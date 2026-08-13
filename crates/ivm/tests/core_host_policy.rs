@@ -2,7 +2,6 @@
 #[path = "../../iroha_data_model/tests/fixtures/axt_golden.rs"]
 mod axt_golden;
 use std::{collections::HashMap, sync::Arc};
-
 use iroha_data_model::{
     nexus as model,
     nexus::{
@@ -20,25 +19,20 @@ use ivm::{
     mock_wsv::{DataspaceAxtPolicy, MockWorldStateView, SpaceDirectoryAxtPolicy},
 };
 mod common;
-
 const AXT_VERIFY_EMPTY_GAS: u64 = 64;
 const AXT_GAS_BASE: u64 = 16;
-
 fn axt_gas(payload_len: usize) -> u64 {
     AXT_GAS_BASE.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
 }
-
 fn axt_commit_gas(touches: usize, proofs: usize, handles: usize) -> u64 {
     axt_gas(touches.saturating_add(proofs).saturating_add(handles))
 }
-
 #[test]
 fn core_host_rejects_noncanonical_policy_snapshot_without_panicking() {
     let snapshot = AxtPolicySnapshot {
         version: 1,
         entries: Vec::new(),
     };
-
     assert!(matches!(
         CoreHost::new().with_axt_policy_snapshot(&snapshot),
         Err(AxtPolicySnapshotValidationError::VersionMismatch {
@@ -47,7 +41,6 @@ fn core_host_rejects_noncanonical_policy_snapshot_without_panicking() {
         })
     ));
 }
-
 fn use_handle_gas(
     handle: &AssetHandle,
     intent: &RemoteSpendIntent,
@@ -64,7 +57,6 @@ fn use_handle_gas(
             .saturating_add(proof_len),
     )
 }
-
 #[test]
 fn core_host_rejects_unknown_syscalls() {
     let mut vm = IVM::new(0);
@@ -73,7 +65,6 @@ fn core_host_rejects_unknown_syscalls() {
     let res = host.syscall(0xFFFF, &mut vm);
     assert!(matches!(res, Err(VMError::UnknownSyscall(_))));
 }
-
 fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(ty, payload);
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
@@ -85,12 +76,10 @@ fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     tlv.extend_from_slice(&h);
     tlv
 }
-
 fn store_tlv(vm: &mut IVM, ty: PointerType, value: &[u8]) -> u64 {
     let tlv = make_tlv(ty, value);
     vm.alloc_input_tlv(&tlv).expect("alloc input")
 }
-
 fn make_descriptor(dsid: DataSpaceId) -> axt::AxtDescriptor {
     axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -101,7 +90,6 @@ fn make_descriptor(dsid: DataSpaceId) -> axt::AxtDescriptor {
         }],
     }
 }
-
 fn make_handle(
     binding: [u8; 32],
     target_lane: LaneId,
@@ -135,7 +123,6 @@ fn make_handle(
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     }
 }
-
 fn make_policy_snapshot(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
@@ -159,7 +146,6 @@ fn make_policy_snapshot(
         entries,
     }
 }
-
 fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
     let mut payload = Vec::new();
     payload.extend_from_slice(domain);
@@ -168,7 +154,6 @@ fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
     }
     iroha_crypto::Hash::new(payload)
 }
-
 fn proof_blob_for(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
@@ -209,7 +194,6 @@ fn proof_blob_for(
         expiry_slot: Some(expiry_slot),
     }
 }
-
 #[test]
 fn core_host_handles_axt_syscalls_with_valid_tlvs() {
     let mut vm = IVM::new(1_000_000);
@@ -219,7 +203,6 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
     let mut host = CoreHost::new()
         .with_axt_policy_snapshot(&snapshot)
         .expect("canonical policy snapshot");
-
     let descriptor = make_descriptor(dsid);
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
     let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
@@ -228,7 +211,6 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
     let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let binding = axt::compute_binding(&descriptor).expect("binding");
@@ -247,14 +229,12 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
         Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
-
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Ok(AXT_VERIFY_EMPTY_GAS)
     );
-
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -273,12 +253,10 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Ok(use_handle_gas(&handle, &intent, None))
     );
-
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Ok(axt_commit_gas(1, 0, 1))
     );
-
     // Follow-up calls without an active AXT sequence must be rejected.
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
@@ -287,7 +265,6 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn core_host_rejects_duplicate_touch() {
     let mut vm = IVM::new(1_000_000);
@@ -296,7 +273,6 @@ fn core_host_rejects_duplicate_touch() {
     let mut host = CoreHost::new()
         .with_axt_policy_snapshot(&snapshot)
         .expect("canonical policy snapshot");
-
     let descriptor = make_descriptor(dsid);
     let desc_ptr = store_tlv(
         &mut vm,
@@ -306,7 +282,6 @@ fn core_host_rejects_duplicate_touch() {
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv(
         &mut vm,
         PointerType::DataSpaceId,
@@ -325,7 +300,6 @@ fn core_host_rejects_duplicate_touch() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("first touch");
-
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert!(matches!(
@@ -333,7 +307,6 @@ fn core_host_rejects_duplicate_touch() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn core_host_rejects_zero_manifest_root_ds_proof() {
     let mut vm = IVM::new(1_000_000);
@@ -342,7 +315,6 @@ fn core_host_rejects_zero_manifest_root_ds_proof() {
     let mut host = CoreHost::new()
         .with_axt_policy_snapshot(&snapshot)
         .expect("canonical policy snapshot");
-
     let descriptor = make_descriptor(dsid);
     let desc_ptr = store_tlv(
         &mut vm,
@@ -352,7 +324,6 @@ fn core_host_rejects_zero_manifest_root_ds_proof() {
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv(
         &mut vm,
         PointerType::DataSpaceId,
@@ -371,7 +342,6 @@ fn core_host_rejects_zero_manifest_root_ds_proof() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch recorded");
-
     let proof = proof_blob_for(dsid, [0; 32], vec![0xA5], 10);
     let proof_ptr = store_tlv(
         &mut vm,
@@ -385,9 +355,7 @@ fn core_host_rejects_zero_manifest_root_ds_proof() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 struct DenyAllPolicy;
-
 impl axt::AxtPolicy for DenyAllPolicy {
     fn allow_touch(
         &self,
@@ -396,18 +364,15 @@ impl axt::AxtPolicy for DenyAllPolicy {
     ) -> Result<(), VMError> {
         Err(VMError::PermissionDenied)
     }
-
     fn allow_handle(&self, _usage: &axt::HandleUsage) -> Result<(), VMError> {
         Err(VMError::PermissionDenied)
     }
 }
-
 #[test]
 fn core_host_policy_rejects_touch_when_policy_denies() {
     let mut vm = IVM::new(1_000_000);
     let host = CoreHost::new().with_axt_policy(Arc::new(DenyAllPolicy));
     let mut host = host;
-
     let dsid = DataSpaceId::new(3);
     let descriptor = make_descriptor(dsid);
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
@@ -417,7 +382,6 @@ fn core_host_policy_rejects_touch_when_policy_denies() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     let ds_ptr = store_tlv(
         &mut vm,
         PointerType::DataSpaceId,
@@ -430,7 +394,6 @@ fn core_host_policy_rejects_touch_when_policy_denies() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn core_host_enforces_space_directory_policy_on_handles() {
     let dsid = DataSpaceId::new(9);
@@ -450,7 +413,6 @@ fn core_host_enforces_space_directory_policy_on_handles() {
     let policy = SpaceDirectoryAxtPolicy::from_snapshot(policies);
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::new().with_axt_policy(Arc::new(policy));
-
     // Begin AXT
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
     let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
@@ -459,7 +421,6 @@ fn core_host_enforces_space_directory_policy_on_handles() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     // Touch the dataspace so handles are permitted.
     let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
     let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
@@ -469,7 +430,6 @@ fn core_host_enforces_space_directory_policy_on_handles() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
         Ok(axt_gas(ds_bytes.len()))
     );
-
     // Lane/manifest match → allowed.
     let handle = make_handle(binding, LaneId::new(2), [1; 32], 1, 1, 10);
     let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
@@ -492,7 +452,6 @@ fn core_host_enforces_space_directory_policy_on_handles() {
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Ok(use_handle_gas(&handle, &intent, None))
     );
-
     // Lane mismatch → denied.
     let bad_handle = make_handle(binding, LaneId::new(3), [1; 32], 1, 1, 10);
     let bad_handle_ptr = store_tlv(
@@ -508,7 +467,6 @@ fn core_host_enforces_space_directory_policy_on_handles() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 fn fixture_intent(dsid: DataSpaceId) -> RemoteSpendIntent {
     RemoteSpendIntent {
         asset_dsid: dsid,
@@ -520,7 +478,6 @@ fn fixture_intent(dsid: DataSpaceId) -> RemoteSpendIntent {
         },
     }
 }
-
 fn convert_descriptor(model: &model::AxtDescriptor) -> axt::AxtDescriptor {
     axt::AxtDescriptor {
         dsids: model.dsids.clone(),
@@ -535,7 +492,6 @@ fn convert_descriptor(model: &model::AxtDescriptor) -> axt::AxtDescriptor {
             .collect(),
     }
 }
-
 fn convert_handle(model: &model::AssetHandle) -> AssetHandle {
     AssetHandle {
         scope: model.scope.clone(),
@@ -562,7 +518,6 @@ fn convert_handle(model: &model::AssetHandle) -> AssetHandle {
         issuer_signature: model.issuer_signature.clone(),
     }
 }
-
 fn run_policy_snapshot_case(
     snapshot: &AxtPolicySnapshot,
     dsid: DataSpaceId,
@@ -579,7 +534,6 @@ fn run_policy_snapshot_case(
         .with_axt_policy_snapshot(snapshot)
         .expect("canonical policy snapshot");
     let mut vm = IVM::new(1_000_000);
-
     let desc_ptr = store_tlv(
         &mut vm,
         PointerType::AxtDescriptor,
@@ -587,7 +541,6 @@ fn run_policy_snapshot_case(
     );
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)?;
-
     let ds_ptr = store_tlv(
         &mut vm,
         PointerType::DataSpaceId,
@@ -605,7 +558,6 @@ fn run_policy_snapshot_case(
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)?;
-
     let mut handle = make_handle(
         binding,
         policy_entry.map_or_else(|| LaneId::new(0), |entry| entry.target_lane),
@@ -617,7 +569,6 @@ fn run_policy_snapshot_case(
         }),
     );
     mutate_handle(&mut handle);
-
     let handle_ptr = store_tlv(
         &mut vm,
         PointerType::AssetHandle,
@@ -642,7 +593,6 @@ fn run_policy_snapshot_case(
     vm.set_register(12, 0);
     host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
 }
-
 #[test]
 fn core_host_builds_space_directory_policy_from_snapshot() {
     let dsid = DataSpaceId::new(11);
@@ -652,12 +602,10 @@ fn core_host_builds_space_directory_policy_from_snapshot() {
         Ok(gas) if gas > 0
     ));
 }
-
 #[test]
 fn core_host_policy_snapshot_rejects_policy_mismatches() {
     let dsid = DataSpaceId::new(12);
     let snapshot = make_policy_snapshot(dsid, [0xCD; 32], LaneId::new(3), 5, 9, 40);
-
     let manifest_root_mismatch = run_policy_snapshot_case(&snapshot, dsid, |handle| {
         handle.manifest_view_root = vec![0xEE; 32];
     });
@@ -665,40 +613,33 @@ fn core_host_policy_snapshot_rejects_policy_mismatches() {
         manifest_root_mismatch,
         Err(VMError::PermissionDenied)
     ));
-
     let expired_handle = run_policy_snapshot_case(&snapshot, dsid, |handle| {
         handle.expiry_slot = 35;
     });
     assert!(matches!(expired_handle, Err(VMError::PermissionDenied)));
-
     let low_handle_era = run_policy_snapshot_case(&snapshot, dsid, |handle| {
         handle.handle_era = 4;
     });
     assert!(matches!(low_handle_era, Err(VMError::PermissionDenied)));
-
     let future_handle_era = run_policy_snapshot_case(&snapshot, dsid, |handle| {
         handle.handle_era = 6;
     });
     assert!(matches!(future_handle_era, Err(VMError::PermissionDenied)));
-
     let low_sub_nonce = run_policy_snapshot_case(&snapshot, dsid, |handle| {
         handle.sub_nonce = 8;
     });
     assert!(matches!(low_sub_nonce, Err(VMError::PermissionDenied)));
-
     let future_sub_nonce = run_policy_snapshot_case(&snapshot, dsid, |handle| {
         handle.sub_nonce = 10;
     });
     assert!(matches!(future_sub_nonce, Err(VMError::PermissionDenied)));
 }
-
 #[test]
 fn core_host_policy_snapshot_rejects_unknown_dataspace() {
     let snapshot = make_policy_snapshot(DataSpaceId::new(99), [0x11; 32], LaneId::new(1), 1, 1, 10);
     let res = run_policy_snapshot_case(&snapshot, DataSpaceId::new(100), |_| {});
     assert!(matches!(res, Err(VMError::PermissionDenied)));
 }
-
 fn run_wsv_policy_case(
     wsv: MockWorldStateView,
     dsid: DataSpaceId,
@@ -710,7 +651,6 @@ fn run_wsv_policy_case(
     let policy = policies.get(&dsid).cloned().unwrap_or_default();
     let mut host = CoreHost::new().with_wsv_policy(&wsv);
     let mut vm = IVM::new(1_000_000);
-
     let desc_ptr = store_tlv(
         &mut vm,
         PointerType::AxtDescriptor,
@@ -718,7 +658,6 @@ fn run_wsv_policy_case(
     );
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)?;
-
     let ds_ptr = store_tlv(
         &mut vm,
         PointerType::DataSpaceId,
@@ -736,7 +675,6 @@ fn run_wsv_policy_case(
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)?;
-
     let mut handle = make_handle(
         binding,
         policy.target_lane,
@@ -746,7 +684,6 @@ fn run_wsv_policy_case(
         wsv.current_slot().saturating_add(5),
     );
     mutate_handle(&mut handle);
-
     let handle_ptr = store_tlv(
         &mut vm,
         PointerType::AssetHandle,
@@ -771,7 +708,6 @@ fn run_wsv_policy_case(
     vm.set_register(12, 0);
     host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
 }
-
 #[test]
 fn core_host_builds_policy_from_wsv_snapshot() {
     let dsid = DataSpaceId::new(77);
@@ -788,11 +724,9 @@ fn core_host_builds_policy_from_wsv_snapshot() {
             current_slot: 0,
         },
     );
-
     let res = run_wsv_policy_case(wsv, dsid, |_| {});
     assert!(matches!(res, Ok(gas) if gas > 0));
 }
-
 #[test]
 fn core_host_wsv_policy_rejects_lane_and_expiry_mismatches() {
     let dsid = DataSpaceId::new(78);
@@ -809,18 +743,15 @@ fn core_host_wsv_policy_rejects_lane_and_expiry_mismatches() {
             current_slot: 0,
         },
     );
-
     let wrong_lane = run_wsv_policy_case(wsv.clone(), dsid, |handle| {
         handle.target_lane = LaneId::new(1);
     });
     assert!(matches!(wrong_lane, Err(VMError::PermissionDenied)));
-
     let expired = run_wsv_policy_case(wsv, dsid, |handle| {
         handle.expiry_slot = 2; // less than current slot -> expired
     });
     assert!(matches!(expired, Err(VMError::PermissionDenied)));
 }
-
 #[test]
 fn core_host_wsv_policy_respects_explicit_current_slot() {
     let dsid = DataSpaceId::new(79);
@@ -836,13 +767,11 @@ fn core_host_wsv_policy_respects_explicit_current_slot() {
             current_slot: 5,
         },
     );
-
     let res = run_wsv_policy_case(wsv, dsid, |handle| {
         handle.expiry_slot = 10;
     });
     assert!(matches!(res, Ok(gas) if gas > 0));
 }
-
 #[test]
 fn core_host_enforces_policy_snapshot() {
     let mut vm = IVM::new(1_000_000);
@@ -865,7 +794,6 @@ fn core_host_enforces_policy_snapshot() {
     let mut host = CoreHost::new()
         .with_axt_policy_snapshot(&snapshot)
         .expect("canonical policy snapshot");
-
     let descriptor = make_descriptor(dsid);
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
     let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
@@ -874,7 +802,6 @@ fn core_host_enforces_policy_snapshot() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
     let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let manifest = TouchManifest {
@@ -889,7 +816,6 @@ fn core_host_enforces_policy_snapshot() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
         Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let mut handle = make_handle(binding, LaneId::new(1), manifest_root, 1, 10, 5);
     let intent = RemoteSpendIntent {
@@ -912,7 +838,6 @@ fn core_host_enforces_policy_snapshot() {
         PointerType::ProofBlob,
         &norito::to_bytes(&proof).expect("encode proof"),
     );
-
     // Wrong lane -> reject
     let handle_ptr = store_tlv(
         &mut vm,
@@ -926,7 +851,6 @@ fn core_host_enforces_policy_snapshot() {
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-
     // Correct lane still fails closed when an inline proof requires a real verifier.
     handle.target_lane = LaneId::new(2);
     let handle_ptr = store_tlv(
@@ -946,7 +870,6 @@ fn core_host_enforces_policy_snapshot() {
         Ok(axt_commit_gas(1, 0, 0))
     );
 }
-
 #[test]
 fn core_host_rejects_inline_proof_manifest_mismatch() {
     let mut vm = IVM::new(1_000_000);
@@ -956,7 +879,6 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
     let mut host = CoreHost::new()
         .with_axt_policy_snapshot(&snapshot)
         .expect("canonical policy snapshot");
-
     let descriptor = make_descriptor(dsid);
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
     let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
@@ -965,7 +887,6 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
     let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let manifest = TouchManifest {
@@ -980,7 +901,6 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
         Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 1, 8);
     let intent = RemoteSpendIntent {
@@ -1008,7 +928,6 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
         PointerType::ProofBlob,
         &norito::to_bytes(&wrong_proof).expect("encode proof"),
     );
-
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
     vm.set_register(12, proof_ptr);
@@ -1017,11 +936,9 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn core_host_rejects_proof_within_skew_without_verifier() {
     use std::num::NonZeroU64;
-
     let mut vm = IVM::new(1_000_000);
     let dsid = DataSpaceId::new(23);
     let manifest_root = [0xAC; 32];
@@ -1030,7 +947,6 @@ fn core_host_rejects_proof_within_skew_without_verifier() {
         .with_axt_timing(NonZeroU64::new(1).expect("slot length"), 1)
         .and_then(|host| host.with_axt_policy_snapshot(&snapshot))
         .expect("canonical policy snapshot");
-
     let descriptor = make_descriptor(dsid);
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
     let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
@@ -1039,7 +955,6 @@ fn core_host_rejects_proof_within_skew_without_verifier() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     let ds_ptr = store_tlv(
         &mut vm,
         PointerType::DataSpaceId,
@@ -1064,7 +979,6 @@ fn core_host_rejects_proof_within_skew_without_verifier() {
     assert!(!cache_status.0);
     assert_eq!(cache_status.1, Some(manifest_root));
 }
-
 #[test]
 fn core_host_rejects_inline_proof_zero_expiry_slot() {
     let mut vm = IVM::new(1_000_000);
@@ -1074,7 +988,6 @@ fn core_host_rejects_inline_proof_zero_expiry_slot() {
     let mut host = CoreHost::new()
         .with_axt_policy_snapshot(&snapshot)
         .expect("canonical policy snapshot");
-
     let descriptor = make_descriptor(dsid);
     let desc_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
     let desc_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &desc_bytes);
@@ -1083,7 +996,6 @@ fn core_host_rejects_inline_proof_zero_expiry_slot() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
     let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let manifest = TouchManifest {
@@ -1098,7 +1010,6 @@ fn core_host_rejects_inline_proof_zero_expiry_slot() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
         Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 1, 10);
     let intent = RemoteSpendIntent {
@@ -1134,7 +1045,6 @@ fn core_host_rejects_inline_proof_zero_expiry_slot() {
         Err(VMError::NoritoInvalid)
     ));
 }
-
 fn exercise_fixture_handle(
     descriptor: &axt::AxtDescriptor,
     snapshot: &AxtPolicySnapshot,
@@ -1148,7 +1058,6 @@ fn exercise_fixture_handle(
         .and_then(|host| host.with_axt_policy_snapshot(snapshot))
         .expect("canonical policy snapshot");
     let mut vm = IVM::new(1_000_000);
-
     let desc_ptr = store_tlv(
         &mut vm,
         PointerType::AxtDescriptor,
@@ -1156,7 +1065,6 @@ fn exercise_fixture_handle(
     );
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)?;
-
     let dsid = descriptor
         .dsids
         .first()
@@ -1179,7 +1087,6 @@ fn exercise_fixture_handle(
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)?;
-
     let handle_ptr = store_tlv(
         &mut vm,
         PointerType::AssetHandle,
@@ -1195,7 +1102,6 @@ fn exercise_fixture_handle(
     vm.set_register(12, 0);
     host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
 }
-
 #[test]
 fn core_host_enforces_fixture_snapshot_fields() {
     let model_descriptor: model::AxtDescriptor =
@@ -1218,10 +1124,8 @@ fn core_host_enforces_fixture_snapshot_fields() {
             .expect("dataspace id present"),
     );
     base_intent.op.from = base_handle.subject.account.clone();
-
     {
         use std::num::NonZeroU64;
-
         use axt::AxtPolicy;
         let dsid = base_intent.asset_dsid;
         axt::validate_descriptor(&descriptor).expect("fixture descriptor must be canonical");
@@ -1264,27 +1168,23 @@ fn core_host_enforces_fixture_snapshot_fields() {
             .record_handle(usage)
             .expect("state should accept fixture handle");
     }
-
     let base_result = exercise_fixture_handle(&descriptor, &snapshot, &base_handle, &base_intent);
     assert!(
         matches!(&base_result, Ok(gas) if *gas > 0),
         "fixture handle must be accepted, got {base_result:?}"
     );
-
     let mut wrong_lane = base_handle.clone();
     wrong_lane.target_lane = LaneId::new(policy_entry.policy.target_lane.as_u32() + 1);
     assert!(matches!(
         exercise_fixture_handle(&descriptor, &snapshot, &wrong_lane, &base_intent),
         Err(VMError::PermissionDenied)
     ));
-
     let mut wrong_manifest_root = base_handle.clone();
     wrong_manifest_root.manifest_view_root = vec![0xFF; 32];
     assert!(matches!(
         exercise_fixture_handle(&descriptor, &snapshot, &wrong_manifest_root, &base_intent),
         Err(VMError::PermissionDenied)
     ));
-
     let mut expired_handle = base_handle.clone();
     expired_handle.expiry_slot = policy_entry.policy.current_slot.saturating_sub(1);
     expired_handle.max_clock_skew_ms = Some(0);
@@ -1292,28 +1192,24 @@ fn core_host_enforces_fixture_snapshot_fields() {
         exercise_fixture_handle(&descriptor, &snapshot, &expired_handle, &base_intent),
         Err(VMError::PermissionDenied)
     ));
-
     let mut low_handle_era = base_handle.clone();
     low_handle_era.handle_era = policy_entry.policy.active_handle_era - 1;
     assert!(matches!(
         exercise_fixture_handle(&descriptor, &snapshot, &low_handle_era, &base_intent),
         Err(VMError::PermissionDenied)
     ));
-
     let mut low_sub_nonce = base_handle.clone();
     low_sub_nonce.sub_nonce = policy_entry.policy.next_handle_counter - 1;
     assert!(matches!(
         exercise_fixture_handle(&descriptor, &snapshot, &low_sub_nonce, &base_intent),
         Err(VMError::PermissionDenied)
     ));
-
     let empty_snapshot = AxtPolicySnapshot::default();
     assert!(matches!(
         exercise_fixture_handle(&descriptor, &empty_snapshot, &base_handle, &base_intent),
         Err(VMError::PermissionDenied)
     ));
 }
-
 #[test]
 fn core_host_caches_fail_closed_ds_proof_per_slot() {
     let dsid = DataSpaceId::new(25);
@@ -1324,7 +1220,6 @@ fn core_host_caches_fail_closed_ds_proof_per_slot() {
         .with_axt_policy_snapshot(&snapshot)
         .expect("canonical policy snapshot");
     let mut vm = IVM::new(1_000_000);
-
     let desc_ptr = store_tlv(
         &mut vm,
         PointerType::AxtDescriptor,
@@ -1333,7 +1228,6 @@ fn core_host_caches_fail_closed_ds_proof_per_slot() {
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv(
         &mut vm,
         PointerType::DataSpaceId,
@@ -1352,14 +1246,12 @@ fn core_host_caches_fail_closed_ds_proof_per_slot() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch recorded");
-
     let proof = proof_blob_for(dsid, manifest_root, vec![0xAA], 50);
     let proof_ptr = store_tlv(
         &mut vm,
         PointerType::ProofBlob,
         &norito::to_bytes(&proof).expect("encode proof blob"),
     );
-
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
     assert!(matches!(
@@ -1371,7 +1263,6 @@ fn core_host_caches_fail_closed_ds_proof_per_slot() {
         host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-
     let cache_status = host
         .axt_cached_proof_status(dsid)
         .expect("cache entry present");
@@ -1382,7 +1273,6 @@ fn core_host_caches_fail_closed_ds_proof_per_slot() {
         "cached manifest root should match policy"
     );
     assert!(host.axt_recorded_proof_payload(dsid).is_none());
-
     let host = host
         .with_axt_timing(
             std::num::NonZeroU64::new(2).expect("non-zero slot length"),
@@ -1394,7 +1284,6 @@ fn core_host_caches_fail_closed_ds_proof_per_slot() {
         "timing changes must invalidate proof decisions made under the old window"
     );
 }
-
 #[test]
 fn core_host_caches_rejected_proof_per_slot() {
     let dsid = DataSpaceId::new(26);
@@ -1405,7 +1294,6 @@ fn core_host_caches_rejected_proof_per_slot() {
         .with_axt_policy_snapshot(&snapshot)
         .expect("canonical policy snapshot");
     let mut vm = IVM::new(1_000_000);
-
     let desc_ptr = store_tlv(
         &mut vm,
         PointerType::AxtDescriptor,
@@ -1414,7 +1302,6 @@ fn core_host_caches_rejected_proof_per_slot() {
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     let ds_ptr = store_tlv(
         &mut vm,
         PointerType::DataSpaceId,
@@ -1433,7 +1320,6 @@ fn core_host_caches_rejected_proof_per_slot() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch recorded");
-
     let wrong_root = [0xEF; 32];
     let proof = proof_blob_for(dsid, wrong_root, vec![0x11, 0x22], 20);
     let proof_ptr = store_tlv(
@@ -1441,7 +1327,6 @@ fn core_host_caches_rejected_proof_per_slot() {
         PointerType::ProofBlob,
         &norito::to_bytes(&proof).expect("encode proof blob"),
     );
-
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_ptr);
     assert!(matches!(
@@ -1464,7 +1349,6 @@ fn core_host_caches_rejected_proof_per_slot() {
         "cached manifest root tracks the offending payload"
     );
 }
-
 #[test]
 fn core_host_fails_closed_multi_dataspace_axt_flow_without_verifier() {
     let dsid_a = DataSpaceId::new(31);
@@ -1509,12 +1393,10 @@ fn core_host_fails_closed_multi_dataspace_axt_flow_without_verifier() {
         version: AxtPolicySnapshot::compute_version(&entries),
         entries,
     };
-
     let mut host = CoreHost::new()
         .with_axt_policy_snapshot(&snapshot)
         .expect("canonical policy snapshot");
     let mut vm = IVM::new(1_000_000);
-
     let desc_ptr = store_tlv(
         &mut vm,
         PointerType::AxtDescriptor,
@@ -1523,7 +1405,6 @@ fn core_host_fails_closed_multi_dataspace_axt_flow_without_verifier() {
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
         .expect("begin");
-
     for (dsid, manifest) in [
         (
             dsid_a,
@@ -1555,7 +1436,6 @@ fn core_host_fails_closed_multi_dataspace_axt_flow_without_verifier() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
             .expect("touch recorded");
     }
-
     for (dsid, root) in [(dsid_a, [0xA1; 32]), (dsid_b, [0xB2; 32])] {
         let proof = proof_blob_for(dsid, root, vec![0x33, 0x44], 40);
         let ds_ptr = store_tlv(
@@ -1580,13 +1460,11 @@ fn core_host_fails_closed_multi_dataspace_axt_flow_without_verifier() {
         assert!(!cache_status.0);
         assert_eq!(cache_status.1, Some(root));
     }
-
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Ok(axt_commit_gas(2, 0, 0))
     );
 }
-
 #[test]
 fn core_host_rejects_zero_manifest_root_policy() {
     let dsid = DataSpaceId::new(17);
@@ -1595,7 +1473,6 @@ fn core_host_rejects_zero_manifest_root_policy() {
     let handle = make_handle(binding, LaneId::new(4), [0; 32], 0, 0, 5);
     let intent = fixture_intent(dsid);
     let snapshot = make_policy_snapshot(dsid, [0; 32], LaneId::new(4), 0, 0, 1);
-
     assert!(matches!(
         exercise_fixture_handle(&descriptor, &snapshot, &handle, &intent),
         Err(VMError::PermissionDenied)

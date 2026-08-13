@@ -4,15 +4,7 @@
 //! digest, one canonical low-s ES256 issuer signature, and one deterministic
 //! registry-root transition. A full random relaxed assignment masks the
 //! sequential Nova fold before the terminal Spartan proof.
-
 #![allow(unexpected_cfgs)]
-
-use core::fmt;
-use std::sync::Arc;
-
-use once_cell::sync::Lazy;
-use thiserror::Error;
-
 use super::{
     VEGA_T256_BASE_MODULUS_BE_V1, VegaT256ScalarV1 as Scalar,
     circuit::{
@@ -33,10 +25,12 @@ use super::{
     },
     sponge::keccak256,
 };
-
+use core::fmt;
+use once_cell::sync::Lazy;
+use std::sync::Arc;
+use thiserror::Error;
 #[path = "zk_ams/mkhe.rs"]
 mod mkhe;
-
 pub use mkhe::{
     ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1,
     ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_WIRE_BYTES_V1,
@@ -179,7 +173,6 @@ pub use mkhe::{
 pub use mkhe::{
     automorphism_switch_zk_ams_mkhe_collective_v1, relinearize_zk_ams_mkhe_collective_v1,
 };
-
 /// Exact number of public T256 scalars in one admission relation instance.
 pub const ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1: usize = 89;
 /// Hard cap checked before Norito decoding of a batch relation proof.
@@ -188,7 +181,6 @@ pub const MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1: usize = 2 * 1024 * 1024;
 pub const ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1: usize = 161;
 /// Sole privacy-action index admitted by the first-release ZK-AMS profile.
 pub const ZK_AMS_ACTION_INDEX_V1: u32 = 0;
-
 const PROOF_VERSION_V1: u8 = 1;
 const MAX_CHAIN_ID_BYTES_V1: usize = 255;
 const COMPOSITION_DOMAIN_V1: &[u8] = b"iroha-zk-ams-v1:batch-admission:masked-relaxed-spartan-t256";
@@ -197,7 +189,6 @@ const PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha.zk-ams.v1.batch-admission.canonical
 const SOURCE_PROFILE_V1: &[u8] = b"arxiv:2602.16130v2:algorithms-1-4:appendices-a-c";
 const PHC_HASH_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:phc:v1";
 const REGISTRY_TRANSITION_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:registry-transition:v1";
-
 const ISSUER_X_INDEX: usize = 0;
 const ISSUER_Y_INDEX: usize = 1;
 const ISSUER_PREFIX_INDEX: usize = 2;
@@ -217,7 +208,6 @@ const NEXT_EPOCH_HIGH_INDEX: usize = 85;
 const NEXT_EPOCH_LOW_INDEX: usize = 86;
 const BATCH_SIZE_INDEX: usize = 87;
 const ANCHOR_INDEX: usize = 88;
-
 static CANONICAL_PROFILE: Lazy<Result<Arc<CircuitProfile>, CircuitError>> =
     Lazy::new(build_canonical_profile);
 static CANONICAL_SHAPE: Lazy<Result<Arc<Shape>, CircuitError>> = Lazy::new(build_canonical_shape);
@@ -243,7 +233,6 @@ static T256_GENERATOR_DIGEST: Lazy<[u8; 32]> = Lazy::new(|| {
     }
     keccak256(&frame)
 });
-
 /// Full consensus binding absorbed before all Nova and Spartan material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsProofContextV1<'a> {
@@ -268,7 +257,6 @@ pub struct ZkAmsProofContextV1<'a> {
     /// Combined Ristretto/T256 generator-basis digest.
     pub generator_digest: [u8; 32],
 }
-
 /// Public values for one ordered credential and registry transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsAdmissionPublicInputV1 {
@@ -307,7 +295,6 @@ pub struct ZkAmsAdmissionPublicInputV1 {
     /// Zero-based position of this anchor.
     pub anchor_index: u32,
 }
-
 impl ZkAmsAdmissionPublicInputV1 {
     fn to_scalars(self) -> Result<Vec<Scalar>, ZkAmsAdmissionRelationErrorV1> {
         self.validate()?;
@@ -346,7 +333,6 @@ impl ZkAmsAdmissionPublicInputV1 {
         }
         Ok(values)
     }
-
     fn validate(self) -> Result<(), ZkAmsAdmissionRelationErrorV1> {
         if !matches!(self.issuer_key_prefix, 0x02 | 0x03)
             || self.issuer_key_x >= VEGA_T256_BASE_MODULUS_BE_V1
@@ -378,7 +364,6 @@ impl ZkAmsAdmissionPublicInputV1 {
         Ok(())
     }
 }
-
 /// Private witness for one exact canonical PHC and issuer signature.
 #[derive(Clone, Copy)]
 pub struct ZkAmsAdmissionRelationWitnessV1<'a> {
@@ -389,7 +374,6 @@ pub struct ZkAmsAdmissionRelationWitnessV1<'a> {
     signature_recovery_x: &'a [u8; 32],
     signature_recovery_y: &'a [u8; 32],
 }
-
 impl<'a> ZkAmsAdmissionRelationWitnessV1<'a> {
     /// Construct a borrowed witness. Algebraic and canonical checks occur in
     /// the exact circuit; this constructor rejects zero hidden PHC fields.
@@ -414,19 +398,16 @@ impl<'a> ZkAmsAdmissionRelationWitnessV1<'a> {
         })
     }
 }
-
 impl fmt::Debug for ZkAmsAdmissionRelationWitnessV1<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ZkAmsAdmissionRelationWitnessV1([REDACTED])")
     }
 }
-
 /// Explicit bounded native prover configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMaskedProverConfigV1 {
     worker_count: usize,
 }
-
 impl ZkAmsMaskedProverConfigV1 {
     /// Select a deterministic commitment worker count in `1..=20`.
     pub const fn new(worker_count: usize) -> Result<Self, ZkAmsAdmissionRelationErrorV1> {
@@ -437,14 +418,12 @@ impl ZkAmsMaskedProverConfigV1 {
         }
         Ok(Self { worker_count })
     }
-
     /// Return the exact selected worker count.
     #[must_use]
     pub const fn worker_count(self) -> usize {
         self.worker_count
     }
 }
-
 /// Frozen compiled proof dimensions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsAdmissionRelationDimensionsV1 {
@@ -463,7 +442,6 @@ pub struct ZkAmsAdmissionRelationDimensionsV1 {
     /// Inner Spartan rounds.
     pub inner_sumcheck_rounds: usize,
 }
-
 /// Failure at the exact ZK-AMS admission relation boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ZkAmsAdmissionRelationErrorV1 {
@@ -521,7 +499,6 @@ pub enum ZkAmsAdmissionRelationErrorV1 {
     #[error("ZK-AMS admission cryptographic randomness is degenerate")]
     DegenerateRandomness,
 }
-
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -531,7 +508,6 @@ struct ZkAmsAdmissionProofWireV1 {
     version: u8,
     relation: MaskedRelaxedProofWireV1,
 }
-
 /// Encode the sole canonical admission-relation wire. Phase-III terminal
 /// producers use this helper so transaction proof bytes cannot drift into a
 /// second outer schema.
@@ -551,7 +527,6 @@ pub(super) fn encode_zk_ams_admission_relation_wire_v1(
     }
     Ok(encoded)
 }
-
 /// Decode and canonicalize the sole admission-relation wire under the exact
 /// expected strict-instance count.
 pub(super) fn decode_zk_ams_admission_relation_wire_v1(
@@ -584,7 +559,6 @@ pub(super) fn decode_zk_ams_admission_relation_wire_v1(
     }
     Ok(proof.relation)
 }
-
 /// Return the exact compiled relation dimensions.
 pub fn zk_ams_admission_relation_dimensions_v1()
 -> Result<ZkAmsAdmissionRelationDimensionsV1, ZkAmsAdmissionRelationErrorV1> {
@@ -601,7 +575,6 @@ pub fn zk_ams_admission_relation_dimensions_v1()
         inner_sumcheck_rounds: dimensions.inner_sumcheck_rounds,
     })
 }
-
 /// Return the digest of the exact circuit/composer profile admitted by
 /// governance.
 pub fn zk_ams_compiled_profile_digest_v1() -> Result<[u8; 32], ZkAmsAdmissionRelationErrorV1> {
@@ -609,7 +582,6 @@ pub fn zk_ams_compiled_profile_digest_v1() -> Result<[u8; 32], ZkAmsAdmissionRel
         .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)?;
     compiled_profile_digest_for_readiness_v1(readiness)
 }
-
 /// Return the digest of the frozen, but not release-ready, candidate profile.
 ///
 /// This function exists only for deterministic release-evidence builders and
@@ -622,7 +594,6 @@ pub fn zk_ams_release_candidate_profile_digest_v1()
     canonical_shape()?;
     Ok(compiled_profile_digest_unchecked_v1())
 }
-
 fn compiled_profile_digest_for_readiness_v1(
     readiness: ZkAmsMkheReadinessV1,
 ) -> Result<[u8; 32], ZkAmsAdmissionRelationErrorV1> {
@@ -631,7 +602,6 @@ fn compiled_profile_digest_for_readiness_v1(
     }
     Ok(compiled_profile_digest_unchecked_v1())
 }
-
 fn compiled_profile_digest_unchecked_v1() -> [u8; 32] {
     let shape = canonical_shape().expect("released ZK-AMS shape must synthesize");
     let dimensions =
@@ -640,14 +610,12 @@ fn compiled_profile_digest_unchecked_v1() -> [u8; 32] {
         &profile_frame(&shape, dimensions).expect("released profile frame is fixed and bounded"),
     )
 }
-
 /// Return the digest of every independently derived T256 commitment generator,
 /// including the hiding generator.
 #[must_use]
 pub fn zk_ams_t256_generator_digest_v1() -> [u8; 32] {
     *T256_GENERATOR_DIGEST
 }
-
 /// Prove an ordered batch and self-verify the exact canonical output.
 pub fn prove_zk_ams_admission_relation_v1<R: MaskedRelaxedRandomSourceV1>(
     context: &ZkAmsProofContextV1<'_>,
@@ -661,7 +629,6 @@ pub fn prove_zk_ams_admission_relation_v1<R: MaskedRelaxedRandomSourceV1>(
     require_mkhe_release_ready_v1()?;
     prove_zk_ams_admission_relation_inner_v1(context, public_inputs, witnesses, config, random)
 }
-
 fn prove_zk_ams_admission_relation_inner_v1<R: MaskedRelaxedRandomSourceV1>(
     context: &ZkAmsProofContextV1<'_>,
     public_inputs: &[ZkAmsAdmissionPublicInputV1],
@@ -709,7 +676,6 @@ fn prove_zk_ams_admission_relation_inner_v1<R: MaskedRelaxedRandomSourceV1>(
     verify_zk_ams_admission_relation_inner_v1(context, public_inputs, &encoded)?;
     Ok(encoded)
 }
-
 /// Verify one bounded, exact-canonical batch relation proof.
 pub fn verify_zk_ams_admission_relation_v1(
     context: &ZkAmsProofContextV1<'_>,
@@ -721,7 +687,6 @@ pub fn verify_zk_ams_admission_relation_v1(
     require_mkhe_release_ready_v1()?;
     verify_zk_ams_admission_relation_inner_v1(context, public_inputs, proof_bytes)
 }
-
 fn verify_zk_ams_admission_relation_inner_v1(
     context: &ZkAmsProofContextV1<'_>,
     public_inputs: &[ZkAmsAdmissionPublicInputV1],
@@ -745,12 +710,10 @@ fn verify_zk_ams_admission_relation_inner_v1(
     )
     .map_err(map_composition_error)
 }
-
 fn require_mkhe_release_ready_v1() -> Result<(), ZkAmsAdmissionRelationErrorV1> {
     mkhe::require_release_ready_v1()
         .map_err(|_| ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)
 }
-
 fn map_circuit_synthesis_error(error: CircuitError) -> MaskedRelaxedErrorV1 {
     match error {
         CircuitError::InvalidAssignment | CircuitError::R1cs(R1csError::Unsatisfied) => {
@@ -767,7 +730,6 @@ fn map_circuit_synthesis_error(error: CircuitError) -> MaskedRelaxedErrorV1 {
         ) => MaskedRelaxedErrorV1::InvalidProfile,
     }
 }
-
 /// Count first, then compile the canonical relation directly into CSR rows.
 ///
 /// The canonical profile deliberately uses dummy values that need not satisfy
@@ -786,7 +748,6 @@ fn synthesize_admission_count_then_compile(
     synthesize_admission_inner(&mut compiler, witness)?;
     Ok((compiler.finalize_compiled()?, dimensions))
 }
-
 /// Synthesize a fixed admission witness directly against the canonical shape.
 /// The caller obtains `shape` only from the canonical shape cache, so no
 /// per-witness sparse matrix reconstruction is needed.
@@ -806,7 +767,6 @@ fn synthesize_admission_with_shape(
     synthesize_admission_inner(&mut builder, witness)?;
     builder.finalize_with_shape()
 }
-
 fn synthesize_admission_inner(
     builder: &mut CircuitBuilder,
     witness: &ZkAmsAdmissionRelationWitnessV1<'_>,
@@ -817,7 +777,6 @@ fn synthesize_admission_inner(
     let policy_id = public_digest_bytes(builder, POLICY_ID_WORD_START)?;
     let seed_key = public_digest_bytes(builder, SEED_KEY_WORD_START)?;
     let phc_hash = public_digest_words(builder, PHC_HASH_WORD_START)?;
-
     let mut phc_message = constant_bytes(builder, PHC_HASH_DOMAIN_V1)?;
     phc_message.extend(constant_bytes(
         builder,
@@ -844,7 +803,6 @@ fn synthesize_admission_inner(
         *witness.signature_recovery_x,
         *witness.signature_recovery_y,
     )?;
-
     // Record/policy digests are deliberately public inputs even though the
     // circuit does not derive state. Runtime matches them to authoritative
     // records; Nova and the transcript still bind their exact values.
@@ -888,7 +846,6 @@ fn synthesize_admission_inner(
     bind_digest_words(builder, computed_next, next_root)?;
     Ok(())
 }
-
 fn build_canonical_profile() -> Result<Arc<CircuitProfile>, CircuitError> {
     let mut public = ZkAmsAdmissionPublicInputV1 {
         issuer_key_x: [1; 32],
@@ -923,14 +880,12 @@ fn build_canonical_profile() -> Result<Arc<CircuitProfile>, CircuitError> {
         dimensions.emitted_constraint_count,
     )?))
 }
-
 fn build_canonical_shape() -> Result<Arc<Shape>, CircuitError> {
     match &*CANONICAL_PROFILE {
         Ok(profile) => Ok(Arc::clone(profile.shape())),
         Err(error) => Err(*error),
     }
 }
-
 #[cfg(test)]
 pub(super) fn canonical_shape_ref() -> Result<&'static Shape, ZkAmsAdmissionRelationErrorV1> {
     match &*CANONICAL_SHAPE {
@@ -938,21 +893,18 @@ pub(super) fn canonical_shape_ref() -> Result<&'static Shape, ZkAmsAdmissionRela
         Err(_) => Err(ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile),
     }
 }
-
 fn canonical_profile() -> Result<&'static Arc<CircuitProfile>, ZkAmsAdmissionRelationErrorV1> {
     match &*CANONICAL_PROFILE {
         Ok(profile) => Ok(profile),
         Err(_) => Err(ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile),
     }
 }
-
 fn canonical_shape() -> Result<Arc<Shape>, ZkAmsAdmissionRelationErrorV1> {
     match &*CANONICAL_SHAPE {
         Ok(shape) => Ok(Arc::clone(shape)),
         Err(_) => Err(ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile),
     }
 }
-
 fn validate_batch(
     public_inputs: &[ZkAmsAdmissionPublicInputV1],
     witness_count: usize,
@@ -1003,7 +955,6 @@ fn validate_batch(
     }
     Ok(())
 }
-
 fn same_batch_lineage(
     expected: ZkAmsAdmissionPublicInputV1,
     actual: ZkAmsAdmissionPublicInputV1,
@@ -1020,7 +971,6 @@ fn same_batch_lineage(
         && actual.current_registry_epoch == expected.current_registry_epoch
         && actual.next_registry_epoch == expected.next_registry_epoch
 }
-
 fn validate_context(
     context: &ZkAmsProofContextV1<'_>,
 ) -> Result<(), ZkAmsAdmissionRelationErrorV1> {
@@ -1044,7 +994,6 @@ fn validate_context(
     }
     Ok(())
 }
-
 fn context_frame(
     context: &ZkAmsProofContextV1<'_>,
 ) -> Result<Vec<u8>, ZkAmsAdmissionRelationErrorV1> {
@@ -1065,7 +1014,6 @@ fn context_frame(
     push_frame(&mut frame, 12, &compiled_profile_digest_unchecked_v1())?;
     Ok(frame)
 }
-
 fn profile_frame(
     shape: &Shape,
     dimensions: MaskedRelaxedDimensionsV1,
@@ -1110,7 +1058,6 @@ fn profile_frame(
     )?;
     Ok(frame)
 }
-
 fn push_frame(
     output: &mut Vec<u8>,
     tag: u8,
@@ -1125,7 +1072,6 @@ fn push_frame(
     output.extend_from_slice(value);
     Ok(())
 }
-
 fn public_digest_words(
     builder: &mut CircuitBuilder,
     start: usize,
@@ -1136,7 +1082,6 @@ fn public_digest_words(
         .try_into()
         .map_err(|_| CircuitError::InvalidDimension)
 }
-
 fn public_digest_bytes(
     builder: &mut CircuitBuilder,
     start: usize,
@@ -1148,7 +1093,6 @@ fn public_digest_bytes(
         .try_into()
         .map_err(|_| CircuitError::InvalidDimension)
 }
-
 fn public_u64_bytes(
     builder: &mut CircuitBuilder,
     high_index: usize,
@@ -1163,7 +1107,6 @@ fn public_u64_bytes(
         .try_into()
         .map_err(|_| CircuitError::InvalidDimension)
 }
-
 fn bind_digest_words(
     builder: &mut CircuitBuilder,
     actual: [WordVar; 8],
@@ -1174,7 +1117,6 @@ fn bind_digest_words(
     }
     Ok(())
 }
-
 fn constant_bytes(
     builder: &mut CircuitBuilder,
     bytes: &[u8],
@@ -1185,13 +1127,11 @@ fn constant_bytes(
         .map(|byte| constant_byte(builder, byte))
         .collect()
 }
-
 fn constant_byte(builder: &mut CircuitBuilder, value: u8) -> Result<ByteVar, CircuitError> {
     let byte = allocate_byte(builder, value)?;
     enforce_byte_constant(builder, byte, value)?;
     Ok(byte)
 }
-
 fn enforce_nonzero_bytes(
     builder: &mut CircuitBuilder,
     bytes: &[ByteVar],
@@ -1203,7 +1143,6 @@ fn enforce_nonzero_bytes(
     }
     builder.enforce_zero(all_zero.lc())
 }
-
 fn enforce_successor_epoch(
     builder: &mut CircuitBuilder,
     current_high: usize,
@@ -1223,7 +1162,6 @@ fn enforce_successor_epoch(
         current.plus(&LinearCombination::constant(Scalar::one())),
     )
 }
-
 fn push_digest_words(values: &mut Vec<Scalar>, bytes: [u8; 32]) {
     values.extend(bytes.chunks_exact(4).map(|word| {
         Scalar::from_u64(u64::from(u32::from_be_bytes(
@@ -1231,7 +1169,6 @@ fn push_digest_words(values: &mut Vec<Scalar>, bytes: [u8; 32]) {
         )))
     }));
 }
-
 fn map_composition_error(error: MaskedRelaxedErrorV1) -> ZkAmsAdmissionRelationErrorV1 {
     match error {
         MaskedRelaxedErrorV1::InvalidInstanceCount { actual, .. } => {
@@ -1258,7 +1195,6 @@ fn map_composition_error(error: MaskedRelaxedErrorV1) -> ZkAmsAdmissionRelationE
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1267,9 +1203,7 @@ mod tests {
         masked_relaxed::{MASKED_RELAXED_COMMITMENT_COLUMNS_V1, MaskedRelaxedCommitmentWireV1},
     };
     use hex_literal::hex;
-
     struct NeverRandom;
-
     impl MaskedRelaxedRandomSourceV1 for NeverRandom {
         fn fill_bytes(
             &mut self,
@@ -1278,7 +1212,6 @@ mod tests {
             panic!("invalid ZK-AMS context must fail before prover randomness")
         }
     }
-
     #[test]
     fn canonical_shape_source_uses_shared_ownership_and_streamed_assignments() {
         let source = include_str!("zk_ams.rs");
@@ -1314,7 +1247,6 @@ mod tests {
         assert!(!canonical_build.contains("validate_strict_assignment"));
         assert!(!canonical_build.contains("CircuitBuilder::new("));
     }
-
     fn proof_context() -> ZkAmsProofContextV1<'static> {
         ZkAmsProofContextV1 {
             chain_id: b"taira-zk-ams-test",
@@ -1329,7 +1261,6 @@ mod tests {
             generator_digest: [0x18; 32],
         }
     }
-
     #[derive(Clone)]
     struct AdmissionAssignmentFixture {
         public: ZkAmsAdmissionPublicInputV1,
@@ -1340,7 +1271,6 @@ mod tests {
         recovery_x: [u8; 32],
         recovery_y: [u8; 32],
     }
-
     impl AdmissionAssignmentFixture {
         fn witness(&self) -> ZkAmsAdmissionRelationWitnessV1<'_> {
             ZkAmsAdmissionRelationWitnessV1::new(
@@ -1354,7 +1284,6 @@ mod tests {
             .expect("nonzero fixed witness")
         }
     }
-
     fn admission_assignment_fixture() -> AdmissionAssignmentFixture {
         AdmissionAssignmentFixture {
             public: ZkAmsAdmissionPublicInputV1 {
@@ -1390,7 +1319,6 @@ mod tests {
             recovery_y: hex!("9099209accc4c8a224c843afa4f4c68a090d04da5e9889dae2f8eefce82a3740"),
         }
     }
-
     fn synthesize_fixture(fixture: &AdmissionAssignmentFixture) -> CircuitAssignment {
         let shape = canonical_shape().expect("canonical fixture shape");
         assert!(core::ptr::eq(
@@ -1400,7 +1328,6 @@ mod tests {
         synthesize_admission_with_shape(fixture.public, &fixture.witness(), shape)
             .expect("fixed-shape admission synthesis")
     }
-
     fn coherent_two_anchor_batch() -> [ZkAmsAdmissionPublicInputV1; 2] {
         let mut first = admission_assignment_fixture().public;
         first.batch_size = 2;
@@ -1413,14 +1340,12 @@ mod tests {
         second.anchor_index = 1;
         [first, second]
     }
-
     fn assignment_is_satisfied(assignment: &CircuitAssignment) -> bool {
         assignment
             .shape
             .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .is_ok()
     }
-
     fn synthetic_dimensions() -> MaskedRelaxedDimensionsV1 {
         MaskedRelaxedDimensionsV1 {
             variable_count: 524_288,
@@ -1432,7 +1357,6 @@ mod tests {
             inner_sumcheck_rounds: 20,
         }
     }
-
     fn empty_relation() -> MaskedRelaxedProofWireV1 {
         let scalar = VegaScalarWireV1::from_raw_bytes_for_test([0; 32]);
         MaskedRelaxedProofWireV1 {
@@ -1453,21 +1377,17 @@ mod tests {
             error_opening_blinding: scalar,
         }
     }
-
     fn empty_proof() -> ZkAmsAdmissionProofWireV1 {
         ZkAmsAdmissionProofWireV1 {
             version: PROOF_VERSION_V1,
             relation: empty_relation(),
         }
     }
-
     #[test]
     fn admission_batch_rejects_every_mixed_governance_and_epoch_lineage() {
         type PublicInputMutation = (&'static str, fn(&mut ZkAmsAdmissionPublicInputV1));
-
         let canonical = coherent_two_anchor_batch();
         validate_batch(&canonical, canonical.len()).expect("coherent two-anchor lineage");
-
         let mutations: [PublicInputMutation; 11] = [
             ("issuer-key-x", |row| row.issuer_key_x[31] ^= 1),
             ("issuer-key-y", |row| row.issuer_key_y[31] ^= 1),
@@ -1501,7 +1421,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn public_prover_and_verifier_reject_nonzero_action_index_before_work() {
         let mut invalid = proof_context();
@@ -1527,7 +1446,6 @@ mod tests {
             Err(ZkAmsAdmissionRelationErrorV1::InvalidContext),
         );
     }
-
     #[test]
     fn every_mkhe_release_gate_fails_compilation_independently() {
         let all_ready = ZkAmsMkheReadinessV1 {
@@ -1545,7 +1463,6 @@ mod tests {
             release_kat_gate: true,
         };
         assert!(compiled_profile_digest_for_readiness_v1(all_ready).is_ok());
-
         for gate in 0..12 {
             let mut adversarial = all_ready;
             match gate {
@@ -1570,7 +1487,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn unavailable_mkhe_release_has_no_public_prove_or_verify_bypass() {
         assert_eq!(
@@ -1585,7 +1501,6 @@ mod tests {
             zk_ams_compiled_profile_digest_v1(),
             Err(ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)
         );
-
         let context = proof_context();
         let fixture = admission_assignment_fixture();
         let witness = fixture.witness();
@@ -1608,39 +1523,33 @@ mod tests {
             Err(ZkAmsAdmissionRelationErrorV1::InvalidCompiledProfile)
         );
     }
-
     #[test]
     fn admission_batch_rejects_duplicate_anchors_and_broken_ordering() {
         let canonical = coherent_two_anchor_batch();
-
         let mut duplicate_credential = canonical;
         duplicate_credential[1].phc_hash = duplicate_credential[0].phc_hash;
         assert_eq!(
             validate_batch(&duplicate_credential, duplicate_credential.len()),
             Err(ZkAmsAdmissionRelationErrorV1::DuplicateCredentialDigest)
         );
-
         let mut duplicate_seed = canonical;
         duplicate_seed[1].seed_public_key = duplicate_seed[0].seed_public_key;
         assert_eq!(
             validate_batch(&duplicate_seed, duplicate_seed.len()),
             Err(ZkAmsAdmissionRelationErrorV1::DuplicateSeedPublicKey)
         );
-
         let mut broken_root_chain = canonical;
         broken_root_chain[1].prior_registry_root = [0x74; 32];
         assert_eq!(
             validate_batch(&broken_root_chain, broken_root_chain.len()),
             Err(ZkAmsAdmissionRelationErrorV1::InvalidPublicInput)
         );
-
         let mut repeated_index = canonical;
         repeated_index[1].anchor_index = 0;
         assert_eq!(
             validate_batch(&repeated_index, repeated_index.len()),
             Err(ZkAmsAdmissionRelationErrorV1::InvalidPublicInput)
         );
-
         let mut false_batch_size = canonical;
         false_batch_size[1].batch_size = 1;
         assert_eq!(
@@ -1648,14 +1557,12 @@ mod tests {
             Err(ZkAmsAdmissionRelationErrorV1::InvalidPublicInput)
         );
     }
-
     #[test]
     fn admission_batch_bounds_and_unsatisfied_witness_errors_are_exact() {
         assert_eq!(
             validate_batch(&[], 0),
             Err(ZkAmsAdmissionRelationErrorV1::InvalidBatchSize { actual: 0 })
         );
-
         let canonical = coherent_two_anchor_batch();
         assert_eq!(
             validate_batch(&canonical, 1),
@@ -1663,7 +1570,6 @@ mod tests {
                 actual: canonical.len(),
             })
         );
-
         let oversized_len = MAX_MASKED_RELAXED_STRICT_INSTANCES_V1 + 1;
         let oversized_batch_size = u32::try_from(oversized_len).expect("bounded hostile batch");
         let mut oversized = vec![canonical[0]; oversized_len];
@@ -1677,7 +1583,6 @@ mod tests {
                 actual: MAX_MASKED_RELAXED_STRICT_INSTANCES_V1 + 1,
             })
         );
-
         assert_eq!(
             map_composition_error(MaskedRelaxedErrorV1::UnsatisfiedWitness),
             ZkAmsAdmissionRelationErrorV1::InvalidWitness,
@@ -1700,7 +1605,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn admission_decoder_preflights_oversized_and_forged_nested_counts() {
         let dimensions = synthetic_dimensions();
@@ -1725,7 +1629,6 @@ mod tests {
                 limit: 1_024
             })
         ));
-
         let encoded_count = 1_025_u32.to_le_bytes();
         let count_offset = encoded
             .windows(encoded_count.len())
@@ -1752,7 +1655,6 @@ mod tests {
             "unexpected forged-count rejection: {forged_error:?}"
         );
     }
-
     #[test]
     fn admission_decoder_rejects_truncation_trailing_and_alternate_layout() {
         let proof = empty_proof();
@@ -1766,12 +1668,10 @@ mod tests {
             )
         };
         assert_eq!(decode(&canonical).expect("canonical wire"), proof);
-
         assert!(decode(&canonical[..canonical.len() - 1]).is_err());
         let mut trailing = canonical.clone();
         trailing.push(0);
         assert!(decode(&trailing).is_err());
-
         let mut alternate = Vec::new();
         {
             let flags =
@@ -1783,7 +1683,6 @@ mod tests {
         assert_ne!(alternate, canonical);
         assert!(decode(&alternate).is_err());
     }
-
     #[test]
     fn admission_assignment_accepts_low_s_and_rejects_malleability_and_rebinding() {
         // Independent P-256 arithmetic fixture: private key 7, nonce 11. The
@@ -1795,7 +1694,6 @@ mod tests {
             assignment_is_satisfied(&low_s),
             "canonical low-s admission assignment must satisfy every constraint"
         );
-
         for public_index in [PHC_HASH_WORD_START, NEXT_ROOT_WORD_START] {
             let mut rebound_public = low_s.public_inputs.clone();
             rebound_public[public_index] += Scalar::one();
@@ -1808,7 +1706,6 @@ mod tests {
             );
         }
         drop(low_s);
-
         let mut high_s_fixture = fixture.clone();
         high_s_fixture.signature_s =
             hex!("f92928529542bb27f2420825f5e986954abea34c926a24dc0ae4108bacac853b");
@@ -1823,7 +1720,6 @@ mod tests {
             .is_err(),
             "the algebraically valid high-s counterpart must fail canonical synthesis"
         );
-
         let mut changed_witness = fixture;
         changed_witness.subject_commitment[0] ^= 1;
         assert!(

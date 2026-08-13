@@ -1,8 +1,6 @@
 //! Ensure scalar state loads from durable storage at function entry.
-
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
-
 #[test]
 fn kotodama_state_scalar_reads_durable() {
     let src = r#"
@@ -17,10 +15,8 @@ fn kotodama_state_scalar_reads_durable() {
     let code = KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile scalar state reader");
-
     let mut host = CoreHost::new();
     host.insert_state_value("counter", common::encode_int_state_value(42));
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&code).expect("load program");
@@ -28,7 +24,6 @@ fn kotodama_state_scalar_reads_durable() {
     vm.run().expect("execute reader");
     assert_eq!(common::decode_i64_register(&vm, 10), 42);
 }
-
 #[test]
 fn kotodama_state_struct_helper_param_reads_flattened_fields() {
     let src = r#"
@@ -61,7 +56,6 @@ fn kotodama_state_struct_helper_param_reads_flattened_fields() {
     let code = KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile struct state helper");
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code).expect("load program");
@@ -69,14 +63,12 @@ fn kotodama_state_struct_helper_param_reads_flattened_fields() {
     vm.run().expect("execute struct state helper");
     assert_eq!(common::decode_i64_register(&vm, 10), 8);
 }
-
 fn run_named_struct_order(source: &str) -> (i64, i64) {
     let code = KotodamaCompiler::new()
         .compile_source(source)
         .expect("compile named-struct source-order fixture");
     let mut host = CoreHost::new();
     host.insert_state_value("trace", common::encode_int_state_value(0));
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&code)
@@ -94,7 +86,6 @@ fn run_named_struct_order(source: &str) -> (i64, i64) {
     };
     (result, trace)
 }
-
 #[test]
 fn out_of_order_named_struct_fields_match_explicit_source_order_at_runtime() {
     let named = r#"
@@ -141,7 +132,6 @@ fn out_of_order_named_struct_fields_match_explicit_source_order_at_runtime() {
             }
         }
     "#;
-
     let named = run_named_struct_order(named);
     let explicit = run_named_struct_order(explicit);
     assert_eq!(named, explicit, "named and explicit forms must agree");

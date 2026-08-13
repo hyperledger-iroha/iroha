@@ -1,5 +1,4 @@
 //! Configuration handling for the SoraNet relay daemon.
-
 use std::{
     fmt,
     fs::{self, File, Metadata as FsMetadata, OpenOptions},
@@ -11,7 +10,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
-
 use ed25519_dalek::VerifyingKey;
 use hex::FromHexError;
 use iroha_crypto::soranet::{
@@ -34,7 +32,6 @@ use norito::{
 };
 use soranet_pq::MlDsaSuite;
 use thiserror::Error;
-
 use crate::{
     capability::{self, ConstantRateMode, GreaseEntry},
     checked_ed25519_verifying_key_from_bytes,
@@ -143,13 +140,11 @@ type ConfigFileIdentity = ();
 #[cfg(unix)]
 fn config_file_identity(metadata: &FsMetadata) -> ConfigFileIdentity {
     use std::os::unix::fs::MetadataExt as _;
-
     (metadata.dev(), metadata.ino())
 }
 #[cfg(windows)]
 fn config_file_identity(metadata: &FsMetadata) -> ConfigFileIdentity {
     use std::os::windows::fs::MetadataExt as _;
-
     (metadata.volume_serial_number(), metadata.file_index())
 }
 #[cfg(not(any(unix, windows)))]
@@ -169,7 +164,6 @@ const fn config_file_identity_available(_identity: ConfigFileIdentity) -> bool {
 #[cfg(windows)]
 fn config_file_is_reparse_point(metadata: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
@@ -193,7 +187,6 @@ fn validate_direct_regular_file(metadata: &FsMetadata, artifact: &str) -> io::Re
 #[cfg(unix)]
 fn open_direct_regular_file(path: &Path) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt as _;
-
     let mut options = OpenOptions::new();
     options.read(true).custom_flags(O_NOFOLLOW_FLAG);
     options.open(path)
@@ -201,7 +194,6 @@ fn open_direct_regular_file(path: &Path) -> io::Result<File> {
 #[cfg(windows)]
 fn open_direct_regular_file(path: &Path) -> io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     let mut options = OpenOptions::new();
     options
@@ -219,7 +211,6 @@ fn open_direct_regular_file(_path: &Path) -> io::Result<File> {
 #[cfg(unix)]
 fn config_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     config_file_identity(left) == config_file_identity(right)
         && left.len() == right.len()
         && left.mtime() == right.mtime()
@@ -231,7 +222,6 @@ fn config_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool
 #[cfg(windows)]
 fn config_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     config_file_identity_available(config_file_identity(left))
         && config_file_identity(left) == config_file_identity(right)
         && left.file_size() == right.file_size()
@@ -3114,7 +3104,6 @@ fn decode_manifest_ml_kem_key(
 }
 fn extract_manifest_identity_private_key(value: &norito::json::Value) -> Option<&str> {
     use norito::json::Value;
-
     match value {
         Value::Object(map) => {
             if let Some(hex) = map.get("identity_private_key_hex").and_then(Value::as_str) {
@@ -3159,7 +3148,6 @@ fn extract_manifest_identity_private_key(value: &norito::json::Value) -> Option<
 }
 fn extract_manifest_ml_kem_hex(value: &norito::json::Value) -> (Option<&str>, Option<&str>) {
     use norito::json::Value;
-
     match value {
         Value::Object(map) => {
             let mut private = map.get("ml_kem_private_key_hex").and_then(Value::as_str);

@@ -1,5 +1,4 @@
 // Bounded lane-retirement inventory arithmetic.
-
 /// Bound the aggregate retirement scan without treating legitimate route
 /// multiplicity as corruption.
 ///
@@ -27,7 +26,6 @@ fn lane_retirement_aggregate_work_item_limit(
         .checked_mul(regular_per_route.checked_add(native_per_route)?)?
         .checked_add(HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS)
 }
-
 /// Bound one route's complete retirement artifact namespace.
 fn lane_retirement_per_route_artifact_file_limit(native_retention: usize) -> Option<usize> {
     native_retention
@@ -36,7 +34,6 @@ fn lane_retirement_per_route_artifact_file_limit(native_retention: usize) -> Opt
         .checked_add(LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE)?
         .checked_add(LANE_RETIREMENT_HISTORICAL_RECOVERY_NAMESPACES_PER_ROUTE)
 }
-
 fn accumulate_lane_retirement_historical_recovery_records(
     current: usize,
     additional: usize,
@@ -45,7 +42,6 @@ fn accumulate_lane_retirement_historical_recovery_records(
         .checked_add(additional)
         .filter(|total| *total <= HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS)
 }
-
 fn remaining_lane_retirement_historical_recovery_budget(
     records_seen: usize,
     bytes_seen: u64,
@@ -56,7 +52,6 @@ fn remaining_lane_retirement_historical_recovery_budget(
         aggregate_byte_limit.checked_sub(bytes_seen)?,
     ))
 }
-
 /// Return whether Native manifest and receipt windows are the same complete,
 /// contiguous retained suffix.
 ///

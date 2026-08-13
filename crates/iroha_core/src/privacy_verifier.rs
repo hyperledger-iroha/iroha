@@ -30,7 +30,6 @@ use iroha_data_model::{
     },
 };
 use thiserror::Error;
-
 #[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{ZkAceNativeErrorV1, verify_zk_ace_privacy_v1};
 #[cfg(feature = "privacy-release-evidence")]
@@ -2242,11 +2241,9 @@ pub(crate) use tests::{
 };
 #[cfg(all(test, feature = "zk-stark"))]
 pub(crate) use tests::{ZkAceRuntimeFixtureForTest, zk_ace_runtime_fixture_for_test};
-
 #[cfg(test)]
 mod tests {
     use std::{str::FromStr as _, sync::OnceLock};
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         asset::AssetDefinitionId,
@@ -2294,7 +2291,6 @@ mod tests {
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest, Sha256};
-
     use super::*;
     use crate::{
         privacy_engines::{
@@ -2365,7 +2361,6 @@ mod tests {
         },
     };
     use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
-
     const TEST_CONSENSUS_LIMITS: PrivacyConsensusLimitsV1 =
         PrivacyConsensusLimitsV1::taira_default();
     fn network_id(seed: u8) -> NetworkId {
@@ -2612,7 +2607,6 @@ mod tests {
     }
     #[path = "zk_x509_tests.rs"]
     mod zk_x509_tests;
-
     fn valid_envelope() -> (
         PrivacyProofEnvelopeV1,
         PrivacyProtocolActivationRecordV1,

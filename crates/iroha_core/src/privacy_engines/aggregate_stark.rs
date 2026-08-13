@@ -7,13 +7,11 @@
 //! minimal batched Merkle multiproofs, shared binary FRI, and opened-query
 //! verification. It deliberately contains no X.509, private-note, or PQ-MASP
 //! policy.
-
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::io::{Read as _, Seek as _, Write as _};
 #[cfg(all(test, target_os = "linux"))]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
 #[cfg(test)]
 use chacha20poly1305::{
     XChaCha20Poly1305,
@@ -29,7 +27,6 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 #[cfg(test)]
 use zeroize::Zeroizing;
-
 use super::transparent_stark::{
     ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
     Sha256MerkleTreeV1, TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1,
@@ -5750,13 +5747,10 @@ pub(crate) fn verify_opened_query_relations_with_deep_v1<
 #[cfg(test)]
 #[path = "aggregate_stark/retained_polynomial_tests.rs"]
 mod retained_polynomial_tests;
-
 #[cfg(test)]
 mod tests {
     use rand::{SeedableRng as _, rngs::StdRng};
-
     use super::*;
-
     const PARAMETERS: AggregateStarkParametersV1 = AggregateStarkParametersV1 {
         proof_magic: *b"AGG1",
         proof_version: 1,
@@ -7654,7 +7648,6 @@ mod tests {
     #[test]
     fn encrypted_field_scratch_memfd_is_anonymous_owner_private_and_exec_sealed() {
         use rustix::fs::{Mode, fchmod};
-
         let file = create_anonymous_scratch_file_v1().expect("Linux 6.3+ sealed scratch memfd");
         let metadata = file.metadata().expect("scratch metadata");
         assert!(metadata.file_type().is_file());

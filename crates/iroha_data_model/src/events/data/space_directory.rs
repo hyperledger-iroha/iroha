@@ -1,15 +1,11 @@
 //! Space Directory manifest lifecycle events.
-
 use iroha_crypto::Hash;
 use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use super::*;
-
 #[model]
 mod model {
     use super::*;
-
     /// Events emitted when capability manifests change state.
     #[derive(
         Debug,
@@ -32,7 +28,6 @@ mod model {
         /// A manifest was revoked ahead of expiry (deny-wins audit).
         ManifestRevoked(SpaceDirectoryManifestRevoked),
     }
-
     /// Payload describing an activation event.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -51,7 +46,6 @@ mod model {
         #[norito(default)]
         pub expiry_epoch: Option<u64>,
     }
-
     /// Payload describing a natural expiry event.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -67,7 +61,6 @@ mod model {
         /// Epoch when the manifest expired.
         pub expired_epoch: u64,
     }
-
     /// Payload describing a manifest revocation.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -87,7 +80,6 @@ mod model {
         pub reason: Option<String>,
     }
 }
-
 /// Common re-exports for the Space Directory event module.
 pub mod prelude {
     pub use super::{

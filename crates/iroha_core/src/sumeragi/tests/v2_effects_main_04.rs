@@ -40,7 +40,6 @@ fn view_change_cancels_non_durable_store_and_unprotected_validation() {
                 _ => unreachable!("the test enumerates both byte-owner classes"),
             }
             let before = executor.body_ownership_projection();
-
             assert!(matches!(
                 executor.consume_effects(
                     vec![AdapterEffect::EnterView {
@@ -63,7 +62,6 @@ fn view_change_cancels_non_durable_store_and_unprotected_validation() {
             assert!(services.cancelled_validations.is_empty());
         }
     }
-
     // The counter covers the first ready body only. Without the global
     // preflight, lock reconciliation could retire that exact subset and
     // commit a zero residual before stale-view cleanup discovers the
@@ -106,7 +104,6 @@ fn view_change_cancels_non_durable_store_and_unprotected_validation() {
         replacement.proposal_round = replacement.round;
         let mut timeout = timeout_at_view(&fixture, 2);
         timeout.groups[0].highest_prepare_qc = Some(replacement.clone());
-
         assert!(matches!(
             executor.consume_effects(
                 vec![AdapterEffect::EnterView {
@@ -125,7 +122,6 @@ fn view_change_cancels_non_durable_store_and_unprotected_validation() {
         assert!(services.cancelled_fetches.is_empty());
         assert!(services.cancelled_validations.is_empty());
     }
-
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1_048_576, 1));
     let mut services = fixture.services();
@@ -150,7 +146,6 @@ fn view_change_cancels_non_durable_store_and_unprotected_validation() {
         .expect("install view");
     assert!(executor.pending_stores.is_empty());
     assert_eq!(services.cancelled_stores, vec![store_id]);
-
     let late_completion = services.execute_store(store_id);
     assert_eq!(
         executor
@@ -163,7 +158,6 @@ fn view_change_cancels_non_durable_store_and_unprotected_validation() {
             .durable_bodies
             .contains_key(&(fixture.manifest.round, fixture.manifest.subject))
     );
-
     executor
         .admit_local_proposal(
             tag(0),
@@ -195,7 +189,6 @@ fn view_change_cancels_non_durable_store_and_unprotected_validation() {
     );
     assert_eq!(services.cancelled_stores, vec![store_id]);
     assert_eq!(services.cancelled_validations, vec![validation_id]);
-
     let late_validation = services.execute_validation(validation_id);
     let late_receipt = late_validation
         .validated_receipt()
@@ -225,7 +218,6 @@ fn view_change_cancels_non_durable_store_and_unprotected_validation() {
     );
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn vote_signing_requires_the_exact_fsynced_execution_commitment() {
     let fixture = Fixture::new();
@@ -244,7 +236,6 @@ fn vote_signing_requires_the_exact_fsynced_execution_commitment() {
     ));
     assert!(missing.status().fail_closed);
     assert!(missing_services.sign_tasks.is_empty());
-
     let mut drift = fixture.executor(EffectQueueConfig::default());
     let mut drift_services = fixture.services();
     persist_fsynced_validation_marker(
@@ -275,7 +266,6 @@ fn vote_signing_requires_the_exact_fsynced_execution_commitment() {
     assert!(drift.status().fail_closed);
     assert!(drift_services.sign_tasks.is_empty());
 }
-
 #[test]
 fn split_round_commit_signing_is_rejected_before_service_dispatch() {
     let fixture = Fixture::new();
@@ -291,7 +281,6 @@ fn split_round_commit_signing_is_rejected_before_service_dispatch() {
     commit.round = round(&fixture.context, fixture.manifest.round.view + 2);
     commit.proposal_round = fixture.manifest.round;
     commit.phase = wire::GlobalPhase::Commit;
-
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::Sign {
@@ -303,10 +292,8 @@ fn split_round_commit_signing_is_rejected_before_service_dispatch() {
         Err(EffectExecutorError::Contract(reason))
             if reason.contains("same-round proposal authority")
     ));
-
     assert!(services.sign_tasks.is_empty());
 }
-
 #[test]
 fn reproposal_commit_signing_uses_its_same_round_validation_marker() {
     let fixture = Fixture::new();
@@ -324,7 +311,6 @@ fn reproposal_commit_signing_uses_its_same_round_validation_marker() {
     commit.round = reproposal_round;
     commit.proposal_round = reproposal_round;
     commit.phase = wire::GlobalPhase::Commit;
-
     executor
         .consume_effects(
             vec![AdapterEffect::Sign {
@@ -334,7 +320,6 @@ fn reproposal_commit_signing_uses_its_same_round_validation_marker() {
             &mut services,
         )
         .expect("same-round reproposal Commit owns its exact validation marker");
-
     assert!(matches!(
         services.sign_tasks.as_slice(),
         [task]
@@ -342,7 +327,6 @@ fn reproposal_commit_signing_uses_its_same_round_validation_marker() {
     ));
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn sign_effect_verifies_signature_and_preserves_original_tag() {
     let fixture = Fixture::new();
@@ -390,7 +374,6 @@ fn sign_effect_verifies_signature_and_preserves_original_tag() {
         CompletionDisposition::Stale
     );
 }
-
 #[test]
 fn invalid_signer_completion_fails_closed_without_runtime_input() {
     let fixture = Fixture::new();
@@ -422,7 +405,6 @@ fn invalid_signer_completion_fails_closed_without_runtime_input() {
     assert!(executor.runtime.completions.is_empty());
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn broadcast_view_and_evidence_effects_reach_exact_hooks() {
     let fixture = Fixture::new();
@@ -460,7 +442,6 @@ fn broadcast_view_and_evidence_effects_reach_exact_hooks() {
     assert_eq!(services.equivocations.len(), 1);
     assert_eq!(services.invalid_bodies, vec![fixture.manifest.subject]);
 }
-
 #[test]
 fn equivocation_reporting_rejects_a_mutated_non_conflicting_pair() {
     let fixture = Fixture::new();
@@ -474,7 +455,6 @@ fn equivocation_reporting_rejects_a_mutated_non_conflicting_pair() {
     second.phase = first.phase;
     second.subject = first.subject;
     second.execution_commitment = first.execution_commitment;
-
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::ReportEquivocation {
@@ -487,7 +467,6 @@ fn equivocation_reporting_rejects_a_mutated_non_conflicting_pair() {
     ));
     assert!(services.equivocations.is_empty());
 }
-
 #[test]
 fn authenticated_chunk_reconstruction_rejection_retires_fetch_nonfatally() {
     let fixture = Fixture::new();
@@ -523,7 +502,6 @@ fn authenticated_chunk_reconstruction_rejection_retires_fetch_nonfatally() {
     )
     .payload()
     .to_vec();
-
     assert!(matches!(
         executor.accept_payload_chunk(
             work_id,
@@ -541,7 +519,6 @@ fn authenticated_chunk_reconstruction_rejection_retires_fetch_nonfatally() {
     assert!(services.closed.is_empty());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn failed_view_cleanup_keeps_stale_fetch_and_requires_restart() {
     let fixture = Fixture::new();
@@ -564,7 +541,6 @@ fn failed_view_cleanup_keeps_stale_fetch_and_requires_restart() {
         .expect("admit prior-view body recovery");
     let before = executor.body_ownership_projection();
     services.fail_on = Some("cancel-fetch");
-
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::EnterView {
@@ -595,7 +571,6 @@ fn failed_view_cleanup_keeps_stale_fetch_and_requires_restart() {
     assert_eq!(executor.body_ownership_projection(), before);
     assert_eq!(services.closed.len(), 1);
 }
-
 #[test]
 fn view_cleanup_rejects_inconsistent_protected_request_before_lock_mutation() {
     let fixture = Fixture::new();
@@ -623,7 +598,6 @@ fn view_cleanup_rejects_inconsistent_protected_request_before_lock_mutation() {
         .expect("certified request index");
     assert!(executor.outstanding_requests.cancel(request_hash));
     let before = executor.body_ownership_projection();
-
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::EnterView {
@@ -642,7 +616,6 @@ fn view_cleanup_rejects_inconsistent_protected_request_before_lock_mutation() {
     assert!(executor.output_guard.restart_required());
     assert_eq!(services.closed.len(), 1);
 }
-
 #[test]
 fn view_cleanup_second_cancellation_failure_commits_no_fetch_retirement() {
     let fixture = Fixture::new();
@@ -687,7 +660,6 @@ fn view_cleanup_second_cancellation_failure_commits_no_fetch_retirement() {
     let first_work_id = services.fetch_tasks[0].id();
     let before = executor.body_ownership_projection();
     services.fail_on_call = Some(("cancel-fetch", 2));
-
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::EnterView {
@@ -706,7 +678,6 @@ fn view_cleanup_second_cancellation_failure_commits_no_fetch_retirement() {
     assert!(executor.output_guard.restart_required());
     assert_eq!(services.closed.len(), 1);
 }
-
 #[test]
 fn ordinary_fetch_authenticates_chunks_and_runs_store_validate_pipeline() {
     let fixture = Fixture::new();
@@ -768,7 +739,6 @@ fn ordinary_fetch_authenticates_chunks_and_runs_store_validate_pipeline() {
             if *completion_tag == tag(0)
                 && manifest == &fixture.manifest
     ));
-
     for _ in 0..8 {
         executor
             .consume_effects(
@@ -838,7 +808,6 @@ fn ordinary_fetch_authenticates_chunks_and_runs_store_validate_pipeline() {
                 && receipt.durable().subject() == fixture.manifest.subject
     ));
 }
-
 #[test]
 fn owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work_nonfatal() {
     let fixture = Fixture::new();
@@ -848,7 +817,6 @@ fn owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work
     let sender = fixture.context.roster[0].validator.clone();
     let unknown = EffectWorkId::for_test(999);
     let exact_ownership = payload_chunk_ingress_ownership(&chunk, sender.clone());
-
     assert_eq!(
         executor.accept_payload_chunk_with_ingress_ownership(
             unknown,
@@ -861,7 +829,6 @@ fn owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work
     );
     assert!(!executor.status().fail_closed);
     assert!(services.chunks.is_empty());
-
     let foreign_origin = fixture.context.roster[1].validator.clone();
     let swapped_ownership = payload_chunk_ingress_ownership(&chunk, foreign_origin);
     assert!(matches!(
@@ -878,7 +845,6 @@ fn owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work
     assert!(services.chunks.is_empty());
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn validation_rejection_enqueues_failure_without_success_receipt() {
     let fixture = Fixture::new();
@@ -932,7 +898,6 @@ fn validation_rejection_enqueues_failure_without_success_receipt() {
     assert_eq!(services.rejected_validations, vec!["invalid transaction"]);
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn proposal_reconstruction_rejects_noncanonical_manifest_without_fail_close() {
     let fixture = Fixture::new();
@@ -946,7 +911,6 @@ fn proposal_reconstruction_rejects_noncanonical_manifest_without_fail_close() {
         fixture.manifest.subject,
         &alternate_chunk,
     );
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -961,7 +925,6 @@ fn proposal_reconstruction_rejects_noncanonical_manifest_without_fail_close() {
         )
         .expect("proposal starts body acquisition");
     let fetch_task = services.fetch_tasks[0].clone();
-
     assert_eq!(
         executor
             .complete_body_reconstruction(
@@ -980,7 +943,6 @@ fn proposal_reconstruction_rejects_noncanonical_manifest_without_fail_close() {
     assert!(services.closed.is_empty());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn certified_response_is_bound_to_exact_request_and_consumed_once() {
     let fixture = Fixture::new();
@@ -1043,7 +1005,6 @@ fn certified_response_is_bound_to_exact_request_and_consumed_once() {
         ))
     ));
 }
-
 #[test]
 fn certified_body_response_carrier_swap_fails_closed_before_fetch_mutation() {
     let fixture = Fixture::new();
@@ -1079,7 +1040,6 @@ fn certified_body_response_carrier_swap_fails_closed_before_fetch_mutation() {
     let pending_before = executor.pending_fetches.clone();
     let certified_before = executor.certified_work.clone();
     let outstanding_before = executor.outstanding_requests.hashes();
-
     assert!(matches!(
         executor.accept_certified_body_response_with_ingress_ownership(
             response,
@@ -1096,7 +1056,6 @@ fn certified_body_response_carrier_swap_fails_closed_before_fetch_mutation() {
     assert!(services.completed_certified_fetches.is_empty());
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn certified_manifest_mismatch_is_recoverable_in_both_authority_orders() {
     for proposal_first in [true, false] {
@@ -1105,7 +1064,6 @@ fn certified_manifest_mismatch_is_recoverable_in_both_authority_orders() {
         let mut services = fixture.services();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
         let sources = certified_sources(&fixture, &prepare);
-
         if proposal_first {
             executor
                 .consume_effects(
@@ -1149,7 +1107,6 @@ fn certified_manifest_mismatch_is_recoverable_in_both_authority_orders() {
                 )
                 .expect("proposal adds manifest authority");
         }
-
         let work_id = services.fetch_tasks[0].id();
         let request = services
             .fetch_tasks
@@ -1166,7 +1123,6 @@ fn certified_manifest_mismatch_is_recoverable_in_both_authority_orders() {
             &alternate_chunk,
         );
         assert_ne!(alternate_manifest, fixture.manifest);
-
         let signed_response = |manifest: wire::PayloadManifest, responder: wire::ValidatorIndex| {
             let mut response = wire::CertifiedBodyResponse {
                 request_hash: HashOf::new(&request),
@@ -1183,7 +1139,6 @@ fn certified_manifest_mismatch_is_recoverable_in_both_authority_orders() {
             .to_vec();
             response
         };
-
         let mismatched = signed_response(alternate_manifest, 0);
         mismatched
             .validate_against(
@@ -1213,7 +1168,6 @@ fn certified_manifest_mismatch_is_recoverable_in_both_authority_orders() {
         assert!(services.closed.is_empty());
         assert!(!executor.status().fail_closed);
         assert!(executor.runtime.completions.is_empty());
-
         let correct = signed_response(fixture.manifest.clone(), 1);
         assert_eq!(
             executor
@@ -1236,7 +1190,6 @@ fn certified_manifest_mismatch_is_recoverable_in_both_authority_orders() {
         ));
     }
 }
-
 #[test]
 fn certificate_first_response_rederives_manifest_before_proposal_authority() {
     let fixture = Fixture::new();
@@ -1257,7 +1210,6 @@ fn certificate_first_response_rederives_manifest_before_proposal_authority() {
             &mut services,
         )
         .expect("certificate starts acquisition before proposal authority");
-
     let work_id = services.fetch_tasks[0].id();
     let request = services.fetch_tasks[0]
         .certified_request()
@@ -1271,7 +1223,6 @@ fn certificate_first_response_rederives_manifest_before_proposal_authority() {
         fixture.manifest.subject,
         &alternate_chunk,
     );
-
     let signed_response = |manifest: wire::PayloadManifest, responder: wire::ValidatorIndex| {
         let mut response = wire::CertifiedBodyResponse {
             request_hash: HashOf::new(&request),
@@ -1288,7 +1239,6 @@ fn certificate_first_response_rederives_manifest_before_proposal_authority() {
         .to_vec();
         response
     };
-
     let mismatched = signed_response(alternate_manifest, 0);
     mismatched
         .validate_against(
@@ -1317,7 +1267,6 @@ fn certificate_first_response_rederives_manifest_before_proposal_authority() {
     assert!(services.completed_certified_fetches.is_empty());
     assert!(services.closed.is_empty());
     assert!(!executor.status().fail_closed);
-
     assert_eq!(
         executor
             .accept_certified_body_response(
@@ -1333,7 +1282,6 @@ fn certificate_first_response_rederives_manifest_before_proposal_authority() {
     assert!(executor.outstanding_requests.is_empty());
     assert_eq!(services.completed_certified_fetches, vec![work_id]);
 }
-
 #[test]
 fn certified_response_retirement_failure_is_fail_closed_after_authentication() {
     let fixture = Fixture::new();
@@ -1373,7 +1321,6 @@ fn certified_response_retirement_failure_is_fail_closed_after_authentication() {
     .to_vec();
     let before = executor.body_ownership_projection();
     services.fail_on = Some("complete-certified-fetch");
-
     assert!(matches!(
         executor.accept_certified_body_response(
             response,
@@ -1400,7 +1347,6 @@ fn certified_response_retirement_failure_is_fail_closed_after_authentication() {
     );
     assert_eq!(services.closed.len(), 1);
 }
-
 #[test]
 fn certified_response_priority_probe_is_read_only_and_detects_revalidation_drift() {
     let fixture = Fixture::new();
@@ -1440,7 +1386,6 @@ fn certified_response_priority_probe_is_read_only_and_detects_revalidation_drift
     let claim_hash_before = executor
         .outstanding_requests
         .response_claim_hash(response.request_hash);
-
     let candidate = match executor
         .probe_certified_response_priority(&response, &responder)
         .expect("exact response authentication succeeds")
@@ -1498,7 +1443,6 @@ fn certified_response_priority_probe_is_read_only_and_detects_revalidation_drift
             .response_claim_hash(response.request_hash),
         claim_hash_before
     );
-
     let mut unsolicited = response.clone();
     unsolicited.request_hash =
         HashOf::from_untyped_unchecked(Hash::new(b"unsolicited certified response priority probe"));
@@ -1521,7 +1465,6 @@ fn certified_response_priority_probe_is_read_only_and_detects_revalidation_drift
             .response_claim_hash(response.request_hash),
         claim_hash_before
     );
-
     let mut invalid = response.clone();
     invalid.signature[0] ^= 1;
     assert!(matches!(
@@ -1544,7 +1487,6 @@ fn certified_response_priority_probe_is_read_only_and_detects_revalidation_drift
     assert!(services.completed_certified_fetches.is_empty());
     assert!(executor.runtime.completions.is_empty());
     assert!(!executor.status().fail_closed);
-
     let authenticated = executor
         .outstanding_requests
         .authenticate_response(&fixture.context, response.clone(), &responder)
@@ -1562,14 +1504,12 @@ fn certified_response_priority_probe_is_read_only_and_detects_revalidation_drift
         Ok(false),
         "Vacant-to-retransmission family drift must change the opaque candidate"
     );
-
     executor.output_guard.activate_restart_required();
     assert!(matches!(
         executor.validate_lifecycle_ingress_selector_authority(),
         Err(EffectTransportError::FailClosed(_))
     ));
 }
-
 #[test]
 fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
     let fixture = Fixture::new();
@@ -1616,7 +1556,6 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
             .is_none()
     );
     assert_eq!(executor.validated_certified_request_presence(), Ok(true));
-
     let uncertified_effect = AdapterEffect::FetchBody {
         tag: tag(0),
         round: fixture.manifest.round,
@@ -1637,7 +1576,6 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
     let certified_ownership = executor.runtime.test_effect_ownership(&certified_effect);
     let ownership_before = executor.body_ownership_projection();
     let service_fetches_before = services.fetch_tasks.clone();
-
     let uncertified = executor.begin_fetch(
         tag(0),
         fixture.manifest.round,
@@ -1656,7 +1594,6 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
     assert_eq!(executor.body_ownership_projection(), ownership_before);
     assert_eq!(services.fetch_tasks, service_fetches_before);
     assert_eq!(executor.validated_certified_request_presence(), Ok(true));
-
     let certified = executor.begin_fetch(
         tag(0),
         fixture.manifest.round,
@@ -1675,7 +1612,6 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
     assert_eq!(executor.body_ownership_projection(), ownership_before);
     assert_eq!(services.fetch_tasks, service_fetches_before);
     assert_eq!(executor.validated_certified_request_presence(), Ok(true));
-
     let collision_id = EffectWorkId::for_test(73);
     executor.pending_fetches.insert(
         collision_id,
@@ -1700,7 +1636,6 @@ fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
         )) if hash == request_hash
     ));
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() {
@@ -1754,7 +1689,6 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     let second_response = response(1);
     assert_eq!(first_response.request_hash, second_response.request_hash);
     assert_ne!(HashOf::new(&first_response), HashOf::new(&second_response));
-
     let ingress = crate::sumeragi::FairV2Ingress::new(32, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
     ingress
         .configure_roster(
@@ -1767,7 +1701,6 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         .expect("fixture roster fits the selector ingress");
     ingress.state.lock().leader_wire_context = Some((fixture.context.id(), fixture.context.height));
     ingress.open().expect("open selector ingress");
-
     let first_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(first_response.clone()),
     ));
@@ -1791,7 +1724,6 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     ));
     let second_ordinal = ingress.state.lock().last_admission_ordinal;
     assert!(first_ordinal < second_ordinal);
-
     let prepared = fixture
         .executor
         .prepare_lifecycle_ingress_selector(&ingress, second_ordinal)
@@ -1831,7 +1763,6 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         Err(CertifiedFetchReadyPublicationError::SelectedOccurrenceNotClaimedResponse),
         "a selected request-fenced retransmission cannot borrow the other occurrence's family authority",
     );
-
     let winning_prepared = fixture
         .executor
         .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
@@ -1902,7 +1833,6 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         first_ordinal,
         "deriving readiness borrows and preserves the complete prepared token",
     );
-
     let owner_effect = task.adapter_effect();
     let owner_pending = task
         .ownership()
@@ -1985,7 +1915,6 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         before_unbound,
         "an owner retaining its startup store cannot plan against an independent service",
     );
-
     let foreign_output_guard = ConsensusOutputGuard::isolated();
     let planner_io = owner.bind_body_store_to_planner_io_for_test(
         &mut production_services,
@@ -2063,7 +1992,6 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         before_capacity_wait,
         "capacity waiting cannot advance the Fetch generation or claim a lease",
     );
-
     let winning_prepared = fixture
         .executor
         .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
@@ -2096,7 +2024,6 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         ) if wait.source() == lifecycle_source && wait.observed_generation() == 1
     ));
     assert_eq!(planner_io.queued_certified_fetch_count(), 1);
-
     let repeated = fixture
         .executor
         .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)

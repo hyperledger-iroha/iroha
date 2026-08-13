@@ -8,9 +8,7 @@
 //! The metadata header encodes the VM version, execution mode flags, optional
 //! vector length and cycle limit.  It also reserves bits for hardware
 //! transactional memory (HTM) support.
-
 use std::io::Write;
-
 use crate::error::VMError;
 use iroha_data_model::smart_contract::manifest::{
     AccessSetHints, ContractErrorCodeDescriptor, EntryPointKind, EntrypointDescriptor,
@@ -23,14 +21,12 @@ use norito::{
         serialize_to_buffer,
     },
 };
-
 /// Domain separator for the canonical deployable contract artifact hash.
 ///
 /// The hash deliberately covers the complete `.to` image, including the fixed
 /// execution header. Contract debug information belongs in a sidecar and is
 /// therefore not part of a deployable artifact.
 pub const CONTRACT_CODE_HASH_DOMAIN: &[u8] = b"iroha:ivm:contract-artifact:v1\0";
-
 /// Compute the canonical identity of a deployable IVM contract artifact.
 ///
 /// Unlike the pre-release body-only hash, this binds every execution-relevant
@@ -39,16 +35,13 @@ pub const CONTRACT_CODE_HASH_DOMAIN: &[u8] = b"iroha:ivm:contract-artifact:v1\0"
 pub fn contract_code_hash(artifact: &[u8]) -> iroha_crypto::Hash {
     iroha_crypto::Hash::new_from_chunks(&[CONTRACT_CODE_HASH_DOMAIN, artifact])
 }
-
 /// Maximum accepted logical vector length for admission.
 pub const VECTOR_LENGTH_MAX: u8 = 64;
-
 /// Magic prefix identifying IVM bytecode.
 pub const MAGIC: &[u8; 4] = b"IVM\0";
 /// Fixed IVM V1 header size: 17 bytes of execution metadata followed by the
 /// authenticated 32-byte ABI descriptor hash.
 pub const HEADER_SIZE: usize = 49;
-
 /// Literal table section marker placed immediately after the metadata header
 /// when compiled bytecode includes literal fixups.
 pub const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
@@ -56,7 +49,6 @@ pub const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 pub const LITERAL_KIND_SHIFT: u32 = 56;
 /// Mask selecting the section-relative offset in an ABI-v1 literal descriptor.
 pub const LITERAL_OFFSET_MASK: u64 = (1_u64 << LITERAL_KIND_SHIFT) - 1;
-
 /// Canonical kinds carried by ABI-v1 indexed-literal table descriptors.
 ///
 /// Each descriptor is one little-endian `u64`: the high byte is this kind and
@@ -71,10 +63,8 @@ pub enum LiteralKindV1 {
     /// Exactly eight little-endian bytes representing a signed `i64`.
     I64 = 1,
 }
-
 impl TryFrom<u8> for LiteralKindV1 {
     type Error = VMError;
-
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::PointerTlv),
@@ -83,7 +73,6 @@ impl TryFrom<u8> for LiteralKindV1 {
         }
     }
 }
-
 /// Encode one canonical ABI-v1 `LTLB` table descriptor.
 #[must_use]
 pub const fn encode_literal_descriptor(kind: LiteralKindV1, relative_offset: u64) -> Option<u64> {
@@ -92,7 +81,6 @@ pub const fn encode_literal_descriptor(kind: LiteralKindV1, relative_offset: u64
     }
     Some(((kind as u64) << LITERAL_KIND_SHIFT) | relative_offset)
 }
-
 /// Decode one canonical ABI-v1 `LTLB` table descriptor.
 pub fn decode_literal_descriptor(raw: u64) -> Result<(LiteralKindV1, u64), VMError> {
     let kind = LiteralKindV1::try_from((raw >> LITERAL_KIND_SHIFT) as u8)?;
@@ -119,10 +107,8 @@ pub const CONTRACT_FEATURE_BIT_ZK: u64 = 1 << 0;
 pub const CONTRACT_FEATURE_BIT_VECTOR: u64 = 1 << 1;
 /// Bitmask of all currently supported embedded execution-capability bits.
 pub const CONTRACT_FEATURE_KNOWN_BITS: u64 = CONTRACT_FEATURE_BIT_ZK | CONTRACT_FEATURE_BIT_VECTOR;
-
 const CONTRACT_INTERFACE_SECTION_HEADER_SIZE: usize = 8;
 const CONTRACT_DEBUG_SECTION_HEADER_SIZE: usize = 8;
-
 /// Artifact-local entrypoint metadata carried inside the required `CNTR` section.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedEntrypointDescriptor {
@@ -144,7 +130,6 @@ pub struct EmbeddedEntrypointDescriptor {
     /// Entrypoint PC relative to the executable instruction stream (not the artifact start).
     pub entry_pc: u64,
 }
-
 impl EmbeddedEntrypointDescriptor {
     #[must_use]
     pub fn to_manifest_descriptor(&self) -> EntrypointDescriptor {
@@ -164,14 +149,12 @@ impl EmbeddedEntrypointDescriptor {
         }
     }
 }
-
 /// Field descriptor for embedded durable state record types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EmbeddedStateFieldDescriptor {
     pub name: String,
     pub ty: EmbeddedStateType,
 }
-
 /// Compact durable-state type schema embedded in contract artifacts.
 ///
 /// Equality and destruction walk the recursive type tree iteratively so the
@@ -215,7 +198,6 @@ pub enum EmbeddedStateType {
         capacity: u8,
     },
 }
-
 impl PartialEq for EmbeddedStateType {
     fn eq(&self, other: &Self) -> bool {
         let mut pending = vec![(self, other)];
@@ -311,9 +293,7 @@ impl PartialEq for EmbeddedStateType {
         true
     }
 }
-
 impl Eq for EmbeddedStateType {}
-
 fn move_embedded_state_type_children(
     value: &mut EmbeddedStateType,
     pending: &mut Vec<EmbeddedStateType>,
@@ -356,7 +336,6 @@ fn move_embedded_state_type_children(
         | EmbeddedStateType::Json => {}
     }
 }
-
 impl Drop for EmbeddedStateType {
     fn drop(&mut self) {
         let mut pending = Vec::new();
@@ -366,7 +345,6 @@ impl Drop for EmbeddedStateType {
         }
     }
 }
-
 impl EmbeddedStateType {
     /// Return the stable one-byte tag used by the custom CNTR type-tree codec.
     #[must_use]
@@ -395,7 +373,6 @@ impl EmbeddedStateType {
         }
     }
 }
-
 const EMBEDDED_STATE_TYPE_TAG_INT: u8 = 0;
 const EMBEDDED_STATE_TYPE_TAG_DECIMAL: u8 = 1;
 const EMBEDDED_STATE_TYPE_TAG_QUANTITY: u8 = 2;
@@ -418,13 +395,11 @@ const EMBEDDED_STATE_TYPE_TAG_RESULT: u8 = 18;
 const EMBEDDED_STATE_TYPE_TAG_LIST: u8 = 19;
 /// Maximum recursive depth accepted by the first-release CNTR state-type codec.
 pub const MAX_EMBEDDED_STATE_TYPE_DEPTH_V1: usize = 256;
-
 fn embedded_state_type_depth_error(operation: &str) -> NoritoError {
     NoritoError::Message(format!(
         "embedded state type {operation} nesting exceeds {MAX_EMBEDDED_STATE_TYPE_DEPTH_V1} levels"
     ))
 }
-
 fn validate_embedded_state_type_iterative(
     root: &EmbeddedStateType,
     operation: &str,
@@ -496,7 +471,6 @@ fn validate_embedded_state_type_iterative(
     }
     Ok(())
 }
-
 fn expect_payload_consumed(
     consumed: usize,
     total: usize,
@@ -509,7 +483,6 @@ fn expect_payload_consumed(
         "trailing bytes in {context} payload"
     )))
 }
-
 fn encode_embedded_state_owned_child(
     encoded: &[u8],
     writer: &mut Vec<u8>,
@@ -525,7 +498,6 @@ fn encode_embedded_state_owned_child(
     writer.write_all(encoded)?;
     Ok(())
 }
-
 fn decode_embedded_state_owned_child(encoded: &[u8]) -> Result<(&[u8], usize), NoritoError> {
     let (owned_payload_len, header_len) = norito::core::inspect_len_from_slice(encoded)?;
     let end = header_len
@@ -542,7 +514,6 @@ fn decode_embedded_state_owned_child(encoded: &[u8]) -> Result<(&[u8], usize), N
     )?;
     Ok((child, end))
 }
-
 fn decode_embedded_state_byte_vec(encoded: &[u8]) -> Result<(&[u8], usize), NoritoError> {
     let (value_len, header_len) = norito::core::inspect_seq_len_slice(encoded)?;
     let end = header_len
@@ -553,7 +524,6 @@ fn decode_embedded_state_byte_vec(encoded: &[u8]) -> Result<(&[u8], usize), Nori
         .ok_or(NoritoError::LengthMismatch)?;
     Ok((value, end))
 }
-
 fn decode_embedded_state_byte_vec_sequence(
     encoded: &[u8],
 ) -> Result<(Vec<&[u8]>, usize), NoritoError> {
@@ -570,14 +540,12 @@ fn decode_embedded_state_byte_vec_sequence(
     }
     Ok((values, plan.used))
 }
-
 fn reserve_embedded_decode_items<T>(count: usize) -> Result<(), NoritoError> {
     let bytes = count
         .checked_mul(core::mem::size_of::<T>())
         .ok_or(NoritoError::LengthMismatch)?;
     norito::core::reserve_decode_allocation(bytes)
 }
-
 fn try_embedded_decode_vec<T>(capacity: usize) -> Result<Vec<T>, NoritoError> {
     reserve_embedded_decode_items::<T>(capacity)?;
     let mut values = Vec::new();
@@ -589,7 +557,6 @@ fn try_embedded_decode_vec<T>(capacity: usize) -> Result<Vec<T>, NoritoError> {
     }
     Ok(values)
 }
-
 fn reserve_embedded_decode_capacity<T>(
     values: &mut Vec<T>,
     additional: usize,
@@ -602,7 +569,6 @@ fn reserve_embedded_decode_capacity<T>(
     if required <= previous_capacity {
         return Ok(());
     }
-
     // Grow geometrically so a deeply nested type cannot force one allocation
     // and copy per decoder event. Known batches can still request their exact
     // larger bound in one step.
@@ -623,18 +589,15 @@ fn reserve_embedded_decode_capacity<T>(
     }
     Ok(())
 }
-
 fn push_embedded_decode_item<T>(values: &mut Vec<T>, value: T) -> Result<(), NoritoError> {
     reserve_embedded_decode_capacity(values, 1)?;
     values.push(value);
     Ok(())
 }
-
 fn boxed_embedded_decode_value<T>(value: T) -> Result<Box<T>, NoritoError> {
     reserve_embedded_decode_items::<T>(1)?;
     Ok(Box::new(value))
 }
-
 fn encode_embedded_state_field_payload(
     value: &EmbeddedStateFieldDescriptor,
 ) -> Result<Vec<u8>, NoritoError> {
@@ -643,7 +606,6 @@ fn encode_embedded_state_field_payload(
     serialize_to_buffer(&value.ty, &mut payload)?;
     Ok(payload)
 }
-
 fn decode_embedded_state_field_payload(
     encoded: &[u8],
 ) -> Result<EmbeddedStateFieldDescriptor, NoritoError> {
@@ -657,13 +619,11 @@ fn decode_embedded_state_field_payload(
     )?;
     Ok(EmbeddedStateFieldDescriptor { name, ty })
 }
-
 fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u8>, NoritoError> {
     enum Event<'a> {
         Enter(&'a EmbeddedStateType),
         Finish(&'a EmbeddedStateType),
     }
-
     validate_embedded_state_type_iterative(value, "encoding")?;
     let mut pending = vec![Event::Enter(value)];
     let mut encoded_values = Vec::<Vec<u8>>::new();
@@ -870,7 +830,6 @@ fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u
     }
     encoded_values.pop().ok_or(NoritoError::LengthMismatch)
 }
-
 fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateType, NoritoError> {
     enum Constructor {
         Tuple(usize),
@@ -883,7 +842,6 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
         Result,
         List(u8),
     }
-
     impl Constructor {
         fn child_count(&self) -> usize {
             match self {
@@ -894,17 +852,14 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
             }
         }
     }
-
     enum Event<'a> {
         Decode { encoded: &'a [u8], depth: usize },
         Finish(Constructor),
     }
-
     struct DecodedValue {
         value: EmbeddedStateType,
         contains_resource_handle: bool,
     }
-
     let mut pending = Vec::new();
     push_embedded_decode_item(&mut pending, Event::Decode { encoded, depth: 1 })?;
     let mut decoded_values = Vec::<DecodedValue>::new();
@@ -1190,25 +1145,21 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
         .map(|decoded| decoded.value)
         .ok_or(NoritoError::LengthMismatch)
 }
-
 impl NoritoSerialize for EmbeddedStateFieldDescriptor {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let encoded = encode_embedded_state_field_payload(self)?;
         encoded.serialize(writer)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for EmbeddedStateFieldDescriptor {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("EmbeddedStateFieldDescriptor decode")
     }
-
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
         let encoded = <Vec<u8> as NoritoDeserialize>::try_deserialize(archived.cast::<Vec<u8>>())?;
         decode_embedded_state_field_payload(&encoded)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for EmbeddedStateFieldDescriptor {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
         let (encoded, used) = <Vec<u8> as DecodeFromSlice>::decode_from_slice(bytes)?;
@@ -1216,33 +1167,27 @@ impl<'a> DecodeFromSlice<'a> for EmbeddedStateFieldDescriptor {
         Ok((value, used))
     }
 }
-
 impl NoritoSerialize for EmbeddedStateType {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let encoded = encode_embedded_state_type_payload(self)?;
         encoded.serialize(writer)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for EmbeddedStateType {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
     }
-
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("EmbeddedStateType decode")
     }
-
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
         let encoded = <Vec<u8> as NoritoDeserialize>::try_deserialize(archived.cast::<Vec<u8>>())?;
         decode_embedded_state_type_payload(&encoded)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for EmbeddedStateType {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
         let (encoded, used) = <Vec<u8> as DecodeFromSlice>::decode_from_slice(bytes)?;
@@ -1250,14 +1195,12 @@ impl<'a> DecodeFromSlice<'a> for EmbeddedStateType {
         Ok((value, used))
     }
 }
-
 /// Seiyaku-level durable state declaration descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedStateDescriptor {
     pub name: String,
     pub ty: EmbeddedStateType,
 }
-
 /// Decoded payload of the required `CNTR` section carried by contract artifacts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(schema_name = "iroha.kotodama.EmbeddedContractInterfaceV1")]
@@ -1284,7 +1227,6 @@ pub struct EmbeddedContractInterfaceV1 {
     /// Stable application error codes accepted by `require`.
     pub error_codes: Vec<ContractErrorCodeDescriptor>,
 }
-
 /// Exact source location emitted for hash-keyed compiler debug sidecars.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedSourceLocation {
@@ -1299,7 +1241,6 @@ pub struct EmbeddedSourceLocation {
     pub line: u32,
     pub column: u32,
 }
-
 /// One exact bytecode/source segment in compiler debug metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedSourceMapEntryV1 {
@@ -1310,7 +1251,6 @@ pub struct EmbeddedSourceMapEntryV1 {
     pub pc_end: u64,
     pub source: EmbeddedSourceLocation,
 }
-
 /// Function-level budget summary emitted inside the optional `DBG1` section.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedFunctionBudgetReportV1 {
@@ -1324,14 +1264,12 @@ pub struct EmbeddedFunctionBudgetReportV1 {
     pub jump_range_risk: bool,
     pub source: Option<EmbeddedSourceLocation>,
 }
-
 /// Decoded payload of the optional `DBG1` section carried by contract artifacts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedContractDebugInfoV1 {
     pub source_map: Vec<EmbeddedSourceMapEntryV1>,
     pub budget_report: Vec<EmbeddedFunctionBudgetReportV1>,
 }
-
 impl EmbeddedContractDebugInfoV1 {
     #[must_use]
     pub fn encode_section(&self) -> Vec<u8> {
@@ -1346,7 +1284,6 @@ impl EmbeddedContractDebugInfoV1 {
         section
     }
 }
-
 impl EmbeddedContractInterfaceV1 {
     #[must_use]
     pub fn encode_section(&self) -> Vec<u8> {
@@ -1362,7 +1299,6 @@ impl EmbeddedContractInterfaceV1 {
         section
     }
 }
-
 /// Execution mode flags used in the metadata header.
 pub mod mode {
     /// Zero-knowledge proof mode enabled.
@@ -1374,7 +1310,6 @@ pub mod mode {
     #[allow(dead_code)]
     pub const HTM: u8 = 0x04;
 }
-
 #[derive(Clone, Debug)]
 pub struct ProgramMetadata {
     pub version_major: u8,
@@ -1386,7 +1321,6 @@ pub struct ProgramMetadata {
     /// ABI version for syscall table and pointer-ABI schema.
     pub abi_version: u8,
 }
-
 /// Result of parsing metadata and locating the code segment inside a program artifact.
 #[derive(Clone, Debug)]
 pub struct ParsedProgramMetadata {
@@ -1402,7 +1336,6 @@ pub struct ParsedProgramMetadata {
     /// Validated location metadata for the optional indexed literal table.
     pub literal_section: Option<ParsedLiteralSection>,
 }
-
 /// Structurally validated byte ranges for an `LTLB` indexed literal section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParsedLiteralSection {
@@ -1419,14 +1352,12 @@ pub struct ParsedLiteralSection {
     /// Absolute artifact offset where executable code begins.
     pub code_offset: usize,
 }
-
 impl ParsedProgramMetadata {
     /// Length of the ordered prefix sections placed between the header and executable code.
     pub fn prefix_len(&self) -> usize {
         self.code_offset.saturating_sub(self.header_len)
     }
 }
-
 impl ProgramMetadata {
     pub fn parse(bytes: &[u8]) -> Result<ParsedProgramMetadata, VMError> {
         if bytes.len() < HEADER_SIZE {
@@ -1449,7 +1380,6 @@ impl ProgramMetadata {
             .try_into()
             .map_err(|_| VMError::InvalidMetadata)?;
         let max_cycles = u64::from_le_bytes(max_cycles_bytes);
-
         // Validate consensus-visible header policy in stable precedence order:
         // version, unknown feature bits, ABI version, vector length, ABI hash.
         // Structural length and magic failures necessarily precede these.
@@ -1498,7 +1428,6 @@ impl ProgramMetadata {
         let mut contract_interface = None;
         let mut contract_debug = None;
         let mut literal_section = None;
-
         if bytes.len() >= code_offset + 4
             && bytes[code_offset..code_offset + 4] == CONTRACT_INTERFACE_SECTION_MAGIC
         {
@@ -1507,7 +1436,6 @@ impl ProgramMetadata {
             contract_interface = Some(decoded_interface);
             code_offset = next_offset;
         }
-
         if bytes.len() >= code_offset + 4
             && bytes[code_offset..code_offset + 4] == CONTRACT_DEBUG_SECTION_MAGIC
         {
@@ -1515,7 +1443,6 @@ impl ProgramMetadata {
             contract_debug = Some(decoded_debug);
             code_offset = next_offset;
         }
-
         // Optional literal section begins immediately after the header for
         // generic 1.1 artifacts, or after the ordered `CNTR`/`DBG1` sections
         // present in self-describing contract artifacts.
@@ -1560,7 +1487,6 @@ impl ProgramMetadata {
             literal_section,
         })
     }
-
     pub fn encode(&self) -> Vec<u8> {
         let mut v = Vec::new();
         v.extend_from_slice(MAGIC);
@@ -1577,7 +1503,6 @@ impl ProgramMetadata {
         v.extend_from_slice(&abi_hash);
         v
     }
-
     /// Construct a default header for a specific `version_major.version_minor`
     /// and `abi_version`. Other fields are set to zero.
     pub fn default_for(version_major: u8, version_minor: u8, abi_version: u8) -> Self {
@@ -1591,7 +1516,6 @@ impl ProgramMetadata {
         }
     }
 }
-
 impl Default for ProgramMetadata {
     fn default() -> Self {
         Self {
@@ -1604,7 +1528,6 @@ impl Default for ProgramMetadata {
         }
     }
 }
-
 fn parse_contract_interface_section(
     bytes: &[u8],
     start: usize,
@@ -1631,7 +1554,6 @@ fn parse_contract_interface_section(
             .map_err(|_| VMError::InvalidMetadata)?;
     Ok((decoded, payload_end))
 }
-
 fn parse_contract_debug_section(
     bytes: &[u8],
     start: usize,
@@ -1658,7 +1580,6 @@ fn parse_contract_debug_section(
             .map_err(|_| VMError::InvalidMetadata)?;
     Ok((decoded, payload_end))
 }
-
 fn parse_literal_section(
     bytes: &[u8],
     start: usize,
@@ -1718,11 +1639,9 @@ fn parse_literal_section(
         code_offset,
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn fixed_header_policy_errors_have_stable_precedence() {
         let mut bytes = ProgramMetadata {
@@ -1730,7 +1649,6 @@ mod tests {
             ..ProgramMetadata::default()
         }
         .encode();
-
         bytes[4] = 2;
         bytes[6] = 0x80;
         bytes[7] = VECTOR_LENGTH_MAX + 1;
@@ -1739,26 +1657,22 @@ mod tests {
             ProgramMetadata::parse(&bytes).expect_err("version must win"),
             VMError::UnsupportedProgramVersion { major: 2, minor: 1 }
         );
-
         bytes[4] = 1;
         bytes[5] = 2;
         assert_eq!(
             ProgramMetadata::parse(&bytes).expect_err("minor version must be explicit"),
             VMError::UnsupportedProgramVersion { major: 1, minor: 2 }
         );
-
         bytes[5] = 1;
         assert_eq!(
             ProgramMetadata::parse(&bytes).expect_err("feature bits must precede ABI"),
             VMError::UnsupportedProgramFeatureBits { bits: 0x80 }
         );
-
         bytes[6] = 0;
         assert_eq!(
             ProgramMetadata::parse(&bytes).expect_err("ABI must precede vector width"),
             VMError::UnsupportedProgramAbiVersion { version: 3 }
         );
-
         bytes[16] = 1;
         assert_eq!(
             ProgramMetadata::parse(&bytes).expect_err("vector width must precede ABI hash"),
@@ -1767,14 +1681,12 @@ mod tests {
                 max_allowed: VECTOR_LENGTH_MAX,
             }
         );
-
         bytes[7] = 0;
         bytes[17] ^= 1;
         assert!(matches!(
             ProgramMetadata::parse(&bytes),
             Err(VMError::ArtifactAbiHashMismatch { .. })
         ));
-
         assert_eq!(
             ProgramMetadata::parse(&bytes[..HEADER_SIZE - 1])
                 .expect_err("truncated fixed header is structural corruption"),
@@ -1786,7 +1698,6 @@ mod tests {
             VMError::InvalidMetadata
         );
     }
-
     #[test]
     fn literal_descriptors_roundtrip_kind_and_full_offset_domain() {
         for kind in [LiteralKindV1::PointerTlv, LiteralKindV1::I64] {
@@ -1798,24 +1709,19 @@ mod tests {
         assert!(encode_literal_descriptor(LiteralKindV1::I64, LITERAL_OFFSET_MASK + 1).is_none());
         assert!(decode_literal_descriptor(0xff00_0000_0000_0000).is_err());
     }
-
     #[test]
     fn contract_code_hash_binds_header_and_body() {
         let mut artifact = vec![0_u8; HEADER_SIZE + 4];
         let original = contract_code_hash(&artifact);
-
         artifact[7] ^= 1;
         assert_ne!(contract_code_hash(&artifact), original);
         artifact[7] ^= 1;
-
         artifact[HEADER_SIZE] ^= 1;
         assert_ne!(contract_code_hash(&artifact), original);
         artifact[HEADER_SIZE] ^= 1;
-
         assert_eq!(contract_code_hash(&artifact), original);
         assert_ne!(original, iroha_crypto::Hash::new(&artifact));
     }
-
     #[test]
     fn literal_section_parse_reports_validated_ranges() {
         let mut artifact = ProgramMetadata::default().encode();
@@ -1828,7 +1734,6 @@ mod tests {
         artifact.extend_from_slice(&[1, 2, 3]);
         artifact.push(0);
         artifact.extend_from_slice(&0x4900_0000u32.to_le_bytes());
-
         let parsed = ProgramMetadata::parse(&artifact).expect("literal section parses");
         let section = parsed.literal_section.expect("literal section metadata");
         assert_eq!(section.start, start);
@@ -1840,7 +1745,6 @@ mod tests {
         assert_eq!(parsed.code_offset, section.code_offset);
         assert_eq!(parsed.prefix_len(), section.code_offset - HEADER_SIZE);
     }
-
     fn nested_state_type() -> EmbeddedStateType {
         EmbeddedStateType::Struct {
             name: "WalletState".to_owned(),
@@ -1880,11 +1784,9 @@ mod tests {
             ],
         }
     }
-
     fn option_chain(wrappers: usize, leaf: EmbeddedStateType) -> EmbeddedStateType {
         (0..wrappers).fold(leaf, |inner, _| EmbeddedStateType::Option(Box::new(inner)))
     }
-
     fn raw_bool_option_payload(wrappers: usize) -> Vec<u8> {
         let mut payload = vec![EMBEDDED_STATE_TYPE_TAG_BOOL];
         for _ in 0..wrappers {
@@ -1895,7 +1797,6 @@ mod tests {
         }
         payload
     }
-
     fn test_section(magic: [u8; 4], payload: &[u8]) -> Vec<u8> {
         let mut section = Vec::with_capacity(8 + payload.len());
         section.extend_from_slice(&magic);
@@ -1907,7 +1808,6 @@ mod tests {
         section.extend_from_slice(payload);
         section
     }
-
     fn alternate_frame<T>(value: &T) -> Vec<u8>
     where
         T: norito::NoritoSerialize,
@@ -1917,32 +1817,25 @@ mod tests {
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         norito::to_bytes(value).expect("encode alternate-layout test frame")
     }
-
     #[test]
     fn embedded_state_field_descriptor_roundtrips() {
         let value = EmbeddedStateFieldDescriptor {
             name: "root".to_owned(),
             ty: nested_state_type(),
         };
-
         let bytes = norito::to_bytes(&value).expect("encode embedded state field");
         let decoded: EmbeddedStateFieldDescriptor =
             norito::decode_from_bytes(&bytes).expect("decode embedded state field");
-
         assert_eq!(decoded, value);
     }
-
     #[test]
     fn embedded_state_type_roundtrips() {
         let value = nested_state_type();
-
         let bytes = norito::to_bytes(&value).expect("encode embedded state type");
         let decoded: EmbeddedStateType =
             norito::decode_from_bytes(&bytes).expect("decode embedded state type");
-
         assert_eq!(decoded, value);
     }
-
     #[test]
     fn embedded_state_type_borrowed_children_honor_layout_and_allocation_limits() {
         let value = EmbeddedStateType::Struct {
@@ -1967,13 +1860,11 @@ mod tests {
                 .expect("decode packed tuple and struct children"),
             value
         );
-
         let tight = norito::DecodeLimits::new(256, payload.len(), 512, payload.len(), 256);
         assert!(matches!(
             norito::with_decode_limits(tight, || { decode_embedded_state_type_payload(&payload) }),
             Err(NoritoError::TotalAllocationExceeded { .. })
         ));
-
         let generous_allocation = payload
             .len()
             .checked_mul(64)
@@ -1988,7 +1879,6 @@ mod tests {
             value
         );
     }
-
     #[test]
     fn embedded_decode_push_charges_only_geometric_capacity_growth() {
         let mut values = Vec::<u64>::new();
@@ -1998,7 +1888,6 @@ mod tests {
         let initial_capacity = values.capacity();
         let no_allocation =
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
-
         let error = norito::with_decode_limits(no_allocation, || {
             for _ in 0..initial_capacity {
                 push_embedded_decode_item(&mut values, 0)?;
@@ -2006,7 +1895,6 @@ mod tests {
             push_embedded_decode_item(&mut values, 0)
         })
         .expect_err("growing a full decoder stack must charge its new capacity");
-
         assert!(matches!(error, NoritoError::TotalAllocationExceeded { .. }));
         assert_eq!(
             values.len(),
@@ -2018,7 +1906,6 @@ mod tests {
             initial_capacity,
             "the allocation budget must reject growth before allocating a replacement buffer"
         );
-
         let target_capacity = initial_capacity.saturating_mul(2).max(4);
         let growth_budget = target_capacity
             .checked_mul(core::mem::size_of::<u64>())
@@ -2037,7 +1924,6 @@ mod tests {
             "decoder stacks must grow geometrically instead of one slot at a time"
         );
     }
-
     #[test]
     fn embedded_state_type_tags_and_nominal_schema_names_are_stable() {
         let variants = vec![
@@ -2077,14 +1963,12 @@ mod tests {
                 capacity: 64,
             },
         ];
-
         for (expected_tag, value) in (0_u8..).zip(variants) {
             assert_eq!(value.wire_tag(), expected_tag);
             let payload =
                 encode_embedded_state_type_payload(&value).expect("encode stable CNTR type");
             assert_eq!(payload.first(), Some(&expected_tag));
         }
-
         assert_eq!(
             <EmbeddedStateType as NoritoSerialize>::schema_hash(),
             norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
@@ -2094,7 +1978,6 @@ mod tests {
             norito::core::schema_hash_for_name(CONTRACT_INTERFACE_SCHEMA_NAME_V1)
         );
     }
-
     #[test]
     fn embedded_state_type_nesting_is_bounded_before_recursive_work() {
         std::thread::Builder::new()
@@ -2109,14 +1992,12 @@ mod tests {
                 .expect("the exact nesting budget remains valid");
                 decode_embedded_state_type_payload(&raw_bool_option_payload(accepted_wrappers))
                     .expect("the exact decoding budget remains valid");
-
                 let error = encode_embedded_state_type_payload(&option_chain(
                     MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
                     EmbeddedStateType::Bool,
                 ))
                 .expect_err("encoding above the state-type nesting budget must fail");
                 assert!(error.to_string().contains("nesting exceeds 256 levels"));
-
                 let error = decode_embedded_state_type_payload(&raw_bool_option_payload(
                     MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
                 ))
@@ -2131,11 +2012,9 @@ mod tests {
             .join()
             .expect("state-schema depth checks must not overflow the native stack");
     }
-
     #[test]
     fn embedded_state_type_equality_observes_nominal_and_structural_fields() {
         assert!(nested_state_type() == nested_state_type());
-
         let unequal = vec![
             (
                 EmbeddedStateType::Tuple(vec![EmbeddedStateType::Int, EmbeddedStateType::Bool]),
@@ -2208,12 +2087,10 @@ mod tests {
                 },
             ),
         ];
-
         for (left, right) in unequal {
             assert!(left != right);
         }
     }
-
     #[test]
     fn embedded_state_type_equality_and_success_drop_are_stack_safe() {
         std::thread::Builder::new()
@@ -2224,14 +2101,11 @@ mod tests {
                 let left = option_chain(wrappers, EmbeddedStateType::Bool);
                 let equal = option_chain(wrappers, EmbeddedStateType::Bool);
                 let unequal = option_chain(wrappers, EmbeddedStateType::Int);
-
                 assert!(left == equal);
                 assert!(left != unequal);
-
                 drop(left);
                 drop(equal);
                 drop(unequal);
-
                 let decoded =
                     decode_embedded_state_type_payload(&raw_bool_option_payload(wrappers))
                         .expect("decode the complete depth-255 wrapper boundary");
@@ -2241,7 +2115,6 @@ mod tests {
             .join()
             .expect("depth-255 equality and destruction must not overflow the native stack");
     }
-
     #[test]
     fn embedded_state_type_malformed_decode_cleanup_is_stack_safe() {
         std::thread::Builder::new()
@@ -2253,14 +2126,12 @@ mod tests {
                 let mut malformed_tuple = vec![EMBEDDED_STATE_TYPE_TAG_TUPLE];
                 serialize_to_buffer(&children, &mut malformed_tuple)
                     .expect("serialize tuple with malformed second child");
-
                 let result = decode_embedded_state_type_payload(&malformed_tuple);
                 assert!(
                     result.is_err(),
                     "the malformed second child must reject after the depth-255 first child"
                 );
                 drop(result);
-
                 let decoded =
                     decode_embedded_state_type_payload(&[EMBEDDED_STATE_TYPE_TAG_QUANTITY])
                         .expect("failed cleanup must not poison a later valid decode");
@@ -2270,7 +2141,6 @@ mod tests {
             .join()
             .expect("malformed decoder cleanup must not overflow the native stack");
     }
-
     #[test]
     fn iterative_state_decoder_rejects_malformed_or_forbidden_nested_children() {
         fn option_payload(child: Vec<u8>) -> Vec<u8> {
@@ -2279,7 +2149,6 @@ mod tests {
                 .expect("serialize adversarial option child");
             payload
         }
-
         for child in [
             Vec::new(),
             vec![EMBEDDED_STATE_TYPE_TAG_BOOL, 0],
@@ -2288,7 +2157,6 @@ mod tests {
             decode_embedded_state_type_payload(&option_payload(child))
                 .expect_err("malformed nested type payload must reject");
         }
-
         let state_map = EmbeddedStateType::StateMap {
             key: Box::new(EmbeddedStateType::AccountId),
             value: Box::new(EmbeddedStateType::Quantity),
@@ -2302,11 +2170,9 @@ mod tests {
         let error = decode_embedded_state_type_payload(&forbidden_list)
             .expect_err("decoded List element cannot hide a StateMap resource handle");
         assert!(error.to_string().contains("resource handles"));
-
         decode_embedded_state_type_payload(&[EMBEDDED_STATE_TYPE_TAG_QUANTITY])
             .expect("rejections must not poison a later valid decode");
     }
-
     #[test]
     fn embedded_list_uses_stable_tag_and_validates_capacity() {
         let value = EmbeddedStateType::List {
@@ -2315,11 +2181,9 @@ mod tests {
         };
         let mut payload = encode_embedded_state_type_payload(&value).expect("encode List schema");
         assert_eq!(payload[0], EMBEDDED_STATE_TYPE_TAG_LIST);
-
         *payload.last_mut().expect("capacity byte") = 0;
         let err = decode_embedded_state_type_payload(&payload).expect_err("reject zero capacity");
         assert!(err.to_string().contains("capacity must be in 1..=64"));
-
         let invalid = EmbeddedStateType::List {
             element: Box::new(EmbeddedStateType::Bool),
             capacity: 65,
@@ -2327,7 +2191,6 @@ mod tests {
         let err = encode_embedded_state_type_payload(&invalid).expect_err("reject capacity 65");
         assert!(err.to_string().contains("capacity must be in 1..=64"));
     }
-
     #[test]
     fn embedded_list_rejects_nested_resource_handles() {
         let value = EmbeddedStateType::List {
@@ -2339,12 +2202,10 @@ mod tests {
             ))),
             capacity: 4,
         };
-
         let err = encode_embedded_state_type_payload(&value)
             .expect_err("nested StateMap cannot cross a List boundary");
         assert!(err.to_string().contains("resource handles"));
     }
-
     #[test]
     fn contract_interface_section_roundtrips_nested_states() {
         let interface = EmbeddedContractInterfaceV1 {
@@ -2379,11 +2240,9 @@ mod tests {
                 ty: nested_state_type(),
             }],
         };
-
         let section = interface.encode_section();
         let (decoded, next_offset) =
             parse_contract_interface_section(&section, 0).expect("parse CNTR section");
-
         assert_eq!(next_offset, section.len());
         assert_eq!(decoded, interface);
         {
@@ -2392,7 +2251,6 @@ mod tests {
             );
             assert_eq!(interface.encode_section(), section);
         }
-
         let alternate = test_section(
             CONTRACT_INTERFACE_SECTION_MAGIC,
             &alternate_frame(&interface),
@@ -2402,7 +2260,6 @@ mod tests {
                 .expect_err("alternate-layout CNTR payload must be rejected"),
             VMError::InvalidMetadata
         );
-
         let mut artifact = ProgramMetadata::default().encode();
         artifact.extend_from_slice(&section);
         artifact.extend_from_slice(&0x4900_0000_u32.to_le_bytes());
@@ -2411,7 +2268,6 @@ mod tests {
         assert_eq!(parsed.prefix_len(), section.len());
         assert_eq!(parsed.code_offset, HEADER_SIZE + section.len());
     }
-
     #[test]
     fn contract_debug_section_is_canonical() {
         let source = EmbeddedSourceLocation {
@@ -2441,20 +2297,17 @@ mod tests {
                 source: Some(source),
             }],
         };
-
         let section = debug.encode_section();
         let (decoded, next_offset) =
             parse_contract_debug_section(&section, 0).expect("parse canonical DBG1 section");
         assert_eq!(decoded, debug);
         assert_eq!(next_offset, section.len());
-
         {
             let _ambient = norito::core::DecodeFlagsGuard::enter(
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
             );
             assert_eq!(debug.encode_section(), section);
         }
-
         let alternate = test_section(CONTRACT_DEBUG_SECTION_MAGIC, &alternate_frame(&debug));
         assert_eq!(
             parse_contract_debug_section(&alternate, 0)

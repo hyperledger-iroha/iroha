@@ -1,18 +1,14 @@
 //! Payload-free immutable audit journal and crash recovery.
-
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-
 use iroha_crypto::{KeyPair, Signature};
 use norito::codec::{Decode, Encode};
-
 use super::{
     envelope::SoftwareSignerKeyEnvelopeAadV1,
     protocol::{
@@ -20,7 +16,6 @@ use super::{
         digest_canonical,
     },
 };
-
 const AUDIT_RECORD_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.audit-record.v1";
 const AUDIT_ATTESTATION_DOMAIN_V1: &[u8] = b"iroha.external-signer.audit-attestation.v1";
 const AUDIT_RECORD_MAX_BYTES_V1: usize = 32 * 1024;
@@ -29,18 +24,15 @@ const AUDIT_RECORD_MAX_BYTES_V1: usize = 32 * 1024;
 // immutable audit records are never truncated or evicted in place.
 const AUDIT_MAX_RECORDS_V1: u64 = 65_536;
 const AUDIT_MAX_TOTAL_BYTES_V1: u64 = 64 * 1024 * 1024;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AuditRetentionLimitsV1 {
     max_records: u64,
     max_total_bytes: u64,
 }
-
 const AUDIT_RETENTION_LIMITS_V1: AuditRetentionLimitsV1 = AuditRetentionLimitsV1 {
     max_records: AUDIT_MAX_RECORDS_V1,
     max_total_bytes: AUDIT_MAX_TOTAL_BYTES_V1,
 };
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) enum SoftwareSignerAuditEventV1 {
     Genesis {
@@ -75,7 +67,6 @@ pub(super) enum SoftwareSignerAuditEventV1 {
         reason_digest: [u8; 32],
     },
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct SoftwareSignerAuditRecordBodyV1 {
     magic: [u8; 8],
@@ -84,14 +75,12 @@ struct SoftwareSignerAuditRecordBodyV1 {
     predecessor_digest: [u8; 32],
     event: SoftwareSignerAuditEventV1,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct SoftwareSignerAuditRecordV1 {
     body: SoftwareSignerAuditRecordBodyV1,
     record_digest: [u8; 32],
     attestation: Vec<u8>,
 }
-
 #[derive(Clone, Debug)]
 pub(super) struct RecoveredSignCommitV1 {
     pub request_digest: [u8; 32],
@@ -100,12 +89,10 @@ pub(super) struct RecoveredSignCommitV1 {
     pub sequence: u64,
     pub audit_head: [u8; 32],
 }
-
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RecoveredAdminCommitV1 {
     pub request_digest: [u8; 32],
 }
-
 pub(super) struct RecoveredJournalV1 {
     pub active_key: SoftwareSignerKeyEnvelopeAadV1,
     pub active_envelope_digest: [u8; 32],
@@ -117,14 +104,12 @@ pub(super) struct RecoveredJournalV1 {
     pub admin_commits: BTreeMap<[u8; 32], RecoveredAdminCommitV1>,
     record_bytes: u64,
 }
-
 pub(super) struct SoftwareSignerAuditJournalV1 {
     directory: PathBuf,
     sequence: u64,
     audit_head: [u8; 32],
     record_bytes: u64,
 }
-
 impl SoftwareSignerAuditJournalV1 {
     pub(super) fn create(
         state_directory: &Path,
@@ -163,7 +148,6 @@ impl SoftwareSignerAuditJournalV1 {
             },
         ))
     }
-
     pub(super) fn open(
         state_directory: &Path,
     ) -> Result<(Self, RecoveredJournalV1), SoftwareSignerJournalErrorV1> {
@@ -182,7 +166,6 @@ impl SoftwareSignerAuditJournalV1 {
             recovered,
         ))
     }
-
     pub(super) fn append(
         &mut self,
         event: SoftwareSignerAuditEventV1,
@@ -190,7 +173,6 @@ impl SoftwareSignerAuditJournalV1 {
     ) -> Result<[u8; 32], SoftwareSignerJournalErrorV1> {
         self.append_with_limits(event, keypair, AUDIT_RETENTION_LIMITS_V1)
     }
-
     fn append_with_limits(
         &mut self,
         event: SoftwareSignerAuditEventV1,
@@ -233,23 +215,19 @@ impl SoftwareSignerAuditJournalV1 {
         self.record_bytes = next_record_bytes;
         Ok(record_digest)
     }
-
     pub(super) const fn sequence(&self) -> u64 {
         self.sequence
     }
-
     pub(super) const fn audit_head(&self) -> [u8; 32] {
         self.audit_head
     }
 }
-
 #[derive(Debug)]
 struct AuditDirectoryInventoryV1 {
     record_count: u64,
     record_bytes: u64,
     pending: Option<(u64, PathBuf)>,
 }
-
 #[allow(clippy::too_many_lines)]
 fn validate_records_streaming(
     directory: &Path,
@@ -283,7 +261,6 @@ fn validate_records_streaming(
     let mut sign_commits = BTreeMap::new();
     let mut admin_commits = BTreeMap::new();
     let mut genesis_digest = [0; 32];
-
     for expected_sequence in 1..=inventory.record_count {
         let record = if expected_sequence == 1 {
             first.take().ok_or(SoftwareSignerJournalErrorV1::Invalid)?
@@ -316,7 +293,6 @@ fn validate_records_streaming(
                 &audit_attestation_message(record_digest, body.sequence),
             )
             .map_err(|_| SoftwareSignerJournalErrorV1::Invalid)?;
-
         match body.event {
             SoftwareSignerAuditEventV1::Genesis {
                 key,
@@ -426,7 +402,6 @@ fn validate_records_streaming(
         }
         expected_predecessor = record_digest;
     }
-
     Ok(RecoveredJournalV1 {
         active_key,
         active_envelope_digest,
@@ -439,7 +414,6 @@ fn validate_records_streaming(
         record_bytes: inventory.record_bytes,
     })
 }
-
 fn persist_record(
     directory: &Path,
     record: &SoftwareSignerAuditRecordV1,
@@ -465,7 +439,6 @@ fn persist_record(
     sync_directory(directory)?;
     validate_private_file(&final_path)
 }
-
 fn encode_record(
     record: &SoftwareSignerAuditRecordV1,
 ) -> Result<Vec<u8>, SoftwareSignerJournalErrorV1> {
@@ -476,7 +449,6 @@ fn encode_record(
     }
     Ok(encoded)
 }
-
 fn enforce_retention_limits(
     current_records: u64,
     current_record_bytes: u64,
@@ -495,7 +467,6 @@ fn enforce_retention_limits(
         .ok_or(SoftwareSignerJournalErrorV1::Capacity)?;
     Ok((records, record_bytes))
 }
-
 fn scan_audit_directory(
     directory: &Path,
     limits: AuditRetentionLimitsV1,
@@ -565,7 +536,6 @@ fn scan_audit_directory(
         pending,
     })
 }
-
 fn read_record(path: &Path) -> Result<SoftwareSignerAuditRecordV1, SoftwareSignerJournalErrorV1> {
     let file_len = validated_private_file_len(path)?;
     if file_len == 0
@@ -602,7 +572,6 @@ fn read_record(path: &Path) -> Result<SoftwareSignerAuditRecordV1, SoftwareSigne
     }
     Ok(record)
 }
-
 fn recover_pending_record(
     directory: &Path,
     inventory: &mut AuditDirectoryInventoryV1,
@@ -631,37 +600,30 @@ fn recover_pending_record(
     inventory.record_count = sequence;
     Ok(())
 }
-
 fn record_name(sequence: u64) -> String {
     format!("{sequence:020}.norito")
 }
-
 fn pending_name(sequence: u64) -> String {
     format!(".pending-{sequence:020}.norito")
 }
-
 fn parse_record_name(name: &str) -> Option<u64> {
     let digits = name.strip_suffix(".norito")?;
     (digits.len() == 20 && digits.bytes().all(|byte| byte.is_ascii_digit()))
         .then(|| digits.parse().ok())
         .flatten()
 }
-
 fn parse_pending_name(name: &str) -> Option<u64> {
     parse_record_name(name.strip_prefix(".pending-")?)
 }
-
 fn audit_attestation_message(record_digest: [u8; 32], sequence: u64) -> [u8; 32] {
     super::protocol::digest_parts(
         AUDIT_ATTESTATION_DOMAIN_V1,
         &[&sequence.to_be_bytes(), &record_digest],
     )
 }
-
 pub(super) fn digest_parts_signature(signature: &[u8]) -> [u8; 32] {
     super::protocol::digest_parts(b"iroha.external-signer.signature.v1", &[signature])
 }
-
 fn create_private_directory(path: &Path) -> Result<(), SoftwareSignerJournalErrorV1> {
     #[cfg(unix)]
     {
@@ -676,7 +638,6 @@ fn create_private_directory(path: &Path) -> Result<(), SoftwareSignerJournalErro
     fs::create_dir(path).map_err(|_| SoftwareSignerJournalErrorV1::Unavailable)?;
     validate_private_directory(path)
 }
-
 fn validate_private_directory(path: &Path) -> Result<(), SoftwareSignerJournalErrorV1> {
     let metadata =
         fs::symlink_metadata(path).map_err(|_| SoftwareSignerJournalErrorV1::Unavailable)?;
@@ -694,7 +655,6 @@ fn validate_private_directory(path: &Path) -> Result<(), SoftwareSignerJournalEr
     }
     Ok(())
 }
-
 fn validated_private_file_len(path: &Path) -> Result<u64, SoftwareSignerJournalErrorV1> {
     let metadata =
         fs::symlink_metadata(path).map_err(|_| SoftwareSignerJournalErrorV1::Unavailable)?;
@@ -713,17 +673,14 @@ fn validated_private_file_len(path: &Path) -> Result<u64, SoftwareSignerJournalE
     }
     Ok(metadata.len())
 }
-
 pub(super) fn validate_private_file(path: &Path) -> Result<(), SoftwareSignerJournalErrorV1> {
     validated_private_file_len(path).map(|_| ())
 }
-
 pub(super) fn sync_directory(path: &Path) -> Result<(), SoftwareSignerJournalErrorV1> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|_| SoftwareSignerJournalErrorV1::Unavailable)
 }
-
 /// Payload-free audit journal validation or persistence failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoftwareSignerJournalErrorV1 {
@@ -738,22 +695,17 @@ pub enum SoftwareSignerJournalErrorV1 {
     /// Filesystem persistence or cryptographic attestation was unavailable.
     Unavailable,
 }
-
 #[cfg(test)]
 mod tests {
     use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
-
     use iroha_crypto::Algorithm;
-
     use super::*;
-
     fn write_private_file(path: &Path, bytes: &[u8]) {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true).mode(0o600);
         let mut file = options.open(path).expect("create private audit fixture");
         file.write_all(bytes).expect("write audit fixture");
     }
-
     fn fixture_event() -> SoftwareSignerAuditEventV1 {
         SoftwareSignerAuditEventV1::EquivocationRejected {
             operation_id: [0x11; 32],
@@ -761,7 +713,6 @@ mod tests {
             rejected_request_digest: [0x33; 32],
         }
     }
-
     #[test]
     fn retention_limits_accept_boundary_and_reject_first_overflow() {
         let limits = AuditRetentionLimitsV1 {
@@ -778,7 +729,6 @@ mod tests {
             Err(SoftwareSignerJournalErrorV1::Capacity)
         );
     }
-
     #[test]
     fn append_rejects_capacity_before_creating_pending_file() {
         let parent = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
@@ -790,7 +740,6 @@ mod tests {
             max_records: 2,
             max_total_bytes: 1,
         };
-
         let mut count_full = SoftwareSignerAuditJournalV1 {
             directory: missing_directory.clone(),
             sequence: 2,
@@ -801,7 +750,6 @@ mod tests {
             count_full.append_with_limits(fixture_event(), &keypair, limits),
             Err(SoftwareSignerJournalErrorV1::Capacity)
         );
-
         let mut bytes_full = SoftwareSignerAuditJournalV1 {
             directory: missing_directory.clone(),
             sequence: 1,
@@ -815,7 +763,6 @@ mod tests {
         assert!(!missing_directory.exists());
         assert_eq!((bytes_full.sequence, bytes_full.record_bytes), (1, 1));
     }
-
     #[test]
     fn directory_inventory_is_bounded_and_requires_contiguous_records() {
         let parent = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
@@ -831,13 +778,11 @@ mod tests {
         let inventory = scan_audit_directory(&exact, limits).expect("exact bounded inventory");
         assert_eq!((inventory.record_count, inventory.record_bytes), (2, 2));
         assert!(inventory.pending.is_none());
-
         write_private_file(&exact.join(record_name(3)), &[0x03]);
         assert!(matches!(
             scan_audit_directory(&exact, limits),
             Err(SoftwareSignerJournalErrorV1::Capacity)
         ));
-
         let bytes_full = parent.path().join("bytes-full");
         create_private_directory(&bytes_full).expect("private bytes-full directory");
         write_private_file(&bytes_full.join(record_name(1)), &[0x01, 0x02]);
@@ -851,7 +796,6 @@ mod tests {
             ),
             Err(SoftwareSignerJournalErrorV1::Capacity)
         ));
-
         let gap = parent.path().join("gap");
         create_private_directory(&gap).expect("private gap directory");
         write_private_file(&gap.join(record_name(1)), &[0x01]);
@@ -867,7 +811,6 @@ mod tests {
             Err(SoftwareSignerJournalErrorV1::Invalid)
         ));
     }
-
     #[test]
     fn directory_inventory_admits_only_the_exact_pending_successor() {
         let parent = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
@@ -887,7 +830,6 @@ mod tests {
             inventory.pending.as_ref().map(|(sequence, _)| *sequence),
             Some(2)
         );
-
         fs::remove_file(directory.join(pending_name(2))).expect("remove exact pending fixture");
         write_private_file(&directory.join(pending_name(1)), &[0x02]);
         assert!(matches!(

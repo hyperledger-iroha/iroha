@@ -1,5 +1,4 @@
 use std::{fs, net::SocketAddr, num::NonZeroU64, path::Path, sync::Arc, time::Duration};
-
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -46,7 +45,6 @@ use tokio::{
     sync::{broadcast, oneshot},
     task::JoinHandle,
 };
-
 fn canonical_block_stream_message() -> Vec<u8> {
     let signer = mochi_core::development_signing_authorities()
         .first()
@@ -67,7 +65,6 @@ fn canonical_block_stream_message() -> Vec<u8> {
     );
     norito::to_bytes(&BlockMessage(block)).expect("canonical block message must encode")
 }
-
 fn canonical_event_stream_message() -> Vec<u8> {
     let event = EventMessage::new(EventBox::Pipeline(PipelineEventBox::Transaction(
         TransactionEvent {
@@ -80,7 +77,6 @@ fn canonical_event_stream_message() -> Vec<u8> {
     )));
     norito::to_bytes(&event).expect("canonical event message must encode")
 }
-
 /// Deterministic payloads served by the mock Torii instance.
 #[derive(Clone, Debug)]
 pub struct MockToriiData {
@@ -101,7 +97,6 @@ pub struct MockToriiData {
     /// Binary `EventMessage` frame broadcast on `/v1/events/ws`.
     pub event_frame: Vec<u8>,
 }
-
 impl Default for MockToriiData {
     fn default() -> Self {
         let governance = GovernanceStatus {
@@ -114,7 +109,6 @@ impl Default for MockToriiData {
             sealed_lane_aliases: Vec::new(),
             citizens_total: 0,
         };
-
         let status = TelemetryStatus {
             build: Default::default(),
             observed_at_ms: 0,
@@ -155,7 +149,6 @@ impl Default for MockToriiData {
             taikai_alias_rotations: Vec::new(),
             da_receipt_cursors: Vec::new(),
         };
-
         let sumeragi = SumeragiV2Status {
             protocol_version: PROTOCOL_VERSION,
             node_fingerprint: Hash::new(b"mochi-mock-node"),
@@ -215,7 +208,6 @@ impl Default for MockToriiData {
             native_amx_participant_applications: Vec::new(),
             autonomous_lane_executions: Vec::new(),
         };
-
         let configuration = norito::json!({
             "torii": {
                 "address": "127.0.0.1:5555",
@@ -225,7 +217,6 @@ impl Default for MockToriiData {
                 "address": "127.0.0.1:1337"
             }
         });
-
         Self {
             status,
             sumeragi,
@@ -238,13 +229,11 @@ impl Default for MockToriiData {
         }
     }
 }
-
 impl MockToriiData {
     /// Load deterministic HTTP fixtures and pair them with stream messages encoded from the
     /// current Torii DTO schema.
     pub fn from_fixture_dir(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref();
-
         let read_bytes = |path: &Path| -> Result<Vec<u8>> {
             fs::read(path).map_err(|err| eyre!("failed to read {}: {err}", path.display()))
         };
@@ -252,7 +241,6 @@ impl MockToriiData {
             fs::read_to_string(path)
                 .map_err(|err| eyre!("failed to read {}: {err}", path.display()))
         };
-
         let status_path = dir.join("status.json");
         let status_bytes = read_bytes(&status_path)?;
         let status: TelemetryStatus = norito::json::from_slice(&status_bytes).map_err(|err| {
@@ -261,7 +249,6 @@ impl MockToriiData {
                 status_path.display()
             )
         })?;
-
         let sumeragi_path = dir.join("sumeragi.json");
         let sumeragi_bytes = read_bytes(&sumeragi_path)?;
         let sumeragi: SumeragiV2Status =
@@ -271,7 +258,6 @@ impl MockToriiData {
                     sumeragi_path.display()
                 )
             })?;
-
         let sumeragi_diagnostics_path = dir.join("sumeragi_diagnostics.json");
         let sumeragi_diagnostics_bytes = read_bytes(&sumeragi_diagnostics_path)?;
         let sumeragi_diagnostics: SumeragiDiagnosticsStatus =
@@ -281,7 +267,6 @@ impl MockToriiData {
                     sumeragi_diagnostics_path.display()
                 )
             })?;
-
         let configuration_path = dir.join("configuration.json");
         let configuration_bytes = read_bytes(&configuration_path)?;
         let configuration: Value =
@@ -291,13 +276,10 @@ impl MockToriiData {
                     configuration_path.display()
                 )
             })?;
-
         let metrics_path = dir.join("metrics.prom");
         let metrics = read_string(&metrics_path)?;
-
         let query_path = dir.join("query.bin");
         let query_response = read_bytes(&query_path)?;
-
         Ok(Self {
             status,
             sumeragi,
@@ -310,7 +292,6 @@ impl MockToriiData {
         })
     }
 }
-
 #[derive(Clone)]
 struct MockToriiBytes {
     status_bytes: Vec<u8>,
@@ -320,7 +301,6 @@ struct MockToriiBytes {
     metrics: String,
     query_response: Vec<u8>,
 }
-
 #[derive(Clone)]
 struct AppState {
     bytes: Arc<Mutex<MockToriiBytes>>,
@@ -329,14 +309,12 @@ struct AppState {
     default_block_frame: Arc<Mutex<Vec<u8>>>,
     default_event_frame: Arc<Mutex<Vec<u8>>>,
 }
-
 /// Builder for spawning a [`MockTorii`] server with deterministic fixtures.
 #[derive(Debug, Clone)]
 pub struct MockToriiBuilder {
     addr: SocketAddr,
     data: MockToriiData,
 }
-
 impl MockToriiBuilder {
     /// Create a new builder bound to the provided socket address.
     #[must_use]
@@ -346,47 +324,40 @@ impl MockToriiBuilder {
             data: MockToriiData::default(),
         }
     }
-
     /// Override the initial status payload served from `/status`.
     #[must_use]
     pub fn status(mut self, status: TelemetryStatus) -> Self {
         self.data.status = status;
         self
     }
-
     /// Override the metrics payload served from `/metrics`.
     #[must_use]
     pub fn metrics(mut self, metrics: impl Into<String>) -> Self {
         self.data.metrics = metrics.into();
         self
     }
-
     /// Override the initial block WebSocket frame.
     #[must_use]
     pub fn block_frame(mut self, frame: Vec<u8>) -> Self {
         self.data.block_frame = frame;
         self
     }
-
     /// Override the initial event WebSocket frame.
     #[must_use]
     pub fn event_frame(mut self, frame: Vec<u8>) -> Self {
         self.data.event_frame = frame;
         self
     }
-
     /// Populate the builder with fixtures loaded from `dir`.
     pub fn fixture_dir(mut self, dir: impl AsRef<Path>) -> Result<Self> {
         self.data = MockToriiData::from_fixture_dir(dir)?;
         Ok(self)
     }
-
     /// Spawn the mock server and return a handle for driving it.
     pub async fn spawn(self) -> Result<MockTorii> {
         MockTorii::spawn(self.addr, self.data).await
     }
 }
-
 /// Frames that can be pushed onto the mock Torii WebSocket feeds.
 #[derive(Clone, Debug)]
 pub enum MockToriiFrame {
@@ -397,7 +368,6 @@ pub enum MockToriiFrame {
     /// Close signal propagated to connected clients.
     Close,
 }
-
 impl MockToriiFrame {
     fn into_message(self) -> Message {
         match self {
@@ -407,7 +377,6 @@ impl MockToriiFrame {
         }
     }
 }
-
 /// Running mock Torii instance.
 pub struct MockTorii {
     addr: SocketAddr,
@@ -415,7 +384,6 @@ pub struct MockTorii {
     task: Option<JoinHandle<()>>,
     state: AppState,
 }
-
 impl MockTorii {
     async fn spawn(addr: SocketAddr, data: MockToriiData) -> Result<Self> {
         let bytes = MockToriiBytes {
@@ -438,7 +406,6 @@ impl MockTorii {
             default_block_frame,
             default_event_frame,
         };
-
         let listener = TcpListener::bind(addr).await?;
         let addr = listener.local_addr()?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -453,18 +420,15 @@ impl MockTorii {
             .route(torii_uri::BLOCKS_STREAM, get(handle_block_stream))
             .route(torii_uri::SUBSCRIPTION, get(handle_event_stream))
             .with_state(state.clone());
-
         let server =
             axum::serve(listener, router.into_make_service()).with_graceful_shutdown(async move {
                 let _ = shutdown_rx.await;
             });
-
         let task = tokio::spawn(async move {
             if let Err(err) = server.await {
                 eprintln!("mock Torii server error: {err}");
             }
         });
-
         Ok(Self {
             addr,
             shutdown: Some(shutdown_tx),
@@ -472,26 +436,22 @@ impl MockTorii {
             state,
         })
     }
-
     /// Socket address the server listens on.
     #[must_use]
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
-
     /// Update the status payload returned by `/status`.
     pub fn set_status(&self, status: TelemetryStatus) -> Result<()> {
         let mut guard = self.state.bytes.lock();
         guard.status_bytes = norito::to_bytes(&status)?;
         Ok(())
     }
-
     /// Update the metrics payload returned by `/metrics`.
     pub fn set_metrics(&self, metrics: impl Into<String>) {
         let mut guard = self.state.bytes.lock();
         guard.metrics = metrics.into();
     }
-
     /// Broadcast a frame on the `/v1/blocks/stream` feed.
     pub fn broadcast_block(&self, frame: MockToriiFrame) {
         if let MockToriiFrame::Binary(bytes) = &frame {
@@ -500,7 +460,6 @@ impl MockTorii {
         }
         let _ = self.state.block_tx.send(frame);
     }
-
     /// Broadcast a frame on the `/v1/events/ws` feed.
     pub fn broadcast_event(&self, frame: MockToriiFrame) {
         if let MockToriiFrame::Binary(bytes) = &frame {
@@ -509,7 +468,6 @@ impl MockTorii {
         }
         let _ = self.state.event_tx.send(frame);
     }
-
     /// Signal the server to shut down and wait for completion.
     pub async fn shutdown(mut self) -> Result<()> {
         if let Some(tx) = self.shutdown.take() {
@@ -522,7 +480,6 @@ impl MockTorii {
         Ok(())
     }
 }
-
 impl Drop for MockTorii {
     fn drop(&mut self) {
         if let Some(tx) = self.shutdown.take() {
@@ -530,27 +487,22 @@ impl Drop for MockTorii {
         }
     }
 }
-
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
     let bytes = state.bytes.lock().status_bytes.clone();
     binary_response(bytes, "application/norito")
 }
-
 async fn handle_sumeragi_status(State(state): State<AppState>) -> impl IntoResponse {
     let bytes = state.bytes.lock().sumeragi_bytes.clone();
     binary_response(bytes, "application/norito")
 }
-
 async fn handle_sumeragi_diagnostics(State(state): State<AppState>) -> impl IntoResponse {
     let bytes = state.bytes.lock().sumeragi_diagnostics_bytes.clone();
     binary_response(bytes, "application/norito")
 }
-
 async fn handle_configuration(State(state): State<AppState>) -> impl IntoResponse {
     let bytes = state.bytes.lock().configuration_bytes.clone();
     binary_response(bytes, "application/json")
 }
-
 async fn handle_metrics(State(state): State<AppState>) -> impl IntoResponse {
     let metrics = state.bytes.lock().metrics.clone();
     Response::builder()
@@ -562,16 +514,13 @@ async fn handle_metrics(State(state): State<AppState>) -> impl IntoResponse {
         .body(Body::from(metrics))
         .expect("metrics response")
 }
-
 async fn handle_transaction() -> impl IntoResponse {
     StatusCode::ACCEPTED
 }
-
 async fn handle_query(State(state): State<AppState>) -> impl IntoResponse {
     let bytes = state.bytes.lock().query_response.clone();
     binary_response(bytes, "application/octet-stream")
 }
-
 async fn handle_block_stream(
     State(state): State<AppState>,
     ws: WebSocketUpgrade,
@@ -579,7 +528,6 @@ async fn handle_block_stream(
     ws.protocols([NORITO_V1_WEBSOCKET_SUBPROTOCOL])
         .on_upgrade(move |socket| block_stream(socket, state))
 }
-
 async fn handle_event_stream(
     State(state): State<AppState>,
     ws: WebSocketUpgrade,
@@ -587,7 +535,6 @@ async fn handle_event_stream(
     ws.protocols([NORITO_V1_WEBSOCKET_SUBPROTOCOL])
         .on_upgrade(move |socket| event_stream(socket, state))
 }
-
 async fn block_stream(mut socket: WebSocket, state: AppState) {
     let Some(Ok(Message::Binary(request))) = socket.recv().await else {
         return;
@@ -606,7 +553,6 @@ async fn block_stream(mut socket: WebSocket, state: AppState) {
         }
     }
 }
-
 async fn event_stream(mut socket: WebSocket, state: AppState) {
     let Some(Ok(Message::Binary(request))) = socket.recv().await else {
         return;
@@ -628,7 +574,6 @@ async fn event_stream(mut socket: WebSocket, state: AppState) {
         }
     }
 }
-
 async fn send_default_frame(
     socket: &mut WebSocket,
     storage: &Arc<Mutex<Vec<u8>>>,
@@ -639,14 +584,12 @@ async fn send_default_frame(
     }
     send_frame(socket, MockToriiFrame::Binary(bytes)).await
 }
-
 async fn send_frame(
     socket: &mut WebSocket,
     frame: MockToriiFrame,
 ) -> std::result::Result<(), axum::Error> {
     socket.send(frame.into_message()).await
 }
-
 fn binary_response(body: Vec<u8>, content_type: &'static str) -> Response<Body> {
     Response::builder()
         .status(StatusCode::OK)
@@ -654,7 +597,6 @@ fn binary_response(body: Vec<u8>, content_type: &'static str) -> Response<Body> 
         .body(Body::from(body))
         .expect("binary response")
 }
-
 /// Utility used by the Kagami stub binary to emit default manifests.
 pub fn kagami_default_manifest_json(
     _genesis_public_key: &PublicKey,
@@ -697,13 +639,10 @@ pub fn kagami_default_manifest_json(
     );
     Ok(json::to_string_pretty(&Value::Object(manifest))?)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     mod replay_fixture_owner;
-
     #[test]
     fn default_data_uses_fixtures() {
         let data = MockToriiData::default();
@@ -723,7 +662,6 @@ mod tests {
             })) if height == NonZeroU64::MIN
         ));
     }
-
     #[test]
     fn kagami_manifest_helper_preserves_requested_chain_and_consensus_mode() {
         let key_pair = iroha_crypto::KeyPair::random();
@@ -736,7 +674,6 @@ mod tests {
         )
         .expect("manifest json");
         let value: Value = json::from_str(&manifest).expect("parse manifest json");
-
         assert_eq!(
             value.get("chain").and_then(Value::as_str),
             Some("mochi-test-chain")

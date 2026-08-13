@@ -1,28 +1,19 @@
 use std::num::NonZeroU64;
-
-use iroha_crypto::{
-    Algorithm, KeyPair, MerkleProof, MerkleTree, MerkleTreeCommitment, SignatureOf,
-};
+use iroha_crypto::{Algorithm, KeyPair, MerkleProof, MerkleTree, MerkleTreeCommitment, SignatureOf};
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::core::DecodeFromSlice;
-
 use crate::consensus::VALIDATOR_SET_HASH_VERSION_V1;
-
 use super::*;
-
 fn dummy_hash() -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32]))
 }
-
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked consensus fixture keypair")
 }
-
 fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("generate checked consensus fixture keypair")
 }
-
 #[cfg(feature = "json")]
 #[test]
 fn manual_consensus_json_labels_have_closed_output_bounds() {
@@ -38,12 +29,10 @@ fn manual_consensus_json_labels_have_closed_output_bounds() {
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         );
     }
-
     assert_bounded(&SumeragiAutonomousLaneExecutionStage::QueueFinalized);
     assert_bounded(&SumeragiAutonomousLaneExecutionStuckReason::QueueFinalizationUnverifiable);
     assert_bounded(&SumeragiNativeAmxParticipantApplicationState::DurablyApplied);
 }
-
 fn sample_roster() -> Vec<PeerId> {
     (0..3)
         .map(|_| {
@@ -55,13 +44,10 @@ fn sample_roster() -> Vec<PeerId> {
         })
         .collect()
 }
-
 fn roster_hash(roster: &[PeerId]) -> Hash {
     Hash::new(roster.to_vec().encode())
 }
-
 include!("consensus/wire_schema_tests.rs");
-
 fn sample_qc_ref() -> QcRef {
     QcRef {
         height: 4,
@@ -71,7 +57,6 @@ fn sample_qc_ref() -> QcRef {
         phase: CertPhase::Prepare,
     }
 }
-
 fn sample_consensus_header() -> ConsensusBlockHeader {
     ConsensusBlockHeader {
         parent_hash: dummy_hash(),
@@ -84,7 +69,6 @@ fn sample_consensus_header() -> ConsensusBlockHeader {
         highest_qc: sample_qc_ref(),
     }
 }
-
 #[test]
 fn committed_lane_block_status_progress_policy_is_fail_closed() {
     for (status, executable) in [
@@ -112,7 +96,6 @@ fn committed_lane_block_status_progress_policy_is_fail_closed() {
             "{status} with matching availability should count as audited progress"
         );
     }
-
     assert!(!committed_lane_block_status_counts_as_progress(
         COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
         false
@@ -150,7 +133,6 @@ fn committed_lane_block_status_progress_policy_is_fail_closed() {
         false
     ));
 }
-
 #[derive(Encode)]
 struct ForgedNexusFeeScheduleInputs {
     tx_bytes_len: u64,
@@ -161,7 +143,6 @@ struct ForgedNexusFeeScheduleInputs {
     per_instruction_fee: Numeric,
     per_gas_unit_fee: Numeric,
 }
-
 #[derive(Encode)]
 struct ForgedNexusFeeReceipt {
     version: u16,
@@ -176,7 +157,6 @@ struct ForgedNexusFeeReceipt {
     fee_amount: Numeric,
     schedule: NexusFeeScheduleInputs,
 }
-
 #[derive(Encode)]
 struct ForgedNposGenesisParams {
     epoch_length_blocks: NonZeroU64,
@@ -194,7 +174,6 @@ struct ForgedNposGenesisParams {
     activation_lag_blocks: u64,
     slashing_delay_blocks: u64,
 }
-
 #[derive(Encode)]
 struct ForgedLaneSettlementReceipt {
     source_id: [u8; 32],
@@ -204,7 +183,6 @@ struct ForgedLaneSettlementReceipt {
     xor_variance: Numeric,
     timestamp_ms: u64,
 }
-
 #[derive(Encode)]
 struct ForgedLaneBlockCommitment {
     block_height: u64,
@@ -221,7 +199,6 @@ struct ForgedLaneBlockCommitment {
     nexus_fee_receipts: Vec<NexusFeeReceipt>,
     native_amx_receipts: Vec<NativeAmxReceipt>,
 }
-
 fn sample_nexus_fee_receipt(source_id: [u8; 32]) -> NexusFeeReceipt {
     NexusFeeReceipt {
         version: NexusFeeReceipt::VERSION,
@@ -251,7 +228,6 @@ fn sample_nexus_fee_receipt(source_id: [u8; 32]) -> NexusFeeReceipt {
         },
     }
 }
-
 #[test]
 fn negative_numeric_payloads_cannot_decode_as_nexus_fees() {
     let forged_schedule = ForgedNexusFeeScheduleInputs {
@@ -268,7 +244,6 @@ fn negative_numeric_payloads_cannot_decode_as_nexus_fees() {
         NexusFeeScheduleInputs::decode(&mut encoded.as_slice()).is_err(),
         "a negative signed payload must not decode as a fee schedule component"
     );
-
     let valid = sample_nexus_fee_receipt([0xA5; 32]);
     let forged_receipt = ForgedNexusFeeReceipt {
         version: valid.version,
@@ -289,7 +264,6 @@ fn negative_numeric_payloads_cannot_decode_as_nexus_fees() {
         "a negative signed payload must not decode as a fee receipt amount"
     );
 }
-
 #[test]
 fn sponsored_nexus_fee_receipt_roundtrips_typed_source_and_asset() {
     let mut receipt = sample_nexus_fee_receipt([0x5A; 32]);
@@ -303,7 +277,6 @@ fn sponsored_nexus_fee_receipt_roundtrips_typed_source_and_asset() {
     ));
     receipt.program_revision = Some(4);
     receipt.lease_id = Some(Hash::new(b"receipt-spend-lease"));
-
     let bytes = receipt.encode();
     assert_eq!(
         NexusFeeReceipt::decode(&mut bytes.as_slice()).expect("decode sponsored receipt"),
@@ -315,7 +288,6 @@ fn sponsored_nexus_fee_receipt_roundtrips_typed_source_and_asset() {
         receipt
     );
 }
-
 #[test]
 fn negative_numeric_payloads_cannot_decode_as_npos_bonds() {
     let forged = ForgedNposGenesisParams {
@@ -340,7 +312,6 @@ fn negative_numeric_payloads_cannot_decode_as_npos_bonds() {
         "a negative signed payload must not decode as an NPoS minimum bond"
     );
 }
-
 #[test]
 fn npos_genesis_reveal_window_must_close_before_boundary() {
     let params = NposGenesisParams {
@@ -363,14 +334,12 @@ fn npos_genesis_reveal_window_must_close_before_boundary() {
         params.validate(),
         Err("VRF reveal window must close before the epoch boundary")
     );
-
     let mut valid = params;
     valid.epoch_length_blocks = NonZeroU64::new(5).expect("non-zero epoch");
     valid
         .validate()
         .expect("one finalized pre-boundary block is sufficient");
 }
-
 #[test]
 fn negative_numeric_payloads_cannot_decode_as_lane_amounts() {
     let forged_receipt = ForgedLaneSettlementReceipt {
@@ -386,7 +355,6 @@ fn negative_numeric_payloads_cannot_decode_as_lane_amounts() {
         LaneSettlementReceipt::decode(&mut encoded.as_slice()).is_err(),
         "a negative signed payload must not decode as a lane receipt amount"
     );
-
     let forged_commitment = ForgedLaneBlockCommitment {
         block_height: 1,
         lane_id: LaneId::SINGLE,
@@ -408,7 +376,6 @@ fn negative_numeric_payloads_cannot_decode_as_lane_amounts() {
         "a negative signed payload must not decode as a lane commitment total"
     );
 }
-
 fn sample_native_amx_invariant_qc() -> NativeAmxAttestationQcV2 {
     sample_native_amx_qc(
         NativeAmxPhase::Prepare,
@@ -419,7 +386,6 @@ fn sample_native_amx_invariant_qc() -> NativeAmxAttestationQcV2 {
         sample_roster(),
     )
 }
-
 fn native_amx_qc_wire(qc: &NativeAmxAttestationQcV2) -> NativeAmxAttestationQcV2Wire {
     NativeAmxAttestationQcV2Wire {
         body: qc.body,
@@ -431,7 +397,6 @@ fn native_amx_qc_wire(qc: &NativeAmxAttestationQcV2) -> NativeAmxAttestationQcV2
         bls_aggregate_signature: qc.bls_aggregate_signature.clone(),
     }
 }
-
 #[test]
 fn native_amx_qc_constructor_rejects_misaligned_validator_material() {
     let qc = sample_native_amx_invariant_qc();
@@ -446,11 +411,9 @@ fn native_amx_qc_constructor_rejects_misaligned_validator_material() {
         qc.bls_aggregate_signature.clone(),
     )
     .expect_err("a validator set without one proof per validator must be rejected");
-
     assert_eq!(error.validator_count(), validator_count);
     assert_eq!(error.proof_count(), 0);
 }
-
 #[test]
 fn native_amx_qc_binary_decode_preserves_layout_and_rejects_misalignment() {
     let qc = sample_native_amx_invariant_qc();
@@ -464,7 +427,6 @@ fn native_amx_qc_binary_decode_preserves_layout_and_rejects_misalignment() {
         NativeAmxAttestationQcV2::decode(&mut qc.encode().as_slice()).expect("aligned QC decodes"),
         qc
     );
-
     let mut malformed_wire = wire;
     malformed_wire
         .validator_set_pops
@@ -475,7 +437,6 @@ fn native_amx_qc_binary_decode_preserves_layout_and_rejects_misalignment() {
         "binary decoding must not construct misaligned validator material"
     );
 }
-
 #[test]
 fn native_amx_qc_json_decode_rejects_misaligned_validator_material() {
     let qc = sample_native_amx_invariant_qc();
@@ -486,7 +447,6 @@ fn native_amx_qc_json_decode_rejects_misaligned_validator_material() {
         .and_then(norito::json::Value::as_array_mut)
         .and_then(Vec::pop)
         .expect("fixture JSON contains validator proofs");
-
     assert!(
         norito::json::from_value::<NativeAmxAttestationQcV2>(value).is_err(),
         "JSON decoding must not construct misaligned validator material"
@@ -499,7 +459,6 @@ fn native_amx_qc_json_decode_rejects_misaligned_validator_material() {
         qc
     );
 }
-
 fn sample_native_amx_participant_proposal(
     body: &NativeAmxAttestationBodyV2,
     validator_set: Vec<PeerId>,
@@ -535,7 +494,6 @@ fn sample_native_amx_participant_proposal(
     proposal.proposal_hash = proposal.computed_proposal_hash();
     proposal
 }
-
 fn sample_native_amx_leg(
     source_id: [u8; 32],
     plan_digest: Hash,
@@ -588,14 +546,12 @@ fn sample_native_amx_leg(
         commit_qc,
     }
 }
-
 fn grouped_native_amx_fixture_document() -> norito::json::Value {
     norito::json::from_str(include_str!(
         "../../../../fixtures/sumeragi_v2/native_amx_v2_grouped.json"
     ))
     .expect("decode Rust-owned grouped Native AMX fixture document")
 }
-
 fn grouped_native_amx_commitment_fixture() -> LaneBlockCommitment {
     let commitment = grouped_native_amx_fixture_document()
         .get("golden")
@@ -605,7 +561,6 @@ fn grouped_native_amx_commitment_fixture() -> LaneBlockCommitment {
     norito::json::from_value(commitment)
         .expect("decode Rust-owned grouped Native AMX lane commitment")
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "this ordered fail-closed fixture validator follows the complete Native AMX evidence pipeline and preserves first-error intent across its canonical anchors"
@@ -614,7 +569,6 @@ fn validate_grouped_native_amx_application_evidence(
     document: &norito::json::Value,
 ) -> Result<(), &'static str> {
     use crate::block::consensus_v2::{ExecutionCommitment, NativeAmxApplicationManifestLeafV1};
-
     let evidence = document
         .pointer("/golden/application_evidence")
         .ok_or("fixture is missing application evidence")?;
@@ -696,7 +650,6 @@ fn validate_grouped_native_amx_application_evidence(
     {
         return Err("manifest proof does not authenticate the leaf");
     }
-
     let active = evidence
         .get("active_lane_incarnations")
         .and_then(norito::json::Value::as_array)
@@ -719,7 +672,6 @@ fn validate_grouped_native_amx_application_evidence(
     {
         return Err("manifest leaf targets a stale incarnation");
     }
-
     let commitment: LaneBlockCommitment = norito::json::from_value(
         document
             .pointer("/golden/receipt_group")
@@ -770,7 +722,6 @@ fn validate_grouped_native_amx_application_evidence(
             return Err("manifest participant identity or mixed-role anchor differs");
         }
     }
-
     let diagnostics: SumeragiDiagnosticsStatus = norito::json::from_value(
         document
             .pointer("/golden/expected_diagnostics")
@@ -800,7 +751,6 @@ fn validate_grouped_native_amx_application_evidence(
     }
     Ok(())
 }
-
 fn refresh_native_amx_participant_proposal(leg: &mut NativeAmxLegRecordV2) {
     leg.participant_proposal.descriptor.descriptor_hash = leg
         .participant_proposal
@@ -812,7 +762,6 @@ fn refresh_native_amx_participant_proposal(leg: &mut NativeAmxLegRecordV2) {
         qc.body.participant_proposal_hash = leg.participant_proposal.proposal_hash;
     }
 }
-
 fn remove_grouped_native_amx_fixture_path(
     document: &mut norito::json::Value,
     path: &str,
@@ -845,7 +794,6 @@ fn remove_grouped_native_amx_fixture_path(
         _ => panic!("control `{control_id}` remove parent is a container"),
     }
 }
-
 fn apply_grouped_native_amx_fixture_mutation(
     document: &mut norito::json::Value,
     mutation: &norito::json::Value,
@@ -944,11 +892,9 @@ fn apply_grouped_native_amx_fixture_mutation(
         _ => panic!("control `{control_id}` uses supported mutation `{operation}`"),
     }
 }
-
 #[test]
 fn native_amx_receipt_negative_corpus_fails_closed() {
     const EXPECTED_RECEIPT_CONTROLS: usize = 45;
-
     let canonical = grouped_native_amx_fixture_document();
     let controls = canonical
         .get("negative_controls")
@@ -1018,11 +964,9 @@ fn native_amx_receipt_negative_corpus_fails_closed() {
         "Rust must execute every declared receipt-group negative control"
     );
 }
-
 #[test]
 fn native_amx_application_evidence_negative_corpus_fails_closed() {
     const EXPECTED_APPLICATION_EVIDENCE_CONTROLS: usize = 10;
-
     let canonical = grouped_native_amx_fixture_document();
     validate_grouped_native_amx_application_evidence(&canonical)
         .expect("the canonical application evidence must be valid before mutation");
@@ -1062,7 +1006,6 @@ fn native_amx_application_evidence_negative_corpus_fails_closed() {
         "Rust must execute every declared application-evidence negative control"
     );
 }
-
 #[test]
 fn native_amx_application_evidence_rejects_coherently_wrong_manifest_count() {
     let mut document = grouped_native_amx_fixture_document();
@@ -1074,14 +1017,12 @@ fn native_amx_application_evidence_rejects_coherently_wrong_manifest_count() {
     *document
         .pointer_mut("/golden/application_evidence/manifest_artifacts/0/manifest_leaf_count")
         .expect("artifact manifest count exists") = norito::json::Value::from(2_u64);
-
     assert_eq!(
         validate_grouped_native_amx_application_evidence(&document),
         Err("fixture must contain one separate-participant manifest"),
         "the same singleton root and proof must not be rebound to a coherent wrong count"
     );
 }
-
 #[test]
 fn native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift() {
     let mut unordered = grouped_native_amx_commitment_fixture();
@@ -1090,7 +1031,6 @@ fn native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift() {
         unordered.validate_native_amx_receipts(),
         Err("Native AMX receipt sources must be strictly ordered")
     );
-
     let mut oversized = grouped_native_amx_commitment_fixture();
     let template = oversized.native_amx_receipts[0].legs[0]
         .participant_settlement
@@ -1103,7 +1043,6 @@ fn native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift() {
         oversized.validate_native_amx_receipts(),
         Err("Native AMX participant settlement is structurally invalid")
     );
-
     let mut same_route_drift = grouped_native_amx_commitment_fixture();
     let receipt = &mut same_route_drift.native_amx_receipts[0];
     let coordinator_route = (receipt.lane_id, receipt.dataspace_id);
@@ -1123,7 +1062,6 @@ fn native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift() {
         Err("Native AMX same-route leg differs from the coordinator identity")
     );
 }
-
 #[test]
 fn native_amx_grouped_receipts_reject_cross_context_height_drift() {
     let mut commitment_height_drift = grouped_native_amx_commitment_fixture();
@@ -1134,7 +1072,6 @@ fn native_amx_grouped_receipts_reject_cross_context_height_drift() {
         Err("Native AMX receipt coordinator identity is invalid"),
         "a receipt lane height belongs to the containing lane commitment, not an unrelated receipt field"
     );
-
     let mut proposal_context_drift = grouped_native_amx_commitment_fixture();
     let receipt = &mut proposal_context_drift.native_amx_receipts[0];
     let coordinator_route = (receipt.lane_id, receipt.dataspace_id);
@@ -1155,7 +1092,6 @@ fn native_amx_grouped_receipts_reject_cross_context_height_drift() {
         "a participant proposal height is bound to the coordinator authority context"
     );
 }
-
 #[test]
 fn native_amx_mixed_role_marker_defers_only_separate_participant_anchor() {
     let mut mixed_role = grouped_native_amx_commitment_fixture();
@@ -1182,7 +1118,6 @@ fn native_amx_mixed_role_marker_defers_only_separate_participant_anchor() {
     mixed_role
         .validate_native_amx_receipts()
         .expect("separate participant may defer exact block-wide anchor validation");
-
     let mut same_route = grouped_native_amx_commitment_fixture();
     let receipt = &mut same_route.native_amx_receipts[0];
     let coordinator_route = (receipt.lane_id, receipt.dataspace_id);
@@ -1209,7 +1144,6 @@ fn native_amx_mixed_role_marker_defers_only_separate_participant_anchor() {
         Err("Native AMX same-route leg differs from the coordinator identity")
     );
 }
-
 #[test]
 fn native_amx_grouped_receipts_reject_qc_and_group_membership_drift() {
     let mut malformed_bitmap = grouped_native_amx_commitment_fixture();
@@ -1220,7 +1154,6 @@ fn native_amx_grouped_receipts_reject_qc_and_group_membership_drift() {
         malformed_bitmap.validate_native_amx_receipts(),
         Err("Native AMX participant QC is structurally invalid")
     );
-
     let mut duplicate_leg = grouped_native_amx_commitment_fixture();
     duplicate_leg.native_amx_receipts[0].legs[1] =
         duplicate_leg.native_amx_receipts[0].legs[0].clone();
@@ -1228,7 +1161,6 @@ fn native_amx_grouped_receipts_reject_qc_and_group_membership_drift() {
         duplicate_leg.validate_native_amx_receipts(),
         Err("Native AMX receipt contains duplicate participant routes")
     );
-
     let mut group_drift = grouped_native_amx_commitment_fixture();
     group_drift.native_amx_receipts[0].legs[0]
         .participant_settlement
@@ -1239,7 +1171,6 @@ fn native_amx_grouped_receipts_reject_qc_and_group_membership_drift() {
         Err("Native AMX participant settlement is structurally invalid")
     );
 }
-
 #[test]
 fn nexus_fee_receipts_change_lane_block_commitment_hash_inputs() {
     let base = LaneBlockCommitment {
@@ -1259,10 +1190,8 @@ fn nexus_fee_receipts_change_lane_block_commitment_hash_inputs() {
     };
     let mut changed = base.clone();
     changed.nexus_fee_receipts[0].fee_amount = "0.002".parse().expect("quantity");
-
     assert_ne!(Hash::new(base.encode()), Hash::new(changed.encode()));
 }
-
 #[test]
 fn native_amx_receipts_change_lane_block_commitment_hash_inputs() {
     let plan_digest = Hash::new(b"test-native-amx-plan");
@@ -1317,10 +1246,8 @@ fn native_amx_receipts_change_lane_block_commitment_hash_inputs() {
     };
     let mut changed = base.clone();
     changed.native_amx_receipts[0].legs[1].commit_qc.body.phase = NativeAmxPhase::Prepare;
-
     assert_ne!(Hash::new(base.encode()), Hash::new(changed.encode()));
 }
-
 #[test]
 fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() {
     let source_id = [0xC7; 32];
@@ -1337,7 +1264,6 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
     let settlement = body
         .computed_grouped_participant_settlement(&ordered_sources)
         .expect("ordered grouped participant settlement");
-
     assert_eq!(settlement.block_height, body.participant_lane_block_height);
     assert_eq!(settlement.lane_id, body.participant_lane_id);
     assert_eq!(
@@ -1376,13 +1302,11 @@ fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() 
         body.computed_grouped_participant_settlement_commitment(&ordered_sources)
             .expect("ordered grouped participant commitment")
     );
-
     let encoded = norito::to_bytes(&settlement).expect("encode participant settlement");
     let decoded = norito::decode_from_bytes::<LaneBlockCommitment>(&encoded)
         .expect("decode participant settlement");
     assert_eq!(decoded, settlement);
 }
-
 #[test]
 fn native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups() {
     let body = sample_native_amx_qc(
@@ -1394,7 +1318,6 @@ fn native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups() 
         sample_roster(),
     )
     .body;
-
     assert!(body.computed_grouped_participant_settlement(&[]).is_err());
     assert!(
         body.computed_grouped_participant_settlement(&[[0x32; 32]])
@@ -1416,7 +1339,6 @@ fn native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups() 
         .is_err()
     );
 }
-
 #[test]
 fn native_amx_v2_attestation_preimage_binds_round_and_epoch() {
     let body = sample_native_amx_qc(
@@ -1443,12 +1365,10 @@ fn native_amx_v2_attestation_preimage_binds_round_and_epoch() {
     another_view.round.view = another_view.round.view.saturating_add(1);
     let mut another_epoch = body;
     another_epoch.epoch = another_epoch.epoch.saturating_add(1);
-
     assert!(preimage.starts_with(b"iroha:native-amx:v2"));
     assert_ne!(preimage, another_view.signature_preimage());
     assert_ne!(preimage, another_epoch.signature_preimage());
 }
-
 fn sample_lane_block_vote_body(phase: CertPhase) -> LaneBlockVoteBodyV1 {
     LaneBlockVoteBodyV1 {
         phase,
@@ -1475,7 +1395,6 @@ fn sample_lane_block_vote_body(phase: CertPhase) -> LaneBlockVoteBodyV1 {
         qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
     }
 }
-
 fn sample_lane_block_proposal() -> LaneBlockProposalV1 {
     let roster = sample_roster();
     let mut descriptor = LaneBlockDescriptorV1 {
@@ -1512,11 +1431,9 @@ fn sample_lane_block_proposal() -> LaneBlockProposalV1 {
     proposal.proposal_hash = proposal.computed_proposal_hash();
     proposal
 }
-
 fn refresh_lane_block_descriptor_hash(proposal: &mut LaneBlockProposalV1) {
     proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
 }
-
 #[test]
 fn lane_block_vote_body_signature_preimage_binds_phase_and_descriptor() {
     let body = sample_lane_block_vote_body(CertPhase::Prepare);
@@ -1531,10 +1448,8 @@ fn lane_block_vote_body_signature_preimage_binds_phase_and_descriptor() {
             "lane-vote signature identity must ignore the caller's ambient Norito layout"
         );
     }
-
     assert!(preimage.starts_with(b"iroha:lane-block-vote:v1"));
     assert!(preimage.len() > b"iroha:lane-block-vote:v1".len());
-
     let mut commit_body = body.clone();
     commit_body.phase = CertPhase::Commit;
     assert_ne!(
@@ -1542,7 +1457,6 @@ fn lane_block_vote_body_signature_preimage_binds_phase_and_descriptor() {
         commit_body.signature_preimage(),
         "prepare and commit lane votes must be domain-separated"
     );
-
     let mut descriptor_drift = body;
     descriptor_drift.descriptor_hash = Hash::prehashed([0x29; Hash::LENGTH]);
     assert_ne!(
@@ -1551,83 +1465,64 @@ fn lane_block_vote_body_signature_preimage_binds_phase_and_descriptor() {
         "descriptor drift must change the lane vote preimage"
     );
 }
-
 #[test]
 fn lane_block_vote_body_signature_preimage_binds_replay_and_quorum_fields() {
     let body = sample_lane_block_vote_body(CertPhase::Prepare);
     let preimage = body.signature_preimage();
-
     let mut cases = Vec::<(&str, LaneBlockVoteBodyV1)>::new();
-
     let mut lane_drift = body.clone();
     lane_drift.lane_id = LaneId::new(8);
     cases.push(("lane id", lane_drift));
-
     let mut dataspace_drift = body.clone();
     dataspace_drift.dataspace_id = DataSpaceId::new(12);
     cases.push(("dataspace id", dataspace_drift));
-
     let mut proposal_height_drift = body.clone();
     proposal_height_drift.proposal_height = proposal_height_drift.proposal_height.saturating_add(1);
     cases.push(("proposal height", proposal_height_drift));
-
     let mut height_drift = body.clone();
     height_drift.lane_block_height = height_drift.lane_block_height.saturating_add(1);
     cases.push(("lane block height", height_drift));
-
     let mut view_drift = body.clone();
     view_drift.lane_block_view = view_drift.lane_block_view.saturating_add(1);
     cases.push(("lane block view", view_drift));
-
     let mut proposal_drift = body.clone();
     proposal_drift.proposal_hash = Hash::prehashed([0x31; Hash::LENGTH]);
     cases.push(("proposal hash", proposal_drift));
-
     let mut subject_drift = body.clone();
     subject_drift.subject_hash = Hash::prehashed([0x32; Hash::LENGTH]);
     cases.push(("subject hash", subject_drift));
-
     let mut ownership_drift = body.clone();
     ownership_drift.payload_ownership_hash = Hash::prehashed([0x33; Hash::LENGTH]);
     cases.push(("payload ownership hash", ownership_drift));
-
     let mut rbc_drift = body.clone();
     rbc_drift.rbc_instance_hash = Hash::prehashed([0x34; Hash::LENGTH]);
     cases.push(("rbc instance hash", rbc_drift));
-
     let mut candidate_indices_drift = body.clone();
     candidate_indices_drift.accepted_candidate_indices.reverse();
     cases.push(("accepted candidate indices", candidate_indices_drift));
-
     let mut transaction_hashes_drift = body.clone();
     transaction_hashes_drift
         .accepted_transaction_hashes
         .reverse();
     cases.push(("accepted transaction hashes", transaction_hashes_drift));
-
     let mut validator_hash_version_drift = body.clone();
     validator_hash_version_drift.validator_set_hash_version = validator_hash_version_drift
         .validator_set_hash_version
         .saturating_add(1);
     cases.push(("validator set hash version", validator_hash_version_drift));
-
     let mut validator_hash_drift = body.clone();
     validator_hash_drift.validator_set_hash =
         HashOf::from_untyped_unchecked(Hash::prehashed([0x35; Hash::LENGTH]));
     cases.push(("validator set hash", validator_hash_drift));
-
     let mut validator_count_drift = body.clone();
     validator_count_drift.validator_count = validator_count_drift.validator_count.saturating_add(1);
     cases.push(("validator count", validator_count_drift));
-
     let mut quorum_drift = body.clone();
     quorum_drift.min_quorum = quorum_drift.min_quorum.saturating_sub(1);
     cases.push(("minimum quorum", quorum_drift));
-
     let mut qc_mode_drift = body.clone();
     qc_mode_drift.qc_mode_tag.push_str(":drift");
     cases.push(("qc mode tag", qc_mode_drift));
-
     for (label, drifted) in cases {
         assert_ne!(
             preimage,
@@ -1636,17 +1531,14 @@ fn lane_block_vote_body_signature_preimage_binds_replay_and_quorum_fields() {
         );
     }
 }
-
 #[test]
 fn lane_block_proposal_hashes_bind_predecessor_and_committee() {
     let proposal = sample_lane_block_proposal();
-
     assert_eq!(
         proposal.descriptor.computed_descriptor_hash(),
         proposal.descriptor.descriptor_hash
     );
     assert_eq!(proposal.computed_proposal_hash(), proposal.proposal_hash);
-
     let mut predecessor_drift = proposal.clone();
     predecessor_drift
         .descriptor
@@ -1656,7 +1548,6 @@ fn lane_block_proposal_hashes_bind_predecessor_and_committee() {
         proposal.descriptor.descriptor_hash,
         "predecessor descriptor drift must change descriptor identity"
     );
-
     let mut committee_drift = proposal.clone();
     committee_drift.descriptor.validator_set.reverse();
     assert_ne!(
@@ -1665,7 +1556,6 @@ fn lane_block_proposal_hashes_bind_predecessor_and_committee() {
         "committee order drift must change descriptor identity"
     );
 }
-
 #[test]
 fn lane_block_and_replay_hashes_ignore_ambient_norito_layout() {
     let proposal = sample_lane_block_proposal();
@@ -1675,7 +1565,6 @@ fn lane_block_and_replay_hashes_ignore_ambient_norito_layout() {
     let replay_hashes = ownership
         .compute_replay_hashes()
         .expect("compute canonical replay hashes");
-
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -1691,91 +1580,71 @@ fn lane_block_and_replay_hashes_ignore_ambient_norito_layout() {
         replay_hashes
     );
 }
-
 #[test]
 fn lane_block_descriptor_hash_binds_replay_and_quorum_fields() {
     let descriptor = sample_lane_block_proposal().descriptor;
     let mut cases = Vec::<(&str, LaneBlockDescriptorV1)>::new();
-
     let mut lane_drift = descriptor.clone();
     lane_drift.lane_id = LaneId::new(8);
     cases.push(("lane id", lane_drift));
-
     let mut dataspace_drift = descriptor.clone();
     dataspace_drift.dataspace_id = DataSpaceId::new(12);
     cases.push(("dataspace id", dataspace_drift));
-
     let mut proposal_height_drift = descriptor.clone();
     proposal_height_drift.proposal_height = proposal_height_drift.proposal_height.saturating_add(1);
     cases.push(("proposal height", proposal_height_drift));
-
     let mut previous_height_drift = descriptor.clone();
     previous_height_drift.previous_lane_block_height = previous_height_drift
         .previous_lane_block_height
         .saturating_sub(1);
     cases.push(("previous lane block height", previous_height_drift));
-
     let mut predecessor_drift = descriptor.clone();
     predecessor_drift.previous_lane_block_descriptor_hash = None;
     cases.push(("previous descriptor hash", predecessor_drift));
-
     let mut height_drift = descriptor.clone();
     height_drift.lane_block_height = height_drift.lane_block_height.saturating_add(1);
     cases.push(("lane block height", height_drift));
-
     let mut view_drift = descriptor.clone();
     view_drift.lane_block_view = view_drift.lane_block_view.saturating_add(1);
     cases.push(("lane block view", view_drift));
-
     let mut subject_drift = descriptor.clone();
     subject_drift.subject_hash = Hash::prehashed([0x31; Hash::LENGTH]);
     cases.push(("subject hash", subject_drift));
-
     let mut ownership_drift = descriptor.clone();
     ownership_drift.payload_ownership_hash = Hash::prehashed([0x32; Hash::LENGTH]);
     cases.push(("payload ownership hash", ownership_drift));
-
     let mut rbc_drift = descriptor.clone();
     rbc_drift.rbc_instance_hash = Hash::prehashed([0x33; Hash::LENGTH]);
     cases.push(("rbc instance hash", rbc_drift));
-
     let mut candidate_indices_drift = descriptor.clone();
     candidate_indices_drift.accepted_candidate_indices.reverse();
     cases.push(("accepted candidate indices", candidate_indices_drift));
-
     let mut transaction_hashes_drift = descriptor.clone();
     transaction_hashes_drift
         .accepted_transaction_hashes
         .reverse();
     cases.push(("accepted transaction hashes", transaction_hashes_drift));
-
     let mut validator_hash_version_drift = descriptor.clone();
     validator_hash_version_drift.validator_set_hash_version = validator_hash_version_drift
         .validator_set_hash_version
         .saturating_add(1);
     cases.push(("validator set hash version", validator_hash_version_drift));
-
     let mut validator_hash_drift = descriptor.clone();
     validator_hash_drift.validator_set_hash =
         HashOf::from_untyped_unchecked(Hash::prehashed([0x34; Hash::LENGTH]));
     cases.push(("validator set hash", validator_hash_drift));
-
     let mut validator_set_drift = descriptor.clone();
     validator_set_drift.validator_set.reverse();
     cases.push(("validator set order", validator_set_drift));
-
     let mut validator_count_drift = descriptor.clone();
     validator_count_drift.validator_count = validator_count_drift.validator_count.saturating_add(1);
     cases.push(("validator count", validator_count_drift));
-
     let mut quorum_drift = descriptor.clone();
     quorum_drift.min_quorum = quorum_drift.min_quorum.saturating_sub(1);
     cases.push(("minimum quorum", quorum_drift));
-
     let mut qc_mode_drift = descriptor.clone();
     qc_mode_drift.qc_mode_tag.push_str(":drift");
     cases.push(("qc mode tag", qc_mode_drift));
-
     for (label, drifted) in cases {
         assert_ne!(
             drifted.computed_descriptor_hash(),
@@ -1784,7 +1653,6 @@ fn lane_block_descriptor_hash_binds_replay_and_quorum_fields() {
         );
     }
 }
-
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -1793,21 +1661,17 @@ fn lane_block_descriptor_hash_binds_replay_and_quorum_fields() {
 fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
     let proposal = sample_lane_block_proposal();
     let mut cases = Vec::<(&str, LaneBlockProposalV1)>::new();
-
     let mut descriptor_hash_drift = proposal.clone();
     descriptor_hash_drift.descriptor.descriptor_hash = Hash::prehashed([0x31; Hash::LENGTH]);
     cases.push(("descriptor hash", descriptor_hash_drift));
-
     let mut lane_drift = proposal.clone();
     lane_drift.descriptor.lane_id = LaneId::new(8);
     refresh_lane_block_descriptor_hash(&mut lane_drift);
     cases.push(("lane id", lane_drift));
-
     let mut dataspace_drift = proposal.clone();
     dataspace_drift.descriptor.dataspace_id = DataSpaceId::new(12);
     refresh_lane_block_descriptor_hash(&mut dataspace_drift);
     cases.push(("dataspace id", dataspace_drift));
-
     let mut proposal_height_drift = proposal.clone();
     proposal_height_drift.descriptor.proposal_height = proposal_height_drift
         .descriptor
@@ -1815,7 +1679,6 @@ fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
         .saturating_add(1);
     refresh_lane_block_descriptor_hash(&mut proposal_height_drift);
     cases.push(("proposal height", proposal_height_drift));
-
     let mut previous_height_drift = proposal.clone();
     previous_height_drift.descriptor.previous_lane_block_height = previous_height_drift
         .descriptor
@@ -1823,40 +1686,33 @@ fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
         .saturating_sub(1);
     refresh_lane_block_descriptor_hash(&mut previous_height_drift);
     cases.push(("previous lane block height", previous_height_drift));
-
     let mut predecessor_drift = proposal.clone();
     predecessor_drift
         .descriptor
         .previous_lane_block_descriptor_hash = None;
     refresh_lane_block_descriptor_hash(&mut predecessor_drift);
     cases.push(("previous descriptor hash", predecessor_drift));
-
     let mut height_drift = proposal.clone();
     height_drift.descriptor.lane_block_height =
         height_drift.descriptor.lane_block_height.saturating_add(1);
     refresh_lane_block_descriptor_hash(&mut height_drift);
     cases.push(("lane block height", height_drift));
-
     let mut view_drift = proposal.clone();
     view_drift.descriptor.lane_block_view = view_drift.descriptor.lane_block_view.saturating_add(1);
     refresh_lane_block_descriptor_hash(&mut view_drift);
     cases.push(("lane block view", view_drift));
-
     let mut subject_drift = proposal.clone();
     subject_drift.descriptor.subject_hash = Hash::prehashed([0x32; Hash::LENGTH]);
     refresh_lane_block_descriptor_hash(&mut subject_drift);
     cases.push(("subject hash", subject_drift));
-
     let mut ownership_drift = proposal.clone();
     ownership_drift.descriptor.payload_ownership_hash = Hash::prehashed([0x33; Hash::LENGTH]);
     refresh_lane_block_descriptor_hash(&mut ownership_drift);
     cases.push(("payload ownership hash", ownership_drift));
-
     let mut rbc_drift = proposal.clone();
     rbc_drift.descriptor.rbc_instance_hash = Hash::prehashed([0x34; Hash::LENGTH]);
     refresh_lane_block_descriptor_hash(&mut rbc_drift);
     cases.push(("rbc instance hash", rbc_drift));
-
     let mut candidate_indices_drift = proposal.clone();
     candidate_indices_drift
         .descriptor
@@ -1864,7 +1720,6 @@ fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
         .reverse();
     refresh_lane_block_descriptor_hash(&mut candidate_indices_drift);
     cases.push(("accepted candidate indices", candidate_indices_drift));
-
     let mut transaction_hashes_drift = proposal.clone();
     transaction_hashes_drift
         .descriptor
@@ -1872,7 +1727,6 @@ fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
         .reverse();
     refresh_lane_block_descriptor_hash(&mut transaction_hashes_drift);
     cases.push(("accepted transaction hashes", transaction_hashes_drift));
-
     let mut validator_hash_version_drift = proposal.clone();
     validator_hash_version_drift
         .descriptor
@@ -1882,18 +1736,15 @@ fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
         .saturating_add(1);
     refresh_lane_block_descriptor_hash(&mut validator_hash_version_drift);
     cases.push(("validator set hash version", validator_hash_version_drift));
-
     let mut validator_hash_drift = proposal.clone();
     validator_hash_drift.descriptor.validator_set_hash =
         HashOf::from_untyped_unchecked(Hash::prehashed([0x35; Hash::LENGTH]));
     refresh_lane_block_descriptor_hash(&mut validator_hash_drift);
     cases.push(("validator set hash", validator_hash_drift));
-
     let mut validator_set_drift = proposal.clone();
     validator_set_drift.descriptor.validator_set.reverse();
     refresh_lane_block_descriptor_hash(&mut validator_set_drift);
     cases.push(("validator set order", validator_set_drift));
-
     let mut validator_count_drift = proposal.clone();
     validator_count_drift.descriptor.validator_count = validator_count_drift
         .descriptor
@@ -1901,17 +1752,14 @@ fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
         .saturating_add(1);
     refresh_lane_block_descriptor_hash(&mut validator_count_drift);
     cases.push(("validator count", validator_count_drift));
-
     let mut quorum_drift = proposal.clone();
     quorum_drift.descriptor.min_quorum = quorum_drift.descriptor.min_quorum.saturating_sub(1);
     refresh_lane_block_descriptor_hash(&mut quorum_drift);
     cases.push(("minimum quorum", quorum_drift));
-
     let mut qc_mode_drift = proposal.clone();
     qc_mode_drift.descriptor.qc_mode_tag.push_str(":drift");
     refresh_lane_block_descriptor_hash(&mut qc_mode_drift);
     cases.push(("qc mode tag", qc_mode_drift));
-
     for (label, drifted) in cases {
         assert_ne!(
             drifted.computed_proposal_hash(),
@@ -1920,7 +1768,6 @@ fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
         );
     }
 }
-
 #[test]
 fn lane_block_proposal_roundtrips_and_derives_vote_body() {
     let proposal = sample_lane_block_proposal();
@@ -1928,7 +1775,6 @@ fn lane_block_proposal_roundtrips_and_derives_vote_body() {
     let decoded: LaneBlockProposalV1 =
         norito::decode_from_bytes(&encoded).expect("lane proposal decodes");
     assert_eq!(decoded, proposal);
-
     let body = decoded.vote_body(CertPhase::Prepare);
     assert_eq!(body.proposal_hash, decoded.proposal_hash);
     assert_eq!(body.descriptor_hash, decoded.descriptor.descriptor_hash);
@@ -1942,7 +1788,6 @@ fn lane_block_proposal_roundtrips_and_derives_vote_body() {
         decoded.descriptor.accepted_transaction_hashes
     );
 }
-
 #[test]
 fn lane_block_certificate_decodes_exactly_and_rejects_trailing_bytes() {
     let proposal = sample_lane_block_proposal();
@@ -1963,26 +1808,21 @@ fn lane_block_certificate_decodes_exactly_and_rejects_trailing_bytes() {
         commit_qc,
     };
     let encoded = certificate.encode();
-
     let (decoded, used) = norito::core::decode_field_canonical::<LaneBlockCertificateV1>(&encoded)
         .expect("canonical lane certificate decodes exactly");
-
     assert_eq!(decoded, certificate);
     assert_eq!(used, encoded.len());
-
     let mut tailed = encoded;
     tailed.extend_from_slice(b"next-frame");
     norito::core::decode_field_canonical::<LaneBlockCertificateV1>(&tailed)
         .expect_err("unframed trailing bytes must be rejected");
 }
-
 fn sample_proposal() -> Proposal {
     Proposal {
         header: sample_consensus_header(),
         payload_hash: Hash::new(b"payload"),
     }
 }
-
 fn sample_reconfig() -> Reconfig {
     let peers = (0..2)
         .map(|_| PeerId::new(checked_random_keypair().public_key().clone()))
@@ -1992,7 +1832,6 @@ fn sample_reconfig() -> Reconfig {
         activation_height: 42,
     }
 }
-
 fn sample_rbc_init() -> RbcInit {
     let roster = sample_roster();
     let roster_hash = roster_hash(&roster);
@@ -2036,7 +1875,6 @@ fn sample_rbc_init() -> RbcInit {
         leader_signature,
     }
 }
-
 fn sample_rbc_chunk() -> RbcChunk {
     RbcChunk {
         block_hash: dummy_hash(),
@@ -2047,7 +1885,6 @@ fn sample_rbc_chunk() -> RbcChunk {
         bytes: vec![1, 2, 3, 4],
     }
 }
-
 fn sample_rbc_init_request() -> RbcInitRequest {
     RbcInitRequest {
         block_hash: dummy_hash(),
@@ -2055,7 +1892,6 @@ fn sample_rbc_init_request() -> RbcInitRequest {
         view: 3,
     }
 }
-
 fn sample_rbc_chunk_request() -> RbcChunkRequest {
     RbcChunkRequest {
         block_hash: dummy_hash(),
@@ -2064,7 +1900,6 @@ fn sample_rbc_chunk_request() -> RbcChunkRequest {
         missing_indices: vec![0, 2, 5],
     }
 }
-
 fn sample_rbc_ready() -> RbcReady {
     let roster = sample_roster();
     RbcReady {
@@ -2078,7 +1913,6 @@ fn sample_rbc_ready() -> RbcReady {
         signature: vec![0x10, 0x11],
     }
 }
-
 fn sample_rbc_deliver() -> RbcDeliver {
     let roster = sample_roster();
     RbcDeliver {
@@ -2096,7 +1930,6 @@ fn sample_rbc_deliver() -> RbcDeliver {
         }],
     }
 }
-
 fn sample_vrf_commit() -> VrfCommit {
     VrfCommit {
         epoch: 7,
@@ -2105,7 +1938,6 @@ fn sample_vrf_commit() -> VrfCommit {
         bls_sig: Vec::new(),
     }
 }
-
 fn sample_vrf_reveal() -> VrfReveal {
     VrfReveal {
         epoch: 7,
@@ -2114,7 +1946,6 @@ fn sample_vrf_reveal() -> VrfReveal {
         bls_sig: Vec::new(),
     }
 }
-
 #[test]
 fn qc_roundtrip_encode_decode() {
     let roster = sample_roster();
@@ -2143,7 +1974,6 @@ fn qc_roundtrip_encode_decode() {
     let dec = Qc::decode(&mut &bytes[..]).expect("decode certificate");
     assert_eq!(cert, dec);
 }
-
 #[test]
 fn exec_witness_roundtrip_codec() {
     let w = ExecWitness {
@@ -2162,7 +1992,6 @@ fn exec_witness_roundtrip_codec() {
     let dec = ExecWitness::decode(&mut &bytes[..]).expect("decode witness");
     assert_eq!(w, dec);
 }
-
 #[test]
 fn rbc_repair_requests_roundtrip_codec() {
     let init_request = sample_rbc_init_request();
@@ -2170,14 +1999,12 @@ fn rbc_repair_requests_roundtrip_codec() {
     let init_decoded =
         RbcInitRequest::decode(&mut &init_bytes[..]).expect("decode RBC init request");
     assert_eq!(init_request, init_decoded);
-
     let chunk_request = sample_rbc_chunk_request();
     let chunk_bytes = chunk_request.encode();
     let chunk_decoded =
         RbcChunkRequest::decode(&mut &chunk_bytes[..]).expect("decode RBC chunk request");
     assert_eq!(chunk_request, chunk_decoded);
 }
-
 #[test]
 fn evidence_roundtrip_codec() {
     let roster = sample_roster();
@@ -2211,7 +2038,6 @@ fn evidence_roundtrip_codec() {
     let dec = Evidence::decode(&mut &bytes[..]).expect("decode evidence");
     assert_eq!(ev, dec);
 }
-
 #[test]
 fn censorship_evidence_roundtrip_codec() {
     let key_pair = checked_random_keypair();
@@ -2237,7 +2063,6 @@ fn censorship_evidence_roundtrip_codec() {
     let dec = Evidence::decode(&mut &bytes[..]).expect("decode censorship evidence");
     assert_eq!(ev, dec);
 }
-
 #[test]
 fn evidence_record_roundtrip() {
     let ev = Evidence {
@@ -2288,7 +2113,6 @@ fn evidence_record_roundtrip() {
     let dec = EvidenceRecord::decode(&mut &bytes[..]).expect("decode evidence record");
     assert_eq!(rec, dec);
 }
-
 #[test]
 fn rbc_ready_decode_from_slice_matches_encode() {
     let ready = RbcReady {
@@ -2306,7 +2130,6 @@ fn rbc_ready_decode_from_slice_matches_encode() {
     assert_eq!(ready, decoded);
     assert_eq!(used, canonical.len());
 }
-
 #[test]
 fn lane_settlement_receipt_decode_from_slice_requires_canonical_bare_prefix() {
     let receipt = LaneSettlementReceipt {
@@ -2324,7 +2147,6 @@ fn lane_settlement_receipt_decode_from_slice_requires_canonical_bare_prefix() {
         .expect("decode canonical lane settlement receipt prefix");
     assert_eq!(decoded, receipt);
     assert_eq!(used, canonical.len());
-
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let alternate = {
@@ -2343,7 +2165,6 @@ fn lane_settlement_receipt_decode_from_slice_requires_canonical_bare_prefix() {
     LaneSettlementReceipt::decode_from_slice(&alternate)
         .expect_err("alternate bare layout must be rejected");
 }
-
 #[test]
 fn proposal_roundtrip_codec() {
     let prop = sample_proposal();
@@ -2351,7 +2172,6 @@ fn proposal_roundtrip_codec() {
     let dec = Proposal::decode(&mut &bytes[..]).expect("decode proposal");
     assert_eq!(prop, dec);
 }
-
 fn checked_seeded_peer_id(seed: u8) -> PeerId {
     PeerId::new(
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -2360,7 +2180,6 @@ fn checked_seeded_peer_id(seed: u8) -> PeerId {
             .clone(),
     )
 }
-
 fn sample_lane_payload_ownership_with_replay_material() -> SumeragiLanePayloadOwnership {
     let mut validator_set = vec![checked_seeded_peer_id(1), checked_seeded_peer_id(2)];
     validator_set.sort();
@@ -2398,14 +2217,12 @@ fn sample_lane_payload_ownership_with_replay_material() -> SumeragiLanePayloadOw
     ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
     ownership
 }
-
 #[test]
 fn lane_payload_ownership_replay_material_validates_canonical_hashes() {
     let ownership = sample_lane_payload_ownership_with_replay_material();
     let replay_hashes = ownership
         .compute_replay_hashes()
         .expect("canonical replay material should hash");
-
     assert_eq!(ownership.subject_hash, replay_hashes.subject_hash);
     assert_eq!(
         ownership.payload_ownership_hash,
@@ -2420,111 +2237,92 @@ fn lane_payload_ownership_replay_material_validates_canonical_hashes() {
         .validate_replay_material()
         .expect("canonical replay material should validate");
 }
-
 #[test]
 fn lane_payload_ownership_replay_material_rejects_accepted_hash_drift() {
     let mut ownership = sample_lane_payload_ownership_with_replay_material();
     ownership.accepted_transaction_hashes[0] = Hash::new(b"forged accepted tx 0");
-
     assert_eq!(
         ownership.validate_replay_material(),
         Err(SumeragiLanePayloadOwnershipReplayError::SubjectHashMismatch)
     );
 }
-
 #[test]
 fn lane_payload_ownership_replay_material_rejects_proposal_height_drift() {
     let mut ownership = sample_lane_payload_ownership_with_replay_material();
     ownership.proposal_height = ownership.proposal_height.saturating_add(1);
-
     assert_eq!(
         ownership.validate_replay_material(),
         Err(SumeragiLanePayloadOwnershipReplayError::DescriptorHashMismatch)
     );
 }
-
 #[test]
 fn lane_payload_ownership_replay_material_rejects_defaulted_candidate_hashes() {
     let mut ownership = sample_lane_payload_ownership_with_replay_material();
     ownership.accepted_transaction_hashes.clear();
-
     assert_eq!(
         ownership.validate_replay_material(),
         Err(SumeragiLanePayloadOwnershipReplayError::CandidateHashCountMismatch)
     );
 }
-
 #[test]
 fn lane_payload_ownership_replay_material_rejects_defaulted_predecessor_height() {
     let mut ownership = sample_lane_payload_ownership_with_replay_material();
     ownership.previous_lane_block_height = 0;
-
     assert_eq!(
         ownership.validate_replay_material(),
         Err(SumeragiLanePayloadOwnershipReplayError::PreviousLaneBlockHeightMismatch)
     );
 }
-
 #[test]
 fn lane_payload_ownership_replay_material_rejects_missing_non_genesis_predecessor_hash() {
     let mut ownership = sample_lane_payload_ownership_with_replay_material();
     assert!(ownership.previous_lane_block_height > 0);
     ownership.previous_lane_block_descriptor_hash = None;
-
     assert_eq!(
         ownership.validate_replay_material(),
         Err(SumeragiLanePayloadOwnershipReplayError::MissingDescriptorHash)
     );
 }
-
 #[test]
 fn lane_payload_ownership_replay_material_rejects_missing_descriptor_hash() {
     let mut ownership = sample_lane_payload_ownership_with_replay_material();
     ownership.lane_block_descriptor_hash = None;
-
     assert_eq!(
         ownership.validate_replay_material(),
         Err(SumeragiLanePayloadOwnershipReplayError::MissingDescriptorHash)
     );
 }
-
 #[test]
 fn lane_payload_ownership_replay_material_rejects_empty_validator_set() {
     let mut ownership = sample_lane_payload_ownership_with_replay_material();
     ownership.lane_block_descriptor_validator_set.clear();
     ownership.lane_block_descriptor_validator_count = 0;
     ownership.lane_block_descriptor_min_quorum = 0;
-
     assert_eq!(
         ownership.validate_replay_material(),
         Err(SumeragiLanePayloadOwnershipReplayError::EmptyValidatorSet)
     );
 }
-
 #[test]
 fn lane_payload_ownership_replay_material_rejects_validator_count_drift() {
     let mut ownership = sample_lane_payload_ownership_with_replay_material();
     ownership.lane_block_descriptor_validator_count = ownership
         .lane_block_descriptor_validator_count
         .saturating_add(1);
-
     assert_eq!(
         ownership.validate_replay_material(),
         Err(SumeragiLanePayloadOwnershipReplayError::ValidatorCountMismatch)
     );
 }
-
 #[test]
 fn lane_payload_ownership_replay_material_rejects_noncanonical_validator_set() {
     let mut ownership = sample_lane_payload_ownership_with_replay_material();
     ownership.lane_block_descriptor_validator_set.reverse();
-
     assert_eq!(
         ownership.validate_replay_material(),
         Err(SumeragiLanePayloadOwnershipReplayError::ValidatorSetNotCanonical)
     );
 }
-
 #[test]
 fn lane_payload_ownership_replay_material_rejects_genesis_predecessor_descriptor() {
     let mut ownership = sample_lane_payload_ownership_with_replay_material();
@@ -2532,13 +2330,11 @@ fn lane_payload_ownership_replay_material_rejects_genesis_predecessor_descriptor
     ownership.previous_lane_block_height = 0;
     ownership.previous_lane_block_descriptor_hash =
         Some(Hash::new(b"unexpected genesis predecessor descriptor"));
-
     assert_eq!(
         ownership.validate_replay_material(),
         Err(SumeragiLanePayloadOwnershipReplayError::UnexpectedGenesisPredecessorDescriptorHash)
     );
 }
-
 #[test]
 fn lane_payload_ownership_status_roundtrip_codec() {
     let ownership = SumeragiLanePayloadOwnership {
@@ -2569,13 +2365,11 @@ fn lane_payload_ownership_status_roundtrip_codec() {
     let decoded = SumeragiLanePayloadOwnership::decode(&mut &encoded[..])
         .expect("lane payload ownership decodes");
     assert_eq!(decoded, ownership);
-
     let (decoded_from_slice, used) = SumeragiLanePayloadOwnership::decode_from_slice(&encoded)
         .expect("lane payload ownership decodes from slice");
     assert_eq!(decoded_from_slice, ownership);
     assert_eq!(used, encoded.len());
 }
-
 include!("consensus/quorum_policy_tests.rs");
 include!("consensus/rbc_roundtrip_tail_tests.rs");
 include!("consensus/runtime_diagnostics_tests.rs");

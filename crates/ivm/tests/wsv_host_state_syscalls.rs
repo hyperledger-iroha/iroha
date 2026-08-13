@@ -1,10 +1,8 @@
 //! WsvHost durable state syscalls: STATE_GET/SET/DEL with pointer-ABI.
-
 use std::{
     fs,
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use iroha_crypto::PublicKey;
 use ivm::{
     IVM, Memory, PointerType, VMError,
@@ -13,7 +11,6 @@ use ivm::{
     syscalls,
 };
 mod common;
-
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
@@ -25,30 +22,25 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 fn state_path_tlv(path: &str) -> Vec<u8> {
     let path: iroha_data_model::state_path::StatePath = path.parse().expect("canonical state path");
     let payload = norito::to_bytes(&path).expect("encode state path");
     make_tlv(PointerType::NoritoBytes, &payload)
 }
-
 fn account(_domain: &str, public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().expect("public key");
     AccountId::new(public_key)
 }
-
 fn saturate_input(vm: &mut IVM) {
     let filler = make_tlv(PointerType::Blob, b"");
     while vm.alloc_input_tlv(&filler).is_ok() {}
 }
-
 fn bytes_state_program(number: u32, name: &str) -> Vec<u8> {
     common::assemble_bytes_state_contract_syscalls(
         &[u8::try_from(number).expect("state syscall fits compact encoding")],
         &[name],
     )
 }
-
 #[test]
 fn wsv_host_state_set_get_del_roundtrip() {
     let wsv = MockWorldStateView::new();
@@ -59,21 +51,18 @@ fn wsv_host_state_set_get_del_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     let host = WsvHost::new_with_subject(wsv, caller.clone(), Default::default());
     vm.set_host(host);
-
     let path_tlv = state_path_tlv("bar");
     let expected = vec![9u8, 8, 7];
     let val1 = common::encode_bytes_state_value(&expected);
     let val1_tlv = make_tlv(PointerType::NoritoBytes, &val1);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_val1 = vm.alloc_input_tlv(&val1_tlv).expect("alloc val");
-
     // SET
     let set_prog = bytes_state_program(syscalls::SYSCALL_STATE_SET, "bar");
     vm.set_register(10, p_path);
     vm.set_register(11, p_val1);
     vm.load_program(&set_prog).expect("load set");
     vm.run().expect("state set");
-
     // GET
     let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "bar");
     vm.set_register(10, p_path);
@@ -85,20 +74,17 @@ fn wsv_host_state_set_get_del_roundtrip() {
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
     assert_eq!(tlv.payload, &val1[..]);
     assert_eq!(common::decode_bytes_state_value(tlv.payload), expected);
-
     // DEL
     let del_prog = bytes_state_program(syscalls::SYSCALL_STATE_DEL, "bar");
     vm.set_register(10, p_path);
     vm.load_program(&del_prog).expect("load del");
     vm.run().expect("state del");
-
     // GET -> 0
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get again");
     vm.run().expect("state get again");
     assert_eq!(vm.register(10), 0);
 }
-
 #[test]
 fn durable_state_overlay_persists_and_restores() {
     let base = std::env::temp_dir().join(format!(
@@ -111,17 +97,14 @@ fn durable_state_overlay_persists_and_restores() {
     ));
     fs::create_dir_all(&base).expect("create temp dir");
     let store_path = base.join("state.json");
-
     let mut wsv = MockWorldStateView::with_state_store(store_path.clone()).expect("persisted wsv");
     let payload = b"abc".to_vec();
     wsv.sc_set("counter", payload.clone()).expect("set state");
     assert_eq!(wsv.sc_get("counter"), Some(payload.clone()));
-
     drop(wsv);
     let wsv_reloaded =
         MockWorldStateView::with_state_store(store_path.clone()).expect("reload persisted");
     assert_eq!(wsv_reloaded.sc_get("counter"), Some(payload.clone()));
-
     let mut wsv_mut = wsv_reloaded;
     let snap = wsv_mut.sc_snapshot();
     let payload_new = b"new".to_vec();
@@ -132,13 +115,11 @@ fn durable_state_overlay_persists_and_restores() {
     wsv_mut.sc_restore(&snap).expect("restore snapshot");
     assert_eq!(wsv_mut.sc_get("counter"), Some(payload.clone()));
     drop(wsv_mut);
-
     let persisted =
         MockWorldStateView::with_state_store(store_path.clone()).expect("reload after restore");
     assert_eq!(persisted.sc_get("counter"), Some(payload));
     let _ = fs::remove_dir_all(base);
 }
-
 #[test]
 fn wsv_host_state_get_returns_canonical_record_in_input_when_space_is_available() {
     let mut wsv = MockWorldStateView::new();
@@ -153,15 +134,12 @@ fn wsv_host_state_get_returns_canonical_record_in_input_when_space_is_available(
     let mut vm = IVM::new(u64::MAX);
     let host = WsvHost::new_with_subject(wsv, caller, Default::default());
     vm.set_host(host);
-
     let path_tlv = state_path_tlv("inline_value");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
-
     let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "inline_value");
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
     vm.run().expect("state get");
-
     let p_out = vm.register(10);
     assert!(
         (Memory::INPUT_START..Memory::INPUT_START + Memory::INPUT_SIZE).contains(&p_out),
@@ -175,7 +153,6 @@ fn wsv_host_state_get_returns_canonical_record_in_input_when_space_is_available(
     assert_eq!(tlv.payload, &stored[..]);
     assert_eq!(common::decode_bytes_state_value(tlv.payload), expected);
 }
-
 #[test]
 fn wsv_host_state_get_spills_to_heap_when_input_bump_is_full() {
     let wsv = MockWorldStateView::new();
@@ -186,27 +163,22 @@ fn wsv_host_state_get_spills_to_heap_when_input_bump_is_full() {
     let mut vm = IVM::new(u64::MAX);
     let host = WsvHost::new_with_subject(wsv, caller, Default::default());
     vm.set_host(host);
-
     let path_tlv = state_path_tlv("spill");
     let expected = vec![0xCD; 64];
     let stored = common::encode_bytes_state_value(&expected);
     let val_tlv = make_tlv(PointerType::NoritoBytes, &stored);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_val = vm.alloc_input_tlv(&val_tlv).expect("alloc value");
-
     let set_prog = bytes_state_program(syscalls::SYSCALL_STATE_SET, "spill");
     vm.set_register(10, p_path);
     vm.set_register(11, p_val);
     vm.load_program(&set_prog).expect("load set");
     vm.run().expect("state set");
-
     saturate_input(&mut vm);
-
     let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "spill");
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
     vm.run().expect("state get");
-
     let p_out = vm.register(10);
     assert!(
         (Memory::HEAP_START..Memory::INPUT_START).contains(&p_out),
@@ -217,7 +189,6 @@ fn wsv_host_state_get_spills_to_heap_when_input_bump_is_full() {
     assert_eq!(tlv.payload, &stored[..]);
     assert_eq!(common::decode_bytes_state_value(tlv.payload), expected);
 }
-
 #[test]
 fn wsv_host_state_get_spills_canonical_record_when_input_bump_is_full() {
     let mut wsv = MockWorldStateView::new();
@@ -232,16 +203,13 @@ fn wsv_host_state_get_spills_canonical_record_when_input_bump_is_full() {
     let mut vm = IVM::new(u64::MAX);
     let host = WsvHost::new_with_subject(wsv, caller, Default::default());
     vm.set_host(host);
-
     let path_tlv = state_path_tlv("spilled_value");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     saturate_input(&mut vm);
-
     let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "spilled_value");
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
     vm.run().expect("state get");
-
     let p_out = vm.register(10);
     assert!(
         (Memory::HEAP_START..Memory::INPUT_START).contains(&p_out),
@@ -252,7 +220,6 @@ fn wsv_host_state_get_spills_canonical_record_when_input_bump_is_full() {
     assert_eq!(tlv.payload, &stored[..]);
     assert_eq!(common::decode_bytes_state_value(tlv.payload), expected);
 }
-
 #[test]
 fn wsv_host_overlay_state_get_spills_to_heap_when_input_bump_is_full() {
     let caller = account(
@@ -261,20 +228,16 @@ fn wsv_host_overlay_state_get_spills_to_heap_when_input_bump_is_full() {
     );
     let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, Default::default());
     let mut vm = IVM::new(u64::MAX);
-
     let path_tlv = state_path_tlv("overlay");
     let expected = vec![0x5A; 48];
     let val_tlv = make_tlv(PointerType::NoritoBytes, &expected);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_val = vm.alloc_input_tlv(&val_tlv).expect("alloc value");
-
     IVMHost::begin_tx(&mut host, &Default::default()).expect("begin overlay tx");
     vm.set_register(10, p_path);
     vm.set_register(11, p_val);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_SET, &mut vm).expect("stage overlay set");
-
     saturate_input(&mut vm);
-
     vm.set_register(10, p_path);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_GET, &mut vm).expect("overlay state get");
     let p_out = vm.register(10);
@@ -289,7 +252,6 @@ fn wsv_host_overlay_state_get_spills_to_heap_when_input_bump_is_full() {
     assert_eq!(tlv.payload, &expected[..]);
     IVMHost::finish_tx(&mut host).expect("finish overlay tx");
 }
-
 #[test]
 fn wsv_state_ingress_rejects_oversized_raw_payload() {
     let mut wsv = MockWorldStateView::new();
@@ -301,7 +263,6 @@ fn wsv_state_ingress_rejects_oversized_raw_payload() {
         Err(VMError::NoritoInvalid)
     );
 }
-
 #[test]
 fn wsv_host_overlay_delete_shadows_base_value_during_tx() {
     let mut wsv = MockWorldStateView::new();
@@ -313,10 +274,8 @@ fn wsv_host_overlay_delete_shadows_base_value_during_tx() {
     );
     let mut host = WsvHost::new_with_subject(wsv, caller, Default::default());
     let mut vm = IVM::new(u64::MAX);
-
     let path_tlv = state_path_tlv("shadowed");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
-
     IVMHost::begin_tx(&mut host, &Default::default()).expect("begin overlay tx");
     vm.set_register(10, p_path);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_DEL, &mut vm).expect("stage delete");
@@ -330,7 +289,6 @@ fn wsv_host_overlay_delete_shadows_base_value_during_tx() {
     );
     IVMHost::finish_tx(&mut host).expect("finish overlay tx");
 }
-
 #[test]
 fn wsv_host_overlay_delete_persists_base_removal_after_finish_tx() {
     let mut wsv = MockWorldStateView::new();
@@ -342,15 +300,12 @@ fn wsv_host_overlay_delete_persists_base_removal_after_finish_tx() {
     );
     let mut host = WsvHost::new_with_subject(wsv, caller, Default::default());
     let mut vm = IVM::new(u64::MAX);
-
     let path_tlv = state_path_tlv("shadowed");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
-
     IVMHost::begin_tx(&mut host, &Default::default()).expect("begin overlay tx");
     vm.set_register(10, p_path);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_DEL, &mut vm).expect("stage delete");
     IVMHost::finish_tx(&mut host).expect("finish overlay tx");
-
     vm.set_register(10, p_path);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_GET, &mut vm)
         .expect("flushed delete should remove persisted base value");
@@ -360,7 +315,6 @@ fn wsv_host_overlay_delete_persists_base_removal_after_finish_tx() {
         "flushed delete should keep the value absent"
     );
 }
-
 #[test]
 fn wsv_host_overlay_set_overrides_and_persists_base_value() {
     let mut wsv = MockWorldStateView::new();
@@ -372,17 +326,14 @@ fn wsv_host_overlay_set_overrides_and_persists_base_value() {
     );
     let mut host = WsvHost::new_with_subject(wsv, caller, Default::default());
     let mut vm = IVM::new(u64::MAX);
-
     let path_tlv = state_path_tlv("shadowed");
     let value_tlv = make_tlv(PointerType::NoritoBytes, b"overlay");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_value = vm.alloc_input_tlv(&value_tlv).expect("alloc value");
-
     IVMHost::begin_tx(&mut host, &Default::default()).expect("begin overlay tx");
     vm.set_register(10, p_path);
     vm.set_register(11, p_value);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_SET, &mut vm).expect("stage overlay set");
-
     vm.set_register(10, p_path);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_GET, &mut vm)
         .expect("overlay set should override base state");
@@ -392,9 +343,7 @@ fn wsv_host_overlay_set_overrides_and_persists_base_value() {
         .expect("overlay tlv");
     assert_eq!(during_tx.type_id, PointerType::NoritoBytes);
     assert_eq!(during_tx.payload, b"overlay");
-
     IVMHost::finish_tx(&mut host).expect("finish overlay tx");
-
     vm.set_register(10, p_path);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_GET, &mut vm)
         .expect("flushed overlay set should persist");
@@ -405,7 +354,6 @@ fn wsv_host_overlay_set_overrides_and_persists_base_value() {
     assert_eq!(after_finish.type_id, PointerType::NoritoBytes);
     assert_eq!(after_finish.payload, b"overlay");
 }
-
 #[test]
 fn wsv_host_state_count_uses_overlay_and_tombstones() {
     let mut wsv = MockWorldStateView::new();
@@ -421,7 +369,6 @@ fn wsv_host_state_count_uses_overlay_and_tombstones() {
     );
     let mut host = WsvHost::new_with_subject(wsv, caller, Default::default());
     let mut vm = IVM::new(u64::MAX);
-
     let deleted_tlv = state_path_tlv("orders/1");
     let added_tlv = state_path_tlv("orders/3");
     let prefix_tlv = state_path_tlv("orders");
@@ -439,14 +386,12 @@ fn wsv_host_state_count_uses_overlay_and_tombstones() {
         .into_iter()
         .map(|key| 1 + u64::try_from(key.len()).expect("key length fits"))
         .sum::<u64>();
-
     IVMHost::begin_tx(&mut host, &Default::default()).expect("begin overlay tx");
     vm.set_register(10, deleted_ptr);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_DEL, &mut vm).expect("stage delete");
     vm.set_register(10, added_ptr);
     vm.set_register(11, value_ptr);
     IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_SET, &mut vm).expect("stage set");
-
     vm.set_register(10, prefix_ptr);
     assert_eq!(
         IVMHost::syscall(&mut host, syscalls::SYSCALL_STATE_COUNT, &mut vm),
@@ -456,7 +401,6 @@ fn wsv_host_state_count_uses_overlay_and_tombstones() {
     );
     assert_eq!(vm.register(10), 2);
 }
-
 #[test]
 fn wsv_host_pointer_helpers_charge_envelope_bytes() {
     let caller = account(
@@ -470,7 +414,6 @@ fn wsv_host_pointer_helpers_charge_envelope_bytes() {
         .alloc_input_tlv(&make_tlv(PointerType::Blob, payload))
         .expect("alloc blob");
     let envelope_len = 2 + 1 + 4 + payload.len() + iroha_crypto::Hash::LENGTH;
-
     vm.set_register(10, ptr);
     assert_eq!(
         IVMHost::syscall(&mut host, syscalls::SYSCALL_POINTER_TO_NORITO, &mut vm),
@@ -483,7 +426,6 @@ fn wsv_host_pointer_helpers_charge_envelope_bytes() {
         assert_eq!(wrapped.payload.len(), envelope_len);
         wrapped.payload.to_vec()
     };
-
     vm.set_register(10, wrapped_ptr);
     vm.set_register(11, PointerType::Blob as u64);
     assert_eq!(
@@ -493,7 +435,6 @@ fn wsv_host_pointer_helpers_charge_envelope_bytes() {
     let roundtrip = vm.validate_tlv(vm.register(10)).expect("roundtrip tlv");
     assert_eq!(roundtrip.type_id, PointerType::Blob);
     assert_eq!(roundtrip.payload, payload);
-
     let retired_blob_carrier = make_tlv(PointerType::Blob, &wrapped_payload);
     let retired_blob_carrier_ptr = vm
         .alloc_input_tlv(&retired_blob_carrier)
@@ -506,7 +447,6 @@ fn wsv_host_pointer_helpers_charge_envelope_bytes() {
     );
     assert_eq!(vm.register(10), retired_blob_carrier_ptr);
 }
-
 #[test]
 fn wsv_host_tlv_eq_charges_payload_bytes() {
     let caller = account(
@@ -521,7 +461,6 @@ fn wsv_host_tlv_eq_charges_payload_bytes() {
     let right = vm
         .alloc_input_tlv(&make_tlv(PointerType::Blob, b"same"))
         .expect("alloc right");
-
     vm.set_register(10, left);
     vm.set_register(11, right);
     assert_eq!(
@@ -530,7 +469,6 @@ fn wsv_host_tlv_eq_charges_payload_bytes() {
     );
     assert_eq!(vm.register(10), 1);
 }
-
 #[test]
 fn wsv_host_tlv_len_charges_payload_bytes() {
     let caller = account(
@@ -542,7 +480,6 @@ fn wsv_host_tlv_len_charges_payload_bytes() {
     let ptr = vm
         .alloc_input_tlv(&make_tlv(PointerType::Blob, b"length"))
         .expect("alloc tlv");
-
     vm.set_register(10, ptr);
     assert_eq!(
         IVMHost::syscall(&mut host, syscalls::SYSCALL_TLV_LEN, &mut vm),

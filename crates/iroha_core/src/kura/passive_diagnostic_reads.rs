@@ -1,10 +1,8 @@
 // Repair-disabled Kura projections used by operator status and diagnostics.
-
 // One row beyond the public 128-row cap lets callers detect overflow without
 // ever turning the diagnostic suffix read into an unbounded history scan.
 const PASSIVE_DIAGNOSTIC_CERTIFIED_RESULT_BUDGET: usize = 129;
 const PASSIVE_DIAGNOSTIC_CERTIFIED_SCAN_BUDGET: usize = 1_032;
-
 impl MergeLedgerLog {
     fn entry_by_hash_without_append_repair(
         &mut self,
@@ -19,7 +17,6 @@ impl MergeLedgerLog {
         self.entry_by_hash_with_append_repair_policy(hash, false)
     }
 }
-
 impl Kura {
     fn lane_block_artifact_is_canonical_hash_only_snapshot_anchor(
         &self,
@@ -40,7 +37,6 @@ impl Kura {
             && canonical.is_some_and(|canonical| canonical == *artifact)
             && self.lane_block_artifact_has_hash_only_snapshot_anchor(artifact)
     }
-
     fn lane_block_application_receipt_has_hash_only_snapshot_anchor(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -58,7 +54,6 @@ impl Kura {
                 repair_missing_sidecar,
             )
     }
-
     /// Read a recovered execution input without publishing any missing sidecar.
     pub(crate) fn read_lane_block_execution_input_without_sidecar_repair(
         &self,
@@ -67,7 +62,6 @@ impl Kura {
     ) -> Option<LaneBlockExecutionInputArtifact> {
         self.read_lane_block_execution_input_with_repair_policy(lane_id, lane_block_height, false)
     }
-
     pub(crate) fn lane_block_execution_input_available_without_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -78,7 +72,6 @@ impl Kura {
         )
         .is_some_and(|artifact| artifact.proposal == *proposal)
     }
-
     /// Read a direct-execution preflight without publishing missing evidence.
     pub(crate) fn read_lane_block_execution_preflight_without_sidecar_repair(
         &self,
@@ -91,7 +84,6 @@ impl Kura {
             false,
         )
     }
-
     pub(crate) fn lane_block_execution_preflight_has_rejections_without_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -107,7 +99,6 @@ impl Kura {
             && artifact.preflight_state_hash == current_state_hash)
             .then(|| artifact.has_rejections())
     }
-
     pub(crate) fn read_preflighted_lane_block_execution_input_for_application_without_sidecar_repair(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -144,7 +135,6 @@ impl Kura {
             && input.entrypoint_hashes == preflight.entrypoint_hashes)
             .then_some(input)
     }
-
     /// Resolve pending or committed merge evidence without repairing a failed append tail.
     pub(crate) fn merge_entry_by_hash_without_append_repair(
         &self,
@@ -168,7 +158,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(entry)
     }
-
     fn validate_merge_carrier_record_against_entry_without_append_repair(
         &self,
         record: MergeLedgerCarrierRecord,
@@ -202,7 +191,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn validate_merge_carrier_record_without_append_repair_under_prune_and_canonical_guards(
         &self,
         record: MergeLedgerCarrierRecord,
@@ -256,7 +244,6 @@ impl Kura {
         };
         Self::validate_merge_carrier_finality_projection(record, entry, &header, &finality)
     }
-
     fn merge_carrier_for_entry_without_append_repair_under_prune_and_canonical_guards(
         &self,
         entry_hash: HashOf<MergeLedgerEntry>,
@@ -281,7 +268,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(record)
     }
-
     fn lane_block_application_receipt_matches_merge_log_without_sidecar_repair(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -292,7 +278,6 @@ impl Kura {
                 artifact,
             )
     }
-
     fn lane_block_application_receipt_matches_merge_log_without_sidecar_repair_under_prune_guard(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -303,7 +288,6 @@ impl Kura {
                 artifact,
             )
     }
-
     fn lane_block_application_receipt_matches_merge_log_without_sidecar_repair_under_prune_and_canonical_guards(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -359,7 +343,6 @@ impl Kura {
             carrier_hash,
         ) == *artifact
     }
-
     fn read_active_lane_block_artifact_from_bound_without_repair_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -386,7 +369,6 @@ impl Kura {
             .ok()?;
         Some(artifact)
     }
-
     /// Return the newest canonical ownership without promoting recovery artifacts.
     pub(crate) fn latest_lane_block_artifact_matching_without_sidecar_repair<F>(
         &self,
@@ -460,7 +442,6 @@ impl Kura {
         )?;
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
-
     /// Return a bounded certified suffix without repair, sync, or cache publication.
     pub(crate) fn latest_certified_lane_block_artifacts_matching_without_sidecar_repair<F>(
         &self,
@@ -545,7 +526,6 @@ impl Kura {
         artifacts
     }
 }
-
 impl Kura {
     fn validate_lane_new_view_certificate_for_artifact(
         artifact: &AutonomousLaneBlockArtifact,
@@ -586,7 +566,6 @@ impl Kura {
         })?;
         Ok((current, target))
     }
-
     fn read_autonomous_lane_block_record_read_only_latest_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -620,7 +599,6 @@ impl Kura {
         }
         Ok(None)
     }
-
     /// Read one exact durability-attested receipt while the caller holds
     /// `prune_lock`. This path never repairs progress-sidecar artifacts.
     fn read_exact_lane_block_application_receipt_under_prune_guard(
@@ -630,7 +608,6 @@ impl Kura {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(proposal)
     }
-
     /// Read one exact durability-attested receipt while the caller holds
     /// `prune_lock` and `canonical_chain_lock`, in that order. This path never
     /// repairs progress-sidecar artifacts or reacquires either outer lock.
@@ -660,7 +637,6 @@ impl Kura {
         )?;
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
-
     fn lane_block_application_receipt_available_under_prune_guard(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -668,7 +644,6 @@ impl Kura {
         self.read_exact_lane_block_application_receipt_under_prune_guard(proposal)
             .is_some()
     }
-
     fn lane_block_application_receipt_available_under_prune_and_canonical_guards(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -676,7 +651,6 @@ impl Kura {
         self.read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(proposal)
             .is_some()
     }
-
     fn lane_block_application_receipt_matches_available_evidence(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -704,7 +678,6 @@ impl Kura {
             }
         }
     }
-
     fn lane_block_application_receipt_matches_available_evidence_under_prune_guard(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
@@ -734,7 +707,6 @@ impl Kura {
             }
         }
     }
-
     fn lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,

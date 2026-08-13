@@ -1,9 +1,7 @@
 //! Ensure overlay construction with different `pipeline.workers` settings yields
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! identical outcomes (events and final state), preserving determinism.
-
 use std::{borrow::Cow, sync::Arc};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -11,9 +9,7 @@ use iroha_core::{
 };
 use iroha_data_model::prelude::*;
 use mv::storage::StorageReadOnly; // trait for .get()
-
 mod snapshots;
-
 fn test_network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(
         iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -21,7 +17,6 @@ fn test_network_id(label: &[u8]) -> NetworkId {
         ),
     )
 }
-
 fn run_with_workers(
     workers: usize,
     network_id: &NetworkId,
@@ -64,7 +59,6 @@ fn run_with_workers(
     cfg.parallel_overlay = true;
     cfg.workers = workers; // 0 = Rayon default
     state.set_pipeline(cfg);
-
     // Build and execute block
     let block: SignedBlock = {
         let accepted: Vec<_> = txs
@@ -86,7 +80,6 @@ fn run_with_workers(
     drop(sb);
     (json, state)
 }
-
 #[test]
 fn overlay_parallel_workers_parity() {
     let network_id = test_network_id(b"overlay-workers-parity");
@@ -99,7 +92,6 @@ fn overlay_parallel_workers_parity() {
         );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
-
     // Build a mixed set of instruction-only transactions to exercise overlay builder
     let txs: Vec<SignedTransaction> = vec![
         TransactionBuilder::new(
@@ -150,11 +142,9 @@ fn overlay_parallel_workers_parity() {
         )])
         .sign(alice_keypair.private_key()),
     ];
-
     // Run with workers=0 (Rayon default) and workers=2
     let (json0, state0) = run_with_workers(0, &network_id, txs.clone(), &alice_id, &bob_id);
     let (json2, state2) = run_with_workers(2, &network_id, txs, &alice_id, &bob_id);
-
     // Compare event JSON and balances
     assert_eq!(
         json0, json2,

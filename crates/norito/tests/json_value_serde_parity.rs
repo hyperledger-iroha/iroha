@@ -1,16 +1,12 @@
 #![cfg(feature = "json")]
 //! Randomized `norito::json::Value` parity coverage against `serde_json`.
-
 use std::collections::BTreeMap;
-
 use norito::json::{self, Number, Value};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use serde_json::{Map as SerdeMap, Number as SerdeNumber, Value as SerdeValue};
-
 const RNG_SEED: u64 = 0x5EED_C0DE_D15E_A5E5;
 const RANDOM_CASES: usize = 256;
 const MAX_DEPTH: usize = 4;
-
 fn norito_value_to_serde(value: &Value) -> SerdeValue {
     match value {
         Value::Null => SerdeValue::Null,
@@ -37,7 +33,6 @@ fn norito_value_to_serde(value: &Value) -> SerdeValue {
         }
     }
 }
-
 fn generate_string(rng: &mut StdRng) -> String {
     const FRAGMENTS: &[&str] = &[
         "",
@@ -53,14 +48,12 @@ fn generate_string(rng: &mut StdRng) -> String {
         "emoji 😀",
         "pi π",
     ];
-
     let mut rendered = String::new();
     for _ in 0..rng.random_range(0..=4) {
         rendered.push_str(FRAGMENTS[rng.random_range(0..FRAGMENTS.len())]);
     }
     rendered
 }
-
 fn generate_finite_f64(rng: &mut StdRng) -> f64 {
     const FIXED_CASES: &[f64] = &[
         -0.0,
@@ -76,7 +69,6 @@ fn generate_finite_f64(rng: &mut StdRng) -> f64 {
         5e-324,
         9_007_199_254_740_992.0,
     ];
-
     if rng.random_bool(0.5) {
         FIXED_CASES[rng.random_range(0..FIXED_CASES.len())]
     } else {
@@ -86,7 +78,6 @@ fn generate_finite_f64(rng: &mut StdRng) -> f64 {
         sign * magnitude * 10f64.powi(exponent)
     }
 }
-
 fn generate_scalar(rng: &mut StdRng) -> Value {
     match rng.random_range(0..=5) {
         0 => Value::Null,
@@ -97,12 +88,10 @@ fn generate_scalar(rng: &mut StdRng) -> Value {
         _ => Value::String(generate_string(rng)),
     }
 }
-
 fn generate_value(rng: &mut StdRng, depth: usize) -> Value {
     if depth >= MAX_DEPTH {
         return generate_scalar(rng);
     }
-
     match rng.random_range(0..=7) {
         0..=5 => generate_scalar(rng),
         6 => Value::Array(
@@ -122,7 +111,6 @@ fn generate_value(rng: &mut StdRng, depth: usize) -> Value {
         }
     }
 }
-
 fn explicit_cases() -> Vec<Value> {
     vec![
         Value::Null,
@@ -162,7 +150,6 @@ fn explicit_cases() -> Vec<Value> {
         ])),
     ]
 }
-
 fn seeded_corpus() -> Vec<Value> {
     let mut corpus = explicit_cases();
     let mut rng = StdRng::seed_from_u64(RNG_SEED);
@@ -171,7 +158,6 @@ fn seeded_corpus() -> Vec<Value> {
     }
     corpus
 }
-
 #[test]
 fn norito_value_corpus_matches_serde_json() {
     for (index, value) in seeded_corpus().iter().enumerate() {

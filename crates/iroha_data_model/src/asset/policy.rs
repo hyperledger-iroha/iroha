@@ -1,17 +1,12 @@
 //! Asset usage policy types shared between issuer/domain/dataspace enforcement paths.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{account::AccountId, asset::AssetDefinitionId, domain::DomainId, nexus::DataSpaceId};
-
 /// Metadata key on an [`crate::asset::AssetDefinition`] storing [`AssetIssuerUsagePolicyV1`].
 pub const ASSET_ISSUER_USAGE_POLICY_METADATA_KEY: &str = "iroha:asset_issuer_usage_policy_v1";
 /// Metadata key on a [`crate::domain::Domain`] storing [`DomainAssetUsagePolicyV1`].
 pub const DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY: &str = "iroha:domain_asset_usage_policy_v1";
-
 /// Issuer-controlled baseline policy for an asset definition.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -39,7 +34,6 @@ pub struct AssetIssuerUsagePolicyV1 {
     #[norito(default)]
     pub subject_bindings: BTreeMap<AccountId, AssetSubjectBindingV1>,
 }
-
 impl AssetIssuerUsagePolicyV1 {
     /// Retrieve the binding for `subject` if one is present.
     #[must_use]
@@ -47,7 +41,6 @@ impl AssetIssuerUsagePolicyV1 {
         self.subject_bindings.get(subject)
     }
 }
-
 /// Subject-level binding payload inside [`AssetIssuerUsagePolicyV1`].
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -77,21 +70,18 @@ pub struct AssetSubjectBindingV1 {
     #[norito(default)]
     pub allowed_dataspaces: BTreeSet<DataSpaceId>,
 }
-
 impl AssetSubjectBindingV1 {
     /// Return `true` when this binding allows `domain`.
     #[must_use]
     pub fn allows_domain(&self, domain: &DomainId) -> bool {
         self.allowed_domains.is_empty() || self.allowed_domains.contains(domain)
     }
-
     /// Return `true` when this binding allows `dataspace`.
     #[must_use]
     pub fn allows_dataspace(&self, dataspace: DataSpaceId) -> bool {
         self.allowed_dataspaces.is_empty() || self.allowed_dataspaces.contains(&dataspace)
     }
 }
-
 /// Domain-owner overlay policy for asset usage inside a specific domain.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -119,7 +109,6 @@ pub struct DomainAssetUsagePolicyV1 {
     #[norito(default)]
     pub denied_assets: BTreeSet<AssetDefinitionId>,
 }
-
 impl DomainAssetUsagePolicyV1 {
     /// Evaluate whether `asset_definition` is allowed by this overlay.
     #[must_use]

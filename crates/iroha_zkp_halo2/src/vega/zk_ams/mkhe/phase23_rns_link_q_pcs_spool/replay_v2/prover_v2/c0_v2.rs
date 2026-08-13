@@ -7,29 +7,21 @@
 //! initial Merkle tree.  The only production authority is uninhabited.  The
 //! returned value is therefore a non-authorizing prerequisite and retains the
 //! accepted replay owner without exposing a file, path, key, slot, or snapshot.
-
 use core::{convert::Infallible, sync::atomic};
 use std::path::Path;
-
 use iroha_confidential_spool::ConfidentialSpoolChunkV1;
-
 use crate::vega::sponge::Keccak256;
-
 use super::super::super::super::{Fq2ParametersV1, Fq2V1};
 use super::*;
-
 const MERKLE_LEAF_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-leaf\0";
 const MERKLE_NODE_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-node\0";
 const INITIAL_TREE_KIND_V2: u8 = 1;
 const INITIAL_TREE_LAYER_V2: u8 = 0;
 const RELEASE_INITIAL_LEAVES_V2: usize = 1 << 19;
 const INITIAL_MERKLE_FRONTIER_NODES_V2: usize = 20;
-
 #[path = "c0_v2/storage_v2.rs"]
 mod storage_v2;
-
 use storage_v2::*;
-
 const _: () = {
     assert!(RELEASE_DOMAIN_LOG_V2 == 19);
     assert!(REPLAY_COLUMNS_V2 == 380);
@@ -44,7 +36,6 @@ const _: () = {
     assert!(!CANONICAL_PROOF_EMITTED_V2);
     assert!(!PROVER_RELEASE_READY_V2);
 };
-
 /// Three independent future authorities are required to make this transition.
 pub(super) enum InitialC0AuthorityV2 {
     Production {
@@ -55,11 +46,9 @@ pub(super) enum InitialC0AuthorityV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 struct ZeroizingNttBufferV2 {
     values: Vec<Fq2V1>,
 }
-
 impl ZeroizingNttBufferV2 {
     fn new_v2(len: usize) -> Result<Self, ProverPrerequisiteErrorV2> {
         if len == 0 || !len.is_power_of_two() {
@@ -75,12 +64,10 @@ impl ZeroizingNttBufferV2 {
         values.resize(len, Fq2V1::ZERO);
         Ok(Self { values })
     }
-
     fn clear_v2(&mut self) {
         self.values.fill(Fq2V1::ZERO);
     }
 }
-
 impl Drop for ZeroizingNttBufferV2 {
     fn drop(&mut self) {
         self.values.fill(Fq2V1::ZERO);
@@ -92,7 +79,6 @@ impl Drop for ZeroizingNttBufferV2 {
         }
     }
 }
-
 fn ntt_in_place_v2(
     values: &mut [Fq2V1],
     field: Fq2ParametersV1,
@@ -132,7 +118,6 @@ fn ntt_in_place_v2(
     }
     Ok(())
 }
-
 fn replay_component_v2(
     stage: QPcsCoefficientReplayStageV2,
     buffer: &mut ZeroizingNttBufferV2,
@@ -175,7 +160,6 @@ fn replay_component_v2(
     }
     Ok(reader.complete_v2()?)
 }
-
 fn write_ntt_column_v2(
     writer: &mut InitialColumnWriterV2,
     buffer: &ZeroizingNttBufferV2,
@@ -191,7 +175,6 @@ fn write_ntt_column_v2(
     }
     Ok(())
 }
-
 fn initial_leaf_hash_v2(
     parameter_digest: [u8; 32],
     length: usize,
@@ -215,7 +198,6 @@ fn initial_leaf_hash_v2(
     hash.update(values);
     Ok(hash.finalize())
 }
-
 fn initial_node_hash_v2(
     parameter_digest: [u8; 32],
     height: usize,
@@ -235,14 +217,12 @@ fn initial_node_hash_v2(
     hash.update(&right);
     Ok(hash.finalize())
 }
-
 struct MerkleFrontierV2 {
     nodes: [[u8; 32]; INITIAL_MERKLE_FRONTIER_NODES_V2],
     occupied: u32,
     leaves: usize,
     parameter_digest: [u8; 32],
 }
-
 impl MerkleFrontierV2 {
     const fn new_v2(parameter_digest: [u8; 32]) -> Self {
         Self {
@@ -252,7 +232,6 @@ impl MerkleFrontierV2 {
             parameter_digest,
         }
     }
-
     fn push_v2(&mut self, mut digest: [u8; 32]) -> Result<(), ProverPrerequisiteErrorV2> {
         let mut level = 0_usize;
         let mut prior = self.leaves;
@@ -278,7 +257,6 @@ impl MerkleFrontierV2 {
             .ok_or(ProverPrerequisiteErrorV2::ArithmeticOverflow)?;
         Ok(())
     }
-
     fn finish_v2(self, expected: usize) -> Result<[u8; 32], ProverPrerequisiteErrorV2> {
         if self.leaves != expected || !expected.is_power_of_two() {
             return Err(ProverPrerequisiteErrorV2::InvalidMerkleRoot);
@@ -294,13 +272,11 @@ impl MerkleFrontierV2 {
         Ok(root)
     }
 }
-
 struct ZeroizingLeafWindowV2 {
     bytes: Vec<u8>,
     values_per_block: usize,
     leaf_bytes: usize,
 }
-
 impl ZeroizingLeafWindowV2 {
     fn new_v2(values_per_block: usize, columns: usize) -> Result<Self, ProverPrerequisiteErrorV2> {
         let leaf_bytes = columns
@@ -323,7 +299,6 @@ impl ZeroizingLeafWindowV2 {
             leaf_bytes,
         })
     }
-
     fn absorb_column_v2(
         &mut self,
         column: usize,
@@ -341,7 +316,6 @@ impl ZeroizingLeafWindowV2 {
         }
         Ok(())
     }
-
     fn leaf_v2(&self, index: usize) -> Result<&[u8], ProverPrerequisiteErrorV2> {
         let start = index
             .checked_mul(self.leaf_bytes)
@@ -351,7 +325,6 @@ impl ZeroizingLeafWindowV2 {
             .ok_or(ProverPrerequisiteErrorV2::InvalidMerkleRoot)
     }
 }
-
 impl Drop for ZeroizingLeafWindowV2 {
     fn drop(&mut self) {
         self.bytes.fill(0);
@@ -363,7 +336,6 @@ impl Drop for ZeroizingLeafWindowV2 {
         }
     }
 }
-
 fn build_initial_root_v2(
     snapshot: QPcsSpoolSnapshotV2,
     geometry: SpoolGeometryV2,
@@ -399,7 +371,6 @@ fn build_initial_root_v2(
     let complete = reader.complete_v2()?;
     Ok((frontier.finish_v2(domain_size)?, complete))
 }
-
 /// Move-only, non-authorizing C0-root prerequisite retaining accepted replay.
 pub(super) struct InitialC0RootPreparedV2 {
     accepted_c0: Option<QPcsC0CompleteV2>,
@@ -408,17 +379,14 @@ pub(super) struct InitialC0RootPreparedV2 {
     parameter_digest: [u8; 32],
     initial_root: [u8; 32],
 }
-
 impl InitialC0RootPreparedV2 {
     pub(super) const fn parameter_digest_v2(&self) -> [u8; 32] {
         self.parameter_digest
     }
-
     pub(super) const fn initial_root_v2(&self) -> [u8; 32] {
         self.initial_root
     }
 }
-
 impl CoefficientsSealedV2 {
     pub(super) fn prepare_initial_c0_root_v2(
         self,
@@ -451,7 +419,6 @@ impl CoefficientsSealedV2 {
         }
         prepare_initial_c0_operation_v2(self, directory)
     }
-
     #[cfg(test)]
     fn prepare_test_geometry_v2(
         self,
@@ -460,7 +427,6 @@ impl CoefficientsSealedV2 {
         prepare_initial_c0_operation_v2(self, directory)
     }
 }
-
 fn prepare_initial_c0_operation_v2(
     mut sealed: CoefficientsSealedV2,
     directory: &Path,
@@ -505,7 +471,6 @@ fn prepare_initial_c0_operation_v2(
                 LdeRowRoleV2::Product,
             )?)?;
             write_ntt_column_v2(&mut column_writer, &buffer)?;
-
             buffer.clear_v2();
             stage = replay_component_v2(stage, &mut buffer, 0, modulus)?;
             ntt_in_place_v2(&mut buffer.values, field)?;
@@ -534,18 +499,14 @@ fn prepare_initial_c0_operation_v2(
         initial_root,
     })
 }
-
 #[cfg(test)]
 static ZEROIZING_NTT_BUFFER_DROPS_V2: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-
 #[cfg(test)]
 static ZEROIZING_LEAF_WINDOW_DROPS_V2: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-
 #[path = "c0_v2/post_root_v2.rs"]
 mod post_root_v2;
-
 #[cfg(test)]
 #[path = "c0_v2_tests.rs"]
 mod tests;

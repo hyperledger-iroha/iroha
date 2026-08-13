@@ -3,7 +3,6 @@
 //! new [`Block`](iroha_data_model::block::SignedBlock)s on the
 //! blockchain.
 mod lane_geometry;
-
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Debug,
@@ -18,7 +17,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use crate::telemetry::StateTelemetry;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::{
@@ -103,7 +101,6 @@ use norito::{
     json::Value as JsonValue,
 };
 use parking_lot::{Condvar, Mutex, RwLock};
-
 use crate::lane_consensus::{
     CommittedLaneBlockSession, DurableLaneBlockNewViewCertificateV1,
     DurableLaneBlockViewCheckpointV1, DurableLanePayloadAvailabilityCertificateV1,
@@ -169,7 +166,6 @@ use crate::{
     },
 };
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
-
 impl From<CommittedBlock> for Arc<SignedBlock> {
     fn from(value: CommittedBlock) -> Self {
         Arc::new(value.into())
@@ -222,64 +218,6 @@ const KAGEMUSHA_ACTIVE_RECEIVER_STAGING_DIR_NAME: &str =
 const KAGEMUSHA_ACTIVE_RECEIVER_SIDECARS_DIR_NAME: &str = "kagemusha_active_receiver_finality";
 const MAX_KAGEMUSHA_TOPUP_FINALITY_SIDECAR_BYTES: usize = 64 * 1024;
 const MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES: usize = 32 * 1024;
-/// Legacy hard limit for one version-two canonical block-retention record.
-///
-/// The 512-message first-release cap and 4 KiB canonical payload cap require a
-/// little over 2 MiB at their joint maximum. Four MiB leaves deterministic
-/// framing/context headroom while preventing hostile on-disk data from turning
-/// startup or proof serving into an unbounded allocation.
-const MAX_RETAINED_BLOCK_RECORD_V2_BYTES: usize = 4 * 1024 * 1024;
-/// Hard limit for the compact merge reference added by retained-record version three.
-///
-/// Consensus accepts at most a 4 MiB merge QC. The remaining 256 KiB bounds
-/// reference metadata and Norito framing without coupling Kura to an
-/// implementation-specific encoded-size estimate.
-const MAX_RETAINED_MERGE_REFERENCE_BYTES: usize = 4 * 1024 * 1024 + 256 * 1024;
-/// Norito envelope headroom when the version-three optional field is present.
-///
-/// The two component maxima are complete independent encodings; this separate
-/// allowance covers the option tag, field framing, and any packed-struct
-/// envelope delta instead of assuming those bytes disappear into either
-/// component's budget.
-const MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES: usize = 256 * 1024;
-/// Hard limit for one immutable version-three canonical block-retention record.
-///
-/// This is the sum of the complete legacy SCCP/archive envelope and the new
-/// independently bounded merge-reference witness. Keeping the joint maximum
-/// explicit prevents a valid near-maximum archive and merge QC from making
-/// finality persistence or pre-eviction retention fail.
-const MAX_RETAINED_BLOCK_RECORD_BYTES: usize = MAX_RETAINED_BLOCK_RECORD_V2_BYTES
-    + MAX_RETAINED_MERGE_REFERENCE_BYTES
-    + MAX_RETAINED_BLOCK_RECORD_V3_FRAMING_BYTES;
-const RETAINED_BLOCK_RECORD_VERSION_V2: u16 = 2;
-const RETAINED_BLOCK_RECORD_VERSION: u16 = 3;
-/// Hard limit for the consensus artifact embedded in one Kura finality record.
-///
-/// The maximum 31-validator revision-4 roster, its current PoPs, and a boundary
-/// snapshot containing the next roster and PoPs fit well below this limit.
-const MAX_V2_FINALITY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
-/// Hard limit for the complete private record, including its retained block header.
-const MAX_KURA_V2_FINALITY_RECORD_BYTES: usize = MAX_V2_FINALITY_ARTIFACT_BYTES + 256 * 1024;
-const KURA_V2_FINALITY_RECORD_VERSION: u16 = 3;
-/// Hard limit for one startup replay WSV checkpoint.
-const MAX_WSV_CHECKPOINT_BYTES: usize = 64 * 1024;
-/// Hard limit for one startup replay commit manifest.
-const MAX_COMMIT_MANIFEST_BYTES: usize = 64 * 1024;
-/// Number of immutable sidecar identities whose successful BLS verification
-/// is remembered. Entries retain only stable path/file/directory metadata and
-/// an artifact hash, not the potentially multi-megabyte artifact itself.
-const V2_FINALITY_VERIFICATION_CACHE_CAPACITY: usize = 64;
-/// Maximum number of finality artifacts retained by one parallel startup
-/// verification batch.
-///
-/// Each artifact is independently bounded, but may still be several MiB for a
-/// maximum-size validator roster. Keeping the batch fixed bounds aggregate
-/// transient memory independently of the host's Rayon worker count.
-const V2_FINALITY_STARTUP_VERIFICATION_BATCH_SIZE: usize = 8;
-const CERTIFIED_FRONTIER_ATTESTATION_CACHE_CAPACITY: usize = 64;
-const LANE_ARTIFACTS_DIR_NAME: &str = "lane_artifacts";
-const LANE_ARTIFACTS_DATA_FILE: &str = "ownerships.norito";
-const LANE_ARTIFACTS_INDEX_FILE: &str = "ownerships.index";
 include!("kura/startup_finality_support.rs");
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum NativeAmxEvidenceKind {
@@ -859,7 +797,6 @@ pub struct Kura {
 }
 #[derive(Debug)]
 struct KuraInstanceIdentityMarker;
-
 /// Comparison-only identity for one exact live Kura instance.
 ///
 /// This seal carries no storage path and cannot reopen Kura. Lifecycle startup
@@ -867,13 +804,11 @@ struct KuraInstanceIdentityMarker;
 /// launching its workers against another.
 #[derive(Clone, Debug)]
 pub(crate) struct KuraInstanceIdentity(Arc<KuraInstanceIdentityMarker>);
-
 impl KuraInstanceIdentity {
     /// Return whether this seal came from the exact supplied Kura instance.
     pub(crate) fn matches(&self, kura: &Kura) -> bool {
         Arc::ptr_eq(&self.0, &kura.instance_identity)
     }
-
     /// Return whether two seals name the same live Kura instance.
     pub(crate) fn same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -2169,7 +2104,6 @@ impl Kura {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
-
             options
                 .mode(0o600)
                 .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
@@ -5781,13 +5715,11 @@ impl Kura {
     #[cfg(unix)]
     fn sidecar_metadata_same_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         left.dev() == right.dev() && left.ino() == right.ino()
     }
     #[cfg(windows)]
     fn sidecar_metadata_same_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         left.volume_serial_number() == right.volume_serial_number()
             && left.file_index() == right.file_index()
             && left.volume_serial_number().is_some()
@@ -5803,7 +5735,6 @@ impl Kura {
         right: &std::fs::Metadata,
     ) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         Self::sidecar_metadata_same_object(left, right)
             && left.nlink() == 1
             && right.nlink() == 1
@@ -5819,7 +5750,6 @@ impl Kura {
         right: &std::fs::Metadata,
     ) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         // Renaming the bound object legitimately advances ctime. Preserve the
         // exact-object, link-count, length, and content-mtime checks that detect
         // replacement or concurrent writes across quarantine publication.
@@ -5836,7 +5766,6 @@ impl Kura {
         right: &std::fs::Metadata,
     ) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         Self::sidecar_metadata_same_object(left, right)
             && left.mtime() == right.mtime()
             && left.mtime_nsec() == right.mtime_nsec()
@@ -5849,7 +5778,6 @@ impl Kura {
         right: &std::fs::Metadata,
     ) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         Self::sidecar_metadata_same_object(left, right)
             && left.last_write_time() == right.last_write_time()
             && left.creation_time() == right.creation_time()
@@ -5877,7 +5805,6 @@ impl Kura {
         right: &std::fs::Metadata,
     ) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         Self::sidecar_metadata_same_object(left, right)
             && left.number_of_links() == Some(1)
             && right.number_of_links() == Some(1)
@@ -5919,13 +5846,11 @@ impl Kura {
     #[cfg(unix)]
     fn sidecar_is_single_link(metadata: &std::fs::Metadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         metadata.nlink() == 1
     }
     #[cfg(windows)]
     fn sidecar_is_single_link(metadata: &std::fs::Metadata) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         metadata.number_of_links() == Some(1)
     }
     #[cfg(all(not(unix), not(windows)))]
@@ -5935,13 +5860,11 @@ impl Kura {
     #[cfg(unix)]
     fn sidecar_has_link_count(metadata: &std::fs::Metadata, expected: u64) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         metadata.nlink() == expected
     }
     #[cfg(windows)]
     fn sidecar_has_link_count(metadata: &std::fs::Metadata, expected: u64) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         u32::try_from(expected)
             .ok()
             .is_some_and(|expected| metadata.number_of_links() == Some(expected))
@@ -6275,7 +6198,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -6379,7 +6301,6 @@ impl Kura {
         #[cfg(unix)]
         {
             use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-
             let parent_path = path.parent().ok_or_else(|| {
                 std::io::Error::new(ErrorKind::InvalidInput, "sidecar path has no parent")
             })?;
@@ -6490,7 +6411,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -6608,7 +6528,6 @@ impl Kura {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             let entry =
                 rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
                     .map_err(std::io::Error::from)?;
@@ -6703,7 +6622,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -6765,7 +6683,6 @@ impl Kura {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             let metadata = temp.metadata().map_err(unpublished)?;
             let before = rustix::fs::statat(
                 &immediate.file,
@@ -6901,7 +6818,6 @@ impl Kura {
         #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             let metadata = temp.metadata().map_err(unpublished)?;
             let before = rustix::fs::statat(
                 &immediate.file,
@@ -7076,7 +6992,6 @@ impl Kura {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
-
             options.custom_flags(
                 (rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW).bits() as i32,
             );
@@ -7084,7 +6999,6 @@ impl Kura {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt as _;
-
             const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
             const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
             options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
@@ -7147,7 +7061,6 @@ impl Kura {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             let before =
                 rustix::fs::statat(&parent.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
                     .map_err(std::io::Error::from)
@@ -7376,7 +7289,6 @@ impl Kura {
                 #[cfg(unix)]
                 if let Some(name) = directory.entry_name.as_deref() {
                     use std::os::unix::fs::MetadataExt as _;
-
                     let Some(parent) = namespace.directories.get(index.saturating_add(1)) else {
                         return false;
                     };
@@ -9340,7 +9252,6 @@ impl Kura {
         #[cfg(unix)]
         let file = {
             use std::os::unix::fs::OpenOptionsExt as _;
-
             let mut directory_options = std::fs::OpenOptions::new();
             directory_options.read(true).custom_flags(
                 (rustix::fs::OFlags::DIRECTORY
@@ -9387,7 +9298,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -9581,7 +9491,6 @@ impl Kura {
         #[cfg(unix)]
         let file = {
             use std::os::unix::fs::OpenOptionsExt as _;
-
             let mut directory_options = std::fs::OpenOptions::new();
             directory_options.read(true).custom_flags(
                 (rustix::fs::OFlags::DIRECTORY
@@ -9628,7 +9537,6 @@ impl Kura {
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
@@ -9840,7 +9748,6 @@ impl Kura {
             #[cfg(unix)]
             let identity = {
                 use std::os::unix::fs::MetadataExt as _;
-
                 RecoveryFileIdentity::Unix {
                     device: metadata.dev(),
                     inode: metadata.ino(),
@@ -9849,7 +9756,6 @@ impl Kura {
             #[cfg(windows)]
             let identity = {
                 use std::os::windows::fs::MetadataExt as _;
-
                 match (metadata.volume_serial_number(), metadata.file_index()) {
                     (Some(volume), Some(index)) => RecoveryFileIdentity::Windows { volume, index },
                     // Match `sidecar_metadata_same_object`: missing Windows identity
@@ -10136,7 +10042,6 @@ impl Kura {
             #[cfg(windows)]
             let count_file_bytes = {
                 use std::os::windows::fs::MetadataExt as _;
-
                 let volume = metadata.volume_serial_number().ok_or_else(|| {
                     Self::invalid_pending_merge_entry_error(
                         path.clone(),
@@ -10418,13 +10323,11 @@ impl Kura {
             #[cfg(unix)]
             let count_file_bytes = {
                 use std::os::unix::fs::MetadataExt as _;
-
                 seen_inodes.insert((metadata.dev(), metadata.ino()))
             };
             #[cfg(windows)]
             let count_file_bytes = {
                 use std::os::windows::fs::MetadataExt as _;
-
                 let volume = metadata.volume_serial_number().ok_or_else(|| {
                     Self::invalid_pending_queue_plan_admission_error(
                         path.clone(),
@@ -13848,7 +13751,6 @@ impl Kura {
         BTreeMap<PathBuf, StableSidecarDirectoryInventory>,
     )> {
         use rayon::prelude::*;
-
         let checkpoint_dir = Self::wsv_checkpoint_dir_for(blocks_dir);
         let manifest_dir = Self::commit_manifest_dir_for(blocks_dir);
         let results = boundary
@@ -14025,7 +13927,6 @@ impl Kura {
         &self,
     ) -> Result<V2StartupFinalityVerificationInventory> {
         use rayon::prelude::*;
-
         let started_at = Instant::now();
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -42831,7 +42732,6 @@ pub(crate) mod tests {
             8,
             || {
                 use std::io::Write as _;
-
                 std::fs::OpenOptions::new()
                     .append(true)
                     .open(&path)

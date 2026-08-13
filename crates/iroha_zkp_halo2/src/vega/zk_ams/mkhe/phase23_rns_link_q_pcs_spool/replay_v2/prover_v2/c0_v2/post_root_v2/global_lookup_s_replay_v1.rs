@@ -3,17 +3,13 @@
 //! This module deliberately has no inhabited production authority yet.  It owns
 //! the exact replay schedule and binding now, while the later lookup-plane seal
 //! remains the only place that may make the production entry point reachable.
-
 use core::{convert::Infallible, mem::size_of};
-
 use super::*;
-
 const GLOBAL_LOOKUP_S_REPLAY_PURPOSE_V1: &[u8] = b"iroha.vega.mkhe.global_lookup.q_pcs_s_replay.v1";
 const GLOBAL_LOOKUP_S_REPLAY_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.vega.mkhe.global_lookup.q_pcs_s_replay.binding.v1";
 const GLOBAL_LOOKUP_S_REPLAY_MAPPING_DOMAIN_V1: &[u8] =
     b"iroha.vega.mkhe.global_lookup.q_pcs_s_replay.mapping.v1";
-
 const GLOBAL_LOOKUP_S_REPETITIONS_V1: usize = 5;
 const GLOBAL_LOOKUP_S_BLOCKS_PER_GROUP_V1: usize = 16;
 const GLOBAL_LOOKUP_S_DIGITS_V1: usize = 4;
@@ -25,7 +21,6 @@ const GLOBAL_LOOKUP_TOPOLOGY_DIGEST_V1: [u8; 32] = [
     0x3a, 0xf9, 0xa6, 0xad, 0x67, 0x38, 0x3c, 0x32, 0xb0, 0x6b, 0xb5, 0xd9, 0x5a, 0x05, 0x86, 0x3b,
     0x8c, 0xb0, 0xb3, 0x33, 0x86, 0x60, 0x17, 0x7b, 0xc2, 0xa9, 0x2e, 0x1b, 0xbf, 0x40, 0xb4, 0xab,
 ];
-
 const GLOBAL_LOOKUP_S_RELEASE_RELATIONS_V1: u64 =
     RELEASE_LIMB_COUNT_V2 as u64 * GLOBAL_LOOKUP_S_REPETITIONS_V1 as u64;
 const GLOBAL_LOOKUP_S_RELEASE_GROUPS_PER_RELATION_V1: u64 =
@@ -51,7 +46,6 @@ const GLOBAL_LOOKUP_S_OPERATIONAL_RECEIPT_ACCEPTED_V1: bool = false;
 const GLOBAL_LOOKUP_S_MEASURED_RSS_WITHIN_CAP_V1: bool = false;
 const GLOBAL_LOOKUP_S_RELEASE_READY_V1: bool = false;
 const GLOBAL_LOOKUP_S_RELEASE_COMPLETE_V1: bool = false;
-
 const _: () = {
     assert!(!GLOBAL_LOOKUP_S_PROOF_COMPLETE_V1);
     assert!(!GLOBAL_LOOKUP_S_ZERO_KNOWLEDGE_BOUND_V1);
@@ -60,11 +54,9 @@ const _: () = {
     assert!(!GLOBAL_LOOKUP_S_RELEASE_READY_V1);
     assert!(!GLOBAL_LOOKUP_S_RELEASE_COMPLETE_V1);
 };
-
 struct GlobalLookupSReplayAuthorityV1 {
     _upstream_lookup_plane_seal: Infallible,
 }
-
 struct GlobalLookupSReplayBindingV1 {
     digest: [u8; 32],
     mapping_digest: [u8; 32],
@@ -72,25 +64,21 @@ struct GlobalLookupSReplayBindingV1 {
     slot_count: u64,
     tuple_count: u64,
 }
-
 trait GlobalLookupSTupleSinkV1 {
     fn begin_v1(
         &mut self,
         binding: &GlobalLookupSReplayBindingV1,
     ) -> Result<(), ProverPrerequisiteErrorV2>;
-
     fn absorb_next_v1(
         &mut self,
         digits: [u16; GLOBAL_LOOKUP_S_DIGITS_V1],
         complement_digits: [u16; GLOBAL_LOOKUP_S_DIGITS_V1],
     ) -> Result<(), ProverPrerequisiteErrorV2>;
-
     fn finish_v1(
         &mut self,
         binding: &GlobalLookupSReplayBindingV1,
     ) -> Result<(), ProverPrerequisiteErrorV2>;
 }
-
 struct GlobalLookupSReplayAxesV1 {
     parameter_digest: [u8; 32],
     sealed_source_transcript_digest: [u8; 32],
@@ -99,7 +87,6 @@ struct GlobalLookupSReplayAxesV1 {
     quotient_root: [u8; 32],
     topology_digest: [u8; 32],
 }
-
 struct GlobalLookupSCoordinateV1 {
     slot: u64,
     limb: u32,
@@ -108,7 +95,6 @@ struct GlobalLookupSCoordinateV1 {
     block_in_group: u32,
     first_coefficient: u64,
 }
-
 impl QuotientRootPreparedV2 {
     #[allow(dead_code)]
     fn replay_global_lookup_s_v1<S: GlobalLookupSTupleSinkV1>(
@@ -126,7 +112,6 @@ impl QuotientRootPreparedV2 {
             _upstream_lookup_plane_seal,
         } = authority;
         match _upstream_lookup_plane_seal {}
-
         #[allow(unreachable_code)]
         {
             self.require_global_lookup_s_owner_v1()?;
@@ -144,7 +129,6 @@ impl QuotientRootPreparedV2 {
             Ok(self)
         }
     }
-
     fn require_global_lookup_s_owner_v1(&self) -> Result<(), ProverPrerequisiteErrorV2> {
         if self.accepted_c0.is_none()
             || self.accepted_cq.is_none()
@@ -160,7 +144,6 @@ impl QuotientRootPreparedV2 {
         Ok(())
     }
 }
-
 fn replay_mask_v1<S: GlobalLookupSTupleSinkV1>(
     masks: MaskSpoolSealedV2,
     geometry: SpoolGeometryV2,
@@ -184,7 +167,6 @@ fn replay_mask_v1<S: GlobalLookupSTupleSinkV1>(
     if require_release {
         require_release_accounting_v1(geometry, slot_count, tuple_count)?;
     }
-
     let snapshot_digest = masks.snapshot_digest_v2()?;
     let mapping_digest = mapping_digest_v1(geometry, slot_count)?;
     let binding = binding_v1(
@@ -195,7 +177,6 @@ fn replay_mask_v1<S: GlobalLookupSTupleSinkV1>(
         tuple_count,
     );
     sink.begin_v1(&binding)?;
-
     let mut reader = masks.begin_replay_v2()?;
     let mut seen_slots = 0_u64;
     let mut seen_tuples = 0_u64;
@@ -245,14 +226,12 @@ fn replay_mask_v1<S: GlobalLookupSTupleSinkV1>(
     sink.finish_v1(&binding)?;
     Ok(masks)
 }
-
 fn slot_count_v1(geometry: SpoolGeometryV2) -> Result<u64, ProverPrerequisiteErrorV2> {
     (geometry.moduli.len() as u64)
         .checked_mul(GLOBAL_LOOKUP_S_REPETITIONS_V1 as u64)
         .and_then(|count| count.checked_mul(geometry.coefficient_blocks_per_component_v2().ok()?))
         .ok_or(ProverPrerequisiteErrorV2::ArithmeticOverflow)
 }
-
 fn tuple_count_v1(
     geometry: SpoolGeometryV2,
     slot_count: u64,
@@ -261,7 +240,6 @@ fn tuple_count_v1(
         .checked_mul(u64::from(geometry.coefficient_values_per_block))
         .ok_or(ProverPrerequisiteErrorV2::ArithmeticOverflow)
 }
-
 fn coordinate_v1(
     geometry: SpoolGeometryV2,
     slot_count: u64,
@@ -291,7 +269,6 @@ fn coordinate_v1(
             .ok_or(ProverPrerequisiteErrorV2::InvalidSourceShape)?,
     })
 }
-
 fn require_coordinate_v1(
     geometry: SpoolGeometryV2,
     expected_slot: u64,
@@ -313,7 +290,6 @@ fn require_coordinate_v1(
     }
     Ok(())
 }
-
 fn radix_tuple_v1(
     value: u64,
     modulus: u64,
@@ -327,7 +303,6 @@ fn radix_tuple_v1(
         .ok_or(ProverPrerequisiteErrorV2::NonCanonicalResidue)?;
     Ok((radix_digits_v1(value), radix_digits_v1(complement)))
 }
-
 fn radix_digits_v1(value: u64) -> [u16; GLOBAL_LOOKUP_S_DIGITS_V1] {
     let mut digits = [0_u16; GLOBAL_LOOKUP_S_DIGITS_V1];
     let mut remaining = value;
@@ -337,7 +312,6 @@ fn radix_digits_v1(value: u64) -> [u16; GLOBAL_LOOKUP_S_DIGITS_V1] {
     }
     digits
 }
-
 fn mapping_digest_v1(
     geometry: SpoolGeometryV2,
     slot_count: u64,
@@ -361,7 +335,6 @@ fn mapping_digest_v1(
     }
     Ok(hash.finalize().into())
 }
-
 fn binding_v1(
     axes: &GlobalLookupSReplayAxesV1,
     snapshot_digest: [u8; 32],
@@ -391,7 +364,6 @@ fn binding_v1(
         tuple_count,
     }
 }
-
 fn require_completion_v1(
     expected_slots: u64,
     expected_tuples: u64,
@@ -403,7 +375,6 @@ fn require_completion_v1(
     }
     Ok(())
 }
-
 fn require_release_accounting_v1(
     geometry: SpoolGeometryV2,
     slot_count: u64,
@@ -431,7 +402,6 @@ fn require_release_accounting_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 #[path = "global_lookup_s_replay_v1_tests.rs"]
 mod tests;

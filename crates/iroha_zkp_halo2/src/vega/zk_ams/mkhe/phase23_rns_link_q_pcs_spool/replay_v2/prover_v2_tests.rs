@@ -3,14 +3,10 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-
 use super::*;
-
 static DIRECTORY_SEQUENCE_V2: AtomicU64 = AtomicU64::new(0);
 static TEST_MODULI_V2: [u64; 2] = [97, 113];
-
 struct TestDirectoryV2(PathBuf);
-
 impl TestDirectoryV2 {
     fn new_v2() -> Self {
         let sequence = DIRECTORY_SEQUENCE_V2.fetch_add(1, Ordering::SeqCst);
@@ -22,13 +18,11 @@ impl TestDirectoryV2 {
         Self(path)
     }
 }
-
 impl Drop for TestDirectoryV2 {
     fn drop(&mut self) {
         fs::remove_dir(&self.0).expect("remove empty prover prerequisite directory");
     }
 }
-
 fn geometry_v2() -> SpoolGeometryV2 {
     SpoolGeometryV2 {
         ring_degree: 4,
@@ -39,14 +33,12 @@ fn geometry_v2() -> SpoolGeometryV2 {
         moduli: &TEST_MODULI_V2,
     }
 }
-
 fn context_v2() -> PublicSpoolContextV2 {
     PublicSpoolContextV2 {
         sealed_source_transcript_digest: [0x31; 32],
         source_algebra_binding_digest: [0x52; 32],
     }
 }
-
 fn pass_v2(directory: &TestDirectoryV2) -> MaskedCoefficientPassV2 {
     MaskedCoefficientPassV2::create_with_geometry_v2(
         &directory.0,
@@ -56,14 +48,12 @@ fn pass_v2(directory: &TestDirectoryV2) -> MaskedCoefficientPassV2 {
     )
     .expect("create tiny masked coefficient pass")
 }
-
 fn secret_v2(values: &[u64]) -> SecretResiduesV2 {
     let mut owner = SecretResiduesV2::new_zeroed_exact_v2(values.len()).expect("secret owner");
     owner.as_mut_slice_v2().copy_from_slice(values);
     assert_eq!(owner.values.len(), owner.values.capacity());
     owner
 }
-
 fn relation_v2(
     limb: u8,
     repetition: u8,
@@ -72,18 +62,15 @@ fn relation_v2(
 ) -> SecretRelationCoefficientsV2 {
     SecretRelationCoefficientsV2::new_v2(limb, repetition, secret_v2(product), secret_v2(quotient))
 }
-
 fn zero_relation_v2(limb: u8, repetition: u8) -> SecretRelationCoefficientsV2 {
     relation_v2(limb, repetition, &[0; 7], &[0; 3])
 }
-
 #[derive(Default)]
 struct CountingEntropyV2 {
     next: u64,
     calls: usize,
     coordinates: Vec<MaskSampleDomainV2>,
 }
-
 impl MaskEntropyV2 for CountingEntropyV2 {
     fn fill_word_v2(
         &mut self,
@@ -97,9 +84,7 @@ impl MaskEntropyV2 for CountingEntropyV2 {
         Ok(())
     }
 }
-
 struct ConstantEntropyV2(u64);
-
 impl MaskEntropyV2 for ConstantEntropyV2 {
     fn fill_word_v2(
         &mut self,
@@ -110,9 +95,7 @@ impl MaskEntropyV2 for ConstantEntropyV2 {
         Ok(())
     }
 }
-
 struct FailingEntropyV2;
-
 impl MaskEntropyV2 for FailingEntropyV2 {
     fn fill_word_v2(
         &mut self,
@@ -122,9 +105,7 @@ impl MaskEntropyV2 for FailingEntropyV2 {
         Err(())
     }
 }
-
 struct PanickingEntropyV2;
-
 impl MaskEntropyV2 for PanickingEntropyV2 {
     fn fill_word_v2(
         &mut self,
@@ -134,12 +115,10 @@ impl MaskEntropyV2 for PanickingEntropyV2 {
         panic!("intentional external entropy unwind")
     }
 }
-
 struct RejectThenAcceptEntropyV2 {
     reject: usize,
     calls: usize,
 }
-
 impl MaskEntropyV2 for RejectThenAcceptEntropyV2 {
     fn fill_word_v2(
         &mut self,
@@ -156,7 +135,6 @@ impl MaskEntropyV2 for RejectThenAcceptEntropyV2 {
         Ok(())
     }
 }
-
 fn read_row_v2(stage: QPcsCoefficientReplayStageV2) -> (QPcsCoefficientReplayStageV2, Vec<u64>) {
     let geometry = geometry_v2();
     let mut reader = stage
@@ -177,7 +155,6 @@ fn read_row_v2(stage: QPcsCoefficientReplayStageV2) -> (QPcsCoefficientReplaySta
         values,
     )
 }
-
 #[cfg(unix)]
 #[test]
 fn literal_mask_equations_spool_order_top_zeros_and_replay_are_exact() {
@@ -210,7 +187,6 @@ fn literal_mask_equations_spool_order_top_zeros_and_replay_are_exact() {
         ),
         (0, 0, 0, 0, 97)
     );
-
     let mut sealed = pass
         .seal_coefficients_v2()
         .expect("seal coefficients before any LDE write");
@@ -219,13 +195,11 @@ fn literal_mask_equations_spool_order_top_zeros_and_replay_are_exact() {
     let (stage, product_low) = read_row_v2(stage);
     let (stage, product_high) = read_row_v2(stage);
     let (_stage, quotient) = read_row_v2(stage);
-
     // Independent literal oracle for S=[1,2,3], including both fixed top zeros.
     assert_eq!(product_low, [11, 22, 33, 40]);
     assert_eq!(product_high, [51, 62, 73, 0]);
     assert_eq!(quotient, [8, 10, 12, 0]);
 }
-
 #[cfg(unix)]
 #[test]
 fn missing_reordered_oversized_and_noncanonical_sources_fail_closed() {
@@ -234,7 +208,6 @@ fn missing_reordered_oversized_and_noncanonical_sources_fail_closed() {
         pass_v2(&directory).seal_coefficients_v2(),
         Err(ProverPrerequisiteErrorV2::MissingRelations)
     ));
-
     let mut reordered = pass_v2(&directory);
     assert_eq!(
         reordered
@@ -246,7 +219,6 @@ fn missing_reordered_oversized_and_noncanonical_sources_fail_closed() {
             .absorb_next_relation_v2(zero_relation_v2(0, 0), &mut CountingEntropyV2::default()),
         Err(ProverPrerequisiteErrorV2::Poisoned)
     );
-
     let mut oversized = pass_v2(&directory);
     assert_eq!(
         oversized.absorb_next_relation_v2(
@@ -255,7 +227,6 @@ fn missing_reordered_oversized_and_noncanonical_sources_fail_closed() {
         ),
         Err(ProverPrerequisiteErrorV2::InvalidSourceShape)
     );
-
     let mut noncanonical = pass_v2(&directory);
     assert_eq!(
         noncanonical.absorb_next_relation_v2(
@@ -265,14 +236,12 @@ fn missing_reordered_oversized_and_noncanonical_sources_fail_closed() {
         Err(ProverPrerequisiteErrorV2::NonCanonicalResidue)
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn entropy_failure_reuse_and_fixed_rejection_bound_poison_the_pass() {
     let directory = TestDirectoryV2::new_v2();
     let words_before = SECRET_ENTROPY_WORD_DROPS_V2.load(Ordering::SeqCst);
     let residues_before = SECRET_RESIDUE_DROPS_V2.load(Ordering::SeqCst);
-
     let mut failed = pass_v2(&directory);
     assert_eq!(
         failed.absorb_next_relation_v2(zero_relation_v2(0, 0), &mut FailingEntropyV2),
@@ -284,7 +253,6 @@ fn entropy_failure_reuse_and_fixed_rejection_bound_poison_the_pass() {
         failed.absorb_next_relation_v2(zero_relation_v2(0, 0), &mut CountingEntropyV2::default()),
         Err(ProverPrerequisiteErrorV2::Poisoned)
     );
-
     let mut reused = pass_v2(&directory);
     let mut constant = ConstantEntropyV2(1);
     reused
@@ -298,7 +266,6 @@ fn entropy_failure_reuse_and_fixed_rejection_bound_poison_the_pass() {
         reused.absorb_next_relation_v2(zero_relation_v2(0, 2), &mut constant),
         Err(ProverPrerequisiteErrorV2::Poisoned)
     );
-
     let mut rejected = pass_v2(&directory);
     let mut always_reject = ConstantEntropyV2(u64::MAX);
     assert_eq!(
@@ -306,7 +273,6 @@ fn entropy_failure_reuse_and_fixed_rejection_bound_poison_the_pass() {
         Err(ProverPrerequisiteErrorV2::RejectionBoundExhausted)
     );
 }
-
 #[test]
 fn rejection_sampling_accepts_only_after_the_exact_last_bounded_attempt() {
     let mut entropy = RejectThenAcceptEntropyV2 {
@@ -319,7 +285,6 @@ fn rejection_sampling_accepts_only_after_the_exact_last_bounded_attempt() {
     let zone = u64::MAX - u64::MAX % 97;
     assert_eq!(zone % 97, 0);
     assert!(102 < zone);
-
     let mut exhausted = RejectThenAcceptEntropyV2 {
         reject: 256,
         calls: 0,
@@ -330,7 +295,6 @@ fn rejection_sampling_accepts_only_after_the_exact_last_bounded_attempt() {
     ));
     assert_eq!(exhausted.calls, usize::from(MASK_SAMPLE_ATTEMPTS_V2));
 }
-
 #[cfg(unix)]
 #[test]
 fn entropy_and_explicit_take_unwinds_zeroize_and_leave_no_reusable_state() {
@@ -348,7 +312,6 @@ fn entropy_and_explicit_take_unwinds_zeroize_and_leave_no_reusable_state() {
         pass.absorb_next_relation_v2(zero_relation_v2(0, 0), &mut CountingEntropyV2::default()),
         Err(ProverPrerequisiteErrorV2::Poisoned)
     );
-
     let mut explicit = pass_v2(&directory);
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         explicit.panic_after_take_for_test_v2();
@@ -359,7 +322,6 @@ fn entropy_and_explicit_take_unwinds_zeroize_and_leave_no_reusable_state() {
         Err(ProverPrerequisiteErrorV2::Poisoned)
     );
 }
-
 #[test]
 fn reuse_guard_compares_complete_values_without_a_digest_collision_surface() {
     let mut guard = MaskReuseGuardV2::new_v2().expect("exact five-mask guard");
@@ -374,7 +336,6 @@ fn reuse_guard_compares_complete_values_without_a_digest_collision_surface() {
         .check_v2(0, 1, &secret_v2(&[1, 2, 4]))
         .expect("one-coordinate difference is not reuse");
 }
-
 #[test]
 fn authority_and_all_downstream_completion_gates_remain_false() {
     assert!(!MASKED_COEFFICIENTS_COMPLETE_V2);
@@ -386,7 +347,6 @@ fn authority_and_all_downstream_completion_gates_remain_false() {
     assert!(!FRI_SECOND_PASS_COMPLETE_V2);
     assert!(!CANONICAL_PROOF_EMITTED_V2);
     assert!(!PROVER_RELEASE_READY_V2);
-
     let source = include_str!("prover_v2.rs");
     assert!(source.contains("source_aggregation: Infallible"));
     assert!(source.contains("algebra_verification: Infallible"));

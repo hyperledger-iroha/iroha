@@ -78,6 +78,7 @@ export {
   TransactionStatusError,
   TransactionTimeoutError,
   TransactionBatchAdmissionAmbiguousError,
+  SorafsOrderbookSubmissionAmbiguousError,
   IsoMessageTimeoutError,
   ToriiDataModelMismatchError,
   ToriiHttpError,

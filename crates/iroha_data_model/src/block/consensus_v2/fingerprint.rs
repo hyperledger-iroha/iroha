@@ -1,17 +1,12 @@
 //! Canonical Sumeragi v2 consensus-parameters fingerprint projection.
-
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_primitives::numeric::Quantity;
 use norito::codec::Encode;
-
 use super::{ConsensusMode, SumeragiV2GenesisContextParameters};
 use crate::block::consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams};
-
 const DOMAIN: &[u8] = b"iroha:sumeragi:v2:consensus-parameters-fingerprint:v1\0";
-
 /// Version of the canonical v2 consensus-parameters projection.
 pub const FORMAT_VERSION: u16 = 1;
-
 #[derive(Encode)]
 struct ConsensusParametersFingerprintInput {
     format_version: u16,
@@ -22,7 +17,6 @@ struct ConsensusParametersFingerprintInput {
     context: SumeragiV2GenesisContextParameters,
     npos: Option<NposGenesisFingerprintInput>,
 }
-
 #[derive(Encode)]
 struct NposGenesisFingerprintInput {
     epoch_length_blocks: core::num::NonZeroU64,
@@ -40,7 +34,6 @@ struct NposGenesisFingerprintInput {
     activation_lag_blocks: u64,
     slashing_delay_blocks: u64,
 }
-
 /// Compute the deterministic v2 consensus-parameters fingerprint.
 ///
 /// Only frozen v2 inputs are representable in the encoded projection. Legacy
@@ -89,7 +82,6 @@ pub fn compute(params: &ConsensusGenesisParams) -> Result<[u8; 32], String> {
         context: params.v2_context,
         npos,
     };
-
     let mut hasher = Blake2b512::new();
     iroha_crypto::blake2::digest::Update::update(&mut hasher, DOMAIN);
     iroha_crypto::blake2::digest::Update::update(&mut hasher, &projection.encode());
@@ -98,11 +90,9 @@ pub fn compute(params: &ConsensusGenesisParams) -> Result<[u8; 32], String> {
     out.copy_from_slice(&digest[..32]);
     Ok(out)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn permissioned_params() -> ConsensusGenesisParams {
         ConsensusGenesisParams {
             block_cadence_ms: core::num::NonZeroU64::new(1_000).unwrap(),
@@ -112,7 +102,6 @@ mod tests {
             v2_context: SumeragiV2GenesisContextParameters::recommended(),
         }
     }
-
     fn npos_params() -> ConsensusGenesisParams {
         let mut params = permissioned_params();
         params.mode =
@@ -134,34 +123,27 @@ mod tests {
             });
         params
     }
-
     #[test]
     fn signed_cadence_changes_live_fingerprint() {
         let baseline = permissioned_params();
         let mut changed = baseline.clone();
         changed.block_cadence_ms = core::num::NonZeroU64::new(1_001).unwrap();
-
         assert_ne!(compute(&baseline).unwrap(), compute(&changed).unwrap(),);
     }
-
     #[test]
     fn signed_context_mismatch_changes_live_fingerprint() {
         let baseline = permissioned_params();
         let mut changed = baseline.clone();
         changed.v2_context.nexus_amx_context_hash[0] ^= 1;
-
         assert_ne!(compute(&baseline).unwrap(), compute(&changed).unwrap(),);
     }
-
     #[test]
     fn signed_execution_policy_mismatch_changes_live_fingerprint() {
         let baseline = permissioned_params();
         let mut changed = baseline.clone();
         changed.v2_context.execution_policy_hash[0] ^= 1;
-
         assert_ne!(compute(&baseline).unwrap(), compute(&changed).unwrap(),);
     }
-
     #[test]
     fn npos_election_input_changes_live_fingerprint() {
         let baseline = npos_params();
@@ -172,7 +154,6 @@ mod tests {
         npos.epoch_seed[0] ^= 1;
         assert_ne!(compute(&baseline).unwrap(), compute(&changed).unwrap(),);
     }
-
     #[test]
     fn all_zero_npos_seed_is_rejected_before_hashing() {
         let mut params = npos_params();
@@ -182,7 +163,6 @@ mod tests {
         npos.epoch_seed = [0; 32];
         assert!(compute(&params).is_err());
     }
-
     #[test]
     fn unsupported_protocol_is_rejected_before_hashing() {
         let mut params = permissioned_params();
@@ -190,7 +170,6 @@ mod tests {
         let error = compute(&params).expect_err("unsupported wire revision must fail closed");
         assert!(error.contains("unsupported consensus protocol version"));
     }
-
     #[test]
     fn invalid_data_availability_context_is_rejected_before_hashing() {
         let mut params = permissioned_params();
@@ -198,7 +177,6 @@ mod tests {
         let error = compute(&params).expect_err("zero DA chunk size must fail closed");
         assert!(error.contains("invalid Sumeragi v2 genesis context"));
     }
-
     #[test]
     fn zero_execution_policy_context_is_rejected_before_hashing() {
         let mut params = permissioned_params();
@@ -206,7 +184,6 @@ mod tests {
         let error = compute(&params).expect_err("zero execution-policy hash must fail closed");
         assert!(error.contains("invalid Sumeragi v2 genesis context"));
     }
-
     #[test]
     fn npos_windows_outside_epoch_are_rejected_before_hashing() {
         let mut params = npos_params();
@@ -219,7 +196,6 @@ mod tests {
             compute(&params).expect_err("VRF windows outside the signed epoch must fail closed");
         assert!(error.contains("close before the epoch boundary"));
     }
-
     #[test]
     fn npos_percentage_above_one_hundred_is_rejected_before_hashing() {
         let mut params = npos_params();
@@ -231,7 +207,6 @@ mod tests {
             compute(&params).expect_err("invalid signed election percentages must fail closed");
         assert!(error.contains("percentages"));
     }
-
     #[test]
     fn genesis_embedded_fingerprint_is_deterministic_without_genesis_hash_input() {
         let params = permissioned_params();

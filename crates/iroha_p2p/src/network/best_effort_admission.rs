@@ -1,5 +1,4 @@
 use super::*;
-
 /// Permanent reason that a recoverable actor-admission request was rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NetworkActorAdmissionRejection {
@@ -22,7 +21,6 @@ pub enum NetworkActorAdmissionRejection {
     /// The authenticated reply connection tenure has been retired.
     InactiveReplyRoute,
 }
-
 /// Recoverable result of best-effort post admission into the network actor.
 ///
 /// Unlike [`NetworkBaseHandle::post`], every failure returns the exact caller
@@ -48,7 +46,6 @@ pub enum NetworkPostAdmissionError<M> {
         reason: NetworkActorAdmissionRejection,
     },
 }
-
 impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// Construct a handle whose ordinary actor-byte corridor is saturated.
     ///
@@ -62,7 +59,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             .expect("one-byte zero-reserve test actor budget must fit");
         handle
     }
-
     /// Override one plaintext topic cap on a disconnected test handle.
     ///
     /// This keeps protocol-carrier admission tests coupled to the same exact
@@ -92,7 +88,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         }
         self
     }
-
     /// Return the configured plaintext frame cap for one outbound topic.
     ///
     /// Application protocols which retain a response before P2P handoff use
@@ -103,7 +98,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     pub fn topic_plaintext_frame_cap(&self, topic: message::Topic) -> usize {
         self.topic_frame_caps.for_topic(topic)
     }
-
     /// Admit a best-effort post while preserving exact source ownership on failure.
     ///
     /// This is the outcome-returning counterpart of [`Self::post`]. It is
@@ -125,7 +119,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         mut msg: Post<T>,
     ) -> Result<(), NetworkPostAdmissionError<Post<T>>> {
         use tokio::sync::mpsc::error::TrySendError;
-
         let requested_priority = msg.priority;
         if !msg.data.is_outbound_allowed() {
             return Err(NetworkPostAdmissionError::Rejected {

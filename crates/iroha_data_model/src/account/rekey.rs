@@ -1,13 +1,10 @@
 //! Stable account rekey metadata for tracking alias-backed account continuity.
-
 use core::fmt;
 use std::{io::Cursor, str::FromStr, string::String, vec::Vec};
-
 use iroha_crypto::PublicKey;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use super::{Account, AccountId, Name};
 use crate::{
     alias_setup::AccountAliasName,
@@ -15,7 +12,6 @@ use crate::{
     error::ParseError,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
-
 /// Dataspace-scoped alias-domain segment used only inside account aliases.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -25,49 +21,41 @@ use crate::{
 #[repr(transparent)]
 #[norito(decode_from_slice)]
 pub struct AccountAliasDomain(pub Name);
-
 impl AccountAliasDomain {
     /// Construct an alias-domain segment from its canonical name.
     #[must_use]
     pub fn new(name: Name) -> Self {
         Self(name)
     }
-
     /// Borrow the underlying alias-domain segment name.
     #[must_use]
     pub fn name(&self) -> &Name {
         &self.0
     }
 }
-
 impl fmt::Display for AccountAliasDomain {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
-
 impl From<Name> for AccountAliasDomain {
     fn from(value: Name) -> Self {
         Self(value)
     }
 }
-
 impl From<AccountAliasDomain> for Name {
     fn from(value: AccountAliasDomain) -> Self {
         value.0
     }
 }
-
 impl FromStr for AccountAliasDomain {
     type Err = ParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         s.parse::<Name>()
             .map(Self)
             .map_err(|_| ParseError::new("account alias domain segment is invalid"))
     }
 }
-
 /// Stable on-chain account alias that survives signatory rotation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -93,7 +81,6 @@ pub struct AccountAlias {
     #[norito(default)]
     pub dataspace: DataSpaceId,
 }
-
 impl AccountAlias {
     /// Create a new account alias from explicit alias components.
     #[must_use]
@@ -104,13 +91,11 @@ impl AccountAlias {
             dataspace,
         }
     }
-
     /// Create a new domainless account alias in the provided dataspace.
     #[must_use]
     pub fn domainless(label: Name, dataspace: DataSpaceId) -> Self {
         Self::new(label, None, dataspace)
     }
-
     /// Create a new account alias from explicit alias components.
     #[must_use]
     pub fn new_in_dataspace(
@@ -120,7 +105,6 @@ impl AccountAlias {
     ) -> Self {
         Self::new(label, domain, dataspace)
     }
-
     /// Parse a canonical account alias literal.
     ///
     /// Supported forms are `name@domain.dataspace` and `name@dataspace`.
@@ -139,7 +123,6 @@ impl AccountAlias {
             dataspace,
         ))
     }
-
     /// Render the canonical account alias literal using dataspace aliases from the catalog.
     ///
     /// # Errors
@@ -155,7 +138,6 @@ impl AccountAlias {
         )
         .map(|name| name.to_string())
     }
-
     /// Resolve the alias-domain scope into a dataspace-qualified [`DomainId`].
     ///
     /// # Errors
@@ -174,7 +156,6 @@ impl AccountAlias {
         Ok(Some(DomainId::try_new(domain.name(), &dataspace_alias)?))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for AccountAlias {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = Cursor::new(bytes);
@@ -184,12 +165,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AccountAlias {
         Ok((value, used))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::nexus::DataSpaceMetadata;
-
     fn catalog() -> DataSpaceCatalog {
         DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
@@ -202,7 +181,6 @@ mod tests {
         ])
         .expect("dataspace catalog")
     }
-
     #[test]
     fn account_label_parses_domainful_literal() {
         let label =
@@ -218,7 +196,6 @@ mod tests {
         );
         assert_eq!(label.dataspace, DataSpaceId::new(7));
     }
-
     #[test]
     fn account_label_parses_domainless_literal() {
         let label = AccountAlias::from_literal("primary@retail", &catalog()).expect("valid alias");
@@ -226,7 +203,6 @@ mod tests {
         assert_eq!(label.domain, None);
         assert_eq!(label.dataspace, DataSpaceId::new(7));
     }
-
     #[test]
     fn account_label_roundtrips_canonical_literal() {
         let catalog = catalog();
@@ -237,25 +213,21 @@ mod tests {
             "treasury@banking.retail"
         );
     }
-
     #[test]
     fn account_label_resolves_domain_id_with_dataspace_alias() {
         let alias =
             AccountAlias::from_literal("Treasury@Banking.Retail", &catalog()).expect("valid alias");
-
         assert_eq!(
             alias.domain_id(&catalog()).expect("resolve domain"),
             Some(DomainId::parse_fully_qualified("banking.retail").expect("domain id"))
         );
     }
-
     #[test]
     fn account_label_rejects_unknown_dataspace_alias() {
         let err = AccountAlias::from_literal("primary@banking.missing", &catalog())
             .expect_err("unknown dataspace must fail");
         assert!(err.to_string().contains("unknown dataspace alias"));
     }
-
     #[test]
     fn account_label_rejects_invalid_literals() {
         for raw in [
@@ -276,7 +248,6 @@ mod tests {
         }
     }
 }
-
 /// Provenance for one account-id transition retained by an [`AccountRekeyRecord`].
 ///
 /// Entries are positional: entry `i` describes the transition from
@@ -305,7 +276,6 @@ pub enum AccountRekeyTransitionProvenance {
     #[codec(index = 2)]
     AccountIdRekey,
 }
-
 /// Structural failures in an account rekey record's transition history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum AccountRekeyRecordError {
@@ -320,7 +290,6 @@ pub enum AccountRekeyRecordError {
         provenance_count: usize,
     },
 }
-
 /// Record that tracks the active concrete account behind a stable account label.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -354,7 +323,6 @@ pub struct AccountRekeyRecord {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub transition_provenance: Vec<AccountRekeyTransitionProvenance>,
 }
-
 impl AccountRekeyRecord {
     /// Bootstrap a rekey record from an existing account using its canonical label.
     ///
@@ -364,7 +332,6 @@ impl AccountRekeyRecord {
         let label = account.label()?.clone();
         Some(Self::new(label, account.id.clone()))
     }
-
     /// Bootstrap a rekey record for an arbitrary alias binding.
     #[must_use]
     pub fn new(label: AccountAlias, active_account_id: AccountId) -> Self {
@@ -377,7 +344,6 @@ impl AccountRekeyRecord {
             transition_provenance: Vec::new(),
         }
     }
-
     fn normalized_transition_provenance(
         &self,
     ) -> Result<Vec<AccountRekeyTransitionProvenance>, AccountRekeyRecordError> {
@@ -395,7 +361,6 @@ impl AccountRekeyRecord {
         }
         Ok(self.transition_provenance.clone())
     }
-
     fn repoint_to_account_with_provenance(
         &self,
         next_account_id: AccountId,
@@ -406,17 +371,14 @@ impl AccountRekeyRecord {
             return Ok(self.clone());
         }
         let active_signatory = next_account_id.try_signatory().cloned();
-
         let mut previous_account_ids = self.previous_account_ids.clone();
         previous_account_ids.push(self.active_account_id.clone());
         let mut transition_provenance = self.normalized_transition_provenance()?;
         transition_provenance.push(provenance);
-
         let mut previous_signatories = self.previous_signatories.clone();
         if let Some(active_signatory) = self.active_signatory.as_ref() {
             previous_signatories.push(active_signatory.clone());
         }
-
         Ok(Self {
             label: self.label.clone(),
             active_account_id: next_account_id,
@@ -426,7 +388,6 @@ impl AccountRekeyRecord {
             transition_provenance,
         })
     }
-
     /// Assign the stable alias to another independently controlled account.
     ///
     /// Alias reassignment retains audit history but deliberately breaks controller continuity.
@@ -442,7 +403,6 @@ impl AccountRekeyRecord {
             AccountRekeyTransitionProvenance::AliasReassignment,
         )
     }
-
     /// Record a canonical account-id rekey that retired the previous controller.
     ///
     /// This constructor records only provenance. Core must additionally enforce retirement and
@@ -459,7 +419,6 @@ impl AccountRekeyRecord {
             AccountRekeyTransitionProvenance::AccountIdRekey,
         )
     }
-
     /// Normalize a decoded legacy history to explicit non-authorizing provenance.
     ///
     /// This is intended for the canonical state rebuild path. Ordinary decoding leaves missing
@@ -473,7 +432,6 @@ impl AccountRekeyRecord {
         self.transition_provenance = self.normalized_transition_provenance()?;
         Ok(())
     }
-
     /// Return the consecutive, explicitly proven account-id rekey predecessors of the active id.
     ///
     /// A legacy or alias-reassignment entry breaks the active lineage. The returned slice is
@@ -501,7 +459,6 @@ impl AccountRekeyRecord {
             .map_or(0, |index| index + 1);
         Ok(&self.previous_account_ids[suffix_start..])
     }
-
     /// Plan a rotation to a new signatory-backed account, returning the staged record.
     ///
     /// # Errors
@@ -510,14 +467,11 @@ impl AccountRekeyRecord {
         self.repoint_for_account_id_rekey(AccountId::new(next_signatory))
     }
 }
-
 #[cfg(test)]
 mod rekey_record_tests {
     use iroha_crypto::KeyPair;
     use norito::codec::{DecodeAll, Encode};
-
     use super::*;
-
     fn account_id() -> AccountId {
         AccountId::new(
             KeyPair::try_random()
@@ -526,14 +480,12 @@ mod rekey_record_tests {
                 .clone(),
         )
     }
-
     fn alias() -> AccountAlias {
         AccountAlias::domainless(
             "wire".parse().expect("account alias label"),
             crate::nexus::DataSpaceId::UNIVERSAL,
         )
     }
-
     #[test]
     fn legacy_wire_defaults_transition_provenance_without_authorizing_it() {
         #[derive(Encode)]
@@ -544,7 +496,6 @@ mod rekey_record_tests {
             active_signatory: Option<PublicKey>,
             previous_signatories: Vec<PublicKey>,
         }
-
         let previous = account_id();
         let active = account_id();
         let legacy = LegacyAccountRekeyRecord {
@@ -558,7 +509,6 @@ mod rekey_record_tests {
         let mut bytes = encoded.as_slice();
         let mut decoded = AccountRekeyRecord::decode_all(&mut bytes)
             .expect("legacy account rekey record must decode");
-
         assert!(bytes.is_empty());
         assert!(decoded.transition_provenance.is_empty());
         assert!(
@@ -568,7 +518,6 @@ mod rekey_record_tests {
                 .is_empty(),
             "legacy history must remain non-authorizing before rebuild"
         );
-
         decoded
             .normalize_legacy_transition_provenance()
             .expect("rebuild normalization");
@@ -577,7 +526,6 @@ mod rekey_record_tests {
             vec![AccountRekeyTransitionProvenance::LegacyUnspecified]
         );
     }
-
     #[test]
     fn alias_reassignment_breaks_the_active_account_id_rekey_suffix() {
         let first = account_id();
@@ -588,7 +536,6 @@ mod rekey_record_tests {
             .expect("alias reassignment")
             .repoint_for_account_id_rekey(active.clone())
             .expect("canonical account-id rekey");
-
         assert_eq!(record.previous_account_ids, vec![first, second.clone()]);
         assert_eq!(
             record.transition_provenance,

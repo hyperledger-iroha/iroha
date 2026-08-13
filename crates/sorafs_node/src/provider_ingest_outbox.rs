@@ -4,7 +4,6 @@
 //! URLs, credentials, and signer material. It retains the immutable ledger
 //! binding, source-delivery crash state, and the exact signed completion
 //! transaction required for reconciliation.
-
 use std::{
     collections::BTreeSet,
     fmt,
@@ -18,12 +17,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
-
 use iroha_config::parameters::{
     defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
     is_production_runtime_handle,
@@ -41,7 +38,6 @@ use iroha_data_model::{
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
 use crate::provider_ingest_runtime::{
     ProviderIngestVerifiedMusubiBundleReceiptV1, StoredProviderIngestVerifiedMusubiBundleReceiptV1,
 };
@@ -6333,7 +6329,6 @@ mod tests {
         },
         time::{Duration, Instant},
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -6353,9 +6348,7 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
     use tempfile::{TempDir, tempdir};
-
     use super::*;
-
     fn test_network_id() -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
@@ -8009,7 +8002,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::{PermissionsExt as _, symlink};
-
             let lock_path = provider_ingest_lock_path(&path).expect("lock path");
             fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644))
                 .expect("weaken lock permissions");

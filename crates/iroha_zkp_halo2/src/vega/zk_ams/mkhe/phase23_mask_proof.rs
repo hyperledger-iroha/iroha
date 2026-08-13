@@ -50,14 +50,10 @@
 //! [`ZkAmsMkheErrorV1::ReleaseUnavailable`] before inspecting attacker bytes.
 
 #![allow(dead_code)]
-
 use core::convert::Infallible;
-
 use super::{BgvProfile, PlaintextModulus, ZkAmsMkheErrorV1, keccak256};
-
 const RELEASE_RING_DEGREE_V1: usize = 131_072;
 const SIGMA_FIXED_INDEPENDENT_COEFFICIENTS_V1: usize = RELEASE_RING_DEGREE_V1 / 2;
-
 const CHALLENGE_STRIDE_V1: usize = 32;
 const CHALLENGE_PARENT_COUNT_V1: usize = RELEASE_RING_DEGREE_V1 / CHALLENGE_STRIDE_V1;
 const CHALLENGE_BITS_PER_REPETITION_V1: usize = 12;
@@ -65,7 +61,6 @@ const CHALLENGE_REPETITIONS_V1: usize = 11;
 const CHALLENGE_SPACE_BITS_V1: usize = CHALLENGE_BITS_PER_REPETITION_V1 * CHALLENGE_REPETITIONS_V1;
 const EXTRACTION_SCALE_V1: usize = 4;
 const EXTRACTOR_L1_BOUND_V1: usize = CHALLENGE_PARENT_COUNT_V1 * CHALLENGE_PARENT_COUNT_V1;
-
 const SMALL_WITNESS_COUNT_V1: usize = 3;
 const SMALL_RESPONSE_COEFFICIENT_BYTES_V1: usize = 4;
 const MESSAGE_RESPONSE_COEFFICIENT_BYTES_V1: usize = 36;
@@ -76,13 +71,11 @@ const RESPONSE_PAYLOAD_PER_FULL_CHUNK_V1: usize =
     RESPONSE_PAYLOAD_PER_REPETITION_V1 * CHALLENGE_REPETITIONS_V1;
 const RESPONSE_PAYLOAD_SIX_REPETITIONS_V1: usize = RESPONSE_PAYLOAD_PER_REPETITION_V1 * 6;
 const RESPONSE_PAYLOAD_FIVE_REPETITIONS_V1: usize = RESPONSE_PAYLOAD_PER_REPETITION_V1 * 5;
-
 const W_SCALAR_COUNT_V1: usize = 524_288;
 const SCALARS_PER_FULL_CIPHERTEXT_CHUNK_V1: usize = 65_536;
 const W_FULL_CIPHERTEXT_CHUNKS_V1: usize = W_SCALAR_COUNT_V1 / SCALARS_PER_FULL_CIPHERTEXT_CHUNK_V1;
 const W_RESPONSE_PAYLOAD_LOWER_BOUND_V1: usize =
     W_FULL_CIPHERTEXT_CHUNKS_V1 * RESPONSE_PAYLOAD_PER_FULL_CHUNK_V1;
-
 const CORRECTED_SWITCH_RESIDUAL_BITS_V1: usize = 494;
 const CORRECTED_COMPOSED_RESIDUAL_BITS_V1: usize = 498;
 const CORRECTED_MAPPED_RESIDUAL_BITS_V1: usize = 790;
@@ -93,7 +86,6 @@ const CORRECTED_LEVEL_ONE_RESIDUAL_BITS_V1: usize = 2_153;
 const CORRECTED_DECRYPTION_SMUDGE_QUOTIENT_BITS_V1: usize = 2_027;
 const CORRECTED_FINAL_RESIDUAL_BITS_V1: usize = 2_287;
 const CENTERED_CAPACITY_BITS_V1: usize = 2_279;
-
 const CORRECTED_TERMINAL_WIDE_RESPONSE_COEFFICIENT_BYTES_V1: usize = 258;
 const SIGNED_SMALL_RESPONSE_COEFFICIENT_BYTES_V1: usize = 8;
 const TERMINAL_PROOF_HEADER_BYTES_V1: usize = 55;
@@ -102,14 +94,12 @@ const CORRECTED_TERMINAL_PROOF_BYTES_V1: usize = RELEASE_RING_DEGREE_V1
         + CORRECTED_TERMINAL_WIDE_RESPONSE_COEFFICIENT_BYTES_V1)
     + TERMINAL_PROOF_HEADER_BYTES_V1;
 const GOVERNED_PROOF_CEILING_BYTES_V1: usize = 32 * 1024 * 1024;
-
 const EXTRACTED_EPHEMERAL_BOUND_BITS_V1: usize = 50;
 const EXTRACTED_ERROR_BOUND_BITS_V1: usize = 51;
 const EXTRACTED_MESSAGE_BOUND_BITS_V1: usize = 305;
 const EXTRACTED_CENTERED_QUOTIENT_BOUND_BITS_V1: usize = 49;
 const CANDIDATE_FRESH_RESIDUAL_BITS_V1: usize = 71;
 const CANDIDATE_WORK_UNITS_PER_FULL_CHUNK_V1: u64 = 1_972_371_456;
-
 const BLOCKER_CORRECTED_NOISE_V1: u8 = 1 << 0;
 const BLOCKER_COMPLETE_PARTY_TRANSPORT_V1: u8 = 1 << 1;
 const BLOCKER_HYRAX_EQUALITY_V1: u8 = 1 << 2;
@@ -118,9 +108,7 @@ const ALL_RELEASE_BLOCKERS_V1: u8 = BLOCKER_CORRECTED_NOISE_V1
     | BLOCKER_COMPLETE_PARTY_TRANSPORT_V1
     | BLOCKER_HYRAX_EQUALITY_V1
     | BLOCKER_PARTIAL_PADDING_V1;
-
 const AUDIT_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.mask-proof.fail-closed-audit";
-
 const _: () = {
     assert!(CHALLENGE_PARENT_COUNT_V1 == 4_096);
     assert!(CHALLENGE_BITS_PER_REPETITION_V1 == CHALLENGE_PARENT_COUNT_V1.ilog2() as usize);
@@ -137,7 +125,6 @@ const _: () = {
     assert!(CORRECTED_TERMINAL_PROOF_BYTES_V1 > GOVERNED_PROOF_CEILING_BYTES_V1);
     assert!(ALL_RELEASE_BLOCKERS_V1 == 0b1111);
 };
-
 /// A concrete direction that could replace the rejected linear-response
 /// transport.  Every option still requires a complete security and resource
 /// review; the variants are not release endorsements.
@@ -157,7 +144,6 @@ pub(super) enum ZkAmsPhase23MaskNextDesignOptionV1 {
     /// both correctness and the governed proof ceiling.
     NoiseProfileAndTerminalProofRedesign = 3,
 }
-
 /// Ordered design directions retained by this audit.
 pub(super) const ZK_AMS_PHASE23_MASK_NEXT_DESIGN_OPTIONS_V1: [ZkAmsPhase23MaskNextDesignOptionV1;
     3] = [
@@ -165,7 +151,6 @@ pub(super) const ZK_AMS_PHASE23_MASK_NEXT_DESIGN_OPTIONS_V1: [ZkAmsPhase23MaskNe
     ZkAmsPhase23MaskNextDesignOptionV1::RnsNativeSuccinctArgument,
     ZkAmsPhase23MaskNextDesignOptionV1::NoiseProfileAndTerminalProofRedesign,
 ];
-
 /// Machine-readable separation between the locally valid scale-four algebra
 /// and the globally invalid release construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,13 +232,11 @@ pub(super) struct ZkAmsPhase23MaskProofAuditV1 {
     /// T256 digest of every preceding field and the ordered next-design list.
     pub digest: [u8; 32],
 }
-
 /// Return the fail-closed audit for the release-shape profile.
 pub(super) fn zk_ams_phase23_mask_proof_audit_v1(
     profile: &BgvProfile,
 ) -> Result<ZkAmsPhase23MaskProofAuditV1, ZkAmsMkheErrorV1> {
     require_candidate_profile_shape(profile)?;
-
     let corrected_global_noise_fits = CORRECTED_FINAL_RESIDUAL_BITS_V1 <= CENTERED_CAPACITY_BITS_V1;
     let corrected_terminal_proof_fits =
         CORRECTED_TERMINAL_PROOF_BYTES_V1 <= GOVERNED_PROOF_CEILING_BYTES_V1;
@@ -279,7 +262,6 @@ pub(super) fn zk_ams_phase23_mask_proof_audit_v1(
         }
     }
     let release_available = per_full_chunk_scale_four_primitive_certified && blocker_mask == 0;
-
     let mut audit = ZkAmsPhase23MaskProofAuditV1 {
         ring_degree: as_u32(RELEASE_RING_DEGREE_V1)?,
         challenge_stride: as_u32(CHALLENGE_STRIDE_V1)?,
@@ -325,11 +307,9 @@ pub(super) fn zk_ams_phase23_mask_proof_audit_v1(
     audit.digest = audit_digest(audit);
     Ok(audit)
 }
-
 /// Uninhabited proof type.  Safe code cannot construct release evidence while
 /// the audit has unresolved blockers.
 pub(super) enum ZkAmsPhase23MaskProofV1 {}
-
 /// Fail closed for proving, verification, encoding, or decoding.
 pub(super) fn preflight_zk_ams_phase23_mask_proof_v1(
     profile: &BgvProfile,
@@ -338,7 +318,6 @@ pub(super) fn preflight_zk_ams_phase23_mask_proof_v1(
     debug_assert!(!audit.release_available);
     Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
 }
-
 /// Reject candidate manifest bytes before parsing attacker-controlled input.
 pub(super) fn decode_zk_ams_phase23_mask_manifest_v1(
     profile: &BgvProfile,
@@ -349,7 +328,6 @@ pub(super) fn decode_zk_ams_phase23_mask_manifest_v1(
         Err(error) => Err(error),
     }
 }
-
 /// Reject candidate record bytes before parsing attacker-controlled input.
 pub(super) fn decode_zk_ams_phase23_mask_record_v1(
     profile: &BgvProfile,
@@ -360,7 +338,6 @@ pub(super) fn decode_zk_ams_phase23_mask_record_v1(
         Err(error) => Err(error),
     }
 }
-
 fn require_candidate_profile_shape(profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
     profile.validate()?;
     if profile.ring_degree != RELEASE_RING_DEGREE_V1
@@ -373,7 +350,6 @@ fn require_candidate_profile_shape(profile: &BgvProfile) -> Result<(), ZkAmsMkhe
     }
     Ok(())
 }
-
 fn audit_digest(audit: ZkAmsPhase23MaskProofAuditV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(AUDIT_DIGEST_DOMAIN_V1.len() + 256);
     frame.extend_from_slice(AUDIT_DIGEST_DOMAIN_V1);
@@ -433,28 +409,22 @@ fn audit_digest(audit: ZkAmsPhase23MaskProofAuditV1) -> [u8; 32] {
     }
     keccak256(&frame)
 }
-
 fn as_u8(value: usize) -> Result<u8, ZkAmsMkheErrorV1> {
     u8::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn as_u16(value: usize) -> Result<u16, ZkAmsMkheErrorV1> {
     u16::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn as_u32(value: usize) -> Result<u32, ZkAmsMkheErrorV1> {
     u32::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn as_u64(value: usize) -> Result<u64, ZkAmsMkheErrorV1> {
     u64::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::zk_ams::mkhe::manifest::release_profile_v1;
-
     #[test]
     fn per_full_chunk_scale_four_primitive_is_locally_certified() {
         let audit = zk_ams_phase23_mask_proof_audit_v1(&release_profile_v1()).unwrap();
@@ -471,7 +441,6 @@ mod tests {
         assert_eq!(audit.candidate_fresh_residual_bits, 71);
         assert_eq!(audit.work_units_per_full_chunk, 1_972_371_456);
     }
-
     #[test]
     fn factor_four_identity_and_sigma_fixity_hold_in_a_negacyclic_oracle() {
         const N: usize = 32;
@@ -489,7 +458,6 @@ mod tests {
         assert_eq!(sigma(&fixed_challenge(N, i)), fixed_challenge(N, i));
         assert_eq!(sigma(&fixed_challenge(N, j)), fixed_challenge(N, j));
     }
-
     #[test]
     fn sigma_fixed_codec_has_exactly_half_degree_and_rejects_non_subfield_values() {
         const N: usize = 16;
@@ -497,16 +465,13 @@ mod tests {
         let packed = reconstruct_sigma_fixed::<N>(&independent).unwrap();
         assert_eq!(sigma(&packed), packed);
         assert_eq!(packed[N / 2], 0);
-
         let mut invalid_midpoint = packed.clone();
         invalid_midpoint[N / 2] = 1;
         assert_ne!(sigma(&invalid_midpoint), invalid_midpoint);
-
         let mut invalid_pair = packed;
         invalid_pair[N - 1] = invalid_pair[1];
         assert_ne!(sigma(&invalid_pair), invalid_pair);
     }
-
     #[test]
     fn exact_local_payload_still_fails_complete_party_transport() {
         let audit = zk_ams_phase23_mask_proof_audit_v1(&release_profile_v1()).unwrap();
@@ -518,7 +483,6 @@ mod tests {
         assert_eq!(audit.governed_complete_party_ceiling, 67_108_864);
         assert!(!audit.complete_w_transport_fits);
     }
-
     #[test]
     fn corrected_noise_and_terminal_proof_are_over_their_caps() {
         let audit = zk_ams_phase23_mask_proof_audit_v1(&release_profile_v1()).unwrap();
@@ -537,7 +501,6 @@ mod tests {
         assert_eq!(audit.governed_proof_ceiling_bytes, 33_554_432);
         assert!(!audit.corrected_terminal_proof_fits);
     }
-
     #[test]
     fn missing_cross_commitment_and_padding_bindings_keep_release_closed() {
         let audit = zk_ams_phase23_mask_proof_audit_v1(&release_profile_v1()).unwrap();
@@ -546,7 +509,6 @@ mod tests {
         assert_eq!(audit.blocker_mask, 0b1111);
         assert!(!audit.release_available);
         assert_ne!(audit.digest, [0; 32]);
-
         let mut forged = audit;
         forged.hyrax_bgv_equality_certified = true;
         assert_ne!(audit_digest(forged), audit.digest);
@@ -557,7 +519,6 @@ mod tests {
         forged.blocker_mask ^= BLOCKER_HYRAX_EQUALITY_V1;
         assert_ne!(audit_digest(forged), audit.digest);
     }
-
     #[test]
     fn every_operational_path_fails_closed_before_decoding() {
         let profile = release_profile_v1();
@@ -576,7 +537,6 @@ mod tests {
             ));
         }
     }
-
     fn reconstruct_sigma_fixed<const N: usize>(independent: &[i64]) -> Option<Vec<i64>> {
         if N < 2 || !N.is_power_of_two() || independent.len() != N / 2 {
             return None;
@@ -589,11 +549,9 @@ mod tests {
         }
         Some(polynomial)
     }
-
     fn fixed_challenge(degree: usize, exponent: i64) -> Vec<i64> {
         add(&monomial(degree, exponent), &monomial(degree, -exponent))
     }
-
     fn geometric_sum(degree: usize, exponent: i64) -> Vec<i64> {
         let divisor = gcd(exponent.unsigned_abs() as usize, degree);
         let length = degree / divisor;
@@ -603,7 +561,6 @@ mod tests {
         }
         sum
     }
-
     fn sigma(polynomial: &[i64]) -> Vec<i64> {
         let mut result = vec![0_i64; polynomial.len()];
         for (exponent, coefficient) in polynomial.iter().copied().enumerate() {
@@ -614,7 +571,6 @@ mod tests {
         }
         result
     }
-
     fn monomial(degree: usize, exponent: i64) -> Vec<i64> {
         let period = (2 * degree) as i64;
         let reduced = exponent.rem_euclid(period) as usize;
@@ -626,15 +582,12 @@ mod tests {
         }
         polynomial
     }
-
     fn add(lhs: &[i64], rhs: &[i64]) -> Vec<i64> {
         lhs.iter().zip(rhs).map(|(lhs, rhs)| lhs + rhs).collect()
     }
-
     fn subtract(lhs: &[i64], rhs: &[i64]) -> Vec<i64> {
         lhs.iter().zip(rhs).map(|(lhs, rhs)| lhs - rhs).collect()
     }
-
     fn multiply(lhs: &[i64], rhs: &[i64]) -> Vec<i64> {
         let degree = lhs.len();
         assert_eq!(rhs.len(), degree);
@@ -652,7 +605,6 @@ mod tests {
         }
         product
     }
-
     fn gcd(mut lhs: usize, mut rhs: usize) -> usize {
         while rhs != 0 {
             let remainder = lhs % rhs;

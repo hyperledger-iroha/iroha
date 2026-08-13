@@ -1,6 +1,5 @@
 //! This module contains [`Asset`] structure, it's implementation and related traits and
 //! instructions implementations.
-
 use iroha_data_model::{
     asset::definition::ConfidentialPolicyMode,
     fastpq::{TransferDeltaTranscript, TransferSmtWitness, normalized_numeric_to_u64},
@@ -11,7 +10,6 @@ use iroha_data_model::{
     query::error::FindError,
 };
 use iroha_telemetry::metrics;
-
 use super::prelude::*;
 /// ISI module contains all instructions related to assets:
 /// - minting/burning assets
@@ -22,7 +20,6 @@ pub mod isi {
         collections::{BTreeMap, BTreeSet},
         sync::LazyLock,
     };
-
     use iroha_crypto::Hash;
     use iroha_data_model::{
         asset::{
@@ -51,7 +48,6 @@ pub mod isi {
         numeric::{Numeric, Quantity},
     };
     use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time as WallClockTime};
-
     use super::*;
     use crate::{
         smartcontracts::isi::account_admission::ensure_receiving_account, state::WorldTransaction,
@@ -1342,7 +1338,6 @@ pub mod isi {
         asset_id: &AssetId,
     ) -> Result<bool, Error> {
         use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
-
         let Some(custom) = parameters
             .custom()
             .get(&FxCorridorPolicyRegistry::parameter_id())
@@ -1385,7 +1380,6 @@ pub mod isi {
         account_id: &AccountId,
     ) -> Result<bool, Error> {
         use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
-
         let Some(custom) = state_transaction
             .world
             .parameters
@@ -1420,7 +1414,6 @@ pub mod isi {
         definition_id: &AssetDefinitionId,
     ) -> Result<bool, Error> {
         use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
-
         let Some(custom) = state_transaction
             .world
             .parameters
@@ -2658,7 +2651,6 @@ pub mod isi {
         authorization: crate::smartcontracts::isi::oracle::VerifiedOracleNumericMovement,
     ) -> Result<(), Error> {
         use crate::smartcontracts::isi::oracle::VerifiedOracleNumericPurpose;
-
         let (purpose, source_id, destination_id, amount) = authorization.into_parts();
         let economics = &state_transaction.oracle.economics;
         let (transcript_authority, retained_purpose) = match purpose {
@@ -2968,7 +2960,6 @@ pub mod isi {
         authorization: crate::smartcontracts::isi::world::isi::VerifiedGovernanceNumericMovement,
     ) -> Result<(), Error> {
         use crate::smartcontracts::isi::world::isi::VerifiedGovernanceNumericPurpose;
-
         let (purpose, source_id, destination_id, amount) = authorization.into_parts();
         let (transcript_authority, retained_purpose) = match purpose {
             VerifiedGovernanceNumericPurpose::LockSlash {
@@ -3284,7 +3275,6 @@ pub mod isi {
         authorization: crate::smartcontracts::isi::escrow::VerifiedNativeEscrowMovement,
     ) -> Result<(), Error> {
         use crate::smartcontracts::isi::escrow::VerifiedNativeEscrowPurpose;
-
         let (purpose, source_id, destination_id, amount) = authorization.into_parts();
         let movement_authorization = match purpose {
             VerifiedNativeEscrowPurpose::Funding {
@@ -3492,7 +3482,6 @@ pub mod isi {
         authorization: crate::smartcontracts::isi::vpn::VerifiedVpnNumericBatch,
     ) -> Result<(), Error> {
         use crate::smartcontracts::isi::vpn::VerifiedVpnNumericPurpose;
-
         let (purpose, legs) = authorization.into_parts();
         let movement_authorization = match purpose {
             VerifiedVpnNumericPurpose::Funding {
@@ -6128,7 +6117,6 @@ pub mod isi {
 /// Asset-related query implementations.
 pub mod query {
     use std::{collections::BTreeSet, sync::Arc};
-
     use eyre::Result;
     use iroha_data_model::{
         asset::{Asset, AssetDefinition, AssetEntry},
@@ -6140,7 +6128,6 @@ pub mod query {
         },
     };
     use norito::json::Value;
-
     #[cfg(test)]
     use super::isi::execute_user_numeric_asset_transfer;
     use super::*;
@@ -7106,7 +7093,6 @@ pub mod query {
     #[cfg(test)]
     mod tests {
         use std::collections::{BTreeMap, BTreeSet};
-
         use iroha_crypto::{Algorithm, Hash, KeyPair};
         use iroha_data_model::account::{
             NewAccount,
@@ -7131,7 +7117,6 @@ pub mod query {
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         use nonzero_ext::nonzero;
         use norito::json::Value;
-
         use super::*;
         use crate::{
             kura::Kura,

@@ -1,7 +1,5 @@
 //! Account-first dashboard rendering.
-
 use super::*;
-
 impl MochiApp {
     pub(super) fn poll_dashboard_updates(&mut self) {
         loop {
@@ -24,7 +22,6 @@ impl MochiApp {
             }
         }
     }
-
     fn spawn_dashboard_refresh(&mut self, supervisor: &Supervisor, peer_rows: &[PeerRow]) {
         if self.dashboard_inflight {
             return;
@@ -51,7 +48,6 @@ impl MochiApp {
             let _ = tx.send(DashboardUpdate { result });
         });
     }
-
     fn bootstrap_inputs(
         &self,
         supervisor: &Supervisor,
@@ -74,7 +70,6 @@ impl MochiApp {
             private_key,
         })
     }
-
     fn local_mcp_add_command(
         &self,
         supervisor: &Supervisor,
@@ -87,7 +82,6 @@ impl MochiApp {
             shell_quote(&mcp_url)
         ))
     }
-
     fn write_bootstrap_files(&mut self, supervisor: &Supervisor, peer_rows: &[PeerRow]) {
         let Some(inputs) = self.bootstrap_inputs(supervisor, peer_rows) else {
             self.last_error = Some("No peer available to render bootstrap files.".to_owned());
@@ -117,7 +111,6 @@ impl MochiApp {
             }
         }
     }
-
     pub(super) fn render_dashboard_view(
         &mut self,
         ui: &mut egui::Ui,
@@ -129,7 +122,6 @@ impl MochiApp {
         if self.dashboard_snapshot.is_none() && !self.dashboard_inflight {
             self.spawn_dashboard_refresh(supervisor, peer_rows);
         }
-
         let running = supervisor.is_any_running();
         let workspace_root = self.effective_workspace_recipe(supervisor);
         let sandbox_root = self.effective_sandbox_recipe(supervisor);
@@ -137,7 +129,6 @@ impl MochiApp {
         let mcp_url = self
             .bootstrap_inputs(supervisor, peer_rows)
             .and_then(|inputs| inputs.mcp_url);
-
         Frame::new()
             .fill(Color32::from_rgb(31, 37, 51))
             .stroke(Stroke::new(1.0, Color32::from_rgb(76, 95, 126)))
@@ -187,7 +178,6 @@ impl MochiApp {
                         }
                     });
                 });
-
                 ui.add_space(12.0);
                 ui.horizontal_wrapped(|ui| {
                     if let Some(inputs) = self.bootstrap_inputs(supervisor, peer_rows)
@@ -232,17 +222,14 @@ impl MochiApp {
                     }
                 });
             });
-
         ui.add_space(12.0);
         ui.columns(2, |columns| {
             columns[0].label(RichText::new("Dev accounts").strong());
             columns[0].add_space(6.0);
-
             if let Some(error) = &self.dashboard_error {
                 columns[0].colored_label(Color32::from_rgb(200, 64, 64), error);
                 columns[0].add_space(6.0);
             }
-
             if let Some(snapshot) = snapshot.as_ref() {
                 for (index, card) in snapshot.accounts.iter().enumerate() {
                     Frame::new()
@@ -299,7 +286,6 @@ impl MochiApp {
                     columns[0].add_space(6.0);
                 }
             }
-
             columns[1].label(RichText::new("Recent blocks").strong());
             columns[1].add_space(6.0);
             if let Some(snapshot) = snapshot.as_ref() {

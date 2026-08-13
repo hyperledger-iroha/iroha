@@ -3,9 +3,7 @@
 //! Governance checks and all deterministic validation precede storage writes.
 //! Proof admission is added only through the exhaustive native verifier
 //! boundary; there is deliberately no generic or opaque fallback verifier.
-
 use std::collections::BTreeSet;
-
 use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError},
@@ -54,7 +52,6 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use mv::storage::StorageReadOnly;
-
 use super::Execute;
 #[cfg(test)]
 use crate::privacy_verifier::VerifiedProofManagedPoolLedgerEffectTestPartsV1;
@@ -109,9 +106,7 @@ use crate::{
     },
     state::{StateTransaction, WorldReadOnly},
 };
-
 include!("privacy/governance_authorization.rs");
-
 fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
     let message = format!("privacy proof admission rejected: {error}");
     let invariant = match &error {
@@ -190,13 +185,11 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         invalid_privacy_parameter(message)
     }
 }
-
 type PreparedProofManagedNoteApplyV1 = (
     Vec<PrivacyNullifierKeyV1>,
     Vec<(PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1)>,
     PrivacyProofManagedPoolAccumulatorStateV1,
 );
-
 struct ProofManagedNoteApplyContextV1<'a, 'block, 'state> {
     effect: &'a VerifiedProofManagedPoolLedgerEffectV1,
     snapshot: &'a PrivacyProofManagedPoolSnapshotV1,
@@ -205,7 +198,6 @@ struct ProofManagedNoteApplyContextV1<'a, 'block, 'state> {
     expected_action_index: u32,
     state_transaction: &'a StateTransaction<'block, 'state>,
 }
-
 enum TypedProofManagedNoteApplyV1<'a> {
     IvmPrivateNote {
         statement: &'a IrohaIvmPrivateNoteStarkStatementV1,
@@ -220,7 +212,6 @@ enum TypedProofManagedNoteApplyV1<'a> {
         successor_state: &'a PrivacyProofManagedAccumulatorStateV1,
     },
 }
-
 fn prepare_proof_managed_note_apply_v1(
     context: ProofManagedNoteApplyContextV1<'_, '_, '_>,
     transition: TypedProofManagedNoteApplyV1<'_>,
@@ -300,7 +291,6 @@ fn prepare_proof_managed_note_apply_v1(
     let output_count = u32::try_from(verified_outputs.len()).map_err(|_| {
         Error::InvariantViolation(format!("verified {protocol_label} output count overflow").into())
     })?;
-
     let mut seen_nullifier_keys = BTreeSet::new();
     let mut nullifier_keys = Vec::new();
     nullifier_keys
@@ -330,7 +320,6 @@ fn prepare_proof_managed_note_apply_v1(
         }
         nullifier_keys.push(key);
     }
-
     let mut seen_commitment_keys = BTreeSet::new();
     let mut output_records = Vec::new();
     output_records
@@ -386,14 +375,12 @@ fn prepare_proof_managed_note_apply_v1(
         .map_err(invalid_privacy_parameter)?;
         output_records.push((key, record));
     }
-
     Ok((
         nullifier_keys,
         output_records,
         PrivacyProofManagedPoolAccumulatorStateV1::PrivateNote(expected_successor),
     ))
 }
-
 impl Execute for RegisterPrivacyProtocolActivationV1 {
     fn execute(
         self,
@@ -401,7 +388,6 @@ impl Execute for RegisterPrivacyProtocolActivationV1 {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_privacy_governance(authority, state_transaction)?;
-
         let current_height = state_transaction._curr_block.height().get();
         let key = PrivacyActivationKeyV1::new(self.activation.protocol_id);
         validate_privacy_registration_v1(
@@ -417,7 +403,6 @@ impl Execute for RegisterPrivacyProtocolActivationV1 {
         .map_err(|error| {
             invalid_privacy_parameter(format!("privacy activation registration rejected: {error}"))
         })?;
-
         state_transaction
             .world
             .privacy_activations
@@ -425,7 +410,6 @@ impl Execute for RegisterPrivacyProtocolActivationV1 {
         Ok(())
     }
 }
-
 impl Execute for SchedulePrivacyConsensusPolicyTighteningV1 {
     fn execute(
         self,
@@ -433,7 +417,6 @@ impl Execute for SchedulePrivacyConsensusPolicyTighteningV1 {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_privacy_governance(authority, state_transaction)?;
-
         let incoming_height = state_transaction.block_height();
         let current = *state_transaction.world.privacy_consensus_policy.get();
         current.validate().map_err(|error| {
@@ -467,7 +450,6 @@ impl Execute for SchedulePrivacyConsensusPolicyTighteningV1 {
                 "privacy consensus policy tightening rejected: {error}"
             ))
         })?;
-
         *state_transaction.world.privacy_consensus_policy.get_mut() =
             iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
                 current_limits: current.current_limits,
@@ -476,7 +458,6 @@ impl Execute for SchedulePrivacyConsensusPolicyTighteningV1 {
         Ok(())
     }
 }
-
 impl Execute for SchedulePrivacyProtocolLimitsTighteningV1 {
     fn execute(
         self,
@@ -484,7 +465,6 @@ impl Execute for SchedulePrivacyProtocolLimitsTighteningV1 {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_privacy_governance(authority, state_transaction)?;
-
         let incoming_height = state_transaction.block_height();
         let key = PrivacyActivationKeyV1::new(self.protocol_id);
         let current = state_transaction
@@ -529,7 +509,6 @@ impl Execute for SchedulePrivacyProtocolLimitsTighteningV1 {
                 "privacy protocol-limit tightening is not executable: {error}"
             ))
         })?;
-
         let mut next = current;
         next.pending_protocol_limits_tightening = Some(pending);
         state_transaction
@@ -539,7 +518,6 @@ impl Execute for SchedulePrivacyProtocolLimitsTighteningV1 {
         Ok(())
     }
 }
-
 impl Execute for TransitionPrivacyProtocolLifecycleV1 {
     fn execute(
         self,
@@ -547,7 +525,6 @@ impl Execute for TransitionPrivacyProtocolLifecycleV1 {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_privacy_governance(authority, state_transaction)?;
-
         let current_height = state_transaction._curr_block.height().get();
         let key = PrivacyActivationKeyV1::new(self.protocol_id);
         let current = state_transaction
@@ -565,7 +542,6 @@ impl Execute for TransitionPrivacyProtocolLifecycleV1 {
             .map_err(|error| {
                 invalid_privacy_parameter(format!("privacy lifecycle transition rejected: {error}"))
             })?;
-
         let mut next = current;
         next.lifecycle = self.next_lifecycle;
         state_transaction
@@ -575,7 +551,6 @@ impl Execute for TransitionPrivacyProtocolLifecycleV1 {
         Ok(())
     }
 }
-
 impl Execute for PublishPrivacyRootV1 {
     fn execute(
         self,
@@ -583,7 +558,6 @@ impl Execute for PublishPrivacyRootV1 {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_privacy_governance(authority, state_transaction)?;
-
         self.publication.validate().map_err(|error| {
             invalid_privacy_parameter(format!("privacy root publication rejected: {error}"))
         })?;
@@ -628,7 +602,6 @@ impl Execute for PublishPrivacyRootV1 {
                 "proof-managed privacy roots require their protocol-specific typed bootstrap and cannot be published generically",
             ));
         }
-
         let head_key = PrivacyRootHeadKeyV1::new(self.publication.namespace, self.publication.role)
             .map_err(invalid_privacy_parameter)?;
         let current_head = state_transaction
@@ -652,7 +625,6 @@ impl Execute for PublishPrivacyRootV1 {
             }
             _ => {}
         }
-
         if let Some(head) = current_head {
             let retained_head = PrivacyRootKeyV1::new(
                 head_key.namespace(),
@@ -681,7 +653,6 @@ impl Execute for PublishPrivacyRootV1 {
                 "privacy root history exists without a current head".into(),
             ));
         }
-
         let root_key = PrivacyRootKeyV1::new(
             self.publication.namespace,
             self.publication.role,
@@ -724,7 +695,6 @@ impl Execute for PublishPrivacyRootV1 {
             retention_anchor,
         )
         .map_err(invalid_privacy_parameter)?;
-
         for key in removals {
             state_transaction.world.privacy_roots.remove(key);
         }
@@ -739,7 +709,6 @@ impl Execute for PublishPrivacyRootV1 {
         Ok(())
     }
 }
-
 impl Execute for BootstrapPrivacyOrchardPoolV1 {
     fn execute(
         self,
@@ -758,7 +727,6 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
         self.bootstrap.validate().map_err(|error| {
             invalid_privacy_parameter(format!("Orchard pool bootstrap rejected: {error}"))
         })?;
-
         let current_height = state_transaction._curr_block.height().get();
         let activation_key =
             PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
@@ -789,7 +757,6 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
                 active.state_since_height
             )));
         }
-
         super::asset::isi::validate_committed_public_balance_scope(
             state_transaction,
             &self.bootstrap.asset_definition_id,
@@ -807,7 +774,6 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
                 self.bootstrap.reserve_account
             )));
         }
-
         let namespace = self.bootstrap.namespace();
         let state_key = PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
             .map_err(invalid_privacy_parameter)?;
@@ -849,7 +815,6 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
                 "Orchard pool state exists without a current typed head".into(),
             ));
         }
-
         let bootstrap_digest = self.bootstrap.digest().map_err(|error| {
             Error::InvariantViolation(
                 format!("Orchard pool bootstrap canonical encoding failed: {error}").into(),
@@ -893,7 +858,6 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
                 "new Orchard root history unexpectedly requires pruning".into(),
             ));
         }
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -910,7 +874,6 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
         Ok(())
     }
 }
-
 impl Execute for BootstrapPrivacyProofManagedPoolV1 {
     fn execute(
         self,
@@ -931,7 +894,6 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
         self.bootstrap.validate().map_err(|error| {
             invalid_privacy_parameter(format!("proof-managed pool bootstrap rejected: {error}"))
         })?;
-
         let protocol_id = self.bootstrap.protocol_id();
         let namespace = self.bootstrap.namespace();
         let root_role =
@@ -977,7 +939,6 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
                 active.state_since_height
             )));
         }
-
         state_transaction
             .world
             .asset_definition(self.bootstrap.asset_definition_id())
@@ -1001,7 +962,6 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
                 "proof-managed pool reserve account `{reserve_account}` does not exist"
             )));
         }
-
         let config_key = PrivacyCommitmentKeyV1::proof_managed_pool_config(namespace)
             .map_err(invalid_privacy_parameter)?;
         let head_key =
@@ -1060,7 +1020,6 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
                 "proof-managed pool state exists without a current typed head".into(),
             ));
         }
-
         let bootstrap_digest = self.bootstrap.digest().map_err(|error| {
             Error::InvariantViolation(
                 format!("proof-managed pool bootstrap canonical encoding failed: {error}").into(),
@@ -1154,7 +1113,6 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
                 "proof-managed bootstrap has no canonical output set".into(),
             ));
         }
-
         const INITIAL_EPOCH: u64 = 1;
         let root_provenance = PrivacyRootProvenanceV1::proof_managed_pool_bootstrap(
             bootstrap_digest,
@@ -1186,7 +1144,6 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
                 "new proof-managed root history unexpectedly requires pruning".into(),
             ));
         }
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -1209,7 +1166,6 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
         Ok(())
     }
 }
-
 impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
     fn execute(
         self,
@@ -1237,7 +1193,6 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
                 ))
             },
         )?;
-
         let current_height = state_transaction._curr_block.height().get();
         let namespace = self.bootstrap.namespace();
         let activation_key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::IrohaZkAmsV1);
@@ -1268,7 +1223,6 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
                 active.state_since_height
             )));
         }
-
         let head_key = PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::AccountRegistry)
             .map_err(invalid_privacy_parameter)?;
         if state_transaction
@@ -1328,7 +1282,6 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
                 "ZK-AMS state items exist without a current registry head".into(),
             ));
         }
-
         let bootstrap_digest = self.bootstrap.digest();
         let issuer_record_key = PrivacyCommitmentKeyV1::zk_ams_issuer_policy_record(
             namespace,
@@ -1373,7 +1326,6 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
                 "new ZK-AMS registry history unexpectedly requires pruning".into(),
             ));
         }
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -1390,7 +1342,6 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
         Ok(())
     }
 }
-
 impl Execute for BootstrapPrivacyPgcAccountsV1 {
     fn execute(
         self,
@@ -1398,7 +1349,6 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_privacy_governance(authority, state_transaction)?;
-
         let encoded_action_bytes = norito::to_bytes(&self)
             .ok()
             .and_then(|bytes| u64::try_from(bytes.len()).ok())
@@ -1423,7 +1373,6 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
                 "native and data-model PGC bootstrap proof caps differ".into(),
             ));
         }
-
         let current_height = state_transaction._curr_block.height().get();
         let activation_key = PrivacyActivationKeyV1::new(self.bootstrap.namespace.protocol_id());
         let activation = state_transaction
@@ -1455,7 +1404,6 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
                 active.state_since_height
             )));
         }
-
         let head_key =
             PrivacyRootHeadKeyV1::new(self.bootstrap.namespace, PrivacyRootRoleV1::PgcAccountState)
                 .map_err(invalid_privacy_parameter)?;
@@ -1506,7 +1454,6 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
                 "Anonymous PGC accounts exist without a current head".into(),
             ));
         }
-
         let computed_root = compute_privacy_pgc_account_state_root_v1(
             self.bootstrap.namespace,
             self.bootstrap.initial_epoch,
@@ -1519,7 +1466,6 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
                 "privacy PGC bootstrap root does not match the canonical account table",
             ));
         }
-
         let bootstrap_digest = self.bootstrap.digest().map_err(|error| {
             Error::InvariantViolation(
                 format!("privacy PGC bootstrap canonical encoding failed: {error}").into(),
@@ -1641,7 +1587,6 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
             .map_err(invalid_privacy_parameter)?;
             account_updates.push((key, state));
         }
-
         let root_provenance = PrivacyRootProvenanceV1::verified_bootstrap(
             bootstrap_digest,
             bootstrap_proof_digest,
@@ -1681,7 +1626,6 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
             ));
         }
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
-
         state_transaction
             .world
             .privacy_pgc_pool_invariants
@@ -1703,7 +1647,6 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
         Ok(())
     }
 }
-
 fn validate_zk_ace_policy_references(
     policy: &iroha_data_model::privacy::PrivacyZkAcePolicyRecordV1,
     state_transaction: &StateTransaction<'_, '_>,
@@ -1721,7 +1664,6 @@ fn validate_zk_ace_policy_references(
     }
     Ok(())
 }
-
 struct PlannedZkX509RootAppendV1 {
     root_key: PrivacyRootKeyV1,
     provenance: PrivacyRootProvenanceV1,
@@ -1729,7 +1671,6 @@ struct PlannedZkX509RootAppendV1 {
     next_head: PrivacyRootHeadRecordV1,
     removals: Vec<PrivacyRootKeyV1>,
 }
-
 fn plan_zk_x509_root_append_v1(
     publication: PrivacyRootPublicationV1,
     provenance: PrivacyRootProvenanceV1,
@@ -1807,7 +1748,6 @@ fn plan_zk_x509_root_append_v1(
             }
         }
     }
-
     let removals = plan_privacy_root_history_update_v1(
         &state_transaction.world.privacy_roots,
         &[root_key],
@@ -1841,7 +1781,6 @@ fn plan_zk_x509_root_append_v1(
         removals,
     })
 }
-
 fn plan_zk_x509_ca_root_append_v1(
     record: PrivacyZkX509TrustAnchorRecordV1,
     state_transaction: &StateTransaction<'_, '_>,
@@ -1871,7 +1810,6 @@ fn plan_zk_x509_ca_root_append_v1(
     .map_err(invalid_privacy_parameter)?;
     plan_zk_x509_root_append_v1(publication, provenance, state_transaction)
 }
-
 fn apply_zk_x509_root_append_v1(
     plan: PlannedZkX509RootAppendV1,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -1888,7 +1826,6 @@ fn apply_zk_x509_root_append_v1(
         .privacy_root_heads
         .insert(plan.head_key, plan.next_head);
 }
-
 fn validate_zk_x509_crl_freshness_v1(
     record: PrivacyZkX509CrlRecordV1,
     block_timestamp_ms: u64,
@@ -1912,7 +1849,6 @@ fn validate_zk_x509_crl_freshness_v1(
     }
     Ok(())
 }
-
 fn validate_current_zk_x509_ca_root_v1(
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
     state_transaction: &StateTransaction<'_, '_>,
@@ -1933,7 +1869,6 @@ fn validate_current_zk_x509_ca_root_v1(
         )
     })
 }
-
 fn preflight_x509_governance_action_v1<T: norito::codec::Encode>(
     instruction: &T,
     label: &str,
@@ -1949,7 +1884,6 @@ fn preflight_x509_governance_action_v1<T: norito::codec::Encode>(
     state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
     Ok((expected_action_index, encoded_action_bytes))
 }
-
 fn x509_trust_anchor_lineage_revision_count_v1(
     trust_anchor_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
     state_transaction: &StateTransaction<'_, '_>,
@@ -1969,7 +1903,6 @@ fn x509_trust_anchor_lineage_revision_count_v1(
     }
     Ok(count)
 }
-
 fn x509_certificate_policy_lineage_revision_count_v1(
     trust_anchor_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
     policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
@@ -1993,7 +1926,6 @@ fn x509_certificate_policy_lineage_revision_count_v1(
     }
     Ok(count)
 }
-
 fn require_registered_zk_ace_protocol(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
@@ -2014,7 +1946,6 @@ fn require_registered_zk_ace_protocol(
         )
     })
 }
-
 fn require_registered_bootle_lantern_protocol(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
@@ -2042,7 +1973,6 @@ fn require_registered_bootle_lantern_protocol(
         )
     })
 }
-
 fn require_registered_vega_protocol(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
@@ -2066,7 +1996,6 @@ fn require_registered_vega_protocol(
         )
     })
 }
-
 impl Execute for RegisterPrivacyZkX509TrustAnchorV1 {
     fn execute(
         self,
@@ -2116,7 +2045,6 @@ impl Execute for RegisterPrivacyZkX509TrustAnchorV1 {
         )
         .map_err(invalid_privacy_parameter)?;
         let root_plan = plan_zk_x509_ca_root_append_v1(self.record, state_transaction)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -2126,7 +2054,6 @@ impl Execute for RegisterPrivacyZkX509TrustAnchorV1 {
         Ok(())
     }
 }
-
 impl Execute for RotatePrivacyZkX509TrustAnchorV1 {
     fn execute(
         self,
@@ -2204,7 +2131,6 @@ impl Execute for RotatePrivacyZkX509TrustAnchorV1 {
         )
         .map_err(invalid_privacy_parameter)?;
         let root_plan = plan_zk_x509_ca_root_append_v1(self.successor, state_transaction)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -2214,7 +2140,6 @@ impl Execute for RotatePrivacyZkX509TrustAnchorV1 {
         Ok(())
     }
 }
-
 impl Execute for RevokePrivacyZkX509TrustAnchorV1 {
     fn execute(
         self,
@@ -2302,7 +2227,6 @@ impl Execute for RevokePrivacyZkX509TrustAnchorV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -2311,7 +2235,6 @@ impl Execute for RevokePrivacyZkX509TrustAnchorV1 {
         Ok(())
     }
 }
-
 impl Execute for RegisterPrivacyZkX509CertificatePolicyV1 {
     fn execute(
         self,
@@ -2379,7 +2302,6 @@ impl Execute for RegisterPrivacyZkX509CertificatePolicyV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -2388,7 +2310,6 @@ impl Execute for RegisterPrivacyZkX509CertificatePolicyV1 {
         Ok(())
     }
 }
-
 impl Execute for RotatePrivacyZkX509CertificatePolicyV1 {
     fn execute(
         self,
@@ -2489,7 +2410,6 @@ impl Execute for RotatePrivacyZkX509CertificatePolicyV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -2498,7 +2418,6 @@ impl Execute for RotatePrivacyZkX509CertificatePolicyV1 {
         Ok(())
     }
 }
-
 impl Execute for RevokePrivacyZkX509CertificatePolicyV1 {
     fn execute(
         self,
@@ -2603,7 +2522,6 @@ impl Execute for RevokePrivacyZkX509CertificatePolicyV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -2612,7 +2530,6 @@ impl Execute for RevokePrivacyZkX509CertificatePolicyV1 {
         Ok(())
     }
 }
-
 impl Execute for RegisterPrivacyZkX509CrlV1 {
     fn execute(
         self,
@@ -2703,7 +2620,6 @@ impl Execute for RegisterPrivacyZkX509CrlV1 {
         Ok(())
     }
 }
-
 impl Execute for RotatePrivacyZkX509CrlV1 {
     fn execute(
         self,
@@ -2768,7 +2684,6 @@ impl Execute for RotatePrivacyZkX509CrlV1 {
         Ok(())
     }
 }
-
 impl Execute for RevokePrivacyZkX509CrlV1 {
     fn execute(
         self,
@@ -2821,7 +2736,6 @@ impl Execute for RevokePrivacyZkX509CrlV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -2830,7 +2744,6 @@ impl Execute for RevokePrivacyZkX509CrlV1 {
         Ok(())
     }
 }
-
 impl Execute for RegisterPrivacyZkAcePolicyV1 {
     fn execute(
         self,
@@ -2884,7 +2797,6 @@ impl Execute for RegisterPrivacyZkAcePolicyV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -2893,7 +2805,6 @@ impl Execute for RegisterPrivacyZkAcePolicyV1 {
         Ok(())
     }
 }
-
 impl Execute for RotatePrivacyZkAcePolicyV1 {
     fn execute(
         self,
@@ -2940,7 +2851,6 @@ impl Execute for RotatePrivacyZkAcePolicyV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -2949,7 +2859,6 @@ impl Execute for RotatePrivacyZkAcePolicyV1 {
         Ok(())
     }
 }
-
 impl Execute for RevokePrivacyZkAcePolicyV1 {
     fn execute(
         self,
@@ -3002,7 +2911,6 @@ impl Execute for RevokePrivacyZkAcePolicyV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -3011,7 +2919,6 @@ impl Execute for RevokePrivacyZkAcePolicyV1 {
         Ok(())
     }
 }
-
 impl Execute for RegisterPrivacyBootleLanternIssuerPolicyV1 {
     fn execute(
         self,
@@ -3070,7 +2977,6 @@ impl Execute for RegisterPrivacyBootleLanternIssuerPolicyV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -3079,7 +2985,6 @@ impl Execute for RegisterPrivacyBootleLanternIssuerPolicyV1 {
         Ok(())
     }
 }
-
 impl Execute for RotatePrivacyBootleLanternIssuerPolicyV1 {
     fn execute(
         self,
@@ -3146,7 +3051,6 @@ impl Execute for RotatePrivacyBootleLanternIssuerPolicyV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -3155,7 +3059,6 @@ impl Execute for RotatePrivacyBootleLanternIssuerPolicyV1 {
         Ok(())
     }
 }
-
 impl Execute for RevokePrivacyBootleLanternIssuerPolicyV1 {
     fn execute(
         self,
@@ -3222,7 +3125,6 @@ impl Execute for RevokePrivacyBootleLanternIssuerPolicyV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -3231,7 +3133,6 @@ impl Execute for RevokePrivacyBootleLanternIssuerPolicyV1 {
         Ok(())
     }
 }
-
 fn vega_issuer_lineage_revision_count_v1(
     issuer_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
     state_transaction: &StateTransaction<'_, '_>,
@@ -3253,7 +3154,6 @@ fn vega_issuer_lineage_revision_count_v1(
     }
     Ok(count)
 }
-
 fn validate_vega_issuer_candidate_key_v1(
     record: &PrivacyVegaIssuerRecordV1,
     state_transaction: &StateTransaction<'_, '_>,
@@ -3282,7 +3182,6 @@ fn validate_vega_issuer_candidate_key_v1(
     }
     Ok(facts)
 }
-
 impl Execute for RegisterPrivacyVegaIssuerV1 {
     fn execute(
         self,
@@ -3328,7 +3227,6 @@ impl Execute for RegisterPrivacyVegaIssuerV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -3337,7 +3235,6 @@ impl Execute for RegisterPrivacyVegaIssuerV1 {
         Ok(())
     }
 }
-
 impl Execute for RotatePrivacyVegaIssuerV1 {
     fn execute(
         self,
@@ -3425,7 +3322,6 @@ impl Execute for RotatePrivacyVegaIssuerV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -3434,7 +3330,6 @@ impl Execute for RotatePrivacyVegaIssuerV1 {
         Ok(())
     }
 }
-
 impl Execute for RevokePrivacyVegaIssuerV1 {
     fn execute(
         self,
@@ -3515,7 +3410,6 @@ impl Execute for RevokePrivacyVegaIssuerV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
-
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
@@ -3524,7 +3418,6 @@ impl Execute for RevokePrivacyVegaIssuerV1 {
         Ok(())
     }
 }
-
 fn load_active_bootle_lantern_policy_v1(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
@@ -3567,7 +3460,6 @@ fn load_active_bootle_lantern_policy_v1(
     }
     Ok(policy)
 }
-
 fn load_vega_issuer_for_statement_v1(
     statement: &iroha_data_model::privacy::VegaExistingCredentialStatementV1,
     commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
@@ -3594,7 +3486,6 @@ fn load_vega_issuer_for_statement_v1(
             )
         })
 }
-
 impl Execute for SubmitPrivacyProofV1 {
     fn execute(
         self,
@@ -3913,7 +3804,6 @@ impl Execute for SubmitPrivacyProofV1 {
                     "proof-managed value balance has no governed reserve account".into(),
                 ));
             }
-
             let mut seen_nullifier_keys = BTreeSet::new();
             for nullifier in nullifiers {
                 let key = PrivacyNullifierKeyV1::proof_managed_nullifier(namespace, *nullifier)
@@ -4115,7 +4005,6 @@ impl Execute for SubmitPrivacyProofV1 {
                     "ZK-AMS statement registry record does not match the authoritative head",
                 ));
             }
-
             match &statement.action {
                 PrivacyZkAmsActionV1::BatchAdmission(batch) => {
                     if batch.account_registry_root != snapshot.current_root()
@@ -4587,7 +4476,6 @@ impl Execute for SubmitPrivacyProofV1 {
             },
         )
         .map_err(privacy_verification_error)?;
-
         if effects.protocol_id() != self.envelope.protocol_id
             || effects.statement_digest() != self.envelope.statement_digest
             || effects.action_index() != expected_action_index
@@ -4597,7 +4485,6 @@ impl Execute for SubmitPrivacyProofV1 {
                 "native privacy verifier returned effects inconsistent with its envelope".into(),
             ));
         }
-
         match effects.into_ledger() {
             VerifiedPrivacyLedgerEffectsV1::None => state_transaction
                 .reserve_privacy_action(expected_action_index, encoded_action_bytes),
@@ -4683,7 +4570,6 @@ impl Execute for SubmitPrivacyProofV1 {
                     expected_action_index,
                 )
                 .map_err(invalid_privacy_parameter)?;
-
                 state_transaction
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
                 state_transaction
@@ -4755,7 +4641,6 @@ impl Execute for SubmitPrivacyProofV1 {
                         "Orchard reserve account cannot submit a directional public bridge",
                     ));
                 }
-
                 let mut seen_nullifiers = BTreeSet::new();
                 let mut nullifier_keys = Vec::with_capacity(effect.nullifiers().len());
                 for nullifier in effect.nullifiers() {
@@ -4842,7 +4727,6 @@ impl Execute for SubmitPrivacyProofV1 {
                     retention_anchor,
                 )
                 .map_err(invalid_privacy_parameter)?;
-
                 state_transaction
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
                 let balance = effect.value_balance();
@@ -4961,7 +4845,6 @@ impl Execute for SubmitPrivacyProofV1 {
                             .into(),
                     ));
                 }
-
                 let reserve_account = snapshot.bootstrap().reserve_account();
                 match (effect.value_balance(), reserve_account) {
                     (Some(balance), Some(reserve_account)) => {
@@ -4981,7 +4864,6 @@ impl Execute for SubmitPrivacyProofV1 {
                         ));
                     }
                 }
-
                 let (nullifier_len, output_len) = match effect.transition() {
                     VerifiedProofManagedPoolTransitionV1::Fcmp {
                         key_images,
@@ -5211,7 +5093,6 @@ impl Execute for SubmitPrivacyProofV1 {
                         )?
                     }
                 };
-
                 let config_key =
                     PrivacyCommitmentKeyV1::proof_managed_pool_config(effect.namespace())
                         .map_err(invalid_privacy_parameter)?;
@@ -5276,7 +5157,6 @@ impl Execute for SubmitPrivacyProofV1 {
                     retention_anchor,
                 )
                 .map_err(invalid_privacy_parameter)?;
-
                 state_transaction
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
                 if let (Some(balance), Some(reserve_account)) =
@@ -5423,7 +5303,6 @@ impl Execute for SubmitPrivacyProofV1 {
                 )
                 .map_err(invalid_privacy_parameter)?;
                 let amount = Quantity::from(effect.amount);
-
                 state_transaction
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
                 super::asset::isi::execute_verified_privacy_public_balance_transfer(
@@ -5561,7 +5440,6 @@ impl Execute for SubmitPrivacyProofV1 {
                         "verified ZK-AMS successor root is inconsistent".into(),
                     ));
                 }
-
                 let item_provenance = PrivacyStateItemRecordV1::zk_ams_verified_proof(
                     snapshot.bootstrap_digest(),
                     self.envelope.statement_digest,
@@ -5617,7 +5495,6 @@ impl Execute for SubmitPrivacyProofV1 {
                     retention_anchor,
                 )
                 .map_err(invalid_privacy_parameter)?;
-
                 state_transaction
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
                 for key in removals {
@@ -5762,7 +5639,6 @@ impl Execute for SubmitPrivacyProofV1 {
                     expected_action_index,
                 )
                 .map_err(invalid_privacy_parameter)?;
-
                 state_transaction
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
                 Register::account(Account::new(effect.account_id.clone()))
@@ -5819,7 +5695,6 @@ impl Execute for SubmitPrivacyProofV1 {
                         "verified Anonymous PGC successor root is inconsistent".into(),
                     ));
                 }
-
                 let account_provenance = PrivacyPgcAccountProvenanceV1::verified_proof(
                     self.envelope.statement_digest,
                     state_transaction.block_height(),
@@ -5902,7 +5777,6 @@ impl Execute for SubmitPrivacyProofV1 {
                     retention_anchor,
                 )
                 .map_err(invalid_privacy_parameter)?;
-
                 state_transaction
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
                 for key in removals {
@@ -5927,12 +5801,10 @@ impl Execute for SubmitPrivacyProofV1 {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use core::num::NonZeroU64;
     use std::{str::FromStr as _, sync::OnceLock};
-
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         NetworkId, Registrable,
@@ -5976,7 +5848,6 @@ mod tests {
     use mv::storage::Storage;
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest, Sha256};
-
     use super::*;
     #[cfg(feature = "zk-stark")]
     use crate::privacy_verifier::{ZkAceRuntimeFixtureForTest, zk_ace_runtime_fixture_for_test};
@@ -6006,41 +5877,34 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
     const TEST_CHAIN_ID: &str = "taira-pgc-runtime-test";
     const TEST_GENESIS_HASH: [u8; 32] = [0x91; 32];
     const TEST_BLOCK_HEIGHT: u64 = 2;
-
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed(TEST_GENESIS_HASH),
         ))
     }
-
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
     }
-
     impl KatRng {
         const fn new(seed: [u8; 32]) -> Self {
             Self { seed, counter: 0 }
         }
     }
-
     impl RngCore for KatRng {
         fn next_u32(&mut self) -> u32 {
             let mut bytes = [0; 4];
             self.fill_bytes(&mut bytes);
             u32::from_be_bytes(bytes)
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut bytes = [0; 8];
             self.fill_bytes(&mut bytes);
             u64::from_be_bytes(bytes)
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             for chunk in destination.chunks_mut(32) {
                 let mut hash = Sha256::new();
@@ -6052,23 +5916,18 @@ mod tests {
                 chunk.copy_from_slice(&block[..chunk.len()]);
             }
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             self.fill_bytes(destination);
             Ok(())
         }
     }
-
     impl CryptoRng for KatRng {}
-
     fn secret(value: u64) -> SecretScalarV1 {
         let mut bytes = [0; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());
         SecretScalarV1::from_bytes(bytes).expect("canonical non-zero scalar")
     }
-
     include!("privacy/active_lifecycle_helper.rs");
-
     fn valid_bootstrap_instruction() -> BootstrapPrivacyPgcAccountsV1 {
         static INSTRUCTION: OnceLock<BootstrapPrivacyPgcAccountsV1> = OnceLock::new();
         INSTRUCTION
@@ -6171,7 +6030,6 @@ mod tests {
             })
             .clone()
     }
-
     fn valid_payment_instruction() -> SubmitPrivacyProofV1 {
         static INSTRUCTION: OnceLock<SubmitPrivacyProofV1> = OnceLock::new();
         INSTRUCTION
@@ -6353,7 +6211,6 @@ mod tests {
             })
             .clone()
     }
-
     fn bind_submit_privacy_instruction(
         transaction: &mut StateTransaction<'_, '_>,
         instruction: &SubmitPrivacyProofV1,
@@ -6367,14 +6224,12 @@ mod tests {
             .expect("privacy submission encodes canonically");
         transaction.bind_privacy_transaction_intent_v1(Some((digest, submission_hash)));
     }
-
     fn bind_payment_instruction(
         transaction: &mut StateTransaction<'_, '_>,
         instruction: &SubmitPrivacyProofV1,
     ) {
         bind_submit_privacy_instruction(transaction, instruction);
     }
-
     fn state_with_activation(lifecycle: PrivacyProtocolLifecycleV1) -> State {
         let activation = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
             .expect("compiled Anonymous PGC profile")
@@ -6396,7 +6251,6 @@ mod tests {
         ));
         state
     }
-
     fn bootle_lantern_public_matrix(seed: usize) -> BootleLanternIssuerPublicMatrixV1 {
         let first_column = core::array::from_fn(|block| BootleLanternPolynomialV1 {
             coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
@@ -6411,7 +6265,6 @@ mod tests {
         BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
             .expect("canonical degree-512 multiplication matrix")
     }
-
     fn bootle_lantern_policy(
         epoch: u64,
         lifecycle: BootleLanternIssuerPolicyLifecycleV1,
@@ -6440,7 +6293,6 @@ mod tests {
         policy.validate().expect("valid Bootle/Lantern policy");
         policy
     }
-
     fn bootle_lantern_statement(
         policy: &BootleLanternIssuerPolicyV1,
     ) -> IrohaBootleLanternAnoncredStatementV1 {
@@ -6468,7 +6320,6 @@ mod tests {
             disclosures: Vec::new(),
         }
     }
-
     fn rotate_bootle_lantern_policy(
         current: &BootleLanternIssuerPolicyV1,
     ) -> BootleLanternIssuerPolicyV1 {
@@ -6492,7 +6343,6 @@ mod tests {
             .expect("canonical active successor");
         successor
     }
-
     fn revoke_bootle_lantern_policy(
         current: &BootleLanternIssuerPolicyV1,
     ) -> BootleLanternIssuerPolicyV1 {
@@ -6511,7 +6361,6 @@ mod tests {
             .expect("canonical terminal successor");
         successor
     }
-
     fn state_with_exact_bootle_lantern_activation() -> State {
         let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
         let activation = compiled_privacy_profile_v1(protocol_id)
@@ -6519,7 +6368,6 @@ mod tests {
             .activation_record(active_lifecycle());
         validate_compiled_privacy_activation_v1(&activation)
             .expect("exact compiled Bootle/Lantern activation");
-
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -6538,7 +6386,6 @@ mod tests {
         ));
         state
     }
-
     fn vega_issuer_record(
         issuer_id: PrivacyIssuerIdV1,
         epoch: u64,
@@ -6562,7 +6409,6 @@ mod tests {
         )
         .expect("canonical governed Vega issuer fixture")
     }
-
     fn state_with_exact_vega_activation() -> State {
         let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
         let activation = compiled_privacy_profile_v1(protocol_id)
@@ -6570,7 +6416,6 @@ mod tests {
             .activation_record(active_lifecycle());
         validate_compiled_privacy_activation_v1(&activation)
             .expect("exact compiled Vega activation");
-
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -6589,14 +6434,12 @@ mod tests {
         ));
         state
     }
-
     fn zk_ace_asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("asset").expect("asset name"),
         )
     }
-
     fn zk_ace_policy(
         epoch: u64,
         identity_byte: u8,
@@ -6613,19 +6456,15 @@ mod tests {
         )
         .expect("canonical ZK-ACE policy fixture")
     }
-
     fn valid_zk_ace_policy() -> PrivacyZkAcePolicyRecordV1 {
         zk_ace_policy(1, 0xA2, PrivacyZkAcePolicyLifecycleV1::Active)
     }
-
     fn x509_trust_anchor_id() -> PrivacyIssuerIdV1 {
         PrivacyIssuerIdV1::new([0xC1; 32])
     }
-
     fn x509_policy_id() -> PrivacyPolicyIdV1 {
         PrivacyPolicyIdV1::new([0xC2; 32])
     }
-
     fn x509_ca_namespace() -> PrivacyNamespaceV1 {
         PrivacyNamespaceV1::new(
             PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
@@ -6634,7 +6473,6 @@ mod tests {
             }),
         )
     }
-
     fn x509_namespace() -> PrivacyNamespaceV1 {
         PrivacyNamespaceV1::new(
             PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
@@ -6644,7 +6482,6 @@ mod tests {
             }),
         )
     }
-
     fn x509_trust_anchor(
         epoch: u64,
         trust_store_byte: u8,
@@ -6666,7 +6503,6 @@ mod tests {
         )
         .expect("canonical X.509 trust-anchor fixture")
     }
-
     fn x509_policy(
         epoch: u64,
         policy_byte: u8,
@@ -6695,7 +6531,6 @@ mod tests {
         )
         .expect("canonical X.509 certificate-policy fixture")
     }
-
     #[allow(clippy::too_many_arguments)]
     fn x509_crl(
         record_epoch: u64,
@@ -6721,14 +6556,12 @@ mod tests {
         )
         .expect("canonical X.509 signed-CRL fixture")
     }
-
     fn state_with_exact_zk_ace_activation() -> State {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
         let activation = compiled_privacy_profile_v1(protocol_id)
             .expect("compiled ZK-ACE profile")
             .activation_record(active_lifecycle());
         validate_compiled_privacy_activation_v1(&activation).expect("exact compiled activation");
-
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -6754,11 +6587,9 @@ mod tests {
         ));
         state
     }
-
     fn test_header() -> BlockHeader {
         test_header_at(TEST_BLOCK_HEIGHT)
     }
-
     fn test_header_at(height: u64) -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),
@@ -6769,7 +6600,6 @@ mod tests {
             0,
         )
     }
-
     fn state_with_fcmp_runtime_fixture(fixture: &FcmpRuntimeFixtureForTest) -> State {
         let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &fixture.envelope.statement
         else {
@@ -6790,7 +6620,6 @@ mod tests {
             PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1),
             fixture.activation,
         );
-
         let snapshot = &fixture.snapshot;
         let namespace = snapshot.namespace();
         let bootstrap = snapshot.bootstrap().clone();
@@ -6854,7 +6683,6 @@ mod tests {
             )
             .expect("FCMP++ bootstrap root head"),
         );
-
         let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -6867,7 +6695,6 @@ mod tests {
         ));
         state
     }
-
     fn fcmp_test_header(fixture: &FcmpRuntimeFixtureForTest) -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(fixture.current_height).expect("non-zero FCMP++ height"),
@@ -6878,13 +6705,11 @@ mod tests {
             0,
         )
     }
-
     fn grant_governance(state_transaction: &mut StateTransaction<'_, '_>) {
         state_transaction
             .world
             .add_account_permission(&ALICE_ID, Permission::from(CanEnactGovernance));
     }
-
     fn privacy_map_counts(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> (usize, usize, usize, usize) {
@@ -6899,7 +6724,6 @@ mod tests {
             state_transaction.world.privacy_root_heads.iter().count(),
         )
     }
-
     #[derive(Clone, Debug, PartialEq)]
     struct ProofManagedStateSnapshot {
         roots: Vec<Vec<u8>>,
@@ -6909,7 +6733,6 @@ mod tests {
         config: Option<PrivacyStateItemRecordV1>,
         budget: (u32, u64, u32, u64),
     }
-
     fn proof_managed_state_snapshot(
         state_transaction: &StateTransaction<'_, '_>,
         config_key: PrivacyCommitmentKeyV1,
@@ -6955,19 +6778,16 @@ mod tests {
             budget: state_transaction.privacy_budget_for_testing(),
         }
     }
-
     fn smart_contract_parameter_message(error: &Error) -> &str {
         let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = error else {
             panic!("expected a typed smart-contract parameter error, got {error:?}");
         };
         message
     }
-
     fn assert_empty_and_unbudgeted(state_transaction: &StateTransaction<'_, '_>) {
         assert_eq!(privacy_map_counts(state_transaction), (0, 0, 0, 0));
         assert_eq!(state_transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
     }
-
     fn assert_proof_managed_submit_rejection_is_atomic(
         transaction: &mut StateTransaction<'_, '_>,
         instruction: SubmitPrivacyProofV1,
@@ -6989,9 +6809,7 @@ mod tests {
             "rejected submission mutated an exact root, head, nullifier, commitment/frontier, configuration, or budget byte: {error:?}"
         );
     }
-
     include!("privacy/core_state_tests.rs");
-
     #[test]
     fn private_note_apply_rejections_preserve_every_proof_managed_record() {
         let (mut statement, input_commitment) = private_note_statement_fixture_v1();
@@ -7021,7 +6839,6 @@ mod tests {
         let statement_digest = PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement.clone())
             .digest()
             .expect("private-IVM statement digest");
-
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -7044,7 +6861,6 @@ mod tests {
         ));
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
-
         let config_key = PrivacyCommitmentKeyV1::proof_managed_pool_config(snapshot.namespace())
             .expect("private-IVM config key");
         let config_record = PrivacyStateItemRecordV1::proof_managed_pool_bootstrap(
@@ -7100,7 +6916,6 @@ mod tests {
             )
             .expect("private-IVM head"),
         );
-
         let transition = || VerifiedProofManagedPoolTransitionV1::IvmPrivateNote {
             nullifiers: statement.nullifiers.clone(),
             output_commitments: statement.output_commitments.clone(),
@@ -7149,11 +6964,9 @@ mod tests {
                     "rejected apply mutated roots, heads, nullifiers, commitments, config, or budget: {error:?}"
                 );
             };
-
         let mut wrong_next_root = successor.root().into_bytes();
         wrong_next_root[0] ^= 1;
         assert_atomic_rejection(&effect(PrivacyRootV1::new(wrong_next_root)), &transaction);
-
         let replay_key = PrivacyNullifierKeyV1::proof_managed_nullifier(
             snapshot.namespace(),
             statement.nullifiers[0],
@@ -7173,7 +6986,6 @@ mod tests {
         );
         assert_atomic_rejection(&effect(successor.root()), &transaction);
         transaction.world.privacy_nullifiers.remove(replay_key);
-
         let duplicate_output_key = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(
             snapshot.namespace(),
             statement.output_commitments[0],
@@ -7195,7 +7007,6 @@ mod tests {
             .expect("private-IVM duplicate output record"),
         );
         assert_atomic_rejection(&effect(successor.root()), &transaction);
-
         let (pq_statement, pq_witness) = pq_masp_fixture();
         let pq_input_commitment =
             derive_pq_masp_note_commitment_v1(&pq_statement, &pq_witness.inputs[0].note)
@@ -7262,7 +7073,6 @@ mod tests {
             "rejected PQ-MASP apply mutated roots, heads, nullifiers, commitments, config, or budget: {error:?}"
         );
     }
-
     #[test]
     fn bootle_lantern_submit_policy_resolution_is_exact_and_fail_closed() {
         let policy = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
@@ -7273,14 +7083,12 @@ mod tests {
         )
         .expect("Bootle/Lantern policy key");
         let mut commitments = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
-
         let error = load_active_bootle_lantern_policy_v1(&statement, &commitments.view())
             .expect_err("missing authoritative policy must reject");
         assert!(
             smart_contract_parameter_message(&error).contains("not registered"),
             "{error:?}"
         );
-
         commitments.insert(
             key,
             PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(policy.clone(), 7)
@@ -7291,7 +7099,6 @@ mod tests {
                 .expect("exact active policy"),
             policy
         );
-
         let statement_mutations: [(&str, fn(&mut IrohaBootleLanternAnoncredStatementV1), &str); 6] = [
             (
                 "issuer",
@@ -7334,7 +7141,6 @@ mod tests {
                 "{label} substitution returned {error:?}"
             );
         }
-
         let rotated = rotate_bootle_lantern_policy(&policy);
         commitments.insert(
             key,
@@ -7353,7 +7159,6 @@ mod tests {
                 .expect("statement selects current rotated policy"),
             rotated
         );
-
         let revoked = revoke_bootle_lantern_policy(&rotated);
         let revoked_statement = bootle_lantern_statement(&revoked);
         commitments.insert(
@@ -7367,7 +7172,6 @@ mod tests {
             smart_contract_parameter_message(&error).contains("revoked"),
             "{error:?}"
         );
-
         let mut corrupted = policy.clone();
         corrupted.record_digest.0[0] ^= 1;
         commitments.insert(
@@ -7383,7 +7187,6 @@ mod tests {
             matches!(error, Error::InvariantViolation(_)),
             "corrupted policy returned {error:?}"
         );
-
         commitments.insert(
             key,
             PrivacyStateItemRecordV1::zk_ace_policy_governance(valid_zk_ace_policy(), 10)
@@ -7396,7 +7199,6 @@ mod tests {
             "wrong-role state returned {error:?}"
         );
     }
-
     #[test]
     fn bootle_lantern_governance_requires_the_exact_registered_activation() {
         let initial = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
@@ -7409,7 +7211,6 @@ mod tests {
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
-
         let budget_before = transaction.privacy_budget_for_testing();
         let error = RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial.clone())
             .execute(&ALICE_ID, &mut transaction)
@@ -7420,7 +7221,6 @@ mod tests {
         );
         assert_eq!(transaction.world.privacy_commitments.get(&key), None);
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
-
         let unrelated_activation = *transaction
             .world
             .privacy_activations
@@ -7446,7 +7246,6 @@ mod tests {
         assert_eq!(transaction.world.privacy_commitments.get(&key), None);
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
     }
-
     #[test]
     fn bootle_lantern_governance_registers_rotates_revokes_and_is_failure_atomic() {
         let state = state_with_exact_bootle_lantern_activation();
@@ -7459,7 +7258,6 @@ mod tests {
             initial.policy_id,
         )
         .expect("Bootle/Lantern policy key");
-
         {
             let mut transaction = block.transaction();
             let error = RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial.clone())
@@ -7476,7 +7274,6 @@ mod tests {
             );
             assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
         }
-
         {
             let mut transaction = block.transaction();
             grant_governance(&mut transaction);
@@ -7511,7 +7308,6 @@ mod tests {
             );
             transaction.apply();
         }
-
         {
             let mut transaction = block.transaction();
             let count_before = privacy_bootle_lantern_issuer_policy_count_v1(
@@ -7543,7 +7339,6 @@ mod tests {
             );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
-
         let rotated = rotate_bootle_lantern_policy(&initial);
         {
             let mut transaction = block.transaction();
@@ -7561,7 +7356,6 @@ mod tests {
             );
             transaction.apply();
         }
-
         block
             .commit()
             .expect("commit Bootle/Lantern registration and rotation block");
@@ -7574,7 +7368,6 @@ mod tests {
             0,
         );
         let mut block = state.block(next_header);
-
         {
             let mut transaction = block.transaction();
             let count_before = privacy_bootle_lantern_issuer_policy_count_v1(
@@ -7610,7 +7403,6 @@ mod tests {
                 Some(&rotated)
             );
         }
-
         let revoked = revoke_bootle_lantern_policy(&rotated);
         {
             let mut transaction = block.transaction();
@@ -7628,7 +7420,6 @@ mod tests {
             );
             transaction.apply();
         }
-
         {
             let mut post_terminal = revoked.clone();
             post_terminal.epoch += 1;
@@ -7641,7 +7432,6 @@ mod tests {
             post_terminal.record_digest = post_terminal
                 .computed_record_digest()
                 .expect("post-terminal policy digest");
-
             let mut transaction = block.transaction();
             let count_before = privacy_bootle_lantern_issuer_policy_count_v1(
                 &transaction.world.privacy_commitments,
@@ -7674,7 +7464,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn bootle_lantern_governance_rejects_transition_substitution_without_mutation() {
         let state = state_with_exact_bootle_lantern_activation();
@@ -7685,7 +7474,6 @@ mod tests {
             current.policy_id,
         )
         .expect("Bootle/Lantern policy key");
-
         {
             let mut transaction = block.transaction();
             grant_governance(&mut transaction);
@@ -7694,7 +7482,6 @@ mod tests {
                 .expect("register transition-test origin");
             transaction.apply();
         }
-
         let rotated = rotate_bootle_lantern_policy(&current);
         let mut skipped_epoch = rotated.clone();
         skipped_epoch.epoch += 1;
@@ -7715,7 +7502,6 @@ mod tests {
         substituted_namespace.record_digest = substituted_namespace
             .computed_record_digest()
             .expect("substituted-namespace policy digest");
-
         let rotation_cases = [
             (
                 "zero compare-and-swap digest",
@@ -7777,7 +7563,6 @@ mod tests {
                 "{label} reserved privacy budget"
             );
         }
-
         let mut mutating_revocation = rotated.clone();
         mutating_revocation.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
         mutating_revocation.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
@@ -7833,7 +7618,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn bootle_lantern_governance_preflight_and_registry_cap_reject_without_mutation() {
         let initial = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
@@ -7842,7 +7626,6 @@ mod tests {
             initial.policy_id,
         )
         .expect("Bootle/Lantern policy key");
-
         let state = state_with_exact_bootle_lantern_activation();
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
@@ -7862,7 +7645,6 @@ mod tests {
         );
         assert_eq!(transaction.world.privacy_commitments.get(&key), None);
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
-
         let state = state_with_exact_bootle_lantern_activation();
         let mut block = state.block(test_header());
         {
@@ -7920,7 +7702,6 @@ mod tests {
             );
             transaction.apply();
         }
-
         {
             let mut over_policy = initial;
             over_policy.policy_id = PrivacyPolicyIdV1::new([0xD1; 32]);
@@ -7933,7 +7714,6 @@ mod tests {
                 over_policy.policy_id,
             )
             .expect("over-cap policy key");
-
             let mut transaction = block.transaction();
             let count_before = privacy_bootle_lantern_issuer_policy_count_v1(
                 &transaction.world.privacy_commitments,
@@ -7958,7 +7738,6 @@ mod tests {
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
     }
-
     #[test]
     fn vega_governance_is_permissioned_exact_append_only_and_failure_atomic() {
         let issuer_id = PrivacyIssuerIdV1::new([0xD1; 32]);
@@ -7971,7 +7750,6 @@ mod tests {
         );
         let origin_key = PrivacyCommitmentKeyV1::vega_issuer_revision(issuer_id, 1)
             .expect("canonical Vega origin key");
-
         let unrelated_state = state_with_activation(active_lifecycle());
         let mut unrelated_block = unrelated_state.block(test_header());
         let mut unrelated_transaction = unrelated_block.transaction();
@@ -7995,7 +7773,6 @@ mod tests {
             unrelated_transaction.privacy_budget_for_testing(),
             unrelated_budget
         );
-
         let state = state_with_exact_vega_activation();
         let mut block = state.block(test_header());
         {
@@ -8008,7 +7785,6 @@ mod tests {
             assert_eq!(transaction.world.privacy_commitments.get(&origin_key), None);
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
-
         {
             let mut transaction = block.transaction();
             grant_governance(&mut transaction);
@@ -8027,7 +7803,6 @@ mod tests {
             );
             transaction.apply();
         }
-
         let rotated = vega_issuer_record(
             issuer_id,
             2,
@@ -8109,7 +7884,6 @@ mod tests {
                 "{label} reserved privacy budget"
             );
         }
-
         {
             let mut transaction = block.transaction();
             RotatePrivacyVegaIssuerV1::new(origin.record_digest, rotated)
@@ -8122,7 +7896,6 @@ mod tests {
             );
             transaction.apply();
         }
-
         let mutating_revocation = vega_issuer_record(
             issuer_id,
             3,
@@ -8147,7 +7920,6 @@ mod tests {
             );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
-
         let revoked = vega_issuer_record(
             issuer_id,
             3,
@@ -8172,7 +7944,6 @@ mod tests {
             );
             transaction.apply();
         }
-
         let post_terminal = vega_issuer_record(
             issuer_id,
             4,
@@ -8196,7 +7967,6 @@ mod tests {
         );
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
     }
-
     #[test]
     fn vega_governance_permanently_owns_keys_and_rejects_off_curve_rotations() {
         let state = state_with_exact_vega_activation();
@@ -8263,7 +8033,6 @@ mod tests {
                 second
             );
         }
-
         let alias_issuer = PrivacyIssuerIdV1::new([0xD6; 32]);
         let alias = PrivacyVegaIssuerRecordV1::new(
             alias_issuer,
@@ -8290,7 +8059,6 @@ mod tests {
             );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
-
         let cross_lineage_rotation = PrivacyVegaIssuerRecordV1::new(
             first_issuer,
             2,
@@ -8316,7 +8084,6 @@ mod tests {
             );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
-
         let mut off_curve_key = [u8::MAX; 33];
         off_curve_key[0] = 0x02;
         let off_curve_rotation = PrivacyVegaIssuerRecordV1::new(
@@ -8344,7 +8111,6 @@ mod tests {
             );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
-
         let transaction = block.transaction();
         assert_eq!(
             privacy_vega_issuer_record_count_v1(&transaction.world.privacy_commitments)
@@ -8362,7 +8128,6 @@ mod tests {
             second
         );
     }
-
     #[test]
     fn vega_governance_does_not_reassign_retired_or_revoked_keys() {
         let state = state_with_exact_vega_activation();
@@ -8385,7 +8150,6 @@ mod tests {
                 .expect("register Vega origin before historical-key probes");
             transaction.apply();
         }
-
         let rotated = vega_issuer_record(
             issuer_id,
             2,
@@ -8424,7 +8188,6 @@ mod tests {
                 rotated
             );
         }
-
         let retired_key_alias = vega_issuer_record(
             PrivacyIssuerIdV1::new([0xD8; 32]),
             1,
@@ -8444,7 +8207,6 @@ mod tests {
             );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
-
         let reactivated = vega_issuer_record(
             issuer_id,
             3,
@@ -8464,7 +8226,6 @@ mod tests {
             );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
-
         let revoked = vega_issuer_record(
             issuer_id,
             3,
@@ -8479,7 +8240,6 @@ mod tests {
                 .expect("canonically revoke the rotated Vega key");
             transaction.apply();
         }
-
         let revoked_key_alias = vega_issuer_record(
             PrivacyIssuerIdV1::new([0xD9; 32]),
             1,
@@ -8499,7 +8259,6 @@ mod tests {
             );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
-
         let transaction = block.transaction();
         assert_eq!(
             privacy_vega_issuer_record_count_v1(&transaction.world.privacy_commitments)
@@ -8512,7 +8271,6 @@ mod tests {
             revoked
         );
     }
-
     #[test]
     fn vega_governance_rejects_the_exact_lineage_cap_without_mutation() {
         let state = state_with_exact_vega_activation();
@@ -8571,7 +8329,6 @@ mod tests {
         );
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
     }
-
     #[path = "zk_x509_governance_tests.rs"]
     mod zk_x509_governance_tests;
     #[test]
@@ -8583,7 +8340,6 @@ mod tests {
         let initial = valid_zk_ace_policy();
         let policy_key =
             PrivacyCommitmentKeyV1::zk_ace_policy(initial.policy_id).expect("policy key");
-
         {
             let mut transaction = block.transaction();
             let error = RegisterPrivacyZkAcePolicyV1::new(initial.clone())
@@ -8593,7 +8349,6 @@ mod tests {
             assert_eq!(transaction.world.privacy_commitments.get(&policy_key), None);
             assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
         }
-
         {
             let mut transaction = block.transaction();
             grant_governance(&mut transaction);
@@ -8610,7 +8365,6 @@ mod tests {
             );
             transaction.apply();
         }
-
         {
             let mut transaction = block.transaction();
             let budget_before = transaction.privacy_budget_for_testing();
@@ -8627,7 +8381,6 @@ mod tests {
                 "duplicate rejection must not reserve budget"
             );
         }
-
         let rotated = zk_ace_policy(2, 0xA4, PrivacyZkAcePolicyLifecycleV1::Active);
         {
             let mut transaction = block.transaction();
@@ -8644,7 +8397,6 @@ mod tests {
             );
             transaction.apply();
         }
-
         block
             .commit()
             .expect("commit ZK-ACE registration and rotation block");
@@ -8657,7 +8409,6 @@ mod tests {
             0,
         );
         let mut block = state.block(next_header);
-
         {
             let mut transaction = block.transaction();
             let budget_before = transaction.privacy_budget_for_testing();
@@ -8683,7 +8434,6 @@ mod tests {
                 rotated
             );
         }
-
         let revoked = zk_ace_policy(3, 0xA4, PrivacyZkAcePolicyLifecycleV1::Revoked);
         {
             let mut transaction = block.transaction();
@@ -8700,7 +8450,6 @@ mod tests {
             );
             transaction.apply();
         }
-
         {
             let mut transaction = block.transaction();
             let budget_before = transaction.privacy_budget_for_testing();
@@ -8727,7 +8476,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "zk-stark")]
     #[test]
     fn zk_ace_submit_atomically_transfers_and_records_replay_nullifier() {
@@ -8802,7 +8550,6 @@ mod tests {
         Mint::asset_quantity(100_u32, source_asset_id.clone())
             .execute(&ALICE_ID, &mut transaction)
             .expect("fund ZK-ACE source");
-
         let instruction = SubmitPrivacyProofV1::new(fixture.envelope.clone());
         bind_submit_privacy_instruction(&mut transaction, &instruction);
         instruction
@@ -8835,7 +8582,6 @@ mod tests {
                 .get(&replay_key)
                 .is_some()
         );
-
         let budget_after_success = transaction.privacy_budget_for_testing();
         bind_submit_privacy_instruction(&mut transaction, &instruction);
         let replay_error = instruction
@@ -8869,7 +8615,6 @@ mod tests {
             "replay rejection must not credit twice"
         );
     }
-
     #[test]
     #[ignore = "release gate: generates and verifies a full masked ZK-AMS batch proof"]
     fn zk_ams_submit_commits_batch_successor_then_provisions_once() {
@@ -8974,7 +8719,6 @@ mod tests {
         );
         let mut block = state.block(header);
         let mut transaction = block.transaction();
-
         let batch_instruction = SubmitPrivacyProofV1::new(fixture.batch_envelope.clone());
         bind_submit_privacy_instruction(&mut transaction, &batch_instruction);
         batch_instruction
@@ -9018,7 +8762,6 @@ mod tests {
             );
         }
         transaction.apply();
-
         let provision_instruction = SubmitPrivacyProofV1::new(fixture.provision_envelope.clone());
         let PrivacyStatementV1::IrohaZkAmsV1(provision_statement) =
             &fixture.provision_envelope.statement
@@ -9070,7 +8813,6 @@ mod tests {
         block
             .commit()
             .expect("commit ZK-AMS batch and provisioning transactions");
-
         let replay_height = fixture
             .current_height
             .checked_add(1)
@@ -9135,7 +8877,6 @@ mod tests {
             "ZK-AMS replay rejection must preserve the registry head"
         );
     }
-
     #[test]
     fn zk_ace_policy_governance_rejects_every_profile_substitution_without_mutation() {
         let mutations: [(&str, fn(&mut PrivacyProtocolActivationRecordV1)); 8] = [
@@ -9165,7 +8906,6 @@ mod tests {
                 );
             }),
         ];
-
         for (label, mutate) in mutations {
             let state = state_with_exact_zk_ace_activation();
             let mut block = state.block(test_header());
@@ -9184,7 +8924,6 @@ mod tests {
                 .privacy_activations
                 .insert(activation_key, substituted);
             let budget_before = transaction.privacy_budget_for_testing();
-
             let error = RegisterPrivacyZkAcePolicyV1::new(valid_zk_ace_policy())
                 .execute(&ALICE_ID, &mut transaction)
                 .expect_err("substituted activation must fail closed");
@@ -9204,7 +8943,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn consensus_policy_schedule_rejects_bad_authority_timing_limits_and_overwrite() {
         let mut next_limits = PrivacyConsensusLimitsV1::taira_default();
@@ -9216,14 +8954,12 @@ mod tests {
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         let original = *transaction.world.privacy_consensus_policy.get();
-
         let error = valid
             .clone()
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("governance permission is mandatory");
         assert!(error.to_string().contains("CanEnactGovernance"), "{error}");
         assert_eq!(*transaction.world.privacy_consensus_policy.get(), original);
-
         grant_governance(&mut transaction);
         for invalid in [
             SchedulePrivacyConsensusPolicyTighteningV1::new(1, next_limits),
@@ -9249,7 +8985,6 @@ mod tests {
                 "rejected scheduling must be read-only"
             );
         }
-
         valid
             .execute(&ALICE_ID, &mut transaction)
             .expect("exact +300 strict tightening");
@@ -9259,7 +8994,6 @@ mod tests {
         assert_eq!(pending.scheduled_at_height, TEST_BLOCK_HEIGHT);
         assert_eq!(pending.effective_at_height, TEST_BLOCK_HEIGHT + 300);
         assert_eq!(pending.next_limits, next_limits);
-
         let mut other_limits = next_limits;
         other_limits.retained_root_count -= 1;
         let error =
@@ -9276,7 +9010,6 @@ mod tests {
             "overwrite rejection must preserve the first schedule byte-for-byte"
         );
     }
-
     #[test]
     fn protocol_limit_schedule_rejects_bad_authority_mismatch_increase_noop_and_overwrite() {
         let state = state_with_activation(active_lifecycle());
@@ -9306,7 +9039,6 @@ mod tests {
             TEST_BLOCK_HEIGHT + 300,
             next,
         );
-
         let error = valid
             .clone()
             .execute(&ALICE_ID, &mut transaction)
@@ -9316,7 +9048,6 @@ mod tests {
             transaction.world.privacy_activations.get(&key),
             Some(&current)
         );
-
         grant_governance(&mut transaction);
         let invalid = [
             SchedulePrivacyProtocolLimitsTighteningV1::new(
@@ -9369,7 +9100,6 @@ mod tests {
                 "rejected scheduling must preserve the activation"
             );
         }
-
         valid
             .execute(&ALICE_ID, &mut transaction)
             .expect("exact +300 strict protocol tightening");
@@ -9385,7 +9115,6 @@ mod tests {
         assert_eq!(pending.scheduled_at_height, TEST_BLOCK_HEIGHT);
         assert_eq!(pending.effective_at_height, TEST_BLOCK_HEIGHT + 300);
         assert_eq!(pending.next_limits, next);
-
         let error = SchedulePrivacyProtocolLimitsTighteningV1::new(
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             TEST_BLOCK_HEIGHT + 301,
@@ -9402,11 +9131,9 @@ mod tests {
             Some(&scheduled)
         );
     }
-
     #[test]
     fn pgc_bootstrap_rejects_authority_inactive_and_future_activation_without_mutation() {
         let instruction = valid_bootstrap_instruction();
-
         let state = state_with_activation(active_lifecycle());
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
@@ -9416,7 +9143,6 @@ mod tests {
             .expect_err("authority without exact governance permission");
         assert!(error.to_string().contains("CanEnactGovernance"), "{error}");
         assert_empty_and_unbudgeted(&transaction);
-
         for lifecycle in [
             PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
                 proposed_at_height: 1,
@@ -9443,7 +9169,6 @@ mod tests {
             assert_empty_and_unbudgeted(&transaction);
         }
     }
-
     #[test]
     fn pgc_bootstrap_cap_and_action_budget_rejections_are_non_mutating() {
         let mut oversized = valid_bootstrap_instruction();
@@ -9464,7 +9189,6 @@ mod tests {
             .expect_err("oversized bootstrap proof");
         assert!(error.to_string().contains("exceeding maximum"), "{error}");
         assert_empty_and_unbudgeted(&transaction);
-
         let state = state_with_activation(active_lifecycle());
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
@@ -9485,7 +9209,6 @@ mod tests {
         assert_eq!(privacy_map_counts(&transaction), (0, 0, 0, 0));
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
     }
-
     #[test]
     fn altered_pgc_bootstrap_fields_and_proof_leave_all_state_unchanged() {
         let mut altered_root = valid_bootstrap_instruction();
@@ -9499,7 +9222,6 @@ mod tests {
             .expect_err("altered public bootstrap root");
         assert!(error.to_string().contains("root does not match"), "{error}");
         assert_empty_and_unbudgeted(&transaction);
-
         let mut altered_supply = valid_bootstrap_instruction();
         altered_supply.bootstrap.total_supply += 1;
         let state = state_with_activation(active_lifecycle());
@@ -9511,7 +9233,6 @@ mod tests {
             .expect_err("altered public aggregate supply");
         assert!(error.to_string().contains("root does not match"), "{error}");
         assert_empty_and_unbudgeted(&transaction);
-
         let mut altered_proof = valid_bootstrap_instruction();
         let middle = altered_proof.proof.bytes.len() / 2;
         altered_proof.proof.bytes[middle] ^= 1;
@@ -9528,7 +9249,6 @@ mod tests {
         );
         assert_empty_and_unbudgeted(&transaction);
     }
-
     #[test]
     fn pgc_bootstrap_rejects_each_preexisting_orphan_without_new_mutation() {
         #[derive(Clone, Copy, Debug)]
@@ -9538,7 +9258,6 @@ mod tests {
             Root,
             Head,
         }
-
         let instruction = valid_bootstrap_instruction();
         let bootstrap_digest = instruction.bootstrap.digest().expect("bootstrap digest");
         let proof_digest = instruction.proof.digest().expect("proof digest");
@@ -9586,7 +9305,6 @@ mod tests {
             None,
         )
         .expect("root head");
-
         for orphan in [
             Orphan::Invariant,
             Orphan::Account,
@@ -9640,7 +9358,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn successful_pgc_bootstrap_is_atomic_and_double_bootstrap_rejects() {
         let instruction = valid_bootstrap_instruction();
@@ -9652,7 +9369,6 @@ mod tests {
         .expect("encoded length");
         let state = state_with_activation(active_lifecycle());
         let mut block = state.block(test_header());
-
         {
             let mut transaction = block.transaction();
             grant_governance(&mut transaction);
@@ -9667,7 +9383,6 @@ mod tests {
             );
             transaction.apply();
         }
-
         {
             let mut transaction = block.transaction();
             let counts_before = privacy_map_counts(&transaction);
@@ -9683,6 +9398,5 @@ mod tests {
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
     }
-
     include!("privacy_pgc_payment_tests.rs");
 }

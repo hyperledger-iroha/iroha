@@ -1,17 +1,12 @@
 //! Purpose-bound authenticated column staging for the initial C0 pass.
-
 use std::path::Path;
-
 use iroha_confidential_spool::{
     CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1,
     CONFIDENTIAL_SPOOL_MAX_SLOTS_V1, ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1,
     ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
-
 use crate::vega::sponge::Keccak256;
-
 use super::*;
-
 const INITIAL_C0_COLUMN_MAPPING_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.initial-c0-column-stage.mapping\0";
 const INITIAL_C0_COLUMN_CONTEXT_DOMAIN_V2: &[u8] =
@@ -19,11 +14,9 @@ const INITIAL_C0_COLUMN_CONTEXT_DOMAIN_V2: &[u8] =
 const INITIAL_C0_COLUMN_FORMULA_V2: &[u8] = b"column=limb*10+repetition*2+role;slot=column*blocks_per_column+block;first_index=block*values_per_block;role=p:0,h:1";
 const INITIAL_C0_ENCODING_V2: &[u8] = b"canonical Fq2=(c0,c1), each canonical big-endian u64";
 const RELEASE_INITIAL_C0_COLUMN_FILE_BYTES_V2: u64 = 3_190_784_000;
-
 const _: () = {
     assert!(RELEASE_INITIAL_C0_COLUMN_FILE_BYTES_V2 == RELEASE_LDE_FILE_BYTES_V2);
 };
-
 #[derive(Clone, Copy)]
 pub(super) struct InitialColumnDescriptorV2 {
     pub(super) domain_size: u64,
@@ -35,7 +28,6 @@ pub(super) struct InitialColumnDescriptorV2 {
     pub(super) file_bytes: u64,
     pub(super) mapping_digest: [u8; 32],
 }
-
 fn initial_column_descriptor_v2(
     geometry: SpoolGeometryV2,
     parameter_digest: [u8; 32],
@@ -130,7 +122,6 @@ fn initial_column_descriptor_v2(
         mapping_digest,
     })
 }
-
 fn initial_column_context_v2(
     descriptor: InitialColumnDescriptorV2,
     parameter_digest: [u8; 32],
@@ -150,12 +141,10 @@ fn initial_column_context_v2(
     }
     Ok(digest)
 }
-
 struct LiveInitialColumnWriterV2 {
     writer: ConfidentialSpoolWriterV1,
     next_slot: u64,
 }
-
 pub(super) struct InitialColumnWriterV2 {
     live: Option<LiveInitialColumnWriterV2>,
     geometry: SpoolGeometryV2,
@@ -163,7 +152,6 @@ pub(super) struct InitialColumnWriterV2 {
     pub(super) descriptor: InitialColumnDescriptorV2,
     pub(super) context_digest: [u8; 32],
 }
-
 impl InitialColumnWriterV2 {
     pub(super) fn create_v2(
         directory: &Path,
@@ -193,7 +181,6 @@ impl InitialColumnWriterV2 {
             context_digest,
         })
     }
-
     pub(super) fn expect_next_column_v2(
         &self,
         expected: u16,
@@ -209,7 +196,6 @@ impl InitialColumnWriterV2 {
         }
         Ok(())
     }
-
     pub(super) fn push_next_block_v2(
         &mut self,
         chunk: ConfidentialSpoolChunkV1,
@@ -247,7 +233,6 @@ impl InitialColumnWriterV2 {
         self.live = Some(live);
         Ok(())
     }
-
     pub(super) fn seal_v2(mut self) -> Result<InitialColumnSnapshotV2, ProverPrerequisiteErrorV2> {
         let live = self
             .live
@@ -266,14 +251,12 @@ impl InitialColumnWriterV2 {
             context_digest: self.context_digest,
         })
     }
-
     #[cfg(test)]
     pub(super) fn panic_after_take_for_test_v2(&mut self) {
         let _live = self.live.take().expect("live initial column writer");
         panic!("intentional initial column writer unwind");
     }
 }
-
 pub(super) struct InitialColumnSnapshotV2 {
     snapshot: Option<ConfidentialSpoolSnapshotV1>,
     geometry: SpoolGeometryV2,
@@ -281,12 +264,10 @@ pub(super) struct InitialColumnSnapshotV2 {
     descriptor: InitialColumnDescriptorV2,
     context_digest: [u8; 32],
 }
-
 struct LiveInitialTransposeV2 {
     snapshot: ConfidentialSpoolSnapshotV1,
     stage: QPcsCoefficientReplayStageV2,
 }
-
 pub(super) struct InitialTransposeV2 {
     live: Option<LiveInitialTransposeV2>,
     pub(super) descriptor: InitialColumnDescriptorV2,
@@ -294,7 +275,6 @@ pub(super) struct InitialTransposeV2 {
     next_block: u64,
     next_column: u16,
 }
-
 impl InitialColumnSnapshotV2 {
     pub(super) fn begin_transpose_v2(
         mut self,
@@ -330,7 +310,6 @@ impl InitialColumnSnapshotV2 {
         })
     }
 }
-
 impl InitialTransposeV2 {
     pub(super) fn copy_next_block_v2(&mut self) -> Result<(), ProverPrerequisiteErrorV2> {
         let mut live = self
@@ -356,7 +335,6 @@ impl InitialTransposeV2 {
         self.live = Some(live);
         Ok(())
     }
-
     pub(super) fn complete_v2(
         mut self,
     ) -> Result<QPcsCoefficientReplayStageV2, ProverPrerequisiteErrorV2> {
@@ -371,7 +349,6 @@ impl InitialTransposeV2 {
         }
         Ok(live.stage)
     }
-
     #[cfg(test)]
     pub(super) fn panic_after_take_for_test_v2(&mut self) {
         let _live = self.live.take().expect("live initial transpose");

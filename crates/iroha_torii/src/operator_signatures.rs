@@ -23,14 +23,12 @@
 //!
 //! Replay protection is enforced via a bounded in-memory nonce cache. Capacity
 //! pressure rejects new requests and never evicts a live nonce.
-
 use std::{
     collections::HashSet,
     fmt,
     num::NonZeroUsize,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -46,13 +44,11 @@ use rand::{
     rand_core::{TryCryptoRng, TryRngCore},
     rngs::OsRng,
 };
-
 use crate::{
     JsonBody, SharedAppState,
     bounded_replay_cache::{InsertError as ReplayInsertError, ReplayCache},
     canonical_request_message, json_entry, json_object,
 };
-
 const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
@@ -60,7 +56,6 @@ const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 const HEADER_TORII_PROXY_TARGET_PEER_ID: &str = "x-iroha-torii-proxy-target-peer-id";
 const OPERATOR_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha.operator.http-request.network.v1\0";
 const TORII_PROXY_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha.torii-proxy.http-request.network.v1\0";
-
 fn validate_operator_signature_for_public_key(
     signature: &Signature,
     public_key: &PublicKey,
@@ -70,7 +65,6 @@ fn validate_operator_signature_for_public_key(
     }
     validate_operator_ed25519_signature_payload(signature.payload())
 }
-
 fn validate_operator_ed25519_signature_payload(
     signature: &[u8],
 ) -> Result<(), OperatorSignatureError> {
@@ -98,7 +92,6 @@ fn validate_operator_ed25519_signature_payload(
     }
     Ok(())
 }
-
 fn parse_operator_signature_for_public_key(
     signature_bytes: &[u8],
     public_key: &PublicKey,
@@ -115,7 +108,6 @@ fn parse_operator_signature_for_public_key(
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE)),
     }
 }
-
 fn operator_ed25519_compressed_y_is_canonical(
     bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
 ) -> bool {
@@ -124,7 +116,6 @@ fn operator_ed25519_compressed_y_is_canonical(
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     let mut y = *bytes;
     y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
     for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
@@ -136,7 +127,6 @@ fn operator_ed25519_compressed_y_is_canonical(
     }
     false
 }
-
 /// Failure to construct or verify an exact-network operator request signature.
 #[derive(Debug, Clone)]
 pub struct OperatorSignatureError {
@@ -144,7 +134,6 @@ pub struct OperatorSignatureError {
     code: &'static str,
     message: String,
 }
-
 impl OperatorSignatureError {
     fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
         Self {
@@ -153,7 +142,6 @@ impl OperatorSignatureError {
             message: message.into(),
         }
     }
-
     fn missing_header(name: &'static str) -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -161,7 +149,6 @@ impl OperatorSignatureError {
             format!("missing required operator signature header `{name}`"),
         )
     }
-
     fn invalid_header(name: &'static str) -> Self {
         Self::new(
             StatusCode::BAD_REQUEST,
@@ -169,7 +156,6 @@ impl OperatorSignatureError {
             format!("invalid operator signature header `{name}`"),
         )
     }
-
     fn key_not_allowed() -> Self {
         Self::new(
             StatusCode::FORBIDDEN,
@@ -177,7 +163,6 @@ impl OperatorSignatureError {
             "operator public key is not allow-listed",
         )
     }
-
     fn skew_exceeded() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -185,7 +170,6 @@ impl OperatorSignatureError {
             "operator request timestamp outside allowed skew window",
         )
     }
-
     fn replay() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -193,7 +177,6 @@ impl OperatorSignatureError {
             "operator request nonce was already used",
         )
     }
-
     fn replay_cache_unavailable() -> Self {
         Self::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -201,7 +184,6 @@ impl OperatorSignatureError {
             "operator request replay protection is at capacity",
         )
     }
-
     fn bad_signature() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
@@ -209,7 +191,6 @@ impl OperatorSignatureError {
             "operator signature failed verification",
         )
     }
-
     fn payload_too_large() -> Self {
         Self::new(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -217,7 +198,6 @@ impl OperatorSignatureError {
             "operator request body exceeds configured maximum",
         )
     }
-
     fn body_read_timeout() -> Self {
         Self::new(
             StatusCode::REQUEST_TIMEOUT,
@@ -225,7 +205,6 @@ impl OperatorSignatureError {
             "operator request body was not received before the configured deadline",
         )
     }
-
     fn random_nonce(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -233,7 +212,6 @@ impl OperatorSignatureError {
             format!("operator signature nonce RNG failed: {}", message.into()),
         )
     }
-
     fn signing(message: impl Into<String>) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -241,7 +219,6 @@ impl OperatorSignatureError {
             format!("operator signature signing failed: {}", message.into()),
         )
     }
-
     fn torii_proxy_target_mismatch() -> Self {
         Self::new(
             StatusCode::FORBIDDEN,
@@ -249,7 +226,6 @@ impl OperatorSignatureError {
             "Torii proxy request target does not match the receiving peer",
         )
     }
-
     fn torii_proxy_receiver_unavailable() -> Self {
         Self::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -258,15 +234,12 @@ impl OperatorSignatureError {
         )
     }
 }
-
 impl fmt::Display for OperatorSignatureError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.message)
     }
 }
-
 impl std::error::Error for OperatorSignatureError {}
-
 impl IntoResponse for OperatorSignatureError {
     fn into_response(self) -> Response {
         let payload = json_object(vec![
@@ -284,7 +257,6 @@ impl IntoResponse for OperatorSignatureError {
         resp
     }
 }
-
 /// Signature-based operator authentication state.
 pub struct OperatorSignatures {
     network_id: NetworkId,
@@ -299,11 +271,9 @@ pub struct OperatorSignatures {
     max_body_bytes: usize,
     body_read_timeout: Duration,
 }
-
 /// Invalid operator-signature freshness, replay, or body-read deadline configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OperatorSignatureConfigError;
-
 impl fmt::Display for OperatorSignatureConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(
@@ -312,13 +282,10 @@ impl fmt::Display for OperatorSignatureConfigError {
         )
     }
 }
-
 impl std::error::Error for OperatorSignatureConfigError {}
-
 /// Public key whose request signature was authenticated by the operator middleware.
 #[derive(Clone, Debug)]
 pub(crate) struct AuthenticatedOperatorPublicKey(pub PublicKey);
-
 impl OperatorSignatures {
     /// Build operator-signature authentication with a replay-safe freshness window.
     ///
@@ -362,11 +329,9 @@ impl OperatorSignatures {
             body_read_timeout,
         })
     }
-
     pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
     }
-
     /// Return the canonical Ed25519 key payloads trusted by operator policy.
     ///
     /// PoR verdict authentication reuses this configured trust root rather
@@ -387,14 +352,12 @@ impl OperatorSignatures {
         keys.dedup();
         keys
     }
-
     fn is_key_allowed(&self, public_key: &PublicKey) -> bool {
         if self.allow_node_key && public_key == &self.node_public_key {
             return true;
         }
         self.allowed_public_keys.contains(public_key)
     }
-
     fn now_unix_ms() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -403,7 +366,6 @@ impl OperatorSignatures {
             .try_into()
             .unwrap_or(u64::MAX)
     }
-
     fn parse_required_header<'a>(
         headers: &'a HeaderMap,
         name: &'static str,
@@ -422,13 +384,11 @@ impl OperatorSignatures {
                 }
             })
     }
-
     fn request_public_key(headers: &HeaderMap) -> Result<PublicKey, OperatorSignatureError> {
         Self::parse_required_header(headers, HEADER_OPERATOR_PUBLIC_KEY)?
             .parse::<PublicKey>()
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_PUBLIC_KEY))
     }
-
     fn validate_freshness(
         &self,
         timestamp_ms: u64,
@@ -444,17 +404,14 @@ impl OperatorSignatures {
         if delta_ms > max_skew_ms {
             return Err(OperatorSignatureError::skew_exceeded());
         }
-
         if nonce.len() > 256 || !nonce.is_ascii() || nonce.bytes().any(|b| b.is_ascii_whitespace())
         {
             return Err(OperatorSignatureError::invalid_header(
                 HEADER_OPERATOR_NONCE,
             ));
         }
-
         Ok(())
     }
-
     fn admit_nonce(
         replay_cache: &ReplayCache,
         nonce: &str,
@@ -469,7 +426,6 @@ impl OperatorSignatures {
             }
         }
     }
-
     fn operator_request_message(
         network_id: &NetworkId,
         method: &crate::Method,
@@ -495,7 +451,6 @@ impl OperatorSignatures {
         msg.extend_from_slice(nonce.as_bytes());
         msg
     }
-
     fn authorize_bytes_with_policy(
         &self,
         headers: &HeaderMap,
@@ -508,23 +463,18 @@ impl OperatorSignatures {
         if require_allowlisted_key && !self.is_key_allowed(&public_key) {
             return Err(OperatorSignatureError::key_not_allowed());
         }
-
         let timestamp_str = Self::parse_required_header(headers, HEADER_OPERATOR_TIMESTAMP_MS)?;
         let timestamp_ms = timestamp_str
             .parse::<u64>()
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_TIMESTAMP_MS))?;
-
         let nonce = Self::parse_required_header(headers, HEADER_OPERATOR_NONCE)?;
-
         let signature_str = Self::parse_required_header(headers, HEADER_OPERATOR_SIGNATURE)?;
         let signature_bytes = BASE64_STANDARD
             .decode(signature_str)
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
         let signature = parse_operator_signature_for_public_key(&signature_bytes, &public_key)?;
         validate_operator_signature_for_public_key(&signature, &public_key)?;
-
         self.validate_freshness(timestamp_ms, nonce)?;
-
         let msg = Self::operator_request_message(
             &self.network_id,
             method,
@@ -536,7 +486,6 @@ impl OperatorSignatures {
         signature
             .verify(&public_key, &msg)
             .map_err(|_| OperatorSignatureError::bad_signature())?;
-
         // Admit the nonce only after authenticating the request. `check_and_insert` is atomic for
         // a replay key, so concurrently verified requests using the same nonce still have exactly
         // one winner without letting unauthenticated traffic consume or evict cache entries.
@@ -546,10 +495,8 @@ impl OperatorSignatures {
             &self.identity_bound_replay_cache
         };
         Self::admit_nonce(replay_cache, nonce, &public_key)?;
-
         Ok(())
     }
-
     fn authorize_bytes(
         &self,
         headers: &HeaderMap,
@@ -559,7 +506,6 @@ impl OperatorSignatures {
     ) -> Result<(), OperatorSignatureError> {
         self.authorize_bytes_with_policy(headers, method, uri, body, true)
     }
-
     fn authorize_request(
         &self,
         req: &axum::http::Request<Body>,
@@ -570,7 +516,6 @@ impl OperatorSignatures {
         }
         self.authorize_bytes(req.headers(), req.method(), req.uri(), body_bytes)
     }
-
     fn authorize_request_for_bound_key(
         &self,
         req: &axum::http::Request<Body>,
@@ -581,13 +526,11 @@ impl OperatorSignatures {
         }
         self.authorize_bytes_with_policy(req.headers(), req.method(), req.uri(), body_bytes, false)
     }
-
     fn torii_proxy_target_peer_id(headers: &HeaderMap) -> Result<PeerId, OperatorSignatureError> {
         Self::parse_required_header(headers, HEADER_TORII_PROXY_TARGET_PEER_ID)?
             .parse::<PeerId>()
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_TORII_PROXY_TARGET_PEER_ID))
     }
-
     fn torii_proxy_request_message(
         network_id: &NetworkId,
         method: &crate::Method,
@@ -620,7 +563,6 @@ impl OperatorSignatures {
         message.extend_from_slice(nonce.as_bytes());
         message
     }
-
     fn authorize_torii_proxy_bytes(
         &self,
         headers: &HeaderMap,
@@ -634,7 +576,6 @@ impl OperatorSignatures {
         if &target_peer_id != receiver_peer_id {
             return Err(OperatorSignatureError::torii_proxy_target_mismatch());
         }
-
         let timestamp_str = Self::parse_required_header(headers, HEADER_OPERATOR_TIMESTAMP_MS)?;
         let timestamp_ms = timestamp_str
             .parse::<u64>()
@@ -646,7 +587,6 @@ impl OperatorSignatures {
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
         let signature = parse_operator_signature_for_public_key(&signature_bytes, &public_key)?;
         validate_operator_signature_for_public_key(&signature, &public_key)?;
-
         self.validate_freshness(timestamp_ms, nonce)?;
         let message = Self::torii_proxy_request_message(
             &self.network_id,
@@ -663,7 +603,6 @@ impl OperatorSignatures {
         Self::admit_nonce(&self.torii_proxy_replay_cache, nonce, &public_key)?;
         Ok(())
     }
-
     fn authorize_torii_proxy_request(
         &self,
         req: &axum::http::Request<Body>,
@@ -683,7 +622,6 @@ impl OperatorSignatures {
         )
     }
 }
-
 async fn collect_operator_signature_body(
     body: Body,
     max_body_bytes: usize,
@@ -700,7 +638,6 @@ async fn collect_operator_signature_body(
         Err(_) => Err(OperatorSignatureError::body_read_timeout()),
     }
 }
-
 /// Build operator signature headers for an internal Torii request.
 pub fn signed_request_headers(
     key_pair: &KeyPair,
@@ -711,7 +648,6 @@ pub fn signed_request_headers(
 ) -> Result<HeaderMap, OperatorSignatureError> {
     signed_request_headers_with_rng(key_pair, network_id, method, uri, body, &mut OsRng)
 }
-
 fn signed_request_headers_with_rng<R: TryCryptoRng>(
     key_pair: &KeyPair,
     network_id: &NetworkId,
@@ -722,7 +658,6 @@ fn signed_request_headers_with_rng<R: TryCryptoRng>(
 ) -> Result<HeaderMap, OperatorSignatureError> {
     let timestamp_ms = OperatorSignatures::now_unix_ms();
     let nonce = operator_signature_nonce_with_rng(rng)?;
-
     let msg = OperatorSignatures::operator_request_message(
         network_id,
         method,
@@ -733,7 +668,6 @@ fn signed_request_headers_with_rng<R: TryCryptoRng>(
     );
     let signature = Signature::try_new(key_pair.private_key(), &msg)
         .map_err(|error| OperatorSignatureError::signing(error.to_string()))?;
-
     Ok(operator_signature_headers(
         key_pair,
         timestamp_ms,
@@ -741,7 +675,6 @@ fn signed_request_headers_with_rng<R: TryCryptoRng>(
         &signature,
     ))
 }
-
 /// Build route-specific signature headers for an internal Torii-proxy request.
 ///
 /// The signature has its own protocol domain and binds the intended receiver peer. The sender key
@@ -766,7 +699,6 @@ pub(crate) fn signed_torii_proxy_request_headers(
         &mut OsRng,
     )
 }
-
 fn signed_torii_proxy_request_headers_with_rng<R: TryCryptoRng>(
     sender_key_pair: &KeyPair,
     network_id: &NetworkId,
@@ -799,7 +731,6 @@ fn signed_torii_proxy_request_headers_with_rng<R: TryCryptoRng>(
     );
     Ok(headers)
 }
-
 fn operator_signature_nonce_with_rng<R: TryCryptoRng>(
     rng: &mut R,
 ) -> Result<String, OperatorSignatureError> {
@@ -808,7 +739,6 @@ fn operator_signature_nonce_with_rng<R: TryCryptoRng>(
         .map_err(|error| OperatorSignatureError::random_nonce(error.to_string()))?;
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes))
 }
-
 fn operator_signature_headers(
     key_pair: &KeyPair,
     timestamp_ms: u64,
@@ -844,7 +774,6 @@ fn operator_signature_headers(
     );
     headers
 }
-
 pub async fn enforce_operator_access(
     State(app): State<SharedAppState>,
     req: Request,
@@ -858,7 +787,6 @@ pub async fn enforce_operator_access(
         )
         .into_response();
     }
-
     // WebAuthn/mTLS can strengthen operator authentication, but a replayable
     // session or bootstrap token must never replace the exact request signature
     // promised by `AuthenticationPolicy::OperatorSignature`.
@@ -875,7 +803,6 @@ pub async fn enforce_operator_access(
             return err.into_response();
         }
     }
-
     let (parts, body) = req.into_parts();
     let body_bytes = match collect_operator_signature_body(
         body,
@@ -899,7 +826,6 @@ pub async fn enforce_operator_access(
         .insert(AuthenticatedOperatorPublicKey(authenticated_public_key));
     next.run(req).await
 }
-
 /// Verify a canonical signed request without applying the operator allow-list.
 ///
 /// Route handlers using this middleware must bind the authenticated header key to an
@@ -932,7 +858,6 @@ pub async fn enforce_identity_bound_signature(
     }
     next.run(req).await
 }
-
 fn torii_proxy_receiver_peer_id(app: &SharedAppState) -> Option<PeerId> {
     #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     {
@@ -944,7 +869,6 @@ fn torii_proxy_receiver_peer_id(app: &SharedAppState) -> Option<PeerId> {
         None
     }
 }
-
 /// Verify the route-specific internal Torii-proxy signature.
 ///
 /// This guard accepts any cryptographically valid peer key, binds the request to this receiver,
@@ -1021,7 +945,6 @@ pub async fn enforce_torii_proxy_peer_signature(
     });
     Response::from_parts(parts, Body::new(guarded_body))
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
     use std::{
@@ -1029,7 +952,6 @@ mod tests {
         sync::{Arc, Barrier},
         thread,
     };
-
     use super::*;
     use axum::routing::{get, post};
     use iroha_config::parameters::actual::{
@@ -1040,50 +962,38 @@ mod tests {
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use tower::ServiceExt as _;
     use url::Url;
-
     struct FailingOperatorNonceRng;
-
     #[derive(Debug)]
     struct FailingOperatorNonceRngError;
-
     impl fmt::Display for FailingOperatorNonceRngError {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str("failing operator nonce RNG")
         }
     }
-
     impl TryRngCore for FailingOperatorNonceRng {
         type Error = FailingOperatorNonceRngError;
-
         fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
             Err(FailingOperatorNonceRngError)
         }
-
         fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
             Err(FailingOperatorNonceRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
             Err(FailingOperatorNonceRngError)
         }
     }
-
     impl TryCryptoRng for FailingOperatorNonceRng {}
-
     fn checked_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked operator signature fixture keypair")
     }
-
     fn checked_mldsa_keypair() -> KeyPair {
         KeyPair::try_from_seed(b"torii-operator-signature-mldsa".to_vec(), Algorithm::MlDsa)
             .expect("generate checked ML-DSA operator signature fixture keypair")
     }
-
     fn test_network_id() -> NetworkId {
         crate::signed_query_test_network_id()
     }
-
     fn foreign_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -1091,7 +1001,6 @@ mod tests {
             ),
         )
     }
-
     fn legacy_token_operator_auth(
         token: &str,
         data_dir: &std::path::Path,
@@ -1123,7 +1032,6 @@ mod tests {
         )
         .expect("valid legacy operator-auth fixture")
     }
-
     fn operator_signatures_with_capacity(
         key_pair: &KeyPair,
         capacity: usize,
@@ -1146,7 +1054,6 @@ mod tests {
         )
         .expect("valid operator-signature test config")
     }
-
     #[test]
     fn unauthorized_operator_errors_advertise_the_signature_scheme() {
         let response =
@@ -1159,14 +1066,12 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn operator_signatures_reject_short_nonce_retention() {
         let key_pair = checked_ed25519_keypair();
         let mut config = ToriiOperatorSignatures::default();
         config.max_clock_skew = Duration::from_secs(60);
         config.nonce_ttl = Duration::from_secs(120);
-
         let error = match OperatorSignatures::new(
             config,
             key_pair.public_key().clone(),
@@ -1179,13 +1084,11 @@ mod tests {
         };
         assert_eq!(error, OperatorSignatureConfigError);
     }
-
     #[test]
     fn operator_signatures_reject_zero_body_read_timeout() {
         let key_pair = checked_ed25519_keypair();
         let mut config = ToriiOperatorSignatures::default();
         config.body_read_timeout = Duration::ZERO;
-
         let error = match OperatorSignatures::new(
             config,
             key_pair.public_key().clone(),
@@ -1198,7 +1101,6 @@ mod tests {
         };
         assert_eq!(error, OperatorSignatureConfigError);
     }
-
     fn signed_headers_with_nonce(
         key_pair: &KeyPair,
         method: &crate::Method,
@@ -1219,7 +1121,6 @@ mod tests {
             .expect("checked operator signature fixture");
         operator_signature_headers(key_pair, timestamp_ms, nonce, &signature)
     }
-
     fn signed_torii_proxy_headers_with_nonce(
         sender_key_pair: &KeyPair,
         target_peer_id: &PeerId,
@@ -1251,18 +1152,15 @@ mod tests {
         );
         headers
     }
-
     const ED25519_SMALL_ORDER_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const ED25519_NONCANONICAL_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     #[test]
     fn operator_signatures_rejects_replay() {
         let key_pair = checked_ed25519_keypair();
@@ -1321,7 +1219,6 @@ mod tests {
                 .parse()
                 .expect("signature header"),
         );
-
         auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect("first use ok");
         let err = auth
@@ -1330,7 +1227,6 @@ mod tests {
             .expect("second use rejected");
         assert_eq!(err.code, "operator_signature_replay");
     }
-
     #[test]
     fn operator_and_proxy_signatures_reject_foreign_exact_network() {
         let key_pair = checked_ed25519_keypair();
@@ -1338,7 +1234,6 @@ mod tests {
         let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("proxy URI");
         let body = b"canonical-norito-request";
         let timestamp_ms = OperatorSignatures::now_unix_ms();
-
         let operator_message = OperatorSignatures::operator_request_message(
             &foreign_network_id(),
             &crate::Method::POST,
@@ -1359,7 +1254,6 @@ mod tests {
             .authorize_bytes(&operator_headers, &crate::Method::POST, &uri, body)
             .expect_err("same route and label on another genesis must fail operator admission");
         assert_eq!(operator_error.code, "operator_signature_bad");
-
         let receiver = PeerId::from(checked_ed25519_keypair().public_key().clone());
         let proxy_message = OperatorSignatures::torii_proxy_request_message(
             &foreign_network_id(),
@@ -1393,7 +1287,6 @@ mod tests {
             .expect_err("same proxy target on another genesis must fail admission");
         assert_eq!(proxy_error.code, "operator_signature_bad");
     }
-
     #[test]
     fn torii_proxy_signatures_accept_unlisted_peer_keys_without_operator_privileges() {
         let operator = checked_ed25519_keypair();
@@ -1411,7 +1304,6 @@ mod tests {
             OperatorSignatures::now_unix_ms(),
             "unlisted-remote-peer",
         );
-
         let operator_error = auth
             .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect_err("remote peer key must not gain privileged operator access");
@@ -1419,7 +1311,6 @@ mod tests {
         auth.authorize_torii_proxy_bytes(&headers, &crate::Method::POST, &uri, body, &receiver)
             .expect("the proxy crypto layer accepts an unlisted peer for handler authorization");
     }
-
     #[test]
     fn torii_proxy_signatures_reject_wrong_or_tampered_target() {
         let operator = checked_ed25519_keypair();
@@ -1439,12 +1330,10 @@ mod tests {
             timestamp_ms,
             "wrong-proxy-target",
         );
-
         let wrong_target = auth
             .authorize_torii_proxy_bytes(&headers, &crate::Method::POST, &uri, body, &receiver)
             .expect_err("a request signed for another receiver must fail");
         assert_eq!(wrong_target.code, "torii_proxy_target_mismatch");
-
         let mut tampered_headers = headers;
         tampered_headers.insert(
             HEADER_TORII_PROXY_TARGET_PEER_ID,
@@ -1464,7 +1353,6 @@ mod tests {
             .expect_err("the receiver target must be covered by the signature");
         assert_eq!(tampered_target.code, "operator_signature_bad");
     }
-
     #[test]
     fn torii_proxy_signatures_bind_canonical_request_freshness_and_reject_replay() {
         let operator = checked_ed25519_keypair();
@@ -1486,7 +1374,6 @@ mod tests {
             timestamp_ms,
             "path-body-replay",
         );
-
         let wrong_method = auth
             .authorize_torii_proxy_bytes(&headers, &crate::Method::PUT, &uri, body, &receiver)
             .expect_err("the signature must bind the exact method");
@@ -1545,7 +1432,6 @@ mod tests {
             )
             .expect_err("the signature must bind the exact nonce");
         assert_eq!(wrong_nonce.code, "operator_signature_bad");
-
         auth.authorize_torii_proxy_bytes(&headers, &crate::Method::POST, &uri, body, &receiver)
             .expect("failed verification must not consume the authenticated nonce");
         let replay = auth
@@ -1553,7 +1439,6 @@ mod tests {
             .expect_err("an authenticated Torii proxy nonce must be single-use");
         assert_eq!(replay.code, "operator_signature_replay");
     }
-
     #[test]
     fn operator_identity_bound_and_torii_proxy_replay_caches_are_partitioned() {
         let signer = checked_ed25519_keypair();
@@ -1580,7 +1465,6 @@ mod tests {
             timestamp_ms,
             nonce,
         );
-
         auth.authorize_bytes(&generic_headers, &crate::Method::POST, &uri, body)
             .expect("privileged operator replay partition admits its first use");
         auth.authorize_bytes_with_policy(&generic_headers, &crate::Method::POST, &uri, body, false)
@@ -1593,7 +1477,6 @@ mod tests {
             &receiver,
         )
         .expect("Torii proxy replay partition admits its independent first use");
-
         assert_eq!(
             auth.authorize_bytes(&generic_headers, &crate::Method::POST, &uri, body)
                 .expect_err("operator partition must reject its own replay")
@@ -1625,7 +1508,6 @@ mod tests {
             "operator_signature_replay"
         );
     }
-
     #[tokio::test]
     async fn torii_proxy_middleware_exposes_authenticated_unlisted_peer_identity() {
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
@@ -1678,14 +1560,12 @@ mod tests {
             .body(Body::from(body.to_vec()))
             .expect("Torii proxy request");
         request.headers_mut().extend(headers);
-
         let response = router
             .oneshot(request)
             .await
             .expect("Torii proxy middleware response");
         assert_eq!(response.status(), StatusCode::OK);
     }
-
     #[tokio::test]
     async fn stalled_signature_body_returns_fixed_timeout_error() {
         let stalled = futures::stream::pending::<
@@ -1702,11 +1582,9 @@ mod tests {
         .await
         .expect("configured signature-body deadline must complete")
         .expect_err("a stalled signature body must be rejected");
-
         assert_eq!(error.status, StatusCode::REQUEST_TIMEOUT);
         assert_eq!(error.code, "operator_signature_body_timeout");
     }
-
     #[tokio::test]
     async fn stalled_torii_proxy_body_timeout_releases_global_proxy_lane() {
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
@@ -1719,7 +1597,6 @@ mod tests {
                 .body_read_timeout = Duration::from_millis(100);
         }
         assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
-
         let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("Torii proxy URI");
         let proxy_layer = axum::middleware::from_fn_with_state::<
             _,
@@ -1751,7 +1628,6 @@ mod tests {
                 .await
                 .expect("Torii proxy middleware response")
         });
-
         tokio::time::timeout(Duration::from_secs(1), body_polled_rx)
             .await
             .expect("stalled body must be polled after acquiring proxy admission")
@@ -1761,7 +1637,6 @@ mod tests {
             0,
             "the stalled body must own the sole proxy lane until its deadline"
         );
-
         let response = tokio::time::timeout(Duration::from_secs(1), response_task)
             .await
             .expect("configured proxy body deadline must complete")
@@ -1781,7 +1656,6 @@ mod tests {
             "timing out a stalled peer body must release the global proxy lane"
         );
     }
-
     #[test]
     fn bad_signature_does_not_consume_its_claimed_nonce() {
         let key_pair = checked_ed25519_keypair();
@@ -1798,7 +1672,6 @@ mod tests {
             timestamp_ms,
             nonce,
         );
-
         let mut invalid_headers = signed_headers_with_nonce(
             &key_pair,
             &crate::Method::POST,
@@ -1811,12 +1684,10 @@ mod tests {
             HEADER_OPERATOR_NONCE,
             nonce.parse().expect("claimed nonce header"),
         );
-
         let error = auth
             .authorize_bytes(&invalid_headers, &crate::Method::POST, &uri, body)
             .expect_err("mismatched signature must fail");
         assert_eq!(error.code, "operator_signature_bad");
-
         auth.authorize_bytes(&valid_headers, &crate::Method::POST, &uri, body)
             .expect("bad signature must not consume the nonce");
         let replay = auth
@@ -1824,7 +1695,6 @@ mod tests {
             .expect_err("authenticated nonce must remain replay-protected");
         assert_eq!(replay.code, "operator_signature_replay");
     }
-
     #[test]
     fn bad_signatures_cannot_poison_replay_cache_capacity() {
         let key_pair = checked_ed25519_keypair();
@@ -1845,12 +1715,10 @@ mod tests {
                 )
             })
             .collect();
-
         for headers in &protected_headers {
             auth.authorize_bytes(headers, &crate::Method::POST, &uri, body)
                 .expect("initial authenticated nonce use");
         }
-
         for index in 0..32 {
             let mut poison_headers = signed_headers_with_nonce(
                 &key_pair,
@@ -1866,13 +1734,11 @@ mod tests {
                     .parse()
                     .expect("poison nonce header"),
             );
-
             let error = auth
                 .authorize_bytes(&poison_headers, &crate::Method::POST, &uri, body)
                 .expect_err("poisoning request must fail signature verification");
             assert_eq!(error.code, "operator_signature_bad");
         }
-
         for headers in &protected_headers {
             let replay = auth
                 .authorize_bytes(headers, &crate::Method::POST, &uri, body)
@@ -1880,7 +1746,6 @@ mod tests {
             assert_eq!(replay.code, "operator_signature_replay");
         }
     }
-
     #[test]
     fn authenticated_capacity_pressure_preserves_live_operator_nonces() {
         let key_pair = checked_ed25519_keypair();
@@ -1898,12 +1763,10 @@ mod tests {
                 nonce,
             )
         });
-
         for headers in &protected_headers {
             auth.authorize_bytes(headers, &crate::Method::POST, &uri, body)
                 .expect("initial authenticated nonce use");
         }
-
         let overflow = signed_headers_with_nonce(
             &key_pair,
             &crate::Method::POST,
@@ -1917,7 +1780,6 @@ mod tests {
             .expect_err("full replay cache must reject a new nonce");
         assert_eq!(error.code, "operator_signature_replay_cache_unavailable");
         assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
-
         for headers in &protected_headers {
             let replay = auth
                 .authorize_bytes(headers, &crate::Method::POST, &uri, body)
@@ -1925,11 +1787,9 @@ mod tests {
             assert_eq!(replay.code, "operator_signature_replay");
         }
     }
-
     #[test]
     fn concurrent_valid_requests_with_same_nonce_have_one_winner() {
         const WORKERS: usize = 16;
-
         let key_pair = checked_ed25519_keypair();
         let auth = operator_signatures_with_capacity(&key_pair, 64);
         let uri: crate::Uri = "/v1/configuration".parse().unwrap();
@@ -1943,7 +1803,6 @@ mod tests {
             "concurrent-shared-nonce",
         );
         let barrier = Arc::new(Barrier::new(WORKERS));
-
         let results = thread::scope(|scope| {
             let mut handles = Vec::with_capacity(WORKERS);
             for _ in 0..WORKERS {
@@ -1962,7 +1821,6 @@ mod tests {
                 .map(|handle| handle.join().expect("authorization worker"))
                 .collect::<Vec<_>>()
         });
-
         let mut accepted = 0;
         let mut replayed = 0;
         for result in results {
@@ -1975,7 +1833,6 @@ mod tests {
         assert_eq!(accepted, 1);
         assert_eq!(replayed, WORKERS - 1);
     }
-
     #[test]
     fn operator_signatures_accepts_valid_signature() {
         let key_pair = checked_ed25519_keypair();
@@ -1996,7 +1853,6 @@ mod tests {
             crate::routing::MaybeTelemetry::disabled(),
         )
         .expect("valid operator-signature test config");
-
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
         let headers = signed_request_headers(
@@ -2007,11 +1863,9 @@ mod tests {
             body,
         )
         .expect("operator signature headers");
-
         auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect("valid signature");
     }
-
     #[test]
     fn operator_signatures_accepts_valid_mldsa_signature() {
         let key_pair = checked_mldsa_keypair();
@@ -2032,7 +1886,6 @@ mod tests {
             crate::routing::MaybeTelemetry::disabled(),
         )
         .expect("valid operator-signature test config");
-
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
         let headers = signed_request_headers(
@@ -2043,11 +1896,9 @@ mod tests {
             body,
         )
         .expect("ML-DSA operator signature headers");
-
         auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect("valid ML-DSA signature");
     }
-
     #[test]
     fn operator_signatures_reject_all_zero_signature_header() {
         let key_pair = checked_ed25519_keypair();
@@ -2085,14 +1936,11 @@ mod tests {
                 .parse()
                 .expect("all-zero signature header"),
         );
-
         let error = auth
             .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect_err("all-zero signature header must fail");
-
         assert_eq!(error.code, "operator_signature_invalid");
     }
-
     #[test]
     fn operator_signatures_reject_malformed_ed25519_signature_r_before_backend() {
         let key_pair = checked_ed25519_keypair();
@@ -2115,7 +1963,6 @@ mod tests {
         .expect("valid operator-signature test config");
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
-
         for (label, replacement_r) in [
             ("small-order", ED25519_SMALL_ORDER_POINT),
             ("noncanonical", ED25519_NONCANONICAL_IDENTITY),
@@ -2144,18 +1991,15 @@ mod tests {
                     .parse()
                     .expect("malformed signature header"),
             );
-
             let error = auth
                 .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
                 .expect_err("malformed signature header must fail");
-
             assert_eq!(
                 error.code, "operator_signature_invalid",
                 "{label} signature R must fail at header admission"
             );
         }
     }
-
     #[test]
     fn operator_signatures_reject_malformed_mldsa_signature_lengths() {
         let key_pair = checked_mldsa_keypair();
@@ -2178,7 +2022,6 @@ mod tests {
         .expect("valid operator-signature test config");
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
-
         for label in ["short", "overlong"] {
             let mut headers = signed_request_headers(
                 &key_pair,
@@ -2212,18 +2055,15 @@ mod tests {
                     .parse()
                     .expect("malformed ML-DSA signature header"),
             );
-
             let error = auth
                 .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
                 .expect_err("malformed ML-DSA operator signature header must fail");
-
             assert_eq!(
                 error.code, "operator_signature_invalid",
                 "{label} ML-DSA signature length must fail at header admission"
             );
         }
     }
-
     #[test]
     fn signed_request_headers_authorize_successfully() {
         let key_pair = checked_ed25519_keypair();
@@ -2253,11 +2093,9 @@ mod tests {
             &[],
         )
         .expect("operator signature headers");
-
         auth.authorize_bytes(&headers, &crate::Method::GET, &uri, &[])
             .expect("generated headers should verify");
     }
-
     #[test]
     fn signed_request_headers_reports_nonce_rng_failure() {
         let key_pair = checked_ed25519_keypair();
@@ -2265,7 +2103,6 @@ mod tests {
             .parse()
             .expect("configuration URI");
         let mut rng = FailingOperatorNonceRng;
-
         let error = signed_request_headers_with_rng(
             &key_pair,
             &test_network_id(),
@@ -2275,7 +2112,6 @@ mod tests {
             &mut rng,
         )
         .expect_err("RNG failure must be reported");
-
         assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(error.code, "operator_signature_nonce_rng");
         assert!(
@@ -2285,22 +2121,18 @@ mod tests {
         );
         assert!(error.message.contains("failing operator nonce RNG"));
     }
-
     #[test]
     fn operator_signature_signing_error_is_internal() {
         let error = OperatorSignatureError::signing("backend rejected message");
-
         assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(error.code, "operator_signature_signing");
         assert!(error.message.contains("backend rejected message"));
     }
-
     #[tokio::test]
     async fn operator_middleware_requires_signature_even_when_legacy_token_is_valid() {
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         assert!(app.operator_signatures.is_enabled());
         assert!(!app.operator_auth.is_enabled());
-
         let tempdir = tempfile::tempdir().expect("operator auth tempdir");
         let operator_auth = legacy_token_operator_auth("legacy-token", tempdir.path());
         let mut headers = HeaderMap::new();
@@ -2312,7 +2144,6 @@ mod tests {
             .authorize_operator_endpoint(&headers, None)
             .await
             .expect("fixture token is valid for legacy operator auth");
-
         let node_public_key = app.da_receipt_signer.public_key().clone();
         let network_id = *app.state.network_id_ref();
         let telemetry = app.telemetry.clone();
@@ -2332,24 +2163,20 @@ mod tests {
         );
         assert!(!app.operator_signatures.is_enabled());
         assert!(app.operator_auth.is_enabled());
-
         let operator_layer = axum::middleware::from_fn_with_state::<
             _,
             _,
             (axum::extract::State<SharedAppState>, axum::extract::Request),
         >(app.clone(), enforce_operator_access);
-
         let router = axum::Router::new()
             .route("/status", get(|| async { "ok" }))
             .route_layer(operator_layer);
-
         let mut request = axum::http::Request::builder()
             .uri("/status")
             .body(Body::empty())
             .expect("request");
         request.headers_mut().extend(headers);
         let response = router.oneshot(request).await.expect("router response");
-
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }

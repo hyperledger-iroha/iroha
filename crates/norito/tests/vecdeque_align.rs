@@ -1,9 +1,6 @@
 //! Ensure VecDeque<T> decodes correctly without per-element copies when aligned.
-
 use std::collections::VecDeque;
-
 use norito::{decode_from_bytes, to_bytes};
-
 #[test]
 fn vecdeque_roundtrip_u32() {
     let mut vd = VecDeque::new();
@@ -14,7 +11,6 @@ fn vecdeque_roundtrip_u32() {
     let out: VecDeque<u32> = decode_from_bytes(&bytes).expect("decode");
     assert_eq!(vd, out);
 }
-
 #[test]
 fn vecdeque_roundtrip_strings() {
     let mut vd = VecDeque::new();

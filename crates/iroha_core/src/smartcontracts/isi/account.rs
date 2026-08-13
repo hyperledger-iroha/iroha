@@ -1,11 +1,8 @@
 //! This module contains implementations of smart-contract traits and instructions for [`Account`] structure
 //! and implementations for account queries.
-
 use iroha_data_model::{prelude::*, query::error::FindError};
 use iroha_telemetry::metrics;
-
 use super::prelude::*;
-
 /// All instructions related to accounts:
 /// - minting/burning public key into account signatories
 /// - minting/burning signature condition check
@@ -18,10 +15,8 @@ pub mod isi {
         error::{InvalidParameterError, MintabilityError, RepetitionError},
     };
     use iroha_executor_data_model::isi::multisig::MultisigSpec;
-
     use super::*;
     use crate::{role::RoleIdWithOwner, state::StateTransaction};
-
     fn is_idempotent_alias_permission(permission: &Permission) -> bool {
         iroha_executor_data_model::permission::account::CanManageAccountAlias::try_from(permission)
             .is_ok()
@@ -923,7 +918,6 @@ pub mod isi {
     #[cfg(test)]
     mod test {
         use core::num::NonZeroU64;
-
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
             domain::DomainId,
@@ -933,7 +927,6 @@ pub mod isi {
         };
         use iroha_primitives::json::Json;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
-
         use crate::smartcontracts::isi::Registrable as _;
         use crate::{
             block::ValidBlock,
@@ -1046,7 +1039,6 @@ pub mod isi {
 /// Implementations for account queries.
 pub mod query {
     use std::{collections::BTreeSet, sync::Arc};
-
     use eyre::Result;
     use iroha_crypto::PublicKey;
     use iroha_data_model::{
@@ -1059,7 +1051,6 @@ pub mod query {
         },
     };
     use norito::json::Value;
-
     use super::*;
     use crate::{
         smartcontracts::{ValidQuery, ValidSingularQuery},
@@ -2026,13 +2017,11 @@ pub mod query {
     #[cfg(test)]
     mod tests {
         use core::num::NonZeroU64;
-
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
         use iroha_executor_data_model::permission::peer::CanManagePeers;
         use iroha_primitives::json::Json;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
-
         use super::super::isi::ensure_recovery_request_targets_current_lineage;
         use super::*;
         use crate::{
@@ -2457,7 +2446,6 @@ pub mod query {
         #[test]
         fn recovery_lineage_accepts_only_explicit_account_id_rekey_suffix() {
             use iroha_data_model::account::rekey::AccountRekeyRecord;
-
             let state = new_state_with_authority();
             let active = checked_account_id();
             let retired = checked_account_id();

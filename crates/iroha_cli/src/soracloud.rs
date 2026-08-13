@@ -7,7 +7,6 @@
 //! helpers also execute through live Torii endpoints. Outbound mutation DTOs
 //! carry signed provenance only; account identity uses HTTP signature/witness
 //! headers, while protected GETs require the exact NetworkId and local key.
-
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -18,7 +17,6 @@ use std::{
     process::Command as ProcessCommand,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use base64::Engine as _;
 use eyre::{Report, Result, WrapErr, eyre};
 use iroha::{
@@ -113,7 +111,6 @@ use sorafs_manifest::{
     MetadataEntry, PinPolicy, StorageClass as ManifestStorageClass, chunker_registry,
 };
 use tiny_keccak::{Hasher as _, Sha3};
-
 #[cfg(test)]
 use iroha::data_model::{
     nexus::{DataSpaceId, FeeDebitSource},
@@ -126,12 +123,8 @@ use iroha::data_model::{
     transaction::SignedTransaction,
 };
 #[cfg(test)]
-use iroha_torii_shared::{
-    FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse,
-};
-
+use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse};
 use crate::{Run, RunContext};
-
 const DEFAULT_CONTAINER_MANIFEST: &str = "fixtures/soracloud/sora_container_manifest_v1.json";
 const DEFAULT_SERVICE_MANIFEST: &str = "fixtures/soracloud/sora_service_manifest_v1.json";
 const DEFAULT_AGENT_APARTMENT_MANIFEST: &str =
@@ -13064,7 +13057,6 @@ struct BundlePackFileSnapshot {
 impl BundlePackFileSnapshot {
     fn from_metadata(metadata: &fs::Metadata) -> Self {
         use std::os::unix::fs::MetadataExt as _;
-
         Self {
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -13215,7 +13207,6 @@ fn snapshot_bundle_pack_handle(file: &fs::File) -> Result<BundlePackFileSnapshot
 #[allow(unsafe_code)]
 fn snapshot_bundle_pack_handle(file: &fs::File) -> Result<BundlePackFileSnapshot> {
     use std::{mem::MaybeUninit, os::windows::io::AsRawHandle as _};
-
     let mut information = MaybeUninit::<BundlePackWindowsByHandleFileInformation>::uninit();
     // SAFETY: `file` owns a valid kernel handle for the duration of the call,
     // and `information` points to writable storage with the exact Win32 ABI
@@ -13271,7 +13262,6 @@ fn open_direct_bundle_pack_file(path: &Path) -> Result<fs::File> {
 #[cfg(windows)]
 fn open_direct_bundle_pack_file(path: &Path) -> Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     let mut options = fs::OpenOptions::new();
     options
         .read(true)
@@ -13312,7 +13302,6 @@ fn open_direct_bundle_pack_directory(path: &Path) -> Result<fs::File> {
 #[cfg(windows)]
 fn open_direct_bundle_pack_directory(path: &Path) -> Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     let mut options = fs::OpenOptions::new();
     options
         .access_mode(0)
@@ -13695,13 +13684,11 @@ impl BundlePackAtomicOutput {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt as _;
-
                 options.mode(0o600);
             }
             #[cfg(windows)]
             {
                 use std::os::windows::fs::OpenOptionsExt as _;
-
                 options.share_mode(WINDOWS_FILE_SHARE_READ_WRITE_DELETE);
             }
             match options.open(&path) {
@@ -13906,7 +13893,6 @@ fn atomic_replace_bundle_pack_file(staged: &Path, output: &Path) -> Result<()> {
 #[cfg(windows)]
 fn windows_bundle_pack_wide_path(path: &Path) -> Result<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt as _;
-
     let mut wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
     if wide.contains(&0) {
         return Err(eyre!(
@@ -15383,7 +15369,6 @@ fn mark_template_file_executable(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let extension = path.extension().and_then(|value| value.to_str());
         if extension == Some("sh") {
             let mut permissions = fs::metadata(path)
@@ -17937,7 +17922,6 @@ mod tests {
     #[test]
     fn bundle_pack_rejects_symbolic_and_hard_link_sources() {
         use std::os::unix::fs::symlink;
-
         let dir = temp_dir("bundle_pack_indirect_source");
         let source = dir.join("server.mjs");
         let symbolic = dir.join("symbolic.mjs");
@@ -17968,7 +17952,6 @@ mod tests {
     #[test]
     fn bundle_pack_replaces_output_symlink_without_touching_its_target() {
         use std::os::unix::fs::symlink;
-
         let dir = temp_dir("bundle_pack_output_symlink");
         let source = dir.join("server.mjs");
         let target = dir.join("target.tgz");
@@ -18066,7 +18049,6 @@ mod tests {
     #[test]
     fn bundle_pack_parses_as_offline_service_command() {
         use clap::Parser as _;
-
         #[derive(clap::Parser)]
         struct ServiceParser {
             #[command(subcommand)]
@@ -22760,7 +22742,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             assert_eq!(
                 fs::metadata(dir.join("http-service/build.sh"))
                     .expect("http-service build.sh metadata")
@@ -23752,7 +23733,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             assert_eq!(
                 fs::metadata(dir.join("services/api/dev.sh"))
                     .expect("single-api dev.sh metadata")
@@ -24013,7 +23993,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             assert_eq!(
                 fs::metadata(dir.join("services/live/build.sh"))
                     .expect("live build.sh metadata")
@@ -28514,7 +28493,6 @@ mod tests {
     #[test]
     fn static_asset_bytes_order_and_reconstruction_are_stable() {
         use sha2::Digest as _;
-
         let mut digest = Sha256::new();
         for asset in [WEBAPP_API_TAIL_V1, PII_API_TAIL_V1] {
             digest.update(Sha256::digest(asset.as_bytes()));

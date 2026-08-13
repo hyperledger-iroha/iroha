@@ -5,10 +5,8 @@
 //! proof; the largest live path frontier is exactly 320 nodes. Successful
 //! verification authenticates C0, Cq, and all 18 FRI layers before checking
 //! every one-point quotient, ten-row batch, FRI fold, and terminal equation.
-
 use super::super::{Fq2ParametersV1, Fq2V1};
 use super::*;
-
 const MERKLE_LEAF_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-leaf\0";
 const MERKLE_NODE_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-node\0";
 const MAX_FRONTIER_NODES_V2: usize = 2 * QUERY_COUNT_V2;
@@ -17,7 +15,6 @@ const CQ_SECTION_V2: usize = 1;
 const FRI_SECTION_START_V2: usize = 2;
 const TERMINAL_OFFSET_V2: usize =
     HEADER_BYTES_V2 + EVALUATION_BYTES_V2 + QUOTIENT_ROOT_BYTES_V2 + FRI_ROOT_BYTES_V2;
-
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum TreeKindV2 {
@@ -25,28 +22,23 @@ enum TreeKindV2 {
     OpeningQuotient = 2,
     Fri = 3,
 }
-
 #[derive(Clone, Copy)]
 struct BorrowedSectionV2<'a> {
     values: &'a [u8],
     authentication: &'a [u8],
 }
-
 #[derive(Clone, Copy)]
 struct FrontierNodeV2 {
     index: u32,
     digest: [u8; 32],
 }
-
 const EMPTY_FRONTIER_NODE_V2: FrontierNodeV2 = FrontierNodeV2 {
     index: 0,
     digest: [0; 32],
 };
-
 struct AuthenticatedEquationsV2<'a> {
     live: Option<LiveProtocolV2<'a>>,
 }
-
 fn merkle_leaf_hash_v2(
     parameter_digest: [u8; 32],
     kind: TreeKindV2,
@@ -71,7 +63,6 @@ fn merkle_leaf_hash_v2(
     frame.push(values)?;
     Ok(keccak256(frame.bytes()))
 }
-
 fn merkle_node_hash_v2(
     parameter_digest: [u8; 32],
     kind: TreeKindV2,
@@ -92,7 +83,6 @@ fn merkle_node_hash_v2(
     frame.push(&right)?;
     Ok(keccak256(frame.bytes()))
 }
-
 #[cfg(test)]
 pub(super) fn initial_leaf_hash_for_prover_parity_v2(
     parameter_digest: [u8; 32],
@@ -101,7 +91,6 @@ pub(super) fn initial_leaf_hash_for_prover_parity_v2(
 ) -> Result<[u8; 32], SoundnessErrorV2> {
     merkle_leaf_hash_v2(parameter_digest, TreeKindV2::Initial, 0, length, values)
 }
-
 #[cfg(test)]
 pub(super) fn initial_node_hash_for_prover_parity_v2(
     parameter_digest: [u8; 32],
@@ -118,7 +107,6 @@ pub(super) fn initial_node_hash_for_prover_parity_v2(
         right,
     )
 }
-
 #[cfg(test)]
 pub(super) fn quotient_leaf_hash_for_prover_parity_v2(
     parameter_digest: [u8; 32],
@@ -133,7 +121,6 @@ pub(super) fn quotient_leaf_hash_for_prover_parity_v2(
         values,
     )
 }
-
 #[cfg(test)]
 pub(super) fn quotient_node_hash_for_prover_parity_v2(
     parameter_digest: [u8; 32],
@@ -150,7 +137,6 @@ pub(super) fn quotient_node_hash_for_prover_parity_v2(
         right,
     )
 }
-
 fn take_borrowed_section_v2<'a>(
     live: &mut LiveProtocolV2<'a>,
     indices: &IndexSetV2,
@@ -195,7 +181,6 @@ fn take_borrowed_section_v2<'a>(
         authentication,
     })
 }
-
 fn authenticate_section_v2(
     section: BorrowedSectionV2<'_>,
     indices: &IndexSetV2,
@@ -286,7 +271,6 @@ fn authenticate_section_v2(
     }
     Ok(())
 }
-
 fn read_section_value_v2(
     section: BorrowedSectionV2<'_>,
     indices: &IndexSetV2,
@@ -308,7 +292,6 @@ fn read_section_value_v2(
         c1: read_u64_v2(section.values, offset + 8)?,
     })
 }
-
 fn read_terminal_value_v2(
     wire: &[u8],
     leaf: usize,
@@ -326,14 +309,12 @@ fn read_terminal_value_v2(
         c1: read_u64_v2(wire, offset + 8)?,
     })
 }
-
 fn fq2_v1(value: Fq2V2) -> Fq2V1 {
     Fq2V1 {
         c0: value.c0,
         c1: value.c1,
     }
 }
-
 fn field_parameters_v2() -> Result<[Fq2ParametersV1; LIMBS_V2], SoundnessErrorV2> {
     let first = Fq2ParametersV1::derive(RELEASE_MODULI_V1[0], DOMAIN_LOG_V2 as usize)
         .map_err(|_| SoundnessErrorV2::InvalidChallenge)?;
@@ -344,7 +325,6 @@ fn field_parameters_v2() -> Result<[Fq2ParametersV1; LIMBS_V2], SoundnessErrorV2
     }
     Ok(parameters)
 }
-
 fn post_quotient_transcript_v2(live: &LiveProtocolV2<'_>) -> Result<[u8; 32], SoundnessErrorV2> {
     let evaluations = live
         .wire
@@ -354,7 +334,6 @@ fn post_quotient_transcript_v2(live: &LiveProtocolV2<'_>) -> Result<[u8; 32], So
     let root = read_digest_v2(live.wire, HEADER_BYTES_V2 + EVALUATION_BYTES_V2)?;
     absorb_root_v2(QUOTIENT_DOMAIN_V2, transcript, 0, root)
 }
-
 fn opening_equation_holds_v2(
     field: Fq2ParametersV1,
     x: Fq2V1,
@@ -366,7 +345,6 @@ fn opening_equation_holds_v2(
     field.sub(committed, Fq2V1::base(evaluation))
         == field.mul(field.sub(x, Fq2V1::base(point)), quotient)
 }
-
 fn batch_value_v2(
     field: Fq2ParametersV1,
     x: Fq2V1,
@@ -387,7 +365,6 @@ fn batch_value_v2(
         field.mul(b, field.mul(quotient_power, quotient)),
     )
 }
-
 fn fold_value_v2(
     field: Fq2ParametersV1,
     x: Fq2V1,
@@ -406,7 +383,6 @@ fn fold_value_v2(
     let odd = field.mul(field.sub(positive, negative), inverse_two_x);
     Ok(field.add(even, field.mul(alpha, odd)))
 }
-
 fn verify_initial_equations_v2(
     live: &LiveProtocolV2<'_>,
     sections: &[BorrowedSectionV2<'_>; SECTION_COUNT_V2],
@@ -492,7 +468,6 @@ fn verify_initial_equations_v2(
     }
     Ok(())
 }
-
 fn verify_fri_equations_v2(
     live: &LiveProtocolV2<'_>,
     sections: &[BorrowedSectionV2<'_>; SECTION_COUNT_V2],
@@ -590,7 +565,6 @@ fn verify_fri_equations_v2(
     }
     Ok(())
 }
-
 impl<'a> FriTranscriptBoundV2<'a> {
     fn verify_authenticated_equations_v2(
         &mut self,
@@ -633,7 +607,6 @@ impl<'a> FriTranscriptBoundV2<'a> {
             TreeKindV2::OpeningQuotient,
             0,
         )?;
-
         let mut queries = live.queries;
         let mut length = DOMAIN_SIZE_V2;
         let mut fri_opened = 0_usize;
@@ -680,7 +653,6 @@ impl<'a> FriTranscriptBoundV2<'a> {
         Ok(AuthenticatedEquationsV2 { live: Some(live) })
     }
 }
-
 #[cfg(test)]
 #[path = "phase23_rns_link_q_pcs_v2_verifier_tests.rs"]
 mod tests;

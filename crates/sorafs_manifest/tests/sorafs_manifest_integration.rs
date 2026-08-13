@@ -1,5 +1,4 @@
 //! Consolidated integration-test harness for SoraFS manifests.
-
 #[path = "chunker_manifest.rs"]
 mod chunker_manifest;
 #[path = "discovery_propagation.rs"]

@@ -1,13 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii Nexus dataspaces account summary endpoint tests.
 #![cfg(feature = "app_api")]
-
 use std::{
     collections::HashSet,
     num::NonZeroU64,
     sync::{Arc, LazyLock, Mutex, MutexGuard},
 };
-
 use axum::{body::Body, http::Request};
 use http::StatusCode;
 use http_body_util::BodyExt as _;
@@ -42,17 +40,13 @@ use mv::storage::StorageReadOnly;
 use norito::json::{self, Value};
 use tokio::sync::broadcast;
 use tower::ServiceExt as _;
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 static CONSENSUS_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
 fn checked_nexus_dataspaces_summary_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked Nexus dataspaces summary Ed25519 fixture keypair")
 }
-
 #[test]
 fn nexus_dataspaces_summary_ed25519_fixture_uses_checked_key_generation() {
     let key_pair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
@@ -60,20 +54,16 @@ fn nexus_dataspaces_summary_ed25519_fixture_uses_checked_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture Nexus dataspaces summary public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-
     let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
@@ -84,10 +74,8 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         .expect("i105 account literal");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii::dataspaces::summary"));
     let dataspace = DataSpaceId::new(42);
-
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -117,9 +105,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-
     let mut nexus = state.nexus_snapshot();
     nexus.enabled = true;
     nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
@@ -133,14 +119,12 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     ])
     .expect("dataspace catalog");
     state.set_nexus(nexus).expect("set nexus config");
-
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("domain id"),
         "xor".parse().expect("asset definition name"),
     );
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
-
     Register::domain(Domain::new(domain_id.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("register domain");
@@ -167,10 +151,8 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("mint asset");
-
     stx.apply();
     block.commit().expect("commit seeded state");
-
     sumeragi::status::set_lane_commitments(
         Vec::new(),
         vec![status::DataspaceCommitmentSnapshot {
@@ -186,7 +168,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
             )),
         }],
     );
-
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let response = router
         .oneshot(
@@ -201,7 +182,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
-
     let body = response
         .into_body()
         .collect()
@@ -209,7 +189,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         .expect("body")
         .to_bytes();
     let payload: Value = json::from_slice(&body).expect("json payload");
-
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
     assert_eq!(payload["account"], Value::from(i105_literal.as_str()));
     assert_eq!(payload["uaid"], Value::from(uaid.to_string()));
@@ -217,7 +196,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     assert_eq!(payload["totals"]["portfolio_positions"], Value::from(1));
     assert_eq!(payload["totals"]["manifests_active"], Value::from(1));
     assert_eq!(payload["totals"]["consensus_tx_count"], Value::from(2));
-
     let dataspaces = payload["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 1);
     let row = &dataspaces[0];
@@ -234,15 +212,12 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     assert_eq!(row["consensus"]["entries"], Value::from(1));
     assert_eq!(row["consensus"]["lane_ids"][0], Value::from(7));
     assert_eq!(row["consensus"]["last_block_height"], Value::from(123));
-
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_without_uaid() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-
     let (state, kura, local_peer_id) = minimal_state(true);
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
@@ -251,7 +226,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
         .to_account_address()
         .and_then(|address| address.to_i105())
         .expect("i105 account literal");
-
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
     Register::account(NewAccount::new(account_id.clone()))
@@ -259,16 +233,13 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
         .expect("register account");
     stx.apply();
     block.commit().expect("commit account");
-
     let router = build_test_router(state, &kura, local_peer_id);
     let spaced_literal = format!("  {account_literal}  ");
     let literal = urlencoding::encode(&spaced_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(router, &uri).await;
-
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
-
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
     assert_eq!(payload["account"], Value::from(i105_literal.as_str()));
     assert!(payload["uaid"].is_null(), "uaid should be null: {body}");
@@ -291,12 +262,10 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
         &Vec::<Value>::new()
     );
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_dataspace() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-
     let (state, kura, local_peer_id) = minimal_state(true);
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
@@ -311,7 +280,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         domain_id.clone(),
         "rose".parse().expect("asset definition name"),
     );
-
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
     Register::domain(Domain::new(domain_id.clone()))
@@ -339,15 +307,12 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         .expect("mint asset");
     stx.apply();
     block.commit().expect("commit seeded state");
-
     let router = build_test_router(state, &kura, local_peer_id);
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(router, &uri).await;
-
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
-
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
     assert_eq!(payload["account"], Value::from(i105_literal.as_str()));
     assert_eq!(payload["uaid"], Value::from(uaid.to_string()));
@@ -359,7 +324,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
     assert_eq!(payload["totals"]["manifests_active"], Value::from(0));
     assert_eq!(payload["totals"]["consensus_entries"], Value::from(0));
     assert_eq!(payload["totals"]["consensus_tx_count"], Value::from(0));
-
     let dataspaces = payload["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 1);
     let row = &dataspaces[0];
@@ -386,17 +350,14 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         &Vec::<Value>::new()
     );
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_manifests() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-
     let pending_dataspace = DataSpaceId::new(7);
     let expired_dataspace = DataSpaceId::new(8);
     let revoked_dataspace = DataSpaceId::new(9);
@@ -408,7 +369,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         .and_then(|address| address.to_i105())
         .expect("i105 account literal");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii::manifest_states"));
-
     let manifest_for = |dataspace: DataSpaceId, issued_ms: u64| AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -418,10 +378,8 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         expiry_epoch: Some(30),
         entries: Vec::new(),
     };
-
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-
     let mut bindings = UaidDataspaceBindings::default();
     for dataspace in [pending_dataspace, expired_dataspace, revoked_dataspace] {
         bindings.bind_account(dataspace, account_id.clone());
@@ -429,7 +387,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-
     let pending_record =
         SpaceDirectoryManifestRecord::new(manifest_for(pending_dataspace, 1_710_000_000_000));
     let mut expired_record =
@@ -449,7 +406,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
     let mut nexus = state.nexus_snapshot();
     nexus.enabled = true;
@@ -476,7 +432,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     ])
     .expect("dataspace catalog");
     state.set_nexus(nexus).expect("set nexus config");
-
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
     Register::account(NewAccount::new(account_id.clone()).with_uaid(Some(uaid)))
@@ -484,7 +439,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         .expect("register account with uaid");
     stx.apply();
     block.commit().expect("commit account");
-
     sumeragi::status::set_lane_commitments(
         Vec::new(),
         vec![status::DataspaceCommitmentSnapshot {
@@ -500,15 +454,12 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
             )),
         }],
     );
-
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(router, &uri).await;
-
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
-
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
     assert_eq!(payload["account"], Value::from(i105_literal.as_str()));
     assert_eq!(payload["uaid"], Value::from(uaid.to_string()));
@@ -526,10 +477,8 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         Value::from(0)
     );
     assert_eq!(payload["totals"]["consensus_teu_total"], Value::from(0));
-
     let dataspaces = payload["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 4);
-
     let universal = &dataspaces[0];
     assert_eq!(
         universal["dataspace_id"],
@@ -544,7 +493,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     assert_eq!(universal["portfolio"]["accounts"], Value::from(1));
     assert_eq!(universal["portfolio"]["positions"], Value::from(0));
     assert_eq!(universal["consensus"]["entries"], Value::from(0));
-
     let pending = &dataspaces[1];
     assert_eq!(
         pending["dataspace_id"],
@@ -559,7 +507,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     assert_eq!(pending["portfolio"]["accounts"], Value::from(0));
     assert_eq!(pending["portfolio"]["positions"], Value::from(0));
     assert_eq!(pending["consensus"]["entries"], Value::from(0));
-
     let expired = &dataspaces[2];
     assert_eq!(
         expired["dataspace_id"],
@@ -573,7 +520,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     assert!(expired["manifest"]["revoked_epoch"].is_null());
     assert_eq!(expired["portfolio"]["accounts"], Value::from(0));
     assert_eq!(expired["consensus"]["entries"], Value::from(0));
-
     let revoked = &dataspaces[3];
     assert_eq!(
         revoked["dataspace_id"],
@@ -590,20 +536,16 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     );
     assert_eq!(revoked["portfolio"]["accounts"], Value::from(0));
     assert_eq!(revoked["consensus"]["entries"], Value::from(0));
-
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_dataspace() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-
     let dataspace = DataSpaceId::new(404);
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
@@ -618,7 +560,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         domain_id.clone(),
         "lotus".parse().expect("asset definition name"),
     );
-
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let mut bindings = UaidDataspaceBindings::default();
@@ -626,12 +567,10 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
     world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
     let mut nexus = state.nexus_snapshot();
     nexus.enabled = true;
     state.set_nexus(nexus).expect("set nexus config");
-
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
     Register::domain(Domain::new(domain_id.clone()))
@@ -659,14 +598,12 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         .expect("mint asset");
     stx.apply();
     block.commit().expect("commit seeded state");
-
     let mut bindings = UaidDataspaceBindings::default();
     bindings.bind_account(dataspace, account_id.clone());
     state
         .world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -684,15 +621,12 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         .world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(router, &uri).await;
-
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
-
     assert_eq!(payload["account_id"], Value::from(account_literal.as_str()));
     assert_eq!(payload["account"], Value::from(i105_literal.as_str()));
     assert_eq!(payload["uaid"], Value::from(uaid.to_string()));
@@ -703,7 +637,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
     assert_eq!(payload["totals"]["manifests_total"], Value::from(1));
     assert_eq!(payload["totals"]["manifests_active"], Value::from(1));
     assert_eq!(payload["totals"]["consensus_entries"], Value::from(0));
-
     let dataspaces = payload["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 1);
     let row = &dataspaces[0];
@@ -722,17 +655,14 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
     assert_eq!(row["manifest"]["status"], Value::from("Active"));
     assert_eq!(row["consensus"]["entries"], Value::from(0));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_totals() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-
     let dataspace = DataSpaceId::new(52);
     let primary_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let primary_account_id = AccountId::new(primary_keypair.public_key().clone());
@@ -753,10 +683,8 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         domain_id.clone(),
         "cedar".parse().expect("asset definition name"),
     );
-
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -773,7 +701,6 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
     let mut nexus = state.nexus_snapshot();
     nexus.enabled = true;
@@ -788,7 +715,6 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
     ])
     .expect("dataspace catalog");
     state.set_nexus(nexus).expect("set nexus config");
-
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
     Register::domain(Domain::new(domain_id.clone()))
@@ -822,7 +748,6 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
     .expect("mint asset");
     stx.apply();
     block.commit().expect("commit seeded state");
-
     let mut bindings = state
         .view()
         .world()
@@ -835,7 +760,6 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         .world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-
     sumeragi::status::set_lane_commitments(
         Vec::new(),
         vec![
@@ -865,15 +789,12 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
             },
         ],
     );
-
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let literal = urlencoding::encode(&primary_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(router, &uri).await;
-
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
     let payload: Value = json::from_str(&body).expect("json payload");
-
     assert_eq!(payload["account_id"], Value::from(primary_literal.as_str()));
     assert_eq!(
         payload["account"],
@@ -894,7 +815,6 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         Value::from(1_100)
     );
     assert_eq!(payload["totals"]["consensus_teu_total"], Value::from(550));
-
     let dataspaces = payload["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 1);
     let row = &dataspaces[0];
@@ -926,15 +846,12 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         row["consensus"]["details"].as_array().expect("details")[0]["lane_id"],
         Value::from(3_u64)
     );
-
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-
     let (state, kura, local_peer_id) = minimal_state(true);
     let router = build_test_router(state, &kura, local_peer_id);
     let (status, body) = request_summary(
@@ -942,81 +859,67 @@ async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
         "/v1/nexus/dataspaces/accounts/not-a-valid-literal/summary",
     )
     .await;
-
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         body.contains("invalid account literal"),
         "expected invalid account literal message, got: {body}"
     );
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-
     let (state, kura, local_peer_id) = minimal_state(true);
     let router = build_test_router(state, &kura, local_peer_id);
     let (status, body) =
         request_summary(router, "/v1/nexus/dataspaces/accounts/%20%20/summary").await;
-
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         body.contains("account literal must not be empty"),
         "expected empty account literal error, got: {body}"
     );
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-
     let (state, kura, local_peer_id) = minimal_state(true);
     let router = build_test_router(state, &kura, local_peer_id);
     let account_literal = valid_missing_account_literal();
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, _body) = request_summary(router, &uri).await;
-
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_when_nexus_disabled() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-
     let (state, kura, local_peer_id) = minimal_state(false);
     let router = build_test_router(state, &kura, local_peer_id);
     let account_literal = valid_missing_account_literal();
     let literal = urlencoding::encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(router, &uri).await;
-
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         body.contains("nexus_disabled"),
         "expected nexus_disabled code, got: {body}"
     );
 }
-
 fn minimal_state(nexus_enabled: bool) -> (Arc<State>, Arc<Kura>, PeerId) {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
     let mut nexus = state.nexus_snapshot();
     nexus.enabled = nexus_enabled;
     state.set_nexus(nexus).expect("set nexus config");
-
     (Arc::new(state), kura, local_peer_id)
 }
-
 async fn request_summary(router: axum::Router, uri: &str) -> (StatusCode, String) {
     let response = router
         .oneshot(
@@ -1037,16 +940,13 @@ async fn request_summary(router: axum::Router, uri: &str) -> (StatusCode, String
     let body = String::from_utf8_lossy(&bytes).to_string();
     (status, body)
 }
-
 fn consensus_guard() -> MutexGuard<'static, ()> {
     CONSENSUS_LOCK.lock().unwrap_or_else(|err| err.into_inner())
 }
-
 fn valid_missing_account_literal() -> String {
     let key_pair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     AccountId::new(key_pair.public_key().clone()).to_string()
 }
-
 fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId) -> axum::Router {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let queue_cfg = Queue::default();
@@ -1066,7 +966,6 @@ fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId)
     );
     torii.router()
 }
-
 fn block_header(height: u64) -> BlockHeader {
     BlockHeader::new(
         NonZeroU64::new(height).expect("height must be non-zero"),

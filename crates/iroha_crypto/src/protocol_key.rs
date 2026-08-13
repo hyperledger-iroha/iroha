@@ -1,19 +1,14 @@
 //! Deterministic public points for protocol-owned, non-signing identities.
-
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use sha2::{Digest as _, Sha512};
-
 use crate::{Algorithm, PublicKey};
-
 const NON_SIGNING_ED25519_TRANSCRIPT_V1: &[u8] = b"iroha:non-signing-ed25519-public-point:v1";
-
 fn update_framed(hasher: &mut Sha512, bytes: &[u8]) {
     let len = u64::try_from(bytes.len())
         .expect("in-memory protocol-key derivation input length must fit u64");
     hasher.update(len.to_be_bytes());
     hasher.update(bytes);
 }
-
 /// Derive a deterministic Ed25519 public point for a protocol-owned identity.
 ///
 /// This is deliberately not seeded key generation. It rejection-samples a
@@ -42,12 +37,10 @@ pub fn derive_non_signing_ed25519_public_key(domain: &[u8], fields: &[&[u8]]) ->
             update_framed(&mut hasher, field);
         }
         hasher.update(counter.to_be_bytes());
-
         let digest = hasher.finalize();
         let mut candidate = [0_u8; 32];
         let candidate_len = candidate.len();
         candidate.copy_from_slice(&digest[..candidate_len]);
-
         let compressed = CompressedEdwardsY(candidate);
         let Some(point) = compressed.decompress() else {
             continue;
@@ -58,19 +51,15 @@ pub fn derive_non_signing_ed25519_public_key(domain: &[u8], fields: &[&[u8]]) ->
         {
             continue;
         }
-
         return PublicKey::from_bytes(Algorithm::Ed25519, &candidate)
             .expect("candidate was validated as a canonical prime-order Ed25519 point");
     }
-
     unreachable!("a SHA-512 transcript must eventually yield a valid Ed25519 subgroup point")
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::KeyPair;
-
     #[test]
     fn non_signing_protocol_key_is_stable_and_framed() {
         let derived = derive_non_signing_ed25519_public_key(
@@ -107,13 +96,11 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn non_signing_protocol_key_is_not_seeded_key_generation() {
         let fields: &[&[u8]] = &[b"public", b"inputs"];
         let derived =
             derive_non_signing_ed25519_public_key(b"iroha:test:protocol-account:v1", fields);
-
         let legacy_seed = fields.concat();
         let legacy = KeyPair::try_from_seed(legacy_seed, Algorithm::Ed25519)
             .expect("non-zero fixture seed derives");

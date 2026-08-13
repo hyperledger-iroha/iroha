@@ -3,19 +3,15 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
 use iroha_data_model::{block::BlockHeader, nexus::LaneConfig as LaneConfigModel};
 use nonzero_ext::nonzero;
-
 use super::*;
 use crate::kura::Kura;
-
 #[test]
 fn state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let _write_guard = state.state_write_lock.lock();
     let barrier = Arc::new(Barrier::new(2));
@@ -27,7 +23,6 @@ fn state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock(
         block.commit().expect("commit should succeed");
     });
     barrier.wait();
-
     let start = Instant::now();
     let mut locked_while_waiting = false;
     while start.elapsed() < Duration::from_millis(200) {
@@ -40,23 +35,19 @@ fn state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock(
         }
         thread::yield_now();
     }
-
     assert!(
         !locked_while_waiting,
         "tiered backend locked while commit waits for state_write_lock"
     );
-
     drop(_write_guard);
     handle.join().expect("commit thread");
 }
-
 #[test]
 fn lane_lifecycle_and_commit_do_not_deadlock_on_lock_order() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
     state.nexus.write().enabled = true;
-
     let plan = iroha_data_model::nexus::LaneLifecyclePlan {
         additions: vec![LaneConfigModel {
             id: LaneId::new(1),
@@ -65,7 +56,6 @@ fn lane_lifecycle_and_commit_do_not_deadlock_on_lock_order() {
         }],
         retire: Vec::new(),
     };
-
     let (done_tx, done_rx) = mpsc::channel();
     let barrier = Arc::new(Barrier::new(3));
     let lane_state = Arc::clone(&state);
@@ -78,7 +68,6 @@ fn lane_lifecycle_and_commit_do_not_deadlock_on_lock_order() {
             .expect("lane lifecycle");
         let _ = lane_done.send(());
     });
-
     let commit_state = Arc::clone(&state);
     let commit_done = done_tx.clone();
     let commit_barrier = Arc::clone(&barrier);
@@ -89,16 +78,13 @@ fn lane_lifecycle_and_commit_do_not_deadlock_on_lock_order() {
         block.commit().expect("commit");
         let _ = commit_done.send(());
     });
-
     barrier.wait();
-
     done_rx
         .recv_timeout(Duration::from_secs(2))
         .expect("first serialized operation completion");
     done_rx
         .recv_timeout(Duration::from_secs(2))
         .expect("second serialized operation completion");
-
     lane_handle.join().expect("lane lifecycle thread");
     commit_handle.join().expect("commit thread");
     assert!(
@@ -110,14 +96,12 @@ fn lane_lifecycle_and_commit_do_not_deadlock_on_lock_order() {
         "lane lifecycle should publish after serialization with commit"
     );
 }
-
 #[test]
 fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
     state.nexus.write().enabled = true;
-
     let plan = iroha_data_model::nexus::LaneLifecyclePlan {
         additions: vec![LaneConfigModel {
             id: LaneId::new(1),
@@ -126,7 +110,6 @@ fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block
         }],
         retire: Vec::new(),
     };
-
     let (block_ready_tx, block_ready_rx) = mpsc::channel();
     let (commit_release_tx, commit_release_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
@@ -144,11 +127,9 @@ fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block
         block.commit().expect("commit prebuilt block");
         let _ = commit_done.send("commit");
     });
-
     block_ready_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("prebuilt block ready");
-
     let lifecycle_state = Arc::clone(&state);
     let lifecycle_done = done_tx.clone();
     let lifecycle_handle = thread::spawn(move || {
@@ -157,7 +138,6 @@ fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block
             .expect("lane lifecycle");
         let _ = lifecycle_done.send("lifecycle");
     });
-
     let publication_start = Instant::now();
     let mut catalog_published = false;
     while publication_start.elapsed() < Duration::from_secs(1) {
@@ -179,14 +159,12 @@ fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block
     commit_release_tx
         .send(())
         .expect("release prebuilt block commit");
-
     done_rx
         .recv_timeout(Duration::from_secs(2))
         .expect("first operation completion");
     done_rx
         .recv_timeout(Duration::from_secs(2))
         .expect("second operation completion");
-
     lifecycle_handle.join().expect("lane lifecycle thread");
     commit_handle.join().expect("commit thread");
     assert!(
@@ -198,18 +176,15 @@ fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block
         "published lane should survive prebuilt block serialization"
     );
 }
-
 #[test]
 fn transaction_uses_prebuilt_block_nexus_snapshot_after_shared_catalog_update() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     state.nexus.write().enabled = true;
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let block_catalog = block.nexus.lane_catalog.clone();
-
     let updated_catalog = iroha_data_model::nexus::LaneCatalog::new(
         nonzero!(2_u32),
         vec![
@@ -236,16 +211,13 @@ fn transaction_uses_prebuilt_block_nexus_snapshot_after_shared_catalog_update() 
             .is_some(),
         "shared Nexus catalog update should be visible to new state snapshots"
     );
-
     let tx = block.transaction();
-
     assert_eq!(tx.nexus.lane_catalog, block_catalog);
     assert!(
         tx.nexus.lane_catalog.by_alias("post-block-beta").is_none(),
         "transactions opened from a prebuilt block must not observe later Nexus catalog updates"
     );
 }
-
 #[test]
 #[should_panic(
     expected = "committed block failed SCCP commitment validation before apply_without_execution"
@@ -315,15 +287,12 @@ fn apply_without_execution_rejects_duplicate_sccp_records_before_state_mutation(
         .expect("deduplicated SCCP root");
     block.set_sccp_commitment_root(Some(root));
     let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
-
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     let mut state_block = state.block(committed.as_ref().header());
-
     let _ = state_block.apply_without_execution(&committed, Vec::new());
 }
-
 #[test]
 #[should_panic(
     expected = "committed block failed SCCP commitment validation before apply_without_execution"
@@ -366,15 +335,12 @@ fn apply_without_execution_rejects_invalid_sccp_record_payload_before_state_muta
         )
         .expect("test block entrypoint hash should match payload");
     let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
-
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     let mut state_block = state.block(committed.as_ref().header());
-
     let _ = state_block.apply_without_execution(&committed, Vec::new());
 }
-
 #[test]
 #[should_panic(
     expected = "committed block failed SCCP commitment validation before apply_without_execution"
@@ -437,15 +403,12 @@ fn apply_without_execution_rejects_unbound_sccp_record_route_before_state_mutati
         )
         .expect("test block entrypoint hash should match payload");
     let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
-
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     let mut state_block = state.block(committed.as_ref().header());
-
     let _ = state_block.apply_without_execution(&committed, Vec::new());
 }
-
 #[test]
 #[should_panic(
     expected = "committed block failed SCCP commitment validation before apply_without_execution"
@@ -508,15 +471,12 @@ fn apply_without_execution_rejects_scoped_sccp_asset_alias_before_state_mutation
         )
         .expect("test block entrypoint hash should match payload");
     let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
-
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     let mut state_block = state.block(committed.as_ref().header());
-
     let _ = state_block.apply_without_execution(&committed, Vec::new());
 }
-
 #[test]
 #[should_panic(
     expected = "committed block failed SCCP commitment validation before apply_without_execution"
@@ -572,22 +532,18 @@ fn apply_without_execution_rejects_resultless_sccp_root_before_state_mutation() 
         crate::bridge::sccp_commitment_root_from_messages(&messages).expect("resultless SCCP root");
     block.set_sccp_commitment_root(Some(root));
     let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
-
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     let mut state_block = state.block(committed.as_ref().header());
-
     let _ = state_block.apply_without_execution(&committed, Vec::new());
 }
-
 #[test]
 fn lane_lifecycle_waits_for_inflight_state_commit_lock() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
     state.nexus.write().enabled = true;
-
     let plan = iroha_data_model::nexus::LaneLifecyclePlan {
         additions: vec![LaneConfigModel {
             id: LaneId::new(1),
@@ -596,7 +552,6 @@ fn lane_lifecycle_waits_for_inflight_state_commit_lock() {
         }],
         retire: Vec::new(),
     };
-
     let commit_guard = state.state_commit_lock.lock();
     let (attempt_tx, attempt_rx) = mpsc::channel();
     let lifecycle_state = Arc::clone(&state);
@@ -608,7 +563,6 @@ fn lane_lifecycle_waits_for_inflight_state_commit_lock() {
             .apply_lane_lifecycle(&plan)
             .expect("lane lifecycle");
     });
-
     attempt_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("lifecycle thread started");
@@ -621,7 +575,6 @@ fn lane_lifecycle_waits_for_inflight_state_commit_lock() {
             .is_none(),
         "manual lifecycle must not publish while a state commit is in progress"
     );
-
     drop(commit_guard);
     handle.join().expect("lane lifecycle thread");
     assert!(
@@ -633,17 +586,14 @@ fn lane_lifecycle_waits_for_inflight_state_commit_lock() {
         "manual lifecycle should publish after the state commit lock is released"
     );
 }
-
 #[test]
 fn heavy_world_commit_bench_helper_commits_accounts() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
-
     let elapsed = state
         .commit_heavy_world_accounts_for_bench(nonzero!(1_u64), 16)
         .expect("heavy world bench commit");
-
     assert!(elapsed > Duration::ZERO);
     assert_eq!(state.view().world.accounts().iter().count(), 16);
 }

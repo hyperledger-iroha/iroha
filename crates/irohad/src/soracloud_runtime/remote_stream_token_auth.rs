@@ -1,17 +1,13 @@
 //! Exact-network operator authentication for Soracloud remote stream-token requests.
-
 use eyre::WrapErr as _;
 use iroha_crypto::KeyPair;
 use iroha_data_model::NetworkId;
-
 const STREAM_TOKEN_PATH: &str = "/v1/sorafs/storage/token";
-
 /// Runtime-only identity used to authenticate remote stream-token issuance.
 pub(super) struct RemoteStreamTokenOperator {
     key_pair: KeyPair,
     network_id: NetworkId,
 }
-
 impl RemoteStreamTokenOperator {
     /// Bind a runtime key to one exact genesis-derived network identity.
     pub(super) fn new(key_pair: KeyPair, network_id: NetworkId) -> Self {
@@ -20,13 +16,11 @@ impl RemoteStreamTokenOperator {
             network_id,
         }
     }
-
     /// Return the exact network identity included in every request signature.
     pub(super) fn network_id(&self) -> &NetworkId {
         &self.network_id
     }
 }
-
 impl super::SoracloudRuntimeManager {
     /// Attach the runtime-only node identity used for remote stream-token issuance.
     #[must_use]
@@ -39,7 +33,6 @@ impl super::SoracloudRuntimeManager {
             Some(RemoteStreamTokenOperator::new(key_pair, network_id));
         self
     }
-
     /// Bind remote hydration to the daemon's runtime node key and genesis trust root.
     #[must_use]
     pub(crate) fn with_remote_stream_token_operator_from_config(
@@ -51,7 +44,6 @@ impl super::SoracloudRuntimeManager {
             NetworkId::from_genesis_hash(config.genesis.expected_hash),
         )
     }
-
     /// Attach a deterministic operator identity to inline runtime tests.
     #[cfg(test)]
     pub(super) fn with_test_remote_stream_token_operator(self, network_id: NetworkId) -> Self {
@@ -62,7 +54,6 @@ impl super::SoracloudRuntimeManager {
         )
     }
 }
-
 /// Fail startup when enabled remote hydration lacks its exact runtime identity.
 pub(super) fn ensure_startup_binding(
     operator: Option<&RemoteStreamTokenOperator>,
@@ -80,7 +71,6 @@ pub(super) fn ensure_startup_binding(
     }
     Ok(())
 }
-
 /// Build one signed request without performing network I/O.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_request(
@@ -100,7 +90,6 @@ pub(super) fn build_request(
     if url.path() != STREAM_TOKEN_PATH || url.query().is_some() || url.fragment().is_some() {
         eyre::bail!("remote Soracloud hydration token URL has a non-canonical path or query");
     }
-
     let mut request_body = norito::json::native::Map::new();
     request_body.insert(
         "manifest_id_hex".into(),
@@ -134,7 +123,6 @@ pub(super) fn build_request(
         &body,
     )
     .wrap_err("sign remote Soracloud hydration token request")?;
-
     client
         .request(method, url)
         .headers(headers)
@@ -145,31 +133,25 @@ pub(super) fn build_request(
         .build()
         .wrap_err("build remote Soracloud hydration token request")
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey};
     use iroha_data_model::{NetworkId, block::BlockHeader};
-
     use super::*;
-
     const PUBLIC_KEY: &str = "x-iroha-operator-public-key";
     const TIMESTAMP: &str = "x-iroha-operator-timestamp-ms";
     const NONCE: &str = "x-iroha-operator-nonce";
     const SIGNATURE: &str = "x-iroha-operator-signature";
     const DOMAIN: &[u8] = b"iroha.operator.http-request.network.v1\0";
-
     fn key_pair() -> KeyPair {
         KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
             .expect("derive remote stream-token operator fixture")
     }
-
     fn network_id(genesis: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             genesis,
         )))
     }
-
     fn client() -> reqwest::blocking::Client {
         reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -177,7 +159,6 @@ mod tests {
             .build()
             .expect("build request-only client")
     }
-
     fn request(
         operator: Option<&RemoteStreamTokenOperator>,
     ) -> eyre::Result<reqwest::blocking::Request> {
@@ -193,7 +174,6 @@ mod tests {
             "diagnostic-nonce",
         )
     }
-
     fn decode_standard_base64(input: &str) -> Vec<u8> {
         fn value(byte: u8) -> u8 {
             match byte {
@@ -205,7 +185,6 @@ mod tests {
                 _ => panic!("invalid base64 fixture byte"),
             }
         }
-
         assert_eq!(input.len() % 4, 0);
         let mut decoded = Vec::with_capacity(input.len() / 4 * 3);
         for chunk in input.as_bytes().chunks_exact(4) {
@@ -222,7 +201,6 @@ mod tests {
         }
         decoded
     }
-
     fn header<'request>(
         request: &'request reqwest::blocking::Request,
         name: &str,
@@ -234,7 +212,6 @@ mod tests {
             .to_str()
             .expect("operator header is text")
     }
-
     fn signature_verifies(
         request: &reqwest::blocking::Request,
         network_id: &NetworkId,
@@ -260,7 +237,6 @@ mod tests {
         message.extend_from_slice(header(request, NONCE).as_bytes());
         signature.verify(&public_key, &message).is_ok()
     }
-
     #[test]
     fn signed_request_carries_exact_body_and_required_headers() -> eyre::Result<()> {
         let key_pair = key_pair();
@@ -272,7 +248,6 @@ mod tests {
             .and_then(reqwest::blocking::Body::as_bytes)
             .expect("in-memory request body");
         let uri: iroha_torii::Uri = STREAM_TOKEN_PATH.parse()?;
-
         assert_eq!(request.method(), reqwest::Method::POST);
         assert_eq!(request.url().path(), STREAM_TOKEN_PATH);
         assert_eq!(
@@ -292,7 +267,6 @@ mod tests {
         assert!(signature_verifies(&request, &network_id, &uri, body));
         Ok(())
     }
-
     #[test]
     fn signature_binds_genesis_path_and_raw_body_even_for_same_label() -> eyre::Result<()> {
         let consumer_label = String::from("sora-production");
@@ -308,7 +282,6 @@ mod tests {
             .expect("in-memory request body");
         let uri: iroha_torii::Uri = STREAM_TOKEN_PATH.parse()?;
         let wrong_uri: iroha_torii::Uri = "/v1/sorafs/storage/token/other".parse()?;
-
         assert!(signature_verifies(&request, &network_id, &uri, body));
         assert!(!signature_verifies(
             &request,
@@ -325,19 +298,16 @@ mod tests {
         ));
         Ok(())
     }
-
     #[test]
     fn missing_operator_fails_before_request_can_be_dispatched() {
         let error = request(None).expect_err("missing runtime signer must fail closed");
         assert!(error.to_string().contains("runtime-only operator signer"));
     }
-
     #[test]
     fn startup_binding_requires_signer_and_exact_genesis() {
         let expected = network_id(b"remote-stream-token-startup-genesis");
         let foreign = network_id(b"remote-stream-token-startup-foreign-genesis");
         let operator = RemoteStreamTokenOperator::new(key_pair(), expected);
-
         ensure_startup_binding(Some(&operator), &expected, true)
             .expect("exact runtime identity is accepted");
         assert!(ensure_startup_binding(None, &expected, true).is_err());
@@ -345,7 +315,6 @@ mod tests {
         ensure_startup_binding(None, &expected, false)
             .expect("disabled remote hydration needs no signer");
     }
-
     #[test]
     fn each_request_uses_a_fresh_operator_nonce() -> eyre::Result<()> {
         let operator = RemoteStreamTokenOperator::new(

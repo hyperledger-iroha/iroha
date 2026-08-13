@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Extra-functional soak and churn scenarios.
-
 mod connected_peers;
 mod genesis;
 mod multiple_blocks_created;

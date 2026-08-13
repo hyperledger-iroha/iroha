@@ -4,13 +4,11 @@
 //! needs a durable notion of the latest query snapshot that survived restarts.
 //! This journal stores the latest indexed block height and hash under the Kura
 //! root so aggregate responses can report a stable snapshot marker.
-
 use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-
 use iroha_crypto::HashOf;
 use iroha_data_model::block::BlockHeader;
 use iroha_logger::warn;
@@ -19,7 +17,6 @@ use norito::{
     decode_from_bytes, to_bytes,
 };
 use thiserror::Error;
-
 /// Snapshot of the latest durable query index state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
 pub struct QueryIndexStatus {
@@ -30,13 +27,11 @@ pub struct QueryIndexStatus {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub indexed_block_hash: Option<HashOf<BlockHeader>>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct PersistedQueryIndexStatus {
     version: u32,
     status: QueryIndexStatus,
 }
-
 /// Errors returned when loading or persisting the query-index status journal.
 #[derive(Debug, Error)]
 pub enum QueryIndexJournalError {
@@ -79,20 +74,17 @@ pub enum QueryIndexJournalError {
         version: u32,
     },
 }
-
 /// Journal that records the latest query-index snapshot marker.
 #[derive(Debug, Clone)]
 pub struct QueryIndexJournal {
     path: PathBuf,
     status: QueryIndexStatus,
 }
-
 impl QueryIndexJournal {
     /// Filename used to persist query index status next to the block store.
     pub const JOURNAL_FILE: &'static str = "query-index-status.norito";
     const JOURNAL_VERSION: u32 = 1;
     const JOURNAL_MAX_BYTES: u64 = 4 * 1024;
-
     /// Build the canonical journal path under the provided root.
     #[must_use]
     pub fn journal_path(root: &Path) -> PathBuf {
@@ -102,7 +94,6 @@ impl QueryIndexJournal {
             root.join(Self::JOURNAL_FILE)
         }
     }
-
     /// Construct a fresh journal with no indexed state.
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
@@ -111,7 +102,6 @@ impl QueryIndexJournal {
             status: QueryIndexStatus::default(),
         }
     }
-
     /// Load a journal from disk, preferring a valid temp file when present.
     ///
     /// Missing files are treated as an empty journal.
@@ -126,7 +116,6 @@ impl QueryIndexJournal {
         if path.as_os_str().is_empty() {
             return Ok(journal);
         }
-
         let main = if path.exists() {
             Some(Self::load_persisted(&path))
         } else {
@@ -137,7 +126,6 @@ impl QueryIndexJournal {
         } else {
             None
         };
-
         let (persisted, read_path) = match (tmp, main) {
             (None, None) => return Ok(journal),
             (Some(Ok(persisted)), _) => (persisted, tmp_path.clone()),
@@ -145,14 +133,12 @@ impl QueryIndexJournal {
             (Some(Err(_)) | None, Some(Ok(persisted))) => (persisted, path.clone()),
             (None | Some(Err(_)), Some(Err(err))) => return Err(err),
         };
-
         journal.status = persisted.status;
         if read_path != path {
             Self::promote_temp_journal(&read_path, &path);
         }
         Ok(journal)
     }
-
     fn load_persisted(path: &Path) -> Result<PersistedQueryIndexStatus, QueryIndexJournalError> {
         let file = fs::File::open(path).map_err(|source| QueryIndexJournalError::Read {
             path: path.to_path_buf(),
@@ -202,11 +188,9 @@ impl QueryIndexJournal {
         }
         Ok(persisted)
     }
-
     fn temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
     }
-
     fn promote_temp_journal(from: &Path, to: &Path) {
         if let Err(err) = fs::rename(from, to) {
             if to.exists() {
@@ -237,20 +221,17 @@ impl QueryIndexJournal {
                 return;
             }
         }
-
         if let Some(parent) = to.parent() {
             if let Ok(dir) = fs::File::open(parent) {
                 let _ = dir.sync_all();
             }
         }
     }
-
     /// Return the current in-memory snapshot.
     #[must_use]
     pub fn snapshot(&self) -> QueryIndexStatus {
         self.status.clone()
     }
-
     /// Update the latest indexed height/hash tracked by this journal.
     pub fn set_latest(
         &mut self,
@@ -260,7 +241,6 @@ impl QueryIndexJournal {
         self.status.indexed_height = indexed_height;
         self.status.indexed_block_hash = indexed_block_hash;
     }
-
     /// Persist the journal atomically to disk.
     ///
     /// # Errors
@@ -270,21 +250,18 @@ impl QueryIndexJournal {
         if self.path.as_os_str().is_empty() {
             return Ok(());
         }
-
         let payload = PersistedQueryIndexStatus {
             version: Self::JOURNAL_VERSION,
             status: self.status.clone(),
         };
         let bytes = to_bytes(&payload).map_err(QueryIndexJournalError::Encode)?;
         let tmp_path = Self::temp_path(&self.path);
-
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|source| QueryIndexJournalError::Write {
                 path: self.path.clone(),
                 source,
             })?;
         }
-
         {
             let mut file =
                 fs::File::create(&tmp_path).map_err(|source| QueryIndexJournalError::Write {
@@ -302,12 +279,10 @@ impl QueryIndexJournal {
                     source,
                 })?;
         }
-
         fs::rename(&tmp_path, &self.path).map_err(|source| QueryIndexJournalError::Write {
             path: self.path.clone(),
             source,
         })?;
-
         if let Some(parent) = self.path.parent() {
             let dir = fs::File::open(parent).map_err(|source| QueryIndexJournalError::Write {
                 path: parent.to_path_buf(),
@@ -319,20 +294,16 @@ impl QueryIndexJournal {
                     source,
                 })?;
         }
-
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::Hash;
-
     fn sample_hash(byte: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::new([byte; Hash::LENGTH]))
     }
-
     #[test]
     fn load_missing_query_index_journal_returns_empty_snapshot() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -340,7 +311,6 @@ mod tests {
         let journal = QueryIndexJournal::load(path).expect("load empty journal");
         assert_eq!(journal.snapshot(), QueryIndexStatus::default());
     }
-
     #[test]
     fn query_index_journal_round_trips_latest_snapshot() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -348,17 +318,14 @@ mod tests {
         let mut journal = QueryIndexJournal::new(path.clone());
         journal.set_latest(42, Some(sample_hash(0xAB)));
         journal.persist().expect("persist journal");
-
         let loaded = QueryIndexJournal::load(path).expect("reload journal");
         assert_eq!(loaded.snapshot(), journal.snapshot());
     }
-
     #[test]
     fn query_index_journal_promotes_temp_file_on_load() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join(QueryIndexJournal::JOURNAL_FILE);
         let tmp_path = path.with_extension("norito.tmp");
-
         let payload = PersistedQueryIndexStatus {
             version: QueryIndexJournal::JOURNAL_VERSION,
             status: QueryIndexStatus {
@@ -368,13 +335,11 @@ mod tests {
         };
         let bytes = to_bytes(&payload).expect("encode temp journal");
         fs::write(&tmp_path, bytes).expect("write temp journal");
-
         let loaded = QueryIndexJournal::load(path.clone()).expect("load journal");
         assert_eq!(loaded.snapshot().indexed_height, 7);
         assert!(path.exists(), "temp journal should be promoted");
         assert!(!tmp_path.exists(), "temp journal should be consumed");
     }
-
     #[test]
     fn query_index_journal_rejects_oversized_file_before_decode() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -387,7 +352,6 @@ mod tests {
             ],
         )
         .expect("write oversized journal");
-
         let error = QueryIndexJournal::load(path).expect_err("oversized journal must fail");
         assert!(
             error.to_string().contains("byte limit"),

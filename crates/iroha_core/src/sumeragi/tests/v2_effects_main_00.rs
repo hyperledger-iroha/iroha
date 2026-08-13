@@ -1,5 +1,4 @@
 use std::{collections::VecDeque, num::NonZeroU64, sync::Arc};
-
 use crate::sumeragi::{
     InboundBlockMessage,
     message::BlockMessage,
@@ -25,14 +24,11 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use tempfile::TempDir;
-
 use super::*;
-
 #[test]
 fn post_finality_cleanup_accumulates_typed_warnings_in_order() {
     let mut outcome = PostFinalityCleanupOutcome::default();
     outcome.record(PostFinalityCleanupTarget::SafetyWal, "WAL directory sync");
-
     outcome.record(
         PostFinalityCleanupTarget::DurableBodies,
         "body worker disconnected",
@@ -41,7 +37,6 @@ fn post_finality_cleanup_accumulates_typed_warnings_in_order() {
         PostFinalityCleanupTarget::PayloadChunks,
         "chunk root retained",
     );
-
     assert_eq!(outcome.warnings().len(), 3);
     assert_eq!(
         outcome
@@ -61,7 +56,6 @@ fn post_finality_cleanup_accumulates_typed_warnings_in_order() {
         "cleanup_worker"
     );
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RuntimeCompletion {
     BodyAvailable(EventTag, wire::PayloadManifest),
@@ -87,7 +81,6 @@ enum RuntimeCompletion {
         ValidatedBodyReceipt,
     ),
 }
-
 #[derive(Default)]
 struct FakeRuntime {
     steps: VecDeque<Result<RuntimeStep<AdapterEffect>, String>>,
@@ -121,7 +114,6 @@ struct FakeRuntime {
     leader_wire_terminal_after_lock: Option<LeaderWireRuntimeTerminal>,
     leader_wire_terminal_after_decision: Option<LeaderWireRuntimeTerminal>,
 }
-
 /// Actual executor/runtime ownership projected without retaining a shadow
 /// state machine. Fatal fail-stop metadata is deliberately excluded: a
 /// rejected admission may latch it, but no body owner or accounting value
@@ -152,7 +144,6 @@ struct BodyOwnershipProjection {
     runtime_bound_validations: Vec<(wire::PayloadManifest, ValidatedBodyReceipt)>,
     runtime_body_reservation: Option<BodyAvailableReservation>,
 }
-
 impl V2EffectExecutor<FakeRuntime> {
     fn body_ownership_projection(&self) -> BodyOwnershipProjection {
         BodyOwnershipProjection {
@@ -179,7 +170,6 @@ impl V2EffectExecutor<FakeRuntime> {
         }
     }
 }
-
 impl FakeRuntime {
     fn push(&mut self, completion: RuntimeCompletion) -> Result<(), EnqueueError> {
         if self.fail_enqueue {
@@ -189,7 +179,6 @@ impl FakeRuntime {
         self.completions.push(completion);
         Ok(())
     }
-
     fn test_effect_ownership(&mut self, effect: &AdapterEffect) -> RuntimeEffectOwnership {
         let mut identity = Vec::new();
         match effect {
@@ -240,7 +229,6 @@ impl FakeRuntime {
         ownership
     }
 }
-
 impl EffectRuntime for FakeRuntime {
     fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         assert!(!self.panic_step, "model safety-WAL step panic");
@@ -258,14 +246,12 @@ impl EffectRuntime for FakeRuntime {
         }
         step
     }
-
     fn step_recovery_effects(
         &mut self,
         now: Instant,
     ) -> Result<RuntimeStep<AdapterEffect>, String> {
         self.step_effects(now)
     }
-
     fn take_effect_ownership(
         &mut self,
         effects: &[AdapterEffect],
@@ -290,7 +276,6 @@ impl EffectRuntime for FakeRuntime {
         }
         bind_adapter_effect_batch_ownership(effects, ownership)
     }
-
     fn take_leader_wire_runtime_terminals(
         &mut self,
     ) -> Result<Vec<LeaderWireRuntimeTerminal>, String> {
@@ -299,7 +284,6 @@ impl EffectRuntime for FakeRuntime {
             .pop_front()
             .unwrap_or_default())
     }
-
     fn set_external_lifecycle_owners(
         &mut self,
         owners: Vec<RuntimeLifecycleOwner>,
@@ -313,7 +297,6 @@ impl EffectRuntime for FakeRuntime {
         self.external_lifecycle_owners = owners;
         Ok(())
     }
-
     fn configure_external_lifecycle_owner_capacity(
         &mut self,
         max_pending_work: usize,
@@ -328,7 +311,6 @@ impl EffectRuntime for FakeRuntime {
         );
         Ok(())
     }
-
     fn reconcile_active_view_producer(
         &mut self,
         _tag: EventTag,
@@ -337,7 +319,6 @@ impl EffectRuntime for FakeRuntime {
         self.active_view_producer_retained = retain;
         Ok(())
     }
-
     fn complete_active_view_producer_after_proposal_fanout(
         &mut self,
         proposal_round: wire::ConsensusRound,
@@ -350,7 +331,6 @@ impl EffectRuntime for FakeRuntime {
         }
         Ok(())
     }
-
     fn mint_local_proposal_effect_ownership(
         &mut self,
         tag: EventTag,
@@ -382,7 +362,6 @@ impl EffectRuntime for FakeRuntime {
             "fake local proposal replay seal did not match its Store owner".to_owned()
         })
     }
-
     fn take_scheduler_ownership(&mut self) -> Result<(), String> {
         if self.reject_scheduler_ownership {
             return Err("fake runtime scheduler owner was invalid".to_owned());
@@ -393,11 +372,9 @@ impl EffectRuntime for FakeRuntime {
         self.scheduler_ownership_ready = false;
         Ok(())
     }
-
     fn authoritative_tag(&self) -> Option<EventTag> {
         self.round_tag
     }
-
     fn reconciliation_frontier(&self) -> Result<RuntimeReconciliationFrontier, String> {
         Ok(RuntimeReconciliationFrontier {
             tag: self.round_tag,
@@ -406,11 +383,9 @@ impl EffectRuntime for FakeRuntime {
             decision: self.decided_body,
         })
     }
-
     fn decided_body(&self) -> Result<Option<DurableDecision>, String> {
         Ok(self.decided_body)
     }
-
     fn bind_validated_body(
         &mut self,
         manifest: &wire::PayloadManifest,
@@ -436,7 +411,6 @@ impl EffectRuntime for FakeRuntime {
             .push((manifest.clone(), validated_receipt.clone()));
         Ok(())
     }
-
     fn reserve_body_available(
         &mut self,
         tag: EventTag,
@@ -483,7 +457,6 @@ impl EffectRuntime for FakeRuntime {
         self.reserved_body_available = Some(reservation.clone());
         Ok(reservation)
     }
-
     fn commit_body_available(
         &mut self,
         reservation: BodyAvailableReservation,
@@ -501,12 +474,10 @@ impl EffectRuntime for FakeRuntime {
         ));
         Ok(())
     }
-
     fn abort_body_available(&mut self, reservation: BodyAvailableReservation) {
         let _retained_exact_owner = !reservation.owns_new_slot()
             || self.reserved_body_available.as_ref() == Some(&reservation);
     }
-
     fn rebind_body_available(
         &mut self,
         previous: EventTag,
@@ -533,7 +504,6 @@ impl EffectRuntime for FakeRuntime {
         }
         Ok(rebound_count == 1)
     }
-
     fn rebind_unpublished_body_available(
         &mut self,
         previous: EventTag,
@@ -564,7 +534,6 @@ impl EffectRuntime for FakeRuntime {
         }
         self.rebind_body_available(previous, rebound, &manifest)
     }
-
     fn retire_unpublished_body_available(
         &mut self,
         tag: EventTag,
@@ -585,7 +554,6 @@ impl EffectRuntime for FakeRuntime {
         };
         self.retire_body_available(tag, &manifest)
     }
-
     fn retire_body_available(
         &mut self,
         tag: EventTag,
@@ -615,7 +583,6 @@ impl EffectRuntime for FakeRuntime {
         }
         Ok(retired == 1)
     }
-
     fn retire_body_pipeline_completions(
         &mut self,
         tag: EventTag,
@@ -690,7 +657,6 @@ impl EffectRuntime for FakeRuntime {
         }
         Ok(retired)
     }
-
     fn retire_unsafe_proposals_for_lock(
         &mut self,
         _locked_round: wire::ConsensusRound,
@@ -701,7 +667,6 @@ impl EffectRuntime for FakeRuntime {
         }
         Ok(0)
     }
-
     fn retire_proposal_work_after_decision(
         &mut self,
         decision_round: wire::ConsensusRound,
@@ -791,7 +756,6 @@ impl EffectRuntime for FakeRuntime {
             recovery_only,
         ))
     }
-
     fn enqueue_body_stored(
         &mut self,
         tag: EventTag,
@@ -801,7 +765,6 @@ impl EffectRuntime for FakeRuntime {
     ) -> Result<(), EnqueueError> {
         self.push(RuntimeCompletion::BodyStored(tag, round, subject, receipt))
     }
-
     fn enqueue_validation_succeeded(
         &mut self,
         tag: EventTag,
@@ -813,7 +776,6 @@ impl EffectRuntime for FakeRuntime {
             tag, round, subject, receipt,
         ))
     }
-
     fn enqueue_validation_succeeded_with_owner(
         &mut self,
         tag: EventTag,
@@ -827,7 +789,6 @@ impl EffectRuntime for FakeRuntime {
             .push(ownership.clone());
         Ok(())
     }
-
     fn enqueue_validation_failed(
         &mut self,
         tag: EventTag,
@@ -836,7 +797,6 @@ impl EffectRuntime for FakeRuntime {
     ) -> Result<(), EnqueueError> {
         self.push(RuntimeCompletion::ValidationFailed(tag, round, subject))
     }
-
     fn enqueue_validation_failed_with_owner(
         &mut self,
         tag: EventTag,
@@ -849,7 +809,6 @@ impl EffectRuntime for FakeRuntime {
             .push(ownership.clone());
         Ok(())
     }
-
     fn enqueue_validation_failures_atomically(
         &mut self,
         failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
@@ -865,11 +824,9 @@ impl EffectRuntime for FakeRuntime {
         );
         Ok(())
     }
-
     fn enqueue_signature(&mut self, tag: EventTag, signature: Vec<u8>) -> Result<(), EnqueueError> {
         self.push(RuntimeCompletion::Signature(tag, signature))
     }
-
     fn enqueue_application_completed(
         &mut self,
         tag: EventTag,
@@ -877,7 +834,6 @@ impl EffectRuntime for FakeRuntime {
     ) -> Result<(), EnqueueError> {
         self.push(RuntimeCompletion::Application(tag, subject))
     }
-
     fn enqueue_local_proposal(
         &mut self,
         tag: EventTag,
@@ -892,7 +848,6 @@ impl EffectRuntime for FakeRuntime {
             validated_receipt,
         ))
     }
-
     fn enqueue_local_proposal_with_owner(
         &mut self,
         tag: EventTag,
@@ -924,7 +879,6 @@ impl EffectRuntime for FakeRuntime {
         slot.insert(ownership.clone());
         Ok(identity)
     }
-
     fn verify_certificate(
         &self,
         context: &wire::HeightContext,
@@ -934,7 +888,6 @@ impl EffectRuntime for FakeRuntime {
             .validate(context)
             .map_err(|error| error.to_string())
     }
-
     fn authenticate_certified_body_request(
         &self,
         context: &wire::HeightContext,
@@ -948,7 +901,6 @@ impl EffectRuntime for FakeRuntime {
             |context, certificate| self.verify_certificate(context, certificate),
         )
     }
-
     fn plan_body_pipeline_candidate_terminal(
         &mut self,
         effect: &AdapterEffect,
@@ -976,7 +928,6 @@ impl EffectRuntime for FakeRuntime {
             .adopt_incumbent_body_stage_for_retry_or_authority(ownership, effect)
             .map(Some)
     }
-
     fn commit_body_pipeline_candidate_terminals(
         &mut self,
         terminals: &[(&AdapterEffect, &RuntimeEffectOwnership)],
@@ -1021,11 +972,9 @@ impl EffectRuntime for FakeRuntime {
             .saturating_add(terminals.len());
         Ok(())
     }
-
     fn queued_commands(&self) -> usize {
         self.completions.len()
     }
-
     fn remaining_completion_capacity(&self) -> usize {
         16usize.saturating_sub(
             self.completions
@@ -1033,11 +982,9 @@ impl EffectRuntime for FakeRuntime {
                 .saturating_add(usize::from(self.reserved_body_available.is_some())),
         )
     }
-
     fn has_certified_fence_escape_credit(&self) -> bool {
         self.certified_fence_escape_credit
     }
-
     fn queue_snapshot(&self, _now: Instant) -> RuntimeQueueSnapshot {
         let empty = RuntimeQueueLaneSnapshot {
             depth: 0,
@@ -1054,12 +1001,10 @@ impl EffectRuntime for FakeRuntime {
             },
         }
     }
-
     fn watchdog_threshold(&self) -> Duration {
         Duration::from_secs(12)
     }
 }
-
 #[derive(Default)]
 struct FakeServices {
     _body_directory: Option<TempDir>,
@@ -1107,7 +1052,6 @@ struct FakeServices {
     decision_serve_reconciliation_pending: bool,
     durable_serve_decision: Option<wire::BlockSubject>,
 }
-
 impl FakeServices {
     fn check(&mut self, operation: &'static str) -> Result<(), String> {
         let call = *self
@@ -1125,7 +1069,6 @@ impl FakeServices {
             Ok(())
         }
     }
-
     fn execute_store(&mut self, work_id: EffectWorkId) -> BodyStoreCompletion {
         let task = self
             .store_tasks
@@ -1140,7 +1083,6 @@ impl FakeServices {
             .execute_store_task(&task)
             .expect("execute durable store task")
     }
-
     fn execute_validation(&mut self, work_id: EffectWorkId) -> BodyValidationCompletion {
         let task = self
             .validation_tasks
@@ -1160,10 +1102,8 @@ impl FakeServices {
             .expect("execute deterministic validation task")
     }
 }
-
 impl V2EffectServices for FakeServices {
     type Error = String;
-
     fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error> {
         self.check("begin-decision-serve-reconciliation")?;
         if self.decision_serve_reconciliation_pending {
@@ -1172,7 +1112,6 @@ impl V2EffectServices for FakeServices {
         self.decision_serve_reconciliation_pending = true;
         Ok(())
     }
-
     fn finish_decision_serve_reconciliation(
         &mut self,
         decided_subject: Option<wire::BlockSubject>,
@@ -1197,7 +1136,6 @@ impl V2EffectServices for FakeServices {
         self.decision_serve_reconciliation_pending = false;
         Ok(())
     }
-
     fn complete_leader_wire_runtime_terminal(
         &mut self,
         terminal: LeaderWireRuntimeTerminal,
@@ -1206,20 +1144,17 @@ impl V2EffectServices for FakeServices {
         self.leader_wire_terminals.push(terminal);
         Ok(())
     }
-
     fn enqueue_consensus_sign(&mut self, task: ConsensusSignTask) -> Result<(), Self::Error> {
         self.check("sign")?;
         self.effect_service_order.push("sign");
         self.sign_tasks.push(task);
         Ok(())
     }
-
     fn cancel_consensus_sign(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
         self.check("cancel-sign")?;
         self.cancelled_signatures.push(work_id);
         Ok(())
     }
-
     fn retire_outbound_payload_for_subject(
         &mut self,
         subject: wire::BlockSubject,
@@ -1228,13 +1163,11 @@ impl V2EffectServices for FakeServices {
         self.retired_outbound_subjects.push(subject);
         Ok(())
     }
-
     fn retire_all_outbound_payloads(&mut self) -> Result<(), Self::Error> {
         self.check("retire-all-outbound")?;
         self.retired_all_outbound = self.retired_all_outbound.saturating_add(1);
         Ok(())
     }
-
     fn retire_candidate_work_after_decision(
         &mut self,
         _decision_round: wire::ConsensusRound,
@@ -1244,7 +1177,6 @@ impl V2EffectServices for FakeServices {
         self.retired_candidate_work = self.retired_candidate_work.saturating_add(1);
         Ok(())
     }
-
     fn broadcast_consensus(
         &mut self,
         message: wire::ConsensusMessageV2,
@@ -1261,7 +1193,6 @@ impl V2EffectServices for FakeServices {
         }
         Ok(disposition)
     }
-
     fn sign_body_request(&mut self, preimage: &[u8]) -> Result<Vec<u8>, Self::Error> {
         self.check("body-sign")?;
         let key = self
@@ -1272,13 +1203,11 @@ impl V2EffectServices for FakeServices {
             .payload()
             .to_vec())
     }
-
     fn enqueue_body_fetch(&mut self, task: BodyFetchTask) -> Result<(), Self::Error> {
         self.check("fetch")?;
         self.fetch_tasks.push(task);
         Ok(())
     }
-
     fn rebind_body_fetch(
         &mut self,
         previous: &BodyFetchTask,
@@ -1300,13 +1229,11 @@ impl V2EffectServices for FakeServices {
         *owned = rebound;
         Ok(())
     }
-
     fn cancel_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
         self.check("cancel-fetch")?;
         self.cancelled_fetches.push(task.id());
         Ok(())
     }
-
     fn complete_body_reconstruction_fetch(
         &mut self,
         task: &BodyFetchTask,
@@ -1315,7 +1242,6 @@ impl V2EffectServices for FakeServices {
         self.completed_reconstruction_fetches.push(task.id());
         Ok(())
     }
-
     fn complete_certified_body_fetch(
         &mut self,
         task: &BodyFetchTask,
@@ -1328,7 +1254,6 @@ impl V2EffectServices for FakeServices {
         self.completed_certified_fetches.push(task.id());
         Ok(CertifiedBodyFetchCompletionDisposition::Completed)
     }
-
     fn accept_authenticated_chunk(
         &mut self,
         task: &BodyFetchTask,
@@ -1342,31 +1267,26 @@ impl V2EffectServices for FakeServices {
             AuthenticatedChunkDisposition::Accepted
         })
     }
-
     fn enqueue_body_store(&mut self, task: BodyStoreTask) -> Result<(), Self::Error> {
         self.check("store")?;
         self.store_tasks.push(task);
         Ok(())
     }
-
     fn cancel_body_store(&mut self, work_id: EffectWorkId) -> Result<bool, Self::Error> {
         self.check("cancel-store")?;
         self.cancelled_stores.push(work_id);
         Ok(!self.inflight_stores.contains(&work_id))
     }
-
     fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
         self.check("validation")?;
         self.validation_tasks.push(task);
         Ok(())
     }
-
     fn cancel_body_validation(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
         self.check("cancel-validation")?;
         self.cancelled_validations.push(work_id);
         Ok(())
     }
-
     fn work_deferred_for_merge_sidecar(
         &mut self,
         work_id: EffectWorkId,
@@ -1379,13 +1299,11 @@ impl V2EffectServices for FakeServices {
             .push((work_id, round, subject, reference.clone()));
         Ok(())
     }
-
     fn enqueue_apply(&mut self, task: ApplyTask) -> Result<(), Self::Error> {
         self.check("apply")?;
         self.apply_tasks.push(task);
         Ok(())
     }
-
     fn entered_view(
         &mut self,
         tag: EventTag,
@@ -1395,7 +1313,6 @@ impl V2EffectServices for FakeServices {
         self.entered_views.push(tag);
         Ok(())
     }
-
     fn report_equivocation(
         &mut self,
         evidence: wire::SumeragiV2Equivocation,
@@ -1405,7 +1322,6 @@ impl V2EffectServices for FakeServices {
         self.equivocations.push(evidence);
         Ok(())
     }
-
     fn report_invalid_certified_body(
         &mut self,
         subject: wire::BlockSubject,
@@ -1416,7 +1332,6 @@ impl V2EffectServices for FakeServices {
         self.invalid_bodies.push(subject);
         Ok(())
     }
-
     fn validation_rejected(
         &mut self,
         _round: wire::ConsensusRound,
@@ -1425,18 +1340,15 @@ impl V2EffectServices for FakeServices {
     ) {
         self.rejected_validations.push(reason.to_owned());
     }
-
     fn publish_effect_status(&mut self, status: &EffectExecutorStatus) -> Result<(), Self::Error> {
         self.check("status")?;
         self.statuses.push(status.clone());
         Ok(())
     }
-
     fn fail_closed(&mut self, reason: &str) {
         self.closed.push(reason.to_owned());
     }
 }
-
 struct Fixture {
     context: wire::HeightContext,
     validator_keys: Vec<KeyPair>,
@@ -1446,7 +1358,6 @@ struct Fixture {
     encoded_chunks: Vec<Vec<u8>>,
     manifest: wire::PayloadManifest,
 }
-
 impl Fixture {
     fn new() -> Self {
         let mut validator_keys = (1_u8..=4)
@@ -1520,7 +1431,6 @@ impl Fixture {
             manifest,
         }
     }
-
     fn services(&self) -> FakeServices {
         let directory = TempDir::new().expect("body-store directory");
         let body_store = V2BodyStore::open_with_policy(
@@ -1536,7 +1446,6 @@ impl Fixture {
             ..FakeServices::default()
         }
     }
-
     fn executor(&self, config: EffectQueueConfig) -> V2EffectExecutor<FakeRuntime> {
         V2EffectExecutor::with_runtime(
             FakeRuntime {
@@ -1552,7 +1461,6 @@ impl Fixture {
         )
         .expect("effect executor")
     }
-
     fn qc(&self, phase: wire::GlobalPhase) -> wire::QuorumCertificate {
         wire::QuorumCertificate {
             round: self.manifest.round,
@@ -1565,7 +1473,6 @@ impl Fixture {
         }
     }
 }
-
 struct ProductionTransportFixture {
     _directory: TempDir,
     context: wire::HeightContext,
@@ -1581,16 +1488,13 @@ struct ProductionTransportFixture {
     lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
     executor: V2EffectExecutor,
 }
-
 impl ProductionTransportFixture {
     fn new() -> Self {
         Self::new_with_local_validator(None)
     }
-
     fn new_validator() -> Self {
         Self::new_with_local_validator(Some(0))
     }
-
     fn new_with_local_validator(local_validator: Option<wire::ValidatorIndex>) -> Self {
         let mut validator_keys = (1_u8..=4)
             .map(|seed| {
@@ -1663,7 +1567,6 @@ impl ProductionTransportFixture {
             Hash::new(b"conflicting executed block wire"),
         );
         assert_ne!(canonical_commitment, conflicting_commitment);
-
         let proofs = validator_keys
             .iter()
             .map(|key| {
@@ -1704,7 +1607,6 @@ impl ProductionTransportFixture {
         runtime
             .recover_validated_body(&manifest, &validated)
             .expect("bind locally validated execution commitment");
-
         let requester_key = KeyPair::try_from_seed(vec![90; 32], Algorithm::BlsNormal)
             .expect("deterministic requester key");
         let responder_key = KeyPair::try_from_seed(vec![91; 32], Algorithm::BlsNormal)
@@ -1719,7 +1621,6 @@ impl ProductionTransportFixture {
             EffectQueueConfig::default(),
         )
         .expect("production effect executor");
-
         Self {
             _directory: directory,
             context,
@@ -1736,7 +1637,6 @@ impl ProductionTransportFixture {
             executor,
         }
     }
-
     fn quorum_certificate(
         &self,
         phase: wire::GlobalPhase,
@@ -1744,7 +1644,6 @@ impl ProductionTransportFixture {
     ) -> wire::QuorumCertificate {
         self.quorum_certificate_for(self.round, self.subject, phase, execution_commitment)
     }
-
     fn quorum_certificate_for(
         &self,
         round: wire::ConsensusRound,
@@ -1787,7 +1686,6 @@ impl ProductionTransportFixture {
                 .expect("aggregate quorum certificate"),
         }
     }
-
     fn signed_normal_proposal(&self, ordinal: u64) -> wire::ConsensusMessageV2 {
         let mut body = b"production normal-ingress saturation body".to_vec();
         body.extend_from_slice(&ordinal.to_le_bytes());
@@ -1819,7 +1717,6 @@ impl ProductionTransportFixture {
         .to_vec();
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal))
     }
-
     fn signed_timeout_vote(&self, view: u64) -> wire::ConsensusMessageV2 {
         let mut vote = wire::TimeoutVote {
             round: round(&self.context, view),
@@ -1835,7 +1732,6 @@ impl ProductionTransportFixture {
         .to_vec();
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(vote))
     }
-
     fn certified_sources(&self, _certificate: &wire::QuorumCertificate) -> Vec<PeerId> {
         self.context
             .roster
@@ -1843,7 +1739,6 @@ impl ProductionTransportFixture {
             .map(|entry| entry.validator.clone())
             .collect()
     }
-
     fn certified_body_request(
         &self,
         certificate: wire::QuorumCertificate,
@@ -1864,7 +1759,6 @@ impl ProductionTransportFixture {
         request
     }
 }
-
 #[test]
 fn production_certified_body_request_rejects_locally_conflicting_qc_without_fail_close() {
     let fixture = ProductionTransportFixture::new();
@@ -1872,7 +1766,6 @@ fn production_certified_body_request_rejects_locally_conflicting_qc_without_fail
         fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.conflicting_commitment);
     let request = fixture.certified_body_request(certificate);
     let requester = PeerId::new(fixture.requester_key.public_key().clone());
-
     assert!(matches!(
         fixture
             .executor
@@ -1883,7 +1776,6 @@ fn production_certified_body_request_rejects_locally_conflicting_qc_without_fail
     assert!(fixture.executor.runtime.driver().ingress_ready());
     assert!(!fixture.executor.status().fail_closed);
 }
-
 #[test]
 fn production_commit_certificate_response_conflict_keeps_discovery_outstanding_and_runtime_open() {
     let mut fixture = ProductionTransportFixture::new();
@@ -1917,7 +1809,6 @@ fn production_commit_certificate_response_conflict_keeps_discovery_outstanding_a
     let discovered = discovery
         .authenticate_response(response, &responder)
         .expect("authenticate signed outer response");
-
     let admission = discovery.enqueue_and_complete(discovered, |message| {
         let reducer_admission = CommitCertificateReducerAdmission::for_test(&message);
         fixture
@@ -1939,7 +1830,6 @@ fn production_commit_certificate_response_conflict_keeps_discovery_outstanding_a
     assert!(fixture.executor.runtime.driver().ingress_ready());
     assert!(!fixture.executor.status().fail_closed);
 }
-
 #[test]
 fn discovered_commit_certificate_mints_exact_reducer_admission_only_after_enqueue() {
     let mut fixture = ProductionTransportFixture::new();
@@ -1954,7 +1844,6 @@ fn discovered_commit_certificate_mints_exact_reducer_admission_only_after_enqueu
         .enqueue_discovered_commit_certificate(message.clone(), ownership)
         .expect("exact authenticated CommitQC enters serialized reducer ingress");
     assert!(admission.matches(&message));
-
     let prepare =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
             fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment),
@@ -1971,7 +1860,6 @@ fn discovered_commit_certificate_mints_exact_reducer_admission_only_after_enqueu
             AdapterError::DurableCommitMismatch
         ))
     ));
-
     let transport = wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(wire::CommitCertificateRequest {
             protocol_version: wire::PROTOCOL_VERSION,
@@ -1993,7 +1881,6 @@ fn discovered_commit_certificate_mints_exact_reducer_admission_only_after_enqueu
         Err(NetworkIngressError::TransportPayload)
     ));
 }
-
 fn round(context: &wire::HeightContext, view: u64) -> wire::ConsensusRound {
     wire::ConsensusRound {
         context_id: context.id(),
@@ -2001,7 +1888,6 @@ fn round(context: &wire::HeightContext, view: u64) -> wire::ConsensusRound {
         view,
     }
 }
-
 fn canonical_payload_manifest(
     context: &wire::HeightContext,
     round: wire::ConsensusRound,
@@ -2013,7 +1899,6 @@ fn canonical_payload_manifest(
         .manifest()
         .clone()
 }
-
 fn deliberately_conflicting_payload_manifest(
     context: &wire::HeightContext,
     round: wire::ConsensusRound,
@@ -2033,7 +1918,6 @@ fn deliberately_conflicting_payload_manifest(
     )
     .expect("derive the structurally valid conflicting fixture manifest")
 }
-
 fn fixture_execution_commitment() -> wire::ExecutionCommitment {
     wire::ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new(b"effects fixture parent state"),
@@ -2043,11 +1927,9 @@ fn fixture_execution_commitment() -> wire::ExecutionCommitment {
         Hash::new(b"effects fixture executed block wire"),
     )
 }
-
 fn tag(view: u64) -> EventTag {
     EventTag::new(1, view, Generation::new(7 + view))
 }
-
 fn vote(fixture: &Fixture) -> wire::Vote {
     wire::Vote {
         round: fixture.manifest.round,
@@ -2059,7 +1941,6 @@ fn vote(fixture: &Fixture) -> wire::Vote {
         signature: Vec::new(),
     }
 }
-
 fn vote_equivocation_evidence(
     fixture: &Fixture,
     signer: wire::ValidatorIndex,
@@ -2080,7 +1961,6 @@ fn vote_equivocation_evidence(
     second.signature = vec![0xE2];
     AdapterEquivocationEvidence::vote_for_test(first, second)
 }
-
 fn proposal(fixture: &Fixture) -> wire::ConsensusMessageV2 {
     wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(wire::Proposal {
         round: fixture.manifest.round,
@@ -2093,7 +1973,6 @@ fn proposal(fixture: &Fixture) -> wire::ConsensusMessageV2 {
         signature: vec![0x91],
     }))
 }
-
 fn timeout_certificate(fixture: &Fixture) -> wire::TimeoutCertificate {
     wire::TimeoutCertificate {
         round: fixture.manifest.round,
@@ -2104,7 +1983,6 @@ fn timeout_certificate(fixture: &Fixture) -> wire::TimeoutCertificate {
         }],
     }
 }
-
 fn manifest_at_view(fixture: &Fixture, view: u64) -> wire::PayloadManifest {
     canonical_payload_manifest(
         &fixture.context,

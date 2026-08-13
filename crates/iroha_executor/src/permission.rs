@@ -6,13 +6,10 @@
 //! owner and namespace authority; after clear, only the native namespace root can revoke. The
 //! leaf token pins its definition so it cannot migrate across a label rebind. Bootstrap-root
 //! permissions remain genesis-only, and ownership of an adjacent field grants no authority.
-
 use std::{borrow::ToOwned as _, collections::BTreeSet, vec::Vec};
-
 use iroha_executor_data_model::permission::{
     Permission, asset_definition::CanManageAssetDefinitionAlias,
 };
-
 use crate::{
     Execute,
     prelude::Context,
@@ -24,7 +21,6 @@ use crate::{
 #[cfg(test)]
 pub(crate) mod test_override {
     use std::cell::RefCell;
-
     thread_local! {
         static PERMISSIONS: RefCell<Vec<crate::data_model::permission::Permission>> = const {
             RefCell::new(Vec::new())
@@ -260,14 +256,11 @@ impl AnyPermission {
         }
     }
 }
-
 mod query {
     use iroha_executor_data_model::permission::query::{
         CanReadAllLedgerData, CanReadRestrictedDataspace,
     };
-
     use super::*;
-
     impl ValidateGrantRevoke for CanReadRestrictedDataspace {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -390,12 +383,9 @@ macro_rules! impl_owned_permission {
         }
     )+};
 }
-
 mod executor {
     use iroha_executor_data_model::permission::executor::CanUpgradeExecutor;
-
     use super::*;
-
     impl ValidateGrantRevoke for CanUpgradeExecutor {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -410,14 +400,11 @@ mod executor {
         }
     }
 }
-
 mod smart_contract {
     use iroha_executor_data_model::permission::smart_contract::{
         CanInvokeContractEntrypoint, CanRegisterSmartContractCode,
     };
-
     use super::*;
-
     impl ValidateGrantRevoke for CanRegisterSmartContractCode {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -473,14 +460,11 @@ mod smart_contract {
         }
     }
 }
-
 mod settlement {
     use iroha_executor_data_model::permission::settlement::{
         CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy,
     };
-
     use super::*;
-
     impl ValidateGrantRevoke for CanManageFxCorridors {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -561,15 +545,12 @@ mod settlement {
     }
     impl_corridor_permission!(CanSetFxCorridorPolicy);
 }
-
 mod nexus {
     use iroha_executor_data_model::permission::nexus::{
         CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
     };
-
     use super::*;
-
     fn ensure_publish_manifest_grant_authority(
         permission: CanPublishSpaceDirectoryManifest,
         authority: &AccountId,
@@ -797,7 +778,6 @@ mod nexus {
     }
     impl_program_scoped_delegation!(CanEnrollFeeSponsorProgram);
 }
-
 mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
         CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
@@ -806,9 +786,7 @@ mod sorafs {
         CanSetSorafsPricing, CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry,
         CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
-
     use super::*;
-
     impl_owned_permission!(
         CanBindSorafsAlias,
         CanDeclareSorafsCapacity,
@@ -826,14 +804,11 @@ mod sorafs {
         CanUnregisterSorafsProviderOwner,
     );
 }
-
 mod soranet {
     use iroha_executor_data_model::permission::soranet::{
         CanIngestSoranetPrivacy, CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers,
     };
-
     use super::*;
-
     impl_owned_permission!(CanManageSoranetVpnQuoteIssuers, CanIngestSoranetPrivacy);
     fn validate_quote_issuer_delegation(
         authority: &AccountId,
@@ -864,15 +839,12 @@ mod soranet {
         }
     }
 }
-
 mod oracle {
     use iroha_executor_data_model::permission::oracle::{
         CanManageTwitterBindings, CanProposeOracleChange, CanRegisterOracleFeed,
         CanResolveOracleDispute, CanRollbackOracleChange, CanVoteOracleChangeStage,
     };
-
     use super::*;
-
     impl_owned_permission!(
         CanRegisterOracleFeed,
         CanProposeOracleChange,
@@ -882,14 +854,9 @@ mod oracle {
         CanManageTwitterBindings,
     );
 }
-
 mod peer {
-    use iroha_executor_data_model::permission::peer::{
-        CanManageLaneRelayEmergency, CanManagePeers,
-    };
-
+    use iroha_executor_data_model::permission::peer::{CanManageLaneRelayEmergency, CanManagePeers};
     use super::*;
-
     impl ValidateGrantRevoke for CanManagePeers {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -917,12 +884,9 @@ mod peer {
         }
     }
 }
-
 mod role {
     use iroha_executor_data_model::permission::role::CanManageRoles;
-
     use super::*;
-
     impl ValidateGrantRevoke for CanManageRoles {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
@@ -937,13 +901,10 @@ mod role {
         }
     }
 }
-
 mod parameter {
     //! Module with pass conditions for parameter related tokens
     use iroha_executor_data_model::permission::parameter::CanSetParameters;
-
     use super::*;
-
     impl ValidateGrantRevoke for CanSetParameters {
         fn validate_grant(
             &self,
@@ -975,15 +936,12 @@ mod parameter {
         }
     }
 }
-
 mod sccp {
     //! Pass conditions for governed SCCP state management.
     use iroha_executor_data_model::permission::sccp::{
         CanManageSccpGovernance, CanProposeSccpRouteGovernance,
     };
-
     use super::*;
-
     impl ValidateGrantRevoke for CanManageSccpGovernance {
         fn validate_grant(
             &self,
@@ -1031,16 +989,13 @@ mod sccp {
         }
     }
 }
-
 mod offline {
     //! Pass conditions for governed offline-settlement releases.
     use iroha_executor_data_model::permission::offline::{
         CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
         CanManageOfflineEscrow,
     };
-
     use super::*;
-
     macro_rules! impl_genesis_only_offline_permission {
         ($($permission:ty),+ $(,)?) => {
             $(
@@ -1071,19 +1026,15 @@ mod offline {
         CanManageOfflineDeviceAttestationPolicy,
     );
 }
-
 pub mod asset {
     //! Module with pass conditions for asset related tokens
-
     use iroha_executor_data_model::permission::asset::{
         CanBurnAsset, CanBurnAssetWithDefinition, CanMintAssetToAccount,
         CanMintAssetWithDefinition, CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition,
         CanSetAssetHoldingLimit, CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit,
         CanTransferAsset, CanTransferAssetWithDefinition,
     };
-
     use super::*;
-
     /// Check if `authority` is the owner of asset.
     ///
     /// `authority` is owner of asset if:
@@ -1269,16 +1220,13 @@ pub mod asset {
         .validate(authority, host, context)
     }
 }
-
 pub mod asset_definition {
     //! Module with pass conditions for asset definition related tokens
-
     use iroha_executor_data_model::permission::asset_definition::{
         AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
         CanManageAssetDefinitionConfidentialPolicy, CanModifyAssetDefinitionMetadata,
         CanUnregisterAssetDefinition,
     };
-
     use super::*;
     use crate::smart_contract::{
         Iroha,
@@ -1504,7 +1452,6 @@ pub mod nft {
     use iroha_executor_data_model::permission::nft::{
         CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft,
     };
-
     use super::*;
     use crate::smart_contract::{
         Iroha,
@@ -1624,19 +1571,15 @@ pub mod nft {
     impl_froms_and_validate_grant_revoke!(WeakOwner: CanTransferNft);
     impl_froms_and_validate_grant_revoke!(FullOwner: CanUnregisterNft, CanModifyNftMetadata);
 }
-
 pub mod account {
     //! Module with pass conditions for asset related tokens
-
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
         CanModifyAccountMetadata, CanRegisterAccount, CanReplaceAccountController,
         CanResolveAccountAlias, CanUnregisterAccount,
     };
     use iroha_executor_data_model::permission::query::CanReadAccountData;
-
     use super::*;
-
     /// Check if `authority` is the owner of account.
     ///
     /// `authority` owns the account if it matches the account subject exactly.
@@ -1864,14 +1807,12 @@ pub mod account {
         CanReadAccountData,
     );
 }
-
 pub mod trigger {
     //! Module with pass conditions for trigger related tokens
     use iroha_executor_data_model::permission::trigger::{
         CanExecuteTrigger, CanModifyTrigger, CanModifyTriggerMetadata, CanRegisterTrigger,
         CanUnregisterTrigger,
     };
-
     use super::*;
     use crate::data_model::{
         isi::error::InstructionExecutionError,
@@ -2014,7 +1955,6 @@ pub mod trigger {
         CanModifyTriggerMetadata,
     );
 }
-
 pub mod domain {
     //! Module with pass conditions for domain related tokens
     use iroha_executor_data_model::permission::{
@@ -2024,9 +1964,7 @@ pub mod domain {
     use iroha_smart_contract::data_model::{
         isi::error::InstructionExecutionError, query::error::FindError,
     };
-
     use super::*;
-
     /// Check if `authority` is owner of domain
     ///
     /// # Errors
@@ -2241,7 +2179,6 @@ pub(crate) fn revoke_permissions<V: Execute + ?Sized>(
 #[cfg(test)]
 mod tests {
     use std::{num::NonZeroU64, vec::Vec};
-
     use iroha_crypto::{Hash, PublicKey};
     use iroha_executor_data_model::permission::offline::{
         CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
@@ -2268,7 +2205,6 @@ mod tests {
         smart_contract::CanInvokeContractEntrypoint,
         soranet::{CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers},
     };
-
     use super::{
         AnyPermission, OnlyGenesis, PassCondition, ValidateGrantRevoke, has_permission_in_roles,
         permission_owned_in_sources,

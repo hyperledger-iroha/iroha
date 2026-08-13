@@ -17,7 +17,6 @@ mod sandbox_cli;
 mod test_support;
 #[path = "wizard.rs"]
 mod wizard;
-
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     convert::TryFrom,
@@ -34,7 +33,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH},
 };
-
 use config::{
     BinaryOverrides, BundleConfig, ResolvedBundleConfig, default_config_path, load_bundle_config,
     load_bundle_config_at,
@@ -105,7 +103,6 @@ use tokio::{
     },
 };
 use toml::{self, Table as TomlTable, Value as TomlValue};
-
 const MAX_BLOCK_EVENTS: usize = 100;
 const MAX_EVENT_EVENTS: usize = 200;
 const MAX_LOG_EVENTS: usize = 200;
@@ -2313,7 +2310,6 @@ fn socket_bind_available() -> bool {
 }
 #[cfg(test)]
 mod cli_tests;
-
 impl Drop for MochiApp {
     fn drop(&mut self) {
         if let Some(stream) = self.block_stream.take() {
@@ -10342,9 +10338,7 @@ fn current_unix_timestamp_ms() -> u64 {
 #[cfg(test)]
 mod timestamp_tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
     use super::{current_unix_timestamp_ms, unix_timestamp_ms, unix_timestamp_ms_from_duration};
-
     #[test]
     fn unix_timestamp_ms_clamps_before_epoch() {
         let err = UNIX_EPOCH

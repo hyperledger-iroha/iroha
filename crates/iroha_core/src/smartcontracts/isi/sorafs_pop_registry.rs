@@ -1,7 +1,5 @@
 //! Authoritative SoraFS proof-of-personhood issuer and registry handlers.
-
 use std::{collections::BTreeMap, str::FromStr, sync::OnceLock};
-
 use iroha_data_model::{
     account::{AccountController, AccountId},
     isi::{
@@ -38,13 +36,11 @@ use sorafs_manifest::pop_credentials::{
     PopRevocationReasonV1, verify_pop_commitment_root_signature_v1,
     verify_pop_revocation_list_signature_v1,
 };
-
 use super::*;
 use crate::{
     smartcontracts::ValidSingularQuery,
     state::{StateTransaction, WorldReadOnly},
 };
-
 const POLICY_STATE_KEY: &str = "sorafs_pop_issuer_policy_v1";
 const STATUS_STATE_KEY: &str = "sorafs_pop_registry_status_v1";
 const CREDENTIAL_STATE_KEY_PREFIX: &str = "sorafs_pop_credential_commitment_v1_";
@@ -87,23 +83,19 @@ const REVOCATION_LIMITS: DecodeLimits = DecodeLimits::new(
     POP_REVOCATION_LIST_PAYLOAD_MAX_BYTES_V1 * 2,
     32,
 );
-
 #[derive(Clone, Debug, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct NonceBindingStateV1 {
     credential_commitment: [u8; 32],
     revocation_nonce_commitment: [u8; 32],
 }
-
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
     ))
 }
-
 fn corrupt_state(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvariantViolation(message.into().into())
 }
-
 fn has_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -131,7 +123,6 @@ fn has_permission(
         });
     direct || role
 }
-
 fn require_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -145,7 +136,6 @@ fn require_permission(
         )))
     }
 }
-
 fn block_time_epoch(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<u64, InstructionExecutionError> {
@@ -157,55 +147,44 @@ fn block_time_epoch(
     }
     Ok(now)
 }
-
 fn policy_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
         StatePath::from_str(POLICY_STATE_KEY).expect("static PoP policy key is valid")
     })
 }
-
 fn status_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
         StatePath::from_str(STATUS_STATE_KEY).expect("static PoP status key is valid")
     })
 }
-
 fn digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
     StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static PoP prefix plus lowercase hex is a valid state key")
 }
-
 fn sequence_key(prefix: &str, sequence: u64) -> StatePath {
     StatePath::from_str(&format!("{prefix}{sequence:020}"))
         .expect("static PoP prefix plus decimal sequence is a valid state key")
 }
-
 fn credential_key(commitment: [u8; 32]) -> StatePath {
     digest_key(CREDENTIAL_STATE_KEY_PREFIX, commitment)
 }
-
 fn nonce_binding_key(commitment: [u8; 32]) -> StatePath {
     digest_key(NONCE_BINDING_STATE_KEY_PREFIX, commitment)
 }
-
 fn root_key(version: u64) -> StatePath {
     sequence_key(ROOT_STATE_KEY_PREFIX, version)
 }
-
 fn revocation_publication_key(version: u64) -> StatePath {
     sequence_key(REVOCATION_PUBLICATION_STATE_KEY_PREFIX, version)
 }
-
 fn revocation_key(commitment: [u8; 32]) -> StatePath {
     digest_key(REVOCATION_STATE_KEY_PREFIX, commitment)
 }
-
 fn audit_key(sequence: u64) -> StatePath {
     sequence_key(AUDIT_STATE_KEY_PREFIX, sequence)
 }
-
 fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
@@ -213,7 +192,6 @@ fn encode_state<T: norito::core::NoritoSerialize>(
     norito::encode_canonical(value)
         .map_err(|error| corrupt_state(format!("failed to encode {label}: {error}")))
 }
-
 fn decode_exact<T>(
     bytes: &[u8],
     limits: DecodeLimits,
@@ -226,7 +204,6 @@ where
 {
     decode_exact_with_current(bytes, limits, maximum, label, state, None)
 }
-
 fn decode_exact_for_current<T>(
     bytes: &[u8],
     limits: DecodeLimits,
@@ -240,7 +217,6 @@ where
 {
     decode_exact_with_current(bytes, limits, maximum, label, state, Some(current))
 }
-
 fn decode_exact_with_current<T>(
     bytes: &[u8],
     limits: DecodeLimits,
@@ -299,14 +275,12 @@ where
     }
     Ok(value)
 }
-
 fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
     decode_exact(bytes, STATE_LIMITS, STATE_MAX_BYTES, label, true)
 }
-
 fn decode_state_for_current<T>(
     bytes: &[u8],
     label: &str,
@@ -317,7 +291,6 @@ where
 {
     decode_exact_for_current(bytes, STATE_LIMITS, STATE_MAX_BYTES, label, true, current)
 }
-
 fn decode_root_payload(
     bytes: &[u8],
     state: bool,
@@ -330,7 +303,6 @@ fn decode_root_payload(
         state,
     )
 }
-
 fn decode_root_payload_for_current(
     bytes: &[u8],
     state: bool,
@@ -345,7 +317,6 @@ fn decode_root_payload_for_current(
         current,
     )
 }
-
 fn decode_revocation_payload(
     bytes: &[u8],
     state: bool,
@@ -358,7 +329,6 @@ fn decode_revocation_payload(
         state,
     )
 }
-
 fn decode_revocation_payload_for_current(
     bytes: &[u8],
     state: bool,
@@ -373,7 +343,6 @@ fn decode_revocation_payload_for_current(
         current,
     )
 }
-
 fn pop_query_current(
     resident_bytes: usize,
 ) -> Result<
@@ -383,7 +352,6 @@ fn pop_query_current(
     crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(resident_bytes)
         .map_err(InstructionExecutionError::Query)
 }
-
 fn reset_pop_query_current(
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
     resident_bytes: usize,
@@ -391,20 +359,16 @@ fn reset_pop_query_current(
     *current = pop_query_current(resident_bytes)?;
     Ok(())
 }
-
 struct PopRegistryDigestWriter<'a>(&'a mut blake3::Hasher);
-
 impl std::io::Write for PopRegistryDigestWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.0.update(bytes);
         Ok(bytes.len())
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
-
 fn canonical_registry_payload_digest<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
@@ -415,20 +379,17 @@ fn canonical_registry_payload_digest<T: norito::core::NoritoSerialize>(
         .map_err(|error| corrupt_state(format!("failed to encode stored {label}: {error}")))?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn read_policy(
     world: &impl WorldReadOnly,
 ) -> Result<Option<PopIssuerPolicyRecordV1>, InstructionExecutionError> {
     read_policy_with_current(world, None)
 }
-
 fn read_policy_for_current(
     world: &impl WorldReadOnly,
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
 ) -> Result<Option<PopIssuerPolicyRecordV1>, InstructionExecutionError> {
     read_policy_with_current(world, Some(current))
 }
-
 fn read_policy_with_current(
     world: &impl WorldReadOnly,
     mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
@@ -470,20 +431,17 @@ fn read_policy_with_current(
     )?;
     Ok(Some(record))
 }
-
 pub(super) fn read_status(
     world: &impl WorldReadOnly,
 ) -> Result<Option<PopRegistryStatusV1>, InstructionExecutionError> {
     read_status_with_current(world, None)
 }
-
 fn read_status_for_current(
     world: &impl WorldReadOnly,
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
 ) -> Result<Option<PopRegistryStatusV1>, InstructionExecutionError> {
     read_status_with_current(world, Some(current))
 }
-
 fn read_status_with_current(
     world: &impl WorldReadOnly,
     mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
@@ -567,7 +525,6 @@ fn read_status_with_current(
     }
     Ok(Some(status))
 }
-
 /// Fully validated active PoP publications used by privacy-preserving consumers.
 pub(super) struct ActivePopPublicationsV1 {
     pub(super) status: PopRegistryStatusV1,
@@ -575,7 +532,6 @@ pub(super) struct ActivePopPublicationsV1 {
     pub(super) root: PopCommitmentRootV1,
     pub(super) revocations: PopRevocationListV1,
 }
-
 /// Fully validated historical publications fixed by an admitted moderation appeal.
 ///
 /// Registry advancement must not rewrite the eligibility snapshot of an
@@ -586,7 +542,6 @@ pub(super) struct PinnedPopPublicationsV1 {
     pub(super) root: PopCommitmentRootV1,
     pub(super) revocations: PopRevocationListV1,
 }
-
 /// Load a historical root/list/audit tuple exactly as captured by an appeal.
 pub(super) fn read_pinned_publications(
     world: &impl WorldReadOnly,
@@ -619,7 +574,6 @@ pub(super) fn read_pinned_publications(
             "pinned PoP registry audit digest does not match its historical link",
         ));
     }
-
     let root_record = read_root(world, commitment_tree_version)?
         .ok_or_else(|| corrupt_state("pinned PoP commitment-root record is missing"))?;
     let revocation_record = read_revocation_publication(world, revocation_list_version)?
@@ -641,7 +595,6 @@ pub(super) fn read_pinned_publications(
         decode_revocation_payload(&revocation_record.canonical_revocation_list_payload, true)?;
     Ok(PinnedPopPublicationsV1 { root, revocations })
 }
-
 /// Load the exact signed active PoP root and revocation snapshot.
 pub(super) fn read_active_publications(
     world: &impl WorldReadOnly,
@@ -686,14 +639,12 @@ pub(super) fn read_active_publications(
         revocations,
     }))
 }
-
 fn read_credential(
     world: &impl WorldReadOnly,
     commitment: [u8; 32],
 ) -> Result<Option<PopCredentialCommitmentRecordV1>, InstructionExecutionError> {
     read_credential_with_current(world, commitment, None)
 }
-
 fn read_credential_for_current(
     world: &impl WorldReadOnly,
     commitment: [u8; 32],
@@ -701,7 +652,6 @@ fn read_credential_for_current(
 ) -> Result<Option<PopCredentialCommitmentRecordV1>, InstructionExecutionError> {
     read_credential_with_current(world, commitment, Some(current))
 }
-
 fn read_credential_with_current(
     world: &impl WorldReadOnly,
     commitment: [u8; 32],
@@ -746,14 +696,12 @@ fn read_credential_with_current(
     )?;
     Ok(Some(record))
 }
-
 fn read_nonce_binding(
     world: &impl WorldReadOnly,
     nonce_commitment: [u8; 32],
 ) -> Result<Option<NonceBindingStateV1>, InstructionExecutionError> {
     read_nonce_binding_with_current(world, nonce_commitment, None)
 }
-
 fn read_nonce_binding_with_current(
     world: &impl WorldReadOnly,
     nonce_commitment: [u8; 32],
@@ -776,14 +724,12 @@ fn read_nonce_binding_with_current(
     }
     Ok(Some(binding))
 }
-
 fn read_root(
     world: &impl WorldReadOnly,
     version: u64,
 ) -> Result<Option<PopCommitmentRootRecordV1>, InstructionExecutionError> {
     read_root_with_current(world, version, None)
 }
-
 fn read_root_for_current(
     world: &impl WorldReadOnly,
     version: u64,
@@ -791,7 +737,6 @@ fn read_root_for_current(
 ) -> Result<Option<PopCommitmentRootRecordV1>, InstructionExecutionError> {
     read_root_with_current(world, version, Some(current))
 }
-
 fn read_root_with_current(
     world: &impl WorldReadOnly,
     version: u64,
@@ -851,14 +796,12 @@ fn read_root_with_current(
     )?;
     Ok(Some(record))
 }
-
 fn read_revocation_publication(
     world: &impl WorldReadOnly,
     version: u64,
 ) -> Result<Option<PopRevocationPublicationRecordV1>, InstructionExecutionError> {
     read_revocation_publication_with_current(world, version, None)
 }
-
 fn read_revocation_publication_for_current(
     world: &impl WorldReadOnly,
     version: u64,
@@ -866,7 +809,6 @@ fn read_revocation_publication_for_current(
 ) -> Result<Option<PopRevocationPublicationRecordV1>, InstructionExecutionError> {
     read_revocation_publication_with_current(world, version, Some(current))
 }
-
 fn read_revocation_publication_with_current(
     world: &impl WorldReadOnly,
     version: u64,
@@ -935,7 +877,6 @@ fn read_revocation_publication_with_current(
     )?;
     Ok(Some(record))
 }
-
 fn read_revocation_record_with_current(
     world: &impl WorldReadOnly,
     nonce_commitment: [u8; 32],
@@ -965,14 +906,12 @@ fn read_revocation_record_with_current(
     }
     Ok(Some(record))
 }
-
 fn read_revocation(
     world: &impl WorldReadOnly,
     nonce_commitment: [u8; 32],
 ) -> Result<Option<PopRevocationRecordV1>, InstructionExecutionError> {
     read_revocation_with_current(world, nonce_commitment, None)
 }
-
 fn read_revocation_for_current(
     world: &impl WorldReadOnly,
     nonce_commitment: [u8; 32],
@@ -980,7 +919,6 @@ fn read_revocation_for_current(
 ) -> Result<Option<PopRevocationRecordV1>, InstructionExecutionError> {
     read_revocation_with_current(world, nonce_commitment, Some(current))
 }
-
 fn read_revocation_with_current(
     world: &impl WorldReadOnly,
     nonce_commitment: [u8; 32],
@@ -1017,7 +955,6 @@ fn read_revocation_with_current(
     if let Some(current) = current.as_deref_mut() {
         reset_pop_query_current(current, retained_base_bytes)?;
     }
-
     let publication =
         read_revocation_publication_with_current(world, list_version, current.as_deref_mut())?
             .ok_or_else(|| corrupt_state("PoP revocation record publication is missing"))?;
@@ -1077,7 +1014,6 @@ fn read_revocation_with_current(
     if let Some(current) = current.as_deref_mut() {
         reset_pop_query_current(current, retained_base_bytes)?;
     }
-
     let record =
         read_revocation_record_with_current(world, nonce_commitment, current.as_deref_mut())?
             .ok_or_else(|| corrupt_state("PoP revocation record disappeared during validation"))?;
@@ -1093,7 +1029,6 @@ fn read_revocation_with_current(
     }
     Ok(Some(record))
 }
-
 fn audit_digest(
     sequence: u64,
     kind: PopRegistryAuditEventKindV1,
@@ -1113,7 +1048,6 @@ fn audit_digest(
     )
     .expect("valid PoP audit authorities have a canonical I105 representation")
 }
-
 fn audit_digest_for_current(
     sequence: u64,
     kind: PopRegistryAuditEventKindV1,
@@ -1133,7 +1067,6 @@ fn audit_digest_for_current(
         Some(current),
     )
 }
-
 fn audit_digest_with_current(
     sequence: u64,
     kind: PopRegistryAuditEventKindV1,
@@ -1154,7 +1087,6 @@ fn audit_digest_with_current(
     hash_canonical_account_i105(&mut hasher, authority, current)?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn hash_canonical_account_i105(
     hasher: &mut blake3::Hasher,
     authority: &AccountId,
@@ -1174,7 +1106,6 @@ fn hash_canonical_account_i105(
             .add_nested(scratch_bytes)
             .map_err(InstructionExecutionError::Query)?;
     }
-
     let mut canonical = Vec::new();
     canonical
         .try_reserve_exact(canonical_len)
@@ -1213,7 +1144,6 @@ fn hash_canonical_account_i105(
     }
     Ok(())
 }
-
 fn pop_account_address_len(authority: &AccountId) -> Result<usize, InstructionExecutionError> {
     let controller_bytes = match authority.controller() {
         AccountController::Single(key) => {
@@ -1253,7 +1183,6 @@ fn pop_account_address_len(authority: &AccountId) -> Result<usize, InstructionEx
         .checked_add(1)
         .ok_or_else(|| corrupt_state("PoP audit authority address length overflow"))
 }
-
 fn encode_pop_account_address(
     authority: &AccountId,
     canonical: &mut Vec<u8>,
@@ -1299,13 +1228,11 @@ fn encode_pop_account_address(
     }
     Ok(())
 }
-
 fn pop_curve_id(algorithm: iroha_crypto::Algorithm) -> Result<u8, InstructionExecutionError> {
     iroha_data_model::account::curve::CurveId::try_from_algorithm(algorithm)
         .map(iroha_data_model::account::curve::CurveId::as_u8)
         .map_err(|_| corrupt_state("PoP audit authority uses an unsupported account-address curve"))
 }
-
 fn pop_encode_base105(
     bytes: &[u8],
     maximum_digits: usize,
@@ -1346,7 +1273,6 @@ fn pop_encode_base105(
     digits.reverse();
     Ok(digits)
 }
-
 fn pop_i105_checksum_digits(canonical: &[u8]) -> [u8; 6] {
     fn step(mut checksum: u32, value: u8) -> u32 {
         const GENERATORS: [u32; 5] = [
@@ -1365,7 +1291,6 @@ fn pop_i105_checksum_digits(canonical: &[u8]) -> [u8; 6] {
         }
         checksum
     }
-
     let mut checksum = 1_u32;
     for &byte in b"snx" {
         checksum = step(checksum, byte >> 5);
@@ -1407,7 +1332,6 @@ fn pop_i105_checksum_digits(canonical: &[u8]) -> [u8; 6] {
     }
     result
 }
-
 fn pop_i105_sentinel<'a>(discriminant: u16, numeric: &'a mut [u8; 6]) -> &'a [u8] {
     match discriminant {
         0x02f1 => b"sora",
@@ -1434,7 +1358,6 @@ fn pop_i105_sentinel<'a>(discriminant: u16, numeric: &'a mut [u8; 6]) -> &'a [u8
         }
     }
 }
-
 fn pop_i105_symbol(digit: u8) -> Result<&'static str, InstructionExecutionError> {
     const SYMBOLS: [&str; 105] = [
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J",
@@ -1449,7 +1372,6 @@ fn pop_i105_symbol(digit: u8) -> Result<&'static str, InstructionExecutionError>
         .copied()
         .ok_or_else(|| corrupt_state("PoP audit authority has an invalid I105 digit"))
 }
-
 fn read_audit_record_with_current(
     world: &impl WorldReadOnly,
     sequence: u64,
@@ -1498,14 +1420,12 @@ fn read_audit_record_with_current(
     }
     Ok(Some(record))
 }
-
 fn read_audit(
     world: &impl WorldReadOnly,
     sequence: u64,
 ) -> Result<Option<PopRegistryAuditDigestRecordV1>, InstructionExecutionError> {
     read_audit_with_current(world, sequence, None)
 }
-
 fn read_audit_for_current(
     world: &impl WorldReadOnly,
     sequence: u64,
@@ -1513,7 +1433,6 @@ fn read_audit_for_current(
 ) -> Result<Option<PopRegistryAuditDigestRecordV1>, InstructionExecutionError> {
     read_audit_with_current(world, sequence, Some(current))
 }
-
 fn read_audit_with_current(
     world: &impl WorldReadOnly,
     sequence: u64,
@@ -1529,7 +1448,6 @@ fn read_audit_with_current(
     if sequence == 1 {
         return Ok(Some(record));
     }
-
     // Retain only the fixed predecessor digest while validating the adjacent
     // audit record. Re-read the immutable current link afterwards so two
     // independently D-sized decoded records never remain resident together.
@@ -1551,7 +1469,6 @@ fn read_audit_with_current(
     if let Some(current) = current.as_deref_mut() {
         reset_pop_query_current(current, retained_base_bytes)?;
     }
-
     let record = read_audit_record_with_current(world, sequence, current.as_deref_mut())?
         .ok_or_else(|| corrupt_state("PoP registry audit link disappeared during validation"))?;
     if record.previous_audit_digest != expected_previous_digest {
@@ -1561,7 +1478,6 @@ fn read_audit_with_current(
     }
     Ok(Some(record))
 }
-
 #[allow(clippy::too_many_arguments)]
 fn validate_audit_binding_with_current(
     world: &impl WorldReadOnly,
@@ -1587,7 +1503,6 @@ fn validate_audit_binding_with_current(
     }
     Ok(())
 }
-
 fn prepare_audit(
     status: &PopRegistryStatusV1,
     kind: PopRegistryAuditEventKindV1,
@@ -1622,13 +1537,11 @@ fn prepare_audit(
         recorded_by: authority.clone(),
     })
 }
-
 fn apply_audit(status: &mut PopRegistryStatusV1, audit: &PopRegistryAuditDigestRecordV1) {
     status.audit_sequence = audit.sequence;
     status.audit_head = Some(audit.audit_digest);
     status.updated_at_epoch = audit.recorded_at_epoch;
 }
-
 fn active_policy(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -1661,7 +1574,6 @@ fn active_policy(
     }
     Ok((record, status, now))
 }
-
 fn validate_publication_identity(
     issuer_id: &str,
     public_key: &[u8],
@@ -1680,7 +1592,6 @@ fn validate_publication_identity(
     }
     Ok(())
 }
-
 fn validate_publication_time(
     published: u64,
     previous: Option<u64>,
@@ -1703,7 +1614,6 @@ fn validate_publication_time(
     }
     Ok(())
 }
-
 fn revocation_reason(reason: PopRevocationReasonV1) -> PopRegistryRevocationReasonV1 {
     match reason {
         PopRevocationReasonV1::Rotated => PopRegistryRevocationReasonV1::Rotated,
@@ -1717,7 +1627,6 @@ fn revocation_reason(reason: PopRevocationReasonV1) -> PopRegistryRevocationReas
         PopRevocationReasonV1::Expired => PopRegistryRevocationReasonV1::Expired,
     }
 }
-
 impl Execute for SetSorafsPopIssuerPolicy {
     fn execute(
         self,
@@ -1782,7 +1691,6 @@ impl Execute for SetSorafsPopIssuerPolicy {
                 ));
             }
         };
-
         let policy_payload = norito::encode_canonical(&self.policy).map_err(|error| {
             invalid_parameter(format!("failed to encode SoraFS PoP policy: {error}"))
         })?;
@@ -1805,7 +1713,6 @@ impl Execute for SetSorafsPopIssuerPolicy {
         let encoded_policy = encode_state(&record, "PoP issuer policy")?;
         let encoded_status = encode_state(&status, "PoP registry status")?;
         let encoded_audit = encode_state(&audit, "PoP registry audit link")?;
-
         state_transaction
             .world
             .smart_contract_state
@@ -1821,7 +1728,6 @@ impl Execute for SetSorafsPopIssuerPolicy {
         Ok(())
     }
 }
-
 impl Execute for CommitSorafsPopCredentialBatch {
     fn execute(
         self,
@@ -1886,7 +1792,6 @@ impl Execute for CommitSorafsPopCredentialBatch {
                 "PoP revocation publication is not bound to the committed root",
             ));
         }
-
         let (previous_root_time, previous_revocation_time, previous_entries, expected_tree_size) =
             if status.active_tree_version == 0 {
                 if root.tree_version != 1
@@ -1980,7 +1885,6 @@ impl Execute for CommitSorafsPopCredentialBatch {
                 "PoP revocation snapshot changed after equality validation",
             ));
         }
-
         for commitment in &batch.commitments {
             if commitment.commitment_root != root.root_digest
                 || commitment.commitment_tree_version != root.tree_version
@@ -2021,7 +1925,6 @@ impl Execute for CommitSorafsPopCredentialBatch {
                 ));
             }
         }
-
         let added = u64::try_from(batch.commitments.len())
             .map_err(|_| invalid_parameter("PoP credential batch size conversion failed"))?;
         let next_count = status
@@ -2086,7 +1989,6 @@ impl Execute for CommitSorafsPopCredentialBatch {
         status.active_revocation_root = Some(revocations.revocation_root);
         status.credential_commitment_count = next_count;
         apply_audit(&mut status, &audit);
-
         let encoded_root = encode_state(&root_record, "PoP root publication")?;
         let encoded_revocations = encode_state(&revocation_record, "PoP revocation publication")?;
         let encoded_audit = encode_state(&audit, "PoP registry audit link")?;
@@ -2120,7 +2022,6 @@ impl Execute for CommitSorafsPopCredentialBatch {
         Ok(())
     }
 }
-
 impl Execute for PublishSorafsPopRevocationList {
     fn execute(
         self,
@@ -2220,7 +2121,6 @@ impl Execute for PublishSorafsPopRevocationList {
                 policy.policy.max_revocations_per_publication
             )));
         }
-
         let audit = prepare_audit(
             &status,
             PopRegistryAuditEventKindV1::RevocationListPublished,
@@ -2280,7 +2180,6 @@ impl Execute for PublishSorafsPopRevocationList {
                 encode_state(&record, "PoP revocation record")?,
             ));
         }
-
         let added = u64::try_from(revocation_writes.len())
             .map_err(|_| corrupt_state("PoP revocation count conversion failed"))?;
         status.revoked_credential_count = status
@@ -2332,14 +2231,12 @@ impl Execute for PublishSorafsPopRevocationList {
         Ok(())
     }
 }
-
 fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
     match error {
         InstructionExecutionError::Query(error) => error,
         error => QueryExecutionFail::Conversion(error.to_string()),
     }
 }
-
 impl ValidSingularQuery for FindSorafsPopIssuerPolicy {
     fn execute(
         &self,
@@ -2351,7 +2248,6 @@ impl ValidSingularQuery for FindSorafsPopIssuerPolicy {
             .ok_or_else(|| QueryExecutionFail::Find(FindError::SorafsPopIssuerPolicy))
     }
 }
-
 impl ValidSingularQuery for FindSorafsPopCredentialCommitmentByDigest {
     fn execute(
         &self,
@@ -2367,7 +2263,6 @@ impl ValidSingularQuery for FindSorafsPopCredentialCommitmentByDigest {
             })
     }
 }
-
 impl ValidSingularQuery for FindSorafsPopCommitmentRootByVersion {
     fn execute(
         &self,
@@ -2381,7 +2276,6 @@ impl ValidSingularQuery for FindSorafsPopCommitmentRootByVersion {
             })
     }
 }
-
 impl ValidSingularQuery for FindSorafsPopRevocationPublicationByVersion {
     fn execute(
         &self,
@@ -2397,7 +2291,6 @@ impl ValidSingularQuery for FindSorafsPopRevocationPublicationByVersion {
             })
     }
 }
-
 impl ValidSingularQuery for FindSorafsPopRevocationByNonceCommitment {
     fn execute(
         &self,
@@ -2417,7 +2310,6 @@ impl ValidSingularQuery for FindSorafsPopRevocationByNonceCommitment {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsPopAuditDigestBySequence {
     fn execute(
         &self,
@@ -2429,7 +2321,6 @@ impl ValidSingularQuery for FindSorafsPopAuditDigestBySequence {
             .ok_or_else(|| QueryExecutionFail::Find(FindError::SorafsPopAuditDigest(self.sequence)))
     }
 }
-
 impl ValidSingularQuery for FindSorafsPopRegistryStatus {
     fn execute(
         &self,
@@ -2453,7 +2344,6 @@ impl ValidSingularQuery for FindSorafsPopRegistryStatus {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
@@ -2477,26 +2367,21 @@ mod tests {
         pop_revocation_list_signature_digest_v1, pop_revocation_root_v1,
         verify_pop_commitment_root_signature_v1, verify_pop_revocation_list_signature_v1,
     };
-
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
     const NOW: u64 = 10_000;
-
     fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
         KeyPair::from_private_key(private).expect("derive deterministic keypair")
     }
-
     fn account(keypair: &KeyPair) -> AccountId {
         AccountId::new(keypair.public_key().clone())
     }
-
     fn public_key_bytes(keypair: &KeyPair) -> [u8; 32] {
         let (_, bytes) = keypair
             .public_key()
@@ -2504,7 +2389,6 @@ mod tests {
             .expect("fixture public key");
         bytes.try_into().expect("Ed25519 public key length")
     }
-
     fn empty_signature(keypair: &KeyPair) -> PopSignatureV1 {
         PopSignatureV1 {
             algorithm: PopSignatureAlgorithmV1::Ed25519,
@@ -2512,14 +2396,12 @@ mod tests {
             signature: Vec::new(),
         }
     }
-
     fn sign_digest(keypair: &KeyPair, digest: [u8; 32]) -> Vec<u8> {
         Signature::try_new(keypair.private_key(), &digest)
             .expect("sign fixture digest")
             .payload()
             .to_vec()
     }
-
     fn sign_root(mut root: PopCommitmentRootV1, keypair: &KeyPair) -> PopCommitmentRootV1 {
         root.publisher_signature = empty_signature(keypair);
         let digest = pop_commitment_root_signature_digest_v1(&root).expect("root digest");
@@ -2527,7 +2409,6 @@ mod tests {
         verify_pop_commitment_root_signature_v1(&root).expect("root signature verifies");
         root
     }
-
     fn sign_revocations(
         mut publication: PopRevocationListV1,
         keypair: &KeyPair,
@@ -2540,13 +2421,11 @@ mod tests {
             .expect("revocation signature verifies");
         publication
     }
-
     fn nonce(value: u8) -> [u8; 32] {
         let mut nonce = [0; 32];
         nonce[0] = value;
         nonce
     }
-
     fn root(
         keypair: &KeyPair,
         root_byte: u8,
@@ -2571,7 +2450,6 @@ mod tests {
             keypair,
         )
     }
-
     fn revocations(
         keypair: &KeyPair,
         root_digest: [u8; 32],
@@ -2595,7 +2473,6 @@ mod tests {
             keypair,
         )
     }
-
     fn commitment(
         credential_byte: u8,
         nonce: [u8; 32],
@@ -2613,7 +2490,6 @@ mod tests {
             expires_at_epoch: NOW + 1_000,
         }
     }
-
     fn batch(
         keypair: &KeyPair,
         root_byte: u8,
@@ -2641,7 +2517,6 @@ mod tests {
             commitments,
         }
     }
-
     fn policy(keypair: &KeyPair) -> PopIssuerPolicyV1 {
         PopIssuerPolicyV1 {
             version: POP_ISSUER_POLICY_VERSION_V1,
@@ -2657,15 +2532,12 @@ mod tests {
             paused: false,
         }
     }
-
     fn block_header() -> BlockHeader {
         BlockHeader::new(nonzero!(1_u64), None, None, None, NOW * 1_000, 0)
     }
-
     fn non_genesis_block_header() -> BlockHeader {
         BlockHeader::new(nonzero!(2_u64), None, None, None, NOW * 1_000, 0)
     }
-
     fn state(operator: &KeyPair, others: &[&KeyPair]) -> State {
         let mut world = World::new();
         for keypair in std::iter::once(operator).chain(others.iter().copied()) {
@@ -2686,25 +2558,21 @@ mod tests {
             LiveQueryStore::start_test(),
         )
     }
-
     fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
         norito::encode_canonical(value).expect("encode canonical fixture")
     }
-
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         norito::to_bytes(value).expect("encode alternate-layout PoP registry fixture")
     }
-
     fn encode_state_with_alternate_ambient<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         encode_state(value, "PoP registry fixture").expect("encode canonical PoP registry state")
     }
-
     #[test]
     fn streamed_policy_audit_payload_digest_matches_canonical_bytes() {
         let operator = keypair(0x0F);
@@ -2714,7 +2582,6 @@ mod tests {
             .expect("stream policy payload digest");
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn streamed_audit_authority_matches_legacy_i105_preimage() {
         let single = account(&keypair(0x10));
@@ -2754,7 +2621,6 @@ mod tests {
                         .to_le_bytes(),
                 );
                 legacy.update(authority_text.as_bytes());
-
                 assert_eq!(
                     audit_digest(sequence, kind, payload_digest, previous, now, authority),
                     *legacy.finalize().as_bytes(),
@@ -2762,7 +2628,6 @@ mod tests {
             }
         }
     }
-
     fn activate(operator: &KeyPair, state_transaction: &mut StateTransaction<'_, '_>) -> AccountId {
         let authority = account(operator);
         SetSorafsPopIssuerPolicy::new(policy(operator))
@@ -2770,7 +2635,6 @@ mod tests {
             .expect("activate PoP policy");
         authority
     }
-
     fn initial_batch(operator: &KeyPair) -> PopCredentialCommitmentBatchV1 {
         let root_digest = [1; 32];
         batch(
@@ -2784,7 +2648,6 @@ mod tests {
             Vec::new(),
         )
     }
-
     fn commit_initial(
         operator: &KeyPair,
         authority: &AccountId,
@@ -2794,7 +2657,6 @@ mod tests {
             .execute(authority, state_transaction)
             .expect("commit initial credential batch");
     }
-
     #[test]
     fn policy_batch_queries_and_audit_chain_are_authoritative() {
         let operator = keypair(0x11);
@@ -2803,7 +2665,6 @@ mod tests {
         let mut stx = block.transaction();
         let authority = activate(&operator, &mut stx);
         commit_initial(&operator, &authority, &mut stx);
-
         let status = FindSorafsPopRegistryStatus.execute(&stx).expect("status");
         assert_eq!(status.active_root_digest, Some([1; 32]));
         assert_eq!(status.active_tree_version, 1);
@@ -2834,7 +2695,6 @@ mod tests {
             Some(first_audit.audit_digest)
         );
     }
-
     #[test]
     fn genesis_permission_bypass_matches_executor_but_policy_requires_registered_issuer() {
         let operator = keypair(0x18);
@@ -2853,7 +2713,6 @@ mod tests {
                 .activated_by,
             genesis_authority_id
         );
-
         let unknown_issuer = keypair(0x1A);
         let state = state(&operator, &[]);
         let mut block = state.block(block_header());
@@ -2867,7 +2726,6 @@ mod tests {
         );
         assert!(FindSorafsPopIssuerPolicy.execute(&stx).is_err());
     }
-
     #[test]
     fn unauthorized_governance_and_issuer_accounts_are_rejected() {
         let operator = keypair(0x21);
@@ -2876,7 +2734,6 @@ mod tests {
         let state = state(&operator, &[&intruder]);
         let mut block = state.block(non_genesis_block_header());
         let mut stx = block.transaction();
-
         assert!(
             SetSorafsPopIssuerPolicy::new(policy(&operator))
                 .execute(&intruder_id, &mut stx)
@@ -2901,7 +2758,6 @@ mod tests {
         assert_eq!(status.credential_commitment_count, 0);
         assert_eq!(authority, account(&operator));
     }
-
     #[test]
     fn malformed_noncanonical_and_oversized_batches_fail_without_mutation() {
         let operator = keypair(0x31);
@@ -2909,7 +2765,6 @@ mod tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let authority = activate(&operator, &mut stx);
-
         let mut wrong_policy = initial_batch(&operator);
         wrong_policy.issuer_policy_digest = [0xEE; 32];
         assert!(
@@ -2917,7 +2772,6 @@ mod tests {
                 .execute(&authority, &mut stx)
                 .is_err()
         );
-
         let canonical_batch = initial_batch(&operator);
         assert_eq!(
             encode_state_with_alternate_ambient(&canonical_batch),
@@ -2958,7 +2812,6 @@ mod tests {
                 .to_string()
                 .contains("not exact canonical Norito")
         );
-
         for payload in [
             vec![0xFF, 0x00],
             alternate,
@@ -2979,7 +2832,6 @@ mod tests {
                     .is_err()
             );
         }
-
         let root_digest = [1; 32];
         let commitments = (1_u16..=257)
             .map(|value| {
@@ -3006,7 +2858,6 @@ mod tests {
         assert_eq!(status.audit_sequence, 1);
         assert_eq!(status.credential_commitment_count, 0);
     }
-
     #[test]
     fn duplicate_commitment_and_stale_root_rollback_are_atomic() {
         let operator = keypair(0x41);
@@ -3016,7 +2867,6 @@ mod tests {
         let authority = activate(&operator, &mut stx);
         commit_initial(&operator, &authority, &mut stx);
         let before = FindSorafsPopRegistryStatus.execute(&stx).expect("status");
-
         let duplicate = batch(
             &operator,
             2,
@@ -3032,7 +2882,6 @@ mod tests {
                 .execute(&authority, &mut stx)
                 .is_err()
         );
-
         let stale = batch(
             &operator,
             2,
@@ -3058,7 +2907,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn revocation_is_bound_monotonic_and_not_replayable() {
         let operator = keypair(0x51);
@@ -3067,7 +2915,6 @@ mod tests {
         let mut stx = block.transaction();
         let authority = activate(&operator, &mut stx);
         commit_initial(&operator, &authority, &mut stx);
-
         let unknown = PopRevocationEntryV1 {
             nonce: nonce(9),
             revoked_at_epoch: NOW,
@@ -3082,7 +2929,6 @@ mod tests {
             .execute(&authority, &mut stx)
             .is_err()
         );
-
         let entry = PopRevocationEntryV1 {
             nonce: nonce(1),
             revoked_at_epoch: NOW,
@@ -3102,7 +2948,6 @@ mod tests {
         .expect("revocation record");
         assert_eq!(committed.credential_commitment, [1; 32]);
         let before = FindSorafsPopRegistryStatus.execute(&stx).expect("status");
-
         assert!(
             PublishSorafsPopRevocationList::new(
                 encode(&first),
@@ -3134,7 +2979,6 @@ mod tests {
             before
         );
     }
-
     #[test]
     fn revocation_batch_policy_limit_is_preflighted_atomically() {
         let operator = keypair(0x61);
@@ -3142,7 +2986,6 @@ mod tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let authority = activate(&operator, &mut stx);
-
         let root_digest = [1; 32];
         let commitments = (1_u8..=17)
             .map(|value| commitment(value, nonce(value), root_digest, 1, 1))

@@ -3,13 +3,9 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-
 use super::*;
-
 static NEXT_TEST_DIRECTORY_V1: AtomicU64 = AtomicU64::new(0);
-
 struct TestDirectoryV1(PathBuf);
-
 impl TestDirectoryV1 {
     fn new_v1(label: &str) -> Self {
         let ordinal = NEXT_TEST_DIRECTORY_V1.fetch_add(1, Ordering::Relaxed);
@@ -21,13 +17,11 @@ impl TestDirectoryV1 {
         Self(path)
     }
 }
-
 impl Drop for TestDirectoryV1 {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-
 fn test_writer_v1(
     directory: &Path,
     main_slots: u64,
@@ -49,13 +43,11 @@ fn test_writer_v1(
     )
     .unwrap()
 }
-
 fn chunk_v1(fill: u8) -> ConfidentialSpoolChunkV1 {
     let mut chunk = ConfidentialSpoolChunkV1::new_zeroed_v1(32).unwrap();
     chunk.as_mut_slice_v1().fill(fill);
     chunk
 }
-
 #[test]
 #[cfg(unix)]
 fn tiny_pair_roundtrip_is_authenticated_and_owns_both_snapshots() {
@@ -65,7 +57,6 @@ fn tiny_pair_roundtrip_is_authenticated_and_owns_both_snapshots() {
     writer.write_main_v1(0, chunk_v1(0xA5)).unwrap();
     writer.write_nonce_v1(0, chunk_v1(0x5A)).unwrap();
     let mut snapshots = writer.seal_v1([0x66; 32]).unwrap();
-
     assert_eq!(snapshots.writer_identity_v1(), writer_identity);
     assert_ne!(snapshots.provider_identity_v1(), writer_identity);
     assert_ne!(snapshots.snapshot_identity_v1(), writer_identity);
@@ -86,7 +77,6 @@ fn tiny_pair_roundtrip_is_authenticated_and_owns_both_snapshots() {
         &[0x5A; 32]
     );
 }
-
 #[test]
 #[cfg(unix)]
 fn pair_rejects_order_and_missing_slots_without_minting_snapshots() {
@@ -104,7 +94,6 @@ fn pair_rejects_order_and_missing_slots_without_minting_snapshots() {
         writer.seal_v1([0x77; 32]),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     ));
-
     let missing_directory = TestDirectoryV1::new_v1("missing");
     let mut missing = test_writer_v1(&missing_directory.0, 2, 1);
     missing.write_main_v1(0, chunk_v1(0x44)).unwrap();
@@ -114,7 +103,6 @@ fn pair_rejects_order_and_missing_slots_without_minting_snapshots() {
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     ));
 }
-
 #[test]
 #[cfg(unix)]
 fn writer_drop_during_unwind_releases_unlinked_owners() {
@@ -126,7 +114,6 @@ fn writer_drop_during_unwind_releases_unlinked_owners() {
     assert!(result.is_err());
     assert!(directory.0.read_dir().unwrap().next().is_none());
 }
-
 #[test]
 fn production_adapter_surface_has_no_path_key_or_raw_snapshot_escape() {
     let source = include_str!("phase23_rns_link_external_spool.rs");
@@ -134,7 +121,6 @@ fn production_adapter_surface_has_no_path_key_or_raw_snapshot_escape() {
         .split("#[cfg(test)]\n#[path = \"phase23_rns_link_external_spool_tests.rs\"]\nmod tests;")
         .next()
         .expect("production source prefix");
-
     assert!(source.lines().count() <= 400);
     assert!(source.len() <= 16_000);
     assert!(production.contains("ConfidentialSpoolWriterV1"));

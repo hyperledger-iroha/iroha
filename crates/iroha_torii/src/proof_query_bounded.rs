@@ -4,7 +4,6 @@ fn decode_bounded_proof_query(
 ) -> Result<SignedQuery, Response> {
     use iroha_data_model::query::{QueryRequest, SingularQueryBox};
     use iroha_version::codec::DecodeVersioned as _;
-
     if dto.signed_query_b64.len() > canonical_base64_max_len(envelope.route_body_bytes) {
         return Err(torii_proxy_error_response(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -106,7 +105,6 @@ fn decode_bounded_proof_query(
     }
     Ok(signed)
 }
-
 async fn execute_bounded_proof_query(
     app: &SharedAppState,
     dto: crate::routing::ProofFindByIdQueryDto,

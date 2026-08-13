@@ -5,7 +5,6 @@ mod shared_sorafs_provider_cache_tests {
         num::NonZeroUsize,
         path::{Path, PathBuf},
     };
-
     use iroha_config::{
         base::read::ConfigReader,
         parameters::{actual::SorafsAdmission, user::Root as UserConfig},
@@ -15,31 +14,24 @@ mod shared_sorafs_provider_cache_tests {
     use iroha_torii::sorafs::{ReplayCheckpointError, discovery::AdvertError};
     use sorafs_manifest::{ProviderAdmissionCouncilPolicyError, ProviderAdvertV1};
     use tempfile::TempDir;
-
     use super::*;
-
     fn base_config() -> Config {
         let table = toml::toml! {
             chain = "00000000-0000-0000-0000-000000000000"
             public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
             private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-
             [network]
             address = "addr:127.0.0.1:1337#8F78"
             public_address = "addr:127.0.0.1:1337#8F78"
-
             [torii]
             address = "addr:127.0.0.1:8080#8942"
-
             [genesis]
             public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-
             [streaming]
             identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
             identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
         };
-
         ConfigReader::new()
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<UserConfig>()
@@ -47,13 +39,11 @@ mod shared_sorafs_provider_cache_tests {
             .parse()
             .expect("shared provider-cache test config must parse")
     }
-
     fn ed25519_public_key(seed: u8) -> PublicKey {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("fixture Ed25519 seed must be valid");
         PublicKey::from(private)
     }
-
     fn configure_discovery(config: &mut Config, temp: &TempDir) -> PathBuf {
         let root = temp
             .path()
@@ -76,13 +66,11 @@ mod shared_sorafs_provider_cache_tests {
         });
         admission_dir
     }
-
     fn fixture_path(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/sorafs_manifest/provider_admission")
             .join(name)
     }
-
     fn install_admission_fixture(admission_dir: &Path) {
         fs::copy(
             fixture_path("envelope_v1.to"),
@@ -90,13 +78,11 @@ mod shared_sorafs_provider_cache_tests {
         )
         .expect("copy canonical provider admission fixture");
     }
-
     fn load_advert_fixture() -> ProviderAdvertV1 {
         let bytes =
             fs::read(fixture_path("advert_v1.to")).expect("read canonical provider advert fixture");
         norito::decode_from_bytes(&bytes).expect("decode canonical provider advert fixture")
     }
-
     fn resign_advert(advert: &mut ProviderAdvertV1) {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x21; 32])
             .expect("fixture provider Ed25519 seed must be valid");
@@ -114,7 +100,6 @@ mod shared_sorafs_provider_cache_tests {
             .payload()
             .to_vec();
     }
-
     #[test]
     fn disabled_discovery_is_side_effect_free_even_with_poisonous_config() {
         let temp = tempfile::tempdir().expect("temporary provider-cache root");
@@ -123,36 +108,29 @@ mod shared_sorafs_provider_cache_tests {
         config.torii.sorafs_discovery.discovery_enabled = false;
         config.torii.sorafs_discovery.known_capabilities = vec!["unknown".to_owned()];
         config.torii.sorafs_discovery.admission = None;
-
         let cache = build_shared_sorafs_provider_cache(&config)
             .expect("disabled discovery must not validate unused configuration");
-
         assert!(cache.is_none());
         assert!(!config.torii.data_dir.exists());
     }
-
     #[test]
     fn enabled_discovery_requires_admission_without_panicking() {
         let mut config = base_config();
         config.torii.sorafs_discovery.discovery_enabled = true;
         config.torii.sorafs_discovery.admission = None;
-
         let error = build_shared_sorafs_provider_cache(&config)
             .expect_err("enabled discovery without admission must fail closed");
-
         assert!(matches!(
             error,
             SharedSoraFsProviderCacheError::AdmissionPolicyRequired
         ));
     }
-
     #[test]
     fn malformed_capability_lists_are_typed_startup_errors() {
         let temp = tempfile::tempdir().expect("temporary provider-cache root");
         let mut config = base_config();
         configure_discovery(&mut config, &temp);
         config.torii.sorafs_discovery.known_capabilities = vec!["not-a-capability".to_owned()];
-
         let error = build_shared_sorafs_provider_cache(&config)
             .expect_err("unknown capability must fail closed");
         assert!(matches!(
@@ -160,7 +138,6 @@ mod shared_sorafs_provider_cache_tests {
             SharedSoraFsProviderCacheError::UnknownCapability(name)
                 if name == "not-a-capability"
         ));
-
         config.torii.sorafs_discovery.known_capabilities =
             vec!["torii".to_owned(), "torii_gateway".to_owned()];
         let error = build_shared_sorafs_provider_cache(&config)
@@ -170,7 +147,6 @@ mod shared_sorafs_provider_cache_tests {
             SharedSoraFsProviderCacheError::DuplicateCapability(name)
                 if name == "torii_gateway"
         ));
-
         config.torii.sorafs_discovery.known_capabilities.clear();
         let error = build_shared_sorafs_provider_cache(&config)
             .expect_err("empty capability list must fail closed");
@@ -179,7 +155,6 @@ mod shared_sorafs_provider_cache_tests {
             SharedSoraFsProviderCacheError::EmptyCapabilities
         ));
     }
-
     #[test]
     fn malformed_admission_policies_are_typed_startup_errors() {
         let temp = tempfile::tempdir().expect("temporary provider-cache root");
@@ -193,7 +168,6 @@ mod shared_sorafs_provider_cache_tests {
             .as_mut()
             .expect("admission policy")
             .trusted_council_keys = vec![duplicate.clone(), duplicate];
-
         let error = build_shared_sorafs_provider_cache(&config)
             .expect_err("duplicate council key must fail closed");
         assert!(matches!(
@@ -202,7 +176,6 @@ mod shared_sorafs_provider_cache_tests {
                 ProviderAdmissionCouncilPolicyError::DuplicateSigner { .. }
             )
         ));
-
         let secp_private = PrivateKey::from_bytes(Algorithm::Secp256k1, &[0x31; 32])
             .expect("fixture secp256k1 seed must be valid");
         config
@@ -222,7 +195,6 @@ mod shared_sorafs_provider_cache_tests {
             }
         ));
     }
-
     #[test]
     fn malformed_replay_checkpoint_is_a_typed_startup_error() {
         let temp = tempfile::tempdir().expect("temporary provider-cache root");
@@ -241,7 +213,6 @@ mod shared_sorafs_provider_cache_tests {
             fs::set_permissions(&checkpoint, fs::Permissions::from_mode(0o600))
                 .expect("set private checkpoint permissions");
         }
-
         let error = build_shared_sorafs_provider_cache(&config)
             .expect_err("corrupt checkpoint must fail startup");
         assert!(matches!(
@@ -252,7 +223,6 @@ mod shared_sorafs_provider_cache_tests {
             } if path == checkpoint
         ));
     }
-
     #[test]
     fn configured_replay_bound_is_enforced_by_shared_cache_startup() {
         let temp = tempfile::tempdir().expect("temporary provider-cache root");
@@ -260,7 +230,6 @@ mod shared_sorafs_provider_cache_tests {
         configure_discovery(&mut config, &temp);
         config.torii.sorafs_discovery.replay_checkpoint_max_entries =
             NonZeroUsize::new(usize::MAX).expect("maximum usize is non-zero");
-
         let error = build_shared_sorafs_provider_cache(&config)
             .expect_err("unsafe replay checkpoint bound must fail startup");
         assert!(matches!(
@@ -274,7 +243,6 @@ mod shared_sorafs_provider_cache_tests {
             }
         ));
     }
-
     #[test]
     fn shared_cache_persists_replay_rejection_across_irohad_restart() {
         let temp = tempfile::tempdir().expect("temporary provider-cache root");
@@ -285,12 +253,10 @@ mod shared_sorafs_provider_cache_tests {
             .torii
             .data_dir
             .join(&config.torii.sorafs_discovery.replay_checkpoint_path);
-
         let original = load_advert_fixture();
         let mut latest = original.clone();
         latest.issued_at = latest.issued_at.saturating_add(1);
         resign_advert(&mut latest);
-
         let cache = build_shared_sorafs_provider_cache(&config)
             .expect("initialize persistent shared cache")
             .expect("enabled discovery cache");
@@ -314,12 +280,10 @@ mod shared_sorafs_provider_cache_tests {
                 .expect("persist latest provider advert high-water mark");
         }
         drop(cache);
-
         assert!(
             checkpoint.exists(),
             "relative replay path must resolve beneath Torii data_dir"
         );
-
         let restarted = build_shared_sorafs_provider_cache(&config)
             .expect("restart with canonical replay checkpoint")
             .expect("enabled discovery cache after restart");
@@ -341,7 +305,6 @@ mod shared_sorafs_provider_cache_tests {
             } if current_issued_at == latest.issued_at
                 && incoming_issued_at < current_issued_at
         ));
-
         let mut conflicting = latest.clone();
         conflicting.allow_unknown_capabilities = !conflicting.allow_unknown_capabilities;
         resign_advert(&mut conflicting);

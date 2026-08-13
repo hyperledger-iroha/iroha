@@ -1,12 +1,9 @@
 use account::AccountId;
-
 mod account {
     use core::str::FromStr;
-
     pub struct AccountId {
         signatory: String,
     }
-
     impl FromStr for AccountId {
         type Err = ();
         fn from_str(_: &str) -> Result<Self, Self::Err> {
@@ -16,11 +13,7 @@ mod account {
         }
     }
 }
-
 fn main() {
-    let account_id: AccountId =
-        "<i105-account-id>"
-            .parse()
-            .unwrap();
+    let account_id: AccountId = "<i105-account-id>".parse().unwrap();
     println!("ID: {}", account_id.signatory);
 }

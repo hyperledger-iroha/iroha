@@ -4,15 +4,12 @@
 //! from the lane-local [`super::consensus::CertPhase`] protocol.  The types in
 //! this module are therefore versioned independently and do not replace or
 //! reinterpret the first-release wire types in [`super::consensus`].
-
 use core::fmt;
 use std::{collections::BTreeSet, vec::Vec};
-
 use iroha_crypto::{Hash, HashOf, MerkleTree, MerkleTreeCommitment};
 use iroha_primitives::erasure::rs16;
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
-
 use super::Header as BlockHeader;
 use crate::{
     NetworkId,
@@ -23,12 +20,10 @@ use crate::{
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
-
 /// Durable finality artifacts associated with canonical Sumeragi v2 blocks.
 pub mod finality;
 /// Canonical genesis/handshake fingerprint projection.
 pub mod fingerprint;
-
 /// Sumeragi v2 wire protocol version.
 pub const PROTOCOL_VERSION: u16 = 4;
 /// Consensus-wide lower bound for one voting roster.
@@ -132,16 +127,12 @@ pub const RECOMMENDED_EXECUTION_POLICY_HASH: [u8; 32] = [
     63, 148, 116, 83, 117, 143, 142, 233, 11, 44, 102, 67, 122, 18, 143, 194, 45, 147, 196, 210,
     224, 202, 96, 194, 97, 216, 40, 183, 224, 184, 151, 195,
 ];
-
 /// Block height in the v2 protocol.
 pub type Height = u64;
-
 /// View number within one block height.
 pub type View = u64;
-
 /// Index into the ordered voting roster frozen in a [`HeightContext`].
 pub type ValidatorIndex = u32;
-
 /// Consensus mode used to select the frozen equal-vote committee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -160,7 +151,6 @@ pub enum ConsensusMode {
     /// Stake selects the finalized epoch committee; every member has one vote.
     Npos,
 }
-
 impl ConsensusMode {
     /// Return the canonical handshake and signing-domain tag for this mode.
     #[must_use]
@@ -170,7 +160,6 @@ impl ConsensusMode {
             Self::Npos => NPOS_TAG,
         }
     }
-
     /// Return the canonical BLS domain for this mode.
     #[must_use]
     pub const fn bls_domain(self) -> &'static str {
@@ -179,14 +168,12 @@ impl ConsensusMode {
             Self::Npos => NPOS_BLS_DOMAIN,
         }
     }
-
     /// Return whether this is permissioned consensus.
     #[must_use]
     pub const fn is_permissioned(self) -> bool {
         matches!(self, Self::Permissioned)
     }
 }
-
 impl From<crate::parameter::system::SumeragiConsensusMode> for ConsensusMode {
     fn from(mode: crate::parameter::system::SumeragiConsensusMode) -> Self {
         match mode {
@@ -195,7 +182,6 @@ impl From<crate::parameter::system::SumeragiConsensusMode> for ConsensusMode {
         }
     }
 }
-
 impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
     fn from(mode: ConsensusMode) -> Self {
         match mode {
@@ -204,7 +190,6 @@ impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
         }
     }
 }
-
 /// A validator and its consensus vote at one height.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -218,7 +203,6 @@ pub struct ValidatorPower {
     /// Consensus vote count. Protocol v4 requires this to be exactly one.
     pub power: u64,
 }
-
 /// Equal-vote quorum parameters frozen in a height context.
 ///
 /// The roster has exact `n = 3f + 1` geometry and a certificate requires
@@ -236,7 +220,6 @@ pub struct DualQuorum {
     /// Redundant total vote count represented by the ordered roster.
     pub total_power: u64,
 }
-
 impl DualQuorum {
     /// Compute the strict two-thirds count threshold for `validator_count`.
     #[must_use]
@@ -245,7 +228,6 @@ impl DualQuorum {
             .then(|| u64::from(validator_count) * 2 / 3 + 1)
             .and_then(|threshold| u32::try_from(threshold).ok())
     }
-
     /// Construct the canonical quorum projection for an ordered voting roster.
     ///
     /// # Errors
@@ -263,7 +245,6 @@ impl DualQuorum {
             total_power,
         })
     }
-
     fn validate_roster(&self, roster: &[ValidatorPower]) -> Result<(), ValidationError> {
         let canonical = Self::from_roster(roster)?;
         if self.min_signers != canonical.min_signers {
@@ -274,7 +255,6 @@ impl DualQuorum {
         }
         Ok(())
     }
-
     fn validate_signers(
         &self,
         signers: &[ValidatorIndex],
@@ -288,7 +268,6 @@ impl DualQuorum {
         if signed_count < self.min_signers {
             return Err(ValidationError::InsufficientSignerCount);
         }
-
         for signer in signers {
             let index = usize::try_from(*signer).map_err(|_| ValidationError::SignerOutOfRange)?;
             let entry = roster.get(index).ok_or(ValidationError::SignerOutOfRange)?;
@@ -299,7 +278,6 @@ impl DualQuorum {
         Ok(())
     }
 }
-
 /// Payload chunking parameters frozen for one block height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -321,7 +299,6 @@ pub struct DataAvailabilityLayout {
     /// Maximum number of encoded chunks accepted for one body.
     pub max_chunk_count: u32,
 }
-
 /// Payload encoding used by v2 data dissemination.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -338,7 +315,6 @@ pub enum PayloadEncoding {
     /// Encode payload stripes with the deterministic RS16 layout.
     ReedSolomon16,
 }
-
 /// Genesis-selected transport inputs needed to construct every Sumeragi v2
 /// height context.
 ///
@@ -363,7 +339,6 @@ pub struct SumeragiV2GenesisContextParameters {
     /// Canonical V1 identity of every process-local policy input which can affect execution.
     pub execution_policy_hash: [u8; 32],
 }
-
 impl SumeragiV2GenesisContextParameters {
     /// Recommended profile emitted by programmatic genesis builders.
     ///
@@ -384,7 +359,6 @@ impl SumeragiV2GenesisContextParameters {
             execution_policy_hash: RECOMMENDED_EXECUTION_POLICY_HASH,
         }
     }
-
     /// Validate the signed context parameters using the same structural rules
     /// enforced for a full height context.
     ///
@@ -402,10 +376,8 @@ impl SumeragiV2GenesisContextParameters {
         validate_data_availability_layout(self.da_layout)
     }
 }
-
 /// Canonical staged active-lane record committed by v2 genesis metadata.
 pub type GenesisActiveNexusLaneRecord = ((LaneId, AccountId), PublicLaneValidatorRecord);
-
 /// Audited snapshot boundary which explicitly replaces an unavailable parent `CommitQC`.
 ///
 /// The complete [`SnapshotV2BootstrapRecord`] is carried inside the signed or digest-pinned
@@ -430,7 +402,6 @@ pub struct SnapshotBootstrapAnchor {
     /// Canonical WSV hash reconstructed from the authenticated snapshot payload.
     pub snapshot_state_hash: Hash,
 }
-
 /// Complete frozen Sumeragi-v2 trust root authenticated by an audited snapshot payload.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -446,11 +417,9 @@ pub struct SnapshotV2BootstrapRecord {
     /// Roster-aligned BLS proofs of possession authenticated by the snapshot payload.
     pub validator_set_pops: Vec<Vec<u8>>,
 }
-
 impl SnapshotV2BootstrapRecord {
     /// Current record layout version.
     pub const VERSION: u16 = 1;
-
     /// Validate the record's structural context and snapshot-anchor relationship.
     ///
     /// Cryptographic `PoP` validation and comparison with restored live consensus keys are performed
@@ -479,7 +448,6 @@ impl SnapshotV2BootstrapRecord {
         Ok(())
     }
 }
-
 /// Immutable inputs to consensus at one block height.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -530,7 +498,6 @@ pub struct HeightContext {
     /// Finalized seed used to choose the view-zero roster offset.
     pub leader_seed: [u8; 32],
 }
-
 impl HeightContext {
     /// Return the typed hash that identifies every round in this context.
     ///
@@ -570,7 +537,6 @@ impl HeightContext {
         };
         HeightContextId(HashOf::from_untyped_unchecked(Hash::new(identity.encode())))
     }
-
     /// Validate the immutable context and its quorum snapshot.
     ///
     /// This does not verify the parent certificate's cryptographic signature.
@@ -643,7 +609,6 @@ impl HeightContext {
         }
         validate_data_availability_layout(self.da_layout)
     }
-
     /// Validate that a canonical signer list satisfies the equal-vote quorum.
     ///
     /// # Errors
@@ -654,7 +619,6 @@ impl HeightContext {
         self.validate()?;
         self.quorum.validate_signers(signers, &self.roster)
     }
-
     /// Return the deterministic leader index for `view`.
     ///
     /// The view-zero offset is the full-width reduction of
@@ -680,7 +644,6 @@ impl HeightContext {
             .expect("validated roster length fits ValidatorIndex")
     }
 }
-
 #[derive(Encode)]
 struct HeightContextIdentity {
     identity_version: u16,
@@ -700,7 +663,6 @@ struct HeightContextIdentity {
     da_layout: DataAvailabilityLayout,
     leader_seed: [u8; 32],
 }
-
 #[derive(Encode)]
 struct ParentCommitIdentity {
     context_id: HeightContextId,
@@ -709,7 +671,6 @@ struct ParentCommitIdentity {
     subject: BlockSubject,
     execution_commitment: ExecutionCommitment,
 }
-
 /// Typed identifier of a complete [`HeightContext`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -721,7 +682,6 @@ pub struct HeightContextId(
     /// Norito hash of the context's semantic identity projection.
     pub HashOf<HeightContext>,
 );
-
 /// Consensus round identity under a frozen height context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -737,7 +697,6 @@ pub struct ConsensusRound {
     /// View number within the height.
     pub view: View,
 }
-
 /// Global Sumeragi v2 voting phase.
 ///
 /// This enum intentionally has no `NewView` variant: view changes are certified
@@ -762,18 +721,15 @@ pub enum GlobalPhase {
     #[codec(index = 2)]
     Commit = 2,
 }
-
 impl TypeId for GlobalPhase {
     fn id() -> Ident {
         "SumeragiV2GlobalPhase".to_owned()
     }
 }
-
 impl IntoSchema for GlobalPhase {
     fn type_name() -> Ident {
         "SumeragiV2GlobalPhase".to_owned()
     }
-
     fn update_schema_map(metamap: &mut MetaMap) {
         let variants = vec![
             EnumVariant {
@@ -790,7 +746,6 @@ impl IntoSchema for GlobalPhase {
         metamap.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
     }
 }
-
 /// Proposal subject bound by votes and certificates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -808,7 +763,6 @@ pub struct BlockSubject {
     /// Hash of the canonical payload bytes.
     pub payload_hash: Hash,
 }
-
 /// Ordered result-bearing membership in one Native AMX participant application.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -826,7 +780,6 @@ pub struct NativeAmxApplicationManifestMemberV1 {
     /// Typed hash of the exact deterministic transaction result.
     pub result_hash: HashOf<TransactionResult>,
 }
-
 /// Canonical result-bearing Native AMX participant application leaf.
 ///
 /// A leaf is control evidence only. It binds one separate participant route to
@@ -870,7 +823,6 @@ pub struct NativeAmxApplicationManifestLeafV1 {
     /// Hash of the canonical result-bearing global block wire.
     pub executed_block_wire_hash: Hash,
 }
-
 impl NativeAmxApplicationManifestLeafV1 {
     /// Validate the bounded, canonical leaf layout.
     ///
@@ -932,14 +884,12 @@ impl NativeAmxApplicationManifestLeafV1 {
         Ok(())
     }
 }
-
 /// Canonical commitment used when a global block contains no separate
 /// Native AMX participant applications.
 #[must_use]
 pub fn native_amx_application_manifest_empty_root() -> Hash {
     Hash::new(NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN)
 }
-
 /// Exact merge-ledger identity authenticated by a global execution commitment.
 ///
 /// The compact block reference remains the complete carrier proof while the
@@ -957,7 +907,6 @@ pub struct MergeCarrierCommitmentV1 {
     /// Canonical hash of the complete merge-ledger entry carried by the block.
     pub entry_hash: HashOf<MergeLedgerEntry>,
 }
-
 impl MergeCarrierCommitmentV1 {
     /// Construct the current exact merge-carrier projection.
     #[must_use]
@@ -967,7 +916,6 @@ impl MergeCarrierCommitmentV1 {
             entry_hash,
         }
     }
-
     /// Validate the current-only projection layout.
     ///
     /// # Errors
@@ -980,7 +928,6 @@ impl MergeCarrierCommitmentV1 {
         Ok(())
     }
 }
-
 /// Deterministic state-transition commitment authenticated by every Prepare and Commit vote.
 ///
 /// The commitment is derived from the exact state-block execution witness
@@ -1030,7 +977,6 @@ pub struct ExecutionCommitment {
     /// Hash of the canonical result-bearing block wire produced by deterministic execution.
     pub executed_block_wire_hash: Hash,
 }
-
 impl ExecutionCommitment {
     /// Construct a transition that contains neither Kagemusha top-up anchors
     /// nor a compact merge carrier.
@@ -1057,7 +1003,6 @@ impl ExecutionCommitment {
             executed_block_wire_hash,
         }
     }
-
     /// Construct a carrier-free commitment and enforce its canonical top-up projection.
     ///
     /// # Errors
@@ -1087,7 +1032,6 @@ impl ExecutionCommitment {
             executed_block_wire_hash,
         )
     }
-
     /// Construct a carrier-free commitment with an explicit Native AMX application manifest.
     ///
     /// # Errors
@@ -1124,7 +1068,6 @@ impl ExecutionCommitment {
             executed_block_wire_hash,
         )
     }
-
     /// Construct a commitment with explicit Native AMX and merge-carrier projections.
     ///
     /// # Errors
@@ -1163,7 +1106,6 @@ impl ExecutionCommitment {
             executed_block_wire_hash,
         )
     }
-
     /// Construct a commitment with all explicit execution manifests.
     ///
     /// # Errors
@@ -1205,7 +1147,6 @@ impl ExecutionCommitment {
         commitment.validate()?;
         Ok(commitment)
     }
-
     /// Validate the canonical count/root relationship and combined top-up root.
     ///
     /// # Errors
@@ -1259,7 +1200,6 @@ impl ExecutionCommitment {
         }
         Ok(())
     }
-
     /// Derive the canonical combined post-state root for a non-empty top-up tree.
     #[must_use]
     pub fn topup_post_state_root(
@@ -1281,7 +1221,6 @@ impl ExecutionCommitment {
         Hash::new(preimage)
     }
 }
-
 /// One global Prepare or Commit vote.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1305,7 +1244,6 @@ pub struct Vote {
     /// BLS signature over the canonical vote preimage.
     pub signature: Vec<u8>,
 }
-
 impl Vote {
     /// Return the domain-separated canonical bytes authenticated by this vote.
     ///
@@ -1326,7 +1264,6 @@ impl Vote {
         };
         signature_preimage(b"iroha:sumeragi:v2:vote", &payload.encode())
     }
-
     /// Validate the vote's context, signer, and signature presence.
     ///
     /// Cryptographic verification remains the authenticated-ingress adapter's
@@ -1346,7 +1283,6 @@ impl Vote {
         require_signature(&self.signature)
     }
 }
-
 /// Canonical same-message fields authenticated by Prepare and Commit votes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1368,7 +1304,6 @@ pub struct VoteSignaturePayload {
     /// Exact deterministic execution result.
     pub execution_commitment: ExecutionCommitment,
 }
-
 /// Stable reference to a full quorum certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1388,7 +1323,6 @@ pub struct QuorumCertificateRef {
     /// Certified deterministic execution result.
     pub execution_commitment: ExecutionCommitment,
 }
-
 impl QuorumCertificateRef {
     /// Return whether both references certify the same committed decision.
     ///
@@ -1406,7 +1340,6 @@ impl QuorumCertificateRef {
             && self.execution_commitment == other.execution_commitment
     }
 }
-
 /// Aggregate Prepare or Commit certificate.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1430,7 +1363,6 @@ pub struct QuorumCertificate {
     /// BLS aggregate signature for the canonical signer sequence.
     pub aggregate_signature: Vec<u8>,
 }
-
 impl QuorumCertificate {
     /// Return a stable reference to this certificate.
     #[must_use]
@@ -1443,7 +1375,6 @@ impl QuorumCertificate {
             execution_commitment: self.execution_commitment,
         }
     }
-
     /// Validate the certificate's context binding and equal-vote quorum.
     ///
     /// Cryptographic aggregate-signature verification remains the caller's
@@ -1462,7 +1393,6 @@ impl QuorumCertificate {
             .validate_signers(&self.signers, &context.roster)?;
         require_aggregate_signature(&self.aggregate_signature)
     }
-
     /// Reconstruct the canonical vote preimage for one certified signer.
     ///
     /// # Errors
@@ -1490,7 +1420,6 @@ impl QuorumCertificate {
         .signature_preimage())
     }
 }
-
 /// One durable timeout vote for a view.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1509,7 +1438,6 @@ pub struct TimeoutVote {
     /// BLS signature over the canonical timeout-vote preimage.
     pub signature: Vec<u8>,
 }
-
 impl TimeoutVote {
     /// Return the domain-separated canonical bytes authenticated by this
     /// timeout vote, excluding the signature itself.
@@ -1525,7 +1453,6 @@ impl TimeoutVote {
         };
         signature_preimage(b"iroha:sumeragi:v2:timeout-vote", &payload.encode())
     }
-
     /// Validate context binding, high-QC reference, signer, and signature
     /// presence.
     ///
@@ -1555,7 +1482,6 @@ impl TimeoutVote {
         require_signature(&self.signature)
     }
 }
-
 /// Canonical same-message fields authenticated by one timeout-vote group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1572,7 +1498,6 @@ pub struct TimeoutVoteSignaturePayload {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_prepare_qc: Option<QuorumCertificateRef>,
 }
-
 /// Aggregate timeout signatures that reported the same highest `PrepareQC`.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1589,7 +1514,6 @@ pub struct TimeoutVoteGroup {
     /// Aggregate BLS signature for this group's timeout votes.
     pub aggregate_signature: Vec<u8>,
 }
-
 /// Certificate authorizing a transition out of one timed-out view.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1603,7 +1527,6 @@ pub struct TimeoutCertificate {
     /// Groups ordered strictly by their optional `PrepareQC` reference.
     pub groups: Vec<TimeoutVoteGroup>,
 }
-
 impl TimeoutCertificate {
     /// Return a stable reference to this timeout certificate.
     #[must_use]
@@ -1614,7 +1537,6 @@ impl TimeoutCertificate {
             certificate_hash: HashOf::new(self),
         }
     }
-
     /// Select the highest reported `PrepareQC` deterministically.
     ///
     /// View is the primary ordering key. The semantic certificate reference
@@ -1632,7 +1554,6 @@ impl TimeoutCertificate {
                     .then_with(|| left.as_ref().cmp(&right.as_ref()))
             })
     }
-
     /// Validate grouping, disjoint signers, context binding, and equal-vote quorum.
     ///
     /// Cryptographic aggregate-signature verification remains the caller's
@@ -1659,7 +1580,6 @@ impl TimeoutCertificate {
         }) {
             return Err(ValidationError::TimeoutGroupsNotStrictlySorted);
         }
-
         let mut all_signers = BTreeSet::new();
         let mut highest_at_view: Option<(View, BlockSubject)> = None;
         for group in &self.groups {
@@ -1707,7 +1627,6 @@ impl TimeoutCertificate {
             .validate_signers(&all_signers, &context.roster)
     }
 }
-
 /// Stable reference to a full timeout certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1725,7 +1644,6 @@ pub struct TimeoutCertificateRef {
     /// Norito hash of the full timeout certificate.
     pub certificate_hash: HashOf<TimeoutCertificate>,
 }
-
 /// Justification carried by a proposal.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1739,7 +1657,6 @@ pub enum ProposalJustification {
     /// Later-view justification from the immediately preceding timeout.
     Timeout(TimeoutJustification),
 }
-
 /// View-zero proposal justification from the parent `CommitQC`.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1752,7 +1669,6 @@ pub struct ParentCommitJustification {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub certificate: Option<QuorumCertificate>,
 }
-
 /// Later-view proposal justification from a timeout certificate.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1772,7 +1688,6 @@ pub struct TimeoutJustification {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_prepare_qc: Option<QuorumCertificate>,
 }
-
 /// Manifest committing to a complete encoded block payload.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1794,7 +1709,6 @@ pub struct PayloadManifest {
     /// Merkle root over `chunk_hashes`.
     pub chunk_root: Hash,
 }
-
 /// Encode a canonical payload into the complete ordered RS16 chunk sequence
 /// committed by [`PayloadManifest`].
 ///
@@ -1819,7 +1733,6 @@ pub fn encode_payload_chunks(
     if payload_size > layout.max_payload_size_bytes {
         return Err(ValidationError::PayloadTooLarge);
     }
-
     let chunk_size = usize::try_from(layout.chunk_size_bytes)
         .map_err(|_| ValidationError::InvalidChunkLength)?;
     let data_shards = usize::from(layout.data_shards);
@@ -1837,7 +1750,6 @@ pub fn encode_payload_chunks(
     if encoded_chunk_count != expected_chunk_count {
         return Err(ValidationError::PayloadSizeMismatch);
     }
-
     let mut encoded = Vec::with_capacity(encoded_chunk_count);
     let symbol_count = chunk_size / 2;
     for stripe in 0..stripe_count {
@@ -1871,7 +1783,6 @@ pub fn encode_payload_chunks(
     }
     Ok(encoded)
 }
-
 impl PayloadManifest {
     /// Derive the only canonical manifest for an encoded chunk sequence.
     ///
@@ -1903,7 +1814,6 @@ impl PayloadManifest {
         }
         Ok(manifest)
     }
-
     /// Validate this manifest against its immutable height context.
     ///
     /// # Errors
@@ -1938,7 +1848,6 @@ impl PayloadManifest {
         Ok(())
     }
 }
-
 /// One encoded payload chunk.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1958,7 +1867,6 @@ pub struct PayloadChunk {
     /// Sender signature over [`Self::signature_preimage`].
     pub signature: Vec<u8>,
 }
-
 impl PayloadChunk {
     /// Validate the chunk's structural commitments and signature presence.
     ///
@@ -1982,7 +1890,6 @@ impl PayloadChunk {
         }
         self.signature_payload(context, manifest).map(|_| ())
     }
-
     /// Build the canonical signature payload for this chunk.
     ///
     /// The total chunk count is deliberately not duplicated in
@@ -2038,7 +1945,6 @@ impl PayloadChunk {
             sender: self.sender,
         })
     }
-
     /// Return the domain-separated bytes that the sender must sign.
     ///
     /// # Errors
@@ -2059,7 +1965,6 @@ impl PayloadChunk {
         Ok(preimage)
     }
 }
-
 /// Canonical fields authenticated by a v2 payload-chunk signature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2092,7 +1997,6 @@ pub struct PayloadChunkSignaturePayload {
     /// Sender index in the height context roster.
     pub sender: ValidatorIndex,
 }
-
 /// Signed proposal for one round.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2113,7 +2017,6 @@ pub struct Proposal {
     /// Leader signature over the canonical proposal preimage.
     pub signature: Vec<u8>,
 }
-
 impl Proposal {
     /// Return the domain-separated canonical bytes authenticated by the
     /// expected leader, excluding the signature itself.
@@ -2123,7 +2026,6 @@ impl Proposal {
         unsigned.signature.clear();
         signature_preimage(b"iroha:sumeragi:v2:proposal", &unsigned.encode())
     }
-
     /// Validate the complete structural proposal contract against a frozen
     /// height context.
     ///
@@ -2197,7 +2099,6 @@ impl Proposal {
         require_signature(&self.signature)
     }
 }
-
 /// Exact pair of individually authenticated Sumeragi v2 messages proving one
 /// validator signed conflicting statements for the same consensus slot.
 ///
@@ -2238,7 +2139,6 @@ pub enum SumeragiV2Equivocation {
         second: TimeoutVote,
     },
 }
-
 /// Schema projection for
 /// [`SumeragiV2Equivocation::Proposal`]'s exact signed pair.
 #[derive(IntoSchema)]
@@ -2248,7 +2148,6 @@ pub struct SumeragiV2ProposalEquivocationSchema {
     /// Conflicting authenticated proposal.
     pub second: Proposal,
 }
-
 /// Schema projection for
 /// [`SumeragiV2Equivocation::PhaseVote`]'s exact signed pair.
 #[derive(IntoSchema)]
@@ -2258,7 +2157,6 @@ pub struct SumeragiV2PhaseVoteEquivocationSchema {
     /// Conflicting authenticated phase vote.
     pub second: Vote,
 }
-
 /// Schema projection for
 /// [`SumeragiV2Equivocation::TimeoutVote`]'s exact signed pair.
 #[derive(IntoSchema)]
@@ -2268,18 +2166,15 @@ pub struct SumeragiV2TimeoutVoteEquivocationSchema {
     /// Conflicting authenticated timeout vote.
     pub second: TimeoutVote,
 }
-
 impl TypeId for SumeragiV2Equivocation {
     fn id() -> Ident {
         "SumeragiV2Equivocation".to_owned()
     }
 }
-
 impl IntoSchema for SumeragiV2Equivocation {
     fn type_name() -> Ident {
         "SumeragiV2Equivocation".to_owned()
     }
-
     fn update_schema_map(metamap: &mut MetaMap) {
         if metamap.contains_key::<Self>() {
             return;
@@ -2310,7 +2205,6 @@ impl IntoSchema for SumeragiV2Equivocation {
         }));
     }
 }
-
 /// Authenticated request for a body covered by a `PrepareQC` or `CommitQC`.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2331,7 +2225,6 @@ pub struct CertifiedBodyRequest {
     /// Requester signature over the canonical request preimage.
     pub signature: Vec<u8>,
 }
-
 impl CertifiedBodyRequest {
     /// Return the canonical request bytes authenticated by the requester.
     #[must_use]
@@ -2343,7 +2236,6 @@ impl CertifiedBodyRequest {
             &unsigned.encode(),
         )
     }
-
     /// Validate context, certificate, requester, and signature presence.
     ///
     /// # Errors
@@ -2361,7 +2253,6 @@ impl CertifiedBodyRequest {
         require_signature(&self.signature)
     }
 }
-
 /// Authenticated response carrying a certified body and its manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2381,7 +2272,6 @@ pub struct CertifiedBodyResponse {
     /// Responder signature over the request hash, manifest, and body hash.
     pub signature: Vec<u8>,
 }
-
 impl CertifiedBodyResponse {
     /// Return the canonical response bytes authenticated by the responder.
     ///
@@ -2401,7 +2291,6 @@ impl CertifiedBodyResponse {
             &payload.encode(),
         )
     }
-
     /// Validate the response against the frozen context and signature
     /// presence. The caller additionally matches `request_hash` to an
     /// outstanding authenticated request.
@@ -2423,7 +2312,6 @@ impl CertifiedBodyResponse {
         validate_validator_index(self.responder, context)?;
         require_signature(&self.signature)
     }
-
     /// Validate this response against the exact outstanding request and the
     /// authenticated outer transport sender.
     ///
@@ -2462,7 +2350,6 @@ impl CertifiedBodyResponse {
         Ok(())
     }
 }
-
 /// Canonical fields authenticated by a certified-body response signature.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2481,7 +2368,6 @@ pub struct CertifiedBodyResponseSignaturePayload {
     /// Responder index in the frozen roster.
     pub responder: ValidatorIndex,
 }
-
 /// Authenticated request for the durable `CommitQC` of one exact height context.
 ///
 /// A lagging peer already reconstructs its next immutable [`HeightContext`]
@@ -2508,7 +2394,6 @@ pub struct CommitCertificateRequest {
     /// Requester signature over the canonical request preimage.
     pub signature: Vec<u8>,
 }
-
 impl CommitCertificateRequest {
     /// Return the canonical bytes authenticated by the requester.
     #[must_use]
@@ -2520,7 +2405,6 @@ impl CommitCertificateRequest {
             &unsigned.encode(),
         )
     }
-
     /// Validate the request against the one active frozen context.
     ///
     /// Cryptographic signature and outer-transport identity verification are
@@ -2548,7 +2432,6 @@ impl CommitCertificateRequest {
         require_signature(&self.signature)
     }
 }
-
 /// Authenticated response carrying the `CommitQC` for an exact outstanding
 /// [`CommitCertificateRequest`].
 ///
@@ -2574,7 +2457,6 @@ pub struct CommitCertificateResponse {
     /// Responder signature over the request hash and exact certificate.
     pub signature: Vec<u8>,
 }
-
 impl CommitCertificateResponse {
     /// Return the canonical bytes authenticated by the responder.
     #[must_use]
@@ -2590,7 +2472,6 @@ impl CommitCertificateResponse {
             &payload.encode(),
         )
     }
-
     /// Validate the certificate and response structure against one context.
     ///
     /// Cryptographic aggregate and responder signatures are verified by the
@@ -2611,7 +2492,6 @@ impl CommitCertificateResponse {
         }
         require_signature(&self.signature)
     }
-
     /// Validate the response against the exact outstanding request.
     ///
     /// # Errors
@@ -2631,7 +2511,6 @@ impl CommitCertificateResponse {
         Ok(())
     }
 }
-
 /// Canonical fields authenticated by a commit-certificate response.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2648,7 +2527,6 @@ pub struct CommitCertificateResponseSignaturePayload {
     /// Current authenticated network identity serving the artifact.
     pub responder: PeerId,
 }
-
 /// Authenticated `NPoS` randomness commitment for one frozen epoch roster.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2666,7 +2544,6 @@ pub struct VrfCommit {
     /// Signature over the canonical `NPoS` `VRF`-commit preimage.
     pub bls_sig: Vec<u8>,
 }
-
 /// Authenticated `NPoS` randomness reveal for one frozen epoch roster.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2686,7 +2563,6 @@ pub struct VrfReveal {
     /// Signature over the canonical `NPoS` `VRF`-reveal preimage.
     pub bls_sig: Vec<u8>,
 }
-
 /// Payload variants accepted by the Sumeragi v2 network envelope.
 #[expect(
     clippy::large_enum_variant,
@@ -2731,7 +2607,6 @@ pub enum ConsensusMessageV2Payload {
     /// `NPoS` epoch-randomness reveal.
     VrfReveal(VrfReveal),
 }
-
 /// Explicitly versioned Sumeragi v2 network envelope.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2745,7 +2620,6 @@ pub struct ConsensusMessageV2 {
     /// Canonical v2 message payload.
     pub payload: ConsensusMessageV2Payload,
 }
-
 /// High-level reducer phase exported by the compact Sumeragi v2 status API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2772,7 +2646,6 @@ pub enum SumeragiV2StatusPhase {
     /// A `CommitQC` is durable and the body is awaiting application.
     PendingApply,
 }
-
 /// Local availability/application state for the current proposal body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2799,7 +2672,6 @@ pub enum SumeragiV2BodyState {
     /// The decided body has been applied locally.
     Applied,
 }
-
 /// Frozen election and equal-vote quorum inputs governing the active status height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2821,7 +2693,6 @@ pub struct SumeragiV2HeightContextStatus {
     /// Canonical `2f + 1` quorum derived from the frozen `3f + 1` roster.
     pub quorum: DualQuorum,
 }
-
 /// Equal-vote summary of the latest authenticated durable `CommitQC`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2843,13 +2714,11 @@ pub struct SumeragiV2CommitQcStatus {
     /// Redundant roster vote total; equal to `validator_count` in protocol v4.
     pub total_power: u64,
 }
-
 /// Reducer generation owning volatile Sumeragi v2 consumer state.
 ///
 /// The generation advances whenever a transition, such as timeout-certificate
 /// installation, replaces vote pools or asynchronous completion ownership.
 pub type SumeragiV2Generation = u64;
-
 /// Partial equal-vote quorum state for one exact voting round and proposal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2875,7 +2744,6 @@ pub struct SumeragiV2VoteQuorumStatus {
     /// Redundant unit-vote projection equal to the frozen roster length.
     pub total_power: u64,
 }
-
 /// Partial timeout quorum state for one exact round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2897,7 +2765,6 @@ pub struct SumeragiV2TimeoutQuorumStatus {
     /// Whether the partial pool has produced a verified timeout certificate.
     pub certificate_formed: bool,
 }
-
 /// Durable protocol intent retained for fair outbound service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2926,7 +2793,6 @@ pub enum SumeragiV2OutboundIntentKind {
     /// Formed timeout-certificate intent.
     TimeoutCertificate,
 }
-
 /// Current lifecycle stage of a durable outbound intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2949,7 +2815,6 @@ pub enum SumeragiV2OutboundIntentStage {
     /// The intent has been broadcast and remains eligible for retransmission.
     Sent,
 }
-
 /// Exact durable outbound intent visible to liveness diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2978,7 +2843,6 @@ pub struct SumeragiV2OutboundIntentStatus {
     /// Current durable-delivery stage.
     pub stage: SumeragiV2OutboundIntentStage,
 }
-
 /// State of one terminating local-work stage.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -3004,7 +2868,6 @@ pub enum SumeragiV2LocalWorkStage {
     /// The stage completed for the active proposal or decision.
     Complete,
 }
-
 /// Local body, validation, application, and handoff pipeline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3026,7 +2889,6 @@ pub struct SumeragiV2WorkStatus {
     /// Activation of the successor height after application.
     pub successor_height: SumeragiV2LocalWorkStage,
 }
-
 /// Bounded queue contributing to Sumeragi v2 progress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3064,7 +2926,6 @@ pub enum SumeragiV2QueueKind {
     /// retries are therefore not scheduler-skip debt.
     EffectDispatch,
 }
-
 /// Occupancy and fairness state for one bounded local queue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3086,7 +2947,6 @@ pub struct SumeragiV2QueueStatus {
     /// Saturating count of eligible dispatches skipped by the oldest item.
     pub service_debt: u64,
 }
-
 /// Reducer transition retained for diagnostic transition age.
 ///
 /// A transition resets `no_progress_age_ms` only when it advances the bounded
@@ -3137,7 +2997,6 @@ pub enum SumeragiV2ProgressTransition {
     /// WAL recovery reconstructed a pending progress path.
     RecoveryReplayed,
 }
-
 /// Last tracked reducer transition and its local age.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3155,7 +3014,6 @@ pub struct SumeragiV2ProgressTransitionStatus {
     /// Local monotonic milliseconds elapsed since the transition.
     pub age_ms: u64,
 }
-
 /// Classified cause of an active no-progress interval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3188,7 +3046,6 @@ pub enum SumeragiV2LivenessBlocker {
     /// The reducer is waiting for safety-WAL persistence or consensus signing.
     LocalControlPending,
 }
-
 /// Closed reducer reason for safely ignoring an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3227,7 +3084,6 @@ pub enum SumeragiV2IgnoreReason {
     /// A durable lock makes the proposal's subject unsafe to prepare.
     UnsafeProposal,
 }
-
 /// Per-height counter for one closed input-ignore reason.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3241,7 +3097,6 @@ pub struct SumeragiV2IgnoreCount {
     /// Number of occurrences at the active height.
     pub count: u64,
 }
-
 /// Authoritative progress diagnostics for the active Sumeragi v2 height.
 ///
 /// Local ages and queue measurements are observation-only: they are never
@@ -3283,7 +3138,6 @@ pub struct SumeragiV2LivenessStatus {
     /// Per-height counters for every observed reducer ignore reason.
     pub ignore_counts: Vec<SumeragiV2IgnoreCount>,
 }
-
 /// Compact Norito payload returned by the Sumeragi v2 status endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3345,7 +3199,6 @@ pub struct SumeragiV2Status {
     /// Authoritative progress and no-progress diagnostics for the active height.
     pub liveness: SumeragiV2LivenessStatus,
 }
-
 impl SumeragiV2Status {
     /// Validate scalar and cross-field invariants which do not require the
     /// frozen validator roster or signature-verification context.
@@ -3365,7 +3218,6 @@ impl SumeragiV2Status {
     )]
     pub fn validate(&self) -> Result<(), SumeragiV2StatusValidationError> {
         use SumeragiV2StatusValidationError as Error;
-
         if self.protocol_version != PROTOCOL_VERSION {
             return Err(Error::UnsupportedProtocolVersion {
                 expected: PROTOCOL_VERSION,
@@ -3397,7 +3249,6 @@ impl SumeragiV2Status {
         if self.height_context.quorum.total_power != validator_count {
             return Err(Error::InvalidHeightContextQuorum);
         }
-
         let phase_body_is_valid = matches!(
             (self.phase, self.body_state),
             (
@@ -3429,7 +3280,6 @@ impl SumeragiV2Status {
             }
             _ => {}
         }
-
         if self.phase == SumeragiV2StatusPhase::PendingApply {
             if self.last_committed_height != self.height
                 || self.last_committed_subject.is_none()
@@ -3485,7 +3335,6 @@ impl SumeragiV2Status {
                 return Err(Error::CommitSummaryContextMismatch);
             }
         }
-
         let validate_prepare = |certificate: &QuorumCertificateRef| {
             if certificate.round.context_id != self.height_context_id {
                 return Err(Error::CertificateContextMismatch);
@@ -3522,7 +3371,6 @@ impl SumeragiV2Status {
             }
             _ => {}
         }
-
         if let Some(timeout) = &self.last_timeout_certificate {
             if timeout.round.context_id != self.height_context_id {
                 return Err(Error::CertificateContextMismatch);
@@ -3540,7 +3388,6 @@ impl SumeragiV2Status {
                 }
             }
         }
-
         if self.liveness.prepare_quorums.len() > MAX_VALIDATORS_PER_HEIGHT
             || self.liveness.commit_quorums.len() > MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT
             || self.liveness.timeout_quorums.len() > MAX_VALIDATORS_PER_HEIGHT
@@ -3550,7 +3397,6 @@ impl SumeragiV2Status {
         {
             return Err(Error::LivenessCollectionTooLarge);
         }
-
         let validate_round_binding = |round: ConsensusRound| {
             let belongs_to_active_context = round.context_id == self.height_context_id;
             let belongs_to_active_height = round.height == self.height;
@@ -3660,7 +3506,6 @@ impl SumeragiV2Status {
                     .map_err(|_| Error::InvalidLivenessExecutionCommitment)?;
             }
         }
-
         let mut queue_kinds = BTreeSet::new();
         for queue in &self.liveness.queues {
             if queue.capacity == 0
@@ -3696,11 +3541,9 @@ impl SumeragiV2Status {
                 return Err(Error::LivenessGenerationFromFuture);
             }
         }
-
         Ok(())
     }
 }
-
 /// Roster-independent structural failures in an exact Sumeragi v2 status snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SumeragiV2StatusValidationError {
@@ -3782,7 +3625,6 @@ pub enum SumeragiV2StatusValidationError {
     /// A progress record referred to a reducer generation not yet installed.
     LivenessGenerationFromFuture,
 }
-
 impl fmt::Display for SumeragiV2StatusValidationError {
     #[expect(
         clippy::too_many_lines,
@@ -3901,9 +3743,7 @@ impl fmt::Display for SumeragiV2StatusValidationError {
         }
     }
 }
-
 impl std::error::Error for SumeragiV2StatusValidationError {}
-
 impl ConsensusMessageV2 {
     /// Wrap a v2 payload with the canonical protocol version.
     #[must_use]
@@ -3913,7 +3753,6 @@ impl ConsensusMessageV2 {
             payload,
         }
     }
-
     /// Reject envelopes from any other consensus wire version.
     ///
     /// # Errors
@@ -3930,7 +3769,6 @@ impl ConsensusMessageV2 {
         Ok(())
     }
 }
-
 /// Structural validation failures for Sumeragi v2 wire values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValidationError {
@@ -4095,7 +3933,6 @@ pub enum ValidationError {
     /// A commit-certificate response did not answer the exact outstanding request.
     CommitCertificateRequestMismatch,
 }
-
 impl fmt::Display for ValidationError {
     #[expect(
         clippy::too_many_lines,
@@ -4293,9 +4130,7 @@ impl fmt::Display for ValidationError {
         }
     }
 }
-
 impl std::error::Error for ValidationError {}
-
 fn payload_chunk_root(chunk_hashes: &[Hash]) -> Option<Hash> {
     let leaves = chunk_hashes
         .iter()
@@ -4305,7 +4140,6 @@ fn payload_chunk_root(chunk_hashes: &[Hash]) -> Option<Hash> {
         .root()
         .map(Hash::from)
 }
-
 fn expected_encoded_chunk_count(
     payload_size_bytes: u64,
     layout: DataAvailabilityLayout,
@@ -4326,7 +4160,6 @@ fn expected_encoded_chunk_count(
     };
     u32::try_from(count).map_err(|_| ValidationError::ChunkCountTooLarge)
 }
-
 fn validate_data_availability_layout(
     layout: DataAvailabilityLayout,
 ) -> Result<(), ValidationError> {
@@ -4358,7 +4191,6 @@ fn validate_data_availability_layout(
     }
     Ok(())
 }
-
 fn validate_encoded_chunk_len(
     manifest: &PayloadManifest,
     actual: usize,
@@ -4370,7 +4202,6 @@ fn validate_encoded_chunk_len(
         PayloadEncoding::ReedSolomon16 => Err(ValidationError::InvalidChunkLength),
     }
 }
-
 fn validated_total_power(roster: &[ValidatorPower]) -> Result<u64, ValidationError> {
     if roster.is_empty() {
         return Err(ValidationError::EmptyRoster);
@@ -4407,7 +4238,6 @@ fn validated_total_power(roster: &[ValidatorPower]) -> Result<u64, ValidationErr
     }
     Ok(total)
 }
-
 fn validate_round(round: ConsensusRound, context: &HeightContext) -> Result<(), ValidationError> {
     context.validate()?;
     if round.context_id != context.id() || round.height != context.height {
@@ -4415,7 +4245,6 @@ fn validate_round(round: ConsensusRound, context: &HeightContext) -> Result<(), 
     }
     Ok(())
 }
-
 fn validate_proposal_round(
     proposal_round: ConsensusRound,
     certified_round: ConsensusRound,
@@ -4427,7 +4256,6 @@ fn validate_proposal_round(
     }
     Ok(())
 }
-
 fn validate_validator_index(
     index: ValidatorIndex,
     context: &HeightContext,
@@ -4438,7 +4266,6 @@ fn validate_validator_index(
     }
     Ok(())
 }
-
 fn require_signature(signature: &[u8]) -> Result<(), ValidationError> {
     if signature.is_empty() {
         Err(ValidationError::MissingSignature)
@@ -4448,7 +4275,6 @@ fn require_signature(signature: &[u8]) -> Result<(), ValidationError> {
         Ok(())
     }
 }
-
 fn require_aggregate_signature(signature: &[u8]) -> Result<(), ValidationError> {
     if signature.is_empty() {
         Err(ValidationError::MissingAggregateSignature)
@@ -4458,12 +4284,10 @@ fn require_aggregate_signature(signature: &[u8]) -> Result<(), ValidationError> 
         Ok(())
     }
 }
-
 fn signature_preimage(domain: &[u8], encoded_payload: &[u8]) -> Vec<u8> {
     let mut preimage = Vec::with_capacity(domain.len() + encoded_payload.len());
     preimage.extend_from_slice(domain);
     preimage.extend_from_slice(encoded_payload);
     preimage
 }
-
 include!("consensus_v2_tests.rs");

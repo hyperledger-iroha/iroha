@@ -9,7 +9,6 @@ fn native_amx_finality_gate_rejects_same_depth_manifest_count_substitution() {
         .expect("same-depth Native manifest primary lane entry");
     let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2, 3, 4]);
     assert_eq!(receipts.len(), 4);
-
     let manifests = (1..=4)
         .map(|participant_height| {
             let path = Kura::native_amx_application_manifest_path_for_entry(
@@ -30,7 +29,6 @@ fn native_amx_finality_gate_rejects_same_depth_manifest_count_substitution() {
     assert_eq!(qc_manifest.manifest_leaf_count, 4);
     Kura::validate_native_amx_participant_application_manifest_artifact(&qc_manifest)
         .expect("QC-backed four-leaf manifest artifact is self-consistent");
-
     let substituted_tree = manifests
         .iter()
         .take(3)
@@ -45,7 +43,6 @@ fn native_amx_finality_gate_rejects_same_depth_manifest_count_substitution() {
         .map(Hash::from)
         .expect("three-leaf same-depth root");
     substituted.manifest_leaf_count = 3;
-
     assert_eq!(qc_manifest.proof.audit_path().len(), 2);
     assert_eq!(
         substituted.proof.audit_path().len(),
@@ -55,7 +52,6 @@ fn native_amx_finality_gate_rejects_same_depth_manifest_count_substitution() {
     assert_ne!(substituted.manifest_root, qc_manifest.manifest_root);
     Kura::validate_native_amx_participant_application_manifest_artifact(&substituted)
         .expect("substituted three-leaf root/count/proof are internally self-consistent");
-
     let finality = kura
         .v2_finality_artifact(qc_manifest.leaf.application_block_height)
         .expect("read Native finality")
@@ -69,7 +65,6 @@ fn native_amx_finality_gate_rejects_same_depth_manifest_count_substitution() {
         qc_execution.native_amx_application_manifest_count,
         qc_manifest.manifest_leaf_count
     );
-
     let _prune_guard = kura.prune_lock.lock();
     let _canonical_chain_guard = kura.canonical_chain_lock.lock();
     assert!(
@@ -85,7 +80,6 @@ fn native_amx_finality_gate_rejects_same_depth_manifest_count_substitution() {
         "an internally valid same-depth three-leaf commitment must not substitute for the four-leaf QC execution commitment"
     );
 }
-
 fn install_native_amx_latest_index_evidence_fixture(
     kura: &Kura,
     entry: &LaneConfigEntry,
@@ -95,7 +89,6 @@ fn install_native_amx_latest_index_evidence_fixture(
         .next()
         .expect("one Native AMX evidence fixture")
 }
-
 fn install_native_amx_evidence_fixture_heights(
     kura: &Kura,
     entry: &LaneConfigEntry,
@@ -108,7 +101,6 @@ fn install_native_amx_evidence_fixture_heights(
         None,
     )
 }
-
 fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
     kura: &Kura,
     entry: &LaneConfigEntry,
@@ -140,7 +132,6 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
     let mut results = Vec::with_capacity(participant_heights.len());
     let mut entrypoint_hashes = Vec::with_capacity(participant_heights.len());
     let mut leaves = Vec::with_capacity(participant_heights.len());
-
     for participant_height in participant_heights.iter().copied() {
         let (session, _) = sample_committed_lane_block_session_for_kura(
             entry.lane_id,
@@ -168,7 +159,6 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
         proposal.proposal_hash = proposal.computed_proposal_hash();
         crate::lane_consensus::validate_lane_block_proposal(&proposal)
             .expect("canonical multi-height Native AMX fixture proposal");
-
         let mut source_id = [0x5A; Hash::LENGTH];
         source_id[..u64::BITS as usize / u8::BITS as usize]
             .copy_from_slice(&participant_height.to_le_bytes());
@@ -240,7 +230,6 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
         .lane_incarnation;
     kura.install_lane_incarnation_marker_for_test(entry, lane_incarnation, 0)
         .expect("install active Native AMX participant incarnation");
-
     let tree = leaves.iter().map(HashOf::new).collect::<MerkleTree<_>>();
     let manifest_root = tree
         .root()
@@ -266,7 +255,6 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
     let _ = kura
         .store_v2_finality_artifact(&finality)
         .expect("persist exact Native AMX finality");
-
     let checkpoint_hash = Hash::new(b"Native AMX latest-index WSV checkpoint");
     kura.store_wsv_checkpoint(application_block_height, block.hash(), checkpoint_hash)
         .expect("persist Native AMX WSV checkpoint");
@@ -281,7 +269,6 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
     .with_authenticated_v2_commit_authority(&finality);
     kura.store_commit_manifest(commit_manifest)
         .expect("persist authenticated Native AMX commit manifest");
-
     let finality_artifact_hash = HashOf::new(&finality);
     let mut receipts = Vec::with_capacity(leaves.len());
     for (index, (((leaf, proposal), settlement), (source_id, (result, entrypoint_hash)))) in leaves
@@ -329,7 +316,6 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
         };
         Kura::validate_native_amx_participant_application_receipt_artifact(&receipt)
             .expect("valid Native AMX receipt sidecar");
-
         let manifest_path = Kura::native_amx_application_manifest_path_for_entry(
             entry,
             &kura.store_root,
@@ -366,7 +352,6 @@ fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
         .expect("sync Native AMX fixture evidence directory");
     receipts
 }
-
 fn native_amx_prune_intent_for_test(
     kura: &Kura,
     entry: &LaneConfigEntry,
@@ -413,7 +398,6 @@ fn native_amx_prune_intent_for_test(
         entries,
     }
 }
-
 struct NativeAmxTwoRouteRepairFixture {
     _temp_dir: TempDir,
     kura: Arc<Kura>,
@@ -422,7 +406,6 @@ struct NativeAmxTwoRouteRepairFixture {
     markers: Vec<crate::state::AppliedNativeAmxParticipantFrontierMarker>,
     entries: [LaneConfigEntry; 2],
 }
-
 #[allow(clippy::too_many_lines)]
 fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
     let route_configs = [
@@ -468,7 +451,6 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
     let executed_block_wire_len =
         u64::try_from(executed_block_wire.len()).expect("two-route carrier length fits u64");
     let executed_block_wire_hash = Hash::new(&executed_block_wire);
-
     let mut route_evidence = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
         let (session, _) =
@@ -487,7 +469,6 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
             0,
         )
         .expect("install two-route Native incarnation");
-
         let mut source_id = [0_u8; Hash::LENGTH];
         source_id[0] = u8::try_from(index + 1).expect("two-route source index fits u8");
         let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
@@ -553,7 +534,6 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
             result,
         ));
     }
-
     let tree = route_evidence
         .iter()
         .map(|(leaf, ..)| HashOf::new(leaf))
@@ -602,7 +582,6 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
         .with_authenticated_v2_commit_authority(&finality),
     )
     .expect("persist two-route Native commit manifest");
-
     let finality_artifact_hash = HashOf::new(&finality);
     let mut artifacts = Vec::with_capacity(route_evidence.len());
     let mut markers = Vec::with_capacity(route_evidence.len());
@@ -678,7 +657,6 @@ fn native_amx_two_route_repair_fixture() -> NativeAmxTwoRouteRepairFixture {
         entries,
     }
 }
-
 fn snapshot_regular_files_recursively(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     fn collect(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
         let mut entries = fs::read_dir(directory)
@@ -702,12 +680,10 @@ fn snapshot_regular_files_recursively(root: &Path) -> BTreeMap<PathBuf, Vec<u8>>
             }
         }
     }
-
     let mut files = BTreeMap::new();
     collect(root, root, &mut files);
     files
 }
-
 fn native_amx_latest_index_test_paths(kura: &Kura, entry: &LaneConfigEntry) -> (PathBuf, PathBuf) {
     let stable =
         Kura::native_amx_participant_receipt_latest_index_path_for_entry(entry, &kura.store_root);
@@ -717,7 +693,6 @@ fn native_amx_latest_index_test_paths(kura: &Kura, entry: &LaneConfigEntry) -> (
         .join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE);
     (stable, temporary)
 }
-
 fn write_synced_native_amx_test_file(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).expect("write Native AMX test artifact");
     std::fs::File::open(path)
@@ -730,7 +705,6 @@ fn write_synced_native_amx_test_file(path: &Path, bytes: &[u8]) {
     )
     .expect("sync Native AMX test artifact directory");
 }
-
 #[test]
 fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
     let temp_dir = TempDir::new().expect("temporary Kura directory");
@@ -743,7 +717,6 @@ fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
     let latest_path =
         Kura::native_amx_participant_receipt_latest_index_path_for_entry(&entry, &kura.store_root);
     drop(kura);
-
     for corrupt in [
         vec![0xA5],
         vec![0x5A; NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES + 1],
@@ -762,7 +735,6 @@ fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
             "unexpected startup error: {error}"
         );
     }
-
     for corrupt_kind in ["older manifest", "older receipt"] {
         let temp_dir = TempDir::new().expect("temporary Kura directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -782,7 +754,6 @@ fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
         };
         fs::write(&corrupt_path, [0xA5]).expect("stage malformed standalone Native evidence");
         let _latest = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
-
         let error = kura
             .rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
             .expect_err("startup must decode every retained Native evidence payload");
@@ -798,7 +769,6 @@ fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
         );
     }
 }
-
 #[test]
 fn native_amx_latest_index_startup_rejects_legacy_v1_filename() {
     let temp_dir = TempDir::new().expect("temporary Kura directory");
@@ -813,7 +783,6 @@ fn native_amx_latest_index_startup_rejects_legacy_v1_filename() {
     let legacy_path = evidence_directory.join(legacy_name);
     fs::write(&legacy_path, [0xA5]).expect("stage unsupported legacy latest pointer");
     drop(kura);
-
     let error = match Kura::new(&config, &lane_config) {
         Ok(_) => panic!("startup must reject a legacy Native latest-index filename"),
         Err(error) => error,
@@ -827,7 +796,6 @@ fn native_amx_latest_index_startup_rejects_legacy_v1_filename() {
         "fail-closed startup must retain the legacy pointer for forensics"
     );
 }
-
 #[test]
 fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scanning() {
     for artifact_kind in ["manifest", "receipt"] {
@@ -859,7 +827,6 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
             .expect("stage excess standalone Native record");
         }
         drop(kura);
-
         let error = match Kura::new(&config, &lane_config) {
             Ok(_) => panic!("startup must reject excess {artifact_kind} records"),
             Err(error) => error,
@@ -869,7 +836,6 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
             "unexpected {artifact_kind} startup bound error: {error}"
         );
     }
-
     let temp_dir = TempDir::new().expect("bounded Native compaction Kura directory");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.roster_sidecar_retention =
@@ -889,7 +855,6 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
     let oldest_receipt =
         Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config)
         .expect("retention plus one fully valid pair must compact at startup");
     let reopened_entry = reopened
@@ -956,7 +921,6 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
         .kura_total_disk_usage_bytes()
         .expect("scan exact Native compaction usage before idempotent reopen");
     drop(reopened);
-
     let (reopened_again, _) = Kura::new(&config, &lane_config)
         .expect("Native compaction startup repair must be idempotent");
     let reopened_again_entry = reopened_again
@@ -1002,7 +966,6 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
         exact_usage
     );
 }
-
 #[test]
 fn native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scanning() {
     for artifact_kind in ["manifest", "receipt"] {
@@ -1026,7 +989,6 @@ fn native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scann
             _ => unreachable!(),
         };
         drop(kura);
-
         for (height, hostile_len) in [
             (1, STRICT_INIT_MAX_BLOCK_BYTES),
             (2, STRICT_INIT_MAX_BLOCK_BYTES),
@@ -1037,7 +999,6 @@ fn native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scann
                 .set_len(hostile_len)
                 .expect("size sparse hostile Native evidence file");
         }
-
         let error = match Kura::new(&config, &lane_config) {
             Ok(_) => panic!("startup must reject oversized {artifact_kind} aggregate data"),
             Err(error) => error,
@@ -1048,7 +1009,6 @@ fn native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scann
         );
     }
 }
-
 #[test]
 fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
     for artifact_kind in ["manifest", "receipt"] {
@@ -1078,7 +1038,6 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
             .sync_all()
             .expect("sync Native publication temporary");
         drop(kura);
-
         let (_reopened, _) = Kura::new(&config, &lane_config)
             .expect("startup must mechanically recover a duplicate publication temporary");
         assert_eq!(
@@ -1091,7 +1050,6 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
             "{artifact_kind} startup repair must remove the exact duplicate temporary"
         );
     }
-
     for crash_stage in [
         "temp-only",
         "stable-before-delete",
@@ -1129,7 +1087,6 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
                 .sync_all()
                 .expect("sync Native prune-journal latest pointer");
         }
-
         let manifest_path =
             Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
         let receipt_path =
@@ -1233,7 +1190,6 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
         }
         sync_dir(evidence_directory).expect("sync staged Native prune-journal crash boundary");
         drop(kura);
-
         let (reopened, _) = Kura::new(&config, &lane_config)
             .unwrap_or_else(|error| panic!("{crash_stage} recovery failed: {error}"));
         let reopened_entry = reopened
@@ -1287,7 +1243,6 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
             "{crash_stage} recovery must reconcile exact disk accounting"
         );
         drop(reopened);
-
         let (reopened_again, _) = Kura::new(&config, &lane_config)
             .unwrap_or_else(|error| panic!("{crash_stage} idempotent reopen failed: {error}"));
         assert_eq!(
@@ -1309,7 +1264,6 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
             "{crash_stage} second reopen must be byte-idempotent"
         );
     }
-
     let temp_dir = TempDir::new().expect("latest-protected Native prune Kura directory");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.roster_sidecar_retention =
@@ -1415,7 +1369,6 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
         "fail-closed startup must retain a latest-targeting prune intent for forensics"
     );
 }
-
 #[test]
 fn native_amx_prune_intent_v2_temporary_cannot_delete_all_pointerless_pairs() {
     let temp_dir = TempDir::new().expect("hostile temporary Native prune Kura directory");
@@ -1451,7 +1404,6 @@ fn native_amx_prune_intent_v2_temporary_cannot_delete_all_pointerless_pairs() {
         .map(|path| fs::read(path).expect("snapshot retained Native evidence"))
         .collect::<Vec<_>>();
     drop(kura);
-
     let error = match Kura::new(&config, &lane_config) {
         Ok(_) => panic!("temporary V2 intent must not delete every pointerless pair"),
         Err(error) => error,
@@ -1471,7 +1423,6 @@ fn native_amx_prune_intent_v2_temporary_cannot_delete_all_pointerless_pairs() {
         );
     }
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn native_amx_prune_intent_v2_requires_exact_protected_pair_and_metadata_join() {
@@ -1569,7 +1520,6 @@ fn native_amx_prune_intent_v2_requires_exact_protected_pair_and_metadata_join() 
         }
         sync_dir(&evidence_directory).expect("sync protected Native prune damage");
         drop(kura);
-
         let error = match Kura::new(&config, &lane_config) {
             Ok(_) => panic!("{damage} must block Native prune recovery"),
             Err(error) => error,
@@ -1590,7 +1540,6 @@ fn native_amx_prune_intent_v2_requires_exact_protected_pair_and_metadata_join() 
         );
     }
 }
-
 #[test]
 fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
     for missing_kind in ["manifest", "receipt"] {
@@ -1627,7 +1576,6 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
             let total_before = kura
                 .disk_usage_bytes()
                 .expect("read total disk accounting before manifest crash");
-
             for result in [
                 kura.remove_latest_native_amx_participant_manifest_for_testing(
                     descriptor.lane_id,
@@ -1692,7 +1640,6 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
                     total_before
                 );
             }
-
             kura.remove_latest_native_amx_participant_manifest_for_testing(
                 descriptor.lane_id,
                 descriptor.dataspace_id,
@@ -1723,7 +1670,6 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
                 .expect("remove interrupted standalone Native receipt");
         }
         drop(kura);
-
         let (reopened, _) = Kura::new(&config, &lane_config)
             .expect("missing structurally valid Native evidence must remain repair-pending");
         let reopened_entry = reopened
@@ -1748,7 +1694,6 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
             "repair-pending {missing_kind} must never satisfy strict runtime evidence"
         );
     }
-
     // Exercise the two identities that a one-record fixture cannot cover:
     // an otherwise exact but non-newest record, and a newest record whose
     // retained prefix has a malformed index entry. Neither rejection may
@@ -1806,7 +1751,6 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
             .expect("encode second strict-removal manifest"),
     )
     .expect("persist second standalone strict-removal manifest");
-
     let two_record_data =
         fs::read(&manifest_data_path).expect("read two-record strict-removal data");
     let second_record_data =
@@ -1830,7 +1774,6 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
         fs::read(&second_manifest_path).expect("reread second data after rejection"),
         second_record_data
     );
-
     let mut malformed_record = second_record_data.clone();
     malformed_record.push(0xA5);
     fs::write(&second_manifest_path, &malformed_record)

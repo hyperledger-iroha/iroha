@@ -1,7 +1,5 @@
 //! SM cryptography helpers exposed via the CLI.
-
 use crate::{Run, RunContext};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
@@ -13,12 +11,10 @@ use norito::json;
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use std::{fs, path::PathBuf};
 use zeroize::{Zeroize, Zeroizing};
-
 enum PrivateInput {
     Hex(String),
     Pem(String),
 }
-
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// SM2 key management helpers.
@@ -31,7 +27,6 @@ pub enum Command {
     #[command(subcommand)]
     Sm4(Sm4Command),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -41,7 +36,6 @@ impl Run for Command {
         }
     }
 }
-
 #[derive(Subcommand, Debug)]
 pub enum Sm2Command {
     /// Generate a new SM2 key pair (distinguishing ID aware).
@@ -51,7 +45,6 @@ pub enum Sm2Command {
     /// Export SM2 key material with config snippets.
     Export(Sm2ExportArgs),
 }
-
 impl Run for Sm2Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -61,13 +54,11 @@ impl Run for Sm2Command {
         }
     }
 }
-
 #[derive(Subcommand, Debug)]
 pub enum Sm3Command {
     /// Hash input data with SM3.
     Hash(Sm3HashArgs),
 }
-
 impl Run for Sm3Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -75,7 +66,6 @@ impl Run for Sm3Command {
         }
     }
 }
-
 #[derive(Subcommand, Debug)]
 pub enum Sm4Command {
     /// Encrypt data with SM4-GCM.
@@ -87,7 +77,6 @@ pub enum Sm4Command {
     /// Decrypt data with SM4-CCM.
     CcmOpen(Sm4CcmOpenArgs),
 }
-
 impl Run for Sm4Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -98,7 +87,6 @@ impl Run for Sm4Command {
         }
     }
 }
-
 #[derive(Args, Debug)]
 pub struct Sm2KeygenArgs {
     /// Distinguishing identifier embedded into SM2 signatures (defaults to `1234567812345678`).
@@ -114,12 +102,10 @@ pub struct Sm2KeygenArgs {
     #[arg(long)]
     quiet: bool,
 }
-
 impl Sm2KeygenArgs {
     fn material(&self) -> Result<Sm2KeyMaterial> {
         self.material_with_rng(&mut OsRng)
     }
-
     fn material_with_rng<R: TryCryptoRng>(&self, rng: &mut R) -> Result<Sm2KeyMaterial> {
         let distid = parse_distid(self.distid.clone())?;
         let private = if let Some(seed_hex) = &self.seed_hex {
@@ -133,11 +119,9 @@ impl Sm2KeygenArgs {
             Sm2PrivateKey::from_seed(distid.clone(), seed.as_ref())
                 .wrap_err("failed to derive SM2 key from random seed")?
         };
-
         Ok(Sm2KeyMaterial::new(&private))
     }
 }
-
 impl Run for Sm2KeygenArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let material = self.material()?;
@@ -146,14 +130,12 @@ impl Run for Sm2KeygenArgs {
                 format!("failed to write SM2 key material to {}", path.display())
             })?;
         }
-
         if !self.quiet {
             context.print_data(&material.json)?;
         }
         Ok(())
     }
 }
-
 #[derive(Args, Debug)]
 pub struct Sm2ImportArgs {
     /// Existing SM2 private key in hex (32 bytes).
@@ -200,7 +182,6 @@ pub struct Sm2ImportArgs {
     #[arg(long)]
     quiet: bool,
 }
-
 impl Run for Sm2ImportArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let Sm2ImportArgs {
@@ -215,7 +196,6 @@ impl Run for Sm2ImportArgs {
             quiet,
         } = self;
         let distid = parse_distid(distid)?;
-
         let source = match (
             private_key_hex,
             private_key_file,
@@ -243,7 +223,6 @@ impl Run for Sm2ImportArgs {
                 ));
             }
         };
-
         let private = match source {
             PrivateInput::Hex(hex) => {
                 let key_bytes = decode_hex_fixed::<32>("SM2 private key", &hex)?;
@@ -253,7 +232,6 @@ impl Run for Sm2ImportArgs {
             PrivateInput::Pem(pem) => Sm2PrivateKey::from_pkcs8_pem(distid.clone(), pem.trim())
                 .wrap_err("invalid SM2 PKCS#8 key")?,
         };
-
         let provided_public_pem =
             match (public_key_pem, public_key_pem_file) {
                 (Some(_), Some(_)) => {
@@ -267,7 +245,6 @@ impl Run for Sm2ImportArgs {
                 })?),
                 (None, None) => None,
             };
-
         if let Some(pem) = provided_public_pem {
             let provided = Sm2PublicKey::from_public_key_pem(distid.clone(), pem.trim())
                 .map_err(|err| eyre!("provided SM2 public key PEM is invalid: {err}"))?;
@@ -277,21 +254,18 @@ impl Run for Sm2ImportArgs {
                 ));
             }
         }
-
         let material = Sm2KeyMaterial::new(&private);
         if let Some(path) = &output {
             fs::write(path, material.as_json_pretty().as_bytes()).with_context(|| {
                 format!("failed to write SM2 key material to {}", path.display())
             })?;
         }
-
         if !quiet {
             context.print_data(&material.json)?;
         }
         Ok(())
     }
 }
-
 #[derive(Args, Debug)]
 pub struct Sm2ExportArgs {
     /// Existing SM2 private key in hex (32 bytes).
@@ -335,11 +309,9 @@ pub struct Sm2ExportArgs {
     #[arg(long)]
     quiet: bool,
 }
-
 impl Run for Sm2ExportArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let distid = parse_distid(self.distid.clone())?;
-
         let source = match (
             self.private_key_hex,
             self.private_key_file,
@@ -367,7 +339,6 @@ impl Run for Sm2ExportArgs {
                 ));
             }
         };
-
         let private = match source {
             PrivateInput::Hex(hex) => {
                 let key_bytes = decode_hex_fixed::<32>("SM2 private key", &hex)?;
@@ -377,13 +348,11 @@ impl Run for Sm2ExportArgs {
             PrivateInput::Pem(pem) => Sm2PrivateKey::from_pkcs8_pem(distid.clone(), pem.trim())
                 .wrap_err("invalid SM2 PKCS#8 key")?,
         };
-
         let material = Sm2KeyMaterial::new(&private);
         if let Some(path) = &self.snippet_output {
             fs::write(path, material.snippet.as_bytes())
                 .with_context(|| format!("failed to write SM2 snippet to {}", path.display()))?;
         }
-
         if !self.quiet {
             context.println(material.snippet.trim_end())?;
             if self.emit_json {
@@ -395,7 +364,6 @@ impl Run for Sm2ExportArgs {
         Ok(())
     }
 }
-
 #[derive(Args, Debug)]
 pub struct Sm3HashArgs {
     /// UTF-8 string to hash (mutually exclusive with other inputs).
@@ -414,7 +382,6 @@ pub struct Sm3HashArgs {
     #[arg(long)]
     quiet: bool,
 }
-
 impl Run for Sm3HashArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let message = if let Some(data) = &self.data {
@@ -429,30 +396,25 @@ impl Run for Sm3HashArgs {
                 "provide --data, --data-hex, or --file to hash with SM3"
             ));
         };
-
         let digest = Sm3Digest::hash(&message);
         let digest_hex = hex::encode_upper(digest.as_bytes());
         let digest_b64 = BASE64.encode(digest.as_bytes());
-
         let payload = json::object([
             ("algorithm", json::Value::from("sm3")),
             ("digest_hex", json::Value::from(digest_hex)),
             ("digest_b64", json::Value::from(digest_b64)),
         ])
         .expect("static SM3 digest payload");
-
         if let Some(path) = &self.output {
             fs::write(path, to_pretty_json(&payload).as_bytes())
                 .with_context(|| format!("failed to write digest to {}", path.display()))?;
         }
-
         if !self.quiet {
             context.print_data(&payload)?;
         }
         Ok(())
     }
 }
-
 #[derive(Args, Debug)]
 pub struct Sm4GcmSealArgs {
     /// SM4 key (16 bytes hex).
@@ -480,7 +442,6 @@ pub struct Sm4GcmSealArgs {
     #[arg(long)]
     quiet: bool,
 }
-
 impl Run for Sm4GcmSealArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let key = decode_hex_fixed::<16>("SM4 key", &self.key_hex)?;
@@ -495,12 +456,10 @@ impl Run for Sm4GcmSealArgs {
             self.plaintext_file.as_ref(),
             "plaintext",
         )?;
-
         let key = Sm4Key::new(key);
         let (ciphertext, tag) = key
             .encrypt_gcm(&nonce, &aad, &plaintext)
             .wrap_err("failed to encrypt with SM4-GCM")?;
-
         if let Some(path) = &self.ciphertext_file {
             fs::write(path, &ciphertext)
                 .with_context(|| format!("failed to write ciphertext to {}", path.display()))?;
@@ -509,7 +468,6 @@ impl Run for Sm4GcmSealArgs {
             fs::write(path, tag.as_ref())
                 .with_context(|| format!("failed to write tag to {}", path.display()))?;
         }
-
         if !self.quiet {
             let payload = json::object([
                 ("algorithm", json::Value::from("sm4-gcm")),
@@ -530,7 +488,6 @@ impl Run for Sm4GcmSealArgs {
         Ok(())
     }
 }
-
 #[derive(Args, Debug)]
 pub struct Sm4GcmOpenArgs {
     /// SM4 key (16 bytes hex).
@@ -561,7 +518,6 @@ pub struct Sm4GcmOpenArgs {
     #[arg(long)]
     quiet: bool,
 }
-
 impl Run for Sm4GcmOpenArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let key = decode_hex_fixed::<16>("SM4 key", &self.key_hex)?;
@@ -586,17 +542,14 @@ impl Run for Sm4GcmOpenArgs {
         }
         let mut tag = [0u8; 16];
         tag.copy_from_slice(&tag_bytes);
-
         let key = Sm4Key::new(key);
         let plaintext = key
             .decrypt_gcm(&nonce, &aad, &ciphertext, &tag)
             .wrap_err("failed to decrypt with SM4-GCM")?;
-
         if let Some(path) = &self.plaintext_file {
             fs::write(path, &plaintext)
                 .with_context(|| format!("failed to write plaintext to {}", path.display()))?;
         }
-
         if !self.quiet {
             let payload = json::object([
                 ("algorithm", json::Value::from("sm4-gcm")),
@@ -615,7 +568,6 @@ impl Run for Sm4GcmOpenArgs {
         Ok(())
     }
 }
-
 #[derive(Args, Debug)]
 pub struct Sm4CcmSealArgs {
     /// SM4 key (16 bytes hex).
@@ -646,7 +598,6 @@ pub struct Sm4CcmSealArgs {
     #[arg(long)]
     quiet: bool,
 }
-
 impl Run for Sm4CcmSealArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let key = decode_hex_fixed::<16>("SM4 key", &self.key_hex)?;
@@ -662,12 +613,10 @@ impl Run for Sm4CcmSealArgs {
             self.plaintext_file.as_ref(),
             "plaintext",
         )?;
-
         let key = Sm4Key::new(key);
         let (ciphertext, tag) = key
             .encrypt_ccm(&nonce, &aad, &plaintext, tag_len)
             .wrap_err("failed to encrypt with SM4-CCM")?;
-
         if let Some(path) = &self.ciphertext_file {
             fs::write(path, &ciphertext)
                 .with_context(|| format!("failed to write ciphertext to {}", path.display()))?;
@@ -676,7 +625,6 @@ impl Run for Sm4CcmSealArgs {
             fs::write(path, &tag)
                 .with_context(|| format!("failed to write tag to {}", path.display()))?;
         }
-
         if !self.quiet {
             let payload = json::object([
                 ("algorithm", json::Value::from("sm4-ccm")),
@@ -698,7 +646,6 @@ impl Run for Sm4CcmSealArgs {
         Ok(())
     }
 }
-
 #[derive(Args, Debug)]
 pub struct Sm4CcmOpenArgs {
     /// SM4 key (16 bytes hex).
@@ -732,7 +679,6 @@ pub struct Sm4CcmOpenArgs {
     #[arg(long)]
     quiet: bool,
 }
-
 impl Run for Sm4CcmOpenArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let key = decode_hex_fixed::<16>("SM4 key", &self.key_hex)?;
@@ -756,17 +702,14 @@ impl Run for Sm4CcmOpenArgs {
                 "tag length mismatch: expected {expected} bytes, got {inferred_len}"
             ));
         }
-
         let key = Sm4Key::new(key);
         let plaintext = key
             .decrypt_ccm(&nonce, &aad, &ciphertext, &tag)
             .wrap_err("failed to decrypt with SM4-CCM")?;
-
         if let Some(path) = &self.plaintext_file {
             fs::write(path, &plaintext)
                 .with_context(|| format!("failed to write plaintext to {}", path.display()))?;
         }
-
         if !self.quiet {
             let payload = json::object([
                 ("algorithm", json::Value::from("sm4-ccm")),
@@ -786,12 +729,10 @@ impl Run for Sm4CcmOpenArgs {
         Ok(())
     }
 }
-
 struct Sm2KeyMaterial {
     json: json::Value,
     snippet: String,
 }
-
 impl Sm2KeyMaterial {
     fn new(private: &Sm2PrivateKey) -> Self {
         let artifacts = collect_sm2_artifacts(private);
@@ -836,17 +777,13 @@ impl Sm2KeyMaterial {
             ),
         ])
         .expect("static SM2 key payload");
-
         let snippet = render_sm2_snippet(&artifacts);
-
         Self { json, snippet }
     }
-
     fn as_json_pretty(&self) -> String {
         to_pretty_json(&self.json)
     }
 }
-
 struct Sm2Artifacts {
     distid: String,
     private_key_hex: String,
@@ -859,7 +796,6 @@ struct Sm2Artifacts {
     public_key_config: String,
     public_key_pem: String,
 }
-
 fn collect_sm2_artifacts(private: &Sm2PrivateKey) -> Sm2Artifacts {
     let distid = private.distid().to_string();
     let mut secret = private.secret_bytes();
@@ -885,9 +821,7 @@ fn collect_sm2_artifacts(private: &Sm2PrivateKey) -> Sm2Artifacts {
     let public_key_pem = public
         .to_public_key_pem()
         .unwrap_or_else(|_| "<unavailable>".to_string());
-
     secret.zeroize();
-
     Sm2Artifacts {
         distid,
         private_key_hex,
@@ -901,7 +835,6 @@ fn collect_sm2_artifacts(private: &Sm2PrivateKey) -> Sm2Artifacts {
         public_key_pem,
     }
 }
-
 fn render_sm2_snippet(artifacts: &Sm2Artifacts) -> String {
     format!(
         r#"# Account key material
@@ -925,7 +858,6 @@ sm2_distid_default = "{distid}"
         distid = artifacts.distid
     )
 }
-
 fn parse_distid(distid: Option<String>) -> Result<String> {
     let value = distid
         .map(|d| d.trim().to_string())
@@ -936,13 +868,11 @@ fn parse_distid(distid: Option<String>) -> Result<String> {
     }
     Ok(value)
 }
-
 fn decode_hex_bytes(label: &str, raw: &str) -> Result<Vec<u8>> {
     let trimmed = raw.trim();
     let without_prefix = trimmed.strip_prefix("0x").unwrap_or(trimmed);
     hex::decode(without_prefix).with_context(|| format!("{label} is not valid hex"))
 }
-
 fn decode_hex_fixed<const N: usize>(label: &str, raw: &str) -> Result<[u8; N]> {
     let bytes = decode_hex_bytes(label, raw)?;
     if bytes.len() != N {
@@ -955,7 +885,6 @@ fn decode_hex_fixed<const N: usize>(label: &str, raw: &str) -> Result<[u8; N]> {
     arr.copy_from_slice(&bytes);
     Ok(arr)
 }
-
 fn decode_ccm_nonce(raw: &str) -> Result<Vec<u8>> {
     let nonce = decode_hex_bytes("SM4-CCM nonce", raw)?;
     if (7..=13).contains(&nonce.len()) {
@@ -967,7 +896,6 @@ fn decode_ccm_nonce(raw: &str) -> Result<Vec<u8>> {
         ))
     }
 }
-
 fn normalize_ccm_tag_len(len: usize) -> Result<usize> {
     match len {
         4 | 6 | 8 | 10 | 12 | 14 | 16 => Ok(len),
@@ -976,7 +904,6 @@ fn normalize_ccm_tag_len(len: usize) -> Result<usize> {
         )),
     }
 }
-
 fn load_hex_or_file_bytes(
     hex: Option<&String>,
     file: Option<&PathBuf>,
@@ -992,11 +919,9 @@ fn load_hex_or_file_bytes(
         (None, None) => Err(eyre!("provide --{label}-hex or --{label}-file")),
     }
 }
-
 fn to_pretty_json(value: &json::Value) -> String {
     norito::json::to_json_pretty(value).expect("SM payloads serialize")
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1012,36 +937,27 @@ mod tests {
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use std::fmt;
     use url::Url;
-
     struct FailingSm2SeedRng;
-
     #[derive(Debug)]
     struct FailingSm2SeedRngError;
-
     impl fmt::Display for FailingSm2SeedRngError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("failing SM2 seed RNG")
         }
     }
-
     impl TryRngCore for FailingSm2SeedRng {
         type Error = FailingSm2SeedRngError;
-
         fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
             Err(FailingSm2SeedRngError)
         }
-
         fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
             Err(FailingSm2SeedRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
             Err(FailingSm2SeedRngError)
         }
     }
-
     impl TryCryptoRng for FailingSm2SeedRng {}
-
     #[test]
     fn sm2_keygen_seed_produces_expected_public_key() {
         let mut ctx = TestContext::new();
@@ -1084,7 +1000,6 @@ mod tests {
             "private key PEM missing header"
         );
     }
-
     #[test]
     fn sm2_keygen_random_reports_rng_failure() {
         let args = Sm2KeygenArgs {
@@ -1094,17 +1009,14 @@ mod tests {
             quiet: false,
         };
         let mut rng = FailingSm2SeedRng;
-
         let error = match args.material_with_rng(&mut rng) {
             Ok(_) => panic!("random SM2 keygen should fail when entropy fails"),
             Err(error) => error,
         };
         let message = format!("{error:?}");
-
         assert!(message.contains("failed to generate random SM2 seed"));
         assert!(message.contains("failing SM2 seed RNG"));
     }
-
     #[test]
     fn sm2_import_accepts_pkcs8_pem() {
         let private =
@@ -1136,7 +1048,6 @@ mod tests {
             "cli-import-pem"
         );
     }
-
     #[test]
     fn sm2_import_rejects_mismatched_public_key() {
         let private =
@@ -1167,7 +1078,6 @@ mod tests {
             "unexpected error message: {err}"
         );
     }
-
     #[test]
     fn sm2_export_snippet_includes_pem_blobs() {
         let private =
@@ -1209,7 +1119,6 @@ mod tests {
             "snippet missing allowed_signing guidance: {snippet}"
         );
     }
-
     #[test]
     fn sm2_export_accepts_pkcs8_pem_input() {
         let private =
@@ -1230,7 +1139,6 @@ mod tests {
         .expect("export sm2 from pem");
         assert!(!ctx.lines.is_empty(), "expected snippet output from export");
     }
-
     #[test]
     fn sm3_hash_string_matches_known_vector() {
         let mut ctx = TestContext::new();
@@ -1253,14 +1161,12 @@ mod tests {
             "1DD3CF971A92489A81DDFBD884CD4D4886D34F752C190F36A40FF9DF03BE5E19"
         );
     }
-
     #[test]
     fn sm4_gcm_roundtrip() {
         let key = "00112233445566778899AABBCCDDEEFF";
         let nonce = "0102030405060708090A0B0C";
         let plaintext_hex = "DEADBEEF";
         let mut ctx = TestContext::new();
-
         Sm4GcmSealArgs {
             key_hex: key.into(),
             nonce_hex: nonce.into(),
@@ -1284,7 +1190,6 @@ mod tests {
             .get("tag_hex")
             .and_then(|v| v.as_str())
             .expect("tag");
-
         let mut ctx_open = TestContext::new();
         Sm4GcmOpenArgs {
             key_hex: key.into(),
@@ -1309,14 +1214,12 @@ mod tests {
             plaintext_hex
         );
     }
-
     #[test]
     fn sm4_ccm_roundtrip() {
         let key = "00112233445566778899AABBCCDDEEFF";
         let nonce = "01020304050607";
         let plaintext_hex = "CAFEF00D";
         let mut ctx = TestContext::new();
-
         Sm4CcmSealArgs {
             key_hex: key.into(),
             nonce_hex: nonce.into(),
@@ -1341,7 +1244,6 @@ mod tests {
             .get("tag_hex")
             .and_then(|v| v.as_str())
             .expect("tag");
-
         let mut ctx_open = TestContext::new();
         Sm4CcmOpenArgs {
             key_hex: key.into(),
@@ -1367,14 +1269,12 @@ mod tests {
             plaintext_hex
         );
     }
-
     struct TestContext {
         cfg: Config,
         json_outputs: Vec<String>,
         lines: Vec<String>,
         i18n: Localizer,
     }
-
     impl TestContext {
         fn new() -> Self {
             let key_pair = checked_crypto_ed25519_key_fixture();
@@ -1409,12 +1309,10 @@ mod tests {
             }
         }
     }
-
     fn checked_crypto_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked crypto fixture key")
     }
-
     #[test]
     fn crypto_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_crypto_ed25519_key_fixture();
@@ -1422,31 +1320,24 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("crypto fixture key advertises a valid algorithm");
-
         assert_eq!(actual, Algorithm::Ed25519);
     }
-
     impl RunContext for TestContext {
         fn config(&self) -> &Config {
             &self.cfg
         }
-
         fn transaction_metadata(&self) -> Option<&Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             false
         }
-
         fn i18n(&self) -> &Localizer {
             &self.i18n
         }
-
         fn print_data<T>(&mut self, data: &T) -> Result<()>
         where
             T: JsonSerialize + ?Sized,
@@ -1455,13 +1346,11 @@ mod tests {
             self.json_outputs.push(json);
             Ok(())
         }
-
         fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
             self.lines.push(data.to_string());
             Ok(())
         }
     }
-
     #[test]
     fn sm2_parse_distid_defaults_to_runtime_value() {
         struct DistidGuard(String);
@@ -1470,11 +1359,9 @@ mod tests {
                 Sm2PublicKey::set_default_distid(self.0.clone()).expect("restore default distid");
             }
         }
-
         let original = Sm2PublicKey::default_distid();
         let _guard = DistidGuard(original.clone());
         Sm2PublicKey::set_default_distid("runtime-default-test").expect("override distid");
-
         let parsed = super::parse_distid(None).expect("parse distid");
         assert_eq!(parsed, "runtime-default-test");
     }

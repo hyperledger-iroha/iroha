@@ -1,7 +1,6 @@
 //! Verify that Norito roundtrips for `SignedBlock` even when signatures carry
 //! packed `ConstVec<u8>` payloads. Reproduces the regression reported for
 //! `SignedBlock` decoding failing on transaction signatures.
-
 use iroha_crypto::{KeyPair, MerkleTree};
 use iroha_data_model::{
     account::AccountId,
@@ -10,17 +9,14 @@ use iroha_data_model::{
     isi::InstructionBox,
     transaction::signed::{SignedTransaction, TransactionBuilder},
 };
-
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked signed-block roundtrip keypair")
 }
-
 fn sample_signed_block_with_empty_instructions() -> (SignedBlock, Vec<SignedTransaction>) {
     let keypair = checked_random_keypair();
     let _domain: DomainId =
         DomainId::try_new("wonderland", "universal").expect("domain for sample block");
     let authority: AccountId = AccountId::new(keypair.public_key().clone());
-
     let txs = vec![
         TransactionBuilder::new_genesis(
             authority.clone(),
@@ -38,11 +34,9 @@ fn sample_signed_block_with_empty_instructions() -> (SignedBlock, Vec<SignedTran
     let block = SignedBlock::genesis(txs.clone(), keypair.private_key(), None, None);
     (block, txs)
 }
-
 #[test]
 fn signed_block_roundtrip_via_norito() {
     let (block, txs) = sample_signed_block_with_empty_instructions();
-
     for (idx, tx) in txs.iter().enumerate() {
         let mut buf = Vec::new();
         norito::core::serialize_to_buffer(tx, &mut buf).expect("serialize signed transaction");
@@ -62,7 +56,6 @@ fn signed_block_roundtrip_via_norito() {
             .expect("codec decode signed tx");
         assert_eq!(codec_decoded, *tx);
     }
-
     // Audit the constructed block structure before serialization.
     assert_eq!(
         block.signatures().count(),
@@ -78,7 +71,6 @@ fn signed_block_roundtrip_via_norito() {
         block.has_results(),
         "genesis blocks now carry an empty results envelope for deterministic hashing"
     );
-
     let expected_hashes: Vec<_> = txs
         .iter()
         .map(SignedTransaction::hash_as_entrypoint)
@@ -96,7 +88,6 @@ fn signed_block_roundtrip_via_norito() {
         block.header().result_merkle_root().is_none(),
         "result merkle root remains unset for empty results"
     );
-
     let tx_sig_len = {
         let tx = block.transactions_vec().first().expect("tx");
         let mut buf = Vec::new();
@@ -104,17 +95,14 @@ fn signed_block_roundtrip_via_norito() {
         buf.len()
     };
     println!("transaction signature serialized len {tx_sig_len}");
-
     let bytes = norito::codec::Encode::encode(&block);
     let mut cursor = bytes.as_slice();
     println!("signed block encoded len {}", bytes.len());
     println!("first 64 bytes {:?}", &bytes[..64.min(bytes.len())]);
     let decoded =
         <SignedBlock as norito::codec::Decode>::decode(&mut cursor).expect("decode block");
-
     assert_eq!(decoded, block);
 }
-
 #[test]
 fn canonical_signed_block_wire_roundtrip_uses_default_layout_flags() {
     let (block, _) = sample_signed_block_with_empty_instructions();

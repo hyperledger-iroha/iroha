@@ -21,7 +21,6 @@
 //!
 //! The worker verifies `ProofAttachment` payloads (single or list, Norito or JSON)
 //! using core backend verifiers and records per-proof metadata. It never mutates WSV.
-
 #[cfg(test)]
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -39,7 +38,6 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use iroha_core::{
@@ -66,7 +64,6 @@ use tokio::{
     sync::Semaphore,
     task::{self, JoinSet},
 };
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 use crate::NoritoQuery;
 use crate::{
@@ -2007,16 +2004,13 @@ pub async fn handle_delete_report(AxumPath(id): AxumPath<String>) -> impl IntoRe
         StatusCode::NOT_FOUND.into_response()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use http_body_util::BodyExt as _;
     use iroha_core::zk::test_utils::{FixtureEnvelope, halo2_ivm_execution_envelope};
     use iroha_data_model::proof::{ProofAttachment, ProofBox};
-
     use super::*;
     use crate::test_utils::TestDataDirGuard;
-
     const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
     #[cfg(any(unix, windows))]
     #[test]

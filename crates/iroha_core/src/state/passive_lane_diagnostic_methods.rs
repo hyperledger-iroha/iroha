@@ -6,7 +6,6 @@ impl State {
         current_state_hash: HashOf<BlockHeader>,
     ) -> Option<crate::sumeragi::status::CommittedLaneBlockExecutionStatus> {
         use crate::sumeragi::status::CommittedLaneBlockExecutionStatus as ExecutionStatus;
-
         let proposal = &session.proposal;
         let application_receipt_available = if session.prepare_qc.payload_availability_qc.is_some()
         {

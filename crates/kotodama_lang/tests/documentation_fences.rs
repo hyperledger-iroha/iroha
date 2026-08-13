@@ -1,14 +1,11 @@
 //! Compile every canonical documentation fence that claims to contain Kotodama.
-
 use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
-
 use kotodama_lang::lexer::{TokenKind, lex};
 use kotodama_lang::session::{CompileRequest, CompilerSession};
-
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -16,7 +13,6 @@ fn repository_root() -> PathBuf {
         .expect("kotodama_lang must live under crates/")
         .to_path_buf()
 }
-
 fn markdown_files(root: &Path, output: &mut Vec<PathBuf>) {
     let mut entries = fs::read_dir(root)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", root.display()))
@@ -31,7 +27,6 @@ fn markdown_files(root: &Path, output: &mut Vec<PathBuf>) {
         }
     }
 }
-
 fn kotodama_fences(path: &Path) -> Vec<(usize, String)> {
     let source = fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
@@ -58,7 +53,6 @@ fn kotodama_fences(path: &Path) -> Vec<(usize, String)> {
     );
     fences
 }
-
 #[test]
 fn canonical_documentation_kotodama_fences_compile() {
     let root = repository_root();
@@ -66,7 +60,6 @@ fn canonical_documentation_kotodama_fences_compile() {
     for relative in ["specs", "crates/ivm/docs"] {
         markdown_files(&root.join(relative), &mut markdown);
     }
-
     let session = CompilerSession::default();
     let mut fence_count = 0usize;
     let mut compiled_sources = BTreeSet::new();

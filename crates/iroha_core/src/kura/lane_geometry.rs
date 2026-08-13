@@ -1,5 +1,4 @@
 //! Crash-atomic Kura lane-geometry transitions.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -8,7 +7,6 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
-
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -24,9 +22,7 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, DecodeAll, Encode};
 #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
-use rustix::fs::{
-    AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, openat, statat, unlinkat,
-};
+use rustix::fs::{AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, openat, statat, unlinkat};
 #[cfg(any(
     target_vendor = "apple",
     target_os = "linux",
@@ -34,7 +30,6 @@ use rustix::fs::{
     target_os = "redox"
 ))]
 use rustix::fs::{RenameFlags, renameat_with};
-
 use super::{
     AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES, AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
     AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX, AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE,
@@ -337,7 +332,6 @@ fn inject_geometry_move_target_collision_for_test(_target: &Path, _directory: bo
 #[cfg(all(test, unix))]
 fn inject_geometry_move_parent_substitution_for_test(target_parent: &Path) -> Result<()> {
     use std::os::unix::fs::symlink;
-
     let substitution = {
         let mut hook = GEOMETRY_MOVE_PARENT_SUBSTITUTION
             .lock()
@@ -8038,7 +8032,6 @@ impl Kura {
         entries_seen: &mut usize,
     ) -> Result<()> {
         use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
-
         if depth > MAX_GEOMETRY_ARCHIVE_DEPTH {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -9540,7 +9533,6 @@ impl Kura {
         context: &str,
     ) -> Result<BoundProgressDirectorySnapshot> {
         use std::{ffi::OsStr, os::unix::ffi::OsStrExt as _};
-
         if !self.geometry_bound_progress_directory_unchanged(directory) {
             return Err(self.geometry_error_owned(
                 ErrorKind::InvalidData,

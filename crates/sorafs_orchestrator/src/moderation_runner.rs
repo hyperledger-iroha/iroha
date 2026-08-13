@@ -4,18 +4,15 @@
 //! files are opened beneath an explicit artefact root without following symbolic
 //! links, verified against their signed fingerprints, decoded with hard Norito
 //! limits, and retained as immutable in-memory values before a service binds.
-
 use std::{
     fs::{self, File, Metadata},
     io::{self, Read},
     path::{Path, PathBuf},
 };
-
 #[cfg(unix)]
 use std::fs::OpenOptions;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-
 #[cfg(feature = "cli-orchestrator")]
 use iroha_crypto::{KeyPair, PrivateKey, PublicKey, SignatureOf};
 use iroha_data_model::sorafs::moderation::{
@@ -33,11 +30,9 @@ use iroha_data_model::sorafs::moderation::{
 };
 use norito::core::DecodeLimits;
 use thiserror::Error;
-
 const MODEL_DECODE_MAX_ELEMENTS: usize =
     MODERATION_MODEL_FEATURE_COUNT_V1 + MODERATION_MODEL_MAX_CALIBRATION_KNOTS_V1 * 2 + 32;
 const MODEL_DECODE_MAX_DEPTH: usize = 16;
-
 /// One model artefact and its signed combination weight, loaded into memory.
 #[derive(Clone, Debug)]
 struct LoadedModerationModelV1 {
@@ -45,13 +40,10 @@ struct LoadedModerationModelV1 {
     artifact: ModerationModelArtifactV1,
     weight_bps: u16,
 }
-
 #[cfg(unix)]
 type FileIdentity = (u64, u64, u64, i64, i64);
-
 #[cfg(not(unix))]
 type ValidatedArtifactRoot = PathBuf;
-
 #[cfg(unix)]
 #[derive(Debug)]
 struct ValidatedArtifactRoot {
@@ -60,7 +52,6 @@ struct ValidatedArtifactRoot {
     identity: FileIdentity,
     _handle: File,
 }
-
 /// Immutable manifest-bound moderation engine shared by all runner transports.
 #[derive(Clone, Debug)]
 pub struct LoadedModerationRunnerV1 {
@@ -68,7 +59,6 @@ pub struct LoadedModerationRunnerV1 {
     models: Vec<LoadedModerationModelV1>,
     max_payload_bytes: u32,
 }
-
 /// Complete deterministic result returned by the shared model engine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModerationInferenceV1 {
@@ -77,7 +67,6 @@ pub struct ModerationInferenceV1 {
     /// Per-model scores in canonical model-id order.
     pub model_scores: Vec<ModerationModelScoreV1>,
 }
-
 /// Verified deterministic runner plus externally anchored result-signing state.
 #[cfg(feature = "cli-orchestrator")]
 #[derive(Debug)]
@@ -89,7 +78,6 @@ pub struct LoadedModerationSigningRunnerV1 {
     signer_public_key: PublicKey,
     signer_private_key: PrivateKey,
 }
-
 /// Errors raised while preparing, loading, or executing model artefacts.
 #[derive(Debug, Error)]
 pub enum ModerationRunnerError {
@@ -218,7 +206,6 @@ pub enum ModerationRunnerError {
     #[error("produced invalid signed moderation result: {0}")]
     InvalidSignedResult(#[from] ModerationSignedResultError),
 }
-
 impl LoadedModerationRunnerV1 {
     /// Load and fully verify every signed artefact below `artifact_root`.
     ///
@@ -267,19 +254,16 @@ impl LoadedModerationRunnerV1 {
             max_payload_bytes,
         })
     }
-
     /// Return the verified signed manifest used by this engine.
     #[must_use]
     pub fn manifest(&self) -> &ModerationReproManifestV1 {
         &self.manifest
     }
-
     /// Return the strictest input bound across every loaded model.
     #[must_use]
     pub fn max_payload_bytes(&self) -> u32 {
         self.max_payload_bytes
     }
-
     /// Re-encode the immutable verified artefacts for supervised bundle output.
     ///
     /// Returning bytes from the in-memory values avoids reopening attacker-
@@ -309,7 +293,6 @@ impl LoadedModerationRunnerV1 {
         }
         Ok(artifacts)
     }
-
     /// Execute all models and combine their calibrated results deterministically.
     pub fn infer(
         &self,
@@ -331,7 +314,6 @@ impl LoadedModerationRunnerV1 {
                 maximum: effective_maximum,
             });
         }
-
         let features = extract_features(payload)?;
         let mut model_scores = Vec::new();
         model_scores
@@ -360,7 +342,6 @@ impl LoadedModerationRunnerV1 {
         })
     }
 }
-
 #[cfg(feature = "cli-orchestrator")]
 impl LoadedModerationSigningRunnerV1 {
     /// Bind a fully verified engine to an externally authenticated trust policy
@@ -411,25 +392,21 @@ impl LoadedModerationSigningRunnerV1 {
             signer_private_key,
         })
     }
-
     /// Return the verified deterministic engine.
     #[must_use]
     pub fn runner(&self) -> &LoadedModerationRunnerV1 {
         &self.runner
     }
-
     /// Return the externally authenticated trust policy.
     #[must_use]
     pub fn trust_policy(&self) -> &ModerationTrustPolicyV1 {
         &self.trust_policy
     }
-
     /// Return the public key used for signed results.
     #[must_use]
     pub fn signer_public_key(&self) -> &PublicKey {
         &self.signer_public_key
     }
-
     /// Infer and sign one manifest-, policy-, payload-, and timestamp-bound
     /// result. The caller must supply trusted wall-clock time, not a client-
     /// controlled timestamp.
@@ -472,7 +449,6 @@ impl LoadedModerationSigningRunnerV1 {
                 "signer authorization has no remaining result lifetime".to_string(),
             ));
         }
-
         let inference = self.runner.infer(payload, service_max_payload_bytes)?;
         let manifest = self.runner.manifest();
         let verdict = moderation_verdict(
@@ -514,7 +490,6 @@ impl LoadedModerationSigningRunnerV1 {
         Ok(result)
     }
 }
-
 #[cfg(feature = "cli-orchestrator")]
 fn moderation_verdict(score_bps: u16, quarantine_bps: u16, escalate_bps: u16) -> &'static str {
     if score_bps >= escalate_bps {
@@ -525,7 +500,6 @@ fn moderation_verdict(score_bps: u16, quarantine_bps: u16, escalate_bps: u16) ->
         "pass"
     }
 }
-
 fn weighted_score_half_up(
     weighted_score: u64,
     total_weight: u64,
@@ -539,7 +513,6 @@ fn weighted_score_half_up(
         / total_weight;
     u16::try_from(rounded_score).map_err(|_| ModerationRunnerError::ArithmeticOverflow)
 }
-
 /// Canonically encode and validate an artefact for release tooling and tests.
 pub fn canonical_model_artifact_bytes(
     artifact: &ModerationModelArtifactV1,
@@ -553,7 +526,6 @@ pub fn canonical_model_artifact_bytes(
     norito::to_bytes(artifact)
         .map_err(|error| ModerationRunnerError::ArtifactEncode(error.to_string()))
 }
-
 /// Build the exact signed fingerprint and canonical bytes for an artefact.
 pub fn fingerprint_model_artifact(
     artifact_path: impl Into<String>,
@@ -590,7 +562,6 @@ pub fn fingerprint_model_artifact(
     };
     Ok((fingerprint, bytes))
 }
-
 #[cfg(not(unix))]
 fn validate_artifact_root(_root: &Path) -> Result<PathBuf, ModerationRunnerError> {
     Err(ModerationRunnerError::InvalidArtifactRoot {
@@ -598,7 +569,6 @@ fn validate_artifact_root(_root: &Path) -> Result<PathBuf, ModerationRunnerError
         reason: "secure no-follow artefact loading is unavailable on this platform".to_owned(),
     })
 }
-
 #[cfg(unix)]
 fn validate_artifact_root(root: &Path) -> Result<ValidatedArtifactRoot, ModerationRunnerError> {
     let metadata = fs::symlink_metadata(root).map_err(|source| {
@@ -662,7 +632,6 @@ fn validate_artifact_root(root: &Path) -> Result<ValidatedArtifactRoot, Moderati
         _handle: handle,
     })
 }
-
 #[cfg(unix)]
 fn verify_artifact_root(root: &ValidatedArtifactRoot) -> Result<(), ModerationRunnerError> {
     for path in [&root.configured, &root.canonical] {
@@ -684,12 +653,10 @@ fn verify_artifact_root(root: &ValidatedArtifactRoot) -> Result<(), ModerationRu
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn verify_artifact_root(_root: &PathBuf) -> Result<(), ModerationRunnerError> {
     unreachable!("non-Unix artifact roots fail closed during validation")
 }
-
 #[cfg(unix)]
 fn load_model(
     root: &ValidatedArtifactRoot,
@@ -697,7 +664,6 @@ fn load_model(
 ) -> Result<ModerationModelArtifactV1, ModerationRunnerError> {
     load_model_with_post_open_hook(root, fingerprint, |_| {})
 }
-
 #[cfg(unix)]
 fn load_model_with_post_open_hook<F>(
     root: &ValidatedArtifactRoot,
@@ -720,7 +686,6 @@ where
             reason: "canonical path escapes the configured artefact root".to_owned(),
         });
     }
-
     let before =
         fs::symlink_metadata(&canonical).map_err(|source| ModerationRunnerError::ArtifactIo {
             path: canonical.clone(),
@@ -735,7 +700,6 @@ where
     reject_linked_artifact(&canonical, &before)?;
     verify_size(&canonical, &before, fingerprint.artifact_bytes)?;
     let before_identity = file_identity(&before);
-
     let mut options = OpenOptions::new();
     options.read(true);
     set_no_follow_flag(&mut options);
@@ -774,7 +738,6 @@ where
     if blake3::hash(&bytes).as_bytes() != &fingerprint.artifact_digest {
         return Err(ModerationRunnerError::ArtifactDigest { path: canonical });
     }
-
     let artifact_limit = usize::try_from(MODERATION_MODEL_MAX_ARTIFACT_BYTES_V1)
         .map_err(|_| ModerationRunnerError::ArithmeticOverflow)?;
     let limits = DecodeLimits::new(
@@ -806,7 +769,6 @@ where
     verify_fingerprint(&canonical, fingerprint, &artifact)?;
     Ok(artifact)
 }
-
 #[cfg(not(unix))]
 fn load_model(
     root: &ValidatedArtifactRoot,
@@ -817,7 +779,6 @@ fn load_model(
         reason: "secure no-follow artefact loading is unavailable on this platform".to_owned(),
     })
 }
-
 fn reject_symlink_components(root: &Path, relative: &str) -> Result<(), ModerationRunnerError> {
     let mut current = root.to_path_buf();
     for component in relative.split('/') {
@@ -836,7 +797,6 @@ fn reject_symlink_components(root: &Path, relative: &str) -> Result<(), Moderati
     }
     Ok(())
 }
-
 fn verify_size(
     path: &Path,
     metadata: &Metadata,
@@ -851,7 +811,6 @@ fn verify_size(
     }
     Ok(())
 }
-
 fn read_exact_bounded(
     file: File,
     expected: u64,
@@ -887,7 +846,6 @@ fn read_exact_bounded(
     }
     Ok(bytes)
 }
-
 #[cfg(unix)]
 fn reject_linked_artifact(path: &Path, metadata: &Metadata) -> Result<(), ModerationRunnerError> {
     if metadata.nlink() != 1 {
@@ -901,7 +859,6 @@ fn reject_linked_artifact(path: &Path, metadata: &Metadata) -> Result<(), Modera
     }
     Ok(())
 }
-
 fn verify_fingerprint(
     path: &Path,
     fingerprint: &ModerationModelFingerprintV1,
@@ -934,7 +891,6 @@ fn verify_fingerprint(
     }
     Ok(())
 }
-
 fn extract_features(
     payload: &[u8],
 ) -> Result<[u64; MODERATION_MODEL_FEATURE_COUNT_V1], ModerationRunnerError> {
@@ -973,7 +929,6 @@ fn extract_features(
     }
     Ok(counts)
 }
-
 fn evaluate_model(
     artifact: &ModerationModelArtifactV1,
     features: &[u64; MODERATION_MODEL_FEATURE_COUNT_V1],
@@ -989,7 +944,6 @@ fn evaluate_model(
     let raw = i64::try_from(raw).map_err(|_| ModerationRunnerError::ArithmeticOverflow)?;
     calibrate(raw, &artifact.calibration)
 }
-
 fn calibrate(
     raw: i64,
     knots: &[iroha_data_model::sorafs::moderation::ModerationCalibrationKnotV1],
@@ -1021,7 +975,6 @@ fn calibrate(
         .ok_or(ModerationRunnerError::ArithmeticOverflow)?
         .score_bps)
 }
-
 #[cfg(unix)]
 fn file_identity(metadata: &Metadata) -> (u64, u64, u64, i64, i64) {
     (
@@ -1032,17 +985,14 @@ fn file_identity(metadata: &Metadata) -> (u64, u64, u64, i64, i64) {
         metadata.mtime_nsec(),
     )
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -1058,7 +1008,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -1075,7 +1024,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{KeyPair, SignatureOf};
@@ -1088,9 +1036,7 @@ mod tests {
         moderation_model_required_operations_v1,
     };
     use tempfile::tempdir;
-
     use super::*;
-
     fn artifact(model_id: [u8; 16], weight: i32) -> ModerationModelArtifactV1 {
         let calibration = vec![
             ModerationCalibrationKnotV1 {
@@ -1118,7 +1064,6 @@ mod tests {
             calibration,
         }
     }
-
     fn signed_manifest(models: Vec<ModerationModelFingerprintV1>) -> ModerationReproManifestV1 {
         let mut body = ModerationReproBodyV1 {
             schema_version: 1,
@@ -1156,7 +1101,6 @@ mod tests {
             }],
         }
     }
-
     fn signed_trust_policy(
         manifest: &ModerationReproManifestV1,
         governance: &KeyPair,
@@ -1198,7 +1142,6 @@ mod tests {
             body,
         }
     }
-
     fn load_raw_artifact_error(
         invalid_artifact: &ModerationModelArtifactV1,
     ) -> ModerationRunnerError {
@@ -1218,7 +1161,6 @@ mod tests {
         )
         .expect_err("invalid raw artefact must fail closed")
     }
-
     fn constant_artifact(model_id: [u8; 16], score_bps: u16) -> ModerationModelArtifactV1 {
         let calibration = vec![
             ModerationCalibrationKnotV1 {
@@ -1244,7 +1186,6 @@ mod tests {
             calibration,
         }
     }
-
     #[test]
     fn loads_and_scores_canonical_models_deterministically() {
         let root = tempdir().expect("root");
@@ -1259,7 +1200,6 @@ mod tests {
             [3; 32],
         )
         .expect("load runner");
-
         let first = runner.infer(b"aaaaaaaa", 1024).expect("score");
         let second = runner.infer(b"aaaaaaaa", 1024).expect("score");
         assert_eq!(first, second);
@@ -1271,7 +1211,6 @@ mod tests {
             vec![("model.norito".to_owned(), bytes)]
         );
     }
-
     #[test]
     fn signing_runner_emits_policy_bound_fresh_result() {
         let root = tempdir().expect("root");
@@ -1296,7 +1235,6 @@ mod tests {
             100,
         )
         .expect("bind signer");
-
         let result = signing_runner
             .screen_signed(
                 b"payload",
@@ -1319,7 +1257,6 @@ mod tests {
             .validate(&manifest, &policy, 100)
             .expect("result independently verifies");
     }
-
     #[test]
     fn signing_runner_rejects_untrusted_and_revoked_keys() {
         let root = tempdir().expect("root");
@@ -1333,7 +1270,6 @@ mod tests {
         let unauthorized = KeyPair::try_random().expect("unauthorized key");
         let policy = signed_trust_policy(&manifest, &governance, &authorized, None);
         let anchors = std::iter::once(governance.public_key().clone()).collect();
-
         let runner =
             LoadedModerationRunnerV1::load_verified(manifest.clone(), root.path(), [3; 32])
                 .expect("load runner");
@@ -1349,7 +1285,6 @@ mod tests {
             .expect_err("key absent from policy must fail"),
             ModerationRunnerError::InvalidSigningKey(_)
         ));
-
         let revoked_policy = signed_trust_policy(&manifest, &governance, &authorized, Some(100));
         let anchors = std::iter::once(governance.public_key().clone()).collect();
         let runner = LoadedModerationRunnerV1::load_verified(manifest, root.path(), [3; 32])
@@ -1367,7 +1302,6 @@ mod tests {
             ModerationRunnerError::InvalidSigningKey(_)
         ));
     }
-
     #[test]
     fn signing_runner_clips_result_expiry_to_future_revocation() {
         let root = tempdir().expect("root");
@@ -1401,7 +1335,6 @@ mod tests {
             .expect("clipped result validates");
         assert!(result.validate(&manifest, &policy, 130).is_err());
     }
-
     #[test]
     fn weighted_ensemble_uses_half_up_rounding() {
         assert_eq!(weighted_score_half_up(1, 2).expect("round"), 1);
@@ -1409,7 +1342,6 @@ mod tests {
         assert_eq!(weighted_score_half_up(2, 2).expect("round"), 1);
         assert!(weighted_score_half_up(0, 0).is_err());
     }
-
     #[test]
     fn fingerprint_verifier_binds_every_decoded_execution_field() {
         let artifact = artifact([1; 16], 1);
@@ -1417,7 +1349,6 @@ mod tests {
             .expect("fingerprint");
         let path = Path::new("model.norito");
         verify_fingerprint(path, &fingerprint, &artifact).expect("matching fingerprint");
-
         macro_rules! assert_mismatch {
             ($field:literal, $mutate:expr) => {{
                 let mut changed = fingerprint.clone();
@@ -1429,7 +1360,6 @@ mod tests {
                 ));
             }};
         }
-
         assert_mismatch!("model_id", |value: &mut ModerationModelFingerprintV1| {
             value.model_id = [2; 16];
         });
@@ -1463,13 +1393,11 @@ mod tests {
                 value.weights_digest[0] ^= 1;
             }
         );
-
         // Engine and feature-profile enums have exactly one first-release
         // variant. Unknown serialized discriminants are exercised by the
         // malformed-Norito loader test below; no second safe Rust value exists
         // with which to construct a semantic mismatch.
     }
-
     #[test]
     fn rejects_every_invalid_artifact_shape_and_resource_claim() {
         let mut invalid = artifact([1; 16], 1);
@@ -1481,7 +1409,6 @@ mod tests {
                 ..
             }
         ));
-
         let mut invalid = artifact([1; 16], 1);
         invalid.model_id = [0; 16];
         assert!(matches!(
@@ -1491,7 +1418,6 @@ mod tests {
                 ..
             }
         ));
-
         for max_input_bytes in [0, MODERATION_MODEL_MAX_INPUT_BYTES_V1 + 1] {
             let mut invalid = artifact([1; 16], 1);
             invalid.max_input_bytes = max_input_bytes;
@@ -1503,7 +1429,6 @@ mod tests {
                 }
             ));
         }
-
         let mut invalid = artifact([1; 16], 1);
         invalid.weights.pop();
         assert!(matches!(
@@ -1513,7 +1438,6 @@ mod tests {
                 ..
             }
         ));
-
         for calibration in [
             vec![ModerationCalibrationKnotV1 {
                 input: 0,
@@ -1536,7 +1460,6 @@ mod tests {
                 }
             ));
         }
-
         let mut invalid = artifact([1; 16], 1);
         invalid.calibration[1].input = invalid.calibration[0].input;
         assert!(matches!(
@@ -1546,7 +1469,6 @@ mod tests {
                 ..
             }
         ));
-
         for calibration in [
             vec![
                 ModerationCalibrationKnotV1 {
@@ -1579,7 +1501,6 @@ mod tests {
                 }
             ));
         }
-
         let mut invalid = artifact([1; 16], 1);
         invalid.working_memory_bytes += 1;
         assert!(matches!(
@@ -1589,7 +1510,6 @@ mod tests {
                 ..
             }
         ));
-
         let mut invalid = artifact([1; 16], 1);
         invalid.max_operations += 1;
         assert!(matches!(
@@ -1599,7 +1519,6 @@ mod tests {
                 ..
             }
         ));
-
         let mut invalid = artifact([1; 16], 0);
         invalid.bias = i64::MAX;
         invalid.weights[0] = 1;
@@ -1611,7 +1530,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn exact_payload_bounds_and_extreme_valid_accumulator_are_deterministic() {
         let root = tempdir().expect("root");
@@ -1626,7 +1544,6 @@ mod tests {
             [3; 32],
         )
         .expect("load runner");
-
         runner.infer(&[0], 1024).expect("one-byte lower bound");
         let maximum_payload = vec![0; 1024];
         let first = runner
@@ -1641,7 +1558,6 @@ mod tests {
             Err(ModerationRunnerError::PayloadTooLarge { maximum: 1024, .. })
         ));
     }
-
     #[test]
     fn multi_model_weights_zero_weight_and_score_order_are_exact() {
         let root = tempdir().expect("root");
@@ -1669,7 +1585,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![[1; 16], [2; 16]]
         );
-
         let root = tempdir().expect("zero-weight root");
         let (zero, bytes_a) =
             fingerprint_model_artifact("a.norito", &model_a, Some(0)).expect("zero fingerprint");
@@ -1690,7 +1605,6 @@ mod tests {
                 .combined_score_bps,
             9_000
         );
-
         let error = LoadedModerationRunnerV1::load_verified(
             signed_manifest(vec![zero]),
             root.path(),
@@ -1704,7 +1618,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn rejects_tampered_and_oversized_inputs() {
         let root = tempdir().expect("root");
@@ -1721,7 +1634,6 @@ mod tests {
             ),
             Err(ModerationRunnerError::ArtifactDigest { .. })
         ));
-
         let root = tempdir().expect("root");
         let model = artifact([1; 16], 1);
         let (fingerprint, bytes) =
@@ -1742,11 +1654,9 @@ mod tests {
             Err(ModerationRunnerError::EmptyPayload)
         ));
     }
-
     #[test]
     fn loader_rejects_signed_size_digest_trailing_and_decode_attacks() {
         let model = artifact([1; 16], 1);
-
         let root = tempdir().expect("size root");
         let (mut fingerprint, bytes) =
             fingerprint_model_artifact("model.norito", &model, None).expect("fingerprint");
@@ -1760,7 +1670,6 @@ mod tests {
             ),
             Err(ModerationRunnerError::ArtifactSize { .. })
         ));
-
         let root = tempdir().expect("digest root");
         let (mut fingerprint, bytes) =
             fingerprint_model_artifact("model.norito", &model, None).expect("fingerprint");
@@ -1774,7 +1683,6 @@ mod tests {
             ),
             Err(ModerationRunnerError::ArtifactDigest { .. })
         ));
-
         let root = tempdir().expect("trailing root");
         let (mut fingerprint, mut bytes) =
             fingerprint_model_artifact("model.norito", &model, None).expect("fingerprint");
@@ -1791,7 +1699,6 @@ mod tests {
             Err(ModerationRunnerError::ArtifactDecode { .. })
                 | Err(ModerationRunnerError::NonCanonicalArtifact { .. })
         ));
-
         let root = tempdir().expect("decode root");
         let (mut fingerprint, _) =
             fingerprint_model_artifact("model.norito", &model, None).expect("fingerprint");
@@ -1813,7 +1720,6 @@ mod tests {
                 | Err(ModerationRunnerError::InvalidArtifact { .. })
         ));
     }
-
     #[test]
     fn bounded_reader_rejects_short_long_and_impossible_capacities() {
         let root = tempdir().expect("root");
@@ -1827,7 +1733,6 @@ mod tests {
                 ..
             })
         ));
-
         let long = root.path().join("long");
         fs::write(&long, b"abcde").expect("write long");
         assert!(matches!(
@@ -1838,7 +1743,6 @@ mod tests {
                 ..
             })
         ));
-
         let impossible = root.path().join("impossible");
         fs::write(&impossible, []).expect("write empty");
         assert!(
@@ -1850,7 +1754,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn calibration_interpolation_and_feature_extraction_cover_boundaries() {
         let knots = [
@@ -1872,7 +1775,6 @@ mod tests {
         assert_eq!(calibrate(0, &knots).expect("exact knot"), 5_000);
         assert_eq!(calibrate(5, &knots).expect("upper interpolation"), 7_500);
         assert_eq!(calibrate(11, &knots).expect("upper clamp"), 10_000);
-
         let features = extract_features(b"aa").expect("features");
         assert_eq!(features[usize::from(b'a')], 10_000);
         let bigram_bin = 256 + (usize::from(b'a') * 251 + usize::from(b'a') * 17) % 256;
@@ -1886,7 +1788,6 @@ mod tests {
             u64::from(MODERATION_REPRO_MAX_BPS)
         );
     }
-
     #[test]
     fn signed_seed_provenance_does_not_influence_integer_inference() {
         let root = tempdir().expect("root");
@@ -1910,7 +1811,6 @@ mod tests {
             signature: SignatureOf::try_new(key.private_key(), &second_manifest.body)
                 .expect("signature"),
         }];
-
         let first = LoadedModerationRunnerV1::load_verified(first_manifest, root.path(), [3; 32])
             .expect("first runner");
         let second = LoadedModerationRunnerV1::load_verified(second_manifest, root.path(), [3; 32])
@@ -1922,7 +1822,6 @@ mod tests {
                 .expect("second score")
         );
     }
-
     #[test]
     fn rejects_wrong_runner_hash_and_manifest_digest() {
         let root = tempdir().expect("root");
@@ -1935,7 +1834,6 @@ mod tests {
             LoadedModerationRunnerV1::load_verified(manifest.clone(), root.path(), [9; 32]),
             Err(ModerationRunnerError::RunnerHashMismatch)
         ));
-
         let mut changed = manifest;
         changed.body.manifest_digest[0] ^= 1;
         assert!(matches!(
@@ -1945,12 +1843,10 @@ mod tests {
             ))
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_symlinked_model() {
         use std::os::unix::fs::symlink;
-
         let root = tempdir().expect("root");
         let outside = tempdir().expect("outside");
         let artifact = artifact([1; 16], 1);
@@ -1971,12 +1867,10 @@ mod tests {
             Err(ModerationRunnerError::UnsafeArtifactPath { .. })
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_nested_symlinks_and_hard_link_aliases() {
         use std::os::unix::fs::symlink;
-
         let root = tempdir().expect("root");
         let outside = tempdir().expect("outside");
         let model = artifact([1; 16], 1);
@@ -1994,7 +1888,6 @@ mod tests {
             ),
             Err(ModerationRunnerError::UnsafeArtifactPath { .. })
         ));
-
         let root = tempdir().expect("hard-link root");
         let (fingerprint, bytes) =
             fingerprint_model_artifact("model.norito", &model, None).expect("fingerprint");
@@ -2010,7 +1903,6 @@ mod tests {
             Err(ModerationRunnerError::UnsafeArtifactPath { .. })
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn detects_file_replacement_after_the_verified_handle_is_open() {
@@ -2024,19 +1916,16 @@ mod tests {
         let replacement = root.path().join("replacement.norito");
         fs::write(&replacement, &bytes).expect("write replacement");
         let displaced = root.path().join("displaced.norito");
-
         let error = load_model_with_post_open_hook(&validated_root, &fingerprint, |canonical| {
             fs::rename(canonical, &displaced).expect("displace opened inode");
             fs::rename(&replacement, canonical).expect("replace artifact path");
         })
         .expect_err("identity replacement must fail");
-
         assert!(matches!(
             error,
             ModerationRunnerError::ArtifactChanged { .. }
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn detects_artifact_root_replacement_after_the_verified_handle_is_open() {
@@ -2049,14 +1938,12 @@ mod tests {
             fingerprint_model_artifact("model.norito", &model, None).expect("fingerprint");
         fs::write(configured.join("model.norito"), &bytes).expect("write model");
         let validated_root = validate_artifact_root(&configured).expect("validate root");
-
         let error = load_model_with_post_open_hook(&validated_root, &fingerprint, |_| {
             fs::rename(&configured, &displaced).expect("displace opened root");
             fs::create_dir(&configured).expect("replace configured root");
             fs::write(configured.join("model.norito"), &bytes).expect("write replacement model");
         })
         .expect_err("root identity replacement must fail");
-
         assert!(matches!(
             error,
             ModerationRunnerError::ArtifactChanged { .. }
@@ -2067,12 +1954,10 @@ mod tests {
             Err(ModerationRunnerError::InvalidArtifactRoot { .. })
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_symlinked_or_replaced_artifact_root() {
         use std::os::unix::fs::symlink;
-
         let parent = tempdir().expect("parent");
         let real = parent.path().join("real");
         fs::create_dir(&real).expect("real root");
@@ -2082,7 +1967,6 @@ mod tests {
             validate_artifact_root(&linked),
             Err(ModerationRunnerError::InvalidArtifactRoot { .. })
         ));
-
         let configured = parent.path().join("configured");
         let moved = parent.path().join("moved");
         fs::create_dir(&configured).expect("configured root");

@@ -5,13 +5,10 @@
 //! ```bash
 //! CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph --root --release --example apply_blocks
 //! ```
-
 mod apply_blocks;
-
 use apply_blocks::StateApplyBlocks;
 use iroha_config::base::{env::std_env, read::ConfigReader};
 use iroha_logger::Config;
-
 fn main() {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

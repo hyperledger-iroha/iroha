@@ -1,7 +1,6 @@
 //! Python bindings exposing a growing subset of the Iroha SDK surface.
 #![deny(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)] // PyO3 generates historical wrappers that require this on edition 2024
-
 mod connect_key_bindings;
 #[cfg(test)]
 mod crypto_admission_tests;
@@ -11,7 +10,6 @@ pub mod privacy_wallet_bundle;
 pub mod privacy_wallet_worker;
 mod sorafs_orderbook_submission;
 mod zk_vk_draft;
-
 use core::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     time::Duration,
@@ -27,7 +25,6 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::hash as blake3_hash;
 use futures::executor::block_on;
@@ -134,6 +131,12 @@ use iroha_data_model::{
     smart_contract::{ContractAddress, ContractAlias},
     sorafs::{
         capacity::ProviderId,
+        orderbook_submission::{
+            parse_sorafs_orderbook_cancel_reason_v1, parse_sorafs_orderbook_decimal_u64_v1,
+            parse_sorafs_orderbook_fee_bps_v1, parse_sorafs_orderbook_payload_kind_v1,
+            parse_sorafs_orderbook_side_v1, parse_sorafs_orderbook_tier_v1,
+            parse_sorafs_orderbook_xor_quantity_v1, validate_sorafs_orderbook_owner_account_v1,
+        },
         pin_registry::{
             ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
             ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
@@ -190,10 +193,9 @@ use sorafs_car::{
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
-    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
-    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
-    OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
-    OrderbookValidationPayloadKindV1, ValidationOutcomeV1,
+    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, OrderCancelReasonV1, OrderSideV1,
+    OrderTierV1, OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1,
+    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, ValidationOutcomeV1,
     alias_cache::{
         AliasCachePolicy, AliasProofState, decode_alias_proof_untrusted_signers, unix_now_secs,
     },
@@ -233,7 +235,6 @@ use sorafs_orchestrator::{
 use tokio::runtime::Runtime;
 use url::{Host, Url};
 use zeroize::Zeroizing;
-
 /// Raised when a non-Ed25519 key is passed to an Ed25519-only helper.
 const ERR_EXPECTED_ED25519: &str = "expected Ed25519 key material";
 const ERR_SM2_SIGNATURE_LEN: &str = "sm2 signature must be 64 bytes";
@@ -4306,100 +4307,35 @@ fn validate_sorafs_reference_governance_cid_py<'a>(
     Ok(Some(cid))
 }
 fn parse_sorafs_orderbook_payload_kind(kind: &str) -> PyResult<OrderbookValidationPayloadKindV1> {
-    match kind {
-        "order-request" => Ok(OrderbookValidationPayloadKindV1::OrderRequest),
-        "order-cancel" => Ok(OrderbookValidationPayloadKindV1::OrderCancel),
-        "trade-event" => Ok(OrderbookValidationPayloadKindV1::TradeEvent),
-        "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
-        "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
-        _ => Err(PyValueError::new_err(format!(
-            "unsupported SoraFS orderbook payload kind `{kind}`"
-        ))),
-    }
-}
-fn parse_sorafs_orderbook_side_py(side: &str) -> PyResult<OrderSideV1> {
-    match side {
-        "bid" => Ok(OrderSideV1::Bid),
-        "ask" => Ok(OrderSideV1::Ask),
-        _ => Err(PyValueError::new_err(format!(
-            "unsupported SoraFS orderbook side `{side}`"
-        ))),
-    }
-}
-fn parse_sorafs_orderbook_tier_py(tier: &str) -> PyResult<OrderTierV1> {
-    match tier {
-        "hot" => Ok(OrderTierV1::Hot),
-        "warm" => Ok(OrderTierV1::Warm),
-        "archive" => Ok(OrderTierV1::Archive),
-        _ => Err(PyValueError::new_err(format!(
-            "unsupported SoraFS orderbook tier `{tier}`"
-        ))),
-    }
-}
-fn parse_sorafs_orderbook_cancel_reason_py(reason: &str) -> PyResult<OrderCancelReasonV1> {
-    match reason {
-        "owner_requested" => Ok(OrderCancelReasonV1::OwnerRequested),
-        "expired" => Ok(OrderCancelReasonV1::Expired),
-        "governance" => Ok(OrderCancelReasonV1::Governance),
-        "replaced" => Ok(OrderCancelReasonV1::Replaced),
-        _ => Err(PyValueError::new_err(format!(
-            "unsupported SoraFS orderbook cancel reason `{reason}`"
-        ))),
-    }
-}
-fn parse_sorafs_decimal_u64_text_py(value: &str, context: &str) -> PyResult<u64> {
-    value.trim().parse::<u64>().map_err(|err| {
+    parse_sorafs_orderbook_payload_kind_v1(kind).ok_or_else(|| {
         PyValueError::new_err(format!(
-            "{context} must be an unsigned 64-bit decimal integer: {err}"
+            "unsupported SoraFS orderbook payload kind `{kind}`"
         ))
     })
 }
-const SORAFS_XOR_QUANTITY_MAX_TEXT_LEN: usize = 155;
-fn parse_sorafs_xor_quantity_text_py(value: &str, context: &str) -> PyResult<XorQuantity> {
-    if value.len() > SORAFS_XOR_QUANTITY_MAX_TEXT_LEN {
-        return Err(PyValueError::new_err(format!(
-            "{context} exceeds the bounded XOR quantity text length"
-        )));
-    }
-    let (whole, fraction) = match value.split_once('.') {
-        Some((whole, fraction)) if !fraction.is_empty() && !fraction.contains('.') => {
-            (whole, Some(fraction))
-        }
-        Some(_) => {
-            return Err(PyValueError::new_err(format!(
-                "{context} must use canonical XOR quantity spelling"
-            )));
-        }
-        None => (value, None),
-    };
-    let canonical_whole = !whole.is_empty()
-        && whole.bytes().all(|byte| byte.is_ascii_digit())
-        && (whole == "0" || !whole.starts_with('0'));
-    let canonical_fraction = fraction.is_none_or(|digits| {
-        digits.len() <= 9
-            && digits.bytes().all(|byte| byte.is_ascii_digit())
-            && !digits.ends_with('0')
-    });
-    if !canonical_whole || !canonical_fraction {
-        return Err(PyValueError::new_err(format!(
-            "{context} must use canonical non-negative XOR quantity spelling with at most 9 fractional digits"
-        )));
-    }
-    let quantity = value.parse::<XorQuantity>().map_err(|err| {
+fn parse_sorafs_orderbook_side_py(side: &str) -> PyResult<OrderSideV1> {
+    parse_sorafs_orderbook_side_v1(side)
+        .ok_or_else(|| PyValueError::new_err(format!("unsupported SoraFS orderbook side `{side}`")))
+}
+fn parse_sorafs_orderbook_tier_py(tier: &str) -> PyResult<OrderTierV1> {
+    parse_sorafs_orderbook_tier_v1(tier)
+        .ok_or_else(|| PyValueError::new_err(format!("unsupported SoraFS orderbook tier `{tier}`")))
+}
+fn parse_sorafs_orderbook_cancel_reason_py(reason: &str) -> PyResult<OrderCancelReasonV1> {
+    parse_sorafs_orderbook_cancel_reason_v1(reason, "owner_requested").ok_or_else(|| {
         PyValueError::new_err(format!(
-            "{context} must be a non-negative XOR quantity with at most 9 fractional digits: {err}"
+            "unsupported SoraFS orderbook cancel reason `{reason}`"
         ))
-    })?;
-    if quantity.to_string() != value {
-        return Err(PyValueError::new_err(format!(
-            "{context} must use canonical XOR quantity spelling"
-        )));
-    }
-    Ok(quantity)
+    })
+}
+fn parse_sorafs_decimal_u64_text_py(value: &str, context: &str) -> PyResult<u64> {
+    parse_sorafs_orderbook_decimal_u64_v1(value, context).map_err(PyValueError::new_err)
+}
+fn parse_sorafs_xor_quantity_text_py(value: &str, context: &str) -> PyResult<XorQuantity> {
+    parse_sorafs_orderbook_xor_quantity_v1(value, context).map_err(PyValueError::new_err)
 }
 fn parse_sorafs_fee_bps_py(value: u32, context: &str) -> PyResult<u16> {
-    u16::try_from(value)
-        .map_err(|_| PyValueError::new_err(format!("{context} must fit in u16 basis points")))
+    parse_sorafs_orderbook_fee_bps_v1(value, context).map_err(PyValueError::new_err)
 }
 fn sorafs_fixed32_from_bytes_py(value: &[u8], context: &str) -> PyResult<[u8; 32]> {
     fixed_array::<32>(value, context)
@@ -4590,15 +4526,7 @@ fn sorafs_build_signed_orderbook_order_cancel_py(
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
 fn validate_sorafs_orderbook_owner_account_py(owner_account: &[u8]) -> PyResult<()> {
-    if owner_account.is_empty() {
-        return Err(PyValueError::new_err("owner_account must not be empty"));
-    }
-    if owner_account.len() > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
-        return Err(PyValueError::new_err(format!(
-            "owner_account must be at most {ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1} bytes"
-        )));
-    }
-    Ok(())
+    validate_sorafs_orderbook_owner_account_v1(owner_account).map_err(PyValueError::new_err)
 }
 #[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_settlement_receipt")]
@@ -4852,7 +4780,6 @@ fn sorafs_validate_governance_dag_head_chain_json_py(
 #[cfg(test)]
 mod sorafs_reference_validation_py_tests {
     use super::*;
-
     #[test]
     fn parse_sorafs_orderbook_payload_kind_requires_exact_v1_name() {
         assert!(matches!(
@@ -5764,7 +5691,6 @@ fn open_connect_payload_py(py: Python<'_>, key: &[u8], frame_bytes: &[u8]) -> Py
 #[cfg(test)]
 mod tests {
     use std::fs;
-
     use ed25519_dalek::SigningKey;
     use http::StatusCode;
     use ivm::bn254_vec::{self, FieldElem};
@@ -5776,9 +5702,7 @@ mod tests {
     };
     use sorafs_car::multi_fetch::PolicyBlockEvidence;
     use tempfile::tempdir;
-
     use super::*;
-
     const SAMPLE_RWA_ID: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal";
     fn ensure_python() {
@@ -11577,7 +11501,7 @@ impl SignedTransactionEnvelope {
         ];
         if let Some(field) = RETIRED_NETWORK_FIELDS
             .iter()
-            .find(|field| obj.contains_key(**field))
+            .find(|&&field| obj.contains_key::<str>(field))
         {
             return Err(PyValueError::new_err(format!(
                 "retired `{field}` envelope field is not accepted"
@@ -12828,7 +12752,7 @@ fn privacy_exact12_action_driver_signing_seed_v1(
     hash.update(candidate_binding_sha256);
     hash.update(request_id);
     hash.update([0]);
-    let mut seed: Zeroizing<[u8; 32]> = Zeroizing::new(hash.finalize().into());
+    let mut seed = Zeroizing::<[u8; 32]>::new(hash.finalize().into());
     if seed.iter().all(|byte| *byte == 0) {
         seed[0] = 1;
     }

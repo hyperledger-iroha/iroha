@@ -1,6 +1,5 @@
 //! Plain ballot re-vote monotonicity tests (extend-only and owner check).
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -19,7 +18,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use nonzero_ext::nonzero;
-
 #[test]
 fn plain_ballot_revotes_extend_only_and_owner_matches() {
     // Minimal state
@@ -36,7 +34,6 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
     gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 1;
     state.set_gov(gov_cfg);
-
     // Build a signed block header at H=1
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
@@ -60,7 +57,6 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
-
     // First vote by ALICE
     let first = CastPlainBallot {
         referendum_id: rid.clone(),
@@ -77,7 +73,6 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::LockCreated(_)))
     )));
-
     // Re-vote with shorter duration should be rejected
     let shorter = CastPlainBallot {
         referendum_id: rid.clone(),
@@ -94,7 +89,6 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::BallotRejected(_)))
     )));
-
     // Re-vote with smaller amount should be rejected
     let smaller = CastPlainBallot {
         referendum_id: rid.clone(),
@@ -106,7 +100,6 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
     let err2 = smaller.execute(&ALICE_ID, &mut stx).unwrap_err();
     let s2 = format!("{err2}");
     assert!(s2.contains("re-vote cannot reduce"));
-
     // Re-vote with longer duration (extend) should work and emit LockExtended
     let extend = CastPlainBallot {
         referendum_id: rid.clone(),
@@ -123,7 +116,6 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::LockExtended(_)))
     )));
-
     // Owner mismatch must be rejected
     let mismatch = CastPlainBallot {
         referendum_id: rid,

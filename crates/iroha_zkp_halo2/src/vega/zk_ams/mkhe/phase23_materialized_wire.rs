@@ -1,7 +1,5 @@
 //! Bounded canonical streaming for materialized Phase-II/III accumulators.
-
 use std::io::{Read, Write};
-
 use super::manifest::release_profile_v1;
 use super::phase23_encrypted::{
     PHASE23_ENCRYPTED_VERSION_V1, PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1,
@@ -10,29 +8,24 @@ use super::phase23_encrypted::{
     validate_materialized,
 };
 use super::{Scalar, ZkAmsMkheErrorV1};
-
 struct ZeroizingMaterializedScalarBytesV1([u8; 32]);
-
 impl ZeroizingMaterializedScalarBytesV1 {
     fn new(value: Scalar) -> Self {
         Self(value.to_be_bytes())
     }
 }
-
 #[cfg(test)]
 std::thread_local! {
     static MATERIALIZED_SCALAR_BYTES_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 #[cfg(test)]
 pub(super) fn materialized_scalar_bytes_zeroized_drop_count_v1() -> usize {
     MATERIALIZED_SCALAR_BYTES_ZEROIZED_DROPS_V1
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
-
 impl Drop for ZeroizingMaterializedScalarBytesV1 {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -46,41 +39,34 @@ impl Drop for ZeroizingMaterializedScalarBytesV1 {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
-
 struct ZeroizingMaterializedWireBufferV1([u8; PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1]);
-
 impl ZeroizingMaterializedWireBufferV1 {
     const fn new() -> Self {
         Self([0; PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1])
     }
-
     fn prefix_mut(&mut self, length: usize) -> Result<&mut [u8], ZkAmsMkheErrorV1> {
         self.0
             .get_mut(..length)
             .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)
     }
-
     fn prefix(&self, length: usize) -> Result<&[u8], ZkAmsMkheErrorV1> {
         self.0
             .get(..length)
             .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)
     }
 }
-
 #[cfg(test)]
 std::thread_local! {
     static MATERIALIZED_WIRE_BUFFER_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 #[cfg(test)]
 pub(super) fn materialized_wire_buffer_zeroized_drop_count_v1() -> usize {
     MATERIALIZED_WIRE_BUFFER_ZEROIZED_DROPS_V1
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
-
 impl Drop for ZeroizingMaterializedWireBufferV1 {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -94,7 +80,6 @@ impl Drop for ZeroizingMaterializedWireBufferV1 {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
-
 /// Stream the exact canonical materialized-accumulator representation.
 ///
 /// A writer failure can leave an unauthoritative canonical prefix in the
@@ -152,7 +137,6 @@ pub fn write_zk_ams_phase23_materialized_accumulators_canonical_v1<W: Write + ?S
     }
     Ok(())
 }
-
 /// Read exactly one canonical materialized-accumulator representation.
 ///
 /// The fixed header is validated before any family allocation. All six final
@@ -275,7 +259,6 @@ pub fn read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1<R: Read 
     validate_materialized(&materialized).map_err(wire_validation_error_v1)?;
     Ok(materialized)
 }
-
 fn write_exact_v1<W: Write + ?Sized>(
     writer: &mut W,
     bytes: &[u8],
@@ -289,7 +272,6 @@ fn write_exact_v1<W: Write + ?Sized>(
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     Ok(())
 }
-
 fn read_exact_v1<R: Read + ?Sized>(
     reader: &mut R,
     bytes: &mut [u8],
@@ -298,7 +280,6 @@ fn read_exact_v1<R: Read + ?Sized>(
         .read_exact(bytes)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
-
 fn read_header_array_v1<const N: usize>(
     header: &[u8],
     cursor: &mut usize,
@@ -314,7 +295,6 @@ fn read_header_array_v1<const N: usize>(
     *cursor = end;
     Ok(value)
 }
-
 fn require_eof_v1<R: Read + ?Sized>(
     reader: &mut R,
     buffer: &mut ZeroizingMaterializedWireBufferV1,
@@ -328,7 +308,6 @@ fn require_eof_v1<R: Read + ?Sized>(
         }
     }
 }
-
 fn wire_validation_error_v1(error: ZkAmsMkheErrorV1) -> ZkAmsMkheErrorV1 {
     match error {
         ZkAmsMkheErrorV1::ResourceCeilingExceeded => error,

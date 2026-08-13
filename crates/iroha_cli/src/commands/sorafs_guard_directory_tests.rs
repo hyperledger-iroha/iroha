@@ -8,13 +8,11 @@ fn load_guard_directory_rejects_oversized_file_before_decode() {
                 + 1,
         )
         .expect("extend oversized sparse snapshot");
-
     let error = load_guard_directory(file.path(), &"00".repeat(32), 1_734_000_000)
         .expect_err("oversized snapshot must fail in the file loader");
     let diagnostic = format!("{error:?}");
     assert!(diagnostic.contains("first-release limit"), "{diagnostic}");
 }
-
 #[test]
 fn guard_directory_http_body_accepts_chunked_response_without_length() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind chunked-response listener");
@@ -35,7 +33,6 @@ fn guard_directory_http_body_accepts_chunked_response_without_length() {
             )
             .expect("write chunked guard-directory response");
     });
-
     let mut response = BlockingHttpClient::builder()
         .timeout(Duration::from_secs(5))
         .build()
@@ -52,17 +49,14 @@ fn guard_directory_http_body_accepts_chunked_response_without_length() {
     assert_eq!(body, b"guard directory");
     server.join().expect("chunked-response server finished");
 }
-
 #[test]
 fn guard_directory_http_body_rejects_oversized_content_length_before_read() {
     struct UnexpectedReader;
-
     impl Read for UnexpectedReader {
         fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
             panic!("oversized Content-Length must fail before reading the response body");
         }
     }
-
     let declared_length =
         u64::try_from(iroha_crypto::soranet::directory::GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1)
             .expect("fixed snapshot limit fits u64")
@@ -72,7 +66,6 @@ fn guard_directory_http_body_rejects_oversized_content_length_before_read() {
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(error.to_string().contains("first-release limit"));
 }
-
 #[test]
 fn guard_directory_http_body_accepts_limit_and_rejects_no_length_max_plus_one() {
     assert_eq!(
@@ -85,7 +78,6 @@ fn guard_directory_http_body_accepts_limit_and_rejects_no_length_max_plus_one() 
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(error.to_string().contains("8-byte first-release limit"));
 }
-
 #[test]
 fn guard_directory_summary_reports_expected_counts() {
     let bytes = sample_guard_directory_snapshot_bytes();

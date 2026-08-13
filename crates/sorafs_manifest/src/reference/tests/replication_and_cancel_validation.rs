@@ -1,5 +1,4 @@
 // Replication-order and CancelAssetLock validation regressions.
-
 #[test]
 fn validate_appeal_finance_cancel_asset_lock_bytes_rejects_trailing_bytes() {
     let mut bytes = fs::read(workspace_fixture(
@@ -8,12 +7,10 @@ fn validate_appeal_finance_cancel_asset_lock_bytes_rejects_trailing_bytes() {
     .expect("read canonical CancelAssetLock fixture");
     bytes.push(0);
     let outcome = validate_appeal_finance_cancel_asset_lock_bytes(&bytes, "trailing.to", 42);
-
     assert!(!outcome.is_ok(), "{outcome:?}");
     assert_eq!(outcome.code, "SFS-NORITO-001");
     assert_eq!(outcome.category, CATEGORY_NORITO);
 }
-
 #[test]
 fn validate_appeal_finance_cancel_asset_lock_bytes_rejects_zero_quantity() {
     let bytes = fs::read(workspace_fixture(
@@ -21,18 +18,15 @@ fn validate_appeal_finance_cancel_asset_lock_bytes_rejects_zero_quantity() {
     ))
     .expect("read zero-quantity CancelAssetLock fixture");
     let outcome = validate_appeal_finance_cancel_asset_lock_bytes(&bytes, "zero-quantity.to", 43);
-
     assert!(!outcome.is_ok(), "{outcome:?}");
     assert_eq!(outcome.code, "SFS-VAL-001");
     assert_eq!(outcome.category, CATEGORY_VALIDATION);
 }
-
 #[test]
 fn validate_signed_replication_order_bytes_accepts_signed_order() {
     let envelope = signed_replication_order();
     let bytes = to_bytes(&envelope).expect("encode signed order");
     let outcome = validate_signed_replication_order_bytes(&bytes, "signed-order.to", 7);
-
     assert!(outcome.is_ok(), "{outcome:?}");
     assert_eq!(outcome.code, "SFS-OK-000");
     assert!(
@@ -43,19 +37,16 @@ fn validate_signed_replication_order_bytes_accepts_signed_order() {
         "{outcome:?}"
     );
 }
-
 #[test]
 fn validate_signed_replication_order_bytes_rejects_bad_signature() {
     let mut envelope = signed_replication_order();
     envelope.order.deadline_at += 1;
     let bytes = to_bytes(&envelope).expect("encode tampered signed order");
     let outcome = validate_signed_replication_order_bytes(&bytes, "bad-signed-order.to", 8);
-
     assert!(!outcome.is_ok());
     assert_eq!(outcome.code, "SFS-SIG-006", "{outcome:?}");
     assert_eq!(outcome.category, CATEGORY_SIGNATURE);
 }
-
 #[test]
 fn validate_replication_order_bytes_rejects_malformed_norito() {
     let outcome = validate_replication_order_bytes(b"not norito", "bad.to", 2);
@@ -63,7 +54,6 @@ fn validate_replication_order_bytes_rejects_malformed_norito() {
     assert_eq!(outcome.code, "SFS-NORITO-001");
     assert_eq!(outcome.category, CATEGORY_NORITO);
 }
-
 #[test]
 fn validate_replication_order_bytes_rejects_manifest_digest_failure() {
     let mut order = replication_order();
@@ -74,7 +64,6 @@ fn validate_replication_order_bytes_rejects_manifest_digest_failure() {
     assert_eq!(outcome.code, "SFS-VAL-001");
     assert_eq!(outcome.category, CATEGORY_VALIDATION);
 }
-
 #[test]
 fn validate_replication_order_bytes_rejects_chunker_failure() {
     let mut order = replication_order();
@@ -85,7 +74,6 @@ fn validate_replication_order_bytes_rejects_chunker_failure() {
     assert_eq!(outcome.code, "SFS-VAL-003");
     assert_eq!(outcome.category, CATEGORY_VALIDATION);
 }
-
 #[test]
 fn validate_replication_order_bytes_rejects_policy_failure() {
     let mut order = replication_order();
@@ -96,7 +84,6 @@ fn validate_replication_order_bytes_rejects_policy_failure() {
     assert_eq!(outcome.code, "SFS-POL-003");
     assert_eq!(outcome.category, CATEGORY_POLICY);
 }
-
 #[test]
 fn validate_replication_order_bytes_rejects_structural_failure() {
     let mut order = replication_order();

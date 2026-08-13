@@ -3,9 +3,7 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-
 use super::*;
-
 static DIRECTORY_SEQUENCE_V2: AtomicU64 = AtomicU64::new(0);
 static TEST_MODULI_V2: [u64; 2] = [97, 113];
 const RELEASE_PARAMETER_KAT_V2: [u8; 32] = [
@@ -20,7 +18,6 @@ const RELEASE_S_CONTEXT_KAT_V2: [u8; 32] = [
     0x6e, 0x7f, 0x5f, 0xd8, 0xd5, 0x43, 0x94, 0xe9, 0x73, 0x9f, 0x84, 0xe8, 0x02, 0x55, 0x05, 0xbb,
     0x6b, 0x2e, 0xf3, 0xdc, 0x6e, 0xf6, 0xc8, 0x43, 0x05, 0xd8, 0x07, 0xb2, 0x30, 0x99, 0x0a, 0x00,
 ];
-
 fn manual_release_s_mapping_oracle_v2(mutate_coordinate: bool) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.mask-s-spool.mapping\0");
@@ -46,7 +43,6 @@ fn manual_release_s_mapping_oracle_v2(mutate_coordinate: bool) -> [u8; 32] {
     }
     hash.finalize()
 }
-
 fn manual_release_s_context_oracle_v2(mapping_digest: [u8; 32], mutate_context: bool) -> [u8; 32] {
     let mut source_context = [0x31; 32];
     source_context[0] ^= u8::from(mutate_context);
@@ -60,9 +56,7 @@ fn manual_release_s_context_oracle_v2(mapping_digest: [u8; 32], mutate_context: 
     hash.update(b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.mask-sample.external-entropy\0");
     hash.finalize()
 }
-
 struct TestDirectoryV2(PathBuf);
-
 impl TestDirectoryV2 {
     fn new_v2() -> Self {
         let sequence = DIRECTORY_SEQUENCE_V2.fetch_add(1, Ordering::SeqCst);
@@ -74,13 +68,11 @@ impl TestDirectoryV2 {
         Self(path)
     }
 }
-
 impl Drop for TestDirectoryV2 {
     fn drop(&mut self) {
         fs::remove_dir(&self.0).expect("remove empty S-spool test directory");
     }
 }
-
 fn geometry_v2() -> SpoolGeometryV2 {
     SpoolGeometryV2 {
         ring_degree: 4,
@@ -91,14 +83,12 @@ fn geometry_v2() -> SpoolGeometryV2 {
         moduli: &TEST_MODULI_V2,
     }
 }
-
 fn context_v2() -> PublicSpoolContextV2 {
     PublicSpoolContextV2 {
         sealed_source_transcript_digest: [0x31; 32],
         source_algebra_binding_digest: [0x42; 32],
     }
 }
-
 fn mask_v2(relation: u16) -> SecretResiduesV2 {
     let mut mask = SecretResiduesV2::new_zeroed_exact_v2(3).unwrap();
     for (index, value) in mask.as_mut_slice_v2().iter_mut().enumerate() {
@@ -106,7 +96,6 @@ fn mask_v2(relation: u16) -> SecretResiduesV2 {
     }
     mask
 }
-
 fn sealed_v2(directory: &TestDirectoryV2) -> MaskSpoolSealedV2 {
     let geometry = geometry_v2();
     let mut writer = MaskSpoolWriterV2::create_v2(
@@ -127,7 +116,6 @@ fn sealed_v2(directory: &TestDirectoryV2) -> MaskSpoolSealedV2 {
     }
     writer.seal_v2().unwrap()
 }
-
 #[test]
 fn tiny_spool_mapping_and_authenticated_replay_are_exact() {
     let directory = TestDirectoryV2::new_v2();
@@ -163,7 +151,6 @@ fn tiny_spool_mapping_and_authenticated_replay_are_exact() {
     let sealed = replay.complete_v2().unwrap();
     assert_eq!(sealed.descriptor.slot_count, 20);
 }
-
 #[test]
 fn purpose_order_failure_poison_and_incomplete_seal_fail_closed() {
     let directory = TestDirectoryV2::new_v2();
@@ -179,7 +166,6 @@ fn purpose_order_failure_poison_and_incomplete_seal_fail_closed() {
         writer.push_next_mask_v2(0, 0, &mask_v2(0)),
         Err(ProverPrerequisiteErrorV2::Poisoned)
     ));
-
     let mut incomplete =
         MaskSpoolWriterV2::create_v2(&directory.0, geometry, parameter, context_v2()).unwrap();
     incomplete.push_next_mask_v2(0, 0, &mask_v2(0)).unwrap();
@@ -187,7 +173,6 @@ fn purpose_order_failure_poison_and_incomplete_seal_fail_closed() {
         incomplete.seal_v2(),
         Err(ProverPrerequisiteErrorV2::MissingRelations)
     ));
-
     let mut full =
         MaskSpoolWriterV2::create_v2(&directory.0, geometry, parameter, context_v2()).unwrap();
     for relation in 0..10_u16 {
@@ -207,7 +192,6 @@ fn purpose_order_failure_poison_and_incomplete_seal_fail_closed() {
         Err(ProverPrerequisiteErrorV2::Poisoned)
     ));
 }
-
 #[test]
 fn context_mutation_extra_read_and_unwind_destroy_replay_authority() {
     let directory = TestDirectoryV2::new_v2();
@@ -218,14 +202,12 @@ fn context_mutation_extra_read_and_unwind_destroy_replay_authority() {
         sealed.begin_replay_v2(),
         Err(ProverPrerequisiteErrorV2::InvalidC0Context)
     ));
-
     let mut hostile_descriptor = sealed_v2(&directory);
     hostile_descriptor.descriptor.slot_count += 1;
     assert!(hostile_descriptor.snapshot_digest_v2().is_err());
     let mut hostile_parameter = sealed_v2(&directory);
     hostile_parameter.parameter_digest[0] ^= 1;
     assert!(hostile_parameter.snapshot_digest_v2().is_err());
-
     let mut complete = sealed_v2(&directory).begin_replay_v2().unwrap();
     for _ in 0..20 {
         drop(complete.read_next_block_v2().unwrap());
@@ -235,7 +217,6 @@ fn context_mutation_extra_read_and_unwind_destroy_replay_authority() {
         complete.complete_v2(),
         Err(ProverPrerequisiteErrorV2::Poisoned)
     ));
-
     let geometry = geometry_v2();
     let parameter = parameter_digest_v2(geometry).unwrap();
     let descriptor = mask_spool_descriptor_v2(geometry, parameter).unwrap();
@@ -272,7 +253,6 @@ fn context_mutation_extra_read_and_unwind_destroy_replay_authority() {
         nonzero_top.read_next_block_v2(),
         Err(ProverPrerequisiteErrorV2::NonCanonicalResidue)
     ));
-
     let before = MASK_REPLAY_CHUNK_ZEROIZED_DROPS_V2.load(Ordering::SeqCst);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut replay = sealed_v2(&directory).begin_replay_v2().unwrap();
@@ -285,7 +265,6 @@ fn context_mutation_extra_read_and_unwind_destroy_replay_authority() {
         before + 1
     );
 }
-
 #[test]
 fn release_geometry_context_binding_and_source_guards_are_pinned() {
     assert_eq!(RELEASE_MASK_S_SLOTS_V2, 24_320);
@@ -335,7 +314,6 @@ fn release_geometry_context_binding_and_source_guards_are_pinned() {
         first,
         mask_spool_context_v2(parameter, descriptor, changed).unwrap()
     );
-
     let source = include_str!("s_spool_v2.rs");
     let tests = include_str!("s_spool_v2_tests.rs");
     assert!(source.lines().count() <= 500);

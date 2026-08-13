@@ -11,9 +11,7 @@
 //! Earliest hook: the CPK prover owner retains all eight `s` openings/blindings. Production lacks `C^Y` before `D`; required order is `C^s,C^Y,A_pk,A_share -> D -> Z_s -> beta -> BP`; seals are uninhabited and every gate false. This does not close persistent-decryption audit bit 7.
 
 #![allow(dead_code, reason = "production response-link seals are uninhabited")]
-
 use core::convert::Infallible;
-
 use crate::{
     generalized_bulletproof::{
         ArithmeticCircuitStatement, GeneralizedBulletproofErrorV1, LinComb, ProofSuite, Variable,
@@ -25,7 +23,6 @@ use crate::{
         sponge::{Keccak256, keccak256},
     },
 };
-
 const RESPONSE_LINK_VERSION_V1: u8 = 1;
 const RESPONSE_LINK_WIRE_TAG_V1: [u8; 4] = *b"ZPRL";
 const RESPONSE_LINK_WIRE_FLAGS_V1: u8 = 0;
@@ -38,14 +35,12 @@ const RESPONSE_LINK_CHALLENGE_WEIGHT_V1: usize = 20;
 const RESPONSE_LINK_SECRET_MASK_BOUND_V1: i64 = 335_544_320;
 const RESPONSE_LINK_SECRET_RESPONSE_BOUND_V1: i64 = 335_544_300;
 const RESPONSE_LINK_INTEGER_LIFT_BOUND_V1: u64 = 671_088_640;
-
 const RESPONSE_LINK_CORE_POINTS_V1: usize = 69;
 const RESPONSE_LINK_CORE_SCALARS_V1: usize = 5;
 const RESPONSE_LINK_CORE_BYTES_V1: usize = 2_437;
 const RESPONSE_LINK_HEADER_BYTES_V1: usize = 7;
 const RESPONSE_LINK_MASK_COMMITMENT_BYTES_V1: usize = 8 * 33;
 const RESPONSE_LINK_TAIL_BYTES_V1: usize = 2_708;
-
 const EXISTING_PROOF_BYTES_V1: usize = 33_030_199;
 const CONDITIONAL_PROOF_BYTES_V1: usize = 33_032_907;
 const PROOF_WIRE_CAP_BYTES_V1: usize = 32 * 1_048_576;
@@ -62,7 +57,6 @@ const PROVER_MAIN_SCALAR_WORK_ESTIMATE_V1: u64 = 9_437_183;
 const PROVER_GROUP_TERM_ESTIMATE_V1: u64 = 508_000;
 const PIT_NUMERATOR_V1: u64 = 131_071;
 const PIT_SOUNDNESS_BITS_FLOOR_V1: u16 = 238;
-
 const TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.persistent-decryption.response-link.transcript\0";
 const CHALLENGE_DOMAIN_V1: &[u8] =
@@ -70,7 +64,6 @@ const CHALLENGE_DOMAIN_V1: &[u8] =
 const EQUATION_V1: &[u8] = b"Zs=Y+D*s;D=sum_h epsilon_h X^h;w_j=sum_h epsilon_h(beta^(j+h) if j+h<N else -beta^(j+h-N));BP language is over F_pT;the signed-small two-fork residual is at most 671088640<pT, so its embedding is injective";
 const CONDITIONAL_TWO_FORK_ASSUMPTIONS_V1: &[u8] = b"ROM forking after identical Cs,CY,A_pk,A_share;fixed CY and RNS first messages make Y cancel, so no CY-to-RNS-first-message cross-opening is needed;distinct sparse D;Pedersen representation binding;generalized-BP knowledge soundness and ZK;existing RNS two-fork extractor;bounded signed-small lift;cyclotomic-domain argument independently certified";
 const SIGNED_SMALL_SEPARATION_V1: &[u8] = b"only signed-i64 secret_response enters this link;the approximately 1855-bit smudge_response is a distinct vector and never enters C^Y,Z_s,or the T256 projection";
-
 const STATE_HOOK_WIRED_V1: bool = false;
 const DIRECT_EQUALITY_VERIFIED_V1: bool = false;
 const ATOMIC_REPLAY_WIRED_V1: bool = false;
@@ -79,7 +72,6 @@ const PRODUCTION_RSS_QUALIFIED_V1: bool = false;
 const PRODUCTION_KAT_QUALIFIED_V1: bool = false;
 const ZERO_KNOWLEDGE_ACCEPTED_V1: bool = false;
 const RELEASE_READY_V1: bool = false;
-
 const _: () = {
     assert!(
         RESPONSE_LINK_RING_DEGREE_V1
@@ -115,7 +107,6 @@ const _: () = {
     );
     assert!(!ZERO_KNOWLEDGE_ACCEPTED_V1 && !RELEASE_READY_V1);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResponseLinkErrorV1 {
     Shape,
@@ -127,13 +118,11 @@ enum ResponseLinkErrorV1 {
     StatementMismatch,
     Backend(GeneralizedBulletproofErrorV1),
 }
-
 impl From<GeneralizedBulletproofErrorV1> for ResponseLinkErrorV1 {
     fn from(error: GeneralizedBulletproofErrorV1) -> Self {
         Self::Backend(error)
     }
 }
-
 #[derive(Clone, Copy)]
 struct ResponseLinkAxesV1 {
     profile_digest: [u8; 32],
@@ -146,7 +135,6 @@ struct ResponseLinkAxesV1 {
     epoch: u64,
     party_index: u8,
 }
-
 impl ResponseLinkAxesV1 {
     fn validate_v1(self) -> Result<(), ResponseLinkErrorV1> {
         if [
@@ -167,19 +155,16 @@ impl ResponseLinkAxesV1 {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SparseChallengeTermV1 {
     shift: u32,
     sign: i8,
 }
-
 #[derive(Clone, Copy)]
 struct SparseChallengeV1 {
     seed: [u8; 32],
     terms: [SparseChallengeTermV1; RESPONSE_LINK_CHALLENGE_WEIGHT_V1],
 }
-
 impl SparseChallengeV1 {
     fn validate_v1(self) -> Result<(), ResponseLinkErrorV1> {
         if self.seed == [0; 32] {
@@ -199,7 +184,6 @@ impl SparseChallengeV1 {
         Ok(())
     }
 }
-
 enum ResponseLinkSourceSealV1 {
     Production {
         verified_cpk_owner: Infallible,
@@ -208,7 +192,6 @@ enum ResponseLinkSourceSealV1 {
     #[cfg(test)]
     TestOnly,
 }
-
 enum ResponseLinkUseSealV1 {
     Production {
         mask_committed_before_challenge: Infallible,
@@ -217,7 +200,6 @@ enum ResponseLinkUseSealV1 {
     #[cfg(test)]
     TestOnly,
 }
-
 enum ResponseLinkIntegrationSealV1 {
     Production {
         decryption_state_hook: Infallible,
@@ -227,33 +209,27 @@ enum ResponseLinkIntegrationSealV1 {
     #[cfg(test)]
     TestOnly,
 }
-
 struct PersistentDecryptionResponseLinkSourceV1 {
     axes: ResponseLinkAxesV1,
     cpk_secret_commitments: [Point; RESPONSE_LINK_CHUNKS_V1],
     seal: ResponseLinkSourceSealV1,
 }
-
 struct PersistentDecryptionResponseLinkMaskCommittedUseV1<'a> {
     source: &'a PersistentDecryptionResponseLinkSourceV1,
     mask_commitments: [Point; RESPONSE_LINK_CHUNKS_V1],
     seal: ResponseLinkUseSealV1,
 }
-
 struct PersistentDecryptionResponseLinkChallengeFixedUseV1<'a> {
     mask_stage: PersistentDecryptionResponseLinkMaskCommittedUseV1<'a>,
     challenge: SparseChallengeV1,
 }
-
 struct PersistentDecryptionResponseLinkResponseFixedUseV1<'a> {
     challenge_stage: PersistentDecryptionResponseLinkChallengeFixedUseV1<'a>,
     secret_response: &'a [i64],
 }
-
 struct PersistentDecryptionResponseLinkCommitmentViewV1<'a> {
     response: &'a PersistentDecryptionResponseLinkResponseFixedUseV1<'a>,
 }
-
 impl PersistentDecryptionResponseLinkResponseFixedUseV1<'_> {
     fn validate_v1(&self) -> Result<(), ResponseLinkErrorV1> {
         self.challenge_stage.mask_stage.source.axes.validate_v1()?;
@@ -282,12 +258,10 @@ impl PersistentDecryptionResponseLinkResponseFixedUseV1<'_> {
         }
         Ok(())
     }
-
     fn commitments_v1(&self) -> PersistentDecryptionResponseLinkCommitmentViewV1<'_> {
         PersistentDecryptionResponseLinkCommitmentViewV1 { response: self }
     }
 }
-
 impl PersistentDecryptionResponseLinkCommitmentViewV1<'_> {
     fn point_v1(&self, index: usize) -> Result<Point, ResponseLinkErrorV1> {
         if index < RESPONSE_LINK_CHUNKS_V1 {
@@ -305,12 +279,10 @@ impl PersistentDecryptionResponseLinkCommitmentViewV1<'_> {
         }
     }
 }
-
 fn scalar_from_signed_v1(value: i64) -> Scalar {
     let magnitude = Scalar::from_u64(value.unsigned_abs());
     if value < 0 { -magnitude } else { magnitude }
 }
-
 fn powers_v1(beta: Scalar, count: usize) -> Vec<Scalar> {
     let mut powers = Vec::with_capacity(count);
     let mut power = Scalar::one();
@@ -320,7 +292,6 @@ fn powers_v1(beta: Scalar, count: usize) -> Vec<Scalar> {
     }
     powers
 }
-
 fn adjoint_weight_v1(
     powers: &[Scalar],
     terms: &[SparseChallengeTermV1],
@@ -348,7 +319,6 @@ fn adjoint_weight_v1(
     }
     Ok(weight)
 }
-
 fn response_link_constraint_v1(
     beta: Scalar,
     challenge: SparseChallengeV1,
@@ -383,7 +353,6 @@ fn response_link_constraint_v1(
     }
     Ok(constraint)
 }
-
 fn arithmetic_statement_v1(
     response: &PersistentDecryptionResponseLinkResponseFixedUseV1<'_>,
     beta: Scalar,
@@ -405,7 +374,6 @@ fn arithmetic_statement_v1(
         Vec::new(),
     )?)
 }
-
 fn frame_header_v1(label: &[u8], payload_bytes: usize) -> Result<Vec<u8>, ResponseLinkErrorV1> {
     let mut header = Vec::with_capacity(1 + 2 + label.len() + 8);
     header.push(0x52);
@@ -422,7 +390,6 @@ fn frame_header_v1(label: &[u8], payload_bytes: usize) -> Result<Vec<u8>, Respon
     );
     Ok(header)
 }
-
 fn absorb_frame_v1(
     state: &mut Keccak256,
     label: &[u8],
@@ -432,7 +399,6 @@ fn absorb_frame_v1(
     state.update(payload);
     Ok(())
 }
-
 fn absorb_points_v1(
     state: &mut Keccak256,
     label: &[u8],
@@ -448,7 +414,6 @@ fn absorb_points_v1(
     }
     Ok(())
 }
-
 fn derive_nonzero_challenge_v1(
     state: &mut Keccak256,
     ordinal: &mut u32,
@@ -481,13 +446,11 @@ fn derive_nonzero_challenge_v1(
         GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted,
     ))
 }
-
 struct ResponseLinkTranscriptSeedV1 {
     state: Keccak256,
     challenge_ordinal: u32,
     beta: Scalar,
 }
-
 impl ResponseLinkTranscriptSeedV1 {
     fn new_v1(
         response: &PersistentDecryptionResponseLinkResponseFixedUseV1<'_>,
@@ -568,19 +531,16 @@ impl ResponseLinkTranscriptSeedV1 {
             beta,
         })
     }
-
     fn binding_digest_v1(&self) -> [u8; 32] {
         self.state.fork_v1().finalize()
     }
 }
-
 struct ResponseLinkVerifierTranscriptV1<'a> {
     state: Keccak256,
     proof: &'a [u8],
     cursor: usize,
     challenge_ordinal: u32,
 }
-
 impl<'a> ResponseLinkVerifierTranscriptV1<'a> {
     fn from_seed_v1(seed: &ResponseLinkTranscriptSeedV1, proof: &'a [u8]) -> Self {
         Self {
@@ -590,7 +550,6 @@ impl<'a> ResponseLinkVerifierTranscriptV1<'a> {
             challenge_ordinal: seed.challenge_ordinal,
         }
     }
-
     fn take_v1(&mut self, count: usize) -> Result<&'a [u8], GeneralizedBulletproofErrorV1> {
         let end = self
             .cursor
@@ -606,7 +565,6 @@ impl<'a> ResponseLinkVerifierTranscriptV1<'a> {
         self.cursor = end;
         Ok(bytes)
     }
-
     fn finish_v1(self) -> Result<[u8; 32], ResponseLinkErrorV1> {
         if self.cursor != self.proof.len() || self.cursor != RESPONSE_LINK_CORE_BYTES_V1 {
             return Err(ResponseLinkErrorV1::ProofEncoding);
@@ -614,7 +572,6 @@ impl<'a> ResponseLinkVerifierTranscriptV1<'a> {
         Ok(self.state.finalize())
     }
 }
-
 impl VerifierTranscript<ZkAmsT256BulletproofSuiteV1> for ResponseLinkVerifierTranscriptV1<'_> {
     fn read_scalar(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
         let bytes: [u8; 32] = self
@@ -627,7 +584,6 @@ impl VerifierTranscript<ZkAmsT256BulletproofSuiteV1> for ResponseLinkVerifierTra
             .map_err(|_| GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
         Ok(scalar)
     }
-
     fn read_point(&mut self) -> Result<Point, GeneralizedBulletproofErrorV1> {
         let bytes: [u8; 33] = self
             .take_v1(33)?
@@ -639,7 +595,6 @@ impl VerifierTranscript<ZkAmsT256BulletproofSuiteV1> for ResponseLinkVerifierTra
             .map_err(|_| GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
         Ok(point)
     }
-
     fn challenge(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
         derive_nonzero_challenge_v1(
             &mut self.state,
@@ -649,12 +604,10 @@ impl VerifierTranscript<ZkAmsT256BulletproofSuiteV1> for ResponseLinkVerifierTra
         .map_err(|_| GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)
     }
 }
-
 struct PersistentDecryptionResponseLinkProofV1 {
     wire: [u8; RESPONSE_LINK_TAIL_BYTES_V1],
     mask_commitments: [Point; RESPONSE_LINK_CHUNKS_V1],
 }
-
 fn validate_core_v1(core: &[u8]) -> Result<(), ResponseLinkErrorV1> {
     if core.len() != RESPONSE_LINK_CORE_BYTES_V1 {
         return Err(ResponseLinkErrorV1::ProofEncoding);
@@ -698,7 +651,6 @@ fn validate_core_v1(core: &[u8]) -> Result<(), ResponseLinkErrorV1> {
     }
     Ok(())
 }
-
 impl PersistentDecryptionResponseLinkProofV1 {
     fn from_wire_bytes_exact_v1(bytes: &[u8]) -> Result<Self, ResponseLinkErrorV1> {
         if bytes.len() != RESPONSE_LINK_TAIL_BYTES_V1
@@ -728,23 +680,19 @@ impl PersistentDecryptionResponseLinkProofV1 {
             mask_commitments,
         })
     }
-
     fn core_v1(&self) -> &[u8] {
         &self.wire[RESPONSE_LINK_HEADER_BYTES_V1 + RESPONSE_LINK_MASK_COMMITMENT_BYTES_V1..]
     }
-
     fn wire_v1(&self) -> &[u8; RESPONSE_LINK_TAIL_BYTES_V1] {
         &self.wire
     }
 }
-
 struct VerifiedPersistentDecryptionResponseLinkReceiptV1 {
     statement_binding_digest: [u8; 32],
     proof_digest: [u8; 32],
     transcript_digest: [u8; 32],
     integration_seal: ResponseLinkIntegrationSealV1,
 }
-
 fn verify_response_link_v1(
     response: PersistentDecryptionResponseLinkResponseFixedUseV1<'_>,
     proof: PersistentDecryptionResponseLinkProofV1,
@@ -770,7 +718,6 @@ fn verify_response_link_v1(
         integration_seal,
     })
 }
-
 // Ordered audit records: proof/core/total/margins/batch/heaps/work estimates, followed by
 // PIT numerator/bits, exact-lift bound, and three forbidden assumptions.
 const RESPONSE_LINK_RESOURCE_RECORD_V1: [u64; 10] = [
@@ -793,7 +740,6 @@ const RESPONSE_LINK_SOUNDNESS_RECORD_V1: (u64, u16, u64, bool, bool, bool) = (
     false, // sparse-challenge inversion
     false, // SIS uniqueness
 );
-
 #[cfg(test)]
 #[path = "persistent_decryption_response_link_tests.rs"]
 mod tests;

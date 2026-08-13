@@ -5,12 +5,8 @@
 //! configuration. The router abstraction keeps the queue decoupled from the
 //! exact routing policy while allowing metrics to reflect the real
 //! assignments instead of collapsing metrics to the primary lane.
-
 use std::{collections::BTreeSet, str::FromStr, sync::Arc};
-
-use iroha_config::parameters::actual::{
-    LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule, Nexus,
-};
+use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule, Nexus};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
@@ -86,13 +82,11 @@ use iroha_executor_data_model::permission::{
 };
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
-
 use crate::{
     state::{State, StateReadOnly, StateView, WorldReadOnly},
     tx::AcceptedTransaction,
 };
 use thiserror::Error;
-
 const AMX_POLICY_METADATA_KEY: &str = "amx_policy";
 const AMX_POLICY_REJECT_CROSS_DATASPACE: &str = "reject_cross_dataspace";
 /// Read-only transaction fields consumed by deterministic lane and dataspace routing.
@@ -7165,7 +7159,6 @@ fn transaction_target_routing_requires_state(tx: &dyn TransactionRoutingView) ->
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
-
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -7215,9 +7208,7 @@ mod tests {
     use iroha_primitives::numeric::NumericSpec;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
-
     use super::*;
-
     fn sample_transaction(
         authority: &AccountId,
         signer: &iroha_crypto::PrivateKey,
@@ -8918,7 +8909,6 @@ mod tests {
     #[test]
     fn resolve_policy_rejects_rule_dataspace_override_for_target() {
         use iroha_data_model::nexus::DataSpaceMetadata;
-
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
             default_dataspace: DataSpaceId::UNIVERSAL,
@@ -9128,7 +9118,6 @@ mod tests {
     #[test]
     fn route_resolution_rejects_lane_dataspace_mismatch() {
         use iroha_data_model::nexus::DataSpaceMetadata;
-
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -9189,7 +9178,6 @@ mod tests {
     #[test]
     fn route_resolution_rejects_unknown_lane() {
         use iroha_data_model::nexus::DataSpaceMetadata;
-
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -9242,7 +9230,6 @@ mod tests {
     #[test]
     fn route_resolution_rejects_missing_default_lane() {
         use iroha_data_model::nexus::DataSpaceMetadata;
-
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::new(9),
@@ -9303,7 +9290,6 @@ mod tests {
     #[test]
     fn route_resolution_rejects_missing_default_dataspace() {
         use iroha_data_model::nexus::DataSpaceMetadata;
-
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,

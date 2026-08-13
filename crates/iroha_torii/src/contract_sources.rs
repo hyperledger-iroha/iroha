@@ -1,5 +1,4 @@
 #![cfg(feature = "app_api")]
-
 use std::{
     collections::BTreeSet,
     fmt::{self, Write as _},
@@ -10,7 +9,6 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use crate::{Error, JsonBody, data_dir};
 use axum::{http::StatusCode, response::IntoResponse};
 use iroha_core::state::{State as CoreState, StateReadOnly, WorldReadOnly};
@@ -29,7 +27,6 @@ use iroha_data_model::{
 };
 use ivm::analysis::ProgramAnalysis;
 use mv::storage::StorageReadOnly;
-
 const VERIFIED_SOURCE_VERSION: u32 = 1;
 const VERIFIED_SOURCE_LANGUAGE_KOTODAMA: &str = "kotodama";
 const FIXED_HEX_COMPONENT_BYTES_V1: usize = 32;
@@ -59,7 +56,6 @@ const VERIFIED_SOURCE_JOB_MESSAGE_MAX_BYTES_V1: usize = 16 * 1024;
 const RENDERED_SOURCE_VERIFIED: &str = "verified_source";
 const RENDERED_SOURCE_PSEUDO: &str = "pseudo_source";
 const RENDERED_SOURCE_MANIFEST_STUB: &str = "manifest_stub";
-
 #[derive(
     Debug,
     Clone,
@@ -72,7 +68,6 @@ pub struct ContractViewAccessHintsDto {
     pub read_keys: Vec<String>,
     pub write_keys: Vec<String>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -85,7 +80,6 @@ pub struct ContractViewEntrypointParamDto {
     pub name: String,
     pub type_name: String,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -109,7 +103,6 @@ pub struct ContractViewEntrypointDto {
     pub access_hints_skipped: Vec<String>,
     pub triggers: Vec<String>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -124,7 +117,6 @@ pub struct ContractViewSyscallDto {
     pub name: Option<String>,
     pub count: u64,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -139,7 +131,6 @@ pub struct ContractViewMemoryDto {
     pub load128: u64,
     pub store128: u64,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -153,7 +144,6 @@ pub struct ContractViewAnalysisDto {
     pub memory: ContractViewMemoryDto,
     pub syscalls: Vec<ContractViewSyscallDto>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -174,7 +164,6 @@ pub struct ContractVerifiedSourceRefDto {
     #[norito(default)]
     pub content_length: Option<u64>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -205,7 +194,6 @@ pub struct ContractCodeViewDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub verified_source_ref: Option<ContractVerifiedSourceRefDto>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -220,7 +208,6 @@ pub struct SubmitVerifiedContractSourceDto {
     pub source_name: Option<String>,
     pub source_text: String,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -243,7 +230,6 @@ pub struct ContractVerifiedSourceJobResponseDto {
     #[norito(default)]
     pub verified_source_ref: Option<ContractVerifiedSourceRefDto>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -271,7 +257,6 @@ struct StoredVerifiedSourceRecord {
     #[norito(default)]
     content_length: Option<u64>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -295,7 +280,6 @@ struct StoredVerifiedSourceJob {
     #[norito(default)]
     verified_source_ref: Option<ContractVerifiedSourceRefDto>,
 }
-
 struct ContractViewBuildInput {
     code_hash: Option<String>,
     declared_code_hash: Option<String>,
@@ -303,25 +287,20 @@ struct ContractViewBuildInput {
     code_bytes: Option<Vec<u8>>,
     warnings: Vec<String>,
 }
-
 fn not_found() -> Error {
     Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
 }
-
 fn conversion_error(message: impl Into<String>) -> Error {
     Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
         message.into(),
     )))
 }
-
 fn map_io_error(error: io::Error, context: &str) -> Error {
     conversion_error(format!("{context}: {error}"))
 }
-
 fn hash_hex(hash: &Hash) -> String {
     hex::encode(hash.as_ref())
 }
-
 fn canonical_code_hash(code_bytes: &[u8]) -> Result<Hash, Error> {
     let parsed = ivm::ProgramMetadata::parse(code_bytes)
         .map_err(|err| conversion_error(format!("invalid contract artifact header: {err}")))?;
@@ -332,7 +311,6 @@ fn canonical_code_hash(code_bytes: &[u8]) -> Result<Hash, Error> {
     }
     Ok(ivm::contract_code_hash(code_bytes))
 }
-
 fn manifest_from_verified_artifact(
     verified: &ivm::VerifiedContractArtifact,
     code_hash: Hash,
@@ -341,7 +319,6 @@ fn manifest_from_verified_artifact(
     manifest.code_hash = Some(code_hash);
     manifest
 }
-
 fn parse_code_hash_hex(raw: &str) -> Result<(Hash, String), Error> {
     if raw.len() != FIXED_HEX_COMPONENT_CHARS_V1 {
         return Err(conversion_error(format!(
@@ -356,7 +333,6 @@ fn parse_code_hash_hex(raw: &str) -> Result<(Hash, String), Error> {
     let canonical = hash_hex(&hash);
     Ok((hash, canonical))
 }
-
 fn canonical_verified_source_job_id(raw: &str) -> Result<String, Error> {
     if raw.len() != FIXED_HEX_COMPONENT_CHARS_V1 {
         return Err(conversion_error(format!(
@@ -369,11 +345,9 @@ fn canonical_verified_source_job_id(raw: &str) -> Result<String, Error> {
         .map_err(|err| conversion_error(format!("invalid verified-source job id: {err}")))?;
     Ok(hex::encode(bytes))
 }
-
 fn now_rfc3339() -> String {
     crate::explorer::now_rfc3339()
 }
-
 fn unique_suffix() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -381,24 +355,20 @@ fn unique_suffix() -> String {
         .unwrap_or(0);
     format!("{nanos:x}")
 }
-
 fn contracts_dir() -> PathBuf {
     data_dir::base_dir().join("contracts")
 }
-
 fn verified_source_record_path(code_hash: &str) -> PathBuf {
     contracts_dir()
         .join("verified_sources")
         .join(format!("{code_hash}.json"))
 }
-
 fn verified_source_job_path(code_hash: &str, job_id: &str) -> PathBuf {
     contracts_dir()
         .join("verified_source_jobs")
         .join(code_hash)
         .join(format!("{job_id}.json"))
 }
-
 fn decimal_u64_encoded_len(mut value: u64) -> usize {
     let mut digits = 1;
     while value >= 10 {
@@ -407,7 +377,6 @@ fn decimal_u64_encoded_len(mut value: u64) -> usize {
     }
     digits
 }
-
 fn json_string_encoded_len(value: &str) -> Option<usize> {
     value.as_bytes().iter().try_fold(2_usize, |length, byte| {
         let encoded = match *byte {
@@ -418,15 +387,12 @@ fn json_string_encoded_len(value: &str) -> Option<usize> {
         length.checked_add(encoded)
     })
 }
-
 fn optional_json_string_encoded_len(value: Option<&str>) -> Option<usize> {
     value.map_or(Some(4), json_string_encoded_len)
 }
-
 fn optional_json_u64_encoded_len(value: Option<u64>) -> usize {
     value.map_or(4, decimal_u64_encoded_len)
 }
-
 fn json_object_encoded_len(fields: &[(&str, usize)]) -> Option<usize> {
     let mut length = 2_usize;
     for (index, (key, value_len)) in fields.iter().enumerate() {
@@ -440,7 +406,6 @@ fn json_object_encoded_len(fields: &[(&str, usize)]) -> Option<usize> {
     }
     Some(length)
 }
-
 fn verified_source_ref_json_encoded_len(value: &ContractVerifiedSourceRefDto) -> Option<usize> {
     let fields = [
         ("language", json_string_encoded_len(&value.language)?),
@@ -467,17 +432,14 @@ fn verified_source_ref_json_encoded_len(value: &ContractVerifiedSourceRefDto) ->
     ];
     json_object_encoded_len(&fields)
 }
-
 fn optional_verified_source_ref_json_encoded_len(
     value: Option<&ContractVerifiedSourceRefDto>,
 ) -> Option<usize> {
     value.map_or(Some(4), verified_source_ref_json_encoded_len)
 }
-
 trait PersistedJsonEncodedLen {
     fn persisted_json_encoded_len(&self) -> Option<usize>;
 }
-
 impl PersistedJsonEncodedLen for StoredVerifiedSourceRecord {
     fn persisted_json_encoded_len(&self) -> Option<usize> {
         let fields = [
@@ -514,7 +476,6 @@ impl PersistedJsonEncodedLen for StoredVerifiedSourceRecord {
         json_object_encoded_len(&fields)
     }
 }
-
 impl PersistedJsonEncodedLen for StoredVerifiedSourceJob {
     fn persisted_json_encoded_len(&self) -> Option<usize> {
         let fields = [
@@ -543,7 +504,6 @@ impl PersistedJsonEncodedLen for StoredVerifiedSourceJob {
         json_object_encoded_len(&fields)
     }
 }
-
 fn write_json_file_atomic<T: norito::json::JsonSerialize + PersistedJsonEncodedLen>(
     path: &Path,
     value: &T,
@@ -584,7 +544,6 @@ fn write_json_file_atomic<T: norito::json::JsonSerialize + PersistedJsonEncodedL
         .map_err(|err| map_io_error(err, "failed to persist contract source file"))?;
     Ok(())
 }
-
 fn read_json_file<T: norito::json::JsonDeserializeOwned>(
     path: &Path,
     maximum_bytes: usize,
@@ -640,7 +599,6 @@ fn read_json_file<T: norito::json::JsonDeserializeOwned>(
         .map(Some)
         .map_err(|err| conversion_error(format!("failed to decode bounded {label}: {err}")))
 }
-
 fn load_verified_source_record(
     code_hash: &str,
 ) -> Result<Option<StoredVerifiedSourceRecord>, Error> {
@@ -650,7 +608,6 @@ fn load_verified_source_record(
         "verified-source record",
     )
 }
-
 fn load_verified_source_job(
     code_hash: &str,
     job_id: &str,
@@ -662,7 +619,6 @@ fn load_verified_source_job(
     )
     .map(|maybe| maybe.map(Into::into))
 }
-
 fn persist_verified_source_record(record: &StoredVerifiedSourceRecord) -> Result<(), Error> {
     write_json_file_atomic(
         &verified_source_record_path(&record.code_hash),
@@ -671,7 +627,6 @@ fn persist_verified_source_record(record: &StoredVerifiedSourceRecord) -> Result
         "verified-source record",
     )
 }
-
 fn persist_verified_source_job(job: &StoredVerifiedSourceJob) -> Result<(), Error> {
     write_json_file_atomic(
         &verified_source_job_path(&job.code_hash, &job.job_id),
@@ -680,7 +635,6 @@ fn persist_verified_source_job(job: &StoredVerifiedSourceJob) -> Result<(), Erro
         "verified-source job",
     )
 }
-
 fn verified_source_ref_from_record(
     record: &StoredVerifiedSourceRecord,
 ) -> Option<ContractVerifiedSourceRefDto> {
@@ -690,7 +644,6 @@ fn verified_source_ref_from_record(
     {
         return None;
     }
-
     Some(ContractVerifiedSourceRefDto {
         language: record.language.clone(),
         source_name: record.source_name.clone(),
@@ -700,7 +653,6 @@ fn verified_source_ref_from_record(
         content_length: record.content_length,
     })
 }
-
 impl From<StoredVerifiedSourceJob> for ContractVerifiedSourceJobResponseDto {
     fn from(value: StoredVerifiedSourceJob) -> Self {
         Self {
@@ -715,7 +667,6 @@ impl From<StoredVerifiedSourceJob> for ContractVerifiedSourceJobResponseDto {
         }
     }
 }
-
 fn persist_job_response(
     job: ContractVerifiedSourceJobResponseDto,
 ) -> Result<ContractVerifiedSourceJobResponseDto, Error> {
@@ -733,7 +684,6 @@ fn persist_job_response(
     persist_verified_source_job(&stored)?;
     Ok(job)
 }
-
 fn entrypoint_kind_label(kind: EntryPointKind) -> &'static str {
     match kind {
         EntryPointKind::Kotoage => "kotoage",
@@ -742,7 +692,6 @@ fn entrypoint_kind_label(kind: EntryPointKind) -> &'static str {
         EntryPointKind::Kaizen => "kaizen",
     }
 }
-
 fn kotodama_string_literal(value: &str) -> String {
     let mut rendered = String::with_capacity(value.len().saturating_add(2));
     rendered.push('"');
@@ -763,7 +712,6 @@ fn kotodama_string_literal(value: &str) -> String {
     rendered.push('"');
     rendered
 }
-
 fn entrypoint_signature(entrypoint: &EntrypointDescriptor) -> Result<String, &'static str> {
     let params = entrypoint
         .params
@@ -818,7 +766,6 @@ fn entrypoint_signature(entrypoint: &EntrypointDescriptor) -> Result<String, &'s
         ),
     })
 }
-
 fn render_program_syscalls(analysis: &ProgramAnalysis) -> String {
     if analysis.syscalls.is_empty() {
         return "none".to_owned();
@@ -833,7 +780,6 @@ fn render_program_syscalls(analysis: &ProgramAnalysis) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
-
 fn trigger_label(
     trigger: &iroha_data_model::smart_contract::manifest::TriggerDescriptor,
 ) -> String {
@@ -843,7 +789,6 @@ fn trigger_label(
     };
     format!("{} -> {}", trigger.id, callback)
 }
-
 fn render_pseudo_source(
     code_hash: &str,
     manifest: Option<&ContractManifest>,
@@ -859,7 +804,6 @@ fn render_pseudo_source(
         "  // Decompiled pseudo-source derived from contract bytes and manifest hints.".to_owned(),
     );
     lines.push(format!("  // code_hash: {code_hash}"));
-
     if let Some(manifest) = manifest {
         if let Some(abi_hash) = manifest.abi_hash.as_ref() {
             lines.push(format!("  // abi_hash: {}", hash_hex(abi_hash)));
@@ -871,7 +815,6 @@ fn render_pseudo_source(
             lines.push(format!("  // features_bitmap: 0x{features:x}"));
         }
     }
-
     if let Some(analysis) = analysis {
         lines.push(format!(
             "  // static analysis: {} instructions; memory(load64={}, store64={}, load128={}, store128={})",
@@ -886,7 +829,6 @@ fn render_pseudo_source(
             render_program_syscalls(analysis)
         ));
     }
-
     if let Some(manifest) = manifest {
         if let Some(entrypoints) = manifest.entrypoints.as_ref() {
             for entrypoint in entrypoints {
@@ -936,11 +878,9 @@ fn render_pseudo_source(
         lines.push(String::new());
         lines.push("  // Manifest metadata is unavailable for this artifact.".to_owned());
     }
-
     lines.push("}".to_owned());
     lines.join("\n")
 }
-
 fn render_manifest_stub(
     code_hash: &str,
     manifest: Option<&ContractManifest>,
@@ -980,7 +920,6 @@ fn render_manifest_stub(
     lines.push("}".to_owned());
     lines.join("\n")
 }
-
 fn aggregate_permissions(manifest: Option<&ContractManifest>) -> Vec<String> {
     let mut values = BTreeSet::new();
     if let Some(entrypoints) = manifest.and_then(|value| value.entrypoints.as_ref()) {
@@ -992,7 +931,6 @@ fn aggregate_permissions(manifest: Option<&ContractManifest>) -> Vec<String> {
     }
     values.into_iter().collect()
 }
-
 fn to_entrypoint_dto(entrypoint: &EntrypointDescriptor) -> ContractViewEntrypointDto {
     ContractViewEntrypointDto {
         name: entrypoint.name.clone(),
@@ -1014,7 +952,6 @@ fn to_entrypoint_dto(entrypoint: &EntrypointDescriptor) -> ContractViewEntrypoin
         triggers: entrypoint.triggers.iter().map(trigger_label).collect(),
     }
 }
-
 fn to_analysis_dto(analysis: &ProgramAnalysis) -> ContractViewAnalysisDto {
     ContractViewAnalysisDto {
         instruction_count: analysis.instruction_count as u64,
@@ -1035,7 +972,6 @@ fn to_analysis_dto(analysis: &ProgramAnalysis) -> ContractViewAnalysisDto {
             .collect(),
     }
 }
-
 fn locate_instruction_box(
     state: &CoreState,
     transaction_hash: &str,
@@ -1045,7 +981,6 @@ fn locate_instruction_box(
     if start_height == 0 {
         return Err(not_found());
     }
-
     let target: iroha_crypto::HashOf<TransactionEntrypoint> = transaction_hash
         .trim()
         .parse()
@@ -1053,7 +988,6 @@ fn locate_instruction_box(
     let lookup_index: usize = index
         .try_into()
         .map_err(|_| conversion_error("instruction index exceeds host pointer width"))?;
-
     let mut height = start_height;
     loop {
         let Some(nonzero_height) = NonZeroUsize::new(height as usize) else {
@@ -1090,10 +1024,8 @@ fn locate_instruction_box(
         }
         height -= 1;
     }
-
     Err(not_found())
 }
-
 fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCodeViewDto, Error> {
     let mut code_hash = input.code_hash.clone().unwrap_or_default();
     let mut declared_code_hash = input.declared_code_hash.clone();
@@ -1106,7 +1038,6 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
         .and_then(|value| value.abi_hash.as_ref().map(hash_hex));
     let mut analysis = None;
     let byte_len = input.code_bytes.as_ref().map(|bytes| bytes.len() as u64);
-
     if let Some(code_bytes) = input.code_bytes.as_ref() {
         let canonical_hash = canonical_code_hash(code_bytes)?;
         match ivm::verify_contract_artifact(code_bytes) {
@@ -1124,7 +1055,6 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
                     declared_code_hash = Some(code_hash.clone());
                     code_hash = verified_hash.clone();
                 }
-
                 let verified_manifest = manifest_from_verified_artifact(&verified, canonical_hash);
                 match manifest.as_ref() {
                     Some(existing)
@@ -1140,10 +1070,8 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
                         manifest = Some(verified_manifest);
                     }
                 }
-
                 abi_hash = Some(hash_hex(&verified.abi_hash));
                 compiler_fingerprint = Some(verified.contract_interface.compiler_fingerprint);
-
                 match ivm::analysis::analyze_program(code_bytes) {
                     Ok(value) => analysis = Some(value),
                     Err(err) => input
@@ -1158,7 +1086,6 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
             }
         }
     }
-
     if code_hash.is_empty() {
         if let Some(manifest_hash) = manifest
             .as_ref()
@@ -1169,7 +1096,6 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
             return Err(not_found());
         }
     }
-
     let verified_source_record = if let Some(record) = load_verified_source_record(&code_hash)? {
         Some(record)
     } else if let Some(declared) = declared_code_hash
@@ -1183,10 +1109,8 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
     let verified_source_ref = verified_source_record
         .as_ref()
         .and_then(verified_source_ref_from_record);
-
     let rendered_source_kind;
     let rendered_source_text;
-
     if let Some(record) = verified_source_record.as_ref() {
         rendered_source_kind = RENDERED_SOURCE_VERIFIED.to_owned();
         rendered_source_text = record.source_text.clone();
@@ -1198,7 +1122,6 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
         rendered_source_kind = RENDERED_SOURCE_MANIFEST_STUB.to_owned();
         rendered_source_text = render_manifest_stub(&code_hash, manifest.as_ref(), &input.warnings);
     }
-
     Ok(ContractCodeViewDto {
         code_hash,
         declared_code_hash,
@@ -1225,7 +1148,6 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
         verified_source_ref,
     })
 }
-
 fn resolve_contract_view_input_for_code_hash(
     state: &CoreState,
     code_hash_hex: &str,
@@ -1237,7 +1159,6 @@ fn resolve_contract_view_input_for_code_hash(
     if manifest.is_none() && code_bytes.is_none() {
         return Err(not_found());
     }
-
     Ok(ContractViewBuildInput {
         code_hash: Some(code_hash_hex),
         declared_code_hash: None,
@@ -1246,13 +1167,11 @@ fn resolve_contract_view_input_for_code_hash(
         warnings: Vec::new(),
     })
 }
-
 fn resolve_contract_view_input_for_instruction(
     instruction: &InstructionBox,
     state: &CoreState,
 ) -> Result<ContractViewBuildInput, Error> {
     let any = instruction.as_any();
-
     if let Some(register_bytes) = any.downcast_ref::<RegisterSmartContractBytes>() {
         return Ok(ContractViewBuildInput {
             code_hash: Some(hash_hex(&register_bytes.code_hash)),
@@ -1264,7 +1183,6 @@ fn resolve_contract_view_input_for_instruction(
             ],
         });
     }
-
     if let Some(register_code) = any.downcast_ref::<RegisterSmartContractCode>() {
         let declared = register_code.manifest.code_hash.as_ref().map(hash_hex);
         return Ok(ContractViewBuildInput {
@@ -1277,7 +1195,6 @@ fn resolve_contract_view_input_for_instruction(
             ],
         });
     }
-
     if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
         let code_hash_hex = hash_hex(&activate.code_hash);
         let mut input = resolve_contract_view_input_for_code_hash(state, &code_hash_hex)?;
@@ -1287,10 +1204,8 @@ fn resolve_contract_view_input_for_instruction(
         ));
         return Ok(input);
     }
-
     Err(not_found())
 }
-
 fn new_job_id(code_hash: &str, source_text: &str) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"iroha.contract.verified-source-job.v1\0");
@@ -1301,7 +1216,6 @@ fn new_job_id(code_hash: &str, source_text: &str) -> String {
     hasher.update(source_text.as_bytes());
     hasher.finalize().to_hex().to_string()
 }
-
 fn verified_source_request_bound_error(
     request: &SubmitVerifiedContractSourceDto,
 ) -> Option<&'static str> {
@@ -1320,13 +1234,11 @@ fn verified_source_request_bound_error(
     }
     None
 }
-
 struct BoundedDiagnosticText {
     text: String,
     maximum_bytes: usize,
     truncated: bool,
 }
-
 impl BoundedDiagnosticText {
     fn try_new(maximum_bytes: usize) -> Result<Self, std::collections::TryReserveError> {
         let mut text = String::new();
@@ -1337,7 +1249,6 @@ impl BoundedDiagnosticText {
             truncated: false,
         })
     }
-
     fn finish(mut self) -> String {
         if self.truncated {
             let ellipsis = '…';
@@ -1358,7 +1269,6 @@ impl BoundedDiagnosticText {
         self.text
     }
 }
-
 impl fmt::Write for BoundedDiagnosticText {
     fn write_str(&mut self, value: &str) -> fmt::Result {
         if self.truncated {
@@ -1378,7 +1288,6 @@ impl fmt::Write for BoundedDiagnosticText {
         Err(fmt::Error)
     }
 }
-
 fn write_diagnostic_source(
     output: &mut BoundedDiagnosticText,
     span: &ivm::kotodama::diagnostic::SourceSpan,
@@ -1388,7 +1297,6 @@ fn write_diagnostic_source(
     }
     output.write_str(span.source.as_deref().unwrap_or("<source>"))
 }
-
 /// Render compiler diagnostics directly into a fixed-size UTF-8 buffer.
 ///
 /// In particular, this must not call `DiagnosticBundle::to_string` or
@@ -1401,7 +1309,6 @@ fn bounded_verified_source_diagnostic_message(
     else {
         return "Kotodama compilation failed (diagnostic allocation failed)".to_owned();
     };
-
     for (index, diagnostic) in bundle.diagnostics.iter().enumerate() {
         let rendered = (|| -> fmt::Result {
             if index != 0 {
@@ -1471,13 +1378,11 @@ fn bounded_verified_source_diagnostic_message(
             break;
         }
     }
-
     if output.text.is_empty() {
         let _ = output.write_str("Kotodama compilation failed without diagnostics");
     }
     output.finish()
 }
-
 pub async fn handle_get_instruction_contract_view(
     state: Arc<CoreState>,
     transaction_hash: String,
@@ -1488,7 +1393,6 @@ pub async fn handle_get_instruction_contract_view(
     let view = build_contract_view(input)?;
     Ok(JsonBody(view))
 }
-
 pub async fn handle_get_contract_code_view(
     state: Arc<CoreState>,
     code_hash_hex: String,
@@ -1497,7 +1401,6 @@ pub async fn handle_get_contract_code_view(
     let view = build_contract_view(input)?;
     Ok(JsonBody(view))
 }
-
 pub fn handle_post_verified_source_job(
     code_hash_hex: String,
     request: SubmitVerifiedContractSourceDto,
@@ -1521,7 +1424,6 @@ pub fn handle_post_verified_source_job(
         return Ok((StatusCode::BAD_REQUEST, JsonBody(persisted)));
     }
     let language = request.language.trim().to_ascii_lowercase();
-
     if language != VERIFIED_SOURCE_LANGUAGE_KOTODAMA {
         let response = ContractVerifiedSourceJobResponseDto {
             job_id,
@@ -1538,7 +1440,6 @@ pub fn handle_post_verified_source_job(
         let persisted = persist_job_response(response)?;
         return Ok((StatusCode::BAD_REQUEST, JsonBody(persisted)));
     }
-
     let source_name = request.source_name;
     let source_text = request.source_text;
     if source_text.trim().is_empty() {
@@ -1555,14 +1456,12 @@ pub fn handle_post_verified_source_job(
         let persisted = persist_job_response(response)?;
         return Ok((StatusCode::BAD_REQUEST, JsonBody(persisted)));
     }
-
     let compile_result = ivm::kotodama::session::CompilerSession::default().build(
         ivm::kotodama::session::CompileRequest {
             source: &source_text,
             source_name: source_name.as_deref(),
         },
     );
-
     let response = match compile_result {
         Ok(output) => {
             let ivm::kotodama::session::CompileOutput {
@@ -1646,7 +1545,6 @@ pub fn handle_post_verified_source_job(
                         .and_then(|value| value.content_length),
                 };
                 persist_verified_source_record(&record)?;
-
                 ContractVerifiedSourceJobResponseDto {
                     job_id,
                     code_hash: code_hash_hex.clone(),
@@ -1670,7 +1568,6 @@ pub fn handle_post_verified_source_job(
             verified_source_ref: None,
         },
     };
-
     let status_code = match response.status.as_str() {
         "accepted" => StatusCode::ACCEPTED,
         "mismatch" | "compile_error" | "conflict" | "error" => StatusCode::BAD_REQUEST,
@@ -1679,7 +1576,6 @@ pub fn handle_post_verified_source_job(
     let persisted = persist_job_response(response)?;
     Ok((status_code, JsonBody(persisted)))
 }
-
 pub async fn handle_get_verified_source_job(
     code_hash_hex: String,
     job_id: String,
@@ -1689,11 +1585,9 @@ pub async fn handle_get_verified_source_job(
     let job = load_verified_source_job(&code_hash_hex, &job_id)?.ok_or_else(not_found)?;
     Ok(JsonBody(job))
 }
-
 #[cfg(test)]
 mod tests {
     use std::{borrow::Cow, num::NonZeroU64, time::Duration};
-
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
         kura::Kura,
@@ -1708,10 +1602,8 @@ mod tests {
     use iroha_executor_data_model::permission::{
         governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
     };
-
     use super::*;
     use crate::test_utils::TestDataDirGuard;
-
     #[test]
     fn verified_source_request_bounds_accept_exact_and_reject_first_overflow() {
         assert_eq!(
@@ -1722,35 +1614,30 @@ mod tests {
             VERIFIED_SOURCE_NAME_MAX_BYTES_V1,
             ivm::kotodama::linker::MAX_LOGICAL_SOURCE_PATH_BYTES
         );
-
         let mut request = SubmitVerifiedContractSourceDto {
             language: "k".repeat(VERIFIED_SOURCE_LANGUAGE_MAX_BYTES_V1),
             source_name: Some("n".repeat(VERIFIED_SOURCE_NAME_MAX_BYTES_V1)),
             source_text: "s".repeat(VERIFIED_SOURCE_TEXT_MAX_BYTES_V1),
         };
         assert_eq!(verified_source_request_bound_error(&request), None);
-
         request.source_text.push('s');
         assert_eq!(
             verified_source_request_bound_error(&request),
             Some("source_text exceeds the Kotodama V1 1048576-byte maximum")
         );
         request.source_text.pop();
-
         request.source_name.as_mut().expect("source name").push('n');
         assert_eq!(
             verified_source_request_bound_error(&request),
             Some("source_name exceeds the Kotodama V1 4096-byte maximum")
         );
         request.source_name.as_mut().expect("source name").pop();
-
         request.language.push('k');
         assert_eq!(
             verified_source_request_bound_error(&request),
             Some("language exceeds the first-release 32-byte maximum")
         );
     }
-
     #[test]
     fn verified_source_diagnostic_message_is_utf8_safe_and_bounded() {
         let short = ivm::kotodama::diagnostic::DiagnosticBundle::single(
@@ -1765,7 +1652,6 @@ mod tests {
             bounded_verified_source_diagnostic_message(&short),
             short.render_human()
         );
-
         let long = ivm::kotodama::diagnostic::DiagnosticBundle::single(
             ivm::kotodama::diagnostic::Diagnostic::error(
                 "KTEST",
@@ -1778,7 +1664,6 @@ mod tests {
         assert!(bounded.len() <= VERIFIED_SOURCE_JOB_MESSAGE_MAX_BYTES_V1);
         assert!(bounded.ends_with('…'));
     }
-
     #[test]
     fn fixed_hex_path_components_are_validated_before_decode_and_canonicalized() {
         let uppercase = "AB".repeat(FIXED_HEX_COMPONENT_BYTES_V1);
@@ -1788,7 +1673,6 @@ mod tests {
             canonical_verified_source_job_id(&uppercase).expect("valid job id"),
             "ab".repeat(FIXED_HEX_COMPONENT_BYTES_V1)
         );
-
         for invalid in [
             "a".repeat(FIXED_HEX_COMPONENT_CHARS_V1 - 1),
             "a".repeat(FIXED_HEX_COMPONENT_CHARS_V1 + 1),
@@ -1799,7 +1683,6 @@ mod tests {
             assert!(canonical_verified_source_job_id(&invalid).is_err());
         }
     }
-
     fn persisted_json_size_fixture() -> StoredVerifiedSourceRecord {
         StoredVerifiedSourceRecord {
             version: VERIFIED_SOURCE_VERSION,
@@ -1815,7 +1698,6 @@ mod tests {
             content_length: Some(u64::MAX),
         }
     }
-
     #[test]
     fn persisted_json_preflight_matches_compact_norito_encoding() {
         let record = persisted_json_size_fixture();
@@ -1824,7 +1706,6 @@ mod tests {
             record.persisted_json_encoded_len(),
             Some(record_bytes.len())
         );
-
         let job = StoredVerifiedSourceJob {
             version: VERIFIED_SOURCE_VERSION,
             job_id: "ef".repeat(FIXED_HEX_COMPONENT_BYTES_V1),
@@ -1846,7 +1727,6 @@ mod tests {
         let job_bytes = norito::json::to_vec(&job).expect("encode source job");
         assert_eq!(job.persisted_json_encoded_len(), Some(job_bytes.len()));
     }
-
     #[test]
     fn persisted_json_writer_rejects_overflow_before_filesystem_mutation() {
         let directory = tempfile::tempdir().expect("verified-source writer directory");
@@ -1854,7 +1734,6 @@ mod tests {
         let encoded_len = record
             .persisted_json_encoded_len()
             .expect("bounded record length");
-
         let exact_path = directory.path().join("exact").join("record.json");
         write_json_file_atomic(&exact_path, &record, encoded_len, "source writer test")
             .expect("exact-size record is admitted");
@@ -1862,7 +1741,6 @@ mod tests {
             fs::read(&exact_path).expect("read persisted record").len(),
             encoded_len
         );
-
         let rejected_parent = directory.path().join("must-not-be-created");
         let rejected_path = rejected_parent.join("record.json");
         assert!(
@@ -1876,7 +1754,6 @@ mod tests {
         );
         assert!(!rejected_parent.exists());
     }
-
     #[test]
     fn verified_source_file_reader_rejects_size_before_json_decode() {
         let directory = tempfile::tempdir().expect("verified-source reader directory");
@@ -1886,7 +1763,6 @@ mod tests {
             read_json_file::<norito::json::Value>(&exact_path, 4, "verified-source reader test")
                 .expect("exact-size JSON is admitted");
         assert!(exact.is_some());
-
         let overflow_path = directory.path().join("overflow.json");
         fs::write(&overflow_path, b"null ").expect("write oversized JSON");
         assert!(
@@ -1894,19 +1770,16 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn verified_source_job_id_has_fixed_hex_size() {
         let job_id = new_job_id(&"00".repeat(32), "seiyaku test {}");
         assert_eq!(job_id.len(), FIXED_HEX_COMPONENT_CHARS_V1);
         assert!(job_id.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
-
     fn checked_contract_sources_key_fixture(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("generate checked contract source fixture key")
     }
-
     #[test]
     fn contract_sources_fixture_uses_checked_random_key_generation() {
         for algorithm in [Algorithm::Ed25519, Algorithm::BlsNormal] {
@@ -1915,11 +1788,9 @@ mod tests {
                 .public_key()
                 .try_algorithm()
                 .expect("contract source fixture key advertises a valid algorithm");
-
             assert_eq!(actual, algorithm);
         }
     }
-
     #[test]
     fn pseudo_source_uses_branded_entrypoint_syntax() {
         let descriptor = |name: &str, kind| EntrypointDescriptor {
@@ -1936,7 +1807,6 @@ mod tests {
             access_hints_skipped: Vec::new(),
             triggers: Vec::new(),
         };
-
         let mut run = descriptor("run", EntryPointKind::Kotoage);
         run.params.push(
             iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
@@ -1944,7 +1814,6 @@ mod tests {
                 type_name: "quantity".to_owned(),
             },
         );
-
         assert_eq!(
             entrypoint_signature(&run).expect("canonical kotoage signature"),
             "kotoage fn run(quantity amount) authorize(\"Run\")",
@@ -1964,7 +1833,6 @@ mod tests {
                 .expect("canonical kaizen signature"),
             "kaizen()",
         );
-
         let mut typed = descriptor("write", EntryPointKind::Kotoage);
         typed.params = vec![
             iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
@@ -1981,7 +1849,6 @@ mod tests {
             entrypoint_signature(&typed).expect("escaped typed kotoage signature"),
             "kotoage fn write(quantity amount, string memo) authorize(\"CanWrite\\\"Memo\\\\Ledger\\n\")"
         );
-
         let manifest = ContractManifest {
             seiyaku_name: Some("Demo".to_owned()),
             code_hash: None,
@@ -2001,27 +1868,23 @@ mod tests {
         ));
         assert!(!rendered.contains("// permission:"));
         assert_eq!(rendered.matches("CanWrite").count(), 1);
-
         let mut missing_authorization = descriptor("write", EntryPointKind::Kotoage);
         missing_authorization.permission = None;
         assert_eq!(
             entrypoint_signature(&missing_authorization),
             Err("kotoage entrypoint is missing caller authorization")
         );
-
         missing_authorization.permission = Some(" \t\n".to_owned());
         assert_eq!(
             entrypoint_signature(&missing_authorization),
             Err("kotoage entrypoint is missing caller authorization")
         );
-
         let mut empty_view_authorization = descriptor("read", EntryPointKind::View);
         empty_view_authorization.permission = Some(" \t\n".to_owned());
         assert_eq!(
             entrypoint_signature(&empty_view_authorization),
             Err("view entrypoint declares an empty caller authorization")
         );
-
         let mut forbidden_lifecycle_authorization =
             descriptor("hajimari", EntryPointKind::Hajimari);
         forbidden_lifecycle_authorization.permission = Some("Admin".to_owned());
@@ -2030,7 +1893,6 @@ mod tests {
             Err("lifecycle entrypoint declares forbidden source authorization")
         );
     }
-
     fn build_state_with_single_transaction(
         instructions: Vec<dm::InstructionBox>,
     ) -> (Arc<State>, HashOf<TransactionEntrypoint>) {
@@ -2041,7 +1903,6 @@ mod tests {
             kura.clone(),
             query,
         ));
-
         let authority_key = checked_contract_sources_key_fixture(Algorithm::Ed25519);
         let authority = dm::AccountId::new(authority_key.public_key().clone());
         let mut builder = dm::TransactionBuilder::new(
@@ -2054,7 +1915,6 @@ mod tests {
             .with_instructions(instructions)
             .sign(authority_key.private_key());
         let target_hash = signed.hash_as_entrypoint();
-
         let leader = checked_contract_sources_key_fixture(Algorithm::BlsNormal);
         let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(signed))])
             .chain(0, state.view().latest_block().as_deref())
@@ -2066,10 +1926,8 @@ mod tests {
             .unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, state_block, committed);
-
         (state, target_hash)
     }
-
     fn install_contract_instance(
         state: &State,
         authority: &AccountId,
@@ -2086,17 +1944,14 @@ mod tests {
             0,
         ));
         let mut stx = block.transaction();
-
         let register_permission: permission::Permission = CanRegisterSmartContractCode.into();
         dm::Grant::account_permission(register_permission, authority.clone())
             .execute(authority, &mut stx)
             .expect("grant CanRegisterSmartContractCode");
-
         let enact_permission: permission::Permission = CanEnactGovernance.into();
         dm::Grant::account_permission(enact_permission, authority.clone())
             .execute(authority, &mut stx)
             .expect("grant CanEnactGovernance");
-
         let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
         let code_hash =
             register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
@@ -2104,12 +1959,10 @@ mod tests {
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
         activate_instance(authority, contract_address.clone(), code_hash, &mut stx)
             .expect("activate instance");
-
         stx.apply();
         block.commit().expect("commit block");
         code_hash
     }
-
     #[tokio::test]
     async fn instruction_contract_view_renders_pseudo_source_for_register_bytes() {
         let _guard = TestDataDirGuard::new();
@@ -2120,13 +1973,11 @@ mod tests {
             code: program,
         });
         let (state, hash) = build_state_with_single_transaction(vec![instruction]);
-
         let response = handle_get_instruction_contract_view(state, hash.to_string(), 0)
             .await
             .expect("contract view response")
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
-
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("body");
@@ -2139,7 +1990,6 @@ mod tests {
         assert!(!payload.rendered_source_text.contains("main:"));
         assert!(!payload.entrypoints.is_empty());
     }
-
     #[tokio::test]
     async fn code_hash_contract_view_prefers_verified_source_record() {
         let _guard = TestDataDirGuard::new();
@@ -2151,7 +2001,6 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-
         let code = crate::test_utils::minimal_ivm_program(1);
         let network_id = *state.network_id_ref();
         let contract_address =
@@ -2179,7 +2028,6 @@ mod tests {
             content_length: Some(24),
         };
         persist_verified_source_record(&record).expect("persist verified source");
-
         let response = handle_get_contract_code_view(state, code_hash_hex)
             .await
             .expect("contract view response")
@@ -2196,14 +2044,12 @@ mod tests {
         );
         assert!(payload.verified_source_ref.is_some());
     }
-
     #[test]
     fn verified_source_job_accepts_exact_match_and_persists_record() {
         let _guard = TestDataDirGuard::new();
         let source = r#"
 seiyaku Demo { kotoage fn main() authorize("Run") {} }
 "#;
-
         let (compiled, _, _) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile contract");
@@ -2214,7 +2060,6 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
                 .data_dir(_guard.path().join("sorafs"))
                 .build(),
         );
-
         let (status, JsonBody(response)) = handle_post_verified_source_job(
             code_hash_hex.clone(),
             SubmitVerifiedContractSourceDto {
@@ -2225,23 +2070,19 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
             node,
         )
         .expect("submit verified source");
-
         assert_eq!(status, StatusCode::ACCEPTED);
         assert_eq!(response.status, "accepted");
         assert!(response.verified_source_ref.is_none());
-
         let record = load_verified_source_record(&code_hash_hex)
             .expect("load record")
             .expect("record exists");
         assert_eq!(record.source_text.trim(), source.trim());
         assert_eq!(record.language, VERIFIED_SOURCE_LANGUAGE_KOTODAMA);
     }
-
     #[test]
     fn verified_source_job_does_not_mutate_provider_storage() {
         let _guard = TestDataDirGuard::new();
         let source = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }";
-
         let (compiled, _, _) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest_and_report(source)
             .expect("compile contract");
@@ -2253,7 +2094,6 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
                 .build(),
         );
         let inspect_node = node.clone();
-
         let (status, JsonBody(response)) = handle_post_verified_source_job(
             code_hash_hex,
             SubmitVerifiedContractSourceDto {
@@ -2264,7 +2104,6 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
             node,
         )
         .expect("submit verified source");
-
         assert_eq!(status, StatusCode::ACCEPTED);
         assert!(response.verified_source_ref.is_none());
         assert!(
@@ -2275,14 +2114,12 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
             "HTTP verified-source submission must not mutate provider storage"
         );
     }
-
     #[test]
     fn verified_source_job_reports_hash_mismatch() {
         let _guard = TestDataDirGuard::new();
         let source = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }";
         let wrong_hash = "11".repeat(32);
         let node = sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::default());
-
         let (status, JsonBody(response)) = handle_post_verified_source_job(
             wrong_hash.clone(),
             SubmitVerifiedContractSourceDto {
@@ -2293,11 +2130,9 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
             node,
         )
         .expect("submit mismatch");
-
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(response.status, "mismatch");
         assert!(response.actual_code_hash.is_some());
-
         let stored = load_verified_source_job(&wrong_hash, &response.job_id)
             .expect("load job")
             .expect("job exists");

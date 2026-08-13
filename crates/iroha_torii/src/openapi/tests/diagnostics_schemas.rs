@@ -20,7 +20,6 @@ fn native_amx_participant_diagnostics_schema_is_closed_and_bounded() {
             .and_then(Value::as_str),
         Some("#/components/schemas/SumeragiNativeAmxParticipantApplication")
     );
-
     let row = schemas
         .get("SumeragiNativeAmxParticipantApplication")
         .and_then(Value::as_object)
@@ -64,7 +63,6 @@ fn native_amx_participant_diagnostics_schema_is_closed_and_bounded() {
         .expect("source count schema");
     assert_eq!(source_count.get("minimum"), Some(&Value::from(1_u64)));
     assert_eq!(source_count.get("maximum"), Some(&Value::from(4_096_u64)));
-
     let states = schemas
         .get("SumeragiNativeAmxParticipantApplicationState")
         .and_then(Value::as_object)
@@ -81,7 +79,6 @@ fn native_amx_participant_diagnostics_schema_is_closed_and_bounded() {
         ]
     );
 }
-
 #[test]
 fn autonomous_lane_execution_diagnostics_schema_is_closed_and_bounded() {
     let schemas = openapi_schemas();

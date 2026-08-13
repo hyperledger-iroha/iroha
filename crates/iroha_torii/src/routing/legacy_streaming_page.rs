@@ -19,12 +19,10 @@ where
         .map(|lim| cap.map_or(lim, |c| lim.min(c)))
         .map(|lim| lim.min(usize::MAX as u64) as usize);
     let page_cap = limit_usize.map(|lim| offset_usize.saturating_add(lim));
-
     let mut matched: usize = 0;
     let mut seq: usize = 0;
     let mut heap: BinaryHeap<PageEntry<K, T>> = BinaryHeap::new();
     let mut collected: Vec<PageEntry<K, T>> = Vec::new();
-
     for (key, item) in iter.into_iter() {
         let entry = PageEntry { key, seq, item };
         seq = seq.wrapping_add(1);
@@ -38,18 +36,15 @@ where
             collected.push(entry);
         }
     }
-
     let mut entries = if page_cap.is_some() {
         heap.into_vec()
     } else {
         collected
     };
-
     entries.sort_by(|a, b| match a.key.cmp(&b.key) {
         Ordering::Equal => a.seq.cmp(&b.seq),
         ord => ord,
     });
-
     let skip = offset_usize.min(entries.len());
     let mut page: Vec<T> = Vec::new();
     for entry in entries.into_iter().skip(skip) {
@@ -60,6 +55,5 @@ where
         }
         page.push(entry.item);
     }
-
     (page, matched)
 }

@@ -1,7 +1,5 @@
 //! Capacity declaration tracking and replication order scheduling for the embedded SoraFS node.
-
 use std::collections::HashMap;
-
 use iroha_data_model::{
     metadata::Metadata,
     sorafs::{
@@ -19,7 +17,6 @@ use sorafs_manifest::capacity::{
     ReplicationOrderSlaV1, ReplicationOrderV1,
 };
 use thiserror::Error;
-
 const CAPACITY_DECLARATION_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 const CAPACITY_RECONCILIATION_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -37,7 +34,6 @@ const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1 * 4,
     32,
 );
-
 /// Finalized block identity bound to a capacity runtime projection.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -48,7 +44,6 @@ pub struct CapacityFinalizedCursorV1 {
     /// Exact finalized block hash at `height`.
     pub block_hash: [u8; 32],
 }
-
 /// Exact finalized-ledger binding retained for a pending provider replication order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalizedReplicationBindingV1 {
@@ -63,7 +58,6 @@ pub struct FinalizedReplicationBindingV1 {
     /// Canonical chunker profile handle committed by the replication order.
     pub chunker_handle: String,
 }
-
 /// Authority mode for installing one complete finalized capacity projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapacityReconcileModeV1 {
@@ -72,7 +66,6 @@ pub enum CapacityReconcileModeV1 {
     /// Explicitly replace the complete projection, including after a fork or reseed.
     FullRebuild,
 }
-
 /// Result of reconciling the embedded provider scheduler from finalized ledger state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapacityReconciliationOutcomeV1 {
@@ -85,27 +78,23 @@ pub struct CapacityReconciliationOutcomeV1 {
     /// Whether the durable runtime projection changed.
     pub changed: bool,
 }
-
 /// Manages the active capacity declaration and replication scheduling state for a provider.
 #[derive(Debug)]
 pub struct CapacityManager {
     state: std::sync::RwLock<CapacityState>,
     entry_limit: usize,
 }
-
 impl Default for CapacityManager {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl CapacityManager {
     /// Construct a new capacity manager with no active declaration.
     #[must_use]
     pub fn new() -> Self {
         Self::with_entry_limit(65_536)
     }
-
     /// Construct a capacity manager with a ceiling for declaration indexes and outstanding
     /// replication orders.
     #[must_use]
@@ -115,7 +104,6 @@ impl CapacityManager {
             entry_limit: entry_limit.max(1),
         }
     }
-
     /// Record a capacity declaration captured from the registry.
     #[cfg(test)]
     pub(crate) fn record_declaration(
@@ -130,10 +118,8 @@ impl CapacityManager {
         declaration
             .validate()
             .map_err(CapacityError::ValidateDeclaration)?;
-
         self.install_declaration(record, declaration)
     }
-
     fn install_declaration(
         &self,
         record: &CapacityDeclarationRecord,
@@ -159,7 +145,6 @@ impl CapacityManager {
                 });
             }
         }
-
         let mut state = self
             .state
             .write()
@@ -176,14 +161,12 @@ impl CapacityManager {
         state.active = Some(ActiveCapacity::new(record, declaration));
         Ok(())
     }
-
     /// Produce a usage snapshot for observability and API responses.
     #[must_use]
     pub fn usage_snapshot(&self) -> CapacityUsageSnapshot {
         let state = self.state.read().expect("capacity state poisoned");
         state.snapshot()
     }
-
     /// Return the finalized block identity installed by the ledger reconciler.
     pub fn finalized_cursor(&self) -> Result<Option<CapacityFinalizedCursorV1>, CapacityError> {
         self.state
@@ -191,7 +174,6 @@ impl CapacityManager {
             .map(|state| state.finalized_cursor)
             .map_err(|_| CapacityError::StateLockPoisoned)
     }
-
     /// Return the exact retained binding for one pending finalized replication order.
     pub fn finalized_replication_binding(
         &self,
@@ -214,7 +196,6 @@ impl CapacityManager {
             }
         }))
     }
-
     /// Reconstruct the active registry record for restart-time telemetry seeding.
     pub(crate) fn active_declaration_record(
         &self,
@@ -235,7 +216,6 @@ impl CapacityManager {
             )
         }))
     }
-
     /// Atomically replace the local scheduling projection from one finalized ledger snapshot.
     ///
     /// Every supplied record is bounded, decoded, structurally validated, re-encoded, and
@@ -257,7 +237,6 @@ impl CapacityManager {
                 limit: self.entry_limit,
             });
         }
-
         let declaration_bytes = declaration.map_or(0, |record| record.declaration.len());
         if declaration_bytes > CAPACITY_DECLARATION_MAX_CANONICAL_BYTES_V1 {
             return Err(CapacityError::FinalizedSnapshotInvalid(format!(
@@ -292,13 +271,11 @@ impl CapacityManager {
                 "capacity reconciliation payloads total {canonical_bytes} bytes; maximum is {CAPACITY_RECONCILIATION_MAX_CANONICAL_BYTES_V1}"
             )));
         }
-
         let candidate = CapacityManager::with_entry_limit(self.entry_limit);
         if let Some(record) = declaration {
             let declaration = validate_finalized_declaration(provider_id, record)?;
             candidate.install_declaration(record, declaration)?;
         }
-
         let mut decoded_orders = Vec::new();
         decoded_orders
             .try_reserve_exact(replication_orders.len())
@@ -318,7 +295,6 @@ impl CapacityManager {
                 "finalized replication-order snapshot contains duplicate identifiers".to_owned(),
             ));
         }
-
         let mut pending_order_count = 0usize;
         for (record, order) in decoded_orders {
             if !matches!(record.status, ReplicationOrderStatus::Pending) {
@@ -352,7 +328,6 @@ impl CapacityManager {
                 )
             })?;
         }
-
         let candidate_active = candidate.checkpoint()?.active;
         let mut state = self
             .state
@@ -369,7 +344,6 @@ impl CapacityManager {
                 .as_ref(),
             candidate_active.as_ref(),
         )?;
-
         let changed = state.finalized_cursor != Some(finalized_cursor)
             || state.active.as_ref().map(ActiveCapacity::checkpoint) != candidate_active;
         if changed {
@@ -385,7 +359,6 @@ impl CapacityManager {
             changed,
         })
     }
-
     /// Schedule the assignments from a replication order if it targets the active provider.
     pub(crate) fn schedule_order(
         &self,
@@ -398,7 +371,6 @@ impl CapacityManager {
         let Some(active) = &mut state.active else {
             return Err(CapacityError::NoActiveDeclaration);
         };
-
         let assignment = order
             .assignments
             .iter()
@@ -406,7 +378,6 @@ impl CapacityManager {
         let Some(assignment) = assignment else {
             return Ok(None);
         };
-
         active.ensure_chunker_supported(order)?;
         active.ensure_order_unique(order)?;
         if active.outstanding_orders.len() >= self.entry_limit {
@@ -419,10 +390,8 @@ impl CapacityManager {
         candidate.reserve_capacity(order, assignment)?;
         let plan = candidate.record_order(order, assignment);
         *active = candidate;
-
         Ok(Some(plan))
     }
-
     /// Release the reservation for a completed replication order.
     #[cfg(test)]
     pub(crate) fn complete_order(
@@ -442,7 +411,6 @@ impl CapacityManager {
         *active = candidate;
         Ok(release)
     }
-
     /// Export the active declaration and every outstanding capacity reservation.
     pub(crate) fn checkpoint(&self) -> Result<CapacityRuntimeCheckpointV1, CapacityError> {
         let state = self
@@ -454,7 +422,6 @@ impl CapacityManager {
             active: state.active.as_ref().map(ActiveCapacity::checkpoint),
         })
     }
-
     /// Restore an authoritative capacity checkpoint after recomputing all allocation totals.
     pub(crate) fn restore_checkpoint(
         &self,
@@ -476,7 +443,6 @@ impl CapacityManager {
         Ok(())
     }
 }
-
 fn validate_finalized_cursor(cursor: CapacityFinalizedCursorV1) -> Result<(), CapacityError> {
     if cursor.height == 0 || cursor.block_hash == [0; 32] {
         return Err(CapacityError::FinalizedSnapshotInvalid(
@@ -485,7 +451,6 @@ fn validate_finalized_cursor(cursor: CapacityFinalizedCursorV1) -> Result<(), Ca
     }
     Ok(())
 }
-
 fn validate_finalized_declaration(
     provider_id: ProviderId,
     record: &CapacityDeclarationRecord,
@@ -536,7 +501,6 @@ fn validate_finalized_declaration(
     }
     Ok(declaration)
 }
-
 fn validate_finalized_replication_order(
     record: &ReplicationOrderRecord,
 ) -> Result<(&ReplicationOrderRecord, ReplicationOrderV1), CapacityError> {
@@ -580,7 +544,6 @@ fn validate_finalized_replication_order(
     }
     Ok((record, order))
 }
-
 fn validate_reconciliation_transition(
     current: Option<CapacityFinalizedCursorV1>,
     candidate: CapacityFinalizedCursorV1,
@@ -614,27 +577,23 @@ fn validate_reconciliation_transition(
     }
     Ok(())
 }
-
 #[derive(Debug, Default)]
 struct CapacityState {
     finalized_cursor: Option<CapacityFinalizedCursorV1>,
     active: Option<ActiveCapacity>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CapacityChunkerCheckpointV1 {
     handle: String,
     committed: u64,
     allocated: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CapacityLaneCheckpointV1 {
     lane_id: String,
     max: u64,
     allocated: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CapacityOrderCheckpointV1 {
     order_id: [u8; 32],
@@ -646,7 +605,6 @@ struct CapacityOrderCheckpointV1 {
     issued_at: u64,
     deadline_at: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ActiveCapacityCheckpointV1 {
     declaration_payload: Vec<u8>,
@@ -659,14 +617,12 @@ struct ActiveCapacityCheckpointV1 {
     metadata: Metadata,
     declaration_window: DeclarationWindow,
 }
-
 /// Canonical restart snapshot for capacity declarations and outstanding reservations.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct CapacityRuntimeCheckpointV1 {
     finalized_cursor: Option<CapacityFinalizedCursorV1>,
     active: Option<ActiveCapacityCheckpointV1>,
 }
-
 impl CapacityState {
     fn snapshot(&self) -> CapacityUsageSnapshot {
         match &self.active {
@@ -675,7 +631,6 @@ impl CapacityState {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct ActiveCapacity {
     declaration_payload: Vec<u8>,
@@ -688,7 +643,6 @@ struct ActiveCapacity {
     metadata: Metadata,
     declaration_window: DeclarationWindow,
 }
-
 impl ActiveCapacity {
     fn new(record: &CapacityDeclarationRecord, declaration: CapacityDeclarationV1) -> Self {
         let chunkers = declaration
@@ -706,7 +660,6 @@ impl ActiveCapacity {
             .iter()
             .map(|lane| (lane.lane_id.clone(), LaneAllocation::from_commitment(lane)))
             .collect::<HashMap<_, _>>();
-
         Self {
             declaration_payload: record.declaration.clone(),
             provider_id: declaration.provider_id,
@@ -723,7 +676,6 @@ impl ActiveCapacity {
             },
         }
     }
-
     fn checkpoint(&self) -> ActiveCapacityCheckpointV1 {
         let mut chunkers = self
             .chunkers
@@ -772,7 +724,6 @@ impl ActiveCapacity {
             declaration_window: self.declaration_window,
         }
     }
-
     fn restore_checkpoint(
         checkpoint: ActiveCapacityCheckpointV1,
         entry_limit: usize,
@@ -819,7 +770,6 @@ impl ActiveCapacity {
                 "capacity declaration payload disagrees with checkpoint summary".to_owned(),
             ));
         }
-
         let mut chunkers = HashMap::with_capacity(checkpoint.chunkers.len());
         let mut previous_chunker: Option<&str> = None;
         let mut committed_by_chunkers = 0u64;
@@ -864,7 +814,6 @@ impl ActiveCapacity {
                 "capacity declaration chunkers disagree with checkpoint allocations".to_owned(),
             ));
         }
-
         let mut lanes = HashMap::with_capacity(checkpoint.lanes.len());
         let mut previous_lane: Option<&str> = None;
         for lane in &checkpoint.lanes {
@@ -896,7 +845,6 @@ impl ActiveCapacity {
                 "capacity declaration lanes disagree with checkpoint allocations".to_owned(),
             ));
         }
-
         let mut outstanding_orders = HashMap::with_capacity(checkpoint.outstanding_orders.len());
         let mut previous_order = None;
         let mut allocated_total_gib = 0u64;
@@ -978,7 +926,6 @@ impl ActiveCapacity {
                 )));
             }
         }
-
         Ok(Self {
             declaration_payload: checkpoint.declaration_payload,
             provider_id: checkpoint.provider_id,
@@ -991,7 +938,6 @@ impl ActiveCapacity {
             declaration_window: checkpoint.declaration_window,
         })
     }
-
     fn ensure_chunker_supported(&self, order: &ReplicationOrderV1) -> Result<(), CapacityError> {
         if self.chunkers.contains_key(&order.chunking_profile) {
             return Ok(());
@@ -1000,7 +946,6 @@ impl ActiveCapacity {
             handle: order.chunking_profile.clone(),
         })
     }
-
     fn ensure_order_unique(&self, order: &ReplicationOrderV1) -> Result<(), CapacityError> {
         if self.outstanding_orders.contains_key(&order.order_id) {
             return Err(CapacityError::OrderAlreadyScheduled {
@@ -1009,7 +954,6 @@ impl ActiveCapacity {
         }
         Ok(())
     }
-
     fn reserve_capacity(
         &mut self,
         order: &ReplicationOrderV1,
@@ -1019,7 +963,6 @@ impl ActiveCapacity {
         if slice_gib == 0 {
             return Err(CapacityError::ZeroSlice);
         }
-
         let available_total = self
             .committed_total_gib
             .saturating_sub(self.allocated_total_gib);
@@ -1029,13 +972,11 @@ impl ActiveCapacity {
                 available: available_total,
             });
         }
-
         let chunker = self
             .chunkers
             .get_mut(&order.chunking_profile)
             .expect("ensure_chunker_supported must be called first");
         chunker.reserve(slice_gib)?;
-
         if let Some(lane_id) = assignment.lane.as_ref() {
             let lane = self
                 .lanes
@@ -1045,15 +986,12 @@ impl ActiveCapacity {
                 })?;
             lane.reserve(slice_gib)?;
         }
-
         self.allocated_total_gib = self
             .allocated_total_gib
             .checked_add(slice_gib)
             .ok_or(CapacityError::AllocationOverflow)?;
-
         Ok(())
     }
-
     fn record_order(
         &mut self,
         order: &ReplicationOrderV1,
@@ -1068,7 +1006,6 @@ impl ActiveCapacity {
             .lane
             .as_ref()
             .and_then(|lane| self.lanes.get(lane).map(|entry| entry.available()));
-
         let plan = ReplicationPlan {
             order_id: order.order_id,
             provider_id: self.provider_id,
@@ -1085,7 +1022,6 @@ impl ActiveCapacity {
             sla: order.sla,
             metadata: order.metadata.clone(),
         };
-
         self.outstanding_orders.insert(
             order.order_id,
             OrderAllocation {
@@ -1098,22 +1034,18 @@ impl ActiveCapacity {
                 deadline_at: order.deadline_at,
             },
         );
-
         plan
     }
-
     #[cfg(test)]
     fn complete_order(&mut self, order_id: [u8; 32]) -> Result<ReplicationRelease, CapacityError> {
         let allocation = self
             .outstanding_orders
             .remove(&order_id)
             .ok_or(CapacityError::OrderNotScheduled { order_id })?;
-
         self.allocated_total_gib = self
             .allocated_total_gib
             .checked_sub(allocation.slice_gib)
             .ok_or(CapacityError::AllocationUnderflow)?;
-
         let chunker = self
             .chunkers
             .get_mut(&allocation.chunker_handle)
@@ -1122,7 +1054,6 @@ impl ActiveCapacity {
             })?;
         chunker.release(allocation.slice_gib)?;
         let remaining_chunker_gib = chunker.available();
-
         let remaining_lane_gib = if let Some(lane_id) = allocation.lane.as_ref() {
             let lane = self
                 .lanes
@@ -1135,11 +1066,9 @@ impl ActiveCapacity {
         } else {
             None
         };
-
         let remaining_total_gib = self
             .committed_total_gib
             .saturating_sub(self.allocated_total_gib);
-
         Ok(ReplicationRelease {
             order_id,
             provider_id: self.provider_id,
@@ -1150,7 +1079,6 @@ impl ActiveCapacity {
             remaining_lane_gib,
         })
     }
-
     fn snapshot(&self) -> CapacityUsageSnapshot {
         let mut chunkers = self
             .chunkers
@@ -1163,7 +1091,6 @@ impl ActiveCapacity {
             })
             .collect::<Vec<_>>();
         chunkers.sort_by(|left, right| left.handle.cmp(&right.handle));
-
         let mut lanes = self
             .lanes
             .iter()
@@ -1175,7 +1102,6 @@ impl ActiveCapacity {
             })
             .collect::<Vec<_>>();
         lanes.sort_by(|left, right| left.lane_id.cmp(&right.lane_id));
-
         let mut outstanding_orders = self
             .outstanding_orders
             .iter()
@@ -1189,7 +1115,6 @@ impl ActiveCapacity {
             })
             .collect::<Vec<_>>();
         outstanding_orders.sort_by_key(|order| order.order_id);
-
         CapacityUsageSnapshot {
             provider_id: Some(self.provider_id),
             committed_total_gib: self.committed_total_gib,
@@ -1203,13 +1128,11 @@ impl ActiveCapacity {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct ChunkerAllocation {
     committed: u64,
     allocated: u64,
 }
-
 impl ChunkerAllocation {
     fn from_commitment(commitment: &ChunkerCommitmentV1) -> Self {
         Self {
@@ -1217,7 +1140,6 @@ impl ChunkerAllocation {
             allocated: 0,
         }
     }
-
     fn reserve(&mut self, slice_gib: u64) -> Result<(), CapacityError> {
         let available = self.available();
         if slice_gib > available {
@@ -1232,7 +1154,6 @@ impl ChunkerAllocation {
             .ok_or(CapacityError::AllocationOverflow)?;
         Ok(())
     }
-
     #[cfg(test)]
     fn release(&mut self, slice_gib: u64) -> Result<(), CapacityError> {
         self.allocated = self
@@ -1241,18 +1162,15 @@ impl ChunkerAllocation {
             .ok_or(CapacityError::AllocationUnderflow)?;
         Ok(())
     }
-
     fn available(&self) -> u64 {
         self.committed.saturating_sub(self.allocated)
     }
 }
-
 #[derive(Debug, Clone)]
 struct LaneAllocation {
     max: u64,
     allocated: u64,
 }
-
 impl LaneAllocation {
     fn from_commitment(commitment: &LaneCommitmentV1) -> Self {
         Self {
@@ -1260,7 +1178,6 @@ impl LaneAllocation {
             allocated: 0,
         }
     }
-
     fn reserve(&mut self, slice_gib: u64) -> Result<(), CapacityError> {
         let available = self.available();
         if slice_gib > available {
@@ -1275,7 +1192,6 @@ impl LaneAllocation {
             .ok_or(CapacityError::AllocationOverflow)?;
         Ok(())
     }
-
     #[cfg(test)]
     fn release(&mut self, slice_gib: u64) -> Result<(), CapacityError> {
         self.allocated = self
@@ -1284,12 +1200,10 @@ impl LaneAllocation {
             .ok_or(CapacityError::AllocationUnderflow)?;
         Ok(())
     }
-
     fn available(&self) -> u64 {
         self.max.saturating_sub(self.allocated)
     }
 }
-
 #[derive(Debug, Clone)]
 struct OrderAllocation {
     manifest_cid: Vec<u8>,
@@ -1300,7 +1214,6 @@ struct OrderAllocation {
     issued_at: u64,
     deadline_at: u64,
 }
-
 /// Summary of the currently active capacity declaration.
 #[derive(Debug, Clone, Default)]
 pub struct CapacityUsageSnapshot {
@@ -1323,7 +1236,6 @@ pub struct CapacityUsageSnapshot {
     /// Record window associated with the declaration.
     pub declaration_window: DeclarationWindow,
 }
-
 /// Usage entry for a chunker profile.
 #[derive(Debug, Clone)]
 pub struct ChunkerUsage {
@@ -1336,7 +1248,6 @@ pub struct ChunkerUsage {
     /// Remaining GiB available for new assignments.
     pub available_gib: u64,
 }
-
 /// Usage entry for a capacity lane.
 #[derive(Debug, Clone)]
 pub struct LaneUsage {
@@ -1349,7 +1260,6 @@ pub struct LaneUsage {
     /// Remaining GiB available within the lane.
     pub available_gib: u64,
 }
-
 /// Outstanding replication order tracked by the scheduler.
 #[derive(Debug, Clone)]
 pub struct OutstandingOrder {
@@ -1366,7 +1276,6 @@ pub struct OutstandingOrder {
     /// Deadline (seconds) when ingestion must be complete.
     pub deadline_at: u64,
 }
-
 /// Result of scheduling a replication order for the active provider.
 #[derive(Debug, Clone)]
 pub struct ReplicationPlan {
@@ -1399,7 +1308,6 @@ pub struct ReplicationPlan {
     /// Metadata entries attached to the order.
     pub metadata: Vec<sorafs_manifest::capacity::CapacityMetadataEntry>,
 }
-
 /// Result of completing a replication order and releasing its reservation.
 #[derive(Debug, Clone)]
 pub struct ReplicationRelease {
@@ -1418,7 +1326,6 @@ pub struct ReplicationRelease {
     /// Remaining GiB within the lane, if applicable.
     pub remaining_lane_gib: Option<u64>,
 }
-
 /// Declaration record window used to expose registry metadata.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct DeclarationWindow {
@@ -1429,7 +1336,6 @@ pub struct DeclarationWindow {
     /// Epoch (inclusive) when the declaration expires.
     pub valid_until_epoch: u64,
 }
-
 /// Errors raised while managing capacity declarations or scheduling replication orders.
 #[derive(Debug, Error)]
 pub enum CapacityError {
@@ -1566,7 +1472,6 @@ pub enum CapacityError {
     #[error("capacity state lock poisoned")]
     StateLockPoisoned,
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::{
@@ -1585,9 +1490,7 @@ mod tests {
     use sorafs_manifest::capacity::{
         CAPACITY_DECLARATION_VERSION_V1, REPLICATION_ORDER_VERSION_V1, ReplicationOrderSlaV1,
     };
-
     use super::*;
-
     fn make_record_and_manager() -> (CapacityManager, CapacityDeclarationRecord) {
         let declaration = CapacityDeclarationV1 {
             version: CAPACITY_DECLARATION_VERSION_V1,
@@ -1623,10 +1526,8 @@ mod tests {
             10,
             Metadata::default(),
         );
-
         (CapacityManager::new(), record)
     }
-
     fn make_order(slice_gib: u64) -> ReplicationOrderV1 {
         ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
@@ -1650,7 +1551,6 @@ mod tests {
             metadata: Vec::new(),
         }
     }
-
     fn make_order_record(
         order: &ReplicationOrderV1,
         status: ReplicationOrderStatus,
@@ -1674,21 +1574,18 @@ mod tests {
             status,
         }
     }
-
     fn finalized_cursor(height: u64, byte: u8) -> CapacityFinalizedCursorV1 {
         CapacityFinalizedCursorV1 {
             height,
             block_hash: [byte; 32],
         }
     }
-
     #[test]
     fn records_capacity_declaration_and_produces_snapshot() {
         let (manager, record) = make_record_and_manager();
         manager
             .record_declaration(&record)
             .expect("record declaration");
-
         let snapshot = manager.usage_snapshot();
         assert_eq!(
             snapshot.provider_id.unwrap(),
@@ -1700,14 +1597,12 @@ mod tests {
         assert_eq!(snapshot.lanes.len(), 1);
         assert!(snapshot.metadata.iter().next().is_none());
     }
-
     #[test]
     fn schedules_replication_order_and_updates_usage() {
         let (manager, record) = make_record_and_manager();
         manager
             .record_declaration(&record)
             .expect("record declaration");
-
         let order = make_order(100);
         let plan = manager
             .schedule_order(&order)
@@ -1717,7 +1612,6 @@ mod tests {
         assert_eq!(plan.remaining_total_gib, 400);
         assert_eq!(plan.remaining_chunker_gib, 400);
         assert_eq!(plan.remaining_lane_gib, Some(400));
-
         let snapshot = manager.usage_snapshot();
         assert_eq!(snapshot.allocated_total_gib, 100);
         assert_eq!(snapshot.available_total_gib, 400);
@@ -1725,14 +1619,12 @@ mod tests {
         assert_eq!(snapshot.lanes[0].allocated_gib, 100);
         assert_eq!(snapshot.outstanding_orders.len(), 1);
     }
-
     #[test]
     fn rejects_orders_exceeding_total_capacity() {
         let (manager, record) = make_record_and_manager();
         manager
             .record_declaration(&record)
             .expect("record declaration");
-
         let order = make_order(600);
         let err = manager.schedule_order(&order).unwrap_err();
         assert!(matches!(
@@ -1740,14 +1632,12 @@ mod tests {
             CapacityError::InsufficientTotalCapacity { requested: 600, .. }
         ));
     }
-
     #[test]
     fn rejects_orders_for_unknown_chunkers() {
         let (manager, record) = make_record_and_manager();
         manager
             .record_declaration(&record)
             .expect("record declaration");
-
         let mut order = make_order(100);
         order.chunking_profile = "sorafs.alt@1.0.0".into();
         let err = manager.schedule_order(&order).unwrap_err();
@@ -1756,20 +1646,17 @@ mod tests {
             CapacityError::UnsupportedChunker { handle } if handle == "sorafs.alt@1.0.0"
         ));
     }
-
     #[test]
     fn completes_replication_order_and_releases_capacity() {
         let (manager, record) = make_record_and_manager();
         manager
             .record_declaration(&record)
             .expect("record declaration");
-
         let order = make_order(200);
         manager
             .schedule_order(&order)
             .expect("schedule order")
             .expect("plan produced");
-
         let release = manager
             .complete_order(order.order_id)
             .expect("complete order");
@@ -1777,20 +1664,17 @@ mod tests {
         assert_eq!(release.remaining_total_gib, 500);
         assert_eq!(release.remaining_chunker_gib, 500);
         assert_eq!(release.remaining_lane_gib, Some(500));
-
         let snapshot_after = manager.usage_snapshot();
         assert_eq!(snapshot_after.allocated_total_gib, 0);
         assert_eq!(snapshot_after.available_total_gib, 500);
         assert!(snapshot_after.outstanding_orders.is_empty());
     }
-
     #[test]
     fn completing_unknown_order_returns_error() {
         let (manager, record) = make_record_and_manager();
         manager
             .record_declaration(&record)
             .expect("record declaration");
-
         let err = manager
             .complete_order([0xAB; 32])
             .expect_err("completion should fail");
@@ -1799,7 +1683,6 @@ mod tests {
             CapacityError::OrderNotScheduled { order_id } if order_id == [0xAB; 32]
         ));
     }
-
     #[test]
     fn failed_lane_reservation_is_transactional() {
         let (manager, record) = make_record_and_manager();
@@ -1820,7 +1703,6 @@ mod tests {
         assert_eq!(snapshot.lanes[0].allocated_gib, 0);
         assert!(snapshot.outstanding_orders.is_empty());
     }
-
     #[test]
     fn configured_limit_refuses_excess_orders_and_live_declaration_replacement() {
         let (_, record) = make_record_and_manager();
@@ -1833,7 +1715,6 @@ mod tests {
             .schedule_order(&first)
             .expect("schedule first order")
             .expect("targeted plan");
-
         let mut second = make_order(100);
         second.order_id = [0x34; 32];
         assert!(matches!(
@@ -1853,7 +1734,6 @@ mod tests {
         ));
         assert_eq!(manager.usage_snapshot().allocated_total_gib, 100);
     }
-
     #[test]
     fn checkpoint_roundtrip_preserves_orders_and_rejects_forged_accounting() {
         let (manager, record) = make_record_and_manager();
@@ -1866,7 +1746,6 @@ mod tests {
             .expect("targeted plan");
         let checkpoint = manager.checkpoint().expect("checkpoint");
         let expected = norito::to_bytes(&checkpoint).expect("encode checkpoint");
-
         let restored = CapacityManager::with_entry_limit(8);
         restored
             .restore_checkpoint(checkpoint.clone())
@@ -1877,7 +1756,6 @@ mod tests {
             expected
         );
         assert_eq!(restored.usage_snapshot().allocated_total_gib, 100);
-
         let mut forged_total = checkpoint.clone();
         forged_total
             .active
@@ -1890,7 +1768,6 @@ mod tests {
                 .expect_err("forged total must fail"),
             CapacityError::InvalidCheckpoint(_)
         ));
-
         let mut corrupt_declaration = checkpoint;
         corrupt_declaration
             .active
@@ -1904,14 +1781,12 @@ mod tests {
             CapacityError::InvalidCheckpoint(_)
         ));
     }
-
     #[test]
     fn finalized_reconciliation_is_atomic_idempotent_and_restart_safe() {
         let (manager, record) = make_record_and_manager();
         let order = make_order(100);
         let order_record = make_order_record(&order, ReplicationOrderStatus::Pending);
         let cursor = finalized_cursor(7, 0xA7);
-
         let installed = manager
             .reconcile_finalized(
                 cursor,
@@ -1924,7 +1799,6 @@ mod tests {
         assert!(installed.changed);
         assert_eq!(installed.pending_order_count, 1);
         assert_eq!(manager.usage_snapshot().allocated_total_gib, 100);
-
         let duplicate = manager
             .reconcile_finalized(
                 cursor,
@@ -1935,7 +1809,6 @@ mod tests {
             )
             .expect("duplicate finalized projection is idempotent");
         assert!(!duplicate.changed);
-
         let checkpoint = manager.checkpoint().expect("checkpoint projection");
         let restarted = CapacityManager::with_entry_limit(8);
         restarted
@@ -1954,7 +1827,6 @@ mod tests {
             .expect("same finalized projection after restart");
         assert!(!after_restart.changed);
     }
-
     #[test]
     fn finalized_reconciliation_releases_only_the_completed_provider_assignment() {
         let (manager, declaration) = make_record_and_manager();
@@ -1966,7 +1838,6 @@ mod tests {
             lane: Some("global".into()),
         });
         order.validate().expect("valid multi-provider order");
-
         let mut order_record = make_order_record(&order, ReplicationOrderStatus::Pending);
         let completed_by = order_record.issued_by.clone();
         order_record
@@ -1990,7 +1861,6 @@ mod tests {
                     block_hash: [0xA6; 32],
                 },
             });
-
         let outcome = manager
             .reconcile_finalized(
                 finalized_cursor(8, 0xA8),
@@ -2000,11 +1870,9 @@ mod tests {
                 &[order_record],
             )
             .expect("install partially completed finalized order");
-
         assert_eq!(outcome.pending_order_count, 0);
         assert_eq!(manager.usage_snapshot().allocated_total_gib, 0);
     }
-
     #[test]
     fn finalized_reconciliation_rejects_forks_without_explicit_full_rebuild() {
         let (manager, record) = make_record_and_manager();
@@ -2018,7 +1886,6 @@ mod tests {
                 &[],
             )
             .expect("install initial projection");
-
         let fork = finalized_cursor(9, 0x29);
         assert!(matches!(
             manager
@@ -2033,7 +1900,6 @@ mod tests {
             CapacityError::FinalizedFork { height: 9 }
         ));
         assert_eq!(manager.finalized_cursor().expect("cursor"), Some(initial));
-
         let rebuilt = manager
             .reconcile_finalized(
                 fork,
@@ -2045,7 +1911,6 @@ mod tests {
             .expect("operator-authorized full rebuild accepts fork replacement");
         assert!(rebuilt.changed);
         assert_eq!(manager.finalized_cursor().expect("cursor"), Some(fork));
-
         assert!(matches!(
             manager
                 .reconcile_finalized(
@@ -2062,14 +1927,12 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn finalized_reconciliation_rejects_substituted_records_without_mutation() {
         let (manager, record) = make_record_and_manager();
         let order = make_order(100);
         let mut substituted = make_order_record(&order, ReplicationOrderStatus::Pending);
         substituted.manifest_digest = ManifestDigest::new([0x99; 32]);
-
         assert!(matches!(
             manager
                 .reconcile_finalized(

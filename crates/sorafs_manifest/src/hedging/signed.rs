@@ -1,17 +1,13 @@
 //! Externally governed authentication for hedging feeds and billing references.
-
 use std::cmp::Ordering;
-
 use blake3::Hasher;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
 use super::{
     BillingStatementV1, HedgingPriceFeedV1, HedgingReferencePriceDecisionV1,
     HedgingValidationError, MAX_BILLING_LINES, MAX_HEDGING_IDENTIFIER_BYTES,
     MAX_HEDGING_PRICE_FEEDS, derive_reference_price_decision_v1,
 };
-
 /// Schema version for [`HedgingFeedBindingV1`].
 pub const HEDGING_FEED_BINDING_VERSION_V1: u8 = 1;
 /// Schema version for [`HedgingTrustedSignerV1`].
@@ -48,7 +44,6 @@ pub const MAX_GOVERNED_BILLING_STATEMENT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_SIGNED_HEDGING_FEED_LEDGER_ENTRIES: usize = MAX_HEDGING_PRICE_FEEDS;
 /// Maximum canonical durable feed-ledger checkpoint bytes.
 pub const MAX_SIGNED_HEDGING_FEED_LEDGER_BYTES: usize = 32 * 1024 * 1024;
-
 /// Exact feed/source pair authorized for one external signer.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -61,7 +56,6 @@ pub struct HedgingFeedBindingV1 {
     /// Canonical governed source identifier.
     pub source: String,
 }
-
 impl HedgingFeedBindingV1 {
     /// Validate the exact authorization pair.
     pub fn validate(&self) -> Result<(), SignedHedgingError> {
@@ -75,7 +69,6 @@ impl HedgingFeedBindingV1 {
         Ok(())
     }
 }
-
 /// One strong Ed25519 signer and the feed identities it may attest.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -90,7 +83,6 @@ pub struct HedgingTrustedSignerV1 {
     /// Authorized pairs in strictly increasing `(feed_id, source)` order.
     pub authorized_feeds: Vec<HedgingFeedBindingV1>,
 }
-
 impl HedgingTrustedSignerV1 {
     /// Validate identity, key strength, bounds, and canonical bindings.
     pub fn validate(&self) -> Result<(), SignedHedgingError> {
@@ -142,7 +134,6 @@ impl HedgingTrustedSignerV1 {
         }
         Ok(())
     }
-
     fn authorizes(&self, feed: &HedgingPriceFeedV1) -> bool {
         self.authorized_feeds
             .binary_search_by(|binding| {
@@ -152,7 +143,6 @@ impl HedgingTrustedSignerV1 {
             .is_ok()
     }
 }
-
 /// External signer, identity, freshness, and revocation policy for price feeds.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -175,7 +165,6 @@ pub struct HedgingFeedTrustPolicyV1 {
     /// Explicit revoked signer ids in strictly increasing order.
     pub revoked_signer_ids: Vec<String>,
 }
-
 impl HedgingFeedTrustPolicyV1 {
     /// Validate policy structure, key uniqueness, and revocation references.
     pub fn validate(&self) -> Result<(), SignedHedgingError> {
@@ -273,7 +262,6 @@ impl HedgingFeedTrustPolicyV1 {
         }
         Ok(())
     }
-
     /// Return the canonical domain-separated policy digest.
     pub fn canonical_digest(&self) -> Result<[u8; 32], SignedHedgingError> {
         self.validate()?;
@@ -284,7 +272,6 @@ impl HedgingFeedTrustPolicyV1 {
             MAX_HEDGING_TRUST_POLICY_BYTES,
         )
     }
-
     /// Return bounded canonical policy bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, SignedHedgingError> {
         self.validate()?;
@@ -294,21 +281,18 @@ impl HedgingFeedTrustPolicyV1 {
             MAX_HEDGING_TRUST_POLICY_BYTES,
         )
     }
-
     fn signer(&self, signer_id: &str) -> Option<&HedgingTrustedSignerV1> {
         self.signers
             .binary_search_by(|signer| signer.signer_id.as_str().cmp(signer_id))
             .ok()
             .map(|index| &self.signers[index])
     }
-
     fn is_revoked(&self, signer_id: &str) -> bool {
         self.revoked_signer_ids
             .binary_search_by(|revoked| revoked.as_str().cmp(signer_id))
             .is_ok()
     }
 }
-
 /// Canonical normalized feed plus external signer authorization.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -325,7 +309,6 @@ pub struct SignedHedgingPriceFeedV1 {
     /// Ed25519 signature over policy, signer id, and exact feed bytes.
     pub signature: [u8; ed25519_dalek::SIGNATURE_LENGTH],
 }
-
 impl SignedHedgingPriceFeedV1 {
     /// Validate policy-independent structure and canonical signature material.
     pub fn validate_structure(&self) -> Result<(), SignedHedgingError> {
@@ -347,7 +330,6 @@ impl SignedHedgingPriceFeedV1 {
         })?;
         Ok(())
     }
-
     /// Return the exact digest signed by the feed authority.
     pub fn signing_digest(&self) -> Result<[u8; 32], SignedHedgingError> {
         self.feed.validate()?;
@@ -373,7 +355,6 @@ impl SignedHedgingPriceFeedV1 {
         hasher.update(&feed_bytes);
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Verify external policy identity, authorization, freshness, revocation, and signature.
     pub fn verify(
         &self,
@@ -424,7 +405,6 @@ impl SignedHedgingPriceFeedV1 {
             })?;
         Ok(())
     }
-
     /// Return bounded canonical envelope bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, SignedHedgingError> {
         self.validate_structure()?;
@@ -435,7 +415,6 @@ impl SignedHedgingPriceFeedV1 {
         )
     }
 }
-
 /// Deterministic reference-price decision retaining every authenticated input.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -452,7 +431,6 @@ pub struct GovernedHedgingReferencePriceDecisionV1 {
     /// Canonical digest of all retained signed inputs.
     pub signed_feeds_digest: [u8; 32],
 }
-
 impl GovernedHedgingReferencePriceDecisionV1 {
     /// Validate intrinsic decision replay and exact signed-input binding.
     pub fn validate_structure(&self) -> Result<(), SignedHedgingError> {
@@ -499,7 +477,6 @@ impl GovernedHedgingReferencePriceDecisionV1 {
         }
         Ok(())
     }
-
     /// Verify policy, every feed signature, freshness, and deterministic replay.
     pub fn verify(
         &self,
@@ -533,7 +510,6 @@ impl GovernedHedgingReferencePriceDecisionV1 {
         }
         Ok(())
     }
-
     /// Return bounded canonical governed-decision bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, SignedHedgingError> {
         self.validate_structure()?;
@@ -544,7 +520,6 @@ impl GovernedHedgingReferencePriceDecisionV1 {
         )
     }
 }
-
 /// Billing statement paired with the authenticated price decision it embeds.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -559,7 +534,6 @@ pub struct GovernedBillingStatementV1 {
     /// Binding digest over statement id, policy, decision, and signed-feed evidence.
     pub binding_digest: [u8; 32],
 }
-
 impl GovernedBillingStatementV1 {
     /// Validate the intrinsic statement and exact governed-price binding.
     pub fn validate_structure(&self) -> Result<(), SignedHedgingError> {
@@ -580,7 +554,6 @@ impl GovernedBillingStatementV1 {
         }
         Ok(())
     }
-
     /// Verify the external feed policy retained by this billing statement.
     pub fn verify(
         &self,
@@ -591,7 +564,6 @@ impl GovernedBillingStatementV1 {
         self.governed_reference_price
             .verify(policy, admitted_at_unix)
     }
-
     /// Return bounded canonical governed-statement bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, SignedHedgingError> {
         self.validate_structure()?;
@@ -602,7 +574,6 @@ impl GovernedBillingStatementV1 {
         )
     }
 }
-
 /// One authenticated feed sample and the exact time it passed admission.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -613,21 +584,18 @@ pub struct SignedHedgingFeedAdmissionV1 {
     /// Exact signed feed envelope retained for replay.
     envelope: SignedHedgingPriceFeedV1,
 }
-
 impl SignedHedgingFeedAdmissionV1 {
     /// Return the exact admission Unix second.
     #[must_use]
     pub const fn admitted_at_unix(&self) -> u64 {
         self.admitted_at_unix
     }
-
     /// Return the retained signed feed envelope.
     #[must_use]
     pub const fn envelope(&self) -> &SignedHedgingPriceFeedV1 {
         &self.envelope
     }
 }
-
 /// Durable latest-feed high-water marks with replay and rollback protection.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -642,7 +610,6 @@ pub struct SignedHedgingFeedLedgerV1 {
     /// Latest admission per feed id in strictly increasing feed-id order.
     admissions: Vec<SignedHedgingFeedAdmissionV1>,
 }
-
 impl SignedHedgingFeedLedgerV1 {
     /// Construct an empty durable ledger bound to a validated trust policy.
     pub fn new(policy: &HedgingFeedTrustPolicyV1) -> Result<Self, SignedHedgingError> {
@@ -654,7 +621,6 @@ impl SignedHedgingFeedLedgerV1 {
             admissions: Vec::new(),
         })
     }
-
     /// Replay policy, signature, freshness, order, and uniqueness invariants.
     pub fn validate(&self, policy: &HedgingFeedTrustPolicyV1) -> Result<(), SignedHedgingError> {
         if self.version != SIGNED_HEDGING_FEED_LEDGER_VERSION_V1 {
@@ -673,7 +639,6 @@ impl SignedHedgingFeedLedgerV1 {
                 max: MAX_SIGNED_HEDGING_FEED_LEDGER_ENTRIES,
             });
         }
-
         if self.admissions.is_empty() != (self.last_admitted_at_unix == 0) {
             return Err(SignedHedgingError::InvalidFeedLedgerClock);
         }
@@ -708,7 +673,6 @@ impl SignedHedgingFeedLedgerV1 {
         }
         Ok(())
     }
-
     /// Verify and upsert one signed feed high-water mark without partial mutation.
     pub fn admit(
         &mut self,
@@ -763,37 +727,31 @@ impl SignedHedgingFeedLedgerV1 {
         self.last_admitted_at_unix = admitted_at_unix;
         Ok(())
     }
-
     /// Return the external policy digest bound into this ledger.
     #[must_use]
     pub const fn policy_digest(&self) -> &[u8; 32] {
         &self.policy_digest
     }
-
     /// Return the highest accepted admission Unix second.
     #[must_use]
     pub const fn last_admitted_at_unix(&self) -> u64 {
         self.last_admitted_at_unix
     }
-
     /// Return the number of retained per-feed high-water marks.
     #[must_use]
     pub const fn len(&self) -> usize {
         self.admissions.len()
     }
-
     /// Return `true` when no signed feed has been admitted.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.admissions.is_empty()
     }
-
     /// Return immutable per-feed high-water marks in canonical feed-id order.
     #[must_use]
     pub fn high_water_marks(&self) -> &[SignedHedgingFeedAdmissionV1] {
         &self.admissions
     }
-
     /// Return fallibly cloned latest samples, one per feed id, in canonical order.
     pub fn latest_signed_feeds(
         &self,
@@ -811,7 +769,6 @@ impl SignedHedgingFeedLedgerV1 {
         }
         Ok(latest)
     }
-
     /// Derive a governed decision only from the latest admitted sample per feed.
     pub fn derive_latest_reference_price(
         &self,
@@ -830,7 +787,6 @@ impl SignedHedgingFeedLedgerV1 {
             max_divergence_bps,
         )
     }
-
     /// Return a bounded canonical checkpoint for durable restart recovery.
     pub fn canonical_bytes(
         &self,
@@ -844,7 +800,6 @@ impl SignedHedgingFeedLedgerV1 {
         )
     }
 }
-
 fn validate_feed_successor(
     previous: &SignedHedgingPriceFeedV1,
     next: &SignedHedgingPriceFeedV1,
@@ -871,7 +826,6 @@ fn validate_feed_successor(
         }
     }
 }
-
 /// Derive a deterministic reference price only from externally verified feeds.
 pub fn derive_governed_reference_price_decision_v1(
     policy: &HedgingFeedTrustPolicyV1,
@@ -927,7 +881,6 @@ pub fn derive_governed_reference_price_decision_v1(
     governed.verify(policy, admitted_at_unix)?;
     Ok(governed)
 }
-
 /// Bind a canonical statement to its exact governed reference-price evidence.
 pub fn bind_governed_billing_statement_v1(
     statement: BillingStatementV1,
@@ -948,7 +901,6 @@ pub fn bind_governed_billing_statement_v1(
     governed.validate_structure()?;
     Ok(governed)
 }
-
 /// Decode one bounded canonical trust policy.
 pub fn decode_hedging_feed_trust_policy(
     bytes: &[u8],
@@ -968,7 +920,6 @@ pub fn decode_hedging_feed_trust_policy(
     policy.validate()?;
     Ok(policy)
 }
-
 /// Decode one bounded canonical signed price feed.
 pub fn decode_signed_hedging_price_feed(
     bytes: &[u8],
@@ -988,7 +939,6 @@ pub fn decode_signed_hedging_price_feed(
     envelope.validate_structure()?;
     Ok(envelope)
 }
-
 /// Decode and fully replay one bounded canonical signed-feed ledger checkpoint.
 pub fn decode_signed_hedging_feed_ledger(
     bytes: &[u8],
@@ -1009,7 +959,6 @@ pub fn decode_signed_hedging_feed_ledger(
     ledger.validate(policy)?;
     Ok(ledger)
 }
-
 /// Decode one bounded canonical governed price decision.
 pub fn decode_governed_reference_price_decision(
     bytes: &[u8],
@@ -1029,7 +978,6 @@ pub fn decode_governed_reference_price_decision(
     decision.validate_structure()?;
     Ok(decision)
 }
-
 /// Decode one bounded canonical governed billing statement.
 pub fn decode_governed_billing_statement(
     bytes: &[u8],
@@ -1049,7 +997,6 @@ pub fn decode_governed_billing_statement(
     statement.validate_structure()?;
     Ok(statement)
 }
-
 fn validate_admission_time(
     policy: &HedgingFeedTrustPolicyV1,
     feed: &HedgingPriceFeedV1,
@@ -1079,7 +1026,6 @@ fn validate_admission_time(
     }
     Ok(())
 }
-
 fn signed_feeds_digest(
     signed_feeds: &[SignedHedgingPriceFeedV1],
 ) -> Result<[u8; 32], SignedHedgingError> {
@@ -1107,7 +1053,6 @@ fn signed_feeds_digest(
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn governed_billing_binding_digest(
     statement: &BillingStatementV1,
     governed: &GovernedHedgingReferencePriceDecisionV1,
@@ -1120,7 +1065,6 @@ fn governed_billing_binding_digest(
     hasher.update(&governed.signed_feeds_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn try_clone_feed(feed: &HedgingPriceFeedV1) -> Result<HedgingPriceFeedV1, SignedHedgingError> {
     Ok(HedgingPriceFeedV1 {
         version: feed.version,
@@ -1133,7 +1077,6 @@ fn try_clone_feed(feed: &HedgingPriceFeedV1) -> Result<HedgingPriceFeedV1, Signe
         status: feed.status,
     })
 }
-
 fn try_clone_signed_feed(
     envelope: &SignedHedgingPriceFeedV1,
 ) -> Result<SignedHedgingPriceFeedV1, SignedHedgingError> {
@@ -1145,7 +1088,6 @@ fn try_clone_signed_feed(
         signature: envelope.signature,
     })
 }
-
 fn try_clone_text(value: &str, context: &'static str) -> Result<String, SignedHedgingError> {
     let mut cloned = String::new();
     cloned
@@ -1154,7 +1096,6 @@ fn try_clone_text(value: &str, context: &'static str) -> Result<String, SignedHe
     cloned.push_str(value);
     Ok(cloned)
 }
-
 fn validate_signer_id(signer_id: &str) -> Result<(), SignedHedgingError> {
     if signer_id.is_empty()
         || signer_id.len() > MAX_HEDGING_SIGNER_ID_BYTES
@@ -1168,7 +1109,6 @@ fn validate_signer_id(signer_id: &str) -> Result<(), SignedHedgingError> {
     }
     Ok(())
 }
-
 fn hash_canonical<T: norito::NoritoSerialize>(
     domain: &[u8],
     payload: &'static str,
@@ -1183,7 +1123,6 @@ fn hash_canonical<T: norito::NoritoSerialize>(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     payload: &'static str,
     value: &T,
@@ -1209,7 +1148,6 @@ fn encode_canonical_bounded<T: norito::NoritoSerialize>(
     }
     Ok(bytes)
 }
-
 fn decode_canonical<T>(
     payload: &'static str,
     bytes: &[u8],
@@ -1238,7 +1176,6 @@ where
     }
     Ok(decoded)
 }
-
 /// Externally governed feed and billing validation failures.
 #[derive(Debug, Error)]
 pub enum SignedHedgingError {
@@ -1453,36 +1390,29 @@ pub enum SignedHedgingError {
     #[error(transparent)]
     Hedging(#[from] HedgingValidationError),
 }
-
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::numeric::Quantity;
-
     use super::*;
     use crate::XorQuantity;
     use crate::hedging::{
         BillingLineDirectionV1, BillingLineItemKindV1, HEDGING_PRICE_FEED_VERSION_V1,
         HedgingFeedStatusV1, build_billing_line_item_v1, build_billing_statement_v1,
     };
-
     const EFFECTIVE_AT: u64 = 1_800_000_000;
-
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
-
     fn usd(value: &str) -> Quantity {
         value.parse().expect("canonical USD quantity")
     }
-
     fn keys() -> [SigningKey; 2] {
         [
             SigningKey::from_bytes(&[11; 32]),
             SigningKey::from_bytes(&[22; 32]),
         ]
     }
-
     fn binding(feed_id: &str, source: &str) -> HedgingFeedBindingV1 {
         HedgingFeedBindingV1 {
             version: HEDGING_FEED_BINDING_VERSION_V1,
@@ -1490,7 +1420,6 @@ mod tests {
             source: source.into(),
         }
     }
-
     fn policy() -> HedgingFeedTrustPolicyV1 {
         let keys = keys();
         HedgingFeedTrustPolicyV1 {
@@ -1517,7 +1446,6 @@ mod tests {
             revoked_signer_ids: Vec::new(),
         }
     }
-
     fn feed(
         feed_id: &str,
         source: &str,
@@ -1539,7 +1467,6 @@ mod tests {
             status: HedgingFeedStatusV1::Ok,
         }
     }
-
     fn sign_feed(
         policy: &HedgingFeedTrustPolicyV1,
         signer_index: usize,
@@ -1557,7 +1484,6 @@ mod tests {
         envelope.signature = keys[signer_index].sign(&digest).to_bytes();
         envelope
     }
-
     fn signed_feeds(policy: &HedgingFeedTrustPolicyV1) -> Vec<SignedHedgingPriceFeedV1> {
         vec![
             sign_feed(
@@ -1572,7 +1498,6 @@ mod tests {
             ),
         ]
     }
-
     fn governed_decision() -> (
         HedgingFeedTrustPolicyV1,
         GovernedHedgingReferencePriceDecisionV1,
@@ -1589,7 +1514,6 @@ mod tests {
         .expect("governed decision");
         (policy, decision)
     }
-
     #[test]
     fn signed_feed_verifies_external_identity_binding_and_freshness() {
         let policy = policy();
@@ -1601,7 +1525,6 @@ mod tests {
         envelope
             .verify(&policy, EFFECTIVE_AT)
             .expect("authorized fresh feed");
-
         let mut wrong_signature = envelope.clone();
         wrong_signature.feed.xor_usd_price = wrong_signature
             .feed
@@ -1612,7 +1535,6 @@ mod tests {
             wrong_signature.verify(&policy, EFFECTIVE_AT),
             Err(SignedHedgingError::SignatureVerification { .. })
         ));
-
         let unauthorized = sign_feed(
             &policy,
             0,
@@ -1622,7 +1544,6 @@ mod tests {
             unauthorized.verify(&policy, EFFECTIVE_AT),
             Err(SignedHedgingError::UnauthorizedFeedBinding { .. })
         ));
-
         let stale = sign_feed(
             &policy,
             0,
@@ -1632,7 +1553,6 @@ mod tests {
             stale.verify(&policy, EFFECTIVE_AT),
             Err(SignedHedgingError::FeedTooOld)
         ));
-
         let future = sign_feed(
             &policy,
             0,
@@ -1643,7 +1563,6 @@ mod tests {
             Err(SignedHedgingError::FeedFromFuture)
         ));
     }
-
     #[test]
     fn policy_substitution_revocation_weak_keys_and_order_fail_closed() {
         let policy = policy();
@@ -1658,7 +1577,6 @@ mod tests {
             envelope.verify(&substituted, EFFECTIVE_AT),
             Err(SignedHedgingError::PolicyDigestMismatch)
         ));
-
         let mut revoked_policy = policy.clone();
         revoked_policy.revoked_signer_ids = vec!["collector-1".into()];
         let revoked = sign_feed(
@@ -1670,7 +1588,6 @@ mod tests {
             revoked.verify(&revoked_policy, EFFECTIVE_AT),
             Err(SignedHedgingError::RevokedSigner { .. })
         ));
-
         let mut weak = policy.clone();
         weak.signers[0].public_key = [0; ed25519_dalek::PUBLIC_KEY_LENGTH];
         assert!(matches!(
@@ -1684,7 +1601,6 @@ mod tests {
             Err(SignedHedgingError::NonCanonicalOrder { field: "signers" })
         ));
     }
-
     #[test]
     fn policy_rejects_duplicate_bindings_keys_revocations_and_empty_active_set() {
         let mut duplicate_binding = policy();
@@ -1696,21 +1612,18 @@ mod tests {
             duplicate_binding.validate(),
             Err(SignedHedgingError::DuplicateFeedAuthorization { .. })
         ));
-
         let mut duplicate_key = policy();
         duplicate_key.signers[1].public_key = duplicate_key.signers[0].public_key;
         assert!(matches!(
             duplicate_key.validate(),
             Err(SignedHedgingError::DuplicateTrustedPublicKey)
         ));
-
         let mut unknown_revocation = policy();
         unknown_revocation.revoked_signer_ids = vec!["collector-9".into()];
         assert!(matches!(
             unknown_revocation.validate(),
             Err(SignedHedgingError::UnknownRevokedSigner { .. })
         ));
-
         let mut all_revoked = policy();
         all_revoked.revoked_signer_ids = vec!["collector-1".into(), "collector-2".into()];
         assert!(matches!(
@@ -1718,7 +1631,6 @@ mod tests {
             Err(SignedHedgingError::NoActiveTrustedSigners)
         ));
     }
-
     #[test]
     fn signed_feed_rejects_unknown_signer_and_malformed_signature() {
         let policy = policy();
@@ -1733,7 +1645,6 @@ mod tests {
             unknown.verify(&policy, EFFECTIVE_AT),
             Err(SignedHedgingError::UntrustedSigner { .. })
         ));
-
         let mut malformed = envelope;
         malformed.signature = [0; ed25519_dalek::SIGNATURE_LENGTH];
         assert!(matches!(
@@ -1741,7 +1652,6 @@ mod tests {
             Err(SignedHedgingError::InvalidSignature { .. })
         ));
     }
-
     #[test]
     fn governed_decision_cannot_weaken_policy_age_or_run_ahead_of_admission() {
         let policy = policy();
@@ -1768,7 +1678,6 @@ mod tests {
             Err(SignedHedgingError::DecisionFromFuture)
         ));
     }
-
     #[test]
     fn governed_decision_retains_and_replays_all_signed_inputs() {
         let (policy, governed) = governed_decision();
@@ -1777,14 +1686,12 @@ mod tests {
             .expect("governed decision verifies");
         assert_eq!(governed.decision.feeds.len(), 2);
         assert_eq!(governed.signed_feeds.len(), 2);
-
         let mut digest_tampered = governed.clone();
         digest_tampered.signed_feeds_digest[0] ^= 1;
         assert!(matches!(
             digest_tampered.validate_structure(),
             Err(SignedHedgingError::SignedFeedsDigestMismatch)
         ));
-
         let mut feed_tampered = governed;
         feed_tampered.signed_feeds[0].feed.xor_usd_price = feed_tampered.signed_feeds[0]
             .feed
@@ -1796,7 +1703,6 @@ mod tests {
             Err(SignedHedgingError::DecisionFeedMismatch { index: 0 })
         ));
     }
-
     #[test]
     fn governed_billing_statement_cannot_drop_authenticated_reference_evidence() {
         let (policy, governed_reference) = governed_decision();
@@ -1832,7 +1738,6 @@ mod tests {
             decode_governed_billing_statement(&encoded).expect("decode governed statement"),
             governed
         );
-
         let mut tampered = governed;
         tampered.binding_digest[0] ^= 1;
         assert!(matches!(
@@ -1840,7 +1745,6 @@ mod tests {
             Err(SignedHedgingError::GovernedBillingDigestMismatch)
         ));
     }
-
     #[test]
     fn signed_feed_ledger_replays_latest_samples_and_restores_checkpoint() {
         let policy = policy();
@@ -1851,7 +1755,6 @@ mod tests {
                 .admit(&policy, envelope, EFFECTIVE_AT)
                 .expect("initial feed admission");
         }
-
         let mut updated_feed = feed("primary", "primary-source", EFFECTIVE_AT + 10, 5_000);
         updated_feed.xor_usd_price = usd("2.01");
         updated_feed.evidence_digest = *blake3::hash(b"primary-update").as_bytes();
@@ -1859,7 +1762,6 @@ mod tests {
         ledger
             .admit(&policy, updated.clone(), EFFECTIVE_AT + 10)
             .expect("updated feed admission");
-
         let latest = ledger
             .latest_signed_feeds(&policy)
             .expect("latest signed feeds");
@@ -1872,14 +1774,12 @@ mod tests {
             .verify(&policy, EFFECTIVE_AT + 10)
             .expect("verify latest governed decision");
         assert_eq!(governed.signed_feeds, latest);
-
         let checkpoint = ledger.canonical_bytes(&policy).expect("ledger checkpoint");
         assert_eq!(
             decode_signed_hedging_feed_ledger(&checkpoint, &policy).expect("restore feed ledger"),
             ledger
         );
     }
-
     #[test]
     fn signed_feed_ledger_rejects_replay_rollback_equivocation_and_evidence_reuse_atomically() {
         let policy = policy();
@@ -1893,13 +1793,11 @@ mod tests {
             .admit(&policy, original.clone(), EFFECTIVE_AT)
             .expect("initial feed admission");
         let baseline = ledger.clone();
-
         assert!(matches!(
             ledger.admit(&policy, original.clone(), EFFECTIVE_AT + 1),
             Err(SignedHedgingError::FeedReplay { .. })
         ));
         assert_eq!(ledger, baseline, "replay rejection must be atomic");
-
         let mut rollback_feed = feed("primary", "primary-source", EFFECTIVE_AT - 20, 10_000);
         rollback_feed.evidence_digest = *blake3::hash(b"rollback-evidence").as_bytes();
         let rollback = sign_feed(&policy, 0, rollback_feed);
@@ -1908,7 +1806,6 @@ mod tests {
             Err(SignedHedgingError::FeedObservationRollback { .. })
         ));
         assert_eq!(ledger, baseline, "observation rollback must be atomic");
-
         let mut equivocation_feed = original.feed.clone();
         equivocation_feed.xor_usd_price = equivocation_feed
             .xor_usd_price
@@ -1921,7 +1818,6 @@ mod tests {
             Err(SignedHedgingError::FeedObservationEquivocation { .. })
         ));
         assert_eq!(ledger, baseline, "equivocation rejection must be atomic");
-
         let mut reused_evidence_feed =
             feed("secondary", "secondary-source", EFFECTIVE_AT - 5, 10_000);
         reused_evidence_feed.evidence_digest = original.feed.evidence_digest;
@@ -1931,7 +1827,6 @@ mod tests {
             Err(SignedHedgingError::FeedEvidenceReplay)
         ));
         assert_eq!(ledger, baseline, "evidence replay must be atomic");
-
         let mut newer_feed = feed("primary", "primary-source", EFFECTIVE_AT + 1, 10_000);
         newer_feed.evidence_digest = *blake3::hash(b"newer-evidence").as_bytes();
         let newer = sign_feed(&policy, 0, newer_feed);
@@ -1940,7 +1835,6 @@ mod tests {
             Err(SignedHedgingError::FeedAdmissionTimeRollback { .. })
         ));
         assert_eq!(ledger, baseline, "admission rollback must be atomic");
-
         let mut substituted_policy = policy.clone();
         substituted_policy.policy_id[0] ^= 1;
         assert!(matches!(
@@ -1948,7 +1842,6 @@ mod tests {
             Err(SignedHedgingError::FeedLedgerPolicyDigestMismatch)
         ));
     }
-
     #[test]
     fn signed_feed_ledger_checkpoint_rejects_reordered_and_tampered_high_water_marks() {
         let policy = policy();
@@ -1958,7 +1851,6 @@ mod tests {
                 .admit(&policy, envelope, EFFECTIVE_AT)
                 .expect("feed admission");
         }
-
         let mut reordered = ledger.clone();
         reordered.admissions.swap(0, 1);
         assert!(matches!(
@@ -1967,14 +1859,12 @@ mod tests {
                 field: "feed_ledger_admissions"
             })
         ));
-
         let mut clock_tampered = ledger.clone();
         clock_tampered.last_admitted_at_unix += 1;
         assert!(matches!(
             clock_tampered.validate(&policy),
             Err(SignedHedgingError::InvalidFeedLedgerClock)
         ));
-
         let mut tampered = ledger;
         tampered.admissions[1].envelope.feed.xor_usd_price = tampered.admissions[1]
             .envelope
@@ -1987,7 +1877,6 @@ mod tests {
             Err(SignedHedgingError::SignatureVerification { .. })
         ));
     }
-
     #[test]
     fn canonical_decoders_reject_trailing_compressed_and_oversized_payloads() {
         let (policy, governed) = governed_decision();
@@ -2009,7 +1898,6 @@ mod tests {
                 .expect("decode governed decision"),
             governed
         );
-
         let mut trailing = policy_bytes;
         trailing.push(0);
         assert!(matches!(

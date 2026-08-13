@@ -13,7 +13,6 @@
 //! the frozen soundness, resource, and governance release gates; no
 //! projection-only or unbound collection of subproofs is treated as a
 //! credential proof.
-
 pub(crate) mod accumulator_air;
 pub(crate) mod accumulator_stark;
 pub(crate) mod air;

@@ -1,11 +1,9 @@
 //! Hardened launcher and offline administrator CLI for the SoraFS software signer.
-
 #[cfg(not(unix))]
 fn main() {
     eprintln!("SoraFS external software signer requires authenticated Unix peer credentials");
     std::process::exit(2);
 }
-
 #[cfg(unix)]
 mod unix_main {
     use std::{
@@ -18,7 +16,6 @@ mod unix_main {
         process,
         sync::Arc,
     };
-
     use clap::{Args, Parser, Subcommand};
     use irohad::external_software_signer::{
         ExternalSoftwareSignerBackendsV1, ExternalSoftwareSignerBillingStatementAdapterV1,
@@ -39,10 +36,8 @@ mod unix_main {
         RuntimeProviderBrokerExecutableV1, load_runtime_provider_broker_catalog_file_v1,
     };
     use norito::{NoritoDeserialize, NoritoSerialize};
-
     const MAX_PUBLIC_ARTIFACT_BYTES_V1: usize = 64 * 1024;
     const MAX_SIGNING_PAYLOAD_BYTES_V1: usize = 32 * 1024 * 1024;
-
     #[derive(Debug, Parser)]
     #[command(
         name = "sorafs_external_software_signer",
@@ -53,7 +48,6 @@ mod unix_main {
         #[command(subcommand)]
         command: Command,
     }
-
     #[derive(Debug, Subcommand)]
     enum Command {
         /// Generate one encrypted key envelope and immutable genesis audit record.
@@ -73,7 +67,6 @@ mod unix_main {
         /// Irreversibly revoke the active key generation.
         Revoke(RevokeArgs),
     }
-
     #[derive(Debug, Args)]
     struct WrappingKeySourceArgs {
         /// Inherited descriptor containing exactly 32 wrapping-key bytes.
@@ -83,7 +76,6 @@ mod unix_main {
         #[arg(long, value_name = "NAME", conflicts_with = "wrapping_key_fd")]
         systemd_credential: Option<String>,
     }
-
     impl WrappingKeySourceArgs {
         fn load(self) -> Result<SoftwareSignerWrappingKeyV1, CliError> {
             match (self.wrapping_key_fd, self.systemd_credential) {
@@ -103,7 +95,6 @@ mod unix_main {
             }
         }
     }
-
     fn open_inherited_descriptor(descriptor: i32) -> Result<OwnedFd, CliError> {
         let namespace = if cfg!(target_os = "linux") {
             "/proc/self/fd"
@@ -114,7 +105,6 @@ mod unix_main {
             .map(OwnedFd::from)
             .map_err(|_| CliError::Credential)
     }
-
     #[derive(Debug, Args)]
     struct ProvisionArgs {
         /// New absolute mode-0700 signer state directory.
@@ -177,7 +167,6 @@ mod unix_main {
         #[command(flatten)]
         wrapping_key: WrappingKeySourceArgs,
     }
-
     #[derive(Debug, Args)]
     struct ServeArgs {
         #[arg(long, value_name = "ABSOLUTE_PATH")]
@@ -192,7 +181,6 @@ mod unix_main {
         #[command(flatten)]
         wrapping_key: WrappingKeySourceArgs,
     }
-
     #[derive(Debug, Args)]
     struct ClientEndpointArgs {
         #[arg(long, value_name = "ABSOLUTE_PATH")]
@@ -202,7 +190,6 @@ mod unix_main {
         #[arg(long, value_name = "ABSOLUTE_PATH")]
         administrator_socket: PathBuf,
     }
-
     impl ClientEndpointArgs {
         fn load_policy(&self) -> Result<SoftwareSignerEndpointPolicyV1, CliError> {
             let binding = read_canonical(&self.binding, MAX_PUBLIC_ARTIFACT_BYTES_V1)?;
@@ -214,7 +201,6 @@ mod unix_main {
             .map_err(|_| CliError::Binding)
         }
     }
-
     #[derive(Debug, Args)]
     struct QualifyArgs {
         #[command(flatten)]
@@ -222,7 +208,6 @@ mod unix_main {
         #[arg(long, value_name = "ABSOLUTE_PATH")]
         provenance_out: PathBuf,
     }
-
     #[derive(Debug, Args)]
     struct SignArgs {
         #[command(flatten)]
@@ -240,7 +225,6 @@ mod unix_main {
         #[arg(long, value_name = "ABSOLUTE_PATH")]
         receipt_out: PathBuf,
     }
-
     #[derive(Debug, Args)]
     struct VerifyReceiptArgs {
         /// Exact reviewed canonical public binding.
@@ -262,7 +246,6 @@ mod unix_main {
         #[arg(long, value_name = "ABSOLUTE_PATH")]
         validation_out: PathBuf,
     }
-
     #[derive(Debug, Args)]
     struct AdminStatusArgs {
         #[command(flatten)]
@@ -270,7 +253,6 @@ mod unix_main {
         #[arg(long, value_name = "ABSOLUTE_PATH")]
         provenance_out: PathBuf,
     }
-
     #[derive(Debug, Args)]
     struct RotateArgs {
         #[command(flatten)]
@@ -296,7 +278,6 @@ mod unix_main {
         #[arg(long, value_name = "ABSOLUTE_PATH")]
         provenance_out: PathBuf,
     }
-
     #[derive(Debug, Args)]
     struct RevokeArgs {
         #[command(flatten)]
@@ -312,7 +293,6 @@ mod unix_main {
         #[arg(long, value_name = "ABSOLUTE_PATH")]
         provenance_out: PathBuf,
     }
-
     #[derive(Debug, norito::JsonDeserialize)]
     #[norito(deny_unknown_fields)]
     struct SignatureReceiptJsonV1 {
@@ -332,7 +312,6 @@ mod unix_main {
         response_digest_blake3_hex: String,
         response_attestation_hex: String,
     }
-
     #[derive(Debug, norito::JsonDeserialize)]
     #[norito(deny_unknown_fields)]
     struct SignatureReceiptBindingJsonV1 {
@@ -355,7 +334,6 @@ mod unix_main {
         audit_genesis_digest_blake3_hex: String,
         max_request_bytes: u32,
     }
-
     #[derive(Debug, norito::JsonDeserialize)]
     #[norito(deny_unknown_fields)]
     struct SignatureReceiptProvenanceJsonV1 {
@@ -364,7 +342,6 @@ mod unix_main {
         revoked: bool,
         attestation_hex: String,
     }
-
     #[derive(Clone, Copy, Debug)]
     enum CliError {
         Credential,
@@ -374,7 +351,6 @@ mod unix_main {
         Service,
         Client,
     }
-
     impl CliError {
         const fn message(self) -> &'static str {
             match self {
@@ -387,7 +363,6 @@ mod unix_main {
             }
         }
     }
-
     pub fn main() {
         let result = if is_standard_broker_argv0(env::args_os().next().as_deref()) {
             run_standard_runtime_provider_broker()
@@ -399,7 +374,6 @@ mod unix_main {
             process::exit(1);
         }
     }
-
     fn run(cli: Cli) -> Result<(), CliError> {
         match cli.command {
             Command::Provision(args) => provision(args),
@@ -412,7 +386,6 @@ mod unix_main {
             Command::Revoke(args) => revoke(args),
         }
     }
-
     fn provision(args: ProvisionArgs) -> Result<(), CliError> {
         let policy_digest = parse_digest(&args.policy_digest_sha256)?;
         let purpose_binding = purpose_binding_from_args(&args)?;
@@ -443,7 +416,6 @@ mod unix_main {
             0o644,
         )
     }
-
     fn purpose_binding_from_args(
         args: &ProvisionArgs,
     ) -> Result<SoftwareSignerPurposeBindingV1, CliError> {
@@ -523,7 +495,6 @@ mod unix_main {
             _ => Err(CliError::Input),
         }
     }
-
     fn serve(args: ServeArgs) -> Result<(), CliError> {
         let expected: SoftwareSignerPublicBindingV1 =
             read_canonical(&args.binding, MAX_PUBLIC_ARTIFACT_BYTES_V1)?;
@@ -545,13 +516,11 @@ mod unix_main {
             .and_then(SoftwareSignerServerV1::serve)
             .map_err(|_| CliError::Service)
     }
-
     fn qualify(args: QualifyArgs) -> Result<(), CliError> {
         let client = SoftwareSignerClientV1::new(args.endpoint.load_policy()?);
         let provenance = client.qualify().map_err(|_| CliError::Client)?;
         write_canonical_new(&args.provenance_out, &provenance, 0o644)
     }
-
     fn sign(args: SignArgs) -> Result<(), CliError> {
         let operation_id = parse_digest(&args.operation_id)?;
         let payload = read_bounded_regular(&args.payload, MAX_SIGNING_PAYLOAD_BYTES_V1)?;
@@ -562,7 +531,6 @@ mod unix_main {
         write_signature_receipt_json_new(&args.receipt_out, &receipt)?;
         write_new(&args.signature_out, &receipt.signature, 0o644)
     }
-
     fn verify_receipt(args: VerifyReceiptArgs) -> Result<(), CliError> {
         let binding: SoftwareSignerPublicBindingV1 =
             read_canonical(&args.binding, MAX_PUBLIC_ARTIFACT_BYTES_V1)?;
@@ -575,13 +543,11 @@ mod unix_main {
             .map_err(|_| CliError::Client)?;
         write_receipt_validation_json_new(&args.validation_out, &receipt, &signature, &binding)
     }
-
     fn status(args: AdminStatusArgs) -> Result<(), CliError> {
         let client = SoftwareSignerAdministratorClientV1::new(args.endpoint.load_policy()?);
         let provenance = client.status().map_err(|_| CliError::Client)?;
         write_canonical_new(&args.provenance_out, &provenance, 0o644)
     }
-
     fn rotate(args: RotateArgs) -> Result<(), CliError> {
         let client = SoftwareSignerAdministratorClientV1::new(args.endpoint.load_policy()?);
         let provenance = client
@@ -598,7 +564,6 @@ mod unix_main {
         write_canonical_new(&args.binding_out, &provenance.binding, 0o644)?;
         write_canonical_new(&args.provenance_out, &provenance, 0o644)
     }
-
     fn revoke(args: RevokeArgs) -> Result<(), CliError> {
         let client = SoftwareSignerAdministratorClientV1::new(args.endpoint.load_policy()?);
         let provenance = client
@@ -611,14 +576,12 @@ mod unix_main {
             .map_err(|_| CliError::Client)?;
         write_canonical_new(&args.provenance_out, &provenance, 0o644)
     }
-
     fn is_standard_broker_argv0(value: Option<&OsStr>) -> bool {
         value
             .map(Path::new)
             .and_then(Path::file_name)
             .is_some_and(|name| name == "iroha-runtime-provider-broker-v1")
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn run_standard_runtime_provider_broker() -> Result<(), CliError> {
         let args = RuntimeProviderBrokerExecutableArgsV1::parse();
@@ -731,12 +694,10 @@ mod unix_main {
                 .map_err(|_| CliError::Service)
         }
     }
-
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     fn run_standard_runtime_provider_broker() -> Result<(), CliError> {
         Err(CliError::Service)
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn fixed_catalog_signer_role_name(
         configured: &irohad::IrohaRuntimeProviderBindingV1,
@@ -755,7 +716,6 @@ mod unix_main {
             _ => return Err(CliError::Binding),
         })
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn fixed_signer_paths(role: &str) -> (PathBuf, PathBuf, PathBuf) {
         #[cfg(target_os = "linux")]
@@ -775,7 +735,6 @@ mod unix_main {
             runtime.join("administrator.sock"),
         )
     }
-
     fn valid_credential_name(value: &str) -> bool {
         !value.is_empty()
             && value.len() <= 128
@@ -785,7 +744,6 @@ mod unix_main {
             && value != "."
             && value != ".."
     }
-
     fn parse_digest(value: &str) -> Result<[u8; 32], CliError> {
         if value.len() != 64 {
             return Err(CliError::Input);
@@ -797,7 +755,6 @@ mod unix_main {
         }
         Ok(digest)
     }
-
     fn parse_lower_hex_bytes(value: &str, maximum: usize) -> Result<Vec<u8>, CliError> {
         if value.is_empty()
             || value.len() % 2 != 0
@@ -810,7 +767,6 @@ mod unix_main {
         }
         hex::decode(value).map_err(|_| CliError::Input)
     }
-
     fn read_canonical<T>(path: &Path, maximum: usize) -> Result<T, CliError>
     where
         T: NoritoSerialize,
@@ -819,7 +775,6 @@ mod unix_main {
         let bytes = read_bounded_regular(path, maximum)?;
         norito::decode_canonical(&bytes).map_err(|_| CliError::Input)
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct DirectoryIdentity {
         device: u64,
@@ -828,7 +783,6 @@ mod unix_main {
         mode: u32,
         links: u64,
     }
-
     impl DirectoryIdentity {
         fn try_from_metadata(metadata: &fs::Metadata) -> Result<Self, CliError> {
             let identity = Self {
@@ -849,7 +803,6 @@ mod unix_main {
             Ok(identity)
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct FileIdentity {
         device: u64,
@@ -859,7 +812,6 @@ mod unix_main {
         links: u64,
         length: u64,
     }
-
     impl FileIdentity {
         fn from_metadata(metadata: &fs::Metadata) -> Self {
             Self {
@@ -872,7 +824,6 @@ mod unix_main {
             }
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct FileSnapshot {
         identity: FileIdentity,
@@ -881,7 +832,6 @@ mod unix_main {
         changed_seconds: i64,
         changed_nanoseconds: i64,
     }
-
     impl FileSnapshot {
         fn from_metadata(metadata: &fs::Metadata) -> Self {
             Self {
@@ -893,13 +843,11 @@ mod unix_main {
             }
         }
     }
-
     struct AnchoredParent {
         directory: File,
         name: OsString,
         chain: Vec<DirectoryIdentity>,
     }
-
     fn open_anchored_parent(path: &Path, error: CliError) -> Result<AnchoredParent, CliError> {
         validate_absolute_normal(path).map_err(|_| error)?;
         let mut names = path
@@ -937,7 +885,6 @@ mod unix_main {
             chain,
         })
     }
-
     fn verify_parent_chain(
         path: &Path,
         expected: &AnchoredParent,
@@ -949,7 +896,6 @@ mod unix_main {
         }
         Ok(())
     }
-
     fn open_anchored_regular(parent: &AnchoredParent, error: CliError) -> Result<File, CliError> {
         rustix::fs::openat(
             &parent.directory,
@@ -963,11 +909,9 @@ mod unix_main {
         .map(File::from)
         .map_err(|_| error)
     }
-
     fn read_bounded_regular(path: &Path, maximum: usize) -> Result<Vec<u8>, CliError> {
         read_bounded_regular_with_hook(path, maximum, || {})
     }
-
     fn read_bounded_regular_with_hook<F>(
         path: &Path,
         maximum: usize,
@@ -1012,7 +956,6 @@ mod unix_main {
         verify_parent_chain(path, &parent, CliError::Input)?;
         Ok(bytes)
     }
-
     fn write_canonical_new<T: NoritoSerialize>(
         path: &Path,
         value: &T,
@@ -1021,7 +964,6 @@ mod unix_main {
         let bytes = norito::encode_canonical(value).map_err(|_| CliError::Output)?;
         write_new(path, &bytes, mode)
     }
-
     fn read_signature_receipt_json(
         path: &Path,
         binding: &SoftwareSignerPublicBindingV1,
@@ -1091,7 +1033,6 @@ mod unix_main {
             )?,
         })
     }
-
     fn write_receipt_validation_json_new(
         path: &Path,
         receipt: &SoftwareSignerSignatureReceiptV1,
@@ -1099,7 +1040,6 @@ mod unix_main {
         binding: &SoftwareSignerPublicBindingV1,
     ) -> Result<(), CliError> {
         use norito::json::{Map, Value};
-
         let mut root = Map::new();
         root.insert(
             "schema".into(),
@@ -1174,13 +1114,11 @@ mod unix_main {
         let bytes = norito::json::to_vec(&Value::Object(root)).map_err(|_| CliError::Output)?;
         write_new(path, &bytes, 0o644)
     }
-
     fn write_signature_receipt_json_new(
         path: &Path,
         receipt: &SoftwareSignerSignatureReceiptV1,
     ) -> Result<(), CliError> {
         use norito::json::{Map, Value};
-
         let binding = &receipt.provenance.binding;
         let (_, public_key_payload) = binding
             .public_key
@@ -1237,7 +1175,6 @@ mod unix_main {
             "max_request_bytes".into(),
             Value::from(binding.max_request_bytes),
         );
-
         let mut provenance_json = Map::new();
         provenance_json.insert(
             "audit_sequence".into(),
@@ -1252,7 +1189,6 @@ mod unix_main {
             "attestation_hex".into(),
             Value::from(hex::encode(&receipt.provenance.attestation)),
         );
-
         let mut root = Map::new();
         root.insert(
             "schema".into(),
@@ -1302,11 +1238,9 @@ mod unix_main {
         let bytes = norito::json::to_vec(&Value::Object(root)).map_err(|_| CliError::Output)?;
         write_new(path, &bytes, 0o644)
     }
-
     fn write_new(path: &Path, bytes: &[u8], mode: u32) -> Result<(), CliError> {
         write_new_with_hook(path, bytes, mode, || {})
     }
-
     fn write_new_with_hook<F>(
         path: &Path,
         bytes: &[u8],
@@ -1388,7 +1322,6 @@ mod unix_main {
         }
         result
     }
-
     fn create_staging_file(
         parent: &AnchoredParent,
         mode: u32,
@@ -1429,7 +1362,6 @@ mod unix_main {
         }
         Err(CliError::Output)
     }
-
     fn open_named_regular(
         parent: &File,
         name: &OsString,
@@ -1447,7 +1379,6 @@ mod unix_main {
         .map(File::from)
         .map_err(|_| error)
     }
-
     fn file_matches_exact_bytes(
         mut file: File,
         expected: &[u8],
@@ -1465,7 +1396,6 @@ mod unix_main {
         let after = FileSnapshot::from_metadata(&file.metadata().map_err(|_| CliError::Output)?);
         Ok(before == after && observed == expected)
     }
-
     fn cleanup_exact_file(parent: &File, name: &OsString, expected_node: (u64, u64)) {
         let Ok(file) = open_named_regular(parent, name, CliError::Output) else {
             return;
@@ -1481,7 +1411,6 @@ mod unix_main {
             let _ = rustix::fs::unlinkat(parent, name, rustix::fs::AtFlags::empty());
         }
     }
-
     fn validate_absolute_normal(path: &Path) -> Result<(), CliError> {
         if !path.is_absolute()
             || path.components().any(|component| {
@@ -1495,15 +1424,11 @@ mod unix_main {
         }
         Ok(())
     }
-
     #[cfg(test)]
     mod tests {
         use std::os::unix::fs::symlink;
-
         use clap::CommandFactory as _;
-
         use super::*;
-
         #[test]
         fn credential_values_never_enter_the_cli() {
             let help = Cli::command().render_long_help().to_string();
@@ -1511,14 +1436,12 @@ mod unix_main {
             assert!(!help.contains("wrapping-key-hex"));
             assert!(!help.contains("secret"));
         }
-
         #[test]
         fn digest_parser_is_canonical_and_nonzero() {
             assert!(parse_digest(&"11".repeat(32)).is_ok());
             assert!(parse_digest(&"00".repeat(32)).is_err());
             assert!(parse_digest(&"AA".repeat(32)).is_err());
         }
-
         #[test]
         fn standard_broker_alias_and_signer_paths_are_fixed() {
             assert!(is_standard_broker_argv0(Some(OsStr::new(
@@ -1554,7 +1477,6 @@ mod unix_main {
                     .contains("broker-native-signers")
             );
         }
-
         #[test]
         fn artifact_io_rejects_ancestor_symlinks_and_hardlinks() {
             let root = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
@@ -1567,7 +1489,6 @@ mod unix_main {
             symlink(&real, &alias).expect("ancestor symlink");
             assert!(read_bounded_regular(&alias.join("input.bin"), 1024).is_err());
             assert!(write_new(&alias.join("output.bin"), b"output", 0o600).is_err());
-
             let linked = real.join("linked.bin");
             fs::hard_link(&input, &linked).expect("input hard link");
             assert!(read_bounded_regular(&input, 1024).is_err());
@@ -1577,7 +1498,6 @@ mod unix_main {
                 b"reviewed input"
             );
         }
-
         #[test]
         fn artifact_io_rejects_leaf_and_staging_hardlink_races() {
             let root = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
@@ -1594,7 +1514,6 @@ mod unix_main {
                 })
                 .is_err()
             );
-
             let output = directory.join("receipt.json");
             let captured = root.path().join("captured-staging");
             assert!(
@@ -1617,7 +1536,6 @@ mod unix_main {
             );
             assert!(!output.exists());
         }
-
         #[test]
         fn artifact_read_rejects_an_ancestor_swap_after_open() {
             let root = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
@@ -1637,7 +1555,6 @@ mod unix_main {
                 .is_err()
             );
         }
-
         #[test]
         fn artifact_write_rejects_an_ancestor_swap_before_publish() {
             let root = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
@@ -1658,7 +1575,6 @@ mod unix_main {
         }
     }
 }
-
 #[cfg(unix)]
 fn main() {
     unix_main::main();

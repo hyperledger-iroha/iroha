@@ -5,9 +5,7 @@
 //! the recursive IPA verifier separate from the compact transition relation,
 //! so initialization, one-parent, and two-parent transitions use identical
 //! keys, layouts, and proof-size limits.
-
 use std::sync::Arc;
-
 use halo2_proofs::halo2curves::pasta::Fp as Scalar;
 use iroha_data_model::offline::{
     KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4, KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2,
@@ -20,7 +18,6 @@ use iroha_data_model::offline::{
 };
 use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
-
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 pub use super::kagemusha_recursion_adapter::generate_candidate_recursive_step_two_receipt_v4;
 #[cfg(feature = "kagemusha-generation-memory-lab")]
@@ -40,7 +37,6 @@ pub use super::kagemusha_recursion_adapter::{
 pub use super::kagemusha_step_transition::{
     KagemushaStepOperationVectorV4, KagemushaStepTransferPublicV4,
 };
-
 /// Version of the compact field-neutral state vector carried across the Pasta cycle.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5: u32 =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
@@ -64,7 +60,6 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5: usize =
         + 1
         + 2
         + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_ACCUMULATOR_LIMBS_V5;
-
 pub(crate) const S_VERSION: usize = 0;
 pub(crate) const S_NETWORK_TAG: usize = S_VERSION + 1;
 pub(crate) const S_ASSET_TAG: usize = S_NETWORK_TAG + 8;
@@ -87,9 +82,7 @@ pub(crate) const S_ARTIFACT_MANIFEST_SHA256: usize = S_BRANCH_CLAIMS
         * KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2;
 pub(crate) const S_VERIFIER_KEY_ID: usize = S_ARTIFACT_MANIFEST_SHA256 + 8;
 const S_END: usize = S_VERIFIER_KEY_ID + 8;
-
 const _: [(); KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5] = [(); S_END];
-
 /// Compile-time layout table for the exact recursive continuing-state vector.
 ///
 /// The tuple values are `(field, first_limb, limb_count)`. Variable-count
@@ -124,7 +117,6 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V5: &[(&str, usize, usiz
     ("artifact_manifest_sha256", S_ARTIFACT_MANIFEST_SHA256, 8),
     ("verifier_key_id", S_VERIFIER_KEY_ID, 8),
 ];
-
 /// Audit map from every continuing statement field to its exact state-vector slot.
 ///
 /// Transition payloads are intentionally absent: they are consumed by the Eq
@@ -162,7 +154,6 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_COVERAGE_V5: &[(&str, &str)] = 
     ),
     ("statement.verifier_key_id", "verifier_key_id"),
 ];
-
 /// Exact field-neutral recursive state represented only by canonical `u32` limbs.
 ///
 /// No limb is reduced modulo either Pasta field. Both recursive circuits range
@@ -172,7 +163,6 @@ pub struct KagemushaRecursiveSpendStateVectorV5 {
     /// Fixed continuing-state limbs in [`KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V5`] order.
     pub limbs: [u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5],
 }
-
 /// Public operation selected by one logical recursive transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KagemushaRecursiveSpendOperationKindV1 {
@@ -183,7 +173,6 @@ pub enum KagemushaRecursiveSpendOperationKindV1 {
     /// Partial redemption that retains a confidential change state.
     RedemptionChange,
 }
-
 // The transition column is intentionally explicit.  Keeping named offsets
 // makes envelope validation fail closed when fields are added or reordered.
 pub(crate) const I_LAYOUT_VERSION: usize = 0;
@@ -267,7 +256,6 @@ pub(crate) const I_PARENT_FINAL_ROOT: usize = I_REDEMPTION_PROFILE + 1;
 pub(crate) const I_REDEMPTION_RECIPIENT_DIGEST: usize = I_PARENT_FINAL_ROOT + 1;
 pub(crate) const I_UNSHIELD_PUBLIC_INPUTS_DIGEST: usize = I_REDEMPTION_RECIPIENT_DIGEST + 4;
 pub(crate) const I_UNSHIELD_PUBLIC_AMOUNT: usize = I_UNSHIELD_PUBLIC_INPUTS_DIGEST + 4;
-
 /// Public-input contract for the secure Kagemusha output-membership relation.
 ///
 /// Paths remain witness values, but every path direction is constrained to the
@@ -276,12 +264,10 @@ pub(crate) const I_UNSHIELD_PUBLIC_AMOUNT: usize = I_UNSHIELD_PUBLIC_INPUTS_DIGE
 /// Axiom Poseidon specification and leaf/node domains of the confidential-note
 /// primitive.
 pub const KAGEMUSHA_OUTPUT_MEMBERSHIP_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_output_membership_v4","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["is_init","is_split","is_redemption_change","has_change","initial_root","final_root","recipient_commitment","recipient_leaf_index","change_commitment","change_leaf_index","dummy_leaf_index"]}"#;
-
 /// IPA domain exponent used by the fixed output-membership relation.
 pub const KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V4: u32 = 12;
 /// Number of one-row instance columns exposed by the output-membership relation.
 pub const KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V4: usize = 11;
-
 /// Operation profile selected by one output-membership proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KagemushaOutputMembershipOperationV4 {
@@ -292,7 +278,6 @@ pub enum KagemushaOutputMembershipOperationV4 {
     /// Partial redemption with one confidential change output.
     RedemptionChange,
 }
-
 /// One proof-bound output and both paths needed to authenticate its creation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaOutputMembershipLeafV4 {
@@ -305,7 +290,6 @@ pub struct KagemushaOutputMembershipLeafV4 {
     /// Commitment path after every output in the operation has been inserted.
     pub membership_path: iroha_data_model::offline::KagemushaConfidentialMerklePathV2,
 }
-
 /// Complete witness for one fixed-shape Poseidon output-membership update.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaOutputMembershipWitnessV4 {
@@ -324,7 +308,6 @@ pub struct KagemushaOutputMembershipWitnessV4 {
     /// Empty-leaf membership path under `final_root` for `dummy_leaf_index`.
     pub dummy_path: iroha_data_model::offline::KagemushaConfidentialMerklePathV2,
 }
-
 /// Eq/Fp secure Poseidon relation proving output insertion and final membership.
 ///
 /// This circuit is intentionally separate from the symmetric transition-only
@@ -337,7 +320,6 @@ pub struct KagemushaOutputMembershipWitnessV4 {
 pub struct KagemushaOutputMembershipCircuitV4 {
     witness: Option<KagemushaOutputMembershipWitnessV4>,
 }
-
 impl KagemushaOutputMembershipCircuitV4 {
     /// Construct the circuit after checking fixed path sizes and scalar encodings.
     pub fn new(witness: KagemushaOutputMembershipWitnessV4) -> Result<Self, String> {
@@ -346,7 +328,6 @@ impl KagemushaOutputMembershipCircuitV4 {
             witness: Some(witness),
         })
     }
-
     /// Return the exact public columns expected by `MockProver` or IPA proving.
     pub fn public_instances(&self) -> Result<Vec<Vec<Scalar>>, String> {
         let witness = self
@@ -356,7 +337,6 @@ impl KagemushaOutputMembershipCircuitV4 {
         output_membership_v4::public_instances(witness)
     }
 }
-
 pub(in crate::zk) mod output_membership_v4 {
     use ff::Field as _;
     use halo2_base::{
@@ -370,7 +350,6 @@ pub(in crate::zk) mod output_membership_v4 {
         circuit::Layouter,
         plonk::{Circuit, ConstraintSystem, Error as PlonkError},
     };
-
     use super::{
         KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V4, KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V4,
         KagemushaOutputMembershipCircuitV4, KagemushaOutputMembershipLeafV4,
@@ -380,10 +359,8 @@ pub(in crate::zk) mod output_membership_v4 {
         CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3,
         confidential_relation_gadget::ConfidentialPoseidonChipV3, scalar_from_repr,
     };
-
     const TREE_DEPTH: usize = iroha_data_model::offline::KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2;
     const MINIMUM_UNUSABLE_ROWS: usize = 9;
-
     fn path_values(
         path: Option<&iroha_data_model::offline::KagemushaConfidentialMerklePathV2>,
     ) -> (Vec<[u8; 32]>, Vec<u8>, [u8; 32]) {
@@ -392,7 +369,6 @@ pub(in crate::zk) mod output_membership_v4 {
             |path| (path.siblings.clone(), path.directions.clone(), path.root),
         )
     }
-
     fn validate_path_encoding(
         path: &iroha_data_model::offline::KagemushaConfidentialMerklePathV2,
         label: &str,
@@ -411,7 +387,6 @@ pub(in crate::zk) mod output_membership_v4 {
             .ok_or_else(|| format!("{label} root is not a canonical Pallas scalar"))?;
         Ok(())
     }
-
     fn validate_leaf_encoding(
         leaf: &KagemushaOutputMembershipLeafV4,
         label: &str,
@@ -421,7 +396,6 @@ pub(in crate::zk) mod output_membership_v4 {
         validate_path_encoding(&leaf.update_path, &format!("{label} update path"))?;
         validate_path_encoding(&leaf.membership_path, &format!("{label} membership path"))
     }
-
     pub(super) fn validate_witness_encoding(
         witness: &KagemushaOutputMembershipWitnessV4,
     ) -> Result<(), String> {
@@ -437,7 +411,6 @@ pub(in crate::zk) mod output_membership_v4 {
         }
         validate_path_encoding(&witness.dummy_path, "dummy membership path")
     }
-
     pub(super) fn validate_witness_shape(
         witness: &KagemushaOutputMembershipWitnessV4,
     ) -> Result<(), String> {
@@ -504,11 +477,9 @@ pub(in crate::zk) mod output_membership_v4 {
         }
         Ok(())
     }
-
     fn scalar(bytes: [u8; 32], label: &str) -> Result<Scalar, String> {
         scalar_from_repr(bytes).ok_or_else(|| format!("{label} is not a canonical Pallas scalar"))
     }
-
     fn profile_flags(operation: KagemushaOutputMembershipOperationV4) -> [Scalar; 3] {
         match operation {
             KagemushaOutputMembershipOperationV4::Init => [Scalar::ONE, Scalar::ZERO, Scalar::ZERO],
@@ -520,14 +491,12 @@ pub(in crate::zk) mod output_membership_v4 {
             }
         }
     }
-
     pub(super) fn public_instances(
         witness: &KagemushaOutputMembershipWitnessV4,
     ) -> Result<Vec<Vec<Scalar>>, String> {
         validate_witness_shape(witness)?;
         public_instances_unchecked(witness)
     }
-
     pub(super) fn public_instances_unchecked(
         witness: &KagemushaOutputMembershipWitnessV4,
     ) -> Result<Vec<Vec<Scalar>>, String> {
@@ -574,7 +543,6 @@ pub(in crate::zk) mod output_membership_v4 {
         );
         Ok(instances)
     }
-
     fn assert_equal(
         ctx: &mut Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -586,7 +554,6 @@ pub(in crate::zk) mod output_membership_v4 {
             .gate()
             .assert_is_const(ctx, &difference, &Scalar::ZERO);
     }
-
     fn assert_equal_if(
         ctx: &mut Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -598,7 +565,6 @@ pub(in crate::zk) mod output_membership_v4 {
         let selected = range.gate().mul(ctx, enabled, difference);
         range.gate().assert_is_const(ctx, &selected, &Scalar::ZERO);
     }
-
     fn assert_present_exactly(
         ctx: &mut Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -609,13 +575,11 @@ pub(in crate::zk) mod output_membership_v4 {
         let absent = range.gate().not(ctx, present);
         assert_equal(ctx, range, is_zero, absent);
     }
-
     struct AssignedMerklePath {
         siblings: Vec<AssignedValue<Scalar>>,
         directions: Vec<AssignedValue<Scalar>>,
         carried_root: AssignedValue<Scalar>,
     }
-
     fn load_path(
         ctx: &mut Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -643,7 +607,6 @@ pub(in crate::zk) mod output_membership_v4 {
             carried_root,
         }
     }
-
     fn path_root(
         ctx: &mut Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -671,7 +634,6 @@ pub(in crate::zk) mod output_membership_v4 {
         }
         node
     }
-
     fn update_roots(
         ctx: &mut Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -688,7 +650,6 @@ pub(in crate::zk) mod output_membership_v4 {
         let after = path_root(ctx, range, poseidon, commitment, &path);
         (before, after)
     }
-
     fn membership_root(
         ctx: &mut Context<Scalar>,
         range: &halo2_base::gates::RangeChip<Scalar>,
@@ -704,7 +665,6 @@ pub(in crate::zk) mod output_membership_v4 {
         assert_equal_if(ctx, range, present, computed, path.carried_root);
         assert_equal_if(ctx, range, present, computed, final_root);
     }
-
     /// Assign the full Poseidon update/membership relation into an existing builder context.
     ///
     /// Returned cells follow
@@ -721,7 +681,6 @@ pub(in crate::zk) mod output_membership_v4 {
             validate_witness_encoding(witness)?;
         }
         let gate = range.gate();
-
         let flags = witness.map_or([Scalar::ZERO; 3], |witness| {
             profile_flags(witness.operation)
         });
@@ -732,7 +691,6 @@ pub(in crate::zk) mod output_membership_v4 {
         let profile_sum = gate.add(ctx, is_init, is_split);
         let profile_sum = gate.add(ctx, profile_sum, is_redemption);
         gate.assert_is_const(ctx, &profile_sum, &Scalar::ONE);
-
         let has_change = ctx.load_witness(if witness.is_some_and(|value| value.change.is_some()) {
             Scalar::ONE
         } else {
@@ -745,7 +703,6 @@ pub(in crate::zk) mod output_membership_v4 {
         let missing_redemption_change = gate.mul(ctx, is_redemption, not_change);
         gate.assert_is_const(ctx, &missing_redemption_change, &Scalar::ZERO);
         let recipient_present = gate.add(ctx, is_init, is_split);
-
         let initial_root = ctx.load_witness(witness.map_or(Scalar::ZERO, |value| {
             scalar(value.initial_root, "validated initial root").expect("validated initial root")
         }));
@@ -758,7 +715,6 @@ pub(in crate::zk) mod output_membership_v4 {
         }
         let unchanged = gate.is_equal(ctx, initial_root, final_root);
         gate.assert_is_const(ctx, &unchanged, &Scalar::ZERO);
-
         let recipient = witness.and_then(|value| value.recipient.as_ref());
         let change = witness.and_then(|value| value.change.as_ref());
         let recipient_commitment = ctx.load_witness(recipient.map_or(Scalar::ZERO, |leaf| {
@@ -771,7 +727,6 @@ pub(in crate::zk) mod output_membership_v4 {
         }));
         assert_present_exactly(ctx, range, recipient_commitment, recipient_present);
         assert_present_exactly(ctx, range, change_commitment, has_change);
-
         let recipient_index = ctx.load_witness(Scalar::from(u64::from(
             recipient.map_or(0, |leaf| leaf.leaf_index),
         )));
@@ -789,12 +744,10 @@ pub(in crate::zk) mod output_membership_v4 {
         gate.assert_is_const(ctx, &absent_recipient_index, &Scalar::ZERO);
         let absent_change_index = gate.mul(ctx, not_change, change_index);
         gate.assert_is_const(ctx, &absent_change_index, &Scalar::ZERO);
-
         let recipient_index_bits = gate.num_to_bits(ctx, recipient_index, TREE_DEPTH);
         let change_index_bits = gate.num_to_bits(ctx, change_index, TREE_DEPTH);
         let dummy_index_bits = gate.num_to_bits(ctx, dummy_index, TREE_DEPTH);
         let poseidon = ConfidentialPoseidonChipV3::new(ctx, range);
-
         let recipient_update_path = recipient.map(|leaf| &leaf.update_path);
         let (recipient_before, recipient_after) = update_roots(
             ctx,
@@ -814,7 +767,6 @@ pub(in crate::zk) mod output_membership_v4 {
         );
         let root_after_recipient =
             gate.select(ctx, recipient_after, initial_root, recipient_present);
-
         let change_update_path = change.map(|leaf| &leaf.update_path);
         let (change_before, change_after) = update_roots(
             ctx,
@@ -828,7 +780,6 @@ pub(in crate::zk) mod output_membership_v4 {
         assert_equal_if(ctx, range, has_change, change_before, root_after_recipient);
         let computed_final = gate.select(ctx, change_after, root_after_recipient, has_change);
         assert_equal(ctx, range, computed_final, final_root);
-
         let split_with_change = gate.mul(ctx, is_split, has_change);
         let one = ctx.load_constant(Scalar::ONE);
         let next_recipient_index = gate.add(ctx, recipient_index, one);
@@ -849,7 +800,6 @@ pub(in crate::zk) mod output_membership_v4 {
         let same_commitment = gate.is_equal(ctx, recipient_commitment, change_commitment);
         let duplicate_commitment = gate.mul(ctx, both_outputs, same_commitment);
         gate.assert_is_const(ctx, &duplicate_commitment, &Scalar::ZERO);
-
         membership_root(
             ctx,
             range,
@@ -881,14 +831,12 @@ pub(in crate::zk) mod output_membership_v4 {
             one,
             final_root,
         );
-
         let dummy_is_recipient = gate.is_equal(ctx, dummy_index, recipient_index);
         let invalid_dummy_recipient = gate.mul(ctx, recipient_present, dummy_is_recipient);
         gate.assert_is_const(ctx, &invalid_dummy_recipient, &Scalar::ZERO);
         let dummy_is_change = gate.is_equal(ctx, dummy_index, change_index);
         let invalid_dummy_change = gate.mul(ctx, has_change, dummy_is_change);
         gate.assert_is_const(ctx, &invalid_dummy_change, &Scalar::ZERO);
-
         Ok([
             is_init,
             is_split,
@@ -903,7 +851,6 @@ pub(in crate::zk) mod output_membership_v4 {
             dummy_index,
         ])
     }
-
     fn builder(
         witness: Option<&KagemushaOutputMembershipWitnessV4>,
     ) -> Result<BaseCircuitBuilder<Scalar>, String> {
@@ -924,23 +871,19 @@ pub(in crate::zk) mod output_membership_v4 {
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
         Ok(builder)
     }
-
     impl Circuit<Scalar> for KagemushaOutputMembershipCircuitV4 {
         type Config = BaseConfig<Scalar>;
         type FloorPlanner = halo2_proofs::circuit::SimpleFloorPlanner;
         type Params = ();
-
         fn without_witnesses(&self) -> Self {
             Self::default()
         }
-
         fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
             let params: BaseCircuitParams = builder(None)
                 .expect("witness-free output-membership relation has a fixed shape")
                 .config_params;
             BaseConfig::configure(meta, params)
         }
-
         fn synthesize(
             &self,
             config: Self::Config,
@@ -951,13 +894,11 @@ pub(in crate::zk) mod output_membership_v4 {
         }
     }
 }
-
 fn canonical_poseidon_digest<T: Encode>(value: &T) -> Result<[u8; 32], String> {
     let bytes = norito::encode_canonical(value)
         .map_err(|err| format!("failed to encode Kagemusha V4 binding value: {err}"))?;
     Ok(iroha_zkp_halo2::poseidon::hash_bytes(&bytes))
 }
-
 fn write_exact_u32_limbs<const N: usize>(target: &mut [u32], bytes: &[u8; N]) {
     assert_eq!(N % 4, 0, "exact state-vector byte strings use u32 limbs");
     assert_eq!(
@@ -969,7 +910,6 @@ fn write_exact_u32_limbs<const N: usize>(target: &mut [u32], bytes: &[u8; N]) {
         *limb = u32::from_le_bytes(chunk.try_into().expect("four-byte exact limb"));
     }
 }
-
 /// Fold the exact public transition-tag history into the compact V5 state value.
 pub(crate) fn kagemusha_recursive_spend_state_history_accumulator_v5(
     transition_tags: &[u8],
@@ -980,7 +920,6 @@ pub(crate) fn kagemusha_recursive_spend_state_history_accumulator_v5(
     {
         return Err("Kagemusha V5 state history has an invalid transition-tag length".to_owned());
     }
-
     let mut accumulator = [0_u8; 32];
     for tag in &mut tags {
         if tag.iter().all(|byte| *byte == 0) {
@@ -995,7 +934,6 @@ pub(crate) fn kagemusha_recursive_spend_state_history_accumulator_v5(
     }
     Ok(accumulator)
 }
-
 fn write_recursive_spend_branch_claim_v5(
     target: &mut [u32],
     claim: &KagemushaRecursiveSpendBranchClaimV2,
@@ -1012,7 +950,6 @@ fn write_recursive_spend_branch_claim_v5(
     write_exact_u32_limbs(&mut target[11..19], &accumulator);
     Ok(())
 }
-
 fn bytes_to_exact_u32_limbs(bytes: &[u8; 32]) -> [u32; 8] {
     std::array::from_fn(|index| {
         let start = index * 4;
@@ -1023,7 +960,6 @@ fn bytes_to_exact_u32_limbs(bytes: &[u8; 32]) -> [u32; 8] {
         )
     })
 }
-
 impl KagemushaRecursiveSpendOperationKindV1 {
     /// Derive the operation kind from the exact submitted statement.
     pub fn from_statement(
@@ -1040,7 +976,6 @@ impl KagemushaRecursiveSpendOperationKindV1 {
             }
         })
     }
-
     /// Return the exact number of predecessor proofs required by this kind.
     #[must_use]
     pub const fn minimum_predecessor_count(self) -> usize {
@@ -1050,20 +985,17 @@ impl KagemushaRecursiveSpendOperationKindV1 {
         }
     }
 }
-
 impl KagemushaRecursiveSpendStateVectorV5 {
     /// Embedded proof-step count used by the paired recursion relation.
     #[must_use]
     pub(crate) const fn proof_step_count(&self) -> u32 {
         self.limbs[S_PROOF_STEP_COUNT]
     }
-
     /// Embedded peer-hop count used by the paired recursion relation.
     #[must_use]
     pub(crate) const fn peer_hop_count(&self) -> u32 {
         self.limbs[S_PEER_HOP_COUNT]
     }
-
     /// Embedded authenticated artifact-manifest identity.
     #[must_use]
     pub(crate) fn manifest_sha256_limbs(&self) -> [u32; 8] {
@@ -1071,7 +1003,6 @@ impl KagemushaRecursiveSpendStateVectorV5 {
             .try_into()
             .expect("manifest slot has eight exact limbs")
     }
-
     /// Reconstruct the complete continuing-state vector directly from an
     /// ABI-21 statement without projecting it through a legacy carrier.
     pub fn from_statement_v4(
@@ -1084,13 +1015,11 @@ impl KagemushaRecursiveSpendStateVectorV5 {
         vector.validate_against_statement_v4(statement)?;
         Ok(vector)
     }
-
     fn from_statement_v4_inner(
         statement: &KagemushaRecursiveSpendPublicStatementV4,
     ) -> Result<Self, String> {
         let mut limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
         limbs[S_VERSION] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
-
         let network_tag =
             super::confidential_v2::derive_confidential_network_tag_v3(&statement.network_id)?;
         write_exact_u32_limbs(&mut limbs[S_NETWORK_TAG..S_NETWORK_TAG + 8], &network_tag);
@@ -1103,7 +1032,6 @@ impl KagemushaRecursiveSpendStateVectorV5 {
             &statement.final_root,
         );
         limbs[S_NEXT_ZERO_LEAF_INDEX] = statement.next_zero_leaf_index;
-
         limbs[S_TOPUP_ANCHOR_COUNT] = u32::try_from(statement.topup_anchor_refs.len())
             .map_err(|_| "Kagemusha V4 top-up anchor count does not fit u32".to_owned())?;
         for (index, anchor) in statement.topup_anchor_refs.iter().enumerate() {
@@ -1111,7 +1039,6 @@ impl KagemushaRecursiveSpendStateVectorV5 {
             write_exact_u32_limbs(&mut limbs[start..start + 8], &anchor.topup_operation_id);
             write_exact_u32_limbs(&mut limbs[start + 8..start + 16], &anchor.anchor_digest);
         }
-
         limbs[S_PROOF_STEP_COUNT] = statement.proof_step_count;
         limbs[S_PEER_HOP_COUNT] = statement.peer_hop_count;
         write_exact_u32_limbs(
@@ -1127,7 +1054,6 @@ impl KagemushaRecursiveSpendStateVectorV5 {
             &statement.current_note.amount.atomic_units.to_le_bytes(),
         );
         limbs[S_CURRENT_SCALE] = statement.current_note.amount.scale;
-
         limbs[S_BRANCH_CLAIM_COUNT] = u32::try_from(statement.branch_claims.len())
             .map_err(|_| "Kagemusha V4 branch-claim count does not fit u32".to_owned())?;
         for (index, claim) in statement.branch_claims.iter().enumerate() {
@@ -1138,7 +1064,6 @@ impl KagemushaRecursiveSpendStateVectorV5 {
                 claim,
             )?;
         }
-
         write_exact_u32_limbs(
             &mut limbs[S_ARTIFACT_MANIFEST_SHA256..S_ARTIFACT_MANIFEST_SHA256 + 8],
             &statement.artifact_binding.manifest_sha256,
@@ -1148,10 +1073,8 @@ impl KagemushaRecursiveSpendStateVectorV5 {
             &mut limbs[S_VERIFIER_KEY_ID..S_VERIFIER_KEY_ID + 8],
             &verifier_key_id,
         );
-
         Ok(Self { limbs })
     }
-
     /// Validate every exact ABI-21 state limb against its canonical statement.
     pub fn validate_against_statement_v4(
         &self,
@@ -1172,7 +1095,6 @@ impl KagemushaRecursiveSpendStateVectorV5 {
         Ok(())
     }
 }
-
 struct KagemushaParentStateOpeningV5<'a> {
     network_id: &'a iroha_data_model::NetworkId,
     asset: &'a iroha_data_model::asset::AssetDefinitionId,
@@ -1187,7 +1109,6 @@ struct KagemushaParentStateOpeningV5<'a> {
     artifact_binding: &'a iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
     verifier_key_id: &'a iroha_data_model::proof::VerifyingKeyId,
 }
-
 fn kagemusha_parent_state_opening_v5(
     parts: KagemushaParentStateOpeningV5<'_>,
 ) -> Result<Vec<u32>, String> {
@@ -1246,13 +1167,11 @@ fn kagemusha_parent_state_opening_v5(
     );
     Ok(limbs.to_vec())
 }
-
 fn encode_kagemusha_u32_scalar_v4(value: u32) -> [u8; 32] {
     let mut encoded = [0_u8; 32];
     encoded[..4].copy_from_slice(&value.to_le_bytes());
     encoded
 }
-
 pub(super) fn kagemusha_public_inputs_for_statement_v4(
     statement: &KagemushaRecursiveSpendPublicStatementV4,
     operation: KagemushaStepOperationVectorV4,
@@ -1264,7 +1183,6 @@ pub(super) fn kagemusha_public_inputs_for_statement_v4(
         KAGEMUSHA_PASTA_PARENT_SLOTS_V1, KagemushaPastaCyclePublicInputsV4,
         kagemusha_sha256_public_words,
     };
-
     statement
         .validate_public_binding()
         .map_err(|error| error.to_string())?;
@@ -1299,7 +1217,6 @@ pub(super) fn kagemusha_public_inputs_for_statement_v4(
         live_selector: KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4,
     })
 }
-
 /// Derive the canonical ABI-21 child statement for one validated peer split.
 ///
 /// The caller supplies only the proof-derived final tree root and next-zero
@@ -1321,7 +1238,6 @@ pub fn kagemusha_recursive_spend_append_statement_v4(
         KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendPeerSplitTransitionV4,
         KagemushaRecursiveSpendTransitionV4,
     };
-
     split
         .validate_public_binding()
         .map_err(|error| error.to_string())?;
@@ -1381,7 +1297,6 @@ pub fn kagemusha_recursive_spend_append_statement_v4(
         .map_err(|error| error.to_string())?;
     Ok(statement)
 }
-
 enum KagemushaArtifactLoaderBindingV4<'a> {
     AuthenticatedRelease(&'a KagemushaAuthenticatedReleaseV4),
     #[cfg(feature = "kagemusha-candidate-evidence-lab")]
@@ -1390,7 +1305,6 @@ enum KagemushaArtifactLoaderBindingV4<'a> {
         manifest_sha256: [u8; 32],
     },
 }
-
 impl<'a> KagemushaArtifactLoaderBindingV4<'a> {
     fn authenticated_release(release: &'a KagemushaAuthenticatedReleaseV4) -> Result<Self, String> {
         let manifest_sha256 = release
@@ -1406,7 +1320,6 @@ impl<'a> KagemushaArtifactLoaderBindingV4<'a> {
         }
         Ok(Self::AuthenticatedRelease(release))
     }
-
     #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     fn candidate_evidence_lab(
         candidate: &'a iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
@@ -1431,7 +1344,6 @@ impl<'a> KagemushaArtifactLoaderBindingV4<'a> {
             manifest_sha256,
         })
     }
-
     fn manifest(&self) -> &KagemushaRecursiveSpendArtifactManifestV4 {
         match self {
             Self::AuthenticatedRelease(release) => release.manifest(),
@@ -1439,7 +1351,6 @@ impl<'a> KagemushaArtifactLoaderBindingV4<'a> {
             Self::CandidateEvidenceLab { candidate, .. } => &candidate.manifest,
         }
     }
-
     fn manifest_sha256(&self) -> [u8; 32] {
         match self {
             Self::AuthenticatedRelease(release) => release.manifest_sha256(),
@@ -1449,7 +1360,6 @@ impl<'a> KagemushaArtifactLoaderBindingV4<'a> {
             } => *manifest_sha256,
         }
     }
-
     fn is_candidate_evidence_lab(&self) -> bool {
         #[cfg(feature = "kagemusha-candidate-evidence-lab")]
         if matches!(self, Self::CandidateEvidenceLab { .. }) {
@@ -1457,7 +1367,6 @@ impl<'a> KagemushaArtifactLoaderBindingV4<'a> {
         }
         false
     }
-
     fn validate_payload(
         &self,
         payload: &super::kagemusha_artifact_v4::KagemushaValidatedArtifactPayloadV4,
@@ -1500,7 +1409,6 @@ impl<'a> KagemushaArtifactLoaderBindingV4<'a> {
         Ok(())
     }
 }
-
 /// Opaque ABI-21 prover facade around the private Pasta recursion adapter.
 ///
 /// Lifecycle callers select a semantic operation and provide its confidential
@@ -1513,7 +1421,6 @@ enum KagemushaPastaCycleOpaqueProverInnerV4 {
         source: Arc<super::kagemusha_artifact_source_v4::KagemushaQualifiedArtifactSourceV4>,
     },
 }
-
 impl KagemushaPastaCycleOpaqueProverInnerV4 {
     fn step_eq_compiled_protocol_sha256(&self) -> [u8; 32] {
         match self {
@@ -1521,14 +1428,12 @@ impl KagemushaPastaCycleOpaqueProverInnerV4 {
             Self::SourceBacked { prover, .. } => prover.step_eq_compiled_protocol_sha256(),
         }
     }
-
     fn step_ep_compiled_protocol_sha256(&self) -> [u8; 32] {
         match self {
             Self::Eager(inner) => inner.step_ep_compiled_protocol_sha256(),
             Self::SourceBacked { prover, .. } => prover.step_ep_compiled_protocol_sha256(),
         }
     }
-
     #[allow(clippy::too_many_arguments)]
     fn prove_operation_encoded_v4(
         &self,
@@ -1559,7 +1464,6 @@ impl KagemushaPastaCycleOpaqueProverInnerV4 {
         }
     }
 }
-
 /// Opaque Eq/Ep recursive-spend prover backed by one authenticated V4 release.
 pub struct KagemushaPastaCycleOpaqueProverV4 {
     inner: KagemushaPastaCycleOpaqueProverInnerV4,
@@ -1567,7 +1471,6 @@ pub struct KagemushaPastaCycleOpaqueProverV4 {
     manifest_sha256: [u8; 32],
     candidate_evidence_lab: bool,
 }
-
 impl KagemushaPastaCycleOpaqueProverV4 {
     /// Parse and cross-check the complete authenticated ABI-21 prover set.
     pub fn from_authenticated_artifacts(
@@ -1584,7 +1487,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             candidate_evidence_lab: artifacts.verifier().is_candidate_evidence_lab(),
         })
     }
-
     /// Parse one authenticated production role at a time without retaining the
     /// complete eight-payload set in memory.
     ///
@@ -1609,7 +1511,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
                 .to_owned(),
         )
     }
-
     /// Parse bounded verifier roles and retain two authenticated, reopenable
     /// framed proving-key spools. Each operation decodes and drops Eq before
     /// opening Ep, so release-sized key material never overlaps.
@@ -1653,7 +1554,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             candidate_evidence_lab: false,
         })
     }
-
     /// Derive a terminal verifier that shares the parsed Params/circuit context
     /// and reparses only the two bounded raw verifying keys. Parsed proving
     /// keys are loaded from their spools per proof and never overlap this step.
@@ -1681,7 +1581,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             candidate_evidence_lab: self.candidate_evidence_lab,
         })
     }
-
     /// Parse one candidate-evidence-lab role at a time without relabelling the
     /// unsigned candidate as a production-authenticated release.
     #[cfg(feature = "kagemusha-candidate-evidence-lab")]
@@ -1734,7 +1633,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             candidate_evidence_lab: true,
         })
     }
-
     /// The legacy candidate loader cannot retain release-sized proving keys in
     /// memory. Use [`Self::from_candidate_artifact_spool_loader`] instead.
     #[cfg(feature = "kagemusha-candidate-evidence-lab")]
@@ -1764,7 +1662,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
                 .to_owned(),
         )
     }
-
     /// Construct a production prover from a core-qualified pinned source.
     pub fn from_qualified_artifact_source(
         source: Arc<super::kagemusha_artifact_source_v4::KagemushaQualifiedArtifactSourceV4>,
@@ -1782,7 +1679,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             candidate_evidence_lab: false,
         })
     }
-
     /// Prove the first V4 state directly from the finalized top-up opening and
     /// insertion path, returning only canonical opaque pair bytes.
     #[allow(clippy::too_many_arguments)]
@@ -1797,7 +1693,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
         output_membership: &KagemushaOutputMembershipWitnessV4,
     ) -> Result<Vec<u8>, String> {
         use iroha_data_model::offline::kagemusha_confidential_amount_encoding_v2;
-
         let anchor = &request.topup_anchor;
         let topup = super::confidential_v2::KagemushaTopUpShieldPublicInputsV2 {
             output_commitment: anchor.current_note.note_commitment,
@@ -1855,7 +1750,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             output_membership,
         )
     }
-
     /// Prove one V4 recipient or change append branch from the exact secure
     /// transfer witness and terminally verified opaque parent pairs.
     #[allow(clippy::too_many_arguments)]
@@ -1930,7 +1824,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             output_membership,
         )
     }
-
     /// Prove a partial-redemption V4 change child. Full redemption deliberately
     /// has no child proof and is handled only by terminal parent verification.
     #[allow(clippy::too_many_arguments)]
@@ -2004,7 +1897,6 @@ impl KagemushaPastaCycleOpaqueProverV4 {
         )
     }
 }
-
 /// Opaque ABI-21 terminal-verifier facade. Spend acceptance requires a
 /// complete V4 bundle; the separate unbound-pair method exists only for
 /// authenticated release qualification. Recursion-specific pair internals
@@ -2013,7 +1905,6 @@ enum KagemushaPastaCycleOpaqueVerifierInnerV4 {
     Eager(super::kagemusha_recursion_adapter::KagemushaPastaCycleTerminalVerifierV4),
     SourceBacked(super::kagemusha_recursion_adapter::KagemushaPastaCycleSourceBackedVerifierV4),
 }
-
 impl KagemushaPastaCycleOpaqueVerifierInnerV4 {
     fn verify_encoded_pair_qualification(&self, encoded_pair: &[u8]) -> Result<(), String> {
         match self {
@@ -2021,7 +1912,6 @@ impl KagemushaPastaCycleOpaqueVerifierInnerV4 {
             Self::SourceBacked(inner) => inner.verify_encoded_pair_qualification(encoded_pair),
         }
     }
-
     #[allow(clippy::too_many_arguments)]
     fn verify_encoded_pair_binding(
         &self,
@@ -2055,7 +1945,6 @@ impl KagemushaPastaCycleOpaqueVerifierInnerV4 {
         }
     }
 }
-
 /// Opaque Eq/Ep recursive-spend verifier backed by one authenticated V4 release.
 pub struct KagemushaPastaCycleOpaqueVerifierV4 {
     inner: KagemushaPastaCycleOpaqueVerifierInnerV4,
@@ -2063,7 +1952,6 @@ pub struct KagemushaPastaCycleOpaqueVerifierV4 {
     manifest_sha256: [u8; 32],
     candidate_evidence_lab: bool,
 }
-
 fn canonical_bundle_operation_v4(
     bundle: &KagemushaRecursiveSpendBundleV4,
 ) -> Result<KagemushaStepOperationVectorV4, String> {
@@ -2071,7 +1959,6 @@ fn canonical_bundle_operation_v4(
     operation.to_fields()?;
     Ok(operation)
 }
-
 fn ensure_bundle_operation_v4(
     bundle: &KagemushaRecursiveSpendBundleV4,
     expected_operation: &KagemushaStepOperationVectorV4,
@@ -2085,7 +1972,6 @@ fn ensure_bundle_operation_v4(
     }
     Ok(())
 }
-
 impl KagemushaPastaCycleOpaqueVerifierV4 {
     /// Parse and cross-check the complete authenticated ABI-21 verifier set.
     pub fn from_authenticated_artifacts(
@@ -2103,7 +1989,6 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
             candidate_evidence_lab: artifacts.is_candidate_evidence_lab(),
         })
     }
-
     /// Parse one authenticated production verifier role at a time without
     /// retaining the complete six-payload set in memory.
     ///
@@ -2126,7 +2011,6 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
         let binding = KagemushaArtifactLoaderBindingV4::authenticated_release(release)?;
         Self::from_artifact_loader_binding(&binding, load)
     }
-
     /// Parse one candidate-evidence-lab verifier role at a time without
     /// relabelling the unsigned candidate as a production-authenticated
     /// release.
@@ -2153,7 +2037,6 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
         )?;
         Self::from_artifact_loader_binding(&binding, load)
     }
-
     fn from_artifact_loader_binding<F>(
         binding: &KagemushaArtifactLoaderBindingV4<'_>,
         mut load: F,
@@ -2184,7 +2067,6 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
             candidate_evidence_lab: binding.is_candidate_evidence_lab(),
         })
     }
-
     /// Construct a production verifier from a core-qualified pinned source.
     pub fn from_qualified_artifact_source(
         source: Arc<super::kagemusha_artifact_source_v4::KagemushaQualifiedArtifactSourceV4>,
@@ -2202,14 +2084,12 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
             candidate_evidence_lab: false,
         })
     }
-
     /// Verify a complete V4 bundle against its authenticated release and
     /// canonical public statement.
     pub fn verify_bundle_v4(&self, bundle: &KagemushaRecursiveSpendBundleV4) -> Result<(), String> {
         let operation = canonical_bundle_operation_v4(bundle)?;
         self.verify_bundle_binding_v4(bundle, &operation)
     }
-
     /// Verify a complete V4 bundle and the exact lifecycle operation that
     /// produced it.
     pub fn verify_bundle_operation_v4(
@@ -2220,7 +2100,6 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
         ensure_bundle_operation_v4(bundle, expected_operation)?;
         self.verify_bundle_binding_v4(bundle, expected_operation)
     }
-
     /// Terminally verify the generator's opaque live-pair calibration vector.
     ///
     /// This is a release-qualification boundary, not a spend-acceptance API:
@@ -2234,7 +2113,6 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
     pub fn verify_release_qualification_pair_v4(&self, encoded_pair: &[u8]) -> Result<(), String> {
         self.inner.verify_encoded_pair_qualification(encoded_pair)
     }
-
     fn verify_bundle_binding_v4(
         &self,
         bundle: &KagemushaRecursiveSpendBundleV4,
@@ -2251,7 +2129,6 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
             &bundle.recursive_proof.proof_envelope.proof.bytes,
         )
     }
-
     fn verify_binding_v4(
         &self,
         statement: &KagemushaRecursiveSpendPublicStatementV4,
@@ -2280,7 +2157,6 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
         )
     }
 }
-
 /// Require a complete ABI-21 bundle to bind its opaque pair envelope to the
 /// authenticated release and to the exact statement-derived state boundary.
 pub(crate) fn ensure_kagemusha_recursive_spend_v4_proof_envelope_binding(
@@ -2306,7 +2182,6 @@ pub(crate) fn ensure_kagemusha_recursive_spend_v4_proof_envelope_binding(
     }
     ensure_kagemusha_recursive_spend_v4_state_boundary_binding(bundle)
 }
-
 fn ensure_kagemusha_recursive_spend_v4_state_boundary_binding(
     bundle: &KagemushaRecursiveSpendBundleV4,
 ) -> Result<(), String> {
@@ -2322,19 +2197,16 @@ fn ensure_kagemusha_recursive_spend_v4_state_boundary_binding(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::{output_membership_v4::assign_kagemusha_output_membership_v4, *};
     use ff::{Field as _, PrimeField as _};
-
     fn scalar_bytes(value: u64) -> [u8; 32] {
         let repr = Scalar::from(value).to_repr();
         let mut bytes = [0; 32];
         bytes.copy_from_slice(repr.as_ref());
         bytes
     }
-
     fn init_statement() -> KagemushaRecursiveSpendPublicStatementV4 {
         use iroha_data_model::{
             NetworkId,
@@ -2348,7 +2220,6 @@ mod tests {
                 kagemusha_recursive_spend_verifier_key_id_v4,
             },
         };
-
         let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
         >::from_untyped_unchecked(
@@ -2396,7 +2267,6 @@ mod tests {
             ),
         }
     }
-
     fn v4_bound_init_bundle_for_envelope_test() -> KagemushaRecursiveSpendBundleV4 {
         use iroha_data_model::{
             offline::{
@@ -2410,7 +2280,6 @@ mod tests {
             },
             proof::ProofBox,
         };
-
         let statement = init_statement();
         let generation = statement.artifact_binding.generation.clone();
         let manifest_sha256 = statement.artifact_binding.manifest_sha256;
@@ -2462,7 +2331,6 @@ mod tests {
             .expect("structurally valid V4 bundle");
         bundle
     }
-
     #[test]
     fn v4_binding_digest_ignores_ambient_norito_layout() {
         let statement = init_statement();
@@ -2480,14 +2348,12 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn v4_envelope_state_boundary_is_bound_beyond_structural_bundle_validation() {
         let bundle = v4_bound_init_bundle_for_envelope_test();
         ensure_kagemusha_recursive_spend_v4_state_boundary_binding(&bundle)
             .expect("canonical V4 state boundary");
         let original_digest = bundle.digest().expect("canonical bundle digest");
-
         let mut substituted = bundle;
         substituted
             .recursive_proof
@@ -2507,14 +2373,12 @@ mod tests {
             "bundle-level verification must reject a substituted state boundary"
         );
     }
-
     #[test]
     fn v4_bundle_operation_carrier_is_canonical_and_substitution_bound() {
         let bundle = v4_bound_init_bundle_for_envelope_test();
         let carried = canonical_bundle_operation_v4(&bundle).expect("canonical carried operation");
         ensure_bundle_operation_v4(&bundle, &carried).expect("exact operation matches");
         let original_digest = bundle.digest().expect("canonical bundle digest");
-
         let mut substituted = bundle.clone();
         substituted.operation.limbs[8] ^= 1;
         assert!(
@@ -2526,7 +2390,6 @@ mod tests {
             original_digest,
             "the carried operation must be part of bundle identity"
         );
-
         let mut noncanonical = bundle;
         noncanonical.operation.limbs[..8].fill(u32::MAX);
         assert!(
@@ -2534,11 +2397,9 @@ mod tests {
             "non-canonical Pallas limbs must reject before proof decoding"
         );
     }
-
     #[test]
     fn recursive_state_vector_layout_is_contiguous_and_exact() {
         use std::collections::BTreeSet;
-
         let mut next = 0;
         let mut layout_fields = BTreeSet::new();
         for &(field, start, len) in KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V5 {
@@ -2565,12 +2426,10 @@ mod tests {
         }
         assert_eq!(statement_fields.len(), 15);
     }
-
     #[test]
     fn recursive_state_history_uses_a_domain_separated_rolling_accumulator() {
         use iroha_data_model::offline::KagemushaRecursiveSpendBranchV2;
         use sha2::{Digest as _, Sha256};
-
         let root =
             KagemushaRecursiveSpendBranchClaimV2::root([0x41; 32]).expect("canonical root claim");
         let first = root
@@ -2580,7 +2439,6 @@ mod tests {
             .child(KagemushaRecursiveSpendBranchV2::Change, [0x61; 32])
             .expect("canonical second child");
         assert_eq!(second.transition_tags.len(), 2 * 24);
-
         let mut expected = [0_u8; 32];
         for tag in second.transition_tags.chunks_exact(24) {
             let mut hasher = Sha256::new();
@@ -2599,17 +2457,14 @@ mod tests {
             kagemusha_recursive_spend_state_history_accumulator_v5(&[]).expect("root accumulator"),
             [0; 32]
         );
-
         let mut claim_limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5];
         write_recursive_spend_branch_claim_v5(&mut claim_limbs, &second)
             .expect("compact branch claim");
         assert_eq!(claim_limbs[8], 2);
         assert_eq!(&claim_limbs[11..19], &bytes_to_exact_u32_limbs(&expected));
-
         assert!(kagemusha_recursive_spend_state_history_accumulator_v5(&[1; 23]).is_err());
         assert!(kagemusha_recursive_spend_state_history_accumulator_v5(&[0; 24]).is_err());
     }
-
     #[test]
     fn recursive_state_vector_is_exact_and_zero_padded() {
         let statement = init_statement();
@@ -2645,7 +2500,6 @@ mod tests {
                 .iter()
                 .all(|limb| *limb == 0)
         );
-
         for &index in &[
             S_VERSION,
             S_NETWORK_TAG,
@@ -2676,11 +2530,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn recursive_state_vector_reference_encoding_is_deterministic() {
         use sha2::{Digest as _, Sha256};
-
         let vector = KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&init_statement())
             .expect("canonical init state vector");
         let bytes = vector
@@ -2698,7 +2550,6 @@ mod tests {
         assert_ne!(actual, [0; 32]);
         assert_eq!(actual.as_slice(), Sha256::digest(repeated).as_slice());
     }
-
     fn output_membership_path(
         commitments: &[[u8; 32]],
         leaf_index: usize,
@@ -2715,7 +2566,6 @@ mod tests {
             root,
         }
     }
-
     fn sparse_output_membership_path(
         commitments: &[Option<[u8; 32]>],
         leaf_index: usize,
@@ -2743,7 +2593,6 @@ mod tests {
             root,
         }
     }
-
     fn output_membership_fixture(
         operation: KagemushaOutputMembershipOperationV4,
         include_change: bool,
@@ -2758,7 +2607,6 @@ mod tests {
         let initial_root =
             super::super::confidential_v2::compute_confidential_root_v3(&commitments)
                 .expect("initial confidential root");
-
         let mut recipient = None;
         if !matches!(
             operation,
@@ -2773,7 +2621,6 @@ mod tests {
             commitments.push(commitment);
             recipient = Some((commitment, leaf_index, update_path));
         }
-
         let mut change = None;
         if include_change {
             let leaf_index = u32::try_from(commitments.len()).expect("bounded change index");
@@ -2785,7 +2632,6 @@ mod tests {
             commitments.push(commitment);
             change = Some((commitment, leaf_index, update_path));
         }
-
         let final_root = super::super::confidential_v2::compute_confidential_root_v3(&commitments)
             .expect("final confidential root");
         let recipient = recipient.map(|(commitment, leaf_index, update_path)| {
@@ -2826,7 +2672,6 @@ mod tests {
             dummy_path,
         }
     }
-
     fn assert_output_membership_satisfied(witness: KagemushaOutputMembershipWitnessV4) {
         let circuit =
             KagemushaOutputMembershipCircuitV4::new(witness).expect("encoded membership witness");
@@ -2839,7 +2684,6 @@ mod tests {
         .expect("output-membership mock prover");
         prover.assert_satisfied();
     }
-
     fn assert_output_membership_rejected(witness: KagemushaOutputMembershipWitnessV4) {
         let instances = output_membership_v4::public_instances_unchecked(&witness)
             .expect("well-encoded adversarial membership instances");
@@ -2857,7 +2701,6 @@ mod tests {
             "adversarial output membership must not satisfy the circuit"
         );
     }
-
     fn bump_scalar_bytes(bytes: [u8; 32]) -> [u8; 32] {
         let value = super::super::confidential_v2::scalar_from_repr(bytes)
             .expect("fixture scalar encoding");
@@ -2866,11 +2709,9 @@ mod tests {
         bytes.copy_from_slice(repr.as_ref());
         bytes
     }
-
     #[test]
     fn output_membership_assignment_gadget_embeds_in_existing_builder() {
         use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
-
         let witness = output_membership_fixture(KagemushaOutputMembershipOperationV4::Split, true);
         let public = KagemushaOutputMembershipCircuitV4::new(witness.clone())
             .expect("encoded membership witness")
@@ -2900,7 +2741,6 @@ mod tests {
             builder.calculate_params(Some(9));
             builder
         };
-
         let accepted = embedded(canonical_final_root);
         halo2_proofs::dev::MockProver::run(
             KAGEMUSHA_OUTPUT_MEMBERSHIP_IPA_K_V4,
@@ -2909,7 +2749,6 @@ mod tests {
         )
         .expect("embedded output-membership mock prover")
         .assert_satisfied();
-
         let rejected = embedded(canonical_final_root + Scalar::ONE);
         assert!(
             halo2_proofs::dev::MockProver::run(
@@ -2923,7 +2762,6 @@ mod tests {
             "the reusable gadget's returned final-root cell must enforce embedding equality"
         );
     }
-
     #[test]
     fn output_membership_poseidon_update_accepts_every_operation_shape() {
         for witness in [
@@ -2935,7 +2773,6 @@ mod tests {
             assert_output_membership_satisfied(witness);
         }
     }
-
     #[test]
     fn output_membership_poseidon_update_rejects_public_substitution() {
         let witness = output_membership_fixture(KagemushaOutputMembershipOperationV4::Split, true);
@@ -2957,7 +2794,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn output_membership_poseidon_update_rejects_path_index_root_and_commitment_attacks() {
         type Mutation = fn(&mut KagemushaOutputMembershipWitnessV4);
@@ -3063,7 +2899,6 @@ mod tests {
             let _ = name;
         }
     }
-
     #[test]
     fn output_membership_rejects_a_valid_empty_path_that_skips_the_frontier() {
         let mut witness =
@@ -3081,7 +2916,6 @@ mod tests {
         assert_eq!(witness.dummy_path.root, witness.final_root);
         assert_output_membership_rejected(witness);
     }
-
     #[test]
     fn output_membership_rejects_nonconsecutive_change_with_valid_merkle_paths() {
         let initial_commitments = [scalar_bytes(700)];
@@ -3106,7 +2940,6 @@ mod tests {
         let change_membership_path = sparse_output_membership_path(&final_commitments, 3);
         let dummy_path = sparse_output_membership_path(&final_commitments, 4);
         let final_root = dummy_path.root;
-
         assert_eq!(recipient_update_path.root, initial_root);
         assert_eq!(change_update_path.root, after_recipient_root);
         assert_eq!(recipient_membership_path.root, final_root);
@@ -3137,25 +2970,21 @@ mod tests {
         };
         assert_output_membership_rejected(witness);
     }
-
     #[test]
     fn output_membership_poseidon_update_rejects_profile_presence_smuggling() {
         let mut init_with_change =
             output_membership_fixture(KagemushaOutputMembershipOperationV4::Split, true);
         init_with_change.operation = KagemushaOutputMembershipOperationV4::Init;
         assert_output_membership_rejected(init_with_change);
-
         let mut redemption_without_change =
             output_membership_fixture(KagemushaOutputMembershipOperationV4::RedemptionChange, true);
         redemption_without_change.change = None;
         assert_output_membership_rejected(redemption_without_change);
-
         let mut redemption_with_recipient =
             output_membership_fixture(KagemushaOutputMembershipOperationV4::Split, true);
         redemption_with_recipient.operation =
             KagemushaOutputMembershipOperationV4::RedemptionChange;
         assert_output_membership_rejected(redemption_with_recipient);
-
         let mut split_without_recipient =
             output_membership_fixture(KagemushaOutputMembershipOperationV4::Split, false);
         split_without_recipient.recipient = None;

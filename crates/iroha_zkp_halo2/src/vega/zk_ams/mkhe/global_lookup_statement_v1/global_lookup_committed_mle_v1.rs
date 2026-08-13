@@ -4,20 +4,16 @@
 //! and byte accounting needed by a later global-lookup opening implementation.
 //! It owns no polynomial, opening, randomness, prover, verifier, or release
 //! authority. Production data-plane and proof-session seals remain uninhabited.
-
 use core::convert::Infallible;
-
 use crate::vega::{
     VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
     bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, sponge::Keccak256,
 };
-
 use super::{
     COEFFICIENT_IPAS_V1, ENDPOINT_GATES_V1, ENDPOINT_STATEMENTS_V1, HIDDEN_ENDPOINTS_V1,
     IpaStatementRoleV1, challenge_v1::challenge_manifest_digest_v1,
     global_lookup_topology_digest_v1, ipa_statement_role_v1, ipa_tag_v1,
 };
-
 const COMMITTED_MLE_VERSION_V1: u8 = 1;
 const COMMITTED_MLE_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.committed-mle.manifest\0";
@@ -33,7 +29,6 @@ const COMMITTED_MLE_ACCOUNTING_SCOPE_LANGUAGE_V1: &[u8] =
     b"accounted-wire-bytes=exactly-19-committed-MLE-opening-proofs;coefficient-q_s-residual-commitments=3-outer-transcript-points-already-parent-accounted-as-99-wire-bytes-and-not-re-serialized-here;coefficient-vector-arithmetic-proofs=3-separate-uninstantiated-proofs-with-unknown-wire-bytes-and-excluded-from-27276-byte-opening-subtotal";
 const ENDPOINT_ENVELOPE_LANGUAGE_V1: &[u8] =
     b"ZGEP||version:u8||flags:u8||c_vec:u8||log_n:u8||statements:u8||gates:u16be||scalar-endpoints:u16be||core-bytes:u16be||purpose-manifest:[u8;32]";
-
 const PINNED_T256_BP_BASIS_DIGEST_V1: [u8; 32] = [
     0xbf, 0x81, 0xc8, 0x30, 0x91, 0xa4, 0x26, 0xbb, 0xcb, 0x2f, 0x75, 0x18, 0xad, 0x37, 0x16, 0x39,
     0x18, 0x10, 0xe5, 0x0b, 0x84, 0x8b, 0x38, 0xd0, 0xc2, 0xb3, 0xcd, 0x96, 0xaf, 0xf9, 0xa3, 0xf8,
@@ -46,7 +41,6 @@ const PINNED_CHALLENGE_MANIFEST_DIGEST_V1: [u8; 32] = [
     0xe3, 0x73, 0x09, 0x11, 0x78, 0x5c, 0xb1, 0xe2, 0x33, 0x32, 0xee, 0x9a, 0x13, 0x61, 0x81, 0x0c,
     0x43, 0x5f, 0x76, 0xb9, 0x3b, 0xec, 0xd5, 0x4e, 0x3b, 0x0d, 0x18, 0x96, 0x44, 0xb3, 0x2d, 0x99,
 ];
-
 const COORDINATE_BITS_V1: u8 = 14;
 const PLANE_BITS_V1: u8 = 15;
 const LOOKUP_BITS_V1: u8 = COORDINATE_BITS_V1 + PLANE_BITS_V1;
@@ -54,7 +48,6 @@ const COEFFICIENT_VECTOR_WIDTH_V1: usize = 1 << COORDINATE_BITS_V1;
 const TABLE_M_VECTOR_WIDTH_V1: usize = 1 << PLANE_BITS_V1;
 const MASK_VECTOR_WIDTH_V1: usize = 1 << 10;
 const ENDPOINT_GATE_VECTOR_WIDTH_V1: usize = 1 << 5;
-
 const POINT_BYTES_V1: usize = 33;
 const SCALAR_BYTES_V1: usize = 32;
 const BP_FIXED_POINTS_C_LE_ONE_V1: usize = 9;
@@ -63,7 +56,6 @@ const COEFFICIENT_CORE_BYTES_V1: usize = 1_381;
 const TABLE_M_CORE_BYTES_V1: usize = 1_447;
 const MASK_CORE_BYTES_V1: usize = 1_117;
 const ENDPOINT_GATE_CORE_BYTES_V1: usize = 787;
-
 const COMMITTED_MLE_PROOFS_V1: usize = COEFFICIENT_IPAS_V1 + 3;
 const TABLE_M_COMMITMENT_BYTES_V1: usize = POINT_BYTES_V1;
 const MASK_COMMITMENT_BYTES_V1: usize = POINT_BYTES_V1;
@@ -80,7 +72,6 @@ const COMMITTED_MLE_ACCOUNTED_WIRE_BYTES_V1: usize = COEFFICIENT_PROOF_SET_BYTES
     + TABLE_M_COMMITMENT_AND_CORE_BYTES_V1
     + MASK_COMMITMENT_AND_CORE_BYTES_V1
     + ENDPOINT_COMMITMENTS_AND_PROOF_BYTES_V1;
-
 const COMMITTED_MLE_PROFILE_ACCEPTED_V1: bool = false;
 const COMMITTED_MLE_DATA_PLANE_WIRED_V1: bool = false;
 const COMMITTED_MLE_PROVER_WIRED_V1: bool = false;
@@ -91,7 +82,6 @@ const COMMITTED_MLE_RECEIPT_ACCEPTED_V1: bool = false;
 const COMMITTED_MLE_AUTHORITY_MINTED_V1: bool = false;
 const COMMITTED_MLE_RSS_QUALIFIED_V1: bool = false;
 const COMMITTED_MLE_RELEASE_READY_V1: bool = false;
-
 const _: () = {
     assert!(LOOKUP_BITS_V1 == 29);
     assert!(COEFFICIENT_VECTOR_WIDTH_V1 == 16_384);
@@ -107,7 +97,6 @@ const _: () = {
     assert!(COMMITTED_MLE_ACCOUNTED_WIRE_BYTES_V1 == 27_276);
     assert!(!COMMITTED_MLE_RELEASE_READY_V1);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommittedMleErrorV1 {
     Shape,
@@ -118,7 +107,6 @@ enum CommittedMleErrorV1 {
     WireEncoding,
     Arithmetic,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommittedMleProofRoleV1 {
     Coefficient(IpaStatementRoleV1),
@@ -126,7 +114,6 @@ enum CommittedMleProofRoleV1 {
     SumcheckMask,
     EndpointGates,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CommittedMleProofShapeV1 {
     ordinal: usize,
@@ -139,7 +126,6 @@ struct CommittedMleProofShapeV1 {
     envelope_bytes: usize,
     core_bytes: usize,
 }
-
 impl CommittedMleProofShapeV1 {
     fn wire_bytes_v1(self) -> Result<usize, CommittedMleErrorV1> {
         self.commitment_wire_bytes
@@ -148,7 +134,6 @@ impl CommittedMleProofShapeV1 {
             .ok_or(CommittedMleErrorV1::Arithmetic)
     }
 }
-
 fn proof_shape_v1(ordinal: usize) -> Result<CommittedMleProofShapeV1, CommittedMleErrorV1> {
     let (
         role,
@@ -216,7 +201,6 @@ fn proof_shape_v1(ordinal: usize) -> Result<CommittedMleProofShapeV1, CommittedM
         core_bytes,
     })
 }
-
 fn generalized_bp_core_bytes_v1(
     log_width: u8,
     vector_commitments: usize,
@@ -236,7 +220,6 @@ fn generalized_bp_core_bytes_v1(
         .and_then(|bytes| bytes.checked_add(BP_FIXED_SCALARS_V1 * SCALAR_BYTES_V1))
         .ok_or(CommittedMleErrorV1::Arithmetic)
 }
-
 fn validate_static_profile_v1() -> Result<(), CommittedMleErrorV1> {
     if ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1 != PINNED_T256_BP_BASIS_DIGEST_V1
         || global_lookup_topology_digest_v1() != PINNED_TOPOLOGY_DIGEST_V1
@@ -271,14 +254,12 @@ fn validate_static_profile_v1() -> Result<(), CommittedMleErrorV1> {
     }
     Ok(())
 }
-
 fn absorb_len_prefixed_v1(hash: &mut Keccak256, bytes: &[u8]) -> Result<(), CommittedMleErrorV1> {
     let len = u16::try_from(bytes.len()).map_err(|_| CommittedMleErrorV1::Arithmetic)?;
     hash.update(&len.to_be_bytes());
     hash.update(bytes);
     Ok(())
 }
-
 fn role_tag_v1(role: CommittedMleProofRoleV1) -> u8 {
     match role {
         CommittedMleProofRoleV1::Coefficient(role) => ipa_tag_v1(role),
@@ -287,7 +268,6 @@ fn role_tag_v1(role: CommittedMleProofRoleV1) -> u8 {
         CommittedMleProofRoleV1::EndpointGates => 19,
     }
 }
-
 fn committed_mle_transcript_manifest_digest_v1() -> Result<[u8; 32], CommittedMleErrorV1> {
     validate_static_profile_v1()?;
     let mut hash = Keccak256::new();
@@ -334,7 +314,6 @@ fn committed_mle_transcript_manifest_digest_v1() -> Result<[u8; 32], CommittedMl
         .then_some(digest)
         .ok_or(CommittedMleErrorV1::Context)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GlobalLookupCommittedMleProfileV1 {
     topology_digest: [u8; 32],
@@ -344,7 +323,6 @@ struct GlobalLookupCommittedMleProfileV1 {
     proof_count: usize,
     accounted_wire_bytes: usize,
 }
-
 fn global_lookup_committed_mle_profile_v1()
 -> Result<GlobalLookupCommittedMleProfileV1, CommittedMleErrorV1> {
     validate_static_profile_v1()?;
@@ -357,7 +335,6 @@ fn global_lookup_committed_mle_profile_v1()
         accounted_wire_bytes: COMMITTED_MLE_ACCOUNTED_WIRE_BYTES_V1,
     })
 }
-
 enum CommittedMleDataPlaneSealV1 {
     Production {
         authenticated_sumcheck_columns: Infallible,
@@ -367,7 +344,6 @@ enum CommittedMleDataPlaneSealV1 {
     #[cfg(test)]
     TestOnly,
 }
-
 enum CommittedMleProofSessionSealV1 {
     Production {
         outer_opening_stage: Infallible,
@@ -377,15 +353,12 @@ enum CommittedMleProofSessionSealV1 {
     #[cfg(test)]
     TestOnly,
 }
-
 #[must_use = "dropping this move-only owner closes the unconsumed committed-MLE prerequisite"]
 struct GlobalLookupCommittedMleOwnerV1 {
     data_plane: CommittedMleDataPlaneSealV1,
     proof_session: CommittedMleProofSessionSealV1,
 }
-
 struct BorrowedPointV1<'a>(&'a [u8; POINT_BYTES_V1]);
-
 fn borrow_point_exact_v1(bytes: &[u8]) -> Result<BorrowedPointV1<'_>, CommittedMleErrorV1> {
     let fixed: &[u8; POINT_BYTES_V1] = bytes
         .try_into()
@@ -394,14 +367,12 @@ fn borrow_point_exact_v1(bytes: &[u8]) -> Result<BorrowedPointV1<'_>, CommittedM
         .map_err(|_| CommittedMleErrorV1::PointEncoding)?;
     Ok(BorrowedPointV1(fixed))
 }
-
 enum BorrowedBpCoreV1<'a> {
     N1024(&'a [u8; MASK_CORE_BYTES_V1]),
     N16384(&'a [u8; COEFFICIENT_CORE_BYTES_V1]),
     N32768(&'a [u8; TABLE_M_CORE_BYTES_V1]),
     EndpointN32(&'a [u8; ENDPOINT_GATE_CORE_BYTES_V1]),
 }
-
 impl BorrowedBpCoreV1<'_> {
     fn bytes_v1(&self) -> &[u8] {
         match self {
@@ -412,7 +383,6 @@ impl BorrowedBpCoreV1<'_> {
         }
     }
 }
-
 fn take_point_v1(bytes: &[u8], cursor: &mut usize) -> Result<(), CommittedMleErrorV1> {
     let end = cursor
         .checked_add(POINT_BYTES_V1)
@@ -425,7 +395,6 @@ fn take_point_v1(bytes: &[u8], cursor: &mut usize) -> Result<(), CommittedMleErr
     *cursor = end;
     Ok(())
 }
-
 fn take_scalar_v1(bytes: &[u8], cursor: &mut usize) -> Result<(), CommittedMleErrorV1> {
     let end = cursor
         .checked_add(SCALAR_BYTES_V1)
@@ -439,7 +408,6 @@ fn take_scalar_v1(bytes: &[u8], cursor: &mut usize) -> Result<(), CommittedMleEr
     *cursor = end;
     Ok(())
 }
-
 fn validate_bp_core_v1(bytes: &[u8], log_width: u8) -> Result<(), CommittedMleErrorV1> {
     let expected = generalized_bp_core_bytes_v1(log_width, 1)?;
     if bytes.len() != expected {
@@ -462,7 +430,6 @@ fn validate_bp_core_v1(bytes: &[u8], log_width: u8) -> Result<(), CommittedMleEr
         .then_some(())
         .ok_or(CommittedMleErrorV1::WireEncoding)
 }
-
 fn borrow_bp_core_exact_v1(
     log_width: u8,
     bytes: &[u8],
@@ -492,12 +459,10 @@ fn borrow_bp_core_exact_v1(
         _ => Err(CommittedMleErrorV1::Shape),
     }
 }
-
 struct BorrowedCoefficientOpeningV1<'a> {
     statement_ordinal: u8,
     core: BorrowedBpCoreV1<'a>,
 }
-
 fn borrow_coefficient_opening_exact_v1(
     statement_ordinal: usize,
     core: &[u8],
@@ -511,12 +476,10 @@ fn borrow_coefficient_opening_exact_v1(
         core: borrow_bp_core_exact_v1(COORDINATE_BITS_V1, core)?,
     })
 }
-
 struct BorrowedTableMOpeningV1<'a> {
     commitment: BorrowedPointV1<'a>,
     core: BorrowedBpCoreV1<'a>,
 }
-
 fn borrow_table_m_opening_exact_v1<'a>(
     commitment: &'a [u8],
     core: &'a [u8],
@@ -526,12 +489,10 @@ fn borrow_table_m_opening_exact_v1<'a>(
         core: borrow_bp_core_exact_v1(PLANE_BITS_V1, core)?,
     })
 }
-
 struct BorrowedMaskOpeningV1<'a> {
     commitment: BorrowedPointV1<'a>,
     core: BorrowedBpCoreV1<'a>,
 }
-
 fn borrow_mask_opening_exact_v1<'a>(
     commitment: &'a [u8],
     core: &'a [u8],
@@ -541,10 +502,8 @@ fn borrow_mask_opening_exact_v1<'a>(
         core: borrow_bp_core_exact_v1(10, core)?,
     })
 }
-
 const ENDPOINT_ENVELOPE_MAGIC_V1: [u8; 4] = *b"ZGEP";
 const ENDPOINT_ENVELOPE_FLAGS_V1: u8 = 0;
-
 fn write_endpoint_envelope_v1(
     output: &mut [u8; ENDPOINT_ENVELOPE_BYTES_V1],
 ) -> Result<(), CommittedMleErrorV1> {
@@ -561,9 +520,7 @@ fn write_endpoint_envelope_v1(
     output[15..].copy_from_slice(&committed_mle_transcript_manifest_digest_v1()?);
     Ok(())
 }
-
 struct BorrowedEndpointEnvelopeV1<'a>(&'a [u8; ENDPOINT_ENVELOPE_BYTES_V1]);
-
 fn borrow_endpoint_envelope_exact_v1(
     bytes: &[u8],
 ) -> Result<BorrowedEndpointEnvelopeV1<'_>, CommittedMleErrorV1> {
@@ -577,13 +534,11 @@ fn borrow_endpoint_envelope_exact_v1(
     }
     Ok(BorrowedEndpointEnvelopeV1(fixed))
 }
-
 struct BorrowedEndpointGateOpeningV1<'a> {
     endpoint_commitments: &'a [u8; ENDPOINT_COMMITMENTS_BYTES_V1],
     envelope: BorrowedEndpointEnvelopeV1<'a>,
     core: BorrowedBpCoreV1<'a>,
 }
-
 fn borrow_endpoint_gate_opening_exact_v1<'a>(
     endpoint_commitments: &'a [u8],
     envelope: &'a [u8],
@@ -602,7 +557,6 @@ fn borrow_endpoint_gate_opening_exact_v1<'a>(
         core: borrow_bp_core_exact_v1(5, core)?,
     })
 }
-
 #[cfg(test)]
 #[path = "global_lookup_committed_mle_v1_tests.rs"]
 mod tests;

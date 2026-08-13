@@ -1,27 +1,22 @@
 use std::{collections::BTreeSet, error::Error, fmt};
-
 use super::{HeightContext, ValidatorId, VotingPower};
-
 /// Equal-vote count and its redundant unit-vote projection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Quorum {
     signer_count: usize,
     voting_power: VotingPower,
 }
-
 impl Quorum {
     /// Returns the number of distinct voting validators in the set.
     #[must_use]
     pub const fn signer_count(self) -> usize {
         self.signer_count
     }
-
     /// Returns the redundant unit-vote projection represented by the set.
     #[must_use]
     pub const fn voting_power(self) -> VotingPower {
         self.voting_power
     }
-
     /// Calculates quorum totals for a set of signers.
     ///
     /// The input must be strictly ordered. Requiring canonical signer order
@@ -56,13 +51,11 @@ impl Quorum {
             voting_power,
         })
     }
-
     /// Returns whether the `2f + 1` distinct-validator threshold is satisfied.
     #[must_use]
     pub fn satisfies(self, context: &HeightContext) -> bool {
         self.signer_count >= context.minimum_signer_count()
     }
-
     /// Validates a canonical signer set and requires its equal-vote quorum.
     ///
     /// # Errors
@@ -82,7 +75,6 @@ impl Quorum {
             })
         }
     }
-
     /// Calculates a quorum over an iterator while rejecting duplicate signers.
     pub(crate) fn from_iter(
         context: &HeightContext,
@@ -94,7 +86,6 @@ impl Quorum {
         Ok((quorum, ordered))
     }
 }
-
 /// Failure while validating a signer set against a frozen height context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuorumError {
@@ -134,7 +125,6 @@ pub enum QuorumError {
         total_voting_power: VotingPower,
     },
 }
-
 impl fmt::Display for QuorumError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -186,5 +176,4 @@ impl fmt::Display for QuorumError {
         }
     }
 }
-
 impl Error for QuorumError {}

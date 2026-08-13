@@ -10,40 +10,31 @@ struct PrintJsonContext<W, E> {
     output_format: CliOutputFormat,
     i18n: Localizer,
 }
-
 impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E> {
     fn config(&self) -> &Config {
         &self.config
     }
-
     fn operator_key_pair(&self) -> Option<&KeyPair> {
         self.operator_key_pair.as_ref()
     }
-
     fn transaction_metadata(&self) -> Option<&Metadata> {
         self.transaction_metadata.as_ref()
     }
-
     fn transaction_fee_payment(&self) -> Result<FeePaymentIntent> {
         self.fee_payment.selection()
     }
-
     fn input_instructions(&self) -> bool {
         self.input_instructions
     }
-
     fn output_instructions(&self) -> bool {
         self.output_instructions
     }
-
     fn i18n(&self) -> &Localizer {
         &self.i18n
     }
-
     fn output_format(&self) -> CliOutputFormat {
         self.output_format
     }
-
     /// Serialize and print data
     ///
     /// # Errors
@@ -62,7 +53,6 @@ impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E>
         self.write.write_all(rendered.as_bytes())?;
         Ok(())
     }
-
     fn println(&mut self, data: impl Display) -> Result<()> {
         if self.output_format == CliOutputFormat::Json {
             writeln!(&mut self.err_write, "{data}")?;
@@ -71,7 +61,6 @@ impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E>
         }
         Ok(())
     }
-
     fn println_data(&mut self, data: impl Display) -> Result<()> {
         writeln!(&mut self.write, "{data}")?;
         Ok(())

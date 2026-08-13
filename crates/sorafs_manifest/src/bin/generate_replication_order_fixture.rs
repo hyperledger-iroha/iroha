@@ -1,7 +1,5 @@
 //! Generates reference Norito fixtures for replication orders.
-
 use std::{error::Error, fs, path::PathBuf};
-
 use hex::encode;
 use sorafs_manifest::{
     CapacityMetadataEntry, canonical_manifest_root_cid,
@@ -10,11 +8,9 @@ use sorafs_manifest::{
         ReplicationOrderV1,
     },
 };
-
 fn main() -> Result<(), Box<dyn Error>> {
     let fixture_dir = PathBuf::from("fixtures/sorafs_manifest/replication_order");
     fs::create_dir_all(&fixture_dir)?;
-
     let order = ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
         order_id: [0xAB; 32],
@@ -46,14 +42,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             value: "ticket-sorafs-0001".to_string(),
         }],
     };
-
     order
         .validate()
         .expect("hard-coded fixture must satisfy validation");
-
     let bytes = norito::to_bytes(&order)?;
     fs::write(fixture_dir.join("order_v1.to"), &bytes)?;
-
     let json = format!(
         "{{\n  \"schema_version\": {},\n  \"order_id_hex\": \"{}\",\n  \"manifest_cid_hex\": \"{}\",\n  \"manifest_digest_hex\": \"{}\",\n  \"target_replicas\": {},\n  \"assignments\": [\n    {{ \"provider_id_hex\": \"{}\", \"slice_gib\": {}, \"lane\": \"{}\" }},\n    {{ \"provider_id_hex\": \"{}\", \"slice_gib\": {}, \"lane\": \"{}\" }}\n  ],\n  \"issued_at\": {},\n  \"deadline_at\": {},\n  \"sla\": {{ \"ingest_deadline_secs\": {}, \"min_availability_percent_milli\": {}, \"min_por_success_percent_milli\": {} }},\n  \"metadata\": [ {{ \"key\": \"{}\", \"value\": \"{}\" }} ],\n  \"norito_bytes_hex\": \"{}\"\n}}\n",
         order.version,
@@ -83,6 +76,5 @@ fn main() -> Result<(), Box<dyn Error>> {
         encode(&bytes),
     );
     fs::write(fixture_dir.join("order_v1.json"), json)?;
-
     Ok(())
 }

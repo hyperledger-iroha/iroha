@@ -2430,6 +2430,18 @@ completion: V2IoCompletion::CertifiedFetchBodyPersisted(completion),
 ..
 } => {
     let prepared = self.io.as_ref().map_or_else(
+        || {
+            Err("persisted certified-Fetch body lost its I/O command owner"
+                .to_owned())
+        },
+        |io| {
+            io.prepare_certified_fetch_body_persistence_ack(
+                completion.completion(),
+                Arc::clone(&self.output_guard),
+            )
+        },
+    );
+    match prepared {
 """,
         "persisted certified-Fetch completion must prepare its exact work acknowledgement before service",
         errors,

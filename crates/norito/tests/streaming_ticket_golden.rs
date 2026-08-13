@@ -1,7 +1,5 @@
 //! Golden fixtures for Norito streaming ticket payloads.
-
 use norito::streaming::{StreamingTicket, TicketCapabilities, TicketPolicy, TicketRevocation};
-
 fn sample_ticket() -> StreamingTicket {
     let capabilities = TicketCapabilities::from_bits(
         TicketCapabilities::LIVE | TicketCapabilities::HDR | TicketCapabilities::SPATIAL_AUDIO,
@@ -34,7 +32,6 @@ fn sample_ticket() -> StreamingTicket {
         capabilities,
     }
 }
-
 fn sample_revocation() -> TicketRevocation {
     TicketRevocation {
         ticket_id: [0xAA; 32],
@@ -43,11 +40,8 @@ fn sample_revocation() -> TicketRevocation {
         revocation_signature: [0xCC; 64],
     }
 }
-
 const STREAMING_TICKET_HEX: &str = "4e52543000003ceb13be2259a1e6a9ede8a0db8feb1c00a5020000000000003b3c60f73b36641f02000000000000000040014401440144014401440144014401440144014401440144014401440144014401440144014401440144014401440144014401440144014401440144014401445f5e736f726175efbe9b314eefbe97684255643242efbe82efbda6efbe8469efbe94efbe86efbe82efbe874b53efbe8361efbe98efbe92efbe9351efbe9772efbe926fefbe98efbe856eefbdb3efbe986251efbdb3514aefbe864c4a35485345080700000000000000010508000800000000000008085200000000000008c05d00000000000010c0d401000000000000000000000000000440000000020c004001550155015501550155015501550155015501550155015501550155015501550155015501550155015501550155015501550155015501550155015501550155082a00000000000000800101660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601660166016601664001770177017701770177017701770177017701770177017701770177017701770177017701770177017701770177017701770177017701770177017701770177400188018801880188018801880188018801880188018801880188018801880188018801880188018801880188018801880188018801880188018801880188018840019901990199019901990199019901990199019901990199019901990199019901990199019901990199019901990199019901990199019901990199019901990887c76665000000000847ef6f65000000001d011b0204001002000000000000000302757303026a70060104983a0000050419000000";
-
 const TICKET_REVOCATION_HEX: &str = "4e5254300000c24c0578425118f84dabe7eac78922f6000701000000000000f16065a33ac61199024001aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa4001bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb021100800101cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc";
-
 #[test]
 fn streaming_ticket_golden() {
     let actual = norito::to_bytes(&sample_ticket()).expect("serialize streaming ticket");
@@ -59,7 +53,6 @@ fn streaming_ticket_golden() {
         to_hex(&actual)
     );
 }
-
 #[test]
 fn ticket_revocation_golden() {
     let actual = norito::to_bytes(&sample_revocation()).expect("serialize ticket revocation");
@@ -71,7 +64,6 @@ fn ticket_revocation_golden() {
         to_hex(&actual)
     );
 }
-
 fn from_hex(hex: &str) -> Vec<u8> {
     let clean: Vec<u8> = hex.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     clean
@@ -79,7 +71,6 @@ fn from_hex(hex: &str) -> Vec<u8> {
         .map(|chunk| (decode_nibble(chunk[0]) << 4) | decode_nibble(chunk[1]))
         .collect()
 }
-
 fn decode_nibble(byte: u8) -> u8 {
     match byte {
         b'0'..=b'9' => byte - b'0',
@@ -88,7 +79,6 @@ fn decode_nibble(byte: u8) -> u8 {
         _ => panic!("invalid hex digit"),
     }
 }
-
 fn to_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);

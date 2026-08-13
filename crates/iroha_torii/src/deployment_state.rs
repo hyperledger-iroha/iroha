@@ -1,7 +1,5 @@
 //! Authenticated, atomic smart-contract deployment compare-and-swap state.
-
 use std::str::FromStr as _;
-
 use axum::{
     extract::{ConnectInfo, State},
     http::{HeaderMap, Method, Uri},
@@ -17,24 +15,20 @@ use iroha_data_model::{
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAlias},
 };
 use mv::storage::StorageReadOnly as _;
-
 use crate::{
     AxResponse, Error, SharedAppState,
     routing::{ContractDeploymentStateRequestDto, ContractDeploymentStateResponseDto},
 };
-
 fn conversion_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
     ))
 }
-
 fn invariant_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
         message.into(),
     ))
 }
-
 fn parse_exact_contract_alias(literal: &str) -> Result<ContractAlias, Error> {
     if literal.is_empty() || literal.trim() != literal {
         return Err(conversion_error(
@@ -50,7 +44,6 @@ fn parse_exact_contract_alias(literal: &str) -> Result<ContractAlias, Error> {
     }
     Ok(alias)
 }
-
 fn deployment_dataspace_id(
     view: &iroha_core::state::StateView<'_>,
     alias: &ContractAlias,
@@ -85,7 +78,6 @@ fn deployment_dataspace_id(
         .map_or_else(|| segment.to_owned(), |entry| entry.alias.clone());
     Ok((dataspace_id, canonical_alias))
 }
-
 fn anchoring_block(
     view: &iroha_core::state::StateView<'_>,
 ) -> Result<
@@ -119,7 +111,6 @@ fn anchoring_block(
         .map_err(|_| invariant_error("latest committed block timestamp does not fit in u64"))?;
     Ok((observed_height, observed_hash, ledger_time_ms))
 }
-
 fn reserved_deploy_nonce(
     world: &impl iroha_core::state::WorldReadOnly,
     authority: &AccountId,
@@ -142,7 +133,6 @@ fn reserved_deploy_nonce(
     })?;
     Ok(nonce)
 }
-
 fn live_previous_contract_address(
     world: &impl iroha_core::state::WorldReadOnly,
     alias: &ContractAlias,
@@ -168,7 +158,6 @@ fn live_previous_contract_address(
     if binding.is_grace_expired_at(ledger_time_ms) {
         return Ok(None);
     }
-
     let previous_dataspace_id = raw_previous.dataspace_id().map_err(|error| {
         invariant_error(format!(
             "current contract alias target `{raw_previous}` has an invalid dataspace: {error}"
@@ -186,7 +175,6 @@ fn live_previous_contract_address(
     }
     Ok(Some(raw_previous))
 }
-
 pub(crate) fn read_contract_deployment_state(
     app: &SharedAppState,
     request: &ContractDeploymentStateRequestDto,
@@ -195,7 +183,6 @@ pub(crate) fn read_contract_deployment_state(
     let (authority, canonical_authority) =
         super::parse_exact_account_id_literal(&request.authority)?;
     let contract_alias = parse_exact_contract_alias(&request.contract_alias)?;
-
     // Every consensus-derived response field below is read from this one retry-consistent view.
     let view = app.state.view();
     let (observed_block_height, observed_block_hash, ledger_time_ms) = anchoring_block(&view)?;
@@ -217,7 +204,6 @@ pub(crate) fn read_contract_deployment_state(
         dataspace_id,
         ledger_time_ms,
     )?;
-
     Ok(ContractDeploymentStateResponseDto {
         authority: canonical_authority,
         contract_alias: contract_alias.to_string(),
@@ -231,7 +217,6 @@ pub(crate) fn read_contract_deployment_state(
         chain_discriminant: chain_discriminant().to_string(),
     })
 }
-
 pub(crate) fn execute_contract_deployment_state_local_read(
     app: &SharedAppState,
     request: &ContractDeploymentStateRequestDto,
@@ -243,7 +228,6 @@ pub(crate) fn execute_contract_deployment_state_local_read(
         expected_route,
     )?)
 }
-
 fn canonical_decimal_u64(value: &str, field: &str) -> Result<u64, String> {
     if value.is_empty() {
         return Err(format!("{field} must not be empty"));
@@ -256,7 +240,6 @@ fn canonical_decimal_u64(value: &str, field: &str) -> Result<u64, String> {
     }
     Ok(parsed)
 }
-
 pub(crate) fn sanitize_routed_contract_deployment_state(
     route: RoutingDecision,
     request_body: &[u8],
@@ -278,7 +261,6 @@ pub(crate) fn sanitize_routed_contract_deployment_state(
                 .to_owned(),
         );
     }
-
     let deploy_nonce = canonical_decimal_u64(&response.deploy_nonce, "deploy_nonce")?;
     if deploy_nonce == u64::MAX {
         return Err("deploy_nonce is exhausted".to_owned());
@@ -337,7 +319,6 @@ pub(crate) fn sanitize_routed_contract_deployment_state(
     norito::json::to_vec(&response)
         .map_err(|error| format!("failed to encode sanitized deployment-state response: {error}"))
 }
-
 pub(crate) async fn handler_contract_deployment_state(
     State(app): State<SharedAppState>,
     method: Method,
@@ -394,11 +375,9 @@ pub(crate) async fn handler_contract_deployment_state(
     }
     execute_contract_deployment_state_local_read(&app, &request, None)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
-
     use axum::{body::Bytes, http::StatusCode, response::IntoResponse as _};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
@@ -412,7 +391,6 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use norito::codec::Encode as _;
-
     use super::*;
     use crate::{
         app_auth::CanonicalRequestAuthConfig,
@@ -421,13 +399,11 @@ mod tests {
             mk_app_state_for_tests_with_world, signed_app_headers,
         },
     };
-
     enum NonceFixture {
         Missing,
         U64(u64),
         Invalid,
     }
-
     fn fixture_world(
         authority: &AccountId,
         other: Option<&AccountId>,
@@ -453,7 +429,6 @@ mod tests {
         }
         iroha_core::state::World::with([], accounts, [])
     }
-
     fn fixture_app(
         authority: &AccountId,
         other: Option<&AccountId>,
@@ -461,7 +436,6 @@ mod tests {
     ) -> SharedAppState {
         mk_app_state_for_tests_with_world(fixture_world(authority, other, nonce))
     }
-
     fn anchor_state(
         app: &SharedAppState,
         creation_time_ms: u64,
@@ -489,7 +463,6 @@ mod tests {
         app.kura
             .store_block(Arc::new(signed_block))
             .expect("store deployment-state anchor block");
-
         let mut state_block = app.state.block(header);
         if let Some((address, alias, lease_expiry_ms, grace_until_ms, bound_at_ms)) = binding {
             let mut transaction = state_block.transaction();
@@ -522,18 +495,15 @@ mod tests {
         assert_eq!(app.state.view().latest_block_hash(), Some(block_hash));
         block_hash
     }
-
     fn request(authority: &AccountId) -> ContractDeploymentStateRequestDto {
         ContractDeploymentStateRequestDto {
             authority: authority.to_string(),
             contract_alias: "deploy::universal".to_owned(),
         }
     }
-
     #[test]
     fn route_catalog_declares_canonical_account_signature_authentication() {
         use iroha_torii_shared::route_catalog::{AuthenticationPolicy, HttpMethod};
-
         let route = iroha_torii_shared::route_catalog::contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST;
         assert_eq!(route.method(), HttpMethod::Post);
         assert_eq!(route.path(), "/v1/contracts/deployment-state");
@@ -542,7 +512,6 @@ mod tests {
             AuthenticationPolicy::CanonicalAccountSignature
         );
     }
-
     #[test]
     fn snapshot_uses_active_sns_dataspace_resolution_before_commit_fallbacks() {
         let authority_key = checked_torii_test_ed25519_keypair(
@@ -575,7 +544,6 @@ mod tests {
         );
         let app = mk_app_state_for_tests_with_world(world);
         anchor_state(&app, 1_000, None);
-
         let response = read_contract_deployment_state(
             &app,
             &ContractDeploymentStateRequestDto {
@@ -585,14 +553,12 @@ mod tests {
             None,
         )
         .expect("deployment state for active SNS dataspace");
-
         assert_eq!(response.dataspace_alias, dataspace_alias);
         assert_eq!(
             response.dataspace_id,
             expected_dataspace_id.as_u64().to_string()
         );
     }
-
     #[test]
     fn snapshot_matches_commit_nonce_and_live_alias_cas_semantics() {
         let authority_key = checked_torii_test_ed25519_keypair(
@@ -616,7 +582,6 @@ mod tests {
             1_000,
             Some((previous.clone(), alias, Some(900), Some(1_100), 100)),
         );
-
         let response = read_contract_deployment_state(&app, &request(&authority), None)
             .expect("deployment state");
         assert_eq!(response.authority, authority.to_string());
@@ -635,7 +600,6 @@ mod tests {
             response.chain_discriminant,
             chain_discriminant().to_string()
         );
-
         let new_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -647,7 +611,6 @@ mod tests {
         .expect("next CAS address");
         assert_ne!(new_address, previous);
     }
-
     #[test]
     fn snapshot_treats_grace_expired_raw_binding_as_no_live_previous_target() {
         let authority_key = checked_torii_test_ed25519_keypair(
@@ -676,13 +639,11 @@ mod tests {
                 100,
             )),
         );
-
         let response = read_contract_deployment_state(&app, &request(&authority), None)
             .expect("deployment state");
         assert_eq!(response.deploy_nonce, "1");
         assert_eq!(response.previous_contract_address, None);
     }
-
     #[test]
     fn snapshot_fails_closed_on_invalid_reserved_nonce_and_wrong_route() {
         let authority_key = checked_torii_test_ed25519_keypair(
@@ -698,7 +659,6 @@ mod tests {
             error,
             Error::Query(iroha_data_model::ValidationFail::InternalError(_))
         ));
-
         let valid_app = fixture_app(&authority, None, NonceFixture::Missing);
         anchor_state(&valid_app, 1_000, None);
         let error = read_contract_deployment_state(
@@ -715,7 +675,6 @@ mod tests {
             Error::Query(iroha_data_model::ValidationFail::InternalError(_))
         ));
     }
-
     #[test]
     fn routed_response_sanitizer_rejects_unknown_fields_and_noncanonical_anchor() {
         let authority_key = checked_torii_test_ed25519_keypair(
@@ -749,7 +708,6 @@ mod tests {
                 .expect("canonical routed response"),
             response_body
         );
-
         let mut unknown = String::from_utf8(response_body).expect("UTF-8 response");
         assert_eq!(unknown.pop(), Some('}'));
         unknown.push_str(",\"unknown\":true}");
@@ -758,7 +716,6 @@ mod tests {
                 .is_err(),
             "deny-unknown response DTO must reject injected fields"
         );
-
         let mut noncanonical = response;
         noncanonical.observed_block_hash = noncanonical.observed_block_hash.to_ascii_lowercase();
         if noncanonical.observed_block_hash != block_hash.to_string() {
@@ -769,7 +726,6 @@ mod tests {
             );
         }
     }
-
     #[tokio::test]
     async fn handler_requires_exact_authority_bound_canonical_auth_and_strict_body() {
         let _guard = app_auth_test_guard(CanonicalRequestAuthConfig::default());
@@ -788,7 +744,6 @@ mod tests {
         let method = Method::POST;
         let uri: Uri = "/v1/contracts/deployment-state".parse().expect("uri");
         let body = norito::json::to_vec(&request(&authority)).expect("request JSON");
-
         let missing_auth = handler_contract_deployment_state(
             State(app.clone()),
             method.clone(),
@@ -800,7 +755,6 @@ mod tests {
         .await
         .expect_err("anonymous deployment-state read must fail");
         assert!(matches!(missing_auth, Error::AppUnauthorized { .. }));
-
         let mismatched_headers = signed_app_headers(&other, &other_key, &method, &uri, &body);
         let mismatch = handler_contract_deployment_state(
             State(app.clone()),
@@ -813,7 +767,6 @@ mod tests {
         .await
         .expect_err("caller/authority mismatch must fail");
         assert!(matches!(mismatch, Error::AppForbidden { .. }));
-
         let unknown_body = format!(
             r#"{{"authority":"{}","contract_alias":"deploy::universal","unknown":true}}"#,
             authority
@@ -837,7 +790,6 @@ mod tests {
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
             ))
         ));
-
         let headers = signed_app_headers(&authority, &authority_key, &method, &uri, &body);
         let response = handler_contract_deployment_state(
             State(app),

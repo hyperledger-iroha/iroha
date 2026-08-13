@@ -13,17 +13,14 @@ use iroha_data_model::{
 use iroha_primitives::const_vec::ConstVec;
 use nonzero_ext::nonzero;
 use norito::codec::{DecodeAll as _, Encode as _};
-
 use super::*;
 use crate::kura::Kura;
-
 #[derive(norito::codec::Decode, norito::codec::Encode)]
 struct MutableSignedBlockWire {
     signatures: BTreeSet<BlockSignature>,
     payload: BlockPayload,
     result: Option<BlockResult>,
 }
-
 fn block_proof_fixture() -> (
     SignedBlock,
     HashOf<TransactionEntrypoint>,
@@ -44,7 +41,6 @@ fn block_proof_fixture() -> (
     };
     let external_hash = tx.hash_as_entrypoint();
     let scheduled_hash = scheduled.hash_as_entrypoint();
-
     let external_tree: CanonMerkleTree<TransactionEntrypoint> =
         [external_hash].into_iter().collect();
     let header = BlockHeader::new(nonzero!(1_u64), None, external_tree.root(), None, 0, 0);
@@ -66,7 +62,6 @@ fn block_proof_fixture() -> (
         .expect("test block entrypoints and results should align");
     (block, external_hash, scheduled_hash)
 }
-
 fn mutate_stored_block(
     block: &SignedBlock,
     mutate: impl FnOnce(&mut BlockPayload, &mut BlockResult),
@@ -79,7 +74,6 @@ fn mutate_stored_block(
     SignedBlock::decode_all(&mut wire.encode().as_slice())
         .expect("tampered fixture should remain a structurally valid block wire")
 }
-
 fn proof_error(
     block: SignedBlock,
     requested_height: NonZeroU64,
@@ -90,7 +84,6 @@ fn proof_error(
     block_proofs_for_entry_from_kura(kura.as_ref(), requested_height, entry_hash)
         .expect_err("adversarial stored block must not produce a proof")
 }
-
 fn assert_entry_geometry_error(
     error: BlockProofError,
     entry_hash: HashOf<TransactionEntrypoint>,
@@ -107,7 +100,6 @@ fn assert_entry_geometry_error(
         other => panic!("expected canonical entry geometry error, got {other:?}"),
     }
 }
-
 fn assert_result_geometry_error(
     error: BlockProofError,
     entry_hash: HashOf<TransactionEntrypoint>,
@@ -124,7 +116,6 @@ fn assert_result_geometry_error(
         other => panic!("expected canonical result geometry error, got {other:?}"),
     }
 }
-
 #[test]
 fn block_proofs_for_external_entry_use_full_executed_tree() {
     let kura = Kura::blank_kura_for_testing();
@@ -132,21 +123,17 @@ fn block_proofs_for_external_entry_use_full_executed_tree() {
     let world = World::default();
     let state = State::new_for_testing(world, Arc::clone(&kura), query);
     let (block, entry_hash, _) = block_proof_fixture();
-
     let block_arc = Arc::new(block);
     kura.store_block(Arc::clone(&block_arc))
         .expect("store block");
-
     {
         let mut hashes = state.block_hashes.block();
         hashes.push(block_arc.hash());
         hashes.commit();
     }
-
     let proofs = state
         .block_proofs_for_entry(block_arc.header().height(), entry_hash)
         .expect("proofs available");
-
     let external_root = block_arc
         .header()
         .merkle_root()
@@ -165,7 +152,6 @@ fn block_proofs_for_external_entry_use_full_executed_tree() {
     assert_eq!(proofs.entry_commitment.root(), &full_entry_root);
     assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
     assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
-
     let result_root = block_arc
         .header()
         .result_merkle_root()
@@ -176,7 +162,6 @@ fn block_proofs_for_external_entry_use_full_executed_tree() {
     let result_proof = proofs.result_proof;
     assert!(result_proof.verify(&result_commitment));
 }
-
 #[test]
 fn block_proofs_reject_stored_full_entry_root_drift() {
     let block_height = nonzero!(1_u64);
@@ -197,7 +182,6 @@ fn block_proofs_reject_stored_full_entry_root_drift() {
         canonical_commitment.leaf_count()
     );
     assert_ne!(substituted_commitment.root(), canonical_commitment.root());
-
     let tampered = mutate_stored_block(&block, |_, result| {
         result.merkle = substituted_tree;
     });
@@ -207,7 +191,6 @@ fn block_proofs_reject_stored_full_entry_root_drift() {
         block_height,
     );
 }
-
 #[test]
 fn block_proofs_reject_stored_full_entry_count_drift() {
     let block_height = nonzero!(1_u64);
@@ -220,7 +203,6 @@ fn block_proofs_reject_stored_full_entry_count_drift() {
             .into_iter()
             .collect();
     assert_eq!(substituted_tree.leaf_count(), 3);
-
     let tampered = mutate_stored_block(&block, |_, result| {
         result.merkle = substituted_tree;
     });
@@ -230,7 +212,6 @@ fn block_proofs_reject_stored_full_entry_count_drift() {
         block_height,
     );
 }
-
 #[test]
 fn block_proofs_reject_stored_result_commitment_drift() {
     let block_height = nonzero!(1_u64);
@@ -245,7 +226,6 @@ fn block_proofs_reject_stored_result_commitment_drift() {
             .collect();
     assert_eq!(substituted_tree.leaf_count(), canonical_hashes.len());
     assert_ne!(substituted_tree.root(), block.header().result_merkle_root());
-
     let tampered = mutate_stored_block(&block, |_, result| {
         result.result_merkle = substituted_tree;
     });
@@ -255,7 +235,6 @@ fn block_proofs_reject_stored_result_commitment_drift() {
         block_height,
     );
 }
-
 #[test]
 fn block_proofs_reject_header_result_root_drift() {
     let block_height = nonzero!(1_u64);
@@ -267,7 +246,6 @@ fn block_proofs_reject_header_result_root_drift() {
         [substituted_hash].into_iter().collect();
     let substituted_root = substituted_tree.root();
     assert_ne!(substituted_root, block.header().result_merkle_root());
-
     let tampered = mutate_stored_block(&block, |payload, _| {
         payload.header.result_merkle_root = substituted_root;
     });
@@ -277,7 +255,6 @@ fn block_proofs_reject_header_result_root_drift() {
         block_height,
     );
 }
-
 #[test]
 fn block_proofs_reject_self_consistent_result_count_misalignment() {
     let block_height = nonzero!(1_u64);
@@ -313,7 +290,6 @@ fn block_proofs_reject_self_consistent_result_count_misalignment() {
         block_height,
     );
 }
-
 #[test]
 fn block_proofs_reject_requested_slot_header_height_mismatch() {
     let requested_height = nonzero!(1_u64);
@@ -322,7 +298,6 @@ fn block_proofs_reject_requested_slot_header_height_mismatch() {
     let tampered = mutate_stored_block(&block, |payload, _| {
         payload.header.height = actual_height;
     });
-
     match proof_error(tampered, requested_height, external_hash) {
         BlockProofError::BlockHeightMismatch { requested, actual } => {
             assert_eq!(requested, requested_height);

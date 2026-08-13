@@ -1,5 +1,4 @@
 // ISO 20022 MCP inner-target authentication regressions.
-
 #[test]
 fn iso20022_operator_auth_is_complete_and_profile_is_query_bound() {
     let arguments = norito::json!({
@@ -25,7 +24,6 @@ fn iso20022_operator_auth_is_complete_and_profile_is_query_bound() {
         "/v1/iso20022/pacs008?profile=swift%20cbpr%2B"
     );
 }
-
 #[test]
 fn iso20022_mcp_schema_retires_raw_headers_and_requires_inner_operator_auth() {
     let config = iroha_config::parameters::actual::ToriiMcp::default();
@@ -35,7 +33,6 @@ fn iso20022_mcp_schema_retires_raw_headers_and_requires_inner_operator_auth() {
         .filter(|tool| tool.name.starts_with("iroha.iso20022."))
         .collect::<Vec<_>>();
     assert_eq!(iso_tools.len(), 10);
-
     for tool in iso_tools {
         let schema = tool.input_schema.as_object().expect("ISO tool schema");
         let required = schema
@@ -60,7 +57,6 @@ fn iso20022_mcp_schema_retires_raw_headers_and_requires_inner_operator_auth() {
             tool.name
         );
     }
-
     let retired = norito::json!({
         "message_xml": "<Document/>",
         "headers": { "X-Iroha-Iso-Profile": "swift-cbpr-plus" }

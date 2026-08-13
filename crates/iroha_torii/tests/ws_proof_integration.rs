@@ -1,14 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration (ignored) test: start a WS endpoint, subscribe, and assert Proof JSON frames.
 #![cfg(feature = "app_api")]
-
 #[cfg(feature = "ws_integration_tests")]
 #[path = "common/proof_events.rs"]
 mod proof_events;
-
 #[cfg(feature = "ws_integration_tests")]
 use std::io::ErrorKind;
-
 #[cfg(feature = "ws_integration_tests")]
 use axum::{Router, routing::get};
 #[cfg(feature = "ws_integration_tests")]
@@ -19,7 +16,6 @@ use proof_events::ProofEventFixture;
 use tokio::net::TcpListener;
 #[cfg(feature = "ws_integration_tests")]
 use tokio_tungstenite::tungstenite::Message;
-
 #[cfg(feature = "ws_integration_tests")]
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
@@ -48,7 +44,6 @@ async fn ws_proof_json_integration() {
     };
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
     // Connect client
     let (mut ws_stream, _resp) =
         match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
@@ -60,7 +55,6 @@ async fn ws_proof_json_integration() {
             }
             Err(e) => panic!("ws connect failed: {e}"),
         };
-
     // Send EventSubscriptionRequest (Any + proof backend filter)
     let sub = iroha_data_model::events::stream::EventSubscriptionRequest {
         filters: vec![iroha_data_model::events::EventFilterBox::Data(
@@ -77,7 +71,6 @@ async fn ws_proof_json_integration() {
         ))
         .await
         .unwrap();
-
     // Send events (one rejected backend; one verified matching backend)
     let ev_bad = ProofEventFixture::new("groth16", [0x20; 32])
         .without_vk()
@@ -85,7 +78,6 @@ async fn ws_proof_json_integration() {
     events
         .send(ev_bad)
         .expect("events stream subscriber to be ready for non-matching backend");
-
     let ev_ok = ProofEventFixture::new("halo2/ipa", [0x21; 32])
         .with_vk("vk", [0x55; 32])
         .with_envelope_hash(Some([0x20; 32]))
@@ -93,7 +85,6 @@ async fn ws_proof_json_integration() {
     events
         .send(ev_ok)
         .expect("events stream subscriber to be ready for matching backend");
-
     // Read frames until we get a ProofVerified event (wire may be JSON text or Norito binary).
     let mut matched = false;
     while let Some(msg) = ws_stream.next().await {

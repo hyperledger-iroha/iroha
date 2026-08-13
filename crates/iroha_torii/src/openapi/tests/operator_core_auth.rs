@@ -35,7 +35,6 @@ fn node_local_core_and_pipeline_reads_document_operator_signatures() {
         assert_eq!(definition.get("in").and_then(Value::as_str), Some("header"));
         assert_eq!(definition.get("name").and_then(Value::as_str), Some(header));
     }
-
     for path in [
         "/v1/peers",
         "/v1/time/status",
@@ -56,7 +55,6 @@ fn node_local_core_and_pipeline_reads_document_operator_signatures() {
             .expect("operator description");
         assert!(description.contains("operator-only"), "{path}");
         assert!(description.contains("exact NetworkId"), "{path}");
-
         let parameters = get
             .get("parameters")
             .and_then(Value::as_array)
@@ -104,7 +102,6 @@ fn node_local_core_and_pipeline_reads_document_operator_signatures() {
             Some(false)
         );
     }
-
     let retention_get = paths
         .get("/v1/proofs/retention")
         .and_then(Value::as_object)

@@ -42,7 +42,6 @@ fn certified_response_priority_probe_reads_exact_or_conflicting_family_claim() {
     let claim_hash_before = executor
         .outstanding_requests
         .response_claim_hash(claimed.request_hash);
-
     let exact = executor
         .probe_certified_response_priority(&claimed, &claimed_responder)
         .expect("exact retransmission remains a preflight candidate");
@@ -64,7 +63,6 @@ fn certified_response_priority_probe_reads_exact_or_conflicting_family_claim() {
             .response_claim_hash(claimed.request_hash),
         claim_hash_before
     );
-
     let competing = signed_certified_response(
         &fixture,
         &task,
@@ -101,7 +99,6 @@ fn certified_response_priority_probe_reads_exact_or_conflicting_family_claim() {
     assert!(services.completed_certified_fetches.is_empty());
     assert!(executor.runtime.completions.is_empty());
     assert!(!executor.status().fail_closed);
-
     assert!(
         executor
             .certified_work
@@ -122,7 +119,6 @@ fn certified_response_priority_probe_reads_exact_or_conflicting_family_claim() {
         )) if request_hash == claimed.request_hash
     ));
 }
-
 #[test]
 fn certified_request_presence_rejects_retained_response_with_different_family_claim() {
     let fixture = Fixture::new();
@@ -170,7 +166,6 @@ fn certified_request_presence_rejects_retained_response_with_different_family_cl
     assert!(executor.has_retained_certified_body_response());
     assert_eq!(executor.outstanding_requests.response_claim_count(), 0);
     assert_eq!(executor.validated_certified_request_presence(), Ok(true));
-
     let competing = signed_certified_response(
         &fixture,
         &task,
@@ -198,7 +193,6 @@ fn certified_request_presence_rejects_retained_response_with_different_family_cl
         )) if request_hash == retained.request_hash
     ));
 }
-
 #[test]
 fn retryable_certified_fetch_transfer_retains_claim_token_and_exact_service_owner() {
     let fixture = Fixture::new();
@@ -230,7 +224,6 @@ fn retryable_certified_fetch_transfer_retains_claim_token_and_exact_service_owne
     let service_owners_before = services.fetch_tasks.clone();
     let ownership_before = executor.body_ownership_projection();
     services.retry_certified_fetch_once = true;
-
     assert_eq!(
         executor.accept_certified_body_response(
             exact_response.clone(),
@@ -260,7 +253,6 @@ fn retryable_certified_fetch_transfer_retains_claim_token_and_exact_service_owne
         without_token, ownership_before,
         "the typed retryable boundary changes only the explicit unpublished token",
     );
-
     let competing_response = signed_certified_response(
         &fixture,
         &task,
@@ -288,7 +280,6 @@ fn retryable_certified_fetch_transfer_retains_claim_token_and_exact_service_owne
     assert_eq!(services.fetch_tasks, service_owners_before);
     assert!(services.completed_certified_fetches.is_empty());
     assert!(!executor.status().fail_closed);
-
     assert_eq!(
         executor
             .accept_certified_body_response(
@@ -327,7 +318,6 @@ fn retryable_certified_fetch_transfer_retains_claim_token_and_exact_service_owne
     ));
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn retained_response_certificate_escape_is_charged_only_once() {
     let fixture = Fixture::new();
@@ -369,7 +359,6 @@ fn retained_response_certificate_escape_is_charged_only_once() {
         Err(EffectTransportError::Backpressure)
     );
     assert!(executor.retained_response_may_admit_certified_fence_escape());
-
     executor.runtime.certified_fence_escape_credit = true;
     executor.reconcile_retained_response_certified_fence_escape_phase();
     assert_eq!(
@@ -380,7 +369,6 @@ fn retained_response_certificate_escape_is_charged_only_once() {
         Some(RetainedCertifiedFenceEscapePhase::Charged)
     );
     assert!(!executor.retained_response_may_admit_certified_fence_escape());
-
     while executor.runtime.remaining_completion_capacity() > 0 {
         executor
             .runtime
@@ -396,7 +384,6 @@ fn retained_response_certificate_escape_is_charged_only_once() {
             .map(|carrier| carrier.certified_fence_escape_phase),
         Some(RetainedCertifiedFenceEscapePhase::Spent)
     );
-
     executor.runtime.certified_fence_escape_credit = true;
     executor.reconcile_retained_response_certified_fence_escape_phase();
     assert!(
@@ -412,7 +399,6 @@ fn retained_response_certificate_escape_is_charged_only_once() {
     );
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn different_subject_decision_supersedes_protected_lock_and_frees_losing_capacity() {
     let fixture = Fixture::new();
@@ -444,7 +430,6 @@ fn different_subject_decision_supersedes_protected_lock_and_frees_losing_capacit
         .expect("fill the only pending-work slot with a losing fetch");
     let losing_id = services.fetch_tasks[0].id();
     executor.protected_lock = Some(losing_lock);
-
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     executor.runtime.decided_body = Some((
         commit.round,
@@ -466,7 +451,6 @@ fn different_subject_decision_supersedes_protected_lock_and_frees_losing_capacit
             &mut services,
         )
         .expect("Decision cleanup frees capacity before decided-body recovery");
-
     assert_eq!(
         executor.protected_decision,
         Some((
@@ -492,7 +476,6 @@ fn different_subject_decision_supersedes_protected_lock_and_frees_losing_capacit
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn decision_installed_by_same_runtime_step_retires_stale_terminal_effects() {
     let fixture = Fixture::new();
@@ -516,7 +499,6 @@ fn decision_installed_by_same_runtime_step_retires_stale_terminal_effects() {
             },
         ])));
     services.fail_on = Some("broadcast");
-
     assert_eq!(
         executor
             .step(Instant::now(), &mut services)
@@ -533,7 +515,6 @@ fn decision_installed_by_same_runtime_step_retires_stale_terminal_effects() {
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn decision_installed_by_same_runtime_step_keeps_exact_commit_and_body_work() {
     let fixture = Fixture::new();
@@ -585,7 +566,6 @@ fn decision_installed_by_same_runtime_step_keeps_exact_commit_and_body_work() {
                 request: SignRequest::Vote(vote(&fixture)),
             },
         ])));
-
     assert_eq!(
         executor
             .step(Instant::now(), &mut services)
@@ -602,7 +582,6 @@ fn decision_installed_by_same_runtime_step_keeps_exact_commit_and_body_work() {
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn commit_fetch_adopts_and_replaces_matching_parked_physical_lineage() {
     let fixture = Fixture::new();
@@ -627,7 +606,6 @@ fn commit_fetch_adopts_and_replaces_matching_parked_physical_lineage() {
     executor
         .park_retained_effect_batch()
         .expect("park ordinary Fetch behind certified progress");
-
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     executor.runtime.decided_body = Some((
         commit.round,
@@ -649,7 +627,6 @@ fn commit_fetch_adopts_and_replaces_matching_parked_physical_lineage() {
             .expect("Commit-certified Fetch replaces its parked physical lineage"),
         1
     );
-
     assert_eq!(services.fetch_tasks.len(), 1);
     assert_eq!(services.fetch_tasks[0].ownership(), &parked_owner);
     assert_eq!(executor.pending_fetches.len(), 1);
@@ -659,7 +636,6 @@ fn commit_fetch_adopts_and_replaces_matching_parked_physical_lineage() {
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn failed_decision_cleanup_keeps_losing_owner_and_requires_restart() {
     let fixture = Fixture::new();
@@ -698,7 +674,6 @@ fn failed_decision_cleanup_keeps_losing_owner_and_requires_restart() {
     executor.runtime.decided_body = Some(durable_decision);
     let before = executor.body_ownership_projection();
     services.fail_on = Some("cancel-fetch");
-
     assert!(matches!(
         executor.consume_effects(Vec::new(), &mut services),
         Err(EffectExecutorError::Service(reason)) if reason.contains("cancel-fetch failed")
@@ -716,7 +691,6 @@ fn failed_decision_cleanup_keeps_losing_owner_and_requires_restart() {
     assert_eq!(executor.body_ownership_projection(), before);
     assert_eq!(services.closed.len(), 1);
 }
-
 #[test]
 fn decision_cleanup_fetch_failure_preserves_exact_local_pipeline_consumer() {
     let fixture = Fixture::new();
@@ -762,7 +736,6 @@ fn decision_cleanup_fetch_failure_preserves_exact_local_pipeline_consumer() {
     ));
     let before = executor.body_ownership_projection();
     services.fail_on = Some("cancel-fetch");
-
     assert!(matches!(
         executor.consume_effects(Vec::new(), &mut services),
         Err(EffectExecutorError::Service(reason)) if reason.contains("cancel-fetch failed")
@@ -780,7 +753,6 @@ fn decision_cleanup_fetch_failure_preserves_exact_local_pipeline_consumer() {
     assert!(executor.output_guard.restart_required());
     assert_eq!(services.closed.len(), 1);
 }
-
 #[test]
 fn decision_cleanup_rejects_inconsistent_certified_request_before_mutation() {
     let fixture = Fixture::new();
@@ -824,7 +796,6 @@ fn decision_cleanup_rejects_inconsistent_certified_request_before_mutation() {
     );
     executor.runtime.decided_body = Some(durable_decision);
     let before = executor.body_ownership_projection();
-
     assert!(matches!(
         executor.consume_effects(Vec::new(), &mut services),
         Err(EffectExecutorError::Contract(_))
@@ -838,7 +809,6 @@ fn decision_cleanup_rejects_inconsistent_certified_request_before_mutation() {
     assert!(executor.output_guard.restart_required());
     assert_eq!(services.closed.len(), 1);
 }
-
 #[test]
 fn decision_preserves_current_tag_local_proposal_for_direct_apply() {
     let fixture = Fixture::new();
@@ -858,7 +828,6 @@ fn decision_preserves_current_tag_local_proposal_for_direct_apply() {
         [RuntimeCompletion::LocalProposal(_, manifest, ..)]
             if manifest == &fixture.manifest
     ));
-
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     executor.runtime.decided_body = Some((
         commit.round,
@@ -880,7 +849,6 @@ fn decision_preserves_current_tag_local_proposal_for_direct_apply() {
             &mut services,
         )
         .expect("preserve the exact local completion across Decision cleanup");
-
     assert!(matches!(
         executor.runtime.completions.as_slice(),
         [RuntimeCompletion::LocalProposal(completion_tag, manifest, ..)]
@@ -890,7 +858,6 @@ fn decision_preserves_current_tag_local_proposal_for_direct_apply() {
     assert!(services.fetch_tasks.is_empty());
     assert_eq!(services.retired_all_outbound, 1);
     assert_eq!(services.retired_candidate_work, 1);
-
     executor
         .consume_effects(Vec::new(), &mut services)
         .expect("Decision reconciliation is idempotent");
@@ -898,7 +865,6 @@ fn decision_preserves_current_tag_local_proposal_for_direct_apply() {
     assert_eq!(services.retired_candidate_work, 1);
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn decision_commitment_mismatch_fails_closed_before_apply() {
     let fixture = Fixture::new();
@@ -927,7 +893,6 @@ fn decision_commitment_mismatch_fails_closed_before_apply() {
         fixture.manifest.subject,
         conflicting_commitment,
     ));
-
     assert!(matches!(
         executor.consume_effects(Vec::new(), &mut services),
         Err(EffectExecutorError::Runtime(reason))
@@ -942,7 +907,6 @@ fn decision_commitment_mismatch_fails_closed_before_apply() {
             if *completion_tag == tag(0) && manifest == &fixture.manifest
     ));
 }
-
 #[test]
 fn reconciled_decision_rejects_same_round_subject_commitment_drift() {
     let fixture = Fixture::new();
@@ -961,7 +925,6 @@ fn reconciled_decision_rejects_same_round_subject_commitment_drift() {
     assert_eq!(executor.protected_decision, Some(first));
     let retired_outbound = services.retired_all_outbound;
     let retired_candidate = services.retired_candidate_work;
-
     let drifted_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new(b"drifted Decision parent state"),
         Hash::new(b"drifted Decision post state"),
@@ -971,7 +934,6 @@ fn reconciled_decision_rejects_same_round_subject_commitment_drift() {
     );
     assert_ne!(drifted_commitment, first.3);
     executor.runtime.decided_body = Some((first.0, first.1, first.2, drifted_commitment));
-
     assert!(matches!(
         executor.consume_effects(Vec::new(), &mut services),
         Err(EffectExecutorError::Contract(reason))
@@ -984,7 +946,6 @@ fn reconciled_decision_rejects_same_round_subject_commitment_drift() {
     assert!(executor.status().fail_closed);
     assert_eq!(services.closed.len(), 1);
 }
-
 #[test]
 fn stale_generation_local_completion_uses_durable_recovery() {
     let fixture = Fixture::new();
@@ -1010,7 +971,6 @@ fn stale_generation_local_completion_uses_durable_recovery() {
         commit.execution_commitment,
     ));
     let certified_sources = certified_sources(&fixture, &commit);
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -1024,7 +984,6 @@ fn stale_generation_local_completion_uses_durable_recovery() {
             &mut services,
         )
         .expect("stale completion falls back to durable body reconstruction");
-
     assert!(matches!(
         executor.runtime.completions.as_slice(),
         [RuntimeCompletion::BodyAvailable(completion_tag, manifest)]
@@ -1035,7 +994,6 @@ fn stale_generation_local_completion_uses_durable_recovery() {
     assert_eq!(executor.body_pipeline_owners.len(), 1);
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn decision_body_stage_adoption_promotes_matching_prepare_authority() {
     let fixture = Fixture::new();
@@ -1082,7 +1040,6 @@ fn decision_body_stage_adoption_promotes_matching_prepare_authority() {
     .rebind_as_inherited_adapter_effect(&validate)
     .expect("carry Commit authority into ValidateBody");
     assert_ne!(incumbent, incoming);
-
     let adopted = incumbent
         .adopt_incumbent_body_stage_for_durable_decision(
             &incoming,
@@ -1095,7 +1052,6 @@ fn decision_body_stage_adoption_promotes_matching_prepare_authority() {
         .expect("matching Commit authority adopts the incumbent validation root");
     assert_eq!(adopted, incumbent);
 }
-
 #[test]
 fn decision_body_stage_adoption_rejects_commitment_drift() {
     let fixture = Fixture::new();
@@ -1137,7 +1093,6 @@ fn decision_body_stage_adoption_rejects_commitment_drift() {
     .expect("one conflicting Commit FetchBody owner")
     .rebind_as_inherited_adapter_effect(&store)
     .expect("carry conflicting Commit authority into StoreBody");
-
     assert!(
         incumbent
             .adopt_incumbent_body_stage_for_durable_decision(
@@ -1152,7 +1107,6 @@ fn decision_body_stage_adoption_rejects_commitment_drift() {
             .contains("proposal or quorum authority")
     );
 }
-
 #[test]
 fn decision_body_stage_retry_rejects_same_root_ordinary_binding_without_mutation() {
     let fixture = Fixture::new();
@@ -1163,7 +1117,6 @@ fn decision_body_stage_retry_rejects_same_root_ordinary_binding_without_mutation
         commit.subject,
         commit.execution_commitment,
     );
-
     let mut store_executor = fixture.executor(EffectQueueConfig::default());
     let mut store_services = fixture.services();
     store_executor
@@ -1214,7 +1167,6 @@ fn decision_body_stage_retry_rejects_same_root_ordinary_binding_without_mutation
     ));
     assert_eq!(store_executor.body_ownership_projection(), store_before);
     assert_eq!(store_services.store_tasks.len(), store_service_count);
-
     let mut validation_executor = fixture.executor(EffectQueueConfig::default());
     let mut validation_services = fixture.services();
     validation_executor
@@ -1285,7 +1237,6 @@ fn decision_body_stage_retry_rejects_same_root_ordinary_binding_without_mutation
         validation_service_count
     );
 }
-
 #[test]
 fn decision_rebinds_exact_local_validation_to_reducer_progress() {
     let fixture = Fixture::new();
@@ -1313,7 +1264,6 @@ fn decision_rebinds_exact_local_validation_to_reducer_progress() {
         &executor.pending_validations[&validation_id].consumer,
         Some(ValidationConsumer::LocalProposal { .. })
     ));
-
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     executor.runtime.decided_body = Some((
         commit.round,
@@ -1370,7 +1320,6 @@ fn decision_rebinds_exact_local_validation_to_reducer_progress() {
         executor.runtime.completions.as_slice(),
         [RuntimeCompletion::BodyAvailable(_, manifest)] if manifest == &fixture.manifest
     ));
-
     executor.runtime.completions.clear();
     executor
         .retain_effect_batch(vec![store_effect], vec![decision_store_ownership])
@@ -1431,7 +1380,6 @@ fn decision_rebinds_exact_local_validation_to_reducer_progress() {
     ));
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn decision_rebinds_exact_local_store_under_incumbent_owner() {
     let fixture = Fixture::new();
@@ -1447,7 +1395,6 @@ fn decision_rebinds_exact_local_store_under_incumbent_owner() {
         .expect("start exact local body store");
     let store_id = services.store_tasks[0].id();
     let incumbent_ownership = executor.pending_stores[&store_id].task.ownership().clone();
-
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     executor.runtime.decided_body = Some((
         commit.round,
@@ -1493,7 +1440,6 @@ fn decision_rebinds_exact_local_store_under_incumbent_owner() {
         Some(RuntimeCompletion::BodyAvailable(completion_tag, manifest))
             if *completion_tag == tag(0) && manifest == &fixture.manifest
     ));
-
     executor.runtime.completions.clear();
     executor
         .retain_effect_batch(vec![store_effect], vec![decision_store_ownership])
@@ -1517,7 +1463,6 @@ fn decision_rebinds_exact_local_store_under_incumbent_owner() {
                     commit.execution_commitment,
                 )
     ));
-
     let completion = services.execute_store(store_id);
     assert_eq!(
         executor
@@ -1539,7 +1484,6 @@ fn decision_rebinds_exact_local_store_under_incumbent_owner() {
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn apply_requires_validated_body_and_typed_exact_kura_completion() {
     let fixture = Fixture::new();
@@ -1616,7 +1560,6 @@ fn apply_requires_validated_body_and_typed_exact_kura_completion() {
     assert_eq!(applied_mode.height(), fixture.context.height);
     assert_eq!(applied_mode.debt(), 0);
 }
-
 #[test]
 fn apply_completion_rejects_detached_owner_fields_before_settlement() {
     for field in ["authorized owner tag", "lifecycle ordinal"] {
@@ -1663,7 +1606,6 @@ fn apply_completion_rejects_detached_owner_fields_before_settlement() {
             vec![vec![0x5C]; fixture.context.roster.len()],
         );
         let receipt = KuraV2CommitReceipt::for_test(&artifact);
-
         assert!(matches!(
             executor.complete_application(
                 DurableApplyCompletion::new(work_id, receipt, artifact),
@@ -1687,7 +1629,6 @@ fn apply_completion_rejects_detached_owner_fields_before_settlement() {
         );
     }
 }
-
 #[test]
 fn reproposal_commit_qc_applies_the_exact_unchanged_body() {
     let fixture = Fixture::new();
@@ -1786,7 +1727,6 @@ fn reproposal_commit_qc_applies_the_exact_unchanged_body() {
             &mut services,
         )
         .expect("reproposal CommitQC applies after its exact body arrives");
-
     let task = services.apply_tasks.last().expect("application task");
     assert_eq!(task.tag(), tag(0));
     assert_eq!(task.authorized_owner_tag(), tag(0));
@@ -1798,7 +1738,6 @@ fn reproposal_commit_qc_applies_the_exact_unchanged_body() {
     assert_eq!(task.validated_receipt().durable().round(), commit.round);
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn apply_worker_request_has_no_runtime_ownership_sidecar() {
     let source = include_str!("../v2_effects.rs");
@@ -1813,7 +1752,6 @@ fn apply_worker_request_has_no_runtime_ownership_sidecar() {
         assert!(task.contains(required), "ApplyTask omitted {required}");
     }
     assert!(!task.contains("RuntimeEffectOwnership"));
-
     let pending = source
         .split_once("struct PendingApply {")
         .expect("ordinary Apply pending state has one declaration")
@@ -1848,7 +1786,6 @@ fn apply_worker_request_has_no_runtime_ownership_sidecar() {
         .expect("Apply completion borrows the task after owner validation");
     assert!(owner_preflight < task_borrow);
 }
-
 #[test]
 fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
     let fixture = Fixture::new();
@@ -1863,7 +1800,6 @@ fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
         )
         .expect("local proposal");
     complete_local_proposal_chain(&mut executor, &mut services);
-
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     assert!(matches!(
         executor.begin_apply(
@@ -1877,7 +1813,6 @@ fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
     ));
     assert!(executor.pending_applications.is_empty());
     assert!(services.apply_tasks.is_empty());
-
     executor.runtime.round_tag = Some(tag(3));
     assert!(matches!(
         executor.begin_apply(
@@ -1904,7 +1839,6 @@ fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
     assert_eq!(services.apply_tasks[0].authorized_owner_tag(), tag(3));
     assert_eq!(services.apply_tasks[0].certificate(), &commit);
 }
-
 #[test]
 fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work() {
     let fixture = Fixture::new();
@@ -1919,7 +1853,6 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
         )
         .expect("local proposal");
     complete_local_proposal_chain(&mut executor, &mut services);
-
     let mut foreign_context = fixture.context.clone();
     foreign_context.network_id =
         crate::sumeragi::synthetic_network_id("foreign-v2-effect-executor-test");
@@ -1933,7 +1866,6 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
         foreign_commit.validate(&foreign_context).is_ok(),
         "the adversarial certificate must be internally valid for its foreign context"
     );
-
     assert!(matches!(
         executor.begin_apply(
             tag(0),
@@ -1948,7 +1880,6 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
     assert!(executor.pending_applications.is_empty());
     assert!(services.apply_tasks.is_empty());
 }
-
 #[test]
 fn recovered_validation_catalog_hydrates_direct_apply_durability() {
     let fixture = Fixture::new();
@@ -1968,7 +1899,6 @@ fn recovered_validation_catalog_hydrates_direct_apply_durability() {
         })
         .expect("persist exact validation marker");
     drop(store);
-
     let mut reopened = V2BodyStore::open_with_policy(
         directory.path(),
         fixture.context.clone(),
@@ -1981,7 +1911,6 @@ fn recovered_validation_catalog_hydrates_direct_apply_durability() {
     let recovered_bodies = reopened.recovery_catalog().expect("recovery catalog");
     let recovered_validations = reopened.validated_recovery_catalog();
     let key = (fixture.manifest.round, fixture.manifest.subject);
-
     let mut executor = V2EffectExecutor::with_runtime(
         FakeRuntime {
             round_tag: Some(tag(0)),
@@ -2001,10 +1930,8 @@ fn recovered_validation_catalog_hydrates_direct_apply_durability() {
     executor
         .install_recovered_validation_catalog(recovered_validations)
         .expect("restore executor validation authority");
-
     assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
     assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
-
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     let mut services = fixture.services();
     executor
@@ -2016,14 +1943,12 @@ fn recovered_validation_catalog_hydrates_direct_apply_durability() {
             &mut services,
         )
         .expect("replayed CommitQC applies without body-stage replay");
-
     assert_eq!(services.apply_tasks.len(), 1);
     assert_eq!(services.apply_tasks[0].certificate(), &commit);
     assert_eq!(services.apply_tasks[0].validated_receipt(), &validated);
     assert!(services.closed.is_empty());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn recovered_next_vote_body_catalog_join_is_exact_and_store_bound() {
     let fixture = Fixture::new();
@@ -2068,7 +1993,6 @@ fn recovered_next_vote_body_catalog_join_is_exact_and_store_bound() {
         )
         .expect("project exact next-Vote body lookup")
     };
-
     let authority = authenticate_recovered_lifecycle_next_vote_body_catalogs(
         lookup(),
         body_store_identity.clone(),
@@ -2078,7 +2002,6 @@ fn recovered_next_vote_body_catalog_join_is_exact_and_store_bound() {
     )
     .expect("exact catalogs mint the opaque body authority");
     assert!(authority.exactly_matches_for_test(&validated, &body_store_identity));
-
     assert!(
         authenticate_recovered_lifecycle_next_vote_body_catalogs(
             lookup(),
@@ -2091,7 +2014,6 @@ fn recovered_next_vote_body_catalog_join_is_exact_and_store_bound() {
         "a missing durable owner must reject the otherwise exact body lookup"
     );
 }
-
 include!("v2_effects_kura_tip_replay.rs");
 include!("v2_effects_01_view_churn_and_runtime_steps.rs");
 #[test]
@@ -2118,7 +2040,6 @@ fn decision_serve_fence_rejects_durable_decision_loss_without_reopening() {
         "failed reconciliation keeps exact Serve admission fenced"
     );
 }
-
 #[test]
 fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
     let fixture = Fixture::new();
@@ -2131,7 +2052,6 @@ fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
         .push_back(Ok(RuntimeStep::Advanced(vec![AdapterEffect::Broadcast(
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote(&fixture))),
         )])));
-
     assert!(matches!(
         executor.step(Instant::now(), &mut services),
         Err(EffectExecutorError::Runtime(reason))
@@ -2142,7 +2062,6 @@ fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
     assert!(services.decision_serve_reconciliation_pending);
     assert!(executor.output_guard.restart_required());
 }
-
 #[test]
 fn recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks() {
     let fixture = Fixture::new();
@@ -2150,7 +2069,6 @@ fn recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks() 
     let mut services = fixture.services();
     executor.runtime.reject_scheduler_ownership = true;
     executor.runtime.steps.push_back(Ok(RuntimeStep::Idle));
-
     assert!(matches!(
         executor.step_pending_tip_recovery(Instant::now(), &mut services),
         Err(EffectExecutorError::Runtime(reason))
@@ -2160,5 +2078,4 @@ fn recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks() 
     assert!(services.decision_serve_reconciliation_pending);
     assert!(executor.output_guard.restart_required());
 }
-
 include!("v2_effects_02_admission_handoffs.rs");

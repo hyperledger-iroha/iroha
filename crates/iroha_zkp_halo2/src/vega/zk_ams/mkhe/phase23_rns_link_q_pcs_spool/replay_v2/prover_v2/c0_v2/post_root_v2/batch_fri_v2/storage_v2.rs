@@ -1,21 +1,15 @@
 //! Purpose-bound authenticated storage and root replay for qPCS B0.
-
 use core::sync::atomic;
 use std::path::Path;
-
 use iroha_confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
-
 use crate::vega::sponge::Keccak256;
-
 use super::*;
-
 #[path = "storage_v2/fold_layer1_v2.rs"]
 mod fold_layer1_v2;
 pub(super) use fold_layer1_v2::*;
-
 const FRI0_CONTEXT_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.batch-fri.layer0.context\0";
 const FRI_LEAF_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-leaf\0";
@@ -26,7 +20,6 @@ const FRI0_FRONTIER_NODES_V2: usize = 20;
 const FRI0_LEAVES_V2: usize = 1 << 19;
 const FRI0_LEAF_BYTES_V2: usize = 380 * 16;
 const FRI0_WINDOW_BYTES_V2: usize = 1_024 * FRI0_LEAF_BYTES_V2;
-
 #[derive(Clone, Copy)]
 pub(super) struct FriLayer0BindingV2 {
     pub(super) parameter_digest: [u8; 32],
@@ -36,7 +29,6 @@ pub(super) struct FriLayer0BindingV2 {
     pub(super) pre_layer_transcript: [u8; 32],
     pub(super) batch_schedule_digest: [u8; 32],
 }
-
 impl FriLayer0BindingV2 {
     pub(super) fn new_v2(
         parameter_digest: [u8; 32],
@@ -65,7 +57,6 @@ impl FriLayer0BindingV2 {
         })
     }
 }
-
 pub(super) fn fri0_context_digest_v2(
     descriptor: StorageLayoutDescriptorV2,
     binding: FriLayer0BindingV2,
@@ -90,7 +81,6 @@ pub(super) fn fri0_context_digest_v2(
     }
     Ok(digest)
 }
-
 pub(super) struct FriLayer0WriterV2 {
     writer: Option<ConfidentialSpoolWriterV1>,
     descriptor: StorageLayoutDescriptorV2,
@@ -98,7 +88,6 @@ pub(super) struct FriLayer0WriterV2 {
     binding: FriLayer0BindingV2,
     next_slot: u64,
 }
-
 impl FriLayer0WriterV2 {
     pub(super) fn create_v2(
         directory: &Path,
@@ -128,7 +117,6 @@ impl FriLayer0WriterV2 {
             next_slot: 0,
         })
     }
-
     pub(super) fn push_next_v2(
         &mut self,
         block: u64,
@@ -171,7 +159,6 @@ impl FriLayer0WriterV2 {
         self.writer = Some(writer);
         Ok(())
     }
-
     pub(super) fn seal_v2(
         mut self,
         replay_permit: AuthenticatedReplayPermitV2,
@@ -200,14 +187,12 @@ impl FriLayer0WriterV2 {
         })
     }
 }
-
 struct FriFrontierV2 {
     nodes: [[u8; 32]; FRI0_FRONTIER_NODES_V2],
     occupied: u32,
     leaves: usize,
     parameter_digest: [u8; 32],
 }
-
 pub(super) fn fri_leaf_hash_v2(
     parameter_digest: [u8; 32],
     values: &[u8],
@@ -225,7 +210,6 @@ pub(super) fn fri_leaf_hash_v2(
     hash.update(values);
     Ok(hash.finalize())
 }
-
 pub(super) fn fri_node_hash_v2(
     parameter_digest: [u8; 32],
     height: usize,
@@ -245,7 +229,6 @@ pub(super) fn fri_node_hash_v2(
     hash.update(&right);
     Ok(hash.finalize())
 }
-
 impl FriFrontierV2 {
     const fn new_v2(parameter_digest: [u8; 32]) -> Self {
         Self {
@@ -255,7 +238,6 @@ impl FriFrontierV2 {
             parameter_digest,
         }
     }
-
     fn push_v2(&mut self, mut digest: [u8; 32]) -> Result<(), ProverPrerequisiteErrorV2> {
         let mut level = 0;
         let mut prior = self.leaves;
@@ -274,7 +256,6 @@ impl FriFrontierV2 {
         self.leaves += 1;
         Ok(())
     }
-
     fn finish_v2(self) -> Result<[u8; 32], ProverPrerequisiteErrorV2> {
         let level = FRI0_LEAVES_V2.ilog2() as usize;
         if self.leaves != FRI0_LEAVES_V2
@@ -286,11 +267,9 @@ impl FriFrontierV2 {
         Ok(self.nodes[level])
     }
 }
-
 struct ZeroizingFriWindowV2 {
     bytes: Vec<u8>,
 }
-
 impl ZeroizingFriWindowV2 {
     fn new_v2() -> Result<Self, ProverPrerequisiteErrorV2> {
         let mut bytes = Vec::new();
@@ -303,7 +282,6 @@ impl ZeroizingFriWindowV2 {
         bytes.resize(FRI0_WINDOW_BYTES_V2, 0);
         Ok(Self { bytes })
     }
-
     fn absorb_v2(&mut self, column: u16, chunk: &[u8]) -> Result<(), ProverPrerequisiteErrorV2> {
         if chunk.len() != usize::from(REPLAY_BLOCK_VALUES_V2) * 16 {
             return Err(ProverPrerequisiteErrorV2::InvalidSourceShape);
@@ -315,14 +293,12 @@ impl ZeroizingFriWindowV2 {
         Ok(())
     }
 }
-
 impl Drop for ZeroizingFriWindowV2 {
     fn drop(&mut self) {
         self.bytes.fill(0);
         atomic::compiler_fence(atomic::Ordering::SeqCst);
     }
 }
-
 pub(super) struct FriLayer0SealedV2 {
     snapshot: Option<ConfidentialSpoolSnapshotV1>,
     descriptor: StorageLayoutDescriptorV2,
@@ -330,7 +306,6 @@ pub(super) struct FriLayer0SealedV2 {
     binding: FriLayer0BindingV2,
     replay_permit: Option<AuthenticatedReplayPermitV2>,
 }
-
 pub(super) struct FriLayer0RootedV2 {
     snapshot: ConfidentialSpoolSnapshotV1,
     descriptor: StorageLayoutDescriptorV2,
@@ -339,13 +314,11 @@ pub(super) struct FriLayer0RootedV2 {
     replay_permit: AuthenticatedReplayPermitV2,
     root: [u8; 32],
 }
-
 impl FriLayer0RootedV2 {
     pub(super) const fn root_digest_v2(&self) -> [u8; 32] {
         self.root
     }
 }
-
 impl FriLayer0SealedV2 {
     pub(super) fn root_v2(mut self) -> Result<FriLayer0RootedV2, ProverPrerequisiteErrorV2> {
         let mut snapshot = self
@@ -392,7 +365,6 @@ impl FriLayer0SealedV2 {
         })
     }
 }
-
 #[path = "storage_v2/canonical_proof_replay_v2.rs"]
 mod canonical_proof_replay_v2;
 pub(super) use canonical_proof_replay_v2::*;

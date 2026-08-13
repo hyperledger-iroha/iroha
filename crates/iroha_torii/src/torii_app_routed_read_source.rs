@@ -1,9 +1,6 @@
 // Source-bounded materialization for application-API routed reads.
-
 use std::marker::PhantomData;
-
 use norito::core::{DecodeFlagsGuard, DeriveSmallBuf, Encoder, NoritoDeserialize};
-
 /// Borrowed wire-equivalent of a derived struct in declaration order.
 ///
 /// App routes use this adapter when world state stores an identifier separately
@@ -14,7 +11,6 @@ struct ToriiBorrowedRoutedReadStruct<'a, T, const N: usize> {
     fields: [&'a dyn norito::core::NoritoSerialize; N],
     marker: PhantomData<T>,
 }
-
 impl<'a, T, const N: usize> ToriiBorrowedRoutedReadStruct<'a, T, N> {
     const fn new(fields: [&'a dyn norito::core::NoritoSerialize; N]) -> Self {
         Self {
@@ -23,7 +19,6 @@ impl<'a, T, const N: usize> ToriiBorrowedRoutedReadStruct<'a, T, N> {
         }
     }
 }
-
 impl<T, const N: usize> norito::core::NoritoSerialize for ToriiBorrowedRoutedReadStruct<'_, T, N>
 where
     T: norito::core::NoritoSerialize,
@@ -31,7 +26,6 @@ where
     fn schema_hash() -> [u8; 16] {
         T::schema_hash()
     }
-
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {
             return Err(norito::core::Error::UnsupportedFeature(
@@ -44,7 +38,6 @@ where
         }
         Ok(())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         if norito::core::use_packed_struct() {
             return None;
@@ -57,7 +50,6 @@ where
         })
     }
 }
-
 /// Materialize the first owned route result through the admitted E/D corridor.
 ///
 /// `source` may borrow arbitrarily nested world-state fields. The only
@@ -88,7 +80,6 @@ where
         canonical_bytes,
     })
 }
-
 fn torii_bounded_routed_read_payload_response<T>(
     payload: ToriiBoundedNoritoPayload<T>,
     format: ResponseFormat,
@@ -132,7 +123,6 @@ where
         }
     }
 }
-
 fn torii_bounded_routed_read_source_response<T, S>(
     source: &S,
     format: ResponseFormat,
@@ -146,7 +136,6 @@ where
     let payload = torii_bounded_routed_read_source_payload::<T, S>(source, &mut budget)?;
     torii_bounded_routed_read_payload_response(payload, format, budget)
 }
-
 fn torii_local_routed_read_budget(
     app: &SharedAppState,
 ) -> Result<ToriiRoutedReadMemoryBudget, Response> {
@@ -155,7 +144,6 @@ fn torii_local_routed_read_budget(
         app.torii_proxy_max_response_bytes,
     )
 }
-
 fn execute_torii_account_local_source_read(
     app: &SharedAppState,
     account_literal: &str,
@@ -199,7 +187,6 @@ fn execute_torii_account_local_source_read(
     torii_bounded_routed_read_source_response::<AccountReadResponse, _>(&source, format, budget)
         .unwrap_or_else(|response| response)
 }
-
 fn execute_torii_internal_account_local_source_read(
     app: &SharedAppState,
     account_literal: &str,
@@ -238,7 +225,6 @@ fn execute_torii_internal_account_local_source_read(
     )
     .unwrap_or_else(|response| response)
 }
-
 fn execute_torii_internal_account_asset_local_source_read(
     app: &SharedAppState,
     account_literal: &str,
@@ -282,7 +268,6 @@ fn execute_torii_internal_account_asset_local_source_read(
     torii_bounded_routed_read_source_response::<Asset, _>(&source, format, budget)
         .unwrap_or_else(|response| response)
 }
-
 /// Borrowed JSON projection for the single asset-definition route.
 ///
 /// The public shape historically passed the definition through a native JSON
@@ -295,18 +280,15 @@ struct ToriiAssetDefinitionJsonSource<'a> {
     alias_binding: Option<&'a iroha_core::state::AssetDefinitionAliasBindingRecord>,
     observation_time_ms: u64,
 }
-
 impl norito::json::FastJsonWrite for ToriiAssetDefinitionJsonSource<'_> {
     fn write_json(&self, output: &mut String) {
         norito::json::write_json_unbounded(self, output);
     }
-
     fn write_json_to(
         &self,
         output: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         use norito::json::JsonSerialize as _;
-
         output.begin_container()?;
         output.push_str("{\"alias\":")?;
         if let Some(binding) = self.alias_binding {
@@ -349,7 +331,6 @@ impl norito::json::FastJsonWrite for ToriiAssetDefinitionJsonSource<'_> {
         Ok(())
     }
 }
-
 fn write_torii_asset_alias_binding_json(
     binding: &iroha_core::state::AssetDefinitionAliasBindingRecord,
     observation_time_ms: u64,
@@ -357,14 +338,12 @@ fn write_torii_asset_alias_binding_json(
 ) -> Result<(), norito::json::BoundedJsonError> {
     use iroha_core::state::AssetDefinitionAliasLeaseStatus;
     use norito::json::JsonSerialize as _;
-
     let status = match binding.status_at(observation_time_ms) {
         AssetDefinitionAliasLeaseStatus::Permanent => "permanent",
         AssetDefinitionAliasLeaseStatus::LeasedActive => "leased_active",
         AssetDefinitionAliasLeaseStatus::LeasedGrace => "leased_grace",
         AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup => "expired_pending_cleanup",
     };
-
     output.begin_container()?;
     output.push_str("{\"alias\":")?;
     norito::json::write_json_string_to(binding.alias.as_ref(), output)?;
@@ -384,14 +363,12 @@ fn write_torii_asset_alias_binding_json(
     output.end_container();
     Ok(())
 }
-
 fn resolve_torii_asset_definition_source_selector(
     world: &impl iroha_core::state::WorldReadOnly,
     asset_literal: &str,
     observation_time_ms: u64,
 ) -> Result<iroha_data_model::asset::AssetDefinitionId, Error> {
     const INVALID_SELECTOR_MSG: &str = "invalid asset selector; expected a canonical Base58 asset id or an on-chain asset alias `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`";
-
     let selector = asset_literal.trim();
     if selector.is_empty() {
         return Err(Error::Query(
@@ -409,7 +386,6 @@ fn resolve_torii_asset_definition_source_selector(
                 ))
             });
     }
-
     let alias: iroha_data_model::asset::AssetDefinitionAlias = selector.parse().map_err(|_| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(
             INVALID_SELECTOR_MSG.to_owned(),
@@ -423,7 +399,6 @@ fn resolve_torii_asset_definition_source_selector(
             ))
         })
 }
-
 fn execute_torii_asset_definition_local_source_read(
     app: &SharedAppState,
     asset_literal: &str,
@@ -460,24 +435,20 @@ fn execute_torii_asset_definition_local_source_read(
         .json_response(&source)
         .unwrap_or_else(|response| response)
 }
-
 struct ToriiSpaceDirectoryBindingsJsonSource<'a> {
     uaid: &'a iroha_data_model::nexus::UniversalAccountId,
     bindings: Option<&'a iroha_core::nexus::space_directory::UaidDataspaceBindings>,
     catalog: &'a iroha_data_model::nexus::DataSpaceCatalog,
 }
-
 impl norito::json::FastJsonWrite for ToriiSpaceDirectoryBindingsJsonSource<'_> {
     fn write_json(&self, output: &mut String) {
         norito::json::write_json_unbounded(self, output);
     }
-
     fn write_json_to(
         &self,
         output: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         use norito::json::JsonSerialize as _;
-
         output.begin_container()?;
         output.push_str("{\"dataspaces\":[")?;
         if let Some(bindings) = self.bindings {
@@ -513,12 +484,10 @@ impl norito::json::FastJsonWrite for ToriiSpaceDirectoryBindingsJsonSource<'_> {
         Ok(())
     }
 }
-
 fn parse_torii_space_directory_uaid_literal(
     raw: &str,
 ) -> Result<iroha_data_model::nexus::UniversalAccountId, Error> {
     use core::str::FromStr as _;
-
     let trimmed = raw.trim();
     let hex_portion = match trimmed.get(..5) {
         Some(prefix) if prefix.eq_ignore_ascii_case("uaid:") => trimmed[5..].trim(),
@@ -535,7 +504,6 @@ fn parse_torii_space_directory_uaid_literal(
         ))
     })
 }
-
 fn execute_torii_space_directory_bindings_local_source_read(
     app: &SharedAppState,
     uaid_literal: &str,
@@ -559,7 +527,6 @@ fn execute_torii_space_directory_bindings_local_source_read(
         .json_response(&source)
         .unwrap_or_else(|response| response)
 }
-
 struct ToriiContractAliasJsonSource<'a> {
     contract_alias: &'a iroha_data_model::smart_contract::ContractAlias,
     contract_address: &'a iroha_data_model::smart_contract::ContractAddress,
@@ -568,18 +535,15 @@ struct ToriiContractAliasJsonSource<'a> {
     binding: &'a iroha_core::state::ContractAliasBindingRecord,
     observation_time_ms: u64,
 }
-
 impl norito::json::FastJsonWrite for ToriiContractAliasJsonSource<'_> {
     fn write_json(&self, output: &mut String) {
         norito::json::write_json_unbounded(self, output);
     }
-
     fn write_json_to(
         &self,
         output: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         use norito::json::JsonSerialize as _;
-
         output.begin_container()?;
         output.push_str("{\"contract_alias\":")?;
         self.contract_alias.json_serialize_to(output)?;
@@ -596,7 +560,6 @@ impl norito::json::FastJsonWrite for ToriiContractAliasJsonSource<'_> {
         Ok(())
     }
 }
-
 fn write_torii_contract_alias_binding_json(
     binding: &iroha_core::state::ContractAliasBindingRecord,
     observation_time_ms: u64,
@@ -604,14 +567,12 @@ fn write_torii_contract_alias_binding_json(
 ) -> Result<(), norito::json::BoundedJsonError> {
     use iroha_core::state::ContractAliasLeaseStatus;
     use norito::json::JsonSerialize as _;
-
     let status = match binding.status_at(observation_time_ms) {
         ContractAliasLeaseStatus::Permanent => "permanent",
         ContractAliasLeaseStatus::LeasedActive => "leased_active",
         ContractAliasLeaseStatus::LeasedGrace => "leased_grace",
         ContractAliasLeaseStatus::ExpiredPendingCleanup => "expired_pending_cleanup",
     };
-
     output.begin_container()?;
     output.push_str("{\"alias\":")?;
     binding.alias.json_serialize_to(output)?;
@@ -631,13 +592,11 @@ fn write_torii_contract_alias_binding_json(
     output.end_container();
     Ok(())
 }
-
 fn execute_torii_contract_alias_local_source_read(
     app: &SharedAppState,
     alias_input: &str,
 ) -> Response {
     use core::str::FromStr as _;
-
     if alias_input.is_empty() {
         return error_response_with_format(
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -753,25 +712,21 @@ fn execute_torii_contract_alias_local_source_read(
         .json_response(&source)
         .unwrap_or_else(|response| response)
 }
-
 struct ToriiExplorerAssetDefinitionJsonSource<'a> {
     definition: &'a iroha_data_model::asset::definition::AssetDefinition,
     assets: u32,
     locked_quantity: Option<&'a iroha_primitives::numeric::Quantity>,
     circulating_quantity: Option<&'a iroha_primitives::numeric::Quantity>,
 }
-
 impl norito::json::FastJsonWrite for ToriiExplorerAssetDefinitionJsonSource<'_> {
     fn write_json(&self, output: &mut String) {
         norito::json::write_json_unbounded(self, output);
     }
-
     fn write_json_to(
         &self,
         output: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         use norito::json::JsonSerialize as _;
-
         output.begin_container()?;
         output.push_str("{\"id\":")?;
         self.definition.id.json_serialize_to(output)?;
@@ -798,7 +753,6 @@ impl norito::json::FastJsonWrite for ToriiExplorerAssetDefinitionJsonSource<'_> 
         Ok(())
     }
 }
-
 fn execute_torii_explorer_asset_definition_local_source_read(
     app: &SharedAppState,
     definition_id: &iroha_data_model::asset::AssetDefinitionId,
@@ -858,7 +812,6 @@ fn execute_torii_explorer_asset_definition_local_source_read(
         .json_response(&source)
         .unwrap_or_else(|response| response)
 }
-
 fn torii_bounded_local_proof_record_payload(
     app: &SharedAppState,
     proof_id: &iroha_data_model::proof::ProofId,
@@ -870,7 +823,6 @@ fn torii_bounded_local_proof_record_payload(
     };
     torii_bounded_routed_read_source_payload::<ProofRecord, _>(record, budget).map(Some)
 }
-
 fn execute_torii_proof_record_local_source_read(
     app: &SharedAppState,
     proof_id: &iroha_data_model::proof::ProofId,
@@ -894,6 +846,5 @@ fn execute_torii_proof_record_local_source_read(
     torii_bounded_routed_read_payload_response(payload, format, budget)
         .unwrap_or_else(|response| response)
 }
-
 #[cfg(test)]
 include!("tests/lib_routed_reads/routed_read_source_bounds.rs");

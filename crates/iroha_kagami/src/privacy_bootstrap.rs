@@ -1,12 +1,10 @@
 //! Fail-closed Exact12 governance activation templates for the Taira testnet.
-
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{Read as _, Write},
     path::{Component, Path, PathBuf},
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
@@ -26,25 +24,20 @@ use iroha_data_model::{
 };
 use iroha_genesis::genesis_instructions_json;
 use norito::json::Value as JsonValue;
-
 use crate::{Outcome, RunArgs};
-
 mod release;
-
 const REPORT_SCHEMA_V1: &str = "iroha.taira.privacy-governance-templates.v1";
 const NOTICE_INTERVAL_BLOCKS_V1: u64 = 300;
 const OBSERVATION_INTERVAL_BLOCKS_V1: u64 = 300;
 const WAVE_PROPOSED_AT_HEIGHTS_V1: [u64; 4] = [1, 602, 1_203, 1_804];
 const MAX_INSTRUCTIONS_JSON_BYTES_V1: u64 = 4 * 1024 * 1024;
 const MAX_REPORT_JSON_BYTES_V1: u64 = 8 * 1024 * 1024;
-
 /// Emit or validate the exact first-release Taira privacy bootstrap.
 #[derive(Debug, ClapArgs)]
 pub struct Args {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Emit all twelve compiled governance activation templates atomically.
@@ -57,7 +50,6 @@ enum Command {
     #[command(name = "render-taira-release-v1")]
     RenderTairaReleaseV1(release::RenderTairaReleaseV1Args),
 }
-
 #[derive(Debug, ClapArgs)]
 struct EmitTairaV1Args {
     /// New file receiving the canonical governance-template instruction array.
@@ -67,7 +59,6 @@ struct EmitTairaV1Args {
     #[arg(long)]
     report_output: PathBuf,
 }
-
 #[derive(Debug, ClapArgs)]
 struct ValidateTairaV1Args {
     /// Canonical genesis instruction JSON array emitted by this command group.
@@ -77,7 +68,6 @@ struct ValidateTairaV1Args {
     #[arg(long)]
     report: PathBuf,
 }
-
 #[derive(Clone, Debug)]
 struct TairaPrivacyBootstrapArtifactsV1 {
     instructions: Vec<InstructionBox>,
@@ -85,7 +75,6 @@ struct TairaPrivacyBootstrapArtifactsV1 {
     instructions_json: Vec<u8>,
     report_json: Vec<u8>,
 }
-
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
@@ -136,7 +125,6 @@ impl<T: Write> RunArgs<T> for Args {
         Ok(())
     }
 }
-
 const fn rollout_wave_index_v1(protocol: PrivacyProtocolIdV1) -> usize {
     match protocol {
         PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
@@ -152,7 +140,6 @@ const fn rollout_wave_index_v1(protocol: PrivacyProtocolIdV1) -> usize {
         PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 | PrivacyProtocolIdV1::IrohaZkAmsV1 => 3,
     }
 }
-
 fn build_taira_privacy_bootstrap_v1() -> color_eyre::Result<TairaPrivacyBootstrapArtifactsV1> {
     let profiles = PrivacyProtocolIdV1::ALL
         .into_iter()
@@ -175,7 +162,6 @@ fn build_taira_privacy_bootstrap_v1() -> color_eyre::Result<TairaPrivacyBootstra
     }
     Ok(artifacts)
 }
-
 fn build_artifacts_from_profiles_v1(
     profiles: &[CompiledPrivacyProfileV1],
 ) -> color_eyre::Result<TairaPrivacyBootstrapArtifactsV1> {
@@ -186,7 +172,6 @@ fn build_artifacts_from_profiles_v1(
             profiles.len()
         );
     }
-
     let mut seen = BTreeSet::new();
     let mut instructions = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
     let mut catalog_rows = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
@@ -230,7 +215,6 @@ fn build_artifacts_from_profiles_v1(
             compiled_profile: PrivacyCompiledProfileResultV1::Available(profile.into()),
         });
     }
-
     let catalog = PrivacyCompiledProfileCatalogV1 {
         version: PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1,
         protocols: catalog_rows,
@@ -240,7 +224,6 @@ fn build_artifacts_from_profiles_v1(
     })?;
     render_artifacts_v1(instructions, catalog)
 }
-
 fn render_artifacts_v1(
     instructions: Vec<InstructionBox>,
     catalog: PrivacyCompiledProfileCatalogV1,
@@ -249,7 +232,6 @@ fn render_artifacts_v1(
     genesis_instructions_json::serialize(&instructions, &mut instructions_json);
     instructions_json.push('\n');
     let instructions_json = instructions_json.into_bytes();
-
     let mut labels = Vec::with_capacity(instructions.len());
     let mut instruction_norito_base64 = Vec::with_capacity(instructions.len());
     let mut instruction_norito_sha256 = Vec::with_capacity(instructions.len());
@@ -291,7 +273,6 @@ fn render_artifacts_v1(
     let mut report_json = norito::json::to_json(&report)
         .wrap_err("failed to encode canonical Taira privacy bootstrap report")?;
     report_json.push('\n');
-
     Ok(TairaPrivacyBootstrapArtifactsV1 {
         instructions,
         catalog,
@@ -299,7 +280,6 @@ fn render_artifacts_v1(
         report_json: report_json.into_bytes(),
     })
 }
-
 fn validate_taira_privacy_bootstrap_v1(
     instructions_json: &[u8],
     report_json: &[u8],
@@ -313,7 +293,6 @@ fn validate_taira_privacy_bootstrap_v1(
     let expected = build_taira_privacy_bootstrap_v1()?;
     validate_artifacts_against_v1(instructions_json, report_json, &expected)
 }
-
 fn validate_artifacts_against_v1(
     instructions_json: &[u8],
     report_json: &[u8],
@@ -325,14 +304,12 @@ fn validate_artifacts_against_v1(
     let instructions = genesis_instructions_json::from_value(&instructions_value)
         .wrap_err("privacy bootstrap instruction JSON cannot be decoded canonically")?;
     validate_instruction_semantics_v1(&instructions, &expected.instructions)?;
-
     let mut canonical_instructions = String::new();
     genesis_instructions_json::serialize(&instructions, &mut canonical_instructions);
     canonical_instructions.push('\n');
     if canonical_instructions.as_bytes() != instructions_json {
         bail!("privacy bootstrap instruction JSON is not in canonical emitted form");
     }
-
     let report_value: JsonValue = norito::json::from_slice(report_json)
         .wrap_err("privacy bootstrap report is not valid Norito JSON")?;
     validate_report_inventory_v1(&report_value, &instructions)?;
@@ -344,7 +321,6 @@ fn validate_artifacts_against_v1(
     }
     Ok(())
 }
-
 fn validate_instruction_semantics_v1(
     instructions: &[InstructionBox],
     expected: &[InstructionBox],
@@ -359,7 +335,6 @@ fn validate_instruction_semantics_v1(
     if expected.len() != PrivacyProtocolIdV1::COUNT {
         bail!("internal exact-12 privacy bootstrap expectation is incomplete");
     }
-
     let mut seen = BTreeSet::new();
     for (index, ((instruction, expected_instruction), expected_protocol)) in instructions
         .iter()
@@ -397,7 +372,6 @@ fn validate_instruction_semantics_v1(
     }
     Ok(())
 }
-
 fn privacy_activation_at_v1(
     instruction: &InstructionBox,
     index: usize,
@@ -413,7 +387,6 @@ fn privacy_activation_at_v1(
             )
         })
 }
-
 fn validate_report_inventory_v1(
     report: &JsonValue,
     instructions: &[InstructionBox],
@@ -428,7 +401,6 @@ fn validate_report_inventory_v1(
     if schema != REPORT_SCHEMA_V1 {
         bail!("privacy bootstrap report schema is not `{REPORT_SCHEMA_V1}`");
     }
-
     let registration = fields
         .get("governance_activation_templates")
         .and_then(JsonValue::as_object)
@@ -450,7 +422,6 @@ fn validate_report_inventory_v1(
             );
         }
     }
-
     for (index, (((label, encoded), claimed_hash), instruction)) in labels
         .iter()
         .zip(&base64_values)
@@ -489,7 +460,6 @@ fn validate_report_inventory_v1(
     }
     Ok(())
 }
-
 fn report_string_array_v1<'a>(
     fields: &'a norito::json::Map,
     field: &str,
@@ -507,7 +477,6 @@ fn report_string_array_v1<'a>(
         })
         .collect()
 }
-
 fn read_bounded(path: &Path, max_bytes: u64, description: &str) -> color_eyre::Result<Vec<u8>> {
     let before =
         fs::symlink_metadata(path).wrap_err_with(|| format!("failed to inspect {description}"))?;
@@ -526,7 +495,6 @@ fn read_bounded(path: &Path, max_bytes: u64, description: &str) -> color_eyre::R
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
     }
     let file = options
@@ -554,11 +522,9 @@ fn read_bounded(path: &Path, max_bytes: u64, description: &str) -> color_eyre::R
     }
     Ok(bytes)
 }
-
 #[cfg(unix)]
 fn same_input_metadata_v1(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.is_file()
         && right.is_file()
         && left.dev() == right.dev()
@@ -574,7 +540,6 @@ fn same_input_metadata_v1(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(not(unix))]
 fn same_input_metadata_v1(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.is_file()
@@ -582,7 +547,6 @@ fn same_input_metadata_v1(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.len() == right.len()
         && left.modified().ok() == right.modified().ok()
 }
-
 fn write_new_artifact_pair(
     first_path: &Path,
     first_bytes: &[u8],
@@ -625,21 +589,18 @@ fn write_new_artifact_pair(
     }
     Ok(())
 }
-
 fn create_new_file(path: &Path, description: &str) -> color_eyre::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
     }
     options
         .open(path)
         .wrap_err_with(|| format!("failed to create new {description} at `{}`", path.display()))
 }
-
 fn resolved_new_output_path_v1(path: &Path) -> color_eyre::Result<PathBuf> {
     let Some(Component::Normal(file_name)) = path.components().next_back() else {
         bail!("new artifact output must end in one normal file name");
@@ -659,7 +620,6 @@ fn resolved_new_output_path_v1(path: &Path) -> color_eyre::Result<PathBuf> {
     }
     Ok(resolved_parent.join(file_name))
 }
-
 fn remove_created_file_if_unchanged_v1(path: &Path, file: &File) {
     let Ok(named) = fs::symlink_metadata(path) else {
         return;
@@ -671,20 +631,16 @@ fn remove_created_file_if_unchanged_v1(path: &Path, file: &File) {
         let _ = fs::remove_file(path);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
-
     use iroha_core::privacy_profiles::zk_x509_release_candidate_profile_material_v1;
     use iroha_data_model::{
         Level,
         isi::Log,
         privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolLimitsTighteningV1},
     };
-
     use super::*;
-
     fn fixture_artifacts() -> TairaPrivacyBootstrapArtifactsV1 {
         static ARTIFACTS: OnceLock<TairaPrivacyBootstrapArtifactsV1> = OnceLock::new();
         ARTIFACTS
@@ -706,14 +662,12 @@ mod tests {
             })
             .clone()
     }
-
     fn rerender_with_instructions(
         expected: &TairaPrivacyBootstrapArtifactsV1,
         instructions: Vec<InstructionBox>,
     ) -> TairaPrivacyBootstrapArtifactsV1 {
         render_artifacts_v1(instructions, expected.catalog.clone()).expect("render mutation")
     }
-
     fn replace_activation(
         instructions: &mut [InstructionBox],
         index: usize,
@@ -725,7 +679,6 @@ mod tests {
         instructions[index] =
             InstructionBox::from(RegisterPrivacyProtocolActivationV1::new(activation));
     }
-
     #[test]
     fn exact_twelve_fixture_is_deterministic_and_strictly_valid() {
         iroha_genesis::init_instruction_registry();
@@ -748,7 +701,6 @@ mod tests {
         validate_artifacts_against_v1(&first.instructions_json, &first.report_json, &first)
             .expect("validate exact-12 fixture");
     }
-
     #[test]
     fn source_failure_prevents_partial_eleven_profile_artifact() {
         let fixture = fixture_artifacts();
@@ -778,11 +730,9 @@ mod tests {
         let error = build_artifacts_from_profiles_v1(&profiles).expect_err("reject partial set");
         assert!(error.to_string().contains("exactly 12 compiled profiles"));
     }
-
     #[test]
     fn missing_duplicate_reordered_and_extra_instructions_are_rejected() {
         let expected = fixture_artifacts();
-
         let mut missing = expected.instructions.clone();
         missing.pop();
         assert!(
@@ -791,7 +741,6 @@ mod tests {
                 .to_string()
                 .contains("exactly 12")
         );
-
         let mut duplicate = expected.instructions.clone();
         duplicate[11] = duplicate[10].clone();
         assert!(
@@ -800,7 +749,6 @@ mod tests {
                 .to_string()
                 .contains("duplicate protocol")
         );
-
         let mut reordered = expected.instructions.clone();
         reordered.swap(0, 1);
         assert!(
@@ -809,7 +757,6 @@ mod tests {
                 .to_string()
                 .contains("order mismatch")
         );
-
         let mut extra = expected.instructions.clone();
         extra.push(InstructionBox::from(Log::new(
             Level::INFO,
@@ -821,7 +768,6 @@ mod tests {
                 .to_string()
                 .contains("exactly 12")
         );
-
         let mut substituted = expected.instructions.clone();
         substituted[11] =
             InstructionBox::from(Log::new(Level::INFO, "not a privacy activation".to_owned()));
@@ -832,7 +778,6 @@ mod tests {
                 .contains(RegisterPrivacyProtocolActivationV1::WIRE_ID)
         );
     }
-
     #[test]
     fn lifecycle_and_compiled_digest_substitutions_are_rejected() {
         let expected = fixture_artifacts();
@@ -890,7 +835,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn retired_sis_aliases_and_trusted_setup_objects_are_rejected() {
         let expected = fixture_artifacts();
@@ -923,7 +867,6 @@ mod tests {
                     || error.to_string().contains("valid Norito JSON")
             );
         }
-
         let mut value: JsonValue =
             norito::json::from_slice(&expected.instructions_json).expect("parse instructions");
         value
@@ -942,7 +885,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn report_hash_base64_label_and_catalog_substitutions_are_rejected() {
         let expected = fixture_artifacts();
@@ -1007,7 +949,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn malformed_noncanonical_and_oversized_json_is_rejected() {
         let expected = fixture_artifacts();
@@ -1030,7 +971,6 @@ mod tests {
                 .contains("fixed byte limit")
         );
     }
-
     #[test]
     fn paired_writer_never_overwrites_and_cleans_first_file_on_second_open_failure() {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -1043,19 +983,16 @@ mod tests {
             "partially created first artifact must be removed"
         );
         assert_eq!(fs::read(&second).expect("read occupied file"), b"occupied");
-
         fs::remove_file(&second).expect("remove occupied path");
         write_new_artifact_pair(&first, b"first", &second, b"second").expect("write fresh pair");
         assert!(write_new_artifact_pair(&first, b"x", &second, b"y").is_err());
         assert_eq!(fs::read(&first).expect("read first"), b"first");
         assert_eq!(fs::read(&second).expect("read second"), b"second");
     }
-
     #[cfg(unix)]
     #[test]
     fn bounded_reader_rejects_symlinks_hardlinks_and_oversized_inputs() {
         use std::os::unix::fs::symlink;
-
         let directory = tempfile::tempdir().expect("tempdir");
         let source = directory.path().join("source.json");
         let symlink_path = directory.path().join("symlink.json");
@@ -1068,7 +1005,6 @@ mod tests {
                 .to_string()
                 .contains("non-symlink regular file")
         );
-
         fs::hard_link(&source, &hardlink_path).expect("create hardlink");
         assert!(
             read_bounded(&source, 16, "hardlinked test input")
@@ -1088,7 +1024,6 @@ mod tests {
             b"{}\n"
         );
     }
-
     #[test]
     fn cleanup_never_removes_a_replacement_path() {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -1105,12 +1040,10 @@ mod tests {
         );
         assert!(moved.exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn paired_writer_rejects_symlinked_parent_aliases() {
         use std::os::unix::fs::symlink;
-
         let directory = tempfile::tempdir().expect("tempdir");
         let real = directory.path().join("real");
         let alias = directory.path().join("alias");

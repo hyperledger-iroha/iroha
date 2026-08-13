@@ -10,7 +10,6 @@ mod runtime_governance_client_auth;
 pub use public_musubi::{
     PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
 };
-
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::{self, Write as _},
@@ -22,7 +21,6 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use base64::Engine as _;
 use bytes::Bytes;
 use derive_more::Display;
@@ -112,7 +110,6 @@ use sorafs_orchestrator::{
 };
 use thiserror::Error;
 use url::Url;
-
 use self::{blocks_api::AsyncBlockStream, events_api::AsyncEventStream};
 pub use crate::query::QueryError;
 use crate::{
@@ -857,7 +854,6 @@ impl AccountOnboardingPlanBodyV1 {
     #[must_use]
     pub fn canonical_hash(&self) -> Hash {
         use norito::codec::Encode as _;
-
         let encoded = self.encode();
         Hash::new_from_chunks(&[
             ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1,
@@ -919,7 +915,6 @@ pub mod account_onboarding_test_fixture {
         isi::{InstructionBox, alias_setup::EnsureAlias, framed_instruction_payload},
         nexus::DataSpaceId,
     };
-
     use super::{
         AccountOnboardingPlanBodyV1, AccountOnboardingPlanReceiptV1,
         AccountOnboardingPlanRequestV1, decode_and_verify_account_onboarding_plan_for_request,
@@ -2844,7 +2839,6 @@ fn sccp_route_governance_proposal_id(
     action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
 ) -> Result<[u8; 32]> {
     use blake2::{Blake2b512, Digest as _};
-
     let anchor = iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
         network_id,
         action: action.clone(),
@@ -3430,7 +3424,6 @@ fn validate_sccp_bridge_transaction_payload(
     expected_creation_time_ms: u64,
 ) -> Result<()> {
     use iroha_data_model::{bridge::BridgeProofPayload, transaction::Executable};
-
     if payload.domain
         != iroha_data_model::transaction::TransactionDomain::Network(*expected_network_id)
     {
@@ -4148,7 +4141,6 @@ fn onboarding_disposition_transition_allowed(
     live: AliasPlanDispositionV1,
 ) -> bool {
     use AliasPlanDispositionV1::{Create, NoOp, Repair};
-
     matches!(
         (planned, live),
         (Create, Create | Repair | NoOp) | (Repair, Repair | NoOp) | (NoOp, NoOp)
@@ -4444,7 +4436,6 @@ fn expected_zk_vk_status(
     object: &norito::json::Map,
 ) -> Result<iroha_data_model::confidential::ConfidentialStatus> {
     use iroha_data_model::confidential::ConfidentialStatus;
-
     match object.get("status").and_then(norito::json::Value::as_str) {
         None | Some("Active") => Ok(ConfidentialStatus::Active),
         Some("Proposed") => Ok(ConfidentialStatus::Proposed),
@@ -4462,7 +4453,6 @@ fn expected_zk_vk_record_from_request(
     request: &norito::json::Value,
 ) -> Result<iroha_data_model::proof::VerifyingKeyRecord> {
     use iroha_data_model::proof::{VerifyingKeyBox, VerifyingKeyRecord};
-
     let object = require_json_object(request, "verifying-key draft request")?;
     let backend =
         require_json_backend_field(object, "backend", "verifying-key draft request.backend")?;
@@ -6980,7 +6970,6 @@ fn commit_qc_json_payload(hash_hex: &str, qc_opt: Option<Qc>) -> norito::json::V
 }
 fn sumeragi_qc_json_payload(snapshot: SumeragiQcSnapshot) -> norito::json::Value {
     use norito::json::{Map, Value};
-
     fn entry_to_value(entry: &SumeragiQcEntry) -> Value {
         let mut map = Map::new();
         map.insert("height".into(), Value::from(entry.height));
@@ -7942,12 +7931,9 @@ fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) ->
 #[cfg(test)]
 mod offline_client_tests {
     use std::sync::{Arc, Mutex};
-
     use norito::derive::NoritoSerialize;
-
     use super::{evidence_http_tests::*, *};
     use crate::{http::Response as HttpResponse, http_default::RequestSnapshot};
-
     #[derive(NoritoSerialize)]
     struct CommandFixture {
         nonce: u64,
@@ -8225,9 +8211,7 @@ mod status_tests {
         SumeragiConsensusStatus,
     };
     use norito::json::Value as JsonValue;
-
     use super::*;
-
     #[test]
     fn decode_status_prefers_norito_bare() {
         let s = Status {
@@ -8428,7 +8412,6 @@ mod status_tests {
 #[cfg(test)]
 mod evidence_filter_tests {
     use super::*;
-
     #[test]
     fn evidence_filter_apply_sets_expected_params() {
         let filter = SumeragiEvidenceListFilter {
@@ -8507,9 +8490,7 @@ mod evidence_filter_tests {
 mod evidence_response_tests {
     use http::Response as HttpResponse;
     use norito::json::Value;
-
     use super::*;
-
     #[test]
     fn parse_json_ok_response_returns_decoded_value() {
         let mut payload = norito::json::Map::new();
@@ -8653,7 +8634,6 @@ mod evidence_http_tests {
         sync::{Arc, Mutex, OnceLock},
         time::Duration,
     };
-
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
     use iroha_data_model::block::consensus::{
@@ -8668,7 +8648,6 @@ mod evidence_http_tests {
             AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
     };
-
     use super::{default_alias_policy, *};
     use crate::{
         http::{Method as HttpMethod, Response as HttpResponse},
@@ -8750,6 +8729,22 @@ mod evidence_http_tests {
             Ok(response.clone())
         }
     }
+    pub(super) fn capability_gated_responder(
+        store: &SnapshotStore,
+        success_status: StatusCode,
+    ) -> impl Fn(RequestSnapshot) -> Result<HttpResponse<Vec<u8>>> + Send + Sync + 'static {
+        let store = Arc::clone(store);
+        let capabilities = compatible_capabilities_body();
+        move |snapshot| {
+            let is_capabilities = snapshot.url.path() == "/v1/node/capabilities";
+            store.lock().expect("snapshot lock").push(snapshot);
+            Ok(if is_capabilities {
+                json_response(StatusCode::OK, &capabilities)
+            } else {
+                empty_response(success_status)
+            })
+        }
+    }
     pub(super) fn assert_single_accept_header(snapshot: &RequestSnapshot, expected: &str) {
         let accept_headers: Vec<_> = snapshot
             .headers
@@ -8764,6 +8759,29 @@ mod evidence_http_tests {
             snapshot.headers
         );
         assert_eq!(accept_headers[0].1, expected);
+    }
+    pub(super) fn assert_signed_headers(snapshot: &RequestSnapshot) -> HashMap<String, String> {
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        for name in [
+            HEADER_ACCOUNT,
+            HEADER_SIGNATURE,
+            HEADER_TIMESTAMP_MS,
+            HEADER_NONCE,
+        ] {
+            assert!(headers.contains_key(name));
+        }
+        headers
+    }
+    pub(super) fn assert_signed_json_headers(snapshot: &RequestSnapshot) {
+        let headers = assert_signed_headers(snapshot);
+        assert_eq!(
+            headers.get("content-type").map(String::as_str),
+            Some(APPLICATION_JSON)
+        );
+        assert_eq!(
+            headers.get("accept").map(String::as_str),
+            Some(APPLICATION_JSON)
+        );
     }
     #[test]
     fn post_account_resolve_builds_request() {
@@ -8967,7 +8985,6 @@ mod evidence_http_tests {
     fn post_multisig_propose_encodes_instruction_boxes_as_native_norito_json() {
         use base64::Engine as _;
         use iroha_data_model::prelude as dm;
-
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let multisig_account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -9041,7 +9058,6 @@ mod evidence_http_tests {
     #[test]
     fn post_multisig_propose_propagates_server_rejection() {
         use iroha_data_model::prelude as dm;
-
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let multisig_account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -9077,7 +9093,6 @@ mod evidence_http_tests {
     #[test]
     fn post_multisig_propose_rejects_malformed_success_response() {
         use iroha_data_model::prelude as dm;
-
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let multisig_account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -9110,7 +9125,6 @@ mod evidence_http_tests {
     #[test]
     fn post_multisig_propose_rejects_malformed_response_metadata() {
         use iroha_data_model::prelude as dm;
-
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let multisig_account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -9298,7 +9312,6 @@ mod evidence_http_tests {
         overrides: &[(&str, norito::json::Value)],
     ) -> norito::json::Value {
         use base64::Engine as _;
-
         let backend = "halo2/ipa";
         let vk_bytes = vec![1, 2, 3];
         let mut object = norito::json::Map::new();
@@ -9448,7 +9461,6 @@ mod evidence_http_tests {
     #[test]
     fn post_zk_vk_register_rejects_response_not_bound_to_payload() {
         use base64::Engine as _;
-
         let client = client_with_base_url(base_url());
         let authority = client.account.clone();
         let request = vk_submission_json(&authority, &[]);
@@ -10613,7 +10625,6 @@ mod evidence_http_tests {
         use iroha_data_model::query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
         };
-
         use crate::{
             crypto::{MerkleProof, PrivateKey, PublicKey},
             data_model::{
@@ -10817,7 +10828,6 @@ mod evidence_http_tests {
         use iroha_data_model::query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
         };
-
         use crate::{
             crypto::{MerkleProof, PrivateKey, PublicKey},
             data_model::{
@@ -11137,7 +11147,6 @@ mod evidence_http_tests {
     #[test]
     fn get_transaction_status_response_requests_json_and_decodes_typed_payload() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
-
         let hash =
             HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                 Hash::prehashed([0x44; Hash::LENGTH]),
@@ -11185,7 +11194,6 @@ mod evidence_http_tests {
     #[test]
     fn get_transaction_status_response_local_sets_local_scope() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
-
         let hash =
             HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                 Hash::prehashed([0x46; Hash::LENGTH]),
@@ -11230,7 +11238,6 @@ mod evidence_http_tests {
     #[test]
     fn get_transaction_status_response_auto_sets_global_scope() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
-
         let hash =
             HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                 Hash::prehashed([0x45; Hash::LENGTH]),
@@ -11275,7 +11282,6 @@ mod evidence_http_tests {
     #[test]
     fn get_account_read_requests_json_and_decodes_typed_payload() {
         use iroha_torii_shared::AccountReadResponse;
-
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let payload = AccountReadResponse {
             account_id: account_id.clone(),
@@ -11391,7 +11397,6 @@ mod evidence_http_tests {
             QueryResponse, SignedQuery,
         };
         use iroha_version::codec::DecodeVersioned;
-
         use crate::{
             crypto::{MerkleProof, PrivateKey, PublicKey},
             data_model::{
@@ -11479,7 +11484,6 @@ mod evidence_http_tests {
     #[test]
     fn transaction_confirmation_status_stops_on_connection_refused_pipeline_lookup() {
         use std::io::{Error, ErrorKind};
-
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
@@ -11526,7 +11530,6 @@ mod evidence_http_tests {
     #[test]
     fn transaction_confirmation_status_stops_on_connection_refused_committed_fallback() {
         use std::io::{Error, ErrorKind};
-
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
@@ -12591,10 +12594,6 @@ impl Client {
             .wrap_err("sign client transaction from instruction items")
     }
     /// Encode and hash a signed transaction once for later submission.
-    #[expect(
-        clippy::unused_self,
-        reason = "this remains an instance method in the stable client workflow API"
-    )]
     pub fn prepare_transaction_payload(
         transaction: &SignedTransaction,
     ) -> PreparedTransactionPayload {
@@ -16965,6 +16964,7 @@ impl Client {
         )
     }
     /// Fetch the active chain-authoritative reserve policy at an optional finalized anchor.
+    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_policy(
@@ -16974,13 +16974,13 @@ impl Client {
         reserve::validate_anchor_request(&finalized, "policy")?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/policy");
         finalized.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| reserve::validate_policy_response(response, &finalized))
     }
     /// Fetch a finalized page of chain-authoritative provider reserve accounts.
+    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_providers(
@@ -16990,13 +16990,13 @@ impl Client {
         reserve::validate_providers_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/providers");
         filter.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| reserve::validate_providers_response(response, &filter))
     }
     /// Fetch one chain-authoritative provider reserve account.
+    ///
     /// # Errors
     /// Returns an error if the provider ID is malformed, request construction, signing, or the
     /// HTTP call fails.
@@ -17010,15 +17010,15 @@ impl Client {
         let path = format!("v1/sorafs/reserve/providers/{provider_id_hex}");
         let mut url = join_torii_url(&self.torii_url, &path);
         finalized.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| {
             reserve::validate_provider_response(response, &provider_id_hex, &finalized)
         })
     }
     /// Fetch a finalized page of chain-authoritative reserve movements.
+    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_movements(
@@ -17028,13 +17028,13 @@ impl Client {
         reserve::validate_movements_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/movements");
         filter.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| reserve::validate_movements_response(response, &filter))
     }
     /// Fetch one chain-authoritative reserve movement.
+    ///
     /// # Errors
     /// Returns an error if the movement ID is malformed, request construction, signing, or the
     /// HTTP call fails.
@@ -17048,15 +17048,15 @@ impl Client {
         let path = format!("v1/sorafs/reserve/movements/{movement_id_hex}");
         let mut url = join_torii_url(&self.torii_url, &path);
         finalized.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| {
             reserve::validate_movement_response(response, &movement_id_hex, &finalized)
         })
     }
     /// Fetch a finalized page of chain-authoritative reserve appeals.
+    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_appeals(
@@ -17066,13 +17066,13 @@ impl Client {
         reserve::validate_appeals_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/appeals");
         filter.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| reserve::validate_appeals_response(response, &filter))
     }
     /// Fetch one chain-authoritative reserve appeal.
+    ///
     /// # Errors
     /// Returns an error if the appeal ID is malformed, request construction, signing, or the
     /// HTTP call fails.
@@ -17086,15 +17086,15 @@ impl Client {
         let path = format!("v1/sorafs/reserve/appeals/{appeal_id_hex}");
         let mut url = join_torii_url(&self.torii_url, &path);
         finalized.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| {
             reserve::validate_appeal_response(response, &appeal_id_hex, &finalized)
         })
     }
     /// Fetch a finalized page of committed reserve-ledger events.
+    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_events(
@@ -17104,10 +17104,9 @@ impl Client {
         reserve::validate_events_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/events");
         filter.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_builder(reserve::finalized_json_request(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
+        ))
         .and_then(|response| reserve::validate_events_response(response, &filter))
     }
     /// Convenience: GET `/v1/sorafs/appeals/pricing/config`.
@@ -20978,10 +20977,8 @@ mod subscription_http_tests {
 #[cfg(test)]
 mod tx_hash_tests {
     use std::time::Duration;
-
     use eyre::eyre;
-
-    use super::hashes_match;
+    use super::{hashes_match, test_network_id};
     use crate::{
         crypto::{Hash, HashOf},
         data_model::transaction::{SignedTransaction, TransactionEntrypoint},
@@ -21124,7 +21121,6 @@ mod tx_hash_tests {
     #[tokio::test]
     async fn retry_transaction_committed_returns_rejection() {
         use crate::data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
-
         let result = super::Client::retry_transaction_committed(
             || {
                 let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
@@ -21196,7 +21192,6 @@ mod tx_hash_tests {
     #[test]
     fn tx_confirmation_status_from_pipeline_response_keeps_rejection_private() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
-
         let payload = PipelineTransactionStatusResponse::new(
             "deadbeef".to_owned(),
             PipelineTransactionStatus {
@@ -21212,7 +21207,6 @@ mod tx_hash_tests {
     #[test]
     fn tx_confirmation_status_from_pipeline_response_accepts_terminal_kinds() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
-
         let committed_payload = PipelineTransactionStatusResponse::new(
             "deadbeef".to_owned(),
             PipelineTransactionStatus {
@@ -21243,7 +21237,6 @@ mod tx_hash_tests {
     #[test]
     fn tx_confirmation_status_from_pipeline_response_accepts_non_terminal_kinds() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
-
         let queued_payload = PipelineTransactionStatusResponse::new(
             "deadbeef".to_owned(),
             PipelineTransactionStatus {
@@ -21325,7 +21318,6 @@ mod tx_hash_tests {
     #[test]
     fn committed_transaction_matches_signed_hash_for_external_entrypoint() {
         use iroha_primitives::const_vec::ConstVec;
-
         use crate::{
             crypto::MerkleProof,
             data_model::{
@@ -21409,12 +21401,10 @@ mod tx_hash_tests {
 #[cfg(test)]
 mod tx_confirmation_stream_tests {
     use std::{future, time::Duration};
-
     use eyre::eyre;
     use futures_util::stream;
     use tokio::sync::{mpsc, oneshot};
     use tokio_stream::wrappers::UnboundedReceiverStream;
-
     use super::{
         listen_for_tx_confirmation_stream, listen_for_tx_confirmation_stream_with_status_check,
     };
@@ -22029,7 +22019,6 @@ mod url_join_tests {
 /// Logic for `sync` and `async` Iroha websocket streams
 pub mod stream_api {
     use futures_util::{SinkExt, Stream, StreamExt};
-
     use super::*;
     use crate::{
         http::ws::conn_flow::{Events, Init, InitData},
@@ -22285,7 +22274,6 @@ pub mod stream_api {
     #[cfg(test)]
     mod tests {
         use super::*;
-
         fn upgrade_response(protocol: Option<&str>) -> http_default::WebSocketResponse {
             let mut builder = ::http::Response::builder().status(101);
             if let Some(protocol) = protocol {
@@ -22335,7 +22323,6 @@ fn canonical_norito_websocket_headers(
 }
 /// Logic related to Events API client implementation.
 pub mod events_api {
-
     use super::*;
     use crate::http::ws::{
         conn_flow::{Events as FlowEvents, Init as FlowInit, InitData},
@@ -22344,7 +22331,6 @@ pub mod events_api {
     /// Events API flow. For documentation and usage examples, refer to [`crate::http::ws::conn_flow`].
     pub mod flow {
         use super::*;
-
         /// Initialization struct for Events API flow.
         pub struct Init {
             /// TORII URL
@@ -22404,7 +22390,6 @@ pub mod events_api {
     /// Async stream for getting events from the `WebSocket` stream.
     pub type AsyncEventStream = stream_api::AsyncStream<flow::Events>;
 }
-
 mod blocks_api {
     use super::*;
     use crate::http::ws::{
@@ -22414,10 +22399,8 @@ mod blocks_api {
     /// Blocks API flow. For documentation and usage examples, refer to [`crate::http::ws::conn_flow`].
     pub mod flow {
         use std::num::NonZeroU64;
-
         use super::*;
         use crate::data_model::block::stream::*;
-
         /// Initialization struct for Blocks API flow.
         pub struct Init {
             /// Block height from which to start streaming blocks
@@ -22484,7 +22467,6 @@ mod tests {
         sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, Signature};
     use iroha_data_model::{
         account::{AccountAddress, AccountId, MultisigMember, MultisigPolicy},
@@ -22560,12 +22542,13 @@ mod tests {
     };
     use sorafs_orchestrator::{PolicyReport, PolicyStatus, prelude::ChunkStore};
     use tempfile::tempdir;
-
     use super::{
         default_alias_policy,
         evidence_http_tests::{
-            SnapshotStore, assert_single_accept_header, base_url, client_with_base_url,
-            empty_response, json_response, respond_with, with_mock_http, with_mock_sorafs_fetch,
+            SnapshotStore, assert_signed_headers, assert_signed_json_headers,
+            assert_single_accept_header, base_url, capability_gated_responder,
+            client_with_base_url, empty_response, json_response, respond_with, with_mock_http,
+            with_mock_sorafs_fetch,
         },
         *,
     };
@@ -22577,7 +22560,6 @@ mod tests {
         http::{Method as HttpMethod, Response as HttpResponse, StatusCode},
         secrecy::SecretString,
     };
-
     mod appeal_finance {
         //! Appeal-finance HTTP client contract tests.
         include!("client/appeal_finance.rs");
@@ -22643,12 +22625,13 @@ mod tests {
                 }
             });
             let response = runtime
-                .block_on(
+                .block_on(async {
                     build_async_http_client()
                         .post(format!("http://{redirect_addr}/transaction"))
                         .body(vec![0x01, 0x02, 0x03])
-                        .send(),
-                )
+                        .send()
+                        .await
+                })
                 .expect("redirect response");
             redirect_server.join().expect("redirect server");
             let followed = target_server.join().expect("target server");
@@ -22693,12 +22676,13 @@ mod tests {
             .build()
             .expect("build async HTTP test runtime");
         let response = runtime
-            .block_on(
+            .block_on(async {
                 build_async_http_client()
                     .post(format!("http://{address}/transaction"))
                     .body(vec![0x01, 0x02, 0x03])
-                    .send(),
-            )
+                    .send()
+                    .await
+            })
             .expect("server response");
         assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
         assert!(
@@ -22810,7 +22794,7 @@ mod tests {
         for retired in ["chain_id", "genesis_hash"] {
             let mut payload = norito::json!({
                 "authority": (authority.as_str()),
-                "network_id": (client.network_id),
+                "network_id": (client.network_id.clone()),
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
                 "envelope_b64": "cHJvb2Y="
@@ -22825,7 +22809,7 @@ mod tests {
         let error = assert_no_http(|| {
             client.post_gov_ballot_plain_json(&norito::json!({
                 "authority": TEST_AUDITOR_I105,
-                "network_id": (client.network_id),
+                "network_id": (client.network_id.clone()),
                 "referendum_id": "referendum-1",
                 "owner": TEST_AUDITOR_I105,
                 "amount": "1",
@@ -22853,7 +22837,7 @@ mod tests {
                     client
                         .post_gov_ballot_zk_v1_json(&norito::json!({
                             "authority": (authority.as_str()),
-                            "network_id": (client.network_id),
+                            "network_id": (client.network_id.clone()),
                             "election_id": "election-1",
                             "backend": "halo2/ipa",
                             "envelope_b64": "cHJvb2Y="
@@ -22863,7 +22847,7 @@ mod tests {
                     client
                         .post_gov_ballot_plain_json(&norito::json!({
                             "authority": (authority.as_str()),
-                            "network_id": (client.network_id),
+                            "network_id": (client.network_id.clone()),
                             "referendum_id": "referendum-1",
                             "owner": (authority.as_str()),
                             "amount": "1",
@@ -23021,7 +23005,6 @@ mod tests {
     }
     fn deterministic_account_onboarding_receipt_vector() -> SharedAccountOnboardingReceiptVector {
         use norito::codec::Encode as _;
-
         let receipt = account_onboarding_test_fixture::receipt_v1()
             .expect("construct deterministic onboarding receipt");
         let body_bytes = receipt.body.encode();
@@ -23053,7 +23036,6 @@ mod tests {
     #[test]
     fn shared_account_onboarding_receipt_vector_matches_rust_canonicalization() {
         use norito::codec::Decode as _;
-
         let fixture: SharedAliasSetupOnboardingFixture = norito::json::from_str(include_str!(
             "../../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json"
         ))
@@ -23363,8 +23345,11 @@ mod tests {
         }
     }
     impl rand::rand_core::TryCryptoRng for FailingClientRng {}
-    pub(super) fn assert_canonical_account_signed_request(client: &Client, req: &RequestSnapshot) {
-        let headers: HashMap<_, _> = req.headers.iter().cloned().collect();
+    pub(super) fn assert_canonical_account_signed_request(
+        client: &Client,
+        snapshot: &RequestSnapshot,
+    ) {
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
         for header in [
             HEADER_ACCOUNT,
             HEADER_SIGNATURE,
@@ -24249,7 +24234,6 @@ mod tests {
     #[test]
     fn sponsored_onboarding_disposition_transitions_are_monotonic() {
         use AliasPlanDispositionV1::{Conflict, Create, NoOp, Repair};
-
         for live in [Create, Repair, NoOp] {
             assert!(onboarding_disposition_transition_allowed(Create, live));
         }
@@ -25088,7 +25072,6 @@ mod tests {
     #[test]
     fn events_ws_flow_uses_framed_norito() {
         use std::num::NonZeroU64;
-
         use crate::data_model::events::{
             EventBox, EventFilterBox,
             pipeline::{
@@ -25186,7 +25169,6 @@ mod tests {
     #[test]
     fn blocks_ws_flow_uses_framed_norito() {
         use std::num::NonZeroU64;
-
         use crate::{
             crypto::{PrivateKey, PublicKey},
             data_model::{
@@ -25264,7 +25246,6 @@ mod tests {
     }
     fn inline_chunk_profile() -> sorafs_manifest::ChunkingProfileV1 {
         use sorafs_manifest::{ChunkingProfileV1, ProfileId, chunker_registry};
-
         ChunkingProfileV1 {
             profile_id: ProfileId(0),
             namespace: "inline".into(),
@@ -25285,7 +25266,6 @@ mod tests {
         sealed_at: u64,
     ) -> sorafs_manifest::pdp::PdpCommitmentV1 {
         use sorafs_manifest::pdp::{PdpCommitmentV1, PdpMerkleTreeV1};
-
         let tree = PdpMerkleTreeV1::from_bytes(payload).expect("build inline PDP tree");
         PdpCommitmentV1::from_tree(
             &tree,
@@ -25320,7 +25300,6 @@ mod tests {
     #[test]
     fn submit_da_blob_posts_payload_and_parses_response() {
         use base64::Engine as _;
-
         let client = client_with_base_url(base_url());
         let params = DaIngestParams::default();
         let metadata = ExtraMetadata::default();
@@ -25429,7 +25408,6 @@ mod tests {
     #[test]
     fn submit_da_blob_to_dir_persists_cli_artifacts() {
         use base64::Engine as _;
-
         let client = client_with_base_url(base_url());
         let params = DaIngestParams::default();
         let payload = vec![0x01, 0x02, 0x03];
@@ -25702,7 +25680,6 @@ mod tests {
     #[test]
     fn prove_da_availability_to_dir_persists_artifacts() {
         use base64::Engine as _;
-
         let (mut bundle, payload) = sample_da_manifest_bundle();
         let response = manifest_bundle_response(&mut bundle);
         let client = client_with_base_url(base_url());
@@ -25783,7 +25760,6 @@ mod tests {
     #[test]
     fn prove_da_availability_to_dir_honours_existing_scoreboard_path() {
         use base64::Engine as _;
-
         let (mut bundle, payload) = sample_da_manifest_bundle();
         let response = manifest_bundle_response(&mut bundle);
         let client = client_with_base_url(base_url());
@@ -26854,23 +26830,7 @@ mod tests {
     #[test]
     fn submit_transaction_uses_norito_content_type_header_and_signed_transaction_payload() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let capabilities_body = compatible_capabilities_body();
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
-                    json_response(StatusCode::OK, &capabilities_body)
-                } else {
-                    HttpResponse::builder()
-                        .status(StatusCode::OK)
-                        .body(Vec::new())
-                        .expect("response build")
-                };
-                Ok(response)
-            }
-        };
+        let responder = capability_gated_responder(&store, StatusCode::OK);
         with_mock_http(responder, || {
             let mut client = client_with_base_url(base_url());
             client
@@ -26989,23 +26949,7 @@ mod tests {
     #[test]
     fn submit_prepared_transaction_payload_reuses_encoded_body() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let capabilities_body = compatible_capabilities_body();
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
-                    json_response(StatusCode::OK, &capabilities_body)
-                } else {
-                    HttpResponse::builder()
-                        .status(StatusCode::OK)
-                        .body(Vec::new())
-                        .expect("response build")
-                };
-                Ok(response)
-            }
-        };
+        let responder = capability_gated_responder(&store, StatusCode::OK);
         let expected_hash = with_mock_http(responder, || {
             let mut client = client_with_base_url(base_url());
             client
@@ -27487,23 +27431,7 @@ mod tests {
     #[test]
     fn submit_transaction_reuses_compatibility_cache_across_equivalent_clients() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let capabilities_body = compatible_capabilities_body();
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
-                    json_response(StatusCode::OK, &capabilities_body)
-                } else {
-                    HttpResponse::builder()
-                        .status(StatusCode::OK)
-                        .body(Vec::new())
-                        .expect("response build")
-                };
-                Ok(response)
-            }
-        };
+        let responder = capability_gated_responder(&store, StatusCode::OK);
         with_mock_http(responder, || {
             let config = Config {
                 torii_api_url: base_url(),
@@ -28306,7 +28234,6 @@ mod tests {
     #[test]
     fn decode_status_prefers_framed_payload() {
         use iroha_telemetry::metrics::Status as S;
-
         let status = S {
             peers: 5,
             blocks: 9,
@@ -29129,62 +29056,56 @@ mod tests {
             )
         );
     }
-    #[test]
-    fn sorafs_alias_filter_sets_query_params() {
-        let client = Client::new(config_factory());
-        let mut url = join_torii_url(&client.torii_url, "v1/sorafs/aliases");
-        let filter = SorafsAliasListFilter {
+    macro_rules! sorafs_filter_query_test {
+        ($name:ident, $path:literal, $filter:expr, $expected:expr $(,)?) => {
+            #[test]
+            fn $name() {
+                let client = Client::new(config_factory());
+                let url = join_torii_url(&client.torii_url, $path);
+                let request = $filter
+                    .apply(client.default_request(HttpMethod::GET, url))
+                    .build()
+                    .expect("build request");
+                assert_eq!(request.uri().query(), Some($expected));
+            }
+        };
+    }
+    sorafs_filter_query_test!(
+        sorafs_alias_filter_sets_query_params,
+        "v1/sorafs/aliases",
+        SorafsAliasListFilter {
             limit: Some(10),
             offset: Some(3),
             namespace: Some("docs"),
             manifest_digest: Some("deadbeef"),
-        };
-        filter.apply_to_url(&mut url);
-        assert_eq!(
-            url.query(),
-            Some("limit=10&offset=3&namespace=docs&manifest_digest=deadbeef")
-        );
-    }
-    #[test]
-    fn sorafs_replication_filter_sets_query_params() {
-        let client = Client::new(config_factory());
-        let mut url = join_torii_url(&client.torii_url, "v1/sorafs/replication");
-        let filter = SorafsReplicationListFilter {
+        },
+        "limit=10&offset=3&namespace=docs&manifest_digest=deadbeef",
+    );
+    sorafs_filter_query_test!(
+        sorafs_replication_filter_sets_query_params,
+        "v1/sorafs/replication",
+        SorafsReplicationListFilter {
             limit: Some(50),
             offset: Some(2),
             status: Some("completed"),
             manifest_digest: Some("abc123"),
-        };
-        filter.apply_to_url(&mut url);
-        assert_eq!(
-            url.query(),
-            Some("limit=50&offset=2&status=completed&manifest_digest=abc123")
-        );
-    }
-    include!("client/sorafs_inventory_auth_tests.rs");
-    #[test]
-    fn sorafs_repair_filters_set_finalized_cursor_params() {
-        let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/audit/repair/tasks");
-        let filter = SorafsRepairTasksFilter {
+        },
+        "limit=50&offset=2&status=completed&manifest_digest=abc123",
+    );
+    sorafs_filter_query_test!(
+        sorafs_repair_filters_set_finalized_cursor_params,
+        "v1/sorafs/audit/repair/tasks",
+        SorafsRepairTasksFilter {
             finalized: SorafsRepairFinalizedAnchor {
                 expected_finalized_height: Some(7),
                 expected_finalized_block_hash_hex: Some("11"),
             },
             limit: Some(25),
             after_task_id_hex: Some("22"),
-        };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
-        assert_eq!(
-            request.uri().query(),
-            Some(
-                "expected_finalized_height=7&expected_finalized_block_hash_hex=11&limit=25&after_task_id_hex=22"
-            )
-        );
-    }
+        },
+        "expected_finalized_height=7&expected_finalized_block_hash_hex=11&limit=25&after_task_id_hex=22",
+    );
+    include!("client/sorafs_inventory_auth_tests.rs");
     #[test]
     fn sorafs_repair_status_targets_finalized_status_endpoint() {
         let client = client_with_base_url(base_url());
@@ -29449,138 +29370,175 @@ mod tests {
                 .contains("checkpoint fingerprint")
         );
     }
+    sorafs_filter_query_test!(
+        sorafs_moderation_quarantine_filter_sets_query_params,
+        "v1/sorafs/moderation/quarantine",
+        SorafsModerationQuarantineFilter { limit: Some(25) },
+        "limit=25",
+    );
     #[test]
-    fn sorafs_moderation_quarantine_filter_sets_query_params() {
-        let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/moderation/quarantine");
-        let filter = SorafsModerationQuarantineFilter { limit: Some(25) };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
-        assert_eq!(request.uri().query(), Some("limit=25"));
-    }
-    #[test]
-    fn sorafs_moderation_quarantine_list_targets_endpoint() {
+    fn sorafs_list_readbacks_target_exact_endpoints() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
-        let filter = SorafsModerationQuarantineFilter { limit: Some(7) };
+        let cycle_id = format!("0x{}", "AB".repeat(16));
+        let entry_cycle_id = format!("0x{}", "AA".repeat(16));
+        let entry_id = "BB".repeat(16);
         with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_moderation_quarantine(filter)
-                .expect("moderation quarantine list request");
+            for response in [
+                client.get_sorafs_moderation_quarantine(SorafsModerationQuarantineFilter {
+                    limit: Some(7),
+                }),
+                client.get_sorafs_moderation_model_registry(SorafsModerationModelRegistryFilter {
+                    limit: Some(11),
+                }),
+                client.get_sorafs_moderation_ballots(SorafsModerationBallotsFilter {
+                    limit: Some(13),
+                }),
+                client.get_sorafs_moderation_ballot_events(SorafsModerationBallotEventsFilter {
+                    since: Some(10),
+                    limit: Some(2),
+                }),
+                client.get_sorafs_moderation_ballot(
+                    "case/401",
+                    "round 7",
+                    SorafsModerationBallotsFilter { limit: Some(5) },
+                ),
+                client.get_sorafs_moderation_ballot_no_show_plan("case/401", "round 7"),
+                client.get_sorafs_moderation_screening_results(
+                    SorafsModerationScreeningResultsFilter { limit: Some(9) },
+                ),
+                client.get_sorafs_transparency_cycles(SorafsTransparencyReadbackFilter {
+                    limit: Some(13),
+                }),
+                client.get_sorafs_transparency_cycle(
+                    &cycle_id,
+                    SorafsTransparencyReadbackFilter { limit: Some(5) },
+                ),
+                client.get_sorafs_transparency_cycle_entry(&entry_cycle_id, &entry_id),
+                client.get_sorafs_transparency_explorer(SorafsTransparencyReadbackFilter {
+                    limit: Some(9),
+                }),
+                client.get_sorafs_transparency_token_issuances(SorafsTransparencyReadbackFilter {
+                    limit: Some(7),
+                }),
+            ] {
+                response.expect("SoraFS list readback request");
+            }
         });
+        const CYCLE_PATH: &str = "/v1/sorafs/transparency/cycles/abababababababababababababababab";
+        const ENTRY_PATH: &str = "/v1/sorafs/transparency/cycles/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/entries/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let expected = [
+            ("/v1/sorafs/moderation/quarantine", Some("limit=7")),
+            ("/v1/sorafs/moderation/model-registry", Some("limit=11")),
+            ("/v1/sorafs/moderation/ballots", Some("limit=13")),
+            (
+                "/v1/sorafs/moderation/ballots/events",
+                Some("since=10&limit=2"),
+            ),
+            (
+                "/v1/sorafs/moderation/ballots/case%2F401/round%207",
+                Some("limit=5"),
+            ),
+            (
+                "/v1/sorafs/moderation/ballots/case%2F401/round%207/no-show-plan",
+                None,
+            ),
+            ("/v1/sorafs/moderation/screening-results", Some("limit=9")),
+            ("/v1/sorafs/transparency/cycles", Some("limit=13")),
+            (CYCLE_PATH, Some("limit=5")),
+            (ENTRY_PATH, None),
+            ("/v1/sorafs/transparency/explorer", Some("limit=9")),
+            ("/v1/sorafs/transparency/tokens", Some("limit=7")),
+        ];
         let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/moderation/quarantine");
-        assert_eq!(snapshot.url.query(), Some("limit=7"));
+        assert_eq!(snapshots.len(), expected.len());
+        for (snapshot, (path, query)) in snapshots.iter().zip(expected) {
+            assert_eq!(snapshot.method, HttpMethod::GET);
+            assert_eq!(snapshot.url.path(), path);
+            assert_eq!(snapshot.url.query(), query);
+        }
     }
+    sorafs_filter_query_test!(
+        sorafs_moderation_model_registry_filter_sets_query_params,
+        "v1/sorafs/moderation/model-registry",
+        SorafsModerationModelRegistryFilter { limit: Some(25) },
+        "limit=25",
+    );
     #[test]
-    fn sorafs_moderation_model_registry_filter_sets_query_params() {
-        let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/moderation/model-registry");
-        let filter = SorafsModerationModelRegistryFilter { limit: Some(25) };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
-        assert_eq!(request.uri().query(), Some("limit=25"));
-    }
-    #[test]
-    fn sorafs_moderation_model_registry_list_targets_endpoint() {
+    fn sorafs_moderation_model_registry_uploads_send_signed_requests() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let filter = SorafsModerationModelRegistryFilter { limit: Some(11) };
+        let response = json_response(StatusCode::ACCEPTED, "{}");
+        let repro_manifest: &[u8] = b"canonical repro manifest bytes";
+        let corpus_manifest: &[u8] = b"canonical corpus manifest bytes";
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_model_registry(filter)
-                .expect("moderation model registry list request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/moderation/model-registry");
-        assert_eq!(snapshot.url.query(), Some("limit=11"));
-    }
-    #[test]
-    fn sorafs_moderation_model_registry_repro_manifest_sends_signed_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"repro"}"#);
-        let manifest_bytes = b"canonical repro manifest bytes";
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_moderation_model_registry_repro_manifest(manifest_bytes)
+                .post_sorafs_moderation_model_registry_repro_manifest(repro_manifest)
                 .expect("moderation model registry repro request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/moderation/model-registry/repro-manifests"
-        );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&APPLICATION_JSON.to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        let expected_manifest_b64 =
-            base64::engine::general_purpose::STANDARD.encode(manifest_bytes);
-        assert_eq!(
-            body.get("manifest_b64").and_then(JsonValue::as_str),
-            Some(expected_manifest_b64.as_str())
-        );
-    }
-    #[test]
-    fn sorafs_moderation_model_registry_corpus_sends_signed_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"corpus"}"#);
-        let manifest_bytes = b"canonical corpus manifest bytes";
-        with_mock_http(respond_with(&store, response), || {
             client
-                .post_sorafs_moderation_model_registry_corpus(manifest_bytes)
+                .post_sorafs_moderation_model_registry_corpus(corpus_manifest)
                 .expect("moderation model registry corpus request");
         });
         let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/moderation/model-registry/corpora"
-        );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        let expected_manifest_b64 =
-            base64::engine::general_purpose::STANDARD.encode(manifest_bytes);
-        assert_eq!(
-            body.get("manifest_b64").and_then(JsonValue::as_str),
-            Some(expected_manifest_b64.as_str())
-        );
+        let expected = [
+            (
+                "/v1/sorafs/moderation/model-registry/repro-manifests",
+                repro_manifest,
+                true,
+            ),
+            (
+                "/v1/sorafs/moderation/model-registry/corpora",
+                corpus_manifest,
+                false,
+            ),
+        ];
+        assert_eq!(snapshots.len(), expected.len());
+        for (snapshot, (path, manifest, json_headers)) in snapshots.iter().zip(expected) {
+            assert_eq!(snapshot.method, HttpMethod::POST);
+            assert_eq!(snapshot.url.path(), path);
+            if json_headers {
+                assert_signed_json_headers(snapshot);
+            } else {
+                assert_signed_headers(snapshot);
+            }
+            let body: JsonValue =
+                norito::json::from_slice(&snapshot.body).expect("decode request body");
+            let expected_b64 = base64::engine::general_purpose::STANDARD.encode(manifest);
+            assert_eq!(
+                body.get("manifest_b64").and_then(JsonValue::as_str),
+                Some(expected_b64.as_str())
+            );
+        }
     }
     #[test]
-    fn sorafs_moderation_model_registry_rejects_empty_manifest() {
+    fn sorafs_json_uploads_reject_empty_payloads() {
         let client = client_with_base_url(base_url());
-        let err = client
-            .post_sorafs_moderation_model_registry_repro_manifest(&[])
-            .expect_err("empty manifest must be rejected");
-        assert!(err.to_string().contains("manifest_bytes"));
+        for (result, context, expected) in [
+            (
+                client.post_sorafs_moderation_model_registry_repro_manifest(&[]),
+                "empty manifest must be rejected",
+                "manifest_bytes",
+            ),
+            (
+                client.post_sorafs_transparency_token_issuance_json(&[]),
+                "empty payload must be rejected",
+                "payload",
+            ),
+            (
+                client.post_sorafs_transparency_privacy_aggregate_source_event_json(&[]),
+                "empty source-event payload must be rejected",
+                "privacy aggregate source event",
+            ),
+            (
+                client.post_sorafs_transparency_privacy_aggregate_publish_due_json(&[]),
+                "empty publish-due payload must be rejected",
+                "privacy aggregate publish-due",
+            ),
+        ] {
+            let error = result.expect_err(context);
+            assert!(error.to_string().contains(expected));
+        }
     }
     fn moderation_ballot_context_fixture() -> SoraFsModerationBallotContextV1 {
         SoraFsModerationBallotContextV1 {
@@ -29615,87 +29573,21 @@ mod tests {
             committed_at_unix_ms: 0,
         }
     }
-    #[test]
-    fn sorafs_moderation_ballots_filter_sets_query_params() {
-        let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/moderation/ballots");
-        let filter = SorafsModerationBallotsFilter { limit: Some(25) };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
-        assert_eq!(request.uri().query(), Some("limit=25"));
-    }
-    #[test]
-    fn sorafs_moderation_ballot_events_filter_sets_query_params() {
-        let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/moderation/ballots/events");
-        let filter = SorafsModerationBallotEventsFilter {
+    sorafs_filter_query_test!(
+        sorafs_moderation_ballots_filter_sets_query_params,
+        "v1/sorafs/moderation/ballots",
+        SorafsModerationBallotsFilter { limit: Some(25) },
+        "limit=25",
+    );
+    sorafs_filter_query_test!(
+        sorafs_moderation_ballot_events_filter_sets_query_params,
+        "v1/sorafs/moderation/ballots/events",
+        SorafsModerationBallotEventsFilter {
             since: Some(40),
             limit: Some(25),
-        };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
-        assert_eq!(request.uri().query(), Some("since=40&limit=25"));
-    }
-    #[test]
-    fn sorafs_moderation_ballots_list_targets_endpoint() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let filter = SorafsModerationBallotsFilter { limit: Some(13) };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_moderation_ballots(filter)
-                .expect("moderation ballots list request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/moderation/ballots");
-        assert_eq!(snapshot.url.query(), Some("limit=13"));
-    }
-    #[test]
-    fn sorafs_moderation_ballot_get_targets_endpoint() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let filter = SorafsModerationBallotsFilter { limit: Some(5) };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_moderation_ballot("case/401", "round 7", filter)
-                .expect("moderation ballot get request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/moderation/ballots/case%2F401/round%207"
-        );
-        assert_eq!(snapshot.url.query(), Some("limit=5"));
-    }
-    #[test]
-    fn sorafs_moderation_ballot_no_show_plan_targets_endpoint() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_moderation_ballot_no_show_plan("case/401", "round 7")
-                .expect("moderation ballot no-show plan request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/moderation/ballots/case%2F401/round%207/no-show-plan"
-        );
-        assert_eq!(snapshot.url.query(), None);
-    }
+        },
+        "since=40&limit=25",
+    );
     #[test]
     fn sorafs_moderation_ballot_no_show_plan_rejects_blank_round_id() {
         let client = client_with_base_url(base_url());
@@ -29704,90 +29596,50 @@ mod tests {
             .expect_err("blank round id must be rejected");
         assert!(err.to_string().contains("round_id"));
     }
-    #[test]
-    fn sorafs_moderation_ballot_events_targets_endpoint() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let filter = SorafsModerationBallotEventsFilter {
-            since: Some(10),
-            limit: Some(2),
-        };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_moderation_ballot_events(filter)
-                .expect("moderation ballot events request");
-        });
+    fn assert_sorafs_transaction_snapshot(
+        store: &SnapshotStore,
+        path: &str,
+        expected_hash: HashOf<SignedTransaction>,
+        forbid_app_signature: bool,
+    ) {
         let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/moderation/ballots/events");
-        assert_eq!(snapshot.url.query(), Some("since=10&limit=2"));
+        assert_eq!(snapshots.len(), 2);
+        let snapshot = snapshots
+            .iter()
+            .find(|snapshot| snapshot.url.path() == path)
+            .expect("missing SoraFS transaction request");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.as_str()),
+            Some(APPLICATION_NORITO)
+        );
+        if forbid_app_signature {
+            assert!(
+                !snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
+                "native transaction routes must not add competing app-auth signatures"
+            );
+        }
+        let decoded = SignedTransaction::decode_all_versioned(&snapshot.body)
+            .expect("request body is a versioned SignedTransaction");
+        assert_eq!(decoded.hash(), expected_hash);
+    }
+    macro_rules! assert_sorafs_routes {
+        ($($route:expr => $path:expr),+ $(,)?) => {
+            $(assert_eq!(format!("/{}", $route.path()), $path);)+
+        };
     }
     #[test]
     fn sorafs_moderation_signed_transaction_routes_use_exact_versioned_norito() {
         use iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit;
-
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let capabilities_body = compatible_capabilities_body();
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_owned();
-                store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
-                    json_response(StatusCode::OK, &capabilities_body)
-                } else {
-                    HttpResponse::builder()
-                        .status(StatusCode::ACCEPTED)
-                        .body(Vec::new())
-                        .expect("response build")
-                };
-                Ok(response)
-            }
-        };
-        let expected_routes = [
-            (
-                SorafsModerationCommandRoute::SubmitAppeal,
-                "/v1/sorafs/moderation/ballots",
-            ),
-            (
-                SorafsModerationCommandRoute::RegisterEligibility,
-                "/v1/sorafs/moderation/ballots/eligibility",
-            ),
-            (
-                SorafsModerationCommandRoute::FinalizeSortition,
-                "/v1/sorafs/moderation/ballots/sortition",
-            ),
-            (
-                SorafsModerationCommandRoute::AcceptAssignment,
-                "/v1/sorafs/moderation/ballots/assignments/accept",
-            ),
-            (
-                SorafsModerationCommandRoute::ActivateCase,
-                "/v1/sorafs/moderation/ballots/activate",
-            ),
-            (
-                SorafsModerationCommandRoute::SubmitCommit,
-                "/v1/sorafs/moderation/ballots/commits",
-            ),
-            (
-                SorafsModerationCommandRoute::RaiseChallenge,
-                "/v1/sorafs/moderation/ballots/challenges",
-            ),
-            (
-                SorafsModerationCommandRoute::ResolveChallenge,
-                "/v1/sorafs/moderation/ballots/challenges/resolve",
-            ),
-            (
-                SorafsModerationCommandRoute::SubmitReveal,
-                "/v1/sorafs/moderation/ballots/reveals",
-            ),
-            (
-                SorafsModerationCommandRoute::FinalizeCase,
-                "/v1/sorafs/moderation/ballots/tally",
-            ),
-        ];
+        let responder = capability_gated_responder(&store, StatusCode::ACCEPTED);
         let expected_hash = with_mock_http(responder, || {
             let mut client = client_with_base_url(base_url());
             client.add_transaction_nonce = true;
@@ -29817,148 +29669,36 @@ mod tests {
                 .downcast_ref::<SubmitSorafsModerationCommit>()
                 .expect("exact commit instruction");
             assert_eq!(embedded.commit_payload(), &commit_payload);
-            for (route, path) in expected_routes {
-                assert_eq!(format!("/{}", route.path()), path);
+            assert_sorafs_routes! {
+                SorafsModerationCommandRoute::SubmitAppeal => "/v1/sorafs/moderation/ballots",
+                SorafsModerationCommandRoute::RegisterEligibility => "/v1/sorafs/moderation/ballots/eligibility",
+                SorafsModerationCommandRoute::FinalizeSortition => "/v1/sorafs/moderation/ballots/sortition",
+                SorafsModerationCommandRoute::AcceptAssignment => "/v1/sorafs/moderation/ballots/assignments/accept",
+                SorafsModerationCommandRoute::ActivateCase => "/v1/sorafs/moderation/ballots/activate",
+                SorafsModerationCommandRoute::SubmitCommit => "/v1/sorafs/moderation/ballots/commits",
+                SorafsModerationCommandRoute::RaiseChallenge => "/v1/sorafs/moderation/ballots/challenges",
+                SorafsModerationCommandRoute::ResolveChallenge => "/v1/sorafs/moderation/ballots/challenges/resolve",
+                SorafsModerationCommandRoute::SubmitReveal => "/v1/sorafs/moderation/ballots/reveals",
+                SorafsModerationCommandRoute::FinalizeCase => "/v1/sorafs/moderation/ballots/tally",
             }
             client
                 .post_sorafs_moderation_ballot_commit(&transaction)
                 .expect("moderation commit transaction route submission");
             transaction.hash()
         });
-        let snapshots = store.lock().expect("snapshot store");
-        assert_eq!(snapshots.len(), 2);
-        let snapshot = snapshots
-            .iter()
-            .find(|snapshot| snapshot.url.path() == "/v1/sorafs/moderation/ballots/commits")
-            .expect("missing moderation commit request");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot
-                .headers
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                .map(|(_, value)| value.as_str()),
-            Some(APPLICATION_NORITO)
+        assert_sorafs_transaction_snapshot(
+            &store,
+            "/v1/sorafs/moderation/ballots/commits",
+            expected_hash,
+            true,
         );
-        assert!(
-            !snapshot
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
-            "native transaction routes must not add competing app-auth signatures"
-        );
-        let decoded = SignedTransaction::decode_all_versioned(&snapshot.body)
-            .expect("moderation request body is a versioned SignedTransaction");
-        assert_eq!(decoded.hash(), expected_hash);
     }
-    #[test]
-    fn sorafs_transparency_readback_filter_sets_query_params() {
-        let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/transparency/cycles");
-        let filter = SorafsTransparencyReadbackFilter { limit: Some(25) };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
-        assert_eq!(request.uri().query(), Some("limit=25"));
-    }
-    #[test]
-    fn sorafs_transparency_cycles_list_targets_endpoint() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let filter = SorafsTransparencyReadbackFilter { limit: Some(13) };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_transparency_cycles(filter)
-                .expect("transparency cycles list request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/transparency/cycles");
-        assert_eq!(snapshot.url.query(), Some("limit=13"));
-    }
-    #[test]
-    fn sorafs_transparency_cycle_get_normalizes_hex_id() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let filter = SorafsTransparencyReadbackFilter { limit: Some(5) };
-        let cycle_id = format!("0x{}", "AB".repeat(16));
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_transparency_cycle(&cycle_id, filter)
-                .expect("transparency cycle get request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/sorafs/transparency/cycles/{}", "ab".repeat(16))
-        );
-        assert_eq!(snapshot.url.query(), Some("limit=5"));
-    }
-    #[test]
-    fn sorafs_transparency_cycle_entry_get_normalizes_hex_ids() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let cycle_id = format!("0x{}", "AA".repeat(16));
-        let entry_id = "BB".repeat(16);
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_transparency_cycle_entry(&cycle_id, &entry_id)
-                .expect("transparency cycle entry get request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(
-            snapshot.url.path(),
-            format!(
-                "/v1/sorafs/transparency/cycles/{}/entries/{}",
-                "aa".repeat(16),
-                "bb".repeat(16)
-            )
-        );
-        assert!(snapshot.url.query().is_none());
-    }
-    #[test]
-    fn sorafs_transparency_explorer_targets_endpoint() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let filter = SorafsTransparencyReadbackFilter { limit: Some(9) };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_transparency_explorer(filter)
-                .expect("transparency explorer request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/transparency/explorer");
-        assert_eq!(snapshot.url.query(), Some("limit=9"));
-    }
-    #[test]
-    fn sorafs_transparency_token_issuances_targets_endpoint() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let filter = SorafsTransparencyReadbackFilter { limit: Some(7) };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_transparency_token_issuances(filter)
-                .expect("transparency token issuance request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/transparency/tokens");
-        assert_eq!(snapshot.url.query(), Some("limit=7"));
-    }
+    sorafs_filter_query_test!(
+        sorafs_transparency_readback_filter_sets_query_params,
+        "v1/sorafs/transparency/cycles",
+        SorafsTransparencyReadbackFilter { limit: Some(25) },
+        "limit=25",
+    );
     #[test]
     fn sorafs_transparency_token_issuance_sends_signed_json_request() {
         let client = client_with_base_url(base_url());
@@ -29989,16 +29729,7 @@ mod tests {
             snapshot.url.path(),
             "/v1/sorafs/transparency/tokens/issuances"
         );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&APPLICATION_JSON.to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        assert_signed_json_headers(snapshot);
         let body: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -30009,14 +29740,6 @@ mod tests {
             body.get("signer_key_hex").and_then(JsonValue::as_str),
             Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")
         );
-    }
-    #[test]
-    fn sorafs_transparency_token_issuance_rejects_empty_json_payload() {
-        let client = client_with_base_url(base_url());
-        let err = client
-            .post_sorafs_transparency_token_issuance_json(&[])
-            .expect_err("empty payload must be rejected");
-        assert!(err.to_string().contains("payload"));
     }
     #[test]
     fn sorafs_transparency_privacy_aggregate_source_event_sends_signed_json_request() {
@@ -30046,16 +29769,7 @@ mod tests {
             snapshot.url.path(),
             "/v1/sorafs/transparency/privacy-aggregates/source-events"
         );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&APPLICATION_JSON.to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        assert_signed_json_headers(snapshot);
         let body: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -30089,11 +29803,7 @@ mod tests {
             snapshot.url.path(),
             "/v1/sorafs/transparency/privacy-aggregates/publish-due"
         );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
+        assert_signed_headers(snapshot);
         let body: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert!(body.get("cycle_prf_output_hex").is_none());
@@ -30103,49 +29813,12 @@ mod tests {
             Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4")
         );
     }
-    #[test]
-    fn sorafs_transparency_privacy_aggregate_json_rejects_empty_payload() {
-        let client = client_with_base_url(base_url());
-        let err = client
-            .post_sorafs_transparency_privacy_aggregate_source_event_json(&[])
-            .expect_err("empty source-event payload must be rejected");
-        assert!(err.to_string().contains("privacy aggregate source event"));
-        let err = client
-            .post_sorafs_transparency_privacy_aggregate_publish_due_json(&[])
-            .expect_err("empty publish-due payload must be rejected");
-        assert!(err.to_string().contains("privacy aggregate publish-due"));
-    }
-    #[test]
-    fn sorafs_moderation_screening_filter_sets_query_params() {
-        let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/moderation/screening-results");
-        let filter = SorafsModerationScreeningResultsFilter { limit: Some(25) };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
-        assert_eq!(request.uri().query(), Some("limit=25"));
-    }
-    #[test]
-    fn sorafs_moderation_screening_list_targets_endpoint() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let filter = SorafsModerationScreeningResultsFilter { limit: Some(9) };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_moderation_screening_results(filter)
-                .expect("moderation screening list request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/moderation/screening-results"
-        );
-        assert_eq!(snapshot.url.query(), Some("limit=9"));
-    }
+    sorafs_filter_query_test!(
+        sorafs_moderation_screening_filter_sets_query_params,
+        "v1/sorafs/moderation/screening-results",
+        SorafsModerationScreeningResultsFilter { limit: Some(25) },
+        "limit=25",
+    );
     #[test]
     fn sorafs_moderation_screening_submit_sends_signed_request() {
         let client = client_with_base_url(base_url());
@@ -30173,16 +29846,7 @@ mod tests {
             snapshot.url.path(),
             "/v1/sorafs/moderation/screening-results"
         );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&APPLICATION_JSON.to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        assert_signed_json_headers(snapshot);
         let body: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -30245,16 +29909,7 @@ mod tests {
                 quarantine_id.to_ascii_lowercase()
             )
         );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&APPLICATION_JSON.to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        assert_signed_json_headers(snapshot);
         let body: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -30296,11 +29951,7 @@ mod tests {
                 quarantine_id.to_ascii_lowercase()
             )
         );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
+        assert_signed_headers(snapshot);
         let body: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -30343,16 +29994,7 @@ mod tests {
                 quarantine_id.to_ascii_lowercase()
             )
         );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&APPLICATION_JSON.to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        assert_signed_json_headers(snapshot);
         let body: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -30384,11 +30026,7 @@ mod tests {
         );
         assert_eq!(snapshot.url.query(), Some("limit=3"));
         assert!(snapshot.body.is_empty());
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
+        let headers = assert_signed_headers(snapshot);
         assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
         let timestamp_ms = headers
             .get(HEADER_TIMESTAMP_MS)
@@ -30445,16 +30083,7 @@ mod tests {
                 quarantine_id.to_ascii_lowercase()
             )
         );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&APPLICATION_JSON.to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        assert_signed_json_headers(snapshot);
         let body: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         let expected_payload_b64 =
@@ -30495,11 +30124,7 @@ mod tests {
             &format!("/v1/sorafs/moderation/quarantine/{quarantine_id}/object")
         );
         assert!(snapshot.body.is_empty());
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
+        let headers = assert_signed_headers(snapshot);
         assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
     }
     #[test]
@@ -30518,53 +30143,7 @@ mod tests {
     #[test]
     fn sorafs_repair_signed_transaction_routes_use_versioned_norito() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let capabilities_body = compatible_capabilities_body();
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_owned();
-                store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
-                    json_response(StatusCode::OK, &capabilities_body)
-                } else {
-                    HttpResponse::builder()
-                        .status(StatusCode::ACCEPTED)
-                        .body(Vec::new())
-                        .expect("response build")
-                };
-                Ok(response)
-            }
-        };
-        let expected_routes = [
-            (
-                SorafsRepairCommandRoute::Report,
-                "/v1/sorafs/audit/repair/report",
-            ),
-            (
-                SorafsRepairCommandRoute::Slash,
-                "/v1/sorafs/audit/repair/slash",
-            ),
-            (
-                SorafsRepairCommandRoute::Claim,
-                "/v1/sorafs/audit/repair/claim",
-            ),
-            (
-                SorafsRepairCommandRoute::Heartbeat,
-                "/v1/sorafs/audit/repair/heartbeat",
-            ),
-            (
-                SorafsRepairCommandRoute::Complete,
-                "/v1/sorafs/audit/repair/complete",
-            ),
-            (
-                SorafsRepairCommandRoute::Fail,
-                "/v1/sorafs/audit/repair/fail",
-            ),
-            (
-                SorafsRepairCommandRoute::Appeal,
-                "/v1/sorafs/audit/repair/appeal",
-            ),
-        ];
+        let responder = capability_gated_responder(&store, StatusCode::ACCEPTED);
         let expected_hash = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
             let transaction = client.build_transaction(
@@ -30575,91 +30154,33 @@ mod tests {
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
-            for (route, path) in expected_routes {
-                assert_eq!(format!("/{}", route.path()), path);
+            assert_sorafs_routes! {
+                SorafsRepairCommandRoute::Report => "/v1/sorafs/audit/repair/report",
+                SorafsRepairCommandRoute::Slash => "/v1/sorafs/audit/repair/slash",
+                SorafsRepairCommandRoute::Claim => "/v1/sorafs/audit/repair/claim",
+                SorafsRepairCommandRoute::Heartbeat => "/v1/sorafs/audit/repair/heartbeat",
+                SorafsRepairCommandRoute::Complete => "/v1/sorafs/audit/repair/complete",
+                SorafsRepairCommandRoute::Fail => "/v1/sorafs/audit/repair/fail",
+                SorafsRepairCommandRoute::Appeal => "/v1/sorafs/audit/repair/appeal",
             }
             client
                 .post_sorafs_repair_report(&transaction)
                 .expect("repair report transaction route submission");
             transaction.hash()
         });
-        let snapshots = store.lock().expect("snapshot store");
-        assert_eq!(snapshots.len(), 2);
-        let snapshot = snapshots
-            .iter()
-            .find(|snapshot| snapshot.url.path() == "/v1/sorafs/audit/repair/report")
-            .expect("missing repair report request");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot
-                .headers
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                .map(|(_, value)| value.as_str()),
-            Some(APPLICATION_NORITO)
+        assert_sorafs_transaction_snapshot(
+            &store,
+            "/v1/sorafs/audit/repair/report",
+            expected_hash,
+            false,
         );
-        let decoded = SignedTransaction::decode_all_versioned(&snapshot.body)
-            .expect("repair request body is a versioned SignedTransaction");
-        assert_eq!(decoded.hash(), expected_hash);
     }
     #[test]
     fn sorafs_reserve_signed_transaction_routes_use_versioned_norito() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let capabilities_body = compatible_capabilities_body();
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_owned();
-                store.lock().expect("snapshot lock").push(snapshot);
-                let response = if path == "/v1/node/capabilities" {
-                    json_response(StatusCode::OK, &capabilities_body)
-                } else {
-                    HttpResponse::builder()
-                        .status(StatusCode::ACCEPTED)
-                        .body(Vec::new())
-                        .expect("response build")
-                };
-                Ok(response)
-            }
-        };
+        let responder = capability_gated_responder(&store, StatusCode::ACCEPTED);
         let movement_id = [0x62; 32];
         let appeal_id = [0x63; 32];
-        let expected_routes = [
-            (
-                SorafsReserveCommandRoute::TopUp,
-                "/v1/sorafs/reserve/top-up".to_owned(),
-            ),
-            (
-                SorafsReserveCommandRoute::Withdrawal,
-                "/v1/sorafs/reserve/withdraw".to_owned(),
-            ),
-            (
-                SorafsReserveCommandRoute::MovementDecision(movement_id),
-                format!(
-                    "/v1/sorafs/reserve/movements/{}/decision",
-                    hex::encode(movement_id)
-                ),
-            ),
-            (
-                SorafsReserveCommandRoute::CreditDraw,
-                "/v1/sorafs/reserve/credit/draw".to_owned(),
-            ),
-            (
-                SorafsReserveCommandRoute::CreditRepay,
-                "/v1/sorafs/reserve/credit/repay".to_owned(),
-            ),
-            (
-                SorafsReserveCommandRoute::Appeal,
-                "/v1/sorafs/reserve/appeals".to_owned(),
-            ),
-            (
-                SorafsReserveCommandRoute::AppealDecision(appeal_id),
-                format!(
-                    "/v1/sorafs/reserve/appeals/{}/decision",
-                    hex::encode(appeal_id)
-                ),
-            ),
-        ];
         let expected_hash = with_mock_http(responder, || {
             let mut client = client_with_base_url(base_url());
             client.transaction_ttl = Some(Duration::from_secs(300));
@@ -30677,32 +30198,32 @@ mod tests {
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
-            for (route, path) in &expected_routes {
-                assert_eq!(format!("/{}", route.path()), path.as_str());
+            assert_sorafs_routes! {
+                SorafsReserveCommandRoute::TopUp => "/v1/sorafs/reserve/top-up",
+                SorafsReserveCommandRoute::Withdrawal => "/v1/sorafs/reserve/withdraw",
+                SorafsReserveCommandRoute::MovementDecision(movement_id) => format!(
+                    "/v1/sorafs/reserve/movements/{}/decision",
+                    hex::encode(movement_id),
+                ),
+                SorafsReserveCommandRoute::CreditDraw => "/v1/sorafs/reserve/credit/draw",
+                SorafsReserveCommandRoute::CreditRepay => "/v1/sorafs/reserve/credit/repay",
+                SorafsReserveCommandRoute::Appeal => "/v1/sorafs/reserve/appeals",
+                SorafsReserveCommandRoute::AppealDecision(appeal_id) => format!(
+                    "/v1/sorafs/reserve/appeals/{}/decision",
+                    hex::encode(appeal_id),
+                ),
             }
             client
                 .post_sorafs_reserve_top_up(&transaction)
                 .expect("reserve top-up transaction route submission");
             transaction.hash()
         });
-        let snapshots = store.lock().expect("snapshot store");
-        assert_eq!(snapshots.len(), 2);
-        let snapshot = snapshots
-            .iter()
-            .find(|snapshot| snapshot.url.path() == "/v1/sorafs/reserve/top-up")
-            .expect("missing reserve top-up request");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot
-                .headers
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                .map(|(_, value)| value.as_str()),
-            Some(APPLICATION_NORITO)
+        assert_sorafs_transaction_snapshot(
+            &store,
+            "/v1/sorafs/reserve/top-up",
+            expected_hash,
+            false,
         );
-        let decoded = SignedTransaction::decode_all_versioned(&snapshot.body)
-            .expect("reserve request body is a versioned SignedTransaction");
-        assert_eq!(decoded.hash(), expected_hash);
     }
     #[test]
     fn sorafs_reserve_filters_carry_finalized_exclusive_cursors() {
@@ -30739,29 +30260,19 @@ mod tests {
             )
         );
     }
-    #[test]
-    fn sorafs_repair_event_filter_carries_complete_exclusive_cursor() {
-        let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/audit/repair/events");
-        let filter = SorafsRepairEventsFilter {
+    sorafs_filter_query_test!(
+        sorafs_repair_event_filter_carries_complete_exclusive_cursor,
+        "v1/sorafs/audit/repair/events",
+        SorafsRepairEventsFilter {
             finalized: SorafsRepairFinalizedAnchor::default(),
             limit: Some(50),
             after_sequence: Some(12),
             after_block_height: Some(7),
             after_block_hash_hex: Some("aa"),
             after_event_index: Some(3),
-        };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
-        assert_eq!(
-            request.uri().query(),
-            Some(
-                "limit=50&after_sequence=12&after_block_height=7&after_block_hash_hex=aa&after_event_index=3"
-            )
-        );
-    }
+        },
+        "limit=50&after_sequence=12&after_block_height=7&after_block_hash_hex=aa&after_event_index=3",
+    );
     include!("client/uaid_literal_tests.rs");
     #[test]
     fn sumeragi_qc_snapshot_roundtrip_to_json_preserves_fields() {
@@ -31176,7 +30687,6 @@ mod tests {
         request: &SccpRouteGovernanceDraftRequest,
     ) -> SccpRouteGovernanceDraftResponse {
         use iroha_data_model::isi::Instruction;
-
         let instruction = iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
             anchor: iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
                 network_id: test_network_id(),
@@ -32374,7 +31884,6 @@ mod tests {
         key_pair: &KeyPair,
     ) {
         use base64::Engine as _;
-
         let signature = Signature::try_new(key_pair.private_key(), &builder.payload_hash_bytes())
             .expect("re-sign adversarial SCCP payload");
         request.signature_b64 =
@@ -32385,7 +31894,6 @@ mod tests {
     #[test]
     fn destination_direct_submit_reuses_exact_payload_and_binds_response_hash() {
         use base64::Engine as _;
-
         let (client, _key_pair, request, builder, tx_hash) = destination_direct_submit_fixture();
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let response_payload = SccpBridgeSubmitResponse {
@@ -32590,7 +32098,6 @@ mod tests {
     #[test]
     fn destination_submit_preflight_rejects_malformed_artifacts_before_http() {
         use base64::Engine as _;
-
         let mut request = SccpDestinationProofSubmitRequest {
             authority: ALICE_ID.clone(),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
@@ -32655,7 +32162,6 @@ mod tests {
         use base64::Engine as _;
         use iroha_data_model::bridge::{BridgeProof, BridgeProofPayload, BridgeProofRange};
         use iroha_data_model::isi::bridge::SubmitBridgeProof;
-
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let artifact_bytes =
             iroha_sccp::encode_canonical_sccp_groth16_bn254_proof_artifact_v1(&fixture.artifact)
@@ -32782,7 +32288,6 @@ mod tests {
         [u8; 32],
     ) {
         use base64::Engine as _;
-
         let (proof, source_identity, trust_anchor) =
             iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
         let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
@@ -32827,7 +32332,6 @@ mod tests {
         use base64::Engine as _;
         use iroha_data_model::bridge::{BridgeProof, BridgeProofPayload, BridgeProofRange};
         use iroha_data_model::isi::bridge::SubmitBridgeProof;
-
         let (request, registry, proof, proof_bytes, route_configuration_hash) =
             native_submit_fixture(iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional);
         let client = sccp_client_with_base_url(base_url());
@@ -32918,7 +32422,6 @@ mod tests {
     #[test]
     fn native_submit_rejects_inactive_or_stale_governance_before_post() {
         use base64::Engine as _;
-
         let (request, mut registry, _proof, _proof_bytes, _route_configuration_hash) =
             native_submit_fixture(iroha_data_model::bridge::SccpRouteActivationV1::Staged);
         let registry_bytes = norito::to_bytes(&registry).expect("encode inactive registry");
@@ -33179,9 +32682,7 @@ mod tests {
     #[cfg(test)]
     mod join_torii_url {
         use url::Url;
-
         use super::*;
-
         fn do_test(url: &str, path: &str, expected: &str) {
             let url = Url::parse(url).unwrap();
             let actual = join_torii_url(&url, path);
@@ -33250,7 +32751,6 @@ mod tests {
 #[cfg(test)]
 mod response_report {
     use super::*;
-
     #[test]
     fn json_media_types_are_limited_to_application_types() {
         assert!(Client::is_json_content_type("application/json"));

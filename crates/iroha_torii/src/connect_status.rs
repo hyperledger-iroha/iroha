@@ -1,5 +1,4 @@
 //! Strict query decoding for management-token-authorized Connect session status.
-
 /// Decode the one required `sid` query parameter for Connect session status.
 ///
 /// Unknown, duplicate, empty, and malformed parameters are rejected so the
@@ -10,7 +9,6 @@ pub(crate) fn parse_session_status_sid(raw_query: Option<&str>) -> Result<String
     if raw.is_empty() {
         return Err("connect: sid query is required");
     }
-
     if raw.contains('&') {
         return Err("connect: status query must contain exactly one parameter");
     }
@@ -31,11 +29,9 @@ pub(crate) fn parse_session_status_sid(raw_query: Option<&str>) -> Result<String
     }
     Ok(value.to_owned())
 }
-
 #[cfg(test)]
 mod tests {
     use super::parse_session_status_sid;
-
     #[test]
     fn accepts_one_exact_sid_parameter() {
         assert_eq!(
@@ -43,7 +39,6 @@ mod tests {
             Ok("abc-_123".to_owned())
         );
     }
-
     #[test]
     fn rejects_missing_unknown_duplicate_and_malformed_parameters() {
         for query in [

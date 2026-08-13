@@ -1,32 +1,26 @@
 //! CLI regression tests for the production SoraFS provider-advert builder.
 #![cfg(feature = "cli")]
-
 use std::{
     env, fs,
     path::{Path, PathBuf},
 };
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use ed25519_dalek::{Signer, SigningKey};
 use iroha_crypto::sha256;
 use tempfile::{Builder, TempDir};
-
 fn canonical_temp_base() -> PathBuf {
     env::temp_dir()
         .canonicalize()
         .expect("canonical system temp dir")
 }
-
 fn tempdir() -> Result<TempDir, std::io::Error> {
     Builder::new()
         .prefix("sorafs-provider-advert-cli-")
         .tempdir_in(canonical_temp_base())
 }
-
 fn repeated_hex(byte: &str, count: usize) -> String {
     byte.repeat(count)
 }
-
 fn body_args() -> Vec<String> {
     vec![
         "--chunker-profile=sorafs.sf1@1.0.0".to_string(),
@@ -42,13 +36,11 @@ fn body_args() -> Vec<String> {
         "--issued-at=1700000000".to_string(),
     ]
 }
-
 struct SigningFixture {
     signing_key: SigningKey,
     public_key_path: PathBuf,
     fingerprint: String,
 }
-
 fn signing_fixture(temp: &TempDir, seed: u8, name: &str) -> SigningFixture {
     let signing_key = SigningKey::from_bytes(&[seed; 32]);
     let public_key = signing_key.verifying_key().to_bytes();
@@ -60,14 +52,12 @@ fn signing_fixture(temp: &TempDir, seed: u8, name: &str) -> SigningFixture {
         fingerprint: hex::encode(sha256(public_key)),
     }
 }
-
 fn reviewed_key_args(fixture: &SigningFixture) -> Vec<String> {
     vec![
         format!("--public-key-file={}", fixture.public_key_path.display()),
         format!("--public-key-fingerprint-sha256={}", fixture.fingerprint),
     ]
 }
-
 fn prepare_args(
     temp: &TempDir,
     fixture: &SigningFixture,
@@ -82,7 +72,6 @@ fn prepare_args(
     args.push(format!("--json-out={}", report_path.display()));
     (args, payload_path, report_path)
 }
-
 fn prepare_and_sign(temp: &TempDir, fixture: &SigningFixture, prefix: &str) -> (PathBuf, PathBuf) {
     let (args, payload_path, _) = prepare_args(temp, fixture, &format!("{prefix}.signing-payload"));
     let output = cargo_bin_cmd!("sorafs_provider_advert")
@@ -94,14 +83,12 @@ fn prepare_and_sign(temp: &TempDir, fixture: &SigningFixture, prefix: &str) -> (
         "prepare failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let payload = fs::read(&payload_path).expect("read signing payload");
     let signature = fixture.signing_key.sign(&payload).to_bytes();
     let signature_path = temp.path().join(format!("{prefix}.sig"));
     fs::write(&signature_path, signature).expect("write external signature");
     (payload_path, signature_path)
 }
-
 fn emit_args(
     temp: &TempDir,
     fixture: &SigningFixture,
@@ -123,14 +110,12 @@ fn emit_args(
     args.push(format!("--json-out={}", report_path.display()));
     (args, advert_path, report_path)
 }
-
 #[test]
 fn provider_advert_external_signing_round_trip_is_deterministic() {
     let first = tempdir().expect("first tempdir");
     let second = tempdir().expect("second tempdir");
     let first_signer = signing_fixture(&first, 0x33, "provider");
     let second_signer = signing_fixture(&second, 0x33, "provider");
-
     let (first_payload, first_signature) = prepare_and_sign(&first, &first_signer, "provider");
     let (second_payload, second_signature) = prepare_and_sign(&second, &second_signer, "provider");
     assert_eq!(
@@ -143,7 +128,6 @@ fn provider_advert_external_signing_round_trip_is_deterministic() {
         fs::read(&second_signature).expect("read second signature"),
         "Ed25519 signature must be deterministic"
     );
-
     let (first_args, first_advert, first_report) = emit_args(
         &first,
         &first_signer,
@@ -160,7 +144,6 @@ fn provider_advert_external_signing_round_trip_is_deterministic() {
         "first emit failed: {}",
         String::from_utf8_lossy(&first_output.stderr)
     );
-
     let (second_args, second_advert, second_report) = emit_args(
         &second,
         &second_signer,
@@ -187,7 +170,6 @@ fn provider_advert_external_signing_round_trip_is_deterministic() {
         fs::read(&second_report).expect("read second report"),
         "final JSON reports must be byte-identical"
     );
-
     let verify_output = cargo_bin_cmd!("sorafs_provider_advert")
         .arg("--verify")
         .arg(format!("--advert={}", first_advert.display()))
@@ -201,7 +183,6 @@ fn provider_advert_external_signing_round_trip_is_deterministic() {
         String::from_utf8_lossy(&verify_output.stderr)
     );
 }
-
 #[test]
 fn provider_advert_emit_rejects_unsigned_production_output() {
     let temp = tempdir().expect("tempdir");
@@ -211,7 +192,6 @@ fn provider_advert_emit_rejects_unsigned_production_output() {
         .args(prepare)
         .assert()
         .success();
-
     let advert_path = temp.path().join("unsigned.advert");
     let mut args = vec!["--emit".to_string()];
     args.extend(body_args());
@@ -222,7 +202,6 @@ fn provider_advert_emit_rejects_unsigned_production_output() {
         .args(args)
         .output()
         .expect("run unsigned provider advert");
-
     assert!(!output.status.success(), "unsigned emit must fail closed");
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("--signature-file"),
@@ -231,7 +210,6 @@ fn provider_advert_emit_rejects_unsigned_production_output() {
     );
     assert!(!advert_path.exists(), "unsigned advert must not be written");
 }
-
 #[test]
 fn provider_advert_cli_rejects_direct_software_signing_options() {
     let temp = tempdir().expect("tempdir");
@@ -259,13 +237,11 @@ fn provider_advert_cli_rejects_direct_software_signing_options() {
         assert!(!report_path.exists());
     }
 }
-
 #[test]
 fn provider_advert_cli_rejects_wrong_key_fingerprint_and_signature() {
     let temp = tempdir().expect("tempdir");
     let fixture = signing_fixture(&temp, 0x33, "provider");
     let other = signing_fixture(&temp, 0x44, "other");
-
     let (mut wrong_fingerprint_args, payload_path, _) =
         prepare_args(&temp, &fixture, "wrong-fingerprint.payload");
     let fingerprint_arg = wrong_fingerprint_args
@@ -284,7 +260,6 @@ fn provider_advert_cli_rejects_wrong_key_fingerprint_and_signature() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!payload_path.exists());
-
     let (reviewed_payload, signature_path) = prepare_and_sign(&temp, &fixture, "wrong-key");
     let (wrong_key_args, advert_path, _) = emit_args(
         &temp,
@@ -304,7 +279,6 @@ fn provider_advert_cli_rejects_wrong_key_fingerprint_and_signature() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!advert_path.exists());
-
     let (reviewed_payload, _) = prepare_and_sign(&temp, &fixture, "wrong-signature");
     let wrong_signature_path = temp.path().join("wrong-signature.sig");
     let payload = fs::read(&reviewed_payload).expect("read reviewed payload");
@@ -332,7 +306,6 @@ fn provider_advert_cli_rejects_wrong_key_fingerprint_and_signature() {
     );
     assert!(!advert_path.exists());
 }
-
 #[test]
 fn provider_advert_cli_rejects_malformed_signature() {
     let temp = tempdir().expect("tempdir");
@@ -342,7 +315,6 @@ fn provider_advert_cli_rejects_malformed_signature() {
     fs::write(&signature_path, [0x55; 63]).expect("write short signature");
     let (args, advert_path, _) =
         emit_args(&temp, &fixture, &payload_path, &signature_path, "malformed");
-
     let output = cargo_bin_cmd!("sorafs_provider_advert")
         .args(args)
         .output()
@@ -355,13 +327,11 @@ fn provider_advert_cli_rejects_malformed_signature() {
     );
     assert!(!advert_path.exists());
 }
-
 #[cfg(unix)]
 #[test]
 fn provider_advert_cli_rejects_symlink_and_hardlink_inputs() {
     let temp = tempdir().expect("tempdir");
     let fixture = signing_fixture(&temp, 0x33, "provider");
-
     let symlink_path = temp.path().join("linked.pub");
     std::os::unix::fs::symlink(&fixture.public_key_path, &symlink_path)
         .expect("create public-key symlink");
@@ -382,7 +352,6 @@ fn provider_advert_cli_rejects_symlink_and_hardlink_inputs() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!payload_path.exists());
-
     let hardlink_path = temp.path().join("hardlinked.pub");
     fs::hard_link(&fixture.public_key_path, &hardlink_path).expect("create public-key hard link");
     let (args, payload_path, _) = prepare_args(&temp, &fixture, "hardlink.payload");
@@ -398,7 +367,6 @@ fn provider_advert_cli_rejects_symlink_and_hardlink_inputs() {
     );
     assert!(!payload_path.exists());
 }
-
 #[test]
 fn provider_advert_cli_rejects_noncanonical_hex_before_outputs() {
     for (bad_arg, expected) in [
@@ -432,12 +400,10 @@ fn provider_advert_cli_rejects_noncanonical_hex_before_outputs() {
         let (mut args, payload_path, report_path) =
             prepare_args(&temp, &fixture, "provider.signing-payload");
         args.push(bad_arg.clone());
-
         let output = cargo_bin_cmd!("sorafs_provider_advert")
             .args(args)
             .output()
             .expect("run provider advert builder");
-
         assert!(
             !output.status.success(),
             "provider advert unexpectedly succeeded for {bad_arg}"
@@ -451,7 +417,6 @@ fn provider_advert_cli_rejects_noncanonical_hex_before_outputs() {
         assert!(!report_path.exists());
     }
 }
-
 #[test]
 fn provider_advert_cli_rejects_v1_selector_aliases_before_outputs() {
     for (bad_arg, expected) in [
@@ -489,12 +454,10 @@ fn provider_advert_cli_rejects_v1_selector_aliases_before_outputs() {
         let (mut args, payload_path, report_path) =
             prepare_args(&temp, &fixture, "provider.signing-payload");
         args.push(bad_arg.to_string());
-
         let output = cargo_bin_cmd!("sorafs_provider_advert")
             .args(args)
             .output()
             .expect("run provider advert builder");
-
         assert!(
             !output.status.success(),
             "provider advert unexpectedly succeeded for {bad_arg}"

@@ -1,8 +1,6 @@
 //! Support types for SM2/SM3/SM4 primitives.
-
 use core::{convert::TryFrom, fmt, str::FromStr};
 use std::sync::{OnceLock, RwLock};
-
 use derive_more::{Deref, DerefMut};
 use hex_literal::hex;
 use iroha_schema::{IntoSchema, TypeId};
@@ -24,7 +22,6 @@ use sm3::digest::Digest as _;
 use sm4::cipher::{Block, BlockDecrypt, BlockEncrypt, KeyInit as Sm4BlockKeyInit};
 use sm4_gcm::{Sm4Key as Sm4AeadKey, sm4_gcm_aad_decrypt, sm4_gcm_aad_encrypt};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
-
 #[cfg(feature = "sm-ffi-openssl")]
 pub use self::openssl_sm::{OpenSslSmBackend, OpenSslSmError};
 #[cfg(not(feature = "ffi_import"))]
@@ -263,7 +260,6 @@ impl Sm2PublicKey {
     /// Returns [`ParseError`] when the PEM cannot be decoded or contains an invalid SM2 key.
     pub fn from_public_key_pem(distid: impl AsRef<str>, pem: &str) -> Result<Self, ParseError> {
         use sm2::pkcs8::DecodePublicKey;
-
         let encoded_point = Sm2EcPublicKey::from_public_key_pem(pem)
             .map_err(|err| ParseError(format!("failed to decode SM2 public key PEM: {err}")))?
             .to_encoded_point(false);
@@ -321,7 +317,6 @@ impl Sm2PublicKey {
     /// Returns [`Error::BadSignature`] when verification fails.
     pub fn verify(&self, message: &[u8], signature: &Sm2Signature) -> Result<(), Error> {
         use signature::Verifier;
-
         #[cfg(feature = "sm-ffi-openssl")]
         {
             let pk_bytes = self.to_sec1_bytes(false);
@@ -946,11 +941,8 @@ fn sm4_decrypt_block_scalar(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
     out.copy_from_slice(buf.as_ref());
     out
 }
-
 mod sm_accel {
-
     use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-
     #[inline]
     pub fn sm3_digest(message: &[u8]) -> Option<[u8; 32]> {
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
@@ -1041,7 +1033,6 @@ mod sm_accel {
             IntrinsicOverride::Auto => None,
         }
     }
-
     #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
     mod neon {
         use super::{
@@ -1104,7 +1095,6 @@ mod sm_accel {
             }
         }
     }
-
     #[cfg(not(all(feature = "sm-neon", target_arch = "aarch64")))]
     mod neon {
         #[cfg(test)]
@@ -1114,7 +1104,6 @@ mod sm_accel {
             SmAccelDisableGuard
         }
     }
-
     #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
     mod portable {
         use super::{
@@ -1202,14 +1191,12 @@ mod sm_accel {
             }
         }
     }
-
     #[cfg(test)]
     pub mod tests {
         #[cfg(all(feature = "sm-neon-force", target_arch = "aarch64"))]
         use super::super::sm3_digest_scalar;
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         use super::super::sm4_encrypt_block_scalar;
-
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         fn parity_seeds() -> [u8; 12] {
             [
@@ -1443,7 +1430,6 @@ mod sm_accel {
         #[test]
         fn neon_sm4_block_cipher_matches_scalar_fixtures() {
             use super::super::{sm4_decrypt_block_scalar, sm4_encrypt_block_scalar};
-
             let _accel_lock = super::super::test_support::lock_accel_state();
             let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
             assert!(
@@ -1475,7 +1461,6 @@ mod sm_accel {
         #[test]
         fn neon_sm4_key_round_trip_matches_scalar() {
             use crate::sm::Sm4Key;
-
             let _accel_lock = super::super::test_support::lock_accel_state();
             let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
             assert!(
@@ -1603,18 +1588,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Sm3Digest {
         Ok((Sm3Digest(buf), Sm3Digest::LENGTH))
     }
 }
-
 #[cfg(feature = "sm-ccm")]
 mod sm4_ccm_compat {
     use core::convert::TryFrom;
-
     use sm4::{
         Sm4,
         cipher::{Block, BlockEncrypt, KeyInit},
     };
-
     use super::Error;
-
     const BLOCK_SIZE: usize = 16;
     fn is_valid_tag_len(len: usize) -> bool {
         (4..=16).contains(&len) && len.is_multiple_of(2)
@@ -2218,11 +2199,9 @@ pub fn set_intrinsic_policy(policy: SmIntrinsicPolicy) {
 pub fn configured_intrinsic_policy() -> SmIntrinsicPolicy {
     sm_accel::configured_policy()
 }
-
 #[cfg(test)]
 mod test_support {
     use std::sync::{Mutex, MutexGuard};
-
     static SM_ACCEL_STATE_LOCK: Mutex<()> = Mutex::new(());
     pub(super) fn lock_accel_state() -> MutexGuard<'static, ()> {
         SM_ACCEL_STATE_LOCK
@@ -2280,7 +2259,6 @@ pub fn intrinsic_policy() -> SmIntrinsicPolicy {
         sm_accel::NeonPolicy::Unsupported => SmIntrinsicPolicy::ScalarOnly,
     }
 }
-
 #[cfg(test)]
 mod intrinsic_policy_tests {
     use super::{
@@ -2339,7 +2317,6 @@ pub mod openssl_provider {
         OnceLock,
         atomic::{AtomicBool, Ordering},
     };
-
     #[cfg(ossl300)]
     use openssl::cipher::Cipher;
     use openssl::{
@@ -2349,7 +2326,6 @@ pub mod openssl_provider {
         version,
     };
     use thiserror::Error;
-
     /// Errors that can occur while initialising or querying the OpenSSL provider preview.
     #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
     #[non_exhaustive]
@@ -2419,7 +2395,6 @@ pub mod openssl_provider {
             version::version()
         }
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -2487,10 +2462,8 @@ pub mod openssl_provider {
         }
     }
 }
-
 #[cfg(feature = "sm-ffi-openssl")]
 pub use openssl_provider::{OpenSslProvider, OpenSslProviderError};
-
 #[cfg(feature = "sm-ffi-openssl")]
 /// Preview OpenSSL-backed implementations for SM primitives.
 pub mod openssl_sm {
@@ -2506,9 +2479,7 @@ pub mod openssl_sm {
     };
     use sm3::Digest;
     use thiserror::Error;
-
     use super::{OpenSslProvider, Sm2Signature, Sm3Digest};
-
     /// Errors returned by the preview OpenSSL SM backend.
     #[derive(Debug, Error)]
     pub enum OpenSslSmError {
@@ -2811,11 +2782,9 @@ pub mod openssl_sm {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
-
     use hex::decode as hex_decode;
     use rand_core::{TryCryptoRng, TryRngCore};
     use signature::hazmat::PrehashVerifier;
@@ -2824,9 +2793,7 @@ mod tests {
         sec1::{Coordinates, ToEncodedPoint},
     };
     use sm3::Sm3;
-
     use super::{sm_accel, *};
-
     const ANNEX_SIG_HEX: &str = "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D16FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7";
     const ANNEX_SIG_DER_HEX: &str = "3044022040F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D102206FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7";
     const ANNEX_PUBKEY_HEX: &str = "040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857";
@@ -3141,7 +3108,6 @@ mod tests {
     fn sm2_compute_z_matches_manual_formula_samples() {
         use rand::{RngCore as _, SeedableRng as _};
         use rand_chacha::ChaCha20Rng;
-
         let mut rng = ChaCha20Rng::from_seed([0xA5; 32]);
         for _ in 0..128 {
             let mut seed = [0u8; 32];
@@ -3545,7 +3511,6 @@ mod tests {
     #[test]
     fn sm2_public_key_prefixed_string_matches_public_key_helper() {
         use crate::{Algorithm, PublicKey};
-
         let private =
             Sm2PrivateKey::from_seed("prefixed-distid", b"prefixed-seed").expect("derive key");
         let public = private.public_key();

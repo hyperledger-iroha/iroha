@@ -6,13 +6,11 @@
 //! [`P256EcdsaCircuitV1`]; a production implementation must bind those
 //! primitives to the arithmetic, reduction, window, equality, and byte-I/O
 //! AIRs. The verifier never calls RustCrypto or the native reference relation.
-
 use super::p256_group_air::{
     P256ProjectiveValueV1, P256WindowCircuitV1, constrain_p256_affine_on_curve_v1,
     normalize_p256_nonidentity_v1, p256_two_scalar_linear_combination_v1,
 };
 use super::p256_window_air::P256WindowScalarV1;
-
 /// Verifier-fixed signature role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256EcdsaRoleV1 {
@@ -22,7 +20,6 @@ pub(crate) enum P256EcdsaRoleV1 {
     /// Fresh wallet-ownership signature: low-s is mandatory.
     WalletOwnership,
 }
-
 /// Private values required for one exact ECDSA equation.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct P256EcdsaWitnessV1 {
@@ -37,13 +34,11 @@ pub(crate) struct P256EcdsaWitnessV1 {
     /// Exact SHA-256/prehash digest interpreted as an unsigned 256-bit word.
     pub(crate) digest_be: [u8; 32],
 }
-
 impl core::fmt::Debug for P256EcdsaWitnessV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("P256EcdsaWitnessV1 { <private material redacted> }")
     }
 }
-
 impl P256EcdsaWitnessV1 {
     /// Overwrite the complete private ECDSA input tuple.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -54,7 +49,6 @@ impl P256EcdsaWitnessV1 {
         self.s_be.fill(0);
         self.digest_be.fill(0);
     }
-
     #[cfg(test)]
     pub(crate) fn private_is_zeroized_v1(&self) -> bool {
         self.public_key_x_be == [0; 32]
@@ -64,7 +58,6 @@ impl P256EcdsaWitnessV1 {
             && self.digest_be == [0; 32]
     }
 }
-
 /// Assigned values retained for complete cross-chip composition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256EcdsaAssignedV1<S, B> {
@@ -87,51 +80,42 @@ pub(crate) struct P256EcdsaAssignedV1<S, B> {
     /// `result_x mod n`, constrained equal to r.
     pub(crate) reduced_x: S,
 }
-
 /// Scalar, reduction, and binding primitives required in addition to the
 /// complete base-field/window circuit.
 pub(crate) trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
     /// Handle of one canonical P-256 scalar-field value.
     type Scalar: Copy;
-
     /// Allocate a private base-field value bound to DER/P-256 byte I/O.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn base_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Value, Self::Error>;
-
     /// Allocate a private canonical scalar bound to strict DER output.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn scalar_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Scalar, Self::Error>;
-
     /// Allocate an inverse and constrain `value * inverse = 1 mod n`.
     fn scalar_inverse_nonzero_v1(
         &mut self,
         value: Self::Scalar,
     ) -> Result<Self::Scalar, Self::Error>;
-
     /// Emit scalar multiplication modulo n.
     fn scalar_multiply_v1(
         &mut self,
         left: Self::Scalar,
         right: Self::Scalar,
     ) -> Result<Self::Scalar, Self::Error>;
-
     /// Constrain two scalar IDs to the same canonical value.
     fn scalar_assert_equal_v1(
         &mut self,
         left: Self::Scalar,
         right: Self::Scalar,
     ) -> Result<(), Self::Error>;
-
     /// Reduce an exact SHA-256 word with the one-subtraction reduction AIR.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn reduce_digest_v1(&mut self, digest_be: [u8; 32]) -> Result<Self::Scalar, Self::Error>;
-
     /// Reduce an assigned canonical base-field coordinate modulo n.
     fn reduce_base_coordinate_v1(
         &mut self,
         coordinate: Self::Value,
     ) -> Result<Self::Scalar, Self::Error>;
-
     /// Return the 256 algebraically bound big-endian bits of a
     /// verifier-positioned ECDSA scalar.
     fn scalar_bits_be_v1(
@@ -139,11 +123,9 @@ pub(crate) trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
         scalar: Self::Scalar,
         role: P256WindowScalarV1,
     ) -> Result<[Self::Bit; 256], Self::Error>;
-
     /// Apply the exact `s <= floor(n/2)` comparison AIR.
     fn constrain_low_s_v1(&mut self, scalar: Self::Scalar) -> Result<(), Self::Error>;
 }
-
 /// Typed source for the five external values consumed by one ECDSA equation.
 ///
 /// The relation schedule asks for each value only at its canonical allocation
@@ -153,20 +135,16 @@ pub(crate) trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
 pub(crate) trait P256EcdsaInputSourceV1<C: P256EcdsaCircuitV1> {
     /// Allocate the affine public-key coordinates.
     fn public_key_v1(&mut self, circuit: &mut C) -> Result<(C::Value, C::Value), C::Error>;
-
     /// Allocate the canonical signature scalars `(r, s)`.
     fn signature_v1(&mut self, circuit: &mut C) -> Result<(C::Scalar, C::Scalar), C::Error>;
-
     /// Allocate and constrain the reduced SHA-256 digest.
     fn reduced_digest_v1(&mut self, circuit: &mut C) -> Result<C::Scalar, C::Error>;
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct P256EcdsaWitnessInputSourceV1 {
     witness: P256EcdsaWitnessV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<C: P256EcdsaCircuitV1> P256EcdsaInputSourceV1<C> for P256EcdsaWitnessInputSourceV1 {
     fn public_key_v1(&mut self, circuit: &mut C) -> Result<(C::Value, C::Value), C::Error> {
@@ -175,19 +153,16 @@ impl<C: P256EcdsaCircuitV1> P256EcdsaInputSourceV1<C> for P256EcdsaWitnessInputS
             circuit.base_input_v1(self.witness.public_key_y_be)?,
         ))
     }
-
     fn signature_v1(&mut self, circuit: &mut C) -> Result<(C::Scalar, C::Scalar), C::Error> {
         Ok((
             circuit.scalar_input_v1(self.witness.r_be)?,
             circuit.scalar_input_v1(self.witness.s_be)?,
         ))
     }
-
     fn reduced_digest_v1(&mut self, circuit: &mut C) -> Result<C::Scalar, C::Error> {
         circuit.reduce_digest_v1(self.witness.digest_be)
     }
 }
-
 /// Constrain one complete P-256 ECDSA verification equation from a typed
 /// external-value source.
 ///
@@ -204,7 +179,6 @@ pub(crate) fn constrain_p256_ecdsa_from_source_v1<
 ) -> Result<P256EcdsaAssignedV1<C::Scalar, C::Value>, C::Error> {
     let (public_key_x, public_key_y) = inputs.public_key_v1(circuit)?;
     let public_key = constrain_p256_affine_on_curve_v1(circuit, public_key_x, public_key_y)?;
-
     let (r, s) = inputs.signature_v1(circuit)?;
     // ECDSA requires both scalars to be strictly positive.
     let _r_inverse = circuit.scalar_inverse_nonzero_v1(r)?;
@@ -212,7 +186,6 @@ pub(crate) fn constrain_p256_ecdsa_from_source_v1<
     if role == P256EcdsaRoleV1::WalletOwnership {
         circuit.constrain_low_s_v1(s)?;
     }
-
     let z = inputs.reduced_digest_v1(circuit)?;
     let u1 = circuit.scalar_multiply_v1(z, s_inverse)?;
     let u2 = circuit.scalar_multiply_v1(r, s_inverse)?;
@@ -228,7 +201,6 @@ pub(crate) fn constrain_p256_ecdsa_from_source_v1<
     let (result_x, _result_y) = normalize_p256_nonidentity_v1(circuit, result)?;
     let reduced_x = circuit.reduce_base_coordinate_v1(result_x)?;
     circuit.scalar_assert_equal_v1(reduced_x, r)?;
-
     Ok(P256EcdsaAssignedV1 {
         public_key,
         r,
@@ -241,7 +213,6 @@ pub(crate) fn constrain_p256_ecdsa_from_source_v1<
         reduced_x,
     })
 }
-
 /// Constrain one complete P-256 ECDSA verification equation from native
 /// witness bytes.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -258,7 +229,6 @@ pub(crate) fn constrain_p256_ecdsa_v1<C: P256EcdsaCircuitV1>(
         P256EcdsaWitnessInputSourceV1 { witness },
     )
 }
-
 #[cfg(test)]
 mod tests {
     use p256::{
@@ -267,7 +237,6 @@ mod tests {
         elliptic_curve::{PrimeField as _, group::Group as _, sec1::ToEncodedPoint as _},
     };
     use thiserror::Error;
-
     use super::*;
     use crate::privacy_engines::zk_x509::{
         p256_air::{
@@ -281,13 +250,10 @@ mod tests {
             build_p256_reduction_trace_v1,
         },
     };
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct BaseValue(usize);
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct ScalarValue(usize);
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
     enum TestError {
         #[error("non-canonical test value")]
@@ -299,7 +265,6 @@ mod tests {
         #[error("wallet signature is high-s")]
         HighS,
     }
-
     #[derive(Debug, Default, PartialEq, Eq)]
     struct TestCircuit {
         base_values: Vec<[u8; 32]>,
@@ -308,12 +273,10 @@ mod tests {
         reductions: Vec<P256ReductionTraceV1>,
         low_s: Vec<P256LowSTraceV1>,
     }
-
     #[derive(Clone, Copy)]
     struct ExplicitTestInputSourceV1 {
         witness: P256EcdsaWitnessV1,
     }
-
     impl P256EcdsaInputSourceV1<TestCircuit> for ExplicitTestInputSourceV1 {
         fn public_key_v1(
             &mut self,
@@ -324,7 +287,6 @@ mod tests {
                 circuit.base_input_v1(self.witness.public_key_y_be)?,
             ))
         }
-
         fn signature_v1(
             &mut self,
             circuit: &mut TestCircuit,
@@ -334,7 +296,6 @@ mod tests {
                 circuit.scalar_input_v1(self.witness.s_be)?,
             ))
         }
-
         fn reduced_digest_v1(
             &mut self,
             circuit: &mut TestCircuit,
@@ -342,7 +303,6 @@ mod tests {
             circuit.reduce_digest_v1(self.witness.digest_be)
         }
     }
-
     impl TestCircuit {
         fn push_base(&mut self, value: [u8; 32]) -> Result<BaseValue, TestError> {
             if value >= P256_BASE_MODULUS_BE_V1 {
@@ -352,7 +312,6 @@ mod tests {
             self.base_values.push(value);
             Ok(assigned)
         }
-
         fn push_scalar(&mut self, value: [u8; 32]) -> Result<ScalarValue, TestError> {
             if value >= P256_SCALAR_MODULUS_BE_V1 {
                 return Err(TestError::NonCanonical);
@@ -361,19 +320,16 @@ mod tests {
             self.scalar_values.push(value);
             Ok(assigned)
         }
-
         fn base_field(&self, value: BaseValue) -> Result<FieldElement, TestError> {
             Option::<FieldElement>::from(FieldElement::from_bytes(&FieldBytes::from(
                 self.base_values[value.0],
             )))
             .ok_or(TestError::NonCanonical)
         }
-
         fn scalar_field(&self, value: ScalarValue) -> Result<Scalar, TestError> {
             Option::<Scalar>::from(Scalar::from_repr(self.scalar_values[value.0].into()))
                 .ok_or(TestError::NonCanonical)
         }
-
         fn push_operation(
             &mut self,
             kind: ZkX509P256ArithmeticKindV1,
@@ -391,15 +347,12 @@ mod tests {
             });
         }
     }
-
     impl P256BaseFieldCircuitV1 for TestCircuit {
         type Value = BaseValue;
         type Error = TestError;
-
         fn constant_v1(&mut self, value: [u8; 32]) -> Result<Self::Value, Self::Error> {
             self.push_base(value)
         }
-
         fn add_v1(
             &mut self,
             left: Self::Value,
@@ -417,7 +370,6 @@ mod tests {
             );
             self.push_base(result)
         }
-
         fn subtract_v1(
             &mut self,
             left: Self::Value,
@@ -435,7 +387,6 @@ mod tests {
             );
             self.push_base(result)
         }
-
         fn multiply_v1(
             &mut self,
             left: Self::Value,
@@ -453,7 +404,6 @@ mod tests {
             );
             self.push_base(result)
         }
-
         fn assert_equal_v1(
             &mut self,
             left: Self::Value,
@@ -464,7 +414,6 @@ mod tests {
             }
             Ok(())
         }
-
         fn inverse_nonzero_v1(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error> {
             let inverse = Option::<FieldElement>::from(self.base_field(value)?.invert())
                 .ok_or(TestError::ZeroInverse)?;
@@ -479,10 +428,8 @@ mod tests {
             Ok(inverse)
         }
     }
-
     impl P256WindowCircuitV1 for TestCircuit {
         type Bit = bool;
-
         fn select_window_v1(
             &mut self,
             table: &[P256ProjectiveValueV1<Self::Value>; 16],
@@ -494,18 +441,14 @@ mod tests {
             Ok(table[index])
         }
     }
-
     impl P256EcdsaCircuitV1 for TestCircuit {
         type Scalar = ScalarValue;
-
         fn base_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Value, Self::Error> {
             self.push_base(value_be)
         }
-
         fn scalar_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Scalar, Self::Error> {
             self.push_scalar(value_be)
         }
-
         fn scalar_inverse_nonzero_v1(
             &mut self,
             value: Self::Scalar,
@@ -520,7 +463,6 @@ mod tests {
             self.scalar_assert_equal_v1(product, one)?;
             Ok(inverse)
         }
-
         fn scalar_multiply_v1(
             &mut self,
             left: Self::Scalar,
@@ -538,7 +480,6 @@ mod tests {
             );
             self.push_scalar(result)
         }
-
         fn scalar_assert_equal_v1(
             &mut self,
             left: Self::Scalar,
@@ -549,7 +490,6 @@ mod tests {
             }
             Ok(())
         }
-
         fn reduce_digest_v1(&mut self, digest_be: [u8; 32]) -> Result<Self::Scalar, Self::Error> {
             let trace =
                 build_p256_reduction_trace_v1(digest_be).map_err(|_| TestError::NonCanonical)?;
@@ -557,14 +497,12 @@ mod tests {
             self.reductions.push(trace);
             self.push_scalar(reduced)
         }
-
         fn reduce_base_coordinate_v1(
             &mut self,
             coordinate: Self::Value,
         ) -> Result<Self::Scalar, Self::Error> {
             self.reduce_digest_v1(self.base_values[coordinate.0])
         }
-
         fn scalar_bits_be_v1(
             &mut self,
             scalar: Self::Scalar,
@@ -575,7 +513,6 @@ mod tests {
                 (bytes[bit / 8] >> (7 - bit % 8)) & 1 == 1
             }))
         }
-
         fn constrain_low_s_v1(&mut self, scalar: Self::Scalar) -> Result<(), Self::Error> {
             let trace = build_p256_low_s_trace_v1(self.scalar_values[scalar.0])
                 .map_err(|_| TestError::HighS)?;
@@ -583,7 +520,6 @@ mod tests {
             Ok(())
         }
     }
-
     fn assigned_generator_table(
         circuit: &mut TestCircuit,
     ) -> [P256ProjectiveValueV1<BaseValue>; 16] {
@@ -612,7 +548,6 @@ mod tests {
             }
         })
     }
-
     fn witness_for(key: &SigningKey, digest: [u8; 32], signature: Signature) -> P256EcdsaWitnessV1 {
         let encoded = key.verifying_key().to_encoded_point(false);
         let mut public_key_x_be = [0_u8; 32];
@@ -627,13 +562,11 @@ mod tests {
             digest_be: digest,
         }
     }
-
     fn signing_key(seed: u8) -> SigningKey {
         let mut bytes = [0_u8; 32];
         bytes[31] = seed.max(1);
         SigningKey::from_slice(&bytes).expect("nonzero key")
     }
-
     fn execute(
         witness: P256EcdsaWitnessV1,
         role: P256EcdsaRoleV1,
@@ -643,7 +576,6 @@ mod tests {
         constrain_p256_ecdsa_v1(&mut circuit, &generator_table, role, witness)?;
         Ok(circuit)
     }
-
     fn execute_from_explicit_source(
         witness: P256EcdsaWitnessV1,
         role: P256EcdsaRoleV1,
@@ -658,7 +590,6 @@ mod tests {
         )?;
         Ok(circuit)
     }
-
     #[test]
     fn typed_input_source_preserves_the_exact_native_witness_schedule() {
         let key = signing_key(7);
@@ -675,7 +606,6 @@ mod tests {
             execute_from_explicit_source(witness, P256EcdsaRoleV1::CertificateOrCrl),
         );
     }
-
     #[test]
     fn complete_ecdsa_equation_matches_rustcrypto_and_fixed_budget() {
         for seed in 1_u8..=8 {
@@ -708,7 +638,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn certificate_high_s_is_valid_but_wallet_high_s_is_rejected() {
         let key = signing_key(29);
@@ -731,7 +660,6 @@ mod tests {
             Err(TestError::HighS)
         );
     }
-
     #[test]
     fn wrong_digest_key_r_s_zero_and_offcurve_inputs_fail_closed() {
         let key = signing_key(41);
@@ -739,11 +667,9 @@ mod tests {
         let signature: Signature = key.sign_prehash(&digest).expect("signature");
         let signature = signature.normalize_s().unwrap_or(signature);
         let witness = witness_for(&key, digest, signature);
-
         let mut wrong_digest = witness;
         wrong_digest.digest_be[0] ^= 1;
         assert!(execute(wrong_digest, P256EcdsaRoleV1::WalletOwnership).is_err());
-
         let other_key = signing_key(43);
         let mut wrong_key = witness;
         let other = other_key.verifying_key().to_encoded_point(false);
@@ -754,29 +680,24 @@ mod tests {
             .public_key_y_be
             .copy_from_slice(other.y().expect("y"));
         assert!(execute(wrong_key, P256EcdsaRoleV1::WalletOwnership).is_err());
-
         let mut wrong_r = witness;
         wrong_r.r_be[31] ^= 1;
         assert!(execute(wrong_r, P256EcdsaRoleV1::WalletOwnership).is_err());
-
         let mut wrong_s = witness;
         wrong_s.s_be[31] ^= 1;
         assert!(execute(wrong_s, P256EcdsaRoleV1::WalletOwnership).is_err());
-
         let mut zero_r = witness;
         zero_r.r_be = [0; 32];
         assert_eq!(
             execute(zero_r, P256EcdsaRoleV1::WalletOwnership).map(|_| ()),
             Err(TestError::ZeroInverse)
         );
-
         let mut zero_s = witness;
         zero_s.s_be = [0; 32];
         assert_eq!(
             execute(zero_s, P256EcdsaRoleV1::WalletOwnership).map(|_| ()),
             Err(TestError::ZeroInverse)
         );
-
         let mut off_curve = witness;
         off_curve.public_key_y_be[31] ^= 1;
         assert_eq!(
@@ -784,7 +705,6 @@ mod tests {
             Err(TestError::Equality)
         );
     }
-
     #[test]
     fn digest_and_result_x_reduction_cover_above_order_words() {
         let key = signing_key(53);
@@ -799,7 +719,6 @@ mod tests {
         assert_eq!(circuit.reductions.len(), 2);
         assert_ne!(circuit.reductions[0].reduced_be_v1(), digest);
     }
-
     #[test]
     fn generator_table_constants_are_exact_uncompressed_points() {
         let mut circuit = TestCircuit::default();

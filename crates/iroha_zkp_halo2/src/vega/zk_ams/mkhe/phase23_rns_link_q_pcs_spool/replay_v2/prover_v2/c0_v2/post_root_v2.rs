@@ -7,15 +7,12 @@
 //! 20-slot Merkle frontier. The combined move-only result retains coefficient,
 //! C0, Cq, and S snapshots, but batching, FRI, proof, and release gates stay
 //! false and the production authority remains uninhabited.
-
 use core::{convert::Infallible, sync::atomic};
 use std::path::Path;
-
 use iroha_confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
-
 use crate::vega::{
     sponge::Keccak256,
     zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
@@ -23,14 +20,11 @@ use crate::vega::{
         SoundnessErrorV2,
     },
 };
-
 use super::*;
-
 #[path = "post_root_v2/batch_fri_v2.rs"]
 mod batch_fri_v2;
 #[path = "post_root_v2/global_lookup_s_replay_v1.rs"]
 mod global_lookup_s_replay_v1;
-
 const QUOTIENT_LEAF_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-leaf\0";
 const QUOTIENT_NODE_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-node\0";
 const QUOTIENT_TREE_KIND_V2: u8 = 2;
@@ -77,14 +71,12 @@ const POST_ROOT_OPERATIONAL_RECEIPT_ACCEPTED_V2: bool = false;
 const POST_ROOT_MEASURED_RSS_WITHIN_CAP_V2: bool = false;
 const POST_ROOT_RELEASE_READY_V2: bool = false;
 const POST_ROOT_RELEASE_COMPLETE_V2: bool = false;
-
 #[cfg(test)]
 static POST_ROOT_EVALUATION_DROPS_V2: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
 #[cfg(test)]
 static POST_ROOT_COEFFICIENT_DROPS_V2: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
 #[cfg(test)]
 static POST_ROOT_CQ_WINDOW_DROPS_V2: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
-
 const _: () = {
     assert!(QUOTIENT_RELATIONS_V2 == 38 * 5);
     assert!(QUOTIENT_EVALUATION_BYTES_V2 == 3_040);
@@ -148,13 +140,11 @@ const _: () = {
     assert!(!POST_ROOT_RELEASE_READY_V2);
     assert!(!POST_ROOT_RELEASE_COMPLETE_V2);
 };
-
 impl From<SoundnessErrorV2> for ProverPrerequisiteErrorV2 {
     fn from(_: SoundnessErrorV2) -> Self {
         Self::InvalidPostRootTranscript
     }
 }
-
 /// The post-root producer remains production-uninhabited independently of C0.
 pub(super) enum PostRootAuthorityV2 {
     Production {
@@ -165,11 +155,9 @@ pub(super) enum PostRootAuthorityV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 struct ZeroizingEvaluationFrameV2 {
     bytes: [u8; QUOTIENT_EVALUATION_BYTES_V2],
 }
-
 impl ZeroizingEvaluationFrameV2 {
     const fn new_v2() -> Self {
         Self {
@@ -177,7 +165,6 @@ impl ZeroizingEvaluationFrameV2 {
         }
     }
 }
-
 impl Drop for ZeroizingEvaluationFrameV2 {
     fn drop(&mut self) {
         self.bytes.fill(0);
@@ -186,11 +173,9 @@ impl Drop for ZeroizingEvaluationFrameV2 {
         POST_ROOT_EVALUATION_DROPS_V2.fetch_add(1, atomic::Ordering::SeqCst);
     }
 }
-
 struct ZeroizingCoefficientBufferV2 {
     values: Vec<u64>,
 }
-
 impl ZeroizingCoefficientBufferV2 {
     fn new_v2(capacity: usize) -> Result<Self, ProverPrerequisiteErrorV2> {
         let mut values = Vec::new();
@@ -203,7 +188,6 @@ impl ZeroizingCoefficientBufferV2 {
         Ok(Self { values })
     }
 }
-
 impl Drop for ZeroizingCoefficientBufferV2 {
     fn drop(&mut self) {
         self.values.fill(0);
@@ -212,7 +196,6 @@ impl Drop for ZeroizingCoefficientBufferV2 {
         POST_ROOT_COEFFICIENT_DROPS_V2.fetch_add(1, atomic::Ordering::SeqCst);
     }
 }
-
 fn read_component_v2(
     replay: PostC0CoefficientReplayV2,
     modulus: u64,
@@ -244,7 +227,6 @@ fn read_component_v2(
     }
     Ok(row.complete_v2()?)
 }
-
 fn evaluate_coefficients_v2(coefficients: &[u64], point: u64, modulus: u64) -> u64 {
     let mut evaluation = 0_u64;
     for coefficient in coefficients.iter().rev().copied() {
@@ -256,7 +238,6 @@ fn evaluate_coefficients_v2(coefficients: &[u64], point: u64, modulus: u64) -> u
     }
     evaluation
 }
-
 fn evaluate_component_v2(
     replay: PostC0CoefficientReplayV2,
     point: u64,
@@ -267,7 +248,6 @@ fn evaluate_component_v2(
     let evaluation = evaluate_coefficients_v2(&coefficients.values, point, modulus);
     Ok((replay, evaluation))
 }
-
 fn pow_mod_v2(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     let mut result = 1_u64;
     while exponent != 0 {
@@ -279,7 +259,6 @@ fn pow_mod_v2(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     }
     result
 }
-
 fn synthesize_quotient_v2(
     coefficients: &mut ZeroizingCoefficientBufferV2,
     point: u64,
@@ -325,7 +304,6 @@ fn synthesize_quotient_v2(
     coefficients.values.resize(domain_size, 0);
     Ok(())
 }
-
 fn load_fq2_buffer_v2(
     buffer: &mut ZeroizingNttBufferV2,
     coefficients: &ZeroizingCoefficientBufferV2,
@@ -338,14 +316,12 @@ fn load_fq2_buffer_v2(
     }
     Ok(())
 }
-
 struct CqColumnWriterV2 {
     writer: Option<ConfidentialSpoolWriterV1>,
     descriptor: StorageLayoutDescriptorV2,
     context_digest: [u8; 32],
     next_slot: u64,
 }
-
 impl CqColumnWriterV2 {
     fn create_v2(
         directory: &Path,
@@ -377,7 +353,6 @@ impl CqColumnWriterV2 {
             next_slot: 0,
         })
     }
-
     fn write_row_v2(
         &mut self,
         expected_column: u16,
@@ -417,7 +392,6 @@ impl CqColumnWriterV2 {
         self.writer = Some(writer);
         Ok(())
     }
-
     fn seal_v2(mut self) -> Result<CqColumnSnapshotV2, ProverPrerequisiteErrorV2> {
         let writer = self
             .writer
@@ -433,20 +407,17 @@ impl CqColumnWriterV2 {
         })
     }
 }
-
 struct CqColumnSnapshotV2 {
     snapshot: Option<ConfidentialSpoolSnapshotV1>,
     descriptor: StorageLayoutDescriptorV2,
     context_digest: [u8; 32],
 }
-
 struct QuotientFrontierV2 {
     nodes: [[u8; 32]; QUOTIENT_FRONTIER_NODES_V2],
     occupied: u32,
     leaves: usize,
     parameter_digest: [u8; 32],
 }
-
 fn quotient_leaf_hash_v2(
     parameter_digest: [u8; 32],
     length: usize,
@@ -470,7 +441,6 @@ fn quotient_leaf_hash_v2(
     hash.update(values);
     Ok(hash.finalize())
 }
-
 fn quotient_node_hash_v2(
     parameter_digest: [u8; 32],
     height: usize,
@@ -490,7 +460,6 @@ fn quotient_node_hash_v2(
     hash.update(&right);
     Ok(hash.finalize())
 }
-
 impl QuotientFrontierV2 {
     const fn new_v2(parameter_digest: [u8; 32]) -> Self {
         Self {
@@ -500,7 +469,6 @@ impl QuotientFrontierV2 {
             parameter_digest,
         }
     }
-
     fn push_v2(&mut self, mut digest: [u8; 32]) -> Result<(), ProverPrerequisiteErrorV2> {
         let mut level = 0_usize;
         let mut prior = self.leaves;
@@ -538,7 +506,6 @@ impl QuotientFrontierV2 {
         }
         Ok(())
     }
-
     fn finish_v2(self, expected: usize) -> Result<[u8; 32], ProverPrerequisiteErrorV2> {
         if expected == 0 || !expected.is_power_of_two() {
             return Err(ProverPrerequisiteErrorV2::InvalidMerkleRoot);
@@ -554,13 +521,11 @@ impl QuotientFrontierV2 {
         Ok(self.nodes[level])
     }
 }
-
 struct ZeroizingCqWindowV2 {
     bytes: Vec<u8>,
     values_per_block: usize,
     leaf_bytes: usize,
 }
-
 impl ZeroizingCqWindowV2 {
     fn new_v2(values_per_block: usize, columns: usize) -> Result<Self, ProverPrerequisiteErrorV2> {
         let leaf_bytes = columns
@@ -583,7 +548,6 @@ impl ZeroizingCqWindowV2 {
             leaf_bytes,
         })
     }
-
     fn absorb_v2(&mut self, column: usize, chunk: &[u8]) -> Result<(), ProverPrerequisiteErrorV2> {
         let column_offset = column
             .checked_mul(16)
@@ -609,7 +573,6 @@ impl ZeroizingCqWindowV2 {
         Ok(())
     }
 }
-
 impl Drop for ZeroizingCqWindowV2 {
     fn drop(&mut self) {
         self.bytes.fill(0);
@@ -618,7 +581,6 @@ impl Drop for ZeroizingCqWindowV2 {
         POST_ROOT_CQ_WINDOW_DROPS_V2.fetch_add(1, atomic::Ordering::SeqCst);
     }
 }
-
 fn transpose_and_root_v2(
     mut column: CqColumnSnapshotV2,
     parameter_digest: [u8; 32],
@@ -684,7 +646,6 @@ fn transpose_and_root_v2(
     let root = frontier.finish_v2(RELEASE_QUOTIENT_LEAVES_V2)?;
     Ok((root, replay))
 }
-
 /// Combined owner for every authenticated artifact through the Cq root.
 pub(super) struct QuotientRootPreparedV2 {
     accepted_c0: Option<QPcsC0StoredV2>,
@@ -697,7 +658,6 @@ pub(super) struct QuotientRootPreparedV2 {
     initial_root: [u8; 32],
     quotient_root: [u8; 32],
 }
-
 impl InitialC0RootPreparedV2 {
     pub(super) fn prepare_quotient_root_v2(
         self,
@@ -716,7 +676,6 @@ impl InitialC0RootPreparedV2 {
         prepare_quotient_operation_v2(self, directory)
     }
 }
-
 fn prepare_quotient_operation_v2(
     mut prepared: InitialC0RootPreparedV2,
     directory: &Path,
@@ -828,7 +787,6 @@ fn prepare_quotient_operation_v2(
                     .try_into()
                     .map_err(|_| ProverPrerequisiteErrorV2::InvalidPostRootTranscript)?,
             );
-
             replay = read_component_v2(replay, modulus, &mut coefficients, true)?;
             if coefficients.values.len() != ring_degree {
                 return Err(ProverPrerequisiteErrorV2::InvalidSourceShape);
@@ -844,7 +802,6 @@ fn prepare_quotient_operation_v2(
                 fixed_row_column_v2(limb, repetition, LdeRowRoleV2::Product)?,
                 &ntt,
             )?;
-
             replay = read_component_v2(replay, modulus, &mut coefficients, true)?;
             if coefficients.values.len() != ring_degree {
                 return Err(ProverPrerequisiteErrorV2::InvalidSourceShape);
@@ -884,7 +841,6 @@ fn prepare_quotient_operation_v2(
         quotient_root,
     })
 }
-
 #[cfg(test)]
 #[path = "post_root_v2_tests.rs"]
 mod tests;

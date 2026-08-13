@@ -1,3 +1,6 @@
+use crate::sumeragi::v2_lifecycle_coordinator::{
+    reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
+};
 #[test]
 fn every_stage_has_one_canonical_round_trip_and_exact_record_mapping() {
     let fixture = Fixture::new();
@@ -12,7 +15,6 @@ fn every_stage_has_one_canonical_round_trip_and_exact_record_mapping() {
         stages,
         LifecycleStageKind::ALL.into_iter().collect::<BTreeSet<_>>()
     );
-
     for case in cases {
         let encoded = case.authority.encode();
         assert!(encoded.len() <= MAX_REPLAY_AUTHORITY_BYTES);
@@ -30,7 +32,6 @@ fn every_stage_has_one_canonical_round_trip_and_exact_record_mapping() {
             .expect("exact lifecycle row matches its replay envelope");
     }
 }
-
 #[test]
 fn canonical_decoder_enforces_version_size_and_complete_input() {
     let fixture = Fixture::new();
@@ -48,13 +49,11 @@ fn canonical_decoder_enforces_version_size_and_complete_input() {
         LifecycleReplayAuthorityV1::decode_canonical(&vec![0; MAX_REPLAY_AUTHORITY_BYTES + 1]),
         Err(ReplayAuthorityCodecError::FrameBounds)
     );
-
     authority.format_version = REPLAY_AUTHORITY_FORMAT_VERSION + 1;
     assert_eq!(
         LifecycleReplayAuthorityV1::decode_canonical(&authority.encode()),
         Err(ReplayAuthorityCodecError::UnsupportedVersion)
     );
-
     authority.format_version = REPLAY_AUTHORITY_FORMAT_VERSION;
     let mut trailing = authority.encode();
     trailing.push(0);
@@ -64,7 +63,6 @@ fn canonical_decoder_enforces_version_size_and_complete_input() {
             | ReplayAuthorityCodecError::NonCanonicalEncoding)
     ));
 }
-
 #[test]
 fn decoded_decision_fetch_rejects_duplicate_certified_sources() {
     let fixture = Fixture::new();
@@ -103,7 +101,6 @@ fn decoded_decision_fetch_rejects_duplicate_certified_sources() {
             DurablePayloadReference::None,
         )
         .expect("unique Decision Fetch source projects exactly");
-
     let LifecycleReplaySourceV1::Wal(source) = &mut decoded.source else {
         unreachable!("Decision Fetch retains its WAL replay source")
     };
@@ -127,7 +124,6 @@ fn decoded_decision_fetch_rejects_duplicate_certified_sources() {
         Err(ReplayAuthorityValidationError::InvalidSource)
     );
 }
-
 #[test]
 fn recovered_decision_body_lineage_is_stage_closed_and_predecessor_bound() {
     let fixture = Fixture::new();
@@ -236,7 +232,6 @@ fn recovered_decision_body_lineage_is_stage_closed_and_predecessor_bound() {
         Some(false),
         "the recovered lineage cannot skip Store"
     );
-
     let causal_root = CausalRoot::new(digest_from_hash(&Hash::new(
         b"recovered Decision Apply test root",
     )));
@@ -303,7 +298,6 @@ fn recovered_decision_body_lineage_is_stage_closed_and_predecessor_bound() {
         &validate_record,
         &terminal_apply_record,
     ));
-
     let live_store_record = super::super::ledger::LifecycleLedgerRecordV1::new(
         lineage.store.key,
         owner,
@@ -359,7 +353,6 @@ fn recovered_decision_body_lineage_is_stage_closed_and_predecessor_bound() {
         !lineage.exactly_matches_validated_receipt(fixture.context, &foreign_validated),
         "a valid receipt for another durable body cannot enter the Apply carrier"
     );
-
     let mut foreign_store = store.authority.clone();
     let LifecycleReplaySourceV1::BodyPipeline(source) = &mut foreign_store.source else {
         unreachable!("recovered Store retains one body-pipeline source")
@@ -380,7 +373,6 @@ fn recovered_decision_body_lineage_is_stage_closed_and_predecessor_bound() {
         "a foreign exact locator cannot enter the body lineage"
     );
 }
-
 #[test]
 fn nested_record_validation_rejects_oversized_canonical_authority() {
     let fixture = Fixture::new();
@@ -413,7 +405,6 @@ fn nested_record_validation_rejects_oversized_canonical_authority() {
         case.payload,
     ));
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records() {
@@ -433,7 +424,6 @@ fn certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records() {
     )
     .expect("seal exact post-fsync Serve/Producer replay pair");
     assert!(pair.shares_exact_storage_origin());
-
     let serve_shape = pair
         .serve
         .family
@@ -476,7 +466,6 @@ fn certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records() {
         DurablePayloadReference::None,
         receipt.payload_hash(),
     ));
-
     let shared = Arc::new(pair);
     let adjacent = Arc::clone(&shared);
     assert!(Arc::ptr_eq(&shared, &adjacent));
@@ -495,7 +484,6 @@ fn certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records() {
         DurablePayloadReference::None,
         receipt.payload_hash(),
     ));
-
     let foreign_request_hash =
         HashOf::from_untyped_unchecked(Hash::new(b"foreign Certified-Serve replay request"));
     assert!(
@@ -553,7 +541,6 @@ fn certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records() {
         .is_none(),
         "a roster member absent from the QC signer set cannot retain replay authority"
     );
-
     let foreign_context = LifecycleContext::new(
         LifecycleDigest::new([0xD1; 32]),
         fixture.active_context.height(),
@@ -601,7 +588,6 @@ fn certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records() {
         fixture.pending_payload(),
         receipt.payload_hash(),
     ));
-
     let authority = LifecycleReplayAuthorityV1 {
         format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
         payload: shared.serve.payload.clone(),
@@ -610,7 +596,6 @@ fn certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records() {
     let canonical = LifecycleReplayAuthorityV1::decode_canonical(&authority.encode())
         .expect("exact Certified-Serve replay source canonical-roundtrips");
     assert!(shared.serve.exactly_matches_authority(&canonical));
-
     let mut wrong_payload_source = canonical.clone();
     let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &mut wrong_payload_source.source
     else {
@@ -622,7 +607,6 @@ fn certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records() {
             .serve
             .exactly_matches_authority(&wrong_payload_source)
     );
-
     let mut wrong_qc_source = canonical.clone();
     let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &mut wrong_qc_source.source else {
         unreachable!("Serve replay authority retains its storage source")
@@ -631,7 +615,6 @@ fn certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records() {
     let wrong_qc_source = LifecycleReplayAuthorityV1::decode_canonical(&wrong_qc_source.encode())
         .expect("mutated QC source remains canonical codec data");
     assert!(!shared.serve.exactly_matches_authority(&wrong_qc_source));
-
     let mut absent_retainer = canonical;
     let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &mut absent_retainer.source else {
         unreachable!("Serve replay authority retains its storage source")
@@ -649,7 +632,6 @@ fn certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records() {
             .is_err()
     );
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn recovered_serve_states_reconstruct_one_common_source_per_replay_pair() {
@@ -657,7 +639,6 @@ fn recovered_serve_states_reconstruct_one_common_source_per_replay_pair() {
     let pending = fixture.replay_pair(RecoveredServeState::Pending);
     let completed = fixture.replay_pair(RecoveredServeState::Completed);
     let negative = fixture.replay_pair(RecoveredServeState::Negative);
-
     for pair in [&pending, &completed, &negative] {
         assert!(pair.shares_exact_storage_origin());
         assert!(Arc::ptr_eq(&pair.serve.family, &pair.producer.family));
@@ -702,7 +683,6 @@ fn recovered_serve_states_reconstruct_one_common_source_per_replay_pair() {
         "the exact canonical frame hash binds its negative state"
     );
 }
-
 #[test]
 fn recovered_prepare_and_commit_votes_build_canonical_attached_evidence() {
     let fixture = Fixture::new();
@@ -732,7 +712,6 @@ fn recovered_prepare_and_commit_votes_build_canonical_attached_evidence() {
         assert!(source.locator.exactly_matches_runtime(locator));
     }
 }
-
 #[test]
 fn recovered_vote_evidence_rejects_role_vote_and_frame_hash_substitution() {
     let fixture = Fixture::new();
@@ -743,22 +722,18 @@ fn recovered_vote_evidence_rejects_role_vote_and_frame_hash_substitution() {
     let evidence =
         RecoveredWalVoteReplayEvidenceV1::from_sealed_recovered_vote(locator, tag, &vote)
             .expect("Prepare replay evidence fixture");
-
     let mut wrong_role = evidence.clone();
     let LifecycleReplaySourceV1::Wal(source) = &mut wrong_role.authority.source else {
         panic!("recovered vote evidence is WAL-backed")
     };
     source.role = ReplayWalRoleV1::LOCK_AND_COMMIT;
     assert!(!wrong_role.exactly_matches_recovered_vote(locator, tag, &vote));
-
     let mut wrong_vote = vote.clone();
     wrong_vote.subject = fixture.conflicting_vote.subject;
     assert!(!evidence.exactly_matches_recovered_vote(locator, tag, &wrong_vote));
-
     let wrong_hash = RecoveredWalFrameIdentity::for_test(8, 9, [0xB3; 32]);
     assert!(!evidence.exactly_matches_recovered_vote(wrong_hash, tag, &vote));
 }
-
 #[test]
 fn certified_fetch_store_validate_evidence_retains_one_canonical_origin_and_frame() {
     let fixture = Fixture::new();
@@ -804,7 +779,6 @@ fn certified_fetch_store_validate_evidence_retains_one_canonical_origin_and_fram
         zero_frame.is_exact_all_stages(),
         "body-frame digests have no reserved zero sentinel"
     );
-
     let store_effect = AdapterEffect::StoreBody {
         tag,
         round: manifest.round,
@@ -814,7 +788,6 @@ fn certified_fetch_store_validate_evidence_retains_one_canonical_origin_and_fram
         .project_store_for_test(&store_effect, &receipt)
         .expect("Fetch evidence projects only its exact Store stage");
     assert!(store.exactly_matches_store(&store_effect, &receipt));
-
     let validate_effect = AdapterEffect::ValidateBody {
         tag,
         round: manifest.round,
@@ -843,7 +816,6 @@ fn certified_fetch_store_validate_evidence_retains_one_canonical_origin_and_fram
     assert_eq!(fetch.family, store.family);
     assert_eq!(store.family, validate.family);
 }
-
 #[test]
 fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_identity() {
     fn projection(
@@ -866,7 +838,6 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
             .project_durable_ready_fetch(effect, &pending, receipt)
             .expect("exact family, pending binding, and receipt project Ready Fetch")
     }
-
     let fixture = Fixture::new();
     let tag = fixture.recovered_tag();
     let manifest = fixture.proposal.manifest.clone();
@@ -921,7 +892,6 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
         retransmitted.completion_digest(),
         "request, response, responder, signature, and physical queue occurrence are not restart identity",
     );
-
     let foreign_causal = projection(
         &effect,
         &first_response,
@@ -932,7 +902,6 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
         first.completion_digest(),
         foreign_causal.completion_digest()
     );
-
     let foreign_effect_identity = Hash::new(b"foreign exact Fetch effect identity");
     assert_ne!(
         first.completion_digest(),
@@ -942,7 +911,6 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
             &first.authority,
         )
     );
-
     let mut foreign_qc_authority = first.authority.clone();
     let LifecycleReplaySourceV1::BodyPipeline(source) = &mut foreign_qc_authority.source else {
         panic!("durable Ready Fetch authority is body-pipeline backed")
@@ -959,7 +927,6 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
             &foreign_qc_authority,
         )
     );
-
     let mut manifest_absent_effect = effect.clone();
     let AdapterEffect::FetchBody {
         manifest: candidate_manifest,
@@ -979,7 +946,6 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
         first.completion_digest(),
         manifest_absent.completion_digest()
     );
-
     let source_key = KeyPair::try_from_seed(vec![0xD6; 32], Algorithm::Ed25519)
         .expect("deterministic certified-source identity");
     let mut foreign_sources_effect = effect.clone();
@@ -1001,7 +967,6 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
         first.completion_digest(),
         foreign_sources.completion_digest()
     );
-
     let mut foreign_frame_authority = first.authority.clone();
     let ReplayPayloadBindingV1::BodyFrame(frame) = &mut foreign_frame_authority.payload else {
         panic!("durable Ready Fetch authority is frame-bound")
@@ -1016,7 +981,6 @@ fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_
         )
     );
 }
-
 #[test]
 fn certified_pipeline_evidence_rejects_certificate_manifest_frame_and_stage_substitution() {
     let fixture = Fixture::new();
@@ -1049,7 +1013,6 @@ fn certified_pipeline_evidence_rejects_certificate_manifest_frame_and_stage_subs
         &receipt,
     )
     .expect("certified substitution fixture");
-
     let mut wrong_certificate = fetch.clone();
     let BodyPipelineOriginV1::Certified { certificate, .. } =
         &mut wrong_certificate.family.source.origin
@@ -1062,10 +1025,8 @@ fn certified_pipeline_evidence_rejects_certificate_manifest_frame_and_stage_subs
         &response,
         &receipt,
     ));
-
     response.manifest.chunk_root = Hash::new(b"substituted response manifest");
     assert!(!fetch.exactly_matches_signed_response_for_test(&fetch_effect, &response, &receipt,));
-
     let mut wrong_frame = fetch.clone();
     wrong_frame.family.body_frame.frame[0] ^= 1;
     assert!(!wrong_frame.exactly_matches_signed_response_for_test(
@@ -1076,7 +1037,6 @@ fn certified_pipeline_evidence_rejects_certificate_manifest_frame_and_stage_subs
         },
         &receipt,
     ));
-
     let store_effect = AdapterEffect::StoreBody {
         tag,
         round: receipt.round(),
@@ -1102,7 +1062,6 @@ fn certified_pipeline_evidence_rejects_certificate_manifest_frame_and_stage_subs
         !validate.exactly_matches_validate_pending(&store_effect, &receipt, &validate_pending,)
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitution() {
@@ -1147,7 +1106,6 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         &validate_effect,
         &validate_pending,
     ));
-
     let foreign_pending = pending_binding(&validate_effect, tag, 71);
     assert!(!seal.exactly_projects_validate(
         &store_effect,
@@ -1180,7 +1138,6 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         &validate_effect,
         &validate_pending,
     ));
-
     let mut validate = seal
         .bind_and_project_validate(
             &store_effect,
@@ -1201,7 +1158,6 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         "zero-valued digest bytes remain structurally valid rather than sentinel values"
     );
     assert!(!validate.exactly_matches_validate(&store_effect, &receipt));
-
     let validate_ownership = store_ownership
         .rebind_as_inherited_adapter_effect(&validate_effect)
         .expect("local Store root rebinds to its exact Validate effect");
@@ -1270,10 +1226,9 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
     ));
     drop(intent);
 }
-
 #[test]
 fn local_body_replay_authority_is_linear_nondecode_and_closed_to_fixed_joins() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -1325,7 +1280,6 @@ fn local_body_replay_authority_is_linear_nondecode_and_closed_to_fixed_joins() {
             "local replay authority exposed or reserved {forbidden}"
         );
     }
-
     let runtime = include_str!("../v2_runtime.rs")
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -1363,11 +1317,10 @@ fn local_body_replay_authority_is_linear_nondecode_and_closed_to_fixed_joins() {
     }
     assert!(!production.contains("BodyPipelineOriginV1::ProposalIntent"));
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -1450,7 +1403,6 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
             "Certified-Serve replay evidence exposed {forbidden}"
         );
     }
-
     let storage = production
         .split("struct CertifiedServeStorageSourceV1 {")
         .nth(1)
@@ -1469,7 +1421,6 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
             "canonical Certified-Serve source omitted {required}"
         );
     }
-
     let payload_store = include_str!("../v2_certified_serve_payload_store.rs")
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -1485,10 +1436,9 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
             "authenticated payload recovery omitted {required}"
         );
     }
-
     for outside in [
         include_str!("../v2_lifecycle_coordinator.rs"),
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2.rs"),
         include_str!("../v2_runtime.rs"),
         include_str!("../v2_effects.rs"),
@@ -1502,7 +1452,7 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
         assert!(!outside.contains("CertifiedServeReplayEvidenceV1"));
         assert!(!outside.contains("CertifiedServeProducerTurnReplayEvidenceV1"));
     }
-    let registry = include_str!("../v2_lifecycle_work_registry.rs")
+    let registry = reviewed_lifecycle_work_registry_source_for_test()
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("registry production prefix is bounded");
@@ -1588,7 +1538,7 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
     for outside in [
         include_str!("../v2.rs"),
         include_str!("../v2_lifecycle_coordinator.rs"),
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_lifecycle_open.rs"),
         include_str!("../v2_lifecycle_settlement.rs"),
         include_str!("../v2_effects.rs"),
@@ -1684,7 +1634,6 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
         .next()
         .expect("safe continuation follows opaque Serve outcome");
     assert!(!opaque_result.contains("fn into_target("));
-
     for required in [
         "impl Drop for DurableCertifiedServeAdmissionPublication",
         "fresh_pending: bool",
@@ -1722,7 +1671,6 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
             "fresh Serve whole-census preflight omitted {required}"
         );
     }
-
     let authority = include_str!("../v2_lifecycle_authority.rs");
     assert!(authority.contains(
         "#[cfg(test)]\n#[derive(Clone, Debug, PartialEq, Eq)]\npub(crate) struct RolloverSnapshot"
@@ -1743,10 +1691,9 @@ fn certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only() {
         );
     }
 }
-
 #[test]
 fn certified_pipeline_replay_evidence_is_normalized_inert_and_stage_fixed() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -1780,7 +1727,6 @@ fn certified_pipeline_replay_evidence_is_normalized_inert_and_stage_fixed() {
             "certified body replay evidence omitted {required}"
         );
     }
-
     let family = evidence
         .split("struct CertifiedBodyPipelineReplayFamilyV1 {")
         .nth(1)
@@ -1792,7 +1738,6 @@ fn certified_pipeline_replay_evidence_is_normalized_inert_and_stage_fixed() {
     assert!(family.contains("body_frame: BodyFrameBindingV1"));
     assert_eq!(family.lines().filter(|line| line.contains(':')).count(), 2);
     assert!(!family.contains("LifecycleReplayAuthorityV1"));
-
     for runtime_seal in [
         "AuthenticatedCertifiedFetchReplayOriginV1",
         "CertifiedFetchReplayEvidenceV1",
@@ -1852,10 +1797,9 @@ fn certified_pipeline_replay_evidence_is_normalized_inert_and_stage_fixed() {
             "transition fixture helper {helper} lost its test-only gate"
         );
     }
-
     for caller in [
         include_str!("../v2_lifecycle_coordinator.rs"),
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_effects.rs"),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
@@ -1865,7 +1809,6 @@ fn certified_pipeline_replay_evidence_is_normalized_inert_and_stage_fixed() {
         assert!(!caller.contains("CertifiedValidateReplayEvidenceV1"));
     }
 }
-
 #[test]
 fn direct_signed_broadcast_evidence_covers_all_seven_fixed_stages() {
     let fixture = Fixture::new();
@@ -1877,7 +1820,6 @@ fn direct_signed_broadcast_evidence_covers_all_seven_fixed_stages() {
             .expect("signed broadcast has one canonical replay envelope");
         assert!(evidence.exactly_matches_effect(&effect, &pending));
     }
-
     let zero_digest_binding = DirectSignedPendingBindingV1 {
         causal_lifecycle_key: [0; 32],
         effect_identity: [0; 32],
@@ -1885,7 +1827,6 @@ fn direct_signed_broadcast_evidence_covers_all_seven_fixed_stages() {
     assert_eq!(zero_digest_binding.causal_lifecycle_key, [0; 32]);
     assert_eq!(zero_digest_binding.effect_identity, [0; 32]);
 }
-
 #[test]
 fn direct_signed_broadcast_evidence_rejects_signature_message_and_pending_substitution() {
     let fixture = Fixture::new();
@@ -1894,7 +1835,6 @@ fn direct_signed_broadcast_evidence_rejects_signature_message_and_pending_substi
     let pending = pending_binding(&effect, fixture.recovered_tag(), 11);
     let evidence = SignedBroadcastReplayEvidenceV1::from_exact_effect(&effect, &pending)
         .expect("signed proposal broadcast replay evidence");
-
     let AdapterEffect::Broadcast(message) = &effect else {
         unreachable!("first signed broadcast fixture is a Proposal")
     };
@@ -1908,7 +1848,6 @@ fn direct_signed_broadcast_evidence_rejects_signature_message_and_pending_substi
     ));
     let re_signed_pending = pending_binding(&re_signed, fixture.recovered_tag(), 12);
     assert!(!evidence.exactly_matches_effect(&re_signed, &re_signed_pending));
-
     let substituted = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::Proposal(fixture.conflicting_proposal.clone()),
     ));
@@ -1917,7 +1856,6 @@ fn direct_signed_broadcast_evidence_rejects_signature_message_and_pending_substi
     assert!(
         SignedBroadcastReplayEvidenceV1::from_exact_effect(&effect, &substituted_pending).is_none()
     );
-
     let foreign_tag = EventTag::new(
         fixture.recovered_tag().height(),
         fixture.recovered_tag().view() + 1,
@@ -1926,7 +1864,6 @@ fn direct_signed_broadcast_evidence_rejects_signature_message_and_pending_substi
     let foreign_pending = pending_binding(&effect, foreign_tag, 14);
     assert!(!evidence.exactly_matches_effect(&effect, &foreign_pending));
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn direct_signed_equivocation_evidence_covers_all_three_fixed_pairs() {
@@ -1959,7 +1896,6 @@ fn direct_signed_equivocation_evidence_covers_all_three_fixed_pairs() {
         assert!(evidence.exactly_matches_effect(&effect, &pending));
     }
 }
-
 #[test]
 fn direct_signed_equivocation_evidence_rejects_pair_order_signature_and_pending_drift() {
     let fixture = Fixture::new();
@@ -1972,7 +1908,6 @@ fn direct_signed_equivocation_evidence_rejects_pair_order_signature_and_pending_
     let pending = pending_binding(&forward, fixture.recovered_tag(), 31);
     let evidence = SignedEquivocationReplayEvidenceV1::from_exact_effect(&forward, &pending)
         .expect("authenticated vote conflict replay evidence");
-
     let reversed = AdapterEffect::ReportEquivocation {
         evidence: AdapterEquivocationEvidence::vote_for_test(
             fixture.conflicting_vote.clone(),
@@ -1981,7 +1916,6 @@ fn direct_signed_equivocation_evidence_rejects_pair_order_signature_and_pending_
     };
     let reversed_pending = pending_binding(&reversed, fixture.recovered_tag(), 32);
     assert!(!evidence.exactly_matches_effect(&reversed, &reversed_pending));
-
     let mut re_signed = fixture.prepare_vote.clone();
     re_signed.signature = vec![0xD2];
     let re_signed = AdapterEffect::ReportEquivocation {
@@ -1996,7 +1930,6 @@ fn direct_signed_equivocation_evidence_rejects_pair_order_signature_and_pending_
         SignedEquivocationReplayEvidenceV1::from_exact_effect(&forward, &re_signed_pending)
             .is_none()
     );
-
     let foreign_tag = EventTag::new(
         fixture.recovered_tag().height(),
         fixture.recovered_tag().view() + 1,
@@ -2005,10 +1938,9 @@ fn direct_signed_equivocation_evidence_rejects_pair_order_signature_and_pending_
     let foreign_pending = pending_binding(&forward, foreign_tag, 34);
     assert!(!evidence.exactly_matches_effect(&forward, &foreign_pending));
 }
-
 #[test]
 fn direct_signed_replay_wrappers_are_opaque_nondecodable_and_fixed_class() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2039,7 +1971,6 @@ fn direct_signed_replay_wrappers_are_opaque_nondecodable_and_fixed_class() {
             "direct signed replay wrapper omitted {required}"
         );
     }
-
     for runtime_seal in [
         "SignedBroadcastReplayEvidenceV1",
         "SignedEquivocationReplayEvidenceV1",
@@ -2079,10 +2010,9 @@ fn direct_signed_replay_wrappers_are_opaque_nondecodable_and_fixed_class() {
             "direct signed replay wrapper exposed or reserved {forbidden}"
         );
     }
-
     for caller in [
         include_str!("../v2_lifecycle_coordinator.rs"),
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_effects.rs"),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
@@ -2091,10 +2021,9 @@ fn direct_signed_replay_wrappers_are_opaque_nondecodable_and_fixed_class() {
         assert!(!caller.contains("SignedEquivocationReplayEvidenceV1"));
     }
 }
-
 #[test]
 fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2170,7 +2099,6 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
             "remote Proposal replay wrapper exposed or reserved {forbidden}"
         );
     }
-
     let runtime = include_str!("../v2_runtime.rs")
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2196,7 +2124,7 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
         );
     }
     for outside in [
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
     ] {
@@ -2208,10 +2136,9 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
         assert!(!outside.contains("PreparedRemoteProposalFetchReplayPreAdmission"));
     }
 }
-
 #[test]
 fn invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2313,7 +2240,6 @@ fn invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only() {
             "invalid-body evidence exposed or reserved {forbidden}"
         );
     }
-
     let adapter = include_str!("../v2.rs")
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2362,11 +2288,10 @@ fn invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only() {
         );
     }
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_mints() {
-    let source = include_str!("../v2_lifecycle_replay_authority.rs");
+    let source = replay_authority_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2419,7 +2344,6 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
             "live WAL seal exposed or reserved forbidden surface {forbidden}"
         );
     }
-
     let adapter = include_str!("../v2.rs")
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -2428,7 +2352,7 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("runtime has one production prefix");
-    let work_registry = include_str!("../v2_lifecycle_work_registry.rs")
+    let work_registry = reviewed_lifecycle_work_registry_source_for_test()
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("work registry has one production prefix");
@@ -2501,7 +2425,7 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
     );
     assert!(!adapter.contains("RecoveredWalFrameIdentity::for_test"));
     for outside in [
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_effects.rs"),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
@@ -2510,7 +2434,6 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
         assert!(!outside.contains("drive_exact_persisted_continuation"));
     }
 }
-
 #[test]
 fn record_matching_rejects_substitution_of_every_external_coordinate() {
     let fixture = Fixture::new();
@@ -2586,7 +2509,6 @@ fn record_matching_rejects_substitution_of_every_external_coordinate() {
         Err(ReplayAuthorityValidationError::PayloadMismatch)
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
@@ -2608,7 +2530,6 @@ fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
             )
             .is_err()
     );
-
     let mut wrong_role = wal_case.authority;
     let LifecycleReplaySourceV1::Wal(source) = &mut wrong_role.source else {
         panic!("first fixture authority is WAL-backed")
@@ -2625,7 +2546,6 @@ fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
             )
             .is_err()
     );
-
     let mut broadcast = fixture.cases().remove(8).authority;
     let LifecycleReplaySourceV1::ConsensusBroadcast(message) = &mut broadcast.source else {
         panic!("ninth fixture authority is a broadcast")
@@ -2646,7 +2566,6 @@ fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
             )
             .is_err()
     );
-
     let invalid_case = fixture.cases().remove(19);
     let mut invalid = invalid_case.authority.clone();
     let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &mut invalid.source else {
@@ -2664,7 +2583,6 @@ fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
             )
             .is_err()
     );
-
     let mut wrong_report_round = invalid_case.authority.clone();
     let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &mut wrong_report_round.source
     else {
@@ -2683,7 +2601,6 @@ fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
             .is_err(),
         "the report QC round cannot diverge from its validation origin"
     );
-
     let mut wrong_remote_origin = invalid_case.authority.clone();
     let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &mut wrong_remote_origin.source
     else {
@@ -2703,7 +2620,6 @@ fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
             .is_err(),
         "a report cannot splice a different signed Proposal origin"
     );
-
     let mut local_origin = invalid_case.authority.clone();
     let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &mut local_origin.source else {
         panic!("invalid-body fixture retains one validation origin")
@@ -2722,7 +2638,6 @@ fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
             .is_err(),
         "local body authority cannot stand in for a reported remote/certified origin"
     );
-
     let mut certified_origin = invalid_case.authority.clone();
     let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &mut certified_origin.source else {
         panic!("invalid-body fixture retains one validation origin")
@@ -2765,7 +2680,6 @@ fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
             .is_err(),
         "a certified origin must retain the report's exact PrepareQC"
     );
-
     let serve_case = fixture.cases().remove(20);
     let mut invalid_retainer = serve_case.authority.clone();
     let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &mut invalid_retainer.source
@@ -2785,7 +2699,6 @@ fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
             )
             .is_err()
     );
-
     let local_store = fixture.cases().remove(5);
     let LifecycleReplaySourceV1::BodyPipeline(local_source) = local_store.authority.source else {
         panic!("sixth fixture authority is a local body source")

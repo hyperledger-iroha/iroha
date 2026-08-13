@@ -1,5 +1,4 @@
 use super::*;
-
 fn compact(tokens: TokenStream2) -> String {
     tokens
         .to_string()
@@ -7,7 +6,6 @@ fn compact(tokens: TokenStream2) -> String {
         .filter(|ch| !ch.is_whitespace())
         .collect()
 }
-
 #[test]
 fn packed_field_bitset_matches_named_and_unnamed_layouts() {
     let named: DeriveInput = syn::parse_quote! {
@@ -21,7 +19,6 @@ fn packed_field_bitset_matches_named_and_unnamed_layouts() {
         unreachable!("test input is a struct");
     };
     assert_eq!(packed_field_bitset(&named_data.fields), vec![0b0000_0010]);
-
     let unnamed: DeriveInput = syn::parse_quote! {
         struct Unnamed(u32, Opaque, Vec<u8>);
     };
@@ -30,7 +27,6 @@ fn packed_field_bitset_matches_named_and_unnamed_layouts() {
     };
     assert_eq!(packed_field_bitset(&unnamed_data.fields), vec![0b0000_0010]);
 }
-
 #[test]
 fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
     let struct_input: DeriveInput = syn::parse_quote! {
@@ -48,7 +44,6 @@ fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
         &struct_input.attrs,
         None,
     ));
-
     let tuple_input: DeriveInput = syn::parse_quote! {
         struct Tuple(Opaque);
     };
@@ -62,7 +57,6 @@ fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
         &tuple_input.attrs,
         None,
     ));
-
     let enum_input: DeriveInput = syn::parse_quote! {
         enum Message {
             Tuple(Opaque, u64),
@@ -79,7 +73,6 @@ fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
         &enum_input.attrs,
         None,
     ));
-
     for expansion in [&struct_expansion, &enum_expansion] {
         assert!(
             expansion.contains("norito::core::decode_context_field_"),
@@ -94,7 +87,6 @@ fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
             "generated decoder must not inline archived-field context setup"
         );
     }
-
     assert!(
         struct_expansion.contains("decode_context_field_archived_compat::<Opaque>"),
         "the legacy retry path must remain delegated to the shared helper"
@@ -165,7 +157,6 @@ fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
         );
     }
 }
-
 #[test]
 fn ordinary_struct_fields_use_verified_exact_length_streaming() {
     let input: DeriveInput = syn::parse_quote! {
@@ -184,11 +175,9 @@ fn ordinary_struct_fields_use_verified_exact_length_streaming() {
         &input.attrs,
         None,
     ));
-
     assert_eq!(expansion.matches("write_len_prefixed_exact(").count(), 2);
     assert!(!expansion.contains("write_len_prefixed("));
 }
-
 #[test]
 fn packed_struct_codegen_counts_then_streams_without_field_payload_buffers() {
     let input: DeriveInput = syn::parse_quote! {
@@ -207,13 +196,11 @@ fn packed_struct_codegen_counts_then_streams_without_field_payload_buffers() {
         &input.attrs,
         None,
     ));
-
     assert!(expansion.contains("encoded_payload_len("));
     assert!(expansion.contains("serialize_to_writer_exact("));
     assert!(!expansion.contains("serialize_to_buffer("));
     assert!(!expansion.contains("__field_bufs"));
 }
-
 #[test]
 fn ordinary_enum_fields_use_verified_exact_length_streaming() {
     let input: DeriveInput = syn::parse_quote! {
@@ -232,7 +219,6 @@ fn ordinary_enum_fields_use_verified_exact_length_streaming() {
         &input.attrs,
         None,
     ));
-
     assert!(expansion.matches("write_len_prefixed_exact(").count() >= 2);
     assert!(!expansion.contains("write_len_prefixed("));
 }

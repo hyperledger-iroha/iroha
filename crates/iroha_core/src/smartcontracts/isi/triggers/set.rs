@@ -7,10 +7,8 @@
 //! same approximate location in the hierarchy, thus using Binary
 //! search trees (common lisp) or hash tables (racket) to quickly
 //! trigger hooks.
-
 use core::cmp::min;
 use std::{collections::BTreeMap, fmt, num::NonZeroU64};
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     events::EventFilter,
@@ -36,28 +34,23 @@ use norito::json;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize as JsonSerializeTrait};
 use thiserror::Error;
-
 use super::trigger_is_enabled;
 use crate::smartcontracts::isi::triggers::specialized::{
     LoadedAction, LoadedActionTrait, SpecializedAction, SpecializedTrigger, TimeTriggerRetryState,
 };
-
 /// Error type for [`Set`] operations.
 #[derive(Debug, Error, displaydoc::Display)]
 pub enum Error {
     /// Failed to preload IVM trigger
     Preload(#[from] VMError),
 }
-
 /// Result type for [`Set`] operations.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
-
 struct BorrowedEnumVariant<'a, T> {
     discriminant: u32,
     value: &'a dyn norito::core::NoritoSerialize,
     marker: core::marker::PhantomData<T>,
 }
-
 impl<'a, T> BorrowedEnumVariant<'a, T> {
     fn new(discriminant: u32, value: &'a dyn norito::core::NoritoSerialize) -> Self {
         Self {
@@ -67,14 +60,12 @@ impl<'a, T> BorrowedEnumVariant<'a, T> {
         }
     }
 }
-
 impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize
     for BorrowedEnumVariant<'_, T>
 {
     fn schema_hash() -> [u8; 16] {
         T::schema_hash()
     }
-
     fn serialize(
         &self,
         writer: &mut norito::core::Encoder<'_>,
@@ -83,7 +74,6 @@ impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize
         let mut scratch = norito::core::DeriveSmallBuf::new();
         norito::core::write_len_prefixed(writer, self.value, &mut scratch)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let discriminant = self.discriminant.encoded_len_exact()?;
         let value = self.value.encoded_len_exact()?;
@@ -92,7 +82,6 @@ impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize
             .checked_add(value)
     }
 }
-
 /// [`IvmBytecode`]s keyed by contract hash.
 /// Stored together with usage counts so triggers sharing the same blob can be deduplicated.
 type TriggerContractStore = Storage<HashOf<IvmBytecode>, IvmBytecodeEntry>;
@@ -105,7 +94,6 @@ type ActiveTriggerIdStoreBlock<'set> = StorageBlock<'set, TriggerId, ()>;
 type ActiveTriggerIdStoreTransaction<'block, 'set> =
     StorageTransaction<'block, 'set, TriggerId, ()>;
 type ActiveTriggerIdStoreView<'set> = StorageView<'set, TriggerId, ()>;
-
 /// Specialized structure that maps event filters to Triggers.
 // NB: `Set` has custom `Serialize` and `DeserializeSeed` implementations
 // which need to be manually updated when changing the struct
@@ -135,12 +123,10 @@ pub struct Set {
     /// 2. Deduplicating triggers with the same contract blob
     contracts: TriggerContractStore,
 }
-
 impl Set {
     fn action_is_active<F>(action: &LoadedAction<F>) -> bool {
         !action.repeats.is_depleted() && trigger_is_enabled(&action.metadata)
     }
-
     fn collect_active_ids<F: mv::Value>(
         triggers: &Storage<TriggerId, LoadedAction<F>>,
     ) -> ActiveTriggerIdStore {
@@ -152,7 +138,6 @@ impl Set {
             .collect()
     }
 }
-
 impl json::JsonDeserialize for Set {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut visitor = json::MapVisitor::new(parser)?;
@@ -166,7 +151,6 @@ impl json::JsonDeserialize for Set {
         > = None;
         let mut ids: Option<Storage<TriggerId, TriggeringEventType>> = None;
         let mut contracts: Option<Storage<HashOf<IvmBytecode>, IvmBytecodeEntry>> = None;
-
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "data_triggers" => {
@@ -193,9 +177,7 @@ impl json::JsonDeserialize for Set {
                 }
             }
         }
-
         visitor.finish()?;
-
         let data_triggers =
             data_triggers.ok_or_else(|| json::MapVisitor::missing_field("data_triggers"))?;
         let pipeline_triggers = pipeline_triggers
@@ -210,7 +192,6 @@ impl json::JsonDeserialize for Set {
         let active_pipeline_trigger_ids = Self::collect_active_ids(&pipeline_triggers);
         let active_time_trigger_ids = Self::collect_active_ids(&time_triggers);
         let active_by_call_trigger_ids = Self::collect_active_ids(&by_call_triggers);
-
         Ok(Self {
             data_triggers,
             pipeline_triggers,
@@ -225,7 +206,6 @@ impl json::JsonDeserialize for Set {
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for Set {
     fn write_json(&self, out: &mut String) {
@@ -262,7 +242,6 @@ impl FastJsonWrite for Set {
         out.push('}');
     }
 }
-
 /// Trigger set for block's aggregated changes
 pub struct SetBlock<'set> {
     /// Triggers using [`DataEventFilter`]
@@ -286,7 +265,6 @@ pub struct SetBlock<'set> {
     /// Original [`IvmBytecode`]s by [`TriggerId`] for querying purposes.
     contracts: TriggerContractStoreBlock<'set>,
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for SetBlock<'_> {
     fn write_json(&self, out: &mut String) {
@@ -323,12 +301,10 @@ impl FastJsonWrite for SetBlock<'_> {
         out.push('}');
     }
 }
-
 fn append_delta_component(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     out.extend_from_slice(bytes);
 }
-
 fn append_trigger_storage_delta<K, V>(
     out: &mut Vec<u8>,
     name: &'static str,
@@ -358,7 +334,6 @@ fn append_trigger_storage_delta<K, V>(
         }
     }
 }
-
 impl SetBlock<'_> {
     /// Append every staged trigger-store mutation to a canonical merge write set.
     pub(crate) fn append_merge_execution_write_set(&self, out: &mut Vec<u8>) {
@@ -404,11 +379,9 @@ impl SetBlock<'_> {
         });
     }
 }
-
 #[cfg(test)]
 mod merge_write_set_tests {
     use super::*;
-
     #[test]
     fn encoder_mentions_every_trigger_block_store() {
         let source = include_str!("set.rs");
@@ -420,7 +393,6 @@ mod merge_write_set_tests {
             .find("\n}\n\nfn append_delta_component")
             .expect("SetBlock declaration terminator must remain discoverable");
         let struct_body = &struct_tail[..struct_end];
-
         let encoder_start = source
             .find("pub(crate) fn append_merge_execution_write_set")
             .expect("trigger merge write-set encoder must exist");
@@ -429,7 +401,6 @@ mod merge_write_set_tests {
             .find("\n    }\n}")
             .expect("trigger merge write-set encoder terminator must remain discoverable");
         let encoder = &encoder_tail[..encoder_end];
-
         for line in struct_body.lines() {
             if !line.starts_with("    ") || line.starts_with("        ") {
                 continue;
@@ -449,7 +420,6 @@ mod merge_write_set_tests {
             );
         }
     }
-
     #[test]
     fn encoder_distinguishes_equal_trigger_kinds_under_different_ids() {
         let set = Set::default();
@@ -461,7 +431,6 @@ mod merge_write_set_tests {
         let mut first_bytes = Vec::new();
         first.append_merge_execution_write_set(&mut first_bytes);
         drop(first);
-
         let mut second = set.block();
         second.ids.insert(
             "merge_trigger_b".parse().expect("valid trigger id"),
@@ -469,11 +438,9 @@ mod merge_write_set_tests {
         );
         let mut second_bytes = Vec::new();
         second.append_merge_execution_write_set(&mut second_bytes);
-
         assert_ne!(first_bytes, second_bytes);
     }
 }
-
 /// Trigger set for transaction's aggregated changes
 pub struct SetTransaction<'block, 'set> {
     /// Triggers using [`DataEventFilter`]
@@ -499,7 +466,6 @@ pub struct SetTransaction<'block, 'set> {
     /// Original [`IvmBytecode`]s by [`TriggerId`] for querying purposes.
     contracts: TriggerContractStoreTransaction<'block, 'set>,
 }
-
 /// Consistent point in time view of the [`Set`]
 pub struct SetView<'set> {
     /// Triggers using [`DataEventFilter`]
@@ -523,7 +489,6 @@ pub struct SetView<'set> {
     /// Original [`IvmBytecode`]s by [`TriggerId`] for querying purposes.
     contracts: TriggerContractStoreView<'set>,
 }
-
 /// Entry in smart-contracts map
 #[cfg_attr(feature = "json", derive(norito::derive::FastJsonWrite))]
 #[derive(Debug, Clone)]
@@ -535,14 +500,12 @@ pub struct IvmBytecodeEntry {
     /// Number of times this contract is used
     count: NonZeroU64,
 }
-
 impl json::JsonDeserialize for IvmBytecodeEntry {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut visitor = json::MapVisitor::new(parser)?;
         let mut original_contract: Option<IvmBytecode> = None;
         let mut code_hash: Option<Hash> = None;
         let mut count: Option<u64> = None;
-
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "original_contract" => {
@@ -562,9 +525,7 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
                 }
             }
         }
-
         visitor.finish()?;
-
         let original_contract = original_contract
             .ok_or_else(|| json::MapVisitor::missing_field("original_contract"))?;
         let raw_count = count.ok_or_else(|| json::MapVisitor::missing_field("count"))?;
@@ -579,7 +540,6 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
                 message: "must match the complete deployable artifact".into(),
             });
         }
-
         Ok(Self {
             original_contract,
             code_hash,
@@ -587,9 +547,7 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
         })
     }
 }
-
 // Norito DTOs for Set serialization
-
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 enum ExecutableRefDto {
     Ivm(HashOf<IvmBytecode>),
@@ -597,7 +555,6 @@ enum ExecutableRefDto {
     Instructions(ConstVec<InstructionBox>),
     Batch(ConstVec<ExecutableBatchItem>),
 }
-
 impl From<&ExecutableRef> for ExecutableRefDto {
     fn from(r: &ExecutableRef) -> Self {
         match r {
@@ -610,7 +567,6 @@ impl From<&ExecutableRef> for ExecutableRefDto {
         }
     }
 }
-
 impl TryFrom<ExecutableRefDto> for ExecutableRef {
     type Error = String;
     fn try_from(dto: ExecutableRefDto) -> Result<Self, Self::Error> {
@@ -622,14 +578,12 @@ impl TryFrom<ExecutableRefDto> for ExecutableRef {
         })
     }
 }
-
 #[derive(Encode, Decode)]
 struct IvmBytecodeEntryDto {
     original_contract: IvmBytecode,
     code_hash: Hash,
     count: u64,
 }
-
 impl From<&IvmBytecodeEntry> for IvmBytecodeEntryDto {
     fn from(e: &IvmBytecodeEntry) -> Self {
         IvmBytecodeEntryDto {
@@ -639,7 +593,6 @@ impl From<&IvmBytecodeEntry> for IvmBytecodeEntryDto {
         }
     }
 }
-
 impl TryFrom<IvmBytecodeEntryDto> for IvmBytecodeEntry {
     type Error = String;
     fn try_from(dto: IvmBytecodeEntryDto) -> Result<Self, Self::Error> {
@@ -656,7 +609,6 @@ impl TryFrom<IvmBytecodeEntryDto> for IvmBytecodeEntry {
         })
     }
 }
-
 #[derive(Encode, Decode, Clone)]
 struct LoadedActionDto<F> {
     executable: ExecutableRefDto,
@@ -667,7 +619,6 @@ struct LoadedActionDto<F> {
     retry_state: Option<TimeTriggerRetryState>,
     metadata: Metadata,
 }
-
 impl<F: Clone> From<&LoadedAction<F>> for LoadedActionDto<F> {
     fn from(a: &LoadedAction<F>) -> Self {
         LoadedActionDto {
@@ -681,7 +632,6 @@ impl<F: Clone> From<&LoadedAction<F>> for LoadedActionDto<F> {
         }
     }
 }
-
 impl<F> TryFrom<LoadedActionDto<F>> for LoadedAction<F> {
     type Error = String;
     fn try_from(dto: LoadedActionDto<F>) -> Result<Self, Self::Error> {
@@ -696,7 +646,6 @@ impl<F> TryFrom<LoadedActionDto<F>> for LoadedAction<F> {
         })
     }
 }
-
 /// Read-only accessor trait for trigger sets.
 pub trait SetReadOnly {
     /// Data triggers map.
@@ -723,7 +672,6 @@ pub trait SetReadOnly {
     fn active_by_call_trigger_ids(&self) -> &impl StorageReadOnly<TriggerId, ()>;
     /// Mapping from code hash to bytecode entry.
     fn contracts(&self) -> &impl StorageReadOnly<HashOf<IvmBytecode>, IvmBytecodeEntry>;
-
     /// Get original [`IvmBytecode`] for [`TriggerId`].
     /// Returns `None` if there's no [`Trigger`]
     /// with specified `id` that has IVM executable
@@ -733,7 +681,6 @@ pub trait SetReadOnly {
             .get(hash)
             .map(|entry| &entry.original_contract)
     }
-
     /// Borrow original trigger bytecode together with its validated deployable hash.
     #[inline]
     fn get_original_contract_with_code_hash(
@@ -744,7 +691,6 @@ pub trait SetReadOnly {
             .get(hash)
             .map(|entry| (&entry.original_contract, entry.code_hash))
     }
-
     /// Convert [`LoadedAction`] to original [`Action`] by retrieving original
     /// [`IvmBytecode`] if applicable.
     ///
@@ -763,7 +709,6 @@ pub trait SetReadOnly {
             retry_state: _,
             metadata,
         } = action;
-
         let original_executable = match executable {
             ExecutableRef::Ivm(ref blob_hash) => {
                 let Some(original_contract) = self.get_original_contract(blob_hash).cloned() else {
@@ -779,7 +724,6 @@ pub trait SetReadOnly {
             ExecutableRef::Instructions(isi) => Executable::Instructions(isi),
             ExecutableRef::Batch(items) => Executable::Batch(items),
         };
-
         let mut specialized =
             match SpecializedAction::new(original_executable, repeats, authority, filter) {
                 Ok(action) => action,
@@ -798,13 +742,11 @@ pub trait SetReadOnly {
             }
         }
     }
-
     /// Get all contained trigger ids without a particular order
     #[inline]
     fn ids_iter(&self) -> impl Iterator<Item = &TriggerId> {
         self.ids().iter().map(|(trigger_id, _)| trigger_id)
     }
-
     /// Iterate active trigger ids from id-only registries maintained on writes.
     fn active_trigger_ids_iter(&self) -> impl Iterator<Item = &TriggerId> {
         self.active_data_trigger_ids()
@@ -814,7 +756,6 @@ pub trait SetReadOnly {
             .chain(self.active_time_trigger_ids().iter().map(|(id, _)| id))
             .chain(self.active_by_call_trigger_ids().iter().map(|(id, _)| id))
     }
-
     /// Iterate triggers directly from the typed trigger stores.
     fn triggers_iter(&self) -> impl Iterator<Item = Trigger> + '_ {
         self.data_triggers()
@@ -844,7 +785,6 @@ pub trait SetReadOnly {
                     }),
             )
     }
-
     /// Project one stored trigger through the active bounded singular-query corridor.
     fn bounded_trigger<F>(
         &self,
@@ -898,7 +838,6 @@ pub trait SetReadOnly {
         )
         .map(Some)
     }
-
     /// Resolve one trigger without cloning its variable-size action before the
     /// active singular-query corridor has admitted it.
     fn trigger_by_id_bounded(
@@ -947,11 +886,9 @@ pub trait SetReadOnly {
         }
         Ok(action)
     }
-
     /// Resolve one trigger by identifier.
     fn trigger_by_id(&self, id: &TriggerId) -> Option<Trigger> {
         let event_type = self.ids().get(id).copied()?;
-
         let trigger = match event_type {
             TriggeringEventType::Data => self
                 .data_triggers()
@@ -987,7 +924,6 @@ pub trait SetReadOnly {
         }
         trigger
     }
-
     /// Returns a bounded iterator of trigger ids matching a given time event.
     ///
     /// Retry attempts are selected first. Scheduled matches beyond
@@ -1011,7 +947,6 @@ pub trait SetReadOnly {
                 .and_then(|json| json.try_into_any_norito::<u64>().ok());
             registered_height.is_some_and(|height| height != current_block_height)
         };
-
         // Retry invocations retain their existing priority over ordinary
         // schedule matches, but both categories share one consensus resource
         // cap so an elapsed interval can never allocate an unbounded clone list.
@@ -1030,7 +965,6 @@ pub trait SetReadOnly {
                 due_retries.push(id.clone());
             }
         }
-
         let scheduled_capacity = max_invocations.saturating_sub(due_retries.len());
         let mut scheduled = Vec::with_capacity(scheduled_capacity);
         for (id, action) in self.time_triggers().iter() {
@@ -1040,7 +974,6 @@ pub trait SetReadOnly {
             if !is_eligible(action) || action.retry_state.is_some() {
                 continue;
             }
-
             let mut count = action.filter.count_matches(&event);
             if let Repeats::Exactly(repeats) = action.repeats {
                 count = min(repeats, count);
@@ -1052,10 +985,8 @@ pub trait SetReadOnly {
                 scheduled.push(id.clone());
             }
         }
-
         due_retries.into_iter().chain(scheduled)
     }
-
     /// Returns an iterator over `(TriggerId, LoadedAction)` pairs for a deterministic pipeline event.
     fn match_pipeline_event<'a>(
         &'a self,
@@ -1067,12 +998,10 @@ pub trait SetReadOnly {
             .filter(move |(_, action)| action.filter.matches(event))
             .map(move |(id, action)| (id.clone(), action.clone()))
     }
-
     /// Get [`ExecutableRef`] for given [`TriggerId`].
     /// Returns `None` if `id` is not in the set.
     fn get_executable(&self, id: &TriggerId) -> Option<&ExecutableRef> {
         let event_type = self.ids().get(id)?;
-
         let executable = match event_type {
             TriggeringEventType::Data => {
                 self.data_triggers().get(id).map(|entry| &entry.executable)
@@ -1098,7 +1027,6 @@ pub trait SetReadOnly {
         }
         executable
     }
-
     /// Apply `f` to triggers whose action satisfies the predicate.
     ///
     /// Return an empty list if [`Set`] doesn't contain any such triggers.
@@ -1156,7 +1084,6 @@ pub trait SetReadOnly {
                 }
             })
     }
-
     /// Apply `f` to the trigger identified by `id`.
     ///
     /// Return [`None`] if [`Set`] doesn't contain the trigger with the given `id`.
@@ -1165,7 +1092,6 @@ pub trait SetReadOnly {
         F: Fn(&dyn LoadedActionTrait) -> R,
     {
         let event_type = self.ids().get(id).copied()?;
-
         let result = match event_type {
             TriggeringEventType::Data => self.data_triggers().get(id).map(|entry| f(entry)),
             TriggeringEventType::Pipeline => self.pipeline_triggers().get(id).map(|entry| f(entry)),
@@ -1184,7 +1110,6 @@ pub trait SetReadOnly {
         result
     }
 }
-
 macro_rules! impl_set_ro {
     ($($ident:ty),*) => {$(
         impl SetReadOnly for $ident {
@@ -1221,11 +1146,9 @@ macro_rules! impl_set_ro {
         }
     )*};
 }
-
 impl_set_ro! {
     SetBlock<'_>, SetTransaction<'_, '_>, SetView<'_>
 }
-
 impl Set {
     /// Create struct to apply block's changes
     pub fn block(&self) -> SetBlock<'_> {
@@ -1242,7 +1165,6 @@ impl Set {
             contracts: self.contracts.block(),
         }
     }
-
     /// Create struct to apply block's changes while reverting changes made in the latest block
     pub fn block_and_revert(&self) -> SetBlock<'_> {
         SetBlock {
@@ -1258,7 +1180,6 @@ impl Set {
             contracts: self.contracts.block_and_revert(),
         }
     }
-
     /// Create point in time view of the [`Set`]
     pub fn view(&self) -> SetView<'_> {
         SetView {
@@ -1274,7 +1195,6 @@ impl Set {
             contracts: self.contracts.view(),
         }
     }
-
     /// Test-only helper to drop a trigger bytecode entry and commit the change.
     #[cfg(test)]
     pub(crate) fn remove_contract_for_test(&mut self, hash: HashOf<IvmBytecode>) -> bool {
@@ -1286,7 +1206,6 @@ impl Set {
         removed
     }
 }
-
 impl<'set> SetBlock<'set> {
     /// Create struct to apply transaction's changes
     pub fn transaction(&mut self) -> SetTransaction<'_, 'set> {
@@ -1303,7 +1222,6 @@ impl<'set> SetBlock<'set> {
             contracts: self.contracts.transaction(),
         }
     }
-
     /// Commit block's changes
     pub fn commit(self) {
         // NOTE: commit in reverse order
@@ -1318,7 +1236,6 @@ impl<'set> SetBlock<'set> {
         self.pipeline_triggers.commit();
         self.data_triggers.commit();
     }
-
     /// Returns a bounded iterator of trigger ids matching a given time event.
     pub fn match_time_event(
         &self,
@@ -1335,7 +1252,6 @@ impl<'set> SetBlock<'set> {
             max_invocations,
         )
     }
-
     /// Returns pipeline triggers matching a deterministic pipeline event.
     pub fn match_pipeline_event<'a>(
         &'a self,
@@ -1344,13 +1260,11 @@ impl<'set> SetBlock<'set> {
         <Self as SetReadOnly>::match_pipeline_event(self, event)
     }
 }
-
 trait TriggeringEventFilter: EventFilter {}
 impl TriggeringEventFilter for DataEventFilter {}
 impl TriggeringEventFilter for PipelineEventFilterBox {}
 impl TriggeringEventFilter for TimeEventFilter {}
 impl TriggeringEventFilter for ExecuteTriggerEventFilter {}
-
 impl<'block, 'set> SetTransaction<'block, 'set> {
     fn set_active_id(
         active_ids: &mut ActiveTriggerIdStoreTransaction<'block, 'set>,
@@ -1363,7 +1277,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             active_ids.remove(id.clone());
         }
     }
-
     fn set_active_id_by_event_type(
         &mut self,
         event_type: TriggeringEventType,
@@ -1385,7 +1298,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             }
         }
     }
-
     /// Apply transaction's changes
     pub fn apply(self) {
         // NOTE: apply in reverse order
@@ -1400,7 +1312,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         self.pipeline_triggers.apply();
         self.data_triggers.apply();
     }
-
     /// Replace occurrences of `old` with `new` in trigger authorities and filters.
     pub fn replace_account_id(&mut self, old: &AccountId, new: &AccountId) {
         if old == new {
@@ -1438,7 +1349,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             }
         }
     }
-
     /// Add trigger with [`DataEventFilter`]
     ///
     /// Return `false` if a trigger with given id already exists
@@ -1455,7 +1365,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             &mut me.data_triggers
         }))
     }
-
     /// Add trigger with [`PipelineEventFilterBox`]
     ///
     /// Return `false` if a trigger with given id already exists
@@ -1472,7 +1381,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             &mut me.pipeline_triggers
         }))
     }
-
     /// Add trigger with [`TimeEventFilter`]
     ///
     /// Returns `false` if a trigger with given id already exists
@@ -1489,7 +1397,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             &mut me.time_triggers
         }))
     }
-
     /// Add trigger with [`ExecuteTriggerEventFilter`]
     ///
     /// Returns `false` if a trigger with given id already exists
@@ -1508,7 +1415,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             }),
         )
     }
-
     /// Add generic trigger to generic collection
     ///
     /// Returns `false` if a trigger with given id already exists
@@ -1534,12 +1440,10 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                     metadata,
                 },
         } = trigger;
-
         if self.ids.get(&trigger_id).is_some() {
             return false;
         }
         let active = !repeats.is_depleted() && trigger_is_enabled(&metadata);
-
         let loaded_executable = match executable {
             Executable::Ivm(bytes) => {
                 let hash = HashOf::new(&bytes);
@@ -1604,7 +1508,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         self.set_active_id_by_event_type(event_type, &trigger_id, active);
         true
     }
-
     /// Apply `f` to the trigger identified by `id`.
     ///
     /// Return [`None`] if [`Set`] doesn't contain the trigger with the given `id`.
@@ -1613,7 +1516,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         F: Fn(&mut dyn LoadedActionTrait) -> R,
     {
         let event_type = self.ids.get(id).copied()?;
-
         let mut active = None;
         let result = match event_type {
             TriggeringEventType::Data => self.data_triggers.get_mut(id).map(|entry| {
@@ -1649,7 +1551,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         }
         result
     }
-
     /// Remove a trigger from the [`Set`].
     ///
     /// Return `false` if [`Set`] doesn't contain the trigger with the given `id`.
@@ -1659,7 +1560,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             return false;
         };
         self.set_active_id_by_event_type(event_type, id, false);
-
         let removed = match event_type {
             TriggeringEventType::Data => {
                 Self::remove_from(&mut self.contracts, &mut self.data_triggers, id.clone())
@@ -1674,7 +1574,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                 Self::remove_from(&mut self.contracts, &mut self.by_call_triggers, id.clone())
             }
         };
-
         if !removed {
             warn!(
                 trigger_id = %id,
@@ -1682,10 +1581,8 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                 "`Set` ids referenced a missing trigger while removing"
             );
         }
-
         true
     }
-
     /// Modify repetitions of the hook identified by [`TriggerId`].
     ///
     /// # Errors
@@ -1710,7 +1607,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         // .flatten() -- unstable
         .and_then(std::convert::identity)
     }
-
     /// Remove trigger from `triggers` and decrease the counter of the original [`IvmBytecode`].
     ///
     /// Note that this function doesn't remove the trigger from [`Set::ids`].
@@ -1730,7 +1626,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             })
             .is_some()
     }
-
     /// Decrease the counter of the original [`IvmBytecode`] by `blob_hash`
     /// or remove it if the counter reaches zero.
     /// Logs and skips removal if the bytecode entry is missing.
@@ -1756,7 +1651,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             }
         }
     }
-
     /// Decrease `action`s for provided triggers and remove those whose counter reached zero.
     pub fn decrease_repeats<'a>(
         &'a mut self,
@@ -1766,7 +1660,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             // Ignoring error if trigger has not `Repeats::Exact(_)` but something else
             let _mod_repeats_res = self.mod_repeats(id, |n| Ok(n.saturating_sub(1)));
         }
-
         let mut removed = Vec::new();
         let Self {
             data_triggers,
@@ -1809,10 +1702,8 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             contracts,
             by_call_triggers,
         );
-
         removed
     }
-
     /// Update internal retry runtime state for a time trigger.
     pub fn set_time_trigger_retry_state(
         &mut self,
@@ -1826,7 +1717,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             })
             .is_some()
     }
-
     /// Remove actions with zero execution count from `triggers`
     fn remove_zeros<F: mv::Value + EventFilter>(
         removed: &mut Vec<TriggerId>,
@@ -1840,7 +1730,6 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
             .filter(|(_, action)| action.repeats.is_depleted())
             .map(|(id, _)| id.clone())
             .collect();
-
         for id in &to_remove {
             let removed_id = ids.remove(id.clone()).is_some();
             active_ids.remove(id.clone());
@@ -1854,11 +1743,9 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                 );
             }
         }
-
         removed.append(&mut to_remove);
     }
 }
-
 fn replace_trigger_authority<F>(
     action: &mut LoadedAction<F>,
     old: &AccountId,
@@ -1871,7 +1758,6 @@ fn replace_trigger_authority<F>(
         false
     }
 }
-
 fn replace_by_call_authority(
     action: &mut LoadedAction<ExecuteTriggerEventFilter>,
     old: &AccountId,
@@ -1888,7 +1774,6 @@ fn replace_by_call_authority(
     }
     updated
 }
-
 /// Same as [`Executable`], but instead of
 /// [`Ivm`](iroha_data_model::transaction::Executable::Ivm) contains hash of the IVM blob
 /// Hash of the bytecode used by the trigger
@@ -1903,7 +1788,6 @@ pub enum ExecutableRef {
     /// Ordered batch of ISIs and deployed contract invocations.
     Batch(ConstVec<ExecutableBatchItem>),
 }
-
 impl core::fmt::Debug for ExecutableRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1918,7 +1802,6 @@ impl core::fmt::Debug for ExecutableRef {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for ExecutableRef {
     fn write_json(&self, out: &mut String) {
@@ -1948,7 +1831,6 @@ impl FastJsonWrite for ExecutableRef {
         out.push('}');
     }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for ExecutableRef {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1962,14 +1844,12 @@ impl json::JsonDeserialize for ExecutableRef {
                 });
             }
         };
-
         if map.len() != 1 {
             return Err(json::Error::InvalidField {
                 field: "ExecutableRef".to_owned(),
                 message: "expected exactly one variant field".to_owned(),
             });
         }
-
         let (key, inner) = map.into_iter().next().expect("checked map length");
         match key.as_str() {
             "Ivm" => json::from_value(inner).map(ExecutableRef::Ivm),
@@ -1980,11 +1860,9 @@ impl json::JsonDeserialize for ExecutableRef {
         }
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod tests {
     use core::time::Duration;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         events::{execute_trigger::ExecuteTriggerEventFilter, time::Schedule},
@@ -1995,54 +1873,42 @@ mod tests {
         },
     };
     use iroha_primitives::{const_vec::ConstVec, json::Json};
-
     use crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY;
-
     use super::*;
-
     fn sample_hash() -> HashOf<IvmBytecode> {
         let bytecode = IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]);
         HashOf::new(&bytecode)
     }
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger-set JSON fixture key generation should succeed")
     }
-
     fn sample_authority() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
     }
-
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     #[test]
     fn inspect_by_id_skips_missing_entry() {
         let mut set = Set::default();
         let trigger_id: TriggerId = "missing_trigger".parse().expect("valid trigger id");
         set.ids
             .insert(trigger_id.clone(), TriggeringEventType::Time);
-
         let view = set.view();
         let found = SetReadOnly::inspect_by_id(&view, &trigger_id, |_| ());
         assert!(found.is_none(), "missing trigger should return None");
     }
-
     #[test]
     fn inspect_by_id_mut_skips_missing_entry() {
         let set = Set::default();
         let trigger_id: TriggerId = "missing_trigger_mut".parse().expect("valid trigger id");
-
         let mut block = set.block();
         let mut tx = block.transaction();
         tx.ids.insert(trigger_id.clone(), TriggeringEventType::Time);
-
         let found = tx.inspect_by_id_mut(&trigger_id, |_| ());
         assert!(found.is_none(), "missing trigger should return None");
     }
-
     #[test]
     fn active_trigger_id_index_tracks_mutations_and_removal() {
         let set = Set::default();
@@ -2056,7 +1922,6 @@ mod tests {
             ExecuteTriggerEventFilter::new(),
         )
         .expect("test trigger action satisfies its authority invariant");
-
         {
             let mut block = set.block();
             let mut tx = block.transaction();
@@ -2067,12 +1932,10 @@ mod tests {
             tx.apply();
             block.commit();
         }
-
         let view = set.view();
         let mut active_ids = view.active_trigger_ids_iter().cloned();
         assert_eq!(active_ids.next(), Some(trigger_id.clone()));
         assert_eq!(active_ids.next(), None);
-
         {
             let mut block = set.block();
             let mut tx = block.transaction();
@@ -2093,7 +1956,6 @@ mod tests {
                 .all(|id| id != &trigger_id),
             "committed view should keep depleted trigger out of the active-id index"
         );
-
         {
             let mut block = set.block();
             let mut tx = block.transaction();
@@ -2114,37 +1976,30 @@ mod tests {
             block.commit();
         }
     }
-
     #[test]
     fn executable_ref_json_roundtrip_ivm() {
         let original = ExecutableRef::Ivm(sample_hash());
-
         let json = norito::json::to_json(&original).expect("serialize ExecutableRef::Ivm");
         let reparsed: ExecutableRef =
             norito::json::from_json(&json).expect("deserialize ExecutableRef::Ivm");
-
         match reparsed {
             ExecutableRef::Ivm(hash) => assert_eq!(hash, sample_hash()),
             other => panic!("expected Ivm variant, got {other:?}"),
         }
     }
-
     #[test]
     fn executable_ref_json_roundtrip_instructions() {
         let instruction = InstructionBox::from(Log::new(Level::INFO, "roundtrip".to_owned()));
         let instructions = ConstVec::from(vec![instruction]);
         let original = ExecutableRef::Instructions(instructions.clone());
-
         let json = norito::json::to_json(&original).expect("serialize ExecutableRef::Instructions");
         let reparsed: ExecutableRef =
             norito::json::from_json(&json).expect("deserialize ExecutableRef::Instructions");
-
         match reparsed {
             ExecutableRef::Instructions(restored) => assert_eq!(restored, instructions),
             other => panic!("expected Instructions variant, got {other:?}"),
         }
     }
-
     #[test]
     fn executable_ref_json_roundtrip_mixed_batch() {
         let authority = sample_authority();
@@ -2170,17 +2025,14 @@ mod tests {
             }),
         ]);
         let original = ExecutableRef::Batch(items.clone());
-
         let json = norito::json::to_json(&original).expect("serialize ExecutableRef::Batch");
         let reparsed: ExecutableRef =
             norito::json::from_json(&json).expect("deserialize ExecutableRef::Batch");
-
         match reparsed {
             ExecutableRef::Batch(restored) => assert_eq!(restored, items),
             other => panic!("expected Batch variant, got {other:?}"),
         }
     }
-
     #[test]
     fn executable_ref_dto_decode_from_slice_roundtrip() {
         let instruction = InstructionBox::from(Log::new(Level::INFO, "dto-roundtrip".to_owned()));
@@ -2191,18 +2043,15 @@ mod tests {
         let decoded: ExecutableRefDto = norito::decode_from_bytes(&bytes).expect("decode dto");
         assert_eq!(decoded, dto);
     }
-
     #[test]
     fn replace_account_id_updates_trigger_authority_and_filter() {
         let set = Set::default();
         let old = sample_authority();
         let new = sample_authority();
-
         let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
         let executable = Executable::Instructions(ConstVec::from(vec![instruction.clone()]));
         let time_trigger_id: TriggerId = "time_trigger_rekey".parse().expect("valid id");
         let call_trigger_id: TriggerId = "call_trigger_rekey".parse().expect("valid id");
-
         let time_action = SpecializedAction::new(
             executable.clone(),
             Repeats::Exactly(1),
@@ -2217,7 +2066,6 @@ mod tests {
             ExecuteTriggerEventFilter::new(),
         )
         .expect("test by-call action satisfies its authority invariant");
-
         let mut block = set.block();
         let mut tx = block.transaction();
         tx.add_time_trigger(SpecializedTrigger::new(
@@ -2233,7 +2081,6 @@ mod tests {
         tx.replace_account_id(&old, &new);
         tx.apply();
         block.commit();
-
         let view = set.view();
         let time_action = view
             .time_triggers()
@@ -2251,7 +2098,6 @@ mod tests {
             "by-call filter authority should be updated"
         );
     }
-
     #[test]
     fn match_time_event_skips_recently_registered_triggers() {
         crate::test_alias::ensure();
@@ -2288,14 +2134,12 @@ mod tests {
             }
             block.commit();
         }
-
         let block_view = set.block();
         let interval_current =
             TimeInterval::new_since_to(Duration::from_millis(0), Duration::from_millis(1_234));
         let time_event = TimeEvent {
             interval: interval_current,
         };
-
         assert!(
             block_view
                 .match_time_event(time_event, 42, 1_234, 16)
@@ -2310,13 +2154,11 @@ mod tests {
             matches_same_time, 1,
             "trigger should match when height differs even if timestamp matches"
         );
-
         let interval_later =
             TimeInterval::new_since_to(Duration::from_millis(1_234), Duration::from_millis(2_000));
         let later_event = TimeEvent {
             interval: interval_later,
         };
-
         let matches_later = block_view
             .match_time_event(later_event, 99, 2_000, 16)
             .count();
@@ -2325,7 +2167,6 @@ mod tests {
             "trigger should appear for subsequent blocks"
         );
     }
-
     #[test]
     fn match_time_event_caps_periodic_materialisation() {
         crate::test_alias::ensure();
@@ -2356,7 +2197,6 @@ mod tests {
             tx.apply();
             block.commit();
         }
-
         let event = TimeEvent {
             interval: TimeInterval {
                 since_ms: 0,
@@ -2367,10 +2207,8 @@ mod tests {
             .view()
             .match_time_event(event, 2, u64::MAX, 3)
             .collect::<Vec<_>>();
-
         assert_eq!(matches.len(), 3);
     }
-
     #[test]
     fn match_time_event_skips_disabled_triggers() {
         crate::test_alias::ensure();
@@ -2411,12 +2249,10 @@ mod tests {
             }
             block.commit();
         }
-
         let block_view = set.block();
         let interval =
             TimeInterval::new_since_to(Duration::from_millis(0), Duration::from_millis(1_234));
         let time_event = TimeEvent { interval };
-
         assert!(
             block_view
                 .match_time_event(time_event, 99, 1_234, 16)
@@ -2425,7 +2261,6 @@ mod tests {
             "disabled trigger must be skipped"
         );
     }
-
     #[test]
     fn match_time_event_requires_registration_metadata() {
         crate::test_alias::ensure();
@@ -2452,12 +2287,10 @@ mod tests {
             }
             block.commit();
         }
-
         let block_view = set.block();
         let interval =
             TimeInterval::new_since_to(Duration::from_millis(0), Duration::from_millis(1_234));
         let time_event = TimeEvent { interval };
-
         assert!(
             block_view
                 .match_time_event(time_event, 99, 1_234, 16)
@@ -2467,7 +2300,6 @@ mod tests {
         );
     }
 }
-
 /// [`SetTransaction::mod_repeats()`] error
 #[derive(Debug, Clone, thiserror::Error, displaydoc::Display)]
 pub enum ModRepeatsError {
@@ -2476,11 +2308,9 @@ pub enum ModRepeatsError {
     /// Trigger repeats count overflow error
     RepeatsOverflow(#[from] RepeatsOverflowError),
 }
-
 /// Trigger repeats count overflow
 #[derive(Debug, Copy, Clone, thiserror::Error, displaydoc::Display)]
 pub struct RepeatsOverflowError;
-
 impl From<ModRepeatsError> for InstructionExecutionError {
     fn from(err: ModRepeatsError) -> Self {
         match err {
@@ -2489,9 +2319,7 @@ impl From<ModRepeatsError> for InstructionExecutionError {
         }
     }
 }
-
 // --- Norito DTO for Set (Phase 1 scaffolding) ---
-
 /// Norito-encoded Data Transfer Object for serializing/deserializing the
 /// `Set` of triggers and associated entries. Used in scaffolding paths where a
 /// compact binary representation is required.
@@ -2504,7 +2332,6 @@ pub struct SetDto {
     ids: Vec<(TriggerId, TriggeringEventType)>,
     contracts: Vec<(HashOf<IvmBytecode>, IvmBytecodeEntryDto)>,
 }
-
 impl SetDto {
     /// Encode this DTO into Norito bytes.
     ///
@@ -2521,7 +2348,6 @@ impl SetDto {
         norito::decode_from_bytes(bytes)
     }
 }
-
 impl From<&Set> for SetDto {
     fn from(set: &Set) -> Self {
         // Use a read-only view to iterate storages
@@ -2573,7 +2399,6 @@ impl From<&Set> for SetDto {
         }
     }
 }
-
 fn load_trigger_entries<F>(
     raw: Vec<(TriggerId, LoadedActionDto<F>)>,
     event_type: TriggeringEventType,
@@ -2600,7 +2425,6 @@ fn load_trigger_entries<F>(
     }
     Ok(entries)
 }
-
 impl TryFrom<SetDto> for Set {
     type Error = String;
     #[allow(clippy::too_many_lines)]
@@ -2613,7 +2437,6 @@ impl TryFrom<SetDto> for Set {
             ids: ids_raw,
             contracts,
         } = dto;
-
         let mut contracts_map = BTreeMap::new();
         let mut duplicate_contracts = 0usize;
         for (hash, entry) in contracts {
@@ -2627,11 +2450,9 @@ impl TryFrom<SetDto> for Set {
                 duplicate_contracts = duplicate_contracts.saturating_add(1);
             }
         }
-
         let mut ids = BTreeMap::new();
         let mut duplicate_ids = Vec::new();
         let mut missing_contracts = Vec::new();
-
         let data = load_trigger_entries(
             data,
             TriggeringEventType::Data,
@@ -2664,7 +2485,6 @@ impl TryFrom<SetDto> for Set {
             &mut duplicate_ids,
             &mut missing_contracts,
         )?;
-
         let mut orphaned_ids = 0usize;
         let mut mismatched_ids = 0usize;
         for (id, event_type) in ids_raw {
@@ -2674,7 +2494,6 @@ impl TryFrom<SetDto> for Set {
                 None => orphaned_ids = orphaned_ids.saturating_add(1),
             }
         }
-
         if !duplicate_ids.is_empty() {
             warn!(
                 count = duplicate_ids.len(),
@@ -2699,7 +2518,6 @@ impl TryFrom<SetDto> for Set {
                 "duplicate trigger bytecode entries found; keeping latest"
             );
         }
-
         let mut contract_counts: BTreeMap<HashOf<IvmBytecode>, u64> = BTreeMap::new();
         for (_, action) in &data {
             if let Some(blob_hash) = action.extract_blob_hash() {
@@ -2725,7 +2543,6 @@ impl TryFrom<SetDto> for Set {
                 *count = count.saturating_add(1);
             }
         }
-
         let mut repaired_contracts = BTreeMap::new();
         let mut dropped_contracts = 0usize;
         let mut fixed_counts = 0usize;
@@ -2748,7 +2565,6 @@ impl TryFrom<SetDto> for Set {
             }
             repaired_contracts.insert(hash, entry);
         }
-
         if dropped_contracts > 0 {
             warn!(
                 count = dropped_contracts,
@@ -2761,7 +2577,6 @@ impl TryFrom<SetDto> for Set {
                 "repairing trigger bytecode reference counts"
             );
         }
-
         let set = Set::default();
         // Use a block + transaction to mutate storages safely
         {
@@ -2803,12 +2618,10 @@ impl TryFrom<SetDto> for Set {
         Ok(set)
     }
 }
-
 #[cfg(test)]
 mod dto_tests {
     use std::collections::BTreeMap;
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
         events::pipeline,
@@ -2819,30 +2632,23 @@ mod dto_tests {
     use iroha_primitives::const_vec::ConstVec;
     use mv::storage::StorageReadOnly;
     use norito::json;
-
     use super::*;
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger-set DTO fixture key generation should succeed")
     }
-
     fn checked_account_id() -> dm::AccountId {
         dm::AccountId::new(checked_keypair().public_key().clone())
     }
-
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     fn sample_set() -> Set {
         let authority = checked_account_id();
-
         let set = Set::default();
         {
             let mut block = set.block();
             let mut tx = block.transaction();
-
             // Data trigger with Instruction executable
             let data_id: dm::TriggerId = "data1".parse().unwrap();
             let data_filter = dm::DataEventFilter::Any;
@@ -2858,7 +2664,6 @@ mod dto_tests {
             .expect("test data-trigger action satisfies its authority invariant");
             let trig = SpecializedTrigger::new(data_id, action);
             tx.add_data_trigger(trig).expect("add data trigger");
-
             // Pipeline trigger with BlockEventFilter variant
             let pipe_id: dm::TriggerId = "pipe1".parse().unwrap();
             let block_filter = pipeline::BlockEventFilter {
@@ -2884,7 +2689,6 @@ mod dto_tests {
             let trig2 = SpecializedTrigger::new(pipe_id, action2);
             tx.add_pipeline_trigger(trig2)
                 .expect("add pipeline trigger");
-
             // Scheduled time trigger with retry policy and empty executable
             let time_id: dm::TriggerId = "time1".parse().unwrap();
             let time_filter = dm::TimeEventFilter(ExecutionTime::Schedule(Schedule::starting_at(
@@ -2905,7 +2709,6 @@ mod dto_tests {
             });
             let trig3 = SpecializedTrigger::new(time_id, action3);
             tx.add_time_trigger(trig3).expect("add time trigger");
-
             // Execute-by-call trigger with IVM executable
             let call_id: dm::TriggerId = "call1".parse().unwrap();
             let call_filter = dm::ExecuteTriggerEventFilter::new();
@@ -2916,20 +2719,16 @@ mod dto_tests {
                     .expect("test by-call action satisfies its authority invariant");
             let trig4 = SpecializedTrigger::new(call_id, action4);
             tx.add_by_call_trigger(trig4).expect("add by-call trigger");
-
             tx.apply();
             block.commit();
         }
-
         set
     }
-
     fn active_trigger_ids(set: &Set) -> Vec<dm::TriggerId> {
         let mut ids: Vec<_> = set.view().active_trigger_ids_iter().cloned().collect();
         ids.sort();
         ids
     }
-
     fn assert_loaded_action_dto_equivalent<F>(left: &LoadedActionDto<F>, right: &LoadedActionDto<F>)
     where
         F: PartialEq + core::fmt::Debug,
@@ -2942,7 +2741,6 @@ mod dto_tests {
         assert_eq!(left.retry_state, right.retry_state);
         assert_eq!(left.metadata, right.metadata);
     }
-
     fn assert_trigger_entries_equivalent<F>(
         left: &[(TriggerId, LoadedActionDto<F>)],
         right: &[(TriggerId, LoadedActionDto<F>)],
@@ -2959,7 +2757,6 @@ mod dto_tests {
             assert_loaded_action_dto_equivalent(left_action, right_action);
         }
     }
-
     fn assert_contract_entries_equivalent(
         left: &[(HashOf<IvmBytecode>, IvmBytecodeEntryDto)],
         right: &[(HashOf<IvmBytecode>, IvmBytecodeEntryDto)],
@@ -2975,7 +2772,6 @@ mod dto_tests {
             assert_eq!(left_entry.count, right_entry.count);
         }
     }
-
     #[test]
     fn empty_set_roundtrip_dto() {
         let set = Set::default();
@@ -2991,7 +2787,6 @@ mod dto_tests {
         assert_eq!(dto3.ids.len(), 0);
         assert_eq!(dto3.contracts.len(), 0);
     }
-
     #[test]
     fn non_empty_set_roundtrip_dto() {
         let set = sample_set();
@@ -3002,10 +2797,8 @@ mod dto_tests {
         assert_eq!(dto.by_call.len(), 1);
         assert_eq!(dto.ids.len(), 4);
         assert_eq!(dto.contracts.len(), 1);
-
         let bytes = dto.encode().expect("encode dto");
         let dto2 = SetDto::decode(&bytes).expect("decode dto");
-
         // Reconstruct Set (full reconstruction path)
         let set2 = Set::try_from(dto2).expect("dto to set");
         let dto3 = SetDto::from(&set2);
@@ -3016,7 +2809,6 @@ mod dto_tests {
         assert_eq!(dto3.ids.len(), 4);
         assert_eq!(dto3.contracts.len(), 1);
     }
-
     #[test]
     fn set_roundtrips_rebuild_active_trigger_ids() {
         let authority = checked_account_id();
@@ -3042,7 +2834,6 @@ mod dto_tests {
                 dm::TimeEventFilter(dm::ExecutionTime::PreCommit),
             )
             .expect("test time-trigger action satisfies its authority invariant");
-
             tx.add_by_call_trigger(SpecializedTrigger::new(active_id.clone(), active_action))
                 .expect("add active by-call trigger");
             tx.add_time_trigger(SpecializedTrigger::new(
@@ -3053,23 +2844,18 @@ mod dto_tests {
             tx.apply();
             block.commit();
         }
-
         assert_eq!(active_trigger_ids(&set), vec![active_id.clone()]);
-
         let dto_bytes = SetDto::from(&set).encode().expect("encode set dto");
         let dto_restored = Set::try_from(SetDto::decode(&dto_bytes).expect("decode set dto"))
             .expect("restore dto");
         assert_eq!(active_trigger_ids(&dto_restored), vec![active_id.clone()]);
-
         let json_repr = json::to_json(&set).expect("serialize set json");
         let json_restored: Set = json::from_json(&json_repr).expect("restore set json");
         assert_eq!(active_trigger_ids(&json_restored), vec![active_id]);
     }
-
     #[test]
     fn set_dto_repairs_inconsistent_storage() {
         let authority = checked_account_id();
-
         let missing_code = IvmBytecode::from_compiled(vec![0x01]);
         let missing_hash = HashOf::new(&missing_code);
         let valid_code = IvmBytecode::from_compiled(vec![0xAA]);
@@ -3078,11 +2864,9 @@ mod dto_tests {
         let extra_code = IvmBytecode::from_compiled(vec![0xBB]);
         let extra_hash = HashOf::new(&extra_code);
         let extra_code_hash = ivm::contract_code_hash(extra_code.as_ref());
-
         let data_id: dm::TriggerId = "data_missing".parse().unwrap();
         let call_id: dm::TriggerId = "call_valid".parse().unwrap();
         let orphan_id: dm::TriggerId = "orphan".parse().unwrap();
-
         let data_action = LoadedActionDto {
             executable: ExecutableRefDto::Ivm(missing_hash),
             repeats: dm::Repeats::Exactly(1),
@@ -3101,7 +2885,6 @@ mod dto_tests {
             retry_state: None,
             metadata: dm::Metadata::default(),
         };
-
         let dto = SetDto {
             data: vec![(data_id.clone(), data_action)],
             pipeline: Vec::new(),
@@ -3131,10 +2914,8 @@ mod dto_tests {
                 ),
             ],
         };
-
         let set = Set::try_from(dto).expect("dto to set");
         let view = set.view();
-
         assert!(view.data_triggers().get(&data_id).is_none());
         assert!(view.by_call_triggers().get(&call_id).is_some());
         assert!(view.ids().get(&data_id).is_none());
@@ -3150,16 +2931,13 @@ mod dto_tests {
         assert_eq!(entry.count.get(), 1);
         assert!(view.contracts().get(&extra_hash).is_none());
     }
-
     #[test]
     fn set_json_roundtrip_matches_dto() {
         let set = sample_set();
         let json_repr = json::to_json(&set).expect("serialize set to json");
         let decoded: Set = json::from_json(&json_repr).expect("deserialize set from json");
-
         let original = SetDto::from(&set);
         let decoded_dto = SetDto::from(&decoded);
-
         assert_trigger_entries_equivalent(&original.data, &decoded_dto.data);
         assert_trigger_entries_equivalent(&original.pipeline, &decoded_dto.pipeline);
         assert_trigger_entries_equivalent(&original.time, &decoded_dto.time);
@@ -3167,7 +2945,6 @@ mod dto_tests {
         assert_eq!(original.ids, decoded_dto.ids);
         assert_contract_entries_equivalent(&original.contracts, &decoded_dto.contracts);
     }
-
     #[test]
     fn time_trigger_retry_state_roundtrip_dto() {
         let authority = checked_account_id();
@@ -3176,7 +2953,6 @@ mod dto_tests {
             max_retries: std::num::NonZeroU32::new(3).expect("nonzero"),
             retry_after_ms: std::num::NonZeroU64::new(500).expect("nonzero"),
         };
-
         let set = Set::default();
         {
             let mut block = set.block();
@@ -3203,13 +2979,11 @@ mod dto_tests {
             tx.apply();
             block.commit();
         }
-
         let dto = SetDto::from(&set);
         let bytes = dto.encode().expect("encode dto");
         let decoded = SetDto::decode(&bytes).expect("decode dto");
         let restored = Set::try_from(decoded).expect("restore set");
         let restored_dto = SetDto::from(&restored);
-
         assert_trigger_entries_equivalent(&dto.time, &restored_dto.time);
         let (_, restored_action) = restored_dto
             .time
@@ -3225,22 +2999,18 @@ mod dto_tests {
             })
         );
     }
-
     #[test]
     fn ivm_entry_rejects_zero_count() {
         let contract = IvmBytecode::from_compiled(vec![1, 2, 3, 4]);
         let encoded_contract = json::to_json(&contract).expect("encode contract");
         let candidate = format!("{{\"original_contract\":{encoded_contract},\"count\":0}}");
-
         let err = json::from_json::<IvmBytecodeEntry>(&candidate)
             .expect_err("zero count must produce error");
-
         match err {
             json::Error::InvalidField { field, .. } => assert_eq!(field, "count"),
             other => panic!("unexpected error {other}"),
         }
     }
-
     #[test]
     fn ivm_entry_rejects_mismatched_deployable_hash() {
         let contract = IvmBytecode::from_compiled(vec![1, 2, 3, 4]);
@@ -3249,7 +3019,6 @@ mod dto_tests {
             code_hash: Hash::new(b"forged-trigger-contract"),
             count: 1,
         };
-
         let error = IvmBytecodeEntry::try_from(entry)
             .expect_err("trigger deployable hash must be authenticated by its bytes");
         assert!(error.contains("code hash"), "unexpected error: {error}");

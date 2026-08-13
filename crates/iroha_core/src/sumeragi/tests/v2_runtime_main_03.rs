@@ -5,14 +5,12 @@ fn class_cursor_advances_from_the_served_class_after_empty_classes() {
     let queued =
         |class, value| TaggedCommand::new(initial, class, FakeCommand::record(value), admitted_at);
     let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(6, 2, 1));
-
     ingress
         .enqueue(queued(CommandClass::Normal, 1))
         .expect("normal command fits the bounded ingress");
     let first = ingress.pop_next().expect("normal class is reachable");
     assert_eq!(first.command.record, Some(1));
     assert_eq!(ingress.next_class, CommandClass::Completion);
-
     let lifecycle_ordinal = ingress
         .lifecycle_ordinals
         .reserve_one()
@@ -41,14 +39,12 @@ fn class_cursor_advances_from_the_served_class_after_empty_classes() {
     let second = ingress.pop_next().expect("completion class is selected");
     assert_eq!(second.command.record, Some(3));
     assert_eq!(ingress.next_class, CommandClass::Progress);
-
     let third = ingress
         .pop_next()
         .expect("empty progress class is skipped to normal");
     assert_eq!(third.command.record, Some(2));
     assert_eq!(ingress.next_class, CommandClass::Completion);
 }
-
 #[test]
 fn production_ingress_pop_uses_shared_selector_for_every_ready_mask() {
     let admitted_at = Instant::now();
@@ -99,7 +95,6 @@ fn production_ingress_pop_uses_shared_selector_for_every_ready_mask() {
                         .expect("one command per ready class fits reserved ingress");
                 }
             }
-
             let selected = ingress.pop_next();
             assert_eq!(
                 selected.as_ref().and_then(|queued| queued.command.record),
@@ -109,7 +104,6 @@ fn production_ingress_pop_uses_shared_selector_for_every_ready_mask() {
         }
     }
 }
-
 #[test]
 fn healthy_same_class_fifo_depth_does_not_accrue_service_debt() {
     let start = Instant::now();
@@ -128,13 +122,11 @@ fn healthy_same_class_fifo_depth_does_not_accrue_service_debt() {
         )
         .expect("enqueue same-class work");
     }
-
     let _ = runtime.step(start);
     let queue = runtime.queue_snapshot(start);
     assert_eq!(queue.normal.depth, 3);
     assert_eq!(queue.normal.max_service_debt, 0);
 }
-
 #[test]
 fn canonical_body_completion_prunes_only_conflicting_queued_proposals() {
     let round = wire::ConsensusRound {
@@ -179,7 +171,6 @@ fn canonical_body_completion_prunes_only_conflicting_queued_proposals() {
         subject: other_subject,
         ..conflicting.clone()
     };
-
     let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(8, 1, 1));
     for (command_tag, manifest) in [
         (tag(0), conflicting.clone()),
@@ -194,7 +185,6 @@ fn canonical_body_completion_prunes_only_conflicting_queued_proposals() {
             )
             .expect("queue authenticated proposal");
     }
-
     ingress
         .enqueue_canonical_body_available(tag(3), canonical.clone())
         .expect("trusted completion prunes its conflicting proposal and appends in FIFO order");
@@ -209,7 +199,6 @@ fn canonical_body_completion_prunes_only_conflicting_queued_proposals() {
     assert!(
         !ingress.conflicts_with_pending_body_available(&authenticated_proposal_for_test(other))
     );
-
     let retained_tags = ingress
         .commands
         .iter()
@@ -228,7 +217,6 @@ fn canonical_body_completion_prunes_only_conflicting_queued_proposals() {
         Some(AdapterCommand::BodyAvailable { manifest }) if manifest.subject == subject
     ));
 }
-
 #[test]
 fn unpublished_body_completion_reservation_fences_conflicting_proposals() {
     let round = wire::ConsensusRound {
@@ -266,7 +254,6 @@ fn unpublished_body_completion_reservation_fences_conflicting_proposals() {
     let canonical_proposal = authenticated_proposal_for_test(canonical.clone());
     let conflicting_proposal = authenticated_proposal_for_test(conflicting);
     let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(2, 0, 0));
-
     let reservation = ingress
         .reserve_canonical_body_available(tag(0), canonical)
         .expect("the unpublished completion atomically claims capacity and an ordinal");
@@ -281,7 +268,6 @@ fn unpublished_body_completion_reservation_fences_conflicting_proposals() {
         !ingress.conflicts_with_pending_body_available(&canonical_proposal),
         "an exact proposal does not conflict with its reserved completion"
     );
-
     let mut mismatched = reservation.clone();
     mismatched.tag = tag(1);
     assert_eq!(
@@ -295,7 +281,6 @@ fn unpublished_body_completion_reservation_fences_conflicting_proposals() {
         Some(&reservation),
         "a rejected token preserves the exact unpublished owner"
     );
-
     ingress
         .commit_canonical_body_available(reservation)
         .expect("the exact reservation token publishes its completion");
@@ -307,7 +292,6 @@ fn unpublished_body_completion_reservation_fences_conflicting_proposals() {
     assert_eq!(completion.lifecycle_ordinal, Some(1));
     assert!(ingress.conflicts_with_pending_body_available(&conflicting_proposal));
 }
-
 #[test]
 fn aborted_body_completion_retry_reclaims_the_entire_token_without_reminting() {
     let directory = TempDir::new().expect("temporary body retry directory");
@@ -335,7 +319,6 @@ fn aborted_body_completion_retry_reclaims_the_entire_token_without_reminting() {
         .lifecycle_ordinals
         .next_ordinal_for_test()
         .expect("inspect source after body reservation");
-
     let mut mismatched_abort = reservation.clone();
     mismatched_abort.tag = tag(1);
     runtime.abort_body_available(mismatched_abort);
@@ -363,7 +346,6 @@ fn aborted_body_completion_retry_reclaims_the_entire_token_without_reminting() {
         source_after_reserve,
         "exact retry cannot mint a second physical ordinal",
     );
-
     let competing_ordinal = runtime
         .ingress
         .lifecycle_ordinals
@@ -388,7 +370,6 @@ fn aborted_body_completion_retry_reclaims_the_entire_token_without_reminting() {
         "materialization observes but never advances the current source",
     );
 }
-
 #[test]
 fn conflicting_body_completion_retry_latches_without_replacing_the_exact_token() {
     let directory = TempDir::new().expect("temporary body conflict directory");
@@ -409,7 +390,6 @@ fn conflicting_body_completion_retry_latches_without_replacing_the_exact_token()
         chunk_hashes: vec![Hash::new(b"conflicting retained body chunk")],
         ..manifest
     };
-
     assert_eq!(
         runtime.reserve_body_available(owner_tag, conflicting),
         Err(EnqueueError::DuplicateCompletionOwnership),
@@ -430,7 +410,6 @@ fn conflicting_body_completion_retry_latches_without_replacing_the_exact_token()
         "conflicting evidence cannot burn a fresh physical ordinal",
     );
 }
-
 #[test]
 fn restored_pre_store_body_available_spends_one_fresh_completion_slot() {
     let directory = TempDir::new().expect("temporary restored body directory");
@@ -454,7 +433,6 @@ fn restored_pre_store_body_available_spends_one_fresh_completion_slot() {
     let source = RuntimeLifecycleOrdinalSource::after_high_watermark(1);
     let mut ingress =
         BoundedIngress::with_lifecycle_ordinals(RuntimeQueueConfig::new(4, 1, 1), source.clone());
-
     assert!(ingress.dormant_local_fifo_reservations.is_empty());
     assert_eq!(ingress.remaining_capacity(), 3);
     let reservation = ingress
@@ -474,7 +452,6 @@ fn restored_pre_store_body_available_spends_one_fresh_completion_slot() {
     let source_after_reserve = source
         .next_ordinal_for_test()
         .expect("inspect source after pre-store body reservation");
-
     ingress.abort_canonical_body_available(reservation.clone());
     let retry = ingress
         .reserve_canonical_body_available_internal(
@@ -495,7 +472,6 @@ fn restored_pre_store_body_available_spends_one_fresh_completion_slot() {
         source_after_reserve,
         "an exact retry cannot mint a second physical admission"
     );
-
     ingress
         .commit_canonical_body_available(retry)
         .expect("stage-7 body materializes under its old logical lifecycle");
@@ -510,7 +486,6 @@ fn restored_pre_store_body_available_spends_one_fresh_completion_slot() {
     );
     assert_eq!(ingress.remaining_capacity(), 2);
 }
-
 #[test]
 fn dormant_body_reservation_aliases_full_capacity_across_abort_retry_and_commit() {
     let directory = TempDir::new().expect("temporary dormant body retry directory");
@@ -539,7 +514,6 @@ fn dormant_body_reservation_aliases_full_capacity_across_abort_retry_and_commit(
         .install_dormant_local_fifo_reservations(vec![dormant])
         .expect("install the full-capacity dormant completion owner");
     assert_eq!(ingress.remaining_capacity(), 0);
-
     let reservation = ingress
         .reserve_canonical_body_available_internal(
             owner_tag,
@@ -557,7 +531,6 @@ fn dormant_body_reservation_aliases_full_capacity_across_abort_retry_and_commit(
     let source_after_reserve = source
         .next_ordinal_for_test()
         .expect("inspect source after dormant reservation");
-
     ingress.abort_canonical_body_available(reservation.clone());
     let retry = ingress
         .reserve_canonical_body_available_internal(owner_tag, manifest, Some(&owner), None, Some(8))
@@ -581,7 +554,6 @@ fn dormant_body_reservation_aliases_full_capacity_across_abort_retry_and_commit(
         "retry cannot replace the exact dormant stage",
     );
     assert_eq!(ingress.reserved_body_available.as_ref(), Some(&reservation));
-
     let source_before_failed_commit = source
         .next_ordinal_for_test()
         .expect("inspect source before rejected dormant commit");
@@ -599,7 +571,6 @@ fn dormant_body_reservation_aliases_full_capacity_across_abort_retry_and_commit(
             .expect("rejected dormant commit preserves the source"),
         source_before_failed_commit,
     );
-
     ingress
         .commit_canonical_body_available(retry)
         .expect("materialization atomically replaces token and dormant backing");
@@ -615,7 +586,6 @@ fn dormant_body_reservation_aliases_full_capacity_across_abort_retry_and_commit(
         source_after_reserve,
     );
 }
-
 #[test]
 fn mismatched_body_completion_commit_fails_closed_without_losing_reservation() {
     let directory = TempDir::new().expect("temporary body reservation directory");
@@ -629,7 +599,6 @@ fn mismatched_body_completion_commit_fails_closed_without_losing_reservation() {
     let exact = reservation.clone();
     let mut mismatched = reservation;
     mismatched.tag = tag(1);
-
     assert_eq!(
         runtime.commit_body_available(mismatched),
         Err(EnqueueError::FailClosed)
@@ -642,7 +611,6 @@ fn mismatched_body_completion_commit_fails_closed_without_losing_reservation() {
         "the invalid token cannot consume the exact reserved owner"
     );
 }
-
 #[test]
 fn retiring_exact_body_completion_releases_a_capacity_one_ingress_slot() {
     let round = wire::ConsensusRound {
@@ -685,7 +653,6 @@ fn retiring_exact_body_completion_releases_a_capacity_one_ingress_slot() {
     let original_tag = tag(4);
     let replacement_tag = tag(5);
     let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(2, 0, 0));
-
     ingress
         .enqueue_canonical_body_available(original_tag, original.clone())
         .expect("the original completion claims the sole slot");
@@ -711,7 +678,6 @@ fn retiring_exact_body_completion_releases_a_capacity_one_ingress_slot() {
         }) if *tag == replacement_tag && manifest == &replacement
     ));
 }
-
 #[test]
 fn exact_authenticated_progress_retransmission_is_queue_coalesced() {
     let round = wire::ConsensusRound {
@@ -745,7 +711,6 @@ fn exact_authenticated_progress_retransmission_is_queue_coalesced() {
     let authenticated =
         || AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(payload.clone()));
     let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(4, 1, 1));
-
     assert_eq!(
         ingress
             .enqueue_authenticated(tag(0), CommandClass::Progress, authenticated())
@@ -767,7 +732,6 @@ fn exact_authenticated_progress_retransmission_is_queue_coalesced() {
         ingress.commands[0].lifecycle_ordinal, admitted_lifecycle_ordinal,
         "an exact transport retry retains the first lifecycle owner"
     );
-
     let dispatched = ingress
         .pop_next()
         .expect("the sole queued CommitQC is dispatchable");
@@ -777,7 +741,6 @@ fn exact_authenticated_progress_retransmission_is_queue_coalesced() {
         AdapterCommand::Authenticated(_)
     ));
     assert_eq!(ingress.len(), 0);
-
     assert_eq!(
         ingress
             .enqueue_authenticated(tag(2), CommandClass::Progress, authenticated())
@@ -792,7 +755,6 @@ fn exact_authenticated_progress_retransmission_is_queue_coalesced() {
         "a later interval is not spliced into the drained causal root"
     );
 }
-
 #[test]
 fn runtime_merges_alternate_sources_for_one_semantic_request() {
     let directory = TempDir::new().expect("temporary alternate-source runtime directory");
@@ -817,7 +779,6 @@ fn runtime_merges_alternate_sources_for_one_semantic_request() {
         source_b,
         route_b.clone(),
     );
-
     let owner_tag = runtime
         .enqueue_network_with_ingress_ownership(message.clone(), ownership_a)
         .expect("first source admits the semantic request");
@@ -872,7 +833,6 @@ fn runtime_merges_alternate_sources_for_one_semantic_request() {
     );
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn later_same_semantic_fair_retry_retains_runtime_lifecycle_root() {
     let directory = TempDir::new().expect("temporary lifecycle-retry runtime directory");
@@ -896,7 +856,6 @@ fn later_same_semantic_fair_retry_retains_runtime_lifecycle_root() {
         fair_runtime_ownership(&message, semantic_origin, authenticated_via),
         retry_ordinal,
     );
-
     runtime
         .enqueue_network_with_ingress_ownership(message.clone(), retained)
         .expect("first fair lifecycle enters runtime");
@@ -909,7 +868,6 @@ fn later_same_semantic_fair_retry_retains_runtime_lifecycle_root() {
     runtime
         .enqueue_network_with_ingress_ownership(message, retry)
         .expect("later same-semantic retry coalesces");
-
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(
         lifecycle_ordinals
@@ -943,7 +901,6 @@ fn later_same_semantic_fair_retry_retains_runtime_lifecycle_root() {
     assert!(ownership.validate_exact());
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it() {
     let directory = TempDir::new().expect("temporary fair-to-runtime predecessor directory");
@@ -978,7 +935,6 @@ fn ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it() {
             .expect("transferred Fair owner participates in runtime minimum"),
         "the exact Serve target cannot prepare past the transferred predecessor"
     );
-
     let (_, consumed) = runtime
         .ingress
         .pop_next_with_ownership()
@@ -993,7 +949,6 @@ fn ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it() {
     );
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum() {
     let directory = TempDir::new().expect("temporary aggregate-rebase runtime directory");
@@ -1018,7 +973,6 @@ fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum() {
         fair_network_ownership(&message, PeerId::new(keys[1].public_key().clone())),
         older_ordinal,
     );
-
     runtime
         .enqueue_network_with_ingress_ownership(message.clone(), newer)
         .expect("newer admissible aggregate enters runtime first");
@@ -1053,7 +1007,6 @@ fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum() {
     runtime
         .enqueue_network_with_ingress_ownership(message, older)
         .expect("older frozen aggregate carrier joins the queued envelope");
-
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(
         lifecycle_ordinals
@@ -1079,7 +1032,6 @@ fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum() {
         Ok(Some(older_ordinal))
     );
     assert!(ownership.validate_exact());
-
     let now = Instant::now();
     runtime
         .arm_live_clocks(now)
@@ -1095,7 +1047,6 @@ fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum() {
     );
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals() {
     let unminted_directory = TempDir::new().expect("temporary unminted-fair runtime directory");
@@ -1127,7 +1078,6 @@ fn network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals() {
             .expect("unminted rejection preserves the source"),
         Some(unminted_ordinal)
     );
-
     let collision_directory = TempDir::new().expect("temporary fair-collision runtime directory");
     let (mut collision_runtime, context, keys) =
         authenticated_network_runtime(&collision_directory, RuntimeQueueConfig::new(8, 2, 2));
@@ -1172,7 +1122,6 @@ fn network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals() {
         "unrelated ordinal collision must fail before a FIFO position is minted"
     );
 }
-
 #[test]
 fn runtime_keeps_identical_wire_requests_from_distinct_semantic_origins_independent() {
     let directory = TempDir::new().expect("temporary distinct-origin runtime directory");
@@ -1184,7 +1133,6 @@ fn runtime_keeps_identical_wire_requests_from_distinct_semantic_origins_independ
     let source = PeerId::new(keys[2].public_key().clone());
     let ownership_a = fair_runtime_ownership(&message, origin_a, source.clone());
     let ownership_b = fair_runtime_ownership(&message, origin_b, source);
-
     runtime
         .enqueue_network_with_ingress_ownership(message.clone(), ownership_a)
         .expect("first semantic origin owns one runtime occurrence");
@@ -1207,7 +1155,6 @@ fn runtime_keeps_identical_wire_requests_from_distinct_semantic_origins_independ
     );
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
     let directory = TempDir::new().expect("temporary Busy-deferred ownership directory");
@@ -1262,7 +1209,6 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
     runtime
         .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
         .expect("publish the pending timeout signer owner");
-
     runtime
         .enqueue_network_with_ingress_ownership(message.clone(), ownership_a)
         .expect("first source enters runtime ingress");
@@ -1282,7 +1228,6 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
         .expect("authenticated Busy owner has an actor-global ordinal");
     let projection_before_alternate =
         runtime.deferred_ingress_ownership[&admission_ordinal].projection_hash;
-
     let ownership_b = fair_runtime_ownership_at_lifecycle(
         fair_runtime_ownership(
             &message,
@@ -1303,7 +1248,6 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
         projection_before_alternate,
         "alternate ownership history must change the exact runtime projection"
     );
-
     let signature = Signature::new(keys[0].private_key(), &signature_preimage)
         .payload()
         .to_vec();
@@ -1322,7 +1266,6 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
     runtime
         .take_effect_ownership(1)
         .expect("the executor consumes the TimeoutVote broadcast owner");
-
     let deferred_effects = match runtime.step(deadline) {
         Ok(RuntimeStep::Advanced(effects)) => effects,
         other => panic!("deferred owner did not receive its service turn: {other:?}"),
@@ -1354,7 +1297,6 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
     assert!(runtime.deferred_ingress_ownership.is_empty());
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation() {
     let directory = TempDir::new().expect("temporary Busy-deferred rebase directory");
@@ -1383,7 +1325,6 @@ fn busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation() {
         "unexpected timeout effects: {:?}",
         timeout.effects()
     );
-
     let message =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
             signed_runtime_quorum_certificate_for_phase(
@@ -1443,7 +1384,6 @@ fn busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation() {
         .clone();
     assert_ne!(frozen_physical_cut, 0);
     assert!(frozen_source_physical_ordinal.is_some());
-
     let older = fair_runtime_ownership_at_lifecycle(
         fair_network_ownership(&message, PeerId::new(keys[1].public_key().clone())),
         older_ordinal,
@@ -1487,7 +1427,6 @@ fn busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation() {
         Some(runtime_ingress_causal_origin_projection_hash(merged))
     );
     assert!(rebased_owner.validate_exact());
-
     let healthy_owner = rebased_owner.clone();
     let mutation = RuntimeIngressOwnershipEvidence::from_fair_ingress(
         &message,
@@ -1561,7 +1500,6 @@ fn busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation() {
     assert!(final_owner.validate_exact());
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner() {
     let directory = TempDir::new().expect("temporary pre-runtime leader-wire directory");
@@ -1586,7 +1524,6 @@ fn distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner() {
             ..
         }]
     ));
-
     let message =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
             signed_runtime_quorum_certificate_for_phase(
@@ -1626,7 +1563,6 @@ fn distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner() {
             .can_admit_network_message_with_ingress_ownership(&message, &same_token_pre_runtime,),
         "an exact pre-runtime retry may merge into its existing Busy owner",
     );
-
     assert!(matches!(
         leader_wire_ingress.try_push(InboundBlockMessage::new(
             BlockMessage::V2(message.clone()),
@@ -1650,7 +1586,6 @@ fn distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner() {
     assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
     let directory = TempDir::new().expect("temporary restored-TC runtime directory");
@@ -1663,7 +1598,6 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
     runtime
         .arm_live_clocks(started_at)
         .expect("arm the restarted runtime before freezing its clock owner");
-
     let message =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
             signed_runtime_timeout_certificate(&context, &keys),
@@ -1685,7 +1619,6 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
         .leader_wire_runtime_receipt()
         .expect("pre-crash TC owns one exact runtime receipt")
         .clone();
-
     // The runner publishes the receiver high-water mark immediately
     // before its serialized turn. A producer can then atomically reserve
     // and publish a distinct valid TC carrier before that turn freezes the
@@ -1698,7 +1631,6 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
-
     // Restart normalizes Runtime/VolatileTerminal to Dormant.  Its exact
     // retransmission regains an Ingress carrier with the old immutable
     // token, but the new process has not yet frozen the Runtime receipt or
@@ -1720,7 +1652,6 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
         original_physical_ordinal,
         "the first physical delivery is not a replay"
     );
-
     let deadline = started_at + runtime.round_timeout();
     let timeout_owner = runtime
         .frozen_timeout_owner_for_test(deadline)
@@ -1735,7 +1666,6 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
         restored_receipt.owner().admission_ordinal() < timeout_owner.lifecycle_ordinal(),
         "the durable replay must retain its pre-restart scheduler position"
     );
-
     assert!(
         leader_wire_ingress
             .try_recv_if(|inbound| {
@@ -1805,7 +1735,6 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
         !runtime.fail_closed,
         "rejecting the fresh carrier is retryable backpressure"
     );
-
     // The retransmitted carrier is physically new even though its durable
     // leader-wire token is logically older.  Recreate the dequeue-time
     // projection on the far side of the frozen timeout cut.
@@ -1841,7 +1770,6 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
         runtime.can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),
         "a later clock reservation cannot pin an older durable replay at fair ingress"
     );
-
     // Model the checked dequeue's atomic Ingress -> Runtime handoff.  The
     // mutating seam must agree with the read-only predicate and still
     // authenticate the TC before it owns reducer capacity.
@@ -1870,7 +1798,6 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
             .is_some_and(|queued| queued.restored_producer_stage.is_none()),
         "authenticated replay must use the ordinary Admit path"
     );
-
     let timeout_step = runtime
         .step(deadline)
         .expect("the absolute timeout retains its already-frozen turn");
@@ -1898,7 +1825,6 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
     runtime
         .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
         .expect("publish the pending timeout signer owner");
-
     let tc_step = runtime
         .try_step_pacemaker_escape(deadline)
         .expect("restored authenticated TC remains a certified escape")

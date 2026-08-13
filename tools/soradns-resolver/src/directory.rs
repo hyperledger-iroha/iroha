@@ -3,7 +3,6 @@ use hex::encode as hex_encode;
 use iroha_data_model::soradns::ResolverDirectoryRecordV1;
 use norito::json::{self, value};
 use norito_derive::{JsonDeserialize, JsonSerialize};
-
 use crate::{
     canonical::{canonicalize_json_bytes_bounded, sha256_digest},
     limits::{
@@ -11,7 +10,6 @@ use crate::{
         MAX_RAD_ENTRIES, directory_json_decode_limits,
     },
 };
-
 /// Parsed representation of `directory.json` emitted by the release tooling.
 #[derive(Debug, Clone, JsonDeserialize)]
 pub struct DirectoryListing {
@@ -23,14 +21,12 @@ pub struct DirectoryListing {
     pub previous_root: Option<String>,
     pub rad: Vec<DirectoryRadEntry>,
 }
-
 impl DirectoryListing {
     #[must_use]
     pub fn entry_count(&self) -> usize {
         self.rad.len()
     }
 }
-
 /// Single RAD entry inside `directory.json`.
 #[derive(Debug, Clone, JsonDeserialize)]
 pub struct DirectoryRadEntry {
@@ -39,7 +35,6 @@ pub struct DirectoryRadEntry {
     pub leaf_hash: String,
     pub file: String,
 }
-
 /// Decode and canonicalise a directory listing JSON blob.
 pub fn parse_directory_listing(bytes: &[u8]) -> Result<(DirectoryListing, [u8; 32])> {
     let decode_limits = directory_json_decode_limits();
@@ -57,7 +52,6 @@ pub fn parse_directory_listing(bytes: &[u8]) -> Result<(DirectoryListing, [u8; 3
     let digest = sha256_digest(&canonical_bytes);
     Ok((listing, digest))
 }
-
 fn validate_listing_bounds(listing: &DirectoryListing) -> Result<()> {
     validate_directory_entry_count(listing.rad.len())?;
     if listing.rad_count != listing.rad.len() {
@@ -112,7 +106,6 @@ fn validate_listing_bounds(listing: &DirectoryListing) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_directory_entry_count(count: usize) -> Result<()> {
     if count > MAX_RAD_ENTRIES {
         eyre::bail!(
@@ -122,14 +115,12 @@ fn validate_directory_entry_count(count: usize) -> Result<()> {
     }
     Ok(())
 }
-
 fn check_hash(label: &str, value: &str) -> Result<()> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         eyre::bail!("{label} must be exactly 64 hexadecimal characters");
     }
     Ok(())
 }
-
 /// Build the canonical signing payload used for directory record signatures.
 pub fn signing_payload_bytes(record: &ResolverDirectoryRecordV1) -> Result<Vec<u8>> {
     let (_, public_key_bytes) = record
@@ -150,7 +141,6 @@ pub fn signing_payload_bytes(record: &ResolverDirectoryRecordV1) -> Result<Vec<u
         .map(String::into_bytes)
         .wrap_err("failed to encode bounded directory signing payload")
 }
-
 #[derive(Debug, JsonSerialize)]
 struct SigningPayload {
     record_version: u16,
@@ -163,11 +153,9 @@ struct SigningPayload {
     proof_manifest_cid: String,
     builder_public_key_hex: String,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn directory_entry_count_accepts_exact_and_rejects_plus_one() {
         validate_directory_entry_count(MAX_RAD_ENTRIES).expect("exact directory count");

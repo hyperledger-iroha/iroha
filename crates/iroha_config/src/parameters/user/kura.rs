@@ -80,7 +80,6 @@ pub struct Kura {
     #[config(nested)]
     pub debug: KuraDebug,
 }
-
 impl Kura {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Kura {
         let Self {
@@ -102,7 +101,6 @@ impl Kura {
                     output_new_blocks: debug_output_new_blocks,
                 },
         } = self;
-
         let replica_advert = actual::KuraReplicaAdvertPolicy {
             eviction_required_replicas,
             evictable_window: replica_advert_evictable_window,
@@ -112,7 +110,6 @@ impl Kura {
         if let Err(error) = replica_advert.validate(blocks_in_memory) {
             emitter.emit(Report::new(ParseError::InvalidKuraConfig).attach(error));
         }
-
         actual::Kura {
             init_mode,
             store_dir,
@@ -128,7 +125,6 @@ impl Kura {
         }
     }
 }
-
 /// User-level configuration container for `KuraDebug`.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct KuraDebug {

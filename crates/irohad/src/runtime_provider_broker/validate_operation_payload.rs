@@ -1440,7 +1440,6 @@ fn validate_operation_payload(
     }
     Ok(())
 }
-
 fn validate_moderation_panel_notification_archive_wire_scope(
     version: u16,
     slot: u16,
@@ -1457,7 +1456,6 @@ fn validate_moderation_panel_notification_archive_wire_scope(
     }
     Ok(())
 }
-
 fn validate_moderation_panel_notification_source_attest_wire_scope(
     version: u16,
     slot: u16,

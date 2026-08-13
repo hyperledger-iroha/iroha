@@ -4,34 +4,25 @@ mod handle_update_tests {
         collections::HashSet,
         sync::{Barrier, atomic::AtomicUsize},
     };
-
     use iroha_config::parameters::actual::SoranetHandshake as ActualSoranetHandshake;
     use iroha_crypto::encryption::ChaCha20Poly1305;
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
     use tokio::sync::{mpsc, watch};
-
     use super::*;
-
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
-
     impl message::ClassifyTopic for Dummy {}
-
     #[derive(Debug, Decode, Encode)]
     struct CloneCountingPayload(Vec<u8>);
-
     static ACTOR_SIZE_CLONES: AtomicUsize = AtomicUsize::new(0);
-
     impl Clone for CloneCountingPayload {
         fn clone(&self) -> Self {
             ACTOR_SIZE_CLONES.fetch_add(1, Ordering::Relaxed);
             Self(self.0.clone())
         }
     }
-
     impl message::ClassifyTopic for CloneCountingPayload {}
-
     impl<'a> norito::core::DecodeFromSlice<'a> for CloneCountingPayload {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
             let mut slice = bytes;
@@ -41,27 +32,22 @@ mod handle_update_tests {
             Ok((value, bytes.len() - slice.len()))
         }
     }
-
     #[derive(Clone, Debug)]
     struct BadLengthHintPayload;
-
     impl ncore::NoritoSerialize for BadLengthHintPayload {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             writer.write_all(&[1, 2, 3, 4])?;
             Ok(())
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             Some(1)
         }
     }
-
     impl<'a> ncore::NoritoDeserialize<'a> for BadLengthHintPayload {
         fn deserialize(_archived: &'a ncore::Archived<Self>) -> Self {
             Self
         }
     }
-
     impl<'a> ncore::DecodeFromSlice<'a> for BadLengthHintPayload {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
             if bytes.len() < 4 {
@@ -70,12 +56,9 @@ mod handle_update_tests {
             Ok((Self, 4))
         }
     }
-
     impl message::ClassifyTopic for BadLengthHintPayload {}
-
     #[derive(Clone, Debug)]
     struct FailingSerializerPayload;
-
     impl ncore::NoritoSerialize for FailingSerializerPayload {
         fn serialize(&self, _writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             Err(ncore::Error::Message(
@@ -83,13 +66,11 @@ mod handle_update_tests {
             ))
         }
     }
-
     impl<'a> ncore::NoritoDeserialize<'a> for FailingSerializerPayload {
         fn deserialize(_archived: &'a ncore::Archived<Self>) -> Self {
             Self
         }
     }
-
     impl<'a> ncore::DecodeFromSlice<'a> for FailingSerializerPayload {
         fn decode_from_slice(_bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
             Err(ncore::Error::Message(
@@ -97,9 +78,7 @@ mod handle_update_tests {
             ))
         }
     }
-
     impl message::ClassifyTopic for FailingSerializerPayload {}
-
     impl<'a> norito::core::DecodeFromSlice<'a> for Dummy {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
             let mut slice = bytes;
@@ -109,7 +88,6 @@ mod handle_update_tests {
             Ok((value, bytes.len() - slice.len()))
         }
     }
-
     #[derive(Clone, Debug, Decode, Encode, PartialEq, Eq)]
     enum RoutedActorDummy {
         Safety,
@@ -118,7 +96,6 @@ mod handle_update_tests {
         LaneAlternate,
         BlockSync,
     }
-
     impl message::ClassifyTopic for RoutedActorDummy {
         fn topic(&self) -> message::Topic {
             match self {
@@ -128,12 +105,10 @@ mod handle_update_tests {
                 Self::BlockSync => message::Topic::BlockSync,
             }
         }
-
         fn progress_reconstruction(&self) -> message::ProgressReconstruction {
             message::ProgressReconstruction::Retransmit
         }
     }
-
     impl<'a> norito::core::DecodeFromSlice<'a> for RoutedActorDummy {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
             let mut slice = bytes;
@@ -143,12 +118,10 @@ mod handle_update_tests {
             Ok((value, bytes.len() - slice.len()))
         }
     }
-
     fn test_network_actor_byte_budget() -> Arc<NetworkActorByteBudget> {
         NetworkActorByteBudget::new(usize::MAX, 0)
             .expect("zero safety reserve must fit the test actor budget")
     }
-
     fn test_topic_frame_caps() -> TopicFrameCaps {
         TopicFrameCaps {
             consensus: usize::MAX,
@@ -160,7 +133,6 @@ mod handle_update_tests {
             other: usize::MAX,
         }
     }
-
     #[test]
     fn network_actor_byte_budget_preserves_additive_safety_reserve() {
         assert!(NetworkActorByteBudget::new(usize::MAX, 0).is_some());
@@ -168,7 +140,6 @@ mod handle_update_tests {
             NetworkActorByteBudget::new(usize::MAX, 1).is_none(),
             "aggregate capacity overflow must fail closed"
         );
-
         let budget = NetworkActorByteBudget::new(10, 4).expect("small exact budget");
         let ordinary = budget
             .try_reserve(10, false)
@@ -181,7 +152,6 @@ mod handle_update_tests {
             }
         );
         assert!(budget.try_reserve(1, false).is_none());
-
         let safety = budget
             .try_reserve(4, true)
             .expect("ordinary saturation must leave the safety reserve available");
@@ -193,7 +163,6 @@ mod handle_update_tests {
             }
         );
         assert!(budget.try_reserve(1, true).is_none());
-
         drop(ordinary);
         assert_eq!(
             budget.retained(),
@@ -208,7 +177,6 @@ mod handle_update_tests {
         drop((replacement, safety));
         assert_eq!(budget.retained(), NetworkActorRetainedBytes::default());
     }
-
     #[test]
     fn progress_budget_bounds_unregistered_waiters_without_fresh_barging() {
         assert!(
@@ -246,7 +214,6 @@ mod handle_update_tests {
         };
         accepted_ticket.commit();
         assert_eq!(budget.retained(), 10);
-
         let ProgressLeaseAttempt::Waiting {
             ticket: Some(first_ticket),
             rank: 1,
@@ -273,7 +240,6 @@ mod handle_update_tests {
         drop(lease);
         assert_eq!(budget.retained(), 0);
     }
-
     #[test]
     fn progress_budget_preserves_fifo_for_three_registered_producers() {
         let budget = NetworkActorProgressBudget::new(1, 1, 4)
@@ -294,7 +260,6 @@ mod handle_update_tests {
             panic!("fixture must occupy the source slot");
         };
         admitted.commit();
-
         let mut tickets = Vec::new();
         for expected_rank in 1..=3 {
             let ProgressLeaseAttempt::Waiting {
@@ -311,7 +276,6 @@ mod handle_update_tests {
         drop(first);
         assert_eq!(tickets[0].rank(), Some(1));
         assert_eq!(tickets[1].rank(), Some(2));
-
         drop(occupied);
         let second = tickets.remove(0);
         let ProgressLeaseAttempt::Ready {
@@ -324,7 +288,6 @@ mod handle_update_tests {
         second.commit();
         drop(second_lease);
         assert_eq!(tickets[0].rank(), Some(1));
-
         let third = tickets.remove(0);
         let ProgressLeaseAttempt::Ready {
             lease: third_lease,
@@ -337,7 +300,6 @@ mod handle_update_tests {
         drop(third_lease);
         assert_eq!(budget.retained(), 0);
     }
-
     #[test]
     fn configured_producer_geometry_gives_six_same_source_waiters_decreasing_ranks() {
         let waiters_per_source = RELIABLE_PROGRESS_WAITERS_PER_SOURCE;
@@ -372,7 +334,6 @@ mod handle_update_tests {
             request_digest: Hash::new([tag]),
             authority: None,
         };
-
         let ProgressLeaseAttempt::Ready {
             lease: occupied_a,
             ticket: mut admitted_a,
@@ -381,7 +342,6 @@ mod handle_update_tests {
             panic!("source A fixture must occupy its actor lane");
         };
         admitted_a.commit();
-
         let mut waiters = Vec::new();
         for expected_rank in 1_u8..=6 {
             let request_shape = shape(expected_rank);
@@ -395,7 +355,6 @@ mod handle_update_tests {
             assert_eq!(rank, usize::from(expected_rank));
             waiters.push((request_shape, ticket));
         }
-
         let ProgressLeaseAttempt::Ready {
             lease: independent_b,
             ticket: mut admitted_b,
@@ -405,7 +364,6 @@ mod handle_update_tests {
         };
         admitted_b.commit();
         drop(independent_b);
-
         drop(occupied_a);
         while !waiters.is_empty() {
             for (index, (_, ticket)) in waiters.iter().enumerate() {
@@ -434,7 +392,6 @@ mod handle_update_tests {
         }
         assert_eq!(budget.retained(), 0);
     }
-
     #[test]
     fn targetized_broadcast_coalesces_only_the_same_digest_and_membership() {
         let budget = NetworkActorProgressBudget::new_classed(
@@ -473,7 +430,6 @@ mod handle_update_tests {
             request_digest,
             authority: Some(ProgressAuthorityIdentity::Topology(generation)),
         };
-
         let first_digest = Hash::new(b"first-broadcast-request");
         let ProgressLeaseAttempt::Ready {
             lease: first,
@@ -489,7 +445,6 @@ mod handle_update_tests {
             panic!("first targetized request must own the lane");
         };
         admitted.commit();
-
         assert!(matches!(
             budget.try_reserve_for_source(
                 1,
@@ -523,7 +478,6 @@ mod handle_update_tests {
         drop(first);
         assert_eq!(budget.retained(), 0);
     }
-
     #[test]
     fn removed_membership_cancellation_is_race_safe_across_ticket_id_reuse() {
         let target = PeerId::from(KeyPair::random().public_key().clone());
@@ -565,7 +519,6 @@ mod handle_update_tests {
             panic!("direct fixture must retain the shared target lane");
         };
         direct_ticket.commit();
-
         let old_membership = membership(7);
         let old_authority = ProgressDeliveryAuthority::Topology(Arc::clone(&old_membership));
         let old_shape = broadcast_shape(7, 7);
@@ -579,7 +532,6 @@ mod handle_update_tests {
         old_membership.cancel();
         assert_eq!(budget.cancel_membership(&old_membership, true), 1);
         assert_eq!(old_ticket.rank(), None);
-
         let new_membership = membership(8);
         let new_authority = ProgressDeliveryAuthority::Topology(Arc::clone(&new_membership));
         let new_shape = broadcast_shape(8, 8);
@@ -613,7 +565,6 @@ mod handle_update_tests {
         };
         new_ticket.commit();
         drop(new_lease);
-
         // Reconciliation can remove the waiter after `Ready` installs its
         // lease but before the channel handoff commits the ticket. That exact
         // cancelled commit is a no-op, not a panic or a cancellation of later
@@ -639,7 +590,6 @@ mod handle_update_tests {
         assert_eq!(budget.cancel_membership(&commit_race_membership, true), 1);
         commit_race_ticket.commit();
         drop(commit_race_lease);
-
         // Force reservation to wait on the budget lock, publish cancellation,
         // then race reservation against the reconciliation sweep. Since the
         // membership check happens under the same budget lock, neither order
@@ -685,7 +635,6 @@ mod handle_update_tests {
         assert!(state.waiters.is_empty());
         assert_eq!(state.retained_items, 0);
     }
-
     #[test]
     fn progress_class_geometry_reserves_safety_from_arbitrary_lane_sources() {
         let budget = NetworkActorProgressBudget::new_classed(
@@ -765,11 +714,9 @@ mod handle_update_tests {
             panic!("lane-source saturation must leave the safety class available");
         };
         safety_admission.commit();
-
         drop((lane_waiter, lane_lease, safety_lease));
         assert_eq!(budget.retained(), 0);
     }
-
     #[test]
     fn progress_ticket_allocation_never_wraps_and_resets_only_when_empty() {
         let budget = NetworkActorProgressBudget::new(1, 2, 2).expect("small progress budget");
@@ -801,7 +748,6 @@ mod handle_update_tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .next_ticket = u64::MAX;
-
         assert!(matches!(
             budget.try_reserve(1, shape, None),
             ProgressLeaseAttempt::Waiting {
@@ -821,7 +767,6 @@ mod handle_update_tests {
         drop((reset_ticket, lease));
         assert_eq!(budget.retained(), 0);
     }
-
     #[test]
     fn admitted_network_message_releases_byte_ownership_on_drop() {
         let budget = NetworkActorByteBudget::new(8, 2).expect("small exact budget");
@@ -839,7 +784,6 @@ mod handle_update_tests {
         drop(message);
         assert_eq!(budget.retained(), NetworkActorRetainedBytes::default());
     }
-
     #[test]
     fn outbound_actor_admission_enforces_plaintext_cap_and_stream_charge_exactly() {
         let (mut handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
@@ -856,7 +800,6 @@ mod handle_update_tests {
         handle.topic_frame_caps.other = plaintext_frame_bytes;
         handle.network_actor_byte_budget =
             NetworkActorByteBudget::new(stream_wire_bytes, 0).expect("exact actor fixture budget");
-
         handle.broadcast(Broadcast {
             data: Dummy,
             priority: Priority::High,
@@ -874,7 +817,6 @@ mod handle_update_tests {
             handle.network_actor_byte_budget.retained(),
             NetworkActorRetainedBytes::default()
         );
-
         handle.topic_frame_caps.other = plaintext_frame_bytes - 1;
         handle.broadcast(Broadcast {
             data: Dummy,
@@ -890,7 +832,6 @@ mod handle_update_tests {
             "rejected over-cap traffic must not retain actor ownership"
         );
     }
-
     struct ControlUpdateReceivers {
         topology: ControlUpdateReceiver<message::UpdateTopology>,
         peers: ControlUpdateReceiver<message::UpdatePeers>,
@@ -901,7 +842,6 @@ mod handle_update_tests {
         handshake: ControlUpdateReceiver<message::UpdateHandshake>,
         consensus_caps: ControlUpdateReceiver<ConsensusCapsSnapshot>,
     }
-
     fn handle_with_control_update_receivers() -> (
         NetworkBaseHandle<Dummy, ChaCha20Poly1305>,
         ControlUpdateReceivers,
@@ -929,7 +869,6 @@ mod handle_update_tests {
         let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
         let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
             watch::channel(HashMap::new());
-
         (
             NetworkBaseHandle {
                 subscribe_to_peers_messages_sender: subscribe_tx,
@@ -978,13 +917,11 @@ mod handle_update_tests {
             },
         )
     }
-
     fn closed_handle() -> NetworkBaseHandle<Dummy, ChaCha20Poly1305> {
         let (handle, receivers) = handle_with_control_update_receivers();
         drop(receivers);
         handle
     }
-
     fn test_consensus_caps(marker: u8) -> crate::ConsensusHandshakeCaps {
         crate::ConsensusHandshakeCaps {
             mode: if marker & 1 == 0 {
@@ -1002,7 +939,6 @@ mod handle_update_tests {
             },
         }
     }
-
     pub(super) fn handle_with_network_receivers<T: Pload>() -> (
         NetworkBaseHandle<T, ChaCha20Poly1305>,
         net_channel::Receiver<AdmittedNetworkMessage<T>>,
@@ -1033,7 +969,6 @@ mod handle_update_tests {
         let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
         let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
             watch::channel(HashMap::new());
-
         drop(update_topology_rx);
         drop(update_peers_rx);
         drop(update_validator_dial_roster_rx);
@@ -1042,7 +977,6 @@ mod handle_update_tests {
         drop(update_acl_rx);
         drop(update_handshake_rx);
         drop(update_consensus_caps_rx);
-
         let handle = NetworkBaseHandle {
             subscribe_to_peers_messages_sender: subscribe_tx,
             online_peers_receiver,
@@ -1076,7 +1010,6 @@ mod handle_update_tests {
             subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
             _encryptor: core::marker::PhantomData,
         };
-
         (
             handle,
             network_message_safety_rx,
@@ -1085,7 +1018,6 @@ mod handle_update_tests {
             network_message_low_rx,
         )
     }
-
     fn accept_direct_targets<T: Pload>(
         handle: &NetworkBaseHandle<T, ChaCha20Poly1305>,
         targets: HashSet<PeerId>,
@@ -1096,7 +1028,6 @@ mod handle_update_tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .reconcile(&targets, &handle.self_id);
     }
-
     fn handle_with_subscriber_receiver() -> (
         NetworkBaseHandle<Dummy, ChaCha20Poly1305>,
         mpsc::Receiver<Subscriber<Dummy>>,
@@ -1120,7 +1051,6 @@ mod handle_update_tests {
         let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
         let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
             watch::channel(HashMap::new());
-
         drop(update_topology_rx);
         drop(update_peers_rx);
         drop(update_validator_dial_roster_rx);
@@ -1129,7 +1059,6 @@ mod handle_update_tests {
         drop(update_acl_rx);
         drop(update_handshake_rx);
         drop(update_consensus_caps_rx);
-
         (
             NetworkBaseHandle {
                 subscribe_to_peers_messages_sender: subscribe_tx,
@@ -1169,37 +1098,31 @@ mod handle_update_tests {
             subscribe_rx,
         )
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn control_update_channel_keeps_newest_unconsumed_value() {
         let (tx, mut rx) = control_update_channel();
         for value in 0..=65 {
             send_control_update(&tx, "test", value);
         }
-
         assert_eq!(receive_control_update(&mut rx).await, Some(65));
         assert!(
             !rx.has_changed()
                 .expect("control update sender should remain open")
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn control_update_receive_is_cancellation_safe_and_reusable() {
         let (tx, mut rx) = control_update_channel();
-
         assert!(
             tokio::time::timeout(Duration::from_millis(10), receive_control_update(&mut rx),)
                 .await
                 .is_err(),
             "an untouched control slot must remain pending"
         );
-
         send_control_update(&tx, "test", 1);
         assert_eq!(receive_control_update(&mut rx).await, Some(1));
         send_control_update(&tx, "test", 2);
         assert_eq!(receive_control_update(&mut rx).await, Some(2));
-
         assert!(
             tokio::time::timeout(Duration::from_millis(10), receive_control_update(&mut rx),)
                 .await
@@ -1207,54 +1130,45 @@ mod handle_update_tests {
             "an applied snapshot must not be delivered twice"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn control_update_receive_preserves_final_value_across_close() {
         let (empty_tx, mut empty_rx) = control_update_channel::<u8>();
         drop(empty_tx);
         assert_eq!(receive_control_update(&mut empty_rx).await, None);
-
         let (tx, mut rx) = control_update_channel();
         send_control_update(&tx, "test", 7_u8);
         drop(tx);
         assert_eq!(receive_control_update(&mut rx).await, Some(7));
         assert_eq!(receive_control_update(&mut rx).await, None);
     }
-
     #[test]
     fn control_update_channel_releases_superseded_snapshots() {
         #[derive(Clone)]
         struct DropProbe(Arc<AtomicUsize>);
-
         impl Drop for DropProbe {
             fn drop(&mut self) {
                 self.0.fetch_add(1, Ordering::SeqCst);
             }
         }
-
         let dropped = Arc::new(AtomicUsize::new(0));
         let (tx, rx) = control_update_channel();
         for _ in 0..1_024 {
             send_control_update(&tx, "test", DropProbe(Arc::clone(&dropped)));
         }
-
         assert_eq!(dropped.load(Ordering::SeqCst), 1_023);
         drop(tx);
         assert_eq!(dropped.load(Ordering::SeqCst), 1_023);
         drop(rx);
         assert_eq!(dropped.load(Ordering::SeqCst), 1_024);
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn publisher_does_not_wait_for_receiver_payload_clone() {
         struct CloneGate(bool);
-
         struct SlowClone {
             marker: u8,
             clone_started: tokio::sync::mpsc::UnboundedSender<()>,
             gate: Arc<(std::sync::Mutex<CloneGate>, std::sync::Condvar)>,
         }
-
         impl Clone for SlowClone {
             fn clone(&self) -> Self {
                 let _ = self.clone_started.send(());
@@ -1274,7 +1188,6 @@ mod handle_update_tests {
                 }
             }
         }
-
         let (clone_started_tx, mut clone_started_rx) = tokio::sync::mpsc::unbounded_channel();
         let gate = Arc::new((
             std::sync::Mutex::new(CloneGate(false)),
@@ -1290,7 +1203,6 @@ mod handle_update_tests {
                 gate: Arc::clone(&gate),
             },
         );
-
         let receive_task = tokio::spawn(async move {
             let first = receive_control_update(&mut rx).await.expect("first update");
             (first, rx)
@@ -1299,7 +1211,6 @@ mod handle_update_tests {
             .recv()
             .await
             .expect("receiver must begin cloning");
-
         let send_tx = tx.clone();
         let send_gate = Arc::clone(&gate);
         let (send_done_tx, mut send_done_rx) = tokio::sync::oneshot::channel();
@@ -1318,13 +1229,11 @@ mod handle_update_tests {
         let send_completed = tokio::time::timeout(Duration::from_secs(1), &mut send_done_rx)
             .await
             .is_ok();
-
         let (lock, ready) = &*gate;
         lock.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .0 = true;
         ready.notify_all();
-
         send_task.await.expect("sender task must not panic");
         let (first, mut rx) = receive_task.await.expect("receiver task must not panic");
         assert!(
@@ -1340,7 +1249,6 @@ mod handle_update_tests {
             2
         );
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_control_update_writers_publish_the_latest_completed_write() {
         let (tx, mut rx) = control_update_channel();
@@ -1357,7 +1265,6 @@ mod handle_update_tests {
         for writer in writers {
             writer.await.expect("control update writer must not panic");
         }
-
         let (writer, sequence) =
             tokio::time::timeout(Duration::from_secs(1), receive_control_update(&mut rx))
                 .await
@@ -1369,24 +1276,19 @@ mod handle_update_tests {
             "the globally last completed writer must have published its final sequence"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn update_topology_overflow_keeps_newest_snapshot() {
         let mut handle = closed_handle();
         let (update_topology_tx, mut update_topology_rx) = control_update_channel();
         handle.update_topology_sender = update_topology_tx;
-
         for _ in 0..64 {
             handle.update_topology(message::UpdateTopology(HashSet::new()));
         }
-
         let superseded_peer = PeerId::from(KeyPair::random().public_key().clone());
         handle.update_topology(message::UpdateTopology(HashSet::from([superseded_peer])));
-
         let newest_peer = PeerId::from(KeyPair::random().public_key().clone());
         let expected = HashSet::from([newest_peer]);
         handle.update_topology(message::UpdateTopology(expected.clone()));
-
         let message::UpdateTopology(actual) = receive_control_update(&mut update_topology_rx)
             .await
             .expect("newest topology update should remain pending");
@@ -1397,7 +1299,6 @@ mod handle_update_tests {
                 .expect("topology sender should remain open")
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn validator_membership_and_dial_roster_share_one_retained_snapshot() {
         let (handle, mut receivers) = handle_with_control_update_receivers();
@@ -1405,12 +1306,10 @@ mod handle_update_tests {
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         let topology = HashSet::from([self_id.clone(), peer_id.clone()]);
         let validator_dial_roster = topology.clone();
-
         handle.update_validator_topology(message::UpdateValidatorTopology {
             topology: topology.clone(),
             validator_dial_roster: validator_dial_roster.clone(),
         });
-
         let ValidatorDialControlUpdate::Topology(message::UpdateValidatorTopology {
             topology: actual_topology,
             validator_dial_roster: actual_roster,
@@ -1430,7 +1329,6 @@ mod handle_update_tests {
             "membership must not race ownership through an independent topology snapshot"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn all_control_update_methods_keep_newest_category_snapshot() {
         let (handle, mut receivers) = handle_with_control_update_receivers();
@@ -1439,7 +1337,6 @@ mod handle_update_tests {
         let newest_peer = PeerId::from(KeyPair::random().public_key().clone());
         let stale_addr = socket_addr!(127.0.0.1:11_001);
         let newest_addr = socket_addr!(127.0.0.1:11_002);
-
         handle.update_topology(message::UpdateTopology(HashSet::from([stale_peer.clone()])));
         handle.update_peers_addresses(message::UpdatePeers(vec![(stale_peer.clone(), stale_addr)]));
         handle.update_validator_dial_roster(message::UpdateValidatorDialRoster(HashSet::from([
@@ -1465,7 +1362,6 @@ mod handle_update_tests {
         stale_handshake.kem_id = 1;
         handle.update_soranet_handshake(stale_handshake);
         handle.update_consensus_caps(test_consensus_caps(1), true);
-
         newest_handle.update_topology(message::UpdateTopology(HashSet::from(
             [newest_peer.clone()],
         )));
@@ -1497,7 +1393,6 @@ mod handle_update_tests {
         newest_handle.update_soranet_handshake(newest_handshake);
         let newest_caps = test_consensus_caps(2);
         newest_handle.update_consensus_caps(newest_caps.clone(), false);
-
         assert!(receivers.topology.has_changed().expect("topology open"));
         assert!(receivers.peers.has_changed().expect("peers open"));
         assert!(
@@ -1526,17 +1421,14 @@ mod handle_update_tests {
                 .has_changed()
                 .expect("consensus caps open")
         );
-
         let message::UpdateTopology(topology) = receive_control_update(&mut receivers.topology)
             .await
             .expect("topology update");
         assert_eq!(topology, HashSet::from([newest_peer.clone()]));
-
         let message::UpdatePeers(peers) = receive_control_update(&mut receivers.peers)
             .await
             .expect("peer-address update");
         assert_eq!(peers, vec![(newest_peer.clone(), newest_addr)]);
-
         let ValidatorDialControlUpdate::Roster(message::UpdateValidatorDialRoster(
             validator_dial_roster,
         )) = receive_control_update(&mut receivers.validator_dial_roster)
@@ -1546,7 +1438,6 @@ mod handle_update_tests {
             panic!("expected standalone validator dial roster update");
         };
         assert_eq!(validator_dial_roster, HashSet::from([newest_peer.clone()]));
-
         let message::UpdatePeerCapabilities(capabilities) =
             receive_control_update(&mut receivers.peer_capabilities)
                 .await
@@ -1560,13 +1451,11 @@ mod handle_update_tests {
                 },
             )]
         );
-
         let message::UpdateTrustedPeers(trusted) =
             receive_control_update(&mut receivers.trusted_peers)
                 .await
                 .expect("trusted-peer update");
         assert_eq!(trusted, HashSet::from([newest_peer.clone()]));
-
         let acl = receive_control_update(&mut receivers.acl)
             .await
             .expect("ACL update");
@@ -1574,12 +1463,10 @@ mod handle_update_tests {
         assert_eq!(acl.allow_keys, vec![newest_peer.public_key().clone()]);
         assert_eq!(acl.allow_cidrs, vec!["192.0.2.0/24"]);
         assert_eq!(acl.deny_cidrs, vec!["198.51.100.0/24"]);
-
         let handshake = receive_control_update(&mut receivers.handshake)
             .await
             .expect("handshake update");
         assert_eq!(handshake.handshake.kem_id, 2);
-
         let consensus = receive_control_update(&mut receivers.consensus_caps)
             .await
             .expect("consensus-capabilities update");
@@ -1588,40 +1475,34 @@ mod handle_update_tests {
         assert!(consensus.take_reconnect_request(&mut applied_generation));
         assert!(!consensus.take_reconnect_request(&mut applied_generation));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn consensus_reconnect_request_survives_newer_caps_only_snapshot() {
         let (sender, mut receiver) = consensus_caps_update_channel();
         sender.send(test_consensus_caps(1), true);
         let newest_caps = test_consensus_caps(2);
         sender.send(newest_caps.clone(), false);
-
         let snapshot = receive_control_update(&mut receiver)
             .await
             .expect("latest consensus snapshot");
         assert_eq!(snapshot.caps, newest_caps);
         let mut applied_generation = ReconnectGeneration::default();
         assert!(snapshot.take_reconnect_request(&mut applied_generation));
-
         sender.send(test_consensus_caps(3), false);
         let caps_only = receive_control_update(&mut receiver)
             .await
             .expect("caps-only snapshot");
         assert!(!caps_only.take_reconnect_request(&mut applied_generation));
-
         sender.send(test_consensus_caps(4), true);
         let reconnect = receive_control_update(&mut receiver)
             .await
             .expect("new reconnect snapshot");
         assert!(reconnect.take_reconnect_request(&mut applied_generation));
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_consensus_updates_preserve_every_reconnect_generation() {
         const WRITERS: u8 = 8;
         const UPDATES_PER_WRITER: u8 = 96;
         const RECONNECT_EVERY: u8 = 3;
-
         let (sender, mut receiver) = consensus_caps_update_channel();
         let mut writers = Vec::new();
         for writer in 0..WRITERS {
@@ -1642,7 +1523,6 @@ mod handle_update_tests {
                 .await
                 .expect("consensus update writer must not panic");
         }
-
         let snapshot = tokio::time::timeout(
             Duration::from_secs(1),
             receive_control_update(&mut receiver),
@@ -1657,22 +1537,18 @@ mod handle_update_tests {
             ReconnectGeneration(expected_generation),
             "caps-only publications must not erase concurrent reconnect requests"
         );
-
         let mut applied_generation = ReconnectGeneration::default();
         assert!(snapshot.take_reconnect_request(&mut applied_generation));
         assert!(!snapshot.take_reconnect_request(&mut applied_generation));
     }
-
     #[test]
     fn subscriber_registration_queue_is_bounded() {
         let (handle, _subscribe_rx) = handle_with_subscriber_receiver();
         let (first_tx, _first_rx) = mpsc::channel(1);
         let (second_tx, _second_rx) = mpsc::channel(1);
-
         assert!(handle.subscribe_to_peers_messages(first_tx).is_ok());
         assert!(handle.subscribe_to_peers_messages(second_tx).is_err());
     }
-
     #[test]
     fn high_actor_drain_limit_scales_with_queue_pressure() {
         assert_eq!(high_actor_drain_limit(1), NETWORK_HIGH_ACTOR_DRAIN_BASE);
@@ -1685,7 +1561,6 @@ mod handle_update_tests {
             NETWORK_HIGH_ACTOR_DRAIN_SATURATED
         );
     }
-
     #[test]
     fn saturated_high_actor_drain_yields_to_service_and_shutdown() {
         assert!(!should_stop_high_actor_drain(
@@ -1707,13 +1582,11 @@ mod handle_update_tests {
             true,
         ));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn high_priority_post_waits_for_actor_queue_capacity() {
         let (handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
             handle_with_network_receivers::<Dummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-
         handle.post(Post {
             data: Dummy,
             peer_id: peer_id.clone(),
@@ -1724,7 +1597,6 @@ mod handle_update_tests {
             peer_id: peer_id.clone(),
             priority: Priority::High,
         });
-
         let first = high_rx
             .recv()
             .await
@@ -1744,7 +1616,6 @@ mod handle_update_tests {
             NetworkMessage::Broadcast(_) => panic!("expected deferred post"),
         }
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn high_priority_actor_overflow_waiters_are_bounded() {
         let (handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
@@ -1755,11 +1626,9 @@ mod handle_update_tests {
             peer_id: peer_id.clone(),
             priority: Priority::High,
         };
-
         handle.post(post());
         handle.post(post());
         handle.post(post());
-
         assert_eq!(
             handle
                 .network_message_high_deferred_permits
@@ -1792,7 +1661,6 @@ mod handle_update_tests {
             "the overflow permit must be released after delivery"
         );
     }
-
     #[test]
     fn outbound_actor_sizing_does_not_clone_large_payloads() {
         let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -1806,10 +1674,8 @@ mod handle_update_tests {
             priority: Priority::High,
         });
         let clones_before = ACTOR_SIZE_CLONES.load(Ordering::Relaxed);
-
         let measured = outbound_actor_message_wire_bytes(&message, &origin, DEFAULT_RELAY_TTL)
             .expect("large actor payload must have a representable wire length");
-
         assert_eq!(ACTOR_SIZE_CLONES.load(Ordering::Relaxed), clones_before);
         assert_eq!(
             measured,
@@ -1820,7 +1686,6 @@ mod handle_update_tests {
             )
         );
     }
-
     #[test]
     fn outbound_actor_sizing_ignores_understated_exact_length_hints() {
         let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -1830,16 +1695,13 @@ mod handle_update_tests {
             peer_id: target.clone(),
             priority: Priority::High,
         });
-
         let measured = outbound_actor_message_wire_bytes(&message, &origin, DEFAULT_RELAY_TTL)
             .expect("a bad optimization hint must not break fallible wire counting");
-
         assert_eq!(
             measured,
             data_frame_wire_len_from_payload_len::<BadLengthHintPayload>(&origin, Some(&target), 4,)
         );
     }
-
     #[test]
     fn outbound_actor_sizing_propagates_serializer_failure_without_panicking() {
         let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -1849,10 +1711,8 @@ mod handle_update_tests {
             peer_id: target,
             priority: Priority::High,
         });
-
         assert!(outbound_actor_message_wire_bytes(&message, &origin, DEFAULT_RELAY_TTL).is_err());
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn deferred_actor_message_retains_and_releases_exact_byte_ownership() {
         let (mut handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
@@ -1873,7 +1733,6 @@ mod handle_update_tests {
             .expect("small two-message actor budget");
         handle.network_actor_byte_budget = NetworkActorByteBudget::new(two_message_bytes, 0)
             .expect("exact two-message actor budget");
-
         let post = || Post {
             data: Dummy,
             peer_id: peer_id.clone(),
@@ -1887,7 +1746,6 @@ mod handle_update_tests {
             two_message_bytes,
             "one queued item and one waiter must retain exactly two charges; the third must fail admission"
         );
-
         let first = high_rx.recv().await.expect("first item must be queued");
         drop(first);
         let second = tokio::time::timeout(Duration::from_secs(1), high_rx.recv())
@@ -1904,7 +1762,6 @@ mod handle_update_tests {
             handle.network_actor_byte_budget.retained(),
             NetworkActorRetainedBytes::default()
         );
-
         let (
             mut closed_handle,
             _closed_safety_rx,
@@ -1932,12 +1789,10 @@ mod handle_update_tests {
             "a closed actor channel must release the reservation exactly once"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn high_priority_broadcast_waits_for_actor_queue_capacity() {
         let (handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
             handle_with_network_receivers::<Dummy>();
-
         handle.broadcast(Broadcast {
             data: Dummy,
             priority: Priority::High,
@@ -1946,7 +1801,6 @@ mod handle_update_tests {
             data: Dummy,
             priority: Priority::High,
         });
-
         let first = high_rx
             .recv()
             .await
@@ -1965,7 +1819,6 @@ mod handle_update_tests {
             NetworkMessage::Post(_) => panic!("expected deferred broadcast"),
         }
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn recoverable_best_effort_post_reports_queue_cap_and_closed_without_losing_source() {
         let (handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
@@ -1992,7 +1845,6 @@ mod handle_update_tests {
             }
             other => panic!("reliable progress must reject best-effort admission: {other:?}"),
         }
-
         handle
             .post_best_effort_recoverable(post())
             .expect("the actor queue owns the first control post");
@@ -2008,7 +1860,6 @@ mod handle_update_tests {
         assert_eq!(returned.data, RoutedActorDummy::Control);
         assert_eq!(returned.peer_id, target);
         assert_eq!(returned.priority, Priority::High);
-
         let first = high_rx
             .recv()
             .await
@@ -2021,7 +1872,6 @@ mod handle_update_tests {
             .expect("deferred control post transfers after actor capacity opens")
             .into_inner();
         assert!(matches!(second, NetworkMessage::Post(_)));
-
         let (mut capped, _safety_rx, _progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         let capped_post = post();
@@ -2042,7 +1892,6 @@ mod handle_update_tests {
             }
             other => panic!("oversize post must be returned with its exact cap outcome: {other:?}"),
         }
-
         let (closed, _safety_rx, _progress_rx, closed_high_rx, _low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         drop(closed_high_rx);
@@ -2054,14 +1903,12 @@ mod handle_update_tests {
             other => panic!("closed actor must return the exact post: {other:?}"),
         }
     }
-
     #[test]
     fn ordinary_high_saturation_does_not_consume_progress_or_safety_capacity() {
         let (handle, mut safety_rx, mut progress_rx, mut high_rx, mut low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
-
         handle.post(Post {
             data: RoutedActorDummy::Control,
             peer_id: peer_id.clone(),
@@ -2088,7 +1935,6 @@ mod handle_update_tests {
                 None,
             )
             .expect("safety progress must enter its source-isolated lane");
-
         assert!(matches!(
             high_rx.try_recv().map(AdmittedNetworkMessage::into_inner),
             Ok(NetworkMessage::Post(Post {
@@ -2120,14 +1966,12 @@ mod handle_update_tests {
             Err(mpsc::error::TryRecvError::Empty)
         ));
     }
-
     #[test]
     fn consensus_lane_and_block_sync_use_progress_and_canonical_high() {
         let (handle, _safety_rx, mut progress_rx, mut high_rx, mut low_rx) =
             handle_with_network_receivers::<RoutedActorDummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
-
         for data in [RoutedActorDummy::Lane, RoutedActorDummy::BlockSync] {
             handle
                 .post_recoverable(
@@ -2159,7 +2003,6 @@ mod handle_update_tests {
             Err(mpsc::error::TryRecvError::Empty)
         ));
     }
-
     #[test]
     #[should_panic(expected = "requires post_recoverable")]
     fn void_post_rejects_reliable_route_at_developer_boundary() {
@@ -2171,7 +2014,6 @@ mod handle_update_tests {
             priority: Priority::High,
         });
     }
-
     #[test]
     #[should_panic(expected = "requires broadcast_recoverable")]
     fn void_broadcast_rejects_reliable_route_at_developer_boundary() {
@@ -2182,7 +2024,6 @@ mod handle_update_tests {
             priority: Priority::High,
         });
     }
-
     #[test]
     fn recoverable_progress_admission_preserves_fifo_and_exact_original() {
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
@@ -2205,7 +2046,6 @@ mod handle_update_tests {
             NetworkActorProgressBudget::new(stream_wire_bytes, 4, 4)
                 .expect("small progress budget");
         handle.network_message_progress_deferred_permits = Arc::new(Semaphore::new(0));
-
         handle
             .post_recoverable(post(), None)
             .expect("the exact maximum must enter the empty progress corridor");
@@ -2213,7 +2053,6 @@ mod handle_update_tests {
             handle.network_actor_progress_budget.retained(),
             stream_wire_bytes
         );
-
         let (second, first_ticket) = match handle.post_recoverable(post(), None) {
             Err(NetworkActorAdmissionError::Backpressured {
                 message,
@@ -2225,7 +2064,6 @@ mod handle_update_tests {
         assert_eq!(second.data, RoutedActorDummy::Lane);
         assert_eq!(second.peer_id, peer_id);
         assert_eq!(second.priority, Priority::Low);
-
         let (third, second_ticket) = match handle.post_recoverable(post(), None) {
             Err(NetworkActorAdmissionError::Backpressured {
                 message,
@@ -2235,7 +2073,6 @@ mod handle_update_tests {
             other => panic!("expected rank-two recoverable pressure, got {other:?}"),
         };
         assert_eq!(third.priority, Priority::Low);
-
         let first = progress_rx
             .try_recv()
             .expect("first progress post must be queued");
@@ -2248,7 +2085,6 @@ mod handle_update_tests {
         ));
         drop(first);
         assert_eq!(handle.network_actor_progress_budget.retained(), 0);
-
         assert!(matches!(
             handle.post_recoverable(post(), None),
             Err(NetworkActorAdmissionError::Backpressured {
@@ -2295,7 +2131,6 @@ mod handle_update_tests {
         ));
         assert_eq!(handle.network_actor_progress_budget.retained(), 0);
     }
-
     #[test]
     fn progress_ticket_rejects_a_different_same_length_payload() {
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
@@ -2318,7 +2153,6 @@ mod handle_update_tests {
             NetworkActorProgressBudget::new(stream_wire_bytes, 1, 2)
                 .expect("one source with two bounded waiters");
         handle.network_message_progress_deferred_permits = Arc::new(Semaphore::new(0));
-
         handle
             .post_recoverable(post(RoutedActorDummy::Lane), None)
             .expect("first exact request fills the retained source slot");
@@ -2350,7 +2184,6 @@ mod handle_update_tests {
             }
             other => panic!("same-length payload substitution must be rejected: {other:?}"),
         }
-
         drop(
             progress_rx
                 .try_recv()
@@ -2358,7 +2191,6 @@ mod handle_update_tests {
         );
         assert_eq!(handle.network_actor_progress_budget.retained(), 0);
     }
-
     #[test]
     fn distinct_direct_posts_to_the_same_target_remain_exactly_backpressured() {
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
@@ -2395,7 +2227,6 @@ mod handle_update_tests {
             NetworkActorProgressBudget::new(stream_wire_bytes, 1, 2)
                 .expect("one exact target source and one waiter must fit");
         handle.network_message_progress_deferred_permits = Arc::new(Semaphore::new(0));
-
         handle
             .post_recoverable(first, None)
             .expect("first direct request owns the target lane");
@@ -2410,7 +2241,6 @@ mod handle_update_tests {
         assert_eq!(second.data, RoutedActorDummy::LaneAlternate);
         assert_eq!(second.peer_id, peer_id);
         assert_eq!(second.priority, Priority::Low);
-
         drop(
             progress_rx
                 .try_recv()
@@ -2433,7 +2263,6 @@ mod handle_update_tests {
         ));
         assert_eq!(handle.network_actor_progress_budget.retained(), 0);
     }
-
     #[test]
     fn recoverable_progress_budget_isolates_targets_at_one_frame_per_source() {
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
@@ -2460,7 +2289,6 @@ mod handle_update_tests {
             NetworkActorProgressBudget::new(stream_wire_bytes, 4, 4)
                 .expect("small progress budget");
         handle.network_message_progress_deferred_permits = Arc::new(Semaphore::new(0));
-
         handle
             .post_recoverable(post(blocked_peer), None)
             .expect("the blocked target must acquire its one-frame source reserve");
@@ -2472,7 +2300,6 @@ mod handle_update_tests {
             handle.network_actor_progress_budget.retained(),
             stream_wire_bytes * 2
         );
-
         let second = progress_rx
             .try_recv()
             .expect("responsive target is independently admitted");
@@ -2488,7 +2315,6 @@ mod handle_update_tests {
         drop(second);
         assert_eq!(handle.network_actor_progress_budget.retained(), 0);
     }
-
     #[test]
     fn recoverable_progress_rejects_one_over_cap_and_releases_on_close() {
         let (mut handle, _safety_rx, progress_rx, _high_rx, _low_rx) =
@@ -2510,7 +2336,6 @@ mod handle_update_tests {
             NetworkActorProgressBudget::new(stream_wire_bytes, 1, 1)
                 .expect("small progress budget");
         drop(progress_rx);
-
         let closed = handle
             .post_recoverable(post(), None)
             .expect_err("a closed progress channel must return source ownership");
@@ -2525,7 +2350,6 @@ mod handle_update_tests {
             }
         ));
         assert_eq!(handle.network_actor_progress_budget.retained(), 0);
-
         handle.topic_frame_caps.consensus = plaintext_frame_bytes - 1;
         let rejected = handle
             .post_recoverable(post(), None)
@@ -2542,7 +2366,6 @@ mod handle_update_tests {
         ));
         assert_eq!(handle.network_actor_progress_budget.retained(), 0);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn ordinary_control_overflow_cannot_consume_source_isolated_safety_capacity() {
         let (handle, mut safety_rx, mut progress_rx, mut high_rx, _low_rx) =
@@ -2554,7 +2377,6 @@ mod handle_update_tests {
             peer_id: peer_id.clone(),
             priority: Priority::High,
         };
-
         handle.post(post(RoutedActorDummy::Control));
         handle.post(post(RoutedActorDummy::Control));
         assert_eq!(
@@ -2570,7 +2392,6 @@ mod handle_update_tests {
             1,
             "ordinary control overflow must not reserve safety overflow capacity"
         );
-
         handle
             .post_recoverable(post(RoutedActorDummy::Safety), None)
             .expect("the safety source owns its independent progress slot");
@@ -2589,7 +2410,6 @@ mod handle_update_tests {
             1,
             "a second item from one safety source must remain with its caller"
         );
-
         assert!(matches!(
             progress_rx.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
@@ -2615,13 +2435,11 @@ mod handle_update_tests {
             }))
         ));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn low_priority_post_still_drops_when_actor_queue_is_full() {
         let (handle, _safety_rx, _progress_rx, _high_rx, mut low_rx) =
             handle_with_network_receivers::<Dummy>();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-
         handle.post(Post {
             data: Dummy,
             peer_id: peer_id.clone(),
@@ -2632,7 +2450,6 @@ mod handle_update_tests {
             peer_id,
             priority: Priority::Low,
         });
-
         let first = low_rx
             .recv()
             .await
@@ -2646,7 +2463,6 @@ mod handle_update_tests {
             "low-priority overflow should remain lossy"
         );
     }
-
     #[test]
     fn update_methods_ignore_closed_channels() {
         let handle = closed_handle();
@@ -2658,14 +2474,12 @@ mod handle_update_tests {
         handle.update_soranet_handshake(ActualSoranetHandshake::default());
         handle.update_consensus_caps(test_consensus_caps(0), false);
     }
-
     #[test]
     fn closed_handle_reports_subscriber_queue_cap() {
         let handle = closed_handle();
         assert_eq!(handle.subscriber_queue_cap().get(), 1);
         assert_eq!(handle.authenticated_source_credit_capacity().get(), 1);
     }
-
     #[tokio::test]
     async fn wait_online_peers_update_reports_closed_channel() {
         let mut handle = closed_handle();

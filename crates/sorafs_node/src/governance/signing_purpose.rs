@@ -13,14 +13,12 @@ pub enum GovernanceDagSigningPurposeV1 {
     /// Signed immutable qualification-history archive.
     QualificationArchive = 5,
 }
-
 impl GovernanceDagSigningPurposeV1 {
     /// Immutable V1 wire identifier.
     #[must_use]
     pub const fn wire_id(self) -> u8 {
         self as u8
     }
-
     /// Decode one immutable V1 wire identifier without aliases.
     #[must_use]
     pub const fn try_from_wire_id(value: u8) -> Option<Self> {
@@ -34,7 +32,6 @@ impl GovernanceDagSigningPurposeV1 {
         }
     }
 }
-
 /// Validate one exact purpose-separated Governance DAG control payload.
 pub fn validate_governance_dag_control_signing_payload_v1(
     purpose: GovernanceDagSigningPurposeV1,
@@ -123,7 +120,6 @@ pub fn validate_governance_dag_control_signing_payload_v1(
     }
     Ok(())
 }
-
 /// Runtime-only signing boundary for the local Governance DAG publisher.
 ///
 /// Production implementations delegate to an authenticated external signer.
@@ -132,7 +128,6 @@ pub fn validate_governance_dag_control_signing_payload_v1(
 pub trait GovernanceDagRuntimeSigner: Send + Sync + fmt::Debug {
     /// Opaque, non-secret deployment handle for this signer.
     fn handle(&self) -> &str;
-
     /// Qualify the active adapter and its public policy revision.
     ///
     /// Implementations must fail when the external-signer adapter is
@@ -140,13 +135,10 @@ pub trait GovernanceDagRuntimeSigner: Send + Sync + fmt::Debug {
     /// production-ready. Provider diagnostics can contain secrets and are
     /// therefore always redacted by the caller.
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
-
     /// Governed publisher peer identity bound to this signer.
     fn publisher_peer_id(&self) -> &[u8];
-
     /// Raw Ed25519 public key bound to the opaque handle.
     fn public_key(&self) -> [u8; 32];
-
     /// Sign one exact canonical Governance DAG payload.
     ///
     /// Implementations must not include credentials or provider diagnostics in

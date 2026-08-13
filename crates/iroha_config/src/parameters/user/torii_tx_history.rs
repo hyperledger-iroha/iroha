@@ -1,5 +1,4 @@
 // User-facing transaction-history visibility and authentication configuration.
-
 /// Transaction-history visibility/auth configuration for Torii app API endpoints.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiTxHistory {
@@ -13,7 +12,6 @@ pub struct ToriiTxHistory {
     /// Optional JWT bearer verification configuration.
     pub jwt: Option<ToriiTxHistoryJwt>,
 }
-
 impl ToriiTxHistory {
     fn parse(self) -> actual::ToriiTxHistory {
         if !(1..=defaults::torii::tx_history::MANDATORY_ALIASES_MAX_FILE_BYTES_V1)
@@ -50,7 +48,6 @@ impl ToriiTxHistory {
         }
     }
 }
-
 /// JWT bearer verification inputs for transaction-history endpoints.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiTxHistoryJwt {
@@ -65,7 +62,6 @@ pub struct ToriiTxHistoryJwt {
     /// Optional audience constraint.
     pub audience: Option<String>,
 }
-
 impl ToriiTxHistoryJwt {
     fn parse(self) -> actual::ToriiTxHistoryJwt {
         let algorithm = self.algorithm.trim().to_ascii_uppercase();
@@ -108,11 +104,9 @@ impl ToriiTxHistoryJwt {
         }
     }
 }
-
 #[cfg(test)]
 mod torii_tx_history_tests {
     use super::*;
-
     #[test]
     fn torii_tx_history_parse_accepts_asset_alias_selector() {
         let parsed = ToriiTxHistory {
@@ -123,7 +117,6 @@ mod torii_tx_history_tests {
             jwt: None,
         }
         .parse();
-
         assert_eq!(
             parsed.allowed_asset_definition_id.as_deref(),
             Some("xor#universal")
@@ -133,7 +126,6 @@ mod torii_tx_history_tests {
             defaults::torii::tx_history::MANDATORY_ALIASES_MAX_FILE_BYTES
         );
     }
-
     #[test]
     fn torii_tx_history_parse_rejects_invalid_asset_selector() {
         let panic = std::panic::catch_unwind(|| {
@@ -146,10 +138,8 @@ mod torii_tx_history_tests {
             }
             .parse();
         });
-
         assert!(panic.is_err(), "expected invalid selector to panic");
     }
-
     #[test]
     fn torii_tx_history_parse_rejects_invalid_alias_policy_memory_geometry() {
         for maximum in [
@@ -166,7 +156,6 @@ mod torii_tx_history_tests {
                 }
                 .parse();
             });
-
             assert!(
                 panic.is_err(),
                 "expected invalid maximum {maximum} to panic"

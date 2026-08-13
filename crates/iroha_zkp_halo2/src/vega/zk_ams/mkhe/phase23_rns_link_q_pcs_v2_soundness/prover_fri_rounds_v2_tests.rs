@@ -1,6 +1,5 @@
 use super::*;
 use crate::vega::sponge::shake256;
-
 const POST_FRI0_TRANSCRIPT_KAT_V2: [u8; 32] = [
     0xc1, 0x31, 0x7e, 0x0f, 0x12, 0xb3, 0xe5, 0xba, 0x8d, 0xd8, 0x9c, 0xcd, 0x20, 0xb0, 0xf5, 0x92,
     0x8f, 0x2b, 0xd7, 0xdd, 0x05, 0x3c, 0x0a, 0x7a, 0x32, 0x77, 0xfd, 0x8d, 0x6d, 0x14, 0xa6, 0xd3,
@@ -21,7 +20,6 @@ const QUERY_ARRAY_KAT_V2: [u8; 32] = [
     0x67, 0x55, 0x6e, 0x20, 0x05, 0xa1, 0x42, 0xda, 0x7c, 0x40, 0xa6, 0x84, 0x9c, 0x29, 0xef, 0xfb,
     0xc7, 0x98, 0x45, 0x41, 0x38, 0xee, 0x91, 0x3d, 0xbe, 0xfa, 0x0f, 0xfa, 0x79, 0xab, 0xb5, 0x2f,
 ];
-
 fn manual_absorb_root_v2(transcript: [u8; 32], layer: u8, root: [u8; 32]) -> [u8; 32] {
     let mut frame = b"iroha.zk-ams.v2.q-pcs.soundness.fri-root\0".to_vec();
     frame.push(2);
@@ -30,7 +28,6 @@ fn manual_absorb_root_v2(transcript: [u8; 32], layer: u8, root: [u8; 32]) -> [u8
     frame.extend_from_slice(&root);
     keccak256(&frame)
 }
-
 fn manual_challenge_v2(transcript: [u8; 32], limb: usize, row: usize, layer: usize) -> [u64; 2] {
     let modulus = RELEASE_MODULI_V1[limb];
     let zone = u64::MAX - u64::MAX % modulus;
@@ -53,7 +50,6 @@ fn manual_challenge_v2(transcript: [u8; 32], limb: usize, row: usize, layer: usi
     }
     panic!("manual fold challenge rejection bound exhausted")
 }
-
 fn manual_absorb_schedule_v2(
     digest: [u8; 32],
     limb: usize,
@@ -69,7 +65,6 @@ fn manual_absorb_schedule_v2(
     frame.extend_from_slice(&value[1].to_be_bytes());
     keccak256(&frame)
 }
-
 fn manual_rounds_through_v2(last_layer: usize) -> ([u8; 32], [u8; 32]) {
     let mut transcript = POST_FRI0_TRANSCRIPT_KAT_V2;
     let mut schedule = FOLD0_SCHEDULE_KAT_V2;
@@ -84,11 +79,9 @@ fn manual_rounds_through_v2(last_layer: usize) -> ([u8; 32], [u8; 32]) {
     }
     (transcript, schedule)
 }
-
 fn manual_rounds_v2() -> ([u8; 32], [u8; 32]) {
     manual_rounds_through_v2(17)
 }
-
 fn manual_queries_v2(transcript: [u8; 32]) -> [u32; QUERY_COUNT_V2] {
     let mut terminal_frame = b"iroha.zk-ams.v2.q-pcs.soundness.fri-terminal\0".to_vec();
     terminal_frame.push(2);
@@ -119,7 +112,6 @@ fn manual_queries_v2(transcript: [u8; 32]) -> [u32; QUERY_COUNT_V2] {
     }
     queries
 }
-
 fn query_digest_v2(queries: &[u32; QUERY_COUNT_V2]) -> [u8; 32] {
     let mut frame = Vec::with_capacity(QUERY_COUNT_V2 * 4);
     for query in queries {
@@ -127,7 +119,6 @@ fn query_digest_v2(queries: &[u32; QUERY_COUNT_V2]) -> [u8; 32] {
     }
     keccak256(&frame)
 }
-
 #[test]
 fn continuation_transcript_matches_literal_independent_oracle() {
     let (manual_transcript, manual_schedule) = manual_rounds_v2();
@@ -199,7 +190,6 @@ fn continuation_transcript_matches_literal_independent_oracle() {
         assert_eq!((section.opened_v2(), section.authentication_v2()), expected);
     }
 }
-
 #[test]
 fn last_round_is_exactly_one_two_by_two_fold_and_rejects_unequal_terminal() {
     let (transcript, schedule) = manual_rounds_v2();
@@ -272,7 +262,6 @@ fn last_round_is_exactly_one_two_by_two_fold_and_rejects_unequal_terminal() {
         Err(SoundnessErrorV2::InvalidTerminal)
     ));
 }
-
 #[test]
 fn source_guard_pins_move_only_bounded_continuation() {
     let source = include_str!("prover_fri_rounds_v2.rs");

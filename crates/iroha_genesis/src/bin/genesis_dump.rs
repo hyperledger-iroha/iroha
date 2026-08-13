@@ -1,7 +1,5 @@
 //! Dump every instruction from a Norito-framed genesis block.
-
 use std::{env, path::Path};
-
 use eyre::{Result, eyre};
 use iroha_data_model::{
     isi::{
@@ -10,14 +8,12 @@ use iroha_data_model::{
     },
     transaction::Executable,
 };
-
 fn main() -> Result<()> {
     iroha_genesis::init_instruction_registry();
     let path = env::args()
         .nth(1)
         .ok_or_else(|| eyre!("usage: genesis_dump <genesis.nrt>"))?;
     let block = iroha_genesis::read_signed_genesis(Path::new(&path))?;
-
     println!(
         "tx_count={} result_count={}",
         block.external_transactions().len(),
@@ -53,6 +49,5 @@ fn main() -> Result<()> {
             }
         }
     }
-
     Ok(())
 }

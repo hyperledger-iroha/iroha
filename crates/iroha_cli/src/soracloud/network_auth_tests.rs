@@ -1,5 +1,4 @@
 // Exact-network Soracloud HTTP authentication regressions included by the parent test module.
-
 #[test]
 fn build_soracloud_mutation_auth_headers_adds_single_sig_freshness_headers() {
     let config = crate::fallback_config();
@@ -8,7 +7,6 @@ fn build_soracloud_mutation_auth_headers_adds_single_sig_freshness_headers() {
     let headers = build_soracloud_mutation_auth_headers(&config, &endpoint, br#"{"noop":true}"#)
         .expect("single-sig headers");
     let header_map: BTreeMap<_, _> = headers.into_iter().collect();
-
     assert_eq!(
         header_map.get(HEADER_IROHA_ACCOUNT),
         Some(&config.account.to_string())
@@ -17,7 +15,6 @@ fn build_soracloud_mutation_auth_headers_adds_single_sig_freshness_headers() {
     assert!(header_map.contains_key(HEADER_IROHA_TIMESTAMP_MS));
     assert!(header_map.contains_key(HEADER_IROHA_NONCE));
     assert!(!header_map.contains_key(HEADER_IROHA_WITNESS));
-
     let signature = Signature::try_from_bytes(
         &base64::engine::general_purpose::STANDARD
             .decode(
@@ -63,14 +60,12 @@ fn build_soracloud_mutation_auth_headers_adds_single_sig_freshness_headers() {
         .verify(config.key_pair.public_key(), &foreign_message)
         .expect_err("Soracloud signature must not verify for another genesis network");
 }
-
 #[test]
 fn build_soracloud_mutation_auth_headers_reports_nonce_rng_failure() {
     let config = crate::fallback_config();
     let endpoint =
         reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
     let mut rng = FailingSoracloudSignatureNonceRng;
-
     let error = build_soracloud_mutation_auth_headers_with_rng(
         &config,
         &endpoint,
@@ -79,11 +74,9 @@ fn build_soracloud_mutation_auth_headers_reports_nonce_rng_failure() {
     )
     .expect_err("signature nonce RNG failure");
     let message = format!("{error:?}");
-
     assert!(message.contains("Soracloud request signature nonce OS RNG failed"));
     assert!(message.contains("failing Soracloud signature nonce RNG"));
 }
-
 #[test]
 fn build_soracloud_read_auth_headers_bind_exact_path_query_and_network() {
     let mut config = crate::fallback_config();
@@ -96,7 +89,6 @@ fn build_soracloud_read_auth_headers_bind_exact_path_query_and_network() {
         .expect("single-signature read headers");
     let header_map: BTreeMap<_, _> = headers.into_iter().collect();
     assert!(!header_map.contains_key(HEADER_IROHA_WITNESS));
-
     let signature = Signature::try_from_bytes(
         &base64::engine::general_purpose::STANDARD
             .decode(header_map.get(HEADER_IROHA_SIGNATURE).expect("signature"))
@@ -124,7 +116,6 @@ fn build_soracloud_read_auth_headers_bind_exact_path_query_and_network() {
             &message(&config.network_id, &endpoint, &[]),
         )
         .expect("exact GET path and query verify");
-
     let reordered = reqwest::Url::parse(
         "http://127.0.0.1:8080/v1/soracloud/apps/status?audit_limit=3&service=zeta",
     )
@@ -158,7 +149,6 @@ fn build_soracloud_read_auth_headers_bind_exact_path_query_and_network() {
             &message(&config.network_id, &endpoint, b"unexpected-body"),
         )
         .expect_err("GET body substitution must fail verification");
-
     let foreign_network = iroha::data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha::data_model::block::BlockHeader,
     >::from_untyped_unchecked(
@@ -171,20 +161,17 @@ fn build_soracloud_read_auth_headers_bind_exact_path_query_and_network() {
         )
         .expect_err("same-label foreign genesis must fail verification");
 }
-
 #[test]
 fn protected_soracloud_get_fails_before_network_without_local_signer() {
     let previous = SORACLOUD_SUBMISSION_CONFIG.with(|slot| slot.borrow_mut().take());
     let error = fetch_torii_soracloud_status("http://127.0.0.1:1", None, Some("token"), 1)
         .expect_err("missing local signer must fail closed");
     SORACLOUD_SUBMISSION_CONFIG.with(|slot| *slot.borrow_mut() = previous);
-
     let message = format!("{error:#}");
     assert!(message.contains("protected GET requires an initialized local account signer"));
     assert!(message.contains("submission config is not initialized"));
     assert!(!message.contains("failed to fetch"));
 }
-
 #[test]
 fn build_soracloud_mutation_auth_headers_uses_witness_file_when_configured() {
     let mut config = crate::fallback_config();
@@ -212,10 +199,8 @@ fn build_soracloud_mutation_auth_headers_uses_witness_file_when_configured() {
     )
     .expect("write witness file");
     config.soracloud_http_witness_file = Some(witness_path);
-
     let headers = build_soracloud_mutation_auth_headers(&config, &endpoint, body).expect("headers");
     let header_map: BTreeMap<_, _> = headers.into_iter().collect();
-
     assert_eq!(
         header_map.get(HEADER_IROHA_ACCOUNT),
         Some(&config.account.to_string())

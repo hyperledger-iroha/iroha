@@ -1,12 +1,10 @@
 //! Content hosting helpers.
-
 use std::{
     collections::BTreeMap,
     fs,
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
 };
-
 use crate::{Run, RunContext};
 use eyre::{Result, WrapErr};
 use iroha::data_model::{
@@ -19,10 +17,8 @@ use iroha::data_model::{
 use iroha_config::parameters::{actual, defaults};
 use iroha_core::smartcontracts::isi::content::{hash_index, parse_tar_index};
 use iroha_crypto::Hash;
-
 const TAR_BLOCK_BYTES: u64 = 512;
 const TAR_TRAILER_BYTES: u64 = TAR_BLOCK_BYTES * 2;
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Publish a content bundle (tar archive) to the content lane.
@@ -30,7 +26,6 @@ pub enum Command {
     /// Pack a directory into a deterministic tarball + manifest without submitting it.
     Pack(PackArgs),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -39,7 +34,6 @@ impl Run for Command {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct PublishArgs {
     /// Path to a tar archive containing the static bundle.
@@ -73,7 +67,6 @@ pub struct PublishArgs {
     #[arg(long, value_name = "PATH")]
     pub manifest_out: Option<PathBuf>,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct PackArgs {
     /// Directory to pack into a tarball.
@@ -101,11 +94,9 @@ pub struct PackArgs {
     #[arg(long)]
     pub immutable: bool,
 }
-
 impl PublishArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let defaults = default_content_config();
-
         let pack_result = if let Some(bundle_path) = self.bundle {
             let tarball = read_content_file_bounded(
                 &bundle_path,
@@ -146,7 +137,6 @@ impl PublishArgs {
         } else {
             eyre::bail!("either --bundle or --root must be supplied");
         };
-
         let bundle_id = Hash::new(&pack_result.tarball);
         let isi = isi::content::PublishContentBundle {
             bundle_id,
@@ -157,7 +147,6 @@ impl PublishArgs {
         context.finish(vec![InstructionBox::from(isi)])
     }
 }
-
 impl PackArgs {
     fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
         let defaults = default_content_config();
@@ -170,7 +159,6 @@ impl PackArgs {
             self.cache_max_age_secs,
             self.immutable,
         )?;
-
         fs::write(&self.bundle_out, &pack.tarball).wrap_err_with(|| {
             format!(
                 "failed to write bundle to {}",
@@ -188,12 +176,10 @@ impl PackArgs {
         Ok(())
     }
 }
-
 struct PackResult {
     tarball: Vec<u8>,
     manifest: ContentBundleManifest,
 }
-
 fn default_content_config() -> actual::Content {
     actual::Content {
         max_bundle_bytes: defaults::content::MAX_BUNDLE_BYTES,
@@ -233,7 +219,6 @@ fn default_content_config() -> actual::Content {
         stripe_layout: defaults::content::default_stripe_layout(),
     }
 }
-
 fn pack_directory(
     root: &Path,
     defaults: &actual::Content,
@@ -256,7 +241,6 @@ fn pack_directory(
     )?;
     Ok(PackResult { tarball, manifest })
 }
-
 fn build_manifest(
     tarball: &[u8],
     defaults: &actual::Content,
@@ -274,21 +258,18 @@ fn build_manifest(
     }
     let files = parse_tar_index(tarball, defaults.max_files, defaults.max_path_len, defaults)
         .wrap_err("failed to parse tarball index")?;
-
     let index_hash = hash_index(&files).wrap_err("failed to hash index")?;
     let cache_max_age = cache_max_age_secs
         .unwrap_or(defaults.default_cache_max_age_secs)
         .min(defaults.max_cache_max_age_secs)
         .max(1);
     let auth_mode = parse_auth_mode(auth).wrap_err("invalid auth mode")?;
-
     let mut mime_overrides = BTreeMap::new();
     for entry in &files {
         if let Some(mime) = guess_mime(&entry.path) {
             mime_overrides.insert(entry.path.clone(), mime);
         }
     }
-
     Ok(ContentBundleManifest {
         bundle_id: Hash::new(tarball),
         index_hash,
@@ -305,7 +286,6 @@ fn build_manifest(
         mime_overrides,
     })
 }
-
 fn parse_auth_mode(raw: Option<&str>) -> Result<ContentAuthMode> {
     let Some(raw) = raw else {
         return Ok(ContentAuthMode::Public);
@@ -332,12 +312,10 @@ fn parse_auth_mode(raw: Option<&str>) -> Result<ContentAuthMode> {
     }
     eyre::bail!("unsupported auth mode `{trimmed}`")
 }
-
 fn read_content_file_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>> {
     let (file, expected_bytes) = open_content_file_bounded(path, max_bytes, label)?;
     read_open_content_file_bounded(file, expected_bytes, label, path)
 }
-
 fn open_content_file_bounded(
     path: &Path,
     max_bytes: u64,
@@ -348,7 +326,6 @@ fn open_content_file_bounded(
     if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
         eyre::bail!("{label} must be a direct regular file: {}", path.display());
     }
-
     let file = open_content_input_file(path)
         .wrap_err_with(|| format!("failed to open {label} {}", path.display()))?;
     let before = file
@@ -368,7 +345,6 @@ fn open_content_file_bounded(
         .map_err(|_| eyre::eyre!("{label} length cannot be represented on this host"))?;
     Ok((file, expected_bytes))
 }
-
 fn read_open_content_file_bounded(
     mut file: fs::File,
     expected_bytes: usize,
@@ -385,7 +361,6 @@ fn read_open_content_file_bounded(
     }
     Ok(bytes)
 }
-
 #[cfg(unix)]
 fn open_content_input_file(path: &Path) -> std::io::Result<fs::File> {
     let descriptor = rustix::fs::open(
@@ -395,29 +370,24 @@ fn open_content_input_file(path: &Path) -> std::io::Result<fs::File> {
     )?;
     Ok(fs::File::from(descriptor))
 }
-
 #[cfg(windows)]
 fn open_content_input_file(path: &Path) -> std::io::Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     fs::OpenOptions::new()
         .read(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_content_input_file(path: &Path) -> std::io::Result<fs::File> {
     fs::File::open(path)
 }
-
 #[derive(Debug)]
 struct ContentSourceEntry {
     path: String,
     data: Vec<u8>,
 }
-
 fn collect_entries(root: &Path, defaults: &actual::Content) -> Result<Vec<ContentSourceEntry>> {
     let root_metadata = fs::symlink_metadata(root)
         .wrap_err_with(|| format!("failed to inspect content root {}", root.display()))?;
@@ -427,7 +397,6 @@ fn collect_entries(root: &Path, defaults: &actual::Content) -> Result<Vec<Conten
             root.display()
         );
     }
-
     let mut entries = Vec::new();
     entries
         .try_reserve_exact(defaults.max_files as usize)
@@ -446,7 +415,6 @@ fn collect_entries(root: &Path, defaults: &actual::Content) -> Result<Vec<Conten
     }
     Ok(entries)
 }
-
 fn collect_entries_from_directory(
     root: &Path,
     relative_dir: &Path,
@@ -473,7 +441,6 @@ fn collect_entries_from_directory(
                 defaults.max_path_len
             );
         }
-
         let file_type = entry
             .file_type()
             .wrap_err_with(|| format!("failed to inspect content path `{canonical_path}`"))?;
@@ -490,7 +457,6 @@ fn collect_entries_from_directory(
                 defaults.max_files
             );
         }
-
         let path = entry.path();
         let (file, source_bytes) =
             open_content_file_bounded(&path, defaults.max_bundle_bytes, "content source")?;
@@ -513,7 +479,6 @@ fn collect_entries_from_directory(
     }
     Ok(())
 }
-
 fn tar_entry_encoded_len(payload_bytes: u64) -> Result<u64> {
     let padded_payload = payload_bytes
         .checked_add(TAR_BLOCK_BYTES - 1)
@@ -524,7 +489,6 @@ fn tar_entry_encoded_len(payload_bytes: u64) -> Result<u64> {
         .checked_add(padded_payload)
         .ok_or_else(|| eyre::eyre!("content tar entry length overflow"))
 }
-
 fn build_tar(entries: &[ContentSourceEntry], max_bundle_bytes: u64) -> Result<Vec<u8>> {
     let archive_bytes = entries.iter().try_fold(TAR_TRAILER_BYTES, |total, entry| {
         total
@@ -567,7 +531,6 @@ fn build_tar(entries: &[ContentSourceEntry], max_bundle_bytes: u64) -> Result<Ve
     debug_assert_eq!(out.len(), archive_bytes);
     Ok(out)
 }
-
 fn split_tar_path(path: &str) -> Result<(String, String)> {
     const NAME_LIMIT: usize = 100;
     const PREFIX_LIMIT: usize = 155;
@@ -585,7 +548,6 @@ fn split_tar_path(path: &str) -> Result<(String, String)> {
     }
     Ok((name.to_string(), prefix.to_string()))
 }
-
 fn guess_mime(path: &str) -> Option<String> {
     let ext = path.rsplit('.').next()?.to_ascii_lowercase();
     let mime = match ext.as_str() {
@@ -604,11 +566,9 @@ fn guess_mime(path: &str) -> Option<String> {
     };
     Some(mime.to_string())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn tar_builder_accepts_exact_bundle_limit_and_rejects_next_block() {
         let max_bundle_bytes = defaults::content::MAX_BUNDLE_BYTES;
@@ -619,7 +579,6 @@ mod tests {
         }];
         let tarball = build_tar(&exact, max_bundle_bytes).expect("exact archive must fit");
         assert_eq!(tarball.len() as u64, max_bundle_bytes);
-
         let oversized = vec![ContentSourceEntry {
             path: "index.bin".to_string(),
             data: vec![0_u8; exact_payload_bytes as usize + 1],
@@ -628,7 +587,6 @@ mod tests {
             .expect_err("one payload byte must require another tar block");
         assert!(error.to_string().contains("configured limit"));
     }
-
     #[test]
     fn bounded_bundle_reader_rejects_sparse_max_plus_one() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -645,7 +603,6 @@ mod tests {
         )
         .expect("exact bundle must be accepted");
         assert_eq!(bytes.len() as u64, defaults::content::MAX_BUNDLE_BYTES);
-
         let oversized_path = directory.path().join("oversized.tar");
         let oversized = fs::File::create(&oversized_path).expect("create oversized bundle");
         oversized
@@ -660,7 +617,6 @@ mod tests {
         .expect_err("max plus one must fail before allocation");
         assert!(error.to_string().contains("first-release limit"));
     }
-
     #[test]
     fn directory_collection_rejects_file_count_overflow() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -672,18 +628,15 @@ mod tests {
             .expect_err("max files plus one must fail");
         assert!(error.to_string().contains("configured limit"));
     }
-
     #[cfg(unix)]
     #[test]
     fn bounded_bundle_reader_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let directory = tempfile::tempdir().expect("temporary directory");
         let target = directory.path().join("target.tar");
         fs::write(&target, []).expect("write target");
         let link = directory.path().join("link.tar");
         symlink(&target, &link).expect("create symlink");
-
         let error =
             read_content_file_bounded(&link, defaults::content::MAX_BUNDLE_BYTES, "test bundle")
                 .expect_err("symlink must fail closed");

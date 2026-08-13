@@ -1,5 +1,4 @@
 // Focused adversarial coverage for terminal settlement/publication fencing.
-
 #[test]
 fn terminal_handoff_identity_is_network_and_destination_bound() {
     let outcome_digest = [0x62; 32];
@@ -45,7 +44,6 @@ fn terminal_handoff_identity_is_network_and_destination_bound() {
         )
     );
 }
-
 #[test]
 fn terminal_handoff_policy_drift_after_delivery_is_ambiguous() {
     let inner = Arc::new(MockHandoffSink::default());
@@ -88,7 +86,6 @@ fn terminal_handoff_policy_drift_after_delivery_is_ambiguous() {
         },
     };
     handoff.handoff_id = handoff.canonical_id();
-
     assert_eq!(
         qualified.deliver(&handoff),
         Err(ModerationHandoffFailureV1::Ambiguous)
@@ -96,7 +93,6 @@ fn terminal_handoff_policy_drift_after_delivery_is_ambiguous() {
     assert_eq!(inner.calls(), 1);
     assert_eq!(inner.delivered(), vec![handoff.handoff_id]);
 }
-
 #[test]
 fn terminal_handoffs_use_exact_finalization_block_across_later_tips() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -111,7 +107,6 @@ fn terminal_handoffs_use_exact_finalization_block_across_later_tips() {
     later_tip.finalized_height = 4;
     later_tip.finalized_block_hash = [4; 32];
     later_tip.finalized_at_unix_ms = 62;
-
     let first = ModerationOrchestratorV1::open(
         config(&temp, "terminal-exact-cursor-a.norito"),
         deps(
@@ -128,7 +123,6 @@ fn terminal_handoffs_use_exact_finalization_block_across_later_tips() {
         ),
     )
     .expect("second orchestrator");
-
     let queue = |orchestrator: &ModerationOrchestratorV1| {
         let (snapshot, digest) = orchestrator
             .read_validated_finalized_snapshot()
@@ -145,7 +139,6 @@ fn terminal_handoffs_use_exact_finalization_block_across_later_tips() {
     };
     let first_handoffs = queue(&first);
     let second_handoffs = queue(&second);
-
     assert_eq!(first_handoffs.len(), 2);
     assert_eq!(
         norito::to_bytes(&first_handoffs).expect("encode first handoffs"),
@@ -161,7 +154,6 @@ fn terminal_handoffs_use_exact_finalization_block_across_later_tips() {
             }
     }));
 }
-
 #[test]
 fn cold_terminal_handoff_rebuild_requires_exact_retained_event() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -187,14 +179,12 @@ fn cold_terminal_handoff_rebuild_requires_exact_retained_event() {
         ),
     )
     .expect("orchestrator");
-
     assert!(matches!(
         orchestrator.reconcile(),
         Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(message))
             if message.contains("no retained exact finalization event")
     ));
 }
-
 #[test]
 fn checkpoint_and_pending_terminal_handoff_are_network_fenced() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -232,7 +222,6 @@ fn checkpoint_and_pending_terminal_handoff_are_network_fenced() {
             .expect("queue terminal handoffs");
     }
     drop(orchestrator);
-
     let original = std::fs::read(&checkpoint.checkpoint_path).expect("read checkpoint");
     let limits = checkpoint_decode_limits(checkpoint.checkpoint_max_bytes).expect("decode limits");
     let mut transplanted =
@@ -251,7 +240,6 @@ fn checkpoint_and_pending_terminal_handoff_are_network_fenced() {
         Err(ModerationOrchestratorError::CheckpointCorrupt(message))
             if message.contains("network binding")
     ));
-
     let mut substituted =
         decode_from_bytes_with_limits::<ModerationOrchestratorCheckpointV1>(&original, limits)
             .expect("decode checkpoint");
@@ -267,7 +255,6 @@ fn checkpoint_and_pending_terminal_handoff_are_network_fenced() {
             if message.contains("terminal handoff identity")
     ));
 }
-
 #[test]
 fn terminal_finalization_source_provenance_mismatch_is_rejected() {
     let temp = tempfile::tempdir().expect("tempdir");

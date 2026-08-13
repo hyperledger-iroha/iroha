@@ -7,7 +7,6 @@
 //! The format begins with a small metadata header followed by a byte buffer
 //! containing archived values. Every value has a corresponding [`Archived`] type
 //! which represents the layout in the buffer.
-
 use core::convert::TryFrom;
 use std::{
     alloc::Layout,
@@ -25,21 +24,17 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-
 pub use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 #[cfg(feature = "derive")]
 pub use norito_derive::{NoritoDeserialize, NoritoSerialize};
 use sha2::{Digest, Sha256};
-
 #[cfg(feature = "schema-structural")]
 use crate::json;
 use crate::{ArchiveSlice, guarded_try_deserialize};
-
 mod encoder;
 pub use encoder::Encoder;
 mod encode_writers;
 use encode_writers::{CountingWriter, ExactLengthWriter, LengthCountingWriter};
-
 pub mod heuristics;
 pub mod hw;
 pub mod simd_crc64;
@@ -48,10 +43,8 @@ pub use simd_crc64::crc64_neon;
 #[cfg(all(target_arch = "x86_64", target_feature = "sse4.2"))]
 pub use simd_crc64::crc64_sse42;
 pub use simd_crc64::{crc64_fallback, hardware_crc64};
-
 #[cfg(all(feature = "gpu-compression", not(target_arch = "wasm32")))]
 pub mod gpu_zstd;
-
 /// Default upper bound on Norito archive length (bytes) when hosts do not
 /// provide an explicit configuration.
 const DEFAULT_MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
@@ -1811,7 +1804,6 @@ where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize + Send,
 {
     use rayon::prelude::*;
-
     validate_header_flags(flags)?;
     check_decode_sequence_length(
         u64::try_from(plan.spans.len()).map_err(|_| Error::LengthMismatch)?,
@@ -2080,9 +2072,7 @@ mod sequence_gpu {
         path::PathBuf,
         sync::{Mutex, OnceLock},
     };
-
     use super::{BinarySequenceLayout, SequencePlan, SequenceSpan, plan_binary_sequence_scalar};
-
     #[repr(C)]
     #[derive(Clone, Copy)]
     struct AbiSpan {
@@ -2356,7 +2346,6 @@ mod sequence_gpu {
     #[cfg(unix)]
     unsafe fn load_library_unix(path: &std::path::Path) -> Option<*mut c_void> {
         use std::{ffi::CString, os::unix::ffi::OsStrExt};
-
         const RTLD_LAZY: c_int = 1;
         let bytes = path.as_os_str().as_bytes();
         if bytes.contains(&0) {
@@ -5969,7 +5958,6 @@ impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'
         Ok(out)
     }
 }
-
 pub mod stream {
     #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     use std::io::BufReader;
@@ -5977,15 +5965,12 @@ pub mod stream {
         alloc::{Layout, alloc, dealloc},
         io::{self, Read},
     };
-
     use crc64fast::Digest;
-
     use super::{
         Archived, Compression, DecodeFlagsGuard, Error, Header, NoritoDeserialize, PayloadCtxGuard,
         archived_payload_align, archived_payload_size, empty_archived_ptr, header_flags,
     };
     use crate::guarded_try_deserialize;
-
     pub(crate) fn inspect_sequence_len_from_reader<R>(
         mut reader: R,
         expected_schema: [u8; 16],
@@ -7510,7 +7495,6 @@ pub fn frame_current_payload_with_default_header<T: NoritoSerialize>() -> Result
 #[cfg(test)]
 mod bytesink_tests {
     use super::*;
-
     #[test]
     fn bytesink_crc_matches_direct() {
         let mut s = ByteSink::with_headroom(4, Header::SIZE);
@@ -7520,7 +7504,6 @@ mod bytesink_tests {
     #[test]
     fn smallbuf_clear_returns_short_writes_to_stack_storage() {
         use std::io::Write as _;
-
         let mut buf = SmallBuf::<4>::new();
         buf.write_all(&[1, 2, 3, 4, 5]).unwrap();
         assert!(buf.spilled);
@@ -7572,7 +7555,6 @@ pub struct CompressionConfig {
 // Always counts calls and bytes; timing is gated behind `adaptive-telemetry`.
 mod telemetry_compress {
     use std::sync::atomic::{AtomicU64, Ordering};
-
     static CALLS: AtomicU64 = AtomicU64::new(0);
     static NONE_SELECTED: AtomicU64 = AtomicU64::new(0);
     static ZSTD_SELECTED: AtomicU64 = AtomicU64::new(0);
@@ -7627,7 +7609,6 @@ mod telemetry_compress {
             COMPRESS_TIME_NS_TOTAL.store(0, Ordering::Relaxed);
         }
     }
-
     pub(crate) use Snapshot as CompressSnapshot;
 }
 /// Return a snapshot of compression telemetry metrics.

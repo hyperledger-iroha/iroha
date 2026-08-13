@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests that state changes made by failing triggers are reverted.
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{ValidationFail, prelude::*, query::error::FindError, trigger::TriggerId};
@@ -8,7 +7,6 @@ use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterEr
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use tokio::task::spawn_blocking;
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_trigger_revert() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -20,7 +18,6 @@ async fn failed_trigger_revert() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     //When
     let trigger_id = "trigger".parse::<TriggerId>()?;
     let account_id = ALICE_ID.clone();
@@ -61,7 +58,6 @@ async fn failed_trigger_revert() -> Result<()> {
         }
     })
     .await?;
-
     let call_trigger = ExecuteTrigger::new(trigger_id);
     let err = spawn_blocking({
         let client = client.clone();
@@ -107,7 +103,6 @@ async fn failed_trigger_revert() -> Result<()> {
     } else {
         panic!("unexpected error: {err:?}");
     }
-
     //Then
     let query_result = match sandbox::handle_result(
         spawn_blocking({

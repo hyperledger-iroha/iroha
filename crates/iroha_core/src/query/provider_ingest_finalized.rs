@@ -19,7 +19,6 @@
 //! archive bytes that lack that field also use a retired state-root domain and
 //! cannot pass canonical decode/validation; operators must reset that
 //! disposable archive namespace rather than migrate it.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
@@ -28,12 +27,10 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
-
 #[cfg(unix)]
 use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
 use std::io::Write as _;
-
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
@@ -54,7 +51,6 @@ use norito::{
 };
 use sorafs_manifest::capacity::{MAX_CAPACITY_METADATA_VALUE_BYTES, ReplicationOrderV1};
 use thiserror::Error;
-
 use crate::{
     kura::{Kura, KuraV2CommitReceipt},
     state::{StateReadOnly, WorldReadOnly as _},
@@ -269,8 +265,7 @@ pub struct ProviderIngestFinalizedArchivedOrderV1 {
     pub pin_manifest: PinManifestRecord,
     /// Chain-authoritative replication-order record.
     pub replication_order: ReplicationOrderRecord,
-    /// Consensus-authenticated Musubi archive binding, absent for generic
-    /// non-Musubi replication orders.
+    /// Consensus-authenticated Musubi archive binding, absent for generic non-Musubi replication orders.
     pub musubi_archive: Option<MusubiReplicationOrderArchiveBindingV1>,
 }
 impl ProviderIngestFinalizedArchivedOrderV1 {
@@ -455,16 +450,14 @@ pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
     pub pin_manifest: PinManifestRecord,
     /// Chain-authoritative replication order.
     pub replication_order: ReplicationOrderRecord,
-    /// Consensus-authenticated Musubi archive binding, absent for generic
-    /// non-Musubi replication orders.
+    /// Consensus-authenticated Musubi archive binding, absent for generic non-Musubi replication orders.
     pub musubi_archive: Option<MusubiReplicationOrderArchiveBindingV1>,
     /// Current authoritative completion epoch, when completion is admissible.
     pub completion_epoch: Option<u64>,
 }
 /// Context-bound exclusive cursor for provider-indexed archive pages.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
-)]
+#[rustfmt::skip]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveCursorV1 {
     /// Exact finalized key whose immutable snapshot is being paged.
     pub key: ProviderIngestFinalizedArchiveKeyV1,
@@ -3347,7 +3340,6 @@ fn validate_pin_manifest_transition(
     order_id: ReplicationOrderId,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     use iroha_data_model::sorafs::pin_registry::PinStatus;
-
     let status_is_monotonic = match (previous.status, current.status) {
         (
             PinStatus::Pending,
@@ -5378,7 +5370,6 @@ fn unlink_verified_archive_file(
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         let name = path.file_name().ok_or_else(|| {
             ProviderIngestFinalizedArchiveErrorV1::PathBindingMismatch {
                 path: path.to_path_buf(),
@@ -5574,7 +5565,6 @@ fn open_unix_directory_ancestry(
     path: &Path,
 ) -> Result<fs::File, ProviderIngestFinalizedArchiveErrorV1> {
     use std::os::unix::fs::MetadataExt as _;
-
     let mut current = fs::File::from(
         rustix::fs::open(
             "/",
@@ -5680,7 +5670,6 @@ fn recover_staged_directory(
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
-
         let directory_file = open_unix_directory_ancestry(directory)?;
         verify_unix_directory_handle(&directory_file, expected_directory_identity, directory)?;
         let entries = rustix::fs::Dir::read_from(&directory_file)
@@ -5806,7 +5795,6 @@ fn unix_staged_file_has_canonical_target(
     canonical_suffix: &str,
 ) -> Result<bool, rustix::io::Errno> {
     use std::os::unix::ffi::OsStrExt as _;
-
     let entries = rustix::fs::Dir::read_from(directory)?;
     let mut matches = 0_u8;
     for entry in entries {
@@ -6056,7 +6044,6 @@ impl Drop for UnixStagedArtifact<'_> {
 #[cfg(unix)]
 fn create_unix_staged_file(directory: &fs::File) -> io::Result<(fs::File, OsString)> {
     use std::os::unix::fs::MetadataExt as _;
-
     for _ in 0..128 {
         let name = OsString::from(format!(
             "{STAGED_FILE_PREFIX}{:08x}-{:016x}",
@@ -6146,7 +6133,6 @@ fn unix_stat_matches_metadata(
     expected_links: u64,
 ) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     rustix::fs::FileType::from_raw_mode(entry.st_mode) == rustix::fs::FileType::RegularFile
         && entry.st_dev as u64 == metadata.dev()
         && entry.st_ino as u64 == metadata.ino()
@@ -6938,17 +6924,14 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
     #[error("finalized provider-ingest archive lock is poisoned")]
     ArchiveLockPoisoned,
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         panic::AssertUnwindSafe,
         sync::{Arc, Mutex},
     };
-
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt as _;
-
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{

@@ -1,10 +1,8 @@
 #![cfg(feature = "cuda")]
-
 use ivm::{
     poseidon2_cuda, poseidon2_cuda_many, poseidon2_simd, poseidon6_cuda, poseidon6_cuda_many,
     poseidon6_simd,
 };
-
 fn ensure_cuda_backend() -> bool {
     if !ivm::cuda_available() {
         eprintln!("CUDA hardware unavailable; skipping Poseidon CUDA parity tests");
@@ -16,7 +14,6 @@ fn ensure_cuda_backend() -> bool {
     }
     true
 }
-
 fn unwrap_or_skip<T>(label: &str, value: Option<T>) -> Option<T> {
     match value {
         Some(v) => Some(v),
@@ -26,7 +23,6 @@ fn unwrap_or_skip<T>(label: &str, value: Option<T>) -> Option<T> {
         }
     }
 }
-
 #[test]
 fn poseidon2_cuda_matches_scalar_vectors() {
     if !ensure_cuda_backend() {
@@ -51,7 +47,6 @@ fn poseidon2_cuda_matches_scalar_vectors() {
         );
     }
 }
-
 #[test]
 fn poseidon6_cuda_matches_scalar_vectors() {
     if !ensure_cuda_backend() {
@@ -83,7 +78,6 @@ fn poseidon6_cuda_matches_scalar_vectors() {
         );
     }
 }
-
 #[test]
 fn poseidon2_cuda_many_matches_scalar_vectors() {
     if !ensure_cuda_backend() {
@@ -102,7 +96,6 @@ fn poseidon2_cuda_many_matches_scalar_vectors() {
     };
     assert_eq!(actual, expected, "Poseidon2 CUDA batch mismatch");
 }
-
 #[test]
 fn poseidon6_cuda_many_matches_scalar_vectors() {
     if !ensure_cuda_backend() {

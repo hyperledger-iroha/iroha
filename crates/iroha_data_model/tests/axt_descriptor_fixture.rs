@@ -1,12 +1,10 @@
 //! Regression guard for the public AXT descriptor/manifest fixtures.
-
 use hex::encode;
 use iroha_data_model::nexus::{
     AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, TouchManifest,
     compute_descriptor_binding, validate_descriptor,
 };
 use norito::{decode_from_bytes, json};
-
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
 struct DescriptorFixture {
     descriptor: AxtDescriptor,
@@ -14,15 +12,12 @@ struct DescriptorFixture {
     binding_hex: String,
     descriptor_hex: String,
 }
-
 #[test]
 fn descriptor_fixture_and_binding_are_stable() {
     let fixture: DescriptorFixture =
         json::from_slice(include_bytes!("fixtures/axt_descriptor_multi_ds.json"))
             .expect("fixture decodes");
-
     validate_descriptor(&fixture.descriptor).expect("fixture descriptor is valid");
-
     // Builder should produce the same descriptor with deterministic ordering and deduplication.
     let built = AxtDescriptorBuilder::new()
         .dataspace(DataSpaceId::new(7))
@@ -40,7 +35,6 @@ fn descriptor_fixture_and_binding_are_stable() {
         .build()
         .expect("builder output valid");
     assert_eq!(built, fixture.descriptor);
-
     // Touch manifest schema should remain aligned with the descriptor dataspace set.
     for fragment in &fixture.touch_manifest {
         assert!(
@@ -49,7 +43,6 @@ fn descriptor_fixture_and_binding_are_stable() {
             fragment.dsid.as_u64()
         );
     }
-
     // Provide a small manifest sanity check to guard key ordering/deduplication.
     let expected_manifest = TouchManifest::from_read_write(
         ["reports/monthly", "reports/monthly"],
@@ -63,10 +56,8 @@ fn descriptor_fixture_and_binding_are_stable() {
             .map(|fragment| &fragment.manifest),
         Some(&expected_manifest)
     );
-
     let binding = compute_descriptor_binding(&fixture.descriptor).expect("binding computed");
     assert_eq!(encode(binding), fixture.binding_hex.to_lowercase());
-
     // Ensure descriptor bytes round-trip via Norito encoding.
     let encoded = norito::to_bytes(&fixture.descriptor).expect("descriptor encodes");
     assert_eq!(

@@ -1,5 +1,4 @@
 // Focused canonical Exact12 public capability-manifest tests.
-
 #[test]
 fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
     let manifest = exact12_capability_manifest();
@@ -13,7 +12,6 @@ fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
     );
     assert!(!manifest.manifest_digest.is_zero());
     assert_eq!(manifest.protocols.len(), PrivacyProtocolIdV1::COUNT);
-
     let generic_rows = [
         (
             PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
@@ -92,7 +90,6 @@ fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
         assert_eq!(row.execution_mode.canonical_label(), execution_mode);
         assert_eq!(row.privacy_feature_mask.bits(), feature_mask);
     }
-
     let x509 = &manifest.protocols[5];
     assert_eq!(
         x509.protocol_id,
@@ -126,7 +123,6 @@ fn exact12_capability_manifest_is_canonical_self_authenticating_and_committed() 
             .expect("compute manifest digest"),
         manifest.manifest_digest
     );
-
     let canonical = manifest
         .canonical_bytes()
         .expect("canonical manifest bytes");
@@ -138,13 +134,11 @@ fn exact12_capability_manifest_is_canonical_self_authenticating_and_committed() 
         norito::decode_from_bytes(&canonical).expect("decode canonical manifest");
     assert_eq!(decoded, manifest);
     decoded.validate().expect("validate decoded manifest");
-
     let json = norito::json::to_json(&manifest).expect("manifest JSON");
     let decoded_json: PrivacyExact12CapabilityManifestV1 =
         norito::json::from_json(&json).expect("decode manifest JSON");
     assert_eq!(decoded_json, manifest);
     assert!(json.contains("missing-distribution-wide-knowledge-soundness-evidence"));
-
     let pgc = &manifest.protocols[1];
     assert_eq!(pgc.readiness, PrivacyCapabilityReadinessV1::Available);
     assert_eq!(
@@ -163,7 +157,6 @@ fn exact12_capability_manifest_is_canonical_self_authenticating_and_committed() 
         );
     }
 }
-
 #[test]
 fn revised_jindo_is_explicitly_experimental_and_never_falsely_certified() {
     let mut snapshot = capability_snapshot();
@@ -175,7 +168,6 @@ fn revised_jindo_is_explicitly_experimental_and_never_falsely_certified() {
     snapshot
         .validate()
         .expect("synthetic available Jindo profile");
-
     let manifest = snapshot
         .exact12_capability_manifest_v1()
         .expect("project Jindo capability");
@@ -193,11 +185,9 @@ fn revised_jindo_is_explicitly_experimental_and_never_falsely_certified() {
         "Jindo has no committed activation"
     );
 }
-
 #[test]
 fn exact12_capability_manifest_rejects_derived_field_and_digest_substitution() {
     let manifest = exact12_capability_manifest();
-
     let mut operation = manifest.clone();
     operation.protocols[0].operation_schema = PrivacyOperationSchemaV1::PqMaspNoteActionV1;
     redigest_exact12_capability_manifest(&mut operation);
@@ -210,7 +200,6 @@ fn exact12_capability_manifest_rejects_derived_field_and_digest_substitution() {
             }
         )
     ));
-
     let mut execution = manifest.clone();
     execution.protocols[0].execution_mode = PrivacyExecutionModeV1::NoteAction;
     redigest_exact12_capability_manifest(&mut execution);
@@ -223,7 +212,6 @@ fn exact12_capability_manifest_rejects_derived_field_and_digest_substitution() {
             }
         )
     ));
-
     let mut feature_mask = manifest.clone();
     feature_mask.protocols[0].privacy_feature_mask = PrivacyFeatureMaskV1::new(1);
     redigest_exact12_capability_manifest(&mut feature_mask);
@@ -236,7 +224,6 @@ fn exact12_capability_manifest_rejects_derived_field_and_digest_substitution() {
             }
         )
     ));
-
     let mut readiness = manifest.clone();
     readiness.protocols[1].readiness = PrivacyCapabilityReadinessV1::Unavailable(
         PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
@@ -251,7 +238,6 @@ fn exact12_capability_manifest_rejects_derived_field_and_digest_substitution() {
             }
         )
     ));
-
     let mut activation = manifest.clone();
     activation.protocols[1].activation_state = PrivacyCapabilityActivationStateV1::Suspended;
     redigest_exact12_capability_manifest(&mut activation);
@@ -264,7 +250,6 @@ fn exact12_capability_manifest_rejects_derived_field_and_digest_substitution() {
             }
         )
     ));
-
     let mut limitation = manifest.clone();
     limitation.protocols[6].limitation = None;
     redigest_exact12_capability_manifest(&mut limitation);
@@ -277,7 +262,6 @@ fn exact12_capability_manifest_rejects_derived_field_and_digest_substitution() {
             }
         )
     ));
-
     let mut digest = manifest;
     digest.manifest_digest.0[0] ^= 0x80;
     assert!(matches!(
@@ -285,11 +269,9 @@ fn exact12_capability_manifest_rejects_derived_field_and_digest_substitution() {
         Err(PrivacyExact12CapabilityManifestValidationErrorV1::ManifestDigestMismatch { .. })
     ));
 }
-
 #[test]
 fn exact12_capability_manifest_rejects_shape_zero_digest_and_json_adversaries() {
     let manifest = exact12_capability_manifest();
-
     let mut missing = manifest.clone();
     missing.protocols.pop();
     redigest_exact12_capability_manifest(&mut missing);
@@ -297,7 +279,6 @@ fn exact12_capability_manifest_rejects_shape_zero_digest_and_json_adversaries() 
         missing.validate(),
         Err(PrivacyExact12CapabilityManifestValidationErrorV1::ProtocolCount { .. })
     ));
-
     let mut duplicate = manifest.clone();
     duplicate.protocols[2] = duplicate.protocols[1];
     redigest_exact12_capability_manifest(&mut duplicate);
@@ -305,14 +286,12 @@ fn exact12_capability_manifest_rejects_shape_zero_digest_and_json_adversaries() 
         duplicate.validate(),
         Err(PrivacyExact12CapabilityManifestValidationErrorV1::ProtocolOrder { .. })
     ));
-
     let mut zero_digest = manifest.clone();
     zero_digest.manifest_digest = PrivacyExact12CapabilityManifestDigestV1::new([0; 32]);
     assert_eq!(
         zero_digest.validate(),
         Err(PrivacyExact12CapabilityManifestValidationErrorV1::ZeroManifestDigest)
     );
-
     let canonical = norito::json::to_json(&manifest).expect("canonical manifest JSON");
     let unknown = canonical.replacen('{', "{\"legacy_catalog_available\":true,", 1);
     assert!(
@@ -330,7 +309,6 @@ fn exact12_capability_manifest_rejects_shape_zero_digest_and_json_adversaries() 
         "execution-mode aliases must fail closed"
     );
 }
-
 #[test]
 fn exact12_capability_manifest_rejects_false_jindo_certification() {
     let mut snapshot = capability_snapshot();

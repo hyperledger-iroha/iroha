@@ -3,11 +3,8 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-
 use iroha_confidential_spool::ConfidentialSpoolErrorV1;
-
 use super::*;
-
 static DIRECTORY_SEQUENCE_V2: AtomicU64 = AtomicU64::new(0);
 static TEST_MODULI_V2: [u64; 2] = [97, 113];
 const RELEASE_PARAMETER_KAT_V2: [u8; 32] = [
@@ -26,9 +23,7 @@ const COLUMN_CONTEXT_KAT_V2: [u8; 32] = [
     0x5b, 0xbd, 0xbf, 0x04, 0xdf, 0x74, 0x07, 0xd5, 0xa9, 0x0d, 0xb2, 0x00, 0x5f, 0x7b, 0xd6, 0x20,
     0x51, 0xfc, 0xa0, 0x94, 0x0b, 0x16, 0xc8, 0xcd, 0xf8, 0xb6, 0xa1, 0x78, 0x31, 0xf4, 0x16, 0x8d,
 ];
-
 struct TestDirectoryV2(PathBuf);
-
 impl TestDirectoryV2 {
     fn new_v2() -> Self {
         let sequence = DIRECTORY_SEQUENCE_V2.fetch_add(1, Ordering::SeqCst);
@@ -40,13 +35,11 @@ impl TestDirectoryV2 {
         Self(path)
     }
 }
-
 impl Drop for TestDirectoryV2 {
     fn drop(&mut self) {
         fs::remove_dir(&self.0).expect("remove empty C0 test directory");
     }
 }
-
 fn geometry_v2() -> SpoolGeometryV2 {
     SpoolGeometryV2 {
         ring_degree: 4,
@@ -57,14 +50,12 @@ fn geometry_v2() -> SpoolGeometryV2 {
         moduli: &TEST_MODULI_V2,
     }
 }
-
 fn context_v2() -> PublicSpoolContextV2 {
     PublicSpoolContextV2 {
         sealed_source_transcript_digest: [0x31; 32],
         source_algebra_binding_digest: [0x42; 32],
     }
 }
-
 fn source_value_v2(limb: u8, repetition: u8, component: u8, index: usize) -> u64 {
     let base = 1 + u64::from(limb) * 20 + u64::from(repetition) * 3;
     match component {
@@ -76,7 +67,6 @@ fn source_value_v2(limb: u8, repetition: u8, component: u8, index: usize) -> u64
         _ => unreachable!("fixed coefficient component"),
     }
 }
-
 fn coefficient_chunk_v2(
     geometry: SpoolGeometryV2,
     limb: u8,
@@ -93,7 +83,6 @@ fn coefficient_chunk_v2(
     }
     chunk
 }
-
 fn sealed_v2(directory: &TestDirectoryV2) -> CoefficientsSealedV2 {
     let geometry = geometry_v2();
     let mut writer = QPcsSpoolWriterV2::create_with_geometry_v2(
@@ -122,7 +111,6 @@ fn sealed_v2(directory: &TestDirectoryV2) -> CoefficientsSealedV2 {
         context: context_v2(),
     }
 }
-
 fn exhaust_coefficients_v2(
     mut stage: QPcsCoefficientReplayStageV2,
 ) -> QPcsCoefficientReplayStageV2 {
@@ -142,7 +130,6 @@ fn exhaust_coefficients_v2(
     }
     stage
 }
-
 fn row_coefficients_v2(limb: u8, repetition: u8, product: bool) -> Vec<u64> {
     let mut coefficients = vec![0_u64; 16];
     if product {
@@ -157,7 +144,6 @@ fn row_coefficients_v2(limb: u8, repetition: u8, product: bool) -> Vec<u64> {
     }
     coefficients
 }
-
 fn schoolbook_v2(coefficients: &[u64], field: Fq2ParametersV1) -> Vec<Fq2V1> {
     (0..coefficients.len())
         .map(|index| {
@@ -172,7 +158,6 @@ fn schoolbook_v2(coefficients: &[u64], field: Fq2ParametersV1) -> Vec<Fq2V1> {
         })
         .collect()
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ManualMutationV2 {
     Clean,
@@ -180,7 +165,6 @@ enum ManualMutationV2 {
     Order,
     Count,
 }
-
 fn manual_leaf_hash_v2(parameter: [u8; 32], values: &[u8], mutation: ManualMutationV2) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(if mutation == ManualMutationV2::Framing {
@@ -203,7 +187,6 @@ fn manual_leaf_hash_v2(parameter: [u8; 32], values: &[u8], mutation: ManualMutat
     hash.update(values);
     hash.finalize()
 }
-
 fn manual_node_hash_v2(
     parameter: [u8; 32],
     height: u8,
@@ -219,7 +202,6 @@ fn manual_node_hash_v2(
     hash.update(&right);
     hash.finalize()
 }
-
 fn manual_root_v2(mutation: ManualMutationV2) -> [u8; 32] {
     let geometry = geometry_v2();
     let parameter = parameter_digest_v2(geometry).unwrap();
@@ -263,7 +245,6 @@ fn manual_root_v2(mutation: ManualMutationV2) -> [u8; 32] {
     }
     leaves[0]
 }
-
 fn marker_chunk_v2(geometry: SpoolGeometryV2, column: u16, block: u64) -> ConfidentialSpoolChunkV1 {
     let limb = usize::from(column / u16::from(FIXED_ROW_COUNT_V2));
     let modulus = geometry.moduli[limb];
@@ -276,7 +257,6 @@ fn marker_chunk_v2(geometry: SpoolGeometryV2, column: u16, block: u64) -> Confid
     }
     chunk
 }
-
 fn filled_column_snapshot_v2(
     directory: &TestDirectoryV2,
 ) -> (InitialColumnSnapshotV2, QPcsCoefficientReplayStageV2) {
@@ -301,7 +281,6 @@ fn filled_column_snapshot_v2(
     }
     (writer.seal_v2().unwrap(), stage)
 }
-
 #[test]
 fn tiny_exact_ntt_matches_independent_schoolbook() {
     let field = Fq2ParametersV1::derive(97, 4).unwrap();
@@ -315,7 +294,6 @@ fn tiny_exact_ntt_matches_independent_schoolbook() {
     ntt_in_place_v2(&mut buffer.values, field).unwrap();
     assert_eq!(buffer.values, expected);
 }
-
 #[test]
 fn tiny_authenticated_transition_matches_materialized_root_kat() {
     let before_ntt = ZEROIZING_NTT_BUFFER_DROPS_V2.load(Ordering::SeqCst);
@@ -346,7 +324,6 @@ fn tiny_authenticated_transition_matches_materialized_root_kat() {
     assert!(ZEROIZING_NTT_BUFFER_DROPS_V2.load(Ordering::SeqCst) > before_ntt);
     assert!(ZEROIZING_LEAF_WINDOW_DROPS_V2.load(Ordering::SeqCst) > before_leaf);
 }
-
 #[test]
 fn literal_root_oracle_rejects_framing_order_and_count_mutations() {
     let expected = manual_root_v2(ManualMutationV2::Clean);
@@ -359,7 +336,6 @@ fn literal_root_oracle_rejects_framing_order_and_count_mutations() {
         assert_ne!(manual_root_v2(mutation), expected);
     }
 }
-
 #[test]
 fn column_stage_transposes_into_exact_block_major_order() {
     let directory = TestDirectoryV2::new_v2();
@@ -382,7 +358,6 @@ fn column_stage_transposes_into_exact_block_major_order() {
     }
     let _complete = reader.complete_v2().unwrap();
 }
-
 #[test]
 fn staging_failures_poison_and_zeroizing_owners_drop() {
     let geometry = geometry_v2();
@@ -401,7 +376,6 @@ fn staging_failures_poison_and_zeroizing_owners_drop() {
             QPcsSpoolErrorV2::MissingLdeBlocks
         ))
     ));
-
     let mut unwound =
         InitialColumnWriterV2::create_v2(&directory.0, geometry, parameter, context_v2()).unwrap();
     assert!(
@@ -414,7 +388,6 @@ fn staging_failures_poison_and_zeroizing_owners_drop() {
         unwound.push_next_block_v2(marker_chunk_v2(geometry, 0, 0)),
         Err(ProverPrerequisiteErrorV2::Poisoned)
     ));
-
     let mut extra =
         InitialColumnWriterV2::create_v2(&directory.0, geometry, parameter, context_v2()).unwrap();
     for column in 0..extra.descriptor.columns {
@@ -434,7 +407,6 @@ fn staging_failures_poison_and_zeroizing_owners_drop() {
         extra.seal_v2(),
         Err(ProverPrerequisiteErrorV2::Poisoned)
     ));
-
     let (snapshot, stage) = filled_column_snapshot_v2(&directory);
     let wrong = PublicSpoolContextV2 {
         sealed_source_transcript_digest: [0x99; 32],
@@ -444,14 +416,12 @@ fn staging_failures_poison_and_zeroizing_owners_drop() {
         snapshot.begin_transpose_v2(stage, wrong),
         Err(ProverPrerequisiteErrorV2::InvalidC0Context)
     ));
-
     let (snapshot, mut stage) = filled_column_snapshot_v2(&directory);
     stage.geometry.lde_values_per_block = 4;
     assert!(matches!(
         snapshot.begin_transpose_v2(stage, context_v2()),
         Err(ProverPrerequisiteErrorV2::InvalidC0Context)
     ));
-
     let (snapshot, stage) = filled_column_snapshot_v2(&directory);
     let mut transpose = snapshot.begin_transpose_v2(stage, context_v2()).unwrap();
     assert!(
@@ -464,7 +434,6 @@ fn staging_failures_poison_and_zeroizing_owners_drop() {
         transpose.copy_next_block_v2(),
         Err(ProverPrerequisiteErrorV2::Poisoned)
     ));
-
     let absent = directory.0.join("absent");
     assert!(matches!(
         InitialColumnWriterV2::create_v2(&absent, geometry, parameter, context_v2()),
@@ -473,7 +442,6 @@ fn staging_failures_poison_and_zeroizing_owners_drop() {
         )))
     ));
 }
-
 #[test]
 fn verifier_hash_frames_and_release_parameter_match_directly() {
     let geometry = SpoolGeometryV2::release_v2();
@@ -501,7 +469,6 @@ fn verifier_hash_frames_and_release_parameter_match_directly() {
         );
     assert_eq!(local_node, verifier_node);
 }
-
 #[test]
 fn source_guards_keep_c0_private_bounded_uninhabited_and_non_authorizing() {
     let source = include_str!("c0_v2.rs");

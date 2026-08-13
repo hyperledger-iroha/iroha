@@ -1,7 +1,5 @@
 //! Allocation-free lexical admission for untrusted JSON documents.
-
 use super::MAX_JSON_VALUE_NESTING_DEPTH;
-
 /// Resource ceilings enforced before an owned JSON decoder is entered.
 ///
 /// These limits cover representation-independent lexical facts. A caller
@@ -21,7 +19,6 @@ pub struct JsonPreflightLimits {
     max_total_elements: usize,
     max_nesting_depth: usize,
 }
-
 impl JsonPreflightLimits {
     /// Construct complete lexical limits for one JSON document.
     #[must_use]
@@ -51,7 +48,6 @@ impl JsonPreflightLimits {
             max_nesting_depth,
         }
     }
-
     /// Derive JSON lexical ceilings from a raw-body limit and Norito limits.
     ///
     /// JSON arrays and objects both act as sequences. Their combined entry
@@ -74,7 +70,6 @@ impl JsonPreflightLimits {
             max_nesting_depth: limits.max_nesting_depth().min(MAX_JSON_VALUE_NESTING_DEPTH),
         }
     }
-
     const fn lexical_unbounded() -> Self {
         Self {
             max_raw_bytes: usize::MAX,
@@ -90,7 +85,6 @@ impl JsonPreflightLimits {
         }
     }
 }
-
 /// A resource measured by JSON lexical preflight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JsonPreflightResource {
@@ -117,7 +111,6 @@ pub enum JsonPreflightResource {
     /// A checked lexical counter.
     Arithmetic,
 }
-
 /// Stable syntax classes returned without copying hostile input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JsonPreflightSyntax {
@@ -148,7 +141,6 @@ pub enum JsonPreflightSyntax {
     /// A boolean or null literal is malformed.
     InvalidLiteral,
 }
-
 impl JsonPreflightSyntax {
     pub(super) const fn message(self) -> &'static str {
         match self {
@@ -168,7 +160,6 @@ impl JsonPreflightSyntax {
         }
     }
 }
-
 /// Failure from allocation-free JSON lexical preflight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JsonPreflightError {
@@ -178,7 +169,6 @@ pub struct JsonPreflightError {
     attempted: usize,
     limit: usize,
 }
-
 impl JsonPreflightError {
     const fn syntax(offset: usize, syntax: JsonPreflightSyntax) -> Self {
         Self {
@@ -189,7 +179,6 @@ impl JsonPreflightError {
             limit: 0,
         }
     }
-
     const fn resource(
         resource: JsonPreflightResource,
         attempted: usize,
@@ -204,7 +193,6 @@ impl JsonPreflightError {
             limit,
         }
     }
-
     const fn arithmetic(offset: usize) -> Self {
         Self::resource(
             JsonPreflightResource::Arithmetic,
@@ -213,38 +201,32 @@ impl JsonPreflightError {
             offset,
         )
     }
-
     /// Resource exceeded by this error, if it is a limit failure.
     #[must_use]
     pub const fn resource_kind(self) -> Option<JsonPreflightResource> {
         self.resource
     }
-
     /// Syntax class, if the document is malformed.
     #[must_use]
     pub const fn syntax_kind(self) -> Option<JsonPreflightSyntax> {
         self.syntax
     }
-
     /// Byte offset at which the failure was detected.
     #[must_use]
     pub const fn offset(self) -> usize {
         self.offset
     }
-
     /// Attempted resource value for a limit failure.
     #[must_use]
     pub const fn attempted(self) -> usize {
         self.attempted
     }
-
     /// Configured resource ceiling for a limit failure.
     #[must_use]
     pub const fn limit(self) -> usize {
         self.limit
     }
 }
-
 impl core::fmt::Display for JsonPreflightError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if let Some(syntax) = self.syntax {
@@ -260,9 +242,7 @@ impl core::fmt::Display for JsonPreflightError {
         )
     }
 }
-
 impl std::error::Error for JsonPreflightError {}
-
 /// Allocation-relevant lexical facts about one complete JSON document.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct JsonPreflightProfile {
@@ -285,111 +265,93 @@ pub struct JsonPreflightProfile {
     max_nesting_depth: usize,
     value_span_bytes: usize,
 }
-
 impl JsonPreflightProfile {
     /// Raw input bytes.
     #[must_use]
     pub const fn raw_bytes(self) -> usize {
         self.raw_bytes
     }
-
     /// Number of JSON values, including the root and containers.
     #[must_use]
     pub const fn values(self) -> usize {
         self.values
     }
-
     /// Number of arrays.
     #[must_use]
     pub const fn arrays(self) -> usize {
         self.arrays
     }
-
     /// Number of objects.
     #[must_use]
     pub const fn objects(self) -> usize {
         self.objects
     }
-
     /// Aggregate number of array entries.
     #[must_use]
     pub const fn array_entries(self) -> usize {
         self.array_entries
     }
-
     /// Aggregate number of object entries.
     #[must_use]
     pub const fn object_entries(self) -> usize {
         self.object_entries
     }
-
     /// Exact sum of the parser's conservative B-tree node count for every
     /// object in this document.
     #[must_use]
     pub const fn object_btree_node_upper_bound(self) -> usize {
         self.object_btree_node_upper_bound
     }
-
     /// Number of entries in the root array or object, or zero for a scalar.
     #[must_use]
     pub const fn root_container_entries(self) -> usize {
         self.root_container_entries
     }
-
     /// Largest entry count observed in one array or object.
     #[must_use]
     pub const fn max_container_entries(self) -> usize {
         self.max_container_entries
     }
-
     /// Aggregate source bytes in quoted string tokens, including quotes.
     #[must_use]
     pub const fn encoded_string_bytes(self) -> usize {
         self.encoded_string_bytes
     }
-
     /// Aggregate decoded UTF-8 bytes in strings and object keys.
     #[must_use]
     pub const fn decoded_string_bytes(self) -> usize {
         self.decoded_string_bytes
     }
-
     /// Aggregate decoded UTF-8 bytes used by object keys.
     #[must_use]
     pub const fn object_key_decoded_bytes(self) -> usize {
         self.object_key_decoded_bytes
     }
-
     /// Largest source length of one quoted string token.
     #[must_use]
     pub const fn max_encoded_string_bytes(self) -> usize {
         self.max_encoded_string_bytes
     }
-
     /// Largest decoded UTF-8 length of one string.
     #[must_use]
     pub const fn max_decoded_string_bytes(self) -> usize {
         self.max_decoded_string_bytes
     }
-
     /// Aggregate exact-reserve capacity requested for owned string results.
     #[must_use]
     pub const fn string_capacity_bytes(self) -> usize {
         self.string_capacity_bytes
     }
-
     /// Largest exact-reserve capacity requested for one escaped string.
     #[must_use]
     pub const fn max_escaped_string_capacity_bytes(self) -> usize {
         self.max_escaped_string_capacity_bytes
     }
-
     /// Deepest JSON value, counting the root as one.
     #[must_use]
     pub const fn max_nesting_depth(self) -> usize {
         self.max_nesting_depth
     }
-
     /// Sum of the source spans of every JSON value.
     ///
     /// This bounds codecs that copy an encoded subtree once at every typed
@@ -399,7 +361,6 @@ impl JsonPreflightProfile {
         self.value_span_bytes
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FrameState {
     ArrayFirstOrEnd,
@@ -411,21 +372,18 @@ enum FrameState {
     ObjectValue,
     ObjectCommaOrEnd,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct Frame {
     state: FrameState,
     value_start: usize,
     entries: usize,
 }
-
 impl Frame {
     const EMPTY: Self = Self {
         state: FrameState::ArrayFirstOrEnd,
         value_start: 0,
         entries: 0,
     };
-
     const fn is_object(self) -> bool {
         matches!(
             self.state,
@@ -437,7 +395,6 @@ impl Frame {
         )
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 struct StringProfile {
     encoded_bytes: usize,
@@ -445,7 +402,6 @@ struct StringProfile {
     capacity_bytes: usize,
     escaped: bool,
 }
-
 struct Scanner<'a> {
     bytes: &'a [u8],
     offset: usize,
@@ -456,7 +412,6 @@ struct Scanner<'a> {
     frame_len: usize,
     root_complete: bool,
 }
-
 impl<'a> Scanner<'a> {
     fn new(bytes: &'a [u8], offset: usize, root_depth: usize, limits: JsonPreflightLimits) -> Self {
         Self {
@@ -470,39 +425,32 @@ impl<'a> Scanner<'a> {
             root_complete: false,
         }
     }
-
     fn error(&self, syntax: JsonPreflightSyntax) -> JsonPreflightError {
         JsonPreflightError::syntax(self.offset.min(self.bytes.len()), syntax)
     }
-
     fn peek(&self) -> Option<u8> {
         self.bytes.get(self.offset).copied()
     }
-
     fn bump(&mut self) -> Option<u8> {
         let byte = self.peek()?;
         self.offset += 1;
         Some(byte)
     }
-
     fn skip_whitespace(&mut self) {
         while matches!(self.peek(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
             self.offset += 1;
         }
     }
-
     fn expect(&mut self, byte: u8, syntax: JsonPreflightSyntax) -> Result<(), JsonPreflightError> {
         if self.bump() != Some(byte) {
             return Err(self.error(syntax));
         }
         Ok(())
     }
-
     fn checked_add(&self, lhs: usize, rhs: usize) -> Result<usize, JsonPreflightError> {
         lhs.checked_add(rhs)
             .ok_or_else(|| JsonPreflightError::arithmetic(self.offset))
     }
-
     fn enforce(
         &self,
         resource: JsonPreflightResource,
@@ -519,7 +467,6 @@ impl<'a> Scanner<'a> {
         }
         Ok(())
     }
-
     fn start_value(&mut self) -> Result<(), JsonPreflightError> {
         let depth = self
             .root_depth
@@ -540,7 +487,6 @@ impl<'a> Scanner<'a> {
             self.limits.max_values,
         )?;
         self.profile.values = values;
-
         self.skip_whitespace();
         let value_start = self.offset;
         match self.peek() {
@@ -587,7 +533,6 @@ impl<'a> Scanner<'a> {
             None => Err(self.error(JsonPreflightSyntax::UnexpectedEnd)),
         }
     }
-
     fn push_frame(&mut self, frame: Frame) -> Result<(), JsonPreflightError> {
         if self.frame_len >= self.frames.len() {
             return Err(JsonPreflightError::resource(
@@ -601,7 +546,6 @@ impl<'a> Scanner<'a> {
         self.frame_len += 1;
         Ok(())
     }
-
     fn complete_scalar(&mut self, value_start: usize) -> Result<(), JsonPreflightError> {
         let span = self
             .offset
@@ -613,7 +557,6 @@ impl<'a> Scanner<'a> {
         }
         Ok(())
     }
-
     fn close_container(&mut self) -> Result<(), JsonPreflightError> {
         let frame = self.frames[self.frame_len - 1];
         self.frame_len -= 1;
@@ -637,7 +580,6 @@ impl<'a> Scanner<'a> {
         }
         Ok(())
     }
-
     fn add_entry(&mut self, array: bool) -> Result<(), JsonPreflightError> {
         let index = self.frame_len - 1;
         let entries = self.checked_add(self.frames[index].entries, 1)?;
@@ -671,7 +613,6 @@ impl<'a> Scanner<'a> {
             self.limits.max_total_elements,
         )
     }
-
     fn parse_literal(&mut self, literal: &[u8]) -> Result<(), JsonPreflightError> {
         let end = self.checked_add(self.offset, literal.len())?;
         if self.bytes.get(self.offset..end) != Some(literal) {
@@ -680,7 +621,6 @@ impl<'a> Scanner<'a> {
         self.offset = end;
         Ok(())
     }
-
     fn parse_number(&mut self) -> Result<(), JsonPreflightError> {
         if self.peek() == Some(b'-') {
             self.offset += 1;
@@ -725,7 +665,6 @@ impl<'a> Scanner<'a> {
         }
         Ok(())
     }
-
     fn parse_string(&mut self) -> Result<StringProfile, JsonPreflightError> {
         let token_start = self.offset;
         self.expect(b'"', JsonPreflightSyntax::InvalidString)?;
@@ -774,7 +713,6 @@ impl<'a> Scanner<'a> {
             escaped,
         })
     }
-
     fn record_string(
         &mut self,
         string: StringProfile,
@@ -811,7 +749,6 @@ impl<'a> Scanner<'a> {
         }
         Ok(())
     }
-
     fn parse_unicode_escape(&mut self) -> Result<usize, JsonPreflightError> {
         let high = self.parse_hex_quad()?;
         if (0xd800..=0xdbff).contains(&high) {
@@ -833,7 +770,6 @@ impl<'a> Scanner<'a> {
             .map(char::len_utf8)
             .ok_or_else(|| self.error(JsonPreflightSyntax::InvalidUnicodeEscape))
     }
-
     fn parse_hex_quad(&mut self) -> Result<u32, JsonPreflightError> {
         let mut value = 0u32;
         for _ in 0..4 {
@@ -850,7 +786,6 @@ impl<'a> Scanner<'a> {
         }
         Ok(value)
     }
-
     fn run(
         mut self,
         complete_document: bool,
@@ -928,7 +863,6 @@ impl<'a> Scanner<'a> {
         Ok((self.profile, self.offset))
     }
 }
-
 /// Validate and profile one complete JSON document without heap allocation.
 ///
 /// Duplicate object names are left to the typed decoder. Retaining them here
@@ -956,7 +890,6 @@ pub fn preflight_slice(
     profile.raw_bytes = bytes.len();
     Ok(profile)
 }
-
 pub(super) fn value_end_at_depth(
     input: &str,
     start: usize,
@@ -970,7 +903,6 @@ pub(super) fn value_end_at_depth(
     }
     value_profile_at_depth(input, start, root_depth).map(|(_, end)| end)
 }
-
 pub(super) fn value_profile_at_depth(
     input: &str,
     start: usize,
@@ -990,22 +922,18 @@ pub(super) fn value_profile_at_depth(
     )
     .run(false)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[derive(Debug, PartialEq, Eq, crate::derive::JsonDeserialize)]
     struct TaggedContent {
         value: String,
     }
-
     #[derive(Debug, PartialEq, Eq, crate::derive::JsonDeserialize)]
     #[norito(tag = "kind", content = "content")]
     enum TaggedFixture {
         Item(TaggedContent),
     }
-
     fn generous() -> JsonPreflightLimits {
         JsonPreflightLimits::new(
             1 << 20,
@@ -1020,7 +948,6 @@ mod tests {
             MAX_JSON_VALUE_NESTING_DEPTH,
         )
     }
-
     #[test]
     fn profiles_strings_containers_and_value_spans() {
         let input = br#"{"a":["\u0041\n",0],"b":{"c":true}}"#;
@@ -1045,17 +972,14 @@ mod tests {
         assert_eq!(profile.max_escaped_string_capacity_bytes(), 2);
         assert!(profile.value_span_bytes() > input.len());
     }
-
     #[test]
     fn sums_btree_nodes_per_object_instead_of_from_aggregate_entries() {
         let input = br#"[{"a":0,"b":0,"c":0,"d":0,"e":0},{}]"#;
         let profile = preflight_slice(input, generous()).expect("valid JSON");
-
         assert_eq!(profile.objects(), 2);
         assert_eq!(profile.object_entries(), 5);
         assert_eq!(profile.object_btree_node_upper_bound(), 1);
     }
-
     #[test]
     fn enforces_exact_decode_limit_mapping() {
         let input = br#"{"a":[0,1]}"#;
@@ -1065,7 +989,6 @@ mod tests {
             JsonPreflightLimits::from_decode_limits(input.len(), limits),
         )
         .expect("exact limits fit");
-
         let short = crate::core::DecodeLimits::new(1, 1, 3, usize::MAX, 3);
         assert_eq!(
             preflight_slice(
@@ -1076,7 +999,6 @@ mod tests {
             .resource_kind(),
             Some(JsonPreflightResource::ContainerEntries)
         );
-
         let shallow = crate::core::DecodeLimits::new(2, 1, 3, usize::MAX, 2);
         assert_eq!(
             preflight_slice(
@@ -1088,7 +1010,6 @@ mod tests {
             Some(JsonPreflightResource::NestingDepth)
         );
     }
-
     #[test]
     fn exact_raw_string_and_total_element_boundaries() {
         let input = br#"["ab",{"c":0}]"#;
@@ -1100,7 +1021,6 @@ mod tests {
                 .resource_kind(),
             Some(JsonPreflightResource::RawBytes)
         );
-
         limits = generous();
         limits.max_decoded_string_bytes = 1;
         assert_eq!(
@@ -1109,7 +1029,6 @@ mod tests {
                 .resource_kind(),
             Some(JsonPreflightResource::DecodedStringBytes)
         );
-
         limits = generous();
         limits.max_total_elements = 2;
         assert_eq!(
@@ -1119,7 +1038,6 @@ mod tests {
             Some(JsonPreflightResource::TotalElements)
         );
     }
-
     #[test]
     fn rejects_malformed_json_without_reflecting_input() {
         for input in [
@@ -1137,14 +1055,12 @@ mod tests {
         let error = preflight_slice(&[b'"', 0xff, b'"'], generous()).expect_err("invalid UTF-8");
         assert_eq!(error.syntax_kind(), Some(JsonPreflightSyntax::InvalidUtf8));
         assert_eq!(error.to_string(), "invalid UTF-8 at byte 1");
-
         let leading_zero = preflight_slice(b"-012", generous()).expect_err("leading zero");
         assert_eq!(
             leading_zero.syntax_kind(),
             Some(JsonPreflightSyntax::LeadingZero)
         );
         assert_eq!(leading_zero.offset(), 2);
-
         let isolated_low =
             preflight_slice(br#""\uDD1E""#, generous()).expect_err("isolated low surrogate");
         assert_eq!(
@@ -1153,7 +1069,6 @@ mod tests {
         );
         assert_eq!(isolated_low.offset(), 6);
     }
-
     #[test]
     fn fixed_stack_accepts_exact_depth_and_rejects_one_more() {
         let at_limit = format!(
@@ -1162,7 +1077,6 @@ mod tests {
             "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1)
         );
         preflight_slice(at_limit.as_bytes(), generous()).expect("exact depth");
-
         let over = format!("[{at_limit}]");
         assert_eq!(
             preflight_slice(over.as_bytes(), generous())
@@ -1171,7 +1085,6 @@ mod tests {
             Some(JsonPreflightResource::NestingDepth)
         );
     }
-
     #[test]
     fn prefix_scan_returns_exact_value_end() {
         let input = "  {\"a\":[1]} trailing";
@@ -1179,7 +1092,6 @@ mod tests {
         let end = value_end_at_depth(input, start, 1).expect("value boundary");
         assert_eq!(&input[start..end], "{\"a\":[1]}");
     }
-
     #[test]
     fn tagged_derive_borrows_content_in_either_field_order() {
         for input in [
@@ -1195,7 +1107,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parser_raw_value_slice_borrows_original_input() {
         let input = r#"  {"nested":[1,2]} tail"#;

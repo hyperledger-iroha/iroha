@@ -17,19 +17,16 @@
 //! explicit asynchronous initialize/open paths, which bind the local store to
 //! the exact network/provider/policy checkpoint scope.
 //!
-//! TODO: before daemon activation, construct this sealed runtime only below the
-//! supervised provider-ingest child, qualify the full crash/corruption matrix,
-//! require a singleton rooted runtime session for each exact external provider
-//! scope across machines, and qualify Windows only after exact SID/DACL
-//! pinning. The local OS lease fences only processes sharing this state root.
-
+//! Daemon activation requires construction below the supervised provider-ingest
+//! child, accepted crash/corruption evidence, and a singleton rooted runtime
+//! session or provider-side cross-machine fencing for each external scope.
+//! Windows remains unsupported until exact SID/DACL pinning is qualified; the
+//! local OS lease fences only processes sharing this state root.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{ffi::OsStr, time::Duration};
 use std::{fmt, io, path::Path, sync::Arc};
-
 use iroha_data_model::{NetworkId, sorafs::capacity::ProviderId};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
-
 use crate::{
     governance::GovernanceFilesystemRootGuard,
     governance_rooted_fs::{
@@ -55,12 +52,10 @@ use crate::{
     },
     provider_ingest_runtime::ProviderIngestFutureV1,
 };
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::governance_rooted_fs::{TwoSlotInitializationWaitV1, TwoSlotStoreConfigV1};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::provider_attestation_journal::MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1;
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const JOURNAL_DIRECTORY_NAME_V1: &str = "musubi-provider-attestation-journal-v1";
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -75,7 +70,6 @@ const JOURNAL_TWO_SLOT_NONCE_DOMAIN_V1: &[u8] =
 const JOURNAL_INITIALIZATION_TIMEOUT_V1: Duration = Duration::from_secs(5);
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const JOURNAL_INITIALIZATION_RETRY_INTERVAL_V1: Duration = Duration::from_millis(10);
-
 /// Exact deployment identity bound into one journal file-store layout.
 ///
 /// The stable two-slot nonce is derived internally from these public values;
@@ -86,7 +80,6 @@ pub struct MusubiProviderAttestationJournalFileBindingV1 {
     network_id: NetworkId,
     provider_id: ProviderId,
 }
-
 impl MusubiProviderAttestationJournalFileBindingV1 {
     /// Construct one non-inert deployment binding.
     ///
@@ -105,19 +98,16 @@ impl MusubiProviderAttestationJournalFileBindingV1 {
             provider_id,
         })
     }
-
     /// Borrow the exact configured deployment identity.
     #[must_use]
     pub const fn network_id(&self) -> &NetworkId {
         &self.network_id
     }
-
     /// Return the exact configured provider identity.
     #[must_use]
     pub const fn provider_id(&self) -> ProviderId {
         self.provider_id
     }
-
     /// Derive the exact clock-seal scope paired with this file-store binding.
     ///
     /// The construction cannot fail because this binding was already validated.
@@ -126,7 +116,6 @@ impl MusubiProviderAttestationJournalFileBindingV1 {
         MusubiProviderAttestationClockScopeV1::try_new(self.network_id, self.provider_id)
             .expect("validated journal file binding yields a valid clock scope")
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn stable_store_nonce(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
@@ -136,7 +125,6 @@ impl MusubiProviderAttestationJournalFileBindingV1 {
         *hasher.finalize().as_bytes()
     }
 }
-
 /// Local root-fenced two-slot persistence adapter for the attestation journal.
 ///
 /// `Debug` deliberately omits the configured state-root path and underlying
@@ -163,7 +151,6 @@ pub struct MusubiProviderAttestationJournalFileStoreV1 {
     local_gate: Arc<Semaphore>,
     composite_gate: Arc<Semaphore>,
 }
-
 impl fmt::Debug for MusubiProviderAttestationJournalFileStoreV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -174,7 +161,6 @@ impl fmt::Debug for MusubiProviderAttestationJournalFileStoreV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl MusubiProviderAttestationJournalFileStoreV1 {
     /// Open or initialize the fixed journal namespace below an existing root.
     ///
@@ -204,7 +190,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
                 "Musubi provider-attestation journal file storage is qualified only on Linux and macOS",
             ));
         }
-
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             policy.validate().map_err(|_| {
@@ -249,13 +234,11 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
             Ok(adapter)
         }
     }
-
     /// Borrow the deployment identity sealed into this store.
     #[must_use]
     pub const fn binding(&self) -> &MusubiProviderAttestationJournalFileBindingV1 {
         &self.binding
     }
-
     /// Return the checkpoint policy used for byte/schema validation.
     ///
     /// A journal coordinator using this adapter must use this exact policy as
@@ -265,7 +248,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
     pub const fn policy(&self) -> MusubiProviderAttestationJournalPolicyV1 {
         self.policy
     }
-
     /// Explicitly provision empty external H0 and construct a sealed runtime.
     ///
     /// Initialization first proves the local two-slot store is the unique safe
@@ -330,7 +312,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
             checkpoint_scope,
         )
     }
-
     /// Open an existing externally sealed journal runtime.
     ///
     /// Ordinary open rejects an absent external H0 and never initializes from
@@ -366,7 +347,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
             checkpoint_scope,
         )
     }
-
     fn checkpoint_scope(
         &self,
     ) -> Result<
@@ -381,7 +361,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
         )
         .map_err(|_| MusubiProviderAttestationJournalErrorV1::StoreRejected)
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn validate_current_blocking(&self) -> io::Result<()> {
         self.root_guard.revalidate()?;
@@ -403,7 +382,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
             (Ok(()), Ok(())) => Ok(()),
         }
     }
-
     async fn run_blocking<ResultValue, Operation>(
         &self,
         operation: Operation,
@@ -428,7 +406,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
             .await
             .map_err(|_| MusubiProviderAttestationJournalStoreErrorV1::Unavailable)?
     }
-
     fn run_revalidated<ResultValue, Operation>(
         &self,
         operation: Operation,
@@ -445,7 +422,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
             (Ok(value), Ok(())) => Ok(value),
         }
     }
-
     fn load_nonblocking(
         &self,
     ) -> Result<
@@ -465,7 +441,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
         }
         Ok(snapshot)
     }
-
     fn compare_and_swap_nonblocking(
         &self,
         expected_revision: Option<[u8; 32]>,
@@ -482,7 +457,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
             .revision()
             .ok_or(MusubiProviderAttestationJournalStoreErrorV1::Rejected)?;
         let replacement_sequence = self.validate_checkpoint_bytes(&replacement_checkpoint_bytes)?;
-
         let current_physical = self.store.try_load().map_err(map_two_slot_try_error)?;
         let current = self.validate_physical_snapshot(&current_physical)?;
         // An exact current-byte replay is a successful idempotent no-op even
@@ -534,7 +508,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
         {
             return Err(MusubiProviderAttestationJournalStoreErrorV1::Rejected);
         }
-
         match self
             .store
             .try_compare_and_swap(&current_physical, &replacement_checkpoint_bytes)
@@ -567,7 +540,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
             }
         }
     }
-
     fn validate_physical_snapshot(
         &self,
         snapshot: &TwoSlotSnapshotV1,
@@ -596,7 +568,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
             )),
         })
     }
-
     fn validate_checkpoint_bytes(
         &self,
         bytes: &[u8],
@@ -609,7 +580,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
         )
         .map_err(|_| MusubiProviderAttestationJournalStoreErrorV1::Rejected)
     }
-
     async fn load_local(
         &self,
     ) -> Result<
@@ -619,7 +589,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
         self.run_blocking(|adapter| adapter.load_nonblocking())
             .await
     }
-
     async fn compare_and_swap_local(
         &self,
         expected_revision: Option<[u8; 32]>,
@@ -633,7 +602,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
         })
         .await
     }
-
     async fn acquire_composite_operation_lease(
         &self,
     ) -> Result<
@@ -663,7 +631,6 @@ impl MusubiProviderAttestationJournalFileStoreV1 {
         .map_err(|_| MusubiProviderAttestationJournalStoreErrorV1::Unavailable)?
     }
 }
-
 /// Root-fenced cross-process lease spanning external and local journal state.
 ///
 /// The per-call two-slot lock is intentionally insufficient here: the
@@ -676,7 +643,6 @@ struct MusubiProviderAttestationJournalCompositeOperationLeaseV1 {
     bound_lease: Option<TwoSlotBoundOperationLeaseV1>,
     _process_permit: OwnedSemaphorePermit,
 }
-
 impl MusubiProviderAttestationJournalCompositeOperationLeaseV1 {
     fn verify(&self) -> Result<(), MusubiProviderAttestationJournalStoreErrorV1> {
         self.bound_lease
@@ -686,7 +652,6 @@ impl MusubiProviderAttestationJournalCompositeOperationLeaseV1 {
             .map_err(map_store_io_error)?;
         self.root_guard.revalidate().map_err(map_store_io_error)
     }
-
     fn release_blocking(mut self) -> Result<(), MusubiProviderAttestationJournalStoreErrorV1> {
         let before = self.verify();
         let unlock = self
@@ -703,7 +668,6 @@ impl MusubiProviderAttestationJournalCompositeOperationLeaseV1 {
         }
     }
 }
-
 async fn finish_composite_operation<ResultValue>(
     lease: MusubiProviderAttestationJournalCompositeOperationLeaseV1,
     result: Result<ResultValue, MusubiProviderAttestationJournalStoreErrorV1>,
@@ -716,7 +680,6 @@ async fn finish_composite_operation<ResultValue>(
         (Ok(value), Ok(())) => Ok(value),
     }
 }
-
 struct MusubiProviderAttestationSealedJournalFileStoreV1 {
     local: MusubiProviderAttestationJournalFileStoreV1,
     clock: Arc<MusubiProviderAttestationSealedUnixClockV1>,
@@ -731,7 +694,6 @@ struct MusubiProviderAttestationSealedJournalFileStoreV1 {
     #[cfg(test)]
     resume_after_external_commit: tokio::sync::Notify,
 }
-
 impl fmt::Debug for MusubiProviderAttestationSealedJournalFileStoreV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -741,7 +703,6 @@ impl fmt::Debug for MusubiProviderAttestationSealedJournalFileStoreV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl MusubiProviderAttestationSealedJournalFileStoreV1 {
     fn new(
         local: MusubiProviderAttestationJournalFileStoreV1,
@@ -763,7 +724,6 @@ impl MusubiProviderAttestationSealedJournalFileStoreV1 {
             resume_after_external_commit: tokio::sync::Notify::new(),
         }
     }
-
     async fn load_sealed(
         &self,
     ) -> Result<
@@ -781,7 +741,6 @@ impl MusubiProviderAttestationSealedJournalFileStoreV1 {
             .map(|(_, snapshot)| snapshot);
         finish_composite_operation(lease, result).await
     }
-
     async fn load_and_reconcile_locked(
         &self,
     ) -> Result<
@@ -801,7 +760,6 @@ impl MusubiProviderAttestationSealedJournalFileStoreV1 {
             .await?;
         Ok((record, snapshot))
     }
-
     async fn reconcile_local_to_authoritative(
         &self,
         record: &MusubiProviderAttestationJournalCheckpointHeadRecordV1,
@@ -872,7 +830,6 @@ impl MusubiProviderAttestationSealedJournalFileStoreV1 {
         }
         Ok(repaired)
     }
-
     async fn compare_and_swap_sealed(
         &self,
         expected_revision: Option<[u8; 32]>,
@@ -891,7 +848,6 @@ impl MusubiProviderAttestationSealedJournalFileStoreV1 {
             .await;
         finish_composite_operation(lease, result).await
     }
-
     async fn compare_and_swap_sealed_locked(
         &self,
         expected_revision: Option<[u8; 32]>,
@@ -991,7 +947,6 @@ impl MusubiProviderAttestationSealedJournalFileStoreV1 {
             }
         }
     }
-
     async fn sync_local_successor(
         &self,
         expected_revision: Option<[u8; 32]>,
@@ -1025,7 +980,6 @@ impl MusubiProviderAttestationSealedJournalFileStoreV1 {
         Ok(())
     }
 }
-
 impl MusubiProviderAttestationJournalStoreV1 for MusubiProviderAttestationSealedJournalFileStoreV1 {
     fn load<'a>(
         &'a self,
@@ -1038,7 +992,6 @@ impl MusubiProviderAttestationJournalStoreV1 for MusubiProviderAttestationSealed
     > {
         Box::pin(async move { self.load_sealed().await })
     }
-
     fn compare_and_swap<'a>(
         &'a self,
         expected_revision: Option<[u8; 32]>,
@@ -1056,13 +1009,11 @@ impl MusubiProviderAttestationJournalStoreV1 for MusubiProviderAttestationSealed
         })
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ValidatedPhysicalCheckpointV1 {
     sequence: u64,
     revision: Option<[u8; 32]>,
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn two_slot_config(
     binding: &MusubiProviderAttestationJournalFileBindingV1,
@@ -1075,7 +1026,6 @@ fn two_slot_config(
         MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1,
     )
 }
-
 fn map_two_slot_try_error(
     error: TwoSlotTryErrorV1,
 ) -> MusubiProviderAttestationJournalStoreErrorV1 {
@@ -1084,7 +1034,6 @@ fn map_two_slot_try_error(
         TwoSlotTryErrorV1::Io(error) => map_store_io_error(error),
     }
 }
-
 fn map_store_io_error(error: io::Error) -> MusubiProviderAttestationJournalStoreErrorV1 {
     match error.kind() {
         io::ErrorKind::InvalidInput
@@ -1101,7 +1050,6 @@ fn map_store_io_error(error: io::Error) -> MusubiProviderAttestationJournalStore
         _ => MusubiProviderAttestationJournalStoreErrorV1::Unavailable,
     }
 }
-
 fn map_checkpoint_error_to_store(
     error: MusubiProviderAttestationJournalCheckpointSealErrorV1,
 ) -> MusubiProviderAttestationJournalStoreErrorV1 {
@@ -1127,7 +1075,6 @@ fn map_checkpoint_error_to_store(
         }
     }
 }
-
 fn map_store_error_to_journal(
     error: MusubiProviderAttestationJournalStoreErrorV1,
 ) -> MusubiProviderAttestationJournalErrorV1 {
@@ -1140,7 +1087,6 @@ fn map_store_error_to_journal(
         }
     }
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn store_error_to_io(error: MusubiProviderAttestationJournalStoreErrorV1) -> io::Error {
     match error {
@@ -1154,7 +1100,6 @@ fn store_error_to_io(error: MusubiProviderAttestationJournalStoreErrorV1) -> io:
         ),
     }
 }
-
 #[cfg(test)]
 mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1163,11 +1108,9 @@ mod tests {
         path::PathBuf,
         sync::{Arc, Mutex as StdMutex},
     };
-
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
     use tempfile::TempDir;
-
     use super::*;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use crate::provider_attestation_clock::{
@@ -1179,10 +1122,8 @@ mod tests {
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use crate::provider_attestation_journal::musubi_provider_attestation_journal_test_checkpoint_bytes_v1;
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     const CLOCK_SEAL_HANDLE: &str = "sealed://musubi/provider-attestation/journal-clock-primary";
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[derive(Debug)]
     struct LocalClockSeal {
@@ -1196,7 +1137,6 @@ mod tests {
         >,
         next_checkpoint_head_error: StdMutex<Option<MusubiProviderAttestationClockSealErrorV1>>,
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     impl LocalClockSeal {
         fn new() -> Self {
@@ -1211,7 +1151,6 @@ mod tests {
                 next_checkpoint_head_error: StdMutex::new(None),
             }
         }
-
         fn binding(&self) -> MusubiProviderAttestationClockSealBindingV1 {
             MusubiProviderAttestationClockSealBindingV1::try_new(
                 CLOCK_SEAL_HANDLE,
@@ -1219,21 +1158,18 @@ mod tests {
             )
             .expect("valid local clock-seal binding")
         }
-
         fn fail_next_checkpoint_head(&self, error: MusubiProviderAttestationClockSealErrorV1) {
             *self
                 .next_checkpoint_head_error
                 .lock()
                 .expect("checkpoint head error lock") = Some(error);
         }
-
         fn remove_checkpoint_blob(&self, scope_digest: [u8; 32], revision: [u8; 32]) {
             self.checkpoint_blobs
                 .lock()
                 .expect("checkpoint blob lock")
                 .remove(&(scope_digest, revision));
         }
-
         fn substitute_checkpoint_blob(
             &self,
             scope_digest: [u8; 32],
@@ -1246,13 +1182,11 @@ mod tests {
                 .insert((scope_digest, revision), bytes);
         }
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     impl MusubiProviderAttestationClockSealV1 for LocalClockSeal {
         fn runtime_handle(&self) -> &str {
             CLOCK_SEAL_HANDLE
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -1261,7 +1195,6 @@ mod tests {
         > {
             Ok(self.qualification)
         }
-
         fn load_latest<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -1282,7 +1215,6 @@ mod tests {
                 }
             })
         }
-
         fn compare_and_swap<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -1303,7 +1235,6 @@ mod tests {
                 Ok(())
             })
         }
-
         fn put_journal_checkpoint_blob<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -1331,7 +1262,6 @@ mod tests {
                 Ok(())
             })
         }
-
         fn load_journal_checkpoint_blob<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -1349,7 +1279,6 @@ mod tests {
                     .cloned())
             })
         }
-
         fn load_journal_checkpoint_head<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -1369,7 +1298,6 @@ mod tests {
                     .cloned())
             })
         }
-
         fn load_journal_checkpoint_head_record<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -1390,7 +1318,6 @@ mod tests {
                     .cloned())
             })
         }
-
         fn compare_and_swap_journal_checkpoint_head<'a>(
             &'a self,
             scope_digest: [u8; 32],
@@ -1434,7 +1361,6 @@ mod tests {
             })
         }
     }
-
     fn binding(seed: u8) -> MusubiProviderAttestationJournalFileBindingV1 {
         MusubiProviderAttestationJournalFileBindingV1::try_new(
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -1444,14 +1370,12 @@ mod tests {
         )
         .expect("valid file-store binding")
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     async fn sealed_clock(
         binding: &MusubiProviderAttestationJournalFileBindingV1,
     ) -> Arc<MusubiProviderAttestationSealedUnixClockV1> {
         sealed_clock_and_provider(binding).await.0
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     async fn sealed_clock_and_provider(
         binding: &MusubiProviderAttestationJournalFileBindingV1,
@@ -1472,7 +1396,6 @@ mod tests {
         );
         (clock, seal)
     }
-
     #[test]
     fn file_binding_derives_the_exact_clock_scope() {
         let binding = binding(0x30);
@@ -1480,12 +1403,10 @@ mod tests {
         assert_eq!(scope.network_id(), binding.network_id());
         assert_eq!(scope.provider_id(), binding.provider_id());
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn canonical_root(temp: &TempDir) -> PathBuf {
         temp.path().canonicalize().expect("canonical state root")
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn store(
         root: &Path,
@@ -1498,7 +1419,6 @@ mod tests {
         )
         .expect("open journal file store")
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     async fn initialized_sealed_store(
         root: &Path,
@@ -1522,7 +1442,6 @@ mod tests {
         ));
         (sealed, clock, seal)
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn reopened_sealed_store(
         root: &Path,
@@ -1537,7 +1456,6 @@ mod tests {
             checkpoint_scope,
         ))
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     async fn advance_external_checkpoint(
         sealed: &MusubiProviderAttestationSealedJournalFileStoreV1,
@@ -1576,7 +1494,6 @@ mod tests {
             .expect("advance external checkpoint");
         (committed, bytes)
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn bound_runtime_accepts_only_the_exact_store_scope_and_policy() {
@@ -1594,12 +1511,10 @@ mod tests {
         )
         .expect("open bound journal file store");
         let clock = sealed_clock(&binding).await;
-
         let runtime = store
             .initialize_journal_runtime(clock)
             .await
             .expect("matching deployment scope must construct the runtime");
-
         assert_eq!(runtime.policy(), policy);
         assert!(
             !runtime.matches_binding(*binding.network_id(), binding.provider_id(), policy),
@@ -1609,7 +1524,6 @@ mod tests {
         assert!(!debug.contains(sensitive_root.to_string_lossy().as_ref()));
         assert!(!debug.contains("operator-secret-state-root"));
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn bound_runtime_rejects_a_foreign_clock_scope() {
@@ -1618,7 +1532,6 @@ mod tests {
         let store_binding = binding(0x22);
         let store = store(&root_path, store_binding);
         let foreign_clock = sealed_clock(&binding(0x23)).await;
-
         assert_eq!(
             store
                 .initialize_journal_runtime(foreign_clock)
@@ -1627,7 +1540,6 @@ mod tests {
             MusubiProviderAttestationJournalErrorV1::StoreRejected
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn ordinary_open_rejects_absent_head_while_initialize_provisions_h0() {
@@ -1635,7 +1547,6 @@ mod tests {
         let root_path = canonical_root(&root);
         let binding = binding(0x24);
         let (clock, _) = sealed_clock_and_provider(&binding).await;
-
         assert_eq!(
             store(&root_path, binding.clone())
                 .open_journal_runtime(Arc::clone(&clock))
@@ -1664,7 +1575,6 @@ mod tests {
             foreign_policy,
         ));
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn explicit_initialize_rejects_nonempty_local_state_without_provisioning_h0() {
@@ -1678,7 +1588,6 @@ mod tests {
             .await
             .expect("install structurally valid local-only checkpoint");
         let (clock, provider) = sealed_clock_and_provider(&binding).await;
-
         assert_eq!(
             local
                 .initialize_journal_runtime(clock)
@@ -1695,7 +1604,6 @@ mod tests {
             "rejected local state must not create external H0"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn sealed_seq1_survives_exact_public_open() {
@@ -1721,13 +1629,11 @@ mod tests {
             Some(checkpoint.as_slice())
         );
         drop(sealed);
-
         store(&root_path, binding)
             .open_journal_runtime(clock)
             .await
             .expect("exact local/external restart opens");
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn lost_head_response_and_exact_replay_are_idempotent() {
@@ -1752,12 +1658,10 @@ mod tests {
             MusubiProviderAttestationJournalCasOutcomeV1::Stored { revision }
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn retry_repairs_external_commit_after_local_sync_failure() {
         use std::sync::atomic::Ordering;
-
         let root = TempDir::new().expect("state root");
         let root_path = canonical_root(&root);
         let (sealed, _, _) = initialized_sealed_store(&root_path, binding(0x27)).await;
@@ -1793,12 +1697,10 @@ mod tests {
             Some(checkpoint.as_slice())
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn composite_lease_fences_a_second_adapter_until_local_sync() {
         use std::sync::atomic::Ordering;
-
         let root = TempDir::new().expect("state root");
         let root_path = canonical_root(&root);
         let binding = binding(0x2D);
@@ -1820,7 +1722,6 @@ mod tests {
             async move { first.compare_and_swap(None, checkpoint).await }
         });
         first.external_commit_reached.notified().await;
-
         assert_eq!(
             first.load().await,
             Err(MusubiProviderAttestationJournalStoreErrorV1::Unavailable),
@@ -1858,12 +1759,10 @@ mod tests {
             Some(checkpoint.as_slice())
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn cancellation_after_external_commit_releases_lease_for_exact_repair() {
         use std::sync::atomic::Ordering;
-
         let root = TempDir::new().expect("state root");
         let root_path = canonical_root(&root);
         let binding = binding(0x2E);
@@ -1887,7 +1786,6 @@ mod tests {
                 .expect_err("cancel the writer in the crash window")
                 .is_cancelled()
         );
-
         assert_eq!(
             second
                 .compare_and_swap(None, checkpoint.clone())
@@ -1905,12 +1803,10 @@ mod tests {
             Some(checkpoint.as_slice())
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn init_lock_unlink_recreate_cannot_split_the_composite_lease() {
         use std::{os::unix::fs::PermissionsExt as _, sync::atomic::Ordering};
-
         let root = TempDir::new().expect("state root");
         let root_path = canonical_root(&root);
         let binding = binding(0x3A);
@@ -1927,7 +1823,6 @@ mod tests {
             async move { first.compare_and_swap(None, checkpoint).await }
         });
         first.external_commit_reached.notified().await;
-
         let init_lock_name = first.local.store.init_lock_name_for_test();
         let journal_path = root_path.join(JOURNAL_DIRECTORY_NAME_V1);
         let checkpoint_store_path = journal_path.join(JOURNAL_TWO_SLOT_STORE_NAME_V1);
@@ -1952,7 +1847,6 @@ mod tests {
         drop(std::fs::File::create(&init_lock_path).expect("install replacement init lock"));
         std::fs::set_permissions(&init_lock_path, std::fs::Permissions::from_mode(0o600))
             .expect("make replacement init lock private");
-
         let second_checkpoint = musubi_provider_attestation_journal_test_checkpoint_bytes_v1(2, 1);
         assert_eq!(
             second
@@ -1976,7 +1870,6 @@ mod tests {
             2,
             "sequence two must not become externally authoritative"
         );
-
         first.resume_after_external_commit.notify_one();
         assert_eq!(
             writer.await.expect("first writer task"),
@@ -2000,7 +1893,6 @@ mod tests {
             "operation locking never mutates the exact two-slot inventory"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn direct_predecessor_repairs_but_deeper_rollback_is_rejected() {
@@ -2016,7 +1908,6 @@ mod tests {
                 .checkpoint_bytes(),
             Some(first.as_slice())
         );
-
         let deep_root = TempDir::new().expect("deep rollback root");
         let deep_path = canonical_root(&deep_root);
         let (deep, _, _) = initialized_sealed_store(&deep_path, binding(0x29)).await;
@@ -2027,7 +1918,6 @@ mod tests {
             Err(MusubiProviderAttestationJournalStoreErrorV1::Rejected)
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn local_fork_and_missing_or_substituted_external_blob_are_rejected() {
@@ -2045,7 +1935,6 @@ mod tests {
             forked.load().await,
             Err(MusubiProviderAttestationJournalStoreErrorV1::Rejected)
         );
-
         let blob_root = TempDir::new().expect("blob root");
         let blob_path = canonical_root(&blob_root);
         let (sealed, _, provider) = initialized_sealed_store(&blob_path, binding(0x2B)).await;
@@ -2070,7 +1959,6 @@ mod tests {
             Err(MusubiProviderAttestationJournalStoreErrorV1::Rejected)
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn externally_initialized_policy_scope_cannot_be_reinterpreted() {
@@ -2095,7 +1983,6 @@ mod tests {
             MusubiProviderAttestationJournalErrorV1::StoreRejected
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn pristine_store_is_empty_and_checkpoint_survives_reopen() {
@@ -2110,7 +1997,6 @@ mod tests {
                 .expect("load pristine store"),
             MusubiProviderAttestationJournalStoreSnapshotV1::empty()
         );
-
         let checkpoint = musubi_provider_attestation_journal_test_checkpoint_bytes_v1(1, 0);
         let expected_revision =
             musubi_provider_attestation_journal_checkpoint_revision_v1(&checkpoint);
@@ -2124,13 +2010,11 @@ mod tests {
             }
         );
         drop(journal_store);
-
         let reopened = store(&root_path, binding);
         let loaded = reopened.load_local().await.expect("load reopened store");
         assert_eq!(loaded.revision(), Some(expected_revision));
         assert_eq!(loaded.checkpoint_bytes(), Some(checkpoint.as_slice()));
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn stale_conflict_and_exact_replay_preserve_the_winner() {
@@ -2143,7 +2027,6 @@ mod tests {
             .compare_and_swap_local(None, first.clone())
             .await
             .expect("store first checkpoint");
-
         assert_eq!(
             store
                 .compare_and_swap_local(None, first.clone())
@@ -2169,7 +2052,6 @@ mod tests {
                 .checkpoint_bytes(),
             Some(first.as_slice())
         );
-
         let second_revision = musubi_provider_attestation_journal_checkpoint_revision_v1(&second);
         assert_eq!(
             store
@@ -2199,7 +2081,6 @@ mod tests {
             }
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn invalid_replacement_and_sequence_jump_are_rejected() {
@@ -2224,7 +2105,6 @@ mod tests {
             Err(MusubiProviderAttestationJournalStoreErrorV1::Rejected)
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn physical_generation_checkpoint_sequence_mismatch_is_rejected() {
@@ -2241,7 +2121,6 @@ mod tests {
                 .expect("install deliberately mismatched physical fixture"),
             TwoSlotCasOutcomeV1::Stored(_)
         ));
-
         assert_eq!(
             store.load_local().await,
             Err(MusubiProviderAttestationJournalStoreErrorV1::Rejected)
@@ -2258,7 +2137,6 @@ mod tests {
             io::ErrorKind::InvalidData | io::ErrorKind::Other
         ));
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn independent_adapters_never_install_two_racing_successors() {
@@ -2269,7 +2147,6 @@ mod tests {
         let right = Arc::new(store(&root_path, binding));
         let left_bytes = musubi_provider_attestation_journal_test_checkpoint_bytes_v1(1, 1);
         let right_bytes = musubi_provider_attestation_journal_test_checkpoint_bytes_v1(1, 2);
-
         let left_task = tokio::spawn({
             let store = Arc::clone(&left);
             let bytes = left_bytes.clone();
@@ -2292,7 +2169,6 @@ mod tests {
             })
             .count();
         assert_eq!(stored_count, 1);
-
         let loaded = left.load_local().await.expect("load race winner");
         let winner = loaded.checkpoint_bytes().expect("winner checkpoint");
         assert!(winner == left_bytes || winner == right_bytes);
@@ -2306,12 +2182,10 @@ mod tests {
             Ok(MusubiProviderAttestationJournalCasOutcomeV1::Conflict)
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn trait_futures_are_send() {
         fn assert_send<Value: Send>(_: &Value) {}
-
         let root = TempDir::new().expect("state root");
         let root_path = canonical_root(&root);
         let store = store(&root_path, binding(0x71));
@@ -2325,7 +2199,6 @@ mod tests {
         assert_send(&compare);
         compare.await.expect("CAS through Send future");
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn reopening_with_another_deployment_binding_is_rejected() {
@@ -2334,7 +2207,6 @@ mod tests {
         let expected_binding = binding(0x72);
         let first = store(&root_path, expected_binding.clone());
         drop(first);
-
         let error = MusubiProviderAttestationJournalFileStoreV1::open_or_create_under(
             &root_path,
             binding(0x73),
@@ -2350,12 +2222,10 @@ mod tests {
             .await
             .expect("binding substitution must not damage the original store");
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn unsafe_symlink_root_is_rejected_and_debug_redacts_path() {
         use std::os::unix::fs::symlink;
-
         let parent = TempDir::new().expect("parent root");
         let parent_path = canonical_root(&parent);
         let target = parent_path.join("target");
@@ -2373,13 +2243,11 @@ mod tests {
             error.kind(),
             io::ErrorKind::InvalidData | io::ErrorKind::Other
         ));
-
         let store = store(&target, binding(0x82));
         let debug = format!("{store:?}");
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains(target.to_string_lossy().as_ref()));
     }
-
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     #[test]
     fn unsupported_platform_fails_closed() {

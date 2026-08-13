@@ -5,7 +5,6 @@
 //! parent-enforced wall-clock, resident-memory, and virtual-address-space
 //! ceilings. Norito is authoritative; JSON is only a typed projection.
 #![cfg(unix)]
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
@@ -37,7 +36,6 @@ use std::{
         mpsc,
     },
 };
-
 use iroha_core::privacy_release_evidence::{
     PRIVACY_RELEASE_CASE_COUNT_V1, PRIVACY_RELEASE_EVIDENCE_SCHEMA_VERSION_V1,
     PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1, PRIVACY_RELEASE_MAX_PROOF_ARTIFACTS_V1,
@@ -4959,9 +4957,7 @@ fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::symlink;
-
     use super::*;
-
     #[cfg(all(
         target_os = "linux",
         target_endian = "little",

@@ -8,7 +8,6 @@
 //! record-streamed under fixed source-byte, record, string, and retained-index
 //! budgets so malformed operator snapshots cannot scale startup memory without
 //! bound.
-
 use core::convert::TryFrom;
 use std::{
     collections::BTreeMap,
@@ -17,7 +16,6 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-
 use eyre::{self, WrapErr as _};
 use iroha_config::parameters::actual;
 use iroha_logger::{error, info, warn};
@@ -27,9 +25,7 @@ use norito::json::{self, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 use super::profiles::ReferenceDatasetRequirement;
-
 /// Maximum encoded size of one first-release reference-data snapshot.
 const REFERENCE_DATA_MAX_DATASET_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum encoded bytes examined across one six-dataset refresh.
@@ -44,14 +40,12 @@ const REFERENCE_DATA_MAX_STRING_BYTES: usize = 4 * 1024;
 const REFERENCE_DATA_RECORD_OVERHEAD_BYTES: usize = 1024;
 /// Multiplier covering normalized keys and reverse-index string copies.
 const REFERENCE_DATA_STRING_ACCOUNTING_MULTIPLIER: usize = 4;
-
 #[derive(Debug)]
 struct ReferenceDataLoadBudget {
     remaining_input_bytes: usize,
     remaining_records: usize,
     remaining_retained_bytes: usize,
 }
-
 impl Default for ReferenceDataLoadBudget {
     fn default() -> Self {
         Self {
@@ -61,7 +55,6 @@ impl Default for ReferenceDataLoadBudget {
         }
     }
 }
-
 impl ReferenceDataLoadBudget {
     fn charge_input(&mut self, kind: DatasetKind, bytes: usize) -> eyre::Result<()> {
         if bytes > self.remaining_input_bytes {
@@ -74,7 +67,6 @@ impl ReferenceDataLoadBudget {
         self.remaining_input_bytes -= bytes;
         Ok(())
     }
-
     fn charge_record(&mut self, kind: DatasetKind) -> eyre::Result<()> {
         if self.remaining_records == 0 {
             eyre::bail!(
@@ -85,7 +77,6 @@ impl ReferenceDataLoadBudget {
         self.remaining_records -= 1;
         Ok(())
     }
-
     fn charge_retained_strings<S: AsRef<str>>(
         &mut self,
         kind: DatasetKind,
@@ -122,7 +113,6 @@ impl ReferenceDataLoadBudget {
         Ok(())
     }
 }
-
 /// Dataset kinds tracked by the ISO bridge reference-data loader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatasetKind {
@@ -139,7 +129,6 @@ pub enum DatasetKind {
     /// Securities cash-leg mapping.
     CashLeg,
 }
-
 impl DatasetKind {
     /// Human-readable label used in logs and metrics.
     #[must_use]
@@ -154,7 +143,6 @@ impl DatasetKind {
         }
     }
 }
-
 /// Snapshot state capturing whether a dataset was ingested successfully.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapshotState {
@@ -165,7 +153,6 @@ pub enum SnapshotState {
     /// Dataset ingestion failed due to IO/parse errors.
     Failed,
 }
-
 impl SnapshotState {
     /// Map the state to a numeric gauge value for telemetry.
     #[must_use]
@@ -177,7 +164,6 @@ impl SnapshotState {
         }
     }
 }
-
 /// Errors that occur while validating ISO reference data records.
 #[derive(Debug, Error)]
 pub enum ReferenceDataError {
@@ -222,7 +208,6 @@ pub enum ReferenceDataError {
         mapping: &'static str,
     },
 }
-
 /// Provenance metadata describing a reference-data snapshot.
 #[derive(Debug, Clone)]
 pub struct SnapshotMetadata {
@@ -235,7 +220,6 @@ pub struct SnapshotMetadata {
     /// Number of records ingested for the dataset.
     pub record_count: usize,
 }
-
 impl SnapshotMetadata {
     fn age_seconds(&self) -> Option<u64> {
         self.fetched_at.map(|ts| {
@@ -249,7 +233,6 @@ impl SnapshotMetadata {
         })
     }
 }
-
 /// Snapshot container describing the state of a particular dataset.
 #[derive(Debug, Clone)]
 pub struct DatasetSnapshot<T> {
@@ -260,7 +243,6 @@ pub struct DatasetSnapshot<T> {
     diagnostics: Option<String>,
     configured_path: Option<PathBuf>,
 }
-
 impl<T> DatasetSnapshot<T> {
     fn missing(kind: DatasetKind) -> Self {
         Self {
@@ -272,7 +254,6 @@ impl<T> DatasetSnapshot<T> {
             configured_path: None,
         }
     }
-
     fn failed(kind: DatasetKind, path: &Path, err: &eyre::Report) -> Self {
         Self {
             kind,
@@ -283,7 +264,6 @@ impl<T> DatasetSnapshot<T> {
             configured_path: Some(path.to_path_buf()),
         }
     }
-
     fn loaded(kind: DatasetKind, path: &Path, metadata: SnapshotMetadata, records: T) -> Self {
         Self {
             kind,
@@ -294,43 +274,36 @@ impl<T> DatasetSnapshot<T> {
             configured_path: Some(path.to_path_buf()),
         }
     }
-
     /// Snapshot status.
     #[must_use]
     pub fn state(&self) -> SnapshotState {
         self.state
     }
-
     /// Snapshot metadata if the dataset loaded successfully.
     #[must_use]
     pub fn metadata(&self) -> Option<&SnapshotMetadata> {
         self.metadata.as_ref()
     }
-
     /// Loaded records when the dataset is available.
     #[must_use]
     pub fn records(&self) -> Option<&T> {
         self.records.as_ref()
     }
-
     /// Diagnostics message (error) when loading failed.
     #[must_use]
     pub fn diagnostics(&self) -> Option<&str> {
         self.diagnostics.as_deref()
     }
-
     /// Configured snapshot path when provided.
     #[must_use]
     pub fn configured_path(&self) -> Option<&Path> {
         self.configured_path.as_deref()
     }
-
     /// Dataset kind represented by this snapshot.
     #[must_use]
     pub fn kind(&self) -> DatasetKind {
         self.kind
     }
-
     fn log_status(&self) {
         match self.state {
             SnapshotState::Loaded => {
@@ -369,7 +342,6 @@ impl<T> DatasetSnapshot<T> {
             }
         }
     }
-
     fn publish_metrics(&self, refresh_interval: Duration) {
         let metrics = metrics::global_or_default();
         let dataset = self.kind.label();
@@ -389,7 +361,6 @@ impl<T> DatasetSnapshot<T> {
             });
     }
 }
-
 fn load_configured_dataset<T>(
     path: Option<&Path>,
     kind: DatasetKind,
@@ -404,7 +375,6 @@ fn load_configured_dataset<T>(
         Err(err) => DatasetSnapshot::failed(kind, path, &err),
     }
 }
-
 /// In-memory snapshot cache for ISO 20022 reference data.
 #[derive(Debug, Clone)]
 pub struct ReferenceDataSnapshots {
@@ -425,55 +395,47 @@ pub struct ReferenceDataSnapshots {
     /// Timestamp when the loader executed.
     loaded_at: OffsetDateTime,
 }
-
 impl ReferenceDataSnapshots {
     /// Build snapshots from the provided configuration.
     pub fn from_config(config: &actual::IsoReferenceData) -> Self {
         let now = OffsetDateTime::now_utc();
         let mut budget = ReferenceDataLoadBudget::default();
-
         let isin_snapshot = load_configured_dataset(
             config.isin_crosswalk_path.as_deref(),
             DatasetKind::IsinCusip,
             &mut budget,
             load_isin_crosswalk,
         );
-
         let bic_lei_snapshot = load_configured_dataset(
             config.bic_lei_path.as_deref(),
             DatasetKind::BicLei,
             &mut budget,
             load_bic_lei_crosswalk,
         );
-
         let mic_snapshot = load_configured_dataset(
             config.mic_directory_path.as_deref(),
             DatasetKind::MicDirectory,
             &mut budget,
             load_mic_directory,
         );
-
         let csd_venue_snapshot = load_configured_dataset(
             config.csd_venue_path.as_deref(),
             DatasetKind::CsdVenue,
             &mut budget,
             load_csd_venue_directory,
         );
-
         let securities_account_snapshot = load_configured_dataset(
             config.securities_account_path.as_deref(),
             DatasetKind::SecuritiesAccount,
             &mut budget,
             load_securities_account_crosswalk,
         );
-
         let cash_leg_snapshot = load_configured_dataset(
             config.cash_leg_path.as_deref(),
             DatasetKind::CashLeg,
             &mut budget,
             load_cash_leg_crosswalk,
         );
-
         let snapshots = Self {
             isin_cusip: isin_snapshot,
             bic_lei: bic_lei_snapshot,
@@ -484,7 +446,6 @@ impl ReferenceDataSnapshots {
             refresh_interval: config.refresh_interval,
             loaded_at: now,
         };
-
         snapshots.log_statuses();
         snapshots.publish_metrics();
         if let Some(cache_dir) = config.cache_dir.as_deref()
@@ -498,7 +459,6 @@ impl ReferenceDataSnapshots {
         }
         snapshots
     }
-
     fn log_statuses(&self) {
         self.isin_cusip.log_status();
         self.bic_lei.log_status();
@@ -507,7 +467,6 @@ impl ReferenceDataSnapshots {
         self.securities_account.log_status();
         self.cash_leg.log_status();
     }
-
     fn publish_metrics(&self) {
         self.isin_cusip.publish_metrics(self.refresh_interval);
         self.bic_lei.publish_metrics(self.refresh_interval);
@@ -517,7 +476,6 @@ impl ReferenceDataSnapshots {
             .publish_metrics(self.refresh_interval);
         self.cash_leg.publish_metrics(self.refresh_interval);
     }
-
     fn persist_cache(&self, root: &Path) -> eyre::Result<()> {
         fs::create_dir_all(root).wrap_err_with(|| {
             format!("failed to create ISO cache directory at {}", root.display())
@@ -530,7 +488,6 @@ impl ReferenceDataSnapshots {
         self.persist_dataset(root, self.cash_leg())?;
         Ok(())
     }
-
     fn persist_dataset<T>(&self, root: &Path, snapshot: &DatasetSnapshot<T>) -> eyre::Result<()> {
         let dataset_dir = root.join(snapshot.kind().label());
         fs::create_dir_all(&dataset_dir).wrap_err_with(|| {
@@ -539,7 +496,6 @@ impl ReferenceDataSnapshots {
                 snapshot.kind().label()
             )
         })?;
-
         let status_path = dataset_dir.join("status.json");
         match snapshot.state() {
             SnapshotState::Loaded => {
@@ -558,10 +514,8 @@ impl ReferenceDataSnapshots {
                 Self::persist_failed_dataset(&status_path, snapshot)?;
             }
         }
-
         Ok(())
     }
-
     fn persist_loaded_dataset<T>(
         &self,
         dataset_dir: &Path,
@@ -578,7 +532,6 @@ impl ReferenceDataSnapshots {
         let data_filename = format!("{sanitized_version}.json");
         let metadata_filename = format!("{sanitized_version}.metadata.json");
         let cached_data_path = dataset_dir.join(&data_filename);
-
         let cached_sha256 = if let Some(source_path) = snapshot.configured_path() {
             if source_path != cached_data_path {
                 fs::copy(source_path, &cached_data_path).wrap_err_with(|| {
@@ -593,7 +546,6 @@ impl ReferenceDataSnapshots {
         } else {
             None
         };
-
         let fetched_at = meta
             .fetched_at
             .map(|ts| ts.format(&Rfc3339).unwrap_or_else(|_| ts.to_string()));
@@ -638,7 +590,6 @@ impl ReferenceDataSnapshots {
                 snapshot.kind().label()
             )
         })?;
-
         let mut status_map = json::Map::new();
         status_map.insert("status".to_owned(), Value::String("loaded".to_owned()));
         status_map.insert(
@@ -658,10 +609,8 @@ impl ReferenceDataSnapshots {
                 snapshot.kind().label()
             )
         })?;
-
         Ok(())
     }
-
     fn persist_missing_dataset(status_path: &Path, label: &str) -> eyre::Result<()> {
         let mut status_map = json::Map::new();
         status_map.insert("status".to_owned(), Value::String("missing".to_owned()));
@@ -670,7 +619,6 @@ impl ReferenceDataSnapshots {
             .wrap_err_with(|| format!("failed to write status file for dataset {label}"))?;
         Ok(())
     }
-
     fn persist_failed_dataset<T>(
         status_path: &Path,
         snapshot: &DatasetSnapshot<T>,
@@ -698,55 +646,46 @@ impl ReferenceDataSnapshots {
         })?;
         Ok(())
     }
-
     /// Access the ISIN ↔ CUSIP crosswalk snapshot.
     #[must_use]
     pub fn isin_cusip(&self) -> &DatasetSnapshot<InstrumentCrosswalk> {
         &self.isin_cusip
     }
-
     /// Access the BIC ↔ LEI crosswalk snapshot.
     #[must_use]
     pub fn bic_lei(&self) -> &DatasetSnapshot<BicLeiCrosswalk> {
         &self.bic_lei
     }
-
     /// Access the MIC directory snapshot.
     #[must_use]
     pub fn mic_directory(&self) -> &DatasetSnapshot<MicDirectory> {
         &self.mic_directory
     }
-
     /// Access the CSD venue crosswalk snapshot.
     #[must_use]
     pub fn csd_venue(&self) -> &DatasetSnapshot<CsdVenueDirectory> {
         &self.csd_venue
     }
-
     /// Access the securities account crosswalk snapshot.
     #[must_use]
     pub fn securities_account(&self) -> &DatasetSnapshot<SecuritiesAccountCrosswalk> {
         &self.securities_account
     }
-
     /// Access the securities cash-leg crosswalk snapshot.
     #[must_use]
     pub fn cash_leg(&self) -> &DatasetSnapshot<CashLegCrosswalk> {
         &self.cash_leg
     }
-
     /// Configured refresh interval.
     #[must_use]
     pub fn refresh_interval(&self) -> Duration {
         self.refresh_interval
     }
-
     /// Timestamp when the snapshots were last loaded.
     #[must_use]
     pub fn loaded_at(&self) -> OffsetDateTime {
         self.loaded_at
     }
-
     /// Return a deterministic checksum over loaded dataset provenance.
     #[must_use]
     pub fn snapshot_id(&self) -> String {
@@ -766,7 +705,6 @@ impl ReferenceDataSnapshots {
         let digest = Sha256::digest(rendered.as_bytes());
         hex_lower(&digest)
     }
-
     /// Returns true when a required dataset is loaded.
     #[must_use]
     pub fn has_required_dataset(&self, requirement: ReferenceDatasetRequirement) -> bool {
@@ -780,7 +718,6 @@ impl ReferenceDataSnapshots {
             }
         }
     }
-
     fn dataset_records_or_skip<T>(
         snapshot: &DatasetSnapshot<T>,
     ) -> Result<Option<&T>, ReferenceDataError> {
@@ -796,7 +733,6 @@ impl ReferenceDataSnapshots {
             }),
         }
     }
-
     fn required_dataset_records<T>(
         snapshot: &DatasetSnapshot<T>,
     ) -> Result<&T, ReferenceDataError> {
@@ -804,7 +740,6 @@ impl ReferenceDataSnapshots {
             kind: snapshot.kind,
         })
     }
-
     /// Validate that an ISIN appears in the crosswalk snapshot.
     ///
     /// # Errors
@@ -820,7 +755,6 @@ impl ReferenceDataSnapshots {
             })
         }
     }
-
     /// Validate that a CUSIP maps to a known ISIN.
     ///
     /// # Errors
@@ -836,7 +770,6 @@ impl ReferenceDataSnapshots {
             })
         }
     }
-
     /// Validate that a BIC is registered in the BIC↔LEI dataset.
     ///
     /// # Errors
@@ -852,7 +785,6 @@ impl ReferenceDataSnapshots {
             })
         }
     }
-
     /// Validate that a LEI is present in the BIC↔LEI dataset.
     ///
     /// # Errors
@@ -868,7 +800,6 @@ impl ReferenceDataSnapshots {
             })
         }
     }
-
     /// Validate that a MIC exists and is active in the MIC directory.
     ///
     /// # Errors
@@ -894,7 +825,6 @@ impl ReferenceDataSnapshots {
             },
         )
     }
-
     /// Validate that an instrument exists and carries an on-ledger mapping.
     ///
     /// # Errors
@@ -923,7 +853,6 @@ impl ReferenceDataSnapshots {
             })
         }
     }
-
     /// Validate that a settlement venue maps to a configured CSD ledger domain.
     ///
     /// # Errors
@@ -948,7 +877,6 @@ impl ReferenceDataSnapshots {
             })
         }
     }
-
     /// Validate that a securities settlement account maps to a ledger account.
     ///
     /// # Errors
@@ -985,7 +913,6 @@ impl ReferenceDataSnapshots {
             })
         }
     }
-
     /// Validate that a securities cash leg maps to a ledger asset definition.
     ///
     /// # Errors
@@ -1018,7 +945,6 @@ impl ReferenceDataSnapshots {
             })
         }
     }
-
     /// Lookup an instrument record by ISIN when the dataset is loaded.
     ///
     /// # Errors
@@ -1030,7 +956,6 @@ impl ReferenceDataSnapshots {
         Self::dataset_records_or_skip(&self.isin_cusip)?
             .map_or_else(|| Ok(None), |records| Ok(records.by_isin(isin)))
     }
-
     /// Lookup an instrument record by CUSIP when the dataset is loaded.
     ///
     /// # Errors
@@ -1042,7 +967,6 @@ impl ReferenceDataSnapshots {
         Self::dataset_records_or_skip(&self.isin_cusip)?
             .map_or_else(|| Ok(None), |records| Ok(records.by_cusip(cusip)))
     }
-
     /// Lookup MIC record if the directory is loaded.
     ///
     /// # Errors
@@ -1052,7 +976,6 @@ impl ReferenceDataSnapshots {
             .map_or_else(|| Ok(None), |records| Ok(records.by_mic(mic)))
     }
 }
-
 fn dataset_snapshot_value<T>(snapshot: &DatasetSnapshot<T>) -> Value {
     let mut map = json::Map::new();
     map.insert(
@@ -1098,7 +1021,6 @@ fn dataset_snapshot_value<T>(snapshot: &DatasetSnapshot<T>) -> Value {
     );
     Value::Object(map)
 }
-
 fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -1108,7 +1030,6 @@ fn hex_lower(bytes: &[u8]) -> String {
     }
     out
 }
-
 /// Crosswalk entry describing an instrument record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstrumentRecord {
@@ -1121,14 +1042,12 @@ pub struct InstrumentRecord {
     /// Optional asset identifier associated with the instrument.
     pub asset_id: Option<String>,
 }
-
 /// ISIN ↔ CUSIP crosswalk lookup structure.
 #[derive(Debug, Clone, Default)]
 pub struct InstrumentCrosswalk {
     by_isin: BTreeMap<String, InstrumentRecord>,
     by_cusip: BTreeMap<String, String>,
 }
-
 impl InstrumentCrosswalk {
     fn insert(&mut self, record: InstrumentRecord) -> eyre::Result<()> {
         let isin_key = normalise_upper_ascii(&record.isin);
@@ -1146,26 +1065,22 @@ impl InstrumentCrosswalk {
         self.by_isin.insert(isin_key, record);
         Ok(())
     }
-
     /// Number of instrument records ingested.
     #[must_use]
     pub fn len(&self) -> usize {
         self.by_isin.len()
     }
-
     /// Returns true when no instrument records are loaded.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_isin.is_empty()
     }
-
     /// Lookup by ISIN.
     #[must_use]
     pub fn by_isin(&self, isin: &str) -> Option<&InstrumentRecord> {
         let key = normalise_upper_ascii(isin);
         self.by_isin.get(&key)
     }
-
     /// Lookup by CUSIP.
     #[must_use]
     pub fn by_cusip(&self, cusip: &str) -> Option<&InstrumentRecord> {
@@ -1174,14 +1089,12 @@ impl InstrumentCrosswalk {
         self.by_isin.get(isin)
     }
 }
-
 /// BIC ↔ LEI crosswalk lookup structure.
 #[derive(Debug, Clone, Default)]
 pub struct BicLeiCrosswalk {
     bic_to_lei: BTreeMap<String, String>,
     lei_to_bic: BTreeMap<String, Vec<String>>,
 }
-
 impl BicLeiCrosswalk {
     fn insert(&mut self, bic: &str, lei: &str) -> eyre::Result<()> {
         let bic_key = normalise_upper_ascii(bic);
@@ -1193,26 +1106,22 @@ impl BicLeiCrosswalk {
         self.lei_to_bic.entry(lei_key).or_default().push(bic_key);
         Ok(())
     }
-
     /// Number of BIC ↔ LEI pairs loaded.
     #[must_use]
     pub fn len(&self) -> usize {
         self.bic_to_lei.len()
     }
-
     /// Returns true when the crosswalk contains no entries.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.bic_to_lei.is_empty()
     }
-
     /// Lookup LEI by BIC.
     #[must_use]
     pub fn lei_by_bic(&self, bic: &str) -> Option<&str> {
         let key = normalise_upper_ascii(bic);
         self.bic_to_lei.get(&key).map(String::as_str)
     }
-
     /// Lookup BICs registered under a given LEI.
     #[must_use]
     pub fn bics_by_lei(&self, lei: &str) -> Option<&[String]> {
@@ -1220,7 +1129,6 @@ impl BicLeiCrosswalk {
         self.lei_to_bic.get(&key).map(Vec::as_slice)
     }
 }
-
 /// MIC directory entry.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MicRecord {
@@ -1233,13 +1141,11 @@ pub struct MicRecord {
     /// Registration or termination status.
     pub status: Option<String>,
 }
-
 /// MIC directory lookup.
 #[derive(Debug, Clone, Default)]
 pub struct MicDirectory {
     by_mic: BTreeMap<String, MicRecord>,
 }
-
 impl MicDirectory {
     fn insert(&mut self, record: MicRecord) -> eyre::Result<()> {
         let key = normalise_upper_ascii(&record.mic);
@@ -1249,19 +1155,16 @@ impl MicDirectory {
         self.by_mic.insert(key, record);
         Ok(())
     }
-
     /// Number of MIC entries loaded.
     #[must_use]
     pub fn len(&self) -> usize {
         self.by_mic.len()
     }
-
     /// Returns true when no MIC entries are registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_mic.is_empty()
     }
-
     /// Lookup a MIC entry by identifier.
     #[must_use]
     pub fn by_mic(&self, mic: &str) -> Option<&MicRecord> {
@@ -1269,7 +1172,6 @@ impl MicDirectory {
         self.by_mic.get(&key)
     }
 }
-
 /// CSD settlement venue mapping entry.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CsdVenueRecord {
@@ -1280,13 +1182,11 @@ pub struct CsdVenueRecord {
     /// Ledger domain identifier used for CSD-owned state.
     pub ledger_domain_id: Option<String>,
 }
-
 /// CSD venue lookup.
 #[derive(Debug, Clone, Default)]
 pub struct CsdVenueDirectory {
     by_mic: BTreeMap<String, CsdVenueRecord>,
 }
-
 impl CsdVenueDirectory {
     fn insert(&mut self, record: CsdVenueRecord) -> eyre::Result<()> {
         let key = normalise_upper_ascii(&record.mic);
@@ -1296,19 +1196,16 @@ impl CsdVenueDirectory {
         self.by_mic.insert(key, record);
         Ok(())
     }
-
     /// Number of CSD venue entries loaded.
     #[must_use]
     pub fn len(&self) -> usize {
         self.by_mic.len()
     }
-
     /// Returns true when no CSD venue entries are registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_mic.is_empty()
     }
-
     /// Lookup a CSD venue entry by MIC.
     #[must_use]
     pub fn by_mic(&self, mic: &str) -> Option<&CsdVenueRecord> {
@@ -1316,7 +1213,6 @@ impl CsdVenueDirectory {
         self.by_mic.get(&key)
     }
 }
-
 /// Securities settlement-account mapping entry.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SecuritiesAccountRecord {
@@ -1327,13 +1223,11 @@ pub struct SecuritiesAccountRecord {
     /// On-ledger account identifier.
     pub account_id: Option<String>,
 }
-
 /// Securities settlement-account lookup.
 #[derive(Debug, Clone, Default)]
 pub struct SecuritiesAccountCrosswalk {
     by_account: BTreeMap<String, SecuritiesAccountRecord>,
 }
-
 impl SecuritiesAccountCrosswalk {
     fn insert(&mut self, record: SecuritiesAccountRecord) -> eyre::Result<()> {
         let key = normalise_upper_ascii(&record.settlement_account);
@@ -1343,19 +1237,16 @@ impl SecuritiesAccountCrosswalk {
         self.by_account.insert(key, record);
         Ok(())
     }
-
     /// Number of securities account entries loaded.
     #[must_use]
     pub fn len(&self) -> usize {
         self.by_account.len()
     }
-
     /// Returns true when no securities account entries are registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_account.is_empty()
     }
-
     /// Lookup a securities settlement account by external account literal.
     #[must_use]
     pub fn by_account(&self, account: &str) -> Option<&SecuritiesAccountRecord> {
@@ -1363,7 +1254,6 @@ impl SecuritiesAccountCrosswalk {
         self.by_account.get(&key)
     }
 }
-
 /// Securities cash-leg mapping entry.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CashLegRecord {
@@ -1374,13 +1264,11 @@ pub struct CashLegRecord {
     /// On-ledger asset definition identifier used for the cash leg.
     pub asset_definition_id: Option<String>,
 }
-
 /// Securities cash-leg lookup.
 #[derive(Debug, Clone, Default)]
 pub struct CashLegCrosswalk {
     by_currency_payment: BTreeMap<(String, Option<String>), CashLegRecord>,
 }
-
 impl CashLegCrosswalk {
     fn insert(&mut self, record: CashLegRecord) -> eyre::Result<()> {
         let key = (
@@ -1397,19 +1285,16 @@ impl CashLegCrosswalk {
         self.by_currency_payment.insert(key, record);
         Ok(())
     }
-
     /// Number of cash-leg entries loaded.
     #[must_use]
     pub fn len(&self) -> usize {
         self.by_currency_payment.len()
     }
-
     /// Returns true when no cash-leg entries are registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_currency_payment.is_empty()
     }
-
     /// Lookup by currency and optional payment type, falling back to a currency-only row.
     #[must_use]
     pub fn by_currency_and_payment(
@@ -1424,7 +1309,6 @@ impl CashLegCrosswalk {
             .or_else(|| self.by_currency_payment.get(&(currency_key, None)))
     }
 }
-
 fn load_isin_crosswalk(
     path: &Path,
     budget: &mut ReferenceDataLoadBudget,
@@ -1467,7 +1351,6 @@ fn load_isin_crosswalk(
         },
     )
 }
-
 fn load_bic_lei_crosswalk(
     path: &Path,
     budget: &mut ReferenceDataLoadBudget,
@@ -1494,7 +1377,6 @@ fn load_bic_lei_crosswalk(
         },
     )
 }
-
 fn load_mic_directory(
     path: &Path,
     budget: &mut ReferenceDataLoadBudget,
@@ -1533,7 +1415,6 @@ fn load_mic_directory(
         },
     )
 }
-
 fn load_csd_venue_directory(
     path: &Path,
     budget: &mut ReferenceDataLoadBudget,
@@ -1566,7 +1447,6 @@ fn load_csd_venue_directory(
         },
     )
 }
-
 fn load_securities_account_crosswalk(
     path: &Path,
     budget: &mut ReferenceDataLoadBudget,
@@ -1609,7 +1489,6 @@ fn load_securities_account_crosswalk(
         },
     )
 }
-
 fn load_cash_leg_crosswalk(
     path: &Path,
     budget: &mut ReferenceDataLoadBudget,
@@ -1646,7 +1525,6 @@ fn load_cash_leg_crosswalk(
         },
     )
 }
-
 fn load_dataset_streaming<T: Default>(
     path: &Path,
     kind: DatasetKind,
@@ -1667,7 +1545,6 @@ fn load_dataset_streaming<T: Default>(
     let mut source = None;
     let mut fetched_at: Option<Option<String>> = None;
     let mut records = None;
-
     while let Some(key) = object.next_key()? {
         match key.as_str() {
             "version" => {
@@ -1731,7 +1608,6 @@ fn load_dataset_streaming<T: Default>(
             parser.position()
         );
     }
-
     let records =
         records.ok_or_else(|| eyre::eyre!("{} snapshot missing `entries` array", kind.label()))?;
     let version =
@@ -1754,14 +1630,12 @@ fn load_dataset_streaming<T: Default>(
     };
     Ok((metadata, records))
 }
-
 fn take_entry_object(entry: Value, dataset: &str) -> eyre::Result<json::Map> {
     match entry {
         Value::Object(obj) => Ok(obj),
         _ => eyre::bail!("{dataset} entry must be an object"),
     }
 }
-
 fn take_required_string(
     obj: &mut json::Map,
     field: &'static str,
@@ -1776,7 +1650,6 @@ fn take_required_string(
     validate_string_bytes_by_label(dataset, field, &value)?;
     Ok(value.trim().to_owned())
 }
-
 fn take_optional_string(
     obj: &mut json::Map,
     field: &'static str,
@@ -1795,11 +1668,9 @@ fn take_optional_string(
         _ => eyre::bail!("{dataset} entry `{field}` must be a string or null"),
     }
 }
-
 fn validate_string_bytes(kind: DatasetKind, field: &'static str, value: &str) -> eyre::Result<()> {
     validate_string_bytes_by_label(kind.label(), field, value)
 }
-
 fn validate_string_bytes_by_label(
     dataset: &str,
     field: &'static str,
@@ -1814,11 +1685,9 @@ fn validate_string_bytes_by_label(
     }
     Ok(())
 }
-
 fn json_message(error: impl core::fmt::Display) -> json::Error {
     json::Error::Message(error.to_string())
 }
-
 fn read_dataset_json_bounded(
     path: &Path,
     kind: DatasetKind,
@@ -1852,7 +1721,6 @@ fn read_dataset_json_bounded(
             REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES
         );
     }
-
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -1880,7 +1748,6 @@ fn read_dataset_json_bounded(
             path.display()
         );
     }
-
     let mut raw = Vec::with_capacity(initial_len);
     Read::by_ref(&mut file)
         .take(
@@ -1927,11 +1794,9 @@ fn read_dataset_json_bounded(
         )
     })
 }
-
 #[cfg(unix)]
 fn same_dataset_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.len() == right.len()
@@ -1940,12 +1805,10 @@ fn same_dataset_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(not(unix))]
 fn same_dataset_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 fn mic_is_active(status: Option<&str>) -> bool {
     match status {
         None => true,
@@ -1964,11 +1827,9 @@ fn mic_is_active(status: Option<&str>) -> bool {
         }
     }
 }
-
 fn normalise_upper_ascii(input: &str) -> String {
     input.trim().to_ascii_uppercase()
 }
-
 fn sanitize_path_component(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -1980,7 +1841,6 @@ fn sanitize_path_component(input: &str) -> String {
     }
     if out.is_empty() { "_".to_owned() } else { out }
 }
-
 fn compute_sha256_hex(path: &Path) -> eyre::Result<String> {
     let mut file = File::open(path)
         .wrap_err_with(|| format!("failed to open dataset at {}", path.display()))?;
@@ -1995,7 +1855,6 @@ fn compute_sha256_hex(path: &Path) -> eyre::Result<String> {
     }
     Ok(hex::encode(hasher.finalize()))
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2003,26 +1862,21 @@ mod tests {
         io::Write as _,
         sync::{Mutex, OnceLock},
     };
-
     use iroha_config::parameters::actual::IsoReferenceData;
     use iroha_telemetry::metrics;
     use tempfile::{NamedTempFile, TempDir};
-
     use super::*;
-
     fn iso_reference_test_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .expect("iso reference test lock poisoned")
     }
-
     fn write_snapshot(contents: &str) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");
         file.write_all(contents.as_bytes()).expect("write snapshot");
         file
     }
-
     #[test]
     fn missing_snapshots_default_to_missing_state() {
         let _guard = iso_reference_test_guard();
@@ -2038,7 +1892,6 @@ mod tests {
         );
         assert_eq!(snapshots.cash_leg().state(), SnapshotState::Missing);
     }
-
     #[test]
     fn oversized_snapshot_is_rejected_before_json_allocation() {
         let _guard = iso_reference_test_guard();
@@ -2053,7 +1906,6 @@ mod tests {
             isin_crosswalk_path: Some(file.path().to_path_buf()),
             ..IsoReferenceData::default()
         };
-
         let snapshots = ReferenceDataSnapshots::from_config(&config);
         assert_eq!(snapshots.isin_cusip().state(), SnapshotState::Failed);
         assert!(
@@ -2063,7 +1915,6 @@ mod tests {
                 .is_some_and(|diagnostics| diagnostics.contains("maximum"))
         );
     }
-
     #[test]
     fn aggregate_record_limit_is_checked_before_next_entry_decode() {
         let file = write_snapshot(
@@ -2075,11 +1926,9 @@ mod tests {
         );
         let mut budget = ReferenceDataLoadBudget::default();
         budget.remaining_records = 0;
-
         let error = load_isin_crosswalk(file.path(), &mut budget).unwrap_err();
         assert!(error.to_string().contains("aggregate limit"));
     }
-
     #[test]
     fn retained_index_budget_rejects_first_overflow() {
         let mut budget = ReferenceDataLoadBudget::default();
@@ -2098,12 +1947,10 @@ mod tests {
                 .contains("retained-index budget")
         );
     }
-
     #[test]
     fn loads_isin_crosswalk_snapshot() {
         let _guard = iso_reference_test_guard();
         let metrics_handle = metrics::global_or_default();
-
         let contents = r#"{
             "version":"2024-05-01",
             "source":"ANNA DSB test",
@@ -2121,7 +1968,6 @@ mod tests {
             isin_crosswalk_path: Some(file.path().to_path_buf()),
             ..IsoReferenceData::default()
         };
-
         let snapshots = ReferenceDataSnapshots::from_config(&config);
         let dataset = snapshots.isin_cusip();
         assert_eq!(dataset.state(), SnapshotState::Loaded);
@@ -2133,7 +1979,6 @@ mod tests {
         let record = crosswalk.by_isin("US0378331005").expect("isin present");
         assert_eq!(record.cusip.as_deref(), Some("037833100"));
         assert_eq!(record.asset_definition_id.as_deref(), Some("usd#test"));
-
         assert_eq!(
             metrics_handle
                 .iso_reference_status
@@ -2154,7 +1999,6 @@ mod tests {
             .get();
         assert!(age >= 0);
     }
-
     #[test]
     fn validate_bic_enforces_registered_entries() {
         let _guard = iso_reference_test_guard();
@@ -2170,13 +2014,11 @@ mod tests {
             bic_lei_path: Some(file.path().to_path_buf()),
             ..IsoReferenceData::default()
         };
-
         let snapshots = ReferenceDataSnapshots::from_config(&config);
         snapshots.validate_bic("DEUTDEFF").expect("validation");
         let err = snapshots.validate_bic("FOOBARXX").unwrap_err();
         assert!(matches!(err, ReferenceDataError::NotFound { .. }));
     }
-
     #[test]
     fn validation_fails_closed_when_dataset_is_missing() {
         let _guard = iso_reference_test_guard();
@@ -2211,7 +2053,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn persists_loaded_snapshots_to_cache() {
         let _guard = iso_reference_test_guard();
@@ -2222,20 +2063,16 @@ mod tests {
         }"#;
         let file = write_snapshot(contents);
         let cache_dir = TempDir::new().expect("cache dir");
-
         let config = IsoReferenceData {
             isin_crosswalk_path: Some(file.path().to_path_buf()),
             cache_dir: Some(cache_dir.path().to_path_buf()),
             ..IsoReferenceData::default()
         };
-
         let snapshots = ReferenceDataSnapshots::from_config(&config);
         assert_eq!(snapshots.isin_cusip().state(), SnapshotState::Loaded);
-
         let dataset_dir = cache_dir.path().join("isin_cusip");
         let status_path = dataset_dir.join("status.json");
         assert!(status_path.exists(), "status file missing");
-
         let status_value: Value =
             norito::json::from_str(&fs::read_to_string(&status_path).unwrap())
                 .expect("status json");
@@ -2247,7 +2084,6 @@ mod tests {
             .get("cached_file")
             .and_then(Value::as_str)
             .expect("cached file entry");
-
         let metadata_path = dataset_dir.join("2024-05-01.metadata.json");
         assert!(metadata_path.exists(), "metadata file missing");
         let metadata_value: Value =
@@ -2259,17 +2095,14 @@ mod tests {
         );
         let cached_data_path = dataset_dir.join(cached_file);
         assert!(cached_data_path.exists(), "cached dataset missing");
-
         let expected_sha = compute_sha256_hex(&cached_data_path).expect("sha256");
         assert_eq!(
             metadata_value.get("cached_sha256").and_then(Value::as_str),
             Some(expected_sha.as_str())
         );
-
         // Metrics are published to a global registry that other tests mutate concurrently,
         // so this test only verifies the cached artifacts.
     }
-
     #[test]
     fn validate_mic_flags_inactive_entries() {
         let _guard = iso_reference_test_guard();
@@ -2286,13 +2119,11 @@ mod tests {
             mic_directory_path: Some(file.path().to_path_buf()),
             ..IsoReferenceData::default()
         };
-
         let snapshots = ReferenceDataSnapshots::from_config(&config);
         snapshots.validate_mic("XNAS").expect("validation");
         let err = snapshots.validate_mic("XTBD").unwrap_err();
         assert!(matches!(err, ReferenceDataError::MicInactive { .. }));
     }
-
     #[test]
     fn loads_and_validates_securities_ledger_crosswalk_snapshots() {
         let _guard = iso_reference_test_guard();
@@ -2331,9 +2162,7 @@ mod tests {
             cash_leg_path: Some(cash_snapshot.path().to_path_buf()),
             ..IsoReferenceData::default()
         };
-
         let snapshots = ReferenceDataSnapshots::from_config(&config);
-
         snapshots
             .validate_instrument_ledger_mapping("037833100")
             .expect("instrument ledger mapping");
@@ -2347,7 +2176,6 @@ mod tests {
             .validate_cash_leg("USD", Some("APMT"))
             .expect("cash-leg mapping");
     }
-
     #[test]
     fn securities_ledger_crosswalk_validation_rejects_incomplete_rows() {
         let _guard = iso_reference_test_guard();
@@ -2386,9 +2214,7 @@ mod tests {
             cash_leg_path: Some(cash_snapshot.path().to_path_buf()),
             ..IsoReferenceData::default()
         };
-
         let snapshots = ReferenceDataSnapshots::from_config(&config);
-
         assert!(matches!(
             snapshots
                 .validate_instrument_ledger_mapping("US0378331005")

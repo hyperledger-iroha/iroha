@@ -6,41 +6,33 @@
 //! inequality has been checked.  In particular, none of these routines fall
 //! back to plaintext execution when an evaluated key or decryption share is
 //! absent.
-
-#[cfg(test)]
-use core::cmp::Ordering;
-use core::fmt;
-
-use once_cell::sync::Lazy;
-use thiserror::Error;
-
 use super::super::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256PointV1, VegaT256ScalarV1 as Scalar,
     derive_t256_generators_v1,
     sponge::{Shake256Reader, keccak256, shake256},
 };
 use super::MaskedRelaxedRandomSourceV1;
-
+#[cfg(test)]
+use core::cmp::Ordering;
+use core::fmt;
+use once_cell::sync::Lazy;
+use thiserror::Error;
 /// Fixed-size entropy owner erased on success, error, and unwind.
 ///
 /// Callers borrow the fixed array during decoding so no unmanaged array copy
 /// is created before this owner is cleared.
 struct ZeroizingRandomBytesV1<const N: usize>([u8; N]);
-
 impl<const N: usize> ZeroizingRandomBytesV1<N> {
     const fn zeroed() -> Self {
         Self([0; N])
     }
-
     fn as_mut_slice(&mut self) -> &mut [u8] {
         &mut self.0
     }
-
     const fn as_array(&self) -> &[u8; N] {
         &self.0
     }
 }
-
 impl<const N: usize> Drop for ZeroizingRandomBytesV1<N> {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -49,26 +41,20 @@ impl<const N: usize> Drop for ZeroizingRandomBytesV1<N> {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
-
 type ZeroizingScalarEntropyV1 = ZeroizingRandomBytesV1<64>;
-
 /// Move-only owner for one named secret scalar.
 struct ZeroizingScalarV1(Scalar);
-
 impl ZeroizingScalarV1 {
     const fn new(value: Scalar) -> Self {
         Self(value)
     }
-
     const fn as_ref(&self) -> &Scalar {
         &self.0
     }
-
     const fn expose_copy(&self) -> Scalar {
         self.0
     }
 }
-
 impl Drop for ZeroizingScalarV1 {
     fn drop(&mut self) {
         let scalar = core::hint::black_box(&mut self.0);
@@ -77,7 +63,6 @@ impl Drop for ZeroizingScalarV1 {
         let _ = core::hint::black_box(&mut *scalar);
     }
 }
-
 #[path = "mkhe/active.rs"]
 mod active;
 #[path = "mkhe/active_exact_binding.rs"]
@@ -184,7 +169,6 @@ mod terminal;
 mod terminal_cross_basis_ipa;
 #[path = "mkhe/wire.rs"]
 mod wire;
-
 pub use active::{
     ZkAmsMkheAbortReasonV1, ZkAmsMkheActiveCollectivePublicKeyStatementV1,
     ZkAmsMkheActiveCollectivePublicKeyWitnessV1, ZkAmsMkheActiveContributionV1,
@@ -376,7 +360,6 @@ pub use wire::{
     ZkAmsMkheProofEnvelopeWireV1, ZkAmsMkheProofKindV1, ZkAmsMkheRnsPolynomialWireV1,
     ZkAmsMkheWireBindingV1, zk_ams_mkhe_cks_statement_digest_v1,
 };
-
 const MKHE_VERSION_V1: u8 = 1;
 const MAX_PARTIES_V1: usize = 8;
 const MAX_RNS_LIMBS_V1: usize = 64;
@@ -391,7 +374,6 @@ const T256_CENTERED_MAX_BE_V1: [u8; 32] = [
     0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 ];
-
 static MKHE_AUTH_GENERATOR: Lazy<Result<VegaT256PointV1, ZkAmsMkheErrorV1>> = Lazy::new(|| {
     derive_t256_generators_v1(AUTH_GENERATOR_LABEL_V1, 1)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
@@ -399,7 +381,6 @@ static MKHE_AUTH_GENERATOR: Lazy<Result<VegaT256PointV1, ZkAmsMkheErrorV1>> = La
         .next()
         .ok_or(ZkAmsMkheErrorV1::InvalidProfile)
 });
-
 /// Failure at the canonical ZK-AMS multi-key BGV boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ZkAmsMkheErrorV1 {
@@ -458,11 +439,9 @@ pub enum ZkAmsMkheErrorV1 {
     #[error("ZK-AMS MKHE wire artifact exceeds its governed byte ceiling")]
     WireTooLarge,
 }
-
 /// Canonical participant identifier used to order every multi-key component.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ZkAmsMkhePartyIdV1([u8; PARTY_ID_BYTES_V1]);
-
 impl ZkAmsMkhePartyIdV1 {
     /// Construct a nonzero participant identifier.
     pub fn new(bytes: [u8; PARTY_ID_BYTES_V1]) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -471,13 +450,11 @@ impl ZkAmsMkhePartyIdV1 {
         }
         Ok(Self(bytes))
     }
-
     /// Return the exact identifier bytes.
     #[must_use]
     pub const fn to_bytes(self) -> [u8; PARTY_ID_BYTES_V1] {
         self.0
     }
-
     fn from_authentication_key(public_key: &[u8; 33]) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut frame = Vec::with_capacity(80);
         frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.authentication-party-id");
@@ -485,7 +462,6 @@ impl ZkAmsMkhePartyIdV1 {
         Self::new(keccak256(&frame))
     }
 }
-
 impl fmt::Debug for ZkAmsMkhePartyIdV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -494,13 +470,11 @@ impl fmt::Debug for ZkAmsMkhePartyIdV1 {
             .finish()
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PartySet {
     parties: Vec<ZkAmsMkhePartyIdV1>,
     digest: [u8; 32],
 }
-
 impl PartySet {
     fn new(parties: Vec<ZkAmsMkhePartyIdV1>) -> Result<Self, ZkAmsMkheErrorV1> {
         if parties.is_empty()
@@ -512,12 +486,10 @@ impl PartySet {
         let digest = party_set_digest(&parties)?;
         Ok(Self { parties, digest })
     }
-
     #[cfg(test)]
     fn singleton(party: ZkAmsMkhePartyIdV1) -> Self {
         Self::new(vec![party]).expect("one nonzero party is canonical")
     }
-
     #[cfg(test)]
     fn union(&self, rhs: &Self) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut parties = Vec::with_capacity(self.parties.len() + rhs.parties.len());
@@ -553,12 +525,10 @@ impl PartySet {
         }
         Self::new(parties)
     }
-
     fn index_of(&self, party: ZkAmsMkhePartyIdV1) -> Option<usize> {
         self.parties.binary_search(&party).ok()
     }
 }
-
 fn party_set_digest(parties: &[ZkAmsMkhePartyIdV1]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let count = u8::try_from(parties.len()).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?;
     let mut frame = Vec::with_capacity(40 + parties.len() * PARTY_ID_BYTES_V1);
@@ -569,11 +539,9 @@ fn party_set_digest(parties: &[ZkAmsMkhePartyIdV1]) -> Result<[u8; 32], ZkAmsMkh
     }
     Ok(keccak256(&frame))
 }
-
 struct AuthenticationSecret {
     scalar_be: [u8; 32],
 }
-
 impl AuthenticationSecret {
     fn generate<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<Self, ZkAmsMkheErrorV1> {
         for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
@@ -586,13 +554,11 @@ impl AuthenticationSecret {
         }
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     }
-
     fn scalar(&self) -> Result<ZeroizingScalarV1, ZkAmsMkheErrorV1> {
         Scalar::from_be_bytes_exact(self.scalar_be)
             .map(ZeroizingScalarV1::new)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)
     }
-
     fn public_key(&self) -> Result<[u8; 33], ZkAmsMkheErrorV1> {
         let scalar = self.scalar()?;
         auth_generator()?
@@ -600,12 +566,10 @@ impl AuthenticationSecret {
             .to_non_identity_wire_bytes()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)
     }
-
     fn party_id(&self) -> Result<ZkAmsMkhePartyIdV1, ZkAmsMkheErrorV1> {
         ZkAmsMkhePartyIdV1::from_authentication_key(&self.public_key()?)
     }
 }
-
 impl Drop for AuthenticationSecret {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.scalar_be);
@@ -614,13 +578,11 @@ impl Drop for AuthenticationSecret {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
-
 impl fmt::Debug for AuthenticationSecret {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("AuthenticationSecret([REDACTED])")
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ArtifactAuthentication {
     version: u8,
@@ -628,7 +590,6 @@ struct ArtifactAuthentication {
     public_key: [u8; 33],
     signature: [u8; SCHNORR_SIGNATURE_BYTES_V1],
 }
-
 impl ArtifactAuthentication {
     fn sign<R: MaskedRelaxedRandomSourceV1>(
         domain: &[u8],
@@ -675,7 +636,6 @@ impl ArtifactAuthentication {
         authentication.verify(domain, transcript_digest)?;
         Ok(authentication)
     }
-
     fn verify(&self, domain: &[u8], transcript_digest: [u8; 32]) -> Result<(), ZkAmsMkheErrorV1> {
         if self.version != MKHE_VERSION_V1
             || domain.is_empty()
@@ -709,14 +669,12 @@ impl ArtifactAuthentication {
         Ok(())
     }
 }
-
 fn auth_generator() -> Result<VegaT256PointV1, ZkAmsMkheErrorV1> {
     MKHE_AUTH_GENERATOR
         .as_ref()
         .copied()
         .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)
 }
-
 fn authentication_challenge(
     domain: &[u8],
     transcript_digest: [u8; 32],
@@ -737,7 +695,6 @@ fn authentication_challenge(
         .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?;
     Ok(Scalar::from_uniform_le_bytes(uniform))
 }
-
 fn random_scalar<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<ZeroizingScalarV1, ZkAmsMkheErrorV1> {
@@ -749,14 +706,12 @@ fn random_scalar<R: MaskedRelaxedRandomSourceV1>(
         uniform.as_array(),
     )))
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PlaintextModulus {
     T256,
     #[cfg(test)]
     Tiny(u64),
 }
-
 impl PlaintextModulus {
     fn digest_bytes(self) -> [u8; 32] {
         match self {
@@ -769,7 +724,6 @@ impl PlaintextModulus {
             }
         }
     }
-
     fn residue(self, modulus: u64) -> u64 {
         match self {
             Self::T256 => bytes_mod_u64(&VEGA_T256_SCALAR_MODULUS_BE_V1, modulus),
@@ -778,7 +732,6 @@ impl PlaintextModulus {
         }
     }
 }
-
 #[derive(Clone, Debug)]
 struct BgvProfile {
     profile_id: [u8; 32],
@@ -797,7 +750,6 @@ struct BgvProfile {
     max_workspace_bytes: usize,
     max_work_units: u64,
 }
-
 impl BgvProfile {
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         if self.profile_id == [0; 32]
@@ -869,7 +821,6 @@ impl BgvProfile {
         }
         Ok(())
     }
-
     fn digest(&self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.validate()?;
         let mut frame = Vec::with_capacity(256 + self.moduli.len() * 16);
@@ -922,7 +873,6 @@ impl BgvProfile {
         frame.extend_from_slice(&self.max_work_units.to_be_bytes());
         Ok(keccak256(&frame))
     }
-
     /// Digest only the algebraic and distribution parameters consumed by the
     /// concrete RLWE security analysis.
     ///
@@ -956,7 +906,6 @@ impl BgvProfile {
         );
         Ok(keccak256(&frame))
     }
-
     /// Digest only the governed deployment resource ceilings.
     fn resource_policy_digest(&self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.validate()?;
@@ -980,19 +929,16 @@ impl BgvProfile {
         Ok(keccak256(&frame))
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RnsPolynomial {
     coefficients: Vec<u64>,
 }
-
 impl RnsPolynomial {
     fn zero(profile: &BgvProfile) -> Self {
         Self {
             coefficients: vec![0; profile.ring_degree * profile.moduli.len()],
         }
     }
-
     /// Test whether every stored residue is zero without allocating a
     /// release-sized comparison polynomial.
     fn is_zero(&self) -> bool {
@@ -1000,7 +946,6 @@ impl RnsPolynomial {
             .iter()
             .all(|coefficient| *coefficient == 0)
     }
-
     fn from_flat(profile: &BgvProfile, coefficients: Vec<u64>) -> Result<Self, ZkAmsMkheErrorV1> {
         profile.validate()?;
         if coefficients.len() != profile.ring_degree * profile.moduli.len() {
@@ -1013,7 +958,6 @@ impl RnsPolynomial {
         }
         Ok(Self { coefficients })
     }
-
     fn from_signed(profile: &BgvProfile, values: &[i64]) -> Result<Self, ZkAmsMkheErrorV1> {
         if values.len() != profile.ring_degree {
             return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
@@ -1029,7 +973,6 @@ impl RnsPolynomial {
         }
         Self::from_flat(profile, coefficients)
     }
-
     #[cfg(test)]
     fn from_unsigned(profile: &BgvProfile, values: &[u64]) -> Result<Self, ZkAmsMkheErrorV1> {
         if values.len() != profile.ring_degree {
@@ -1041,7 +984,6 @@ impl RnsPolynomial {
         }
         Self::from_flat(profile, coefficients)
     }
-
     fn from_t256_plaintext_bytes(
         profile: &BgvProfile,
         values: &[[u8; 32]],
@@ -1068,7 +1010,6 @@ impl RnsPolynomial {
         }
         Self::from_flat(profile, coefficients)
     }
-
     #[cfg(test)]
     fn from_test_plaintext(profile: &BgvProfile, values: &[u64]) -> Result<Self, ZkAmsMkheErrorV1> {
         let PlaintextModulus::Tiny(plaintext_modulus) = profile.plaintext_modulus else {
@@ -1085,20 +1026,16 @@ impl RnsPolynomial {
         }
         Self::from_flat(profile, coefficients)
     }
-
     fn limb<'a>(&'a self, profile: &BgvProfile, index: usize) -> &'a [u64] {
         let start = index * profile.ring_degree;
         &self.coefficients[start..start + profile.ring_degree]
     }
-
     fn add(&self, rhs: &Self, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.binary(rhs, profile, mod_add)
     }
-
     fn sub(&self, rhs: &Self, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.binary(rhs, profile, mod_sub)
     }
-
     #[cfg(test)]
     fn negate(&self, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.validate(profile)?;
@@ -1115,7 +1052,6 @@ impl RnsPolynomial {
         }
         Ok(output)
     }
-
     #[cfg(test)]
     fn scale_gadget(&self, digit: usize, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.validate(profile)?;
@@ -1140,7 +1076,6 @@ impl RnsPolynomial {
         }
         Ok(output)
     }
-
     fn scale_plaintext_modulus(&self, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.validate(profile)?;
         let mut output = self.clone();
@@ -1157,7 +1092,6 @@ impl RnsPolynomial {
         }
         Ok(output)
     }
-
     fn mul(&self, rhs: &Self, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.validate(profile)?;
         rhs.validate(profile)?;
@@ -1182,7 +1116,6 @@ impl RnsPolynomial {
         }
         Self::from_flat(profile, coefficients)
     }
-
     fn automorphism(
         &self,
         exponent: usize,
@@ -1214,7 +1147,6 @@ impl RnsPolynomial {
         }
         Ok(output)
     }
-
     fn validate(&self, profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
         profile.validate()?;
         if self.coefficients.len() != profile.ring_degree * profile.moduli.len() {
@@ -1231,7 +1163,6 @@ impl RnsPolynomial {
         }
         Ok(())
     }
-
     fn binary(
         &self,
         rhs: &Self,
@@ -1254,11 +1185,9 @@ impl RnsPolynomial {
         Self::from_flat(profile, output)
     }
 }
-
 struct SecretPolynomial {
     coefficients: Vec<i64>,
 }
-
 impl SecretPolynomial {
     fn sample_ternary<R: MaskedRelaxedRandomSourceV1>(
         profile: &BgvProfile,
@@ -1292,7 +1221,6 @@ impl SecretPolynomial {
         }
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     }
-
     fn sample_error<R: MaskedRelaxedRandomSourceV1>(
         profile: &BgvProfile,
         random: &mut R,
@@ -1321,11 +1249,9 @@ impl SecretPolynomial {
         }
         Ok(owner)
     }
-
     fn as_rns(&self, profile: &BgvProfile) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
         RnsPolynomial::from_signed(profile, &self.coefficients)
     }
-
     #[allow(
         dead_code,
         reason = "used by the private fail-closed collective evaluated-key generator"
@@ -1344,7 +1270,6 @@ impl SecretPolynomial {
                 .collect(),
         })
     }
-
     #[allow(
         dead_code,
         reason = "used by the private fail-closed collective evaluated-key generator"
@@ -1376,7 +1301,6 @@ impl SecretPolynomial {
         Ok(Self { coefficients })
     }
 }
-
 impl Drop for SecretPolynomial {
     fn drop(&mut self) {
         let coefficients = core::hint::black_box(&mut self.coefficients);
@@ -1385,20 +1309,17 @@ impl Drop for SecretPolynomial {
         let _ = core::hint::black_box(&mut *coefficients);
     }
 }
-
 impl fmt::Debug for SecretPolynomial {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SecretPolynomial([REDACTED])")
     }
 }
-
 #[cfg(test)]
 struct IndependentSecretKey {
     party: ZkAmsMkhePartyIdV1,
     profile_digest: [u8; 32],
     secret: SecretPolynomial,
 }
-
 #[cfg(test)]
 impl fmt::Debug for IndependentSecretKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1410,7 +1331,6 @@ impl fmt::Debug for IndependentSecretKey {
             .finish()
     }
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct IndependentPublicKey {
@@ -1420,7 +1340,6 @@ struct IndependentPublicKey {
     a: RnsPolynomial,
     b: RnsPolynomial,
 }
-
 #[cfg(test)]
 fn independent_keygen<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
@@ -1456,7 +1375,6 @@ fn independent_keygen<R: MaskedRelaxedRandomSourceV1>(
         public,
     ))
 }
-
 #[cfg(test)]
 fn validate_public_key(
     profile: &BgvProfile,
@@ -1472,7 +1390,6 @@ fn validate_public_key(
     }
     Ok(())
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LinearCiphertext {
@@ -1483,7 +1400,6 @@ struct LinearCiphertext {
     constant: RnsPolynomial,
     linear: Vec<RnsPolynomial>,
 }
-
 #[cfg(test)]
 impl LinearCiphertext {
     fn validate(&self, profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1506,7 +1422,6 @@ impl LinearCiphertext {
         }
         Ok(())
     }
-
     fn extend(&self, target: &PartySet, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.validate(profile)?;
         if self
@@ -1533,7 +1448,6 @@ impl LinearCiphertext {
             linear,
         })
     }
-
     fn add(&self, rhs: &Self, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         self.validate(profile)?;
         rhs.validate(profile)?;
@@ -1561,7 +1475,6 @@ impl LinearCiphertext {
         output.validate(profile)?;
         Ok(output)
     }
-
     fn mul_plaintext(
         &self,
         plaintext: &RnsPolynomial,
@@ -1582,7 +1495,6 @@ impl LinearCiphertext {
                 .collect::<Result<Vec<_>, _>>()?,
         })
     }
-
     fn mul(
         &self,
         rhs: &Self,
@@ -1643,7 +1555,6 @@ impl LinearCiphertext {
         Ok(output)
     }
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QuadraticComponent {
@@ -1651,7 +1562,6 @@ struct QuadraticComponent {
     right: ZkAmsMkhePartyIdV1,
     value: RnsPolynomial,
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QuadraticCiphertext {
@@ -1663,7 +1573,6 @@ struct QuadraticCiphertext {
     linear: Vec<RnsPolynomial>,
     quadratic: Vec<QuadraticComponent>,
 }
-
 #[cfg(test)]
 impl QuadraticCiphertext {
     fn validate(&self, profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1704,14 +1613,12 @@ impl QuadraticCiphertext {
         Ok(())
     }
 }
-
 #[cfg(test)]
 const RKG_ROUND_ONE_AUTH_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rkg-round-one";
 #[cfg(test)]
 const RKG_ROUND_TWO_AUTH_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rkg-round-two";
 #[cfg(test)]
 const GALOIS_KEY_AUTH_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.galois-key";
-
 #[cfg(test)]
 struct RkgEphemeralState {
     profile_digest: [u8; 32],
@@ -1724,7 +1631,6 @@ struct RkgEphemeralState {
     integrity_digest: [u8; 32],
     ephemeral: Vec<SecretPolynomial>,
 }
-
 #[cfg(test)]
 impl fmt::Debug for RkgEphemeralState {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1744,14 +1650,12 @@ impl fmt::Debug for RkgEphemeralState {
             .finish()
     }
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RkgRoundOneEntry {
     h0: RnsPolynomial,
     h1: RnsPolynomial,
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RkgRoundOneContribution {
@@ -1765,7 +1669,6 @@ struct RkgRoundOneContribution {
     entries: Vec<RkgRoundOneEntry>,
     authentication: ArtifactAuthentication,
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RkgRoundOneAggregate {
@@ -1779,7 +1682,6 @@ struct RkgRoundOneAggregate {
     contribution_digests: Vec<[u8; 32]>,
     digest: [u8; 32],
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RkgRoundTwoContribution {
@@ -1794,7 +1696,6 @@ struct RkgRoundTwoContribution {
     k0: Vec<RnsPolynomial>,
     authentication: ArtifactAuthentication,
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProductRelinearizationKey {
@@ -1809,7 +1710,6 @@ struct ProductRelinearizationKey {
     digits: Vec<LinearCiphertext>,
     digest: [u8; 32],
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GaloisKey {
@@ -1821,7 +1721,6 @@ struct GaloisKey {
     digits: Vec<LinearCiphertext>,
     authentication: ArtifactAuthentication,
 }
-
 #[cfg(test)]
 fn generate_galois_key<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
@@ -1883,7 +1782,6 @@ fn generate_galois_key<R: MaskedRelaxedRandomSourceV1>(
     validate_galois_key(profile, &key)?;
     Ok(key)
 }
-
 #[cfg(test)]
 fn validate_galois_key(profile: &BgvProfile, key: &GaloisKey) -> Result<(), ZkAmsMkheErrorV1> {
     let twice_degree = profile
@@ -1912,7 +1810,6 @@ fn validate_galois_key(profile: &BgvProfile, key: &GaloisKey) -> Result<(), ZkAm
     key.authentication
         .verify(GALOIS_KEY_AUTH_DOMAIN_V1, galois_key_digest(key, profile)?)
 }
-
 #[cfg(test)]
 fn rotate_ciphertext(
     profile: &BgvProfile,
@@ -1976,7 +1873,6 @@ fn rotate_ciphertext(
     output.validate(profile)?;
     Ok(output)
 }
-
 #[cfg(test)]
 fn rkg_round_one<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
@@ -2081,7 +1977,6 @@ fn rkg_round_one<R: MaskedRelaxedRandomSourceV1>(
     state.integrity_digest = rkg_state_integrity_digest(&state, profile)?;
     Ok((state, contribution))
 }
-
 #[cfg(test)]
 fn validate_rkg_round_one_contribution(
     profile: &BgvProfile,
@@ -2116,7 +2011,6 @@ fn validate_rkg_round_one_contribution(
         rkg_round_one_contribution_digest(contribution, profile)?,
     )
 }
-
 #[cfg(test)]
 fn aggregate_rkg_round_one(
     profile: &BgvProfile,
@@ -2176,7 +2070,6 @@ fn aggregate_rkg_round_one(
     validate_rkg_round_one_aggregate(profile, &aggregate)?;
     Ok(aggregate)
 }
-
 #[cfg(test)]
 fn validate_rkg_round_one_aggregate(
     profile: &BgvProfile,
@@ -2205,7 +2098,6 @@ fn validate_rkg_round_one_aggregate(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn rkg_round_two<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
@@ -2292,7 +2184,6 @@ fn rkg_round_two<R: MaskedRelaxedRandomSourceV1>(
     validate_rkg_round_two_contribution(profile, aggregate, &contribution)?;
     Ok(contribution)
 }
-
 #[cfg(test)]
 fn validate_rkg_round_two_contribution(
     profile: &BgvProfile,
@@ -2324,7 +2215,6 @@ fn validate_rkg_round_two_contribution(
         rkg_round_two_contribution_digest(contribution, profile)?,
     )
 }
-
 #[cfg(test)]
 fn aggregate_rkg_round_two(
     profile: &BgvProfile,
@@ -2377,7 +2267,6 @@ fn aggregate_rkg_round_two(
     validate_product_relinearization_key(profile, &key)?;
     Ok(key)
 }
-
 #[cfg(test)]
 fn validate_product_relinearization_key(
     profile: &BgvProfile,
@@ -2412,7 +2301,6 @@ fn validate_product_relinearization_key(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn relinearize(
     profile: &BgvProfile,
@@ -2479,7 +2367,6 @@ fn relinearize(
     output.validate(profile)?;
     Ok(output)
 }
-
 #[cfg(test)]
 fn gadget_decompose(
     profile: &BgvProfile,
@@ -2559,7 +2446,6 @@ fn gadget_decompose(
         .map(|values| RnsPolynomial::from_signed(profile, values))
         .collect()
 }
-
 #[cfg(test)]
 fn derive_rkg_common_a(
     profile: &BgvProfile,
@@ -2589,7 +2475,6 @@ fn derive_rkg_common_a(
     );
     derive_uniform_rns_from_context(profile, b"iroha.zk-ams.v1.mkhe.rkg-common-a", &context)
 }
-
 fn derive_uniform_rns_from_context(
     profile: &BgvProfile,
     domain: &[u8],
@@ -2641,7 +2526,6 @@ fn derive_uniform_rns_from_context(
     }
     RnsPolynomial::from_flat(profile, coefficients)
 }
-
 #[cfg(test)]
 fn checked_rkg_round_one_contribution_bytes(
     profile: &BgvProfile,
@@ -2652,7 +2536,6 @@ fn checked_rkg_round_one_contribution_bytes(
         .and_then(|bytes| bytes.checked_add(2 * profile.gadget_digits * polynomial_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 fn checked_rkg_round_two_contribution_bytes(
     profile: &BgvProfile,
@@ -2665,7 +2548,6 @@ fn checked_rkg_round_two_contribution_bytes(
         .and_then(|bytes| bytes.checked_add(profile.gadget_digits * polynomial_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 fn checked_product_relinearization_key_bytes(
     profile: &BgvProfile,
@@ -2682,7 +2564,6 @@ fn checked_product_relinearization_key_bytes(
         })
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 fn checked_galois_key_bytes(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErrorV1> {
     1_usize
@@ -2694,7 +2575,6 @@ fn checked_galois_key_bytes(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErro
         })
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 fn rkg_round_one_contribution_digest(
     contribution: &RkgRoundOneContribution,
@@ -2712,7 +2592,6 @@ fn rkg_round_one_contribution_digest(
     hash_rkg_entries(&mut hash, &contribution.entries, profile)?;
     Ok(hash.finalize())
 }
-
 #[cfg(test)]
 fn rkg_state_integrity_digest(
     state: &RkgEphemeralState,
@@ -2743,7 +2622,6 @@ fn rkg_state_integrity_digest(
     }
     Ok(hash.finalize())
 }
-
 #[cfg(test)]
 fn rkg_round_one_aggregate_digest(
     aggregate: &RkgRoundOneAggregate,
@@ -2763,7 +2641,6 @@ fn rkg_round_one_aggregate_digest(
     hash_rkg_entries(&mut hash, &aggregate.entries, profile)?;
     Ok(hash.finalize())
 }
-
 #[cfg(test)]
 fn rkg_round_two_contribution_digest(
     contribution: &RkgRoundTwoContribution,
@@ -2784,7 +2661,6 @@ fn rkg_round_two_contribution_digest(
     }
     Ok(hash.finalize())
 }
-
 #[cfg(test)]
 fn product_relinearization_key_digest(
     key: &ProductRelinearizationKey,
@@ -2807,7 +2683,6 @@ fn product_relinearization_key_digest(
     }
     Ok(hash.finalize())
 }
-
 #[cfg(test)]
 fn galois_key_digest(key: &GaloisKey, profile: &BgvProfile) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut hash = super::super::sponge::Keccak256::new();
@@ -2826,7 +2701,6 @@ fn galois_key_digest(key: &GaloisKey, profile: &BgvProfile) -> Result<[u8; 32], 
     }
     Ok(hash.finalize())
 }
-
 #[cfg(test)]
 fn hash_rkg_entries(
     hash: &mut super::super::sponge::Keccak256,
@@ -2844,7 +2718,6 @@ fn hash_rkg_entries(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn hash_linear_ciphertext(
     hash: &mut super::super::sponge::Keccak256,
@@ -2862,7 +2735,6 @@ fn hash_linear_ciphertext(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn hash_rns_polynomial(
     hash: &mut super::super::sponge::Keccak256,
@@ -2880,7 +2752,6 @@ fn hash_rns_polynomial(
     }
     Ok(())
 }
-
 fn checked_rns_polynomial_bytes(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErrorV1> {
     // Four bytes encode the exact flat coefficient count in the canonical
     // wire, followed by limb-major u64 residues.
@@ -2891,7 +2762,6 @@ fn checked_rns_polynomial_bytes(profile: &BgvProfile) -> Result<usize, ZkAmsMkhe
         .and_then(|bytes| bytes.checked_add(core::mem::size_of::<u32>()))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn checked_gadget_decomposition_workspace_bytes(
     profile: &BgvProfile,
 ) -> Result<usize, ZkAmsMkheErrorV1> {
@@ -2926,7 +2796,6 @@ fn checked_gadget_decomposition_workspace_bytes(
         .and_then(|bytes| bytes.checked_add(reconstruction))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn checked_hybrid_streaming_workspace_bytes(
     profile: &BgvProfile,
 ) -> Result<usize, ZkAmsMkheErrorV1> {
@@ -2952,7 +2821,6 @@ fn checked_hybrid_streaming_workspace_bytes(
         .and_then(|bytes| bytes.checked_add(signed_scratch))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn checked_linear_ciphertext_bytes(
     profile: &BgvProfile,
     party_count: usize,
@@ -2975,7 +2843,6 @@ fn checked_linear_ciphertext_bytes(
         })
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 fn checked_quadratic_ciphertext_bytes(
     profile: &BgvProfile,
@@ -3005,7 +2872,6 @@ fn checked_quadratic_ciphertext_bytes(
         })
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn ring_multiplication_work(profile: &BgvProfile) -> Result<u64, ZkAmsMkheErrorV1> {
     u64::try_from(profile.ring_degree)
         .ok()
@@ -3013,7 +2879,6 @@ fn ring_multiplication_work(profile: &BgvProfile) -> Result<u64, ZkAmsMkheErrorV
         .and_then(|work| work.checked_mul(profile.moduli.len() as u64))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn phase23_max_composed_rotation_key_switch_count(
     slot_count: usize,
 ) -> Result<usize, ZkAmsMkheErrorV1> {
@@ -3026,7 +2891,6 @@ fn phase23_max_composed_rotation_key_switch_count(
         .map(|value| value / 2)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 fn phase23_rotation_ring_multiplication_count(
     profile: &BgvProfile,
@@ -3042,7 +2906,6 @@ fn phase23_rotation_ring_multiplication_count(
         .and_then(|value| value.checked_mul(key_switch_count))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn checked_ring_multiplication_work(
     profile: &BgvProfile,
     multiplication_count: usize,
@@ -3058,7 +2921,6 @@ fn checked_ring_multiplication_work(
     }
     Ok(())
 }
-
 fn checked_coefficient_work(
     profile: &BgvProfile,
     polynomial_passes: usize,
@@ -3074,7 +2936,6 @@ fn checked_coefficient_work(
     }
     Ok(())
 }
-
 fn checked_rng_bytes(profile: &BgvProfile, maximum_bytes: usize) -> Result<(), ZkAmsMkheErrorV1> {
     let work =
         u64::try_from(maximum_bytes).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
@@ -3083,7 +2944,6 @@ fn checked_rng_bytes(profile: &BgvProfile, maximum_bytes: usize) -> Result<(), Z
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn encrypt<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
@@ -3124,7 +2984,6 @@ fn encrypt<R: MaskedRelaxedRandomSourceV1>(
     output.validate(profile)?;
     Ok(output)
 }
-
 #[cfg(test)]
 fn decrypt_polynomial(
     profile: &BgvProfile,
@@ -3153,7 +3012,6 @@ fn decrypt_polynomial(
     }
     Ok(value)
 }
-
 #[cfg(test)]
 fn decrypt_test_plaintext(
     profile: &BgvProfile,
@@ -3163,7 +3021,6 @@ fn decrypt_test_plaintext(
     let polynomial = decrypt_polynomial(profile, ciphertext, secrets)?;
     reduce_test_polynomial(profile, &polynomial)
 }
-
 #[cfg(test)]
 fn decrypt_quadratic_test_plaintext(
     profile: &BgvProfile,
@@ -3205,7 +3062,6 @@ fn decrypt_quadratic_test_plaintext(
     }
     reduce_test_polynomial(profile, &value)
 }
-
 #[cfg(test)]
 fn assert_test_evaluation_key_equation(
     profile: &BgvProfile,
@@ -3246,7 +3102,6 @@ fn assert_test_evaluation_key_equation(
         );
     }
 }
-
 #[cfg(test)]
 fn test_bilinear_key_noise_bound(profile: &BgvProfile, party_count: u64) -> u64 {
     let degree = u64::try_from(profile.ring_degree).unwrap();
@@ -3269,7 +3124,6 @@ fn test_bilinear_key_noise_bound(profile: &BgvProfile, party_count: u64) -> u64 
         })
         .unwrap()
 }
-
 #[cfg(test)]
 fn reduce_test_polynomial(
     profile: &BgvProfile,
@@ -3303,7 +3157,6 @@ fn reduce_test_polynomial(
         })
         .collect()
 }
-
 #[cfg(test)]
 fn sample_uniform_rns<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
@@ -3324,7 +3177,6 @@ fn sample_uniform_rns<R: MaskedRelaxedRandomSourceV1>(
     }
     RnsPolynomial::from_flat(profile, coefficients)
 }
-
 fn random_byte<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<u8, ZkAmsMkheErrorV1> {
     let mut byte = ZeroizingRandomBytesV1::<1>::zeroed();
     random
@@ -3332,7 +3184,6 @@ fn random_byte<R: MaskedRelaxedRandomSourceV1>(random: &mut R) -> Result<u8, ZkA
         .map_err(|_| ZkAmsMkheErrorV1::RandomUnavailable)?;
     Ok(byte.as_array()[0])
 }
-
 fn sample_below<R: MaskedRelaxedRandomSourceV1>(
     modulus: u64,
     random: &mut R,
@@ -3356,7 +3207,6 @@ fn sample_below<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
-
 fn signed_mod(value: i64, modulus: u64) -> u64 {
     if value >= 0 {
         value as u64 % modulus
@@ -3369,23 +3219,19 @@ fn signed_mod(value: i64, modulus: u64) -> u64 {
         }
     }
 }
-
 fn mod_add(left: u64, right: u64, modulus: u64) -> u64 {
     let sum = left + right;
     let (reduced, borrow) = sum.overflowing_sub(modulus);
     let mask = 0_u64.wrapping_sub(u64::from(borrow));
     (reduced & !mask) | (sum & mask)
 }
-
 fn mod_sub(left: u64, right: u64, modulus: u64) -> u64 {
     let (difference, borrow) = left.overflowing_sub(right);
     difference.wrapping_add(modulus & 0_u64.wrapping_sub(u64::from(borrow)))
 }
-
 fn mod_mul(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) * u128::from(right)) % u128::from(modulus)) as u64
 }
-
 fn mod_pow(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     let mut result = 1_u64;
     while exponent != 0 {
@@ -3397,14 +3243,12 @@ fn mod_pow(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     }
     result
 }
-
 fn mod_inverse(value: u64, modulus: u64) -> Option<u64> {
     if value == 0 || modulus < 2 {
         return None;
     }
     Some(mod_pow(value, modulus - 2, modulus))
 }
-
 fn is_prime_u64(value: u64) -> bool {
     if value < 2 {
         return false;
@@ -3442,7 +3286,6 @@ fn is_prime_u64(value: u64) -> bool {
     }
     true
 }
-
 fn bit_reverse_permute(values: &mut [u64]) {
     let mut target = 0_usize;
     for index in 1..values.len() {
@@ -3457,7 +3300,6 @@ fn bit_reverse_permute(values: &mut [u64]) {
         }
     }
 }
-
 fn cyclic_ntt(values: &mut [u64], root: u64, modulus: u64) {
     bit_reverse_permute(values);
     let mut width = 2;
@@ -3476,7 +3318,6 @@ fn cyclic_ntt(values: &mut [u64], root: u64, modulus: u64) {
         width <<= 1;
     }
 }
-
 fn inverse_cyclic_ntt(values: &mut [u64], root: u64, modulus: u64) -> Result<(), ZkAmsMkheErrorV1> {
     let inverse_root = mod_inverse(root, modulus).ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
     cyclic_ntt(values, inverse_root, modulus);
@@ -3487,7 +3328,6 @@ fn inverse_cyclic_ntt(values: &mut [u64], root: u64, modulus: u64) -> Result<(),
     }
     Ok(())
 }
-
 fn negacyclic_multiply(
     left: &[u64],
     right: &[u64],
@@ -3520,7 +3360,6 @@ fn negacyclic_multiply(
     }
     Ok(left_twisted)
 }
-
 fn bytes_mod_u64(bytes: &[u8], modulus: u64) -> u64 {
     bytes.iter().fold(0_u64, |accumulator, byte| {
         mod_add(
@@ -3530,7 +3369,6 @@ fn bytes_mod_u64(bytes: &[u8], modulus: u64) -> u64 {
         )
     })
 }
-
 fn t256_centered_residue_with_modulus_residue(
     value: &[u8; 32],
     modulus: u64,
@@ -3546,27 +3384,22 @@ fn t256_centered_residue_with_modulus_residue(
         mod_sub(residue, plaintext_modulus_residue, modulus)
     }
 }
-
 const WIDE_LIMBS: usize = MAX_RNS_LIMBS_V1;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct WideUint {
     limbs: [u64; WIDE_LIMBS],
 }
-
 impl WideUint {
     const fn zero() -> Self {
         Self {
             limbs: [0; WIDE_LIMBS],
         }
     }
-
     const fn one() -> Self {
         let mut limbs = [0; WIDE_LIMBS];
         limbs[0] = 1;
         Self { limbs }
     }
-
     fn checked_mul_u64(self, rhs: u64) -> Option<Self> {
         let mut output = [0_u64; WIDE_LIMBS];
         let mut carry = 0_u128;
@@ -3577,7 +3410,6 @@ impl WideUint {
         }
         (carry == 0).then_some(Self { limbs: output })
     }
-
     fn checked_add_mul_u64(self, multiplicand: Self, scalar: u64) -> Option<Self> {
         let product = multiplicand.checked_mul_u64(scalar)?;
         let mut output = [0_u64; WIDE_LIMBS];
@@ -3589,7 +3421,6 @@ impl WideUint {
         }
         (carry == 0).then_some(Self { limbs: output })
     }
-
     fn checked_sub(self, rhs: Self) -> Option<Self> {
         let mut output = [0_u64; WIDE_LIMBS];
         let mut borrow = false;
@@ -3601,7 +3432,6 @@ impl WideUint {
         }
         (!borrow).then_some(Self { limbs: output })
     }
-
     fn shr_one(self) -> Self {
         let mut output = [0_u64; WIDE_LIMBS];
         let mut carry = 0_u64;
@@ -3611,13 +3441,11 @@ impl WideUint {
         }
         Self { limbs: output }
     }
-
     fn mod_u64(self, modulus: u64) -> u64 {
         self.limbs.iter().rev().fold(0_u64, |remainder, limb| {
             ((u128::from(remainder) << 64 | u128::from(*limb)) % u128::from(modulus)) as u64
         })
     }
-
     fn bit_len(self) -> usize {
         self.limbs
             .iter()
@@ -3626,7 +3454,6 @@ impl WideUint {
                 index * 64 + (64 - self.limbs[index].leading_zeros() as usize)
             })
     }
-
     #[allow(
         dead_code,
         reason = "used by the private fail-closed seekable evaluated-key runtime"
@@ -3656,7 +3483,6 @@ impl WideUint {
         }
         Ok(value & ((1_u64 << width) - 1))
     }
-
     fn crt(residues: &[u64], moduli: &[u64]) -> Result<Self, ZkAmsMkheErrorV1> {
         if residues.is_empty() || residues.len() != moduli.len() || residues.len() > WIDE_LIMBS {
             return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
@@ -3682,11 +3508,9 @@ impl WideUint {
         Ok(value)
     }
 }
-
 fn modulus_product_bit_len(moduli: &[u64]) -> Result<usize, ZkAmsMkheErrorV1> {
     Ok(modulus_product(moduli)?.bit_len())
 }
-
 fn modulus_product(moduli: &[u64]) -> Result<WideUint, ZkAmsMkheErrorV1> {
     let mut product = WideUint::one();
     for &modulus in moduli {
@@ -3696,15 +3520,12 @@ fn modulus_product(moduli: &[u64]) -> Result<WideUint, ZkAmsMkheErrorV1> {
     }
     Ok(product)
 }
-
 #[cfg(test)]
 mod tests {
     use super::super::MaskedRelaxedRandomErrorV1;
     use super::*;
-
     const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
     const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
-
     fn test_profile() -> BgvProfile {
         BgvProfile {
             profile_id: [0x51; 32],
@@ -3724,12 +3545,10 @@ mod tests {
             max_work_units: 1 << 20,
         }
     }
-
     struct KatRandom {
         state: [u8; 32],
         counter: u64,
     }
-
     impl KatRandom {
         fn new(label: &[u8]) -> Self {
             Self {
@@ -3738,7 +3557,6 @@ mod tests {
             }
         }
     }
-
     impl MaskedRelaxedRandomSourceV1 for KatRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             let mut written = 0;
@@ -3756,7 +3574,6 @@ mod tests {
             Ok(())
         }
     }
-
     fn schoolbook_negacyclic(left: &[u64], right: &[u64], modulus: u64) -> Vec<u64> {
         let mut output = vec![0_u64; left.len()];
         for (left_index, &left_value) in left.iter().enumerate() {
@@ -3773,7 +3590,6 @@ mod tests {
         }
         output
     }
-
     fn generate_product_key(
         profile: &BgvProfile,
         party_set: &PartySet,
@@ -3815,7 +3631,6 @@ mod tests {
             .collect::<Vec<_>>();
         aggregate_rkg_round_two(profile, &aggregate, &second).expect("complete product key")
     }
-
     #[test]
     fn profile_primality_roots_and_crt_are_exact() {
         let profile = test_profile();
@@ -3832,7 +3647,6 @@ mod tests {
             value
         );
     }
-
     #[test]
     fn wide_bit_extraction_accepts_1_through_63_and_rejects_every_boundary_overrun() {
         let mut value = WideUint::zero();
@@ -3867,7 +3681,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidProfile)
         );
     }
-
     #[test]
     fn centered_t256_lift_boundaries_and_automorphism_are_exact() {
         const HALF: [u8; 32] = T256_CENTERED_MAX_BE_V1;
@@ -3884,7 +3697,6 @@ mod tests {
         let zero = [0_u8; 32];
         let mut one = [0_u8; 32];
         one[31] = 1;
-
         for &modulus in manifest::RELEASE_MODULI_V1.iter() {
             let p_residue = bytes_mod_u64(&VEGA_T256_SCALAR_MODULUS_BE_V1, modulus);
             assert_eq!(
@@ -3917,7 +3729,6 @@ mod tests {
                 "the two centered boundary representatives must be exact negatives"
             );
         }
-
         let mut profile = test_profile();
         profile.plaintext_modulus = PlaintextModulus::T256;
         let values = [
@@ -3940,7 +3751,6 @@ mod tests {
                 );
             }
         }
-
         let exponent = 5_usize;
         let mut transformed_values = [[0_u8; 32]; 8];
         for (index, value) in values.iter().enumerate() {
@@ -3956,7 +3766,6 @@ mod tests {
             lifted.automorphism(exponent, &profile).unwrap(),
             RnsPolynomial::from_t256_plaintext_bytes(&profile, &transformed_values).unwrap()
         );
-
         let mut noncanonical = [zero; 8];
         noncanonical[0] = VEGA_T256_SCALAR_MODULUS_BE_V1;
         assert_eq!(
@@ -3969,7 +3778,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPolynomial)
         );
     }
-
     #[test]
     fn frozen_release_manifest_validates_with_certified_security_but_open_release_gates() {
         let manifest = zk_ams_mkhe_release_manifest_v1().unwrap();
@@ -3994,7 +3802,6 @@ mod tests {
         assert_ne!(manifest.active_exact_binding_audit_digest, [0; 32]);
         assert_ne!(manifest.decryption_resource_evidence_digest, [0; 32]);
         assert_eq!(manifest.release_kat_digest, [0; 32]);
-
         let noise = zk_ams_mkhe_noise_certificate_v1().unwrap();
         assert_eq!(noise.independent_fresh_residual_bits, 278);
         assert_eq!(noise.collective_ingress_residual_bits, 411);
@@ -4011,7 +3818,6 @@ mod tests {
         assert_eq!(noise.decryption_smudge_quotient_bits, 1_855);
         assert_eq!(noise.final_decryption_residual_bits, 2_115);
         assert_eq!(noise.correctness_margin_bits, 164);
-
         let security = zk_ams_mkhe_security_candidate_v1().unwrap();
         assert_eq!(security.ring_degree, 131_072);
         assert_eq!(security.ciphertext_modulus_bits, 2_280);
@@ -4026,7 +3832,6 @@ mod tests {
             manifest.security_candidate_input_digest,
             zk_ams_mkhe_security_candidate_input_digest_v1().unwrap()
         );
-
         let resource = zk_ams_mkhe_resource_certificate_v1().unwrap();
         assert_eq!(resource.governed_roster_wire_bytes, 302);
         assert_eq!(resource.rns_polynomial_wire_bytes, 39_845_892);
@@ -4053,7 +3858,6 @@ mod tests {
             manifest.resource_certificate_digest,
             zk_ams_mkhe_resource_certificate_digest_v1().unwrap()
         );
-
         let phase23 = zk_ams_phase23_equation_certificate_v1();
         assert!(phase23.encrypted_sparse_maps_complete);
         assert!(phase23.encrypted_cross_term_complete);
@@ -4064,7 +3868,6 @@ mod tests {
         assert_eq!(phase23.hidden_mask_proof_blocker_mask, 0b1111);
         assert_ne!(phase23.hidden_mask_proof_audit_digest, [0; 32]);
         assert!(!phase23.is_complete());
-
         assert_ne!(zk_ams_mkhe_manifest_digest_v1().unwrap(), [0; 32]);
         assert_ne!(zk_ams_mkhe_readiness_digest_v1().unwrap(), [0; 32]);
         let readiness = zk_ams_mkhe_readiness_v1().unwrap();
@@ -4086,7 +3889,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
         );
     }
-
     #[test]
     fn ntt_matches_independent_schoolbook_negacyclic_kat() {
         let profile = test_profile();
@@ -4102,7 +3904,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn centered_balanced_gadget_decomposition_reconstructs_every_digit() {
         let profile = test_profile();
@@ -4129,7 +3930,6 @@ mod tests {
             first_canonical > ciphertext_modulus.shr_one(),
             "negative centered coefficients must exercise the canonical interval above Q/2"
         );
-
         let decomposition = gadget_decompose(&profile, &polynomial).unwrap();
         assert_eq!(decomposition.len(), profile.gadget_digits);
         for (digit, polynomial_digit) in decomposition.iter().enumerate() {
@@ -4142,7 +3942,6 @@ mod tests {
                 );
             }
         }
-
         let base = 1_u64 << profile.gadget_base_log;
         for (limb, &modulus) in profile.moduli.iter().enumerate() {
             let mut power = 1_u64;
@@ -4168,7 +3967,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn artifact_authentication_binds_party_domain_and_transcript() {
         let mut random = KatRandom::new(b"zk-ams-mkhe-authentication-kat");
@@ -4184,7 +3982,6 @@ mod tests {
         authentication
             .verify(b"zk-ams-mkhe-test-artifact", digest)
             .unwrap();
-
         let mut altered_signature = authentication.clone();
         altered_signature.signature[64] ^= 1;
         assert_eq!(
@@ -4206,7 +4003,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidAuthentication)
         );
     }
-
     #[test]
     fn bilinear_rkg_rejects_incomplete_reordered_spliced_and_rogue_rounds() {
         let profile = test_profile();
@@ -4248,7 +4044,6 @@ mod tests {
             states.push(state);
             first.push(contribution);
         }
-
         assert!(
             aggregate_rkg_round_one(
                 &profile,
@@ -4343,7 +4138,6 @@ mod tests {
             .is_err(),
             "noncanonical H residue must fail"
         );
-
         let aggregate = aggregate_rkg_round_one(
             &profile,
             &target_set,
@@ -4369,7 +4163,6 @@ mod tests {
             "round-two must reject an ephemeral U state altered after its authenticated round one"
         );
     }
-
     #[test]
     fn independent_keys_encrypt_add_multiply_and_enforce_canonical_key_union() {
         let profile = test_profile();
@@ -4404,7 +4197,6 @@ mod tests {
         assert_eq!(product.quadratic[2].left, party_b);
         assert_eq!(product.quadratic[2].right, party_b);
     }
-
     #[test]
     fn authenticated_bilinear_rkg_relinearizes_self_and_pair_products_exactly() {
         let profile = test_profile();
@@ -4519,7 +4311,6 @@ mod tests {
             reduce_test_polynomial(&profile, &expected_bb).unwrap(),
             "right self-square RKG digit zero is within the proven no-wrap bound"
         );
-
         let left_values = [1, 2, 3, 4, 5, 6, 7, 8];
         let right_values = [8, 7, 6, 5, 4, 3, 2, 1];
         let left = encrypt(
@@ -4551,7 +4342,6 @@ mod tests {
             "direct bilinear RKG must relinearize without any division in R_Q"
         );
     }
-
     #[test]
     fn authenticated_galois_key_rotates_and_rejects_missing_duplicate_or_spliced_keys() {
         let profile = test_profile();
@@ -4602,16 +4392,13 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidAuthentication)
         );
     }
-
     struct ConstantRandom(u8);
-
     impl MaskedRelaxedRandomSourceV1 for ConstantRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             destination.fill(self.0);
             Ok(())
         }
     }
-
     #[test]
     fn hostile_constant_entropy_hits_hard_retry_ceilings() {
         let profile = test_profile();
@@ -4628,7 +4415,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::RandomUnavailable)
         );
     }
-
     #[test]
     fn malformed_profiles_polynomials_and_party_sets_fail_closed() {
         let profile = test_profile();

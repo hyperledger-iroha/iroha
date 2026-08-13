@@ -10,7 +10,6 @@ impl QueuePlanJournal {
     ) -> io::Result<QueuePlanStartupReplayReceiptV1> {
         self.observe_startup_replay_receipt_with_finalized_absence(phases, &[])
     }
-
     /// Validate active V6 phases and already-finalized carrier keys against one
     /// immutable V4 journal snapshot.
     ///
@@ -38,7 +37,6 @@ impl QueuePlanJournal {
                 "queue-plan startup phase coverage exceeds the configured owner bound",
             ));
         }
-
         let mut owner_hashes = BTreeSet::new();
         let mut entrypoints = BTreeSet::new();
         for phase in phases {
@@ -88,7 +86,6 @@ impl QueuePlanJournal {
                 ));
             }
         }
-
         let mut replay = self.prepare_replay_with_removed_entrypoints(Some(&entrypoints))?;
         replay.verify_snapshot_content()?;
         for phase in phases {
@@ -127,7 +124,6 @@ impl QueuePlanJournal {
                 removed.validate_global_admission_for_reservation_commit(key)?;
             }
         }
-
         let live_claims =
             replay
                 .live_positions

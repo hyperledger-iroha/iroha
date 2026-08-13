@@ -1,7 +1,5 @@
 //! This module contains [`Peer`] structure and related implementations and traits implementations.
-
 use std::str::FromStr;
-
 use derive_more::Constructor;
 use iroha_crypto::PublicKey;
 use iroha_data_model_derive::model;
@@ -9,19 +7,15 @@ use iroha_primitives::addr::SocketAddr;
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use norito::literal;
-
 pub use self::model::*;
 use crate::{Identifiable, Registered, error::ParseError};
-
 #[model]
 mod model {
     use getset::Getters;
     use iroha_data_model_derive::IdEqOrdHash;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-
     use super::*;
-
     /// Peer's identification.
     ///
     /// Equality is tested by `public_key` field only.
@@ -53,7 +47,6 @@ mod model {
         /// Public Key of the [`Peer`].
         pub public_key: PublicKey,
     }
-
     /// Representation of other Iroha Peer instances running in separate processes.
     #[derive(
         derive_more::Debug,
@@ -76,21 +69,17 @@ mod model {
         pub id: PeerId,
     }
 }
-
 impl FromStr for PeerId {
     type Err = iroha_crypto::error::ParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         PublicKey::from_str(s).map(Self::new)
     }
 }
-
 impl From<PublicKey> for PeerId {
     fn from(public_key: PublicKey) -> Self {
         Self { public_key }
     }
 }
-
 impl Peer {
     /// Construct `Peer` given `id` and `address`.
     #[inline]
@@ -101,10 +90,8 @@ impl Peer {
         }
     }
 }
-
 impl FromStr for Peer {
     type Err = ParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (public_key_candidate, address_candidate) = match s.rsplit_once('@') {
             None => (s, None),
@@ -120,7 +107,6 @@ impl FromStr for Peer {
             }
             Some((public, addr)) => (public, Some(addr)),
         };
-
         let public_key: PublicKey = public_key_candidate.parse().map_err(|_| ParseError {
             reason: r#"Failed to parse `public_key` part in `public_key@address`. `public_key` should have multihash format e.g. "ed0120...""#,
         })?;
@@ -143,22 +129,18 @@ impl FromStr for Peer {
         Ok(Self::new(address, public_key))
     }
 }
-
 #[cfg(test)]
 mod parse_tests {
     use super::*;
-
     #[test]
     fn peer_from_str_accepts_addr_literal() {
         let key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
         let literal = literal::format("addr", "127.0.0.1:1337");
         let candidate = format!("{key}@{literal}");
-
         let peer = Peer::from_str(&candidate).expect("peer parses from addr literal");
         assert_eq!(peer.address().to_string(), "127.0.0.1:1337");
         assert_eq!(peer.id().public_key.to_string(), key);
     }
-
     #[test]
     fn peer_from_str_rejects_malformed_addr_literal() {
         let key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
@@ -166,10 +148,8 @@ mod parse_tests {
         literal.pop();
         literal.push('0');
         let candidate = format!("{key}@{literal}");
-
         assert!(Peer::from_str(&candidate).is_err());
     }
-
     #[test]
     fn peer_from_str_accepts_bare_public_key() {
         let key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
@@ -178,22 +158,18 @@ mod parse_tests {
         assert_eq!(peer.address().to_string(), "0.0.0.0:0");
     }
 }
-
 impl Registered for Peer {
     type With = PeerId;
 }
-
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{Peer, PeerId};
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for PeerId {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.public_key.to_string(), out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -201,7 +177,6 @@ impl FastJsonWrite for PeerId {
         norito::json::JsonSerialize::json_serialize_to(&self.public_key, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for PeerId {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -215,13 +190,11 @@ impl JsonDeserialize for PeerId {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for Peer {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -229,7 +202,6 @@ impl FastJsonWrite for Peer {
         json::write_json_string_to(&self.to_string(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for Peer {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -243,29 +215,23 @@ impl JsonDeserialize for Peer {
         }
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod tests {
     use iroha_primitives::addr::SocketAddr;
     use norito::json::{self, FastJsonWrite};
-
     use super::*;
-
     #[test]
     fn peer_json_roundtrip() {
         let pk = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
         let addr: SocketAddr = "127.0.0.1:1337".parse().expect("valid address");
         let peer = Peer::new(addr.clone(), pk.parse::<PublicKey>().expect("valid key"));
-
         let mut json = String::new();
         peer.write_json(&mut json);
         assert_eq!(json, format!("\"{pk}@{addr}\""));
-
         let decoded: Peer = json::from_json(&json).expect("deserialize peer");
         assert_eq!(decoded.address(), &addr);
         assert_eq!(decoded.id().public_key, peer.id().public_key);
     }
-
     #[test]
     fn peer_id_bounded_json_delegates_to_public_key_without_scratch() {
         let literal = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";

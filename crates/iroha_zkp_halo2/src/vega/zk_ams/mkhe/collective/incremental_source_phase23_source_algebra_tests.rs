@@ -1,5 +1,4 @@
 use super::*;
-
 const PRODUCTION_SOURCE_V2: &str = include_str!("incremental_source_phase23_source_algebra.rs");
 const TEST_SOURCE_V2: &str = include_str!("incremental_source_phase23_source_algebra_tests.rs");
 const PARENT_SOURCE_V2: &str = include_str!("incremental_source_phase23.rs");
@@ -17,7 +16,6 @@ const SOURCE_OPENINGS_TEST_SOURCE_V1: &str = include_str!(
 const SOURCE_OPENINGS_REOPEN_SOURCE_V1: &str = include_str!(
     "incremental_source_phase23_source_algebra/global_lookup_source_replay_v1/source_openings_v1/canonical_reopen_v1.rs"
 );
-
 #[test]
 fn exact_formula_mapping_and_memory_budgets_are_frozen() {
     assert_eq!(SOURCE_ALGEBRA_RECORDS_V2, 43);
@@ -60,7 +58,6 @@ fn exact_formula_mapping_and_memory_budgets_are_frozen() {
         b"limb->repetition->block->P-low->P-high->H"
     );
 }
-
 #[test]
 fn exact_record_equation_limb_map_has_one_order_and_one_digest() {
     let first = relation_coordinate_v2(0, 0, 0).unwrap();
@@ -75,14 +72,12 @@ fn exact_record_equation_limb_map_has_one_order_and_one_digest() {
     assert_eq!(first.equation.ciphertext.tag_v2(), 1);
     assert_eq!(first.equation.delta, 1);
     assert_eq!(first.modulus, RELEASE_MODULI_V1[0]);
-
     let second_equation = relation_coordinate_v2(0, 1, 0).unwrap();
     assert_eq!(second_equation.equation.equation.tag_v2(), 1);
     assert_eq!(second_equation.equation.key.tag_v2(), 2);
     assert_eq!(second_equation.equation.error.tag_v2(), 2);
     assert_eq!(second_equation.equation.ciphertext.tag_v2(), 2);
     assert_eq!(second_equation.equation.delta, 0);
-
     let expected_families = [1_u8, 2, 3, 4, 5, 6];
     let boundary_ordinals = [0_u16, 1, 17, 33, 34, 42];
     for (ordinal, family) in boundary_ordinals.into_iter().zip(expected_families) {
@@ -102,7 +97,6 @@ fn exact_record_equation_limb_map_has_one_order_and_one_digest() {
     assert!(relation_coordinate_v2(43, 0, 0).is_err());
     assert!(relation_coordinate_v2(0, 2, 0).is_err());
     assert!(relation_coordinate_v2(0, 0, 38).is_err());
-
     assert_eq!(
         exact_formula_digest_v2().unwrap(),
         [
@@ -117,7 +111,6 @@ fn exact_record_equation_limb_map_has_one_order_and_one_digest() {
             160, 183, 205, 144, 190, 236, 179, 225, 102, 39, 1, 27, 104,
         ]
     );
-
     let mut order = core::array::from_fn(|index| index as u16);
     let exact = mapping_digest_for_record_order_v2(&order).unwrap();
     order.swap(0, 1);
@@ -125,13 +118,11 @@ fn exact_record_equation_limb_map_has_one_order_and_one_digest() {
     order[1] = 1;
     assert!(mapping_digest_for_record_order_v2(&order).is_err());
 }
-
 const ORACLE_N: usize = 4;
 const ORACLE_Q: i64 = 97;
 const ORACLE_P: i64 = 17;
 const ORACLE_A: [i64; ORACLE_N] = [7, 18, 29, 40];
 const ORACLE_B: [i64; ORACLE_N] = [13, 22, 31, 40];
-
 struct OracleRecord {
     r: [i64; ORACLE_N],
     e0: [i64; ORACLE_N],
@@ -140,11 +131,9 @@ struct OracleRecord {
     c0: [i64; ORACLE_N],
     c1: [i64; ORACLE_N],
 }
-
 fn oracle_mod(value: i64) -> i64 {
     value.rem_euclid(ORACLE_Q)
 }
-
 fn oracle_pow(mut base: i64, mut exponent: usize) -> i64 {
     let mut result = 1;
     while exponent != 0 {
@@ -156,7 +145,6 @@ fn oracle_pow(mut base: i64, mut exponent: usize) -> i64 {
     }
     result
 }
-
 fn oracle_ordinary(left: &[i64; ORACLE_N], right: &[i64; ORACLE_N]) -> [i64; 2 * ORACLE_N] {
     let mut product = [0_i64; 2 * ORACLE_N];
     for (i, left_value) in left.iter().enumerate() {
@@ -166,7 +154,6 @@ fn oracle_ordinary(left: &[i64; ORACLE_N], right: &[i64; ORACLE_N]) -> [i64; 2 *
     }
     product
 }
-
 fn oracle_negacyclic(left: &[i64; ORACLE_N], right: &[i64; ORACLE_N]) -> [i64; ORACLE_N] {
     let ordinary = oracle_ordinary(left, right);
     let mut product = [0_i64; ORACLE_N];
@@ -175,7 +162,6 @@ fn oracle_negacyclic(left: &[i64; ORACLE_N], right: &[i64; ORACLE_N]) -> [i64; O
     }
     product
 }
-
 fn oracle_centered_message(record: usize, index: usize, wrong_boundary: bool) -> i64 {
     let value = ((3 * record + 5 * index) % ORACLE_P as usize) as i64;
     let boundary = if wrong_boundary { 9 } else { 8 };
@@ -185,7 +171,6 @@ fn oracle_centered_message(record: usize, index: usize, wrong_boundary: bool) ->
         value - ORACLE_P
     }
 }
-
 fn oracle_record(record: usize) -> OracleRecord {
     let r = core::array::from_fn(|index| ((record + index) % 3) as i64 - 1);
     let e0 = core::array::from_fn(|index| ((record + 2 * index) % 5) as i64 - 2);
@@ -205,14 +190,12 @@ fn oracle_record(record: usize) -> OracleRecord {
         c1,
     }
 }
-
 struct OracleMutation {
     swapped_equations: bool,
     wrong_centering: bool,
     add_ciphertext: bool,
     negacyclic_t: bool,
 }
-
 fn oracle_aggregate(
     gamma: i64,
     beta: i64,
@@ -285,7 +268,6 @@ fn oracle_aggregate(
     relation[2 * ORACLE_N - 1] = 0;
     (relation, quotient)
 }
-
 fn oracle_relation_is_exact(relation: &[i64; 2 * ORACLE_N], quotient: &[i64; ORACLE_N]) -> bool {
     quotient[ORACLE_N - 1] == 0
         && relation[2 * ORACLE_N - 1] == 0
@@ -293,7 +275,6 @@ fn oracle_relation_is_exact(relation: &[i64; 2 * ORACLE_N], quotient: &[i64; ORA
             relation[index] == quotient[index] && relation[ORACLE_N + index] == quotient[index]
         })
 }
-
 fn no_oracle_mutation() -> OracleMutation {
     OracleMutation {
         swapped_equations: false,
@@ -302,7 +283,6 @@ fn no_oracle_mutation() -> OracleMutation {
         negacyclic_t: false,
     }
 }
-
 #[test]
 fn independent_tiny_oracle_pins_all_five_vectors() {
     let order = core::array::from_fn(|index| index);
@@ -320,12 +300,10 @@ fn independent_tiny_oracle_pins_all_five_vectors() {
         assert!(oracle_relation_is_exact(&relation, &quotient));
     }
 }
-
 #[test]
 fn hostile_order_top_zero_formula_equation_and_centering_mutations_fail() {
     let order = core::array::from_fn(|index| index);
     let expected = oracle_aggregate(2, 3, &order, no_oracle_mutation());
-
     let mut reordered = order;
     reordered.swap(0, 1);
     assert_ne!(
@@ -382,7 +360,6 @@ fn hostile_order_top_zero_formula_equation_and_centering_mutations_fail() {
     );
     assert_eq!(oracle_centered_message(3, 0, false), -8);
     assert_eq!(oracle_centered_message(3, 0, true), 9);
-
     let (mut bad_relation, quotient) = expected;
     bad_relation[2 * ORACLE_N - 1] = 1;
     assert!(!oracle_relation_is_exact(&bad_relation, &quotient));
@@ -390,7 +367,6 @@ fn hostile_order_top_zero_formula_equation_and_centering_mutations_fail() {
     bad_quotient[ORACLE_N - 1] = 1;
     assert!(!oracle_relation_is_exact(&relation, &bad_quotient));
 }
-
 #[test]
 fn production_seals_flags_poison_order_and_privacy_stay_fail_closed() {
     let _ordered = OrderedCiphertextBundleSealV2::TestOnly;
@@ -404,7 +380,6 @@ fn production_seals_flags_poison_order_and_privacy_stay_fail_closed() {
     assert!(!Q_PCS_HANDOFF_COMPLETE_V2);
     assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V2);
     assert!(!RELEASE_COMPLETE_V2);
-
     for impossible_field in [
         "ordered_43_ciphertexts: Infallible",
         "move_only_key_authority: Infallible",
@@ -427,7 +402,6 @@ fn production_seals_flags_poison_order_and_privacy_stay_fail_closed() {
     assert!(!PRODUCTION_SOURCE_V2.contains("into_parts"));
     assert!(!PRODUCTION_SOURCE_V2.contains("as_tuple"));
     assert_eq!(PRODUCTION_SOURCE_V2.matches("pub(super)").count(), 6);
-
     let preflight = PRODUCTION_SOURCE_V2
         .split("fn preflight_v2")
         .nth(1)
@@ -444,7 +418,6 @@ fn production_seals_flags_poison_order_and_privacy_stay_fail_closed() {
     assert!(PARENT_SOURCE_V2.contains("fn into_source_algebra_prerequisite_v2("));
     assert!(PARENT_SOURCE_V2.contains("self,"));
 }
-
 #[test]
 fn source_and_test_budgets_remain_bounded() {
     assert!(PRODUCTION_SOURCE_V2.lines().count() <= 1_200);

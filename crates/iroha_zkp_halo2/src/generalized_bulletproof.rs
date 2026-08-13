@@ -3,16 +3,13 @@
 //! This module owns the curve-agnostic proof equations. Transcript codecs,
 //! concrete curves, generator derivation domains, and entropy providers remain
 //! explicit adapters so a protocol can freeze its own consensus bytes.
-
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 use std::{
     fmt::Debug,
     ops::{Add, AddAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign},
 };
-
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 use thiserror::Error;
-
 /// Stable failure classes emitted by the generalized-Bulletproof backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum GeneralizedBulletproofErrorV1 {
@@ -61,7 +58,6 @@ pub enum GeneralizedBulletproofErrorV1 {
     #[error("generalized-Bulletproof transcript was not consumed exactly")]
     TranscriptConsumption,
 }
-
 /// Fallible cryptographic byte source.
 ///
 /// Implementations must either fill the complete destination or return an
@@ -70,10 +66,8 @@ pub trait ProofRandomSource {
     /// Fill all of `destination` or report entropy unavailability.
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), GeneralizedBulletproofErrorV1>;
 }
-
 /// Fixed number of canonical-decoding attempts for one prover scalar.
 pub const MAX_PROVER_SCALAR_ATTEMPTS_V1: usize = 128;
-
 /// Best-effort clearing for secret byte encodings without introducing unsafe
 /// code into this crate.
 ///
@@ -90,20 +84,16 @@ fn clear_secret_bytes(bytes: &mut [u8]) {
     #[cfg(test)]
     SECRET_BYTE_CLEAR_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
-
 #[cfg(test)]
 static SECRET_BYTE_CLEAR_CALLS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-
 /// Fixed-size secret byte buffer cleared on normal return and unwind.
 struct SecretBytes<const N: usize>([u8; N]);
-
 impl<const N: usize> Drop for SecretBytes<N> {
     fn drop(&mut self) {
         clear_secret_bytes(&mut self.0);
     }
 }
-
 /// Sample one canonical scalar from a fallible byte source.
 ///
 /// Non-canonical candidates are rejected with a fixed public retry bound;
@@ -122,7 +112,6 @@ where
     }
     Err(GeneralizedBulletproofErrorV1::ProverRandomnessExhausted)
 }
-
 /// Scalar operations required by the shared arithmetic proof.
 pub trait ProofScalar:
     Copy
@@ -146,7 +135,6 @@ pub trait ProofScalar:
     const ONE: Self;
     /// Number of significant little-endian scalar bits used by MSM.
     const SCALAR_BITS: usize;
-
     /// Convert a small unsigned integer into this scalar field.
     fn from_u64(value: u64) -> Self;
     /// Decode a canonical 32-byte scalar, rejecting non-canonical encodings.
@@ -176,12 +164,10 @@ pub trait ProofScalar:
     /// not promise that compiler-created copies or register temporaries are
     /// erased, and no destructor runs if the process aborts.
     fn clear_secret(&mut self);
-
     /// Return the canonical little-endian bytes consumed by MSM bit extraction.
     fn bits_le(self) -> [u8; 32] {
         self.encode()
     }
-
     /// Sample one canonical scalar from the supplied entropy source.
     fn random(
         rng: &mut impl ProofRandomSource,
@@ -193,29 +179,24 @@ pub trait ProofScalar:
         Ok(Self::decode(bytes.0))
     }
 }
-
 /// One owned secret scalar whose storage is cleared on every exit path.
 ///
 /// `ProofScalar` is necessarily `Copy`, so arithmetic can still create
 /// compiler temporaries and register copies. This guard covers the named stack
 /// slot owned by the prover and makes every intentional copy explicit.
 struct SecretScalar<F: ProofScalar>(F);
-
 /// Erases one callee-owned `Copy` scalar parameter on every exit path.
 struct BorrowedSecretScalarSlot<'a, F: ProofScalar>(&'a mut F);
-
 impl<F: ProofScalar> BorrowedSecretScalarSlot<'_, F> {
     fn expose_copy(&self) -> F {
         *self.0
     }
 }
-
 impl<F: ProofScalar> Drop for BorrowedSecretScalarSlot<'_, F> {
     fn drop(&mut self) {
         self.0.clear_secret();
     }
 }
-
 impl<F: ProofScalar> SecretScalar<F> {
     fn new(mut value: F) -> Self {
         let incoming = BorrowedSecretScalarSlot(&mut value);
@@ -223,33 +204,27 @@ impl<F: ProofScalar> SecretScalar<F> {
         drop(incoming);
         owned
     }
-
     fn take(value: &mut F) -> Self {
         let incoming = BorrowedSecretScalarSlot(value);
         let owned = Self(incoming.expose_copy());
         drop(incoming);
         owned
     }
-
     fn expose_copy(&self) -> F {
         self.0
     }
-
     fn expose_ref(&self) -> &F {
         &self.0
     }
-
     fn expose_mut(&mut self) -> &mut F {
         &mut self.0
     }
 }
-
 impl<F: ProofScalar> Drop for SecretScalar<F> {
     fn drop(&mut self) {
         self.0.clear_secret();
     }
 }
-
 /// Group operations required by the shared arithmetic proof.
 ///
 /// `POINT_BYTES` and `Encoded` make point width a suite property: FCMP uses
@@ -274,7 +249,6 @@ pub trait ProofPoint:
     type Encoded: AsRef<[u8]> + Copy + Clone + Debug + Eq + Send + Sync + 'static;
     /// Exact number of bytes in one canonical point encoding.
     const POINT_BYTES: usize;
-
     /// Return the group identity.
     fn identity() -> Self;
     /// Return whether this point is the group identity.
@@ -302,18 +276,15 @@ pub trait ProofPoint:
         allow_identity: bool,
     ) -> Result<Self, GeneralizedBulletproofErrorV1>;
 }
-
 /// Curve suite binding one scalar field, one group, and one generator basis.
 pub trait ProofSuite: Copy + Clone + Debug + Eq + Send + Sync + 'static {
     /// Scalar field used by the suite.
     type Scalar: ProofScalar;
     /// Prime-order group used by the suite.
     type Point: ProofPoint<Scalar = Self::Scalar>;
-
     /// Return the suite's immutable generator basis.
     fn generators() -> &'static ProofGenerators<Self>;
 }
-
 /// Transcript writes required by the prover.
 pub trait ProverTranscript<S: ProofSuite> {
     /// Append one canonical scalar to the proof transcript.
@@ -323,7 +294,6 @@ pub trait ProverTranscript<S: ProofSuite> {
     /// Derive the next non-zero Fiat-Shamir challenge.
     fn challenge(&mut self) -> Result<S::Scalar, GeneralizedBulletproofErrorV1>;
 }
-
 /// Transcript reads required by the verifier.
 pub trait VerifierTranscript<S: ProofSuite> {
     /// Read the next canonical scalar from the proof transcript.
@@ -333,7 +303,6 @@ pub trait VerifierTranscript<S: ProofSuite> {
     /// Derive the next non-zero Fiat-Shamir challenge.
     fn challenge(&mut self) -> Result<S::Scalar, GeneralizedBulletproofErrorV1>;
 }
-
 /// Full generator basis for one proof suite.
 #[derive(Clone, Debug)]
 pub struct ProofGenerators<S: ProofSuite> {
@@ -348,7 +317,6 @@ pub struct ProofGenerators<S: ProofSuite> {
     /// Power-of-two prefix sums of `h_bold` used by batched verification.
     pub h_sum: Vec<S::Point>,
 }
-
 impl<S: ProofSuite> ProofGenerators<S> {
     /// Construct a checked basis and its power-of-two H-prefix sums.
     pub fn new(
@@ -390,7 +358,6 @@ impl<S: ProofSuite> ProofGenerators<S> {
             h_sum,
         })
     }
-
     /// Borrow a checked power-of-two prefix of this generator basis.
     pub fn reduce(
         &self,
@@ -411,7 +378,6 @@ impl<S: ProofSuite> ProofGenerators<S> {
         })
     }
 }
-
 /// Borrowed power-of-two generator prefix used by one proof.
 #[derive(Clone, Copy, Debug)]
 pub struct ProofGeneratorView<'a, S: ProofSuite> {
@@ -424,24 +390,20 @@ pub struct ProofGeneratorView<'a, S: ProofSuite> {
     /// Borrowed right-generator prefix.
     pub h_bold: &'a [S::Point],
 }
-
 const SECRET_MSM_WINDOW_BITS_V1: usize = 4;
 const SECRET_MSM_TABLE_ENTRIES_V1: usize = 1 << SECRET_MSM_WINDOW_BITS_V1;
 const SECRET_MSM_CHUNK_TERMS_V1: usize = 256;
 const SECRET_MSM_WINDOWS_V1: usize = 256 / SECRET_MSM_WINDOW_BITS_V1;
-
 struct SecretMsmTerm<S: ProofSuite> {
     scalar: S::Scalar,
     point: S::Point,
 }
-
 impl<S: ProofSuite> Drop for SecretMsmTerm<S> {
     fn drop(&mut self) {
         self.scalar.clear_secret();
         self.point.clear_secret();
     }
 }
-
 /// Unwind-safe eraser for the private by-value `push_copy` parameter slots.
 ///
 /// `ProofScalar` and `ProofPoint` are `Copy`, so copying either parameter into
@@ -452,28 +414,23 @@ struct BorrowedSecretMsmTerm<'a, S: ProofSuite> {
     scalar: &'a mut S::Scalar,
     point: &'a mut S::Point,
 }
-
 impl<'a, S: ProofSuite> BorrowedSecretMsmTerm<'a, S> {
     fn new(scalar: &'a mut S::Scalar, point: &'a mut S::Point) -> Self {
         Self { scalar, point }
     }
-
     fn scalar_copy(&self) -> S::Scalar {
         *self.scalar
     }
-
     fn point_copy(&self) -> S::Point {
         *self.point
     }
 }
-
 impl<S: ProofSuite> Drop for BorrowedSecretMsmTerm<'_, S> {
     fn drop(&mut self) {
         self.scalar.clear_secret();
         self.point.clear_secret();
     }
 }
-
 /// Exact-capacity owner for prover-secret multiscalar-multiplication terms.
 ///
 /// Construction reserves all storage before a secret is accepted. `push`
@@ -496,7 +453,6 @@ pub struct SecretMultiexpBuilder<S: ProofSuite> {
     exact_capacity: usize,
     allocation_capacity: usize,
 }
-
 impl<S: ProofSuite> SecretMultiexpBuilder<S> {
     /// Reserve storage for exactly `exact_capacity` subsequently supplied
     /// terms before accepting any prover secret.
@@ -515,22 +471,18 @@ impl<S: ProofSuite> SecretMultiexpBuilder<S> {
             allocation_capacity,
         })
     }
-
     /// Return the exact public term count declared at construction.
     pub const fn capacity(&self) -> usize {
         self.exact_capacity
     }
-
     /// Return the number of terms accepted so far.
     pub fn len(&self) -> usize {
         self.terms.len()
     }
-
     /// Return whether no terms have been accepted yet.
     pub fn is_empty(&self) -> bool {
         self.terms.is_empty()
     }
-
     /// Copy one borrowed scalar/point pair into the fixed allocation.
     ///
     /// Caller-owned slots remain under their existing RAII owner. The private
@@ -544,7 +496,6 @@ impl<S: ProofSuite> SecretMultiexpBuilder<S> {
     ) -> Result<(), GeneralizedBulletproofErrorV1> {
         self.push_copy(*scalar, *point)
     }
-
     fn push_copy(
         &mut self,
         mut scalar: S::Scalar,
@@ -566,7 +517,6 @@ impl<S: ProofSuite> SecretMultiexpBuilder<S> {
         debug_assert_eq!(self.terms.capacity(), self.allocation_capacity);
         Ok(())
     }
-
     /// Evaluate exactly the declared number of terms in constant time with
     /// respect to all scalar values.
     pub fn evaluate(self) -> Result<S::Point, GeneralizedBulletproofErrorV1> {
@@ -579,7 +529,6 @@ impl<S: ProofSuite> SecretMultiexpBuilder<S> {
         chunks.fold_in_order()
     }
 }
-
 /// Exact-capacity collection of independently evaluated secret MSM chunks.
 ///
 /// Storing `Result` as the item deliberately avoids short-circuiting on the
@@ -592,7 +541,6 @@ struct SecretMsmChunkResults<S: ProofSuite> {
     exact_len: usize,
     allocation_capacity: usize,
 }
-
 impl<S: ProofSuite> SecretMsmChunkResults<S> {
     fn new(exact_len: usize) -> Result<Self, GeneralizedBulletproofErrorV1> {
         let mut values = Vec::new();
@@ -609,7 +557,6 @@ impl<S: ProofSuite> SecretMsmChunkResults<S> {
             allocation_capacity,
         })
     }
-
     fn collect(&mut self, terms: &[SecretMsmTerm<S>]) -> Result<(), GeneralizedBulletproofErrorV1> {
         if !self.values.is_empty()
             || terms.len().div_ceil(SECRET_MSM_CHUNK_TERMS_V1) != self.exact_len
@@ -633,7 +580,6 @@ impl<S: ProofSuite> SecretMsmChunkResults<S> {
         debug_assert_eq!(self.values.as_ptr(), allocation);
         Ok(())
     }
-
     fn fold_in_order(self) -> Result<S::Point, GeneralizedBulletproofErrorV1> {
         let mut result = SecretPoint::new(S::Point::identity());
         for chunk in self.values {
@@ -643,9 +589,7 @@ impl<S: ProofSuite> SecretMsmChunkResults<S> {
         Ok(result.expose_copy())
     }
 }
-
 struct SecretScalarEncodings([[u8; 32]; SECRET_MSM_CHUNK_TERMS_V1]);
-
 impl Drop for SecretScalarEncodings {
     fn drop(&mut self) {
         for encoding in &mut self.0 {
@@ -653,17 +597,13 @@ impl Drop for SecretScalarEncodings {
         }
     }
 }
-
 struct SecretDigits([u8; SECRET_MSM_CHUNK_TERMS_V1]);
-
 impl Drop for SecretDigits {
     fn drop(&mut self) {
         clear_secret_bytes(&mut self.0);
     }
 }
-
 struct SecretPoint<P: ProofPoint>(P);
-
 impl<P: ProofPoint> SecretPoint<P> {
     fn new(mut point: P) -> Self {
         let incoming = BorrowedSecretPoint::new(&mut point);
@@ -671,22 +611,18 @@ impl<P: ProofPoint> SecretPoint<P> {
         drop(incoming);
         owned
     }
-
     fn expose_copy(&self) -> P {
         self.0
     }
-
     fn replace(&mut self, point: &mut P) {
         self.0.clear_secret();
         self.0 = *point;
         point.clear_secret();
     }
-
     fn double_assign(&mut self) {
         let mut doubled = self.0.double();
         self.replace(&mut doubled);
     }
-
     fn add_assign(&mut self, mut rhs: P) {
         let rhs_slot = BorrowedSecretPoint::new(&mut rhs);
         let mut sum = self.0 + rhs_slot.expose_copy();
@@ -696,39 +632,31 @@ impl<P: ProofPoint> SecretPoint<P> {
         drop(rhs_slot);
         self.replace(&mut sum);
     }
-
     fn select_assign(&mut self, candidate: &P, choice: u8) {
         let mut selected = P::conditional_select(&self.0, candidate, choice);
         self.replace(&mut selected);
     }
 }
-
 impl<P: ProofPoint> Drop for SecretPoint<P> {
     fn drop(&mut self) {
         self.0.clear_secret();
     }
 }
-
 struct BorrowedSecretPoint<'a, P: ProofPoint>(&'a mut P);
-
 impl<'a, P: ProofPoint> BorrowedSecretPoint<'a, P> {
     fn new(point: &'a mut P) -> Self {
         Self(point)
     }
-
     fn expose_copy(&self) -> P {
         *self.0
     }
 }
-
 impl<P: ProofPoint> Drop for BorrowedSecretPoint<'_, P> {
     fn drop(&mut self) {
         self.0.clear_secret();
     }
 }
-
 struct SecretPointTable<P: ProofPoint>(Vec<[P; SECRET_MSM_TABLE_ENTRIES_V1]>);
-
 impl<P: ProofPoint> Drop for SecretPointTable<P> {
     fn drop(&mut self) {
         for row in &mut self.0 {
@@ -738,9 +666,7 @@ impl<P: ProofPoint> Drop for SecretPointTable<P> {
         }
     }
 }
-
 struct SecretPointTableRow<P: ProofPoint>([P; SECRET_MSM_TABLE_ENTRIES_V1]);
-
 impl<P: ProofPoint> Drop for SecretPointTableRow<P> {
     fn drop(&mut self) {
         for point in &mut self.0 {
@@ -748,19 +674,16 @@ impl<P: ProofPoint> Drop for SecretPointTableRow<P> {
         }
     }
 }
-
 fn ct_eq_u8(left: u8, right: u8) -> u8 {
     let difference = u16::from(left ^ right);
     ((difference.wrapping_sub(1) >> 8) & 1) as u8
 }
-
 fn secret_straus_chunk<S: ProofSuite>(
     terms: &[SecretMsmTerm<S>],
 ) -> Result<SecretPoint<S::Point>, GeneralizedBulletproofErrorV1> {
     if terms.is_empty() || terms.len() > SECRET_MSM_CHUNK_TERMS_V1 {
         return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
     }
-
     // Allocate the public-point table before scalar encodings or digits are
     // materialized. Rows and their temporary source copies are still cleared
     // on every exit path because callers may conservatively treat points as
@@ -777,7 +700,6 @@ fn secret_straus_chunk<S: ProofSuite>(
         }
         tables.0.push(row.0);
     }
-
     let mut encodings = SecretScalarEncodings([[0_u8; 32]; SECRET_MSM_CHUNK_TERMS_V1]);
     for (index, term) in terms.iter().enumerate() {
         let encoding = SecretBytes(term.scalar.bits_le());
@@ -808,10 +730,8 @@ fn secret_straus_chunk<S: ProofSuite>(
     }
     Ok(accumulator)
 }
-
 /// Encoded scalar material cached by Pippenger while extracting windows.
 struct SecretScalarBytes(Vec<[u8; 32]>);
-
 impl Drop for SecretScalarBytes {
     fn drop(&mut self) {
         for bytes in &mut self.0 {
@@ -819,7 +739,6 @@ impl Drop for SecretScalarBytes {
         }
     }
 }
-
 /// Deterministic variable-time multiscalar multiplication over public terms.
 ///
 /// This function is verifier/public-input only. Its window selection, bucket
@@ -844,7 +763,6 @@ pub fn multiexp<S: ProofSuite>(terms: &[(S::Scalar, S::Point)]) -> S::Point {
     };
     pippenger::<S>(terms, window)
 }
-
 /// Simultaneous multiplication for two public-scalar terms.
 ///
 /// Inner-product proving repeatedly folds adjacent public generator points by
@@ -876,7 +794,6 @@ fn public_two_term_multiexp<S: ProofSuite>(terms: &[(S::Scalar, S::Point)]) -> S
                 left_multiples[left_digit] + right_multiples[right_digit];
         }
     }
-
     let mut result = S::Point::identity();
     let windows = S::Scalar::SCALAR_BITS.div_ceil(2);
     for window in (0..windows).rev() {
@@ -898,7 +815,6 @@ fn public_two_term_multiexp<S: ProofSuite>(terms: &[(S::Scalar, S::Point)]) -> S
     }
     result
 }
-
 fn pippenger<S: ProofSuite>(terms: &[(S::Scalar, S::Point)], window: usize) -> S::Point {
     let windows = S::Scalar::SCALAR_BITS.div_ceil(window);
     let mask = (1_u16 << window) - 1;
@@ -936,7 +852,6 @@ fn pippenger<S: ProofSuite>(terms: &[(S::Scalar, S::Point)], window: usize) -> S
     }
     result
 }
-
 #[derive(Clone, Debug)]
 struct BatchVerifier<S: ProofSuite> {
     g: S::Scalar,
@@ -946,7 +861,6 @@ struct BatchVerifier<S: ProofSuite> {
     h_sum: Vec<S::Scalar>,
     additional: Vec<(S::Scalar, S::Point)>,
 }
-
 impl<S: ProofSuite> BatchVerifier<S> {
     fn new() -> Self {
         Self {
@@ -958,7 +872,6 @@ impl<S: ProofSuite> BatchVerifier<S> {
             additional: Vec::new(),
         }
     }
-
     fn ensure_len(&mut self, len: usize) {
         if self.g_bold.len() < len {
             self.g_bold.resize(len, S::Scalar::ZERO);
@@ -966,7 +879,6 @@ impl<S: ProofSuite> BatchVerifier<S> {
             self.h_sum.resize(len, S::Scalar::ZERO);
         }
     }
-
     fn verify(self) -> bool {
         let generators = S::generators();
         let mut terms = Vec::with_capacity(
@@ -989,16 +901,13 @@ impl<S: ProofSuite> BatchVerifier<S> {
         multiexp::<S>(&terms).is_identity()
     }
 }
-
 /// Owned scalar vector whose elements are cleared when the vector is dropped.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ScalarVector<F: ProofScalar>(
     /// Scalar elements in deterministic protocol order.
     pub Vec<F>,
 );
-
 type ScalarVectorPair<F> = (ScalarVector<F>, ScalarVector<F>);
-
 impl<F: ProofScalar> Drop for ScalarVector<F> {
     fn drop(&mut self) {
         for value in &mut self.0 {
@@ -1006,20 +915,17 @@ impl<F: ProofScalar> Drop for ScalarVector<F> {
         }
     }
 }
-
 impl<F: ProofScalar> Index<usize> for ScalarVector<F> {
     type Output = F;
     fn index(&self, index: usize) -> &Self::Output {
         &self.0[index]
     }
 }
-
 impl<F: ProofScalar> IndexMut<usize> for ScalarVector<F> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.0[index]
     }
 }
-
 impl<F: ProofScalar> Add<F> for ScalarVector<F> {
     type Output = Self;
     fn add(mut self, scalar: F) -> Self {
@@ -1029,7 +935,6 @@ impl<F: ProofScalar> Add<F> for ScalarVector<F> {
         self
     }
 }
-
 impl<F: ProofScalar> Sub<F> for ScalarVector<F> {
     type Output = Self;
     fn sub(mut self, scalar: F) -> Self {
@@ -1039,7 +944,6 @@ impl<F: ProofScalar> Sub<F> for ScalarVector<F> {
         self
     }
 }
-
 impl<F: ProofScalar> Mul<F> for ScalarVector<F> {
     type Output = Self;
     fn mul(mut self, scalar: F) -> Self {
@@ -1049,7 +953,6 @@ impl<F: ProofScalar> Mul<F> for ScalarVector<F> {
         self
     }
 }
-
 impl<F: ProofScalar> Add<&Self> for ScalarVector<F> {
     type Output = Self;
     fn add(mut self, other: &Self) -> Self {
@@ -1060,7 +963,6 @@ impl<F: ProofScalar> Add<&Self> for ScalarVector<F> {
         self
     }
 }
-
 impl<F: ProofScalar> Sub<&Self> for ScalarVector<F> {
     type Output = Self;
     fn sub(mut self, other: &Self) -> Self {
@@ -1071,7 +973,6 @@ impl<F: ProofScalar> Sub<&Self> for ScalarVector<F> {
         self
     }
 }
-
 impl<F: ProofScalar> Mul<&Self> for ScalarVector<F> {
     type Output = Self;
     fn mul(mut self, other: &Self) -> Self {
@@ -1082,13 +983,11 @@ impl<F: ProofScalar> Mul<&Self> for ScalarVector<F> {
         self
     }
 }
-
 impl<F: ProofScalar> ScalarVector<F> {
     /// Construct a vector containing `len` zero scalars.
     pub fn zero(len: usize) -> Self {
         Self(vec![F::ZERO; len])
     }
-
     /// Construct the first `len` powers of `value`, beginning with one.
     ///
     /// # Panics
@@ -1106,17 +1005,14 @@ impl<F: ProofScalar> ScalarVector<F> {
         }
         Self(result)
     }
-
     /// Return the number of scalar elements.
     pub fn len(&self) -> usize {
         self.0.len()
     }
-
     /// Return whether this vector has no scalar elements.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-
     /// Compute an inner product with the corresponding prefix of an iterator.
     ///
     /// # Panics
@@ -1135,7 +1031,6 @@ impl<F: ProofScalar> ScalarVector<F> {
         assert_eq!(count, self.len());
         result.expose_copy()
     }
-
     fn pad_with_zeroes(&mut self, len: usize) -> Result<(), GeneralizedBulletproofErrorV1> {
         if self.len() > len {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
@@ -1151,7 +1046,6 @@ impl<F: ProofScalar> ScalarVector<F> {
         }
         Ok(())
     }
-
     fn split(mut self) -> Result<(Self, Self), GeneralizedBulletproofErrorV1> {
         if self.len() <= 1 || !self.len().is_multiple_of(2) {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
@@ -1169,7 +1063,6 @@ impl<F: ProofScalar> ScalarVector<F> {
         Ok((self, Self(right)))
     }
 }
-
 /// Sample a secret vector incrementally so successfully sampled prefixes are
 /// cleared if a later entropy request or canonical decode fails.
 fn random_scalar_vector<F, R>(
@@ -1186,7 +1079,6 @@ where
     }
     Ok(result)
 }
-
 /// Opening of one Pedersen vector commitment used by the FCMP circuit.
 pub struct VectorCommitmentOpening<F: ProofScalar> {
     /// Committed vector values in generator order.
@@ -1194,7 +1086,6 @@ pub struct VectorCommitmentOpening<F: ProofScalar> {
     /// Pedersen blinding scalar for the commitment.
     pub mask: F,
 }
-
 impl<F: ProofScalar> Drop for VectorCommitmentOpening<F> {
     fn drop(&mut self) {
         for value in &mut self.values.0 {
@@ -1203,7 +1094,6 @@ impl<F: ProofScalar> Drop for VectorCommitmentOpening<F> {
         self.mask.clear_secret();
     }
 }
-
 impl<F: ProofScalar> VectorCommitmentOpening<F> {
     /// Construct an opening from committed values and its blinding scalar.
     pub fn new(values: Vec<F>, mut mask: F) -> Self {
@@ -1216,7 +1106,6 @@ impl<F: ProofScalar> VectorCommitmentOpening<F> {
         owned
     }
 }
-
 /// Owned opening of one scalar Pedersen commitment.
 ///
 /// The type stays private so only the bounded witness constructor can create
@@ -1225,7 +1114,6 @@ struct ScalarCommitmentOpening<F: ProofScalar> {
     value: F,
     mask: F,
 }
-
 impl<F: ProofScalar> ScalarCommitmentOpening<F> {
     fn new(mut value: F, mut mask: F) -> Self {
         let incoming_value = BorrowedSecretScalarSlot(&mut value);
@@ -1238,10 +1126,8 @@ impl<F: ProofScalar> ScalarCommitmentOpening<F> {
         owned
     }
 }
-
 /// Guard for the tuple allocation accepted at the crate-private boundary.
 struct ScalarCommitmentOpeningInputs<F: ProofScalar>(Vec<(F, F)>);
-
 impl<F: ProofScalar> Drop for ScalarCommitmentOpeningInputs<F> {
     fn drop(&mut self) {
         for (value, mask) in &mut self.0 {
@@ -1250,14 +1136,12 @@ impl<F: ProofScalar> Drop for ScalarCommitmentOpeningInputs<F> {
         }
     }
 }
-
 impl<F: ProofScalar> Drop for ScalarCommitmentOpening<F> {
     fn drop(&mut self) {
         self.value.clear_secret();
         self.mask.clear_secret();
     }
 }
-
 /// Witness for a concrete generalized-Bulletproof arithmetic circuit.
 pub struct ArithmeticCircuitWitness<S: ProofSuite> {
     a_l: ScalarVector<S::Scalar>,
@@ -1266,7 +1150,6 @@ pub struct ArithmeticCircuitWitness<S: ProofSuite> {
     vector_commitments: Vec<VectorCommitmentOpening<S::Scalar>>,
     scalar_commitments: Vec<ScalarCommitmentOpening<S::Scalar>>,
 }
-
 impl<S: ProofSuite> ArithmeticCircuitWitness<S> {
     /// Construct a witness and derive each multiplication-gate output.
     ///
@@ -1279,7 +1162,6 @@ impl<S: ProofSuite> ArithmeticCircuitWitness<S> {
     ) -> Result<Self, GeneralizedBulletproofErrorV1> {
         Self::new_with_scalar_commitments(a_l, a_r, vector_commitments, Vec::new())
     }
-
     /// Construct a witness which also opens the statement's scalar Pedersen
     /// commitments in statement order.
     pub(crate) fn new_with_scalar_commitments(
@@ -1312,7 +1194,6 @@ impl<S: ProofSuite> ArithmeticCircuitWitness<S> {
         })
     }
 }
-
 /// One constrainable circuit variable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
@@ -1346,7 +1227,6 @@ pub enum Variable {
         usize,
     ),
 }
-
 /// Sparse generalized-Bulletproof linear combination.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinComb<F: ProofScalar> {
@@ -1369,13 +1249,11 @@ pub struct LinComb<F: ProofScalar> {
     /// Constant term of the linear combination.
     pub c: F,
 }
-
 impl<F: ProofScalar> From<Variable> for LinComb<F> {
     fn from(variable: Variable) -> Self {
         Self::empty().term(F::ONE, variable)
     }
 }
-
 impl<F: ProofScalar> Add<&Self> for LinComb<F> {
     type Output = Self;
     fn add(mut self, other: &Self) -> Self {
@@ -1395,7 +1273,6 @@ impl<F: ProofScalar> Add<&Self> for LinComb<F> {
         self
     }
 }
-
 impl<F: ProofScalar> Sub<&Self> for LinComb<F> {
     type Output = Self;
     fn sub(mut self, other: &Self) -> Self {
@@ -1419,7 +1296,6 @@ impl<F: ProofScalar> Sub<&Self> for LinComb<F> {
         self
     }
 }
-
 impl<F: ProofScalar> Mul<F> for LinComb<F> {
     type Output = Self;
     fn mul(mut self, scalar: F) -> Self {
@@ -1444,7 +1320,6 @@ impl<F: ProofScalar> Mul<F> for LinComb<F> {
         self
     }
 }
-
 impl<F: ProofScalar> LinComb<F> {
     /// Construct an empty linear combination equal to zero.
     pub fn empty() -> Self {
@@ -1460,7 +1335,6 @@ impl<F: ProofScalar> LinComb<F> {
             c: F::ZERO,
         }
     }
-
     /// Append one weighted variable term.
     pub fn term(mut self, scalar: F, variable: Variable) -> Self {
         match variable {
@@ -1491,20 +1365,17 @@ impl<F: ProofScalar> LinComb<F> {
         }
         self
     }
-
     /// Add a constant scalar term.
     pub fn constant(mut self, scalar: F) -> Self {
         self.c += scalar;
         self
     }
 }
-
 fn accumulate<F: ProofScalar>(accumulator: &mut ScalarVector<F>, values: &[(usize, F)], weight: F) {
     for (index, coefficient) in values {
         accumulator[*index] += *coefficient * weight;
     }
 }
-
 /// Public circuit statement, constraints, and commitment points to verify.
 #[derive(Clone, Debug)]
 pub struct ArithmeticCircuitStatement<'a, S: ProofSuite> {
@@ -1513,7 +1384,6 @@ pub struct ArithmeticCircuitStatement<'a, S: ProofSuite> {
     vector_commitments: Vec<S::Point>,
     scalar_commitments: Vec<S::Point>,
 }
-
 impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
     /// Construct and validate a statement against its suite-bound generators.
     ///
@@ -1556,7 +1426,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
-
         for constraint in &constraints {
             let actual_highest_a_index = constraint
                 .wl
@@ -1578,7 +1447,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
                 .filter_map(|(commitment, weights)| (!weights.is_empty()).then_some(commitment))
                 .max();
             let actual_highest_v_index = constraint.wv.iter().map(|(index, _)| *index).max();
-
             if constraint.highest_a_index != actual_highest_a_index
                 || constraint.highest_c_index != actual_highest_c_index
                 || constraint.highest_v_index != actual_highest_v_index
@@ -1598,7 +1466,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             scalar_commitments,
         })
     }
-
     fn yz_challenges(
         &self,
         y: S::Scalar,
@@ -1617,7 +1484,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         }
         Ok((y_inverse, ScalarVector(z)))
     }
-
     /// Create a proof for this statement and witness in `transcript`.
     pub fn prove<R, T>(
         self,
@@ -1644,7 +1510,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         for opening in &mut witness.vector_commitments {
             opening.values.pad_with_zeroes(n)?;
         }
-
         // Validate every opening and every circuit constraint before emitting
         // any proof bytes. A malformed native witness is an API error, never a
         // source of a knowingly-invalid proof.
@@ -1698,7 +1563,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
                 return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
             }
         }
-
         let alpha = SecretScalar::new(random_scalar::<S::Scalar, _>(rng)?);
         let beta = SecretScalar::new(random_scalar::<S::Scalar, _>(rng)?);
         let rho = SecretScalar::new(random_scalar::<S::Scalar, _>(rng)?);
@@ -1744,7 +1608,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         let z_one = transcript.challenge()?;
         let (y_inverse, z) = self.yz_challenges(y, z_one)?;
         let y_powers = ScalarVector::powers(y, n);
-
         let ni = 2 + (2 * (commitment_count / 2));
         let ilr = ni / 2;
         let io = ni;
@@ -1754,7 +1617,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         let js = ni + 1;
         let mut l = vec![ScalarVector(Vec::new()); is + 1];
         let mut r = vec![ScalarVector(Vec::new()); is + 1];
-
         let mut l_weights = ScalarVector::zero(n);
         let mut r_weights = ScalarVector::zero(n);
         let mut o_weights = ScalarVector::zero(n);
@@ -1784,7 +1646,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
                 return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
             }
         }
-
         let mut cg_weights = Vec::with_capacity(commitment_count);
         for commitment in 0..commitment_count {
             let mut weights = ScalarVector::zero(n);
@@ -1815,7 +1676,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             l[index] = opening.values.clone();
             r[reverse] = weights;
         }
-
         let t_poly_len = 1 + (2 * (l.len() - 1));
         let mut t = ScalarVector::zero(t_poly_len);
         for (left_index, left) in l.iter().enumerate() {
@@ -1859,7 +1719,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         drop(l);
         drop(r);
         let t_caret = SecretScalar::new(l_eval.inner_product(r_eval.0.iter()));
-
         let mut tau_ni = SecretScalar::new(S::Scalar::ZERO);
         for (weight, opening) in scalar_commitment_weights
             .0
@@ -1870,7 +1729,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             *tau_ni.expose_mut() += weight * opening.mask;
         }
         drop(scalar_commitment_weights);
-
         // The omitted t[ni] commitment is reconstructed from the scalar
         // statement commitments. Vector-commitment masks instead contribute
         // to `u` below.
@@ -1901,7 +1759,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         drop(beta);
         drop(rho);
         drop(witness);
-
         let mut p_terms = SecretMultiexpBuilder::<S>::new(1 + (2 * n))?;
         for (index, (left, right)) in l_eval.0.iter().zip(&r_eval.0).enumerate() {
             p_terms.push(left, &self.generators.g_bold[index])?;
@@ -1927,7 +1784,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             transcript,
         )
     }
-
     /// Consume and verify one proof transcript for this statement.
     pub fn verify<T>(self, transcript: &mut T) -> Result<(), GeneralizedBulletproofErrorV1>
     where
@@ -1942,14 +1798,12 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         let jlr = ni / 2;
         let l_r_poly_len = ni + 2;
         let t_poly_len = (2 * l_r_poly_len) - 1;
-
         let ai = transcript.read_point()?;
         let ao = transcript.read_point()?;
         let s_point = transcript.read_point()?;
         let y = transcript.challenge()?;
         let z_one = transcript.challenge()?;
         let (y_inverse, z) = self.yz_challenges(y, z_one)?;
-
         let mut l_weights = ScalarVector::zero(n);
         let mut r_weights = ScalarVector::zero(n);
         let mut o_weights = ScalarVector::zero(n);
@@ -1960,7 +1814,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         }
         let r_weights = r_weights * &y_inverse;
         let delta = r_weights.inner_product(l_weights.0.iter());
-
         let mut t_before = Vec::with_capacity(ni);
         for _ in 0..ni {
             t_before.push(transcript.read_point()?);
@@ -1973,7 +1826,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         let tau_x = transcript.read_scalar()?;
         let u = transcript.read_scalar()?;
         let t_caret = transcript.read_scalar()?;
-
         // Check the polynomial commitment equation independently.
         let mut polynomial = BatchVerifier::<S>::new();
         polynomial.g += t_caret;
@@ -2008,7 +1860,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         if !polynomial.verify() {
             return Err(GeneralizedBulletproofErrorV1::CircuitEquation);
         }
-
         // Build P and verify the inner-product equation independently.
         let mut ipa = BatchVerifier::<S>::new();
         ipa.ensure_len(n);
@@ -2020,13 +1871,11 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         }
         ipa.h_sum[log_n] -= S::Scalar::ONE;
         ipa.additional.push((x[is], s_point));
-
         let mut h_bold_scalars = l_weights * x[jlr];
         for (index, weight) in (r_weights * x[jlr]).0.iter().copied().enumerate() {
             ipa.g_bold[index] += weight;
         }
         h_bold_scalars = h_bold_scalars + &(o_weights * S::Scalar::ONE);
-
         let mut cg_weights = Vec::with_capacity(self.vector_commitments.len());
         for commitment in 0..self.vector_commitments.len() {
             let mut weights = ScalarVector::zero(n);
@@ -2056,7 +1905,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
             ipa.h_bold[index] += scalar;
         }
         ipa.h -= u;
-
         let ip_x = transcript.challenge()?;
         ipa.g += ip_x * t_caret;
         verify_inner_product::<S, _>(self.generators, y_inverse, ip_x, &mut ipa, transcript)?;
@@ -2066,7 +1914,6 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         Ok(())
     }
 }
-
 fn prove_inner_product<S, T>(
     generators: ProofGeneratorView<'_, S>,
     h_bold_weights: ScalarVector<S::Scalar>,
@@ -2090,7 +1937,6 @@ where
     {
         return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
     }
-
     // The inner-product protocol itself does not otherwise use `P` while
     // proving. Check the opening unconditionally so release builds cannot
     // serialize a proof for an inconsistent caller-supplied statement. Keep
@@ -2111,7 +1957,6 @@ where
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
     }
-
     // A one-element IPA has no challenge with which to fold the symbolic H
     // weight. Finish directly against the original fixed generators.
     if n == 1 {
@@ -2127,7 +1972,6 @@ where
         transcript.push_scalar(b[0])?;
         return Ok(());
     }
-
     // Round zero consumes the original fixed basis. Apply each public H weight
     // to the corresponding secret coefficient inside the constant-time MSM.
     // Only after the transcript fixes x do we materialize n/2 folded H points,
@@ -2152,7 +1996,6 @@ where
     {
         return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
     }
-
     let c_left = SecretScalar::new(a_left.inner_product(b_right.0.iter()));
     let c_right = SecretScalar::new(a_right.inner_product(b_left.0.iter()));
     let left = {
@@ -2182,7 +2025,6 @@ where
     if left.is_identity() || right.is_identity() {
         return Err(GeneralizedBulletproofErrorV1::InnerProductRoundIdentity);
     }
-
     transcript.push_point(left)?;
     transcript.push_point(right)?;
     let challenge = transcript.challenge()?;
@@ -2247,7 +2089,6 @@ where
     a = (a_left * challenge) + &(a_right * inverse);
     b = (b_left * inverse) + &(b_right * challenge);
     drop(h_bold_weights);
-
     while g_bold.len() > 1 {
         let (a_left, a_right) = a.split()?;
         let (b_left, b_right) = b.split()?;
@@ -2265,7 +2106,6 @@ where
         {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
-
         let c_left = SecretScalar::new(a_left.inner_product(b_right.0.iter()));
         let c_right = SecretScalar::new(a_right.inner_product(b_left.0.iter()));
         let left = {
@@ -2295,14 +2135,12 @@ where
         if left.is_identity() || right.is_identity() {
             return Err(GeneralizedBulletproofErrorV1::InnerProductRoundIdentity);
         }
-
         transcript.push_point(left)?;
         transcript.push_point(right)?;
         let challenge = transcript.challenge()?;
         let inverse = challenge
             .invert()
             .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
-
         // Every fold scalar is transcript-public. Evaluate the independent G
         // and H halves in indexed order. The `parallel` feature uses the
         // ambient deterministic Rayon pool; the fallback performs the same
@@ -2352,7 +2190,6 @@ where
         a = (a_left * challenge) + &(a_right * inverse);
         b = (b_left * inverse) + &(b_right * challenge);
     }
-
     if g_bold.len() != 1 || h_bold.len() != 1 || a.len() != 1 || b.len() != 1 {
         return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
     }
@@ -2368,7 +2205,6 @@ where
     transcript.push_scalar(b[0])?;
     Ok(())
 }
-
 fn challenge_products<F: ProofScalar>(challenges: &[(F, F)]) -> Vec<F> {
     let mut products = vec![F::ONE; 1 << challenges.len()];
     if !challenges.is_empty() {
@@ -2385,7 +2221,6 @@ fn challenge_products<F: ProofScalar>(challenges: &[(F, F)]) -> Vec<F> {
     }
     products
 }
-
 fn verify_inner_product<S, T>(
     generators: ProofGeneratorView<'_, S>,
     h_bold_weights: ScalarVector<S::Scalar>,
@@ -2427,84 +2262,66 @@ where
     verifier.g -= a * b * u;
     Ok(())
 }
-
 #[cfg(test)]
 mod secret_cleanup_tests {
+    use super::*;
     use std::sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
     };
-
-    use super::*;
-
     static TEST_LOCK: Mutex<()> = Mutex::new(());
     static CLEAR_CALLS: AtomicUsize = AtomicUsize::new(0);
     static POINT_CLEAR_CALLS: AtomicUsize = AtomicUsize::new(0);
     static POINT_ADD_CALLS: AtomicUsize = AtomicUsize::new(0);
     static PANIC_ON_POINT_ADD: AtomicUsize = AtomicUsize::new(usize::MAX);
-
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct TrackingScalar(u64);
-
     impl Add for TrackingScalar {
         type Output = Self;
-
         fn add(self, rhs: Self) -> Self::Output {
             Self(self.0.wrapping_add(rhs.0))
         }
     }
-
     impl Sub for TrackingScalar {
         type Output = Self;
-
         fn sub(self, rhs: Self) -> Self::Output {
             Self(self.0.wrapping_sub(rhs.0))
         }
     }
-
     impl Mul for TrackingScalar {
         type Output = Self;
-
         fn mul(self, rhs: Self) -> Self::Output {
             Self(self.0.wrapping_mul(rhs.0))
         }
     }
-
     impl Neg for TrackingScalar {
         type Output = Self;
-
         fn neg(self) -> Self::Output {
             Self(self.0.wrapping_neg())
         }
     }
-
     impl AddAssign for TrackingScalar {
         fn add_assign(&mut self, rhs: Self) {
             *self = *self + rhs;
         }
     }
-
     impl SubAssign for TrackingScalar {
         fn sub_assign(&mut self, rhs: Self) {
             *self = *self - rhs;
         }
     }
-
     impl MulAssign for TrackingScalar {
         fn mul_assign(&mut self, rhs: Self) {
             *self = *self * rhs;
         }
     }
-
     impl ProofScalar for TrackingScalar {
         const ZERO: Self = Self(0);
         const ONE: Self = Self(1);
         const SCALAR_BITS: usize = 64;
-
         fn from_u64(value: u64) -> Self {
             Self(value)
         }
-
         fn decode(bytes: [u8; 32]) -> Option<Self> {
             Some(Self(u64::from_le_bytes(
                 bytes[..8]
@@ -2512,13 +2329,11 @@ mod secret_cleanup_tests {
                     .expect("eight-byte tracking scalar encoding"),
             )))
         }
-
         fn encode(self) -> [u8; 32] {
             let mut bytes = [0_u8; 32];
             bytes[..8].copy_from_slice(&self.0.to_le_bytes());
             bytes
         }
-
         fn reduce_wide(bytes: [u8; 64]) -> Self {
             Self(u64::from_le_bytes(
                 bytes[..8]
@@ -2526,43 +2341,33 @@ mod secret_cleanup_tests {
                     .expect("eight-byte tracking scalar reduction"),
             ))
         }
-
         fn invert(self) -> Option<Self> {
             (!self.is_zero()).then_some(Self::ONE)
         }
-
         fn sqrt(self) -> Option<Self> {
             Some(self)
         }
-
         fn square(self) -> Self {
             self * self
         }
-
         fn double(self) -> Self {
             self + self
         }
-
         fn is_zero(self) -> bool {
             self == Self::ZERO
         }
-
         fn is_odd(self) -> bool {
             self.0 & 1 == 1
         }
-
         fn clear_secret(&mut self) {
             self.0 = 0;
             CLEAR_CALLS.fetch_add(1, Ordering::SeqCst);
         }
     }
-
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct TrackingPoint(u64);
-
     impl Add for TrackingPoint {
         type Output = Self;
-
         fn add(self, rhs: Self) -> Self::Output {
             let call = POINT_ADD_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
             assert_ne!(
@@ -2573,72 +2378,57 @@ mod secret_cleanup_tests {
             Self(self.0.wrapping_add(rhs.0))
         }
     }
-
     impl Sub for TrackingPoint {
         type Output = Self;
-
         fn sub(self, rhs: Self) -> Self::Output {
             Self(self.0.wrapping_sub(rhs.0))
         }
     }
-
     impl Neg for TrackingPoint {
         type Output = Self;
-
         fn neg(self) -> Self::Output {
             Self(self.0.wrapping_neg())
         }
     }
-
     impl AddAssign for TrackingPoint {
         fn add_assign(&mut self, rhs: Self) {
             *self = *self + rhs;
         }
     }
-
     impl SubAssign for TrackingPoint {
         fn sub_assign(&mut self, rhs: Self) {
             *self = *self - rhs;
         }
     }
-
     impl ProofPoint for TrackingPoint {
         type Scalar = TrackingScalar;
         type Encoded = [u8; 32];
         const POINT_BYTES: usize = 32;
-
         fn identity() -> Self {
             Self(0)
         }
-
         fn is_identity(self) -> bool {
             self.0 == 0
         }
-
         fn double(self) -> Self {
             Self(self.0.wrapping_mul(2))
         }
-
         fn scale(self, scalar: Self::Scalar) -> Self {
             Self(self.0.wrapping_mul(scalar.0))
         }
-
         fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
             let mask = 0_u64.wrapping_sub(u64::from(choice & 1));
             Self((a.0 & !mask) | (b.0 & mask))
         }
-
         fn clear_secret(&mut self) {
             self.0 = 0;
             POINT_CLEAR_CALLS.fetch_add(1, Ordering::SeqCst);
         }
-
         fn encode(self) -> Self::Encoded {
             let mut bytes = [0_u8; 32];
             bytes[..8].copy_from_slice(&self.0.to_le_bytes());
             bytes
         }
-
         fn decode(
             bytes: impl AsRef<[u8]>,
             allow_identity: bool,
@@ -2658,14 +2448,11 @@ mod secret_cleanup_tests {
             Ok(point)
         }
     }
-
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct TrackingSuite;
-
     impl ProofSuite for TrackingSuite {
         type Scalar = TrackingScalar;
         type Point = TrackingPoint;
-
         fn generators() -> &'static ProofGenerators<Self> {
             static GENERATORS: std::sync::OnceLock<ProofGenerators<TrackingSuite>> =
                 std::sync::OnceLock::new();
@@ -2680,12 +2467,10 @@ mod secret_cleanup_tests {
             })
         }
     }
-
     struct ScriptedRandom {
         requests: usize,
         fail_at: Option<usize>,
     }
-
     impl ProofRandomSource for ScriptedRandom {
         fn fill_bytes(
             &mut self,
@@ -2700,7 +2485,6 @@ mod secret_cleanup_tests {
             Ok(())
         }
     }
-
     #[test]
     fn secret_scalar_owner_clears_constructor_and_transfer_slots() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -2709,7 +2493,6 @@ mod secret_cleanup_tests {
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
         drop(owned);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
-
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let mut source = TrackingScalar(7);
         let owned = SecretScalar::take(&mut source);
@@ -2717,7 +2500,6 @@ mod secret_cleanup_tests {
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
         drop(owned);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
-
         let source = include_str!("generalized_bulletproof.rs");
         assert!(source.contains("fn new(mut value: F) -> Self"));
         assert!(source.contains("fn take(value: &mut F) -> Self"));
@@ -2731,7 +2513,6 @@ mod secret_cleanup_tests {
         assert!(random.contains("if let Some(mut scalar) = F::random(rng)?"));
         assert!(random.contains("SecretScalar::take(&mut scalar)"));
     }
-
     #[test]
     fn scoped_guards_clear_named_scalars_and_msm_copies() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -2749,7 +2530,6 @@ mod secret_cleanup_tests {
         }
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
     }
-
     #[test]
     fn secret_builder_private_push_copy_clears_successful_parameter_slots() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -2766,7 +2546,6 @@ mod secret_cleanup_tests {
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
         assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 2);
     }
-
     #[test]
     fn secret_builder_source_boundary_is_borrowed_and_callee_slots_are_guarded() {
         let source = include_str!("generalized_bulletproof.rs");
@@ -2782,7 +2561,6 @@ mod secret_cleanup_tests {
             !source.contains("pub fn push(\n        &mut self,\n        mut scalar: S::Scalar,")
         );
     }
-
     #[test]
     fn secret_builder_rejects_overflow_without_reallocation_and_wipes_terms() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -2808,7 +2586,6 @@ mod secret_cleanup_tests {
         drop(terms);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 5);
         assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 5);
-
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let mut incomplete =
             SecretMultiexpBuilder::<TrackingSuite>::new(2).expect("fixed tracking capacity");
@@ -2821,7 +2598,6 @@ mod secret_cleanup_tests {
         );
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
     }
-
     #[test]
     fn secret_builder_matches_public_and_naive_msm_across_chunks() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -2848,7 +2624,6 @@ mod secret_cleanup_tests {
                 TrackingPoint(sum.0.wrapping_add(term.0.0.wrapping_mul(term.1.0)))
             });
         assert_eq!(multiexp::<TrackingSuite>(&public_terms), expected);
-
         let evaluate_secret = || {
             let mut secret = SecretMultiexpBuilder::<TrackingSuite>::new(public_terms.len())
                 .expect("fixed cross-chunk capacity");
@@ -2879,7 +2654,6 @@ mod secret_cleanup_tests {
             assert_eq!(single_thread.encode(), four_threads.encode());
         }
     }
-
     #[test]
     fn public_two_term_straus_matches_independent_scaling_at_scalar_edges() {
         let scalars = [
@@ -2908,7 +2682,6 @@ mod secret_cleanup_tests {
             }
         }
     }
-
     fn tracking_msm(
         terms: impl IntoIterator<Item = (TrackingScalar, TrackingPoint)>,
     ) -> TrackingPoint {
@@ -2918,7 +2691,6 @@ mod secret_cleanup_tests {
                 sum + point.scale(scalar)
             })
     }
-
     fn tracking_inner_product(left: &[TrackingScalar], right: &[TrackingScalar]) -> TrackingScalar {
         left.iter()
             .copied()
@@ -2927,7 +2699,6 @@ mod secret_cleanup_tests {
                 sum + (left * right)
             })
     }
-
     #[test]
     fn symbolic_initial_h_matches_eager_materialization_at_small_powers_of_two() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -2970,7 +2741,6 @@ mod secret_cleanup_tests {
             let u_scalar = TrackingScalar(13);
             let u = g.scale(u_scalar);
             let product = tracking_inner_product(&a, &b);
-
             let eager_opening = tracking_msm(
                 a.iter()
                     .copied()
@@ -2992,7 +2762,6 @@ mod secret_cleanup_tests {
                     .chain(core::iter::once((product * u_scalar, g))),
             );
             assert_eq!(symbolic_opening, eager_opening, "opening diverged at n={n}");
-
             if n == 1 {
                 continue;
             }
@@ -3005,7 +2774,6 @@ mod secret_cleanup_tests {
             let (weight_left, weight_right) = weights.split_at(half);
             let c_left = tracking_inner_product(a_left, b_right);
             let c_right = tracking_inner_product(a_right, b_left);
-
             let eager_left = tracking_msm(
                 a_left
                     .iter()
@@ -3030,7 +2798,6 @@ mod secret_cleanup_tests {
                     .chain(core::iter::once((c_left * u_scalar, g))),
             );
             assert_eq!(symbolic_left, eager_left, "L0 diverged at n={n}");
-
             let eager_right = tracking_msm(
                 a_right
                     .iter()
@@ -3055,7 +2822,6 @@ mod secret_cleanup_tests {
                     .chain(core::iter::once((c_right * u_scalar, g))),
             );
             assert_eq!(symbolic_right, eager_right, "R0 diverged at n={n}");
-
             let challenge = TrackingScalar(7);
             let inverse = TrackingScalar(11);
             for index in 0..half {
@@ -3070,10 +2836,8 @@ mod secret_cleanup_tests {
             }
         }
     }
-
     #[derive(Default)]
     struct RecordingProverTranscript(Vec<u8>);
-
     impl ProverTranscript<TrackingSuite> for RecordingProverTranscript {
         fn push_scalar(
             &mut self,
@@ -3083,7 +2847,6 @@ mod secret_cleanup_tests {
             self.0.extend_from_slice(&scalar.encode());
             Ok(())
         }
-
         fn push_point(
             &mut self,
             point: TrackingPoint,
@@ -3092,12 +2855,10 @@ mod secret_cleanup_tests {
             self.0.extend_from_slice(&point.encode());
             Ok(())
         }
-
         fn challenge(&mut self) -> Result<TrackingScalar, GeneralizedBulletproofErrorV1> {
             Ok(TrackingScalar::ONE)
         }
     }
-
     #[test]
     fn symbolic_h_proof_bytes_are_worker_count_independent() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -3186,7 +2947,6 @@ mod secret_cleanup_tests {
             assert_eq!(single_thread, four_threads);
         }
     }
-
     #[test]
     fn secret_chunk_fold_clears_successes_after_peer_error() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -3211,7 +2971,6 @@ mod secret_cleanup_tests {
         // result, its named intermediates, and buffered result all clear.
         assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 9);
     }
-
     #[test]
     fn secret_point_constructor_clears_its_copy_parameter() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -3220,7 +2979,6 @@ mod secret_cleanup_tests {
         assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 1);
         drop(point);
         assert_eq!(POINT_CLEAR_CALLS.load(Ordering::SeqCst), 2);
-
         let source = include_str!("generalized_bulletproof.rs");
         let constructor = source
             .split_once("impl<P: ProofPoint> SecretPoint<P> {")
@@ -3233,7 +2991,6 @@ mod secret_cleanup_tests {
         assert!(constructor.contains("BorrowedSecretPoint::new(&mut point)"));
         assert!(constructor.contains("drop(incoming);"));
     }
-
     #[test]
     fn secret_builder_unwind_wipes_terms_digits_tables_and_named_points() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -3261,7 +3018,6 @@ mod secret_cleanup_tests {
         assert!(SECRET_BYTE_CLEAR_CALLS.load(Ordering::SeqCst) >= 259);
         assert!(POINT_CLEAR_CALLS.load(Ordering::SeqCst) > 40);
     }
-
     #[test]
     fn vector_padding_and_split_clear_replaced_allocations() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -3273,7 +3029,6 @@ mod secret_cleanup_tests {
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
         drop(padded);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
-
         let source = include_str!("generalized_bulletproof.rs");
         assert!(source.contains("vector: impl Iterator<Item = &'a F>"));
         assert!(!source.contains("inner_product(right.0.iter().copied())"));
@@ -3281,7 +3036,6 @@ mod secret_cleanup_tests {
         assert!(source.contains("map(|constraint| &constraint.c)"));
         assert!(!source.contains("tau_x_poly.0.iter().copied()"));
         assert!(source.contains("tau_x_poly.0.iter().enumerate()"));
-
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let values = ScalarVector(vec![
             TrackingScalar(1),
@@ -3295,7 +3049,6 @@ mod secret_cleanup_tests {
         drop(right);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
     }
-
     #[test]
     fn random_vector_clears_success_and_partial_failure() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
@@ -3311,7 +3064,6 @@ mod secret_cleanup_tests {
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 8);
         drop(values);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 12);
-
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let mut failure = ScriptedRandom {
             requests: 0,
@@ -3323,11 +3075,9 @@ mod secret_cleanup_tests {
         ));
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 9);
     }
-
     #[test]
     fn scalar_commitment_openings_clear_on_success_error_and_unwind() {
         let _lock = TEST_LOCK.lock().expect("secret cleanup test lock");
-
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let opening = VectorCommitmentOpening::new(
             vec![TrackingScalar(2), TrackingScalar(3)],
@@ -3336,7 +3086,6 @@ mod secret_cleanup_tests {
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 1);
         drop(opening);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
-
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let legacy = ArithmeticCircuitWitness::<TrackingSuite>::new(
             vec![TrackingScalar(3)],
@@ -3347,7 +3096,6 @@ mod secret_cleanup_tests {
         assert!(legacy.scalar_commitments.is_empty());
         drop(legacy);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 3);
-
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let witness = ArithmeticCircuitWitness::<TrackingSuite>::new_with_scalar_commitments(
             vec![TrackingScalar(3)],
@@ -3358,7 +3106,6 @@ mod secret_cleanup_tests {
         .expect("scalar-opening witness constructor succeeds");
         drop(witness);
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 9);
-
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         assert!(matches!(
             ArithmeticCircuitWitness::<TrackingSuite>::new_with_scalar_commitments(
@@ -3370,7 +3117,6 @@ mod secret_cleanup_tests {
             Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
         ));
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 7);
-
         CLEAR_CALLS.store(0, Ordering::SeqCst);
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _witness = ArithmeticCircuitWitness::<TrackingSuite>::new_with_scalar_commitments(
@@ -3385,7 +3131,6 @@ mod secret_cleanup_tests {
         assert!(unwind.is_err());
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 9);
     }
-
     #[test]
     fn scalar_commitment_opening_source_boundary_stays_private_and_zeroizing() {
         let source = include_str!("generalized_bulletproof.rs");
@@ -3393,7 +3138,6 @@ mod secret_cleanup_tests {
             include_str!("../../iroha_core/src/privacy_engines/fcmp_plus_plus/bulletproof.rs");
         let fcmp_circuit =
             include_str!("../../iroha_core/src/privacy_engines/fcmp_plus_plus/circuit.rs");
-
         assert!(source.contains("struct ScalarCommitmentOpening<F: ProofScalar>"));
         assert!(!source.contains("pub struct ScalarCommitmentOpening"));
         assert!(source.contains("struct ScalarCommitmentOpeningInputs<F: ProofScalar>"));

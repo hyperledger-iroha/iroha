@@ -7,7 +7,6 @@
 #[cfg(test)]
 use std::time::SystemTime;
 use std::{collections::BTreeMap, str::FromStr};
-
 #[cfg(test)]
 use iroha_data_model::block::BlockHeader;
 #[cfg(test)]
@@ -40,11 +39,9 @@ use mv::storage::StorageReadOnly;
 use norito::codec::{Decode as _, Encode as _};
 use regex::Regex;
 use thiserror::Error;
-
 #[cfg(test)]
 use crate::state::{State, StateReadOnly};
 use crate::state::{StateBlock, StateTransaction, World, WorldReadOnly};
-
 pub use iroha_data_model::sns::{
     ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
 };
@@ -2865,7 +2862,6 @@ mod tests {
         },
         transaction::TransactionBuilder,
     };
-
     use super::*;
     use crate::{
         kura::Kura,
@@ -3148,9 +3144,7 @@ mod tests {
     }
     #[test]
     fn account_id_rekey_lineage_requires_typed_live_unambiguous_retired_history() {
-        use iroha_data_model::account::rekey::{
-            AccountRekeyRecord, AccountRekeyTransitionProvenance,
-        };
+        use iroha_data_model::account::rekey::{AccountRekeyRecord, AccountRekeyTransitionProvenance};
         let catalog = dataspace_catalog();
         let alias =
             AccountAlias::domainless("lineage".parse().expect("label"), DataSpaceId::UNIVERSAL);
@@ -3507,7 +3501,6 @@ mod tests {
             "alpha"
         );
     }
-
     mod active_dataspace_alias_tests {
         include!("sns/active_dataspace_alias_tests.rs");
     }
@@ -4227,10 +4220,8 @@ mod tests {
     #[test]
     fn sns_state_block_does_not_advance_transaction_height() {
         use std::collections::HashSet;
-
         use iroha_data_model::block::BlockHeader;
         use nonzero_ext::nonzero;
-
         let state = State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),
@@ -4280,7 +4271,6 @@ mod tests {
     #[test]
     fn sns_state_block_uses_wall_clock_lifecycle_time() {
         use std::time::SystemTime;
-
         let state = State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),

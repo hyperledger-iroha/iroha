@@ -1,5 +1,4 @@
 //! Tokio actor Peer
-
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     net::SocketAddr,
@@ -9,7 +8,6 @@ use std::{
     },
     time::SystemTime,
 };
-
 use bytes::{Buf, BufMut, BytesMut};
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use iroha_crypto::soranet::pow::TicketRevocationStoreLimits;
@@ -38,7 +36,6 @@ use tokio::{
     sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch},
     time::Duration,
 };
-
 use crate::{
     ConsensusConfigCaps, ConsensusHandshakeCaps, ConsensusMode, Error, RelayRole, boilerplate::*,
 };
@@ -803,7 +800,6 @@ fn sign_soranet_transport_delegation_v3(
     challenge: SoranetTransportDelegationChallenge,
 ) -> Result<LocalSoranetTransportDelegationV3, crate::Error> {
     use crate::SoranetTransportDelegationError as DelegationError;
-
     if node_key_pair.algorithm() != iroha_crypto::Algorithm::BlsNormal {
         return Err(DelegationError::LocalNodeAlgorithmMismatch {
             found: node_key_pair.algorithm(),
@@ -858,7 +854,6 @@ fn verify_soranet_transport_delegation_v3(
     expected_challenge: &SoranetTransportDelegationChallenge,
 ) -> Result<VerifiedSoranetTransportDelegationV3, crate::SoranetTransportDelegationError> {
     use crate::SoranetTransportDelegationError as DelegationError;
-
     if canonical_signed_frame.is_empty() {
         return Err(DelegationError::EmptyFrame);
     }
@@ -1095,10 +1090,8 @@ where
     read.read_exact(&mut payload).await?;
     Ok(payload)
 }
-
 mod post_channel {
     use tokio::sync::mpsc;
-
     pub type Sender<T> = mpsc::Sender<T>;
     pub type Receiver<T> = mpsc::Receiver<T>;
     pub fn channel<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
@@ -2070,9 +2063,7 @@ impl<T> RetainedPost<T> {
 #[cfg(test)]
 mod shared_byte_budget_tests {
     use iroha_crypto::KeyPair;
-
     use super::*;
-
     #[test]
     fn ordinary_cannot_consume_the_safety_reserve() {
         let budget = SharedByteBudget::new(10, 3).expect("valid budget geometry");
@@ -2671,7 +2662,6 @@ mod shared_byte_budget_tests {
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::sync::{Mutex, OnceLock};
-
     /// Origin for a peer task spawn observed in tests.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum SpawnPath {
@@ -2766,16 +2756,12 @@ impl Default for OutboundFrameQueueLimits {
         )
     }
 }
-
 pub mod handles {
     //! Module with functions to start peer actor and handle to interact with it.
-
     use iroha_crypto::KeyPair;
     use iroha_logger::Instrument;
     use iroha_primitives::addr::SocketAddr;
-
     use super::{run::RunPeerArgs, *};
-
     /// Start Peer in `state::Connecting` state
     #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     pub(crate) fn connecting<T: Pload + crate::network::message::ClassifyTopic, E: Enc>(
@@ -3034,7 +3020,6 @@ pub mod handles {
             T: crate::network::message::ClassifyTopic,
         {
             use tokio::sync::mpsc::error::TrySendError;
-
             let topic = msg.topic();
             let priority = msg.priority();
             let progress =
@@ -3178,7 +3163,6 @@ pub mod handles {
         /// Receive the next message from any synthetic lane, if any.
         pub(crate) fn try_recv_any(&mut self) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
             use tokio::sync::mpsc::error::TryRecvError;
-
             macro_rules! try_lane {
                 ($lane:expr) => {
                     match $lane.try_recv() {
@@ -3206,7 +3190,6 @@ pub mod handles {
             &mut self,
         ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
             use tokio::sync::mpsc::error::TryRecvError;
-
             macro_rules! try_lane {
                 ($lane:expr) => {
                     match $lane.try_recv() {
@@ -3293,7 +3276,6 @@ pub mod handles {
     mod tests {
         use norito::codec::{Decode, Encode};
         use tokio::sync::mpsc::error::TryRecvError;
-
         use super::*;
         use crate::{
             Priority,
@@ -3658,12 +3640,9 @@ pub mod handles {
         }
     }
 }
-
 mod run {
     //! Module with peer [`run`] function.
-
     use std::task::Poll;
-
     #[cfg(feature = "quic")]
     use bytes::Bytes;
     use futures::future::poll_fn;
@@ -3672,10 +3651,8 @@ mod run {
     use norito::codec::Decode;
     use tokio::time::Instant;
     use tracing;
-
     use crate::network::message::{ClassifyTopic, Topic};
     use crate::{Priority, sampler::LogSampler};
-
     use super::{
         cryptographer::Cryptographer,
         handshake_flow::Handshake,
@@ -4637,7 +4614,6 @@ mod run {
         timeout: Duration,
     ) -> bool {
         use tokio::sync::mpsc::error::TrySendError;
-
         let message = ServiceMessage::Terminated(terminated);
         match service_message_sender.try_send(message) {
             Ok(()) => true,
@@ -7964,7 +7940,6 @@ mod run {
     {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
             use std::borrow::Cow;
-
             let min_size = ncore::archived_payload_size::<Self>();
             let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
                 let mut padded = Vec::with_capacity(min_size);
@@ -8158,17 +8133,13 @@ mod run {
             task::{Context, Poll},
             time::Duration,
         };
-
         use bytes::Bytes;
         use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
         use iroha_data_model::peer::Peer;
         use norito::codec::{Decode, Encode};
         use tokio::io::{AsyncRead, AsyncWrite};
-
         use crate::Priority;
-
         use super::*;
-
         #[derive(Encode, Decode, Clone, Debug)]
         struct Dummy;
         impl ClassifyTopic for Dummy {}
@@ -12836,16 +12807,12 @@ mod run {
         }
     }
 }
-
 mod state {
     //! Module for peer stages.
-
     use iroha_crypto::{KeyPair, PublicKey, Signature};
     use iroha_data_model::peer::Peer;
     use iroha_primitives::addr::SocketAddr;
-
     use super::{cryptographer::Cryptographer, *};
-
     #[derive(Clone, Debug, Encode, Decode)]
     pub(super) struct HandshakeConfidentialDigest {
         vk_set_hash: Option<[u8; 32]>,
@@ -13110,7 +13077,6 @@ mod state {
     }
     pub(super) fn hex_bytes(bytes: &[u8]) -> String {
         use core::fmt::Write as _;
-
         let mut out = String::with_capacity(bytes.len() * 2);
         for byte in bytes {
             let _ = write!(&mut out, "{byte:02x}");
@@ -13538,7 +13504,6 @@ mod state {
                 connection_id: ConnectionId,
             ) -> Result<Connection, crate::Error> {
                 use tokio::time::Instant;
-
                 const QUIC_SERVER_NAME: &str = "iroha-quic";
                 let deadline = Instant::now() + dial_timeout;
                 let targets: Vec<std::net::SocketAddr> = match peer_addr {
@@ -13847,9 +13812,7 @@ mod state {
     #[cfg(test)]
     mod dial_policy_tests {
         use std::{sync::Arc, time::Duration};
-
         use super::*;
-
         fn connecting_to(
             peer_addr: std::net::SocketAddr,
             tls_enabled: bool,
@@ -13946,7 +13909,6 @@ mod state {
         #[tokio::test(flavor = "current_thread")]
         async fn tls_dial_falls_back_to_plain_when_enabled() {
             use tokio::net::TcpListener;
-
             let listener = match TcpListener::bind("127.0.0.1:0").await {
                 Ok(listener) => listener,
                 Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
@@ -14595,14 +14557,10 @@ mod state {
 }
 include!("peer_tests.rs");
 // handshake payload is encoded/decoded as a tuple to avoid extra type definitions
-
 mod handshake_flow {
     //! Implementations of the handshake process.
-
     use async_trait::async_trait;
-
     use super::{state::*, *};
-
     #[async_trait]
     pub(super) trait Stage<E: Enc> {
         type NextStage;
@@ -14665,18 +14623,13 @@ mod handshake_flow {
     impl_handshake!(ConnectedTo);
     impl_handshake!(Connecting);
 }
-
 pub(crate) use run::{checked_data_message_wire_len, data_message_wire_len_from_payload_len};
 #[cfg(test)]
 pub(crate) use run::{data_message_wire_len, materialized_data_message_wire_len};
-
 pub mod message {
     //! Module for peer messages
-
     use iroha_data_model::peer::Peer;
-
     use super::*;
-
     /// Connection-local count of reliable deliveries which crossed a peer
     /// dispatch worker but have not yet left their final local consumer.
     ///
@@ -15316,10 +15269,8 @@ pub mod message {
         },
     }
 }
-
 mod cryptographer {
     use iroha_crypto::{SessionKey, encryption::SymmetricEncryptor};
-
     use super::*;
     /// Peer's cryptographic primitives
     #[derive(Clone)]

@@ -5,9 +5,7 @@
 //! only need a compact view that says which accounts are permitted to act inside
 //! which dataspaces. This module provides that mapping; higher-level services
 //! are responsible for keeping it in sync with manifest activation/revocation.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     account::{AccountId, rekey::AccountAliasDomain},
@@ -19,9 +17,7 @@ use iroha_schema::IntoSchema;
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::state::WorldReadOnly;
-
 /// Failure to resolve the one issuer key authorized by committed AXT policy.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum AxtIssuerResolutionError {
@@ -47,7 +43,6 @@ pub enum AxtIssuerResolutionError {
     #[error("AXT issuer account must use a single-signature controller")]
     MultisigIssuer,
 }
-
 /// Exact committed issuer identity and verification key for one AXT policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AxtIssuerBinding {
@@ -56,7 +51,6 @@ pub struct AxtIssuerBinding {
     /// Sole single-signature controller resolved through the committed UAID indexes.
     pub public_key: PublicKey,
 }
-
 /// Resolve the exact AXT issuer key from committed Space Directory state.
 ///
 /// Resolution is keyed by both dataspace and active manifest root. The
@@ -76,7 +70,6 @@ pub fn resolve_axt_issuer_binding(
     if manifest_root.iter().all(|byte| *byte == 0) {
         return Err(AxtIssuerResolutionError::ZeroManifestRoot);
     }
-
     let mut matched_uaid = None;
     for (uaid, set) in world.space_directory_manifests().iter() {
         let Some(record) = set.get(&dataspace) else {
@@ -99,7 +92,6 @@ pub fn resolve_axt_issuer_binding(
             return Err(AxtIssuerResolutionError::AmbiguousManifest);
         }
     }
-
     let uaid = matched_uaid.ok_or(AxtIssuerResolutionError::MissingManifest)?;
     let account = world
         .uaid_accounts()
@@ -128,7 +120,6 @@ pub fn resolve_axt_issuer_binding(
         public_key,
     })
 }
-
 /// Lane identity extraction failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaneIdentityMetadataError {
@@ -147,7 +138,6 @@ pub enum LaneIdentityMetadataError {
         dataspace: DataSpaceId,
     },
 }
-
 /// Extract lane identity metadata (UAID + capability tags) for transaction admission.
 ///
 /// The lookup is scoped by account UAID and routed dataspace:
@@ -169,7 +159,6 @@ pub fn extract_lane_identity_metadata(
     let Some(uaid) = account_entry.value().uaid().copied() else {
         return Ok((None, Vec::new()));
     };
-
     let manifest_record = world
         .space_directory_manifests()
         .get(&uaid)
@@ -182,7 +171,6 @@ pub fn extract_lane_identity_metadata(
             dataspace: dataspace_id,
         });
     }
-
     let is_bound = world
         .uaid_dataspaces()
         .get(&uaid)
@@ -193,7 +181,6 @@ pub fn extract_lane_identity_metadata(
             dataspace: dataspace_id,
         });
     }
-
     if let Some(record) = manifest_record {
         let mut tags = BTreeSet::new();
         for entry in &record.manifest.entries {
@@ -206,10 +193,8 @@ pub fn extract_lane_identity_metadata(
         }
         return Ok((Some(uaid), tags.into_iter().collect()));
     }
-
     Ok((Some(uaid), Vec::new()))
 }
-
 /// Resolve every dataspace-qualified account domain bound to an authority.
 ///
 /// Lane-compliance policies operate on domain selectors, while production
@@ -239,25 +224,21 @@ pub fn extract_authority_domains(
     }
     Ok(domains.into_iter().collect())
 }
-
 /// Deterministic mapping from a UAID to the dataspaces/accounts where it is active.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct UaidDataspaceBindings {
     entries: BTreeMap<DataSpaceId, BTreeSet<AccountId>>,
 }
-
 impl UaidDataspaceBindings {
     /// Returns `true` when the UAID is not associated with any dataspace.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
-
     /// Iterate dataspace bindings (`dataspace_id`, `accounts`).
     pub fn iter(&self) -> impl Iterator<Item = (&DataSpaceId, &BTreeSet<AccountId>)> {
         self.entries.iter()
     }
-
     /// Returns `true` when the provided account is bound to `dataspace`.
     #[must_use]
     pub fn is_bound_to(&self, dataspace: DataSpaceId, account_id: &AccountId) -> bool {
@@ -265,7 +246,6 @@ impl UaidDataspaceBindings {
             .get(&dataspace)
             .is_some_and(|accounts| accounts.contains(account_id))
     }
-
     /// Returns the dataspace that owns the provided account, if any.
     #[must_use]
     pub fn dataspace_for_account(&self, account_id: &AccountId) -> Option<DataSpaceId> {
@@ -274,7 +254,6 @@ impl UaidDataspaceBindings {
             .find(|(_, accounts)| accounts.contains(account_id))
             .map(|(dataspace, _)| *dataspace)
     }
-
     /// Adds an `(dataspace, account)` binding for the UAID.
     ///
     /// Returns `true` when the account was newly inserted.
@@ -284,7 +263,6 @@ impl UaidDataspaceBindings {
             .or_default()
             .insert(account_id)
     }
-
     /// Removes an `(dataspace, account)` binding for the UAID.
     ///
     /// Returns `true` when the account was present and removed.
@@ -301,7 +279,6 @@ impl UaidDataspaceBindings {
             false
         }
     }
-
     /// Removes _all_ bindings for the provided account, returning the dataspaces cleared.
     pub fn purge_account(&mut self, account_id: &AccountId) -> Vec<DataSpaceId> {
         let mut emptied = Vec::new();
@@ -316,7 +293,6 @@ impl UaidDataspaceBindings {
         }
         emptied
     }
-
     /// Retain only bindings for dataspaces included in `allowed`.
     ///
     /// Returns `true` when at least one dataspace binding was removed.
@@ -327,36 +303,30 @@ impl UaidDataspaceBindings {
         self.entries.len() != before
     }
 }
-
 /// Deterministic mapping from a canonical account id to the dataspaces and domains where it is
 /// visible for routed read queries.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct AccountScopeDirectoryEntry {
     entries: BTreeMap<DataSpaceId, BTreeSet<AccountAliasDomain>>,
 }
-
 impl AccountScopeDirectoryEntry {
     /// Returns `true` when the account has no routed dataspace scope.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
-
     /// Iterate account scope entries (`dataspace_id`, `domains`).
     pub fn iter(&self) -> impl Iterator<Item = (&DataSpaceId, &BTreeSet<AccountAliasDomain>)> {
         self.entries.iter()
     }
-
     /// Ensure the account is visible in `dataspace`.
     pub fn ensure_dataspace(&mut self, dataspace: DataSpaceId) {
         self.entries.entry(dataspace).or_default();
     }
-
     /// Bind `domain_id` under `dataspace`.
     pub fn bind_domain(&mut self, dataspace: DataSpaceId, domain: AccountAliasDomain) {
         self.entries.entry(dataspace).or_default().insert(domain);
     }
-
     /// Resolve the stored dataspace -> alias-domain scope into fully-qualified [`DomainId`]s.
     ///
     /// # Errors
@@ -380,7 +350,6 @@ impl AccountScopeDirectoryEntry {
         }
         Ok(hierarchy)
     }
-
     /// Retain only dataspaces included in `allowed`.
     ///
     /// Returns `true` when at least one dataspace entry was removed.
@@ -391,26 +360,22 @@ impl AccountScopeDirectoryEntry {
         self.entries.len() != before
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for UaidDataspaceBindings {
     fn json_serialize(&self, out: &mut String) {
         use base64::Engine as _;
-
         let bytes = norito::encode_canonical(self)
             .expect("UaidDataspaceBindings Norito serialization must succeed");
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         norito::json::JsonSerialize::json_serialize(&encoded, out);
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for UaidDataspaceBindings {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use base64::Engine as _;
-
         let encoded = parser.parse_string()?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded.as_str())
@@ -419,26 +384,22 @@ impl norito::json::JsonDeserialize for UaidDataspaceBindings {
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for AccountScopeDirectoryEntry {
     fn json_serialize(&self, out: &mut String) {
         use base64::Engine as _;
-
         let bytes = norito::encode_canonical(self)
             .expect("AccountScopeDirectoryEntry Norito serialization must succeed");
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         norito::json::JsonSerialize::json_serialize(&encoded, out);
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for AccountScopeDirectoryEntry {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use base64::Engine as _;
-
         let encoded = parser.parse_string()?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded.as_str())
@@ -447,7 +408,6 @@ impl norito::json::JsonDeserialize for AccountScopeDirectoryEntry {
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
-
 /// Manifest record tracked by the Space Directory host.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestRecord {
@@ -459,7 +419,6 @@ pub struct SpaceDirectoryManifestRecord {
     #[norito(default)]
     pub lifecycle: SpaceDirectoryManifestLifecycle,
 }
-
 impl SpaceDirectoryManifestRecord {
     /// Construct a new record computing the canonical manifest hash.
     #[must_use]
@@ -471,26 +430,22 @@ impl SpaceDirectoryManifestRecord {
             lifecycle: SpaceDirectoryManifestLifecycle::default(),
         }
     }
-
     /// Dataspace identifier extracted from the manifest.
     #[must_use]
     pub fn dataspace(&self) -> DataSpaceId {
         self.manifest.dataspace
     }
-
     /// UAID identifier extracted from the manifest.
     #[must_use]
     pub fn uaid(&self) -> UniversalAccountId {
         self.manifest.uaid
     }
-
     /// Returns `true` when the manifest is currently active (activated and not expired/revoked).
     #[must_use]
     pub fn is_active(&self) -> bool {
         self.lifecycle.is_active()
     }
 }
-
 /// Lifecycle metadata recorded for a manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 pub struct SpaceDirectoryManifestLifecycle {
@@ -504,7 +459,6 @@ pub struct SpaceDirectoryManifestLifecycle {
     #[norito(default)]
     pub revocation: Option<SpaceDirectoryManifestRevocation>,
 }
-
 /// Metadata describing a manifest revocation event.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestRevocation {
@@ -514,7 +468,6 @@ pub struct SpaceDirectoryManifestRevocation {
     #[norito(default)]
     pub reason: Option<String>,
 }
-
 impl SpaceDirectoryManifestLifecycle {
     /// Mark the manifest as activated at the provided epoch (clearing expiry/revocation markers).
     pub fn mark_activated(&mut self, epoch: u64) {
@@ -522,37 +475,31 @@ impl SpaceDirectoryManifestLifecycle {
         self.expired_epoch = None;
         self.revocation = None;
     }
-
     /// Record the epoch when the manifest expired.
     pub fn mark_expired(&mut self, epoch: u64) {
         self.expired_epoch = Some(epoch);
     }
-
     /// Record a revocation event (epoch + optional reason).
     pub fn mark_revoked(&mut self, epoch: u64, reason: Option<String>) {
         self.revocation = Some(SpaceDirectoryManifestRevocation { epoch, reason });
     }
-
     /// Returns `true` when the manifest has been activated and not expired/revoked.
     #[must_use]
     pub fn is_active(&self) -> bool {
         self.activated_epoch.is_some() && self.expired_epoch.is_none() && self.revocation.is_none()
     }
 }
-
 /// Deterministic mapping from dataspace id to manifest record for a UAID.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestSet {
     entries: BTreeMap<DataSpaceId, SpaceDirectoryManifestRecord>,
 }
-
 impl SpaceDirectoryManifestSet {
     /// Returns true when no manifests are recorded for the UAID.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
-
     /// Inserts or replaces the manifest associated with `record.manifest.dataspace`.
     pub fn upsert(
         &mut self,
@@ -560,24 +507,20 @@ impl SpaceDirectoryManifestSet {
     ) -> Option<SpaceDirectoryManifestRecord> {
         self.entries.insert(record.dataspace(), record)
     }
-
     /// Removes the manifest bound to the provided dataspace.
     pub fn remove(&mut self, dataspace: &DataSpaceId) -> Option<SpaceDirectoryManifestRecord> {
         self.entries.remove(dataspace)
     }
-
     /// Fetch the manifest bound to the dataspace, if any.
     #[must_use]
     pub fn get(&self, dataspace: &DataSpaceId) -> Option<&SpaceDirectoryManifestRecord> {
         self.entries.get(dataspace)
     }
-
     /// Iterate manifests keyed by dataspace.
     pub fn iter(&self) -> impl Iterator<Item = (&DataSpaceId, &SpaceDirectoryManifestRecord)> {
         self.entries.iter()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use base64::Engine as _;
@@ -586,10 +529,8 @@ mod tests {
     use iroha_data_model::{account::Account, domain::Domain, prelude::*};
     use iroha_test_samples::gen_account_in;
     use norito::json;
-
     use super::*;
     use crate::state::World;
-
     fn sample_manifest(dataspace: u32) -> AssetPermissionManifest {
         AssetPermissionManifest {
             version: ManifestVersion::default(),
@@ -601,7 +542,6 @@ mod tests {
             entries: Vec::new(),
         }
     }
-
     #[test]
     fn record_computes_manifest_hash() {
         let manifest = sample_manifest(11);
@@ -610,7 +550,6 @@ mod tests {
         assert_eq!(record.manifest, manifest);
         assert_eq!(record.manifest_hash, expected_hash);
         assert!(record.lifecycle.activated_epoch.is_none());
-
         let ambient_record = {
             let alternate_flags =
                 norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
@@ -622,7 +561,6 @@ mod tests {
             "manifest identity must ignore ambient Norito layout"
         );
     }
-
     #[test]
     fn manifest_set_upsert_replaces_existing_entry() {
         let mut set = SpaceDirectoryManifestSet::default();
@@ -633,7 +571,6 @@ mod tests {
             set.get(&DataSpaceId::new(1)).unwrap().manifest_hash,
             first.manifest_hash
         );
-
         let mut manifest = sample_manifest(1);
         manifest.activation_epoch = 999;
         let replacement = SpaceDirectoryManifestRecord::new(manifest.clone());
@@ -643,30 +580,25 @@ mod tests {
         assert_eq!(stored.manifest.entries, manifest.entries);
         assert_eq!(set.iter().count(), 1);
     }
-
     #[test]
     fn bindings_report_membership_by_dataspace() {
         let mut bindings = UaidDataspaceBindings::default();
         let dataspace = DataSpaceId::new(7);
         let (account_id, _) = gen_account_in("wonderland");
-
         assert!(!bindings.is_bound_to(dataspace, &account_id));
         bindings.bind_account(dataspace, account_id.clone());
         assert!(bindings.is_bound_to(dataspace, &account_id));
         assert!(!bindings.is_bound_to(DataSpaceId::new(8), &account_id));
     }
-
     #[test]
     fn bindings_json_roundtrip() {
         let mut bindings = UaidDataspaceBindings::default();
         let (account_id, _) = gen_account_in("wonderland");
         bindings.bind_account(DataSpaceId::new(9), account_id);
-
         let encoded = json::to_json(&bindings).expect("bindings should serialize to JSON");
         let decoded: UaidDataspaceBindings =
             json::from_str(&encoded).expect("bindings should deserialize from JSON");
         assert_eq!(decoded, bindings);
-
         let alternate_flags =
             norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
         let ambient_encoded = {
@@ -674,7 +606,6 @@ mod tests {
             json::to_json(&bindings).expect("bindings use ambient-independent JSON")
         };
         assert_eq!(ambient_encoded, encoded);
-
         let canonical_frame =
             norito::encode_canonical(&bindings).expect("encode canonical bindings frame");
         let alternate_frame = {
@@ -691,18 +622,15 @@ mod tests {
             "alternate-layout bindings frame must fail the external JSON boundary"
         );
     }
-
     #[test]
     fn account_scope_entry_json_roundtrip() {
         let mut entry = AccountScopeDirectoryEntry::default();
         entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
         entry.ensure_dataspace(DataSpaceId::new(12));
-
         let encoded = json::to_json(&entry).expect("scope entry should serialize to JSON");
         let decoded: AccountScopeDirectoryEntry =
             json::from_str(&encoded).expect("scope entry should deserialize from JSON");
         assert_eq!(decoded, entry);
-
         let alternate_flags =
             norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
         let ambient_encoded = {
@@ -710,7 +638,6 @@ mod tests {
             json::to_json(&entry).expect("scope entry uses ambient-independent JSON")
         };
         assert_eq!(ambient_encoded, encoded);
-
         let canonical_frame =
             norito::encode_canonical(&entry).expect("encode canonical scope frame");
         let alternate_frame = {
@@ -727,7 +654,6 @@ mod tests {
             "alternate-layout scope frame must fail the external JSON boundary"
         );
     }
-
     fn world_with_uaid(
         uaid: UniversalAccountId,
         dataspace: DataSpaceId,
@@ -742,7 +668,6 @@ mod tests {
             .with_uaid(Some(uaid))
             .build(&authority);
         let mut world = World::with([domain], [account], []);
-
         if with_manifest {
             let manifest = AssetPermissionManifest {
                 version: ManifestVersion::default(),
@@ -767,10 +692,8 @@ mod tests {
                 world.uaid_dataspaces.insert(uaid, bindings);
             }
         }
-
         (world, authority)
     }
-
     fn active_manifest_root(
         world: &World,
         uaid: UniversalAccountId,
@@ -785,14 +708,12 @@ mod tests {
             .manifest_hash
             .as_ref()
     }
-
     #[test]
     fn axt_issuer_resolution_uses_only_consistent_committed_identity() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::axt-issuer"));
         let dataspace = DataSpaceId::new(31);
         let (world, authority) = world_with_uaid(uaid, dataspace, true, true);
         let root = active_manifest_root(&world, uaid, dataspace);
-
         assert_eq!(
             resolve_axt_issuer_binding(&world.view(), dataspace, root),
             Ok(AxtIssuerBinding {
@@ -803,7 +724,6 @@ mod tests {
                     .clone(),
             })
         );
-
         let mut accounts = world.accounts.block();
         accounts
             .get_mut(&authority)
@@ -815,7 +735,6 @@ mod tests {
             Err(AxtIssuerResolutionError::IdentityIndexMismatch)
         );
     }
-
     #[test]
     fn axt_issuer_resolution_rejects_missing_dataspace_binding() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::axt-unbound"));
@@ -825,20 +744,17 @@ mod tests {
         let mut bindings = world.uaid_dataspaces.block();
         bindings.remove(uaid);
         bindings.commit();
-
         assert_eq!(
             resolve_axt_issuer_binding(&world.view(), dataspace, root),
             Err(AxtIssuerResolutionError::MissingDataspaceBinding)
         );
     }
-
     #[test]
     fn lane_identity_metadata_rejects_missing_dataspace_binding() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::lane-helper-missing"));
         let dataspace = DataSpaceId::new(17);
         let (world, authority) = world_with_uaid(uaid, dataspace, false, true);
         let world_view = world.view();
-
         let err = extract_lane_identity_metadata(&world_view, &authority, dataspace)
             .expect_err("UAID routing must require a dataspace binding");
         assert_eq!(
@@ -846,14 +762,12 @@ mod tests {
             LaneIdentityMetadataError::MissingDataspaceBinding { uaid, dataspace }
         );
     }
-
     #[test]
     fn lane_identity_metadata_rejects_inactive_target_manifest() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::lane-helper-inactive"));
         let dataspace = DataSpaceId::new(23);
         let (world, authority) = world_with_uaid(uaid, dataspace, true, false);
         let world_view = world.view();
-
         let err = extract_lane_identity_metadata(&world_view, &authority, dataspace)
             .expect_err("inactive target manifest must be rejected");
         assert_eq!(

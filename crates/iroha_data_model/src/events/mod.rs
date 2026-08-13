@@ -1,14 +1,11 @@
 //! Events for streaming API.
-
 use std::{format, ops::Deref, string::String, sync::Arc, vec::Vec};
-
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use pipeline::{BlockEvent, TransactionEvent};
-
 pub use crate::{Decode, Encode};
 macro_rules! impl_json_via_norito_bytes {
     ($($ty:path),+ $(,)?) => {
@@ -17,7 +14,6 @@ macro_rules! impl_json_via_norito_bytes {
                 fn write_json(&self, out: &mut String) {
                     norito::json::write_canonical_base64_json(self, out);
                 }
-
                 fn write_json_to(
                     &self,
                     out: &mut dyn norito::json::JsonWriteSink,
@@ -25,7 +21,6 @@ macro_rules! impl_json_via_norito_bytes {
                     norito::json::write_canonical_base64_json_to(self, out)
                 }
             }
-
             impl norito::json::JsonDeserialize for $ty {
                 fn json_deserialize(
                     parser: &mut norito::json::Parser<'_>,
@@ -43,50 +38,40 @@ macro_rules! impl_json_via_norito_bytes {
         )+
     };
 }
-
 pub use self::model::*;
-
 /// Shared, reference-counted wrapper for [`data::DataEvent`] to avoid repeated cloning.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SharedDataEvent(Arc<data::DataEvent>);
-
 impl SharedDataEvent {
     /// Wrap an existing [`Arc`] around a [`data::DataEvent`].
     pub fn from_arc(event: Arc<data::DataEvent>) -> Self {
         Self(event)
     }
-
     /// Consume the wrapper and return the inner [`Arc`].
     pub fn into_arc(self) -> Arc<data::DataEvent> {
         self.0
     }
-
     /// Borrow the underlying [`Arc`].
     pub fn as_arc(&self) -> &Arc<data::DataEvent> {
         &self.0
     }
 }
-
 impl Deref for SharedDataEvent {
     type Target = data::DataEvent;
-
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
 }
-
 impl From<data::DataEvent> for SharedDataEvent {
     fn from(event: data::DataEvent) -> Self {
         Self(Arc::new(event))
     }
 }
-
 impl From<Arc<data::DataEvent>> for SharedDataEvent {
     fn from(event: Arc<data::DataEvent>) -> Self {
         Self(event)
     }
 }
-
 impl AsRef<data::DataEvent> for SharedDataEvent {
     fn as_ref(&self) -> &data::DataEvent {
         self.0.as_ref()
@@ -102,14 +87,11 @@ pub mod pipeline;
 pub mod time;
 /// Events indicating completion of trigger execution.
 pub mod trigger_completed;
-
 #[cfg(test)]
 mod tests {
     use std::{str::FromStr, sync::Arc};
-
     use iroha_crypto::Hash;
     use iroha_primitives::json::Json;
-
     use super::*;
     use crate::{
         domain::DomainId,
@@ -117,7 +99,6 @@ mod tests {
         events::execute_trigger::ExecuteTriggerEventFilter,
         name::Name,
     };
-
     #[cfg(feature = "json")]
     #[test]
     fn event_filter_json_is_canonical_and_ambient_independent() {
@@ -155,7 +136,6 @@ mod tests {
                 canonical_json
             );
         }
-
         let alternate_frame = {
             let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             norito::to_bytes(&filter).expect("encode alternate-layout event filter")
@@ -167,7 +147,6 @@ mod tests {
         norito::json::from_json::<EventFilterBox>(&alternate_json)
             .expect_err("alternate-layout event-filter JSON must be rejected");
     }
-
     #[test]
     fn shared_data_event_from_arc_preserves_arc_pointer() {
         let metadata = MetadataChanged {
@@ -179,7 +158,6 @@ mod tests {
         let shared = SharedDataEvent::from_arc(Arc::clone(&event));
         assert!(Arc::ptr_eq(shared.as_arc(), &event));
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn pipeline_batch_filters_match_any_event() {
@@ -188,10 +166,8 @@ mod tests {
         };
         use crate::nexus::{DataSpaceId, LaneId};
         use iroha_crypto::HashOf;
-
         let hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH]));
         let hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH]));
-
         let ev_a: PipelineEventBox = TransactionEvent {
             hash: hash_a,
             block_height: None,
@@ -208,21 +184,17 @@ mod tests {
             status: TransactionStatus::Queued,
         }
         .into();
-
         let event = EventBox::PipelineBatch(vec![ev_a.clone(), ev_b.clone()]);
         let filter: EventFilterBox = TransactionEventFilter::default().for_hash(hash_a).into();
         assert!(filter.matches(&event));
-
         let hash_c = HashOf::from_untyped_unchecked(Hash::prehashed([3_u8; Hash::LENGTH]));
         let filter: EventFilterBox = TransactionEventFilter::default().for_hash(hash_c).into();
         assert!(!filter.matches(&event));
     }
 }
-
 #[model]
 mod model {
     use super::*;
-
     #[derive(Debug, Clone, PartialEq, Eq, FromVariant, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     /// Top-level wrapper for all streamed event payloads.
@@ -240,7 +212,6 @@ mod model {
         /// Trigger completion event.
         TriggerCompleted(trigger_completed::TriggerCompletedEvent),
     }
-
     /// Event type which could invoke trigger execution.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
     pub enum TriggeringEventType {
@@ -253,7 +224,6 @@ mod model {
         /// Trigger execution event.
         ExecuteTrigger,
     }
-
     /// Event filter.
     #[allow(variant_size_differences)]
     #[derive(
@@ -276,7 +246,6 @@ mod model {
         TriggerCompleted(trigger_completed::TriggerCompletedEventFilter),
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for TriggeringEventType {
     fn json_serialize(&self, out: &mut String) {
@@ -288,7 +257,6 @@ impl JsonSerialize for TriggeringEventType {
         };
         json::write_json_string(label, out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -302,7 +270,6 @@ impl JsonSerialize for TriggeringEventType {
         json::write_json_string_to(label, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for TriggeringEventType {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -318,22 +285,18 @@ impl JsonDeserialize for TriggeringEventType {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(EventBox, EventFilterBox);
-
 impl From<TransactionEvent> for EventBox {
     fn from(source: TransactionEvent) -> Self {
         Self::Pipeline(source.into())
     }
 }
-
 impl From<BlockEvent> for EventBox {
     fn from(source: BlockEvent) -> Self {
         Self::Pipeline(source.into())
     }
 }
-
 // Provide slice decoding via Norito codec for core consumers that expect
 // `norito::core::DecodeFromSlice`. Delegate to the header-framed codec decoder.
 impl<'a> norito::core::DecodeFromSlice<'a> for EventBox {
@@ -345,7 +308,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for EventBox {
         Ok((value, used))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for EventFilterBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut s: &'a [u8] = bytes;
@@ -355,7 +317,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for EventFilterBox {
         Ok((value, used))
     }
 }
-
 impl EventBox {
     /// Returns the shared data payload if this box stores a [`data::DataEvent`].
     #[inline]
@@ -365,13 +326,11 @@ impl EventBox {
             _ => None,
         }
     }
-
     /// Returns the data payload if this box stores a [`data::DataEvent`].
     #[inline]
     pub fn as_data_event(&self) -> Option<&data::DataEvent> {
         self.as_shared_data_event().map(SharedDataEvent::as_ref)
     }
-
     /// Consumes the box and returns the shared data payload if present.
     /// # Errors
     ///
@@ -385,50 +344,39 @@ impl EventBox {
         }
     }
 }
-
 impl TryFrom<EventBox> for TransactionEvent {
     type Error = iroha_macro::error::ErrorTryFromEnum<EventBox, Self>;
-
     fn try_from(event: EventBox) -> Result<Self, Self::Error> {
         use iroha_macro::error::ErrorTryFromEnum;
-
         let EventBox::Pipeline(pipeline_event) = event else {
             return Err(ErrorTryFromEnum::default());
         };
-
         pipeline_event
             .try_into()
             .map_err(|_| ErrorTryFromEnum::default())
     }
 }
-
 impl TryFrom<EventBox> for BlockEvent {
     type Error = iroha_macro::error::ErrorTryFromEnum<EventBox, Self>;
-
     fn try_from(event: EventBox) -> Result<Self, Self::Error> {
         use iroha_macro::error::ErrorTryFromEnum;
-
         let EventBox::Pipeline(pipeline_event) = event else {
             return Err(ErrorTryFromEnum::default());
         };
-
         pipeline_event
             .try_into()
             .map_err(|_| ErrorTryFromEnum::default())
     }
 }
-
 /// Trait for filters
 #[cfg(feature = "transparent_api")]
 pub trait EventFilter {
     /// Type of event that can be filtered
     type Event;
-
     /// Check if `item` matches filter
     ///
     /// Returns `true`, if `item` matches filter and `false` if not
     fn matches(&self, event: &Self::Event) -> bool;
-
     /// Returns a number of times trigger should be executed for
     ///
     /// Used for time-triggers
@@ -436,7 +384,6 @@ pub trait EventFilter {
     fn count_matches(&self, event: &Self::Event) -> u32 {
         self.matches(event).into()
     }
-
     /// Check if filter is mintable.
     ///
     /// Returns `true` by default. Used for time-triggers
@@ -445,11 +392,9 @@ pub trait EventFilter {
         true
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl EventFilter for EventFilterBox {
     type Event = EventBox;
-
     /// Apply filter to event.
     fn matches(&self, event: &EventBox) -> bool {
         match (event, self) {
@@ -481,7 +426,6 @@ impl EventFilter for EventFilterBox {
             ) => false,
         }
     }
-
     fn mintable(&self) -> bool {
         match self {
             Self::Time(filter) => filter.mintable(),
@@ -489,13 +433,11 @@ impl EventFilter for EventFilterBox {
         }
     }
 }
-
 mod conversions {
     use super::{
         pipeline::{BlockEventFilter, TransactionEventFilter},
         prelude::*,
     };
-
     macro_rules! last_tt {
         ($last:tt) => {
             $last
@@ -504,7 +446,6 @@ mod conversions {
             last_tt!($($tail)*)
         };
     }
-
     // chain multiple conversions into one
     macro_rules! impl_from_via_path {
         ($($initial:ty $(=> $intermediate:ty)*),+ $(,)?) => {
@@ -520,7 +461,6 @@ mod conversions {
             )+
         };
     }
-
     impl_from_via_path! {
         PeerEventFilter             => DataEventFilter => EventFilterBox,
         DomainEventFilter           => DataEventFilter => EventFilterBox,
@@ -533,23 +473,19 @@ mod conversions {
         RoleEventFilter             => DataEventFilter => EventFilterBox,
         ConfigurationEventFilter    => DataEventFilter => EventFilterBox,
         ExecutorEventFilter         => DataEventFilter => EventFilterBox,
-
         TransactionEventFilter => PipelineEventFilterBox => EventFilterBox,
         BlockEventFilter       => PipelineEventFilterBox => EventFilterBox,
     }
 }
-
 impl TypeId for SharedDataEvent {
     fn id() -> Ident {
         data::DataEvent::id()
     }
 }
-
 impl IntoSchema for SharedDataEvent {
     fn type_name() -> Ident {
         data::DataEvent::type_name()
     }
-
     fn update_schema_map(metamap: &mut MetaMap) {
         data::DataEvent::update_schema_map(metamap);
         if !metamap.contains_key::<Self>()
@@ -559,22 +495,17 @@ impl IntoSchema for SharedDataEvent {
         }
     }
 }
-
 #[cfg(feature = "http")]
 pub mod stream {
     //! Structures related to event streaming over HTTP
-
     use derive_more::Constructor;
     use iroha_data_model_derive::model;
     use iroha_version::prelude::*;
-
     pub use self::model::*;
     use super::*;
-
     #[model]
     mod model {
         use super::*;
-
         /// Message sent by the stream producer.
         /// Event sent by the peer.
         #[derive(Debug, Clone, Decode, Encode, IntoSchema, Constructor)]
@@ -584,7 +515,6 @@ pub mod stream {
         )]
         #[repr(transparent)]
         pub struct EventMessage(pub EventBox);
-
         /// Message sent by the stream consumer.
         /// Request sent by the client to subscribe to events.
         ///
@@ -616,7 +546,6 @@ pub mod stream {
             )]
             pub proof_envelope_hash: Option<Vec<[u8; 32]>>,
         }
-
         impl EventSubscriptionRequest {
             /// Create a subscription request without proof-specific filters.
             #[must_use]
@@ -629,7 +558,6 @@ pub mod stream {
                 }
             }
         }
-
         // Provide slice decoding via Norito codec for HTTP payloads
         impl<'a> norito::core::DecodeFromSlice<'a> for EventMessage {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -650,18 +578,15 @@ pub mod stream {
             }
         }
     }
-
     impl From<EventMessage> for EventBox {
         fn from(source: EventMessage) -> Self {
             source.0
         }
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
         use crate::events::data::prelude::DataEventFilter;
-
         #[test]
         fn subscription_request_new_sets_defaults() {
             let filters = vec![EventFilterBox::Data(DataEventFilter::Any)];
@@ -671,7 +596,6 @@ pub mod stream {
             assert!(request.proof_call_hash.is_none());
             assert!(request.proof_envelope_hash.is_none());
         }
-
         #[test]
         fn subscription_request_roundtrips_proof_filters() {
             let request = EventSubscriptionRequest {
@@ -690,7 +614,6 @@ pub mod stream {
         }
     }
 }
-
 /// Exports common structs and enums from this module.
 pub mod prelude {
     #[cfg(feature = "transparent_api")]

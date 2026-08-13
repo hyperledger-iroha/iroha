@@ -10,7 +10,6 @@ async fn managed_status_stream_throttles_metrics_requests() {
     let body = encode_status_payload(&status);
     let sumeragi = sample_sumeragi_status_wire();
     let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
-
     server.mock(|when, then| {
         when.method(GET).path("/status");
         then.status(200)
@@ -28,14 +27,12 @@ async fn managed_status_stream_throttles_metrics_requests() {
         then.status(200)
             .body("queue_size 2\nsumeragi_tx_queue_depth 1");
     });
-
     let client = operator_test_client(server.url("/"));
     let handle = tokio::runtime::Handle::current();
     let options = StatusStreamOptions::new(Duration::from_millis(10))
         .with_metrics_poll_interval(Some(Duration::from_secs(60)));
     let stream = ManagedStatusStream::spawn_with_options(&handle, "status-peer", client, options);
     let mut receiver = stream.subscribe();
-
     let first_event = timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("first snapshot");
@@ -48,7 +45,6 @@ async fn managed_status_stream_throttles_metrics_requests() {
         })
     );
     assert!(first_metrics_present, "first poll must fetch metrics");
-
     let second_event = timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("second snapshot");
@@ -64,12 +60,10 @@ async fn managed_status_stream_throttles_metrics_requests() {
         "cached metrics should be propagated between polls"
     );
     assert_eq!(metrics_mock.calls(), 1);
-
     stream.abort();
     sleep(Duration::from_millis(10)).await;
     assert!(stream.is_finished());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn managed_status_stream_can_disable_metrics_polling() {
     let Some(server) = try_start_mock_server() else {
@@ -82,7 +76,6 @@ async fn managed_status_stream_can_disable_metrics_polling() {
     let body = encode_status_payload(&status);
     let sumeragi = sample_sumeragi_status_wire();
     let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
-
     server.mock(|when, then| {
         when.method(GET).path("/status");
         then.status(200)
@@ -99,14 +92,12 @@ async fn managed_status_stream_can_disable_metrics_polling() {
         when.method(GET).path("/metrics");
         then.status(200).body("queue_size 4");
     });
-
     let client = operator_test_client(server.url("/"));
     let handle = tokio::runtime::Handle::current();
     let options = StatusStreamOptions::new(Duration::from_millis(10))
         .with_metrics_poll_interval(Some(Duration::ZERO));
     let stream = ManagedStatusStream::spawn_with_options(&handle, "status-peer", client, options);
     let mut receiver = stream.subscribe();
-
     match timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("snapshot without metrics")
@@ -122,12 +113,10 @@ async fn managed_status_stream_can_disable_metrics_polling() {
         other => panic!("expected snapshot without metrics, got {other:?}"),
     }
     assert_eq!(metrics_mock.calls(), 0);
-
     stream.abort();
     sleep(Duration::from_millis(10)).await;
     assert!(stream.is_finished());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn managed_status_stream_reports_metrics_failures() {
     let Some(server) = try_start_mock_server() else {
@@ -140,7 +129,6 @@ async fn managed_status_stream_reports_metrics_failures() {
     let body = encode_status_payload(&status);
     let sumeragi = sample_sumeragi_status_wire();
     let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
-
     server.mock(|when, then| {
         when.method(GET).path("/status");
         then.status(200)
@@ -157,13 +145,11 @@ async fn managed_status_stream_reports_metrics_failures() {
         when.method(GET).path("/metrics");
         then.status(503);
     });
-
     let client = operator_test_client(server.url("/"));
     let handle = tokio::runtime::Handle::current();
     let stream =
         ManagedStatusStream::spawn(&handle, "status-peer", client, Duration::from_millis(10));
     let mut receiver = stream.subscribe();
-
     match timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("receive metrics snapshot")
@@ -183,12 +169,10 @@ async fn managed_status_stream_reports_metrics_failures() {
         }
         other => panic!("expected snapshot with metrics error, got {other:?}"),
     }
-
     stream.abort();
     sleep(Duration::from_millis(10)).await;
     assert!(stream.is_finished());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn wait_for_ready_retries_until_status_returns_ok() {
     let status = TelemetryStatus {
@@ -201,7 +185,6 @@ async fn wait_for_ready_retries_until_status_returns_ok() {
     else {
         return;
     };
-
     let client = ToriiClient::new(format!("http://{addr}")).expect("client");
     let options = ReadinessOptions::new(Duration::from_millis(400))
         .with_poll_interval(Duration::from_millis(20));
@@ -209,12 +192,10 @@ async fn wait_for_ready_retries_until_status_returns_ok() {
         .wait_for_ready(options)
         .await
         .expect("readiness snapshot");
-
     assert_eq!(snapshot.status.queue_size, 9);
     let _ = shutdown.send(());
     let _ = handle.join();
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn all_managed_peers_genesis_waits_for_the_lagging_peer() {
     let committed = TelemetryStatus {
@@ -250,7 +231,6 @@ async fn all_managed_peers_genesis_waits_for_the_lagging_peer() {
     ];
     let options = ReadinessOptions::new(Duration::from_millis(400))
         .with_poll_interval(Duration::from_millis(20));
-
     let mut snapshots = wait_for_all_managed_peers_genesis(peers, options)
         .await
         .expect("all managed peers committed genesis");
@@ -262,13 +242,11 @@ async fn all_managed_peers_genesis_waits_for_the_lagging_peer() {
             .collect::<Vec<_>>(),
         vec![("peer0", 1), ("peer1", 1)]
     );
-
     let _ = ready_shutdown.send(());
     let _ = lagging_shutdown.send(());
     let _ = ready_handle.join();
     let _ = lagging_handle.join();
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn all_managed_peers_genesis_reports_each_lagging_alias_and_endpoint() {
     let committed = TelemetryStatus {
@@ -304,7 +282,6 @@ async fn all_managed_peers_genesis_reports_each_lagging_alias_and_endpoint() {
     ];
     let options = ReadinessOptions::new(Duration::from_millis(120))
         .with_poll_interval(Duration::from_millis(15));
-
     let error = wait_for_all_managed_peers_genesis(peers, options)
         .await
         .expect_err("lagging managed peer must fail the topology-wide gate");
@@ -317,13 +294,11 @@ async fn all_managed_peers_genesis_reports_each_lagging_alias_and_endpoint() {
     assert!(message.contains("peer-lagging"), "{message}");
     assert!(message.contains(&lagging_url), "{message}");
     assert!(message.contains("zero committed blocks"), "{message}");
-
     let _ = ready_shutdown.send(());
     let _ = lagging_shutdown.send(());
     let _ = ready_handle.join();
     let _ = lagging_handle.join();
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn wait_for_ready_times_out_when_status_never_recovers() {
     let Some((addr, shutdown, handle)) = spawn_status_stub(vec![(503, Vec::new())]) else {
@@ -332,7 +307,6 @@ async fn wait_for_ready_times_out_when_status_never_recovers() {
     let client = ToriiClient::new(format!("http://{addr}")).expect("client");
     let options = ReadinessOptions::new(Duration::from_millis(120))
         .with_poll_interval(Duration::from_millis(15));
-
     match client.wait_for_ready(options).await {
         Ok(_) => panic!("expected readiness error"),
         Err(ToriiError::UnexpectedStatus { status, .. }) => {
@@ -340,11 +314,9 @@ async fn wait_for_ready_times_out_when_status_never_recovers() {
         }
         Err(other) => panic!("unexpected readiness error: {other:?}"),
     }
-
     let _ = shutdown.send(());
     let _ = handle.join();
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn wait_for_genesis_commit_retries_zero_height_until_committed() {
     let zero_height = TelemetryStatus {
@@ -361,7 +333,6 @@ async fn wait_for_genesis_commit_retries_zero_height_until_committed() {
     ]) else {
         return;
     };
-
     let client = ToriiClient::new(format!("http://{addr}")).expect("client");
     let options = ReadinessOptions::new(Duration::from_millis(400))
         .with_poll_interval(Duration::from_millis(20));
@@ -369,12 +340,10 @@ async fn wait_for_genesis_commit_retries_zero_height_until_committed() {
         .wait_for_genesis_commit(options)
         .await
         .expect("committed genesis snapshot");
-
     assert_eq!(snapshot.status.blocks, 1);
     let _ = shutdown.send(());
     let _ = handle.join();
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn wait_for_genesis_commit_times_out_at_persistent_zero_height() {
     let zero_height = TelemetryStatus {
@@ -386,11 +355,9 @@ async fn wait_for_genesis_commit_times_out_at_persistent_zero_height() {
     else {
         return;
     };
-
     let client = ToriiClient::new(format!("http://{addr}")).expect("client");
     let options = ReadinessOptions::new(Duration::from_millis(120))
         .with_poll_interval(Duration::from_millis(15));
-
     match client.wait_for_genesis_commit(options).await {
         Ok(_) => panic!("expected genesis commitment timeout"),
         Err(ToriiError::Timeout { context }) => {
@@ -398,11 +365,9 @@ async fn wait_for_genesis_commit_times_out_at_persistent_zero_height() {
         }
         Err(other) => panic!("unexpected genesis readiness error: {other:?}"),
     }
-
     let _ = shutdown.send(());
     let _ = handle.join();
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn managed_block_stream_emits_alias_on_error() {
     let handle = tokio::runtime::Handle::current();
@@ -429,13 +394,10 @@ async fn managed_block_stream_emits_alias_on_error() {
             }
         }
     };
-
     let stream = ManagedBlockStream::spawn_with_factory(&handle, "alias-error", factory);
     assert_eq!(stream.alias(), "alias-error");
     let mut receiver = stream.subscribe();
-
     tokio::task::yield_now().await;
-
     match timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("decode error event produced")
@@ -444,7 +406,6 @@ async fn managed_block_stream_emits_alias_on_error() {
         BlockStreamEvent::DecodeError { .. } => {}
         other => panic!("expected decode error, got {other:?}"),
     }
-
     match timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("alias notice event produced")
@@ -455,15 +416,12 @@ async fn managed_block_stream_emits_alias_on_error() {
         }
         other => panic!("expected alias text notice, got {other:?}"),
     }
-
     sleep(INITIAL_BACKOFF).await;
     tokio::task::yield_now().await;
-
     stream.abort();
     sleep(Duration::from_millis(20)).await;
     assert!(stream.is_finished());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn managed_block_stream_abort_stops_worker() {
     let handle = tokio::runtime::Handle::current();
@@ -476,12 +434,10 @@ async fn managed_block_stream_abort_stops_worker() {
         })
     });
     assert_eq!(stream.alias(), "abort-peer");
-
     stream.abort();
     tokio::task::yield_now().await;
     assert!(stream.is_finished());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn submit_signed_transaction_posts_versioned_bytes() {
     let listener = match handle_bind_result(
@@ -537,7 +493,6 @@ async fn submit_signed_transaction_posts_versioned_bytes() {
             }
         })
     };
-
     let keypair = KeyPair::random();
     let tx = TransactionBuilder::new(
         test_network_id(),
@@ -547,13 +502,11 @@ async fn submit_signed_transaction_posts_versioned_bytes() {
     .with_instructions(iter::empty::<InstructionBox>())
     .sign(keypair.private_key());
     let versioned = tx.encode_versioned();
-
     let client = ToriiClient::new(format!("http://{addr}")).expect("client");
     client
         .submit_signed_transaction(&tx)
         .await
         .expect("submit transaction");
-
     server_task.await.expect("server task finished");
     let guard = recorded.lock().await;
     let (request_line, body) = guard.clone().expect("captured request");
@@ -563,7 +516,6 @@ async fn submit_signed_transaction_posts_versioned_bytes() {
     );
     assert_eq!(body, versioned);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn execute_query_decodes_response() {
     let Some(server) = try_start_mock_server() else {
@@ -575,12 +527,10 @@ async fn execute_query_decodes_response() {
         None,
     );
     let encoded = norito::to_bytes(&query_output).expect("encode query output");
-
     let mock = server.mock(|when, then| {
         when.method(POST).path("/v1/query");
         then.status(200).body(encoded.clone());
     });
-
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
     let client = ToriiClient::new_for_network(server.url("/"), test_network_id()).expect("client");
@@ -597,19 +547,16 @@ async fn execute_query_decodes_response() {
         .execute_query(&signed_query)
         .await
         .expect("decode query output");
-
     mock.assert();
     let (_, remaining_items, continue_cursor) = response.into_parts();
     assert_eq!(remaining_items, 0);
     assert!(continue_cursor.is_none());
 }
-
 #[test]
 fn sign_query_requires_an_exact_network_identity() {
     let client = ToriiClient::new("http://127.0.0.1:8080").expect("client");
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
-
     let error = client
         .sign_query(
             QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
@@ -619,10 +566,8 @@ fn sign_query_requires_an_exact_network_identity() {
             &keypair,
         )
         .expect_err("a general Torii client must not invent signed-query lineage");
-
     assert!(matches!(error, ToriiError::SignedQueryContext(_)));
 }
-
 #[test]
 fn sign_query_binds_lineage_freshness_and_one_shot_nonce() {
     let network_id = test_network_id();
@@ -630,7 +575,6 @@ fn sign_query_binds_lineage_freshness_and_one_shot_nonce() {
         .expect("network-bound client");
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
-
     let signed = client
         .sign_query(
             QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
@@ -640,7 +584,6 @@ fn sign_query_binds_lineage_freshness_and_one_shot_nonce() {
             &keypair,
         )
         .expect("sign query");
-
     assert_eq!(client.network_id(), Some(network_id));
     assert_eq!(signed.payload.network_id, network_id);
     assert!(signed.payload.creation_time_ms > 0);
@@ -650,7 +593,6 @@ fn sign_query_binds_lineage_freshness_and_one_shot_nonce() {
         .verify_signature()
         .expect("signature covers every replay-context field");
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn execute_query_returns_unexpected_status() {
     let Some(server) = try_start_mock_server() else {
@@ -660,7 +602,6 @@ async fn execute_query_returns_unexpected_status() {
         when.method(POST).path("/v1/query");
         then.status(500);
     });
-
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
     let client = ToriiClient::new_for_network(server.url("/"), test_network_id()).expect("client");
@@ -677,7 +618,6 @@ async fn execute_query_returns_unexpected_status() {
         .execute_query(&signed_query)
         .await
         .expect_err("non-success status should error");
-
     mock.assert();
     match err {
         ToriiError::UnexpectedStatus { status, .. } => {
@@ -686,7 +626,6 @@ async fn execute_query_returns_unexpected_status() {
         other => panic!("expected UnexpectedStatus, got {other:?}"),
     }
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn execute_query_reports_decode_error() {
     let Some(server) = try_start_mock_server() else {
@@ -696,7 +635,6 @@ async fn execute_query_reports_decode_error() {
         when.method(POST).path("/v1/query");
         then.status(200).body(vec![0, 1, 2, 3]);
     });
-
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
     let client = ToriiClient::new_for_network(server.url("/"), test_network_id()).expect("client");
@@ -713,11 +651,9 @@ async fn execute_query_reports_decode_error() {
         .execute_query(&signed_query)
         .await
         .expect_err("malformed payload should error");
-
     mock.assert();
     matches!(err, ToriiError::Decode(_));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_status_decodes_norito_payload() {
     let Some(server) = try_start_mock_server() else {
@@ -740,7 +676,6 @@ async fn fetch_status_decodes_norito_payload() {
         ..TelemetryStatus::default()
     };
     let encoded = norito::codec::encode_adaptive(&status);
-
     let mock = server.mock(|when, then| {
         when.method(GET)
             .path("/status")
@@ -749,21 +684,17 @@ async fn fetch_status_decodes_norito_payload() {
             .header("content-type", NORITO_MIME_TYPE)
             .body(encoded.clone());
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let decoded = client.fetch_status().await.expect("status");
-
     mock.assert();
     assert_eq!(decoded.blocks, status.blocks);
     assert_eq!(decoded.queue_size, status.queue_size);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_status_decodes_framed_norito_payload() {
     let Some(server) = try_start_mock_server() else {
         return;
     };
-
     let status = TelemetryStatus {
         build: Default::default(),
         peers: 2,
@@ -781,7 +712,6 @@ async fn fetch_status_decodes_framed_norito_payload() {
         ..TelemetryStatus::default()
     };
     let encoded = norito::to_bytes(&status).expect("encode framed status");
-
     let mock = server.mock(|when, then| {
         when.method(GET)
             .path("/status")
@@ -790,15 +720,12 @@ async fn fetch_status_decodes_framed_norito_payload() {
             .header("content-type", NORITO_MIME_TYPE)
             .body(encoded.clone());
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let decoded = client.fetch_status().await.expect("status");
-
     mock.assert();
     assert_eq!(decoded.blocks, status.blocks);
     assert_eq!(decoded.queue_size, status.queue_size);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_status_snapshot_tracks_metrics_across_calls() {
     let listener = match handle_bind_result(
@@ -809,7 +736,6 @@ async fn fetch_status_snapshot_tracks_metrics_across_calls() {
         None => return,
     };
     let addr = listener.local_addr().expect("listener address");
-
     let initial = TelemetryStatus {
         build: Default::default(),
         peers: 2,
@@ -842,12 +768,10 @@ async fn fetch_status_snapshot_tracks_metrics_across_calls() {
         queue_size: 9,
         ..TelemetryStatus::default()
     };
-
     let responses = vec![
         norito::codec::encode_adaptive(&initial),
         norito::codec::encode_adaptive(&updated),
     ];
-
     let server_task = tokio::spawn(async move {
         for payload in responses {
             if let Ok((mut socket, _)) = listener.accept().await {
@@ -877,7 +801,6 @@ async fn fetch_status_snapshot_tracks_metrics_across_calls() {
             }
         }
     });
-
     let client = ToriiClient::new(format!("http://{addr}")).expect("client");
     let first = client
         .fetch_status_snapshot()
@@ -889,7 +812,6 @@ async fn fetch_status_snapshot_tracks_metrics_across_calls() {
     assert_eq!(first.metrics.tx_approved_delta, 0);
     assert_eq!(first.metrics.tx_rejected_delta, 0);
     assert_eq!(first.metrics.view_change_delta, 0);
-
     let second = client
         .fetch_status_snapshot()
         .await
@@ -915,10 +837,8 @@ async fn fetch_status_snapshot_tracks_metrics_across_calls() {
         second.metrics.view_change_delta,
         updated.view_changes - initial.view_changes
     );
-
     server_task.await.expect("server task finished");
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_status_reports_decode_error_for_invalid_payload() {
     let Some(server) = try_start_mock_server() else {
@@ -930,17 +850,14 @@ async fn fetch_status_reports_decode_error_for_invalid_payload() {
             .header("accept", NORITO_MIME_TYPE);
         then.status(200).body(vec![0, 1, 2, 3, 4]);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let err = client
         .fetch_status()
         .await
         .expect_err("invalid payload should fail");
-
     mock.assert();
     matches!(err, ToriiError::Decode(_));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_sumeragi_status_decodes_payload() {
     let Some(server) = try_start_mock_server() else {
@@ -949,7 +866,6 @@ async fn fetch_sumeragi_status_decodes_payload() {
     let status = sample_sumeragi_status_wire();
     let mut encoded = Vec::new();
     norito::core::to_bytes_in(&status, &mut encoded).expect("encode framed status");
-
     let mock = server.mock(|when, then| {
         when.method(GET)
             .path("/v1/sumeragi/status")
@@ -958,17 +874,14 @@ async fn fetch_sumeragi_status_decodes_payload() {
             .header("content-type", NORITO_MIME_TYPE)
             .body(encoded.clone());
     });
-
     let client = operator_test_client(server.url("/"));
     let decoded = client
         .fetch_sumeragi_status()
         .await
         .expect("status payload");
-
     mock.assert();
     assert_eq!(decoded, status);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_sumeragi_status_rejects_semantically_invalid_payload() {
     let Some(server) = try_start_mock_server() else {
@@ -979,7 +892,6 @@ async fn fetch_sumeragi_status_rejects_semantically_invalid_payload() {
     assert!(status.validate().is_err(), "fixture must be invalid");
     let mut encoded = Vec::new();
     norito::core::to_bytes_in(&status, &mut encoded).expect("encode framed status");
-
     let mock = server.mock(|when, then| {
         when.method(GET)
             .path("/v1/sumeragi/status")
@@ -988,17 +900,14 @@ async fn fetch_sumeragi_status_rejects_semantically_invalid_payload() {
             .header("content-type", NORITO_MIME_TYPE)
             .body(encoded.clone());
     });
-
     let client = operator_test_client(server.url("/"));
     let err = client
         .fetch_sumeragi_status()
         .await
         .expect_err("invalid status invariants must fail");
-
     mock.assert();
     assert!(matches!(err, ToriiError::Decode(_)));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_sumeragi_status_reports_unexpected_status() {
     let Some(server) = try_start_mock_server() else {
@@ -1008,13 +917,11 @@ async fn fetch_sumeragi_status_reports_unexpected_status() {
         when.method(GET).path("/v1/sumeragi/status");
         then.status(503);
     });
-
     let client = operator_test_client(server.url("/"));
     let err = client
         .fetch_sumeragi_status()
         .await
         .expect_err("non-success status should error");
-
     mock.assert();
     match err {
         ToriiError::UnexpectedStatus { status, .. } => {
@@ -1023,7 +930,6 @@ async fn fetch_sumeragi_status_reports_unexpected_status() {
         other => panic!("expected UnexpectedStatus, got {other:?}"),
     }
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_status_returns_unexpected_status_on_non_success() {
     let Some(server) = try_start_mock_server() else {
@@ -1035,13 +941,11 @@ async fn fetch_status_returns_unexpected_status_on_non_success() {
             .header("accept", NORITO_MIME_TYPE);
         then.status(502);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let err = client
         .fetch_status()
         .await
         .expect_err("non-success response should error");
-
     mock.assert();
     match err {
         ToriiError::UnexpectedStatus { status, .. } => {
@@ -1050,7 +954,6 @@ async fn fetch_status_returns_unexpected_status_on_non_success() {
         other => panic!("expected UnexpectedStatus, got {other:?}"),
     }
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_configuration_reports_decode_error() {
     let Some(server) = try_start_mock_server() else {
@@ -1062,17 +965,14 @@ async fn fetch_configuration_reports_decode_error() {
             .header("content-type", "application/json")
             .body(&b"{not-json}"[..]);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let err = client
         .fetch_configuration()
         .await
         .expect_err("malformed json should error");
-
     mock.assert();
     matches!(err, ToriiError::Decode(_));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_metrics_returns_unexpected_status_on_error() {
     let Some(server) = try_start_mock_server() else {
@@ -1082,13 +982,11 @@ async fn fetch_metrics_returns_unexpected_status_on_error() {
         when.method(GET).path("/metrics");
         then.status(503);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let err = client
         .fetch_metrics()
         .await
         .expect_err("non-success response should error");
-
     mock.assert();
     match err {
         ToriiError::UnexpectedStatus { status, .. } => {
@@ -1097,7 +995,6 @@ async fn fetch_metrics_returns_unexpected_status_on_error() {
         other => panic!("expected UnexpectedStatus, got {other:?}"),
     }
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_configuration_returns_json() {
     let Some(server) = try_start_mock_server() else {
@@ -1109,14 +1006,11 @@ async fn fetch_configuration_returns_json() {
             .header("content-type", "application/json")
             .body(r#"{"chain_id":"mochi"}"#);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let value = client.fetch_configuration().await.expect("config");
-
     mock.assert();
     assert_eq!(value["chain_id"].as_str(), Some("mochi"));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_lane_lifecycle_status_returns_valid_norito() {
     let Some(server) = try_start_mock_server() else {
@@ -1132,17 +1026,14 @@ async fn fetch_lane_lifecycle_status_returns_valid_norito() {
             .header("content-type", NORITO_MIME_TYPE)
             .body(body);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let actual = client
         .fetch_lane_lifecycle_status()
         .await
         .expect("lifecycle status");
-
     mock.assert();
     assert_eq!(actual, expected);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_lane_lifecycle_status_reports_unexpected_status() {
     let Some(server) = try_start_mock_server() else {
@@ -1152,13 +1043,11 @@ async fn fetch_lane_lifecycle_status_reports_unexpected_status() {
         when.method(GET).path("/v1/nexus/lifecycle");
         then.status(503);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let err = client
         .fetch_lane_lifecycle_status()
         .await
         .expect_err("non-success response should error");
-
     mock.assert();
     match err {
         ToriiError::UnexpectedStatus { status, .. } => {
@@ -1167,7 +1056,6 @@ async fn fetch_lane_lifecycle_status_reports_unexpected_status() {
         other => panic!("expected UnexpectedStatus, got {other:?}"),
     }
 }
-
 #[test]
 fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
     let status = lifecycle_status(true);
@@ -1206,7 +1094,6 @@ fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
         .expect("decode lifecycle parameter")
         .expect("matching lifecycle parameter");
     assert_eq!(payload.expected_catalog_hash, status.catalog_hash);
-
     let bob = crate::compose::development_signing_authorities()
         .iter()
         .find(|signer| !signer.allows_permission(InstructionPermission::SetParameters))
@@ -1220,7 +1107,6 @@ fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
     .expect_err("signer without CanSetParameters must be rejected locally");
     assert!(error.to_string().contains("CanSetParameters"));
 }
-
 #[test]
 fn lane_lifecycle_transaction_rejects_forged_status_hash() {
     let mut status = lifecycle_status(true);
@@ -1237,7 +1123,6 @@ fn lane_lifecycle_transaction_rejects_forged_status_hash() {
     .expect_err("forged status hash must fail closed");
     assert!(error.to_string().contains("catalog hash mismatch"));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn lane_lifecycle_rejects_network_id_different_from_client() {
     let configured_network_id = test_network_id();
@@ -1251,15 +1136,12 @@ async fn lane_lifecycle_rejects_network_id_different_from_client() {
     let signer = crate::compose::development_signing_authorities()
         .first()
         .expect("development signer");
-
     let error = client
         .apply_lane_lifecycle(supplied_network_id, signer, LaneLifecyclePlan::default())
         .await
         .expect_err("mismatched exact network identity must fail before I/O");
-
     assert!(matches!(error, ToriiError::SignedQueryContext(_)));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_metrics_returns_text() {
     let Some(server) = try_start_mock_server() else {
@@ -1270,14 +1152,11 @@ async fn fetch_metrics_returns_text() {
         when.method(GET).path("/metrics");
         then.status(200).body(metrics_body);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let body = client.fetch_metrics().await.expect("metrics");
-
     mock.assert();
     assert_eq!(body, metrics_body);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_metrics_snapshot_parses_values() {
     let Some(server) = try_start_mock_server() else {
@@ -1293,20 +1172,17 @@ state_tiered_hot_entries 10
         when.method(GET).path("/metrics");
         then.status(200).body(metrics_body);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let snapshot = client
         .fetch_metrics_snapshot()
         .await
         .expect("metrics snapshot");
-
     mock.assert();
     assert_eq!(snapshot.queue_size, Some(4.0));
     assert_eq!(snapshot.view_changes, Some(2.0));
     assert_eq!(snapshot.sumeragi_tx_queue_depth, Some(5.0));
     assert_eq!(snapshot.state_tiered_hot_entries, Some(10.0));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_block_parses_payload() {
     let Some(server) = try_start_mock_server() else {
@@ -1327,20 +1203,17 @@ async fn fetch_block_parses_payload() {
             .header("content-type", "application/json")
             .body(body);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let record = client
         .fetch_block(7)
         .await
         .expect("request")
         .expect("record");
-
     mock.assert();
     assert_eq!(record.height, 7);
     assert_eq!(record.prev_block_hash.as_deref(), Some("cc22dd33"));
     assert_eq!(record.transactions_total, 2);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_block_returns_none_on_404() {
     let Some(server) = try_start_mock_server() else {
@@ -1350,14 +1223,11 @@ async fn fetch_block_returns_none_on_404() {
         when.method(GET).path("/v1/blocks/99");
         then.status(404);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let record = client.fetch_block(99).await.expect("request");
-
     mock.assert();
     assert!(record.is_none());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_blocks_page_supports_query_params() {
     let Some(server) = try_start_mock_server() else {
@@ -1391,7 +1261,6 @@ async fn fetch_blocks_page_supports_query_params() {
             .header("content-type", "application/json")
             .body(body);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let page = client
         .fetch_blocks_page(ExplorerBlocksQuery {
@@ -1400,7 +1269,6 @@ async fn fetch_blocks_page_supports_query_params() {
         })
         .await
         .expect("page");
-
     mock.assert();
     assert_eq!(page.pagination.per_page, 2);
     assert_eq!(page.items.len(), 2);
@@ -1408,7 +1276,6 @@ async fn fetch_blocks_page_supports_query_params() {
     assert_eq!(page.items[1].hash, "cc22dd33");
     assert_eq!(page.items[1].transactions_rejected, 1);
 }
-
 #[test]
 fn metrics_parser_ignores_comments_and_labels() {
     let body = r#"
@@ -1427,7 +1294,6 @@ state_tiered_cold_entries 2
     assert_eq!(snapshot.state_tiered_cold_entries, Some(2.0));
     assert!(snapshot.state_tiered_hot_entries.is_none());
 }
-
 #[test]
 fn status_metrics_report_activity_deltas() {
     let previous = TelemetryStatus {
@@ -1451,7 +1317,6 @@ fn status_metrics_report_activity_deltas() {
         blocks_non_empty: 11,
         ..TelemetryStatus::default()
     };
-
     let metrics = StatusMetrics::from_samples(Some(&previous), &current);
     assert_eq!(metrics.commit_latency_ms, 25);
     assert_eq!(metrics.queue_delta, 3);
@@ -1464,7 +1329,6 @@ fn status_metrics_report_activity_deltas() {
     assert_eq!(metrics.sample_interval_ms, 0);
     assert!(metrics.has_activity());
 }
-
 #[test]
 fn status_metrics_report_idle_when_snapshots_match() {
     let snapshot = TelemetryStatus {
@@ -1475,7 +1339,6 @@ fn status_metrics_report_idle_when_snapshots_match() {
         view_changes: 0,
         ..TelemetryStatus::default()
     };
-
     let metrics = StatusMetrics::from_samples(Some(&snapshot), &snapshot);
     assert_eq!(metrics.commit_latency_ms, snapshot.commit_time_ms);
     assert_eq!(metrics.queue_delta, 0);
@@ -1488,7 +1351,6 @@ fn status_metrics_report_idle_when_snapshots_match() {
     assert_eq!(metrics.sample_interval_ms, 0);
     assert!(!metrics.has_activity());
 }
-
 #[test]
 fn status_state_records_sample_interval_and_block_delta() {
     let mut state = StatusState::default();
@@ -1500,7 +1362,6 @@ fn status_state_records_sample_interval_and_block_delta() {
     let first_metrics = state.record(now, &first);
     assert_eq!(first_metrics.block_delta, 0);
     assert_eq!(first_metrics.sample_interval_ms, 0);
-
     let later = now + Duration::from_millis(150);
     let second = TelemetryStatus {
         blocks: 3,
@@ -1512,7 +1373,6 @@ fn status_state_records_sample_interval_and_block_delta() {
     assert_eq!(second_metrics.blocks_non_empty_delta, 2);
     assert_eq!(second_metrics.sample_interval_ms, 150);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn status_monitor_streams_snapshots() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -1531,7 +1391,6 @@ async fn status_monitor_streams_snapshots() {
             }
         }
     });
-
     let mut receiver = monitor.subscribe();
     timeout(Duration::from_secs(1), receiver.changed())
         .await
@@ -1553,10 +1412,8 @@ async fn status_monitor_streams_snapshots() {
         1
     );
     assert!(state.last_error.is_none());
-
     monitor.stop();
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn status_monitor_records_errors_and_clears_on_success() {
     let step = Arc::new(AtomicUsize::new(0));
@@ -1583,7 +1440,6 @@ async fn status_monitor_records_errors_and_clears_on_success() {
             }
         }
     });
-
     let mut receiver = monitor.subscribe();
     timeout(Duration::from_secs(1), receiver.changed())
         .await
@@ -1592,7 +1448,6 @@ async fn status_monitor_records_errors_and_clears_on_success() {
     let first = receiver.borrow().clone();
     assert!(first.last_error.is_some());
     assert!(!first.has_snapshot());
-
     timeout(Duration::from_secs(1), receiver.changed())
         .await
         .expect("second update")
@@ -1608,10 +1463,8 @@ async fn status_monitor_records_errors_and_clears_on_success() {
             .queue_size,
         1
     );
-
     monitor.stop();
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn status_monitor_tracks_last_success_and_exposes_age() {
     let step = Arc::new(AtomicUsize::new(0));
@@ -1638,7 +1491,6 @@ async fn status_monitor_tracks_last_success_and_exposes_age() {
             }
         }
     });
-
     let mut receiver = monitor.subscribe();
     timeout(Duration::from_secs(1), receiver.changed())
         .await
@@ -1656,7 +1508,6 @@ async fn status_monitor_tracks_last_success_and_exposes_age() {
         "age should be present for successful poll"
     );
     assert!(first.last_error.is_none(), "first poll should succeed");
-
     timeout(Duration::from_secs(1), receiver.changed())
         .await
         .expect("second update")
@@ -1676,10 +1527,8 @@ async fn status_monitor_tracks_last_success_and_exposes_age() {
         "age should remain available after errors"
     );
     assert!(second.last_error.is_some(), "second poll should fail");
-
     monitor.stop();
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn metrics_monitor_streams_snapshots() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -1697,7 +1546,6 @@ async fn metrics_monitor_streams_snapshots() {
             }
         }
     });
-
     let mut receiver = monitor.subscribe();
     timeout(Duration::from_secs(1), receiver.changed())
         .await
@@ -1720,10 +1568,8 @@ async fn metrics_monitor_streams_snapshots() {
         "monitor should retain queue gauge"
     );
     assert!(state.last_error.is_none());
-
     monitor.stop();
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn metrics_monitor_records_errors_and_clears_on_success() {
     let step = Arc::new(AtomicUsize::new(0));
@@ -1748,7 +1594,6 @@ async fn metrics_monitor_records_errors_and_clears_on_success() {
             }
         }
     });
-
     let mut receiver = monitor.subscribe();
     timeout(Duration::from_secs(1), receiver.changed())
         .await
@@ -1757,7 +1602,6 @@ async fn metrics_monitor_records_errors_and_clears_on_success() {
     let first = receiver.borrow().clone();
     assert!(first.last_error.is_some());
     assert!(!first.has_snapshot());
-
     timeout(Duration::from_secs(1), receiver.changed())
         .await
         .expect("second update")
@@ -1774,10 +1618,8 @@ async fn metrics_monitor_records_errors_and_clears_on_success() {
         ),
         "successful poll should publish snapshot"
     );
-
     monitor.stop();
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn metrics_monitor_tracks_last_success_and_exposes_age() {
     let step = Arc::new(AtomicUsize::new(0));
@@ -1802,7 +1644,6 @@ async fn metrics_monitor_tracks_last_success_and_exposes_age() {
             }
         }
     });
-
     let mut receiver = monitor.subscribe();
     timeout(Duration::from_secs(1), receiver.changed())
         .await
@@ -1817,7 +1658,6 @@ async fn metrics_monitor_tracks_last_success_and_exposes_age() {
         "successful poll should expose age helper"
     );
     assert!(first.last_error.is_none());
-
     timeout(Duration::from_secs(1), receiver.changed())
         .await
         .expect("second update")
@@ -1831,10 +1671,8 @@ async fn metrics_monitor_tracks_last_success_and_exposes_age() {
         second.last_error.is_some(),
         "failed poll should surface the error"
     );
-
     monitor.stop();
 }
-
 #[test]
 fn metrics_snapshot_queue_utilization_reports_ratio() {
     let mut snapshot = empty_metrics_snapshot();
@@ -1857,7 +1695,6 @@ fn metrics_snapshot_queue_utilization_reports_ratio() {
         "zero capacity should skip utilisation computation"
     );
 }
-
 #[test]
 fn metrics_snapshot_queue_saturation_interprets_flags() {
     let mut snapshot = empty_metrics_snapshot();
@@ -1871,7 +1708,6 @@ fn metrics_snapshot_queue_saturation_interprets_flags() {
         "non-binary values should bubble up as indeterminate"
     );
 }
-
 #[test]
 fn metrics_snapshot_cold_entry_ratio_handles_missing_totals() {
     let mut snapshot = empty_metrics_snapshot();
@@ -1889,7 +1725,6 @@ fn metrics_snapshot_cold_entry_ratio_handles_missing_totals() {
         "zero totals should skip ratio computation"
     );
 }
-
 #[test]
 fn explorer_block_record_parses_camel_case_fields() {
     let value = norito::json!({
@@ -1905,7 +1740,6 @@ fn explorer_block_record_parses_camel_case_fields() {
     assert!(record.prev_block_hash.is_none());
     assert_eq!(record.transactions_total, 3);
 }
-
 #[test]
 fn explorer_blocks_page_errors_when_items_invalid() {
     let value = norito::json!({
@@ -1915,7 +1749,6 @@ fn explorer_blocks_page_errors_when_items_invalid() {
     let err = ExplorerBlocksPage::from_json(&value).expect_err("expected failure");
     assert!(matches!(err, ToriiError::Decode(_)));
 }
-
 #[test]
 fn explorer_account_record_decodes_payload() {
     let value = norito::json!({
@@ -1942,7 +1775,6 @@ fn explorer_account_record_decodes_payload() {
     assert_eq!(record.owned_assets, 5);
     assert_eq!(record.owned_nfts, 1);
 }
-
 #[test]
 fn explorer_accounts_page_decodes_entries() {
     let value = norito::json!({
@@ -1972,7 +1804,6 @@ fn explorer_accounts_page_decodes_entries() {
         "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
     );
 }
-
 #[test]
 fn explorer_domain_record_decodes_payload() {
     let value = norito::json!({
@@ -1995,7 +1826,6 @@ fn explorer_domain_record_decodes_payload() {
     assert_eq!(record.assets, 3);
     assert_eq!(record.nfts, 1);
 }
-
 #[test]
 fn explorer_domains_page_validates_entries() {
     let value = norito::json!({
@@ -2006,7 +1836,6 @@ fn explorer_domains_page_validates_entries() {
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].id, "sora");
 }
-
 #[test]
 fn explorer_asset_definition_record_decodes_payload() {
     let value = norito::json!({
@@ -2026,7 +1855,6 @@ fn explorer_asset_definition_record_decodes_payload() {
         "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
     );
 }
-
 #[test]
 fn explorer_asset_definition_page_validates_entries() {
     let value = norito::json!({
@@ -2039,7 +1867,6 @@ fn explorer_asset_definition_page_validates_entries() {
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
 }
-
 #[test]
 fn explorer_asset_record_decodes_payload() {
     let value = norito::json!({
@@ -2056,7 +1883,6 @@ fn explorer_asset_record_decodes_payload() {
     );
     assert_eq!(record.value, "10.0");
 }
-
 #[test]
 fn explorer_assets_page_validates_entries() {
     let value = norito::json!({
@@ -2069,7 +1895,6 @@ fn explorer_assets_page_validates_entries() {
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].definition_id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
 }
-
 #[test]
 fn explorer_nft_record_decodes_payload() {
     let value = norito::json!({
@@ -2085,7 +1910,6 @@ fn explorer_nft_record_decodes_payload() {
     );
     assert_eq!(record.metadata, norito::json!({ "uri": "ipfs://cid" }));
 }
-
 #[test]
 fn explorer_nfts_page_validates_entries() {
     let value = norito::json!({
@@ -2099,7 +1923,6 @@ fn explorer_nfts_page_validates_entries() {
         "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
     );
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_explorer_accounts_page_applies_filters() {
     let Some(server) = try_start_mock_server() else {
@@ -2133,7 +1956,6 @@ async fn fetch_explorer_accounts_page_applies_filters() {
         then.status(200)
             .body(norito::json::to_string(&body).expect("serialize mock body"));
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let page = client
         .fetch_explorer_accounts_page(ExplorerAccountsQuery {
@@ -2144,14 +1966,12 @@ async fn fetch_explorer_accounts_page_applies_filters() {
         })
         .await
         .expect("page");
-
     mock.assert();
     assert_eq!(page.pagination.limit, 25);
     assert_eq!(page.pagination.next_cursor.as_deref(), Some("Y3Vyc29yLTI"));
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].owned_assets, 4);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_explorer_domains_page_applies_filters() {
     let Some(server) = try_start_mock_server() else {
@@ -2172,7 +1992,6 @@ async fn fetch_explorer_domains_page_applies_filters() {
         then.status(200)
             .body(norito::json::to_string(&body).expect("serialize"));
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let page = client
         .fetch_explorer_domains_page(ExplorerDomainsQuery {
@@ -2182,12 +2001,10 @@ async fn fetch_explorer_domains_page_applies_filters() {
         })
         .await
         .expect("page");
-
     mock.assert();
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].id, "sora");
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_explorer_asset_definitions_page_applies_filters() {
     let Some(server) = try_start_mock_server() else {
@@ -2210,7 +2027,6 @@ async fn fetch_explorer_asset_definitions_page_applies_filters() {
         then.status(200)
             .body(norito::json::to_string(&body).expect("serialize"));
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let page = client
         .fetch_explorer_asset_definitions_page(ExplorerAssetDefinitionsQuery {
@@ -2225,7 +2041,6 @@ async fn fetch_explorer_asset_definitions_page_applies_filters() {
     assert!(page.pagination.has_more);
     assert_eq!(page.items[0].id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_explorer_assets_page_applies_filters() {
     let Some(server) = try_start_mock_server() else {
@@ -2264,7 +2079,6 @@ async fn fetch_explorer_assets_page_applies_filters() {
         "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
     );
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_explorer_nfts_page_applies_filters() {
     let Some(server) = try_start_mock_server() else {
@@ -2301,7 +2115,6 @@ async fn fetch_explorer_nfts_page_applies_filters() {
     assert!(page.pagination.has_more);
     assert_eq!(page.items[0].id, "art#gallery");
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_explorer_rwas_page_applies_filters() {
     let Some(server) = try_start_mock_server() else {
@@ -2349,7 +2162,6 @@ async fn fetch_explorer_rwas_page_applies_filters() {
     assert_eq!(page.items[0].held_quantity, "2");
     assert_eq!(page.items[0].parents[0].rwa, "source#commodities");
 }
-
 #[test]
 fn explorer_cursor_metadata_rejects_inconsistent_continuation() {
     let value = norito::json!({
@@ -2365,7 +2177,6 @@ fn explorer_cursor_metadata_rejects_inconsistent_continuation() {
             .contains("has_more must match next_cursor")
     );
 }
-
 #[test]
 fn explorer_cursor_rejects_noncanonical_trailing_bits() {
     assert_eq!(
@@ -2376,7 +2187,6 @@ fn explorer_cursor_rejects_noncanonical_trailing_bits() {
         .expect_err("non-zero unused base64url bits must fail");
     assert!(error.to_string().contains("canonical base64url"));
 }
-
 #[test]
 fn explorer_world_pages_reject_unknown_fields_and_oversized_items() {
     macro_rules! assert_all_world_pages_reject {
@@ -2401,14 +2211,12 @@ fn explorer_world_pages_reject_unknown_fields_and_oversized_items() {
             assert!(error.to_string().contains($needle));
         }};
     }
-
     let unexpected_page_field = norito::json!({
         "pagination": {"limit": 1, "next_cursor": null, "has_more": false},
         "items": [],
         "page": 1
     });
     assert_all_world_pages_reject!(unexpected_page_field, "must contain exactly");
-
     let unexpected_metadata_field = norito::json!({
         "pagination": {
             "limit": 1,
@@ -2419,14 +2227,12 @@ fn explorer_world_pages_reject_unknown_fields_and_oversized_items() {
         "items": []
     });
     assert_all_world_pages_reject!(unexpected_metadata_field, "must contain exactly");
-
     let oversized_items = norito::json!({
         "pagination": {"limit": 1, "next_cursor": null, "has_more": false},
         "items": [{}, {}]
     });
     assert_all_world_pages_reject!(oversized_items, "must contain at most 1 entries");
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn explorer_cursor_query_rejects_invalid_bounds_before_http() {
     let client = ToriiClient::new("http://127.0.0.1:9").expect("client");
@@ -2439,7 +2245,6 @@ async fn explorer_cursor_query_rejects_invalid_bounds_before_http() {
         .await
         .expect_err("oversized limit must fail locally");
     assert!(limit_error.to_string().contains("between 1 and 100"));
-
     let cursor_error = client
         .fetch_explorer_domains_page(ExplorerDomainsQuery {
             cursor: Some("padded==".to_owned()),
@@ -2449,7 +2254,6 @@ async fn explorer_cursor_query_rejects_invalid_bounds_before_http() {
         .await
         .expect_err("padded cursor must fail locally");
     assert!(cursor_error.to_string().contains("canonical base64url"));
-
     let trailing_bits_error = client
         .fetch_explorer_domains_page(ExplorerDomainsQuery {
             cursor: Some("AB".to_owned()),
@@ -2464,7 +2268,6 @@ async fn explorer_cursor_query_rejects_invalid_bounds_before_http() {
             .contains("canonical base64url")
     );
 }
-
 #[test]
 fn parse_pipeline_smoke_status_accepts_approved_height() {
     let value = norito::json!({
@@ -2481,7 +2284,6 @@ fn parse_pipeline_smoke_status_accepts_approved_height() {
         .expect("terminal status");
     assert_eq!(status, SmokeTransactionStatus::Committed(7));
 }
-
 #[test]
 fn parse_pipeline_smoke_status_reports_rejection_reason() {
     let value = norito::json!({
@@ -2503,7 +2305,6 @@ fn parse_pipeline_smoke_status_reports_rejection_reason() {
         other => panic!("expected rejection, got {other:?}"),
     }
 }
-
 #[test]
 fn parse_pipeline_smoke_status_preserves_queued_reconciliation_evidence() {
     let value = norito::json!({
@@ -2517,7 +2318,6 @@ fn parse_pipeline_smoke_status_preserves_queued_reconciliation_evidence() {
         .expect("queued status remains observable");
     assert_eq!(status, SmokeTransactionStatus::Queued);
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_smoke_transaction_status_uses_pipeline_status() {
     let Some(server) = try_start_mock_server() else {
@@ -2545,7 +2345,6 @@ async fn fetch_smoke_transaction_status_uses_pipeline_status() {
     mock.assert();
     assert_eq!(status, SmokeTransactionStatus::Committed(9));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_smoke_transaction_status_falls_back_to_explorer() {
     let Some(server) = try_start_mock_server() else {
@@ -2578,7 +2377,6 @@ async fn fetch_smoke_transaction_status_falls_back_to_explorer() {
     explorer.assert();
     assert_eq!(status, SmokeTransactionStatus::Committed(12));
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn list_triggers_parses_results() {
     let Some(server) = try_start_mock_server() else {
@@ -2607,7 +2405,6 @@ async fn list_triggers_parses_results() {
         then.status(200)
             .body(norito::json::to_string(&payload).expect("serialize payload"));
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let page = client
         .list_triggers(TriggerListQuery {
@@ -2618,7 +2415,6 @@ async fn list_triggers_parses_results() {
         })
         .await
         .expect("page");
-
     mock.assert();
     assert_eq!(page.total, 7);
     assert_eq!(page.items.len(), 1);
@@ -2628,7 +2424,6 @@ async fn list_triggers_parses_results() {
         norito::json!({ "cron": "0 0 * * *" })
     );
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn get_trigger_supports_missing() {
     let Some(server) = try_start_mock_server() else {
@@ -2648,7 +2443,6 @@ async fn get_trigger_supports_missing() {
         then.status(200)
             .body(norito::json::to_string(&body).expect("serialize body"));
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     assert!(
         client
@@ -2658,7 +2452,6 @@ async fn get_trigger_supports_missing() {
             .is_none()
     );
     not_found.assert();
-
     let record = client
         .get_trigger("mint-hook")
         .await
@@ -2668,7 +2461,6 @@ async fn get_trigger_supports_missing() {
     assert_eq!(record.id, "mint-hook");
     assert_eq!(record.action, body.get("action").unwrap().clone());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn register_trigger_posts_json() {
     let Some(server) = try_start_mock_server() else {
@@ -2688,15 +2480,12 @@ async fn register_trigger_posts_json() {
         then.status(200)
             .body(norito::json::to_string(&response).expect("serialize payload"));
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     let record = client.register_trigger(&request).await.expect("request");
-
     mock.assert();
     assert_eq!(record.id, "hook");
     assert_eq!(record.action, response.get("action").unwrap().clone());
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn delete_trigger_reports_outcome() {
     let Some(server) = try_start_mock_server() else {
@@ -2710,14 +2499,12 @@ async fn delete_trigger_reports_outcome() {
         when.method(DELETE).path("/v1/triggers/missing");
         then.status(404);
     });
-
     let client = ToriiClient::new(server.url("/")).expect("client");
     assert!(client.delete_trigger("hook").await.expect("delete"));
     deleted.assert();
     assert!(!client.delete_trigger("missing").await.expect("delete"));
     missing.assert();
 }
-
 #[test]
 fn account_deleted_summary_mentions_account_id() {
     let event_box = EventBox::Data(DataEvent::from(AccountEvent::Deleted(ALICE_ID.clone())).into());
@@ -2730,7 +2517,6 @@ fn account_deleted_summary_mentions_account_id() {
         "detail `{detail}` should mention {alice_literal}"
     );
 }
-
 #[test]
 fn asset_transfer_summaries_cover_direct_and_batch_events() {
     let definition = AssetDefinitionId::derive_from_components(
@@ -2740,7 +2526,6 @@ fn asset_transfer_summaries_cover_direct_and_batch_events() {
     let source = AssetId::new(definition.clone(), ALICE_ID.clone());
     let destination = AssetId::new(definition, BOB_ID.clone());
     let amount = Quantity::from(5_u32);
-
     let direct = AssetEvent::Transferred(AssetTransferred {
         source: source.clone(),
         destination: destination.clone(),
@@ -2751,7 +2536,6 @@ fn asset_transfer_summaries_cover_direct_and_batch_events() {
     assert!(detail.contains(&source.to_string()));
     assert!(detail.contains(&destination.to_string()));
     assert!(detail.contains(&amount.to_string()));
-
     let batch = AssetEvent::BatchTransferOutcome(AssetBatchTransferOutcome {
         leg_index: 2,
         leg_id: "leg-2".to_owned(),
@@ -2769,7 +2553,6 @@ fn asset_transfer_summaries_cover_direct_and_batch_events() {
     assert!(detail.contains(&amount.to_string()));
     assert!(detail.contains("status=Applied"));
 }
-
 #[test]
 fn account_controller_replaced_summary_mentions_old_and_new_controllers() {
     let event_box = EventBox::Data(
@@ -2787,7 +2570,6 @@ fn account_controller_replaced_summary_mentions_old_and_new_controllers() {
         ))
         .into(),
     );
-
     let summary = EventSummary::from_event(&event_box);
     assert_eq!(summary.label, "Account controller replaced");
     let detail = summary.detail.expect("detail");
@@ -2800,7 +2582,6 @@ fn account_controller_replaced_summary_mentions_old_and_new_controllers() {
         "detail `{detail}` should mention both controller summaries"
     );
 }
-
 #[test]
 fn account_recovery_policy_summary_mentions_alias_and_quorum() {
     let alias = iroha_data_model::account::AccountAlias::domainless(
@@ -2826,7 +2607,6 @@ fn account_recovery_policy_summary_mentions_alias_and_quorum() {
         )))
         .into(),
     );
-
     let summary = EventSummary::from_event(&event_box);
     assert_eq!(summary.label, "Account recovery policy set");
     let detail = summary.detail.expect("detail");
@@ -2838,7 +2618,6 @@ fn account_recovery_policy_summary_mentions_alias_and_quorum() {
         "detail `{detail}` should summarize the recovery policy"
     );
 }
-
 fn empty_metrics_snapshot() -> ToriiMetricsSnapshot {
     ToriiMetricsSnapshot {
         timestamp: Instant::now(),

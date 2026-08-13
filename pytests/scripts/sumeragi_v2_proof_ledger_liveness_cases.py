@@ -1506,6 +1506,12 @@ def test_nightly_chaos_cold_cache_is_offline_shared_policy_and_fail_closed(
         ),
         (
             policy,
+            "release_invocation_cargo_lock || return $?",
+            "return $?",
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
             'if ((cargo_prefix)) && [[ "$argument" == "--" ]]; then',
             'if [[ "$argument" == "--" ]]; then',
             "shared process policy lacks exact required token",

@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! Verifying-key registry indexing by `(circuit_id, version)`.
-
 use iroha_core::{
     executor::Executor,
     kura::Kura,
@@ -29,10 +28,8 @@ use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 #[path = "common/world_fixture.rs"]
 mod test_world;
-
 fn grant_manage_vk(block: &mut iroha_core::state::StateBlock<'_>) {
     let mut stx = block.transaction();
     let perm = Permission::new(
@@ -44,7 +41,6 @@ fn grant_manage_vk(block: &mut iroha_core::state::StateBlock<'_>) {
         .expect("grant manage vk");
     stx.apply();
 }
-
 fn register_vk(
     exec: &Executor,
     block: &mut iroha_core::state::StateBlock<'_>,
@@ -61,7 +57,6 @@ fn register_vk(
         .expect("register vk");
     stx.apply();
 }
-
 fn base_record(circuit: &str, version: u32) -> VerifyingKeyRecord {
     let mut rec = VerifyingKeyRecord::new(
         version,
@@ -76,24 +71,19 @@ fn base_record(circuit: &str, version: u32) -> VerifyingKeyRecord {
     rec.max_proof_bytes = 4096;
     rec
 }
-
 #[test]
 fn duplicate_circuit_version_registration_rejected() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-
     let exec = Executor::default();
-
     let id_primary = VerifyingKeyId::new("halo2/ipa", "vk_primary");
     let rec_primary = base_record("circuit_alpha", 1);
     register_vk(&exec, &mut block, &id_primary, &rec_primary);
-
     let mut stx = block.transaction();
     let id_secondary = VerifyingKeyId::new("halo2/ipa", "vk_secondary");
     let rec_secondary = base_record("circuit_alpha", 1);
@@ -112,24 +102,19 @@ fn duplicate_circuit_version_registration_rejected() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn update_rotates_circuit_version_index() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-
     let exec = Executor::default();
-
     let id = VerifyingKeyId::new("halo2/ipa", "vk_upgrade");
     let rec_current = base_record("circuit_beta", 1);
     register_vk(&exec, &mut block, &id, &rec_current);
-
     // Upgrade to version 2
     let mut stx = block.transaction();
     let rec_v2 = base_record("circuit_beta", 2);
@@ -141,7 +126,6 @@ fn update_rotates_circuit_version_index() {
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), update)
         .expect("update vk");
     stx.apply();
-
     let map = block.world.verifying_keys_by_circuit();
     let key_old = (String::from("circuit_beta"), 1);
     let key_new = (String::from("circuit_beta"), 2);
@@ -151,7 +135,6 @@ fn update_rotates_circuit_version_index() {
     );
     assert!(map.get(&key_old).is_none(), "old version still indexed");
 }
-
 fn register_halo2_vk(
     block: &mut iroha_core::state::StateBlock<'_>,
     exec: &Executor,
@@ -172,7 +155,6 @@ fn register_halo2_vk(
     register_vk(exec, block, &id, &record);
     id
 }
-
 fn execute_verify_proof(
     block: &mut iroha_core::state::StateBlock<'_>,
     mut attachment: iroha_data_model::proof::ProofAttachment,
@@ -189,18 +171,15 @@ fn execute_verify_proof(
     }
     res
 }
-
 #[test]
 fn verify_proof_rejects_circuit_mismatch() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-
     let exec = Executor::default();
     let public_inputs = vec![1u8, 2, 3];
     let expected_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
@@ -213,7 +192,6 @@ fn verify_proof_rejects_circuit_mismatch() {
         vec![7, 7, 7],
         expected_hash,
     );
-
     let vk_commitment = hash_vk(&VerifyingKeyBox::new("halo2/ipa".into(), vec![7, 7, 7]));
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::Halo2IpaPasta,
@@ -227,7 +205,6 @@ fn verify_proof_rejects_circuit_mismatch() {
     let proof_box = iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), proof_bytes);
     let attachment =
         iroha_data_model::proof::ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
-
     let err = execute_verify_proof(&mut block, attachment, vk_commitment).expect_err("must fail");
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(msg)) => {
@@ -236,18 +213,15 @@ fn verify_proof_rejects_circuit_mismatch() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn verify_proof_rejects_schema_hash_mismatch() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-
     let exec = Executor::default();
     let public_inputs = vec![4u8, 5, 6];
     let vk_id = register_halo2_vk(
@@ -259,7 +233,6 @@ fn verify_proof_rejects_schema_hash_mismatch() {
         vec![8, 8, 8],
         [0xFF; 32],
     );
-
     let vk_commitment = hash_vk(&VerifyingKeyBox::new("halo2/ipa".into(), vec![8, 8, 8]));
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::Halo2IpaPasta,
@@ -273,7 +246,6 @@ fn verify_proof_rejects_schema_hash_mismatch() {
     let proof_box = iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), proof_bytes);
     let attachment =
         iroha_data_model::proof::ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
-
     let err = execute_verify_proof(&mut block, attachment, vk_commitment).expect_err("must fail");
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(msg)) => {
@@ -282,18 +254,15 @@ fn verify_proof_rejects_schema_hash_mismatch() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn verify_proof_records_matching_metadata_with_invalid_proof_as_rejected() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-
     let exec = Executor::default();
     let public_inputs = vec![11u8, 12, 13];
     let hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
@@ -307,7 +276,6 @@ fn verify_proof_records_matching_metadata_with_invalid_proof_as_rejected() {
         vk_bytes.clone(),
         hash,
     );
-
     let commitment = hash_vk(&VerifyingKeyBox::new("halo2/ipa".into(), vk_bytes));
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::Halo2IpaPasta,
@@ -325,7 +293,6 @@ fn verify_proof_records_matching_metadata_with_invalid_proof_as_rejected() {
         backend: attachment.backend.clone(),
         proof_hash: iroha_core::zk::hash_proof(&attachment.proof),
     };
-
     execute_verify_proof(&mut block, attachment, commitment)
         .expect("invalid proof result should be recorded");
     let record = block
@@ -339,18 +306,15 @@ fn verify_proof_records_matching_metadata_with_invalid_proof_as_rejected() {
         "matching metadata must not substitute for cryptographic verification"
     );
 }
-
 #[test]
 fn register_requires_circuit_and_schema_hash() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     grant_manage_vk(&mut block);
-
     let exec = Executor::default();
     let mut rec = base_record("", 1);
     rec.circuit_id.clear();
@@ -375,9 +339,7 @@ fn register_requires_circuit_and_schema_hash() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
-
     drop(stx);
-
     rec.circuit_id = "circuit_alpha".into();
     rec.public_inputs_schema_hash = [0u8; 32];
     let mut stx2 = block.transaction();

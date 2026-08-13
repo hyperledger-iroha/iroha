@@ -31,7 +31,6 @@ fn assert_restored_stage_seven_retirement_does_not_resurrect(
             .restored_dormant_producer_continuations
             .contains(&restored_address)
     );
-
     let restarted_tag = restarted.current_tag();
     let certificate = wire::QuorumCertificate {
         round,
@@ -91,7 +90,6 @@ fn assert_restored_stage_seven_retirement_does_not_resurrect(
         fetch_ownership.owner().causal_origin().lifecycle_key,
         logical_key
     );
-
     let capacity_before = runtime.remaining_completion_capacity();
     if !reserve_completion {
         assert!(
@@ -225,7 +223,6 @@ fn assert_restored_stage_seven_retirement_does_not_resurrect(
                 .contains(&restored_address),
         "terminal runtime retirement must persistently release the restored producer"
     );
-
     drop(runtime.into_driver());
     let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
@@ -247,7 +244,6 @@ fn assert_restored_stage_seven_retirement_does_not_resurrect(
         "a terminally retired stage-7 producer cannot resurrect on restart"
     );
 }
-
 #[test]
 fn restored_body_available_terminal_retirement_is_persistent_before_token_release() {
     assert_restored_stage_seven_retirement_does_not_resurrect(0xB8, true, false, false);
@@ -256,7 +252,6 @@ fn restored_body_available_terminal_retirement_is_persistent_before_token_releas
     assert_restored_stage_seven_retirement_does_not_resurrect(0xBB, false, false, false);
     assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, false);
 }
-
 #[test]
 fn live_producer_owner_cannot_replace_immutable_identity() {
     let directory = TempDir::new().expect("temporary directory");
@@ -281,7 +276,6 @@ fn live_producer_owner_cannot_replace_immutable_identity() {
         adapter.restored_dormant_producer_continuations.is_empty(),
         "same-process reservations are never restart-dormant"
     );
-
     adapter.clear_selected_producer_lifecycle();
     adapter
         .bind_selected_producer_lifecycle(Hash::new(b"forged equal-rank owner"), 1)
@@ -297,7 +291,6 @@ fn live_producer_owner_cannot_replace_immutable_identity() {
         "rejected live replacement changes no durable alias"
     );
 }
-
 #[test]
 fn restored_producer_rejects_a_mismatched_replay_identity_without_mutation() {
     let directory = TempDir::new().expect("temporary directory");
@@ -319,7 +312,6 @@ fn restored_producer_rejects_a_mismatched_replay_identity_without_mutation() {
             .expect("persist stored owner")
             .expect("tracked source reserves an address");
     }
-
     let (mut restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
         verified_genesis(context()),
@@ -341,7 +333,6 @@ fn restored_producer_rejects_a_mismatched_replay_identity_without_mutation() {
     restarted
         .bind_selected_producer_lifecycle(Hash::new(b"replayed producer owner"), 2)
         .expect("bind replay owner");
-
     assert!(matches!(
         restarted.reserve_selected_producer_continuation(Some(candidate)),
         Err(AdapterError::ServicedCandidateStore(_))
@@ -358,7 +349,6 @@ fn restored_producer_rejects_a_mismatched_replay_identity_without_mutation() {
         "a rejected identity replacement cannot claim the dormant alias"
     );
 }
-
 #[test]
 fn conditional_transport_service_reserves_and_coalesces_a_producer_lifecycle() {
     let directory = TempDir::new().expect("temporary directory");
@@ -402,7 +392,6 @@ fn conditional_transport_service_reserves_and_coalesces_a_producer_lifecycle() {
         "volatile transport completion cannot become a restart-stable terminal"
     );
 }
-
 #[test]
 fn retired_empty_handoff_terminalizes_once_and_exact_replay_coalesces() {
     let directory = TempDir::new().expect("temporary directory");
@@ -450,7 +439,6 @@ fn retired_empty_handoff_terminalizes_once_and_exact_replay_coalesces() {
             .contains_key(&address),
         "process-local retirement must not be upgraded to restart-stable evidence"
     );
-
     let replay = adapter
         .step(event)
         .expect("coalesce exact retransmission after drain");
@@ -469,7 +457,6 @@ fn retired_empty_handoff_terminalizes_once_and_exact_replay_coalesces() {
         "exact replay cannot resurrect the retired old stage"
     );
 }
-
 #[test]
 fn every_producer_stage_has_an_explicit_replay_parent_contract() {
     let classified = ServicedCandidateStage::ALL
@@ -540,7 +527,6 @@ fn every_producer_stage_has_an_explicit_replay_parent_contract() {
         );
     }
 }
-
 #[test]
 fn speculative_producer_rollback_restores_free_and_terminal_slots() {
     let directory = TempDir::new().expect("temporary directory");
@@ -580,7 +566,6 @@ fn speculative_producer_rollback_restores_free_and_terminal_slots() {
         .rollback_producer_reservation(Some(inserted))
         .expect("roll back inserted reservation");
     assert!(!adapter.producer_continuations.contains_key(&address));
-
     adapter.clear_selected_producer_lifecycle();
     adapter
         .bind_selected_producer_lifecycle(Hash::new(b"first source"), 1)
@@ -593,7 +578,6 @@ fn speculative_producer_rollback_restores_free_and_terminal_slots() {
         .terminalize_producer_continuation(Some(inserted.address))
         .expect("terminalize incumbent");
     let terminal = adapter.producer_continuations[&inserted.address].clone();
-
     let replacement_key = ServicedCandidateKey::new(
         adapter.wire_context.id(),
         adapter.wire_context.height,
@@ -624,14 +608,12 @@ fn speculative_producer_rollback_restores_free_and_terminal_slots() {
         .expect("roll back terminal replacement");
     assert_eq!(adapter.producer_continuations[&address], terminal);
 }
-
 #[test]
 fn process_only_producer_replacement_rollback_stays_volatile_across_restart() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
     let replacement = reserve_process_only_producer_replacement(&mut adapter, 0x48);
-
     adapter
         .rollback_producer_reservation(Some(replacement.reservation))
         .expect("roll back process-only terminal replacement");
@@ -645,18 +627,15 @@ fn process_only_producer_replacement_rollback_stays_volatile_across_restart() {
             .contains_key(&replacement.address),
         "rollback cannot publish the process-only predecessor"
     );
-
     drop(adapter);
     assert_process_only_predecessor_absent_after_restart(&directory);
 }
-
 #[test]
 fn process_only_producer_replacement_release_stays_volatile_across_restart() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
     let replacement = reserve_process_only_producer_replacement(&mut adapter, 0x49);
-
     adapter
         .release_unrecorded_producer(Some(replacement.reservation))
         .expect("release process-only terminal replacement");
@@ -670,11 +649,9 @@ fn process_only_producer_replacement_release_stays_volatile_across_restart() {
             .contains_key(&replacement.address),
         "release cannot publish the process-only predecessor"
     );
-
     drop(adapter);
     assert_process_only_predecessor_absent_after_restart(&directory);
 }
-
 #[test]
 fn durable_decision_release_does_not_restore_stale_process_only_predecessor() {
     let directory = TempDir::new().expect("temporary directory");
@@ -682,7 +659,6 @@ fn durable_decision_release_does_not_restore_stale_process_only_predecessor() {
     assert!(startup.is_empty());
     let replacement = reserve_process_only_producer_replacement(&mut adapter, 0x4B);
     adapter.clear_selected_producer_lifecycle();
-
     let decided_subject = subject(0x4C);
     let leader = adapter.wire_context.leader(0);
     let proposal = proposal(&adapter.wire_context, leader, decided_subject);
@@ -725,7 +701,6 @@ fn durable_decision_release_does_not_restore_stale_process_only_predecessor() {
     assert!(adapter.pending_producer_handoffs.is_empty());
     let reclaimed_snapshot = std::fs::read(adapter.serviced_candidate_store_path_for_test())
         .expect("read canonical reclaimed owner snapshot");
-
     adapter
         .release_unrecorded_producer(Some(replacement.reservation))
         .expect("discard stale pre-Decision undo token");
@@ -742,7 +717,6 @@ fn durable_decision_release_does_not_restore_stale_process_only_predecessor() {
         reclaimed_snapshot,
         "a stale pre-Decision undo token cannot republish reclaimed ownership"
     );
-
     adapter
         .bind_selected_producer_lifecycle(Hash::new(b"post-Decision retry"), 3)
         .expect("bind post-Decision retry");
@@ -754,7 +728,6 @@ fn durable_decision_release_does_not_restore_stale_process_only_predecessor() {
         "the durable Decision remains the sole restart owner"
     );
     assert!(!adapter.fail_closed);
-
     drop(adapter);
     let (restarted, _) = open_test(&directory).expect("replay the durable Decision");
     assert!(restarted.reducer.durable_state().decision().is_some());
@@ -767,14 +740,12 @@ fn durable_decision_release_does_not_restore_stale_process_only_predecessor() {
     assert!(restarted.deferred_producer_continuations.is_empty());
     assert!(restarted.pending_producer_handoffs.is_empty());
 }
-
 #[test]
 fn process_only_producer_replacement_handoff_does_not_resurrect_predecessor() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
     let replacement = reserve_process_only_producer_replacement(&mut adapter, 0x4A);
-
     let handoff = adapter
         .record_serviced_candidate(
             Some(replacement.candidate),
@@ -800,11 +771,9 @@ fn process_only_producer_replacement_handoff_does_not_resurrect_predecessor() {
             .contains_key(&replacement.address),
         "non-durable acknowledgement cannot resurrect the process-only predecessor"
     );
-
     drop(adapter);
     assert_process_only_predecessor_absent_after_restart(&directory);
 }
-
 #[test]
 fn retiring_busy_local_parent_releases_unacknowledged_producer_owner() {
     let directory = TempDir::new().expect("temporary directory");
@@ -860,11 +829,9 @@ fn retiring_busy_local_parent_releases_unacknowledged_producer_owner() {
     adapter
         .deferred_producer_continuations
         .insert(admission_ordinal, reservation);
-
     adapter
         .retire_deferred_body_pipeline_completions(tag, round, subject)
         .expect("persist exact local-parent retirement before queue release");
-
     assert!(adapter.deferred_completions.is_empty());
     assert!(
         !adapter
@@ -876,7 +843,6 @@ fn retiring_busy_local_parent_releases_unacknowledged_producer_owner() {
         "goal-reaching retirement cannot manufacture successor acknowledgement"
     );
 }
-
 #[test]
 fn failed_busy_parent_retirement_retains_queue_and_durable_owner() {
     let directory = TempDir::new().expect("temporary deferred-retirement directory");
@@ -931,7 +897,6 @@ fn failed_busy_parent_retirement_retains_queue_and_durable_owner() {
     adapter
         .deferred_producer_continuations
         .insert(admission_ordinal, reservation);
-
     let path = adapter
         .serviced_candidate_store_path_for_test()
         .to_path_buf();
@@ -954,7 +919,6 @@ fn failed_busy_parent_retirement_retains_queue_and_durable_owner() {
         adapter.durable_producer_continuations.get(&address),
         "failed publication restores both producer aliases before returning"
     );
-
     std::fs::remove_dir(&path).expect("remove sabotaged producer directory");
     std::fs::write(&path, snapshot).expect("restore pre-retirement producer snapshot");
     drop(adapter);
@@ -976,7 +940,6 @@ fn failed_busy_parent_retirement_retains_queue_and_durable_owner() {
         "failed retirement must reopen the exact producer instead of losing work"
     );
 }
-
 #[test]
 fn restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline() {
     let directory = TempDir::new().expect("temporary protected-frontier directory");
@@ -1057,7 +1020,6 @@ fn restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline() {
             adapter.clear_selected_producer_lifecycle();
         }
         assert_eq!(addresses.len(), expected_stage_codes.len());
-
         let (_, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
         let mut keys = (1_u8..=4)
             .map(|seed| {
@@ -1122,7 +1084,6 @@ fn restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline() {
         assert_eq!(locked.proposal_round().view(), tag.view());
         expected_addresses = addresses;
     }
-
     let (restarted, _startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
         verified_genesis(context()),
@@ -1179,7 +1140,6 @@ fn restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline() {
     );
     assert!(!restarted.fail_closed);
 }
-
 #[test]
 fn restart_frontier_rejects_reserved_producer_beyond_the_durable_view() {
     let directory = TempDir::new().expect("temporary future-producer directory");
@@ -1210,7 +1170,6 @@ fn restart_frontier_rejects_reserved_producer_beyond_the_durable_view() {
         );
         assert_eq!(adapter.current_tag(), current);
     }
-
     assert!(matches!(
         SumeragiV2Adapter::open_with_aggregator(
             directory.path().join("safety.wal"),
@@ -1226,7 +1185,6 @@ fn restart_frontier_rejects_reserved_producer_beyond_the_durable_view() {
             if reason.contains("originated beyond the replayed durable view")
     ));
 }
-
 #[test]
 fn strict_view_advance_retains_live_producer_admission_until_owner_release() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1247,7 +1205,6 @@ fn strict_view_advance_retains_live_producer_admission_until_owner_release() {
         .expect("tracked timeout reserves");
     let address = reservation.address;
     adapter.clear_selected_producer_lifecycle();
-
     let round = wire::ConsensusRound {
         context_id: adapter.wire_context.id(),
         height: adapter.wire_context.height,
@@ -1302,7 +1259,6 @@ fn strict_view_advance_retains_live_producer_admission_until_owner_release() {
         adapter.producer_continuations.get(&address),
         "strict-view reclamation must not split a still-live producer from its durable admission"
     );
-
     adapter
         .bind_selected_producer_lifecycle(causal_key, 1)
         .expect("rebind exact live retry");
@@ -1313,7 +1269,6 @@ fn strict_view_advance_retains_live_producer_admission_until_owner_release() {
     assert_eq!(retry.address, address);
     assert_eq!(retry.change, ProducerReservationChange::Unchanged);
     assert!(!adapter.fail_closed);
-
     drop(retry);
     drop(adapter);
     let (restarted, _startup) = SumeragiV2Adapter::open_with_aggregator(
@@ -1355,7 +1310,6 @@ fn strict_view_advance_retains_live_producer_admission_until_owner_release() {
             .contains_key(&address)
     );
 }
-
 #[test]
 fn strict_view_advance_reclaims_process_terminal_before_retagged_retry() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1396,7 +1350,6 @@ fn strict_view_advance_reclaims_process_terminal_before_retagged_retry() {
             .contains_key(&address)
     );
     assert!(adapter.serviced_candidates.contains_key(&candidate.0));
-
     let round = wire::ConsensusRound {
         context_id: adapter.wire_context.id(),
         height: adapter.wire_context.height,
@@ -1421,7 +1374,6 @@ fn strict_view_advance_reclaims_process_terminal_before_retagged_retry() {
         !adapter.producer_continuations.contains_key(&address),
         "the strict episode exit must reclaim its process-only terminal"
     );
-
     let retagged_candidate = (candidate.0, adapter.current_tag().view(), candidate.2);
     adapter
         .bind_selected_producer_lifecycle(causal_key, 1)
@@ -1433,7 +1385,6 @@ fn strict_view_advance_reclaims_process_terminal_before_retagged_retry() {
     assert_eq!(retry.change, ProducerReservationChange::Inserted);
     assert!(!adapter.fail_closed);
 }
-
 #[test]
 fn terminal_producer_tombstone_survives_restart_blocks_aba_and_advances_shared_source() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1477,7 +1428,6 @@ fn terminal_producer_tombstone_survives_restart_blocks_aba_and_advances_shared_s
             )
             .expect("publish terminal high-watermark");
     }
-
     let (mut restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
         verified_genesis(context()),
@@ -1528,7 +1478,6 @@ fn terminal_producer_tombstone_survives_restart_blocks_aba_and_advances_shared_s
         "a drained logical stage cannot resurrect through its old identity"
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims() {
@@ -1582,7 +1531,6 @@ fn serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims() {
             .serviced_candidate_store_path_for_test()
             .to_path_buf();
         stale_snapshot = std::fs::read(&snapshot_path).expect("retain the pre-Decision snapshot");
-
         let decided_subject = subject(0x43);
         let leader = adapter.wire_context.leader(0);
         let proposal = proposal(&adapter.wire_context, leader, decided_subject);
@@ -1600,7 +1548,6 @@ fn serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims() {
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0x43; 96],
         };
-
         std::fs::remove_file(&snapshot_path).expect("remove the published snapshot");
         std::fs::create_dir(&snapshot_path).expect("replace the reclaim target with a directory");
         let wal_records_before = adapter.wal.recovered_records().len();
@@ -1622,7 +1569,6 @@ fn serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims() {
             "the failed adjacent snapshot publication cannot roll back the durable Decision"
         );
     }
-
     std::fs::remove_dir(&snapshot_path).expect("remove the injected reclaim obstacle");
     std::fs::write(&snapshot_path, &stale_snapshot)
         .expect("restore the last durable pre-Decision snapshot");
@@ -1649,7 +1595,6 @@ fn serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims() {
         "replay must durably replace the stale pre-Decision snapshot"
     );
     drop(restarted);
-
     let (mut replayed_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("leader-safety.wal"),
         verified_genesis(context),

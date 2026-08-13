@@ -7,7 +7,6 @@ impl sorafs_node::GovernanceDagRuntimeSigner for GovernanceSigner {
             self.later_handle.unwrap_or(self.handle)
         }
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -18,7 +17,6 @@ impl sorafs_node::GovernanceDagRuntimeSigner for GovernanceSigner {
             self.later_qualification.unwrap_or(self.first_qualification)
         })
     }
-
     fn publisher_peer_id(&self) -> &[u8] {
         let call = self.publisher_peer_id_calls.fetch_add(1, Ordering::Relaxed);
         if call == 0 {
@@ -29,7 +27,6 @@ impl sorafs_node::GovernanceDagRuntimeSigner for GovernanceSigner {
                 .unwrap_or(&self.publisher_peer_id)
         }
     }
-
     fn public_key(&self) -> [u8; 32] {
         let first = self
             .key_pair
@@ -45,7 +42,6 @@ impl sorafs_node::GovernanceDagRuntimeSigner for GovernanceSigner {
             self.later_public_key.unwrap_or(first)
         }
     }
-
     fn sign(
         &self,
         _purpose: sorafs_node::GovernanceDagSigningPurposeV1,

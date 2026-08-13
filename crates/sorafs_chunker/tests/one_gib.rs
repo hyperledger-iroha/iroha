@@ -2,14 +2,11 @@ use std::{
     io::Write,
     process::{Command, Stdio},
 };
-
 use blake3::{Hash, Hasher};
 use norito::json::Value;
 use sorafs_chunker::{Chunk, ChunkProfile, Chunker, fixtures::FixtureProfile};
-
 const TOTAL_LEN: usize = 1 << 30; // 1 GiB
 const PROFILE: FixtureProfile = FixtureProfile::SF1_V1;
-
 fn collect_chunks(template: &[u8]) -> Vec<Chunk> {
     let mut chunker = Chunker::new();
     let mut chunks = Vec::new();
@@ -19,20 +16,17 @@ fn collect_chunks(template: &[u8]) -> Vec<Chunk> {
         TOTAL_LEN,
         "template length does not evenly divide 1 GiB"
     );
-
     for _ in 0..repeat {
         chunker.feed(template, |chunk| chunks.push(chunk));
     }
     chunker.finish(|chunk| chunks.push(chunk));
     chunks
 }
-
 fn replay_chunks(chunks: &[Chunk], template: &[u8]) -> (blake3::Hash, Vec<blake3::Hash>) {
     let mut overall = Hasher::new();
     let mut per_chunk = Vec::with_capacity(chunks.len());
     let mut offset = 0usize;
     let template_len = template.len();
-
     for chunk in chunks {
         let mut chunk_hasher = Hasher::new();
         let mut remaining = chunk.length;
@@ -47,11 +41,9 @@ fn replay_chunks(chunks: &[Chunk], template: &[u8]) -> (blake3::Hash, Vec<blake3
         }
         per_chunk.push(chunk_hasher.finalize());
     }
-
     assert_eq!(offset, TOTAL_LEN, "replay covered unexpected length");
     (overall.finalize(), per_chunk)
 }
-
 #[test]
 #[ignore = "expensive 1 GiB regression; run with `cargo test --test one_gib -- --ignored`"]
 fn chunk_profile_default_handles_one_gib_stream() {
@@ -61,10 +53,8 @@ fn chunk_profile_default_handles_one_gib_stream() {
         1 << 20,
         "fixture must remain a 1 MiB corpus"
     );
-
     let chunks = collect_chunks(&template);
     assert!(!chunks.is_empty(), "chunker emitted no chunks");
-
     let profile = ChunkProfile::DEFAULT;
     for window in chunks.windows(2) {
         assert_eq!(
@@ -98,10 +88,8 @@ fn chunk_profile_default_handles_one_gib_stream() {
         TOTAL_LEN,
         "final chunk end did not reach 1 GiB"
     );
-
     let (overall_digest, chunk_digests) = replay_chunks(&chunks, &template);
     let repeat = TOTAL_LEN / template.len();
-
     let chunk_dump_path = std::env::var("CARGO_BIN_EXE_sorafs_chunk_dump")
         .expect("sorafs_chunk_dump binary available during tests");
     let mut child = Command::new(&chunk_dump_path)
@@ -163,7 +151,6 @@ fn chunk_profile_default_handles_one_gib_stream() {
         let digest = Hash::from_hex(digest_hex).expect("valid blake3 digest");
         chunk_vec_from_cli.push(Chunk { offset, length });
         digests_from_cli.push(digest);
-
         assert_eq!(chunk.offset, offset, "chunk offset mismatch at index {idx}");
         assert_eq!(chunk.length, length, "chunk length mismatch at index {idx}");
     }
@@ -176,7 +163,6 @@ fn chunk_profile_default_handles_one_gib_stream() {
         cli_overall_digest, overall_digest,
         "overall digest mismatch between CLI and library"
     );
-
     let digest_hex = overall_digest.to_hex();
     assert_eq!(
         digest_hex.as_str(),

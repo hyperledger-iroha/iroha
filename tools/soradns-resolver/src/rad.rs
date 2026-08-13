@@ -5,7 +5,6 @@ use iroha_data_model::soradns::{
 use iroha_primitives::soradns::derive_gateway_hosts;
 use norito::{decode_from_bytes_with_limits, json};
 use thiserror::Error;
-
 use crate::{
     canonical::{canonicalize_norito_bytes, sha256_domain_digest},
     limits::{
@@ -13,13 +12,10 @@ use crate::{
         MAX_RAD_SNAPSHOT_BYTES, rad_snapshot_decode_limits,
     },
 };
-
 /// Convenience alias for the SoraDNS RAD payload.
 pub type ResolverAttestation = ResolverAttestationDocumentV1;
-
 /// Domain separator used when hashing RAD payloads.
 pub const RAD_HASH_DOMAIN: &[u8] = b"rad-v1";
-
 /// Decode a RAD payload from Norito bytes.
 pub fn decode_rad_entries(bytes: &[u8]) -> Result<Vec<ResolverAttestation>> {
     if bytes.len() > MAX_RAD_SNAPSHOT_BYTES {
@@ -43,39 +39,32 @@ pub fn decode_rad_entries(bytes: &[u8]) -> Result<Vec<ResolverAttestation>> {
     }
     Ok(entries)
 }
-
 /// Perform structural validation for a RAD entry before it is added to state.
 pub fn validate_rad(rad: &ResolverAttestation) -> Result<(), ResolverAttestationValidationError> {
     validate_rad_resource_bounds(rad)?;
     if rad.version != RAD_VERSION_V1 {
         return Err(ResolverAttestationValidationError::UnsupportedVersion { found: rad.version });
     }
-
     if rad.fqdn.trim().is_empty() {
         return Err(ResolverAttestationValidationError::EmptyFqdn);
     }
-
     if rad.valid_from_unix >= rad.valid_until_unix {
         return Err(ResolverAttestationValidationError::InvalidValidityWindow {
             valid_from: rad.valid_from_unix,
             valid_until: rad.valid_until_unix,
         });
     }
-
     if rad.rotation_policy.max_lifetime_days == 0 {
         return Err(ResolverAttestationValidationError::InvalidRotationPolicy);
     }
-
     if rad.rotation_policy.required_overlap_seconds == 0 {
         return Err(ResolverAttestationValidationError::InvalidRotationPolicy);
     }
-
     if let Some(endpoint) = &rad.telemetry_endpoint
         && endpoint.trim().is_empty()
     {
         return Err(ResolverAttestationValidationError::InvalidTelemetryEndpoint);
     }
-
     let derived = derive_gateway_hosts(&rad.fqdn)
         .map_err(ResolverAttestationValidationError::DerivedHostFailure)?;
     let expected = GatewayHostSet::from(&derived);
@@ -85,12 +74,9 @@ pub fn validate_rad(rad: &ResolverAttestation) -> Result<(), ResolverAttestation
             found: Box::new(rad.canonical_hosts.clone()),
         });
     }
-
     validate_transport_bundle(&rad.transport)?;
-
     Ok(())
 }
-
 /// Validate all variable-width fields in one decoded RAD.
 pub(crate) fn validate_rad_resource_bounds(
     rad: &ResolverAttestation,
@@ -116,7 +102,6 @@ pub(crate) fn validate_rad_resource_bounds(
         &rad.canonical_hosts.pretty_host,
         MAX_IDENTIFIER_BYTES,
     )?;
-
     if let Some(doh) = &rad.transport.doh {
         check_string("DoH endpoint", &doh.endpoint, MAX_FIELD_BYTES)?;
     }
@@ -152,7 +137,6 @@ pub(crate) fn validate_rad_resource_bounds(
             MAX_IDENTIFIER_BYTES,
         )?;
     }
-
     check_len(
         "TLS provisioning profiles",
         rad.tls.provisioning_profiles.len(),
@@ -179,7 +163,6 @@ pub(crate) fn validate_rad_resource_bounds(
     }
     Ok(())
 }
-
 /// Account the heap retained by one RAD, including decoded spare capacities.
 pub(crate) fn rad_retained_bytes(
     rad: &ResolverAttestation,
@@ -247,7 +230,6 @@ pub(crate) fn rad_retained_bytes(
     }
     Ok(bytes)
 }
-
 fn validate_operator_account_bounds(
     rad: &ResolverAttestation,
 ) -> Result<(), ResolverAttestationValidationError> {
@@ -277,7 +259,6 @@ fn validate_operator_account_bounds(
     }
     Ok(())
 }
-
 fn charge_operator_account(
     total: &mut usize,
     rad: &ResolverAttestation,
@@ -298,7 +279,6 @@ fn charge_operator_account(
     }
     Ok(())
 }
-
 fn public_key_payload_len(
     key: &iroha_crypto::PublicKey,
 ) -> Result<usize, ResolverAttestationValidationError> {
@@ -306,7 +286,6 @@ fn public_key_payload_len(
         .map(|(_, payload)| payload.len())
         .map_err(|_| ResolverAttestationValidationError::MalformedCryptoMaterial)
 }
-
 fn check_string(
     field: &'static str,
     value: &str,
@@ -314,7 +293,6 @@ fn check_string(
 ) -> Result<(), ResolverAttestationValidationError> {
     check_len(field, value.len(), maximum)
 }
-
 fn check_string_vec(
     field: &'static str,
     values: &[String],
@@ -325,7 +303,6 @@ fn check_string_vec(
     }
     Ok(())
 }
-
 fn check_len(
     field: &'static str,
     found: usize,
@@ -340,14 +317,12 @@ fn check_len(
     }
     Ok(())
 }
-
 fn charge(total: &mut usize, additional: usize) -> Result<(), ResolverAttestationValidationError> {
     *total = (*total)
         .checked_add(additional)
         .ok_or(ResolverAttestationValidationError::RetainedSizeOverflow)?;
     Ok(())
 }
-
 fn charge_vec_capacity<T>(
     total: &mut usize,
     capacity: usize,
@@ -357,7 +332,6 @@ fn charge_vec_capacity<T>(
         .ok_or(ResolverAttestationValidationError::RetainedSizeOverflow)?;
     charge(total, bytes)
 }
-
 fn charge_string_vec(
     total: &mut usize,
     values: &[String],
@@ -369,7 +343,6 @@ fn charge_string_vec(
     }
     Ok(())
 }
-
 /// Compute the canonical digest of a RAD entry (matching the release tooling).
 pub fn compute_rad_digest(rad: &ResolverAttestation) -> Result<[u8; 32]> {
     let value = json::to_value(rad).wrap_err("failed to convert RAD into JSON value")?;
@@ -378,7 +351,6 @@ pub fn compute_rad_digest(rad: &ResolverAttestation) -> Result<[u8; 32]> {
         .wrap_err("failed to canonicalize RAD JSON")?;
     Ok(sha256_domain_digest(RAD_HASH_DOMAIN, &canonical_bytes))
 }
-
 fn validate_transport_bundle(
     bundle: &ResolverTransportBundle,
 ) -> Result<(), ResolverAttestationValidationError> {
@@ -394,7 +366,6 @@ fn validate_transport_bundle(
     }
     Ok(())
 }
-
 /// Structural validation errors surfaced when ingesting a RAD entry.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ResolverAttestationValidationError {
@@ -438,7 +409,6 @@ pub enum ResolverAttestationValidationError {
     #[error("failed to derive gateway hosts: {0}")]
     DerivedHostFailure(#[from] iroha_primitives::soradns::GatewayHostError),
 }
-
 #[cfg(test)]
 mod tests {
     use expect_test::expect;
@@ -450,9 +420,7 @@ mod tests {
             TlsProvisioningProfile, TlsTransportV1,
         },
     };
-
     use super::*;
-
     fn base_rad() -> ResolverAttestation {
         let bindings = derive_gateway_hosts("docs.sora").expect("derive hosts");
         let operator_account = {
@@ -513,13 +481,11 @@ mod tests {
             telemetry_endpoint: None,
         }
     }
-
     #[test]
     fn rad_validation_succeeds() {
         let rad = base_rad();
         assert!(validate_rad(&rad).is_ok());
     }
-
     #[test]
     fn rad_detects_host_mismatch() {
         let mut rad = base_rad();
@@ -530,7 +496,6 @@ mod tests {
             ResolverAttestationValidationError::HostMismatch { .. }
         ));
     }
-
     #[test]
     fn rad_digest_remains_stable() {
         let rad = base_rad();
@@ -538,7 +503,6 @@ mod tests {
         expect!["90ea6fb553abd091527d60c89ca8acf637b551abd127f9632878b4ef741a34da"]
             .assert_eq(&hex::encode(digest));
     }
-
     #[test]
     fn rad_collection_limit_accepts_exact_and_rejects_plus_one() {
         check_len("RAD entries", MAX_RAD_ENTRIES, MAX_RAD_ENTRIES)
@@ -552,7 +516,6 @@ mod tests {
             }) if found == MAX_RAD_ENTRIES + 1
         ));
     }
-
     #[test]
     fn rad_crypto_field_limit_accepts_exact_and_rejects_plus_one() {
         let mut rad = base_rad();

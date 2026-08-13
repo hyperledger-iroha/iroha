@@ -1,15 +1,12 @@
 // MCP Connect lifecycle and disabled-route registration regressions.
-
 #[tokio::test]
 async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
-
     let app = build_router(cfg);
     let sid = B64.encode([0x66u8; 32]);
-
     let (status, create_call) = post_mcp(
         &app,
         norito::json!({
@@ -49,7 +46,6 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
         .and_then(Value::as_str)
         .expect("token_management present")
         .to_owned();
-
     let (status, ticket_call) = post_mcp(
         &app,
         norito::json!({
@@ -80,7 +76,6 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
             "wss://node.example/v1/connect/ws?sid=ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY&role=app"
         )
     );
-
     let (status, status_call) = post_mcp(
         &app,
         norito::json!({
@@ -107,7 +102,6 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
         status_structured.get("status").and_then(Value::as_u64),
         Some(200)
     );
-
     let (status, delete_call) = post_mcp(
         &app,
         norito::json!({
@@ -137,13 +131,11 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
         Some(204)
     );
 }
-
 #[tokio::test]
 async fn mcp_routes_remain_registered_and_report_disabled_state() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = false;
-
     let app = build_router(cfg);
     let response = app
         .clone()
@@ -155,14 +147,12 @@ async fn mcp_routes_remain_registered_and_report_disabled_state() {
         )
         .await
         .expect("response");
-
     assert_eq!(response.status(), StatusCode::OK);
     let capabilities = read_json_body(response).await;
     assert_eq!(
         capabilities.get("enabled").and_then(Value::as_bool),
         Some(false)
     );
-
     let (status, error) = post_mcp(
         &app,
         norito::json!({
@@ -178,14 +168,12 @@ async fn mcp_routes_remain_registered_and_report_disabled_state() {
         Some("mcp_disabled")
     );
 }
-
 #[tokio::test]
 async fn mcp_jsonrpc_connect_session_create_and_ticket_generates_sid_when_omitted() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
-
     let app = build_router(cfg);
     for (id, tool_name, role) in [
         (2082, "connect.session.create_and_ticket", "app"),
@@ -207,7 +195,6 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_generates_sid_when_omitte
             }),
         )
         .await;
-
         assert_eq!(status, StatusCode::OK);
         assert!(
             !tool_is_error(&call),

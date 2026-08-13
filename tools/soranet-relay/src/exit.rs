@@ -10,7 +10,6 @@
 //! independent hard corridor declared below. Catalog files must be direct,
 //! stable regular files and their filename route/stream IDs must match the
 //! decoded update before the route can enter the cache.
-
 use std::{
     collections::HashMap,
     fs::{self, File, Metadata as FsMetadata, OpenOptions},
@@ -19,7 +18,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-
 use blake3::Hasher as Blake3Hasher;
 use iroha_data_model::soranet::RelayId;
 use norito::{
@@ -27,11 +25,9 @@ use norito::{
     streaming::{PrivacyRouteUpdate, SoranetAccessKind, SoranetRoute, SoranetStreamTag},
 };
 use thiserror::Error;
-
 use crate::config::{
     ConfigError, ExitRoutingConfig, KaigiStreamRoutingConfig, NoritoStreamRoutingConfig,
 };
-
 const DEFAULT_GAR_CATEGORY_READ_ONLY: &str = "stream.norito.read_only";
 const DEFAULT_GAR_CATEGORY_AUTH: &str = "stream.norito.authenticated";
 const ROUTE_OPEN_FRAME_LEN: usize = 34;
@@ -43,7 +39,6 @@ const NORITO_FILE_EXTENSION: &str = "norito";
 const DEFAULT_KAIGI_CATEGORY_PUBLIC: &str = "stream.kaigi.public";
 const DEFAULT_KAIGI_CATEGORY_AUTH: &str = "stream.kaigi.authenticated";
 const KAIGI_ROOM_DOMAIN_TAG: &[u8] = b"soranet.kaigi.room_id.v1";
-
 // First-release route-catalog corridors. The producer's default provision
 // queue is 256 entries; 4,096 route files retain sixteen complete queue
 // generations while bounding stale-spool traversal. A route update is a small
@@ -66,7 +61,6 @@ const ROUTE_CATALOG_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     128 * 1024,
     16,
 );
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const ROUTE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -92,59 +86,46 @@ const ROUTE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
     ))
 ))]
 compile_error!("soranet-relay requires a defined no-follow open flag on this Unix target");
-
 #[cfg(unix)]
 type RouteFileIdentity = (u64, u64);
 #[cfg(windows)]
 type RouteFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type RouteFileIdentity = ();
-
 #[cfg(unix)]
 fn route_file_identity(metadata: &FsMetadata) -> RouteFileIdentity {
     use std::os::unix::fs::MetadataExt as _;
-
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(windows)]
 fn route_file_identity(metadata: &FsMetadata) -> RouteFileIdentity {
     use std::os::windows::fs::MetadataExt as _;
-
     (metadata.volume_serial_number(), metadata.file_index())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn route_file_identity(_metadata: &FsMetadata) -> RouteFileIdentity {}
-
 #[cfg(unix)]
 const fn route_file_identity_available(_identity: RouteFileIdentity) -> bool {
     true
 }
-
 #[cfg(windows)]
 const fn route_file_identity_available(identity: RouteFileIdentity) -> bool {
     identity.0.is_some() && identity.1.is_some()
 }
-
 #[cfg(not(any(unix, windows)))]
 const fn route_file_identity_available(_identity: RouteFileIdentity) -> bool {
     false
 }
-
 #[cfg(windows)]
 fn route_file_is_reparse_point(metadata: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
-
 #[cfg(not(windows))]
 fn route_file_is_reparse_point(_metadata: &FsMetadata) -> bool {
     false
 }
-
 fn validate_direct_route_file(metadata: &FsMetadata) -> io::Result<()> {
     if metadata.file_type().is_symlink()
         || route_file_is_reparse_point(metadata)
@@ -158,20 +139,16 @@ fn validate_direct_route_file(metadata: &FsMetadata) -> io::Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn open_direct_route_file(path: &Path) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt as _;
-
     let mut options = OpenOptions::new();
     options.read(true).custom_flags(ROUTE_O_NOFOLLOW_FLAG);
     options.open(path)
 }
-
 #[cfg(windows)]
 fn open_direct_route_file(path: &Path) -> io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     let mut options = OpenOptions::new();
     options
@@ -179,7 +156,6 @@ fn open_direct_route_file(path: &Path) -> io::Result<File> {
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options.open(path)
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_direct_route_file(_path: &Path) -> io::Result<File> {
     Err(io::Error::new(
@@ -187,11 +163,9 @@ fn open_direct_route_file(_path: &Path) -> io::Result<File> {
         "stable direct-file opens are unavailable on this platform",
     ))
 }
-
 #[cfg(unix)]
 fn route_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     route_file_identity(left) == route_file_identity(right)
         && left.len() == right.len()
         && left.mtime() == right.mtime()
@@ -199,23 +173,19 @@ fn route_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool 
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn route_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     route_file_identity(left) == route_file_identity(right)
         && left.file_size() == right.file_size()
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
         && left.file_attributes() == right.file_attributes()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn route_file_metadata_unchanged(_left: &FsMetadata, _right: &FsMetadata) -> bool {
     false
 }
-
 fn read_bounded_direct_route_file(path: &Path, maximum: usize) -> io::Result<Vec<u8>> {
     let before = fs::symlink_metadata(path)?;
     validate_direct_route_file(&before)?;
@@ -229,7 +199,6 @@ fn read_bounded_direct_route_file(path: &Path, maximum: usize) -> io::Result<Vec
             ),
         ));
     }
-
     let mut file = open_direct_route_file(path)?;
     let opened = file.metadata()?;
     validate_direct_route_file(&opened)?;
@@ -251,7 +220,6 @@ fn read_bounded_direct_route_file(path: &Path, maximum: usize) -> io::Result<Vec
             format!("route update exceeds the remaining first-release {maximum}-byte limit"),
         ));
     }
-
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(expected_len).map_err(|error| {
         io::Error::new(
@@ -277,7 +245,6 @@ fn read_bounded_direct_route_file(path: &Path, maximum: usize) -> io::Result<Vec
             format!("route update grew or exceeds its {maximum}-byte limit"),
         ));
     }
-
     let after_file = file.metadata()?;
     let after_path = fs::symlink_metadata(path)?;
     validate_direct_route_file(&after_file)?;
@@ -292,13 +259,11 @@ fn read_bounded_direct_route_file(path: &Path, maximum: usize) -> io::Result<Vec
     }
     Ok(bytes)
 }
-
 #[derive(Clone, Copy)]
 struct CanonicalRouteFileName {
     route_id: [u8; 32],
     stream_id: [u8; 32],
 }
-
 fn parse_canonical_route_file_name(path: &Path) -> Result<CanonicalRouteFileName, String> {
     let name = path
         .file_name()
@@ -321,7 +286,6 @@ fn parse_canonical_route_file_name(path: &Path) -> Result<CanonicalRouteFileName
         stream_id: decode_lower_hash(stream_hex, "stream id")?,
     })
 }
-
 fn decode_lower_hash(value: &str, label: &str) -> Result<[u8; 32], String> {
     if value.len() != 64 || !value.bytes().all(is_lower_hex_digit) {
         return Err(format!(
@@ -333,17 +297,14 @@ fn decode_lower_hash(value: &str, label: &str) -> Result<[u8; 32], String> {
         .map_err(|error| format!("route filename {label} is invalid: {error}"))?;
     Ok(decoded)
 }
-
 fn is_lower_hex_digit(byte: u8) -> bool {
     byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
 }
-
 fn checked_add_with_limit(current: usize, additional: usize, maximum: usize) -> Option<usize> {
     current
         .checked_add(additional)
         .filter(|total| *total <= maximum)
 }
-
 fn checked_replace_with_limit(
     current: usize,
     previous: usize,
@@ -355,14 +316,12 @@ fn checked_replace_with_limit(
         .and_then(|total| total.checked_add(replacement))
         .filter(|total| *total <= maximum)
 }
-
 /// Static exit routing configuration derived from user config.
 #[derive(Clone, Debug)]
 pub struct ExitRouting {
     norito_stream: Option<NoritoStreamRoute>,
     kaigi_stream: Option<KaigiStreamRoute>,
 }
-
 impl ExitRouting {
     pub fn from_config(cfg: &ExitRoutingConfig) -> Result<Self, ConfigError> {
         let norito_stream = match &cfg.norito_stream {
@@ -373,13 +332,11 @@ impl ExitRouting {
             Some(route_cfg) => Some(KaigiStreamRoute::from_config(route_cfg)?),
             None => None,
         };
-
         Ok(Self {
             norito_stream,
             kaigi_stream,
         })
     }
-
     pub fn prepare(&self, relay_id: RelayId) -> ExitRoutingState {
         let norito_stream = self
             .norito_stream
@@ -395,24 +352,20 @@ impl ExitRouting {
         }
     }
 }
-
 /// Prepared exit routing state bound to a relay identifier.
 #[derive(Clone)]
 pub struct ExitRoutingState {
     norito_stream: Option<Arc<NoritoStreamState>>,
     kaigi_stream: Option<Arc<KaigiStreamState>>,
 }
-
 impl ExitRoutingState {
     pub fn norito_stream(&self) -> Option<Arc<NoritoStreamState>> {
         self.norito_stream.as_ref().map(Arc::clone)
     }
-
     pub fn kaigi_stream(&self) -> Option<Arc<KaigiStreamState>> {
         self.kaigi_stream.as_ref().map(Arc::clone)
     }
 }
-
 /// Norito streaming route configuration resolved from user config.
 #[derive(Clone, Debug)]
 pub struct NoritoStreamRoute {
@@ -424,7 +377,6 @@ pub struct NoritoStreamRoute {
     spool_dir: Option<PathBuf>,
     route_refresh_interval: Duration,
 }
-
 impl NoritoStreamRoute {
     fn from_config(cfg: &NoritoStreamRoutingConfig) -> Result<Self, ConfigError> {
         let url = cfg.torii_ws_url.trim();
@@ -438,7 +390,6 @@ impl NoritoStreamRoute {
                 "norito_stream.torii_ws_url must start with ws:// or wss:// (got `{url}`)"
             )));
         }
-
         let gar_read_only = cfg
             .gar_category_read_only
             .as_deref()
@@ -449,7 +400,6 @@ impl NoritoStreamRoute {
             .as_deref()
             .unwrap_or(DEFAULT_GAR_CATEGORY_AUTH)
             .to_owned();
-
         let connect_timeout = Duration::from_millis(cfg.connect_timeout_millis.max(1));
         let padding_target = Duration::from_millis(cfg.padding_target_millis.max(1));
         let route_refresh_interval = Duration::from_secs(cfg.route_refresh_secs.max(1));
@@ -463,19 +413,15 @@ impl NoritoStreamRoute {
             route_refresh_interval,
         })
     }
-
     fn torii_ws_url(&self) -> &str {
         &self.torii_ws_url
     }
-
     fn connect_timeout(&self) -> Duration {
         self.connect_timeout
     }
-
     fn padding_target(&self) -> Duration {
         self.padding_target
     }
-
     fn gar_category(&self, authenticated: bool) -> &str {
         if authenticated {
             &self.gar_authenticated
@@ -483,7 +429,6 @@ impl NoritoStreamRoute {
             &self.gar_read_only
         }
     }
-
     fn spool_dir(&self, relay_id: RelayId) -> Option<PathBuf> {
         let base = self.spool_dir.clone()?;
         let relay_hex = hex::encode(relay_id);
@@ -491,12 +436,10 @@ impl NoritoStreamRoute {
         path.push(NORITO_STREAM_SUBDIR);
         Some(path)
     }
-
     fn route_refresh_interval(&self) -> Duration {
         self.route_refresh_interval
     }
 }
-
 /// Kaigi streaming route configuration resolved from user config.
 #[derive(Clone, Debug)]
 pub struct KaigiStreamRoute {
@@ -507,7 +450,6 @@ pub struct KaigiStreamRoute {
     spool_dir: Option<PathBuf>,
     route_refresh_interval: Duration,
 }
-
 impl KaigiStreamRoute {
     fn from_config(cfg: &KaigiStreamRoutingConfig) -> Result<Self, ConfigError> {
         let url = cfg.hub_ws_url.trim();
@@ -521,7 +463,6 @@ impl KaigiStreamRoute {
                 "kaigi_stream.hub_ws_url must start with ws:// or wss:// (got `{url}`)"
             )));
         }
-
         let gar_public = cfg
             .gar_category_public
             .as_deref()
@@ -532,10 +473,8 @@ impl KaigiStreamRoute {
             .as_deref()
             .unwrap_or(DEFAULT_KAIGI_CATEGORY_AUTH)
             .to_owned();
-
         let connect_timeout = Duration::from_millis(cfg.connect_timeout_millis.max(1));
         let route_refresh_interval = Duration::from_secs(cfg.route_refresh_secs.max(1));
-
         Ok(Self {
             hub_ws_url: url.to_owned(),
             connect_timeout,
@@ -545,15 +484,12 @@ impl KaigiStreamRoute {
             route_refresh_interval,
         })
     }
-
     fn hub_ws_url(&self) -> &str {
         &self.hub_ws_url
     }
-
     fn connect_timeout(&self) -> Duration {
         self.connect_timeout
     }
-
     fn gar_category(&self, authenticated: bool) -> &str {
         if authenticated {
             &self.gar_authenticated
@@ -561,7 +497,6 @@ impl KaigiStreamRoute {
             &self.gar_public
         }
     }
-
     fn spool_dir(&self, relay_id: RelayId) -> Option<PathBuf> {
         let base = self.spool_dir.clone()?;
         let relay_hex = hex::encode(relay_id);
@@ -569,12 +504,10 @@ impl KaigiStreamRoute {
         path.push(KAIGI_STREAM_SUBDIR);
         Some(path)
     }
-
     fn route_refresh_interval(&self) -> Duration {
         self.route_refresh_interval
     }
 }
-
 /// Cached route record extracted from a Norito/Kaigi route update.
 #[derive(Clone, Debug)]
 pub struct RouteRecord {
@@ -589,7 +522,6 @@ pub struct RouteRecord {
     pub valid_from_segment: u64,
     pub valid_until_segment: u64,
 }
-
 struct RouteCatalog {
     root: PathBuf,
     refresh_interval: Duration,
@@ -597,12 +529,10 @@ struct RouteCatalog {
     stream_label: &'static str,
     cache: Mutex<RouteCache>,
 }
-
 struct RouteCache {
     last_refresh: Option<Instant>,
     routes: HashMap<[u8; 32], RouteRecord>,
 }
-
 impl RouteCatalog {
     fn new(
         root: PathBuf,
@@ -621,7 +551,6 @@ impl RouteCatalog {
             }),
         }
     }
-
     fn lookup(&self, channel_id: &[u8; 32]) -> Result<Option<RouteRecord>, RouteCatalogError> {
         let mut cache = self.cache.lock().expect("route catalog mutex poisoned");
         let refresh_due = match cache.last_refresh {
@@ -634,7 +563,6 @@ impl RouteCatalog {
         }
         Ok(cache.routes.get(channel_id).cloned())
     }
-
     fn scan(&self) -> Result<HashMap<[u8; 32], RouteRecord>, RouteCatalogError> {
         let mut records: HashMap<[u8; 32], RouteRecord> = HashMap::new();
         let mut directory_entries = 0usize;
@@ -652,7 +580,6 @@ impl RouteCatalog {
                 });
             }
         };
-
         for entry in entries {
             directory_entries = checked_add_with_limit(
                 directory_entries,
@@ -786,7 +713,6 @@ impl RouteCatalog {
             if !should_retain {
                 continue;
             }
-
             let is_new_route = !records.contains_key(&record.channel_id);
             let previous_heap_bytes = records
                 .get(&record.channel_id)
@@ -839,11 +765,9 @@ impl RouteCatalog {
             records.insert(record.channel_id, record);
             route_heap_bytes = next_route_heap_bytes;
         }
-
         Ok(records)
     }
 }
-
 /// Errors surfaced while reading or decoding route catalogs.
 #[derive(Debug, Error)]
 pub enum RouteCatalogError {
@@ -894,7 +818,6 @@ pub enum RouteCatalogError {
         error: std::collections::TryReserveError,
     },
 }
-
 impl RouteRecord {
     fn from_update(update: PrivacyRouteUpdate, route: SoranetRoute) -> Self {
         let channel_id: [u8; 32] = route.channel_id.into();
@@ -913,14 +836,12 @@ impl RouteRecord {
             valid_until_segment: update.valid_until_segment,
         }
     }
-
     fn heap_bytes(&self) -> usize {
         self.exit_token
             .capacity()
             .saturating_add(self.exit_multiaddr.capacity())
     }
 }
-
 fn validate_route_update(update: &PrivacyRouteUpdate) -> Result<(), String> {
     let route_id = update.route_id;
     if route_id.iter().all(|byte| *byte == 0) {
@@ -952,21 +873,18 @@ fn validate_route_update(update: &PrivacyRouteUpdate) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn route_map_bucket_bytes(capacity: usize) -> Option<usize> {
     capacity
         .checked_mul(std::mem::size_of::<([u8; 32], RouteRecord)>())
         // Include hash-table control bytes and allocator rounding.
         .and_then(|bytes| bytes.checked_mul(2))
 }
-
 /// Prepared Norito streaming state with optional on-disk route catalog.
 #[derive(Clone)]
 pub struct NoritoStreamState {
     config: NoritoStreamRoute,
     catalog: Option<Arc<RouteCatalog>>,
 }
-
 impl NoritoStreamState {
     fn new(config: NoritoStreamRoute, relay_id: RelayId) -> Self {
         let catalog = config.spool_dir(relay_id).map(|root| {
@@ -979,23 +897,18 @@ impl NoritoStreamState {
         });
         Self { config, catalog }
     }
-
     pub fn connect_timeout(&self) -> Duration {
         self.config.connect_timeout()
     }
-
     pub fn padding_target(&self) -> Duration {
         self.config.padding_target()
     }
-
     pub fn torii_ws_url(&self) -> &str {
         self.config.torii_ws_url()
     }
-
     pub fn gar_category(&self, authenticated: bool) -> &str {
         self.config.gar_category(authenticated)
     }
-
     pub fn lookup_channel(
         &self,
         channel_id: &[u8; 32],
@@ -1006,14 +919,12 @@ impl NoritoStreamState {
         }
     }
 }
-
 /// Prepared Kaigi streaming state with optional on-disk route catalog.
 #[derive(Clone)]
 pub struct KaigiStreamState {
     config: KaigiStreamRoute,
     catalog: Option<Arc<RouteCatalog>>,
 }
-
 impl KaigiStreamState {
     fn new(config: KaigiStreamRoute, relay_id: RelayId) -> Self {
         let catalog = config.spool_dir(relay_id).map(|root| {
@@ -1026,19 +937,15 @@ impl KaigiStreamState {
         });
         Self { config, catalog }
     }
-
     pub fn connect_timeout(&self) -> Duration {
         self.config.connect_timeout()
     }
-
     pub fn hub_ws_url(&self) -> &str {
         self.config.hub_ws_url()
     }
-
     pub fn gar_category(&self, authenticated: bool) -> &str {
         self.config.gar_category(authenticated)
     }
-
     pub fn lookup_channel(
         &self,
         channel_id: &[u8; 32],
@@ -1049,7 +956,6 @@ impl KaigiStreamState {
         }
     }
 }
-
 /// Derive a blinded Kaigi room identifier from route metadata.
 ///
 /// The derivation uses BLAKE3 with a fixed domain separator so room identifiers
@@ -1071,7 +977,6 @@ pub fn derive_kaigi_room_id(
     room_id.copy_from_slice(digest.as_bytes());
     room_id
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExitStreamTag {
     /// Norito streaming route.
@@ -1079,7 +984,6 @@ pub enum ExitStreamTag {
     /// Kaigi streaming route.
     KaigiStream,
 }
-
 impl ExitStreamTag {
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
@@ -1088,7 +992,6 @@ impl ExitStreamTag {
             _ => None,
         }
     }
-
     pub fn as_u8(self) -> u8 {
         match self {
             Self::NoritoStream => 0x01,
@@ -1096,45 +999,36 @@ impl ExitStreamTag {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RouteFlags(u8);
-
 impl RouteFlags {
     /// Flag indicating an authenticated exit route.
     pub const AUTHENTICATED: u8 = 0x01;
-
     pub const fn new(raw: u8) -> Self {
         Self(raw)
     }
-
     pub const fn raw(self) -> u8 {
         self.0
     }
-
     pub const fn is_authenticated(self) -> bool {
         (self.0 & Self::AUTHENTICATED) != 0
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RouteOpenFrame {
     tag: ExitStreamTag,
     flags: RouteFlags,
     channel_id: [u8; 32],
 }
-
 impl RouteOpenFrame {
     /// Fixed length of the on-wire route-open frame.
     pub const fn length() -> usize {
         ROUTE_OPEN_FRAME_LEN
     }
-
     pub fn decode(bytes: &[u8]) -> Result<Self, RouteOpenFrameError> {
         if bytes.len() != ROUTE_OPEN_FRAME_LEN {
             return Err(RouteOpenFrameError::InvalidLength(bytes.len()));
         }
-
         let tag_byte = bytes[0];
         let Some(tag) = ExitStreamTag::from_u8(tag_byte) else {
             return Err(RouteOpenFrameError::UnknownTag(tag_byte));
@@ -1145,27 +1039,22 @@ impl RouteOpenFrame {
         if channel_id.iter().all(|&b| b == 0) {
             return Err(RouteOpenFrameError::ZeroChannelId);
         }
-
         Ok(Self {
             tag,
             flags,
             channel_id,
         })
     }
-
     pub const fn tag(&self) -> ExitStreamTag {
         self.tag
     }
-
     pub const fn flags(&self) -> RouteFlags {
         self.flags
     }
-
     pub const fn channel_id(&self) -> &[u8; 32] {
         &self.channel_id
     }
 }
-
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RouteOpenFrameError {
     /// Frame length does not match the expected 34-byte payload.
@@ -1178,7 +1067,6 @@ pub enum RouteOpenFrameError {
     #[error("channel identifier must not be all zeros")]
     ZeroChannelId,
 }
-
 #[cfg(test)]
 mod tests {
     use norito::{
@@ -1186,9 +1074,7 @@ mod tests {
         to_bytes,
     };
     use tempfile::TempDir;
-
     use super::*;
-
     fn sample_route() -> NoritoStreamRoutingConfig {
         NoritoStreamRoutingConfig {
             torii_ws_url: "wss://torii.test/norito/stream".into(),
@@ -1200,7 +1086,6 @@ mod tests {
             route_refresh_secs: 5,
         }
     }
-
     fn sample_kaigi_route() -> KaigiStreamRoutingConfig {
         KaigiStreamRoutingConfig {
             hub_ws_url: "wss://kaigi.test/hub".into(),
@@ -1211,7 +1096,6 @@ mod tests {
             route_refresh_secs: 6,
         }
     }
-
     #[test]
     fn norito_route_defaults_apply() {
         let cfg = sample_route();
@@ -1228,7 +1112,6 @@ mod tests {
         assert_eq!(route.gar_category(false), DEFAULT_GAR_CATEGORY_READ_ONLY);
         assert_eq!(route.gar_category(true), DEFAULT_GAR_CATEGORY_AUTH);
     }
-
     #[test]
     fn kaigi_route_defaults_apply() {
         let cfg = sample_kaigi_route();
@@ -1241,7 +1124,6 @@ mod tests {
         assert_eq!(route.gar_category(false), DEFAULT_KAIGI_CATEGORY_PUBLIC);
         assert_eq!(route.gar_category(true), DEFAULT_KAIGI_CATEGORY_AUTH);
     }
-
     #[test]
     fn exit_routing_constructs_optional_route() {
         let cfg = ExitRoutingConfig {
@@ -1254,30 +1136,24 @@ mod tests {
         assert!(state.norito_stream().is_some());
         assert!(state.kaigi_stream().is_some());
     }
-
     #[test]
     fn exit_routing_uses_relay_scoped_spool_dirs() {
         let temp = TempDir::new().expect("temp dir");
         let relay_id = [0x42; 32];
         let channel_id = [0x99; 32];
-
         let mut norito_cfg = sample_route();
         norito_cfg.spool_dir = Some(temp.path().to_path_buf());
         norito_cfg.route_refresh_secs = 0;
-
         let mut kaigi_cfg = sample_kaigi_route();
         kaigi_cfg.spool_dir = Some(temp.path().to_path_buf());
         kaigi_cfg.route_refresh_secs = 0;
-
         let routing = ExitRouting::from_config(&ExitRoutingConfig {
             norito_stream: Some(norito_cfg),
             kaigi_stream: Some(kaigi_cfg),
         })
         .expect("routing config");
         let state = routing.prepare(relay_id);
-
         let spool_root = temp.path().join(format!("exit-{}", hex::encode(relay_id)));
-
         let write_update = |dir: &std::path::Path,
                             route_id: [u8; 32],
                             stream_tag: SoranetStreamTag,
@@ -1307,7 +1183,6 @@ mod tests {
             let bytes = to_bytes(&update).expect("encode route");
             fs::write(dir.join(file_name), bytes).expect("write route");
         };
-
         write_update(
             &spool_root.join(NORITO_STREAM_SUBDIR),
             [0x11; 32],
@@ -1320,7 +1195,6 @@ mod tests {
             SoranetStreamTag::Kaigi,
             "/dns/kaigi.example/tcp/443/quic",
         );
-
         let norito_record = state
             .norito_stream()
             .expect("norito route configured")
@@ -1332,7 +1206,6 @@ mod tests {
             norito_record.exit_multiaddr,
             "/dns/norito.example/tcp/443/quic"
         );
-
         let kaigi_record = state
             .kaigi_stream()
             .expect("kaigi route configured")
@@ -1345,57 +1218,47 @@ mod tests {
             "/dns/kaigi.example/tcp/443/quic"
         );
     }
-
     #[test]
     fn route_open_decodes_norito_stream() {
         let mut bytes = [0u8; ROUTE_OPEN_FRAME_LEN];
         bytes[0] = ExitStreamTag::NoritoStream.as_u8();
         bytes[1] = RouteFlags::AUTHENTICATED;
         bytes[2..34].copy_from_slice(&[0xAA; 32]);
-
         let frame = RouteOpenFrame::decode(&bytes).expect("decode frame");
         assert_eq!(frame.tag(), ExitStreamTag::NoritoStream);
         assert!(frame.flags().is_authenticated());
         assert_eq!(frame.channel_id(), &[0xAA; 32]);
     }
-
     #[test]
     fn route_open_decodes_kaigi_stream() {
         let mut bytes = [0u8; ROUTE_OPEN_FRAME_LEN];
         bytes[0] = ExitStreamTag::KaigiStream.as_u8();
         bytes[2..34].copy_from_slice(&[0xBB; 32]);
-
         let frame = RouteOpenFrame::decode(&bytes).expect("decode frame");
         assert_eq!(frame.tag(), ExitStreamTag::KaigiStream);
         assert!(!frame.flags().is_authenticated());
         assert_eq!(frame.channel_id(), &[0xBB; 32]);
     }
-
     #[test]
     fn route_open_rejects_unknown_tag() {
         let mut bytes = [0u8; ROUTE_OPEN_FRAME_LEN];
         bytes[0] = 0xFF;
         bytes[2..34].copy_from_slice(&[0x01; 32]);
-
         let err = RouteOpenFrame::decode(&bytes).expect_err("decode fails");
         assert_eq!(err, RouteOpenFrameError::UnknownTag(0xFF));
     }
-
     #[test]
     fn route_open_rejects_zero_channel() {
         let mut bytes = [0u8; ROUTE_OPEN_FRAME_LEN];
         bytes[0] = ExitStreamTag::NoritoStream.as_u8();
-
         let err = RouteOpenFrame::decode(&bytes).expect_err("decode fails");
         assert_eq!(err, RouteOpenFrameError::ZeroChannelId);
     }
-
     #[test]
     fn derive_kaigi_room_id_blinds_channel_and_route_ids() {
         let channel_id = [0x01; 32];
         let route_id = [0x02; 32];
         let stream_id = [0x03; 32];
-
         let room_id = derive_kaigi_room_id(&channel_id, &route_id, &stream_id);
         assert_eq!(
             room_id,
@@ -1405,7 +1268,6 @@ mod tests {
         assert_ne!(room_id, channel_id, "room id must not leak the channel id");
         assert_ne!(room_id, route_id, "room id must not reuse the route id");
         assert_ne!(room_id, stream_id, "room id must not reuse the stream id");
-
         let changed_route = derive_kaigi_room_id(&channel_id, &[0x04; 32], &stream_id);
         let changed_stream = derive_kaigi_room_id(&channel_id, &route_id, &[0x05; 32]);
         assert_ne!(
@@ -1417,17 +1279,14 @@ mod tests {
             "stream id changes must produce distinct room ids"
         );
     }
-
     #[test]
     fn route_catalog_returns_latest_route() {
         let temp = TempDir::new().expect("temp dir");
         let catalog_root = temp.path();
-
         let channel_id = [0x11; 32];
         let route_id_old = [0x22; 32];
         let route_id_new = [0x33; 32];
         let stream_id = [0x44; 32];
-
         let make_update = |route_id: [u8; 32], valid_from: u64| PrivacyRouteUpdate {
             route_id,
             stream_id,
@@ -1443,7 +1302,6 @@ mod tests {
                 stream_tag: SoranetStreamTag::NoritoStream,
             }),
         };
-
         let write_update = |root: &std::path::Path, update: PrivacyRouteUpdate, seq: u32| {
             let file_name = format!(
                 "{seq:016x}-route-{}-stream-{}.{}",
@@ -1456,12 +1314,10 @@ mod tests {
             let bytes = to_bytes(&update).expect("encode norito");
             fs::write(path, bytes).expect("write norito file");
         };
-
         let older = make_update(route_id_old, 10);
         let newer = make_update(route_id_new, 42);
         write_update(catalog_root, older, 0);
         write_update(catalog_root, newer, 1);
-
         let catalog = RouteCatalog::new(
             catalog_root.to_path_buf(),
             Duration::from_millis(0),
@@ -1480,13 +1336,11 @@ mod tests {
         assert_eq!(record.access_kind, SoranetAccessKind::Authenticated);
         assert_eq!(record.stream_tag, SoranetStreamTag::NoritoStream);
     }
-
     #[test]
     fn route_catalog_filters_by_stream_tag() {
         let temp = TempDir::new().expect("temp dir");
         let catalog_root = temp.path();
         let channel_id = [0x55; 32];
-
         let update = PrivacyRouteUpdate {
             route_id: [0x11; 32],
             stream_id: [0x22; 32],
@@ -1502,7 +1356,6 @@ mod tests {
                 stream_tag: SoranetStreamTag::Kaigi,
             }),
         };
-
         let file_name = format!(
             "0000000000000001-route-{}-stream-{}.{}",
             hex::encode(update.route_id),
@@ -1513,7 +1366,6 @@ mod tests {
         fs::create_dir_all(catalog_root).expect("create catalog dir");
         let bytes = to_bytes(&update).expect("encode kaigi route");
         fs::write(path, bytes).expect("write kaigi route");
-
         let norito_catalog = RouteCatalog::new(
             catalog_root.to_path_buf(),
             Duration::from_secs(0),
@@ -1527,7 +1379,6 @@ mod tests {
                 .is_none(),
             "catalog configured for norito must skip kaigi routes"
         );
-
         let kaigi_catalog = RouteCatalog::new(
             catalog_root.to_path_buf(),
             Duration::from_secs(0),
@@ -1540,7 +1391,6 @@ mod tests {
             .expect("kaigi route expected");
         assert_eq!(record.stream_tag, SoranetStreamTag::Kaigi);
     }
-
     #[test]
     fn route_catalog_respects_refresh_interval() {
         let temp = TempDir::new().expect("temp dir");
@@ -1549,7 +1399,6 @@ mod tests {
         let route_id_initial = [0x99; 32];
         let route_id_updated = [0xA5; 32];
         let stream_id = [0x77; 32];
-
         let make_update = |route_id: [u8; 32], valid_from: u64| PrivacyRouteUpdate {
             route_id,
             stream_id,
@@ -1565,7 +1414,6 @@ mod tests {
                 stream_tag: SoranetStreamTag::NoritoStream,
             }),
         };
-
         let write_update = |root: &std::path::Path, update: PrivacyRouteUpdate, seq: u32| {
             let file_name = format!(
                 "{seq:016x}-route-{}-stream-{}.{}",
@@ -1578,9 +1426,7 @@ mod tests {
             let bytes = to_bytes(&update).expect("encode norito");
             fs::write(path, bytes).expect("write norito file");
         };
-
         write_update(catalog_root, make_update(route_id_initial, 2), 0);
-
         let catalog = RouteCatalog::new(
             catalog_root.to_path_buf(),
             Duration::from_secs(1),
@@ -1594,18 +1440,14 @@ mod tests {
         assert_eq!(initial.route_id, route_id_initial);
         assert_eq!(initial.valid_from_segment, 2);
         assert_eq!(initial.stream_tag, SoranetStreamTag::NoritoStream);
-
         write_update(catalog_root, make_update(route_id_updated, 7), 1);
-
         let cached = catalog
             .lookup(&channel_id)
             .expect("catalog lookup")
             .expect("route present");
         assert_eq!(cached.route_id, route_id_initial);
         assert_eq!(cached.stream_tag, SoranetStreamTag::NoritoStream);
-
         std::thread::sleep(Duration::from_millis(1100));
-
         let refreshed = catalog
             .lookup(&channel_id)
             .expect("catalog lookup")
@@ -1614,24 +1456,20 @@ mod tests {
         assert_eq!(refreshed.valid_from_segment, 7);
         assert_eq!(refreshed.stream_tag, SoranetStreamTag::NoritoStream);
     }
-
     #[test]
     fn derive_room_id_depends_on_route_metadata() {
         let channel = [0xA1; 32];
         let route_one = [0xB2; 32];
         let route_two = [0xC3; 32];
         let stream = [0xD4; 32];
-
         let room_one = derive_kaigi_room_id(&channel, &route_one, &stream);
         let room_two = derive_kaigi_room_id(&channel, &route_two, &stream);
-
         assert_ne!(room_one, channel, "room id must not leak the channel id");
         assert_ne!(
             room_one, room_two,
             "changing the route id must yield a different room id"
         );
     }
-
     #[test]
     fn route_catalog_file_limit_accepts_exact_and_rejects_plus_one() {
         let temp = TempDir::new().expect("temp dir");
@@ -1644,7 +1482,6 @@ mod tests {
                 .len(),
             ROUTE_CATALOG_FILE_MAX_BYTES_V1
         );
-
         let oversized = temp.path().join("oversized.norito");
         fs::write(&oversized, vec![0xA5; ROUTE_CATALOG_FILE_MAX_BYTES_V1 + 1])
             .expect("write oversized route file");
@@ -1652,12 +1489,10 @@ mod tests {
             read_bounded_direct_route_file(&oversized, ROUTE_CATALOG_FILE_MAX_BYTES_V1).is_err()
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn route_catalog_file_read_rejects_symlinks() {
         use std::os::unix::fs::symlink;
-
         let temp = TempDir::new().expect("temp dir");
         let target = temp.path().join("target.norito");
         let link = temp.path().join("link.norito");
@@ -1665,7 +1500,6 @@ mod tests {
         symlink(&target, &link).expect("create route symlink");
         assert!(read_bounded_direct_route_file(&link, ROUTE_CATALOG_FILE_MAX_BYTES_V1).is_err());
     }
-
     #[test]
     fn route_catalog_count_and_byte_limits_accept_exact_and_reject_plus_one() {
         for maximum in [
@@ -1699,7 +1533,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn route_update_field_limits_accept_exact_and_reject_plus_one() {
         let mut update = PrivacyRouteUpdate {
@@ -1731,7 +1564,6 @@ mod tests {
             .push('x');
         assert!(validate_route_update(&update).is_err());
     }
-
     #[test]
     fn route_catalog_rejects_filename_payload_mismatch() {
         let temp = TempDir::new().expect("temp dir");
@@ -1768,7 +1600,6 @@ mod tests {
             Err(RouteCatalogError::Validation { .. })
         ));
     }
-
     #[test]
     fn route_catalog_returns_none_when_empty() {
         let temp = TempDir::new().expect("temp dir");

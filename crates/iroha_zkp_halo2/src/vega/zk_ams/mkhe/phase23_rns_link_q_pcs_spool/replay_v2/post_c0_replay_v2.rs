@@ -1,10 +1,7 @@
 //! Exact two-pass coefficient replay after the initial qPCS root.
-
 use super::*;
-
 const CQ_POST_ROOT_CONTEXT_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.cq-post-root.context\0";
-
 pub(super) fn cq_bound_layout_v2(
     parameter_digest: [u8; 32],
     logical_length: u64,
@@ -29,7 +26,6 @@ pub(super) fn cq_bound_layout_v2(
         digest,
     )
 }
-
 pub(super) fn cq_post_root_context_digest_v2(
     descriptor: StorageLayoutDescriptorV2,
     context: PublicSpoolContextV2,
@@ -70,7 +66,6 @@ pub(super) fn cq_post_root_context_digest_v2(
     }
     Ok(digest)
 }
-
 pub(super) struct QPcsC0StoredV2 {
     coefficient: ConfidentialSpoolSnapshotV1,
     lde: ConfidentialSpoolSnapshotV1,
@@ -80,12 +75,10 @@ pub(super) struct QPcsC0StoredV2 {
     lde_context_digest: [u8; 32],
     snapshot_binding_digest: [u8; 32],
 }
-
 pub(super) struct C0BatchReplayV2 {
     stored: Option<QPcsC0StoredV2>,
     next_slot: u64,
 }
-
 pub(super) struct CqBatchReplayV2 {
     snapshot: Option<ConfidentialSpoolSnapshotV1>,
     descriptor: StorageLayoutDescriptorV2,
@@ -94,7 +87,6 @@ pub(super) struct CqBatchReplayV2 {
     pre_quotient_transcript: [u8; 32],
     next_slot: u64,
 }
-
 pub(super) struct QPcsCqStoredV2 {
     snapshot: ConfidentialSpoolSnapshotV1,
     descriptor: StorageLayoutDescriptorV2,
@@ -102,29 +94,24 @@ pub(super) struct QPcsCqStoredV2 {
     snapshot_digest: [u8; 32],
     pre_quotient_transcript: [u8; 32],
 }
-
 pub(super) struct PostC0CoefficientReplayV2 {
     snapshot: Option<QPcsSpoolSnapshotV2>,
     next_purpose: u16,
     pass: u8,
 }
-
 pub(super) struct PostC0ReplayBoundaryV2 {
     snapshot: Option<QPcsSpoolSnapshotV2>,
     completed_passes: u8,
 }
-
 pub(super) struct QPcsC0PostReplayCompleteV2 {
     snapshot: QPcsSpoolSnapshotV2,
 }
-
 pub(super) struct PostC0CoefficientRowV2 {
     owner: Option<PostC0CoefficientReplayV2>,
     pair: u16,
     component: CoefficientComponentV2,
     next_block: u64,
 }
-
 impl QPcsC0CompleteV2 {
     pub(super) fn begin_post_c0_coefficient_replay_v2(
         self,
@@ -139,7 +126,6 @@ impl QPcsC0CompleteV2 {
         })
     }
 }
-
 impl PostC0ReplayBoundaryV2 {
     pub(super) fn begin_second_replay_v2(
         mut self,
@@ -154,7 +140,6 @@ impl PostC0ReplayBoundaryV2 {
             pass: 1,
         })
     }
-
     pub(super) fn finish_v2(mut self) -> Result<QPcsC0PostReplayCompleteV2, QPcsSpoolErrorV2> {
         let snapshot = self.snapshot.take().ok_or(QPcsSpoolErrorV2::Poisoned)?;
         if self.completed_passes != 2 {
@@ -163,7 +148,6 @@ impl PostC0ReplayBoundaryV2 {
         Ok(QPcsC0PostReplayCompleteV2 { snapshot })
     }
 }
-
 impl QPcsC0PostReplayCompleteV2 {
     pub(super) fn separate_replay_permit_v2(
         self,
@@ -184,7 +168,6 @@ impl QPcsC0PostReplayCompleteV2 {
         ))
     }
 }
-
 impl QPcsC0StoredV2 {
     pub(super) fn begin_c0_batch_replay_v2(
         self,
@@ -250,7 +233,6 @@ impl QPcsC0StoredV2 {
         })
     }
 }
-
 impl C0BatchReplayV2 {
     pub(super) fn read_next_v2(
         &mut self,
@@ -278,7 +260,6 @@ impl C0BatchReplayV2 {
         self.stored = Some(stored);
         Ok(AuthenticatedReplayChunkV2 { chunk })
     }
-
     pub(super) fn complete_v2(mut self) -> Result<QPcsC0StoredV2, QPcsSpoolErrorV2> {
         let stored = self.stored.take().ok_or(QPcsSpoolErrorV2::Poisoned)?;
         if self.next_slot != stored.geometry.lde_slot_count_v2()? {
@@ -287,7 +268,6 @@ impl C0BatchReplayV2 {
         Ok(stored)
     }
 }
-
 fn validate_exhausted_cq_batch_boundary_v2(
     descriptor: StorageLayoutDescriptorV2,
     next_unit: u64,
@@ -310,7 +290,6 @@ fn validate_exhausted_cq_batch_boundary_v2(
     }
     Ok(())
 }
-
 impl QPcsDerivedReplayV2 {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn begin_cq_batch_replay_v2(
@@ -345,7 +324,6 @@ impl QPcsDerivedReplayV2 {
         })
     }
 }
-
 impl CqBatchReplayV2 {
     pub(super) fn read_next_v2(
         &mut self,
@@ -369,7 +347,6 @@ impl CqBatchReplayV2 {
         self.snapshot = Some(snapshot);
         Ok(AuthenticatedReplayChunkV2 { chunk })
     }
-
     pub(super) fn complete_v2(
         mut self,
     ) -> Result<(QPcsCqStoredV2, AuthenticatedReplayPermitV2), QPcsSpoolErrorV2> {
@@ -394,7 +371,6 @@ impl CqBatchReplayV2 {
         ))
     }
 }
-
 impl PostC0CoefficientReplayV2 {
     pub(super) fn geometry_v2(&self) -> Result<SpoolGeometryV2, QPcsSpoolErrorV2> {
         Ok(self
@@ -403,7 +379,6 @@ impl PostC0CoefficientReplayV2 {
             .ok_or(QPcsSpoolErrorV2::Poisoned)?
             .geometry)
     }
-
     pub(super) fn begin_next_row_v2(mut self) -> Result<PostC0CoefficientRowV2, QPcsSpoolErrorV2> {
         let snapshot = self.snapshot.take().ok_or(QPcsSpoolErrorV2::Poisoned)?;
         let purpose_count = u16::from(snapshot.geometry.limb_count_v2()?)
@@ -428,7 +403,6 @@ impl PostC0CoefficientReplayV2 {
             next_block: 0,
         })
     }
-
     pub(super) fn complete_v2(mut self) -> Result<PostC0ReplayBoundaryV2, QPcsSpoolErrorV2> {
         let snapshot = self.snapshot.take().ok_or(QPcsSpoolErrorV2::Poisoned)?;
         let expected = u16::from(snapshot.geometry.limb_count_v2()?)
@@ -451,7 +425,6 @@ impl PostC0CoefficientReplayV2 {
         })
     }
 }
-
 impl PostC0CoefficientRowV2 {
     pub(super) fn geometry_v2(&self) -> Result<SpoolGeometryV2, QPcsSpoolErrorV2> {
         self.owner
@@ -459,7 +432,6 @@ impl PostC0CoefficientRowV2 {
             .ok_or(QPcsSpoolErrorV2::Poisoned)?
             .geometry_v2()
     }
-
     pub(super) fn read_next_block_v2(
         &mut self,
     ) -> Result<AuthenticatedReplayChunkV2, QPcsSpoolErrorV2> {
@@ -489,7 +461,6 @@ impl PostC0CoefficientRowV2 {
         self.owner = Some(owner);
         Ok(AuthenticatedReplayChunkV2 { chunk })
     }
-
     pub(super) fn complete_v2(mut self) -> Result<PostC0CoefficientReplayV2, QPcsSpoolErrorV2> {
         let mut owner = self.owner.take().ok_or(QPcsSpoolErrorV2::Poisoned)?;
         let snapshot = owner.snapshot.as_ref().ok_or(QPcsSpoolErrorV2::Poisoned)?;
@@ -502,14 +473,12 @@ impl PostC0CoefficientRowV2 {
             .ok_or(QPcsSpoolErrorV2::InvalidGeometry)?;
         Ok(owner)
     }
-
     #[cfg(test)]
     fn panic_after_take_for_test_v2(&mut self) {
         let _owner = self.owner.take().expect("live post-C0 replay row");
         panic!("intentional post-C0 replay unwind test");
     }
 }
-
 pub(super) fn bind_cq_post_root_replay_v2(
     snapshot: ConfidentialSpoolSnapshotV1,
     descriptor: StorageLayoutDescriptorV2,
@@ -540,7 +509,6 @@ pub(super) fn bind_cq_post_root_replay_v2(
         replay_permit,
     })
 }
-
 #[path = "post_c0_replay_v2/canonical_proof_replay_v2.rs"]
 mod canonical_proof_replay_v2;
 pub(super) use canonical_proof_replay_v2::*;

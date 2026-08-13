@@ -13,12 +13,10 @@
 /// Opaque phase boundaries used by the compiler regression benchmark.
 #[doc(hidden)]
 pub mod benchmark;
-
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
 };
-
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use indexmap::IndexSet;
@@ -48,7 +46,6 @@ use iroha_data_model::{
     trigger::{Trigger, TriggerId},
 };
 use norito::json;
-
 use super::{
     ast::{BinaryOp, FunctionKind, FunctionModifiers, SourceLocation, SourceUnitKind, UnaryOp},
     diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
@@ -1466,7 +1463,6 @@ fn state_path_literal_data_key(
 fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>> {
     use ir::DataRefKind as DRK;
     use iroha_primitives::json::Json;
-
     let (type_id, payload) = match kind {
         DRK::Account => {
             let id = iroha_data_model::account::AccountId::parse_encoded(raw)
@@ -1695,13 +1691,11 @@ impl Default for CompilerOptions {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
-
     use indexmap::IndexSet;
     use iroha_data_model::{
         DomainId,
         asset::{AssetBalanceScope, id::AssetDefinitionId},
     };
-
     use super::{
         ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
         COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES,
@@ -1729,7 +1723,6 @@ mod tests {
         pointer_abi::PointerType,
     };
     use ivm_abi::syscalls;
-
     fn test_mode_compiler() -> Compiler {
         Compiler::new_with_options(CompilerOptions {
             mode: CompilerMode::Test,
@@ -1750,9 +1743,7 @@ mod tests {
     }
     fn sample_asset_handle() -> crate::axt::AssetHandle {
         use iroha_data_model::nexus::{DataSpaceId, LaneId};
-
         use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject};
-
         AssetHandle {
             scope: vec!["transfer".to_owned()],
             subject: HandleSubject {
@@ -2122,9 +2113,7 @@ mod tests {
     #[test]
     fn axt_descriptor_literal_encoding_enforces_host_invariants() {
         use iroha_data_model::nexus::DataSpaceId;
-
         use crate::axt::{AxtDescriptor, AxtTouchSpec};
-
         fn literal(descriptor: &AxtDescriptor) -> String {
             let bytes = norito::to_bytes(descriptor).expect("encode AXT descriptor");
             format!("0x{}", hex::encode(bytes))
@@ -2211,9 +2200,7 @@ mod tests {
     #[test]
     fn capability_pointer_encoding_rejects_context_free_faults() {
         use iroha_data_model::nexus::{DataSpaceId, LaneId};
-
         use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject, ProofBlob};
-
         fn literal<T: norito::NoritoSerialize>(value: &T) -> String {
             let bytes = norito::to_bytes(value).expect("encode capability literal");
             format!("0x{}", hex::encode(bytes))
@@ -2384,7 +2371,6 @@ mod tests {
     #[test]
     fn codegen_rejects_noncanonical_or_invalid_literal_axt_touch_manifests() {
         use crate::axt::TouchManifest;
-
         let invalid = TouchManifest {
             read: vec!["z".to_owned(), "a".to_owned()],
             write: Vec::new(),
@@ -2423,9 +2409,7 @@ mod tests {
     #[test]
     fn codegen_rejects_noncanonical_or_invalid_literal_remote_spend_intents() {
         use iroha_data_model::nexus::DataSpaceId;
-
         use crate::axt::{RemoteSpendIntent, SpendOp};
-
         let invalid = RemoteSpendIntent {
             asset_dsid: DataSpaceId::new(7),
             op: SpendOp {
@@ -2476,7 +2460,6 @@ mod tests {
     #[test]
     fn shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints() {
         use ivm_abi::host_payload::{RootsGetRequest, VoteGetTallyRequest, VrfEpochSeedRequest};
-
         let asset: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
             .parse()
             .expect("canonical asset definition");
@@ -6902,7 +6885,6 @@ seiyaku ReachableHintControlFlow {{
     #[test]
     fn optimized_ir_dynamic_provenance_must_match_the_emitted_state_schema() {
         use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
-
         fn state_keys(hint: Option<DynamicAccessHint>) -> ir::Instr {
             ir::Instr::StateKeys {
                 dest: ir::Temp(0),
@@ -7303,7 +7285,6 @@ seiyaku ExactScanProvenance {{
     #[test]
     fn manifest_access_set_hints_include_asset_registration_literals() {
         use iroha_data_model::asset::id::{AssetDefinitionId, AssetId};
-
         let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let asset_def = AssetDefinitionId::parse_address_literal(asset_literal).unwrap();
         let account = sample_account_id();
@@ -7508,7 +7489,6 @@ kotoage fn main() authorize("AssetAdmin") {{
     #[test]
     fn manifest_access_set_hints_include_transfer_domain_literal() {
         use iroha_data_model::domain::DomainId;
-
         let from_literal = sample_account_literal();
         let to = sample_account_id_alt();
         let to_literal = to.to_string();
@@ -8067,7 +8047,6 @@ seiyaku Test {{
     #[test]
     fn manifest_trigger_decl_sets_authority() {
         use iroha_data_model::account::{AccountId, ParsedAccountId};
-
         let authority_literal = sample_account_literal();
         let src = format!(
             r#"
@@ -8943,7 +8922,6 @@ seiyaku Test {{
     #[test]
     fn manifest_access_set_hints_include_create_trigger() {
         use std::str::FromStr;
-
         use iroha_data_model::{
             account::AccountId,
             events::{EventFilterBox, execute_trigger::ExecuteTriggerEventFilter},
@@ -9165,7 +9143,6 @@ pub fn encode_jal(rd: u8, imm: i32) -> Result<u32, String> {
 #[cfg(test)]
 mod test_mode_tests {
     use super::*;
-
     #[test]
     fn production_mode_rejects_test_functions_instead_of_stripping_them() {
         let src = include_str!("compiler/fixtures/v1/c175.ko");
@@ -9368,7 +9345,6 @@ mod test_mode_tests {
     #[allow(clippy::too_many_lines)]
     fn every_typed_query_page_compiles_with_a_structural_public_schema() {
         use ivm_abi::entrypoint::{EntrypointValueTypeNodeV1 as Node, EntrypointValueTypeV1};
-
         let source = include_str!("compiler/fixtures/v1/c179.ko");
         let artifact = Compiler::new()
             .compile_source(source)
@@ -18189,7 +18165,6 @@ fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
 }
 fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType, String> {
     use semantic::Type;
-
     Ok(match semantic::resolve_struct_type(ty) {
         Type::Int => EmbeddedStateType::Int,
         Type::Decimal => EmbeddedStateType::Decimal,
@@ -19141,7 +19116,6 @@ fn record_smart_contract_lifecycle_access(
     access_set: &mut AccessSets,
 ) -> Option<()> {
     use iroha_data_model::isi::smart_contract_code as DMScode;
-
     let payload = decode_norito_literal_payload(raw)?;
     match syscall {
         syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
@@ -19430,7 +19404,6 @@ fn record_instruction_box_access(
     }
     {
         use iroha_data_model::isi::escrow as DMEscrow;
-
         if let Some(instr) = any.downcast_ref::<DMEscrow::OpenAssetEscrow>() {
             record_asset_escrow_open_access(
                 access_set,
@@ -19671,7 +19644,6 @@ fn record_typed_core_query_get_access(
     access_set: &mut AccessSets,
 ) -> Option<()> {
     use ivm_abi::core_query::CoreQueryEntityTagV1;
-
     match entity {
         CoreQueryEntityTagV1::Account => {
             let account =
@@ -21005,10 +20977,8 @@ fn entrypoint_kind_from_modifiers(modifiers: &FunctionModifiers) -> Option<Entry
         FunctionKind::Private => None,
     }
 }
-
 pub mod test_helpers {
     use super::*;
-
     /// Trigger just the CallMulti guard in codegen with a fabricated IR function.
     /// This avoids parsing/semantic stages and focuses on the emission error path.
     pub fn try_emit_callmulti_guard_only(ret_arity: usize) -> Result<(), String> {

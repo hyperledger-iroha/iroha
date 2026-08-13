@@ -1,5 +1,4 @@
 // Bootstrap recovery helpers for atomically relabelling durable lane geometry.
-
 fn bootstrap_move_geometry_path(
     store_root: &Path,
     source: &Path,
@@ -126,7 +125,6 @@ fn bootstrap_move_geometry_path(
     }
     Ok(true)
 }
-
 fn bootstrap_preflight_geometry_path(
     store_root: &Path,
     source: &Path,
@@ -172,7 +170,6 @@ fn bootstrap_preflight_geometry_path(
     bootstrap_validate_existing_ancestors(store_root, source)?;
     bootstrap_validate_existing_ancestors(store_root, target)
 }
-
 fn bootstrap_move_geometry_binding(
     store_root: &Path,
     source: &LaneGeometryBinding,
@@ -184,7 +181,6 @@ fn bootstrap_move_geometry_binding(
     let target_merge = store_root.join(&target.merge_path);
     bootstrap_preflight_geometry_path(store_root, &source_blocks, &target_blocks, true)?;
     bootstrap_preflight_geometry_path(store_root, &source_merge, &target_merge, false)?;
-
     let rollback = || -> Result<()> {
         let merge_result =
             bootstrap_move_geometry_path(store_root, &target_merge, &source_merge, false);
@@ -200,7 +196,6 @@ fn bootstrap_move_geometry_binding(
             )),
         }
     };
-
     if let Err(error) =
         bootstrap_move_geometry_path(store_root, &source_blocks, &target_blocks, true)
     {
@@ -227,7 +222,6 @@ fn bootstrap_move_geometry_binding(
         },
     }
 }
-
 fn bootstrap_require_lane_marker(
     store_root: &Path,
     blocks: &Path,

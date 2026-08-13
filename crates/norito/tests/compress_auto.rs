@@ -4,16 +4,13 @@
 //! without the `compression` feature. Ensure `compress_auto` degrades
 //! gracefully and returns `Compression::None` even when payload size would
 //! normally trigger compression.
-
 #[test]
 fn compress_auto_is_noop_without_compression_feature() {
     use norito::{Compression, core::heuristics::compress_auto};
-
     let payload = vec![0u8; 8 * 1024];
     let (algo, out) = compress_auto(payload.clone()).expect("compress_auto should not fail");
     // Always reference output to avoid unused variable warnings under cfg variations
     let _ = &out;
-
     // With `compression` disabled, we must not attempt to call into zstd and
     // should return the original payload unchanged. With `compression` enabled,
     // the selector should choose zstd for a sufficiently large payload.

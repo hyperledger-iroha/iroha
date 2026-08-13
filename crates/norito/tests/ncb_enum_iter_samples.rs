@@ -1,7 +1,5 @@
 //! Iterator sample checks over NCB enum datasets for various toggle combos.
-
 use norito::columnar as ncb;
-
 #[test]
 fn offsets_id_code_delta_iter_samples() {
     use ncb::EnumBorrow;
@@ -17,7 +15,6 @@ fn offsets_id_code_delta_iter_samples() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     assert_eq!(view.len(), rows.len());
-
     // Spot-check ids and payloads
     assert_eq!(view.id(0), 100);
     assert_eq!(view.id(2), 103);
@@ -29,7 +26,6 @@ fn offsets_id_code_delta_iter_samples() {
         ncb::ColEnumRef::Code(v) => assert_eq!(v, 9),
         _ => panic!("exp Code"),
     }
-
     // Collect names and codes at flag=true via iterators, compare with naive
     let mut names_true_naive = Vec::new();
     let mut codes_true_naive = Vec::new();
@@ -57,7 +53,6 @@ fn offsets_id_code_delta_iter_samples() {
     assert_eq!(names_idx, names_true_naive);
     assert_eq!(codes_idx, codes_true_naive);
 }
-
 #[test]
 fn dict_id_code_delta_iter_samples() {
     use ncb::EnumBorrow;
@@ -73,7 +68,6 @@ fn dict_id_code_delta_iter_samples() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     assert_eq!(view.len(), rows.len());
-
     // Spot-check names via dict and codes via delta
     match view.payload(0).expect("p0") {
         ncb::ColEnumRef::Name(s) => assert_eq!(s, "aa"),
@@ -87,7 +81,6 @@ fn dict_id_code_delta_iter_samples() {
         ncb::ColEnumRef::Name(s) => assert_eq!(s, "aa"),
         _ => panic!("exp Name"),
     }
-
     let mut names_true_naive = Vec::new();
     let mut codes_true_naive = Vec::new();
     for i in 0..view.len() {
@@ -113,7 +106,6 @@ fn dict_id_code_delta_iter_samples() {
     assert_eq!(names_idx, names_true_naive);
     assert_eq!(codes_idx, codes_true_naive);
 }
-
 #[test]
 fn offsets_repeating_names_zero_delta_codes() {
     use ncb::EnumBorrow;
@@ -134,7 +126,6 @@ fn offsets_repeating_names_zero_delta_codes() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     assert_eq!(view.len(), rows.len());
-
     // Naive collection for flag=true
     let mut names_true_naive = Vec::new();
     let mut codes_true_naive = Vec::new();
@@ -149,7 +140,6 @@ fn offsets_repeating_names_zero_delta_codes() {
     // Expect names at indices 0,3,9 (flags true) and codes from flagged indices (1,4,5,7)
     assert_eq!(names_true_naive, vec!["xx", "xx", "xx"]);
     assert_eq!(codes_true_naive, vec![200, 200, 200, 201]);
-
     // Iterators must match naive lists and subsequences
     let names_fast: Vec<String> = view
         .iter_names_flag_true_fast()
@@ -161,7 +151,6 @@ fn offsets_repeating_names_zero_delta_codes() {
     let codes_slice: Vec<u32> = view.iter_codes_flag_true_fast().skip(1).take(2).collect();
     assert_eq!(codes_slice, vec![200, 200]);
 }
-
 #[test]
 fn dict_repeating_names_zero_delta_codes() {
     use ncb::EnumBorrow;
@@ -180,7 +169,6 @@ fn dict_repeating_names_zero_delta_codes() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     assert_eq!(view.len(), rows.len());
-
     // Naive and iterator parity checks
     let mut names_true_naive = Vec::new();
     let mut codes_true_naive = Vec::new();
@@ -199,7 +187,6 @@ fn dict_repeating_names_zero_delta_codes() {
     let codes_fast: Vec<u32> = view.iter_codes_flag_true_fast().collect();
     assert_eq!(names_fast, names_true_naive);
     assert_eq!(codes_fast, codes_true_naive);
-
     // Specific sample slices
     let names_slice: Vec<String> = view
         .iter_names_flag_true_fast()
@@ -210,7 +197,6 @@ fn dict_repeating_names_zero_delta_codes() {
     let codes_slice: Vec<u32> = view.iter_codes_flag_true_fast().skip(2).take(1).collect();
     assert_eq!(codes_slice, vec![50]);
 }
-
 #[test]
 fn offsets_long_repeats_zero_delta_codes() {
     use ncb::EnumBorrow;
@@ -236,7 +222,6 @@ fn offsets_long_repeats_zero_delta_codes() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     assert_eq!(view.len(), rows.len());
-
     // Collect iterator outputs
     let names_true: Vec<String> = view
         .iter_names_flag_true_fast()
@@ -256,7 +241,6 @@ fn offsets_long_repeats_zero_delta_codes() {
     }
     assert_eq!(names_true, names_true_naive);
     assert_eq!(codes_true, codes_true_naive);
-
     // Windowed subsequence checks: ensure a window of three 300s exists and two 301s exist
     let has_three_300s = codes_true.windows(3).any(|w| w == [300, 300, 300]);
     assert!(
@@ -268,7 +252,6 @@ fn offsets_long_repeats_zero_delta_codes() {
         has_two_301s,
         "expected a run of two 301s in codes_true: {codes_true:?}"
     );
-
     // Reverse slice check: reverse codes and verify tail holds expected last repeated code
     if let Some(&last) = codes_true.last() {
         let rev_api: Vec<u32> = view.iter_codes_flag_true_fast_rev().collect();
@@ -277,7 +260,6 @@ fn offsets_long_repeats_zero_delta_codes() {
         assert_eq!(rev_api, rev_manual);
     }
 }
-
 #[test]
 fn dict_long_repeats_zero_delta_codes() {
     use ncb::EnumBorrow;
@@ -299,7 +281,6 @@ fn dict_long_repeats_zero_delta_codes() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     assert_eq!(view.len(), rows.len());
-
     let names_true: Vec<String> = view
         .iter_names_flag_true_fast()
         .map(|s| s.to_string())
@@ -317,7 +298,6 @@ fn dict_long_repeats_zero_delta_codes() {
     }
     assert_eq!(names_true, names_true_naive);
     assert_eq!(codes_true, codes_true_naive);
-
     // Windows: ensure at least three 50s and two 51s in a row somewhere
     assert!(codes_true.windows(3).any(|w| w == [50, 50, 50]));
     assert!(codes_true.windows(2).any(|w| w == [51, 51]));
@@ -329,7 +309,6 @@ fn dict_long_repeats_zero_delta_codes() {
         assert_eq!(rev_api, rev_manual);
     }
 }
-
 #[test]
 fn offsets_long_repeats_fixture() {
     use ncb::EnumBorrow;
@@ -364,7 +343,6 @@ fn offsets_long_repeats_fixture() {
     };
     assert_eq!(r#gen, hex, "offsets long repeats fixture mismatch");
 }
-
 #[test]
 fn dict_long_repeats_fixture() {
     use ncb::EnumBorrow;
@@ -398,15 +376,12 @@ fn dict_long_repeats_fixture() {
     };
     assert_eq!(r#gen, hex, "dict long repeats fixture mismatch");
 }
-
 // ===== Helper predicates for regex-like pattern assertions over flag-true rows =====
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PayloadKind {
     Name(String),
     Code(u32),
 }
-
 fn collect_flag_true_payloads(view: &ncb::NcbU64EnumBoolView<'_>) -> Vec<PayloadKind> {
     let mut out = Vec::new();
     for i in 0..view.len() {
@@ -419,7 +394,6 @@ fn collect_flag_true_payloads(view: &ncb::NcbU64EnumBoolView<'_>) -> Vec<Payload
     }
     out
 }
-
 fn has_alternating_name_code(
     seq: &[PayloadKind],
     expected_name: &str,
@@ -458,7 +432,6 @@ fn has_alternating_name_code(
     }
     false
 }
-
 fn has_pattern_window(seq: &[PayloadKind], pattern: &[PayloadKind]) -> bool {
     if pattern.is_empty() || seq.len() < pattern.len() {
         return false;
@@ -492,7 +465,6 @@ fn has_pattern_window(seq: &[PayloadKind], pattern: &[PayloadKind]) -> bool {
     }
     false
 }
-
 // Predicate-based pattern matching
 #[derive(Debug, Clone)]
 enum Pred {
@@ -504,7 +476,6 @@ enum Pred {
     NameMatches(regex::Regex),
     CodeIn(core::ops::RangeInclusive<u32>),
 }
-
 fn has_pattern_window_pred(seq: &[PayloadKind], pattern: &[Pred]) -> bool {
     if pattern.is_empty() || seq.len() < pattern.len() {
         return false;
@@ -529,7 +500,6 @@ fn has_pattern_window_pred(seq: &[PayloadKind], pattern: &[Pred]) -> bool {
     }
     false
 }
-
 // Small builder helpers (function-based DSL)
 fn p_name(s: &str) -> Pred {
     Pred::NameEq(s.to_string())
@@ -546,7 +516,6 @@ fn p_code_ge(v: u32) -> Pred {
 fn p_code_in(start: u32, end: u32) -> Pred {
     Pred::CodeIn(start..=end)
 }
-
 // Helper to ensure a hex fixture exists and matches the generated bytes.
 fn ensure_hex_fixture(rel_path: &str, bytes: &[u8]) {
     use std::{io::Write as _, path::Path};
@@ -577,7 +546,6 @@ fn ensure_hex_fixture(rel_path: &str, bytes: &[u8]) {
     let hex = hex.trim();
     assert_eq!(generated, hex, "fixture mismatch for {}", path.display());
 }
-
 #[test]
 fn offsets_alternating_pattern_regex_like() {
     use ncb::EnumBorrow;
@@ -598,7 +566,6 @@ fn offsets_alternating_pattern_regex_like() {
     let seq = collect_flag_true_payloads(&view);
     assert!(has_alternating_name_code(&seq, "aa", 300, 6)); // at least 6 pairs
 }
-
 #[test]
 fn dict_alternating_pattern_regex_like() {
     use ncb::EnumBorrow;
@@ -618,7 +585,6 @@ fn dict_alternating_pattern_regex_like() {
     let seq = collect_flag_true_payloads(&view);
     assert!(has_alternating_name_code(&seq, "zz", 77, 4));
 }
-
 #[test]
 fn offsets_complex_window_pattern() {
     use ncb::EnumBorrow;
@@ -645,7 +611,6 @@ fn offsets_complex_window_pattern() {
         "sequence {seq:?} missing pattern"
     );
 }
-
 #[test]
 fn offsets_nested_window_fixture() {
     use ncb::EnumBorrow;
@@ -674,7 +639,6 @@ fn offsets_nested_window_fixture() {
     };
     assert_eq!(r#gen, hex, "offsets nested window fixture mismatch");
 }
-
 #[test]
 fn dict_complex_window_pattern() {
     use ncb::EnumBorrow;
@@ -700,7 +664,6 @@ fn dict_complex_window_pattern() {
         "sequence {seq:?} missing pattern"
     );
 }
-
 #[test]
 fn offsets_predicate_pattern_window() {
     use ncb::EnumBorrow;
@@ -724,7 +687,6 @@ fn offsets_predicate_pattern_window() {
         "sequence {seq:?} missing pred pattern"
     );
 }
-
 #[test]
 fn dict_mixed_nested_windows_pattern_dsl() {
     use ncb::EnumBorrow;
@@ -745,14 +707,12 @@ fn dict_mixed_nested_windows_pattern_dsl() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     let seq = collect_flag_true_payloads(&view);
-
     // Check for the complex nested window using the DSL
     let pat1 = vec![p_name("aa"), p_code(50), p_code(51), p_name("bb")];
     assert!(
         has_pattern_window_pred(&seq, &pat1),
         "missing pat1 in {seq:?}"
     );
-
     // Regex + range-based match
     let pat2 = vec![p_name_re(r"^a.*"), p_code_in(53, 54)];
     assert!(
@@ -760,7 +720,6 @@ fn dict_mixed_nested_windows_pattern_dsl() {
         "missing pat2 in {seq:?}"
     );
 }
-
 #[test]
 fn dict_mixed_nested_windows_fixture() {
     use ncb::EnumBorrow;
@@ -779,7 +738,6 @@ fn dict_mixed_nested_windows_fixture() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     ensure_hex_fixture("tests/data/enum_dict_mixed_nested_windows.hex", &bytes);
 }
-
 #[test]
 fn dict_mixed_overlapping_windows_pattern_dsl_and_fixture() {
     use ncb::EnumBorrow;
@@ -798,22 +756,18 @@ fn dict_mixed_overlapping_windows_pattern_dsl_and_fixture() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     let seq = collect_flag_true_payloads(&view);
-
     let pat1 = vec![p_name("ko"), p_code(60), p_name("ko")];
     assert!(
         has_pattern_window_pred(&seq, &pat1),
         "missing pat1 in {seq:?}"
     );
-
     let pat2 = vec![p_code_in(60, 61), p_name_re(r"^koto")];
     assert!(
         has_pattern_window_pred(&seq, &pat2),
         "missing pat2 in {seq:?}"
     );
-
     ensure_hex_fixture("tests/data/enum_dict_mixed_overlapping_windows.hex", &bytes);
 }
-
 #[test]
 fn offsets_mixed_nested_windows_pattern_dsl() {
     use ncb::EnumBorrow;
@@ -832,20 +786,17 @@ fn offsets_mixed_nested_windows_pattern_dsl() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     let seq = collect_flag_true_payloads(&view);
-
     let pat1 = vec![p_name("aa"), p_code(50), p_code(51), p_name("bb")];
     assert!(
         has_pattern_window_pred(&seq, &pat1),
         "missing pat1 in {seq:?}"
     );
-
     let pat2 = vec![p_name_re(r"^a.*"), p_code_in(53, 54)];
     assert!(
         has_pattern_window_pred(&seq, &pat2),
         "missing pat2 in {seq:?}"
     );
 }
-
 #[test]
 fn offsets_mixed_nested_windows_fixture() {
     use ncb::EnumBorrow;
@@ -864,7 +815,6 @@ fn offsets_mixed_nested_windows_fixture() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     ensure_hex_fixture("tests/data/enum_offsets_mixed_nested_windows.hex", &bytes);
 }
-
 #[test]
 fn offsets_mixed_overlapping_windows_pattern_dsl_and_fixture() {
     use ncb::EnumBorrow;
@@ -880,25 +830,21 @@ fn offsets_mixed_overlapping_windows_pattern_dsl_and_fixture() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     let seq = collect_flag_true_payloads(&view);
-
     let pat1 = vec![p_name("ko"), p_code(60), p_name("ko")];
     assert!(
         has_pattern_window_pred(&seq, &pat1),
         "missing pat1 in {seq:?}"
     );
-
     let pat2 = vec![p_code_in(60, 61), p_name_re(r"^koto")];
     assert!(
         has_pattern_window_pred(&seq, &pat2),
         "missing pat2 in {seq:?}"
     );
-
     ensure_hex_fixture(
         "tests/data/enum_offsets_mixed_overlapping_windows.hex",
         &bytes,
     );
 }
-
 #[test]
 fn dict_long_nested_windows_a_pattern_and_fixture() {
     use ncb::EnumBorrow;
@@ -928,14 +874,11 @@ fn dict_long_nested_windows_a_pattern_and_fixture() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     let seq = collect_flag_true_payloads(&view);
-
     // Windows to assert
     let p1 = vec![p_name("aa"), p_code(60), p_code(60), p_name("bb")];
     assert!(has_pattern_window_pred(&seq, &p1));
-
     let p2 = vec![p_name_re(r"^c"), p_code_in(61, 62)];
     assert!(has_pattern_window_pred(&seq, &p2));
-
     let p3 = vec![
         p_name("aa"),
         p_code_in(62, 63),
@@ -943,13 +886,10 @@ fn dict_long_nested_windows_a_pattern_and_fixture() {
         p_name_re(r"^c"),
     ];
     assert!(has_pattern_window_pred(&seq, &p3));
-
     let p4 = vec![p_code_in(63, 65), p_name_re(r"^e")];
     assert!(has_pattern_window_pred(&seq, &p4));
-
     ensure_hex_fixture("tests/data/enum_dict_long_nested_windows_a.hex", &bytes);
 }
-
 #[test]
 fn dict_long_nested_windows_b_overlaps_and_fixture() {
     use ncb::EnumBorrow;
@@ -977,23 +917,17 @@ fn dict_long_nested_windows_b_overlaps_and_fixture() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     let seq = collect_flag_true_payloads(&view);
-
     // Overlapping windows
     let w1 = vec![p_name("ko"), p_code(70), p_code(70), p_name("ko")];
     assert!(has_pattern_window_pred(&seq, &w1));
-
     let w2 = vec![p_name_re(r"^koto"), p_code_in(71, 73), p_name_re(r"^kot")];
     assert!(has_pattern_window_pred(&seq, &w2));
-
     let w3 = vec![p_code_in(72, 73), p_name_re(r"^koto")];
     assert!(has_pattern_window_pred(&seq, &w3));
-
     let w4 = vec![p_name_re(r"^koko?ro"), p_code_ge(74)];
     assert!(has_pattern_window_pred(&seq, &w4));
-
     ensure_hex_fixture("tests/data/enum_dict_long_nested_windows_b.hex", &bytes);
 }
-
 #[test]
 fn offsets_long_nested_windows_a_pattern_and_fixture() {
     use ncb::EnumBorrow;
@@ -1023,13 +957,10 @@ fn offsets_long_nested_windows_a_pattern_and_fixture() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     let seq = collect_flag_true_payloads(&view);
-
     let p1 = vec![p_name("aa"), p_code(60), p_code(60), p_name("bb")];
     assert!(has_pattern_window_pred(&seq, &p1));
-
     let p2 = vec![p_name_re(r"^c"), p_code_in(61, 62)];
     assert!(has_pattern_window_pred(&seq, &p2));
-
     let p3 = vec![
         p_name("aa"),
         p_code_in(62, 63),
@@ -1037,13 +968,10 @@ fn offsets_long_nested_windows_a_pattern_and_fixture() {
         p_name_re(r"^c"),
     ];
     assert!(has_pattern_window_pred(&seq, &p3));
-
     let p4 = vec![p_code_in(63, 65), p_name_re(r"^e")];
     assert!(has_pattern_window_pred(&seq, &p4));
-
     ensure_hex_fixture("tests/data/enum_offsets_long_nested_windows_a.hex", &bytes);
 }
-
 #[test]
 fn offsets_long_nested_windows_b_overlaps_and_fixture() {
     use ncb::EnumBorrow;
@@ -1071,22 +999,16 @@ fn offsets_long_nested_windows_b_overlaps_and_fixture() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     let seq = collect_flag_true_payloads(&view);
-
     let w1 = vec![p_name("ko"), p_code(70), p_code(70), p_name("ko")];
     assert!(has_pattern_window_pred(&seq, &w1));
-
     let w2 = vec![p_name_re(r"^koto"), p_code_in(71, 73), p_name_re(r"^kot")];
     assert!(has_pattern_window_pred(&seq, &w2));
-
     let w3 = vec![p_code_in(72, 73), p_name_re(r"^koto")];
     assert!(has_pattern_window_pred(&seq, &w3));
-
     let w4 = vec![p_name_re(r"^koko?ro"), p_code_ge(74)];
     assert!(has_pattern_window_pred(&seq, &w4));
-
     ensure_hex_fixture("tests/data/enum_offsets_long_nested_windows_b.hex", &bytes);
 }
-
 #[test]
 fn offsets_id_code_delta_alt_names_and_codes() {
     use ncb::EnumBorrow;
@@ -1117,7 +1039,6 @@ fn offsets_id_code_delta_alt_names_and_codes() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     assert_eq!(view.len(), rows.len());
-
     // Validate specific subsequences via iterators
     let names_true: Vec<String> = view
         .iter_names_flag_true_fast()
@@ -1138,7 +1059,6 @@ fn offsets_id_code_delta_alt_names_and_codes() {
     let codes_slice: Vec<u32> = view.iter_codes_flag_true_fast().skip(1).take(2).collect();
     assert_eq!(codes_slice, vec![101, 102]);
 }
-
 #[test]
 fn dict_id_code_delta_alt_names_and_codes() {
     use ncb::EnumBorrow;
@@ -1158,7 +1078,6 @@ fn dict_id_code_delta_alt_names_and_codes() {
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
     assert_eq!(view.len(), rows.len());
-
     // Names via dict should resolve correctly
     let names_true: Vec<String> = view
         .iter_names_flag_true_fast()

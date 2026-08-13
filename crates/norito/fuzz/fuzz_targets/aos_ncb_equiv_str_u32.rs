@@ -1,7 +1,6 @@
 #![no_main]
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-
 #[derive(Clone, Debug, Arbitrary)]
 struct Row {
     id: u64,
@@ -10,7 +9,6 @@ struct Row {
     val: u32,
     flag: bool,
 }
-
 fn arbitrary_string_cap(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<String> {
     let n: usize = u.int_in_range(0..=24)?;
     let mut s = String::with_capacity(n);
@@ -20,7 +18,6 @@ fn arbitrary_string_cap(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Resul
     }
     Ok(s)
 }
-
 fuzz_target!(|rows: Vec<Row>| {
     let rows = rows.into_iter().take(64).collect::<Vec<_>>();
     if rows.is_empty() {
@@ -33,7 +30,6 @@ fuzz_target!(|rows: Vec<Row>| {
     // Encode via AoS and NCB and ensure both decoders roundtrip to equal owned rows
     let aos = norito::aos::encode_rows_u64_str_u32_bool(&borrowed);
     let ncb = norito::columnar::encode_ncb_u64_str_u32_bool(&borrowed);
-
     let mut out_aos = Vec::new();
     {
         let view = norito::columnar::view_aos_u64_str_u32_bool(&aos).expect("view aos");

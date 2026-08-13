@@ -17,14 +17,10 @@
     dead_code,
     reason = "the receipt graph remains private and fail-closed until every opaque handoff is wired"
 )]
-
 use crate::vega::sponge::Keccak256;
-
 use super::{MKHE_VERSION_V1, ZkAmsMkheErrorV1};
-
 const RECEIPT_CAPABILITY_AUDIT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.verified-receipt-capability-audit";
-
 const BLOCKER_CPK_AGGREGATE_V1: u16 = 1 << 0;
 const BLOCKER_RKG_ROUND_ONE_V1: u16 = 1 << 1;
 const BLOCKER_RKG_ROUND_TWO_V1: u16 = 1 << 2;
@@ -46,10 +42,8 @@ const CURRENT_OPEN_RECEIPT_CAPABILITY_BLOCKERS_V1: u16 = ALL_RECEIPT_CAPABILITY_
         | BLOCKER_RKG_ROUND_ONE_V1
         | BLOCKER_RKG_ROUND_TWO_V1
         | BLOCKER_GALOIS_KEY_V1);
-
 const _: () = assert!(ALL_RECEIPT_CAPABILITY_BLOCKERS_V1 == 0xff);
 const _: () = assert!(CURRENT_OPEN_RECEIPT_CAPABILITY_BLOCKERS_V1 == 0xf0);
-
 /// One release operation which must be authorized by opaque verified receipts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ZkAmsMkheReceiptCapabilityConsumerV1 {
@@ -68,7 +62,6 @@ pub(super) enum ZkAmsMkheReceiptCapabilityConsumerV1 {
     /// Prove and publish one authenticated split-decryption share.
     SplitDecryption,
 }
-
 /// Digest-bound status of every mandatory verified-receipt handoff.
 ///
 /// Fields ending in `_specified` or `_bound` describe implemented structure,
@@ -128,7 +121,6 @@ pub(super) struct ZkAmsMkheReceiptCapabilityAuditV1 {
     /// Digest of every preceding field.
     pub(super) digest: [u8; 32],
 }
-
 impl ZkAmsMkheReceiptCapabilityAuditV1 {
     /// Recheck the blocker set, aggregate state, and audit digest.
     pub(super) fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
@@ -142,7 +134,6 @@ impl ZkAmsMkheReceiptCapabilityAuditV1 {
         }
         Ok(())
     }
-
     /// Return whether one exact consumer is currently authorized.
     pub(super) const fn authorizes(self, consumer: ZkAmsMkheReceiptCapabilityConsumerV1) -> bool {
         match consumer {
@@ -187,7 +178,6 @@ impl ZkAmsMkheReceiptCapabilityAuditV1 {
         }
     }
 }
-
 /// Evaluate the current source-level capability graph without inferring proof
 /// success from a type name, a nonzero digest, or canonical transport bytes.
 pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapabilityAuditV1 {
@@ -254,7 +244,6 @@ pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapab
     audit.digest = receipt_capability_audit_digest_v1(audit);
     audit
 }
-
 /// Require one operational capability without accepting a digest shell or a
 /// structurally decoded RNS-Link envelope as a substitute.
 ///
@@ -272,7 +261,6 @@ pub(super) fn require_zk_ams_mkhe_receipt_capability_v1(
     }
     Ok(())
 }
-
 fn receipt_capability_blocker_mask_v1(audit: ZkAmsMkheReceiptCapabilityAuditV1) -> u16 {
     let mut blockers = 0_u16;
     for (closed, blocker) in [
@@ -312,7 +300,6 @@ fn receipt_capability_blocker_mask_v1(audit: ZkAmsMkheReceiptCapabilityAuditV1) 
     }
     blockers
 }
-
 const fn receipt_capability_release_available_v1(audit: ZkAmsMkheReceiptCapabilityAuditV1) -> bool {
     audit.cpk_relation_receipt_sealed
         && audit.cpk_party_state_admission_consumes_receipt
@@ -334,7 +321,6 @@ const fn receipt_capability_release_available_v1(audit: ZkAmsMkheReceiptCapabili
         && audit.persistent_decryption_replay_axes_specified
         && audit.blocker_mask == 0
 }
-
 fn receipt_capability_audit_digest_v1(audit: ZkAmsMkheReceiptCapabilityAuditV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(RECEIPT_CAPABILITY_AUDIT_DOMAIN_V1);
@@ -365,7 +351,6 @@ fn receipt_capability_audit_digest_v1(audit: ZkAmsMkheReceiptCapabilityAuditV1) 
     hash.update(&[audit.release_available.into()]);
     hash.finalize()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,7 +391,6 @@ mod tests {
         },
         phase23_rns_link_wire::ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1,
     };
-
     type MintCpkBindingV1 = fn(
         &ZkAmsMkheGovernedActiveRosterV1,
         [u8; 32],
@@ -463,7 +447,6 @@ mod tests {
         ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1,
         ZkAmsMkheErrorV1,
     >;
-
     fn begin_state_owned_native_bgv_openings_v1<'a>(
         packed_owner: &'a ZkAmsPhase23PackedAccumulatorSetV1,
         common_key: &'a ZkAmsMkheCollectivePublicKeyV1,
@@ -472,14 +455,12 @@ mod tests {
     ) -> Result<StateOwnedRnsLinkAccumulatorOpeningsV1<'a>, ZkAmsMkheErrorV1> {
         StateOwnedRnsLinkAccumulatorOpeningsV1::new(packed_owner, common_key, ciphertexts)
     }
-
     fn absorb_state_owned_native_bgv_opening_v1<'a>(
         stream: &mut StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
         opening: ZkAmsMkheCollectiveEncryptionOpeningV1,
     ) -> Result<(), ZkAmsMkheErrorV1> {
         stream.absorb_next_opening_v1(opening)
     }
-
     fn finish_state_owned_native_bgv_openings_v1<'a>(
         stream: StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
     ) -> Result<ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1, ZkAmsMkheErrorV1> {
@@ -503,7 +484,6 @@ mod tests {
             &'c ZkAmsMkheAuthenticatedDecryptionShareV1,
         )
             -> Result<ZkAmsMkheDecryptionSplitTransportV1, ZkAmsMkheErrorV1>;
-
     fn assert_source_markers_in_order_v1(mut source: &str, markers: &[&str]) {
         for marker in markers {
             source = source
@@ -512,7 +492,6 @@ mod tests {
                 .1;
         }
     }
-
     #[test]
     fn source_surface_guards_distinguish_receipts_from_bypasses() {
         let production = include_str!("receipt_capability_audit.rs")
@@ -537,7 +516,6 @@ mod tests {
                 std::vec::IntoIter<Result<ZkAmsT256PackedPlaintextV1, ZkAmsMkheErrorV1>>,
             >;
         let _: SplitWithPersistentReceiptV1 = split_zk_ams_mkhe_decryption_share_v1;
-
         let ceremony_source = include_str!("cpk_ceremony.rs");
         assert!(ceremony_source.contains("pub struct ZkAmsMkheCpkCeremonyV1"));
         let transition = ceremony_source
@@ -569,7 +547,6 @@ mod tests {
                 "staged.finalize_v1(backend)?",
             ],
         );
-
         let relation_source = include_str!("cpk_relation.rs");
         assert!(relation_source.contains("struct CpkRelationVerificationSealV1;"));
         assert!(relation_source.contains(
@@ -581,7 +558,6 @@ mod tests {
         assert!(relation_source.contains(
             "pub(super) fn from_verified_relation(receipt: VerifiedZkAmsMkheCpkRelationReceiptV1)"
         ));
-
         let staged_source = include_str!("persistent_decryption_equality.rs");
         let verified_absorb = staged_source
             .split("fn absorb_verified_party_inner_v1")
@@ -635,7 +611,6 @@ mod tests {
                 .count()
                 >= 2
         );
-
         let collective_source = include_str!("collective.rs");
         assert_eq!(
             collective_source
@@ -660,7 +635,6 @@ mod tests {
             staged_aggregate
                 .contains("admission.validate_for_v1(roster, transcript_digest, party_index)?")
         );
-
         for facade_source in [
             include_str!("../mkhe.rs"),
             include_str!("../../zk_ams.rs"),
@@ -668,7 +642,6 @@ mod tests {
         ] {
             assert!(facade_source.contains("ZkAmsMkheCpkCeremonyV1"));
         }
-
         let evaluated_key_runtime = include_str!("collective_eval_keys/runtime.rs");
         let runtime_constructor = evaluated_key_runtime
             .split("pub(super) fn new_from_compact_cpk_v1")
@@ -707,7 +680,6 @@ mod tests {
             .expect("private evidence preflight boundary");
         assert!(preflight.contains("consume_for_runtime_v1(expected)"));
     }
-
     #[test]
     fn current_graph_records_every_open_handoff_without_false_certification() {
         let audit = zk_ams_mkhe_receipt_capability_audit_v1();
@@ -734,7 +706,6 @@ mod tests {
         assert_ne!(audit.digest, [0; 32]);
         assert!(!audit.release_available);
     }
-
     #[test]
     fn receipt_consumers_closed_by_sealed_evidence_sets_are_authorized() {
         for consumer in [
@@ -746,7 +717,6 @@ mod tests {
             assert!(zk_ams_mkhe_receipt_capability_audit_v1().authorizes(consumer));
             assert_eq!(require_zk_ams_mkhe_receipt_capability_v1(consumer), Ok(()));
         }
-
         for consumer in [
             ZkAmsMkheReceiptCapabilityConsumerV1::RnsLinkVerification,
             ZkAmsMkheReceiptCapabilityConsumerV1::TerminalMaterialization,
@@ -759,7 +729,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn audit_digest_binds_every_capability_axis() {
         let baseline = zk_ams_mkhe_receipt_capability_audit_v1();
@@ -788,7 +757,6 @@ mod tests {
         assert_flag_bound!(split_decryption_receipts_enforced);
         assert_flag_bound!(persistent_decryption_equality_complete);
         assert_flag_bound!(persistent_decryption_replay_axes_specified);
-
         let mut changed = baseline;
         changed.blocker_mask ^= BLOCKER_RNS_LINK_ALGEBRA_V1;
         assert_ne!(receipt_capability_audit_digest_v1(changed), baseline.digest);
@@ -796,7 +764,6 @@ mod tests {
             changed.validate(),
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
-
         let mut changed = baseline;
         changed.release_available = true;
         assert_ne!(receipt_capability_audit_digest_v1(changed), baseline.digest);

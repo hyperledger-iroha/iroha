@@ -1,7 +1,5 @@
 //! Topic cap enforcement tests. Skips gracefully if sockets are unavailable.
-
 use std::{collections::HashSet, num::NonZeroUsize};
-
 use iroha_config::parameters::{
     actual::{
         LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
@@ -26,16 +24,13 @@ use norito::codec::{Decode, Encode};
 #[cfg(feature = "p2p_ws")]
 use tokio::net::TcpListener;
 use tokio::time::Duration;
-
 // These tests assert process-global cap counters, so their snapshots must not overlap.
 static FRAME_CAP_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 #[derive(Clone, Debug, Decode, Encode)]
 struct BigMsg {
     topic: u8,
     data: Vec<u8>,
 }
-
 impl ClassifyTopic for BigMsg {
     fn topic(&self) -> Topic {
         match self.topic {
@@ -49,13 +44,11 @@ impl ClassifyTopic for BigMsg {
         }
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for BigMsg {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
-
 async fn wait_for_peer_state(
     network: &NetworkHandle<BigMsg>,
     should_be_online: bool,
@@ -74,7 +67,6 @@ async fn wait_for_peer_state(
     .await
     .is_ok()
 }
-
 async fn wait_for_both_online(
     first: &NetworkHandle<BigMsg>,
     second: &NetworkHandle<BigMsg>,
@@ -84,7 +76,6 @@ async fn wait_for_both_online(
     wait_for_peer_state(first, true, timeout, poll_interval).await
         && wait_for_peer_state(second, true, timeout, poll_interval).await
 }
-
 async fn wait_for_consensus_cap_increase(start_cap: u64, timeout: Duration) -> Option<u64> {
     tokio::time::timeout(timeout, async {
         loop {
@@ -98,7 +89,6 @@ async fn wait_for_consensus_cap_increase(start_cap: u64, timeout: Duration) -> O
     .await
     .ok()
 }
-
 #[cfg(feature = "p2p_ws")]
 async fn forward_one_ws_connection(
     listener: TcpListener,
@@ -121,7 +111,6 @@ async fn forward_one_ws_connection(
         ))
     }
 }
-
 #[cfg(feature = "p2p_ws")]
 async fn assert_ws_global_cap_disconnects(
     listener: &NetworkHandle<BigMsg>,
@@ -137,7 +126,6 @@ async fn assert_ws_global_cap_disconnects(
         peer_id: listener_peer.id().clone(),
         priority: Priority::High,
     });
-
     assert!(
         wait_for_peer_state(
             listener,
@@ -153,7 +141,6 @@ async fn assert_ws_global_cap_disconnects(
         start_cap,
         "global cap enforcement must precede topic cap accounting",
     );
-
     let _ = wait_for_peer_state(
         dialer,
         false,
@@ -162,7 +149,6 @@ async fn assert_ws_global_cap_disconnects(
     )
     .await;
 }
-
 fn default_soranet_handshake() -> ActualSoranetHandshake {
     // Frame-cap tests do not exercise admission puzzles; avoid coupling their
     // deadlines to Argon2 cost or host load.
@@ -182,7 +168,6 @@ fn default_soranet_handshake() -> ActualSoranetHandshake {
         pow,
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn make_config(
     addr: &SocketAddr,
@@ -321,21 +306,17 @@ fn make_config(
         quic_max_idle_timeout: None,
     }
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn topic_cap_violation_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
-
     let chain = super::test_network_id("test_chain");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let a1 = super::next_addr();
     let a2 = super::next_addr();
-
     // Small caps for all topics (1 KiB) with a larger global cap so the
     // per-topic consensus cap handles the oversized frame.
     let cfg = |addr: SocketAddr| make_config(&addr, &addr, 16 * 1024, 1024);
-
     let started1 = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp1.clone()),
         cfg(a1.clone()),
@@ -362,7 +343,6 @@ async fn topic_cap_violation_disconnects() {
         Ok(ok) => ok,
         Err(_) => return,
     };
-
     // Connect with a single outbound dial to avoid racing simultaneous
     // connection resolution with the cap-violation post below.
     let p2 = Peer::new(a2.clone(), kp2.public_key().clone());
@@ -370,7 +350,6 @@ async fn topic_cap_violation_disconnects() {
     net1.update_topology(UpdateTopology(HashSet::from([p2.id().clone()])));
     net2.update_topology(UpdateTopology(HashSet::from([p1.id().clone()])));
     net2.update_peers_addresses(UpdatePeers(vec![(p1.id().clone(), a1.clone())]));
-
     // Wait for both views of the connection to be established.
     if !wait_for_both_online(
         &net1,
@@ -382,11 +361,9 @@ async fn topic_cap_violation_disconnects() {
     {
         return;
     }
-
     // Track the initial consensus cap counter so exact actor admission can be
     // shown to account for the rejected frame.
     let start_cap = iroha_p2p::network::cap_violations_consensus();
-
     // Submit a BigMsg exceeding the topic cap (Consensus cap=1 KiB, data=8 KiB).
     let big = BigMsg {
         topic: 0,
@@ -412,7 +389,6 @@ async fn topic_cap_violation_disconnects() {
     let end_cap = wait_for_consensus_cap_increase(start_cap, Duration::from_millis(1_000))
         .await
         .expect("consensus cap violation counter should increase");
-
     // Exact outbound admission rejects the oversized canonical frame before
     // transferring ownership, and the consensus cap counter records it.
     assert!(
@@ -420,16 +396,13 @@ async fn topic_cap_violation_disconnects() {
         "consensus cap violations should increment for oversized frame"
     );
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn tcp_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
-
     let chain = super::test_network_id("test_chain_tcp");
     let kp_listener = super::random_node_key_pair();
     let kp_dialer = super::random_node_key_pair();
-
     // Reserve a concrete TCP port for the listener so the dialer can reach it reliably.
     let probe = match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
         Ok(sock) => sock,
@@ -438,14 +411,11 @@ async fn tcp_global_frame_cap_disconnects() {
     };
     let port = probe.local_addr().unwrap().port();
     drop(probe);
-
     let listen_addr = socket_addr!(127.0.0.1: {port});
     let dialer_addr = super::next_addr();
-
     // Listener enforces a tight global frame cap, dialer keeps a generous cap so outbound succeeds.
     let listener_cfg = make_config(&listen_addr, &listen_addr, 1_024, 16 * 1024);
     let dialer_cfg = make_config(&dialer_addr, &dialer_addr, 16 * 1024, 16 * 1024);
-
     let started_listener = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
@@ -459,7 +429,6 @@ async fn tcp_global_frame_cap_disconnects() {
         Ok(ok) => ok,
         Err(_) => return,
     };
-
     let started_dialer = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_dialer.clone()),
         dialer_cfg,
@@ -473,20 +442,16 @@ async fn tcp_global_frame_cap_disconnects() {
         Ok(ok) => ok,
         Err(_) => return,
     };
-
     let peer_listener = Peer::new(listen_addr.clone(), kp_listener.public_key().clone());
     let peer_dialer = Peer::new(dialer_addr.clone(), kp_dialer.public_key().clone());
-
     // The listener only needs topology membership to accept the dialer; omitting the dialer
     // address prevents a simultaneous outbound session from masking the tested disconnect.
     net_listener.update_topology(UpdateTopology(HashSet::from([peer_dialer.id().clone()])));
-
     net_dialer.update_topology(UpdateTopology(HashSet::from([peer_listener.id().clone()])));
     net_dialer.update_peers_addresses(UpdatePeers(vec![(
         peer_listener.id().clone(),
         listen_addr.clone(),
     )]));
-
     // Wait for the direct TCP connection to establish; skip in sandboxed environments.
     let online = tokio::time::timeout(Duration::from_millis(1500), async {
         loop {
@@ -500,9 +465,7 @@ async fn tcp_global_frame_cap_disconnects() {
     if online.is_err() {
         return;
     }
-
     let start_cap = iroha_p2p::network::cap_violations_consensus();
-
     // Send a payload larger than the listener's global frame cap but within the dialer's allowance.
     let oversize = BigMsg {
         topic: 0,
@@ -513,7 +476,6 @@ async fn tcp_global_frame_cap_disconnects() {
         peer_id: peer_listener.id().clone(),
         priority: Priority::High,
     });
-
     // The listener should drop the session once the oversized frame is observed.
     let dropped = tokio::time::timeout(Duration::from_millis(1000), async {
         loop {
@@ -528,13 +490,11 @@ async fn tcp_global_frame_cap_disconnects() {
         dropped.is_ok(),
         "listener should disconnect after global frame cap violation"
     );
-
     let end_cap = iroha_p2p::network::cap_violations_consensus();
     assert_eq!(
         end_cap, start_cap,
         "global cap enforcement must run before topic cap accounting",
     );
-
     // Dialer should eventually observe the connection closure as well.
     let _ = tokio::time::timeout(Duration::from_millis(1000), async {
         loop {
@@ -546,16 +506,13 @@ async fn tcp_global_frame_cap_disconnects() {
     })
     .await;
 }
-
 #[cfg(feature = "p2p_tls")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
-
     let chain = super::test_network_id("test_chain_tls");
     let kp_listener = super::random_node_key_pair();
     let kp_dialer = super::random_node_key_pair();
-
     // Reserve a TCP port for TLS listener (the same port is reused for QUIC-less TCP listener).
     let probe = match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
         Ok(sock) => sock,
@@ -564,22 +521,18 @@ async fn tls_global_frame_cap_disconnects() {
     };
     let port = probe.local_addr().unwrap().port();
     drop(probe);
-
     let tls_listen = socket_addr!(127.0.0.1: {port});
     let public_host = SocketAddr::Host(SocketAddrHost {
         host: "localhost".into(),
         port,
     });
-
     // Listener enforces a small global frame cap, dialer uses a generous cap so outbound succeeds.
     let mut listener_cfg = make_config(&tls_listen, &public_host, 1024, 4096);
     listener_cfg.tls_enabled = true;
     listener_cfg.tls_listen_address = Some(WithOrigin::inline(tls_listen.clone()));
-
     let client_addr = super::next_addr();
     let mut dialer_cfg = make_config(&client_addr, &client_addr, 16 * 1024, 16 * 1024);
     dialer_cfg.tls_enabled = true;
-
     let started_listener = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
@@ -593,7 +546,6 @@ async fn tls_global_frame_cap_disconnects() {
         Ok(ok) => ok,
         Err(_) => return,
     };
-
     let started_dialer = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_dialer.clone()),
         dialer_cfg,
@@ -607,20 +559,16 @@ async fn tls_global_frame_cap_disconnects() {
         Ok(ok) => ok,
         Err(_) => return,
     };
-
     // Exchange topology using hostname so the dialer attempts the TLS path.
     let peer_listener = Peer::new(public_host.clone(), kp_listener.public_key().clone());
     let peer_dialer = Peer::new(client_addr.clone(), kp_dialer.public_key().clone());
-
     // Keep this one-way so the oversized inbound frame closes the only listener-side session.
     net_listener.update_topology(UpdateTopology(HashSet::from([peer_dialer.id().clone()])));
-
     net_dialer.update_topology(UpdateTopology(HashSet::from([peer_listener.id().clone()])));
     net_dialer.update_peers_addresses(UpdatePeers(vec![(
         peer_listener.id().clone(),
         public_host.clone(),
     )]));
-
     // Wait for connection establishment (skip if environment prevents it).
     let online = tokio::time::timeout(Duration::from_millis(1500), async {
         loop {
@@ -634,9 +582,7 @@ async fn tls_global_frame_cap_disconnects() {
     if online.is_err() {
         return;
     }
-
     let start_cap = iroha_p2p::network::cap_violations_consensus();
-
     // Send a payload exceeding listener's global frame cap but within the dialer's cap.
     let oversize = BigMsg {
         topic: 0,
@@ -647,7 +593,6 @@ async fn tls_global_frame_cap_disconnects() {
         peer_id: peer_listener.id().clone(),
         priority: Priority::High,
     });
-
     // Expect the listener to drop the connection after rejecting the oversized frame.
     let dropped = tokio::time::timeout(Duration::from_millis(1000), async {
         loop {
@@ -662,13 +607,11 @@ async fn tls_global_frame_cap_disconnects() {
         dropped.is_ok(),
         "listener should disconnect after frame cap violation"
     );
-
     let end_cap = iroha_p2p::network::cap_violations_consensus();
     assert_eq!(
         end_cap, start_cap,
         "global frame cap enforcement should occur before topic caps are counted"
     );
-
     // Dialer should eventually observe zero peers once the listener drops the session.
     let _ = tokio::time::timeout(Duration::from_millis(1000), async {
         loop {
@@ -680,17 +623,14 @@ async fn tls_global_frame_cap_disconnects() {
     })
     .await;
 }
-
 #[cfg(feature = "quic")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn quic_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
-
     let chain = super::test_network_id("test_chain_quic");
     let kp_listener = super::random_node_key_pair();
     let kp_dialer = super::random_node_key_pair();
-
     // Reserve a UDP/TCP port for QUIC + TCP listener pair.
     let probe = match std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
         Ok(sock) => sock,
@@ -704,20 +644,16 @@ async fn quic_global_frame_cap_disconnects() {
     };
     let port = probe.local_addr().expect("probe local addr").port();
     drop(probe);
-
     let listen_addr = socket_addr!(127.0.0.1: {port});
     let public_host = SocketAddr::Host(SocketAddrHost {
         host: "localhost".into(),
         port,
     });
-
     let mut listener_cfg = make_config(&listen_addr, &public_host, 1024, 4096);
     listener_cfg.quic_enabled = true;
-
     let client_addr = super::next_addr();
     let mut dialer_cfg = make_config(&client_addr, &client_addr, 16 * 1024, 16 * 1024);
     dialer_cfg.quic_enabled = true;
-
     let started_listener = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
@@ -731,7 +667,6 @@ async fn quic_global_frame_cap_disconnects() {
         Ok(ok) => ok,
         Err(_) => return,
     };
-
     let started_dialer = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_dialer.clone()),
         dialer_cfg,
@@ -745,19 +680,15 @@ async fn quic_global_frame_cap_disconnects() {
         Ok(ok) => ok,
         Err(_) => return,
     };
-
     let peer_listener = Peer::new(public_host.clone(), kp_listener.public_key().clone());
     let peer_dialer = Peer::new(client_addr.clone(), kp_dialer.public_key().clone());
-
     // Keep this one-way so the oversized inbound frame closes the only listener-side session.
     net_listener.update_topology(UpdateTopology(HashSet::from([peer_dialer.id().clone()])));
-
     net_dialer.update_topology(UpdateTopology(HashSet::from([peer_listener.id().clone()])));
     net_dialer.update_peers_addresses(UpdatePeers(vec![(
         peer_listener.id().clone(),
         public_host.clone(),
     )]));
-
     let online = tokio::time::timeout(Duration::from_millis(1800), async {
         loop {
             if net_listener.online_peers(HashSet::len) > 0 {
@@ -770,9 +701,7 @@ async fn quic_global_frame_cap_disconnects() {
     if online.is_err() {
         return;
     }
-
     let start_cap = iroha_p2p::network::cap_violations_consensus();
-
     let oversize = BigMsg {
         topic: 0,
         data: vec![0u8; 8 * 1024],
@@ -782,7 +711,6 @@ async fn quic_global_frame_cap_disconnects() {
         peer_id: peer_listener.id().clone(),
         priority: Priority::High,
     });
-
     let dropped = tokio::time::timeout(Duration::from_millis(1200), async {
         loop {
             if net_listener.online_peers(HashSet::len) == 0 {
@@ -796,13 +724,11 @@ async fn quic_global_frame_cap_disconnects() {
         dropped.is_ok(),
         "listener should disconnect after QUIC frame cap violation"
     );
-
     let end_cap = iroha_p2p::network::cap_violations_consensus();
     assert_eq!(
         end_cap, start_cap,
         "global frame enforcement must precede topic cap accounting"
     );
-
     let _ = tokio::time::timeout(Duration::from_millis(1000), async {
         loop {
             if net_dialer.online_peers(HashSet::len) == 0 {
@@ -813,16 +739,13 @@ async fn quic_global_frame_cap_disconnects() {
     })
     .await;
 }
-
 #[cfg(feature = "p2p_ws")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ws_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
-
     let chain = super::test_network_id("test_chain_ws");
     let kp_listener = super::random_node_key_pair();
     let kp_dialer = super::random_node_key_pair();
-
     let ws_listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -834,7 +757,6 @@ async fn ws_global_frame_cap_disconnects() {
         Err(err) => panic!("bind ws listener: {err}"),
     };
     let ws_addr = ws_listener.local_addr().expect("ws listener addr");
-
     let listener_addr = super::next_addr();
     let listener_cfg = make_config(&listener_addr, &listener_addr, 1_024, 16 * 1024);
     let (network_listener, _child_listener) = NetworkHandle::<BigMsg>::start(
@@ -847,12 +769,10 @@ async fn ws_global_frame_cap_disconnects() {
     )
     .await
     .expect("start websocket listener network");
-
     let forwarder = tokio::spawn(forward_one_ws_connection(
         ws_listener,
         network_listener.clone(),
     ));
-
     let dialer_addr = super::next_addr();
     let mut dialer_cfg = make_config(&dialer_addr, &dialer_addr, 16 * 1024, 16 * 1024);
     dialer_cfg.prefer_ws_fallback = true;
@@ -866,28 +786,23 @@ async fn ws_global_frame_cap_disconnects() {
     )
     .await
     .expect("start websocket dialer network");
-
     // Listener only needs topology knowledge to accept the inbound session.
     let peer_dialer = Peer::new(dialer_addr.clone(), kp_dialer.public_key().clone());
     network_listener.update_topology(UpdateTopology(HashSet::from([peer_dialer.id().clone()])));
-
     let listener_host: SocketAddr = format!("localhost:{}", ws_addr.port())
         .parse()
         .expect("host socket addr");
     let peer_listener = Peer::new(listener_host.clone(), kp_listener.public_key().clone());
-
     net_dialer.update_topology(UpdateTopology(HashSet::from([peer_listener.id().clone()])));
     net_dialer.update_peers_addresses(UpdatePeers(vec![(
         peer_listener.id().clone(),
         listener_host.clone(),
     )]));
-
     tokio::time::timeout(Duration::from_millis(2_000), forwarder)
         .await
         .expect("websocket accept/handshake task timed out")
         .expect("websocket accept/handshake task panicked")
         .expect("websocket handshake or network handoff failed");
-
     assert!(
         wait_for_peer_state(
             &network_listener,
@@ -898,6 +813,5 @@ async fn ws_global_frame_cap_disconnects() {
         .await,
         "websocket listener network did not observe the peer before the online timeout"
     );
-
     assert_ws_global_cap_disconnects(&network_listener, &net_dialer, &peer_listener).await;
 }

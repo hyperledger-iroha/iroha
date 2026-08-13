@@ -1,8 +1,6 @@
 //! Integration tests covering the `SoraFS` pin registry flows.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use std::{collections::BTreeSet, convert::TryInto, env, fs, num::NonZeroU64, path::PathBuf};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_core::{
     kura::Kura,
@@ -42,9 +40,7 @@ use sorafs_manifest::{
     ReplicationOrderV1, chunker_registry,
     pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
 };
-
 const FIXTURE_PATH: &str = "tests/fixtures/sorafs_pin_registry/snapshot.json";
-
 #[test]
 fn pin_registry_snapshot_matches_fixture() {
     let state = make_state();
@@ -61,13 +57,10 @@ fn pin_registry_snapshot_matches_fixture() {
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
     let council_keys = council_keypair();
-
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
-
     let alias_binding = alias_binding_for(digest, "sora", "docs", 12, 36, &council_keys);
     BindManifestAlias {
         digest,
@@ -77,7 +70,6 @@ fn pin_registry_snapshot_matches_fixture() {
     }
     .execute(&alice(), &mut tx)
     .expect("bind alias");
-
     let providers = [
         ProviderId::new([0x51; 32]),
         ProviderId::new([0x52; 32]),
@@ -95,7 +87,6 @@ fn pin_registry_snapshot_matches_fixture() {
     }
     .execute(&alice(), &mut tx)
     .expect("issue replication order");
-
     for provider_id in providers {
         CompleteReplicationOrder {
             order_id,
@@ -108,13 +99,10 @@ fn pin_registry_snapshot_matches_fixture() {
         .execute(&alice(), &mut tx)
         .expect("complete provider replication assignment");
     }
-
     tx.apply();
     block.commit().expect("commit block");
-
     let view = state.view();
     let world = view.world();
-
     let manifest = world.pin_manifests().get(&digest).expect("manifest stored");
     let alias_id = ManifestAliasId::from(&alias_binding);
     let alias_record = world
@@ -125,10 +113,8 @@ fn pin_registry_snapshot_matches_fixture() {
         .replication_orders()
         .get(&order_id)
         .expect("order stored");
-
     let snapshot = snapshot_json(manifest, alias_record, order_record);
     let fixture = load_fixture();
-
     if env::var_os("UPDATE_FIXTURES").is_some() {
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_PATH);
         let mut payload = norito::json::to_vec_pretty(&snapshot).expect("serialize fixture");
@@ -139,13 +125,11 @@ fn pin_registry_snapshot_matches_fixture() {
             fixture_path.display()
         );
     }
-
     assert_eq!(
         snapshot, fixture,
         "generated snapshot does not match fixture JSON"
     );
 }
-
 #[test]
 fn alias_proof_fixture_decodes() {
     let fixture = load_fixture();
@@ -154,7 +138,6 @@ fn alias_proof_fixture_decodes() {
         .and_then(|array| array.first())
         .and_then(Value::as_object)
         .expect("alias fixture entry");
-
     let proof_b64 = alias_entry
         .get("proof_b64")
         .and_then(Value::as_str)
@@ -162,10 +145,8 @@ fn alias_proof_fixture_decodes() {
     let proof_bytes = BASE64_STD
         .decode(proof_b64)
         .expect("alias proof base64 decoding");
-
     let bundle: AliasProofBundleV1 =
         decode_from_bytes(&proof_bytes).expect("decode alias proof bundle");
-
     assert_eq!(bundle.binding.alias, "sora/docs");
     assert_eq!(bundle.binding.bound_at, 12);
     assert_eq!(bundle.binding.expiry_epoch, 36);
@@ -177,14 +158,12 @@ fn alias_proof_fixture_decodes() {
         !bundle.council_signatures.is_empty(),
         "alias proof bundle must contain council signatures"
     );
-
     let reencoded = to_bytes(&bundle).expect("re-encode alias proof bundle");
     assert_eq!(
         BASE64_STD.encode(reencoded),
         proof_b64,
         "alias proof bundle must roundtrip to the fixture payload"
     );
-
     let first_sig = &bundle.council_signatures[0];
     let signer =
         PublicKey::from_bytes(Algorithm::Ed25519, &first_sig.signer).expect("parse signer key");
@@ -195,7 +174,6 @@ fn alias_proof_fixture_decodes() {
         .verify(&signer, digest.as_ref())
         .expect("council signature verifies");
 }
-
 #[test]
 fn replication_order_fixture_decodes() {
     let fixture = load_fixture();
@@ -204,7 +182,6 @@ fn replication_order_fixture_decodes() {
         .and_then(|array| array.first())
         .and_then(Value::as_object)
         .expect("replication order fixture entry");
-
     let order_b64 = order_entry
         .get("canonical_order_b64")
         .and_then(Value::as_str)
@@ -212,10 +189,8 @@ fn replication_order_fixture_decodes() {
     let order_bytes = BASE64_STD
         .decode(order_b64)
         .expect("replication order base64 decoding");
-
     let order: ReplicationOrderV1 =
         decode_from_bytes(&order_bytes).expect("decode replication order");
-
     assert_eq!(order.order_id, [0x44; 32]);
     assert_eq!(order.manifest_digest, *default_digest().as_bytes());
     assert_eq!(order.target_replicas, 3);
@@ -231,7 +206,6 @@ fn replication_order_fixture_decodes() {
     );
     assert_eq!(order.issued_at, 1_700_000_000);
     assert_eq!(order.deadline_at, 1_700_086_400);
-
     let reencoded = to_bytes(&order).expect("re-encode replication order");
     assert_eq!(
         BASE64_STD.encode(reencoded),
@@ -239,21 +213,17 @@ fn replication_order_fixture_decodes() {
         "replication order canonical payload must match fixture bytes"
     );
 }
-
 #[test]
 fn duplicate_alias_binding_is_rejected() {
     let state = make_state();
     let council_keys = council_keypair();
-
     {
         let mut block = state.block(block_header(1));
         let mut tx = block.transaction();
         bootstrap_sorafs(&mut tx);
         let digest = default_digest();
         let chunk_digest = default_chunk_digest();
-
         register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
-
         let alias_binding = alias_binding_for(digest, "sora", "docs", 12, 36, &council_keys);
         BindManifestAlias {
             digest,
@@ -263,21 +233,16 @@ fn duplicate_alias_binding_is_rejected() {
         }
         .execute(&alice(), &mut tx)
         .expect("initial alias bind succeeds");
-
         tx.apply();
         block.commit().expect("commit block");
     }
-
     let digest_b = manifest_digest_for_seed(0xBB);
     let chunk_digest_b = chunk_digest_for_seed(0xBB);
-
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     register_and_approve(&mut tx, digest_b, chunk_digest_b, &council_keys);
     let alias_binding = alias_binding_for(digest_b, "sora", "docs", 16, 36, &council_keys);
-
     let err = BindManifestAlias {
         digest: digest_b,
         binding: alias_binding,
@@ -286,7 +251,6 @@ fn duplicate_alias_binding_is_rejected() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("duplicate alias binding must fail");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -299,20 +263,16 @@ fn duplicate_alias_binding_is_rejected() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 #[test]
 fn replication_order_with_mismatched_profile_is_rejected() {
     let state = make_state();
     let council_keys = council_keypair();
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
-
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
-
     let providers = [
         ProviderId::new([0x61; 32]),
         ProviderId::new([0x62; 32]),
@@ -322,7 +282,6 @@ fn replication_order_with_mismatched_profile_is_rejected() {
     let mut order_struct = replication_order(order_id, digest, &providers, 3);
     order_struct.chunking_profile = "sorafs.chunker@9.9.9".into();
     let order_payload = norito::to_bytes(&order_struct).expect("encode replication order");
-
     let err = IssueReplicationOrder {
         order_id,
         order_payload,
@@ -332,7 +291,6 @@ fn replication_order_with_mismatched_profile_is_rejected() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("replication order with mismatched profile must be rejected");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -345,20 +303,16 @@ fn replication_order_with_mismatched_profile_is_rejected() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 #[test]
 fn alias_binding_with_expiry_before_bound_is_rejected() {
     let state = make_state();
     let council_keys = council_keypair();
-
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
-
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
-
     let alias_binding = alias_binding_for(digest, "sora", "docs", 12, 10, &council_keys);
     let err = BindManifestAlias {
         digest,
@@ -368,7 +322,6 @@ fn alias_binding_with_expiry_before_bound_is_rejected() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("expiry before bound must be rejected");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -381,20 +334,16 @@ fn alias_binding_with_expiry_before_bound_is_rejected() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 #[test]
 fn alias_binding_exceeding_retention_is_rejected() {
     let state = make_state();
     let council_keys = council_keypair();
-
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
-
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
-
     let alias_binding = alias_binding_for(digest, "sora", "docs", 12, 100, &council_keys);
     let err = BindManifestAlias {
         digest,
@@ -404,7 +353,6 @@ fn alias_binding_exceeding_retention_is_rejected() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("expiry after retention must be rejected");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -417,20 +365,16 @@ fn alias_binding_exceeding_retention_is_rejected() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 #[test]
 fn replication_order_below_min_replicas_is_rejected() {
     let state = make_state();
     let council_keys = council_keypair();
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
-
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
-
     let providers = [
         ProviderId::new([0x71; 32]),
         ProviderId::new([0x72; 32]),
@@ -439,7 +383,6 @@ fn replication_order_below_min_replicas_is_rejected() {
     let order_id = ReplicationOrderId::new([0x46; 32]);
     let order_struct = replication_order(order_id, digest, &providers, 1);
     let order_payload = norito::to_bytes(&order_struct).expect("encode replication order");
-
     let err = IssueReplicationOrder {
         order_id,
         order_payload,
@@ -449,7 +392,6 @@ fn replication_order_below_min_replicas_is_rejected() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("replication order below minimum replicas must be rejected");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -462,18 +404,15 @@ fn replication_order_below_min_replicas_is_rejected() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 #[test]
 fn register_manifest_rejects_unknown_chunker_profile() {
     let state = make_state();
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     let mut manifest = manifest_fixture(0xCC);
     manifest.chunking.namespace = "unknown".into();
     manifest.chunking.name = "mystery".into();
-
     let err = RegisterPinManifest {
         manifest_payload: manifest.encode().expect("encode invalid manifest"),
         alias: None,
@@ -481,7 +420,6 @@ fn register_manifest_rejects_unknown_chunker_profile() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("manifest with unknown chunker must be rejected");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -492,51 +430,42 @@ fn register_manifest_rejects_unknown_chunker_profile() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 #[test]
 fn register_manifest_rejects_policy_above_governance_replica_ceiling() {
     let mut state = make_state();
     state.gov.sorafs_pin_policy.max_replicas_ceiling = Some(2);
-
     assert_governed_policy_rejection(
         state,
         default_policy(),
         "pin policy exceeds maximum replicas 2",
     );
 }
-
 #[test]
 fn register_manifest_rejects_policy_beyond_governance_retention_ceiling() {
     let mut state = make_state();
     state.gov.sorafs_pin_policy.max_retention_epoch = Some(30);
-
     let mut policy = default_policy();
     policy.retention_epoch = 31;
     assert_governed_policy_rejection(state, policy, "pin retention epoch must be <= 30");
 }
-
 #[test]
 fn register_manifest_rejects_storage_class_outside_governance_allowlist() {
     let mut state = make_state();
     state.gov.sorafs_pin_policy.allowed_storage_classes =
         Some(BTreeSet::from([StorageClass::Cold]));
-
     assert_governed_policy_rejection(
         state,
         default_policy(),
         "storage class `Hot` is not permitted by policy",
     );
 }
-
 #[test]
 fn register_manifest_rejects_unknown_successor() {
     let state = make_state();
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     let unknown_parent = manifest_digest_for_seed(0xF1);
-
     let err = RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE1),
         alias: None,
@@ -544,7 +473,6 @@ fn register_manifest_rejects_unknown_successor() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("successor must reference existing manifest");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -555,16 +483,13 @@ fn register_manifest_rejects_unknown_successor() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 #[test]
 fn register_manifest_rejects_self_successor() {
     let state = make_state();
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     let digest = manifest_digest_for_seed(0xE2);
-
     let err = RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE2),
         alias: None,
@@ -572,7 +497,6 @@ fn register_manifest_rejects_self_successor() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("manifest cannot succeed itself");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -583,14 +507,12 @@ fn register_manifest_rejects_self_successor() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 #[test]
 fn register_manifest_accepts_active_successor() {
     let state = make_state();
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     let parent = manifest_digest_for_seed(0xE3);
     RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE3),
@@ -601,7 +523,6 @@ fn register_manifest_accepts_active_successor() {
     .expect("register predecessor");
     tx.apply();
     block.commit().expect("commit predecessor");
-
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
@@ -612,7 +533,6 @@ fn register_manifest_accepts_active_successor() {
     }
     .execute(&alice(), &mut tx)
     .expect("active predecessor should accept successor");
-
     let stored = tx
         .world()
         .pin_manifests()
@@ -620,20 +540,17 @@ fn register_manifest_accepts_active_successor() {
         .expect("successor stored");
     assert_eq!(stored.successor_of, Some(parent));
 }
-
 #[test]
 fn register_manifest_rejects_retired_successor() {
     let state = make_state();
     let council_keys = council_keypair();
     let parent = manifest_digest_for_seed(0xE5);
-
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE5), &council_keys);
     tx.apply();
     block.commit().expect("commit approved predecessor");
-
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
@@ -645,7 +562,6 @@ fn register_manifest_rejects_retired_successor() {
     .expect("retire predecessor");
     tx.apply();
     block.commit().expect("commit retirement");
-
     let mut block = state.block(block_header(3));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
@@ -656,7 +572,6 @@ fn register_manifest_rejects_retired_successor() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("successor must reject retired predecessor");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -667,24 +582,20 @@ fn register_manifest_rejects_retired_successor() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 #[test]
 fn register_manifest_with_successor_persists_pointer() {
     let state = make_state();
     let council_keys = council_keypair();
     let parent = manifest_digest_for_seed(0xE7);
-
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE7), &council_keys);
     tx.apply();
     block.commit().expect("commit approved predecessor");
-
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     let child = manifest_digest_for_seed(0xE8);
     RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE8),
@@ -693,7 +604,6 @@ fn register_manifest_with_successor_persists_pointer() {
     }
     .execute(&alice(), &mut tx)
     .expect("register successor manifest");
-
     let stored = tx
         .world()
         .pin_manifests()
@@ -702,20 +612,16 @@ fn register_manifest_with_successor_persists_pointer() {
         .expect("successor stored");
     assert_eq!(stored.successor_of.as_ref(), Some(&parent));
 }
-
 #[test]
 fn bind_alias_rejects_expiry_before_bound_epoch() {
     let state = make_state();
     let council_keys = council_keypair();
     let digest = manifest_digest_for_seed(0xD1);
     let chunk_digest = chunk_digest_for_seed(0xD1);
-
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
-
     let alias_binding = alias_binding_for(digest, "sora", "docs", 20, 18, &council_keys);
     let err = BindManifestAlias {
         digest,
@@ -725,7 +631,6 @@ fn bind_alias_rejects_expiry_before_bound_epoch() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("alias expiry earlier than bound epoch must be rejected");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -736,20 +641,16 @@ fn bind_alias_rejects_expiry_before_bound_epoch() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 #[test]
 fn bind_alias_rejects_bound_epoch_before_approval() {
     let state = make_state();
     let council_keys = council_keypair();
     let digest = manifest_digest_for_seed(0xD2);
     let chunk_digest = chunk_digest_for_seed(0xD2);
-
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
-
     let alias_binding = alias_binding_for(digest, "sora", "docs", 4, 20, &council_keys);
     let err = BindManifestAlias {
         digest,
@@ -759,7 +660,6 @@ fn bind_alias_rejects_bound_epoch_before_approval() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("alias bound epoch before approval must be rejected");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -770,20 +670,16 @@ fn bind_alias_rejects_bound_epoch_before_approval() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 #[test]
 fn bind_alias_rejects_expiry_after_retention_epoch() {
     let state = make_state();
     let council_keys = council_keypair();
     let digest = manifest_digest_for_seed(0xD3);
     let chunk_digest = chunk_digest_for_seed(0xD3);
-
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
-
     let alias_binding = alias_binding_for(
         digest,
         "sora",
@@ -800,7 +696,6 @@ fn bind_alias_rejects_expiry_after_retention_epoch() {
     }
     .execute(&alice(), &mut tx)
     .expect_err("alias expiry beyond retention must be rejected");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -811,7 +706,6 @@ fn bind_alias_rejects_expiry_after_retention_epoch() {
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
 }
-
 fn make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
@@ -847,24 +741,20 @@ fn make_state() -> State {
     state.set_gov(governance);
     state
 }
-
 fn completion_anchor_header() -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 42, 0)
 }
-
 fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
     ProviderIngestFinalizedAnchorV1 {
         height: 1,
         block_hash: *iroha_crypto::HashOf::new(&completion_anchor_header()).as_ref(),
     }
 }
-
 fn seed_completion_anchor(state: &State) {
     let mut committed_hashes = state.block_hashes.block();
     committed_hashes.push_for_tests(iroha_crypto::HashOf::new(&completion_anchor_header()));
     committed_hashes.commit_for_tests();
 }
-
 fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV1 {
     ProviderIngestCompletionAuthorityV1::new(
         owner.clone(),
@@ -876,7 +766,6 @@ fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV
         },
     )
 }
-
 fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     let fee_asset_id = tx.gov.sorafs_pin_fee_asset_id.clone();
     let domain_id =
@@ -905,7 +794,6 @@ fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '
     }
     seed_pin_fee_balance(tx, &alice(), 10_000_000_000_000);
 }
-
 fn seed_pin_fee_balance(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     account: &AccountId,
@@ -916,7 +804,6 @@ fn seed_pin_fee_balance(
         .execute(&alice(), tx)
         .expect("mint SoraFS public pin fee balance");
 }
-
 fn pin_fee_balance(
     tx: &iroha_core::state::StateTransaction<'_, '_>,
     account: &AccountId,
@@ -927,7 +814,6 @@ fn pin_fee_balance(
         .get(&asset_id)
         .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
-
 fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_message: &str) {
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
@@ -935,7 +821,6 @@ fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_me
     let alice_balance_before = pin_fee_balance(&tx, &alice());
     let treasury_account = tx.gov.sorafs_pin_fee_treasury_account.clone();
     let treasury_balance_before = pin_fee_balance(&tx, &treasury_account);
-
     let mut manifest = manifest_fixture(0xAA);
     manifest.pin_policy = sorafs_manifest::PinPolicy {
         min_replicas: policy.min_replicas,
@@ -955,7 +840,6 @@ fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_me
     }
     .execute(&alice(), &mut tx)
     .expect_err("governance policy must reject manifest registration");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -980,16 +864,13 @@ fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_me
         "rejected manifest policy must not credit the treasury"
     );
 }
-
 fn block_header(height: u64) -> iroha_data_model::block::BlockHeader {
     let nz_height = NonZeroU64::new(height).expect("height must be non-zero");
     iroha_data_model::block::BlockHeader::new(nz_height, None, None, None, 0, 0)
 }
-
 fn default_digest() -> ManifestDigest {
     manifest_digest_for_seed(0xAA)
 }
-
 fn manifest_fixture_with_chunk_digest(seed: u8, chunk_digest_sha3_256: [u8; 32]) -> ManifestV1 {
     let commitment = seed.max(1);
     ManifestBuilder::new()
@@ -1012,44 +893,35 @@ fn manifest_fixture_with_chunk_digest(seed: u8, chunk_digest_sha3_256: [u8; 32])
         .build()
         .expect("fixture manifest")
 }
-
 fn chunk_digest_for_seed(seed: u8) -> [u8; 32] {
     [seed.wrapping_add(0x23).max(1); 32]
 }
-
 fn manifest_fixture(seed: u8) -> ManifestV1 {
     manifest_fixture_with_chunk_digest(seed, chunk_digest_for_seed(seed))
 }
-
 fn manifest_payload_for_seed(seed: u8) -> Vec<u8> {
     manifest_fixture(seed)
         .encode()
         .expect("encode fixture manifest")
 }
-
 fn manifest_digest_for_seed(seed: u8) -> ManifestDigest {
     ManifestDigest::from_manifest(&manifest_fixture(seed)).expect("digest fixture manifest")
 }
-
 fn fixture_seed_for_digest(digest: ManifestDigest) -> u8 {
     (1..=u8::MAX)
         .find(|seed| manifest_digest_for_seed(*seed) == digest)
         .expect("manifest digest must belong to a fixture seed")
 }
-
 fn root_cid_for_manifest(digest: ManifestDigest) -> ManifestRootCid {
     ManifestRootCid::try_from_slice(&manifest_fixture(fixture_seed_for_digest(digest)).root_cid)
         .expect("canonical root CID")
 }
-
 fn default_chunk_digest() -> [u8; 32] {
     chunk_digest_for_seed(0xAA)
 }
-
 fn default_content_length() -> u64 {
     1_073_741_824
 }
-
 fn default_chunker() -> ChunkerProfileHandle {
     let descriptor = chunker_registry::default_descriptor();
     ChunkerProfileHandle {
@@ -1060,7 +932,6 @@ fn default_chunker() -> ChunkerProfileHandle {
         multihash_code: descriptor.multihash_code,
     }
 }
-
 fn default_policy() -> PinPolicy {
     PinPolicy {
         min_replicas: 3,
@@ -1068,12 +939,10 @@ fn default_policy() -> PinPolicy {
         retention_epoch: 42,
     }
 }
-
 fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     if tx.tx_call_hash.is_none() {
         tx.tx_call_hash = Some(Hash::prehashed([0x91; Hash::LENGTH]));
     }
-
     let alice = alice();
     let default_domain =
         DomainId::try_new("default", "universal").expect("explicit fixture domain");
@@ -1087,7 +956,6 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
             .execute(&alice, tx)
             .expect("register sorafs authority");
     }
-
     {
         let world = &mut tx.world;
         for perm in [
@@ -1099,7 +967,6 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
         }
     }
     seed_public_pin_fee_assets(tx);
-
     for provider_id in [
         ProviderId::new([0x51; 32]),
         ProviderId::new([0x52; 32]),
@@ -1125,7 +992,6 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
         .expect("register provider completion authority");
     }
 }
-
 fn register_and_approve(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     digest: ManifestDigest,
@@ -1146,7 +1012,6 @@ fn register_and_approve(
     }
     .execute(&alice(), tx)
     .expect("register manifest");
-
     let stored = tx
         .world()
         .pin_manifests()
@@ -1163,7 +1028,6 @@ fn register_and_approve(
             revoked_at_block_height: None,
         }];
     let envelope = build_envelope(&stored, council_keys);
-
     ApprovePinManifest {
         digest,
         council_envelope: Some(envelope),
@@ -1172,7 +1036,6 @@ fn register_and_approve(
     .execute(&alice(), tx)
     .expect("approve manifest");
 }
-
 fn replication_order(
     order_id: ReplicationOrderId,
     manifest: ManifestDigest,
@@ -1210,7 +1073,6 @@ fn replication_order(
         metadata: Vec::new(),
     }
 }
-
 fn alias_binding_for(
     digest: ManifestDigest,
     namespace: &str,
@@ -1225,14 +1087,11 @@ fn alias_binding_for(
         bound_at,
         expiry_epoch,
     };
-
     let merkle_path: Vec<[u8; 32]> = Vec::new();
     let registry_root =
         alias_merkle_root(&binding_payload, &merkle_path).expect("compute alias proof merkle root");
-
     let generated_at_unix = 1_700_000_000;
     let expires_at_unix = generated_at_unix + 86_400;
-
     let mut bundle = AliasProofBundleV1 {
         binding: binding_payload,
         registry_root,
@@ -1242,7 +1101,6 @@ fn alias_binding_for(
         merkle_path,
         council_signatures: Vec::new(),
     };
-
     let digest = alias_proof_signature_digest(&bundle);
     let signature = checked_signature(
         council_keys.private_key(),
@@ -1253,12 +1111,10 @@ fn alias_binding_for(
     let signer: [u8; 32] = public_bytes
         .try_into()
         .expect("ed25519 public key must contain 32 bytes");
-
     bundle.council_signatures.push(CouncilSignature {
         signer,
         signature: signature.payload().to_vec(),
     });
-
     let proof = to_bytes(&bundle).expect("encode alias proof bundle");
     ManifestAliasBinding {
         name: name.to_owned(),
@@ -1266,14 +1122,12 @@ fn alias_binding_for(
         proof,
     }
 }
-
 fn council_keypair() -> KeyPair {
     let secret_bytes = [0x11; 32];
     let private =
         PrivateKey::from_bytes(Algorithm::Ed25519, &secret_bytes).expect("private key bytes");
     KeyPair::from_private_key(private).expect("derive keypair")
 }
-
 fn checked_ed25519_public_key_bytes<'a>(keypair: &'a KeyPair, context: &str) -> &'a [u8] {
     let (algorithm, public_bytes) = keypair
         .public_key()
@@ -1282,12 +1136,10 @@ fn checked_ed25519_public_key_bytes<'a>(keypair: &'a KeyPair, context: &str) -> 
     assert_eq!(algorithm, Algorithm::Ed25519, "{context} must be Ed25519");
     public_bytes
 }
-
 fn checked_signature(private_key: &PrivateKey, payload: &[u8], context: &str) -> Signature {
     Signature::try_new(private_key, payload)
         .unwrap_or_else(|err| panic!("{context} should sign successfully: {err}"))
 }
-
 fn build_envelope(record: &PinManifestRecord, keypair: &KeyPair) -> Vec<u8> {
     let mut sig_entry = json::Map::new();
     let signature = checked_signature(
@@ -1309,7 +1161,6 @@ fn build_envelope(record: &PinManifestRecord, keypair: &KeyPair) -> Vec<u8> {
         "signer_multihash".into(),
         Value::from(keypair.public_key().to_string()),
     );
-
     let mut envelope = json::Map::new();
     envelope.insert(
         "chunk_digest_sha3_256".into(),
@@ -1324,12 +1175,10 @@ fn build_envelope(record: &PinManifestRecord, keypair: &KeyPair) -> Vec<u8> {
         "signatures".into(),
         Value::Array(vec![Value::Object(sig_entry)]),
     );
-
     let mut serialized = json::to_vec_pretty(&Value::Object(envelope)).expect("serialize envelope");
     serialized.push(b'\n');
     serialized
 }
-
 fn alice() -> AccountId {
     AccountId::new(
         "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -1337,7 +1186,6 @@ fn alice() -> AccountId {
             .expect("public key"),
     )
 }
-
 fn snapshot_json(
     manifest: &PinManifestRecord,
     alias: &ManifestAliasRecord,
@@ -1346,7 +1194,6 @@ fn snapshot_json(
     let manifest_obj = manifest_snapshot(manifest);
     let alias_obj = alias_snapshot(alias);
     let order_obj = order_snapshot(order);
-
     let mut root = json::Map::new();
     root.insert(
         "manifests".into(),
@@ -1362,7 +1209,6 @@ fn snapshot_json(
     );
     Value::Object(root)
 }
-
 fn manifest_snapshot(manifest: &PinManifestRecord) -> json::Map {
     let mut manifest_obj = json::Map::new();
     manifest_obj.insert(
@@ -1434,7 +1280,6 @@ fn manifest_snapshot(manifest: &PinManifestRecord) -> json::Map {
     );
     manifest_obj
 }
-
 fn alias_snapshot(alias: &ManifestAliasRecord) -> json::Map {
     let mut alias_obj = json::Map::new();
     alias_obj.insert(
@@ -1459,7 +1304,6 @@ fn alias_snapshot(alias: &ManifestAliasRecord) -> json::Map {
     );
     alias_obj
 }
-
 fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
     let order_payload: ReplicationOrderV1 =
         norito::decode_from_bytes(&order.canonical_order).expect("decode order payload");
@@ -1596,7 +1440,6 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
     );
     order_obj
 }
-
 fn load_fixture() -> Value {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let path = manifest_dir.join(FIXTURE_PATH);

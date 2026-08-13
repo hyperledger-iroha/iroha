@@ -1,6 +1,5 @@
 //! High-level orchestrator facade wiring SoraFS scoreboards to the async
 //! multi-source fetch loop implemented in `sorafs_car`.
-
 use std::{
     cmp::Ordering as CmpOrdering,
     collections::{HashMap, VecDeque},
@@ -16,7 +15,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use futures::future::join_all;
 use iroha_core::prelude::Hash;
 use iroha_data_model::{
@@ -59,7 +57,6 @@ use tokio::{
     time::sleep,
 };
 use url::Host;
-
 pub mod appeals;
 pub mod compliance;
 pub mod incentives;
@@ -71,7 +68,6 @@ pub mod routing_authority;
 pub mod soranet;
 pub mod taikai_cache;
 pub mod treasury;
-
 pub(crate) const SORANET_PQ_RANK_STEP_WEIGHT: u32 = 250;
 pub(crate) const SORANET_PQ_CERTIFICATE_BONUS: u32 = 500;
 pub(crate) const SORANET_BANDWIDTH_UNIT_BYTES: u64 = 256 * 1024; // 256 KiB per weight step.
@@ -315,7 +311,6 @@ use taikai_cache::{
     TaikaiCacheHandle, TaikaiCacheStatsSnapshot, TaikaiPullQueueStats, TaikaiPullRequest,
     TaikaiPullTicket, TaikaiQueueError,
 };
-
 use crate::proxy::{
     BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle, PROXY_MANIFEST_ID,
     PROXY_PROTOCOL_LABEL, ProxyError, ProxyMode, spawn_local_quic_proxy,
@@ -337,7 +332,6 @@ pub mod prelude {
         },
     };
     pub use sorafs_chunker::ChunkProfile;
-
     pub use crate::{
         AnonymityPolicy, CircuitRefreshReport, FetchSession, GatewayCarVerification,
         GatewayOrchestratorError, ManifestVerificationContext, ManifestVerificationError,
@@ -993,14 +987,9 @@ impl Default for OrchestratorConfig {
 }
 /// Helper utilities for configuring the orchestrator via Norito JSON payloads.
 pub mod bindings {
-    use std::{
-        collections::BTreeSet, convert::TryFrom, num::NonZeroU32, path::PathBuf, time::Duration,
-    };
-
+    use std::{collections::BTreeSet, convert::TryFrom, num::NonZeroU32, path::PathBuf, time::Duration};
     use norito::json::{Map, Value};
-
     use super::*;
-
     /// Errors that may occur while parsing [`OrchestratorConfig`] from JSON.
     #[derive(Debug, Error)]
     #[error("{0}")]
@@ -6084,7 +6073,6 @@ mod tests {
         thread,
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
-
     use super::*;
     use crate::{
         bindings::{config_from_json, config_to_json},
@@ -6115,7 +6103,6 @@ mod tests {
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
     use tokio::sync::Mutex as AsyncMutex;
-
     fn relay_id(byte: u8) -> [u8; 32] {
         [byte; 32]
     }

@@ -10,18 +10,15 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 use ff::PrimeField;
 use halo2_proofs::{
     circuit::{Region, Value},
     plonk::Error,
 };
-
 #[cfg(test)]
 use super::super::super::{BLOCK_SIZE, BlockWord, ROUNDS};
 use super::MessageScheduleConfig;
 use crate::zk::kagemusha_sha256_table16_v4::AssignedBits;
-
 // Rows needed for each gate
 pub const DECOMPOSE_0_ROWS: usize = 2;
 pub const DECOMPOSE_1_ROWS: usize = 2;
@@ -31,7 +28,6 @@ pub const SIGMA_0_V1_ROWS: usize = 4;
 pub const SIGMA_0_V2_ROWS: usize = 4;
 pub const SIGMA_1_V1_ROWS: usize = 4;
 pub const SIGMA_1_V2_ROWS: usize = 4;
-
 // Rows needed for each subregion
 pub const SUBREGION_0_LEN: usize = 1; // W_0
 pub const SUBREGION_0_ROWS: usize = SUBREGION_0_LEN * DECOMPOSE_0_ROWS;
@@ -46,7 +42,6 @@ pub const SUBREGION_3_LEN: usize = 13; // W[49..62]
 pub const SUBREGION_3_ROWS: usize = SUBREGION_3_LEN * SUBREGION_3_WORD;
 // pub const SUBREGION_4_LEN: usize = 2; // W_[62..64]
 // pub const SUBREGION_4_ROWS: usize = SUBREGION_4_LEN * DECOMPOSE_0_ROWS;
-
 /// Returns row number of a word
 pub fn get_word_row(word_idx: usize) -> usize {
     assert!(word_idx <= 63);
@@ -66,7 +61,6 @@ pub fn get_word_row(word_idx: usize) -> usize {
             + DECOMPOSE_0_ROWS * (word_idx - 62)
     }
 }
-
 /// Test vector: "abc"
 #[cfg(test)]
 pub fn msg_schedule_test_input() -> [BlockWord; BLOCK_SIZE] {
@@ -89,7 +83,6 @@ pub fn msg_schedule_test_input() -> [BlockWord; BLOCK_SIZE] {
         BlockWord(Value::known(0b00000000000000000000000000011000)),
     ]
 }
-
 #[cfg(test)]
 pub const MSG_SCHEDULE_TEST_OUTPUT: [u32; ROUNDS] = [
     0b01100001011000100110001110000000,
@@ -157,7 +150,6 @@ pub const MSG_SCHEDULE_TEST_OUTPUT: [u32; ROUNDS] = [
     0b11101110101010111010001011001100,
     0b00010010101100011110110111101011,
 ];
-
 type AssignedWordAndHalves<F> = (
     AssignedBits<32, F>,
     (AssignedBits<16, F>, AssignedBits<16, F>),
@@ -173,9 +165,7 @@ impl MessageScheduleConfig {
         // Rename these here for ease of matching the gates to the specification.
         let a_3 = self.extras[0];
         let a_4 = self.extras[1];
-
         let row = get_word_row(word_idx);
-
         let w_lo = {
             let w_lo_val = word.map(|word| word as u16);
             AssignedBits::<16, F>::assign(
@@ -196,7 +186,6 @@ impl MessageScheduleConfig {
                 w_hi_val,
             )?
         };
-
         let word = AssignedBits::<32, F>::assign(
             region,
             || format!("W_{}", word_idx),
@@ -204,7 +193,6 @@ impl MessageScheduleConfig {
             row,
             word,
         )?;
-
         Ok((word, (w_lo, w_hi)))
     }
 }

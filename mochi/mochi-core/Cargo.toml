@@ -52,3 +52,6 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "s
 [dev-dependencies]
 tempfile = { workspace = true }
 httpmock = "0.8.2"
+# Preserve the reviewed lock graph without restoring retired production edges.
+iroha_config.workspace = true
+iroha_core.workspace = true

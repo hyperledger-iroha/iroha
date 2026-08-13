@@ -1,9 +1,6 @@
 //! CoreHost canonical `Name` frame decoding and rejection coverage.
-
 use ivm::{CoreHost, IVM, PointerType, encoding, syscalls};
-
 mod common;
-
 fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&(pty as u16).to_be_bytes());
@@ -14,7 +11,6 @@ fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 #[test]
 fn name_decode_rejects_invalid_utf8() {
     let mut vm = IVM::new(u64::MAX);
@@ -49,7 +45,6 @@ fn name_decode_rejects_invalid_utf8() {
     let err = vm.run().expect_err("expected invalid UTF-8 to be rejected");
     assert!(matches!(err, ivm::VMError::DecodeError));
 }
-
 #[test]
 fn name_decode_rejects_invalid_name_utf8_valid() {
     let mut vm = IVM::new(u64::MAX);
@@ -80,7 +75,6 @@ fn name_decode_rejects_invalid_name_utf8_valid() {
     let err = vm.run().expect_err("expected invalid Name to be rejected");
     assert!(matches!(err, ivm::VMError::DecodeError));
 }
-
 #[test]
 fn name_decode_rejects_reserved_chars() {
     let mut vm = IVM::new(u64::MAX);
@@ -113,7 +107,6 @@ fn name_decode_rejects_reserved_chars() {
         .expect_err("expected reserved chars to be rejected");
     assert!(matches!(err, ivm::VMError::DecodeError));
 }
-
 #[test]
 fn name_decode_accepts_valid_utf8() {
     let mut vm = IVM::new(u64::MAX);

@@ -1,5 +1,4 @@
 // Generated-localnet rANS table copy, isolation, and path contract tests.
-
 #[test]
 fn copy_rans_tables_writes_seed_table() {
     let temp = tempfile::tempdir().expect("tmp dir");
@@ -18,7 +17,6 @@ fn copy_rans_tables_writes_seed_table() {
     let bytes = fs::read(&emitted_path).expect("read rANS seed table");
     assert_eq!(bytes, RANS_SEED0_TABLE);
 }
-
 #[test]
 fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
     let temp = tempfile::tempdir().expect("tmp dir");
@@ -46,7 +44,6 @@ fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
         ),
     ];
     let mut generated_paths = std::collections::BTreeSet::new();
-
     for (label, sora_profile, consensus_mode) in profiles {
         let out_dir = temp.path().join(label);
         let opts = LocalnetOptions {
@@ -65,10 +62,8 @@ fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
             block_cadence_ms: None,
             consensus_mode,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
             .unwrap_or_else(|error| panic!("generate {label} localnet: {error:#}"));
-
         let canonical_out_dir =
             fs::canonicalize(&out_dir).expect("canonical generated output directory");
         let expected_path =
@@ -82,7 +77,6 @@ fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
             fs::read(&expected_path).expect("read generated rANS table"),
             RANS_SEED0_TABLE
         );
-
         for peer_index in 0..opts.peers.get() {
             let config_path = out_dir.join(format!("peer{peer_index}.toml"));
             let peer_config: toml::Value = toml::from_str(
@@ -107,12 +101,10 @@ fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
                 "{label} peer {peer_index} must bind its own generated rANS table"
             );
         }
-
         assert!(
             generated_paths.insert(expected_path),
             "{label} must not reuse another generated network's rANS table"
         );
     }
-
     assert_eq!(generated_paths.len(), profiles.len());
 }

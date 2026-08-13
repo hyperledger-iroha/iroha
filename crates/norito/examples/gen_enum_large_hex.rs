@@ -1,6 +1,5 @@
 //! Generate the enum_offsets_id_code_delta_large hex to stdout.
 use norito::columnar as ncb;
-
 fn main() {
     use ncb::EnumBorrow;
     let n = 300usize;

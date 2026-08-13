@@ -19,6 +19,8 @@ from typing import Any
 import pytest
 
 from pytests.scripts.sumeragi_v2_release_bootstrap_tool_manifest_support import (
+    REQUIRED_RUNNER_TOOL_NAMES,
+    fixture_tool_probe_helper,
     provision_archived_python_runtime as _provision_archived_python_runtime,
 )
 
@@ -26,6 +28,21 @@ from pytests.scripts.sumeragi_v2_release_bootstrap_tool_manifest_support import 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = REPO_ROOT / "scripts" / "validate_sumeragi_v2_release_bootstrap.py"
 BOOTSTRAP = REPO_ROOT / "scripts" / "bootstrap_sumeragi_v2_release.py"
+BOOTSTRAP_COMPONENT_FILES = (
+    REPO_ROOT / "scripts" / "bootstrap_sumeragi_v2_release_receipt_replay.py",
+)
+RECEIPT_VALIDATOR_COMPONENT_FILES = tuple(
+    REPO_ROOT / "scripts" / name
+    for name in (
+        "write_sumeragi_v2_release_receipt_formal_artifacts.py",
+        "write_sumeragi_v2_release_receipt_corridor_log.py",
+        "write_sumeragi_v2_release_receipt_gate_evidence.py",
+        "write_sumeragi_v2_release_receipt_publication.py",
+    )
+)
+APPROVAL_CONTRACT = (
+    REPO_ROOT / "scripts" / "sumeragi_v2_release_approval_contract.py"
+)
 RUNTIME_HELPER = REPO_ROOT / "scripts" / "copy_sumeragi_v2_release_cargo_cache.py"
 PYTHON = Path(sys.executable).resolve(strict=True)
 FRAMEWORK_PYTHON = (
@@ -35,6 +52,14 @@ FRAMEWORK_PYTHON = (
 )
 FINGERPRINT = "SHA256:" + "A" * 43
 OTHER_FINGERPRINT = "SHA256:" + "B" * 43
+APPROVAL_EVIDENCE_ROOT_ID = "fixture-release-evidence-root"
+APPROVAL_DURATIONS = (900, 901, 902, 903)
+APPROVAL_CLASS_IDS = (
+    "offline-toolchain-sdk",
+    "formal-proof-tools",
+    "network-scale-soak",
+    "final-bootstrap-publication",
+)
 
 TRUSTED_NAMES = {
     "allowed_signers": "bootstrap-allowed-signers",
@@ -49,11 +74,118 @@ TRUSTED_NAMES = {
     "receipt_validator": "validate-receipt.py",
     "receipt_validator_support": "sumeragi_v2_localnet_manifest.py",
     "runtime_helper": "copy-release-runtime.py",
+    "tool_probe_helper": "probe-release-tools.py",
+    "approval_contract": "release-approval-contract.py",
+    "approval_offline_toolchain_sdk": "offline-toolchain-sdk.approval.v1.json",
+    "approval_formal_proof_tools": "formal-proof-tools.approval.v1.json",
+    "approval_network_scale_soak": "network-scale-soak.approval.v1.json",
+    "approval_final_bootstrap_publication": (
+        "final-bootstrap-publication.approval.v1.json"
+    ),
     "sdk_dependency_bundle_manifest": "sdk-dependency-bundle-manifest.json",
     "revocation": "bootstrap-revocation",
     "runner_tool_manifest": "runner-tool-manifest.json",
     "ssh_keygen": "ssh-keygen",
 }
+
+
+def _load_approval_component(path: Path) -> object:
+    spec = importlib.util.spec_from_file_location(
+        "sumeragi_release_bootstrap_validator_approval_fixture", path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _approval_fixture(
+    *,
+    module: object,
+    identity: dict[str, Any],
+    tool_manifest_sha256: str,
+    trust: Path,
+    evidence: Path,
+) -> tuple[dict[str, Path], dict[str, Any]]:
+    expectations = module.build_release_approval_expectations(
+        candidate_oid=identity["head_commit"],
+        candidate_tree=identity["head_tree"],
+        protected_tool_manifest_sha256=tool_manifest_sha256,
+        evidence_root_id=APPROVAL_EVIDENCE_ROOT_ID,
+        offline_toolchain_sdk_duration_seconds=APPROVAL_DURATIONS[0],
+        formal_proof_tools_duration_seconds=APPROVAL_DURATIONS[1],
+        network_scale_soak_duration_seconds=APPROVAL_DURATIONS[2],
+        final_bootstrap_publication_duration_seconds=APPROVAL_DURATIONS[3],
+    )
+    archives: dict[str, Path] = {}
+    paths: dict[object, Path] = {}
+    for ordinal, approval_class in enumerate(module.APPROVAL_CLASS_ORDER):
+        expectation = expectations[approval_class]
+        class_id = approval_class.value
+        value = {
+            "approval_id": f"fixture-approval-{ordinal}-{class_id}",
+            "approved_at": f"2026-08-{ordinal + 1:02d}T01:02:03Z",
+            "candidate_oid": expectation.candidate_oid,
+            "candidate_tree": expectation.candidate_tree,
+            "class_id": class_id,
+            "evidence_root_id": expectation.evidence_root_id,
+            "expected_duration_seconds": expectation.expected_duration_seconds,
+            "format": module.APPROVAL_FORMAT,
+            "operations": [item.value() for item in expectation.operations],
+            "profile": expectation.profile,
+            "protected_tool_manifest_sha256": (
+                expectation.protected_tool_manifest_sha256
+            ),
+            "schema_version": module.APPROVAL_SCHEMA_VERSION,
+        }
+        data = _canonical(value)
+        label = "approval_" + class_id.replace("-", "_")
+        _write(trust / f"source-{label}", data, 0o400)
+        path = _write(evidence / TRUSTED_NAMES[label], data, 0o400)
+        archives[label] = path
+        paths[approval_class] = path
+    approvals = module.load_protected_release_approval_set(
+        paths, expectations=expectations, expected_owner_uid=os.getuid()
+    )
+    class_records: dict[str, Any] = {}
+    for approval in approvals:
+        class_id = approval.class_id.value
+        sanitized = approval.sanitized_archive()
+        name = f"{class_id}.approval-attestation.v1.json"
+        path = _write(evidence / name, sanitized.canonical_bytes, 0o400)
+        class_records[class_id] = {
+            "archive_id": module.APPROVAL_ARCHIVE_IDS[approval.class_id],
+            "archive_name": name,
+            "mode": "0400",
+            "sha256": sanitized.sha256,
+            "size_bytes": path.stat().st_size,
+        }
+    sanitized_set = module.sanitized_release_approval_set_archive(approvals)
+    set_name = "release-approval-set-attestation.v1.json"
+    set_path = _write(evidence / set_name, sanitized_set.canonical_bytes, 0o400)
+    marker = {
+        "format": module.APPROVAL_SET_ARCHIVE_FORMAT,
+        "schema_version": 1,
+        "candidate_oid": identity["head_commit"],
+        "candidate_tree": identity["head_tree"],
+        "protected_tool_manifest_sha256": tool_manifest_sha256,
+        "evidence_root_id": APPROVAL_EVIDENCE_ROOT_ID,
+        "expected_duration_seconds": dict(zip(APPROVAL_CLASS_IDS, APPROVAL_DURATIONS)),
+        "operation_plan_sha256": {
+            approval_class.value: digest
+            for approval_class, digest in module.APPROVAL_OPERATION_PLAN_SHA256.items()
+        },
+        "class_attestations": class_records,
+        "set_attestation": {
+            "archive_id": "release-approval.set-attestation.v1",
+            "archive_name": set_name,
+            "mode": "0400",
+            "sha256": sanitized_set.sha256,
+            "size_bytes": set_path.stat().st_size,
+        },
+    }
+    return archives, marker
 IDENTITY_NAMES = {
     "cargo_lock": "identity-Cargo.lock",
     "git": "identity-git",
@@ -201,6 +333,12 @@ def _fixture_validator_values(
         ),
         "--sdk-dependency-final-work-inventory": (
             "path", str(invocation / "sdk-dependency-work-final.json"),
+        ),
+        "--runtime-tool-probe-manifest": (
+            "path", str(invocation / "runtime-tool-probe-manifest.json"),
+        ),
+        "--runtime-tool-probe-result": (
+            "path", str(invocation / "runtime-tool-probe-result.json"),
         ),
         "--output": ("path", str(receipt)),
         "--verify-existing": ("flag", True),
@@ -1076,24 +1214,34 @@ def release_fixture(tmp_path: Path) -> Fixture:
     _write(candidate / "payload", b"candidate\n", 0o600)
     _write(candidate / "HEAD_ID", "0" * 40 + "\n", 0o600)
 
-    runner_tool_source = _write(
-        trust / "runner-tool-chmod", b"synthetic chmod", 0o500
-    )
+    runner_tool_sources = {
+        name: _write(
+            trust / f"runner-tool-{name}",
+            f"synthetic fixture tool {name}\n".encode(),
+            0o500,
+        )
+        for name in REQUIRED_RUNNER_TOOL_NAMES
+    }
     runner_tool_manifest = _canonical(
         {
             "schema_version": 1,
             "tools": {
-                "chmod": {
-                    "path": str(runner_tool_source),
-                    "sha256": _digest(runner_tool_source.read_bytes()),
+                name: {
+                    "path": str(source),
+                    "sha256": _digest(source.read_bytes()),
                 }
+                for name, source in sorted(runner_tool_sources.items())
             },
         }
     )
-    runner_tool_archive = _copy(
-        runner_tool_source, evidence / "runner-tools" / "chmod", 0o500
-    )
-    (evidence / "runner-bin" / "chmod").symlink_to("../runner-tools/chmod")
+    runner_tool_archives = {
+        name: _copy(
+            source, evidence / "runner-tools" / name, 0o500
+        )
+        for name, source in sorted(runner_tool_sources.items())
+    }
+    for name in REQUIRED_RUNNER_TOOL_NAMES:
+        (evidence / "runner-bin" / name).symlink_to(f"../runner-tools/{name}")
     source_data = {
         "allowed_signers": b'release namespaces="git" ssh-ed25519 AAAATEST\n',
         "bash": b"synthetic relocatable bash",
@@ -1104,6 +1252,8 @@ def release_fixture(tmp_path: Path) -> Fixture:
         "receipt_validator": b"synthetic protected receipt validator",
         "receipt_validator_support": b"synthetic receipt validator support",
         "runtime_helper": b"synthetic protected runtime helper",
+        "tool_probe_helper": fixture_tool_probe_helper(),
+        "approval_contract": APPROVAL_CONTRACT.read_bytes(),
         "sdk_dependency_bundle_manifest": _canonical({
             "format": "iroha-sumeragi-v2-sdk-dependency-sources",
             "schema_version": 1,
@@ -1154,6 +1304,50 @@ def release_fixture(tmp_path: Path) -> Fixture:
         )
         _provision_archived_python_runtime(PYTHON, archives["python"])
 
+    tool_probe_manifest_value = {
+        "schema_version": 1,
+        "tools": {
+            name: {
+                "archive_id": f"release-runner-tool.{name}.v1",
+                "path": str(runner_tool_archives[name]),
+                "sha256": _digest(runner_tool_archives[name].read_bytes()),
+            }
+            for name in REQUIRED_RUNNER_TOOL_NAMES
+        },
+    }
+    tool_probe_manifest = _write(
+        evidence / "runner-tool-probe-manifest.json",
+        _canonical(tool_probe_manifest_value),
+        0o400,
+    )
+    tool_probe_run = subprocess.run(
+        [
+            str(archives["python"]),
+            "-I",
+            "-S",
+            str(archives["tool_probe_helper"]),
+            "--tool-manifest",
+            str(tool_probe_manifest),
+            "--expected-tool-manifest-sha256",
+            _digest(tool_probe_manifest.read_bytes()),
+            "--probe-root",
+            str(evidence / ".fixture-tool-probe"),
+        ],
+        cwd=evidence,
+        env={"LANG": "C", "LC_ALL": "C", "PATH": str(evidence)},
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert tool_probe_run.returncode == 0, tool_probe_run.stderr.decode(
+        "utf-8", "replace"
+    )
+    assert tool_probe_run.stderr == b""
+    tool_probe_result = _write(
+        evidence / "runner-tool-probes.json", tool_probe_run.stdout, 0o400
+    )
+    tool_probe_value = json.loads(tool_probe_run.stdout)
+
     first_identity = _identity(candidate)
     raw = _raw_commit(
         first_identity["head_tree"],
@@ -1164,6 +1358,15 @@ def release_fixture(tmp_path: Path) -> Fixture:
     identity = _identity(candidate)
     identity_bytes = _canonical(identity)
     _write(evidence / "candidate-identity.json", identity_bytes, 0o400)
+    approval_module = _load_approval_component(archives["approval_contract"])
+    approval_archives, release_approvals = _approval_fixture(
+        module=approval_module,
+        identity=identity,
+        tool_manifest_sha256=_digest(archives["runner_tool_manifest"].read_bytes()),
+        trust=trust,
+        evidence=evidence,
+    )
+    archives.update(approval_archives)
 
     identity_data = {
         "cargo_lock": (candidate / "Cargo.lock").read_bytes(),
@@ -1277,6 +1480,29 @@ def release_fixture(tmp_path: Path) -> Fixture:
         }
     if framework_runtime_record is not None:
         trusted_records["python"]["runtime"] = framework_runtime_record
+    for label, sources, archive_id in (
+        (
+            "bootstrap",
+            BOOTSTRAP_COMPONENT_FILES,
+            "release-bootstrap.bootstrap-component.v1:",
+        ),
+        (
+            "receipt_validator",
+            RECEIPT_VALIDATOR_COMPONENT_FILES,
+            "release-bootstrap.receipt-validator-component.v1:",
+        ),
+    ):
+        components: dict[str, Any] = {}
+        for source in sources:
+            archive = _write(evidence / source.name, source.read_bytes(), 0o400)
+            components[source.name] = {
+                "archive_id": archive_id + source.name,
+                "archive_name": source.name,
+                "mode": "0400",
+                "sha256": _digest(archive.read_bytes()),
+                "size_bytes": archive.stat().st_size,
+            }
+        trusted_records[label]["components"] = components
     identity_records = {
         "identity_attestation": _artifact(attestation_bytes, "identity-attestation.json", 0o400),
         "identity_transcript": _artifact(transcript_bytes, "identity-transcript.json", 0o400),
@@ -1292,6 +1518,12 @@ def release_fixture(tmp_path: Path) -> Fixture:
     policy_environment = {
         "SUMERAGI_V2_RELEASE_RUNTIME_HELPER": str(archives["runtime_helper"]),
         "SUMERAGI_V2_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": _digest(archives["runtime_helper"].read_bytes()),
+        "SUMERAGI_V2_RELEASE_TOOL_PROBE_HELPER": str(
+            archives["tool_probe_helper"]
+        ),
+        "SUMERAGI_V2_RELEASE_EXPECTED_TOOL_PROBE_HELPER_SHA256": _digest(
+            archives["tool_probe_helper"].read_bytes()
+        ),
         "SUMERAGI_V2_RELEASE_SSH_KEYGEN_BIN": str(archives["ssh_keygen"]),
         "SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256": _digest(archives["git"].read_bytes()),
         "SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256": _digest(archives["ssh_keygen"].read_bytes()),
@@ -1314,6 +1546,12 @@ def release_fixture(tmp_path: Path) -> Fixture:
     aliases.update({
         "IROHA_RELEASE_RUNTIME_HELPER": str(archives["runtime_helper"]),
         "IROHA_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": _digest(archives["runtime_helper"].read_bytes()),
+        "IROHA_RELEASE_TOOL_PROBE_HELPER": str(
+            archives["tool_probe_helper"]
+        ),
+        "IROHA_RELEASE_EXPECTED_TOOL_PROBE_HELPER_SHA256": _digest(
+            archives["tool_probe_helper"].read_bytes()
+        ),
         "IROHA_RELEASE_SDK_DEPENDENCY_BUNDLE_MANIFEST": str(
             archives["sdk_dependency_bundle_manifest"]
         ),
@@ -1357,6 +1595,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
         "candidate_identity": identity,
         "candidate_identity_sha256": _digest(identity_bytes),
         "trusted_inputs": trusted_records,
+        "release_approvals": release_approvals,
         "identity_verification": identity_records,
         "runner": {
             "archive_id": "release-candidate.runner.v1",
@@ -1383,14 +1622,15 @@ def release_fixture(tmp_path: Path) -> Fixture:
             },
             "tool_directory": "runner-bin",
             "tools": {
-                "chmod": {
-                    "archive_id": "release-runner-tool.chmod.v1",
-                    "alias_name": "chmod",
-                    "archive_name": "runner-tools/chmod",
+                name: {
+                    "archive_id": f"release-runner-tool.{name}.v1",
+                    "alias_name": name,
+                    "archive_name": f"runner-tools/{name}",
                     "mode": "0500",
-                    "sha256": _digest(runner_tool_archive.read_bytes()),
-                    "size_bytes": runner_tool_archive.stat().st_size,
+                    "sha256": _digest(runner_tool_archives[name].read_bytes()),
+                    "size_bytes": runner_tool_archives[name].stat().st_size,
                 }
+                for name in REQUIRED_RUNNER_TOOL_NAMES
             },
             "self_digest_environment_variables": [
                 "IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256",
@@ -1415,6 +1655,27 @@ def release_fixture(tmp_path: Path) -> Fixture:
                     f"{archives['python']}\n".encode()
                 ),
                 "stdout_size_bytes": len(f"{archives['python']}\n".encode()),
+            },
+            "runner_tool_closure": {
+                "manifest": {
+                    "archive_id": (
+                        "release-bootstrap.runner-tool-probe-manifest.v1"
+                    ),
+                    **_artifact(
+                        tool_probe_manifest.read_bytes(),
+                        tool_probe_manifest.name,
+                        0o400,
+                    ),
+                },
+                "result": {
+                    "archive_id": "release-bootstrap.runner-tool-probes.v1",
+                    **_artifact(
+                        tool_probe_result.read_bytes(),
+                        tool_probe_result.name,
+                        0o400,
+                    ),
+                },
+                "value": tool_probe_value,
             },
         },
     }
@@ -1444,6 +1705,17 @@ def test_entry_accepts_exact_authenticated_contract(release_fixture: Fixture) ->
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
     assert result.stderr == ""
+    marker = release_fixture.marker()
+    approvals = marker["release_approvals"]
+    assert set(approvals["class_attestations"]) == set(APPROVAL_CLASS_IDS)
+    public_bytes = _canonical(approvals)
+    assert str(release_fixture.trust).encode() not in public_bytes
+    assert b'"arguments"' not in public_bytes
+    raw = release_fixture.evidence / TRUSTED_NAMES[
+        "approval_offline_toolchain_sdk"
+    ]
+    raw.chmod(0o600)
+    _assert_rejected(release_fixture.run())
 
 
 def test_entry_rejects_legacy_arbitrary_path_entries(release_fixture: Fixture) -> None:
@@ -1626,7 +1898,14 @@ def test_sealed_rejects_drifted_runner_owned_validator_copy(
     "field,value",
     [
         (("schema_version",), True),
-        (("runner", "size_bytes"), True),
+        (
+            (
+                "release_approvals",
+                "expected_duration_seconds",
+                "formal-proof-tools",
+            ),
+            True,
+        ),
         (("trusted_inputs", "git", "size_bytes"), 1.0),
     ],
 )

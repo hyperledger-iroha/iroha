@@ -1,11 +1,9 @@
 //! Puzzle-gated handshake edge cases for P2P.
-
 use std::{
     collections::HashSet,
     num::NonZeroU32,
     time::{Duration, Instant},
 };
-
 use iroha_config::parameters::{
     actual::{
         LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
@@ -26,26 +24,20 @@ use iroha_p2p::{
 };
 use iroha_primitives::addr::socket_addr;
 use norito::codec::{Decode, Encode};
-
 use super::next_port;
-
 const PUZZLE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-
 #[derive(Clone, Debug, Decode, Encode)]
 struct EmptyMsg;
-
 impl ClassifyTopic for EmptyMsg {
     fn topic(&self) -> Topic {
         Topic::Other
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for EmptyMsg {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
-
 fn puzzle_handshake(difficulty: u8, memory_kib: u32) -> ActualSoranetHandshake {
     let mut handshake = ActualSoranetHandshake {
         descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
@@ -69,7 +61,6 @@ fn puzzle_handshake(difficulty: u8, memory_kib: u32) -> ActualSoranetHandshake {
     });
     handshake
 }
-
 #[allow(clippy::too_many_lines)]
 fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHandshake) -> Config {
     let public_addr = addr.clone();
@@ -206,7 +197,6 @@ fn config(addr: iroha_primitives::addr::SocketAddr, handshake: ActualSoranetHand
         quic_max_idle_timeout: None,
     }
 }
-
 async fn assert_exact_peers_connect(
     network: &NetworkHandle<EmptyMsg>,
     expected_peers: &HashSet<PeerId>,
@@ -227,13 +217,11 @@ async fn assert_exact_peers_connect(
     })
     .expect("online peers channel closed while waiting for required-puzzle handshake");
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn matching_required_puzzle_parameters_connect() {
     if super::skip_if_no_tcp_bind() {
         return;
     }
-
     let chain = super::test_network_id("puzzle_match");
     let key_pairs = std::array::from_fn::<_, 4, _>(|_| super::random_node_key_pair());
     let addresses = std::array::from_fn::<_, 4, _>(|_| socket_addr!(127.0.0.1: {next_port()}));
@@ -242,7 +230,6 @@ async fn matching_required_puzzle_parameters_connect() {
     let handshake = puzzle_handshake(1, 4 * 1024);
     assert!(handshake.pow.required, "test must require puzzle admission");
     assert!(handshake.pow.puzzle.is_some(), "test must configure Argon2");
-
     let shutdown = ShutdownSignal::new();
     let mut networks = Vec::with_capacity(key_pairs.len());
     let mut children = Vec::with_capacity(key_pairs.len());
@@ -260,13 +247,11 @@ async fn matching_required_puzzle_parameters_connect() {
         networks.push(network);
         children.push(child);
     }
-
     let peers = addresses
         .into_iter()
         .zip(&key_pairs)
         .map(|(address, key_pair)| Peer::new(address, key_pair.public_key().clone()))
         .collect::<Vec<_>>();
-
     // Use a star with peer 0 as the sole dialer. This exercises three
     // independent puzzle-gated handshakes without simultaneous-connection
     // replacement races. Each leaf authorizes only the hub as an inbound peer.
@@ -285,17 +270,14 @@ async fn matching_required_puzzle_parameters_connect() {
     for network in &networks[1..] {
         network.update_topology(UpdateTopology(leaf_expected.clone()));
     }
-
     tokio::join!(
         assert_exact_peers_connect(&networks[0], &hub_expected),
         assert_exact_peers_connect(&networks[1], &leaf_expected),
         assert_exact_peers_connect(&networks[2], &leaf_expected),
         assert_exact_peers_connect(&networks[3], &leaf_expected),
     );
-
     shutdown.send();
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn puzzle_mismatch_rejects_handshake() {
     let chain = super::test_network_id("puzzle_mismatch");
@@ -303,16 +285,13 @@ async fn puzzle_mismatch_rejects_handshake() {
         return;
     }
     let baseline_failures = peer::handshake_failure_count();
-
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let addr1 = socket_addr!(127.0.0.1: {next_port()});
     let addr2 = socket_addr!(127.0.0.1: {next_port()});
-
     // Keep the puzzle work small so the mismatch is observed reliably even under CPU load.
     let handshake_entry = puzzle_handshake(2, 8 * 1024);
     let handshake_exit = puzzle_handshake(3, 8 * 1024);
-
     let started1 = NetworkHandle::<EmptyMsg>::start(
         super::p2p_identity_keys(kp1.clone()),
         config(addr1.clone(), handshake_entry),
@@ -339,10 +318,8 @@ async fn puzzle_mismatch_rejects_handshake() {
         Ok(ok) => ok,
         Err(_e) => return,
     };
-
     let peer1 = Peer::new(addr1, kp1.public_key().clone());
     let peer2 = Peer::new(addr2, kp2.public_key().clone());
-
     net1.update_topology(UpdateTopology([peer2.id().clone()].into_iter().collect()));
     net1.update_peers_addresses(UpdatePeers(vec![(
         peer2.id().clone(),
@@ -353,7 +330,6 @@ async fn puzzle_mismatch_rejects_handshake() {
         peer1.id().clone(),
         peer1.address().clone(),
     )]));
-
     // Allow enough time for the slower side to mint a ticket when tests are running in parallel.
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut observed_failure = false;
@@ -366,7 +342,6 @@ async fn puzzle_mismatch_rejects_handshake() {
     }
     // Avoid races where the counter increments between the last poll and the loop exit.
     observed_failure |= peer::handshake_failure_count() > baseline_failures;
-
     assert!(
         observed_failure,
         "expected puzzle mismatch to cause handshake failure"

@@ -36,6 +36,8 @@ const REQUIRED_OUTPUTS = [
   "nativeArtifactHash.js",
   "numericV1.js",
   "strictLosslessJson.js",
+  "sorafsOrderbookSubmission.js",
+  "sorafsOrderbookSubmission.d.ts",
   "sumeragiTyped.js",
   "toriiBrowserClient.js",
   "toriiClient.js",

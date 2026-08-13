@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for ZK proof events over the Torii event stream.
 use std::time::Duration;
-
 use assert_matches::assert_matches;
 use eyre::{Result, eyre};
 use futures_util::StreamExt;
@@ -19,11 +18,9 @@ use iroha_data_model::{
 use iroha_test_network::*;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 use tokio::{task::spawn_blocking, time::timeout};
-
 const PROOF_VERIFY_TIMEOUT_MS: i64 = 600_000;
 const CLIENT_STATUS_TIMEOUT: Duration = Duration::from_secs(600);
 const PROOF_EVENT_TIMEOUT: Duration = Duration::from_secs(600);
-
 fn active_vk_record(
     circuit_id: &str,
     vk_box: VerifyingKeyBox,
@@ -47,7 +44,6 @@ fn active_vk_record(
     record.status = ConfidentialStatus::Active;
     record
 }
-
 fn halo2_attachment_and_registration(
     vk_name: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
@@ -73,7 +69,6 @@ fn halo2_attachment_and_registration(
         verifying_keys::RegisterVerifyingKey { id: vk_id, record },
     )
 }
-
 fn rejected_halo2_attachment_and_registration()
 -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
     let circuit_id = "halo2/ipa:event-rejected";
@@ -105,18 +100,15 @@ fn rejected_halo2_attachment_and_registration()
         verifying_keys::RegisterVerifyingKey { id: vk_id, record },
     )
 }
-
 fn client_with_timeout(network: &Network) -> Client {
     let mut client = network.client();
     client.transaction_status_timeout = CLIENT_STATUS_TIMEOUT;
     client.transaction_ttl = Some(CLIENT_STATUS_TIMEOUT + Duration::from_secs(5));
     client
 }
-
 fn proof_event_timeout(network: &Network) -> Duration {
     network.sync_timeout().max(PROOF_EVENT_TIMEOUT)
 }
-
 fn proof_network_builder() -> NetworkBuilder {
     let (_, verified_vk) = halo2_attachment_and_registration("event_vk");
     let (_, rejected_vk) = rejected_halo2_attachment_and_registration();
@@ -135,7 +127,6 @@ fn proof_network_builder() -> NetworkBuilder {
         .with_genesis_instruction(verified_vk)
         .with_genesis_instruction(rejected_vk)
 }
-
 fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
     const NEEDLES: [&str; 3] = [
         "haven't got tx confirmation within",
@@ -147,7 +138,6 @@ fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
         NEEDLES.iter().any(|needle| text.contains(needle))
     })
 }
-
 async fn verify_proof_emits_event(
     network: &Network,
     context: &'static str,
@@ -162,7 +152,6 @@ async fn verify_proof_emits_event(
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening proof event stream"))??;
-
     let verify: InstructionBox = iroha::data_model::isi::zk::VerifyProof::new(attachment).into();
     {
         let submit_client = client.clone();
@@ -184,7 +173,6 @@ async fn verify_proof_emits_event(
         }
     }
     network.ensure_blocks(2).await?;
-
     let result = async {
         let proof_event = timeout(proof_event_timeout(network), async {
             loop {
@@ -208,15 +196,12 @@ async fn verify_proof_emits_event(
                 iroha::data_model::events::data::proof::ProofEvent::Rejected(_)
             );
         }
-
         Ok(())
     }
     .await;
-
     events.close().await;
     result
 }
-
 #[tokio::test]
 async fn proof_event_scenarios() -> Result<()> {
     let _override_guard = sandbox::override_network_parallelism(Some(true), None);
@@ -226,7 +211,6 @@ async fn proof_event_scenarios() -> Result<()> {
     else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         verify_proof_emits_event(
             &network,
@@ -235,7 +219,6 @@ async fn proof_event_scenarios() -> Result<()> {
             true,
         )
         .await?;
-
         verify_proof_emits_event(
             &network,
             stringify!(verify_proof_emits_rejected_event),
@@ -243,14 +226,11 @@ async fn proof_event_scenarios() -> Result<()> {
             false,
         )
         .await?;
-
         Ok(())
     }
     .await;
-
     if sandbox::handle_result(result, stringify!(proof_event_scenarios))?.is_none() {
         return Ok(());
     }
-
     Ok(())
 }

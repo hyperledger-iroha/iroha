@@ -13,7 +13,6 @@ pub struct PrivacyZkX509DisclosedAttributeV1 {
     /// Public digest of the privately salted canonical attribute value.
     pub attribute_digest: PrivacyAttributeDigestV1,
 }
-
 /// Native X.509 credential-predicate STARK statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -72,7 +71,6 @@ pub struct IrohaZkX509StarkP256StatementV1 {
     /// Nullifier derived from the certificate serial and policy.
     pub certificate_nullifier: PrivacyNullifierV1,
 }
-
 /// Canonical little-endian element of the fixed Jindo coefficient field.
 ///
 /// The compiled modulus is `3611623616^8 + 1`. Fixed width at the type boundary
@@ -87,21 +85,18 @@ pub struct PrivacyJindoFieldElementV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub encoding: [u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1],
 }
-
 impl PrivacyJindoFieldElementV1 {
     /// Construct a fixed-width field-element encoding.
     #[must_use]
     pub const fn new(encoding: [u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1]) -> Self {
         Self { encoding }
     }
-
     /// Borrow the exact field-element bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1] {
         &self.encoding
     }
 }
-
 /// Canonical public outer commitment in the fixed Jindo lattice profile.
 ///
 /// The byte string contains 3 × 1024 signed little-endian `i32`
@@ -117,21 +112,18 @@ pub struct PrivacyJindoLatticeCommitmentV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub encoding: Vec<u8>,
 }
-
 impl PrivacyJindoLatticeCommitmentV1 {
     /// Construct a fixed-profile lattice-commitment encoding.
     #[must_use]
     pub fn new(encoding: Vec<u8>) -> Self {
         Self { encoding }
     }
-
     /// Borrow the exact lattice-commitment bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.encoding
     }
 }
-
 /// Native Jindo batched univariate lattice polynomial-opening statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -149,7 +141,6 @@ pub struct IrohaJindoPolynomialCommitmentStatementV1 {
     /// Claimed values in exact polynomial-commitment order.
     pub claimed_evaluations: Vec<PrivacyJindoFieldElementV1>,
 }
-
 /// One direct 64-bit attribute in the fixed Bootle/Lantern credential profile.
 ///
 /// Bits are interpreted little-endian and become the 64 binary coefficients
@@ -165,21 +156,18 @@ pub struct BootleLanternAttributeValueV1(
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub [u8; BOOTLE_LANTERN_ATTRIBUTE_BYTES_V1],
 );
-
 impl BootleLanternAttributeValueV1 {
     /// Construct one direct attribute value.
     #[must_use]
     pub const fn new(bytes: [u8; BOOTLE_LANTERN_ATTRIBUTE_BYTES_V1]) -> Self {
         Self(bytes)
     }
-
     /// Borrow the exact direct attribute bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; BOOTLE_LANTERN_ATTRIBUTE_BYTES_V1] {
         &self.0
     }
 }
-
 /// One polynomial in `Z_12289[X]/(X^64 + 1)`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -191,7 +179,6 @@ pub struct BootleLanternPolynomialV1 {
     /// Exactly 64 canonical coefficients, each strictly below 12,289.
     pub coefficients: Vec<u16>,
 }
-
 /// Canonical issuer verification matrix `B` in the application ring.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -203,7 +190,6 @@ pub struct BootleLanternIssuerPublicMatrixV1 {
     /// Exactly 64 polynomials in row-major 8-by-8 order.
     pub entries: Vec<BootleLanternPolynomialV1>,
 }
-
 /// Minimum number of non-zero coefficients in the canonical degree-512
 /// issuer public key `h` reconstructed from the eight first-column blocks.
 ///
@@ -212,7 +198,6 @@ pub struct BootleLanternIssuerPublicMatrixV1 {
 /// authoritative policy boundary without attempting to prove possession of
 /// the issuer secret key.
 pub const BOOTLE_LANTERN_ISSUER_PUBLIC_KEY_MIN_NONZERO_COEFFICIENTS_V1: usize = 256;
-
 impl BootleLanternIssuerPublicMatrixV1 {
     /// Expand the eight canonical first-column blocks of one degree-512
     /// Falcon/NTRU public key into its exact 8-by-8 multiplication matrix over
@@ -262,7 +247,6 @@ impl BootleLanternIssuerPublicMatrixV1 {
                 }
             }
         }
-
         let mut entries = Vec::with_capacity(
             BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
         );
@@ -291,7 +275,6 @@ impl BootleLanternIssuerPublicMatrixV1 {
         entries.extend(first_column.iter().rev().cloned());
         Ok(Self { entries })
     }
-
     fn validate_matrix_entries_v1(
         &self,
         dimension: usize,
@@ -348,7 +331,6 @@ impl BootleLanternIssuerPublicMatrixV1 {
         }
         Ok(())
     }
-
     /// Validate the exact degree-512-to-eight-degree-64 negacyclic
     /// multiplication-block structure and conservative public-key density.
     ///
@@ -366,7 +348,6 @@ impl BootleLanternIssuerPublicMatrixV1 {
         let dimension = BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
         let degree = BOOTLE_LANTERN_RING_DEGREE_V1;
         self.validate_matrix_entries_v1(dimension, degree)?;
-
         for row in 0..dimension {
             for column in 0..dimension {
                 let actual = &self.entries[row * dimension + column].coefficients;
@@ -406,7 +387,6 @@ impl BootleLanternIssuerPublicMatrixV1 {
                 }
             }
         }
-
         let nonzero_coefficients = (0..dimension)
             .flat_map(|row| &self.entries[row * dimension].coefficients)
             .filter(|coefficient| **coefficient != 0)
@@ -426,7 +406,6 @@ impl BootleLanternIssuerPublicMatrixV1 {
         Ok(())
     }
 }
-
 /// Governed allowed values for one required public attribute.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -438,7 +417,6 @@ pub struct BootleLanternAllowedAttributeValuesV1 {
     /// Strictly increasing values; empty means any disclosed value is allowed.
     pub values: Vec<BootleLanternAttributeValueV1>,
 }
-
 /// Forward-only lifecycle of one authoritative Bootle/Lantern issuer policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -457,7 +435,6 @@ pub enum BootleLanternIssuerPolicyLifecycleV1 {
     #[cfg_attr(feature = "json", norito(rename = "revoked"))]
     Revoked,
 }
-
 /// Committed issuer key and selective-disclosure policy trusted by verification.
 ///
 /// The proof submitter supplies only the record identity and digest in the
@@ -490,7 +467,6 @@ pub struct BootleLanternIssuerPolicyV1 {
     /// Digest of this record with this field normalized to zero.
     pub record_digest: PrivacyBootleLanternIssuerPolicyDigestV1,
 }
-
 impl BootleLanternIssuerPolicyV1 {
     /// Compute the exact digest of the issuer verification matrix selected by
     /// `issuer_parameter_id`.
@@ -514,7 +490,6 @@ impl BootleLanternIssuerPolicyV1 {
         hasher.update(encoded);
         Ok(PrivacyParameterDigestV1::new(hasher.finalize().into()))
     }
-
     /// Compute the canonical record digest with `record_digest` normalized to zero.
     ///
     /// # Errors
@@ -539,7 +514,6 @@ impl BootleLanternIssuerPolicyV1 {
             hasher.finalize().into(),
         ))
     }
-
     /// Validate canonical issuer key, disclosure rules, and self-authenticating digest.
     ///
     /// This intrinsic check does not make the record trusted. Core must resolve
@@ -555,7 +529,6 @@ impl BootleLanternIssuerPolicyV1 {
         self.validate_allowed_values()?;
         self.validate_record_digest()
     }
-
     fn validate_identity(&self) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
         if self.issuer_id.is_zero() {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroIssuerId);
@@ -574,7 +547,6 @@ impl BootleLanternIssuerPolicyV1 {
         }
         Ok(())
     }
-
     fn validate_issuer_public_matrix(
         &self,
     ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
@@ -589,7 +561,6 @@ impl BootleLanternIssuerPolicyV1 {
         }
         Ok(())
     }
-
     fn validate_allowed_values(&self) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
         if self.allowed_values.len() != BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 {
             return Err(
@@ -634,7 +605,6 @@ impl BootleLanternIssuerPolicyV1 {
         }
         Ok(())
     }
-
     fn validate_record_digest(&self) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
         if self.record_digest.is_zero() {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroRecordDigest);
@@ -647,7 +617,6 @@ impl BootleLanternIssuerPolicyV1 {
         }
         Ok(())
     }
-
     /// Validate a first record for a newly created issuer-policy key.
     ///
     /// # Errors
@@ -668,7 +637,6 @@ impl BootleLanternIssuerPolicyV1 {
         }
         Ok(())
     }
-
     /// Validate an atomic replacement of one committed issuer-policy record.
     ///
     /// # Errors
@@ -714,7 +682,6 @@ impl BootleLanternIssuerPolicyV1 {
         }
         Ok(())
     }
-
     /// Validate an active-to-active exact successor.
     ///
     /// # Errors
@@ -731,7 +698,6 @@ impl BootleLanternIssuerPolicyV1 {
         }
         Ok(())
     }
-
     /// Validate an active-to-terminal-revoked exact successor.
     ///
     /// # Errors
@@ -757,7 +723,6 @@ impl BootleLanternIssuerPolicyV1 {
         Ok(())
     }
 }
-
 /// Structural failure for a committed Bootle/Lantern issuer-policy record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum BootleLanternIssuerPolicyValidationErrorV1 {
@@ -944,7 +909,6 @@ pub enum BootleLanternIssuerPolicyValidationErrorV1 {
     #[error("Bootle/Lantern issuer-policy revocation must preserve key material and policy rules")]
     RevocationMustPreservePolicy,
 }
-
 /// One canonical Bootle/Lantern selective-disclosure entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -958,7 +922,6 @@ pub struct BootleLanternDisclosedAttributeV1 {
     /// Direct public 64-bit attribute value.
     pub value: BootleLanternAttributeValueV1,
 }
-
 /// Native Bootle Lantern/LNP22 module-lattice anonymous-credential statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -984,7 +947,6 @@ pub struct IrohaBootleLanternAnoncredStatementV1 {
     /// Strictly increasing direct selectively disclosed attributes.
     pub disclosures: Vec<BootleLanternDisclosedAttributeV1>,
 }
-
 /// Direction of a public value balance relative to a private pool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1003,7 +965,6 @@ pub enum PrivacyValueBalanceDirectionV1 {
     /// Private value leaves the pool.
     OutOfPool,
 }
-
 /// Signed public value balance represented without JSON-ambiguous `i128`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1017,7 +978,6 @@ pub struct PrivacyValueBalanceV1 {
     /// Absolute atomic amount.
     pub amount: u128,
 }
-
 impl PrivacyValueBalanceV1 {
     /// Construct a zero public value balance.
     #[must_use]
@@ -1027,7 +987,6 @@ impl PrivacyValueBalanceV1 {
             amount: 0,
         }
     }
-
     /// Validate direction and magnitude consistency.
     ///
     /// # Errors
@@ -1049,7 +1008,6 @@ impl PrivacyValueBalanceV1 {
         Ok(())
     }
 }
-
 /// Exact public data for one Orchard V3 action.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1080,7 +1038,6 @@ pub struct PrivacyOrchardActionV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub value_commitment: [u8; 32],
 }
-
 /// Orchard Halo2 private action-bundle statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1112,7 +1069,6 @@ pub struct OrchardHalo2ActionsStatementV1 {
     /// Last block height at which the action is valid.
     pub expiry_height: u64,
 }
-
 /// Monero FCMP++ full-chain-membership transfer statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1142,7 +1098,6 @@ pub struct MoneroFcmpPlusPlusStatementV1 {
     /// Encrypted new outputs, aligned one-to-one with `outputs`.
     pub encrypted_outputs: Vec<PrivacyFcmpEncryptedOutputV1>,
 }
-
 /// Native IVM private-note execution statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1182,7 +1137,6 @@ pub struct IrohaIvmPrivateNoteStarkStatementV1 {
     /// Ledger epoch bound into private program execution.
     pub execution_epoch: u64,
 }
-
 impl IrohaIvmPrivateNoteStarkStatementV1 {
     /// Compute the action digest with its self-authenticating field normalized
     /// to zero.
@@ -1206,7 +1160,6 @@ impl IrohaIvmPrivateNoteStarkStatementV1 {
         Ok(PrivacyActionDigestV1::new(hasher.finalize().into()))
     }
 }
-
 /// Post-quantum authorization profile required by PQ-MASP v0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1221,7 +1174,6 @@ pub enum PrivacyPqAuthorizationProfileV1 {
     /// ML-DSA-65 transaction authorization.
     MlDsa65,
 }
-
 /// Post-quantum note-encryption profile required by PQ-MASP v0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1236,7 +1188,6 @@ pub enum PrivacyPqNoteEncryptionProfileV1 {
     /// ML-KEM-768 key establishment with XChaCha20-Poly1305 payload encryption.
     MlKem768XChaCha20Poly1305,
 }
-
 /// Post-quantum MASP STARK transfer statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1277,7 +1228,6 @@ pub struct PqMaspStarkStatementV1 {
     /// Ledger epoch bound into authorization.
     pub authorization_epoch: u64,
 }
-
 /// Protocol-typed canonical privacy statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.statement.v1")]
@@ -1315,7 +1265,6 @@ pub enum PrivacyStatementV1 {
     /// Post-quantum MASP STARK statement.
     PqMaspStarkV0(PqMaspStarkStatementV1),
 }
-
 impl PrivacyStatementV1 {
     /// Exact protocol carried by this statement variant.
     #[must_use]
@@ -1339,7 +1288,6 @@ impl PrivacyStatementV1 {
             Self::PqMaspStarkV0(_) => PrivacyProtocolIdV1::PqMaspStarkV0,
         }
     }
-
     /// Borrow the explicit shared context inside this protocol statement.
     #[must_use]
     pub const fn context(&self) -> &PrivacyStatementContextV1 {
@@ -1358,7 +1306,6 @@ impl PrivacyStatementV1 {
             Self::PqMaspStarkV0(statement) => &statement.context,
         }
     }
-
     /// Mutably borrow the explicit shared context inside this protocol statement.
     ///
     /// Transaction-intent normalization uses this single exhaustive boundary
@@ -1380,7 +1327,6 @@ impl PrivacyStatementV1 {
             Self::PqMaspStarkV0(statement) => &mut statement.context,
         }
     }
-
     /// Hash this complete protocol-tagged statement using canonical Norito bytes.
     ///
     /// # Errors
@@ -1398,7 +1344,6 @@ impl PrivacyStatementV1 {
         hasher.update(&encoded);
         Ok(PrivacyStatementDigestV1::new(*hasher.finalize().as_bytes()))
     }
-
     /// Validate the exact protocol statement and consensus resource bounds.
     ///
     /// # Errors
@@ -1444,7 +1389,6 @@ impl PrivacyStatementV1 {
         Ok(())
     }
 }
-
 fn validate_zk_ace(
     statement: &ZkAcePqAuthorizationStatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -1464,7 +1408,6 @@ fn validate_zk_ace(
     )?;
     require_nullifier(statement.replay_nullifier, 0)
 }
-
 fn validate_anonymous_pgc(
     statement: &AnonymousPgcKOutOfNStatementV1,
     _limits: &PrivacyConsensusLimitsV1,
@@ -1543,7 +1486,6 @@ fn validate_anonymous_pgc(
     }
     Ok(())
 }
-
 fn validate_verange(
     statement: &VeRangeTransparentRangeStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -1576,7 +1518,6 @@ fn validate_verange(
         PrivacyCountFieldV1::AggregatedCommitments,
     )
 }
-
 fn validate_zk_ams(
     statement: &IrohaZkAmsStatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -1608,7 +1549,6 @@ fn validate_zk_ams(
         }
     }
 }
-
 fn validate_zk_ams_batch_admission(
     batch: &PrivacyZkAmsBatchAdmissionV1,
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -1659,7 +1599,6 @@ fn validate_zk_ams_batch_admission(
     }
     Ok(())
 }
-
 fn validate_zk_ams_provision_account(
     provision: &PrivacyZkAmsProvisionAccountV1,
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -1694,7 +1633,6 @@ fn validate_zk_ams_provision_account(
     }
     Ok(())
 }
-
 fn validate_vega(
     statement: &VegaExistingCredentialStatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -1734,7 +1672,6 @@ fn validate_vega(
     }
     Ok(())
 }
-
 fn validate_vega_presentation_date(
     date: PrivacyVegaMdlDateV1,
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -1766,7 +1703,6 @@ fn validate_vega_presentation_date(
     }
     Ok(())
 }
-
 fn vega_gregorian_days_in_month(year: u16, month: u8) -> Option<u8> {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => Some(31),
@@ -1776,11 +1712,9 @@ fn vega_gregorian_days_in_month(year: u16, month: u8) -> Option<u8> {
         _ => None,
     }
 }
-
 fn vega_is_gregorian_leap_year(year: u16) -> bool {
     year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
-
 fn validate_zk_x509_governance_bindings(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -1830,7 +1764,6 @@ fn validate_zk_x509_governance_bindings(
     )?;
     Ok(())
 }
-
 fn validate_zk_x509_usage_and_disclosures(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -1890,7 +1823,6 @@ fn validate_zk_x509_usage_and_disclosures(
     )?;
     Ok(())
 }
-
 fn validate_zk_x509(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -1902,7 +1834,6 @@ fn validate_zk_x509(
     )?;
     require_nullifier(statement.certificate_nullifier, 0)
 }
-
 fn validate_zk_x509_presentation_window(
     start: u64,
     end: u64,
@@ -1922,7 +1853,6 @@ fn validate_zk_x509_presentation_window(
     }
     Ok(())
 }
-
 fn validate_jindo(
     statement: &IrohaJindoPolynomialCommitmentStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -2009,7 +1939,6 @@ fn validate_jindo(
     }
     Ok(())
 }
-
 fn is_canonical_jindo_field_element(element: &PrivacyJindoFieldElementV1) -> bool {
     for index in (0..IROHA_JINDO_FIELD_ELEMENT_BYTES_V1).rev() {
         if element.encoding[index] != IROHA_JINDO_FIELD_MODULUS_LE_V1[index] {
@@ -2018,7 +1947,6 @@ fn is_canonical_jindo_field_element(element: &PrivacyJindoFieldElementV1) -> boo
     }
     false
 }
-
 fn validate_bootle_lantern(
     statement: &IrohaBootleLanternAnoncredStatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -2068,7 +1996,6 @@ fn validate_bootle_lantern(
     }
     Ok(())
 }
-
 fn validate_orchard(
     statement: &OrchardHalo2ActionsStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -2133,7 +2060,6 @@ fn validate_orchard(
     }
     Ok(())
 }
-
 fn validate_fcmp(
     statement: &MoneroFcmpPlusPlusStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -2179,7 +2105,6 @@ fn validate_fcmp(
             });
         }
     }
-
     let max_outputs = FCMP_MAX_OUTPUTS_V1.min(limits.max_commitments_per_action);
     let output_count = u32_len(statement.outputs.len())?;
     if output_count == 0 || output_count > max_outputs {
@@ -2213,7 +2138,6 @@ fn validate_fcmp(
         max_outputs,
     )
 }
-
 fn validate_fcmp_encrypted_outputs(
     encrypted_outputs: &[PrivacyFcmpEncryptedOutputV1],
     outputs: &[PrivacyFcmpOutputTupleV1],
@@ -2260,7 +2184,6 @@ fn validate_fcmp_encrypted_outputs(
     }
     Ok(())
 }
-
 fn validate_ivm_private_note(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -2310,7 +2233,6 @@ fn validate_ivm_private_note(
     )?;
     validate_ivm_private_encrypted_outputs(&statement.encrypted_outputs)
 }
-
 fn validate_public_balance_scope(
     scope: AssetBalanceScope,
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -2322,7 +2244,6 @@ fn validate_public_balance_scope(
     }
     Ok(())
 }
-
 fn validate_pq_masp(
     statement: &PqMaspStarkStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -2366,7 +2287,6 @@ fn validate_pq_masp(
         limits,
     )
 }
-
 fn validate_nullifiers_with_max(
     values: &[PrivacyNullifierV1],
     require_nonempty: bool,
@@ -2387,7 +2307,6 @@ fn validate_nullifiers_with_max(
     }
     Ok(())
 }
-
 fn validate_commitments_with_max(
     values: &[PrivacyCommitmentV1],
     require_nonempty: bool,
@@ -2408,7 +2327,6 @@ fn validate_commitments_with_max(
     }
     Ok(())
 }
-
 fn validate_encrypted_outputs(
     outputs: &[PrivacyEncryptedOutputV1],
     commitments: &[PrivacyCommitmentV1],
@@ -2458,7 +2376,6 @@ fn validate_encrypted_outputs(
     }
     Ok(())
 }
-
 fn validate_ivm_private_encrypted_outputs(
     outputs: &[PrivacyEncryptedOutputV1],
 ) -> Result<(), PrivacyStatementValidationError> {
@@ -2481,7 +2398,6 @@ fn validate_ivm_private_encrypted_outputs(
     }
     Ok(())
 }
-
 fn require_nonzero_id(
     is_zero: bool,
     field: PrivacyTypedFieldV1,
@@ -2491,7 +2407,6 @@ fn require_nonzero_id(
     }
     Ok(())
 }
-
 fn require_epoch(
     epoch: u64,
     field: PrivacyEpochFieldV1,
@@ -2501,7 +2416,6 @@ fn require_epoch(
     }
     Ok(())
 }
-
 fn validate_next_root_transition(
     current_root: PrivacyRootV1,
     current_epoch: u64,
@@ -2524,7 +2438,6 @@ fn validate_next_root_transition(
     }
     Ok(())
 }
-
 fn require_nullifier(
     value: PrivacyNullifierV1,
     index: u32,
@@ -2534,7 +2447,6 @@ fn require_nullifier(
     }
     Ok(())
 }
-
 fn require_commitment(
     value: PrivacyCommitmentV1,
     index: u32,
@@ -2544,7 +2456,6 @@ fn require_commitment(
     }
     Ok(())
 }
-
 fn require_count(
     actual: usize,
     declared: u32,
@@ -2560,15 +2471,12 @@ fn require_count(
     }
     Ok(())
 }
-
 fn u32_len(len: usize) -> Result<u32, PrivacyStatementValidationError> {
     u32::try_from(len).map_err(|_| PrivacyStatementValidationError::PayloadLengthOverflow)
 }
-
 fn u32_index(index: usize) -> Result<u32, PrivacyStatementValidationError> {
     u32_len(index)
 }
-
 fn first_duplicate_index<T: PartialEq>(values: &[T]) -> Option<usize> {
     for later in 1..values.len() {
         if values[..later].contains(&values[later]) {
@@ -2577,7 +2485,6 @@ fn first_duplicate_index<T: PartialEq>(values: &[T]) -> Option<usize> {
     }
     None
 }
-
 impl PrivacyProtocolActivationLimitsV1 {
     /// Validate a statement against activation-specific governed count limits.
     ///
@@ -2638,7 +2545,6 @@ impl PrivacyProtocolActivationLimitsV1 {
         }
     }
 }
-
 fn validate_anonymous_pgc_activation_statement(
     limits: AnonymousPgcActivationLimitsV1,
     statement: &AnonymousPgcKOutOfNStatementV1,
@@ -2654,7 +2560,6 @@ fn validate_anonymous_pgc_activation_statement(
         limits.max_recipient_count,
     )
 }
-
 fn validate_zk_ams_activation_statement(
     limits: ZkAmsActivationLimitsV1,
     statement: &IrohaZkAmsStatementV1,
@@ -2672,7 +2577,6 @@ fn validate_zk_ams_activation_statement(
         ),
     }
 }
-
 fn validate_orchard_activation_statement(
     limits: OrchardActivationLimitsV1,
     statement: &OrchardHalo2ActionsStatementV1,
@@ -2683,7 +2587,6 @@ fn validate_orchard_activation_statement(
         limits.max_action_count,
     )
 }
-
 fn validate_fcmp_activation_statement(
     limits: FcmpActivationLimitsV1,
     statement: &MoneroFcmpPlusPlusStatementV1,
@@ -2699,7 +2602,6 @@ fn validate_fcmp_activation_statement(
         limits.max_output_count,
     )
 }
-
 fn validate_ivm_private_note_activation_statement(
     limits: IvmPrivateNoteActivationLimitsV1,
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
@@ -2715,7 +2617,6 @@ fn validate_ivm_private_note_activation_statement(
         limits.max_output_count,
     )
 }
-
 fn validate_pq_masp_activation_statement(
     limits: PqMaspActivationLimitsV1,
     statement: &PqMaspStarkStatementV1,
@@ -2731,7 +2632,6 @@ fn validate_pq_masp_activation_statement(
         limits.max_output_count,
     )
 }
-
 fn validate_activation_statement_count(
     field: PrivacyActivationLimitFieldV1,
     count: u32,
@@ -2742,7 +2642,6 @@ fn validate_activation_statement_count(
     }
     Ok(())
 }
-
 fn validate_activation_statement_len(
     field: PrivacyActivationLimitFieldV1,
     count: usize,

@@ -1,11 +1,9 @@
 //! Domain-separated governance proposal fingerprints.
-
 use iroha_crypto::blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
 };
 use norito::codec::Encode;
-
 pub const DEPLOY_CONTRACT_V1: &[u8] = b"iroha.governance.proposal.deploy_contract.v1";
 pub const RUNTIME_UPGRADE_V1: &[u8] = b"iroha.governance.proposal.runtime_upgrade.v1";
 pub const SCCP_ROUTE_GOVERNANCE_V1: &[u8] = b"iroha.governance.proposal.sccp_route_governance.v1";
@@ -16,7 +14,6 @@ pub const MUSUBI_REGISTRY_GOVERNANCE_V1: &[u8] =
     b"iroha.governance.proposal.musubi_registry_governance.v1";
 pub const SORAFS_PROVIDER_GOVERNANCE_V1: &[u8] =
     b"iroha.governance.proposal.sorafs_provider_governance.v1";
-
 pub fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
     let encoded = proposal.encode();
     let domain_len = u64::try_from(domain.len())
@@ -32,13 +29,10 @@ pub fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
         .expect("fingerprint output has the configured Blake2b length");
     fingerprint
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-
     use super::*;
-
     #[test]
     fn proposal_domains_are_unique() {
         let domains = [
@@ -55,7 +49,6 @@ mod tests {
             domains.len()
         );
     }
-
     #[test]
     fn fingerprint_binds_the_proposal_domain() {
         let proposal = 7_u32;

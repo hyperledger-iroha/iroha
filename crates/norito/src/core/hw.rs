@@ -4,12 +4,10 @@
 //! GPU availability so higher-level code can make deterministic choices about
 //! accelerated paths. All detection is best-effort and never changes the
 //! observable Norito format — only performance.
-
 use std::sync::{
     OnceLock,
     atomic::{AtomicBool, Ordering},
 };
-
 /// Snapshot of hardware capabilities relevant to Norito fast paths.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HwCaps {
@@ -25,15 +23,12 @@ pub struct HwCaps {
     // GPU backends for compression (feature-gated)
     pub gpu_zstd: bool,
 }
-
 static CAPS: OnceLock<HwCaps> = OnceLock::new();
 static GPU_ALLOWED: AtomicBool = AtomicBool::new(true);
-
 #[cfg_attr(not(feature = "gpu-compression"), allow(dead_code))]
 pub fn gpu_policy_allowed() -> bool {
     GPU_ALLOWED.load(Ordering::SeqCst)
 }
-
 /// Detect and cache hardware capabilities.
 pub fn detect() -> &'static HwCaps {
     CAPS.get_or_init(|| {
@@ -60,13 +55,11 @@ pub fn detect() -> &'static HwCaps {
         caps
     })
 }
-
 /// True if x86_64 AVX2 is available at runtime.
 #[inline]
 pub fn has_avx2() -> bool {
     detect().avx2
 }
-
 /// True if aarch64 NEON is available.
 #[inline]
 pub fn has_neon() -> bool {
@@ -79,7 +72,6 @@ pub fn has_neon() -> bool {
         false
     }
 }
-
 /// True if a GPU compression backend is available (CUDA or Metal).
 #[inline]
 pub fn has_gpu_compression() -> bool {
@@ -95,28 +87,23 @@ pub fn has_gpu_compression() -> bool {
         false
     }
 }
-
 /// Gate GPU compression availability via policy (default: allowed).
 pub fn set_gpu_compression_allowed(allowed: bool) {
     GPU_ALLOWED.store(allowed, Ordering::SeqCst);
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn gpu_policy_toggle_updates_state() {
         let baseline_allowed = gpu_policy_allowed();
         let baseline_has_gpu = has_gpu_compression();
-
         set_gpu_compression_allowed(false);
         assert!(!gpu_policy_allowed(), "policy flag should reflect disable");
         assert!(
             !has_gpu_compression(),
             "GPU compression must report unavailable once disabled"
         );
-
         set_gpu_compression_allowed(true);
         assert!(gpu_policy_allowed(), "policy flag should allow GPUs again");
         if baseline_allowed {
@@ -126,7 +113,6 @@ mod tests {
                 "reenabling policy should restore previous detection state"
             );
         }
-
         // Restore original configuration for other tests.
         set_gpu_compression_allowed(baseline_allowed);
         assert_eq!(

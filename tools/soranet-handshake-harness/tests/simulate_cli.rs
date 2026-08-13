@@ -1,16 +1,13 @@
 use std::fs;
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use tempfile::TempDir;
-
 #[test]
 fn simulate_writes_frames_and_telemetry() {
     let temp = TempDir::new().expect("tempdir");
     let frames_dir = temp.path().join("frames");
     let telemetry_path = temp.path().join("telemetry.json");
     let json_path = temp.path().join("report.json");
-
     let mut cmd = cargo_bin_cmd!("soranet-handshake-harness");
     cmd.args([
         "simulate",
@@ -41,7 +38,6 @@ fn simulate_writes_frames_and_telemetry() {
     ])
     .assert()
     .success();
-
     let report = fs::read_to_string(&json_path).expect("json report content");
     let report_value: Value = json::from_str(&report).expect("report JSON should parse");
     let report_obj = report_value
@@ -63,7 +59,6 @@ fn simulate_writes_frames_and_telemetry() {
         handshake_steps.len(),
         "frames directory should contain one frame per handshake step"
     );
-
     for step in handshake_steps {
         let step_obj = step
             .as_object()
@@ -88,7 +83,6 @@ fn simulate_writes_frames_and_telemetry() {
             "frame {path:?} should be padded to 1024-byte blocks"
         );
     }
-
     let telemetry = fs::read_to_string(&telemetry_path).expect("telemetry file should be written");
     let telemetry_value: Value = json::from_str(&telemetry).expect("telemetry JSON should parse");
     let telemetry_obj = telemetry_value
@@ -121,10 +115,8 @@ fn simulate_writes_frames_and_telemetry() {
         telemetry.ends_with('\n'),
         "telemetry payload should end with newline"
     );
-
     assert!(report.contains("transcript_hash_hex"));
 }
-
 #[test]
 fn inspect_rejects_pre_release_only_suite_lists() {
     let mut cmd = cargo_bin_cmd!("soranet-handshake-harness");

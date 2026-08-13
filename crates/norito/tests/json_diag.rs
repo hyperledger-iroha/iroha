@@ -1,5 +1,4 @@
 //! Diagnostic test to sanity-check Norito JSON parsing on sample payloads.
-
 #[test]
 fn diag_samples() {
     let samples = vec![

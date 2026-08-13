@@ -18,21 +18,18 @@ fn complete_certified_serve_episode_cannot_veto_pacemaker() {
         2,
         "a Complete predecessor episode must service the pacemaker exactly like a newly claimed episode"
     );
-
     service_certified_serve_barrier_pacemaker_turn(false, false, || {
         calls.set(calls.get().saturating_add(1));
         Err::<(), _>("typed pacemaker failure")
     })
     .expect_err("live runner propagates a typed pacemaker failure");
     assert_eq!(calls.get(), 3);
-
     service_certified_serve_barrier_pacemaker_turn(true, false, || {
         calls.set(calls.get().saturating_add(1));
         Ok::<(), ()>(())
     })
     .expect("interrupted-tip recovery does not arm a fresh pacemaker");
     assert_eq!(calls.get(), 3);
-
     #[cfg(feature = "bls")]
     {
         let mut recovery =
@@ -60,13 +57,11 @@ fn complete_certified_serve_episode_cannot_veto_pacemaker() {
             }
         }
         recovery.assert_complete();
-
         let mut late_passive_fetch =
             super::super::v2_worker::tests::SelectedServeTimeoutRecoveryFixture::new_late_passive_fetch();
         late_passive_fetch.assert_late_passive_fetch_completion_reopens_selected_serve();
     }
 }
-
 #[test]
 fn canonical_body_recovery_batches_all_ordered_heights_before_gate_close() {
     let need = |height: u64| {
@@ -109,12 +104,10 @@ fn canonical_body_recovery_batches_all_ordered_heights_before_gate_close() {
         !startup_gate_pending,
         "the gate opens only after all batches"
     );
-
     let mut duplicated = needs;
     duplicated[4] = duplicated[3];
     assert!(canonical_executed_block_recovery_batches(&duplicated, 3).is_err());
 }
-
 #[test]
 fn dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester() {
     let (mut services, _) = super::super::v2_worker::tests::fixture();
@@ -127,17 +120,14 @@ fn dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester() {
         "a carrierless live Serve lifecycle must restart into local startup discharge"
     );
 }
-
 #[test]
 fn committed_lane_status_publisher_retries_revision_drift_without_publication() {
     let _guard = super::super::status::rbc_status_test_guard();
     super::super::status::clear_v2_status();
     let revision = Cell::new((1_u64, 1_u64, 1_u64));
     let mut publisher = CommittedLaneStatusPublisher::default();
-
     assert!(publisher.publish_if_changed_with(|| revision.get(), Vec::new));
     assert_eq!(publisher.published_revision, Some((1, 1, 1)));
-
     revision.set((2, 1, 1));
     let projection_ran = Cell::new(false);
     assert!(
@@ -161,7 +151,6 @@ fn committed_lane_status_publisher_retries_revision_drift_without_publication() 
         super::super::status::committed_lane_blocks_snapshot().is_empty(),
         "revision drift must retain the prior global status root"
     );
-
     assert!(
         publisher.publish_if_changed_with(|| revision.get(), Vec::new),
         "the next stable runner edge must retry the newer revision"
@@ -169,7 +158,6 @@ fn committed_lane_status_publisher_retries_revision_drift_without_publication() 
     assert_eq!(publisher.published_revision, Some((3, 1, 1)));
     super::super::status::clear_v2_status();
 }
-
 #[test]
 fn pending_tip_recovery_gate_precedes_lane_work_construction() {
     let constructed = Cell::new(false);
@@ -183,7 +171,6 @@ fn pending_tip_recovery_gate_precedes_lane_work_construction() {
         !constructed.get(),
         "the lane-work constructor must not run before strict tip repair completes"
     );
-
     let value = construct_after_pending_tip_application_recovery(true, true, || {
         constructed.set(true);
         Ok(7_u8)
@@ -192,7 +179,6 @@ fn pending_tip_recovery_gate_precedes_lane_work_construction() {
     assert_eq!(value, 7);
     assert!(constructed.get());
 }
-
 #[test]
 fn pending_tip_recovery_deadline_is_bounded_and_fail_closed() {
     let _status_guard = super::super::status::rbc_status_test_guard();
@@ -208,7 +194,6 @@ fn pending_tip_recovery_deadline_is_bounded_and_fail_closed() {
         deadline.remaining(started_at + Duration::from_secs(29)),
         Duration::from_secs(1)
     );
-
     let output_guard = ConsensusOutputGuard::isolated();
     let error = pending_tip_recovery_deadline_error(
         output_guard.as_ref(),
@@ -227,7 +212,6 @@ fn pending_tip_recovery_deadline_is_bounded_and_fail_closed() {
     ));
     super::super::status::clear_v2_status();
 }
-
 #[test]
 fn bounded_sidecar_admission_turn_applies_only_its_budget() {
     let mut queued = VecDeque::from([1_u8, 2, 3]);
@@ -244,7 +228,6 @@ fn bounded_sidecar_admission_turn_applies_only_its_budget() {
     assert_eq!(count, 1);
     assert_eq!(applied, vec![1]);
     assert_eq!(queued, VecDeque::from([2, 3]));
-
     let result = apply_bounded_sidecar_admissions(
         2,
         || Ok::<_, &'static str>(queued.pop_front()),
@@ -253,7 +236,6 @@ fn bounded_sidecar_admission_turn_applies_only_its_budget() {
     assert_eq!(result, Err("fail-stop acknowledgement"));
     assert_eq!(queued, VecDeque::from([3]));
 }
-
 #[test]
 fn empty_drain_after_peek_is_restart_required_without_panicking() {
     assert!(matches!(
@@ -261,7 +243,6 @@ fn empty_drain_after_peek_is_restart_required_without_panicking() {
         Err(V2RunnerError::RestartRequired)
     ));
 }
-
 fn context() -> (wire::HeightContext, Vec<KeyPair>) {
     let mut keys = (1_u8..=4)
         .map(|seed| {
@@ -304,7 +285,6 @@ fn context() -> (wire::HeightContext, Vec<KeyPair>) {
         keys,
     )
 }
-
 fn decided_recovery_certified_request(
     context: &wire::HeightContext,
     requester_key: &KeyPair,
@@ -339,7 +319,6 @@ fn decided_recovery_certified_request(
         .to_vec();
     request
 }
-
 fn admitted_decided_recovery_request(
     context: &wire::HeightContext,
     request: &wire::CertifiedBodyRequest,
@@ -360,20 +339,17 @@ fn admitted_decided_recovery_request(
             .collect(),
     )
 }
-
 enum RecordedPrepareOutcome {
     Admitted(u8),
     Backpressure,
     Rejected(&'static str),
     Service(&'static str),
 }
-
 struct RecordingDecidedLaneAuthorizer {
     calls: Vec<&'static str>,
     stage_error: Option<&'static str>,
     prepare_outcome: Option<RecordedPrepareOutcome>,
 }
-
 impl RecordingDecidedLaneAuthorizer {
     fn new(prepare_outcome: RecordedPrepareOutcome) -> Self {
         Self {
@@ -383,10 +359,8 @@ impl RecordingDecidedLaneAuthorizer {
         }
     }
 }
-
 impl DecidedLaneRecoveryDrainAuthorizer for RecordingDecidedLaneAuthorizer {
     type Admission = u8;
-
     fn stage_negative(
         &mut self,
         _request_hash: HashOf<wire::CertifiedBodyRequest>,
@@ -396,7 +370,6 @@ impl DecidedLaneRecoveryDrainAuthorizer for RecordingDecidedLaneAuthorizer {
         self.stage_error
             .map_or(Ok(()), |reason| Err(reason.to_owned()))
     }
-
     fn prepare_exact(
         &mut self,
         _authenticated_via: &PeerId,
@@ -419,12 +392,10 @@ impl DecidedLaneRecoveryDrainAuthorizer for RecordingDecidedLaneAuthorizer {
         }
     }
 }
-
 struct RecordingDecidedLaneCommitter {
     calls: Vec<&'static str>,
     fail_on: Option<&'static str>,
 }
-
 impl RecordingDecidedLaneCommitter {
     fn new(fail_on: Option<&'static str>) -> Self {
         Self {
@@ -432,7 +403,6 @@ impl RecordingDecidedLaneCommitter {
             fail_on,
         }
     }
-
     fn record(&mut self, operation: &'static str) -> Result<(), V2RunnerError> {
         self.calls.push(operation);
         if self.fail_on == Some(operation) {
@@ -442,18 +412,14 @@ impl RecordingDecidedLaneCommitter {
         }
     }
 }
-
 impl DecidedLaneRecoveryDrainCommitter for RecordingDecidedLaneCommitter {
     type Admission = u8;
-
     fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
         self.record("lane-local")
     }
-
     fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError> {
         self.record("kura-replica-advert")
     }
-
     fn commit_current_serve(
         &mut self,
         current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
@@ -466,20 +432,16 @@ impl DecidedLaneRecoveryDrainCommitter for RecordingDecidedLaneCommitter {
             )),
         }
     }
-
     fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError> {
         self.record("bind-leader-wire")
     }
-
     fn commit_historical_serve(&mut self) -> Result<(), V2RunnerError> {
         self.record("serve-history")
     }
-
     fn commit_leader_wire_volatile(&mut self) -> Result<(), V2RunnerError> {
         self.record("retire-volatile")
     }
 }
-
 #[test]
 fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
     let (context, keys) = context();
@@ -508,7 +470,6 @@ fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
             },
         )
     };
-
     let mut staged = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
     let staged_decision =
         authorize_decided_lane_recovery_drain(prepare(decided_subject), &mut staged);
@@ -522,7 +483,6 @@ fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
     ));
     staged.calls.push("checked-drain");
     assert_eq!(staged.calls, ["stage-negative", "checked-drain"]);
-
     let mut failed_stage =
         RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
     failed_stage.stage_error = Some("durable negative write failed");
@@ -535,7 +495,6 @@ fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
             if reason == "durable negative write failed"
     ));
     assert_eq!(failed_stage.calls, ["stage-negative"]);
-
     let mut admitted = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Admitted(7));
     assert!(matches!(
         authorize_decided_lane_recovery_drain(prepare(subject), &mut admitted),
@@ -547,7 +506,6 @@ fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
     ));
     admitted.calls.push("checked-drain");
     assert_eq!(admitted.calls, ["prepare-exact", "checked-drain"]);
-
     let mut typed_rejection = RecordingDecidedLaneAuthorizer::new(
         RecordedPrepareOutcome::Rejected("typed negative was staged"),
     );
@@ -561,7 +519,6 @@ fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
     ));
     typed_rejection.calls.push("checked-drain");
     assert_eq!(typed_rejection.calls, ["prepare-exact", "checked-drain"]);
-
     let mut backpressured =
         RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
     assert!(matches!(
@@ -569,7 +526,6 @@ fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
         DecidedLaneRecoveryDrainDecision::Retain
     ));
     assert_eq!(backpressured.calls, ["prepare-exact"]);
-
     let mut failed_prepare = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Service(
         "Serve preparation failed",
     ));
@@ -584,7 +540,6 @@ fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
         "service failure cannot authorize checked dequeue"
     );
 }
-
 #[test]
 fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
     let mut exact = RecordingDecidedLaneCommitter::new(None);
@@ -599,7 +554,6 @@ fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
         DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
     );
     assert_eq!(exact.calls, ["serve-exact-decided"]);
-
     let mut negative = RecordingDecidedLaneCommitter::new(None);
     assert_eq!(
         commit_decided_lane_recovery_drain(
@@ -612,7 +566,6 @@ fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
         DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
     );
     assert_eq!(negative.calls, ["retire-staged-negative"]);
-
     let mut kura_replica_advert = RecordingDecidedLaneCommitter::new(None);
     assert_eq!(
         commit_decided_lane_recovery_drain(
@@ -623,7 +576,6 @@ fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
         DecidedLaneRecoveryDrainCommitOutcome::KuraReplicaAdvert
     );
     assert_eq!(kura_replica_advert.calls, ["kura-replica-advert"]);
-
     let mut historical = RecordingDecidedLaneCommitter::new(None);
     assert_eq!(
         commit_decided_lane_recovery_drain(
@@ -634,7 +586,6 @@ fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
         DecidedLaneRecoveryDrainCommitOutcome::HistoricalServe
     );
     assert_eq!(historical.calls, ["bind-leader-wire", "serve-history"]);
-
     let mut volatile = RecordingDecidedLaneCommitter::new(None);
     assert_eq!(
         commit_decided_lane_recovery_drain(
@@ -645,7 +596,6 @@ fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
         DecidedLaneRecoveryDrainCommitOutcome::LeaderWireVolatile
     );
     assert_eq!(volatile.calls, ["bind-leader-wire", "retire-volatile"]);
-
     let mut failed_bind = RecordingDecidedLaneCommitter::new(Some("bind-leader-wire"));
     assert!(
         commit_decided_lane_recovery_drain(
@@ -660,7 +610,6 @@ fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
         "a failed bind cannot publish VolatileTerminal"
     );
 }
-
 #[test]
 fn kura_replica_advert_error_classification_retires_only_invalid_remote_claims() {
     assert!(matches!(
@@ -675,7 +624,6 @@ fn kura_replica_advert_error_classification_retires_only_invalid_remote_claims()
         KuraReplicaAdvertAdmissionError::Fatal(crate::kura::Error::CanonicalStoragePoisoned)
     ));
 }
-
 #[test]
 fn drain_decided_lane_recovery_ingress_prepares_exact_and_typed_negative_branches() {
     let (context, keys) = context();
@@ -707,7 +655,6 @@ fn drain_decided_lane_recovery_ingress_prepares_exact_and_typed_negative_branche
             DecidedLaneRecoveryCurrentServe::Authenticated { request: authenticated, .. }
         ) if authenticated.request_hash() == HashOf::new(&request)
     ));
-
     assert!(matches!(
         prepare_decided_lane_recovery_ingress(
             &inbound,
@@ -723,7 +670,6 @@ fn drain_decided_lane_recovery_ingress_prepares_exact_and_typed_negative_branche
             }
         ) if request_hash == HashOf::new(&request)
     ));
-
     let decided_subject = proposal_subject(b"decided recovery winning subject");
     assert_ne!(decided_subject, subject);
     assert!(matches!(
@@ -751,7 +697,6 @@ fn drain_decided_lane_recovery_ingress_prepares_exact_and_typed_negative_branche
         ) if request_hash == HashOf::new(&request) && decided == decided_subject
     ));
 }
-
 #[test]
 fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traffic() {
     let (context, keys) = context();
@@ -772,7 +717,6 @@ fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traf
         ),
         DecidedLaneRecoveryIngressPreparation::HistoricalServe
     ));
-
     let peer = context.roster[0].validator.clone();
     let non_serve = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
         wire::PayloadChunk {
@@ -796,7 +740,6 @@ fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traf
         ),
         DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
     ));
-
     let mut wrong_version = non_serve;
     wrong_version.protocol_version = wrong_version.protocol_version.saturating_sub(1);
     let wrong_version =
@@ -811,7 +754,6 @@ fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traf
         DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
     ));
 }
-
 fn height_ingress_bindings_fixture(
     owner_marker: u8,
 ) -> (
@@ -853,7 +795,6 @@ fn height_ingress_bindings_fixture(
         .expect("configure joint height ingress");
     ingress.require_certified_serve_gate();
     ingress.require_leader_wire_lifecycle_gate();
-
     let ingress_ready = Arc::new(AtomicBool::new(false));
     let (serve_gate, lifecycle_ordinals) =
         super::super::v2_worker::tests::certified_serve_ingress_gate_fixture();
@@ -863,7 +804,6 @@ fn height_ingress_bindings_fixture(
         serve_gate.clone(),
     )
     .expect("bind joint height Serve gate");
-
     let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
         roster.len(),
         context.da_layout.max_chunk_count,
@@ -913,7 +853,6 @@ fn height_ingress_bindings_fixture(
         leader_gate,
     )
 }
-
 #[test]
 fn height_ingress_bindings_retire_both_gates_in_one_closed_cut() {
     let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
@@ -934,7 +873,6 @@ fn height_ingress_bindings_retire_both_gates_in_one_closed_cut() {
                 .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate))
         );
     }
-
     bindings
         .retire()
         .expect("retire both per-height ingress gates atomically");
@@ -953,7 +891,6 @@ fn height_ingress_bindings_retire_both_gates_in_one_closed_cut() {
         .retire()
         .expect("joint height retirement remains idempotent");
 }
-
 #[test]
 fn height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership() {
     {
@@ -970,7 +907,6 @@ fn height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership(
         ));
         assert!(ingress_ready.load(Ordering::Acquire));
         assert!(ingress.state.lock().open);
-
         drop(bindings);
         assert!(!ingress_ready.load(Ordering::Acquire));
         let state = ingress.state.lock();
@@ -990,7 +926,6 @@ fn height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership(
             "a failed joint validation cannot partially detach the leader-wire gate"
         );
     }
-
     {
         let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
             height_ingress_bindings_fixture(0xD7);
@@ -1005,7 +940,6 @@ fn height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership(
         ));
         assert!(ingress_ready.load(Ordering::Acquire));
         assert!(ingress.state.lock().open);
-
         drop(bindings);
         assert!(!ingress_ready.load(Ordering::Acquire));
         let state = ingress.state.lock();
@@ -1026,7 +960,6 @@ fn height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership(
         );
     }
 }
-
 fn leader_wire_runtime_ingress_fixture() -> (
     TempDir,
     FairV2Ingress,
@@ -1161,7 +1094,6 @@ fn leader_wire_runtime_ingress_fixture() -> (
         semantic_origin,
     )
 }
-
 #[test]
 fn fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry() {
     let (_directory, ingress, gate, ownership, message, semantic_origin) =
@@ -1176,7 +1108,6 @@ fn fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry() {
         None,
         "a runtime-bound owner has already left the durable Ingress selector"
     );
-
     assert!(matches!(
         complete_control_ingress_admission(
             &ingress,
@@ -1203,18 +1134,15 @@ fn fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry() {
         None
     );
 }
-
 fn test_predecessor(context: &wire::HeightContext, label: &[u8]) -> DurableV2PredecessorIdentity {
     DurableV2PredecessorIdentity::for_test(context.height, label)
 }
-
 fn test_successor_authority(
     predecessor: DurableV2PredecessorIdentity,
     successor_context_id: wire::HeightContextId,
 ) -> DurableSuccessorActivationAuthority {
     DurableSuccessorActivationAuthority::for_test(predecessor, successor_context_id)
 }
-
 fn test_recovered_complete_tip_authority(
     context: &wire::HeightContext,
     successor_context_id: wire::HeightContextId,
@@ -1265,7 +1193,6 @@ fn test_recovered_complete_tip_authority(
     )
     .expect("synthetic complete-tip activation matches its exact durable evidence")
 }
-
 fn valid_ingress_probe() -> BlockMessage {
     let validator = PeerId::new(
         KeyPair::try_from_seed(vec![0xD7; 32], Algorithm::BlsNormal)
@@ -1275,7 +1202,6 @@ fn valid_ingress_probe() -> BlockMessage {
     );
     super::super::v2_worker::tests::lane_commit_qc_block_message(validator)
 }
-
 fn runner_status(context: &wire::HeightContext) -> wire::SumeragiV2Status {
     wire::SumeragiV2Status {
         protocol_version: wire::PROTOCOL_VERSION,
@@ -1307,7 +1233,6 @@ fn runner_status(context: &wire::HeightContext) -> wire::SumeragiV2Status {
         liveness: Default::default(),
     }
 }
-
 fn publish_applied_runner_status(context: &wire::HeightContext) {
     let mut status = runner_status(context);
     status.phase = wire::SumeragiV2StatusPhase::PendingApply;
@@ -1327,7 +1252,6 @@ fn publish_applied_runner_status(context: &wire::HeightContext) {
     });
     super::super::status::set_v2_status(status);
 }
-
 fn labelled_lane_qc_message(peer: PeerId, label: &[u8]) -> BlockMessage {
     let mut message = super::super::v2_worker::tests::lane_commit_qc_block_message(peer);
     let BlockMessage::LaneBlockQc(qc) = &mut message else {
@@ -1336,7 +1260,6 @@ fn labelled_lane_qc_message(peer: PeerId, label: &[u8]) -> BlockMessage {
     qc.body.proposal_hash = Hash::new(label);
     message
 }
-
 fn lane_qc_label(message: &NetworkMessage) -> Hash {
     let NetworkMessage::SumeragiBlock(wire) = message else {
         panic!("runner scheduler fixture emitted a non-block network message")
@@ -1346,7 +1269,6 @@ fn lane_qc_label(message: &NetworkMessage) -> Hash {
     };
     qc.body.proposal_hash.clone()
 }
-
 fn runner_sidecar_chunk(
     local: PeerId,
     requester: PeerId,
@@ -1373,7 +1295,6 @@ fn runner_sidecar_chunk(
         bytes: vec![1, 2, 3, 4],
     }
 }
-
 #[test]
 fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
     let (mut services, keys) = super::super::v2_worker::tests::fixture();
@@ -1401,7 +1322,6 @@ fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
             .push((post.peer_id.clone(), lane_qc_label(&post.data)));
         Ok(())
     });
-
     let reserved_filler = Hash::new(b"runner reserved filler");
     let shared_filler = Hash::new(b"runner shared filler");
     for (label, expected) in [
@@ -1430,7 +1350,6 @@ fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
                 .all(|(_, actual)| actual != &expected)
         );
     }
-
     let blocked_label = Hash::new(b"runner blocked effect A");
     let responsive_label = Hash::new(b"runner reserved effect B");
     let blocked_effect = V2LaneWorkEffect::PostLaneBlock {
@@ -1445,7 +1364,6 @@ fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
         super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
     assert!(lane_work.requeue_effect(blocked_effect));
     assert!(lane_work.requeue_effect(responsive_effect));
-
     dispatch_lane_work_effects(&mut lane_work, &services, 1)
         .expect("reserved work bypasses the unserviceable head");
     assert_eq!(lane_work.effect_count(), 1);
@@ -1470,7 +1388,6 @@ fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
         );
         assert!(admitted.iter().all(|(_, label)| label != &blocked_label));
     }
-
     keep_blocked.store(false, Ordering::Release);
     assert!(
         !services
@@ -1505,7 +1422,6 @@ fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
     }
     assert_eq!(admitted.len(), 4);
 }
-
 #[test]
 fn runner_dispatch_preserves_durable_lane_certificate_reply_routes() {
     let history = super::super::v2_lane_work::tests::durable_lane_history_fixture();
@@ -1538,7 +1454,6 @@ fn runner_dispatch_preserves_durable_lane_certificate_reply_routes() {
     let route_a = route_fixture.mint_via(requester.clone(), hub_a.clone());
     let route_b = route_fixture.mint_via(requester.clone(), hub_b.clone());
     assert!(route_a.source_key() != route_b.source_key());
-
     let mut reply_routes = NetworkReplyRoutes::try_from_route(route_a.clone())
         .expect("first authenticated durable-response source");
     reply_routes
@@ -1547,7 +1462,6 @@ fn runner_dispatch_preserves_durable_lane_certificate_reply_routes() {
                 .expect("second authenticated durable-response source"),
         )
         .expect("attach the independent durable-response source");
-
     let mut admitted_a = super::super::fair_v2_ingress_admit_for_test(
         InboundBlockMessage::try_from_transport_with_reply_route(
             BlockMessage::LaneBlockProposal(history.certificate.proposal.clone()),
@@ -1579,7 +1493,6 @@ fn runner_dispatch_preserves_durable_lane_certificate_reply_routes() {
     );
     assert!(ingress_ownership.validate_exact());
     assert!(ingress_ownership.matches_reply_routes(Some(&reply_routes)));
-
     let mut effect = V2LaneWorkEffect::PostDurableLaneCertificate {
         peer: requester,
         reply_routes: Some(reply_routes),
@@ -1606,7 +1519,6 @@ fn runner_dispatch_preserves_durable_lane_certificate_reply_routes() {
         }
         other => panic!("durable response lost exact route ownership: {other:?}"),
     }
-
     dispatch_lane_work_effect(&services, effect)
         .expect("runner hands the Kura-backed certificate to exact output");
     assert!(
@@ -1625,7 +1537,6 @@ fn runner_dispatch_preserves_durable_lane_certificate_reply_routes() {
         "only the responsive authenticated source may reach exact-output dispatch"
     );
 }
-
 #[test]
 fn runner_dispatch_preserves_certified_sidecar_chunk_reply_routes() {
     let (mut services, keys) = super::super::v2_worker::tests::fixture();
@@ -1644,7 +1555,6 @@ fn runner_dispatch_preserves_certified_sidecar_chunk_reply_routes() {
     let reply_routes =
         NetworkReplyRoutes::try_from_route(route.clone()).expect("live reply route set");
     let chunk = runner_sidecar_chunk(local, requester.clone(), b"runner sidecar request");
-
     dispatch_lane_work_effect(
         &services,
         V2LaneWorkEffect::PostCertifiedMergeSidecar {

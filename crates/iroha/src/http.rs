@@ -1,11 +1,8 @@
 //! Module with general communication primitives like an HTTP request builder.
-
 use core::borrow::Borrow;
-
 use eyre::{Result, eyre};
 pub use http::{Method, Response, StatusCode};
 use url::Url;
-
 /// General HTTP request builder.
 ///
 /// To use custom builder with client, you need to implement this trait for some type and pass it
@@ -17,7 +14,6 @@ pub trait RequestBuilder {
     /// Create a new builder with specified method and URL. Entrypoint for most client operations.
     #[must_use]
     fn new(method: Method, url: Url) -> Self;
-
     /// Add multiple query params at once. Uses [`RequestBuilder::param`] for each param.
     #[must_use]
     fn params<P, K, V>(mut self, params: P) -> Self
@@ -34,11 +30,9 @@ pub trait RequestBuilder {
         }
         self
     }
-
     /// Add a single query param
     #[must_use]
     fn param<K: AsRef<str>, V: ToString + ?Sized>(self, key: K, value: &V) -> Self;
-
     /// Add multiple headers at once. Uses [`RequestBuilder::header`] for each param.
     #[must_use]
     fn headers<H: IntoIterator, N: AsRef<str>, V: ToString>(mut self, headers: H) -> Self
@@ -52,22 +46,17 @@ pub trait RequestBuilder {
         }
         self
     }
-
     /// Add a single header
     #[must_use]
     fn header<N: AsRef<str>, V: ToString + ?Sized>(self, name: N, value: &V) -> Self;
-
     /// Set request's binary body
     #[must_use]
     fn body(self, data: Vec<u8>) -> Self;
 }
-
 /// Generalization of `WebSocket` client's functionality
 pub mod ws {
     use url::Url;
-
     use super::{RequestBuilder, Result, eyre};
-
     /// `WebSocket` connection flow stages.
     ///
     /// Flow consists of the following:
@@ -223,7 +212,6 @@ pub mod ws {
     /// ```
     pub mod conn_flow {
         use super::*;
-
         /// Initial data to initialize connection and acquire handshake. Produced by implementor of [`Init`].
         pub struct InitData<R, E>
         where
@@ -237,7 +225,6 @@ pub mod ws {
             /// Handler for the next flow stage - handshake
             pub next: E,
         }
-
         impl<R, E> InitData<R, E>
         where
             R: RequestBuilder,
@@ -252,12 +239,10 @@ pub mod ws {
                 }
             }
         }
-
         /// Initial flow stage.
         pub trait Init<R: RequestBuilder> {
             /// The next handler
             type Next: Events;
-
             /// Consumes itself to produce initial data to:
             ///
             /// - Open WS connection;
@@ -267,12 +252,10 @@ pub mod ws {
             /// It doesn't return a `Result` because it doesn't accept any parameters except of itself.
             fn init(self) -> InitData<R, Self::Next>;
         }
-
         /// Events flow stage.
         pub trait Events {
             /// Something yielded by the handler
             type Event;
-
             /// Handles forthcoming Iroha message and returns:
             ///
             /// - Decoded event;
@@ -283,7 +266,6 @@ pub mod ws {
             fn message(&self, message: Vec<u8>) -> Result<Self::Event>;
         }
     }
-
     /// Replaces `http(s)://` with `ws(s)://`
     ///
     /// # Errors
@@ -299,7 +281,6 @@ pub mod ws {
                 ));
             }
         }
-
         Ok(url)
     }
 }

@@ -1,5 +1,4 @@
 //! Stream token issuance helpers for Torii chunk-range gateways.
-
 use std::{
     collections::BTreeMap,
     sync::{
@@ -8,7 +7,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use base64::Engine as _;
 use ed25519_dalek::VerifyingKey;
 use iroha_config::parameters::{actual, validate_production_runtime_handle};
@@ -22,7 +20,6 @@ use sorafs_manifest::{
     StreamTokenBodyV1, StreamTokenError, StreamTokenV1,
 };
 use thiserror::Error;
-
 /// Fixed rolling window applied to authenticated-subject issuance quotas.
 const ISSUANCE_QUOTA_WINDOW: Duration = Duration::from_mins(1);
 /// Maximum number of active authenticated issuance subjects retained by one gateway.
@@ -49,7 +46,6 @@ const MAX_TOKEN_RATE_LIMIT_BYTES: u64 = 1_073_741_824;
 const MAX_TOKEN_REQUESTS_PER_MINUTE: u32 = 10_000;
 /// Maximum tolerated positive clock skew for an otherwise valid token.
 pub(crate) const MAX_TOKEN_FUTURE_SKEW_SECS: u64 = 60;
-
 /// Payload-free failure categories exposed by a runtime-only stream-token
 /// signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -61,14 +57,12 @@ pub enum StreamTokenSigningError {
     #[error("stream-token runtime signer refused request")]
     Refused,
 }
-
 /// Public revision and policy identity reported by the stream-token signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StreamTokenRuntimeSignerQualificationV1 {
     revision: u64,
     policy_digest: [u8; 32],
 }
-
 impl StreamTokenRuntimeSignerQualificationV1 {
     /// Construct one public signer qualification.
     ///
@@ -81,19 +75,16 @@ impl StreamTokenRuntimeSignerQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return the exact non-zero adapter revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the exact non-zero public-policy digest.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     /// Reject a zero revision or zero policy digest.
     ///
     /// # Errors
@@ -109,7 +100,6 @@ impl StreamTokenRuntimeSignerQualificationV1 {
         Ok(())
     }
 }
-
 /// Invalid public stream-token signer qualification value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamTokenRuntimeSignerQualificationValueErrorV1 {
@@ -118,7 +108,6 @@ pub enum StreamTokenRuntimeSignerQualificationValueErrorV1 {
     /// Public-policy digest is all zeroes.
     ZeroPolicyDigest,
 }
-
 /// Payload-free failure while probing a runtime stream-token signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum StreamTokenRuntimeSignerProbeErrorV1 {
@@ -129,7 +118,6 @@ pub enum StreamTokenRuntimeSignerProbeErrorV1 {
     #[error("stream-token runtime signer probe stale or revoked")]
     StaleOrRevoked,
 }
-
 /// Runtime-only pure-Ed25519 signing boundary for stream-token issuance.
 ///
 /// Implementations own their credentials, sessions, and bounded provider
@@ -138,22 +126,18 @@ pub enum StreamTokenRuntimeSignerProbeErrorV1 {
 pub trait StreamTokenRuntimeSigner: Send + Sync {
     /// Return the exact opaque runtime handle bound by configuration.
     fn handle(&self) -> &str;
-
     /// Return the exact Ed25519 public key bound by configuration.
     fn public_key(&self) -> [u8; 32];
-
     /// Probe the exact active adapter revision and public-policy digest.
     fn qualification(
         &self,
     ) -> Result<StreamTokenRuntimeSignerQualificationV1, StreamTokenRuntimeSignerProbeErrorV1>;
-
     /// Sign one canonical, domain-separated stream-token payload.
     fn sign(
         &self,
         signing_payload: &[u8],
     ) -> Result<[u8; ed25519_dalek::SIGNATURE_LENGTH], StreamTokenSigningError>;
 }
-
 /// Issuer used to sign stream tokens with configured defaults.
 pub struct StreamTokenIssuer {
     signer: Arc<dyn StreamTokenRuntimeSigner>,
@@ -165,7 +149,6 @@ pub struct StreamTokenIssuer {
     max_issuance_budgets: usize,
     max_seen_epoch: AtomicU64,
 }
-
 /// Opaque, non-secret identity used for stream-token issuance accounting.
 ///
 /// The subject is derived only after the exact-network operator signature has
@@ -173,11 +156,9 @@ pub struct StreamTokenIssuer {
 /// used to construct quota identities.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct StreamTokenQuotaSubject([u8; 32]);
-
 impl StreamTokenQuotaSubject {
     const DERIVATION_CONTEXT: &'static str =
         "iroha.torii.sorafs.stream-token.issuance-quota-subject.v1";
-
     /// Derive a non-reversible quota subject from an authenticated operator
     /// public key.
     pub(crate) fn from_authenticated_operator(public_key: &PublicKey) -> Self {
@@ -186,7 +167,6 @@ impl StreamTokenQuotaSubject {
         Self(*hasher.finalize().as_bytes())
     }
 }
-
 /// Default limits applied when overrides are not supplied.
 #[derive(Debug, Clone, Copy)]
 struct TokenDefaults {
@@ -201,7 +181,6 @@ struct TokenDefaults {
     /// Default per-authenticated-subject issuance quota (requests per minute).
     requests_per_minute: u32,
 }
-
 /// Quota accounting snapshot for one authenticated issuance subject.
 #[derive(Debug, Clone, Copy)]
 struct IssuanceBudget {
@@ -210,7 +189,6 @@ struct IssuanceBudget {
     /// Issuances already consumed within the window.
     used: u32,
 }
-
 /// Overrides supplied when minting a token.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TokenOverrides {
@@ -223,7 +201,6 @@ pub struct TokenOverrides {
     /// Optional override for the per-token request quota (requests per minute).
     pub requests_per_minute: Option<u32>,
 }
-
 /// Result of a successful token issuance.
 #[derive(Debug)]
 pub struct TokenIssue {
@@ -232,7 +209,6 @@ pub struct TokenIssue {
     /// Remaining issuance quota within the current window.
     pub remaining_quota: u32,
 }
-
 impl StreamTokenIssuer {
     /// Construct an issuer from the Torii configuration.
     ///
@@ -329,7 +305,6 @@ impl StreamTokenIssuer {
             max_seen_epoch: AtomicU64::new(0),
         }))
     }
-
     /// Issue a signed stream token for the provided manifest details.
     ///
     /// # Errors
@@ -361,7 +336,6 @@ impl StreamTokenIssuer {
             overrides.requests_per_minute,
             self.defaults.requests_per_minute,
         )?;
-
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| StreamTokenIssuerError::TimeOverflow)?
@@ -370,7 +344,6 @@ impl StreamTokenIssuer {
         let ttl_epoch = now
             .checked_add(ttl_secs)
             .ok_or(StreamTokenIssuerError::TimeOverflow)?;
-
         let body = StreamTokenBodyV1 {
             token_id: new_token_id()?,
             manifest_cid,
@@ -384,7 +357,6 @@ impl StreamTokenIssuer {
             token_pk_version: self.defaults.key_version,
         };
         validate_token_body(&body)?;
-
         let remaining_quota = self.reserve_issuance_budget(quota_subject, Instant::now())?;
         let signing_payload = body
             .signing_payload_bytes()
@@ -403,13 +375,11 @@ impl StreamTokenIssuer {
         self.revalidate_runtime_signer()?;
         let token = StreamTokenV1::from_external_signature(body, signature, &self.verifying_key)
             .map_err(|_| StreamTokenIssuerError::RuntimeSignerOutputInvalid)?;
-
         Ok(TokenIssue {
             token,
             remaining_quota,
         })
     }
-
     fn revalidate_runtime_signer(&self) -> Result<(), StreamTokenIssuerError> {
         if self.signer.handle() != self.expected_signer_handle
             || validate_production_runtime_handle(self.signer.handle()).is_err()
@@ -432,24 +402,20 @@ impl StreamTokenIssuer {
         }
         Ok(())
     }
-
     /// Return the Ed25519 verifying key bytes.
     pub fn verifying_key_bytes(&self) -> [u8; 32] {
         self.verifying_key.to_bytes()
     }
-
     /// Return a reference to the verifying key used for stream tokens.
     #[must_use]
     pub fn verifying_key(&self) -> &VerifyingKey {
         &self.verifying_key
     }
-
     /// Return the default key version embedded in issued tokens.
     #[must_use]
     pub fn key_version(&self) -> u32 {
         self.defaults.key_version
     }
-
     fn reserve_issuance_budget(
         &self,
         quota_subject: StreamTokenQuotaSubject,
@@ -463,7 +429,6 @@ impl StreamTokenIssuer {
         budgets.retain(|_, budget| {
             now.saturating_duration_since(budget.window_start) < ISSUANCE_QUOTA_WINDOW
         });
-
         if let Some(budget) = budgets.get_mut(&quota_subject) {
             let elapsed = now.saturating_duration_since(budget.window_start);
             if budget.used >= limit {
@@ -481,7 +446,6 @@ impl StreamTokenIssuer {
             budget.used += 1;
             return Ok(limit - budget.used);
         }
-
         if budgets.len() >= self.max_issuance_budgets {
             return Err(StreamTokenIssuerError::IssuanceQuotaCapacityExceeded {
                 capacity: self.max_issuance_budgets,
@@ -496,7 +460,6 @@ impl StreamTokenIssuer {
         );
         Ok(limit - 1)
     }
-
     fn observe_epoch(&self, now: u64) -> Result<(), StreamTokenIssuerError> {
         let previous = self.max_seen_epoch.fetch_max(now, Ordering::SeqCst);
         if now < previous {
@@ -508,7 +471,6 @@ impl StreamTokenIssuer {
         Ok(())
     }
 }
-
 impl TokenDefaults {
     fn validate(self) -> Result<(), StreamTokenIssuerError> {
         validate_bounded_nonzero("key_version", self.key_version, u32::MAX)?;
@@ -530,7 +492,6 @@ impl TokenDefaults {
         )
     }
 }
-
 fn validate_bounded_nonzero<T>(
     field: &'static str,
     value: T,
@@ -547,7 +508,6 @@ where
     }
     Ok(())
 }
-
 fn checked_override<T>(
     field: &'static str,
     requested: Option<T>,
@@ -565,7 +525,6 @@ where
     }
     Ok(value)
 }
-
 /// Validate the context-free, canonical v1 stream-token body policy.
 pub fn validate_token_body(body: &StreamTokenBodyV1) -> Result<(), StreamTokenBodyError> {
     if body.token_id.len() != TOKEN_ID_HEX_LEN
@@ -610,12 +569,10 @@ pub fn validate_token_body(body: &StreamTokenBodyV1) -> Result<(), StreamTokenBo
     }
     Ok(())
 }
-
 fn new_token_id() -> Result<String, StreamTokenIssuerError> {
     let mut rng = OsRng;
     new_token_id_with_rng(&mut rng)
 }
-
 fn new_token_id_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<String, StreamTokenIssuerError> {
     let mut bytes = [0u8; 16];
     rng.try_fill_bytes(&mut bytes)
@@ -625,7 +582,6 @@ fn new_token_id_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<String, StreamT
         })?;
     Ok(hex::encode(bytes))
 }
-
 const fn map_runtime_signer_probe_error(
     error: StreamTokenRuntimeSignerProbeErrorV1,
 ) -> StreamTokenIssuerError {
@@ -638,7 +594,6 @@ const fn map_runtime_signer_probe_error(
         }
     }
 }
-
 /// Errors encountered while configuring or issuing stream tokens.
 #[derive(Debug, Error)]
 pub enum StreamTokenIssuerError {
@@ -745,7 +700,6 @@ pub enum StreamTokenIssuerError {
     #[error("stream-token issuance quota state is unavailable")]
     IssuanceQuotaStateUnavailable,
 }
-
 /// Canonical structural errors in a v1 stream-token body.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum StreamTokenBodyError {
@@ -779,7 +733,6 @@ pub enum StreamTokenBodyError {
     #[error("token_pk_version must be greater than zero")]
     KeyVersion,
 }
-
 /// Errors produced while decoding stream tokens from client headers.
 #[derive(Debug, Error)]
 pub enum StreamTokenHeaderError {
@@ -811,7 +764,6 @@ pub enum StreamTokenHeaderError {
     #[error("stream token signature must be exactly 64 bytes")]
     InvalidSignatureLength,
 }
-
 /// Encode a stream token into base64 suitable for transport headers.
 ///
 /// # Errors
@@ -821,7 +773,6 @@ pub fn encode_token_base64(token: &StreamTokenV1) -> Result<String, StreamTokenE
     let bytes = norito::to_bytes(token)?;
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
-
 /// Decode a stream token provided in a transport header.
 ///
 /// # Errors
@@ -855,42 +806,31 @@ pub fn decode_token_base64(value: &str) -> Result<StreamTokenV1, StreamTokenHead
     }
     Ok(token)
 }
-
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signer, SigningKey};
-
     use super::*;
-
     struct FailingTryRng;
-
     #[derive(Debug)]
     struct FailingTryRngError;
-
     impl std::fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing stream token RNG")
         }
     }
-
     impl TryRngCore for FailingTryRng {
         type Error = FailingTryRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingTryRngError)
         }
     }
-
     impl TryCryptoRng for FailingTryRng {}
-
     #[derive(Debug, Clone, Copy)]
     enum TestSignerMode {
         Sign,
@@ -899,7 +839,6 @@ mod tests {
         WrongKey,
         Malformed,
     }
-
     struct TestStreamTokenRuntimeSigner {
         handle: String,
         signing_key: SigningKey,
@@ -919,7 +858,6 @@ mod tests {
         signing_payloads: Mutex<Vec<Vec<u8>>>,
         calls: std::sync::atomic::AtomicUsize,
     }
-
     impl TestStreamTokenRuntimeSigner {
         fn new(handle: &str, seed: [u8; 32], mode: TestSignerMode) -> Self {
             let signing_key = SigningKey::from_bytes(&seed);
@@ -936,7 +874,6 @@ mod tests {
                 calls: std::sync::atomic::AtomicUsize::new(0),
             }
         }
-
         fn with_qualification_results(
             mut self,
             results: Vec<
@@ -952,18 +889,15 @@ mod tests {
                 .expect("test qualification results") = results;
             self
         }
-
         fn with_first_probe_public_key(mut self, public_key: [u8; 32]) -> Self {
             self.first_probe_public_key = Some(public_key);
             self
         }
     }
-
     impl StreamTokenRuntimeSigner for TestStreamTokenRuntimeSigner {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn public_key(&self) -> [u8; 32] {
             if self.qualification_calls.load(Ordering::Relaxed) == 1 {
                 return self
@@ -972,7 +906,6 @@ mod tests {
             }
             self.advertised_public_key
         }
-
         fn qualification(
             &self,
         ) -> Result<StreamTokenRuntimeSignerQualificationV1, StreamTokenRuntimeSignerProbeErrorV1>
@@ -985,7 +918,6 @@ mod tests {
                 .copied()
                 .unwrap_or(Ok(self.qualification))
         }
-
         fn sign(
             &self,
             signing_payload: &[u8],
@@ -1006,7 +938,6 @@ mod tests {
             }
         }
     }
-
     fn token_config(public_key: [u8; 32], requests_per_minute: u32) -> actual::SorafsTokenConfig {
         actual::SorafsTokenConfig {
             enabled: true,
@@ -1022,7 +953,6 @@ mod tests {
             ..actual::SorafsTokenConfig::default()
         }
     }
-
     fn issuer_and_signer(
         limit: u32,
         mode: TestSignerMode,
@@ -1039,7 +969,6 @@ mod tests {
             .expect("enabled issuer");
         (issuer, signer)
     }
-
     fn sample_body() -> StreamTokenBodyV1 {
         StreamTokenBodyV1 {
             token_id: "0123456789abcdef0123456789abcdef".to_string(),
@@ -1054,7 +983,6 @@ mod tests {
             token_pk_version: 3,
         }
     }
-
     #[test]
     fn sign_and_verify_roundtrip() {
         let signing = SigningKey::from_bytes(&[0x42; 32]);
@@ -1067,7 +995,6 @@ mod tests {
         let bytes = body.to_canonical_bytes().expect("bytes");
         assert_eq!(hash.as_bytes(), blake3::hash(&bytes).as_bytes());
     }
-
     #[test]
     fn new_token_id_reports_rng_failure() {
         let mut rng = FailingTryRng;
@@ -1080,7 +1007,6 @@ mod tests {
             Err(other) => panic!("expected RNG failure, got {other:?}"),
         }
     }
-
     #[test]
     fn signer_qualification_rejects_zero_public_fields() {
         assert_eq!(
@@ -1092,7 +1018,6 @@ mod tests {
             Err(StreamTokenRuntimeSignerQualificationValueErrorV1::ZeroPolicyDigest)
         );
     }
-
     #[test]
     fn disabled_issuance_rejects_an_unexpected_runtime_signer() {
         let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
@@ -1113,7 +1038,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn runtime_signer_binding_fails_closed() {
         let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
@@ -1123,31 +1047,26 @@ mod tests {
         ));
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer.clone();
         let mut config = token_config(signer.public_key(), 2);
-
         assert!(
             StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone()))
                 .expect("canonical production handle must be accepted")
                 .is_some()
         );
-
         config.enabled = false;
         assert!(matches!(
             StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
             Err(StreamTokenIssuerError::UnexpectedRuntimeSigner)
         ));
-
         config.enabled = true;
         assert!(matches!(
             StreamTokenIssuer::from_config(&config, None),
             Err(StreamTokenIssuerError::MissingRuntimeSigner)
         ));
-
         config.signer_handle = None;
         assert!(matches!(
             StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
             Err(StreamTokenIssuerError::MissingRuntimeSignerHandle)
         ));
-
         for invalid_handle in [
             "mock-stream-token",
             "https://operator:secret@signer",
@@ -1162,20 +1081,17 @@ mod tests {
                 Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle)
             ));
         }
-
         config.signer_handle = Some("pkcs11:prod/other-token/v1".to_owned());
         assert!(matches!(
             StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
             Err(StreamTokenIssuerError::RuntimeSignerHandleMismatch)
         ));
-
         config.signer_handle = Some("pkcs11:prod/stream-token/v1".to_owned());
         config.signer_public_key = None;
         assert!(matches!(
             StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
             Err(StreamTokenIssuerError::MissingRuntimeSignerPublicKey)
         ));
-
         let mut weak_public_key = [0; 32];
         weak_public_key[0] = 1;
         config.signer_public_key = Some(weak_public_key);
@@ -1183,7 +1099,6 @@ mod tests {
             StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
             Err(StreamTokenIssuerError::WeakRuntimeSignerPublicKey)
         ));
-
         config.signer_public_key = Some(
             SigningKey::from_bytes(&[0x34; 32])
                 .verifying_key()
@@ -1194,7 +1109,6 @@ mod tests {
             Err(StreamTokenIssuerError::RuntimeSignerPublicKeyMismatch)
         ));
     }
-
     #[test]
     fn runtime_signer_qualification_fails_closed_at_startup() {
         let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
@@ -1203,7 +1117,6 @@ mod tests {
             TestSignerMode::Sign,
         ));
         let mut config = token_config(signer.public_key(), 2);
-
         config.signer_revision = None;
         assert!(matches!(
             StreamTokenIssuer::from_config(&config, Some(signer.clone())),
@@ -1226,7 +1139,6 @@ mod tests {
             StreamTokenIssuer::from_config(&config, Some(signer.clone())),
             Err(StreamTokenIssuerError::RuntimeSignerQualificationMismatch)
         ));
-
         let unavailable = Arc::new(
             TestStreamTokenRuntimeSigner::new(
                 "pkcs11:prod/stream-token/v1",
@@ -1242,7 +1154,6 @@ mod tests {
             StreamTokenIssuer::from_config(&config, Some(unavailable)),
             Err(StreamTokenIssuerError::RuntimeSignerUnavailable)
         ));
-
         let expected = StreamTokenRuntimeSignerQualificationV1::new(4, [0xb4; 32]);
         let drifted = StreamTokenRuntimeSignerQualificationV1::new(5, [0xb4; 32]);
         let drifting = Arc::new(
@@ -1258,7 +1169,6 @@ mod tests {
             StreamTokenIssuer::from_config(&config, Some(drifting)),
             Err(StreamTokenIssuerError::RuntimeSignerQualificationChanged)
         ));
-
         let transient_identity_drift = Arc::new(
             TestStreamTokenRuntimeSigner::new(
                 "pkcs11:prod/stream-token/v1",
@@ -1272,7 +1182,6 @@ mod tests {
             StreamTokenIssuer::from_config(&config, Some(transient_identity_drift)),
             Err(StreamTokenIssuerError::RuntimeSignerQualificationMismatch)
         ));
-
         let test_marked = Arc::new(TestStreamTokenRuntimeSigner::new(
             "pkcs11:test/stream-token/v1",
             [0x33; 32],
@@ -1284,7 +1193,6 @@ mod tests {
             Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle)
         ));
     }
-
     #[test]
     fn verify_rejects_modified_body() {
         let signing = SigningKey::from_bytes(&[0x24; 32]);
@@ -1295,17 +1203,14 @@ mod tests {
         let err = tampered.verify(&verifying).expect_err("should fail");
         assert!(matches!(err, StreamTokenError::SignatureInvalid(_)));
     }
-
     fn issuer_with_limit(limit: u32) -> StreamTokenIssuer {
         issuer_with_capacity(limit, MAX_ISSUANCE_SUBJECTS)
     }
-
     fn issuer_with_capacity(limit: u32, max_issuance_budgets: usize) -> StreamTokenIssuer {
         let (mut issuer, _) = issuer_and_signer(limit, TestSignerMode::Sign);
         issuer.max_issuance_budgets = max_issuance_budgets;
         issuer
     }
-
     fn quota_subject(label: &str) -> StreamTokenQuotaSubject {
         let seed = *blake3::hash(label.as_bytes()).as_bytes();
         let signing_key = SigningKey::from_bytes(&seed);
@@ -1316,7 +1221,6 @@ mod tests {
         .expect("derived operator fixture key");
         StreamTokenQuotaSubject::from_authenticated_operator(&public_key)
     }
-
     #[test]
     fn issuer_signs_exact_payload_and_verifies_before_release() {
         let (issuer, signer) = issuer_and_signer(2, TestSignerMode::Sign);
@@ -1329,7 +1233,6 @@ mod tests {
                 TokenOverrides::default(),
             )
             .expect("issue verified token");
-
         let payloads = signer
             .signing_payloads
             .lock()
@@ -1352,7 +1255,6 @@ mod tests {
             "startup and the signing boundary each require two public probes"
         );
     }
-
     #[test]
     fn runtime_signer_qualification_is_fenced_before_and_after_signing() {
         let expected = StreamTokenRuntimeSignerQualificationV1::new(4, [0xb4; 32]);
@@ -1411,7 +1313,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn runtime_signer_probe_unavailability_before_signing_is_payload_free() {
         let expected = StreamTokenRuntimeSignerQualificationV1::new(4, [0xb4; 32]);
@@ -1447,7 +1348,6 @@ mod tests {
         assert_eq!(error.to_string(), "stream-token runtime signer unavailable");
         assert_eq!(signer.calls.load(Ordering::Relaxed), 0);
     }
-
     #[test]
     fn runtime_signer_failures_are_payload_free_and_consume_reserved_quota() {
         for (mode, expected) in [
@@ -1476,7 +1376,6 @@ mod tests {
             );
             assert_eq!(error.to_string(), expected.to_string());
             assert_eq!(signer.calls.load(Ordering::Relaxed), 1);
-
             assert!(matches!(
                 issuer.issue_token(
                     quota_subject("credential-hsm"),
@@ -1494,7 +1393,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn invalid_runtime_signer_output_never_releases_a_token() {
         for mode in [TestSignerMode::WrongKey, TestSignerMode::Malformed] {
@@ -1512,7 +1410,6 @@ mod tests {
             assert_eq!(signer.calls.load(Ordering::Relaxed), 1);
         }
     }
-
     #[test]
     fn authenticated_subject_quota_is_enforced() {
         let issuer = issuer_with_limit(2);
@@ -1522,7 +1419,6 @@ mod tests {
             requests_per_minute: Some(2),
             ..TokenOverrides::default()
         };
-
         let first = issuer
             .issue_token(
                 subject,
@@ -1533,7 +1429,6 @@ mod tests {
             )
             .expect("first token");
         assert_eq!(first.remaining_quota, 1);
-
         let second = issuer
             .issue_token(
                 subject,
@@ -1544,7 +1439,6 @@ mod tests {
             )
             .expect("second token");
         assert_eq!(second.remaining_quota, 0);
-
         let err = issuer
             .issue_token(
                 subject,
@@ -1558,7 +1452,6 @@ mod tests {
             err,
             StreamTokenIssuerError::IssuanceQuotaExceeded { .. }
         ));
-
         if let Some(entry) = issuer
             .issuance_budgets
             .lock()
@@ -1572,7 +1465,6 @@ mod tests {
             }
             entry.used = 2;
         }
-
         let refreshed = issuer
             .issue_token(
                 subject,
@@ -1584,7 +1476,6 @@ mod tests {
             .expect("quota reset");
         assert_eq!(refreshed.remaining_quota, 1);
     }
-
     #[test]
     fn zero_and_above_ceiling_overrides_fail_closed() {
         let issuer = issuer_with_limit(2);
@@ -1634,7 +1525,6 @@ mod tests {
                 Err(StreamTokenIssuerError::InvalidPolicy { .. })
             ));
         }
-
         let valid = issuer
             .issue_token(
                 quota_subject("credential-free"),
@@ -1646,7 +1536,6 @@ mod tests {
             .expect("invalid requests must not consume issuance quota");
         assert_eq!(valid.remaining_quota, 1);
     }
-
     #[test]
     fn issuance_state_capacity_fails_closed_and_prunes_idle_subjects() {
         let issuer = issuer_with_capacity(2, 2);
@@ -1671,7 +1560,6 @@ mod tests {
             ),
             Err(StreamTokenIssuerError::IssuanceQuotaCapacityExceeded { capacity: 2 })
         ));
-
         let stale = Instant::now()
             .checked_sub(ISSUANCE_QUOTA_WINDOW + Duration::from_secs(1))
             .expect("stale instant");
@@ -1692,14 +1580,12 @@ mod tests {
             )
             .expect("stale client pruned before capacity check");
     }
-
     #[test]
     fn concurrent_issuance_never_exceeds_authenticated_subject_budget() {
         use std::{
             sync::{Arc, Barrier, atomic::AtomicUsize, atomic::Ordering},
             thread,
         };
-
         const THREADS: usize = 32;
         const LIMIT: u32 = 7;
         let issuer = Arc::new(issuer_with_limit(LIMIT));
@@ -1732,11 +1618,9 @@ mod tests {
         }
         assert_eq!(successes.load(Ordering::Relaxed), LIMIT as usize);
     }
-
     #[test]
     fn poisoned_issuance_state_fails_closed() {
         use std::{sync::Arc, thread};
-
         let issuer = Arc::new(issuer_with_limit(2));
         let poisoner = Arc::clone(&issuer);
         let poisoned = thread::spawn(move || {
@@ -1745,7 +1629,6 @@ mod tests {
         })
         .join();
         assert!(poisoned.is_err(), "poisoning worker must panic");
-
         assert!(matches!(
             issuer.issue_token(
                 quota_subject("credential-a"),
@@ -1757,7 +1640,6 @@ mod tests {
             Err(StreamTokenIssuerError::IssuanceQuotaStateUnavailable)
         ));
     }
-
     #[test]
     fn issuance_wall_clock_rollback_fails_closed() {
         let issuer = issuer_with_limit(2);
@@ -1770,7 +1652,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn canonical_body_validation_rejects_each_unsafe_dimension() {
         let mut cases = Vec::new();
@@ -1801,33 +1682,28 @@ mod tests {
         let mut body = sample_body();
         body.token_pk_version = 0;
         cases.push((body, StreamTokenBodyError::KeyVersion));
-
         for (body, expected) in cases {
             assert_eq!(validate_token_body(&body), Err(expected));
         }
     }
-
     #[test]
     fn canonical_body_accepts_exact_maximum_lifetime_and_rejects_max_plus_one() {
         let mut maximum = sample_body();
         maximum.issued_at = 1_700_000_000;
         maximum.ttl_epoch = maximum.issued_at + STREAM_TOKEN_MAX_TTL_SECS_V1;
         validate_token_body(&maximum).expect("exact maximum lifetime");
-
         maximum.ttl_epoch += 1;
         assert_eq!(
             validate_token_body(&maximum),
             Err(StreamTokenBodyError::Lifetime)
         );
     }
-
     #[test]
     fn base64_decoder_enforces_canonical_bounded_frame_and_body() {
         let signing = SigningKey::from_bytes(&[0x42; 32]);
         let token = StreamTokenV1::sign(sample_body(), &signing).expect("sign");
         let encoded = encode_token_base64(&token).expect("encode");
         assert_eq!(decode_token_base64(&encoded).expect("decode"), token);
-
         assert!(matches!(
             decode_token_base64(&"A".repeat(MAX_STREAM_TOKEN_BASE64_BYTES + 1)),
             Err(StreamTokenHeaderError::HeaderTooLong { .. })
@@ -1839,7 +1715,6 @@ mod tests {
             decode_token_base64(&oversized_wire),
             Err(StreamTokenHeaderError::PayloadTooLong { .. })
         ));
-
         let mut invalid_body = sample_body();
         invalid_body.provider_id = [0; 32];
         let invalid_token = StreamTokenV1::sign(invalid_body, &signing).expect("sign invalid body");
@@ -1850,7 +1725,6 @@ mod tests {
                 StreamTokenBodyError::ProviderId
             ))
         ));
-
         let mut short_signature = token;
         short_signature.signature.pop();
         let short_encoded = encode_token_base64(&short_signature).expect("encode short signature");

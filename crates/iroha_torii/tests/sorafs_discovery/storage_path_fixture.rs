@@ -5,7 +5,6 @@ fn storage_temp_data_dir(temp_dir: &TempDir) -> PathBuf {
         .expect("canonical storage temp dir")
         .join("storage")
 }
-
 #[test]
 fn sorafs_storage_temp_data_dir_uses_canonical_parent() {
     let temp_dir = tempdir().expect("storage temp dir");

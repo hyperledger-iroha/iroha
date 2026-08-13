@@ -1,6 +1,5 @@
 //! `SoraFS` helper commands for interacting with Torii REST endpoints.
 #![allow(clippy::size_of_ref)]
-
 use super::{
     da::{normalize_ticket_hex, persist_manifest_bundle},
     da_common::DaManifestFetcher,
@@ -20,7 +19,6 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use crate::{CliOutputFormat, Run, RunContext, cli_output::print_with_optional_text};
 use base64::{
     Engine,
@@ -83,9 +81,7 @@ use sorafs_car::{
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::chunker_registry;
 use sorafs_manifest::deal::XorQuantity;
-use sorafs_manifest::repair::{
-    REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairSlashProposalV1, RepairTicketId,
-};
+use sorafs_manifest::repair::{REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairSlashProposalV1, RepairTicketId};
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
     StorageClass as ManifestStorageClass,
@@ -118,7 +114,6 @@ use soranet_pq::MlDsaSuite;
 use time::{Duration as TimeDelta, OffsetDateTime, format_description::well_known::Rfc3339};
 use tiny_keccak::{Hasher as _, Sha3};
 use tokio::runtime::Runtime;
-
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
@@ -157,7 +152,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{NoritoSerialize, decode_from_bytes};
-
 #[allow(dead_code)]
 const ML_KEM_768_PUBLIC_LEN: usize = 1184;
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Default)]
@@ -244,7 +238,6 @@ impl ReserveDurationArg {
 mod capture_path_tests {
     use super::{default_orchestrator_capture_dir, scoreboard_capture_paths};
     use std::path::PathBuf;
-
     #[test]
     fn defaults_use_artifacts_directory() {
         let capture = scoreboard_capture_paths(None, None);
@@ -273,7 +266,6 @@ mod capture_path_tests {
 mod provider_count_tests {
     use super::{ProviderCounts, insert_provider_counts};
     use norito::json::Value;
-
     #[test]
     fn provider_counts_include_gateway_only_runs() {
         let mut summary = norito::json::Map::new();
@@ -307,7 +299,6 @@ mod provider_count_tests {
 mod transport_policy_summary_tests {
     use super::{TransportPolicy, insert_transport_policy};
     use norito::json::Value;
-
     #[test]
     fn summary_records_transport_policy_overrides() {
         let mut summary = norito::json::Map::new();
@@ -358,7 +349,6 @@ mod transport_policy_summary_tests {
 mod telemetry_summary_tests {
     use super::{insert_summary_telemetry_region, insert_summary_telemetry_source};
     use norito::json::Value;
-
     #[test]
     fn summary_records_telemetry_label() {
         let mut summary = norito::json::Map::new();
@@ -773,13 +763,11 @@ type BillingProofFileIdentity = ();
 #[cfg(unix)]
 fn billing_proof_file_identity(metadata: &fs::Metadata) -> BillingProofFileIdentity {
     use std::os::unix::fs::MetadataExt as _;
-
     (metadata.dev(), metadata.ino())
 }
 #[cfg(windows)]
 fn billing_proof_file_identity(metadata: &fs::Metadata) -> BillingProofFileIdentity {
     use std::os::windows::fs::MetadataExt as _;
-
     (metadata.volume_serial_number(), metadata.file_index())
 }
 #[cfg(not(any(unix, windows)))]
@@ -800,13 +788,11 @@ fn billing_proof_file_is_single_link(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         metadata.nlink() == 1
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
-
         metadata.number_of_links() == Some(1)
     }
     #[cfg(not(any(unix, windows)))]
@@ -818,7 +804,6 @@ fn billing_proof_file_is_single_link(metadata: &fs::Metadata) -> bool {
 #[cfg(windows)]
 fn billing_proof_file_is_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
@@ -832,7 +817,6 @@ fn billing_proof_file_is_indirect(metadata: &fs::Metadata) -> bool {
 #[cfg(unix)]
 fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     billing_proof_file_identity(left) == billing_proof_file_identity(right)
         && left.nlink() == 1
         && right.nlink() == 1
@@ -845,7 +829,6 @@ fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -
 #[cfg(windows)]
 fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     billing_proof_file_identity_available(billing_proof_file_identity(left))
         && billing_proof_file_identity(left) == billing_proof_file_identity(right)
         && left.number_of_links() == Some(1)
@@ -876,7 +859,6 @@ fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
 #[cfg(windows)]
 fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     let mut options = fs::OpenOptions::new();
     options
@@ -1642,6 +1624,7 @@ impl Run for TransparencyExplorerCanaryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let timeout = Duration::from_secs(self.timeout_secs.max(1));
         let client = BlockingHttpClient::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .user_agent("sorafs-cli transparency-explorer-canary")
             .build()
@@ -1702,6 +1685,7 @@ impl Run for TransparencyPublicationCanaryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let timeout = Duration::from_secs(self.timeout_secs.max(1));
         let client = BlockingHttpClient::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .user_agent("sorafs-cli transparency-publication-canary")
             .build()
@@ -2937,6 +2921,7 @@ impl Run for ModerationQuarantineNotificationsDeliverArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let timeout = Duration::from_secs(self.timeout_secs.max(1));
         let http_client = BlockingHttpClient::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .user_agent("iroha-cli sorafs-moderation-notifications")
             .build()
@@ -3070,6 +3055,7 @@ impl Run for ModerationQuarantineNotificationsCanaryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let timeout = Duration::from_secs(self.timeout_secs.max(1));
         let http_client = BlockingHttpClient::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .user_agent("iroha-cli sorafs-moderation-notification-canary")
             .build()
@@ -3396,6 +3382,7 @@ impl Run for ModerationQuarantineOperatorCanaryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let timeout = Duration::from_secs(self.timeout_secs.max(1));
         let client = BlockingHttpClient::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .user_agent("sorafs-cli moderation-operator-canary")
             .build()
@@ -4437,7 +4424,6 @@ fn parse_optional_timestamp(value: Option<&str>, field: &str) -> Result<Option<u
 #[cfg(test)]
 mod gar_receipt_cli_tests {
     use super::*;
-
     #[test]
     fn parse_timestamp_accepts_rfc3339() {
         let ts = parse_timestamp_value("2026-05-10T10:15:00Z", "triggered-at")
@@ -6774,7 +6760,6 @@ fn load_manifest_envelope(path: &Path) -> Result<String> {
 mod fetch_args_manifest_tests {
     use super::{DownloadedManifest, merge_manifest_inputs};
     use std::path::PathBuf;
-
     #[test]
     fn merge_inputs_prefers_explicit_values() {
         let manifest = PathBuf::from("/tmp/manifest_explicit.to");
@@ -6832,7 +6817,6 @@ mod manifest_envelope_tests {
     };
     use std::io::Write;
     use tempfile::NamedTempFile;
-
     #[test]
     fn load_manifest_envelope_rejects_empty_files() {
         let file = NamedTempFile::new().expect("temp file");
@@ -6888,7 +6872,6 @@ mod manifest_envelope_tests {
 mod cli_scoreboard_metadata_tests {
     use super::*;
     use norito::json::Value;
-
     #[test]
     fn cli_scoreboard_metadata_records_policy_overrides() {
         let value = cli_scoreboard_metadata(&ScoreboardMetadataInput {
@@ -8699,7 +8682,6 @@ struct ShadowRunSummary {
 #[allow(clippy::too_many_lines)]
 fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummary {
     use std::collections::BTreeMap;
-
     #[derive(Default)]
     struct RelayAccumulator {
         epochs: usize,
@@ -9957,7 +9939,6 @@ fn file_is_executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         fs::metadata(path)
             .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
@@ -10261,7 +10242,6 @@ fn set_executable_if_supported(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let mut permissions = fs::metadata(path)
             .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?
             .permissions();
@@ -13279,7 +13259,6 @@ impl Run for GatewayCacheInvalidateArgs {
 mod gateway_tests {
     use super::tests::{TestContext, assert_sorafs_config_snippet_is_schema_valid};
     use super::*;
-
     #[test]
     fn template_config_uses_host_override() {
         let args = GatewayTemplateConfigArgs {
@@ -17262,7 +17241,6 @@ mod tests {
             RelayEpochMetricsV1, RelayRewardDisputeV1, RelayRewardInstructionV1,
         },
     };
-
     use iroha_i18n::{Bundle, Language, Localizer};
     use iroha_primitives::numeric::Quantity;
     use norito::json::{Map, Value};
@@ -17278,25 +17256,21 @@ mod tests {
     };
     use sorafs_orchestrator::soranet::EndpointTag;
     use sorafs_orchestrator::{incentives::RewardConfig, treasury::ExpectedLedgerTransfer};
-    use soranet_pq::{
-        MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
-    };
+    use soranet_pq::{MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use std::{
         fmt::{self, Display},
         fs,
-        io::Write,
+        io::{Read as _, Write},
         path::Path,
         str::FromStr,
         time::{Duration, SystemTime},
     };
     use tempfile::{NamedTempFile, TempDir};
     use url::Url;
-
     include!("sorafs_nonce_rng_tests.rs");
     #[test]
     fn hedging_billing_subcommands_parse_all_read_and_ack_routes() {
         use clap::Parser as _;
-
         #[derive(clap::Parser)]
         struct Parser {
             #[command(subcommand)]
@@ -17523,7 +17497,6 @@ mod tests {
     #[test]
     fn hedging_billing_cli_rejects_symlink_proof() {
         use std::os::unix::fs::symlink;
-
         let proof_dir = TempDir::new().expect("proof directory");
         let target = proof_dir.path().join("proof-target.bin");
         let link = proof_dir.path().join("proof-link.bin");
@@ -17633,7 +17606,6 @@ mod tests {
     #[test]
     fn billing_statement_cli_refuses_to_follow_output_symlink() {
         use std::os::unix::fs::symlink;
-
         let output_dir = TempDir::new().expect("statement output directory");
         let target = output_dir.path().join("target.norito");
         let output = output_dir.path().join("statement.norito");
@@ -19179,55 +19151,30 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         assert!(!ctx.printed[0].contains("proof_token_digest_key"));
         let value: Value = norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.transparency.explorer_canary.v1")
-        );
-        assert_eq!(value.get("status").and_then(Value::as_str), Some("passed"));
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(6));
-        assert_eq!(value.get("route_count").and_then(Value::as_u64), Some(3));
-        assert_eq!(
-            value.get("payload_bytes_included").and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            value
-                .get("private_digest_keys_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let routes = value
-            .get("routes")
-            .and_then(Value::as_array)
-            .expect("canary routes");
-        assert!(
-            routes
+        let schema = value["schema"].as_str();
+        assert_eq!(schema, Some("sorafs.transparency.explorer_canary.v1"));
+        assert_eq!(value["status"].as_str(), Some("passed"));
+        assert_eq!(value["limit"].as_u64(), Some(6));
+        assert_eq!(value["route_count"].as_u64(), Some(3));
+        assert_eq!(value["payload_bytes_included"].as_bool(), Some(false));
+        assert_eq!(value["private_digest_keys_included"].as_bool(), Some(false));
+        let routes = value["routes"].as_array().expect("canary routes");
+        for name in ["browser_ui", "proof_token_issuance_index"] {
+            let found = routes
                 .iter()
-                .any(|route| route.get("name").and_then(Value::as_str) == Some("browser_ui"))
-        );
-        assert!(
-            routes
-                .iter()
-                .any(|route| route.get("name").and_then(Value::as_str)
-                    == Some("proof_token_issuance_index"))
-        );
+                .any(|route| route["name"].as_str() == Some(name));
+            assert!(found);
+        }
         let explorer = routes
             .iter()
-            .find(|route| route.get("name").and_then(Value::as_str) == Some("explorer_snapshot"))
+            .find(|route| route["name"].as_str() == Some("explorer_snapshot"))
             .expect("explorer route evidence");
-        let explorer_url = explorer
-            .get("url")
-            .and_then(Value::as_str)
-            .expect("explorer URL");
+        let explorer_url = explorer["url"].as_str().expect("explorer URL");
         assert!(explorer_url.contains("/root/v1/sorafs/transparency/explorer"));
         assert!(explorer_url.contains("limit=6"));
-        let written: Value =
-            norito::json::from_slice(&fs::read(out).expect("written canary evidence"))
-                .expect("written evidence JSON");
-        assert_eq!(
-            written.get("schema").and_then(Value::as_str),
-            Some("sorafs.transparency.explorer_canary.v1")
-        );
+        let bytes = fs::read(out).expect("written canary evidence");
+        let written: Value = norito::json::from_slice(&bytes).expect("written evidence JSON");
+        assert_eq!(written["schema"], value["schema"]);
     }
     #[test]
     fn transparency_explorer_canary_rejects_private_digest_keys() {
@@ -19350,51 +19297,25 @@ mod tests {
         assert!(!ctx.printed[0].contains("manifest-must-not-leak"));
         let value: Value =
             norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.transparency.publication_canary.v1")
-        );
-        assert_eq!(value.get("status").and_then(Value::as_str), Some("passed"));
-        assert_eq!(value.get("route_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(
-            value.get("passed_route_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            value
-                .get("cycle_detail_probe_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value
-                .get("publication_bodies_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let routes = value
-            .get("routes")
-            .and_then(Value::as_array)
+        let schema = value["schema"].as_str();
+        assert_eq!(schema, Some("sorafs.transparency.publication_canary.v1"));
+        assert_eq!(value["status"].as_str(), Some("passed"));
+        assert_eq!(value["route_count"].as_u64(), Some(2));
+        assert_eq!(value["passed_route_count"].as_u64(), Some(2));
+        assert_eq!(value["cycle_detail_probe_count"].as_u64(), Some(1));
+        assert_eq!(value["publication_bodies_included"].as_bool(), Some(false));
+        let routes = value["routes"]
+            .as_array()
             .expect("publication canary routes");
-        assert!(routes.iter().all(|route| {
-            route
-                .get("anchor_metadata_present")
-                .and_then(Value::as_bool)
-                == Some(true)
-        }));
-        assert!(routes.iter().all(|route| {
-            route
-                .get("publisher_identity_present")
-                .and_then(Value::as_bool)
-                == Some(true)
-        }));
-        let written: Value =
-            norito::json::from_slice(&fs::read(out).expect("written publication canary evidence"))
-                .expect("written evidence JSON");
-        assert_eq!(
-            written.get("schema").and_then(Value::as_str),
-            Some("sorafs.transparency.publication_canary.v1")
-        );
+        for field in ["anchor_metadata_present", "publisher_identity_present"] {
+            let all_present = routes
+                .iter()
+                .all(|route| route[field].as_bool() == Some(true));
+            assert!(all_present);
+        }
+        let bytes = fs::read(out).expect("written publication canary evidence");
+        let written: Value = norito::json::from_slice(&bytes).expect("written evidence JSON");
+        assert_eq!(written["schema"], value["schema"]);
     }
     #[test]
     fn transparency_publication_canary_rejects_malformed_cycle_id_before_fetch() {
@@ -19434,20 +19355,12 @@ mod tests {
         let value: Value =
             norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
         assert_eq!(value.get("status").and_then(Value::as_str), Some("failed"));
-        assert_eq!(
-            value.get("passed_route_count").and_then(Value::as_u64),
-            Some(0)
-        );
+        assert_eq!(value["passed_route_count"].as_u64(), Some(0));
+        let routes = value["routes"].as_array().expect("routes");
         assert!(
-            value
-                .get("routes")
-                .and_then(Value::as_array)
-                .expect("routes")
+            routes
                 .iter()
-                .all(|route| route
-                    .get("publisher_identity_present")
-                    .and_then(Value::as_bool)
-                    == Some(false))
+                .all(|route| route["publisher_identity_present"].as_bool() == Some(false))
         );
     }
     #[test]
@@ -19469,10 +19382,7 @@ mod tests {
         let value: Value =
             norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
         assert_eq!(value.get("status").and_then(Value::as_str), Some("failed"));
-        assert_eq!(
-            value.get("passed_route_count").and_then(Value::as_u64),
-            Some(0)
-        );
+        assert_eq!(value["passed_route_count"].as_u64(), Some(0));
     }
     #[test]
     fn transparency_tokens_prints_payload() {
@@ -20174,7 +20084,6 @@ mod tests {
         juror_id: &str,
     ) -> SoraFsModerationBallotCommitV1 {
         use iroha_data_model::sorafs::moderation::SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1;
-
         let reveal = moderation_ballot_reveal_fixture_for_juror(juror_id);
         SoraFsModerationBallotCommitV1 {
             version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
@@ -20730,7 +20639,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             let mode = fs::metadata(bundle_dir.join("run.sh"))
                 .expect("run script metadata")
                 .permissions()
@@ -20926,8 +20834,7 @@ mod tests {
     }
     #[test]
     fn moderation_quarantine_notifications_deliver_writes_outbox_and_webhook_summary() {
-        let manifest = juror_notifications_manifest_fixture(false);
-        let manifest_file = write_json_file(&manifest);
+        let manifest_file = write_json_file(&juror_notifications_manifest_fixture(false));
         let out_dir = TempDir::new().expect("notification outbox");
         let args = ModerationQuarantineNotificationsDeliverArgs {
             manifest: manifest_file.path().to_path_buf(),
@@ -20943,18 +20850,13 @@ mod tests {
             Ok(Response::builder()
                 .status(StatusCode::ACCEPTED)
                 .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "status": "accepted"
-                }))?)
+                .body(br#"{"status":"accepted"}"#.to_vec())
                 .unwrap())
         })
         .expect("notification delivery should succeed");
         assert_eq!(posts.len(), 1);
         let posted: Value = norito::json::from_slice(&posts[0]).expect("posted notification JSON");
-        assert_eq!(
-            posted.get("delivery_id").and_then(Value::as_str),
-            Some("notify-1")
-        );
+        assert_eq!(posted["delivery_id"].as_str(), Some("notify-1"));
         let outbox_file = out_dir.path().join("notify-1.json");
         assert!(outbox_file.exists(), "outbox file should be written");
         let outbox_body = fs::read_to_string(outbox_file).expect("read outbox file");
@@ -20963,25 +20865,12 @@ mod tests {
         let summary: Value =
             norito::json::from_str(&ctx.printed[0]).expect("delivery summary JSON");
         assert_eq!(
-            summary.get("schema").and_then(Value::as_str),
+            summary["schema"].as_str(),
             Some("sorafs.moderation.juror_notifications.delivery.v1")
         );
-        assert_eq!(
-            summary.get("delivery_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            summary
-                .get("payload_bytes_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            summary
-                .get("private_payloads_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
+        assert_eq!(summary["delivery_count"].as_u64(), Some(1));
+        assert_eq!(summary["payload_bytes_included"].as_bool(), Some(false));
+        assert_eq!(summary["private_payloads_included"].as_bool(), Some(false));
         assert!(
             !ctx.printed[0].contains("Build the private commit payload locally."),
             "delivery summary must not repeat notification body text"
@@ -20989,8 +20878,7 @@ mod tests {
     }
     #[test]
     fn moderation_quarantine_notifications_deliver_rejects_private_payload_flags() {
-        let manifest = juror_notifications_manifest_fixture(true);
-        let manifest_file = write_json_file(&manifest);
+        let manifest_file = write_json_file(&juror_notifications_manifest_fixture(true));
         let out_dir = TempDir::new().expect("notification outbox");
         let args = ModerationQuarantineNotificationsDeliverArgs {
             manifest: manifest_file.path().to_path_buf(),
@@ -21016,8 +20904,7 @@ mod tests {
     }
     #[test]
     fn moderation_quarantine_notifications_canary_writes_payload_free_evidence() {
-        let manifest = juror_notifications_manifest_fixture(false);
-        let manifest_file = write_json_file(&manifest);
+        let manifest_file = write_json_file(&juror_notifications_manifest_fixture(false));
         let out_dir = TempDir::new().expect("canary evidence dir");
         let out = out_dir.path().join("nested/evidence.json");
         let args = ModerationQuarantineNotificationsCanaryArgs {
@@ -21034,9 +20921,7 @@ mod tests {
             Ok(Response::builder()
                 .status(StatusCode::ACCEPTED)
                 .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "status": "accepted"
-                }))?)
+                .body(br#"{"status":"accepted"}"#.to_vec())
                 .unwrap())
         })
         .expect("canary should succeed");
@@ -21046,41 +20931,22 @@ mod tests {
         let evidence: Value =
             norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
         assert_eq!(
-            evidence.get("schema").and_then(Value::as_str),
+            evidence["schema"].as_str(),
             Some("sorafs.moderation.juror_notifications.transport_canary.v1")
         );
-        assert_eq!(
-            evidence.get("status").and_then(Value::as_str),
-            Some("passed")
-        );
-        assert_eq!(evidence.get("probe_count").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            evidence.get("accepted_count").and_then(Value::as_u64),
-            Some(1)
-        );
+        assert_eq!(evidence["status"].as_str(), Some("passed"));
+        assert_eq!(evidence["probe_count"].as_u64(), Some(1));
+        assert_eq!(evidence["accepted_count"].as_u64(), Some(1));
         assert!(
-            evidence
-                .get("manifest_body_blake3_hex")
-                .and_then(Value::as_str)
-                .is_some(),
+            evidence["manifest_body_blake3_hex"].as_str().is_some(),
             "canary evidence should expose the typed manifest digest key"
         );
         assert!(
             evidence.get("manifest_body_blake3").is_none(),
             "canary evidence must not emit the ambiguous manifest digest key"
         );
-        assert_eq!(
-            evidence
-                .get("payload_bytes_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            evidence
-                .get("private_payloads_included")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
+        assert_eq!(evidence["payload_bytes_included"].as_bool(), Some(false));
+        assert_eq!(evidence["private_payloads_included"].as_bool(), Some(false));
         assert!(
             !ctx.printed[0].contains("Build the private commit payload locally."),
             "canary evidence must not repeat notification body text"
@@ -21088,8 +20954,7 @@ mod tests {
     }
     #[test]
     fn moderation_quarantine_notifications_canary_records_failed_probe_without_body() {
-        let manifest = juror_notifications_manifest_fixture(false);
-        let manifest_file = write_json_file(&manifest);
+        let manifest_file = write_json_file(&juror_notifications_manifest_fixture(false));
         let args = ModerationQuarantineNotificationsCanaryArgs {
             manifest: manifest_file.path().to_path_buf(),
             webhook_url: "https://moderation.example.test/webhook".to_string(),
@@ -21101,26 +20966,147 @@ mod tests {
             Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "error": "transport unavailable"
-                }))?)
+                .body(br#"{"error":"transport unavailable"}"#.to_vec())
                 .unwrap())
         })
         .expect("canary should emit failed evidence instead of hiding probe failure");
         let evidence: Value =
             norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
-        assert_eq!(
-            evidence.get("status").and_then(Value::as_str),
-            Some("failed")
-        );
-        assert_eq!(
-            evidence.get("accepted_count").and_then(Value::as_u64),
-            Some(0)
-        );
+        assert_eq!(evidence["status"].as_str(), Some("failed"));
+        assert_eq!(evidence["accepted_count"].as_u64(), Some(0));
         assert!(
             !ctx.printed[0].contains("transport unavailable"),
             "canary evidence must hash response bodies instead of archiving them"
         );
+    }
+    #[test]
+    fn moderation_quarantine_notifications_run_does_not_follow_cross_origin_redirects() {
+        for canary in [false, true] {
+            let manifest = write_json_file(&juror_notifications_manifest_fixture(false));
+            let origin = TcpListener::bind("127.0.0.1:0").expect("bind redirect origin");
+            let origin_addr = origin.local_addr().expect("redirect origin address");
+            let target = TcpListener::bind("127.0.0.1:0").expect("bind redirect target");
+            let target_addr = target.local_addr().expect("redirect target address");
+            let server = thread::spawn(move || {
+                let (mut stream, _) = origin.accept().expect("accept webhook request");
+                let mut request = [0_u8; 8192];
+                let len = stream.read(&mut request).expect("read webhook request");
+                assert!(request[..len].starts_with(b"POST "));
+                write!(
+                    stream,
+                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{target_addr}/stolen\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .expect("write redirect response");
+            });
+            let webhook_url = format!("http://{origin_addr}/webhook");
+            let mut ctx = TestContext::new();
+            if canary {
+                ModerationQuarantineNotificationsCanaryArgs {
+                    manifest: manifest.path().to_path_buf(),
+                    webhook_url,
+                    out: None,
+                    timeout_secs: 1,
+                }
+                .run(&mut ctx)
+                .expect("redirect must produce failed canary evidence");
+                let evidence: Value =
+                    norito::json::from_str(&ctx.printed[0]).expect("redirect canary evidence JSON");
+                assert_eq!(evidence["status"].as_str(), Some("failed"));
+                assert_eq!(evidence["accepted_count"].as_u64(), Some(0));
+                assert_eq!(evidence["probes"][0]["response_status"].as_u64(), Some(307));
+            } else {
+                let err = ModerationQuarantineNotificationsDeliverArgs {
+                    manifest: manifest.path().to_path_buf(),
+                    out_dir: None,
+                    webhook_url: Some(webhook_url),
+                    timeout_secs: 1,
+                }
+                .run(&mut ctx)
+                .expect_err("redirected delivery must fail");
+                assert!(err.to_string().contains("status 307"));
+                assert!(ctx.printed.is_empty());
+            }
+            server.join().expect("redirect server finished");
+            target
+                .set_nonblocking(true)
+                .expect("set target nonblocking");
+            assert!(
+                matches!(target.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
+                "cross-origin redirect target must receive no connection"
+            );
+        }
+    }
+    #[test]
+    fn sorafs_get_canary_runs_do_not_follow_cross_origin_redirects() {
+        for command in 0_u8..3 {
+            let origin = TcpListener::bind("127.0.0.1:0").expect("bind redirect origin");
+            let origin_addr = origin.local_addr().expect("redirect origin address");
+            let target = TcpListener::bind("127.0.0.1:0").expect("bind redirect target");
+            let target_addr = target.local_addr().expect("redirect target address");
+            let server = thread::spawn(move || {
+                let (mut stream, _) = origin.accept().expect("accept GET canary request");
+                let mut request = [0_u8; 8192];
+                let len = stream.read(&mut request).expect("read GET canary request");
+                assert!(request[..len].starts_with(b"GET "));
+                write!(
+                    stream,
+                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{target_addr}/substitute\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .expect("write redirect response");
+            });
+            let base_url = format!("http://{origin_addr}/root");
+            let mut ctx = TestContext::new();
+            match command {
+                0 => {
+                    let error = TransparencyExplorerCanaryArgs {
+                        torii_url: Some(base_url),
+                        limit: None,
+                        timeout_secs: 1,
+                        out: None,
+                    }
+                    .run(&mut ctx)
+                    .expect_err("explorer redirect must fail");
+                    assert!(error.to_string().contains("307"));
+                    assert!(ctx.printed.is_empty());
+                }
+                1 => {
+                    TransparencyPublicationCanaryArgs {
+                        torii_url: Some(base_url),
+                        cycle_ids: Vec::new(),
+                        limit: None,
+                        timeout_secs: 1,
+                        out: None,
+                    }
+                    .run(&mut ctx)
+                    .expect("publication redirect must emit failed evidence");
+                    let evidence: Value = norito::json::from_str(&ctx.printed[0])
+                        .expect("publication redirect evidence JSON");
+                    assert_eq!(evidence["status"].as_str(), Some("failed"));
+                    assert_eq!(evidence["routes"][0]["status_code"].as_u64(), Some(307));
+                    assert_eq!(evidence["routes"][0]["passed"].as_bool(), Some(false));
+                }
+                2 => {
+                    let error = ModerationQuarantineOperatorCanaryArgs {
+                        operator_url: base_url,
+                        quarantine_id: "ba".repeat(16),
+                        limit: None,
+                        timeout_secs: 1,
+                        out: None,
+                    }
+                    .run(&mut ctx)
+                    .expect_err("operator redirect must fail");
+                    assert!(error.to_string().contains("307"));
+                    assert!(ctx.printed.is_empty());
+                }
+                _ => unreachable!("bounded GET canary selector"),
+            }
+            server.join().expect("redirect server finished");
+            target.set_nonblocking(true).expect("nonblocking target");
+            assert!(
+                matches!(target.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
+                "cross-origin redirect target must receive no GET connection"
+            );
+        }
     }
     #[test]
     fn moderation_registry_list_with_prints_payload() {
@@ -21795,48 +21781,34 @@ mod tests {
         assert_eq!(ctx.printed.len(), 1);
         assert!(!ctx.printed[0].contains("payload_b64"));
         let value: Value = norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
+        let schema = value["schema"].as_str();
         assert_eq!(
-            value.get("schema").and_then(Value::as_str),
+            schema,
             Some("sorafs.moderation.quarantine.operator_canary.v1")
         );
-        assert_eq!(value.get("status").and_then(Value::as_str), Some("passed"));
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(4));
-        assert_eq!(value.get("route_count").and_then(Value::as_u64), Some(8));
-        assert_eq!(
-            value.get("payload_bytes_included").and_then(Value::as_bool),
-            Some(false)
-        );
-        let routes = value
-            .get("routes")
-            .and_then(Value::as_array)
-            .expect("canary routes");
+        assert_eq!(value["status"].as_str(), Some("passed"));
+        assert_eq!(value["limit"].as_u64(), Some(4));
+        assert_eq!(value["route_count"].as_u64(), Some(8));
+        assert_eq!(value["payload_bytes_included"].as_bool(), Some(false));
+        let routes = value["routes"].as_array().expect("canary routes");
         assert_eq!(routes.len(), 8);
-        assert!(
-            routes
-                .iter()
-                .any(|route| route.get("name").and_then(Value::as_str)
-                    == Some("commit_reveal_status"))
-        );
+        let has_commit_reveal = routes
+            .iter()
+            .any(|route| route["name"].as_str() == Some("commit_reveal_status"));
+        assert!(has_commit_reveal);
         let operator_panel = routes
             .iter()
-            .find(|route| route.get("name").and_then(Value::as_str) == Some("operator_panel"))
+            .find(|route| route["name"].as_str() == Some("operator_panel"))
             .expect("operator-panel route evidence");
-        let operator_panel_url = operator_panel
-            .get("url")
-            .and_then(Value::as_str)
-            .expect("operator-panel URL");
+        let operator_panel_url = operator_panel["url"].as_str().expect("operator-panel URL");
         assert!(operator_panel_url.contains("/root/v1/sorafs/moderation/quarantine/"));
         assert!(operator_panel_url.contains("limit=4"));
         assert!(routes.iter().all(|route| {
             route.get("payload_bytes_included").and_then(Value::as_bool) == Some(false)
         }));
-        let written: Value =
-            norito::json::from_slice(&fs::read(out).expect("written canary evidence"))
-                .expect("written evidence JSON");
-        assert_eq!(
-            written.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.quarantine.operator_canary.v1")
-        );
+        let bytes = fs::read(out).expect("written canary evidence");
+        let written: Value = norito::json::from_slice(&bytes).expect("written evidence JSON");
+        assert_eq!(written["schema"], value["schema"]);
     }
     #[test]
     fn moderation_quarantine_operator_canary_rejects_payload_bytes() {
@@ -23284,7 +23256,6 @@ mod tests {
     #[test]
     fn storage_token_issue_passes_arguments_and_prints_nonce() {
         use std::cell::RefCell;
-
         let args = StorageTokenIssueArgs {
             manifest_id: "aa".repeat(32),
             provider_id: "bb".repeat(32),
@@ -23654,7 +23625,6 @@ mod tests {
     fn gateway_route_plan_writes_plan_and_headers() {
         use base64::engine::general_purpose::STANDARD as BASE64;
         use tempfile::TempDir;
-
         let tmp = TempDir::new().expect("temp dir");
         let manifest_path = tmp.path().join("manifest.json");
         fs::write(&manifest_path, r#"{"root_cid":[1,2,3]}"#).expect("write manifest");
@@ -23725,7 +23695,6 @@ mod tests {
     #[test]
     fn gateway_route_plan_supports_rollback_and_toggles() {
         use tempfile::TempDir;
-
         let tmp = TempDir::new().expect("temp dir");
         let manifest_path = tmp.path().join("manifest.json");
         let rollback_path = tmp.path().join("rollback.json");

@@ -9,7 +9,6 @@
 //! HTTP signature or witness headers.
 //! Node-local autonomy summaries are read through the same 16 MiB V1 ceiling
 //! enforced by the runtime writer and from a stable direct file description.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -18,7 +17,6 @@ use std::{
     path::{Path as FsPath, PathBuf},
     time::Duration,
 };
-
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -113,12 +111,9 @@ use mv::storage::StorageReadOnly;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 #[cfg(test)]
 use tokio::sync::RwLock;
-
 use crate::{JsonBody, NoritoJson, NoritoQuery, SharedAppState};
-
 mod bounded_public_response;
 mod hf_model_info_response;
-
 const CONTROL_PLANE_SCHEMA_VERSION: u16 = 1;
 const PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME: &str = "soracloud/public_service_discovery";
 const PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1: u16 = 1;
@@ -4592,7 +4587,6 @@ fn soracloud_draft_response(
 }
 fn soracloud_tx_instr_from_box(boxed: InstructionBox) -> SoracloudTxInstr {
     use iroha_data_model::isi::Instruction;
-
     let type_name = Instruction::id(&*boxed);
     let payload = Instruction::dyn_encode(&*boxed);
     let framed = iroha_data_model::isi::frame_instruction_payload(type_name, &payload)
@@ -4675,7 +4669,6 @@ fn instruction_execution_message(
     error: &iroha_data_model::isi::error::InstructionExecutionError,
 ) -> String {
     use iroha_data_model::isi::error::InstructionExecutionError;
-
     match error {
         InstructionExecutionError::InvalidParameter(inner) => {
             join_nested_message(error.to_string(), inner.to_string())
@@ -4697,7 +4690,6 @@ fn transaction_rejection_message(
     reason: &iroha_data_model::transaction::error::TransactionRejectionReason,
 ) -> String {
     use iroha_data_model::transaction::error::TransactionRejectionReason;
-
     match reason {
         TransactionRejectionReason::Validation(validation) => {
             join_nested_message(reason.to_string(), validation_fail_message(validation))
@@ -7324,7 +7316,6 @@ fn authoritative_agent_runtime_recent_runs(
 #[cfg(unix)]
 fn same_agent_runtime_summary_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.nlink() == 1
@@ -7338,7 +7329,6 @@ fn same_agent_runtime_summary_file(left: &fs::Metadata, right: &fs::Metadata) ->
 #[cfg(windows)]
 fn same_agent_runtime_summary_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     left.volume_serial_number().is_some()
         && left.volume_serial_number() == right.volume_serial_number()
@@ -7371,13 +7361,11 @@ fn read_agent_runtime_execution_summary_bytes(path: &FsPath) -> io::Result<Vec<u
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
@@ -11806,14 +11794,12 @@ pub(crate) async fn handle_health_compliance_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use std::{
         fs,
         num::{NonZeroU16, NonZeroU32, NonZeroU64},
         path::{Path, PathBuf},
         sync::Arc,
     };
-
     use iroha_core::soracloud_runtime::{
         SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
         SoracloudApartmentAutonomyExecutionSummaryV1, SoracloudApartmentExecutionRequest,
@@ -11862,9 +11848,7 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
-
     use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world;
-
     #[cfg(any(unix, windows))]
     #[test]
     fn autonomy_summary_reader_accepts_v1_limit_and_rejects_first_overflow_byte() {
@@ -12632,7 +12616,6 @@ mod tests {
     #[tokio::test]
     async fn resolve_public_local_read_route_uses_authoritative_service_route_state() {
         use iroha_core::state::World;
-
         let mut world = World::new();
         let bundle = fixture_bundle("2026.02.0");
         let service_name = bundle.service.service_name.clone();
@@ -12693,7 +12676,6 @@ mod tests {
     #[tokio::test]
     async fn resolve_public_route_projects_http_service_inrous() {
         use iroha_core::state::World;
-
         let mut world = World::new();
         let mut bundle = fixture_bundle("2026.04.0");
         bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
@@ -12773,7 +12755,6 @@ mod tests {
     async fn resolve_public_route_splits_hosted_live_search_from_vault_handlers() {
         use iroha_core::state::World;
         use iroha_data_model::soracloud::SoraMailboxContractV1;
-
         let mut world = World::new();
         let mut live_bundle = fixture_bundle("2026.04.0");
         live_bundle.service.service_name = "travel_ops_live".parse().expect("service name");
@@ -12927,7 +12908,6 @@ mod tests {
     #[tokio::test]
     async fn resolve_public_route_rejects_http_service_with_expired_lease() {
         use iroha_core::state::World;
-
         let mut world = World::new();
         let mut bundle = fixture_bundle("2026.04.1");
         bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
@@ -12996,7 +12976,6 @@ mod tests {
     #[tokio::test]
     async fn resolve_public_route_projects_ordered_mailbox_handlers() {
         use iroha_core::state::World;
-
         let mut world = World::new();
         let bundle = fixture_bundle("2026.02.0");
         let service_name = bundle.service.service_name.clone();
@@ -13064,7 +13043,6 @@ mod tests {
     async fn resolve_public_route_prefers_handler_class_for_http_method() {
         use iroha_core::state::World;
         use iroha_data_model::soracloud::SoraMailboxContractV1;
-
         let mut world = World::new();
         let mut bundle = fixture_bundle("2026.03.0");
         bundle.service.handlers = vec![
@@ -13151,7 +13129,6 @@ mod tests {
     #[test]
     fn authoritative_ciphertext_query_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -13277,7 +13254,6 @@ mod tests {
     #[test]
     fn authoritative_health_compliance_report_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -13420,7 +13396,6 @@ mod tests {
     #[test]
     fn authoritative_training_job_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -13503,7 +13478,6 @@ mod tests {
     #[test]
     fn authoritative_service_config_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -13579,7 +13553,6 @@ mod tests {
     #[test]
     fn authoritative_service_public_discovery_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -13710,7 +13683,6 @@ mod tests {
     #[test]
     fn authoritative_service_secret_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -13801,7 +13773,6 @@ mod tests {
     #[test]
     fn authoritative_model_weight_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -13902,7 +13873,6 @@ mod tests {
     #[test]
     fn authoritative_model_artifact_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -13991,7 +13961,6 @@ mod tests {
     #[test]
     fn authoritative_uploaded_model_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -14127,7 +14096,6 @@ mod tests {
     #[test]
     fn authoritative_uploaded_model_status_rejects_orphan_user_upload_artifact() {
         use iroha_core::state::World;
-
         let mut world = World::default();
         let service_name: Name = "web_portal".parse().expect("service name");
         world.soracloud_model_artifacts_mut_for_testing().insert(
@@ -14172,7 +14140,6 @@ mod tests {
     #[test]
     fn authoritative_uploaded_model_status_ignores_non_upload_artifacts() {
         use iroha_core::state::World;
-
         let payload = sample_uploaded_model_register_payload();
         let service_name = payload.bundle.service_name.clone();
         let mut world = World::default();
@@ -14229,7 +14196,6 @@ mod tests {
     #[test]
     fn authoritative_uploaded_model_status_rejects_malformed_queries() {
         use iroha_core::state::World;
-
         let app = mk_app_state_for_tests_with_world(World::default());
         let assert_bad_request = |query: UploadedModelStatusQuery, expected: &str| {
             let err = authoritative_uploaded_model_status_from_query(&app, &query)
@@ -14440,7 +14406,6 @@ mod tests {
     #[test]
     fn uploaded_model_register_pin_gate_rejects_missing_inactive_or_mismatched_pin() {
         use iroha_core::state::World;
-
         let payload = sample_uploaded_model_register_payload();
         let digest = payload.bundle.sorafs_manifest_digest;
         let missing_app = mk_app_state_for_tests_with_world(World::default());
@@ -14487,7 +14452,6 @@ mod tests {
     #[test]
     fn private_uploaded_model_execute_requires_finalized_quantized_bundle_and_active_artifacts() {
         use iroha_core::state::World;
-
         let mut payload = sample_uploaded_model_register_payload();
         payload.bundle.runtime_format =
             SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1;
@@ -14638,7 +14602,6 @@ mod tests {
     #[test]
     fn private_uploaded_model_execute_binds_committed_decryption_request() {
         use iroha_core::state::World;
-
         let mut payload = sample_uploaded_model_register_payload();
         payload.bundle.runtime_format =
             SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1;
@@ -16410,7 +16373,6 @@ mod tests {
     fn authoritative_hf_shared_lease_status_uses_runtime_projection_when_available()
     -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -16518,7 +16480,6 @@ mod tests {
     #[test]
     fn authoritative_agent_runtime_receipt_for_run_prefers_latest_receipt() {
         use iroha_core::state::World;
-
         let request_commitment = Hash::new(b"ops-agent-request");
         let run = SoraAgentAutonomyRunRecordV1 {
             run_id: "ops_agent:autonomy:9".to_owned(),
@@ -16589,7 +16550,6 @@ mod tests {
     #[test]
     fn handle_agent_autonomy_run_finalize_rejects_signer_mismatch() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -16638,7 +16598,6 @@ mod tests {
     fn execute_runtime_agent_autonomy_run_returns_none_for_non_hf_apartment()
     -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -16688,7 +16647,6 @@ mod tests {
     fn build_authoritative_agent_runtime_receipt_instruction_is_idempotent()
     -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -16763,7 +16721,6 @@ mod tests {
     fn build_authoritative_agent_autonomy_execution_audit_instruction_is_idempotent()
     -> Result<(), eyre::Report> {
         use iroha_core::state::World;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;

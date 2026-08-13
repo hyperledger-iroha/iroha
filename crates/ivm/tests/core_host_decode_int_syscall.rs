@@ -1,8 +1,6 @@
 //! CoreHost: decode Norito-framed i64 from NoritoBytes via SYSCALL_DECODE_INT.
-
 use ivm::{CoreHost, IVM, PointerType, encoding, syscalls};
 mod common;
-
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&(pty as u16).to_be_bytes());
@@ -13,7 +11,6 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 #[test]
 fn core_host_decode_int_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
@@ -38,7 +35,6 @@ fn core_host_decode_int_roundtrip() {
     vm.run().expect("run");
     assert_eq!(vm.register(10), 12345);
 }
-
 #[test]
 fn core_host_decode_int_rejects_blob() {
     let mut vm = IVM::new(u64::MAX);

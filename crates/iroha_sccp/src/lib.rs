@@ -10,9 +10,7 @@
 //! The crate targets the Rust standard library unconditionally.
 //! BLS verification for Taira and BSC finality is also unconditional so Cargo
 //! feature selection cannot change consensus admission results.
-
 extern crate alloc;
-
 mod source_identity;
 pub use source_identity::*;
 mod ethereum_native;
@@ -36,9 +34,7 @@ pub use test_fixtures::{
     sccp_exact_outbound_test_fixture_v1, sccp_finalize_taira_block_test_fixture_v1,
     sccp_sora_outbound_execution_policy_test_fixture_v1,
 };
-
 use alloc::{borrow::ToOwned, format, string::String, vec::Vec};
-
 use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
@@ -77,7 +73,6 @@ use iroha_data_model::{
 use norito::to_bytes;
 use sha2::{Digest as _, Sha256};
 use tiny_keccak::Hasher;
-
 #[cfg(any(test, feature = "test-fixtures"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 /// Per-thread work counters for the closed SCCP destination-proof path.
@@ -446,16 +441,13 @@ fn decode_canonical_0x_lower_hex_fixed<const N: usize>(value: &str) -> Option<[u
     }
     Some(out)
 }
-
 mod json_utils {
     use alloc::{
         format,
         string::{String, ToString},
         vec::Vec,
     };
-
     use norito::json::{self, Error, JsonDeserialize, Parser};
-
     fn encode_hex(bytes: &[u8]) -> String {
         const LUT: &[u8; 16] = b"0123456789abcdef";
         let mut out = String::with_capacity(2 + bytes.len() * 2);
@@ -517,10 +509,8 @@ mod json_utils {
         }
         parser.parse_u64().map(u128::from)
     }
-
     pub mod hex32 {
         use super::{Error, Parser, decode_hex_fixed, encode_hex, json};
-
         pub fn serialize(value: &[u8; 32], out: &mut String) {
             json::write_json_string(&encode_hex(value), out);
         }
@@ -529,10 +519,8 @@ mod json_utils {
             decode_hex_fixed::<32>(&value)
         }
     }
-
     pub mod hex20 {
         use super::{Error, Parser, decode_hex_fixed, encode_hex, json};
-
         pub fn serialize(value: &[u8; 20], out: &mut String) {
             json::write_json_string(&encode_hex(value), out);
         }
@@ -545,10 +533,8 @@ mod json_utils {
             decode_hex_fixed::<20>(&value)
         }
     }
-
     pub mod bytes_hex {
         use super::{Error, Parser, Vec, decode_hex_vec, encode_hex, json};
-
         pub fn serialize(value: &[u8], out: &mut String) {
             json::write_json_string(&encode_hex(value), out);
         }
@@ -557,11 +543,8 @@ mod json_utils {
             decode_hex_vec(&value)
         }
     }
-
     pub mod vec_bytes_hex {
-        use super::{
-            Error, JsonDeserialize, Parser, String, Vec, decode_hex_vec, encode_hex, json,
-        };
+        use super::{Error, JsonDeserialize, Parser, String, Vec, decode_hex_vec, encode_hex, json};
         pub fn serialize(value: &[Vec<u8>], out: &mut String) {
             out.push('[');
             for (index, item) in value.iter().enumerate() {
@@ -580,10 +563,8 @@ mod json_utils {
                 .collect()
         }
     }
-
     pub mod u64_string {
         use super::{Error, Parser, ToString, json, parse_decimal_u64};
-
         #[expect(
             clippy::trivially_copy_pass_by_ref,
             reason = "norito field serializers receive values by reference"
@@ -595,10 +576,8 @@ mod json_utils {
             parse_decimal_u64(parser)
         }
     }
-
     pub mod u128_string {
         use super::{Error, Parser, ToString, json, parse_decimal_u128};
-
         pub fn serialize(value: &u128, out: &mut String) {
             json::write_json_string(&value.to_string(), out);
         }
@@ -606,10 +585,8 @@ mod json_utils {
             parse_decimal_u128(parser)
         }
     }
-
     pub mod canonical_u64_string {
         use super::{Error, Parser, ToString, json, parse_canonical_decimal_u64_string};
-
         #[expect(
             clippy::trivially_copy_pass_by_ref,
             reason = "norito field serializers receive values by reference"
@@ -621,10 +598,8 @@ mod json_utils {
             parse_canonical_decimal_u64_string(&parser.parse_string()?)
         }
     }
-
     pub mod canonical_u128_string {
         use super::{Error, Parser, ToString, json, parse_canonical_decimal_u128_string};
-
         pub fn serialize(value: &u128, out: &mut String) {
             json::write_json_string(&value.to_string(), out);
         }
@@ -4573,7 +4548,6 @@ pub fn canonical_sccp_payload_bytes(
 #[cfg(test)]
 mod canonical_payload_encoding_tests {
     use super::*;
-
     fn transfer_fixture() -> TransferPayloadV1 {
         TransferPayloadV1 {
             version: 1,
@@ -5252,7 +5226,6 @@ fn hash_merkle_node(left: &H256, right: &H256) -> H256 {
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, sync::OnceLock};
-
     use halo2curves::{
         Coordinates, CurveAffine,
         bn256::{Fq, Fq2, Fr, G1Affine, G2Affine},
@@ -5274,9 +5247,7 @@ mod tests {
         },
         proof::ProofBox,
     };
-
     use super::*;
-
     struct OutboundFixture {
         route: SccpGovernedRouteV1,
         bundle: TairaSccpMessageProofV1,
@@ -7176,7 +7147,6 @@ mod tests {
     #[test]
     fn exact_v2_finality_accepts_fixture_and_rejects_context_attacks() {
         use iroha_data_model::block::consensus_v2::{GlobalPhase, PROTOCOL_VERSION};
-
         let proof = exact_v2_finality_fixture();
         assert!(verify_taira_bridge_finality_proof_structure(&proof));
         assert!(verify_taira_bridge_finality_proof_cryptographic(&proof));

@@ -5,9 +5,7 @@
 //! a compiler-known, fixed number of 64-bit ABI words. The source type and
 //! boundary schema carry the element type and capacity; no runtime type tag is
 //! inferred from memory contents.
-
 use core::fmt;
-
 /// Minimum source-level list capacity.
 pub const LIST_MIN_CAPACITY_V1: u8 = 1;
 /// Maximum source-level list capacity.
@@ -16,7 +14,6 @@ pub const LIST_MAX_CAPACITY_V1: u8 = 64;
 pub const LIST_HEADER_WORDS_V1: u64 = 2;
 /// Width of one ABI word in bytes.
 pub const LIST_WORD_BYTES_V1: u64 = 8;
-
 /// Invalid compiler-owned list layout or access.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListLayoutErrorV1 {
@@ -41,7 +38,6 @@ pub enum ListLayoutErrorV1 {
         len: u64,
     },
 }
-
 impl fmt::Display for ListLayoutErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -64,16 +60,13 @@ impl fmt::Display for ListLayoutErrorV1 {
         }
     }
 }
-
 impl std::error::Error for ListLayoutErrorV1 {}
-
 /// Validated contiguous list layout known to compiler and VM tooling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ListLayoutV1 {
     capacity: u8,
     element_words: u64,
 }
-
 impl ListLayoutV1 {
     /// Construct a validated layout.
     ///
@@ -96,19 +89,16 @@ impl ListLayoutV1 {
         layout.allocation_bytes()?;
         Ok(layout)
     }
-
     /// Compile-time capacity.
     #[must_use]
     pub const fn capacity(self) -> u8 {
         self.capacity
     }
-
     /// Flattened width of one element in ABI words.
     #[must_use]
     pub const fn element_words(self) -> u64 {
         self.element_words
     }
-
     /// Total size of the single contiguous heap allocation.
     ///
     /// # Errors
@@ -125,7 +115,6 @@ impl ListLayoutV1 {
             .and_then(|words| words.checked_mul(LIST_WORD_BYTES_V1))
             .ok_or(ListLayoutErrorV1::SizeOverflow)
     }
-
     /// Byte offset of a capacity-checked element slot from the list handle.
     ///
     /// # Errors
@@ -147,7 +136,6 @@ impl ListLayoutV1 {
             .and_then(|words| words.checked_mul(LIST_WORD_BYTES_V1))
             .ok_or(ListLayoutErrorV1::SizeOverflow)
     }
-
     /// Byte offset of an element that is present at `len`.
     ///
     /// # Errors
@@ -166,11 +154,9 @@ impl ListLayoutV1 {
         self.slot_offset(index)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn every_v1_capacity_has_one_contiguous_layout() {
         for capacity in LIST_MIN_CAPACITY_V1..=LIST_MAX_CAPACITY_V1 {
@@ -190,7 +176,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn invalid_capacities_widths_and_arithmetic_fail_closed() {
         assert!(matches!(
@@ -210,7 +195,6 @@ mod tests {
             Err(ListLayoutErrorV1::SizeOverflow)
         );
     }
-
     #[test]
     fn reads_distinguish_capacity_from_logical_length() {
         let layout = ListLayoutV1::try_new(4, 2).expect("layout");

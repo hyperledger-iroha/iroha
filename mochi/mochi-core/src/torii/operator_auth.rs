@@ -1,10 +1,8 @@
 //! Exact-network operator request signing for MOCHI's Torii client.
-
 use std::{
     fmt,
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
@@ -17,9 +15,7 @@ use reqwest::{
     header::{ACCEPT, HeaderMap, HeaderValue},
 };
 use url::Url;
-
 use super::{NORITO_MIME_TYPE, ToriiError, ToriiResult};
-
 const OPERATOR_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha.operator.http-request.network.v1\0";
 const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
@@ -39,14 +35,12 @@ const FORBIDDEN_DEFAULT_AUTH_HEADERS: [&str; 12] = [
     HEADER_OPERATOR_SIGNATURE,
     "x-iroha-torii-proxy-target-peer-id",
 ];
-
 /// Immutable signing material for one exact Torii network.
 #[derive(Clone)]
 pub struct OperatorSigningContext {
     network_id: NetworkId,
     key_pair: KeyPair,
 }
-
 impl OperatorSigningContext {
     /// Bind an operator key pair to one genesis-derived network identity.
     #[must_use]
@@ -56,20 +50,17 @@ impl OperatorSigningContext {
             key_pair,
         }
     }
-
     /// Return the exact network identity covered by every request signature.
     #[must_use]
     pub const fn network_id(&self) -> NetworkId {
         self.network_id
     }
-
     /// Return the public half of the configured operator key pair.
     #[must_use]
     pub fn public_key(&self) -> &PublicKey {
         self.key_pair.public_key()
     }
 }
-
 impl fmt::Debug for OperatorSigningContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -79,7 +70,6 @@ impl fmt::Debug for OperatorSigningContext {
             .finish_non_exhaustive()
     }
 }
-
 pub(super) fn build_operator_get_request(
     http: &Client,
     default_headers: &HeaderMap,
@@ -111,7 +101,6 @@ pub(super) fn build_operator_get_request(
             "operator request forbids configured fallback or precomputed auth header `{name}`"
         )));
     }
-
     let timestamp_ms: u64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| ToriiError::SignedQueryContext(error.to_string()))?
@@ -130,7 +119,6 @@ pub(super) fn build_operator_get_request(
         Signature::try_new(context.key_pair.private_key(), &message).map_err(|error| {
             ToriiError::SignedQueryContext(format!("failed to sign operator request: {error}"))
         })?;
-
     http.get(url)
         .header(ACCEPT, NORITO_MIME_TYPE)
         .header(
@@ -158,14 +146,12 @@ pub(super) fn build_operator_get_request(
         .build()
         .map_err(ToriiError::Http)
 }
-
 fn operator_header_value(name: &'static str, value: &str) -> ToriiResult<HeaderValue> {
     HeaderValue::from_str(value).map_err(|source| ToriiError::InvalidHeader {
         name: name.to_owned(),
         source,
     })
 }
-
 fn canonical_query_string(raw: Option<&str>) -> String {
     let Some(raw) = raw else {
         return String::new();
@@ -180,7 +166,6 @@ fn canonical_query_string(raw: Option<&str>) -> String {
     }
     serializer.finish()
 }
-
 fn encode_hex(bytes: &[u8]) -> String {
     const TABLE: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
@@ -190,7 +175,6 @@ fn encode_hex(bytes: &[u8]) -> String {
     }
     output
 }
-
 fn operator_request_message(
     url: &Url,
     network_id: NetworkId,
@@ -220,22 +204,18 @@ fn operator_request_message(
     message.extend_from_slice(nonce.as_bytes());
     message
 }
-
 #[cfg(test)]
 mod tests {
     use base64::Engine as _;
     use iroha_crypto::{Algorithm, KeyPair, ed25519_parse_signature};
     use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
-
     use super::*;
-
     fn context() -> OperatorSigningContext {
         OperatorSigningContext::new(
             crate::torii::test_network_id(),
             KeyPair::random_with_algorithm(Algorithm::Ed25519),
         )
     }
-
     #[test]
     fn operator_get_signs_the_final_sorted_target_and_empty_body() {
         let context = context();
@@ -249,7 +229,6 @@ mod tests {
             url,
         )
         .expect("signed request");
-
         assert_eq!(request.method(), Method::GET);
         assert!(request.body().is_none());
         assert_eq!(request.url().query(), Some("z=2&a=1"));
@@ -281,7 +260,6 @@ mod tests {
                 .any(|window| window == b"a=1&z=2")
         );
     }
-
     #[test]
     fn operator_get_rejects_default_auth_before_dispatch() {
         let context = context();

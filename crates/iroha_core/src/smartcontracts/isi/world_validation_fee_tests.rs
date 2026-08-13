@@ -33,7 +33,6 @@ fn validation_fee_activation_delay_enforces_exact_boundary_and_overflow() {
         .is_err()
     );
 }
-
 #[test]
 fn sorafs_provider_owner_transition_requires_full_parliament_gate() {
     let kind = ProposalKind::SorafsProviderGovernance(
@@ -63,7 +62,6 @@ fn sorafs_provider_owner_transition_requires_full_parliament_gate() {
         ]
     );
 }
-
 #[test]
 fn contract_subject_binding_materializes_missing_account_and_preserves_existing_account() {
     let state = State::new_for_testing(
@@ -84,7 +82,6 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
     Register::account(Account::new(ALICE_ID.clone()))
         .execute(&ALICE_ID, &mut state_transaction)
         .expect("seed lifecycle authority");
-
     let missing_address = ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
@@ -96,7 +93,6 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
     .expect("missing-subject contract address");
     let missing_subject = missing_address.subject_id();
     assert!(state_transaction.world.account(&missing_subject).is_err());
-
     let bound_subject =
         super::ensure_contract_subject_binding(&ALICE_ID, &mut state_transaction, &missing_address)
             .expect("bind and materialize missing contract subject");
@@ -106,7 +102,6 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
         &state_transaction.world,
         &missing_subject,
     ));
-
     let existing_address = ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
@@ -123,7 +118,6 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
     Register::account(Account::new(existing_subject.clone()).with_metadata(metadata.clone()))
         .execute(&ALICE_ID, &mut state_transaction)
         .expect("seed existing contract subject account");
-
     let bound_existing = super::ensure_contract_subject_binding(
         &ALICE_ID,
         &mut state_transaction,
@@ -142,18 +136,15 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
         "binding must not replace or repair an existing subject account",
     );
 }
-
 #[test]
 fn upgrade_execute_enforces_capability_at_the_mutation_boundary() {
     use iroha_data_model::permission::Permissions;
     use iroha_executor_data_model::permission::executor::CanUpgradeExecutor;
-
     fn invalid_upgrade() -> iroha_data_model::isi::Upgrade {
         iroha_data_model::isi::Upgrade::new(iroha_data_model::executor::Executor::new(
             IvmBytecode::from_compiled(Vec::new()),
         ))
     }
-
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -169,7 +160,6 @@ fn upgrade_execute_enforces_capability_at_the_mutation_boundary() {
     );
     let mut block = state.block(header);
     let mut state_transaction = block.transaction();
-
     let error = invalid_upgrade()
         .execute(&ALICE_ID, &mut state_transaction)
         .expect_err("direct native dispatch must not bypass executor-upgrade authority");
@@ -178,7 +168,6 @@ fn upgrade_execute_enforces_capability_at_the_mutation_boundary() {
             if message.as_ref().contains("CanUpgradeExecutor")),
         "unexpected upgrade denial: {error:?}"
     );
-
     state_transaction.world.account_permissions.insert(
         ALICE_ID.clone(),
         Permissions::from([Permission::from(CanUpgradeExecutor)]),
@@ -192,12 +181,10 @@ fn upgrade_execute_enforces_capability_at_the_mutation_boundary() {
         "an exact capability holder must reach migration: {error:?}"
     );
 }
-
 #[test]
 fn validation_fee_derived_runtime_permission_rejects_preexisting_direct_and_role_holders() {
     use iroha_data_model::permission::Permissions;
     use iroha_executor_data_model::permission::asset::CanTransferAsset;
-
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -220,14 +207,12 @@ fn validation_fee_derived_runtime_permission_rejects_preexisting_direct_and_role
         asset: AssetId::new(asset_definition_id, ALICE_ID.clone()),
     }
     .into();
-
     super::require_absent_validation_fee_runtime_permission(
         &stx,
         &permission,
         "the wrapper SBD asset transfer effect",
     )
     .expect("an absent effect permission is eligible for protected derivation");
-
     stx.world
         .account_permissions
         .insert(BOB_ID.clone(), Permissions::from([permission.clone()]));
@@ -242,7 +227,6 @@ fn validation_fee_derived_runtime_permission_rejects_preexisting_direct_and_role
         "unexpected direct-holder error: {direct_error:?}"
     );
     stx.world.account_permissions.remove(BOB_ID.clone());
-
     let role_id: RoleId = "validation_fee_effect_holder".parse().expect("role id");
     let role = Role::new(role_id.clone(), ALICE_ID.clone())
         .add_permission(permission.clone())
@@ -266,12 +250,10 @@ fn validation_fee_derived_runtime_permission_rejects_preexisting_direct_and_role
         "a failed derivation preflight must leave no direct effect token"
     );
 }
-
 #[test]
 fn validation_fee_derived_runtime_permissions_roll_back_atomically() {
     use iroha_executor_data_model::permission::asset::CanTransferAsset;
     use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
-
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -325,7 +307,6 @@ fn validation_fee_derived_runtime_permissions_roll_back_atomically() {
             "the wrapper SBD asset transfer effect",
         ),
     ];
-
     let error = super::install_derived_validation_fee_runtime_permissions_with_validation(
         permissions,
         &mut stx,
@@ -350,7 +331,6 @@ fn validation_fee_derived_runtime_permissions_roll_back_atomically() {
         );
     }
 }
-
 fn fee_sponsor_revision_fixture(
     program_id: iroha_data_model::nexus::FeeSponsorProgramId,
     asset_definition_id: AssetDefinitionId,
@@ -360,7 +340,6 @@ fn fee_sponsor_revision_fixture(
         FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorIvmSelector,
         FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector,
     };
-
     FeeSponsorProgramRevision {
         program_id,
         revision,
@@ -383,14 +362,12 @@ fn fee_sponsor_revision_fixture(
         }],
     }
 }
-
 #[test]
 fn fee_sponsor_program_rejects_unregistered_payout_account() {
     use iroha_data_model::{
         isi::nexus::CreateFeeSponsorProgram,
         nexus::{FeeSponsorProgram, FeeSponsorProgramId},
     };
-
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -409,7 +386,6 @@ fn fee_sponsor_program_rejects_unregistered_payout_account() {
     Register::account(Account::new(ALICE_ID.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("register sponsor");
-
     let program_id = FeeSponsorProgramId::new(
         ALICE_ID.clone(),
         "closed_payout".parse().expect("program name"),
@@ -427,7 +403,6 @@ fn fee_sponsor_program_rejects_unregistered_payout_account() {
             .contains("unknown fee sponsor payout account")
     );
     assert!(stx.world.fee_sponsor_programs.get(&program_id).is_none());
-
     Register::account(Account::new(BOB_ID.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("register payout account");
@@ -447,7 +422,6 @@ fn fee_sponsor_program_rejects_unregistered_payout_account() {
         .expect_err("a live program's immutable payout account must remain registered");
     assert!(error.to_string().contains("immutable payout account"));
 }
-
 #[test]
 fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
     use iroha_data_model::{
@@ -459,7 +433,6 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
         permission::Permissions,
     };
     use iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram;
-
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -483,7 +456,6 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
                 .expect("register sponsor withdrawal fixture account");
         }
     }
-
     let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
         .parse()
         .expect("canonical asset definition id");
@@ -501,7 +473,6 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
     Mint::asset_quantity(Quantity::from(10_u32), custody_asset.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("fund sponsor custody");
-
     let program_id = FeeSponsorProgramId::new(
         ALICE_ID.clone(),
         "owner_payout".parse().expect("program name"),
@@ -529,7 +500,6 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
         }
         .into()]),
     );
-
     let withdrawal = WithdrawFeeSponsorProgram {
         program_id: program_id.clone(),
         asset_definition_id: asset_definition_id.clone(),
@@ -548,7 +518,6 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
             .balance,
         Quantity::from(10_u32)
     );
-
     withdrawal
         .execute(&ALICE_ID, &mut stx)
         .expect("exact sponsor may withdraw to the registered payout account");
@@ -578,7 +547,6 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
         Quantity::from(7_u32)
     );
 }
-
 #[test]
 fn fee_sponsor_vault_allocation_requires_program_management_authority() {
     use iroha_data_model::{
@@ -590,7 +558,6 @@ fn fee_sponsor_vault_allocation_requires_program_management_authority() {
         permission::Permissions,
     };
     use iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram;
-
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -607,7 +574,6 @@ fn fee_sponsor_vault_allocation_requires_program_management_authority() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.nexus.enabled = true;
-
     let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
         .parse()
         .expect("canonical asset definition id");
@@ -625,7 +591,6 @@ fn fee_sponsor_vault_allocation_requires_program_management_authority() {
     stx.world
         .fee_sponsor_programs
         .insert(program_id.clone(), program);
-
     let error = RegisterVerifiedFeeSponsorVaultAllocation {
         program_id: program_id.clone(),
         program_revision: 1,
@@ -649,7 +614,6 @@ fn fee_sponsor_vault_allocation_requires_program_management_authority() {
             .to_string()
             .contains("cannot manage fee sponsor program")
     );
-
     let mut permissions = Permissions::new();
     permissions.insert(
         CanManageFeeSponsorProgram {
@@ -663,7 +627,6 @@ fn fee_sponsor_vault_allocation_requires_program_management_authority() {
     ensure_fee_sponsor_program_owner(&BOB_ID, &program_id, &stx)
         .expect("delegated manager must be authorized to register allocations");
 }
-
 #[test]
 fn fee_sponsor_vault_allocation_rejects_future_source_height() {
     use iroha_data_model::{
@@ -673,7 +636,6 @@ fn fee_sponsor_vault_allocation_rejects_future_source_height() {
             FeeSponsorProgramRevisionKey, FeeSponsorVault, FeeSponsorVaultKey, ProofBlob,
         },
     };
-
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -690,7 +652,6 @@ fn fee_sponsor_vault_allocation_rejects_future_source_height() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.nexus.enabled = true;
-
     let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
         .parse()
         .expect("canonical asset definition id");
@@ -729,7 +690,6 @@ fn fee_sponsor_vault_allocation_rejects_future_source_height() {
             balance: Quantity::from(10_u32),
         },
     );
-
     let error = RegisterVerifiedFeeSponsorVaultAllocation {
         program_id,
         program_revision: 1,
@@ -758,7 +718,6 @@ fn fee_sponsor_vault_allocation_rejects_future_source_height() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     use iroha_data_model::{
@@ -771,7 +730,6 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
             FeeSponsorProgramRevisionKey, ProofBlob,
         },
     };
-
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -788,7 +746,6 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.nexus.enabled = true;
-
     let authority = ALICE_ID.clone();
     let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
         .parse()
@@ -804,7 +761,6 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     stx.world
         .asset_definitions
         .insert(asset_definition_id.clone(), definition);
-
     let program_id = FeeSponsorProgramId::new(
         authority.clone(),
         "restricted_asset".parse().expect("program name"),
@@ -821,7 +777,6 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     stx.world
         .fee_sponsor_programs
         .insert(program_id.clone(), program);
-
     let stage_error = StageFeeSponsorProgramRevision {
         revision: fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 2),
     }
@@ -841,7 +796,6 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
             .get(&FeeSponsorProgramRevisionKey::new(program_id.clone(), 2))
             .is_none()
     );
-
     let fund_error = FundFeeSponsorProgram {
         program_id: program_id.clone(),
         asset_definition_id: asset_definition_id.clone(),
@@ -850,7 +804,6 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     .execute(&authority, &mut stx)
     .expect_err("restricted fee asset funding must fail");
     assert!(is_restricted_asset_error(&fund_error));
-
     let allocation_error = RegisterVerifiedFeeSponsorVaultAllocation {
         program_id,
         program_revision: 1,

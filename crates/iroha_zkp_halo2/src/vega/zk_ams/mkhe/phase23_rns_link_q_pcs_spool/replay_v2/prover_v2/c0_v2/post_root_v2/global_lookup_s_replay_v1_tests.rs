@@ -3,9 +3,7 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-
 use super::*;
-
 static DIRECTORY_SEQUENCE_V1: AtomicU64 = AtomicU64::new(0);
 static TEST_MODULI_V1: [u64; 2] = [97, 113];
 const RELEASE_PARAMETER_KAT_V1: [u8; 32] = [
@@ -32,7 +30,6 @@ const TINY_BINDING_KAT_V1: [u8; 32] = [
     0x9d, 0xfd, 0x76, 0xc0, 0x3f, 0x6e, 0x5e, 0x73, 0x7a, 0x6a, 0x66, 0xd0, 0x81, 0x6c, 0x41, 0x90,
     0x9d, 0x13, 0x77, 0xc6, 0x8a, 0x19, 0x42, 0xb6, 0x3b, 0x84, 0xed, 0xf7, 0xa5, 0x99, 0x16, 0xcf,
 ];
-
 fn manual_mapping_oracle_v1(
     limbs: u64,
     blocks_per_relation: u64,
@@ -60,7 +57,6 @@ fn manual_mapping_oracle_v1(
     assert_eq!(slot_count, limbs * 5 * blocks_per_relation);
     hash.finalize()
 }
-
 fn manual_binding_oracle_v1(
     parameter_digest: [u8; 32],
     mapping_digest: [u8; 32],
@@ -86,9 +82,7 @@ fn manual_binding_oracle_v1(
     hash.update(&tuple_count.to_be_bytes());
     hash.finalize()
 }
-
 struct TestDirectoryV1(PathBuf);
-
 impl TestDirectoryV1 {
     fn new_v1() -> Self {
         let sequence = DIRECTORY_SEQUENCE_V1.fetch_add(1, Ordering::SeqCst);
@@ -100,13 +94,11 @@ impl TestDirectoryV1 {
         Self(path)
     }
 }
-
 impl Drop for TestDirectoryV1 {
     fn drop(&mut self) {
         fs::remove_dir(&self.0).expect("terminal replay removed its confidential snapshot");
     }
 }
-
 fn geometry_v1() -> SpoolGeometryV2 {
     SpoolGeometryV2 {
         ring_degree: 4,
@@ -117,14 +109,12 @@ fn geometry_v1() -> SpoolGeometryV2 {
         moduli: &TEST_MODULI_V1,
     }
 }
-
 fn context_v1() -> PublicSpoolContextV2 {
     PublicSpoolContextV2 {
         sealed_source_transcript_digest: [0x31; 32],
         source_algebra_binding_digest: [0x42; 32],
     }
 }
-
 fn axes_v1() -> GlobalLookupSReplayAxesV1 {
     let context = context_v1();
     GlobalLookupSReplayAxesV1 {
@@ -136,7 +126,6 @@ fn axes_v1() -> GlobalLookupSReplayAxesV1 {
         topology_digest: GLOBAL_LOOKUP_TOPOLOGY_DIGEST_V1,
     }
 }
-
 fn sealed_v1(directory: &TestDirectoryV1) -> MaskSpoolSealedV2 {
     let geometry = geometry_v1();
     let mut writer = MaskSpoolWriterV2::create_v2(
@@ -161,14 +150,12 @@ fn sealed_v1(directory: &TestDirectoryV1) -> MaskSpoolSealedV2 {
     }
     writer.seal_v2().unwrap()
 }
-
 struct CountingSinkV1 {
     begins: u64,
     tuples: u64,
     finishes: u64,
     binding_digest: [u8; 32],
 }
-
 impl CountingSinkV1 {
     fn new_v1() -> Self {
         Self {
@@ -179,7 +166,6 @@ impl CountingSinkV1 {
         }
     }
 }
-
 impl GlobalLookupSTupleSinkV1 for CountingSinkV1 {
     fn begin_v1(
         &mut self,
@@ -194,7 +180,6 @@ impl GlobalLookupSTupleSinkV1 for CountingSinkV1 {
         self.binding_digest = binding.digest;
         Ok(())
     }
-
     fn absorb_next_v1(
         &mut self,
         digits: [u16; 4],
@@ -205,7 +190,6 @@ impl GlobalLookupSTupleSinkV1 for CountingSinkV1 {
         self.tuples += 1;
         Ok(())
     }
-
     fn finish_v1(
         &mut self,
         binding: &GlobalLookupSReplayBindingV1,
@@ -216,13 +200,11 @@ impl GlobalLookupSTupleSinkV1 for CountingSinkV1 {
         Ok(())
     }
 }
-
 struct FailingSinkV1 {
     fail_at: u64,
     tuples: u64,
     panic: bool,
 }
-
 impl GlobalLookupSTupleSinkV1 for FailingSinkV1 {
     fn begin_v1(
         &mut self,
@@ -230,7 +212,6 @@ impl GlobalLookupSTupleSinkV1 for FailingSinkV1 {
     ) -> Result<(), ProverPrerequisiteErrorV2> {
         Ok(())
     }
-
     fn absorb_next_v1(
         &mut self,
         _digits: [u16; 4],
@@ -245,7 +226,6 @@ impl GlobalLookupSTupleSinkV1 for FailingSinkV1 {
         }
         Ok(())
     }
-
     fn finish_v1(
         &mut self,
         _binding: &GlobalLookupSReplayBindingV1,
@@ -253,7 +233,6 @@ impl GlobalLookupSTupleSinkV1 for FailingSinkV1 {
         Ok(())
     }
 }
-
 #[test]
 fn authenticated_replay_returns_owner_only_after_exact_sink_completion() {
     let directory = TestDirectoryV1::new_v1();
@@ -273,7 +252,6 @@ fn authenticated_replay_returns_owner_only_after_exact_sink_completion() {
     }
     drop(replay.complete_v2().unwrap());
 }
-
 #[test]
 fn sink_error_and_unwind_terminally_drop_the_taken_snapshot() {
     let directory = TestDirectoryV1::new_v1();
@@ -310,7 +288,6 @@ fn sink_error_and_unwind_terminally_drop_the_taken_snapshot() {
         .is_err()
     );
 }
-
 #[test]
 fn coordinate_order_completion_and_radix_complement_are_exact() {
     let geometry = SpoolGeometryV2::release_v2();
@@ -342,7 +319,6 @@ fn coordinate_order_completion_and_radix_complement_are_exact() {
     let last = coordinate_v1(geometry, slots, slots - 1).unwrap();
     assert_eq!((last.limb, last.repetition, last.group), (37, 4, 7));
     assert!(coordinate_v1(geometry, slots, slots).is_err());
-
     let mut reordered = coordinate_v1(geometry, slots, 1).unwrap();
     reordered.group = 1;
     assert!(matches!(
@@ -351,7 +327,6 @@ fn coordinate_order_completion_and_radix_complement_are_exact() {
     ));
     assert!(require_completion_v1(24_320, 24_903_680, 24_319, 24_903_680).is_err());
     assert!(require_completion_v1(24_320, 24_903_680, 24_321, 24_903_680).is_err());
-
     let modulus = RELEASE_MODULI_V1[0];
     for value in [0, 1, 32_767, 32_768, modulus - 1] {
         let (digits, complement) = radix_tuple_v1(value, modulus).unwrap();
@@ -368,7 +343,6 @@ fn coordinate_order_completion_and_radix_complement_are_exact() {
     }
     assert!(radix_tuple_v1(modulus, modulus).is_err());
 }
-
 #[test]
 fn release_accounting_topology_binding_mutations_and_source_guards_are_pinned() {
     let geometry = SpoolGeometryV2::release_v2();
@@ -384,7 +358,6 @@ fn release_accounting_topology_binding_mutations_and_source_guards_are_pinned() 
     );
     assert_eq!(GLOBAL_LOOKUP_S_RELEASE_TOTAL_IO_BYTES_V1, 598_855_680);
     assert_eq!(GLOBAL_LOOKUP_S_RELEASE_TRANSIENT_HEAP_BYTES_V1, 8_192);
-
     assert_eq!(
         parameter_digest_v2(geometry).unwrap(),
         RELEASE_PARAMETER_KAT_V1
@@ -443,7 +416,6 @@ fn release_accounting_topology_binding_mutations_and_source_guards_are_pinned() 
         ),
         RELEASE_BINDING_KAT_V1
     );
-
     let mapping = mapping_digest_v1(geometry_v1(), 20).unwrap();
     let baseline = binding_v1(&axes_v1(), [0x75; 32], mapping, 20, 40).digest;
     assert_eq!(
@@ -478,7 +450,6 @@ fn release_accounting_topology_binding_mutations_and_source_guards_are_pinned() 
         baseline,
         binding_v1(&axes_v1(), snapshot, mapping, 20, 40).digest
     );
-
     let source = include_str!("global_lookup_s_replay_v1.rs");
     let tests = include_str!("global_lookup_s_replay_v1_tests.rs");
     let parent = include_str!("../post_root_v2.rs");

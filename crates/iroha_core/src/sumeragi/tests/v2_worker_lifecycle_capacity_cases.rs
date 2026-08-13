@@ -6,7 +6,6 @@ fn recovered_decision_apply_completion_drop_is_fail_stop() {
     ));
     assert!(output_guard.restart_required());
 }
-
 #[test]
 fn settled_recovered_decision_apply_completion_disarms_drop_guard() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -15,7 +14,6 @@ fn settled_recovered_decision_apply_completion_disarms_drop_guard() {
     drop(guard);
     assert!(!output_guard.restart_required());
 }
-
 #[test]
 fn recovered_decision_apply_source_stays_outside_generic_effect_ownership() {
     let apply_source = include_str!("../v2_apply.rs");
@@ -63,7 +61,6 @@ fn recovered_decision_apply_source_stays_outside_generic_effect_ownership() {
         "only the fixed recovered carrier projection may mint the worker task"
     );
 }
-
 #[test]
 fn recovered_decision_apply_worker_source_keeps_a_separate_owner_corridor() {
     let source = include_str!("../v2_worker.rs");
@@ -75,7 +72,6 @@ fn recovered_decision_apply_worker_source_keeps_a_separate_owner_corridor() {
         .expect("generic queue enqueue precedes cancellation")
         .0;
     assert!(generic_enqueue.contains("UnreservedRecoveredDecisionApply"));
-
     let reservation = source
         .split_once("impl RecoveredDecisionApplyCapacityReservationV1<'_>")
         .expect("dedicated recovered Apply reservation remains present")
@@ -86,7 +82,6 @@ fn recovered_decision_apply_worker_source_keeps_a_separate_owner_corridor() {
     assert!(reservation.contains("authenticated_predecessor_debt"));
     assert!(reservation.contains("prepared.commit_for_worker()"));
     assert!(reservation.contains("V2IoCommand::RecoveredDecisionApply(task)"));
-
     let completion = source
         .split_once("struct RecoveredDecisionApplyWorkAckV1")
         .expect("dedicated recovered Apply acknowledgement remains present")
@@ -99,7 +94,6 @@ fn recovered_decision_apply_worker_source_keeps_a_separate_owner_corridor() {
     assert!(completion.contains("fn retry_deferred("));
     assert!(completion.contains("retry_recovered_decision_apply(task)"));
     assert!(completion.contains("acknowledge_recovered_decision_apply_completion(self.key)"));
-
     let retry = source
         .split_once("fn retry_recovered_decision_apply<")
         .expect("dedicated recovered Apply retry remains present")
@@ -125,7 +119,6 @@ fn recovered_decision_apply_worker_source_keeps_a_separate_owner_corridor() {
             && queued < publish,
         "deferred retry must rejoin the Serve barrier and transfer completion ownership before publication"
     );
-
     let generic_take = source
         .split_once("fn take_io_completion(")
         .expect("ordinary completion take remains present")
@@ -148,7 +141,6 @@ fn recovered_decision_apply_worker_source_keeps_a_separate_owner_corridor() {
     assert!(!source.contains("_services: &'services mut ProductionV2Services"));
     assert!(!source.contains("complete_application(*guarded"));
 }
-
 #[test]
 fn recovered_decision_apply_completion_accounting_is_stable_by_exact_key() {
     let admission = V2IoAdmission::new(2, 2).expect("construct bounded I/O admission");
@@ -157,7 +149,6 @@ fn recovered_decision_apply_completion_accounting_is_stable_by_exact_key() {
     admission.retain_completion(Instant::now(), false, None, None, None, None);
     admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None);
     admission.retain_completion(Instant::now(), false, Some(8), None, None, None);
-
     assert!(admission.recovered_decision_apply_completion_is_exact(key));
     assert!(
         !admission.recovered_decision_apply_completion_is_exact(same_ordinal_foreign),
@@ -176,7 +167,6 @@ fn recovered_decision_apply_completion_accounting_is_stable_by_exact_key() {
         "keyed transfer must preserve unrelated completion positions"
     );
 }
-
 #[test]
 fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_completions() {
     let admission = Arc::new(V2IoAdmission::new(2, 2).expect("bounded retry admission"));
@@ -217,7 +207,6 @@ fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
             )
         })
         .collect::<Vec<_>>();
-
     assert!(
         command_tx
             .queue
@@ -225,7 +214,6 @@ fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
             .is_ok(),
         "the exact retained completion must re-enter its dedicated queue"
     );
-
     let state = command_tx.queue.lock();
     assert_eq!(
         state
@@ -261,7 +249,6 @@ fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
         .collect::<Vec<_>>();
     assert_eq!(unrelated_after, unrelated_before);
 }
-
 #[test]
 fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrier() {
     {
@@ -294,7 +281,6 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
                 )
             })
             .collect::<Vec<_>>();
-
         assert!(matches!(
             command_tx
                 .queue
@@ -303,7 +289,6 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
                 RecoveredDecisionApplyRetryTaskFixtureV1(returned)
             )) if returned == key
         ));
-
         let state = command_tx.queue.lock();
         assert_eq!(
             state
@@ -339,7 +324,6 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
             completion_before
         );
     }
-
     let (service, keys) = fixture_with_block_payload();
     let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
     let request = authenticated_serve_request(
@@ -379,7 +363,6 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
             )
         })
         .collect::<Vec<_>>();
-
     assert!(matches!(
         command_tx
             .queue
@@ -388,7 +371,6 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrie
             RecoveredDecisionApplyRetryTaskFixtureV1(returned)
         )) if returned == key
     ));
-
     let state = command_tx.queue.lock();
     assert_eq!(
         state
@@ -436,7 +418,6 @@ pub(in crate::sumeragi) struct LifecyclePlannerIoFixture {
     command_rx: V2IoCommandReceiver,
     _body_store: V2BodyStore,
 }
-
 impl LifecyclePlannerIoFixture {
     /// Count exact queued certified-Fetch persistence commands.
     pub(in crate::sumeragi) fn queued_certified_fetch_count(&self) -> usize {
@@ -448,7 +429,6 @@ impl LifecyclePlannerIoFixture {
             .filter(|command| matches!(command, V2IoCommand::PersistCertifiedFetchBody(_)))
             .count()
     }
-
     /// Fill the exact Consensus threshold with control predecessors.
     pub(in crate::sumeragi) fn saturate_consensus_prefix(&self, services: &ProductionV2Services) {
         let io = services
@@ -465,7 +445,6 @@ impl LifecyclePlannerIoFixture {
                 .expect("control reserve admits the bounded test predecessor");
         }
     }
-
     /// Release one exact synthetic predecessor through the real receiver.
     pub(in crate::sumeragi) fn release_one_predecessor(&self) {
         assert!(matches!(
@@ -473,7 +452,6 @@ impl LifecyclePlannerIoFixture {
             Ok(V2IoCommand::Shutdown)
         ));
     }
-
     /// Replace only the manual service's output guard for identity tests.
     pub(in crate::sumeragi) fn install_output_guard_for_test(
         &self,
@@ -490,7 +468,6 @@ impl LifecyclePlannerIoFixture {
         );
         services.output_guard = output_guard;
     }
-
     /// Retire the manual queue without invoking worker shutdown semantics.
     pub(in crate::sumeragi) fn detach(self, services: &mut ProductionV2Services) {
         services.lifecycle_body_store_identity = None;
@@ -498,7 +475,6 @@ impl LifecyclePlannerIoFixture {
         drop(self);
     }
 }
-
 /// Install the exact body store moved out of a lifecycle owner into one
 /// bounded production-service queue for the owner transaction regression.
 pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_test(
@@ -519,7 +495,6 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_test(
         class_capacity,
     )
 }
-
 /// Install a moved exact store for a chosen local-validator service fixture.
 pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
     services: &mut ProductionV2Services,
@@ -572,7 +547,6 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
         _body_store: body_store,
     }
 }
-
 /// Install the exact private signer matching the test service's local peer.
 pub(in crate::sumeragi) fn install_local_signer_for_test(
     services: &mut ProductionV2Services,
@@ -612,7 +586,6 @@ fn lifecycle_capacity_reservation_freezes_fifo_tail_and_rolls_back_under_lock() 
     };
     assert_eq!(reservation.predecessor_debt, 1);
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 2);
-
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
     let producer = std::thread::spawn(move || {
         let result = sender.try_send(V2IoCommand::Shutdown);
@@ -624,7 +597,6 @@ fn lifecycle_capacity_reservation_freezes_fifo_tail_and_rolls_back_under_lock() 
         done_rx.recv_timeout(Duration::from_millis(20)),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout)
     ));
-
     reservation.cancel_before_plan_for_test();
     assert!(done_rx.recv().expect("producer resumes after rollback"));
     producer.join().expect("producer thread exits");
@@ -633,7 +605,6 @@ fn lifecycle_capacity_reservation_freezes_fifo_tail_and_rolls_back_under_lock() 
     assert!(matches!(receiver.try_recv(), Ok(V2IoCommand::Shutdown)));
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
 }
-
 #[test]
 fn lifecycle_capacity_unfinished_reservation_closes_output_fail_stop() {
     let (service, _) = fixture();
@@ -656,13 +627,10 @@ fn lifecycle_capacity_unfinished_reservation_closes_output_fail_stop() {
     else {
         panic!("empty consensus suffix must reserve");
     };
-
     drop(reservation);
-
     assert!(output_guard.restart_required());
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
 }
-
 #[test]
 fn lifecycle_capacity_uses_hierarchical_class_and_release_generation() {
     let (service, _) = fixture();
@@ -671,7 +639,6 @@ fn lifecycle_capacity_uses_hierarchical_class_and_release_generation() {
     let (sender, _receiver) = v2_io_command_channel(capacity, 1, 1, 1, Arc::clone(&admission));
     assert!(admission.try_reserve(V2IoAdmissionClass::Auxiliary));
     let output_guard = ConsensusOutputGuard::isolated();
-
     let auxiliary = LifecycleIngressIoTargetSeal::for_test(
         &service.context,
         LifecycleIngressIoTargetKind::CertifiedServe,
@@ -693,7 +660,6 @@ fn lifecycle_capacity_uses_hierarchical_class_and_release_generation() {
         wait.target.kind(),
         LifecycleIngressIoTargetKind::CertifiedServe
     );
-
     let consensus = LifecycleIngressIoTargetSeal::for_test(
         &service.context,
         LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
@@ -714,7 +680,6 @@ fn lifecycle_capacity_uses_hierarchical_class_and_release_generation() {
     assert!(admission.lifecycle_capacity_generation() > wait.observed_generation);
     admission.release();
 }
-
 #[test]
 fn lifecycle_capacity_wait_classifies_live_release_and_terminal_service_loss() {
     let (mut service, _) = fixture();
@@ -741,7 +706,6 @@ fn lifecycle_capacity_wait_classifies_live_release_and_terminal_service_loss() {
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission: Arc::clone(&admission),
     });
-
     assert_eq!(
         wait.status(&service),
         LifecycleIoCapacityWaitStatus::SamePending
@@ -752,7 +716,6 @@ fn lifecycle_capacity_wait_classifies_live_release_and_terminal_service_loss() {
         wait.status(&service),
         LifecycleIoCapacityWaitStatus::Released
     );
-
     admission
         .lifecycle_capacity_generation
         .store(u64::MAX, AtomicOrdering::Release);
@@ -763,7 +726,6 @@ fn lifecycle_capacity_wait_classifies_live_release_and_terminal_service_loss() {
         wait.status(&service),
         LifecycleIoCapacityWaitStatus::GenerationExhausted
     );
-
     output_guard.activate_restart_required();
     assert_eq!(
         wait.status(&service),
@@ -775,7 +737,6 @@ fn lifecycle_capacity_wait_classifies_live_release_and_terminal_service_loss() {
         LifecycleIoCapacityWaitStatus::ForeignOrDisconnected
     );
 }
-
 #[test]
 fn lifecycle_capacity_generation_exhaustion_never_wraps() {
     let (service, _) = fixture();
@@ -789,7 +750,6 @@ fn lifecycle_capacity_generation_exhaustion_never_wraps() {
     admission.release();
     assert_eq!(admission.lifecycle_capacity_generation(), u64::MAX);
     assert!(admission.lifecycle_capacity_generation_exhausted());
-
     let output_guard = ConsensusOutputGuard::isolated();
     let operation = output_guard
         .begin_fail_stop_operation()
@@ -816,7 +776,6 @@ fn lifecycle_capacity_generation_exhaustion_never_wraps() {
     );
     assert!(output_guard.restart_required());
 }
-
 #[test]
 fn lifecycle_capacity_rejects_repeat_fetch_while_work_is_completion_pending() {
     let (mut service, keys) = fixture();
@@ -841,7 +800,6 @@ fn lifecycle_capacity_rejects_repeat_fetch_while_work_is_completion_pending() {
         sender.queue.lock().work[&work_id].state,
         V2IoWorkState::CompletionPending
     );
-
     let output_guard = ConsensusOutputGuard::isolated();
     let operation = output_guard
         .begin_fail_stop_operation()
@@ -876,7 +834,6 @@ fn unconsumed_certified_fetch_persistence_closes_output() {
     )));
     assert!(abandoned_output.restart_required());
     assert!(abandoned_output.acquire().is_none());
-
     let transferred_output = ConsensusOutputGuard::isolated();
     let mut transferred =
         CertifiedFetchBodyPersistenceDropGuard::new(Arc::clone(&transferred_output));

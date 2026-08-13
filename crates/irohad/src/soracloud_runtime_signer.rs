@@ -6,9 +6,7 @@
 //! material never cross this boundary. A qualified signer is re-probed
 //! immediately before and after every operation, and every returned signature
 //! is verified against the exact requested transaction or provenance payload.
-
 use std::sync::Arc;
-
 use iroha_config::parameters::validate_production_runtime_handle;
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 pub use iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1;
@@ -17,9 +15,7 @@ use iroha_data_model::{
     soracloud::validate_soracloud_runtime_provenance_preimage_v1,
     transaction::{SignedTransaction, TransactionPayload},
 };
-
 const MAX_SORACLOUD_RUNTIME_PROVENANCE_PREIMAGE_BYTES_V1: usize = 16 * 1024 * 1024;
-
 /// Public liveness and policy identity reported by the runtime signer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SoracloudRuntimeSignerQualificationV1 {
@@ -28,7 +24,6 @@ pub struct SoracloudRuntimeSignerQualificationV1 {
     active: bool,
     test_only: bool,
 }
-
 impl SoracloudRuntimeSignerQualificationV1 {
     /// Construct a qualification report.
     ///
@@ -48,31 +43,26 @@ impl SoracloudRuntimeSignerQualificationV1 {
             test_only,
         }
     }
-
     /// Return the exact adapter and public-policy revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the exact public-policy digest.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     /// Return whether the provider reports an active, non-revoked posture.
     #[must_use]
     pub const fn active(self) -> bool {
         self.active
     }
-
     /// Return whether the provider reports a test-only implementation.
     #[must_use]
     pub const fn test_only(self) -> bool {
         self.test_only
     }
-
     /// Reject zero, inactive, revoked, or test-only qualification.
     ///
     /// # Errors
@@ -94,7 +84,6 @@ impl SoracloudRuntimeSignerQualificationV1 {
         Ok(())
     }
 }
-
 /// Invalid public signer qualification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoracloudRuntimeSignerQualificationValueErrorV1 {
@@ -107,7 +96,6 @@ pub enum SoracloudRuntimeSignerQualificationValueErrorV1 {
     /// Provider reports a test-only implementation.
     TestOnly,
 }
-
 /// Exact non-secret identity expected from the deployment-owned signer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudRuntimeSignerBindingV1 {
@@ -116,7 +104,6 @@ pub struct SoracloudRuntimeSignerBindingV1 {
     public_key: PublicKey,
     qualification: SoracloudRuntimeSignerQualificationV1,
 }
-
 impl SoracloudRuntimeSignerBindingV1 {
     /// Project and validate one parsed public signer binding.
     ///
@@ -143,7 +130,6 @@ impl SoracloudRuntimeSignerBindingV1 {
             ),
         )
     }
-
     /// Validate and construct an expected production signer binding.
     ///
     /// # Errors
@@ -174,32 +160,27 @@ impl SoracloudRuntimeSignerBindingV1 {
             qualification,
         })
     }
-
     /// Return the stable opaque provider handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         &self.handle
     }
-
     /// Return the exact transaction authority.
     #[must_use]
     pub const fn authority(&self) -> &AccountId {
         &self.authority
     }
-
     /// Return the exact public key.
     #[must_use]
     pub const fn public_key(&self) -> &PublicKey {
         &self.public_key
     }
-
     /// Return the expected active, non-test qualification.
     #[must_use]
     pub const fn qualification(&self) -> SoracloudRuntimeSignerQualificationV1 {
         self.qualification
     }
 }
-
 /// Invalid expected signer binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoracloudRuntimeSignerBindingErrorV1 {
@@ -214,7 +195,6 @@ pub enum SoracloudRuntimeSignerBindingErrorV1 {
     /// Public key does not derive the configured authority.
     AuthorityKeyMismatch,
 }
-
 /// Payload-free failure while probing the deployment-owned signer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoracloudRuntimeSignerProbeErrorV1 {
@@ -223,7 +203,6 @@ pub enum SoracloudRuntimeSignerProbeErrorV1 {
     /// Provider refused or could not answer the public probe.
     Refused,
 }
-
 /// Payload-free failure while asking the deployment-owned signer to sign.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoracloudRuntimeSigningErrorV1 {
@@ -242,7 +221,6 @@ pub enum SoracloudRuntimeSigningErrorV1 {
     /// Provider identity, key, revision, or posture changed around the request.
     QualificationChanged,
 }
-
 /// Runtime-only mutation and purpose-separated provenance signer.
 ///
 /// Implementations keep credentials and private keys inside the deployment
@@ -251,24 +229,19 @@ pub enum SoracloudRuntimeSigningErrorV1 {
 pub trait SoracloudRuntimeMutationSignerV1: Send + Sync {
     /// Return the stable opaque production-provider handle.
     fn handle(&self) -> &str;
-
     /// Return the transaction authority controlled by this provider.
     fn authority(&self) -> AccountId;
-
     /// Probe the exact public key controlled by this provider.
     fn public_key(&self) -> Result<PublicKey, SoracloudRuntimeSignerProbeErrorV1>;
-
     /// Probe the active revision, policy digest, and non-test posture.
     fn qualification(
         &self,
     ) -> Result<SoracloudRuntimeSignerQualificationV1, SoracloudRuntimeSignerProbeErrorV1>;
-
     /// Sign one exact fee-quoted Soracloud transaction payload.
     fn sign_transaction(
         &self,
         payload: TransactionPayload,
     ) -> Result<SignedTransaction, SoracloudRuntimeSigningErrorV1>;
-
     /// Sign one exact canonical, purpose-bound provenance preimage.
     fn sign_provenance(
         &self,
@@ -276,7 +249,6 @@ pub trait SoracloudRuntimeMutationSignerV1: Send + Sync {
         preimage: &[u8],
     ) -> Result<Signature, SoracloudRuntimeSigningErrorV1>;
 }
-
 /// Startup or operation-bound exact qualification failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoracloudRuntimeSignerQualificationErrorV1 {
@@ -307,7 +279,6 @@ pub enum SoracloudRuntimeSignerQualificationErrorV1 {
     /// Provider identity changed between adjacent probes.
     ProviderDrift,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProviderSnapshotV1 {
     handle: String,
@@ -315,7 +286,6 @@ struct ProviderSnapshotV1 {
     public_key: PublicKey,
     qualification: SoracloudRuntimeSignerQualificationV1,
 }
-
 fn validate_public_key_algorithm(public_key: &PublicKey) -> Result<(), ()> {
     if matches!(
         public_key.try_algorithm(),
@@ -326,7 +296,6 @@ fn validate_public_key_algorithm(public_key: &PublicKey) -> Result<(), ()> {
         Err(())
     }
 }
-
 fn probe_provider(
     provider: &(impl SoracloudRuntimeMutationSignerV1 + ?Sized),
 ) -> Result<ProviderSnapshotV1, SoracloudRuntimeSignerQualificationErrorV1> {
@@ -365,7 +334,6 @@ fn probe_provider(
         qualification,
     })
 }
-
 fn validate_snapshot(
     binding: &SoracloudRuntimeSignerBindingV1,
     snapshot: &ProviderSnapshotV1,
@@ -390,7 +358,6 @@ fn validate_snapshot(
     }
     Ok(())
 }
-
 fn qualification_probe_error(
     error: SoracloudRuntimeSignerQualificationErrorV1,
 ) -> SoracloudRuntimeSignerProbeErrorV1 {
@@ -400,12 +367,10 @@ fn qualification_probe_error(
         SoracloudRuntimeSignerProbeErrorV1::Refused
     }
 }
-
 struct QualifiedSoracloudRuntimeMutationSignerV1 {
     binding: SoracloudRuntimeSignerBindingV1,
     provider: Arc<dyn SoracloudRuntimeMutationSignerV1>,
 }
-
 impl QualifiedSoracloudRuntimeMutationSignerV1 {
     fn try_new(
         binding: SoracloudRuntimeSignerBindingV1,
@@ -419,33 +384,27 @@ impl QualifiedSoracloudRuntimeMutationSignerV1 {
         validate_snapshot(&binding, &first)?;
         Ok(Self { binding, provider })
     }
-
     fn revalidate(&self) -> Result<(), SoracloudRuntimeSignerQualificationErrorV1> {
         validate_snapshot(&self.binding, &probe_provider(self.provider.as_ref())?)
     }
 }
-
 impl SoracloudRuntimeMutationSignerV1 for QualifiedSoracloudRuntimeMutationSignerV1 {
     fn handle(&self) -> &str {
         self.binding.handle()
     }
-
     fn authority(&self) -> AccountId {
         self.binding.authority().clone()
     }
-
     fn public_key(&self) -> Result<PublicKey, SoracloudRuntimeSignerProbeErrorV1> {
         self.revalidate().map_err(qualification_probe_error)?;
         Ok(self.binding.public_key().clone())
     }
-
     fn qualification(
         &self,
     ) -> Result<SoracloudRuntimeSignerQualificationV1, SoracloudRuntimeSignerProbeErrorV1> {
         self.revalidate().map_err(qualification_probe_error)?;
         Ok(self.binding.qualification())
     }
-
     fn sign_transaction(
         &self,
         payload: TransactionPayload,
@@ -469,7 +428,6 @@ impl SoracloudRuntimeMutationSignerV1 for QualifiedSoracloudRuntimeMutationSigne
         }
         Ok(transaction)
     }
-
     fn sign_provenance(
         &self,
         purpose: SoracloudRuntimeProvenancePurposeV1,
@@ -493,7 +451,6 @@ impl SoracloudRuntimeMutationSignerV1 for QualifiedSoracloudRuntimeMutationSigne
         Ok(signature)
     }
 }
-
 /// Qualify an injected Soracloud signer against one exact expected binding.
 ///
 /// The provider is probed twice before this function returns. The returned
@@ -512,11 +469,9 @@ pub fn qualify_soracloud_runtime_mutation_signer_v1(
     let provider: Arc<dyn SoracloudRuntimeMutationSignerV1> = Arc::new(provider);
     Ok(provider)
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
-
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -526,18 +481,14 @@ mod tests {
         transaction::signed::{MultisigSignature, MultisigSignatures},
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
-
     use super::*;
-
     const QUALIFICATION: SoracloudRuntimeSignerQualificationV1 =
         SoracloudRuntimeSignerQualificationV1::new(9, [0xA9; 32], true, false);
-
     #[derive(Clone, Copy)]
     enum TestTransactionMutation {
         Attachments,
         Multisig,
     }
-
     struct TestSigner {
         handle: String,
         key_pair: KeyPair,
@@ -545,27 +496,22 @@ mod tests {
         transaction_mutation: Mutex<Option<TestTransactionMutation>>,
         forge_provenance: bool,
     }
-
     impl SoracloudRuntimeMutationSignerV1 for TestSigner {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn authority(&self) -> AccountId {
             AccountId::new(self.key_pair.public_key().clone())
         }
-
         fn public_key(&self) -> Result<PublicKey, SoracloudRuntimeSignerProbeErrorV1> {
             Ok(self.key_pair.public_key().clone())
         }
-
         fn qualification(
             &self,
         ) -> Result<SoracloudRuntimeSignerQualificationV1, SoracloudRuntimeSignerProbeErrorV1>
         {
             Ok(*self.qualification.lock().expect("qualification lock"))
         }
-
         fn sign_transaction(
             &self,
             payload: TransactionPayload,
@@ -597,7 +543,6 @@ mod tests {
             }
             Ok(signed)
         }
-
         fn sign_provenance(
             &self,
             _purpose: SoracloudRuntimeProvenancePurposeV1,
@@ -612,7 +557,6 @@ mod tests {
                 .map_err(|_| SoracloudRuntimeSigningErrorV1::Refused)
         }
     }
-
     fn fixture(
         forge_provenance: bool,
     ) -> (
@@ -647,13 +591,11 @@ mod tests {
         .expect("valid payload");
         (binding, provider, payload)
     }
-
     #[test]
     fn qualified_signer_reverifies_exact_transaction_and_provenance() {
         let (binding, provider, payload) = fixture(false);
         let signer = qualify_soracloud_runtime_mutation_signer_v1(binding, provider)
             .expect("provider qualifies");
-
         let transaction = signer
             .sign_transaction(payload.clone())
             .expect("transaction signs");
@@ -676,7 +618,6 @@ mod tests {
             )
             .expect("signature verifies");
     }
-
     #[test]
     fn qualification_rejects_inactive_and_test_only_providers() {
         for (qualification, expected) in [
@@ -697,7 +638,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn qualification_rejects_substituted_handle_and_stale_revision() {
         let (binding, mut provider, _) = fixture(false);
@@ -708,7 +648,6 @@ mod tests {
             qualify_soracloud_runtime_mutation_signer_v1(binding, provider).err(),
             Some(SoracloudRuntimeSignerQualificationErrorV1::HandleMismatch)
         );
-
         let (binding, provider, _) = fixture(false);
         *provider.qualification.lock().expect("qualification lock") =
             SoracloudRuntimeSignerQualificationV1::new(10, [0xA9; 32], true, false);
@@ -717,7 +656,6 @@ mod tests {
             Some(SoracloudRuntimeSignerQualificationErrorV1::RevisionMismatch)
         );
     }
-
     #[test]
     fn qualified_signer_rejects_forged_provenance_signature() {
         let (binding, provider, _) = fixture(true);
@@ -736,7 +674,6 @@ mod tests {
             Err(SoracloudRuntimeSigningErrorV1::InvalidProvenanceSignature)
         );
     }
-
     #[test]
     fn qualified_signer_rejects_explicit_purpose_mismatch() {
         let (binding, provider, _) = fixture(false);
@@ -747,7 +684,6 @@ mod tests {
             b"same semantic bytes",
         )
         .expect("encode provenance preimage");
-
         assert_eq!(
             signer.sign_provenance(
                 SoracloudRuntimeProvenancePurposeV1::ModelHostHeartbeat,
@@ -756,7 +692,6 @@ mod tests {
             Err(SoracloudRuntimeSigningErrorV1::InvalidProvenancePreimage)
         );
     }
-
     fn assert_transaction_sidecar_is_rejected(mutation: TestTransactionMutation) {
         let (binding, provider, payload) = fixture(false);
         *provider
@@ -770,17 +705,14 @@ mod tests {
             Err(SoracloudRuntimeSigningErrorV1::SubstitutedTransaction)
         );
     }
-
     #[test]
     fn qualified_signer_rejects_provider_injected_proof_attachments() {
         assert_transaction_sidecar_is_rejected(TestTransactionMutation::Attachments);
     }
-
     #[test]
     fn qualified_signer_rejects_provider_injected_multisig_sidecar() {
         assert_transaction_sidecar_is_rejected(TestTransactionMutation::Multisig);
     }
-
     #[test]
     fn qualified_public_probes_do_not_mask_later_revocation() {
         let (binding, provider, _) = fixture(false);
@@ -788,7 +720,6 @@ mod tests {
             .expect("provider qualifies");
         *provider.qualification.lock().expect("qualification lock") =
             SoracloudRuntimeSignerQualificationV1::new(9, [0xA9; 32], false, false);
-
         assert_eq!(
             signer.public_key(),
             Err(SoracloudRuntimeSignerProbeErrorV1::Refused)

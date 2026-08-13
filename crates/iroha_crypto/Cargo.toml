@@ -18,9 +18,9 @@ dev-tools = []
 # General application surface. Consensus-only consumers should use
 # `consensus` so they do not pull PQC and batch-verification helpers.
 application = ["std", "rand", "json", "ecc-batch", "bfv-accel", "pqc"]
-# Tokio adapters for the SoraNet post-handshake record protocol.  Keep this
-# opt-in so non-network crypto consumers do not acquire an async runtime.
-soranet-record-io = ["dep:tokio"]
+# Compatibility marker for the exported SoraNet record-I/O macro. Tokio names
+# resolve in each consumer crate, so the crypto crate does not own the runtime.
+soranet-record-io = []
 # Cryptography required by consensus and canonical node identities.
 consensus = ["std", "rand", "bls"]
 # Complete shipping node surface.
@@ -129,8 +129,6 @@ arrayref = { version = "0.3.9", default-features = false }
 
 aead = { version = "0.6.0-rc.3", default-features = false, features = ["alloc"] }
 chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core", "zeroize"] }
-tokio = { workspace = true, optional = true, features = ["io-util", "macros", "rt"] }
-
 elliptic-curve = { version = "0.13.8", default-features = false, features = ["std"] }
 k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecdsa", "sha256", "std"] }
 

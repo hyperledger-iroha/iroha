@@ -1,8 +1,6 @@
 use super::*;
-
 const SOURCE_DIGEST: [u8; 32] = [0x72; 32];
 const ALGEBRA_DIGEST: [u8; 32] = [0x83; 32];
-
 #[derive(Clone, Copy)]
 enum UniformCase {
     Valid,
@@ -10,26 +8,21 @@ enum UniformCase {
     BatchMismatch,
     FriMismatch,
 }
-
 fn context() -> ExpectedPublicContextV2 {
     ExpectedPublicContextV2 {
         sealed_source_transcript_digest: SOURCE_DIGEST,
         source_algebra_binding_digest: ALGEBRA_DIGEST,
     }
 }
-
 fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
-
 fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
 }
-
 fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_be_bytes());
 }
-
 fn uniform_tree_levels(
     kind: TreeKindV2,
     layer: usize,
@@ -54,7 +47,6 @@ fn uniform_tree_levels(
     }
     levels
 }
-
 fn uniform_root(
     kind: TreeKindV2,
     layer: usize,
@@ -65,7 +57,6 @@ fn uniform_root(
         .last()
         .unwrap()
 }
-
 fn uniform_leaf(case: UniformCase, kind: TreeKindV2, layer: usize) -> [u8; LEAF_BYTES_V2] {
     let mut leaf = [0_u8; LEAF_BYTES_V2];
     let make_nonzero = match case {
@@ -79,7 +70,6 @@ fn uniform_leaf(case: UniformCase, kind: TreeKindV2, layer: usize) -> [u8; LEAF_
     }
     leaf
 }
-
 fn append_uniform_section(
     wire: &mut Vec<u8>,
     queries: &[u32; QUERY_COUNT_V2],
@@ -96,7 +86,6 @@ fn append_uniform_section(
     for _ in 0..indices.len {
         wire.extend_from_slice(leaf);
     }
-
     let levels = uniform_tree_levels(kind, layer, length, leaf);
     assert_eq!(*levels.last().unwrap(), expected_root);
     let mut current = indices.values[..indices.len].to_vec();
@@ -127,7 +116,6 @@ fn append_uniform_section(
     }
     assert_eq!(written, authentication);
 }
-
 fn authentication_cap_witness_queries() -> [u32; QUERY_COUNT_V2] {
     let mut queries = [0_u32; QUERY_COUNT_V2];
     let mut next = 0_usize;
@@ -148,7 +136,6 @@ fn authentication_cap_witness_queries() -> [u32; QUERY_COUNT_V2] {
     }
     unreachable!("the 8-bit parity partition contains 160 requested states")
 }
-
 fn authenticated_uniform_wire_for_queries(
     case: UniformCase,
     query_override: Option<[u32; QUERY_COUNT_V2]>,
@@ -170,7 +157,6 @@ fn authenticated_uniform_wire_for_queries(
         *root = uniform_root(TreeKindV2::Fri, layer, length, &leaf);
         length /= 2;
     }
-
     let mut wire = vec![0_u8; FIXED_BEFORE_SECTIONS_V2];
     wire[..16].copy_from_slice(&MAGIC_V2);
     wire[16..24].copy_from_slice(&[2, 17, 19, 38, 5, 10, 18, 2]);
@@ -195,14 +181,12 @@ fn authenticated_uniform_wire_for_queries(
         wire[fri_root_offset + layer * 32..fri_root_offset + (layer + 1) * 32]
             .copy_from_slice(root);
     }
-
     let mut header = begin_v2(&wire, context(), SourceReplaySealV2::TestOnly).unwrap();
     let mut points = header.derive_points_v2().unwrap();
     let mut relations = points.check_relations_v2().unwrap();
     let mut quotient = relations.bind_quotient_root_v2().unwrap();
     let fri = quotient.bind_fri_transcript_v2().unwrap();
     let queries = query_override.unwrap_or(fri.live.as_ref().unwrap().queries);
-
     append_uniform_section(
         &mut wire,
         &queries,
@@ -244,15 +228,12 @@ fn authenticated_uniform_wire_for_queries(
     assert!(wire.len() <= MAX_PROOF_BYTES_V2);
     wire
 }
-
 fn authenticated_uniform_wire(case: UniformCase) -> Vec<u8> {
     authenticated_uniform_wire_for_queries(case, None)
 }
-
 fn authenticated_zero_wire() -> Vec<u8> {
     authenticated_uniform_wire(UniformCase::Valid)
 }
-
 fn through_fri(wire: &[u8]) -> FriTranscriptBoundV2<'_> {
     let mut header = begin_v2(wire, context(), SourceReplaySealV2::TestOnly).unwrap();
     let mut points = header.derive_points_v2().unwrap();
@@ -260,13 +241,11 @@ fn through_fri(wire: &[u8]) -> FriTranscriptBoundV2<'_> {
     let mut quotient = relations.bind_quotient_root_v2().unwrap();
     quotient.bind_fri_transcript_v2().unwrap()
 }
-
 fn section_len(wire: &[u8], offset: usize) -> usize {
     let opened = read_u32_v2(wire, offset).unwrap() as usize;
     let authentication = read_u32_v2(wire, offset + 4).unwrap() as usize;
     SECTION_HEADER_BYTES_V2 + opened * LEAF_BYTES_V2 + authentication * 32
 }
-
 #[test]
 fn literal_hash_field_and_equation_kats_are_stable() {
     const ZERO_LEAF_KAT: [u8; 32] = [
@@ -291,7 +270,6 @@ fn literal_hash_field_and_equation_kats_are_stable() {
         c0: 418_867_165_342_680_109,
         c1: 659_404_745_440_456_809,
     };
-
     let parameter_digest = parameter_digest_v2().unwrap();
     let leaf = [0_u8; LEAF_BYTES_V2];
     let leaf_hash = merkle_leaf_hash_v2(
@@ -315,7 +293,6 @@ fn literal_hash_field_and_equation_kats_are_stable() {
         .unwrap(),
         ZERO_PARENT_KAT
     );
-
     let field = field_parameters_v2().unwrap()[0];
     assert_eq!(field.nonresidue, 5);
     assert_eq!(
@@ -370,7 +347,6 @@ fn literal_hash_field_and_equation_kats_are_stable() {
         FOLD_KAT
     );
 }
-
 #[test]
 fn authenticated_verifier_accepts_the_exact_fri_authentication_maximum() {
     let queries = authentication_cap_witness_queries();
@@ -394,7 +370,6 @@ fn authenticated_verifier_accepts_the_exact_fri_authentication_maximum() {
     let verified = fri.verify_authenticated_equations_v2().unwrap();
     assert!(verified.live.is_some());
 }
-
 #[test]
 fn authenticated_zero_codeword_verifies_and_transition_poison_is_sticky() {
     let wire = authenticated_zero_wire();
@@ -412,7 +387,6 @@ fn authenticated_zero_codeword_verifies_and_transition_poison_is_sticky() {
     assert!(!AUTHENTICATED_MULTIPASS_REPLAY_INTEGRATED_V2);
     assert!(!RELEASE_READY_V2);
 }
-
 #[test]
 fn authenticated_hostile_opening_batch_and_fold_equations_fail_at_their_gate() {
     for (case, expected) in [
@@ -438,14 +412,12 @@ fn authenticated_hostile_opening_batch_and_fold_equations_fail_at_their_gate() {
         assert_eq!(error, expected);
     }
 }
-
 #[test]
 fn hostile_value_path_and_tree_role_order_fail_closed() {
     let wire = authenticated_zero_wire();
     let first_section = FIXED_BEFORE_SECTIONS_V2;
     let opened = read_u32_v2(&wire, first_section).unwrap() as usize;
     let authentication_start = first_section + SECTION_HEADER_BYTES_V2 + opened * LEAF_BYTES_V2;
-
     let mut changed_value = wire.clone();
     changed_value[first_section + SECTION_HEADER_BYTES_V2 + 15] ^= 1;
     let mut fri = through_fri(&changed_value);
@@ -453,7 +425,6 @@ fn hostile_value_path_and_tree_role_order_fail_closed() {
         fri.verify_authenticated_equations_v2(),
         Err(SoundnessErrorV2::InvalidMerklePath)
     ));
-
     let mut changed_path = wire.clone();
     changed_path[authentication_start] ^= 1;
     let mut fri = through_fri(&changed_path);
@@ -461,7 +432,6 @@ fn hostile_value_path_and_tree_role_order_fail_closed() {
         fri.verify_authenticated_equations_v2(),
         Err(SoundnessErrorV2::InvalidMerklePath)
     ));
-
     let first_len = section_len(&wire, first_section);
     let second_section = first_section + first_len;
     let second_len = section_len(&wire, second_section);
@@ -477,7 +447,6 @@ fn hostile_value_path_and_tree_role_order_fail_closed() {
         Err(SoundnessErrorV2::InvalidMerklePath)
     ));
 }
-
 #[test]
 fn source_guards_keep_verifier_borrowed_private_bounded_and_non_authorizing() {
     let source = include_str!("phase23_rns_link_q_pcs_v2_verifier.rs");

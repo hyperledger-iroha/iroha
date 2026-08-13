@@ -1,10 +1,7 @@
 //! Native DeFi instructions.
-
 use iroha_primitives::numeric::{Numeric, Quantity};
-
 use super::*;
 use crate::rwa::RwaId;
-
 isi! {
     /// Submit a solver-fillable `DeFi` intent.
     #[cfg_attr(
@@ -30,7 +27,6 @@ isi! {
         pub nonce: u64,
     }
 }
-
 isi! {
     /// Record a solver fill or terminal settlement for an intent.
     #[cfg_attr(
@@ -53,7 +49,6 @@ isi! {
         pub status: Name,
     }
 }
-
 isi! {
     /// Register a `DeFi` tokenized or async vault.
     #[cfg_attr(
@@ -73,7 +68,6 @@ isi! {
         pub async_redeem: bool,
     }
 }
-
 isi! {
     /// Record a vault deposit or redemption request.
     #[cfg_attr(
@@ -95,7 +89,6 @@ isi! {
         pub request_kind: Name,
     }
 }
-
 isi! {
     /// Register a bonded `DeFi` service operator.
     #[cfg_attr(
@@ -113,7 +106,6 @@ isi! {
         pub min_bond: Quantity,
     }
 }
-
 isi! {
     /// Record service health and accrued fees for an operator.
     #[cfg_attr(
@@ -133,7 +125,6 @@ isi! {
         pub fees_accrued: Quantity,
     }
 }
-
 isi! {
     /// Configure an AMM hook policy for a pool.
     #[cfg_attr(
@@ -155,7 +146,6 @@ isi! {
         pub enabled: bool,
     }
 }
-
 isi! {
     /// Record an AMM hook execution result.
     #[cfg_attr(
@@ -179,7 +169,6 @@ isi! {
         pub slot: u64,
     }
 }
-
 isi! {
     /// Register a portfolio-margin market.
     #[cfg_attr(
@@ -199,7 +188,6 @@ isi! {
         pub liquidation_threshold_bps: u16,
     }
 }
-
 isi! {
     /// Record a portfolio-margin account update.
     #[cfg_attr(
@@ -221,7 +209,6 @@ isi! {
         pub status: Name,
     }
 }
-
 isi! {
     /// Register an RWA-backed `DeFi` market.
     #[cfg_attr(
@@ -241,7 +228,6 @@ isi! {
         pub nav_asset: AssetDefinitionId,
     }
 }
-
 isi! {
     /// Record an RWA NAV or redemption checkpoint.
     #[cfg_attr(
@@ -261,7 +247,6 @@ isi! {
         pub status: Name,
     }
 }
-
 macro_rules! impl_defi_display {
     ($ty:ty, $label:literal, $id:ident) => {
         impl core::fmt::Display for $ty {
@@ -271,7 +256,6 @@ macro_rules! impl_defi_display {
         }
     };
 }
-
 impl_defi_display!(SubmitDefiIntent, "DEFI_INTENT_SUBMIT", intent_id);
 impl_defi_display!(SettleDefiIntent, "DEFI_INTENT_SETTLE", intent_id);
 impl_defi_display!(RegisterDefiVault, "DEFI_VAULT_REGISTER", vault_id);
@@ -296,7 +280,6 @@ impl_defi_display!(
 );
 impl_defi_display!(RegisterDefiRwaMarket, "DEFI_RWA_MARKET_REGISTER", market_id);
 impl_defi_display!(ReportDefiRwaNav, "DEFI_RWA_NAV_REPORT", market_id);
-
 impl SubmitDefiIntent {
     /// Stable wire identifier.
     pub const WIRE_ID: &'static str = "iroha.defi.intent.submit";
@@ -345,7 +328,6 @@ impl ReportDefiRwaNav {
     /// Stable wire identifier.
     pub const WIRE_ID: &'static str = "iroha.defi.rwa.nav.report";
 }
-
 impl crate::seal::Instruction for SubmitDefiIntent {}
 impl crate::seal::Instruction for SettleDefiIntent {}
 impl crate::seal::Instruction for RegisterDefiVault {}
@@ -358,7 +340,6 @@ impl crate::seal::Instruction for RegisterDefiMarginMarket {}
 impl crate::seal::Instruction for UpdateDefiMarginAccount {}
 impl crate::seal::Instruction for RegisterDefiRwaMarket {}
 impl crate::seal::Instruction for ReportDefiRwaNav {}
-
 isi_box! {
     /// Grouping enum for DeFi-native instructions.
     #[cfg_attr(
@@ -393,7 +374,6 @@ isi_box! {
         ReportRwaNav(ReportDefiRwaNav),
     }
 }
-
 impl_into_box! {
     SubmitDefiIntent
     | SettleDefiIntent
@@ -409,21 +389,16 @@ impl_into_box! {
     | ReportDefiRwaNav
     => DeFiInstructionBox
 }
-
 impl crate::seal::Instruction for DeFiInstructionBox {}
-
 impl DeFiInstructionBox {
     /// Stable wire identifier for boxed `DeFi` instructions.
     pub const WIRE_ID: &'static str = "iroha.defi";
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use norito::codec::{Decode, Encode};
-
     use super::*;
-
     #[derive(Encode)]
     struct ForgedSubmitDefiIntent {
         intent_id: Name,
@@ -435,7 +410,6 @@ mod tests {
         deadline_slot: u64,
         nonce: u64,
     }
-
     #[derive(Encode)]
     struct ForgedReportDefiRwaNav {
         market_id: Name,
@@ -444,29 +418,23 @@ mod tests {
         report_slot: u64,
         status: Name,
     }
-
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked DeFi fixture account keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn domain() -> DomainId {
         DomainId::try_new("wonderland", "universal").expect("domain")
     }
-
     fn asset(name: &str) -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(domain(), name.parse().expect("asset name"))
     }
-
     fn name(value: &str) -> Name {
         value.parse().expect("name")
     }
-
     fn rwa_id(seed: &'static str) -> RwaId {
         RwaId::generated(domain(), Hash::new(seed))
     }
-
     fn submit_intent() -> SubmitDefiIntent {
         SubmitDefiIntent {
             intent_id: name("intent_a"),
@@ -479,7 +447,6 @@ mod tests {
             nonce: 7,
         }
     }
-
     #[test]
     fn negative_numeric_payload_cannot_decode_as_defi_quantity() {
         let forged = ForgedSubmitDefiIntent {
@@ -493,12 +460,10 @@ mod tests {
             nonce: 1,
         };
         let encoded = forged.encode();
-
         assert!(
             SubmitDefiIntent::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not cross the DeFi quantity boundary"
         );
-
         let forged_nav = ForgedReportDefiRwaNav {
             market_id: name("market_negative_nav"),
             nav_per_share: Numeric::new(-1_i32, 0),
@@ -512,7 +477,6 @@ mod tests {
             "a negative NAV must not cross the DeFi quantity boundary"
         );
     }
-
     fn settle_intent() -> SettleDefiIntent {
         SettleDefiIntent {
             owner: account(1),
@@ -523,7 +487,6 @@ mod tests {
             status: name("filled"),
         }
     }
-
     fn vault() -> RegisterDefiVault {
         RegisterDefiVault {
             vault_id: name("vault_a"),
@@ -533,7 +496,6 @@ mod tests {
             async_redeem: true,
         }
     }
-
     fn vault_request() -> RecordDefiVaultRequest {
         RecordDefiVaultRequest {
             vault_id: name("vault_a"),
@@ -544,7 +506,6 @@ mod tests {
             request_kind: name("redeem"),
         }
     }
-
     fn operator() -> RegisterDefiOperator {
         RegisterDefiOperator {
             operator: account(3),
@@ -553,7 +514,6 @@ mod tests {
             min_bond: Quantity::from(10_000_u64),
         }
     }
-
     fn heartbeat() -> RecordDefiOperatorHeartbeat {
         RecordDefiOperatorHeartbeat {
             operator: account(3),
@@ -563,7 +523,6 @@ mod tests {
             fees_accrued: Quantity::from(12_u64),
         }
     }
-
     fn hook_policy() -> ConfigureDefiAmmHook {
         ConfigureDefiAmmHook {
             pool_id: name("pool_a"),
@@ -574,7 +533,6 @@ mod tests {
             enabled: true,
         }
     }
-
     fn hook_execution() -> RecordDefiHookExecution {
         RecordDefiHookExecution {
             pool_id: name("pool_a"),
@@ -586,7 +544,6 @@ mod tests {
             slot: 4000,
         }
     }
-
     fn margin_market() -> RegisterDefiMarginMarket {
         RegisterDefiMarginMarket {
             market_id: name("perps_xor"),
@@ -596,7 +553,6 @@ mod tests {
             liquidation_threshold_bps: 6_500,
         }
     }
-
     fn margin_account() -> UpdateDefiMarginAccount {
         UpdateDefiMarginAccount {
             account: account(5),
@@ -607,7 +563,6 @@ mod tests {
             status: name("healthy"),
         }
     }
-
     fn rwa_market() -> RegisterDefiRwaMarket {
         RegisterDefiRwaMarket {
             market_id: name("tbill_a"),
@@ -617,7 +572,6 @@ mod tests {
             nav_asset: asset("usdt"),
         }
     }
-
     fn rwa_nav() -> ReportDefiRwaNav {
         ReportDefiRwaNav {
             market_id: name("tbill_a"),
@@ -627,7 +581,6 @@ mod tests {
             status: name("active"),
         }
     }
-
     fn assert_norito_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::core::NoritoSerialize,
@@ -637,7 +590,6 @@ mod tests {
         let decoded = norito::decode_from_bytes::<T>(&bytes).expect("decode");
         assert_eq!(decoded, value);
     }
-
     #[cfg(feature = "json")]
     fn assert_json_roundtrip<T>(value: T)
     where
@@ -651,7 +603,6 @@ mod tests {
         let decoded = norito::json::from_str::<T>(&json).expect("json decode");
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes(value: DeFiInstructionBox) {
         let registry = crate::isi::registry::default();
         let (payload, flags) = norito::codec::encode_with_header_flags(&value);
@@ -667,7 +618,6 @@ mod tests {
         .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn defi_wire_ids_are_stable() {
         assert_eq!(DeFiInstructionBox::WIRE_ID, "iroha.defi");
@@ -705,7 +655,6 @@ mod tests {
         );
         assert_eq!(ReportDefiRwaNav::WIRE_ID, "iroha.defi.rwa.nav.report");
     }
-
     #[test]
     fn defi_display_strings_are_stable() {
         assert_eq!(submit_intent().to_string(), "DEFI_INTENT_SUBMIT `intent_a`");
@@ -739,7 +688,6 @@ mod tests {
         );
         assert_eq!(rwa_nav().to_string(), "DEFI_RWA_NAV_REPORT `tbill_a`");
     }
-
     #[test]
     fn defi_norito_roundtrips() {
         assert_norito_roundtrip(submit_intent());
@@ -757,7 +705,6 @@ mod tests {
         assert_norito_roundtrip(DeFiInstructionBox::SubmitIntent(submit_intent()));
         assert_norito_roundtrip(DeFiInstructionBox::ReportRwaNav(rwa_nav()));
     }
-
     #[test]
     #[cfg(feature = "json")]
     fn defi_json_roundtrips() {
@@ -776,7 +723,6 @@ mod tests {
         assert_json_roundtrip(DeFiInstructionBox::SubmitIntent(submit_intent()));
         assert_json_roundtrip(DeFiInstructionBox::ReportRwaNav(rwa_nav()));
     }
-
     #[test]
     fn defi_default_registry_decodes_boxed_surface() {
         assert_registry_decodes(DeFiInstructionBox::SubmitIntent(submit_intent()));

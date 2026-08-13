@@ -4,11 +4,8 @@
 //! carries an explicit nominal numeric kind and that kind's complete canonical
 //! schema-bound numeric frame.  Runtime validation must compare the requested
 //! kind before publishing a private pointer into guest memory.
-
 use norito::{Decode, Encode};
-
 use crate::pointer_abi::PointerType;
-
 /// ABI/domain version bound into private numeric projections and commitments.
 pub const PRIVATE_INPUT_ABI_VERSION_V1: u16 = 1;
 /// Nominal Norito schema name for one typed private-input record.
@@ -46,7 +43,6 @@ pub const PRIVATE_NUMERIC_VALCOM_H_COMPRESSED_V1: [u8; 48] = [
     0xa1, 0x93, 0x90, 0x35, 0x53, 0xc1, 0xe6, 0x67, 0x6a, 0x3c, 0xc9, 0xb8, 0xc8, 0x9f, 0xc1, 0x97,
     0x0c, 0xba, 0x9e, 0x5f, 0x64, 0x8b, 0xdf, 0xd7, 0x44, 0x0d, 0xd7, 0xd9, 0xef, 0xb6, 0x2e, 0x26,
 ];
-
 /// Exact numeric payload kind carried by a private-input record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum PrivateInputKindV1 {
@@ -60,7 +56,6 @@ pub enum PrivateInputKindV1 {
     #[codec(index = 2)]
     Quantity,
 }
-
 impl PrivateInputKindV1 {
     /// Decode the stable register tag used by `GET_PRIVATE_INPUT`.
     #[must_use]
@@ -72,7 +67,6 @@ impl PrivateInputKindV1 {
             _ => return None,
         })
     }
-
     /// Return the stable register/Norito tag for this kind.
     #[must_use]
     pub const fn tag(self) -> u64 {
@@ -82,7 +76,6 @@ impl PrivateInputKindV1 {
             Self::Quantity => 2,
         }
     }
-
     /// Return the canonical pointer-ABI type published for this kind.
     #[must_use]
     pub const fn pointer_type(self) -> PointerType {
@@ -93,7 +86,6 @@ impl PrivateInputKindV1 {
         }
     }
 }
-
 /// One canonical typed private input.
 ///
 /// `payload` is a complete schema-bound V1 numeric frame, not an unframed
@@ -108,7 +100,6 @@ pub struct PrivateInputRecordV1 {
     /// Complete canonical `IntValueV1`, `DecimalValueV1`, or `QuantityValueV1` frame.
     pub payload: Vec<u8>,
 }
-
 impl PrivateInputRecordV1 {
     /// Construct an unvalidated record for later canonical host validation.
     #[must_use]
@@ -116,11 +107,9 @@ impl PrivateInputRecordV1 {
         Self { kind, payload }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn kind_tags_and_pointer_types_are_stable() {
         for (kind, tag, pointer_type) in [
@@ -134,7 +123,6 @@ mod tests {
         }
         assert_eq!(PrivateInputKindV1::from_tag(3), None);
     }
-
     #[test]
     fn norito_kind_discriminants_match_register_tags() {
         for kind in [
@@ -149,7 +137,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn private_input_record_uses_its_nominal_v1_schema() {
         assert_eq!(

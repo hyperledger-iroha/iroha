@@ -3,16 +3,12 @@
 //! This bounded, non-authorizing child shares one exact challenge schedule
 //! between prover and verifier, checks canonical relations and multiproofs,
 //! and remains production-uninhabited behind uninhabited replay authorities.
-
 use core::{convert::Infallible, fmt};
-
 use crate::vega::sponge::{Shake256Reader, keccak256};
-
 use super::{
     Fq2ParametersV1 as BatchFieldV2, Fq2V1 as BatchValueV2, RELEASE_MODULI_V1, mod_add_v1,
     mod_mul_v1, mod_pow_v1,
 };
-
 const VERSION_V2: u8 = 2;
 const LIMBS_V2: usize = 38;
 const REPETITIONS_V2: usize = 5;
@@ -60,7 +56,6 @@ const FIXED_ENVELOPE_BYTES_V2: usize =
     FIXED_BEFORE_SECTIONS_V2 + SECTION_COUNT_V2 * SECTION_HEADER_BYTES_V2;
 const MAX_PROOF_BYTES_V2: usize = 29_245_792;
 const GLOBAL_PROOF_CAP_BYTES_V2: usize = 32 * 1024 * 1024;
-
 const MAGIC_V2: [u8; 16] = *b"IROHA-QPCSV2\0\0\0\0";
 const PARAMETER_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.soundness.parameters\0";
 const INITIAL_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.soundness.initial-root\0";
@@ -76,7 +71,6 @@ const SCHEDULE_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.soundness.schedule\0";
 const FIXED_WIDTH_TAG_V2: &[u8] = b"P:2N/c[2N-1]=0;H:N/c[N-1]=0";
 const ROW_ORDER_TAG_V2: &[u8] = b"column=limb*10+repetition*2+role;P:0;H:1";
 const BATCH_FORMULA_TAG_V2: &[u8] = b"Bp=aP+bXUP;Bh=aX^NH+bX^(N+1)UH";
-
 const SOURCE_AGGREGATION_LINKED_V2: bool = false;
 const CROSS_SET_ALGEBRA_VERIFIED_V2: bool = false;
 const HYRAX_LINKED_V2: bool = false;
@@ -92,7 +86,6 @@ const COMPLETE_WORK_BOUND_DERIVED_V2: bool = false;
 const MEASURED_RSS_WITHIN_CAP_V2: bool = false;
 const OPERATIONAL_RECEIPT_ACCEPTED_V2: bool = false;
 const RELEASE_READY_V2: bool = false;
-
 const _: () = {
     assert!(RELEASE_MODULI_V1.len() == LIMBS_V2);
     assert!(ROWS_PER_LIMB_V2 == REPETITIONS_V2 * ROWS_PER_REPETITION_V2);
@@ -110,7 +103,6 @@ const _: () = {
     assert!(GLOBAL_PROOF_CAP_BYTES_V2 - MAX_PROOF_BYTES_V2 == 4_308_640);
     assert!(MAX_PROOF_BYTES_V2 < GLOBAL_PROOF_CAP_BYTES_V2);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SoundnessErrorV2 {
     Poisoned,
@@ -132,18 +124,15 @@ pub(super) enum SoundnessErrorV2 {
     ProofCapExceeded,
     ArithmeticOverflow,
 }
-
 impl fmt::Display for SoundnessErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
-
 struct FrameV2<const N: usize> {
     bytes: [u8; N],
     len: usize,
 }
-
 impl<const N: usize> FrameV2<N> {
     const fn new() -> Self {
         Self {
@@ -151,7 +140,6 @@ impl<const N: usize> FrameV2<N> {
             len: 0,
         }
     }
-
     fn push(&mut self, bytes: &[u8]) -> Result<(), SoundnessErrorV2> {
         let end = self
             .len
@@ -165,21 +153,17 @@ impl<const N: usize> FrameV2<N> {
         self.len = end;
         Ok(())
     }
-
     fn bytes(&self) -> &[u8] {
         &self.bytes[..self.len]
     }
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Fq2V2 {
     c0: u64,
     c1: u64,
 }
-
 impl Fq2V2 {
     const ZERO: Self = Self { c0: 0, c1: 0 };
-
     fn encode(self) -> [u8; FQ2_BYTES_V2] {
         let mut encoded = [0_u8; FQ2_BYTES_V2];
         encoded[..8].copy_from_slice(&self.c0.to_be_bytes());
@@ -187,13 +171,11 @@ impl Fq2V2 {
         encoded
     }
 }
-
 #[derive(Clone, Copy)]
 struct ExpectedPublicContextV2 {
     sealed_source_transcript_digest: [u8; 32],
     source_algebra_binding_digest: [u8; 32],
 }
-
 enum SourceReplaySealV2 {
     Production {
         source_and_algebra: Infallible,
@@ -202,7 +184,6 @@ enum SourceReplaySealV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 #[derive(Clone, Copy)]
 struct HeaderV2 {
     parameter_digest: [u8; 32],
@@ -210,7 +191,6 @@ struct HeaderV2 {
     source_algebra_binding_digest: [u8; 32],
     initial_root: [u8; 32],
 }
-
 struct ProverPostRootLiveV2 {
     header: HeaderV2,
     transcript: [u8; 32],
@@ -220,7 +200,6 @@ struct ProverPostRootLiveV2 {
     batch_schedule_digest: [u8; 32],
     batch_challenges: [Fq2V2; BATCH_CHALLENGE_COUNT_V2],
 }
-
 pub(super) struct ProverPostRootPointsV2 {
     live: Option<ProverPostRootLiveV2>,
 }
@@ -273,36 +252,29 @@ struct LiveProtocolV2<'a> {
     fold_schedule_digest: [u8; 32],
     queries: [u32; QUERY_COUNT_V2],
 }
-
 struct HeaderParsedV2<'a> {
     live: Option<LiveProtocolV2<'a>>,
 }
 struct PointsDerivedV2<'a> {
     live: Option<LiveProtocolV2<'a>>,
 }
-
 struct RelationsCheckedV2<'a> {
     live: Option<LiveProtocolV2<'a>>,
 }
-
 struct QuotientRootBoundV2<'a> {
     live: Option<LiveProtocolV2<'a>>,
 }
-
 struct FriTranscriptBoundV2<'a> {
     live: Option<LiveProtocolV2<'a>>,
 }
-
 struct StructurallyParsedV2<'a> {
     live: Option<LiveProtocolV2<'a>>,
 }
-
 fn shake256_fixed_v2<const N: usize>(input: &[u8]) -> [u8; N] {
     let mut output = [0_u8; N];
     Shake256Reader::new(input).read(&mut output);
     output
 }
-
 fn parameter_digest_v2() -> Result<[u8; 32], SoundnessErrorV2> {
     let mut frame = FrameV2::<640>::new();
     frame.push(PARAMETER_DOMAIN_V2)?;
@@ -325,12 +297,10 @@ fn parameter_digest_v2() -> Result<[u8; 32], SoundnessErrorV2> {
     }
     Ok(keccak256(frame.bytes()))
 }
-
 #[cfg(test)]
 pub(super) fn parameter_digest_for_spool_parity_v2() -> [u8; 32] {
     parameter_digest_v2().expect("fixed release qPCS V2 parameter digest")
 }
-
 #[cfg(test)]
 pub(super) fn initial_leaf_hash_for_prover_parity_v2(
     parameter_digest: [u8; 32],
@@ -340,7 +310,6 @@ pub(super) fn initial_leaf_hash_for_prover_parity_v2(
     verifier::initial_leaf_hash_for_prover_parity_v2(parameter_digest, length, values)
         .expect("valid initial C0 Merkle leaf parity frame")
 }
-
 #[cfg(test)]
 pub(super) fn initial_node_hash_for_prover_parity_v2(
     parameter_digest: [u8; 32],
@@ -351,7 +320,6 @@ pub(super) fn initial_node_hash_for_prover_parity_v2(
     verifier::initial_node_hash_for_prover_parity_v2(parameter_digest, height, left, right)
         .expect("valid initial C0 Merkle node parity frame")
 }
-
 #[cfg(test)]
 pub(super) fn quotient_leaf_hash_for_prover_parity_v2(
     parameter_digest: [u8; 32],
@@ -361,7 +329,6 @@ pub(super) fn quotient_leaf_hash_for_prover_parity_v2(
     verifier::quotient_leaf_hash_for_prover_parity_v2(parameter_digest, length, values)
         .expect("valid opening-quotient Merkle leaf parity frame")
 }
-
 #[cfg(test)]
 pub(super) fn quotient_node_hash_for_prover_parity_v2(
     parameter_digest: [u8; 32],
@@ -372,7 +339,6 @@ pub(super) fn quotient_node_hash_for_prover_parity_v2(
     verifier::quotient_node_hash_for_prover_parity_v2(parameter_digest, height, left, right)
         .expect("valid opening-quotient Merkle node parity frame")
 }
-
 fn read_u16_v2(bytes: &[u8], offset: usize) -> Result<u16, SoundnessErrorV2> {
     Ok(u16::from_be_bytes(
         bytes
@@ -382,7 +348,6 @@ fn read_u16_v2(bytes: &[u8], offset: usize) -> Result<u16, SoundnessErrorV2> {
             .map_err(|_| SoundnessErrorV2::Truncated)?,
     ))
 }
-
 fn read_u32_v2(bytes: &[u8], offset: usize) -> Result<u32, SoundnessErrorV2> {
     Ok(u32::from_be_bytes(
         bytes
@@ -392,7 +357,6 @@ fn read_u32_v2(bytes: &[u8], offset: usize) -> Result<u32, SoundnessErrorV2> {
             .map_err(|_| SoundnessErrorV2::Truncated)?,
     ))
 }
-
 fn read_u64_v2(bytes: &[u8], offset: usize) -> Result<u64, SoundnessErrorV2> {
     Ok(u64::from_be_bytes(
         bytes
@@ -402,7 +366,6 @@ fn read_u64_v2(bytes: &[u8], offset: usize) -> Result<u64, SoundnessErrorV2> {
             .map_err(|_| SoundnessErrorV2::Truncated)?,
     ))
 }
-
 fn read_digest_v2(bytes: &[u8], offset: usize) -> Result<[u8; 32], SoundnessErrorV2> {
     bytes
         .get(offset..offset + 32)
@@ -410,7 +373,6 @@ fn read_digest_v2(bytes: &[u8], offset: usize) -> Result<[u8; 32], SoundnessErro
         .try_into()
         .map_err(|_| SoundnessErrorV2::Truncated)
 }
-
 fn parse_header_v2(
     wire: &[u8],
     expected: ExpectedPublicContextV2,
@@ -468,7 +430,6 @@ fn parse_header_v2(
         initial_root,
     })
 }
-
 fn begin_v2<'a>(
     wire: &'a [u8],
     expected: ExpectedPublicContextV2,
@@ -489,7 +450,6 @@ fn begin_v2<'a>(
         }),
     })
 }
-
 fn initial_transcript_v2(header: HeaderV2) -> Result<[u8; 32], SoundnessErrorV2> {
     let mut frame = FrameV2::<256>::new();
     frame.push(INITIAL_DOMAIN_V2)?;
@@ -500,7 +460,6 @@ fn initial_transcript_v2(header: HeaderV2) -> Result<[u8; 32], SoundnessErrorV2>
     frame.push(&header.initial_root)?;
     Ok(keccak256(frame.bytes()))
 }
-
 fn derive_relation_point_v2(
     transcript: [u8; 32],
     limb: usize,
@@ -532,7 +491,6 @@ fn derive_relation_point_v2(
     }
     Err(SoundnessErrorV2::InvalidChallenge)
 }
-
 fn derive_all_relation_points_v2(
     header: HeaderV2,
 ) -> Result<([u8; 32], [u64; RELATION_COUNT_V2]), SoundnessErrorV2> {
@@ -548,7 +506,6 @@ fn derive_all_relation_points_v2(
     }
     Ok((transcript, relation_points))
 }
-
 impl<'a> HeaderParsedV2<'a> {
     fn derive_points_v2(&mut self) -> Result<PointsDerivedV2<'a>, SoundnessErrorV2> {
         let mut live = self.live.take().ok_or(SoundnessErrorV2::Poisoned)?;
@@ -556,7 +513,6 @@ impl<'a> HeaderParsedV2<'a> {
         Ok(PointsDerivedV2 { live: Some(live) })
     }
 }
-
 fn absorb_evaluations_v2(
     transcript: [u8; 32],
     encoded: &[u8],
@@ -569,7 +525,6 @@ fn absorb_evaluations_v2(
     frame.push(encoded)?;
     Ok(keccak256(frame.bytes()))
 }
-
 fn validate_relations_v2(
     relation_points: &[u64; RELATION_COUNT_V2],
     encoded: &[u8],
@@ -596,7 +551,6 @@ fn validate_relations_v2(
     }
     Ok(())
 }
-
 impl<'a> PointsDerivedV2<'a> {
     fn check_relations_v2(&mut self) -> Result<RelationsCheckedV2<'a>, SoundnessErrorV2> {
         let mut live = self.live.take().ok_or(SoundnessErrorV2::Poisoned)?;
@@ -614,7 +568,6 @@ impl<'a> PointsDerivedV2<'a> {
         Ok(RelationsCheckedV2 { live: Some(live) })
     }
 }
-
 impl ProverPostRootPointsV2 {
     pub(super) fn derive_v2(
         parameter_digest: [u8; 32],
@@ -648,7 +601,6 @@ impl ProverPostRootPointsV2 {
             }),
         })
     }
-
     pub(super) fn point_v2(&self, limb: usize, repetition: usize) -> Result<u64, SoundnessErrorV2> {
         if limb >= LIMBS_V2 || repetition >= REPETITIONS_V2 {
             return Err(SoundnessErrorV2::InvalidChallenge);
@@ -661,7 +613,6 @@ impl ProverPostRootPointsV2 {
             .copied()
             .ok_or(SoundnessErrorV2::InvalidChallenge)
     }
-
     pub(super) fn bind_evaluations_v2(
         mut self,
         encoded: &[u8],
@@ -672,7 +623,6 @@ impl ProverPostRootPointsV2 {
         Ok(ProverEvaluationsBoundV2 { live: Some(live) })
     }
 }
-
 impl ProverEvaluationsBoundV2 {
     pub(super) fn point_v2(&self, limb: usize, repetition: usize) -> Result<u64, SoundnessErrorV2> {
         if limb >= LIMBS_V2 || repetition >= REPETITIONS_V2 {
@@ -686,7 +636,6 @@ impl ProverEvaluationsBoundV2 {
             .copied()
             .ok_or(SoundnessErrorV2::InvalidChallenge)
     }
-
     pub(super) fn transcript_v2(&self) -> Result<[u8; 32], SoundnessErrorV2> {
         Ok(self
             .live
@@ -694,7 +643,6 @@ impl ProverEvaluationsBoundV2 {
             .ok_or(SoundnessErrorV2::Poisoned)?
             .transcript)
     }
-
     pub(super) fn bind_quotient_root_v2(
         mut self,
         root: [u8; 32],
@@ -715,7 +663,6 @@ impl ProverEvaluationsBoundV2 {
         Ok(ProverQuotientRootBoundV2 { live: Some(live) })
     }
 }
-
 impl ProverQuotientRootBoundV2 {
     pub(super) fn point_v2(&self, limb: usize, repetition: usize) -> Result<u64, SoundnessErrorV2> {
         if limb >= LIMBS_V2 || repetition >= REPETITIONS_V2 {
@@ -729,7 +676,6 @@ impl ProverQuotientRootBoundV2 {
             .copied()
             .ok_or(SoundnessErrorV2::InvalidChallenge)
     }
-
     pub(super) fn transcript_v2(&self) -> Result<[u8; 32], SoundnessErrorV2> {
         Ok(self
             .live
@@ -848,7 +794,6 @@ impl ProverBatchChallengesV2 {
         })
     }
 }
-
 impl ProverBatchRowsCompleteV2 {
     pub(super) fn bind_fri_layer0_root_v2(
         self,
@@ -902,7 +847,6 @@ impl ProverBatchRowsCompleteV2 {
         })
     }
 }
-
 impl ProverFriLayer0ChallengesV2 {
     pub(super) fn context_v2(
         &self,
@@ -916,7 +860,6 @@ impl ProverFriLayer0ChallengesV2 {
             live.layer0_root,
         ))
     }
-
     pub(super) fn fold_next_pair_v2(
         &mut self,
         pair_block: u64,
@@ -978,7 +921,6 @@ impl ProverFriLayer0ChallengesV2 {
         self.live = Some(live);
         Ok(())
     }
-
     pub(super) fn complete_v2(mut self) -> Result<ProverFriLayer0FoldCompleteV2, SoundnessErrorV2> {
         let mut live = self.live.take().ok_or(SoundnessErrorV2::Poisoned)?;
         if self.next_pair_block != 256 || self.next_column != 0 {
@@ -994,7 +936,6 @@ impl ProverFriLayer0ChallengesV2 {
         })
     }
 }
-
 impl ProverFriLayer0FoldCompleteV2 {
     pub(super) const fn context_v2(&self) -> ([u8; 32], [u8; 32], [u8; 32], [u8; 32], [u8; 32]) {
         (
@@ -1006,7 +947,6 @@ impl ProverFriLayer0FoldCompleteV2 {
         )
     }
 }
-
 fn absorb_root_v2(
     domain: &[u8],
     transcript: [u8; 32],
@@ -1021,7 +961,6 @@ fn absorb_root_v2(
     frame.push(&root)?;
     Ok(keccak256(frame.bytes()))
 }
-
 fn derive_fq2_challenge_v2(
     domain: &[u8],
     transcript: [u8; 32],
@@ -1063,7 +1002,6 @@ fn derive_fq2_challenge_v2(
     }
     Err(SoundnessErrorV2::InvalidChallenge)
 }
-
 fn absorb_schedule_value_v2(
     digest: [u8; 32],
     kind: u8,
@@ -1081,7 +1019,6 @@ fn absorb_schedule_value_v2(
     frame.push(&value.encode())?;
     Ok(keccak256(frame.bytes()))
 }
-
 fn derive_batch_schedule_with_v2(
     transcript: [u8; 32],
     mut retain: impl FnMut(usize, Fq2V2),
@@ -1114,7 +1051,6 @@ fn derive_batch_schedule_with_v2(
 fn derive_batch_schedule_v2(transcript: [u8; 32]) -> Result<[u8; 32], SoundnessErrorV2> {
     derive_batch_schedule_with_v2(transcript, |_, _| {})
 }
-
 impl<'a> RelationsCheckedV2<'a> {
     fn bind_quotient_root_v2(&mut self) -> Result<QuotientRootBoundV2<'a>, SoundnessErrorV2> {
         let mut live = self.live.take().ok_or(SoundnessErrorV2::Poisoned)?;
@@ -1131,7 +1067,6 @@ impl<'a> RelationsCheckedV2<'a> {
         Ok(QuotientRootBoundV2 { live: Some(live) })
     }
 }
-
 fn absorb_terminal_v2(transcript: [u8; 32], terminal: &[u8]) -> Result<[u8; 32], SoundnessErrorV2> {
     let mut frame = FrameV2::<12_320>::new();
     frame.push(TERMINAL_DOMAIN_V2)?;
@@ -1141,7 +1076,6 @@ fn absorb_terminal_v2(transcript: [u8; 32], terminal: &[u8]) -> Result<[u8; 32],
     frame.push(terminal)?;
     Ok(keccak256(frame.bytes()))
 }
-
 fn validate_leaf_values_v2(values: &[u8]) -> Result<(), SoundnessErrorV2> {
     if !values.len().is_multiple_of(LEAF_BYTES_V2) {
         return Err(SoundnessErrorV2::InvalidSectionCount);
@@ -1157,7 +1091,6 @@ fn validate_leaf_values_v2(values: &[u8]) -> Result<(), SoundnessErrorV2> {
     }
     Ok(())
 }
-
 fn derive_queries_v2(transcript: [u8; 32]) -> Result<[u32; QUERY_COUNT_V2], SoundnessErrorV2> {
     let bound = (DOMAIN_SIZE_V2 / 2) as u64;
     let zone = u64::MAX - u64::MAX % bound;
@@ -1185,7 +1118,6 @@ fn derive_queries_v2(transcript: [u8; 32]) -> Result<[u32; QUERY_COUNT_V2], Soun
     }
     Ok(queries)
 }
-
 impl<'a> QuotientRootBoundV2<'a> {
     fn bind_fri_transcript_v2(&mut self) -> Result<FriTranscriptBoundV2<'a>, SoundnessErrorV2> {
         let mut live = self.live.take().ok_or(SoundnessErrorV2::Poisoned)?;
@@ -1231,12 +1163,10 @@ impl<'a> QuotientRootBoundV2<'a> {
         Ok(FriTranscriptBoundV2 { live: Some(live) })
     }
 }
-
 struct IndexSetV2 {
     values: [u32; 2 * QUERY_COUNT_V2],
     len: usize,
 }
-
 fn query_pair_indices_v2(queries: &[u32; QUERY_COUNT_V2], length: usize) -> IndexSetV2 {
     let half = (length / 2) as u32;
     let mut result = IndexSetV2 {
@@ -1259,7 +1189,6 @@ fn query_pair_indices_v2(queries: &[u32; QUERY_COUNT_V2], length: usize) -> Inde
     result.len = unique;
     result
 }
-
 fn exact_authentication_count_v2(
     indices: &IndexSetV2,
     mut length: usize,
@@ -1290,7 +1219,6 @@ fn exact_authentication_count_v2(
     }
     Ok(authentication)
 }
-
 fn checked_fri_multiproof_bytes_v2(
     opened: usize,
     authentication: usize,
@@ -1312,7 +1240,6 @@ fn checked_fri_multiproof_bytes_v2(
     }
     Ok(bytes)
 }
-
 fn parse_section_v2(
     live: &mut LiveProtocolV2<'_>,
     indices: &IndexSetV2,
@@ -1351,7 +1278,6 @@ fn parse_section_v2(
     }
     Ok((opened, authentication))
 }
-
 impl<'a> FriTranscriptBoundV2<'a> {
     fn parse_exact_sections_v2(&mut self) -> Result<StructurallyParsedV2<'a>, SoundnessErrorV2> {
         let mut live = self.live.take().ok_or(SoundnessErrorV2::Poisoned)?;
@@ -1395,17 +1321,14 @@ impl<'a> FriTranscriptBoundV2<'a> {
         Ok(StructurallyParsedV2 { live: Some(live) })
     }
 }
-
 #[path = "phase23_rns_link_q_pcs_v2_soundness/prover_fri_rounds_v2.rs"]
 mod prover_fri_rounds_v2;
 pub(super) use prover_fri_rounds_v2::*;
 #[path = "phase23_rns_link_q_pcs_v2_soundness/prover_canonical_proof_v2.rs"]
 mod prover_canonical_proof_v2;
 pub(super) use prover_canonical_proof_v2::*;
-
 #[path = "phase23_rns_link_q_pcs_v2_verifier.rs"]
 mod verifier;
-
 #[cfg(test)]
 #[path = "phase23_rns_link_q_pcs_v2_soundness_tests.rs"]
 mod tests;

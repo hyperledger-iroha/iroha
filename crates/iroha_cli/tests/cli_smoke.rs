@@ -5,7 +5,6 @@
 //! catch regression where the clap command tree fails to build or the
 //! binary cannot launch in automated environments.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use std::{
     ffi::OsStr,
     fs,
@@ -16,7 +15,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::hash;
 use iroha::{
@@ -289,7 +287,6 @@ fn write_metrics_snapshot(dir: &Path, metrics: &RelayEpochMetricsV1, suffix: &st
 }
 fn proposal_id_hex(contract_address: &str, code: &[u8; 32], abi: &[u8; 32]) -> String {
     use iroha_crypto::blake2::{Blake2b512, digest::Digest as _};
-
     let contract_address_len =
         u32::try_from(contract_address.len()).expect("contract address length fits into u32");
     let mut input = Vec::with_capacity(
@@ -459,7 +456,6 @@ fn command() -> TestCommand {
 #[test]
 fn soracles_aggregate_output_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("soracles_aggregate").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
@@ -641,7 +637,6 @@ fn sorafs_reserve_quote_outputs_breakdown() {
 #[test]
 fn sorafs_reserve_ledger_emits_instructions() {
     use torii_mock_support::TempDir;
-
     let temp_dir = TempDir::new("sorafs_reserve_ledger").expect("temp dir");
     let quote_path = temp_dir.path().join("reserve_quote.json");
     let quote_arg = quote_path.to_str().expect("utf8 path");
@@ -747,7 +742,6 @@ fn sorafs_reserve_ledger_emits_instructions() {
 #[test]
 fn sorafs_reserve_lifecycle_projects_credit_draw() {
     use torii_mock_support::TempDir;
-
     let temp_dir = TempDir::new("sorafs_reserve_lifecycle").expect("temp dir");
     let quote_path = temp_dir.path().join("reserve_quote.json");
     let quote_arg = quote_path.to_str().expect("utf8 path");
@@ -849,7 +843,6 @@ fn da_get_help_is_accessible() {
 #[test]
 fn gov_protected_set_produces_instruction_skeleton() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("gov_protected_set").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
@@ -883,7 +876,6 @@ fn gov_protected_set_produces_instruction_skeleton() {
 #[test]
 fn gov_deploy_meta_outputs_metadata_stub() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("gov_deploy_meta").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
@@ -920,7 +912,6 @@ fn gov_deploy_meta_outputs_metadata_stub() {
 #[test]
 fn gov_deploy_meta_accepts_manifest_approvers() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("gov_deploy_meta_approvers").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
@@ -1780,7 +1771,6 @@ fn gov_vote_plain_emits_summary_and_json() {
 #[allow(clippy::too_many_lines)]
 fn sorafs_incentives_service_cli_roundtrip() {
     use torii_mock_support::TempDir;
-
     let temp_dir = TempDir::new("incentives_service_cli_roundtrip").expect("temp dir");
     let state_path = state_path(&temp_dir, "payout_state.json");
     let config_path = write_reward_config_file(&temp_dir);
@@ -1979,7 +1969,6 @@ fn sorafs_incentives_service_cli_roundtrip() {
 #[allow(clippy::too_many_lines)]
 fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
     use torii_mock_support::TempDir;
-
     let temp_dir = TempDir::new("incentives_service_cli_process_batch").expect("temp dir");
     let state_path = state_path(&temp_dir, "payout_state.json");
     let config_path = write_reward_config_file(&temp_dir);
@@ -2779,7 +2768,6 @@ fn gov_audit_deploy_reports_results_against_mock() {
 #[test]
 fn repo_initiate_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("repo_initiate").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
@@ -2841,7 +2829,6 @@ fn repo_initiate_emits_instruction_payload() {
 #[allow(clippy::too_many_lines)]
 fn da_submit_no_submit_emits_request_artifacts() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("da_submit_artifacts").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
@@ -3005,7 +2992,6 @@ fn da_submit_no_submit_emits_request_artifacts() {
 #[allow(clippy::too_many_lines)]
 fn iroha_da_submit_records_pdp_commitment_receipt() {
     use core::convert::TryFrom;
-
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::Signature;
     use iroha_data_model::{
@@ -3021,7 +3007,6 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
     };
     use torii_mock_support::{TempDir, write_client_config};
-
     fn fixed_digest(seed: u8) -> BlobDigest {
         let mut bytes = [0u8; 32];
         for (idx, byte) in bytes.iter_mut().enumerate() {
@@ -3280,7 +3265,6 @@ fn da_rent_quote_outputs_summary_and_json() {
 #[test]
 fn da_rent_ledger_emits_transfer_plan() {
     use torii_mock_support::TempDir;
-
     const GIB: u64 = 12;
     const MONTHS: u32 = 3;
     const BASE: &str = "9";
@@ -3447,7 +3431,6 @@ fn da_rent_ledger_emits_transfer_plan() {
 #[test]
 fn repo_unwind_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("repo_unwind").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
@@ -3477,7 +3460,6 @@ fn repo_unwind_emits_instruction_payload() {
 #[test]
 fn settlement_dvp_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("settlement_dvp").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
@@ -3537,7 +3519,6 @@ fn settlement_dvp_emits_instruction_payload() {
 #[test]
 fn settlement_pvp_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("settlement_pvp").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
@@ -3593,7 +3574,6 @@ fn settlement_pvp_emits_instruction_payload() {
 #[test]
 fn settlement_accepts_commit_atomicity() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("settlement_atomicity").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     let iso_path = temp_dir.path().join("dvp_preview.xml");
@@ -3682,7 +3662,6 @@ fn zk_help_mentions_attachments() {
 #[test]
 fn crypto_sm2_import_accepts_pem_files() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let key =
         Sm2PrivateKey::new("pem-distid", [0x11; 32]).expect("deterministic SM2 key generation");
     let private_pem = key.to_pkcs8_pem().expect("encode SM2 private key");
@@ -4192,7 +4171,6 @@ fn account_get_command_against_torii_mock() {
 #[allow(clippy::too_many_lines)]
 fn zk_attachments_flow_against_torii_mock() {
     use torii_mock_support::{SpawnError, TempDir, ToriiMockProcess, write_client_config};
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -4332,7 +4310,6 @@ fn zk_attachments_flow_against_torii_mock() {
 #[allow(clippy::too_many_lines)]
 fn zk_prover_reports_flow_against_torii_mock() {
     use torii_mock_support::{SpawnError, TempDir, ToriiMockProcess, write_client_config};
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -4648,7 +4625,6 @@ fn address_convert_json_summary_is_domainless() {
 #[test]
 fn address_audit_reports_parsed_and_errors() {
     use torii_mock_support::TempDir;
-
     let local_account = account_id_for_domain("sora", 0xC3);
     let default_account = account_id_for_domain("default", 0x44);
     let local_i105 = encode_account_id_to_i105_for_discriminant(&local_account, 753).expect("i105");
@@ -4697,7 +4673,6 @@ fn address_audit_reports_parsed_and_errors() {
 #[test]
 fn address_audit_rejects_domain_suffix() {
     use torii_mock_support::TempDir;
-
     let account = account_id_for_domain("wonderland", 0xE5);
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
     let literal = format!("{i105}@banka");
@@ -4808,7 +4783,6 @@ fn entry_by_status<'a>(entries: &'a [Value], status: &str) -> &'a Value {
 #[test]
 fn space_directory_manifest_audit_bundle_cli() {
     use torii_mock_support::TempDir;
-
     let workspace = workspace_root();
     let manifest_fixture = workspace
         .join("fixtures")
@@ -4898,7 +4872,6 @@ fn space_directory_manifest_audit_bundle_cli() {
         "artifact manifest reference mismatch"
     );
 }
-
 mod torii_mock_support {
     use std::{
         env, fmt, fs,
@@ -4910,10 +4883,8 @@ mod torii_mock_support {
         thread,
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
-
     use norito::json;
     use url::Url;
-
     const MOCK_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
     #[derive(Debug)]
     pub enum SpawnError {

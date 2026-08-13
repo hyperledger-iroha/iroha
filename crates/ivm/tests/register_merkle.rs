@@ -1,5 +1,4 @@
 use ivm::Registers;
-
 #[test]
 fn register_merkle_updates() {
     let mut regs = Registers::new();

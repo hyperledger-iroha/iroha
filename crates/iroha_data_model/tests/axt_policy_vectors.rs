@@ -1,5 +1,4 @@
 //! Golden Norito fixtures for AXT descriptor/handle/policy encodings plus validation edge cases.
-
 #[path = "fixtures/axt_golden.rs"]
 mod axt_golden;
 use iroha_crypto::{Hash, HashOf};
@@ -12,7 +11,6 @@ use iroha_data_model::nexus::{
 use iroha_data_model::{NetworkId, block::BlockHeader};
 use iroha_primitives::numeric::Quantity;
 use ivm::axt;
-
 fn assert_bytes_match(name: &str, actual: &[u8], expected: &[u8]) {
     assert_eq!(
         actual.len(),
@@ -30,7 +28,6 @@ fn assert_bytes_match(name: &str, actual: &[u8], expected: &[u8]) {
         panic!("{name} mismatch at byte {idx}: actual {lhs:#04x} expected {rhs:#04x}");
     }
 }
-
 fn sample_descriptor() -> AxtDescriptor {
     let ds_a = DataSpaceId::new(7);
     let ds_b = DataSpaceId::new(13);
@@ -50,7 +47,6 @@ fn sample_descriptor() -> AxtDescriptor {
         ],
     }
 }
-
 fn sample_binding(descriptor: &AxtDescriptor) -> AxtBinding {
     validate_descriptor(descriptor).expect("sample descriptor must be canonical");
     let ivm_descriptor = axt::AxtDescriptor {
@@ -68,12 +64,10 @@ fn sample_binding(descriptor: &AxtDescriptor) -> AxtBinding {
     let binding = axt::compute_binding(&ivm_descriptor).expect("binding");
     AxtBinding::new(binding)
 }
-
 fn encoded_account(public_key_hex: &str) -> String {
     iroha_data_model::account::AccountId::new(public_key_hex.parse().expect("public key"))
         .to_string()
 }
-
 fn sample_issuer_context() -> AxtHandleIssuerContextV1 {
     AxtHandleIssuerContextV1 {
         network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -87,7 +81,6 @@ fn sample_issuer_context() -> AxtHandleIssuerContextV1 {
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
     }
 }
-
 fn sample_handle(binding: AxtBinding) -> AssetHandle {
     AssetHandle {
         scope: vec!["register".into(), "transfer".into()],
@@ -116,7 +109,6 @@ fn sample_handle(binding: AxtBinding) -> AssetHandle {
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     }
 }
-
 fn sample_policy_snapshot() -> AxtPolicySnapshot {
     let entries = vec![AxtPolicyBinding {
         dsid: DataSpaceId::new(7),
@@ -133,7 +125,6 @@ fn sample_policy_snapshot() -> AxtPolicySnapshot {
         entries,
     }
 }
-
 fn sample_intent() -> RemoteSpendIntent {
     RemoteSpendIntent {
         asset_dsid: DataSpaceId::new(7),
@@ -149,7 +140,6 @@ fn sample_intent() -> RemoteSpendIntent {
         },
     }
 }
-
 #[test]
 fn descriptor_roundtrip_matches_golden() {
     let descriptor = sample_descriptor();
@@ -160,7 +150,6 @@ fn descriptor_roundtrip_matches_golden() {
     assert_eq!(decoded, descriptor);
     assert_eq!(validate_descriptor(&descriptor), Ok(()));
 }
-
 #[test]
 fn asset_handle_roundtrip_matches_golden() {
     let descriptor = sample_descriptor();
@@ -172,7 +161,6 @@ fn asset_handle_roundtrip_matches_golden() {
         norito::decode_from_bytes(axt_golden::AXT_HANDLE).expect("decode handle fixture");
     assert_eq!(decoded, handle);
 }
-
 #[test]
 fn policy_snapshot_roundtrip_matches_golden() {
     let snapshot = sample_policy_snapshot();
@@ -182,7 +170,6 @@ fn policy_snapshot_roundtrip_matches_golden() {
         norito::decode_from_bytes(axt_golden::AXT_POLICY).expect("decode policy fixture");
     assert_eq!(decoded, snapshot);
 }
-
 #[test]
 fn descriptor_validation_errors_are_stable() {
     let empty = AxtDescriptor {
@@ -193,7 +180,6 @@ fn descriptor_validation_errors_are_stable() {
         validate_descriptor(&empty),
         Err(AxtValidationError::EmptyDataspaceList)
     ));
-
     let dup_id = AxtDescriptor {
         dsids: vec![DataSpaceId::new(2), DataSpaceId::new(2)],
         touches: vec![],
@@ -202,7 +188,6 @@ fn descriptor_validation_errors_are_stable() {
         validate_descriptor(&dup_id),
         Err(AxtValidationError::DuplicateDataspaceId(id)) if id == DataSpaceId::new(2)
     ));
-
     let undeclared_touch = AxtDescriptor {
         dsids: vec![DataSpaceId::new(1)],
         touches: vec![AxtTouchSpec {
@@ -215,7 +200,6 @@ fn descriptor_validation_errors_are_stable() {
         validate_descriptor(&undeclared_touch),
         Err(AxtValidationError::TouchUndeclaredDataspace(id)) if id == DataSpaceId::new(3)
     ));
-
     let duplicate_touch = AxtDescriptor {
         dsids: vec![DataSpaceId::new(5)],
         touches: vec![
@@ -236,7 +220,6 @@ fn descriptor_validation_errors_are_stable() {
         Err(AxtValidationError::DuplicateTouch(id)) if id == DataSpaceId::new(5)
     ));
 }
-
 #[test]
 #[ignore = "utility for regenerating golden vectors"]
 fn print_golden_vectors() {
@@ -244,15 +227,12 @@ fn print_golden_vectors() {
     let binding = sample_binding(&descriptor);
     let handle = sample_handle(binding);
     let snapshot = sample_policy_snapshot();
-
     let descriptor_bytes = norito::to_bytes(&descriptor).expect("encode descriptor");
     let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
     let snapshot_bytes = norito::to_bytes(&snapshot).expect("encode snapshot");
-
     println!("descriptor: {}", hex::encode(descriptor_bytes));
     println!("handle: {}", hex::encode(handle_bytes));
     println!("policy: {}", hex::encode(snapshot_bytes));
-
     let touch_fragment = AxtTouchFragment {
         dsid: descriptor.dsids[0],
         manifest: TouchManifest {

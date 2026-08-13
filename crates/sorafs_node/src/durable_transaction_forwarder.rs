@@ -4,7 +4,6 @@
 //! instruction and its finalized-chain reconciliation result. This module owns
 //! only the reusable crash states and the hardened single-writer persistence
 //! protocol.
-
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
@@ -15,20 +14,16 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
 #[cfg(windows)]
 use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
-
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
 static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static CHECKPOINT_PROCESS_LOCKS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0002_0000 | 0x0008_0000;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -39,7 +34,6 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 #[cfg(windows)]
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-
 /// Durable crash state shared by native transaction forwarders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) enum StoredDeliveryStateV1 {
@@ -54,12 +48,10 @@ pub(crate) enum StoredDeliveryStateV1 {
     /// The exact transaction is known pending or applied.
     Submitted,
 }
-
 /// Minimal mutable record required by the durable delivery state machine.
 pub(crate) trait DeliveryRecord {
     /// Exact signed envelope retained by this domain.
     type Transaction: Clone;
-
     /// Current durable state.
     fn delivery_state(&self) -> StoredDeliveryStateV1;
     /// Replace the durable state.
@@ -81,14 +73,12 @@ pub(crate) trait DeliveryRecord {
     /// Replace the exact signed envelope.
     fn set_signed_transaction(&mut self, transaction: Option<Self::Transaction>);
 }
-
 /// Finalized block anchor used to prove retry absence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FinalizedCursorV1 {
     pub(crate) height: u64,
     pub(crate) block_hash: [u8; 32],
 }
-
 /// Result of a bounded transition that can exhaust its attempt budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RetryBoundOutcome {
@@ -97,7 +87,6 @@ pub(crate) enum RetryBoundOutcome {
     /// The wrapper must atomically move the entry to its dead-letter set.
     Exhausted,
 }
-
 /// State-machine transition error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum DeliveryTransitionError {
@@ -111,7 +100,6 @@ pub(crate) enum DeliveryTransitionError {
     #[error("delivery retry bound is exhausted")]
     RetryExhausted,
 }
-
 /// Validate a non-zero finalized cursor.
 pub(crate) fn validate_finalized_cursor(
     cursor: FinalizedCursorV1,
@@ -121,7 +109,6 @@ pub(crate) fn validate_finalized_cursor(
     }
     Ok(())
 }
-
 /// Reset a signer-only crash state, for which submission was impossible.
 pub(crate) fn recover_interrupted_signing<R: DeliveryRecord>(entry: &mut R) -> bool {
     if entry.delivery_state() != StoredDeliveryStateV1::Signing {
@@ -132,7 +119,6 @@ pub(crate) fn recover_interrupted_signing<R: DeliveryRecord>(entry: &mut R) -> b
     entry.set_baseline_finalized_block_hash([0; 32]);
     true
 }
-
 /// Validate the structural invariants of one stored delivery.
 pub(crate) fn validate_delivery<R: DeliveryRecord>(entry: &R, max_attempts: u32) -> bool {
     let has_baseline =
@@ -150,7 +136,6 @@ pub(crate) fn validate_delivery<R: DeliveryRecord>(entry: &R, max_attempts: u32)
     };
     valid_state && entry.attempts() <= max_attempts
 }
-
 /// Durably claim a ready entry before invoking an isolated signer.
 pub(crate) fn claim_for_signing<R: DeliveryRecord>(
     entry: &mut R,
@@ -171,7 +156,6 @@ pub(crate) fn claim_for_signing<R: DeliveryRecord>(
     entry.set_delivery_state(StoredDeliveryStateV1::Signing);
     Ok(())
 }
-
 /// Attach an exact signed envelope to an isolated signing claim.
 pub(crate) fn store_signed_transaction<R: DeliveryRecord>(
     entry: &mut R,
@@ -191,7 +175,6 @@ pub(crate) fn store_signed_transaction<R: DeliveryRecord>(
     entry.set_delivery_state(StoredDeliveryStateV1::Signed);
     Ok(())
 }
-
 /// Release a signer claim that could not have submitted a transaction.
 pub(crate) fn release_signing_claim<R: DeliveryRecord>(
     entry: &mut R,
@@ -206,7 +189,6 @@ pub(crate) fn release_signing_claim<R: DeliveryRecord>(
     entry.set_delivery_state(StoredDeliveryStateV1::Ready);
     Ok(())
 }
-
 /// Enter the ambiguous crash state before exposing exact bytes to a submitter.
 pub(crate) fn begin_submission<R: DeliveryRecord>(
     entry: &mut R,
@@ -221,7 +203,6 @@ pub(crate) fn begin_submission<R: DeliveryRecord>(
     entry.set_delivery_state(StoredDeliveryStateV1::Ambiguous);
     Ok(transaction)
 }
-
 /// Mark an ambiguous transaction as known pending or applied.
 pub(crate) fn mark_submitted<R: DeliveryRecord>(
     entry: &mut R,
@@ -234,7 +215,6 @@ pub(crate) fn mark_submitted<R: DeliveryRecord>(
     entry.set_delivery_state(StoredDeliveryStateV1::Submitted);
     Ok(())
 }
-
 /// Return a known pre-queue failure to the signed state without changing bytes.
 pub(crate) fn mark_not_submitted<R: DeliveryRecord>(
     entry: &mut R,
@@ -247,7 +227,6 @@ pub(crate) fn mark_not_submitted<R: DeliveryRecord>(
     entry.set_delivery_state(StoredDeliveryStateV1::Signed);
     Ok(())
 }
-
 /// Re-enable the same exact envelope only after finalized absence is proven.
 pub(crate) fn mark_finalized_absent<R: DeliveryRecord>(
     entry: &mut R,
@@ -276,7 +255,6 @@ pub(crate) fn mark_finalized_absent<R: DeliveryRecord>(
     entry.set_delivery_state(StoredDeliveryStateV1::Signed);
     Ok(RetryBoundOutcome::Pending)
 }
-
 /// Discard a terminally rejected envelope so the semantic operation can be re-signed.
 ///
 /// This intentionally retains the proof-forwarder's established behavior:
@@ -295,7 +273,6 @@ pub(crate) fn mark_transaction_rejected<R: DeliveryRecord>(
     entry.set_signed_transaction(None);
     RetryBoundOutcome::Pending
 }
-
 /// Hardened checkpoint-store error shared by all wrappers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum CheckpointStoreError {
@@ -318,7 +295,6 @@ pub(crate) enum CheckpointStoreError {
     #[error("checkpoint writer registry is poisoned")]
     RuntimePoisoned,
 }
-
 /// Atomic, private, single-writer checkpoint byte store.
 #[derive(Debug)]
 pub(crate) struct AtomicCheckpointStore {
@@ -329,10 +305,8 @@ pub(crate) struct AtomicCheckpointStore {
     checkpoint_file_name: &'static str,
     max_bytes: u64,
 }
-
 /// Canonical checkpoint bytes paired with their optimistic fingerprint.
 type LoadedCheckpointBytesV1 = (Option<Vec<u8>>, Option<[u8; 32]>);
-
 impl AtomicCheckpointStore {
     /// Open or create a private state directory.
     pub(crate) fn new(
@@ -353,14 +327,12 @@ impl AtomicCheckpointStore {
             max_bytes,
         })
     }
-
     fn verify_root_identity(&self) -> Result<(), CheckpointStoreError> {
         if state_directory_identity(&self.root)? != self.root_identity {
             return Err(CheckpointStoreError::Io);
         }
         Ok(())
     }
-
     /// Read the exact canonical checkpoint bytes and their optimistic fingerprint.
     pub(crate) fn load_bytes(&self) -> Result<LoadedCheckpointBytesV1, CheckpointStoreError> {
         self.verify_root_identity()?;
@@ -374,7 +346,6 @@ impl AtomicCheckpointStore {
             .map(|digest| *digest.as_bytes());
         Ok((bytes, fingerprint))
     }
-
     /// Atomically replace the checkpoint after an optimistic concurrency check.
     pub(crate) fn commit_bytes(
         &self,
@@ -440,7 +411,6 @@ impl AtomicCheckpointStore {
         Ok(*blake3::hash(bytes).as_bytes())
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StateDirectoryIdentity {
     #[cfg(unix)]
@@ -454,12 +424,10 @@ struct StateDirectoryIdentity {
     #[cfg(all(not(unix), not(windows)))]
     _unsupported: (),
 }
-
 fn state_directory_identity(path: &Path) -> Result<StateDirectoryIdentity, CheckpointStoreError> {
     let (_directory, metadata) = open_stable_state_directory(path)?;
     state_directory_identity_from_metadata(&metadata)
 }
-
 #[cfg(unix)]
 fn state_directory_identity_from_metadata(
     metadata: &fs::Metadata,
@@ -469,7 +437,6 @@ fn state_directory_identity_from_metadata(
         inode: metadata.ino(),
     })
 }
-
 #[cfg(windows)]
 fn state_directory_identity_from_metadata(
     metadata: &fs::Metadata,
@@ -481,20 +448,17 @@ fn state_directory_identity_from_metadata(
         file_index: metadata.file_index().ok_or(CheckpointStoreError::Io)?,
     })
 }
-
 #[cfg(all(not(unix), not(windows)))]
 fn state_directory_identity_from_metadata(
     _metadata: &fs::Metadata,
 ) -> Result<StateDirectoryIdentity, CheckpointStoreError> {
     Err(CheckpointStoreError::Io)
 }
-
 /// Guard used by focused alias/hard-link persistence tests.
 pub(crate) struct CheckpointWriterGuard {
     _process_guard: CheckpointProcessGuard,
     _file: File,
 }
-
 impl CheckpointWriterGuard {
     pub(crate) fn acquire(path: &Path) -> Result<Self, CheckpointStoreError> {
         let process_guard = CheckpointProcessGuard::acquire(path)?;
@@ -545,11 +509,9 @@ impl CheckpointWriterGuard {
         })
     }
 }
-
 struct CheckpointProcessGuard {
     path: PathBuf,
 }
-
 impl CheckpointProcessGuard {
     fn acquire(path: &Path) -> Result<Self, CheckpointStoreError> {
         let parent = path.parent().ok_or(CheckpointStoreError::Io)?;
@@ -567,7 +529,6 @@ impl CheckpointProcessGuard {
         Ok(Self { path })
     }
 }
-
 impl Drop for CheckpointProcessGuard {
     fn drop(&mut self) {
         if let Ok(mut held) = CHECKPOINT_PROCESS_LOCKS.lock() {
@@ -575,7 +536,6 @@ impl Drop for CheckpointProcessGuard {
         }
     }
 }
-
 fn ensure_private_state_directory(path: &Path) -> Result<(), CheckpointStoreError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
@@ -601,7 +561,6 @@ fn ensure_private_state_directory(path: &Path) -> Result<(), CheckpointStoreErro
     state_directory_identity(path).map(drop)?;
     Ok(())
 }
-
 fn read_checkpoint_bytes(
     path: &Path,
     max_bytes: u64,
@@ -652,7 +611,6 @@ fn read_checkpoint_bytes(
     }
     Ok(Some(bytes))
 }
-
 fn validate_regular_file_metadata(
     metadata: &fs::Metadata,
     max_bytes: u64,
@@ -687,7 +645,6 @@ fn validate_regular_file_metadata(
     }
     Ok(())
 }
-
 fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<File, CheckpointStoreError> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -719,7 +676,6 @@ fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<File, CheckpointSt
     }
     Ok(file)
 }
-
 fn validate_checkpoint_temp(
     path: &Path,
     file: &File,
@@ -738,7 +694,6 @@ fn validate_checkpoint_temp(
     }
     Ok(())
 }
-
 fn validate_persisted_checkpoint(
     path: &Path,
     file: &File,
@@ -757,7 +712,6 @@ fn validate_persisted_checkpoint(
     }
     Ok(())
 }
-
 fn persist_atomic_replacement(temporary: &Path, destination: &Path) -> std::io::Result<()> {
     // `std::fs::rename` does not replace an existing Windows destination. `TempPath::persist`
     // selects native replacement semantics on all release targets. Cleanup remains disabled so a
@@ -766,7 +720,6 @@ fn persist_atomic_replacement(temporary: &Path, destination: &Path) -> std::io::
     temporary.disable_cleanup(true);
     temporary.persist(destination).map_err(|error| error.error)
 }
-
 fn sync_directory(path: &Path) -> Result<(), CheckpointStoreError> {
     let (directory, opened) = open_stable_state_directory(path)?;
     directory.sync_all().map_err(|_| CheckpointStoreError::Io)?;
@@ -781,7 +734,6 @@ fn sync_directory(path: &Path) -> Result<(), CheckpointStoreError> {
     }
     Ok(())
 }
-
 fn open_stable_state_directory(path: &Path) -> Result<(File, fs::Metadata), CheckpointStoreError> {
     let before = fs::symlink_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
     validate_state_directory_metadata(&before)?;
@@ -800,7 +752,6 @@ fn open_stable_state_directory(path: &Path) -> Result<(File, fs::Metadata), Chec
     }
     Ok((directory, opened))
 }
-
 fn validate_state_directory_metadata(metadata: &fs::Metadata) -> Result<(), CheckpointStoreError> {
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(CheckpointStoreError::Io);
@@ -827,7 +778,6 @@ fn validate_state_directory_metadata(metadata: &fs::Metadata) -> Result<(), Chec
     }
     Ok(())
 }
-
 #[cfg(any(
     target_os = "linux",
     target_os = "android",
@@ -838,13 +788,11 @@ fn configure_direct_file_open(options: &mut OpenOptions) -> Result<(), Checkpoin
     options.custom_flags(SAFE_OPEN_FLAGS);
     Ok(())
 }
-
 #[cfg(windows)]
 fn configure_direct_file_open(options: &mut OpenOptions) -> Result<(), CheckpointStoreError> {
     options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     Ok(())
 }
-
 #[cfg(not(any(
     target_os = "linux",
     target_os = "android",
@@ -855,7 +803,6 @@ fn configure_direct_file_open(options: &mut OpenOptions) -> Result<(), Checkpoin
 fn configure_direct_file_open(_options: &mut OpenOptions) -> Result<(), CheckpointStoreError> {
     Err(CheckpointStoreError::Io)
 }
-
 #[cfg(any(
     target_os = "linux",
     target_os = "android",
@@ -866,7 +813,6 @@ fn configure_direct_directory_open(options: &mut OpenOptions) -> Result<(), Chec
     options.custom_flags(SAFE_OPEN_FLAGS);
     Ok(())
 }
-
 #[cfg(windows)]
 fn configure_direct_directory_open(options: &mut OpenOptions) -> Result<(), CheckpointStoreError> {
     // `File::sync_all` maps to `FlushFileBuffers`, which requires a write-capable handle.
@@ -874,7 +820,6 @@ fn configure_direct_directory_open(options: &mut OpenOptions) -> Result<(), Chec
     options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
     Ok(())
 }
-
 #[cfg(not(any(
     target_os = "linux",
     target_os = "android",
@@ -885,12 +830,10 @@ fn configure_direct_directory_open(options: &mut OpenOptions) -> Result<(), Chec
 fn configure_direct_directory_open(_options: &mut OpenOptions) -> Result<(), CheckpointStoreError> {
     Err(CheckpointStoreError::Io)
 }
-
 #[cfg(unix)]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(windows)]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.volume_serial_number().is_some()
@@ -898,12 +841,10 @@ fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.volume_serial_number() == right.volume_serial_number()
         && left.file_index() == right.file_index()
 }
-
 #[cfg(all(not(unix), not(windows)))]
 fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_file_identity(left, right)
@@ -915,7 +856,6 @@ fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_file_identity(left, right)
@@ -925,12 +865,10 @@ fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
-
 #[cfg(all(not(unix), not(windows)))]
 fn file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn directory_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_file_identity(left, right)
@@ -939,7 +877,6 @@ fn directory_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bo
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn directory_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_file_identity(left, right)
@@ -947,21 +884,17 @@ fn directory_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bo
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
-
 #[cfg(all(not(unix), not(windows)))]
 fn directory_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
     fn private_directory(path: &Path) {
         ensure_private_state_directory(path).expect("create private state directory");
     }
-
     fn assert_distinct_directory_identities() {
         let outer = TempDir::new().expect("temporary directory");
         let first = outer.path().join("first");
@@ -973,7 +906,6 @@ mod tests {
             state_directory_identity(&second).expect("second identity")
         );
     }
-
     fn assert_hardlinked_checkpoint_is_rejected() {
         let directory = TempDir::new().expect("temporary directory");
         let store =
@@ -992,7 +924,6 @@ mod tests {
             CheckpointStoreError::Io
         );
     }
-
     fn assert_hardlinked_lock_is_rejected() {
         let directory = TempDir::new().expect("temporary directory");
         private_directory(directory.path());
@@ -1005,7 +936,6 @@ mod tests {
             Err(CheckpointStoreError::Io)
         ));
     }
-
     fn assert_root_path_substitution_is_rejected() {
         let outer = TempDir::new().expect("temporary directory");
         let state = outer.path().join("state");
@@ -1025,7 +955,6 @@ mod tests {
             "replacement root must not receive checkpoint bytes"
         );
     }
-
     fn assert_os_lock_contention_is_busy() {
         let directory = TempDir::new().expect("temporary directory");
         private_directory(directory.path());
@@ -1044,7 +973,6 @@ mod tests {
         drop(lock_file);
         drop(CheckpointWriterGuard::acquire(&lock_path).expect("lock becomes available"));
     }
-
     #[cfg(any(unix, windows))]
     #[test]
     fn checkpoint_store_replaces_existing_destination() {
@@ -1066,12 +994,10 @@ mod tests {
             Some(&b"second"[..])
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn unix_checkpoint_open_rejects_symlink_and_hardlink_targets() {
         use std::os::unix::fs::symlink;
-
         let symlink_directory = TempDir::new().expect("temporary directory");
         let store = AtomicCheckpointStore::new(
             symlink_directory.path(),
@@ -1087,7 +1013,6 @@ mod tests {
             store.load_bytes().expect_err("reject symlink checkpoint"),
             CheckpointStoreError::Io
         );
-
         let lock_directory = TempDir::new().expect("temporary directory");
         private_directory(lock_directory.path());
         let outside_lock = lock_directory.path().join("outside.lock");
@@ -1100,11 +1025,9 @@ mod tests {
             CheckpointWriterGuard::acquire(&lock_path),
             Err(CheckpointStoreError::Io)
         ));
-
         assert_hardlinked_checkpoint_is_rejected();
         assert_hardlinked_lock_is_rejected();
     }
-
     #[cfg(unix)]
     #[test]
     fn unix_checkpoint_identity_path_substitution_and_lock_contention_are_fenced() {
@@ -1112,14 +1035,12 @@ mod tests {
         assert_root_path_substitution_is_rejected();
         assert_os_lock_contention_is_busy();
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_direct_open_uses_reparse_safe_flags() {
         assert_ne!(FILE_FLAG_OPEN_REPARSE_POINT, 0);
         assert_ne!(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, 0);
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_checkpoint_identity_and_hardlinks_are_fenced() {
@@ -1127,7 +1048,6 @@ mod tests {
         assert_hardlinked_checkpoint_is_rejected();
         assert_hardlinked_lock_is_rejected();
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_checkpoint_path_substitution_and_lock_contention_are_fenced() {

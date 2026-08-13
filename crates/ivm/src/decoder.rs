@@ -5,20 +5,16 @@
 //! load.  Compressed forms predating the wide encoding are no longer supported.
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
-
 use crate::{
     error::{Perm, VMError},
     memory::Memory,
 };
-
 #[cfg(test)]
 pub static DECODE_CALLS: AtomicU64 = AtomicU64::new(0);
-
 /// Decode the instruction at `pc`, returning the raw word and its length (always 4).
 pub fn decode(memory: &Memory, pc: u64) -> Result<(u32, u32), VMError> {
     decode_wide(memory, pc)
 }
-
 /// Decode assuming the stream contains only 32-bit words aligned on 4-byte boundaries.
 /// This helper bypasses the compressed-instruction logic and is intended for the
 /// upcoming wide-encoding pipeline.
@@ -46,7 +42,6 @@ pub fn decode_wide(memory: &Memory, pc: u64) -> Result<(u32, u32), VMError> {
     let word = memory.load_u32(pc)?;
     Ok((word, 4))
 }
-
 /// Decode one instruction directly from a code slice.
 ///
 /// This is the allocation-free admission/predecode path. It deliberately has
@@ -81,11 +76,9 @@ pub fn decode_slice(code: &[u8], pc: u64) -> Result<(u32, u32), VMError> {
         4,
     ))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn slice_decoder_matches_memory_decoder_without_vm_memory() {
         let words = [0x1122_3344_u32, 0xAABB_CCDD];
@@ -95,7 +88,6 @@ mod tests {
             .collect::<Vec<_>>();
         let mut memory = Memory::new(code.len() as u64);
         memory.load_code(&code);
-
         for pc in [0, 4] {
             assert_eq!(decode_slice(&code, pc), decode_wide(&memory, pc));
         }

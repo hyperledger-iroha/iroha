@@ -3,14 +3,11 @@ use std::{
     fs,
     path::PathBuf,
 };
-
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, eyre};
 use iroha_crypto::PublicKey;
 use iroha_genesis::{read_genesis_manifest_bytes, validate_genesis_manifest_json};
-
 use crate::{Outcome, RunArgs, tui};
-
 /// Embed one or more PoPs into a JSON genesis manifest (inlined under `topology` entries).
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
@@ -24,7 +21,6 @@ pub struct Args {
     #[clap(long = "peer-pop")]
     peer_pops: Vec<String>,
 }
-
 impl<T: std::io::Write> RunArgs<T> for Args {
     fn run(self, _writer: &mut std::io::BufWriter<T>) -> Outcome {
         tui::status("Embedding PoP entries into genesis manifest");
@@ -34,7 +30,6 @@ impl<T: std::io::Write> RunArgs<T> for Args {
             norito::json::from_slice(&bytes).wrap_err("parse genesis json")?;
         drop(bytes);
         ensure_consensus_mode(&manifest)?;
-
         let mut pops: BTreeMap<PublicKey, Vec<u8>> = BTreeMap::new();
         for kv in &self.peer_pops {
             let (k, v) = kv
@@ -49,7 +44,6 @@ impl<T: std::io::Write> RunArgs<T> for Args {
                 return Err(eyre!("duplicate --peer-pop entry for peer {pk}"));
             }
         }
-
         let mut used_pops = BTreeSet::new();
         let txs = manifest
             .get_mut("transactions")
@@ -104,7 +98,6 @@ impl<T: std::io::Write> RunArgs<T> for Args {
                 ));
             }
         }
-
         let json = norito::json::to_json_pretty(&manifest).wrap_err("serialize genesis")?;
         validate_genesis_manifest_json(json.as_bytes())
             .wrap_err("generated genesis exceeds fixed resource bounds")?;
@@ -113,13 +106,11 @@ impl<T: std::io::Write> RunArgs<T> for Args {
         Ok(())
     }
 }
-
 fn extract_peer(
     entry: norito::json::Value,
 ) -> color_eyre::Result<(norito::json::Value, PublicKey)> {
     use iroha_data_model::peer::PeerId;
     use norito::json::Value;
-
     let Value::Object(mut map) = entry else {
         return Err(eyre!(
             "topology entries must be objects with `peer` and optional `pop_hex`"
@@ -152,10 +143,8 @@ fn extract_peer(
     let canonical = Value::String(public_key.to_string());
     Ok((canonical, public_key))
 }
-
 fn ensure_consensus_mode(manifest: &norito::json::Value) -> color_eyre::Result<()> {
     use iroha_data_model::parameter::system::SumeragiConsensusMode;
-
     let Some(raw) = manifest.get("consensus_mode") else {
         return Err(eyre!("genesis manifest missing `consensus_mode`"));
     };
@@ -163,7 +152,6 @@ fn ensure_consensus_mode(manifest: &norito::json::Value) -> color_eyre::Result<(
         norito::json::value::from_value(raw.clone()).wrap_err("decode `consensus_mode`")?;
     Ok(())
 }
-
 fn encode_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -173,20 +161,15 @@ fn encode_hex(bytes: &[u8]) -> String {
     }
     out
 }
-
 #[cfg(test)]
 mod tests {
     use std::io::BufWriter;
-
     use tempfile::NamedTempFile;
-
     use super::*;
-
     fn checked_embed_pop_keypair() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random()
             .expect("embed-pop fixture key generation should succeed")
     }
-
     #[test]
     fn embed_pop_fixture_key_generation_preserves_default_algorithm() {
         assert_eq!(
@@ -194,7 +177,6 @@ mod tests {
             iroha_crypto::Algorithm::default()
         );
     }
-
     #[test]
     fn rejects_non_object_transactions() {
         let manifest = r#"{
@@ -204,17 +186,14 @@ mod tests {
             "consensus_mode": "Permissioned",
             "transactions": ["not-a-map"]
         }"#;
-
         let input = NamedTempFile::new().expect("create manifest tmp file");
         let output = NamedTempFile::new().expect("create output tmp file");
         fs::write(input.path(), manifest).expect("write manifest");
-
         let args = Args {
             manifest: input.path().to_path_buf(),
             out: output.path().to_path_buf(),
             peer_pops: Vec::new(),
         };
-
         let mut sink = BufWriter::new(Vec::<u8>::new());
         let err = args
             .run(&mut sink)
@@ -224,7 +203,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn rejects_missing_consensus_mode() {
         let manifest = r#"{
@@ -235,17 +213,14 @@ mod tests {
                 {}
             ]
         }"#;
-
         let input = NamedTempFile::new().expect("create manifest tmp file");
         let output = NamedTempFile::new().expect("create output tmp file");
         fs::write(input.path(), manifest).expect("write manifest");
-
         let args = Args {
             manifest: input.path().to_path_buf(),
             out: output.path().to_path_buf(),
             peer_pops: Vec::new(),
         };
-
         let mut sink = BufWriter::new(Vec::<u8>::new());
         let err = args
             .run(&mut sink)
@@ -255,7 +230,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn embeds_pops_into_topology_entries() {
         let kp = checked_embed_pop_keypair();
@@ -271,20 +245,16 @@ mod tests {
             }}]
         }}"#
         );
-
         let input = NamedTempFile::new().expect("create manifest tmp file");
         let output = NamedTempFile::new().expect("create output tmp file");
         fs::write(input.path(), manifest).expect("write manifest");
-
         let args = Args {
             manifest: input.path().to_path_buf(),
             out: output.path().to_path_buf(),
             peer_pops: vec![format!("{pk}=00")],
         };
-
         let mut sink = BufWriter::new(Vec::<u8>::new());
         args.run(&mut sink).expect("embed pop should succeed");
-
         let out_json: norito::json::Value =
             norito::json::from_str(&fs::read_to_string(output.path()).expect("read output"))
                 .expect("parse output");
@@ -303,7 +273,6 @@ mod tests {
             "topology entry should wrap peer"
         );
     }
-
     #[test]
     fn rejects_noncanonical_peer_value() {
         let kp = checked_embed_pop_keypair();
@@ -319,17 +288,14 @@ mod tests {
             }}]
         }}"#
         );
-
         let input = NamedTempFile::new().expect("create manifest tmp file");
         let output = NamedTempFile::new().expect("create output tmp file");
         fs::write(input.path(), manifest).expect("write manifest");
-
         let args = Args {
             manifest: input.path().to_path_buf(),
             out: output.path().to_path_buf(),
             peer_pops: vec![format!("{pk}=00")],
         };
-
         let mut sink = BufWriter::new(Vec::<u8>::new());
         let err = args
             .run(&mut sink)
@@ -340,7 +306,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn rejects_duplicate_peer_pops() {
         let kp = checked_embed_pop_keypair();
@@ -356,17 +321,14 @@ mod tests {
             }}]
         }}"#
         );
-
         let input = NamedTempFile::new().expect("create manifest tmp file");
         let output = NamedTempFile::new().expect("create output tmp file");
         fs::write(input.path(), manifest).expect("write manifest");
-
         let args = Args {
             manifest: input.path().to_path_buf(),
             out: output.path().to_path_buf(),
             peer_pops: vec![format!("{pk}=00"), format!("{pk}=01")],
         };
-
         let mut sink = BufWriter::new(Vec::<u8>::new());
         let err = args
             .run(&mut sink)
@@ -376,7 +338,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn rejects_unused_peer_pops() {
         let peer_a = checked_embed_pop_keypair();
@@ -394,17 +355,14 @@ mod tests {
             }}]
         }}"#
         );
-
         let input = NamedTempFile::new().expect("create manifest tmp file");
         let output = NamedTempFile::new().expect("create output tmp file");
         fs::write(input.path(), manifest).expect("write manifest");
-
         let args = Args {
             manifest: input.path().to_path_buf(),
             out: output.path().to_path_buf(),
             peer_pops: vec![format!("{pk_a}=00"), format!("{pk_b}=01")],
         };
-
         let mut sink = BufWriter::new(Vec::<u8>::new());
         let err = args
             .run(&mut sink)

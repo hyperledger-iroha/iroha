@@ -1,7 +1,5 @@
 //! Regression test coverage for tuple deserialization edge cases.
-
 use norito::{decode_from_bytes, to_bytes};
-
 #[test]
 fn tuple_roundtrip_handles_empty_string() {
     let value = (123u16, String::new());
@@ -9,7 +7,6 @@ fn tuple_roundtrip_handles_empty_string() {
     let decoded: (u16, String) = decode_from_bytes(&bytes).expect("decode tuple with empty string");
     assert_eq!(decoded, value);
 }
-
 #[test]
 fn tuple_roundtrip_with_zst_prefix() {
     let value = ((), String::from("edge"));
@@ -17,7 +14,6 @@ fn tuple_roundtrip_with_zst_prefix() {
     let decoded: ((), String) = decode_from_bytes(&bytes).expect("decode tuple with ZST prefix");
     assert_eq!(decoded, value);
 }
-
 #[test]
 fn tuple_roundtrip_mixed_large_elements() {
     let large_str = "x".repeat(4096);

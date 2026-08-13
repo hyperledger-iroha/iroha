@@ -4,7 +4,6 @@ mod tests {
         io::Cursor,
         sync::{Arc, Mutex},
     };
-
     use http::StatusCode;
     use http_body_util::BodyExt;
     use iroha_core::{
@@ -32,12 +31,9 @@ mod tests {
         Metrics, MicropaymentCreditSnapshot, MicropaymentSampleStatus, MicropaymentTicketCounters,
     };
     use tokio::runtime::Runtime;
-
     use super::{sorafs_capacity_tests::build_por_challenge, *};
     use crate::mk_app_state_for_tests;
-
     static SUMERAGI_V2_STATUS_TEST_LOCK: Mutex<()> = Mutex::new(());
-
     fn install_passive_diagnostic_lane_artifact(
         state: &CoreState,
         kura: &Kura,
@@ -54,7 +50,6 @@ mod tests {
             nexus::{DataSpaceId, LaneId},
             peer::PeerId,
         };
-
         let block_signer = checked_routing_fixture_keypair(
             0xe2,
             Algorithm::Ed25519,
@@ -157,7 +152,6 @@ mod tests {
             .expect("store passive diagnostic lane artifact");
         proposal
     }
-
     #[test]
     fn openapi_handler_emits_alias_spec() {
         Runtime::new().expect("runtime").block_on(async {
@@ -181,7 +175,6 @@ mod tests {
             assert!(paths.contains_key("/v1/aliases/resolve-index"));
         });
     }
-
     #[test]
     fn status_tail_accesses_field() {
         let policy = ActualLaneRoutingPolicy {
@@ -224,55 +217,39 @@ mod tests {
                 duplicate: 0,
             },
         }];
-
         let peers = status_value_by_path(&status, "peers").unwrap();
         assert_eq!(peers, json_value(&0u64));
-
         let observed = status_value_by_path(&status, "observed_at_ms").unwrap();
         assert_eq!(observed, json_value(&1_000u64));
-
         let queued = status_value_by_path(&status, "queue_queued").unwrap();
         assert_eq!(queued, json_value(&3u64));
-
         let inflight = status_value_by_path(&status, "queue_inflight").unwrap();
         assert_eq!(inflight, json_value(&2u64));
-
         let last_block = status_value_by_path(&status, "last_block_committed_at_ms").unwrap();
         assert_eq!(last_block, json_value(&900u64));
-
         let last_non_empty =
             status_value_by_path(&status, "last_non_empty_block_committed_at_ms").unwrap();
         assert_eq!(last_non_empty, json_value(&800u64));
-
         let since_block = status_value_by_path(&status, "time_since_last_block_ms").unwrap();
         assert_eq!(since_block, json_value(&100u64));
-
         let since_non_empty =
             status_value_by_path(&status, "time_since_last_non_empty_block_ms").unwrap();
         assert_eq!(since_non_empty, json_value(&200u64));
-
         let last_rejection = status_value_by_path(&status, "last_rejection_at_ms").unwrap();
         assert_eq!(last_rejection, json_value(&Some(1_234u64)));
-
         let rejected_recent = status_value_by_path(&status, "txs_rejected_recent_5m").unwrap();
         assert_eq!(rejected_recent, json_value(&7u64));
-
         let secs = status_value_by_path(&status, "uptime/secs").unwrap();
         assert_eq!(secs, json_value(&0u64));
-
         let crypto = status_value_by_path(&status, "crypto").unwrap();
         assert!(crypto.is_object());
-
         let sm_helpers = status_value_by_path(&status, "crypto/sm_helpers_available").unwrap();
         assert_eq!(sm_helpers, json_value(&cfg!(feature = "sm")));
-
         let sm_preview =
             status_value_by_path(&status, "crypto/sm_openssl_preview_enabled").unwrap();
         assert_eq!(sm_preview, json_value(&false));
-
         let governance = status_value_by_path(&status, "governance").unwrap();
         assert!(governance.is_object());
-
         let nexus = status_value_by_path(&status, "nexus").unwrap();
         assert!(nexus.is_object());
         let policy = status_value_by_path(&status, "nexus/routing_policy").unwrap();
@@ -287,7 +264,6 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("smartcontract::deploy")
         );
-
         let micropayments = status_value_by_path(&status, "sorafs_micropayments").unwrap();
         assert!(micropayments.is_array());
         let sample = status_value_by_path(&status, "sorafs_micropayments/feed").unwrap();
@@ -297,7 +273,6 @@ mod tests {
         assert_eq!(outstanding, json_value(&Quantity::from(7_u64)));
         assert!(status_value_by_path(&status, "sorafs_micropayments/unknown").is_none());
     }
-
     #[test]
     fn status_block_visibility_falls_back_to_sumeragi_commit_height() {
         let metrics = Metrics::default();
@@ -308,17 +283,13 @@ mod tests {
         sumeragi.commit_qc_height = 4_274;
         sumeragi.highest_qc_height = 4_275;
         sumeragi.locked_qc_height = 4_273;
-
         super::normalize_status_block_visibility(&mut status, None);
-
         assert_eq!(status.blocks, 4_274);
         assert_eq!(status.blocks_non_empty, 0);
-
         status.blocks = 4_273;
         super::normalize_status_block_visibility(&mut status, None);
         assert_eq!(status.blocks, 4_274);
     }
-
     #[test]
     fn status_block_visibility_uses_authoritative_applied_height() {
         let metrics = Metrics::default();
@@ -326,27 +297,22 @@ mod tests {
         let mut status = Status::from(&metrics);
         let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
         sumeragi.commit_qc_height = 4_275;
-
         super::normalize_status_block_visibility(&mut status, Some(4_274));
-
         assert_eq!(
             status.blocks, 4_274,
             "a CommitQC pending apply must not lead query-visible state"
         );
-
         let metrics = Metrics::default();
         metrics.block_height.inc_by(4_275);
         let mut status = Status::from(&metrics);
         let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
         sumeragi.commit_qc_height = 4_276;
-
         super::normalize_status_block_visibility(&mut status, Some(4_274));
         assert_eq!(
             status.blocks, 4_274,
             "a Kura-backed telemetry scan pending WSV apply must not lead state"
         );
     }
-
     #[tokio::test]
     async fn status_response_bounds_unavailable_fresh_block_counter_sync() {
         let metrics = Arc::new(Metrics::default());
@@ -355,7 +321,6 @@ mod tests {
             Some(Telemetry::new(metrics, true)),
             TelemetryProfile::Full,
         );
-
         let error = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
@@ -375,12 +340,10 @@ mod tests {
             }
         ));
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn status_tail_returns_micropayment_sample() {
         use http_body_util::BodyExt;
-
         let telemetry = MaybeTelemetry::for_tests();
         let provider_hex = "feedcafe";
         telemetry.with_metrics(|tel| {
@@ -400,7 +363,6 @@ mod tests {
                 },
             );
         });
-
         let path = format!("sorafs_micropayments/{provider_hex}");
         let response = super::handle_status(&telemetry, None, Some(&path), true, None, None, None)
             .await
@@ -435,12 +397,10 @@ mod tests {
             Some(2)
         );
     }
-
     #[cfg(feature = "telemetry")]
     #[tokio::test]
     async fn status_root_includes_effective_nexus_routing_policy() {
         use http_body_util::BodyExt;
-
         let telemetry = MaybeTelemetry::for_tests();
         let policy = ActualLaneRoutingPolicy {
             default_lane: LaneId::new(0),
@@ -455,7 +415,6 @@ mod tests {
                 },
             }],
         };
-
         let response = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
@@ -476,7 +435,6 @@ mod tests {
             .to_bytes();
         let payload: norito::json::Value =
             norito::json::from_slice(&body).expect("decode status payload");
-
         let rules = payload
             .get("nexus")
             .and_then(|nexus| nexus.get("routing_policy"))
@@ -502,12 +460,10 @@ mod tests {
             Some("smartcontract::deploy")
         );
     }
-
     #[tokio::test]
     async fn status_root_and_tail_include_universal_offline_capability() {
         use http_body_util::BodyExt;
         use iroha_torii_shared::offline_api::OfflineStatus;
-
         let telemetry = MaybeTelemetry::for_tests();
         let offline = OfflineStatus {
             mandatory: false,
@@ -518,7 +474,6 @@ mod tests {
             assets: Vec::new(),
             blockers: Vec::new(),
         };
-
         let response = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
@@ -551,7 +506,6 @@ mod tests {
                 .and_then(norito::json::Value::as_u64),
             Some(22)
         );
-
         let response = super::handle_status(
             &telemetry,
             None,
@@ -573,7 +527,6 @@ mod tests {
             norito::json::from_slice(&body).expect("decode status tail");
         assert_eq!(payload.as_str(), Some("cash_handoff_v1"));
     }
-
     #[cfg(feature = "telemetry")]
     #[tokio::test]
     async fn status_tail_rejects_nexus_fields_when_disabled() {
@@ -591,7 +544,6 @@ mod tests {
         .expect_err("lane-specific tails must be rejected when nexus is disabled");
         assert!(matches!(err, Error::StatusSegmentNotFound(_)));
     }
-
     #[cfg(feature = "telemetry")]
     #[tokio::test]
     async fn metrics_handler_strips_lane_labels_when_nexus_disabled() {
@@ -600,7 +552,6 @@ mod tests {
             .metrics()
             .await
             .set_lane_block_height("lane-0", "global", 3);
-
         let enabled = super::handle_metrics(&telemetry, true)
             .await
             .expect("metrics should render when Nexus is enabled");
@@ -608,7 +559,6 @@ mod tests {
             enabled.contains("nexus_lane_block_height"),
             "lane metrics should be present when Nexus is enabled"
         );
-
         let filtered = super::handle_metrics(&telemetry, false)
             .await
             .expect("metrics should render when Nexus is disabled");
@@ -621,7 +571,6 @@ mod tests {
             "non-lane metrics must remain after filtering: {filtered}"
         );
     }
-
     #[tokio::test]
     async fn sumeragi_status_fails_closed_before_v2_replay() {
         let _guard = SUMERAGI_V2_STATUS_TEST_LOCK
@@ -637,10 +586,8 @@ mod tests {
             super::handle_v1_sumeragi_status(axum::extract::State(state), None, false, false)
                 .await
                 .expect("status handler");
-
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
-
     #[tokio::test]
     async fn sumeragi_status_json_is_exact_authoritative_v2_schema() {
         let _guard = SUMERAGI_V2_STATUS_TEST_LOCK
@@ -686,7 +633,6 @@ mod tests {
             iroha_core::kura::Kura::blank_kura_for_testing(),
             iroha_core::query::store::LiveQueryStore::start_test(),
         ));
-
         let response = super::handle_v1_sumeragi_status(
             axum::extract::State(std::sync::Arc::clone(&state)),
             Some(axum::http::HeaderValue::from_static("application/json")),
@@ -707,7 +653,6 @@ mod tests {
         .await
         .expect("restart-required status handler");
         status::clear_v2_status();
-
         assert_eq!(response.status(), StatusCode::OK);
         let body = response
             .into_body()
@@ -760,7 +705,6 @@ mod tests {
             );
         }
     }
-
     #[tokio::test]
     async fn permissioned_sumeragi_diagnostics_omit_npos_and_canonical_state() {
         let kura = Kura::blank_kura_for_testing();
@@ -814,7 +758,6 @@ mod tests {
                 "leaked canonical field {canonical}"
             );
         }
-
         let proposal = install_passive_diagnostic_lane_artifact(&state, &kura);
         let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(
             &iroha_data_model::nexus::LaneCatalog::default(),
@@ -864,7 +807,6 @@ mod tests {
         assert!(!ownership_data_temp.exists());
         assert!(!ownership_index_temp.exists());
     }
-
     #[test]
     fn malformed_npos_diagnostics_are_rejected() {
         let reducer = SumeragiV2Status {
@@ -906,7 +848,6 @@ mod tests {
             ..Default::default()
         };
         assert!(super::sumeragi_npos_diagnostics(&zero_seed, &reducer).is_err());
-
         let invalid_windows = iroha_data_model::parameter::system::SumeragiNposParameters {
             epoch_length_blocks: NonZeroU64::new(10).expect("non-zero epoch length"),
             vrf_commit_window_blocks: 8,
@@ -915,7 +856,6 @@ mod tests {
         };
         assert!(super::sumeragi_npos_diagnostics(&invalid_windows, &reducer).is_err());
     }
-
     #[tokio::test]
     async fn status_accept_header_returns_codec_norito() {
         let telemetry = MaybeTelemetry::for_tests();
@@ -933,14 +873,12 @@ mod tests {
         )
         .await
         .expect("status handler");
-
         assert_eq!(
             response.headers().get(axum::http::header::CONTENT_TYPE),
             Some(&axum::http::HeaderValue::from_static(
                 crate::utils::NORITO_MIME_TYPE
             ))
         );
-
         let body = response
             .into_body()
             .collect()
@@ -951,12 +889,10 @@ mod tests {
         assert_eq!(decoded.blocks, expected.blocks);
         assert_eq!(decoded.blocks_non_empty, expected.blocks_non_empty);
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn committed_block_height_detects_commits() {
         use std::num::NonZeroU64;
-
         let header = BlockHeader {
             height: NonZeroU64::new(7).unwrap(),
             prev_block_hash: None,
@@ -999,7 +935,6 @@ mod tests {
             status: BlockStatus::Committed,
         })]);
         assert_eq!(super::committed_block_height(&committed_batch), Some(7));
-
         let created_header = BlockHeader {
             height: NonZeroU64::new(3).unwrap(),
             prev_block_hash: None,
@@ -1043,21 +978,18 @@ mod tests {
         })]);
         assert!(super::committed_block_height(&created_batch).is_none());
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn average_block_time_handles_empty_chain() {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
         assert!(super::average_block_time_ms(&kura, 0, 10).is_none());
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn latest_block_created_at_missing_when_height_zero() {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
         assert!(super::latest_block_created_at(&kura, 0).is_none());
     }
-
     #[test]
     fn sumeragi_telemetry_endpoint_returns_snapshot() {
         Runtime::new().expect("runtime").block_on(async {
@@ -1074,7 +1006,6 @@ mod tests {
             status::record_availability_vote(4, &peer);
             status::record_qc_latency("availability", 123);
             status::set_rbc_backlog_snapshot(7, 5, 2);
-
             let world = iroha_core::state::World::new();
             {
                 let mut block = world.block();
@@ -1100,13 +1031,11 @@ mod tests {
                 );
                 block.commit();
             }
-
             let state = Arc::new(iroha_core::state::State::new_for_testing(
                 world,
                 iroha_core::kura::Kura::blank_kura_for_testing(),
                 iroha_core::query::store::LiveQueryStore::start_test(),
             ));
-
             let resp = super::handle_v1_sumeragi_telemetry(state.clone())
                 .await
                 .expect("telemetry handler")
@@ -1119,7 +1048,6 @@ mod tests {
                 .to_bytes();
             let json: norito::json::Value =
                 norito::json::from_slice(body.as_ref()).expect("decode telemetry response");
-
             let availability = json
                 .get("availability")
                 .and_then(|v| v.as_object())
@@ -1140,7 +1068,6 @@ mod tests {
                     .unwrap_or_default()
                     >= 1
             }));
-
             let vrf = json
                 .get("vrf")
                 .and_then(|v| v.as_object())
@@ -1152,7 +1079,6 @@ mod tests {
             );
             assert!(vrf.contains_key("participants_total"));
             assert!(vrf.contains_key("reveals_total"));
-
             let qc = json
                 .get("qc_latency_ms")
                 .and_then(|v| v.as_array())
@@ -1164,7 +1090,6 @@ mod tests {
                     .map(|s| s == "availability")
                     .unwrap_or(false)
             }));
-
             let backlog = json
                 .get("rbc_backlog")
                 .and_then(|v| v.as_object())
@@ -1177,7 +1102,6 @@ mod tests {
             );
         });
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn por_status_export_and_report_handlers() {
@@ -1192,7 +1116,6 @@ mod tests {
         coordinator
             .record_challenge(&challenge_b)
             .expect("second challenge recorded");
-
         let status_query = PorStatusQueryDto {
             manifest: Some(hex::encode(challenge_a.manifest_digest)),
             provider: Some(hex::encode(challenge_a.provider_id)),
@@ -1209,7 +1132,6 @@ mod tests {
             status_page.statuses[0].challenge_id,
             challenge_a.challenge_id
         );
-
         let oversized_status_query = PorStatusQueryDto {
             manifest: None,
             provider: None,
@@ -1223,7 +1145,6 @@ mod tests {
             super::handle_get_sorafs_por_status(coordinator.clone(), oversized_status_query)
                 .is_err()
         );
-
         let export = super::handle_get_sorafs_por_export(
             coordinator.clone(),
             PorExportQueryDto {
@@ -1240,7 +1161,6 @@ mod tests {
             export.page.statuses[0].challenge_id,
             challenge_a.challenge_id
         );
-
         let invalid_report_response = super::handle_get_sorafs_por_report(
             coordinator.clone(),
             PorReportIsoWeek {
@@ -1254,7 +1174,6 @@ mod tests {
             invalid_report_response.status(),
             axum::http::StatusCode::BAD_REQUEST
         );
-
         let report = super::handle_get_sorafs_por_report(
             coordinator.clone(),
             PorReportIsoWeek {
@@ -1269,16 +1188,12 @@ mod tests {
         );
     }
 }
-
 #[cfg(feature = "profiling")]
 pub mod profiling {
     use std::num::{NonZeroU16, NonZeroU64};
-
     use nonzero_ext::nonzero;
     use pprof::protos::Message;
-
     use super::*;
-
     /// Query params used to configure profile gathering
     #[allow(clippy::unsafe_derive_deserialize)]
     #[derive(
@@ -1297,17 +1212,14 @@ pub mod profiling {
         #[norito(default = "ProfileParams::default_seconds")]
         seconds: NonZeroU64,
     }
-
     impl ProfileParams {
         fn default_frequency() -> NonZeroU16 {
             nonzero!(99_u16)
         }
-
         fn default_seconds() -> NonZeroU64 {
             nonzero!(10_u64)
         }
     }
-
     /// Serve pprof profile data
     pub async fn handle_profile(
         ProfileParams { frequency, seconds }: ProfileParams,
@@ -1328,24 +1240,19 @@ pub mod profiling {
                                 e
                             ))
                         })?;
-
                     // Collect profiles for seconds
                     tokio::time::sleep(tokio::time::Duration::from_secs(seconds.get())).await;
-
                     let report = guard
                         .report()
                         .build()
                         .map_err(|e| Error::Pprof(eyre::eyre!("generate report fail: {}", e)))?;
-
                     let profile = report.pprof().map_err(|e| {
                         Error::Pprof(eyre::eyre!("generate pprof from report fail: {}", e))
                     })?;
-
                     profile.encode(&mut body).map_err(|e| {
                         Error::Pprof(eyre::eyre!("encode pprof into bytes fail: {}", e))
                     })?;
                 }
-
                 Ok(body)
             }
             Err(_) => {
@@ -1354,11 +1261,9 @@ pub mod profiling {
             }
         }
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
-
         #[tokio::test]
         async fn profiling_encodes_pprof_payload() {
             let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
@@ -1366,17 +1271,14 @@ pub mod profiling {
                 frequency: nonzero!(99_u16),
                 seconds: nonzero!(1_u64),
             };
-
             let payload = handle_profile(params, lock).await.expect("profile payload");
             assert!(!payload.is_empty(), "pprof payload should not be empty");
         }
     }
 }
-
 #[cfg(all(test, feature = "ws_integration_tests"))]
 mod event_stream_tests {
     use std::{io::ErrorKind, sync::Arc};
-
     use axum::{Router, extract::ws::WebSocketUpgrade, routing::get};
     use futures_util::{SinkExt as _, StreamExt as _};
     use iroha_core::EventsSender;
@@ -1394,9 +1296,7 @@ mod event_stream_tests {
     };
     use norito::{decode_from_bytes, to_bytes};
     use tokio::{net::TcpListener, sync::Mutex};
-
     use super::event::handle_events_stream_with_receiver;
-
     async fn spawn_event_stream_server(
         receiver: tokio::sync::broadcast::Receiver<EventBox>,
     ) -> Option<std::net::SocketAddr> {
@@ -1435,7 +1335,6 @@ mod event_stream_tests {
         });
         Some(addr)
     }
-
     async fn connect_event_stream(
         addr: std::net::SocketAddr,
     ) -> Option<
@@ -1453,7 +1352,6 @@ mod event_stream_tests {
             Err(err) => panic!("ws connect failed: {err}"),
         }
     }
-
     async fn next_close_frame(
         stream: &mut tokio_tungstenite::WebSocketStream<
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -1474,7 +1372,6 @@ mod event_stream_tests {
         .await
         .expect("timed out waiting for close frame")
     }
-
     #[tokio::test]
     async fn ws_stream_receives_buffered_events() {
         let events: EventsSender = tokio::sync::broadcast::channel(16).0;
@@ -1500,12 +1397,10 @@ mod event_stream_tests {
                 status: TransactionStatus::Queued,
             }),
         ]);
-
         let rx_holder = Arc::new(Mutex::new(Some(events.subscribe())));
         events
             .send(queued_event)
             .expect("receiver should be subscribed");
-
         let app = Router::new().route(
             "/ws",
             get({
@@ -1529,7 +1424,6 @@ mod event_stream_tests {
                 }
             }),
         );
-
         let listener = match TcpListener::bind("127.0.0.1:0").await {
             Ok(listener) => listener,
             Err(err) if err.kind() == ErrorKind::PermissionDenied => return,
@@ -1539,7 +1433,6 @@ mod event_stream_tests {
         tokio::spawn(async move {
             axum::serve(listener, app).await.expect("axum server");
         });
-
         let (mut ws_stream, _resp) =
             match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
                 Ok(pair) => pair,
@@ -1550,7 +1443,6 @@ mod event_stream_tests {
                 }
                 Err(err) => panic!("ws connect failed: {err}"),
             };
-
         let sub = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
             TransactionEventFilter::default().for_hash(hash).into(),
         )]);
@@ -1561,7 +1453,6 @@ mod event_stream_tests {
             ))
             .await
             .expect("send subscription");
-
         let mut got_event = None;
         while let Some(msg) = ws_stream.next().await {
             let msg = msg.expect("ws message");
@@ -1575,12 +1466,10 @@ mod event_stream_tests {
                 }
             }
         }
-
         let event = got_event.expect("transaction event");
         assert_eq!(event.hash(), &hash);
         assert_eq!(event.status(), &TransactionStatus::Queued);
     }
-
     #[tokio::test]
     async fn ws_stream_reports_lag_and_closes() {
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -1604,7 +1493,6 @@ mod event_stream_tests {
             dataspace_id: DataSpaceId::new(0),
             status: TransactionStatus::Queued,
         }));
-
         let rx_holder = Arc::new(Mutex::new(Some(events.subscribe())));
         events
             .send(lagged_event)
@@ -1612,7 +1500,6 @@ mod event_stream_tests {
         events
             .send(wanted_event)
             .expect("receiver should be subscribed");
-
         let app = Router::new().route(
             "/ws",
             get({
@@ -1636,7 +1523,6 @@ mod event_stream_tests {
                 }
             }),
         );
-
         let listener = match TcpListener::bind("127.0.0.1:0").await {
             Ok(listener) => listener,
             Err(err) if err.kind() == ErrorKind::PermissionDenied => return,
@@ -1646,7 +1532,6 @@ mod event_stream_tests {
         tokio::spawn(async move {
             axum::serve(listener, app).await.expect("axum server");
         });
-
         let (mut ws_stream, _resp) =
             match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
                 Ok(pair) => pair,
@@ -1657,7 +1542,6 @@ mod event_stream_tests {
                 }
                 Err(err) => panic!("ws connect failed: {err}"),
             };
-
         let sub = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
             TransactionEventFilter::default()
                 .for_hash(wanted_hash.clone())
@@ -1670,7 +1554,6 @@ mod event_stream_tests {
             ))
             .await
             .expect("send subscription");
-
         let close = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 match ws_stream.next().await {
@@ -1685,11 +1568,9 @@ mod event_stream_tests {
         })
         .await
         .expect("timed out waiting for close frame");
-
         assert_eq!(u16::from(close.code), crate::stream::CLOSE_TRY_AGAIN_LATER);
         assert_eq!(close.reason, "event_stream_lagged:1");
     }
-
     #[tokio::test]
     async fn ws_stream_rejects_text_subscription_payload() {
         let events: EventsSender = tokio::sync::broadcast::channel(4).0;
@@ -1699,7 +1580,6 @@ mod event_stream_tests {
         let Some(mut ws_stream) = connect_event_stream(addr).await else {
             return;
         };
-
         ws_stream
             .send(tokio_tungstenite::tungstenite::Message::Text(
                 "not-norito".into(),
@@ -1710,7 +1590,6 @@ mod event_stream_tests {
         assert_eq!(u16::from(close.code), crate::stream::CLOSE_INVALID_PAYLOAD);
         assert_eq!(close.reason, "invalid_subscription_payload");
     }
-
     #[tokio::test]
     async fn ws_stream_rejects_empty_event_filter_set() {
         let events: EventsSender = tokio::sync::broadcast::channel(4).0;
@@ -1720,7 +1599,6 @@ mod event_stream_tests {
         let Some(mut ws_stream) = connect_event_stream(addr).await else {
             return;
         };
-
         let subscription = EventSubscriptionRequest::new(Vec::new());
         ws_stream
             .send(tokio_tungstenite::tungstenite::Message::Binary(
@@ -1734,7 +1612,6 @@ mod event_stream_tests {
         assert_eq!(u16::from(close.code), crate::stream::CLOSE_POLICY_VIOLATION);
         assert_eq!(close.reason, "invalid_event_subscription");
     }
-
     #[tokio::test]
     async fn ws_stream_rejects_data_after_subscription() {
         let events: EventsSender = tokio::sync::broadcast::channel(4).0;
@@ -1744,7 +1621,6 @@ mod event_stream_tests {
         let Some(mut ws_stream) = connect_event_stream(addr).await else {
             return;
         };
-
         let subscription = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
             TransactionEventFilter::default().into(),
         )]);
@@ -1761,12 +1637,10 @@ mod event_stream_tests {
             ))
             .await
             .expect("send unexpected second request");
-
         let close = next_close_frame(&mut ws_stream).await;
         assert_eq!(u16::from(close.code), crate::stream::CLOSE_INVALID_PAYLOAD);
         assert_eq!(close.reason, "invalid_subscription_payload");
     }
-
     #[tokio::test]
     async fn ws_stream_emits_transport_heartbeat() {
         let events: EventsSender = tokio::sync::broadcast::channel(4).0;
@@ -1776,7 +1650,6 @@ mod event_stream_tests {
         let Some(mut ws_stream) = connect_event_stream(addr).await else {
             return;
         };
-
         let subscription = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
             TransactionEventFilter::default().into(),
         )]);
@@ -1786,7 +1659,6 @@ mod event_stream_tests {
             ))
             .await
             .expect("send subscription");
-
         let heartbeat = tokio::time::timeout(std::time::Duration::from_secs(1), async {
             loop {
                 match ws_stream.next().await {

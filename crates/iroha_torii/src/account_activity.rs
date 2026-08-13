@@ -1,5 +1,4 @@
 //! Shared account-activity extraction for Explorer filters and push notifications.
-
 use iroha_data_model::{
     account::AccountId,
     isi::{
@@ -12,7 +11,6 @@ use iroha_data_model::{
     prelude::InstructionBox,
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
-
 /// Role of an account within an activity payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AccountActivityRole {
@@ -25,7 +23,6 @@ pub(crate) enum AccountActivityRole {
     /// Account was affected without a directional value transfer.
     Affected,
 }
-
 impl AccountActivityRole {
     /// Stable label used in push payloads.
     pub(crate) const fn as_str(self) -> &'static str {
@@ -37,7 +34,6 @@ impl AccountActivityRole {
         }
     }
 }
-
 /// Account reference extracted from a committed instruction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AccountInstructionActivity {
@@ -46,14 +42,12 @@ pub(crate) struct AccountInstructionActivity {
     /// Account role within this instruction.
     pub(crate) role: AccountActivityRole,
 }
-
 /// Return true when an instruction affects the given account.
 pub(crate) fn instruction_matches_account_id(instr: &InstructionBox, expected: &AccountId) -> bool {
     instruction_account_activities(instr)
         .iter()
         .any(|activity| &activity.account == expected)
 }
-
 /// Extract all account references from an instruction.
 pub(crate) fn instruction_account_activities(
     instr: &InstructionBox,
@@ -62,7 +56,6 @@ pub(crate) fn instruction_account_activities(
     collect_instruction_account_activities(instr, &mut out);
     out
 }
-
 fn collect_instruction_account_activities(
     instr: &InstructionBox,
     out: &mut Vec<AccountInstructionActivity>,
@@ -240,7 +233,6 @@ fn collect_instruction_account_activities(
         }
     }
 }
-
 fn collect_multisig_account_activities(
     multisig: &MultisigInstructionBox,
     out: &mut Vec<AccountInstructionActivity>,
@@ -266,7 +258,6 @@ fn collect_multisig_account_activities(
         }
     }
 }
-
 fn push_directional(out: &mut Vec<AccountInstructionActivity>, from: &AccountId, to: &AccountId) {
     if from == to {
         push_unique(out, from, AccountActivityRole::SelfActivity);
@@ -275,7 +266,6 @@ fn push_directional(out: &mut Vec<AccountInstructionActivity>, from: &AccountId,
         push_unique(out, to, AccountActivityRole::Incoming);
     }
 }
-
 fn push_unique(
     out: &mut Vec<AccountInstructionActivity>,
     account: &AccountId,
@@ -291,7 +281,6 @@ fn push_unique(
         });
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::KeyPair;
@@ -307,15 +296,12 @@ mod tests {
         prelude::Numeric,
         role::RoleId,
     };
-
     use super::*;
-
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     #[test]
     fn account_fixture_uses_checked_seed_derivation() {
         assert_ne!(account(1), account(2));
@@ -324,21 +310,18 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     fn asset_id(account: AccountId) -> AssetId {
         let domain = DomainId::try_new("wallet", "universal").expect("domain");
         let definition =
             AssetDefinitionId::derive_from_components(domain, "xor".parse().expect("asset name"));
         AssetId::new(definition, account)
     }
-
     #[test]
     fn transfer_marks_outgoing_and_incoming_accounts() {
         let alice = account(1);
         let bob = account(2);
         let instruction: InstructionBox =
             Transfer::asset_quantity(asset_id(alice.clone()), 10u32, bob.clone()).into();
-
         let activities = instruction_account_activities(&instruction);
         assert!(activities.contains(&AccountInstructionActivity {
             account: alice,
@@ -349,7 +332,6 @@ mod tests {
             role: AccountActivityRole::Incoming,
         }));
     }
-
     #[test]
     fn mint_burn_and_metadata_match_asset_owner() {
         let alice = account(3);
@@ -362,12 +344,10 @@ mod tests {
             iroha_primitives::json::Json::new("gold"),
         )
         .into();
-
         assert!(instruction_matches_account_id(&mint, &alice));
         assert!(instruction_matches_account_id(&burn, &alice));
         assert!(instruction_matches_account_id(&metadata, &alice));
     }
-
     #[test]
     fn permissions_and_nft_transfer_match_accounts() {
         let alice = account(4);
@@ -387,13 +367,11 @@ mod tests {
             "mona".parse().expect("nft name"),
         );
         let nft: InstructionBox = Transfer::nft(alice.clone(), nft_id, bob.clone()).into();
-
         assert!(instruction_matches_account_id(&grant, &alice));
         assert!(instruction_matches_account_id(&role, &bob));
         assert!(instruction_matches_account_id(&nft, &alice));
         assert!(instruction_matches_account_id(&nft, &bob));
     }
-
     #[test]
     fn account_registration_and_removal_match_registered_account() {
         let alice = account(6);
@@ -405,11 +383,9 @@ mod tests {
         let remove: InstructionBox =
             RemoveKeyValue::account(alice.clone(), "tier".parse::<Name>().expect("metadata key"))
                 .into();
-
         assert!(instruction_matches_account_id(&register, &alice));
         assert!(instruction_matches_account_id(&remove, &alice));
     }
-
     #[test]
     fn nft_register_without_owner_metadata_is_not_account_activity() {
         let alice = account(7);
@@ -421,7 +397,6 @@ mod tests {
             Nft::new(nft_id, Metadata::default()),
         ))
         .into();
-
         assert!(!instruction_matches_account_id(&instruction, &alice));
     }
 }

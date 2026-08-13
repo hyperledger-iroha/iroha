@@ -4,14 +4,12 @@
 //! filter at 16 KiB. Loads pin one direct regular-file identity, read its exact
 //! metadata length plus a growth sentinel, and decode under explicit Norito
 //! allocation limits before the configuration can influence a chaos run.
-
 use std::{
     fs::{self, Metadata, OpenOptions},
     io::{self, Read},
     path::{Path, PathBuf},
     time::Duration,
 };
-
 use color_eyre::{Result, eyre::eyre};
 use dirs::config_dir;
 use norito::{
@@ -19,7 +17,6 @@ use norito::{
     codec::{Decode, Encode},
 };
 use tracing::warn;
-
 use crate::config::{
     ChaosConfig, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT,
     DEFAULT_SHUTDOWN_DRAIN_TIMEOUT, DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
@@ -27,7 +24,6 @@ use crate::config::{
     WorkloadProfile,
 };
 use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
-
 const APP_DIR: &str = "izanami";
 const CONFIG_FILE: &str = "config.bin";
 /// First-release ceiling for one persisted Izanami configuration frame.
@@ -41,7 +37,6 @@ const STORED_ARGS_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     CONFIG_FILE_MAX_BYTES_V1 * 2,
     16,
 );
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const CONFIG_FILE_O_NOFOLLOW_FLAG: i32 = 0x2000_0000;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -67,7 +62,6 @@ const CONFIG_FILE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
     ))
 ))]
 compile_error!("Izanami persistence requires a defined no-follow open flag on this Unix target");
-
 #[derive(Clone, Debug, Encode, Decode)]
 #[norito(decode_from_slice)]
 struct StoredArgs {
@@ -116,63 +110,51 @@ struct StoredArgs {
     #[norito(default = "default_sumeragi_proposal_queue_scan_multiplier")]
     sumeragi_proposal_queue_scan_multiplier: u64,
 }
-
 fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
     match profile {
         WorkloadProfile::Stable => 0,
         WorkloadProfile::Chaos => 1,
     }
 }
-
 fn workload_profile_from_u8(value: u8) -> WorkloadProfile {
     match value {
         1 => WorkloadProfile::Chaos,
         _ => WorkloadProfile::Stable,
     }
 }
-
 fn duration_to_ms(duration: Duration, label: &str) -> Result<u64> {
     u64::try_from(duration.as_millis())
         .map_err(|_| eyre!("{label} {duration:?} too large to persist"))
 }
-
 fn maybe_duration_to_ms(duration: Option<Duration>, label: &str) -> Result<Option<u64>> {
     duration
         .map(|value| duration_to_ms(value, label))
         .transpose()
 }
-
 fn default_progress_interval_ms() -> u64 {
     u64::try_from(DEFAULT_PROGRESS_INTERVAL.as_millis())
         .expect("default progress interval should fit into u64")
 }
-
 fn default_progress_timeout_ms() -> u64 {
     u64::try_from(DEFAULT_PROGRESS_TIMEOUT.as_millis())
         .expect("default progress timeout should fit into u64")
 }
-
 fn default_shutdown_drain_timeout_ms() -> u64 {
     u64::try_from(DEFAULT_SHUTDOWN_DRAIN_TIMEOUT.as_millis())
         .expect("default shutdown drain timeout should fit into u64")
 }
-
 fn default_submitters() -> u32 {
     1
 }
-
 fn default_packet_loss_percent() -> u8 {
     DEFAULT_NETWORK_PACKET_LOSS_PERCENT
 }
-
 fn default_sumeragi_block_max_transactions() -> u64 {
     DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS
 }
-
 fn default_sumeragi_proposal_queue_scan_multiplier() -> u64 {
     DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER
 }
-
 impl StoredArgs {
     fn from_args(args: &IzanamiArgs) -> Result<Self> {
         if args.log_filter.len() > LOG_FILTER_MAX_BYTES_V1 {
@@ -251,7 +233,6 @@ impl StoredArgs {
         stored.validate_persistence_limits()?;
         Ok(stored)
     }
-
     fn validate_persistence_limits(&self) -> Result<()> {
         if self.log_filter.len() > LOG_FILTER_MAX_BYTES_V1 {
             return Err(eyre!(
@@ -261,7 +242,6 @@ impl StoredArgs {
         }
         Ok(())
     }
-
     fn into_args(self) -> Result<IzanamiArgs> {
         let to_duration = |ms: u64| -> Result<Duration> { Ok(Duration::from_millis(ms)) };
         let fault_toggles = FaultToggles::from_bits(self.fault_flags);
@@ -299,33 +279,26 @@ impl StoredArgs {
         })
     }
 }
-
 fn config_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join(APP_DIR).join(CONFIG_FILE))
 }
-
 #[cfg(unix)]
 fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(windows)]
 fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     left.volume_serial_number().is_some()
         && left.file_index().is_some()
         && left.volume_serial_number() == right.volume_serial_number()
         && left.file_index() == right.file_index()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn same_file_identity(_left: &Metadata, _right: &Metadata) -> bool {
     false
 }
-
 fn metadata_is_link(metadata: &Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
@@ -333,18 +306,15 @@ fn metadata_is_link(metadata: &Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
-
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
         return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
     }
     #[cfg(not(windows))]
     false
 }
-
 fn invalid_config_file(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
-
 fn read_config_file_bounded(path: &Path) -> io::Result<Vec<u8>> {
     let maximum_u64 = u64::try_from(CONFIG_FILE_MAX_BYTES_V1)
         .expect("fixed Izanami configuration limit fits u64");
@@ -359,19 +329,16 @@ fn read_config_file_bounded(path: &Path) -> io::Result<Vec<u8>> {
             "persisted Izanami configuration exceeds {CONFIG_FILE_MAX_BYTES_V1} bytes"
         )));
     }
-
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(CONFIG_FILE_O_NOFOLLOW_FLAG);
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
@@ -402,7 +369,6 @@ fn read_config_file_bounded(path: &Path) -> io::Result<Vec<u8>> {
             "persisted Izanami configuration grew while being read",
         ));
     }
-
     let opened_after = file.metadata()?;
     let named_after = fs::symlink_metadata(path)?;
     if metadata_is_link(&named_after)
@@ -419,7 +385,6 @@ fn read_config_file_bounded(path: &Path) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-
 fn decode_stored_args_bounded(bytes: &[u8]) -> Result<StoredArgs> {
     let stored = norito::codec::decode_exact_from_slice_with_limits::<StoredArgs>(
         bytes,
@@ -429,12 +394,10 @@ fn decode_stored_args_bounded(bytes: &[u8]) -> Result<StoredArgs> {
     stored.validate_persistence_limits()?;
     Ok(stored)
 }
-
 struct FixedCapacityWriter {
     bytes: Vec<u8>,
     maximum: usize,
 }
-
 impl FixedCapacityWriter {
     fn new(maximum: usize) -> io::Result<Self> {
         let mut bytes = Vec::new();
@@ -445,12 +408,10 @@ impl FixedCapacityWriter {
         })?;
         Ok(Self { bytes, maximum })
     }
-
     fn finish(self) -> Vec<u8> {
         self.bytes
     }
 }
-
 impl io::Write for FixedCapacityWriter {
     fn write(&mut self, input: &[u8]) -> io::Result<usize> {
         let end = self
@@ -466,12 +427,10 @@ impl io::Write for FixedCapacityWriter {
         self.bytes.extend_from_slice(input);
         Ok(input.len())
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
-
 fn encode_stored_args_bounded(stored: &StoredArgs) -> Result<Vec<u8>> {
     let encoded_bytes = norito::codec::encode_adaptive_into(stored, &mut io::sink())
         .map_err(|error| eyre!("failed to count persisted Izanami configuration: {error}"))?;
@@ -491,7 +450,6 @@ fn encode_stored_args_bounded(stored: &StoredArgs) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-
 pub fn load_args() -> Result<Option<IzanamiArgs>> {
     let Some(path) = config_path() else {
         return Ok(None);
@@ -509,11 +467,9 @@ pub fn load_args() -> Result<Option<IzanamiArgs>> {
         }
         Err(err) => return Err(err.into()),
     };
-
     let stored = decode_stored_args_bounded(&data)?;
     stored.into_args().map(Some)
 }
-
 pub fn store_args(args: &IzanamiArgs) -> Result<()> {
     let Some(path) = config_path() else {
         return Ok(());
@@ -522,7 +478,6 @@ pub fn store_args(args: &IzanamiArgs) -> Result<()> {
     args_clone.tui = false;
     let stored = StoredArgs::from_args(&args_clone)?;
     let bytes = encode_stored_args_bounded(&stored)?;
-
     let dir = path.parent().unwrap();
     if let Err(err) = fs::create_dir_all(dir) {
         if err.kind() == io::ErrorKind::PermissionDenied {
@@ -548,15 +503,12 @@ pub fn store_args(args: &IzanamiArgs) -> Result<()> {
     }
     Ok(())
 }
-
 pub fn store_config(config: &ChaosConfig) -> Result<()> {
     store_args(&IzanamiArgs::from_config(config))
 }
-
 #[cfg(test)]
 mod portable_tests {
     use super::*;
-
     #[test]
     fn stored_args_roundtrip_preserves_fault_window_fields() -> Result<()> {
         let mut args = IzanamiArgs::defaults();
@@ -568,9 +520,7 @@ mod portable_tests {
         args.prebuild_tx_workers = 4;
         args.sumeragi_block_max_transactions = 1_536;
         args.sumeragi_proposal_queue_scan_multiplier = 2;
-
         let loaded = StoredArgs::from_args(&args)?.into_args()?;
-
         assert_eq!(loaded.fault_window_start, args.fault_window_start);
         assert_eq!(loaded.fault_window_end, args.fault_window_end);
         assert_eq!(loaded.shutdown_drain_timeout, args.shutdown_drain_timeout);
@@ -586,44 +536,37 @@ mod portable_tests {
         );
         Ok(())
     }
-
     #[test]
     fn persisted_log_filter_limit_accepts_exact_and_rejects_next_byte() -> Result<()> {
         let mut args = IzanamiArgs::defaults();
         args.log_filter = "x".repeat(LOG_FILTER_MAX_BYTES_V1);
         StoredArgs::from_args(&args)?;
-
         args.log_filter.push('x');
         let error = StoredArgs::from_args(&args).expect_err("oversized filter must fail closed");
         assert!(error.to_string().contains("log_filter"));
         Ok(())
     }
-
     #[test]
     fn bounded_decoder_rejects_oversized_persisted_filter() -> Result<()> {
         let mut stored = StoredArgs::from_args(&IzanamiArgs::defaults())?;
         stored.log_filter = "x".repeat(LOG_FILTER_MAX_BYTES_V1 + 1);
         let encoded = stored.encode();
-
         let error = decode_stored_args_bounded(&encoded)
             .expect_err("decoder field budget must reject oversized filter");
         assert!(error.to_string().contains("decode failed"));
         Ok(())
     }
-
     #[test]
     fn bounded_codec_preserves_legacy_bare_wire_bytes() -> Result<()> {
         let stored = StoredArgs::from_args(&IzanamiArgs::defaults())?;
         let legacy = stored.encode();
         let bounded = encode_stored_args_bounded(&stored)?;
-
         assert_eq!(bounded, legacy);
         let decoded = decode_stored_args_bounded(&bounded)?;
         assert_eq!(decoded.log_filter, stored.log_filter);
         Ok(())
     }
 }
-
 #[cfg(all(test, unix, target_os = "linux"))]
 mod tests {
     use std::{
@@ -632,14 +575,11 @@ mod tests {
         path::PathBuf,
         sync::{Mutex as StdMutex, OnceLock},
     };
-
     use super::*;
-
     struct EnvGuard {
         key: &'static str,
         previous: Option<String>,
     }
-
     impl EnvGuard {
         #[allow(unsafe_code)]
         fn set(key: &'static str, value: &str) -> Self {
@@ -651,7 +591,6 @@ mod tests {
             Self { key, previous }
         }
     }
-
     impl Drop for EnvGuard {
         #[allow(unsafe_code)]
         fn drop(&mut self) {
@@ -668,12 +607,10 @@ mod tests {
             }
         }
     }
-
     fn env_lock() -> &'static StdMutex<()> {
         static ENV_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
         ENV_LOCK.get_or_init(|| StdMutex::new(()))
     }
-
     fn readonly_dir(label: &str) -> Result<PathBuf> {
         let dir = env::temp_dir().join(format!("izanami-{label}-{}", std::process::id()));
         fs::create_dir_all(&dir)?;
@@ -682,7 +619,6 @@ mod tests {
         fs::set_permissions(&dir, perms)?;
         Ok(dir)
     }
-
     fn restore_dir(path: &PathBuf) -> Result<()> {
         let mut perms = fs::metadata(path)?.permissions();
         perms.set_mode(0o700);
@@ -690,13 +626,11 @@ mod tests {
         let _ = fs::remove_dir_all(path);
         Ok(())
     }
-
     fn temp_config_dir(label: &str) -> Result<PathBuf> {
         let dir = env::temp_dir().join(format!("izanami-{label}-{}", std::process::id()));
         fs::create_dir_all(&dir)?;
         Ok(dir)
     }
-
     #[test]
     fn bounded_config_reader_accepts_exact_limit_and_rejects_next_byte() -> Result<()> {
         let dir = temp_config_dir("bounded-read")?;
@@ -706,7 +640,6 @@ mod tests {
             .expect("fixed Izanami configuration limit fits u64");
         file.set_len(maximum_u64)?;
         drop(file);
-
         assert_eq!(
             read_config_file_bounded(&path)?.len(),
             CONFIG_FILE_MAX_BYTES_V1
@@ -717,29 +650,23 @@ mod tests {
             .set_len(maximum_u64 + 1)?;
         let error = read_config_file_bounded(&path).expect_err("max + 1 must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-
         fs::remove_dir_all(dir)?;
         Ok(())
     }
-
     #[test]
     fn bounded_config_reader_rejects_symlink() -> Result<()> {
         use std::os::unix::fs::symlink;
-
         let dir = temp_config_dir("symlink-read")?;
         let target = dir.join("target.bin");
         fs::write(&target, b"config")?;
         let link = dir.join(CONFIG_FILE);
         symlink(&target, &link)?;
-
         let error = read_config_file_bounded(&link).expect_err("symlink must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert_eq!(fs::read(target)?, b"config");
-
         fs::remove_dir_all(dir)?;
         Ok(())
     }
-
     #[test]
     fn oversized_filter_is_rejected_before_config_directory_creation() -> Result<()> {
         let _env_lock = env_lock().lock().expect("env lock");
@@ -748,15 +675,12 @@ mod tests {
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", config_home.to_string_lossy().as_ref());
         let mut args = IzanamiArgs::defaults();
         args.log_filter = "x".repeat(LOG_FILTER_MAX_BYTES_V1 + 1);
-
         let error = store_args(&args).expect_err("oversized filter must fail before persistence");
         assert!(error.to_string().contains("log_filter"));
         assert!(!config_home.exists());
-
         fs::remove_dir_all(root)?;
         Ok(())
     }
-
     #[derive(Clone, Encode, Decode)]
     struct StoredArgsLegacy {
         peers: u32,
@@ -774,20 +698,16 @@ mod tests {
         nexus: bool,
         allow_net: bool,
     }
-
     #[test]
     fn store_args_skips_permission_denied() -> Result<()> {
         let _env_lock = env_lock().lock().expect("env lock");
         let dir = readonly_dir("perm-store")?;
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
-
         let args = IzanamiArgs::defaults();
         assert!(store_args(&args).is_ok());
-
         restore_dir(&dir)?;
         Ok(())
     }
-
     #[test]
     fn load_args_skips_permission_denied() -> Result<()> {
         let _env_lock = env_lock().lock().expect("env lock");
@@ -800,24 +720,20 @@ mod tests {
         let mut perms = fs::metadata(&config_file)?.permissions();
         perms.set_mode(0o000);
         fs::set_permissions(&config_file, perms)?;
-
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
         let loaded = load_args()?;
         assert!(loaded.is_none());
-
         let mut perms = fs::metadata(&config_file)?.permissions();
         perms.set_mode(0o600);
         fs::set_permissions(&config_file, perms)?;
         let _ = fs::remove_dir_all(&dir);
         Ok(())
     }
-
     #[test]
     fn store_and_load_roundtrip_persists_progress_settings() -> Result<()> {
         let _env_lock = env_lock().lock().expect("env lock");
         let dir = temp_config_dir("roundtrip")?;
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
-
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
@@ -859,10 +775,8 @@ mod tests {
             nexus: true,
             diagnostic_dir: None,
         };
-
         store_args(&args)?;
         let loaded = load_args()?.expect("persisted args should load");
-
         assert_eq!(loaded.allow_net, args.allow_net);
         assert_eq!(loaded.peers, args.peers);
         assert_eq!(loaded.faulty, args.faulty);
@@ -903,17 +817,14 @@ mod tests {
         );
         assert_eq!(loaded.packet_loss_percent, args.packet_loss_percent);
         assert_eq!(loaded.nexus, args.nexus);
-
         let _ = fs::remove_dir_all(&dir);
         Ok(())
     }
-
     #[test]
     fn load_args_defaults_missing_progress_fields() -> Result<()> {
         let _env_lock = env_lock().lock().expect("env lock");
         let dir = temp_config_dir("legacy")?;
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
-
         let legacy = StoredArgsLegacy {
             peers: 4,
             faulty: 1,
@@ -929,7 +840,6 @@ mod tests {
             nexus: false,
             allow_net: true,
         };
-
         let Some(path) = config_path() else {
             return Ok(());
         };
@@ -937,9 +847,7 @@ mod tests {
             fs::create_dir_all(parent)?;
         }
         fs::write(&path, legacy.encode())?;
-
         let loaded = load_args()?.expect("legacy args should load");
-
         assert_eq!(loaded.peers, legacy.peers as usize);
         assert_eq!(loaded.faulty, legacy.faulty as usize);
         assert_eq!(loaded.duration, Duration::from_millis(legacy.duration_ms));
@@ -976,7 +884,6 @@ mod tests {
             loaded.packet_loss_percent,
             DEFAULT_NETWORK_PACKET_LOSS_PERCENT
         );
-
         let _ = fs::remove_dir_all(&dir);
         Ok(())
     }

@@ -4,9 +4,7 @@
 //!
 //! Builds a minimal Torii instance and checks that a couple of App API
 //! endpoints are reachable via the consolidated helper-built router.
-
 use std::sync::Arc;
-
 use axum::http::{Request, StatusCode, Uri, header::CONTENT_TYPE};
 // use iroha_config::base::WithOrigin; // unused in this smoke test
 use iroha_core::{
@@ -15,15 +13,12 @@ use iroha_core::{
 use iroha_data_model::{ChainId, peer::PeerId};
 use tower::ServiceExt as _; // for Router::oneshot
 // use iroha_primitives::addr::socket_addr; // unused in this smoke test
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 // Minimal root config for starting Kiso and wiring Torii
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     iroha_torii::test_utils::mk_minimal_root_cfg()
 }
-
 async fn assert_route_is_not_auth_denied(
     app: axum::Router,
     request: Request<axum::body::Body>,
@@ -36,7 +31,6 @@ async fn assert_route_is_not_auth_denied(
     );
     status
 }
-
 #[tokio::test]
 async fn app_api_router_smoke() {
     // Start Kiso and minimal components for Torii
@@ -61,7 +55,6 @@ async fn app_api_router_smoke() {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
-
     // Build Torii (telemetry optional)
     let torii = {
         #[cfg(feature = "telemetry")]
@@ -114,9 +107,7 @@ async fn app_api_router_smoke() {
             )
         }
     };
-
     let app = torii.api_router_for_tests();
-
     for path in ["/v1/soracloud/status", "/v1/soracloud/apps/status"] {
         let response = app
             .clone()
@@ -144,7 +135,6 @@ async fn app_api_router_smoke() {
             .expect("public Soracloud discovery GET"),
     )
     .await;
-
     // The v1 alias VOPRF-shaped hash helper was retired before release because it was
     // neither keyed nor verifiable. Every legacy request shape must remain unroutable,
     // including malformed input, a replay, cross-domain material, and wrong-key/proof fields.
@@ -180,7 +170,6 @@ async fn app_api_router_smoke() {
             "retired alias VOPRF route accepted {case} request"
         );
     }
-
     // 1) App API: GET /v1/accounts/{account_id}/assets — use a bogus id to avoid
     // state setup; we only care that the route exists and responds deterministically.
     assert_route_is_not_auth_denied(
@@ -193,7 +182,6 @@ async fn app_api_router_smoke() {
             .unwrap(),
     )
     .await;
-
     // 2) App API: GET /v1/events/sse — endpoint exists; allow OK or 429 depending on rate limits
     let resp_sse = app
         .clone()
@@ -217,7 +205,6 @@ async fn app_api_router_smoke() {
             .unwrap_or("");
         assert!(ct.contains("text/event-stream"));
     }
-
     // 2b) App API: GET /v1/explorer/blocks/stream — endpoint exists; allow OK or 429.
     let resp_blocks_sse = app
         .clone()
@@ -241,7 +228,6 @@ async fn app_api_router_smoke() {
             .unwrap_or("");
         assert!(ct.contains("text/event-stream"));
     }
-
     // 2c) App API: GET /v1/gov/stream — endpoint exists; allow OK/429.
     let resp_gov_sse = app
         .clone()
@@ -265,7 +251,6 @@ async fn app_api_router_smoke() {
             .unwrap_or("");
         assert!(ct.contains("text/event-stream"));
     }
-
     // 2d) App API: GET /v1/telemetry/live — endpoint exists; allow OK/429/403.
     let resp_telemetry_live = app
         .clone()
@@ -299,7 +284,6 @@ async fn app_api_router_smoke() {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
         ));
     }
-
     // 2e) App API: GET /v1/telemetry/propagation — endpoint exists; allow OK/429/403.
     let resp_telemetry_propagation = app
         .clone()
@@ -325,7 +309,6 @@ async fn app_api_router_smoke() {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
         ));
     }
-
     // 3) App API: GET /v1/webhooks — operator auth runs before route dispatch.
     let unsigned_webhooks_response = app
         .clone()
@@ -353,7 +336,6 @@ async fn app_api_router_smoke() {
         ),
     )
     .await;
-
     // 4) App API: GET /v1/assets/{definition_id}/holders — use percent-encoded '#'
     // in the definition id (bogus#wonderland) to ensure parsing is exercised.
     assert_route_is_not_auth_denied(
@@ -366,7 +348,6 @@ async fn app_api_router_smoke() {
             .unwrap(),
     )
     .await;
-
     // 5) App API: POST /v1/webhooks — create a webhook (write path)
     let body = r#"{
   "url": "https://example.com/callback",
@@ -387,7 +368,6 @@ async fn app_api_router_smoke() {
         ),
     )
     .await;
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()
@@ -398,7 +378,6 @@ async fn app_api_router_smoke() {
             .unwrap(),
     )
     .await;
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()
@@ -409,7 +388,6 @@ async fn app_api_router_smoke() {
             .unwrap(),
     )
     .await;
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()
@@ -420,7 +398,6 @@ async fn app_api_router_smoke() {
             .unwrap(),
     )
     .await;
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()
@@ -431,7 +408,6 @@ async fn app_api_router_smoke() {
             .unwrap(),
     )
     .await;
-
     assert_route_is_not_auth_denied(
         app,
         Request::builder()
@@ -443,7 +419,6 @@ async fn app_api_router_smoke() {
     )
     .await;
 }
-
 #[tokio::test]
 async fn contract_routes_honor_api_token_requirement() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
@@ -466,7 +441,6 @@ async fn contract_routes_honor_api_token_requirement() {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
-
     let torii = {
         #[cfg(feature = "telemetry")]
         {
@@ -518,9 +492,7 @@ async fn contract_routes_honor_api_token_requirement() {
             )
         }
     };
-
     let app = torii.api_router_for_tests();
-
     for (method, path) in [
         ("POST", "/v1/contracts/deploy"),
         ("POST", "/v1/contracts/deploy-bundle"),
@@ -544,7 +516,6 @@ async fn contract_routes_honor_api_token_requirement() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "path {path}");
     }
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()
@@ -556,7 +527,6 @@ async fn contract_routes_honor_api_token_requirement() {
             .unwrap(),
     )
     .await;
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()
@@ -568,7 +538,6 @@ async fn contract_routes_honor_api_token_requirement() {
             .unwrap(),
     )
     .await;
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()
@@ -580,7 +549,6 @@ async fn contract_routes_honor_api_token_requirement() {
             .unwrap(),
     )
     .await;
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()

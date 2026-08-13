@@ -20,21 +20,16 @@
 //! fields are uninhabited. Consequently no production caller can create these
 //! spools yet. Test-only construction exercises the storage state machine with
 //! tiny geometry. Every readiness and completion axis remains false.
-
 use core::{convert::Infallible, fmt};
 use std::path::Path;
-
 use iroha_confidential_spool::{
     CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1,
     CONFIDENTIAL_SPOOL_MAX_SLOTS_V1, ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1,
     ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
-
 use crate::vega::sponge::{Keccak256, keccak256};
-
 use super::super::super::manifest::{RELEASE_MODULI_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1};
 use super::is_prime_u64;
-
 const Q_PCS_SPOOL_VERSION_V2: u8 = 2;
 const OPENING_REPETITIONS_V2: u8 = 5;
 const ROWS_PER_REPETITION_V2: u8 = 2;
@@ -60,7 +55,6 @@ const RELEASE_LDE_FILE_BYTES_V2: u64 = 3_190_784_000;
 const RELEASE_TOTAL_FILE_BYTES_V2: u64 =
     RELEASE_COEFFICIENT_FILE_BYTES_V2 + RELEASE_LDE_FILE_BYTES_V2;
 const AUTHENTICATION_TAG_BYTES_V2: u64 = 16;
-
 const PARAMETER_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.soundness.parameters\0";
 const FIXED_WIDTH_TAG_V2: &[u8] = b"P:2N/c[2N-1]=0;H:N/c[N-1]=0";
 const ROW_ORDER_TAG_V2: &[u8] = b"column=limb*10+repetition*2+role;P:0;H:1";
@@ -82,7 +76,6 @@ const COEFFICIENT_ENCODING_V2: &[u8] =
     b"canonical big-endian u64 residues;descriptor fixes values-per-block";
 const LDE_ENCODING_V2: &[u8] =
     b"canonical (c0,c1) big-endian u64 Fq2 values;descriptor fixes values-per-block";
-
 const SOURCE_AGGREGATION_COMPLETE_V2: bool = false;
 const SOURCE_ALGEBRA_VERIFIED_V2: bool = false;
 const Q_PCS_MASKING_INTEGRATED_V2: bool = false;
@@ -91,7 +84,6 @@ const Q_PCS_PROOF_INTEGRATED_V2: bool = false;
 const OPERATIONAL_RECEIPT_ACCEPTED_V2: bool = false;
 const RELEASE_READY_V2: bool = false;
 const RELEASE_COMPLETE_V2: bool = false;
-
 const _: () = {
     assert!(FIXED_ROW_COUNT_V2 == 10);
     assert!(RELEASE_LIMB_COUNT_V2 as usize == RELEASE_MODULI_V1.len());
@@ -134,7 +126,6 @@ const _: () = {
     assert!(!RELEASE_READY_V2);
     assert!(!RELEASE_COMPLETE_V2);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QPcsSpoolErrorV2 {
     InvalidGeometry,
@@ -153,19 +144,16 @@ enum QPcsSpoolErrorV2 {
     Poisoned,
     Leaf(ConfidentialSpoolErrorV1),
 }
-
 impl fmt::Display for QPcsSpoolErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
-
 impl From<ConfidentialSpoolErrorV1> for QPcsSpoolErrorV2 {
     fn from(error: ConfidentialSpoolErrorV1) -> Self {
         Self::Leaf(error)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FixedTenRowParameterDescriptorV2 {
     version: u8,
@@ -182,7 +170,6 @@ struct FixedTenRowParameterDescriptorV2 {
     fri_rounds: u8,
     extension_degree: u8,
 }
-
 impl FixedTenRowParameterDescriptorV2 {
     fn from_geometry_v2(geometry: SpoolGeometryV2) -> Result<Self, QPcsSpoolErrorV2> {
         geometry.validate_v2()?;
@@ -212,7 +199,6 @@ impl FixedTenRowParameterDescriptorV2 {
             extension_degree: EXTENSION_DEGREE_V2,
         })
     }
-
     fn digest_v2(self, moduli: &[u64]) -> Result<[u8; 32], QPcsSpoolErrorV2> {
         if usize::from(self.limb_count) != moduli.len() || moduli.is_empty() {
             return Err(QPcsSpoolErrorV2::InvalidGeometry);
@@ -261,7 +247,6 @@ impl FixedTenRowParameterDescriptorV2 {
         Ok(digest)
     }
 }
-
 #[derive(Clone, Copy)]
 struct SpoolGeometryV2 {
     ring_degree: u32,
@@ -271,7 +256,6 @@ struct SpoolGeometryV2 {
     lde_values_per_block: u16,
     moduli: &'static [u64],
 }
-
 impl SpoolGeometryV2 {
     const fn release_v2() -> Self {
         Self {
@@ -283,7 +267,6 @@ impl SpoolGeometryV2 {
             moduli: &RELEASE_MODULI_V1,
         }
     }
-
     fn validate_v2(self) -> Result<(), QPcsSpoolErrorV2> {
         let limb_count = self.limb_count_v2()?;
         if limb_count == 0
@@ -318,30 +301,25 @@ impl SpoolGeometryV2 {
         self.lde_slot_count_v2()?;
         Ok(())
     }
-
     fn limb_count_v2(self) -> Result<u8, QPcsSpoolErrorV2> {
         u8::try_from(self.moduli.len()).map_err(|_| QPcsSpoolErrorV2::InvalidGeometry)
     }
-
     fn domain_size_v2(self) -> Result<u64, QPcsSpoolErrorV2> {
         1_u64
             .checked_shl(u32::from(self.domain_log))
             .ok_or(QPcsSpoolErrorV2::InvalidGeometry)
     }
-
     fn coefficient_blocks_per_component_v2(self) -> Result<u64, QPcsSpoolErrorV2> {
         if self.coefficient_values_per_block == 0 {
             return Err(QPcsSpoolErrorV2::InvalidGeometry);
         }
         Ok(u64::from(self.ring_degree) / u64::from(self.coefficient_values_per_block))
     }
-
     fn coefficient_block_bytes_v2(self) -> Result<u64, QPcsSpoolErrorV2> {
         u64::from(self.coefficient_values_per_block)
             .checked_mul(BASE_FIELD_WIRE_BYTES_V2)
             .ok_or(QPcsSpoolErrorV2::InvalidGeometry)
     }
-
     fn coefficient_slot_count_v2(self) -> Result<u64, QPcsSpoolErrorV2> {
         u64::try_from(self.moduli.len())
             .ok()
@@ -350,27 +328,23 @@ impl SpoolGeometryV2 {
             .and_then(|value| value.checked_mul(u64::from(COEFFICIENT_COMPONENTS_V2)))
             .ok_or(QPcsSpoolErrorV2::InvalidGeometry)
     }
-
     fn lde_blocks_per_column_v2(self) -> Result<u64, QPcsSpoolErrorV2> {
         if self.lde_values_per_block == 0 {
             return Err(QPcsSpoolErrorV2::InvalidGeometry);
         }
         Ok(self.domain_size_v2()? / u64::from(self.lde_values_per_block))
     }
-
     fn lde_block_bytes_v2(self) -> Result<u64, QPcsSpoolErrorV2> {
         u64::from(self.lde_values_per_block)
             .checked_mul(FQ2_WIRE_BYTES_V2)
             .ok_or(QPcsSpoolErrorV2::InvalidGeometry)
     }
-
     fn lde_column_count_v2(self) -> Result<u64, QPcsSpoolErrorV2> {
         u64::try_from(self.moduli.len())
             .ok()
             .and_then(|value| value.checked_mul(u64::from(FIXED_ROW_COUNT_V2)))
             .ok_or(QPcsSpoolErrorV2::InvalidGeometry)
     }
-
     fn lde_slot_count_v2(self) -> Result<u64, QPcsSpoolErrorV2> {
         let columns = self.lde_column_count_v2()?;
         let blocks = self.lde_blocks_per_column_v2()?;
@@ -379,14 +353,12 @@ impl SpoolGeometryV2 {
             .ok_or(QPcsSpoolErrorV2::InvalidGeometry)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CoefficientComponentV2 {
     ProductLow,
     ProductHighWithTopZero,
     QuotientWithTopZero,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CoefficientCoordinateV2 {
     limb: u8,
@@ -394,13 +366,11 @@ struct CoefficientCoordinateV2 {
     block: u64,
     component: CoefficientComponentV2,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LdeRowRoleV2 {
     Product,
     Quotient,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LdeCoordinateV2 {
     limb: u8,
@@ -408,7 +378,6 @@ struct LdeCoordinateV2 {
     role: LdeRowRoleV2,
     block: u64,
 }
-
 fn coefficient_coordinate_v2(
     geometry: SpoolGeometryV2,
     slot: u64,
@@ -434,7 +403,6 @@ fn coefficient_coordinate_v2(
         component,
     })
 }
-
 fn lde_coordinate_v2(
     geometry: SpoolGeometryV2,
     slot: u64,
@@ -458,11 +426,9 @@ fn lde_coordinate_v2(
         block: slot / columns,
     })
 }
-
 fn parameter_digest_v2(geometry: SpoolGeometryV2) -> Result<[u8; 32], QPcsSpoolErrorV2> {
     FixedTenRowParameterDescriptorV2::from_geometry_v2(geometry)?.digest_v2(geometry.moduli)
 }
-
 fn mapping_digest_v2(
     geometry: SpoolGeometryV2,
     parameter_digest: [u8; 32],
@@ -539,13 +505,11 @@ fn mapping_digest_v2(
     }
     Ok(digest)
 }
-
 #[derive(Clone, Copy)]
 struct PublicSpoolContextV2 {
     sealed_source_transcript_digest: [u8; 32],
     source_algebra_binding_digest: [u8; 32],
 }
-
 impl PublicSpoolContextV2 {
     fn validate_v2(self) -> Result<(), QPcsSpoolErrorV2> {
         if self.sealed_source_transcript_digest == [0; 32]
@@ -556,13 +520,11 @@ impl PublicSpoolContextV2 {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy)]
 enum SpoolRoleV2 {
     Coefficients = 1,
     Lde = 2,
 }
-
 fn context_digest_v2(
     role: SpoolRoleV2,
     parameter_digest: [u8; 32],
@@ -584,7 +546,6 @@ fn context_digest_v2(
     }
     Ok(digest)
 }
-
 enum AuthenticatedReplayPermitV2 {
     Production {
         source_aggregation: Infallible,
@@ -593,14 +554,12 @@ enum AuthenticatedReplayPermitV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 struct LiveSpoolWritersV2 {
     coefficient: ConfidentialSpoolWriterV1,
     lde: ConfidentialSpoolWriterV1,
     next_coefficient_slot: u64,
     replay_permit: AuthenticatedReplayPermitV2,
 }
-
 struct QPcsSpoolWriterV2 {
     live: Option<LiveSpoolWritersV2>,
     geometry: SpoolGeometryV2,
@@ -608,7 +567,6 @@ struct QPcsSpoolWriterV2 {
     coefficient_context_digest: [u8; 32],
     lde_context_digest: [u8; 32],
 }
-
 impl QPcsSpoolWriterV2 {
     fn create_in_v2(
         directory: &Path,
@@ -622,7 +580,6 @@ impl QPcsSpoolWriterV2 {
             replay_permit,
         )
     }
-
     fn create_with_geometry_v2(
         directory: &Path,
         geometry: SpoolGeometryV2,
@@ -644,7 +601,6 @@ impl QPcsSpoolWriterV2 {
         if coefficient_context_digest == lde_context_digest {
             return Err(QPcsSpoolErrorV2::InvalidGeometry);
         }
-
         let coefficient_layout = ConfidentialSpoolLayoutV1::new_v1(
             geometry.coefficient_slot_count_v2()?,
             geometry.coefficient_block_bytes_v2()?,
@@ -666,7 +622,6 @@ impl QPcsSpoolWriterV2 {
         {
             return Err(QPcsSpoolErrorV2::InvalidGeometry);
         }
-
         let coefficient = ConfidentialSpoolWriterV1::create_in_v1(directory, coefficient_layout)?;
         let lde = ConfidentialSpoolWriterV1::create_in_v1(directory, lde_layout)?;
         Ok(Self {
@@ -682,7 +637,6 @@ impl QPcsSpoolWriterV2 {
             lde_context_digest,
         })
     }
-
     fn push_coefficient_block_v2(
         &mut self,
         chunk: ConfidentialSpoolChunkV1,
@@ -701,14 +655,12 @@ impl QPcsSpoolWriterV2 {
         self.live = Some(live);
         Ok(())
     }
-
     #[cfg(test)]
     fn panic_after_take_for_test_v2(&mut self) {
         let _live = self.live.take().expect("live test writer");
         panic!("intentional qPCS spool unwind test");
     }
 }
-
 fn validate_coefficient_chunk_v2(
     geometry: SpoolGeometryV2,
     coordinate: CoefficientCoordinateV2,
@@ -749,7 +701,6 @@ fn validate_coefficient_chunk_v2(
     }
     Ok(())
 }
-
 fn validate_lde_chunk_v2(
     geometry: SpoolGeometryV2,
     coordinate: LdeCoordinateV2,
@@ -779,7 +730,6 @@ fn validate_lde_chunk_v2(
     }
     Ok(())
 }
-
 fn snapshot_binding_digest_v2(
     parameter_digest: [u8; 32],
     coefficient_context_digest: [u8; 32],
@@ -801,10 +751,8 @@ fn snapshot_binding_digest_v2(
     }
     Ok(digest)
 }
-
 #[path = "phase23_rns_link_q_pcs_spool/replay_v2.rs"]
 mod replay_v2;
-
 #[cfg(test)]
 #[path = "phase23_rns_link_q_pcs_spool_tests.rs"]
 mod tests;

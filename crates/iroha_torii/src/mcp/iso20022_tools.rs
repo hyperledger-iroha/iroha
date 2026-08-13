@@ -1,5 +1,4 @@
 // ISO 20022 MCP tools require a complete signature for their exact inner target.
-
 fn iso20022_operator_auth_schema() -> Value {
     norito::json!({
         "type": "object",
@@ -29,7 +28,6 @@ fn iso20022_operator_auth_schema() -> Value {
         }
     })
 }
-
 fn iroha_iso20022_pacs008_submit_tool() -> ToolSpec {
     iroha_iso20022_lifecycle_submit_tool(
         "iroha.iso20022.pacs008.submit",
@@ -38,7 +36,6 @@ fn iroha_iso20022_pacs008_submit_tool() -> ToolSpec {
         "Submit an ISO 20022 pacs.008 payload (`message_xml`/`xml` shortcuts supported).",
     )
 }
-
 fn iroha_iso20022_pacs009_submit_tool() -> ToolSpec {
     iroha_iso20022_lifecycle_submit_tool(
         "iroha.iso20022.pacs009.submit",
@@ -47,7 +44,6 @@ fn iroha_iso20022_pacs009_submit_tool() -> ToolSpec {
         "Submit an ISO 20022 pacs.009 payload (`message_xml`/`xml` shortcuts supported).",
     )
 }
-
 fn iroha_iso20022_lifecycle_submit_tool(
     name: &str,
     message_type: &str,
@@ -98,7 +94,6 @@ fn iroha_iso20022_lifecycle_submit_tool(
         }),
     }
 }
-
 fn iroha_iso20022_pacs002_submit_tool() -> ToolSpec {
     iroha_iso20022_lifecycle_submit_tool(
         "iroha.iso20022.pacs002.submit",
@@ -107,7 +102,6 @@ fn iroha_iso20022_pacs002_submit_tool() -> ToolSpec {
         "Submit an ISO 20022 pacs.002 lifecycle payload (`message_xml`/`xml` shortcuts supported).",
     )
 }
-
 fn iroha_iso20022_pacs004_submit_tool() -> ToolSpec {
     iroha_iso20022_lifecycle_submit_tool(
         "iroha.iso20022.pacs004.submit",
@@ -116,7 +110,6 @@ fn iroha_iso20022_pacs004_submit_tool() -> ToolSpec {
         "Submit an ISO 20022 pacs.004 lifecycle payload (`message_xml`/`xml` shortcuts supported).",
     )
 }
-
 fn iroha_iso20022_camt056_submit_tool() -> ToolSpec {
     iroha_iso20022_lifecycle_submit_tool(
         "iroha.iso20022.camt056.submit",
@@ -125,7 +118,6 @@ fn iroha_iso20022_camt056_submit_tool() -> ToolSpec {
         "Submit an ISO 20022 camt.056 lifecycle payload (`message_xml`/`xml` shortcuts supported).",
     )
 }
-
 fn iroha_iso20022_sese023_submit_tool() -> ToolSpec {
     iroha_iso20022_lifecycle_submit_tool(
         "iroha.iso20022.sese023.submit",
@@ -134,7 +126,6 @@ fn iroha_iso20022_sese023_submit_tool() -> ToolSpec {
         "Submit an ISO 20022 sese.023 settlement instruction payload (`message_xml`/`xml` shortcuts supported).",
     )
 }
-
 fn iroha_iso20022_sese024_submit_tool() -> ToolSpec {
     iroha_iso20022_lifecycle_submit_tool(
         "iroha.iso20022.sese024.submit",
@@ -143,7 +134,6 @@ fn iroha_iso20022_sese024_submit_tool() -> ToolSpec {
         "Submit an ISO 20022 sese.024 settlement status payload (`message_xml`/`xml` shortcuts supported).",
     )
 }
-
 fn iroha_iso20022_sese025_submit_tool() -> ToolSpec {
     iroha_iso20022_lifecycle_submit_tool(
         "iroha.iso20022.sese025.submit",
@@ -152,7 +142,6 @@ fn iroha_iso20022_sese025_submit_tool() -> ToolSpec {
         "Submit an ISO 20022 sese.025 settlement confirmation payload (`message_xml`/`xml` shortcuts supported).",
     )
 }
-
 fn iroha_iso20022_colr012_submit_tool() -> ToolSpec {
     iroha_iso20022_lifecycle_submit_tool(
         "iroha.iso20022.colr012.submit",
@@ -161,7 +150,6 @@ fn iroha_iso20022_colr012_submit_tool() -> ToolSpec {
         "Submit an ISO 20022 colr.012 collateral substitution confirmation payload (`message_xml`/`xml` shortcuts supported).",
     )
 }
-
 fn iroha_iso20022_status_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.iso20022.status.get".to_owned(),

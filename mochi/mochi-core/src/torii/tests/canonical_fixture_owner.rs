@@ -4,11 +4,8 @@ use std::{
     io::Write as _,
     path::{Path, PathBuf},
 };
-
 use super::*;
-
 const STAGE_ENV: &str = "IROHA_MOCHI_CANONICAL_FIXTURE_STAGE";
-
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -16,7 +13,6 @@ fn repository_root() -> PathBuf {
         .expect("mochi-core is nested below the repository root")
         .to_path_buf()
 }
-
 fn fixture_output_root() -> (PathBuf, bool) {
     let checked = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -35,7 +31,6 @@ fn fixture_output_root() -> (PathBuf, bool) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         assert_eq!(
             metadata.permissions().mode() & 0o777,
             0o700,
@@ -58,7 +53,6 @@ fn fixture_output_root() -> (PathBuf, bool) {
     );
     (stage, true)
 }
-
 fn publish_or_check(fixtures: &[(&str, Vec<u8>)]) {
     let (root, write) = fixture_output_root();
     for (name, expected) in fixtures {
@@ -69,7 +63,6 @@ fn publish_or_check(fixtures: &[(&str, Vec<u8>)]) {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt as _;
-
                 options.mode(0o600);
             }
             let mut output = options.open(&path).unwrap_or_else(|error| {
@@ -126,12 +119,10 @@ fn publish_or_check(fixtures: &[(&str, Vec<u8>)]) {
             .expect("sync Mochi canonical fixture stage");
     }
 }
-
 fn canonical_event_fixture(message: &EventMessage, error: &'static str) -> Vec<u8> {
     let (payload, flags) = norito::codec::encode_with_header_flags(message);
     norito::core::frame_bare_with_header_flags::<EventMessage>(&payload, flags).expect(error)
 }
-
 #[test]
 #[ignore = "registered fixture owner; checks in place unless an external stage is supplied"]
 fn canonical_torii_binary_fixture_owner() {

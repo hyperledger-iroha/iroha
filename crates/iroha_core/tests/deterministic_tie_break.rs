@@ -4,15 +4,12 @@
 //! Build several independent transactions (no conflicts) and assert that the
 //! execution order is a stable sort by (`call_hash`, index) regardless of the
 //! input order.
-
 use std::{borrow::Cow, sync::Arc};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
 };
 use iroha_data_model::prelude::*;
-
 fn build_world() -> (
     iroha_core::state::State,
     NetworkId,
@@ -51,7 +48,6 @@ fn build_world() -> (
     let b0 = Asset::new(a2_coin, z.clone());
     let c0 = Asset::new(a3_coin, z.clone());
     let d0 = Asset::new(a4_coin, z);
-
     let world = iroha_core::state::World::with_assets(
         [domain],
         [acc1, acc2, acc3, acc4],
@@ -74,7 +70,6 @@ fn build_world() -> (
         vec![(a1, k1), (a2, k2), (a3, k3), (a4, k4)],
     )
 }
-
 fn run_block(state: &mut iroha_core::state::State, txs: Vec<SignedTransaction>) -> ValidBlock {
     // Build block
     let acc: Vec<_> = txs
@@ -92,7 +87,6 @@ fn run_block(state: &mut iroha_core::state::State, txs: Vec<SignedTransaction>) 
     let _ = sb.commit();
     vb
 }
-
 #[test]
 fn scheduler_tie_break_stable_by_call_hash_then_index() {
     let (mut state, network_id, accs) = build_world();
@@ -111,7 +105,6 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
             .sign(kp.private_key())
         })
         .collect();
-
     // Canonical execution order captured by running the identity ordering once.
     let expected_block = run_block(&mut state, txs.clone());
     let expected: Vec<_> = expected_block
@@ -119,7 +112,6 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
         .entrypoint_hashes()
         .take(4)
         .collect();
-
     // Define a few deterministic permutations
     let perms: Vec<Vec<usize>> = vec![
         vec![0, 1, 2, 3], // identity
@@ -128,7 +120,6 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
         vec![2, 3, 0, 1], // rotate left 2
         vec![0, 2, 1, 3], // swap middle
     ];
-
     for p in perms {
         let permuted_txs: Vec<_> = p.iter().map(|&i| txs[i].clone()).collect();
         let vb = run_block(&mut state, permuted_txs);
@@ -143,7 +134,6 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
         assert!(vb.as_ref().results().take(4).all(|r| r.as_ref().is_ok()));
     }
 }
-
 #[test]
 fn scheduler_tie_break_randomized_input_orders() {
     // Same setup as the basic test, but exercise many randomized permutations
@@ -163,7 +153,6 @@ fn scheduler_tie_break_randomized_input_orders() {
             .sign(kp.private_key())
         })
         .collect();
-
     // Canonical execution order from the initial run (identity permutation).
     let expected_block = run_block(&mut state, txs.clone());
     let expected: Vec<_> = expected_block
@@ -171,7 +160,6 @@ fn scheduler_tie_break_randomized_input_orders() {
         .entrypoint_hashes()
         .take(4)
         .collect();
-
     // Deterministic LCG for shuffling
     #[derive(Clone)]
     struct Lcg(u64);
@@ -195,7 +183,6 @@ fn scheduler_tie_break_randomized_input_orders() {
         }
         out
     }
-
     // Exercise many randomized permutations with a fixed seed for reproducibility
     let mut rng = Lcg::new(0x00C0_FFEE);
     for _ in 0..64 {

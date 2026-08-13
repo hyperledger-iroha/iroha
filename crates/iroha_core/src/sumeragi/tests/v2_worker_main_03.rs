@@ -30,7 +30,6 @@ fn timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier() 
         ));
         (message, source)
     });
-
     let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
     let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
         128,
@@ -60,7 +59,6 @@ fn timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier() 
         .expect("configure the production-shaped timeout/Serve ingress");
     ingress.require_certified_serve_gate();
     ingress.require_leader_wire_lifecycle_gate();
-
     let directory = TempDir::new().expect("temporary timeout/Serve ingress gate");
     let owner = [0xAC; 32];
     let capacity =
@@ -107,7 +105,6 @@ fn timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier() 
         )
         .expect("bind the timeout-vote lifecycle to the shared ordinal source");
     ingress.open().expect("open the timeout/Serve ingress");
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound(request.request(), serve_via,)),
         Ok(FairV2IngressPushDisposition::Enqueued)
@@ -130,7 +127,6 @@ fn timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier() 
             .expect("inspect the queued TimeoutVote owner"),
         Some(2)
     );
-
     assert!(
         ingress
             .try_recv_if_checked_retiring_obsolete(|inbound| {
@@ -213,7 +209,6 @@ fn timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier() 
         Some(1)
     );
 }
-
 #[test]
 fn closed_height_atomically_retires_serve_and_leader_ingress() {
     let (service, keys) = fixture_with_block_payload();
@@ -272,7 +267,6 @@ fn closed_height_atomically_retires_serve_and_leader_ingress() {
         .expect("configure production-shaped combined ingress");
     ingress.require_certified_serve_gate();
     ingress.require_leader_wire_lifecycle_gate();
-
     let directory = TempDir::new().expect("temporary combined ingress gate");
     let owner = [0xAB; 32];
     let capacity =
@@ -355,12 +349,10 @@ fn closed_height_atomically_retires_serve_and_leader_ingress() {
     let scheduler_high_watermark = *durable_ingress_ordinals
         .last()
         .expect("two durable ingress owners have a high-watermark");
-
     ingress.close();
     ingress
         .unbind_height_ingress_gates(&serve_gate, &leader_gate)
         .expect("joint retirement cannot expose a carrierless Ingress record");
-
     let state = ingress.state.lock();
     assert_eq!(state.len, 0);
     assert!(state.certified_serve_gate.is_none());
@@ -375,7 +367,6 @@ fn closed_height_atomically_retires_serve_and_leader_ingress() {
         None,
         "joint lane retirement rolls back the live Serve RAII carrier"
     );
-
     assert_eq!(
         leader_gate
             .ingress_scheduler_ordinals()
@@ -423,7 +414,6 @@ fn closed_height_atomically_retires_serve_and_leader_ingress() {
         "restart-dormant records own no physical selector turn"
     );
     drop(dormant_gate);
-
     let decision_recovery_authority =
         super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
             service.context.id(),
@@ -459,7 +449,6 @@ fn closed_height_atomically_retires_serve_and_leader_ingress() {
         None
     );
 }
-
 #[test]
 fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle() {
     let (service, keys) = fixture_with_block_payload();
@@ -489,7 +478,6 @@ fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle()
     let BlockMessage::V2(leader_envelope) = &leader_message else {
         unreachable!("leader fixture is a v2 envelope");
     };
-
     let (command_tx, command_rx, _admission) = test_io_command_channel(4);
     let leader_scheduler_ordinal = (1_u128..=41)
         .map(|expected| {
@@ -531,7 +519,6 @@ fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle()
         .expect("configure the combined Serve/leader ingress");
     ingress.require_certified_serve_gate();
     ingress.require_leader_wire_lifecycle_gate();
-
     let (identity, slot) = {
         let state = ingress.state.lock();
         match super::super::fair_v2_ingress_leader_wire_identity(
@@ -555,7 +542,6 @@ fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle()
         source_class,
     };
     assert_eq!(leader_token.scheduler_ordinal(), 41);
-
     let directory = TempDir::new().expect("temporary combined ingress gate");
     let wal_path = directory.path().join("serve-leader-order.wal");
     let owner = [0xA9; 32];
@@ -591,7 +577,6 @@ fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle()
         .reserve(leader_token.clone())
         .expect("reserve the pre-restart leader lifecycle");
     drop(leader_gate);
-
     let recovery_authority =
         super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
             service.context.id(),
@@ -637,7 +622,6 @@ fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle()
     ingress
         .open()
         .expect("open the combined production ingress");
-
     let mut route_fixture = NetworkReplyRouteTestFixture::new(via.clone());
     let route = route_fixture.mint_via(requester.clone(), via.clone());
     assert!(matches!(
@@ -654,7 +638,6 @@ fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle()
         .expect("the exact Serve request owns the selected barrier");
     assert_eq!(serve_barrier.scheduler_ordinal(), 42);
     assert_eq!(serve_barrier.carrier_ordinal(), 8);
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(leader_message, Some(proposer),)),
         Ok(FairV2IngressPushDisposition::Enqueued)
@@ -693,7 +676,6 @@ fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle()
             .expect("inspect durable leader selector"),
         Some(leader_token.scheduler_ordinal())
     );
-
     assert!(
         ingress
             .try_recv_if_checked(|inbound| {
@@ -710,7 +692,6 @@ fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle()
             .is_none(),
         "an older retained scheduler identity cannot cross the earlier Serve carrier"
     );
-
     let (admission, committed) = drain_and_commit_gated_serve(
         &ingress,
         &command_tx,
@@ -758,7 +739,6 @@ fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle()
         );
         assert!(state.commands.is_empty());
     }
-
     let mut leader = ingress
         .try_recv_if_checked(|inbound| {
             matches!(
@@ -803,7 +783,6 @@ fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle()
         })
     ));
 }
-
 #[test]
 fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
     let (service, keys) = fixture_with_block_payload();
@@ -834,7 +813,6 @@ fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
     let distinct_route = route_fixture.mint_via(distinct_requester.clone(), distinct_via.clone());
     let (command_tx, command_rx, _admission) = test_io_command_channel(4);
     let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
     let before = fair_ingress_accounting_snapshot(&ingress);
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
@@ -908,7 +886,6 @@ fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
             .claim_serve_runtime_episode(first_barrier)
             .expect("same ticket cannot reopen its episode")
     );
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
             request.request(),
@@ -944,7 +921,6 @@ fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
             Some(request.request_hash())
         );
     }
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
             distinct.request(),
@@ -984,7 +960,6 @@ fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
         ),
         Err(V2IoTrySendError::Full(_))
     ));
-
     let mut prepared = None;
     let mut popped = ingress
         .try_recv_if(|_| {
@@ -1038,7 +1013,6 @@ fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
             .is_none(),
         "the promoted waiter precedes every later local producer episode"
     );
-
     let mut distinct_prepared = None;
     let mut distinct_popped = ingress
         .try_recv_if(|_| {
@@ -1078,7 +1052,6 @@ fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
         );
         assert_eq!(state.next_serve_admission_ordinal, 2);
     }
-
     let producer_episode = command_tx
         .try_begin_producer_episode()
         .expect("open post-target producer episode")
@@ -1130,14 +1103,12 @@ fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
             ..
         })
     ));
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire test gate before queue teardown");
     assert_eq!(before.last_admission_ordinal, 0);
 }
-
 #[test]
 fn final_serve_retirement_yields_one_producer_episode_before_replenishment() {
     let (service, keys) = fixture_with_block_payload();
@@ -1173,7 +1144,6 @@ fn final_serve_retirement_yields_one_producer_episode_before_replenishment() {
     let replenishment_route = routes.mint_via(replenishment_requester.clone(), via.clone());
     let (command_tx, _command_rx, _admission) = test_io_command_channel(6);
     let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
             first.request(),
@@ -1210,7 +1180,6 @@ fn final_serve_retirement_yields_one_producer_episode_before_replenishment() {
         .1,
         CertifiedServeCommit::Queued
     ));
-
     let actor_ordinal_before = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
     let lifecycle_ordinal_before = command_tx.queue.lock().next_serve_admission_ordinal;
     {
@@ -1234,7 +1203,6 @@ fn final_serve_retirement_yields_one_producer_episode_before_replenishment() {
         lifecycle_ordinal_before,
         "post-Serve replenishment cannot mint a lifecycle before the producer turn"
     );
-
     let producer_episode = command_tx
         .try_begin_producer_episode()
         .expect("consume the atomic post-Serve handoff")
@@ -1254,7 +1222,6 @@ fn final_serve_retirement_yields_one_producer_episode_before_replenishment() {
         assert!(!state.producer_episode_due);
         assert!(!state.producer_episode_active);
     }
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
             replenishment.request(),
@@ -1273,13 +1240,11 @@ fn final_serve_retirement_yields_one_producer_episode_before_replenishment() {
         .1,
         CertifiedServeCommit::Queued
     ));
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire post-Serve producer handoff fixture gate");
 }
-
 #[test]
 fn drained_exact_retransmission_gets_fresh_scheduler_ordinal() {
     let (service, keys) = fixture_with_block_payload();
@@ -1300,7 +1265,6 @@ fn drained_exact_retransmission_gets_fresh_scheduler_ordinal() {
         .expect("mint post-drain exact retransmission route");
     let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
     let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
             request.request(),
@@ -1336,7 +1300,6 @@ fn drained_exact_retransmission_gets_fresh_scheduler_ordinal() {
     assert!(matches!(first_commit, CertifiedServeCommit::Queued));
     assert_eq!(first_barrier.lifecycle_id(), first_admission.lifecycle_id);
     assert!(command_tx.queue.lock().serve_ingress_waiters.is_empty());
-
     let scheduler_before_retry = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
     assert!(matches!(
         gate.reserve(request.request(), &via, true, 2),
@@ -1352,7 +1315,6 @@ fn drained_exact_retransmission_gets_fresh_scheduler_ordinal() {
         .expect("consume the post-drain producer handoff")
         .expect("final Serve retirement owes one producer episode");
     drop(post_drain_producer_episode);
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound_with_route(
             request.request(),
@@ -1400,13 +1362,11 @@ fn drained_exact_retransmission_gets_fresh_scheduler_ordinal() {
         "wire retransmission retains the logical Serve lifecycle/tombstone"
     );
     assert!(matches!(retry_commit, CertifiedServeCommit::Coalesced));
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire post-drain retransmission gate");
 }
-
 #[test]
 fn checked_serve_dequeue_persistence_failure_retains_exact_entry() {
     let (service, keys) = fixture_with_block_payload();
@@ -1450,7 +1410,6 @@ fn checked_serve_dequeue_persistence_failure_retains_exact_entry() {
         persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
             .expect("open checked-dequeue persistent queue");
     let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-
     assert!(matches!(
         ingress.try_push(ordinary(
             context.height.saturating_add(1),
@@ -1593,7 +1552,6 @@ fn checked_serve_dequeue_persistence_failure_retains_exact_entry() {
             "rollback persistence failure cannot partially mutate the logical handoff"
         );
     }
-
     fs::remove_dir(&temporary_state).expect("unblock Serve-state retirement publication");
     let mut retried_admission = None;
     let mut inbound = ingress
@@ -1671,13 +1629,11 @@ fn checked_serve_dequeue_persistence_failure_retains_exact_entry() {
         CertifiedServeCommit::Queued
     ));
     assert!(command_tx.queue.lock().serve_ingress_reservation.is_none());
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire checked-dequeue fixture gate");
 }
-
 #[test]
 fn negative_checked_dequeue_persistence_failure_rolls_back_without_losing_carrier() {
     let (service, keys) = fixture_with_block_payload();
@@ -1710,7 +1666,6 @@ fn negative_checked_dequeue_persistence_failure_rolls_back_without_losing_carrie
     let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
     let durable_before = fs::read(&state_path).expect("read pre-rejection Serve snapshot");
     let temporary_state = state_path.with_extension("norito.tmp");
-
     let error = ingress
         .try_recv_if_checked(|inbound| {
             let selected = matches!(
@@ -1772,7 +1727,6 @@ fn negative_checked_dequeue_persistence_failure_rolls_back_without_losing_carrie
         durable_before,
         "failed negative publication cannot alter the last durable snapshot"
     );
-
     fs::remove_dir(&temporary_state).expect("unblock negative Serve-state publication");
     let drained = ingress
         .try_recv_if_checked(|inbound| {
@@ -1841,13 +1795,11 @@ fn negative_checked_dequeue_persistence_failure_rolls_back_without_losing_carrie
         actor_ordinal_after_negative,
         "an exact negative retry cannot consume another actor-global ordinal"
     );
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire negative rollback gate");
 }
-
 #[test]
 fn provisional_current_height_drain_is_rejected_and_unbacked_lifecycle_is_detected() {
     let (service, keys) = fixture_with_block_payload();
@@ -1897,7 +1849,6 @@ fn provisional_current_height_drain_is_rejected_and_unbacked_lifecycle_is_detect
         None,
         "a live raw admission is backed by exactly one physical carrier"
     );
-
     {
         let mut state = command_tx.queue.lock();
         let removed = state
@@ -1943,13 +1894,11 @@ fn provisional_current_height_drain_is_rejected_and_unbacked_lifecycle_is_detect
         producer_error.contains("unbacked AwaitingRetry"),
         "the queue lock enforces the same invariant between runner polls"
     );
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire provisional guard gate");
 }
-
 #[test]
 fn live_waiter_rejects_higher_view_without_restart_or_ordinal_mutation() {
     let (service, keys) = fixture_with_block_payload();
@@ -1986,7 +1935,6 @@ fn live_waiter_rejects_higher_view_without_restart_or_ordinal_mutation() {
         .expect("the original exact owner is selected");
     let actor_ordinal_before = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
     let lifecycle_ordinal_before = command_tx.queue.lock().next_serve_admission_ordinal;
-
     assert!(matches!(
         gate.reserve(higher.request(), &via, true, 11),
         Err(CertifiedServeIngressReserveError::Busy)
@@ -2012,7 +1960,6 @@ fn live_waiter_rejects_higher_view_without_restart_or_ordinal_mutation() {
     assert!(command_tx.queue.lock().receiver_open);
     drop(retained);
 }
-
 #[test]
 fn checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal() {
     let (service, keys) = fixture_with_block_payload();
@@ -2059,7 +2006,6 @@ fn checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal() {
             "the mutation weakens only the reservation/evidence binding"
         );
     }
-
     let error = ingress
         .try_recv_if_checked(|_| true)
         .expect_err("checked dequeue must reject the mismatched lifecycle owner");
@@ -2074,7 +2020,6 @@ fn checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal() {
             .expect("failed mutation dequeue retains the durable barrier"),
         Some(barrier)
     );
-
     {
         let mut state = ingress.state.lock();
         let entry = state
@@ -2097,7 +2042,6 @@ fn checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire restored mutation fixture");
 }
-
 #[test]
 fn restored_serviceable_lifecycle_seals_response_before_exposing_producers() {
     let (service, keys) = fixture_with_block_payload();
@@ -2162,7 +2106,6 @@ fn restored_serviceable_lifecycle_seals_response_before_exposing_producers() {
     assert!(persisted.unsealed_lifecycles.is_empty());
     assert!(persisted.negative_tombstones.is_empty());
     assert_eq!(persisted.terminal_tombstones.len(), 1);
-
     let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
     assert!(matches!(
         ingress.try_push(certified_serve_inbound(
@@ -2194,7 +2137,6 @@ fn restored_serviceable_lifecycle_seals_response_before_exposing_producers() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire startup-discharge replay gate");
 }
-
 #[test]
 fn restored_serviceable_lifecycle_missing_or_corrupt_body_preserves_serve_snapshot() {
     let (service, keys) = fixture_with_block_payload();
@@ -2209,7 +2151,6 @@ fn restored_serviceable_lifecycle_missing_or_corrupt_body_preserves_serve_snapsh
         wire::GlobalPhase::Prepare,
         &[0, 1, 2, 3],
     );
-
     let missing_body_root = TempDir::new().expect("missing-body root");
     let missing_serve_root = TempDir::new().expect("missing-body Serve root");
     let missing_body_store = V2BodyStore::open(missing_body_root.path(), context.clone())
@@ -2248,7 +2189,6 @@ fn restored_serviceable_lifecycle_missing_or_corrupt_body_preserves_serve_snapsh
         missing_before,
         "a missing canonical body cannot publish a terminal Serve transition"
     );
-
     let corrupt_body_root = TempDir::new().expect("corrupt-body root");
     let corrupt_serve_root = TempDir::new().expect("corrupt-body Serve root");
     let mut corrupt_body_store = V2BodyStore::open(corrupt_body_root.path(), context.clone())
@@ -2305,7 +2245,6 @@ fn restored_serviceable_lifecycle_missing_or_corrupt_body_preserves_serve_snapsh
         "a corrupt canonical body cannot publish a terminal Serve transition"
     );
 }
-
 #[test]
 fn restored_serviceable_lifecycle_rejects_wrong_local_signing_key_before_mutation() {
     let (service, keys) = fixture_with_block_payload();
@@ -2361,7 +2300,6 @@ fn restored_serviceable_lifecycle_rejects_wrong_local_signing_key_before_mutatio
         "the key/index binding is checked before any response is signed or persisted"
     );
 }
-
 #[test]
 fn restored_invalid_qc_is_negative_and_exact_retry_consumes_no_new_ordinal() {
     let (service, keys) = fixture_with_block_payload();

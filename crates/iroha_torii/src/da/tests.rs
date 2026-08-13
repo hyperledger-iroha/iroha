@@ -1,5 +1,4 @@
 //! DA ingest and persistence tests.
-
 use core::convert::TryInto;
 use std::{
     cell::Cell,
@@ -16,7 +15,6 @@ use std::{
     },
     time::Duration,
 };
-
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use flate2::{Compression as FlateCompression, write::GzEncoder};
@@ -73,7 +71,6 @@ use sorafs_manifest::{
 };
 use tempfile::tempdir;
 use tokio::{fs as async_fs, sync::Mutex as AsyncMutex};
-
 use crate::da::taikai;
 use crate::da::taikai::taikai_ingest;
 use crate::da::taikai::taikai_ingest::{
@@ -88,9 +85,7 @@ use crate::da::taikai::{
 use crate::da::{
     DaReceiptLog, DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpooler, ReplayCursorStore,
 };
-
 use super::*;
-
 fn checked_signature(private_key: &PrivateKey, payload: &[u8]) -> Signature {
     Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
@@ -516,7 +511,6 @@ fn load_manifest_from_spool_rejects_fingerprint_mismatch() {
 #[test]
 fn load_manifest_from_spool_rejects_ticket_shard_symlink() {
     use std::os::unix::fs::symlink;
-
     let dir = tempdir().expect("dir");
     let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
     let ticket = context.artifacts.storage_ticket;
@@ -4511,7 +4505,6 @@ fn persist_manifest_for_sorafs_writes_and_is_idempotent() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-
         let mode = fs::metadata(&first_path)
             .expect("read manifest permissions")
             .permissions()
@@ -5620,7 +5613,6 @@ fn load_da_receipts_rejects_filename_fingerprint_mismatch() {
 #[test]
 fn da_receipt_log_open_rejects_spool_dir_symlink() {
     use std::os::unix::fs::symlink;
-
     let temp_dir = tempdir().expect("temp dir");
     let target = temp_dir.path().join("receipt-log-target");
     fs::create_dir(&target).expect("create target directory");
@@ -5978,7 +5970,6 @@ fn da_receipt_log_in_memory_append_fails_closed() {
 #[test]
 fn da_receipt_log_duplicate_reload_rejects_receipt_symlink_replacement() {
     use std::os::unix::fs::symlink;
-
     let receipt_dir = tempdir().expect("receipt dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(4), 10);
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
@@ -6832,7 +6823,6 @@ fn replay_cursor_store_rejects_existing_temp_without_truncating() {
 #[test]
 fn replay_cursor_store_open_rejects_dir_symlink() {
     use std::os::unix::fs::symlink;
-
     let temp = tempdir().expect("tempdir");
     let target = temp.path().join("cursor-root-target");
     fs::create_dir(&target).expect("create cursor target directory");
@@ -6868,7 +6858,6 @@ fn replay_cursor_store_open_rejects_dir_symlink() {
 #[test]
 fn replay_cursor_store_empty_rejects_dir_symlink() {
     use std::os::unix::fs::symlink;
-
     let temp = tempdir().expect("tempdir");
     let target = temp.path().join("cursor-empty-target");
     fs::create_dir(&target).expect("create cursor target directory");
@@ -6894,7 +6883,6 @@ fn replay_cursor_store_empty_rejects_dir_symlink() {
 #[test]
 fn replay_cursor_store_record_rejects_dir_symlink_replacement() {
     use std::os::unix::fs::symlink;
-
     let temp = tempdir().expect("tempdir");
     let path = temp.path().join("cursor-root");
     fs::create_dir(&path).expect("create cursor root");
@@ -6937,7 +6925,6 @@ fn replay_cursor_store_record_rejects_dir_symlink_replacement() {
 #[test]
 fn replay_cursor_store_open_rejects_main_snapshot_symlink() {
     use std::os::unix::fs::symlink;
-
     let temp = tempdir().expect("tempdir");
     let main_path = replay_cursor_main_path(temp.path());
     let target_path = temp.path().join("cursor-symlink-target.json");
@@ -6972,7 +6959,6 @@ fn replay_cursor_store_open_rejects_main_snapshot_symlink() {
 #[test]
 fn replay_cursor_store_open_rejects_journal_symlink() {
     use std::os::unix::fs::symlink;
-
     let temp = tempdir().expect("tempdir");
     let journal_path = replay_cursor_journal_path(temp.path());
     let target_path = temp.path().join("cursor-journal-symlink-target");
@@ -6998,7 +6984,6 @@ fn replay_cursor_store_open_rejects_journal_symlink() {
 #[test]
 fn replay_cursor_store_open_rejects_temp_snapshot_symlink() {
     use std::os::unix::fs::symlink;
-
     let temp = tempdir().expect("tempdir");
     let main_path = replay_cursor_main_path(temp.path());
     let tmp_path = persistence::replay_cursor_temp_path(&main_path);

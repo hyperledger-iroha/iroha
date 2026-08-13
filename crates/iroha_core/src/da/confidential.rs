@@ -3,7 +3,6 @@
 //! Lanes marked as confidential compute rely on `SoraFS` tickets instead of
 //! embedding payload bytes in the public DA spool. We enforce that the lane
 //! declares a policy and that commitments carry non-zero digests/tickets.
-
 use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
 use iroha_data_model::{
     da::{
@@ -14,7 +13,6 @@ use iroha_data_model::{
     sorafs::pin_registry::ManifestDigest,
 };
 use thiserror::Error;
-
 /// Errors raised while validating confidential-compute commitments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ConfidentialComputeError {
@@ -34,7 +32,6 @@ pub enum ConfidentialComputeError {
     #[error("confidential lane must use split/commitment-only storage, not {0:?}")]
     InvalidStorageProfile(LaneStorageProfile),
 }
-
 /// Validate a DA commitment for confidential-compute lanes.
 ///
 /// Returns `Ok(None)` when the lane is not marked confidential. Otherwise returns
@@ -50,43 +47,34 @@ pub fn validate_confidential_compute_record(
     if !lane_config.is_confidential_compute(record.lane_id) {
         return Ok(None);
     }
-
     let entry = lane_config
         .entry(record.lane_id)
         .ok_or(ConfidentialComputeError::MissingPolicy)?;
     let Some(policy) = lane_config.confidential_compute_policy(record.lane_id) else {
         return Err(ConfidentialComputeError::MissingPolicy);
     };
-
     if matches!(entry.storage_profile, LaneStorageProfile::FullReplica) {
         return Err(ConfidentialComputeError::InvalidStorageProfile(
             entry.storage_profile,
         ));
     }
-
     if is_zero_ticket(&record.storage_ticket) {
         return Err(ConfidentialComputeError::ZeroStorageTicket);
     }
-
     if record.client_blob_id.is_zero() {
         return Err(ConfidentialComputeError::ZeroPayloadDigest);
     }
-
     if is_zero_manifest(&record.manifest_hash) {
         return Err(ConfidentialComputeError::ZeroManifestDigest);
     }
-
     Ok(Some(policy.clone()))
 }
-
 fn is_zero_ticket(ticket: &StorageTicketId) -> bool {
     ticket.as_ref().iter().all(|byte| *byte == 0)
 }
-
 fn is_zero_manifest(digest: &ManifestDigest) -> bool {
     digest.as_bytes().iter().all(|byte| *byte == 0)
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
@@ -101,9 +89,7 @@ mod tests {
         },
         sorafs::pin_registry::ManifestDigest,
     };
-
     use super::*;
-
     fn lane_config(confidential: bool, key_version: Option<u32>) -> ConfigLaneConfig {
         let mut metadata = std::collections::BTreeMap::new();
         if confidential {
@@ -130,7 +116,6 @@ mod tests {
         .expect("catalog");
         ConfigLaneConfig::from_catalog(&catalog)
     }
-
     fn record_with_ticket(ticket: [u8; 32], blob: [u8; 32]) -> DaCommitmentRecord {
         DaCommitmentRecord::new(
             LaneId::new(0),
@@ -147,38 +132,31 @@ mod tests {
                 .expect("checked core confidential DA acknowledgement signature fixture"),
         )
     }
-
     #[test]
     fn passes_when_policy_and_digests_present() {
         let config = lane_config(true, Some(3));
         let record = record_with_ticket([0x22; 32], [0x33; 32]);
-
         let policy = validate_confidential_compute_record(&config, &record)
             .expect("validation should succeed")
             .expect("policy must be returned");
         assert_eq!(policy.key_version, 3);
     }
-
     #[test]
     fn rejects_missing_policy() {
         let config = lane_config(true, None);
         let record = record_with_ticket([0x22; 32], [0x33; 32]);
-
         let err = validate_confidential_compute_record(&config, &record)
             .expect_err("missing policy must fail");
         assert!(matches!(err, ConfidentialComputeError::MissingPolicy));
     }
-
     #[test]
     fn rejects_zero_ticket_or_payload() {
         let config = lane_config(true, Some(1));
-
         let zero_ticket = record_with_ticket([0; 32], [0x33; 32]);
         assert!(matches!(
             validate_confidential_compute_record(&config, &zero_ticket).expect_err("zero ticket"),
             ConfidentialComputeError::ZeroStorageTicket
         ));
-
         let zero_payload = record_with_ticket([0x22; 32], [0; 32]);
         assert!(matches!(
             validate_confidential_compute_record(&config, &zero_payload).expect_err("zero payload"),

@@ -10,7 +10,6 @@ use std::{
     time::Duration,
     vec::Vec,
 };
-
 #[cfg(feature = "fault_injection")]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use derive_more::{Deref, Display, From, TryInto};
@@ -24,7 +23,6 @@ use norito::{
     core::DecodeFromSlice,
 };
 use thiserror::Error;
-
 pub use self::model::*;
 use super::{
     error,
@@ -49,14 +47,12 @@ use crate::{
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
 use iroha_primitives::numeric::Quantity;
-
 /// Default signature-bound lifetime assigned by [`TransactionBuilder`].
 ///
 /// Networks govern the admission ceiling through
 /// [`crate::parameter::TransactionParameters::max_time_to_live_ms`]. This
 /// default matches the default client transaction lifetime.
 pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
-
 fn verify_typed_signature_for_signer<T: Encode>(
     signature: &SignatureOf<T>,
     signer: &PublicKey,
@@ -73,14 +69,11 @@ fn verify_typed_signature_for_signer<T: Encode>(
     }
     signature.verify(signer, payload)
 }
-
 #[model]
 mod model {
     use iroha_primitives::const_vec::ConstVec;
-
     use super::*;
     use crate::account::AccountId;
-
     /// Fee system whose charge is bounded by a signed transaction limit.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -94,7 +87,6 @@ mod model {
         /// Pipeline gas charged for contract or IVM execution.
         PipelineGas,
     }
-
     /// Signature-bound upper bound for one fee component and asset.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -110,7 +102,6 @@ mod model {
         /// Maximum amount the signer authorizes for this component.
         pub max_amount: Quantity,
     }
-
     /// Signature-bound limits for authority-paid fees.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -126,7 +117,6 @@ mod model {
         #[norito(default)]
         pub gas_limit: Option<NonZeroU64>,
     }
-
     /// Signature-bound limits and exact revision for sponsor-program fees.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -146,7 +136,6 @@ mod model {
         #[norito(default)]
         pub gas_limit: Option<NonZeroU64>,
     }
-
     /// Required signature-bound choice of fee funding source and limits.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -165,7 +154,6 @@ mod model {
         /// Charge one exact revision of an on-chain sponsor program.
         Sponsor(SponsorFeePayment),
     }
-
     /// Closed security domain signed into every transaction payload.
     ///
     /// Ordinary transactions bind the exact genesis-header-derived network
@@ -188,7 +176,6 @@ mod model {
         /// Genesis-only marker used to avoid a genesis-hash self-reference.
         Genesis,
     }
-
     /// Canonical unsigned transaction draft used by quote, signing, and verification APIs.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -224,7 +211,6 @@ mod model {
         #[norito(default)]
         pub attachments: Option<crate::proof::ProofAttachmentList>,
     }
-
     /// Signature of transaction
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -232,7 +218,6 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct TransactionSignature(pub SignatureOf<TransactionPayload>);
-
     /// A single signature produced by a multisig member.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -245,7 +230,6 @@ mod model {
         /// Signature over the transaction payload produced by `signer`.
         pub signature: SignatureOf<TransactionPayload>,
     }
-
     impl MultisigSignature {
         /// Construct a new multisig signature entry.
         pub fn new(
@@ -255,7 +239,6 @@ mod model {
             Self { signer, signature }
         }
     }
-
     /// Collection of multisig signatures attached to a transaction.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -266,14 +249,12 @@ mod model {
         /// Signature entries provided by multisig members.
         pub signatures: Vec<MultisigSignature>,
     }
-
     impl MultisigSignatures {
         /// Construct a bundle in canonical signer order.
         pub fn new(mut signatures: Vec<MultisigSignature>) -> Self {
             signatures.sort_by(|left, right| left.signer.cmp(&right.signer));
             Self { signatures }
         }
-
         /// Validate the unique canonical signer ordering required on the wire.
         ///
         /// # Errors
@@ -291,7 +272,6 @@ mod model {
             Ok(())
         }
     }
-
     impl<'a> norito::core::DecodeFromSlice<'a> for TransactionSignature {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
             let (inner, used) =
@@ -299,7 +279,6 @@ mod model {
             Ok((TransactionSignature(inner), used))
         }
     }
-
     /// Payload signed when committing to a sealed transaction.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -320,7 +299,6 @@ mod model {
         /// Optional nonce to let an authority submit multiple indistinguishable commitments.
         pub nonce: Option<NonZeroU64>,
     }
-
     /// Signed sealed-transaction commitment.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -333,7 +311,6 @@ mod model {
         /// Commitment payload.
         pub(super) payload: SealedTransactionCommitmentPayload,
     }
-
     /// Reveal data for a previously committed sealed transaction.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -348,7 +325,6 @@ mod model {
         /// Salt used when computing the commitment.
         pub salt: [u8; 32],
     }
-
     /// Transaction containing a signed intent and its authorization proof.
     ///
     /// `Iroha` and its clients use [`Self`] to send transactions over the network.
@@ -370,7 +346,6 @@ mod model {
         /// Optional bundle of multisig signatures when the authority uses a multisig controller.
         pub(super) multisig_signatures: Option<MultisigSignatures>,
     }
-
     /// Structure that represents the initial state of a transaction before the transaction receives any signatures.
     #[derive(Debug, Clone)]
     #[must_use]
@@ -382,13 +357,11 @@ mod model {
         /// Whether this builder came from the explicit genesis-only constructor.
         pub(super) construction: TransactionConstruction,
     }
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum TransactionConstruction {
         Ordinary,
         Genesis,
     }
-
     impl TransactionBuilder {
         /// Validate the builder's construction-domain invariant before signing or export.
         pub(super) fn validate_payload_state(
@@ -397,7 +370,6 @@ mod model {
             super::TransactionBuilder::validate_payload(&self.payload, self.construction)
         }
     }
-
     /// Initial execution step of a transaction, which may invoke data triggers.
     #[derive(
         Debug,
@@ -424,7 +396,6 @@ mod model {
         /// Scheduled time trigger that initiates a transaction.
         Time(TimeTriggerEntrypoint),
     }
-
     /// The outcome of processing a transaction:
     /// either a sequence of data triggers, or a rejection reason.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -434,12 +405,10 @@ mod model {
         /// Durable per-leg receipts emitted by an independently settled native transfer batch.
         pub Vec<AssetBatchTransferOutcome>,
     );
-
     /// The outcome of processing a transaction:
     /// either a sequence of data triggers, or a rejection reason.
     pub type TransactionResultInner =
         Result<DataTriggerSequence, error::TransactionRejectionReason>;
-
     /// Single execution step in a transaction, comprising ordered instructions.
     #[derive(
         Debug,
@@ -459,7 +428,6 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct ExecutionStep(pub ConstVec<InstructionBox>);
 }
-
 // Keep explicit slice decoders for hot ingress paths. The generic derived
 // decoders regressed on versioned payloads carrying adaptive Norito bodies.
 fn decode_signed_transaction_with_cursor(
@@ -472,7 +440,6 @@ fn decode_signed_transaction_with_cursor(
         usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
     Ok((decoded, used))
 }
-
 fn decode_transaction_payload_with_cursor(
     bytes: &[u8],
 ) -> Result<(model::TransactionPayload, usize), norito::core::Error> {
@@ -483,7 +450,6 @@ fn decode_transaction_payload_with_cursor(
         usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
     Ok((decoded, used))
 }
-
 fn read_aos_field<'a>(
     bytes: &'a [u8],
     offset: &mut usize,
@@ -505,7 +471,6 @@ fn read_aos_field<'a>(
     *offset = field_end;
     Ok(field)
 }
-
 fn decode_slice_field<T>(field: &[u8], flags: u8) -> Result<T, norito::core::Error>
 where
     T: for<'de> norito::core::NoritoDeserialize<'de> + for<'de> norito::core::DecodeFromSlice<'de>,
@@ -517,7 +482,6 @@ where
     }
     Ok(value)
 }
-
 fn decode_canonical_field<T>(field: &[u8], flags: u8) -> Result<T, norito::core::Error>
 where
     T: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
@@ -529,7 +493,6 @@ where
     }
     Ok(value)
 }
-
 fn decode_codec_field<T>(field: &[u8]) -> Result<T, norito::core::Error>
 where
     T: norito::codec::Decode,
@@ -537,7 +500,6 @@ where
     let mut cursor = std::io::Cursor::new(field);
     <T as norito::codec::Decode>::decode(&mut cursor)
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -545,7 +507,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return decode_transaction_payload_with_cursor(bytes);
         }
-
         let mut offset = 0usize;
         let domain = decode_canonical_field::<TransactionDomain>(
             read_aos_field(bytes, &mut offset, flags)?,
@@ -595,7 +556,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -603,7 +563,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return decode_signed_transaction_with_cursor(bytes);
         }
-
         let mut offset = 0usize;
         let signature =
             decode_codec_field::<TransactionSignature>(read_aos_field(bytes, &mut offset, flags)?)?;
@@ -629,7 +588,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionEntrypoint {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let _guard = norito::core::PayloadCtxGuard::enter(bytes);
@@ -640,7 +598,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionEntrypoint {
         Ok((decoded, used))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for model::ExecutionStep {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -665,7 +622,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::ExecutionStep {
         Ok((Self(instructions), field_end))
     }
 }
-
 /// Error returned when verifying a transaction signature.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TransactionSignatureError {
@@ -717,18 +673,14 @@ pub enum TransactionSignatureError {
         required: u16,
     },
 }
-
 static EXPIRES_AT_HEIGHT_NAME: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str("expires_at_height").expect("expires_at_height is a valid metadata key")
 });
-
 /// Stable reason string for rejecting multisig controllers in tx signing paths.
 pub const MULTISIG_SIGNING_UNSUPPORTED_REASON: &str =
     "multisig authority requires bundled signatures for verification";
-
 /// Domain separation tag for sealed transaction commitment hashing.
 pub const SEALED_TRANSACTION_COMMITMENT_DOMAIN: &[u8] = b"iroha.sealed_tx.v1";
-
 /// Structural error in a signature-bound fee payment intent.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum FeePaymentIntentError {
@@ -753,7 +705,6 @@ pub enum FeePaymentIntentError {
     #[error("legacy transaction metadata key `{0}` is not supported")]
     LegacyMetadataKey(String),
 }
-
 impl FeeChargeLimit {
     /// Construct a signature-bound limit for one exact fee component and asset.
     #[must_use]
@@ -769,7 +720,6 @@ impl FeeChargeLimit {
         }
     }
 }
-
 impl FeePaymentIntent {
     /// Construct an authority-paid intent.
     #[must_use]
@@ -782,7 +732,6 @@ impl FeePaymentIntent {
             gas_limit,
         })
     }
-
     /// Construct an exact sponsor-program intent.
     #[must_use]
     pub const fn sponsor(
@@ -798,7 +747,6 @@ impl FeePaymentIntent {
             gas_limit,
         })
     }
-
     /// Return the canonical per-component charge limits.
     #[must_use]
     pub fn charge_limits(&self) -> &[FeeChargeLimit] {
@@ -807,7 +755,6 @@ impl FeePaymentIntent {
             Self::Sponsor(payment) => &payment.charge_limits,
         }
     }
-
     /// Return the signed executable gas limit, when applicable.
     #[must_use]
     pub const fn gas_limit(&self) -> Option<NonZeroU64> {
@@ -816,7 +763,6 @@ impl FeePaymentIntent {
             Self::Sponsor(payment) => payment.gas_limit,
         }
     }
-
     /// Return the exact sponsor program and revision, if sponsorship was selected.
     #[must_use]
     pub const fn sponsor_program(&self) -> Option<(&FeeSponsorProgramId, u64)> {
@@ -825,7 +771,6 @@ impl FeePaymentIntent {
             Self::Sponsor(payment) => Some((&payment.program_id, payment.program_revision)),
         }
     }
-
     /// Return whether two intents select the same payer and executable gas bound.
     ///
     /// Quote-to-sign clients use this before replacing the draft's charge
@@ -840,7 +785,6 @@ impl FeePaymentIntent {
         };
         same_payer && self.gas_limit() == other.gas_limit()
     }
-
     /// Validate canonical ordering, uniqueness, revision, and positive maxima.
     ///
     /// Empty limits are structurally valid because fee-free networks have no
@@ -861,7 +805,6 @@ impl FeePaymentIntent {
         ) {
             return Err(FeePaymentIntentError::ZeroProgramRevision);
         }
-
         let mut previous = None;
         for limit in self.charge_limits() {
             if limit.max_amount.is_zero() {
@@ -882,7 +825,6 @@ impl FeePaymentIntent {
         }
         Ok(())
     }
-
     fn validate_metadata(metadata: &Metadata) -> Result<(), FeePaymentIntentError> {
         for key in ["fee_sponsor", "gas_limit", "gas_asset_id"] {
             if metadata.get(key).is_some() {
@@ -892,14 +834,11 @@ impl FeePaymentIntent {
         Ok(())
     }
 }
-
 static TX_SEQUENCE_NAME: LazyLock<Name> =
     LazyLock::new(|| Name::from_str("tx_sequence").expect("tx_sequence is a valid metadata key"));
-
 /// Domain separator for the canonical first-release privacy transaction intent.
 pub const PRIVACY_TRANSACTION_INTENT_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.privacy.transaction-intent-digest.v1";
-
 /// Dynamic or opaque executable path excluded from the V1 privacy intent projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyTransactionIntentUnsupportedPathV1 {
@@ -918,7 +857,6 @@ pub enum PrivacyTransactionIntentUnsupportedPathV1 {
     /// An opaque instruction has no locally auditable typed payload.
     OpaqueInstruction,
 }
-
 /// Failure to derive or validate a canonical V1 privacy transaction intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyTransactionIntentErrorV1 {
@@ -969,7 +907,6 @@ pub enum PrivacyTransactionIntentErrorV1 {
         actual: PrivacyStatementDigestV1,
     },
 }
-
 #[derive(Default)]
 struct PrivacyTransactionIntentScan<'a> {
     first_submission: Option<&'a SubmitPrivacyProofV1>,
@@ -977,7 +914,6 @@ struct PrivacyTransactionIntentScan<'a> {
     unsupported_path: Option<PrivacyTransactionIntentUnsupportedPathV1>,
     privacy_in_unsupported_path: bool,
 }
-
 impl<'a> PrivacyTransactionIntentScan<'a> {
     fn inspect_direct_instruction(&mut self, instruction: &'a InstructionBox) {
         if let Some(submission) = instruction.as_any().downcast_ref::<SubmitPrivacyProofV1>() {
@@ -1007,7 +943,6 @@ impl<'a> PrivacyTransactionIntentScan<'a> {
                 .get_or_insert(PrivacyTransactionIntentUnsupportedPathV1::ExecuteTrigger);
         }
     }
-
     fn inspect_proved_overlay_instruction(&mut self, instruction: &InstructionBox) {
         if instruction
             .as_any()
@@ -1022,7 +957,6 @@ impl<'a> PrivacyTransactionIntentScan<'a> {
         }
     }
 }
-
 fn scan_privacy_transaction_intent_v1(executable: &Executable) -> PrivacyTransactionIntentScan<'_> {
     let mut scan = PrivacyTransactionIntentScan::default();
     match executable {
@@ -1063,7 +997,6 @@ fn scan_privacy_transaction_intent_v1(executable: &Executable) -> PrivacyTransac
     }
     scan
 }
-
 fn validate_exact_direct_privacy_submission_v1<'a>(
     scan: &PrivacyTransactionIntentScan<'a>,
 ) -> Result<&'a SubmitPrivacyProofV1, PrivacyTransactionIntentErrorV1> {
@@ -1085,7 +1018,6 @@ fn validate_exact_direct_privacy_submission_v1<'a>(
         .first_submission
         .expect("a non-zero direct submission count stores its first submission"))
 }
-
 fn normalize_privacy_submission_for_intent_v1(submission: &SubmitPrivacyProofV1) -> InstructionBox {
     let mut normalized = submission.clone();
     normalized.envelope.proof.bytes_mut().bytes.clear();
@@ -1113,7 +1045,6 @@ fn normalize_privacy_submission_for_intent_v1(submission: &SubmitPrivacyProofV1)
     normalized.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
     normalized.into()
 }
-
 fn normalize_privacy_executable_for_intent_v1(
     executable: &Executable,
 ) -> Result<Executable, PrivacyTransactionIntentErrorV1> {
@@ -1162,13 +1093,11 @@ fn normalize_privacy_executable_for_intent_v1(
         }
     }
 }
-
 #[cfg(feature = "fault_injection")]
 static FAULT_INJECTION_METADATA_NAME: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str("fault_injection_overlay")
         .expect("fault_injection_overlay is a valid metadata key")
 });
-
 impl TransactionPayload {
     /// Validate the complete signature-bound fee intent.
     ///
@@ -1184,7 +1113,6 @@ impl TransactionPayload {
             .validate()
             .and_then(|()| FeePaymentIntent::validate_metadata(&self.metadata))
     }
-
     /// Return the canonical privacy transaction-intent projection bytes.
     ///
     /// This is the exact unsigned-payload preimage consumed by
@@ -1205,7 +1133,6 @@ impl TransactionPayload {
         norito::encode_canonical(&normalized)
             .map_err(|_| PrivacyTransactionIntentErrorV1::PayloadEncodingFailure)
     }
-
     /// Derive the canonical privacy transaction-intent digest from this unsigned payload.
     ///
     /// V1 accepts exactly one direct typed [`SubmitPrivacyProofV1`] in either
@@ -1247,7 +1174,6 @@ impl TransactionPayload {
             *hasher.finalize().as_bytes(),
         ))
     }
-
     /// Validate the final stored intent and statement digests.
     ///
     /// This is the admission-side companion to
@@ -1278,7 +1204,6 @@ impl TransactionPayload {
                 actual: actual_intent,
             });
         }
-
         let expected_statement = submission
             .envelope
             .statement
@@ -1296,7 +1221,6 @@ impl TransactionPayload {
         }
         Ok(expected_intent)
     }
-
     /// Validate and borrow an optional direct privacy submission for runtime admission.
     ///
     /// Ordinary non-privacy transactions return `Ok(None)`. A typed submission
@@ -1329,19 +1253,16 @@ impl TransactionPayload {
         let digest = self.validate_privacy_transaction_intent_binding_v1()?;
         Ok(Some((digest, submission)))
     }
-
     /// Return transaction instructions.
     #[inline]
     pub fn instructions(&self) -> &Executable {
         &self.instructions
     }
-
     /// Return transaction authority.
     #[inline]
     pub fn authority(&self) -> &AccountId {
         &self.authority
     }
-
     /// Return the required signature-bound transaction lifetime.
     ///
     /// `None` identifies malformed decoded input; safe builders always assign
@@ -1351,13 +1272,11 @@ impl TransactionPayload {
         self.time_to_live_ms
             .map(|ttl| Duration::from_millis(ttl.into()))
     }
-
     /// Return the exact signed transaction security domain.
     #[inline]
     pub const fn domain(&self) -> &TransactionDomain {
         &self.domain
     }
-
     /// Return the exact network identity for an ordinary transaction.
     ///
     /// Genesis payloads return `None` because their explicit marker avoids a
@@ -1370,7 +1289,6 @@ impl TransactionPayload {
         }
     }
 }
-
 impl SignedTransaction {
     /// Derive the privacy intent from the canonical signed payload.
     ///
@@ -1386,7 +1304,6 @@ impl SignedTransaction {
     ) -> Result<PrivacyTransactionIntentDigestV1, PrivacyTransactionIntentErrorV1> {
         self.payload.privacy_transaction_intent_digest_v1()
     }
-
     /// Validate and borrow the optional direct privacy submission in this signed transaction.
     ///
     /// # Errors
@@ -1403,48 +1320,40 @@ impl SignedTransaction {
         self.payload
             .privacy_transaction_intent_binding_if_present_v1()
     }
-
     /// Transaction payload. Used for tests
     pub fn payload(&self) -> &TransactionPayload {
         &self.payload
     }
-
     /// Return transaction instructions
     #[inline]
     pub fn instructions(&self) -> &Executable {
         self.payload.instructions()
     }
-
     /// Return transaction authority
     #[inline]
     pub fn authority(&self) -> &AccountId {
         self.payload.authority()
     }
-
     /// Return transaction metadata.
     #[inline]
     pub fn metadata(&self) -> &Metadata {
         &self.payload.metadata
     }
-
     /// Return the exact signature-bound fee payment intent.
     #[inline]
     pub fn fee_payment_intent(&self) -> &FeePaymentIntent {
         &self.payload.fee_payment
     }
-
     /// Multisig signature bundle attached to this transaction, if any.
     #[inline]
     pub fn multisig_signatures(&self) -> Option<&MultisigSignatures> {
         self.multisig_signatures.as_ref()
     }
-
     /// Creation timestamp as [`core::time::Duration`]
     #[inline]
     pub fn creation_time(&self) -> Duration {
         Duration::from_millis(self.payload.creation_time_ms)
     }
-
     /// Replace the transaction authority without re-signing the payload.
     ///
     /// Useful for tests that need to simulate malformed or unsupported
@@ -1455,7 +1364,6 @@ impl SignedTransaction {
         self.payload.authority = authority;
         self
     }
-
     /// Return the required signature-bound transaction lifetime.
     ///
     /// `None` identifies malformed decoded input.
@@ -1463,44 +1371,37 @@ impl SignedTransaction {
     pub fn time_to_live(&self) -> Option<Duration> {
         self.payload.time_to_live()
     }
-
     /// Transaction nonce
     #[inline]
     pub fn nonce(&self) -> Option<NonZeroU32> {
         self.payload.nonce
     }
-
     /// Exact signed transaction security domain.
     #[inline]
     pub const fn domain(&self) -> &TransactionDomain {
         self.payload.domain()
     }
-
     /// Exact network identity for an ordinary transaction.
     #[inline]
     pub const fn network_id(&self) -> Option<&NetworkId> {
         self.payload.network_id()
     }
-
     /// Return the transaction signature
     #[inline]
     pub fn signature(&self) -> &TransactionSignature {
         &self.signature
     }
-
     /// Attach a multisig signature bundle, replacing any existing entry.
     #[inline]
     pub fn set_multisig_signatures(&mut self, signatures: MultisigSignatures) {
         self.multisig_signatures = Some(signatures);
     }
-
     /// Replace the transaction signature.
     #[cfg(feature = "transparent_api")]
     #[inline]
     pub fn set_signature(&mut self, signature: TransactionSignature) {
         self.signature = signature;
     }
-
     /// Number of signatures bundled with this transaction.
     ///
     /// Current transactions carry exactly one signature for single-key
@@ -1517,13 +1418,11 @@ impl SignedTransaction {
                 .map_or(0, |bundle| bundle.signatures.len()),
         }
     }
-
     /// Optional proof attachments carried alongside the payload.
     #[inline]
     pub fn attachments(&self) -> Option<&crate::proof::ProofAttachmentList> {
         self.payload.attachments.as_ref()
     }
-
     /// Height-based TTL advertised via transaction metadata.
     ///
     /// Returns `Ok(None)` when the metadata key is absent.
@@ -1537,7 +1436,6 @@ impl SignedTransaction {
             .map(Json::try_into_any_norito::<u64>)
             .transpose()
     }
-
     /// Per-authority transaction sequence advertised via metadata.
     ///
     /// Returns `Ok(None)` when the metadata key is absent.
@@ -1551,7 +1449,6 @@ impl SignedTransaction {
             .map(Json::try_into_any_norito::<u64>)
             .transpose()
     }
-
     /// Canonical identifier for this external transaction.
     ///
     /// The identifier commits to the exact signed intent and excludes the
@@ -1562,7 +1459,6 @@ impl SignedTransaction {
         let entry_hash = self.hash_as_entrypoint();
         HashOf::from_untyped_unchecked(Hash::from(entry_hash))
     }
-
     /// Hash for this external transaction as `TransactionEntrypoint`.
     ///
     /// This matches the canonical transaction hash returned by [`Self::hash`].
@@ -1571,7 +1467,6 @@ impl SignedTransaction {
         let entry_hash = HashOf::new(&ExternalEntrypointRef(self));
         HashOf::from_untyped_unchecked(Hash::from(entry_hash))
     }
-
     /// Injects a set of fictitious instructions into the transaction payload for testing.
     ///
     /// Only available when the `fault_injection` feature is enabled.
@@ -1582,11 +1477,9 @@ impl SignedTransaction {
     ) {
         let additions: Vec<InstructionBox> =
             extra_instructions.into_iter().map(Into::into).collect();
-
         if additions.is_empty() {
             return;
         }
-
         match &mut self.payload.instructions {
             Executable::Instructions(instructions) => {
                 let mut modified = instructions.clone().into_vec();
@@ -1607,7 +1500,6 @@ impl SignedTransaction {
             }
         }
     }
-
     #[cfg(feature = "fault_injection")]
     pub(crate) fn fault_injection_overlay(metadata: &Metadata) -> Option<Vec<String>> {
         metadata
@@ -1615,7 +1507,6 @@ impl SignedTransaction {
             .cloned()
             .and_then(|value| value.try_into_any_norito::<Vec<String>>().ok())
     }
-
     #[cfg(feature = "fault_injection")]
     pub(crate) fn apply_fault_injection_overlay(
         metadata: &mut Metadata,
@@ -1629,7 +1520,6 @@ impl SignedTransaction {
         }));
         metadata.insert(FAULT_INJECTION_METADATA_NAME.clone(), Json::new(combined));
     }
-
     /// Verify transaction signature.
     ///
     /// # Errors
@@ -1653,7 +1543,6 @@ impl SignedTransaction {
         }
     }
 }
-
 impl SealedTransactionCommitmentPayload {
     /// Construct a sealed transaction commitment payload.
     #[must_use]
@@ -1675,7 +1564,6 @@ impl SealedTransactionCommitmentPayload {
         }
     }
 }
-
 impl SignedSealedTransactionCommitment {
     /// Try to sign a sealed transaction commitment payload.
     ///
@@ -1692,7 +1580,6 @@ impl SignedSealedTransactionCommitment {
             payload,
         })
     }
-
     /// Sign a sealed transaction commitment payload.
     #[must_use]
     pub fn sign(
@@ -1702,35 +1589,30 @@ impl SignedSealedTransactionCommitment {
         Self::try_sign(payload, private_key)
             .expect("signing should succeed for a valid key pair and sealed commitment payload")
     }
-
     /// Commitment payload.
     #[inline]
     #[must_use]
     pub fn payload(&self) -> &SealedTransactionCommitmentPayload {
         &self.payload
     }
-
     /// Account authorized to reveal the transaction.
     #[inline]
     #[must_use]
     pub fn authority(&self) -> &AccountId {
         &self.payload.authority
     }
-
     /// Commitment hash.
     #[inline]
     #[must_use]
     pub fn commitment(&self) -> &Hash {
         &self.payload.commitment
     }
-
     /// Signature over the commitment payload.
     #[inline]
     #[must_use]
     pub fn signature(&self) -> &SignatureOf<SealedTransactionCommitmentPayload> {
         &self.signature
     }
-
     /// Verify the commitment signature.
     ///
     /// # Errors
@@ -1749,13 +1631,11 @@ impl SignedSealedTransactionCommitment {
         }
     }
 }
-
 impl core::fmt::Display for SignedSealedTransactionCommitment {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.commitment().fmt(f)
     }
 }
-
 impl SealedTransactionReveal {
     /// Construct a sealed transaction reveal.
     #[must_use]
@@ -1766,14 +1646,12 @@ impl SealedTransactionReveal {
             salt,
         }
     }
-
     /// Revealed signed transaction.
     #[inline]
     #[must_use]
     pub fn signed_transaction(&self) -> &SignedTransaction {
         &self.signed_transaction
     }
-
     /// Recompute the expected commitment using the stored commitment deadline.
     #[must_use]
     pub fn expected_commitment_with_deadline(&self, reveal_deadline_height: u64) -> Hash {
@@ -1789,13 +1667,11 @@ impl SealedTransactionReveal {
         )
     }
 }
-
 impl core::fmt::Display for SealedTransactionReveal {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.commitment.fmt(f)
     }
 }
-
 /// Compute the canonical sealed transaction commitment.
 ///
 /// The input is domain-separated and includes the exact network id, the hash of canonical Norito
@@ -1826,7 +1702,6 @@ pub fn compute_sealed_transaction_commitment(
     bytes.extend_from_slice(&reveal_deadline_height.to_le_bytes());
     Hash::new(bytes)
 }
-
 impl SignedTransaction {
     fn verify_multisig_signatures(
         &self,
@@ -1843,12 +1718,10 @@ impl SignedTransaction {
         if &bundle.signatures[0].signature != primary_signature {
             return Err(TransactionSignatureError::NonCanonicalMultisigSignatures);
         }
-
         let mut weights = BTreeMap::new();
         for member in policy.members() {
             weights.insert(member.public_key().clone(), member.weight());
         }
-
         let mut collected: u32 = 0;
         for entry in &bundle.signatures {
             let Some(weight) = weights.get(&entry.signer) else {
@@ -1858,28 +1731,23 @@ impl SignedTransaction {
                 .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))?;
             collected = collected.saturating_add(u32::from(*weight));
         }
-
         if collected < u32::from(policy.threshold()) {
             return Err(TransactionSignatureError::InsufficientMultisigWeight {
                 collected,
                 required: policy.threshold(),
             });
         }
-
         Ok(())
     }
 }
-
 impl iroha_version::Version for SignedTransaction {
     fn version(&self) -> u8 {
         1
     }
-
     fn supported_versions() -> core::ops::Range<u8> {
         1..2
     }
 }
-
 fn encode_default_layout_versioned<T>(
     version: u8,
     value: &T,
@@ -1893,7 +1761,6 @@ where
     norito::core::serialize_to_buffer(value, &mut bytes)?;
     Ok(bytes)
 }
-
 impl SignedTransaction {
     /// Encode the complete canonical fixed-V1 transaction wire.
     ///
@@ -1910,30 +1777,25 @@ impl SignedTransaction {
         encode_default_layout_versioned(self.version(), self)
     }
 }
-
 impl iroha_version::codec::EncodeVersioned for SignedTransaction {
     fn encode_versioned(&self) -> Vec<u8> {
         self.encode_wire_v1()
             .expect("versioned transaction encoding should not fail")
     }
 }
-
 impl iroha_version::codec::DecodeVersioned for SignedTransaction {
     fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
         iroha_version::codec::decode_exact_versioned(input)
     }
 }
-
 impl iroha_version::Version for TransactionEntrypoint {
     fn version(&self) -> u8 {
         1
     }
-
     fn supported_versions() -> core::ops::Range<u8> {
         1..2
     }
 }
-
 impl TransactionEntrypoint {
     /// Encode the complete canonical fixed-V1 transaction-entrypoint wire.
     ///
@@ -1950,34 +1812,29 @@ impl TransactionEntrypoint {
         encode_default_layout_versioned(self.version(), self)
     }
 }
-
 impl iroha_version::codec::EncodeVersioned for TransactionEntrypoint {
     fn encode_versioned(&self) -> Vec<u8> {
         self.encode_wire_v1()
             .expect("versioned transaction entrypoint encoding should not fail")
     }
 }
-
 impl iroha_version::codec::DecodeVersioned for TransactionEntrypoint {
     fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
         iroha_version::codec::decode_exact_versioned(input)
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl From<SignedTransaction> for (AccountId, Executable) {
     fn from(source: SignedTransaction) -> Self {
         (source.payload.authority, source.payload.instructions)
     }
 }
-
 impl TransactionSignature {
     /// Signature itself
     pub fn payload(&self) -> &Signature {
         &self.0
     }
 }
-
 impl MultisigSignatures {
     /// Produce a multisig signature bundle by signing the given payload with each private key.
     ///
@@ -1998,15 +1855,12 @@ impl MultisigSignatures {
                 Ok(MultisigSignature::new(signer, signature))
             })
             .collect::<Result<_, _>>()?;
-
         if signatures.is_empty() {
             return Err(TransactionSignatureError::NoSignatures);
         }
-
         Ok(Self::new(signatures))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for TransactionEntrypoint {
     fn write_json(&self, out: &mut String) {
@@ -2035,7 +1889,6 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
         }
         out.push('}');
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -2065,7 +1918,6 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for TransactionEntrypoint {
     fn json_deserialize(
@@ -2102,7 +1954,6 @@ impl norito::json::JsonDeserialize for TransactionEntrypoint {
         Ok(value)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for TransactionResult {
     fn json_serialize(&self, out: &mut String) {
@@ -2125,7 +1976,6 @@ impl norito::json::JsonSerialize for TransactionResult {
         norito::json::JsonSerialize::json_serialize(&self.1, out);
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -2149,7 +1999,6 @@ impl norito::json::JsonSerialize for TransactionResult {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for TransactionResult {
     fn json_deserialize(
@@ -2164,7 +2013,6 @@ impl norito::json::JsonDeserialize for TransactionResult {
             if parser.try_consume_char(b'}')? {
                 break;
             }
-
             let key = parser.parse_key()?;
             match key.as_str() {
                 "Ok" => {
@@ -2194,7 +2042,6 @@ impl norito::json::JsonDeserialize for TransactionResult {
                 }
                 other => return Err(norito::json::Error::unknown_field(other.to_owned())),
             }
-
             parser.skip_ws();
             if parser.try_consume_char(b',')? {
                 continue;
@@ -2202,20 +2049,17 @@ impl norito::json::JsonDeserialize for TransactionResult {
             parser.consume_char(b'}')?;
             break;
         }
-
         Ok(TransactionResult(
             inner.ok_or_else(|| norito::json::Error::missing_field("Ok or Err"))?,
             batch_transfer_outcomes.unwrap_or_default(),
         ))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ExecutionStep {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -2223,7 +2067,6 @@ impl norito::json::FastJsonWrite for ExecutionStep {
         norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ExecutionStep {
     fn json_deserialize(
@@ -2232,9 +2075,7 @@ impl norito::json::JsonDeserialize for ExecutionStep {
         ConstVec::<InstructionBox>::json_deserialize(parser).map(ExecutionStep)
     }
 }
-
 struct ExternalEntrypointRef<'a>(&'a SignedTransaction);
-
 impl norito::core::NoritoSerialize for ExternalEntrypointRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&0_u32, writer)?;
@@ -2242,14 +2083,12 @@ impl norito::core::NoritoSerialize for ExternalEntrypointRef<'_> {
         norito::core::write_len_prefixed(writer, self.0.payload(), &mut tmp)?;
         Ok(())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0
             .payload()
             .encoded_len_hint()
             .map(|len| 4_usize.saturating_add(8).saturating_add(len))
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let len = self.0.payload().encoded_len_exact()?;
         Some(
@@ -2259,7 +2098,6 @@ impl norito::core::NoritoSerialize for ExternalEntrypointRef<'_> {
         )
     }
 }
-
 impl TransactionBuilder {
     fn new_with_time(
         domain: TransactionDomain,
@@ -2293,7 +2131,6 @@ impl TransactionBuilder {
             construction,
         }
     }
-
     /// Construct [`Self`], using the time from [`TimeSource`]
     // we don't want to expose this to non-tests
     #[inline]
@@ -2308,7 +2145,6 @@ impl TransactionBuilder {
             .as_millis()
             .try_into()
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX");
-
         Self::new_with_time(
             TransactionDomain::Network(network_id),
             authority,
@@ -2316,7 +2152,6 @@ impl TransactionBuilder {
             fee_payment,
         )
     }
-
     /// Construct [`Self`] with the exact signature-bound fee payment intent.
     #[inline]
     pub fn new(network_id: NetworkId, authority: AccountId, fee_payment: FeePaymentIntent) -> Self {
@@ -2327,7 +2162,6 @@ impl TransactionBuilder {
             fee_payment,
         )
     }
-
     /// Construct a transaction carrying the explicit genesis-only domain.
     ///
     /// Runtime admission rejects this domain. Genesis construction and
@@ -2336,7 +2170,6 @@ impl TransactionBuilder {
     pub fn new_genesis(authority: AccountId, fee_payment: FeePaymentIntent) -> Self {
         Self::new_genesis_with_time_source(authority, &TimeSource::new_system(), fee_payment)
     }
-
     /// Construct a genesis-domain transaction using an explicit time source.
     #[inline]
     pub fn new_genesis_with_time_source(
@@ -2357,16 +2190,13 @@ impl TransactionBuilder {
         )
     }
 }
-
 include!("signed/builder_construction.rs");
-
 impl TransactionBuilder {
     /// Borrow the exact unsigned payload currently held by this builder.
     #[must_use]
     pub const fn payload(&self) -> &TransactionPayload {
         &self.payload
     }
-
     /// Set instructions for this transaction
     pub fn with_instructions<I>(mut self, instructions: impl IntoIterator<Item = I>) -> Self
     where
@@ -2379,19 +2209,16 @@ impl TransactionBuilder {
             .into();
         self
     }
-
     /// Add IVM bytecode to this transaction
     pub fn with_bytecode(mut self, bytecode: IvmBytecode) -> Self {
         self.payload.instructions = bytecode.into();
         self
     }
-
     /// Set executable for this transaction
     pub fn with_executable(mut self, executable: Executable) -> Self {
         self.payload.instructions = executable;
         self
     }
-
     /// Set an ordered, atomic mix of instructions and deployed-contract calls.
     ///
     /// An empty iterator can be represented for decoding symmetry but is
@@ -2409,37 +2236,31 @@ impl TransactionBuilder {
         );
         self
     }
-
     /// Adds metadata to this transaction
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
         self.payload.metadata = metadata;
         self
     }
-
     /// Set the required signature-bound fee payer and charge limits.
     pub fn with_fee_payment_intent(mut self, intent: FeePaymentIntent) -> Self {
         self.payload.fee_payment = intent;
         self
     }
-
     /// Attach proof payloads to this transaction before signing.
     pub fn with_attachments(mut self, attachments: crate::proof::ProofAttachmentList) -> Self {
         self.payload.attachments = Some(attachments);
         self
     }
-
     /// Attach multisig signatures for a multisig authority.
     pub fn with_multisig_signatures(mut self, signatures: MultisigSignatures) -> Self {
         self.multisig_signatures = Some(signatures);
         self
     }
-
     /// Set nonce for this transaction
     pub fn set_nonce(&mut self, nonce: NonZeroU32) -> &mut Self {
         self.payload.nonce = Some(nonce);
         self
     }
-
     /// Set time-to-live for this transaction
     ///
     /// A zero duration leaves the builder with an invalid missing lifetime;
@@ -2450,19 +2271,15 @@ impl TransactionBuilder {
             .as_millis()
             .try_into()
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX");
-
         self.payload.time_to_live_ms = NonZeroU64::new(ttl);
-
         self
     }
-
     /// Set creation time of transaction
     pub fn set_creation_time(&mut self, value: Duration) -> &mut Self {
         self.payload.creation_time_ms = u64::try_from(value.as_millis())
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX");
         self
     }
-
     /// Encode the transaction payload to canonical Norito bytes.
     ///
     /// This is the byte sequence external signers should receive before
@@ -2471,19 +2288,16 @@ impl TransactionBuilder {
     pub fn encode_payload(&self) -> Vec<u8> {
         norito::codec::encode_adaptive(&self.payload)
     }
-
     /// Return the canonical prehash signed by transaction signatures.
     #[must_use]
     pub fn payload_hash(&self) -> Hash {
         Hash::from(HashOf::new(&self.payload))
     }
-
     /// Return the canonical prehash signed by transaction signatures as raw bytes.
     #[must_use]
     pub fn payload_hash_bytes(&self) -> [u8; Hash::LENGTH] {
         *HashOf::new(&self.payload).as_ref()
     }
-
     /// Build a signed transaction from a signature produced by an external signer.
     ///
     /// The signature is not trusted blindly by this constructor. Callers that
@@ -2497,7 +2311,6 @@ impl TransactionBuilder {
             multisig_signatures: self.multisig_signatures,
         }
     }
-
     /// Try to sign transaction with provided key pair.
     ///
     /// # Errors
@@ -2511,7 +2324,6 @@ impl TransactionBuilder {
         use iroha_crypto::PublicKey;
         self.validate_payload_state()?;
         let payload = self.payload;
-
         let expected = payload
             .authority
             .try_signatory()
@@ -2520,26 +2332,22 @@ impl TransactionBuilder {
         if expected != &derived {
             return Err(TransactionSignatureError::AuthorityKeyMismatch);
         }
-
         let signature = TransactionSignature(
             SignatureOf::try_new(private_key, &payload)
                 .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))?,
         );
-
         Ok(SignedTransaction {
             signature,
             payload,
             multisig_signatures: self.multisig_signatures,
         })
     }
-
     /// Sign transaction with provided key pair.
     #[must_use]
     pub fn sign(self, private_key: &iroha_crypto::PrivateKey) -> SignedTransaction {
         self.try_sign(private_key)
             .expect("signing should succeed for a valid private key and transaction payload")
     }
-
     /// Try to sign a transaction whose authority uses a multisig controller.
     ///
     /// The provided signer keys are used to produce a canonical multisig
@@ -2559,26 +2367,22 @@ impl TransactionBuilder {
         let mut bundle = self
             .multisig_signatures
             .unwrap_or_else(|| MultisigSignatures::new(Vec::new()));
-
         let produced = MultisigSignatures::from_signers(&payload, signers)?;
         bundle.signatures.extend(produced.signatures);
         bundle = MultisigSignatures::new(bundle.signatures);
         bundle.validate_canonical()?;
-
         let primary_signature = bundle
             .signatures
             .first()
             .expect("multisig signing requires at least one signer")
             .signature
             .clone();
-
         Ok(SignedTransaction {
             signature: TransactionSignature(primary_signature),
             payload,
             multisig_signatures: Some(bundle),
         })
     }
-
     /// Sign a transaction whose authority uses a multisig controller.
     ///
     /// The provided signer keys are used to produce a canonical multisig
@@ -2598,28 +2402,22 @@ impl TransactionBuilder {
             .expect("multisig signing requires at least one valid signer")
     }
 }
-
 #[cfg(test)]
 fn test_network_id(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([seed; Hash::LENGTH]),
     ))
 }
-
 #[cfg(test)]
 #[path = "signed_model_tests.rs"]
 mod tests;
-
 #[cfg(test)]
 #[path = "signed/ttl_tests.rs"]
 mod ttl_tests;
-
 #[cfg(all(test, feature = "fault_injection"))]
 #[path = "signed/fault_injection_tests.rs"]
 mod fault_injection_tests;
-
 include!("signed/attachments_tests.rs");
-
 impl TransactionEntrypoint {
     /// Account authorized to initiate this transaction when one exists.
     #[inline]
@@ -2633,7 +2431,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::Time(entrypoint) => Some(&entrypoint.authority),
         }
     }
-
     /// Account authorized to initiate this transaction.
     ///
     #[inline]
@@ -2647,7 +2444,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::Time(entrypoint) => &entrypoint.authority,
         }
     }
-
     /// Creation timestamp in milliseconds when the entrypoint carries one.
     #[inline]
     pub fn creation_time_ms(&self) -> Option<u64> {
@@ -2661,7 +2457,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         }
     }
-
     /// Metadata attached to the entrypoint when one exists.
     #[inline]
     pub fn metadata(&self) -> Option<&Metadata> {
@@ -2673,7 +2468,6 @@ impl TransactionEntrypoint {
             TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         }
     }
-
     /// Hash for this transaction entrypoint.
     #[inline]
     pub fn hash(&self) -> HashOf<Self> {
@@ -2683,7 +2477,6 @@ impl TransactionEntrypoint {
         }
     }
 }
-
 impl TransactionResult {
     /// Construct a transaction result without independent-batch receipts.
     #[inline]
@@ -2691,53 +2484,44 @@ impl TransactionResult {
     pub fn new(inner: TransactionResultInner) -> Self {
         Self(inner, Vec::new())
     }
-
     /// Durable per-leg receipts emitted by an independently settled native transfer batch.
     #[inline]
     #[must_use]
     pub fn batch_transfer_outcomes(&self) -> &[AssetBatchTransferOutcome] {
         &self.1
     }
-
     /// Replace the durable per-leg receipts committed by this transaction-result leaf.
     #[inline]
     pub fn set_batch_transfer_outcomes(&mut self, outcomes: Vec<AssetBatchTransferOutcome>) {
         self.1 = outcomes;
     }
-
     /// Hash for this transaction result.
     #[inline]
     pub fn hash(&self) -> HashOf<Self> {
         HashOf::new(self)
     }
-
     /// Hash for this transaction result computed from its inner representation.
     #[inline]
     pub fn hash_from_inner(inner: &TransactionResultInner) -> HashOf<Self> {
         HashOf::new(&TransactionResult::new(inner.clone()))
     }
 }
-
 impl From<TransactionResultInner> for TransactionResult {
     #[inline]
     fn from(inner: TransactionResultInner) -> Self {
         Self::new(inner)
     }
 }
-
 impl core::ops::Deref for TransactionResult {
     type Target = TransactionResultInner;
-
     #[inline]
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl core::fmt::Display for TransactionResult {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("TransactionResult")
     }
 }
-
 include!("signed_norito_rpc_fixture_tests.rs");

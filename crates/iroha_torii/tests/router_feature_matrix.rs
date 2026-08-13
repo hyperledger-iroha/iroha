@@ -5,9 +5,7 @@
 //! instantiated under different compile-time feature combinations (`telemetry/app_api/connect`,
 //! etc.). Each cfg-gated block runs only when the corresponding feature is enabled.
 #![allow(clippy::too_many_lines)]
-
 use std::sync::Arc;
-
 use axum::http::{Request, StatusCode, Uri};
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
@@ -15,10 +13,8 @@ use iroha_core::{
 use iroha_data_model::{ChainId, peer::PeerId};
 use norito::json;
 use tower::ServiceExt as _; // for Router::oneshot
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 /// Candidate paths that may expose an `OpenAPI` document.
 const OPENAPI_CANDIDATES: &[&str] = &[
     "/openapi.json",
@@ -27,7 +23,6 @@ const OPENAPI_CANDIDATES: &[&str] = &[
     "/swagger/v1/swagger.json",
     iroha_torii_shared::uri::SCHEMA,
 ];
-
 async fn fetch_generated_openapi(app: &axum::Router) -> Option<String> {
     for path in OPENAPI_CANDIDATES {
         let request = Request::builder()
@@ -51,12 +46,10 @@ async fn fetch_generated_openapi(app: &axum::Router) -> Option<String> {
     }
     None
 }
-
 fn canonicalize_json(input: &str) -> Option<String> {
     let value: json::Value = json::from_str(input).ok()?;
     json::to_string_pretty(&value).ok()
 }
-
 fn diff_preview(expected: &str, actual: &str) -> String {
     let expected_lines: Vec<_> = expected.lines().collect();
     let actual_lines: Vec<_> = actual.lines().collect();
@@ -75,7 +68,6 @@ fn diff_preview(expected: &str, actual: &str) -> String {
     }
     "spec contents differ (unable to locate differing line)".to_owned()
 }
-
 async fn diff_openapi_if_available(app: &axum::Router) {
     let Some(raw_spec) = fetch_generated_openapi(app).await else {
         assert!(
@@ -84,7 +76,6 @@ async fn diff_openapi_if_available(app: &axum::Router) {
         );
         return;
     };
-
     if let Ok(actual_path) = std::env::var("IROHA_TORII_OPENAPI_ACTUAL") {
         if let Some(pretty) = canonicalize_json(&raw_spec) {
             if let Err(err) = tokio::fs::write(&actual_path, pretty.as_bytes()).await {
@@ -94,23 +85,19 @@ async fn diff_openapi_if_available(app: &axum::Router) {
             eprintln!("failed to write raw OpenAPI snapshot to {actual_path}: {err}");
         }
     }
-
     let Ok(expected_path) = std::env::var("IROHA_TORII_OPENAPI_EXPECTED") else {
         return;
     };
-
     let expected_raw = match tokio::fs::read_to_string(&expected_path).await {
         Ok(contents) => contents,
         Err(err) => panic!("failed to read expected OpenAPI snapshot from {expected_path}: {err}"),
     };
-
     let Some(expected) = canonicalize_json(&expected_raw) else {
         panic!("expected OpenAPI snapshot at {expected_path} is not valid JSON");
     };
     let Some(actual) = canonicalize_json(&raw_spec) else {
         panic!("generated OpenAPI document is not valid JSON: consider regenerating it");
     };
-
     if expected != actual {
         let preview = diff_preview(&expected, &actual);
         panic!(
@@ -118,20 +105,17 @@ async fn diff_openapi_if_available(app: &axum::Router) {
         );
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.connect.enabled = cfg!(feature = "connect");
     cfg
 }
-
 #[tokio::test]
 async fn router_builds_under_current_features() {
     // Start a minimal Kiso
     let cfg = mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
-
     // Minimal in-memory components required by Torii
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -148,7 +132,6 @@ async fn router_builds_under_current_features() {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx; // keep channel alive
     let da_receipt_signer = cfg.common.key_pair.clone();
-
     // Build Torii. Telemetry handle is only required when the feature is enabled.
     let torii = {
         #[cfg(feature = "telemetry")]
@@ -204,11 +187,8 @@ async fn router_builds_under_current_features() {
             )
         }
     };
-
     let app = torii.api_router_for_tests();
-
     diff_openapi_if_available(&app).await;
-
     // A couple of smoke GETs that are present regardless of features
     let resp1 = app
         .clone()
@@ -226,7 +206,6 @@ async fn router_builds_under_current_features() {
         resp1.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
-
     for (path, expected_status) in [
         ("/v1/sumeragi/evidence", StatusCode::METHOD_NOT_ALLOWED),
         ("/v1/sumeragi/vrf/commit", StatusCode::NOT_FOUND),
@@ -251,7 +230,6 @@ async fn router_builds_under_current_features() {
             "retired Sumeragi mutation route {path} must remain absent"
         );
     }
-
     let resp2 = app
         .clone()
         .oneshot(fixtures::operator_signed_request(
@@ -269,7 +247,6 @@ async fn router_builds_under_current_features() {
         resp2.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
-
     #[cfg(feature = "app_api")]
     {
         let resp = app
@@ -287,7 +264,6 @@ async fn router_builds_under_current_features() {
             StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
         ));
     }
-
     #[cfg(all(feature = "app_api", not(feature = "telemetry")))]
     {
         for path in [
@@ -308,7 +284,6 @@ async fn router_builds_under_current_features() {
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
     }
-
     #[cfg(feature = "connect")]
     {
         let session = app
@@ -322,7 +297,6 @@ async fn router_builds_under_current_features() {
             .await
             .unwrap();
         assert_eq!(session.status(), StatusCode::BAD_REQUEST);
-
         let aggregate = app
             .clone()
             .oneshot(
@@ -335,7 +309,6 @@ async fn router_builds_under_current_features() {
             .unwrap();
         assert_eq!(aggregate.status(), StatusCode::UNAUTHORIZED);
     }
-
     #[cfg(not(feature = "profiling"))]
     {
         let resp = app
@@ -350,7 +323,6 @@ async fn router_builds_under_current_features() {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
-
     #[cfg(not(feature = "schema"))]
     {
         let resp = app
@@ -365,7 +337,6 @@ async fn router_builds_under_current_features() {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
-
     #[cfg(not(feature = "telemetry"))]
     {
         for path in [
@@ -388,7 +359,6 @@ async fn router_builds_under_current_features() {
             assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
         }
     }
-
     #[cfg(not(feature = "zk-verify-batch"))]
     {
         let resp = app
@@ -405,7 +375,6 @@ async fn router_builds_under_current_features() {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn router_exposes_status_when_telemetry_enabled() {
@@ -461,7 +430,6 @@ async fn router_exposes_status_when_telemetry_enabled() {
         true,
     );
     let app = torii.api_router_for_tests();
-
     let resp = app
         .oneshot(fixtures::operator_signed_request(
             &cfg.common.key_pair,

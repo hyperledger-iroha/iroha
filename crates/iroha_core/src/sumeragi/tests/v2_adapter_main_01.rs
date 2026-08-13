@@ -16,7 +16,6 @@ fn write_and_reopen_authenticated_wal_startup(
         records,
     )
 }
-
 #[cfg(feature = "bls")]
 fn write_and_reopen_authenticated_wal_startup_at_path(
     wal_path: PathBuf,
@@ -55,7 +54,6 @@ fn write_and_reopen_authenticated_wal_startup_at_path(
         assert_eq!(receipt.sequence().checked_add(1), Some(persistence_id));
     }
     drop(adapter);
-
     let verified = VerifiedHeightContext::genesis(context.clone(), proofs_of_possession.to_vec())
         .expect("reverify authenticated FIFO context");
     SumeragiV2Adapter::open_recovered_startup_with_aggregator(
@@ -70,7 +68,6 @@ fn write_and_reopen_authenticated_wal_startup_at_path(
     )
     .expect("reopen authenticated FIFO WAL")
 }
-
 fn take_current_sign(effects: &mut Vec<AdapterEffect>) -> AdapterEffect {
     let signs = effects
         .iter()
@@ -82,7 +79,6 @@ fn take_current_sign(effects: &mut Vec<AdapterEffect>) -> AdapterEffect {
     };
     effects.remove(*index)
 }
-
 fn persist_proposal_intent_for_control_recovery(directory: &TempDir, marker: u8) {
     let (mut adapter, startup) =
         open_test_as_leader(directory).expect("open local ProposalIntent fixture");
@@ -113,7 +109,6 @@ fn persist_proposal_intent_for_control_recovery(directory: &TempDir, marker: u8)
         }]
     ));
 }
-
 fn persist_timeout_intent_for_control_recovery(directory: &TempDir) {
     let (mut adapter, startup) = open_test(directory).expect("open TimeoutIntent fixture");
     assert!(startup.is_empty());
@@ -128,7 +123,6 @@ fn persist_timeout_intent_for_control_recovery(directory: &TempDir) {
         }]
     ));
 }
-
 fn open_control_owner_for_test(
     safety: &TempDir,
     storage: &TempDir,
@@ -161,7 +155,6 @@ fn open_control_owner_for_test(
         )
         .unwrap_or_else(|error| panic!("open exact recovered control owner: {error}"))
 }
-
 #[cfg(feature = "bls")]
 fn write_authenticated_decision_startup(
     safety: &TempDir,
@@ -193,7 +186,6 @@ fn write_authenticated_decision_startup(
     );
     (startup, context, proofs)
 }
-
 #[cfg(feature = "bls")]
 fn reopen_authenticated_decision_startup(
     safety: &TempDir,
@@ -215,14 +207,12 @@ fn reopen_authenticated_decision_startup(
     )
     .expect("reopen authenticated Decision WAL")
 }
-
 #[cfg(feature = "bls")]
 #[derive(Clone, Copy)]
 enum DecisionBodyMarkerFixture {
     Validated,
     Rejected,
 }
-
 #[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
 fn write_decision_startup_with_body_marker(
@@ -304,7 +294,6 @@ fn write_decision_startup_with_body_marker(
             assert!(validation.rejection_reason().is_some())
         }
     }
-
     let mut decision = wire::QuorumCertificate {
         round,
         proposal_round: round,
@@ -325,7 +314,6 @@ fn write_decision_startup_with_body_marker(
     );
     (startup, body_store)
 }
-
 fn lifecycle_owner_config() -> SumeragiV2Config {
     SumeragiV2Config {
         format_version: SUMERAGI_V2_CONFIG_FORMAT_VERSION,
@@ -387,7 +375,6 @@ fn lifecycle_owner_config() -> SumeragiV2Config {
         },
     }
 }
-
 fn lifecycle_factory_state_for_test(
     kura: Arc<Kura>,
     network_id: iroha_data_model::NetworkId,
@@ -404,7 +391,6 @@ fn lifecycle_factory_state_for_test(
         ),
     )
 }
-
 fn quarantined_lifecycle_body_store_for_test(
     body_store: super::super::v2_body_store::V2BodyStore,
 ) -> super::super::v2_body_store::QuarantinedV2BodyStore {
@@ -412,7 +398,6 @@ fn quarantined_lifecycle_body_store_for_test(
         .into_quarantined_recovered_startup()
         .expect("freshly opened lifecycle body store enters quarantine")
 }
-
 fn lifecycle_factory_inputs_for_test(
     startup: &AuthenticatedRecoveredAdapterStartup,
     storage: RecoveredLifecycleStorageAuthorityV1,
@@ -426,7 +411,6 @@ fn lifecycle_factory_inputs_for_test(
     try_lifecycle_factory_inputs_for_test(startup, storage, state, kura, local_signer)
         .unwrap_or_else(|error| panic!("bind exact lifecycle factory inputs: {error}"))
 }
-
 #[allow(clippy::result_large_err)]
 fn try_lifecycle_factory_inputs_for_test(
     startup: &AuthenticatedRecoveredAdapterStartup,
@@ -453,7 +437,6 @@ fn try_lifecycle_factory_inputs_for_test(
         events_sender,
     )
 }
-
 fn open_test_with_capacity_geometry(
     directory: &TempDir,
     capacity_geometry: ServicedCandidateCapacityGeometry,
@@ -471,7 +454,6 @@ fn open_test_with_capacity_geometry(
         deferred_admission_ordinals(),
     )
 }
-
 fn assert_registry_eq(actual: &WireRegistry, expected: &WireRegistry) {
     assert_eq!(actual.wire_context, expected.wire_context);
     assert_eq!(actual.context_id, expected.context_id);
@@ -483,7 +465,6 @@ fn assert_registry_eq(actual: &WireRegistry, expected: &WireRegistry) {
     assert_eq!(actual.certificates, expected.certificates);
     assert_eq!(actual.proposals, expected.proposals);
 }
-
 fn open_test_as_leader(
     directory: &TempDir,
 ) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), AdapterError> {
@@ -500,7 +481,6 @@ fn open_test_as_leader(
         deferred_admission_ordinals(),
     )
 }
-
 fn unowned_body_event(adapter: &SumeragiV2Adapter, marker: u8) -> reducer::Event {
     reducer::Event::BodyAvailable {
         tag: adapter.current_tag(),
@@ -508,7 +488,6 @@ fn unowned_body_event(adapter: &SumeragiV2Adapter, marker: u8) -> reducer::Event
         subject: reducer::Subject::repeat(marker),
     }
 }
-
 fn durably_retire_unowned_body_event(adapter: &mut SumeragiV2Adapter, marker: u8) {
     let event = unowned_body_event(adapter, marker);
     assert!(
@@ -524,7 +503,6 @@ fn durably_retire_unowned_body_event(adapter: &mut SumeragiV2Adapter, marker: u8
             .is_empty()
     );
 }
-
 #[test]
 fn direct_internal_discard_tombstones_a_b_a_and_survives_restart() {
     let directory = TempDir::new().expect("temporary directory");
@@ -562,7 +540,6 @@ fn direct_internal_discard_tombstones_a_b_a_and_survives_restart() {
         );
         assert_eq!(adapter.serviced_candidate_count_for_test(), initial + 2);
     }
-
     let context = context();
     let (mut restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
@@ -591,7 +568,6 @@ fn direct_internal_discard_tombstones_a_b_a_and_survives_restart() {
     );
     assert_eq!(restarted.serviced_candidate_count_for_test(), retained);
 }
-
 #[test]
 fn nonquorum_vote_retransmission_rebuilds_volatile_pool_after_restart() {
     let directory = TempDir::new().expect("temporary directory");
@@ -676,7 +652,6 @@ fn nonquorum_vote_retransmission_rebuilds_volatile_pool_after_restart() {
                 .any(|quorum| quorum.round == round && quorum.signer_count == 2)
         );
     }
-
     let (mut restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
         verified_genesis(context),
@@ -715,7 +690,6 @@ fn nonquorum_vote_retransmission_rebuilds_volatile_pool_after_restart() {
             .any(|quorum| quorum.round == round && quorum.signer_count == 1)
     );
 }
-
 #[test]
 fn deferred_discard_tombstones_before_owner_release_and_restart() {
     let directory = TempDir::new().expect("temporary directory");
@@ -739,7 +713,6 @@ fn deferred_discard_tombstones_before_owner_release_and_restart() {
                 .is_some()
         );
         assert_eq!(adapter.deferred_completions.len(), 1);
-
         let effects = adapter
             .drain_deferred()
             .expect("service the nondispatchable candidate exactly once");
@@ -759,7 +732,6 @@ fn deferred_discard_tombstones_before_owner_release_and_restart() {
         );
         assert_eq!(adapter.serviced_candidate_count_for_test(), initial + 1);
     }
-
     let context = context();
     let (mut restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
@@ -784,7 +756,6 @@ fn deferred_discard_tombstones_before_owner_release_and_restart() {
     );
     assert_eq!(restarted.serviced_candidate_count_for_test(), retained);
 }
-
 #[test]
 fn serviced_candidate_write_failure_is_fail_closed_and_retains_deferred_owner() {
     let directory = TempDir::new().expect("temporary directory");
@@ -815,7 +786,6 @@ fn serviced_candidate_write_failure_is_fail_closed_and_retains_deferred_owner() 
         "failed publication retains the selected owner before fail-stop"
     );
 }
-
 #[test]
 fn restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect() {
     let directory = TempDir::new().expect("temporary directory");
@@ -870,7 +840,6 @@ fn restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect() {
             "reservation is synchronized before its source can retire"
         );
     }
-
     let (restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
         verified_genesis(context()),
@@ -908,7 +877,6 @@ fn restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect() {
             .is_empty(),
         "a restart-dormant timeout remains a non-FIFO clock root"
     );
-
     let lifecycle_ordinals =
         super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(1);
     let started_at = Instant::now();
@@ -987,7 +955,6 @@ fn restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect() {
             .restored_dormant_producer_continuations
             .contains(&restored_address)
     );
-
     drop(runtime.into_driver());
     let (restarted_again, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
@@ -1019,7 +986,6 @@ fn restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect() {
         "the drained logical request cannot be recreated at its old stage"
     );
 }
-
 struct StageSevenCrashCut {
     wire_context: wire::HeightContext,
     round: wire::ConsensusRound,
@@ -1029,7 +995,6 @@ struct StageSevenCrashCut {
     logical_ordinal: u128,
     restored_address: ProducerContinuationAddress,
 }
-
 fn persist_stage_seven_crash_cut(directory: &TempDir, marker: u8) -> StageSevenCrashCut {
     let wire_context = context();
     let round = wire::ConsensusRound {
@@ -1086,7 +1051,6 @@ fn persist_stage_seven_crash_cut(directory: &TempDir, marker: u8) -> StageSevenC
         logical_key = fetch_ownership.owner().causal_origin().lifecycle_key;
         logical_ordinal = fetch_ownership.owner().lifecycle_ordinal();
         assert_eq!(logical_ordinal, 1);
-
         let mut adapter = runtime.into_driver();
         let event = reducer::Event::BodyAvailable {
             tag,
@@ -1140,7 +1104,6 @@ fn persist_stage_seven_crash_cut(directory: &TempDir, marker: u8) -> StageSevenC
         restored_address,
     }
 }
-
 #[test]
 fn body_rebind_coalescence_preserves_the_only_persistent_producer() {
     let directory = TempDir::new().expect("temporary durable coalescence directory");
@@ -1226,7 +1189,6 @@ fn body_rebind_coalescence_preserves_the_only_persistent_producer() {
     runtime
         .commit_body_available(reservation)
         .expect("materialize the restart-restored source owner");
-
     let rebound = reducer::EventTag::new(
         previous.height(),
         previous.view() + 1,
@@ -1253,7 +1215,6 @@ fn body_rebind_coalescence_preserves_the_only_persistent_producer() {
         .enqueue_volatile_body_available_for_test(rebound, manifest.clone())
         .expect("stage an independently volatile destination owner");
     assert_eq!(runtime.queued_commands(), 2);
-
     assert!(
         runtime
             .rebind_body_available(previous, rebound, &manifest)
@@ -1286,7 +1247,6 @@ fn body_rebind_coalescence_preserves_the_only_persistent_producer() {
             .contains(&restored_address),
         "the rebound volatile carrier aliases the same restart-dormant producer",
     );
-
     drop(runtime.into_driver());
     let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
@@ -1311,7 +1271,6 @@ fn body_rebind_coalescence_preserves_the_only_persistent_producer() {
             .contains(&restored_address),
     );
 }
-
 #[test]
 fn restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_does_not_resurrect() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1324,7 +1283,6 @@ fn restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_do
         logical_ordinal,
         restored_address,
     } = persist_stage_seven_crash_cut(&directory, 0xB7);
-
     let (restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
         verified_genesis(context()),
@@ -1355,7 +1313,6 @@ fn restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_do
             .is_empty(),
         "stage 7 preserves logical identity without a latent FIFO slot"
     );
-
     let restarted_tag = restarted.current_tag();
     let certificate = wire::QuorumCertificate {
         round,
@@ -1427,7 +1384,6 @@ fn restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_do
         Some(logical_ordinal + 2),
         "the certified Fetch owns one new external lifecycle before completion admission"
     );
-
     let capacity_before = runtime.remaining_completion_capacity();
     let reservation = runtime
         .reserve_body_available_with_owner(restarted_tag, manifest.clone(), &fetch_ownership)
@@ -1438,7 +1394,6 @@ fn restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_do
         .next_ordinal_for_test()
         .expect("inspect the shared source after completion admission");
     assert_eq!(source_after_reserve, Some(logical_ordinal + 3));
-
     let retry = runtime
         .reserve_body_available_with_owner(restarted_tag, manifest.clone(), &fetch_ownership)
         .expect("exact reconstruction retry coalesces with its token");
@@ -1451,7 +1406,6 @@ fn restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_do
         source_after_reserve,
         "an exact retry cannot spend a second physical admission position"
     );
-
     runtime
         .commit_body_available(retry)
         .expect("materialize the reconstructed completion");
@@ -1485,7 +1439,6 @@ fn restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_do
             .contains_key(&restored_address),
         "the service handoff removes the restart-stable stage-7 record"
     );
-
     drop(runtime.into_driver());
     let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),

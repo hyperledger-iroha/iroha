@@ -17,7 +17,6 @@ fn fair_v2_ingress_capacity_arithmetic_overflow_fails_closed() {
         None,
         "two usize::MAX source partitions are not representable"
     );
-
     let exact_max = super::FairV2Ingress::new(1, usize::MAX, usize::MAX, 0, 0);
     exact_max
         .configure_roster([])
@@ -25,7 +24,6 @@ fn fair_v2_ingress_capacity_arithmetic_overflow_fails_closed() {
     exact_max
         .open()
         .expect("an exact representable maximum must not be rejected as overflow");
-
     let validator = validator_peers(1).pop().expect("validator fixture");
     let aggregate_overflow = super::FairV2Ingress::new(7, usize::MAX, usize::MAX, 0, 0);
     let error = aggregate_overflow
@@ -35,7 +33,6 @@ fn fair_v2_ingress_capacity_arithmetic_overflow_fails_closed() {
     assert_eq!(error.required(), usize::MAX);
     assert_eq!(error.kind, super::FairV2IngressCapacityKind::Bytes);
     assert_eq!(aggregate_overflow.open(), Err(error));
-
     let reserve_overflow = super::FairV2Ingress::new(7, usize::MAX, usize::MAX, usize::MAX, 1);
     let error = reserve_overflow
         .configure_roster([validator])
@@ -48,7 +45,6 @@ fn fair_v2_ingress_capacity_arithmetic_overflow_fails_closed() {
     );
     assert_eq!(reserve_overflow.open(), Err(error));
 }
-
 #[test]
 fn fair_v2_ingress_rejects_timeout_vote_larger_than_its_byte_reserve() {
     let validator = validator_peers(1).pop().expect("validator fixture");
@@ -61,13 +57,11 @@ fn fair_v2_ingress_rejects_timeout_vote_larger_than_its_byte_reserve() {
         .configure_roster([validator.clone()])
         .expect("the deliberately short reserve still fits its source partition");
     ingress.open().expect("open configured roster");
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(timeout_vote, Some(validator))),
         Err(super::FairV2IngressPushError::Rejected(_))
     ));
 }
-
 #[test]
 fn fair_v2_ingress_rejects_timeout_vote_reserve_larger_than_source_partition() {
     let validator = validator_peers(1).pop().expect("validator fixture");
@@ -79,7 +73,6 @@ fn fair_v2_ingress_rejects_timeout_vote_reserve_larger_than_source_partition() {
     assert_eq!(error.configured(), 1024);
     assert_eq!(error.required(), 1025);
 }
-
 #[test]
 fn fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pressure() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(9);
@@ -89,7 +82,6 @@ fn fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pr
         .configure_roster([validator.clone()])
         .expect("validator plus anonymous lane fit");
     ingress.open().expect("open configured roster");
-
     for index in 0..3 {
         assert!(
             handle.try_incoming_block_message_from(validator.clone(), v2_auxiliary_prepare(index),)
@@ -101,7 +93,6 @@ fn fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pr
     );
     assert!(handle.try_incoming_block_message_from(validator.clone(), v2_message_with_index(99),));
     assert_eq!(ingress.len(), 4);
-
     let completion = ingress
         .try_recv_if(|inbound| payload_chunk_index(inbound) == Some(99))
         .expect("same-source transport completion bypasses the saturated auxiliary prefix");
@@ -114,7 +105,6 @@ fn fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pr
         "service restores the exact per-validator transport-completion reservation"
     );
 }
-
 #[test]
 fn fair_v2_ingress_prepare_vote_cannot_consume_commit_progress_reservation() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(9);
@@ -124,7 +114,6 @@ fn fair_v2_ingress_prepare_vote_cannot_consume_commit_progress_reservation() {
         .configure_roster([validator.clone()])
         .expect("validator plus anonymous lane fit");
     ingress.open().expect("open configured roster");
-
     let prepare =
         InboundBlockMessage::new(v2_vote(wire::GlobalPhase::Prepare), Some(validator.clone()));
     let commit =
@@ -161,7 +150,6 @@ fn fair_v2_ingress_prepare_vote_cannot_consume_commit_progress_reservation() {
         FairV2IngressClass::Progress,
         "Commit-certificate recovery must share the protected progress slot"
     );
-
     assert!(
         handle.try_incoming_block_message_from(
             validator.clone(),
@@ -181,14 +169,12 @@ fn fair_v2_ingress_prepare_vote_cannot_consume_commit_progress_reservation() {
             validator.clone(),
             v2_vote(wire::GlobalPhase::Commit),
         ));
-
     let delivered = ingress
         .try_recv_if(|inbound| vote_phase(inbound) == Some(wire::GlobalPhase::Commit))
         .expect("Commit vote bypasses the saturated auxiliary prefix");
     assert_eq!(delivered.sender(), Some(&validator));
     assert_eq!(vote_phase(&delivered), Some(wire::GlobalPhase::Commit));
 }
-
 #[test]
 fn fair_v2_ingress_minimum_capacity_admits_timeout_votes() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(7);
@@ -198,13 +184,11 @@ fn fair_v2_ingress_minimum_capacity_admits_timeout_votes() {
         .configure_roster([validator.clone()])
         .expect("one validator, its progress and TimeoutVote slots, and anonymous fit");
     ingress.open().expect("open configured roster");
-
     assert!(handle.try_incoming_block_message_from(validator.clone(), v2_auxiliary_prepare(0),));
     assert!(handle.try_incoming_block_message_from(
         validator.clone(),
         v2_commit_certificate_request(0, &validator),
     ));
-
     let timeout = InboundBlockMessage::new(v2_timeout_vote(), Some(validator.clone()));
     assert_eq!(
         FairV2IngressClass::classify(&timeout),
@@ -223,7 +207,6 @@ fn fair_v2_ingress_minimum_capacity_admits_timeout_votes() {
         })
     ));
 }
-
 #[test]
 fn fair_v2_ingress_certified_escape_survives_exact_same_source_saturation() {
     let validator = validator_peers(1).pop().expect("validator fixture");
@@ -239,7 +222,6 @@ fn fair_v2_ingress_certified_escape_survives_exact_same_source_saturation() {
     let direct_commit_qc = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::QuorumCertificate(response.certificate.clone()),
     ));
-
     for (label, escape) in [
         ("timeout certificate", v2_timeout_certificate(1)),
         ("commit quorum certificate", direct_commit_qc),
@@ -277,7 +259,6 @@ fn fair_v2_ingress_certified_escape_survives_exact_same_source_saturation() {
             .configure_roster([validator.clone()])
             .expect("one exact validator corridor and anonymous lane fit");
         ingress.open().expect("open exact certified corridor");
-
         for message in [prepare, progress, completion, timeout] {
             assert!(matches!(
                 ingress.try_push(InboundBlockMessage::new(message, Some(validator.clone()),)),
@@ -302,7 +283,6 @@ fn fair_v2_ingress_certified_escape_survives_exact_same_source_saturation() {
                 "ordinary Prepare/progress bytes must fill only their own partition: case={label}",
             );
         }
-
         let BlockMessage::V2(envelope) = &escape else {
             unreachable!("certified escape fixture is v2");
         };
@@ -343,7 +323,6 @@ fn fair_v2_ingress_certified_escape_survives_exact_same_source_saturation() {
         assert_eq!(ingress.len(), 4, "case={label}");
     }
 }
-
 #[test]
 fn fair_v2_ingress_serializes_distinct_timeout_certificates_per_source() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
@@ -353,14 +332,12 @@ fn fair_v2_ingress_serializes_distinct_timeout_certificates_per_source() {
         .configure_roster([validator.clone()])
         .expect("validator plus anonymous lane fit");
     ingress.open().expect("open configured roster");
-
     assert!(handle.try_incoming_block_message_from(validator.clone(), v2_timeout_certificate(0),));
     assert!(
         !handle.try_incoming_block_message_from(validator.clone(), v2_timeout_certificate(1),),
         "one authenticated source cannot spend two certified owners concurrently",
     );
     assert_eq!(ingress.len(), 1);
-
     let timeout_view = |inbound: &InboundBlockMessage| match inbound.message() {
         BlockMessage::V2(wire::ConsensusMessageV2 {
             payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
@@ -383,7 +360,6 @@ fn fair_v2_ingress_serializes_distinct_timeout_certificates_per_source() {
     assert_eq!(timeout_view(&successor), Some(1));
     assert_eq!(ingress.len(), 0);
 }
-
 #[test]
 fn fair_v2_ingress_control_slot_is_exactly_source_context_height_and_kind_scoped() {
     let mut validators = validator_peers(2);
@@ -395,13 +371,11 @@ fn fair_v2_ingress_control_slot_is_exactly_source_context_height_and_kind_scoped
         &predecessor,
         &later_same_slot
     ));
-
     let different_source = InboundBlockMessage::new(v2_timeout_certificate(1), Some(second));
     assert!(!fair_v2_ingress_same_control_slot(
         &predecessor,
         &different_source
     ));
-
     let mut different_height_message = v2_timeout_certificate(1);
     let BlockMessage::V2(wire::ConsensusMessageV2 {
         payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
@@ -416,13 +390,11 @@ fn fair_v2_ingress_control_slot_is_exactly_source_context_height_and_kind_scoped
         &predecessor,
         &different_height
     ));
-
     let different_kind = InboundBlockMessage::new(v2_timeout_vote(), Some(first.clone()));
     assert!(!fair_v2_ingress_same_control_slot(
         &predecessor,
         &different_kind
     ));
-
     let non_control =
         InboundBlockMessage::new(v2_commit_certificate_request(0, &first), Some(first));
     assert!(!fair_v2_ingress_same_control_slot(
@@ -430,7 +402,6 @@ fn fair_v2_ingress_control_slot_is_exactly_source_context_height_and_kind_scoped
         &non_control
     ));
 }
-
 #[test]
 fn fair_v2_ingress_reservation_potential_does_not_increase_on_service() {
     assert_eq!(super::fair_v2_ingress_required_capacity(0, None), Some(1));
@@ -446,7 +417,6 @@ fn fair_v2_ingress_reservation_potential_does_not_increase_on_service() {
         Some(7 * 33),
         "every configured source plus anonymous owns one byte partition"
     );
-
     for (source_class, reserve_anonymous_completion) in [
         (super::FairV2IngressSourceClass::Anonymous, false),
         (super::FairV2IngressSourceClass::Anonymous, true),
@@ -525,7 +495,6 @@ fn fair_v2_ingress_reservation_potential_does_not_increase_on_service() {
         }
     }
 }
-
 #[test]
 fn fair_v2_ingress_saturated_peer_cannot_block_an_empty_validator_timeout() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
@@ -537,7 +506,6 @@ fn fair_v2_ingress_saturated_peer_cannot_block_an_empty_validator_timeout() {
         .configure_roster(validators)
         .expect("two validators, their progress and TimeoutVote slots, and anonymous fit");
     ingress.open().expect("open configured roster");
-
     assert!(handle.try_incoming_block_message_from(saturated.clone(), v2_auxiliary_prepare(0),));
     assert!(handle.try_incoming_block_message_from(saturated.clone(), v2_message_with_index(1),));
     assert!(
@@ -548,7 +516,6 @@ fn fair_v2_ingress_saturated_peer_cannot_block_an_empty_validator_timeout() {
         handle.try_incoming_block_message_from(honest.clone(), v2_timeout_vote()),
         "the saturated peer must not consume the honest validator's timeout slot"
     );
-
     let delivered = ingress
         .try_recv_if(|inbound| inbound.sender() == Some(&honest))
         .expect("honest timeout remains serviceable despite peer saturation");
@@ -560,7 +527,6 @@ fn fair_v2_ingress_saturated_peer_cannot_block_an_empty_validator_timeout() {
         })
     ));
 }
-
 #[test]
 fn fair_v2_ingress_non_head_service_consumes_one_source_turn() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
@@ -572,7 +538,6 @@ fn fair_v2_ingress_non_head_service_consumes_one_source_turn() {
         .configure_roster(validators)
         .expect("two validators, their progress and TimeoutVote slots, and anonymous fit");
     ingress.open().expect("open configured roster");
-
     assert!(handle.try_incoming_block_message_from(first_source.clone(), v2_auxiliary_prepare(0),));
     assert!(
         handle.try_incoming_block_message_from(
@@ -583,19 +548,16 @@ fn fair_v2_ingress_non_head_service_consumes_one_source_turn() {
     assert!(
         handle.try_incoming_block_message_from(second_source.clone(), v2_auxiliary_prepare(1),)
     );
-
     let bypass = ingress
         .try_recv_if(|inbound| vote_phase(inbound) == Some(wire::GlobalPhase::Commit))
         .expect("the first source's later admissible entry is selected");
     assert_eq!(bypass.sender(), Some(&first_source));
     assert_eq!(vote_phase(&bypass), Some(wire::GlobalPhase::Commit));
-
     let next = ingress
         .try_recv_if(|_| true)
         .expect("the other ready source owns the next turn");
     assert_eq!(next.sender(), Some(&second_source));
     assert_eq!(vote_height(&next), Some(2));
-
     let retained = ingress
         .try_recv_if(|_| true)
         .expect("the bypassed entry remains in its original source lane");

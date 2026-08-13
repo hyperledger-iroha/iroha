@@ -4,19 +4,15 @@
 //! `q - 1` therefore needs the explicit `(high, low) = (0, -1)` branch from
 //! the Lantern construction; ordinary integer division would emit the
 //! non-canonical high part `m`.
-
 use thiserror::Error;
-
 use super::params::{
     COMPRESSION_GAMMA_V1, COMPRESSION_MODULUS_V1, DECOMPOSITION_BITS_V1, PROOF_MODULUS_V1,
 };
-
 const POWER_OF_TWO_V1: u64 = 1_u64 << DECOMPOSITION_BITS_V1;
 const POWER_OF_TWO_HALF_V1: i64 = (POWER_OF_TWO_V1 / 2) as i64;
 const GAMMA_HALF_V1: i64 = (COMPRESSION_GAMMA_V1 / 2) as i64;
 const COMPRESSION_MODULUS_HALF_V1: i64 = (COMPRESSION_MODULUS_V1 / 2) as i64;
 const PROOF_MODULUS_HALF_V1: i64 = (PROOF_MODULUS_V1 / 2) as i64;
-
 /// Rounded high part and signed low part of one proof-ring residue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Power2RoundV1 {
@@ -25,7 +21,6 @@ pub struct Power2RoundV1 {
     /// Centered low part in `(-2^14, 2^14]`.
     pub low: i64,
 }
-
 /// `gamma`-decomposition of one proof-ring residue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GammaDecompositionV1 {
@@ -35,7 +30,6 @@ pub struct GammaDecompositionV1 {
     /// `q-1` residue represented as `-1`.
     pub low: i64,
 }
-
 /// Compute the unique `2^15` rounding used for compressed `tA1`.
 ///
 /// # Errors
@@ -54,7 +48,6 @@ pub fn power2round_v1(residue: u64) -> Result<Power2RoundV1, CompressionErrorV1>
     debug_assert!(high < (1_u64 << 36));
     Ok(Power2RoundV1 { high, low })
 }
-
 /// Compute the unique `gamma`-decomposition used by reconciliation.
 ///
 /// # Errors
@@ -80,7 +73,6 @@ pub fn gamma_decompose_v1(residue: u64) -> Result<GammaDecompositionV1, Compress
     }
     Ok(GammaDecompositionV1 { high, low })
 }
-
 /// Reconstruct the proof-ring residue represented by a gamma decomposition.
 ///
 /// # Errors
@@ -100,7 +92,6 @@ pub fn recompose_gamma_v1(decomposition: GammaDecompositionV1) -> Result<u64, Co
             + i128::from(decomposition.low),
     ))
 }
-
 /// Compute the centered reconciliation hint for `r + z` relative to `r`.
 ///
 /// # Errors
@@ -119,7 +110,6 @@ pub fn make_gamma_hint_v1(residue: u64, correction: i64) -> Result<i64, Compress
         i128::from(corrected.high) - i128::from(base.high),
     ))
 }
-
 /// Recover the reconciled high part from a centered hint and base residue.
 ///
 /// # Errors
@@ -138,7 +128,6 @@ pub fn use_gamma_hint_v1(residue: u64, hint: i64) -> Result<u64, CompressionErro
         COMPRESSION_MODULUS_V1,
     ))
 }
-
 /// Convert one canonical proof residue to its centered lift.
 ///
 /// # Errors
@@ -153,13 +142,11 @@ pub fn center_proof_residue_v1(residue: u64) -> Result<i64, CompressionErrorV1> 
             - i64::try_from(PROOF_MODULUS_V1).expect("proof modulus fits i64"))
     }
 }
-
 /// Convert a signed lift to its unique proof-ring residue.
 #[must_use]
 pub fn proof_residue_from_centered_v1(value: i64) -> u64 {
     canonicalize_i128(i128::from(value))
 }
-
 fn center_modulus_even(value: i128) -> i64 {
     let mut centered = i128::from(mod_i128(value, COMPRESSION_MODULUS_V1));
     let half = i128::from(COMPRESSION_MODULUS_HALF_V1);
@@ -168,7 +155,6 @@ fn center_modulus_even(value: i128) -> i64 {
     }
     i64::try_from(centered).expect("centered hint fits i64")
 }
-
 fn mod_i128(value: i128, modulus: u64) -> u64 {
     let modulus = i128::from(modulus);
     let mut reduced = value % modulus;
@@ -177,18 +163,15 @@ fn mod_i128(value: i128, modulus: u64) -> u64 {
     }
     u64::try_from(reduced).expect("canonical non-negative residue fits u64")
 }
-
 fn canonicalize_i128(value: i128) -> u64 {
     mod_i128(value, PROOF_MODULUS_V1)
 }
-
 fn require_canonical(residue: u64) -> Result<(), CompressionErrorV1> {
     if residue >= PROOF_MODULUS_V1 {
         return Err(CompressionErrorV1::NonCanonicalResidue);
     }
     Ok(())
 }
-
 /// Fixed decomposition failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum CompressionErrorV1 {
@@ -211,11 +194,9 @@ pub enum CompressionErrorV1 {
     #[error("Bootle/Lantern compression arithmetic invariant failed")]
     InternalInvariant,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn fixed_parameters_have_the_required_exact_factorization() {
         assert_eq!(
@@ -224,7 +205,6 @@ mod tests {
         );
         assert_eq!(POWER_OF_TWO_V1, 32_768);
     }
-
     #[test]
     fn power2round_boundaries_are_unique_and_recompose_exactly() {
         for residue in [
@@ -254,7 +234,6 @@ mod tests {
             Err(CompressionErrorV1::NonCanonicalResidue)
         );
     }
-
     #[test]
     fn gamma_decomposition_handles_q_minus_one_exception_exactly() {
         assert_eq!(
@@ -281,7 +260,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn hint_recovers_corrected_high_part_across_all_boundary_classes() {
         for residue in [
@@ -317,7 +295,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn hint_recovers_the_full_centered_response_domain_on_an_adversarial_corpus() {
         let mut state = 0xC6BC_2796_92B5_CC83_u64;
@@ -341,7 +318,6 @@ mod tests {
             assert_eq!(recovered, corrected.high);
         }
     }
-
     #[test]
     fn decomposition_roundtrips_a_large_deterministic_adversarial_corpus() {
         let mut state = 0xD1B5_4A32_D192_ED03_u64;
@@ -359,7 +335,6 @@ mod tests {
             assert_eq!(proof_residue_from_centered_v1(centered), residue);
         }
     }
-
     #[test]
     fn malformed_decompositions_corrections_hints_and_residues_fail_closed() {
         assert_eq!(

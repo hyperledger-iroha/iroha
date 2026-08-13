@@ -10,7 +10,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     runtime
         .arm_live_clocks(start)
         .expect("arm runtime after adapter startup");
-
     // Service one complete periodic episode before the signer becomes
     // busy. A later tick must mint a new lifecycle ordinal rather than
     // resurrecting this drained episode at its old position.
@@ -21,7 +20,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
             .expect("service pre-fence retransmission"),
         RuntimeStep::Advanced(_)
     ));
-
     let proposal = signed_runtime_proposal(&context, &keys, 0xE1);
     runtime
         .enqueue_network(proposal)
@@ -43,7 +41,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
         ] => (*tag, manifest.clone()),
         effects => panic!("unexpected proposal effects: {effects:?}"),
     };
-
     runtime
         .enqueue_body_available(tag, manifest.clone())
         .expect("enqueue reconstructed body");
@@ -108,7 +105,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     runtime
         .set_external_lifecycle_owners(vec![prepare_effect_ownership[0].owner().clone()])
         .expect("publish the pending Prepare signer owner");
-
     // The second periodic episode is still before the absolute deadline,
     // but it is frozen only at this serialized runner entry. The pending
     // Prepare signer already owns an older lifecycle position, so the new
@@ -132,7 +128,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
         runtime.retransmit_owner.is_some(),
         "the fresh periodic episode remains frozen at its later lifecycle position"
     );
-
     let prepare_signature = Signature::new(keys[0].private_key(), &prepare_signature_preimage)
         .payload()
         .to_vec();
@@ -147,7 +142,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
         .set_external_lifecycle_owners(Vec::new())
         .expect("retire the pending Prepare signer owner after completion enqueue");
     assert_eq!(runtime.queued_commands(), 1);
-
     let prepare_broadcast = runtime
         .step(second_retransmission)
         .expect("owned Prepare completion precedes the younger retransmission");
@@ -184,7 +178,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
         "the younger periodic episode remains frozen until its own turn"
     );
     assert_eq!(runtime.queued_commands(), 0);
-
     // Once the older completion drains, the retained fresh episode runs
     // and rebroadcasts the newly published Prepare vote.
     let retransmit_retry = runtime
@@ -217,7 +210,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     );
     assert!(runtime.deferred_lifecycle_ownership.is_empty());
     assert!(runtime.retransmit_owner.is_none());
-
     // Absolute timeout remains one-shot after the pre-deadline episode
     // drains. Its signing lifecycle likewise predates the next periodic
     // episode.
@@ -247,7 +239,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     runtime
         .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
         .expect("publish the pending TimeoutVote signer owner");
-
     // A fresh retransmission episode becomes due while TimeoutVote signing
     // is active. Its new ordinal follows the signer, so it remains at the
     // runtime boundary instead of entering the adapter as Busy debt.
@@ -268,7 +259,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
             .all_deferred_admission_ordinals()
             .is_empty()
     );
-
     let timeout_signature = Signature::new(keys[0].private_key(), &timeout_signature_preimage)
         .payload()
         .to_vec();
@@ -315,7 +305,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
         runtime.retransmit_owner.is_some(),
         "the younger post-timeout episode remains frozen until its own turn"
     );
-
     // Treat the first TimeoutVote broadcast as lost. The retained younger
     // periodic episode now owns the next serialized turn and rebroadcasts
     // the published vote.
@@ -344,7 +333,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     );
     assert!(runtime.deferred_lifecycle_ownership.is_empty());
     assert!(runtime.retransmit_owner.is_none());
-
     // A later periodic tick remains armed after the one-shot timeout and
     // continues broadcasting the published TimeoutVote.
     let later_post_timeout_tick = post_timeout_retransmission + runtime.retransmit_interval();
@@ -383,7 +371,6 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     );
     assert!(runtime.deferred_lifecycle_ownership.is_empty());
 }
-
 #[test]
 fn round_timeout_grows_linearly_by_view_without_wrapping() {
     let base = Duration::from_secs(10);
@@ -394,7 +381,6 @@ fn round_timeout_grows_linearly_by_view_without_wrapping() {
         round_timeout_for_view(Duration::new(1, 500_000_000), 1),
         Duration::from_secs(3),
     );
-
     assert_eq!(
         round_timeout_for_view(Duration::from_secs(1), u64::MAX - 1),
         Duration::from_secs(u64::MAX)
@@ -405,7 +391,6 @@ fn round_timeout_grows_linearly_by_view_without_wrapping() {
     );
     assert_eq!(round_timeout_for_view(Duration::MAX, 1), Duration::MAX);
 }
-
 #[test]
 fn recovered_nonzero_view_uses_scaled_timeout_from_live_arm() {
     let constructed_at = Instant::now();
@@ -419,7 +404,6 @@ fn recovered_nonzero_view_uses_scaled_timeout_from_live_arm() {
         Vec::new(),
     )
     .expect("open recovered runtime");
-
     runtime
         .arm_live_clocks(armed_at)
         .expect("arm after recovered startup");
@@ -429,7 +413,6 @@ fn recovered_nonzero_view_uses_scaled_timeout_from_live_arm() {
     let _ = runtime.step_and_take_scheduler_ownership_for_test(armed_at + Duration::from_secs(50));
     assert_eq!(runtime.driver.timeouts, vec![recovered]);
 }
-
 #[test]
 fn class_aware_ingress_is_bounded_and_reserves_progress_and_completion_slots() {
     let start = Instant::now();
@@ -440,7 +423,6 @@ fn class_aware_ingress_is_bounded_and_reserves_progress_and_completion_slots() {
         RuntimeQueueConfig::new(5, 2, 1),
     );
     assert_eq!(runtime.remaining_completion_capacity(), 4);
-
     enqueue_fake(
         &mut runtime,
         initial,
@@ -486,7 +468,6 @@ fn class_aware_ingress_is_bounded_and_reserves_progress_and_completion_slots() {
         ),
         Err(EnqueueError::Full)
     );
-
     for offset in 0..4 {
         let _ = runtime
             .step_and_take_scheduler_ownership_for_test(start + Duration::from_millis(offset));
@@ -497,7 +478,6 @@ fn class_aware_ingress_is_bounded_and_reserves_progress_and_completion_slots() {
         "class reserves protect admission capacity but cannot overtake an older lifecycle"
     );
 }
-
 #[test]
 fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     let start = Instant::now();
@@ -538,7 +518,6 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
             FakeCommand::record(9),
         ))
         .expect("progress causal owner fits");
-
     assert!(matches!(runtime.step(start), Ok(RuntimeStep::Advanced(_))));
     let evidence = runtime
         .last_scheduler_ownership()
@@ -584,21 +563,18 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     assert_eq!(candidate.eligible_skips_before, 0);
     assert_eq!(candidate.eligible_skips_after, 0);
     assert_eq!(evidence.validate_exact(), Ok(()));
-
     let rejected = |mutated: RuntimeSchedulerOwnershipEvidence| {
         assert_eq!(
             mutated.validate_exact(),
             Err(RuntimeSchedulerEvidenceError::InvalidProjection)
         );
     };
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
     };
     candidate.identity.canonical_hash = iroha_crypto::Hash::new([0xFF]);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
@@ -609,28 +585,24 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     candidate.projection_hash = runtime_fifo_candidate_projection_hash(candidate);
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
     };
     candidate.kind = RuntimeCommandKind::Authenticated;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
     };
     candidate.class = SERVICE_CLASS_NORMAL;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
     };
     candidate.tag = tag(99);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
@@ -639,14 +611,12 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     candidate.projection_hash = runtime_fifo_candidate_projection_hash(candidate);
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
     };
     candidate.admission_ordinal = 0;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
@@ -655,7 +625,6 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     candidate.projection_hash = runtime_fifo_candidate_projection_hash(candidate);
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
@@ -667,7 +636,6 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     candidate.projection_hash = runtime_fifo_candidate_projection_hash(candidate);
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
@@ -686,7 +654,6 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     candidate.projection_hash = runtime_fifo_candidate_projection_hash(candidate);
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
@@ -698,43 +665,35 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     candidate.projection_hash = runtime_fifo_candidate_projection_hash(candidate);
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
     };
     candidate.fifo_position = 0;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.queue_after.service_cursor = SERVICE_CLASS_COMPLETION;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.queue_after.max_service_debt = evidence.queue_before.max_service_debt.saturating_add(2);
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.queue_before.service_cursor = SERVICE_CLASS_NONE;
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.timeout_due = true;
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.progress_ready = false;
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.fifo_owed_after = true;
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence;
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut mutated.candidate else {
         unreachable!();
@@ -744,7 +703,6 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     mutated.projection_hash = runtime_scheduler_projection_hash(&mutated);
     rejected(mutated);
 }
-
 #[test]
 fn scheduler_minimum_uses_cached_admission_but_dispatch_revalidates_ingress() {
     let directory = TempDir::new().expect("temporary cached-admission directory");
@@ -755,7 +713,6 @@ fn scheduler_minimum_uses_cached_admission_but_dispatch_revalidates_ingress() {
             signed_runtime_quorum_certificate(&context, &keys, 0xA6),
         ));
     let source = PeerId::new(keys[0].public_key().clone());
-
     runtime
         .enqueue_network_with_ingress_ownership(
             message.clone(),
@@ -768,7 +725,6 @@ fn scheduler_minimum_uses_cached_admission_but_dispatch_revalidates_ingress() {
         .front()
         .and_then(|queued| queued.lifecycle_ordinal)
         .expect("published command owns a lifecycle ordinal");
-
     // Model corruption after publication to prove the two validation
     // boundaries are distinct. A rank scan consumes only the immutable
     // cached admission certificate; dispatch still validates the full
@@ -799,7 +755,6 @@ fn scheduler_minimum_uses_cached_admission_but_dispatch_revalidates_ingress() {
         "dispatch rejects corrupted ingress before consuming the cached owner"
     );
 }
-
 #[test]
 fn scheduler_queue_seal_rejects_valid_same_wire_ingress_carrier_substitution() {
     let directory = TempDir::new().expect("temporary scheduler-ingress-seal directory");
@@ -821,7 +776,6 @@ fn scheduler_queue_seal_rejects_valid_same_wire_ingress_carrier_substitution() {
     )
     .expect("independent same-wire carrier has exact runtime ownership");
     assert!(replacement_ingress.validate_frozen_physical());
-
     runtime
         .enqueue_network_with_ingress_ownership(
             message.clone(),
@@ -860,7 +814,6 @@ fn scheduler_queue_seal_rejects_valid_same_wire_ingress_carrier_substitution() {
         original_ingress.earliest_lifecycle_ordinal(),
         "the replacement is rank-compatible before the private selection check"
     );
-
     let mut substituted = evidence;
     let RuntimeSelectedCandidateOwnership::Exact(candidate) = &mut substituted.candidate else {
         unreachable!();
@@ -875,7 +828,6 @@ fn scheduler_queue_seal_rejects_valid_same_wire_ingress_carrier_substitution() {
         "the queue-private seal rejects a valid same-wire full-carrier substitution after every public projection is recomputed"
     );
 }
-
 #[test]
 fn full_lane_retryable_backpressure_preserves_owner_across_class_fairness() {
     let start = Instant::now();
@@ -912,7 +864,6 @@ fn full_lane_retryable_backpressure_preserves_owner_across_class_fairness() {
         .find(|queued| queued.command.record == Some(2))
         .expect("selected Completion owner is present")
         .clone();
-
     assert!(matches!(
         runtime.step(start),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
@@ -941,7 +892,6 @@ fn full_lane_retryable_backpressure_preserves_owner_across_class_fairness() {
     assert_eq!(restored.lifecycle_ordinal, original.lifecycle_ordinal);
     assert_eq!(restored.causal_origin, original.causal_origin);
     assert_eq!(runtime.driver.delivered, Vec::new());
-
     let mut weakened = evidence.clone();
     weakened.selected = RuntimeSelectedOwnerKind::Fifo;
     weakened.projection_hash = runtime_scheduler_projection_hash(&weakened);
@@ -952,7 +902,6 @@ fn full_lane_retryable_backpressure_preserves_owner_across_class_fairness() {
     );
     assert!(runtime.take_last_scheduler_ownership().is_some());
     assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
-
     assert!(matches!(
         runtime.step_and_take_scheduler_ownership_for_test(start),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
@@ -971,7 +920,6 @@ fn full_lane_retryable_backpressure_preserves_owner_across_class_fairness() {
     );
     assert_eq!(runtime.ingress.len(), 0);
 }
-
 #[test]
 fn retry_unadmitted_predecessor_gets_one_bounded_serve_attempt() {
     let start = Instant::now();
@@ -990,7 +938,6 @@ fn retry_unadmitted_predecessor_gets_one_bounded_serve_attempt() {
         .ingress
         .mint_non_fifo_lifecycle_ordinal()
         .expect("external Serve ticket shares the actor ordinal source");
-
     let first_witness = runtime
         .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
         .expect("older runnable predecessor is visible")
@@ -1047,7 +994,6 @@ fn retry_unadmitted_predecessor_gets_one_bounded_serve_attempt() {
             .expect("alternate target also suppresses the one attempted owner"),
         "one retry attempt is shared across both exact target comparisons"
     );
-
     runtime
         .step_and_take_scheduler_ownership_for_test(start)
         .expect("the restored owner remains available after Serve settlement");
@@ -1066,7 +1012,6 @@ fn retry_unadmitted_predecessor_gets_one_bounded_serve_attempt() {
             .expect("settled owner clears alternate-target retry suppression")
     );
     assert!(!runtime.retained_response_predecessor_retry_attempted);
-
     let completed_ordinal = runtime
         .ingress
         .mint_non_fifo_lifecycle_ordinal()
@@ -1109,7 +1054,6 @@ fn retry_unadmitted_predecessor_gets_one_bounded_serve_attempt() {
             .is_none()
     );
 }
-
 #[test]
 fn typed_pacemaker_escape_selects_only_progress_root() {
     let start = Instant::now();
@@ -1133,7 +1077,6 @@ fn typed_pacemaker_escape_selects_only_progress_root() {
         FakeCommand::record(2),
     )
     .expect("Progress owner fits");
-
     assert!(matches!(
         runtime.try_step_pacemaker_escape(start),
         Ok(Some(RuntimeStep::Advanced(ref effects))) if effects.len() == 1
@@ -1151,7 +1094,6 @@ fn typed_pacemaker_escape_selects_only_progress_root() {
         .expect("consume the Progress effect owner");
     assert_eq!(runtime.driver.delivered, vec![(owner_tag, 2)]);
     assert_eq!(runtime.queued_commands(), 1);
-
     assert!(matches!(runtime.try_step_pacemaker_escape(start), Ok(None)));
     assert_eq!(runtime.queued_commands(), 1);
     runtime
@@ -1162,7 +1104,6 @@ fn typed_pacemaker_escape_selects_only_progress_root() {
         vec![(owner_tag, 2), (owner_tag, 1)]
     );
 }
-
 #[test]
 fn missing_nonempty_effect_ownership_latches_runtime_fail_closed() {
     let start = Instant::now();
@@ -1172,7 +1113,6 @@ fn missing_nonempty_effect_ownership_latches_runtime_fail_closed() {
         start,
         RuntimeQueueConfig::new(4, 1, 1),
     );
-
     assert_eq!(
         runtime.take_effect_ownership(1),
         Err("Sumeragi v2 effect batch omitted its lifecycle ownership".to_owned()),
@@ -1189,7 +1129,6 @@ fn missing_nonempty_effect_ownership_latches_runtime_fail_closed() {
         "missing runtime ownership permanently closes later ingress",
     );
 }
-
 #[test]
 fn retryable_backpressure_restores_the_exact_recovery_fifo_owner_once() {
     let start = Instant::now();
@@ -1218,7 +1157,6 @@ fn retryable_backpressure_restores_the_exact_recovery_fifo_owner_once() {
         .expect("recovery owner is present")
         .lifecycle_owner()
         .expect("recovery owner is exact");
-
     assert!(matches!(
         runtime.step_recovery(start),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
@@ -1244,7 +1182,6 @@ fn retryable_backpressure_restores_the_exact_recovery_fifo_owner_once() {
     );
     assert!(runtime.take_last_scheduler_ownership().is_some());
     assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
-
     assert!(matches!(
         runtime.step_recovery_and_take_scheduler_ownership_for_test(start),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
@@ -1252,7 +1189,6 @@ fn retryable_backpressure_restores_the_exact_recovery_fifo_owner_once() {
     assert_eq!(runtime.driver.delivered, vec![(owner_tag, 7)]);
     assert_eq!(runtime.queued_commands(), 0);
 }
-
 #[test]
 fn adapter_command_identity_is_derived_from_exact_immutable_payload() {
     let owner_tag = tag(4);
@@ -1267,7 +1203,6 @@ fn adapter_command_identity_is_derived_from_exact_immutable_payload() {
         expected,
         AdapterCommand::SignatureCompleted(vec![0x11, 0x22, 0x34]).exact_runtime_command_identity()
     );
-
     let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(4, 1, 1));
     ingress
         .enqueue(TaggedCommand::new(
@@ -1288,12 +1223,10 @@ fn adapter_command_identity_is_derived_from_exact_immutable_payload() {
     assert_eq!(candidate.admission_ordinal, 1);
     assert_eq!(candidate.fifo_position, 0);
 }
-
 #[test]
 fn scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches() {
     let start = Instant::now();
     let owner_tag = tag(0);
-
     let mut idle = runtime(
         FakeDriver::new(owner_tag),
         start,
@@ -1318,7 +1251,6 @@ fn scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches() {
         "a coherently rehashed empty queue cannot claim service debt"
     );
     assert!(idle.take_last_scheduler_ownership().is_some());
-
     assert!(matches!(
         idle.step(start + Duration::from_secs(2)),
         Ok(RuntimeStep::Advanced(_))
@@ -1338,7 +1270,6 @@ fn scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches() {
             .map(|evidence| evidence.selected),
         Some(RuntimeSelectedOwnerKind::Timeout)
     );
-
     let (mut recovery, _) = SerializedV2Runtime::with_driver(
         FakeDriver::new(owner_tag),
         start,
@@ -1398,7 +1329,6 @@ fn scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches() {
             .validate_exact(),
         Ok(())
     );
-
     let mut deferred_driver = FakeDriver::new(owner_tag);
     deferred_driver
         .deferred_effects
@@ -1418,7 +1348,6 @@ fn scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches() {
                 && candidate.service.validate_exact()
                 && candidate.ingress_ownership.is_none()
     ));
-
     let mut unavailable_driver = FakeDriver::new(owner_tag);
     unavailable_driver.deferred_identity_unavailable = true;
     unavailable_driver
@@ -1431,12 +1360,10 @@ fn scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches() {
     ));
     assert!(unavailable.last_scheduler_ownership().is_none());
 }
-
 #[test]
 fn runtime_rejects_replayed_foreign_and_mutated_deferred_tokens() {
     let start = Instant::now();
     let owner_tag = tag(0);
-
     let mut replay_driver = FakeDriver::new(owner_tag);
     replay_driver
         .deferred_effects
@@ -1461,7 +1388,6 @@ fn runtime_rejects_replayed_foreign_and_mutated_deferred_tokens() {
     assert!(matches!(replay.step(start), Ok(RuntimeStep::Advanced(_))));
     assert!(replay.take_last_scheduler_ownership().is_some());
     assert!(matches!(replay.step(start), Err(RuntimeError::FailClosed)));
-
     let mut foreign_driver = FakeDriver::new(owner_tag);
     foreign_driver
         .deferred_effects
@@ -1479,7 +1405,6 @@ fn runtime_rejects_replayed_foreign_and_mutated_deferred_tokens() {
         .push_back(foreign_evidence);
     let mut foreign = runtime(foreign_driver, start, RuntimeQueueConfig::new(6, 2, 1));
     assert!(matches!(foreign.step(start), Err(RuntimeError::FailClosed)));
-
     let mut mutated_driver = FakeDriver::new(owner_tag);
     mutated_driver
         .deferred_effects
@@ -1498,7 +1423,6 @@ fn runtime_rejects_replayed_foreign_and_mutated_deferred_tokens() {
     let mut mutated = runtime(mutated_driver, start, RuntimeQueueConfig::new(6, 2, 1));
     assert!(matches!(mutated.step(start), Err(RuntimeError::FailClosed)));
 }
-
 #[test]
 fn runtime_rejects_driver_selection_outside_eligible_deferred_owner_set() {
     let start = Instant::now();
@@ -1515,7 +1439,6 @@ fn runtime_rejects_driver_selection_outside_eligible_deferred_owner_set() {
     assert!(ineligible.claim_adapter_service_for_test());
     driver.deferred_evidence_overrides.push_back(ineligible);
     driver.deferred_active_ordinals.insert(1);
-
     let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(6, 2, 1));
     let origin = RuntimeCandidateCausalOrigin::mint_fresh_root(
         owner_tag,
@@ -1545,14 +1468,12 @@ fn runtime_rejects_driver_selection_outside_eligible_deferred_owner_set() {
             .expect("the active target has one exact eligible owner"),
         BTreeSet::from([1])
     );
-
     assert!(matches!(runtime.step(start), Err(RuntimeError::FailClosed)));
     assert_eq!(
         runtime.fail_closed_reason.as_deref(),
         Some("deferred driver selected an ineligible admission owner")
     );
 }
-
 #[test]
 fn runtime_rejects_two_deferred_occurrences_for_one_logical_lifecycle() {
     let start = Instant::now();
@@ -1603,7 +1524,6 @@ fn runtime_rejects_two_deferred_occurrences_for_one_logical_lifecycle() {
                 .is_none()
         );
     }
-
     assert!(matches!(
         runtime.eligible_deferred_admission_ordinals(),
         Err(EnqueueError::FailClosed)
@@ -1615,7 +1535,6 @@ fn runtime_rejects_two_deferred_occurrences_for_one_logical_lifecycle() {
         Some("deferred physical-cut lifecycle ownership was invalid")
     );
 }
-
 #[test]
 fn scheduler_owner_must_be_taken_before_a_later_step_can_enter() {
     let start = Instant::now();
@@ -1625,13 +1544,11 @@ fn scheduler_owner_must_be_taken_before_a_later_step_can_enter() {
         start,
         RuntimeQueueConfig::new(6, 2, 1),
     );
-
     assert!(matches!(blocked_runtime.step(start), Ok(RuntimeStep::Idle)));
     let first_projection_hash = blocked_runtime
         .last_scheduler_ownership()
         .expect("first idle selection retains a carrier")
         .projection_hash;
-
     let periodic_at = start + blocked_runtime.retransmit_interval();
     assert!(matches!(
         blocked_runtime.step(periodic_at),
@@ -1652,21 +1569,18 @@ fn scheduler_owner_must_be_taken_before_a_later_step_can_enter() {
         .expect("failed re-entry preserves the first unconsumed carrier");
     assert_eq!(retained.selected, RuntimeSelectedOwnerKind::Idle);
     assert_eq!(retained.projection_hash, first_projection_hash);
-
     let mut runtime = self::runtime(
         FakeDriver::new(owner_tag),
         start,
         RuntimeQueueConfig::new(6, 2, 1),
     );
     assert!(matches!(runtime.step(start), Ok(RuntimeStep::Idle)));
-
     let taken = runtime
         .take_last_scheduler_ownership()
         .expect("effect boundary takes the exact first occurrence");
     assert_eq!(taken.selected, RuntimeSelectedOwnerKind::Idle);
     assert_eq!(taken.validate_exact(), Ok(()));
     assert!(runtime.last_scheduler_ownership().is_none());
-
     assert!(matches!(
         runtime.step(periodic_at),
         Ok(RuntimeStep::Advanced(_))
@@ -1679,7 +1593,6 @@ fn scheduler_owner_must_be_taken_before_a_later_step_can_enter() {
     );
     assert!(runtime.last_scheduler_ownership().is_none());
 }
-
 #[test]
 fn checked_admission_reservation_rejection_preserves_and_reuses_the_owner() {
     let source = RuntimeLifecycleOrdinalSource::after_high_watermark(40);
@@ -1697,7 +1610,6 @@ fn checked_admission_reservation_rejection_preserves_and_reuses_the_owner() {
         Some(41),
         "a rejected checked admission cannot burn its prospective owner"
     );
-
     let admitted = source
         .with_checked_reservation(1, |first, successor| Ok((first, successor)))
         .expect("retry commits the same prospective owner");
@@ -1709,11 +1621,9 @@ fn checked_admission_reservation_rejection_preserves_and_reuses_the_owner() {
         Some(42)
     );
 }
-
 #[test]
 fn restored_high_watermark_exhaustion_fails_without_erasing_the_source() {
     let source = RuntimeLifecycleOrdinalSource::after_high_watermark(u128::MAX - 1);
-
     assert!(source.advance_past(u128::MAX).is_err());
     assert_eq!(
         source
@@ -1722,7 +1632,6 @@ fn restored_high_watermark_exhaustion_fails_without_erasing_the_source() {
         Some(u128::MAX),
         "a rejected restored high-watermark must not turn exhaustion into an empty source"
     );
-
     let already_exhausted = RuntimeLifecycleOrdinalSource::after_high_watermark(u128::MAX);
     assert!(already_exhausted.advance_past(0).is_err());
     assert_eq!(
@@ -1732,7 +1641,6 @@ fn restored_high_watermark_exhaustion_fails_without_erasing_the_source() {
         None
     );
 }
-
 #[test]
 fn checked_ingress_rejection_preserves_dormant_owner_until_exact_retry() {
     let owner_tag = tag(0);
@@ -1745,7 +1653,6 @@ fn checked_ingress_rejection_preserves_dormant_owner_until_exact_retry() {
         .install_dormant_local_fifo_reservations(vec![dormant.clone()])
         .expect("install one exact restart-dormant owner");
     let mirror_before = ingress.next_admission_ordinal;
-
     let rejected: Result<(), EnqueueError> =
         ingress.with_checked_admission_ordinal_range(1, |checked_ingress, first, successor| {
             assert_eq!((first, successor), (2, 3));
@@ -1766,7 +1673,6 @@ fn checked_ingress_rejection_preserves_dormant_owner_until_exact_retry() {
             .expect("inspect source after rejected dormant replacement"),
         Some(2)
     );
-
     ingress
         .enqueue(restored_fake_command(
             owner_tag,
@@ -1789,7 +1695,6 @@ fn checked_ingress_rejection_preserves_dormant_owner_until_exact_retry() {
         Some(3)
     );
 }
-
 #[test]
 fn checked_admission_reservation_exhaustion_never_enters_commit() {
     let source = RuntimeLifecycleOrdinalSource::after_high_watermark(u128::MAX - 1);
@@ -1810,7 +1715,6 @@ fn checked_admission_reservation_exhaustion_never_enters_commit() {
     }
     assert!(!commit_called.get());
 }
-
 #[test]
 fn admission_ordinal_exhaustion_fails_runtime_closed() {
     let start = Instant::now();
@@ -1865,21 +1769,18 @@ fn admission_ordinal_exhaustion_fails_runtime_closed() {
         "failed FIFO admission cannot advance either ordinal representation"
     );
 }
-
 #[test]
 fn causal_lifecycle_key_ignores_only_process_generation() {
     let first_tag = EventTag::new(9, 4, Generation::new(1));
     let replay_tag = EventTag::new(9, 4, Generation::new(7));
     let different_view = EventTag::new(9, 5, Generation::new(7));
     let command = FakeCommand::record(0xA5);
-
     let first =
         RuntimeCandidateCausalOrigin::mint(first_tag, CommandClass::Progress, &command, None);
     let replay =
         RuntimeCandidateCausalOrigin::mint(replay_tag, CommandClass::Progress, &command, None);
     let other_view =
         RuntimeCandidateCausalOrigin::mint(different_view, CommandClass::Progress, &command, None);
-
     assert!(first.same_lifecycle(&replay));
     assert_eq!(first.lifecycle_key, replay.lifecycle_key);
     assert_ne!(
@@ -1889,7 +1790,6 @@ fn causal_lifecycle_key_ignores_only_process_generation() {
     assert!(!first.same_lifecycle(&other_view));
     assert_ne!(first.lifecycle_key, other_view.lifecycle_key);
 }
-
 #[test]
 fn aggregate_certificate_causal_roots_ignore_signer_carrier_replacement() {
     let (context, keys) = authenticated_runtime_context();
@@ -1917,7 +1817,6 @@ fn aggregate_certificate_causal_roots_ignore_signer_carrier_replacement() {
         )
         .causal_origin
     };
-
     let qc_a = signed_runtime_quorum_certificate(&context, &keys, 0xD1);
     let mut qc_b = qc_a.clone();
     qc_b.signers.rotate_left(1);
@@ -1931,7 +1830,6 @@ fn aggregate_certificate_causal_roots_ignore_signer_carrier_replacement() {
         source_b.clone(),
     );
     assert!(qc_origin_a.same_lifecycle(&qc_origin_b));
-
     let tc_a = signed_runtime_timeout_certificate(&context, &keys);
     let mut tc_b = tc_a.clone();
     tc_b.groups[0].signers.rotate_left(1);
@@ -1958,7 +1856,6 @@ fn aggregate_certificate_causal_roots_ignore_signer_carrier_replacement() {
     let tc_origin_a = tagged_origin(tc_message_a, source_a);
     let tc_origin_b = tagged_origin(tc_message_b, source_b.clone());
     assert!(tc_origin_a.same_lifecycle(&tc_origin_b));
-
     let mut other_round = tc_a;
     other_round.round.view = other_round.round.view.saturating_add(1);
     let other_round_origin = tagged_origin(

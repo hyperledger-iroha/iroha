@@ -1,10 +1,8 @@
 //! Shared ownership for the deterministic collective-public-key polynomial.
-
 use super::{
     ZkAmsMkheErrorV1, ZkAmsMkheGovernedActiveRosterV1, ZkAmsMkheRnsPolynomialWireV1,
     release_profile_v1, zk_ams_mkhe_active_collective_public_a_v1,
 };
-
 /// Prepared common public `a` for one governed roster and transcript.
 ///
 /// Preparing once and sharing this immutable context across all eight party
@@ -20,7 +18,6 @@ pub struct ZkAmsMkhePreparedCollectivePublicAV1 {
     transcript_digest: [u8; 32],
     public_a: ZkAmsMkheRnsPolynomialWireV1,
 }
-
 impl core::fmt::Debug for ZkAmsMkhePreparedCollectivePublicAV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -32,20 +29,17 @@ impl core::fmt::Debug for ZkAmsMkhePreparedCollectivePublicAV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkhePreparedCollectivePublicAV1 {
     /// Transcript for which the common polynomial was prepared.
     #[must_use]
     pub const fn transcript_digest(&self) -> [u8; 32] {
         self.transcript_digest
     }
-
     /// Borrow the single prepared common polynomial allocation.
     #[must_use]
     pub const fn public_a(&self) -> &ZkAmsMkheRnsPolynomialWireV1 {
         &self.public_a
     }
-
     pub(super) fn validate_for(
         &self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -62,12 +56,10 @@ impl ZkAmsMkhePreparedCollectivePublicAV1 {
         self.public_a.encoded_len()?;
         Ok(())
     }
-
     pub(super) fn shared_public_a(&self) -> ZkAmsMkheRnsPolynomialWireV1 {
         self.public_a.clone()
     }
 }
-
 /// Derive and validate the release common `a` exactly once for an eight-party
 /// collective-public-key generation batch.
 pub fn prepare_zk_ams_mkhe_collective_public_a_v1(
@@ -91,7 +83,6 @@ pub fn prepare_zk_ams_mkhe_collective_public_a_v1(
     prepared.validate_for(roster)?;
     Ok(prepared)
 }
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -114,7 +105,6 @@ mod tests {
             .next()
             .expect("common-a accessor boundary");
         assert!(accessor.contains("pub const fn public_a"));
-
         let wire = include_str!("../wire.rs");
         let polynomial = wire
             .split("pub struct ZkAmsMkheRnsPolynomialWireV1")
@@ -124,7 +114,6 @@ mod tests {
             .next()
             .expect("wire polynomial fields");
         assert!(polynomial.contains("residues: Arc<Vec<u64>>"));
-
         let generator = source
             .split("pub fn generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1")
             .nth(1)

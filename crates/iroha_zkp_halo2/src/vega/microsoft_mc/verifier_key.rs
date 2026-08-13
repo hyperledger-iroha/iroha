@@ -1,5 +1,4 @@
 //! Exact bounded Microsoft Vega-MC verifier-key codec and digest.
-
 use super::super::{
     VegaMdlProofDimensionsV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
 };
@@ -7,14 +6,12 @@ use super::{
     sha256::Sha256,
     wire::{McCodecError, Reader, write_len, write_point, write_scalar},
 };
-
 const DEFAULT_COMMITMENT_WIDTH: usize = 2_048;
 const MAX_VERIFIER_KEY_BYTES: usize = 512 * 1024 * 1024;
 const MAX_KEY_COLUMNS: usize = DEFAULT_COMMITMENT_WIDTH;
 const MAX_MATRIX_ENTRIES: usize = 1 << 26;
 const MAX_MATRIX_ROWS: usize = 1 << 22;
 const MAX_VERIFIER_ROUNDS: usize = 256;
-
 /// Canonical Hyrax commitment or verifier key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct HyraxKeyWire {
@@ -22,7 +19,6 @@ pub(super) struct HyraxKeyWire {
     pub(super) generators: Vec<Point>,
     pub(super) hiding_generator: Point,
 }
-
 /// Canonical sparse matrix in compressed-row form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SparseMatrixWire {
@@ -31,12 +27,10 @@ pub(super) struct SparseMatrixWire {
     pub(super) row_offsets: Vec<usize>,
     pub(super) columns: usize,
 }
-
 impl SparseMatrixWire {
     pub(super) fn rows(&self) -> usize {
         self.row_offsets.len() - 1
     }
-
     pub(super) fn row_entries(
         &self,
         row: usize,
@@ -44,7 +38,6 @@ impl SparseMatrixWire {
         let bounds = self.row_offsets.get(row..=row + 1)?;
         Some((bounds[0]..bounds[1]).map(|index| (self.indices[index], self.data[index])))
     }
-
     pub(super) fn evaluate(
         &self,
         row_weights: &[Scalar],
@@ -64,7 +57,6 @@ impl SparseMatrixWire {
         Ok(result)
     }
 }
-
 /// Application split-R1CS shape.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SplitShapeWire {
@@ -82,7 +74,6 @@ pub(super) struct SplitShapeWire {
     pub(super) b: SparseMatrixWire,
     pub(super) c: SparseMatrixWire,
 }
-
 impl SplitShapeWire {
     pub(super) fn variables(&self) -> Result<usize, McCodecError> {
         self.shared
@@ -91,7 +82,6 @@ impl SplitShapeWire {
             .ok_or(McCodecError::InvalidEncoding)
     }
 }
-
 /// Multi-round verifier-circuit shape.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct MultiRoundShapeWire {
@@ -107,7 +97,6 @@ pub(super) struct MultiRoundShapeWire {
     pub(super) b: SparseMatrixWire,
     pub(super) c: SparseMatrixWire,
 }
-
 /// Regular relaxed verifier-circuit shape.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RegularShapeWire {
@@ -118,7 +107,6 @@ pub(super) struct RegularShapeWire {
     pub(super) b: SparseMatrixWire,
     pub(super) c: SparseMatrixWire,
 }
-
 /// Exact canonical Microsoft Vega-MC verifier key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct McVerifierKeyWire {
@@ -132,7 +120,6 @@ pub(super) struct McVerifierKeyWire {
     pub(super) verifier_evaluation_key: HyraxKeyWire,
     pub(super) num_steps: usize,
 }
-
 impl McVerifierKeyWire {
     /// Decode one trusted-key candidate under absolute allocation bounds.
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, McCodecError> {
@@ -155,7 +142,6 @@ impl McVerifierKeyWire {
         key.validate()?;
         Ok(key)
     }
-
     /// Encode the ordinary fixed-little-endian verifier-key representation.
     pub(super) fn encode(&self) -> Result<Vec<u8>, McCodecError> {
         self.validate()?;
@@ -174,7 +160,6 @@ impl McVerifierKeyWire {
         }
         Ok(output)
     }
-
     /// Compute the exact mixed raw/bincode SHA-256 verifier-key digest.
     pub(super) fn digest(&self) -> Result<[u8; 32], McCodecError> {
         self.validate()?;
@@ -190,7 +175,6 @@ impl McVerifierKeyWire {
         digest_usize(&mut digest, self.num_steps)?;
         Ok(digest.finalize())
     }
-
     /// Derive all exact proof sequence lengths from the verifier key.
     pub(super) fn proof_dimensions(&self) -> Result<VegaMdlProofDimensionsV1, McCodecError> {
         self.validate()?;
@@ -266,7 +250,6 @@ impl McVerifierKeyWire {
             relaxed_opening_scalars: width,
         })
     }
-
     fn validate(&self) -> Result<(), McCodecError> {
         validate_hyrax_key(&self.application_key)?;
         validate_hyrax_key(&self.evaluation_key)?;
@@ -310,7 +293,6 @@ impl McVerifierKeyWire {
         Ok(())
     }
 }
-
 fn read_hyrax_key(reader: &mut Reader<'_>) -> Result<HyraxKeyWire, McCodecError> {
     let columns = reader.encoded_len()?;
     if columns == 0 || columns > MAX_KEY_COLUMNS {
@@ -323,7 +305,6 @@ fn read_hyrax_key(reader: &mut Reader<'_>) -> Result<HyraxKeyWire, McCodecError>
         hiding_generator: reader.point()?,
     })
 }
-
 fn read_points(reader: &mut Reader<'_>, expected: usize) -> Result<Vec<Point>, McCodecError> {
     if reader.encoded_len()? != expected
         || expected
@@ -338,7 +319,6 @@ fn read_points(reader: &mut Reader<'_>, expected: usize) -> Result<Vec<Point>, M
     }
     Ok(points)
 }
-
 fn read_sparse_matrix(reader: &mut Reader<'_>) -> Result<SparseMatrixWire, McCodecError> {
     let data_len = bounded_count(reader, 32, MAX_MATRIX_ENTRIES)?;
     let mut data = Vec::with_capacity(data_len);
@@ -371,7 +351,6 @@ fn read_sparse_matrix(reader: &mut Reader<'_>) -> Result<SparseMatrixWire, McCod
     validate_sparse_matrix(&matrix)?;
     Ok(matrix)
 }
-
 fn bounded_count(
     reader: &mut Reader<'_>,
     element_bytes: usize,
@@ -387,7 +366,6 @@ fn bounded_count(
     }
     Ok(count)
 }
-
 fn read_split_shape(reader: &mut Reader<'_>) -> Result<SplitShapeWire, McCodecError> {
     let shape = SplitShapeWire {
         constraints: reader.encoded_len()?,
@@ -407,7 +385,6 @@ fn read_split_shape(reader: &mut Reader<'_>) -> Result<SplitShapeWire, McCodecEr
     validate_split_shape(&shape)?;
     Ok(shape)
 }
-
 fn read_multi_round_shape(reader: &mut Reader<'_>) -> Result<MultiRoundShapeWire, McCodecError> {
     let constraints = reader.encoded_len()?;
     let constraints_unpadded = reader.encoded_len()?;
@@ -431,7 +408,6 @@ fn read_multi_round_shape(reader: &mut Reader<'_>) -> Result<MultiRoundShapeWire
     validate_multi_round_shape(&shape)?;
     Ok(shape)
 }
-
 fn read_regular_shape(reader: &mut Reader<'_>) -> Result<RegularShapeWire, McCodecError> {
     let shape = RegularShapeWire {
         constraints: reader.encoded_len()?,
@@ -444,7 +420,6 @@ fn read_regular_shape(reader: &mut Reader<'_>) -> Result<RegularShapeWire, McCod
     validate_regular_shape(&shape)?;
     Ok(shape)
 }
-
 fn read_usize_vec(reader: &mut Reader<'_>, expected: usize) -> Result<Vec<usize>, McCodecError> {
     if expected > MAX_VERIFIER_ROUNDS || reader.encoded_len()? != expected {
         return Err(McCodecError::InvalidEncoding);
@@ -455,7 +430,6 @@ fn read_usize_vec(reader: &mut Reader<'_>, expected: usize) -> Result<Vec<usize>
     }
     Ok(values)
 }
-
 fn validate_hyrax_key(key: &HyraxKeyWire) -> Result<(), McCodecError> {
     if key.columns == 0
         || key.columns > MAX_KEY_COLUMNS
@@ -480,7 +454,6 @@ fn validate_hyrax_key(key: &HyraxKeyWire) -> Result<(), McCodecError> {
     }
     Ok(())
 }
-
 fn validate_sparse_matrix(matrix: &SparseMatrixWire) -> Result<(), McCodecError> {
     if matrix.columns == 0
         || matrix.data.len() != matrix.indices.len()
@@ -497,7 +470,6 @@ fn validate_sparse_matrix(matrix: &SparseMatrixWire) -> Result<(), McCodecError>
     }
     Ok(())
 }
-
 fn validate_split_shape(shape: &SplitShapeWire) -> Result<(), McCodecError> {
     let variables = shape.variables()?;
     let columns = variables
@@ -521,7 +493,6 @@ fn validate_split_shape(shape: &SplitShapeWire) -> Result<(), McCodecError> {
     }
     Ok(())
 }
-
 fn validate_multi_round_shape(shape: &MultiRoundShapeWire) -> Result<(), McCodecError> {
     let variable_total = shape
         .variables_per_round
@@ -561,7 +532,6 @@ fn validate_multi_round_shape(shape: &MultiRoundShapeWire) -> Result<(), McCodec
     }
     Ok(())
 }
-
 fn validate_regular_shape(shape: &RegularShapeWire) -> Result<(), McCodecError> {
     let columns = shape
         .variables
@@ -579,7 +549,6 @@ fn validate_regular_shape(shape: &RegularShapeWire) -> Result<(), McCodecError> 
     }
     Ok(())
 }
-
 fn write_hyrax_key(output: &mut Vec<u8>, key: &HyraxKeyWire) -> Result<(), McCodecError> {
     write_usize(output, key.columns)?;
     write_len(output, key.generators.len())?;
@@ -588,7 +557,6 @@ fn write_hyrax_key(output: &mut Vec<u8>, key: &HyraxKeyWire) -> Result<(), McCod
     }
     write_point(output, key.hiding_generator)
 }
-
 fn write_sparse_matrix(
     output: &mut Vec<u8>,
     matrix: &SparseMatrixWire,
@@ -607,7 +575,6 @@ fn write_sparse_matrix(
     }
     write_usize(output, matrix.columns)
 }
-
 fn write_split_shape(output: &mut Vec<u8>, shape: &SplitShapeWire) -> Result<(), McCodecError> {
     for value in split_dimensions(shape) {
         write_usize(output, value)?;
@@ -616,7 +583,6 @@ fn write_split_shape(output: &mut Vec<u8>, shape: &SplitShapeWire) -> Result<(),
     write_sparse_matrix(output, &shape.b)?;
     write_sparse_matrix(output, &shape.c)
 }
-
 fn write_multi_round_shape(
     output: &mut Vec<u8>,
     shape: &MultiRoundShapeWire,
@@ -633,7 +599,6 @@ fn write_multi_round_shape(
     write_sparse_matrix(output, &shape.b)?;
     write_sparse_matrix(output, &shape.c)
 }
-
 fn write_regular_shape(output: &mut Vec<u8>, shape: &RegularShapeWire) -> Result<(), McCodecError> {
     write_usize(output, shape.constraints)?;
     write_usize(output, shape.variables)?;
@@ -642,7 +607,6 @@ fn write_regular_shape(output: &mut Vec<u8>, shape: &RegularShapeWire) -> Result
     write_sparse_matrix(output, &shape.b)?;
     write_sparse_matrix(output, &shape.c)
 }
-
 fn write_usize(output: &mut Vec<u8>, value: usize) -> Result<(), McCodecError> {
     output.extend_from_slice(
         &u64::try_from(value)
@@ -651,7 +615,6 @@ fn write_usize(output: &mut Vec<u8>, value: usize) -> Result<(), McCodecError> {
     );
     Ok(())
 }
-
 fn write_usize_vec(output: &mut Vec<u8>, values: &[usize]) -> Result<(), McCodecError> {
     write_len(output, values.len())?;
     for value in values {
@@ -659,7 +622,6 @@ fn write_usize_vec(output: &mut Vec<u8>, values: &[usize]) -> Result<(), McCodec
     }
     Ok(())
 }
-
 fn digest_hyrax_key(digest: &mut Sha256, key: &HyraxKeyWire) -> Result<(), McCodecError> {
     digest_usize(digest, key.columns)?;
     digest_usize(digest, key.generators.len())?;
@@ -672,7 +634,6 @@ fn digest_hyrax_key(digest: &mut Sha256, key: &HyraxKeyWire) -> Result<(), McCod
         .update(&key.hiding_generator.to_non_identity_wire_bytes()?)
         .map_err(|_| McCodecError::InvalidEncoding)
 }
-
 fn digest_split_shape_raw(digest: &mut Sha256, shape: &SplitShapeWire) -> Result<(), McCodecError> {
     for value in split_dimensions(shape) {
         digest_usize(digest, value)?;
@@ -681,7 +642,6 @@ fn digest_split_shape_raw(digest: &mut Sha256, shape: &SplitShapeWire) -> Result
     digest_sparse_matrix_raw(digest, &shape.b)?;
     digest_sparse_matrix_raw(digest, &shape.c)
 }
-
 fn digest_sparse_matrix_raw(
     digest: &mut Sha256,
     matrix: &SparseMatrixWire,
@@ -703,7 +663,6 @@ fn digest_sparse_matrix_raw(
     }
     Ok(())
 }
-
 fn digest_multi_round_shape(
     digest: &mut Sha256,
     shape: &MultiRoundShapeWire,
@@ -714,7 +673,6 @@ fn digest_multi_round_shape(
         .update(&encoded)
         .map_err(|_| McCodecError::InvalidEncoding)
 }
-
 fn digest_regular_shape(digest: &mut Sha256, shape: &RegularShapeWire) -> Result<(), McCodecError> {
     let mut encoded = Vec::new();
     write_regular_shape(&mut encoded, shape)?;
@@ -722,7 +680,6 @@ fn digest_regular_shape(digest: &mut Sha256, shape: &RegularShapeWire) -> Result
         .update(&encoded)
         .map_err(|_| McCodecError::InvalidEncoding)
 }
-
 fn digest_usize(digest: &mut Sha256, value: usize) -> Result<(), McCodecError> {
     digest
         .update(
@@ -732,7 +689,6 @@ fn digest_usize(digest: &mut Sha256, value: usize) -> Result<(), McCodecError> {
         )
         .map_err(|_| McCodecError::InvalidEncoding)
 }
-
 fn split_dimensions(shape: &SplitShapeWire) -> [usize; 10] {
     [
         shape.constraints,
@@ -747,19 +703,16 @@ fn split_dimensions(shape: &SplitShapeWire) -> [usize; 10] {
         shape.challenges,
     ]
 }
-
 fn log2_exact(value: usize) -> Result<usize, McCodecError> {
     if value == 0 || !value.is_power_of_two() {
         return Err(McCodecError::InvalidEncoding);
     }
     usize::try_from(value.ilog2()).map_err(|_| McCodecError::InvalidEncoding)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::microsoft_mc::{sha256::sha256, wire::McProofWire};
-
     const PYTHON_VK: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../vendor/vega-prover/reference/fixtures/cubic/python_vk.bin"
@@ -768,7 +721,6 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/../../vendor/vega-prover/reference/fixtures/cubic/python_standalone_proof.bin"
     ));
-
     #[test]
     fn python_verifier_key_sections_decode_and_validate_independently() {
         let mut reader = Reader::new(PYTHON_VK);
@@ -783,7 +735,6 @@ mod tests {
         let verifier_evaluation_key = read_hyrax_key(&mut reader).expect("verifier evaluation key");
         let num_steps = reader.encoded_len().expect("step count");
         reader.finish().expect("no trailing verifier-key bytes");
-
         validate_hyrax_key(&application_key).expect("valid application key");
         validate_hyrax_key(&evaluation_key).expect("valid application evaluation key");
         validate_split_shape(&step_shape).expect("valid step shape");
@@ -796,7 +747,6 @@ mod tests {
         assert_eq!(verifier_commitment_key, verifier_evaluation_key);
         assert_eq!(num_steps, 2);
     }
-
     #[test]
     fn python_verifier_key_and_proof_roundtrip_exactly() {
         assert_eq!(
@@ -817,7 +767,6 @@ mod tests {
             PYTHON_PROOF
         );
     }
-
     #[test]
     fn verifier_key_decoder_rejects_trailing_truncated_and_length_bomb_inputs() {
         let mut trailing = PYTHON_VK.to_vec();

@@ -1,5 +1,4 @@
 //! Norito payloads and helpers for ZK verify syscalls using Halo2 (transparent IPA).
-
 #[cfg(feature = "goldilocks_backend")]
 use iroha_zkp_halo2::backend::goldilocks;
 use iroha_zkp_halo2::{
@@ -7,7 +6,6 @@ use iroha_zkp_halo2::{
     backend::{bn254, pallas},
     norito_helpers::{self as nh, DecodedEnvelope},
 };
-
 /// Verify a Halo2 IPA polynomial opening encoded as a Norito envelope (outer TLV payload).
 pub fn verify_open_envelope(raw: &[u8]) -> Result<bool, iroha_zkp_halo2::Error> {
     let env: OpenVerifyEnvelope = ivm_abi::codec::decode_canonical_norito(raw)
@@ -81,7 +79,6 @@ pub fn verify_open_envelope(raw: &[u8]) -> Result<bool, iroha_zkp_halo2::Error> 
         }
     }
 }
-
 /// Build an `OpenVerifyEnvelope` from wire-compatible structs with a fixed transcript label.
 pub fn build_open_verify_envelope(
     params: iroha_zkp_halo2::IpaParams,
@@ -99,14 +96,12 @@ pub fn build_open_verify_envelope(
         domain_tag: None,
     }
 }
-
 /// Verify multiple envelopes and return per-envelope results.
 pub fn batch_verify_open_envelopes(
     envs: &[iroha_zkp_halo2::OpenVerifyEnvelope],
 ) -> Vec<Result<bool, iroha_zkp_halo2::Error>> {
     iroha_zkp_halo2::batch::verify_open_batch(envs)
 }
-
 // Preserve the established runtime module paths while making the shared ABI
 // crate the sole owner of these nominal wire types.
 pub use ivm_abi::host_payload::{

@@ -1,5 +1,4 @@
 // Bounded merge helpers for application routed reads.
-
 #[cfg(feature = "app_api")]
 fn parse_asset_definition_item_literal(literal: &str) -> Option<AssetDefinitionId> {
     literal
@@ -7,7 +6,6 @@ fn parse_asset_definition_item_literal(literal: &str) -> Option<AssetDefinitionI
         .ok()
         .or_else(|| AssetDefinitionId::parse_address_literal(literal).ok())
 }
-
 #[cfg(feature = "app_api")]
 fn asset_item_home_dataspace_id(app: &AppState, item: &Value) -> Option<DataSpaceId> {
     let object = item.as_object()?;
@@ -20,7 +18,6 @@ fn asset_item_home_dataspace_id(app: &AppState, item: &Value) -> Option<DataSpac
     {
         return dataspace_id_for_alias_segment(app, alias.dataspace_segment());
     }
-
     for key in ["asset_definition_id", "asset"] {
         if let Some(definition_id) = object
             .get(key)
@@ -30,7 +27,6 @@ fn asset_item_home_dataspace_id(app: &AppState, item: &Value) -> Option<DataSpac
             return asset_definition_home_dataspace_id(app, &definition_id);
         }
     }
-
     for key in ["asset_id", "asset"] {
         if let Some(asset_id) = object
             .get(key)
@@ -40,20 +36,16 @@ fn asset_item_home_dataspace_id(app: &AppState, item: &Value) -> Option<DataSpac
             return asset_definition_home_dataspace_id(app, asset_id.definition());
         }
     }
-
     None
 }
-
 #[cfg(feature = "app_api")]
 fn asset_item_has_global_scope(item: &Value) -> bool {
     let Some(object) = item.as_object() else {
         return false;
     };
-
     if let Some(scope) = object.get("scope").and_then(Value::as_str) {
         return scope == "global";
     }
-
     for key in ["asset_id", "asset"] {
         if let Some(asset_id) = object
             .get(key)
@@ -63,10 +55,8 @@ fn asset_item_has_global_scope(item: &Value) -> bool {
             return matches!(asset_id.scope(), AssetBalanceScope::Global);
         }
     }
-
     false
 }
-
 #[cfg(feature = "app_api")]
 fn route_is_public_or_universal(app: &AppState, route: RoutingDecision) -> bool {
     if route.dataspace_id == DataSpaceId::UNIVERSAL {
@@ -83,7 +73,6 @@ fn route_is_public_or_universal(app: &AppState, route: RoutingDecision) -> bool 
                 && lane.visibility == iroha_data_model::nexus::LaneVisibility::Public
         })
 }
-
 #[cfg(feature = "app_api")]
 fn should_keep_authoritative_global_item(
     app: &AppState,
@@ -93,14 +82,11 @@ fn should_keep_authoritative_global_item(
     if !asset_item_has_global_scope(item) {
         return true;
     }
-
     if let Some(home_dataspace_id) = asset_item_home_dataspace_id(app, item) {
         return home_dataspace_id == route.dataspace_id;
     }
-
     route_is_public_or_universal(app, route)
 }
-
 #[cfg(feature = "app_api")]
 fn filter_non_authoritative_global_list_rows(
     app: &AppState,
@@ -116,7 +102,6 @@ fn filter_non_authoritative_global_list_rows(
     ) {
         return Ok(payloads);
     }
-
     let mut payloads = payloads;
     for (route, payload) in &mut payloads {
         let Some(object) = payload.as_object_mut() else {
@@ -153,10 +138,8 @@ fn filter_non_authoritative_global_list_rows(
         };
         *total_value = Value::from(total);
     }
-
     Ok(payloads)
 }
-
 #[cfg(feature = "app_api")]
 fn filter_non_authoritative_global_portfolio_rows(
     app: &AppState,
@@ -166,7 +149,6 @@ fn filter_non_authoritative_global_portfolio_rows(
     if !matches!(endpoint, ToriiReadEndpointV1::AccountsPortfolio) {
         return Ok(payloads);
     }
-
     let mut payloads = payloads;
     for (route, payload) in &mut payloads {
         let Some(object) = payload.as_object_mut() else {
@@ -179,7 +161,6 @@ fn filter_non_authoritative_global_portfolio_rows(
                 "expected `dataspaces` array while filtering portfolio response",
             ));
         };
-
         let mut total_accounts = 0_u64;
         let mut total_positions = 0_u64;
         for dataspace in dataspaces {
@@ -196,7 +177,6 @@ fn filter_non_authoritative_global_portfolio_rows(
                     "portfolio dataspace rows must include `accounts`",
                 ));
             };
-
             for account in accounts {
                 let Some(account_object) = account.as_object_mut() else {
                     return Err(torii_internal_json_error(
@@ -211,7 +191,6 @@ fn filter_non_authoritative_global_portfolio_rows(
                         "portfolio account rows must include `assets`",
                     ));
                 };
-
                 assets.retain(|asset| {
                     let keep = should_keep_authoritative_global_item(app, *route, asset);
                     if !keep {
@@ -238,7 +217,6 @@ fn filter_non_authoritative_global_portfolio_rows(
                     total_positions.saturating_add(u64::try_from(assets.len()).unwrap_or(u64::MAX));
             }
         }
-
         let Some(totals) = object.get_mut("totals").and_then(Value::as_object_mut) else {
             return Err(torii_internal_json_error(
                 "expected `totals` object while filtering portfolio response",
@@ -257,10 +235,8 @@ fn filter_non_authoritative_global_portfolio_rows(
         };
         *positions_total = Value::from(total_positions);
     }
-
     Ok(payloads)
 }
-
 #[cfg(feature = "app_api")]
 fn list_items_from_payload<'a>(
     payload: &'a Value,
@@ -278,7 +254,6 @@ fn list_items_from_payload<'a>(
     }
     Err(torii_internal_json_error(context))
 }
-
 #[cfg(feature = "app_api")]
 fn list_items_from_owned_payload(
     payload: Value,
@@ -293,7 +268,6 @@ fn list_items_from_owned_payload(
         _ => Err(torii_internal_json_error(context)),
     }
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ToriiExactListPage {
@@ -301,7 +275,6 @@ struct ToriiExactListPage {
     total: u64,
     has_more: bool,
 }
-
 #[cfg(feature = "app_api")]
 fn validate_torii_exact_list_page(
     payload: &Value,
@@ -332,7 +305,6 @@ fn validate_torii_exact_list_page(
             "routed account-list page must report `count_mode` as `exact`",
         ));
     }
-
     let item_count = u64::try_from(items.len()).unwrap_or(u64::MAX);
     if item_count > page_limit {
         return Err(torii_internal_json_error(format!(
@@ -358,14 +330,12 @@ fn validate_torii_exact_list_page(
             "routed account-list page has inconsistent pagination metadata",
         ));
     }
-
     Ok(ToriiExactListPage {
         item_count,
         total,
         has_more,
     })
 }
-
 #[cfg(feature = "app_api")]
 fn merged_list_response(
     payloads: Vec<Value>,
@@ -401,7 +371,6 @@ fn merged_list_response(
             merged_items.push(item);
         }
     }
-
     drop(seen);
     budget.admit_merge_btree::<String, Value>(1, 2)?;
     budget.admit_merge_allocation("total".len() + "items".len())?;
@@ -413,7 +382,6 @@ fn merged_list_response(
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 fn merged_paginated_list_response(
     payloads: Vec<Value>,
@@ -453,7 +421,6 @@ fn merged_paginated_list_response(
             merged_items.push(item);
         }
     }
-
     let total = merged_items.len();
     let start = usize::try_from(page_offset)
         .unwrap_or(usize::MAX)
@@ -465,7 +432,6 @@ fn merged_paginated_list_response(
         merged_items.drain(..start);
     }
     merged_items.truncate(end.saturating_sub(start));
-
     drop(seen);
     let root_entries = if count_mode_label == "exact" { 4 } else { 3 };
     let root_key_bytes = "items".len()
@@ -490,7 +456,6 @@ fn merged_paginated_list_response(
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug)]
 struct AccountHistoryMergeItem {
@@ -498,7 +463,6 @@ struct AccountHistoryMergeItem {
     canonical: Vec<u8>,
     value: Value,
 }
-
 #[cfg(feature = "app_api")]
 impl AccountHistoryMergeItem {
     fn id(&self) -> &str {
@@ -509,7 +473,6 @@ impl AccountHistoryMergeItem {
             .unwrap_or_default()
     }
 }
-
 #[cfg(feature = "app_api")]
 fn account_history_merge_item(
     payload: Value,
@@ -529,7 +492,6 @@ fn account_history_merge_item(
         value: payload,
     })
 }
-
 #[cfg(feature = "app_api")]
 fn account_history_count_mode_label(raw: Option<&str>) -> &'static str {
     match raw {
@@ -538,7 +500,6 @@ fn account_history_count_mode_label(raw: Option<&str>) -> &'static str {
         Some(_) => "bounded",
     }
 }
-
 #[cfg(feature = "app_api")]
 fn merged_account_history_response(
     payloads: Vec<Value>,
@@ -579,7 +540,6 @@ fn merged_account_history_response(
             );
         }
     }
-
     let mut merged_items = budget.try_merge_vec(unique.len())?;
     merged_items.extend(
         unique.into_iter().map(
@@ -590,7 +550,6 @@ fn merged_account_history_response(
             },
         ),
     );
-
     merged_items.sort_by(|left, right| {
         right
             .timestamp_ms
@@ -598,7 +557,6 @@ fn merged_account_history_response(
             .then_with(|| left.id().cmp(right.id()))
             .then_with(|| left.canonical.cmp(&right.canonical))
     });
-
     let total = merged_items.len();
     let start = usize::try_from(page_offset)
         .unwrap_or(usize::MAX)
@@ -612,7 +570,6 @@ fn merged_account_history_response(
     merged_items.truncate(end.saturating_sub(start));
     let mut items = budget.try_merge_vec(merged_items.len())?;
     items.extend(merged_items.into_iter().map(|item| item.value));
-
     let root_entries = if count_mode_label == "exact" { 5 } else { 4 };
     let root_key_bytes = "items".len()
         + "has_more".len()
@@ -640,7 +597,6 @@ fn merged_account_history_response(
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 fn merged_account_read_response(
     payloads: Vec<ToriiBoundedNoritoPayload<AccountReadResponse>>,
@@ -656,7 +612,6 @@ fn merged_account_read_response(
             .entry(payload.canonical_bytes)
             .or_insert(payload.value);
     }
-
     match unique_payloads.len() {
         0 => Err(torii_proxy_error_response(
             StatusCode::NOT_FOUND,
@@ -692,7 +647,6 @@ fn merged_account_read_response(
         )),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn merged_singleton_response(
     payloads: Vec<Value>,
@@ -710,7 +664,6 @@ fn merged_singleton_response(
         budget.retain_canonical_capacity(canonical.capacity())?;
         unique_payloads.insert(canonical, payload);
     }
-
     match unique_payloads.len() {
         0 => Err(torii_proxy_error_response(
             StatusCode::NOT_FOUND,
@@ -733,7 +686,6 @@ fn merged_singleton_response(
         )),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn pipeline_status_payload_rank(payload: &Value) -> Result<u8, Response> {
     let kind = payload
@@ -757,7 +709,6 @@ fn pipeline_status_payload_rank(payload: &Value) -> Result<u8, Response> {
         )),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn pipeline_status_payload_tie_break(payload: &Value) -> Result<(u8, u64), Response> {
     let object = payload.as_object().ok_or_else(|| {
@@ -783,7 +734,6 @@ fn pipeline_status_payload_tie_break(payload: &Value) -> Result<(u8, u64), Respo
         .unwrap_or_default();
     Ok((source_rank, block_height))
 }
-
 #[cfg(feature = "app_api")]
 fn merged_pipeline_status_response(
     payloads: Vec<Value>,
@@ -793,7 +743,6 @@ fn merged_pipeline_status_response(
     let mut budget = budget;
     budget.begin_json_merge();
     let mut best: Option<(Value, u8, (u8, u64))> = None;
-
     for payload in payloads {
         let rank = pipeline_status_payload_rank(&payload)?;
         let tie_break = pipeline_status_payload_tie_break(&payload)?;
@@ -828,7 +777,6 @@ fn merged_pipeline_status_response(
             }
         }
     }
-
     let Some((payload, _, _)) = best else {
         return Err(torii_proxy_error_response(
             StatusCode::NOT_FOUND,
@@ -836,12 +784,10 @@ fn merged_pipeline_status_response(
             "no dataspace returned a matching result",
         ));
     };
-
     let mut response = budget.json_response(&payload)?;
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 fn authorize_alias_resolve_index_payloads(
     app: &SharedAppState,
@@ -888,7 +834,6 @@ fn authorize_alias_resolve_index_payloads(
     }
     Ok(payloads)
 }
-
 #[cfg(feature = "app_api")]
 fn merged_alias_resolve_index_response(
     payloads: Vec<Value>,
@@ -916,7 +861,6 @@ fn merged_alias_resolve_index_response(
                     "routed alias-index response must include string `account_id`",
                 )
             })?;
-
         if let Some(existing) = selected.as_ref() {
             let existing = existing
                 .as_object()
@@ -935,7 +879,6 @@ fn merged_alias_resolve_index_response(
             selected = Some(payload);
         }
     }
-
     let Some(mut payload) = selected else {
         return Err(torii_proxy_error_response(
             StatusCode::NOT_FOUND,
@@ -959,7 +902,6 @@ fn merged_alias_resolve_index_response(
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 fn merged_alias_lookup_by_account_response(
     payloads: Vec<Value>,
@@ -987,7 +929,6 @@ fn merged_alias_lookup_by_account_response(
     let mut merged_items = budget.try_merge_vec(item_count)?;
     let mut account_id: Option<Value> = None;
     let mut seen = BTreeSet::<Vec<u8>>::new();
-
     for payload in payloads {
         let Value::Object(mut object) = payload else {
             return Err(torii_internal_json_error(
@@ -1013,7 +954,6 @@ fn merged_alias_lookup_by_account_response(
             None => account_id = Some(candidate_account_id),
             Some(_) => {}
         }
-
         let items = match object.remove("items") {
             Some(Value::Array(items)) => items,
             _ => {
@@ -1070,13 +1010,11 @@ fn merged_alias_lookup_by_account_response(
             merged_items.push(item);
         }
     }
-
     if merged_items.is_empty() && denied_routes > 0 {
         return Err(torii_alias_permission_denied_response(
             "one or more dataspace routes denied the alias-by-account lookup and no allowed route returned aliases",
         ));
     }
-
     if merged_items.len() > EXACT_ALIAS_LOOKUP_MAX_ITEMS {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -1110,7 +1048,6 @@ fn merged_alias_lookup_by_account_response(
                     .cmp(&left.get("is_primary").and_then(Value::as_bool))
             })
     });
-
     drop(seen);
     budget.admit_merge_btree::<String, Value>(1, 4)?;
     budget.admit_merge_allocation(
@@ -1131,7 +1068,6 @@ fn merged_alias_lookup_by_account_response(
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 fn merged_space_directory_bindings_response(
     payloads: Vec<Value>,
@@ -1175,7 +1111,6 @@ fn merged_space_directory_bindings_response(
     budget.admit_merge_btree::<String, ()>(row_count, account_count)?;
     let mut uaid: Option<String> = None;
     let mut dataspaces = BTreeMap::<u64, (Option<String>, BTreeSet<String>)>::new();
-
     for payload in payloads {
         let Value::Object(mut object) = payload else {
             return Err(torii_internal_json_error(
@@ -1250,7 +1185,6 @@ fn merged_space_directory_bindings_response(
             }
         }
     }
-
     let dataspace_count = dataspaces.len();
     let output_map_count = dataspace_count
         .checked_add(1)
@@ -1278,7 +1212,6 @@ fn merged_space_directory_bindings_response(
         row.insert("accounts".to_owned(), Value::Array(account_values));
         rows.push(Value::Object(row));
     }
-
     let mut root = norito::json::Map::new();
     root.insert(
         "uaid".to_owned(),
@@ -1290,7 +1223,6 @@ fn merged_space_directory_bindings_response(
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 fn merged_space_directory_manifests_response(
     payloads: Vec<Value>,
@@ -1338,7 +1270,6 @@ fn merged_space_directory_manifests_response(
     let mut explicit_total = 0u64;
     let mut saw_explicit_total = false;
     let mut manifests = BTreeMap::<(u64, String), (Vec<u8>, Value)>::new();
-
     for payload in payloads {
         let Value::Object(mut object) = payload else {
             return Err(torii_internal_json_error(
@@ -1400,7 +1331,6 @@ fn merged_space_directory_manifests_response(
             manifests.insert(key, (canonical, row));
         }
     }
-
     let total = if saw_explicit_total {
         explicit_total
     } else {
@@ -1420,7 +1350,6 @@ fn merged_space_directory_manifests_response(
             merged.truncate(limit);
         }
     }
-
     budget.admit_merge_btree::<String, Value>(1, 3)?;
     budget.admit_merge_allocation("uaid".len() + "total".len() + "manifests".len())?;
     let mut root = norito::json::Map::new();
@@ -1435,7 +1364,6 @@ fn merged_space_directory_manifests_response(
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 fn merged_portfolio_response(
     payloads: Vec<Value>,
@@ -1460,7 +1388,6 @@ fn merged_portfolio_response(
     budget.admit_merge_btree::<u64, Value>(1, row_count)?;
     let mut uaid: Option<String> = None;
     let mut dataspaces = BTreeMap::<u64, Value>::new();
-
     for payload in payloads {
         let Value::Object(mut object) = payload else {
             return Err(torii_internal_json_error(
@@ -1490,7 +1417,6 @@ fn merged_portfolio_response(
             dataspaces.entry(dataspace_id).or_insert(row);
         }
     }
-
     let mut total_accounts = 0u64;
     let mut total_positions = 0u64;
     for row in dataspaces.values() {
@@ -1518,7 +1444,6 @@ fn merged_portfolio_response(
             .unwrap_or(0);
         total_positions = total_positions.saturating_add(position_count);
     }
-
     budget.admit_merge_btree::<String, Value>(2, 5)?;
     budget.admit_merge_allocation(
         "accounts".len() + "positions".len() + "uaid".len() + "totals".len() + "dataspaces".len(),
@@ -1526,19 +1451,16 @@ fn merged_portfolio_response(
     let mut totals = norito::json::Map::new();
     totals.insert("accounts".into(), Value::from(total_accounts));
     totals.insert("positions".into(), Value::from(total_positions));
-
     let mut merged_dataspaces = budget.try_merge_vec(dataspaces.len())?;
     merged_dataspaces.extend(dataspaces.into_values());
     let mut root = norito::json::Map::new();
     root.insert("uaid".into(), uaid.map(Value::from).unwrap_or(Value::Null));
     root.insert("totals".into(), Value::Object(totals));
     root.insert("dataspaces".into(), Value::Array(merged_dataspaces));
-
     let mut response = budget.json_response(&Value::Object(root))?;
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 fn merged_dataspace_summary_response(
     payloads: Vec<Value>,
@@ -1602,7 +1524,6 @@ fn merged_dataspace_summary_response(
     let mut consensus_chunks_total = 0u64;
     let mut consensus_rbc_bytes_total = 0u64;
     let mut consensus_teu_total = 0u64;
-
     for payload in payloads {
         let Value::Object(mut object) = payload else {
             return Err(torii_internal_json_error(
@@ -1642,7 +1563,6 @@ fn merged_dataspace_summary_response(
                 dataspaces.insert(dataspace_id, row);
                 continue;
             }
-
             if let Some(accounts) = row.get("accounts").and_then(Value::as_array) {
                 for account in accounts {
                     if let Some(account) = account.as_str() {
@@ -1650,7 +1570,6 @@ fn merged_dataspace_summary_response(
                     }
                 }
             }
-
             let portfolio = row.get("portfolio").and_then(Value::as_object);
             portfolio_accounts_total = portfolio_accounts_total.saturating_add(
                 portfolio
@@ -1664,7 +1583,6 @@ fn merged_dataspace_summary_response(
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
             );
-
             let manifest = row.get("manifest").and_then(Value::as_object);
             if manifest
                 .and_then(|manifest| manifest.get("present"))
@@ -1680,7 +1598,6 @@ fn merged_dataspace_summary_response(
             {
                 manifests_active = manifests_active.saturating_add(1);
             }
-
             let consensus = row.get("consensus").and_then(Value::as_object);
             consensus_entries_total = consensus_entries_total.saturating_add(
                 consensus
@@ -1715,7 +1632,6 @@ fn merged_dataspace_summary_response(
             dataspaces.insert(dataspace_id, row);
         }
     }
-
     let accounts_bound = unique_accounts.len();
     drop(unique_accounts);
     let fixed_key_bytes = [
@@ -1741,7 +1657,6 @@ fn merged_dataspace_summary_response(
     .ok_or_else(torii_routed_read_accounting_response)?;
     budget.admit_merge_btree::<String, Value>(2, 16)?;
     budget.admit_merge_allocation(fixed_key_bytes)?;
-
     let mut totals = norito::json::Map::new();
     totals.insert("dataspaces".into(), Value::from(dataspaces.len() as u64));
     totals.insert("accounts_bound".into(), Value::from(accounts_bound as u64));
@@ -1772,10 +1687,8 @@ fn merged_dataspace_summary_response(
         "consensus_teu_total".into(),
         Value::from(consensus_teu_total),
     );
-
     let mut merged_dataspaces = budget.try_merge_vec(dataspaces.len())?;
     merged_dataspaces.extend(dataspaces.into_values());
-
     let mut root = norito::json::Map::new();
     root.insert(
         "account".into(),
@@ -1788,7 +1701,6 @@ fn merged_dataspace_summary_response(
     root.insert("uaid".into(), uaid.unwrap_or(Value::Null));
     root.insert("totals".into(), Value::Object(totals));
     root.insert("dataspaces".into(), Value::Array(merged_dataspaces));
-
     let mut response = budget.json_response(&Value::Object(root))?;
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)

@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests of the Iroha Client CLI
-
 use std::{
     collections::BTreeMap,
     net::{TcpListener, TcpStream},
@@ -13,7 +12,6 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use integration_tests::{
     binary_resolver::{
         binary_supports_training_job_commands, cli_binary_name,
@@ -50,31 +48,25 @@ use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR};
 use norito::json::{self, Value};
 use reqwest::Url;
-
 const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
 const SORACLOUD_TEST_SUBPROCESS_TIMEOUT_HEADROOM: Duration = Duration::from_secs(15);
 const SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "main";
 const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
-
 fn program() -> PathBuf {
     iroha_program().unwrap()
 }
-
 fn program_reuse_existing_or_build() -> PathBuf {
     iroha_program_reuse_existing_or_resolve().unwrap()
 }
-
 fn soracloud_fixture(path: &str) -> PathBuf {
     workspace_root().join(path)
 }
-
 const SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL: &str = "5PeSrQmLNwwKtruJvDZrbrm9RuMw";
 fn soracloud_hf_lease_asset_definition() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL)
         .expect("test lease asset definition literal should parse")
 }
-
 fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> eyre::Result<Option<u128>> {
     let asset = match client.query_single(FindAssetById::new(asset_id.clone())) {
         Ok(asset) => asset,
@@ -101,7 +93,6 @@ fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> eyre::Resu
     }
     Ok(asset.value().as_numeric().try_mantissa_u128())
 }
-
 fn assert_soracloud_hf_lease_asset_ready(
     client: &Client,
     accounts: &[AccountId],
@@ -130,10 +121,8 @@ fn assert_soracloud_hf_lease_asset_ready(
     }
     Ok(())
 }
-
 const SORACLOUD_LIVE_HF_TEST_REPO_ID: &str = "hf-internal-testing/tiny-random-gpt2";
 const SORACLOUD_LIVE_HF_TEST_MODEL_NAME: &str = "tiny-random-gpt2";
-
 fn soracloud_live_hf_allowed_signing() -> toml::Value {
     toml::Value::Array(vec![
         toml::Value::String("ed25519".to_owned()),
@@ -141,7 +130,6 @@ fn soracloud_live_hf_allowed_signing() -> toml::Value {
         toml::Value::String("bls_normal".to_owned()),
     ])
 }
-
 #[test]
 fn find_existing_cli_binary_path_from_roots_returns_first_match() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -151,23 +139,19 @@ fn find_existing_cli_binary_path_from_roots_returns_first_match() {
     let expected = root_b.join("debug").join(binary_name);
     std::fs::create_dir_all(expected.parent().expect("parent dir")).expect("create dirs");
     std::fs::write(&expected, b"binary").expect("create fake binary");
-
     let profiles = vec!["debug".to_owned(), "release".to_owned()];
     let found = find_existing_cli_binary_path_from_roots(&[root_a, root_b], &profiles);
     assert_eq!(found, Some(expected));
 }
-
 #[test]
 fn find_existing_cli_binary_path_from_roots_returns_none_when_missing() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("target");
     std::fs::create_dir_all(&root).expect("create dirs");
-
     let profiles = vec!["debug".to_owned(), "release".to_owned()];
     let found = find_existing_cli_binary_path_from_roots(&[root], &profiles);
     assert!(found.is_none());
 }
-
 #[test]
 fn find_existing_binary_path_from_roots_returns_daemon_match() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -175,7 +159,6 @@ fn find_existing_binary_path_from_roots_returns_daemon_match() {
     let expected = root.join("debug").join(irohad_binary_name());
     std::fs::create_dir_all(expected.parent().expect("parent dir")).expect("create dirs");
     std::fs::write(&expected, b"binary").expect("create fake binary");
-
     let profiles = vec!["debug".to_owned(), "release".to_owned()];
     let found = find_existing_binary_path_from_roots(
         std::slice::from_ref(&root),
@@ -184,7 +167,6 @@ fn find_existing_binary_path_from_roots_returns_daemon_match() {
     );
     assert_eq!(found, Some(expected));
 }
-
 #[test]
 fn find_existing_binary_path_from_roots_prefers_newer_match() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -197,13 +179,11 @@ fn find_existing_binary_path_from_roots_prefers_newer_match() {
     std::fs::write(&older, b"older").expect("write older binary");
     std::thread::sleep(Duration::from_secs(1));
     std::fs::write(&newer, b"newer").expect("write newer binary");
-
     let profiles = vec!["debug".to_owned(), "release".to_owned()];
     let found =
         find_existing_binary_path_from_roots(&[root_a, root_b], &profiles, irohad_binary_name());
     assert_eq!(found, Some(newer));
 }
-
 #[test]
 fn newest_existing_binary_path_prefers_fresher_daemon_over_cli_sibling() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -217,11 +197,9 @@ fn newest_existing_binary_path_prefers_fresher_daemon_over_cli_sibling() {
     std::fs::write(&stale, b"stale").expect("write stale daemon");
     std::thread::sleep(Duration::from_secs(1));
     std::fs::write(&fresh, b"fresh").expect("write fresh daemon");
-
     let selected = newest_existing_binary_path([Some(stale), Some(fresh.clone())]);
     assert_eq!(selected, Some(fresh));
 }
-
 #[test]
 fn matching_irohad_binary_path_from_cli_path_uses_sibling_binary() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -231,22 +209,18 @@ fn matching_irohad_binary_path_from_cli_path_uses_sibling_binary() {
     let daemon = profile_dir.join(irohad_binary_name());
     std::fs::write(&cli, b"cli").expect("write cli");
     std::fs::write(&daemon, b"daemon").expect("write daemon");
-
     let found = matching_irohad_binary_path_from_cli_path(&cli);
     assert_eq!(found, Some(daemon));
 }
-
 #[test]
 fn binary_supports_training_job_commands_rejects_missing_binary() {
     let missing = PathBuf::from("/definitely/missing/iroha");
     assert!(!binary_supports_training_job_commands(&missing));
 }
-
 #[cfg(unix)]
 #[test]
 fn binary_supports_training_job_commands_rejects_help_without_subcommand() {
     use std::os::unix::fs::PermissionsExt;
-
     let temp = tempfile::tempdir().expect("tempdir");
     let script = temp.path().join("fake_iroha.sh");
     std::fs::write(&script, "#!/bin/sh\necho 'soracloud help output'\n").expect("write script");
@@ -255,12 +229,10 @@ fn binary_supports_training_job_commands_rejects_help_without_subcommand() {
     std::fs::set_permissions(&script, perms).expect("set permissions");
     assert!(!binary_supports_training_job_commands(&script));
 }
-
 #[cfg(unix)]
 #[test]
 fn binary_supports_training_job_commands_accepts_help_with_subcommand() {
     use std::os::unix::fs::PermissionsExt;
-
     let temp = tempfile::tempdir().expect("tempdir");
     let script = temp.path().join("fake_iroha.sh");
     std::fs::write(
@@ -273,7 +245,6 @@ fn binary_supports_training_job_commands_accepts_help_with_subcommand() {
     std::fs::set_permissions(&script, perms).expect("set permissions");
     assert!(binary_supports_training_job_commands(&script));
 }
-
 #[test]
 fn should_reuse_existing_cli_binary_for_tests_defaults_to_false() {
     assert!(!should_reuse_existing_cli_binary_for_tests_from_value(None));
@@ -284,7 +255,6 @@ fn should_reuse_existing_cli_binary_for_tests_defaults_to_false() {
         Some("false")
     ));
 }
-
 #[test]
 fn should_reuse_existing_cli_binary_for_tests_accepts_truthy_values() {
     assert!(should_reuse_existing_cli_binary_for_tests_from_value(Some(
@@ -297,7 +267,6 @@ fn should_reuse_existing_cli_binary_for_tests_accepts_truthy_values() {
         "1"
     )));
 }
-
 #[test]
 fn iroha_cli_test_build_profile_override_defaults_to_debug_when_unset_or_blank() {
     assert_eq!(iroha_cli_test_build_profile_override(None), Some("debug"));
@@ -310,13 +279,11 @@ fn iroha_cli_test_build_profile_override_defaults_to_debug_when_unset_or_blank()
         Some("debug")
     );
 }
-
 #[test]
 fn iroha_cli_test_build_profile_override_preserves_existing_profile() {
     assert_eq!(iroha_cli_test_build_profile_override(Some("release")), None);
     assert_eq!(iroha_cli_test_build_profile_override(Some("debug")), None);
 }
-
 fn local_program_config() -> ProgramConfig {
     let key = KeyPair::try_random().expect("generate checked local CLI config keypair");
     let domain_id: DomainId =
@@ -329,11 +296,9 @@ fn local_program_config() -> ProgramConfig {
         ttl: DEFAULT_TRANSACTION_TIME_TO_LIVE,
     }
 }
-
 #[test]
 fn local_program_config_uses_checked_key_generation() {
     let config = local_program_config();
-
     assert_eq!(config.torii_url.as_str(), "http://127.0.0.1:8080/");
     assert_eq!(
         config.account_domain,
@@ -342,7 +307,6 @@ fn local_program_config_uses_checked_key_generation() {
     assert_eq!(config.status_timeout, DEFAULT_TRANSACTION_STATUS_TIMEOUT);
     assert_eq!(config.ttl, DEFAULT_TRANSACTION_TIME_TO_LIVE);
 }
-
 fn program_config_for_account(
     client: &Client,
     account_domain: &str,
@@ -361,7 +325,6 @@ fn program_config_for_account(
         ttl,
     }
 }
-
 struct ProgramConfig {
     torii_url: Url,
     account_domain: DomainId,
@@ -369,13 +332,11 @@ struct ProgramConfig {
     status_timeout: Duration,
     ttl: Duration,
 }
-
 impl From<&Client> for ProgramConfig {
     fn from(value: &Client) -> Self {
         program_config_for_account(value, "wonderland", &value.key_pair)
     }
 }
-
 impl ProgramConfig {
     fn envs(&self) -> impl IntoIterator<Item = (&str, String)> {
         [
@@ -397,7 +358,6 @@ impl ProgramConfig {
             ),
         ]
     }
-
     fn toml(&self) -> toml::Table {
         toml::Table::new()
             .write("chain", iroha_test_network::chain_id().to_string())
@@ -423,7 +383,6 @@ impl ProgramConfig {
             )
     }
 }
-
 async fn run_soracloud_command(
     cwd: &Path,
     config: &ProgramConfig,
@@ -439,7 +398,6 @@ async fn run_soracloud_command(
         .envs(config.envs());
     Ok(tokio_output_with_timeout(&mut command, timeout).await?)
 }
-
 async fn wait_for_soracloud_json_command(
     cwd: &Path,
     config: &ProgramConfig,
@@ -470,7 +428,6 @@ async fn wait_for_soracloud_json_command(
                 String::from_utf8_lossy(&output.stderr)
             )
         };
-
         if Instant::now() >= deadline {
             return Err(eyre::eyre!(
                 "timed out waiting for soracloud command convergence after {:?}; last detail: {}",
@@ -481,7 +438,6 @@ async fn wait_for_soracloud_json_command(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
-
 async fn wait_for_soracloud_status_payload(
     cwd: &Path,
     config: &ProgramConfig,
@@ -498,7 +454,6 @@ async fn wait_for_soracloud_status_payload(
     )
     .await
 }
-
 async fn wait_for_soracloud_hf_status_payload(
     cwd: &Path,
     config: &ProgramConfig,
@@ -528,7 +483,6 @@ async fn wait_for_soracloud_hf_status_payload(
     )
     .await
 }
-
 fn soracloud_command_args(args: &[&str]) -> Vec<String> {
     let mut effective_args = namespaced_soracloud_command_args(args);
     if !args.contains(&"--timeout-secs") {
@@ -537,7 +491,6 @@ fn soracloud_command_args(args: &[&str]) -> Vec<String> {
     }
     effective_args
 }
-
 fn soracloud_subprocess_timeout(args: &[&str]) -> Duration {
     let control_plane_timeout_secs = args
         .windows(2)
@@ -554,7 +507,6 @@ fn soracloud_subprocess_timeout(args: &[&str]) -> Duration {
     Duration::from_secs(control_plane_timeout_secs)
         .saturating_add(SORACLOUD_TEST_SUBPROCESS_TIMEOUT_HEADROOM)
 }
-
 fn namespaced_soracloud_command_args(args: &[&str]) -> Vec<String> {
     let Some((command, tail)) = args.split_first() else {
         return Vec::new();
@@ -608,7 +560,6 @@ fn namespaced_soracloud_command_args(args: &[&str]) -> Vec<String> {
         None => args.iter().map(|arg| (*arg).to_owned()).collect(),
     }
 }
-
 #[test]
 fn soracloud_command_args_append_timeout_once() {
     assert_eq!(
@@ -654,20 +605,17 @@ fn soracloud_command_args_append_timeout_once() {
         Duration::from_secs(30)
     );
 }
-
 #[derive(Clone)]
 struct MockHttpResponse {
     content_type: &'static str,
     body: Vec<u8>,
 }
-
 struct MockHttpServer {
     base_url: String,
     address: String,
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
 }
-
 impl MockHttpServer {
     fn start(routes: BTreeMap<String, MockHttpResponse>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock HTTP server");
@@ -736,12 +684,10 @@ impl MockHttpServer {
             handle: Some(handle),
         }
     }
-
     fn api_base_url(&self) -> String {
         format!("{}/api", self.base_url)
     }
 }
-
 impl Drop for MockHttpServer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -751,7 +697,6 @@ impl Drop for MockHttpServer {
         }
     }
 }
-
 fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
@@ -779,7 +724,6 @@ fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
             Err(error) => panic!("read mock HTTP request failed: {error}"),
         }
     }
-
     let target = String::from_utf8_lossy(&request)
         .lines()
         .next()
@@ -791,7 +735,6 @@ fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
     }
     target.split('?').next().unwrap_or_default().to_owned()
 }
-
 fn start_mock_hf_source_server() -> MockHttpServer {
     let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
     let revision = SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION;
@@ -819,12 +762,10 @@ fn start_mock_hf_source_server() -> MockHttpServer {
         ),
     ]))
 }
-
 #[tokio::test]
 async fn mock_hf_source_server_serves_profile_routes() -> eyre::Result<()> {
     let server = start_mock_hf_source_server();
     let client = integration_tests::http::client();
-
     let info = client
         .get(format!(
             "{}/api/models/{}/revision/{}",
@@ -846,7 +787,6 @@ async fn mock_hf_source_server_serves_profile_routes() -> eyre::Result<()> {
             .and_then(Value::as_str),
         Some("model.safetensors")
     );
-
     let weights = client
         .head(format!(
             "{}/{}/resolve/{}/model.safetensors",
@@ -864,7 +804,6 @@ async fn mock_hf_source_server_serves_profile_routes() -> eyre::Result<()> {
             .and_then(|value| value.to_str().ok()),
         Some("4096")
     );
-
     let repeated_info = client
         .get(format!(
             "{}/api/models/{}/revision/{}",
@@ -878,10 +817,8 @@ async fn mock_hf_source_server_serves_profile_routes() -> eyre::Result<()> {
         repeated_info.status().is_success(),
         "mock HF server should continue serving later profile requests"
     );
-
     Ok(())
 }
-
 fn validator_program_config(
     network: &iroha_test_network::Network,
 ) -> eyre::Result<(ProgramConfig, String, AccountId)> {
@@ -899,7 +836,6 @@ fn validator_program_config(
         validator_peer.account_id(),
     ))
 }
-
 async fn advertise_soracloud_model_host(
     cwd: &Path,
     network: &iroha_test_network::Network,
@@ -911,7 +847,6 @@ async fn advertise_soracloud_model_host(
         .map(iroha_test_network::NetworkPeer::account_id)
         .collect::<Vec<_>>();
     assert_soracloud_hf_lease_asset_ready(&network.client(), &validator_accounts, 100_000)?;
-
     let torii_url = network.client().torii_url.to_string();
     let heartbeat_expires_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
@@ -953,10 +888,8 @@ async fn advertise_soracloud_model_host(
         advertise.status,
         String::from_utf8_lossy(&advertise.stderr)
     );
-
     Ok(())
 }
-
 fn assert_requires_torii_url(output: &std::process::Output) {
     assert!(
         !output.status.success(),
@@ -970,11 +903,9 @@ fn assert_requires_torii_url(output: &std::process::Output) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
-
 fn tagged_enum_label<'a>(value: &'a Value, tag: &str) -> Option<&'a str> {
     value.as_object()?.get(tag)?.as_str()
 }
-
 #[tokio::test]
 async fn can_upgrade_executor() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
@@ -988,7 +919,6 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
     else {
         return Ok(());
     };
-
     // Use an explicit client.toml to avoid any env resolution pitfalls
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
@@ -997,7 +927,6 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let exit_status = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("ops")
@@ -1009,12 +938,9 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
         .envs(config.envs())
         .bounded_status()
         .await?;
-
     assert!(exit_status.success());
-
     Ok(())
 }
-
 #[tokio::test]
 async fn reads_client_toml_by_default() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
@@ -1027,14 +953,12 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
         return Ok(());
     };
     let config = ProgramConfig::from(&network.client());
-
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
         dir.path().join("client.toml"),
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let exit_status = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("ledger")
@@ -1043,16 +967,12 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
         .arg("all")
         .bounded_status()
         .await?;
-
     assert!(exit_status.success());
-
     Ok(())
 }
-
 #[test]
 fn tx_ivm_rejects_missing_gas_limit_without_hanging() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
-
     let dir = tempfile::tempdir()?;
     let config = local_program_config();
     std::fs::write(
@@ -1062,7 +982,6 @@ fn tx_ivm_rejects_missing_gas_limit_without_hanging() -> eyre::Result<()> {
     let program_path = dir.path().join("hello.to");
     std::fs::write(&program_path, b"fake-ivm-bytecode")?;
     let binary = program_reuse_existing_or_build();
-
     let started_at = Instant::now();
     let output = std::process::Command::new(binary)
         .current_dir(dir.path())
@@ -1074,12 +993,10 @@ fn tx_ivm_rejects_missing_gas_limit_without_hanging() -> eyre::Result<()> {
         .arg(&program_path)
         .bounded_output()?;
     let elapsed = started_at.elapsed();
-
     assert!(
         elapsed < Duration::from_secs(5),
         "iroha tx ivm should fail quickly instead of hanging; elapsed {elapsed:?}"
     );
-
     assert!(
         !output.status.success(),
         "CLI unexpectedly succeeded with stdout: {}",
@@ -1095,14 +1012,11 @@ fn tx_ivm_rejects_missing_gas_limit_without_hanging() -> eyre::Result<()> {
         !stderr.contains("Connection refused"),
         "CLI should reject a missing typed gas limit before any network call: {stderr}"
     );
-
     Ok(())
 }
-
 #[test]
 fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_intent_error() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
-
     let dir = tempfile::tempdir()?;
     let config = local_program_config();
     std::fs::write(
@@ -1112,7 +1026,6 @@ fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_intent_error() -> eyre:
     let program_path = dir.path().join("hello.to");
     std::fs::write(&program_path, b"fake-ivm-bytecode")?;
     let binary = program_reuse_existing_or_build();
-
     let started_at = Instant::now();
     let output = std::process::Command::new(binary)
         .current_dir(dir.path())
@@ -1126,12 +1039,10 @@ fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_intent_error() -> eyre:
         .arg("42")
         .bounded_output()?;
     let elapsed = started_at.elapsed();
-
     assert!(
         elapsed < Duration::from_secs(5),
         "iroha tx ivm --gas-limit should complete quickly; elapsed {elapsed:?}"
     );
-
     assert!(
         !output.status.success(),
         "CLI unexpectedly succeeded with stdout: {}",
@@ -1146,12 +1057,9 @@ fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_intent_error() -> eyre:
         stderr.contains("Failed to submit an IVM transaction"),
         "unexpected stderr: {stderr}"
     );
-
     Ok(())
 }
-
 // Add more CLI tests here!
-
 #[tokio::test]
 async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
@@ -1175,7 +1083,6 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
     else {
         return Ok(());
     };
-
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -1183,7 +1090,6 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let output = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1200,7 +1106,6 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-
     let payload: Value =
         json::from_slice(&output.stdout).expect("CLI should emit JSON soracloud status payload");
     assert_eq!(
@@ -1219,10 +1124,8 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
     assert!(network_status.contains_key("routing"));
     assert!(network_status.contains_key("resource_pressure"));
     assert!(network_status.contains_key("failed_admissions"));
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
@@ -1245,7 +1148,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     else {
         return Ok(());
     };
-
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -1253,7 +1155,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let container_fixture = soracloud_fixture("fixtures/soracloud/sora_container_manifest_v1.json");
     let service_fixture = soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json");
     let container: SoraContainerManifestV1 =
@@ -1264,7 +1165,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     service_v1.container.manifest_hash = Hash::new(Encode::encode(&container));
     let mut service_v2 = service_v1.clone();
     service_v2.service_version = "1.1.0".to_string();
-
     let container_path = dir.path().join("container_manifest.json");
     let service_v1_path = dir.path().join("service_v1.json");
     let service_v2_path = dir.path().join("service_v2.json");
@@ -1284,7 +1184,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     )
     .await?;
     let torii_url = network.client().torii_url.to_string();
-
     let deploy = run_soracloud_command(
         dir.path(),
         &config,
@@ -1305,7 +1204,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         deploy.status,
         String::from_utf8_lossy(&deploy.stderr)
     );
-
     let deploy_payload: Value =
         json::from_slice(&deploy.stdout).expect("CLI should emit deploy JSON payload");
     assert_eq!(
@@ -1314,7 +1212,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
             .and_then(Value::as_str),
         Some("1.0.0")
     );
-
     let upgrade = run_soracloud_command(
         dir.path(),
         &config,
@@ -1335,7 +1232,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         upgrade.status,
         String::from_utf8_lossy(&upgrade.stderr)
     );
-
     let upgrade_payload: Value =
         json::from_slice(&upgrade.stdout).expect("CLI should emit upgrade JSON payload");
     assert_eq!(
@@ -1356,7 +1252,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
             .and_then(Value::as_str),
         Some("Canary")
     );
-
     let rollout_governance_hash = Hash::new(b"cli-live-rollout-promote").to_string();
     let rollout = run_soracloud_command(
         dir.path(),
@@ -1382,7 +1277,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         rollout.status,
         String::from_utf8_lossy(&rollout.stderr)
     );
-
     let rollout_payload: Value =
         json::from_slice(&rollout.stdout).expect("CLI should emit rollout JSON payload");
     assert_eq!(
@@ -1405,7 +1299,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
             .and_then(Value::as_u64),
         Some(100)
     );
-
     let rollback = run_soracloud_command(
         dir.path(),
         &config,
@@ -1424,7 +1317,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         rollback.status,
         String::from_utf8_lossy(&rollback.stderr)
     );
-
     let rollback_payload: Value =
         json::from_slice(&rollback.stdout).expect("CLI should emit rollback JSON payload");
     assert_eq!(
@@ -1433,7 +1325,6 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
             .and_then(Value::as_str),
         Some("1.0.0")
     );
-
     let status_payload = wait_for_soracloud_status_payload(
         dir.path(),
         &config,
@@ -1495,10 +1386,8 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         services[0].get("current_version").and_then(Value::as_str),
         Some("1.0.0")
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_control_plane()
 -> eyre::Result<()> {
@@ -1522,7 +1411,6 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
     else {
         return Ok(());
     };
-
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -1530,7 +1418,6 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let container_fixture = soracloud_fixture("fixtures/soracloud/sora_container_manifest_v1.json");
     let service_fixture = soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json");
     let container: SoraContainerManifestV1 =
@@ -1539,7 +1426,6 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         norito::json::from_slice(&std::fs::read(&service_fixture)?)?;
     service.service_version = "1.0.0".to_string();
     service.container.manifest_hash = Hash::new(Encode::encode(&container));
-
     let mut over_cap_container = container.clone();
     over_cap_container.resources.cpu_millis = NonZeroU32::new(64_001).expect("non-zero cpu");
     let mut over_cap_service = service.clone();
@@ -1556,7 +1442,6 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         norito::json::to_vec_pretty(&over_cap_service).expect("encode over-cap service"),
     )
     .await?;
-
     let over_cap_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1588,7 +1473,6 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         "{}",
         String::from_utf8_lossy(&over_cap_deploy.stderr)
     );
-
     let mut no_write_container = container.clone();
     no_write_container.capabilities.allow_state_writes = false;
     assert!(
@@ -1613,7 +1497,6 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         norito::json::to_vec_pretty(&no_write_service).expect("encode no-write service"),
     )
     .await?;
-
     let no_write_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1653,10 +1536,8 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         "{}",
         no_write_stderr
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane()
 -> eyre::Result<()> {
@@ -1681,7 +1562,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
     else {
         return Ok(());
     };
-
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -1689,7 +1569,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let container_fixture = soracloud_fixture("fixtures/soracloud/sora_container_manifest_v1.json");
     let service_fixture = soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json");
     let mut container: SoraContainerManifestV1 =
@@ -1699,7 +1578,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
     container.capabilities.allow_model_training = true;
     service.service_version = "2.0.0".to_string();
     service.container.manifest_hash = Hash::new(Encode::encode(&container));
-
     let container_path = dir.path().join("container_training.json");
     let service_path = dir.path().join("service_training.json");
     tokio::fs::write(
@@ -1712,7 +1590,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         norito::json::to_vec_pretty(&service).expect("encode service"),
     )
     .await?;
-
     let deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1733,11 +1610,9 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         deploy.status,
         String::from_utf8_lossy(&deploy.stderr)
     );
-
     let service_name = service.service_name.to_string();
     let model_name = "ops_model";
     let dataset_ref = "dataset://ops/synthetic-v1";
-
     let training_start_1 = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1774,7 +1649,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         training_start_1.status,
         String::from_utf8_lossy(&training_start_1.stderr)
     );
-
     let checkpoint_1a = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1801,7 +1675,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         checkpoint_1a.status,
         String::from_utf8_lossy(&checkpoint_1a.stderr)
     );
-
     let checkpoint_1b = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1828,7 +1701,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         checkpoint_1b.status,
         String::from_utf8_lossy(&checkpoint_1b.stderr)
     );
-
     let training_status_1 = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1860,7 +1732,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         job_1.get("completed_steps").and_then(Value::as_u64),
         Some(4)
     );
-
     let artifact_register_1 = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1893,7 +1764,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         artifact_register_1.status,
         String::from_utf8_lossy(&artifact_register_1.stderr)
     );
-
     let weight_register_1 = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1928,7 +1798,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         weight_register_1.status,
         String::from_utf8_lossy(&weight_register_1.stderr)
     );
-
     let training_start_2 = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1965,7 +1834,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         training_start_2.status,
         String::from_utf8_lossy(&training_start_2.stderr)
     );
-
     let checkpoint_2a = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -1992,7 +1860,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         checkpoint_2a.status,
         String::from_utf8_lossy(&checkpoint_2a.stderr)
     );
-
     let checkpoint_2b = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -2019,7 +1886,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         checkpoint_2b.status,
         String::from_utf8_lossy(&checkpoint_2b.stderr)
     );
-
     let artifact_register_2 = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -2052,7 +1918,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         artifact_register_2.status,
         String::from_utf8_lossy(&artifact_register_2.stderr)
     );
-
     let weight_register_2 = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -2089,7 +1954,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         weight_register_2.status,
         String::from_utf8_lossy(&weight_register_2.stderr)
     );
-
     let promote_v2 = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -2115,7 +1979,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         promote_v2.status,
         String::from_utf8_lossy(&promote_v2.stderr)
     );
-
     let status_after_promote = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -2154,7 +2017,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
             .and_then(Value::as_u64),
         Some(2)
     );
-
     let rollback = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -2179,7 +2041,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         rollback.status,
         String::from_utf8_lossy(&rollback.stderr)
     );
-
     let status_after_rollback = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -2212,7 +2073,6 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
             .and_then(Value::as_str),
         Some("1.0.0")
     );
-
     let artifact_status_2 = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -2249,10 +2109,8 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
             .and_then(Value::as_str),
         Some("1.1.0")
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
@@ -2293,7 +2151,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         std::slice::from_ref(&network.client().account),
         100_000,
     )?;
-
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -2302,7 +2159,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     )
     .await?;
     advertise_soracloud_model_host(dir.path(), &network).await?;
-
     let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
     let service_name_a = "hf_lease_a";
     let service_name_b = "hf_lease_b";
@@ -2313,7 +2169,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     let lease_asset_definition = lease_asset_definition.to_string();
     let torii_url = network.client().torii_url.to_string();
     let account_id = network.client().account.to_string();
-
     let deploy = run_soracloud_command(
         dir.path(),
         &config,
@@ -2385,7 +2240,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
             .and_then(Value::as_u64),
         Some(10_000)
     );
-
     let service_status = run_soracloud_command(
         dir.path(),
         &config,
@@ -2414,7 +2268,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         }),
         "hf-deploy should auto-deploy service `{service_name_a}`"
     );
-
     let agent_status = run_soracloud_command(
         dir.path(),
         &config,
@@ -2445,7 +2298,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         }),
         "hf-deploy should auto-deploy apartment `{apartment_name}`"
     );
-
     let rebind = run_soracloud_command(
         dir.path(),
         &config,
@@ -2504,7 +2356,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
             .iter()
             .any(|value| value.as_str() == Some(service_name_b))
     );
-
     let status = run_soracloud_command(
         dir.path(),
         &config,
@@ -2547,7 +2398,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         .and_then(Value::as_array)
         .expect("hf status service bindings");
     assert_eq!(status_services.len(), 2);
-
     let leave = run_soracloud_command(
         dir.path(),
         &config,
@@ -2599,7 +2449,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
             .and_then(|value| tagged_enum_label(value, "status")),
         Some("Left")
     );
-
     let renew = run_soracloud_command(
         dir.path(),
         &config,
@@ -2649,7 +2498,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
             .and_then(Value::as_u64),
         Some(10_000)
     );
-
     let status_after_renew = run_soracloud_command(
         dir.path(),
         &config,
@@ -2690,10 +2538,8 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         .expect("hf renewed service bindings");
     assert_eq!(renewed_services.len(), 1);
     assert_eq!(renewed_services[0].as_str(), Some(service_name_renew));
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
@@ -2734,7 +2580,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         std::slice::from_ref(&network.client().account),
         100_000,
     )?;
-
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -2743,7 +2588,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     )
     .await?;
     advertise_soracloud_model_host(dir.path(), &network).await?;
-
     let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
     let initial_service_name = "hf_queue_a";
     let queued_service_name = "hf_queue_next";
@@ -2756,7 +2600,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     let lease_asset_definition = lease_asset_definition.to_string();
     let torii_url = network.client().torii_url.to_string();
     let account_id = network.client().account.to_string();
-
     let deploy = run_soracloud_command(
         dir.path(),
         &config,
@@ -2790,7 +2633,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("CreateWindow")
     );
-
     let renew = run_soracloud_command(
         dir.path(),
         &config,
@@ -2868,7 +2710,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         .get("window_expires_at_ms")
         .and_then(Value::as_u64)
         .expect("current window expiry");
-
     let blocked_leave = run_soracloud_command(
         dir.path(),
         &config,
@@ -2895,7 +2736,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         blocked_leave_stderr.contains("cannot leave before it activates"),
         "unexpected queued sponsor leave stderr: {blocked_leave_stderr}"
     );
-
     // Wait until just after the authoritative current window expires. Sleeping
     // for a full extra lease term from the renew response can overshoot on
     // slower localnets and land in the post-queued `CreateWindow` path instead
@@ -2906,7 +2746,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         .saturating_sub(now_ms)
         .min(u128::from(u64::MAX)) as u64;
     tokio::time::sleep(Duration::from_millis(wait_ms)).await;
-
     let promote = run_soracloud_command(
         dir.path(),
         &config,
@@ -2950,7 +2789,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
             .and_then(Value::as_u64),
         Some(0)
     );
-
     let status = run_soracloud_command(
         dir.path(),
         &config,
@@ -3025,10 +2863,8 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
             .iter()
             .any(|value| value.as_str() == Some(promoted_service_name))
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
@@ -3093,7 +2929,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         ],
         100_000,
     )?;
-
     let alice_config = ProgramConfig::from(&network.client());
     let bob_config = program_config_for_account(&network.client(), "wonderland", &BOB_KEYPAIR);
     let carpenter_config = program_config_for_account(
@@ -3108,7 +2943,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     )
     .await?;
     advertise_soracloud_model_host(dir.path(), &network).await?;
-
     let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
     let torii_url = network.client().torii_url.to_string();
     let lease_term_ms = 60_000_u64;
@@ -3119,7 +2953,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     let alice_account_id = network.client().account.to_string();
     let bob_account_id = BOB_ID.to_string();
     let carpenter_account_id = CARPENTER_ID.to_string();
-
     let alice_deploy = run_soracloud_command(
         dir.path(),
         &alice_config,
@@ -3162,7 +2995,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             .and_then(Value::as_u64),
         Some(10_000)
     );
-
     let bob_deploy = run_soracloud_command(
         dir.path(),
         &bob_config,
@@ -3196,7 +3028,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("Join")
     );
-
     let bob_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &bob_config,
@@ -3270,7 +3101,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             .map(u128::from),
         Some(bob_expected_charge)
     );
-
     let carpenter_deploy = run_soracloud_command(
         dir.path(),
         &carpenter_config,
@@ -3305,7 +3135,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("Join")
     );
-
     let carpenter_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &carpenter_config,
@@ -3383,7 +3212,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             .map(u128::from),
         Some(carpenter_expected_charge)
     );
-
     let alice_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &alice_config,
@@ -3412,7 +3240,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         .get("member")
         .and_then(Value::as_object)
         .expect("alice member");
-
     let bob_final_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &bob_config,
@@ -3445,7 +3272,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         .get("member")
         .and_then(Value::as_object)
         .expect("carpenter member");
-
     let alice_join_order = (
         alice_member
             .get("joined_at_ms")
@@ -3473,7 +3299,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             carpenter_base_refund + carpenter_remainder,
         )
     };
-
     assert_eq!(
         alice_status_payload
             .get("pool")
@@ -3540,10 +3365,8 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             .map(u128::from),
         Some(0)
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() -> eyre::Result<()>
 {
@@ -3563,7 +3386,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
     else {
         return Ok(());
     };
-
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -3571,10 +3393,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let site_dir = dir.path().join("soracloud_site");
     let webapp_dir = dir.path().join("soracloud_webapp");
-
     let site_init = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -3597,7 +3417,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         site_init.status,
         String::from_utf8_lossy(&site_init.stderr)
     );
-
     let webapp_init = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -3620,7 +3439,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         webapp_init.status,
         String::from_utf8_lossy(&webapp_init.stderr)
     );
-
     let site_service_path = site_dir.join("service_manifest.json");
     let webapp_service_path = webapp_dir.join("service_manifest.json");
     let site_service: SoraServiceManifestV1 =
@@ -3652,7 +3470,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
             .map(|route| route.path_prefix.as_str()),
         Some("/api")
     );
-
     let site_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -3686,7 +3503,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
             .and_then(Value::as_str),
         Some("1.0.0")
     );
-
     let webapp_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -3720,7 +3536,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
             .and_then(Value::as_str),
         Some("1.0.0")
     );
-
     let mut site_service_v2 = site_service.clone();
     site_service_v2.service_version = "1.1.0".to_string();
     let site_service_v2_path = site_dir.join("service_manifest_v2.json");
@@ -3729,7 +3544,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         norito::json::to_vec_pretty(&site_service_v2).expect("encode site service v2"),
     )
     .await?;
-
     let site_upgrade = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -3767,7 +3581,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         .get("rollout_handle")
         .and_then(Value::as_str)
         .expect("site upgrade should emit rollout handle");
-
     let site_rollout = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -3802,7 +3615,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
             .and_then(Value::as_str),
         Some("Promoted")
     );
-
     let site_rollback = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -3829,7 +3641,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
             .and_then(Value::as_str),
         Some("1.0.0")
     );
-
     let status = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -3846,7 +3657,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         status.status,
         String::from_utf8_lossy(&status.stderr)
     );
-
     let status_payload: Value =
         json::from_slice(&status.stdout).expect("CLI should emit soracloud status payload");
     let network_status = status_payload
@@ -3861,7 +3671,6 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         control_plane.get("service_count").and_then(Value::as_u64),
         Some(2)
     );
-
     let services = control_plane
         .get("services")
         .and_then(Value::as_array)
@@ -3910,10 +3719,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
             .and_then(Value::as_str),
         Some("/api")
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
@@ -3932,7 +3739,6 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
     else {
         return Ok(());
     };
-
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -3940,7 +3746,6 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let mut manifest: AgentApartmentManifestV1 = norito::json::from_slice(&std::fs::read(
         soracloud_fixture("fixtures/soracloud/agent_apartment_manifest_v1.json"),
     )?)?;
@@ -3948,14 +3753,12 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
         .policy_capabilities
         .push("agent.autonomy.run".parse().expect("valid capability"));
     manifest.validate().expect("manifest should remain valid");
-
     let manifest_path = dir.path().join("agent_apartment_manifest.json");
     tokio::fs::write(
         &manifest_path,
         norito::json::to_vec_pretty(&manifest).expect("encode apartment manifest"),
     )
     .await?;
-
     let deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -3994,7 +3797,6 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .and_then(Value::as_u64),
         Some(500)
     );
-
     let allow = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4028,7 +3830,6 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .and_then(Value::as_u64),
         Some(500)
     );
-
     let run = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4072,7 +3873,6 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .and_then(Value::as_str)
             .is_some_and(|run_id| !run_id.is_empty())
     );
-
     let status = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4109,7 +3909,6 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .and_then(Value::as_u64),
         Some(380)
     );
-
     let revoke = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4140,7 +3939,6 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .and_then(Value::as_u64),
         Some(1)
     );
-
     let revoked_run = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4172,10 +3970,8 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
         "unexpected revoked-capability error: {}",
         String::from_utf8_lossy(&revoked_run.stderr)
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_control_plane()
 -> eyre::Result<()> {
@@ -4195,7 +3991,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
     else {
         return Ok(());
     };
-
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -4203,7 +3998,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let mut sender: AgentApartmentManifestV1 = norito::json::from_slice(&std::fs::read(
         soracloud_fixture("fixtures/soracloud/agent_apartment_manifest_v1.json"),
     )?)?;
@@ -4213,7 +4007,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
     sender
         .validate()
         .expect("sender manifest should remain valid");
-
     let mut recipient = sender.clone();
     recipient.apartment_name = "worker_agent".parse().expect("valid apartment name");
     recipient
@@ -4225,7 +4018,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
     recipient
         .validate()
         .expect("recipient manifest should remain valid");
-
     let sender_manifest_path = dir.path().join("sender_agent_manifest.json");
     let recipient_manifest_path = dir.path().join("recipient_agent_manifest.json");
     tokio::fs::write(
@@ -4238,7 +4030,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         norito::json::to_vec_pretty(&recipient).expect("encode recipient manifest"),
     )
     .await?;
-
     let sender_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4259,7 +4050,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         sender_deploy.status,
         String::from_utf8_lossy(&sender_deploy.stderr)
     );
-
     let recipient_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4280,7 +4070,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         recipient_deploy.status,
         String::from_utf8_lossy(&recipient_deploy.stderr)
     );
-
     let expired_wallet = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4308,7 +4097,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "unexpected lease-expiry rejection error: {}",
         String::from_utf8_lossy(&expired_wallet.stderr)
     );
-
     let renew = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4329,7 +4117,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         renew.status,
         String::from_utf8_lossy(&renew.stderr)
     );
-
     let restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4355,7 +4142,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         restart_payload.get("restart_count").and_then(Value::as_u64),
         Some(1)
     );
-
     let status = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4394,7 +4180,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         apartment.get("restart_count").and_then(Value::as_u64),
         Some(1)
     );
-
     let wallet_request = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4430,7 +4215,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
             .and_then(Value::as_u64),
         Some(1)
     );
-
     let wallet_approve = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4459,7 +4243,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
             .and_then(Value::as_u64),
         Some(0)
     );
-
     let message_send = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4497,7 +4280,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
             .and_then(Value::as_u64),
         Some(1)
     );
-
     let mailbox_status_queued = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4533,7 +4315,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         queued_messages[0].get("message_id").and_then(Value::as_str),
         Some(message_id.as_str())
     );
-
     let message_ack = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4562,7 +4343,6 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
             .and_then(Value::as_u64),
         Some(0)
     );
-
     let mailbox_status_empty = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4594,10 +4374,8 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .and_then(Value::as_array)
         .expect("empty mailbox messages array");
     assert!(empty_messages.is_empty());
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane()
 -> eyre::Result<()> {
@@ -4619,7 +4397,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     else {
         return Ok(());
     };
-
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -4627,7 +4404,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let mut sender: AgentApartmentManifestV1 = norito::json::from_slice(&std::fs::read(
         soracloud_fixture("fixtures/soracloud/agent_apartment_manifest_v1.json"),
     )?)?;
@@ -4640,7 +4416,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     sender
         .validate()
         .expect("sender manifest should remain valid");
-
     let mut recipient = sender.clone();
     recipient.apartment_name = "worker_agent".parse().expect("valid apartment name");
     recipient
@@ -4652,7 +4427,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     recipient
         .validate()
         .expect("recipient manifest should remain valid");
-
     let sender_manifest_path = dir.path().join("sender_agent_manifest.json");
     let recipient_manifest_path = dir.path().join("recipient_agent_manifest.json");
     tokio::fs::write(
@@ -4665,10 +4439,8 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         norito::json::to_vec_pretty(&recipient).expect("encode recipient manifest"),
     )
     .await?;
-
     let restart_peer = network.peers().first().expect("network peer").clone();
     let restart_torii_url = restart_peer.torii_url();
-
     let sender_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4691,7 +4463,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         sender_deploy.status,
         String::from_utf8_lossy(&sender_deploy.stderr)
     );
-
     let recipient_deploy = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4714,7 +4485,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         recipient_deploy.status,
         String::from_utf8_lossy(&recipient_deploy.stderr)
     );
-
     let allow = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4737,7 +4507,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         allow.status,
         String::from_utf8_lossy(&allow.stderr)
     );
-
     let run_before_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4792,7 +4561,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         persistent_bytes_after_first_run > 0,
         "first autonomy run should create a persisted checkpoint"
     );
-
     let wallet_request = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4828,7 +4596,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64),
         Some(1)
     );
-
     let message_send = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4860,7 +4627,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .and_then(Value::as_str)
         .expect("message id present")
         .to_owned();
-
     let config_layers: Vec<_> = network.config_layers().collect();
     restart_peer.shutdown().await;
     let restart_timeout = network.peer_startup_timeout();
@@ -4875,7 +4641,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             restart_timeout
         )
     })??;
-
     let status_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4950,7 +4715,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .get("process_generation")
         .and_then(Value::as_u64)
         .expect("process_generation in status after peer restart");
-
     let manual_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -4981,7 +4745,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         process_generation_after_manual_restart,
         process_generation_before_manual_restart.saturating_add(1)
     );
-
     let autonomy_status_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -5038,7 +4801,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64)
             .is_some_and(|bytes| bytes >= persistent_bytes_after_first_run)
     );
-
     let mailbox_status_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -5074,7 +4836,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         queued_messages[0].get("message_id").and_then(Value::as_str),
         Some(message_id.as_str())
     );
-
     let wallet_approve_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -5103,7 +4864,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64),
         Some(0)
     );
-
     let message_ack_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -5132,7 +4892,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64),
         Some(0)
     );
-
     let run_after_restart = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -5197,7 +4956,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64)
             .is_some_and(|bytes| bytes > persistent_bytes_after_first_run)
     );
-
     let mailbox_status_empty = tokio::process::Command::new(program())
         .current_dir(dir.path())
         .arg("soracloud")
@@ -5224,10 +4982,8 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64),
         Some(0)
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_agent_autonomy_commands_require_torii_url() -> eyre::Result<()> {
     let config = local_program_config();
@@ -5237,7 +4993,6 @@ async fn soracloud_agent_autonomy_commands_require_torii_url() -> eyre::Result<(
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let mut manifest: AgentApartmentManifestV1 = norito::json::from_slice(&std::fs::read(
         soracloud_fixture("fixtures/soracloud/agent_apartment_manifest_v1.json"),
     )?)?;
@@ -5245,14 +5000,12 @@ async fn soracloud_agent_autonomy_commands_require_torii_url() -> eyre::Result<(
         .policy_capabilities
         .push("agent.autonomy.run".parse().expect("valid capability"));
     manifest.validate().expect("manifest should remain valid");
-
     let manifest_path = dir.path().join("agent_apartment_manifest.json");
     tokio::fs::write(
         &manifest_path,
         norito::json::to_vec_pretty(&manifest).expect("encode apartment manifest"),
     )
     .await?;
-
     let deploy = run_soracloud_command(
         dir.path(),
         &config,
@@ -5266,7 +5019,6 @@ async fn soracloud_agent_autonomy_commands_require_torii_url() -> eyre::Result<(
     )
     .await?;
     assert_requires_torii_url(&deploy);
-
     let allow = run_soracloud_command(
         dir.path(),
         &config,
@@ -5282,7 +5034,6 @@ async fn soracloud_agent_autonomy_commands_require_torii_url() -> eyre::Result<(
     )
     .await?;
     assert_requires_torii_url(&allow);
-
     let run = run_soracloud_command(
         dir.path(),
         &config,
@@ -5302,7 +5053,6 @@ async fn soracloud_agent_autonomy_commands_require_torii_url() -> eyre::Result<(
     )
     .await?;
     assert_requires_torii_url(&run);
-
     let status = run_soracloud_command(
         dir.path(),
         &config,
@@ -5310,7 +5060,6 @@ async fn soracloud_agent_autonomy_commands_require_torii_url() -> eyre::Result<(
     )
     .await?;
     assert_requires_torii_url(&status);
-
     let revoke = run_soracloud_command(
         dir.path(),
         &config,
@@ -5326,10 +5075,8 @@ async fn soracloud_agent_autonomy_commands_require_torii_url() -> eyre::Result<(
     )
     .await?;
     assert_requires_torii_url(&revoke);
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre::Result<()> {
     let config = local_program_config();
@@ -5339,7 +5086,6 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let mut sender: AgentApartmentManifestV1 = norito::json::from_slice(&std::fs::read(
         soracloud_fixture("fixtures/soracloud/agent_apartment_manifest_v1.json"),
     )?)?;
@@ -5349,7 +5095,6 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
     sender
         .validate()
         .expect("sender manifest should remain valid");
-
     let mut recipient = sender.clone();
     recipient.apartment_name = "worker_agent".parse().expect("valid apartment name");
     recipient
@@ -5361,7 +5106,6 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
     recipient
         .validate()
         .expect("recipient manifest should remain valid");
-
     let sender_manifest_path = dir.path().join("sender_agent_manifest.json");
     let recipient_manifest_path = dir.path().join("recipient_agent_manifest.json");
     tokio::fs::write(
@@ -5374,7 +5118,6 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
         norito::json::to_vec_pretty(&recipient).expect("encode recipient manifest"),
     )
     .await?;
-
     let sender_deploy = run_soracloud_command(
         dir.path(),
         &config,
@@ -5386,7 +5129,6 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
     )
     .await?;
     assert_requires_torii_url(&sender_deploy);
-
     let recipient_deploy = run_soracloud_command(
         dir.path(),
         &config,
@@ -5398,7 +5140,6 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
     )
     .await?;
     assert_requires_torii_url(&recipient_deploy);
-
     let wallet_request = run_soracloud_command(
         dir.path(),
         &config,
@@ -5414,7 +5155,6 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
     )
     .await?;
     assert_requires_torii_url(&wallet_request);
-
     let wallet_approve = run_soracloud_command(
         dir.path(),
         &config,
@@ -5428,7 +5168,6 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
     )
     .await?;
     assert_requires_torii_url(&wallet_approve);
-
     let wallet_revoke = run_soracloud_command(
         dir.path(),
         &config,
@@ -5444,7 +5183,6 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
     )
     .await?;
     assert_requires_torii_url(&wallet_revoke);
-
     let message_send = run_soracloud_command(
         dir.path(),
         &config,
@@ -5462,7 +5200,6 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
     )
     .await?;
     assert_requires_torii_url(&message_send);
-
     let message_ack = run_soracloud_command(
         dir.path(),
         &config,
@@ -5476,7 +5213,6 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
     )
     .await?;
     assert_requires_torii_url(&message_ack);
-
     let mailbox_status = run_soracloud_command(
         dir.path(),
         &config,
@@ -5484,10 +5220,8 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
     )
     .await?;
     assert_requires_torii_url(&mailbox_status);
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> {
     let config = local_program_config();
@@ -5497,7 +5231,6 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let manifest: AgentApartmentManifestV1 = norito::json::from_slice(&std::fs::read(
         soracloud_fixture("fixtures/soracloud/agent_apartment_manifest_v1.json"),
     )?)?;
@@ -5507,7 +5240,6 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
         norito::json::to_vec_pretty(&manifest).expect("encode apartment manifest"),
     )
     .await?;
-
     let deploy = run_soracloud_command(
         dir.path(),
         &config,
@@ -5521,7 +5253,6 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
     )
     .await?;
     assert_requires_torii_url(&deploy);
-
     let renew = run_soracloud_command(
         dir.path(),
         &config,
@@ -5535,7 +5266,6 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
     )
     .await?;
     assert_requires_torii_url(&renew);
-
     let wallet = run_soracloud_command(
         dir.path(),
         &config,
@@ -5551,7 +5281,6 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
     )
     .await?;
     assert_requires_torii_url(&wallet);
-
     let restart = run_soracloud_command(
         dir.path(),
         &config,
@@ -5565,7 +5294,6 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
     )
     .await?;
     assert_requires_torii_url(&restart);
-
     let status = run_soracloud_command(
         dir.path(),
         &config,
@@ -5573,10 +5301,8 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
     )
     .await?;
     assert_requires_torii_url(&status);
-
     Ok(())
 }
-
 #[tokio::test]
 async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<()> {
     let config = local_program_config();
@@ -5586,11 +5312,9 @@ async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
-
     let lease_term_ms = "60000".to_string();
     let base_fee_nanos = "10000".to_string();
     let lease_asset_definition = soracloud_hf_lease_asset_definition().to_string();
-
     let deploy = run_soracloud_command(
         dir.path(),
         &config,
@@ -5610,7 +5334,6 @@ async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<
     )
     .await?;
     assert_requires_torii_url(&deploy);
-
     let status = run_soracloud_command(
         dir.path(),
         &config,
@@ -5624,7 +5347,6 @@ async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<
     )
     .await?;
     assert_requires_torii_url(&status);
-
     let leave = run_soracloud_command(
         dir.path(),
         &config,
@@ -5640,7 +5362,6 @@ async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<
     )
     .await?;
     assert_requires_torii_url(&leave);
-
     let renew = run_soracloud_command(
         dir.path(),
         &config,
@@ -5660,6 +5381,5 @@ async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<
     )
     .await?;
     assert_requires_torii_url(&renew);
-
     Ok(())
 }

@@ -1,5 +1,4 @@
 //! Visitor helper functions for instructions.
-
 use super::Visit;
 use crate::{
     isi::{
@@ -43,7 +42,6 @@ use crate::{
     },
     prelude::*,
 };
-
 /// Dispatch a boxed instruction to the corresponding visitor hook.
 pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) {
     if !(visit_core_instruction(visitor, isi)
@@ -55,21 +53,18 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         visitor.visit_unclassified_instruction(isi);
     }
 }
-
 /// Visit an instruction that has no typed hook in the generic data-model walker.
 ///
 /// Registered native extensions are valid [`InstructionBox`] values even when
 /// this intentionally small walker does not expose their semantics. The default
 /// is therefore a leaf visit instead of a process-terminating assertion.
 pub fn visit_unclassified_instruction<V: Visit + ?Sized>(_visitor: &mut V, _isi: &InstructionBox) {}
-
 fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
     visit_core_setup_instruction(visitor, isi)
         || visit_core_box_instruction(visitor, isi)
         || visit_privacy_instruction(visitor, isi)
         || visit_integrated_instruction(visitor, isi)
 }
-
 fn visit_core_setup_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
     if let Some(v) = isi.as_any().downcast_ref::<SetParameter>() {
         visitor.visit_set_parameter(v);
@@ -115,7 +110,6 @@ fn visit_core_setup_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &Instru
     }
     true
 }
-
 fn visit_core_box_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
     if let Some(v) = isi.as_any().downcast_ref::<Log>() {
         visitor.visit_log(v);
@@ -146,7 +140,6 @@ fn visit_core_box_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &Instruct
     }
     true
 }
-
 #[allow(
     clippy::too_many_lines,
     reason = "the exhaustive privacy instruction inventory stays in one dispatch chain so new variants cannot silently become no-ops"
@@ -155,7 +148,6 @@ fn visit_privacy_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &Instructi
     visit_privacy_protocol_instruction(visitor, isi)
         || visit_privacy_issuer_and_proof_instruction(visitor, isi)
 }
-
 fn visit_privacy_protocol_instruction<V: Visit + ?Sized>(
     visitor: &mut V,
     isi: &InstructionBox,
@@ -225,7 +217,6 @@ fn visit_privacy_protocol_instruction<V: Visit + ?Sized>(
     }
     true
 }
-
 fn visit_privacy_issuer_and_proof_instruction<V: Visit + ?Sized>(
     visitor: &mut V,
     isi: &InstructionBox,
@@ -323,7 +314,6 @@ fn visit_privacy_issuer_and_proof_instruction<V: Visit + ?Sized>(
     }
     true
 }
-
 fn visit_integrated_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
     if let Some(v) = isi.as_any().downcast_ref::<ClaimTwitterFollowReward>() {
         visitor.visit_claim_twitter_follow_reward(v);
@@ -346,7 +336,6 @@ fn visit_integrated_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &Instru
     }
     true
 }
-
 fn visit_staking_and_identifier_instruction<V: Visit + ?Sized>(
     visitor: &mut V,
     isi: &InstructionBox,
@@ -410,7 +399,6 @@ fn visit_staking_and_identifier_instruction<V: Visit + ?Sized>(
     }
     true
 }
-
 fn visit_soracloud_service_instruction<V: Visit + ?Sized>(
     visitor: &mut V,
     isi: &InstructionBox,
@@ -470,7 +458,6 @@ fn visit_soracloud_service_instruction<V: Visit + ?Sized>(
     }
     true
 }
-
 fn visit_soracloud_agent_instruction<V: Visit + ?Sized>(
     visitor: &mut V,
     isi: &InstructionBox,
@@ -520,7 +507,6 @@ fn visit_soracloud_agent_instruction<V: Visit + ?Sized>(
     }
     true
 }
-
 fn visit_soracloud_training_instruction<V: Visit + ?Sized>(
     visitor: &mut V,
     isi: &InstructionBox,
@@ -588,7 +574,6 @@ fn visit_soracloud_training_instruction<V: Visit + ?Sized>(
     }
     true
 }
-
 /// Dispatch register variants like peers, domains, and triggers.
 pub fn visit_register<V: Visit + ?Sized>(visitor: &mut V, isi: &RegisterBox) {
     match isi {
@@ -601,7 +586,6 @@ pub fn visit_register<V: Visit + ?Sized>(visitor: &mut V, isi: &RegisterBox) {
         RegisterBox::Trigger(obj) => visitor.visit_register_trigger(obj),
     }
 }
-
 /// Dispatch unregister variants across all registerable entities.
 pub fn visit_unregister<V: Visit + ?Sized>(visitor: &mut V, isi: &UnregisterBox) {
     match isi {
@@ -614,7 +598,6 @@ pub fn visit_unregister<V: Visit + ?Sized>(visitor: &mut V, isi: &UnregisterBox)
         UnregisterBox::Trigger(obj) => visitor.visit_unregister_trigger(obj),
     }
 }
-
 /// Dispatch mint variants to the appropriate hook.
 pub fn visit_mint<V: Visit + ?Sized>(visitor: &mut V, isi: &MintBox) {
     match isi {
@@ -622,7 +605,6 @@ pub fn visit_mint<V: Visit + ?Sized>(visitor: &mut V, isi: &MintBox) {
         MintBox::TriggerRepetitions(obj) => visitor.visit_mint_trigger_repetitions(obj),
     }
 }
-
 /// Dispatch burn variants to the appropriate hook.
 pub fn visit_burn<V: Visit + ?Sized>(visitor: &mut V, isi: &BurnBox) {
     match isi {
@@ -630,7 +612,6 @@ pub fn visit_burn<V: Visit + ?Sized>(visitor: &mut V, isi: &BurnBox) {
         BurnBox::TriggerRepetitions(obj) => visitor.visit_burn_trigger_repetitions(obj),
     }
 }
-
 /// Dispatch transfer variants to the appropriate hook.
 pub fn visit_transfer<V: Visit + ?Sized>(visitor: &mut V, isi: &TransferBox) {
     match isi {
@@ -640,7 +621,6 @@ pub fn visit_transfer<V: Visit + ?Sized>(visitor: &mut V, isi: &TransferBox) {
         TransferBox::Nft(obj) => visitor.visit_transfer_nft(obj),
     }
 }
-
 /// Dispatch set-key-value variants to the appropriate hook.
 pub fn visit_set_key_value<V: Visit + ?Sized>(visitor: &mut V, isi: &SetKeyValueBox) {
     match isi {
@@ -651,7 +631,6 @@ pub fn visit_set_key_value<V: Visit + ?Sized>(visitor: &mut V, isi: &SetKeyValue
         SetKeyValueBox::Trigger(obj) => visitor.visit_set_trigger_key_value(obj),
     }
 }
-
 /// Dispatch remove-key-value variants to the appropriate hook.
 pub fn visit_remove_key_value<V: Visit + ?Sized>(visitor: &mut V, isi: &RemoveKeyValueBox) {
     match isi {
@@ -664,21 +643,18 @@ pub fn visit_remove_key_value<V: Visit + ?Sized>(visitor: &mut V, isi: &RemoveKe
         RemoveKeyValueBox::Trigger(obj) => visitor.visit_remove_trigger_key_value(obj),
     }
 }
-
 /// Dispatch grouped RWA instructions.
 pub fn visit_rwa_instruction_box<V: Visit + ?Sized>(
     _visitor: &mut V,
     _isi: &crate::isi::rwa::RwaInstructionBox,
 ) {
 }
-
 /// Dispatch grouped `DeFi` instructions.
 pub fn visit_defi_instruction_box<V: Visit + ?Sized>(
     _visitor: &mut V,
     _isi: &crate::isi::defi::DeFiInstructionBox,
 ) {
 }
-
 /// Dispatch grant variants to the appropriate hook.
 pub fn visit_grant<V: Visit + ?Sized>(visitor: &mut V, isi: &GrantBox) {
     match isi {
@@ -687,7 +663,6 @@ pub fn visit_grant<V: Visit + ?Sized>(visitor: &mut V, isi: &GrantBox) {
         GrantBox::RolePermission(obj) => visitor.visit_grant_role_permission(obj),
     }
 }
-
 /// Dispatch revoke variants to the appropriate hook.
 pub fn visit_revoke<V: Visit + ?Sized>(visitor: &mut V, isi: &RevokeBox) {
     match isi {
@@ -696,7 +671,6 @@ pub fn visit_revoke<V: Visit + ?Sized>(visitor: &mut V, isi: &RevokeBox) {
         RevokeBox::RolePermission(obj) => visitor.visit_revoke_role_permission(obj),
     }
 }
-
 /// Macro generating visitor method signatures for every instruction variant.
 #[macro_export]
 macro_rules! instruction_visitors {
@@ -915,16 +889,13 @@ macro_rules! instruction_visitors {
         }
     };
 }
-
 macro_rules! define_instruction_visitors {
     ( $( $visitor:ident($operation:ty) ),+ $(,)? ) => { $(
         #[doc = concat!("Visit ", stringify!($operation), ".")]
         pub fn $visitor<V: Visit + ?Sized>(_visitor: &mut V, _operation: $operation) {}
     )+ };
 }
-
 instruction_visitors!(define_instruction_visitors);
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -958,17 +929,14 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, KeyPair};
-
     struct CountingVisitor {
         logs: usize,
     }
-
     impl Visit for CountingVisitor {
         fn visit_log(&mut self, _: &Log) {
             self.logs += 1;
         }
     }
-
     fn redigest_bootle_visitor_policy(policy: &mut BootleLanternIssuerPolicyV1) {
         policy.issuer_parameter_digest = policy
             .computed_issuer_parameter_digest()
@@ -978,7 +946,6 @@ mod tests {
             .computed_record_digest()
             .expect("visitor issuer policy encodes");
     }
-
     fn bootle_visitor_public_matrix(seed: u16) -> BootleLanternIssuerPublicMatrixV1 {
         let first_column = core::array::from_fn(|block| BootleLanternPolynomialV1 {
             coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
@@ -991,7 +958,6 @@ mod tests {
         BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
             .expect("canonical visitor degree-512 multiplication matrix")
     }
-
     fn bootle_visitor_policy() -> BootleLanternIssuerPolicyV1 {
         let mut policy = BootleLanternIssuerPolicyV1 {
             issuer_id: PrivacyIssuerIdV1::new([0x21; 32]),
@@ -1014,7 +980,6 @@ mod tests {
             .expect("canonical Bootle/Lantern visitor fixture");
         policy
     }
-
     fn vega_visitor_record(
         epoch: u64,
         key_seed: u8,
@@ -1037,7 +1002,6 @@ mod tests {
         )
         .expect("canonical structural Vega visitor fixture")
     }
-
     #[test]
     fn visit_log_dispatches() {
         let mut visitor = CountingVisitor { logs: 0 };
@@ -1048,19 +1012,16 @@ mod tests {
         visit_instruction(&mut visitor, &isi);
         assert_eq!(visitor.logs, 1);
     }
-
     #[test]
     fn unclassified_native_instruction_uses_fallback_hook() {
         struct FallbackVisitor {
             calls: usize,
         }
-
         impl Visit for FallbackVisitor {
             fn visit_unclassified_instruction(&mut self, _: &InstructionBox) {
                 self.calls += 1;
             }
         }
-
         let isi = Box::new(crate::isi::ram_lfe::ActivateRamLfeProgramPolicy {
             program_id: "visitor_fallback"
                 .parse()
@@ -1068,24 +1029,19 @@ mod tests {
         })
         .into_instruction_box();
         let mut visitor = FallbackVisitor { calls: 0 };
-
         visit_instruction(&mut visitor, &isi);
-
         assert_eq!(visitor.calls, 1);
     }
-
     #[test]
     fn visit_register_public_lane_validator_dispatches() {
         struct RegisterVisitor {
             called: bool,
         }
-
         impl Visit for RegisterVisitor {
             fn visit_register_public_lane_validator(&mut self, _: &RegisterPublicLaneValidator) {
                 self.called = true;
             }
         }
-
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let key_pair = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
@@ -1099,18 +1055,15 @@ mod tests {
             Metadata::default(),
         );
         let isi = InstructionBox::from(instruction);
-
         let mut visitor = RegisterVisitor { called: false };
         visit_instruction(&mut visitor, &isi);
         assert!(visitor.called);
     }
-
     #[test]
     fn visit_rebind_public_lane_validator_peer_dispatches() {
         struct RebindVisitor {
             called: bool,
         }
-
         impl Visit for RebindVisitor {
             fn visit_rebind_public_lane_validator_peer(
                 &mut self,
@@ -1119,7 +1072,6 @@ mod tests {
                 self.called = true;
             }
         }
-
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let validator_key = KeyPair::try_from_seed(vec![0x12; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
@@ -1132,18 +1084,15 @@ mod tests {
             validator,
             peer_id,
         ));
-
         let mut visitor = RebindVisitor { called: false };
         visit_instruction(&mut visitor, &isi);
         assert!(visitor.called);
     }
-
     #[test]
     fn visit_all_bootle_lantern_governance_instructions_dispatches_from_boxes() {
         struct BootleVisitor {
             calls: Vec<&'static str>,
         }
-
         impl Visit for BootleVisitor {
             fn visit_register_privacy_bootle_lantern_issuer_policy_v1(
                 &mut self,
@@ -1151,14 +1100,12 @@ mod tests {
             ) {
                 self.calls.push("register");
             }
-
             fn visit_rotate_privacy_bootle_lantern_issuer_policy_v1(
                 &mut self,
                 _: &RotatePrivacyBootleLanternIssuerPolicyV1,
             ) {
                 self.calls.push("rotate");
             }
-
             fn visit_revoke_privacy_bootle_lantern_issuer_policy_v1(
                 &mut self,
                 _: &RevokePrivacyBootleLanternIssuerPolicyV1,
@@ -1166,7 +1113,6 @@ mod tests {
                 self.calls.push("revoke");
             }
         }
-
         let current = bootle_visitor_policy();
         let mut rotated = current.clone();
         rotated.epoch += 1;
@@ -1176,7 +1122,6 @@ mod tests {
         rotated
             .validate_rotation_successor(&current)
             .expect("canonical Bootle/Lantern rotation visitor fixture");
-
         let mut revoked = current.clone();
         revoked.epoch += 1;
         revoked.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
@@ -1184,40 +1129,33 @@ mod tests {
         revoked
             .validate_revocation_successor(&current)
             .expect("canonical Bootle/Lantern revocation visitor fixture");
-
         let instructions: Vec<InstructionBox> = vec![
             RegisterPrivacyBootleLanternIssuerPolicyV1::new(current.clone()).into(),
             RotatePrivacyBootleLanternIssuerPolicyV1::new(current.record_digest, rotated).into(),
             RevokePrivacyBootleLanternIssuerPolicyV1::new(current.record_digest, revoked).into(),
         ];
-
         let mut visitor = BootleVisitor { calls: Vec::new() };
         for instruction in &instructions {
             visit_instruction(&mut visitor, instruction);
         }
         assert_eq!(visitor.calls, ["register", "rotate", "revoke"]);
     }
-
     #[test]
     fn visit_all_vega_governance_instructions_dispatches_from_boxes() {
         struct VegaVisitor {
             calls: Vec<&'static str>,
         }
-
         impl Visit for VegaVisitor {
             fn visit_register_privacy_vega_issuer_v1(&mut self, _: &RegisterPrivacyVegaIssuerV1) {
                 self.calls.push("register");
             }
-
             fn visit_rotate_privacy_vega_issuer_v1(&mut self, _: &RotatePrivacyVegaIssuerV1) {
                 self.calls.push("rotate");
             }
-
             fn visit_revoke_privacy_vega_issuer_v1(&mut self, _: &RevokePrivacyVegaIssuerV1) {
                 self.calls.push("revoke");
             }
         }
-
         let current =
             vega_visitor_record(1, 0x41, None, PrivacyVegaIssuerRecordLifecycleV1::Active);
         let rotated = vega_visitor_record(
@@ -1237,20 +1175,17 @@ mod tests {
             RotatePrivacyVegaIssuerV1::new(current.record_digest, rotated).into(),
             RevokePrivacyVegaIssuerV1::new(current.record_digest, revoked).into(),
         ];
-
         let mut visitor = VegaVisitor { calls: Vec::new() };
         for instruction in &instructions {
             visit_instruction(&mut visitor, instruction);
         }
         assert_eq!(visitor.calls, ["register", "rotate", "revoke"]);
     }
-
     #[test]
     fn visit_all_x509_governance_instructions_dispatches_from_boxes() {
         struct X509Visitor {
             calls: Vec<&'static str>,
         }
-
         impl Visit for X509Visitor {
             fn visit_register_privacy_zk_x509_trust_anchor_v1(
                 &mut self,
@@ -1258,55 +1193,46 @@ mod tests {
             ) {
                 self.calls.push("register-trust-anchor");
             }
-
             fn visit_rotate_privacy_zk_x509_trust_anchor_v1(
                 &mut self,
                 _: &RotatePrivacyZkX509TrustAnchorV1,
             ) {
                 self.calls.push("rotate-trust-anchor");
             }
-
             fn visit_revoke_privacy_zk_x509_trust_anchor_v1(
                 &mut self,
                 _: &RevokePrivacyZkX509TrustAnchorV1,
             ) {
                 self.calls.push("revoke-trust-anchor");
             }
-
             fn visit_register_privacy_zk_x509_certificate_policy_v1(
                 &mut self,
                 _: &RegisterPrivacyZkX509CertificatePolicyV1,
             ) {
                 self.calls.push("register-certificate-policy");
             }
-
             fn visit_rotate_privacy_zk_x509_certificate_policy_v1(
                 &mut self,
                 _: &RotatePrivacyZkX509CertificatePolicyV1,
             ) {
                 self.calls.push("rotate-certificate-policy");
             }
-
             fn visit_revoke_privacy_zk_x509_certificate_policy_v1(
                 &mut self,
                 _: &RevokePrivacyZkX509CertificatePolicyV1,
             ) {
                 self.calls.push("revoke-certificate-policy");
             }
-
             fn visit_register_privacy_zk_x509_crl_v1(&mut self, _: &RegisterPrivacyZkX509CrlV1) {
                 self.calls.push("register-crl");
             }
-
             fn visit_rotate_privacy_zk_x509_crl_v1(&mut self, _: &RotatePrivacyZkX509CrlV1) {
                 self.calls.push("rotate-crl");
             }
-
             fn visit_revoke_privacy_zk_x509_crl_v1(&mut self, _: &RevokePrivacyZkX509CrlV1) {
                 self.calls.push("revoke-crl");
             }
         }
-
         let trust_anchor_id = PrivacyIssuerIdV1::new([0x11; 32]);
         let policy_id = PrivacyPolicyIdV1::new([0x12; 32]);
         let trust_anchor = PrivacyZkX509TrustAnchorRecordV1::new(
@@ -1349,7 +1275,6 @@ mod tests {
             PrivacyZkX509RecordLifecycleV1::Active,
         )
         .expect("valid X.509 CRL visitor fixture");
-
         let instructions: Vec<InstructionBox> = vec![
             RegisterPrivacyZkX509TrustAnchorV1::new(trust_anchor).into(),
             RotatePrivacyZkX509TrustAnchorV1::new(trust_anchor.record_digest, trust_anchor).into(),
@@ -1362,12 +1287,10 @@ mod tests {
             RotatePrivacyZkX509CrlV1::new(crl.record_digest, crl).into(),
             RevokePrivacyZkX509CrlV1::new(crl.record_digest, crl).into(),
         ];
-
         let mut visitor = X509Visitor { calls: Vec::new() };
         for instruction in &instructions {
             visit_instruction(&mut visitor, instruction);
         }
-
         assert_eq!(
             visitor.calls,
             [

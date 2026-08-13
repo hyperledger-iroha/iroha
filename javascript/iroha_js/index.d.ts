@@ -6,6 +6,7 @@ import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProof
 import type { BufferEncoding } from "./src/nodeBufferTypes.js";
 import type { ToriiBrowserExplorerAccountsOptions, ToriiBrowserExplorerAssetDefinition, ToriiBrowserExplorerAssetDefinitionsOptions, ToriiBrowserExplorerAssetsOptions, ToriiBrowserExplorerCursorPage, ToriiBrowserExplorerDomainsOptions, ToriiBrowserExplorerOwnedDomainOptions } from "./src/toriiBrowserExplorerTypes.js";
 import type { SubscriptionActionResponse, SubscriptionAuthorityActionRequest, SubscriptionCancelActionRequest, SubscriptionChargeActionRequest, SubscriptionCreateRequest, SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListItem, SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse, SubscriptionPlanListItem, SubscriptionPlanListResponse, SubscriptionUsageDraft, SubscriptionUsageRequest } from "./src/subscriptionTypes.js";
+import type { SorafsOrderbookSignedTransaction, SorafsOrderbookSubmissionReceipt, SorafsOrderbookTransactionSubmitOptions } from "./src/sorafsOrderbookSubmission.js";
 import { NetworkId } from "./src/networkId.js";
 export { NetworkId, OperatorSigningContext };
 export * from "./kotodama-compiler.js";
@@ -15,6 +16,7 @@ export * from "./bootle-lantern-issuance.js";
 export * from "./src/blockProofTypes.js";
 export * from "./src/toriiBrowserExplorerTypes.js";
 export type * from "./src/subscriptionTypes.js";
+export * from "./src/sorafsOrderbookSubmission.js";
 
 export type JsonValue =
   | null
@@ -3875,6 +3877,7 @@ type ToriiRuntimeNamespaceExport =
   | "OperatorSigningContext"
   | "ToriiClient"
   | "TransactionBatchAdmissionAmbiguousError"
+  | "SorafsOrderbookSubmissionAmbiguousError"
   | "ToriiDataModelMismatchError"
   | "ToriiHttpError"
   | "TransactionStatusError"
@@ -4103,7 +4106,11 @@ export interface ResolvedToriiClientConfig {
 
 export type ToriiHealthStatus = { status: string } & Record<string, unknown>;
 /** Immutable NetworkId context required by APIs that return local-signing drafts. */
-export class LocalSigningContext { constructor(networkId: NetworkId); readonly networkId: NetworkId; }
+export class LocalSigningContext {
+  constructor(networkId: NetworkId, chainDiscriminant?: number);
+  readonly networkId: NetworkId; readonly chainDiscriminant: number;
+}
+
 export interface ToriiClientOptions extends ToriiClientRetryOptions {
   chain?: never;
   chainId?: never;
@@ -8914,10 +8921,6 @@ export interface SorafsOrderbookEventsWebSocketStreamOptions<T = unknown>
   closeOnReturn?: boolean;
 }
 
-export interface SorafsOrderbookTransactionSubmitOptions {
-  signal?: AbortSignal;
-}
-
 export interface SorafsOrderbookFinalizedCursor {
   height: number;
   block_hash: string;
@@ -10698,17 +10701,17 @@ export declare class ToriiClient {
     options: SorafsReplicationListOptions & PaginationIteratorOptions,
   ): AsyncGenerator<SorafsReplicationOrderRecord, void, unknown>;
   submitSorafsOrderbookOrder(
-    signedTransaction: BinaryLike,
-    options?: SorafsOrderbookTransactionSubmitOptions,
-  ): Promise<unknown>;
+    signedTransaction: SorafsOrderbookSignedTransaction,
+    options: SorafsOrderbookTransactionSubmitOptions,
+  ): Promise<SorafsOrderbookSubmissionReceipt>;
   submitSorafsOrderbookCancel(
-    signedTransaction: BinaryLike,
-    options?: SorafsOrderbookTransactionSubmitOptions,
-  ): Promise<unknown>;
+    signedTransaction: SorafsOrderbookSignedTransaction,
+    options: SorafsOrderbookTransactionSubmitOptions,
+  ): Promise<SorafsOrderbookSubmissionReceipt>;
   submitSorafsOrderbookReceipt(
-    signedTransaction: BinaryLike,
-    options?: SorafsOrderbookTransactionSubmitOptions,
-  ): Promise<unknown>;
+    signedTransaction: SorafsOrderbookSignedTransaction,
+    options: SorafsOrderbookTransactionSubmitOptions,
+  ): Promise<SorafsOrderbookSubmissionReceipt>;
   getSorafsOrderbook(
     options?: SorafsOrderbookReadOptions,
   ): Promise<SorafsOrderbookBookResponse>;

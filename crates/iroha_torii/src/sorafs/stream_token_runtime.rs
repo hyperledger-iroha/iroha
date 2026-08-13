@@ -1,15 +1,11 @@
 //! Strict Torii ownership checks for the production stream-token runtime.
-
 use std::sync::Arc;
-
 use iroha_config::parameters::actual::{SorafsTokenConfig, Torii as ToriiConfig};
 use iroha_data_model::{NetworkId, sorafs::reputation::derive_stream_token_gateway_id_v1};
-
 use super::{
     StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionQualificationV1, StreamTokenIssuer,
     StreamTokenRuntimeSigner,
 };
-
 /// Reject missing, unexpected, or drifting production admission ownership.
 pub(crate) fn preflight_admission_capture(
     network_id: &NetworkId,
@@ -28,7 +24,6 @@ pub(crate) fn preflight_admission_capture(
             )
         };
     }
-
     let capture = capture.ok_or_else(|| {
         "enabled stream tokens require a deployment-owned admission capture".to_owned()
     })?;
@@ -66,7 +61,6 @@ pub(crate) fn preflight_admission_capture(
                 .to_owned()
         })
 }
-
 /// Construct the optional issuer after signer qualification.
 pub(crate) fn build_issuer(
     config: &SorafsTokenConfig,
@@ -82,7 +76,6 @@ pub(crate) fn build_issuer(
         Err(error) => panic!("invalid SoraFS stream token configuration: {error}"),
     }
 }
-
 impl crate::ToriiRuntimeDeps {
     /// Attach the runtime-only HSM/KMS signer used for stream-token issuance.
     #[must_use]
@@ -93,7 +86,6 @@ impl crate::ToriiRuntimeDeps {
         self.sorafs_stream_token_signer = Some(signer);
         self
     }
-
     /// Attach the qualified deployment-owned stream-token admission capture.
     #[must_use]
     pub fn with_sorafs_stream_token_admission_capture(
@@ -104,7 +96,6 @@ impl crate::ToriiRuntimeDeps {
         self
     }
 }
-
 impl crate::AppState {
     /// Clone the production stream-token admission capture.
     pub(crate) fn stream_token_admission_capture(
@@ -112,27 +103,22 @@ impl crate::AppState {
     ) -> Option<Arc<StreamTokenAdmissionCaptureV1>> {
         self.stream_token_admission_capture.clone()
     }
-
     /// Clone the configured stream-token issuer.
     pub(crate) fn stream_token_issuer(&self) -> Option<Arc<StreamTokenIssuer>> {
         self.stream_token_issuer.clone()
     }
-
     #[cfg(test)]
     pub(crate) fn stream_token_concurrency(&self) -> &super::StreamTokenConcurrencyTracker {
         &self.stream_token_concurrency
     }
-
     #[cfg(test)]
     pub(crate) fn stream_token_quota(&self) -> &super::StreamTokenQuotaTracker {
         &self.stream_token_quota
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     #[should_panic(
         expected = "enabled stream-token issuance requires torii.operator_signatures.enabled"

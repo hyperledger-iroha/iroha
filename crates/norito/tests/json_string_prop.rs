@@ -1,14 +1,11 @@
 #![cfg(feature = "json")]
 //! Deterministic tests for Norito JSON string parsing and skipping.
-
 use norito::json::{Arena, Parser, TapeWalker, from_json_fast, write_json_string};
-
 fn json_quote(s: &str) -> String {
     let mut out = String::new();
     write_json_string(s, &mut out);
     out
 }
-
 #[test]
 fn parse_string_matches_input() {
     let cases = [
@@ -28,7 +25,6 @@ fn parse_string_matches_input() {
         "multi\\\\slashes",
         "braces{}not structural",
     ];
-
     for s in cases {
         let quoted = json_quote(s);
         let mut p = Parser::new(&quoted);
@@ -36,7 +32,6 @@ fn parse_string_matches_input() {
         assert_eq!(out, s);
     }
 }
-
 #[test]
 fn parse_string_ref_inline_matches_input() {
     // Deterministic cases covering escapes, unicode, and edge conditions.
@@ -74,7 +69,6 @@ fn parse_string_ref_inline_matches_input() {
         assert_eq!(w.raw_pos(), quoted.len());
     }
 }
-
 #[test]
 fn skip_value_advances_to_next() {
     let a = json_quote("hello");
@@ -100,7 +94,6 @@ fn skip_value_advances_to_next() {
     };
     assert_eq!(s2, "world");
 }
-
 #[test]
 fn from_json_fast_equivalence_simple_struct() {
     #[derive(Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
@@ -109,7 +102,6 @@ fn from_json_fast_equivalence_simple_struct() {
         name: String,
         ok: bool,
     }
-
     impl norito::json::JsonDeserialize for S {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, norito::json::Error> {
             p.skip_ws();
@@ -138,7 +130,6 @@ fn from_json_fast_equivalence_simple_struct() {
             })
         }
     }
-
     let s = r#"{"id":123,"name":"abc","ok":true}"#;
     let a: S = norito::json::from_json(s).expect("generic");
     let b: S = from_json_fast(s).expect("fast");

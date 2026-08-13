@@ -3,17 +3,13 @@
 mod tests {
     use norito::codec::{Decode, Encode};
     use zeroize::Zeroizing;
-
     use super::*;
-
     static SESSION_KEY_ZEROIZATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn session_key_zeroization_test_guard() -> std::sync::MutexGuard<'static, ()> {
         SESSION_KEY_ZEROIZATION_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
-
     fn supported_algorithms() -> Vec<Algorithm> {
         let base = [Algorithm::Ed25519, Algorithm::Secp256k1];
         #[cfg(feature = "gost")]
@@ -26,19 +22,15 @@ mod tests {
         ];
         #[cfg(not(feature = "gost"))]
         let gost_algorithms: [Algorithm; 0] = [];
-
         let ml_dsa_algorithms = [Algorithm::MlDsa];
-
         #[cfg(feature = "bls")]
         let bls_algorithms = [Algorithm::BlsNormal, Algorithm::BlsSmall];
         #[cfg(not(feature = "bls"))]
         let bls_algorithms: [Algorithm; 0] = [];
-
         #[cfg(feature = "sm")]
         let sm_algorithms = [Algorithm::Sm2];
         #[cfg(not(feature = "sm"))]
         let sm_algorithms: [Algorithm; 0] = [];
-
         base.iter()
             .chain(gost_algorithms.iter())
             .chain(ml_dsa_algorithms.iter())
@@ -47,83 +39,62 @@ mod tests {
             .copied()
             .collect()
     }
-
     #[derive(Debug)]
     struct FailingTryRngError;
-
     impl core::fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             f.write_str("failing ML-DSA signing RNG")
         }
     }
-
     struct FailingTryRng;
-
     impl rand_core::TryRngCore for FailingTryRng {
         type Error = FailingTryRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_fill_bytes(&mut self, _dest: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingTryRngError)
         }
     }
-
     impl rand_core::TryCryptoRng for FailingTryRng {}
-
     struct FixedTryRng {
         byte: u8,
     }
-
     impl rand_core::TryRngCore for FixedTryRng {
         type Error = core::convert::Infallible;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok(u64::from_le_bytes([self.byte; 8]))
         }
-
         fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
             dest.fill(self.byte);
             Ok(())
         }
     }
-
     impl rand_core::TryCryptoRng for FixedTryRng {}
-
     fn seeded_ml_dsa_secret(seed: &[u8]) -> (PublicKey, MlDsaSecretKey) {
         use pqcrypto_traits::sign::SecretKey as _;
-
         let (public, private) =
             mldsa_seed::mldsa65::keypair_from_seed(seed).expect("seeded ML-DSA keypair");
         let raw_secret = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
             .expect("valid ML-DSA secret bytes");
-
         (public, MlDsaSecretKey::new(&raw_secret))
     }
-
     fn checked_seed_keypair(seed: &[u8], algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(seed.to_vec(), algorithm).expect("generate checked seeded keypair")
     }
-
     #[cfg(feature = "rand")]
     fn checked_random_keypair(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).expect("generate checked random keypair")
     }
-
     fn checked_signature(private_key: &PrivateKey, message: &[u8]) -> Signature {
         Signature::try_new(private_key, message).expect("sign checked top-level fixture")
     }
-
     #[test]
     fn ed25519_parse_signature_rejects_inert_or_malformed_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -135,18 +106,15 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let key_pair = checked_seed_keypair(&[0x31; 32], Algorithm::Ed25519);
         let signature = checked_signature(key_pair.private_key(), b"ed25519 parse signature");
         ed25519_parse_signature(signature.payload()).expect("valid Ed25519 signature parses");
-
         let err = ed25519_parse_signature(&[0u8; 64])
             .expect_err("all-zero Ed25519 signature material must fail admission");
         assert!(
             matches!(err, Error::Parse(ref parse) if parse.to_string().contains("all zero")),
             "unexpected all-zero signature error: {err:?}"
         );
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -162,25 +130,21 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn mldsa65_parse_signature_rejects_inert_or_malformed_lengths() {
         let key_pair = checked_seed_keypair(&[0x32; 32], Algorithm::MlDsa);
         let signature = checked_signature(key_pair.private_key(), b"mldsa65 parse signature");
         mldsa65_parse_signature(signature.payload()).expect("valid ML-DSA-65 signature parses");
-
         let err = mldsa65_parse_signature(&[0u8; 64])
             .expect_err("all-zero ML-DSA signature material must fail admission");
         assert!(
             matches!(err, Error::Parse(ref parse) if parse.to_string().contains("all zero")),
             "unexpected all-zero signature error: {err:?}"
         );
-
         let mut short = signature.payload().to_vec();
         short.pop().expect("ML-DSA signature fixture is non-empty");
         let mut overlong = signature.payload().to_vec();
         overlong.push(0xA5);
-
         for (label, malformed) in [("short", short), ("overlong", overlong)] {
             let err = mldsa65_parse_signature(&malformed)
                 .expect_err("malformed ML-DSA-65 signature length must fail admission");
@@ -191,23 +155,19 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn session_key_from_zeroizing_vec_preserves_payload_and_zeroizes_on_drop() {
         let _test_guard = session_key_zeroization_test_guard();
         __debug_clear_last_zeroized_session_key();
-
         let expected = vec![0x7B; 32];
         {
             let session_key = SessionKey::from_zeroizing_vec(Zeroizing::new(expected.clone()));
             assert_eq!(session_key.payload(), expected.as_slice());
         }
-
         let recorded = __debug_last_zeroized_session_key();
         assert_eq!(recorded.len(), expected.len());
         assert!(recorded.iter().all(|&byte| byte == 0));
     }
-
     #[test]
     fn session_key_zeroization_log_recovers_from_poisoned_debug_mutex() {
         let _test_guard = session_key_zeroization_test_guard();
@@ -218,25 +178,21 @@ mod tests {
             panic!("poison session-key zeroization debug log");
         });
         assert!(result.is_err());
-
         let expected = vec![0x3C; 24];
         {
             let session_key = SessionKey::new(expected.clone());
             assert_eq!(session_key.payload(), expected.as_slice());
         }
-
         let recorded = __debug_last_zeroized_session_key();
         assert_eq!(recorded.len(), expected.len());
         assert!(recorded.iter().all(|&byte| byte == 0));
     }
-
     #[test]
     fn private_key_try_to_bytes_roundtrips_classic_payloads() {
         let cases: &[(Algorithm, &[u8])] = &[
             (Algorithm::Ed25519, b"iroha:ed25519-private-export"),
             (Algorithm::Secp256k1, b"iroha:secp256k1-private-export"),
         ];
-
         for (algorithm, seed) in cases {
             let key_pair = checked_seed_keypair(seed, *algorithm);
             let (exported_algorithm, payload) = key_pair
@@ -248,11 +204,9 @@ mod tests {
                 !payload.is_empty(),
                 "{algorithm:?} private-key export must not be empty"
             );
-
             let parsed = PrivateKey::from_bytes(exported_algorithm, &payload)
                 .expect("exported private key payload parses");
             assert_eq!(parsed.to_bytes(), (exported_algorithm, payload));
-
             let message = b"top-level private-key export roundtrip";
             let signature = checked_signature(&parsed, message);
             signature
@@ -260,7 +214,6 @@ mod tests {
                 .expect("reparsed private key signs for original public key");
         }
     }
-
     #[test]
     #[cfg(feature = "bls")]
     fn private_key_try_to_bytes_roundtrips_bls_payloads() {
@@ -268,7 +221,6 @@ mod tests {
             (Algorithm::BlsNormal, b"iroha:bls-normal-private-export"),
             (Algorithm::BlsSmall, b"iroha:bls-small-private-export"),
         ];
-
         for (algorithm, seed) in cases {
             let key_pair =
                 KeyPair::try_from_seed(seed.to_vec(), *algorithm).expect("seeded BLS keypair");
@@ -281,11 +233,9 @@ mod tests {
                 !payload.is_empty(),
                 "{algorithm:?} private-key export must not be empty"
             );
-
             let parsed = PrivateKey::from_bytes(exported_algorithm, &payload)
                 .expect("exported BLS private key payload parses");
             assert_eq!(parsed.to_bytes(), (exported_algorithm, payload));
-
             let message = b"top-level BLS private-key export roundtrip";
             let signature = Signature::try_new(&parsed, message).expect("BLS signature");
             signature
@@ -293,7 +243,6 @@ mod tests {
                 .expect("reparsed BLS private key signs for original public key");
         }
     }
-
     #[test]
     fn algorithm_serialize_deserialize_consistent() {
         for algorithm in supported_algorithms() {
@@ -304,7 +253,6 @@ mod tests {
             assert_eq!(algorithm, de);
         }
     }
-
     #[test]
     fn try_random_with_algorithm_ed25519_signs_and_verifies() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
@@ -313,7 +261,6 @@ mod tests {
             .expect("checked wrong Ed25519 random keypair");
         let message = b"top-level checked Ed25519 random keypair";
         let signature = checked_signature(key_pair.private_key(), message);
-
         signature
             .verify(key_pair.public_key(), message)
             .expect("signature verifies");
@@ -321,7 +268,6 @@ mod tests {
             .verify(wrong_key.public_key(), message)
             .expect_err("signature must reject wrong Ed25519 key");
     }
-
     #[test]
     fn try_random_with_algorithm_secp256k1_signs_and_verifies() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)
@@ -330,7 +276,6 @@ mod tests {
             .expect("checked wrong secp256k1 random keypair");
         let message = b"top-level checked secp256k1 random keypair";
         let signature = checked_signature(key_pair.private_key(), message);
-
         signature
             .verify(key_pair.public_key(), message)
             .expect("signature verifies");
@@ -338,7 +283,6 @@ mod tests {
             .verify(wrong_key.public_key(), message)
             .expect_err("signature must reject wrong secp256k1 key");
     }
-
     #[test]
     fn try_random_with_algorithm_ml_dsa_signs_and_verifies() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
@@ -347,7 +291,6 @@ mod tests {
             .expect("checked wrong ML-DSA random keypair");
         let message = b"top-level checked ML-DSA random keypair";
         let signature = checked_signature(key_pair.private_key(), message);
-
         signature
             .verify(key_pair.public_key(), message)
             .expect("signature verifies");
@@ -355,7 +298,6 @@ mod tests {
             .verify(wrong_key.public_key(), message)
             .expect_err("signature must reject wrong ML-DSA key");
     }
-
     #[cfg(feature = "sm")]
     #[test]
     fn try_random_with_algorithm_sm2_signs_and_verifies() {
@@ -365,7 +307,6 @@ mod tests {
             .expect("checked wrong SM2 random keypair");
         let message = b"top-level checked SM2 random keypair";
         let signature = checked_signature(key_pair.private_key(), message);
-
         signature
             .verify(key_pair.public_key(), message)
             .expect("signature verifies");
@@ -373,7 +314,6 @@ mod tests {
             .verify(wrong_key.public_key(), message)
             .expect_err("signature must reject wrong SM2 key");
     }
-
     #[cfg(feature = "sm")]
     #[test]
     fn try_from_seed_sm2_uses_checked_public_derivation() {
@@ -381,10 +321,8 @@ mod tests {
             .expect("checked SM2 seeded keypair");
         let derived_public = PublicKey::from_private_key(key_pair.private_key())
             .expect("checked SM2 public derivation");
-
         assert_eq!(derived_public, key_pair.public_key().clone());
     }
-
     #[test]
     fn try_from_seed_ml_dsa_is_deterministic_and_signs() {
         let seed = b"iroha:top-level-ml-dsa-seed";
@@ -392,20 +330,17 @@ mod tests {
             .expect("checked ML-DSA seeded keypair");
         let second = KeyPair::try_from_seed(seed.to_vec(), Algorithm::MlDsa)
             .expect("checked ML-DSA seeded keypair");
-
         assert_eq!(first.public_key(), second.public_key());
         assert_eq!(
             first.private_key().to_bytes(),
             second.private_key().to_bytes()
         );
-
         let message = b"top-level checked ML-DSA seeded keypair";
         let signature = checked_signature(first.private_key(), message);
         signature
             .verify(first.public_key(), message)
             .expect("signature verifies");
     }
-
     #[cfg(feature = "gost")]
     #[test]
     fn try_from_seed_gost_is_deterministic_and_signs() {
@@ -414,13 +349,11 @@ mod tests {
             .expect("checked GOST seeded keypair");
         let second = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Gost3410_2012_256ParamSetB)
             .expect("checked GOST seeded keypair");
-
         assert_eq!(first.public_key(), second.public_key());
         assert_eq!(
             first.private_key().to_bytes(),
             second.private_key().to_bytes()
         );
-
         let message = b"top-level checked GOST seeded keypair";
         let signature =
             Signature::try_new(first.private_key(), message).expect("checked GOST signature");
@@ -428,7 +361,6 @@ mod tests {
             .verify(first.public_key(), message)
             .expect("signature verifies");
     }
-
     #[cfg(feature = "bls")]
     #[test]
     fn bls_normal_aggregate_fast_accepts_valid_and_rejects_bad() {
@@ -446,10 +378,8 @@ mod tests {
             bls_normal_pop_prove(&sk2).expect("pop"),
         ];
         let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
-
         bls_normal_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pop_refs)
             .expect("aggregate fast ok");
-
         let mut bad_sig = sig1.payload().to_vec();
         bad_sig[0] ^= 0x01;
         let bad_signatures: Vec<&[u8]> = vec![bad_sig.as_slice(), sig2.payload()];
@@ -464,7 +394,6 @@ mod tests {
             "bad signature must be rejected"
         );
     }
-
     #[cfg(feature = "bls")]
     #[test]
     fn bls_normal_same_message_wrappers_reject_duplicate_public_keys() {
@@ -476,7 +405,6 @@ mod tests {
         let public_keys: Vec<&PublicKey> = vec![&public_key, &public_key];
         let pop = bls_normal_pop_prove(&private_key).expect("pop");
         let pops: Vec<&[u8]> = vec![pop.as_slice(), pop.as_slice()];
-
         assert!(
             bls_normal_verify_aggregate_same_message(msg, &signatures, &public_keys, &pops)
                 .is_err(),
@@ -498,12 +426,10 @@ mod tests {
             "duplicate signer keys must be rejected in preaggregated wrapper"
         );
     }
-
     #[cfg(feature = "bls")]
     #[test]
     fn bls_normal_same_message_rejects_canceling_key_aggregate_with_valid_pops() {
         use w3f_bls::SerializableToBytes as _;
-
         let secret =
             w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_seed(b"iroha:test:canceling-bls-normal");
         let opposite = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>(-secret.0);
@@ -517,7 +443,6 @@ mod tests {
         let pop2 = bls_normal_pop_prove(&sk2).expect("pop 2");
         bls_normal_pop_verify(&pk1, &pop1).expect("pop 1 verifies");
         bls_normal_pop_verify(&pk2, &pop2).expect("pop 2 verifies");
-
         let msg = b"canceling-wrapper-normal";
         let sig1 = checked_signature(&sk1, msg);
         let sig2 = checked_signature(&sk2, msg);
@@ -526,7 +451,6 @@ mod tests {
         let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
         let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
         let pop_refs: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
-
         assert!(
             bls_normal_verify_aggregate_same_message_fast(
                 msg,
@@ -543,7 +467,6 @@ mod tests {
             "fallback wrapper must not bypass identity aggregate rejection"
         );
     }
-
     #[cfg(feature = "bls")]
     #[test]
     fn bls_small_aggregate_fast_accepts_valid_and_rejects_bad() {
@@ -561,10 +484,8 @@ mod tests {
             bls_small_pop_prove(&sk2).expect("pop"),
         ];
         let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
-
         bls_small_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pop_refs)
             .expect("aggregate fast ok");
-
         let mut bad_sig = sig2.payload().to_vec();
         bad_sig[0] ^= 0x01;
         let bad_signatures: Vec<&[u8]> = vec![sig1.payload(), bad_sig.as_slice()];
@@ -579,7 +500,6 @@ mod tests {
             "bad signature must be rejected"
         );
     }
-
     #[cfg(feature = "bls")]
     #[test]
     fn bls_small_same_message_wrappers_reject_duplicate_public_keys() {
@@ -591,7 +511,6 @@ mod tests {
         let public_keys: Vec<&PublicKey> = vec![&public_key, &public_key];
         let pop = bls_small_pop_prove(&private_key).expect("pop");
         let pops: Vec<&[u8]> = vec![pop.as_slice(), pop.as_slice()];
-
         assert!(
             bls_small_verify_aggregate_same_message(msg, &signatures, &public_keys, &pops).is_err(),
             "duplicate signer keys must be rejected in fallback wrapper"
@@ -602,12 +521,10 @@ mod tests {
             "duplicate signer keys must be rejected in fast wrapper"
         );
     }
-
     #[cfg(feature = "bls")]
     #[test]
     fn bls_small_same_message_rejects_canceling_key_aggregate_with_valid_pops() {
         use w3f_bls::SerializableToBytes as _;
-
         let secret = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_seed(
             b"iroha:test:canceling-bls-small",
         );
@@ -622,7 +539,6 @@ mod tests {
         let pop2 = bls_small_pop_prove(&sk2).expect("pop 2");
         bls_small_pop_verify(&pk1, &pop1).expect("pop 1 verifies");
         bls_small_pop_verify(&pk2, &pop2).expect("pop 2 verifies");
-
         let msg = b"canceling-wrapper-small";
         let sig1 = checked_signature(&sk1, msg);
         let sig2 = checked_signature(&sk2, msg);
@@ -631,7 +547,6 @@ mod tests {
         let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
         let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
         let pop_refs: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
-
         assert!(
             bls_small_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pop_refs)
                 .is_err(),
@@ -643,12 +558,10 @@ mod tests {
             "fallback wrapper must not bypass identity aggregate rejection"
         );
     }
-
     #[test]
     fn no_such_algorithm_error_displays_identifier() {
         let missing = "rot13-ed25519";
         let err = Error::NoSuchAlgorithm(missing.to_string());
-
         let rendered = err.to_string();
         assert!(
             rendered.contains(missing),
@@ -659,23 +572,18 @@ mod tests {
             "Display output should remain human readable"
         );
     }
-
     #[test]
     fn ml_dsa_secret_key_clone_shares_inner_arc() {
         use pqcrypto_traits::sign::SecretKey as _;
-
         use crate::mldsa_seed::mldsa65 as seeded;
-
         let (public, private) =
             seeded::keypair_from_seed(b"iroha:ml-dsa:strong-count").expect("seeded ML-DSA keypair");
         let raw_secret = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
             .expect("valid ML-DSA secret bytes");
         let key = MlDsaSecretKey::new(&raw_secret);
         assert_eq!(key.strong_count(), 1, "initial strong count must be 1");
-
         let cloned = key.clone();
         assert_eq!(key.strong_count(), 2, "cloning increments strong count");
-
         let message = b"iroha:ml-dsa:test-arc-sharing";
         let sig_original = key.try_sign(message).expect("original ML-DSA signature");
         let sig_clone = cloned.try_sign(message).expect("clone ML-DSA signature");
@@ -685,92 +593,73 @@ mod tests {
         Signature::from_bytes(&sig_clone)
             .verify(&public, message)
             .expect("clone ML-DSA signature should verify");
-
         drop(cloned);
         assert_eq!(key.strong_count(), 1, "dropping clone decrements count");
     }
-
     #[test]
     fn ml_dsa_try_sign_with_rng_reports_rng_failure() {
         let (_, key) = seeded_ml_dsa_secret(b"iroha:ml-dsa:signing-rng-failure");
         let mut rng = FailingTryRng;
-
         let err = key
             .try_sign_with_rng(b"iroha:ml-dsa:message", &mut rng)
             .expect_err("ML-DSA signing RNG failure must fail closed");
-
         assert!(
             matches!(err, Error::Signing(ref message) if message.contains("hedged RNG seed draw failed")),
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn ml_dsa_try_sign_with_rng_rejects_all_zero_seed_material() {
         let (_, key) = seeded_ml_dsa_secret(b"iroha:ml-dsa:signing-all-zero");
         let mut rng = FixedTryRng { byte: 0 };
-
         let err = key
             .try_sign_with_rng(b"iroha:ml-dsa:message", &mut rng)
             .expect_err("all-zero ML-DSA signing seed material must fail closed");
-
         assert!(
             matches!(err, Error::Signing(ref message) if message.contains("all-zero material")),
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn ml_dsa_try_sign_with_rng_accepts_nonzero_seed_material() {
         let (public, key) = seeded_ml_dsa_secret(b"iroha:ml-dsa:signing-nonzero");
         let mut rng = FixedTryRng { byte: 0x42 };
         let message = b"iroha:ml-dsa:signing-nonzero-message";
-
         let signature = key
             .try_sign_with_rng(message, &mut rng)
             .expect("nonzero ML-DSA signing seed material should sign");
-
         Signature::from_bytes(&signature)
             .verify(&public, message)
             .expect("ML-DSA signature should verify");
     }
-
     #[test]
     fn ml_dsa_private_key_from_bytes_signs_after_local_scrub() {
         use crate::mldsa_seed::mldsa65 as seeded;
-
         let (public, private) = seeded::keypair_from_seed(b"iroha:ml-dsa:from-bytes-scrub")
             .expect("seeded ML-DSA keypair");
         let private_bytes = Zeroizing::new(private.to_bytes().1);
         let parsed = PrivateKey::from_bytes(Algorithm::MlDsa, private_bytes.as_slice())
             .expect("parse ML-DSA private key");
-
         let message = b"iroha:ml-dsa:parsed-private-key-signs";
         let signature = checked_signature(&parsed, message);
-
         signature
             .verify(&public, message)
             .expect("parsed ML-DSA private key signs");
     }
-
     #[test]
     fn ml_dsa_private_key_parse_rejects_all_zero_material() {
         let all_zero = vec![0u8; pqcrypto_mldsa::mldsa65::secret_key_bytes()];
-
         let err = PrivateKey::from_bytes(Algorithm::MlDsa, &all_zero)
             .expect_err("all-zero ML-DSA private key material must fail closed");
-
         let rendered = err.to_string();
         assert!(
             rendered.contains("all-zero material") || rendered.contains("all zero"),
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn ml_dsa_private_key_parse_uses_strict_secret_validator_for_component_drift() {
         use crate::mldsa_seed::mldsa65 as seeded;
-
         let (_, private) = seeded::keypair_from_seed(b"iroha:ml-dsa:strict-secret-parse")
             .expect("seeded ML-DSA keypair");
         let mut private_bytes = private.to_bytes().1;
@@ -778,25 +667,20 @@ mod tests {
             .last_mut()
             .expect("ML-DSA secret key has at least one byte");
         *last ^= 0x01;
-
         let err = PrivateKey::from_bytes(Algorithm::MlDsa, &private_bytes)
             .expect_err("strict ML-DSA secret-key validation must reject component drift");
-
         assert!(
             err.to_string().contains("internally inconsistent"),
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn ml_dsa_public_key_parse_rejects_invalid_length() {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
             .expect("checked ML-DSA random keypair");
         let (_, public_payload) = key_pair.public_key().to_bytes();
-
         let parsed = PublicKey::from_bytes(Algorithm::MlDsa, public_payload);
         assert!(parsed.is_ok(), "expected valid ML-DSA public key bytes");
-
         let mut bad = public_payload.to_vec();
         bad.push(0x00);
         let err = PublicKey::from_bytes(Algorithm::MlDsa, &bad).unwrap_err();
@@ -805,30 +689,23 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn ml_dsa_public_key_parse_rejects_all_zero_material() {
         let all_zero = vec![0u8; pqcrypto_mldsa::mldsa65::public_key_bytes()];
-
         let err = PublicKey::from_bytes(Algorithm::MlDsa, &all_zero)
             .expect_err("all-zero ML-DSA public key material must fail closed");
-
         assert!(
             err.to_string().contains("all-zero material"),
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn pqc_verify_aggregate_rejects_empty_input() {
         let empty: [&[u8]; 0] = [];
-
         let err = pqc_verify_aggregate(&empty, &empty, &empty)
             .expect_err("empty ML-DSA aggregate verification must fail closed");
-
         assert_eq!(err, Error::BadSignature);
     }
-
     #[test]
     #[cfg(feature = "rand")]
     fn key_pair_serialize_deserialize_consistent() {
@@ -836,7 +713,6 @@ mod tests {
             public_key: PublicKey,
             private_key: ExposedPrivateKey,
         }
-
         impl norito::json::JsonSerialize for ExposedKeyPair {
             fn json_serialize(&self, out: &mut String) {
                 use norito::json::{self, Map, Value};
@@ -852,14 +728,12 @@ mod tests {
                 norito::json::JsonSerialize::json_serialize(&Value::Object(map), out);
             }
         }
-
         for algorithm in supported_algorithms() {
             let key_pair = checked_random_keypair(algorithm);
             let exposed_key_pair = ExposedKeyPair {
                 public_key: key_pair.public_key.clone(),
                 private_key: ExposedPrivateKey(key_pair.private_key.clone()),
             };
-
             let ser = norito::json::to_json(&exposed_key_pair)
                 .unwrap_or_else(|_| panic!("Failed to serialize key pair {:?}", &key_pair));
             let de: KeyPair = norito::json::from_str(&ser)
@@ -867,19 +741,16 @@ mod tests {
             assert_eq!(key_pair, de);
         }
     }
-
     #[test]
     #[cfg(feature = "bls")]
     fn bls_pop_hashes_match_legacy_contiguous_layout() {
         let pk_bytes = [0x42; 96];
         let pop = [0xA5; 48];
-
         let mut legacy_message = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
         legacy_message.extend_from_slice(POP_DST.as_bytes());
         legacy_message.extend_from_slice(&pk_bytes);
         let expected_message_hash: [u8; Hash::LENGTH] = Hash::new(&legacy_message).into();
         assert_eq!(bls_pop_message_hash(&pk_bytes), expected_message_hash);
-
         let mut legacy_cache_key = Vec::with_capacity(pk_bytes.len() + pop.len());
         legacy_cache_key.extend_from_slice(&pk_bytes);
         legacy_cache_key.extend_from_slice(&pop);
@@ -888,7 +759,6 @@ mod tests {
             Hash::new(&legacy_cache_key)
         );
     }
-
     #[test]
     #[cfg(feature = "bls")]
     fn bls_pop_cache_is_exact_and_adversarially_bounded() {
@@ -900,7 +770,6 @@ mod tests {
             proof[..8].copy_from_slice(&index.rotate_left(17).to_le_bytes());
             (public_key, proof)
         }
-
         let mut cache = BlsPopCache::default();
         let overflow = 257;
         for index in 0..BLS_POP_CACHE_CAPACITY + overflow {
@@ -909,7 +778,6 @@ mod tests {
         }
         assert_eq!(cache.len(), BLS_POP_CACHE_CAPACITY);
         assert_eq!(cache.insertion_order.len(), BLS_POP_CACHE_CAPACITY);
-
         for index in 0..overflow {
             let (public_key, proof) = material(index);
             assert!(
@@ -925,12 +793,10 @@ mod tests {
         ));
         let (newest_key, newest_proof) = material(BLS_POP_CACHE_CAPACITY + overflow - 1);
         assert!(cache.contains(Algorithm::BlsNormal, &newest_key, &newest_proof));
-
         let mut substituted_proof = newest_proof.clone();
         substituted_proof[0] ^= 1;
         assert!(!cache.contains(Algorithm::BlsNormal, &newest_key, &substituted_proof));
         assert!(!cache.contains(Algorithm::BlsSmall, &newest_key, &newest_proof));
-
         // A digest is only an index: even an adversarially populated collision
         // bucket cannot make different exact material appear cached.
         let collision_digest =
@@ -951,7 +817,6 @@ mod tests {
             &newest_key,
             &substituted_proof,
         ));
-
         cache.remember(Algorithm::BlsNormal, &newest_key, &newest_proof);
         assert_eq!(
             cache.len(),
@@ -959,7 +824,6 @@ mod tests {
             "an exact duplicate must not consume capacity"
         );
     }
-
     #[test]
     #[cfg(feature = "bls")]
     fn bls_pop_prove_and_verify_roundtrip() {
@@ -973,12 +837,10 @@ mod tests {
         let other = checked_random_keypair(Algorithm::BlsNormal);
         assert!(bls_normal_pop_verify(other.public_key(), &pop).is_err());
     }
-
     #[test]
     #[cfg(feature = "bls")]
     fn bls_pop_rejects_unhashed_message() {
         use crate::secrecy::ExposeSecret;
-
         // PoP signed over POP_DST || pk (unhashed) must be rejected.
         let kp = checked_random_keypair(Algorithm::BlsNormal);
         let (algorithm, pk_bytes) = kp
@@ -999,7 +861,6 @@ mod tests {
         .expect("BLS sign");
         assert!(bls_normal_pop_verify(kp.public_key(), &pop).is_err());
     }
-
     #[test]
     #[cfg(feature = "bls")]
     fn bls_small_pop_roundtrip() {
@@ -1009,7 +870,6 @@ mod tests {
         let other = checked_random_keypair(Algorithm::BlsSmall);
         assert!(bls_small_pop_verify(other.public_key(), &pop).is_err());
     }
-
     #[test]
     #[cfg(feature = "bls")]
     fn bls_pop_paths_reject_malformed_public_key_without_panic() {
@@ -1017,7 +877,6 @@ mod tests {
         let err = bls_normal_pop_verify(&malformed_normal, &[])
             .expect_err("malformed normal BLS key must fail closed");
         assert!(matches!(err, Error::Parse(_)));
-
         let public_keys = vec![&malformed_normal];
         let signatures: Vec<&[u8]> = vec![&[]];
         let pops: Vec<&[u8]> = vec![&[]];
@@ -1029,30 +888,25 @@ mod tests {
         )
         .expect_err("malformed aggregate key must fail during PoP collection");
         assert!(matches!(err, Error::Parse(_)));
-
         let malformed_small = PublicKey(PublicKeyCompact::new(Algorithm::BlsSmall, &[]));
         let err = bls_small_pop_verify(&malformed_small, &[])
             .expect_err("malformed small BLS key must fail closed");
         assert!(matches!(err, Error::Parse(_)));
     }
-
     #[test]
     fn private_key_format_or_serialize_redacted() {
         let key_pair = checked_random_keypair(Algorithm::default());
         let (_, private_key) = key_pair.into_parts();
-
         assert_eq!(
             norito::json::to_json(&private_key).expect("Couldn't serialize key"),
             format!("\"{PRIVATE_KEY_REDACTED}\"")
         );
         assert_eq!(format!("{}", &private_key), PRIVATE_KEY_REDACTED);
     }
-
     #[test]
     fn encode_decode_algorithm_consistent() {
         for algorithm in supported_algorithms() {
             let encoded_algorithm = algorithm.encode();
-
             let decoded_algorithm =
                 Algorithm::decode(&mut encoded_algorithm.as_slice()).expect("Failed to decode");
             assert_eq!(
@@ -1062,7 +916,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn key_pair_match() {
         KeyPair::new(
@@ -1074,7 +927,6 @@ mod tests {
                 .expect("Private key not in mulithash format"),
         )
         .unwrap();
-
         #[cfg(feature = "bls")]
         {
             KeyPair::new("ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
@@ -1085,7 +937,6 @@ mod tests {
                 .expect("Private key not in mulithash format")
             ).unwrap();
         }
-
         #[cfg(feature = "gost")]
         {
             for algorithm in [
@@ -1109,7 +960,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     #[cfg(all(feature = "bls", feature = "rand"))]
     fn bls_normal_multi_message_duplicates_are_rejected() {
@@ -1122,22 +972,18 @@ mod tests {
         let sig2 = signature::bls::BlsNormal::sign(&message, &sk2).expect("BLS sign");
         let pk1_bytes = pk1.to_bytes();
         let pk2_bytes = pk2.to_bytes();
-
         let msgs: Vec<&[u8]> = vec![message.as_slice(), message.as_slice()];
         let signature_refs: Vec<&[u8]> = vec![sig1.as_slice(), sig2.as_slice()];
         let pk_refs: Vec<&[u8]> = vec![pk1_bytes.as_slice(), pk2_bytes.as_slice()];
-
         super::signature::bls::verify_aggregate_multi_message_normal(
             &msgs,
             &signature_refs,
             &pk_refs,
         )
         .expect_err("aggregate verifier must reject duplicate messages");
-
         super::bls_normal_verify_aggregate_multi_message(&msgs, &signature_refs, &pk_refs)
             .expect_err("wrapper must reject duplicate messages");
     }
-
     #[test]
     #[cfg(all(feature = "bls", feature = "rand"))]
     fn bls_small_multi_message_duplicates_are_rejected() {
@@ -1150,31 +996,25 @@ mod tests {
         let sig2 = signature::bls::BlsSmall::sign(&message, &sk2).expect("BLS sign");
         let pk1_bytes = pk1.to_bytes();
         let pk2_bytes = pk2.to_bytes();
-
         let msgs: Vec<&[u8]> = vec![message.as_slice(), message.as_slice()];
         let signature_refs: Vec<&[u8]> = vec![sig1.as_slice(), sig2.as_slice()];
         let pk_refs: Vec<&[u8]> = vec![pk1_bytes.as_slice(), pk2_bytes.as_slice()];
-
         super::signature::bls::verify_aggregate_multi_message_small(
             &msgs,
             &signature_refs,
             &pk_refs,
         )
         .expect_err("aggregate verifier must reject duplicate messages");
-
         super::bls_small_verify_aggregate_multi_message(&msgs, &signature_refs, &pk_refs)
             .expect_err("wrapper must reject duplicate messages");
     }
-
     #[test]
     #[cfg(feature = "rand")]
     fn encode_decode_public_key_consistent() {
         for algorithm in supported_algorithms() {
             let key_pair = checked_random_keypair(algorithm);
             let (public_key, _) = key_pair.into_parts();
-
             let encoded_public_key = public_key.encode();
-
             let decoded_public_key =
                 PublicKey::decode(&mut encoded_public_key.as_slice()).expect("Failed to decode");
             assert_eq!(
@@ -1184,28 +1024,24 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn public_key_norito_roundtrip() {
         let pk: PublicKey =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .expect("public key");
-
         let mut buf = Vec::new();
         norito::core::serialize_to_buffer(&pk, &mut buf).expect("serialize public key");
         let (decoded, used) = <PublicKey as norito::core::DecodeFromSlice>::decode_from_slice(&buf)
             .expect("decode public key slice");
         assert_eq!(used, buf.len());
         assert_eq!(decoded, pk);
-
         let codec_bytes = pk.encode();
         let mut cursor = codec_bytes.as_slice();
         let codec_decoded =
             <PublicKey as Decode>::decode(&mut cursor).expect("codec decode public key");
         assert_eq!(codec_decoded, pk);
     }
-
     #[test]
     fn public_key_payload_ceiling_covers_feature_independent_algorithms() {
         assert_eq!(MAX_PUBLIC_KEY_PAYLOAD_BYTES, 8_258);
@@ -1213,7 +1049,6 @@ mod tests {
             assert!(MAX_PUBLIC_KEY_PAYLOAD_BYTES >= ML_DSA_65_PUBLIC_KEY_BYTES);
         }
     }
-
     #[cfg(feature = "sm")]
     #[test]
     fn maximum_accepted_sm2_public_key_payload_matches_protocol_ceiling() {
@@ -1223,7 +1058,6 @@ mod tests {
         let payload =
             sm::encode_sm2_public_key_payload(&distid, &private.public_key().to_sec1_bytes(false))
                 .expect("encode maximum canonical SM2 public key payload");
-
         assert_eq!(payload.len(), MAX_PUBLIC_KEY_PAYLOAD_BYTES);
         let key = PublicKey::from_bytes(Algorithm::Sm2, &payload)
             .expect("maximum-size canonical SM2 public key remains decodable");
@@ -1233,7 +1067,6 @@ mod tests {
         assert_eq!(literal.len(), 2 * (2 + 2 + MAX_PUBLIC_KEY_PAYLOAD_BYTES));
         assert_bounded_public_key_json(&literal, &key);
     }
-
     #[cfg(feature = "sm")]
     #[test]
     fn sm2_public_key_multihash_and_prefixed_roundtrip() {
@@ -1243,7 +1076,6 @@ mod tests {
         let sec1 = sm2_pk.to_sec1_bytes(false);
         let payload = sm::encode_sm2_public_key_payload(sm2_pk.distid(), &sec1).expect("payload");
         let pk = PublicKey::from_bytes(Algorithm::Sm2, &payload).expect("construct SM2 key");
-
         let canonical = pk
             .try_to_multihash_string()
             .expect("checked SM2 multihash formatting");
@@ -1256,19 +1088,15 @@ mod tests {
             canonical.ends_with(&payload_hex),
             "SM2 multihash should embed payload bytes"
         );
-
         let prefixed = pk
             .try_to_prefixed_string()
             .expect("checked SM2 prefixed formatting");
         assert_eq!(prefixed, format!("sm2:{canonical}"));
-
         let parsed_prefixed: PublicKey = prefixed.parse().expect("parse prefixed key");
         assert_eq!(parsed_prefixed, pk);
-
         let parsed: PublicKey = canonical.parse().expect("parse bare multihash");
         assert_eq!(parsed, pk);
     }
-
     #[cfg(feature = "sm")]
     #[test]
     fn sm2_private_key_checked_payload_and_prefixed_roundtrip() {
@@ -1279,7 +1107,6 @@ mod tests {
             .try_to_bytes()
             .expect("checked SM2 private payload extraction");
         let exposed = ExposedPrivateKey(private_key.clone());
-
         assert_eq!(algorithm, Algorithm::Sm2);
         assert!(!payload.is_empty(), "SM2 private payload must not be empty");
         assert_eq!(private_key.to_bytes(), (algorithm, payload.clone()));
@@ -1287,7 +1114,6 @@ mod tests {
             PrivateKey::from_bytes(algorithm, &payload).expect("decode checked SM2 payload"),
             private_key
         );
-
         let canonical = exposed
             .try_to_multihash_string()
             .expect("checked SM2 private multihash formatting");
@@ -1295,11 +1121,9 @@ mod tests {
             .try_to_prefixed_string()
             .expect("checked SM2 private prefixed formatting");
         assert_eq!(prefixed, format!("sm2:{canonical}"));
-
         let parsed_prefixed: ExposedPrivateKey = prefixed.parse().expect("parse prefixed key");
         assert_eq!(parsed_prefixed, exposed);
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn exposed_private_key_explicit_exports_roundtrip_and_debug_is_redacted() {
@@ -1317,7 +1141,6 @@ mod tests {
         let prefixed = exposed
             .try_to_prefixed_string()
             .expect("checked private prefixed formatting");
-
         assert_eq!(exposed.to_string(), canonical);
         assert_eq!(exposed.to_prefixed_string(), prefixed);
         assert_eq!(
@@ -1336,7 +1159,6 @@ mod tests {
                 .expect("parse prefixed private-key multihash"),
             exposed
         );
-
         let debug = format!("{exposed:?}");
         assert!(debug.contains("ExposedPrivateKey"));
         assert!(debug.contains(&format!("{algorithm:?}")));
@@ -1345,7 +1167,6 @@ mod tests {
         assert!(!debug.contains(&prefixed));
         assert!(!debug.contains(&payload_hex));
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_roundtrip_via_canonical_decode() {
@@ -1356,7 +1177,6 @@ mod tests {
         let compact = pk.0.clone();
         let mut payload = Vec::new();
         norito::core::serialize_to_buffer(&compact, &mut payload).expect("serialize compact");
-
         let (decoded, used) = norito::core::decode_field_canonical::<PublicKeyCompact>(&payload)
             .expect("decode compact");
         assert!(used <= payload.len());
@@ -1364,7 +1184,6 @@ mod tests {
         let from_original = PublicKey(compact.clone());
         assert_eq!(from_decoded, from_original);
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_encoded_len_exact_matches_norito() {
@@ -1376,13 +1195,11 @@ mod tests {
             .expect("encode public key")
             .len()
             - norito::core::Header::SIZE;
-
         assert_eq!(
             norito::core::NoritoSerialize::encoded_len_exact(&pk).expect("exact public key length"),
             expected
         );
     }
-
     #[test]
     #[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
     fn mldsa_public_key_sizing_does_not_revalidate_key_material() {
@@ -1396,7 +1213,6 @@ mod tests {
         let expected_exact = <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
             &compact.algorithm_and_payload,
         );
-
         reset_public_key_validation_call_count();
         assert_eq!(
             norito::core::NoritoSerialize::encoded_len_hint(compact),
@@ -1419,7 +1235,6 @@ mod tests {
             0,
             "Norito sizing must not parse ML-DSA key material"
         );
-
         compact
             .validated_full()
             .expect("generated compact ML-DSA key validates");
@@ -1432,7 +1247,6 @@ mod tests {
             "test counter must observe both validation entry points"
         );
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_try_deserialize_rejects_invalid_payload() {
@@ -1447,7 +1261,6 @@ mod tests {
             .expect_err("invalid compact payload");
         assert!(matches!(err, norito::core::Error::Message(_)));
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_decode_from_slice_rejects_invalid_payload() {
@@ -1459,31 +1272,25 @@ mod tests {
             .expect_err("invalid compact payload");
         assert!(matches!(err, norito::core::Error::Message(_)));
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_serialize_rejects_malformed_payload_without_panic() {
         let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
-
         let err = norito::core::to_bytes(&compact)
             .expect_err("malformed compact public key must not serialize to Norito");
-
         assert!(matches!(err, norito::core::Error::Message(_)));
         assert!(norito::core::NoritoSerialize::encoded_len_hint(&compact).is_some());
         assert!(norito::core::NoritoSerialize::encoded_len_exact(&compact).is_some());
     }
-
     #[test]
     fn public_key_compact_to_full_rejects_malformed_state_without_panic() {
         let malformed_payload = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
         assert!(PublicKeyFull::try_from(&malformed_payload).is_err());
-
         let missing_tag = PublicKeyCompact {
             algorithm_and_payload: ConstVec::new(Vec::new()),
         };
         assert!(PublicKeyFull::try_from(&missing_tag).is_err());
     }
-
     #[test]
     fn public_key_compact_try_from_full_preserves_checked_payload() {
         let public_key = KeyPair::try_from_seed(vec![0x56; 32], Algorithm::Ed25519)
@@ -1495,11 +1302,9 @@ mod tests {
             .expect("generated public key must be well-formed");
         let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
         let compact = PublicKeyCompact::from(full);
-
         assert_eq!(compact.try_algorithm().expect("algorithm tag"), algorithm);
         assert_eq!(compact.try_payload().expect("payload"), payload);
     }
-
     #[test]
     fn public_key_full_try_payload_borrows_ed25519_payload() {
         let public_key = checked_seed_keypair(&[0x42; 32], Algorithm::Ed25519)
@@ -1509,7 +1314,6 @@ mod tests {
             .try_to_bytes()
             .expect("generated public key must be well-formed");
         let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
-
         match full
             .try_payload()
             .expect("validated public key payload is encodable")
@@ -1518,7 +1322,6 @@ mod tests {
             Cow::Owned(_) => panic!("Ed25519 full public key payload should borrow"),
         }
     }
-
     #[test]
     #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
     fn public_key_full_try_payload_borrows_blstrs_bls_payloads() {
@@ -1530,7 +1333,6 @@ mod tests {
                 .try_to_bytes()
                 .expect("generated BLS public key must be well-formed");
             let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
-
             match full
                 .try_payload()
                 .expect("validated BLS public key payload is encodable")
@@ -1540,7 +1342,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
     fn public_key_full_try_payload_borrows_w3f_bls_payloads() {
@@ -1552,7 +1353,6 @@ mod tests {
                 .try_to_bytes()
                 .expect("generated BLS public key must be well-formed");
             let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
-
             match full
                 .try_payload()
                 .expect("validated BLS public key payload is encodable")
@@ -1562,7 +1362,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn public_key_norito_golden_archive() {
         let pk: PublicKey =
@@ -1577,7 +1376,6 @@ mod tests {
             "public key Norito archive changed"
         );
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_try_deserialize_rejects_invalid_payload() {
@@ -1591,20 +1389,16 @@ mod tests {
             .expect_err("invalid key");
         assert!(matches!(err, norito::core::Error::Message(_)));
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_norito_serialize_rejects_malformed_payload_without_panic() {
         let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
-
         let err = norito::core::to_bytes(&malformed)
             .expect_err("malformed public key must not serialize to Norito");
-
         assert!(matches!(err, norito::core::Error::Message(_)));
         assert!(norito::core::NoritoSerialize::encoded_len_hint(&malformed).is_some());
         assert!(norito::core::NoritoSerialize::encoded_len_exact(&malformed).is_some());
     }
-
     #[test]
     fn public_key_try_to_bytes_rejects_malformed_compact_state_without_panic() {
         let valid = checked_seed_keypair(&[0x42; 32], Algorithm::Ed25519)
@@ -1616,7 +1410,6 @@ mod tests {
         let invalid_tag = PublicKey(PublicKeyCompact {
             algorithm_and_payload: ConstVec::new(vec![0xff]),
         });
-
         assert_eq!(
             valid.try_algorithm().expect("valid algorithm"),
             Algorithm::Ed25519
@@ -1631,7 +1424,6 @@ mod tests {
             .try_algorithm()
             .expect_err("invalid compact algorithm tag must fail closed");
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_hash_and_ord_handle_malformed_compact_state_without_panic() {
@@ -1644,13 +1436,11 @@ mod tests {
         let invalid_tag = PublicKey(PublicKeyCompact {
             algorithm_and_payload: ConstVec::new(vec![0xff]),
         });
-
         let mut hashed = std::collections::HashSet::new();
         hashed.insert(valid.clone());
         hashed.insert(missing_tag.clone());
         hashed.insert(invalid_tag.clone());
         assert_eq!(hashed.len(), 3);
-
         let mut sorted = std::collections::BTreeSet::new();
         sorted.insert(valid.clone());
         sorted.insert(missing_tag.clone());
@@ -1662,12 +1452,10 @@ mod tests {
         );
         assert!(valid < missing_tag);
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_fallible_string_encoders_reject_malformed_payload_without_panic() {
         let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
-
         malformed
             .try_to_multihash_string()
             .expect_err("malformed public key must not format as multihash");
@@ -1675,7 +1463,6 @@ mod tests {
             .try_to_prefixed_string()
             .expect_err("malformed public key must not format as prefixed multihash");
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_infallible_formatters_handle_malformed_compact_state_without_panic() {
@@ -1683,11 +1470,9 @@ mod tests {
             algorithm_and_payload: ConstVec::new(Vec::new()),
         });
         let malformed_payload = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
-
         let missing_display = missing_tag.to_string();
         assert_eq!(missing_display, "invalid-public-key:");
         assert!(format!("{missing_tag:?}").contains("missing public key algorithm tag"));
-
         let payload_display = malformed_payload.to_string();
         assert_eq!(payload_display, "invalid-public-key:00");
         assert!(format!("{malformed_payload:?}").contains("invalid-public-key:00"));
@@ -1695,26 +1480,21 @@ mod tests {
             malformed_payload.to_prefixed_string(),
             "invalid-public-key:00"
         );
-
         let json = norito::json::to_json(&missing_tag).expect("serialize malformed key marker");
         assert_eq!(json, r#""invalid-public-key:""#);
         norito::json::from_json::<PublicKey>(&json)
             .expect_err("malformed marker must not deserialize as a public key");
     }
-
     #[test]
     fn keypair_new_rejects_malformed_public_key_without_panic() {
         let (_, private_key) = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
             .expect("seeded keypair")
             .into_parts();
         let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
-
         let err = KeyPair::new(malformed, private_key)
             .expect_err("malformed public key must fail closed");
-
         assert!(matches!(err, Error::Parse(_)));
     }
-
     #[test]
     #[cfg(feature = "rand")]
     fn public_key_from_bytes_roundtrip() {
@@ -1726,14 +1506,12 @@ mod tests {
         let reconstructed = PublicKey::from_bytes(alg, bytes).expect("Should decode");
         assert_eq!(public_key, reconstructed);
     }
-
     #[test]
     fn invalid_private_key() {
         assert!(PrivateKey::from_hex(
             Algorithm::Ed25519,
             "0000000000000000000000000000000049BF70187154C57B97AF913163E8E875733B4EAF1F3F0689B31CE392129493E9"
         ).is_err());
-
         #[cfg(feature = "bls")]
         assert!(
             PrivateKey::from_hex(
@@ -1741,7 +1519,6 @@ mod tests {
                 "93CA389FC2979F3F7D2A7F8B76C70DE6D5EAF5FA58D4F93CB8B0FB298D398ACC59C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             ).is_err());
     }
-
     #[test]
     fn key_pair_mismatch() {
         KeyPair::new(
@@ -1753,7 +1530,6 @@ mod tests {
                 .expect("Public key not in mulithash format"),
         )
         .unwrap_err();
-
         #[cfg(feature = "bls")]
         {
             KeyPair::new("ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
@@ -1765,7 +1541,6 @@ mod tests {
                 ).unwrap_err();
         }
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn display_public_key() {
@@ -1821,7 +1596,6 @@ mod tests {
         public_key: PublicKey,
         private_key: ExposedPrivateKey,
     }
-
     #[cfg(not(feature = "ffi_import"))]
     impl norito::json::JsonSerialize for TestJson {
         fn json_serialize(&self, out: &mut String) {
@@ -1838,7 +1612,6 @@ mod tests {
             norito::json::JsonSerialize::json_serialize(&Value::Object(map), out);
         }
     }
-
     #[cfg(not(feature = "ffi_import"))]
     impl norito::json::JsonDeserialize for TestJson {
         fn json_deserialize(
@@ -1847,7 +1620,6 @@ mod tests {
             let mut map = norito::json::MapVisitor::new(parser)?;
             let mut public_key = None;
             let mut private_key = None;
-
             while let Some(key) = map.next_key()? {
                 match key.as_str() {
                     "public_key" => {
@@ -1865,21 +1637,17 @@ mod tests {
                     _ => map.skip_value()?,
                 }
             }
-
             map.finish()?;
-
             let public_key =
                 public_key.ok_or_else(|| norito::json::MapVisitor::missing_field("public_key"))?;
             let private_key = private_key
                 .ok_or_else(|| norito::json::MapVisitor::missing_field("private_key"))?;
-
             Ok(Self {
                 public_key,
                 private_key,
             })
         }
     }
-
     macro_rules! assert_test_json_serde {
         ($json:expr, $actual:expr) => {
             assert_eq!(
@@ -1892,7 +1660,6 @@ mod tests {
             );
         };
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn serde_keys_ed25519() {
@@ -1917,7 +1684,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn serde_keys_secp256k1() {
@@ -1942,7 +1708,6 @@ mod tests {
             }
         );
     }
-
     #[cfg(not(feature = "ffi_import"))]
     fn assert_bounded_public_key_json(literal: &str, key: &PublicKey) {
         let encoded = format!("\"{literal}\"");
@@ -1956,7 +1721,6 @@ mod tests {
         ));
         let decoded: PublicKey = norito::json::from_str(&encoded).expect("bounded JSON decode");
         assert_eq!(&decoded, key);
-
         let limits = |bytes| {
             norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
         };
@@ -1978,20 +1742,17 @@ mod tests {
         ));
         assert!(usage.total_allocated_bytes() <= exact - 1);
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_bounded_json_is_direct_and_measured() {
         let ed_literal = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
         let ed: PublicKey = ed_literal.parse().expect("Ed25519 fixture");
         assert_bounded_public_key_json(ed_literal, &ed);
-
         let secp_literal =
             "e701210312273E8810581E58948D3FB8F9E8AD53AAA21492EBB8703915BBB565A21B7FCC";
         let secp: PublicKey = secp_literal.parse().expect("Secp256k1 fixture");
         assert_bounded_public_key_json(secp_literal, &secp);
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_json_rejects_above_protocol_literal_before_hex_decode() {
@@ -2005,7 +1766,6 @@ mod tests {
             matches!(error, norito::json::Error::Message(message) if message == "invalid public key")
         );
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn fromstr_accepts_algo_prefixed_public_key() {
@@ -2016,7 +1776,6 @@ mod tests {
         let pk2: PublicKey = prefixed.parse().expect("prefixed multihash parses");
         assert_eq!(pk1, pk2);
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn fromstr_accepts_algo_prefixed_private_key() {
@@ -2028,7 +1787,6 @@ mod tests {
         assert_eq!(sk1.to_bytes().1, sk2.to_bytes().1);
         assert_eq!(sk1.algorithm(), sk2.algorithm());
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn prefixed_mismatch_is_error() {

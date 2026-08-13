@@ -16,7 +16,6 @@ fn drain_canonical_executed_block_recovery_ingress(
     }
     Ok(drained)
 }
-
 fn dispatch_canonical_executed_block_recovery_effects(
     recovery: &mut CanonicalExecutedBlockRecovery,
     services: &ProductionV2Services,
@@ -62,7 +61,6 @@ fn dispatch_canonical_executed_block_recovery_effects(
     }
     Ok(dispatched)
 }
-
 /// Advance one retained historical lane owner on the ordinary retransmission
 /// cadence, even when no lane or relay ingress arrives to trigger recovery.
 fn service_historical_recovery_tick(

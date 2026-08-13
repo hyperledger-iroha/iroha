@@ -4,12 +4,9 @@
 //! Kotodama V1 numeric calls instead debit deterministic phases immediately
 //! before the associated work. An unaffordable phase leaves remaining gas
 //! intact; charges for earlier completed phases are never refunded.
-
 use crate::VMError;
-
 /// Fixed entry charge for a staged syscall lifecycle.
 pub(crate) const STAGED_SYSCALL_ENTRY_GAS: u64 = crate::numeric_gas::NUMERIC_ENTRY_GAS;
-
 /// Consensus-visible syscall metering lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyscallMetering {
@@ -19,7 +16,6 @@ pub enum SyscallMetering {
     /// The handler debits each bounded work phase immediately before it begins.
     Staged,
 }
-
 /// Stable completion state for a staged syscall.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyscallCompletion {
@@ -30,7 +26,6 @@ pub enum SyscallCompletion {
     /// The syscall trapped after zero or more completed phases.
     Trap,
 }
-
 /// Stable phase tags for staged deterministic work.
 ///
 /// Operand-validation phases may repeat in register order. The tag identifies
@@ -57,7 +52,6 @@ pub enum SyscallMeteringPhase {
     /// Size, debit, allocate, and serialize the output envelope.
     OutputSerialization = 8,
 }
-
 impl SyscallMeteringPhase {
     /// Number of stable staged-metering phase tags in ABI V1.
     pub const COUNT: usize = 9;
@@ -73,13 +67,11 @@ impl SyscallMeteringPhase {
         Self::Normalization,
         Self::OutputSerialization,
     ];
-
     /// Return the stable numeric tag used in diagnostics and gas vectors.
     #[must_use]
     pub const fn tag(self) -> u8 {
         self as u8
     }
-
     /// Return the stable descriptor name bound by the gas-schedule hash.
     #[must_use]
     pub const fn descriptor_name(self) -> &'static str {
@@ -96,7 +88,6 @@ impl SyscallMeteringPhase {
         }
     }
 }
-
 /// Accounting snapshot for the active or most recently completed staged call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StagedSyscallContext {
@@ -105,7 +96,6 @@ pub struct StagedSyscallContext {
     phase_charges: [u64; SyscallMeteringPhase::COUNT],
     completion: Option<SyscallCompletion>,
 }
-
 impl StagedSyscallContext {
     pub(crate) const fn new(syscall: u32) -> Self {
         Self {
@@ -115,31 +105,26 @@ impl StagedSyscallContext {
             completion: None,
         }
     }
-
     /// Syscall number associated with this context.
     #[must_use]
     pub const fn syscall(&self) -> u32 {
         self.syscall
     }
-
     /// Gas charged by all completed stages.
     #[must_use]
     pub const fn charged(&self) -> u64 {
         self.charged
     }
-
     /// Gas charged for one stable phase tag, including repeated occurrences.
     #[must_use]
     pub const fn phase_charge(&self, phase: SyscallMeteringPhase) -> u64 {
         self.phase_charges[phase as usize]
     }
-
     /// Completion state, or `None` while the call remains active.
     #[must_use]
     pub const fn completion(&self) -> Option<SyscallCompletion> {
         self.completion
     }
-
     pub(crate) fn record_charge(
         &mut self,
         phase: SyscallMeteringPhase,
@@ -162,16 +147,13 @@ impl StagedSyscallContext {
         self.charged = total;
         Ok(())
     }
-
     pub(crate) fn finish(&mut self, completion: SyscallCompletion) {
         self.completion = Some(completion);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn phase_tags_are_contiguous_and_stable() {
         assert_eq!(SyscallMeteringPhase::ALL.len(), SyscallMeteringPhase::COUNT);
@@ -180,7 +162,6 @@ mod tests {
             assert!(!phase.descriptor_name().is_empty());
         }
     }
-
     #[test]
     fn context_accumulates_repeated_phase_charges() {
         let mut context = StagedSyscallContext::new(0x01_0105);
@@ -194,7 +175,6 @@ mod tests {
             .record_charge(SyscallMeteringPhase::Arithmetic, 12)
             .expect("arithmetic charge");
         context.finish(SyscallCompletion::RecoverableFailure);
-
         assert_eq!(context.charged(), 23);
         assert_eq!(
             context.phase_charge(SyscallMeteringPhase::PointerHeader),
@@ -205,7 +185,6 @@ mod tests {
             Some(SyscallCompletion::RecoverableFailure)
         );
     }
-
     #[test]
     fn context_rejects_gas_domain_overflow() {
         let mut context = StagedSyscallContext::new(0x01_0105);

@@ -5,7 +5,6 @@ pub(crate) const HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS: usize = 4_096;
 const HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX: &str = ".historical-autonomous-recovery-";
 const HISTORICAL_AUTONOMOUS_RECOVERY_HARD_MAX_AGGREGATE_BYTES: u64 =
     V2_PENDING_CONTROL_SIDECAR_BYTES_MAX as u64;
-
 fn historical_autonomous_recovery_record_name_is_canonical(name: &std::ffi::OsStr) -> bool {
     name.to_str()
         .and_then(|name| name.strip_suffix(".norito"))
@@ -16,7 +15,6 @@ fn historical_autonomous_recovery_record_name_is_canonical(name: &std::ffi::OsSt
                     .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
         })
 }
-
 /// Enumerate one historical-recovery namespace without ever retaining more
 /// than the caller's remaining global record/byte budget.
 ///
@@ -41,7 +39,6 @@ fn bounded_historical_autonomous_recovery_entries<T>(
             directory.to_path_buf(),
         ));
     }
-
     let before = std::fs::symlink_metadata(directory)
         .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
     if before.file_type().is_symlink() || !before.file_type().is_dir() {
@@ -156,7 +153,6 @@ fn bounded_historical_autonomous_recovery_entries<T>(
         encoded_bytes,
     ))
 }
-
 fn accumulate_historical_autonomous_recovery_bytes(
     current: u64,
     encoded_len: usize,
@@ -170,7 +166,6 @@ fn accumulate_historical_autonomous_recovery_bytes(
         .checked_add(u64::try_from(encoded_len).ok()?)
         .filter(|total| *total <= aggregate_byte_limit)
 }
-
 fn historical_autonomous_recovery_read_matches_accounting(
     accounted: &std::fs::Metadata,
     read: &StableSidecarRead,
@@ -178,7 +173,6 @@ fn historical_autonomous_recovery_read_matches_accounting(
     u64::try_from(read.bytes.len()).ok() == Some(accounted.len())
         && Kura::sidecar_file_metadata_unchanged(accounted, &read.metadata.file)
 }
-
 /// Immutable, self-contained Kura seal for historical autonomous lane work.
 ///
 /// Records live below the exact active lane-incarnation directory. Lane
@@ -202,7 +196,6 @@ pub(crate) struct HistoricalAutonomousLaneRecoveryRecordV1 {
     /// enough to resume the unfinished two-phase lane session after pruning.
     pub(crate) validator_pops: Vec<Vec<u8>>,
 }
-
 impl HistoricalAutonomousLaneRecoveryRecordV1 {
     pub(crate) fn from_install(
         install: &crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1,
@@ -221,7 +214,6 @@ impl HistoricalAutonomousLaneRecoveryRecordV1 {
             validator_pops,
         }
     }
-
     pub(crate) fn installation_input(
         &self,
     ) -> crate::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1 {
@@ -238,7 +230,6 @@ impl HistoricalAutonomousLaneRecoveryRecordV1 {
         }
     }
 }
-
 /// Return the exact bytes used for validation, capacity admission, and stable
 /// no-clobber publication of one historical recovery seal.
 fn historical_autonomous_recovery_record_bytes(
@@ -246,18 +237,15 @@ fn historical_autonomous_recovery_record_bytes(
 ) -> Vec<u8> {
     record.encode()
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HistoricalAutonomousLaneRecoveryPersistOutcome {
     Installed,
     AlreadyInstalled,
 }
-
 struct HistoricalAutonomousLaneRecoveryBatchPreflight {
     existing_recovery_ids: BTreeSet<Hash>,
     additional_physical_peak_bytes: u64,
 }
-
 struct HistoricalAutonomousExecutionInputRouteCapacity {
     namespace: BoundProgressNamespace,
     initial_layout: SidecarIndexLayout,
@@ -266,26 +254,22 @@ struct HistoricalAutonomousExecutionInputRouteCapacity {
     index_len: u64,
     planned_inputs: BTreeMap<u64, LaneBlockExecutionInputArtifact>,
 }
-
 macro_rules! kura_historical_autonomous_recovery_methods {
     () => {
         fn historical_autonomous_recovery_aggregate_byte_limit(&self) -> u64 {
             u64::try_from(self.pending_control_sidecar_limits.aggregate_bytes)
                 .expect("validated pending-control sidecar bytes fit u64")
         }
-
         #[cfg(test)]
         pub(crate) fn historical_autonomous_recovery_inventory_scans_for_test(&self) -> usize {
             self.historical_autonomous_recovery_inventory_scans
                 .load(Ordering::Relaxed)
         }
-
         #[cfg(test)]
         pub(crate) fn reset_historical_autonomous_recovery_inventory_scans_for_test(&self) {
             self.historical_autonomous_recovery_inventory_scans
                 .store(0, Ordering::Relaxed);
         }
-
         fn historical_autonomous_recovery_directory_for_entry(
             entry: &LaneConfigEntry,
             store_root: &Path,
@@ -293,7 +277,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             Self::lane_artifact_dir(&entry.blocks_dir(store_root))
                 .join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1)
         }
-
         fn historical_autonomous_recovery_path_for_entry(
             entry: &LaneConfigEntry,
             store_root: &Path,
@@ -302,7 +285,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             Self::historical_autonomous_recovery_directory_for_entry(entry, store_root)
                 .join(format!("{}.norito", hex::encode(recovery_id.as_ref())))
         }
-
         fn invalid_historical_autonomous_recovery(
             path: PathBuf,
             detail: impl Into<String>,
@@ -312,7 +294,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 path,
             )
         }
-
         fn validate_historical_autonomous_recovery_record_shape(
             &self,
             record: &HistoricalAutonomousLaneRecoveryRecordV1,
@@ -413,7 +394,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             }
             Ok(())
         }
-
         fn read_historical_autonomous_recovery_record(
             &self,
             path: &Path,
@@ -423,7 +403,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 path, directory, None,
             )
         }
-
         fn read_historical_autonomous_recovery_record_from_inventory(
             &self,
             path: &Path,
@@ -461,7 +440,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             self.validate_historical_autonomous_recovery_record_shape(&record, path)?;
             Ok(Some(record))
         }
-
         fn validate_historical_autonomous_recovery_dependencies(
             &self,
             record: &HistoricalAutonomousLaneRecoveryRecordV1,
@@ -534,7 +512,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             }
             Ok(())
         }
-
         /// Revalidate one record returned by the bounded inventory against its
         /// exact immutable file plus the ordinary autonomous payload and
         /// execution-input sidecars. Holding the prune lock across the direct
@@ -549,7 +526,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 expected,
             )
         }
-
         fn validate_historical_autonomous_lane_recovery_record_dependencies_under_prune_guard(
             &self,
             expected: &HistoricalAutonomousLaneRecoveryRecordV1,
@@ -588,7 +564,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             }
             self.validate_historical_autonomous_recovery_dependencies(expected, &path)
         }
-
         fn validate_historical_autonomous_recovery_inventory_collisions(
             &self,
             records: &[HistoricalAutonomousLaneRecoveryRecordV1],
@@ -644,7 +619,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             }
             Ok(())
         }
-
         /// Read the complete active-incarnation recovery namespace under both
         /// caller and hard limits. Unknown, temporary, linked, or noncanonical
         /// entries fail closed; archived incarnations are deliberately outside
@@ -656,7 +630,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             let _prune_guard = self.prune_lock.lock();
             self.historical_autonomous_lane_recovery_records_bounded_under_prune_guard(limit)
         }
-
         fn historical_autonomous_lane_recovery_records_bounded_under_prune_guard(
             &self,
             limit: usize,
@@ -758,7 +731,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             self.validate_historical_autonomous_recovery_inventory_collisions(&records)?;
             Ok(records)
         }
-
         /// Prove that normal autonomous-payload and execution-input writers
         /// will accept this record before an all-item runner batch mutates its
         /// first file. This is deliberately read-only; startup must complete
@@ -838,7 +810,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 &record.payload,
                 MAX_AUTONOMOUS_LANE_CLAIM_FILES,
             )?;
-
             let existing_input = Self::read_indexed_sidecar_from_paths_with_recovery(
                 descriptor.lane_block_height,
                 &input_data_path,
@@ -855,7 +826,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             }
             Ok(())
         }
-
         fn historical_autonomous_execution_input_route_capacity_locked(
             &self,
             entry: &LaneConfigEntry,
@@ -926,7 +896,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 planned_inputs: BTreeMap::new(),
             })
         }
-
         fn historical_autonomous_initial_execution_input_locked(
             &self,
             route: &HistoricalAutonomousExecutionInputRouteCapacity,
@@ -967,7 +936,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 )
             })
         }
-
         fn plan_historical_autonomous_execution_input_growth_locked(
             &self,
             route: &mut HistoricalAutonomousExecutionInputRouteCapacity,
@@ -997,7 +965,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     "historical autonomous execution input conflicts with durable bytes",
                 ));
             }
-
             let old_index_len = route.index_len;
             let (next_layout, new_index_len, individual_peak) =
                 if route.layout.is_based() && lane_block_height < route.layout.base_height {
@@ -1163,7 +1130,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                         })?;
                     (layout, new_index_len, peak)
                 };
-
             let stable_growth = payload_len
                 .checked_add(new_index_len)
                 .and_then(|bytes| bytes.checked_sub(old_index_len))
@@ -1192,7 +1158,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 .insert(lane_block_height, artifact.clone());
             Ok((stable_growth, transient))
         }
-
         fn preflight_historical_autonomous_recovery_batch_capacity_under_prune_guard(
             &self,
             pending_canonical_bytes: u64,
@@ -1284,7 +1249,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             )?;
             Ok(additional_physical_peak_bytes)
         }
-
         fn preflight_historical_autonomous_lane_recovery_records_under_prune_guard(
             &self,
             pending_canonical_bytes: u64,
@@ -1429,7 +1393,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 additional_physical_peak_bytes,
             })
         }
-
         #[cfg(test)]
         pub(crate) fn historical_autonomous_lane_recovery_record_matches(
             &self,
@@ -1460,7 +1423,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             self.validate_historical_autonomous_recovery_dependencies(&record, &path)?;
             Ok(true)
         }
-
         /// Match an in-memory planner DTO to its complete durable record. The
         /// record reader still validates the stored ordered PoPs; the DTO does
         /// not get to supply or override that historical authority.
@@ -1494,7 +1456,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             self.validate_historical_autonomous_recovery_dependencies(&record, &path)?;
             Ok(true)
         }
-
         /// Persist one record after the caller completed the all-item namespace
         /// preflight. This path performs only direct dependency and immutable
         /// file checks; it never rescans the complete recovery namespace.
@@ -1510,7 +1471,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 )?;
                 return Ok(HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled);
             }
-
             // The caller must first cross the signed
             // CanonicalHistoricalRecoveryRecord custody bootstrap. This
             // function holds the historical-record batch lock and therefore
@@ -1544,7 +1504,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                     ));
                 }
             }
-
             let descriptor = &record.payload.origin_proposal.descriptor;
             let provisional_entry = self.lane_storage_entry(descriptor.lane_id)?;
             let provisional_path = Self::historical_autonomous_recovery_path_for_entry(
@@ -1557,7 +1516,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 &provisional_path,
             )?;
             let bytes = historical_autonomous_recovery_record_bytes(record);
-
             let accounting_mutation = self.begin_total_disk_usage_mutation();
             let _geometry_guard = self.lane_geometry_lock.lock();
             let entry = self.lane_storage_entry(descriptor.lane_id)?;
@@ -1594,7 +1552,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 })?;
                 sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
             }
-
             if let Some(existing) =
                 self.read_historical_autonomous_recovery_record(&path, &directory)?
             {
@@ -1653,7 +1610,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled
             })
         }
-
         /// Return the already-validated physical reservation for an otherwise
         /// read-only batch preflight.
         #[cfg(test)]
@@ -1674,7 +1630,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             )
             .map(|preflight| preflight.additional_physical_peak_bytes)
         }
-
         /// Persist one all-or-restart batch with exactly one complete bounded
         /// inventory/preflight pass. Collision checks use ordered indexes;
         /// subsequent per-record work uses direct paths and immutable readback.
@@ -1711,7 +1666,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             }
             Ok(outcomes)
         }
-
         /// Persist carrier-extracted executable bytes through the ordinary
         /// autonomous lane path, then persist the execution input, and only then
         /// publish the separate immutable recovery seal.
@@ -1744,20 +1698,16 @@ macro_rules! kura_historical_autonomous_recovery_methods {
         }
     };
 }
-
 #[cfg(test)]
 mod historical_autonomous_recovery_bound_tests {
     use super::*;
-
     const TEST_AGGREGATE_BYTE_LIMIT: u64 = V2_PENDING_CONTROL_SIDECAR_BYTES.get() as u64;
-
     fn canonical_record_name(index: usize) -> String {
         format!(
             "{index:0width$x}.norito",
             width = Hash::LENGTH.saturating_mul(2)
         )
     }
-
     fn scan_metadata(
         directory: &Path,
         record_limit: usize,
@@ -1774,7 +1724,6 @@ mod historical_autonomous_recovery_bound_tests {
             },
         )
     }
-
     #[test]
     fn aggregate_byte_bound_is_exact_and_duplicate_aware() {
         let limit = V2_PENDING_CONTROL_SIDECAR_BYTES_MIN as u64;
@@ -1798,7 +1747,6 @@ mod historical_autonomous_recovery_bound_tests {
             "an exact immutable duplicate must not consume aggregate bytes twice",
         );
     }
-
     #[test]
     fn bounded_namespace_honors_lower_and_higher_configured_limits() {
         let lower = tempfile::tempdir().expect("temporary lower-bound namespace");
@@ -1806,7 +1754,6 @@ mod historical_autonomous_recovery_bound_tests {
             .expect("write lower-bound historical recovery record");
         scan_metadata(lower.path(), 1, 1)
             .expect_err("the caller's configured lower byte bound must be enforced");
-
         let higher = tempfile::tempdir().expect("temporary higher-bound namespace");
         std::fs::write(higher.path().join(canonical_record_name(0)), [0_u8])
             .expect("write higher-bound historical recovery record");
@@ -1816,7 +1763,6 @@ mod historical_autonomous_recovery_bound_tests {
             .expect("a valid configured limit above the release default must be accepted");
         assert_eq!(records.len(), 1);
         assert_eq!(bytes, 1);
-
         scan_metadata(
             higher.path(),
             1,
@@ -1824,13 +1770,11 @@ mod historical_autonomous_recovery_bound_tests {
         )
         .expect_err("a configured byte limit above the hard maximum must fail closed");
     }
-
     #[test]
     fn bounded_namespace_rejects_same_path_mutation_during_accounting() {
         let temp = tempfile::tempdir().expect("temporary mutation namespace");
         let path = temp.path().join(canonical_record_name(0));
         std::fs::write(&path, [0_u8]).expect("write historical recovery record");
-
         bounded_historical_autonomous_recovery_entries(
             temp.path(),
             1,
@@ -1845,7 +1789,6 @@ mod historical_autonomous_recovery_bound_tests {
         )
         .expect_err("same-path mutation after metadata accounting must fail closed");
     }
-
     #[test]
     fn bounded_namespace_rechecks_every_file_after_enumeration() {
         let temp = tempfile::tempdir().expect("temporary post-enumeration mutation namespace");
@@ -1854,7 +1797,6 @@ mod historical_autonomous_recovery_bound_tests {
                 .expect("write historical recovery record");
         }
         let mut first_accounted_path: Option<PathBuf> = None;
-
         bounded_historical_autonomous_recovery_entries(
             temp.path(),
             2,
@@ -1875,7 +1817,6 @@ mod historical_autonomous_recovery_bound_tests {
             "an earlier entry changed while a later entry was bound must fail final accounting",
         );
     }
-
     #[test]
     fn decoded_bytes_must_match_the_scanner_accounted_identity_and_length() {
         let temp = tempfile::tempdir().expect("temporary decode-accounting namespace");
@@ -1885,7 +1826,6 @@ mod historical_autonomous_recovery_bound_tests {
         let directory =
             std::fs::symlink_metadata(temp.path()).expect("recovery directory metadata");
         let canonical_path = std::fs::canonicalize(&path).expect("canonical recovery path");
-
         let length_drift = vec![0_u8, 1_u8];
         let length_mismatch = StableSidecarRead {
             bytes_hash: Hash::new(&length_drift),
@@ -1900,7 +1840,6 @@ mod historical_autonomous_recovery_bound_tests {
             !historical_autonomous_recovery_read_matches_accounting(&accounted, &length_mismatch,),
             "bytes with a different scanner-accounted length must never reach decoding",
         );
-
         let replacement = temp.path().join("replacement");
         let replacement_bytes = vec![1_u8];
         std::fs::write(&replacement, &replacement_bytes).expect("write same-length replacement");
@@ -1920,7 +1859,6 @@ mod historical_autonomous_recovery_bound_tests {
             "same-path and same-length replacement metadata must never reach decoding",
         );
     }
-
     #[test]
     fn bounded_namespace_accepts_exact_record_and_aggregate_limits() {
         let temp = tempfile::tempdir().expect("temporary historical recovery namespace");
@@ -1940,7 +1878,6 @@ mod historical_autonomous_recovery_bound_tests {
             u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS)
                 .expect("record count fits u64")
         );
-
         let aggregate = tempfile::tempdir().expect("temporary aggregate-bound namespace");
         let mut remaining = TEST_AGGREGATE_BYTE_LIMIT;
         let mut index = 0_usize;
@@ -1965,7 +1902,6 @@ mod historical_autonomous_recovery_bound_tests {
         assert_eq!(records.len(), index);
         assert_eq!(bytes, TEST_AGGREGATE_BYTE_LIMIT);
     }
-
     #[test]
     fn bounded_namespace_rejects_count_size_and_aggregate_overflow() {
         let count = tempfile::tempdir().expect("temporary count-overflow namespace");
@@ -1979,7 +1915,6 @@ mod historical_autonomous_recovery_bound_tests {
             TEST_AGGREGATE_BYTE_LIMIT,
         )
         .expect_err("the 4,097th historical recovery record must fail");
-
         let oversized = tempfile::tempdir().expect("temporary oversized-record namespace");
         let file = std::fs::File::create(oversized.path().join(canonical_record_name(0)))
             .expect("create oversized sparse historical recovery record");
@@ -1995,7 +1930,6 @@ mod historical_autonomous_recovery_bound_tests {
             TEST_AGGREGATE_BYTE_LIMIT,
         )
         .expect_err("one byte beyond the per-record bound must fail");
-
         let aggregate = tempfile::tempdir().expect("temporary aggregate-overflow namespace");
         let per_record = u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)
             .expect("record byte limit fits u64");
@@ -2020,7 +1954,6 @@ mod historical_autonomous_recovery_bound_tests {
         )
         .expect_err("one byte beyond the aggregate bound must fail");
     }
-
     #[test]
     fn bounded_namespace_rejects_noncanonical_and_nested_entries() {
         for name in [
@@ -2038,7 +1971,6 @@ mod historical_autonomous_recovery_bound_tests {
             )
             .expect_err("a temporary, short, or uppercase filename must fail");
         }
-
         let nested = tempfile::tempdir().expect("temporary nested-entry namespace");
         std::fs::create_dir(nested.path().join(canonical_record_name(0)))
             .expect("create nested historical recovery entry");
@@ -2049,12 +1981,10 @@ mod historical_autonomous_recovery_bound_tests {
         )
         .expect_err("a nested directory must fail");
     }
-
     #[cfg(unix)]
     #[test]
     fn bounded_namespace_rejects_symlinks_and_hardlinks() {
         use std::os::unix::fs::symlink;
-
         let symlinked = tempfile::tempdir().expect("temporary symlink namespace");
         let outside = tempfile::NamedTempFile::new().expect("symlink target");
         symlink(
@@ -2068,7 +1998,6 @@ mod historical_autonomous_recovery_bound_tests {
             TEST_AGGREGATE_BYTE_LIMIT,
         )
         .expect_err("a record symlink must fail");
-
         let linked = tempfile::tempdir().expect("temporary hardlink namespace");
         let first = linked.path().join(canonical_record_name(0));
         let second = linked.path().join(canonical_record_name(1));
@@ -2080,7 +2009,6 @@ mod historical_autonomous_recovery_bound_tests {
             TEST_AGGREGATE_BYTE_LIMIT,
         )
         .expect_err("a hardlinked historical recovery record must fail");
-
         let namespace_parent = tempfile::tempdir().expect("temporary namespace parent");
         let real_namespace = tempfile::tempdir().expect("real historical recovery namespace");
         symlink(
@@ -2099,7 +2027,6 @@ mod historical_autonomous_recovery_bound_tests {
         )
         .expect_err("a namespace symlink must fail");
     }
-
     #[test]
     fn block_store_accounting_counts_recognized_nested_records_once() {
         let temp = tempfile::tempdir().expect("temporary block store");
@@ -2108,7 +2035,6 @@ mod historical_autonomous_recovery_bound_tests {
         let before =
             Kura::block_store_bytes_with_historical_limit(temp.path(), TEST_AGGREGATE_BYTE_LIMIT)
                 .expect("measure empty block store");
-
         let historical = lane_artifacts.join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1);
         std::fs::create_dir(&historical).expect("create historical recovery namespace");
         let record = historical.join(canonical_record_name(0));
@@ -2122,7 +2048,6 @@ mod historical_autonomous_recovery_bound_tests {
             Some(u64::try_from(record_bytes.len()).expect("record length fits u64")),
             "the recognized nested record must be counted exactly once",
         );
-
         std::fs::create_dir(lane_artifacts.join("unexpected_nested_namespace"))
             .expect("create unexpected nested namespace");
         Kura::block_store_bytes_with_historical_limit(temp.path(), TEST_AGGREGATE_BYTE_LIMIT)

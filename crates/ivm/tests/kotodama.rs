@@ -1,7 +1,5 @@
 //! Tests for Kotodama parsing, semantics, and compilation.
-
 use std::convert::TryInto;
-
 use iroha_crypto as _;
 use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
@@ -20,11 +18,9 @@ use ivm::{
     syscalls,
 };
 mod common;
-
 fn parse_meta_offset(code: &[u8]) -> Result<(ProgramMetadata, usize), ivm::VMError> {
     ProgramMetadata::parse(code).map(|parsed| (parsed.metadata, parsed.code_offset))
 }
-
 fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -33,14 +29,12 @@ fn hex(bytes: &[u8]) -> String {
     }
     s
 }
-
 fn test_compiler() -> Compiler {
     Compiler::new_with_options(CompilerOptions {
         mode: CompilerMode::Test,
         ..CompilerOptions::default()
     })
 }
-
 fn select_test_entrypoint(
     vm: &mut ivm::IVM,
     program: &[u8],
@@ -82,23 +76,19 @@ fn select_test_entrypoint(
     vm.set_program_counter(pc)
         .unwrap_or_else(|error| panic!("select test entrypoint `{name}`: {error:?}"));
 }
-
 fn parse(source: &str) -> Result<kd_ast::Program, String> {
     parse_source(source)
 }
-
 #[test]
 fn create_compiler() {
     let _c = Compiler::new();
 }
-
 #[test]
 fn compile_stub() {
     let compiler = Compiler::new();
     let result = compiler.compile_source("ADD 1, 2");
     assert!(result.is_err(), "compiler should reject invalid source");
 }
-
 #[test]
 fn lex_simple_function() {
     let src = "fn add(int a, int b) { let c = a + b; }";
@@ -110,7 +100,6 @@ fn lex_simple_function() {
             .any(|t| matches!(t.kind, TokenKind::Ident(ref s) if s == "add"))
     );
 }
-
 #[test]
 fn parse_simple_add() {
     let src = "module SimpleAdd { fn add(int a, int b) { let c = a + b; } }";
@@ -141,7 +130,6 @@ fn parse_simple_add() {
         _ => panic!("unexpected statement"),
     }
 }
-
 #[test]
 fn lexer_accepts_v1_branded_keywords_in_both_scripts() {
     use ivm::kotodama::lexer::{TokenKind, lex};
@@ -162,7 +150,6 @@ fn lexer_accepts_v1_branded_keywords_in_both_scripts() {
         lex(branded).expect("Japanese branded declaration must be accepted");
     }
 }
-
 #[test]
 fn parse_and_type_tuples_and_types() {
     let src =
@@ -172,7 +159,6 @@ fn parse_and_type_tuples_and_types() {
     let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
     assert_eq!(f.name, "t");
 }
-
 #[test]
 fn bytes_type_is_accepted_and_roundtrips_through_semantics() {
     let src = "module BytesDemo { fn echo(bytes b) -> bytes { let bytes tmp = b; return tmp; } }";
@@ -181,7 +167,6 @@ fn bytes_type_is_accepted_and_roundtrips_through_semantics() {
     let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
     assert_eq!(f.ret_ty, Some(Type::Bytes));
 }
-
 #[test]
 fn string_equality_compiles() {
     let src = "seiyaku StringEquality { view fn f() { let _x = \"hi\" == \"hi\"; } }";
@@ -190,7 +175,6 @@ fn string_equality_compiles() {
         .expect("string equality should compile");
     assert!(!code.is_empty());
 }
-
 #[test]
 fn irohaswap_sample_compiles() {
     let src = include_str!("../../kotodama_lang/src/samples/irohaswap.ko");
@@ -199,7 +183,6 @@ fn irohaswap_sample_compiles() {
         .expect("irohaswap sample should compile");
     assert!(!code.is_empty());
 }
-
 #[test]
 fn prediction_market_demo_compiles() {
     let src = include_str!("../../../demo/prediction_market.ko");
@@ -208,7 +191,6 @@ fn prediction_market_demo_compiles() {
         .expect("prediction market demo should compile");
     assert!(!code.is_empty());
 }
-
 #[test]
 fn tuple_destructure_and_field_access() {
     // Destructure a tuple literal into (a,b) and sum; also exercise direct field access `(1,2).1`
@@ -229,7 +211,6 @@ fn tuple_destructure_and_field_access() {
         }
     }
 }
-
 #[test]
 fn tuple_var_member_access() {
     // Bind a tuple to a name and use member access on it.
@@ -248,7 +229,6 @@ fn tuple_var_member_access() {
         Err(e) => panic!("vm run error: {e:?}"),
     }
 }
-
 #[test]
 fn call_function_with_tuple_return() {
     let src = r#"
@@ -269,7 +249,6 @@ fn call_function_with_tuple_return() {
     vm.run().expect("run tuple call");
     assert_eq!(common::decode_i64_register(&vm, 10), 56);
 }
-
 #[test]
 fn quantity_arithmetic_compiles_without_implicit_conversion() {
     let src = r#"
@@ -287,7 +266,6 @@ fn quantity_arithmetic_compiles_without_implicit_conversion() {
         .compile_source(src)
         .expect("compile quantity arithmetic");
 }
-
 #[test]
 fn negative_quantity_conversion_is_rejected() {
     let src = r#"
@@ -303,7 +281,6 @@ fn negative_quantity_conversion_is_rejected() {
         .expect_err("negative quantity literal should fail");
     assert!(err.to_string().contains("E_NEGATIVE_QUANTITY"), "{err}");
 }
-
 #[test]
 fn fractional_quantity_literal_is_accepted_contextually() {
     let src = r#"
@@ -318,7 +295,6 @@ fn fractional_quantity_literal_is_accepted_contextually() {
         .compile_source(src)
         .expect("fractional quantity literal should compile in quantity context");
 }
-
 #[test]
 fn decimal_literal_rejects_int_annotation() {
     let prog = parse(
@@ -340,7 +316,6 @@ fn decimal_literal_rejects_int_annotation() {
         err.message()
     );
 }
-
 #[test]
 fn implicit_quantity_to_int_conversion_is_rejected() {
     let src = r#"
@@ -357,11 +332,9 @@ fn implicit_quantity_to_int_conversion_is_rejected() {
         .expect_err("implicit quantity-to-int conversion must fail");
     assert!(error.contains("expected int, got quantity"), "{error}");
 }
-
 #[test]
 fn assert_builtin_obeys_truthiness() {
     let compiler = test_compiler();
-
     let (pass, _manifest, pass_report) = compiler
         .compile_source_with_manifest_and_report(
             "seiyaku AssertTrue { view fn main() { test::assert(true); } }",
@@ -371,7 +344,6 @@ fn assert_builtin_obeys_truthiness() {
     vm.load_program(&pass).expect("load passing assert");
     select_test_entrypoint(&mut vm, &pass, &pass_report, "main");
     vm.run().expect("test::assert(true) should not abort");
-
     let (fail, _manifest, fail_report) = compiler
         .compile_source_with_manifest_and_report(
             "seiyaku AssertFalse { view fn main() { test::assert(false); } }",
@@ -383,7 +355,6 @@ fn assert_builtin_obeys_truthiness() {
     let err = vm.run().expect_err("test::assert(false) should abort");
     assert!(matches!(err, ivm::VMError::AssertionFailed));
 }
-
 #[test]
 fn many_string_literals_load_under_wide_guard() {
     // Exercise pointer literal emission with offsets beyond the wide 8-bit range.
@@ -393,7 +364,6 @@ fn many_string_literals_load_under_wide_guard() {
     }
     src.push_str(" return;");
     src.push_str("} }");
-
     let code = Compiler::new()
         .compile_source(&src)
         .expect("compile program with many literals");
@@ -401,7 +371,6 @@ fn many_string_literals_load_under_wide_guard() {
     vm.load_program(&code)
         .expect("wide guard must accept Kotodama output");
 }
-
 #[test]
 fn pointer_constructors_compile() {
     let src = r#"
@@ -419,7 +388,6 @@ fn pointer_constructors_compile() {
         .compile_source(src)
         .expect("compile typed pointer constructors");
 }
-
 #[test]
 fn public_function_without_authorization_rejected() {
     let src = r#"
@@ -437,7 +405,6 @@ fn public_function_without_authorization_rejected() {
         "error should mention missing authorization: {err}"
     );
 }
-
 #[test]
 fn register_peer_requires_permission() {
     let src = r#"
@@ -455,7 +422,6 @@ fn register_peer_requires_permission() {
         "error should mention missing authorization for peer registration: {err}"
     );
 }
-
 #[test]
 fn register_account_requires_permission() {
     let src = r#"
@@ -473,7 +439,6 @@ fn register_account_requires_permission() {
         "error should mention missing authorization for account registration: {err}"
     );
 }
-
 #[test]
 fn trigger_management_requires_permission() {
     let src = r#"
@@ -492,7 +457,6 @@ fn trigger_management_requires_permission() {
         "error should mention missing authorization for trigger operations: {err}"
     );
 }
-
 #[test]
 fn public_function_with_permission_is_allowed() {
     let src = r#"
@@ -506,7 +470,6 @@ fn public_function_with_permission_is_allowed() {
         .compile_source(src)
         .expect("permission attribute should allow privileged call");
 }
-
 #[test]
 fn removed_in_memory_map_type_is_rejected() {
     let src = r#"
@@ -516,7 +479,6 @@ fn removed_in_memory_map_type_is_rejected() {
             view fn main() {}
         }
     "#;
-
     let err = Compiler::new()
         .compile_source(src)
         .expect_err("in-memory Map must be rejected");
@@ -525,7 +487,6 @@ fn removed_in_memory_map_type_is_rejected() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn parse_for_each_map_and_builtins() {
     let src = r#"
@@ -540,20 +501,17 @@ fn parse_for_each_map_and_builtins() {
         "error hint should mention the canonical bounded helpers: {err}"
     );
 }
-
 #[test]
 fn c_style_for_loop_is_rejected() {
     let src = "module Loops { fn f() { for var i = 0; i < 3; i = i + 1 { let x = i; } } }";
     parse(src).expect_err("V1 only accepts compiler-proven bounded iterator loops");
 }
-
 #[test]
 fn literal_range_for_loop_is_bounded() {
     let src = "module Loops { fn f() { for x in range(6) { let y = x; } } }";
     let prog = parse(src).expect("parse should succeed");
     analyze(&prog).expect("a literal range within the V1 bound must type-check");
 }
-
 #[test]
 fn state_map_take_two_is_bounded() {
     let src = r#"
@@ -565,7 +523,6 @@ fn state_map_take_two_is_bounded() {
     let prog = parse(src).expect("parse");
     analyze(&prog).expect("StateMap take(2) is compiler-bounded");
 }
-
 #[test]
 fn removed_bounded_attribute_is_rejected() {
     let src = r#"
@@ -576,7 +533,6 @@ fn removed_bounded_attribute_is_rejected() {
     "#;
     parse(src).expect_err("legacy bounded attributes are not V1 syntax");
 }
-
 #[test]
 fn parse_and_type_bounded_map_take_one_ok() {
     let src = r#"
@@ -590,7 +546,6 @@ fn parse_and_type_bounded_map_take_one_ok() {
     let ivm::kotodama::semantic::TypedItem::Function(func) = &typed.items[0];
     assert!(!func.body.statements.is_empty());
 }
-
 #[test]
 fn compile_domain_literal_emits_tlv_domainid() {
     let src = r#"
@@ -607,7 +562,6 @@ fn compile_domain_literal_emits_tlv_domainid() {
         "expected DomainId TLV type (0x0008) in compiled artifact"
     );
 }
-
 #[test]
 fn compile_register_domain_emits_syscall_0x10() {
     use ivm::encoding;
@@ -628,7 +582,6 @@ fn compile_register_domain_emits_syscall_0x10() {
         "expected SCALL imm8=0x10 (register_domain) in compiled bytecode"
     );
 }
-
 #[test]
 fn compile_zk_verify_batch_emits_syscall_0x64() {
     // Ensure the Kotodama intrinsic lowers to SCALL 0x64.
@@ -648,7 +601,6 @@ fn compile_zk_verify_batch_emits_syscall_0x64() {
         "expected SCALL imm8=0x64 (zk_verify_batch) in compiled bytecode"
     );
 }
-
 #[test]
 fn compile_blob_literal_emits_tlv_blob() {
     // Ensure a bytes literal emits the canonical bytes TLV (wire type 0x0006).
@@ -665,7 +617,6 @@ fn compile_blob_literal_emits_tlv_blob() {
         "expected bytes TLV type (0x0006) in compiled artifact"
     );
 }
-
 #[test]
 fn semantic_typed_pointers_and_authority() {
     let src = r#"
@@ -682,7 +633,6 @@ fn semantic_typed_pointers_and_authority() {
         "semantics should accept typed pointers + authority"
     );
 }
-
 #[test]
 fn compile_emits_get_authority_syscall() {
     let src = r#"seiyaku Authority { view fn f() -> AccountId { return context::authority(); } }"#;
@@ -698,7 +648,6 @@ fn compile_emits_get_authority_syscall() {
     let want = encoding::wide::encode_sys(scall, syscalls::SYSCALL_GET_AUTHORITY as u8);
     assert!(words.contains(&want), "GET_AUTHORITY syscall not found");
 }
-
 #[test]
 fn compile_emits_current_time_syscall() {
     let src = r#"seiyaku Time { view fn f() -> int { return context::current_time_ms(); } }"#;
@@ -714,7 +663,6 @@ fn compile_emits_current_time_syscall() {
     let want = encoding::wide::encode_sys(scall, syscalls::SYSCALL_CURRENT_TIME_MS as u8);
     assert!(words.contains(&want), "CURRENT_TIME_MS syscall not found");
 }
-
 #[test]
 fn compile_emits_block_height_syscall() {
     let src = r#"seiyaku Height { view fn f() -> int { return context::block_height(); } }"#;
@@ -727,7 +675,6 @@ fn compile_emits_block_height_syscall() {
         "SYSVAR_BLOCK_HEIGHT syscall not found"
     );
 }
-
 #[test]
 fn compile_emits_extended_sysvar_helpers() {
     let src = r#"
@@ -763,7 +710,6 @@ fn compile_emits_extended_sysvar_helpers() {
         );
     }
 }
-
 #[test]
 fn semantic_rejects_extended_sysvar_helper_args() {
     let prog = parse(r#"module InvalidContext { fn f() { let _chain = context::chain_id(1); } }"#)
@@ -775,7 +721,6 @@ fn semantic_rejects_extended_sysvar_helper_args() {
         err.message()
     );
 }
-
 #[test]
 fn raw_query_and_authority_sysvar_helpers_are_not_source_apis() {
     let src = r#"
@@ -789,7 +734,6 @@ fn raw_query_and_authority_sysvar_helpers_are_not_source_apis() {
         .compile_source(src)
         .expect_err("raw query bridge must be rejected");
     assert!(error.contains("query_execute_norito"));
-
     let raw_authority =
         r#"seiyaku RawAuthority { view fn caller() -> AccountId { return sysvar_authority(); } }"#;
     let error = test_compiler()
@@ -797,7 +741,6 @@ fn raw_query_and_authority_sysvar_helpers_are_not_source_apis() {
         .expect_err("direct sysvar helper must be rejected");
     assert!(error.contains("sysvar_authority"));
 }
-
 #[test]
 fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
     let prog =
@@ -809,7 +752,6 @@ fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
         "unexpected error: {}",
         err.message()
     );
-
     let prog =
         parse(r#"module InvalidAuthority { fn f() { let _caller = sysvar_authority(1); } }"#)
             .unwrap();
@@ -820,7 +762,6 @@ fn semantic_rejects_extended_query_and_authority_sysvar_helper_args() {
         err.message()
     );
 }
-
 #[test]
 fn compile_emits_core_query_get_helpers() {
     let src = r#"
@@ -865,14 +806,12 @@ fn compile_emits_core_query_get_helpers() {
         );
     }
 }
-
 #[test]
 fn manifest_includes_exact_access_hints_for_static_typed_query_get_helpers() {
     use iroha_data_model::{
         account::{AccountId, ParsedAccountId},
         asset::id::{AssetDefinitionId, AssetId},
     };
-
     let account = AccountId::parse_encoded("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
         .map(ParsedAccountId::into_account_id)
         .expect("parse account literal");
@@ -922,7 +861,6 @@ fn manifest_includes_exact_access_hints_for_static_typed_query_get_helpers() {
     );
     assert!(!read.read_keys.contains(&"*".to_string()));
 }
-
 #[test]
 fn semantic_rejects_typed_query_get_helper_args() {
     let prog =
@@ -934,7 +872,6 @@ fn semantic_rejects_typed_query_get_helper_args() {
         "unexpected error: {}",
         err.message()
     );
-
     let prog = parse(
         r#"module InvalidQuery { fn f() { let _instance = ledger::query::seiyaku_instance(1); } }"#,
     )
@@ -946,7 +883,6 @@ fn semantic_rejects_typed_query_get_helper_args() {
         err.message()
     );
 }
-
 #[test]
 fn compile_emits_zk_vrf_read_helpers() {
     let src = r#"
@@ -975,12 +911,10 @@ fn compile_emits_zk_vrf_read_helpers() {
         );
     }
 }
-
 #[test]
 fn manifest_includes_exact_access_hints_for_static_zk_read_requests() {
     use iroha_data_model::asset::id::AssetDefinitionId;
     use ivm::zk_verify::{RootsGetRequest, VoteGetTallyRequest};
-
     let asset_definition = AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
         .expect("parse asset definition");
     let roots_payload = norito::to_bytes(&RootsGetRequest {
@@ -1033,7 +967,6 @@ fn manifest_includes_exact_access_hints_for_static_zk_read_requests() {
     );
     assert!(!read.read_keys.contains(&"*".to_string()));
 }
-
 #[test]
 fn semantic_rejects_zk_vrf_read_helper_args() {
     let prog =
@@ -1048,7 +981,6 @@ fn semantic_rejects_zk_vrf_read_helper_args() {
         err.message()
     );
 }
-
 #[test]
 fn compile_emits_state_introspection_helpers() {
     let src = r#"
@@ -1079,7 +1011,6 @@ fn compile_emits_state_introspection_helpers() {
         );
     }
 }
-
 #[test]
 fn semantic_rejects_state_introspection_helper_args() {
     let prog = parse(
@@ -1094,7 +1025,6 @@ fn semantic_rejects_state_introspection_helper_args() {
         err.message()
     );
 }
-
 #[test]
 fn semantic_rejects_legacy_name_state_path_carriers() {
     // `Name` is retained here only as an explicit negative ABI fixture. V1
@@ -1113,7 +1043,6 @@ fn semantic_rejects_legacy_name_state_path_carriers() {
         err.message()
     );
 }
-
 #[test]
 fn compile_emits_extended_hash_syscalls() {
     let src = r#"
@@ -1144,7 +1073,6 @@ fn compile_emits_extended_hash_syscalls() {
         assert!(words.contains(&want), "{name} syscall not found");
     }
 }
-
 #[test]
 fn semantic_rejects_extended_hash_non_bytes_arg() {
     let prog =
@@ -1156,7 +1084,6 @@ fn semantic_rejects_extended_hash_non_bytes_arg() {
         err.message()
     );
 }
-
 #[test]
 fn compile_emits_resolve_account_alias_syscall() {
     let src = r#"seiyaku ResolveAlias { view fn f() { let a = ledger::account::resolve_alias("banking@centralbank"); } }"#;
@@ -1175,7 +1102,6 @@ fn compile_emits_resolve_account_alias_syscall() {
         "RESOLVE_ACCOUNT_ALIAS syscall not found"
     );
 }
-
 #[test]
 fn parse_and_type_bounded_map_take_one() {
     let src = r#"
@@ -1189,7 +1115,6 @@ fn parse_and_type_bounded_map_take_one() {
     let ivm::kotodama::semantic::TypedItem::Function(func) = &typed.items[0];
     assert!(!func.body.statements.is_empty());
 }
-
 #[test]
 fn for_each_map_mutation_is_rejected() {
     // Mutation of the iterated map inside the loop must be rejected.
@@ -1203,7 +1128,6 @@ fn for_each_map_mutation_is_rejected() {
     let err = analyze(&prog).expect_err("should reject mutation during iteration");
     assert_eq!(err.code(), "E_ITER_MUTATION");
 }
-
 #[test]
 fn parse_error() {
     let src = "module Broken { fn bad("; // incomplete
@@ -1211,7 +1135,6 @@ fn parse_error() {
     assert!(err.contains("identifier"));
     assert!(err.contains("module Broken { fn bad("));
 }
-
 #[test]
 fn semantic_simple_add() {
     let src = "module Arithmetic { fn add(int a, int b) { let c = a + b; } }";
@@ -1225,7 +1148,6 @@ fn semantic_simple_add() {
         panic!("expected let statement");
     }
 }
-
 #[test]
 fn semantic_type_error() {
     let src = "module InvalidArithmetic { fn bad() { let a = 1 + \"hi\"; } }";
@@ -1238,18 +1160,14 @@ fn semantic_type_error() {
         err.message()
     );
 }
-
 #[test]
 fn encode_helpers() {
     use ivm::kotodama::compiler::{encode_add, encode_addi};
-
     let add = encode_add(3, 1, 2);
     assert_eq!(add, 0x0103_0102);
-
     let addi = encode_addi(1, 1, 7).expect("encode addi");
     assert_eq!(addi, 0x2001_0107);
 }
-
 #[test]
 fn compile_and_run_add() {
     let src = "seiyaku Add { fn add(int a, int b) -> int { return a + b; } view fn main() -> int { return add(a: 4, b: 7); } }";
@@ -1262,7 +1180,6 @@ fn compile_and_run_add() {
         off > 17,
         "self-describing artifacts must prefix code with CNTR"
     );
-
     let mut vm = ivm::IVM::new(u64::MAX);
     // Decode trace left disabled by default; first-words dump is printed above.
     vm.load_program(&code).unwrap();
@@ -1270,7 +1187,6 @@ fn compile_and_run_add() {
     vm.run().expect("execution failed");
     assert_eq!(common::decode_i64_register(&vm, 10), 11);
 }
-
 #[test]
 fn state_allocations_do_not_clobber_params() {
     let src = r#"
@@ -1287,7 +1203,6 @@ fn state_allocations_do_not_clobber_params() {
     vm.run().expect("execution failed");
     assert_eq!(common::decode_i64_register(&vm, 10), 42);
 }
-
 #[test]
 fn compile_builtin_create_nfts_and_set_detail() {
     let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";
@@ -1308,7 +1223,6 @@ fn compile_builtin_create_nfts_and_set_detail() {
     let has = |imm: u8| code_bytes.windows(4).any(|w| w == pat(imm));
     assert!(has(imm_create) && has(imm_detail));
 }
-
 #[test]
 fn statement_call_sugar_is_rejected() {
     for src in [
@@ -1319,7 +1233,6 @@ fn statement_call_sugar_is_rejected() {
         assert!(err.contains("call"), "unexpected parse error: {err}");
     }
 }
-
 #[test]
 fn pointer_constructors_accept_string_variables() {
     // Use variables bound to string literals; constructors should work
@@ -1353,7 +1266,6 @@ fn pointer_constructors_accept_string_variables() {
         "expected set detail and transfer domain syscalls"
     );
 }
-
 #[test]
 fn pointer_constructors_reject_implicit_conversions_and_method_aliases() {
     for source in [
@@ -1381,7 +1293,6 @@ fn pointer_constructors_reject_implicit_conversions_and_method_aliases() {
         );
     }
 }
-
 #[test]
 fn triple_nested_struct_field_access() {
     // Deeply nested struct fields: d.c.b.a.x
@@ -1409,7 +1320,6 @@ fn triple_nested_struct_field_access() {
     vm.run().expect("execute");
     assert_eq!(common::decode_i64_register(&vm, 10), 5);
 }
-
 #[test]
 fn triple_nested_struct_field_mixed_named_numeric_access() {
     // Mixed access: d.c.0.a.x where D { (B, int) c }
@@ -1435,7 +1345,6 @@ fn triple_nested_struct_field_mixed_named_numeric_access() {
     vm.run().expect("execute");
     assert_eq!(common::decode_i64_register(&vm, 10), 7);
 }
-
 #[test]
 fn invalid_numeric_on_struct_reports_error() {
     let src = r#"
@@ -1448,7 +1357,6 @@ fn invalid_numeric_on_struct_reports_error() {
     let err = analyze(&prog).expect_err("expected error");
     assert!(err.message().contains("unknown field '0' on struct A"));
 }
-
 #[test]
 fn invalid_named_on_tuple_reports_error() {
     let src = r#"
@@ -1460,7 +1368,6 @@ fn invalid_named_on_tuple_reports_error() {
     let err = analyze(&prog).expect_err("expected error");
     assert!(err.message().contains("unknown field 'a' on tuple"));
 }
-
 #[test]
 fn invalid_numeric_tuple_index_reports_error() {
     let src = r#"
@@ -1472,7 +1379,6 @@ fn invalid_numeric_tuple_index_reports_error() {
     let err = analyze(&prog).expect_err("expected error");
     assert!(err.message().contains("tuple index 3 out of bounds"));
 }
-
 #[test]
 fn tuple_index_on_non_tuple_reports_type() {
     let src = r#"
@@ -1488,7 +1394,6 @@ fn tuple_index_on_non_tuple_reports_type() {
             .contains("tuple index on non-tuple type struct A")
     );
 }
-
 #[test]
 fn tuple_index_on_non_tuple_int_reports_type() {
     let src = r#"
@@ -1500,7 +1405,6 @@ fn tuple_index_on_non_tuple_int_reports_type() {
     let err = analyze(&prog).expect_err("expected error");
     assert!(err.message().contains("tuple index on non-tuple type int"));
 }
-
 #[test]
 fn unknown_field_on_struct_reports_available_fields() {
     let src = r#"
@@ -1516,7 +1420,6 @@ fn unknown_field_on_struct_reports_available_fields() {
             .contains("unknown field 'z' on struct A (available: x, y)")
     );
 }
-
 #[test]
 fn invalid_named_on_non_struct_reports_error() {
     let src = r#"
@@ -1528,7 +1431,6 @@ fn invalid_named_on_non_struct_reports_error() {
     let err = analyze(&prog).expect_err("expected error");
     assert!(err.message().contains("unknown field 'foo' on type int"));
 }
-
 #[test]
 fn invalid_indexing_on_non_map_reports_error() {
     let src = r#"
@@ -1544,7 +1446,6 @@ fn invalid_indexing_on_non_map_reports_error() {
             .contains("indexing not supported on this type")
     );
 }
-
 #[test]
 fn method_call_sugar_receiver_and_arg() {
     // a.method(b) sugar: receiver prepended as first arg
@@ -1563,7 +1464,6 @@ fn method_call_sugar_receiver_and_arg() {
     vm.run().expect("execute");
     assert_eq!(common::decode_i64_register(&vm, 10), 12);
 }
-
 #[test]
 fn semantic_type_enforcement_for_typed_syscalls() {
     use ivm::kotodama::parser::parse;
@@ -1576,7 +1476,6 @@ fn semantic_type_enforcement_for_typed_syscalls() {
     let bad2 = parse("module InvalidDetail { fn f() { ledger::account::set_detail(account: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), key: Json::parse(\"1\"), value: Name::parse(\"k\")); } }").unwrap();
     assert!(analyze(&bad2).is_err());
 }
-
 #[test]
 fn range_end_less_than_start_rejected() {
     let src = r#"
@@ -1589,7 +1488,6 @@ fn range_end_less_than_start_rejected() {
     let err = analyze(&prog).expect_err("expected end<start rejection");
     assert!(err.message().contains("end >= start"));
 }
-
 #[test]
 fn range_non_integer_args_rejected() {
     let src = r#"
@@ -1602,7 +1500,6 @@ fn range_non_integer_args_rejected() {
     let err = analyze(&prog).expect_err("expected non-integer rejection");
     assert!(err.message().contains("range(start, end)"));
 }
-
 #[test]
 fn dynamic_state_map_take_is_rejected() {
     let src = r#"
@@ -1623,7 +1520,6 @@ fn dynamic_state_map_take_is_rejected() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn dynamic_state_map_range_is_rejected() {
     let src = r#"
@@ -1644,7 +1540,6 @@ fn dynamic_state_map_range_is_rejected() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn compile_typed_nft_syscalls() {
     let src = "seiyaku NftCalls { kotoage fn main() authorize(\"ManageNfts\") { ledger::nft::mint(nft: NftId::parse(\"n0$wonderland.universal\"), owner: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\")); ledger::nft::transfer(source: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), nft: NftId::parse(\"n0$wonderland.universal\"), destination: AccountId::parse(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
@@ -1658,7 +1553,6 @@ fn compile_typed_nft_syscalls() {
     assert!(has(syscalls::SYSCALL_NFT_MINT_ASSET as u8));
     assert!(has(syscalls::SYSCALL_NFT_TRANSFER_ASSET as u8));
 }
-
 #[test]
 fn compile_and_run_modulo() {
     // Return a % b
@@ -1670,7 +1564,6 @@ fn compile_and_run_modulo() {
     vm.run().expect("execute");
     assert_eq!(common::decode_i64_register(&vm, 10), 17 % 5);
 }
-
 #[test]
 fn compiler_owns_first_release_abi_metadata() {
     let code = Compiler::new()
@@ -1680,7 +1573,6 @@ fn compiler_owns_first_release_abi_metadata() {
     assert_eq!(meta.abi_version, 1);
     assert_eq!(meta.vector_length, 0);
 }
-
 #[test]
 fn compile_emits_manifest_hashes() {
     use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
@@ -1699,7 +1591,6 @@ fn compile_emits_manifest_hashes() {
     let expected_abi = iroha_crypto::Hash::prehashed(compute_abi_hash(policy));
     assert_eq!(manifest.abi_hash, Some(expected_abi));
 }
-
 #[test]
 fn manifest_code_hash_reflects_literals() {
     let compiler = Compiler::new();
@@ -1717,11 +1608,9 @@ fn manifest_code_hash_reflects_literals() {
     let hash_b = manifest_b.code_hash.expect("beta code hash");
     assert_ne!(hash_a, hash_b, "literals must influence code_hash");
 }
-
 #[test]
 fn manifest_includes_entrypoints_and_features() {
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
     let src = r#"
         seiyaku Demo {
             state int counter;
@@ -1759,7 +1648,6 @@ fn manifest_includes_entrypoints_and_features() {
     assert_eq!(entrypoints[0].permission, None);
     assert_eq!(entrypoints[0].read_keys, Vec::<String>::new());
     assert_eq!(entrypoints[0].write_keys, vec!["state:counter"]);
-
     assert_eq!(entrypoints[1].name, "run");
     assert!(matches!(entrypoints[1].kind, EntryPointKind::Kotoage));
     assert_eq!(entrypoints[1].permission.as_deref(), Some("Admin"));
@@ -1767,11 +1655,9 @@ fn manifest_includes_entrypoints_and_features() {
     assert_eq!(entrypoints[1].write_keys, Vec::<String>::new());
     assert_eq!(manifest.features_bitmap, Some(0));
 }
-
 #[test]
 fn manifest_includes_trigger_descriptors() {
     use iroha_data_model::{events::EventFilterBox, trigger::action::Repeats};
-
     let src = r#"
         seiyaku Demo {
             kotoage fn run() authorize("Trigger") {}
@@ -1798,14 +1684,12 @@ fn manifest_includes_trigger_descriptors() {
     assert_eq!(trigger.repeats, Repeats::Exactly(2));
     assert_eq!(trigger.callback.entrypoint, "run");
 }
-
 #[test]
 fn manifest_includes_isi_access_hints_for_static_targets() {
     use iroha_data_model::{
         account::AccountId,
         asset::id::{AssetDefinitionId, AssetId},
     };
-
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let src = r#"
         seiyaku StaticAssetAccess {
@@ -1830,7 +1714,6 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
     let asset_def =
         AssetDefinitionId::parse_address_literal(asset_literal).expect("parse canonical asset");
     let asset_id = AssetId::of(asset_def.clone(), account.clone());
-
     assert!(hints.read_keys.contains(&format!("account:{account}")));
     assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
@@ -1840,7 +1723,6 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         !hints.read_keys.iter().any(|key| key.starts_with("domain:")),
         "canonical asset-definition ids must not synthesize domain hints",
     );
-
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     let main = entrypoints
         .iter()
@@ -1856,7 +1738,6 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         "opaque canonical asset definitions should not synthesize domain hints",
     );
 }
-
 #[test]
 fn production_manifest_accepts_authority_placeholder_isi_access() {
     let src = r#"
@@ -1889,7 +1770,6 @@ fn production_manifest_accepts_authority_placeholder_isi_access() {
     );
     assert!(!hints.read_keys.contains(&"*".to_string()));
     assert!(!hints.write_keys.contains(&"*".to_string()));
-
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     let main = entrypoints
         .iter()
@@ -1906,7 +1786,6 @@ fn production_manifest_accepts_authority_placeholder_isi_access() {
             .contains(&"domain:wonderland.universal".to_string())
     );
 }
-
 #[test]
 fn production_manifest_accepts_parameter_dependent_isi_access_with_coarse_hints() {
     let src = r#"
@@ -1930,7 +1809,6 @@ fn production_manifest_accepts_parameter_dependent_isi_access_with_coarse_hints(
     }
     assert!(!hints.read_keys.iter().any(|key| key == "*"));
     assert!(!hints.write_keys.iter().any(|key| key == "*"));
-
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     let move_entry = entrypoints
         .iter()
@@ -1945,7 +1823,6 @@ fn production_manifest_accepts_parameter_dependent_isi_access_with_coarse_hints(
         assert!(move_entry.write_keys.iter().any(|actual| actual == key));
     }
 }
-
 #[test]
 fn source_localization_blocks_are_rejected() {
     for spelling in ["messages", "kotoba"] {
@@ -1965,7 +1842,6 @@ fn source_localization_blocks_are_rejected() {
         assert!(error.contains("source-unit item"), "{error}");
     }
 }
-
 #[test]
 fn lexer_block_comments_and_number_literals() {
     // Block comments and hex/binary/underscored numbers
@@ -1982,7 +1858,6 @@ fn lexer_block_comments_and_number_literals() {
     let prog = parse(src).expect("parse with comments and literals");
     let _typed = analyze(&prog).expect("analyze literals");
 }
-
 #[test]
 fn compound_assignments_typecheck() {
     // x +=, -=, *=, /=, %= should typecheck and rebind SSA name
@@ -1990,7 +1865,6 @@ fn compound_assignments_typecheck() {
     let prog = parse(src).expect("parse compound assigns");
     let _typed = analyze(&prog).expect("analyze compound assigns");
 }
-
 #[test]
 fn canonical_host_calls_typecheck_and_removed_map_does_not() {
     let src = r#"
@@ -2002,12 +1876,10 @@ fn canonical_host_calls_typecheck_and_removed_map_does_not() {
     "#;
     let prog = parse(src).expect("parse ledger::asset::transfer");
     analyze(&prog).expect("analyze ledger::asset::transfer");
-
     let src2 = "module RemovedMap { fn make() -> int { return std::map::new(); } }";
     let prog2 = parse(src2).expect("parse std::map::new");
     analyze(&prog2).expect_err("in-memory map constructors are removed from V1");
 }
-
 #[test]
 fn indirect_sensitive_calls_require_permission() {
     let src = r#"
@@ -2027,7 +1899,6 @@ fn indirect_sensitive_calls_require_permission() {
         "expected authorization error, got {err}"
     );
 }
-
 #[test]
 fn while_loops_are_rejected_in_v1() {
     let src = r#"
@@ -2052,7 +1923,6 @@ fn while_loops_are_rejected_in_v1() {
         .expect_err("while loops must be rejected");
     assert!(error.contains("while"), "unexpected error: {error}");
 }
-
 #[test]
 fn ternary_parses_and_types() {
     let src = "module Ternary { fn f(int a, int b) -> int { let x = (1 < 2) ? a : b; return x; } }";
@@ -2061,7 +1931,6 @@ fn ternary_parses_and_types() {
     let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
     assert_eq!(f.name, "f");
 }
-
 #[test]
 fn ternary_min_types() {
     let src = "module Ternary { fn choose_min(int a, int b) -> int { return (a < b) ? a : b; } }";
@@ -2070,14 +1939,12 @@ fn ternary_min_types() {
         matches!(item, ivm::kotodama::semantic::TypedItem::Function(function) if function.name == "choose_min")
     }));
 }
-
 #[test]
 fn nested_ternary_types() {
     let src =
         "module Ternary { fn f(int a, int b, int c) -> int { return a < b ? b < c ? b : c : a; } }";
     analyze(&parse(src).expect("parse nested ternary")).expect("type nested ternary");
 }
-
 #[test]
 fn build_options_control_header_and_source_meta_is_unavailable() {
     let src = r#"
@@ -2101,7 +1968,6 @@ seiyaku MyC {
     assert_eq!(meta.mode & ivm::ivm_mode::ZK, 0);
     assert_eq!(meta.mode & ivm::ivm_mode::VECTOR, 0);
 }
-
 #[test]
 fn removed_in_memory_map_indexing_is_rejected() {
     let src = "module RemovedMap { fn f(Map<int, int> m, int k) -> int { return m[k]; } }";
@@ -2110,7 +1976,6 @@ fn removed_in_memory_map_indexing_is_rejected() {
         .expect_err("in-memory Map must not compile in V1");
     assert!(error.contains("Map"), "unexpected error: {error}");
 }
-
 #[test]
 fn branch_lowering_uses_compact_conditional_and_one_relaxed_transfer() {
     let src = r#"
@@ -2138,7 +2003,6 @@ seiyaku Branches {
         .chunks_exact(4)
         .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("word chunk")))
         .collect::<Vec<_>>();
-
     let branch_index = words
         .iter()
         .position(|word| {
@@ -2148,14 +2012,12 @@ seiyaku Branches {
             )
         })
         .expect("expected compact conditional branch");
-
     let branch_word = words[branch_index];
     let imm = instruction::wide::imm8(branch_word);
     assert_eq!(
         imm, 2,
         "BNE should skip the one-word else transfer and land on the one-word then transfer"
     );
-
     let relaxed_else_transfer = words[branch_index + 1];
     let then_block_index =
         branch_index + usize::try_from(imm).expect("positive branch displacement");
@@ -2178,7 +2040,6 @@ seiyaku Branches {
         "taken path must fall through into the adjacent block without a second jump"
     );
 }
-
 #[test]
 fn compile_poseidon2_and_assert_eq() {
     // Truncated scalar proof gadgets are internal VM operations.
@@ -2188,21 +2049,17 @@ fn compile_poseidon2_and_assert_eq() {
         .compile_source(src)
         .expect_err("truncated Poseidon must not be a source API");
     assert!(error.contains("crypto::poseidon2"));
-
     // assert_eq succeeds without enabling ZK mode
     let src = "seiyaku Assertions { view fn pass() { test::assert_eq(actual: 1, expected: 1); } view fn fail() { test::assert_eq(actual: 1, expected: 2); } }";
     let (code, _manifest, report) = test_compiler()
         .compile_source_with_manifest_and_report(src)
         .expect("compile failed");
-
     let (meta, _) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.mode & 0x01, 0);
-
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
     select_test_entrypoint(&mut vm, &code, &report, "pass");
     vm.run().expect("assert_eq failed");
-
     // failing case
     let mut vm2 = ivm::IVM::new(u64::MAX);
     vm2.load_program(&code).unwrap();
@@ -2210,7 +2067,6 @@ fn compile_poseidon2_and_assert_eq() {
     let res = vm2.run();
     assert!(matches!(res, Err(ivm::VMError::AssertionFailed)));
 }
-
 #[test]
 fn compile_pubkgen_and_valcom() {
     let src = "seiyaku Commitments { view fn main() -> (int, int) { let p = crypto::pubkgen(9); let c = crypto::valcom(left: 9, right: 4); return (p, c); } }";
@@ -2219,7 +2075,6 @@ fn compile_pubkgen_and_valcom() {
         .expect_err("toy public-key and public scalar commitment APIs must fail closed");
     assert!(error.contains("crypto::pubkgen"));
 }
-
 #[test]
 fn public_scalar_valcom_is_rejected_even_without_pubkgen() {
     let src = "module Commitment { fn main(int a, int b) -> int { return crypto::valcom(left: a, right: b); } }";
@@ -2231,12 +2086,10 @@ fn public_scalar_valcom_is_rejected_even_without_pubkgen() {
     .expect_err("public valcom operands must not select the truncated opcode");
     assert!(error.contains("Secret<int|decimal|quantity>"));
 }
-
 #[test]
 fn typed_json_access_spills_are_handled() {
     use ivm::kotodama::ir::Instr;
     use ivm::kotodama::regalloc;
-
     std::thread::Builder::new()
         .name("typed_json_access_spills".to_owned())
         .stack_size(8 * 1024 * 1024)
@@ -2259,7 +2112,6 @@ fn typed_json_access_spills_are_handled() {
                 src.push_str(" + val;\n  return sum;\n}\n}\n");
                 src
             };
-
             let src = build_src(32);
             let prog = parse(&src).expect("parse typed Json spill");
             let typed = analyze(&prog).expect("analyze typed Json spill");
@@ -2293,7 +2145,6 @@ fn typed_json_access_spills_are_handled() {
         .join()
         .expect("typed Json spill test thread");
 }
-
 #[test]
 fn raw_json_codec_aliases_are_rejected() {
     let src = r#"
@@ -2311,7 +2162,6 @@ fn raw_json_codec_aliases_are_rejected() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn compile_and_run_poseidon_register_forms() {
     let src = r#"
@@ -2328,7 +2178,6 @@ seiyaku PoseidonForms {
         .expect_err("truncated Poseidon register forms must remain VM-internal");
     assert!(error.contains("crypto::poseidon2") || error.contains("crypto::poseidon6"));
 }
-
 #[test]
 fn unbounded_state_map_iteration_is_rejected() {
     let src = r#"
@@ -2343,7 +2192,6 @@ fn unbounded_state_map_iteration_is_rejected() {
         "{err}"
     );
 }
-
 #[test]
 fn unbounded_state_map_iteration_cannot_infer_a_limit() {
     let src = r#"
@@ -2358,7 +2206,6 @@ fn unbounded_state_map_iteration_cannot_infer_a_limit() {
         "{err}"
     );
 }
-
 #[test]
 fn map_new_is_rejected_in_v1() {
     let src = "module RemovedMap { fn make() -> int { return Map::new(); } }";
@@ -2367,14 +2214,12 @@ fn map_new_is_rejected_in_v1() {
         .expect_err("in-memory Map allocation must not compile in V1");
     assert!(error.contains("Map"), "unexpected error: {error}");
 }
-
 #[test]
 fn compile_from_file() {
     let path = std::path::Path::new("tests/data/add.ko");
     let code = Compiler::new().compile_file(path).expect("compile failed");
     assert!(!code.is_empty());
 }
-
 #[test]
 fn compile_complex_program() {
     let path = std::path::Path::new("tests/data/complex.ko");
@@ -2382,7 +2227,6 @@ fn compile_complex_program() {
     let (meta, _) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.mode & ivm::ivm_mode::ZK, 0);
 }
-
 #[test]
 fn parse_control_flow() {
     let path = std::path::Path::new("tests/data/control.ko");
@@ -2392,11 +2236,9 @@ fn parse_control_flow() {
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     assert!(ir.functions[0].blocks.len() > 2);
 }
-
 #[test]
 fn parse_amm_dex() {
     use std::path::Path;
-
     use ivm::kotodama::ir::{Instr, WideNumericKind};
     let path = Path::new("tests/data/amm.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
@@ -2430,11 +2272,9 @@ fn parse_amm_dex() {
     }
     assert!(has_mul && has_div);
 }
-
 #[test]
 fn parse_dai_clone() {
     use std::path::Path;
-
     use ivm::kotodama::ir::{Instr, WideNumericKind};
     let path = Path::new("tests/data/dai.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
@@ -2468,7 +2308,6 @@ fn parse_dai_clone() {
     }
     assert!(has_add && has_sub);
 }
-
 #[test]
 fn parse_mint_asset_builtin() {
     use ivm::kotodama::ir::Instr;
@@ -2479,7 +2318,6 @@ fn parse_mint_asset_builtin() {
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(instrs.iter().any(|i| matches!(i, Instr::MintAsset { .. })));
 }
-
 #[test]
 fn parse_transfer_asset_builtin() {
     use ivm::kotodama::ir::Instr;
@@ -2494,7 +2332,6 @@ fn parse_transfer_asset_builtin() {
             .any(|i| matches!(i, Instr::TransferAsset { .. }))
     );
 }
-
 #[test]
 fn parse_transfer_batch_builtin() {
     use ivm::kotodama::ir::Instr;
@@ -2528,7 +2365,6 @@ fn parse_transfer_batch_builtin() {
         "one high-level transfer_batch call must close one atomic batch"
     );
 }
-
 #[test]
 fn transfer_batch_requires_entries() {
     let src = "module EmptyBatch { fn f() { ledger::asset::transfer_batch(); } }";
@@ -2538,7 +2374,6 @@ fn transfer_batch_requires_entries() {
         "an empty transfer_batch call must be rejected"
     );
 }
-
 #[test]
 fn transfer_batch_requires_tuple_entries() {
     let src = "module InvalidBatch { fn f(AccountId a) { ledger::asset::transfer_batch(a); } }";
@@ -2548,7 +2383,6 @@ fn transfer_batch_requires_tuple_entries() {
         "non-tuple transfer_batch entries must be rejected"
     );
 }
-
 #[test]
 fn parse_burn_asset_builtin() {
     use ivm::kotodama::ir::Instr;
@@ -2559,7 +2393,6 @@ fn parse_burn_asset_builtin() {
     let instrs = &ir.functions[0].blocks[0].instrs;
     assert!(instrs.iter().any(|i| matches!(i, Instr::BurnAsset { .. })));
 }
-
 #[test]
 fn parse_register_asset_builtin() {
     use ivm::kotodama::ir::Instr;
@@ -2580,7 +2413,6 @@ fn parse_register_asset_builtin() {
             .any(|i| matches!(i, Instr::RegisterAsset { .. }))
     );
 }
-
 #[test]
 fn parse_create_new_asset_builtin() {
     use ivm::kotodama::ir::Instr;
@@ -2607,7 +2439,6 @@ fn parse_create_new_asset_builtin() {
             .any(|i| matches!(i, Instr::CreateNewAsset { .. }))
     );
 }
-
 #[test]
 fn parse_register_asset_rejects_bare_name_literal() {
     let src = r#"
@@ -2622,11 +2453,9 @@ fn parse_register_asset_rejects_bare_name_literal() {
         "unexpected semantic error: {err:?}"
     );
 }
-
 #[test]
 fn parse_mfc_example() {
     use std::path::Path;
-
     use ivm::kotodama::ir::{Instr, Terminator};
     let path = Path::new("tests/data/mfc.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
@@ -2657,7 +2486,6 @@ fn parse_mfc_example() {
     }
     assert!(has_transfer && has_branch && has_mint && has_register);
 }
-
 #[test]
 fn compile_kotodama_samples_supported() {
     use std::path::Path;
@@ -2678,7 +2506,6 @@ fn compile_kotodama_samples_supported() {
             .unwrap_or_else(|e| panic!("compile failed for {file}: {e}"));
     }
 }
-
 #[test]
 fn compile_unary_ops() {
     let src = "seiyaku UnaryOps { view fn f(int a, bool b) { let c = -a; let d = !b; } }";
@@ -2686,7 +2513,6 @@ fn compile_unary_ops() {
         .compile_source(src)
         .expect("compile unary ops");
 }
-
 #[test]
 fn in_memory_map_methods_are_rejected() {
     let src = r#"
@@ -2704,7 +2530,6 @@ fn in_memory_map_methods_are_rejected() {
         "unexpected error: {error:?}"
     );
 }
-
 #[test]
 fn ir_lower_contains_method_state_map() {
     use ivm::kotodama::ir::Instr;
@@ -2733,7 +2558,6 @@ fn ir_lower_contains_method_state_map() {
     }
     assert!(saw_state_get && saw_ne);
 }
-
 #[test]
 fn ephemeral_keys_take2_helper_is_rejected() {
     let src = r#"
@@ -2748,7 +2572,6 @@ fn ephemeral_keys_take2_helper_is_rejected() {
         "unexpected error: {error:?}"
     );
 }
-
 #[test]
 fn ephemeral_keys_values_take2_helper_is_rejected() {
     let src = r#"
@@ -2767,7 +2590,6 @@ fn ephemeral_keys_values_take2_helper_is_rejected() {
         "unexpected error: {error:?}"
     );
 }
-
 #[test]
 fn ir_tuple_pack_and_get_general() {
     use ivm::kotodama::ir::Instr;
@@ -2812,7 +2634,6 @@ fn ir_tuple_pack_and_get_general() {
         "tuple field access should lower via TupleGet or reuse flattened bindings"
     );
 }
-
 #[test]
 fn typed_vrf_syscalls_are_present() {
     let src = r#"
@@ -2837,7 +2658,6 @@ fn typed_vrf_syscalls_are_present() {
     assert!(has(syscalls::SYSCALL_VRF_VERIFY as u8));
     assert!(has(syscalls::SYSCALL_VRF_VERIFY_BATCH as u8));
 }
-
 #[test]
 fn raw_pointer_codec_alias_is_rejected() {
     let src = r#"
@@ -2855,11 +2675,9 @@ fn raw_pointer_codec_alias_is_rejected() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn raw_axt_intrinsics_are_rejected() {
     use norito::to_bytes;
-
     let dsid = DataSpaceId::new(7);
     let desc = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -2928,7 +2746,6 @@ fn raw_axt_intrinsics_are_rejected() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn semantic_return_value_without_declared_type_is_rejected() {
     let src = "module ReturnMismatch { fn f() { return 1; } }";

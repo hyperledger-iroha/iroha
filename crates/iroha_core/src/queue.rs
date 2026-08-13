@@ -4,12 +4,10 @@
 //! updates. Lane/dataspace routing is delegated to a pluggable router so the
 //! queue can expose the actual Nexus assignments instead of single-lane
 //! placeholders.
-
 mod journal;
 mod reservation_journal;
 mod router;
 pub(crate) mod routing_ledger;
-
 use core::time::Duration;
 #[cfg(test)]
 use std::sync::Barrier;
@@ -26,7 +24,6 @@ use std::{
         mpsc,
     },
 };
-
 use crossbeam_queue::ArrayQueue;
 use dashmap::{DashMap, mapref::entry::Entry};
 use eyre::Result;
@@ -112,7 +109,6 @@ use tokio::{
     sync::watch,
     time::{MissedTickBehavior, interval},
 };
-
 #[cfg(test)]
 use crate::state::LaneLifecycleError;
 #[cfg(feature = "telemetry")]
@@ -18485,7 +18481,6 @@ impl Queue {
     #[cfg(any(test, feature = "telemetry"))]
     fn compute_teu_weight(tx: &AcceptedTransaction<'static>) -> u64 {
         use iroha_data_model::transaction::Executable;
-
         match tx.entrypoint() {
             iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
                 match signed.instructions() {
@@ -19181,7 +19176,6 @@ pub mod tests {
         thread,
         time::Duration,
     };
-
     use iroha_config::{
         base::WithOrigin,
         kura::InitMode,
@@ -19224,7 +19218,6 @@ pub mod tests {
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     use tempfile::{TempDir, tempdir};
-
     #[allow(unused_imports)]
     use super::*;
     use crate::{
@@ -19645,7 +19638,6 @@ pub mod tests {
         close_global_height: u64,
     ) {
         use iroha_data_model::merge::{LaneDrainFrontierV1, LaneDrainIntentV1, LaneDrainStateV1};
-
         let lane_incarnation = Hash::new(b"queue-drain-close-incarnation");
         let mut nexus = state.nexus_snapshot();
         let mut lanes = nexus.lane_catalog.lanes().to_vec();
@@ -20937,7 +20929,6 @@ pub mod tests {
     #[test]
     fn installing_manifests_populates_privacy_registry() {
         use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
-
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let mut statuses = BTreeMap::new();

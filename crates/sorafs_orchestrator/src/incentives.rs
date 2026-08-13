@@ -4,7 +4,6 @@
 //! calculator implemented in `iroha_core::soranet_incentives`. The orchestrator feeds epoch metrics,
 //! bond state, and optional metadata into the calculator and converts the resulting reward decision
 //! into deterministic `RelayRewardInstructionV1` payloads that the treasury daemon can execute.
-
 use std::{
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
@@ -12,7 +11,6 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
-
 use hex::encode as hex_encode;
 use iroha_core::soranet_incentives::{
     RelayIncentiveError, RelayRewardCalculator, RewardConfig as CoreRewardConfig, RewardDecision,
@@ -31,7 +29,6 @@ use iroha_data_model::{
 use iroha_logger::warn;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use thiserror::Error;
-
 /// Declarative configuration for the relay reward engine.
 #[derive(Debug, Clone)]
 pub struct RewardConfig {
@@ -53,7 +50,6 @@ pub struct RewardConfig {
     /// Optional path where relay epoch metrics are persisted as a Norito log.
     pub metrics_log_path: Option<PathBuf>,
 }
-
 impl RewardConfig {
     /// Validate the reward configuration, ensuring weights fall within expected bounds.
     pub fn validate(&self) -> Result<(), RewardConfigError> {
@@ -66,31 +62,25 @@ impl RewardConfig {
                 bandwidth: self.bandwidth_weight_per_mille,
             });
         }
-
         if self.bandwidth_target_bytes == 0 {
             return Err(RewardConfigError::BandwidthTargetZero);
         }
-
         if self.base_reward.scale() > 9 {
             return Err(RewardConfigError::BaseRewardScale {
                 scale: self.base_reward.scale(),
             });
         }
-
         if self.compliance_penalty_basis_points > 10_000 {
             return Err(RewardConfigError::CompliancePenaltyOverflow {
                 penalty: self.compliance_penalty_basis_points,
             });
         }
-
         if self.budget_approval_id.is_none() {
             return Err(RewardConfigError::MissingBudgetApprovalId);
         }
-
         Ok(())
     }
 }
-
 /// Errors raised while constructing the reward engine.
 #[derive(Debug, Error)]
 pub enum RewardConfigError {
@@ -132,7 +122,6 @@ pub enum RewardConfigError {
         source: MetricsLogError,
     },
 }
-
 /// Computes relay reward instructions given epoch metrics and bonding state.
 #[derive(Debug, Clone)]
 pub struct RelayRewardEngine {
@@ -141,7 +130,6 @@ pub struct RelayRewardEngine {
     config: RewardConfig,
     metrics_log: Option<Arc<MetricsLog>>,
 }
-
 impl RelayRewardEngine {
     /// Construct a new reward engine using the supplied configuration.
     ///
@@ -153,7 +141,6 @@ impl RelayRewardEngine {
         config.validate()?;
         Self::build(config)
     }
-
     fn build(config: RewardConfig) -> Result<Self, RewardConfigError> {
         let availability_raw = config.uptime_weight_per_mille.saturating_mul(10);
         let bandwidth_raw = config.bandwidth_weight_per_mille.saturating_mul(10);
@@ -168,7 +155,6 @@ impl RelayRewardEngine {
             let bandwidth = remaining_total.saturating_sub(avail);
             (avail, bandwidth)
         };
-
         let weights = RewardWeights {
             availability_bps,
             bandwidth_bps,
@@ -183,7 +169,6 @@ impl RelayRewardEngine {
             warning_penalty_per_mille: (config.compliance_penalty_basis_points / 10).min(1_000),
             exit_bonus_per_mille: 0,
         };
-
         let calculator = RelayRewardCalculator::new(core_config).map_err(|err| match err {
             RelayIncentiveError::InvalidWeights { .. } => RewardConfigError::WeightOverflow {
                 uptime: config.uptime_weight_per_mille,
@@ -195,7 +180,6 @@ impl RelayRewardEngine {
             }
             other => RewardConfigError::Invariant(other),
         })?;
-
         let metrics_log = if let Some(path) = config.metrics_log_path.clone() {
             Some(Arc::new(MetricsLog::open(path.clone()).map_err(
                 |source| RewardConfigError::MetricsLog { path, source },
@@ -203,13 +187,11 @@ impl RelayRewardEngine {
         } else {
             None
         };
-
         if let Some(handle) = iroha_telemetry::metrics::global()
             && let Some(base_nanos) = quantity_to_nanos(&base_reward)
         {
             handle.set_soranet_reward_base_payout(base_nanos);
         }
-
         Ok(Self {
             calculator,
             budget_approval_id: config.budget_approval_id,
@@ -217,13 +199,11 @@ impl RelayRewardEngine {
             metrics_log,
         })
     }
-
     /// Returns a reference to the orchestrator-level configuration.
     #[must_use]
     pub fn config(&self) -> &RewardConfig {
         &self.config
     }
-
     /// Produce a relay reward instruction for the provided metrics and bond ledger entry.
     ///
     /// Bond checks are delegated to the core calculator; relays that fail to maintain the minimum
@@ -238,7 +218,6 @@ impl RelayRewardEngine {
     ) -> RelayRewardInstructionV1 {
         let issued_at_unix = u64::from(metrics.epoch);
         let beneficiary_clone = beneficiary.clone();
-
         match self.calculator.evaluate(
             metrics,
             bond_entry,
@@ -306,7 +285,6 @@ impl RelayRewardEngine {
             }
         }
     }
-
     fn log_metrics(
         &self,
         metrics: &RelayEpochMetricsV1,
@@ -316,11 +294,9 @@ impl RelayRewardEngine {
         let Some(log) = &self.metrics_log else {
             return;
         };
-
         let mut record = metrics.clone();
         let mut metadata = record.metadata.clone();
         metadata_merge(&mut metadata, extra_metadata);
-
         match outcome {
             MetricsLogOutcome::Rewarded { score } => {
                 record.reward_score = u64::from(score);
@@ -344,9 +320,7 @@ impl RelayRewardEngine {
                 );
             }
         }
-
         record.metadata = metadata;
-
         if let Err(err) = log.append(&record) {
             warn!(
                 relay_id = %hex_encode(record.relay_id),
@@ -355,7 +329,6 @@ impl RelayRewardEngine {
             );
         }
     }
-
     fn zero_instruction(
         &self,
         metrics: &RelayEpochMetricsV1,
@@ -374,19 +347,16 @@ impl RelayRewardEngine {
         }
     }
 }
-
 fn metadata_insert(metadata: &mut Metadata, key: &str, value: impl Into<Json>) {
     if let Ok(name) = Name::from_str(key) {
         metadata.insert(name, value);
     }
 }
-
 fn metadata_merge(target: &mut Metadata, extra: &Metadata) {
     for (key, value) in extra.iter() {
         let _ = target.insert(key.clone(), value.clone());
     }
 }
-
 fn skip_reason_label(reason: RewardSkipReason) -> &'static str {
     match reason {
         RewardSkipReason::InsufficientBond => "insufficient_bond",
@@ -395,7 +365,6 @@ fn skip_reason_label(reason: RewardSkipReason) -> &'static str {
         RewardSkipReason::ZeroScore => "zero_score",
     }
 }
-
 fn record_reward_telemetry(
     relay_id: RelayId,
     amount: &Quantity,
@@ -418,7 +387,6 @@ fn record_reward_telemetry(
         }
     }
 }
-
 pub(crate) fn quantity_to_nanos(amount: &Quantity) -> Option<u128> {
     let scale = amount.scale();
     let mantissa = amount.as_numeric().try_mantissa_u128()?;
@@ -430,7 +398,6 @@ pub(crate) fn quantity_to_nanos(amount: &Quantity) -> Option<u128> {
         mantissa.checked_mul(multiplier)
     }
 }
-
 #[derive(Debug)]
 enum MetricsLogOutcome<'a> {
     Rewarded {
@@ -444,7 +411,6 @@ enum MetricsLogOutcome<'a> {
         error: &'a RelayIncentiveError,
     },
 }
-
 impl<'a> MetricsLogOutcome<'a> {
     fn from_decision(decision: &'a RewardDecision) -> Self {
         match decision {
@@ -464,7 +430,6 @@ impl<'a> MetricsLogOutcome<'a> {
         }
     }
 }
-
 #[derive(Debug, Error)]
 pub enum MetricsLogError {
     #[error("failed to create metrics log directory {path:?}: {source}")]
@@ -483,13 +448,11 @@ pub enum MetricsLogError {
     #[error("failed to read metrics log at {path:?}: {source}")]
     Read { path: PathBuf, source: io::Error },
 }
-
 #[derive(Debug)]
 struct MetricsLog {
     path: PathBuf,
     writer: Mutex<File>,
 }
-
 impl MetricsLog {
     fn open(path: PathBuf) -> Result<Self, MetricsLogError> {
         if let Some(parent) = path.parent()
@@ -500,7 +463,6 @@ impl MetricsLog {
                 source,
             })?;
         }
-
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -509,18 +471,15 @@ impl MetricsLog {
                 path: path.clone(),
                 source,
             })?;
-
         Ok(Self {
             path,
             writer: Mutex::new(file),
         })
     }
-
     fn append(&self, entry: &RelayEpochMetricsV1) -> Result<(), MetricsLogError> {
         let (payload, flags) = norito::codec::encode_with_header_flags(entry);
         let framed =
             norito::core::frame_bare_with_header_flags::<RelayEpochMetricsV1>(&payload, flags)?;
-
         let mut guard = self.writer.lock().expect("metrics log mutex poisoned");
         guard
             .write_all(&framed)
@@ -535,7 +494,6 @@ impl MetricsLog {
         Ok(())
     }
 }
-
 /// Read all relay metrics entries stored in a Norito log.
 pub fn read_metrics_log(
     path: impl AsRef<Path>,
@@ -550,7 +508,6 @@ pub fn read_metrics_log(
     })?;
     let mut reader = BufReader::new(file);
     let mut entries = Vec::new();
-
     loop {
         {
             let buffer = reader.fill_buf().map_err(|source| MetricsLogError::Read {
@@ -561,7 +518,6 @@ pub fn read_metrics_log(
                 break;
             }
         }
-
         match norito::deserialize_stream::<_, RelayEpochMetricsV1>(&mut reader) {
             Ok(entry) => entries.push(entry),
             Err(norito::Error::Io(err)) if err.kind() == io::ErrorKind::UnexpectedEof => break,
@@ -573,33 +529,26 @@ pub fn read_metrics_log(
             }
         }
     }
-
     Ok(entries)
 }
-
 #[cfg(test)]
 mod tests {
     use std::convert::TryFrom;
-
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
         asset::AssetDefinitionId, domain::DomainId, metadata::Metadata, name::Name,
         soranet::incentives::RelayComplianceStatusV1,
     };
     use tempfile::tempdir;
-
     use super::*;
-
     fn quantity(value: u32) -> Quantity {
         Quantity::from(value)
     }
-
     fn asset_id() -> AssetDefinitionId {
         let domain = DomainId::try_new("sora", "universal").expect("domain id");
         let name = Name::from_str("xor").expect("asset name");
         AssetDefinitionId::derive_from_components(domain, name)
     }
-
     fn policy() -> RelayBondPolicyV1 {
         RelayBondPolicyV1 {
             minimum_exit_bond: quantity(1_000),
@@ -609,11 +558,9 @@ mod tests {
             activation_grace_epochs: 0,
         }
     }
-
     fn budget_id() -> [u8; 32] {
         [0xAB; 32]
     }
-
     fn bond_entry(amount: u32, exit_capable: bool) -> RelayBondLedgerEntryV1 {
         RelayBondLedgerEntryV1 {
             relay_id: [0_u8; 32],
@@ -623,13 +570,11 @@ mod tests {
             exit_capable,
         }
     }
-
     fn sample_account() -> AccountId {
         let key_hex = "11".repeat(32);
         let public_key = PublicKey::from_hex(Algorithm::Ed25519, &key_hex).expect("public key");
         AccountId::new(public_key)
     }
-
     fn metrics(uptime_ratio_per_mille: u16, bandwidth_bytes: u128) -> RelayEpochMetricsV1 {
         RelayEpochMetricsV1 {
             relay_id: [0_u8; 32],
@@ -648,7 +593,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn engine(uptime_weight: u16, bandwidth_weight: u16, penalty_bps: u16) -> RelayRewardEngine {
         let config = RewardConfig {
             policy: policy(),
@@ -662,7 +606,6 @@ mod tests {
         };
         RelayRewardEngine::new(config).expect("config valid")
     }
-
     #[test]
     fn weight_validation_rejects_overflow() {
         let config = RewardConfig {
@@ -680,7 +623,6 @@ mod tests {
             Err(RewardConfigError::WeightOverflow { .. })
         ));
     }
-
     #[test]
     fn compliance_penalty_rejects_overflow() {
         let config = RewardConfig {
@@ -698,7 +640,6 @@ mod tests {
             Err(RewardConfigError::CompliancePenaltyOverflow { penalty: 12_500 })
         ));
     }
-
     #[test]
     fn missing_budget_approval_is_rejected() {
         let config = RewardConfig {
@@ -716,7 +657,6 @@ mod tests {
             Err(RewardConfigError::MissingBudgetApprovalId)
         ));
     }
-
     #[test]
     fn sub_nano_base_reward_is_rejected() {
         let mut config = engine(500, 500, 0).config().clone();
@@ -728,28 +668,21 @@ mod tests {
             Err(RewardConfigError::BaseRewardScale { scale: 10 })
         ));
     }
-
     #[test]
     fn reward_engine_sets_base_payout_metric() {
         let metrics = iroha_telemetry::metrics::global_or_default();
         metrics.soranet_reward_base_payout_nanos.set(0);
-
         let expected_nanos = quantity_to_nanos(&quantity(100)).expect("base reward convertible");
-
         let _ = engine(500, 500, 0);
-
         let observed = metrics.soranet_reward_base_payout_nanos.get();
         let expected = u64::try_from(expected_nanos).expect("fits in gauge");
         assert_eq!(observed, expected);
-
         metrics.soranet_reward_base_payout_nanos.set(0);
     }
-
     #[test]
     fn quantity_to_nanos_accepts_zero_without_panic() {
         assert_eq!(quantity_to_nanos(&Quantity::zero()), Some(0));
     }
-
     #[test]
     fn clean_compliant_relay_receives_full_payout() {
         let engine = engine(500, 500, 0);
@@ -762,7 +695,6 @@ mod tests {
         );
         assert_eq!(instruction.payout_amount, quantity(100));
     }
-
     #[test]
     fn warning_penalty_reduces_payout() {
         let mut metrics = metrics(1_000, 1_000);
@@ -777,7 +709,6 @@ mod tests {
         assert!(instruction.payout_amount < quantity(100));
         assert!(instruction.payout_amount > Quantity::zero());
     }
-
     #[test]
     fn suspended_relay_receives_zero() {
         let mut metrics = metrics(1_000, 1_000);
@@ -791,7 +722,6 @@ mod tests {
         );
         assert_eq!(instruction.payout_amount, Quantity::zero());
     }
-
     #[test]
     fn insufficient_bond_zeroes_payout() {
         let engine = engine(500, 500, 0);
@@ -803,12 +733,10 @@ mod tests {
         );
         assert_eq!(instruction.payout_amount, Quantity::zero());
     }
-
     #[test]
     fn metrics_log_records_entries() {
         let dir = tempdir().expect("temp dir");
         let log_path = dir.path().join("relay_metrics.log");
-
         let config = RewardConfig {
             policy: policy(),
             base_reward: quantity(100),
@@ -820,28 +748,23 @@ mod tests {
             metrics_log_path: Some(log_path.clone()),
         };
         let engine = RelayRewardEngine::new(config).expect("config valid");
-
         let mut extra_metadata = Metadata::default();
         let epoch_key = Name::from_str("epoch_tag").expect("name");
         extra_metadata.insert(epoch_key.clone(), Json::new("epoch-1"));
-
         let _ = engine.compute_reward(
             &metrics(1_000, 1_000),
             &bond_entry(5_000, true),
             sample_account(),
             extra_metadata.clone(),
         );
-
         let _ = engine.compute_reward(
             &metrics(1_000, 1_000),
             &bond_entry(100, true),
             sample_account(),
             Metadata::default(),
         );
-
         let records = read_metrics_log(&log_path).expect("read metrics log");
         assert_eq!(records.len(), 2);
-
         let decision_key = Name::from_str("reward_decision").expect("name");
         assert_eq!(
             records[0].metadata.get(&decision_key),
@@ -851,7 +774,6 @@ mod tests {
             records[1].metadata.get(&decision_key),
             Some(&Json::new("skipped"))
         );
-
         let reason_key = Name::from_str("reward_skip_reason").expect("name");
         assert_eq!(
             records[1].metadata.get(&reason_key),
@@ -859,7 +781,6 @@ mod tests {
                 RewardSkipReason::InsufficientBond
             )))
         );
-
         assert_eq!(
             records[0].metadata.get(&epoch_key),
             Some(&Json::new("epoch-1"))

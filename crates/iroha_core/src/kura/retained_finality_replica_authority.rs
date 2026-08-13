@@ -2,30 +2,24 @@ impl Kura {
     fn retained_block_record_dir_for(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(RETAINED_BLOCKS_DIR_NAME)
     }
-
     fn retained_block_record_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
         Self::retained_block_record_dir_for(blocks_dir).join(format!("{height:020}.norito"))
     }
-
     fn retained_block_rewrite_staging_dir_for(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME)
     }
-
     fn retained_block_rewrite_staging_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
         Self::retained_block_rewrite_staging_dir_for(blocks_dir)
             .join(format!("{height:020}.norito"))
     }
-
     #[cfg(test)]
     fn retained_block_record_dir(&self) -> PathBuf {
         Self::retained_block_record_dir_for(&self.active_blocks_dir.lock())
     }
-
     #[cfg(test)]
     fn retained_block_record_path(&self, height: u64) -> PathBuf {
         Self::retained_block_record_path_for(&self.active_blocks_dir.lock(), height)
     }
-
     fn canonical_height_sidecar_heights_for(
         store_root: &Path,
         directory: &Path,
@@ -136,7 +130,6 @@ impl Kura {
         heights.sort_unstable();
         Ok(heights)
     }
-
     fn retained_block_record_heights_for(
         store_root: &Path,
         blocks_dir: &Path,
@@ -149,18 +142,15 @@ impl Kura {
             max_canonical_entries,
         )
     }
-
     fn invalid_retained_sccp_archive(height: u64, reason: impl Into<String>) -> Error {
         Error::InvalidRetainedSccpArchive {
             height,
             reason: reason.into(),
         }
     }
-
     fn canonical_block_wire_hash(block: &SignedBlock) -> Result<Hash> {
         Self::canonical_block_wire_identity(block).map(|(_, hash)| hash)
     }
-
     fn canonical_block_wire_identity(block: &SignedBlock) -> Result<(u64, Hash)> {
         let wire = block.encode_wire().map_err(Error::NoritoFrame)?;
         let len = u64::try_from(wire.len())?;
@@ -172,13 +162,11 @@ impl Kura {
         }
         Ok((len, Hash::new(&wire)))
     }
-
     fn canonical_proposal_wire_hash(block: &SignedBlock) -> Result<Hash> {
         block
             .canonical_proposal_wire_hash()
             .map_err(Error::NoritoFrame)
     }
-
     fn validate_v2_finality_wire_bindings(
         height: u64,
         artifact: &V2FinalityArtifact,
@@ -207,7 +195,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn ensure_existing_block_wire_matches(
         &self,
         block: &SignedBlock,
@@ -241,7 +228,6 @@ impl Kura {
             }
             return Ok(());
         }
-
         if let Some((retained_header, _, retained_wire_len, retained_wire_hash, _, _)) =
             self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
         {
@@ -254,7 +240,6 @@ impl Kura {
             }
             return Ok(());
         }
-
         let block_height = NonZeroUsize::new(usize::try_from(height)?)
             .ok_or(Error::CanonicalBlockWireMismatch { height })?;
         let canonical_block = self
@@ -267,7 +252,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn retained_sccp_archive_from_block(
         block: &SignedBlock,
     ) -> Result<Vec<KuraRetainedSccpMessage>> {
@@ -318,7 +302,6 @@ impl Kura {
         }
         Ok(archive)
     }
-
     fn validate_retained_sccp_archive(
         record: &KuraRetainedBlockRecord,
     ) -> Result<Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>> {
@@ -397,7 +380,6 @@ impl Kura {
         }
         Ok(projections)
     }
-
     fn decode_retained_block_record_at(
         &self,
         path: &Path,
@@ -407,7 +389,6 @@ impl Kura {
             .decode_retained_block_record_with_identity_at(path, directory)?
             .map(|(record, _)| record))
     }
-
     fn decode_canonical_retained_block_record(
         path: &Path,
         bytes: &[u8],
@@ -448,7 +429,6 @@ impl Kura {
             )),
         }
     }
-
     fn decode_retained_block_record_with_identity_at(
         &self,
         path: &Path,
@@ -463,7 +443,6 @@ impl Kura {
         let record = Self::decode_canonical_retained_block_record(path, &snapshot.bytes)?;
         Ok(Some((record, snapshot)))
     }
-
     fn validate_retained_block_record_at(
         path: &Path,
         expected_height: u64,
@@ -560,7 +539,6 @@ impl Kura {
         }
         Self::validate_retained_sccp_archive(record)
     }
-
     fn retained_block_record_at(
         &self,
         blocks_dir: &Path,
@@ -578,7 +556,6 @@ impl Kura {
     > {
         self.retained_block_record_at_inner(blocks_dir, height, canonical_hash, true)
     }
-
     fn retained_block_record_at_without_live_body(
         &self,
         blocks_dir: &Path,
@@ -596,7 +573,6 @@ impl Kura {
     > {
         self.retained_block_record_at_inner(blocks_dir, height, canonical_hash, false)
     }
-
     fn retained_block_record_at_with_identity(
         &self,
         blocks_dir: &Path,
@@ -623,7 +599,6 @@ impl Kura {
             validate_live_body,
         )
     }
-
     fn retained_block_record_at_inner(
         &self,
         blocks_dir: &Path,
@@ -649,7 +624,6 @@ impl Kura {
             )?
             .map(|(record, _)| record))
     }
-
     fn retained_block_record_at_inner_with_identity(
         &self,
         blocks_dir: &Path,
@@ -718,7 +692,6 @@ impl Kura {
             read_identity,
         )))
     }
-
     fn prepare_retained_block_record(
         blocks_dir: &Path,
         canonical_hash: HashOf<BlockHeader>,
@@ -760,7 +733,6 @@ impl Kura {
         }
         Ok(record)
     }
-
     fn persist_prepared_retained_block_record(
         &self,
         blocks_dir: &Path,
@@ -786,7 +758,6 @@ impl Kura {
                 max: MAX_RETAINED_BLOCK_RECORD_BYTES,
             });
         }
-
         if let Some((existing, existing_identity)) =
             self.decode_retained_block_record_with_identity_at(&path, &directory)?
         {
@@ -841,7 +812,6 @@ impl Kura {
             }
             return Err(Error::ConflictingRetainedBlockRecord { height });
         }
-
         create_dir_all_with_context(&directory)?;
         if let Some(parent) = directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
@@ -860,7 +830,6 @@ impl Kura {
             };
         }
         self.add_total_disk_usage_bytes(u64::try_from(bytes.len())?);
-
         let Some(persisted) = self.decode_retained_block_record_at(&path, &directory)? else {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -877,7 +846,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn persist_retained_block_record(
         &self,
         blocks_dir: &Path,
@@ -887,7 +855,6 @@ impl Kura {
         let record = Self::prepare_retained_block_record(blocks_dir, canonical_hash, block)?;
         self.persist_prepared_retained_block_record(blocks_dir, canonical_hash, &record)
     }
-
     /// Read a bounded, root-authenticated SCCP archive retained independently of the block body.
     #[cfg(test)]
     pub(crate) fn retained_sccp_archive(
@@ -913,7 +880,6 @@ impl Kura {
         {
             return Ok(Some((header, archive)));
         }
-
         if let Some(block) = self.get_block(block_height) {
             if block.header().sccp_commitment_root().is_none() {
                 return Ok(None);
@@ -937,7 +903,6 @@ impl Kura {
         }
         Err(Error::MissingRetainedBlockRecord { height })
     }
-
     /// Inventory nonempty retained SCCP archives through an exact committed-height boundary.
     ///
     /// Selected records are decoded one at a time, bound to Kura's canonical hash journal, and
@@ -995,7 +960,6 @@ impl Kura {
         }
         Ok(summaries)
     }
-
     fn validate_retained_block_inventory_on_startup(&self) -> Result<()> {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let blocks_dir = self.active_blocks_dir.lock().clone();
@@ -1101,7 +1065,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn prune_retained_block_records_from(
         &self,
         blocks_dir: &Path,
@@ -1114,7 +1077,6 @@ impl Kura {
             &authority,
         )
     }
-
     fn prune_retained_block_records_from_during_snapshot_finalization(
         &self,
         blocks_dir: &Path,
@@ -1128,7 +1090,6 @@ impl Kura {
             &authority,
         )
     }
-
     fn prune_retained_block_records_from_with_authority(
         &self,
         blocks_dir: &Path,
@@ -1171,7 +1132,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn staged_retained_block_record(
         &self,
         stage: &StagedRetainedBlockRewrite,
@@ -1210,7 +1170,6 @@ impl Kura {
         )?;
         Ok(record)
     }
-
     fn stage_retained_block_records_for_rewrite(
         &self,
         blocks_dir: &Path,
@@ -1227,7 +1186,6 @@ impl Kura {
                 staging_directory,
             ));
         }
-
         let durable_height = self.block_store.lock().read_durable_index_count()?;
         let heights =
             Self::retained_block_record_heights_for(&self.store_root, blocks_dir, durable_height)?;
@@ -1262,7 +1220,6 @@ impl Kura {
         if entries.is_empty() {
             return Ok(None);
         }
-
         create_dir_all_with_context(&staging_directory)?;
         if let Some(parent) = staging_directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
@@ -1278,7 +1235,6 @@ impl Kura {
                     staging_directory.clone(),
                 )
             })?;
-
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut moved = 0_usize;
         let move_result = (|| -> Result<()> {
@@ -1327,7 +1283,6 @@ impl Kura {
             removed_total_bytes,
         }))
     }
-
     fn reconcile_staged_retained_block_rewrite_after_error(
         &self,
         stage: &StagedRetainedBlockRewrite,
@@ -1366,7 +1321,6 @@ impl Kura {
                 removed_total_bytes = removed_total_bytes.saturating_add(entry.bytes_len);
             }
         }
-
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         for (entry, restore) in stage.entries.iter().zip(restore) {
             let source =
@@ -1393,7 +1347,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn discard_staged_retained_block_rewrite(
         &self,
         stage: &StagedRetainedBlockRewrite,
@@ -1430,7 +1383,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     fn with_retained_block_records_staged_for_rewrite<T>(
         &self,
         blocks_dir: &Path,
@@ -1489,7 +1441,6 @@ impl Kura {
             }
         }
     }
-
     fn resolve_retained_block_rewrite_stage_before_canonical_mutation(
         &self,
         blocks_dir: &Path,
@@ -1501,12 +1452,10 @@ impl Kura {
             Err(error) => Err(Error::IO(error, staging_directory)),
         }
     }
-
     fn recover_retained_block_rewrite_stage_on_startup(&self, blocks_dir: &Path) -> Result<()> {
         let authority = StartupRecoveryMutationAuthority::Authenticated;
         self.recover_retained_block_rewrite_stage_with_authority(blocks_dir, &authority)
     }
-
     fn recover_retained_block_rewrite_stage_during_snapshot_finalization(
         &self,
         blocks_dir: &Path,
@@ -1515,7 +1464,6 @@ impl Kura {
         let authority = StartupRecoveryMutationAuthority::SnapshotFinalization(authority);
         self.recover_retained_block_rewrite_stage_with_authority(blocks_dir, &authority)
     }
-
     fn recover_retained_block_rewrite_stage_with_authority(
         &self,
         blocks_dir: &Path,
@@ -1605,23 +1553,18 @@ impl Kura {
         }
         Ok(())
     }
-
     fn v2_finality_artifact_dir_for(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(V2_FINALITY_ARTIFACTS_DIR_NAME)
     }
-
     fn v2_finality_artifact_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
         Self::v2_finality_artifact_dir_for(blocks_dir).join(format!("{height:020}.norito"))
     }
-
     fn v2_finality_artifact_dir(&self) -> PathBuf {
         Self::v2_finality_artifact_dir_for(&self.active_blocks_dir.lock())
     }
-
     fn v2_finality_artifact_path(&self, height: u64) -> PathBuf {
         Self::v2_finality_artifact_path_for(&self.active_blocks_dir.lock(), height)
     }
-
     fn v2_finality_artifact_heights_for(
         store_root: &Path,
         blocks_dir: &Path,
@@ -1635,7 +1578,6 @@ impl Kura {
             durable_height_bound,
         )
     }
-
     fn highest_v2_finality_artifact_height_for(
         store_root: &Path,
         blocks_dir: &Path,
@@ -1647,12 +1589,10 @@ impl Kura {
                 .copied(),
         )
     }
-
     fn highest_v2_finality_artifact_height(&self, blocks_dir: &Path) -> Result<Option<u64>> {
         let durable_height = self.block_store.lock().read_durable_index_count()?;
         Self::highest_v2_finality_artifact_height_for(&self.store_root, blocks_dir, durable_height)
     }
-
     fn ensure_v2_finality_allows_rewrite_from(
         &self,
         blocks_dir: &Path,
@@ -1668,7 +1608,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn ensure_replay_metadata_allows_top_replacement_while_sidecars_locked(
         &self,
         blocks_dir: &Path,
@@ -1689,7 +1628,6 @@ impl Kura {
             self.ensure_durable_block_at_height(height, checkpoint.block_hash)?;
             return Err(Error::CommittedBlockReplacementForbidden { height });
         }
-
         let manifest_path = Self::commit_manifest_path_for(blocks_dir, height);
         if let Some(manifest) = Self::decode_commit_manifest_at(&manifest_path)? {
             if manifest.height != height {
@@ -1701,10 +1639,8 @@ impl Kura {
             self.ensure_durable_block_at_height(height, manifest.block_hash)?;
             return Err(Error::CommittedBlockReplacementForbidden { height });
         }
-
         Ok(())
     }
-
     fn deterministic_kura_replica_keepers(
         &self,
         artifact: &V2FinalityArtifact,
@@ -1722,7 +1658,6 @@ impl Kura {
         if required == 0 || required > artifact.commit_qc.signers.len() {
             return Vec::new();
         }
-
         let finality_artifact_hash = HashOf::new(artifact);
         let mut candidates = Vec::with_capacity(artifact.commit_qc.signers.len());
         for &signer_index in &artifact.commit_qc.signers {
@@ -1759,7 +1694,6 @@ impl Kura {
             .map(|(_, index, peer)| (index, peer))
             .collect()
     }
-
     /// Return the exact cryptographically verified finality, complete-wire
     /// identity, and deterministic CommitQC keeper set required for eviction.
     fn verified_kura_replica_authority_for_eviction(
@@ -1815,7 +1749,6 @@ impl Kura {
             selected_keepers,
         }))
     }
-
     /// Return the independently signed complete-wire length and hash required before body eviction.
     fn verified_v2_finality_wire_hash_for_eviction(
         &self,

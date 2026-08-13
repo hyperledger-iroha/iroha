@@ -1,7 +1,5 @@
 //! Canonical private-note witness and deterministic execution relation.
-
 use std::{collections::BTreeSet, fmt};
-
 use iroha_data_model::privacy::{
     IrohaIvmPrivateNoteStarkStatementV1, PrivacyCommitmentV1, PrivacyNamespaceScopeV1,
     PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyPoolProgramNamespaceV1, PrivacyProgramIdV1,
@@ -10,9 +8,7 @@ use iroha_data_model::privacy::{
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroize;
-
 use super::{codec::encode_private_program_v1, wallet::validate_ivm_private_encrypted_output_v1};
-
 /// Maximum consumed notes in the sole compiled relation.
 pub const PRIVATE_NOTE_MAX_INPUTS_V1: usize = 2;
 /// Maximum created notes in the sole compiled relation.
@@ -25,7 +21,6 @@ pub const PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1: usize = 16;
 pub const PRIVATE_PROGRAM_INSTRUCTION_BYTES_V1: usize = 8;
 /// Number of checked 128-bit VM registers.
 pub const PRIVATE_PROGRAM_REGISTER_COUNT_V1: usize = 8;
-
 pub(super) const HASH_FRAME_DOMAIN_V1: &[u8] = b"iroha:privacy:ivm-private-note:hash-frame:v1";
 pub(super) const PROGRAM_ID_DOMAIN_V1: &[u8] = b"iroha:privacy:ivm-private-note:program-id:v1";
 pub(super) const NOTE_AUTHORITY_DOMAIN_V1: &[u8] = b"iroha:privacy:ivm-private-note:authority:v1";
@@ -35,12 +30,10 @@ pub(super) const ACCUMULATOR_LEAF_DOMAIN_V1: &[u8] =
     b"iroha.privacy.proof-managed-note-tree.leaf.v1";
 pub(super) const ACCUMULATOR_NODE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.proof-managed-note-tree.node.v1";
-
 /// Exact relation and wire-independent engine descriptor.
 pub(crate) const IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1: &[u8] = b"iroha-ivm-private-note-stark-v1:native-rust:first-release:inputs=1..2:outputs=1..2:values=u128-checked:tree=sha256-depth32-exact-ledger-domains:program=IPN1-v1-fixed16x8:registers=8xu128:r4=reserved-zero:producer=typed-redacted-witness+relation-preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind-policy-v1+self-verify:wallet=x25519+xchacha20poly1305:wallet-rng=prover-rng:fixed64-reservoir:fallible-refill:reject-initial-constant-half+periods-1,2,4,8,16,32:retain-tail-max63:zeroize+poison-on-error-or-unwind:v1:successor=validator-derived-only:legacy=unrepresentable";
 /// Exact hash framing used inside the AIR and native differential oracle.
 pub(crate) const IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1: &[u8] = b"sha256:frame-domain-len-u16be-field-count-u16be-field-len-u64be:program-id+authority+commitment+stable-pool-program-nullifier:proof-managed-leaf-and-level-node-exact-v1";
-
 /// Deterministic private-program opcode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -64,7 +57,6 @@ pub enum PrivateOpcodeV1 {
     /// Load the statement execution epoch into `dst`.
     LoadExecutionEpoch = 8,
 }
-
 impl PrivateOpcodeV1 {
     fn from_byte(value: u8) -> Result<Self, IvmPrivateNoteRelationErrorV1> {
         match value {
@@ -81,7 +73,6 @@ impl PrivateOpcodeV1 {
         }
     }
 }
-
 /// One exact eight-byte private instruction.
 ///
 /// Encoding is `(opcode, dst, lhs, rhs, immediate_be_u32)`. Fields unused by
@@ -99,7 +90,6 @@ pub struct PrivateInstructionV1 {
     /// Exact immediate.
     pub(crate) immediate: u32,
 }
-
 impl PrivateInstructionV1 {
     /// Canonical halt instruction and post-halt padding word.
     pub const HALT: Self = Self {
@@ -109,7 +99,6 @@ impl PrivateInstructionV1 {
         right: 0,
         immediate: 0,
     };
-
     /// Encode one instruction.
     pub const fn to_bytes(self) -> [u8; PRIVATE_PROGRAM_INSTRUCTION_BYTES_V1] {
         let immediate = self.immediate.to_be_bytes();
@@ -124,7 +113,6 @@ impl PrivateInstructionV1 {
             immediate[3],
         ]
     }
-
     /// Decode one instruction and reject unknown opcodes.
     pub fn from_bytes(
         bytes: [u8; PRIVATE_PROGRAM_INSTRUCTION_BYTES_V1],
@@ -143,7 +131,6 @@ impl PrivateInstructionV1 {
             immediate,
         })
     }
-
     /// Construct one canonical instruction.
     ///
     /// # Errors
@@ -167,37 +154,31 @@ impl PrivateInstructionV1 {
         instruction.validate()?;
         Ok(instruction)
     }
-
     /// Return the closed opcode.
     #[must_use]
     pub const fn opcode(self) -> PrivateOpcodeV1 {
         self.opcode
     }
-
     /// Return the destination-register index.
     #[must_use]
     pub const fn destination(self) -> u8 {
         self.destination
     }
-
     /// Return the first source-register index.
     #[must_use]
     pub const fn left(self) -> u8 {
         self.left
     }
-
     /// Return the second source-register index.
     #[must_use]
     pub const fn right(self) -> u8 {
         self.right
     }
-
     /// Return the exact immediate operand.
     #[must_use]
     pub const fn immediate(self) -> u32 {
         self.immediate
     }
-
     fn validate(self) -> Result<(), IvmPrivateNoteRelationErrorV1> {
         let register_count = PRIVATE_PROGRAM_REGISTER_COUNT_V1 as u8;
         let register = |value: u8| value < register_count;
@@ -244,26 +225,22 @@ impl PrivateInstructionV1 {
         }
     }
 }
-
 /// Fixed-size canonical private program.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PrivateProgramV1 {
     /// Exact instruction tape. The first halt terminates the active prefix.
     pub(crate) instructions: [PrivateInstructionV1; PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1],
 }
-
 impl fmt::Debug for PrivateProgramV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PrivateProgramV1(<redacted>)")
     }
 }
-
 impl Drop for PrivateProgramV1 {
     fn drop(&mut self) {
         self.instructions.fill(PrivateInstructionV1::HALT);
     }
 }
-
 impl PrivateProgramV1 {
     /// Construct and validate the sole fixed-width private program.
     ///
@@ -278,7 +255,6 @@ impl PrivateProgramV1 {
         program.validate()?;
         Ok(program)
     }
-
     /// Borrow the complete canonical instruction tape.
     #[must_use]
     pub const fn instructions(
@@ -286,7 +262,6 @@ impl PrivateProgramV1 {
     ) -> &[PrivateInstructionV1; PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1] {
         &self.instructions
     }
-
     /// Validate the unique instruction encoding and post-halt padding.
     pub fn validate(&self) -> Result<(), IvmPrivateNoteRelationErrorV1> {
         let mut halted = false;
@@ -305,7 +280,6 @@ impl PrivateProgramV1 {
         Ok(())
     }
 }
-
 /// Plaintext committed by one private note.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PrivateNotePlaintextV1 {
@@ -320,7 +294,6 @@ pub struct PrivateNotePlaintextV1 {
     /// Wallet-defined payload digest.
     pub(crate) memo_digest: [u8; 32],
 }
-
 impl PrivateNotePlaintextV1 {
     /// Construct one canonical nonzero private-note plaintext.
     ///
@@ -346,44 +319,37 @@ impl PrivateNotePlaintextV1 {
         validate_note(&note)?;
         Ok(note)
     }
-
     /// Return the atomic value.
     #[must_use]
     pub const fn value(&self) -> u128 {
         self.value
     }
-
     /// Return the committed spending-authority digest.
     #[must_use]
     pub const fn spending_authority(&self) -> &[u8; 32] {
         &self.spending_authority
     }
-
     /// Return the unique note nonce.
     #[must_use]
     pub const fn rho(&self) -> &[u8; 32] {
         &self.rho
     }
-
     /// Return the commitment blinding.
     #[must_use]
     pub const fn blinding(&self) -> &[u8; 32] {
         &self.blinding
     }
-
     /// Return the wallet-defined memo digest.
     #[must_use]
     pub const fn memo_digest(&self) -> &[u8; 32] {
         &self.memo_digest
     }
 }
-
 impl fmt::Debug for PrivateNotePlaintextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PrivateNotePlaintextV1(<redacted>)")
     }
 }
-
 impl Drop for PrivateNotePlaintextV1 {
     fn drop(&mut self) {
         self.value = 0;
@@ -393,7 +359,6 @@ impl Drop for PrivateNotePlaintextV1 {
         self.memo_digest.zeroize();
     }
 }
-
 /// Wallet-local consumed-note witness.
 #[derive(Clone, PartialEq, Eq)]
 pub struct IvmPrivateNoteInputWitnessV1 {
@@ -406,7 +371,6 @@ pub struct IvmPrivateNoteInputWitnessV1 {
     /// Exact depth-32 sibling path from leaf to root.
     pub(crate) authentication_path: [[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1],
 }
-
 impl IvmPrivateNoteInputWitnessV1 {
     /// Construct one typed consumed-note witness.
     ///
@@ -434,30 +398,25 @@ impl IvmPrivateNoteInputWitnessV1 {
             authentication_path,
         })
     }
-
     /// Borrow the committed plaintext.
     #[must_use]
     pub const fn note(&self) -> &PrivateNotePlaintextV1 {
         &self.note
     }
-
     /// Return the zero-based leaf position.
     #[must_use]
     pub const fn leaf_position(&self) -> u32 {
         self.leaf_position
     }
-
     /// Borrow the exact depth-32 authentication path.
     #[must_use]
     pub const fn authentication_path(&self) -> &[[u8; 32]; PRIVATE_NOTE_TREE_DEPTH_V1] {
         &self.authentication_path
     }
-
     /// Derive the public commitment opened by this input witness.
     pub fn commitment_v1(&self) -> Result<PrivacyCommitmentV1, IvmPrivateNoteRelationErrorV1> {
         derive_note_commitment_v1(&self.note)
     }
-
     /// Derive the stable public nullifier for this input and pool/program.
     ///
     /// The spending secret remains encapsulated by the redacted witness and is
@@ -475,27 +434,23 @@ impl IvmPrivateNoteInputWitnessV1 {
         )
     }
 }
-
 impl fmt::Debug for IvmPrivateNoteInputWitnessV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("IvmPrivateNoteInputWitnessV1(<redacted>)")
     }
 }
-
 impl Drop for IvmPrivateNoteInputWitnessV1 {
     fn drop(&mut self) {
         self.spending_secret.zeroize();
         self.authentication_path.zeroize();
     }
 }
-
 /// Wallet-local created-note witness.
 #[derive(Clone, PartialEq, Eq)]
 pub struct IvmPrivateNoteOutputWitnessV1 {
     /// Committed plaintext.
     pub(crate) note: PrivateNotePlaintextV1,
 }
-
 impl IvmPrivateNoteOutputWitnessV1 {
     /// Construct one typed created-note witness.
     ///
@@ -506,20 +461,17 @@ impl IvmPrivateNoteOutputWitnessV1 {
         validate_note(&note)?;
         Ok(Self { note })
     }
-
     /// Borrow the committed plaintext.
     #[must_use]
     pub const fn note(&self) -> &PrivateNotePlaintextV1 {
         &self.note
     }
 }
-
 impl fmt::Debug for IvmPrivateNoteOutputWitnessV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("IvmPrivateNoteOutputWitnessV1(<redacted>)")
     }
 }
-
 /// Complete bounded wallet-local witness.
 ///
 /// The sole first-release `IPNE` wallet codec is structurally checked by the
@@ -538,7 +490,6 @@ pub struct IvmPrivateNoteWitnessV1 {
     /// Created notes in statement-commitment order.
     pub(crate) outputs: Vec<IvmPrivateNoteOutputWitnessV1>,
 }
-
 impl IvmPrivateNoteWitnessV1 {
     /// Construct one exact first-release private-note witness.
     ///
@@ -565,26 +516,22 @@ impl IvmPrivateNoteWitnessV1 {
             outputs,
         })
     }
-
     /// Borrow the governed program preimage.
     #[must_use]
     pub const fn program(&self) -> &PrivateProgramV1 {
         &self.program
     }
-
     /// Borrow consumed notes in public-nullifier order.
     #[must_use]
     pub fn inputs(&self) -> &[IvmPrivateNoteInputWitnessV1] {
         &self.inputs
     }
-
     /// Borrow created notes in public-commitment order.
     #[must_use]
     pub fn outputs(&self) -> &[IvmPrivateNoteOutputWitnessV1] {
         &self.outputs
     }
 }
-
 impl fmt::Debug for IvmPrivateNoteWitnessV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -595,7 +542,6 @@ impl fmt::Debug for IvmPrivateNoteWitnessV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// One native SHA-256 invocation consumed by the STARK witness compiler.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct Sha256InvocationV1 {
@@ -603,7 +549,6 @@ pub(super) struct Sha256InvocationV1 {
     pub(super) preimage: Vec<u8>,
     pub(super) digest: [u8; 32],
 }
-
 impl fmt::Debug for Sha256InvocationV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -613,14 +558,12 @@ impl fmt::Debug for Sha256InvocationV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl Drop for Sha256InvocationV1 {
     fn drop(&mut self) {
         self.preimage.zeroize();
         self.digest.zeroize();
     }
 }
-
 /// Fixed semantic role for a SHA invocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Sha256InvocationRoleV1 {
@@ -632,7 +575,6 @@ pub(super) enum Sha256InvocationRoleV1 {
     AccumulatorNode { input: u8, level: u8 },
     OutputCommitment { output: u8 },
 }
-
 /// Fully checked relation material. This remains prover-local.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct ValidatedPrivateNoteRelationV1 {
@@ -641,7 +583,6 @@ pub(super) struct ValidatedPrivateNoteRelationV1 {
     pub(super) output_sum: u128,
     pub(super) final_registers: [u128; PRIVATE_PROGRAM_REGISTER_COUNT_V1],
 }
-
 impl fmt::Debug for ValidatedPrivateNoteRelationV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -651,7 +592,6 @@ impl fmt::Debug for ValidatedPrivateNoteRelationV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Native relation or witness failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum IvmPrivateNoteRelationErrorV1 {
@@ -707,7 +647,6 @@ pub enum IvmPrivateNoteRelationErrorV1 {
     #[error("private-note bounded allocation failed")]
     AllocationFailure,
 }
-
 pub(super) fn frame_preimage_v1(
     domain: &[u8],
     fields: &[&[u8]],
@@ -746,7 +685,6 @@ pub(super) fn frame_preimage_v1(
     debug_assert_eq!(preimage.len(), capacity);
     Ok(preimage)
 }
-
 fn sha256_invocation_v1(
     role: Sha256InvocationRoleV1,
     domain: &[u8],
@@ -760,7 +698,6 @@ fn sha256_invocation_v1(
         digest,
     })
 }
-
 /// Derive the exact program identifier.
 pub fn derive_private_program_id_v1(
     program: &PrivateProgramV1,
@@ -775,7 +712,6 @@ pub fn derive_private_program_id_v1(
         .digest,
     ))
 }
-
 /// Derive a note spending-authority digest from its secret.
 pub fn derive_note_authority_v1(
     spending_secret: &[u8; 32],
@@ -790,7 +726,6 @@ pub fn derive_note_authority_v1(
     )?
     .digest)
 }
-
 /// Derive the sole canonical note commitment.
 pub fn derive_note_commitment_v1(
     note: &PrivateNotePlaintextV1,
@@ -811,7 +746,6 @@ pub fn derive_note_commitment_v1(
         .digest,
     ))
 }
-
 /// Derive the sole canonical input nullifier.
 ///
 /// The nullifier is deliberately independent of transaction context, action
@@ -842,7 +776,6 @@ pub fn derive_note_nullifier_v1(
         .digest,
     ))
 }
-
 fn validate_note(note: &PrivateNotePlaintextV1) -> Result<(), IvmPrivateNoteRelationErrorV1> {
     if note.value == 0
         || is_zero(&note.spending_authority)
@@ -853,11 +786,9 @@ fn validate_note(note: &PrivateNotePlaintextV1) -> Result<(), IvmPrivateNoteRela
     }
     Ok(())
 }
-
 fn is_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
-
 pub(super) fn namespace_v1(statement: &IrohaIvmPrivateNoteStarkStatementV1) -> PrivacyNamespaceV1 {
     PrivacyNamespaceV1::new(
         PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
@@ -867,7 +798,6 @@ pub(super) fn namespace_v1(statement: &IrohaIvmPrivateNoteStarkStatementV1) -> P
         }),
     )
 }
-
 pub(super) fn accumulator_leaf_invocation_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     input: u8,
@@ -899,7 +829,6 @@ pub(super) fn accumulator_leaf_invocation_v1(
         preimage,
     })
 }
-
 pub(super) fn accumulator_node_invocation_v1(
     input: u8,
     level: u8,
@@ -921,7 +850,6 @@ pub(super) fn accumulator_node_invocation_v1(
         preimage,
     })
 }
-
 pub(super) fn validate_statement_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<(), IvmPrivateNoteRelationErrorV1> {
@@ -986,7 +914,6 @@ pub(super) fn validate_statement_v1(
         .validate()
         .map_err(|_| IvmPrivateNoteRelationErrorV1::InvalidStatement)
 }
-
 fn execute_program_v1(
     program: &PrivateProgramV1,
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
@@ -1057,7 +984,6 @@ fn execute_program_v1(
     }
     Err(IvmPrivateNoteRelationErrorV1::ProgramDoesNotHalt)
 }
-
 pub(super) fn public_balance_sides(balance: PrivacyValueBalanceV1) -> (u128, u128) {
     match balance.direction {
         PrivacyValueBalanceDirectionV1::Balanced => (0, 0),
@@ -1065,7 +991,6 @@ pub(super) fn public_balance_sides(balance: PrivacyValueBalanceV1) -> (u128, u12
         PrivacyValueBalanceDirectionV1::OutOfPool => (0, balance.amount),
     }
 }
-
 /// Validate the complete witness relation and build the sole STARK witness
 /// schedule.
 ///
@@ -1088,7 +1013,6 @@ pub(super) fn validate_private_note_relation_v1(
         return Err(IvmPrivateNoteRelationErrorV1::WitnessShape);
     }
     witness.program.validate()?;
-
     let mut invocations = Vec::new();
     let maximum_invocations = 1_usize
         .checked_add(
@@ -1103,7 +1027,6 @@ pub(super) fn validate_private_note_relation_v1(
     invocations
         .try_reserve_exact(maximum_invocations)
         .map_err(|_| IvmPrivateNoteRelationErrorV1::AllocationFailure)?;
-
     let program_bytes = encode_private_program_v1(&witness.program)?;
     let program_invocation = sha256_invocation_v1(
         Sha256InvocationRoleV1::Program,
@@ -1114,7 +1037,6 @@ pub(super) fn validate_private_note_relation_v1(
         return Err(IvmPrivateNoteRelationErrorV1::ProgramIdMismatch);
     }
     invocations.push(program_invocation);
-
     let mut input_sum = 0_u128;
     let mut seen_input_commitments = BTreeSet::new();
     let mut seen_positions = BTreeSet::new();
@@ -1133,7 +1055,6 @@ pub(super) fn validate_private_note_relation_v1(
             return Err(IvmPrivateNoteRelationErrorV1::SpendingAuthorityMismatch);
         }
         invocations.push(authority_invocation);
-
         let commitment_invocation = sha256_invocation_v1(
             Sha256InvocationRoleV1::InputCommitment { input: input_u8 },
             NOTE_COMMITMENT_DOMAIN_V1,
@@ -1151,7 +1072,6 @@ pub(super) fn validate_private_note_relation_v1(
             return Err(IvmPrivateNoteRelationErrorV1::Duplicate);
         }
         invocations.push(commitment_invocation);
-
         let nullifier_invocation = sha256_invocation_v1(
             Sha256InvocationRoleV1::Nullifier { input: input_u8 },
             NOTE_NULLIFIER_DOMAIN_V1,
@@ -1167,7 +1087,6 @@ pub(super) fn validate_private_note_relation_v1(
             return Err(IvmPrivateNoteRelationErrorV1::NullifierMismatch);
         }
         invocations.push(nullifier_invocation);
-
         let leaf_invocation = accumulator_leaf_invocation_v1(statement, input_u8, commitment)?;
         let mut current = leaf_invocation.digest;
         invocations.push(leaf_invocation);
@@ -1194,7 +1113,6 @@ pub(super) fn validate_private_note_relation_v1(
             .checked_add(input.note.value)
             .ok_or(IvmPrivateNoteRelationErrorV1::ValueOverflow)?;
     }
-
     let mut output_sum = 0_u128;
     let mut seen_outputs = BTreeSet::new();
     for (index, (output, public_commitment)) in witness
@@ -1229,7 +1147,6 @@ pub(super) fn validate_private_note_relation_v1(
             .checked_add(output.note.value)
             .ok_or(IvmPrivateNoteRelationErrorV1::ValueOverflow)?;
     }
-
     let (public_in, public_out) = public_balance_sides(statement.value_balance);
     let conserved_input = input_sum
         .checked_add(public_in)
@@ -1241,7 +1158,6 @@ pub(super) fn validate_private_note_relation_v1(
         return Err(IvmPrivateNoteRelationErrorV1::ValueConservation);
     }
     let final_registers = execute_program_v1(&witness.program, statement, input_sum, output_sum)?;
-
     if invocations.len() != maximum_invocations {
         return Err(IvmPrivateNoteRelationErrorV1::WitnessShape);
     }

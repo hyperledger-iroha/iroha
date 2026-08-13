@@ -1,14 +1,11 @@
 //! Authenticated Kagemusha ABI-21/V4 release verification and activation preparation.
-
 mod taira;
-
 use std::{
     collections::BTreeSet,
     fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
 use iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4;
@@ -42,11 +39,8 @@ use iroha_data_model::offline::{
     KagemushaStepCircuitParamsV4, KagemushaTopUpFinalityRosterArtifactV2,
     OfflineDeviceAttestationPolicy, kagemusha_recursive_spend_release_sha256,
 };
-
 use crate::{ExplicitExitError, Outcome, RunArgs};
-
 type Result<T> = color_eyre::Result<T>;
-
 const MANIFEST_JSON_FILE_NAME: &str = "manifest.json";
 const MANIFEST_NORITO_FILE_NAME: &str = "manifest.norito";
 const MANIFEST_NORITO_SHA256_FILE_NAME: &str = "manifest.norito.sha256";
@@ -104,7 +98,6 @@ const AUTHENTICATED_ARTIFACT_ROLES_V4: [(
         KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
     ),
 ];
-
 fn validate_artifacts_sequentially<I, T, E, F>(
     artifacts: I,
     mut validate: F,
@@ -118,14 +111,12 @@ where
     }
     Ok(())
 }
-
 /// Kagemusha release-management command group.
 #[derive(Debug, ClapArgs)]
 pub struct Args {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Verify one complete authenticated ABI-21/V4 release directory.
@@ -147,7 +138,6 @@ enum Command {
     #[command(name = "prepare-taira-testnet-base-genesis-v4")]
     PrepareTairaTestnetBaseGenesisV4(taira::PrepareTestnetBaseGenesisV4Args),
 }
-
 #[derive(Debug, ClapArgs)]
 struct VerifyReleaseV4Args {
     /// Immutable directory containing the exact ABI-21/V4 release inventory.
@@ -166,7 +156,6 @@ struct VerifyReleaseV4Args {
     #[arg(long, value_parser = parse_nonzero_canonical_u64)]
     memory_limit_bytes: Option<u64>,
 }
-
 #[derive(Debug, ClapArgs)]
 struct PromoteReleaseV4Args {
     /// Immutable directory containing the exact ABI-21/V4 release inventory.
@@ -188,7 +177,6 @@ struct PromoteReleaseV4Args {
     #[arg(long, value_parser = parse_nonzero_canonical_u64)]
     memory_limit_bytes: Option<u64>,
 }
-
 #[derive(Debug, ClapArgs)]
 struct PrepareActivationV4Args {
     /// Root containing lowercase manifest-digest release directories.
@@ -211,14 +199,12 @@ struct PrepareActivationV4Args {
     #[arg(long)]
     output: PathBuf,
 }
-
 #[derive(Debug, ClapArgs)]
 struct PrepareReleaseCircuitParamsV4Args {
     /// New owner-private directory atomically receiving the canonical Eq/Ep Norito files.
     #[arg(long)]
     output_dir: PathBuf,
 }
-
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
@@ -310,7 +296,6 @@ impl<T: Write> RunArgs<T> for Args {
         Ok(())
     }
 }
-
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
 struct ReleaseCircuitParamsArtifactReportV4 {
     file_name: String,
@@ -318,7 +303,6 @@ struct ReleaseCircuitParamsArtifactReportV4 {
     file_sha256: String,
     circuit_params_sha256: String,
 }
-
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 struct ReleaseCircuitParamsReportV4 {
     status: String,
@@ -327,7 +311,6 @@ struct ReleaseCircuitParamsReportV4 {
     step_eq: ReleaseCircuitParamsArtifactReportV4,
     step_ep: ReleaseCircuitParamsArtifactReportV4,
 }
-
 fn prepare_release_circuit_params_v4<T: Write>(
     args: PrepareReleaseCircuitParamsV4Args,
     writer: &mut std::io::BufWriter<T>,
@@ -357,7 +340,6 @@ fn prepare_release_circuit_params_v4<T: Write>(
     let size_bytes = u64::try_from(bytes.len())
         .map_err(|_| eyre!("first-release circuit-parameter length does not fit u64"))?;
     publish_release_circuit_params_directory_v4(writer, &args.output_dir, &bytes)?;
-
     let artifact = |file_name: &str| ReleaseCircuitParamsArtifactReportV4 {
         file_name: file_name.to_owned(),
         size_bytes,
@@ -379,7 +361,6 @@ fn prepare_release_circuit_params_v4<T: Write>(
     )?;
     Ok(())
 }
-
 fn parse_manifest_sha256(value: &str) -> std::result::Result<[u8; 32], String> {
     if value.len() != 64
         || !value
@@ -393,7 +374,6 @@ fn parse_manifest_sha256(value: &str) -> std::result::Result<[u8; 32], String> {
         .try_into()
         .map_err(|_| "manifest SHA-256 has the wrong length".to_owned())
 }
-
 fn parse_nonzero_canonical_u64(value: &str) -> std::result::Result<u64, String> {
     if value.is_empty()
         || value == "0"
@@ -410,7 +390,6 @@ fn parse_nonzero_canonical_u64(value: &str) -> std::result::Result<u64, String> 
         .parse::<u64>()
         .map_err(|error| format!("value must fit u64: {error}"))
 }
-
 fn configured_policy_bytes(path: &Path) -> Result<Vec<u8>> {
     let configured = read_external_bounded(
         path,
@@ -422,7 +401,6 @@ fn configured_policy_bytes(path: &Path) -> Result<Vec<u8>> {
     policy.validate().map_err(|error| eyre!(error))?;
     Ok(configured)
 }
-
 fn configured_device_attestation_policy(path: &Path) -> Result<OfflineDeviceAttestationPolicy> {
     let raw = read_external_bounded(
         path,
@@ -441,7 +419,6 @@ fn configured_device_attestation_policy(path: &Path) -> Result<OfflineDeviceAtte
     }
     Ok(policy)
 }
-
 fn validate_device_attestation_policy_for_atomic_activation(
     policy: &OfflineDeviceAttestationPolicy,
 ) -> Result<()> {
@@ -462,7 +439,6 @@ fn validate_device_attestation_policy_for_atomic_activation(
     validate_atomic_activation_android_apps(policy)?;
     Ok(())
 }
-
 fn validate_atomic_activation_trusted_roots(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     let mut root_ids = BTreeSet::new();
     let mut platforms = BTreeSet::new();
@@ -489,7 +465,6 @@ fn validate_atomic_activation_trusted_roots(policy: &OfflineDeviceAttestationPol
     }
     Ok(())
 }
-
 fn validate_atomic_activation_revocations(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     let mut revoked = BTreeSet::new();
     for digest in &policy.revoked_certificate_sha256 {
@@ -499,7 +474,6 @@ fn validate_atomic_activation_revocations(policy: &OfflineDeviceAttestationPolic
     }
     Ok(())
 }
-
 fn validate_atomic_activation_ios_apps(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     let mut ios_ids = BTreeSet::new();
     for app in &policy.ios_apps {
@@ -542,7 +516,6 @@ fn validate_atomic_activation_ios_apps(policy: &OfflineDeviceAttestationPolicy) 
     }
     Ok(())
 }
-
 fn validate_atomic_activation_android_apps(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     let mut android_ids = BTreeSet::new();
     for app in &policy.android_apps {
@@ -568,12 +541,10 @@ fn validate_atomic_activation_android_apps(policy: &OfflineDeviceAttestationPoli
     }
     Ok(())
 }
-
 struct VerifiedReleaseV4 {
     authenticated: KagemushaAuthenticatedReleaseV4,
     report: VerificationReport,
 }
-
 impl VerifiedReleaseV4 {
     fn immutable_candidate(&self) -> Result<KagemushaRecursiveSpendCandidateV4> {
         self.authenticated
@@ -581,7 +552,6 @@ impl VerifiedReleaseV4 {
             .immutable_candidate()
             .map_err(|error| eyre!("failed to reconstruct immutable V4 candidate: {error}"))
     }
-
     fn promotion_record(&self) -> Result<KagemushaRecursiveSpendPromotedReleaseV4> {
         let candidate = self.immutable_candidate()?;
         let record = KagemushaRecursiveSpendPromotedReleaseV4 {
@@ -612,7 +582,6 @@ impl VerifiedReleaseV4 {
             .map_err(|error| eyre!("invalid candidate-bound V4 promotion record: {error}"))?;
         Ok(record)
     }
-
     fn verification_report(&self) -> Result<VerificationReportV4> {
         let candidate_sha256 = self
             .immutable_candidate()?
@@ -627,7 +596,6 @@ impl VerifiedReleaseV4 {
         ))
     }
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the ordered fail-closed release verification keeps authenticated inputs and first-error checks in one auditable pass"
@@ -644,7 +612,6 @@ fn verify_release_directory_v4(
         decode_canonical_norito(policy_bytes, "configured Kagemusha release policy")?;
     policy.validate().map_err(|error| eyre!(error))?;
     let release_policy_sha256 = kagemusha_recursive_spend_release_sha256(policy_bytes);
-
     let manifest_bytes = read_regular_bounded(
         &root,
         MANIFEST_NORITO_FILE_NAME,
@@ -661,7 +628,6 @@ fn verify_release_directory_v4(
         bail!("Kagemusha V4 release memory contract differs from the active in-process guard");
     }
     let manifest_sha256 = kagemusha_recursive_spend_release_sha256(&manifest_bytes);
-
     let manifest_digest = read_regular_bounded(
         &root,
         MANIFEST_NORITO_SHA256_FILE_NAME,
@@ -671,7 +637,6 @@ fn verify_release_directory_v4(
     if manifest_digest != format!("{}\n", hex::encode(manifest_sha256)).as_bytes() {
         bail!("Kagemusha V4 manifest digest sidecar does not match manifest.norito");
     }
-
     let manifest_json = read_regular_bounded(
         &root,
         MANIFEST_JSON_FILE_NAME,
@@ -686,7 +651,6 @@ fn verify_release_directory_v4(
     if manifest_from_json != manifest {
         bail!("Kagemusha V4 JSON and Norito manifests are not semantically identical");
     }
-
     let attestation_bytes = read_regular_bounded(
         &root,
         RELEASE_ATTESTATION_FILE_NAME_V4,
@@ -695,7 +659,6 @@ fn verify_release_directory_v4(
     )?;
     let attestation: KagemushaRecursiveSpendReleaseAttestationV4 =
         decode_canonical_norito(&attestation_bytes, "Kagemusha V4 release attestation")?;
-
     require_release_file_path(
         &root,
         benchmark_evidence_path,
@@ -754,7 +717,6 @@ fn verify_release_directory_v4(
     {
         bail!("Kagemusha V4 manifest does not bind the exact qualification receipt");
     }
-
     let descriptors: Vec<_> = manifest
         .profiles
         .iter()
@@ -833,10 +795,8 @@ fn verify_release_directory_v4(
     {
         bail!("authenticated Kagemusha V4 material does not bind the canonical manifest");
     }
-
     verify_roster_v4(&root, &manifest)?;
     verify_exact_inventory_v4(&root, &manifest)?;
-
     let subject = manifest
         .release_attestation_subject()
         .map_err(|error| eyre!(error))?;
@@ -865,7 +825,6 @@ fn verify_release_directory_v4(
     }
     Ok(verified)
 }
-
 fn roster_release_generations_match_v4(
     roster_generation: &str,
     manifest_generation: &str,
@@ -875,7 +834,6 @@ fn roster_release_generations_match_v4(
     let descriptor_matches_manifest = descriptor_generation == manifest_generation;
     descriptor_matches_roster && descriptor_matches_manifest
 }
-
 fn verify_qualification_receipt_v4(
     root: &Path,
     authenticated: &KagemushaAuthenticatedReleaseV4,
@@ -970,7 +928,6 @@ fn verify_qualification_receipt_v4(
     ep_opened.verify_unchanged()?;
     Ok(())
 }
-
 fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManifestV4) -> Outcome {
     let descriptor = &manifest.topup_finality_roster_artifact;
     let bytes = read_regular_bounded(
@@ -1003,7 +960,6 @@ fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManif
     }
     Ok(())
 }
-
 fn insert_expected_release_file_v4(
     expected: &mut BTreeSet<String>,
     file_name: String,
@@ -1014,7 +970,6 @@ fn insert_expected_release_file_v4(
     }
     Ok(())
 }
-
 fn verify_exact_inventory_v4(
     root: &Path,
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -1080,7 +1035,6 @@ fn verify_exact_inventory_v4(
     }
     Ok(())
 }
-
 fn recursive_step_verifier_commitment_v4(
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
 ) -> Result<[u8; 32]> {
@@ -1093,7 +1047,6 @@ fn recursive_step_verifier_commitment_v4(
     preimage.extend_from_slice(&profiles);
     Ok(kagemusha_recursive_spend_release_sha256(&preimage))
 }
-
 fn canonical_release_root(path: &Path) -> Result<PathBuf> {
     let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
         format!(
@@ -1108,7 +1061,6 @@ fn canonical_release_root(path: &Path) -> Result<PathBuf> {
     path.canonicalize()
         .wrap_err("failed to canonicalize Kagemusha release directory")
 }
-
 struct PinnedRegularFile {
     file: File,
     path: PathBuf,
@@ -1116,7 +1068,6 @@ struct PinnedRegularFile {
     length: usize,
     label: String,
 }
-
 impl PinnedRegularFile {
     fn verify_unchanged(&self) -> Outcome {
         let after_open = self
@@ -1135,7 +1086,6 @@ impl PinnedRegularFile {
         Ok(())
     }
 }
-
 fn open_regular_bounded(
     root: &Path,
     name: &str,
@@ -1176,7 +1126,6 @@ fn open_regular_bounded(
         label: label.to_owned(),
     })
 }
-
 fn read_regular_bounded(root: &Path, name: &str, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
     let mut opened = open_regular_bounded(root, name, max_bytes, label)?;
     let mut bytes = Vec::with_capacity(opened.length.saturating_add(1));
@@ -1194,7 +1143,6 @@ fn read_regular_bounded(root: &Path, name: &str, max_bytes: usize, label: &str) 
     opened.verify_unchanged()?;
     Ok(bytes)
 }
-
 fn read_external_bounded(path: &Path, maximum: usize, label: &str) -> Result<Vec<u8>> {
     let parent = path
         .parent()
@@ -1208,7 +1156,6 @@ fn read_external_bounded(path: &Path, maximum: usize, label: &str) -> Result<Vec
         .ok_or_else(|| eyre!("{label} file name is not UTF-8"))?;
     read_regular_bounded(&parent, name, maximum, label)
 }
-
 fn require_release_file_path(root: &Path, supplied: &Path, name: &str, label: &str) -> Outcome {
     let supplied = supplied
         .canonicalize()
@@ -1222,7 +1169,6 @@ fn require_release_file_path(root: &Path, supplied: &Path, name: &str, label: &s
     }
     Ok(())
 }
-
 fn decode_canonical_norito<T>(bytes: &[u8], label: &str) -> Result<T>
 where
     T: norito::NoritoSerialize,
@@ -1237,7 +1183,6 @@ where
     }
     Ok(value)
 }
-
 #[cfg(unix)]
 fn reject_unsafe_mode(metadata: &fs::Metadata, label: &str) -> Outcome {
     use std::os::unix::fs::MetadataExt as _;
@@ -1246,12 +1191,10 @@ fn reject_unsafe_mode(metadata: &fs::Metadata, label: &str) -> Outcome {
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn reject_unsafe_mode(_: &fs::Metadata, _: &str) -> Outcome {
     Ok(())
 }
-
 #[cfg(unix)]
 fn reject_hard_links(metadata: &fs::Metadata, label: &str) -> Outcome {
     use std::os::unix::fs::MetadataExt as _;
@@ -1260,12 +1203,10 @@ fn reject_hard_links(metadata: &fs::Metadata, label: &str) -> Outcome {
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn reject_hard_links(_: &fs::Metadata, _: &str) -> Outcome {
     Ok(())
 }
-
 #[cfg(unix)]
 fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
@@ -1277,19 +1218,16 @@ fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(not(unix))]
 fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 #[derive(Debug)]
 #[must_use = "a post-rename commit-uncertain outcome must be handled explicitly"]
 enum DurableFilePublicationOutcomeV1 {
     Committed { final_path: PathBuf },
     CommitUncertain { final_path: PathBuf, reason: String },
 }
-
 impl DurableFilePublicationOutcomeV1 {
     fn operator_record(&self) -> String {
         let (status, final_path, durable, reason) = match self {
@@ -1313,14 +1251,12 @@ impl DurableFilePublicationOutcomeV1 {
         )
     }
 }
-
 #[derive(Debug)]
 #[must_use = "a post-rename circuit-parameter commit outcome must be handled explicitly"]
 enum ReleaseCircuitParamsPublicationOutcomeV1 {
     Committed { final_path: PathBuf },
     CommitUncertain { final_path: PathBuf, reason: String },
 }
-
 impl ReleaseCircuitParamsPublicationOutcomeV1 {
     fn operator_record(&self) -> String {
         let (status, final_path, durable, reason) = match self {
@@ -1344,7 +1280,6 @@ impl ReleaseCircuitParamsPublicationOutcomeV1 {
         )
     }
 }
-
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PromotionDirectorySnapshotV1 {
@@ -1355,12 +1290,10 @@ struct PromotionDirectorySnapshotV1 {
     gid: u32,
     links: u64,
 }
-
 #[cfg(unix)]
 impl PromotionDirectorySnapshotV1 {
     fn from_metadata(metadata: &fs::Metadata) -> Option<Self> {
         use std::os::unix::fs::MetadataExt as _;
-
         metadata.is_dir().then(|| Self {
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -1370,7 +1303,6 @@ impl PromotionDirectorySnapshotV1 {
             links: metadata.nlink(),
         })
     }
-
     fn validate_trusted(self, label: &str) -> Result<()> {
         let effective_uid = rustix::process::geteuid().as_raw();
         if (self.uid != 0 && self.uid != effective_uid) || self.mode & 0o022 != 0 || self.links == 0
@@ -1381,7 +1313,6 @@ impl PromotionDirectorySnapshotV1 {
         }
         Ok(())
     }
-
     fn validate_private(self, label: &str) -> Result<()> {
         self.validate_trusted(label)?;
         if self.uid != rustix::process::geteuid().as_raw()
@@ -1393,7 +1324,6 @@ impl PromotionDirectorySnapshotV1 {
         Ok(())
     }
 }
-
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PromotionFileSnapshotV1 {
@@ -1405,12 +1335,10 @@ struct PromotionFileSnapshotV1 {
     links: u64,
     length: u64,
 }
-
 #[cfg(unix)]
 impl PromotionFileSnapshotV1 {
     fn from_metadata(metadata: &fs::Metadata) -> Option<Self> {
         use std::os::unix::fs::MetadataExt as _;
-
         (metadata.is_file() && metadata.nlink() == 1).then(|| Self {
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -1421,7 +1349,6 @@ impl PromotionFileSnapshotV1 {
             length: metadata.len(),
         })
     }
-
     fn validate_private(self) -> Result<()> {
         if self.uid != rustix::process::geteuid().as_raw()
             || self.mode & 0o777 != 0o600
@@ -1432,7 +1359,6 @@ impl PromotionFileSnapshotV1 {
         Ok(())
     }
 }
-
 #[cfg(unix)]
 struct PinnedPromotionParentV1 {
     path: PathBuf,
@@ -1440,7 +1366,6 @@ struct PinnedPromotionParentV1 {
     snapshot: PromotionDirectorySnapshotV1,
     path_chain: Vec<(PathBuf, PromotionDirectorySnapshotV1)>,
 }
-
 #[cfg(unix)]
 impl PinnedPromotionParentV1 {
     #[expect(
@@ -1449,9 +1374,7 @@ impl PinnedPromotionParentV1 {
     )]
     fn open(path: &Path) -> Result<Self> {
         use std::path::Component;
-
         use rustix::fs::{AtFlags, Mode, OFlags, open, openat, statat};
-
         let absolute = if path.is_absolute() {
             path.to_path_buf()
         } else {
@@ -1468,7 +1391,6 @@ impl PinnedPromotionParentV1 {
             .ok_or_else(|| eyre!("promotion-record parent must be a directory"))?;
         let canonical = fs::canonicalize(&absolute)
             .wrap_err("failed to canonicalize promotion-record parent")?;
-
         let root_path = Path::new("/");
         let root_before = fs::symlink_metadata(root_path)
             .wrap_err("failed to inspect promotion-record filesystem root")?;
@@ -1494,7 +1416,6 @@ impl PinnedPromotionParentV1 {
         let mut current_path = root_path.to_path_buf();
         let mut path_chain = vec![(current_path.clone(), root_snapshot)];
         let mut snapshot = root_snapshot;
-
         for component in canonical.components().skip(1) {
             let Component::Normal(name) = component else {
                 bail!("promotion-record parent contains a non-canonical path component");
@@ -1554,7 +1475,6 @@ impl PinnedPromotionParentV1 {
         parent.verify_path_identity()?;
         Ok(parent)
     }
-
     fn verify_path_identity(&self) -> Result<()> {
         let opened = PromotionDirectorySnapshotV1::from_metadata(
             &self
@@ -1591,13 +1511,10 @@ impl PinnedPromotionParentV1 {
         Ok(())
     }
 }
-
 #[cfg(unix)]
 fn random_promotion_temporary_name_v1(target: &std::ffi::OsStr) -> Result<std::ffi::OsString> {
     use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-
     use rand::{TryRngCore as _, rngs::OsRng};
-
     let mut random = [0_u8; 16];
     OsRng
         .try_fill_bytes(&mut random)
@@ -1609,7 +1526,6 @@ fn random_promotion_temporary_name_v1(target: &std::ffi::OsStr) -> Result<std::f
     bytes.extend_from_slice(hex::encode(random).as_bytes());
     Ok(std::ffi::OsString::from_vec(bytes))
 }
-
 #[cfg(unix)]
 fn cleanup_promotion_temporary_v1(
     parent: &PinnedPromotionParentV1,
@@ -1619,7 +1535,6 @@ fn cleanup_promotion_temporary_v1(
         .wrap_err("failed to remove unpublished promotion-record temporary file")?;
     Ok(())
 }
-
 #[cfg(unix)]
 #[expect(
     clippy::too_many_lines,
@@ -1636,7 +1551,6 @@ where
     S: FnOnce(&File) -> std::io::Result<()>,
 {
     use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags, openat, renameat_with, statat};
-
     let parent_path = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -1656,7 +1570,6 @@ where
         Err(error) if error == rustix::io::Errno::NOENT => {}
         Err(error) => return Err(error).wrap_err("failed to inspect promotion-record destination"),
     }
-
     let temporary_name = random_promotion_temporary_name_v1(target_name)?;
     let mut temporary = File::from(
         openat(
@@ -1702,7 +1615,6 @@ where
             return Err(error);
         }
     };
-
     if let Err(error) = before_publish().and_then(|()| parent.verify_path_identity()) {
         cleanup_promotion_temporary_v1(&parent, &temporary_name)?;
         return Err(error);
@@ -1717,7 +1629,6 @@ where
         cleanup_promotion_temporary_v1(&parent, &temporary_name)?;
         return Err(error).wrap_err("failed to atomically publish new promotion record");
     }
-
     let final_path = parent.path.join(target_name);
     let after_publication = (|| -> Result<()> {
         let target = statat(&parent.file, target_name, AtFlags::SYMLINK_NOFOLLOW)
@@ -1744,7 +1655,6 @@ where
         },
     })
 }
-
 #[cfg(unix)]
 fn release_circuit_params_file_snapshot_matches_stat_v1(
     snapshot: PromotionFileSnapshotV1,
@@ -1758,7 +1668,6 @@ fn release_circuit_params_file_snapshot_matches_stat_v1(
         && u64::try_from(stat.st_nlink).ok() == Some(snapshot.links)
         && u64::try_from(stat.st_size).ok() == Some(snapshot.length)
 }
-
 #[cfg(unix)]
 fn release_circuit_params_directory_snapshot_matches_stat_v1(
     snapshot: PromotionDirectorySnapshotV1,
@@ -1771,7 +1680,6 @@ fn release_circuit_params_directory_snapshot_matches_stat_v1(
         && u32::try_from(stat.st_gid).ok() == Some(snapshot.gid)
         && u64::try_from(stat.st_nlink).ok() == Some(snapshot.links)
 }
-
 #[cfg(unix)]
 fn write_release_circuit_params_staged_file_v1(
     directory: &File,
@@ -1779,7 +1687,6 @@ fn write_release_circuit_params_staged_file_v1(
     bytes: &[u8],
 ) -> Result<PromotionFileSnapshotV1> {
     use rustix::fs::{AtFlags, Mode, OFlags, openat, statat};
-
     let mut file = File::from(
         openat(
             directory,
@@ -1820,7 +1727,6 @@ fn write_release_circuit_params_staged_file_v1(
     }
     Ok(snapshot)
 }
-
 #[cfg(unix)]
 fn cleanup_release_circuit_params_staging_v1(
     parent: &PinnedPromotionParentV1,
@@ -1828,7 +1734,6 @@ fn cleanup_release_circuit_params_staging_v1(
     temporary_name: &std::ffi::OsStr,
 ) -> Result<()> {
     use rustix::fs::{AtFlags, unlinkat};
-
     for file_name in [
         RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
         RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
@@ -1853,7 +1758,6 @@ fn cleanup_release_circuit_params_staging_v1(
         .wrap_err("failed to sync circuit-parameter parent after cleanup")?;
     Ok(())
 }
-
 #[cfg(unix)]
 #[expect(
     clippy::too_many_lines,
@@ -1872,7 +1776,6 @@ where
     use rustix::fs::{
         AtFlags, Mode, OFlags, RenameFlags, mkdirat, openat, renameat_with, statat, unlinkat,
     };
-
     let parent_path = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -1894,7 +1797,6 @@ where
             return Err(error).wrap_err("failed to inspect circuit-parameter destination");
         }
     }
-
     let temporary_name = random_promotion_temporary_name_v1(target_name)?;
     mkdirat(&parent.file, &temporary_name, Mode::from_raw_mode(0o700))
         .wrap_err("failed to create private circuit-parameter staging directory")?;
@@ -1932,7 +1834,6 @@ where
             return Err(error);
         }
     };
-
     let prepare_result = (|| -> Result<()> {
         write_release_circuit_params_staged_file_v1(
             &staging,
@@ -1959,7 +1860,6 @@ where
         cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
         return Err(error);
     }
-
     if let Err(error) = renameat_with(
         &parent.file,
         &temporary_name,
@@ -1970,7 +1870,6 @@ where
         cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
         return Err(error).wrap_err("failed to atomically publish circuit-parameter directory");
     }
-
     let final_path = parent.path.join(target_name);
     let after_publication = (|| -> Result<()> {
         let opened = PromotionDirectorySnapshotV1::from_metadata(
@@ -1998,7 +1897,6 @@ where
         },
     })
 }
-
 #[cfg(unix)]
 fn write_release_circuit_params_directory_v1(
     path: &Path,
@@ -2006,7 +1904,6 @@ fn write_release_circuit_params_directory_v1(
 ) -> Result<ReleaseCircuitParamsPublicationOutcomeV1> {
     write_release_circuit_params_directory_with_hooks_v1(path, bytes, || Ok(()), File::sync_all)
 }
-
 #[cfg(not(unix))]
 fn write_release_circuit_params_directory_v1(
     _path: &Path,
@@ -2014,7 +1911,6 @@ fn write_release_circuit_params_directory_v1(
 ) -> Result<ReleaseCircuitParamsPublicationOutcomeV1> {
     bail!("safe circuit-parameter directory publication requires Unix descriptor-relative APIs")
 }
-
 fn publish_release_circuit_params_directory_v4<W: Write>(
     writer: &mut W,
     path: &Path,
@@ -2034,17 +1930,14 @@ fn publish_release_circuit_params_directory_v4<W: Write>(
         }
     }
 }
-
 #[cfg(unix)]
 fn write_new_durable_file(path: &Path, bytes: &[u8]) -> Result<DurableFilePublicationOutcomeV1> {
     write_new_durable_file_with_hooks_v1(path, bytes, || Ok(()), File::sync_all)
 }
-
 #[cfg(not(unix))]
 fn write_new_durable_file(_path: &Path, _bytes: &[u8]) -> Result<DurableFilePublicationOutcomeV1> {
     bail!("safe Kagemusha promotion-record publication requires Unix descriptor-relative APIs")
 }
-
 fn publish_new_durable_file<W: Write>(writer: &mut W, path: &Path, bytes: &[u8]) -> Result<()> {
     match write_new_durable_file(path, bytes)? {
         committed @ DurableFilePublicationOutcomeV1::Committed { .. } => {
@@ -2060,7 +1953,6 @@ fn publish_new_durable_file<W: Write>(writer: &mut W, path: &Path, bytes: &[u8])
         }
     }
 }
-
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
 struct VerificationArtifact {
     purpose: String,
@@ -2070,7 +1962,6 @@ struct VerificationArtifact {
     payload_size_bytes: Option<u64>,
     payload_sha256: Option<String>,
 }
-
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 struct VerificationReport {
     status: String,
@@ -2089,7 +1980,6 @@ struct VerificationReport {
     recursive_step_verifier_commitment: String,
     artifacts: Vec<VerificationArtifact>,
 }
-
 impl VerificationReport {
     fn from_manifest_v4(
         manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -2142,7 +2032,6 @@ impl VerificationReport {
         }
     }
 }
-
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 struct VerificationReportV4 {
     status: String,
@@ -2163,7 +2052,6 @@ struct VerificationReportV4 {
     recursive_step_verifier_commitment: String,
     artifacts: Vec<VerificationArtifact>,
 }
-
 impl VerificationReportV4 {
     fn from_report(
         report: &VerificationReport,
@@ -2192,22 +2080,18 @@ impl VerificationReportV4 {
             artifacts: report.artifacts.clone(),
         }
     }
-
     fn canonical_json(&self) -> Result<String> {
         norito::json::to_json(self).wrap_err("failed to encode Kagemusha V4 verification JSON")
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, collections::BTreeSet, fs, rc::Rc};
-
     use iroha_data_model::offline::{
         KagemushaStepCircuitParamsV4, OfflineAndroidAppAttestationPolicy,
         OfflineDeviceAttestationPolicy, OfflineDeviceAttestationTrustedRoot,
         OfflineIosAppAttestationPolicy,
     };
-
     use super::{
         AUTHENTICATED_ARTIFACT_ROLES_V4, PrepareReleaseCircuitParamsV4Args,
         RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4, RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
@@ -2216,24 +2100,20 @@ mod tests {
         read_regular_bounded, roster_release_generations_match_v4, validate_artifacts_sequentially,
         validate_device_attestation_policy_for_atomic_activation,
     };
-
     #[cfg(unix)]
     use super::{
         DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE, DurableFilePublicationOutcomeV1,
         ReleaseCircuitParamsPublicationOutcomeV1, write_new_durable_file_with_hooks_v1,
         write_release_circuit_params_directory_with_hooks_v1,
     };
-
     struct LivePayload {
         live: Rc<Cell<usize>>,
     }
-
     impl Drop for LivePayload {
         fn drop(&mut self) {
             self.live.set(self.live.get() - 1);
         }
     }
-
     fn valid_device_attestation_policy() -> OfflineDeviceAttestationPolicy {
         OfflineDeviceAttestationPolicy {
             version: 1,
@@ -2268,7 +2148,6 @@ mod tests {
             require_android_app_policy: true,
         }
     }
-
     #[test]
     fn activation_manifest_digest_parser_is_lowercase_and_exact() {
         assert_eq!(parse_manifest_sha256(&"ab".repeat(32)), Ok([0xab; 32]));
@@ -2276,7 +2155,6 @@ mod tests {
         assert!(parse_manifest_sha256(&"a".repeat(63)).is_err());
         assert!(parse_manifest_sha256(&format!("{}g", "a".repeat(63))).is_err());
     }
-
     #[test]
     fn operator_memory_lowering_parser_is_nonzero_and_canonical() {
         assert_eq!(parse_nonzero_canonical_u64("1"), Ok(1));
@@ -2288,7 +2166,6 @@ mod tests {
             assert!(parse_nonzero_canonical_u64(invalid).is_err(), "{invalid:?}");
         }
     }
-
     #[test]
     fn bounded_artifact_reader_accepts_exact_limit_and_rejects_overflow() {
         let root = tempfile::tempdir().expect("temporary bounded-artifact root");
@@ -2298,19 +2175,16 @@ mod tests {
                 .expect("read exact bounded artifact"),
             vec![0x5A; 32]
         );
-
         fs::write(root.path().join("oversized.bin"), [0xA5; 33])
             .expect("write oversized bounded artifact");
         let error = read_regular_bounded(root.path(), "oversized.bin", 32, "test artifact")
             .expect_err("oversized bounded artifact must fail closed");
         assert!(error.to_string().contains("size bound"));
     }
-
     #[cfg(unix)]
     #[test]
     fn release_circuit_params_command_publishes_one_canonical_atomic_directory() {
         use std::{fs, os::unix::fs::PermissionsExt as _};
-
         let root = tempfile::tempdir().expect("temporary circuit-parameter root");
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
             .expect("secure circuit-parameter root");
@@ -2320,7 +2194,6 @@ mod tests {
             .expect("secure circuit-parameter parent");
         let output_dir = parent.join("circuit-params-v4");
         let mut writer = std::io::BufWriter::new(Vec::new());
-
         prepare_release_circuit_params_v4(
             PrepareReleaseCircuitParamsV4Args {
                 output_dir: output_dir.clone(),
@@ -2330,7 +2203,6 @@ mod tests {
         .expect("publish canonical release circuit parameters");
         let report =
             String::from_utf8(writer.into_inner().expect("flush report")).expect("report is UTF-8");
-
         let expected = KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
             .expect("reviewed first-release profile");
         let expected_bytes = norito::to_bytes(&expected).expect("encode reviewed profile");
@@ -2390,7 +2262,6 @@ mod tests {
         assert!(report.contains(&hex::encode(
             expected.sha256().expect("reviewed profile identity")
         )));
-
         let mut retry_report = std::io::BufWriter::new(Vec::new());
         let error = prepare_release_circuit_params_v4(
             PrepareReleaseCircuitParamsV4Args { output_dir },
@@ -2404,12 +2275,10 @@ mod tests {
             "unexpected retry error: {error:#}"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn release_circuit_params_publication_rejects_parent_substitution_before_visibility() {
         use std::{fs, os::unix::fs::PermissionsExt as _};
-
         let root = tempfile::tempdir().expect("temporary circuit-parameter root");
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
             .expect("secure circuit-parameter root");
@@ -2419,7 +2288,6 @@ mod tests {
         fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
             .expect("secure circuit-parameter parent");
         let output_dir = parent.join("circuit-params-v4");
-
         let error = write_release_circuit_params_directory_with_hooks_v1(
             &output_dir,
             b"canonical circuit parameters",
@@ -2435,7 +2303,6 @@ mod tests {
             std::fs::File::sync_all,
         )
         .expect_err("a swapped parent must fail before pair visibility");
-
         assert!(error.to_string().contains("parent"));
         assert!(!output_dir.exists());
         assert!(!displaced.join("circuit-params-v4").exists());
@@ -2451,12 +2318,10 @@ mod tests {
             "the unpublished private staging directory must be removed"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn release_circuit_params_parent_sync_failure_is_complete_but_commit_uncertain() {
         use std::{fs, io, os::unix::fs::PermissionsExt as _};
-
         let root = tempfile::tempdir().expect("temporary circuit-parameter root");
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
             .expect("secure circuit-parameter root");
@@ -2466,7 +2331,6 @@ mod tests {
             .expect("secure circuit-parameter parent");
         let output_dir = parent.join("circuit-params-v4");
         let bytes = b"canonical circuit parameters";
-
         let outcome = write_release_circuit_params_directory_with_hooks_v1(
             &output_dir,
             bytes,
@@ -2498,12 +2362,10 @@ mod tests {
                 .contains("status=commit-uncertain")
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn promotion_publication_rejects_a_parent_swap_before_visibility() {
         use std::{fs, os::unix::fs::PermissionsExt as _};
-
         let root = tempfile::tempdir().expect("temporary publication root");
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
             .expect("secure temporary root");
@@ -2513,7 +2375,6 @@ mod tests {
         fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
             .expect("secure promotion parent");
         let target = parent.join("promotion-record-v4.norito");
-
         let error = write_new_durable_file_with_hooks_v1(
             &target,
             b"authenticated promotion record",
@@ -2529,7 +2390,6 @@ mod tests {
             std::fs::File::sync_all,
         )
         .expect_err("a swapped parent must fail before publication");
-
         assert!(error.to_string().contains("parent"));
         assert!(!target.exists(), "the impostor path must receive no record");
         assert!(
@@ -2541,12 +2401,10 @@ mod tests {
             b"must survive"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn promotion_parent_sync_failure_is_explicitly_commit_uncertain() {
         use std::{fs, io, os::unix::fs::PermissionsExt as _};
-
         let root = tempfile::tempdir().expect("temporary publication root");
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
             .expect("secure temporary root");
@@ -2556,7 +2414,6 @@ mod tests {
             .expect("secure promotion parent");
         let target = parent.join("promotion-record-v4.norito");
         let bytes = b"authenticated promotion record";
-
         let outcome = write_new_durable_file_with_hooks_v1(
             &target,
             bytes,
@@ -2581,7 +2438,6 @@ mod tests {
                 .contains("status=commit-uncertain")
         );
     }
-
     #[test]
     fn every_command_publication_handles_commit_uncertainty() {
         let source = include_str!("kagemusha.rs");
@@ -2618,7 +2474,6 @@ mod tests {
             "command dispatch must not discard a low-level directory publication outcome"
         );
     }
-
     #[test]
     fn roster_generation_binding_uses_the_authenticated_descriptor() {
         assert!(roster_release_generations_match_v4(
@@ -2637,7 +2492,6 @@ mod tests {
             "release-a"
         ));
     }
-
     #[test]
     fn v4_report_inventory_is_the_canonical_eight_role_abi21_order() {
         assert_eq!(
@@ -2657,7 +2511,6 @@ mod tests {
         assert_eq!(AUTHENTICATED_ARTIFACT_ROLES_V4.len(), 8);
         assert_eq!(REPORT_ROSTER_PURPOSE, "topup_finality_roster");
     }
-
     #[test]
     fn release_inventory_rejects_role_name_collision_instead_of_collapsing_it() {
         let mut expected = BTreeSet::new();
@@ -2676,12 +2529,10 @@ mod tests {
         assert!(error.to_string().contains("aliases another release file"));
         assert_eq!(expected.len(), 1);
     }
-
     #[test]
     fn authenticated_artifact_validation_drops_each_payload_before_loading_the_next() {
         let live = Rc::new(Cell::new(0));
         let peak = Rc::new(Cell::new(0));
-
         validate_artifacts_sequentially(0..AUTHENTICATED_ARTIFACT_ROLES_V4.len(), |_| {
             assert_eq!(live.get(), 0, "the prior artifact payload must be dropped");
             live.set(1);
@@ -2691,11 +2542,9 @@ mod tests {
             })
         })
         .expect("sequential validation succeeds");
-
         assert_eq!(live.get(), 0);
         assert_eq!(peak.get(), 1);
     }
-
     #[test]
     fn release_verifier_uses_the_sequential_artifact_path() {
         let source = include_str!("kagemusha.rs");
@@ -2706,17 +2555,14 @@ mod tests {
             .split_once("\nfn verify_roster_v4(")
             .expect("release verifier boundary exists")
             .0;
-
         assert!(verifier.contains("validate_artifacts_sequentially("));
         assert!(!verifier.contains("validated.push("));
         assert!(!verifier.contains("KagemushaPastaCycleProverArtifactsV4::new("));
     }
-
     #[test]
     fn atomic_activation_accepts_only_fail_closed_production_app_policy() {
         let policy = valid_device_attestation_policy();
         assert!(validate_device_attestation_policy_for_atomic_activation(&policy).is_ok());
-
         for mutate in [
             |policy: &mut OfflineDeviceAttestationPolicy| {
                 policy.require_android_app_policy = false;
@@ -2736,29 +2582,24 @@ mod tests {
             assert!(validate_device_attestation_policy_for_atomic_activation(&changed).is_err());
         }
     }
-
     #[test]
     fn atomic_activation_rejects_missing_duplicate_and_noncanonical_policy_entries() {
         let policy = valid_device_attestation_policy();
-
         let mut missing_platform = policy.clone();
         missing_platform.trusted_roots.pop();
         assert!(
             validate_device_attestation_policy_for_atomic_activation(&missing_platform).is_err()
         );
-
         let mut duplicate_root = policy.clone();
         duplicate_root
             .trusted_roots
             .push(duplicate_root.trusted_roots[0].clone());
         assert!(validate_device_attestation_policy_for_atomic_activation(&duplicate_root).is_err());
-
         let mut unsorted_categories = policy.clone();
         unsorted_categories.ios_apps[0].allowed_validation_categories = vec![8, 7];
         assert!(
             validate_device_attestation_policy_for_atomic_activation(&unsorted_categories).is_err()
         );
-
         let mut duplicate_signer = policy;
         duplicate_signer.android_apps[0]
             .signing_certificate_sha256

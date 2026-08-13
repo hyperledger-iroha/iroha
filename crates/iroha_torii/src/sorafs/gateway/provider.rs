@@ -1,8 +1,6 @@
 //! Payload-free runtime-provider bindings shared by gateway security adapters.
-
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use thiserror::Error;
-
 /// Exact public identity configured for one runtime-owned gateway provider.
 ///
 /// This binding intentionally contains no credentials, private keys, tokens,
@@ -13,7 +11,6 @@ pub struct GatewayProviderBindingV1 {
     revision: u64,
     policy_digest: [u8; 32],
 }
-
 impl GatewayProviderBindingV1 {
     /// Construct one exact independently governed provider binding.
     ///
@@ -39,26 +36,22 @@ impl GatewayProviderBindingV1 {
             policy_digest,
         })
     }
-
     /// Return the stable non-secret provider handle.
     #[must_use]
     pub fn provider_handle(&self) -> &str {
         &self.provider_handle
     }
-
     /// Return the exact non-zero deployment revision.
     #[must_use]
     pub const fn revision(&self) -> u64 {
         self.revision
     }
-
     /// Return the exact non-zero public-policy digest.
     #[must_use]
     pub const fn policy_digest(&self) -> [u8; 32] {
         self.policy_digest
     }
 }
-
 /// Payload-free validation failures for gateway runtime-provider bindings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum GatewayProviderBindingErrorV1 {
@@ -76,7 +69,6 @@ pub enum GatewayProviderBindingErrorV1 {
     #[error("gateway runtime provider policy digest is zero")]
     ZeroPolicyDigest,
 }
-
 fn validate_gateway_provider_handle(handle: &str) -> Result<(), GatewayProviderBindingErrorV1> {
     match validate_production_runtime_handle(handle) {
         Ok(()) => Ok(()),
@@ -88,11 +80,9 @@ fn validate_gateway_provider_handle(handle: &str) -> Result<(), GatewayProviderB
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn provider_binding_uses_central_handle_grammar_and_rejects_zero_qualification() {
         let binding = GatewayProviderBindingV1::try_new(

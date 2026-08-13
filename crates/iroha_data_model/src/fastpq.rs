@@ -1,20 +1,15 @@
 //! FASTPQ-specific data structures shared between the host and prover.
-
 use std::collections::BTreeMap;
-
 use iroha_crypto::Hash;
 use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, Quantity},
 };
 use iroha_schema::IntoSchema;
-
 use crate::{account::AccountId, asset::id::AssetDefinitionId};
-
 /// Metadata key storing Norito-encoded [`TransferTranscript`] collections for
 /// FASTPQ gadgets.
 pub const TRANSFER_TRANSCRIPTS_METADATA_KEY: &str = "transfer_transcripts";
-
 /// Transcript describing one or more deterministic asset transfers within a transaction.
 #[derive(
     Debug,
@@ -41,7 +36,6 @@ pub struct TransferTranscript {
     /// Present for single-delta transcripts; omitted for multi-delta batches.
     pub poseidon_preimage_digest: Option<Hash>,
 }
-
 /// Per-transfer delta describing the balance change for the sender and receiver.
 #[derive(
     Debug,
@@ -80,7 +74,6 @@ pub struct TransferDeltaTranscript {
     /// the debit to the batch root after the credit.
     pub to_smt_witness: TransferSmtWitness,
 }
-
 impl TransferDeltaTranscript {
     /// Attach sparse Merkle update witnesses for sender and receiver accounts.
     #[must_use]
@@ -93,7 +86,6 @@ impl TransferDeltaTranscript {
         self.to_smt_witness = to_witness;
         self
     }
-
     /// Return the common decimal scale used to normalize this delta into FASTPQ witness units.
     #[must_use]
     pub fn normalized_scale(&self) -> u32 {
@@ -109,7 +101,6 @@ impl TransferDeltaTranscript {
         .unwrap_or(0)
     }
 }
-
 /// Sparse-Merkle update witness for one transfer participant.
 #[derive(
     Debug,
@@ -135,7 +126,6 @@ pub struct TransferSmtWitness {
     /// Sibling node hashes encountered along the path.
     pub siblings: Vec<[u8; 32]>,
 }
-
 impl TransferSmtWitness {
     /// Construct a typed sparse-Merkle update witness.
     #[must_use]
@@ -153,11 +143,9 @@ impl TransferSmtWitness {
         }
     }
 }
-
 fn trimmed_scale(value: &Quantity) -> u32 {
     value.scale()
 }
-
 /// Normalize an exact decimal into deterministic integer witness units for FASTPQ.
 ///
 /// The caller chooses the target decimal scale. Values are scaled up by powers of ten until they
@@ -168,13 +156,11 @@ pub fn normalized_numeric_to_u64(value: &Numeric, target_scale: u32) -> Option<u
     if value.mantissa().is_negative() || value.scale() > target_scale {
         return None;
     }
-
     let scale_delta = target_scale - value.scale();
     let factor = BigInt::pow10(scale_delta)?;
     let scaled = value.mantissa().checked_mul(&factor).ok()?;
     scaled.to_string().parse::<u64>().ok()
 }
-
 /// Canonical FASTPQ transition batch recorded in execution witnesses.
 #[derive(
     Debug,
@@ -197,7 +183,6 @@ pub struct FastpqTransitionBatch {
     /// Arbitrary metadata (e.g., entry hash, transcript count).
     pub metadata: BTreeMap<String, Vec<u8>>,
 }
-
 /// Canonical FASTPQ state transition.
 #[derive(
     Debug,
@@ -220,7 +205,6 @@ pub struct FastpqStateTransition {
     /// Operation selector describing the transition semantics.
     pub operation: FastpqOperationKind,
 }
-
 /// FASTPQ operation selector recorded in batches.
 #[derive(
     Debug,
@@ -248,7 +232,6 @@ pub enum FastpqOperationKind {
     /// Metadata mutation (domains, accounts, assets, etc.).
     MetaSet,
 }
-
 /// Public inputs committed by the FASTPQ prover.
 #[derive(
     Debug,
@@ -276,7 +259,6 @@ pub struct FastpqPublicInputs {
     /// Transaction set hash recorded by the scheduler.
     pub tx_set_hash: [u8; 32],
 }
-
 /// Role permission delta descriptor used in FASTPQ transcripts.
 #[derive(
     Debug,
@@ -297,7 +279,6 @@ pub struct FastpqRolePermissionDelta {
     /// Epoch at which the change becomes effective (little-endian u64).
     pub epoch: u64,
 }
-
 /// Bundle of transcripts keyed by the transaction entrypoint hash.
 #[derive(
     Debug,
@@ -318,36 +299,28 @@ pub struct TransferTranscriptBundle {
     /// Recorded transcripts for the entry.
     pub transcripts: Vec<TransferTranscript>,
 }
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
-
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
-
     use super::*;
     use crate::{account::AccountId, asset::id::AssetDefinitionId, domain::DomainId, name::Name};
-
     const SIGNATORY: &str =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
-
     fn account(label: &str) -> AccountId {
         let _ = label;
         AccountId::new(SIGNATORY.parse().expect("valid public key"))
     }
-
     fn asset(label: &str) -> AssetDefinitionId {
         let name = Name::from_str(label).expect("valid asset name");
         let domain = DomainId::try_new("wonderland", "universal").expect("valid domain id");
         AssetDefinitionId::derive_from_components(domain, name)
     }
-
     fn quantity<T: Into<BigInt>>(mantissa: T, scale: u32) -> Quantity {
         Quantity::try_from_numeric(Numeric::new(mantissa, scale))
             .expect("non-negative canonical quantity")
     }
-
     #[derive(Encode)]
     struct ForgedTransferDeltaTranscript {
         from_account: AccountId,
@@ -361,7 +334,6 @@ mod tests {
         from_smt_witness: TransferSmtWitness,
         to_smt_witness: TransferSmtWitness,
     }
-
     #[test]
     fn transfer_delta_transcript_attaches_smt_witnesses() {
         let delta = TransferDeltaTranscript {
@@ -382,7 +354,6 @@ mod tests {
         assert_eq!(updated.from_smt_witness, from_witness);
         assert_eq!(updated.to_smt_witness, to_witness);
     }
-
     #[test]
     fn transfer_delta_normalized_scale_uses_highest_numeric_scale() {
         let delta = TransferDeltaTranscript {
@@ -397,10 +368,8 @@ mod tests {
             from_smt_witness: TransferSmtWitness::default(),
             to_smt_witness: TransferSmtWitness::default(),
         };
-
         assert_eq!(delta.normalized_scale(), 1);
     }
-
     #[test]
     fn transfer_delta_normalized_scale_trims_trailing_zero_padding() {
         let delta = TransferDeltaTranscript {
@@ -415,32 +384,26 @@ mod tests {
             from_smt_witness: TransferSmtWitness::default(),
             to_smt_witness: TransferSmtWitness::default(),
         };
-
         assert_eq!(delta.normalized_scale(), 3);
     }
-
     #[test]
     fn normalized_numeric_to_u64_scales_to_requested_precision() {
         let whole = quantity(1, 0);
         let fractional = quantity(5, 1);
-
         assert_eq!(normalized_numeric_to_u64(whole.as_numeric(), 1), Some(10));
         assert_eq!(
             normalized_numeric_to_u64(fractional.as_numeric(), 1),
             Some(5)
         );
     }
-
     #[test]
     fn normalized_numeric_to_u64_accepts_trimmed_trailing_zero_scale() {
         let padded = quantity(120_000_000_000_000_000_000_000_i128, 18);
-
         assert_eq!(
             normalized_numeric_to_u64(padded.as_numeric(), 3),
             Some(120_000_000)
         );
     }
-
     #[test]
     fn negative_numeric_payload_cannot_decode_as_transfer_delta_quantity() {
         let forged = ForgedTransferDeltaTranscript {
@@ -456,7 +419,6 @@ mod tests {
             to_smt_witness: TransferSmtWitness::default(),
         };
         let encoded = forged.encode();
-
         assert!(
             TransferDeltaTranscript::decode(&mut encoded.as_slice()).is_err(),
             "a signed negative payload must not cross the FASTPQ quantity boundary"

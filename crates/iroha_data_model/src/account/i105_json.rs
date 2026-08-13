@@ -1,11 +1,8 @@
 //! Allocation-bounded canonical I105 JSON output for account identifiers.
-
 use iroha_crypto::PublicKey;
 use norito::json::{BoundedJsonError, JsonWriteSink};
 use std::{alloc::Layout, mem::MaybeUninit, ptr::NonNull};
-
 use super::{AccountController, AccountId, curve::CurveId};
-
 const ADDRESS_HEADER_SINGLE_V1: u8 = 0b0000_0010;
 const ADDRESS_HEADER_MULTISIG_V1: u8 = 0b0000_1010;
 const CONTROLLER_SINGLE_KEY_TAG: u8 = 0;
@@ -15,7 +12,6 @@ const I105_BASE: u64 = 105;
 const I105_LIMB_DIGITS: usize = 8;
 const I105_LIMB_BASE: u64 = 14_774_554_437_890_625; // 105^8
 const I105_CHECKSUM_LEN: usize = 6;
-
 /// Write one canonical AccountId JSON string without constructing an
 /// `AccountAddress` or staging the rendered string.
 ///
@@ -48,7 +44,6 @@ pub(super) fn write_bounded(
     }
     output.push('"')
 }
-
 #[allow(unsafe_code)]
 fn try_allocate_exact_limbs(length: usize) -> Result<Box<[MaybeUninit<u64>]>, BoundedJsonError> {
     let layout = Layout::array::<MaybeUninit<u64>>(length)
@@ -64,7 +59,6 @@ fn try_allocate_exact_limbs(length: usize) -> Result<Box<[MaybeUninit<u64>]>, Bo
     let slice = core::ptr::slice_from_raw_parts_mut(allocation.as_ptr(), length);
     Ok(unsafe { Box::from_raw(slice) })
 }
-
 fn canonical_address_len(account: &AccountId) -> Result<usize, BoundedJsonError> {
     let controller_len = match account.controller() {
         AccountController::Single(key) => {
@@ -98,7 +92,6 @@ fn canonical_address_len(account: &AccountId) -> Result<usize, BoundedJsonError>
         .checked_add(1)
         .ok_or(BoundedJsonError::Unsupported)
 }
-
 fn maximum_base105_digits(canonical_len: usize) -> Result<usize, BoundedJsonError> {
     if canonical_len == 0 {
         return Err(BoundedJsonError::Unsupported);
@@ -108,11 +101,9 @@ fn maximum_base105_digits(canonical_len: usize) -> Result<usize, BoundedJsonErro
         .map(|digits| digits.div_ceil(3))
         .ok_or(BoundedJsonError::Unsupported)
 }
-
 fn maximum_base105_limbs(canonical_len: usize) -> Result<usize, BoundedJsonError> {
     Ok(maximum_base105_digits(canonical_len)?.div_ceil(I105_LIMB_DIGITS))
 }
-
 fn key_parts(key: &PublicKey) -> Result<(u8, &[u8]), BoundedJsonError> {
     let (algorithm, payload) = key
         .try_to_bytes()
@@ -122,7 +113,6 @@ fn key_parts(key: &PublicKey) -> Result<(u8, &[u8]), BoundedJsonError> {
         .map_err(|_| BoundedJsonError::Unsupported)?;
     Ok((curve, payload))
 }
-
 fn emit_canonical_address(
     account: &AccountId,
     mut emit: impl FnMut(u8) -> Result<(), BoundedJsonError>,
@@ -184,14 +174,12 @@ fn emit_canonical_address(
     }
     Ok(())
 }
-
 struct I105Encoder {
     limbs: Box<[MaybeUninit<u64>]>,
     initialized_limbs: usize,
     canonical_bytes: usize,
     checksum: I105Checksum,
 }
-
 impl I105Encoder {
     fn new(limbs: Box<[MaybeUninit<u64>]>) -> Self {
         Self {
@@ -201,14 +189,12 @@ impl I105Encoder {
             checksum: I105Checksum::new(),
         }
     }
-
     fn push_canonical_byte(&mut self, byte: u8) -> Result<(), BoundedJsonError> {
         self.canonical_bytes = self
             .canonical_bytes
             .checked_add(1)
             .ok_or(BoundedJsonError::Unsupported)?;
         self.checksum.push_byte(byte);
-
         let mut carry = u64::from(byte);
         for limb in self.initialized_limbs_mut() {
             let accumulator = *limb * 256 + carry;
@@ -221,7 +207,6 @@ impl I105Encoder {
         }
         Ok(())
     }
-
     fn push_limb(&mut self, limb: u64) -> Result<(), BoundedJsonError> {
         if self.initialized_limbs >= self.limbs.len() {
             return Err(BoundedJsonError::LengthMismatch);
@@ -230,7 +215,6 @@ impl I105Encoder {
         self.initialized_limbs += 1;
         Ok(())
     }
-
     #[allow(unsafe_code)]
     fn initialized_limbs(&self) -> &[u64] {
         // SAFETY: `push_limb` initializes every slot below
@@ -240,7 +224,6 @@ impl I105Encoder {
             core::slice::from_raw_parts(self.limbs.as_ptr().cast::<u64>(), self.initialized_limbs)
         }
     }
-
     #[allow(unsafe_code)]
     fn initialized_limbs_mut(&mut self) -> &mut [u64] {
         // SAFETY: identical initialization invariant to
@@ -253,13 +236,11 @@ impl I105Encoder {
         }
     }
 }
-
 struct I105Checksum {
     value: u32,
     accumulator: u32,
     bits: u32,
 }
-
 impl I105Checksum {
     fn new() -> Self {
         let mut checksum = Self {
@@ -276,7 +257,6 @@ impl I105Checksum {
         }
         checksum
     }
-
     fn push_byte(&mut self, byte: u8) {
         self.accumulator = (self.accumulator << 8) | u32::from(byte);
         self.bits += 8;
@@ -292,7 +272,6 @@ impl I105Checksum {
         // emitted five-bit stream.
         self.accumulator &= (1_u32 << self.bits) - 1;
     }
-
     fn finish(mut self) -> [u8; I105_CHECKSUM_LEN] {
         if self.bits > 0 {
             let word = u8::try_from((self.accumulator << (5 - self.bits)) & 0x1f)
@@ -311,7 +290,6 @@ impl I105Checksum {
         }
         result
     }
-
     fn step(&mut self, word: u8) {
         const GENERATORS: [u32; 5] = [
             0x3b6a_57b2,
@@ -329,7 +307,6 @@ impl I105Checksum {
         }
     }
 }
-
 fn write_sentinel(
     discriminant: u16,
     output: &mut dyn JsonWriteSink,
@@ -344,7 +321,6 @@ fn write_sentinel(
         }
     }
 }
-
 fn write_u16_decimal(
     mut value: u16,
     output: &mut dyn JsonWriteSink,
@@ -363,7 +339,6 @@ fn write_u16_decimal(
         core::str::from_utf8(&digits[cursor..]).expect("decimal digit buffer is valid UTF-8"),
     )
 }
-
 fn write_base105_limbs(
     limbs: &[u64],
     output: &mut dyn JsonWriteSink,
@@ -384,7 +359,6 @@ fn write_base105_limbs(
     }
     Ok(())
 }
-
 fn expand_base105_limb(mut limb: u64, digits: &mut [u8; I105_LIMB_DIGITS], pad: bool) -> usize {
     let mut cursor = digits.len();
     while limb != 0 {
@@ -402,7 +376,6 @@ fn expand_base105_limb(mut limb: u64, digits: &mut [u8; I105_LIMB_DIGITS], pad: 
         cursor
     }
 }
-
 fn write_i105_symbol(digit: u8, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
     const ASCII: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     const KANA: [&str; 47] = [
@@ -421,21 +394,17 @@ fn write_i105_symbol(digit: u8, output: &mut dyn JsonWriteSink) -> Result<(), Bo
         Err(BoundedJsonError::Unsupported)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
-
     use super::*;
     use crate::account::{MultisigMember, MultisigPolicy, address::ChainDiscriminantGuard};
-
     fn keypair(seed: u64) -> KeyPair {
         let mut bytes = vec![0xA5; 32];
         bytes[..8].copy_from_slice(&seed.to_le_bytes());
         KeyPair::try_from_seed(bytes, Algorithm::Ed25519)
             .expect("derive checked AccountId JSON fixture keypair")
     }
-
     fn assert_bounded_parity(account: &AccountId) {
         for discriminant in [0x02f1, 0x0171, 0, 42] {
             let _guard = ChainDiscriminantGuard::enter(discriminant);
@@ -447,7 +416,6 @@ mod tests {
                 norito::json::to_json_bounded(account, ordinary.len() - 1),
                 Err(BoundedJsonError::BodyTooLarge)
             );
-
             let canonical_len = canonical_address_len(account).expect("canonical address length");
             let scratch = maximum_base105_limbs(canonical_len)
                 .expect("scratch bound")
@@ -459,12 +427,10 @@ mod tests {
             assert!(scratch <= ordinary.len().saturating_mul(2));
         }
     }
-
     #[test]
     fn bounded_account_json_matches_ordinary_for_single_controller() {
         assert_bounded_parity(&AccountId::new(keypair(1).public_key().clone()));
     }
-
     #[test]
     fn bounded_account_json_matches_ordinary_for_large_multisig_controller() {
         let members = (0..=u8::MAX)
@@ -476,7 +442,6 @@ mod tests {
         let policy = MultisigPolicy::new(1, members).expect("valid multisig policy");
         assert_bounded_parity(&AccountId::new_multisig(policy));
     }
-
     #[test]
     fn base105_digit_capacity_covers_every_byte_width() {
         for canonical_len in 1..=4096 {
@@ -488,7 +453,6 @@ mod tests {
             assert!(scratch <= canonical_len.saturating_mul(2).saturating_add(7));
         }
     }
-
     #[test]
     fn limb_scratch_uses_the_requested_exact_layout() {
         for length in [1, 2, 17, 257] {

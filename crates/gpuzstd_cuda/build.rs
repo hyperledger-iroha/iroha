@@ -1,11 +1,9 @@
 //! Build CUDA kernels for the Norito gpuzstd helper when nvcc is available.
-
 use std::{
     env,
     path::{Path, PathBuf},
     process::Command,
 };
-
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(gpuzstd_cuda_available)");
     println!("cargo:rerun-if-env-changed=CUDA_HOME");
@@ -13,7 +11,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=GPUZSTD_CUDA_ARCH");
     println!("cargo:rerun-if-env-changed=GPUZSTD_CUDA_SKIP_BUILD");
     println!("cargo:rerun-if-changed=cuda/gpuzstd_cuda.cu");
-
     if env::var_os("CARGO_FEATURE_CUDA_KERNEL").is_none() {
         return;
     }
@@ -25,11 +22,9 @@ fn main() {
         println!("cargo:warning=nvcc not found; building gpuzstd_cuda without CUDA kernels.");
         return;
     };
-
     if let Some(dir) = locate_cuda_lib_dir() {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }
-
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let mut build = cc::Build::new();
     build.cuda(true);
@@ -46,7 +41,6 @@ fn main() {
         build.flag("-Xcompiler=-fPIC");
         build.flag("-Xcompiler=-fno-fast-math");
     }
-
     if let Some(arch_flag) = env::var_os("GPUZSTD_CUDA_ARCH") {
         build.flag(
             arch_flag
@@ -54,7 +48,6 @@ fn main() {
                 .expect("GPUZSTD_CUDA_ARCH must be valid UTF-8"),
         );
     }
-
     if let Some(host_compiler) = select_cuda_host_compiler(&target_os) {
         println!(
             "cargo:warning=using CUDA host compiler {}",
@@ -65,7 +58,6 @@ fn main() {
     } else if target_os == "linux" && !explicit_cxx_configured() {
         build.ccbin(false);
     }
-
     build.compile("gpuzstd_cuda_kernels");
     println!("cargo:rustc-link-lib=cudart");
     match target_os.as_str() {
@@ -75,7 +67,6 @@ fn main() {
     }
     println!("cargo:rustc-cfg=gpuzstd_cuda_available");
 }
-
 fn find_nvcc() -> Option<PathBuf> {
     for var in ["NVCC", "CUDACXX"] {
         if let Some(path) = env::var_os(var).map(PathBuf::from)
@@ -84,12 +75,10 @@ fn find_nvcc() -> Option<PathBuf> {
             return Some(path);
         }
     }
-
     let path_nvcc = PathBuf::from("nvcc");
     if nvcc_works(&path_nvcc) {
         return Some(path_nvcc);
     }
-
     let exe = if cfg!(windows) { "nvcc.exe" } else { "nvcc" };
     for root in env::var_os("CUDA_HOME")
         .into_iter()
@@ -100,10 +89,8 @@ fn find_nvcc() -> Option<PathBuf> {
             return Some(candidate);
         }
     }
-
     None
 }
-
 fn nvcc_works(path: &Path) -> bool {
     Command::new(path)
         .arg("--version")
@@ -111,7 +98,6 @@ fn nvcc_works(path: &Path) -> bool {
         .map(|out| out.status.success())
         .unwrap_or(false)
 }
-
 fn locate_cuda_lib_dir() -> Option<PathBuf> {
     let root = env::var_os("CUDA_HOME")
         .or_else(|| env::var_os("CUDA_PATH"))
@@ -128,7 +114,6 @@ fn locate_cuda_lib_dir() -> Option<PathBuf> {
     }
     None
 }
-
 fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
     if target_os != "linux" || explicit_cxx_configured() {
         return None;
@@ -144,7 +129,6 @@ fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
     }
     None
 }
-
 fn explicit_cxx_configured() -> bool {
     env::var_os("CXX").is_some()
         || env::var_os("HOST_CXX").is_some()

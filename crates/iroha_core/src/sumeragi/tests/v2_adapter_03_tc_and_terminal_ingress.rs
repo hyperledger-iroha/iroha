@@ -3,7 +3,6 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     let locked_subject = subject(0xBE);
     let locked_execution_commitment = execution_commitment(0xBE);
     let wire_round = wire::ConsensusRound {
@@ -25,7 +24,6 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
     assert!(!adapter.authenticated_ingress_is_progress(&authenticated));
     let generation = adapter.current_tag().generation();
     let serviced_before = adapter.serviced_candidate_count_for_test();
-
     let premature = adapter
         .receive_authenticated(authenticated)
         .expect("deliver the current Commit before its Prepare lock is durable");
@@ -86,7 +84,6 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
         marker_count,
         "same-class policy replay cannot consume a tombstone"
     );
-
     let prepare = wire::QuorumCertificate {
         round: wire_round,
         proposal_round: wire_round,
@@ -114,7 +111,6 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
             && *subject == locked_subject
             && certificate.phase == wire::GlobalPhase::Prepare
     )));
-
     let locked_payload = [0xBE, 2];
     let manifest = encode_payload(
         &adapter.wire_context,
@@ -174,7 +170,6 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
             remote_commit.clone(),
         ))
     );
-
     let readmitted = adapter
         .receive_authenticated(AuthenticatedConsensusMessage::for_test(
             remote_commit.clone(),
@@ -219,7 +214,6 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
             .disposition(),
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
-
     adapter
         .signature_completed(commit_sign_tag, vec![0xBF])
         .expect("self-admit the local Commit");
@@ -257,14 +251,12 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
     );
     assert_eq!(adapter.serviced_candidate_count_for_test(), marker_count);
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     let locked_subject = subject(0xD6);
     let locked_execution_commitment = execution_commitment(0xD6);
     let wire_round = wire::ConsensusRound {
@@ -339,7 +331,6 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
     adapter
         .signature_completed(replay_tag, vec![0xB6])
         .expect("restore the local locked CommitVote");
-
     let locked_vote = |signer, marker| {
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
             round: wire_round,
@@ -369,7 +360,6 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
             .disposition(),
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
-
     let tag_before_tc = adapter.current_tag();
     let timeout = wire::TimeoutCertificate {
         round: wire_round,
@@ -407,7 +397,6 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
         Some((round, core_subject)),
         "EnterView must restore the durable locked subject"
     );
-
     assert_eq!(
         adapter
             .receive_authenticated(AuthenticatedConsensusMessage::for_test(locked_vote(
@@ -449,7 +438,6 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
             .disposition(),
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
-
     let liveness = adapter.status().expect("build liveness snapshot");
     liveness
         .validate()
@@ -475,7 +463,6 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
     assert!(liveness.liveness.ignore_counts.iter().any(|entry| {
         entry.reason == wire::SumeragiV2IgnoreReason::Duplicate && entry.count >= 2
     }));
-
     let conflict =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
             round: wire_round,
@@ -512,7 +499,6 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
             .disposition(),
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
-
     let penultimate = adapter
         .receive_authenticated(AuthenticatedConsensusMessage::for_test(locked_vote(
             2, 0xB8,
@@ -551,7 +537,6 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
         adapter.reducer.durable_state().locked().is_some(),
         "the retained Prepare lock makes this a post-decision admission regression"
     );
-
     // The local signer's vote was reconstructed from WAL rather than
     // admitted through network ingress, so this is a fresh semantic key
     // arriving only after Decision became durable.
@@ -559,7 +544,6 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
     let authenticated = AuthenticatedConsensusMessage::for_test(decided_vote.clone());
     assert!(!adapter.wire_ingress_may_use_progress(&decided_vote.payload));
     assert!(!adapter.authenticated_ingress_is_progress(&authenticated));
-
     let decided_key = IngressSemanticKey::Vote {
         round: wire_round,
         phase: wire::GlobalPhase::Commit,
@@ -607,13 +591,11 @@ fn tc_reset_readmits_exact_locked_commit_once_per_generation() {
         "decided votes cannot consume protected deferred ownership"
     );
 }
-
 #[test]
 fn terminal_ignored_ingress_is_recorded_before_duplicate_coalescing() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     let round = wire::ConsensusRound {
         context_id: adapter.wire_context.id(),
         height: adapter.wire_context.height,
@@ -640,7 +622,6 @@ fn terminal_ignored_ingress_is_recorded_before_duplicate_coalescing() {
         .vote_to_core(&vote, &context)
         .expect("convert the admitted vote");
     let stale_tag = reducer::EventTag::new(round.height, round.view, reducer::Generation::new(0));
-
     let ignored = adapter
         .step_authenticated_ingress(
             reducer::Event::VoteReceived {
@@ -654,7 +635,6 @@ fn terminal_ignored_ingress_is_recorded_before_duplicate_coalescing() {
         ignored.disposition(),
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::StaleGeneration)
     );
-
     let (duplicate, admission) = adapter
         .admit_authenticated_payload(&payload)
         .expect("coalesce the exact terminal retransmission");
@@ -666,7 +646,6 @@ fn terminal_ignored_ingress_is_recorded_before_duplicate_coalescing() {
     );
     assert!(admission.is_none());
 }
-
 #[test]
 fn deferred_zero_ordinal_is_exact_single_use_and_never_reminted() {
     let source = DeferredAdmissionOrdinalSource::new(0);
@@ -675,7 +654,6 @@ fn deferred_zero_ordinal_is_exact_single_use_and_never_reminted() {
         DeferredServiceEvidence::completion_for_test(&source, tag, 1, DeferredPriority::Completion);
     let second =
         DeferredServiceEvidence::completion_for_test(&source, tag, 1, DeferredPriority::Completion);
-
     assert_eq!(first.admission_ordinal, 0);
     assert_eq!(second.admission_ordinal, 1);
     assert!(first.validate_exact());
@@ -688,7 +666,6 @@ fn deferred_zero_ordinal_is_exact_single_use_and_never_reminted() {
     assert!(second.claim_adapter_service_for_test());
     assert!(second.claim_runtime_handoff_once());
 }
-
 #[test]
 fn deferred_projection_distinguishes_authenticated_proposal_origins() {
     let context_id = reducer::ContextId::repeat(0xA1);
@@ -704,7 +681,6 @@ fn deferred_projection_distinguishes_authenticated_proposal_origins() {
         append_deferred_projection_event(&mut projection, &event);
         projection
     };
-
     let signed_vote = |proposal_round| {
         reducer::SignedVote::new(
             reducer::Vote::new_with_proposal_round(
@@ -728,7 +704,6 @@ fn deferred_projection_distinguishes_authenticated_proposal_origins() {
             vote: signed_vote(origin_b),
         })
     );
-
     let certificate = |proposal_round| {
         reducer::QuorumCertificate::new(
             reducer::CertificateRef::new_with_proposal_round(
@@ -751,7 +726,6 @@ fn deferred_projection_distinguishes_authenticated_proposal_origins() {
             certificate: certificate(origin_b),
         })
     );
-
     let proposal = |proposal_round| {
         reducer::SignedProposal::new(
             reducer::Proposal::new(
@@ -789,7 +763,6 @@ fn deferred_projection_distinguishes_authenticated_proposal_origins() {
         })
     );
 }
-
 #[test]
 fn deferred_ordinal_exhaustion_fails_adapter_closed_before_wrap() {
     let directory = TempDir::new().expect("temporary directory");
@@ -807,7 +780,6 @@ fn deferred_ordinal_exhaustion_fails_adapter_closed_before_wrap() {
         unreachable!("proposal fixture")
     };
     let tag = adapter.current_tag();
-
     adapter
         .defer_body_available_for_test(tag, &first.manifest)
         .expect("last safely advanceable ordinal is admitted");
@@ -831,7 +803,6 @@ fn deferred_ordinal_exhaustion_fails_adapter_closed_before_wrap() {
         "exhaustion cannot wrap the actor source to a stale ordinal"
     );
 }
-
 #[test]
 fn deferred_actor_source_never_aliases_across_adapter_instances() {
     let first_directory = TempDir::new().expect("first temporary directory");
@@ -875,7 +846,6 @@ fn deferred_actor_source_never_aliases_across_adapter_instances() {
     second
         .defer_body_available_for_test(second_tag, &second_proposal.manifest)
         .expect("second adapter instance advances the same actor source");
-
     let first_owner = first
         .pop_deferred_next()
         .expect("first adapter instance rank remains valid")
@@ -897,7 +867,6 @@ fn deferred_actor_source_never_aliases_across_adapter_instances() {
     assert!(first_owner.validate_exact());
     assert!(second_owner.validate_exact());
 }
-
 #[test]
 fn deferred_occurrence_capability_binds_direct_authenticated_provenance() {
     let directory = TempDir::new().expect("temporary occurrence-capability directory");
@@ -926,7 +895,6 @@ fn deferred_occurrence_capability_binds_direct_authenticated_provenance() {
     assert!(evidence.validate_exact());
     assert_eq!(evidence.admission_ordinal(), *ordinal);
     assert!(evidence.is_authenticated_ingress());
-
     let mut reclassified = evidence;
     reclassified.authenticated_ingress = false;
     reclassified.projection_hash = deferred_occurrence_ownership_projection_hash(&reclassified);
@@ -935,7 +903,6 @@ fn deferred_occurrence_capability_binds_direct_authenticated_provenance() {
         "rehashing cannot detach provenance from the private admission capability"
     );
 }
-
 #[test]
 fn deferred_service_evidence_rejects_every_owner_and_rank_mutation() {
     let source = DeferredAdmissionOrdinalSource::new(0);
@@ -946,65 +913,50 @@ fn deferred_service_evidence_rejects_every_owner_and_rank_mutation() {
     assert!(evidence.validate_exact());
     assert!(evidence.belongs_to(&source));
     assert!(!evidence.belongs_to(&foreign));
-
     let rejected = |mutated: DeferredServiceEvidence| {
         assert!(!mutated.validate_exact());
     };
-
     let mut mutated = evidence.clone();
     mutated.admission_ordinal = 1;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.priority = DeferredPriority::Progress;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.event_kind = DeferredEventKind::RetransmitElapsed;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.original_tag = reducer::EventTag::new(7, 3, reducer::Generation::new(3));
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.original_event = reducer::Event::RetransmitElapsed { tag };
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.protected_progress = true;
     mutated.projection_hash = deferred_service_projection_hash(&mutated);
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.eligible_skips_after = 1;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.service_cursor_after = DeferredPriority::Normal;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.service_cursor_before = DeferredPriority::Completion;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.queue_lengths_after.completion = 1;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.total_len_before = 2;
     rejected(mutated);
-
     let mut mutated = evidence.clone();
     mutated.retag = DeferredRetagRelation::AuthenticatedIngress { from: tag, to: tag };
     rejected(mutated);
-
     let mut mutated = evidence;
     mutated.projection_hash = Hash::new(b"wrong deferred projection");
     rejected(mutated);
 }
-
 #[test]
 fn deferred_authenticated_retry_retains_exact_original_and_effective_tags() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1050,7 +1002,6 @@ fn deferred_authenticated_retry_retains_exact_original_and_effective_tags() {
         eligible_skips: 0,
     });
     adapter.next_deferred_priority = DeferredPriority::Normal;
-
     let selection = adapter
         .pop_deferred_next()
         .expect("authenticated retry rank remains valid")
@@ -1072,7 +1023,6 @@ fn deferred_authenticated_retry_retains_exact_original_and_effective_tags() {
     );
     assert!(adapter.deferred_authenticated_event_matches_wire(&selection.evidence));
 }
-
 #[test]
 fn authenticated_deferred_service_rejects_same_kind_envelope_swap_before_reducer() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1097,7 +1047,6 @@ fn authenticated_deferred_service_rejects_same_kind_envelope_swap_before_reducer
         tag: adapter.current_tag(),
         proposal: first,
     };
-
     assert!(matches!(
         adapter.enqueue_deferred(
             event.clone(),
@@ -1110,7 +1059,6 @@ fn authenticated_deferred_service_rejects_same_kind_envelope_swap_before_reducer
         Err(AdapterError::RuntimeIngressOwnershipViolation)
     ));
     assert!(adapter.deferred_inputs.is_empty());
-
     let admission_capability = adapter
         .mint_deferred_admission_ordinal(true)
         .expect("mint exact deferred owner");
@@ -1131,7 +1079,6 @@ fn authenticated_deferred_service_rejects_same_kind_envelope_swap_before_reducer
     });
     adapter.next_deferred_priority = DeferredPriority::Normal;
     let durable_before = adapter.reducer.durable_state().clone();
-
     assert!(matches!(
         adapter.drain_deferred_with_evidence(),
         Err(AdapterError::DeferredServiceOwnershipViolation)
@@ -1139,7 +1086,6 @@ fn authenticated_deferred_service_rejects_same_kind_envelope_swap_before_reducer
     assert_eq!(adapter.reducer.durable_state(), &durable_before);
     assert!(adapter.fail_closed);
 }
-
 #[test]
 fn deferred_adapter_rejects_foreign_and_replayed_capabilities_before_reducer_step() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1168,7 +1114,6 @@ fn deferred_adapter_rejects_foreign_and_replayed_capabilities_before_reducer_ste
         eligible_skips: 0,
     };
     adapter.deferred_completions.push_back(input(stale));
-
     let (_, first) = adapter
         .drain_deferred_with_evidence()
         .expect("first exact capability crosses the adapter")
@@ -1201,7 +1146,6 @@ fn deferred_adapter_rejects_foreign_and_replayed_capabilities_before_reducer_ste
         Some(1),
         "the replay is rejected before a second reducer transition"
     );
-
     let foreign_directory = TempDir::new().expect("foreign temporary directory");
     let (mut foreign_adapter, foreign_startup) =
         open_test(&foreign_directory).expect("open foreign adapter");
@@ -1236,7 +1180,6 @@ fn deferred_adapter_rejects_foreign_and_replayed_capabilities_before_reducer_ste
     ));
     assert!(foreign_adapter.ignore_counts.is_empty());
 }
-
 #[test]
 fn deferred_service_debt_counts_only_oldest_skipped_classes() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1282,7 +1225,6 @@ fn deferred_service_debt_counts_only_oldest_skipped_classes() {
         .deferred_inputs
         .push_back(input(DeferredPriority::Normal));
     adapter.next_deferred_priority = DeferredPriority::Completion;
-
     let selected = adapter
         .pop_deferred_next()
         .expect("deferred service debt remains representable")
@@ -1295,7 +1237,6 @@ fn deferred_service_debt_counts_only_oldest_skipped_classes() {
     assert_eq!(adapter.deferred_inputs[0].eligible_skips, 1);
     assert_eq!(adapter.deferred_inputs[1].eligible_skips, 0);
 }
-
 #[test]
 fn deferred_selector_services_only_the_runtime_lifecycle_minimum_set() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1325,7 +1266,6 @@ fn deferred_selector_services_only_the_runtime_lifecycle_minimum_set() {
         .deferred_inputs
         .push_back(input(1, DeferredPriority::Normal));
     adapter.next_deferred_priority = DeferredPriority::Completion;
-
     let selection = adapter
         .pop_deferred_next_eligible(&BTreeSet::from([1]))
         .expect("lifecycle-filtered deferred selection remains exact")
@@ -1368,7 +1308,6 @@ fn deferred_selector_services_only_the_runtime_lifecycle_minimum_set() {
             .matches_eligible_admission_ordinals(&BTreeSet::from([1, 10])),
         "the adapter seal binds the runtime's complete target-relative set"
     );
-
     let rejected = |mut evidence: DeferredServiceEvidence| {
         evidence.projection_hash = deferred_service_projection_hash(&evidence);
         assert!(
@@ -1385,7 +1324,6 @@ fn deferred_selector_services_only_the_runtime_lifecycle_minimum_set() {
     let mut exceeds_total_class = selection.evidence.clone();
     exceeds_total_class.eligible_queue_lengths_before.progress = 1;
     rejected(exceeds_total_class);
-
     assert_eq!(adapter.deferred_completions[0].admission_ordinal, 10);
     assert_eq!(adapter.deferred_inputs[0].admission_ordinal, 11);
     assert_eq!(adapter.deferred_completions[0].eligible_skips, 0);
@@ -1396,7 +1334,6 @@ fn deferred_selector_services_only_the_runtime_lifecycle_minimum_set() {
         "the exact queue-selection capability crosses the adapter seam once"
     );
 }
-
 #[test]
 fn deferred_service_debt_overflow_is_typed_and_fail_closed() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1423,14 +1360,12 @@ fn deferred_service_debt_overflow_is_typed_and_fail_closed() {
         .deferred_progress_inputs
         .push_back(input(2, DeferredPriority::Progress, u64::MAX));
     adapter.next_deferred_priority = DeferredPriority::Completion;
-
     assert!(matches!(
         adapter.pop_deferred_next(),
         Err(AdapterError::DeferredServiceDebtOverflow)
     ));
     assert!(adapter.fail_closed);
 }
-
 #[test]
 fn deferred_service_cursor_cycles_nonempty_classes() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1471,7 +1406,6 @@ fn deferred_service_cursor_cycles_nonempty_classes() {
         queue.push_back(input(priority));
     }
     adapter.next_deferred_priority = DeferredPriority::Completion;
-
     let selected = (0..6)
         .map(|_| {
             let selection = adapter
@@ -1500,7 +1434,6 @@ fn deferred_service_cursor_cycles_nonempty_classes() {
             .is_none()
     );
 }
-
 #[test]
 fn deferred_dispatch_decreases_rank_by_exactly_one_macro_step_per_turn() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1535,7 +1468,6 @@ fn deferred_dispatch_decreases_rank_by_exactly_one_macro_step_per_turn() {
         .deferred_inputs
         .push_back(input(DeferredPriority::Normal));
     adapter.next_deferred_priority = DeferredPriority::Completion;
-
     for (turn, expected_lengths) in [
         (DeferredPriority::Completion, [0, 1, 1]),
         (DeferredPriority::Progress, [0, 0, 1]),
@@ -1567,13 +1499,11 @@ fn deferred_dispatch_decreases_rank_by_exactly_one_macro_step_per_turn() {
     }
     assert!(!adapter.deferred_work_is_serviceable());
 }
-
 #[test]
 fn deferred_service_contract_violation_is_terminal() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     assert!(matches!(
         adapter.fail_deferred_service_contract(),
         AdapterError::DeferredServiceContractViolation
@@ -1584,7 +1514,6 @@ fn deferred_service_contract_violation_is_terminal() {
         Err(AdapterError::FailClosed)
     ));
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn unowned_busy_prepare_certificate_rolls_back_staged_registry_and_active_subject() {
@@ -1602,7 +1531,6 @@ fn unowned_busy_prepare_certificate_rolls_back_staged_registry_and_active_subjec
             ..
         }]
     ));
-
     let wire_round = wire::ConsensusRound {
         context_id: adapter.wire_context.id(),
         height: adapter.wire_context.height,
@@ -1641,7 +1569,6 @@ fn unowned_busy_prepare_certificate_rolls_back_staged_registry_and_active_subjec
         admitted_at: Instant::now(),
         eligible_skips: 0,
     });
-
     let registry_before = adapter.registry.clone();
     let active_subject_before = adapter.active_subject;
     let deferred_before = adapter.deferred_progress_inputs.clone();
@@ -1661,14 +1588,12 @@ fn unowned_busy_prepare_certificate_rolls_back_staged_registry_and_active_subjec
     assert_registry_eq(&adapter.registry, &registry_before);
     assert_eq!(adapter.active_subject, active_subject_before);
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn unowned_busy_exact_locked_vote_rolls_back_and_remains_retryable() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     let locked_subject = subject(0xE6);
     let locked_execution_commitment = execution_commitment(0xE6);
     let wire_round = wire::ConsensusRound {
@@ -1740,7 +1665,6 @@ fn unowned_busy_exact_locked_vote_rolls_back_and_remains_retryable() {
             ..
         }] if vote.phase() == reducer::Phase::Commit
     ));
-
     let roster_len = adapter.wire_context.roster.len();
     let mut fillers = VecDeque::with_capacity(roster_len);
     for signer in 0..roster_len {
@@ -1787,7 +1711,6 @@ fn unowned_busy_exact_locked_vote_rolls_back_and_remains_retryable() {
             .expect("fixture roster is non-empty"),
     )
     .expect("fixture signer fits u32");
-
     let locked_vote =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
             round: wire_round,
@@ -1825,7 +1748,6 @@ fn unowned_busy_exact_locked_vote_rolls_back_and_remains_retryable() {
         !adapter.ingress_deliveries.contains_key(&key),
         "admission without locked-vote queue ownership must remain retryable"
     );
-
     adapter.deferred_progress_inputs.pop_back();
     let retried = adapter
         .receive_authenticated(AuthenticatedConsensusMessage::for_test(locked_vote))
@@ -1850,7 +1772,6 @@ fn unowned_busy_exact_locked_vote_rolls_back_and_remains_retryable() {
         })
     ));
 }
-
 #[test]
 fn deferred_progress_capacity_matches_partition_geometry() {
     assert_eq!(deferred_progress_capacity(0), 3);
@@ -1908,7 +1829,6 @@ fn deferred_progress_capacity_matches_partition_geometry() {
         "runtime and effect ownership are derived from the supplied production configuration"
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
@@ -1922,7 +1842,6 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
         height: adapter.wire_context.height,
         view: 0,
     };
-
     for signer in 0..roster_len {
         let signer = u32::try_from(signer).expect("fixture signer fits u32");
         let marker = u8::try_from(signer).expect("fixture signer fits u8") | 0xA0;
@@ -1967,7 +1886,6 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
                 .expect("admit one locked Commit owner per frozen validator")
                 .is_some()
         );
-
         let wire_timeout = wire::TimeoutVote {
             round: wire_round,
             highest_prepare_qc: None,
@@ -2062,7 +1980,6 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
             );
         }
     }
-
     for (phase, marker) in [
         (wire::GlobalPhase::Prepare, 0xB0),
         (wire::GlobalPhase::Commit, 0xB1),
@@ -2128,7 +2045,6 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
             .expect("admit the independent TC class owner")
             .is_some()
     );
-
     assert_eq!(
         adapter.deferred_progress_inputs.len(),
         deferred_progress_capacity(roster_len)
@@ -2150,7 +2066,6 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
             "each protected Progress class owns its exact partition"
         );
     }
-
     let retained = adapter.deferred_progress_inputs.clone();
     let later_round = wire::ConsensusRound {
         view: 1,
@@ -2187,7 +2102,6 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
     );
     assert_eq!(adapter.deferred_progress_inputs, retained);
 }
-
 #[test]
 fn protected_locked_vote_uses_reserved_capacity_without_evicting_certificate_ownership() {
     let directory = TempDir::new().expect("temporary directory");
@@ -2278,7 +2192,6 @@ fn protected_locked_vote_uses_reserved_capacity_without_evicting_certificate_own
         adapter.deferred_progress_inputs, admitted_before,
         "equal-rank traffic must never replace already admitted certificate ownership"
     );
-
     let locked_subject = subject(0xDA);
     let locked_execution_commitment = execution_commitment(0xDA);
     let wire_vote = wire::Vote {
@@ -2313,7 +2226,6 @@ fn protected_locked_vote_uses_reserved_capacity_without_evicting_certificate_own
     };
     let protected_event = reducer::Event::VoteReceived { tag, vote };
     assert_eq!(progress_rank(&protected_event), 0);
-
     assert!(
         adapter
             .enqueue_deferred(
@@ -2346,7 +2258,6 @@ fn protected_locked_vote_uses_reserved_capacity_without_evicting_certificate_own
         })
     ));
 }
-
 fn saturate_ordinary_semantic_history(
     adapter: &mut SumeragiV2Adapter,
     round: wire::ConsensusRound,
@@ -2375,7 +2286,6 @@ fn saturate_ordinary_semantic_history(
         MAX_INGRESS_SEMANTIC_KEYS
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote() {
@@ -2388,7 +2298,6 @@ fn certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote() {
         height: adapter.wire_context.height,
         view: current_tag.view(),
     };
-
     let local_timeout = adapter
         .timeout_elapsed(current_tag)
         .expect("start the local TimeoutVote signature fence");
@@ -2399,7 +2308,6 @@ fn certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote() {
             ..
         },]
     ));
-
     let timeout_certificate = wire::TimeoutCertificate {
         round: current_round,
         groups: vec![wire::TimeoutVoteGroup {
@@ -2424,7 +2332,6 @@ fn certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote() {
     ));
     assert_eq!(adapter.current_tag().view(), current_round.view + 1);
     assert!(adapter.deferred_progress_inputs.is_empty());
-
     let adjacent_round = wire::ConsensusRound {
         view: current_round
             .view
@@ -2448,7 +2355,6 @@ fn certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote() {
         .expect("apply the adjacent vote after its view becomes current");
     assert_eq!(applied.disposition(), reducer::StepDisposition::Applied);
     assert!(adapter.ingress_deliveries.contains_key(&adjacent_key));
-
     let duplicate = adapter
         .receive_verified(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote),
@@ -2459,7 +2365,6 @@ fn certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote() {
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn busy_deferred_source_identity_coalesces_across_consumer_view_change() {
@@ -2473,7 +2378,6 @@ fn busy_deferred_source_identity_coalesces_across_consumer_view_change() {
         view: first_tag.view(),
     };
     saturate_ordinary_semantic_history(&mut adapter, first_round);
-
     let first_timeout = adapter
         .timeout_elapsed(first_tag)
         .expect("start the first local TimeoutVote signature fence");
@@ -2486,7 +2390,6 @@ fn busy_deferred_source_identity_coalesces_across_consumer_view_change() {
         ] => *tag,
         effects => panic!("unexpected first timeout effects: {effects:?}"),
     };
-
     let old_timeout = wire::TimeoutVote {
         round: first_round,
         highest_prepare_qc: None,
@@ -2532,7 +2435,6 @@ fn busy_deferred_source_identity_coalesces_across_consumer_view_change() {
         original_candidate.0.leader(),
         adapter.wire_context.leader(first_round.view)
     );
-
     let duplicate_old = adapter
         .receive_verified(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::TimeoutVote(old_timeout),
@@ -2543,7 +2445,6 @@ fn busy_deferred_source_identity_coalesces_across_consumer_view_change() {
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
     assert_eq!(adapter.deferred_progress_inputs.len(), 1);
-
     let timeout_certificate = wire::TimeoutCertificate {
         round: first_round,
         groups: vec![wire::TimeoutVoteGroup {
@@ -2613,7 +2514,6 @@ fn busy_deferred_source_identity_coalesces_across_consumer_view_change() {
             && !adapter.ingress_deliveries.contains_key(&old_key),
         "a capacity-bypass TimeoutVote record must retire when its view is no longer current"
     );
-
     let second_tag = adapter.current_tag();
     let second_timeout = adapter
         .timeout_elapsed(second_tag)
@@ -2666,7 +2566,6 @@ fn busy_deferred_source_identity_coalesces_across_consumer_view_change() {
         );
         assert!(!adapter.ingress_deliveries.contains_key(&current_key));
     }
-
     adapter
         .signature_completed(second_sign_tag, vec![0xDB; 96])
         .expect("complete the current-view signature");
@@ -2691,7 +2590,6 @@ fn busy_deferred_source_identity_coalesces_across_consumer_view_change() {
         retained_count + 1,
         "a transient same-source projection remains owned until strict episode exit"
     );
-
     let applied = adapter
         .receive_verified(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::TimeoutVote(current_timeout.clone()),

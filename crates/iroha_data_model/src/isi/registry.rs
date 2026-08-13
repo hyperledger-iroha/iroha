@@ -1,8 +1,6 @@
 #[cfg(feature = "governance")]
 use crate::isi::governance;
-
 mod wire_ids;
-
 use crate::{
     isi::{
         InstructionRegistry, account_alias_lease, account_recovery, alias_setup, asset_alias,
@@ -18,10 +16,8 @@ use crate::{
     },
     prelude::*,
 };
-
 /// Signature of helper functions that register instructions into [`InstructionRegistry`].
 type Registrar = fn(InstructionRegistry) -> InstructionRegistry;
-
 /// Built-in instruction registrations that make up the default registry used by Iroha.
 const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<RegisterBox>,
@@ -399,14 +395,12 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<runtime_upgrade::ActivateRuntimeUpgrade>,
     InstructionRegistry::register_slice::<runtime_upgrade::CancelRuntimeUpgrade>,
 ];
-
 /// Create an [`InstructionRegistry`] populated with all instructions supported
 /// by Iroha out of the box.
 pub fn default() -> InstructionRegistry {
     let registry = apply_registrars(ALL_REGISTRARS.iter().copied());
     wire_ids::apply(registry)
 }
-
 /// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
 ///
 /// Sponsor-program revision validation uses this fail-closed lookup before an
@@ -416,7 +410,6 @@ pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
     static DEFAULT_REGISTRY: std::sync::OnceLock<InstructionRegistry> = std::sync::OnceLock::new();
     DEFAULT_REGISTRY.get_or_init(default).contains(wire_id)
 }
-
 /// Apply every [`Registrar`] from the provided iterator to build an [`InstructionRegistry`].
 fn apply_registrars(registrars: impl IntoIterator<Item = Registrar>) -> InstructionRegistry {
     registrars
@@ -425,13 +418,11 @@ fn apply_registrars(registrars: impl IntoIterator<Item = Registrar>) -> Instruct
             register(registry)
         })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_primitives::numeric::{Numeric, Quantity};
-
     fn xor_quantity_nanos(value: u128) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(
             value,
@@ -439,33 +430,26 @@ mod tests {
         ))
         .expect("u128 nano-XOR registry fixture fits Quantity")
     }
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked ISI registry fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn domain_id() -> DomainId {
         DomainId::try_new("wonderland", "universal").expect("domain id")
     }
-
     fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(domain_id(), "rose".parse().expect("asset name"))
     }
-
     fn asset_id() -> AssetId {
         AssetId::of(asset_definition_id(), account(0xA1))
     }
-
     fn trigger_id() -> TriggerId {
         "registry_tick".parse().expect("trigger id")
     }
-
     fn role_id() -> RoleId {
         "registry_auditor".parse().expect("role id")
     }
-
     fn assert_default_registry_decodes<T>(value: T)
     where
         T: crate::isi::Instruction
@@ -485,10 +469,8 @@ mod tests {
             .decode(wire_id, &framed)
             .expect("registered instruction")
             .expect("decode instruction");
-
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     fn framed_instruction_payload<T>(value: &T) -> Vec<u8>
     where
         T: crate::isi::Instruction
@@ -500,7 +482,6 @@ mod tests {
         norito::core::frame_bare_with_header_flags::<T>(&payload, flags)
             .expect("frame instruction payload")
     }
-
     fn raw_instruction_payload<T>(value: &T) -> Vec<u8>
     where
         T: crate::isi::Instruction + norito::codec::Encode,
@@ -508,7 +489,6 @@ mod tests {
         let (payload, _) = norito::codec::encode_with_header_flags(value);
         payload
     }
-
     fn framed_instruction_payload_with_tag<T>(value: &T, tag: u32) -> Vec<u8>
     where
         T: crate::isi::Instruction
@@ -524,7 +504,6 @@ mod tests {
         norito::core::frame_bare_with_header_flags::<T>(&payload, flags)
             .expect("frame instruction payload")
     }
-
     fn assert_default_registry_rejects_payload<T>(wire_id: &str, value: T)
     where
         T: crate::isi::Instruction
@@ -537,30 +516,25 @@ mod tests {
         let decoded = registry
             .decode(wire_id, &framed)
             .expect("canonical wire id remains registered");
-
         assert!(
             decoded.is_err(),
             "{wire_id} must reject payload encoded for {}",
             std::any::type_name::<T>()
         );
     }
-
     fn assert_default_registry_rejects_framed_payload(wire_id: &str, framed: &[u8], source: &str) {
         let registry = default();
         let decoded = registry
             .decode(wire_id, framed)
             .expect("canonical wire id remains registered");
-
         assert!(
             decoded.is_err(),
             "{wire_id} must reject framed payload encoded for {source}"
         );
     }
-
     fn settlement_leg(from: AccountId, to: AccountId, quantity: u32) -> settlement::SettlementLeg {
         settlement::SettlementLeg::new(asset_definition_id(), quantity, from, to)
     }
-
     fn assert_instruction_box_uses_wire_id(
         instruction: InstructionBox,
         expected_wire_id: &str,
@@ -572,7 +546,6 @@ mod tests {
             wire_id, expected_wire_id,
             "InstructionBox conversion must use canonical boxed wire id"
         );
-
         let decoded = default()
             .decode(wire_id, &framed)
             .expect("encoded wire id is registered")
@@ -583,7 +556,6 @@ mod tests {
             "pair payload should decode back into the canonical boxed family"
         );
     }
-
     #[test]
     fn default_registry_registers_public_lane_validator() {
         let registry = default();
@@ -591,7 +563,6 @@ mod tests {
             crate::isi::staking::RegisterPublicLaneValidator,
         >()));
     }
-
     #[test]
     fn default_registry_registers_public_lane_validator_rebind() {
         let registry = default();
@@ -599,7 +570,6 @@ mod tests {
             crate::isi::staking::RebindPublicLaneValidatorPeer,
         >()));
     }
-
     #[test]
     fn default_registry_registers_kaigi_relay_health_report() {
         let registry = default();
@@ -607,14 +577,12 @@ mod tests {
             crate::isi::kaigi::ReportKaigiRelayHealth,
         >()));
     }
-
     #[test]
     fn instruction_registry_inventory_is_complete_unique_and_registered() {
         let registry = default();
         let registered_type_names = registry.names().collect::<std::collections::BTreeSet<_>>();
         let mut inventoried_type_names = std::collections::BTreeSet::new();
         let mut seen_wire_ids = std::collections::BTreeMap::new();
-
         for entry in wire_ids::ALL {
             let type_name = (entry.type_name)();
             let wire_id = entry.wire_id;
@@ -655,19 +623,16 @@ mod tests {
                 panic!("wire id collision: {wire_id} registered for {previous} and {type_name}");
             }
         }
-
         assert_eq!(
             registered_type_names, inventoried_type_names,
             "every default-registry type must have one explicit wire-ID inventory entry"
         );
         assert_eq!(registry.len(), wire_ids::ALL.len());
     }
-
     #[test]
     fn stable_wire_id_remapping_preserves_every_codec_byte_path() {
         let typed = apply_registrars(ALL_REGISTRARS.iter().copied());
         let remapped = with_stable_ids(typed.clone());
-
         for inventory in wire_ids::ALL {
             let type_name = (inventory.type_name)();
             let before = typed
@@ -676,7 +641,6 @@ mod tests {
             let after = remapped
                 .entry_for_type_name(type_name)
                 .expect("wire-id-remapped entry");
-
             assert_eq!(after.type_name, before.type_name, "{type_name}");
             assert!(std::ptr::fn_addr_eq(after.ctor, before.ctor), "{type_name}");
             assert!(
@@ -690,7 +654,6 @@ mod tests {
             assert_eq!(after.wire_id, inventory.wire_id, "{type_name}");
         }
     }
-
     #[test]
     fn instruction_vtable_frame_matches_canonical_concrete_bytes() {
         let concrete = Log::new(Level::INFO, "vtable frame parity".to_owned());
@@ -698,11 +661,9 @@ mod tests {
         let inner = super::super::peel_instruction_box(&*boxed);
         let expected = norito::encode_canonical(&concrete).expect("canonical concrete frame");
         let mut actual = Vec::new();
-
         inner
             .dyn_write_frame(&mut actual)
             .expect("stream canonical trait-object frame");
-
         assert_eq!(actual, expected);
         assert_eq!(
             inner
@@ -711,7 +672,6 @@ mod tests {
             expected.len()
         );
     }
-
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
         const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 347;
@@ -719,7 +679,6 @@ mod tests {
         const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 347;
         #[cfg(not(feature = "governance"))]
         const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 328;
-
         let source = include_str!("registry.rs");
         let production = source
             .split("\n#[cfg(test)]\nmod tests")
@@ -732,7 +691,6 @@ mod tests {
             .1
             .split_once("\n];")
             .expect("typed registrar inventory boundary");
-
         assert_eq!(
             inventory.matches("::<").count(),
             EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS,
@@ -760,17 +718,14 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn instruction_wire_ids_match_v1_golden_inventory_hash() {
         use sha2::{Digest, Sha256};
-
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
             "6b62eae4361bed47f9b3d76ee2c4d34c5c1c9e6f0239db424d9c8c72c14e423e";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
             "10a06c47bd6e3c28f02a826be08c26b721057427e93f602b0efebf0622253a53";
-
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -780,7 +735,6 @@ mod tests {
             let canonical = assignments.concat();
             hex::encode(Sha256::digest(canonical.as_bytes()))
         };
-
         let without_governance = assignment_digest(
             wire_ids::ALL
                 .iter()
@@ -791,7 +745,6 @@ mod tests {
             without_governance, EXPECTED_WITHOUT_GOVERNANCE_SHA256,
             "non-governance V1 type-to-wire-ID assignments changed"
         );
-
         #[cfg(feature = "governance")]
         {
             assert_eq!(
@@ -809,7 +762,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     #[should_panic(expected = "instruction registry key collision")]
     fn instruction_registry_rejects_wire_id_collisions() {
@@ -817,18 +769,15 @@ mod tests {
             .register_with_id::<Log>("instruction.collision")
             .register_with_id::<Upgrade>("instruction.collision");
     }
-
     #[test]
     fn bootle_lantern_governance_instructions_have_unique_canonical_registrations() {
         let static_registry = apply_registrars(ALL_REGISTRARS.iter().copied());
         let registry = default();
         let mut wire_ids = std::collections::BTreeSet::new();
-
         macro_rules! assert_bootle_registration {
             ($instruction:ty) => {{
                 let type_name = std::any::type_name::<$instruction>();
                 let wire_id = <$instruction>::WIRE_ID;
-
                 assert!(
                     static_registry.contains(type_name),
                     "{type_name} must be present in the built-in registrar list"
@@ -848,7 +797,6 @@ mod tests {
                 );
             }};
         }
-
         assert_bootle_registration!(privacy::RegisterPrivacyBootleLanternIssuerPolicyV1);
         assert_bootle_registration!(privacy::RotatePrivacyBootleLanternIssuerPolicyV1);
         assert_bootle_registration!(privacy::RevokePrivacyBootleLanternIssuerPolicyV1);
@@ -856,18 +804,15 @@ mod tests {
         assert_bootle_registration!(privacy::RotatePrivacyVegaIssuerV1);
         assert_bootle_registration!(privacy::RevokePrivacyVegaIssuerV1);
     }
-
     #[test]
     fn x509_governance_instructions_have_unique_canonical_registrations() {
         let static_registry = apply_registrars(ALL_REGISTRARS.iter().copied());
         let registry = default();
         let mut wire_ids = std::collections::BTreeSet::new();
-
         macro_rules! assert_x509_registration {
             ($instruction:ty) => {{
                 let type_name = std::any::type_name::<$instruction>();
                 let wire_id = <$instruction>::WIRE_ID;
-
                 assert!(
                     static_registry.contains(type_name),
                     "{type_name} must be present in the built-in registrar list"
@@ -887,7 +832,6 @@ mod tests {
                 );
             }};
         }
-
         assert_x509_registration!(privacy::RegisterPrivacyZkX509TrustAnchorV1);
         assert_x509_registration!(privacy::RotatePrivacyZkX509TrustAnchorV1);
         assert_x509_registration!(privacy::RevokePrivacyZkX509TrustAnchorV1);
@@ -897,10 +841,8 @@ mod tests {
         assert_x509_registration!(privacy::RegisterPrivacyZkX509CrlV1);
         assert_x509_registration!(privacy::RotatePrivacyZkX509CrlV1);
         assert_x509_registration!(privacy::RevokePrivacyZkX509CrlV1);
-
         assert_eq!(wire_ids.len(), 9);
     }
-
     #[test]
     fn sponsor_program_wire_id_lookup_is_clean_break() {
         assert!(is_instruction_wire_id_registered(
@@ -911,7 +853,6 @@ mod tests {
             "nexus::UpsertFeeSponsorPolicy"
         ));
     }
-
     #[test]
     fn required_boi_alias_compatibility_ids_are_registered_without_reopening_retired_mutations() {
         let registry = default();
@@ -919,14 +860,12 @@ mod tests {
             account_alias_lease::AcquireAccountAliasLease,
         >()));
         assert!(registry.contains("identity::SetAccountAliasBinding"));
-
         let removed_ids = [
             "iroha.account.alias.lease.renew",
             "iroha.account.alias.binding.set",
             "iroha.account.alias.primary.set",
             "identity::SetPrimaryAccountAlias",
         ];
-
         for wire_id in removed_ids {
             assert!(
                 !registry.contains(wire_id),
@@ -934,7 +873,6 @@ mod tests {
             );
             assert!(!is_instruction_wire_id_registered(wire_id));
         }
-
         for wire_id in [
             alias_setup::EnsureAlias::WIRE_ID,
             alias_setup::RenewAliasLease::WIRE_ID,
@@ -948,7 +886,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn legacy_sns_mutation_instruction_ids_are_not_registered() {
         let registry = default();
@@ -966,7 +903,6 @@ mod tests {
             "iroha_data_model::isi::sns::UnfreezeSnsName",
             "iroha.sns.name.unfreeze",
         ];
-
         for wire_id in removed_ids {
             assert!(
                 !registry.contains(wire_id),
@@ -975,7 +911,6 @@ mod tests {
             assert!(registry.decode(wire_id, &[]).is_none());
             assert!(!is_instruction_wire_id_registered(wire_id));
         }
-
         for wire_id in [
             alias_setup::EnsureAlias::WIRE_ID,
             alias_setup::RenewAliasLease::WIRE_ID,
@@ -989,7 +924,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn retired_offline_note_instruction_ids_reject_valid_and_adversarial_payloads() {
         let registry = default();
@@ -1004,7 +938,6 @@ mod tests {
             "iroha.offline.note.redeem",
             "iroha.offline.note.audit",
         ];
-
         for wire_id in retired_ids {
             assert!(
                 !registry.contains(wire_id),
@@ -1029,19 +962,16 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn device_attestation_registration_has_stable_wire_id() {
         let registry = default();
         let type_name = std::any::type_name::<offline::RegisterOfflineDeviceAttestation>();
-
         assert_eq!(
             registry.wire_id(type_name),
             Some(offline::RegisterOfflineDeviceAttestation::WIRE_ID)
         );
         assert!(registry.contains(offline::RegisterOfflineDeviceAttestation::WIRE_ID));
     }
-
     #[test]
     fn instruction_registry_excludes_direct_grouped_variants() {
         let registry = default();
@@ -1090,14 +1020,12 @@ mod tests {
             std::any::type_name::<settlement::DvpIsi>(),
             std::any::type_name::<settlement::PvpIsi>(),
         ];
-
         for name in removed_type_names {
             assert!(
                 !registry.contains(name),
                 "{name} must not be in default registry"
             );
         }
-
         let removed_wire_ids = [
             repo::RepoIsi::WIRE_ID,
             repo::ReverseRepoIsi::WIRE_ID,
@@ -1112,7 +1040,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn instruction_registry_does_not_decode_removed_direct_wire_ids() {
         let registry = default();
@@ -1125,10 +1052,8 @@ mod tests {
             settlement_leg(account(0xB2), account(0xB1), 11),
             settlement::SettlementPlan::default(),
         );
-
         let direct_repo_payload = framed_instruction_payload(&direct_repo);
         let direct_dvp_payload = framed_instruction_payload(&direct_dvp);
-
         assert!(
             registry
                 .decode(repo::RepoMarginCallIsi::WIRE_ID, &direct_repo_payload)
@@ -1142,13 +1067,11 @@ mod tests {
             "removed settlement direct wire id must stay undecodable"
         );
     }
-
     #[test]
     fn instruction_registry_rejects_unknown_and_near_miss_wire_ids() {
         let registry = default();
         let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
         let framed = framed_instruction_payload(&register_box);
-
         for wire_id in [
             "",
             "iroha.register ",
@@ -1164,7 +1087,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn instruction_registry_does_not_decode_removed_direct_type_names() {
         let registry = default();
@@ -1175,7 +1097,6 @@ mod tests {
             "legacy".parse().expect("metadata key"),
             iroha_primitives::json::Json::new("value"),
         );
-
         for (type_name, framed) in [
             (
                 std::any::type_name::<Register<Domain>>(),
@@ -1196,7 +1117,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn public_instruction_pair_helpers_reject_removed_direct_names() {
         let direct_register = Register::domain(Domain::new(domain_id()));
@@ -1214,7 +1134,6 @@ mod tests {
             settlement_leg(account(0xD2), account(0xD1), 71),
             settlement::SettlementPlan::default(),
         );
-
         for (removed_name, raw_payload, framed_payload) in [
             (
                 std::any::type_name::<Register<Domain>>(),
@@ -1247,7 +1166,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn instruction_box_from_grouped_direct_variants_uses_boxed_wire_ids() {
         assert_instruction_box_uses_wire_id(
@@ -1294,7 +1212,6 @@ mod tests {
             std::any::type_name::<settlement::SettlementInstructionBox>(),
         );
     }
-
     #[test]
     fn instruction_registry_rejects_removed_direct_names_with_boxed_payloads() {
         let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
@@ -1312,7 +1229,6 @@ mod tests {
             settlement_leg(account(0xD6), account(0xD5), 91),
             settlement::SettlementPlan::default(),
         ));
-
         for (removed_name, boxed_payload) in [
             (
                 std::any::type_name::<Register<Domain>>(),
@@ -1349,7 +1265,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn instruction_registry_frame_helper_rejects_direct_payloads_under_boxed_ids() {
         let direct_register = Register::domain(Domain::new(domain_id()));
@@ -1367,7 +1282,6 @@ mod tests {
             settlement_leg(account(0xD8), account(0xD7), 101),
             settlement::SettlementPlan::default(),
         );
-
         for (boxed_wire_id, raw_payload) in [
             (
                 RegisterBox::WIRE_ID,
@@ -1391,7 +1305,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn instruction_registry_rejects_unframed_canonical_payloads() {
         let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
@@ -1406,7 +1319,6 @@ mod tests {
             settlement_leg(account(0xC2), account(0xC1), 51),
             settlement::SettlementPlan::default(),
         ));
-
         for (wire_id, payload, source) in [
             (
                 RegisterBox::WIRE_ID,
@@ -1427,7 +1339,6 @@ mod tests {
             assert_default_registry_rejects_framed_payload(wire_id, &payload, source);
         }
     }
-
     #[test]
     fn instruction_registry_rejects_trailing_bytes_after_valid_frames() {
         let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
@@ -1442,7 +1353,6 @@ mod tests {
             settlement_leg(account(0xC4), account(0xC3), 61),
             settlement::SettlementPlan::default(),
         ));
-
         for (wire_id, mut framed, source) in [
             (
                 RegisterBox::WIRE_ID,
@@ -1464,7 +1374,6 @@ mod tests {
             assert_default_registry_rejects_framed_payload(wire_id, &framed, source);
         }
     }
-
     #[test]
     fn instruction_registry_rejects_direct_payloads_spoofed_as_boxes() {
         assert_default_registry_rejects_payload(
@@ -1497,7 +1406,6 @@ mod tests {
             ),
         );
     }
-
     #[test]
     fn instruction_registry_rejects_cross_family_box_payloads() {
         let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
@@ -1514,7 +1422,6 @@ mod tests {
             settlement_leg(account(0xB6), account(0xB5), 31),
             settlement::SettlementPlan::default(),
         ));
-
         assert_default_registry_rejects_framed_payload(
             MintBox::WIRE_ID,
             &framed_instruction_payload(&register_box),
@@ -1531,7 +1438,6 @@ mod tests {
             std::any::type_name::<settlement::SettlementInstructionBox>(),
         );
     }
-
     #[test]
     fn instruction_registry_rejects_cross_family_payloads_through_type_name_aliases() {
         let register_box = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
@@ -1548,7 +1454,6 @@ mod tests {
             settlement_leg(account(0xDA), account(0xD9), 111),
             settlement::SettlementPlan::default(),
         ));
-
         assert_default_registry_rejects_framed_payload(
             std::any::type_name::<MintBox>(),
             &framed_instruction_payload(&register_box),
@@ -1565,7 +1470,6 @@ mod tests {
             std::any::type_name::<settlement::SettlementInstructionBox>(),
         );
     }
-
     #[test]
     fn instruction_registry_rejects_invalid_box_variant_tags() {
         let invalid_tag = u32::MAX;
@@ -1581,7 +1485,6 @@ mod tests {
             settlement_leg(account(0xB8), account(0xB7), 41),
             settlement::SettlementPlan::default(),
         ));
-
         for (wire_id, framed) in [
             (
                 RegisterBox::WIRE_ID,
@@ -1602,7 +1505,6 @@ mod tests {
             assert!(decoded.is_err(), "{wire_id} must reject invalid enum tag");
         }
     }
-
     #[test]
     fn instruction_registry_rejects_truncated_box_payloads() {
         let registry = default();
@@ -1620,7 +1522,6 @@ mod tests {
             assert!(decoded.is_err(), "{wire_id} must reject truncated payload");
         }
     }
-
     #[test]
     fn instruction_registry_decodes_boxed_stable_ids() {
         assert_default_registry_decodes(RegisterBox::Domain(Register::domain(Domain::new(
@@ -1654,7 +1555,6 @@ mod tests {
             role_id(),
             account(0xA3),
         )));
-
         let registry = default();
         assert!(registry.contains(rwa::RwaInstructionBox::WIRE_ID));
         assert!(registry.contains(repo::RepoInstructionBox::WIRE_ID));
@@ -1664,7 +1564,6 @@ mod tests {
             "atomic SCCP route-governance type path missing from default registry"
         );
     }
-
     #[test]
     fn instruction_registry_registers_and_decodes_standalone_surface() {
         let registry = default();
@@ -1697,7 +1596,6 @@ mod tests {
                 "{name} missing from default registry"
             );
         }
-
         assert_default_registry_decodes(content::PublishContentBundle {
             bundle_id: Hash::new(b"content-bundle"),
             tarball: b"tar".to_vec(),
@@ -1741,7 +1639,6 @@ mod tests {
             upto_epoch: Some(9),
         });
     }
-
     #[test]
     fn default_registry_rejects_retired_zk_ace_instruction_wires() {
         let registry = default();
@@ -1761,7 +1658,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn default_registry_excludes_retired_confidential_instructions() {
         let retired_wires = [
@@ -1812,7 +1708,6 @@ mod tests {
             .concat(),
         ];
         let registry = default();
-
         for retired in &retired_wires {
             assert!(
                 !registry.contains(retired),
@@ -1823,7 +1718,6 @@ mod tests {
                 "retired confidential wire must not be dispatchable: {retired}"
             );
         }
-
         for specialized in [
             std::any::type_name::<offline::TopUpKagemushaRecursiveV4>(),
             std::any::type_name::<offline::RedeemKagemushaRecursiveV4>(),
@@ -1835,7 +1729,6 @@ mod tests {
             assert_eq!(registry.wire_id(specialized), Some(specialized));
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn structured_json_rejects_retired_confidential_dispatch() {
@@ -1856,7 +1749,6 @@ mod tests {
                 .expect_err("retired confidential JSON must not dispatch");
         }
     }
-
     #[cfg(feature = "governance")]
     #[test]
     fn default_registry_registers_citizenship_instructions() {

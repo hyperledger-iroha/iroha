@@ -2,11 +2,8 @@
 #![cfg(feature = "zk-stark")]
 //! Cross-dataspace STARK verification tests that validate proof outcomes while
 //! ensuring proof payload details are not exposed to other dataspaces.
-
 use super::localnet_npos::npos_override_transactions;
-
 use std::{collections::BTreeSet, num::NonZeroU64, time::Duration};
-
 use base64::Engine as _;
 use eyre::{Result, ensure, eyre};
 use futures_util::StreamExt;
@@ -65,7 +62,6 @@ use tokio::{
     time::{sleep, timeout},
 };
 use toml::{Table, Value as TomlValue};
-
 const NEXUS_ALIAS: &str = "universal";
 const DS1_ALIAS: &str = "ds1";
 const DS2_ALIAS: &str = "ds2";
@@ -84,78 +80,65 @@ const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
 const PROOF_FETCH_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
-
 const STARK_BACKEND: &str = "stark/fri/sha256-goldilocks-v1";
 const CIRCUIT_ID_VALID: &str = "stark/fri/sha256-goldilocks-v1:cross-dataspace-verifyproof-v1";
 const CIRCUIT_ID_MISMATCH: &str = "stark/fri/sha256-goldilocks-v1:cross-dataspace-verifyproof-v2";
 const SCHEMA_VALID: &[u8] = b"nexus:cross-dataspace:verifyproof:schema:v1";
 const SCHEMA_MISMATCH: &[u8] = b"nexus:cross-dataspace:verifyproof:schema:v2";
-
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct ExpectedLaneValidatorBinding {
     validator: String,
     peer_id: String,
 }
-
 fn validator_authority_account_for_peer(index: usize) -> AccountId {
     let keypair = KeyPair::try_from_seed(validator_authority_seed(index), Algorithm::Ed25519)
         .expect("fixture cross-dataspace STARK validator authority key");
     AccountId::new(keypair.public_key().clone())
 }
-
 fn validator_authority_seed(index: usize) -> Vec<u8> {
     let mut seed = vec![0_u8; 32];
     seed[0] = 0xD3;
     seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
     seed
 }
-
 #[test]
 fn validator_authority_account_uses_checked_seed_derivation() {
     let expected = KeyPair::try_from_seed(validator_authority_seed(2), Algorithm::Ed25519)
         .expect("fixture cross-dataspace STARK validator authority key");
-
     assert_eq!(
         validator_authority_account_for_peer(2),
         AccountId::new(expected.public_key().clone())
     );
 }
-
 fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLaneValidatorBinding {
     ExpectedLaneValidatorBinding {
         validator: validator_authority_account_for_peer(index).to_string(),
         peer_id: peer_id.to_string(),
     }
 }
-
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
-
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
 }
-
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("universal", "universal").expect("fee asset domain"),
         "xor".parse().expect("fee asset name"),
     )
 }
-
 enum RouteProbeOutcome {
     Approved,
     Rejected(String),
 }
-
 enum CommittedTxOutcome {
     Applied,
     Rejected(String),
 }
-
 fn render_rejection_reason(
     reason: &iroha::data_model::transaction::error::TransactionRejectionReason,
 ) -> String {
@@ -167,7 +150,6 @@ fn render_rejection_reason(
         format!("{display}; details: {debug}")
     }
 }
-
 fn query_committed_tx_outcome(
     client: &Client,
     entry_hash: &HashOf<TransactionEntrypoint>,
@@ -190,7 +172,6 @@ fn query_committed_tx_outcome(
             })
         })
 }
-
 async fn wait_for_committed_success(
     client: &Client,
     entry_hash: HashOf<TransactionEntrypoint>,
@@ -227,7 +208,6 @@ async fn wait_for_committed_success(
         "{context}: timed out waiting for committed transaction outcome for transaction {entry_hash}{suffix}"
     ))
 }
-
 fn has_test_network_feature(feature: &str) -> bool {
     std::env::var("TEST_NETWORK_IROHAD_FEATURES")
         .ok()
@@ -238,7 +218,6 @@ fn has_test_network_feature(feature: &str) -> bool {
         })
         .unwrap_or(false)
 }
-
 fn require_test_network_feature(feature: &str, test_name: &str) -> Result<()> {
     ensure!(
         has_test_network_feature(feature),
@@ -246,7 +225,6 @@ fn require_test_network_feature(feature: &str, test_name: &str) -> Result<()> {
     );
     Ok(())
 }
-
 fn localnet_builder() -> NetworkBuilder {
     let gas_account_str = ALICE_ID.to_string();
     NetworkBuilder::new()
@@ -276,7 +254,6 @@ fn localnet_builder() -> NetworkBuilder {
             );
             lane_nexus.insert("visibility".into(), TomlValue::String("public".to_owned()));
             lane_nexus.insert("metadata".into(), TomlValue::Table(Table::new()));
-
             let mut lane_ds1 = Table::new();
             lane_ds1.insert("index".into(), TomlValue::Integer(1));
             lane_ds1.insert("alias".into(), TomlValue::String("lane-ds1".to_owned()));
@@ -286,7 +263,6 @@ fn localnet_builder() -> NetworkBuilder {
                 TomlValue::String("restricted".to_owned()),
             );
             lane_ds1.insert("metadata".into(), TomlValue::Table(Table::new()));
-
             let mut lane_ds2 = Table::new();
             lane_ds2.insert("index".into(), TomlValue::Integer(2));
             lane_ds2.insert("alias".into(), TomlValue::String("lane-ds2".to_owned()));
@@ -296,7 +272,6 @@ fn localnet_builder() -> NetworkBuilder {
                 TomlValue::String("restricted".to_owned()),
             );
             lane_ds2.insert("metadata".into(), TomlValue::Table(Table::new()));
-
             let mut ds_nexus = Table::new();
             ds_nexus.insert("alias".into(), TomlValue::String(NEXUS_ALIAS.to_owned()));
             ds_nexus.insert("id".into(), TomlValue::Integer(NEXUS_ID_U64 as i64));
@@ -305,7 +280,6 @@ fn localnet_builder() -> NetworkBuilder {
                 TomlValue::String("main nexus dataspace".to_owned()),
             );
             ds_nexus.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
             let mut ds1 = Table::new();
             ds1.insert("alias".into(), TomlValue::String(DS1_ALIAS.to_owned()));
             ds1.insert("id".into(), TomlValue::Integer(DS1_ID_U64 as i64));
@@ -318,7 +292,6 @@ fn localnet_builder() -> NetworkBuilder {
                 TomlValue::String("private dataspace one".to_owned()),
             );
             ds1.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
             let mut ds2 = Table::new();
             ds2.insert("alias".into(), TomlValue::String(DS2_ALIAS.to_owned()));
             ds2.insert("id".into(), TomlValue::Integer(DS2_ID_U64 as i64));
@@ -331,21 +304,18 @@ fn localnet_builder() -> NetworkBuilder {
                 TomlValue::String("private dataspace two".to_owned()),
             );
             ds2.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
             let mut matcher_alice = Table::new();
             matcher_alice.insert("account".into(), TomlValue::String(ALICE_ID.to_string()));
             let mut rule_alice = Table::new();
             rule_alice.insert("lane".into(), TomlValue::Integer(1));
             rule_alice.insert("dataspace".into(), TomlValue::String(DS1_ALIAS.to_owned()));
             rule_alice.insert("matcher".into(), TomlValue::Table(matcher_alice));
-
             let mut matcher_bob = Table::new();
             matcher_bob.insert("account".into(), TomlValue::String(BOB_ID.to_string()));
             let mut rule_bob = Table::new();
             rule_bob.insert("lane".into(), TomlValue::Integer(2));
             rule_bob.insert("dataspace".into(), TomlValue::String(DS2_ALIAS.to_owned()));
             rule_bob.insert("matcher".into(), TomlValue::Table(matcher_bob));
-
             let mut policy = Table::new();
             policy.insert("default_lane".into(), TomlValue::Integer(0));
             policy.insert(
@@ -359,7 +329,6 @@ fn localnet_builder() -> NetworkBuilder {
                     TomlValue::Table(rule_bob),
                 ]),
             );
-
             layer
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
@@ -405,7 +374,6 @@ fn localnet_builder() -> NetworkBuilder {
                 .write(["zk", "stark", "enabled"], true);
         })
 }
-
 fn npos_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
 ) -> Vec<Vec<InstructionBox>> {
@@ -415,7 +383,6 @@ fn npos_multilane_genesis_post_topology_transactions(
         "expected {TOTAL_PEERS} peers in genesis topology, got {}",
         topology.len()
     );
-
     let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
     let universal_domain: DomainId =
         DomainId::try_new("universal", "universal").expect("universal domain");
@@ -423,7 +390,6 @@ fn npos_multilane_genesis_post_topology_transactions(
     let ds2_domain: DomainId = DomainId::try_new("ds2", "universal").expect("ds2 domain");
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = nexus_fee_asset_definition_id();
-
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::domain(Domain::new(universal_domain)).into(),
@@ -460,12 +426,10 @@ fn npos_multilane_genesis_post_topology_transactions(
         )
         .into(),
     ];
-
     let mut validator_tx = Vec::new();
     let lanes = [NEXUS_LANE_INDEX, DS1_LANE_INDEX, DS2_LANE_INDEX];
     let mint_amount =
         VALIDATOR_STAKE_PER_LANE.saturating_mul(u64::try_from(lanes.len()).unwrap_or(u64::MAX));
-
     for (index, peer) in topology.iter().enumerate() {
         let validator_id = validator_authority_account_for_peer(index);
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
@@ -483,7 +447,6 @@ fn npos_multilane_genesis_post_topology_transactions(
             )
             .into(),
         );
-
         for lane_index in lanes {
             let lane_id = LaneId::new(lane_index);
             validator_tx.push(
@@ -501,10 +464,8 @@ fn npos_multilane_genesis_post_topology_transactions(
                 .push(ActivatePublicLaneValidator::new(lane_id, validator_id.clone()).into());
         }
     }
-
     vec![bootstrap_tx, validator_tx]
 }
-
 fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_count = std::num::NonZeroU32::new(3).expect("lane count");
     let lanes = vec![
@@ -534,13 +495,11 @@ fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
     proof_policy_bundle(&lane_config)
 }
-
 #[test]
 fn cross_dataspace_zk_stark_localnet_genesis_preexecution_smoke() {
     let _guard = sandbox::serial_guard();
     let _network = localnet_builder().build();
 }
-
 fn expected_lane_validators(
     network: &sandbox::SerializedNetwork,
 ) -> BTreeSet<ExpectedLaneValidatorBinding> {
@@ -551,7 +510,6 @@ fn expected_lane_validators(
         .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
         .collect()
 }
-
 fn lane_validator_snapshot(
     snapshot: &norito::json::Value,
     context: &str,
@@ -567,7 +525,6 @@ fn lane_validator_snapshot(
         .get("items")
         .and_then(norito::json::Value::as_array)
         .ok_or_else(|| eyre!("{context}: lane validator response is missing items"))?;
-
     let mut active = BTreeSet::new();
     for item in items {
         let entry = item
@@ -594,10 +551,8 @@ fn lane_validator_snapshot(
             });
         }
     }
-
     Ok((usize::try_from(total).unwrap_or(usize::MAX), active))
 }
-
 async fn wait_for_active_lane_validators(
     client: &Client,
     lane_id: LaneId,
@@ -607,7 +562,6 @@ async fn wait_for_active_lane_validators(
     let started = tokio::time::Instant::now();
     let mut last_total = 0usize;
     let mut last_active = BTreeSet::new();
-
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
         let snapshot = client
             .get_public_lane_validators(lane_id)
@@ -620,7 +574,6 @@ async fn wait_for_active_lane_validators(
         }
         sleep(STATUS_POLL_INTERVAL).await;
     }
-
     Err(eyre!(
         "{context}: timed out waiting for active validators on lane {lane_id}; expected total {} active {:?}, observed total {} active {:?}",
         expected_active.len(),
@@ -629,7 +582,6 @@ async fn wait_for_active_lane_validators(
         last_active
     ))
 }
-
 async fn wait_for_route_probe_approval(
     submitter: &Client,
     instruction: InstructionBox,
@@ -644,22 +596,18 @@ async fn wait_for_route_probe_approval(
     );
     let hash = transaction.hash();
     let entry_hash = transaction.hash_as_entrypoint();
-
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
         submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
-
     sleep(ROUTE_PROBE_SSE_HANDSHAKE_DELAY).await;
-
     let submitter_for_submit = submitter.clone();
     spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction))
         .await
         .map_err(|err| eyre!("{context}: route probe submit task join error: {err}"))?
         .map_err(|err| eyre!("{context}: failed to submit route probe transaction: {err}"))?;
-
     let outcome = timeout(STATUS_WAIT_TIMEOUT, async {
         let mut saw_queued = false;
         loop {
@@ -729,7 +677,6 @@ async fn wait_for_route_probe_approval(
     })
     .await
     .map_err(|_| eyre!("{context}: timed out waiting for route probe status"))??;
-
     events.close().await;
     match outcome {
         RouteProbeOutcome::Approved => Ok(entry_hash),
@@ -738,7 +685,6 @@ async fn wait_for_route_probe_approval(
         )),
     }
 }
-
 async fn wait_for_route_probe_rejection(
     submitter: &Client,
     instruction: InstructionBox,
@@ -752,22 +698,18 @@ async fn wait_for_route_probe_rejection(
         Metadata::default(),
     );
     let hash = transaction.hash();
-
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
         submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
-
     sleep(ROUTE_PROBE_SSE_HANDSHAKE_DELAY).await;
-
     let submitter_for_submit = submitter.clone();
     spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction))
         .await
         .map_err(|err| eyre!("{context}: route probe submit task join error: {err}"))?
         .map_err(|err| eyre!("{context}: failed to submit route probe transaction: {err}"))?;
-
     let outcome = timeout(STATUS_WAIT_TIMEOUT, async {
         let mut saw_queued = false;
         loop {
@@ -837,7 +779,6 @@ async fn wait_for_route_probe_rejection(
     })
     .await
     .map_err(|_| eyre!("{context}: timed out waiting for route probe status"))??;
-
     events.close().await;
     match outcome {
         RouteProbeOutcome::Approved => Err(eyre!(
@@ -846,7 +787,6 @@ async fn wait_for_route_probe_rejection(
         RouteProbeOutcome::Rejected(reason) => Ok(reason),
     }
 }
-
 fn sample_stark_vk_box(circuit_id: &str, n_log2: u8) -> VerifyingKeyBox {
     let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
         version: 1,
@@ -861,7 +801,6 @@ fn sample_stark_vk_box(circuit_id: &str, n_log2: u8) -> VerifyingKeyBox {
     let bytes = norito::to_bytes(&vk_payload).expect("encode stark vk payload");
     VerifyingKeyBox::new(STARK_BACKEND.to_owned(), bytes)
 }
-
 async fn register_stark_vk(
     client: &Client,
     vk_id: VerifyingKeyId,
@@ -882,7 +821,6 @@ async fn register_stark_vk(
     record.vk_len = vk_box.bytes.len() as u32;
     record.max_proof_bytes = 8 * 1024 * 1024;
     record.key = Some(vk_box);
-
     let entry_hash = wait_for_route_probe_approval(
         client,
         InstructionBox::from(
@@ -901,7 +839,6 @@ async fn register_stark_vk(
     .await?;
     Ok(())
 }
-
 fn build_stark_attachment(
     vk_ref: VerifyingKeyId,
     vk_box: &VerifyingKeyBox,
@@ -916,21 +853,18 @@ fn build_stark_attachment(
         vec![vec![[0x11_u8; 32]], vec![[0x22_u8; 32]]],
     )
     .map_err(|err| eyre!(err))?;
-
     Ok(ProofAttachment::new_ref(
         STARK_BACKEND.to_owned(),
         proof,
         vk_ref,
     ))
 }
-
 fn proof_id_for_attachment(attachment: &ProofAttachment) -> ProofId {
     ProofId {
         backend: attachment.backend.clone(),
         proof_hash: iroha_core::zk::hash_proof(&attachment.proof),
     }
 }
-
 async fn grant_manage_verifying_keys_permission(client: &Client) -> Result<()> {
     let manage_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     let entry_hash = wait_for_route_probe_approval(
@@ -949,7 +883,6 @@ async fn grant_manage_verifying_keys_permission(client: &Client) -> Result<()> {
     .await?;
     Ok(())
 }
-
 fn proof_marker(proof_bytes: &[u8]) -> Vec<u8> {
     if proof_bytes.is_empty() {
         return Vec::new();
@@ -958,14 +891,12 @@ fn proof_marker(proof_bytes: &[u8]) -> Vec<u8> {
     let start = (proof_bytes.len().saturating_sub(width)) / 2;
     proof_bytes[start..start + width].to_vec()
 }
-
 fn contains_subsequence(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty()
         && haystack
             .windows(needle.len())
             .any(|window| window == needle)
 }
-
 fn assert_payload_redacted(payload: &[u8], marker: &[u8], context: &str) -> Result<()> {
     ensure!(
         !marker.is_empty(),
@@ -976,22 +907,18 @@ fn assert_payload_redacted(payload: &[u8], marker: &[u8], context: &str) -> Resu
         "{context}: payload leaked binary proof marker {}",
         hex::encode(marker)
     );
-
     let marker_hex = hex::encode(marker);
     ensure!(
         !contains_subsequence(payload, marker_hex.as_bytes()),
         "{context}: payload leaked hex proof marker {marker_hex}"
     );
-
     let marker_base64 = base64::engine::general_purpose::STANDARD.encode(marker);
     ensure!(
         !contains_subsequence(payload, marker_base64.as_bytes()),
         "{context}: payload leaked base64 proof marker {marker_base64}"
     );
-
     Ok(())
 }
-
 fn parse_hex32(input: &str) -> Option<[u8; 32]> {
     let hex = input.strip_prefix("0x").unwrap_or(input);
     if hex.len() != 64 {
@@ -1006,7 +933,6 @@ fn parse_hex32(input: &str) -> Option<[u8; 32]> {
     }
     Some(out)
 }
-
 fn tamper_stark_attachment_inner_envelope(attachment: &ProofAttachment) -> Result<ProofAttachment> {
     let mut tampered = attachment.clone();
     let mut open_verify: OpenVerifyEnvelope = norito::decode_from_bytes(&tampered.proof.bytes)?;
@@ -1025,7 +951,6 @@ fn tamper_stark_attachment_inner_envelope(attachment: &ProofAttachment) -> Resul
     tampered.proof.bytes = norito::to_bytes(&open_verify)?;
     Ok(tampered)
 }
-
 fn hex_char(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -1034,7 +959,6 @@ fn hex_char(b: u8) -> Option<u8> {
         _ => None,
     }
 }
-
 fn parse_proof_id_from_json(value: &norito::json::Value) -> Option<ProofId> {
     match value {
         norito::json::Value::String(s) => s.parse::<ProofId>().ok(),
@@ -1063,7 +987,6 @@ fn parse_proof_id_from_json(value: &norito::json::Value) -> Option<ProofId> {
         _ => None,
     }
 }
-
 fn parse_proof_status_from_json(value: &norito::json::Value) -> Option<ProofStatus> {
     match value.as_str()? {
         "Submitted" => Some(ProofStatus::Submitted),
@@ -1072,18 +995,15 @@ fn parse_proof_status_from_json(value: &norito::json::Value) -> Option<ProofStat
         _ => None,
     }
 }
-
 fn decode_proof_record_payload(payload: &[u8]) -> Result<ProofRecord> {
     if payload.len() >= norito::core::Header::SIZE && payload.starts_with(&norito::core::MAGIC) {
         let rec: ProofRecord = norito::decode_from_bytes(payload)?;
         return Ok(rec);
     }
-
     let value: norito::json::Value = norito::json::from_slice(payload)?;
     if let Ok(record) = norito::json::from_value::<ProofRecord>(value.clone()) {
         return Ok(record);
     }
-
     let id = value
         .get("id")
         .and_then(parse_proof_id_from_json)
@@ -1092,7 +1012,6 @@ fn decode_proof_record_payload(payload: &[u8]) -> Result<ProofRecord> {
         .get("status")
         .and_then(parse_proof_status_from_json)
         .ok_or_else(|| eyre!("proof response missing status"))?;
-
     Ok(ProofRecord {
         id,
         vk_ref: None,
@@ -1102,7 +1021,6 @@ fn decode_proof_record_payload(payload: &[u8]) -> Result<ProofRecord> {
         bridge: None,
     })
 }
-
 async fn fetch_proof_record_payload(
     observer: &Client,
     proof_id: &ProofId,
@@ -1116,7 +1034,6 @@ async fn fetch_proof_record_payload(
         let proof_id_string = proof_id.to_string();
         segments.extend(["v1", "proofs", proof_id_string.as_str()]);
     }
-
     let response = HttpClient::builder()
         .timeout(PROOF_FETCH_HTTP_TIMEOUT)
         .build()?
@@ -1127,13 +1044,11 @@ async fn fetch_proof_record_payload(
     if response.status() == StatusCode::NOT_FOUND {
         return Ok(None);
     }
-
     let response = response.error_for_status()?;
     let payload = response.bytes().await?.to_vec();
     let record = decode_proof_record_payload(&payload)?;
     Ok(Some((record, payload)))
 }
-
 fn query_proof_record_via_signed_query(
     observer: &Client,
     proof_id: &ProofId,
@@ -1150,7 +1065,6 @@ fn query_proof_record_via_signed_query(
         Err(err) => Err(eyre!(err)),
     }
 }
-
 async fn wait_for_proof_record_status(
     observer: &Client,
     proof_id: &ProofId,
@@ -1160,7 +1074,6 @@ async fn wait_for_proof_record_status(
     let deadline = tokio::time::Instant::now() + STATUS_WAIT_TIMEOUT;
     let mut last_status = None;
     let mut last_error = None;
-
     loop {
         match fetch_proof_record_payload(observer, proof_id).await {
             Ok(Some((record, payload))) => {
@@ -1176,7 +1089,6 @@ async fn wait_for_proof_record_status(
                 last_error = Some(err.to_string());
             }
         }
-
         if tokio::time::Instant::now() >= deadline {
             let status_suffix = last_status
                 .map(|status| format!("; last observed status: {status:?}"))
@@ -1200,7 +1112,6 @@ async fn wait_for_proof_record_status(
         sleep(STATUS_POLL_INTERVAL).await;
     }
 }
-
 async fn wait_for_absent_proof_record(
     observer: &Client,
     proof_id: &ProofId,
@@ -1209,7 +1120,6 @@ async fn wait_for_absent_proof_record(
     let deadline = tokio::time::Instant::now() + STATUS_WAIT_TIMEOUT;
     let mut saw_not_found = false;
     let mut last_error = None;
-
     loop {
         match fetch_proof_record_payload(observer, proof_id).await {
             Ok(None) => {
@@ -1225,7 +1135,6 @@ async fn wait_for_absent_proof_record(
                 last_error = Some(err.to_string());
             }
         }
-
         if tokio::time::Instant::now() >= deadline {
             if saw_not_found {
                 return Ok(());
@@ -1240,7 +1149,6 @@ async fn wait_for_absent_proof_record(
         sleep(STATUS_POLL_INTERVAL).await;
     }
 }
-
 #[tokio::test]
 #[ignore = "native STARK/FRI V1 proving fails closed until AIR openings are implemented"]
 async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Result<()> {
@@ -1248,7 +1156,6 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
         "zk-stark",
         stringify!(stark_cross_dataspace_verifyproof_validity_without_payload_leak),
     )?;
-
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
         stringify!(stark_cross_dataspace_verifyproof_validity_without_payload_leak),
@@ -1257,9 +1164,7 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
     else {
         return Ok(());
     };
-
     network.ensure_blocks(1).await?;
-
     let alice = network.client();
     let bob = network
         .peer()
@@ -1269,7 +1174,6 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
         &nexus_observer_id,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
     );
-
     let expected_validators = expected_lane_validators(&network);
     wait_for_active_lane_validators(
         &alice,
@@ -1292,7 +1196,6 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
         "ds2 lane validator activation",
     )
     .await?;
-
     wait_for_route_probe_approval(
         &alice,
         InstructionBox::from(Log::new(Level::INFO, "route probe ds1".to_owned())),
@@ -1309,9 +1212,7 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
         "route probe ds2",
     )
     .await?;
-
     grant_manage_verifying_keys_permission(&alice).await?;
-
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
@@ -1325,11 +1226,9 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
         SCHEMA_VALID,
     )
     .await?;
-
     let attachment =
         build_stark_attachment(valid_vk_id, &valid_vk_box, CIRCUIT_ID_VALID, SCHEMA_VALID)?;
     let marker = proof_marker(&attachment.proof.bytes);
-
     let verifyproof_entry_hash = wait_for_route_probe_approval(
         &alice,
         InstructionBox::from(VerifyProof::new(attachment.clone())),
@@ -1345,7 +1244,6 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
     )
     .await?;
     network.ensure_blocks(2).await?;
-
     let proof_id = proof_id_for_attachment(&attachment);
     let ds1_submitter_payload = wait_for_proof_record_status(
         &alice,
@@ -1355,7 +1253,6 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
     )
     .await?;
     assert_payload_redacted(&ds1_submitter_payload, &marker, "ds1 submitter payload")?;
-
     let ds2_observer_payload = wait_for_proof_record_status(
         &bob,
         &proof_id,
@@ -1364,7 +1261,6 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
     )
     .await?;
     assert_payload_redacted(&ds2_observer_payload, &marker, "ds2 observer payload")?;
-
     let nexus_observer_payload = wait_for_proof_record_status(
         &nexus_observer,
         &proof_id,
@@ -1373,10 +1269,8 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
     )
     .await?;
     assert_payload_redacted(&nexus_observer_payload, &marker, "nexus observer payload")?;
-
     Ok(())
 }
-
 #[tokio::test]
 #[ignore = "native STARK/FRI V1 proving fails closed until AIR openings are implemented"]
 async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak()
@@ -1385,7 +1279,6 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
         "zk-stark",
         stringify!(stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak),
     )?;
-
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
         stringify!(stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak),
@@ -1394,9 +1287,7 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
     else {
         return Ok(());
     };
-
     network.ensure_blocks(1).await?;
-
     let alice = network.client();
     let bob = network
         .peer()
@@ -1406,7 +1297,6 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
         &nexus_observer_id,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
     );
-
     let expected_validators = expected_lane_validators(&network);
     wait_for_active_lane_validators(
         &alice,
@@ -1429,7 +1319,6 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
         "ds2 lane validator activation",
     )
     .await?;
-
     wait_for_route_probe_approval(
         &alice,
         InstructionBox::from(Log::new(Level::INFO, "route probe ds1".to_owned())),
@@ -1446,9 +1335,7 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
         "route probe ds2",
     )
     .await?;
-
     grant_manage_verifying_keys_permission(&alice).await?;
-
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
@@ -1462,11 +1349,9 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
         SCHEMA_VALID,
     )
     .await?;
-
     let attachment =
         build_stark_attachment(valid_vk_id, &valid_vk_box, CIRCUIT_ID_VALID, SCHEMA_VALID)?;
     let marker = proof_marker(&attachment.proof.bytes);
-
     let verifyproof_entry_hash = wait_for_route_probe_approval(
         &bob,
         InstructionBox::from(VerifyProof::new(attachment.clone())),
@@ -1482,7 +1367,6 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
     )
     .await?;
     network.ensure_blocks(2).await?;
-
     let proof_id = proof_id_for_attachment(&attachment);
     let ds2_submitter_payload = wait_for_proof_record_status(
         &bob,
@@ -1492,7 +1376,6 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
     )
     .await?;
     assert_payload_redacted(&ds2_submitter_payload, &marker, "ds2 submitter payload")?;
-
     let ds1_observer_payload = wait_for_proof_record_status(
         &alice,
         &proof_id,
@@ -1501,7 +1384,6 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
     )
     .await?;
     assert_payload_redacted(&ds1_observer_payload, &marker, "ds1 observer payload")?;
-
     let nexus_observer_payload = wait_for_proof_record_status(
         &nexus_observer,
         &proof_id,
@@ -1510,10 +1392,8 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
     )
     .await?;
     assert_payload_redacted(&nexus_observer_payload, &marker, "nexus observer payload")?;
-
     Ok(())
 }
-
 #[tokio::test]
 #[ignore = "native STARK/FRI V1 proving fails closed until AIR openings are implemented"]
 async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> Result<()> {
@@ -1521,7 +1401,6 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         "zk-stark",
         stringify!(stark_cross_dataspace_verifyproof_rejection_without_payload_leak),
     )?;
-
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
         stringify!(stark_cross_dataspace_verifyproof_rejection_without_payload_leak),
@@ -1530,9 +1409,7 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
     else {
         return Ok(());
     };
-
     network.ensure_blocks(1).await?;
-
     let alice = network.client();
     let bob = network
         .peer()
@@ -1542,7 +1419,6 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         &nexus_observer_id,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
     );
-
     let expected_validators = expected_lane_validators(&network);
     wait_for_active_lane_validators(
         &alice,
@@ -1565,7 +1441,6 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         "ds2 lane validator activation",
     )
     .await?;
-
     wait_for_route_probe_approval(
         &alice,
         InstructionBox::from(Log::new(Level::INFO, "route probe ds1".to_owned())),
@@ -1582,9 +1457,7 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         "route probe ds2",
     )
     .await?;
-
     grant_manage_verifying_keys_permission(&alice).await?;
-
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
@@ -1598,7 +1471,6 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         SCHEMA_VALID,
     )
     .await?;
-
     let mismatch_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_bad");
     let mismatch_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_MISMATCH,
@@ -1612,16 +1484,13 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         SCHEMA_MISMATCH,
     )
     .await?;
-
     let valid_attachment =
         build_stark_attachment(valid_vk_id, &valid_vk_box, CIRCUIT_ID_VALID, SCHEMA_VALID)?;
-
     let mismatched_attachment = ProofAttachment::new_ref(
         STARK_BACKEND.to_owned(),
         valid_attachment.proof.clone(),
         mismatch_vk_id,
     );
-
     let _rejection_reason = wait_for_route_probe_rejection(
         &alice,
         InstructionBox::from(VerifyProof::new(mismatched_attachment.clone())),
@@ -1630,7 +1499,6 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         "verifyproof submit ds1 mismatched vk",
     )
     .await?;
-
     let proof_id = proof_id_for_attachment(&mismatched_attachment);
     wait_for_absent_proof_record(
         &bob,
@@ -1644,10 +1512,8 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         "observe absent proof record from nexus observer",
     )
     .await?;
-
     let mut malformed_attachment = valid_attachment.clone();
     malformed_attachment.proof.bytes.clear();
-
     let _malformed_rejection_reason = wait_for_route_probe_rejection(
         &alice,
         InstructionBox::from(VerifyProof::new(malformed_attachment.clone())),
@@ -1656,7 +1522,6 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         "verifyproof submit ds1 malformed proof",
     )
     .await?;
-
     let malformed_proof_id = proof_id_for_attachment(&malformed_attachment);
     wait_for_absent_proof_record(
         &bob,
@@ -1670,10 +1535,8 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         "observe absent malformed proof record from nexus observer",
     )
     .await?;
-
     Ok(())
 }
-
 #[tokio::test]
 #[ignore = "native STARK/FRI V1 proving fails closed until AIR openings are implemented"]
 async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak()
@@ -1684,7 +1547,6 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
             stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak
         ),
     )?;
-
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
         stringify!(
@@ -1695,9 +1557,7 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
     else {
         return Ok(());
     };
-
     network.ensure_blocks(1).await?;
-
     let alice = network.client();
     let bob = network
         .peer()
@@ -1707,7 +1567,6 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
         &nexus_observer_id,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
     );
-
     let expected_validators = expected_lane_validators(&network);
     wait_for_active_lane_validators(
         &alice,
@@ -1730,7 +1589,6 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
         "ds2 lane validator activation",
     )
     .await?;
-
     wait_for_route_probe_approval(
         &alice,
         InstructionBox::from(Log::new(Level::INFO, "route probe ds1".to_owned())),
@@ -1747,9 +1605,7 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
         "route probe ds2",
     )
     .await?;
-
     grant_manage_verifying_keys_permission(&alice).await?;
-
     let valid_vk_id = VerifyingKeyId::new(STARK_BACKEND, "cross_ds_stark_verifyproof_ok");
     let valid_vk_box = sample_stark_vk_box(
         CIRCUIT_ID_VALID,
@@ -1763,12 +1619,10 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
         SCHEMA_VALID,
     )
     .await?;
-
     let valid_attachment =
         build_stark_attachment(valid_vk_id, &valid_vk_box, CIRCUIT_ID_VALID, SCHEMA_VALID)?;
     let tampered_attachment = tamper_stark_attachment_inner_envelope(&valid_attachment)?;
     let marker = proof_marker(&tampered_attachment.proof.bytes);
-
     let verifyproof_entry_hash = wait_for_route_probe_approval(
         &alice,
         InstructionBox::from(VerifyProof::new(tampered_attachment.clone())),
@@ -1784,7 +1638,6 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
     )
     .await?;
     network.ensure_blocks(2).await?;
-
     let proof_id = proof_id_for_attachment(&tampered_attachment);
     let ds1_submitter_payload = wait_for_proof_record_status(
         &alice,
@@ -1794,7 +1647,6 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
     )
     .await?;
     assert_payload_redacted(&ds1_submitter_payload, &marker, "ds1 submitter payload")?;
-
     let ds2_observer_payload = wait_for_proof_record_status(
         &bob,
         &proof_id,
@@ -1803,7 +1655,6 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
     )
     .await?;
     assert_payload_redacted(&ds2_observer_payload, &marker, "ds2 observer payload")?;
-
     let nexus_observer_payload = wait_for_proof_record_status(
         &nexus_observer,
         &proof_id,
@@ -1812,10 +1663,8 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
     )
     .await?;
     assert_payload_redacted(&nexus_observer_payload, &marker, "nexus observer payload")?;
-
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1826,14 +1675,12 @@ mod tests {
         nexus::DataSpaceId,
         proof::{ProofRecord, ProofStatus},
     };
-
     fn sample_proof_id() -> ProofId {
         ProofId {
             backend: STARK_BACKEND.into(),
             proof_hash: [0xAB; 32],
         }
     }
-
     fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
         assert_eq!(raw.len(), 64);
         let mut hash = [0_u8; 32];
@@ -1843,12 +1690,10 @@ mod tests {
         }
         hash
     }
-
     #[test]
     fn dataspace_fixture_manifest_hashes_derive_config_ids() {
         let ds1_hash = decode_manifest_hash_fixture(DS1_MANIFEST_HASH);
         let ds2_hash = decode_manifest_hash_fixture(DS2_MANIFEST_HASH);
-
         assert_eq!(NEXUS_ALIAS, "universal");
         assert_eq!(NEXUS_ID_U64, DataSpaceId::UNIVERSAL.as_u64());
         assert_eq!(DataSpaceId::from_hash(&ds1_hash).as_u64(), DS1_ID_U64);
@@ -1856,7 +1701,6 @@ mod tests {
         assert_ne!(DataSpaceId::from_hash(&ds1_hash), DataSpaceId::UNIVERSAL);
         assert_ne!(DataSpaceId::from_hash(&ds2_hash), DataSpaceId::UNIVERSAL);
     }
-
     #[test]
     fn decode_proof_record_payload_accepts_minimal_json_object_shape() {
         let payload = format!(
@@ -1870,13 +1714,10 @@ mod tests {
             backend = STARK_BACKEND,
             proof_hash = hex::encode([0xAB; 32]),
         );
-
         let record = decode_proof_record_payload(payload.as_bytes()).expect("decode JSON payload");
-
         assert_eq!(record.id, sample_proof_id());
         assert_eq!(record.status, ProofStatus::Rejected);
     }
-
     #[test]
     fn decode_proof_record_payload_accepts_norito_record_payload() {
         let record = ProofRecord {
@@ -1888,18 +1729,14 @@ mod tests {
             bridge: None,
         };
         let payload = norito::to_bytes(&record).expect("encode norito proof record");
-
         let decoded = decode_proof_record_payload(&payload).expect("decode norito payload");
-
         assert_eq!(decoded.id, record.id);
         assert_eq!(decoded.status, ProofStatus::Verified);
     }
-
     #[test]
     fn parse_proof_status_from_json_rejects_unknown_status_strings() {
         let value =
             norito::json::from_str::<norito::json::Value>(r#""PendingApproval""#).expect("json");
-
         assert!(parse_proof_status_from_json(&value).is_none());
     }
 }

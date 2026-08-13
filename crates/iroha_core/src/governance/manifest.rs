@@ -3,7 +3,6 @@
 //! These helpers validate that lanes which advertise a governance module in the
 //! Nexus catalog have a manifest available on disk and threads the parsed rules
 //! into runtime enforcement (queue admission, governance telemetry, etc.).
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
@@ -13,7 +12,6 @@ use std::{
     str::{self, FromStr},
     sync::Arc,
 };
-
 use hex::decode;
 use iroha_config::parameters::actual::{
     GovernanceCatalog, GovernanceModule as ConfigGovernanceModule, LaneRegistry,
@@ -35,7 +33,6 @@ use norito::{
     codec::Encode,
     json::{self, JsonDeserialize, JsonSerialize, Value as JsonValue},
 };
-
 /// First-release byte ceiling for one active lane manifest source.
 const LANE_MANIFEST_MAX_BYTES_V1: usize = 256 * 1024;
 /// First-release byte ceiling for the optional governance catalog overlay.
@@ -82,7 +79,6 @@ const GOVERNANCE_OVERLAY_MAX_MODULES_V1: usize = 256;
 const GOVERNANCE_OVERLAY_MAX_PARAMS_PER_MODULE_V1: usize = 128;
 /// Maximum parameters across the complete governance overlay.
 const GOVERNANCE_OVERLAY_MAX_PARAMS_V1: usize = 4 * 1024;
-
 const MANIFEST_JSON_LIMITS_V1: ManifestJsonLimits = ManifestJsonLimits {
     max_string_bytes: MANIFEST_SOURCE_MAX_STRING_BYTES_V1,
     max_strings: MANIFEST_SOURCE_MAX_STRINGS_V1,
@@ -90,7 +86,6 @@ const MANIFEST_JSON_LIMITS_V1: ManifestJsonLimits = ManifestJsonLimits {
     max_rule_units: MANIFEST_SOURCE_MAX_RULE_UNITS_V1,
     max_depth: MANIFEST_SOURCE_MAX_JSON_DEPTH_V1,
 };
-
 #[derive(Clone, Copy, Debug)]
 struct ManifestJsonLimits {
     max_string_bytes: usize,
@@ -99,14 +94,12 @@ struct ManifestJsonLimits {
     max_rule_units: usize,
     max_depth: usize,
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ManifestJsonFootprint {
     strings: usize,
     string_bytes: usize,
     rule_units: usize,
 }
-
 #[derive(Debug, Default)]
 struct ManifestSourceLoadBudget {
     bytes: usize,
@@ -114,12 +107,10 @@ struct ManifestSourceLoadBudget {
     string_bytes: usize,
     rule_units: usize,
 }
-
 impl ManifestSourceLoadBudget {
     fn remaining_bytes(&self) -> usize {
         MANIFEST_SOURCE_AGGREGATE_MAX_BYTES_V1.saturating_sub(self.bytes)
     }
-
     fn charge_bytes(&mut self, bytes: usize) -> Result<(), String> {
         let attempted = self
             .bytes
@@ -133,7 +124,6 @@ impl ManifestSourceLoadBudget {
         self.bytes = attempted;
         Ok(())
     }
-
     fn charge_json(&mut self, footprint: ManifestJsonFootprint) -> Result<(), String> {
         let strings = self
             .strings
@@ -168,7 +158,6 @@ impl ManifestSourceLoadBudget {
         Ok(())
     }
 }
-
 /// Minimal manifest descriptor parsed from disk.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
 struct ManifestFile {
@@ -193,7 +182,6 @@ struct ManifestFile {
     #[norito(default)]
     pub privacy_commitments: Option<Vec<ManifestPrivacyCommitment>>,
 }
-
 /// Manifest-level validator binding descriptor.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
 struct ManifestValidatorBindingFile {
@@ -205,7 +193,6 @@ struct ManifestValidatorBindingFile {
     #[norito(default)]
     pub torii_url: Option<String>,
 }
-
 /// Manifest-level privacy commitment descriptor.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
 #[norito(deny_unknown_fields)]
@@ -218,7 +205,6 @@ struct ManifestPrivacyCommitment {
     #[norito(default)]
     pub merkle: Option<ManifestMerkleCommitment>,
 }
-
 /// Merkle commitment parameters advertised in manifests.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
 #[norito(deny_unknown_fields)]
@@ -228,7 +214,6 @@ struct ManifestMerkleCommitment {
     /// Maximum allowed audit-path depth.
     pub max_depth: Option<u8>,
 }
-
 /// Governance catalog overlay loaded from distribution cache.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
 struct GovernanceCatalogFile {
@@ -238,7 +223,6 @@ struct GovernanceCatalogFile {
     #[norito(default)]
     pub modules: BTreeMap<String, GovernanceModuleFile>,
 }
-
 /// Governance module descriptor loaded from distribution cache.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
 struct GovernanceModuleFile {
@@ -248,7 +232,6 @@ struct GovernanceModuleFile {
     #[norito(default)]
     pub params: BTreeMap<String, String>,
 }
-
 impl From<GovernanceModuleFile> for ConfigGovernanceModule {
     fn from(value: GovernanceModuleFile) -> Self {
         Self {
@@ -257,7 +240,6 @@ impl From<GovernanceModuleFile> for ConfigGovernanceModule {
         }
     }
 }
-
 /// Status of a lane manifest after loading from disk.
 #[derive(Debug, Clone)]
 pub struct LaneManifestStatus {
@@ -280,7 +262,6 @@ pub struct LaneManifestStatus {
     /// Lane privacy commitments derived from the manifest.
     pub privacy_commitments: Vec<LanePrivacyCommitment>,
 }
-
 impl LaneManifestStatus {
     fn missing(
         lane: LaneId,
@@ -302,7 +283,6 @@ impl LaneManifestStatus {
             privacy_commitments: Vec::new(),
         }
     }
-
     fn builder(
         lane: LaneId,
         alias: String,
@@ -312,20 +292,17 @@ impl LaneManifestStatus {
     ) -> LaneManifestStatusBuilder {
         LaneManifestStatusBuilder::new(lane, alias, dataspace, visibility, storage)
     }
-
     /// Retrieve parsed governance rules if available.
     #[must_use]
     pub fn rules(&self) -> Option<&GovernanceRules> {
         self.governance_rules.as_ref()
     }
-
     /// Privacy commitments advertised by the lane manifest.
     #[must_use]
     pub fn privacy_commitments(&self) -> &[LanePrivacyCommitment] {
         &self.privacy_commitments
     }
 }
-
 #[derive(Debug)]
 struct LaneManifestStatusBuilder {
     lane: LaneId,
@@ -338,7 +315,6 @@ struct LaneManifestStatusBuilder {
     governance_rules: Option<GovernanceRules>,
     privacy_commitments: Vec<LanePrivacyCommitment>,
 }
-
 impl LaneManifestStatusBuilder {
     fn new(
         lane: LaneId,
@@ -359,27 +335,22 @@ impl LaneManifestStatusBuilder {
             privacy_commitments: Vec::new(),
         }
     }
-
     fn governance(mut self, governance: Option<String>) -> Self {
         self.governance = governance;
         self
     }
-
     fn manifest_path(mut self, path: PathBuf) -> Self {
         self.manifest_path = Some(path);
         self
     }
-
     fn governance_rules(mut self, rules: GovernanceRules) -> Self {
         self.governance_rules = Some(rules);
         self
     }
-
     fn privacy_commitments(mut self, commitments: Vec<LanePrivacyCommitment>) -> Self {
         self.privacy_commitments = commitments;
         self
     }
-
     fn build_ready(self) -> Result<LaneManifestStatus, LaneManifestBuilderError> {
         let Some(path) = self.manifest_path else {
             return Err(LaneManifestBuilderError::MissingManifestPath);
@@ -387,7 +358,6 @@ impl LaneManifestStatusBuilder {
         let Some(rules) = self.governance_rules else {
             return Err(LaneManifestBuilderError::MissingGovernanceRules);
         };
-
         Ok(LaneManifestStatus {
             lane: self.lane,
             alias: self.alias,
@@ -401,13 +371,11 @@ impl LaneManifestStatusBuilder {
         })
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LaneManifestBuilderError {
     MissingManifestPath,
     MissingGovernanceRules,
 }
-
 impl fmt::Display for LaneManifestBuilderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -416,9 +384,7 @@ impl fmt::Display for LaneManifestBuilderError {
         }
     }
 }
-
 impl std::error::Error for LaneManifestBuilderError {}
-
 /// Governance rule set derived from a manifest file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GovernanceRules {
@@ -435,7 +401,6 @@ pub struct GovernanceRules {
     /// Typed governance hooks with optional raw values for unknown entries.
     pub hooks: GovernanceHooks,
 }
-
 /// Explicit validator binding declared in an admin-managed lane manifest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ManifestValidatorBinding {
@@ -446,14 +411,12 @@ pub struct ManifestValidatorBinding {
     /// Optional Torii base URL used when authoritative routing must bridge over HTTP.
     pub torii_url: Option<String>,
 }
-
 /// Artifacts derived from a manifest file.
 #[derive(Debug, Clone)]
 struct ManifestArtifacts {
     rules: GovernanceRules,
     privacy_commitments: Vec<LanePrivacyCommitment>,
 }
-
 /// Parsed governance hook policies.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GovernanceHooks {
@@ -462,7 +425,6 @@ pub struct GovernanceHooks {
     /// Unrecognised hooks preserved for future modules.
     pub unknown: BTreeMap<String, JsonValue>,
 }
-
 /// Runtime upgrade governance hook.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeUpgradeHook {
@@ -476,7 +438,6 @@ pub struct RuntimeUpgradeHook {
     /// Optional allowlist of metadata values (`String`).
     pub allowed_ids: Option<BTreeSet<String>>,
 }
-
 impl GovernanceHooks {
     fn from_manifest_hooks(hooks: Option<&BTreeMap<String, JsonValue>>) -> Result<Self, String> {
         let mut parsed = Self::default();
@@ -502,13 +463,11 @@ impl GovernanceHooks {
         Ok(parsed)
     }
 }
-
 impl RuntimeUpgradeHook {
     fn from_json(value: &JsonValue) -> Result<Self, String> {
         let JsonValue::Object(map) = value else {
             return Err("runtime_upgrade hook must be a JSON object".into());
         };
-
         let mut allow = true;
         if let Some(entry) = map.get("allow") {
             match entry {
@@ -516,7 +475,6 @@ impl RuntimeUpgradeHook {
                 _ => return Err("runtime_upgrade.allow must be a boolean".into()),
             }
         }
-
         let mut require_metadata = false;
         if let Some(entry) = map.get("require_metadata") {
             match entry {
@@ -526,7 +484,6 @@ impl RuntimeUpgradeHook {
                 }
             }
         }
-
         let mut metadata_key: Option<Name> = None;
         if let Some(entry) = map.get("metadata_key") {
             match entry {
@@ -542,7 +499,6 @@ impl RuntimeUpgradeHook {
                 _ => return Err("runtime_upgrade.metadata_key must be a string".into()),
             }
         }
-
         let mut allowed_ids: Option<BTreeSet<String>> = None;
         if let Some(entry) = map.get("allowed_ids") {
             match entry {
@@ -579,13 +535,11 @@ impl RuntimeUpgradeHook {
                 _ => return Err("runtime_upgrade.allowed_ids must be an array".into()),
             }
         }
-
         if (require_metadata || allowed_ids.is_some()) && metadata_key.is_none() {
             metadata_key = Some(Name::from_str("gov_upgrade_id").map_err(|err| {
                 format!("failed to derive default runtime_upgrade metadata key: {err}")
             })?);
         }
-
         Ok(Self {
             allow,
             require_metadata,
@@ -594,7 +548,6 @@ impl RuntimeUpgradeHook {
         })
     }
 }
-
 impl GovernanceRules {
     fn from_manifest(alias: &str, manifest: &ManifestFile) -> Result<Self, String> {
         let version = manifest.version.unwrap_or(1);
@@ -603,7 +556,6 @@ impl GovernanceRules {
                 "manifest version {version} is not supported (expected 1)"
             ));
         }
-
         let mut validators = Vec::new();
         let mut validator_bindings = Vec::new();
         if let Some(entries) = manifest.validators.as_ref() {
@@ -626,7 +578,6 @@ impl GovernanceRules {
                         "duplicate validator id `{validator_trimmed}` in lane `{alias}`"
                     ));
                 }
-
                 let peer_raw = entry
                     .peer_id
                     .as_deref()
@@ -642,7 +593,6 @@ impl GovernanceRules {
                         "duplicate validator peer_id `{peer_trimmed}` in lane `{alias}`"
                     ));
                 }
-
                 let torii_url = entry
                     .torii_url
                     .as_deref()
@@ -662,7 +612,6 @@ impl GovernanceRules {
                     }
                     None => None,
                 };
-
                 validators.push(account.clone());
                 validator_bindings.push(ManifestValidatorBinding {
                     validator: account,
@@ -671,7 +620,6 @@ impl GovernanceRules {
                 });
             }
         }
-
         let quorum = manifest.quorum;
         if let Some(q) = quorum {
             if q == 0 {
@@ -688,7 +636,6 @@ impl GovernanceRules {
                 ));
             }
         }
-
         let mut protected_namespaces = BTreeSet::new();
         if let Some(namespaces) = manifest.protected_namespaces.as_ref() {
             for ns in namespaces {
@@ -705,9 +652,7 @@ impl GovernanceRules {
                 }
             }
         }
-
         let hooks = GovernanceHooks::from_manifest_hooks(manifest.hooks.as_ref())?;
-
         Ok(Self {
             version,
             validators,
@@ -718,7 +663,6 @@ impl GovernanceRules {
         })
     }
 }
-
 /// Registry of manifests keyed by lane identifier.
 #[derive(Debug)]
 pub struct LaneManifestRegistry {
@@ -733,7 +677,6 @@ pub struct LaneManifestRegistry {
     /// Digest of the effective active-catalog manifest source set.
     consensus_policy_digest: [u8; 32],
 }
-
 impl Default for LaneManifestRegistry {
     fn default() -> Self {
         let source_snapshot = Arc::new(LaneManifestSourceSnapshot::empty());
@@ -745,7 +688,6 @@ impl Default for LaneManifestRegistry {
         }
     }
 }
-
 /// Deferred source locations or immutable parsed inputs from one bounded scan.
 ///
 /// The first bind materializes only active aliases. Catalog lifecycle rebinding
@@ -760,40 +702,34 @@ pub struct LaneManifestSourceSnapshot {
     /// Deferred source configuration, consumed exactly once when the active lane catalog is known.
     pending_registry: Option<LaneRegistry>,
 }
-
 #[derive(Debug)]
 struct FrozenLaneManifestSource {
     path: PathBuf,
     parsed: Result<ManifestFile, String>,
     content_digest: LaneManifestSourceContentDigestV1,
 }
-
 #[derive(Debug)]
 struct FrozenGovernanceOverlaySource {
     path: PathBuf,
     parsed: Result<GovernanceCatalogFile, String>,
     content_digest: LaneManifestSourceContentDigestV1,
 }
-
 #[derive(Encode)]
 struct LaneManifestSourceSetDigestV1 {
     version: u8,
     manifests: Vec<LaneManifestSourceDigestV1>,
     governance_overlay: Option<LaneManifestSourceContentDigestV1>,
 }
-
 #[derive(Encode)]
 struct LaneManifestSourceDigestV1 {
     alias: String,
     content: LaneManifestSourceContentDigestV1,
 }
-
 #[derive(Debug, Clone, Encode)]
 struct LaneManifestSourceContentDigestV1 {
     valid: bool,
     digest: [u8; 32],
 }
-
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
@@ -801,7 +737,6 @@ struct LaneManifestRegistryDigestV1 {
     version: u8,
     lanes: Vec<LaneManifestStatusDigestV1>,
 }
-
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
@@ -816,7 +751,6 @@ struct LaneManifestStatusDigestV1 {
     rules: Option<GovernanceRulesDigestV1>,
     privacy_commitments: Vec<LanePrivacyCommitmentDigestV1>,
 }
-
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
@@ -828,7 +762,6 @@ struct GovernanceRulesDigestV1 {
     protected_namespaces: Vec<Name>,
     runtime_upgrade: Option<RuntimeUpgradeHookDigestV1>,
 }
-
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
@@ -837,7 +770,6 @@ struct ManifestValidatorBindingDigestV1 {
     peer_id: PeerId,
     torii_url: Option<String>,
 }
-
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
@@ -847,7 +779,6 @@ struct RuntimeUpgradeHookDigestV1 {
     metadata_key: Option<Name>,
     allowed_ids: Option<Vec<String>>,
 }
-
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
@@ -858,7 +789,6 @@ enum LanePrivacyCommitmentDigestV1 {
         max_depth: u8,
     },
 }
-
 impl LaneManifestSourceSnapshot {
     fn empty() -> Self {
         let mut snapshot = Self {
@@ -870,7 +800,6 @@ impl LaneManifestSourceSnapshot {
         snapshot.consensus_policy_digest = snapshot.compute_consensus_policy_digest();
         snapshot
     }
-
     /// Capture the configured source locations for one active-catalog binding.
     ///
     /// Filesystem materialization is deferred until [`Self::bind`] supplies the
@@ -888,7 +817,6 @@ impl LaneManifestSourceSnapshot {
         snapshot.consensus_policy_digest = snapshot.compute_consensus_policy_digest();
         snapshot
     }
-
     fn load_for_catalog(registry_cfg: &LaneRegistry, lane_catalog: &LaneCatalog) -> Self {
         let active_aliases = lane_catalog
             .lanes()
@@ -903,7 +831,6 @@ impl LaneManifestSourceSnapshot {
             &active_aliases,
         );
         let mut budget = ManifestSourceLoadBudget::default();
-
         // The overlay is applied before lane sources and therefore consumes the
         // aggregate startup budget first, independent of directory iteration order.
         let governance_overlay = cache_dir
@@ -925,7 +852,6 @@ impl LaneManifestSourceSnapshot {
         snapshot.consensus_policy_digest = snapshot.compute_consensus_policy_digest();
         snapshot
     }
-
     /// Bind this immutable source set to an active catalog.
     #[must_use]
     pub fn bind(
@@ -939,13 +865,11 @@ impl LaneManifestSourceSnapshot {
             governance_catalog,
         )
     }
-
     /// Canonical digest of this materialized active-catalog source snapshot.
     #[must_use]
     pub const fn consensus_policy_digest(&self) -> [u8; 32] {
         self.consensus_policy_digest
     }
-
     fn compute_consensus_policy_digest(&self) -> [u8; 32] {
         const DOMAIN: &[u8] = b"iroha:nexus:lane-manifest-source-set:v1\0";
         let manifests = self
@@ -967,7 +891,6 @@ impl LaneManifestSourceSnapshot {
         .encode();
         Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into()
     }
-
     fn apply_governance_overlay(&self, catalog: &mut GovernanceCatalog) {
         let Some(source) = self.governance_overlay.as_ref() else {
             return;
@@ -983,7 +906,6 @@ impl LaneManifestSourceSnapshot {
                 return;
             }
         };
-
         let mut applied = false;
         if let Some(default_module) = parsed.default_module.as_deref() {
             let trimmed = default_module.trim();
@@ -1023,13 +945,11 @@ impl LaneManifestSourceSnapshot {
         }
     }
 }
-
 impl LaneManifestRegistry {
     /// Construct an empty registry (no lanes require manifests).
     pub fn empty() -> Self {
         Self::default()
     }
-
     /// Return the canonical digest of the accepted active-catalog manifest source set.
     ///
     /// It binds each active lane source and the governance overlay while excluding
@@ -1039,7 +959,6 @@ impl LaneManifestRegistry {
     pub fn consensus_policy_digest(&self) -> [u8; 32] {
         self.consensus_policy_digest
     }
-
     #[cfg(any(test, feature = "telemetry"))]
     fn status_policy_digest(statuses: &BTreeMap<LaneId, LaneManifestStatus>) -> [u8; 32] {
         const DOMAIN: &[u8] = b"iroha:nexus:lane-manifest-policy-set:v1\0";
@@ -1114,7 +1033,6 @@ impl LaneManifestRegistry {
         let encoded = LaneManifestRegistryDigestV1 { version: 1, lanes }.encode();
         Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into()
     }
-
     fn freeze_manifest_source(
         path: PathBuf,
         budget: &mut ManifestSourceLoadBudget,
@@ -1183,7 +1101,6 @@ impl LaneManifestRegistry {
             },
         }
     }
-
     fn freeze_governance_overlay_source(
         path: PathBuf,
         budget: &mut ManifestSourceLoadBudget,
@@ -1251,7 +1168,6 @@ impl LaneManifestRegistry {
             },
         }
     }
-
     fn invalid_manifest_source(
         path: PathBuf,
         reason: String,
@@ -1259,7 +1175,6 @@ impl LaneManifestRegistry {
     ) -> FrozenLaneManifestSource {
         Self::invalid_manifest_source_with_digest(path, reason, Hash::new(digest_marker).into())
     }
-
     fn invalid_manifest_source_with_digest(
         path: PathBuf,
         reason: String,
@@ -1274,7 +1189,6 @@ impl LaneManifestRegistry {
             },
         }
     }
-
     fn invalid_governance_overlay_source(
         path: PathBuf,
         reason: String,
@@ -1286,7 +1200,6 @@ impl LaneManifestRegistry {
             Hash::new(digest_marker).into(),
         )
     }
-
     fn invalid_governance_overlay_source_with_digest(
         path: PathBuf,
         reason: String,
@@ -1301,7 +1214,6 @@ impl LaneManifestRegistry {
             },
         }
     }
-
     fn parse_bounded_manifest_json(
         raw: &[u8],
         budget: &mut ManifestSourceLoadBudget,
@@ -1312,7 +1224,6 @@ impl LaneManifestRegistry {
         budget.charge_json(footprint)?;
         json::from_json(raw).map_err(|err| format!("manifest JSON parse error: {err}"))
     }
-
     fn parse_bounded_governance_overlay_json(
         raw: &[u8],
         budget: &mut ManifestSourceLoadBudget,
@@ -1323,7 +1234,6 @@ impl LaneManifestRegistry {
         budget.charge_json(footprint)?;
         json::from_json(raw).map_err(|err| format!("governance overlay JSON parse error: {err}"))
     }
-
     fn preflight_manifest_json(
         raw: &[u8],
         limits: ManifestJsonLimits,
@@ -1334,7 +1244,6 @@ impl LaneManifestRegistry {
         let mut escaped = false;
         let mut current_string_bytes = 0_usize;
         let mut in_scalar = false;
-
         for byte in raw.iter().copied() {
             if in_string {
                 if escaped {
@@ -1396,7 +1305,6 @@ impl LaneManifestRegistry {
                 }
                 continue;
             }
-
             match byte {
                 b'"' => {
                     in_string = true;
@@ -1433,7 +1341,6 @@ impl LaneManifestRegistry {
                 _ => {}
             }
         }
-
         if in_string || escaped {
             return Err("lane-manifest JSON contains an unterminated string".to_owned());
         }
@@ -1442,7 +1349,6 @@ impl LaneManifestRegistry {
         }
         Ok(footprint)
     }
-
     fn charge_manifest_rule_unit(
         rule_units: &mut usize,
         limits: ManifestJsonLimits,
@@ -1458,7 +1364,6 @@ impl LaneManifestRegistry {
         }
         Ok(())
     }
-
     fn validate_manifest_source_bounds(manifest: &ManifestFile) -> Result<(), String> {
         Self::validate_optional_source_string(
             "lane alias",
@@ -1545,7 +1450,6 @@ impl LaneManifestRegistry {
         }
         Ok(())
     }
-
     fn validate_governance_overlay_source_bounds(
         overlay: &GovernanceCatalogFile,
     ) -> Result<(), String> {
@@ -1598,7 +1502,6 @@ impl LaneManifestRegistry {
             GOVERNANCE_OVERLAY_MAX_PARAMS_V1,
         )
     }
-
     fn validate_optional_source_string(
         label: &str,
         value: Option<&str>,
@@ -1608,7 +1511,6 @@ impl LaneManifestRegistry {
             Self::validate_source_string(label, value, max_bytes)
         })
     }
-
     fn validate_source_string(label: &str, value: &str, max_bytes: usize) -> Result<(), String> {
         if value.len() > max_bytes {
             return Err(format!(
@@ -1618,7 +1520,6 @@ impl LaneManifestRegistry {
         }
         Ok(())
     }
-
     fn validate_source_collection_len(
         label: &str,
         actual: usize,
@@ -1631,7 +1532,6 @@ impl LaneManifestRegistry {
         }
         Ok(())
     }
-
     fn read_bounded_regular_file(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
         let path_metadata = fs::symlink_metadata(path)?;
         if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
@@ -1649,19 +1549,16 @@ impl LaneManifestRegistry {
                 ),
             ));
         }
-
         let mut options = fs::OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
-
             options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
         }
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt as _;
-
             const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
             options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         }
@@ -1681,7 +1578,6 @@ impl LaneManifestRegistry {
                 "source changed identity while it was opened",
             ));
         }
-
         let capacity = usize::try_from(opened_metadata.len())
             .unwrap_or(max_bytes)
             .min(max_bytes)
@@ -1708,18 +1604,14 @@ impl LaneManifestRegistry {
         }
         Ok(raw)
     }
-
     #[cfg(unix)]
     fn manifest_file_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
-
         left.dev() == right.dev() && left.ino() == right.ino() && left.len() == right.len()
     }
-
     #[cfg(windows)]
     fn manifest_file_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         use std::os::windows::fs::MetadataExt as _;
-
         left.file_type().is_file()
             && right.file_type().is_file()
             && left.volume_serial_number().is_some()
@@ -1728,12 +1620,10 @@ impl LaneManifestRegistry {
             && left.file_index() == right.file_index()
             && left.len() == right.len()
     }
-
     #[cfg(not(any(unix, windows)))]
     fn manifest_file_metadata_matches(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
         false
     }
-
     /// Build the registry from one frozen scan of the provided source configuration.
     pub fn from_config(
         lane_catalog: &LaneCatalog,
@@ -1743,7 +1633,6 @@ impl LaneManifestRegistry {
         let source_snapshot = Arc::new(LaneManifestSourceSnapshot::load(registry_cfg));
         source_snapshot.bind(lane_catalog, governance_catalog)
     }
-
     /// Bind a frozen parsed source snapshot to an active lane catalog.
     #[must_use]
     #[allow(clippy::too_many_lines)]
@@ -1759,7 +1648,6 @@ impl LaneManifestRegistry {
             ));
             return Self::from_source_snapshot(materialized, lane_catalog, governance_catalog);
         }
-
         let mut statuses = BTreeMap::new();
         let mut effective_governance = governance_catalog.clone();
         source_snapshot.apply_governance_overlay(&mut effective_governance);
@@ -1769,14 +1657,12 @@ impl LaneManifestRegistry {
             alias_count = source_snapshot.manifests_by_alias.len(),
             "binding frozen lane manifest aliases"
         );
-
         for lane in lane_catalog.lanes() {
             let alias = lane.alias.clone();
             let governance = lane.governance.clone();
             let dataspace = lane.dataspace_id;
             let visibility = lane.visibility;
             let storage = lane.storage;
-
             let manifest_source = source_snapshot.manifests_by_alias.get(&alias);
             let status = manifest_source.map_or_else(
                 || {
@@ -1845,7 +1731,6 @@ impl LaneManifestRegistry {
             );
             statuses.insert(lane.id, status);
         }
-
         // Log governance modules lacking manifest declarations.
         for status in statuses.values() {
             if status.governance.is_some() && status.manifest_path.is_none() {
@@ -1864,7 +1749,6 @@ impl LaneManifestRegistry {
                 );
             }
         }
-
         Self {
             statuses,
             manifest_source_aliases,
@@ -1872,7 +1756,6 @@ impl LaneManifestRegistry {
             source_snapshot: Some(source_snapshot),
         }
     }
-
     fn collect_manifest_sources(
         manifest_dir: Option<&Path>,
         cache_dir: Option<&Path>,
@@ -1880,7 +1763,6 @@ impl LaneManifestRegistry {
     ) -> BTreeMap<String, PathBuf> {
         let mut manifests = BTreeMap::new();
         let mut duplicate_aliases = BTreeSet::new();
-
         if let Some(dir) = manifest_dir {
             if dir.exists() {
                 Self::ingest_manifest_directory(
@@ -1897,7 +1779,6 @@ impl LaneManifestRegistry {
                 );
             }
         }
-
         if let Some(dir) = cache_dir {
             if dir.exists() {
                 Self::ingest_manifest_directory(
@@ -1914,10 +1795,8 @@ impl LaneManifestRegistry {
                 );
             }
         }
-
         manifests
     }
-
     fn ingest_manifest_directory(
         dir: &Path,
         active_aliases: &BTreeSet<&str>,
@@ -1945,7 +1824,6 @@ impl LaneManifestRegistry {
                         ignored_unknown_sources = ignored_unknown_sources.saturating_add(1);
                         continue;
                     }
-
                     if duplicate_aliases.contains(&alias) {
                         warn!(
                             lane = %alias,
@@ -1955,7 +1833,6 @@ impl LaneManifestRegistry {
                         );
                         continue;
                     }
-
                     if !seen_in_directory.insert(alias.clone()) {
                         warn!(
                             lane = %alias,
@@ -1967,7 +1844,6 @@ impl LaneManifestRegistry {
                         duplicate_aliases.insert(alias);
                         continue;
                     }
-
                     let path = entry.path();
                     let is_direct_regular_file = entry
                         .file_type()
@@ -1982,7 +1858,6 @@ impl LaneManifestRegistry {
                         duplicate_aliases.insert(alias);
                         continue;
                     }
-
                     if manifests.contains_key(&alias) {
                         if override_existing {
                             if let Some(prev) = manifests.get(&alias) {
@@ -2002,7 +1877,6 @@ impl LaneManifestRegistry {
                             continue;
                         }
                     }
-
                     manifests.insert(alias, path);
                 }
                 if ignored_unknown_sources != 0 {
@@ -2022,7 +1896,6 @@ impl LaneManifestRegistry {
             }
         }
     }
-
     fn manifest_alias_from_file_name(file_name: &OsStr) -> Option<String> {
         let stem = file_name.to_str()?.strip_suffix(".json")?.trim();
         if stem.is_empty() {
@@ -2034,7 +1907,6 @@ impl LaneManifestRegistry {
         }
         Some(alias.to_string())
     }
-
     fn governance_overlay_path(cache_dir: &Path) -> Option<PathBuf> {
         let path = cache_dir.join("governance_catalog.json");
         match fs::symlink_metadata(&path) {
@@ -2043,7 +1915,6 @@ impl LaneManifestRegistry {
             Err(_) => Some(path),
         }
     }
-
     #[allow(clippy::too_many_lines)]
     fn parse_privacy_commitments(
         alias: &str,
@@ -2052,10 +1923,8 @@ impl LaneManifestRegistry {
         let Some(entries) = manifest.privacy_commitments.as_ref() else {
             return Ok(Vec::new());
         };
-
         let mut commitments = Vec::new();
         let mut seen_ids = BTreeSet::new();
-
         for entry in entries {
             let id = entry.id.ok_or_else(|| {
                 format!("privacy commitment entry missing `id` for lane `{alias}`")
@@ -2065,12 +1934,10 @@ impl LaneManifestRegistry {
                     "privacy commitment id {id} appears multiple times for lane `{alias}`"
                 ));
             }
-
             let scheme_raw = entry.scheme.as_deref().ok_or_else(|| {
                 format!("privacy commitment {id} is missing `scheme` for lane `{alias}`")
             })?;
             let scheme = scheme_raw.trim().to_ascii_lowercase();
-
             match scheme.as_str() {
                 "merkle" => {
                     let merkle = entry.merkle.as_ref().ok_or_else(|| {
@@ -2107,10 +1974,8 @@ impl LaneManifestRegistry {
                 }
             }
         }
-
         Ok(commitments)
     }
-
     fn parse_hex_digest(
         alias: &str,
         commitment_id: u16,
@@ -2147,7 +2012,6 @@ impl LaneManifestRegistry {
         arr.copy_from_slice(&bytes);
         Ok(arr)
     }
-
     #[cfg(test)]
     fn validate_manifest(
         path: &Path,
@@ -2161,7 +2025,6 @@ impl LaneManifestRegistry {
         let parsed = source.parsed?;
         Self::validate_parsed_manifest(&parsed, lane_id, alias, lane_governance, catalog)
     }
-
     fn validate_parsed_manifest(
         parsed: &ManifestFile,
         lane_id: LaneId,
@@ -2194,7 +2057,6 @@ impl LaneManifestRegistry {
                 None => return Err("manifest missing governance module identifier".into()),
             }
         }
-
         let privacy_commitments = Self::parse_privacy_commitments(alias, parsed)?;
         let rules = GovernanceRules::from_manifest(alias, parsed)?;
         debug!(
@@ -2207,7 +2069,6 @@ impl LaneManifestRegistry {
             privacy_commitments,
         })
     }
-
     /// Install manifests into the registry from pre-built statuses (testing/telemetry scaffolding).
     #[cfg(any(test, feature = "telemetry"))]
     pub fn from_statuses(statuses: BTreeMap<LaneId, LaneManifestStatus>) -> Self {
@@ -2224,7 +2085,6 @@ impl LaneManifestRegistry {
             source_snapshot: None,
         }
     }
-
     /// Deterministically bind the installed immutable sources to a new catalog.
     ///
     /// This operation performs no filesystem access and preserves the source-set
@@ -2238,7 +2098,6 @@ impl LaneManifestRegistry {
         if let Some(source_snapshot) = self.source_snapshot.as_ref() {
             return source_snapshot.bind(lane_catalog, governance_catalog);
         }
-
         let templates = self
             .statuses
             .values()
@@ -2288,7 +2147,6 @@ impl LaneManifestRegistry {
             source_snapshot: None,
         }
     }
-
     /// Whether the lane is ready for traffic under its governance manifest.
     ///
     /// # Errors
@@ -2313,7 +2171,6 @@ impl LaneManifestRegistry {
         }
         Ok(())
     }
-
     /// Validate that every active lane can enforce all configured manifest semantics.
     ///
     /// # Errors
@@ -2326,7 +2183,6 @@ impl LaneManifestRegistry {
         }
         Ok(())
     }
-
     /// Enumerate lanes missing manifests (for logging or tests).
     pub fn missing_entries(&self) -> Vec<&LaneManifestStatus> {
         self.statuses
@@ -2334,7 +2190,6 @@ impl LaneManifestRegistry {
             .filter(|status| self.ensure_lane_ready(status.lane).is_err())
             .collect()
     }
-
     /// Collect lane aliases that currently lack manifests.
     pub fn missing_aliases(&self) -> BTreeSet<String> {
         self.missing_entries()
@@ -2342,29 +2197,24 @@ impl LaneManifestRegistry {
             .map(|status| status.alias.clone())
             .collect()
     }
-
     /// Retrieve the manifest status for `lane_id`, if available.
     pub fn status(&self, lane_id: LaneId) -> Option<&LaneManifestStatus> {
         self.statuses.get(&lane_id)
     }
-
     /// Return whether the frozen active-catalog source set contains `alias`.
     #[must_use]
     pub fn has_manifest_source_alias(&self, alias: &str) -> bool {
         self.manifest_source_aliases.contains(alias)
     }
-
     /// Retrieve parsed governance rules for `lane_id`, if available.
     pub fn lane_rules(&self, lane_id: LaneId) -> Option<&GovernanceRules> {
         self.status(lane_id).and_then(LaneManifestStatus::rules)
     }
-
     /// Retrieve the validator set declared for `lane_id`, if present.
     pub fn lane_validators(&self, lane_id: LaneId) -> Option<Vec<AccountId>> {
         self.lane_rules(lane_id)
             .map(|rules| rules.validators.clone())
     }
-
     /// Retrieve explicit validator-account to peer-id bindings declared for `lane_id`, if present.
     pub fn lane_validator_bindings(
         &self,
@@ -2373,19 +2223,16 @@ impl LaneManifestRegistry {
         self.lane_rules(lane_id)
             .map(|rules| rules.validator_bindings.clone())
     }
-
     /// Retrieve the quorum declared for `lane_id`, if present.
     pub fn lane_quorum(&self, lane_id: LaneId) -> Option<u32> {
         self.lane_rules(lane_id).and_then(|rules| rules.quorum)
     }
-
     /// Snapshot the current manifest statuses for all lanes.
     #[must_use]
     pub fn statuses(&self) -> Vec<LaneManifestStatus> {
         self.statuses.values().cloned().collect()
     }
 }
-
 /// Governance guard error returned when a lane lacks an active manifest.
 #[derive(Debug, Clone)]
 pub struct GovernanceGuardError {
@@ -2398,7 +2245,6 @@ pub struct GovernanceGuardError {
     /// Reason why the lane is not ready for traffic.
     pub reason: GovernanceGuardReason,
 }
-
 impl GovernanceGuardError {
     /// Render the failure reason for logs.
     #[must_use]
@@ -2434,13 +2280,11 @@ impl GovernanceGuardError {
             ),
         }
     }
-
     /// Retrieve the guard failure reason.
     #[must_use]
     pub const fn reason(&self) -> GovernanceGuardReason {
         self.reason
     }
-
     fn missing_manifest(status: &LaneManifestStatus) -> Self {
         Self {
             lane: status.lane,
@@ -2449,7 +2293,6 @@ impl GovernanceGuardError {
             reason: GovernanceGuardReason::MissingManifest,
         }
     }
-
     fn unknown_lane(lane: LaneId) -> Self {
         Self {
             lane,
@@ -2458,7 +2301,6 @@ impl GovernanceGuardError {
             reason: GovernanceGuardReason::UnknownLane,
         }
     }
-
     fn missing_privacy_commitments(status: &LaneManifestStatus) -> Self {
         Self {
             lane: status.lane,
@@ -2468,7 +2310,6 @@ impl GovernanceGuardError {
         }
     }
 }
-
 /// Reasons surfaced when a lane is gated by governance/manifest checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GovernanceGuardReason {
@@ -2479,22 +2320,17 @@ pub enum GovernanceGuardReason {
     /// Lane advertises commitment-only storage but has no privacy commitments configured.
     MissingPrivacyCommitments,
 }
-
 /// Shared registry handle.
 pub type LaneManifestRegistryHandle = Arc<LaneManifestRegistry>;
-
 impl fmt::Display for GovernanceGuardError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.message())
     }
 }
-
 impl std::error::Error for GovernanceGuardError {}
-
 #[cfg(test)]
 mod tests {
     use std::{path::PathBuf, str::FromStr};
-
     use iroha_config::parameters::actual::{
         GovernanceCatalog, GovernanceModule as ConfigGovernanceModule, LaneRegistry,
     };
@@ -2506,13 +2342,10 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
-
     use super::*;
-
     fn account_id_literal(account: &AccountId) -> String {
         account.to_string()
     }
-
     fn digest_fixture_registry(
         path: &str,
         validator: AccountId,
@@ -2553,7 +2386,6 @@ mod tests {
         };
         LaneManifestRegistry::from_statuses(BTreeMap::from([(LaneId::SINGLE, status)]))
     }
-
     #[test]
     fn consensus_policy_digest_ignores_path_but_binds_committee_and_hooks() {
         let baseline = digest_fixture_registry("/srv/a.manifest.json", ALICE_ID.clone(), 1, true);
@@ -2564,7 +2396,6 @@ mod tests {
             relocated.consensus_policy_digest(),
             "filesystem relocation must not change manifest semantics"
         );
-
         let validator_drift =
             digest_fixture_registry("/srv/a.manifest.json", BOB_ID.clone(), 1, true);
         assert_ne!(
@@ -2584,7 +2415,6 @@ mod tests {
             hook_drift.consensus_policy_digest()
         );
     }
-
     #[test]
     fn source_policy_digest_binds_only_active_manifest_sources() {
         let first_dir = tempdir().expect("first manifest directory");
@@ -2595,7 +2425,6 @@ mod tests {
             .expect("write compact future manifest");
         fs::write(second_dir.path().join("future.manifest.json"), formatted)
             .expect("write relocated formatted future manifest");
-
         let registry_for = |catalog: &LaneCatalog, directory: &Path| {
             LaneManifestRegistry::from_config(
                 catalog,
@@ -2614,7 +2443,6 @@ mod tests {
             "unknown future manifests must not enter the startup source set"
         );
         assert!(!baseline.has_manifest_source_alias("future"));
-
         let expanded = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
@@ -2640,7 +2468,6 @@ mod tests {
             "path and JSON formatting changes must not partition active peers"
         );
     }
-
     #[test]
     fn bounded_regular_source_read_accepts_boundary_and_rejects_overflow() {
         let dir = tempdir().expect("manifest directory");
@@ -2651,29 +2478,24 @@ mod tests {
                 .expect("boundary source is accepted"),
             b"12345678"
         );
-
         fs::write(&path, b"123456789").expect("write overflow source");
         let error = LaneManifestRegistry::read_bounded_regular_file(&path, 8)
             .expect_err("max plus one must reject before an unbounded read");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[cfg(unix)]
     #[test]
     fn bounded_regular_source_read_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("manifest directory");
         let target = dir.path().join("target.json");
         let link = dir.path().join("link.json");
         fs::write(&target, b"{}").expect("write target");
         symlink(&target, &link).expect("create source symlink");
-
         let error = LaneManifestRegistry::read_bounded_regular_file(&link, 8)
             .expect_err("symlink source must be rejected");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[test]
     fn manifest_json_preflight_enforces_string_rule_and_depth_boundaries() {
         let limits = ManifestJsonLimits {
@@ -2688,7 +2510,6 @@ mod tests {
         assert_eq!(footprint.strings, 2);
         assert_eq!(footprint.string_bytes, 2);
         assert_eq!(footprint.rule_units, 4);
-
         assert!(
             LaneManifestRegistry::preflight_manifest_json(br#"{"long":0}"#, limits).is_err(),
             "one over the per-string bound must reject"
@@ -2706,7 +2527,6 @@ mod tests {
             "one over the nesting bound must reject"
         );
     }
-
     #[test]
     fn manifest_shape_and_aggregate_budgets_reject_overflow() {
         let mut manifest = ManifestFile {
@@ -2724,7 +2544,6 @@ mod tests {
         assert!(LaneManifestRegistry::validate_manifest_source_bounds(&manifest).is_ok());
         manifest.lane = Some("x".repeat(MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1 + 1));
         assert!(LaneManifestRegistry::validate_manifest_source_bounds(&manifest).is_err());
-
         let overlay = GovernanceCatalogFile {
             modules: (0..=GOVERNANCE_OVERLAY_MAX_MODULES_V1)
                 .map(|index| (format!("module-{index}"), GovernanceModuleFile::default()))
@@ -2732,7 +2551,6 @@ mod tests {
             ..GovernanceCatalogFile::default()
         };
         assert!(LaneManifestRegistry::validate_governance_overlay_source_bounds(&overlay).is_err());
-
         let mut budget = ManifestSourceLoadBudget {
             bytes: MANIFEST_SOURCE_AGGREGATE_MAX_BYTES_V1,
             strings: MANIFEST_SOURCE_AGGREGATE_MAX_STRINGS_V1,
@@ -2753,7 +2571,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn active_oversize_manifest_is_represented_as_invalid_without_full_read() {
         let dir = tempdir().expect("manifest directory");
@@ -2769,7 +2586,6 @@ mod tests {
                 ..LaneRegistry::default()
             },
         );
-
         assert!(registry.has_manifest_source_alias("default"));
         let source = registry
             .source_snapshot
@@ -2786,7 +2602,6 @@ mod tests {
                 .contains("bounded")
         );
     }
-
     #[test]
     fn oversize_governance_overlay_is_represented_as_invalid_without_full_read() {
         let cache = tempdir().expect("manifest cache directory");
@@ -2804,7 +2619,6 @@ mod tests {
                 ..LaneRegistry::default()
             },
         );
-
         let overlay = registry
             .source_snapshot
             .as_ref()
@@ -2820,7 +2634,6 @@ mod tests {
                 .contains("bounded")
         );
     }
-
     #[test]
     fn unknown_sparse_manifest_does_not_enter_snapshot_or_digest() {
         let populated = tempdir().expect("populated manifest directory");
@@ -2841,7 +2654,6 @@ mod tests {
                 },
             )
         };
-
         let skipped = registry_for(populated.path());
         let baseline = registry_for(empty.path());
         assert!(!skipped.has_manifest_source_alias("future"));
@@ -2850,7 +2662,6 @@ mod tests {
             baseline.consensus_policy_digest()
         );
     }
-
     #[test]
     fn frozen_source_rebind_ignores_post_load_file_drift_and_preserves_digest() {
         let dir = tempdir().expect("manifest directory");
@@ -2864,7 +2675,6 @@ mod tests {
         let governance = GovernanceCatalog::default();
         let baseline = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         let digest = baseline.consensus_policy_digest();
-
         fs::write(&path, b"{not-json").expect("drift manifest after startup");
         let rebound = baseline.rebind(&lane_catalog, &governance);
         assert_eq!(rebound.consensus_policy_digest(), digest);
@@ -2875,7 +2685,6 @@ mod tests {
                 .version,
             1
         );
-
         let freshly_loaded = LaneManifestRegistry::from_config(
             &lane_catalog,
             &GovernanceCatalog::default(),
@@ -2884,7 +2693,6 @@ mod tests {
         assert_ne!(freshly_loaded.consensus_policy_digest(), digest);
         assert!(freshly_loaded.lane_rules(LaneId::SINGLE).is_none());
     }
-
     #[test]
     fn frozen_source_rebind_does_not_activate_unknown_future_manifest() {
         let dir = tempdir().expect("manifest directory");
@@ -2904,7 +2712,6 @@ mod tests {
         let baseline =
             LaneManifestRegistry::from_config(&LaneCatalog::default(), &governance, &registry_cfg);
         assert!(!baseline.has_manifest_source_alias("future"));
-
         let expanded = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
@@ -2926,7 +2733,6 @@ mod tests {
                 .reason(),
             GovernanceGuardReason::MissingManifest
         );
-
         let explicitly_reloaded =
             LaneManifestRegistry::from_config(&expanded, &governance, &registry_cfg);
         assert!(
@@ -2935,7 +2741,6 @@ mod tests {
                 .is_ok()
         );
     }
-
     #[test]
     fn governed_or_private_lanes_without_frozen_semantics_fail_closed() {
         let baseline = LaneManifestRegistry::from_config(
@@ -2964,7 +2769,6 @@ mod tests {
                 .reason(),
             GovernanceGuardReason::MissingManifest
         );
-
         let private = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
@@ -2994,7 +2798,6 @@ mod tests {
             GovernanceGuardReason::UnknownLane
         );
     }
-
     #[test]
     fn builder_requires_manifest_components() {
         let err = LaneManifestStatus::builder(
@@ -3008,7 +2811,6 @@ mod tests {
         .build_ready()
         .expect_err("missing manifest path should fail");
         assert_eq!(err, LaneManifestBuilderError::MissingManifestPath);
-
         let err = LaneManifestStatus::builder(
             LaneId::new(7),
             "lane".to_string(),
@@ -3021,7 +2823,6 @@ mod tests {
         .expect_err("missing governance rules should fail");
         assert_eq!(err, LaneManifestBuilderError::MissingGovernanceRules);
     }
-
     #[test]
     fn privacy_commitments_parse_from_manifest() {
         let manifest = ManifestFile {
@@ -3044,7 +2845,6 @@ mod tests {
             .expect("commitments parsed");
         assert_eq!(parsed.len(), 1);
     }
-
     #[test]
     fn privacy_commitments_reject_snark_scheme_without_real_verifier() {
         let manifest = ManifestFile {
@@ -3064,7 +2864,6 @@ mod tests {
             "unexpected rejection: {err}"
         );
     }
-
     #[test]
     fn privacy_commitment_json_rejects_removed_snark_fields() {
         let raw = r#"{
@@ -3086,7 +2885,6 @@ mod tests {
             "unexpected rejection: {err}"
         );
     }
-
     #[test]
     fn commitment_only_lane_without_commitments_is_rejected() {
         let mut statuses = BTreeMap::new();
@@ -3113,7 +2911,6 @@ mod tests {
             GovernanceGuardReason::MissingPrivacyCommitments
         );
     }
-
     #[test]
     fn commitment_only_lane_with_commitments_is_allowed() {
         let mut statuses = BTreeMap::new();
@@ -3138,7 +2935,6 @@ mod tests {
         let registry = LaneManifestRegistry::from_statuses(statuses);
         assert!(registry.ensure_lane_ready(LaneId::new(2)).is_ok());
     }
-
     #[test]
     fn builder_produces_ready_status() {
         let rules = GovernanceRules {
@@ -3148,7 +2944,6 @@ mod tests {
         };
         let expected_rules = rules.clone();
         let manifest_path = PathBuf::from("lane.manifest.json");
-
         let status = LaneManifestStatus::builder(
             LaneId::new(3),
             "lane".to_string(),
@@ -3161,7 +2956,6 @@ mod tests {
         .governance_rules(rules)
         .build_ready()
         .expect("builder should construct ready status");
-
         assert_eq!(status.lane, LaneId::new(3));
         assert_eq!(status.alias, "lane");
         assert_eq!(status.dataspace, DataSpaceId::new(5));
@@ -3171,7 +2965,6 @@ mod tests {
         assert_eq!(status.manifest_path, Some(manifest_path));
         assert_eq!(status.rules(), Some(&expected_rules));
     }
-
     #[test]
     fn registry_detects_missing_manifest() {
         let lane_catalog = LaneCatalog::new(
@@ -3189,7 +2982,6 @@ mod tests {
             .modules
             .insert("parliament".to_string(), ConfigGovernanceModule::default());
         let registry_cfg = LaneRegistry::default();
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         let err = registry
             .ensure_lane_ready(LaneId::new(0))
@@ -3197,7 +2989,6 @@ mod tests {
         assert_eq!(err.alias, "governance");
         assert_eq!(registry.missing_entries().len(), 1);
     }
-
     #[test]
     fn registry_loads_present_manifest() {
         let lane_catalog = LaneCatalog::new(
@@ -3221,7 +3012,6 @@ mod tests {
             manifest_directory: Some(path.parent().unwrap().to_path_buf()),
             ..LaneRegistry::default()
         };
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         assert!(
             registry.ensure_lane_ready(LaneId::new(0)).is_ok(),
@@ -3234,7 +3024,6 @@ mod tests {
         assert!(rules.validators.is_empty());
         assert!(rules.protected_namespaces.is_empty());
     }
-
     #[test]
     fn registry_rejects_duplicate_manifest_aliases_in_directory() {
         let lane_catalog = LaneCatalog::new(
@@ -3266,7 +3055,6 @@ mod tests {
             manifest_directory: Some(dir.path().to_path_buf()),
             ..LaneRegistry::default()
         };
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         let err = registry
             .ensure_lane_ready(LaneId::new(0))
@@ -3276,7 +3064,6 @@ mod tests {
         let status = registry.status(LaneId::new(0)).expect("lane status");
         assert!(status.manifest_path.is_none());
     }
-
     #[test]
     fn cache_manifest_overrides_primary_directory() {
         let lane_catalog = LaneCatalog::new(
@@ -3293,10 +3080,8 @@ mod tests {
         governance
             .modules
             .insert("parliament".to_string(), ConfigGovernanceModule::default());
-
         let primary_dir = tempdir().expect("primary manifest directory");
         let cache_dir = tempdir().expect("cache manifest directory");
-
         fs::write(
             primary_dir.path().join("gov.manifest.json"),
             r#"{"lane":"gov","governance":"parliament","protected_namespaces":["primary"]}"#,
@@ -3307,13 +3092,11 @@ mod tests {
             r#"{"lane":"gov","governance":"parliament","protected_namespaces":["cached"]}"#,
         )
         .expect("write cache manifest");
-
         let registry_cfg = LaneRegistry {
             manifest_directory: Some(primary_dir.path().to_path_buf()),
             cache_directory: Some(cache_dir.path().to_path_buf()),
             ..LaneRegistry::default()
         };
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         let status = registry.status(LaneId::new(0)).expect("lane status");
         let rules = status.rules().expect("rules present");
@@ -3324,7 +3107,6 @@ mod tests {
         );
         assert_eq!(rules.protected_namespaces.len(), 1);
     }
-
     #[test]
     fn governance_overlay_supplies_missing_module() {
         let lane_catalog = LaneCatalog::new(
@@ -3338,7 +3120,6 @@ mod tests {
         )
         .expect("valid catalog");
         let governance = GovernanceCatalog::default();
-
         let cache_dir = tempdir().expect("cache manifest directory");
         fs::write(
             cache_dir.path().join("council.manifest.json"),
@@ -3350,13 +3131,11 @@ mod tests {
             r#"{"default_module":"council","modules":{"council":{"module_type":"council_multisig","params":{"quorum":"2"}}}}"#,
         )
         .expect("write governance overlay");
-
         let registry_cfg = LaneRegistry {
             manifest_directory: None,
             cache_directory: Some(cache_dir.path().to_path_buf()),
             ..LaneRegistry::default()
         };
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         let status = registry.status(LaneId::new(0)).expect("lane status");
         assert!(
@@ -3368,7 +3147,6 @@ mod tests {
             "manifest from cache directory should be registered"
         );
     }
-
     #[test]
     fn manifest_rejects_invalid_validator() {
         let lane_catalog = LaneCatalog::new(
@@ -3399,11 +3177,9 @@ mod tests {
             manifest_directory: Some(path.parent().unwrap().to_path_buf()),
             ..LaneRegistry::default()
         };
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         assert!(registry.ensure_lane_ready(LaneId::new(0)).is_err());
     }
-
     #[test]
     fn manifest_rejects_quorum_larger_than_validator_set() {
         crate::test_alias::ensure();
@@ -3436,11 +3212,9 @@ mod tests {
             manifest_directory: Some(path.parent().unwrap().to_path_buf()),
             ..LaneRegistry::default()
         };
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         assert!(registry.ensure_lane_ready(LaneId::new(0)).is_err());
     }
-
     #[test]
     fn manifest_parses_validators_and_namespaces() {
         crate::test_alias::ensure();
@@ -3493,7 +3267,6 @@ mod tests {
             manifest_directory: Some(path.parent().unwrap().to_path_buf()),
             ..LaneRegistry::default()
         };
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         assert!(registry.ensure_lane_ready(LaneId::new(0)).is_ok());
         let rules = registry
@@ -3534,7 +3307,6 @@ mod tests {
         assert!(allowed_ids.contains("upgrade-q1"));
         assert!(rules.hooks.unknown.contains_key("custom_hook"));
     }
-
     #[test]
     fn manifest_rejects_duplicate_protected_namespace() {
         crate::test_alias::ensure();
@@ -3549,7 +3321,6 @@ mod tests {
             r#"{"lane":"gov","governance":"parliament","protected_namespaces":[" treasury ","treasury"]}"#,
         )
         .expect("write manifest");
-
         let err = LaneManifestRegistry::validate_manifest(
             &path,
             LaneId::new(0),
@@ -3563,7 +3334,6 @@ mod tests {
             "expected duplicate namespace rejection, got {err}"
         );
     }
-
     #[test]
     fn manifest_rejects_duplicate_runtime_upgrade_allowed_id() {
         crate::test_alias::ensure();
@@ -3578,7 +3348,6 @@ mod tests {
             r#"{"lane":"gov","governance":"parliament","hooks":{"runtime_upgrade":{"allowed_ids":["upgrade-q1"," upgrade-q1 "]}}}"#,
         )
         .expect("write manifest");
-
         let err = LaneManifestRegistry::validate_manifest(
             &path,
             LaneId::new(0),
@@ -3592,7 +3361,6 @@ mod tests {
             "expected duplicate runtime upgrade id rejection, got {err}"
         );
     }
-
     #[test]
     fn manifests_allow_validator_reuse_across_lanes() {
         crate::test_alias::ensure();
@@ -3618,7 +3386,6 @@ mod tests {
         governance
             .modules
             .insert("parliament".to_string(), ConfigGovernanceModule::default());
-
         let dir = tempdir().expect("tmp dir");
         let alice = account_id_literal(&ALICE_ID);
         let bob = account_id_literal(&BOB_ID);
@@ -3644,11 +3411,9 @@ mod tests {
             manifest_directory: Some(dir.path().to_path_buf()),
             ..LaneRegistry::default()
         };
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         assert!(registry.ensure_lane_ready(LaneId::new(0)).is_ok());
         assert!(registry.ensure_lane_ready(LaneId::new(1)).is_ok());
-
         let core_validators = registry
             .lane_validators(LaneId::new(0))
             .expect("core validators parsed");
@@ -3675,7 +3440,6 @@ mod tests {
         assert_eq!(registry.lane_quorum(LaneId::new(0)), Some(2));
         assert_eq!(registry.lane_quorum(LaneId::new(1)), Some(2));
     }
-
     #[test]
     fn manifest_rejects_invalid_validator_torii_url() {
         crate::test_alias::ensure();
@@ -3714,7 +3478,6 @@ mod tests {
         .expect_err("invalid torii_url should fail manifest validation");
         assert!(err.contains("torii_url"));
     }
-
     #[test]
     fn manifest_rejects_legacy_string_validator_entries() {
         crate::test_alias::ensure();
@@ -3744,11 +3507,9 @@ mod tests {
             manifest_directory: Some(path.parent().unwrap().to_path_buf()),
             ..LaneRegistry::default()
         };
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         assert!(registry.ensure_lane_ready(LaneId::new(0)).is_err());
     }
-
     #[test]
     fn manifest_rejects_duplicate_validator_binding() {
         crate::test_alias::ensure();
@@ -3782,11 +3543,9 @@ mod tests {
             manifest_directory: Some(path.parent().unwrap().to_path_buf()),
             ..LaneRegistry::default()
         };
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         assert!(registry.ensure_lane_ready(LaneId::new(0)).is_err());
     }
-
     #[test]
     fn manifest_rejects_duplicate_peer_binding() {
         crate::test_alias::ensure();
@@ -3820,7 +3579,6 @@ mod tests {
             manifest_directory: Some(path.parent().unwrap().to_path_buf()),
             ..LaneRegistry::default()
         };
-
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         assert!(registry.ensure_lane_ready(LaneId::new(0)).is_err());
     }

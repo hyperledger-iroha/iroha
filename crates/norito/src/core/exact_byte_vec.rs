@@ -1,5 +1,4 @@
 // Exact-layout destination used by the counted bounded frame encoder.
-
 fn exact_byte_vec_with_capacity(bytes: usize) -> Result<Vec<u8>, BoundedEncodeError> {
     if bytes == 0 {
         return Ok(Vec::new());

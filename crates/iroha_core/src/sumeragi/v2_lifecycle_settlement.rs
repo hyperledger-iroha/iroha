@@ -1,17 +1,14 @@
 //! Durable settlement gate for lifecycle turns.
-
 use super::{
     CoordinatorFault, LifecycleCoordinator, LifecycleStageKind, LifecycleState, LifecycleWorkClass,
     TerminalOutcome, TurnLease, TurnOutcome, WaitSource,
     replay_authority::CertifiedServeTerminalReplayAuthorityPairV1, serve_and_producer_keys_match,
 };
-
 impl LifecycleCoordinator {
     /// Settle once; an invalid lease remains visible and fails closed.
     pub(crate) fn settle_turn(&mut self, lease: TurnLease, outcome: TurnOutcome) {
         self.settle_turn_inner(lease, outcome, None);
     }
-
     /// Settle a Certified-Serve terminal from one sealed post-fsync replay
     /// family replacement.
     #[cfg(test)]
@@ -23,7 +20,6 @@ impl LifecycleCoordinator {
         let outcome = TurnOutcome::Terminal(terminal.terminal_outcome());
         self.settle_turn_inner(lease, outcome, Some(terminal));
     }
-
     fn settle_turn_inner(
         &mut self,
         lease: TurnLease,
@@ -44,7 +40,6 @@ impl LifecycleCoordinator {
         }
         *self = next;
     }
-
     /// Apply one already-gated settlement to the pure lifecycle state.
     pub(super) fn reduce_settle_turn(
         &mut self,
@@ -54,13 +49,11 @@ impl LifecycleCoordinator {
     ) {
         self.reduce_settle_turn_inner(lease, outcome, durable_serve_terminal, false);
     }
-
     /// Terminalize one body parent on a staged coordinator before attaching
     /// its typed continuation and publishing the complete durable projection.
     pub(super) fn reduce_settle_body_parent_for_continuation(&mut self, lease: TurnLease) {
         self.reduce_settle_turn_inner(lease, TurnOutcome::Advanced, None, true);
     }
-
     fn reduce_settle_turn_inner(
         &mut self,
         lease: TurnLease,
@@ -95,7 +88,6 @@ impl LifecycleCoordinator {
         {
             return self.latch_settlement_fault(CoordinatorFault::InvalidTerminalOutcome);
         }
-
         match (lease.work_class, outcome, durable_serve_terminal) {
             (LifecycleWorkClass::CertifiedServe, TurnOutcome::Terminal(terminal), Some(replay)) => {
                 if replay.terminal_outcome() != terminal {
@@ -152,7 +144,6 @@ impl LifecycleCoordinator {
             }
             (_, _, None) => {}
         }
-
         let result = match outcome {
             TurnOutcome::Advanced => self.finish_terminal(lease.ordinal, TerminalOutcome::Advanced),
             TurnOutcome::Terminal(outcome) => self.finish_terminal(lease.ordinal, outcome),
@@ -185,11 +176,9 @@ impl LifecycleCoordinator {
         }
         self.active_lease = None;
     }
-
     fn latch_settlement_fault(&mut self, fault: CoordinatorFault) {
         self.fault = Some(fault);
     }
-
     /// Finish one already-preflighted terminal transition and its paired
     /// Certified-Serve/ProducerTurn bookkeeping.
     pub(super) fn finish_terminal(
@@ -283,7 +272,6 @@ impl LifecycleCoordinator {
         metadata.payload = terminal_payload;
         metadata.replay_authority = terminal_replay;
         self.release_capacity(work_class.capacity_class())?;
-
         if work_class == LifecycleWorkClass::CertifiedServe {
             let producer = paired_ordinal;
             if outcome == TerminalOutcome::Cancelled {

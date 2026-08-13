@@ -3,20 +3,14 @@
 //! The implementation lives in `iroha_zkp_halo2`; this module retains the
 //! FCMP-focused compatibility and adversarial tests against its frozen
 //! Blake2b transcript adapter.
-
+#[cfg(test)]
+use super::proof_math::FcmpProofRandomSource;
 pub(super) use iroha_zkp_halo2::generalized_bulletproof::{
     ArithmeticCircuitStatement, ArithmeticCircuitWitness, LinComb, Variable,
     VectorCommitmentOpening,
 };
-
-#[cfg(test)]
-use super::proof_math::FcmpProofRandomSource;
-
 #[cfg(test)]
 mod tests {
-    use rand_08::{SeedableRng as _, rngs::StdRng};
-    use rand_core_06::{CryptoRng, RngCore};
-
     use super::*;
     use crate::privacy_engines::fcmp_plus_plus::{
         FailingRngV1, FcmpNativeErrorV1,
@@ -30,34 +24,29 @@ mod tests {
         GeneralizedBulletproofErrorV1, MAX_PROVER_SCALAR_ATTEMPTS_V1, ProofGenerators,
         random_scalar,
     };
-
+    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand_core_06::{CryptoRng, RngCore};
     #[derive(Default)]
     struct NonCanonicalRng {
         calls: usize,
     }
-
     impl RngCore for NonCanonicalRng {
         fn next_u32(&mut self) -> u32 {
             u32::MAX
         }
-
         fn next_u64(&mut self) -> u64 {
             u64::MAX
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             destination.fill(0xff);
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
             self.calls += 1;
             destination.fill(0xff);
             Ok(())
         }
     }
-
     impl CryptoRng for NonCanonicalRng {}
-
     fn circuit_constraints() -> Vec<LinComb<Field25519>> {
         vec![
             LinComb::empty()
@@ -88,7 +77,6 @@ mod tests {
                 .constant(-Field25519::from_u64(20)),
         ]
     }
-
     fn commitment(
         generators: ProofGeneratorView<'_, SeleneSuite>,
         opening: &VectorCommitmentOpening<Field25519>,
@@ -105,7 +93,6 @@ mod tests {
             .expect("test commitment mask fits its fixed capacity");
         terms.evaluate().expect("complete test commitment")
     }
-
     fn duplicate_test_openings(
         openings: &[VectorCommitmentOpening<Field25519>],
     ) -> Vec<VectorCommitmentOpening<Field25519>> {
@@ -114,7 +101,6 @@ mod tests {
             .map(|opening| VectorCommitmentOpening::new(opening.values.0.clone(), opening.mask))
             .collect()
     }
-
     fn verify_test_circuit(context: [u8; 32], proof: &[u8]) -> Result<(), FcmpNativeErrorV1> {
         let generators = selene_bp_generators().reduce(4)?;
         let mut transcript = VerifierTranscript::new(context, proof);
@@ -132,7 +118,6 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     fn native_arithmetic_circuit_prover_round_trips_and_tampering_fails_closed() {
         let context = [0x42_u8; 32];
@@ -187,7 +172,6 @@ mod tests {
         let proof = transcript.complete();
         assert_eq!(proof.len() % 32, 0);
         verify_test_circuit(context, &proof).expect("native proof verifies");
-
         // Every serialized point/scalar phase is bound either by the
         // transcript or a checked proof equation.
         for element in 0..(proof.len() / 32) {
@@ -202,7 +186,6 @@ mod tests {
         let mut extended = proof.clone();
         extended.extend_from_slice(&[0_u8; 32]);
         assert!(verify_test_circuit(context, &extended).is_err());
-
         // Bad multiplication values and bad Pedersen openings are rejected
         // before an arithmetic proof can be emitted.
         let invalid_gate_witness = ArithmeticCircuitWitness::<SeleneSuite>::new(
@@ -228,7 +211,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut bad_openings = openings;
         bad_openings[0].values[0] += Field25519::ONE;
         let invalid_opening_witness = ArithmeticCircuitWitness::<SeleneSuite>::new(
@@ -255,14 +237,12 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn statement_rejects_forged_indices_and_malformed_generator_views() {
         let basis = selene_bp_generators();
         let valid = basis.reduce(4).expect("valid view");
         let commitments = vec![basis.g];
         let scalar_commitments = vec![basis.h];
-
         let rejects = |constraint| {
             assert_eq!(
                 ArithmeticCircuitStatement::new(
@@ -275,7 +255,6 @@ mod tests {
                 GeneralizedBulletproofErrorV1::ArithmeticInvariant
             );
         };
-
         let mut forged_l = LinComb::empty().term(Field25519::ONE, Variable::aL(4));
         forged_l.highest_a_index = Some(0);
         rejects(forged_l);
@@ -297,7 +276,6 @@ mod tests {
         let mut forged_v = LinComb::empty().term(Field25519::ONE, Variable::V(1));
         forged_v.highest_v_index = Some(0);
         rejects(forged_v);
-
         let empty: [SelenePoint; 0] = [];
         let one_g = [basis.g_bold[0]];
         let three_g = [basis.g_bold[0], basis.g_bold[1], basis.g_bold[2]];
@@ -305,7 +283,6 @@ mod tests {
         let identity_g = [SelenePoint::identity(), basis.g_bold[1]];
         let two_h = [basis.h_bold[0], basis.h_bold[1]];
         let foreign_g = [basis.g_bold[0] + basis.h, basis.g_bold[1]];
-
         let rejects_view = |view: ProofGeneratorView<'_, SeleneSuite>| {
             assert_eq!(
                 ArithmeticCircuitStatement::new(view, Vec::new(), Vec::new(), Vec::new())
@@ -350,14 +327,12 @@ mod tests {
             h_bold: &two_h,
         });
     }
-
     #[test]
     fn generator_constructor_rejects_identity_and_degenerate_prefixes() {
         let basis = selene_bp_generators();
         let identity = SelenePoint::identity();
         let valid_g = vec![basis.g_bold[0], basis.g_bold[1]];
         let valid_h = vec![basis.h_bold[0], basis.h_bold[1]];
-
         assert!(
             ProofGenerators::<SeleneSuite>::new(
                 identity,
@@ -386,7 +361,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn generalized_bulletproof_randomness_rejects_noncanonical_rng_at_fixed_bound() {
         let mut rng = NonCanonicalRng::default();

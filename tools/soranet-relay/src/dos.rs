@@ -1,5 +1,4 @@
 //! DoS and abuse mitigation utilities for the relay handshake path.
-
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
@@ -12,7 +11,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime},
 };
-
 use blake3::Hasher;
 use hex;
 use iroha_crypto::soranet::{
@@ -23,7 +21,6 @@ use iroha_crypto::soranet::{
 use norito::{DecodeLimits, derive::JsonDeserialize, json};
 use thiserror::Error;
 use tracing::warn;
-
 use crate::{
     capability,
     config::{
@@ -33,7 +30,6 @@ use crate::{
     },
     metrics::Metrics,
 };
-
 // First-release bounds for the operator-reloadable emergency descriptor set.
 // The entry ceiling is shared with the inline relay-config list. A fully
 // escaped 64-byte descriptor string can occupy 386 source bytes, so 4 MiB
@@ -49,7 +45,6 @@ const EMERGENCY_THROTTLE_DOCUMENT_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
 const EMERGENCY_THROTTLE_MAX_TOTAL_ELEMENTS_V1: usize = EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1 + 2;
 const EMERGENCY_THROTTLE_MAX_DEPTH_V1: usize = 4;
 const EMERGENCY_THROTTLE_MAX_ALLOCATED_BYTES_V1: usize = 2 * 1024 * 1024;
-
 const EMERGENCY_THROTTLE_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1,
     EMERGENCY_THROTTLE_DESCRIPTOR_HEX_BYTES,
@@ -57,7 +52,6 @@ const EMERGENCY_THROTTLE_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     EMERGENCY_THROTTLE_MAX_ALLOCATED_BYTES_V1,
     EMERGENCY_THROTTLE_MAX_DEPTH_V1,
 );
-
 const fn emergency_throttle_preflight_limits_v1() -> json::JsonPreflightLimits {
     json::JsonPreflightLimits::new(
         EMERGENCY_THROTTLE_DOCUMENT_MAX_BYTES_V1,
@@ -72,7 +66,6 @@ const fn emergency_throttle_preflight_limits_v1() -> json::JsonPreflightLimits {
         EMERGENCY_THROTTLE_MAX_DEPTH_V1,
     )
 }
-
 /// Aggregated controls applied to inbound handshakes.
 pub struct DoSControls {
     adaptive: AdaptiveDifficulty,
@@ -88,7 +81,6 @@ pub struct DoSControls {
     descriptor_limits: Option<QuotaLimits>,
     emergency: Option<EmergencyThrottle>,
 }
-
 impl DoSControls {
     /// Create a new controller from the relay PoW configuration.
     pub fn new(
@@ -101,17 +93,12 @@ impl DoSControls {
     ) -> Result<Self, ConfigError> {
         let mut adaptive_cfg = config.adaptive.clone();
         adaptive_cfg.apply_defaults();
-
         let quotas_cfg = config.quotas_for_mode(mode);
-
         let mut slowloris_cfg = config.slowloris.clone();
         slowloris_cfg.apply_defaults();
-
         let adaptive = AdaptiveDifficulty::new(base_params, adaptive_cfg, Arc::clone(&metrics));
-
         let remote_params = RateLimitParams::from_remote(&quotas_cfg);
         let descriptor_params = RateLimitParams::from_descriptor(&quotas_cfg);
-
         let remote_limits = QuotaLimits::from(&remote_params);
         let remote_limiter = Mutex::new(RateLimiter::new(remote_params));
         let (descriptor_limits, descriptor_limiter) = match descriptor_params {
@@ -122,13 +109,11 @@ impl DoSControls {
             }
             None => (None, Mutex::new(None)),
         };
-
         metrics.set_pow_difficulty(adaptive.current_difficulty());
         metrics.set_active_remote_cooldowns(0);
         if descriptor_limits.is_none() {
             metrics.set_active_descriptor_cooldowns(0);
         }
-
         let puzzle_policy = puzzle.map(PuzzlePolicy::new);
         let replay_filter = if config.replay_filter().is_enabled() {
             Some(Mutex::new(ReplayFilter::new(
@@ -143,7 +128,6 @@ impl DoSControls {
             .emergency_throttle()
             .map(|cfg| EmergencyThrottle::new(cfg.clone()))
             .transpose()?;
-
         Ok(Self {
             adaptive,
             remote_limiter,
@@ -159,23 +143,19 @@ impl DoSControls {
             emergency,
         })
     }
-
     /// Returns the current PoW parameters (possibly adapted).
     pub fn current_pow_parameters(&self) -> Parameters {
         self.adaptive.current_parameters()
     }
-
     /// Returns the current puzzle parameters if a puzzle policy is enabled.
     pub fn current_puzzle_parameters(&self) -> Option<puzzle::Parameters> {
         let policy = self.puzzle.as_ref()?;
         Some(policy.current_parameters(self.adaptive.current_difficulty()))
     }
-
     /// Returns the configured admission token policy, if any.
     pub(crate) fn has_token_policy(&self) -> bool {
         self.token.is_some()
     }
-
     /// Verify an admission token against the configured policy.
     pub fn verify_token(
         &self,
@@ -199,22 +179,18 @@ impl DoSControls {
         }
         result
     }
-
     /// Indicates whether PoW tickets are mandated by relay policy.
     pub fn is_pow_required(&self) -> bool {
         self.require_pow
     }
-
     /// Returns the active remote quota limits.
     pub fn remote_quota_limits(&self) -> QuotaLimits {
         self.remote_limits
     }
-
     /// Returns the active descriptor quota limits, if configured.
     pub fn descriptor_quota_limits(&self) -> Option<QuotaLimits> {
         self.descriptor_limits
     }
-
     /// Registers a pending handshake attempt, enforcing quota limits.
     pub fn begin(
         &self,
@@ -223,7 +199,6 @@ impl DoSControls {
     ) -> Result<AttemptContext, Throttle> {
         self.begin_at(remote, descriptor_commit, Instant::now())
     }
-
     /// Same as [`Self::begin`] but allows tests to supply a deterministic timestamp.
     pub fn begin_at(
         &self,
@@ -232,7 +207,6 @@ impl DoSControls {
         now: Instant,
     ) -> Result<AttemptContext, Throttle> {
         let ip = remote.ip();
-
         if let (Some(emergency), Some(commit_bytes)) = (&self.emergency, descriptor_commit)
             && let Some(duration) = emergency.should_throttle(commit_bytes)
         {
@@ -242,14 +216,12 @@ impl DoSControls {
                 reason: ThrottleReason::Emergency,
             });
         }
-
         if let Err(cooldown) = self.check_remote_limit(ip, now) {
             return Err(Throttle {
                 cooldown,
                 reason: ThrottleReason::RemoteQuota,
             });
         }
-
         if let (Some(filter), Some(commit_bytes)) = (self.replay_filter.as_ref(), descriptor_commit)
         {
             let mut guard = filter.lock().expect("replay filter mutex poisoned");
@@ -261,7 +233,6 @@ impl DoSControls {
                 });
             }
         }
-
         if let Some(key) = descriptor_commit.and_then(descriptor_key) {
             if let Err(cooldown) = self.check_descriptor_limit(key, now) {
                 return Err(Throttle {
@@ -282,34 +253,28 @@ impl DoSControls {
             })
         }
     }
-
     /// Records a successful handshake outcome.
     pub fn record_success(&self, attempt: &AttemptContext, elapsed: Duration) {
         self.record_success_at(attempt, elapsed, Instant::now());
     }
-
     /// Same as [`Self::record_success`] but accepts an explicit timestamp.
     pub fn record_success_at(&self, attempt: &AttemptContext, elapsed: Duration, now: Instant) {
         self.adaptive.observe_success(now);
         self.observe_slowloris_success_at(attempt.remote, elapsed, now);
     }
-
     /// Records a PoW verification failure.
     pub fn record_pow_failure(&self, attempt: &AttemptContext, elapsed: Duration) {
         self.record_pow_failure_at(attempt, elapsed, Instant::now());
     }
-
     /// Same as [`Self::record_pow_failure`] but accepts an explicit timestamp.
     pub fn record_pow_failure_at(&self, attempt: &AttemptContext, elapsed: Duration, now: Instant) {
         self.adaptive.observe_pow_failure(now);
         self.observe_slowloris_success_at(attempt.remote, elapsed, now);
     }
-
     /// Records a timeout while reading the handshake.
     pub fn record_timeout(&self, attempt: &AttemptContext, _elapsed: Duration) {
         self.record_timeout_at(attempt, _elapsed, Instant::now());
     }
-
     /// Same as [`Self::record_timeout`] but accepts an explicit timestamp.
     pub fn record_timeout_at(&self, attempt: &AttemptContext, _elapsed: Duration, now: Instant) {
         if let Some(penalty) = self
@@ -319,17 +284,14 @@ impl DoSControls {
             self.impose_remote_cooldown(attempt.remote, now, penalty);
         }
     }
-
     /// Records a non-PoW failure outcome.
     pub fn record_failure(&self, attempt: &AttemptContext, elapsed: Duration) {
         self.record_failure_at(attempt, elapsed, Instant::now());
     }
-
     /// Same as [`Self::record_failure`] but accepts an explicit timestamp.
     pub fn record_failure_at(&self, attempt: &AttemptContext, elapsed: Duration, now: Instant) {
         self.observe_slowloris_success_at(attempt.remote, elapsed, now);
     }
-
     fn observe_slowloris_success_at(&self, ip: IpAddr, elapsed: Duration, now: Instant) {
         if let Some(penalty) = self
             .slowloris
@@ -338,7 +300,6 @@ impl DoSControls {
             self.impose_remote_cooldown(ip, now, penalty);
         }
     }
-
     fn impose_remote_cooldown(&self, ip: IpAddr, now: Instant, cooldown: Duration) {
         if cooldown.is_zero() {
             return;
@@ -349,7 +310,6 @@ impl DoSControls {
             self.metrics.set_active_remote_cooldowns(count);
         }
     }
-
     fn check_remote_limit(&self, ip: IpAddr, now: Instant) -> Result<(), Duration> {
         if let Ok(mut limiter) = self.remote_limiter.lock() {
             let result = limiter.check(ip, now);
@@ -360,7 +320,6 @@ impl DoSControls {
             Ok(())
         }
     }
-
     fn check_descriptor_limit(&self, key: [u8; 16], now: Instant) -> Result<(), Duration> {
         if let Ok(mut guard) = self.descriptor_limiter.lock() {
             if let Some(limiter) = guard.as_mut() {
@@ -377,7 +336,6 @@ impl DoSControls {
         }
     }
 }
-
 /// Context associated with an inbound handshake attempt.
 #[derive(Debug, Clone)]
 pub struct AttemptContext {
@@ -385,21 +343,18 @@ pub struct AttemptContext {
     _descriptor_key: Option<[u8; 16]>,
     started_at: Instant,
 }
-
 impl AttemptContext {
     /// Returns the elapsed handshake duration.
     pub fn elapsed(&self) -> Duration {
         self.started_at.elapsed()
     }
 }
-
 /// Throttling decision describing the applied cooldown.
 #[derive(Debug, Clone, Copy)]
 pub struct Throttle {
     pub cooldown: Duration,
     pub reason: ThrottleReason,
 }
-
 /// Reasons why a handshake was throttled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThrottleReason {
@@ -408,7 +363,6 @@ pub enum ThrottleReason {
     DescriptorReplay,
     Emergency,
 }
-
 impl fmt::Display for ThrottleReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -419,7 +373,6 @@ impl fmt::Display for ThrottleReason {
         }
     }
 }
-
 fn descriptor_key(bytes: &[u8]) -> Option<[u8; 16]> {
     if bytes.is_empty() {
         return None;
@@ -431,7 +384,6 @@ fn descriptor_key(bytes: &[u8]) -> Option<[u8; 16]> {
     out.copy_from_slice(&digest.as_bytes()[..16]);
     Some(out)
 }
-
 /// Adaptive PoW difficulty controller.
 struct AdaptiveDifficulty {
     enabled: bool,
@@ -441,29 +393,24 @@ struct AdaptiveDifficulty {
     window: Mutex<WindowStats>,
     metrics: Arc<Metrics>,
 }
-
 /// Puzzle parameters tied to the current difficulty.
 struct PuzzlePolicy {
     base: puzzle::Parameters,
 }
-
 impl PuzzlePolicy {
     fn new(base: puzzle::Parameters) -> Self {
         Self { base }
     }
-
     fn current_parameters(&self, difficulty: u8) -> puzzle::Parameters {
         self.base.with_difficulty(difficulty)
     }
 }
-
 /// Admission-token verifier plus local revocation set.
 struct TokenPolicy {
     verifier: AdmissionTokenVerifier,
     revoked: HashSet<[u8; 32]>,
     issuer_hex: String,
 }
-
 impl TokenPolicy {
     fn from_source(source: TokenPolicySource) -> Self {
         let revoked = source.revocations.into_iter().collect::<HashSet<_>>();
@@ -474,15 +421,12 @@ impl TokenPolicy {
             issuer_hex,
         }
     }
-
     fn is_revoked(&self, token_id: &[u8; 32]) -> bool {
         self.revoked.contains(token_id)
     }
-
     fn issuer_hex(&self) -> &str {
         &self.issuer_hex
     }
-
     fn verify(
         &self,
         token: &AdmissionToken,
@@ -499,7 +443,6 @@ impl TokenPolicy {
             .map_err(TokenPolicyError::Verify)
     }
 }
-
 /// Errors surfaced by the token policy checker.
 #[derive(Debug, Error)]
 pub enum TokenPolicyError {
@@ -510,7 +453,6 @@ pub enum TokenPolicyError {
     #[error("token policy not available")]
     Unavailable,
 }
-
 fn token_outcome_label(error: &TokenPolicyError) -> &'static str {
     match error {
         TokenPolicyError::Verify(inner) => match inner {
@@ -531,7 +473,6 @@ fn token_outcome_label(error: &TokenPolicyError) -> &'static str {
         TokenPolicyError::Unavailable => "store_error",
     }
 }
-
 struct EmergencyThrottle {
     cooldown_millis: AtomicU64,
     refresh: Duration,
@@ -539,19 +480,16 @@ struct EmergencyThrottle {
     static_descriptors: HashSet<[u8; 16]>,
     state: RwLock<EmergencyThrottleState>,
 }
-
 struct EmergencyThrottleState {
     last_loaded: Instant,
     dynamic_descriptors: HashSet<[u8; 16]>,
 }
-
 impl EmergencyThrottle {
     fn new(config: EmergencyThrottleConfig) -> Result<Self, ConfigError> {
         let static_descriptors = Self::decode_descriptor_list(config.descriptor_commit_hex.iter())
             .map_err(ConfigError::EmergencyThrottle)?;
         let refresh = Duration::from_secs(config.refresh_secs);
         let mut cooldown_secs = config.cooldown_secs.max(1);
-
         let (dynamic_descriptors, override_secs) = match &config.file_path {
             Some(path) => match Self::load_document(path) {
                 Ok(doc) => (doc.descriptors, doc.cooldown_override_secs),
@@ -562,19 +500,16 @@ impl EmergencyThrottle {
             },
             None => (HashSet::new(), None),
         };
-
         if let Some(secs) = override_secs
             && secs > 0
         {
             cooldown_secs = secs;
         }
-
         let cooldown_millis = cooldown_secs.saturating_mul(1_000).max(1);
         let state = EmergencyThrottleState {
             last_loaded: Instant::now(),
             dynamic_descriptors,
         };
-
         Ok(Self {
             cooldown_millis: AtomicU64::new(cooldown_millis),
             refresh,
@@ -583,14 +518,11 @@ impl EmergencyThrottle {
             state: RwLock::new(state),
         })
     }
-
     fn should_throttle(&self, descriptor_commit: &[u8]) -> Option<Duration> {
         let key = descriptor_key(descriptor_commit)?;
-
         if self.static_descriptors.contains(&key) {
             return Some(self.cooldown_duration());
         }
-
         if self.file_path.is_none() {
             let state = self.state.read().expect("emergency state poisoned");
             if state.dynamic_descriptors.contains(&key) {
@@ -598,7 +530,6 @@ impl EmergencyThrottle {
             }
             return None;
         }
-
         let needs_reload = {
             let state = self.state.read().expect("emergency state poisoned");
             if state.dynamic_descriptors.contains(&key) {
@@ -606,11 +537,9 @@ impl EmergencyThrottle {
             }
             state.last_loaded.elapsed() >= self.refresh
         };
-
         if !needs_reload {
             return None;
         }
-
         let mut guard = self.state.write().expect("emergency state poisoned");
         if guard.last_loaded.elapsed() >= self.refresh
             && let Err(err) = self.reload_locked(&mut guard)
@@ -620,15 +549,12 @@ impl EmergencyThrottle {
         if guard.dynamic_descriptors.contains(&key) || self.static_descriptors.contains(&key) {
             return Some(self.cooldown_duration());
         }
-
         None
     }
-
     fn cooldown_duration(&self) -> Duration {
         let millis = self.cooldown_millis.load(Ordering::Relaxed).max(1);
         Duration::from_millis(millis)
     }
-
     fn reload_locked(&self, state: &mut EmergencyThrottleState) -> Result<(), String> {
         state.last_loaded = Instant::now();
         let Some(path) = &self.file_path else {
@@ -649,7 +575,6 @@ impl EmergencyThrottle {
             Err(err) => Err(err),
         }
     }
-
     fn decode_descriptor_list<I, S>(hex_values: I) -> Result<HashSet<[u8; 16]>, String>
     where
         I: ExactSizeIterator<Item = S>,
@@ -671,7 +596,6 @@ impl EmergencyThrottle {
         }
         Ok(set)
     }
-
     fn decode_descriptor(hex_value: &str) -> Option<[u8; 16]> {
         match capability::parse_descriptor_commit_hex(hex_value) {
             Ok(bytes) => match descriptor_key(&bytes) {
@@ -689,7 +613,6 @@ impl EmergencyThrottle {
             }
         }
     }
-
     fn load_document(path: &Path) -> Result<LoadedEmergencyThrottle, String> {
         let bytes = read_bounded_direct_regular_file(
             path,
@@ -712,12 +635,10 @@ impl EmergencyThrottle {
         })
     }
 }
-
 struct LoadedEmergencyThrottle {
     descriptors: HashSet<[u8; 16]>,
     cooldown_override_secs: Option<u64>,
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct EmergencyThrottleDocument {
     #[norito(default)]
@@ -725,17 +646,14 @@ struct EmergencyThrottleDocument {
     #[norito(default)]
     cooldown_secs: Option<u64>,
 }
-
 struct WindowStats {
     start: Instant,
     successes: u32,
     pow_failures: u32,
 }
-
 impl AdaptiveDifficulty {
     fn new(base: Parameters, mut cfg: AdaptiveDifficultyConfig, metrics: Arc<Metrics>) -> Self {
         let base_diff = base.difficulty();
-
         if base_diff == 0 {
             cfg.min_difficulty = 0;
         }
@@ -745,15 +663,12 @@ impl AdaptiveDifficulty {
         if cfg.max_difficulty == 0 {
             cfg.enabled = false;
         }
-
         let current = if cfg.enabled {
             base_diff.clamp(cfg.min_difficulty, cfg.max_difficulty)
         } else {
             base_diff
         };
-
         metrics.set_pow_difficulty(current);
-
         Self {
             enabled: cfg.enabled,
             base,
@@ -767,7 +682,6 @@ impl AdaptiveDifficulty {
             metrics,
         }
     }
-
     fn current_parameters(&self) -> Parameters {
         let difficulty = if self.enabled {
             self.current.load(Ordering::Relaxed)
@@ -776,7 +690,6 @@ impl AdaptiveDifficulty {
         };
         self.base.with_difficulty(difficulty)
     }
-
     fn current_difficulty(&self) -> u8 {
         if self.enabled {
             self.current.load(Ordering::Relaxed)
@@ -784,7 +697,6 @@ impl AdaptiveDifficulty {
             self.base.difficulty()
         }
     }
-
     fn observe_success(&self, now: Instant) {
         if !self.enabled {
             return;
@@ -793,7 +705,6 @@ impl AdaptiveDifficulty {
         guard.successes = guard.successes.saturating_add(1);
         Self::maybe_adjust(&self.cfg, &self.metrics, &self.current, &mut guard, now);
     }
-
     fn observe_pow_failure(&self, now: Instant) {
         if !self.enabled {
             return;
@@ -802,7 +713,6 @@ impl AdaptiveDifficulty {
         guard.pow_failures = guard.pow_failures.saturating_add(1);
         Self::maybe_adjust(&self.cfg, &self.metrics, &self.current, &mut guard, now);
     }
-
     fn maybe_adjust(
         cfg: &AdaptiveDifficultyConfig,
         metrics: &Metrics,
@@ -814,7 +724,6 @@ impl AdaptiveDifficulty {
         if elapsed < Duration::from_secs(cfg.window_secs) {
             return;
         }
-
         let mut updated = current.load(Ordering::Relaxed);
         if stats.pow_failures >= cfg.pow_failure_threshold && updated < cfg.max_difficulty {
             updated = updated
@@ -828,25 +737,21 @@ impl AdaptiveDifficulty {
                 .saturating_sub(cfg.decrease_step)
                 .max(cfg.min_difficulty);
         }
-
         stats.start = now;
         stats.successes = 0;
         stats.pow_failures = 0;
-
         if updated != current.load(Ordering::Relaxed) {
             current.store(updated, Ordering::Relaxed);
             metrics.set_pow_difficulty(updated);
         }
     }
 }
-
 /// Rate limiter entry.
 struct RateEntry {
     window_start: Instant,
     count: u32,
     cooldown_until: Option<Instant>,
 }
-
 #[derive(Clone, Copy)]
 struct RateLimitParams {
     window: Duration,
@@ -854,7 +759,6 @@ struct RateLimitParams {
     cooldown: Duration,
     max_entries: usize,
 }
-
 impl RateLimitParams {
     fn new(window: Duration, burst: u32, cooldown: Duration, max_entries: usize) -> Self {
         Self {
@@ -864,7 +768,6 @@ impl RateLimitParams {
             max_entries,
         }
     }
-
     fn from_remote(cfg: &QuotaConfig) -> Self {
         Self::new(
             Duration::from_secs(cfg.per_remote_window_secs.max(1)),
@@ -873,7 +776,6 @@ impl RateLimitParams {
             cfg.max_entries.max(1),
         )
     }
-
     fn from_descriptor(cfg: &QuotaConfig) -> Option<Self> {
         if cfg.per_descriptor_burst == 0 {
             None
@@ -887,13 +789,11 @@ impl RateLimitParams {
         }
     }
 }
-
 /// Per-remote or per-descriptor rate limiter with cooldown tracking.
 struct RateLimiter<K> {
     params: RateLimitParams,
     entries: HashMap<K, RateEntry>,
 }
-
 /// Snapshot of quota settings for metrics and compliance logging.
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
@@ -907,7 +807,6 @@ pub struct QuotaLimits {
     /// Maximum distinct entries tracked by the limiter.
     max_entries: usize,
 }
-
 impl From<&RateLimitParams> for QuotaLimits {
     fn from(params: &RateLimitParams) -> Self {
         Self {
@@ -918,26 +817,21 @@ impl From<&RateLimitParams> for QuotaLimits {
         }
     }
 }
-
 #[allow(dead_code)]
 impl QuotaLimits {
     pub fn burst(&self) -> u32 {
         self.burst
     }
-
     pub fn window(&self) -> Duration {
         self.window
     }
-
     pub fn cooldown(&self) -> Duration {
         self.cooldown
     }
-
     pub fn max_entries(&self) -> usize {
         self.max_entries
     }
 }
-
 impl<K> RateLimiter<K>
 where
     K: Eq + Hash,
@@ -948,7 +842,6 @@ where
             entries: HashMap::new(),
         }
     }
-
     fn check(&mut self, key: K, now: Instant) -> Result<(), Duration> {
         if self.params.burst == 0 {
             return Ok(());
@@ -965,7 +858,6 @@ where
             count: 0,
             cooldown_until: None,
         });
-
         if let Some(until) = entry.cooldown_until {
             if until > now {
                 return Err(until.saturating_duration_since(now));
@@ -974,7 +866,6 @@ where
             entry.count = 0;
             entry.window_start = now;
         }
-
         let elapsed = now
             .checked_duration_since(entry.window_start)
             .unwrap_or_default();
@@ -982,7 +873,6 @@ where
             entry.window_start = now;
             entry.count = 0;
         }
-
         entry.count = entry.count.saturating_add(1);
         if entry.count > self.params.burst {
             let cooldown_until = now + self.params.cooldown;
@@ -990,10 +880,8 @@ where
             entry.count = self.params.burst;
             return Err(self.params.cooldown);
         }
-
         Ok(())
     }
-
     fn impose_cooldown(&mut self, key: K, now: Instant, cooldown: Duration) {
         if self.params.burst == 0 {
             return;
@@ -1019,14 +907,12 @@ where
         entry.count = 0;
         entry.cooldown_until = Some(now + cooldown);
     }
-
     fn cooldown_count(&self, now: Instant) -> u64 {
         self.entries
             .values()
             .filter(|entry| entry.cooldown_until.is_some_and(|until| until > now))
             .count() as u64
     }
-
     fn cleanup(&mut self, now: Instant) {
         if self.entries.is_empty() {
             return;
@@ -1039,13 +925,11 @@ where
         });
     }
 }
-
 /// Stored positions for an observed replay entry.
 struct ReplayEntry {
     expiry: Instant,
     positions: Box<[usize]>,
 }
-
 /// Counting bloom filter used to detect replayed PoW tickets.
 struct ReplayFilter {
     mask: usize,
@@ -1054,11 +938,9 @@ struct ReplayFilter {
     counters: Vec<u16>,
     entries: VecDeque<ReplayEntry>,
 }
-
 impl ReplayFilter {
     fn new(bits: usize, hash_count: u8, ttl: Duration) -> Result<Self, ConfigError> {
         const MAX_BITS: usize = 1 << 24; // 16,777,216 counters
-
         let clamped = bits.max(64);
         if clamped > MAX_BITS {
             return Err(ConfigError::ReplayFilter(
@@ -1076,11 +958,9 @@ impl ReplayFilter {
             entries: VecDeque::new(),
         })
     }
-
     fn ttl(&self) -> Duration {
         self.ttl
     }
-
     fn observe(&mut self, key: &[u8], now: Instant) -> bool {
         self.purge(now);
         let positions = self.hash_positions(key);
@@ -1095,7 +975,6 @@ impl ReplayFilter {
         });
         !seen
     }
-
     fn purge(&mut self, now: Instant) {
         while let Some(entry) = self.entries.front() {
             if entry.expiry > now {
@@ -1110,7 +989,6 @@ impl ReplayFilter {
             self.entries.pop_front();
         }
     }
-
     fn hash_positions(&self, key: &[u8]) -> Vec<usize> {
         let mut hasher = Hasher::new();
         hasher.update(key);
@@ -1125,23 +1003,19 @@ impl ReplayFilter {
         positions
     }
 }
-
 /// Events observed by the slowloris detector.
 enum SlowlorisEvent {
     Success(Duration),
     Timeout,
 }
-
 struct SlowlorisEntry {
     window_start: Instant,
     score: u32,
 }
-
 struct SlowlorisDetector {
     cfg: SlowlorisConfig,
     entries: Mutex<HashMap<IpAddr, SlowlorisEntry>>,
 }
-
 impl SlowlorisDetector {
     fn new(cfg: SlowlorisConfig) -> Self {
         Self {
@@ -1149,18 +1023,15 @@ impl SlowlorisDetector {
             entries: Mutex::new(HashMap::new()),
         }
     }
-
     fn observe(&self, ip: IpAddr, event: SlowlorisEvent, now: Instant) -> Option<Duration> {
         if !self.cfg.enabled {
             return None;
         }
-
         let mut guard = self.entries.lock().expect("slowloris mutex poisoned");
         let entry = guard.entry(ip).or_insert(SlowlorisEntry {
             window_start: now,
             score: 0,
         });
-
         let window_elapsed = now
             .checked_duration_since(entry.window_start)
             .unwrap_or_default();
@@ -1168,7 +1039,6 @@ impl SlowlorisDetector {
             entry.window_start = now;
             entry.score = 0;
         }
-
         let mut penalise = matches!(event, SlowlorisEvent::Timeout);
         if let SlowlorisEvent::Success(elapsed) = event {
             let threshold = Duration::from_millis(self.cfg.max_handshake_millis);
@@ -1176,23 +1046,19 @@ impl SlowlorisDetector {
                 penalise = true;
             }
         }
-
         if penalise {
             entry.score = entry.score.saturating_add(1);
         } else {
             entry.score = entry.score.saturating_sub(1);
         }
-
         if entry.score >= self.cfg.timeout_threshold {
             entry.score = 0;
             entry.window_start = now;
             return Some(Duration::from_secs(self.cfg.penalty_secs));
         }
-
         None
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1201,21 +1067,17 @@ mod tests {
         thread,
         time::{Duration as StdDuration, UNIX_EPOCH},
     };
-
     use iroha_crypto::soranet::token::compute_issuer_fingerprint;
     use rand::{SeedableRng, rngs::StdRng};
     use tempfile::tempdir;
-
     use super::*;
     use crate::{
         config::{PuzzleConfig, ReplayFilterConfig, TokenConfig},
         metrics::TokenOutcomeKey,
     };
-
     fn base_params() -> Parameters {
         Parameters::new(8, Duration::from_secs(600), Duration::from_secs(30))
     }
-
     #[test]
     fn rate_limiter_throttles_after_burst() {
         let params = RateLimitParams::new(Duration::from_secs(1), 2, Duration::from_secs(2), 16);
@@ -1228,7 +1090,6 @@ mod tests {
             .expect_err("expected throttle after burst exceeded");
         assert_eq!(err, Duration::from_secs(2));
     }
-
     #[test]
     fn rate_limiter_rejects_new_keys_at_capacity_without_overshoot() {
         let cooldown = Duration::from_secs(2);
@@ -1238,17 +1099,14 @@ mod tests {
         let first = IpAddr::from([127, 0, 0, 1]);
         let second = IpAddr::from([127, 0, 0, 2]);
         let overflow = IpAddr::from([127, 0, 0, 3]);
-
         assert!(limiter.check(first, now).is_ok());
         assert!(limiter.check(second, now).is_ok());
         assert_eq!(limiter.check(overflow, now), Err(cooldown));
         assert_eq!(limiter.entries.len(), 2);
-
         limiter.impose_cooldown(overflow, now, cooldown);
         assert_eq!(limiter.entries.len(), 2);
         assert!(!limiter.entries.contains_key(&overflow));
     }
-
     #[test]
     fn adaptive_difficulty_respects_thresholds() {
         let metrics = Arc::new(Metrics::new());
@@ -1269,7 +1127,6 @@ mod tests {
         let diff = adaptive.current_difficulty();
         assert!(diff >= 8);
     }
-
     #[test]
     fn adaptive_difficulty_counters_saturate_without_panic() {
         let metrics = Arc::new(Metrics::new());
@@ -1283,22 +1140,18 @@ mod tests {
         };
         let adaptive = AdaptiveDifficulty::new(base_params(), cfg, metrics);
         let now = Instant::now();
-
         {
             let mut stats = adaptive.window.lock().expect("window lock");
             stats.start = now;
             stats.successes = u32::MAX;
             stats.pow_failures = u32::MAX;
         }
-
         adaptive.observe_success(now);
         adaptive.observe_pow_failure(now);
-
         let stats = adaptive.window.lock().expect("window lock");
         assert_eq!(stats.successes, u32::MAX);
         assert_eq!(stats.pow_failures, u32::MAX);
     }
-
     #[test]
     fn adaptive_difficulty_steps_saturate_before_clamp() {
         let metrics = Metrics::new();
@@ -1314,7 +1167,6 @@ mod tests {
         };
         let start = Instant::now();
         let now = start + Duration::from_secs(2);
-
         let current = AtomicU8::new(250);
         let mut stats = WindowStats {
             start,
@@ -1323,7 +1175,6 @@ mod tests {
         };
         AdaptiveDifficulty::maybe_adjust(&cfg, &metrics, &current, &mut stats, now);
         assert_eq!(current.load(Ordering::Relaxed), u8::MAX);
-
         let current = AtomicU8::new(4);
         let mut stats = WindowStats {
             start,
@@ -1333,7 +1184,6 @@ mod tests {
         AdaptiveDifficulty::maybe_adjust(&cfg, &metrics, &current, &mut stats, now);
         assert_eq!(current.load(Ordering::Relaxed), cfg.min_difficulty);
     }
-
     #[test]
     fn remote_quota_throttle_sets_active_gauge() {
         let metrics = Arc::new(Metrics::new());
@@ -1358,17 +1208,14 @@ mod tests {
         )
         .expect("dos controls");
         let remote: SocketAddr = "127.0.0.1:2000".parse().expect("remote addr");
-
         controls.begin(remote, None).expect("first attempt allowed");
         let throttle = controls
             .begin(remote, None)
             .expect_err("second attempt should throttle");
         assert!(matches!(throttle.reason, ThrottleReason::RemoteQuota));
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.active_remote_cooldowns, 1);
     }
-
     #[test]
     fn descriptor_quota_throttle_sets_active_gauge() {
         let metrics = Arc::new(Metrics::new());
@@ -1396,7 +1243,6 @@ mod tests {
         .expect("dos controls");
         let remote: SocketAddr = "127.0.0.2:2000".parse().expect("remote addr");
         let descriptor = [0xAB; 32];
-
         controls
             .begin(remote, Some(&descriptor))
             .expect("first attempt allowed");
@@ -1404,11 +1250,9 @@ mod tests {
             .begin(remote, Some(&descriptor))
             .expect_err("second attempt should throttle descriptor");
         assert!(matches!(throttle.reason, ThrottleReason::DescriptorQuota));
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.active_descriptor_cooldowns, 1);
     }
-
     #[test]
     fn emergency_throttle_blocks_descriptor() {
         let metrics = Arc::new(Metrics::new());
@@ -1435,16 +1279,13 @@ mod tests {
         )
         .expect("dos controls");
         let remote: SocketAddr = "127.0.0.3:3030".parse().expect("remote addr");
-
         let throttle = controls
             .begin(remote, Some(&descriptor))
             .expect_err("descriptor should be blocked by emergency throttle");
         assert!(matches!(throttle.reason, ThrottleReason::Emergency));
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.throttled_emergency, 1);
     }
-
     #[test]
     fn emergency_throttle_descriptor_count_accepts_exact_limit() {
         let descriptor = hex::encode([0x31_u8; 32]);
@@ -1452,13 +1293,11 @@ mod tests {
         let decoded = EmergencyThrottle::decode_descriptor_list(exact.iter())
             .expect("exact descriptor count");
         assert_eq!(decoded.len(), 1, "duplicate descriptors collapse");
-
         let overflow = vec![descriptor; EMERGENCY_THROTTLE_MAX_DESCRIPTORS_V1 + 1];
         let error = EmergencyThrottle::decode_descriptor_list(overflow.iter())
             .expect_err("max+1 descriptors must fail before retention");
         assert!(error.contains("first-release limit"), "{error}");
     }
-
     #[test]
     fn emergency_throttle_document_accepts_exact_file_limit() {
         let directory = tempdir().expect("temporary directory");
@@ -1467,33 +1306,27 @@ mod tests {
         let mut exact = vec![b' '; EMERGENCY_THROTTLE_DOCUMENT_MAX_BYTES_V1];
         exact[..prefix.len()].copy_from_slice(prefix);
         fs::write(&path, &exact).expect("write exact document");
-
         let loaded = EmergencyThrottle::load_document(&path).expect("exact document");
         assert!(loaded.descriptors.is_empty());
-
         exact.push(b' ');
         fs::write(&path, exact).expect("write oversized document");
         let error = EmergencyThrottle::load_document(&path)
             .expect_err("max+1 document must fail before decode");
         assert!(error.contains("first-release limit"), "{error}");
     }
-
     #[cfg(unix)]
     #[test]
     fn emergency_throttle_document_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let directory = tempdir().expect("temporary directory");
         let target = directory.path().join("target.json");
         let link = directory.path().join("emergency.json");
         fs::write(&target, br#"{"descriptor_commit_hex":[]}"#).expect("write target");
         symlink(&target, &link).expect("create symlink");
-
         let error = EmergencyThrottle::load_document(&link)
             .expect_err("symlinked document must fail before read");
         assert!(error.contains("direct regular file"), "{error}");
     }
-
     #[test]
     fn replay_filter_triggers_descriptor_throttle() {
         let metrics = Arc::new(Metrics::new());
@@ -1521,7 +1354,6 @@ mod tests {
         )
         .expect("dos controls");
         let remote: SocketAddr = "127.0.0.4:4040".parse().expect("remote addr");
-
         controls
             .begin(remote, Some(&descriptor))
             .expect("first attempt allowed");
@@ -1531,14 +1363,12 @@ mod tests {
         assert!(matches!(throttle.reason, ThrottleReason::DescriptorReplay));
         assert_eq!(throttle.cooldown, filter_ttl);
     }
-
     #[test]
     fn replay_filter_allows_reentry_after_ttl() {
         let ttl = Duration::from_millis(200);
         let mut filter = ReplayFilter::new(128, 3, ttl).expect("replay filter");
         let key = b"descriptor-key";
         let now = Instant::now();
-
         assert!(filter.observe(key, now), "first insert should pass");
         assert!(
             !filter.observe(key, now + Duration::from_millis(10)),
@@ -1552,7 +1382,6 @@ mod tests {
             "entry should expire after TTL"
         );
     }
-
     #[test]
     fn replay_filter_constructor_rejects_overflowing_bits_without_panic() {
         match ReplayFilter::new(usize::MAX, 3, Duration::from_secs(1)) {
@@ -1564,7 +1393,6 @@ mod tests {
             Ok(_) => panic!("expected replay filter config error, got Ok(_)"),
         }
     }
-
     #[test]
     fn puzzle_parameters_follow_current_difficulty() {
         let metrics = Arc::new(Metrics::new());
@@ -1604,11 +1432,9 @@ mod tests {
         assert_eq!(params.difficulty(), 6);
         assert_eq!(params.memory_kib().get(), 4096);
     }
-
     #[test]
     fn token_policy_verifies_valid_token() {
         use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
-
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
         let issuer_hex = hex::encode(keypair.public_key());
@@ -1633,7 +1459,6 @@ mod tests {
             .token_policy()
             .expect("token policy result")
             .expect("token policy enabled");
-
         let metrics = Arc::new(Metrics::new());
         let controls = DoSControls::new(
             base,
@@ -1644,7 +1469,6 @@ mod tests {
             RelayMode::Entry,
         )
         .expect("dos controls");
-
         let relay_id = [0xAB; 32];
         let transcript_hash = [0xCD; 32];
         let issued = UNIX_EPOCH + Duration::from_secs(1_000_000);
@@ -1662,7 +1486,6 @@ mod tests {
             &mut rng,
         )
         .expect("mint token");
-
         controls
             .verify_token(
                 &token,
@@ -1672,11 +1495,9 @@ mod tests {
             )
             .expect("token should verify");
     }
-
     #[test]
     fn token_policy_rejects_revoked_token() {
         use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
-
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
         let issuer_hex = hex::encode(keypair.public_key());
@@ -1699,7 +1520,6 @@ mod tests {
         .expect("mint token");
         let revoked_hex = hex::encode(token.token_id());
         let replay_dir = tempdir().expect("replay tempdir");
-
         let mut pow_cfg = PowConfig {
             required: true,
             token: Some(TokenConfig {
@@ -1730,7 +1550,6 @@ mod tests {
             RelayMode::Entry,
         )
         .expect("dos controls");
-
         let err = controls
             .verify_token(
                 &token,
@@ -1741,17 +1560,14 @@ mod tests {
             .expect_err("token should be revoked");
         assert!(matches!(err, TokenPolicyError::Revoked(_)));
     }
-
     #[test]
     fn token_outcome_labels_inert_signature_as_invalid_signature() {
         let error = TokenPolicyError::Verify(TokenVerifyError::InertSignature);
         assert_eq!(token_outcome_label(&error), "signature_invalid");
     }
-
     #[test]
     fn token_outcome_metrics_recorded() {
         use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
-
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
         let issuer_hex = hex::encode(keypair.public_key());
@@ -1773,7 +1589,6 @@ mod tests {
         )
         .expect("mint token");
         let replay_dir = tempdir().expect("replay tempdir");
-
         let mut pow_cfg = PowConfig {
             required: true,
             token: Some(TokenConfig {
@@ -1802,13 +1617,11 @@ mod tests {
             RelayMode::Entry,
         )
         .expect("dos controls");
-
         let now = issued + Duration::from_secs(5);
         controls
             .verify_token(&token, &relay_id, &transcript_hash, now)
             .expect("first use");
         let _ = controls.verify_token(&token, &relay_id, &transcript_hash, now);
-
         let snapshot = metrics.snapshot();
         let accepted_key = TokenOutcomeKey {
             issuer: hex::encode(token.issuer_fingerprint()),

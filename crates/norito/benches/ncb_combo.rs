@@ -1,8 +1,6 @@
 //! Benches for combo NCB shapes: (u64, &str, u32, bool) and (u64, &[u8], u32, bool).
 #![allow(clippy::type_complexity)]
-
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-
 mod ncb {
     pub use norito::columnar::{
         encode_ncb_u64_bytes_u32_bool, encode_ncb_u64_str_u32_bool,
@@ -10,10 +8,8 @@ mod ncb {
         view_ncb_u64_bytes_u32_bool, view_ncb_u64_str_u32_bool,
     };
 }
-
 // Bring AoS encode trait into scope for `value.encode()` syntax
 use norito::codec::Encode as _;
-
 fn gen_str_u32_rows(n: usize) -> (Vec<(u64, String, u32, bool)>, Vec<(u64, String, u32, bool)>) {
     let mut rows = Vec::with_capacity(n);
     for i in 0..n {
@@ -26,7 +22,6 @@ fn gen_str_u32_rows(n: usize) -> (Vec<(u64, String, u32, bool)>, Vec<(u64, Strin
     }
     (rows.clone(), rows)
 }
-
 fn gen_bytes_u32_rows(
     n: usize,
 ) -> (
@@ -45,10 +40,8 @@ fn gen_bytes_u32_rows(
     }
     (rows.clone(), rows)
 }
-
 fn bench_combo(c: &mut Criterion) {
     let sizes = [256usize, 1024usize];
-
     // u64, &str, u32, bool
     let mut g = c.benchmark_group("combo_u64_str_u32_bool");
     for n in sizes {
@@ -118,7 +111,6 @@ fn bench_combo(c: &mut Criterion) {
         });
     }
     g.finish();
-
     // u64, &[u8], u32, bool
     let mut g2 = c.benchmark_group("combo_u64_bytes_u32_bool");
     for n in sizes {
@@ -185,6 +177,5 @@ fn bench_combo(c: &mut Criterion) {
     }
     g2.finish();
 }
-
 criterion_group!(benches, bench_combo);
 criterion_main!(benches);

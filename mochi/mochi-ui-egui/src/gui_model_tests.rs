@@ -4,7 +4,6 @@ use std::{
     path::Path,
     time::{Duration, Instant},
 };
-
 use egui::{CentralPanel, Color32, Context, FontFamily, TextStyle};
 use iroha_data_model::{
     account::{AccountAdmissionMode, admission::ImplicitAccountFeeDestination},
@@ -35,7 +34,6 @@ use mochi_core::{
     torii::{GovernanceStatus, StatusMetrics, Uptime},
 };
 use norito::json::{self, Value};
-
 use super::test_support::{
     TestEnvGuard, env_lock, genesis_invocation_count, install_kagami_stub, install_noop_stub,
     kagami_sign_invocation_count,
@@ -47,7 +45,6 @@ use super::{
     compose_launch_recipe, ensure_http_base, filter_state_entries, reset_cli_overrides_for_tests,
     shell_quote,
 };
-
 #[test]
 fn snapshot_label_preview_matches_expectations() {
     assert_eq!(
@@ -60,7 +57,6 @@ fn snapshot_label_preview_matches_expectations() {
         "blank labels should produce no preview"
     );
 }
-
 #[test]
 fn theme_palette_applied_to_visuals() {
     let mut app = MochiApp::default();
@@ -82,14 +78,12 @@ fn theme_palette_applied_to_visuals() {
     assert_eq!(heading.family, FontFamily::Proportional);
     assert!((heading.size - 20.0).abs() < f32::EPSILON);
 }
-
 #[test]
 fn shell_quote_handles_spaces_and_single_quotes() {
     assert_eq!(shell_quote("mochi-local"), "mochi-local");
     assert_eq!(shell_quote("/tmp/mochi data"), "'/tmp/mochi data'");
     assert_eq!(shell_quote("alice's sandbox"), "'alice'\"'\"'s sandbox'");
 }
-
 #[test]
 fn ensure_http_base_adds_scheme_once() {
     assert_eq!(ensure_http_base("127.0.0.1:8080"), "http://127.0.0.1:8080");
@@ -98,7 +92,6 @@ fn ensure_http_base_adds_scheme_once() {
         "http://127.0.0.1:8080"
     );
 }
-
 #[test]
 fn compose_launch_recipe_includes_current_flags() {
     let recipe = compose_launch_recipe(
@@ -121,7 +114,6 @@ fn compose_launch_recipe_includes_current_flags() {
     assert!(recipe.contains("--build-binaries"));
     assert!(recipe.contains("--disable-smoke"));
 }
-
 #[test]
 fn compose_app_env_recipe_emits_local_bootstrap_exports() {
     let recipe = compose_app_env_recipe(
@@ -139,7 +131,6 @@ fn compose_app_env_recipe_emits_local_bootstrap_exports() {
     assert!(recipe.contains("export IROHA_ACCOUNT_ID=alice@wonderland"));
     assert!(recipe.contains("export IROHA_PRIVATE_KEY=deadbeef"));
 }
-
 #[test]
 fn render_view_tabs_keeps_active_view() {
     let mut app = MochiApp::default();
@@ -152,7 +143,6 @@ fn render_view_tabs_keeps_active_view() {
     });
     assert_eq!(app.active_view, ActiveView::Activity);
 }
-
 #[test]
 fn render_overview_bar_smoke() {
     if !super::socket_bind_available() {
@@ -168,23 +158,19 @@ fn render_overview_bar_smoke() {
     let data_root = temp.path().join("ui-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
     reset_cli_overrides_for_tests();
-
     let mut app = MochiApp::default();
     let mut supervisor = app.supervisor.take().expect("supervisor ready");
     let peer_rows = app.build_peer_rows(&supervisor);
     let metrics = app.collect_dashboard_metrics(&peer_rows);
-
     let ctx = Context::default();
     let _ = ctx.run(Default::default(), |ctx| {
         CentralPanel::default().show(ctx, |ui| {
             app.render_overview_bar(ui, &mut supervisor, &peer_rows, &metrics);
         });
     });
-
     assert!(!app.settings_dialog);
     app.supervisor = Some(supervisor);
 }
-
 #[test]
 fn cli_profile_override_reconfigures_builder() {
     let overrides = CliOverrides {
@@ -195,7 +181,6 @@ fn cli_profile_override_reconfigures_builder() {
     assert_eq!(builder.profile().preset, Some(ProfilePreset::FourPeerBft));
     assert_eq!(builder.profile().topology.peer_count, 4);
 }
-
 #[test]
 fn maintenance_state_running_shows_spinner() {
     let banner = MaintenanceState::Running(MaintenanceTask::Snapshot)
@@ -207,7 +192,6 @@ fn maintenance_state_running_shows_spinner() {
         "running banner should not be dismissable"
     );
 }
-
 #[test]
 fn maintenance_state_completed_is_dismissable() {
     let banner = MaintenanceState::Completed {
@@ -225,7 +209,6 @@ fn maintenance_state_completed_is_dismissable() {
         "completed banner should retain completion message"
     );
 }
-
 #[test]
 fn entry_form_to_state_accepts_valid_inputs() {
     let form = SignerEntryForm {
@@ -235,7 +218,6 @@ fn entry_form_to_state_accepts_valid_inputs() {
         permissions: [InstructionPermission::MintAsset].into_iter().collect(),
         roles: String::new(),
     };
-
     let state =
         MochiApp::entry_form_to_state(&form).expect("valid signer form should produce entry state");
     assert_eq!(state.label, "Test signer");
@@ -246,7 +228,6 @@ fn entry_form_to_state_accepts_valid_inputs() {
             .contains(&InstructionPermission::MintAsset)
     );
 }
-
 #[test]
 fn entry_form_to_state_rejects_missing_fields() {
     let form = SignerEntryForm {
@@ -261,7 +242,6 @@ fn entry_form_to_state_rejects_missing_fields() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn signer_entries_to_signers_converts_entries() {
     let private_key = ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()).to_string();
@@ -272,7 +252,6 @@ fn signer_entries_to_signers_converts_entries() {
         permissions: InstructionPermission::all().into_iter().collect(),
         roles: String::new(),
     };
-
     let signers =
         MochiApp::signer_entries_to_signers(&[entry]).expect("expected successful conversion");
     assert_eq!(signers.len(), 1);
@@ -280,7 +259,6 @@ fn signer_entries_to_signers_converts_entries() {
     assert_eq!(signer.label(), "Alice real");
     assert_eq!(signer.account_id(), &*ALICE_ID);
 }
-
 #[test]
 fn signer_entries_to_signers_rejects_empty_permissions() {
     let entry = SignerEntryState {
@@ -290,7 +268,6 @@ fn signer_entries_to_signers_rejects_empty_permissions() {
         permissions: Default::default(),
         roles: String::new(),
     };
-
     let err = MochiApp::signer_entries_to_signers(&[entry])
         .expect_err("empty permission list should be rejected");
     assert!(
@@ -298,13 +275,11 @@ fn signer_entries_to_signers_rejects_empty_permissions() {
         "unexpected error message: {err}"
     );
 }
-
 #[test]
 fn parse_role_list_accepts_comma_separated_roles() {
     let roles = MochiApp::parse_role_list("auditor, basic_user").expect("role list should parse");
     assert_eq!(roles.len(), 2);
 }
-
 #[test]
 fn parse_role_list_rejects_invalid_roles() {
     let err =
@@ -314,7 +289,6 @@ fn parse_role_list_rejects_invalid_roles() {
         "unexpected error message: {err}"
     );
 }
-
 #[test]
 fn parse_optional_u32_accepts_empty_and_numbers() {
     assert_eq!(
@@ -326,14 +300,12 @@ fn parse_optional_u32_accepts_empty_and_numbers() {
         Some(7)
     );
 }
-
 #[test]
 fn parse_lane_count_input_rejects_zero() {
     let err =
         MochiApp::parse_lane_count_input("0").expect_err("zero lane count should be rejected");
     assert!(err.contains("greater than zero"), "unexpected error: {err}");
 }
-
 #[test]
 fn parse_lane_count_input_accepts_numbers() {
     assert_eq!(
@@ -345,7 +317,6 @@ fn parse_lane_count_input_accepts_numbers() {
         None
     );
 }
-
 #[test]
 fn toml_helpers_extract_strings_and_numbers() {
     let value = TomlValue::String("alpha".to_owned());
@@ -353,9 +324,7 @@ fn toml_helpers_extract_strings_and_numbers() {
     assert_eq!(toml_u32(&TomlValue::Integer(7)), Some(7));
     assert_eq!(toml_u32(&TomlValue::String("12".to_owned())), Some(12));
 }
-
 include!("gui/tests/lane_and_admission.rs");
-
 #[test]
 fn maintenance_export_snapshot_creates_snapshot_directory() {
     if !super::socket_bind_available() {
@@ -364,22 +333,17 @@ fn maintenance_export_snapshot_creates_snapshot_directory() {
     }
     let _lock = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
-
     let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
     let irohad_stub = install_noop_stub(temp.path(), "irohad_snapshot_stub.sh");
     let log_path = temp.path().join("kagami_snapshot.log");
-
     let _log_guard = TestEnvGuard::set("MOCHI_TEST_KAGAMI_LOG", &log_path);
     let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-
     let data_root = temp.path().join("snapshot-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-
     let mut app = MochiApp::default();
     let mut supervisor_slot = app.supervisor.take();
     let initial_invocations = genesis_invocation_count(&log_path);
-
     assert!(
         app.begin_maintenance(MaintenanceTask::Snapshot),
         "snapshot maintenance should start when idle"
@@ -389,7 +353,6 @@ fn maintenance_export_snapshot_creates_snapshot_directory() {
         label: Some(label.clone()),
     });
     app.schedule_pending_maintenance(&mut supervisor_slot);
-
     for _ in 0..100 {
         app.poll_maintenance_updates(&mut supervisor_slot);
         if !matches!(app.maintenance_state, MaintenanceState::Running(_)) {
@@ -397,7 +360,6 @@ fn maintenance_export_snapshot_creates_snapshot_directory() {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-
     assert!(
         !matches!(app.maintenance_state, MaintenanceState::Running(_)),
         "snapshot maintenance did not finish in time"
@@ -406,7 +368,6 @@ fn maintenance_export_snapshot_creates_snapshot_directory() {
         supervisor_slot.is_some(),
         "supervisor should be restored after maintenance"
     );
-
     app.supervisor = supervisor_slot;
     let supervisor = app.supervisor.as_ref().expect("supervisor restored");
     match &app.maintenance_state {
@@ -418,7 +379,6 @@ fn maintenance_export_snapshot_creates_snapshot_directory() {
         }
         other => panic!("snapshot maintenance did not complete: {other:?}"),
     }
-
     let snapshots_dir = supervisor.paths().snapshots_dir();
     let snapshot_slug = "smoke-snapshot-42";
     let snapshot_root = snapshots_dir.join(snapshot_slug);
@@ -440,14 +400,12 @@ fn maintenance_export_snapshot_creates_snapshot_directory() {
         Some(supervisor.peers().len() as u64),
         "metadata peer_count should match supervisor peer count"
     );
-
     let final_invocations = genesis_invocation_count(&log_path);
     assert_eq!(
         final_invocations, initial_invocations,
         "exporting snapshots must not trigger additional kagami invocations"
     );
 }
-
 #[test]
 fn maintenance_reset_invokes_kagami_and_cleans_storage() {
     if !super::socket_bind_available() {
@@ -456,21 +414,16 @@ fn maintenance_reset_invokes_kagami_and_cleans_storage() {
     }
     let _lock = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
-
     let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
     let irohad_stub = install_noop_stub(temp.path(), "irohad_reset_stub.sh");
     let log_path = temp.path().join("kagami_reset.log");
-
     let _log_guard = TestEnvGuard::set("MOCHI_TEST_KAGAMI_LOG", &log_path);
     let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-
     let data_root = temp.path().join("reset-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-
     let mut app = MochiApp::default();
     let mut supervisor_slot = app.supervisor.take();
-
     {
         let supervisor = supervisor_slot.as_ref().expect("supervisor ready");
         for peer in supervisor.peers() {
@@ -478,16 +431,13 @@ fn maintenance_reset_invokes_kagami_and_cleans_storage() {
             fs::write(storage_dir.join("junk.bin"), b"junk").expect("write junk file");
         }
     }
-
     let baseline_invocations = genesis_invocation_count(&log_path);
-
     assert!(
         app.begin_maintenance(MaintenanceTask::Reset),
         "reset maintenance should start when idle"
     );
     app.maintenance_command = Some(MaintenanceCommand::Reset);
     app.schedule_pending_maintenance(&mut supervisor_slot);
-
     for _ in 0..120 {
         app.poll_maintenance_updates(&mut supervisor_slot);
         if !matches!(app.maintenance_state, MaintenanceState::Running(_)) {
@@ -495,7 +445,6 @@ fn maintenance_reset_invokes_kagami_and_cleans_storage() {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-
     assert!(
         !matches!(app.maintenance_state, MaintenanceState::Running(_)),
         "reset maintenance did not finish in time"
@@ -504,7 +453,6 @@ fn maintenance_reset_invokes_kagami_and_cleans_storage() {
         supervisor_slot.is_some(),
         "supervisor should be restored after maintenance"
     );
-
     app.supervisor = supervisor_slot;
     let supervisor = app.supervisor.as_ref().expect("supervisor restored");
     match &app.maintenance_state {
@@ -516,7 +464,6 @@ fn maintenance_reset_invokes_kagami_and_cleans_storage() {
         }
         other => panic!("reset maintenance did not complete: {other:?}"),
     }
-
     for peer in supervisor.peers() {
         let storage_dir = peer.storage_dir();
         assert!(
@@ -544,14 +491,12 @@ fn maintenance_reset_invokes_kagami_and_cleans_storage() {
             peer.alias()
         );
     }
-
     let final_invocations = genesis_invocation_count(&log_path);
     assert!(
         final_invocations > baseline_invocations,
         "wipe & re-genesis should invoke kagami again"
     );
 }
-
 #[test]
 fn maintenance_restore_snapshot_rehydrates_storage() {
     if !super::socket_bind_available() {
@@ -560,27 +505,21 @@ fn maintenance_restore_snapshot_rehydrates_storage() {
     }
     let _lock = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
-
     let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
     let irohad_stub = install_noop_stub(temp.path(), "irohad_restore_stub.sh");
     let log_path = temp.path().join("kagami_restore.log");
-
     let _log_guard = TestEnvGuard::set("MOCHI_TEST_KAGAMI_LOG", &log_path);
     let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-
     let data_root = temp.path().join("restore-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-
     let mut app = MochiApp::default();
     let mut supervisor_slot = app.supervisor.take();
     let supervisor = supervisor_slot.as_mut().expect("supervisor ready");
-
     let peer = supervisor.peers().first().expect("at least one peer");
     let storage_dir = peer.storage_dir();
     let marker_path = storage_dir.join("marker.txt");
     fs::write(&marker_path, b"snapshot-data").expect("write snapshot data");
-
     let snapshot_root = supervisor
         .export_snapshot(Some("Restore Snapshot 7"))
         .expect("export snapshot");
@@ -589,9 +528,7 @@ fn maintenance_restore_snapshot_rehydrates_storage() {
         .unwrap()
         .to_string_lossy()
         .to_string();
-
     fs::write(&marker_path, b"mutated-data").expect("mutate storage marker");
-
     assert!(
         app.begin_maintenance(MaintenanceTask::Restore),
         "restore maintenance should start when idle"
@@ -599,7 +536,6 @@ fn maintenance_restore_snapshot_rehydrates_storage() {
     let target = slug.clone();
     app.maintenance_command = Some(MaintenanceCommand::Restore { target });
     app.schedule_pending_maintenance(&mut supervisor_slot);
-
     for _ in 0..120 {
         app.poll_maintenance_updates(&mut supervisor_slot);
         if !matches!(app.maintenance_state, MaintenanceState::Running(_)) {
@@ -607,7 +543,6 @@ fn maintenance_restore_snapshot_rehydrates_storage() {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-
     assert!(
         !matches!(app.maintenance_state, MaintenanceState::Running(_)),
         "restore maintenance did not finish in time"
@@ -616,7 +551,6 @@ fn maintenance_restore_snapshot_rehydrates_storage() {
         supervisor_slot.is_some(),
         "supervisor should be restored after maintenance"
     );
-
     app.supervisor = supervisor_slot;
     let supervisor = app.supervisor.as_ref().expect("supervisor restored");
     match &app.maintenance_state {
@@ -628,21 +562,18 @@ fn maintenance_restore_snapshot_rehydrates_storage() {
         }
         other => panic!("restore maintenance did not complete: {other:?}"),
     }
-
     let restored_marker =
         fs::read(marker_path).expect("read storage marker after restore completed");
     assert_eq!(
         restored_marker, b"snapshot-data",
         "restore should rehydrate storage contents"
     );
-
     let snapshots_dir = supervisor.paths().snapshots_dir();
     assert!(
         snapshots_dir.join(&slug).exists(),
         "snapshot should remain available for future restores"
     );
 }
-
 fn sample_sumeragi_status_wire() -> SumeragiV2Status {
     SumeragiV2Status {
         protocol_version: PROTOCOL_VERSION,
@@ -679,7 +610,6 @@ fn sample_sumeragi_status_wire() -> SumeragiV2Status {
         liveness: Default::default(),
     }
 }
-
 fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
     SumeragiDiagnosticsStatus {
         pipeline_execution: Default::default(),
@@ -747,7 +677,6 @@ fn sample_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
         autonomous_lane_executions: Vec::new(),
     }
 }
-
 #[test]
 fn ensure_selection_picks_first_available() {
     let mut selection = Some("missing".to_owned());
@@ -755,7 +684,6 @@ fn ensure_selection_picks_first_available() {
     MochiApp::ensure_selection(&mut selection, &aliases);
     assert_eq!(selection, Some("alpha".to_owned()));
 }
-
 #[test]
 fn collect_event_text_includes_summary_and_detail() {
     let rendered = vec![
@@ -792,7 +720,6 @@ fn collect_event_text_includes_summary_and_detail() {
         "[alpha] Transaction Rejected — ABC — hash=ABCDEF • raw=128B — reason=invalid_signature"
     );
 }
-
 #[test]
 fn collect_event_json_serializes_structured_events() {
     let time_interval = TimeInterval::new(Duration::from_millis(10), Duration::from_millis(5));
@@ -816,7 +743,6 @@ fn collect_event_json_serializes_structured_events() {
         json::from_str(&as_json).expect("exported JSON should be parseable via Norito");
     let array = parsed.as_array().expect("export must be a JSON array");
     assert_eq!(array.len(), 1, "expected a single exported event payload");
-
     let text_event = EventDisplay {
         alias: Some("alpha".to_owned()),
         event: EventStreamEvent::Text {
@@ -828,7 +754,6 @@ fn collect_event_json_serializes_structured_events() {
         "JSON export must fail when no structured events match"
     );
 }
-
 fn sample_state_entry(title: &str, bytes: Vec<u8>) -> super::StateEntry {
     let json_payload = format!("{{\"title\":\"{title}\"}}");
     super::StateEntry {
@@ -847,7 +772,6 @@ fn sample_state_entry(title: &str, bytes: Vec<u8>) -> super::StateEntry {
         search_blob: title.to_ascii_lowercase(),
     }
 }
-
 fn sample_state_entry_with_domain(title: &str, domain: &str, bytes: Vec<u8>) -> super::StateEntry {
     let mut entry = sample_state_entry(title, bytes);
     let lower = domain.to_ascii_lowercase();
@@ -857,7 +781,6 @@ fn sample_state_entry_with_domain(title: &str, domain: &str, bytes: Vec<u8>) -> 
     entry.search_blob.push_str(&lower);
     entry
 }
-
 #[test]
 fn collect_state_json_exports_array() {
     let entries = [
@@ -886,7 +809,6 @@ fn collect_state_json_exports_array() {
         Some("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB")
     );
 }
-
 #[test]
 fn collect_state_norito_exports_hex_dump() {
     let entries = [sample_state_entry(
@@ -915,7 +837,6 @@ fn collect_state_norito_exports_hex_dump() {
         "hex section should contain only hexadecimal digits"
     );
 }
-
 #[test]
 fn save_state_json_to_file_writes_filtered_entries() {
     let entries = [sample_state_entry(
@@ -935,7 +856,6 @@ fn save_state_json_to_file_writes_filtered_entries() {
         "exported JSON should include entry identifier"
     );
 }
-
 #[test]
 fn save_state_json_to_file_rejects_empty_entries() {
     let entries: Vec<&super::StateEntry> = Vec::new();
@@ -944,7 +864,6 @@ fn save_state_json_to_file_rejects_empty_entries() {
         "export should fail when no state entries are selected"
     );
 }
-
 #[test]
 fn save_state_norito_to_file_writes_filtered_entries() {
     let entries = [sample_state_entry(
@@ -965,7 +884,6 @@ fn save_state_norito_to_file_writes_filtered_entries() {
         "exported Norito dump should include entry identifier"
     );
 }
-
 #[test]
 fn save_state_norito_to_file_rejects_empty_entries() {
     let entries: Vec<&super::StateEntry> = Vec::new();
@@ -974,7 +892,6 @@ fn save_state_norito_to_file_rejects_empty_entries() {
         "export should fail when no state entries are selected"
     );
 }
-
 #[test]
 fn state_tab_select_page_updates_entries_and_remaining() {
     let mut tab = super::StateTabState::new(StateQueryKind::Accounts);
@@ -996,7 +913,6 @@ fn state_tab_select_page_updates_entries_and_remaining() {
             remaining: 0,
         },
     ];
-
     tab.select_page(0);
     assert_eq!(tab.entries.len(), 1, "expected a single entry on page 0");
     assert_eq!(
@@ -1009,7 +925,6 @@ fn state_tab_select_page_updates_entries_and_remaining() {
         Some(2),
         "remaining counter should be preserved when greater than zero"
     );
-
     tab.select_page(1);
     assert_eq!(tab.entries.len(), 1, "expected a single entry on page 1");
     assert_eq!(
@@ -1022,7 +937,6 @@ fn state_tab_select_page_updates_entries_and_remaining() {
         "remaining counter should drop to None when reported as zero"
     );
 }
-
 #[test]
 fn state_tabs_reset_results_preserves_filters() {
     let mut tabs = super::StateTabs::default();
@@ -1047,7 +961,6 @@ fn state_tabs_reset_results_preserves_filters() {
         entries: vec![sample_state_entry("peer#1", vec![0x04])],
         remaining: 0,
     });
-
     tabs.reset_results_for_all();
     let tab = tabs.get(StateQueryKind::Accounts);
     assert!(
@@ -1072,7 +985,6 @@ fn state_tabs_reset_results_preserves_filters() {
         "reset should clear cached pages for the peers tab"
     );
 }
-
 #[test]
 fn state_filter_adapts_peer_fields() {
     let mut filter = super::StateFilter {
@@ -1099,7 +1011,6 @@ fn state_filter_adapts_peer_fields() {
         "peer filter should not retain asset definition constraints"
     );
 }
-
 #[test]
 fn filter_state_entries_collects_cached_matches() {
     let entry_page0 = sample_state_entry(
@@ -1144,7 +1055,6 @@ fn filter_state_entries_collects_cached_matches() {
         "cached match should reference the sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB entry"
     );
 }
-
 #[test]
 fn filter_state_entries_falls_back_to_current_page() {
     let entry_page0 = sample_state_entry(
@@ -1177,7 +1087,6 @@ fn filter_state_entries_falls_back_to_current_page() {
         "cached results should include the local page entry"
     );
 }
-
 #[test]
 fn filter_state_entries_respects_domain_filter() {
     let entry_page0 = sample_state_entry_with_domain(
@@ -1225,7 +1134,6 @@ fn filter_state_entries_respects_domain_filter() {
         "matched entry should report the requested domain"
     );
 }
-
 #[test]
 fn collect_log_text_joins_lines() {
     let entries = vec![
@@ -1235,9 +1143,7 @@ fn collect_log_text_joins_lines() {
     let text = super::collect_log_text(&entries).expect("export log lines");
     assert_eq!(text, "[alpha] started\n[alpha] running");
 }
-
 include!("gui/collect_log_text_empty_test.rs");
-
 #[test]
 fn save_logs_to_file_writes_filtered_entries() {
     let entries = vec![
@@ -1254,7 +1160,6 @@ fn save_logs_to_file_writes_filtered_entries() {
     assert!(written.contains("[alpha] started"));
     assert!(written.contains("[alpha] running"));
 }
-
 #[test]
 fn save_logs_to_file_rejects_empty_entries() {
     let entries: Vec<(usize, String)> = Vec::new();
@@ -1263,7 +1168,6 @@ fn save_logs_to_file_rejects_empty_entries() {
         "export should fail with no matching logs"
     );
 }
-
 #[test]
 fn log_kind_filter_respects_settings() {
     let mut app = MochiApp::default();
@@ -1278,7 +1182,6 @@ fn log_kind_filter_respects_settings() {
         !app.is_log_kind_enabled(MochiApp::log_event_kind(&stdout_event)),
         "stdout events should be hidden when the toggle is disabled"
     );
-
     let system_event = PeerLogEvent::Lifecycle {
         alias: Arc::from("alpha"),
         event: LifecycleEvent::Started { attempt: 0 },
@@ -1289,7 +1192,6 @@ fn log_kind_filter_respects_settings() {
         "system events remain visible by default"
     );
 }
-
 #[test]
 fn event_filter_honours_alias_filters() {
     let mut filter = EventFilterState::default();
@@ -1315,7 +1217,6 @@ fn event_filter_honours_alias_filters() {
         "re-enabled alias should match again"
     );
 }
-
 #[test]
 fn event_filter_supports_multiple_peer_toggles() {
     let mut filter = EventFilterState::default();
@@ -1335,7 +1236,6 @@ fn event_filter_supports_multiple_peer_toggles() {
     );
     assert!(filter.matches(&alpha, None));
     assert!(filter.matches(&beta, None));
-
     filter.toggle_alias("beta", false);
     assert!(
         filter.matches(&alpha, None),
@@ -1346,7 +1246,6 @@ fn event_filter_supports_multiple_peer_toggles() {
         "disabled alias should be hidden"
     );
 }
-
 #[test]
 fn event_filter_alias_toggle_is_case_insensitive() {
     let mut filter = EventFilterState::default();
@@ -1363,7 +1262,6 @@ fn event_filter_alias_toggle_is_case_insensitive() {
         "alias filters should treat names case-insensitively"
     );
 }
-
 #[test]
 fn event_filter_serializes_and_restores_state() {
     let mut filter = EventFilterState {
@@ -1384,7 +1282,6 @@ fn event_filter_serializes_and_restores_state() {
         "alias selection should persist with lowercasing"
     );
 }
-
 #[test]
 fn collect_dashboard_metrics_counts_resources() {
     let mut app = MochiApp::default();
@@ -1408,7 +1305,6 @@ fn collect_dashboard_metrics_counts_resources() {
             logs: "logs-beta".to_owned(),
         },
     ];
-
     let summary = BlockSummary {
         height: 5,
         hash_hex: "hash".to_owned(),
@@ -1433,7 +1329,6 @@ fn collect_dashboard_metrics_counts_resources() {
             text: "started".to_owned(),
         },
     });
-
     let event_snapshot = EventSnapshot {
         connected: true,
         ..Default::default()
@@ -1448,7 +1343,6 @@ fn collect_dashboard_metrics_counts_resources() {
     });
     app.log_events
         .push(MochiApp::system_log_event("alpha", "log".to_owned()));
-
     let metrics = app.collect_dashboard_metrics(&peer_rows);
     assert_eq!(metrics.total_peers, 2);
     assert_eq!(metrics.running_peers, 1);
@@ -1463,12 +1357,10 @@ fn collect_dashboard_metrics_counts_resources() {
     assert!(metrics.avg_queue.is_none());
     assert!(metrics.avg_commit_latency_ms.is_none());
 }
-
 #[test]
 fn peer_status_view_captures_metrics_and_errors() {
     let mut view = PeerStatusView::default();
     let now = Instant::now();
-
     let initial = TelemetryStatus {
         build: Default::default(),
         peers: 2,
@@ -1520,7 +1412,6 @@ fn peer_status_view_captures_metrics_and_errors() {
     let membership_summary = view.membership_summary().expect("membership summary");
     assert!(membership_summary.contains("h21"));
     assert!(membership_summary.contains("leader 1"));
-
     let updated = TelemetryStatus {
         build: Default::default(),
         peers: 3,
@@ -1575,7 +1466,6 @@ fn peer_status_view_captures_metrics_and_errors() {
     let membership_summary = view.membership_summary().expect("membership summary");
     assert!(membership_summary.contains("h30"));
     assert!(membership_summary.contains("committed 9"));
-
     let err_info = ToriiError::Decode("bad payload".to_owned()).summarize();
     view.record_error(err_info, now + Duration::from_secs(3));
     let (label, color) = view.status_label();
@@ -1583,12 +1473,10 @@ fn peer_status_view_captures_metrics_and_errors() {
     assert_eq!(color, Color32::from_rgb(200, 160, 64));
     assert!(view.membership_summary().is_some());
 }
-
 #[test]
 fn peer_status_view_surfaces_sealed_lanes() {
     let mut view = PeerStatusView::default();
     let now = Instant::now();
-
     let status = TelemetryStatus {
         build: Default::default(),
         peers: 2,
@@ -1621,7 +1509,6 @@ fn peer_status_view_surfaces_sealed_lanes() {
         status: status.clone(),
         metrics: StatusMetrics::from_samples(None, &status),
     };
-
     let sumeragi = sample_sumeragi_status_wire();
     let mut diagnostics = sample_sumeragi_diagnostics();
     diagnostics.lane_governance_sealed_total = 2;
@@ -1632,9 +1519,7 @@ fn peer_status_view_surfaces_sealed_lanes() {
         "ops".to_owned(),
         "extra".to_owned(),
     ];
-
     view.record_snapshot(snapshot, Some(sumeragi), Some(diagnostics), None, None, now);
-
     let (label, color) = view.status_label();
     assert!(
         label.contains("sealed=2"),
@@ -1655,7 +1540,6 @@ fn peer_status_view_surfaces_sealed_lanes() {
         "summary should collapse additional aliases: {summary}"
     );
 }
-
 #[test]
 fn lane_status_rows_surface_relay_lag_and_cursor() {
     let mut view = PeerStatusView::default();
@@ -1693,9 +1577,7 @@ fn lane_status_rows_surface_relay_lag_and_cursor() {
     };
     let envelope = LaneRelayEnvelope::new(header, None, None, settlement, 256).expect("envelope");
     diagnostics.lane_relay_envelopes = vec![envelope];
-
     view.record_snapshot(snapshot, Some(sumeragi), Some(diagnostics), None, None, now);
-
     let rows = view.lane_status_rows(&lane_catalog_snapshot(None));
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
@@ -1706,7 +1588,6 @@ fn lane_status_rows_surface_relay_lag_and_cursor() {
     assert_eq!(row.da_cursor_label(), "e2 s7");
     assert!(matches!(row.relay_state, RelayIngestState::MissingQc));
 }
-
 #[test]
 fn composer_update_success_records_message() {
     let mut app = MochiApp::default();
@@ -1732,7 +1613,6 @@ fn composer_update_success_records_message() {
     assert_eq!(app.event_filter.search, "hash123");
     assert!(app.auto_event_stream);
 }
-
 #[test]
 fn composer_update_failure_records_error() {
     let mut app = MochiApp::default();
@@ -1760,7 +1640,6 @@ fn composer_update_failure_records_error() {
     assert_eq!(app.log_selected_peer.as_deref(), Some("beta"));
     assert!(app.auto_log_stream);
 }
-
 #[test]
 fn add_instruction_to_batch_appends_draft() {
     let mut app = MochiApp::default();
@@ -1772,7 +1651,6 @@ fn add_instruction_to_batch_appends_draft() {
     assert_eq!(app.composer_drafts.len(), 1);
     assert!(app.composer_error.is_none());
 }
-
 #[test]
 fn transfer_without_destination_records_error() {
     let mut app = MochiApp::default();
@@ -1791,7 +1669,6 @@ fn transfer_without_destination_records_error() {
         "expected destination error message"
     );
 }
-
 #[test]
 fn add_instruction_respects_signer_permissions() {
     let mut app = MochiApp::default();
@@ -1810,7 +1687,6 @@ fn add_instruction_respects_signer_permissions() {
         "expected permission error, got `{message}`"
     );
 }
-
 #[test]
 fn composer_template_prefills_mint_inputs() {
     if !super::socket_bind_available() {
@@ -1833,13 +1709,10 @@ fn composer_template_prefills_mint_inputs() {
     let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
     reset_cli_overrides_for_tests();
-
     let mut app = MochiApp::default();
     app.composer_selected_signer = Some(0);
     let signers = development_signing_authorities();
-
     app.apply_composer_template(ComposerTemplate::MintRoseToSigner, signers);
-
     assert_eq!(
         app.composer_instruction_kind,
         ComposerInstructionKind::MintAsset
@@ -1863,7 +1736,6 @@ fn composer_template_prefills_mint_inputs() {
         "should surface mint template info banner"
     );
 }
-
 #[test]
 fn composer_template_prefills_burn_inputs() {
     if !super::socket_bind_available() {
@@ -1886,13 +1758,10 @@ fn composer_template_prefills_burn_inputs() {
     let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
     reset_cli_overrides_for_tests();
-
     let mut app = MochiApp::default();
     app.composer_selected_signer = Some(0);
     let signers = development_signing_authorities();
-
     app.apply_composer_template(ComposerTemplate::BurnRoseFromSigner, signers);
-
     assert_eq!(
         app.composer_instruction_kind,
         ComposerInstructionKind::BurnAsset
@@ -1916,7 +1785,6 @@ fn composer_template_prefills_burn_inputs() {
         "should surface burn template info banner"
     );
 }
-
 #[test]
 fn composer_template_prefills_transfer_inputs() {
     if !super::socket_bind_available() {
@@ -1939,13 +1807,10 @@ fn composer_template_prefills_transfer_inputs() {
     let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
     reset_cli_overrides_for_tests();
-
     let mut app = MochiApp::default();
     app.composer_selected_signer = Some(0);
     let signers = development_signing_authorities();
-
     app.apply_composer_template(ComposerTemplate::TransferRoseToTeammate, signers);
-
     assert_eq!(
         app.composer_instruction_kind,
         ComposerInstructionKind::TransferAsset
@@ -1967,7 +1832,6 @@ fn composer_template_prefills_transfer_inputs() {
         "destination should differ from the source signer"
     );
 }
-
 #[test]
 fn queue_plot_points_returns_points() {
     let mut app = MochiApp::default();
@@ -2002,10 +1866,8 @@ fn queue_plot_points_returns_points() {
         metrics: None,
     });
     app.status_history.insert("alpha".to_owned(), history);
-
     assert!(app.queue_plot_points("alpha").is_some());
 }
-
 #[test]
 fn commit_latency_plot_points_require_multiple_samples() {
     let mut app = MochiApp::default();
@@ -2013,7 +1875,6 @@ fn commit_latency_plot_points_require_multiple_samples() {
         app.commit_latency_plot_points("beta").is_none(),
         "no history should produce no plot"
     );
-
     let base = Instant::now();
     let mut history = VecDeque::new();
     let status_a = TelemetryStatus {
@@ -2036,7 +1897,6 @@ fn commit_latency_plot_points_require_multiple_samples() {
         app.commit_latency_plot_points("beta").is_none(),
         "a single sample should not emit a plot"
     );
-
     let mut status_b = status_a.clone();
     status_b.commit_time_ms = 140;
     status_b.queue_size = 5;
@@ -2053,13 +1913,11 @@ fn commit_latency_plot_points_require_multiple_samples() {
             snapshot: snapshot_b,
             metrics: None,
         });
-
     assert!(
         app.commit_latency_plot_points("beta").is_some(),
         "two samples should produce a commit latency plot"
     );
 }
-
 #[test]
 fn throughput_plot_points_returns_points() {
     let mut app = MochiApp::default();
@@ -2097,7 +1955,6 @@ fn throughput_plot_points_returns_points() {
         "two samples should produce throughput points"
     );
 }
-
 #[test]
 fn consensus_queue_plot_points_require_metrics() {
     let mut app = MochiApp::default();
@@ -2134,7 +1991,6 @@ fn consensus_queue_plot_points_require_metrics() {
         "two metrics samples should produce consensus queue points"
     );
 }
-
 #[test]
 fn view_change_plot_points_record_deltas() {
     let mut app = MochiApp::default();
@@ -2176,7 +2032,6 @@ fn view_change_plot_points_record_deltas() {
         "non-zero view change deltas should produce points"
     );
 }
-
 #[test]
 fn reschedule_plot_points_record_activity() {
     let mut app = MochiApp::default();
@@ -2218,7 +2073,6 @@ fn reschedule_plot_points_record_activity() {
         "reschedule deltas should produce points"
     );
 }
-
 #[test]
 fn peer_status_view_summarises_metrics() {
     let mut view = PeerStatusView::default();
@@ -2247,7 +2101,6 @@ fn peer_status_view_summarises_metrics() {
         storage.contains("Tiered state"),
         "storage string should include Tiered state label"
     );
-
     view.record_snapshot(
         snapshot,
         None,
@@ -2265,7 +2118,6 @@ fn peer_status_view_summarises_metrics() {
         "metrics error label should include prefix"
     );
 }
-
 fn sample_metrics_snapshot(timestamp: Instant, depth: f64, capacity: f64) -> ToriiMetricsSnapshot {
     ToriiMetricsSnapshot {
         timestamp,
@@ -2280,7 +2132,6 @@ fn sample_metrics_snapshot(timestamp: Instant, depth: f64, capacity: f64) -> Tor
         uptime_since_genesis_ms: None,
     }
 }
-
 #[test]
 fn peer_state_color_matches_palette() {
     let palette = MochiApp::palette();
@@ -2297,5 +2148,4 @@ fn peer_state_color_matches_palette() {
         palette.warning
     );
 }
-
 include!("gui/settings_tail_tests.rs");

@@ -14,9 +14,7 @@
 //! node and SET-pair events through four-lane products, and every terminal is
 //! carried to the final aggregate row. RFC 5280 consumes those terminals in
 //! its own adapter through the sole complete MAIN aggregate registration.
-
 use thiserror::Error;
-
 use super::{
     der_air::{
         ZK_X509_DER_AIR_MAX_DOCUMENTS_V1, ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1,
@@ -36,7 +34,6 @@ use super::{
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
-
 /// Stable identity of the fixed-capacity strict-DER numeric adapter.
 #[cfg(test)]
 pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-stark-air-v1-incompatible:native-log19:base76:aux196:fixed14:constraints898:degree7:two-base-and-four-aux-physical-chunks:registered-expression-degree-ceiling7:multi-direction-affine-audit-attains-seven:mask-multiplier-degree801:mask-coefficients802:quotient-bound3151335:quotient-coset-capacity4194303:fri-chunk-capacity1048575:four-chunk-composition-capacity4194303:zero-sized-public-shape:constant-registration-transcript:no-private-document-count-length-parser-or-comparator-disclosure:committed-private-parser-and-comparator-active-prefixes:canonical-inactive-rows:carried-private-document-count-range-bound:parser-cap65536:comparator-cap262144:padding196608:proof-document-max4096:proof-total-document-bytes32768:generic-oracle-max16384:streaming-byte-parser:identifier-u32-base128-minimal:length-definite-minimal-max16384:node-count-max2048:depth-max16:constructed-frame-push-pop-four-lane-product:universal-tag-one-hot-without-witness-branch:primitive-boolean-null-integer-enumerated-oid-bit-string:set-pair-four-lane-product:set-byte-zero-safe-log-derivative-with-singular-count-equality:input-byte-and-node-event-four-lane-products:private-document-product-internal-not-public:verifier-fixed-parser-and-comparator-and-padding-ranges:cross-adapter-claims:rfc5280-and-byte-memory-consumer-registrations=complete:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
@@ -45,7 +42,6 @@ pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_SHA256_V1: [u8; 32] = [
     0xd5, 0x2f, 0xc3, 0x6d, 0x71, 0x55, 0xc6, 0x4c, 0xa1, 0xe9, 0xe0, 0x1f, 0x96, 0x8b, 0xac, 0x70,
     0x21, 0xc9, 0x2f, 0x18, 0x1e, 0x41, 0x5b, 0x45, 0x20, 0x72, 0x19, 0x94, 0x71, 0x94, 0xb5, 0x83,
 ];
-
 /// The aggregate native domain shared with SHA, projection, and every bus.
 pub(crate) const ZK_X509_DER_STARK_TRACE_LOG2_V1: u8 = 19;
 pub(crate) const ZK_X509_DER_STARK_TRACE_SIZE_V1: usize = 1 << ZK_X509_DER_STARK_TRACE_LOG2_V1;
@@ -84,14 +80,12 @@ pub(crate) const ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1: usize =
 /// Canonical inactive tail completing the sole first-release trace domain.
 pub(crate) const ZK_X509_DER_STARK_FIXED_PADDING_ROWS_V1: usize =
     ZK_X509_DER_STARK_TRACE_SIZE_V1 - ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1;
-
 const _: () =
     assert!(ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1 < ZK_X509_DER_STARK_TRACE_SIZE_V1);
 const _: () = assert!(
     ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1 + ZK_X509_DER_STARK_FIXED_PADDING_ROWS_V1
         == ZK_X509_DER_STARK_TRACE_SIZE_V1
 );
-
 const DER_TUPLE_CHALLENGE_LABELS_V1: [&[u8]; 12] = [
     b"zk-x509-der-bus-tuple-slot-00-v1",
     b"zk-x509-der-bus-tuple-slot-01-v1",
@@ -107,7 +101,6 @@ const DER_TUPLE_CHALLENGE_LABELS_V1: [&[u8]; 12] = [
     b"zk-x509-der-bus-tuple-slot-11-v1",
 ];
 const DER_BYTE_LOOKUP_CHALLENGE_LABEL_V1: &[u8] = b"zk-x509-der-byte-lookup-shift-v1";
-
 // Parser row columns. Comparator rows deliberately reinterpret the same
 // physical cells; fixed family selectors choose the numeric equations.
 const BASE_DOCUMENT: usize = 0;
@@ -146,7 +139,6 @@ const BASE_ROW_ACTIVE: usize = 64;
 const BASE_FINAL_DOCUMENT: usize = 65;
 const BASE_FINAL_DOCUMENT_BITS: usize = 66;
 const BASE_FINAL_DOCUMENT_SLACK_BITS: usize = 71;
-
 const PHASE_IDENTIFIER_FIRST: usize = 0;
 const PHASE_IDENTIFIER_HIGH: usize = 1;
 const PHASE_LENGTH_FIRST: usize = 2;
@@ -156,11 +148,9 @@ const PHASE_PRIMITIVE_CONTENT: usize = 5;
 const PHASE_BOUNDARY: usize = 6;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const PHASE_SET_COMPARATOR: usize = 7;
-
 const UNIVERSAL_TAGS_V1: [u32; ZK_X509_DER_AIR_UNIVERSAL_SELECTORS_V1] = [
     1, 2, 3, 4, 5, 6, 10, 12, 16, 17, 18, 19, 20, 22, 23, 24, 26, 28, 30,
 ];
-
 pub(crate) const FIX_ACTIVE: usize = 0;
 pub(crate) const FIX_FIRST_ACTIVE: usize = 1;
 pub(crate) const FIX_LAST_ACTIVE: usize = 2;
@@ -175,7 +165,6 @@ pub(crate) const FIX_FIRST_AGGREGATE: usize = 10;
 pub(crate) const FIX_LAST_AGGREGATE: usize = 11;
 pub(crate) const FIX_FINAL_DOCUMENT: usize = 12;
 pub(crate) const FIX_PARSER_CONTINUE: usize = 13;
-
 const AUX_STACK_PUSH_BEFORE: usize = 0;
 const AUX_STACK_POP_BEFORE: usize = AUX_STACK_PUSH_BEFORE + ZK_X509_DER_STARK_BUS_LANES_V1;
 const AUX_STACK_PUSH_AFTER: usize = AUX_STACK_POP_BEFORE + ZK_X509_DER_STARK_BUS_LANES_V1;
@@ -241,9 +230,7 @@ const AUX_BOUNDARY_COMPLETES_PARENT: usize = AUX_BOUNDARY_NOT_ROOT + 1;
 const AUX_PAIR_PRODUCER_EVENT: usize = AUX_BOUNDARY_COMPLETES_PARENT + 1;
 const AUX_PRIMITIVE_ENTRY: usize = AUX_PAIR_PRODUCER_EVENT + 1;
 const AUX_ENTERS_CHILD: usize = AUX_PRIMITIVE_ENTRY + 1;
-
 const _: () = assert!(AUX_ENTERS_CHILD + 1 == ZK_X509_DER_STARK_AUX_WIDTH_V1);
-
 /// Private proof geometry committed inside the DER base trace.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -252,7 +239,6 @@ pub(crate) struct ZkX509DerStarkPrivateShapeV1 {
     pub(crate) parser_rows: usize,
     pub(crate) comparator_rows: usize,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerStarkPrivateShapeV1 {
     pub(crate) fn active_rows(&self) -> Result<usize, ZkX509DerStarkErrorV1> {
@@ -261,7 +247,6 @@ impl ZkX509DerStarkPrivateShapeV1 {
             .filter(|rows| *rows != 0 && *rows <= ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1)
             .ok_or(ZkX509DerStarkErrorV1::Resource)
     }
-
     pub(crate) fn validate(&self) -> Result<(), ZkX509DerStarkErrorV1> {
         if self.document_lengths.is_empty()
             || self.document_lengths.len() > ZK_X509_DER_STARK_MAX_DOCUMENTS_V1
@@ -333,44 +318,36 @@ impl ZkX509DerStarkPrivateShapeV1 {
         Ok(())
     }
 }
-
 /// Public fixed-capacity DER registration shape. It intentionally contains no
 /// private document count, length, parser count, or comparator count.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkShapeV1;
-
 impl ZkX509DerStarkShapeV1 {
     pub(crate) const fn validate(&self) -> Result<(), ZkX509DerStarkErrorV1> {
         Ok(())
     }
-
     #[cfg(test)]
     pub(crate) const fn active_rows(&self) -> usize {
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
     }
-
     #[cfg(test)]
     pub(crate) const fn transcript_bytes(&self) -> &'static [u8] {
         b"zk-x509-der-stark-fixed-registration-v1"
     }
 }
-
 /// Verifier-owned constant fixed schedule; it never stores native fixed rows.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkFixedScheduleV1;
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerStarkFixedScheduleV1 {
     pub(crate) const fn active_rows(&self) -> usize {
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
     }
-
     #[cfg(test)]
     pub(crate) const fn aggregate_rows(&self) -> usize {
         ZK_X509_DER_STARK_TRACE_SIZE_V1
     }
-
     pub(crate) fn fixed_row(
         &self,
         index: usize,
@@ -406,7 +383,6 @@ impl ZkX509DerStarkFixedScheduleV1 {
         Ok(row)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn compile_zk_x509_der_stark_fixed_schedule_v1(
     shape: ZkX509DerStarkShapeV1,
@@ -414,7 +390,6 @@ pub(crate) fn compile_zk_x509_der_stark_fixed_schedule_v1(
     shape.validate()?;
     Ok(ZkX509DerStarkFixedScheduleV1)
 }
-
 /// Transcript challenges used by stack, event, and byte lookup buses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkChallengesV1 {
@@ -423,7 +398,6 @@ pub(crate) struct ZkX509DerStarkChallengesV1 {
     /// Logarithmic-derivative byte lookup points.
     pub(crate) byte_lookup: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
 }
-
 impl ZkX509DerStarkChallengesV1 {
     pub(crate) fn validate(self) -> Result<(), ZkX509DerStarkErrorV1> {
         for lane in 0..ZK_X509_DER_STARK_BUS_LANES_V1 {
@@ -451,7 +425,6 @@ impl ZkX509DerStarkChallengesV1 {
         Ok(())
     }
 }
-
 /// Derive the strict-DER copy and lookup challenges in canonical lane-major
 /// order after the DER base commitment and before constructing its auxiliary
 /// trace.
@@ -479,7 +452,6 @@ pub(crate) fn derive_zk_x509_der_stark_challenges_v1(
     }
     Ok(challenges)
 }
-
 /// Numeric DER adapter failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509DerStarkErrorV1 {
@@ -496,7 +468,6 @@ pub(crate) enum ZkX509DerStarkErrorV1 {
     #[error("zk-X509 DER STARK trace transition is invalid")]
     Transition,
 }
-
 /// Base trace before challenge-dependent bus products are populated.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
@@ -505,14 +476,12 @@ pub(crate) struct ZkX509DerStarkBaseV1 {
     /// Exact active parser rows followed by exact SET comparator rows.
     pub(crate) rows: Vec<[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509DerStarkBaseV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkX509DerStarkBaseV1 { <private material redacted> }")
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerStarkBaseV1 {
     /// Recursively overwrite all private geometry and committed field rows.
@@ -526,7 +495,6 @@ impl ZkX509DerStarkBaseV1 {
         }
         self.rows.clear();
     }
-
     #[cfg(test)]
     pub(crate) fn private_is_zeroized_v1(&self) -> bool {
         self.private_shape.document_lengths.is_empty()
@@ -535,7 +503,6 @@ impl ZkX509DerStarkBaseV1 {
             && self.rows.is_empty()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zk_x509_der_stark_compact_row_native_index_v1(
     shape: &ZkX509DerStarkPrivateShapeV1,
@@ -552,7 +519,6 @@ fn zk_x509_der_stark_compact_row_native_index_v1(
             .ok_or(ZkX509DerStarkErrorV1::Resource)
     }
 }
-
 /// Fixed public terminal registration.
 ///
 /// Document lengths and the number of DER documents are private. In
@@ -561,7 +527,6 @@ fn zk_x509_der_stark_compact_row_native_index_v1(
 /// offline dictionary oracle for the short, highly structured length vector.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ZkX509DerStarkPublicTerminalsV1;
-
 /// Prover-supplied cross-adapter terminal claims.
 ///
 /// These values are absorbed after auxiliary roots and before composition
@@ -573,7 +538,6 @@ pub(crate) struct ZkX509DerStarkTerminalClaimsV1 {
     pub(crate) input_byte: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
     pub(crate) node: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
 }
-
 /// Exact node-event fields exported to the RFC 5280 consumer.
 ///
 /// The order is the DER adapter's committed node tuple order.  Exposing the
@@ -593,7 +557,6 @@ pub(crate) struct ZkX509DerStarkNodeEventV1 {
     pub(crate) depth: F,
     pub(crate) content_len: F,
 }
-
 /// Challenge-dependent strict-DER trace. Only active rows are materialized;
 /// aggregate padding rows are reconstructed from the final accumulators.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -602,7 +565,6 @@ pub(crate) struct ZkX509DerStarkTraceV1 {
     pub(crate) base: ZkX509DerStarkBaseV1,
     pub(crate) aux_rows: Vec<[F; ZK_X509_DER_STARK_AUX_WIDTH_V1]>,
 }
-
 /// Final bus values exported by the adapter.
 ///
 /// Stack, SET-pair, and lookup terminals must close internally. Node and
@@ -622,7 +584,6 @@ pub(crate) struct ZkX509DerStarkTerminalsV1 {
     pub(crate) byte_query_zero_count: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
     pub(crate) input_byte: [F; ZK_X509_DER_STARK_BUS_LANES_V1],
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FrameV1 {
@@ -635,7 +596,6 @@ struct FrameV1 {
     previous_start: u64,
     previous_end: u64,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ParserStateV1 {
@@ -667,7 +627,6 @@ struct ParserStateV1 {
     finalize_selectors: [F; ZK_X509_DER_AIR_UNIVERSAL_SELECTORS_V1],
     boundary_parent: FrameV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ParserStateV1 {
     fn for_document(document: usize, document_len: usize) -> Result<Self, ZkX509DerStarkErrorV1> {
@@ -703,7 +662,6 @@ impl ParserStateV1 {
         })
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_bits_v1(
     row: &mut [F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
@@ -715,7 +673,6 @@ fn write_bits_v1(
         row[start + bit] = F((value >> bit) & 1);
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn inverse_or_zero_v1(value: u64) -> F {
     if value == 0 {
@@ -724,7 +681,6 @@ fn inverse_or_zero_v1(value: u64) -> F {
         F(value).inv().expect("nonzero canonical bounded value")
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn encode_parser_state_v1(
     state: &ParserStateV1,
@@ -782,7 +738,6 @@ fn encode_parser_state_v1(
     row[BASE_OID_START] = F(u64::from(state.oid_start));
     row[BASE_UNUSED_BITS] = F(u64::from(state.unused_bits));
     row[BASE_DOCUMENT_FIRST] = F(u64::from(state.document_first));
-
     match state.phase {
         PHASE_IDENTIFIER_FIRST | PHASE_IDENTIFIER_HIGH => {
             write_bits_v1(&mut row, BASE_PAYLOAD, 3, u64::from(state.identifier_count));
@@ -826,17 +781,14 @@ fn encode_parser_state_v1(
     }
     Ok(row)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn node_usize_v1(value: F) -> Result<usize, ZkX509DerStarkErrorV1> {
     usize::try_from(value.0).map_err(|_| ZkX509DerStarkErrorV1::Resource)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn node_u64_v1(value: F) -> u64 {
     value.0
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn direct_children_v1(
     trace: &ZkX509DerDocumentTraceV1,
@@ -867,7 +819,6 @@ fn direct_children_v1(
         .map(|(index, _)| index)
         .collect())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn primitive_kind_v1(node: &ZkX509DerNodeRowV1) -> u8 {
     // 0=other, 1=BOOLEAN, 2=INTEGER, 3=BIT STRING, 4=NULL,
@@ -877,7 +828,6 @@ fn primitive_kind_v1(node: &ZkX509DerNodeRowV1) -> u8 {
         .position(|selector| node.universal_selectors[*selector] == F::ONE)
         .map_or(0, |position| u8::try_from(position + 1).expect("kind fits"))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn emit_parser_row_v1(
     rows: &mut Vec<[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]>,
@@ -901,7 +851,6 @@ fn emit_parser_row_v1(
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn emit_node_v1(
@@ -928,7 +877,6 @@ fn emit_node_v1(
     {
         return Err(ZkX509DerStarkErrorV1::Transition);
     }
-
     state.node_start = start;
     state.tag_class = 0;
     state.constructed = false;
@@ -942,7 +890,6 @@ fn emit_node_v1(
         .expect("cap")
         .checked_sub(state.node_count)
         .ok_or(ZkX509DerStarkErrorV1::Resource)?;
-
     for identifier_index in 0..node_usize_v1(node.identifier_len.value)? {
         let byte = u8::try_from(node.identifier[identifier_index].value.0)
             .map_err(|_| ZkX509DerStarkErrorV1::Row)?;
@@ -954,7 +901,6 @@ fn emit_node_v1(
         state.identifier_count =
             u8::try_from(identifier_index).map_err(|_| ZkX509DerStarkErrorV1::Resource)?;
         emit_parser_row_v1(rows, byte_rows, state, Some(byte))?;
-
         if identifier_index == 0 {
             state.tag_class = byte >> 6;
             state.constructed = byte & 0x20 != 0;
@@ -981,7 +927,6 @@ fn emit_node_v1(
     if state.tag_accumulator != node.tag_number.value.0 {
         return Err(ZkX509DerStarkErrorV1::Transition);
     }
-
     let length_len = node_usize_v1(node.length_len.value)?;
     state.length_accumulator = 0;
     state.length_remaining = 0;
@@ -1027,7 +972,6 @@ fn emit_node_v1(
     if state.length_accumulator != node.content_len.value.0 || state.offset != content_start {
         return Err(ZkX509DerStarkErrorV1::Transition);
     }
-
     state.phase = PHASE_FINALIZE_HEADER;
     state.check_delta = state.length_accumulator;
     state.finalize_selectors = node.universal_selectors;
@@ -1037,7 +981,6 @@ fn emit_node_v1(
         .checked_add(1)
         .ok_or(ZkX509DerStarkErrorV1::Resource)?;
     state.finalize_selectors = [F::ZERO; ZK_X509_DER_AIR_UNIVERSAL_SELECTORS_V1];
-
     let children = direct_children_v1(trace, node_index)?;
     if node.constructed == F::ONE {
         let parent = state.frame;
@@ -1193,7 +1136,6 @@ fn emit_node_v1(
     };
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn encode_comparator_row_v1(
     document: usize,
@@ -1237,7 +1179,6 @@ fn encode_comparator_row_v1(
             .and_then(|value| value.checked_sub(1))
             .ok_or(ZkX509DerStarkErrorV1::Row)?
     };
-
     let mut row = [F::ZERO; ZK_X509_DER_STARK_BASE_WIDTH_V1];
     row[0] = F(u64::try_from(document).map_err(|_| ZkX509DerStarkErrorV1::Resource)?);
     row[1] = source.set_node.value;
@@ -1269,7 +1210,6 @@ fn encode_comparator_row_v1(
     write_bits_v1(&mut row, 34, 15, slack);
     Ok(row)
 }
-
 /// Build the exact active numeric base trace.
 ///
 /// The logical parser is used only as a prover-side witness compiler and
@@ -1337,7 +1277,6 @@ pub(crate) fn build_zk_x509_der_stark_base_v1(
     {
         return Err(ZkX509DerStarkErrorV1::Transition);
     }
-
     let mut pair_id = 0_usize;
     for (document, trace) in traces.iter().enumerate() {
         for row_index in 0..trace.set_order_rows.len() {
@@ -1412,7 +1351,6 @@ pub(crate) fn build_zk_x509_der_stark_base_v1(
         rows,
     })
 }
-
 fn pack_bits_v1(bits: &[F]) -> F {
     bits.iter()
         .copied()
@@ -1421,7 +1359,6 @@ fn pack_bits_v1(bits: &[F]) -> F {
             sum.add(value.mul(F(1_u64 << bit)))
         })
 }
-
 #[cfg(test)]
 fn equality_selector_from_bits_v1(bits: &[F], value: usize) -> F {
     bits.iter()
@@ -1436,7 +1373,6 @@ fn equality_selector_from_bits_v1(bits: &[F], value: usize) -> F {
             })
         })
 }
-
 fn compress_tuple_v1(values: &[F], challenge: [F; 12]) -> F {
     values
         .iter()
@@ -1446,7 +1382,6 @@ fn compress_tuple_v1(values: &[F], challenge: [F; 12]) -> F {
             sum.add(value.mul(coefficient))
         })
 }
-
 fn stack_push_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
     [
         F::ONE,
@@ -1463,7 +1398,6 @@ fn stack_push_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
         row[BASE_FRAME_PREVIOUS_END],
     ]
 }
-
 fn stack_pop_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
     [
         F::ONE,
@@ -1480,7 +1414,6 @@ fn stack_pop_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
         row[BASE_PAYLOAD + 7],
     ]
 }
-
 fn document_tuple_v1(document: F, document_len: F) -> [F; 12] {
     let mut tuple = [F::ZERO; 12];
     tuple[0] = F(2);
@@ -1488,7 +1421,6 @@ fn document_tuple_v1(document: F, document_len: F) -> [F; 12] {
     tuple[2] = document_len;
     tuple
 }
-
 fn node_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
     [
         F(3),
@@ -1505,7 +1437,6 @@ fn node_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
         row[BASE_LENGTH_ACCUMULATOR],
     ]
 }
-
 fn pair_producer_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
     let mut tuple = [F::ZERO; 12];
     tuple[..9].copy_from_slice(&[
@@ -1521,7 +1452,6 @@ fn pair_producer_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12]
     ]);
     tuple
 }
-
 fn pair_consumer_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
     let mut tuple = [F::ZERO; 12];
     tuple[..9].copy_from_slice(&[
@@ -1537,7 +1467,6 @@ fn pair_consumer_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12]
     ]);
     tuple
 }
-
 fn byte_tuple_v1(document: F, address: F, value: F) -> [F; 12] {
     let mut tuple = [F::ZERO; 12];
     tuple[0] = F(5);
@@ -1546,7 +1475,6 @@ fn byte_tuple_v1(document: F, address: F, value: F) -> [F; 12] {
     tuple[3] = value;
     tuple
 }
-
 fn input_byte_tuple_v1(document: F, address: F, value: F) -> [F; 12] {
     let mut tuple = [F::ZERO; 12];
     tuple[0] = F(6);
@@ -1555,7 +1483,6 @@ fn input_byte_tuple_v1(document: F, address: F, value: F) -> [F; 12] {
     tuple[3] = value;
     tuple
 }
-
 /// Return the exact DER input-byte factor consumed by a downstream adapter.
 pub(crate) fn zk_x509_der_stark_input_byte_factor_v1(
     document: F,
@@ -1575,7 +1502,6 @@ pub(crate) fn zk_x509_der_stark_input_byte_factor_v1(
         tuple_challenge,
     ))
 }
-
 /// Return the exact DER node factor consumed by a downstream adapter.
 pub(crate) fn zk_x509_der_stark_node_factor_v1(
     event: ZkX509DerStarkNodeEventV1,
@@ -1606,11 +1532,9 @@ pub(crate) fn zk_x509_der_stark_node_factor_v1(
         tuple_challenge,
     ))
 }
-
 fn byte_denominator_v1(tuple: [F; 12], lane: usize, challenges: ZkX509DerStarkChallengesV1) -> F {
     challenges.byte_lookup[lane].add(compress_tuple_v1(&tuple, challenges.tuple[lane]))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn derive_zk_x509_der_stark_private_document_product_v1(
     shape: &ZkX509DerStarkPrivateShapeV1,
@@ -1631,7 +1555,6 @@ fn derive_zk_x509_der_stark_private_document_product_v1(
     }
     Ok(document_product)
 }
-
 pub(crate) fn derive_zk_x509_der_stark_public_terminals_v1(
     shape: &ZkX509DerStarkShapeV1,
     challenges: ZkX509DerStarkChallengesV1,
@@ -1640,7 +1563,6 @@ pub(crate) fn derive_zk_x509_der_stark_public_terminals_v1(
     challenges.validate()?;
     Ok(ZkX509DerStarkPublicTerminalsV1)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn read_aux_lanes_v1(
     row: &[F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
@@ -1650,7 +1572,6 @@ fn read_aux_lanes_v1(
         .try_into()
         .expect("four DER bus lanes")
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_aux_lanes_v1(
     row: &mut [F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
@@ -1659,7 +1580,6 @@ fn write_aux_lanes_v1(
 ) {
     row[offset..offset + ZK_X509_DER_STARK_BUS_LANES_V1].copy_from_slice(&values);
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn zk_x509_der_stark_terminals_v1(
     trace: &ZkX509DerStarkTraceV1,
@@ -1682,7 +1602,6 @@ pub(crate) fn zk_x509_der_stark_terminals_v1(
         input_byte: read_aux_lanes_v1(last, AUX_INPUT_BYTE_AFTER),
     })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn zk_x509_der_stark_terminal_claims_v1(
     trace: &ZkX509DerStarkTraceV1,
@@ -1693,7 +1612,6 @@ pub(crate) fn zk_x509_der_stark_terminal_claims_v1(
         node: terminals.node,
     })
 }
-
 /// Bind ordered input-byte then node claims to the committed final auxiliary
 /// row. This helper is shared by native and aggregate opened-row evaluation.
 pub(crate) fn evaluate_zk_x509_der_stark_terminal_claim_residues_v1(
@@ -1710,7 +1628,6 @@ pub(crate) fn evaluate_zk_x509_der_stark_terminal_claim_residues_v1(
         }
     })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_zero_test_witness_v1(
     row: &mut [F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
@@ -1727,7 +1644,6 @@ fn write_zero_test_witness_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn populate_low_degree_auxiliaries_v1(
     base: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
@@ -1757,7 +1673,6 @@ fn populate_low_degree_auxiliaries_v1(
         }
         aux[AUX_DEPTH_SELECTORS + depth] = F::ONE;
     }
-
     if phase == PHASE_IDENTIFIER_HIGH {
         let count = usize::try_from(pack_bits_v1(&base[BASE_PAYLOAD..BASE_PAYLOAD + 3]).0)
             .map_err(|_| ZkX509DerStarkErrorV1::Row)?;
@@ -1785,7 +1700,6 @@ fn populate_low_degree_auxiliaries_v1(
         }
         aux[AUX_LENGTH_REMAINING_SELECTORS + remaining] = F::ONE;
     }
-
     let byte_bits = &base[BASE_BYTE_BITS..BASE_BYTE_BITS + 8];
     aux[AUX_LOW_FIVE_PAIR_01] = byte_bits[0].mul(byte_bits[1]);
     aux[AUX_LOW_FIVE_PAIR_23] = byte_bits[2].mul(byte_bits[3]);
@@ -1803,7 +1717,6 @@ fn populate_low_degree_auxiliaries_v1(
                 .mul(F::ONE.sub(aux[AUX_HIGH_TAG])),
         ),
     );
-
     let length_first = aux[AUX_PHASE_SELECTORS + PHASE_LENGTH_FIRST];
     let long_length = byte_bits[7];
     aux[AUX_LENGTH_COUNT_TWO] = length_first.mul(long_length).mul(high_low.sub(F::ONE));
@@ -1820,7 +1733,6 @@ fn populate_low_degree_auxiliaries_v1(
         AUX_BYTE_128_INVERSE,
         base[BASE_BYTE_VALUE].sub(F(128)),
     )?;
-
     let count_one = aux[AUX_IDENTIFIER_COUNT_SELECTORS + 1];
     for bit in 0..7 {
         aux[AUX_UPDATED_FIRST_HIGH_BITS + bit] = identifier_high.mul(
@@ -1828,7 +1740,6 @@ fn populate_low_degree_auxiliaries_v1(
                 .add(count_one.mul(byte_bits[bit].sub(base[BASE_PAYLOAD + 3 + bit]))),
         );
     }
-
     let primitive = aux[AUX_PHASE_SELECTORS + PHASE_PRIMITIVE_CONTENT];
     let kind_integer_or_enumerated =
         aux[AUX_PRIMITIVE_KIND_SELECTORS + 2].add(aux[AUX_PRIMITIVE_KIND_SELECTORS + 6]);
@@ -1844,7 +1755,6 @@ fn populate_low_degree_auxiliaries_v1(
     aux[AUX_NEXT_OID_START_EXPECTED] = aux[AUX_PRIMITIVE_KIND_SELECTORS + 5]
         .mul(F::ONE.sub(last_primitive))
         .mul(F::ONE.sub(byte_bits[7]));
-
     let identifier_first = aux[AUX_PHASE_SELECTORS + PHASE_IDENTIFIER_FIRST];
     let finalize = aux[AUX_PHASE_SELECTORS + PHASE_FINALIZE_HEADER];
     let boundary = aux[AUX_PHASE_SELECTORS + PHASE_BOUNDARY];
@@ -1891,7 +1801,6 @@ fn populate_low_degree_auxiliaries_v1(
     aux[AUX_ENTERS_CHILD] = base[BASE_CONSTRUCTED].mul(F::ONE.sub(base[BASE_CHECK_IS_ZERO]));
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn validate_zk_x509_der_stark_base_trace_v1(
     base: &ZkX509DerStarkBaseV1,
@@ -1940,7 +1849,6 @@ pub(crate) fn validate_zk_x509_der_stark_base_trace_v1(
     }
     Ok(())
 }
-
 /// Attach all post-base-commitment permutation and lookup accumulators.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_der_stark_trace_v1(
@@ -1953,7 +1861,6 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
     if base.rows.len() != base.private_shape.active_rows()? {
         return Err(ZkX509DerStarkErrorV1::Transition);
     }
-
     let mut stack_push = [F::ONE; ZK_X509_DER_STARK_BUS_LANES_V1];
     let mut stack_pop = [F::ONE; ZK_X509_DER_STARK_BUS_LANES_V1];
     let mut document = [F::ONE; ZK_X509_DER_STARK_BUS_LANES_V1];
@@ -1966,7 +1873,6 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
     let mut byte_query_zero_count = [F::ZERO; ZK_X509_DER_STARK_BUS_LANES_V1];
     let mut input_byte = [F::ONE; ZK_X509_DER_STARK_BUS_LANES_V1];
     let mut aux_rows = Vec::with_capacity(base.rows.len());
-
     for (index, current) in base.rows.iter().enumerate() {
         let parser = index < base.private_shape.parser_rows;
         let comparator = !parser;
@@ -2001,7 +1907,6 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
             && current[BASE_FRAME_IS_SET] == F::ONE
             && current[BASE_FRAME_HAS_CHILD] == F::ONE;
         let pair_consumer_event = comparator && current[28] == F::ONE;
-
         let mut aux = [F::ZERO; ZK_X509_DER_STARK_AUX_WIDTH_V1];
         populate_low_degree_auxiliaries_v1(current, &schedule.fixed_row(native_index)?, &mut aux)?;
         write_aux_lanes_v1(&mut aux, AUX_STACK_PUSH_BEFORE, stack_push);
@@ -2023,7 +1928,6 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
             byte_query_zero_count,
         );
         write_aux_lanes_v1(&mut aux, AUX_INPUT_BYTE_BEFORE, input_byte);
-
         for lane in 0..ZK_X509_DER_STARK_BUS_LANES_V1 {
             if stack_push_event {
                 stack_push[lane] = stack_push[lane].mul(compress_tuple_v1(
@@ -2128,7 +2032,6 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
                 }
             }
         }
-
         write_aux_lanes_v1(&mut aux, AUX_STACK_PUSH_AFTER, stack_push);
         write_aux_lanes_v1(&mut aux, AUX_STACK_POP_AFTER, stack_pop);
         write_aux_lanes_v1(&mut aux, AUX_DOCUMENT_AFTER, document);
@@ -2150,7 +2053,6 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
         write_aux_lanes_v1(&mut aux, AUX_INPUT_BYTE_AFTER, input_byte);
         aux_rows.push(aux);
     }
-
     let trace = ZkX509DerStarkTraceV1 { base, aux_rows };
     let terminals = zk_x509_der_stark_terminals_v1(&trace)?;
     let private_document_product = derive_zk_x509_der_stark_private_document_product_v1(
@@ -2167,7 +2069,6 @@ pub(crate) fn build_zk_x509_der_stark_trace_v1(
     }
     Ok(trace)
 }
-
 /// Reconstruct one native-domain base row, including exact zero padding.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn zk_x509_der_stark_aggregate_base_row_v1(
@@ -2223,7 +2124,6 @@ pub(crate) fn zk_x509_der_stark_aggregate_base_row_v1(
     );
     Ok(row)
 }
-
 /// Reconstruct one native-domain auxiliary row. Padding carries every public
 /// and cross-adapter terminal while all local inverse witnesses are zero.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2308,7 +2208,6 @@ pub(crate) fn zk_x509_der_stark_aggregate_aux_row_v1(
     }
     Ok(row)
 }
-
 #[cfg(test)]
 pub(crate) fn zk_x509_der_stark_native_base_cell_v1(
     base: &ZkX509DerStarkBaseV1,
@@ -2320,7 +2219,6 @@ pub(crate) fn zk_x509_der_stark_native_base_cell_v1(
     }
     Ok(zk_x509_der_stark_aggregate_base_row_v1(base, row)?[column])
 }
-
 #[cfg(test)]
 pub(crate) fn zk_x509_der_stark_native_aux_cell_v1(
     trace: &ZkX509DerStarkTraceV1,
@@ -2332,7 +2230,6 @@ pub(crate) fn zk_x509_der_stark_native_aux_cell_v1(
     }
     Ok(zk_x509_der_stark_aggregate_aux_row_v1(trace, row)?[column])
 }
-
 #[cfg(test)]
 pub(crate) fn zk_x509_der_stark_native_fixed_cell_v1(
     schedule: &ZkX509DerStarkFixedScheduleV1,
@@ -2344,7 +2241,6 @@ pub(crate) fn zk_x509_der_stark_native_fixed_cell_v1(
     }
     Ok(schedule.fixed_row(row)?[column])
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn allocate_native_column_v1() -> Result<Vec<F>, ZkX509DerStarkErrorV1> {
     let mut column = Vec::new();
@@ -2353,7 +2249,6 @@ fn allocate_native_column_v1() -> Result<Vec<F>, ZkX509DerStarkErrorV1> {
         .map_err(|_| ZkX509DerStarkErrorV1::Resource)?;
     Ok(column)
 }
-
 /// Generate one base column over the full native domain. Callers can commit
 /// and drop it before requesting the next column.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2370,7 +2265,6 @@ pub(crate) fn build_zk_x509_der_stark_native_base_column_v1(
     }
     Ok(column)
 }
-
 /// Generate one auxiliary column over the full native domain, carrying the
 /// exact final terminal through aggregate padding.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2387,7 +2281,6 @@ pub(crate) fn build_zk_x509_der_stark_native_aux_column_v1(
     }
     Ok(column)
 }
-
 /// Generate one verifier-owned fixed column over the full native domain.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_der_stark_native_fixed_column_v1(
@@ -2403,7 +2296,6 @@ pub(crate) fn build_zk_x509_der_stark_native_fixed_column_v1(
     }
     Ok(column)
 }
-
 fn push_boolean_residues_v1(residues: &mut Vec<F>, gate: F, values: &[F]) {
     residues.extend(
         values
@@ -2412,7 +2304,6 @@ fn push_boolean_residues_v1(residues: &mut Vec<F>, gate: F, values: &[F]) {
             .map(|value| gate.mul(value).mul(value.sub(F::ONE))),
     );
 }
-
 fn push_carry_residues_v1(
     residues: &mut Vec<F>,
     gate: F,
@@ -2427,7 +2318,6 @@ fn push_carry_residues_v1(
             .map(|column| gate.mul(next[column].sub(current[column]))),
     );
 }
-
 fn push_one_hot_projection_residues_v1(residues: &mut Vec<F>, selectors: &[F], gate: F, value: F) {
     for selector in selectors {
         residues.push(selector.mul(selector.sub(F::ONE)));
@@ -2444,14 +2334,12 @@ fn push_one_hot_projection_residues_v1(residues: &mut Vec<F>, selectors: &[F], g
             .sub(gate.mul(value)),
     );
 }
-
 fn push_zero_test_residues_v1(residues: &mut Vec<F>, value: F, selector: F, inverse: F) {
     residues.push(selector.mul(selector.sub(F::ONE)));
     residues.push(value.mul(selector));
     residues.push(value.mul(inverse).sub(F::ONE.sub(selector)));
     residues.push(selector.mul(inverse));
 }
-
 /// Constrain a total, event-gated inverse. `zero` is one exactly when an
 /// active event's denominator is zero; inactive events canonically use
 /// `(zero, inverse) = (0, 0)`.
@@ -2469,7 +2357,6 @@ fn push_gated_zero_safe_inverse_residues_v1(
     residues.push(denominator.mul(inverse).sub(gate.mul(F::ONE.sub(zero))));
     residues.push(zero.mul(inverse));
 }
-
 #[allow(clippy::too_many_lines)]
 fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     current: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
@@ -2507,7 +2394,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         .add(primitive);
     let non_consuming = finalize.add(boundary);
     residues.clear();
-
     residues.push(row_active.mul(row_active.sub(F::ONE)));
     residues.push(row_active.mul(F::ONE.sub(fixed[FIX_ACTIVE])));
     residues.push(row_active.sub(parser).sub(comparator));
@@ -2557,7 +2443,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             .sub(fixed[FIX_LAST_AGGREGATE])
             .mul(next[BASE_FINAL_DOCUMENT].sub(current[BASE_FINAL_DOCUMENT])),
     );
-
     push_one_hot_projection_residues_v1(residues, phases, parser, phase_value);
     let depth = pack_bits_v1(&current[BASE_DEPTH_BITS..BASE_DEPTH_BITS + 5]);
     let depth_selectors: &[F; 17] = current_aux
@@ -2605,7 +2490,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         length_body,
         pack_bits_v1(&current[BASE_PAYLOAD..BASE_PAYLOAD + 2]),
     );
-
     let byte_bits = &current[BASE_BYTE_BITS..BASE_BYTE_BITS + 8];
     residues.push(current_aux[AUX_LOW_FIVE_PAIR_01].sub(byte_bits[0].mul(byte_bits[1])));
     residues.push(current_aux[AUX_LOW_FIVE_PAIR_23].sub(byte_bits[2].mul(byte_bits[3])));
@@ -2717,7 +2601,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
                 .mul(current[BASE_FRAME_HAS_CHILD]),
         ),
     );
-
     push_boolean_residues_v1(
         residues,
         parser,
@@ -2732,7 +2615,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             ),
         ),
     );
-
     push_boolean_residues_v1(residues, parser.mul(consuming), byte_bits);
     residues.push(
         parser
@@ -2743,7 +2625,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     for bit in byte_bits {
         residues.push(parser.mul(non_consuming).mul(*bit));
     }
-
     push_boolean_residues_v1(
         residues,
         parser,
@@ -2772,7 +2653,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     );
     let depth_zero = depth_selectors[0];
     let depth_one = depth_selectors[1];
-
     let check_used = identifier_first.add(finalize).add(primitive).add(boundary);
     residues.push(
         parser
@@ -2834,7 +2714,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             .mul(current[BASE_CHECK_INVERSE]),
     );
     residues.push(identifier_first.mul(current[BASE_CHECK_IS_ZERO]));
-
     // Payloads are typed by numeric phase selectors; every unused cell is
     // forced to zero so no hidden witness channel survives.
     let identifier_payload = identifier_first.add(identifier_high);
@@ -2893,7 +2772,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             .mul(F::ONE.sub(primitive))
             .mul(current[BASE_UNUSED_BITS]),
     );
-
     // Initial document state.
     residues.push(fixed[FIX_FIRST_PARSER].mul(current[BASE_DOCUMENT_FIRST].sub(F::ONE)));
     residues.push(fixed[FIX_FIRST_PARSER].mul(current[BASE_DOCUMENT]));
@@ -2923,7 +2801,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             .mul(non_consuming)
             .mul(current[BASE_BYTE_LOOKUP_MULTIPLICITY]),
     );
-
     let carry_common = [
         BASE_DOCUMENT,
         BASE_DOCUMENT_LEN,
@@ -2948,7 +2825,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         ordinary_depth_carry
             .mul(pack_bits_v1(&next[BASE_DEPTH_BITS..BASE_DEPTH_BITS + 5]).sub(depth)),
     );
-
     // Identifier first octet.
     let low_tag = pack_bits_v1(&byte_bits[..5]);
     let high_tag = current_aux[AUX_HIGH_TAG];
@@ -3030,7 +2906,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
                 .mul(next[BASE_PAYLOAD + bit].sub(expected)),
         );
     }
-
     // High-tag base-128 continuation.
     let identifier_count = pack_bits_v1(&current[BASE_PAYLOAD..BASE_PAYLOAD + 3]);
     let count_one = count_selectors[1];
@@ -3137,7 +3012,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             BASE_FRAME_PREVIOUS_END,
         ],
     );
-
     // Length first and long-form body rows.
     let length_count = pack_bits_v1(&byte_bits[..7]);
     let length_count_two = current_aux[AUX_LENGTH_COUNT_TWO];
@@ -3207,7 +3081,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             BASE_FRAME_PREVIOUS_END,
         ],
     );
-
     let remaining_one = remaining_selectors[1];
     let remaining_two = remaining_selectors[2];
     let long_two = current[BASE_PAYLOAD + 2];
@@ -3295,7 +3168,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             BASE_FRAME_PREVIOUS_END,
         ],
     );
-
     // Header finalization and the constrained universal-tag projection.
     residues.push(finalize.mul(current[BASE_CONTENT_START].sub(current[BASE_OFFSET])));
     residues.push(
@@ -3503,7 +3375,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             ),
         ),
     );
-
     // Primitive canonicality.
     let kind_bits = &current[BASE_PAYLOAD..BASE_PAYLOAD + 3];
     residues.push(
@@ -3651,7 +3522,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             BASE_FRAME_PREVIOUS_END,
         ],
     );
-
     // Boundary terminal and document sequencing. Stack restoration is also
     // bound by the challenge-dependent push/pop products.
     let expected_root_completion = F::ONE
@@ -3733,7 +3603,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
                 .sub(depth.sub(current[BASE_CONSTRUCTED])),
         ),
     );
-
     let parent_id = current[BASE_CONSTRUCTED].mul(current[BASE_PAYLOAD]).add(
         F::ONE
             .sub(current[BASE_CONSTRUCTED])
@@ -3818,7 +3687,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         );
     }
     residues.push(boundary.mul(current[BASE_CONSTRUCTED]).mul(depth_zero));
-
     // SET comparator rows.
     let cmp_first = current[28];
     let cmp_last = current[29];
@@ -3943,7 +3811,6 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             .mul(F::ONE.sub(next_fixed[FIX_COMPARATOR])),
     );
 }
-
 /// Evaluate every base/fixed strict-DER identity as one numeric polynomial
 /// vector. The inventory is independent of witness values and row phases.
 ///
@@ -3969,7 +3836,6 @@ pub(crate) fn evaluate_zk_x509_der_stark_base_residues_v1(
     );
     residues
 }
-
 /// Evaluate the complete strict-DER adapter, including every challenge-bound
 /// permutation and logarithmic-derivative lookup.
 #[allow(clippy::too_many_arguments)]
@@ -3999,7 +3865,6 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
     {
         return Err(ZkX509DerStarkErrorV1::Row);
     }
-
     evaluate_zk_x509_der_stark_base_residues_into_v1(
         current,
         next,
@@ -4027,7 +3892,6 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
     let first_aggregate = fixed[FIX_FIRST_AGGREGATE];
     let last_aggregate = fixed[FIX_LAST_AGGREGATE];
     let aggregate_continue = F::ONE.sub(last_aggregate);
-
     for lane in 0..ZK_X509_DER_STARK_BUS_LANES_V1 {
         let tuple_challenge = challenges.tuple[lane];
         let stack_push_factor = compress_tuple_v1(&stack_push_tuple_v1(current), tuple_challenge);
@@ -4049,7 +3913,6 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
             ),
             tuple_challenge,
         );
-
         for (before, after, next_before, gate, factor) in [
             (
                 AUX_STACK_PUSH_BEFORE + lane,
@@ -4108,7 +3971,6 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
             residues.push(first_aggregate.mul(current_aux[before].sub(F::ONE)));
             residues.push(aggregate_continue.mul(next_aux[next_before].sub(current_aux[after])));
         }
-
         let table_tuple = byte_tuple_v1(
             current[BASE_DOCUMENT],
             current[BASE_OFFSET],
@@ -4146,7 +4008,6 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
             right_zero,
             right_inverse,
         );
-
         residues.push(
             current_aux[AUX_BYTE_TABLE_SUM_AFTER + lane].sub(
                 current_aux[AUX_BYTE_TABLE_SUM_BEFORE + lane].add(
@@ -4205,7 +4066,6 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
                     .sub(current_aux[AUX_BYTE_QUERY_ZERO_COUNT_AFTER + lane]),
             ),
         );
-
         residues.push(last_aggregate.mul(
             current_aux[AUX_STACK_PUSH_AFTER + lane].sub(current_aux[AUX_STACK_POP_AFTER + lane]),
         ));
@@ -4238,7 +4098,6 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
     }
     Ok(())
 }
-
 /// Allocate and evaluate the complete strict-DER constraint vector.
 ///
 /// Streaming composition builders should use
@@ -4271,13 +4130,10 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_v1(
     )?;
     Ok(residues)
 }
-
 #[cfg(test)]
 mod tests {
     use sha2::{Digest as _, Sha256};
-
     use super::*;
-
     fn challenges() -> ZkX509DerStarkChallengesV1 {
         ZkX509DerStarkChallengesV1 {
             tuple: core::array::from_fn(|lane| {
@@ -4288,7 +4144,6 @@ mod tests {
             byte_lookup: [F(9_001), F(9_002), F(9_003), F(9_004)],
         }
     }
-
     fn private_shape() -> ZkX509DerStarkPrivateShapeV1 {
         ZkX509DerStarkPrivateShapeV1 {
             document_lengths: vec![2, 3],
@@ -4296,7 +4151,6 @@ mod tests {
             comparator_rows: 4,
         }
     }
-
     fn try_low_degree_aux(
         base: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
         fixed: &[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
@@ -4305,14 +4159,12 @@ mod tests {
         populate_low_degree_auxiliaries_v1(base, fixed, &mut aux)?;
         Ok(aux)
     }
-
     fn low_degree_aux(
         base: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
         fixed: &[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
     ) -> [F; ZK_X509_DER_STARK_AUX_WIDTH_V1] {
         try_low_degree_aux(base, fixed).expect("low-degree auxiliaries")
     }
-
     fn transcript_with_base_root(root: [u8; 32]) -> TransparentTranscriptV1 {
         let mut transcript = TransparentTranscriptV1::new(
             b"zk-x509-der-challenge-test-suite-v1",
@@ -4325,20 +4177,17 @@ mod tests {
             .expect("base root");
         transcript
     }
-
     #[test]
     fn transcript_challenge_schedule_is_lane_major_base_bound_and_pinned() {
         let mut transcript = transcript_with_base_root([0x25; 32]);
         let derived =
             derive_zk_x509_der_stark_challenges_v1(&mut transcript).expect("DER challenges");
         derived.validate().expect("valid DER challenges");
-
         let mut replay = transcript_with_base_root([0x25; 32]);
         assert_eq!(
             derived,
             derive_zk_x509_der_stark_challenges_v1(&mut replay).expect("replayed challenges")
         );
-
         let mut encoding = Vec::with_capacity(
             ZK_X509_DER_STARK_BUS_LANES_V1 * (DER_TUPLE_CHALLENGE_LABELS_V1.len() + 1) * 8,
         );
@@ -4357,7 +4206,6 @@ mod tests {
                 0x8e, 0xf2, 0x2f, 0x12,
             ]
         );
-
         let mut changed_root = transcript_with_base_root([0x26; 32]);
         let changed = derive_zk_x509_der_stark_challenges_v1(&mut changed_root)
             .expect("changed-root challenges");
@@ -4366,7 +4214,6 @@ mod tests {
             assert_ne!(derived.tuple[lane], changed.tuple[lane]);
             assert_ne!(derived.byte_lookup[lane], changed.byte_lookup[lane]);
         }
-
         // A tuple-first schedule is consensus-significant: sampling the lookup
         // shift before the twelve coefficients must not reproduce a lane.
         let mut wrong_order = transcript_with_base_root([0x25; 32]);
@@ -4381,7 +4228,6 @@ mod tests {
         assert_ne!(derived.byte_lookup[0], first_lookup);
         assert_ne!(derived.tuple[0], wrong_tuple);
     }
-
     #[test]
     fn fixed_schedule_is_exact_over_parser_comparator_and_padding_boundaries() {
         let schedule = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1)
@@ -4396,44 +4242,37 @@ mod tests {
             schedule.active_rows() + ZK_X509_DER_STARK_FIXED_PADDING_ROWS_V1,
             schedule.aggregate_rows()
         );
-
         let first = schedule.fixed_row(0).expect("first");
         assert_eq!(first[FIX_ACTIVE], F::ONE);
         assert_eq!(first[FIX_FIRST_ACTIVE], F::ONE);
         assert_eq!(first[FIX_PARSER], F::ONE);
         assert_eq!(first[FIX_FIRST_PARSER], F::ONE);
-
         let last_parser = schedule
             .fixed_row(ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 - 1)
             .expect("last parser capacity row");
         assert_eq!(last_parser[FIX_LAST_PARSER], F::ONE);
         assert_eq!(last_parser[FIX_COMPARATOR], F::ZERO);
-
         let first_comparator = schedule
             .fixed_row(ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1)
             .expect("first comparator");
         assert_eq!(first_comparator[FIX_COMPARATOR], F::ONE);
         assert_eq!(first_comparator[FIX_FIRST_COMPARATOR], F::ONE);
-
         let last_active = schedule
             .fixed_row(ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1 - 1)
             .expect("last fixed-capacity row");
         assert_eq!(last_active[FIX_LAST_ACTIVE], F::ONE);
         assert_eq!(last_active[FIX_LAST_COMPARATOR], F::ONE);
-
         let first_padding = schedule
             .fixed_row(ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1)
             .expect("first padding");
         assert_eq!(first_padding[FIX_PADDING], F::ONE);
         assert_eq!(first_padding[FIX_ACTIVE], F::ZERO);
-
         let final_row = schedule
             .fixed_row(ZK_X509_DER_STARK_TRACE_SIZE_V1 - 1)
             .expect("final aggregate row");
         assert_eq!(final_row[FIX_PADDING], F::ONE);
         assert_eq!(final_row[FIX_LAST_AGGREGATE], F::ONE);
     }
-
     #[test]
     fn private_geometry_cannot_change_public_transcript_or_fixed_schedule() {
         let first = private_shape();
@@ -4445,7 +4284,6 @@ mod tests {
         first.validate().expect("first private shape");
         second.validate().expect("second private shape");
         assert_ne!(first, second);
-
         let public = ZkX509DerStarkShapeV1;
         assert_eq!(
             public.transcript_bytes(),
@@ -4469,7 +4307,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn private_shape_rejects_empty_zero_oversized_and_overfull_profiles() {
         let mut mutations = Vec::new();
@@ -4504,7 +4341,6 @@ mod tests {
         changed = private_shape();
         changed.comparator_rows = ZK_X509_DER_STARK_TRACE_SIZE_V1;
         mutations.push(changed);
-
         for (index, mutation) in mutations.into_iter().enumerate() {
             assert!(
                 mutation.validate().is_err(),
@@ -4512,7 +4348,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn numeric_layout_uses_two_base_and_four_honest_auxiliary_chunks() {
         assert_eq!(ZK_X509_DER_STARK_BASE_WIDTH_V1, 76);
@@ -4533,9 +4368,7 @@ mod tests {
         assert_eq!(ZK_X509_DER_MAX_NESTING_DEPTH_V1, 16);
         assert_eq!(ZK_X509_DER_MAX_VALUES_V1, 2_048);
     }
-
     include!("der_stark/tuple_compression_test.rs");
-
     #[test]
     fn canonical_documents_compile_to_exact_streaming_and_set_rows() {
         let sequence = [0x30, 0x03, 0x02, 0x01, 0x01];
@@ -4549,7 +4382,6 @@ mod tests {
             base.rows.len(),
             base.private_shape.active_rows().expect("active")
         );
-
         let first = &base.rows[0];
         assert_eq!(first[BASE_DOCUMENT], F::ZERO);
         assert_eq!(first[BASE_DOCUMENT_LEN], F(5));
@@ -4560,7 +4392,6 @@ mod tests {
             pack_bits_v1(&first[BASE_PHASE_BITS..BASE_PHASE_BITS + 3]),
             F(PHASE_IDENTIFIER_FIRST as u64)
         );
-
         let comparator = &base.rows[base.private_shape.parser_rows];
         assert_eq!(comparator[0], F::ONE);
         assert_eq!(comparator[28], F::ONE);
@@ -4570,7 +4401,6 @@ mod tests {
         assert_eq!(comparator_terminal[29], F::ONE);
         assert_eq!(comparator_terminal[9], F::ONE);
     }
-
     #[test]
     fn malformed_and_noncanonical_documents_never_reach_numeric_compilation() {
         let adversarial: [&[u8]; 8] = [
@@ -4590,7 +4420,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn numeric_air_rejects_nonminimal_identifier_length_and_primitive_families() {
         let mutate_byte = |row: &mut [F; ZK_X509_DER_STARK_BASE_WIDTH_V1], byte: u8| {
@@ -4626,7 +4455,6 @@ mod tests {
             .iter()
             .any(|residue| *residue != F::ZERO)
         };
-
         let high_tag = [0x9f, 0x1f, 0x00];
         let base = build_zk_x509_der_stark_base_v1(&[&high_tag]).expect("high tag");
         let high_row = base
@@ -4642,7 +4470,6 @@ mod tests {
         mutate_byte(&mut current, 0x1e);
         next[BASE_TAG_ACCUMULATOR] = F(30);
         assert!(rejects_pair(high_row, current, next));
-
         let mut long_length = vec![0x04, 0x81, 0x80];
         long_length.resize(3 + 128, 0x00);
         let base = build_zk_x509_der_stark_base_v1(&[&long_length]).expect("long length");
@@ -4661,7 +4488,6 @@ mod tests {
             current,
             base.rows[length_body + 1]
         ));
-
         let integer = [0x02, 0x02, 0x00, 0x80];
         let base = build_zk_x509_der_stark_base_v1(&[&integer]).expect("integer");
         let first_content = base
@@ -4673,7 +4499,6 @@ mod tests {
         next = base.rows[first_content + 1];
         mutate_byte(&mut next, 0x7f);
         assert!(rejects_pair(first_content, current, next));
-
         let boolean = [0x01, 0x01, 0xff];
         let base = build_zk_x509_der_stark_base_v1(&[&boolean]).expect("boolean");
         let content = base
@@ -4684,7 +4509,6 @@ mod tests {
         current = base.rows[content];
         mutate_byte(&mut current, 0x01);
         assert!(rejects_pair(content, current, base.rows[content + 1]));
-
         let oid = [0x06, 0x01, 0x2a];
         let base = build_zk_x509_der_stark_base_v1(&[&oid]).expect("oid");
         let content = base
@@ -4695,7 +4519,6 @@ mod tests {
         current = base.rows[content];
         mutate_byte(&mut current, 0x80);
         assert!(rejects_pair(content, current, base.rows[content + 1]));
-
         let bit_string = [0x03, 0x02, 0x01, 0x80];
         let base = build_zk_x509_der_stark_base_v1(&[&bit_string]).expect("bit string");
         let last_content = base
@@ -4715,7 +4538,6 @@ mod tests {
             base.rows[last_content + 1]
         ));
     }
-
     #[test]
     fn every_canonical_streaming_and_set_row_satisfies_numeric_base_air() {
         let nested = [
@@ -4789,21 +4611,18 @@ mod tests {
             .all(|residue| *residue == F::ZERO)
         );
     }
-
     #[test]
     fn adversarial_activity_restart_inactive_payload_and_document_count_fail() {
         let integer = [0x02, 0x01, 0x01];
         let base = build_zk_x509_der_stark_base_v1(&[&integer]).expect("numeric DER base");
         let schedule =
             compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1).expect("schedule");
-
         let mut dropped = base.clone();
         dropped.rows[1][BASE_ROW_ACTIVE] = F::ZERO;
         assert_eq!(
             validate_zk_x509_der_stark_base_trace_v1(&dropped),
             Err(ZkX509DerStarkErrorV1::Transition)
         );
-
         let inactive_index = base.private_shape.parser_rows;
         let inactive =
             zk_x509_der_stark_aggregate_base_row_v1(&base, inactive_index).expect("inactive row");
@@ -4832,7 +4651,6 @@ mod tests {
             .any(|residue| *residue != F::ZERO),
             "an inactive parser prefix cannot restart"
         );
-
         let next_inactive = zk_x509_der_stark_aggregate_base_row_v1(&base, inactive_index + 1)
             .expect("next inactive row");
         let mut payload = inactive;
@@ -4850,7 +4668,6 @@ mod tests {
             .any(|residue| *residue != F::ZERO),
             "inactive rows have no payload channel"
         );
-
         let mut wrong_count = inactive;
         wrong_count[BASE_FINAL_DOCUMENT_SLACK_BITS] =
             F::ONE.sub(wrong_count[BASE_FINAL_DOCUMENT_SLACK_BITS]);
@@ -4868,7 +4685,6 @@ mod tests {
             "the privately committed document count is range- and carry-bound"
         );
     }
-
     #[test]
     fn every_active_base_cell_is_algebraically_observed() {
         let nested = [
@@ -4947,7 +4763,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn complete_numeric_trace_closes_stack_set_document_and_byte_buses() {
         let nested = [
@@ -4978,7 +4793,6 @@ mod tests {
             terminals.byte_query_zero_count
         );
         assert_ne!(terminals.node, [F::ONE; ZK_X509_DER_STARK_BUS_LANES_V1]);
-
         let comparator_end =
             ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 + trace.base.private_shape.comparator_rows;
         let mut indices: Vec<_> = (0..=trace.base.private_shape.parser_rows)
@@ -5050,7 +4864,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn native_column_streaming_is_an_exact_transpose_at_all_boundaries() {
         let ordered_set = [0x31, 0x04, 0x05, 0x00, 0x05, 0x00];
@@ -5074,7 +4887,6 @@ mod tests {
         ];
         sample_rows.sort_unstable();
         sample_rows.dedup();
-
         for column_index in 0..ZK_X509_DER_STARK_BASE_WIDTH_V1 {
             let column = build_zk_x509_der_stark_native_base_column_v1(&trace.base, column_index)
                 .expect("base column");
@@ -5111,7 +4923,6 @@ mod tests {
                 );
             }
         }
-
         assert!(
             build_zk_x509_der_stark_native_base_column_v1(
                 &trace.base,
@@ -5131,7 +4942,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn every_auxiliary_cell_and_post_commitment_base_cell_is_observed() {
         let nested = [
@@ -5151,7 +4961,6 @@ mod tests {
         let next_fixed = schedule.fixed_row(1).expect("next fixed");
         let next = trace.base.rows[1];
         let next_aux = trace.aux_rows[1];
-
         for column in 0..ZK_X509_DER_STARK_AUX_WIDTH_V1 {
             let mut changed = trace.aux_rows[0];
             changed[column] = changed[column].add(F(7));
@@ -5172,7 +4981,6 @@ mod tests {
                 "auxiliary column {column} is not observed"
             );
         }
-
         let byte_row = trace
             .base
             .rows
@@ -5197,7 +5005,6 @@ mod tests {
         )
         .expect("numeric residues");
         assert!(residues.iter().any(|residue| *residue != F::ZERO));
-
         let stack_pop_row = trace
             .base
             .rows
@@ -5227,7 +5034,6 @@ mod tests {
         .expect("numeric residues");
         assert!(residues.iter().any(|residue| *residue != F::ZERO));
     }
-
     #[test]
     fn adversarial_bus_challenge_shape_and_terminal_mutations_fail_closed() {
         let nested = [
@@ -5235,7 +5041,6 @@ mod tests {
         ];
         let canonical_challenges = challenges();
         let canonical_base = build_zk_x509_der_stark_base_v1(&[&nested]).expect("canonical base");
-
         let mut invalid_challenges = canonical_challenges;
         invalid_challenges.tuple[0][0] = F::ZERO;
         assert!(
@@ -5251,7 +5056,6 @@ mod tests {
         assert!(
             build_zk_x509_der_stark_trace_v1(canonical_base.clone(), invalid_challenges).is_err()
         );
-
         let queried_byte_row = canonical_base
             .rows
             .iter()
@@ -5319,7 +5123,6 @@ mod tests {
             collision_residues.iter().any(|residue| *residue != F::ZERO),
             "a forged singular-factor count must fail"
         );
-
         let mut changed = canonical_base.clone();
         let stack_pop = changed
             .rows
@@ -5336,7 +5139,6 @@ mod tests {
             build_zk_x509_der_stark_trace_v1(changed, canonical_challenges).is_err(),
             "wrong restored parent frame must break the stack permutation"
         );
-
         changed = canonical_base.clone();
         let queried_byte = changed
             .rows
@@ -5349,14 +5151,12 @@ mod tests {
             build_zk_x509_der_stark_trace_v1(changed, canonical_challenges).is_err(),
             "wrong table multiplicity must break the byte lookup"
         );
-
         changed = canonical_base.clone();
         changed.private_shape.document_lengths[0] += 1;
         assert!(
             build_zk_x509_der_stark_trace_v1(changed, canonical_challenges).is_err(),
             "private document lengths must bind the document product"
         );
-
         let trace = build_zk_x509_der_stark_trace_v1(canonical_base.clone(), canonical_challenges)
             .expect("canonical trace");
         let schedule =
@@ -5391,7 +5191,6 @@ mod tests {
         .expect("residues");
         assert!(residues.iter().any(|residue| *residue != F::ZERO));
     }
-
     #[test]
     fn complete_evaluator_has_witness_independent_residue_shape() {
         let challenges = challenges();
@@ -5434,7 +5233,6 @@ mod tests {
         }
         assert_eq!(expected, Some(ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1));
     }
-
     fn affine_row<const N: usize>(seed: u64, role: u64, point: F) -> [F; N] {
         core::array::from_fn(|index| {
             let index = u64::try_from(index).expect("column index fits u64");
@@ -5453,7 +5251,6 @@ mod tests {
             intercept.add(slope.mul(point))
         })
     }
-
     fn finite_difference_degrees(samples: &[Vec<F>]) -> Vec<usize> {
         let residue_count = samples.first().map_or(0, Vec::len);
         assert!(samples.iter().all(|sample| sample.len() == residue_count));
@@ -5480,7 +5277,6 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn independently_interpolated_complete_air_degree_matches_registration() {
         const SAMPLE_COUNT: usize = 21;
@@ -5534,6 +5330,5 @@ mod tests {
             "registered degree must be attained"
         );
     }
-
     include!("der_stark_descriptor_tests.rs");
 }

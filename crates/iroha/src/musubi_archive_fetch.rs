@@ -5,7 +5,6 @@
 //! manifest and every page of the storage plan against the immutable Musubi
 //! archive commitment, mints a short-lived provider-bound stream token, and
 //! regenerates the canonical CAR through a bounded reader.
-
 use std::{
     collections::{BTreeMap, HashSet},
     fmt, fs,
@@ -16,12 +15,9 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 mod bounded_stream;
 mod json_preflight;
-
 use json_preflight::{JsonDomEnvelopeV1, preflight_json_dom};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
@@ -51,12 +47,10 @@ use sorafs_manifest::{
     validate_manifest, validate_registered_chunker_profile,
 };
 use url::{Host, Url};
-
 use crate::{
     client::Client,
     config::{MusubiFetchConfig, MusubiFetchProviderGatewayConfig},
 };
-
 const CLIENT_HEADER: &str = "x-sorafs-client";
 const NONCE_HEADER: &str = "x-sorafs-nonce";
 const VERIFYING_KEY_HEADER: &str = "x-sorafs-verifying-key";
@@ -80,7 +74,6 @@ const MAX_PREPARED_PLANS: usize = 128;
 const MAX_STREAM_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 const TOKEN_BYTE_WINDOW_GUARD: Duration = Duration::from_millis(1_100);
 const BUNDLE_METADATA_FILE_COUNT: usize = 3;
-
 const MANIFEST_JSON_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
     tokens: 4_096,
     depth: 16,
@@ -104,18 +97,15 @@ const TOKEN_JSON_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
     total_string_bytes: 16 * 1024,
     atom_bytes: 64,
 };
-
 // TODO: Qualify the complete HTTP/TLS + JSON DOM + CAR/cache fetch process against the 64 MiB
 // peak-RSS gate in an isolated deployment-equivalent child. These allocation-free envelopes stop
 // hostile JSON structure and oversized scalar literals before DOM allocation, but they are
 // intentionally not presented as an allocator or process-RSS measurement.
-
 // TODO: Replace the platform-configured provider-origin map with a finalized provider-advert
 // projection that binds each DNS answer and stream-token verifying key to its enacted advert.
 // The current client pins one exclusively-public DNS answer set for its lifetime and the existing
 // gateway client independently repeats that protection, but the deployment-signed advert/IP
 // binding and server-side adversarial DNS-rebinding qualification are not exposed by Torii yet.
-
 /// Stable failure class exposed to the Musubi adapter without secret-bearing detail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiArchiveRuntimeFailureClassV1 {
@@ -128,7 +118,6 @@ pub enum MusubiArchiveRuntimeFailureClassV1 {
     /// Configuration or authoritative state must change.
     Permanent,
 }
-
 /// Closed integrity surface carried to the authoritative consumer-failover boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiArchiveRuntimeIntegritySurfaceV1 {
@@ -137,7 +126,6 @@ pub enum MusubiArchiveRuntimeIntegritySurfaceV1 {
     /// Authenticated control evidence failed outside the immutable archive commitment.
     Other,
 }
-
 /// Secret-redacted production archive transport failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MusubiArchiveRuntimeErrorV1 {
@@ -145,7 +133,6 @@ pub struct MusubiArchiveRuntimeErrorV1 {
     code: &'static str,
     integrity_surface: Option<MusubiArchiveRuntimeIntegritySurfaceV1>,
 }
-
 impl MusubiArchiveRuntimeErrorV1 {
     const fn new(
         class: MusubiArchiveRuntimeFailureClassV1,
@@ -158,34 +145,28 @@ impl MusubiArchiveRuntimeErrorV1 {
             integrity_surface,
         }
     }
-
     /// Return the stable retry/integrity classification.
     #[must_use]
     pub const fn class(self) -> MusubiArchiveRuntimeFailureClassV1 {
         self.class
     }
-
     /// Return the stable public code.
     #[must_use]
     pub const fn code(self) -> &'static str {
         self.code
     }
-
     /// Return the typed integrity surface without interpreting the public error code.
     #[must_use]
     pub const fn integrity_surface(self) -> Option<MusubiArchiveRuntimeIntegritySurfaceV1> {
         self.integrity_surface
     }
 }
-
 impl fmt::Display for MusubiArchiveRuntimeErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.code)
     }
 }
-
 impl std::error::Error for MusubiArchiveRuntimeErrorV1 {}
-
 #[derive(Clone)]
 struct ProviderRuntimeV1 {
     provider: ProviderId,
@@ -193,7 +174,6 @@ struct ProviderRuntimeV1 {
     operator_key_pair: KeyPair,
     http: HttpClient,
 }
-
 #[derive(Clone)]
 struct PreparedProviderRuntimeV1 {
     provider: ProviderId,
@@ -201,7 +181,6 @@ struct PreparedProviderRuntimeV1 {
     operator_public_key: PublicKey,
     operator_private_key_path: PathBuf,
 }
-
 /// Parsed, secret-free production archive-fetch configuration.
 ///
 /// Provider identities, canonical origins, and operator-key paths are validated and retained, but
@@ -215,7 +194,6 @@ pub struct PreparedMusubiArchiveFetchConfigV1 {
     client_id: String,
     request_timeout: Duration,
 }
-
 impl fmt::Debug for PreparedMusubiArchiveFetchConfigV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -226,7 +204,6 @@ impl fmt::Debug for PreparedMusubiArchiveFetchConfigV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl fmt::Debug for ProviderRuntimeV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -237,14 +214,12 @@ impl fmt::Debug for ProviderRuntimeV1 {
             .finish_non_exhaustive()
     }
 }
-
 #[derive(Clone, Debug)]
 struct PreparedPlanV1 {
     plan_binding: [u8; 32],
     root_cid_hex: String,
     chunker_handle: String,
 }
-
 #[derive(Clone)]
 struct GatewaySessionFactoryV1 {
     runtime: ProviderRuntimeV1,
@@ -256,7 +231,6 @@ struct GatewaySessionFactoryV1 {
     max_chunk_bytes: u64,
     request_timeout: Duration,
 }
-
 struct GatewaySessionV1 {
     fetcher: sorafs_car::gateway::GatewayFetcher,
     provider: Arc<FetchProvider>,
@@ -266,7 +240,6 @@ struct GatewaySessionV1 {
     byte_window_started: Option<Instant>,
     byte_window_used: u64,
 }
-
 /// Authenticated production `SoraFS` transport with bounded, pinned provider clients.
 pub struct AuthenticatedMusubiArchiveFetchClientV1 {
     providers: BTreeMap<ProviderId, ProviderRuntimeV1>,
@@ -276,7 +249,6 @@ pub struct AuthenticatedMusubiArchiveFetchClientV1 {
     prepared: BTreeMap<(ManifestDigest, ProviderId, ArchiveId), PreparedPlanV1>,
     stream_failure: Option<Arc<Mutex<Option<MusubiArchiveRuntimeErrorV1>>>>,
 }
-
 impl fmt::Debug for AuthenticatedMusubiArchiveFetchClientV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -288,7 +260,6 @@ impl fmt::Debug for AuthenticatedMusubiArchiveFetchClientV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl PreparedMusubiArchiveFetchConfigV1 {
     /// Parse and validate the fetch subtree from one caller-owned bounded `client.toml` image.
     ///
@@ -313,7 +284,6 @@ impl PreparedMusubiArchiveFetchConfigV1 {
         let config = parse_fetch_subtree(&document)?;
         Self::from_platform_config(&config_path, &config)
     }
-
     /// Validate one already-parsed fetch subtree without loading credentials or network state.
     ///
     /// # Errors
@@ -384,7 +354,6 @@ impl PreparedMusubiArchiveFetchConfigV1 {
             request_timeout,
         })
     }
-
     /// Load and cross-check every runtime-only operator key before pinning DNS answers or
     /// constructing the authenticated client.
     ///
@@ -428,7 +397,6 @@ impl PreparedMusubiArchiveFetchConfigV1 {
         })
     }
 }
-
 impl AuthenticatedMusubiArchiveFetchClientV1 {
     /// Load only `[musubi.fetch]` from one required platform `client.toml`.
     ///
@@ -445,7 +413,6 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
         PreparedMusubiArchiveFetchConfigV1::from_platform_config_bytes(&path, &bytes)?
             .build_client()
     }
-
     /// Build the production boundary from the typed platform-client fetch subtree.
     ///
     /// Relative operator-key paths are resolved beside `client.toml`. Every gateway is
@@ -461,7 +428,6 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
         PreparedMusubiArchiveFetchConfigV1::from_platform_config(config_path, config)?
             .build_client()
     }
-
     /// Fetch and validate the canonical manifest plus every storage-plan page.
     ///
     /// # Errors
@@ -495,7 +461,6 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
         );
         Ok(plan)
     }
-
     /// Mint an exact stream token and open a bounded canonical CAR reader.
     ///
     /// # Errors
@@ -552,7 +517,6 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
             stream_failure,
         )
     }
-
     /// Consume the last failure reported while an authenticated CAR reader was running.
     ///
     /// The returned value is a stable, redacted classification. It lets the cache adapter
@@ -567,13 +531,11 @@ impl AuthenticatedMusubiArchiveFetchClientV1 {
         )
     }
 }
-
 fn parse_config_document(text: &str) -> Result<toml::Value, MusubiArchiveRuntimeErrorV1> {
     text.parse::<toml::Table>()
         .map(toml::Value::Table)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"))
 }
-
 impl GatewaySessionFactoryV1 {
     fn open(&self) -> Result<GatewaySessionV1, MusubiArchiveRuntimeErrorV1> {
         let token = mint_stream_token(
@@ -629,7 +591,6 @@ impl GatewaySessionFactoryV1 {
         })
     }
 }
-
 #[derive(Debug)]
 struct VerifiedManifestV1 {
     manifest: ManifestV1,
@@ -638,7 +599,6 @@ struct VerifiedManifestV1 {
     chunk_count: usize,
     file_count: usize,
 }
-
 fn fetch_and_validate_manifest(
     runtime: &ProviderRuntimeV1,
     pin_manifest: &ManifestDigest,
@@ -667,7 +627,6 @@ fn fetch_and_validate_manifest(
     )?;
     parse_and_validate_manifest(&manifest_id_hex, &body, commitment)
 }
-
 fn parse_and_validate_manifest(
     expected_manifest_id_hex: &str,
     body: &[u8],
@@ -747,7 +706,6 @@ fn parse_and_validate_manifest(
         file_count,
     })
 }
-
 fn fetch_and_validate_plan(
     runtime: &ProviderRuntimeV1,
     pin_manifest: &ManifestDigest,
@@ -834,14 +792,12 @@ fn fetch_and_validate_plan(
     enforce_plan_memory_bound(&plan)?;
     Ok(plan)
 }
-
 struct PlanPageV1 {
     truncated_chunks: bool,
     truncated_files: bool,
     chunks: Vec<CarChunk>,
     files: Vec<FilePlan>,
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the provider-owned plan is validated in one ordered fail-closed audit surface"
@@ -939,7 +895,6 @@ fn parse_plan_page(
     {
         return Err(integrity("MUSUBI_ARCHIVE_PLAN_PAGINATION_INVALID"));
     }
-
     let mut chunks = Vec::new();
     chunks
         .try_reserve_exact(chunks_value.len())
@@ -978,7 +933,6 @@ fn parse_plan_page(
             taikai_segment_hint: None,
         });
     }
-
     let mut files = Vec::new();
     files
         .try_reserve_exact(files_value.len())
@@ -1044,7 +998,6 @@ fn parse_plan_page(
         files,
     })
 }
-
 struct StreamTokenEvidenceV1 {
     encoded: String,
     verifying_key_hex: String,
@@ -1052,7 +1005,6 @@ struct StreamTokenEvidenceV1 {
     ttl_epoch: u64,
     rate_limit_bytes: u64,
 }
-
 fn mint_stream_token(
     runtime: &ProviderRuntimeV1,
     network_id: &NetworkId,
@@ -1142,14 +1094,12 @@ fn mint_stream_token(
         rate_limit_bytes: token.body.rate_limit_bytes,
     })
 }
-
 struct OperatorRequestHeadersV1 {
     public_key: String,
     timestamp_ms: String,
     nonce: String,
     signature_b64: String,
 }
-
 fn operator_request_headers(
     runtime: &ProviderRuntimeV1,
     network_id: &NetworkId,
@@ -1180,7 +1130,6 @@ fn operator_request_headers(
         signature_b64: STANDARD.encode(signature.payload()),
     })
 }
-
 fn decode_stream_token_exact(encoded: &str) -> Result<StreamTokenV1, MusubiArchiveRuntimeErrorV1> {
     if encoded.len() > STREAM_TOKEN_MAX_BASE64_BYTES_V1 || encoded.trim() != encoded {
         return Err(control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"));
@@ -1210,7 +1159,6 @@ fn decode_stream_token_exact(encoded: &str) -> Result<StreamTokenV1, MusubiArchi
     }
     Ok(token)
 }
-
 fn canonical_car_reader(
     sessions: GatewaySessionFactoryV1,
     initial_session: GatewaySessionV1,
@@ -1234,7 +1182,6 @@ fn canonical_car_reader(
     })
     .map_err(|_| permanent("MUSUBI_ARCHIVE_STREAM_THREAD_FAILED"))
 }
-
 fn stream_canonical_car(
     plan: &CarBuildPlan,
     commitment: &MusubiArchiveCommitmentV1,
@@ -1282,7 +1229,6 @@ fn stream_canonical_car(
     }
     Ok(())
 }
-
 struct GatewayPayloadReaderV1 {
     runtime: tokio::runtime::Runtime,
     sessions: GatewaySessionFactoryV1,
@@ -1292,7 +1238,6 @@ struct GatewayPayloadReaderV1 {
     current: Cursor<Vec<u8>>,
     failure: Option<MusubiArchiveRuntimeErrorV1>,
 }
-
 impl Read for GatewayPayloadReaderV1 {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         if output.is_empty() {
@@ -1335,7 +1280,6 @@ impl Read for GatewayPayloadReaderV1 {
         }
     }
 }
-
 fn classify_gateway_fetch_error(error: &GatewayFetchError) -> MusubiArchiveRuntimeErrorV1 {
     match error {
         GatewayFetchError::Request { .. } | GatewayFetchError::RequestBody { .. } => {
@@ -1380,7 +1324,6 @@ fn classify_gateway_fetch_error(error: &GatewayFetchError) -> MusubiArchiveRunti
         }
     }
 }
-
 impl GatewayPayloadReaderV1 {
     fn ensure_session(&mut self) -> io::Result<bool> {
         let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -1396,7 +1339,6 @@ impl GatewayPayloadReaderV1 {
         };
         Ok(true)
     }
-
     fn reserve_byte_budget(&mut self, requested: u64) -> io::Result<()> {
         if requested == 0 || requested > self.session.byte_rate_limit {
             return Err(self.fail(permanent("MUSUBI_ARCHIVE_TOKEN_BUDGET_INSUFFICIENT")));
@@ -1425,7 +1367,6 @@ impl GatewayPayloadReaderV1 {
         };
         Ok(())
     }
-
     fn fail(&mut self, error: MusubiArchiveRuntimeErrorV1) -> io::Error {
         self.failure = Some(error);
         let kind = if error.class() == MusubiArchiveRuntimeFailureClassV1::Integrity {
@@ -1436,7 +1377,6 @@ impl GatewayPayloadReaderV1 {
         io::Error::new(kind, error.code())
     }
 }
-
 fn parse_fetch_subtree(
     document: &toml::Value,
 ) -> Result<MusubiFetchConfig, MusubiArchiveRuntimeErrorV1> {
@@ -1531,7 +1471,6 @@ fn parse_fetch_subtree(
         provider_gateways,
     })
 }
-
 fn parse_gateway_base_url(raw: &str) -> Result<Url, MusubiArchiveRuntimeErrorV1> {
     if raw.is_empty() || raw.len() > 2_048 || raw.trim() != raw {
         return Err(permanent("MUSUBI_ARCHIVE_FETCH_GATEWAY_URL_INVALID"));
@@ -1562,7 +1501,6 @@ fn parse_gateway_base_url(raw: &str) -> Result<Url, MusubiArchiveRuntimeErrorV1>
     }
     Ok(url)
 }
-
 fn pinned_http_client(
     base_url: &Url,
     request_timeout: Duration,
@@ -1600,7 +1538,6 @@ fn pinned_http_client(
         .build()
         .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_HTTP_CLIENT_INVALID"))
 }
-
 fn is_public_ip(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => {
@@ -1636,7 +1573,6 @@ fn is_public_ip(address: IpAddr) -> bool {
         }
     }
 }
-
 fn gateway_origin(url: &Url) -> Option<(String, String, u16)> {
     Some((
         url.scheme().to_owned(),
@@ -1644,7 +1580,6 @@ fn gateway_origin(url: &Url) -> Option<(String, String, u16)> {
         url.port_or_known_default()?,
     ))
 }
-
 fn anchor_config_path(path: &Path) -> Result<PathBuf, MusubiArchiveRuntimeErrorV1> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
@@ -1653,7 +1588,6 @@ fn anchor_config_path(path: &Path) -> Result<PathBuf, MusubiArchiveRuntimeErrorV
         .map(|current| current.join(path))
         .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_CONFIG_INVALID"))
 }
-
 fn resolve_config_path(
     config_path: &Path,
     configured: &str,
@@ -1682,7 +1616,6 @@ fn resolve_config_path(
             .join(path)
     })
 }
-
 fn read_operator_key_pair(
     path: &Path,
     expected_public_key: &PublicKey,
@@ -1718,7 +1651,6 @@ fn read_operator_key_pair(
     KeyPair::new(expected_public_key.clone(), private_key)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_MISMATCH"))
 }
-
 fn read_bounded_regular(path: &Path, maximum: u64) -> io::Result<(Vec<u8>, fs::Metadata)> {
     #[cfg(not(unix))]
     {
@@ -1731,7 +1663,6 @@ fn read_bounded_regular(path: &Path, maximum: u64) -> io::Result<(Vec<u8>, fs::M
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-
         let mut options = fs::OpenOptions::new();
         options
             .read(true)
@@ -1774,7 +1705,6 @@ fn read_bounded_regular(path: &Path, maximum: u64) -> io::Result<(Vec<u8>, fs::M
         Ok((bytes, after))
     }
 }
-
 #[cfg(all(
     target_os = "android",
     not(any(
@@ -1786,7 +1716,6 @@ fn read_bounded_regular(path: &Path, maximum: u64) -> io::Result<(Vec<u8>, fs::M
     ))
 ))]
 compile_error!("Musubi secure fetch-file reads are not qualified for this Android architecture");
-
 #[cfg(all(
     unix,
     not(any(
@@ -1801,12 +1730,10 @@ compile_error!("Musubi secure fetch-file reads are not qualified for this Androi
     ))
 ))]
 compile_error!("Musubi secure fetch-file reads are not qualified for this Unix target");
-
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
 const fn platform_no_follow_flag() -> i32 {
     0x400000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
@@ -1814,7 +1741,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
@@ -1822,7 +1748,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -1836,7 +1761,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "linux",
     not(any(
@@ -1850,7 +1774,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android", target_os = "macos")),
@@ -1865,14 +1788,12 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(target_os = "macos")]
 const fn platform_no_follow_flag() -> i32 {
     // O_NOFOLLOW rejects a substituted final component; the opened descriptor then remains the
     // sole read authority even if an ancestor or the directory entry is replaced concurrently.
     0x100
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -1885,7 +1806,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x80
 }
-
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "sparc", target_arch = "sparc64")
@@ -1893,7 +1813,6 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x4000
 }
-
 #[cfg(any(
     target_os = "android",
     all(
@@ -1911,7 +1830,6 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x800
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -1927,18 +1845,15 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x4
 }
-
 #[cfg(unix)]
 /// Return the qualified flags for a nonblocking, final-component no-follow open.
 pub(crate) const fn secure_no_follow_nonblocking_flags() -> i32 {
     platform_no_follow_flag() | platform_nonblocking_flag()
 }
-
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
 const fn platform_directory_only_flag() -> i32 {
     0x200000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
@@ -1946,7 +1861,6 @@ const fn platform_directory_only_flag() -> i32 {
 const fn platform_directory_only_flag() -> i32 {
     0x4000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
@@ -1954,7 +1868,6 @@ const fn platform_directory_only_flag() -> i32 {
 const fn platform_directory_only_flag() -> i32 {
     0x10000
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -1968,7 +1881,6 @@ const fn platform_directory_only_flag() -> i32 {
 const fn platform_directory_only_flag() -> i32 {
     0x4000
 }
-
 #[cfg(all(
     target_os = "linux",
     not(any(
@@ -1982,38 +1894,31 @@ const fn platform_directory_only_flag() -> i32 {
 const fn platform_directory_only_flag() -> i32 {
     0x10000
 }
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const fn platform_directory_only_flag() -> i32 {
     0x0010_0000
 }
-
 #[cfg(target_os = "freebsd")]
 const fn platform_directory_only_flag() -> i32 {
     0x0002_0000
 }
-
 #[cfg(target_os = "dragonfly")]
 const fn platform_directory_only_flag() -> i32 {
     0x0800_0000
 }
-
 #[cfg(target_os = "openbsd")]
 const fn platform_directory_only_flag() -> i32 {
     0x0002_0000
 }
-
 #[cfg(target_os = "netbsd")]
 const fn platform_directory_only_flag() -> i32 {
     0x0020_0000
 }
-
 /// Return the qualified flags for a nonblocking, no-follow directory open.
 #[cfg(unix)]
 pub(crate) const fn secure_directory_open_flags() -> i32 {
     secure_no_follow_nonblocking_flags() | platform_directory_only_flag()
 }
-
 fn read_json_response(
     response: HttpResponse,
     maximum: u64,
@@ -2076,7 +1981,6 @@ fn read_json_response(
     }
     Ok(body)
 }
-
 fn http_status_error(status: StatusCode, prefix: &'static str) -> MusubiArchiveRuntimeErrorV1 {
     if matches!(status, StatusCode::NOT_FOUND | StatusCode::GONE) {
         return unavailable(match prefix {
@@ -2110,7 +2014,6 @@ fn http_status_error(status: StatusCode, prefix: &'static str) -> MusubiArchiveR
         _ => "MUSUBI_ARCHIVE_PROVIDER_REJECTED",
     })
 }
-
 fn enforce_plan_memory_bound(plan: &CarBuildPlan) -> Result<(), MusubiArchiveRuntimeErrorV1> {
     let chunk_bytes = plan
         .chunks
@@ -2168,7 +2071,6 @@ fn enforce_plan_memory_bound(plan: &CarBuildPlan) -> Result<(), MusubiArchiveRun
     }
     Ok(())
 }
-
 fn exact_plan_binding(plan: &CarBuildPlan) -> Result<[u8; 32], MusubiArchiveRuntimeErrorV1> {
     let mut transcript =
         blake3::Hasher::new_derive_key("iroha.musubi.sorafs.exact-car-build-plan-binding.v1");
@@ -2200,7 +2102,6 @@ fn exact_plan_binding(plan: &CarBuildPlan) -> Result<[u8; 32], MusubiArchiveRunt
     }
     Ok(*transcript.finalize().as_bytes())
 }
-
 fn update_plan_usize(
     transcript: &mut blake3::Hasher,
     value: usize,
@@ -2210,7 +2111,6 @@ fn update_plan_usize(
     transcript.update(&value.to_le_bytes());
     Ok(())
 }
-
 fn parse_provider_id(raw: &str) -> Result<ProviderId, MusubiArchiveRuntimeErrorV1> {
     if !is_lower_hex(raw, 64) {
         return Err(permanent("MUSUBI_ARCHIVE_FETCH_PROVIDER_ID_INVALID"));
@@ -2224,7 +2124,6 @@ fn parse_provider_id(raw: &str) -> Result<ProviderId, MusubiArchiveRuntimeErrorV
     }
     Ok(ProviderId::new(bytes))
 }
-
 fn parse_lower_hex_32(raw: &str) -> Result<[u8; 32], MusubiArchiveRuntimeErrorV1> {
     if !is_lower_hex(raw, 64) {
         return Err(integrity("MUSUBI_ARCHIVE_RESPONSE_HEX_INVALID"));
@@ -2232,18 +2131,15 @@ fn parse_lower_hex_32(raw: &str) -> Result<[u8; 32], MusubiArchiveRuntimeErrorV1
     let decoded = hex::decode(raw).map_err(|_| integrity("MUSUBI_ARCHIVE_RESPONSE_HEX_INVALID"))?;
     <[u8; 32]>::try_from(decoded).map_err(|_| integrity("MUSUBI_ARCHIVE_RESPONSE_HEX_INVALID"))
 }
-
 fn is_lower_hex(value: &str, length: usize) -> bool {
     value.len() == length
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
-
 fn valid_visible_ascii(value: &str, minimum: usize, maximum: usize) -> bool {
     (minimum..=maximum).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_graphic())
 }
-
 fn random_nonce() -> Result<String, MusubiArchiveRuntimeErrorV1> {
     let mut bytes = [0_u8; 16];
     OsRng
@@ -2254,7 +2150,6 @@ fn random_nonce() -> Result<String, MusubiArchiveRuntimeErrorV1> {
     }
     Ok(hex::encode(bytes))
 }
-
 fn header_text<'headers>(headers: &'headers HeaderMap, name: &str) -> Option<&'headers str> {
     let mut values = headers.get_all(name).iter();
     let value = values.next()?.to_str().ok()?;
@@ -2263,7 +2158,6 @@ fn header_text<'headers>(headers: &'headers HeaderMap, name: &str) -> Option<&'h
     }
     Some(value)
 }
-
 fn required_string<'value>(
     map: &'value norito::json::Map,
     field: &str,
@@ -2272,13 +2166,11 @@ fn required_string<'value>(
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| integrity("MUSUBI_ARCHIVE_RESPONSE_INVALID"))
 }
-
 fn required_u64(map: &norito::json::Map, field: &str) -> Result<u64, MusubiArchiveRuntimeErrorV1> {
     map.get(field)
         .and_then(norito::json::Value::as_u64)
         .ok_or_else(|| integrity("MUSUBI_ARCHIVE_RESPONSE_INVALID"))
 }
-
 fn required_usize(
     map: &norito::json::Map,
     field: &str,
@@ -2286,7 +2178,6 @@ fn required_usize(
     let value = required_u64(map, field)?;
     usize::try_from(value).map_err(|_| integrity("MUSUBI_ARCHIVE_RESPONSE_INVALID"))
 }
-
 fn required_bool(
     map: &norito::json::Map,
     field: &str,
@@ -2295,18 +2186,15 @@ fn required_bool(
         .and_then(norito::json::Value::as_bool)
         .ok_or_else(|| integrity("MUSUBI_ARCHIVE_RESPONSE_INVALID"))
 }
-
 const fn retryable(code: &'static str) -> MusubiArchiveRuntimeErrorV1 {
     MusubiArchiveRuntimeErrorV1::new(MusubiArchiveRuntimeFailureClassV1::Retryable, code, None)
 }
-
 const fn integrity(code: &'static str) -> MusubiArchiveRuntimeErrorV1 {
     surfaced_integrity(
         code,
         MusubiArchiveRuntimeIntegritySurfaceV1::ArchiveCommitment,
     )
 }
-
 const fn surfaced_integrity(
     code: &'static str,
     surface: MusubiArchiveRuntimeIntegritySurfaceV1,
@@ -2317,30 +2205,24 @@ const fn surfaced_integrity(
         Some(surface),
     )
 }
-
 const fn control_integrity(code: &'static str) -> MusubiArchiveRuntimeErrorV1 {
     surfaced_integrity(code, MusubiArchiveRuntimeIntegritySurfaceV1::Other)
 }
-
 const fn unavailable(code: &'static str) -> MusubiArchiveRuntimeErrorV1 {
     MusubiArchiveRuntimeErrorV1::new(MusubiArchiveRuntimeFailureClassV1::Unavailable, code, None)
 }
-
 const fn permanent(code: &'static str) -> MusubiArchiveRuntimeErrorV1 {
     MusubiArchiveRuntimeErrorV1::new(MusubiArchiveRuntimeFailureClassV1::Permanent, code, None)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const TEST_NETWORK_ID: &str =
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     const OTHER_NETWORK_ID: &str =
         "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22";
     const TEST_OPERATOR_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
-
     #[test]
     fn exact_stream_token_decode_ignores_ambient_layout_flags() {
         let token = StreamTokenV1 {
@@ -2364,13 +2246,11 @@ mod tests {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-
         assert_eq!(
             decode_stream_token_exact(&encoded).expect("decode under alternate ambient flags"),
             token
         );
     }
-
     #[test]
     fn operator_headers_bind_network_path_body_and_single_freshness_tuple() {
         let operator_key_pair = KeyPair::try_random().expect("operator key");
@@ -2417,7 +2297,6 @@ mod tests {
         signature
             .verify(operator_key_pair.public_key(), &exact_message)
             .expect("signature must bind the exact request");
-
         let other_network = OTHER_NETWORK_ID
             .parse::<NetworkId>()
             .expect("fixed foreign network identity");
@@ -2466,7 +2345,6 @@ mod tests {
                 "an altered network, path, body, or freshness tuple must fail"
             );
         }
-
         let fresh = operator_request_headers(&runtime, &network_id, &url, body)
             .expect("fresh operator request headers");
         assert_ne!(
@@ -2474,7 +2352,6 @@ mod tests {
             "every dispatch needs a fresh nonce"
         );
     }
-
     #[test]
     fn operator_fetch_parser_ignores_unrelated_account_key_material() {
         let document = parse_config_document(&format!(
@@ -2515,7 +2392,6 @@ operator_private_key_file = "provider.key"
             "provider.key"
         );
     }
-
     #[test]
     fn prepared_fetch_config_uses_one_image_and_defers_runtime_operator_key_and_network() {
         let image = format!(
@@ -2542,7 +2418,6 @@ operator_private_key_file = "keys/provider.key"
             image.as_bytes(),
         )
         .expect("preparation must not open the absent operator key or resolve provider DNS");
-
         assert_eq!(prepared.providers.len(), 1);
         assert_eq!(
             prepared.providers[0].operator_private_key_path,
@@ -2565,12 +2440,10 @@ operator_private_key_file = "keys/provider.key"
             assert!(!debug.contains(redacted));
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn platform_loader_uses_only_the_fetch_operator_identity() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let temporary = tempfile::tempdir().expect("temporary platform directory");
         let operator = KeyPair::try_random().expect("operator key");
         let key_path = temporary.path().join("provider.key");
@@ -2604,7 +2477,6 @@ operator_private_key_file = "provider.key"
             ),
         )
         .expect("write operator-authenticated platform config");
-
         let client = AuthenticatedMusubiArchiveFetchClientV1::load_platform_file(&config_path)
             .expect("invalid account keys must be irrelevant to fetch configuration");
         let debug = format!("{client:?}");
@@ -2612,7 +2484,6 @@ operator_private_key_file = "provider.key"
         assert!(!debug.contains(&operator.public_key().to_string()));
         assert!(!debug.contains(&ExposedPrivateKey(operator.private_key().clone()).to_string()));
     }
-
     #[test]
     fn fetch_parser_rejects_missing_network_and_all_legacy_bearer_fields() {
         for source in [
@@ -2670,7 +2541,6 @@ operator_private_key_file = "provider.key"
             assert!(parse_fetch_subtree(&value).is_err());
         }
     }
-
     #[test]
     fn prepared_fetch_rejects_noncanonical_operator_public_key_text() {
         let mut config = MusubiFetchConfig {
@@ -2691,7 +2561,6 @@ operator_private_key_file = "provider.key"
         config.provider_gateways[0].operator_public_key = config.provider_gateways[0]
             .operator_public_key
             .to_ascii_lowercase();
-
         let error = PreparedMusubiArchiveFetchConfigV1::from_platform_config(
             Path::new("client.toml"),
             &config,
@@ -2699,7 +2568,6 @@ operator_private_key_file = "provider.key"
         .expect_err("operator key aliases must not be normalized");
         assert_eq!(error.code(), "MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_INVALID");
     }
-
     #[test]
     fn gateway_urls_reject_redirect_and_dns_attack_primitives() {
         for invalid in [
@@ -2720,12 +2588,10 @@ operator_private_key_file = "provider.key"
         }
         assert!(parse_gateway_base_url("https://8.8.8.8/").is_ok());
     }
-
     #[cfg(unix)]
     #[test]
     fn operator_key_file_is_private_bounded_matching_and_redacted() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         let temporary = tempfile::tempdir().expect("temporary directory");
         let operator = KeyPair::try_random().expect("operator key");
         let foreign = KeyPair::try_random().expect("foreign key");
@@ -2743,7 +2609,6 @@ operator_private_key_file = "provider.key"
             "MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_MISMATCH"
         );
         assert!(!format!("{mismatch:?}").contains(&encoded));
-
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("weaken key");
         let error = read_operator_key_pair(&path, operator.public_key())
             .expect_err("world-readable operator key must fail");
@@ -2752,7 +2617,6 @@ operator_private_key_file = "provider.key"
             "MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_FILE_PERMISSIONS"
         );
         assert!(!format!("{error:?}").contains(&encoded));
-
         fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).expect("make key read-only");
         let error = read_operator_key_pair(&path, operator.public_key())
             .expect_err("operator keys require the exact 0600 mode");
@@ -2760,7 +2624,6 @@ operator_private_key_file = "provider.key"
             error.code(),
             "MUSUBI_ARCHIVE_FETCH_OPERATOR_KEY_FILE_PERMISSIONS"
         );
-
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("restore key mode");
         let symlink_path = temporary.path().join("provider-symlink.key");
         symlink(&path, &symlink_path).expect("create hostile key symlink");
@@ -2768,7 +2631,6 @@ operator_private_key_file = "provider.key"
             read_operator_key_pair(&symlink_path, operator.public_key()).is_err(),
             "operator key reads must never follow a replacement symlink"
         );
-
         let hardlink_path = temporary.path().join("provider-hardlink.key");
         fs::hard_link(&path, &hardlink_path).expect("create hostile key hard link");
         assert!(
@@ -2776,7 +2638,6 @@ operator_private_key_file = "provider.key"
             "multiply-linked operator key files must fail closed"
         );
     }
-
     #[test]
     fn gateway_stream_failures_keep_retry_and_integrity_classes() {
         let retryable_error = classify_gateway_fetch_error(&GatewayFetchError::UnexpectedStatus {
@@ -2802,7 +2663,6 @@ operator_private_key_file = "provider.key"
         );
         assert!(!format!("{integrity_error:?}").contains("redacted-provider"));
     }
-
     #[test]
     fn integrity_errors_bind_closed_metric_surface_without_string_classification() {
         assert_eq!(
@@ -2818,7 +2678,6 @@ operator_private_key_file = "provider.key"
             None
         );
     }
-
     #[test]
     fn exact_plan_binding_rejects_file_plan_substitution() {
         let payload = [1_u8, 2, 3, 4];
@@ -2848,7 +2707,6 @@ operator_private_key_file = "provider.key"
             exact_plan_binding(&plan).expect("bind substituted plan")
         );
     }
-
     #[test]
     fn stream_memory_preflight_counts_retained_vector_capacity() {
         let payload = [7_u8; 64];
@@ -2876,7 +2734,6 @@ operator_private_key_file = "provider.key"
             .saturating_add(1);
         plan.chunks
             .reserve_exact(required_capacity.saturating_sub(plan.chunks.len()));
-
         let error = enforce_plan_memory_bound(&plan)
             .expect_err("overcapacity plan must fail before the worker clone");
         assert_eq!(error.code(), "MUSUBI_ARCHIVE_PLAN_MEMORY_LIMIT");

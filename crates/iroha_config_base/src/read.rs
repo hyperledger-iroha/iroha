@@ -1,5 +1,4 @@
 //! Configuration reader API.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::identity,
@@ -7,14 +6,11 @@ use std::{
     fmt::{Debug, Write as _},
     path::{Path, PathBuf},
 };
-
 use drop_bomb::DropBomb;
 use error_stack::{Report, ResultExt};
 use norito::json::{self, JsonDeserializeOwned};
 use thiserror::Error;
-
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
-
 use crate::{
     ParameterId, ParameterOrigin, WithOrigin, attach,
     attach::{EnvValue, MissingParameter, UnknownParameter},
@@ -22,21 +18,16 @@ use crate::{
     toml::{self, TomlSource},
     util::{Emitter, ExtendsPaths},
 };
-
 const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
-
 /// Maximum number of `extends` edges plus the root source in one traversal.
 ///
 /// Repeated diamond edges count toward this ceiling even though their already
 /// visited target is loaded only once. This also bounds the explicit DFS stack.
 pub const MAX_TOML_EXTENDS_SOURCES: usize = 64;
-
 /// Maximum nesting depth of a TOML `extends` graph, with the root at depth zero.
 pub const MAX_TOML_EXTENDS_DEPTH: u8 = 32;
-
 /// Maximum aggregate encoded bytes across unique TOML sources in one traversal.
 pub const MAX_TOML_EXTENDS_TOTAL_BYTES: u64 = 8 * toml::MAX_TOML_SOURCE_BYTES;
-
 fn escape_json_string_plain(s: &str, out: &mut String) {
     out.push('"');
     for ch in s.chars() {
@@ -56,10 +47,8 @@ fn escape_json_string_plain(s: &str, out: &mut String) {
     }
     out.push('"');
 }
-
 fn serialize_json_value_plain(value: &json::Value, out: &mut String) {
     use norito::json::native::Number;
-
     match value {
         json::Value::Null => out.push_str("null"),
         json::Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
@@ -102,7 +91,6 @@ fn serialize_json_value_plain(value: &json::Value, out: &mut String) {
         }
     }
 }
-
 fn deserialize_json_value_plain<T: json::JsonDeserialize>(
     value: &json::Value,
 ) -> std::result::Result<T, json::Error> {
@@ -121,7 +109,6 @@ fn deserialize_json_value_plain<T: json::JsonDeserialize>(
         }
     }
 }
-
 /// A type that implements reading from [`ConfigReader`]
 pub trait ReadConfig: Sized {
     /// Returns the [`FinalWrap`] with self and the reader itself, transformed
@@ -131,7 +118,6 @@ pub trait ReadConfig: Sized {
     /// no error upon [`ConfigReader::into_result`].
     fn read(reader: &mut ConfigReader) -> FinalWrap<Self>;
 }
-
 /// An umbrella error for various cases related to [`ConfigReader`].
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -166,7 +152,6 @@ pub enum Error {
         msg: String,
     },
 }
-
 #[derive(Debug, Error, Eq, PartialEq)]
 enum ExtendsTraversalError {
     #[error("configuration `extends` cycle detected at `{}`", path.display())]
@@ -178,13 +163,11 @@ enum ExtendsTraversalError {
     #[error("configuration `extends` encoded bytes {observed} exceed the maximum {maximum}")]
     ByteLimit { observed: u64, maximum: u64 },
 }
-
 #[derive(Debug)]
 struct ExtendsTraversalBudget {
     source_references: usize,
     bytes_read: u64,
 }
-
 impl ExtendsTraversalBudget {
     fn new() -> Self {
         Self {
@@ -192,7 +175,6 @@ impl ExtendsTraversalBudget {
             bytes_read: 0,
         }
     }
-
     fn check_depth(depth: u8) -> core::result::Result<(), ExtendsTraversalError> {
         if depth > MAX_TOML_EXTENDS_DEPTH {
             return Err(ExtendsTraversalError::DepthLimit {
@@ -202,7 +184,6 @@ impl ExtendsTraversalBudget {
         }
         Ok(())
     }
-
     fn schedule_sources(
         &mut self,
         additional: usize,
@@ -217,7 +198,6 @@ impl ExtendsTraversalBudget {
         self.source_references = observed;
         Ok(())
     }
-
     fn record_bytes(&mut self, additional: u64) -> core::result::Result<(), ExtendsTraversalError> {
         let observed = self.bytes_read.saturating_add(additional);
         if observed > MAX_TOML_EXTENDS_TOTAL_BYTES {
@@ -229,16 +209,13 @@ impl ExtendsTraversalBudget {
         self.bytes_read = observed;
         Ok(())
     }
-
     fn remaining_bytes(&self) -> u64 {
         MAX_TOML_EXTENDS_TOTAL_BYTES.saturating_sub(self.bytes_read)
     }
 }
-
 fn extends_traversal_report(error: ExtendsTraversalError) -> Report<Error> {
     Report::new(error).change_context(Error::CannotExtend)
 }
-
 fn extends_read_report(
     report: Report<toml::FromFileError>,
     path: &Path,
@@ -257,7 +234,6 @@ fn extends_read_report(
         None => report,
     }
 }
-
 fn read_toml_source_with_budget(
     path: &Path,
     parent: Option<&PathBuf>,
@@ -296,7 +272,6 @@ fn read_toml_source_with_budget(
         .map_err(extends_traversal_report)?;
     Ok(source)
 }
-
 fn take_extends_paths(source: &mut TomlSource) -> Result<Vec<PathBuf>, Error> {
     let Some(extends) = source.table_mut().remove("extends") else {
         return Ok(Vec::new());
@@ -316,21 +291,17 @@ fn take_extends_paths(source: &mut TomlSource) -> Result<Vec<PathBuf>, Error> {
         ExtendsPaths::Chain(paths) => paths,
     })
 }
-
 #[derive(Error, Debug)]
 #[error("{0}")]
 struct EnvError(String);
-
 #[derive(Error, Debug)]
 #[error("failed to deserialize config value: {message}")]
 struct JsonValueError {
     message: String,
 }
-
 fn normalize_json_error_message(raw: &str) -> String {
     raw.strip_prefix("JSON error: ").unwrap_or(raw).to_string()
 }
-
 impl From<norito::json::Error> for JsonValueError {
     fn from(error: norito::json::Error) -> Self {
         let message = error.to_string();
@@ -339,7 +310,6 @@ impl From<norito::json::Error> for JsonValueError {
         }
     }
 }
-
 impl From<Report<norito::json::Error>> for JsonValueError {
     fn from(report: Report<norito::json::Error>) -> Self {
         let message = report.to_string();
@@ -348,7 +318,6 @@ impl From<Report<norito::json::Error>> for JsonValueError {
         }
     }
 }
-
 impl Error {
     /// Some other error message
     pub fn other(message: impl AsRef<str>) -> Self {
@@ -357,7 +326,6 @@ impl Error {
         }
     }
 }
-
 #[expect(clippy::too_long_first_doc_paragraph)]
 /// The reader, which provides an API to accumulate config sources,
 /// read parameters from them, override with environment variables, fallback to default values,
@@ -381,19 +349,16 @@ pub struct ConfigReader {
     /// A runtime guard to prevent dropping the [`ConfigReader`] without handing errors
     bomb: DropBomb,
 }
-
 impl Debug for ConfigReader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ConfigReader")
     }
 }
-
 impl Default for ConfigReader {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl ConfigReader {
     /// Constructor
     pub fn new() -> Self {
@@ -408,21 +373,18 @@ impl ConfigReader {
             env: Box::new(crate::env::std_env),
         }
     }
-
     /// Replace default environment reader ([`std::env::var`]) with a custom one
     #[must_use]
     pub fn with_env(mut self, env: impl ReadEnv + 'static) -> Self {
         self.env = Box::new(env);
         self
     }
-
     /// Add a data source to read parameters from.
     #[must_use]
     pub fn with_toml_source(mut self, source: TomlSource) -> Self {
         self.sources.push(source);
         self
     }
-
     /// Rewrite the ordered TOML sources before typed parameter deserialization.
     ///
     /// Sources are provided in resolution order: later entries have higher
@@ -434,7 +396,6 @@ impl ConfigReader {
         rewrite(&mut self.sources);
         self
     }
-
     /// Return whether any loaded TOML source explicitly defines `id`.
     ///
     /// This distinguishes an operator-provided value from a value materialized
@@ -447,7 +408,6 @@ impl ConfigReader {
             .iter()
             .any(|source| source.fetch(&id).is_some())
     }
-
     /// Reads a TOML file and handles its `extends` field, implementing mixins mechanism.
     ///
     /// The traversal is depth-first in declared order. Canonically identical
@@ -475,7 +435,6 @@ impl ConfigReader {
                 source: TomlSource,
             },
         }
-
         let result = (|| -> Result<(), Error> {
             let mut stack = vec![StackEntry::Visit {
                 path: path.as_ref().to_path_buf(),
@@ -485,7 +444,6 @@ impl ConfigReader {
             let mut active = BTreeSet::new();
             let mut visited = BTreeSet::new();
             let mut budget = ExtendsTraversalBudget::new();
-
             while let Some(entry) = stack.pop() {
                 let (path, depth, parent) = match entry {
                     StackEntry::Visit {
@@ -501,7 +459,6 @@ impl ConfigReader {
                         continue;
                     }
                 };
-
                 ExtendsTraversalBudget::check_depth(depth).map_err(extends_traversal_report)?;
                 let (identity, canonical_path) = toml::canonical_regular_file_identity(&path)
                     .map_err(|error| extends_read_report(error, &path, parent.as_ref(), depth))?;
@@ -514,7 +471,6 @@ impl ConfigReader {
                 if visited.contains(&identity) {
                     continue;
                 }
-
                 let mut source = read_toml_source_with_budget(
                     &path,
                     parent.as_ref(),
@@ -523,13 +479,11 @@ impl ConfigReader {
                     &mut budget,
                 )?;
                 let extends_paths = take_extends_paths(&mut source)?;
-
                 budget
                     .schedule_sources(extends_paths.len())
                     .map_err(extends_traversal_report)?;
                 active.insert(identity.clone());
                 stack.push(StackEntry::Emit { identity, source });
-
                 let child_depth = depth.saturating_add(1);
                 let parent_dir = path.parent().unwrap_or_else(|| Path::new(""));
                 for extends_path in extends_paths.into_iter().rev() {
@@ -540,10 +494,8 @@ impl ConfigReader {
                     });
                 }
             }
-
             Ok(())
         })();
-
         match result {
             Ok(()) => {
                 self.bomb.defuse();
@@ -555,7 +507,6 @@ impl ConfigReader {
             }
         }
     }
-
     /// Instantiate a parameter reading pipeline.
     #[must_use]
     pub fn read_parameter<T>(&mut self, id: impl Into<ParameterId>) -> ReadingParameter<'_, T>
@@ -566,7 +517,6 @@ impl ConfigReader {
         self.collect_parameter(&id);
         ReadingParameter::new(self, id).fetch()
     }
-
     /// Delegate reading to another implementor of [`ReadConfig`] under a certain namespace.
     /// All parameter IDs in it will be resolved within that namespace.
     #[must_use]
@@ -576,7 +526,6 @@ impl ConfigReader {
         self.nesting.pop();
         value
     }
-
     /// Finally, complete the reading procedure and emit a collective report
     /// in case if any error occurred along the reading process.
     ///
@@ -585,7 +534,6 @@ impl ConfigReader {
     pub fn into_result(mut self) -> Result<(), Error> {
         self.bomb.defuse();
         let mut emitter = Emitter::new();
-
         if !self.missing_parameters.is_empty() {
             let mut report = Report::new(Error::MissingParameters);
             for i in self.missing_parameters {
@@ -593,7 +541,6 @@ impl ConfigReader {
             }
             emitter.emit(report);
         }
-
         // looking for unknown parameters
         for source in &self.sources {
             let unknown_parameters = source.find_unknown(self.existing_parameters.iter());
@@ -608,7 +555,6 @@ impl ConfigReader {
                     .push(report);
             }
         }
-
         // emit reports by source
         for (source, reports) in self.errors_by_source {
             let mut local_emitter = Emitter::new();
@@ -620,7 +566,6 @@ impl ConfigReader {
                 .expect_err("there should be at least one error");
             emitter.emit(report.change_context(Error::InSourceFile(source)))
         }
-
         // environment parsing errors
         if !self.errors_in_env.is_empty() {
             let mut local_emitter = Emitter::new();
@@ -632,10 +577,8 @@ impl ConfigReader {
                 .expect_err("there should be at least one error");
             emitter.emit(report.change_context(Error::InEnvironment));
         }
-
         emitter.into_result()
     }
-
     /// A shorthand to "just read the config and get an error or the value".
     /// # Errors
     /// See [`Self::into_result`]
@@ -644,11 +587,9 @@ impl ConfigReader {
         self.into_result()?;
         Ok(value.unwrap())
     }
-
     fn full_id(&self, id: impl Into<ParameterId>) -> ParameterId {
         self.nesting.iter().chain(id.into().segments.iter()).into()
     }
-
     fn collect_deserialize_error<C: StdError + Send + Sync + 'static>(
         &mut self,
         source_path: PathBuf,
@@ -660,19 +601,15 @@ impl ConfigReader {
             .or_default()
             .push(report.change_context(Error::ParseParameter(path.clone())));
     }
-
     fn collect_env_error(&mut self, report: Report<EnvError>) {
         self.errors_in_env.push(report)
     }
-
     fn collect_parameter(&mut self, id: &ParameterId) {
         self.existing_parameters.insert(id.clone());
     }
-
     fn collect_missing_parameter(&mut self, id: &ParameterId) {
         self.missing_parameters.insert(id.clone());
     }
-
     fn fetch_parameter<T>(
         &mut self,
         id: &ParameterId,
@@ -681,11 +618,9 @@ impl ConfigReader {
         T: JsonDeserializeOwned,
     {
         self.collect_parameter(id);
-
         let mut errored = false;
         let mut value = None;
         let mut errors: Vec<(PathBuf, Report<JsonValueError>)> = Vec::new();
-
         for source in &self.sources {
             if let Some(toml_value) = source.fetch(id) {
                 let source_path = source.path().clone();
@@ -703,7 +638,6 @@ impl ConfigReader {
                         continue;
                     }
                 };
-
                 let result: std::result::Result<T, _> = deserialize_json_value_plain(&json_value);
                 match (result, errored) {
                     (Ok(v), false) => {
@@ -739,15 +673,12 @@ impl ConfigReader {
                 )
             }
         }
-
         for (source_path, report) in errors {
             self.collect_deserialize_error(source_path, id, report);
         }
-
         if errored { Err(()) } else { Ok(value) }
     }
 }
-
 /// A state of reading a certain configuration parameter.
 pub struct ReadingParameter<'reader, T> {
     reader: &'reader mut ConfigReader,
@@ -755,7 +686,6 @@ pub struct ReadingParameter<'reader, T> {
     value: Option<WithOrigin<T>>,
     errored: bool,
 }
-
 impl<'reader, T> ReadingParameter<'reader, T> {
     fn new(reader: &'reader mut ConfigReader, id: ParameterId) -> Self {
         Self {
@@ -766,7 +696,6 @@ impl<'reader, T> ReadingParameter<'reader, T> {
         }
     }
 }
-
 impl<T> ReadingParameter<'_, T>
 where
     T: JsonDeserializeOwned,
@@ -781,11 +710,9 @@ where
                 self.errored = true;
             }
         }
-
         self
     }
 }
-
 impl<T> ReadingParameter<'_, T>
 where
     T: FromEnvStr,
@@ -831,11 +758,9 @@ where
         } else {
             log::trace!("parameter `{}`: env var `{var}` not found", self.id)
         }
-
         self
     }
 }
-
 impl<T> ReadingParameter<'_, T> {
     /// Finish reading, and if the value is not read so far, it will be reported later on [`ConfigReader::into_result`].
     #[must_use]
@@ -849,7 +774,6 @@ impl<T> ReadingParameter<'_, T> {
             (true, _) => ReadingDone(ReadingDoneValue::Errored),
         }
     }
-
     /// Finish reading, falling back to a default value if it is absent
     #[must_use]
     pub fn value_or_else<F: FnOnce() -> T>(self, fun: F) -> ReadingDone<T> {
@@ -865,7 +789,6 @@ impl<T> ReadingParameter<'_, T> {
             (true, _) => ReadingDone(ReadingDoneValue::Errored),
         }
     }
-
     /// Finish reading, allowing value to be not present
     #[must_use]
     pub fn value_optional(self) -> OptionReadingDone<T> {
@@ -875,7 +798,6 @@ impl<T> ReadingParameter<'_, T> {
         }
     }
 }
-
 // Lifetime is elided intentionally (`'_`) to avoid triggering the
 // `single-use-lifetimes` lint while still binding the impl to the reader borrow.
 impl<T: Default> ReadingParameter<'_, T> {
@@ -885,17 +807,14 @@ impl<T: Default> ReadingParameter<'_, T> {
         self.value_or_else(Default::default)
     }
 }
-
 enum ReadingDoneValue<T> {
     Errored,
     Fine(T),
 }
-
 impl<T> ReadingDoneValue<T> {
     fn into_final(self) -> FinalWrap<T> {
         self.into_final_with(identity)
     }
-
     fn into_final_with<F, U>(self, f: F) -> FinalWrap<U>
     where
         F: FnOnce(T) -> U,
@@ -906,42 +825,35 @@ impl<T> ReadingDoneValue<T> {
         }
     }
 }
-
 /// A state of reading when the parameter's value is read, and the next step is to finish it via
 /// [`ReadingDone::finish`] or [`ReadingDone::finish_with_origin`]
 pub struct ReadingDone<T>(ReadingDoneValue<WithOrigin<T>>);
-
 /// Same as [`ReadingDone`], but holding an optional value.
 pub struct OptionReadingDone<T>(ReadingDoneValue<Option<WithOrigin<T>>>);
-
 impl<T> ReadingDone<T> {
     /// Finish with the value only.
     #[must_use]
     pub fn finish(self) -> FinalWrap<T> {
         self.0.into_final_with(WithOrigin::into_value)
     }
-
     /// Finish with the value and its origin
     #[must_use]
     pub fn finish_with_origin(self) -> FinalWrap<WithOrigin<T>> {
         self.0.into_final()
     }
 }
-
 impl<T> OptionReadingDone<T> {
     /// Finish with the value only
     #[must_use]
     pub fn finish(self) -> FinalWrap<Option<T>> {
         self.0.into_final_with(|x| x.map(WithOrigin::into_value))
     }
-
     /// Finish with the value and its origin
     #[must_use]
     pub fn finish_with_origin(self) -> FinalWrap<Option<WithOrigin<T>>> {
         self.0.into_final()
     }
 }
-
 /// A value that should be accessed only if overall configuration reading succeeded.
 ///
 /// I.e. it is guaranteed that [`FinalWrap::unwrap`] will not panic after associated
@@ -952,14 +864,12 @@ impl<T> OptionReadingDone<T> {
 /// `ConfigReader::into_result` returned `Ok`, preventing premature panics while
 /// aggregating configuration errors.
 pub struct FinalWrap<T>(FinalWrapInner<T>);
-
 /// Exists to not expose enum variants if they were in [`FinalWrap`]
 enum FinalWrapInner<T> {
     Errored,
     Value(T),
     ValueFn(Box<dyn FnOnce() -> T>),
 }
-
 impl<T> FinalWrap<T> {
     /// Pass a closure that will emit the value on [`Self::unwrap`].
     pub fn value_fn<F>(fun: F) -> Self
@@ -968,7 +878,6 @@ impl<T> FinalWrap<T> {
     {
         Self(FinalWrapInner::ValueFn(Box::new(fun)))
     }
-
     /// Unwrap the value inside.
     ///
     /// Can be safely called only after the [`ConfigReader::into_result`] returned [Ok].
@@ -985,18 +894,14 @@ impl<T> FinalWrap<T> {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
     };
-
     use super::*;
-
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
-
     fn temp_config_dir(label: &str) -> PathBuf {
         let nonce = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
@@ -1006,17 +911,14 @@ mod tests {
         fs::create_dir_all(&path).expect("create temporary configuration directory");
         path
     }
-
     fn report_debug(report: &Report<[Error]>) -> String {
         format!("{report:#?}")
     }
-
     #[test]
     fn extends_cycle_is_rejected_before_reloading_active_source() {
         let dir = temp_config_dir("cycle");
         let config = dir.join("config.toml");
         fs::write(&config, "extends = \"./config.toml\"\n").expect("write cyclic configuration");
-
         let report = ConfigReader::new()
             .read_toml_with_extends(&config)
             .expect_err("self-cycle must be rejected");
@@ -1025,10 +927,8 @@ mod tests {
             rendered.contains("configuration `extends` cycle detected"),
             "unexpected report: {rendered}"
         );
-
         fs::remove_dir_all(dir).expect("remove temporary configuration directory");
     }
-
     #[test]
     fn extends_diamond_loads_canonical_source_once_in_declared_order() {
         let dir = temp_config_dir("diamond");
@@ -1048,7 +948,6 @@ mod tests {
             "extends = [\"left.toml\", \"right.toml\"]\n",
         )
         .expect("write top configuration");
-
         let mut reader = ConfigReader::new()
             .read_toml_with_extends(dir.join("top.toml"))
             .expect("diamond must load");
@@ -1068,17 +967,14 @@ mod tests {
             source_names,
             ["base.toml", "left.toml", "right.toml", "top.toml"]
         );
-
         let value = reader
             .read_parameter::<String>(["value"])
             .value_required()
             .finish();
         reader.into_result().expect("diamond config is valid");
         assert_eq!(value.unwrap(), "right");
-
         fs::remove_dir_all(dir).expect("remove temporary configuration directory");
     }
-
     #[test]
     fn extends_source_reference_ceiling_is_checked_before_children_are_opened() {
         let dir = temp_config_dir("source_limit");
@@ -1088,7 +984,6 @@ mod tests {
             .join(", ");
         fs::write(dir.join("root.toml"), format!("extends = [{children}]\n"))
             .expect("write excessive source fanout");
-
         let report = ConfigReader::new()
             .read_toml_with_extends(dir.join("root.toml"))
             .expect_err("excessive source fanout must fail");
@@ -1102,10 +997,8 @@ mod tests {
             rendered.contains(&expected),
             "unexpected report: {rendered}"
         );
-
         fs::remove_dir_all(dir).expect("remove temporary configuration directory");
     }
-
     #[test]
     fn extends_depth_ceiling_is_enforced_on_the_first_excess_edge() {
         let dir = temp_config_dir("depth_limit");
@@ -1118,7 +1011,6 @@ mod tests {
             fs::write(dir.join(format!("{depth}.toml")), body)
                 .expect("write deep configuration chain");
         }
-
         let report = ConfigReader::new()
             .read_toml_with_extends(dir.join("0.toml"))
             .expect_err("excessive depth must fail");
@@ -1132,10 +1024,8 @@ mod tests {
             rendered.contains(&expected),
             "unexpected report: {rendered}"
         );
-
         fs::remove_dir_all(dir).expect("remove temporary configuration directory");
     }
-
     #[test]
     fn extends_traversal_budget_enforces_exact_boundaries() {
         ExtendsTraversalBudget::check_depth(MAX_TOML_EXTENDS_DEPTH)
@@ -1147,7 +1037,6 @@ mod tests {
                 maximum: MAX_TOML_EXTENDS_DEPTH,
             })
         );
-
         let mut sources = ExtendsTraversalBudget::new();
         sources
             .schedule_sources(MAX_TOML_EXTENDS_SOURCES - 1)
@@ -1159,7 +1048,6 @@ mod tests {
                 maximum: MAX_TOML_EXTENDS_SOURCES,
             })
         );
-
         let mut bytes = ExtendsTraversalBudget::new();
         bytes
             .record_bytes(MAX_TOML_EXTENDS_TOTAL_BYTES)
@@ -1172,17 +1060,14 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn detects_explicit_toml_parameter_before_defaults_are_read() {
         let mut reader = ConfigReader::new().with_toml_source(TomlSource::inline(::toml::toml! {
             [sorafs.storage]
             enabled = false
         }));
-
         assert!(reader.contains_toml_parameter(["sorafs", "storage", "enabled"]));
         assert!(!reader.contains_toml_parameter(["sorafs", "storage", "missing"]));
-
         let enabled = reader
             .read_parameter::<bool>(["sorafs", "storage", "enabled"])
             .value_required()
@@ -1190,7 +1075,6 @@ mod tests {
         reader.into_result().expect("source must be fully consumed");
         assert!(!enabled.unwrap());
     }
-
     #[test]
     fn trims_json_error_prefix_in_messages() {
         let base_err = norito::json::Error::TrailingCharacters {
@@ -1203,7 +1087,6 @@ mod tests {
             simple.message,
             "trailing characters at byte 1 (line 1, col 2)"
         );
-
         let report = Report::new(base_err);
         let reported = JsonValueError::from(report);
         assert_eq!(
@@ -1211,11 +1094,9 @@ mod tests {
             "trailing characters at byte 1 (line 1, col 2)"
         );
     }
-
     #[test]
     fn plain_serializer_matches_roundtrip() {
         use norito::json::{self, Value, native::Number};
-
         let values = [
             Value::String("00000000-0000-0000-0000-000000000000".to_owned()),
             Value::String("addr:127.0.0.1:33337#D694".to_owned()),
@@ -1234,13 +1115,11 @@ mod tests {
             }),
             Value::Number(Number::U64(42)),
         ];
-
         for value in values {
             let mut plain = String::new();
             serialize_json_value_plain(&value, &mut plain);
             let parsed = json::parse_value(&plain).expect("plain serialized value parses");
             assert_eq!(parsed, value, "mismatch for plain serializer");
-
             let canonical = json::to_json(&value).expect("canonical to_json");
             let reparsed =
                 json::parse_value(&canonical).expect("canonical serialized value parses");

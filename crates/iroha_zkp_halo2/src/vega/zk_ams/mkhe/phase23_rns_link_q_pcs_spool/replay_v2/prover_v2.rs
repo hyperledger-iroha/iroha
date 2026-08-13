@@ -15,17 +15,13 @@
 //! derive the post-root points, and freeze the opening-quotient root. Batching,
 //! FRI, cross-field binding, and proof emission remain absent; every
 //! completion gate remains false.
-
 use core::{convert::Infallible, fmt, sync::atomic};
 use std::path::Path;
-
 use super::*;
-
 const MASK_SAMPLE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.mask-sample.external-entropy\0";
 const MASK_SAMPLE_ATTEMPTS_V2: u16 = 256;
 const PRODUCT_COMPONENTS_V2: usize = 2;
-
 const MASKED_COEFFICIENTS_COMPLETE_V2: bool = false;
 const INITIAL_C0_ROOT_PREPARED_V2: bool = false;
 const INITIAL_C0_ROOT_FROZEN_V2: bool = false;
@@ -35,7 +31,6 @@ const FRI_FIRST_PASS_COMPLETE_V2: bool = false;
 const FRI_SECOND_PASS_COMPLETE_V2: bool = false;
 const CANONICAL_PROOF_EMITTED_V2: bool = false;
 const PROVER_RELEASE_READY_V2: bool = false;
-
 const _: () = {
     assert!(OPENING_REPETITIONS_V2 == 5);
     assert!(COEFFICIENT_COMPONENTS_V2 == 3);
@@ -49,7 +44,6 @@ const _: () = {
     assert!(!CANONICAL_PROOF_EMITTED_V2);
     assert!(!PROVER_RELEASE_READY_V2);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ProverPrerequisiteErrorV2 {
     InvalidRelationOrder,
@@ -73,25 +67,21 @@ pub(super) enum ProverPrerequisiteErrorV2 {
     Poisoned,
     Spool(QPcsSpoolErrorV2),
 }
-
 impl fmt::Display for ProverPrerequisiteErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
-
 impl From<QPcsSpoolErrorV2> for ProverPrerequisiteErrorV2 {
     fn from(error: QPcsSpoolErrorV2) -> Self {
         Self::Spool(error)
     }
 }
-
 impl From<ConfidentialSpoolErrorV1> for ProverPrerequisiteErrorV2 {
     fn from(error: ConfidentialSpoolErrorV1) -> Self {
         Self::Spool(QPcsSpoolErrorV2::Leaf(error))
     }
 }
-
 /// The future source child must possess all three independent authorities.
 pub(super) enum ProverSourceSealV2 {
     Production {
@@ -102,7 +92,6 @@ pub(super) enum ProverSourceSealV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 /// Public coordinates supplied to the external, fallible entropy source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct MaskSampleDomainV2 {
@@ -115,7 +104,6 @@ pub(super) struct MaskSampleDomainV2 {
     pub(super) attempt: u16,
     pub(super) modulus: u64,
 }
-
 /// Entropy is injected by the eventual caller and may fail closed.
 ///
 /// A successful call must overwrite all eight bytes with one independently
@@ -128,12 +116,10 @@ pub(super) trait MaskEntropyV2 {
         destination: &mut [u8; 8],
     ) -> Result<(), ()>;
 }
-
 /// Exact-capacity, move-only source/mask residue owner.
 pub(super) struct SecretResiduesV2 {
     values: Vec<u64>,
 }
-
 impl SecretResiduesV2 {
     pub(super) fn new_zeroed_exact_v2(len: usize) -> Result<Self, ProverPrerequisiteErrorV2> {
         if len == 0 {
@@ -149,16 +135,13 @@ impl SecretResiduesV2 {
         values.resize(len, 0);
         Ok(Self { values })
     }
-
     pub(super) fn as_mut_slice_v2(&mut self) -> &mut [u64] {
         &mut self.values
     }
-
     fn as_slice_v2(&self) -> &[u64] {
         &self.values
     }
 }
-
 impl Drop for SecretResiduesV2 {
     fn drop(&mut self) {
         self.values.fill(0);
@@ -167,7 +150,6 @@ impl Drop for SecretResiduesV2 {
         SECRET_RESIDUE_DROPS_V2.fetch_add(1, atomic::Ordering::SeqCst);
     }
 }
-
 /// One already-aggregated and algebra-verified source relation.
 pub(super) struct SecretRelationCoefficientsV2 {
     limb: u8,
@@ -175,7 +157,6 @@ pub(super) struct SecretRelationCoefficientsV2 {
     product: SecretResiduesV2,
     quotient: SecretResiduesV2,
 }
-
 impl SecretRelationCoefficientsV2 {
     pub(super) fn new_v2(
         limb: u8,
@@ -191,17 +172,14 @@ impl SecretRelationCoefficientsV2 {
         }
     }
 }
-
 struct SecretEntropyWordV2 {
     bytes: [u8; 8],
 }
-
 impl SecretEntropyWordV2 {
     const fn zeroed_v2() -> Self {
         Self { bytes: [0; 8] }
     }
 }
-
 impl Drop for SecretEntropyWordV2 {
     fn drop(&mut self) {
         self.bytes.fill(0);
@@ -210,12 +188,10 @@ impl Drop for SecretEntropyWordV2 {
         SECRET_ENTROPY_WORD_DROPS_V2.fetch_add(1, atomic::Ordering::SeqCst);
     }
 }
-
 struct MaskReuseGuardV2 {
     limb: u8,
     masks: Vec<SecretResiduesV2>,
 }
-
 impl MaskReuseGuardV2 {
     fn new_v2() -> Result<Self, ProverPrerequisiteErrorV2> {
         let capacity = usize::from(OPENING_REPETITIONS_V2);
@@ -228,7 +204,6 @@ impl MaskReuseGuardV2 {
         }
         Ok(Self { limb: 0, masks })
     }
-
     fn check_v2(
         &mut self,
         limb: u8,
@@ -251,7 +226,6 @@ impl MaskReuseGuardV2 {
         }
         Ok(())
     }
-
     fn commit_v2(&mut self, mask: SecretResiduesV2) -> Result<(), ProverPrerequisiteErrorV2> {
         let capacity = usize::from(OPENING_REPETITIONS_V2);
         if self.masks.len() >= capacity || self.masks.capacity() != capacity {
@@ -264,34 +238,29 @@ impl MaskReuseGuardV2 {
         Ok(())
     }
 }
-
 impl Drop for MaskReuseGuardV2 {
     fn drop(&mut self) {
         self.masks.clear();
         atomic::compiler_fence(atomic::Ordering::SeqCst);
     }
 }
-
 struct LiveMaskedCoefficientPassV2 {
     writer: QPcsSpoolWriterV2,
     mask_writer: MaskSpoolWriterV2,
     next_relation: u16,
     reuse: MaskReuseGuardV2,
 }
-
 pub(super) struct MaskedCoefficientPassV2 {
     live: Option<LiveMaskedCoefficientPassV2>,
     geometry: SpoolGeometryV2,
     context: PublicSpoolContextV2,
 }
-
 /// The only successful output: coefficients are sealed, but no LDE/root exists.
 pub(super) struct CoefficientsSealedV2 {
     stage: Option<QPcsCoefficientReplayStageV2>,
     masks: Option<MaskSpoolSealedV2>,
     context: PublicSpoolContextV2,
 }
-
 impl MaskedCoefficientPassV2 {
     pub(super) fn create_in_v2(
         directory: &Path,
@@ -309,7 +278,6 @@ impl MaskedCoefficientPassV2 {
         };
         Self::create_with_geometry_v2(directory, SpoolGeometryV2::release_v2(), context, permit)
     }
-
     fn create_with_geometry_v2(
         directory: &Path,
         geometry: SpoolGeometryV2,
@@ -336,7 +304,6 @@ impl MaskedCoefficientPassV2 {
             context,
         })
     }
-
     pub(super) fn absorb_next_relation_v2(
         &mut self,
         relation: SecretRelationCoefficientsV2,
@@ -350,7 +317,6 @@ impl MaskedCoefficientPassV2 {
         self.live = Some(live);
         Ok(())
     }
-
     pub(super) fn seal_coefficients_v2(
         mut self,
     ) -> Result<CoefficientsSealedV2, ProverPrerequisiteErrorV2> {
@@ -380,14 +346,12 @@ impl MaskedCoefficientPassV2 {
             context: self.context,
         })
     }
-
     #[cfg(test)]
     fn panic_after_take_for_test_v2(&mut self) {
         let _live = self.live.take().expect("live masked coefficient pass");
         panic!("intentional masked-coefficient unwind");
     }
 }
-
 fn absorb_relation_operation_v2(
     live: &mut LiveMaskedCoefficientPassV2,
     geometry: SpoolGeometryV2,
@@ -429,7 +393,6 @@ fn absorb_relation_operation_v2(
     {
         return Err(ProverPrerequisiteErrorV2::NonCanonicalResidue);
     }
-
     let mask = sample_mask_v2(
         mask_len,
         modulus,
@@ -450,7 +413,6 @@ fn absorb_relation_operation_v2(
         .ok_or(ProverPrerequisiteErrorV2::ArithmeticOverflow)?;
     Ok(())
 }
-
 fn sample_mask_v2(
     len: usize,
     modulus: u64,
@@ -492,11 +454,9 @@ fn sample_mask_v2(
     }
     Ok(mask)
 }
-
 fn add_mod_v2(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) + u128::from(right)) % u128::from(modulus)) as u64
 }
-
 fn write_masked_relation_v2(
     writer: &mut QPcsSpoolWriterV2,
     geometry: SpoolGeometryV2,
@@ -563,23 +523,17 @@ fn write_masked_relation_v2(
     }
     Ok(())
 }
-
 #[cfg(test)]
 static SECRET_RESIDUE_DROPS_V2: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-
 #[cfg(test)]
 static SECRET_ENTROPY_WORD_DROPS_V2: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-
 #[path = "prover_v2/s_spool_v2.rs"]
 mod s_spool_v2;
-
 use s_spool_v2::*;
-
 #[path = "prover_v2/c0_v2.rs"]
 mod c0_v2;
-
 #[cfg(test)]
 #[path = "prover_v2_tests.rs"]
 mod tests;

@@ -1,13 +1,9 @@
 //! CLI regressions for the SoraFS Taikai CAR bundler.
-
 #![cfg(feature = "cli")]
-
 use std::fs;
-
 use assert_cmd::{Command, cargo::cargo_bin_cmd};
 use iroha_data_model::taikai::TaikaiSegmentEnvelopeV1;
 use tempfile::tempdir;
-
 #[test]
 fn taikai_car_cli_generates_bundle() {
     let dir = tempdir().expect("tempdir");
@@ -18,7 +14,6 @@ fn taikai_car_cli_generates_bundle() {
     let envelope_path = dir_path.join("segment.to");
     let indexes_path = dir_path.join("segment.indexes.json");
     let ingest_path = dir_path.join("segment.ingest.json");
-
     let mut cmd: Command = cargo_bin_cmd!("taikai_car");
     cmd.arg("--payload")
         .arg(&payload_path)
@@ -59,19 +54,15 @@ fn taikai_car_cli_generates_bundle() {
             &"22".repeat(32),
         ]);
     cmd.assert().success();
-
     let car_bytes = fs::read(&car_path).expect("read car");
     assert!(!car_bytes.is_empty(), "car archive must contain payload");
-
     let envelope_bytes = fs::read(&envelope_path).expect("read envelope");
     let envelope: TaikaiSegmentEnvelopeV1 =
         norito::decode_from_bytes(&envelope_bytes).expect("decode envelope");
     assert_eq!(envelope.segment_sequence, 42);
-
     assert!(indexes_path.exists(), "indexes JSON should exist");
     assert!(ingest_path.exists(), "ingest metadata JSON should exist");
 }
-
 #[test]
 fn taikai_car_cli_rejects_noncanonical_operator_inputs() {
     let cases = vec![
@@ -99,7 +90,6 @@ fn taikai_car_cli_rejects_noncanonical_operator_inputs() {
         ("--manifest-hash", "AA".repeat(32), "lowercase"),
         ("--storage-ticket", "00".repeat(32), "all zeros"),
     ];
-
     for (flag, bad_value, expected) in cases {
         let dir = tempdir().expect("tempdir");
         let dir_path = dir.path().canonicalize().expect("canonical tempdir");
@@ -109,7 +99,6 @@ fn taikai_car_cli_rejects_noncanonical_operator_inputs() {
         let envelope_path = dir_path.join("segment.to");
         let indexes_path = dir_path.join("segment.indexes.json");
         let ingest_path = dir_path.join("segment.ingest.json");
-
         let mut cmd: Command = cargo_bin_cmd!("taikai_car");
         cmd.arg("--payload")
             .arg(&payload_path)
@@ -122,7 +111,6 @@ fn taikai_car_cli_rejects_noncanonical_operator_inputs() {
             .arg("--ingest-metadata-out")
             .arg(&ingest_path);
         push_metadata_args(&mut cmd, (flag, bad_value.as_str()));
-
         let output = cmd.output().expect("run taikai_car");
         assert!(
             !output.status.success(),
@@ -139,7 +127,6 @@ fn taikai_car_cli_rejects_noncanonical_operator_inputs() {
         );
     }
 }
-
 fn push_metadata_args(cmd: &mut Command, override_pair: (&str, &str)) {
     push_pair(cmd, "--event-id", "demo-event", override_pair);
     push_pair(cmd, "--stream-id", "stage-a", override_pair);
@@ -157,7 +144,6 @@ fn push_metadata_args(cmd: &mut Command, override_pair: (&str, &str)) {
     push_pair(cmd, "--ingest-latency-ms", "7", override_pair);
     push_pair(cmd, "--live-edge-drift-ms", "-3", override_pair);
 }
-
 fn push_pair(cmd: &mut Command, flag: &str, default: &str, override_pair: (&str, &str)) {
     cmd.arg(flag).arg(if override_pair.0 == flag {
         override_pair.1

@@ -4,7 +4,6 @@
 //! canonical limbs.  The only full-polynomial owners are the two output
 //! accumulators; decomposition rereads authenticated C1 stripes into a bounded
 //! five-digit batch and never constructs a native input ciphertext or digit.
-
 use super::super::{
     collective::{
         ZkAmsMkheStreamingCollectiveAutomorphismOutputV1, ZkAmsMkheStreamingCollectiveCiphertextV1,
@@ -18,17 +17,14 @@ use super::super::{
     },
 };
 use super::*;
-
 const STREAMING_COLLECTIVE_LIMB_COUNT_BYTES_V1: usize = core::mem::size_of::<u32>();
 const STREAMING_AUTOMORPHISM_STRIPE_COEFFICIENTS_V1: usize =
     ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 / core::mem::size_of::<u64>();
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct StreamingAutomorphismInputSnapshotV1 {
     provider_identity: [u8; 32],
     snapshot_identity: [u8; 32],
 }
-
 impl StreamingAutomorphismInputSnapshotV1 {
     fn observe_v1(
         expected: &mut Option<Self>,
@@ -55,13 +51,11 @@ impl StreamingAutomorphismInputSnapshotV1 {
         Ok(())
     }
 }
-
 struct StreamingAutomorphismInputScratchV1 {
     stripe: Vec<u8>,
     residues: Vec<u64>,
     transactions: Vec<ZkAmsMkheDirectObjectReadTransactionV1>,
 }
-
 impl StreamingAutomorphismInputScratchV1 {
     fn new_v1(profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         let stripe_bytes = profile
@@ -77,7 +71,6 @@ impl StreamingAutomorphismInputScratchV1 {
             return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
         }
         stripe.resize(stripe_bytes, 0);
-
         let mut residues = Vec::new();
         residues
             .try_reserve_exact(profile.moduli.len())
@@ -86,7 +79,6 @@ impl StreamingAutomorphismInputScratchV1 {
             return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
         }
         residues.resize(profile.moduli.len(), 0);
-
         let mut transactions = Vec::new();
         transactions
             .try_reserve_exact(profile.moduli.len())
@@ -100,7 +92,6 @@ impl StreamingAutomorphismInputScratchV1 {
             transactions,
         })
     }
-
     fn begin_transactions_v1<P>(
         &mut self,
         kind: ZkAmsMkheDirectObjectKindV1,
@@ -135,7 +126,6 @@ impl StreamingAutomorphismInputScratchV1 {
         Ok(())
     }
 }
-
 impl Drop for StreamingAutomorphismInputScratchV1 {
     fn drop(&mut self) {
         let stripe = core::hint::black_box(&mut self.stripe);
@@ -147,7 +137,6 @@ impl Drop for StreamingAutomorphismInputScratchV1 {
         let _ = core::hint::black_box(&mut *residues);
     }
 }
-
 struct StreamingAutomorphismHybridBatchV1 {
     first_digit: usize,
     digit_count: usize,
@@ -156,7 +145,6 @@ struct StreamingAutomorphismHybridBatchV1 {
     base: u64,
     signed_digits: Vec<i64>,
 }
-
 impl StreamingAutomorphismHybridBatchV1 {
     fn new_v1(profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         if !profile.hybrid_rns_decomposition
@@ -191,7 +179,6 @@ impl StreamingAutomorphismHybridBatchV1 {
             signed_digits,
         })
     }
-
     fn begin_batch_v1(
         &mut self,
         profile: &BgvProfile,
@@ -209,7 +196,6 @@ impl StreamingAutomorphismHybridBatchV1 {
             .checked_add(digit_count)
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
     }
-
     fn absorb_coefficient_v1(
         &mut self,
         profile: &BgvProfile,
@@ -299,7 +285,6 @@ impl StreamingAutomorphismHybridBatchV1 {
         }
         Ok(())
     }
-
     fn fill_digit_limb_v1(
         &self,
         profile: &BgvProfile,
@@ -332,7 +317,6 @@ impl StreamingAutomorphismHybridBatchV1 {
         Ok(())
     }
 }
-
 impl Drop for StreamingAutomorphismHybridBatchV1 {
     fn drop(&mut self) {
         let signed_digits = core::hint::black_box(&mut self.signed_digits);
@@ -341,7 +325,6 @@ impl Drop for StreamingAutomorphismHybridBatchV1 {
         let _ = core::hint::black_box(&mut *signed_digits);
     }
 }
-
 fn exact_zero_rns_v1(profile: &BgvProfile) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
     let coefficient_count = profile
         .ring_degree
@@ -357,7 +340,6 @@ fn exact_zero_rns_v1(profile: &BgvProfile) -> Result<RnsPolynomial, ZkAmsMkheErr
     coefficients.resize(coefficient_count, 0);
     RnsPolynomial::from_flat(profile, coefficients)
 }
-
 fn exact_limb_mut_v1<'a>(
     profile: &BgvProfile,
     polynomial: &'a mut RnsPolynomial,
@@ -374,7 +356,6 @@ fn exact_limb_mut_v1<'a>(
         .get_mut(start..end)
         .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)
 }
-
 fn read_exact_limb_into_v1<P>(
     profile: &BgvProfile,
     modulus: u64,
@@ -430,7 +411,6 @@ where
     }
     Ok(())
 }
-
 fn read_automorphed_constant_v1<P>(
     profile: &BgvProfile,
     exponent: usize,
@@ -498,7 +478,6 @@ where
     }
     Ok(())
 }
-
 fn read_automorphed_linear_batch_v1<P>(
     profile: &BgvProfile,
     exponent: usize,
@@ -591,7 +570,6 @@ where
     }
     Ok(())
 }
-
 /// Apply one frozen Galois automorphism directly to a consuming 38-limb
 /// ciphertext manifest and compactly switch the linear component back to the
 /// governed collective key.
@@ -633,7 +611,6 @@ where
     let exponent = usize::try_from(key.entry.galois_exponent())
         .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
     let output_transcript_digest = runtime.output_lineage(key, ciphertext.ciphertext_digest())?;
-
     // The complete output authority, all output heap capacity, and every
     // arithmetic/read owner are allocated before the first ciphertext byte is
     // requested from the direct-object provider.
@@ -728,7 +705,6 @@ where
         }
         runtime.validate_provider_state(key, evaluated_key_provider)?;
     }
-
     // Every C0 pass and all eight complete 38-limb C1 passes have finished and
     // authenticated before the first externally visible output publication.
     for limb_index in 0..profile.moduli.len() {
@@ -749,7 +725,6 @@ where
     drop(linear);
     output_publication.finish_v1(ciphertext, &runtime.eval_key_binding)
 }
-
 /// Portable managed-memory accounting for the direct streaming automorphism.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1 {
@@ -790,12 +765,10 @@ pub struct ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1 {
     /// Opaque provider/backend residency is not introspectable through either trait.
     pub opaque_provider_residency_included: bool,
 }
-
 /// Return exact target-layout accounting for the frozen release profile.
 pub fn zk_ams_mkhe_streaming_collective_automorphism_accounting_v1()
 -> Result<ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1, ZkAmsMkheErrorV1> {
     use core::mem::size_of;
-
     let profile = release_profile_v1();
     profile.validate()?;
     let limbs = profile.moduli.len();
@@ -892,7 +865,6 @@ pub fn zk_ams_mkhe_streaming_collective_automorphism_accounting_v1()
         .and_then(|bytes| bytes.checked_add(output_publication_heap_bytes))
         .and_then(|bytes| bytes.checked_add(fixed_control_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-
     let caller_input_manifest_bytes = u64::try_from(
         size_of::<ZkAmsMkheStreamingCollectiveCiphertextV1>()
             .checked_add(
@@ -969,20 +941,16 @@ pub fn zk_ams_mkhe_streaming_collective_automorphism_accounting_v1()
         opaque_provider_residency_included: false,
     })
 }
-
 fn runtime_entry_count_v1() -> Result<usize, ZkAmsMkheErrorV1> {
     ZK_AMS_T256_GALOIS_KEY_COUNT_V1
         .checked_add(1)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
     const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
-
     fn hybrid_profile_v1() -> BgvProfile {
         BgvProfile {
             profile_id: [0x79; 32],
@@ -1002,7 +970,6 @@ mod tests {
             max_work_units: 16 << 20,
         }
     }
-
     #[test]
     fn direct_forward_scatter_digits_match_native_inverse_gather_v1() {
         let profile = hybrid_profile_v1();
@@ -1042,11 +1009,9 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn release_streaming_automorphism_accounting_is_exact_v1() {
         use core::mem::size_of;
-
         assert_eq!(size_of::<ZkAmsMkheDirectObjectPointerV1>(), 80);
         assert_eq!(size_of::<ZkAmsMkheDirectObjectReadReceiptV1>(), 248);
         assert_eq!(size_of::<ZkAmsMkheDirectObjectReadTransactionV1>(), 2_112);
@@ -1074,7 +1039,6 @@ mod tests {
                 - size_of::<super::super::super::PlaintextModulus>(),
             1_056
         );
-
         let accounting = zk_ams_mkhe_streaming_collective_automorphism_accounting_v1().unwrap();
         assert_eq!(accounting.arithmetic_heap_bytes, 87_031_808);
         assert_eq!(accounting.input_stripe_bytes, 311_296);

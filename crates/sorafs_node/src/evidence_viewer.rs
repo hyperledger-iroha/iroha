@@ -13,14 +13,12 @@
 //! exact signed receipt checkpoint and
 //! [`EvidenceViewerTransparencyProjectionV1`]; the older `NodeHandle`
 //! session/access registry is intentionally not fed by this service.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-
 use iroha_config::parameters::{
     ProductionRuntimeHandleError, is_canonical_webauthn_origin_v1, is_canonical_webauthn_rp_id_v1,
     is_production_runtime_handle, validate_production_runtime_handle,
@@ -28,7 +26,6 @@ use iroha_config::parameters::{
 use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
 use crate::{
     ModerationEvidenceViewerAccessKind, ModerationEvidenceViewerSessionInput,
     ModerationEvidenceViewerSessionRecord, ModerationQuarantineObjectError,
@@ -41,7 +38,6 @@ use crate::{
 };
 /// Deployment-owned monotonic transparency producer for signed viewer state.
 pub mod transparency_producer;
-
 /// Canonical evidence-viewer checkpoint schema version.
 pub const EVIDENCE_VIEWER_CHECKPOINT_VERSION_V1: u16 = 1;
 /// Canonical external checkpoint-authority record schema version.
@@ -6517,10 +6513,8 @@ mod tests {
             atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         },
     };
-
     use ed25519_dalek::{Signer as _, SigningKey};
     use tempfile::TempDir;
-
     use super::*;
     use crate::{
         ModerationQuarantineKeyOperationErrorV1, ModerationQuarantineKeyProviderQualificationV1,
@@ -7517,7 +7511,6 @@ mod tests {
             dek: &[u8; 32],
         ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
-
             SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.key)
                 .map_err(|error| {
                     ModerationQuarantineKeyOperationErrorV1::Rejected
@@ -7540,7 +7533,6 @@ mod tests {
             wrapped_dek: &[u8],
         ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
-
             if key_id != self.key_id {
                 return Err(ModerationQuarantineKeyOperationErrorV1::StaleOrRevoked);
             }

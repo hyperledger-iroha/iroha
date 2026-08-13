@@ -24,7 +24,6 @@
 //! Non-Unix mutation fails closed: Windows needs an audited `NtCreateFile`
 //! `RootDirectory` plus handle-relative `FileLinkInformation` wrapper before
 //! this archive can be production-qualified there.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
@@ -33,12 +32,10 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
-
 #[cfg(unix)]
 use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
 use std::io::Write as _;
-
 use iroha_data_model::{
     NetworkId,
     query::sorafs::prelude::{
@@ -75,7 +72,6 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use thiserror::Error;
-
 use crate::{
     kura::{Kura, KuraV2CommitReceipt},
     smartcontracts::ValidSingularQuery,
@@ -7949,7 +7945,6 @@ fn verify_unix_directory_ancestry(path: &Path) -> Result<(), ReputationFinalized
 #[cfg(unix)]
 fn open_unix_directory_ancestry(path: &Path) -> Result<fs::File, ReputationFinalizedArchiveError> {
     use std::os::unix::fs::MetadataExt as _;
-
     let mut current = fs::File::from(
         rustix::fs::open(
             "/",
@@ -8056,7 +8051,6 @@ fn recover_staged_directory(
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
-
         let directory_file = open_unix_directory_ancestry(directory)?;
         verify_unix_directory_handle(&directory_file, expected_directory_identity, directory)?;
         let entries = rustix::fs::Dir::read_from(&directory_file)
@@ -8184,7 +8178,6 @@ fn unix_staged_file_has_canonical_target(
     canonical_suffix: &str,
 ) -> Result<bool, rustix::io::Errno> {
     use std::os::unix::ffi::OsStrExt as _;
-
     let entries = rustix::fs::Dir::read_from(directory)?;
     let mut matches = 0_u8;
     for entry in entries {
@@ -8501,7 +8494,6 @@ impl Drop for UnixStagedArtifact<'_> {
 #[cfg(unix)]
 fn create_unix_staged_file(directory: &fs::File) -> io::Result<(fs::File, OsString)> {
     use std::os::unix::fs::MetadataExt as _;
-
     for _ in 0..128 {
         let name = OsString::from(format!(
             "{STAGED_FILE_PREFIX}{:08x}-{:016x}",
@@ -8591,7 +8583,6 @@ fn unix_stat_matches_metadata(
     expected_links: u64,
 ) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     rustix::fs::FileType::from_raw_mode(entry.st_mode) == rustix::fs::FileType::RegularFile
         && entry.st_dev as u64 == metadata.dev()
         && entry.st_ino as u64 == metadata.ino()
@@ -9357,7 +9348,6 @@ pub enum ReputationFinalizedArchiveError {
         block_hash: [u8; 32],
     },
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -9366,7 +9356,6 @@ mod tests {
         sync::{Arc, Barrier, Mutex},
         thread,
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -9398,9 +9387,7 @@ mod tests {
     };
     use sorafs_manifest::deal::XorQuantity;
     use tempfile::tempdir;
-
     use super::*;
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -13174,7 +13161,6 @@ mod tests {
     #[test]
     fn startup_recovers_a_stage_linked_to_one_canonical_policy_target() {
         use std::os::unix::fs::MetadataExt as _;
-
         let directory = tempdir().expect("create archive directory");
         let projection = sample_projection(7, [0x71; 32]);
         let archive = open_archive(&directory, bounds());
@@ -13210,7 +13196,6 @@ mod tests {
     #[test]
     fn descriptor_relative_publication_resists_directory_substitution() {
         use std::os::unix::fs::symlink;
-
         for substitute_before_create in [true, false] {
             let directory = tempdir().expect("create archive directory");
             let external_guard = tempdir().expect("create replacement directory");
@@ -13347,7 +13332,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-
             let direct = root.join("direct");
             fs::create_dir(&direct).expect("create direct ancestor");
             let alias = root.join("alias");

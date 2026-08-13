@@ -1,17 +1,14 @@
 //! Puppeteer for `irohad`, to create test networks
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 mod config;
 mod consensus_message_control;
 pub mod fslock_ports;
 pub mod genesis_support;
-
 pub use consensus_message_control::{
     ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
     ConsensusMessageControlHeld, ConsensusMessageControlKind, ConsensusMessageControlRule,
     NativeAmxFaultAck, NativeAmxFaultPhase,
 };
-
 use core::{fmt, future::Future, time::Duration};
 use std::{
     borrow::Cow,
@@ -33,7 +30,6 @@ use std::{
     thread,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-
 use color_eyre::eyre::{Context, Report, Result, eyre};
 pub use config::chain_id;
 use fslock::LockFile;
@@ -119,12 +115,9 @@ use tokio::{
 };
 use toml::{Table, Value, map::Entry};
 use tracing::{Instrument, debug, error, info, info_span, warn};
-
 use crate::config::ensure_genesis_results_with_runtime_config;
-
 /// Consensus mode frozen into the test network's signed genesis profile.
 pub use iroha_data_model::block::consensus_v2::ConsensusMode;
-
 const TEST_SNS_LEASE_PAYMENT: &str = "0.5";
 const TEST_SNS_POLICY_VERSION: u16 = 1;
 const TEST_SNS_PAYMENT_ASSET_DEFINITION: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
@@ -148,7 +141,6 @@ fn random_soranet_transport_key_pair_distinct_from(streaming: &KeyPair) -> KeyPa
         }
     }
 }
-
 pub use crate::config::genesis as genesis_factory;
 /// Build the default minimal genesis with additional post-topology transactions.
 ///
@@ -822,7 +814,6 @@ fn prune_stale_tempdirs() {
 }
 fn init_logger_once() {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         let _ = tracing_subscriber::registry()
@@ -1112,7 +1103,6 @@ fn validate_published_mode_and_links(
     label: &str,
 ) -> color_eyre::Result<()> {
     use std::os::unix::fs::MetadataExt as _;
-
     if metadata.mode() & 0o7777 != expected_mode {
         return Err(eyre!(
             "{label} must have exact mode {expected_mode:04o}; got {:04o}",
@@ -1142,7 +1132,6 @@ fn validate_published_directory_mode(
     label: &str,
 ) -> color_eyre::Result<()> {
     use std::os::unix::fs::MetadataExt as _;
-
     if metadata.mode() & 0o7777 != expected_mode {
         return Err(eyre!(
             "{label} must have exact mode {expected_mode:04o}; got {:04o}",
@@ -1194,7 +1183,6 @@ fn published_directory_metadata(
 #[cfg(unix)]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.len() == right.len()
@@ -9420,7 +9408,6 @@ mod tests {
         thread,
         time::Duration,
     };
-
     use iroha_config::parameters::defaults;
     use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
     use iroha_crypto::Algorithm;
@@ -9437,9 +9424,7 @@ mod tests {
     use tempfile::tempdir;
     use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
     use toml::Value as TomlValue;
-
     use super::*;
-
     static LOG_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
     /// Serializes async tests that override `TEST_NETWORK_BIN_*` variables so they
     /// cannot leak into concurrently running cases.
@@ -11153,7 +11138,6 @@ mod tests {
     #[test]
     fn release_prebuilt_binary_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let fixture = create_release_prebuilt_fixture();
         let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256, "0");
@@ -12282,7 +12266,6 @@ exit 0
     #[test]
     fn config_layers_include_trusted_peer_pop_and_bls() {
         use std::collections::{BTreeMap, BTreeSet};
-
         fn assert_trusted_entries(network: &Network) {
             let mut layers = network.config_layers();
             let base = layers.next().expect("base config layer").into_owned();

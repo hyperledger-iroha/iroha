@@ -3,13 +3,11 @@
 //! basic commit-certificate shape checks, an in-memory deduplication store for the Sumeragi
 //! actor, exact Sumeragi v2 equivocation-pair verification, and routines that
 //! persist new evidence records into the world state.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
     time::{SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(test)]
 use iroha_crypto::HashOf;
 use iroha_crypto::{Algorithm, Signature};
@@ -25,28 +23,23 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use mv::storage::StorageReadOnly;
-
 use super::consensus::{
     Evidence, EvidenceKind, EvidencePayload, NPOS_TAG, PERMISSIONED_TAG, Phase, Vote, vote_preimage,
 };
 use crate::state::{State, WorldReadOnly};
-
 /// Minimum expected length for BLS signatures attached to consensus votes.
 ///
 /// Consensus validators authenticate votes with BLS-normal signatures (96 bytes). Treating this
 /// as a lower bound catches truncated payloads emitted by buggy or malicious peers.
 const MIN_BLS_SIGNATURE_LEN: usize = 96;
-
 /// Maximum exact Sumeragi v2 equivocation proofs admitted by one block.
 ///
 /// The count bound makes proof verification work predictable even when a peer
 /// has accumulated a large local evidence backlog.
 pub(crate) const MAX_V2_EVIDENCE_ADMISSIONS_PER_BLOCK: usize = 8;
-
 /// Maximum aggregate Norito size of exact Sumeragi v2 equivocation proofs in
 /// one block.
 pub(crate) const MAX_V2_EVIDENCE_ADMISSION_BYTES: usize = 4 * 1024 * 1024;
-
 /// Context required to cryptographically validate consensus evidence.
 #[derive(Debug, Clone, Copy)]
 pub struct EvidenceValidationContext<'a> {
@@ -59,7 +52,6 @@ pub struct EvidenceValidationContext<'a> {
     /// Optional PRF seed for `NPoS` topology rotation.
     pub prf_seed: Option<[u8; 32]>,
 }
-
 /// Reconstruct the legacy signature roster for archival evidence validation.
 ///
 /// Live Sumeragi v2 never calls this path: v2 votes carry the frozen
@@ -93,7 +85,6 @@ fn archival_topology_for_view(
     }
     rotated
 }
-
 fn archival_vote_signature_check(
     vote: &Vote,
     topology: &super::network_topology::Topology,
@@ -123,14 +114,12 @@ fn archival_vote_signature_check(
         )
         .map_err(|_| EvidenceValidationError::SignatureInvalid)
 }
-
 /// Derive a deterministic deduplication key for an evidence entry.
 #[must_use]
 pub fn evidence_key(ev: &Evidence) -> Vec<u8> {
     let canonical = canonicalize_evidence(ev);
     evidence_key_inner(&canonical)
 }
-
 fn evidence_key_inner(ev: &Evidence) -> Vec<u8> {
     use norito::codec::Encode as _;
     let mut key = Vec::new();
@@ -138,7 +127,6 @@ fn evidence_key_inner(ev: &Evidence) -> Vec<u8> {
     key.extend_from_slice(&ev.encode());
     key
 }
-
 fn canonicalize_evidence(ev: &Evidence) -> Evidence {
     match &ev.payload {
         EvidencePayload::DoubleVote { v1, v2 } => {
@@ -169,14 +157,12 @@ fn canonicalize_evidence(ev: &Evidence) -> Evidence {
         _ => ev.clone(),
     }
 }
-
 /// Return an exact v2 conflict with its signed artifacts in canonical wire order.
 #[must_use]
 pub(crate) fn canonicalize_v2_conflict(
     conflict: &wire_v2::SumeragiV2Equivocation,
 ) -> wire_v2::SumeragiV2Equivocation {
     use norito::codec::Encode;
-
     fn ordered<T: Clone + Encode>(first: &T, second: &T) -> (T, T) {
         if first.encode() <= second.encode() {
             (first.clone(), second.clone())
@@ -184,7 +170,6 @@ pub(crate) fn canonicalize_v2_conflict(
             (second.clone(), first.clone())
         }
     }
-
     match conflict {
         wire_v2::SumeragiV2Equivocation::Proposal { first, second } => {
             let (first, second) = ordered(first, second);
@@ -200,7 +185,6 @@ pub(crate) fn canonicalize_v2_conflict(
         }
     }
 }
-
 /// Return an exact v2 proof with the conflicting pair in canonical order.
 #[must_use]
 pub(crate) fn canonicalize_v2_equivocation_evidence(
@@ -212,7 +196,6 @@ pub(crate) fn canonicalize_v2_equivocation_evidence(
         conflict: canonicalize_v2_conflict(&evidence.conflict),
     }
 }
-
 /// Wrap an exact v2 proof in the durable evidence representation.
 #[must_use]
 pub(crate) fn canonical_v2_evidence(evidence: &SumeragiV2EquivocationEvidence) -> Evidence {
@@ -223,13 +206,11 @@ pub(crate) fn canonical_v2_evidence(evidence: &SumeragiV2EquivocationEvidence) -
         )),
     }
 }
-
 /// Return the canonical WSV key for an exact v2 equivocation proof.
 #[must_use]
 pub(crate) fn v2_evidence_admission_key(evidence: &SumeragiV2EquivocationEvidence) -> Vec<u8> {
     evidence_key_inner(&canonical_v2_evidence(evidence))
 }
-
 fn validate_v2_evidence_context_anchor(
     state: &State,
     evidence: &SumeragiV2EquivocationEvidence,
@@ -243,14 +224,12 @@ fn validate_v2_evidence_context_anchor(
     }
     Ok(())
 }
-
 fn v2_evidence_matches_persisted_context(
     evidence: &SumeragiV2EquivocationEvidence,
     persisted: &wire_v2::HeightContext,
 ) -> bool {
     persisted == &evidence.context
 }
-
 /// Validate the exact v2 evidence admitted by a candidate block.
 ///
 /// Validation is self-contained: a follower does not need to have observed or
@@ -268,18 +247,15 @@ pub(crate) fn validate_v2_evidence_admissions(
     admissions: &[SumeragiV2EquivocationEvidence],
 ) -> Result<Vec<Vec<u8>>, EvidenceValidationError> {
     use norito::codec::Encode as _;
-
     if admissions.len() > MAX_V2_EVIDENCE_ADMISSIONS_PER_BLOCK {
         return Err(EvidenceValidationError::V2AdmissionTooMany);
     }
-
     let total_bytes = admissions.iter().try_fold(0_usize, |total, evidence| {
         total.checked_add(evidence.encode().len())
     });
     if total_bytes.is_none_or(|size| size > MAX_V2_EVIDENCE_ADMISSION_BYTES) {
         return Err(EvidenceValidationError::V2AdmissionTooLarge);
     }
-
     let horizon = {
         let world = state.world_view();
         world
@@ -300,7 +276,6 @@ pub(crate) fn validate_v2_evidence_admissions(
         if !evidence_within_configured_horizon(block_height, horizon, Some(round.height)) {
             return Err(EvidenceValidationError::V2AdmissionStale);
         }
-
         let canonical = canonicalize_v2_equivocation_evidence(evidence);
         if canonical != *evidence {
             return Err(EvidenceValidationError::V2AdmissionNonCanonical);
@@ -325,7 +300,6 @@ pub(crate) fn validate_v2_evidence_admissions(
     }
     Ok(keys)
 }
-
 /// Reject penalty actions which consume evidence admitted by the same block.
 ///
 /// Penalties must be derived exclusively from prior committed state so every
@@ -353,7 +327,6 @@ pub(crate) fn validate_v2_admission_penalty_separation(
         Ok(())
     }
 }
-
 /// Select a canonical, bounded batch of locally pending exact v2 proofs for a
 /// proposer to attach to its next candidate.
 #[must_use]
@@ -362,7 +335,6 @@ pub(crate) fn pending_v2_evidence_admissions(
     proposal_height: u64,
 ) -> Vec<SumeragiV2EquivocationEvidence> {
     use norito::codec::Encode as _;
-
     let horizon = {
         let world = state.world_view();
         world
@@ -430,7 +402,6 @@ pub(crate) fn pending_v2_evidence_admissions(
     drop(records);
     selected
 }
-
 fn canonicalize_censorship_receipts(
     receipts: &[iroha_data_model::transaction::TransactionSubmissionReceipt],
 ) -> Vec<iroha_data_model::transaction::TransactionSubmissionReceipt> {
@@ -443,7 +414,6 @@ fn canonicalize_censorship_receipts(
     keyed.sort_by(|(left, _), (right, _)| left.cmp(right));
     keyed.into_iter().map(|(_, receipt)| receipt).collect()
 }
-
 fn double_vote_kind_for_phases(first: Phase, second: Phase) -> Option<EvidenceKind> {
     match (first, second) {
         (Phase::Prepare, Phase::Prepare) => Some(EvidenceKind::DoublePrepare),
@@ -455,7 +425,6 @@ fn double_vote_kind_for_phases(first: Phase, second: Phase) -> Option<EvidenceKi
         _ => None,
     }
 }
-
 fn canonical_vote_pair(v1: &Vote, v2: &Vote) -> (Vote, Vote) {
     let left = (
         v1.phase as u8,
@@ -475,7 +444,6 @@ fn canonical_vote_pair(v1: &Vote, v2: &Vote) -> (Vote, Vote) {
         (v2.clone(), v1.clone())
     }
 }
-
 /// Check for a double-vote: same validator at the same height/view/epoch on conflicting blocks.
 pub fn check_double_vote(v1: &Vote, v2: &Vote) -> Option<Evidence> {
     if v1.height == v2.height
@@ -505,7 +473,6 @@ pub fn check_double_vote(v1: &Vote, v2: &Vote) -> Option<Evidence> {
         None
     }
 }
-
 fn signer_peer_for_vote(
     vote: &Vote,
     context: &EvidenceValidationContext<'_>,
@@ -522,7 +489,6 @@ fn signer_peer_for_vote(
         .and_then(|idx| signature_topology.as_ref().get(idx).cloned())
         .ok_or(EvidenceValidationError::SignerMismatch)
 }
-
 #[cfg(test)]
 fn check_double_vote_with_context(
     v1: &Vote,
@@ -556,7 +522,6 @@ fn check_double_vote_with_context(
         },
     })
 }
-
 /// Simple in-memory evidence store to deduplicate by a deterministic key.
 #[derive(Default)]
 #[cfg(test)]
@@ -566,7 +531,6 @@ pub struct EvidenceStore {
     // Optional payload map for audit/listing
     entries: BTreeMap<Vec<u8>, Evidence>,
 }
-
 #[cfg(test)]
 impl EvidenceStore {
     fn new() -> Self {
@@ -575,7 +539,6 @@ impl EvidenceStore {
             entries: BTreeMap::new(),
         }
     }
-
     /// Insert evidence if unseen. Returns true if newly inserted.
     fn insert(&mut self, ev: &Evidence, context: &EvidenceValidationContext<'_>) -> bool {
         let canonical = canonicalize_evidence(ev);
@@ -591,7 +554,6 @@ impl EvidenceStore {
         }
     }
 }
-
 /// Persist an [`EvidenceRecord`] into the world state if unseen.
 ///
 /// Returns `true` when the supplied evidence was newly inserted, `false`
@@ -607,7 +569,6 @@ pub fn persist_record(
     }
     persist_validated_record(state, canonical)
 }
-
 /// Validate and durably persist exact Sumeragi v2 equivocation artifacts.
 ///
 /// The caller supplies the immutable context and PoPs recovered from the
@@ -632,7 +593,6 @@ pub(crate) fn persist_sumeragi_v2_equivocation(
     });
     Ok(persist_validated_record(state, canonical))
 }
-
 fn persist_validated_record(state: &State, canonical: Evidence) -> bool {
     let fallback_height = u64::try_from(state.committed_height()).unwrap_or(0);
     let horizon = {
@@ -647,7 +607,6 @@ fn persist_validated_record(state: &State, canonical: Evidence) -> bool {
         return false;
     }
     drop(view);
-
     let (subject_height, subject_view) = evidence_subject_height_view(&canonical);
     if !evidence_within_configured_horizon(fallback_height, horizon, subject_height) {
         return false;
@@ -655,7 +614,6 @@ fn persist_validated_record(state: &State, canonical: Evidence) -> bool {
     let recorded_at_height = subject_height.unwrap_or(fallback_height);
     let recorded_at_view = subject_view.unwrap_or_default();
     let recorded_at_ms = current_unix_ms();
-
     let record = EvidenceRecord {
         evidence: canonical,
         recorded_at_height,
@@ -667,13 +625,11 @@ fn persist_validated_record(state: &State, canonical: Evidence) -> bool {
         penalty_applied_at_height: None,
         consensus_admitted_at_height: None,
     };
-
     let mut block = state.world.consensus_evidence.block();
     block.insert(key, record);
     block.commit();
     true
 }
-
 /// Detect and persist a double-vote in isolated archival-evidence tests.
 ///
 /// Returns `true` when evidence was newly recorded (store + WSV), `false` otherwise.
@@ -691,10 +647,8 @@ pub fn record_double_vote(
     if !store.insert(&evidence, context) {
         return false;
     }
-
     persist_record(state, &evidence, context)
 }
-
 /// Extract the height/view referenced by consensus evidence, when present.
 pub fn evidence_subject_height_view(evidence: &Evidence) -> (Option<Height>, Option<View>) {
     match &evidence.payload {
@@ -718,7 +672,6 @@ pub fn evidence_subject_height_view(evidence: &Evidence) -> (Option<Height>, Opt
         }
     }
 }
-
 #[cfg(test)]
 fn evidence_block_refs(evidence: &Evidence) -> Vec<(u64, HashOf<BlockHeader>)> {
     let mut refs = Vec::new();
@@ -751,7 +704,6 @@ fn evidence_block_refs(evidence: &Evidence) -> Vec<(u64, HashOf<BlockHeader>)> {
     }
     refs
 }
-
 fn v2_conflict_round(conflict: &wire_v2::SumeragiV2Equivocation) -> wire_v2::ConsensusRound {
     match conflict {
         wire_v2::SumeragiV2Equivocation::Proposal { first, .. } => first.round,
@@ -759,7 +711,6 @@ fn v2_conflict_round(conflict: &wire_v2::SumeragiV2Equivocation) -> wire_v2::Con
         wire_v2::SumeragiV2Equivocation::TimeoutVote { first, .. } => first.round,
     }
 }
-
 fn current_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -768,7 +719,6 @@ fn current_unix_ms() -> u64 {
         .try_into()
         .unwrap_or(0)
 }
-
 fn evidence_within_configured_horizon(
     current_height: u64,
     horizon: Option<u64>,
@@ -782,7 +732,6 @@ fn evidence_within_configured_horizon(
     let lower_bound = current_height.saturating_sub(horizon);
     reference >= lower_bound
 }
-
 /// Errors returned by [`validate_evidence`] when the supplied [`Evidence`] fails basic
 /// structural consistency checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -868,7 +817,6 @@ pub enum EvidenceValidationError {
     /// A candidate tries to admit and penalize exact v2 evidence atomically.
     V2AdmissionSameBlockPenalty,
 }
-
 impl std::fmt::Display for EvidenceValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use EvidenceValidationError::*;
@@ -941,9 +889,7 @@ impl std::fmt::Display for EvidenceValidationError {
         write!(f, "{msg}")
     }
 }
-
 impl std::error::Error for EvidenceValidationError {}
-
 /// Ensure that [`Evidence`] metadata and attached signatures remain consistent.
 ///
 /// This routine enforces invariants that malicious peers could violate by crafting
@@ -1000,7 +946,6 @@ pub fn validate_evidence(
         _ => Err(EvidenceValidationError::KindPayloadMismatch),
     }
 }
-
 fn validate_vote_signatures(
     v1: &Vote,
     v2: &Vote,
@@ -1036,7 +981,6 @@ fn validate_vote_signatures(
     .map_err(|_| EvidenceValidationError::SignatureInvalid)?;
     Ok(())
 }
-
 fn validate_double_vote(
     kind: EvidenceKind,
     v1: &Vote,
@@ -1072,7 +1016,6 @@ fn validate_double_vote(
     if !block_hash_conflict && !root_conflict {
         return Err(EvidenceValidationError::BlockHashMatch);
     }
-
     match (kind, expected_kind) {
         (EvidenceKind::DoublePrepare, EvidenceKind::DoublePrepare)
         | (EvidenceKind::DoubleCommit, EvidenceKind::DoubleCommit) => {
@@ -1086,7 +1029,6 @@ fn validate_double_vote(
         _ => Err(EvidenceValidationError::KindPayloadMismatch),
     }
 }
-
 fn validate_censorship(
     tx_hash: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
     receipts: &[iroha_data_model::transaction::TransactionSubmissionReceipt],
@@ -1114,7 +1056,6 @@ fn validate_censorship(
     }
     Ok(())
 }
-
 pub(crate) fn validate_v2_equivocation(
     evidence: &SumeragiV2EquivocationEvidence,
 ) -> Result<(), EvidenceValidationError> {
@@ -1123,7 +1064,6 @@ pub(crate) fn validate_v2_equivocation(
         .validate()
         .map_err(|_| EvidenceValidationError::V2ContextInvalid)?;
     validate_v2_roster_proofs(context, &evidence.proofs_of_possession)?;
-
     match &evidence.conflict {
         wire_v2::SumeragiV2Equivocation::Proposal { first, second } => {
             first
@@ -1235,7 +1175,6 @@ pub(crate) fn validate_v2_equivocation(
         }
     }
 }
-
 fn validate_v2_roster_proofs(
     context: &wire_v2::HeightContext,
     proofs_of_possession: &[Vec<u8>],
@@ -1260,7 +1199,6 @@ fn validate_v2_roster_proofs(
         Ok(())
     }
 }
-
 fn verify_v2_individual_signature(
     context: &wire_v2::HeightContext,
     signer: wire_v2::ValidatorIndex,
@@ -1277,7 +1215,6 @@ fn verify_v2_individual_signature(
         .verify(context.roster[index].validator.public_key(), preimage)
         .map_err(|_| EvidenceValidationError::V2SignatureInvalid)
 }
-
 fn verify_v2_proposal_justification(
     context: &wire_v2::HeightContext,
     proofs_of_possession: &[Vec<u8>],
@@ -1303,7 +1240,6 @@ fn verify_v2_proposal_justification(
         }
     }
 }
-
 fn verify_v2_quorum_certificate(
     context: &wire_v2::HeightContext,
     proofs_of_possession: &[Vec<u8>],
@@ -1328,7 +1264,6 @@ fn verify_v2_quorum_certificate(
         &preimage,
     )
 }
-
 fn verify_v2_timeout_certificate(
     context: &wire_v2::HeightContext,
     proofs_of_possession: &[Vec<u8>],
@@ -1363,7 +1298,6 @@ fn verify_v2_timeout_certificate(
     }
     Ok(())
 }
-
 fn verify_v2_aggregate_signature(
     context: &wire_v2::HeightContext,
     proofs_of_possession: &[Vec<u8>],
@@ -1397,7 +1331,6 @@ fn verify_v2_aggregate_signature(
         Err(EvidenceValidationError::V2CryptographyUnavailable)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
@@ -1415,7 +1348,6 @@ mod tests {
     use mv::cell::Cell;
     use norito::codec::{Decode, Encode as _};
     use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
-
     use super::{
         super::consensus::{
             ConsensusBlockHeader, Phase, Proposal, Qc, QcAggregate, QcHeaderRef, Vote,
@@ -1423,19 +1355,16 @@ mod tests {
         *,
     };
     use crate::state::{State, World};
-
     type EvidenceCase = (EvidenceKind, EvidencePayload, EvidenceValidationError);
     type EvidenceRoundtripCase = (
         &'static str,
         EvidenceValidationError,
         fn(&EvidenceTestContext) -> Evidence,
     );
-
     fn checked_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("Sumeragi evidence fixture BLS key generation should succeed")
     }
-
     struct EvidenceTestContext {
         network_id: NetworkId,
         mode_tag: &'static str,
@@ -1443,7 +1372,6 @@ mod tests {
         keypairs: Vec<KeyPair>,
         topology: super::super::network_topology::Topology,
     }
-
     impl EvidenceTestContext {
         fn new(peer_count: usize) -> Self {
             let keypairs: Vec<_> = (0..peer_count).map(|_| checked_bls_keypair()).collect();
@@ -1459,7 +1387,6 @@ mod tests {
                 topology,
             }
         }
-
         fn validation_context(&self) -> EvidenceValidationContext<'_> {
             EvidenceValidationContext {
                 topology: &self.topology,
@@ -1468,7 +1395,6 @@ mod tests {
                 prf_seed: Some(self.prf_seed),
             }
         }
-
         fn signer_keypair_for_view(&self, signer: u32, height: u64, view: u64) -> &KeyPair {
             let idx = usize::try_from(signer).expect("signer index fits usize");
             let rotated = super::archival_topology_for_view(
@@ -1487,7 +1413,6 @@ mod tests {
                 .find(|kp| kp.public_key() == peer.public_key())
                 .expect("signer keypair must exist for view-aligned topology")
         }
-
         fn signer_index_for_keypair_at_view(
             &self,
             keypair: &KeyPair,
@@ -1508,7 +1433,6 @@ mod tests {
                 .expect("keypair must be present in view-aligned topology");
             u32::try_from(index).expect("signer index fits u32")
         }
-
         fn sign_vote(&self, vote: &mut Vote) {
             let keypair = self.signer_keypair_for_view(vote.signer, vote.height, vote.view);
             let preimage =
@@ -1518,27 +1442,22 @@ mod tests {
             vote.bls_sig = signature.payload().to_vec();
         }
     }
-
     fn test_context() -> EvidenceTestContext {
         EvidenceTestContext::new(12)
     }
-
     fn test_network_id(seed: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             seed,
         )))
     }
-
     fn zero_state_root() -> Hash {
         Hash::prehashed([0u8; 32])
     }
-
     fn sample_validator_set() -> Vec<PeerId> {
         let keypair = KeyPair::try_from_seed(b"evidence-validator".to_vec(), Algorithm::BlsNormal)
             .expect("fixture seed must derive a valid BLS keypair");
         vec![PeerId::new(keypair.public_key().clone())]
     }
-
     #[test]
     fn sample_validator_set_uses_checked_seed_derivation() {
         assert!(
@@ -1547,13 +1466,11 @@ mod tests {
         );
         assert_eq!(sample_validator_set().len(), 1);
     }
-
     fn test_state() -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         State::new_for_testing(World::default(), kura, query)
     }
-
     fn test_state_for_network(network_id: NetworkId) -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -1565,11 +1482,9 @@ mod tests {
             network_id,
         )
     }
-
     fn test_state_for_v2_fixture(fixture: &V2EvidenceFixture) -> State {
         test_state_for_v2_fixture_with_world(fixture, World::default())
     }
-
     fn test_state_for_v2_fixture_with_horizon(fixture: &V2EvidenceFixture, horizon: u64) -> State {
         let mut params = Parameters::default();
         let npos = SumeragiNposParameters {
@@ -1581,7 +1496,6 @@ mod tests {
         world.parameters = Cell::new(params);
         test_state_for_v2_fixture_with_world(fixture, world)
     }
-
     fn test_state_for_v2_fixture_with_slashing_delay(
         fixture: &V2EvidenceFixture,
         slashing_delay_blocks: u64,
@@ -1596,7 +1510,6 @@ mod tests {
         world.parameters = Cell::new(params);
         test_state_for_v2_fixture_with_world(fixture, world)
     }
-
     fn test_state_for_v2_fixture_with_world(fixture: &V2EvidenceFixture, world: World) -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -1610,13 +1523,11 @@ mod tests {
         install_v2_finality_for_fixture(&state, fixture);
         state
     }
-
     struct V2EvidenceFixture {
         context: wire_v2::HeightContext,
         keys: Vec<KeyPair>,
         proofs: Vec<Vec<u8>>,
     }
-
     impl V2EvidenceFixture {
         fn new() -> Self {
             let mut keys = (1_u8..=4)
@@ -1670,7 +1581,6 @@ mod tests {
                 proofs,
             }
         }
-
         fn round(&self, view: u64) -> wire_v2::ConsensusRound {
             wire_v2::ConsensusRound {
                 context_id: self.context.id(),
@@ -1678,7 +1588,6 @@ mod tests {
                 view,
             }
         }
-
         fn subject(&self, seed: u8) -> wire_v2::BlockSubject {
             wire_v2::BlockSubject {
                 parent_block_hash: None,
@@ -1686,7 +1595,6 @@ mod tests {
                 payload_hash: Hash::prehashed([seed.wrapping_add(1); 32]),
             }
         }
-
         fn sign(&self, signer: wire_v2::ValidatorIndex, preimage: &[u8]) -> Vec<u8> {
             Signature::try_new(
                 self.keys[usize::try_from(signer).expect("signer index")].private_key(),
@@ -1696,7 +1604,6 @@ mod tests {
             .payload()
             .to_vec()
         }
-
         fn execution_commitment(&self) -> wire_v2::ExecutionCommitment {
             wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"v2 evidence parent state"),
@@ -1706,7 +1613,6 @@ mod tests {
                 Hash::new(b"v2 evidence executed block wire"),
             )
         }
-
         fn vote(
             &self,
             signer: wire_v2::ValidatorIndex,
@@ -1725,7 +1631,6 @@ mod tests {
             vote.signature = self.sign(signer, &vote.signature_preimage());
             vote
         }
-
         fn prepare_qc(&self, subject: wire_v2::BlockSubject) -> wire_v2::QuorumCertificate {
             let signers = vec![0, 1, 2];
             let unsigned = wire_v2::Vote {
@@ -1753,7 +1658,6 @@ mod tests {
                     .expect("aggregate v2 evidence QC"),
             }
         }
-
         fn proposal(&self, subject: wire_v2::BlockSubject) -> wire_v2::Proposal {
             let round = self.round(0);
             let proposer = self.context.leader(0);
@@ -1783,7 +1687,6 @@ mod tests {
             proposal.signature = self.sign(proposer, &proposal.signature_preimage());
             proposal
         }
-
         fn timeout_vote(
             &self,
             signer: wire_v2::ValidatorIndex,
@@ -1798,7 +1701,6 @@ mod tests {
             vote.signature = self.sign(signer, &vote.signature_preimage());
             vote
         }
-
         fn payload(
             &self,
             conflict: wire_v2::SumeragiV2Equivocation,
@@ -1810,7 +1712,6 @@ mod tests {
             }
         }
     }
-
     fn install_v2_finality_for_fixture(state: &State, fixture: &V2EvidenceFixture) {
         let committed = crate::block::ValidBlock::new_dummy_and_modify_header(
             fixture.keys[0].private_key(),
@@ -1828,7 +1729,6 @@ mod tests {
             .kura()
             .store_block(std::sync::Arc::clone(&block))
             .expect("store canonical v2 evidence fixture block");
-
         let subject = wire_v2::BlockSubject {
             parent_block_hash: None,
             block_hash: block.hash(),
@@ -1886,7 +1786,6 @@ mod tests {
             ))
             .expect("persist canonical v2 evidence fixture finality");
     }
-
     fn swap_v2_conflict(
         conflict: &wire_v2::SumeragiV2Equivocation,
     ) -> wire_v2::SumeragiV2Equivocation {
@@ -1911,7 +1810,6 @@ mod tests {
             }
         }
     }
-
     fn canonical_v2_phase_vote_evidence(
         fixture: &V2EvidenceFixture,
         first_seed: u8,
@@ -1932,7 +1830,6 @@ mod tests {
             },
         ))
     }
-
     fn apply_v2_admissions_for_test(
         state: &State,
         admissions: Vec<SumeragiV2EquivocationEvidence>,
@@ -1968,7 +1865,6 @@ mod tests {
         transaction.apply();
         state_block.commit().expect("test admission block commits");
     }
-
     fn add_v2_penalty_validator(state: &State, peer: &PeerId) {
         let validator = iroha_data_model::account::AccountId::new(peer.public_key().clone());
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
@@ -1988,43 +1884,36 @@ mod tests {
         validators.insert((iroha_data_model::nexus::LaneId::SINGLE, validator), record);
         validators.commit();
     }
-
     #[test]
     fn sumeragi_v2_equivocation_validates_exact_proposal_vote_and_timeout_pairs() {
         let fixture = V2EvidenceFixture::new();
         let subject_a = fixture.subject(0x61);
         let subject_b = fixture.subject(0x62);
-
         let proposal = fixture.payload(wire_v2::SumeragiV2Equivocation::Proposal {
             first: fixture.proposal(subject_a),
             second: fixture.proposal(subject_b),
         });
         validate_v2_equivocation(&proposal).expect("valid double proposal");
-
         let phase_vote = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
             first: fixture.vote(1, wire_v2::GlobalPhase::Prepare, subject_a),
             second: fixture.vote(1, wire_v2::GlobalPhase::Prepare, subject_b),
         });
         validate_v2_equivocation(&phase_vote).expect("valid double phase vote");
-
         let timeout = fixture.payload(wire_v2::SumeragiV2Equivocation::TimeoutVote {
             first: fixture.timeout_vote(2, None),
             second: fixture.timeout_vote(2, Some(fixture.prepare_qc(subject_a))),
         });
         validate_v2_equivocation(&timeout).expect("valid double timeout vote");
     }
-
     #[test]
     fn sumeragi_v2_equivocation_authenticates_vote_origin_and_execution() {
         let fixture = V2EvidenceFixture::new();
         let subject = fixture.subject(0x6a);
         let signer = 1;
-
         let mut first = fixture.vote(signer, wire_v2::GlobalPhase::Commit, subject);
         first.round = fixture.round(2);
         first.proposal_round = first.round;
         first.signature = fixture.sign(signer, &first.signature_preimage());
-
         let mut different_origin = first.clone();
         different_origin.proposal_round = fixture.round(1);
         different_origin.signature = fixture.sign(signer, &different_origin.signature_preimage());
@@ -2037,7 +1926,6 @@ mod tests {
             Err(EvidenceValidationError::V2ArtifactInvalid),
             "a vote whose proposal origin differs from its certified round is not canonical evidence"
         );
-
         let mut different_execution = first.clone();
         different_execution.execution_commitment.post_state_root =
             Hash::new(b"different v2 evidence post state");
@@ -2050,7 +1938,6 @@ mod tests {
         validate_v2_equivocation(&execution_conflict)
             .expect("different authenticated execution commitments conflict");
     }
-
     #[test]
     fn sumeragi_v2_equivocation_generic_ingress_anchors_network_and_roster() {
         let fixture = V2EvidenceFixture::new();
@@ -2077,7 +1964,6 @@ mod tests {
             prf_seed: None,
         };
         validate_evidence(&evidence, &context).expect("trusted v2 evidence ingress");
-
         let shortened_topology =
             super::super::network_topology::Topology::new(peers.into_iter().skip(1));
         let untrusted_roster = EvidenceValidationContext {
@@ -2088,7 +1974,6 @@ mod tests {
             validate_evidence(&evidence, &untrusted_roster),
             Err(EvidenceValidationError::V2ContextInvalid)
         );
-
         let foreign_network = test_network_id(b"foreign-v2-evidence-genesis");
         let wrong_network = EvidenceValidationContext {
             network_id: &foreign_network,
@@ -2099,7 +1984,6 @@ mod tests {
             Err(EvidenceValidationError::V2ContextInvalid)
         );
     }
-
     #[test]
     fn sumeragi_v2_equivocation_rejects_forgery_wrong_slot_and_duplicates() {
         let fixture = V2EvidenceFixture::new();
@@ -2107,7 +1991,6 @@ mod tests {
         let subject_b = fixture.subject(0x72);
         let first = fixture.vote(1, wire_v2::GlobalPhase::Commit, subject_a);
         let second = fixture.vote(1, wire_v2::GlobalPhase::Commit, subject_b);
-
         let duplicate = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
             first: first.clone(),
             second: first.clone(),
@@ -2116,7 +1999,6 @@ mod tests {
             validate_v2_equivocation(&duplicate),
             Err(EvidenceValidationError::V2ArtifactsDoNotConflict)
         );
-
         let mut forged_pop = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
             first: first.clone(),
             second: second.clone(),
@@ -2126,7 +2008,6 @@ mod tests {
             validate_v2_equivocation(&forged_pop),
             Err(EvidenceValidationError::V2ProofOfPossessionInvalid)
         );
-
         let mut missing_pop = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
             first: first.clone(),
             second: second.clone(),
@@ -2136,7 +2017,6 @@ mod tests {
             validate_v2_equivocation(&missing_pop),
             Err(EvidenceValidationError::V2ProofCountMismatch)
         );
-
         let mut forged_qc = fixture.prepare_qc(subject_a);
         forged_qc.aggregate_signature[0] ^= 0x80;
         let forged_qc = fixture.payload(wire_v2::SumeragiV2Equivocation::TimeoutVote {
@@ -2147,7 +2027,6 @@ mod tests {
             validate_v2_equivocation(&forged_qc),
             Err(EvidenceValidationError::V2SignatureInvalid)
         );
-
         let mut forged_signature = second.clone();
         forged_signature.signature[0] ^= 0x80;
         let forged_signature = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
@@ -2158,7 +2037,6 @@ mod tests {
             validate_v2_equivocation(&forged_signature),
             Err(EvidenceValidationError::V2SignatureInvalid)
         );
-
         let mut forged_signer = second.clone();
         forged_signer.signer = 2;
         let forged_signer = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
@@ -2169,7 +2047,6 @@ mod tests {
             validate_v2_equivocation(&forged_signer),
             Err(EvidenceValidationError::V2SignerMismatch)
         );
-
         let mut wrong_round = second.clone();
         wrong_round.round.view = 1;
         let wrong_round = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
@@ -2181,7 +2058,6 @@ mod tests {
             Err(EvidenceValidationError::V2ArtifactInvalid
                 | EvidenceValidationError::V2RoundMismatch)
         ));
-
         let mut wrong_context = second;
         wrong_context.round.context_id =
             wire_v2::HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([0xFF; 32])));
@@ -2194,9 +2070,7 @@ mod tests {
             Err(EvidenceValidationError::V2ArtifactInvalid)
         );
     }
-
     include!("evidence/missing_signer_pop_test.rs");
-
     #[test]
     fn sumeragi_v2_equivocation_persistence_deduplicates_swaps_and_restart_replay() {
         let fixture = V2EvidenceFixture::new();
@@ -2205,7 +2079,6 @@ mod tests {
             second: fixture.vote(1, wire_v2::GlobalPhase::Prepare, fixture.subject(0x82)),
         };
         let state = test_state();
-
         assert!(
             persist_sumeragi_v2_equivocation(
                 &state,
@@ -2235,7 +2108,6 @@ mod tests {
         let (_, record) = records.iter().next().expect("stored v2 evidence");
         assert_eq!(record.evidence.kind, EvidenceKind::SumeragiV2Equivocation);
     }
-
     #[test]
     fn sumeragi_v2_equivocation_persistence_rejects_invalid_artifacts() {
         let fixture = V2EvidenceFixture::new();
@@ -2246,26 +2118,22 @@ mod tests {
             second: forged,
         };
         let state = test_state();
-
         assert_eq!(
             persist_sumeragi_v2_equivocation(&state, &fixture.context, &fixture.proofs, conflict,),
             Err(EvidenceValidationError::V2SignatureInvalid)
         );
         assert_eq!(state.world.consensus_evidence.view().iter().count(), 0);
     }
-
     #[test]
     fn v2_admission_validates_without_follower_local_observation() {
         let fixture = V2EvidenceFixture::new();
         let evidence = canonical_v2_phase_vote_evidence(&fixture, 0x91, 0x92);
         let follower = test_state_for_v2_fixture(&fixture);
-
         let keys = validate_v2_evidence_admissions(&follower, 2, &[evidence.clone()])
             .expect("self-contained exact proof must validate on an unaware follower");
         assert_eq!(keys, vec![v2_evidence_admission_key(&evidence)]);
         assert_eq!(follower.world.consensus_evidence.view().iter().count(), 0);
     }
-
     #[test]
     fn v2_admission_rejects_context_store_only_recovery_record() {
         let fixture = V2EvidenceFixture::new();
@@ -2292,7 +2160,6 @@ mod tests {
             ChainId::from("sumeragi-v2-evidence-display-name"),
             fixture.context.network_id,
         );
-
         assert_eq!(
             state
                 .sumeragi_v2_height_context(fixture.context.height)
@@ -2305,26 +2172,22 @@ mod tests {
             Err(EvidenceValidationError::V2AdmissionContextUnavailable)
         );
     }
-
     #[test]
     fn v2_admission_rejects_noncanonical_duplicate_reordered_and_oversize_batches() {
         let fixture = V2EvidenceFixture::new();
         let state = test_state_for_v2_fixture(&fixture);
         let first = canonical_v2_phase_vote_evidence(&fixture, 0x93, 0x94);
         let second = canonical_v2_phase_vote_evidence(&fixture, 0x95, 0x96);
-
         let mut noncanonical = first.clone();
         noncanonical.conflict = swap_v2_conflict(&noncanonical.conflict);
         assert_eq!(
             validate_v2_evidence_admissions(&state, 2, &[noncanonical]),
             Err(EvidenceValidationError::V2AdmissionNonCanonical)
         );
-
         assert_eq!(
             validate_v2_evidence_admissions(&state, 2, &[first.clone(), first.clone()]),
             Err(EvidenceValidationError::V2AdmissionOrder)
         );
-
         let mut ordered = vec![first.clone(), second];
         ordered.sort_by_key(v2_evidence_admission_key);
         validate_v2_evidence_admissions(&state, 2, &ordered)
@@ -2334,20 +2197,17 @@ mod tests {
             validate_v2_evidence_admissions(&state, 2, &ordered),
             Err(EvidenceValidationError::V2AdmissionOrder)
         );
-
         let oversized = vec![first; MAX_V2_EVIDENCE_ADMISSIONS_PER_BLOCK + 1];
         assert_eq!(
             validate_v2_evidence_admissions(&state, 2, &oversized),
             Err(EvidenceValidationError::V2AdmissionTooMany)
         );
     }
-
     #[test]
     fn v2_admission_rejects_forged_foreign_future_stale_and_committed_proofs() {
         let fixture = V2EvidenceFixture::new();
         let state = test_state_for_v2_fixture(&fixture);
         let evidence = canonical_v2_phase_vote_evidence(&fixture, 0x97, 0x98);
-
         let mut forged = evidence.clone();
         let wire_v2::SumeragiV2Equivocation::PhaseVote { second, .. } = &mut forged.conflict else {
             unreachable!("phase-vote fixture")
@@ -2358,7 +2218,6 @@ mod tests {
             validate_v2_evidence_admissions(&state, 2, &[forged]),
             Err(EvidenceValidationError::V2SignatureInvalid)
         );
-
         let foreign = test_state_for_network(test_network_id(b"foreign-v2-admission-genesis"));
         assert_eq!(
             validate_v2_evidence_admissions(&foreign, 2, &[evidence.clone()]),
@@ -2384,13 +2243,11 @@ mod tests {
             validate_v2_evidence_admissions(&state, 1, &[evidence.clone()]),
             Err(EvidenceValidationError::V2AdmissionNotPrior)
         );
-
         let stale_state = test_state_for_v2_fixture_with_horizon(&fixture, 1);
         assert_eq!(
             validate_v2_evidence_admissions(&stale_state, 4, &[evidence.clone()]),
             Err(EvidenceValidationError::V2AdmissionStale)
         );
-
         let key = v2_evidence_admission_key(&evidence);
         let mut records = state.world.consensus_evidence.block();
         records.insert(
@@ -2413,7 +2270,6 @@ mod tests {
             Err(EvidenceValidationError::V2AdmissionAlreadyCommitted)
         );
     }
-
     #[test]
     fn asymmetric_v2_observation_converges_after_committed_admission() {
         let fixture = V2EvidenceFixture::new();
@@ -2428,13 +2284,11 @@ mod tests {
         };
         persist_sumeragi_v2_equivocation(&proposer, &fixture.context, &fixture.proofs, conflict)
             .expect("local exact proof validates");
-
         let admissions = pending_v2_evidence_admissions(&proposer, 2);
         assert_eq!(admissions.len(), 1);
         assert!(pending_v2_evidence_admissions(&follower, 2).is_empty());
         validate_v2_evidence_admissions(&follower, 2, &admissions)
             .expect("unaware follower revalidates the attached exact proof");
-
         let proposer_precommit = super::super::penalties::PenaltyApplier::from_committed_state(
             &proposer,
             iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
@@ -2462,10 +2316,8 @@ mod tests {
             follower_precommit.penalty_actions
         );
         assert!(proposer_precommit.penalty_actions.is_empty());
-
         apply_v2_admissions_for_test(&proposer, admissions.clone(), 2, 3, 77);
         apply_v2_admissions_for_test(&follower, admissions.clone(), 2, 3, 77);
-
         let key = v2_evidence_admission_key(&admissions[0]);
         let proposer_record = proposer
             .world
@@ -2486,7 +2338,6 @@ mod tests {
         assert_eq!(proposer_record.recorded_at_height, 2);
         assert_eq!(proposer_record.recorded_at_view, 3);
         assert_eq!(proposer_record.recorded_at_ms, 77);
-
         let proposer_same_block = super::super::penalties::PenaltyApplier::from_committed_state(
             &proposer,
             iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
@@ -2498,7 +2349,6 @@ mod tests {
         .derive_npos_consensus_effects(2, Vec::new())
         .expect("derive proposer same-height effects");
         assert!(proposer_same_block.penalty_actions.is_empty());
-
         let proposer_effects = super::super::penalties::PenaltyApplier::from_committed_state(
             &proposer,
             iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
@@ -2527,7 +2377,6 @@ mod tests {
                 .any(|action| matches!(action, NposPenaltyAction::ConsensusSlash(_)))
         );
     }
-
     #[test]
     fn v2_admission_rejects_same_block_consensus_slash() {
         let fixture = V2EvidenceFixture::new();
@@ -2545,13 +2394,11 @@ mod tests {
                 amount: iroha_primitives::numeric::Quantity::from(1_u64),
             },
         );
-
         assert_eq!(
             validate_v2_admission_penalty_separation(&[key], &[slash]),
             Err(EvidenceValidationError::V2AdmissionSameBlockPenalty)
         );
     }
-
     fn state_with_horizon(current_height: u64, horizon: u64) -> State {
         let mut params = Parameters::default();
         let npos = SumeragiNposParameters {
@@ -2577,7 +2424,6 @@ mod tests {
         }
         state
     }
-
     #[test]
     fn evidence_horizon_formal_gate_configured_matrix() {
         let cases = [
@@ -2599,7 +2445,6 @@ mod tests {
             ("future subject", 10, Some(3), Some(12), true),
             ("stale when horizon one", 10, Some(1), Some(8), false),
         ];
-
         for (case, current_height, horizon, subject_height, expected) in cases {
             assert_eq!(
                 evidence_within_configured_horizon(current_height, horizon, subject_height),
@@ -2608,7 +2453,6 @@ mod tests {
             );
         }
     }
-
     fn sample_double_vote_pair(ctx: &EvidenceTestContext) -> (Vote, Vote) {
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x80; 32]));
         let zero_root = zero_state_root();
@@ -2632,25 +2476,21 @@ mod tests {
         ctx.sign_vote(&mut v2);
         (v1, v2)
     }
-
     #[test]
     fn evidence_rejects_retired_or_unknown_signature_domains() {
         let mut ctx = test_context();
         ctx.mode_tag = "sumeragi-legacy-permissioned";
         let (v1, v2) = sample_double_vote_pair(&ctx);
         let evidence = check_double_vote(&v1, &v2).expect("conflicting signed votes");
-
         assert_invalid_evidence_rejected(
             &ctx.validation_context(),
             &evidence,
             EvidenceValidationError::UnsupportedModeTag,
         );
     }
-
     fn sample_tx_hash(tag: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([tag; Hash::LENGTH]))
     }
-
     fn submission_receipt_for(
         ctx: &EvidenceTestContext,
         signer_idx: usize,
@@ -2671,7 +2511,6 @@ mod tests {
         };
         TransactionSubmissionReceipt::sign(payload, keypair)
     }
-
     fn submission_receipt_with_invalid_signature(
         ctx: &EvidenceTestContext,
         signer_idx: usize,
@@ -2701,7 +2540,6 @@ mod tests {
         };
         TransactionSubmissionReceipt::sign(payload, signing_key)
     }
-
     fn sample_invalid_qc_evidence(
         ctx: &EvidenceTestContext,
         tag: u8,
@@ -2739,7 +2577,6 @@ mod tests {
             },
         }
     }
-
     fn sample_invalid_proposal_evidence(tag: u8, height: u64, view: u64) -> Evidence {
         let parent_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([tag; Hash::LENGTH]));
@@ -2770,7 +2607,6 @@ mod tests {
             },
         }
     }
-
     fn sample_censorship_evidence(
         ctx: &EvidenceTestContext,
         tag: u8,
@@ -2787,7 +2623,6 @@ mod tests {
             payload: EvidencePayload::Censorship { tx_hash, receipts },
         }
     }
-
     fn double_vote_with(
         ctx: &EvidenceTestContext,
         mutate: impl FnOnce(&mut Vote, &mut Vote),
@@ -2801,7 +2636,6 @@ mod tests {
             payload: EvidencePayload::DoubleVote { v1, v2 },
         }
     }
-
     fn double_vote_with_unchecked(
         ctx: &EvidenceTestContext,
         mutate: impl FnOnce(&mut Vote, &mut Vote),
@@ -2813,26 +2647,21 @@ mod tests {
             payload: EvidencePayload::DoubleVote { v1, v2 },
         }
     }
-
     fn roundtrip_case_duplicate_signer(ctx: &EvidenceTestContext) -> Evidence {
         double_vote_with(ctx, |_, v2| v2.signer = v2.signer.saturating_add(1))
     }
-
     fn roundtrip_case_conflicting_height(ctx: &EvidenceTestContext) -> Evidence {
         double_vote_with(ctx, |_, v2| v2.height = v2.height.saturating_add(1))
     }
-
     fn roundtrip_case_conflicting_view(ctx: &EvidenceTestContext) -> Evidence {
         double_vote_with(ctx, |_, v2| v2.view = v2.view.saturating_add(1))
     }
-
     fn roundtrip_case_signature_truncated(ctx: &EvidenceTestContext) -> Evidence {
         double_vote_with_unchecked(ctx, |v1, v2| {
             v1.bls_sig.truncate(super::MIN_BLS_SIGNATURE_LEN / 2);
             v2.bls_sig.truncate(super::MIN_BLS_SIGNATURE_LEN / 2);
         })
     }
-
     fn roundtrip_case_mixed_manifest_payload(ctx: &EvidenceTestContext) -> Evidence {
         let (v1, v2) = sample_double_vote_pair(ctx);
         Evidence {
@@ -2840,12 +2669,10 @@ mod tests {
             payload: EvidencePayload::DoubleVote { v1, v2 },
         }
     }
-
     #[allow(clippy::too_many_lines)]
     fn mismatched_payload_cases(ctx: &EvidenceTestContext) -> Vec<EvidenceCase> {
         let (v1, v2) = sample_double_vote_pair(ctx);
         let double_vote_payload = EvidencePayload::DoubleVote { v1, v2 };
-
         let validator_set = ctx.topology.as_ref().to_vec();
         let zero_root = zero_state_root();
         let qc = Qc {
@@ -2874,7 +2701,6 @@ mod tests {
             certificate: qc,
             reason: "forged QC payload variant".to_owned(),
         };
-
         let proposal = Proposal {
             header: ConsensusBlockHeader {
                 parent_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -2902,14 +2728,11 @@ mod tests {
             proposal,
             reason: "forged proposal payload variant".to_owned(),
         };
-
         let censorship_payload = EvidencePayload::Censorship {
             tx_hash: sample_tx_hash(0xCC),
             receipts: Vec::new(),
         };
-
         let expected = EvidenceValidationError::KindPayloadMismatch;
-
         vec![
             (
                 EvidenceKind::InvalidQc,
@@ -2973,7 +2796,6 @@ mod tests {
             ),
         ]
     }
-
     fn assert_invalid_evidence_rejected(
         context: &EvidenceValidationContext<'_>,
         evidence: &Evidence,
@@ -2988,16 +2810,13 @@ mod tests {
         );
         let evidence = decoded;
         let key = evidence_key(&evidence);
-
         assert_eq!(validate_evidence(&evidence, context), Err(expected_error));
-
         let mut store = EvidenceStore::new();
         assert!(
             !store.insert(&evidence, context),
             "EvidenceStore must reject {expected_error:?}"
         );
         assert!(store.entries.is_empty());
-
         let state = test_state();
         assert!(
             !persist_record(&state, &evidence, context),
@@ -3010,7 +2829,6 @@ mod tests {
             "rejected evidence must not expose a staking lookup key"
         );
     }
-
     fn assert_validation_case(
         context: &EvidenceValidationContext<'_>,
         case: &str,
@@ -3019,7 +2837,6 @@ mod tests {
     ) {
         assert_eq!(validate_evidence(&evidence, context), expected, "{case}");
     }
-
     fn rotated_peer_at(ctx: &EvidenceTestContext, height: u64, view: u64, signer: u32) -> PeerId {
         let rotated = super::archival_topology_for_view(
             &ctx.topology,
@@ -3034,7 +2851,6 @@ mod tests {
             .expect("signer index must be present in rotated topology")
             .clone()
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn evidence_canonicalization_formal_gate_key_order_and_payload_matrix() {
@@ -3058,7 +2874,6 @@ mod tests {
             evidence_key(&prepare_ordered),
             evidence_key(&prepare_swapped)
         );
-
         let (mut cross_prepare, mut cross_commit) = sample_double_vote_pair(&ctx);
         cross_prepare.phase = Phase::Prepare;
         cross_commit.phase = Phase::Commit;
@@ -3082,7 +2897,6 @@ mod tests {
             evidence_key(&cross_phase),
             evidence_key(&cross_phase_swapped)
         );
-
         let (mut root_left, mut root_right) = sample_double_vote_pair(&ctx);
         root_left.phase = Phase::Commit;
         root_right.phase = Phase::Commit;
@@ -3111,7 +2925,6 @@ mod tests {
             evidence_key(&root_conflict),
             evidence_key(&root_conflict_swapped)
         );
-
         let censorship = sample_censorship_evidence(&ctx, 0xE0, &[6, 12, 9, 15]);
         let EvidencePayload::Censorship { tx_hash, receipts } = &censorship.payload else {
             panic!("sample_censorship_evidence must produce censorship payload");
@@ -3126,7 +2939,6 @@ mod tests {
             },
         };
         assert_eq!(evidence_key(&censorship), evidence_key(&censorship_swapped));
-
         let mut duplicate_receipts = receipts.clone();
         duplicate_receipts.push(
             receipts
@@ -3146,7 +2958,6 @@ mod tests {
             evidence_key(&censorship_with_duplicate),
             "canonicalization must sort receipts without collapsing duplicate payloads"
         );
-
         let wrong_kind = Evidence {
             kind: EvidenceKind::InvalidQc,
             payload: censorship.payload.clone(),
@@ -3156,14 +2967,11 @@ mod tests {
             evidence_key(&wrong_kind),
             "deduplication keys must bind the evidence kind"
         );
-
         let invalid_qc = sample_invalid_qc_evidence(&ctx, 0xB0, 21, 3);
         assert_eq!(canonicalize_evidence(&invalid_qc), invalid_qc);
-
         let invalid_proposal = sample_invalid_proposal_evidence(0xB1, 22, 4);
         assert_eq!(canonicalize_evidence(&invalid_proposal), invalid_proposal);
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn evidence_canonicalization_formal_gate_subject_and_block_refs_matrix() {
@@ -3183,19 +2991,16 @@ mod tests {
             (Some(subject_first.height), Some(subject_first.view)),
             "double-vote subject extraction is anchored to the first canonical vote"
         );
-
         let invalid_qc = sample_invalid_qc_evidence(&ctx, 0xC0, 31, 7);
         assert_eq!(
             evidence_subject_height_view(&invalid_qc),
             (Some(31), Some(7))
         );
-
         let invalid_proposal = sample_invalid_proposal_evidence(0xC1, 32, 8);
         assert_eq!(
             evidence_subject_height_view(&invalid_proposal),
             (Some(32), Some(8))
         );
-
         let empty_censorship = Evidence {
             kind: EvidenceKind::Censorship,
             payload: EvidencePayload::Censorship {
@@ -3207,10 +3012,8 @@ mod tests {
             evidence_subject_height_view(&empty_censorship),
             (None, None)
         );
-
         let censorship = sample_censorship_evidence(&ctx, 0xC3, &[9, 13, 11, 10]);
         assert_eq!(evidence_subject_height_view(&censorship), (Some(13), None));
-
         let (ref_left, ref_right) = sample_double_vote_pair(&ctx);
         let double_refs = Evidence {
             kind: EvidenceKind::DoublePrepare,
@@ -3226,7 +3029,6 @@ mod tests {
                 (ref_right.height, ref_right.block_hash),
             ]
         );
-
         let (mut root_left, mut root_right) = sample_double_vote_pair(&ctx);
         root_left.phase = Phase::Commit;
         root_right.phase = Phase::Commit;
@@ -3245,7 +3047,6 @@ mod tests {
             vec![(root_left.height, root_left.block_hash)],
             "same-hash root conflicts should not duplicate block references"
         );
-
         let EvidencePayload::InvalidQc { certificate, .. } = &invalid_qc.payload else {
             panic!("sample_invalid_qc_evidence must produce invalid QC payload");
         };
@@ -3256,7 +3057,6 @@ mod tests {
         assert!(evidence_block_refs(&invalid_proposal).is_empty());
         assert!(evidence_block_refs(&censorship).is_empty());
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn evidence_canonicalization_formal_gate_store_and_persist_metadata() {
@@ -3271,7 +3071,6 @@ mod tests {
             },
         };
         let canonical = canonicalize_evidence(&swapped);
-
         let mut store = EvidenceStore::new();
         assert!(store.insert(&swapped, &context));
         assert_eq!(store.entries.len(), 1);
@@ -3291,7 +3090,6 @@ mod tests {
             !store.insert(&swapped, &context),
             "swapped duplicate should not insert"
         );
-
         let (mut invalid_left, mut invalid_right) = sample_double_vote_pair(&ctx);
         invalid_right.block_hash = invalid_left.block_hash;
         ctx.sign_vote(&mut invalid_left);
@@ -3308,7 +3106,6 @@ mod tests {
             "invalid evidence must be rejected before deduplication"
         );
         assert_eq!(store.entries.len(), 1);
-
         let (new_left, mut new_right) = sample_double_vote_pair(&ctx);
         new_right.block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x95; Hash::LENGTH]));
@@ -3322,7 +3119,6 @@ mod tests {
         };
         assert!(store.insert(&new_valid, &context));
         assert_eq!(store.entries.len(), 2);
-
         let state = test_state();
         assert!(persist_record(&state, &swapped, &context));
         assert!(
@@ -3344,14 +3140,12 @@ mod tests {
         assert!(!record.penalty_cancelled);
         assert_eq!(record.penalty_applied_at_height, None);
         assert_eq!(record.penalty_cancelled_at_height, None);
-
         let invalid_state = test_state();
         assert!(!persist_record(&invalid_state, &invalid, &context));
         assert_eq!(
             invalid_state.world.consensus_evidence.view().iter().count(),
             0
         );
-
         let censorship = sample_censorship_evidence(&ctx, 0xD4, &[8, 13, 11, 10]);
         let canonical_censorship = canonicalize_evidence(&censorship);
         let censorship_state = test_state();
@@ -3368,20 +3162,17 @@ mod tests {
         assert_eq!(record.penalty_applied_at_height, None);
         assert_eq!(record.penalty_cancelled_at_height, None);
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn evidence_validation_formal_gate_kind_and_double_vote_matrix() {
         let ctx = test_context();
         let context = ctx.validation_context();
-
         assert_validation_case(
             &context,
             "invalid_qc_without_typed_proof",
             sample_invalid_qc_evidence(&ctx, 0x61, 11, 2),
             Err(EvidenceValidationError::UnverifiableInvalidQc),
         );
-
         let invalid_qc_payload = sample_invalid_qc_evidence(&ctx, 0x62, 12, 3).payload;
         assert_validation_case(
             &context,
@@ -3392,7 +3183,6 @@ mod tests {
             },
             Err(EvidenceValidationError::KindPayloadMismatch),
         );
-
         let (double_left, double_right) = sample_double_vote_pair(&ctx);
         assert_validation_case(
             &context,
@@ -3406,7 +3196,6 @@ mod tests {
             },
             Err(EvidenceValidationError::KindPayloadMismatch),
         );
-
         let proposal_payload = sample_invalid_proposal_evidence(0x63, 13, 4).payload;
         assert_validation_case(
             &context,
@@ -3417,7 +3206,6 @@ mod tests {
             },
             Err(EvidenceValidationError::KindPayloadMismatch),
         );
-
         assert_validation_case(
             &context,
             "double_prepare_valid",
@@ -3430,7 +3218,6 @@ mod tests {
             },
             Ok(()),
         );
-
         let (mut commit_left, mut commit_right) = sample_double_vote_pair(&ctx);
         commit_left.phase = Phase::Commit;
         commit_right.phase = Phase::Commit;
@@ -3448,7 +3235,6 @@ mod tests {
             },
             Ok(()),
         );
-
         let (mut root_left, mut root_right) = sample_double_vote_pair(&ctx);
         root_left.phase = Phase::Commit;
         root_right.phase = Phase::Commit;
@@ -3469,7 +3255,6 @@ mod tests {
             },
             Ok(()),
         );
-
         let (mut cross_prepare, mut cross_commit) = sample_double_vote_pair(&ctx);
         cross_prepare.phase = Phase::Prepare;
         cross_commit.phase = Phase::Commit;
@@ -3487,7 +3272,6 @@ mod tests {
             },
             Ok(()),
         );
-
         let mut missing_sig = Evidence {
             kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote {
@@ -3505,7 +3289,6 @@ mod tests {
             missing_sig,
             Err(EvidenceValidationError::SignatureMissing),
         );
-
         let mut truncated_sig = Evidence {
             kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote {
@@ -3523,7 +3306,6 @@ mod tests {
             truncated_sig,
             Err(EvidenceValidationError::SignatureTruncated),
         );
-
         let mut all_zero_sig = Evidence {
             kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote {
@@ -3541,7 +3323,6 @@ mod tests {
             all_zero_sig,
             Err(EvidenceValidationError::SignatureInvalid),
         );
-
         let mut bad_phase_right = double_right.clone();
         bad_phase_right.phase = Phase::NewView;
         assert_validation_case(
@@ -3556,7 +3337,6 @@ mod tests {
             },
             Err(EvidenceValidationError::PhaseMismatch),
         );
-
         let mut height_mismatch_right = double_right.clone();
         height_mismatch_right.height += 1;
         ctx.sign_vote(&mut height_mismatch_right);
@@ -3572,7 +3352,6 @@ mod tests {
             },
             Err(EvidenceValidationError::HeightMismatch),
         );
-
         let mut view_mismatch_right = double_right.clone();
         view_mismatch_right.view += 1;
         ctx.sign_vote(&mut view_mismatch_right);
@@ -3588,7 +3367,6 @@ mod tests {
             },
             Err(EvidenceValidationError::ViewMismatch),
         );
-
         let mut epoch_mismatch_right = double_right.clone();
         epoch_mismatch_right.epoch += 1;
         ctx.sign_vote(&mut epoch_mismatch_right);
@@ -3604,7 +3382,6 @@ mod tests {
             },
             Err(EvidenceValidationError::EpochMismatch),
         );
-
         let mut signer_mismatch_right = double_right.clone();
         signer_mismatch_right.signer += 1;
         ctx.sign_vote(&mut signer_mismatch_right);
@@ -3620,7 +3397,6 @@ mod tests {
             },
             Err(EvidenceValidationError::SignerMismatch),
         );
-
         let mut same_hash_prepare_right = double_right.clone();
         same_hash_prepare_right.block_hash = double_left.block_hash;
         ctx.sign_vote(&mut same_hash_prepare_right);
@@ -3636,7 +3412,6 @@ mod tests {
             },
             Err(EvidenceValidationError::BlockHashMatch),
         );
-
         let mut same_roots_commit_right = commit_right.clone();
         same_roots_commit_right.block_hash = commit_left.block_hash;
         same_roots_commit_right.parent_state_root = commit_left.parent_state_root;
@@ -3654,7 +3429,6 @@ mod tests {
             },
             Err(EvidenceValidationError::BlockHashMatch),
         );
-
         assert_validation_case(
             &context,
             "double_prepare_kind_for_commit",
@@ -3679,7 +3453,6 @@ mod tests {
             },
             Err(EvidenceValidationError::PhaseKindMismatch),
         );
-
         let mut invalid_signature = Evidence {
             kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote {
@@ -3697,7 +3470,6 @@ mod tests {
             invalid_signature,
             Err(EvidenceValidationError::SignatureInvalid),
         );
-
         let mut missing_precedence = Evidence {
             kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote {
@@ -3715,7 +3487,6 @@ mod tests {
             missing_precedence,
             Err(EvidenceValidationError::SignatureMissing),
         );
-
         let mut truncated_precedence = Evidence {
             kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote {
@@ -3733,7 +3504,6 @@ mod tests {
             truncated_precedence,
             Err(EvidenceValidationError::SignatureTruncated),
         );
-
         let mut phase_precedence_right = double_right.clone();
         phase_precedence_right.phase = Phase::NewView;
         phase_precedence_right.height += 1;
@@ -3749,7 +3519,6 @@ mod tests {
             },
             Err(EvidenceValidationError::PhaseMismatch),
         );
-
         let mut height_precedence_right = double_right.clone();
         height_precedence_right.height += 1;
         height_precedence_right.epoch += 1;
@@ -3766,7 +3535,6 @@ mod tests {
             },
             Err(EvidenceValidationError::HeightMismatch),
         );
-
         let mut epoch_precedence_right = double_right.clone();
         epoch_precedence_right.epoch += 1;
         epoch_precedence_right.signer += 1;
@@ -3783,7 +3551,6 @@ mod tests {
             },
             Err(EvidenceValidationError::EpochMismatch),
         );
-
         let mut signer_precedence_right = double_right;
         signer_precedence_right.signer += 1;
         signer_precedence_right.block_hash = double_left.block_hash;
@@ -3801,20 +3568,17 @@ mod tests {
             Err(EvidenceValidationError::SignerMismatch),
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn unverifiable_proposal_claims_fail_closed_without_typed_proofs() {
         let ctx = test_context();
         let context = ctx.validation_context();
-
         assert_validation_case(
             &context,
             "structurally_plausible_proposal_claim",
             sample_invalid_proposal_evidence(0x80, 51, 5),
             Err(EvidenceValidationError::UnverifiableInvalidProposal),
         );
-
         let mut equal_height = sample_invalid_proposal_evidence(0x81, 51, 5);
         if let EvidencePayload::InvalidProposal { proposal, .. } = &mut equal_height.payload {
             proposal.header.height = proposal.header.highest_qc.height;
@@ -3825,7 +3589,6 @@ mod tests {
             equal_height,
             Err(EvidenceValidationError::UnverifiableInvalidProposal),
         );
-
         let mut lower_height = sample_invalid_proposal_evidence(0x82, 51, 5);
         if let EvidencePayload::InvalidProposal { proposal, .. } = &mut lower_height.payload {
             proposal.header.height = proposal.header.highest_qc.height.saturating_sub(1);
@@ -3836,7 +3599,6 @@ mod tests {
             lower_height,
             Err(EvidenceValidationError::UnverifiableInvalidProposal),
         );
-
         let mut parent_mismatch = sample_invalid_proposal_evidence(0x83, 51, 5);
         if let EvidencePayload::InvalidProposal { proposal, .. } = &mut parent_mismatch.payload {
             proposal.header.parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -3849,7 +3611,6 @@ mod tests {
             parent_mismatch,
             Err(EvidenceValidationError::UnverifiableInvalidProposal),
         );
-
         let mut height_parent_precedence = sample_invalid_proposal_evidence(0x85, 51, 5);
         if let EvidencePayload::InvalidProposal { proposal, .. } =
             &mut height_parent_precedence.payload
@@ -3865,7 +3626,6 @@ mod tests {
             height_parent_precedence,
             Err(EvidenceValidationError::UnverifiableInvalidProposal),
         );
-
         let mut view_reset = sample_invalid_proposal_evidence(0x87, 51, 0);
         if let EvidencePayload::InvalidProposal { proposal, .. } = &mut view_reset.payload {
             proposal.header.view = 0;
@@ -3878,7 +3638,6 @@ mod tests {
             Err(EvidenceValidationError::UnverifiableInvalidProposal),
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn evidence_validation_formal_gate_censorship_matrix() {
@@ -3901,7 +3660,6 @@ mod tests {
             },
             Ok(()),
         );
-
         let mut extra_duplicate = exact_receipts.clone();
         extra_duplicate.push(
             exact_receipts
@@ -3921,7 +3679,6 @@ mod tests {
             },
             Ok(()),
         );
-
         assert_validation_case(
             &context,
             "censorship_empty",
@@ -3934,7 +3691,6 @@ mod tests {
             },
             Err(EvidenceValidationError::ReceiptMissing),
         );
-
         let receipt = submission_receipt_for(&ctx, 0, tx_hash, 10);
         assert_validation_case(
             &context,
@@ -3948,7 +3704,6 @@ mod tests {
             },
             Err(EvidenceValidationError::ReceiptTxHashMismatch),
         );
-
         let outsider = checked_bls_keypair();
         let outsider_payload = TransactionSubmissionReceiptPayload {
             tx_hash,
@@ -3973,7 +3728,6 @@ mod tests {
             },
             Err(EvidenceValidationError::ReceiptSignerOutOfTopology),
         );
-
         assert_validation_case(
             &context,
             "censorship_bad_signature",
@@ -3988,7 +3742,6 @@ mod tests {
             },
             Err(EvidenceValidationError::ReceiptSignatureInvalid),
         );
-
         assert_validation_case(
             &context,
             "censorship_duplicate_below_quorum",
@@ -4001,7 +3754,6 @@ mod tests {
             },
             Err(EvidenceValidationError::ReceiptQuorumMissing),
         );
-
         let larger_ctx = EvidenceTestContext::new(7);
         let larger_context = larger_ctx.validation_context();
         let larger_tx_hash = sample_tx_hash(0x93);
@@ -4021,7 +3773,6 @@ mod tests {
             },
             Err(EvidenceValidationError::ReceiptQuorumMissing),
         );
-
         assert_validation_case(
             &context,
             "censorship_tx_mismatch_precedes_quorum",
@@ -4034,7 +3785,6 @@ mod tests {
             },
             Err(EvidenceValidationError::ReceiptTxHashMismatch),
         );
-
         let outsider_bad_sig_receipt =
             TransactionSubmissionReceipt::sign(outsider_payload, &ctx.keypairs[0]);
         assert_validation_case(
@@ -4049,7 +3799,6 @@ mod tests {
             },
             Err(EvidenceValidationError::ReceiptSignerOutOfTopology),
         );
-
         assert_validation_case(
             &context,
             "censorship_signature_precedes_quorum",
@@ -4065,14 +3814,12 @@ mod tests {
             Err(EvidenceValidationError::ReceiptSignatureInvalid),
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn double_vote_recording_formal_gate_detection_matrix() {
         let ctx = test_context();
         let context = ctx.validation_context();
         let (prepare_left, prepare_right) = sample_double_vote_pair(&ctx);
-
         let prepare = check_double_vote(&prepare_left, &prepare_right)
             .expect("bare_prepare_conflict must emit");
         assert_eq!(prepare.kind, EvidenceKind::DoublePrepare);
@@ -4080,7 +3827,6 @@ mod tests {
             .expect("bare_swapped_prepare_conflict must emit");
         assert_eq!(prepare.kind, swapped_prepare.kind);
         assert_eq!(evidence_key(&prepare), evidence_key(&swapped_prepare));
-
         let (mut commit_left, mut commit_right) = sample_double_vote_pair(&ctx);
         commit_left.phase = Phase::Commit;
         commit_right.phase = Phase::Commit;
@@ -4089,7 +3835,6 @@ mod tests {
         let commit_block = check_double_vote(&commit_left, &commit_right)
             .expect("bare_commit_block_conflict must emit");
         assert_eq!(commit_block.kind, EvidenceKind::DoubleCommit);
-
         let (mut root_left, mut root_right) = sample_double_vote_pair(&ctx);
         root_left.phase = Phase::Commit;
         root_right.phase = Phase::Commit;
@@ -4100,7 +3845,6 @@ mod tests {
         let commit_root = check_double_vote(&root_left, &root_right)
             .expect("bare_commit_root_conflict must emit");
         assert_eq!(commit_root.kind, EvidenceKind::DoubleCommit);
-
         let (mut cross_prepare, mut cross_commit) = sample_double_vote_pair(&ctx);
         cross_prepare.phase = Phase::Prepare;
         cross_commit.phase = Phase::Commit;
@@ -4116,7 +3860,6 @@ mod tests {
             evidence_key(&cross_phase),
             evidence_key(&cross_phase_swapped)
         );
-
         let mut same_hash_prepare_right = prepare_right.clone();
         same_hash_prepare_right.block_hash = prepare_left.block_hash;
         ctx.sign_vote(&mut same_hash_prepare_right);
@@ -4124,7 +3867,6 @@ mod tests {
             check_double_vote(&prepare_left, &same_hash_prepare_right).is_none(),
             "bare_same_hash_prepare must not emit"
         );
-
         let mut same_roots_commit_right = commit_right.clone();
         same_roots_commit_right.block_hash = commit_left.block_hash;
         same_roots_commit_right.parent_state_root = commit_left.parent_state_root;
@@ -4134,30 +3876,24 @@ mod tests {
             check_double_vote(&commit_left, &same_roots_commit_right).is_none(),
             "bare_same_hash_commit_same_roots must not emit"
         );
-
         let mut height_mismatch = prepare_right.clone();
         height_mismatch.height += 1;
         ctx.sign_vote(&mut height_mismatch);
         assert!(check_double_vote(&prepare_left, &height_mismatch).is_none());
-
         let mut epoch_mismatch = prepare_right.clone();
         epoch_mismatch.epoch += 1;
         ctx.sign_vote(&mut epoch_mismatch);
         assert!(check_double_vote(&prepare_left, &epoch_mismatch).is_none());
-
         let mut signer_mismatch = prepare_right.clone();
         signer_mismatch.signer += 1;
         ctx.sign_vote(&mut signer_mismatch);
         assert!(check_double_vote(&prepare_left, &signer_mismatch).is_none());
-
         let mut bad_phase = prepare_right.clone();
         bad_phase.phase = Phase::NewView;
         assert!(check_double_vote(&prepare_left, &bad_phase).is_none());
-
         let ctx_same = check_double_vote_with_context(&prepare_left, &prepare_right, &context)
             .expect("ctx_same_peer_same_index must emit");
         assert_eq!(ctx_same.kind, EvidenceKind::DoublePrepare);
-
         let height = prepare_left.height;
         let base_view = 0;
         let target_signer = 2;
@@ -4185,7 +3921,6 @@ mod tests {
             check_double_vote_with_context(&rotated_left, &rotated_right, &context).is_none(),
             "ctx_same_peer_rotated_index must not treat later-view voting as equivocation"
         );
-
         let mut cross_view_left = prepare_left.clone();
         cross_view_left.view = 0;
         cross_view_left.signer = 1;
@@ -4203,7 +3938,6 @@ mod tests {
             check_double_vote_with_context(&cross_view_left, &cross_view_right, &context).is_none(),
             "ctx_cross_view_same_peer must not emit"
         );
-
         let raw_signer = 0;
         let raw_base_peer = rotated_peer_at(&ctx, height, 0, raw_signer);
         let different_peer_view = (1..16)
@@ -4222,7 +3956,6 @@ mod tests {
             check_double_vote_with_context(&raw_left, &raw_right, &context).is_none(),
             "ctx_same_raw_different_peer must not emit"
         );
-
         let mut out_of_range_first = prepare_left.clone();
         out_of_range_first.signer =
             u32::try_from(ctx.topology.as_ref().len() + 1).expect("test topology length fits u32");
@@ -4230,7 +3963,6 @@ mod tests {
             check_double_vote_with_context(&out_of_range_first, &prepare_right, &context).is_none(),
             "ctx_out_of_range_first must not emit"
         );
-
         let mut out_of_range_second = prepare_right.clone();
         out_of_range_second.signer =
             u32::try_from(ctx.topology.as_ref().len() + 1).expect("test topology length fits u32");
@@ -4238,21 +3970,18 @@ mod tests {
             check_double_vote_with_context(&prepare_left, &out_of_range_second, &context).is_none(),
             "ctx_out_of_range_second must not emit"
         );
-
         assert!(
             check_double_vote_with_context(&prepare_left, &same_hash_prepare_right, &context)
                 .is_none(),
             "ctx_nonconflict must not emit"
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn double_vote_recording_formal_gate_record_control_flow_matrix() {
         let ctx = test_context();
         let context = ctx.validation_context();
         let (v1, v2) = sample_double_vote_pair(&ctx);
-
         let mut store = EvidenceStore::new();
         let state = test_state();
         let mut nonconflict = v1.clone();
@@ -4264,7 +3993,6 @@ mod tests {
         );
         assert_eq!(store.entries.len(), 0);
         assert_eq!(state.world.consensus_evidence.view().iter().count(), 0);
-
         let mut store = EvidenceStore::new();
         let state = test_state();
         let expected = check_double_vote(&v1, &v2).expect("valid double vote expected");
@@ -4282,7 +4010,6 @@ mod tests {
         );
         assert_eq!(store.entries.len(), 1);
         assert_eq!(state.world.consensus_evidence.view().iter().count(), 1);
-
         let mut validation_store = EvidenceStore::new();
         let validation_state = test_state();
         let mut unsigned_left = v1.clone();
@@ -4313,7 +4040,6 @@ mod tests {
                 .count(),
             0
         );
-
         let mut initial_store = EvidenceStore::new();
         let duplicate_state = test_state();
         assert!(record_double_vote(
@@ -4339,7 +4065,6 @@ mod tests {
                 .count(),
             1
         );
-
         let stale_state = state_with_horizon(50, 3);
         let (mut stale_left, mut stale_right) = sample_double_vote_pair(&ctx);
         stale_left.height = 40;
@@ -4368,7 +4093,6 @@ mod tests {
             stale_state.world.consensus_evidence.view().iter().count(),
             0
         );
-
         let mut swapped_store = EvidenceStore::new();
         let swapped_state = test_state();
         assert!(record_double_vote(
@@ -4387,7 +4111,6 @@ mod tests {
             swapped_state.world.consensus_evidence.view().iter().count(),
             1
         );
-
         let (mut cross_prepare, mut cross_commit) = sample_double_vote_pair(&ctx);
         cross_prepare.phase = Phase::Prepare;
         cross_commit.phase = Phase::Commit;
@@ -4417,7 +4140,6 @@ mod tests {
                 .seen
                 .contains(&evidence_key(&cross_record.evidence))
         );
-
         let (mut root_left, mut root_right) = sample_double_vote_pair(&ctx);
         root_left.phase = Phase::Commit;
         root_right.phase = Phase::Commit;
@@ -4450,12 +4172,10 @@ mod tests {
                 .contains(&evidence_key(&root_record.evidence))
         );
     }
-
     #[test]
     fn invalid_qc_claims_fail_closed_without_typed_proofs() {
         let ctx = test_context();
         let context = ctx.validation_context();
-
         let claim = |tag, height, view, bitmap: Vec<u8>| {
             let mut evidence = sample_invalid_qc_evidence(&ctx, tag, height, view);
             let EvidencePayload::InvalidQc { certificate, .. } = &mut evidence.payload else {
@@ -4464,7 +4184,6 @@ mod tests {
             certificate.aggregate.signers_bitmap = bitmap;
             evidence
         };
-
         for (_case, evidence) in [
             ("empty_bitmap_nonzero", claim(0xF1, 7, 2, Vec::new())),
             ("zero_sentinel_nonempty", claim(0xF2, 0, 0, vec![0x01])),
@@ -4487,7 +4206,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn detect_double_prevote() {
         let ctx = test_context();
@@ -4516,7 +4234,6 @@ mod tests {
         let ev = check_double_vote(&v1, &v2).expect("should detect double vote");
         assert!(matches!(ev.kind, EvidenceKind::DoublePrepare));
     }
-
     #[test]
     fn detect_double_precommit() {
         let ctx = test_context();
@@ -4534,7 +4251,6 @@ mod tests {
         let ev = check_double_vote(&v1, &v2).expect("should detect double vote");
         assert!(matches!(ev.kind, EvidenceKind::DoubleCommit));
     }
-
     #[test]
     fn double_vote_detects_commit_root_mismatch() {
         let ctx = test_context();
@@ -4565,7 +4281,6 @@ mod tests {
         let ev = check_double_vote(&v1, &v2).expect("commit root mismatch must yield evidence");
         assert!(matches!(ev.kind, EvidenceKind::DoubleCommit));
     }
-
     #[test]
     fn double_vote_requires_distinct_block_hashes() {
         let ctx = test_context();
@@ -4594,7 +4309,6 @@ mod tests {
             "identical votes should not yield double-vote evidence"
         );
     }
-
     #[test]
     fn double_vote_requires_matching_height_view_and_epoch() {
         let ctx = test_context();
@@ -4628,7 +4342,6 @@ mod tests {
             check_double_vote(&v1, &v2).is_none(),
             "height mismatch must not produce double-vote evidence"
         );
-
         v2.height = v1.height;
         v2.view = v1.view.saturating_add(1);
         v2.epoch = v1.epoch;
@@ -4637,7 +4350,6 @@ mod tests {
             check_double_vote(&v1, &v2).is_none(),
             "a legitimate later-view vote must not produce double-vote evidence"
         );
-
         // Restore view but change epoch to confirm epoch mismatch rejects evidence too.
         v2.height = v1.height;
         v2.view = v1.view;
@@ -4648,7 +4360,6 @@ mod tests {
             "epoch mismatch must not produce double-vote evidence"
         );
     }
-
     #[test]
     fn double_vote_requires_same_signer() {
         let ctx = test_context();
@@ -4682,7 +4393,6 @@ mod tests {
             "votes from different signers must not emit double-vote evidence"
         );
     }
-
     #[test]
     fn double_vote_detects_cross_phase_conflict() {
         let ctx = test_context();
@@ -4711,12 +4421,10 @@ mod tests {
         );
         ctx.sign_vote(&mut v1);
         ctx.sign_vote(&mut v2);
-
         let evidence =
             check_double_vote(&v1, &v2).expect("cross-phase conflict must emit evidence");
         assert_eq!(evidence.kind, EvidenceKind::DoubleCommit);
     }
-
     #[test]
     fn double_vote_phase_must_match_kind() {
         let ctx = test_context();
@@ -4745,7 +4453,6 @@ mod tests {
         );
         ctx.sign_vote(&mut v1);
         ctx.sign_vote(&mut v2);
-
         let forged = Evidence {
             kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote {
@@ -4757,14 +4464,12 @@ mod tests {
             validate_evidence(&forged, &context),
             Err(EvidenceValidationError::PhaseKindMismatch)
         );
-
         let valid = Evidence {
             kind: EvidenceKind::DoubleCommit,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
         assert!(validate_evidence(&valid, &context).is_ok());
     }
-
     #[test]
     fn validate_double_vote_accepts_cross_phase_conflict() {
         let ctx = test_context();
@@ -4794,14 +4499,12 @@ mod tests {
         );
         ctx.sign_vote(&mut v1);
         ctx.sign_vote(&mut v2);
-
         let ev = Evidence {
             kind: EvidenceKind::DoubleCommit,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
         assert!(validate_evidence(&ev, &context).is_ok());
     }
-
     #[test]
     fn legitimate_cross_view_votes_cannot_persist_or_reach_staking_key() {
         let ctx = test_context();
@@ -4833,14 +4536,12 @@ mod tests {
         v2.signer = ctx.signer_index_for_keypair_at_view(signer_keypair, v2.height, v2.view);
         ctx.sign_vote(&mut v1);
         ctx.sign_vote(&mut v2);
-
         let ev = Evidence {
             kind: EvidenceKind::DoubleCommit,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
         assert_invalid_evidence_rejected(&context, &ev, EvidenceValidationError::ViewMismatch);
     }
-
     #[test]
     fn validate_double_vote_rejects_same_block_hash() {
         let ctx = test_context();
@@ -4876,7 +4577,6 @@ mod tests {
             Err(EvidenceValidationError::BlockHashMatch)
         );
     }
-
     #[test]
     fn validate_double_vote_rejects_epoch_mismatch() {
         let ctx = test_context();
@@ -4915,7 +4615,6 @@ mod tests {
             Err(EvidenceValidationError::EpochMismatch)
         );
     }
-
     #[test]
     fn validate_double_vote_rejects_signer_mismatch() {
         let ctx = test_context();
@@ -4954,7 +4653,6 @@ mod tests {
             Err(EvidenceValidationError::SignerMismatch)
         );
     }
-
     #[test]
     fn kind_payload_mismatch_is_rejected() {
         let ctx = test_context();
@@ -5003,7 +4701,6 @@ mod tests {
             Err(EvidenceValidationError::KindPayloadMismatch)
         );
     }
-
     #[test]
     fn store_deduplicates() {
         let ctx = test_context();
@@ -5037,7 +4734,6 @@ mod tests {
         // Listing contains exactly one
         assert_eq!(store.entries.len(), 1);
     }
-
     #[test]
     fn store_rejects_invalid_evidence() {
         let ctx = test_context();
@@ -5075,7 +4771,6 @@ mod tests {
         );
         assert!(store.entries.is_empty());
     }
-
     #[test]
     fn persist_record_rejects_invalid_double_vote() {
         let ctx = test_context();
@@ -5114,9 +4809,7 @@ mod tests {
         let view = state.world.consensus_evidence.view();
         assert_eq!(view.iter().count(), 0);
     }
-
     include!("evidence/signature_missing_test.rs");
-
     #[test]
     fn persist_record_rejects_truncated_signature_mutation() {
         let ctx = test_context();
@@ -5131,7 +4824,6 @@ mod tests {
             EvidenceValidationError::SignatureTruncated,
         );
     }
-
     #[test]
     fn persist_record_rejects_invalid_signature_payload() {
         let ctx = test_context();
@@ -5151,7 +4843,6 @@ mod tests {
             EvidenceValidationError::SignatureInvalid,
         );
     }
-
     #[test]
     fn persist_record_rejects_duplicate_signer_mutation() {
         let ctx = test_context();
@@ -5165,7 +4856,6 @@ mod tests {
             EvidenceValidationError::SignerMismatch,
         );
     }
-
     #[test]
     fn persist_record_rejects_height_mismatch_mutation() {
         let ctx = test_context();
@@ -5179,7 +4869,6 @@ mod tests {
             EvidenceValidationError::HeightMismatch,
         );
     }
-
     #[test]
     fn persist_record_rejects_cross_view_mutation_before_signer_resolution() {
         let ctx = test_context();
@@ -5193,7 +4882,6 @@ mod tests {
             EvidenceValidationError::ViewMismatch,
         );
     }
-
     #[test]
     fn persist_record_rejects_epoch_mismatch_mutation() {
         let ctx = test_context();
@@ -5207,7 +4895,6 @@ mod tests {
             EvidenceValidationError::EpochMismatch,
         );
     }
-
     #[test]
     fn persist_record_rejects_phase_kind_mismatch_mutation() {
         let ctx = test_context();
@@ -5224,7 +4911,6 @@ mod tests {
             EvidenceValidationError::PhaseKindMismatch,
         );
     }
-
     #[test]
     fn persist_record_rejects_kind_payload_mismatch_mutation() {
         let ctx = test_context();
@@ -5265,7 +4951,6 @@ mod tests {
             EvidenceValidationError::KindPayloadMismatch,
         );
     }
-
     #[test]
     fn persist_record_rejects_unverified_proposal_height_claim() {
         let ctx = test_context();
@@ -5306,7 +4991,6 @@ mod tests {
             EvidenceValidationError::UnverifiableInvalidProposal,
         );
     }
-
     #[test]
     fn persist_record_rejects_plausible_proposal_without_invalidity_proof() {
         let ctx = test_context();
@@ -5344,7 +5028,6 @@ mod tests {
             EvidenceValidationError::UnverifiableInvalidProposal,
         );
     }
-
     #[test]
     fn persist_record_rejects_unverified_proposal_parent_claim() {
         let ctx = test_context();
@@ -5385,7 +5068,6 @@ mod tests {
             EvidenceValidationError::UnverifiableInvalidProposal,
         );
     }
-
     #[test]
     fn censorship_evidence_accepts_quorum_receipts() {
         let ctx = EvidenceTestContext::new(4);
@@ -5403,7 +5085,6 @@ mod tests {
         let mut store = EvidenceStore::new();
         assert!(store.insert(&evidence, &context));
     }
-
     #[test]
     fn censorship_evidence_dedups_receipt_order() {
         let ctx = EvidenceTestContext::new(4);
@@ -5415,7 +5096,6 @@ mod tests {
             .collect();
         let mut reversed = receipts.clone();
         reversed.reverse();
-
         let evidence = Evidence {
             kind: EvidenceKind::Censorship,
             payload: EvidencePayload::Censorship { tx_hash, receipts },
@@ -5427,9 +5107,7 @@ mod tests {
                 receipts: reversed,
             },
         };
-
         assert_eq!(evidence_key(&evidence), evidence_key(&reordered));
-
         let mut store = EvidenceStore::new();
         assert!(store.insert(&evidence, &context));
         assert!(
@@ -5437,7 +5115,6 @@ mod tests {
             "reordered receipts should not create a new evidence entry"
         );
     }
-
     #[test]
     fn censorship_subject_height_uses_latest_receipt() {
         let ctx = EvidenceTestContext::new(4);
@@ -5451,12 +5128,10 @@ mod tests {
             kind: EvidenceKind::Censorship,
             payload: EvidencePayload::Censorship { tx_hash, receipts },
         };
-
         let (height, view) = evidence_subject_height_view(&evidence);
         assert_eq!(height, Some(12));
         assert_eq!(view, None);
     }
-
     #[test]
     fn double_vote_evidence_dedups_vote_order() {
         let ctx = test_context();
@@ -5473,9 +5148,7 @@ mod tests {
             kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1: v2, v2: v1 },
         };
-
         assert_eq!(evidence_key(&evidence), evidence_key(&reordered));
-
         let mut store = EvidenceStore::new();
         assert!(store.insert(&evidence, &context));
         assert!(
@@ -5483,13 +5156,11 @@ mod tests {
             "reordered votes should not create a new evidence entry"
         );
     }
-
     #[test]
     fn censorship_evidence_rejects_invalid_receipts() {
         let ctx = EvidenceTestContext::new(4);
         let context = ctx.validation_context();
         let tx_hash = sample_tx_hash(0xDE);
-
         let missing = Evidence {
             kind: EvidenceKind::Censorship,
             payload: EvidencePayload::Censorship {
@@ -5502,7 +5173,6 @@ mod tests {
             &missing,
             EvidenceValidationError::ReceiptMissing,
         );
-
         let mismatched = Evidence {
             kind: EvidenceKind::Censorship,
             payload: EvidencePayload::Censorship {
@@ -5515,7 +5185,6 @@ mod tests {
             &mismatched,
             EvidenceValidationError::ReceiptTxHashMismatch,
         );
-
         let outsider = checked_bls_keypair();
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
@@ -5538,7 +5207,6 @@ mod tests {
             &outsider_ev,
             EvidenceValidationError::ReceiptSignerOutOfTopology,
         );
-
         let invalid_sig = Evidence {
             kind: EvidenceKind::Censorship,
             payload: EvidencePayload::Censorship {
@@ -5553,7 +5221,6 @@ mod tests {
             &invalid_sig,
             EvidenceValidationError::ReceiptSignatureInvalid,
         );
-
         let below_quorum = Evidence {
             kind: EvidenceKind::Censorship,
             payload: EvidencePayload::Censorship {
@@ -5567,7 +5234,6 @@ mod tests {
             EvidenceValidationError::ReceiptQuorumMissing,
         );
     }
-
     #[test]
     fn persist_record_rejects_mixed_manifest_payloads() {
         let ctx = test_context();
@@ -5577,7 +5243,6 @@ mod tests {
             assert_invalid_evidence_rejected(&context, &evidence, expected);
         }
     }
-
     #[test]
     #[allow(clippy::type_complexity)]
     #[allow(clippy::too_many_lines)]
@@ -5616,7 +5281,6 @@ mod tests {
                 EvidenceValidationError::EpochMismatch,
             ),
         ];
-
         for _ in 0..32 {
             for (mutate, expected) in cases {
                 let (mut v1, mut v2) = sample_double_vote_pair(&ctx);
@@ -5633,7 +5297,6 @@ mod tests {
                 let noise: u8 = rng.random();
                 v1.bls_sig.push(noise);
                 v2.bls_sig.push(noise ^ 0xFF);
-
                 let evidence = Evidence {
                     kind: EvidenceKind::DoublePrepare,
                     payload: EvidencePayload::DoubleVote { v1, v2 },
@@ -5641,7 +5304,6 @@ mod tests {
                 assert_invalid_evidence_rejected(&context, &evidence, *expected);
             }
         }
-
         // Cover signature missing and phase/kind mismatch explicitly.
         let evidence = double_vote_with_unchecked(&ctx, |v1, v2| {
             v1.bls_sig.clear();
@@ -5652,7 +5314,6 @@ mod tests {
             &evidence,
             EvidenceValidationError::SignatureMissing,
         );
-
         let (v1, v2) = sample_double_vote_pair(&ctx);
         let forged = Evidence {
             kind: EvidenceKind::DoubleCommit,
@@ -5664,7 +5325,6 @@ mod tests {
             EvidenceValidationError::PhaseKindMismatch,
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn fuzz_evidence_roundtrip_rejects_invalid_cases() {
@@ -5777,7 +5437,6 @@ mod tests {
                             v2: v2.clone(),
                         },
                     };
-
                     let bytes = evidence.encode();
                     let mut slice = bytes.as_slice();
                     let decoded =
@@ -5787,7 +5446,6 @@ mod tests {
                         validate_evidence(&decoded, &context).is_ok(),
                         "stale evidence must pass structural validation"
                     );
-
                     let state = state_with_horizon(current_height, horizon);
                     assert!(
                         !persist_record(&state, &decoded, &context),
@@ -5798,7 +5456,6 @@ mod tests {
                 }
             }
         }
-
         let mut cases = mismatched_payload_cases(&ctx);
         cases.shuffle(&mut rng);
         for (kind, payload, expected) in cases {
@@ -5806,7 +5463,6 @@ mod tests {
             assert_invalid_evidence_rejected(&context, &evidence, expected);
         }
     }
-
     #[test]
     fn persist_record_inserts_once() {
         let ctx = test_context();
@@ -5835,11 +5491,9 @@ mod tests {
         ctx.sign_vote(&mut v1);
         ctx.sign_vote(&mut v2);
         let evidence = check_double_vote(&v1, &v2).expect("double vote expected");
-
         assert!(persist_record(&state, &evidence, &context));
         // second insertion should be ignored
         assert!(!persist_record(&state, &evidence, &context));
-
         let view = state.world.consensus_evidence.view();
         let stored: Vec<_> = view.iter().map(|(_, rec)| rec.clone()).collect();
         assert_eq!(stored.len(), 1);
@@ -5848,7 +5502,6 @@ mod tests {
         assert_eq!(rec.recorded_at_height, v1.height);
         assert_eq!(rec.recorded_at_view, v1.view);
     }
-
     #[test]
     fn persist_record_inserts_once_for_precommit() {
         let ctx = test_context();
@@ -5863,19 +5516,16 @@ mod tests {
             kind: EvidenceKind::DoubleCommit,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
-
         assert!(persist_record(&state, &evidence, &context));
         assert!(
             !persist_record(&state, &evidence, &context),
             "duplicate precommit evidence should be ignored"
         );
-
         let view = state.world.consensus_evidence.view();
         let stored: Vec<_> = view.iter().map(|(_, rec)| rec.clone()).collect();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].evidence.kind, EvidenceKind::DoubleCommit);
     }
-
     #[test]
     fn record_double_vote_persists_once() {
         let ctx = test_context();
@@ -5883,7 +5533,6 @@ mod tests {
         let mut store = EvidenceStore::new();
         let state = test_state();
         let (v1, v2) = sample_double_vote_pair(&ctx);
-
         assert!(
             record_double_vote(&mut store, &state, &v1, &v2, &context),
             "first equivocation must be recorded"
@@ -5892,20 +5541,17 @@ mod tests {
             !record_double_vote(&mut store, &state, &v1, &v2, &context),
             "duplicate equivocation should be deduplicated"
         );
-
         let view = state.world.consensus_evidence.view();
         let stored: Vec<_> = view.iter().collect();
         assert_eq!(stored.len(), 1);
         assert_eq!(store.entries.len(), 1);
     }
-
     #[test]
     fn record_double_vote_rejects_persisted_duplicates() {
         let ctx = test_context();
         let context = ctx.validation_context();
         let state = test_state();
         let (v1, v2) = sample_double_vote_pair(&ctx);
-
         let mut store = EvidenceStore::new();
         assert!(
             record_double_vote(&mut store, &state, &v1, &v2, &context),
@@ -5916,7 +5562,6 @@ mod tests {
             1,
             "evidence should be persisted to WSV"
         );
-
         // Simulate a restart with a fresh in-memory store.
         let mut fresh_store = EvidenceStore::new();
         assert!(
@@ -5934,7 +5579,6 @@ mod tests {
             "fresh store should still record the duplicate to avoid relogging"
         );
     }
-
     #[test]
     fn record_double_vote_handles_precommit_equivocation() {
         let ctx = test_context();
@@ -5946,7 +5590,6 @@ mod tests {
         v2.phase = Phase::Commit;
         ctx.sign_vote(&mut v1);
         ctx.sign_vote(&mut v2);
-
         assert!(
             record_double_vote(&mut store, &state, &v1, &v2, &context),
             "precommit equivocation should be recorded"
@@ -5955,14 +5598,12 @@ mod tests {
         let (_, record) = view.iter().next().expect("evidence must be stored");
         assert_eq!(record.evidence.kind, EvidenceKind::DoubleCommit);
     }
-
     #[test]
     fn record_double_vote_dedupes_per_phase() {
         let ctx = test_context();
         let context = ctx.validation_context();
         let mut store = EvidenceStore::new();
         let state = test_state();
-
         // Prepare equivocation inserts once.
         let (prevote1, prevote2) = sample_double_vote_pair(&ctx);
         assert!(record_double_vote(
@@ -5972,7 +5613,6 @@ mod tests {
             !record_double_vote(&mut store, &state, &prevote1, &prevote2, &context),
             "duplicate prevote evidence should be ignored"
         );
-
         // Commit equivocation inserts independently and dedupes.
         let (mut precommit1, mut precommit2) = sample_double_vote_pair(&ctx);
         precommit1.phase = Phase::Commit;
@@ -5990,7 +5630,6 @@ mod tests {
             !record_double_vote(&mut store, &state, &precommit1, &precommit2, &context),
             "duplicate precommit evidence should be ignored"
         );
-
         let view = state.world.consensus_evidence.view();
         let kinds: Vec<EvidenceKind> = view.iter().map(|(_, rec)| rec.evidence.kind).collect();
         assert_eq!(kinds.len(), 2, "one record per phase expected");
@@ -6000,7 +5639,6 @@ mod tests {
             "prevote and precommit evidence should both be persisted"
         );
     }
-
     #[test]
     fn record_double_vote_detects_cross_phase_conflict() {
         let ctx = test_context();
@@ -6013,7 +5651,6 @@ mod tests {
             iroha_crypto::Hash::prehashed([0x90; 32]),
         );
         ctx.sign_vote(&mut v2);
-
         assert!(
             record_double_vote(&mut store, &state, &v1, &v2, &context),
             "cross-phase conflict must be recorded once"
@@ -6022,12 +5659,10 @@ mod tests {
             !record_double_vote(&mut store, &state, &v1, &v2, &context),
             "duplicate cross-phase conflict should be deduplicated"
         );
-
         let view = state.world.consensus_evidence.view();
         let (_, record) = view.iter().next().expect("evidence must persist to WSV");
         assert_eq!(record.evidence.kind, EvidenceKind::DoubleCommit);
     }
-
     #[test]
     fn record_double_vote_dedupes_cross_phase_ordering() {
         let ctx = test_context();
@@ -6042,7 +5677,6 @@ mod tests {
         );
         ctx.sign_vote(&mut prevote);
         ctx.sign_vote(&mut precommit);
-
         assert!(
             record_double_vote(&mut store, &state, &prevote, &precommit, &context),
             "first cross-phase conflict must be recorded"
@@ -6051,12 +5685,10 @@ mod tests {
             !record_double_vote(&mut store, &state, &precommit, &prevote, &context),
             "reversed cross-phase detection should deduplicate the same conflict"
         );
-
         let view = state.world.consensus_evidence.view();
         assert_eq!(view.iter().count(), 1, "WSV must persist only one record");
         assert_eq!(store.entries.len(), 1, "in-memory store must dedupe");
     }
-
     #[test]
     fn persist_record_rejects_stale_evidence_replay() {
         let ctx = test_context();
@@ -6072,7 +5704,6 @@ mod tests {
         let current_height = u64::try_from(view.height()).unwrap_or(0);
         assert_eq!(current_height, 50);
         drop(view);
-
         let h = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0xB3; 32],
         ));
@@ -6109,6 +5740,5 @@ mod tests {
         let view = state.world.consensus_evidence.view();
         assert_eq!(view.iter().count(), 0);
     }
-
     include!("evidence/roundtrip_matrix_test.rs");
 }

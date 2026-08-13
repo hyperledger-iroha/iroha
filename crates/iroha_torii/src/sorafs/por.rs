@@ -5,7 +5,6 @@
 //! indexes in place with exact node-authoritative generation updates. Coordinator
 //! persistence retains only exact report publication state once the projection
 //! has been installed.
-
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -22,10 +21,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
     time::Duration as StdDuration,
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
-
 #[cfg(feature = "app_api")]
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -65,7 +62,6 @@ use thiserror::Error;
 use time::{Date, Duration, OffsetDateTime, Weekday};
 #[cfg(feature = "app_api")]
 use tokio::time::{MissedTickBehavior, interval};
-
 const POR_STATUS_PAGE_VERSION_V1: u8 = 1;
 const POR_STATUS_EXPORT_PAGE_VERSION_V1: u8 = 1;
 /// Maximum sum of canonical status-record bytes returned by one PoR page.
@@ -2043,7 +2039,6 @@ fn canonical_weekly_report_generated_at(
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc as StdArc, Barrier};
-
     use ed25519_dalek::{Signer as _, SigningKey};
     #[cfg(feature = "app_api")]
     use sorafs_manifest::{ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1};
@@ -2055,15 +2050,12 @@ mod tests {
         provider_advert::{AdvertSignature, SignatureAlgorithm},
     };
     use tempfile::tempdir;
-
     use super::*;
-
     fn canonical_temp_root(dir: &tempfile::TempDir) -> PathBuf {
         let root = fs::canonicalize(dir.path()).expect("canonical temp root");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
                 .expect("private canonical temp root");
         }
@@ -2116,7 +2108,6 @@ mod tests {
     #[test]
     fn immutable_secure_publication_is_exactly_idempotent_and_conflict_safe() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
@@ -2141,7 +2132,6 @@ mod tests {
     #[test]
     fn descriptor_relative_link_publication_is_exclusive_and_unlinks_source() {
         use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
@@ -2192,7 +2182,6 @@ mod tests {
     #[test]
     fn descriptor_relative_replace_stays_bound_to_opened_parent() {
         use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
@@ -2241,7 +2230,6 @@ mod tests {
     #[test]
     fn descriptor_relative_read_stays_bound_to_opened_parent() {
         use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
@@ -2304,7 +2292,6 @@ mod tests {
     #[test]
     fn concurrent_immutable_publication_has_one_canonical_winner() {
         use std::os::unix::fs::PermissionsExt as _;
-
         const WORKERS: usize = 16;
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
@@ -2362,7 +2349,6 @@ mod tests {
     #[test]
     fn concurrent_identical_immutable_publication_is_idempotent() {
         use std::os::unix::fs::PermissionsExt as _;
-
         const WORKERS: usize = 16;
         const CANONICAL: &[u8] = b"one-canonical-publication";
         let dir = tempdir().expect("temp dir");
@@ -2404,7 +2390,6 @@ mod tests {
     #[test]
     fn secure_persistence_rejects_parent_traversal_symlinks_and_hardlinks() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
@@ -2458,7 +2443,6 @@ mod tests {
     #[tokio::test]
     async fn drand_high_water_commits_atomically_under_concurrency() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private state root");
@@ -2527,7 +2511,6 @@ mod tests {
     #[tokio::test]
     async fn drand_persistence_failure_rolls_back_memory_and_retry_succeeds() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("temp dir");
         let state_path = canonical_temp_root(&dir).join("drand-state.to");
         let provider = drand_test_provider(state_path.clone());
@@ -3825,7 +3808,6 @@ mod tests {
     #[test]
     fn persistence_failures_roll_back_each_coordinator_transition() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         let blocked_parent = root.join("blocked");
@@ -4542,7 +4524,6 @@ mod tests {
         );
         assert!(!catch_up.published);
     }
-
     #[cfg(feature = "app_api")]
     mod runtime {
         use std::{
@@ -4552,10 +4533,8 @@ mod tests {
                 atomic::{AtomicUsize, Ordering as AtomicOrdering},
             },
         };
-
         use super::*;
         use crate::sorafs::por::{RandomnessProvider, VrfProvider};
-
         #[derive(Clone)]
         struct StaticRandomnessProvider {
             randomness: PorRandomness,

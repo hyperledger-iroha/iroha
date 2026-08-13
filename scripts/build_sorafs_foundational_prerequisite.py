@@ -19,9 +19,7 @@ import json
 import os
 import secrets
 import stat
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -75,7 +73,11 @@ from sorafs_response_args import (  # noqa: E402
 )
 from sorafs_software_signer_receipt import (  # noqa: E402
     parse_canonical_validation,
+    run_offline_receipt_verifier,
     validate_receipt_validation,
+)
+from sorafs_software_signer_evidence import (  # noqa: E402
+    build_foundational_receipt_bundle,
 )
 from sorafs_runner_preflight import plan_rendered_path_is_safe  # noqa: E402
 from sorafs_l1_lane_inventory_integration import (  # noqa: E402
@@ -95,12 +97,11 @@ from sorafs_topology_qualification import (  # noqa: E402
 )
 
 
-MAX_FOUNDATIONAL_ARTIFACT_BYTES = 64 * 1024
+MAX_FOUNDATIONAL_ARTIFACT_BYTES = 256 * 1024
+MAX_FOUNDATIONAL_SIGNING_PAYLOAD_BYTES = 64 * 1024
 MAX_EXTERNAL_SIGNER_VERIFIER_BYTES = 128 * 1024 * 1024
 MAX_EXTERNAL_SIGNER_BINDING_BYTES = 64 * 1024
 MAX_EXTERNAL_SIGNER_RECEIPT_BYTES = 64 * 1024
-MAX_EXTERNAL_SIGNER_VALIDATION_BYTES = 16 * 1024
-EXTERNAL_SIGNER_VERIFIER_TIMEOUT_SECS = 30
 MAX_PREREQUISITE_PACKAGE_BYTES = MAX_SUMMARY_BYTES
 MAX_LANE_SUMMARY_BYTES = MAX_SUMMARY_BYTES
 MAX_DEPLOYMENT_ID_BYTES = 128
@@ -132,6 +133,9 @@ FOUNDATIONAL_PREREQUISITE_EVIDENCE_SUMMARY_FIELDS = frozenset(
 )
 UNSIGNED_SIGNATURE_FIELDS = (
     FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS - {"signature_hex"}
+)
+UNSIGNED_FOUNDATIONAL_FIELDS = (
+    FOUNDATIONAL_PREREQUISITE_FIELDS - {"signer_receipt_bundle"}
 )
 ZERO_SIGNATURE_DIAGNOSTIC = (
     "foundational prerequisite signature must be a non-zero canonical "
@@ -1122,6 +1126,9 @@ def validation_options(
     topology_qualification: dict[str, str] | None,
     resilience_qualification: dict[str, Any] | None = None,
     lane_inventory: VerifiedLaneInventory | None = None,
+    signer_verifier: Path | None = None,
+    signer_verifier_sha256: str | None = None,
+    replay_signer_receipt: bool = True,
 ) -> ValidationOptions:
     """Build exact aggregate-gate options for one reviewed envelope."""
 
@@ -1133,6 +1140,9 @@ def validation_options(
         foundational_signer_public_key=public_key,
         foundational_release_sequence=release_sequence,
         foundational_previous_envelope_sha256=previous_envelope_sha256,
+        foundational_signer_verifier=signer_verifier,
+        foundational_signer_verifier_sha256=signer_verifier_sha256,
+        replay_foundational_signer_receipt=replay_signer_receipt,
         topology_qualification=topology_qualification,
         resilience_qualification=resilience_qualification,
         l1_lane_evidence_inventory=lane_inventory,
@@ -1148,7 +1158,7 @@ def validate_unsigned_envelope(
     errors: list[str] = []
     body = validate_foundational_exact_fields(
         payload,
-        FOUNDATIONAL_PREREQUISITE_FIELDS,
+        UNSIGNED_FOUNDATIONAL_FIELDS,
         "foundational prerequisite signing body",
         errors,
     )
@@ -1167,6 +1177,7 @@ def validate_unsigned_envelope(
     candidate_signature = dict(signature)
     candidate_signature["signature_hex"] = "00" * RAW_ED25519_SIGNATURE_BYTES
     candidate["signature"] = candidate_signature
+    candidate["signer_receipt_bundle"] = None
     _summary, checker_errors, _context = validate_foundational_prerequisite_summary(
         candidate,
         options,
@@ -1652,6 +1663,7 @@ def validate_previous_envelope(
         release_sequence=previous_sequence,
         previous_envelope_sha256=previous_predecessor,
         topology_qualification=None,
+        replay_signer_receipt=False,
     )
     _summary, checker_errors, _context = validate_foundational_prerequisite_summary(
         previous,
@@ -1671,7 +1683,7 @@ def load_unsigned_signing_payload(
     signing_payload, errors = read_bounded_regular_file(
         path,
         label="--signing-payload",
-        maximum_bytes=MAX_FOUNDATIONAL_ARTIFACT_BYTES,
+        maximum_bytes=MAX_FOUNDATIONAL_SIGNING_PAYLOAD_BYTES,
     )
     if signing_payload is None:
         return None, None, errors
@@ -1688,37 +1700,12 @@ def load_unsigned_signing_payload(
     return signing_payload, unsigned, errors
 
 
-def _write_private_verifier_input(path: Path, payload: bytes, mode: int) -> None:
-    """Write one private, process-owned verifier input inside a fresh directory."""
-
-    descriptor = os.open(
-        path,
-        os.O_WRONLY
-        | os.O_CREAT
-        | os.O_EXCL
-        | getattr(os, "O_BINARY", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0),
-        mode,
-    )
-    try:
-        offset = 0
-        while offset < len(payload):
-            written = os.write(descriptor, payload[offset:])
-            if written <= 0:
-                raise OSError("short verifier input write")
-            offset += written
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def verify_external_software_signer_receipt(
     args: argparse.Namespace,
     *,
     signing_payload: bytes,
     signature: bytes,
-) -> tuple[bytes | None, list[str]]:
+) -> tuple[bytes | None, dict[str, str] | None, list[str]]:
     """Run the pinned offline verifier over stable private copies of all inputs."""
 
     errors: list[str] = []
@@ -1776,68 +1763,19 @@ def verify_external_software_signer_receipt(
         or receipt is None
         or operation_id_hex is None
     ):
-        return None, errors
+        return None, None, errors
 
-    validation_raw: bytes | None = None
-    try:
-        with tempfile.TemporaryDirectory(
-            prefix="sorafs-promotion-receipt-"
-        ) as temporary_directory:
-            root = Path(temporary_directory).resolve(strict=True)
-            verifier_path = root / "receipt-verifier"
-            binding_path = root / "promotion.binding.norito"
-            payload_path = root / "foundational.signing-payload.bin"
-            signature_path = root / "signature.raw"
-            receipt_path = root / "signature-receipt.json"
-            validation_path = root / "receipt-validation.json"
-            for path, payload, mode in (
-                (verifier_path, verifier, 0o500),
-                (binding_path, binding, 0o400),
-                (payload_path, signing_payload, 0o400),
-                (signature_path, signature, 0o400),
-                (receipt_path, receipt, 0o400),
-            ):
-                _write_private_verifier_input(path, payload, mode)
-            result = subprocess.run(
-                [
-                    str(verifier_path),
-                    "verify-receipt",
-                    "--binding",
-                    str(binding_path),
-                    "--payload",
-                    str(payload_path),
-                    "--signature",
-                    str(signature_path),
-                    "--receipt",
-                    str(receipt_path),
-                    "--expected-operation-id",
-                    operation_id_hex,
-                    "--validation-out",
-                    str(validation_path),
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=root,
-                env={"LANG": "C", "LC_ALL": "C", "PATH": os.defpath},
-                check=False,
-                timeout=EXTERNAL_SIGNER_VERIFIER_TIMEOUT_SECS,
-            )
-            if result.returncode != 0 or result.stdout or result.stderr:
-                errors.append(
-                    "external software signer receipt verification failed"
-                )
-            else:
-                validation_raw, validation_read_errors = read_bounded_regular_file(
-                    validation_path,
-                    label="software signer receipt validation",
-                    maximum_bytes=MAX_EXTERNAL_SIGNER_VALIDATION_BYTES,
-                )
-                errors.extend(validation_read_errors)
-    except (OSError, subprocess.SubprocessError):
-        errors.append("external software signer receipt verifier could not run")
+    validation_raw, verifier_run_errors = run_offline_receipt_verifier(
+        verifier=verifier,
+        binding=binding,
+        payload=signing_payload,
+        signature=signature,
+        receipt=receipt,
+        operation_id_hex=operation_id_hex,
+    )
+    errors.extend(verifier_run_errors)
     if validation_raw is None:
-        return None, errors
+        return None, None, errors
     validation, validation_errors = parse_canonical_validation(validation_raw)
     errors.extend(validation_errors)
     if validation is not None:
@@ -1853,7 +1791,16 @@ def verify_external_software_signer_receipt(
                 policy_digest_sha256=args.expected_signer_policy_digest_sha256,
             )
         )
-    return (validation_raw if not errors else None), errors
+    bundle = None
+    if not errors:
+        bundle = build_foundational_receipt_bundle(
+            verifier_sha256=expected_verifier_sha256,
+            operation_id_hex=operation_id_hex,
+            binding=binding,
+            receipt=receipt,
+            validation=validation_raw,
+        )
+    return (validation_raw if not errors else None), bundle, errors
 
 
 def validate_finalize_inputs(
@@ -2070,6 +2017,8 @@ def finalize(args: argparse.Namespace) -> int:
         topology_qualification=topology_qualification,
         resilience_qualification=resilience_qualification,
         lane_inventory=lane_inventory,
+        signer_verifier=args.signer_verifier,
+        signer_verifier_sha256=args.expected_signer_verifier_sha256,
     )
     errors = validate_unsigned_envelope(unsigned, options)
     validate_inventory_lane_digest_bindings(
@@ -2089,12 +2038,12 @@ def finalize(args: argparse.Namespace) -> int:
             ["foundational prerequisite signature verification failed"]
         )
         return 1
-    receipt_validation, receipt_errors = verify_external_software_signer_receipt(
+    receipt_validation, receipt_bundle, receipt_errors = verify_external_software_signer_receipt(
         args,
         signing_payload=signing_payload,
         signature=signature,
     )
-    if receipt_errors or receipt_validation is None:
+    if receipt_errors or receipt_validation is None or receipt_bundle is None:
         emit_checker_error_lines(receipt_errors)
         return 1
 
@@ -2103,6 +2052,7 @@ def finalize(args: argparse.Namespace) -> int:
         **final_envelope["signature"],
         "signature_hex": signature.hex(),
     }
+    final_envelope["signer_receipt_bundle"] = receipt_bundle
     if foundational_signing_payload(final_envelope) != signing_payload:
         emit_checker_error_lines(
             ["final envelope does not preserve the reviewed signing payload"]

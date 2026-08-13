@@ -1,11 +1,9 @@
 //! Offline command surfaces.
-
 use std::{
     fs,
     io::{BufReader, BufWriter},
     path::{Path, PathBuf},
 };
-
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4};
@@ -18,9 +16,7 @@ use iroha::data_model::petal_stream::{
 };
 use iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4;
 use norito::derive::JsonSerialize;
-
 use crate::{Run, RunContext, cli_output::print_with_optional_text};
-
 const SCORE_STYLES_SCHEMA: &str = "iroha.offline.petal.score_styles.v1";
 const ENCODE_SCHEMA: &str = "iroha.offline.petal.encode.v1";
 const EVAL_CAPTURE_SCHEMA: &str = "iroha.offline.petal.eval_capture.v1";
@@ -1820,7 +1816,6 @@ fn read_petal_gif_samples(
     encoded_frame_index: u16,
 ) -> Result<PetalStreamSampleGrid> {
     use image::{AnimationDecoder, codecs::gif::GifDecoder};
-
     if grid_size == 0 {
         return Err(eyre!("grid size must be greater than 0"));
     }
@@ -2559,12 +2554,9 @@ struct StyleScoreReport {
 #[cfg(test)]
 mod tests {
     use std::fmt::Display;
-
     use iroha_i18n::{Bundle, Language, Localizer};
     use norito::json::Value;
-
     use super::*;
-
     #[test]
     fn kagemusha_manifest_digest_requires_canonical_lowercase_sha256() {
         let canonical = "ab".repeat(32);
@@ -2952,7 +2944,6 @@ mod tests {
     #[test]
     fn encode_gif_animation_frames_are_encoded_inside_single_file() {
         use image::{AnimationDecoder, codecs::gif::GifDecoder};
-
         let payload = write_payload(b"sora-temple-capture-baseline");
         let tempdir = tempfile::tempdir().expect("temp dir");
         let mut args = encode_args(payload.path(), tempdir.path());
@@ -2988,7 +2979,6 @@ mod tests {
     #[test]
     fn encode_gif_katakana_base94_writes_animated_command_tiles_with_visual_codecs_feature() {
         use image::{AnimationDecoder, codecs::gif::GifDecoder};
-
         let payload = write_payload(b"sora-temple-capture-baseline");
         let tempdir = tempfile::tempdir().expect("temp dir");
         let mut args = katakana_encode_args(payload.path(), tempdir.path());

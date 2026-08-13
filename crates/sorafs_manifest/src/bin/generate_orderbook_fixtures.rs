@@ -1,11 +1,9 @@
 //! Generates deterministic SoraFS orderbook and settlement fixtures.
-
 use std::{
     error::Error,
     fs,
     path::{Path, PathBuf},
 };
-
 use ed25519_dalek::SigningKey;
 use hex::encode;
 use norito::{
@@ -23,16 +21,13 @@ use sorafs_manifest::{
     validate_orderbook_payload_bytes, verify_order_cancel_signature_v1,
     verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
 };
-
 const VALIDATION_GENERATED_AT: u64 = 123;
-
 fn main() -> Result<(), Box<dyn Error>> {
     let fixture_dir = PathBuf::from("fixtures/sorafs_manifest/orderbook");
     let negative_dir = fixture_dir.join("negative");
     fs::create_dir_all(&fixture_dir)?;
     fs::create_dir_all(&negative_dir)?;
     let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
-
     let order_owner = b"buyer@sora".to_vec();
     let order_nonce = 7;
     let order = sign_order_request_ed25519_v1(
@@ -55,7 +50,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &signing_key,
     )?;
     verify_order_request_signature_v1(&order)?;
-
     let cancel = sign_order_cancel_ed25519_v1(
         OrderCancelV1 {
             version: ORDERBOOK_CANCEL_VERSION_V1,
@@ -68,7 +62,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &signing_key,
     )?;
     verify_order_cancel_signature_v1(&cancel)?;
-
     let trade = TradeEventV1 {
         version: ORDERBOOK_TRADE_EVENT_VERSION_V1,
         trade_id: id(0x83),
@@ -82,7 +75,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         timestamp_unix: 1_700_000_100,
     };
     trade.validate()?;
-
     let channel = open_settlement_channel_for_trade_v1(
         &trade,
         id(0x82),
@@ -90,7 +82,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         id(0x10),
         1_700_000_110,
     )?;
-
     let receipt = sign_settlement_receipt_ed25519_v1(
         SettlementReceiptV1 {
             version: SETTLEMENT_RECEIPT_VERSION_V1,
@@ -112,7 +103,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &signing_key,
     )?;
     verify_settlement_receipt_signature_v1(&receipt)?;
-
     write_norito_pair(
         &fixture_dir.join("order_request_v1"),
         &order,
@@ -151,7 +141,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         true,
         "SFS-OK-000",
     )?;
-
     let mut forged_order = order.clone();
     *forged_order
         .signature
@@ -176,7 +165,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         false,
         "SFS-SIG-007",
     )?;
-
     let mut trailing_order_bytes = order_bytes;
     trailing_order_bytes.push(0);
     fs::write(
@@ -195,14 +183,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         false,
         "SFS-NORITO-001",
     )?;
-
     Ok(())
 }
-
 fn id(seed: u8) -> [u8; 32] {
     [seed; 32]
 }
-
 fn empty_signature(signing_key: &SigningKey) -> OrderbookSignatureV1 {
     OrderbookSignatureV1 {
         algorithm: SignatureAlgorithm::Ed25519,
@@ -210,7 +195,6 @@ fn empty_signature(signing_key: &SigningKey) -> OrderbookSignatureV1 {
         signature: Vec::new(),
     }
 }
-
 fn write_expected_outcome(
     path: &Path,
     outcome: &sorafs_manifest::ValidationOutcomeV1,
@@ -228,7 +212,6 @@ fn write_expected_outcome(
     fs::write(path, format!("{}\n", to_string_pretty(outcome)?))?;
     Ok(())
 }
-
 fn write_norito_pair<T>(
     base_path: &Path,
     value: &T,
@@ -246,7 +229,6 @@ where
     fs::write(base_path.with_extension("json"), json)?;
     Ok(())
 }
-
 fn order_json(order: &OrderRequestV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(order.version));
@@ -270,7 +252,6 @@ fn order_json(order: &OrderRequestV1) -> Value {
     map.insert("signature".into(), signature_json(&order.signature));
     Value::Object(map)
 }
-
 fn cancel_json(cancel: &OrderCancelV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(cancel.version));
@@ -284,7 +265,6 @@ fn cancel_json(cancel: &OrderCancelV1) -> Value {
     map.insert("signature".into(), signature_json(&cancel.signature));
     Value::Object(map)
 }
-
 fn trade_json(trade: &TradeEventV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(trade.version));
@@ -308,7 +288,6 @@ fn trade_json(trade: &TradeEventV1) -> Value {
     map.insert("timestamp_unix".into(), Value::from(trade.timestamp_unix));
     Value::Object(map)
 }
-
 fn channel_json(channel: &SettlementChannelV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(channel.version));
@@ -342,7 +321,6 @@ fn channel_json(channel: &SettlementChannelV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn receipt_json(receipt: &SettlementReceiptV1) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(receipt.version));
@@ -384,7 +362,6 @@ fn receipt_json(receipt: &SettlementReceiptV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn signature_json(signature: &OrderbookSignatureV1) -> Value {
     let mut map = Map::new();
     map.insert("algorithm".into(), Value::from("ed25519"));
@@ -398,14 +375,12 @@ fn signature_json(signature: &OrderbookSignatureV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn order_side(side: OrderSideV1) -> &'static str {
     match side {
         OrderSideV1::Bid => "bid",
         OrderSideV1::Ask => "ask",
     }
 }
-
 fn order_tier(tier: OrderTierV1) -> &'static str {
     match tier {
         OrderTierV1::Hot => "hot",
@@ -413,7 +388,6 @@ fn order_tier(tier: OrderTierV1) -> &'static str {
         OrderTierV1::Archive => "archive",
     }
 }
-
 fn cancel_reason(reason: OrderCancelReasonV1) -> &'static str {
     match reason {
         OrderCancelReasonV1::OwnerRequested => "owner_requested",
@@ -422,7 +396,6 @@ fn cancel_reason(reason: OrderCancelReasonV1) -> &'static str {
         OrderCancelReasonV1::Replaced => "replaced",
     }
 }
-
 fn channel_status(status: SettlementChannelStatusV1) -> &'static str {
     match status {
         SettlementChannelStatusV1::Open => "open",

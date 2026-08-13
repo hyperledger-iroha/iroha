@@ -8,13 +8,10 @@
     clippy::uninlined_format_args
 )]
 #![allow(clippy::redundant_closure_for_method_calls)]
-
 use std::sync::Once;
-
 use axum::{Router, response::IntoResponse, routing::get};
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
-
 fn ensure_quota_config() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
@@ -36,13 +33,11 @@ fn ensure_quota_config() {
         );
     });
 }
-
 #[tokio::test]
 async fn attachments_list_filters_and_count() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     ensure_quota_config();
     iroha_torii::zk_attachments::init_persistence();
-
     let tenant = iroha_torii::zk_attachments::AttachmentTenant::anonymous();
     let app = Router::new()
         .route(
@@ -69,7 +64,6 @@ async fn attachments_list_filters_and_count() {
                 }
             }),
         );
-
     // Seed two different attachments by calling POST handler directly
     let id1 = {
         let body_value = iroha_torii::json_object(vec![("k", 1u64)]);
@@ -112,7 +106,6 @@ async fn attachments_list_filters_and_count() {
         let meta: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
         meta.get("id").and_then(|v| v.as_str()).unwrap().to_string()
     };
-
     // Seed a ZK1 envelope attachment (Norito) with PROF tag
     let id3 = {
         let mut env = Vec::new();
@@ -139,7 +132,6 @@ async fn attachments_list_filters_and_count() {
         let meta: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
         meta.get("id").and_then(|v| v.as_str()).unwrap().to_string()
     };
-
     // List with content_type filter json
     let req = http::Request::builder()
         .method("GET")
@@ -152,7 +144,6 @@ async fn attachments_list_filters_and_count() {
         norito::json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0], id1);
-
     // Count all
     let req2 = http::Request::builder()
         .method("GET")
@@ -164,7 +155,6 @@ async fn attachments_list_filters_and_count() {
     let v: norito::json::Value =
         norito::json::from_slice(&resp2.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(v.get("count").and_then(|x| x.as_u64()), Some(3));
-
     // Count one by id
     let req3 = http::Request::builder()
         .method("GET")
@@ -176,7 +166,6 @@ async fn attachments_list_filters_and_count() {
     let v3: norito::json::Value =
         norito::json::from_slice(&resp3.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(v3.get("count").and_then(|x| x.as_u64()), Some(1));
-
     // List has_tag=PROF (should return only ZK1 envelope id)
     let req4 = http::Request::builder()
         .method("GET")

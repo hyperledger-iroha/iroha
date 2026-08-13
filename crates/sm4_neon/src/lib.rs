@@ -1,11 +1,9 @@
 #![allow(clippy::missing_const_for_fn)]
-
 //! NEON-accelerated helpers for the SM4 block cipher.
 //!
 //! The functions exposed here are safe wrappers around unsafe NEON intrinsics.
 //! They return `None` when NEON is unavailable so upstream callers can fall
 //! back to the scalar RustCrypto implementation without panicking.
-
 #[cfg(target_arch = "aarch64")]
 const CK: [u32; 32] = [
     0x0007_0E15,
@@ -41,7 +39,6 @@ const CK: [u32; 32] = [
     0x484F_565D,
     0x646B_7279,
 ];
-
 #[cfg(target_arch = "aarch64")]
 #[rustfmt::skip]
 const SM4_SBOX: [u8; 256] = [
@@ -62,22 +59,16 @@ const SM4_SBOX: [u8; 256] = [
     0x89, 0x69, 0x97, 0x4A, 0x0C, 0x96, 0x77, 0x7E, 0x65, 0xB9, 0xF1, 0x09, 0xC5, 0x6E, 0xC6, 0x84,
     0x18, 0xF0, 0x7D, 0xEC, 0x3A, 0xDC, 0x4D, 0x20, 0x79, 0xEE, 0x5F, 0x3E, 0xD7, 0xCB, 0x39, 0x48,
 ];
-
 #[cfg(target_arch = "aarch64")]
 mod neon {
     use std::sync::OnceLock;
-
     use super::{CK, SM4_SBOX};
-
     type NeonTable = core::arch::aarch64::uint8x16x4_t;
-
     static SBOX_TABLES: OnceLock<[NeonTable; 4]> = OnceLock::new();
-
     #[inline]
     pub fn is_supported() -> bool {
         cfg!(feature = "force-neon") || std::arch::is_aarch64_feature_detected!("neon")
     }
-
     #[allow(unsafe_code)]
     pub fn encrypt_block(key: &[u8; 16], block: &[u8; 16]) -> Option<[u8; 16]> {
         if !is_supported() {
@@ -85,7 +76,6 @@ mod neon {
         }
         Some(unsafe { encrypt_block_neon(key, block) })
     }
-
     #[allow(unsafe_code)]
     pub fn decrypt_block(key: &[u8; 16], block: &[u8; 16]) -> Option<[u8; 16]> {
         if !is_supported() {
@@ -93,14 +83,12 @@ mod neon {
         }
         Some(unsafe { decrypt_block_neon(key, block) })
     }
-
     #[allow(unsafe_code)]
     #[target_feature(enable = "neon")]
     unsafe fn encrypt_block_neon(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
         let round_keys = expand_round_keys(key);
         unsafe { apply_round_keys(block, &round_keys) }
     }
-
     #[allow(unsafe_code)]
     #[target_feature(enable = "neon")]
     unsafe fn decrypt_block_neon(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
@@ -108,7 +96,6 @@ mod neon {
         round_keys.reverse();
         unsafe { apply_round_keys(block, &round_keys) }
     }
-
     #[allow(unsafe_code)]
     #[target_feature(enable = "neon")]
     unsafe fn apply_round_keys(block: &[u8; 16], rk: &[u32; 32]) -> [u8; 16] {
@@ -116,7 +103,6 @@ mod neon {
         let mut x1 = u32::from_be_bytes(block[4..8].try_into().expect("SM4 block"));
         let mut x2 = u32::from_be_bytes(block[8..12].try_into().expect("SM4 block"));
         let mut x3 = u32::from_be_bytes(block[12..16].try_into().expect("SM4 block"));
-
         for &rk_i in rk {
             let tmp = x1 ^ x2 ^ x3 ^ rk_i;
             let transformed = unsafe { round_transform(tmp) };
@@ -126,7 +112,6 @@ mod neon {
             x2 = x3;
             x3 = new;
         }
-
         let mut out = [0u8; 16];
         out[0..4].copy_from_slice(&x3.to_be_bytes());
         out[4..8].copy_from_slice(&x2.to_be_bytes());
@@ -134,7 +119,6 @@ mod neon {
         out[12..16].copy_from_slice(&x0.to_be_bytes());
         out
     }
-
     #[allow(unsafe_code)]
     #[target_feature(enable = "neon")]
     unsafe fn round_transform(value: u32) -> u32 {
@@ -145,7 +129,6 @@ mod neon {
         let scalar = core::arch::aarch64::vgetq_lane_u32(substituted_u32, 0);
         unsafe { linear_transform(scalar) }
     }
-
     #[allow(unsafe_code)]
     #[target_feature(enable = "neon")]
     unsafe fn sub_bytes(bytes: core::arch::aarch64::uint8x16_t) -> core::arch::aarch64::uint8x16_t {
@@ -161,7 +144,6 @@ mod neon {
         }
         result
     }
-
     #[allow(unsafe_code)]
     #[target_feature(enable = "neon")]
     unsafe fn linear_transform(value: u32) -> u32 {
@@ -176,7 +158,6 @@ mod neon {
         );
         core::arch::aarch64::vgetq_lane_u32(combined, 0)
     }
-
     #[allow(unsafe_code)]
     #[target_feature(enable = "neon")]
     unsafe fn rotl32(
@@ -187,7 +168,6 @@ mod neon {
         let right = core::arch::aarch64::vshlq_u32(value, core::arch::aarch64::vdupq_n_s32(n - 32));
         core::arch::aarch64::vorrq_u32(left, right)
     }
-
     #[inline]
     fn expand_round_keys(key: &[u8; 16]) -> [u32; 32] {
         const FK: [u32; 4] = [0xA3B1_BAC6, 0x56AA_3350, 0x677D_9197, 0xB270_22DC];
@@ -198,7 +178,6 @@ mod neon {
         for (slot, fk) in k.iter_mut().zip(FK) {
             *slot ^= fk;
         }
-
         let mut rk = [0u32; 32];
         for (i, entry) in rk.iter_mut().enumerate() {
             let temp = k[1] ^ k[2] ^ k[3] ^ CK[i];
@@ -209,13 +188,11 @@ mod neon {
         }
         rk
     }
-
     #[inline]
     fn key_schedule_transform(value: u32) -> u32 {
         let substituted = substitute_word(value);
         substituted ^ substituted.rotate_left(13) ^ substituted.rotate_left(23)
     }
-
     #[inline]
     fn substitute_word(value: u32) -> u32 {
         let b0 = u32::from(SM4_SBOX[(value >> 24) as usize]);
@@ -224,7 +201,6 @@ mod neon {
         let b3 = u32::from(SM4_SBOX[(value & 0xFF) as usize]);
         (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
     }
-
     fn sbox_tables() -> &'static [NeonTable; 4] {
         SBOX_TABLES.get_or_init(|| {
             let mut chunks = [[0u8; 64]; 4];
@@ -235,39 +211,32 @@ mod neon {
         })
     }
 }
-
 #[cfg(target_arch = "aarch64")]
 pub use neon::{decrypt_block, encrypt_block, is_supported};
-
 #[cfg(not(target_arch = "aarch64"))]
 #[inline]
 pub fn is_supported() -> bool {
     false
 }
-
 #[cfg(not(target_arch = "aarch64"))]
 #[allow(clippy::unused_unit)]
 pub fn encrypt_block(_: &[u8; 16], _: &[u8; 16]) -> Option<[u8; 16]> {
     None
 }
-
 #[cfg(not(target_arch = "aarch64"))]
 #[allow(clippy::unused_unit)]
 pub fn decrypt_block(_: &[u8; 16], _: &[u8; 16]) -> Option<[u8; 16]> {
     None
 }
-
 #[cfg(all(test, target_arch = "aarch64"))]
 mod tests {
     use super::{CK, SM4_SBOX, decrypt_block, encrypt_block, is_supported};
-
     #[test]
     fn neon_round_trip_matches_scalar() {
         if !is_supported() {
             eprintln!("skipping NEON SM4 test: NEON not available");
             return;
         }
-
         for seed in render_seeds() {
             let (key, block) = render_case(seed);
             let scalar_enc = sm4_scalar_encrypt(&key, &block);
@@ -276,14 +245,12 @@ mod tests {
                 scalar_enc, neon_enc,
                 "SM4 NEON encrypt mismatch for seed {seed:#04x}"
             );
-
             let neon_dec =
                 decrypt_block(&key, &scalar_enc).expect("NEON decrypt must succeed when enabled");
             assert_eq!(
                 block, neon_dec,
                 "SM4 NEON decrypt mismatch for seed {seed:#04x}"
             );
-
             let scalar_dec = sm4_scalar_decrypt(&key, &neon_enc);
             assert_eq!(
                 block, scalar_dec,
@@ -291,13 +258,11 @@ mod tests {
             );
         }
     }
-
     fn render_seeds() -> [u8; 12] {
         [
             0x00, 0x01, 0x02, 0x10, 0x22, 0x45, 0x7F, 0x80, 0xA5, 0xC3, 0xEE, 0xFF,
         ]
     }
-
     fn render_case(seed: u8) -> ([u8; 16], [u8; 16]) {
         let mut key = [0u8; 16];
         let mut block = [0u8; 16];
@@ -313,18 +278,15 @@ mod tests {
         }
         (key, block)
     }
-
     fn sm4_scalar_encrypt(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
         let round_keys = scalar_round_keys(key);
         scalar_apply_rounds(block, &round_keys)
     }
-
     fn sm4_scalar_decrypt(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
         let mut round_keys = scalar_round_keys(key);
         round_keys.reverse();
         scalar_apply_rounds(block, &round_keys)
     }
-
     fn scalar_round_keys(key: &[u8; 16]) -> [u32; 32] {
         const FK: [u32; 4] = [0xA3B1_BAC6, 0x56AA_3350, 0x677D_9197, 0xB270_22DC];
         let mut k = [0u32; 4];
@@ -334,7 +296,6 @@ mod tests {
         for (slot, fk) in k.iter_mut().zip(FK) {
             *slot ^= fk;
         }
-
         let mut rk = [0u32; 32];
         for (i, entry) in rk.iter_mut().enumerate() {
             let temp = k[1] ^ k[2] ^ k[3] ^ CK[i];
@@ -345,13 +306,11 @@ mod tests {
         }
         rk
     }
-
     fn scalar_apply_rounds(block: &[u8; 16], rk: &[u32; 32]) -> [u8; 16] {
         let mut x0 = u32::from_be_bytes(block[0..4].try_into().expect("SM4 block"));
         let mut x1 = u32::from_be_bytes(block[4..8].try_into().expect("SM4 block"));
         let mut x2 = u32::from_be_bytes(block[8..12].try_into().expect("SM4 block"));
         let mut x3 = u32::from_be_bytes(block[12..16].try_into().expect("SM4 block"));
-
         for &rk_i in rk {
             let tmp = x1 ^ x2 ^ x3 ^ rk_i;
             let transformed = scalar_round_transform(tmp);
@@ -361,7 +320,6 @@ mod tests {
             x2 = x3;
             x3 = new;
         }
-
         let mut out = [0u8; 16];
         out[0..4].copy_from_slice(&x3.to_be_bytes());
         out[4..8].copy_from_slice(&x2.to_be_bytes());
@@ -369,12 +327,10 @@ mod tests {
         out[12..16].copy_from_slice(&x0.to_be_bytes());
         out
     }
-
     fn scalar_key_schedule_transform(value: u32) -> u32 {
         let substituted = scalar_substitute_word(value);
         substituted ^ substituted.rotate_left(13) ^ substituted.rotate_left(23)
     }
-
     fn scalar_round_transform(value: u32) -> u32 {
         let substituted = scalar_substitute_word(value);
         substituted
@@ -383,7 +339,6 @@ mod tests {
             ^ substituted.rotate_left(18)
             ^ substituted.rotate_left(24)
     }
-
     fn scalar_substitute_word(value: u32) -> u32 {
         let b0 = u32::from(SM4_SBOX[(value >> 24) as usize]);
         let b1 = u32::from(SM4_SBOX[((value >> 16) & 0xFF) as usize]);

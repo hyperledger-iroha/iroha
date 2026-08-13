@@ -7,9 +7,7 @@
 //! refer to the streaming entry points below, and remains fail-closed until an
 //! authenticated peak-residency run is installed for the exact bounded CAS
 //! worker.
-
 use core::{fmt, mem::size_of};
-
 use super::super::super::MaskedRelaxedRandomErrorV1;
 #[cfg(test)]
 use super::super::negacyclic_multiply;
@@ -67,7 +65,6 @@ use super::{
     wide_relation_challenge_weight, wide_response_parameters,
 };
 use crate::vega::sponge::Keccak256;
-
 const STREAMING_RESOURCE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.decryption-streaming-resource";
 const DECRYPTION_PROOF_TAG_V1: [u8; 4] = *b"ZADP";
 const DECRYPTION_SPLIT_MANIFEST_TAG_V1: [u8; 4] = *b"ZDSM";
@@ -88,19 +85,16 @@ const STAGED_PROVER_RNG_BYTE_BUDGET_V1: u64 = 5_000_000_000;
 const STAGED_PROVER_COMMON_A_CANDIDATE_BUDGET_V1: u64 = 1_500_000_000;
 const DECRYPTION_BINDING_HASH_BYTES_V1: u64 = 6 * 32 + 8 + 4 + 8 + 1 + 32 + 1;
 const ZK_AMS_MKHE_DECRYPTION_STAGED_RELEASE_KAT_DIGEST_V1: [u8; 32] = [0; 32];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SparseChallengeTermV1 {
     shift: usize,
     sign: i8,
 }
-
 /// Digest pinned only by an authenticated run of this exact streaming topology.
 ///
 /// This is deliberately distinct from the native-residency certificate. It
 /// remains zero until the complete bounded release worker has been measured.
 pub const ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1: [u8; 32] = [0; 32];
-
 /// Missing implementation boundary that keeps streaming decryption fail-closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -118,7 +112,6 @@ pub enum ZkAmsMkheDecryptionStreamingBlockerV1 {
     /// matches. The staged-local 120-attempt policy no longer activates it.
     StagedProverWorkCeilingExceeded = 3,
 }
-
 /// Phase-specific source accounting for the bounded verifier topology.
 ///
 /// These are exact enumerated large-buffer payloads, not a peak-RSS claim.
@@ -350,7 +343,6 @@ pub struct ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     /// Digest binding every field above.
     pub evidence_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     /// Recompute every byte and fail closed on any forged readiness field.
     pub fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
@@ -386,7 +378,6 @@ impl ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
         Ok(())
     }
 }
-
 /// Return source-derived bounded-verifier accounting without opening a release gate.
 pub fn zk_ams_mkhe_decryption_streaming_residency_evidence_v1()
 -> Result<ZkAmsMkheDecryptionStreamingResidencyEvidenceV1, ZkAmsMkheErrorV1> {
@@ -394,7 +385,6 @@ pub fn zk_ams_mkhe_decryption_streaming_residency_evidence_v1()
     evidence.validate()?;
     Ok(evidence)
 }
-
 fn derive_streaming_residency_evidence_v1()
 -> Result<ZkAmsMkheDecryptionStreamingResidencyEvidenceV1, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
@@ -954,7 +944,6 @@ fn derive_streaming_residency_evidence_v1()
     evidence.evidence_digest = streaming_residency_evidence_digest(evidence);
     Ok(evidence)
 }
-
 fn staged_signed_wide_candidate_bytes_v1(
     bound: &super::WideMagnitudeV1,
 ) -> Result<u64, ZkAmsMkheErrorV1> {
@@ -964,7 +953,6 @@ fn staged_signed_wide_candidate_bytes_v1(
     u64::try_from(twice_bound.bit_len().div_ceil(8))
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn streaming_residency_evidence_digest(
     evidence: ZkAmsMkheDecryptionStreamingResidencyEvidenceV1,
 ) -> [u8; 32] {
@@ -1080,55 +1068,47 @@ fn streaming_residency_evidence_digest(
     hash.update(&[evidence.release_certified.into()]);
     hash.finalize()
 }
-
 /// Exact provider session and immutable snapshot used by one full-roster read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheDecryptionStreamingSnapshotV1 {
     provider_identity: [u8; 32],
     snapshot_identity: [u8; 32],
 }
-
 impl ZkAmsMkheDecryptionStreamingSnapshotV1 {
     /// Identity of the exact open provider session.
     #[must_use]
     pub const fn provider_identity(self) -> [u8; 32] {
         self.provider_identity
     }
-
     /// Identity of the immutable object revision used for every pass.
     #[must_use]
     pub const fn snapshot_identity(self) -> [u8; 32] {
         self.snapshot_identity
     }
 }
-
 /// Decryption result accompanied by its exact immutable provider snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheStreamingFullRosterDecryptionResultV1 {
     result: ZkAmsMkheFullRosterDecryptionResultV1,
     snapshot: ZkAmsMkheDecryptionStreamingSnapshotV1,
 }
-
 impl ZkAmsMkheStreamingFullRosterDecryptionResultV1 {
     /// Verified plaintext, residual bound, and ordered-share-set digest.
     #[must_use]
     pub const fn result(&self) -> &ZkAmsMkheFullRosterDecryptionResultV1 {
         &self.result
     }
-
     /// Exact immutable provider revision shared by every object pass.
     #[must_use]
     pub const fn snapshot(&self) -> ZkAmsMkheDecryptionStreamingSnapshotV1 {
         self.snapshot
     }
-
     /// Consume the snapshot wrapper and return the existing result type.
     #[must_use]
     pub fn into_result(self) -> ZkAmsMkheFullRosterDecryptionResultV1 {
         self.result
     }
 }
-
 fn stream_ciphertext_component_into_hash_v1<P>(
     ciphertext: &ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_>,
     constant: bool,
@@ -1177,7 +1157,6 @@ where
     }
     Ok(())
 }
-
 fn hash_streaming_ciphertext_components_v1<P>(
     ciphertext: &ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_>,
     profile: &BgvProfile,
@@ -1211,7 +1190,6 @@ where
         scratch.as_mut_array(),
     )
 }
-
 /// Key-lineage axes checked only at live manifest admission. They deliberately
 /// do not enter the legacy statement/ZDSM transcript, whose canonical bytes
 /// remain unchanged.
@@ -1221,7 +1199,6 @@ struct DecryptionCiphertextKeyLineageV1 {
     key_transcript_digest: [u8; 32],
     collective_key_digest: [u8; 32],
 }
-
 impl DecryptionCiphertextKeyLineageV1 {
     fn validate_expected_v1(self, expected: Self) -> Result<(), ZkAmsMkheErrorV1> {
         if self.key_material_digest == [0; 32]
@@ -1237,7 +1214,6 @@ impl DecryptionCiphertextKeyLineageV1 {
         Ok(())
     }
 }
-
 fn validate_streaming_ciphertext_live_v1<P>(
     roster: &ZkAmsMkheGovernedRosterWireV1,
     ciphertext: &ZkAmsMkheStreamingCollectiveCiphertextV1,
@@ -1317,7 +1293,6 @@ where
     )?;
     Ok((axes, snapshot.finish()?))
 }
-
 /// Compact, context-minted release statement for the bounded verifier.
 ///
 /// The value retains only roster, ciphertext, compact bindings, and content
@@ -1338,7 +1313,6 @@ pub struct ZkAmsMkheStreamingDecryptionStatementV1<'a> {
     party_b_pointers: [ZkAmsMkheDirectObjectPointerV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     key_context_digest: [u8; 32],
 }
-
 impl fmt::Debug for ZkAmsMkheStreamingDecryptionStatementV1<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1356,7 +1330,6 @@ impl fmt::Debug for ZkAmsMkheStreamingDecryptionStatementV1<'_> {
             .finish_non_exhaustive()
     }
 }
-
 impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
     /// Mint a compact statement from the exact bounded CPK ceremony authority.
     ///
@@ -1436,38 +1409,32 @@ impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
         value.validate_compact()?;
         Ok(value)
     }
-
     /// Exact governed roster retained by the compact statement.
     #[must_use]
     pub const fn roster(&self) -> &'a ZkAmsMkheGovernedRosterWireV1 {
         self.roster
     }
-
     /// Exact direct-object ciphertext manifest retained by the compact statement.
     #[must_use]
     pub const fn ciphertext(&self) -> &'a ZkAmsMkheStreamingCollectiveCiphertextV1 {
         self.ciphertext
     }
-
     /// Native ciphertext digest bound into all eight signed manifests.
     #[must_use]
     pub const fn ciphertext_digest(&self) -> [u8; 32] {
         self.ciphertext_axes.ciphertext_digest()
     }
-
     /// Explicit release ciphertext-record identifier. It is not a plaintext
     /// packing chunk index and is bound separately from the sample index.
     #[must_use]
     pub const fn ciphertext_record_index(&self) -> u32 {
         self.ciphertext_axes.ciphertext_record_index()
     }
-
     /// Provider session and immutable snapshot authenticated at statement mint.
     #[must_use]
     pub const fn ciphertext_snapshot(&self) -> ZkAmsMkheDecryptionStreamingSnapshotV1 {
         self.ciphertext_snapshot
     }
-
     /// Mint the exact ordered move-only party-use set for bounded staged proving.
     ///
     /// No caller-supplied digest or pointer enters this operation. Each use is
@@ -1491,7 +1458,6 @@ impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
                 self.key_context_digest,
             )
     }
-
     fn consume_party_use_v1(
         &self,
         party_index: usize,
@@ -1521,7 +1487,6 @@ impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
         }
         Ok(binding)
     }
-
     fn validate_compact(&self) -> Result<(), ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
         let ciphertext = self.ciphertext.sealed_binding_v1()?;
@@ -1578,7 +1543,6 @@ impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
         }
         Ok(())
     }
-
     fn derive_common_a_limb(
         &self,
         profile: &BgvProfile,
@@ -1588,7 +1552,6 @@ impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
         derive_active_collective_public_a_limb_v1(profile, roster, cpk_transcript_digest, limb)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
-
     fn prepare_common_a_context(
         &self,
         profile: &BgvProfile,
@@ -1599,14 +1562,12 @@ impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
             .map_err(map_common_a_derivation_error_v1)
     }
 }
-
 fn map_common_a_derivation_error_v1(error: ZkAmsMkheCpkRelationErrorV1) -> ZkAmsMkheErrorV1 {
     match error {
         ZkAmsMkheCpkRelationErrorV1::ResourceCeiling => ZkAmsMkheErrorV1::ResourceCeilingExceeded,
         _ => ZkAmsMkheErrorV1::InvalidKeyMaterial,
     }
 }
-
 fn derive_prepared_common_a_limb_v1(
     context: &ZkAmsMkhePreparedCollectivePublicAContextV1,
     limb: usize,
@@ -1616,12 +1577,9 @@ fn derive_prepared_common_a_limb_v1(
         .derive_limb_budgeted_v1(limb, remaining_candidates)
         .map_err(map_common_a_derivation_error_v1)
 }
-
 const STAGED_DECRYPTION_RELATION_ADMISSION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.staged-decryption-relation-admission";
-
 struct StagedDecryptionRelationAdmissionSealV1;
-
 /// Move-only canonical staged output for one semantically verified party share.
 ///
 /// Both large components have been sealed, content-addressed, atomically
@@ -1639,7 +1597,6 @@ pub struct ZkAmsMkheStagedDecryptionShareV1 {
     snapshot: ZkAmsMkheDecryptionStreamingSnapshotV1,
     semantic_verification_digest: [u8; 32],
 }
-
 impl fmt::Debug for ZkAmsMkheStagedDecryptionShareV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1654,48 +1611,40 @@ impl fmt::Debug for ZkAmsMkheStagedDecryptionShareV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheStagedDecryptionShareV1 {
     /// Exact governed roster slot represented by the signed manifest.
     #[must_use]
     pub const fn party_index(&self) -> u8 {
         self.party_index
     }
-
     /// Exact canonical signed `ZDSM` bytes consumed by the streaming verifier.
     #[must_use]
     pub const fn manifest_bytes(&self) -> &[u8; ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1] {
         &self.manifest_bytes
     }
-
     /// Published, sealed, and independently reread share-polynomial receipt.
     #[must_use]
     pub const fn polynomial_publication(&self) -> &ZkAmsMkheDirectObjectPublicationReceiptV1 {
         &self.polynomial_publication
     }
-
     /// Published, sealed, and independently reread proof-object receipt.
     #[must_use]
     pub const fn proof_publication(&self) -> &ZkAmsMkheDirectObjectPublicationReceiptV1 {
         &self.proof_publication
     }
-
     /// Exact immutable provider revision used by every proving and replay read.
     #[must_use]
     pub const fn snapshot(&self) -> ZkAmsMkheDecryptionStreamingSnapshotV1 {
         self.snapshot
     }
-
     /// Digest minted only after exact semantic response-equation replay.
     #[must_use]
     pub const fn semantic_verification_digest(&self) -> [u8; 32] {
         self.semantic_verification_digest
     }
 }
-
 /// Secret-derived limb storage erased on success, error, and unwind.
 struct ZeroizingStagedU64VectorV1(Vec<u64>);
-
 impl ZeroizingStagedU64VectorV1 {
     fn new_zeroed(length: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
@@ -1708,7 +1657,6 @@ impl ZeroizingStagedU64VectorV1 {
         }
         Ok(Self(values))
     }
-
     fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
         values
@@ -1719,20 +1667,16 @@ impl ZeroizingStagedU64VectorV1 {
         }
         Ok(Self(values))
     }
-
     fn push(&mut self, value: u64) {
         self.0.push(value);
     }
-
     fn as_slice(&self) -> &[u64] {
         &self.0
     }
-
     fn as_mut_slice(&mut self) -> &mut [u64] {
         &mut self.0
     }
 }
-
 impl Drop for ZeroizingStagedU64VectorV1 {
     fn drop(&mut self) {
         super::clear_secret_u64_slice_v1(&mut self.0);
@@ -1740,14 +1684,12 @@ impl Drop for ZeroizingStagedU64VectorV1 {
         super::record_decryption_transient_zeroized_drop_v1(self.0.iter().all(|value| *value == 0));
     }
 }
-
 /// Full decrypted aggregate storage erased on every verifier exit path.
 ///
 /// This retains exactly one `P`-byte RNS owner. It deliberately exposes only
 /// borrowed coefficient slices and a borrowed decoder view, so an ordinary
 /// full-polynomial owner cannot escape before `Drop` clears every residue.
 struct ZeroizingAggregateRnsV1(RnsPolynomial);
-
 impl ZeroizingAggregateRnsV1 {
     fn zero_exact_v1(profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         profile.validate()?;
@@ -1765,16 +1707,13 @@ impl ZeroizingAggregateRnsV1 {
         }
         Ok(Self(RnsPolynomial { coefficients }))
     }
-
     fn coefficients_mut(&mut self) -> &mut [u64] {
         &mut self.0.coefficients
     }
-
     fn as_rns(&self) -> &RnsPolynomial {
         &self.0
     }
 }
-
 impl Drop for ZeroizingAggregateRnsV1 {
     fn drop(&mut self) {
         super::clear_secret_u64_slice_v1(&mut self.0.coefficients);
@@ -1784,24 +1723,19 @@ impl Drop for ZeroizingAggregateRnsV1 {
         );
     }
 }
-
 /// Fixed staging/encoding scratch erased on every exit path.
 struct ZeroizingStagedBytesV1<const N: usize>([u8; N]);
-
 impl<const N: usize> ZeroizingStagedBytesV1<N> {
     const fn zeroed() -> Self {
         Self([0; N])
     }
-
     fn as_mut_slice(&mut self) -> &mut [u8] {
         &mut self.0
     }
-
     fn as_mut_array(&mut self) -> &mut [u8; N] {
         &mut self.0
     }
 }
-
 impl<const N: usize> Drop for ZeroizingStagedBytesV1<N> {
     fn drop(&mut self) {
         super::clear_secret_bytes_v1(&mut self.0);
@@ -1809,12 +1743,10 @@ impl<const N: usize> Drop for ZeroizingStagedBytesV1<N> {
         super::record_decryption_transient_zeroized_drop_v1(self.0.iter().all(|value| *value == 0));
     }
 }
-
 /// Fallibly allocated exact-length owner for a complete authenticated proof.
 /// It is move-only and erases its initialized capacity on success, error, and
 /// unwind before the allocation is released.
 struct ZeroizingStagedByteVectorV1(Vec<u8>);
-
 impl ZeroizingStagedByteVectorV1 {
     fn new_zeroed_exact(length: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut bytes = Vec::new();
@@ -1827,16 +1759,13 @@ impl ZeroizingStagedByteVectorV1 {
         }
         Ok(Self(bytes))
     }
-
     fn as_slice(&self) -> &[u8] {
         &self.0
     }
-
     fn as_mut_slice(&mut self) -> &mut [u8] {
         &mut self.0
     }
 }
-
 impl Drop for ZeroizingStagedByteVectorV1 {
     fn drop(&mut self) {
         super::clear_secret_bytes_v1(self.0.as_mut_slice());
@@ -1844,7 +1773,6 @@ impl Drop for ZeroizingStagedByteVectorV1 {
         super::record_decryption_transient_zeroized_drop_v1(self.0.iter().all(|value| *value == 0));
     }
 }
-
 fn bit_reverse_permute_staged_v1(values: &mut [u64]) {
     let mut target = 0_usize;
     for index in 1..values.len() {
@@ -1859,7 +1787,6 @@ fn bit_reverse_permute_staged_v1(values: &mut [u64]) {
         }
     }
 }
-
 fn cyclic_ntt_staged_v1(values: &mut [u64], root: u64, modulus: u64) {
     bit_reverse_permute_staged_v1(values);
     let mut width = 2;
@@ -1878,7 +1805,6 @@ fn cyclic_ntt_staged_v1(values: &mut [u64], root: u64, modulus: u64) {
         width <<= 1;
     }
 }
-
 fn inverse_cyclic_ntt_staged_v1(
     values: &mut [u64],
     root: u64,
@@ -1893,7 +1819,6 @@ fn inverse_cyclic_ntt_staged_v1(
     }
     Ok(())
 }
-
 fn negacyclic_multiply_staged_v1(
     left: &[u64],
     right: &[u64],
@@ -1934,7 +1859,6 @@ fn negacyclic_multiply_staged_v1(
     }
     Ok(left_twisted)
 }
-
 fn sparse_challenge_terms_v1(
     challenge: &[i8],
 ) -> Result<Vec<SparseChallengeTermV1>, ZkAmsMkheErrorV1> {
@@ -1956,7 +1880,6 @@ fn sparse_challenge_terms_v1(
     }
     Ok(terms)
 }
-
 fn sparse_fold_small_coefficient_v1(
     terms: &[SparseChallengeTermV1],
     witness: &[i64],
@@ -1985,7 +1908,6 @@ fn sparse_fold_small_coefficient_v1(
     }
     Ok(output)
 }
-
 fn sparse_fold_wide_coefficient_v1(
     terms: &[SparseChallengeTermV1],
     witness: &[SignedWideV1],
@@ -2016,7 +1938,6 @@ fn sparse_fold_wide_coefficient_v1(
     }
     Ok(output)
 }
-
 fn encode_signed_wide_fixed_into_v1(
     value: &SignedWideV1,
     output: &mut [u8],
@@ -2042,7 +1963,6 @@ fn encode_signed_wide_fixed_into_v1(
     }
     Ok(())
 }
-
 fn write_residue_limb_staged_v1<P>(
     transaction: &mut ZkAmsMkheDirectObjectPublicationTransactionV1<'_, P>,
     residues: &[u64],
@@ -2070,7 +1990,6 @@ where
     }
     Ok(())
 }
-
 fn publish_staged_share_polynomial_v1<P>(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
     profile: &BgvProfile,
@@ -2145,7 +2064,6 @@ where
     }
     transaction.finish()
 }
-
 fn hash_staged_public_key_mask_commitment_v1(
     common_a_context: &ZkAmsMkhePreparedCollectivePublicAContextV1,
     profile: &BgvProfile,
@@ -2189,7 +2107,6 @@ fn hash_staged_public_key_mask_commitment_v1(
     }
     Ok(())
 }
-
 fn hash_staged_share_mask_commitment_v1<P>(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
     profile: &BgvProfile,
@@ -2242,7 +2159,6 @@ where
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_staged_decryption_transcript_prefix_v1<P>(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
@@ -2295,7 +2211,6 @@ where
     snapshot.observe(&share_receipt)?;
     Ok(transcript)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn derive_staged_decryption_challenge_seed_v1<P>(
     prefix: &Keccak256,
@@ -2332,7 +2247,6 @@ where
     )?;
     Ok(transcript.finalize())
 }
-
 fn staged_small_response_v1(
     mask: i64,
     terms: &[SparseChallengeTermV1],
@@ -2342,7 +2256,6 @@ fn staged_small_response_v1(
     mask.checked_add(sparse_fold_small_coefficient_v1(terms, witness, index)?)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn staged_wide_response_v1(
     mask: &SignedWideV1,
     terms: &[SparseChallengeTermV1],
@@ -2352,7 +2265,6 @@ fn staged_wide_response_v1(
     mask.checked_add(&sparse_fold_wide_coefficient_v1(terms, witness, index)?)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn staged_responses_fit_v1(
     terms: &[SparseChallengeTermV1],
@@ -2389,7 +2301,6 @@ fn staged_responses_fit_v1(
     }
     Ok(true)
 }
-
 fn staged_proof_header_v1(
     degree: usize,
     wide_response_bytes: usize,
@@ -2424,7 +2335,6 @@ fn staged_proof_header_v1(
     }
     Ok(header)
 }
-
 fn write_staged_small_response_section_v1<P>(
     transaction: &mut ZkAmsMkheDirectObjectPublicationTransactionV1<'_, P>,
     terms: &[SparseChallengeTermV1],
@@ -2462,7 +2372,6 @@ where
     }
     Ok(())
 }
-
 fn write_staged_wide_response_section_v1<P>(
     transaction: &mut ZkAmsMkheDirectObjectPublicationTransactionV1<'_, P>,
     terms: &[SparseChallengeTermV1],
@@ -2509,7 +2418,6 @@ where
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn publish_staged_decryption_proof_v1<P>(
     profile: &BgvProfile,
@@ -2568,7 +2476,6 @@ where
     }
     transaction.finish()
 }
-
 fn direct_to_decryption_transport_pointer_v1(
     pointer: ZkAmsMkheDirectObjectPointerV1,
     expected_direct_kind: ZkAmsMkheDirectObjectKindV1,
@@ -2585,7 +2492,6 @@ fn direct_to_decryption_transport_pointer_v1(
     value.validate_shape()?;
     Ok(value)
 }
-
 /// Replay one published party relation through the same zero-copy readers,
 /// transcript frames, and response equations used by the public consumer. The
 /// public entry point requires exactly eight authenticated manifests before it
@@ -2646,7 +2552,6 @@ where
     }
     Ok(expected)
 }
-
 fn staged_semantic_verification_digest_v1(
     binding: &DecryptionBindingV1,
     polynomial_publication: &ZkAmsMkheDirectObjectPublicationReceiptV1,
@@ -2683,7 +2588,6 @@ fn staged_semantic_verification_digest_v1(
     }
     Ok(digest)
 }
-
 fn validate_staged_publication_pair_v1(
     polynomial_publication: &ZkAmsMkheDirectObjectPublicationReceiptV1,
     proof_publication: &ZkAmsMkheDirectObjectPublicationReceiptV1,
@@ -2706,12 +2610,10 @@ fn validate_staged_publication_pair_v1(
     }
     Ok(())
 }
-
 struct StagedProverBudgetedRandomSourceV1<'a, R: ?Sized> {
     source: &'a mut R,
     remaining_bytes: u64,
 }
-
 impl<'a, R: ?Sized> StagedProverBudgetedRandomSourceV1<'a, R> {
     fn new(source: &'a mut R, maximum_bytes: u64) -> Result<Self, ZkAmsMkheErrorV1> {
         if maximum_bytes == 0 {
@@ -2723,7 +2625,6 @@ impl<'a, R: ?Sized> StagedProverBudgetedRandomSourceV1<'a, R> {
         })
     }
 }
-
 impl<R> MaskedRelaxedRandomSourceV1 for StagedProverBudgetedRandomSourceV1<'_, R>
 where
     R: MaskedRelaxedRandomSourceV1 + ?Sized,
@@ -2738,7 +2639,6 @@ where
         self.source.fill_bytes(destination)
     }
 }
-
 fn sample_staged_proof_masks_v1<R>(
     degree: usize,
     secret_mask_bound: i64,
@@ -2774,7 +2674,6 @@ where
     }
     Ok((secret_mask, error_mask, smudge_mask))
 }
-
 /// Create, publish, semantically replay, and authenticate one bounded release share.
 ///
 /// The move-only persistent use is consumed before randomness or staging. The
@@ -2873,7 +2772,6 @@ where
     )?;
     let mut remaining_common_a_candidates =
         streaming_resource.staged_prover_common_a_candidate_budget;
-
     // Match the native prover's two independent health checks and random draw
     // order exactly: health, smudge witness, health, then each mask attempt.
     validate_wide_relation_random_health(&mut bounded_random)?;
@@ -2894,7 +2792,6 @@ where
     )?;
     let share_pointer = polynomial_publication.pointer();
     snapshot.observe(polynomial_publication.post_publish_read_receipt())?;
-
     validate_wide_relation_random_health(&mut bounded_random)?;
     let transcript_prefix = build_staged_decryption_transcript_prefix_v1(
         statement,
@@ -2982,7 +2879,6 @@ where
     snapshot.observe(proof_publication.post_publish_read_receipt())?;
     validate_staged_publication_pair_v1(&polynomial_publication, &proof_publication)?;
     let proof_pointer = proof_publication.pointer();
-
     // No private prover vector survives into the public semantic replay.
     drop(secret_mask);
     drop(error_mask);
@@ -2990,7 +2886,6 @@ where
     drop(smudge);
     drop(challenge_terms);
     drop(challenge);
-
     let replayed_seed = verify_published_staged_relation_v1(
         &transcript_prefix,
         statement,
@@ -3007,7 +2902,6 @@ where
         return Err(ZkAmsMkheErrorV1::InvalidShareProof);
     }
     let snapshot = snapshot.finish()?;
-
     let polynomial = direct_to_decryption_transport_pointer_v1(
         share_pointer,
         ZkAmsMkheDirectObjectKindV1::DecryptionSharePolynomial,
@@ -3060,7 +2954,6 @@ where
         semantic_verification_digest,
     })
 }
-
 /// Zero-copy canonical view of one exact flat release `ZADP` proof.
 #[derive(Clone, Copy)]
 pub struct ZkAmsMkheDecryptionProofViewV1<'a> {
@@ -3071,7 +2964,6 @@ pub struct ZkAmsMkheDecryptionProofViewV1<'a> {
     smudge_offset: usize,
     wide_response_bytes: usize,
 }
-
 impl fmt::Debug for ZkAmsMkheDecryptionProofViewV1<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3081,7 +2973,6 @@ impl fmt::Debug for ZkAmsMkheDecryptionProofViewV1<'_> {
             .finish_non_exhaustive()
     }
 }
-
 impl<'a> ZkAmsMkheDecryptionProofViewV1<'a> {
     /// Preflight exact release counts, length, canonical signed values, and bounds.
     pub fn decode_release_exact(bytes: &'a [u8]) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -3164,13 +3055,11 @@ impl<'a> ZkAmsMkheDecryptionProofViewV1<'a> {
             wide_response_bytes,
         })
     }
-
     /// Fiat--Shamir seed encoded by the proof.
     #[must_use]
     pub const fn challenge_seed(self) -> [u8; 32] {
         self.challenge_seed
     }
-
     fn secret_limb(&self, modulus: u64) -> Result<ZeroizingStagedU64VectorV1, ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
         let mut output = ZeroizingStagedU64VectorV1::new_zeroed(profile.ring_degree)?;
@@ -3180,14 +3069,12 @@ impl<'a> ZkAmsMkheDecryptionProofViewV1<'a> {
         }
         Ok(output)
     }
-
     fn error_mod(&self, index: usize, modulus: u64) -> Result<u64, ZkAmsMkheErrorV1> {
         Ok(signed_mod(
             read_i64_at(self.bytes, self.error_offset, index)?,
             modulus,
         ))
     }
-
     fn smudge_mod(&self, index: usize, modulus: u64) -> Result<u64, ZkAmsMkheErrorV1> {
         Ok(read_wide_at(
             self.bytes,
@@ -3198,7 +3085,6 @@ impl<'a> ZkAmsMkheDecryptionProofViewV1<'a> {
         .mod_u64(modulus))
     }
 }
-
 fn read_i64_at(bytes: &[u8], vector_offset: usize, index: usize) -> Result<i64, ZkAmsMkheErrorV1> {
     let start = vector_offset
         .checked_add(
@@ -3218,7 +3104,6 @@ fn read_i64_at(bytes: &[u8], vector_offset: usize, index: usize) -> Result<i64, 
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
     ))
 }
-
 fn read_wide_at(
     bytes: &[u8],
     vector_offset: usize,
@@ -3241,16 +3126,13 @@ fn read_wide_at(
             .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?,
     )
 }
-
 struct StreamingSnapshotAccumulatorV1 {
     identity: Option<ZkAmsMkheDecryptionStreamingSnapshotV1>,
 }
-
 impl StreamingSnapshotAccumulatorV1 {
     const fn new() -> Self {
         Self { identity: None }
     }
-
     fn with_expected(
         expected: ZkAmsMkheDecryptionStreamingSnapshotV1,
     ) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -3261,7 +3143,6 @@ impl StreamingSnapshotAccumulatorV1 {
             identity: Some(expected),
         })
     }
-
     fn observe(
         &mut self,
         receipt: &ZkAmsMkheDirectObjectReadReceiptV1,
@@ -3280,19 +3161,16 @@ impl StreamingSnapshotAccumulatorV1 {
         self.identity = Some(observed);
         Ok(())
     }
-
     fn finish(self) -> Result<ZkAmsMkheDecryptionStreamingSnapshotV1, ZkAmsMkheErrorV1> {
         self.identity.ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
 }
-
 struct StreamingRnsObjectReaderV1<'a, P: ?Sized> {
     provider: &'a mut P,
     transaction: ZkAmsMkheDirectObjectReadTransactionV1,
     next_limb: usize,
     coefficient_count: usize,
 }
-
 impl<'a, P> StreamingRnsObjectReaderV1<'a, P>
 where
     P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
@@ -3331,7 +3209,6 @@ where
         }
         Ok(reader)
     }
-
     fn read_limb(
         &mut self,
         profile: &BgvProfile,
@@ -3374,7 +3251,6 @@ where
         self.next_limb += 1;
         Ok(values)
     }
-
     fn finish(
         self,
         profile: &BgvProfile,
@@ -3392,7 +3268,6 @@ where
         self.transaction.finish(self.provider)
     }
 }
-
 fn read_complete_object_v1<P>(
     kind: ZkAmsMkheDirectObjectKindV1,
     pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -3426,7 +3301,6 @@ where
     let receipt = transaction.finish(provider)?;
     Ok((bytes, receipt))
 }
-
 fn direct_pointer_from_manifest(
     pointer: ZkAmsMkheDecryptionTransportPointerV1,
 ) -> Result<ZkAmsMkheDirectObjectPointerV1, ZkAmsMkheErrorV1> {
@@ -3440,7 +3314,6 @@ fn direct_pointer_from_manifest(
     };
     ZkAmsMkheDirectObjectPointerV1::new(kind, pointer.payload_bytes(), pointer.payload_blake3())
 }
-
 fn decode_streaming_manifest_exact(
     bytes: &[u8],
 ) -> Result<ZkAmsMkheDecryptionTransportManifestV1, ZkAmsMkheErrorV1> {
@@ -3502,7 +3375,6 @@ fn decode_streaming_manifest_exact(
     manifest.validate_structural()?;
     Ok(manifest)
 }
-
 fn update_streamed_rns_header(
     hash: &mut Keccak256,
     profile: &BgvProfile,
@@ -3518,13 +3390,11 @@ fn update_streamed_rns_header(
     );
     Ok(())
 }
-
 fn update_residue_limb(hash: &mut Keccak256, residues: &[u64]) {
     for residue in residues {
         hash.update(&residue.to_be_bytes());
     }
 }
-
 fn hash_streamed_polynomial_v1<P>(
     kind: ZkAmsMkheDirectObjectKindV1,
     pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -3543,7 +3413,6 @@ where
     }
     reader.finish(profile)
 }
-
 fn subtract_sparse_negacyclic_product_in_place(
     accumulator: &mut [u64],
     challenge: &[i8],
@@ -3583,7 +3452,6 @@ fn subtract_sparse_negacyclic_product_in_place(
     }
     Ok(())
 }
-
 fn add_share_limb_in_place(
     aggregate: &mut ZeroizingAggregateRnsV1,
     profile: &BgvProfile,
@@ -3612,7 +3480,6 @@ fn add_share_limb_in_place(
     }
     Ok(())
 }
-
 fn reconstruct_public_key_commitment_v1<P>(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
     profile: &BgvProfile,
@@ -3681,7 +3548,6 @@ where
     }
     party_b.finish(profile)
 }
-
 fn reconstruct_share_commitment_and_aggregate_v1<P>(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
     profile: &BgvProfile,
@@ -3750,7 +3616,6 @@ where
     }
     share_reader.finish(profile)
 }
-
 /// Verify one native share relation without materializing native `a`/`b_i`
 /// polynomials or full RNS response vectors.
 ///
@@ -3798,7 +3663,6 @@ pub(super) fn verify_native_relation_limb_streaming(
     super::update_rns_hash(&mut transcript, profile, ciphertext.constant())?;
     super::update_rns_hash(&mut transcript, profile, ciphertext.linear())?;
     super::update_rns_hash(&mut transcript, profile, share)?;
-
     transcript.update(
         &u32::try_from(coefficient_count)
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
@@ -3853,7 +3717,6 @@ pub(super) fn verify_native_relation_limb_streaming(
             transcript.update(&value.to_be_bytes());
         }
     }
-
     transcript.update(
         &u32::try_from(coefficient_count)
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
@@ -3914,7 +3777,6 @@ pub(super) fn verify_native_relation_limb_streaming(
     }
     Ok(())
 }
-
 fn preflight_manifests(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
     manifest_bytes: &[&[u8]],
@@ -3989,7 +3851,6 @@ fn preflight_manifests(
         )
     })
 }
-
 fn validate_streaming_manifest_slot_v1(
     manifest: &ZkAmsMkheDecryptionTransportManifestV1,
     expected_index: usize,
@@ -4004,7 +3865,6 @@ fn validate_streaming_manifest_slot_v1(
     }
     Ok(())
 }
-
 /// Authenticate, verify, and combine the exact ordered eight split shares with
 /// at most three complete RNS polynomial payloads resident at once.
 ///
@@ -4086,7 +3946,6 @@ where
     set_hash.update(DECRYPTION_SET_DOMAIN_V1);
     set_hash.update(&statement.roster.roster_digest());
     set_hash.update(&statement.ciphertext_digest());
-
     for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
         let proof_pointer = direct_pointer_from_manifest(manifests[party_index].proof())
             .map_err(|_| binding_abort(party_index))?;
@@ -4133,7 +3992,6 @@ where
             &statement.party_bindings[party_index],
         )
         .map_err(|_| binding_abort(party_index))?;
-
         update_streamed_rns_header(&mut transcript, &profile)
             .map_err(|_| binding_abort(party_index))?;
         for limb in 0..profile.moduli.len() {
@@ -4254,7 +4112,6 @@ where
         snapshot: snapshot.finish().map_err(|_| binding_abort(0))?,
     })
 }
-
 #[cfg(test)]
 #[path = "decryption_streaming_tests.rs"]
 mod tests;

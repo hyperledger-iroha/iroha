@@ -10,16 +10,12 @@
 //!
 //! The transcript challenges must be sampled only after both endpoint and
 //! address-sorted traces have been committed.
-
 use thiserror::Error;
-
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
-
 /// Manifest descriptor for cross-segment byte-channel binding.
 pub(crate) const ZK_X509_IO_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-cross-segment-io-v1:fixed-sequential-channel-ids:fixed-producer-and-consumer-endpoints:byte-offsets-contiguous:one-write-per-channel-byte:all-reads-equal-write:public-input-reads-verifier-fixed:four-independent-lane-and-coordinate-labelled-transcript-challenged-channel-offset-value-write-grand-products:max-accesses=byte-memory-segment-capacity:first-release";
-
 /// Exact fixed-capacity byte-memory registration in the canonical aggregate.
 pub(crate) const ZK_X509_IO_FIXED_CAPACITY_ROWS_V1: usize = 1 << 18;
 pub(crate) const IO_PERMUTATION_LANES_V1: usize = 4;
@@ -53,7 +49,6 @@ pub(crate) const IO_PERMUTATION_CHALLENGE_LABELS_V1: [[&[u8]; 5]; IO_PERMUTATION
         b"zk-x509-io-copy-lane3-write-v1",
     ],
 ];
-
 /// Segment role participating in one fixed byte channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ZkX509IoSegmentRoleV1 {
@@ -73,7 +68,6 @@ pub(crate) enum ZkX509IoSegmentRoleV1 {
     /// Verifier-fixed public statement input.
     PublicInput,
 }
-
 /// One fixed producer or consumer endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ZkX509IoEndpointV1 {
@@ -82,7 +76,6 @@ pub(crate) struct ZkX509IoEndpointV1 {
     /// Canonical instance index within that family.
     pub(crate) instance: u16,
 }
-
 /// Fixed topology and optional verifier value for one byte channel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509IoChannelDeclarationV1 {
@@ -97,7 +90,6 @@ pub(crate) struct ZkX509IoChannelDeclarationV1 {
     /// Verifier-fixed bytes when a public-input consumer is present.
     pub(crate) public_value: Option<Vec<u8>>,
 }
-
 /// Endpoint values used to generate one channel witness.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,7 +101,6 @@ pub(crate) struct ZkX509IoChannelWitnessV1 {
     /// Consumer bytes in declaration order.
     pub(crate) consumer_values: Vec<Vec<u8>>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct IoAccessV1 {
@@ -119,7 +110,6 @@ pub(crate) struct IoAccessV1 {
     pub(crate) is_write: F,
     pub(crate) endpoint: ZkX509IoEndpointV1,
 }
-
 /// One independent tuple-compression lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509IoLaneChallengesV1 {
@@ -129,13 +119,11 @@ pub(crate) struct ZkX509IoLaneChallengesV1 {
     pub(crate) value: F,
     pub(crate) is_write: F,
 }
-
 /// Four independent cross-segment I/O permutation lanes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509IoChallengesV1 {
     pub(crate) lanes: [ZkX509IoLaneChallengesV1; IO_PERMUTATION_LANES_V1],
 }
-
 impl ZkX509IoChallengesV1 {
     /// Reject zero, non-canonical, or duplicate I/O challenge lanes.
     pub(crate) fn validate(self) -> Result<(), ZkX509IoAirErrorV1> {
@@ -165,7 +153,6 @@ impl ZkX509IoChallengesV1 {
         Ok(())
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct IoPermutationRowV1 {
@@ -176,7 +163,6 @@ pub(crate) struct IoPermutationRowV1 {
     pub(crate) execution_product_after: [F; IO_PERMUTATION_LANES_V1],
     pub(crate) sorted_product_after: [F; IO_PERMUTATION_LANES_V1],
 }
-
 /// Main byte-channel tables and challenge-dependent auxiliary products.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,7 +172,6 @@ pub(crate) struct ZkX509IoTraceV1 {
     pub(crate) sorted: Vec<IoAccessV1>,
     pub(crate) permutation_rows: Vec<IoPermutationRowV1>,
 }
-
 /// Cross-segment I/O construction or constraint failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509IoAirErrorV1 {
@@ -216,7 +201,6 @@ pub(crate) enum ZkX509IoAirErrorV1 {
     #[error("zk-X509 cross-segment I/O resource bound is exceeded")]
     Resource,
 }
-
 /// Derive I/O-copy challenges after committing endpoint and sorted traces.
 pub(crate) fn derive_zk_x509_io_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -238,7 +222,6 @@ pub(crate) fn derive_zk_x509_io_challenges_v1(
         }),
     })
 }
-
 /// Construct and validate the complete cross-segment byte-copy trace.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_io_trace_v1(
@@ -257,7 +240,6 @@ pub(crate) fn build_zk_x509_io_trace_v1(
     trace.validate(challenges)?;
     Ok(trace)
 }
-
 /// Construct the challenge-independent endpoint and address-sorted tables.
 ///
 /// A STARK prover commits these tables before deriving the permutation
@@ -282,7 +264,6 @@ pub(crate) fn build_zk_x509_io_base_tables_v1(
     if witnesses.len() != declarations.len() {
         return Err(ZkX509IoAirErrorV1::Topology);
     }
-
     let capacity = byte_memory_capacity_v1()?;
     let expected_rows = declarations
         .iter()
@@ -324,7 +305,6 @@ pub(crate) fn build_zk_x509_io_base_tables_v1(
     validate_sorted_v1(&declarations, &sorted)?;
     Ok((declarations, execution, sorted))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509IoTraceV1 {
     /// Number of globally bound endpoint byte accesses.
@@ -332,7 +312,6 @@ impl ZkX509IoTraceV1 {
     pub(crate) const fn rows(&self) -> usize {
         self.execution.len()
     }
-
     /// Validate topology, public values, sorted memory, and all product lanes.
     pub(crate) fn validate(
         &self,
@@ -349,7 +328,6 @@ impl ZkX509IoTraceV1 {
             challenges,
         )
     }
-
     /// Bind one endpoint's exact bytes to another segment's constrained cells.
     #[cfg(test)]
     pub(crate) fn validate_endpoint_bytes(
@@ -377,7 +355,6 @@ impl ZkX509IoTraceV1 {
         }
         Ok(())
     }
-
     /// Bind all channel identifiers, lengths, and endpoint roles to the
     /// verifier-compiled topology rather than prover-selected metadata.
     #[cfg(test)]
@@ -391,7 +368,6 @@ impl ZkX509IoTraceV1 {
         }
         Ok(())
     }
-
     /// Bind one public channel to verifier-supplied statement bytes.
     #[cfg(test)]
     pub(crate) fn validate_public_channel(
@@ -417,7 +393,6 @@ impl ZkX509IoTraceV1 {
             .map_err(|_| ZkX509IoAirErrorV1::PublicInput)
     }
 }
-
 pub(crate) fn validate_declarations_v1(
     declarations: &[ZkX509IoChannelDeclarationV1],
 ) -> Result<(), ZkX509IoAirErrorV1> {
@@ -458,7 +433,6 @@ pub(crate) fn validate_declarations_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_channel_execution_v1(
     execution: &mut Vec<IoAccessV1>,
@@ -512,7 +486,6 @@ fn append_channel_execution_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn io_access_v1(
     channel: u32,
@@ -529,7 +502,6 @@ fn io_access_v1(
         endpoint,
     })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_execution_topology_v1(
     declarations: &[ZkX509IoChannelDeclarationV1],
@@ -575,7 +547,6 @@ fn validate_execution_topology_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_sorted_v1(
     declarations: &[ZkX509IoChannelDeclarationV1],
@@ -625,7 +596,6 @@ fn validate_sorted_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_sorted_access_range_v1(
     access: IoAccessV1,
@@ -643,7 +613,6 @@ fn validate_sorted_access_range_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_permutation_rows_v1(
     execution: &[IoAccessV1],
@@ -678,7 +647,6 @@ fn build_permutation_rows_v1(
     }
     Ok(rows)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_permutation_rows_v1(
     execution: &[IoAccessV1],
@@ -718,7 +686,6 @@ fn validate_permutation_rows_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn compress_access_v1(access: IoAccessV1, challenge: ZkX509IoLaneChallengesV1) -> F {
     challenge
@@ -728,19 +695,15 @@ fn compress_access_v1(access: IoAccessV1, challenge: ZkX509IoLaneChallengesV1) -
         .add(challenge.value.mul(access.value))
         .add(challenge.is_write.mul(access.is_write))
 }
-
 pub(crate) fn byte_memory_capacity_v1() -> Result<usize, ZkX509IoAirErrorV1> {
     Ok(ZK_X509_IO_FIXED_CAPACITY_ROWS_V1)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn endpoint(role: ZkX509IoSegmentRoleV1, instance: u16) -> ZkX509IoEndpointV1 {
         ZkX509IoEndpointV1 { role, instance }
     }
-
     fn challenges() -> ZkX509IoChallengesV1 {
         ZkX509IoChallengesV1 {
             lanes: [
@@ -775,7 +738,6 @@ mod tests {
             ],
         }
     }
-
     fn witness(
         channel: u32,
         producer: ZkX509IoEndpointV1,
@@ -795,7 +757,6 @@ mod tests {
             consumer_values: vec![value.to_vec(); consumers.len()],
         }
     }
-
     fn valid_witnesses() -> Vec<ZkX509IoChannelWitnessV1> {
         vec![
             witness(
@@ -821,7 +782,6 @@ mod tests {
             ),
         ]
     }
-
     #[test]
     fn der_sha_crl_commitment_and_public_bytes_are_globally_bound() {
         let witnesses = valid_witnesses();
@@ -858,7 +818,6 @@ mod tests {
             trace.validate_public_channel(2, &[0x43; 32]),
             Err(ZkX509IoAirErrorV1::PublicInput)
         );
-
         let mut wrong_topology = declarations;
         wrong_topology[1].producer.instance += 1;
         assert_eq!(
@@ -866,25 +825,21 @@ mod tests {
             Err(ZkX509IoAirErrorV1::Topology)
         );
     }
-
     #[test]
     fn topology_sorted_public_and_product_mutations_fail_closed() {
         let trace = build_zk_x509_io_trace_v1(&valid_witnesses(), challenges()).expect("I/O trace");
-
         let mut changed = trace.clone();
         changed.execution[0].endpoint = endpoint(ZkX509IoSegmentRoleV1::P256, 0);
         assert_eq!(
             changed.validate(challenges()),
             Err(ZkX509IoAirErrorV1::Topology)
         );
-
         let mut changed = trace.clone();
         changed.execution[0].value = changed.execution[0].value.add(F::ONE);
         assert_eq!(
             changed.validate(challenges()),
             Err(ZkX509IoAirErrorV1::Permutation)
         );
-
         let mut changed = trace.clone();
         let first_group_channel = changed.sorted[0].channel;
         let first_group_offset = changed.sorted[0].offset;
@@ -897,14 +852,12 @@ mod tests {
             changed.validate(challenges()),
             Err(ZkX509IoAirErrorV1::Permutation)
         );
-
         let mut changed = trace.clone();
         changed.sorted[1].is_write = F::ONE;
         assert_eq!(
             changed.validate(challenges()),
             Err(ZkX509IoAirErrorV1::SortedMemory)
         );
-
         let mut changed = trace.clone();
         let public = changed
             .execution
@@ -916,7 +869,6 @@ mod tests {
             changed.validate(challenges()),
             Err(ZkX509IoAirErrorV1::PublicInput)
         );
-
         let mut changed = trace;
         changed.permutation_rows[7].sorted_product_after[2] =
             changed.permutation_rows[7].sorted_product_after[2].add(F::ONE);
@@ -925,7 +877,6 @@ mod tests {
             Err(ZkX509IoAirErrorV1::Permutation)
         );
     }
-
     #[test]
     fn channel_declarations_and_resource_bound_are_strict() {
         let mut changed = valid_witnesses();
@@ -934,21 +885,18 @@ mod tests {
             build_zk_x509_io_trace_v1(&changed, challenges()),
             Err(ZkX509IoAirErrorV1::Topology)
         );
-
         let mut changed = valid_witnesses();
         changed[0].declaration.consumers[0] = changed[0].declaration.producer;
         assert_eq!(
             build_zk_x509_io_trace_v1(&changed, challenges()),
             Err(ZkX509IoAirErrorV1::Topology)
         );
-
         let mut changed = valid_witnesses();
         changed[2].declaration.public_value = None;
         assert_eq!(
             build_zk_x509_io_trace_v1(&changed, challenges()),
             Err(ZkX509IoAirErrorV1::Topology)
         );
-
         // The closed X5S1 profile admits four top-level DER documents of at
         // most 4 KiB each. Keep that census distinct from this generic
         // byte-memory adapter's larger standalone capacity.
@@ -964,7 +912,6 @@ mod tests {
             build_zk_x509_io_trace_v1(&witnesses, challenges()).expect("bounded document I/O");
         assert_eq!(trace.rows(), 32_768);
         assert!(trace.rows() <= byte_memory_capacity_v1().expect("byte-memory capacity"));
-
         let capacity_bytes = 64 * 1_024;
         let witnesses = vec![witness(
             0,
@@ -975,7 +922,6 @@ mod tests {
         )];
         let trace = build_zk_x509_io_trace_v1(&witnesses, challenges()).expect("adapter capacity");
         assert_eq!(trace.rows(), 131_072);
-
         let oversized = vec![witness(
             0,
             endpoint(ZkX509IoSegmentRoleV1::StrictDer, 0),
@@ -988,7 +934,6 @@ mod tests {
             Err(ZkX509IoAirErrorV1::Resource)
         );
     }
-
     #[test]
     fn transcript_challenges_bind_both_trace_commitments() {
         let labels: Vec<_> = IO_PERMUTATION_CHALLENGE_LABELS_V1
@@ -1014,7 +959,6 @@ mod tests {
             .expect("commit roots");
         let sampled = derive_zk_x509_io_challenges_v1(&mut transcript).expect("I/O challenges");
         sampled.validate().expect("valid challenges");
-
         let mut changed_root = sorted_root;
         changed_root[5] ^= 1;
         let mut changed = TransparentTranscriptV1::new(b"zk-x509-io-test", &profile, &public)

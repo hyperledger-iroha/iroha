@@ -1,12 +1,10 @@
 //! Durable `StateMap` lowering tests, including struct-valued entries.
-
 use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, Quantity},
 };
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler, numeric_tlv};
 mod common;
-
 fn execute_int_result(source: &str) -> i64 {
     let program = KotodamaCompiler::new()
         .compile_source(source)
@@ -25,7 +23,6 @@ fn execute_int_result(source: &str) -> i64 {
     }
     common::decode_i64_register(&vm, 10)
 }
-
 fn encoded_order_inversion(quantity: bool) -> (String, String) {
     let mut values = Vec::new();
     for scale in 0..=6 {
@@ -60,7 +57,6 @@ fn encoded_order_inversion(quantity: bool) -> (String, String) {
         .find_map(|pair| (pair[0].2 > pair[1].2).then(|| (pair[0].1.clone(), pair[1].1.clone())))
         .expect("fixture domain must contain an encoded-order/numeric-order inversion")
 }
-
 #[test]
 fn state_map_set_get_roundtrip() {
     // Declare state map and perform set/get within a single run.
@@ -83,7 +79,6 @@ fn state_map_set_get_roundtrip() {
     vm.run().expect("state map roundtrip");
     assert_eq!(common::decode_i64_register(&vm, 10), 7);
 }
-
 #[test]
 fn state_map_with_struct_value_roundtrip() {
     // Store and load a struct through a durable state map.
@@ -109,7 +104,6 @@ fn state_map_with_struct_value_roundtrip() {
     vm.run().expect("state map struct roundtrip");
     assert_eq!(common::decode_i64_register(&vm, 10), 9);
 }
-
 #[test]
 fn decimal_and_quantity_keys_collapse_equivalent_literal_spellings() {
     for numeric_type in ["decimal", "quantity"] {
@@ -139,7 +133,6 @@ fn decimal_and_quantity_keys_collapse_equivalent_literal_spellings() {
         );
     }
 }
-
 #[test]
 fn decimal_and_quantity_iteration_follow_encoded_key_bytes_not_numeric_magnitude() {
     for (numeric_type, quantity) in [("decimal", false), ("quantity", true)] {

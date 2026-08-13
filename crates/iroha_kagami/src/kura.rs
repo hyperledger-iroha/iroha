@@ -3,14 +3,11 @@ use std::{
     io::{BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
-
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, eyre};
 use iroha_core::kura::{BlockIndex, BlockStore, PipelineRecoverySidecar};
 use iroha_data_model::block::decode_framed_signed_block;
-
 use crate::{Outcome, RunArgs, tui};
-
 /// Kura inspector
 #[derive(Debug, ClapArgs, Clone)]
 pub struct Args {
@@ -23,7 +20,6 @@ pub struct Args {
     #[clap(subcommand)]
     command: Command,
 }
-
 #[derive(Subcommand, Debug, Clone)]
 enum Command {
     /// Print contents of a certain length of the blocks
@@ -47,7 +43,6 @@ enum Command {
         output: Option<PathBuf>,
     },
 }
-
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let args = self;
@@ -59,7 +54,6 @@ impl<T: Write> RunArgs<T> for Args {
                 Ok(height - 1)
             }
         }).transpose()?;
-
         match args.command {
             Command::Print { length, output } => {
                 tui::status("Inspecting Kura block store");
@@ -114,10 +108,8 @@ impl<T: Write> RunArgs<T> for Args {
         }
     }
 }
-
 fn resolve_block_store_dir(block_store_path: &Path) -> color_eyre::Result<PathBuf> {
     let mut normalized: std::borrow::Cow<'_, Path> = block_store_path.into();
-
     if let Some(os_str_file_name) = normalized.file_name() {
         let file_name_str = os_str_file_name.to_str().unwrap_or("");
         if matches!(
@@ -127,12 +119,10 @@ fn resolve_block_store_dir(block_store_path: &Path) -> color_eyre::Result<PathBu
             normalized.to_mut().pop();
         }
     }
-
     let candidate = normalized.into_owned();
     if candidate.join("blocks.index").exists() {
         return Ok(candidate);
     }
-
     let blocks_dir = candidate.join("blocks");
     if blocks_dir.is_dir() {
         let mut entries = std::fs::read_dir(&blocks_dir)
@@ -148,13 +138,11 @@ fn resolve_block_store_dir(block_store_path: &Path) -> color_eyre::Result<PathBu
             }
         }
     }
-
     Err(color_eyre::eyre::eyre!(
         "failed to locate block store files under {:?}",
         candidate
     ))
 }
-
 fn print_blockchain(
     writer: &mut dyn Write,
     block_store_path: &Path,
@@ -163,23 +151,19 @@ fn print_blockchain(
 ) -> Outcome {
     let block_store_path = resolve_block_store_dir(block_store_path)?;
     let mut block_store = BlockStore::new(&block_store_path);
-
     let index_count = block_store
         .read_index_count()
         .wrap_err("failed to read index count from block store {block_store_path:?}.")?;
-
     if index_count == 0 {
         return Err(eyre!(
             "Index count is zero. This could be because there are no blocks in the store: {block_store_path:?}"
         ));
     }
-
     let from_height = if from_height >= index_count {
         index_count - 1
     } else {
         from_height
     };
-
     // Clamp to available blocks and avoid u64 addition overflow when length is untrusted user input.
     let requested = from_height.saturating_add(block_count);
     let block_count = if requested > index_count {
@@ -187,7 +171,6 @@ fn print_blockchain(
     } else {
         block_count
     };
-
     let mut block_indices = vec![
         BlockIndex {
             start: 0,
@@ -201,7 +184,6 @@ fn print_blockchain(
         .read_block_indices(from_height, &mut block_indices)
         .wrap_err("failed to read block indices")?;
     let block_indices = block_indices;
-
     // Now for the actual printing
     writeln!(writer, "Index file says there are {index_count} blocks.",)?;
     writeln!(
@@ -210,11 +192,9 @@ fn print_blockchain(
         from_height + 1,
         from_height + block_count
     )?;
-
     for i in 0..block_count {
         let idx = block_indices[usize::try_from(i).wrap_err("index didn't fit in 32-bits")?];
         let meta_index = from_height + i;
-
         writeln!(
             writer,
             "Block#{} starts at byte offset {} and is {} bytes long.",
@@ -232,14 +212,11 @@ fn print_blockchain(
         writeln!(writer, "Block#{} :", meta_index + 1)?;
         writeln!(writer, "{block:#?}")?;
     }
-
     Ok(())
 }
-
 fn print_sidecar(writer: &mut dyn Write, block_store_path: &Path, height: u64) -> Outcome {
     // Resolve the concrete lane directory when multilane layout is in use.
     let block_store_path = resolve_block_store_dir(block_store_path)?;
-
     // First try the current indexed sidecar store (`pipeline/sidecars.{norito,index}`).
     if let Some(sidecar) = read_indexed_sidecar(&block_store_path, height) {
         let json = sidecar.to_json_value();
@@ -247,29 +224,24 @@ fn print_sidecar(writer: &mut dyn Write, block_store_path: &Path, height: u64) -
         writer.write_all(serialized.as_bytes())?;
         return Ok(());
     }
-
     Err(eyre!(
         "no indexed pipeline sidecar found under {:?} for height {}",
         block_store_path,
         height
     ))
 }
-
 /// Attempt to read a pipeline recovery sidecar from the indexed sidecar store.
 fn read_indexed_sidecar(block_store_path: &Path, height: u64) -> Option<PipelineRecoverySidecar> {
     const PIPELINE_DIR_NAME: &str = "pipeline";
     const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
     const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
     const PIPELINE_INDEX_ENTRY_SIZE: u64 = 16; // two u64s: offset + len
-
     if height == 0 {
         return None;
     }
-
     let pipeline_dir = block_store_path.join(PIPELINE_DIR_NAME);
     let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-
     let mut index = File::open(&index_path).ok()?;
     let index_meta = index.metadata().ok()?;
     if index_meta.len() % PIPELINE_INDEX_ENTRY_SIZE != 0 {
@@ -279,7 +251,6 @@ fn read_indexed_sidecar(block_store_path: &Path, height: u64) -> Option<Pipeline
     if height > entries {
         return None;
     }
-
     let mut entry_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE as usize];
     index
         .seek(SeekFrom::Start((height - 1) * PIPELINE_INDEX_ENTRY_SIZE))
@@ -291,24 +262,19 @@ fn read_indexed_sidecar(block_store_path: &Path, height: u64) -> Option<Pipeline
         return None;
     }
     let len_usize = usize::try_from(len).ok()?;
-
     let mut data = File::open(&data_path).ok()?;
     let data_len = data.metadata().ok()?.len();
     if offset.saturating_add(len) > data_len {
         return None;
     }
-
     let mut payload = vec![0u8; len_usize];
     data.seek(SeekFrom::Start(offset)).ok()?;
     data.read_exact(&mut payload).ok()?;
-
     norito::decode_from_bytes::<PipelineRecoverySidecar>(&payload).ok()
 }
-
 #[cfg(test)]
 mod tests {
     use std::{borrow::Cow, fs, sync::Arc};
-
     use iroha_core::{block::BlockBuilder, kura::PipelineDagSnapshot, tx::AcceptedTransaction};
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -316,9 +282,7 @@ mod tests {
         prelude::*,
     };
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-
     use super::*;
-
     fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
         let network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -346,13 +310,11 @@ mod tests {
         store.append_block_to_chain(&sb).expect("append");
         Arc::new(sb)
     }
-
     #[test]
     fn appended_block_uses_verifiable_checked_signature() {
         let temp = tempfile::tempdir().unwrap();
         let mut store = BlockStore::new(temp.path());
         store.create_files_if_they_do_not_exist().unwrap();
-
         let block = append_block(&mut store, None);
         let signature = block
             .signatures()
@@ -362,7 +324,6 @@ mod tests {
             .signature()
             .verify_hash(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(), block.hash())
             .expect("Kagami Kura fixture block signature verifies");
-
         let wrong_key =
             KeyPair::try_random_with_algorithm(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.algorithm())
                 .expect("generate wrong-key verifier");
@@ -371,16 +332,13 @@ mod tests {
             .verify_hash(wrong_key.public_key(), block.hash())
             .expect_err("Kagami Kura fixture block rejects wrong key");
     }
-
     #[test]
     fn print_latest_block_from_store_dir() {
         let temp = tempfile::tempdir().unwrap();
         let mut store = BlockStore::new(temp.path());
         store.create_files_if_they_do_not_exist().unwrap();
-
         let first = append_block(&mut store, None);
         let _second = append_block(&mut store, Some(first.as_ref()));
-
         let mut buf = Vec::new();
         // Use a large from_height to select the latest block per inspector logic
         print_blockchain(&mut buf, temp.path(), u64::MAX, 1).unwrap();
@@ -390,20 +348,16 @@ mod tests {
         assert!(s.contains("Printing blocks 2-2"));
         assert!(s.contains("Block#2 starts at byte offset"));
     }
-
     #[test]
     fn print_writes_to_output_file() {
         // Prepare a temporary block store with two blocks.
         let temp = tempfile::tempdir().unwrap();
         let mut store = BlockStore::new(temp.path());
         store.create_files_if_they_do_not_exist().unwrap();
-
         let first = append_block(&mut store, None);
         let _second = append_block(&mut store, Some(first.as_ref()));
-
         // Prepare output file
         let out_path = temp.path().join("out.txt");
-
         // Build Kagami args (use output some file; writer should be ignored in this branch)
         let args = Args {
             from: None,
@@ -413,16 +367,13 @@ mod tests {
                 output: Some(out_path.clone()),
             },
         };
-
         let mut sink = std::io::BufWriter::new(Vec::<u8>::new());
         args.run(&mut sink).expect("print ok");
-
         // Validate file content contains the expected prelude and the latest block number
         let s = std::fs::read_to_string(&out_path).expect("read output");
         assert!(s.contains("Index file says there are 2 blocks."));
         assert!(s.contains("Printing blocks 2-2"));
     }
-
     #[test]
     fn sidecar_prints_to_file() {
         use iroha_config::{
@@ -434,7 +385,6 @@ mod tests {
             },
         };
         use iroha_core::kura::Kura;
-
         // Prepare a temp store and write a synthetic sidecar via Kura
         let temp = tempfile::tempdir().unwrap();
         let (kura, _count) = Kura::new(
@@ -470,7 +420,6 @@ mod tests {
             Vec::new(),
         );
         kura.write_pipeline_metadata(&sidecar);
-
         let out_path = temp.path().join("sidecar.json");
         let args = Args {
             from: None,
@@ -482,30 +431,25 @@ mod tests {
         };
         let mut sink = std::io::BufWriter::new(Vec::<u8>::new());
         args.run(&mut sink).expect("sidecar ok");
-
         let read = std::fs::read_to_string(out_path).unwrap();
         assert!(read.contains("\"pipeline.recovery\""));
         assert!(read.contains("\"height\": 7"));
         assert!(read.contains(&block_hash.to_string()));
     }
-
     #[test]
     fn print_clamps_overflowing_length() {
         // Prepare a temporary block store with two blocks.
         let temp = tempfile::tempdir().unwrap();
         let mut store = BlockStore::new(temp.path());
         store.create_files_if_they_do_not_exist().unwrap();
-
         let first = append_block(&mut store, None);
         let _second = append_block(&mut store, Some(first.as_ref()));
-
         let mut buf = Vec::new();
         // Request an absurdly large length; logic should clamp to the available blocks.
         print_blockchain(&mut buf, temp.path(), 0, u64::MAX).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("Printing blocks 1-2"));
     }
-
     #[test]
     fn sidecar_print_rejects_invalid_block_layout() {
         let temp = tempfile::tempdir().unwrap();
@@ -515,7 +459,6 @@ mod tests {
         let pipeline_dir = temp.path().join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("pipeline dir");
         fs::write(pipeline_dir.join("block_1.norito"), b"invalid").expect("invalid sidecar");
-
         let mut sink = std::io::BufWriter::new(Vec::<u8>::new());
         let err = print_sidecar(&mut sink, temp.path(), 1).expect_err("invalid layout should fail");
         assert!(

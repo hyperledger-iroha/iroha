@@ -1,7 +1,5 @@
 //! ILP execution checks for gas accounting and deterministic error ordering.
-
 use ivm::{IVM, Instruction, VMError};
-
 #[test]
 fn ilp_charges_gas_in_program_order() {
     let mut vm = IVM::new(1);
@@ -24,13 +22,11 @@ fn ilp_charges_gas_in_program_order() {
     assert_eq!(vm.register(1), 5);
     assert_eq!(vm.register(2), 0);
 }
-
 #[test]
 fn ilp_reports_first_error_in_index_order() {
     let mut vm = IVM::new(u64::MAX);
     vm.zk_mode = true;
     vm.registers.set_tag(1, true);
-
     let block = [
         Instruction::Vadd32 {
             rd: 1,
@@ -43,7 +39,6 @@ fn ilp_reports_first_error_in_index_order() {
             rt: 2,
         },
     ];
-
     let err = vm
         .execute_block_parallel(&block)
         .expect_err("expected ilp error");

@@ -5,7 +5,6 @@
 //! introducing gas/fees on read endpoints.
 
 #![allow(clippy::redundant_pub_crate)]
-
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, VecDeque, hash_map::DefaultHasher},
@@ -19,22 +18,18 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use axum::http::HeaderMap;
 use dashmap::{DashMap, mapref::entry::Entry};
 use parking_lot::Mutex;
-
 /// Shared, cheap-to-clone limiter.
 #[derive(Clone)]
 pub struct RateLimiter {
     inner: Arc<ShardedLimiter>,
 }
-
 struct ShardedLimiter {
     disabled: bool,
     shards: Vec<Mutex<InnerLimiter>>,
 }
-
 struct InnerLimiter {
     rate_per_sec: f64,
     burst: f64,
@@ -42,13 +37,11 @@ struct InnerLimiter {
     order: VecDeque<String>,
     max_buckets: usize,
 }
-
 #[derive(Clone, Copy)]
 struct TokenBucket {
     tokens: f64,
     last: Instant,
 }
-
 const DEFAULT_MAX_BUCKETS: usize = 4_096;
 const DEFAULT_RATE_LIMITER_SHARDS: usize = 64;
 const MIN_BUCKETS_PER_SHARD: usize = 64;
@@ -59,13 +52,11 @@ const PREAUTH_NOFILE_RESERVE: u64 = 128;
 /// the live map and stale expiry records from growing without bound.
 const DEFAULT_PREAUTH_BAN_CAPACITY: NonZeroUsize =
     NonZeroUsize::new(DEFAULT_MAX_BUCKETS).expect("default ban capacity is non-zero");
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BanEntry {
     expires_at: Instant,
     generation: u64,
 }
-
 /// Heap key ordered by earliest expiry and then IP for deterministic eviction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct BanExpiry {
@@ -73,19 +64,16 @@ struct BanExpiry {
     ip: IpAddr,
     generation: u64,
 }
-
 #[derive(Default)]
 struct ExpiringBanState {
     entries: HashMap<IpAddr, BanEntry>,
     expiries: BinaryHeap<Reverse<BanExpiry>>,
     next_generation: u64,
 }
-
 struct ExpiringBanStore {
     capacity: usize,
     state: Mutex<ExpiringBanState>,
 }
-
 impl ExpiringBanStore {
     fn new(capacity: usize) -> Self {
         Self {
@@ -93,13 +81,11 @@ impl ExpiringBanStore {
             state: Mutex::new(ExpiringBanState::default()),
         }
     }
-
     fn is_banned_at(&self, ip: IpAddr, now: Instant) -> bool {
         let mut state = self.state.lock();
         state.purge_expired(now);
         state.entries.contains_key(&ip)
     }
-
     fn ban_for_at(&self, ip: IpAddr, duration: Duration, now: Instant) {
         if self.capacity == 0 || duration.is_zero() {
             return;
@@ -107,10 +93,8 @@ impl ExpiringBanStore {
         let Some(expires_at) = now.checked_add(duration) else {
             return;
         };
-
         let mut state = self.state.lock();
         state.purge_expired(now);
-
         let generation = state.allocate_generation();
         if !state.entries.contains_key(&ip) && state.entries.len() >= self.capacity {
             state.evict_earliest();
@@ -129,18 +113,15 @@ impl ExpiringBanStore {
         }));
         state.compact_expiries_if_needed(self.capacity);
     }
-
     #[cfg(test)]
     fn entry_count(&self) -> usize {
         self.state.lock().entries.len()
     }
-
     #[cfg(test)]
     fn expiry_count(&self) -> usize {
         self.state.lock().expiries.len()
     }
 }
-
 impl ExpiringBanState {
     fn purge_expired(&mut self, now: Instant) {
         while let Some(Reverse(expiry)) = self.expiries.peek().copied() {
@@ -153,7 +134,6 @@ impl ExpiringBanState {
             }
         }
     }
-
     fn evict_earliest(&mut self) {
         while let Some(Reverse(expiry)) = self.expiries.pop() {
             if self.entry_matches(expiry) {
@@ -161,7 +141,6 @@ impl ExpiringBanState {
                 return;
             }
         }
-
         // The heap and map are updated under one mutex, so this branch is only
         // a defensive repair for an inconsistent in-memory index. Preserve the
         // hard capacity invariant even then.
@@ -174,13 +153,11 @@ impl ExpiringBanState {
             self.entries.remove(&ip);
         }
     }
-
     fn entry_matches(&self, expiry: BanExpiry) -> bool {
         self.entries.get(&expiry.ip).is_some_and(|entry| {
             entry.generation == expiry.generation && entry.expires_at == expiry.expires_at
         })
     }
-
     fn allocate_generation(&mut self) -> u64 {
         if self.next_generation == u64::MAX {
             self.renumber_generations();
@@ -189,7 +166,6 @@ impl ExpiringBanState {
         self.next_generation += 1;
         generation
     }
-
     fn renumber_generations(&mut self) {
         let mut ordered = self
             .entries
@@ -215,7 +191,6 @@ impl ExpiringBanState {
         self.next_generation = u64::try_from(self.entries.len())
             .expect("bounded pre-authentication ban count fits in u64");
     }
-
     fn compact_expiries_if_needed(&mut self, capacity: usize) {
         let max_expiry_records = capacity.saturating_mul(2).max(1);
         if self.expiries.len() <= max_expiry_records {
@@ -232,7 +207,6 @@ impl ExpiringBanState {
             }));
     }
 }
-
 impl ShardedLimiter {
     fn new(rate_per_sec: Option<f64>, burst: f64, max_buckets: usize) -> Self {
         let max_buckets = max_buckets.max(1);
@@ -262,10 +236,8 @@ impl ShardedLimiter {
                 ))
             })
             .collect();
-
         Self { disabled, shards }
     }
-
     fn shard_for(&self, key: &str) -> &Mutex<InnerLimiter> {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
@@ -275,7 +247,6 @@ impl ShardedLimiter {
         &self.shards[index]
     }
 }
-
 impl InnerLimiter {
     fn new(rate_per_sec: f64, burst: f64, max_buckets: usize) -> Self {
         Self {
@@ -286,7 +257,6 @@ impl InnerLimiter {
             max_buckets,
         }
     }
-
     fn insert_full_bucket(&mut self, key: &str, now: Instant) {
         if self.buckets.len() >= self.max_buckets {
             if let Some(oldest) = self.order.pop_front() {
@@ -303,7 +273,6 @@ impl InnerLimiter {
             },
         );
     }
-
     fn refill_bucket(rate_per_sec: f64, burst: f64, bucket: &mut TokenBucket, now: Instant) {
         let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
         if elapsed > 0.0 {
@@ -311,22 +280,18 @@ impl InnerLimiter {
             bucket.last = now;
         }
     }
-
     fn allow_cost(&mut self, key: &str, cost: u64, now: Instant) -> bool {
         let burst = self.burst;
         let required = (cost.max(1) as f64).min(f64::MAX);
         if required > burst {
             return false;
         }
-
         self.allow_required(key, required, now)
     }
-
     fn allow_cost_capped_to_burst(&mut self, key: &str, cost: u64, now: Instant) -> bool {
         let required = (cost.max(1) as f64).min(self.burst);
         self.allow_required(key, required, now)
     }
-
     fn allow_required(&mut self, key: &str, required: f64, now: Instant) -> bool {
         let burst = self.burst;
         let rate_per_sec = self.rate_per_sec;
@@ -347,27 +312,22 @@ impl InnerLimiter {
             false
         }
     }
-
     fn allow_repeated(&mut self, key: &str, count: usize, now: Instant) -> bool {
         if count == 0 {
             return true;
         }
-
         let required = count as f64;
         if required > self.burst {
             return false;
         }
-
         self.allow_required(key, required, now)
     }
 }
-
 impl RateLimiter {
     /// Create a new limiter. If `rate_per_sec` is None or 0, the limiter allows all.
     pub fn new(rate_per_sec: Option<u32>, burst: Option<u32>) -> Self {
         Self::new_with_capacity(rate_per_sec, burst, DEFAULT_MAX_BUCKETS)
     }
-
     /// Create a limiter from an exact requests-per-minute rate.
     ///
     /// Fractional per-second refill is preserved, so rates below 60/minute do
@@ -381,7 +341,6 @@ impl RateLimiter {
             inner: Arc::new(ShardedLimiter::new(rate, burst, DEFAULT_MAX_BUCKETS)),
         }
     }
-
     /// Create a new limiter configured with `u64`-sized token buckets.
     pub fn new_u64(rate_per_sec: Option<u64>, burst: Option<u64>) -> Self {
         let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
@@ -390,7 +349,6 @@ impl RateLimiter {
             inner: Arc::new(ShardedLimiter::new(rate, burst, DEFAULT_MAX_BUCKETS)),
         }
     }
-
     pub(crate) fn new_with_capacity(
         rate_per_sec: Option<u32>,
         burst: Option<u32>,
@@ -402,12 +360,10 @@ impl RateLimiter {
             inner: Arc::new(ShardedLimiter::new(rate, burst, max_buckets)),
         }
     }
-
     /// Returns true if allowed (consumed 1 token), false if limited.
     pub async fn allow(&self, key: &str) -> bool {
         self.allow_cost(key, 1).await
     }
-
     /// Returns true if allowed after consuming `cost` tokens, false if limited.
     #[allow(clippy::unused_async)]
     pub async fn allow_cost(&self, key: &str, cost: u64) -> bool {
@@ -419,7 +375,6 @@ impl RateLimiter {
             .lock()
             .allow_cost(key, cost, Instant::now())
     }
-
     /// Consume a weighted cost capped to this limiter's configured burst.
     ///
     /// This preserves relative weighting whenever the burst can accommodate it while ensuring a
@@ -435,7 +390,6 @@ impl RateLimiter {
             .lock()
             .allow_cost_capped_to_burst(key, cost, Instant::now())
     }
-
     /// Atomically consumes `count` tokens for one key.
     ///
     /// Rejection leaves the bucket unchanged, including when `count` exceeds
@@ -450,7 +404,6 @@ impl RateLimiter {
             .lock()
             .allow_repeated(key, count, Instant::now())
     }
-
     #[cfg(test)]
     #[allow(clippy::unused_async)]
     pub(crate) async fn bucket_count(&self) -> usize {
@@ -461,13 +414,11 @@ impl RateLimiter {
             .sum()
     }
 }
-
 /// Internal header recording the remote IP the connection was accepted from.
 pub const REMOTE_ADDR_HEADER: &str = "x-iroha-remote-addr";
 /// Standard proxy header carrying the client/proxy address chain.
 pub const FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
 const MAX_FORWARDED_FOR_HOPS: usize = 32;
-
 /// Resolve the effective client IP for downstream policy decisions.
 ///
 /// The canonical remote address header is preferred because ingress middleware
@@ -481,7 +432,6 @@ pub fn effective_remote_ip(headers: &HeaderMap, remote: Option<IpAddr>) -> Optio
         .and_then(|value| value.parse().ok())
         .or(remote)
 }
-
 /// Resolve the remote IP that ingress middleware should inject.
 ///
 /// If the transport peer belongs to a configured trusted proxy CIDR, the
@@ -515,7 +465,6 @@ pub fn ingress_remote_ip(
             .unwrap_or_else(|| forwarded[0]),
     )
 }
-
 fn parse_forwarded_for_chain(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
     let mut addresses = Vec::new();
     for value in headers.get_all(FORWARDED_FOR_HEADER).iter() {
@@ -533,7 +482,6 @@ fn parse_forwarded_for_chain(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
     }
     (!addresses.is_empty()).then_some(addresses)
 }
-
 /// Derive a rate-limit key from headers and optional hint:
 /// - Prefer `X-API-Token` if present and token usage is enabled
 /// - Else the effective client IP resolved by ingress middleware
@@ -558,7 +506,6 @@ pub fn key_from_headers(
     }
     "anon".to_string()
 }
-
 /// Awaitable helper: returns true when request should pass (either not enforced
 /// or limiter allows), false when it should be rate-limited.
 pub async fn allow_conditionally(limiter: &RateLimiter, key: &str, enforce: bool) -> bool {
@@ -568,7 +515,6 @@ pub async fn allow_conditionally(limiter: &RateLimiter, key: &str, enforce: bool
         limiter.allow(key).await
     }
 }
-
 /// Awaitable helper for costed operations: returns true when request should pass (either not
 /// enforced or limiter allows), false when it should be rate-limited.
 pub async fn allow_cost_conditionally(
@@ -583,7 +529,6 @@ pub async fn allow_cost_conditionally(
         limiter.allow_cost(key, cost).await
     }
 }
-
 #[allow(dead_code)]
 fn _assert_allow_conditionally_future_send() {
     fn assert_send_future<F: std::future::Future + Send>(future: F) {
@@ -592,20 +537,16 @@ fn _assert_allow_conditionally_future_send() {
     let limiter = RateLimiter::new(Some(1), Some(1));
     assert_send_future(allow_conditionally(&limiter, "key", true));
 }
-
 // ---------------- CIDR allowlist helpers ----------------
-
 #[derive(Clone, Debug)]
 pub struct IpNet {
     kind: IpKind,
 }
-
 #[derive(Clone, Debug)]
 enum IpKind {
     V4 { net: u32, mask: u32 },
     V6 { net: [u8; 16], bits: u8 },
 }
-
 pub fn parse_cidr(s: &str) -> Option<IpNet> {
     if let Some((ip, bits_str)) = s.split_once('/') {
         let bits: u8 = bits_str.parse().ok()?;
@@ -654,11 +595,9 @@ pub fn parse_cidr(s: &str) -> Option<IpNet> {
     }
     None
 }
-
 pub fn parse_cidrs(list: &[String]) -> Vec<IpNet> {
     list.iter().filter_map(|s| parse_cidr(s)).collect()
 }
-
 pub fn cidr_contains(nets: &[IpNet], ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -685,14 +624,12 @@ pub fn cidr_contains(nets: &[IpNet], ip: IpAddr) -> bool {
         }
     }
 }
-
 /// Returns true if the request should bypass rate limits due to CIDR allowlist.
 /// Uses the effective client IP resolved by ingress middleware.
 pub fn is_allowed_by_cidr(headers: &HeaderMap, remote: Option<IpAddr>, allow: &[IpNet]) -> bool {
     let candidate_ip = effective_remote_ip(headers, remote);
     candidate_ip.map_or(false, |ip| cidr_contains(allow, ip))
 }
-
 /// Returns true if a forwarded header is present and the TCP peer belongs to a
 /// trusted proxy CIDR.
 pub fn has_trusted_forwarded_header(
@@ -712,7 +649,6 @@ pub fn has_trusted_forwarded_header(
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| !value.trim().is_empty())
 }
-
 /// Configuration for the pre-authentication connection gate.
 #[derive(Debug, Clone)]
 pub struct PreAuthConfig {
@@ -725,7 +661,6 @@ pub struct PreAuthConfig {
     pub allow_nets: Vec<IpNet>,
     pub scheme_limits: Vec<SchemeLimit>,
 }
-
 #[cfg(unix)]
 #[allow(unsafe_code)]
 pub(crate) fn nofile_soft_limit() -> Option<u64> {
@@ -744,18 +679,15 @@ pub(crate) fn nofile_soft_limit() -> Option<u64> {
     }
     Some(soft)
 }
-
 #[cfg(not(unix))]
 pub(crate) fn nofile_soft_limit() -> Option<u64> {
     None
 }
-
 fn preauth_budget_from_nofile(nofile_soft: u64) -> u64 {
     let reserve = PREAUTH_NOFILE_RESERVE.min(nofile_soft.saturating_sub(1));
     let budget = nofile_soft.saturating_sub(reserve);
     (budget / 2).max(1)
 }
-
 pub(crate) fn clamp_preauth_max_total(
     configured: Option<usize>,
     nofile_soft: Option<u64>,
@@ -767,7 +699,6 @@ pub(crate) fn clamp_preauth_max_total(
     let cap = preauth_budget_from_nofile(nofile_soft) as usize;
     Some(configured.min(cap))
 }
-
 pub(crate) fn clamp_preauth_max_per_ip(
     configured: Option<usize>,
     max_total: Option<usize>,
@@ -775,7 +706,6 @@ pub(crate) fn clamp_preauth_max_per_ip(
     let configured = configured?;
     Some(max_total.map_or(configured, |max_total| configured.min(max_total)))
 }
-
 /// Per-scheme concurrency limit description.
 #[derive(Debug, Clone)]
 pub struct SchemeLimit {
@@ -784,12 +714,10 @@ pub struct SchemeLimit {
     /// Maximum concurrent connections allowed for the scheme.
     pub max_connections: usize,
 }
-
 #[derive(Clone)]
 pub struct PreAuthGate {
     inner: Arc<PreAuthGateInner>,
 }
-
 struct PreAuthGateInner {
     disabled: bool,
     max_total: Option<usize>,
@@ -803,7 +731,6 @@ struct PreAuthGateInner {
     active_per_scheme: DashMap<String, usize>,
     bans: ExpiringBanStore,
 }
-
 /// Guard tracking held slots within the pre-auth gate.
 pub struct PreAuthPermit {
     gate: Arc<PreAuthGateInner>,
@@ -813,7 +740,6 @@ pub struct PreAuthPermit {
     scheme: Option<String>,
     counted_scheme: bool,
 }
-
 impl fmt::Debug for PreAuthPermit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PreAuthPermit")
@@ -823,7 +749,6 @@ impl fmt::Debug for PreAuthPermit {
             .finish_non_exhaustive()
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RejectReason {
     GlobalCap,
@@ -832,7 +757,6 @@ pub enum RejectReason {
     Banned,
     SchemeCap,
 }
-
 impl RejectReason {
     pub fn metric_label(self) -> &'static str {
         match self {
@@ -844,7 +768,6 @@ impl RejectReason {
         }
     }
 }
-
 impl PreAuthGate {
     pub fn new(cfg: PreAuthConfig) -> Self {
         let PreAuthConfig {
@@ -885,7 +808,6 @@ impl PreAuthGate {
             inner: Arc::new(inner),
         }
     }
-
     pub fn disabled() -> Self {
         Self::new(PreAuthConfig {
             max_total: None,
@@ -898,7 +820,6 @@ impl PreAuthGate {
             scheme_limits: Vec::new(),
         })
     }
-
     pub async fn acquire(
         &self,
         ip: Option<IpAddr>,
@@ -908,16 +829,13 @@ impl PreAuthGate {
         if inner.disabled {
             return Ok(PreAuthPermit::bypass(inner.clone(), ip));
         }
-
         if let Some(addr) = ip {
             if inner.is_allowlisted(addr) {
                 return Ok(PreAuthPermit::bypass(inner.clone(), Some(addr)));
             }
-
             if inner.is_banned(addr) {
                 return Err(RejectReason::Banned);
             }
-
             if let Some(rate) = inner.rate_limiter.as_ref() {
                 if !rate.allow(&addr.to_string()).await {
                     inner.note_ban(addr);
@@ -925,7 +843,6 @@ impl PreAuthGate {
                 }
             }
         }
-
         let counted_ip_addr = if let Some(addr) = ip {
             match inner.active_per_ip.entry(addr) {
                 Entry::Occupied(mut occ) => {
@@ -946,7 +863,6 @@ impl PreAuthGate {
             None
         };
         let counted_ip = counted_ip_addr.is_some();
-
         let scheme_key = if let Some(label) = scheme {
             if let Some(limit) = inner.scheme_limits.get(label) {
                 let key = label.to_string();
@@ -972,7 +888,6 @@ impl PreAuthGate {
             None
         };
         let counted_scheme = scheme_key.is_some();
-
         let counted_global = if let Some(limit) = inner.max_total {
             let prev = inner.active_total.fetch_add(1, Ordering::AcqRel);
             if prev >= limit {
@@ -992,7 +907,6 @@ impl PreAuthGate {
         } else {
             false
         };
-
         Ok(PreAuthPermit {
             gate: Arc::clone(&self.inner),
             ip,
@@ -1003,22 +917,18 @@ impl PreAuthGate {
         })
     }
 }
-
 impl PreAuthGateInner {
     fn is_allowlisted(&self, ip: IpAddr) -> bool {
         cidr_contains(&self.allow_nets, ip)
     }
-
     fn is_banned(&self, ip: IpAddr) -> bool {
         self.bans.is_banned_at(ip, Instant::now())
     }
-
     fn note_ban(&self, ip: IpAddr) {
         if let Some(duration) = self.ban_duration {
             self.bans.ban_for_at(ip, duration, Instant::now());
         }
     }
-
     fn release_ip(&self, ip: IpAddr) {
         if let Entry::Occupied(mut entry) = self.active_per_ip.entry(ip) {
             if *entry.get() > 1 {
@@ -1028,7 +938,6 @@ impl PreAuthGateInner {
             }
         }
     }
-
     fn release_scheme(&self, scheme: &str) {
         if let Entry::Occupied(mut entry) = self.active_per_scheme.entry(scheme.to_owned()) {
             if *entry.get() > 1 {
@@ -1039,7 +948,6 @@ impl PreAuthGateInner {
         }
     }
 }
-
 impl PreAuthPermit {
     fn bypass(gate: Arc<PreAuthGateInner>, ip: Option<IpAddr>) -> Self {
         Self {
@@ -1052,7 +960,6 @@ impl PreAuthPermit {
         }
     }
 }
-
 impl Drop for PreAuthPermit {
     fn drop(&mut self) {
         if self.counted_global {
@@ -1070,43 +977,35 @@ impl Drop for PreAuthPermit {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn churn_ip(index: u64) -> IpAddr {
         let prefix = u128::from(0x2001_0db8_u32) << 96;
         IpAddr::V6(Ipv6Addr::from(prefix | u128::from(index)))
     }
-
     #[test]
     fn preauth_ban_store_caps_unique_ipv6_churn() {
         const CAPACITY: usize = 32;
         let store = ExpiringBanStore::new(CAPACITY);
         let now = Instant::now();
-
         for index in 0..10_000 {
             store.ban_for_at(churn_ip(index), Duration::from_secs(60), now);
         }
-
         assert_eq!(store.entry_count(), CAPACITY);
         assert!(store.expiry_count() <= CAPACITY * 2);
     }
-
     #[test]
     fn preauth_ban_store_purges_expiry_on_unrelated_lookup() {
         let store = ExpiringBanStore::new(4);
         let now = Instant::now();
         let banned = churn_ip(1);
-
         store.ban_for_at(banned, Duration::from_secs(1), now);
         assert!(store.is_banned_at(banned, now));
         assert!(!store.is_banned_at(churn_ip(2), now + Duration::from_secs(2)));
         assert_eq!(store.entry_count(), 0);
         assert_eq!(store.expiry_count(), 0);
     }
-
     #[test]
     fn preauth_ban_store_evicts_earliest_expiry_then_lowest_ip() {
         let store = ExpiringBanStore::new(2);
@@ -1114,15 +1013,12 @@ mod tests {
         let lower_ip = churn_ip(1);
         let higher_ip = churn_ip(2);
         let replacement = churn_ip(3);
-
         store.ban_for_at(higher_ip, Duration::from_secs(10), now);
         store.ban_for_at(lower_ip, Duration::from_secs(10), now);
         store.ban_for_at(replacement, Duration::from_secs(20), now);
-
         assert!(!store.is_banned_at(lower_ip, now));
         assert!(store.is_banned_at(higher_ip, now));
         assert!(store.is_banned_at(replacement, now));
-
         let earliest = churn_ip(4);
         store.ban_for_at(earliest, Duration::from_secs(5), now);
         assert!(!store.is_banned_at(higher_ip, now));
@@ -1130,51 +1026,41 @@ mod tests {
         store.ban_for_at(churn_ip(5), Duration::from_secs(30), now);
         assert!(!store.is_banned_at(earliest, now));
     }
-
     #[test]
     fn preauth_ban_store_refresh_ignores_stale_heap_records_and_compacts() {
         let store = ExpiringBanStore::new(2);
         let now = Instant::now();
         let ip = churn_ip(1);
-
         store.ban_for_at(ip, Duration::from_secs(1), now);
         for seconds in 2..=100 {
             store.ban_for_at(ip, Duration::from_secs(seconds), now);
         }
-
         assert_eq!(store.entry_count(), 1);
         assert!(store.expiry_count() <= 4);
         assert!(store.is_banned_at(ip, now + Duration::from_secs(2)));
         assert!(!store.is_banned_at(churn_ip(2), now + Duration::from_secs(101)));
         assert_eq!(store.entry_count(), 0);
     }
-
     #[test]
     fn preauth_ban_store_stale_expiry_cannot_remove_a_refreshed_ban() {
         let store = ExpiringBanStore::new(8);
         let now = Instant::now();
         let ip = churn_ip(1);
-
         store.ban_for_at(ip, Duration::from_secs(1), now);
         store.ban_for_at(ip, Duration::from_secs(10), now);
         assert_eq!(store.expiry_count(), 2);
-
         assert!(store.is_banned_at(ip, now + Duration::from_secs(2)));
         assert_eq!(store.entry_count(), 1);
         assert_eq!(store.expiry_count(), 1);
     }
-
     #[test]
     fn preauth_ban_store_ignores_zero_duration() {
         let store = ExpiringBanStore::new(1);
         let now = Instant::now();
-
         store.ban_for_at(churn_ip(1), Duration::ZERO, now);
-
         assert_eq!(store.entry_count(), 0);
         assert_eq!(store.expiry_count(), 0);
     }
-
     #[test]
     fn preauth_ban_store_remains_usable_after_unwind() {
         let store = ExpiringBanStore::new(1);
@@ -1183,20 +1069,17 @@ mod tests {
             panic!("exercise lock release during unwind");
         }));
         assert!(unwound.is_err());
-
         let now = Instant::now();
         let ip = churn_ip(1);
         store.ban_for_at(ip, Duration::from_secs(1), now);
         assert!(store.is_banned_at(ip, now));
     }
-
     #[test]
     fn preauth_ban_store_preserves_capacity_under_concurrent_churn() {
         const CAPACITY: usize = 64;
         let store = Arc::new(ExpiringBanStore::new(CAPACITY));
         let now = Instant::now();
         let mut workers = Vec::new();
-
         for worker in 0_u64..8 {
             let store = Arc::clone(&store);
             workers.push(std::thread::spawn(move || {
@@ -1212,11 +1095,9 @@ mod tests {
         for worker in workers {
             worker.join().expect("ban-store worker must not panic");
         }
-
         assert_eq!(store.entry_count(), CAPACITY);
         assert!(store.expiry_count() <= CAPACITY * 2);
     }
-
     #[test]
     fn preauth_gate_applies_configured_ban_capacity() {
         let gate = PreAuthGate::new(PreAuthConfig {
@@ -1231,15 +1112,12 @@ mod tests {
         });
         let first = churn_ip(1);
         let second = churn_ip(2);
-
         gate.inner.note_ban(first);
         gate.inner.note_ban(second);
-
         assert_eq!(gate.inner.bans.entry_count(), 1);
         assert!(!gate.inner.is_banned(first));
         assert!(gate.inner.is_banned(second));
     }
-
     #[tokio::test]
     async fn limiter_allows_then_limits() {
         let limiter = RateLimiter::new(Some(2), Some(2));
@@ -1249,7 +1127,6 @@ mod tests {
         // Third should be limited
         assert!(!limiter.allow("a").await);
     }
-
     #[test]
     fn per_minute_rates_preserve_fractional_refill_boundaries() {
         for rate_per_minute in [1_u32, 59] {
@@ -1257,7 +1134,6 @@ mod tests {
             let configured = limiter.inner.shards[0].lock().rate_per_sec;
             let expected = f64::from(rate_per_minute) / 60.0;
             assert!((configured - expected).abs() < f64::EPSILON);
-
             let mut inner = InnerLimiter::new(expected, 1.0, 1);
             let start = Instant::now();
             assert!(inner.allow_cost("boundary", 1, start));
@@ -1274,7 +1150,6 @@ mod tests {
             ));
         }
     }
-
     #[tokio::test]
     async fn limiter_respects_costs() {
         let limiter = RateLimiter::new(Some(10), Some(10));
@@ -1283,11 +1158,9 @@ mod tests {
         // Bucket should be drained beyond burst
         assert!(!limiter.allow_cost("cost", 3).await);
     }
-
     #[tokio::test]
     async fn limiter_rejects_impossible_cost_without_tracking_key() {
         let limiter = RateLimiter::new(Some(10), Some(10));
-
         assert!(!limiter.allow_cost("too-large", 11).await);
         assert_eq!(
             limiter.bucket_count().await,
@@ -1297,22 +1170,18 @@ mod tests {
         assert!(limiter.allow_cost("too-large", 1).await);
         assert_eq!(limiter.bucket_count().await, 1);
     }
-
     #[tokio::test]
     async fn capped_cost_consumes_the_exact_available_burst() {
         let limiter = RateLimiter::new(Some(10), Some(3));
-
         assert!(limiter.allow_cost_capped_to_burst("capped", 8).await);
         assert!(
             !limiter.allow("capped").await,
             "an oversized weighted request must consume the full configured burst"
         );
     }
-
     #[tokio::test]
     async fn capped_cost_preserves_disabled_limiter_behavior() {
         let limiter = RateLimiter::new(None, Some(1));
-
         assert!(
             limiter
                 .allow_cost_capped_to_burst("disabled", u64::MAX)
@@ -1320,21 +1189,17 @@ mod tests {
         );
         assert_eq!(limiter.bucket_count().await, 0);
     }
-
     #[test]
     fn capped_cost_preserves_fractional_refill_timing() {
         let mut limiter = InnerLimiter::new(2.0, 3.0, 1);
         let start = Instant::now();
-
         assert!(limiter.allow_cost_capped_to_burst("refill", 8, start));
         assert!(!limiter.allow_cost("refill", 1, start + Duration::from_millis(499)));
         assert!(limiter.allow_cost("refill", 1, start + Duration::from_millis(500)));
     }
-
     #[tokio::test]
     async fn limiter_existing_key_reuses_bucket() {
         let limiter = RateLimiter::new(Some(10), Some(10));
-
         assert!(limiter.allow("same").await);
         assert!(limiter.allow_cost("same", 2).await);
         assert!(limiter.allow_repeated("same", 3).await);
@@ -1344,22 +1209,18 @@ mod tests {
             "repeated checks for an existing key should stay on one bucket"
         );
     }
-
     #[tokio::test]
     async fn limiter_allow_repeated_is_atomic() {
         let limiter = RateLimiter::new(Some(1), Some(2));
-
         assert!(!limiter.allow_repeated("batch", 3).await);
         assert!(limiter.allow("batch").await);
         assert!(limiter.allow("batch").await);
         assert!(!limiter.allow("batch").await);
-
         let limiter = RateLimiter::new(Some(1), Some(3));
         assert!(limiter.allow_repeated("batch", 2).await);
         assert!(limiter.allow("batch").await);
         assert!(!limiter.allow("batch").await);
     }
-
     #[test]
     fn key_from_headers_prefers_token_then_remote_then_hint() {
         let mut headers = HeaderMap::new();
@@ -1372,13 +1233,11 @@ mod tests {
             ),
             "203.0.113.99"
         );
-
         headers.insert("x-api-token", "secret".parse().unwrap());
         assert_eq!(
             key_from_headers(&headers, Some("203.0.113.99".parse().unwrap()), None, true),
             "secret"
         );
-
         let headers2 = HeaderMap::new();
         assert_eq!(
             key_from_headers(&headers2, None, Some("hint"), true),
@@ -1386,7 +1245,6 @@ mod tests {
         );
         assert_eq!(key_from_headers(&headers2, None, None, true), "anon");
     }
-
     #[test]
     fn key_from_headers_ignores_token_when_disabled() {
         let mut headers = HeaderMap::new();
@@ -1406,13 +1264,11 @@ mod tests {
             "hint"
         );
     }
-
     #[test]
     fn trusted_forwarded_header_requires_proxy_membership() {
         let trusted = parse_cidrs(&["127.0.0.0/8".to_owned()]);
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-client-cert", "cert=present".parse().unwrap());
-
         assert!(has_trusted_forwarded_header(
             &headers,
             Some("127.0.0.1".parse().unwrap()),
@@ -1432,41 +1288,34 @@ mod tests {
             "x-forwarded-client-cert",
         ));
     }
-
     #[tokio::test]
     async fn limiter_caps_bucket_growth() {
         let limiter = RateLimiter::new_with_capacity(Some(1), Some(1), 2);
         assert!(limiter.allow("a").await);
         assert!(limiter.allow("b").await);
         assert!(limiter.bucket_count().await <= 2);
-
         assert!(limiter.allow("c").await);
         // Capacity is 2, so one bucket must have been evicted.
         assert!(limiter.bucket_count().await <= 2);
-
         // Previously inserted keys should still be serviced without panicking.
         assert!(limiter.allow("a").await);
         assert!(limiter.bucket_count().await <= 2);
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn limiter_allows_distinct_keys_concurrently() {
         let limiter = RateLimiter::new(Some(10_000), Some(10_000));
         let mut handles = Vec::new();
-
         for index in 0..128 {
             let limiter = limiter.clone();
             handles.push(tokio::spawn(async move {
                 limiter.allow(&format!("client-{index}")).await
             }));
         }
-
         for handle in handles {
             assert!(handle.await.expect("limiter task should finish"));
         }
         assert!(limiter.bucket_count().await <= DEFAULT_MAX_BUCKETS);
     }
-
     #[tokio::test]
     async fn preauth_gate_limits_global_and_per_ip() {
         let gate = PreAuthGate::new(PreAuthConfig {
@@ -1494,7 +1343,6 @@ mod tests {
             .await
             .expect("permit released allows again");
     }
-
     #[tokio::test]
     async fn preauth_gate_respects_allowlist() {
         let nets = parse_cidrs(&["127.0.0.0/8".to_string()]);
@@ -1516,7 +1364,6 @@ mod tests {
             .await
             .expect("allowlisted bypass repeated");
     }
-
     #[tokio::test]
     async fn preauth_gate_rate_limits_and_bans() {
         let gate = PreAuthGate::new(PreAuthConfig {
@@ -1544,7 +1391,6 @@ mod tests {
             .expect_err("ban active");
         assert_eq!(banned, RejectReason::Banned);
     }
-
     #[tokio::test]
     async fn preauth_gate_limits_per_scheme() {
         let gate = PreAuthGate::new(PreAuthConfig {
@@ -1579,7 +1425,6 @@ mod tests {
             .await
             .expect("http scheme uses global pool");
     }
-
     #[tokio::test]
     async fn preauth_permit_releases_every_counter_during_unwind() {
         let gate = PreAuthGate::new(PreAuthConfig {
@@ -1600,32 +1445,26 @@ mod tests {
             .acquire(Some(ip), Some("http"))
             .await
             .expect("first connection acquires every counter");
-
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _permit = permit;
             panic!("exercise pre-auth permit unwind");
         }));
         assert!(unwound.is_err());
-
         gate.acquire(Some(ip), Some("http"))
             .await
             .expect("unwind releases global, IP, and scheme counters exactly once");
     }
-
     #[test]
     fn preauth_counter_release_is_atomic_with_concurrent_reacquire() {
         const ITERATIONS: usize = 20_000;
-
         let gate = PreAuthGate::disabled();
         let inner = Arc::clone(&gate.inner);
         let ip: IpAddr = "203.0.113.55".parse().expect("valid test address");
         let scheme = "http".to_owned();
         inner.active_per_ip.insert(ip, 1);
         inner.active_per_scheme.insert(scheme.clone(), 1);
-
         let start = Arc::new(std::sync::Barrier::new(3));
         let finish = Arc::new(std::sync::Barrier::new(3));
-
         let release_worker = {
             let inner = Arc::clone(&inner);
             let start = Arc::clone(&start);
@@ -1654,7 +1493,6 @@ mod tests {
                 }
             })
         };
-
         for iteration in 0..ITERATIONS {
             start.wait();
             finish.wait();
@@ -1669,7 +1507,6 @@ mod tests {
                 "scheme counter lost a concurrent acquisition at iteration {iteration}"
             );
         }
-
         release_worker
             .join()
             .expect("release worker must not panic");
@@ -1677,7 +1514,6 @@ mod tests {
             .join()
             .expect("acquire worker must not panic");
     }
-
     fn parse_cidrs_skips_invalid_entries() {
         let nets = parse_cidrs(&[
             "203.0.113.0/24".into(),
@@ -1687,7 +1523,6 @@ mod tests {
         assert_eq!(nets.len(), 1);
         assert!(matches!(nets[0].kind, IpKind::V4 { .. }));
     }
-
     #[test]
     fn parse_cidr_ipv6_zero_prefix_zeroes_octets() {
         let parsed = parse_cidr("::/0").expect("valid zero prefix");
@@ -1699,7 +1534,6 @@ mod tests {
             _ => panic!("expected IPv6 network"),
         }
     }
-
     #[test]
     fn parse_cidr_ipv6_full_prefix_retains_address() {
         let parsed = parse_cidr("2001:db8::dead:beef/128").expect("valid /128");
@@ -1714,7 +1548,6 @@ mod tests {
             _ => panic!("expected IPv6 network"),
         }
     }
-
     #[test]
     fn cidr_contains_supports_ipv6_partial_prefix() {
         let net = parse_cidr("2001:db8::/65").expect("valid IPv6 CIDR");
@@ -1730,7 +1563,6 @@ mod tests {
                 .expect("valid IPv6 address outside net")
         ));
     }
-
     #[test]
     fn key_from_headers_uses_trusted_header_when_remote_missing() {
         let mut headers = HeaderMap::new();
@@ -1740,7 +1572,6 @@ mod tests {
         );
         assert_eq!(key_from_headers(&headers, None, None, true), "2001:db8::42");
     }
-
     #[test]
     fn key_from_headers_prefers_injected_header() {
         let mut headers = HeaderMap::new();
@@ -1755,7 +1586,6 @@ mod tests {
             "203.0.113.55"
         );
     }
-
     #[test]
     fn ingress_remote_ip_uses_trusted_forwarded_for_chain() {
         let mut headers = HeaderMap::new();
@@ -1766,7 +1596,6 @@ mod tests {
             Some("203.0.113.55".parse().unwrap())
         );
     }
-
     #[test]
     fn ingress_remote_ip_ignores_forwarded_header_from_untrusted_peer() {
         let mut headers = HeaderMap::new();
@@ -1777,7 +1606,6 @@ mod tests {
             Some("198.51.100.10".parse().unwrap())
         );
     }
-
     #[test]
     fn ingress_remote_ip_rejects_client_spoofed_internal_header() {
         let mut headers = HeaderMap::new();
@@ -1788,7 +1616,6 @@ mod tests {
             Some("127.0.0.1".parse().unwrap())
         );
     }
-
     #[test]
     fn ingress_remote_ip_ignores_attacker_prefix_before_proxy_observation() {
         let mut headers = HeaderMap::new();
@@ -1802,7 +1629,6 @@ mod tests {
             Some("198.51.100.42".parse().unwrap())
         );
     }
-
     #[test]
     fn ingress_remote_ip_falls_back_to_proxy_for_malformed_chain() {
         let mut headers = HeaderMap::new();
@@ -1816,7 +1642,6 @@ mod tests {
             Some("127.0.0.1".parse().unwrap())
         );
     }
-
     #[test]
     fn ingress_remote_ip_falls_back_to_proxy_for_oversized_chain() {
         let mut headers = HeaderMap::new();
@@ -1830,18 +1655,15 @@ mod tests {
             Some("127.0.0.1".parse().unwrap())
         );
     }
-
     #[tokio::test]
     async fn allow_conditionally_bypasses_when_disabled() {
         let limiter = RateLimiter::new(Some(1), Some(1));
         // Saturate the limiter so subsequent checks would fail when enforced.
         assert!(limiter.allow("key").await);
         assert!(!limiter.allow("key").await);
-
         assert!(allow_conditionally(&limiter, "key", false).await);
         assert!(!allow_conditionally(&limiter, "key", true).await);
     }
-
     #[tokio::test]
     async fn limiter_with_disabled_configuration_short_circuits() {
         let limiter = RateLimiter::new(None, None);
@@ -1849,7 +1671,6 @@ mod tests {
             assert!(limiter.allow("any").await);
         }
     }
-
     #[test]
     fn is_allowed_by_cidr_prefers_effective_remote_ip() {
         let allow = vec![parse_cidr("203.0.113.0/24").unwrap()];
@@ -1864,12 +1685,10 @@ mod tests {
             Some("198.51.100.1".parse().unwrap()),
             &allow
         ));
-
         let mut headers_with_injected = HeaderMap::new();
         headers_with_injected.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
         assert!(is_allowed_by_cidr(&headers_with_injected, None, &allow));
     }
-
     #[test]
     fn is_allowed_by_cidr_prefers_injected_header() {
         let allow = vec![parse_cidr("203.0.113.0/24").unwrap()];
@@ -1881,7 +1700,6 @@ mod tests {
             &allow
         ));
     }
-
     #[test]
     fn is_allowed_by_cidr_respects_dual_stack_injected_header() {
         let allow = vec![
@@ -1891,18 +1709,15 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(REMOTE_ADDR_HEADER, "203.0.113.77".parse().unwrap());
         assert!(is_allowed_by_cidr(&headers, None, &allow));
-
         headers.insert(REMOTE_ADDR_HEADER, "2001:db8::99".parse().unwrap());
         assert!(is_allowed_by_cidr(&headers, None, &allow));
     }
-
     #[test]
     fn clamp_preauth_max_total_respects_nofile_budget() {
         let nofile_soft = Some(256);
         assert_eq!(clamp_preauth_max_total(Some(200), nofile_soft), Some(64));
         assert_eq!(clamp_preauth_max_total(Some(32), nofile_soft), Some(32));
     }
-
     #[test]
     fn clamp_preauth_max_per_ip_caps_to_total() {
         assert_eq!(clamp_preauth_max_per_ip(Some(100), Some(64)), Some(64));

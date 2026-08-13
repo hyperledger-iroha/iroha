@@ -3,14 +3,10 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-
 use super::*;
-
 static DIRECTORY_SEQUENCE_V2: AtomicU64 = AtomicU64::new(0);
 static TEST_MODULI_V2: [u64; 2] = [97, 113];
-
 struct TestDirectoryV2(PathBuf);
-
 impl TestDirectoryV2 {
     fn new_v2() -> Self {
         let sequence = DIRECTORY_SEQUENCE_V2.fetch_add(1, Ordering::SeqCst);
@@ -22,13 +18,11 @@ impl TestDirectoryV2 {
         Self(path)
     }
 }
-
 impl Drop for TestDirectoryV2 {
     fn drop(&mut self) {
         fs::remove_dir(&self.0).expect("remove empty post-C0 replay directory");
     }
 }
-
 fn geometry_v2() -> SpoolGeometryV2 {
     SpoolGeometryV2 {
         ring_degree: 4,
@@ -39,14 +33,12 @@ fn geometry_v2() -> SpoolGeometryV2 {
         moduli: &TEST_MODULI_V2,
     }
 }
-
 fn context_v2() -> PublicSpoolContextV2 {
     PublicSpoolContextV2 {
         sealed_source_transcript_digest: [0x31; 32],
         source_algebra_binding_digest: [0x42; 32],
     }
 }
-
 fn c0_complete_v2(directory: &TestDirectoryV2) -> QPcsC0CompleteV2 {
     let geometry = geometry_v2();
     let mut writer = QPcsSpoolWriterV2::create_with_geometry_v2(
@@ -92,7 +84,6 @@ fn c0_complete_v2(directory: &TestDirectoryV2) -> QPcsC0CompleteV2 {
     }
     c0.complete_v2().unwrap()
 }
-
 fn exhaust_pass_v2(mut replay: PostC0CoefficientReplayV2) -> PostC0ReplayBoundaryV2 {
     let geometry = replay.geometry_v2().unwrap();
     let purposes = u16::from(geometry.limb_count_v2().unwrap())
@@ -114,7 +105,6 @@ fn exhaust_pass_v2(mut replay: PostC0CoefficientReplayV2) -> PostC0ReplayBoundar
     }
     replay.complete_v2().unwrap()
 }
-
 #[test]
 fn exactly_two_complete_passes_transfer_the_only_permit() {
     let directory = TestDirectoryV2::new_v2();
@@ -165,7 +155,6 @@ fn stored_c0_can_only_reopen_in_exact_block_major_order_after_full_revalidation(
     let stored = replay.complete_v2().unwrap();
     assert_eq!(stored.geometry.domain_size_v2().unwrap(), 16);
     assert_ne!(stored.snapshot_binding_digest, [0; 32]);
-
     let first = exhaust_pass_v2(
         c0_complete_v2(&directory)
             .begin_post_c0_coefficient_replay_v2()
@@ -199,7 +188,6 @@ fn stored_c0_snapshot_binding_and_public_context_are_rechecked_before_reset() {
     let (mut stored, _permit) = completed.separate_replay_permit_v2().unwrap();
     stored.snapshot_binding_digest[0] ^= 1;
     assert!(stored.begin_c0_batch_replay_v2(context_v2()).is_err());
-
     let first = exhaust_pass_v2(
         c0_complete_v2(&directory)
             .begin_post_c0_coefficient_replay_v2()
@@ -223,7 +211,6 @@ fn incomplete_extra_context_and_unwind_fail_closed() {
         replay.complete_v2(),
         Err(QPcsSpoolErrorV2::ReplayIncomplete)
     ));
-
     let replay = c0_complete_v2(&directory)
         .begin_post_c0_coefficient_replay_v2()
         .unwrap();
@@ -232,7 +219,6 @@ fn incomplete_extra_context_and_unwind_fail_closed() {
         row.complete_v2(),
         Err(QPcsSpoolErrorV2::ReplayIncomplete)
     ));
-
     let replay = c0_complete_v2(&directory)
         .begin_post_c0_coefficient_replay_v2()
         .unwrap();
@@ -245,7 +231,6 @@ fn incomplete_extra_context_and_unwind_fail_closed() {
         Err(QPcsSpoolErrorV2::ExtraCoefficientBlock)
     ));
     assert!(matches!(row.complete_v2(), Err(QPcsSpoolErrorV2::Poisoned)));
-
     let mut complete = c0_complete_v2(&directory);
     complete.snapshot.coefficient_context_digest[0] ^= 1;
     let mut row = complete
@@ -258,7 +243,6 @@ fn incomplete_extra_context_and_unwind_fail_closed() {
         row.read_next_block_v2(),
         Err(QPcsSpoolErrorV2::Poisoned)
     ));
-
     let replay = c0_complete_v2(&directory)
         .begin_post_c0_coefficient_replay_v2()
         .unwrap();
@@ -272,7 +256,6 @@ fn incomplete_extra_context_and_unwind_fail_closed() {
         Err(QPcsSpoolErrorV2::Poisoned)
     ));
 }
-
 #[test]
 fn one_pass_cannot_be_relabelled_complete_and_source_guards_are_pinned() {
     let directory = TestDirectoryV2::new_v2();
@@ -285,7 +268,6 @@ fn one_pass_cannot_be_relabelled_complete_and_source_guards_are_pinned() {
         first.finish_v2(),
         Err(QPcsSpoolErrorV2::InvalidStoragePhase)
     ));
-
     let source = include_str!("post_c0_replay_v2.rs");
     let tests = include_str!("post_c0_replay_v2_tests.rs");
     assert!(source.lines().count() <= 550);
@@ -329,7 +311,6 @@ fn one_pass_cannot_be_relabelled_complete_and_source_guards_are_pinned() {
         .unwrap();
     assert!(!source[cq_start..cq_end].contains("replay_permit"));
 }
-
 #[test]
 fn cq_batch_boundary_is_the_exact_release_descriptor_at_unit_512() {
     let parameter = parameter_digest_v2(SpoolGeometryV2::release_v2()).unwrap();
@@ -346,7 +327,6 @@ fn cq_batch_boundary_is_the_exact_release_descriptor_at_unit_512() {
     wrong.mapping_digest[0] ^= 1;
     assert!(validate_exhausted_cq_batch_boundary_v2(wrong, 512, parameter).is_err());
 }
-
 #[test]
 fn tiny_post_root_binding_uses_the_accepted_column_transpose_order() {
     let directory = TestDirectoryV2::new_v2();

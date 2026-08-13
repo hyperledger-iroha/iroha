@@ -1,7 +1,5 @@
 //! Asset definitions and builders.
-
 use core::fmt;
-
 use derive_more::Display;
 use getset::{CopyGetters, Getters};
 use iroha_crypto::Hash;
@@ -11,19 +9,16 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::Value;
-
 pub use self::model::*;
 use super::{alias::AssetDefinitionAlias, id::AssetDefinitionId};
 use crate::{
     HasMetadata, Identifiable, Registered, Registrable, account::prelude::*, domain::DomainId,
     isi::error::MintabilityError, metadata::Metadata, sorafs_uri::SorafsUri,
 };
-
 /// Maximum accepted asset human-name length.
 pub const MAX_ASSET_NAME_LEN: usize = 128;
 /// Maximum accepted asset description length.
 pub const MAX_ASSET_DESCRIPTION_LEN: usize = 2048;
-
 /// Validate human-facing asset name.
 ///
 /// # Errors
@@ -53,7 +48,6 @@ pub fn validate_asset_name(name: &str) -> Result<(), crate::error::ParseError> {
     }
     Ok(())
 }
-
 /// Validate optional human-facing description.
 ///
 /// # Errors
@@ -82,7 +76,6 @@ pub fn validate_asset_description(
     }
     Ok(())
 }
-
 /// Validate optional alias literal for an asset definition against one allowed name stem.
 ///
 /// ASCII case differences are ignored so UX display labels like `CBDC` can still bind aliases
@@ -96,7 +89,6 @@ pub fn validate_asset_alias(
 ) -> Result<(), crate::error::ParseError> {
     validate_asset_alias_against_names(alias, [expected_name])
 }
-
 /// Validate optional alias literal for an asset definition against a set of allowed name stems.
 ///
 /// ASCII case differences are ignored for each allowed stem.
@@ -125,11 +117,9 @@ where
         "asset alias name segment must match the asset name",
     ))
 }
-
 #[model]
 mod model {
     use super::*;
-
     /// Balance partition policy for transparent asset ownership buckets.
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -144,7 +134,6 @@ mod model {
         #[display("DataspaceRestricted")]
         DataspaceRestricted,
     }
-
     /// Asset definition defines the type of that asset.
     #[derive(
         Debug,
@@ -224,7 +213,6 @@ mod model {
         #[registrable_builder(skip, init = AssetConfidentialPolicy::default())]
         pub confidential_policy: AssetConfidentialPolicy,
     }
-
     /// An assets mintability scheme. `Infinitely` means elastic
     /// supply. `Once` is what you want to use. Don't use `Not` explicitly
     /// outside of smartcontracts.
@@ -259,7 +247,6 @@ mod model {
         #[display("Limited({_0})")]
         Limited(MintabilityTokens),
     }
-
     /// Remaining mintability budget for limited assets.
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, CopyGetters,
@@ -279,7 +266,6 @@ mod model {
         #[getset(get_copy = "pub")]
         value: u32,
     }
-
     impl MintabilityTokens {
         /// Construct a new token budget if the value is non-zero.
         #[must_use]
@@ -290,7 +276,6 @@ mod model {
                 Some(Self { value })
             }
         }
-
         /// Attempt to construct a token budget, returning an error when the provided value is zero.
         ///
         /// # Errors
@@ -298,7 +283,6 @@ mod model {
         pub fn try_new(value: u32) -> Result<Self, MintabilityError> {
             Self::new(value).ok_or(MintabilityError::InvalidMintabilityTokens(value))
         }
-
         /// Decrement the budget by one, returning the remaining value or `None` when it reaches zero.
         #[must_use]
         pub const fn decrement(self) -> Option<Self> {
@@ -311,26 +295,22 @@ mod model {
             }
         }
     }
-
     impl From<MintabilityTokens> for u32 {
         fn from(tokens: MintabilityTokens) -> Self {
             tokens.value
         }
     }
-
     impl fmt::Display for MintabilityTokens {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{}", self.value)
         }
     }
-
     impl Mintable {
         /// Create a limited mintability variant from a pre-validated token budget.
         #[must_use]
         pub const fn limited(tokens: MintabilityTokens) -> Self {
             Self::Limited(tokens)
         }
-
         /// Attempt to create a limited mintability variant from a raw token value.
         ///
         /// # Errors
@@ -338,7 +318,6 @@ mod model {
         pub fn limited_from_u32(tokens: u32) -> Result<Self, MintabilityError> {
             MintabilityTokens::try_new(tokens).map(Self::Limited)
         }
-
         /// Remaining limited token budget, if applicable.
         #[must_use]
         pub const fn remaining_tokens(self) -> Option<MintabilityTokens> {
@@ -347,7 +326,6 @@ mod model {
                 _ => None,
             }
         }
-
         /// Consume one unit of mintability budget.
         ///
         /// # Errors
@@ -372,7 +350,6 @@ mod model {
             }
         }
     }
-
     /// Operating mode for confidential asset flows.
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -391,7 +368,6 @@ mod model {
         #[display("Convertible")]
         Convertible,
     }
-
     /// Pending transition to a new confidential policy mode.
     #[derive(
         Debug,
@@ -434,7 +410,6 @@ mod model {
         #[getset(get = "pub")]
         pub conversion_window: Option<u64>,
     }
-
     /// Configuration governing whether and how an asset uses confidential flows.
     #[derive(
         Debug,
@@ -478,7 +453,6 @@ mod model {
         pub pending_transition: Option<ConfidentialPolicyTransition>,
     }
 }
-
 impl AssetDefinition {
     /// Construct builder for [`AssetDefinition`] identifiable by [`AssetDefinitionId`].
     ///
@@ -494,7 +468,6 @@ impl AssetDefinition {
     ) -> <Self as Registered>::With {
         <Self as Registered>::With::new(id, name.into(), spec, balance_scope_policy, owning_domain)
     }
-
     /// Construct builder for [`AssetDefinition`] identifiable by [`AssetDefinitionId`].
     ///
     /// The human-facing `name` is explicit and cannot be omitted from construction.
@@ -514,12 +487,10 @@ impl AssetDefinition {
             owning_domain,
         )
     }
-
     /// Mutable access to asset definition metadata for in-place updates.
     pub fn metadata_mut(&mut self) -> &mut Metadata {
         &mut self.metadata
     }
-
     /// Consume one unit of the limited mintability budget.
     ///
     /// # Errors
@@ -527,17 +498,14 @@ impl AssetDefinition {
     pub fn consume_mintability(&mut self) -> Result<bool, MintabilityError> {
         self.mintable.consume_one()
     }
-
     /// Set mintability mode.
     pub fn set_mintable(&mut self, mintable: Mintable) {
         self.mintable = mintable;
     }
-
     /// Set the owner of this asset definition.
     pub fn set_owned_by(&mut self, owner: AccountId) {
         self.owned_by = owner;
     }
-
     /// Set the runtime confidential policy configuration.
     ///
     /// Consensus execution uses this after validating the canonical confidential verifier
@@ -546,7 +514,6 @@ impl AssetDefinition {
         self.confidential_policy = policy;
     }
 }
-
 impl NewAssetDefinition {
     /// Set mintability to [`Mintable::Once`]
     #[inline]
@@ -555,7 +522,6 @@ impl NewAssetDefinition {
         self.mintable = Mintable::Once;
         self
     }
-
     /// Set mintability to [`Mintable::Limited`] with a pre-validated token budget.
     #[inline]
     #[must_use]
@@ -563,7 +529,6 @@ impl NewAssetDefinition {
         self.mintable = Mintable::limited(tokens);
         self
     }
-
     /// Try to set mintability to [`Mintable::Limited`] using a raw token value.
     ///
     /// Returns an error when the provided value is zero.
@@ -575,7 +540,6 @@ impl NewAssetDefinition {
         Ok(self)
     }
 }
-
 impl Default for AssetConfidentialPolicy {
     fn default() -> Self {
         Self {
@@ -587,7 +551,6 @@ impl Default for AssetConfidentialPolicy {
         }
     }
 }
-
 impl AssetConfidentialPolicy {
     fn transition_is_valid_for_current_mode(
         &self,
@@ -613,7 +576,6 @@ impl AssetConfidentialPolicy {
                 ConfidentialPolicyMode::TransparentOnly => false,
             }
     }
-
     /// Return whether the persisted pending transition has a valid ABI V1 shape.
     ///
     /// This is a recovery boundary as well as a runtime invariant: authenticated
@@ -623,13 +585,11 @@ impl AssetConfidentialPolicy {
         self.pending_transition
             .is_none_or(|transition| self.transition_is_valid_for_current_mode(transition))
     }
-
     /// Create a transparent-only policy.
     #[must_use]
     pub fn transparent() -> Self {
         Self::default()
     }
-
     /// Create a shielded-only policy without pending transitions.
     #[must_use]
     pub fn shielded_only() -> Self {
@@ -638,7 +598,6 @@ impl AssetConfidentialPolicy {
             ..Self::default()
         }
     }
-
     /// Create a convertible policy without pending transitions.
     #[must_use]
     pub fn convertible() -> Self {
@@ -647,7 +606,6 @@ impl AssetConfidentialPolicy {
             ..Self::default()
         }
     }
-
     /// Compute a digest summarizing the confidential feature expectations.
     #[must_use]
     pub fn features_digest(&self) -> Hash {
@@ -661,7 +619,6 @@ impl AssetConfidentialPolicy {
         buf.extend_from_slice(&self.pedersen_params_id.unwrap_or_default().to_le_bytes());
         Hash::new(&buf)
     }
-
     /// Determine the policy mode that should be in effect at `block_height`.
     ///
     /// Returns the pending transition's mode once the effective height is reached.
@@ -688,7 +645,6 @@ impl AssetConfidentialPolicy {
         }
         self.mode
     }
-
     /// Apply the pending transition when it is due, returning the updated policy and
     /// whether a change occurred.
     ///
@@ -722,13 +678,11 @@ impl AssetConfidentialPolicy {
         (self, false)
     }
 }
-
 impl HasMetadata for AssetDefinition {
     fn metadata(&self) -> &Metadata {
         &self.metadata
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for Mintable {
     fn write_json(&self, out: &mut String) {
@@ -742,7 +696,6 @@ impl norito::json::FastJsonWrite for Mintable {
             }
         }
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -757,7 +710,6 @@ impl norito::json::FastJsonWrite for Mintable {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ConfidentialPolicyMode {
     fn write_json(&self, out: &mut String) {
@@ -768,7 +720,6 @@ impl norito::json::FastJsonWrite for ConfidentialPolicyMode {
         };
         norito::json::write_json_string(label, out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -781,7 +732,6 @@ impl norito::json::FastJsonWrite for ConfidentialPolicyMode {
         norito::json::write_json_string_to(label, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for AssetBalancePolicy {
     fn write_json(&self, out: &mut String) {
@@ -791,7 +741,6 @@ impl norito::json::FastJsonWrite for AssetBalancePolicy {
         };
         norito::json::write_json_string(label, out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -803,7 +752,6 @@ impl norito::json::FastJsonWrite for AssetBalancePolicy {
         norito::json::write_json_string_to(label, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ConfidentialPolicyMode {
     fn json_deserialize(
@@ -821,7 +769,6 @@ impl norito::json::JsonDeserialize for ConfidentialPolicyMode {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for AssetBalancePolicy {
     fn json_deserialize(
@@ -838,14 +785,12 @@ impl norito::json::JsonDeserialize for AssetBalancePolicy {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for Mintable {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use norito::json::MapVisitor;
-
         parser.skip_ws();
         let next = match parser.peek() {
             Some(byte) => byte,
@@ -856,23 +801,19 @@ impl norito::json::JsonDeserialize for Mintable {
                 });
             }
         };
-
         if next == b'"' {
             let label = parser.parse_string()?;
             return parse_mintable_label(label.as_str());
         }
-
         if next != b'{' {
             return Err(norito::json::Error::InvalidField {
                 field: String::from("Mintable"),
                 message: String::from("expected string variant or object"),
             });
         }
-
         let mut visitor = MapVisitor::new(parser)?;
         let mut kind: Option<String> = None;
         let mut tokens: Option<MintabilityTokens> = None;
-
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "kind" => {
@@ -894,9 +835,7 @@ impl norito::json::JsonDeserialize for Mintable {
             }
         }
         visitor.finish()?;
-
         let kind = kind.ok_or_else(|| norito::json::Error::missing_field("kind"))?;
-
         match kind.as_str() {
             "Infinitely" => Ok(Mintable::Infinitely),
             "Once" => Ok(Mintable::Once),
@@ -914,7 +853,6 @@ impl norito::json::JsonDeserialize for Mintable {
         }
     }
 }
-
 #[cfg(feature = "json")]
 fn parse_mintable_label(label: &str) -> Result<Mintable, norito::json::Error> {
     match label {
@@ -940,7 +878,6 @@ fn parse_mintable_label(label: &str) -> Result<Mintable, norito::json::Error> {
         }),
     }
 }
-
 #[cfg(feature = "json")]
 fn parse_limited_tokens_value(value: Value) -> Result<MintabilityTokens, norito::json::Error> {
     let raw = match value {
@@ -966,33 +903,27 @@ fn parse_limited_tokens_value(value: Value) -> Result<MintabilityTokens, norito:
             });
         }
     };
-
     let raw = u32::try_from(raw).map_err(|_| norito::json::Error::InvalidField {
         field: String::from("Mintable"),
         message: String::from("tokens exceed u32 range"),
     })?;
-
     MintabilityTokens::try_new(raw).map_err(|err| norito::json::Error::InvalidField {
         field: String::from("Mintable"),
         message: err.to_string(),
     })
 }
-
 impl HasMetadata for NewAssetDefinition {
     fn metadata(&self) -> &Metadata {
         &self.metadata
     }
 }
-
 #[cfg(test)]
 mod validation_tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode as _, DecodeAll as _, Encode as _};
-
     use super::*;
     use crate::domain::DomainId;
-
     #[derive(Encode)]
     struct ForgedAssetDefinition {
         id: AssetDefinitionId,
@@ -1009,7 +940,6 @@ mod validation_tests {
         total_quantity: Numeric,
         confidential_policy: AssetConfidentialPolicy,
     }
-
     #[derive(Encode)]
     struct ForgedNewAssetDefinitionWithPolicy {
         id: AssetDefinitionId,
@@ -1024,13 +954,11 @@ mod validation_tests {
         owning_domain: Option<DomainId>,
         confidential_policy: AssetConfidentialPolicy,
     }
-
     fn owner() -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
             .expect("derive checked asset-definition fixture owner");
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn confidential_policy_discards_transitions_outside_the_v1_state_machine() {
         for (mode, previous_mode, new_mode) in [
@@ -1072,17 +1000,14 @@ mod validation_tests {
                 pending_transition: Some(transition),
                 ..AssetConfidentialPolicy::default()
             };
-
             assert_eq!(policy.effective_mode(10), mode);
             let (before_due, changed) = policy.apply_if_due(9);
             assert_eq!(before_due.mode(), mode);
             assert!(before_due.pending_transition().is_none());
             assert!(changed);
-
             assert_eq!(policy.effective_mode(10), mode);
         }
     }
-
     #[test]
     fn confidential_policy_validates_persisted_transition_shape() {
         let valid_to_shielded = ConfidentialPolicyTransition {
@@ -1110,7 +1035,6 @@ mod validation_tests {
             };
             assert!(policy.pending_transition_is_valid());
         }
-
         let malformed = [
             ConfidentialPolicyTransition {
                 conversion_window: None,
@@ -1138,14 +1062,12 @@ mod validation_tests {
             assert!(!policy.pending_transition_is_valid());
         }
     }
-
     #[test]
     fn constructors_require_explicit_name() {
         let id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
-
         let numeric = AssetDefinition::numeric(
             id.clone(),
             "Rose",
@@ -1153,7 +1075,6 @@ mod validation_tests {
             None,
         );
         assert_eq!(numeric.name, "Rose");
-
         let custom = AssetDefinition::new(
             id,
             "Rose fractional",
@@ -1163,7 +1084,6 @@ mod validation_tests {
         );
         assert_eq!(custom.name, "Rose fractional");
     }
-
     #[test]
     fn constructor_requires_explicit_ownership_intent() {
         let domain = DomainId::try_new("wonderland", "universal").expect("domain");
@@ -1175,7 +1095,6 @@ mod validation_tests {
             AssetDefinition::numeric(id, "Rose", crate::asset::AssetBalancePolicy::Global, None);
         assert_eq!(definition.alias, None);
         assert_eq!(definition.owning_domain, None);
-
         let explicit = definition.with_owning_domain(Some(domain.clone()));
         let encoded = explicit.encode();
         let decoded = NewAssetDefinition::decode(&mut encoded.as_slice())
@@ -1184,7 +1103,6 @@ mod validation_tests {
         assert_eq!(decoded.alias, None);
         assert_eq!(decoded.owning_domain, Some(domain));
     }
-
     #[test]
     fn new_asset_definition_binary_rejects_custom_confidential_policy() {
         let domain = DomainId::try_new("wonderland", "universal").expect("domain");
@@ -1208,7 +1126,6 @@ mod validation_tests {
             NewAssetDefinition::decode_all(&mut encoded.as_slice()).is_err(),
             "registration wire must not carry caller-selected confidential policy state"
         );
-
         let canonical = AssetDefinition::numeric(id, "Rose", AssetBalancePolicy::Global, None);
         let encoded = canonical.encode();
         let decoded = NewAssetDefinition::decode_all(&mut encoded.as_slice())
@@ -1219,7 +1136,6 @@ mod validation_tests {
             &AssetConfidentialPolicy::default()
         );
     }
-
     #[test]
     fn negative_numeric_payload_cannot_decode_as_asset_definition_total() {
         let id = AssetDefinitionId::derive_from_components(
@@ -1245,44 +1161,37 @@ mod validation_tests {
             confidential_policy: definition.confidential_policy,
         };
         let encoded = forged.encode();
-
         assert!(
             AssetDefinition::decode(&mut encoded.as_slice()).is_err(),
             "a signed negative payload must not cross the nominal total-quantity boundary"
         );
     }
-
     #[test]
     fn asset_name_validation_rejects_blank_and_alias_separators() {
         assert!(validate_asset_name("   ").is_err());
         assert!(validate_asset_name("usd#x").is_err());
         assert!(validate_asset_name("usd@x").is_err());
     }
-
     #[test]
     fn asset_name_validation_accepts_simple_label() {
         validate_asset_name("USD Coin").expect("valid name");
     }
-
     #[test]
     fn asset_description_validation_rejects_blank_when_present() {
         assert!(validate_asset_description(Some("  ")).is_err());
         validate_asset_description(None).expect("none is valid");
     }
-
     #[test]
     fn asset_alias_validation_requires_name_segment_match() {
         let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("alias");
         validate_asset_alias(Some(&alias), "usd").expect("matching name segment");
         assert!(validate_asset_alias(Some(&alias), "US Dollar").is_err());
     }
-
     #[test]
     fn asset_alias_validation_accepts_ascii_case_differences() {
         let alias: AssetDefinitionAlias = "cbdc#centralbank".parse().expect("alias");
         validate_asset_alias(Some(&alias), "CBDC").expect("matching name segment");
     }
-
     #[test]
     fn asset_alias_validation_accepts_any_allowed_stem() {
         let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("alias");
@@ -1290,16 +1199,12 @@ mod validation_tests {
             .expect("one allowed display-name stem should be accepted");
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
     use std::str::FromStr;
-
     use norito::json::{Arena, FastFromJson, TapeWalker};
-
     use super::*;
     use crate::{Name, domain::DomainId, metadata::Metadata};
-
     #[test]
     fn new_asset_definition_json_roundtrip_omits_confidential_policy() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1325,7 +1230,6 @@ mod json_tests {
             balance_scope_policy: AssetBalancePolicy::DataspaceRestricted,
             owning_domain: Some(domain),
         };
-
         let json =
             norito::json::to_json(&new_definition).expect("serialize asset definition builder");
         assert!(
@@ -1334,7 +1238,6 @@ mod json_tests {
         );
         let decoded: NewAssetDefinition =
             norito::json::from_json(&json).expect("deserialize asset definition builder");
-
         assert_eq!(decoded.id, new_definition.id);
         assert_eq!(decoded.name, new_definition.name);
         assert_eq!(decoded.description, new_definition.description);
@@ -1349,7 +1252,6 @@ mod json_tests {
         );
         assert_eq!(decoded.owning_domain, new_definition.owning_domain);
     }
-
     #[test]
     fn new_asset_definition_json_rejects_custom_confidential_policy() {
         let definition = AssetDefinition::numeric(
@@ -1377,7 +1279,6 @@ mod json_tests {
             "registration JSON must reject caller-selected confidential policy state"
         );
     }
-
     #[test]
     fn new_asset_definition_fast_from_json_matches_value() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1397,7 +1298,6 @@ mod json_tests {
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
         };
-
         let json = norito::json::to_json(&new_definition).expect("serialize asset definition");
         assert!(
             json.contains("\"owning_domain\":null"),
@@ -1413,7 +1313,6 @@ mod json_tests {
             <NewAssetDefinition as FastFromJson>::parse(&mut walker, &mut arena).expect("parse");
         assert_eq!(parsed, new_definition);
     }
-
     #[test]
     fn new_asset_definition_json_rejects_missing_ownership_intent() {
         let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1438,7 +1337,6 @@ mod json_tests {
             "missing ownership intent must not default to an unowned definition"
         );
     }
-
     #[test]
     fn new_asset_definition_json_rejects_missing_balance_policy_intent() {
         let definition = AssetDefinition::numeric(

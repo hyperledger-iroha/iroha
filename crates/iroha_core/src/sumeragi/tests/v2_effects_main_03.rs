@@ -8,7 +8,6 @@ fn reordered_enter_view_fails_before_fresh_sign_dispatch() {
     let mut fresh_vote = vote(&fixture);
     fresh_vote.round = round(&fixture.context, 1);
     fresh_vote.proposal_round = fresh_vote.round;
-
     assert!(matches!(
         executor.consume_effects(
             vec![
@@ -33,13 +32,11 @@ fn reordered_enter_view_fails_before_fresh_sign_dispatch() {
     assert!(services.entered_views.is_empty());
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn same_view_higher_generation_tc_requires_and_installs_leading_enter_view() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
-
     for view in [1, 2] {
         let next_tag = tag(view);
         executor.runtime.round_tag = Some(next_tag);
@@ -54,7 +51,6 @@ fn same_view_higher_generation_tc_requires_and_installs_leading_enter_view() {
             )
             .expect("install the ordinary certified view transition");
     }
-
     let current = tag(2);
     let upgraded = EventTag::new(
         current.height(),
@@ -72,12 +68,10 @@ fn same_view_higher_generation_tc_requires_and_installs_leading_enter_view() {
             &mut services,
         )
         .expect("install the alternate same-view TC generation");
-
     assert_eq!(executor.reconciled_tag, Some(upgraded));
     assert_eq!(services.entered_views.last(), Some(&upgraded));
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn first_lock_retires_unlocked_fetch_store_and_validation_owners() {
     let fixture = Fixture::new();
@@ -88,7 +82,6 @@ fn first_lock_retires_unlocked_fetch_store_and_validation_owners() {
         round(&fixture.context, consumer.view()),
         replacement_subject,
     );
-
     {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -106,17 +99,14 @@ fn first_lock_retires_unlocked_fetch_store_and_validation_owners() {
             )
             .expect("start unlocked candidate fetch");
         let fetch_id = services.fetch_tasks[0].id();
-
         executor
             .reconcile_locked_body_for_recovery(consumer, first_lock, &mut services)
             .expect("first different lock retires the unlocked fetch");
-
         assert!(executor.pending_fetches.is_empty());
         assert!(executor.body_pipeline_owners.is_empty());
         assert_eq!(services.cancelled_fetches, vec![fetch_id]);
         assert_eq!(services.retired_outbound_subjects, vec![staged.subject]);
     }
-
     {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -129,17 +119,14 @@ fn first_lock_retires_unlocked_fetch_store_and_validation_owners() {
             )
             .expect("start unlocked local-proposal store");
         let store_id = services.store_tasks[0].id();
-
         executor
             .reconcile_locked_body_for_recovery(consumer, first_lock, &mut services)
             .expect("first different lock retires the unlocked store");
-
         assert!(executor.pending_stores.is_empty());
         assert!(executor.body_pipeline_owners.is_empty());
         assert_eq!(executor.pending_store_bytes, 0);
         assert_eq!(services.cancelled_stores, vec![store_id]);
     }
-
     {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -157,17 +144,14 @@ fn first_lock_retires_unlocked_fetch_store_and_validation_owners() {
             .complete_body_store(stored, &mut services)
             .expect("advance unlocked candidate to validation");
         let validation_id = services.validation_tasks[0].id();
-
         executor
             .reconcile_locked_body_for_recovery(consumer, first_lock, &mut services)
             .expect("first different lock retires the unlocked validation");
-
         assert!(executor.pending_validations.is_empty());
         assert!(executor.body_pipeline_owners.is_empty());
         assert_eq!(services.cancelled_validations, vec![validation_id]);
     }
 }
-
 #[test]
 fn higher_lock_retires_queued_store_validation_and_local_proposal_completions() {
     let fixture = Fixture::new();
@@ -178,7 +162,6 @@ fn higher_lock_retires_queued_store_validation_and_local_proposal_completions() 
         round(&fixture.context, consumer.view()),
         replacement_subject,
     );
-
     {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -232,14 +215,12 @@ fn higher_lock_retires_queued_store_validation_and_local_proposal_completions() 
             [RuntimeCompletion::BodyStored(tag, round, subject, _)]
                 if *tag == consumer && *round == staged.round && *subject == staged.subject
         ));
-
         executor
             .reconcile_locked_body_for_recovery(consumer, first_lock, &mut services)
             .expect("first lock retires queued BodyStored");
         assert!(executor.runtime.completions.is_empty());
         assert!(executor.body_pipeline_owners.is_empty());
     }
-
     {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -266,14 +247,12 @@ fn higher_lock_retires_queued_store_validation_and_local_proposal_completions() 
             [RuntimeCompletion::LocalProposal(tag, manifest, ..)]
                 if *tag == consumer && manifest == &staged
         ));
-
         executor
             .reconcile_locked_body_for_recovery(consumer, first_lock, &mut services)
             .expect("first lock retires queued LocalProposalReady");
         assert!(executor.runtime.completions.is_empty());
         assert!(executor.body_pipeline_owners.is_empty());
     }
-
     {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -343,7 +322,6 @@ fn higher_lock_retires_queued_store_validation_and_local_proposal_completions() 
             [RuntimeCompletion::ValidationSucceeded(tag, round, subject, _)]
                 if *tag == consumer && *round == staged.round && *subject == staged.subject
         ));
-
         executor
             .reconcile_locked_body_for_recovery(consumer, first_lock, &mut services)
             .expect("first lock retires queued ValidationSucceeded");
@@ -351,7 +329,6 @@ fn higher_lock_retires_queued_store_validation_and_local_proposal_completions() 
         assert!(executor.body_pipeline_owners.is_empty());
     }
 }
-
 #[test]
 fn lock_reconciliation_rejects_same_round_conflict_and_late_lower_lock() {
     let fixture = Fixture::new();
@@ -363,7 +340,6 @@ fn lock_reconciliation_rejects_same_round_conflict_and_late_lower_lock() {
     executor
         .reconcile_locked_body_for_recovery(consumer, first, &mut services)
         .expect("publish initial lock");
-
     assert!(matches!(
         executor.reconcile_locked_body_for_recovery(
             consumer,
@@ -376,7 +352,6 @@ fn lock_reconciliation_rejects_same_round_conflict_and_late_lower_lock() {
     assert_eq!(executor.protected_lock, Some(first));
     assert!(!executor.output_guard.restart_required());
     assert!(services.closed.is_empty());
-
     let higher = (round(&fixture.context, 1), replacement_subject);
     executor
         .reconcile_locked_body_for_recovery(consumer, higher, &mut services)
@@ -390,7 +365,6 @@ fn lock_reconciliation_rejects_same_round_conflict_and_late_lower_lock() {
     assert!(!executor.output_guard.restart_required());
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn higher_round_same_subject_retires_old_origin_pipeline_with_same_tag() {
     let fixture = Fixture::new();
@@ -426,7 +400,6 @@ fn higher_round_same_subject_retires_old_origin_pipeline_with_same_tag() {
         )
         .expect("queue the old round-bound completion");
     assert_eq!(executor.ready_body_bytes, body_len * 2);
-
     let higher = (round(&fixture.context, 1), fixture.manifest.subject);
     executor
         .reconcile_locked_body_for_recovery(consumer, higher, &mut services)
@@ -437,7 +410,6 @@ fn higher_round_same_subject_retires_old_origin_pipeline_with_same_tag() {
     assert!(executor.runtime.completions.is_empty());
     assert!(executor.retained_locked_body.is_some());
     assert_eq!(executor.ready_body_bytes, body_len);
-
     executor
         .retain_locked_body_for_recovery(
             consumer,
@@ -462,7 +434,6 @@ fn higher_round_same_subject_retires_old_origin_pipeline_with_same_tag() {
     assert_eq!(executor.ready_bodies.len(), 1);
     assert_eq!(executor.ready_body_bytes, body_len * 2);
     assert!(!executor.status().fail_closed);
-
     // Exact lock repetition used to return before global byte accounting
     // was checked. Exercise the direct lock-recovery entrypoint with both
     // low and inflated counters: neither corruption may hide behind the
@@ -494,7 +465,6 @@ fn higher_round_same_subject_retires_old_origin_pipeline_with_same_tag() {
             _ => unreachable!("the test enumerates low and high corruption"),
         };
         let before = executor.body_ownership_projection();
-
         assert!(matches!(
             executor.reconcile_locked_body_for_recovery(
                 consumer,
@@ -511,7 +481,6 @@ fn higher_round_same_subject_retires_old_origin_pipeline_with_same_tag() {
         assert!(services.cancelled_validations.is_empty());
     }
 }
-
 #[test]
 fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
     let fixture = Fixture::new();
@@ -520,7 +489,6 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
     let protected = (fixture.manifest.round, fixture.manifest.subject);
     let protected_lock = fixture.qc(wire::GlobalPhase::Prepare);
     let body_len = u64::try_from(fixture.body.len()).expect("body length");
-
     let initial_tag = EventTag::new(1, 0, Generation::new(40));
     executor
         .reconcile_locked_body_for_recovery(initial_tag, protected, &mut services)
@@ -536,7 +504,6 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
         .expect("stage one view-independent locked-body cache");
     assert_eq!(executor.ready_body_bytes, body_len * 2);
     assert!(executor.body_pipeline_owners.is_empty());
-
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
@@ -550,7 +517,6 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
     assert_eq!(executor.ready_body_bytes, body_len * 2);
     assert!(executor.retained_locked_body.is_some());
     assert_eq!(executor.ready_bodies.len(), 1);
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -571,7 +537,6 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
             if *completion_tag == EventTag::new(1, 1, Generation::new(41))
                 && manifest == &fixture.manifest
     ));
-
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
@@ -591,7 +556,6 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
     assert_eq!(executor.ready_body_bytes, body_len * 2);
     assert!(executor.retained_locked_body.is_some());
 }
-
 #[test]
 fn higher_different_lock_releases_retained_cache_before_replacement_staging() {
     let fixture = Fixture::new();
@@ -611,7 +575,6 @@ fn higher_different_lock_releases_retained_cache_before_replacement_staging() {
             &mut services,
         )
         .expect("retain the original lock cache");
-
     let replacement_header = BlockHeader::new(
         NonZeroU64::new(1).expect("height"),
         None,
@@ -658,7 +621,6 @@ fn higher_different_lock_releases_retained_cache_before_replacement_staging() {
     assert!(executor.retained_locked_body.is_none());
     assert!(executor.ready_bodies.is_empty());
     assert_eq!(executor.ready_body_bytes, 0);
-
     executor
         .retain_locked_body_for_recovery(
             EventTag::new(1, 2, Generation::new(52)),
@@ -680,7 +642,6 @@ fn higher_different_lock_releases_retained_cache_before_replacement_staging() {
         u64::try_from(replacement_body.len()).expect("replacement body length") * 2
     );
 }
-
 #[test]
 fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
     let fixture = Fixture::new();
@@ -724,7 +685,6 @@ fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
         .expect("start Apply through the production admission path");
     let task = services.apply_tasks.pop().expect("production Apply task");
     let work_id = task.id();
-
     assert_eq!(
         executor
             .defer_application_for_merge_sidecar(work_id, &reference, &mut services)
@@ -748,7 +708,6 @@ fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
     );
     assert_eq!(executor.status().deferred_merge_work, 0);
     assert!(executor.pending_applications.contains_key(&work_id));
-
     // Application deferral is also an ownership boundary. An internally
     // inconsistent decided task must fail before sidecar registration or
     // a recovery callback can treat it as legitimate pending work.
@@ -763,7 +722,6 @@ fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
         ..task.subject
     };
     let deferred_callbacks = services.deferred_merge_sidecars.len();
-
     assert!(matches!(
         executor.defer_application_for_merge_sidecar(work_id, &reference, &mut services,),
         Err(EffectExecutorError::Contract(reason))
@@ -772,7 +730,6 @@ fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
     assert!(executor.pending_applications.contains_key(&work_id));
     assert!(executor.deferred_merge_work.is_empty());
     assert_eq!(services.deferred_merge_sidecars.len(), deferred_callbacks);
-
     let pending = executor
         .pending_applications
         .get_mut(&work_id)
@@ -787,7 +744,6 @@ fn decided_apply_retries_after_exact_merge_sidecar_recovery() {
     assert!(executor.deferred_merge_work.is_empty());
     assert_eq!(services.deferred_merge_sidecars.len(), deferred_callbacks);
 }
-
 #[test]
 fn deferred_merge_sidecar_accepts_earlier_carrier_and_rejects_future_or_foreign() {
     {
@@ -806,7 +762,6 @@ fn deferred_merge_sidecar_accepts_earlier_carrier_and_rejects_future_or_foreign(
         )
         .id();
         reference.merge_qc.view = round.view.saturating_sub(1);
-
         assert_eq!(
             executor
                 .complete_body_validation(
@@ -820,7 +775,6 @@ fn deferred_merge_sidecar_accepts_earlier_carrier_and_rejects_future_or_foreign(
         assert!(!executor.status().fail_closed);
         assert_eq!(services.deferred_merge_sidecars.len(), 1);
     }
-
     for mismatch in 0..3 {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::default());
@@ -864,7 +818,6 @@ fn deferred_merge_sidecar_accepts_earlier_carrier_and_rejects_future_or_foreign(
         assert!(executor.runtime.completions.is_empty());
     }
 }
-
 #[test]
 fn certified_view_prunes_unprotected_merge_sidecar_work_but_keeps_high_qc_subject() {
     for protected in [false, true] {
@@ -895,7 +848,6 @@ fn certified_view_prunes_unprotected_merge_sidecar_work_but_keeps_high_qc_subjec
                 &mut services,
             )
             .expect("defer exact prior-view work");
-
         let mut timeout = timeout_at_view(&fixture, round.view);
         let protected_lock = protected.then(|| {
             let mut highest = fixture.qc(wire::GlobalPhase::Prepare);
@@ -908,7 +860,6 @@ fn certified_view_prunes_unprotected_merge_sidecar_work_but_keeps_high_qc_subjec
         executor
             .install_view(tag(round.view + 1), timeout, protected_lock, &mut services)
             .expect("install certified next view");
-
         assert_eq!(
             executor.retains_deferred_merge_sidecar(work_id, round, subject, entry_hash),
             protected
@@ -935,7 +886,6 @@ fn certified_view_prunes_unprotected_merge_sidecar_work_but_keeps_high_qc_subjec
         );
     }
 }
-
 #[test]
 fn certified_view_protects_only_the_exact_high_qc_round_for_one_subject() {
     let fixture = Fixture::new();
@@ -961,7 +911,6 @@ fn certified_view_protects_only_the_exact_high_qc_round_for_one_subject() {
         subject,
     )
     .id();
-
     let mut second_reference = reference.clone();
     second_reference.merge_qc.view = second_round.view;
     for (work_id, reference) in [(first_id, reference), (second_id, second_reference)] {
@@ -972,7 +921,6 @@ fn certified_view_protects_only_the_exact_high_qc_round_for_one_subject() {
             )
             .expect("defer same-subject validation round");
     }
-
     let mut timeout = timeout_at_view(&fixture, second_round.view);
     let mut highest = fixture.qc(wire::GlobalPhase::Prepare);
     highest.round = second_round;
@@ -987,13 +935,11 @@ fn certified_view_protects_only_the_exact_high_qc_round_for_one_subject() {
             &mut services,
         )
         .expect("install certified view with exact high PrepareQC");
-
     assert!(!executor.retains_deferred_merge_sidecar(first_id, first_round, subject, entry_hash));
     assert!(executor.retains_deferred_merge_sidecar(second_id, second_round, subject, entry_hash));
     assert_eq!(executor.status().deferred_merge_work, 1);
     assert!(executor.pending_validations[&second_id].consumer.is_none());
 }
-
 #[test]
 fn protected_deferred_validation_retags_consumer_across_view_churn_before_retry() {
     let fixture = Fixture::new();
@@ -1028,13 +974,11 @@ fn protected_deferred_validation_retags_consumer_across_view_churn_before_retry(
             .expect("defer protected validation"),
         CompletionDisposition::Deferred
     );
-
     let mut high_prepare = fixture.qc(wire::GlobalPhase::Prepare);
     high_prepare.round = round;
     high_prepare.proposal_round = round;
     high_prepare.subject = subject;
     let sources = certified_sources(&fixture, &high_prepare);
-
     for entering_view in [round.view + 1, round.view + 2] {
         let mut timeout = timeout_at_view(&fixture, entering_view - 1);
         timeout.groups[0].highest_prepare_qc = Some(high_prepare.clone());
@@ -1059,7 +1003,6 @@ fn protected_deferred_validation_retags_consumer_across_view_churn_before_retry(
             )
             .expect("replay protected body in current view");
         assert!(executor.pending_validations[&work_id].consumer.is_none());
-
         executor
             .consume_effects(
                 vec![
@@ -1087,7 +1030,6 @@ fn protected_deferred_validation_retags_consumer_across_view_churn_before_retry(
             Some(&entry_hash)
         );
     }
-
     assert_eq!(
         executor
             .retry_deferred_merge_sidecar(entry_hash, &mut services)
@@ -1124,7 +1066,6 @@ fn protected_deferred_validation_retags_consumer_across_view_churn_before_retry(
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn certified_view_rebinds_inflight_high_qc_validation_through_current_fifo() {
     let fixture = Fixture::new();
@@ -1144,7 +1085,6 @@ fn certified_view_rebinds_inflight_high_qc_validation_through_current_fifo() {
         .complete_body_store(stored, &mut services)
         .expect("start old-view validation");
     let work_id = services.validation_tasks[0].id();
-
     let prepare = fixture.qc(wire::GlobalPhase::Prepare);
     let sources = certified_sources(&fixture, &prepare);
     let mut timeout = timeout_certificate(&fixture);
@@ -1169,7 +1109,6 @@ fn certified_view_rebinds_inflight_high_qc_validation_through_current_fifo() {
             &mut services,
         )
         .expect("install view and replay locked-body acquisition");
-
     assert_eq!(executor.pending_validations.len(), 1);
     assert!(executor.pending_validations[&work_id].consumer.is_none());
     assert_eq!(
@@ -1184,7 +1123,6 @@ fn certified_view_rebinds_inflight_high_qc_validation_through_current_fifo() {
         Some(RuntimeCompletion::BodyAvailable(completion_tag, manifest))
             if *completion_tag == tag(1) && manifest == &fixture.manifest
     ));
-
     executor
         .consume_effects(
             vec![
@@ -1214,7 +1152,6 @@ fn certified_view_rebinds_inflight_high_qc_validation_through_current_fifo() {
             .iter()
             .all(|task| task.id() == work_id)
     );
-
     let completed = services.execute_validation(work_id);
     assert_eq!(
         executor
@@ -1236,7 +1173,6 @@ fn certified_view_rebinds_inflight_high_qc_validation_through_current_fifo() {
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn detached_validation_outcomes_replay_only_after_current_consumer_attaches() {
     for reject in [false, true] {
@@ -1257,7 +1193,6 @@ fn detached_validation_outcomes_replay_only_after_current_consumer_attaches() {
             .complete_body_store(stored, &mut services)
             .expect("start old-view validation");
         let work_id = services.validation_tasks[0].id();
-
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
         let mut timeout = timeout_certificate(&fixture);
         timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
@@ -1272,7 +1207,6 @@ fn detached_validation_outcomes_replay_only_after_current_consumer_attaches() {
             )
             .expect("detach protected validation");
         assert!(executor.pending_validations[&work_id].consumer.is_none());
-
         executor.runtime.completions.clear();
         if reject {
             services.validation_error = Some("detached rejection".to_owned());
@@ -1286,7 +1220,6 @@ fn detached_validation_outcomes_replay_only_after_current_consumer_attaches() {
         );
         assert!(executor.runtime.completions.is_empty());
         assert!(executor.pending_validations.is_empty());
-
         let sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
@@ -1346,7 +1279,6 @@ fn detached_validation_outcomes_replay_only_after_current_consumer_attaches() {
         assert!(!executor.status().fail_closed);
     }
 }
-
 #[test]
 fn contradictory_terminal_validation_catalogues_fail_closed() {
     for conflicting_receipt in [false, true] {
@@ -1371,7 +1303,6 @@ fn contradictory_terminal_validation_catalogues_fail_closed() {
             .task
             .durable_receipt()
             .clone();
-
         let error = if conflicting_receipt {
             let first = services.execute_validation(work_id);
             let first_receipt = first
@@ -1414,7 +1345,6 @@ fn contradictory_terminal_validation_catalogues_fail_closed() {
                 )
                 .expect_err("validated and rejected outcomes must fail closed")
         };
-
         assert!(matches!(
             error,
             EffectExecutorError::Contract(_) | EffectExecutorError::BodyStore(_)
@@ -1423,7 +1353,6 @@ fn contradictory_terminal_validation_catalogues_fail_closed() {
         assert_eq!(services.closed.len(), 1);
     }
 }
-
 #[test]
 fn queued_protected_store_keeps_one_work_id_across_repeated_tcs() {
     let fixture = Fixture::new();
@@ -1442,7 +1371,6 @@ fn queued_protected_store_keeps_one_work_id_across_repeated_tcs() {
     let mut high_prepare = fixture.qc(wire::GlobalPhase::Prepare);
     high_prepare.round = protected.0;
     high_prepare.subject = protected.1;
-
     for (view, generation) in [(1, 61), (2, 62)] {
         let mut timeout = timeout_at_view(&fixture, view - 1);
         timeout.groups[0].highest_prepare_qc = Some(high_prepare.clone());
@@ -1469,7 +1397,6 @@ fn queued_protected_store_keeps_one_work_id_across_repeated_tcs() {
         assert!(services.cancelled_stores.is_empty());
         assert_eq!(services.store_tasks.len(), 1);
     }
-
     let current_tag = EventTag::new(1, 2, Generation::new(62));
     let sources = certified_sources(&fixture, &high_prepare);
     executor
@@ -1497,7 +1424,6 @@ fn queued_protected_store_keeps_one_work_id_across_repeated_tcs() {
         &executor.pending_stores[&original_task.id()].consumer,
         Some(StoreConsumer::Reducer { tag: consumer, .. }) if *consumer == current_tag
     ));
-
     let completion = services.execute_store(original_task.id());
     assert_eq!(completion.tag(), original_task.tag());
     assert_eq!(
@@ -1513,7 +1439,6 @@ fn queued_protected_store_keeps_one_work_id_across_repeated_tcs() {
     ));
     assert_eq!(executor.pending_store_bytes, 0);
 }
-
 #[test]
 fn active_old_view_store_rebinds_current_consumer_before_late_completion() {
     let fixture = Fixture::new();
@@ -1529,7 +1454,6 @@ fn active_old_view_store_rebinds_current_consumer_before_late_completion() {
         .expect("start old-view body store");
     let store_id = services.store_tasks[0].id();
     services.inflight_stores.insert(store_id);
-
     let prepare = fixture.qc(wire::GlobalPhase::Prepare);
     let sources = certified_sources(&fixture, &prepare);
     let mut timeout = timeout_certificate(&fixture);
@@ -1544,7 +1468,6 @@ fn active_old_view_store_rebinds_current_consumer_before_late_completion() {
             &mut services,
         )
         .expect("detach active old-view store consumer");
-
     assert!(
         services.cancelled_stores.is_empty(),
         "the effective durable lock owns immutable store work across the TC"
@@ -1556,7 +1479,6 @@ fn active_old_view_store_rebinds_current_consumer_before_late_completion() {
         u64::try_from(fixture.body.len()).expect("body length")
     );
     assert!(executor.body_pipeline_owners.is_empty());
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -1583,7 +1505,6 @@ fn active_old_view_store_rebinds_current_consumer_before_late_completion() {
             .map(|owner| owner.tag),
         Some(tag(1))
     );
-
     executor
         .consume_effects(
             vec![AdapterEffect::StoreBody {
@@ -1599,7 +1520,6 @@ fn active_old_view_store_rebinds_current_consumer_before_late_completion() {
         Some(StoreConsumer::Reducer { tag: consumer, .. }) if *consumer == tag(1)
     ));
     assert_eq!(services.store_tasks.len(), 1);
-
     let late_completion = services.execute_store(store_id);
     assert_eq!(late_completion.tag(), tag(0));
     assert_eq!(
@@ -1624,7 +1544,6 @@ fn active_old_view_store_rebinds_current_consumer_before_late_completion() {
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn active_old_view_store_completes_between_current_fetch_and_store() {
     let fixture = Fixture::new();
@@ -1640,7 +1559,6 @@ fn active_old_view_store_completes_between_current_fetch_and_store() {
         .expect("start old-view body store");
     let store_id = services.store_tasks[0].id();
     services.inflight_stores.insert(store_id);
-
     let prepare = fixture.qc(wire::GlobalPhase::Prepare);
     let sources = certified_sources(&fixture, &prepare);
     let mut timeout = timeout_certificate(&fixture);
@@ -1656,7 +1574,6 @@ fn active_old_view_store_completes_between_current_fetch_and_store() {
         )
         .expect("detach active old-view store consumer");
     assert!(executor.pending_stores[&store_id].consumer.is_none());
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -1677,7 +1594,6 @@ fn active_old_view_store_completes_between_current_fetch_and_store() {
     ));
     assert!(executor.pending_stores[&store_id].consumer.is_none());
     assert_eq!(services.store_tasks.len(), 1);
-
     let late_completion = services.execute_store(store_id);
     assert_eq!(late_completion.tag(), tag(0));
     let expected_receipt = late_completion.receipt().clone();
@@ -1700,7 +1616,6 @@ fn active_old_view_store_completes_between_current_fetch_and_store() {
         Some(RuntimeCompletion::BodyAvailable(completion_tag, manifest))
             if *completion_tag == tag(1) && manifest == &fixture.manifest
     ));
-
     executor
         .consume_effects(
             vec![AdapterEffect::StoreBody {
@@ -1728,7 +1643,6 @@ fn active_old_view_store_completes_between_current_fetch_and_store() {
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn retired_store_and_current_fetch_completion_are_order_independent() {
     for store_finishes_first in [true, false] {
@@ -1757,7 +1671,6 @@ fn retired_store_and_current_fetch_completion_are_order_independent() {
             .expect("retire unprotected active store consumer");
         assert!(executor.pending_stores.is_empty());
         assert!(executor.body_pipeline_owners.is_empty());
-
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
         let sources = certified_sources(&fixture, &prepare);
         executor
@@ -1791,7 +1704,6 @@ fn retired_store_and_current_fetch_completion_are_order_independent() {
         )
         .payload()
         .to_vec();
-
         let late_completion = services.execute_store(store_id);
         let durable = late_completion.receipt().clone();
         if store_finishes_first {
@@ -1802,7 +1714,6 @@ fn retired_store_and_current_fetch_completion_are_order_independent() {
                 CompletionDisposition::Stale
             );
         }
-
         assert_eq!(
             executor
                 .accept_certified_body_response(
@@ -1837,7 +1748,6 @@ fn retired_store_and_current_fetch_completion_are_order_independent() {
             Some(RuntimeCompletion::BodyAvailable(completion_tag, manifest))
                 if *completion_tag == tag(1) && manifest == &fixture.manifest
         ));
-
         executor
             .consume_effects(
                 vec![AdapterEffect::StoreBody {
@@ -1871,7 +1781,6 @@ fn retired_store_and_current_fetch_completion_are_order_independent() {
         assert!(services.closed.is_empty());
     }
 }
-
 #[test]
 fn current_fetch_fails_closed_on_conflicting_retired_store_receipt() {
     let fixture = Fixture::new();
@@ -1906,7 +1815,6 @@ fn current_fetch_fails_closed_on_conflicting_retired_store_receipt() {
             &mut services,
         )
         .expect("retire unprotected alternate store");
-
     let prepare = fixture.qc(wire::GlobalPhase::Prepare);
     let sources = certified_sources(&fixture, &prepare);
     executor
@@ -1936,7 +1844,6 @@ fn current_fetch_fails_closed_on_conflicting_retired_store_receipt() {
             .expect("catalog retired alternate store"),
         CompletionDisposition::Stale
     );
-
     let mut response = wire::CertifiedBodyResponse {
         request_hash: HashOf::new(&request),
         manifest: fixture.manifest.clone(),
@@ -1970,7 +1877,6 @@ fn current_fetch_fails_closed_on_conflicting_retired_store_receipt() {
     assert!(executor.status().fail_closed);
     assert_eq!(services.closed.len(), 1);
 }
-
 #[test]
 fn matching_ready_body_winner_makes_fetch_completion_idempotent() {
     let fixture = Fixture::new();
@@ -2002,7 +1908,6 @@ fn matching_ready_body_winner_makes_fetch_completion_idempotent() {
     assert_eq!(ready.manifest, fixture.manifest);
     executor.ready_bodies.insert(key, ready);
     executor.ready_body_bytes = body_len;
-
     assert_eq!(
         executor
             .complete_body_reconstruction(
@@ -2025,7 +1930,6 @@ fn matching_ready_body_winner_makes_fetch_completion_idempotent() {
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn late_retired_store_cannot_overwrite_current_pending_manifest() {
     let fixture = Fixture::new();
@@ -2052,7 +1956,6 @@ fn late_retired_store_cannot_overwrite_current_pending_manifest() {
         )
         .expect("retire unprotected active store consumer");
     assert!(executor.pending_stores.is_empty());
-
     let mut alternate_chunk = fixture.body.clone();
     alternate_chunk[0] ^= 1;
     let alternate_manifest = deliberately_conflicting_payload_manifest(
@@ -2073,7 +1976,6 @@ fn late_retired_store_cannot_overwrite_current_pending_manifest() {
     let current_id = services.store_tasks.last().expect("current store").id();
     assert_ne!(current_id, retired_id);
     assert_eq!(executor.pending_stores.len(), 1);
-
     let late_completion = services.execute_store(retired_id);
     assert!(matches!(
         executor.complete_body_store(late_completion, &mut services),
@@ -2089,7 +1991,6 @@ fn late_retired_store_cannot_overwrite_current_pending_manifest() {
     assert!(executor.status().fail_closed);
     assert_eq!(services.closed.len(), 1);
 }
-
 #[test]
 fn active_losing_store_releases_capacity_for_high_qc_fetch() {
     let fixture = Fixture::new();
@@ -2105,7 +2006,6 @@ fn active_losing_store_releases_capacity_for_high_qc_fetch() {
         .expect("start losing old-view body store");
     let store_id = services.store_tasks[0].id();
     services.inflight_stores.insert(store_id);
-
     let high_subject = wire::BlockSubject {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"high-QC block")),
         ..fixture.manifest.subject
@@ -2125,12 +2025,10 @@ fn active_losing_store_releases_capacity_for_high_qc_fetch() {
             &mut services,
         )
         .expect("release active losing-store ownership");
-
     assert_eq!(services.cancelled_stores, vec![store_id]);
     assert!(executor.pending_stores.is_empty());
     assert_eq!(executor.pending_store_bytes, 0);
     assert!(executor.body_pipeline_owners.is_empty());
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -2146,7 +2044,6 @@ fn active_losing_store_releases_capacity_for_high_qc_fetch() {
         .expect("high-QC fetch uses the released bounded slot");
     assert_eq!(executor.pending_fetches.len(), 1);
     assert_eq!(executor.pending_work(), 1);
-
     let late_completion = services.execute_store(store_id);
     assert_eq!(late_completion.tag(), tag(0));
     assert_eq!(

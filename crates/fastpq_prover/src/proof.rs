@@ -2,7 +2,6 @@ use core::convert::TryFrom;
 use fastpq_isi::{CANONICAL_PARAMETER_SETS, StarkParameterSet, find_by_name};
 use iroha_crypto::Hash;
 use norito::{NoritoDeserialize, NoritoSerialize};
-
 use crate::{
     Error, Result, TransitionBatch,
     backend::{
@@ -1204,11 +1203,9 @@ fn canonical_params_version(params: &StarkParameterSet) -> Option<u16> {
         .position(|candidate| candidate.name == params.name)
         .and_then(|idx| u16::try_from(idx + 1).ok())
 }
-
 mod hash_norito {
     pub mod core {
         use iroha_crypto::Hash;
-
         pub fn to_bytes(hash: &Hash) -> [u8; 32] {
             let mut out = [0u8; 32];
             out.copy_from_slice(hash.as_ref());
@@ -1216,7 +1213,6 @@ mod hash_norito {
         }
     }
 }
-
 mod field_norito {
     pub mod core {
         pub fn to_bytes(value: u64) -> [u8; 32] {
@@ -1238,7 +1234,6 @@ mod field_norito {
 mod tests {
     use super::*;
     use crate::{OperationKind, PublicInputs, StateTransition};
-
     fn verify_limits_with_override(apply: impl FnOnce(&mut VerifyLimits)) -> VerifyLimits {
         let mut limits = VerifyLimits::default();
         apply(&mut limits);

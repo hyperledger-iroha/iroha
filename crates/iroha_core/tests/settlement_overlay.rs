@@ -1,9 +1,7 @@
 //! Integration tests covering settlement admission and overlay execution paths.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::unwrap_used)]
-
 use std::str::FromStr as _;
-
 use iroha_core::{
     kura::Kura,
     pipeline::overlay::TxOverlay,
@@ -34,14 +32,11 @@ use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
-
     let delivery_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -52,7 +47,6 @@ fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
-
     let delivery_def = AssetDefinition::numeric(
         delivery_def_id.clone(),
         "bond".to_owned(),
@@ -67,7 +61,6 @@ fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
         None,
     )
     .build(&ALICE_ID);
-
     let alice_delivery = Asset::new(
         AssetId::new(delivery_def_id.clone(), ALICE_ID.clone()),
         Quantity::from(10u32),
@@ -76,7 +69,6 @@ fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
         AssetId::new(payment_def_id.clone(), BOB_ID.clone()),
         Quantity::from(1_000u32),
     );
-
     let world = World::with_assets(
         [domain],
         [alice, bob],
@@ -84,23 +76,18 @@ fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
         [alice_delivery, bob_payment],
         [],
     );
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
-
     (state, delivery_def_id, payment_def_id)
 }
-
 fn settlement_state_with_payment_spec(
     payment_spec: NumericSpec,
 ) -> (State, AssetDefinitionId, AssetDefinitionId) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
-
     let delivery_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -111,7 +98,6 @@ fn settlement_state_with_payment_spec(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
-
     let delivery_def = AssetDefinition::new(
         delivery_def_id.clone(),
         "bond".to_owned(),
@@ -128,7 +114,6 @@ fn settlement_state_with_payment_spec(
         None,
     )
     .build(&ALICE_ID);
-
     let alice_delivery = Asset::new(
         AssetId::new(delivery_def_id.clone(), ALICE_ID.clone()),
         Quantity::from(5u32),
@@ -137,7 +122,6 @@ fn settlement_state_with_payment_spec(
         AssetId::new(payment_def_id.clone(), BOB_ID.clone()),
         Quantity::from(2u32),
     );
-
     let world = World::with_assets(
         [domain],
         [alice, bob],
@@ -145,14 +129,11 @@ fn settlement_state_with_payment_spec(
         [alice_delivery, bob_payment],
         [],
     );
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
-
     (state, delivery_def_id, payment_def_id)
 }
-
 fn apply_overlay(
     stx: &mut iroha_core::state::StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -160,7 +141,6 @@ fn apply_overlay(
 ) -> Result<(), ValidationFail> {
     TxOverlay::from_instructions(instructions).apply(stx, authority)
 }
-
 fn asset_balance(
     stx: &iroha_core::state::StateTransaction<'_, '_>,
     definition: &AssetDefinitionId,
@@ -170,7 +150,6 @@ fn asset_balance(
         .get(&AssetId::new(definition.clone(), account.clone()))
         .map_or_else(Quantity::zero, |owned| owned.0.clone())
 }
-
 fn grant_exact_settlement_consent(
     stx: &mut iroha_core::state::StateTransaction<'_, '_>,
     debited_asset: AssetId,
@@ -192,14 +171,12 @@ fn grant_exact_settlement_consent(
     )
     .expect("counterparty should grant exact settlement consent");
 }
-
 #[test]
 fn dvp_overlay_rejects_underfunded_leg() {
     let (state, delivery_def_id, payment_def_id) = settlement_state();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let instruction = DvpIsi {
         settlement_id: "overlay_underfunded".parse().unwrap(),
         delivery_leg: SettlementLeg::new(
@@ -226,7 +203,6 @@ fn dvp_overlay_rejects_underfunded_leg() {
         instruction.settlement_id(),
         instruction.intent_hash(),
     );
-
     let err = apply_overlay(&mut stx, &ALICE_ID, vec![InstructionBox::from(instruction)])
         .expect_err("insufficient payment leg should fail admission");
     match err {
@@ -248,14 +224,12 @@ fn dvp_overlay_rejects_underfunded_leg() {
     assert_eq!(alice_balance, Quantity::from(10u32));
     assert_eq!(bob_balance, Quantity::from(1_000u32));
 }
-
 #[test]
 fn pvp_overlay_executes_when_funded() {
     let (state, primary_def_id, counter_def_id) = settlement_state();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let instruction = PvpIsi {
         settlement_id: "overlay_funded_fx".parse().unwrap(),
         primary_leg: SettlementLeg::new(
@@ -279,10 +253,8 @@ fn pvp_overlay_executes_when_funded() {
         instruction.settlement_id(),
         instruction.intent_hash(),
     );
-
     apply_overlay(&mut stx, &ALICE_ID, vec![InstructionBox::from(instruction)])
         .expect("funded PvP overlay should succeed");
-
     assert_eq!(
         asset_balance(&stx, &primary_def_id, &ALICE_ID),
         Quantity::from(5u32)
@@ -300,7 +272,6 @@ fn pvp_overlay_executes_when_funded() {
         Quantity::from(500u32)
     );
 }
-
 #[test]
 fn dvp_overlay_rejects_commit_first_without_moving_assets() {
     let (state, delivery_def_id, payment_def_id) =
@@ -308,7 +279,6 @@ fn dvp_overlay_rejects_commit_first_without_moving_assets() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let instruction = DvpIsi {
         settlement_id: "overlay_commit_first".parse().unwrap(),
         delivery_leg: SettlementLeg::new(
@@ -335,7 +305,6 @@ fn dvp_overlay_rejects_commit_first_without_moving_assets() {
         instruction.settlement_id(),
         instruction.intent_hash(),
     );
-
     let err = apply_overlay(&mut stx, &ALICE_ID, vec![InstructionBox::from(instruction)])
         .expect_err("partial-commit DvP must fail admission");
     match err {
@@ -344,18 +313,15 @@ fn dvp_overlay_rejects_commit_first_without_moving_assets() {
         ValidationFail::InstructionFailed(exec_err) => panic!("unexpected error: {exec_err:?}"),
         other => panic!("unexpected validation error: {other:?}"),
     }
-
     let alice_delivery = asset_balance(&stx, &delivery_def_id, &ALICE_ID);
     let bob_delivery = asset_balance(&stx, &delivery_def_id, &BOB_ID);
     let alice_cash = asset_balance(&stx, &payment_def_id, &ALICE_ID);
     let bob_cash = asset_balance(&stx, &payment_def_id, &BOB_ID);
-
     assert_eq!(alice_delivery, Quantity::from(5u32));
     assert_eq!(bob_delivery, Quantity::zero());
     assert_eq!(alice_cash, Quantity::zero());
     assert_eq!(bob_cash, Quantity::from(2u32));
 }
-
 #[test]
 fn dvp_overlay_rejects_commit_second_without_moving_assets() {
     let (state, delivery_def_id, payment_def_id) =
@@ -363,11 +329,9 @@ fn dvp_overlay_rejects_commit_second_without_moving_assets() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let alice_delivery_before = asset_balance(&stx, &delivery_def_id, &ALICE_ID);
     let bob_delivery_before = asset_balance(&stx, &delivery_def_id, &BOB_ID);
     let bob_cash_before = asset_balance(&stx, &payment_def_id, &BOB_ID);
-
     let instruction = DvpIsi {
         settlement_id: "overlay_commit_second".parse().unwrap(),
         delivery_leg: SettlementLeg::new(
@@ -394,7 +358,6 @@ fn dvp_overlay_rejects_commit_second_without_moving_assets() {
         instruction.settlement_id(),
         instruction.intent_hash(),
     );
-
     let err = apply_overlay(&mut stx, &ALICE_ID, vec![InstructionBox::from(instruction)])
         .expect_err("partial-commit DvP must fail admission");
     match err {
@@ -403,7 +366,6 @@ fn dvp_overlay_rejects_commit_second_without_moving_assets() {
         ValidationFail::InstructionFailed(exec_err) => panic!("unexpected error: {exec_err:?}"),
         other => panic!("unexpected validation error: {other:?}"),
     }
-
     assert_eq!(
         asset_balance(&stx, &delivery_def_id, &ALICE_ID),
         alice_delivery_before,

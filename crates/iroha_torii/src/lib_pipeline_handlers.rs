@@ -1,5 +1,4 @@
 // Transaction batch and pipeline status/recovery handlers.
-
 fn accept_transaction_metadata(
     err: &iroha_core::tx::AcceptTransactionFail,
 ) -> (&'static str, String) {
@@ -29,7 +28,6 @@ fn accept_transaction_metadata(
         ),
     }
 }
-
 fn transaction_batch_submission_response(accepted_count: usize) -> Response {
     let mut response = Response::new(Body::empty());
     *response.status_mut() = StatusCode::ACCEPTED;
@@ -45,7 +43,6 @@ fn transaction_batch_submission_response(accepted_count: usize) -> Response {
     }
     response
 }
-
 async fn allow_transaction_batch_rate_limit(
     limiter: &limits::RateLimiter,
     api_token: Option<&str>,
@@ -54,7 +51,6 @@ async fn allow_transaction_batch_rate_limit(
     if let Some(token) = api_token {
         return limiter.allow_repeated(token, transactions.len()).await;
     }
-
     let mut index = 0;
     while index < transactions.len() {
         let authority = transactions[index].authority();
@@ -70,7 +66,6 @@ async fn allow_transaction_batch_rate_limit(
     }
     true
 }
-
 async fn handler_post_transactions_batch(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -98,13 +93,11 @@ async fn handler_post_transactions_batch(
         },
     )
     .await?;
-
     if !allow_transaction_batch_rate_limit(&app.tx_rate_limiter, token_hdr, &transactions).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-
     let accepted_count = {
         let app = app.clone();
         let (accepted_count, _compute_permit) = run_transaction_ingress_compute_job(
@@ -165,10 +158,8 @@ async fn handler_post_transactions_batch(
         ?;
         accepted_count
     };
-
     Ok(transaction_batch_submission_response(accepted_count))
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_proof_record_get(
     State(app): State<SharedAppState>,
@@ -240,7 +231,6 @@ async fn handler_proof_record_get(
             ));
         }
     }
-
     let response_budget = ToriiRoutedReadMemoryBudget::new(
         app.query_fanout_working_set_bytes,
         app.torii_proxy_max_response_bytes,
@@ -288,7 +278,6 @@ async fn handler_proof_record_get(
         fanout_reservation,
     ))
 }
-
 async fn handler_proof_retention_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -314,7 +303,6 @@ async fn handler_proof_retention_status(
     let status = routing::handle_proof_retention_status(app.state.clone())?;
     Ok(crate::utils::respond_with_format(status, format))
 }
-
 /// Debug endpoint exposing the current AXT proof cache state per dataspace.
 #[cfg(feature = "telemetry")]
 async fn handler_axt_proof_cache_status(
@@ -327,7 +315,6 @@ async fn handler_axt_proof_cache_status(
     let snapshot = app.state.metrics().axt_debug_status();
     Ok(crate::utils::JsonBody(snapshot))
 }
-
 /// Fallback when telemetry is disabled.
 #[cfg(not(feature = "telemetry"))]
 async fn handler_axt_proof_cache_status(
@@ -341,7 +328,6 @@ async fn handler_axt_proof_cache_status(
         &app.telemetry,
     ))
 }
-
 async fn handler_pipeline_recovery(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -377,7 +363,6 @@ async fn handler_pipeline_recovery(
         .body(axum::body::Body::from(serialized))
         .expect("static pipeline recovery response is valid"))
 }
-
 /// Maximum canonical source size for one persisted recovery sidecar.
 const PIPELINE_RECOVERY_SOURCE_MAX_BYTES: usize =
     iroha_data_model::merge::MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
@@ -387,7 +372,6 @@ const PIPELINE_RECOVERY_SOURCE_MAX_BYTES: usize =
 /// Eight times that source ceiling leaves conservative room for JSON escaping
 /// and structure while keeping the response allocation finite.
 const PIPELINE_RECOVERY_MAX_RESPONSE_BYTES: usize = PIPELINE_RECOVERY_SOURCE_MAX_BYTES * 8;
-
 fn build_pipeline_recovery_response(kura: &Kura, height: u64) -> Result<String, Error> {
     let sidecar = kura.read_pipeline_metadata(height).ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -402,7 +386,6 @@ fn build_pipeline_recovery_response(kura: &Kura, height: u64) -> Result<String, 
     })?;
     bounded_pipeline_recovery_json(serialized)
 }
-
 fn bounded_pipeline_recovery_json(serialized: String) -> Result<String, Error> {
     if serialized.len() > PIPELINE_RECOVERY_MAX_RESPONSE_BYTES {
         return Err(Error::AppServiceUnavailable {
@@ -414,11 +397,9 @@ fn bounded_pipeline_recovery_json(serialized: String) -> Result<String, Error> {
     }
     Ok(serialized)
 }
-
 #[cfg(test)]
 mod pipeline_recovery_response_bounds_tests {
     use super::*;
-
     #[test]
     fn pipeline_recovery_handler_retains_bounded_physical_work_admission() {
         let source = include_str!("lib_pipeline_handlers.rs");
@@ -427,14 +408,12 @@ mod pipeline_recovery_response_bounds_tests {
             .and_then(|(_, tail)| tail.split_once("async fn handler_pipeline_preflight("))
             .map(|(handler, _)| handler)
             .expect("locate pipeline recovery handler source");
-
         assert!(handler.contains("check_operator_rate_limit("));
         assert!(!handler.contains("validate_api_token("));
         assert!(handler.contains("acquire_query_admission(&app, true)"));
         assert!(handler.contains("tokio::task::spawn_blocking"));
         assert!(handler.contains("(result, admission)"));
     }
-
     #[test]
     fn pipeline_recovery_json_rejects_response_larger_than_protocol_budget() {
         let oversized = "x".repeat(PIPELINE_RECOVERY_MAX_RESPONSE_BYTES + 1);
@@ -447,7 +426,6 @@ mod pipeline_recovery_response_bounds_tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn pipeline_recovery_json_accepts_response_at_protocol_budget() {
         let exact = "x".repeat(PIPELINE_RECOVERY_MAX_RESPONSE_BYTES);
@@ -459,7 +437,6 @@ mod pipeline_recovery_response_bounds_tests {
         );
     }
 }
-
 async fn handler_pipeline_preflight(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -483,7 +460,6 @@ async fn handler_pipeline_preflight(
         format,
     ))
 }
-
 async fn handler_pipeline_recovery_fastpq_proofs(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -503,7 +479,6 @@ async fn handler_pipeline_recovery_fastpq_proofs(
         &app.rate_limiter,
     )
     .await?;
-
     let page = PipelineFastpqRecoveryPage::parse(&query)?;
     let admission = acquire_query_admission(&app, true).await?;
     let kura = Arc::clone(&app.kura);
@@ -526,14 +501,12 @@ async fn handler_pipeline_recovery_fastpq_proofs(
         .body(axum::body::Body::from(serialized))
         .expect("static FASTPQ recovery response is valid"))
 }
-
 const PIPELINE_FASTPQ_RECOVERY_DEFAULT_LIMIT: usize = 16;
 const PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT: usize = 64;
 const PIPELINE_FASTPQ_RECOVERY_MAX_PROOF_BYTES: usize = 4 * 1024 * 1024;
 const PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES: usize = 8 * 1024 * 1024;
 const PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
 const PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES: usize = 24 * 1024 * 1024;
-
 #[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug, Default)]
 struct PipelineFastpqRecoveryQuery {
     #[norito(default)]
@@ -541,13 +514,11 @@ struct PipelineFastpqRecoveryQuery {
     #[norito(default)]
     limit: Option<u64>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PipelineFastpqRecoveryPage {
     offset: usize,
     limit: usize,
 }
-
 impl PipelineFastpqRecoveryPage {
     fn parse(query: &PipelineFastpqRecoveryQuery) -> Result<Self, Error> {
         let offset = usize::try_from(query.offset.unwrap_or_default())
@@ -565,14 +536,12 @@ impl PipelineFastpqRecoveryPage {
         Ok(Self { offset, limit })
     }
 }
-
 fn fastpq_recovery_capacity_error(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
         code: "pipeline_recovery_fastpq_artifact_too_large",
         message: message.into(),
     }
 }
-
 fn charge_fastpq_recovery_artifact_bytes(used: &mut usize, amount: usize) -> Result<(), Error> {
     let next = used.checked_add(amount).ok_or_else(|| {
         fastpq_recovery_capacity_error("FASTPQ recovery artifact size overflowed")
@@ -586,7 +555,6 @@ fn charge_fastpq_recovery_artifact_bytes(used: &mut usize, amount: usize) -> Res
     *used = next;
     Ok(())
 }
-
 fn build_pipeline_recovery_fastpq_response(
     kura: &Kura,
     height: u64,
@@ -607,7 +575,6 @@ fn build_pipeline_recovery_fastpq_response(
             fastpq_proof_snapshot_recovery_json(kura, height, snapshot, &mut artifact_bytes)
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     let mut root = norito::json::Map::new();
     root.insert(
         "height".to_owned(),
@@ -654,7 +621,6 @@ fn build_pipeline_recovery_fastpq_response(
     }
     Ok(serialized)
 }
-
 fn fastpq_proof_snapshot_recovery_json(
     kura: &Kura,
     height: u64,
@@ -668,7 +634,6 @@ fn fastpq_proof_snapshot_recovery_json(
         )));
     }
     charge_fastpq_recovery_artifact_bytes(artifact_bytes, snapshot.proof.len())?;
-
     // Build the object field-by-field. `FastpqProofSnapshot::to_json_value`
     // eagerly encodes its batch, which would duplicate expensive work before
     // this endpoint can enforce its source-byte budget.
@@ -706,7 +671,6 @@ fn fastpq_proof_snapshot_recovery_json(
         norito::json::to_value(&base64::engine::general_purpose::STANDARD.encode(&snapshot.proof))
             .expect("serialize FASTPQ proof"),
     );
-
     match fastpq_committed_batch_base64(kura, height, snapshot, artifact_bytes)? {
         Some((batch, reconstructed)) => {
             object.insert(
@@ -740,10 +704,8 @@ fn fastpq_proof_snapshot_recovery_json(
             }
         }
     }
-
     Ok(norito::json::Value::Object(object))
 }
-
 fn fastpq_committed_batch_base64(
     kura: &Kura,
     height: u64,
@@ -756,7 +718,6 @@ fn fastpq_committed_batch_base64(
     if !snapshot.batch.transitions.is_empty() {
         return encode_fastpq_recovery_batch(&snapshot.batch, false, artifact_bytes).map(Some);
     }
-
     let Some(height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
         iroha_logger::warn!(
             height,
@@ -798,7 +759,6 @@ fn fastpq_committed_batch_base64(
         }
     }
 }
-
 fn encode_fastpq_recovery_batch(
     batch: &fastpq_prover::TransitionBatch,
     reconstructed: bool,
@@ -826,7 +786,6 @@ fn encode_fastpq_recovery_batch(
         reconstructed,
     ))
 }
-
 #[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
 struct PipelineStatusQuery {
     #[norito(default)]
@@ -834,7 +793,6 @@ struct PipelineStatusQuery {
     #[norito(default)]
     scope: Option<String>,
 }
-
 #[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
 struct TriggerCompletionQuery {
     #[norito(default)]
@@ -854,14 +812,12 @@ struct TriggerCompletionQuery {
     #[norito(default)]
     include_reconstructed: Option<bool>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TriggerCompletionOutcomeFilter {
     All,
     Success,
     Failure,
 }
-
 impl TriggerCompletionOutcomeFilter {
     fn parse(raw: Option<&str>) -> Result<Self, Error> {
         let normalized = raw
@@ -878,7 +834,6 @@ impl TriggerCompletionOutcomeFilter {
             ))),
         }
     }
-
     fn matches(self, outcome: &str) -> bool {
         match self {
             Self::All => true,
@@ -887,19 +842,16 @@ impl TriggerCompletionOutcomeFilter {
         }
     }
 }
-
 const TRIGGER_COMPLETION_DEFAULT_LIMIT: u64 = 100;
 const TRIGGER_COMPLETION_MAX_LIMIT: u64 = 1_000;
 const TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS: u64 = 1_000;
 const TRIGGER_COMPLETION_MAX_SCAN_BLOCKS: u64 = 10_000;
-
 fn trigger_completion_outcome(outcome: &TriggerCompletedOutcome) -> (&'static str, Option<String>) {
     match outcome {
         TriggerCompletedOutcome::Success => ("Success", None),
         TriggerCompletedOutcome::Failure(message) => ("Failure", Some(message.clone())),
     }
 }
-
 fn trigger_completion_summary_from_event(
     event: &TriggerCompletedEvent,
 ) -> TriggerCompletionSummary {
@@ -912,7 +864,6 @@ fn trigger_completion_summary_from_event(
         message,
     }
 }
-
 fn trigger_completion_record_from_event(
     block: &iroha_data_model::block::SignedBlock,
     block_height: u64,
@@ -930,7 +881,6 @@ fn trigger_completion_record_from_event(
         source: source.to_owned(),
     }
 }
-
 fn trigger_completion_record_from_parts(
     block_height: u64,
     entrypoint_index: usize,
@@ -954,7 +904,6 @@ fn trigger_completion_record_from_parts(
         source: source.to_owned(),
     }
 }
-
 fn visit_reconstructed_trigger_completion_records<F>(
     block: &iroha_data_model::block::SignedBlock,
     block_height: u64,
@@ -992,7 +941,6 @@ where
                 return false;
             }
         }
-
         let Ok(sequence) = &result.0 else {
             continue;
         };
@@ -1021,7 +969,6 @@ where
     }
     true
 }
-
 fn trigger_completion_record_matches(
     record: &TriggerCompletionRecord,
     trigger_id: Option<&str>,
@@ -1040,7 +987,6 @@ fn trigger_completion_record_matches(
     }
     outcome.matches(&record.completion.outcome)
 }
-
 fn visit_trigger_completion_records_for_block<F>(
     block: &iroha_data_model::block::SignedBlock,
     block_height: u64,
@@ -1062,7 +1008,6 @@ where
     if reconstruct {
         return visit_reconstructed_trigger_completion_records(block, block_height, &mut visit);
     }
-
     persisted.iter().all(|event| {
         visit(trigger_completion_record_from_event(
             block,
@@ -1072,7 +1017,6 @@ where
         ))
     })
 }
-
 fn trigger_completion_from_height(query: &TriggerCompletionQuery, requested_to: u64) -> u64 {
     let scan_limit = query
         .scan_limit_blocks
@@ -1083,7 +1027,6 @@ fn trigger_completion_from_height(query: &TriggerCompletionQuery, requested_to: 
         .max(1);
     query.from_height.unwrap_or(1).max(1).max(bounded_from)
 }
-
 fn trigger_completion_query_response(
     app: &SharedAppState,
     query: &TriggerCompletionQuery,
@@ -1096,7 +1039,6 @@ fn trigger_completion_query_response(
     let include_reconstructed = query.include_reconstructed.unwrap_or(true);
     let outcome = TriggerCompletionOutcomeFilter::parse(query.outcome.as_deref())?;
     let requested_to = query.to_height.unwrap_or(latest_height).min(latest_height);
-
     if latest_height == 0 || requested_to == 0 {
         return Ok(TriggerCompletionListResponse {
             latest_height,
@@ -1107,7 +1049,6 @@ fn trigger_completion_query_response(
             completions: Vec::new(),
         });
     }
-
     let from_height = trigger_completion_from_height(query, requested_to);
     if from_height > requested_to {
         return Ok(TriggerCompletionListResponse {
@@ -1119,7 +1060,6 @@ fn trigger_completion_query_response(
             completions: Vec::new(),
         });
     }
-
     let mut completions = Vec::new();
     let mut scanned_blocks = 0_u64;
     for height in (from_height..=requested_to).rev() {
@@ -1161,7 +1101,6 @@ fn trigger_completion_query_response(
             });
         }
     }
-
     Ok(TriggerCompletionListResponse {
         latest_height,
         from_height,
@@ -1171,7 +1110,6 @@ fn trigger_completion_query_response(
         completions,
     })
 }
-
 fn trigger_completion_summaries_for_entrypoint_hash(
     app: &SharedAppState,
     block_height: u64,
@@ -1197,13 +1135,11 @@ fn trigger_completion_summaries_for_entrypoint_hash(
         })
         .unwrap_or_default()
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelineStatusReadScope {
     Local,
     Global,
 }
-
 impl PipelineStatusReadScope {
     const fn as_str(self) -> &'static str {
         match self {
@@ -1212,7 +1148,6 @@ impl PipelineStatusReadScope {
         }
     }
 }
-
 fn parse_pipeline_status_scope(raw: Option<&str>) -> Result<PipelineStatusReadScope, Error> {
     let normalized = raw
         .map(str::trim)
@@ -1227,13 +1162,11 @@ fn parse_pipeline_status_scope(raw: Option<&str>) -> Result<PipelineStatusReadSc
         ))),
     }
 }
-
 fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>, Error> {
     raw.trim()
         .parse::<HashOf<SignedTransaction>>()
         .map_err(|_| conversion_error("invalid signed transaction hash".to_owned()))
 }
-
 fn pipeline_status_response(
     hash: &HashOf<SignedTransaction>,
     entry: &PipelineStatusEntry,
@@ -1250,7 +1183,6 @@ fn pipeline_status_response(
         resolved_from.to_owned(),
     )
 }
-
 fn pipeline_status_projection_error(message: impl std::fmt::Display) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -1258,7 +1190,6 @@ fn pipeline_status_projection_error(message: impl std::fmt::Display) -> Error {
         )),
     ))
 }
-
 fn certified_merge_pipeline_transactions(
     carrier_hash: HashOf<BlockHeader>,
     reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
@@ -1295,7 +1226,6 @@ fn certified_merge_pipeline_transactions(
         .zip(transactions)
         .collect())
 }
-
 fn pipeline_status_from_state(
     app: &AppState,
     hash: &HashOf<SignedTransaction>,
@@ -1333,7 +1263,6 @@ fn pipeline_status_from_state(
             rejection,
         )));
     }
-
     let reference = block_ref
         .execution_context()
         .and_then(|context| context.merge_entry.as_ref())
@@ -1377,28 +1306,23 @@ fn pipeline_status_from_state(
         rejection,
     )))
 }
-
 fn pipeline_status_terminal_or_state_entry(
     app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
 ) -> Result<Option<(PipelineStatusEntry, &'static str)>, Error> {
     app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
-
     if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash)? {
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
         return Ok(Some((entry, "state")));
     }
-
     if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
         if entry.kind.is_terminal() {
             return Ok(Some((entry, "cache")));
         }
     }
-
     Ok(None)
 }
-
 fn pipeline_status_local_entry_checked(
     app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
@@ -1406,7 +1330,6 @@ fn pipeline_status_local_entry_checked(
     if let Some(entry) = pipeline_status_terminal_or_state_entry(app, hash)? {
         return Ok(Some(entry));
     }
-
     if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
         if entry.kind == PipelineStatusKind::Queued
             && !app.queue.contains_pending_hash(hash.clone(), &app.state)
@@ -1416,17 +1339,14 @@ fn pipeline_status_local_entry_checked(
         }
         return Ok(Some((entry, "cache")));
     }
-
     if app.queue.contains_pending_hash(hash.clone(), &app.state) {
         let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
         return Ok(Some((entry, "queue")));
     }
-
     Ok(None)
 }
-
 fn pipeline_status_local_entry(
     app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
@@ -1443,7 +1363,6 @@ fn pipeline_status_local_entry(
         }
     }
 }
-
 fn pipeline_status_response_with_route(
     hash: &HashOf<SignedTransaction>,
     entry: &PipelineStatusEntry,
@@ -1461,13 +1380,11 @@ fn pipeline_status_response_with_route(
     }
     response
 }
-
 fn pipeline_status_not_found_error() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::NotFound,
     ))
 }
-
 fn pipeline_status_error_is_not_found(error: &Error) -> bool {
     matches!(
         error,
@@ -1476,14 +1393,12 @@ fn pipeline_status_error_is_not_found(error: &Error) -> bool {
         ))
     )
 }
-
 fn exact_transaction_details_query_hash(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<HashOf<TransactionEntrypoint>, Error> {
     use iroha_data_model::query::{
         CommittedTxFilters, QueryItemKind, QueryRequest, transaction::prelude::FindTransactions,
     };
-
     fn exact_hash_from_predicate(
         predicate: &iroha_data_model::query::dsl::CompoundPredicate<CommittedTransaction>,
     ) -> Option<HashOf<TransactionEntrypoint>> {
@@ -1496,7 +1411,6 @@ fn exact_transaction_details_query_hash(
             })
         .then_some(entry_eq)
     }
-
     let QueryRequest::Start(query) = request.request() else {
         return Err(conversion_error(
             "transaction details requires a signed FindTransactions start query".to_owned(),
@@ -1507,9 +1421,7 @@ fn exact_transaction_details_query_hash(
             "transaction details query parameters must use their canonical defaults".to_owned(),
         ));
     }
-
-    let (item_kind, predicate_bytes, selector_bytes, payload) =
-        canonical_iterable_query_parts(query);
+    let (item_kind, predicate_bytes, selector_bytes, payload) = query.parts();
     if item_kind != QueryItemKind::CommittedTransaction
         || !payload_matches_query::<FindTransactions>(payload)
     {
@@ -1531,7 +1443,6 @@ fn exact_transaction_details_query_hash(
         ));
     }
     let hash = exact_hash_from_predicate(&predicate);
-
     hash.ok_or_else(|| {
         conversion_error(
             "transaction details requires exactly one entrypoint_hash equality predicate"
@@ -1539,7 +1450,6 @@ fn exact_transaction_details_query_hash(
         )
     })
 }
-
 fn transaction_details_operator_authority(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -1547,7 +1457,6 @@ fn transaction_details_operator_authority(
     let permission: Permission = CanReadAllLedgerData.into();
     torii_account_has_permission(world, authority, &permission)
 }
-
 fn transaction_details_authority_is_involved(
     authority: &AccountId,
     transaction: &CommittedTransaction,
@@ -1561,14 +1470,12 @@ fn transaction_details_authority_is_involved(
                 outcome.asset.account() == authority || &outcome.destination == authority
             })
 }
-
 fn pipeline_transaction_details_response(
     app: &SharedAppState,
     authority: &AccountId,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<PipelineTransactionDetailsResponse, Error> {
     use iroha_data_model::query::{CommittedTxFilters, dsl::CompoundPredicate};
-
     let signed_hash =
         HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash.clone()));
     let block_height = app
@@ -1583,7 +1490,6 @@ fn pipeline_transaction_details_response(
         )))
     })?;
     let is_operator = transaction_details_operator_authority(world, authority);
-
     let mut transactions =
         iroha_core::smartcontracts::isi::tx::committed_transactions_indexed_snapshot(
             &state_view,
@@ -1613,7 +1519,6 @@ fn pipeline_transaction_details_response(
             ),
         ));
     }
-
     let block_height = u64::try_from(block_height.get())
         .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
     let hash = signed_hash.to_string();
@@ -1627,7 +1532,6 @@ fn pipeline_transaction_details_response(
         transaction,
     })
 }
-
 fn pipeline_status_proxy_query(
     hash: &HashOf<SignedTransaction>,
     scope: PipelineStatusReadScope,
@@ -1637,7 +1541,6 @@ fn pipeline_status_proxy_query(
         scope: Some(scope.as_str().to_owned()),
     })
 }
-
 fn execute_pipeline_status_local_read(
     app: &SharedAppState,
     query: &PipelineStatusQuery,
@@ -1652,13 +1555,11 @@ fn execute_pipeline_status_local_read(
         .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
     let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
     let hash = parse_signed_transaction_hash(hash_raw)?;
-
     let local_entry = if matches!(read_scope, PipelineStatusReadScope::Local) {
         pipeline_status_local_entry_checked(app, &hash)?
     } else {
         pipeline_status_terminal_or_state_entry(app, &hash)?
     };
-
     if let Some((entry, resolved_from)) = local_entry {
         return Ok(pipeline_status_response_with_route(
             &hash,
@@ -1669,10 +1570,8 @@ fn execute_pipeline_status_local_read(
             route,
         ));
     }
-
     Err(pipeline_status_not_found_error())
 }
-
 #[cfg(feature = "app_api")]
 fn pipeline_status_payload_is_authoritative_hint(
     payload: &PipelineTransactionStatusResponse,
@@ -1683,7 +1582,6 @@ fn pipeline_status_payload_is_authoritative_hint(
         _ => false,
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn pipeline_status_hinted_global_response(
     response: Response,
@@ -1695,7 +1593,6 @@ async fn pipeline_status_hinted_global_response(
     if !response.status().is_success() {
         return Ok(Some(response));
     }
-
     let (parts, body) = response.into_parts();
     let bytes = axum::body::to_bytes(body, max_response_bytes.max(1))
         .await
@@ -1710,10 +1607,8 @@ async fn pipeline_status_hinted_global_response(
         .map(|payload| pipeline_status_payload_is_authoritative_hint(&payload))
         .unwrap_or(false);
     let response = Response::from_parts(parts, Body::from(bytes));
-
     Ok(is_terminal.then_some(response))
 }
-
 async fn handler_pipeline_transaction_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -1742,17 +1637,14 @@ async fn handler_pipeline_transaction_status(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
     let hash = parse_signed_transaction_hash(hash_raw)?;
-
     match execute_pipeline_status_local_read(&app, &query, format, None) {
         Ok(response) => return Ok(response),
         Err(error) if pipeline_status_error_is_not_found(&error) => {}
         Err(error) => return Err(error),
     }
-
     if matches!(read_scope, PipelineStatusReadScope::Local) {
         return Err(pipeline_status_not_found_error());
     }
-
     #[cfg(feature = "app_api")]
     {
         let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
@@ -1774,7 +1666,6 @@ async fn handler_pipeline_transaction_status(
                 Err(response) => return Ok(response),
             }
         }
-
         Ok(execute_torii_fanout_singleton_read(
             &app,
             ToriiReadEndpointV1::PipelineTransactionStatusGet,
@@ -1784,7 +1675,6 @@ async fn handler_pipeline_transaction_status(
         )
         .await)
     }
-
     #[cfg(not(feature = "app_api"))]
     {
         let _ = headers;
@@ -1793,7 +1683,6 @@ async fn handler_pipeline_transaction_status(
         Err(pipeline_status_not_found_error())
     }
 }
-
 async fn handler_pipeline_transaction_details(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -1811,7 +1700,6 @@ async fn handler_pipeline_transaction_details(
     if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         admit_signed_query_preauth(app.as_ref(), &headers, Some(remote.ip())).await?;
     }
-
     // Exact network, freshness, signature, and one-shot nonce checks complete before the first
     // state or Kura access. The signed request itself binds the sole permitted entrypoint hash.
     let verified =
@@ -1823,7 +1711,6 @@ async fn handler_pipeline_transaction_details(
     let response = pipeline_transaction_details_response(&app, &authority, entrypoint_hash)?;
     Ok(crate::utils::respond_with_format(response, format))
 }
-
 async fn handler_trigger_completions(
     State(app): State<SharedAppState>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
@@ -1838,7 +1725,6 @@ async fn handler_trigger_completions(
         format,
     ))
 }
-
 async fn handler_policy(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -1935,14 +1821,11 @@ async fn handler_policy(
         );
         resp
     }
-
     let queue_len = app.queue.active_len() as u64;
     let token_required = app.require_api_token;
-
     let enforce_rate =
         !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets);
     check_operator_rate_limit(&app, &headers, Some(remote.ip()), "v1/policy", enforce_rate).await?;
-
     Ok(build_policy_body(
         app.require_api_token,
         &app.fee_policy,

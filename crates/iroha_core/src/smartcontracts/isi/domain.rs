@@ -1,11 +1,8 @@
 //! This module contains [`Domain`] structure and related implementations and trait implementations.
-
 use eyre::Result;
 use iroha_data_model::{account::rekey::AccountRekeyRecord, prelude::*, query::error::FindError};
 use iroha_telemetry::metrics;
-
 use super::super::isi::prelude::*;
-
 /// ISI module contains all instructions related to domains:
 /// - creating/changing assets
 /// - registering/unregistering accounts
@@ -16,7 +13,6 @@ pub mod isi {
         collections::{BTreeSet, btree_map::Entry},
         str::FromStr,
     };
-
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
         IntoKeyValue, NetworkId,
@@ -38,7 +34,6 @@ pub mod isi {
     };
     use iroha_logger::prelude::*;
     use norito::codec::Decode as _;
-
     use super::*;
     use crate::{
         alias::{
@@ -3193,7 +3188,6 @@ pub mod isi {
 /// Implementations for domain queries.
 pub mod query {
     use std::collections::BTreeSet;
-
     use iroha_data_model::{
         domain::Domain,
         query::{
@@ -3203,7 +3197,6 @@ pub mod query {
         },
     };
     use norito::json::Value;
-
     use super::*;
     use crate::{
         smartcontracts::{ValidQuery, ValidSingularQuery},
@@ -3460,9 +3453,7 @@ pub mod query {
 #[cfg(test)]
 mod tests {
     include!("domain_restricted_asset_definition_tests.rs");
-
     use std::sync::Arc;
-
     use iroha_crypto::{
         Algorithm, Hash, KeyPair,
         blake2::{Blake2b512, digest::Digest as _},
@@ -3532,7 +3523,6 @@ mod tests {
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
-
     use super::isi::upsert_account_rekey_record;
     use super::*;
     use crate::{
@@ -4220,7 +4210,6 @@ mod tests {
     #[test]
     fn find_domains_by_account_id_returns_owned_domains_only() {
         use std::collections::BTreeSet;
-
         let mut state = test_state();
         let owner_domain = DomainId::try_new("owner", "universal").expect("domain id");
         let alice_owned = DomainId::try_new("banka", "universal").expect("domain id");
@@ -4245,7 +4234,6 @@ mod tests {
     #[test]
     fn find_domains_filters_owner_with_owner_index() {
         use std::collections::BTreeSet;
-
         let mut state = test_state();
         let alice_owned = DomainId::try_new("banka", "universal").expect("domain id");
         let alice_owned_two = DomainId::try_new("cards", "universal").expect("domain id");

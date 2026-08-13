@@ -53,7 +53,6 @@ fn restored_carrierless_leader_wires_stay_dormant_until_exact_post_capacity_repl
             "a Full exact replay cannot activate the dormant {cut:?} owner"
         );
         while fixture.ingress.try_recv_if(|_| true).is_some() {}
-
         let mut newer = fixture.message.clone();
         let BlockMessage::V2(envelope) = &mut newer else {
             unreachable!("leader-wire restart fixture is a v2 envelope");
@@ -77,7 +76,6 @@ fn restored_carrierless_leader_wires_stay_dormant_until_exact_post_capacity_repl
             fixture.ingress.state.lock().open,
             "a newer conflicting identity must wait without fail-stop for {cut:?}"
         );
-
         assert!(
             matches!(
                 fixture.ingress.try_push(InboundBlockMessage::new(
@@ -89,7 +87,6 @@ fn restored_carrierless_leader_wires_stay_dormant_until_exact_post_capacity_repl
             "unrelated traffic must still bypass the dormant {cut:?} slot"
         );
         assert!(fixture.ingress.try_recv_if(|_| true).is_some());
-
         assert!(matches!(
             fixture.ingress.try_push(InboundBlockMessage::new(
                 fixture.message.clone(),
@@ -113,7 +110,6 @@ fn restored_carrierless_leader_wires_stay_dormant_until_exact_post_capacity_repl
             assert_eq!(record.status, super::FairV2IngressLeaderWireStatus::Ingress);
             assert_eq!(record.token, fixture.token);
         }
-
         let mut replay = fixture
             .ingress
             .try_recv_if(|_| true)
@@ -150,7 +146,6 @@ fn restored_carrierless_leader_wires_stay_dormant_until_exact_post_capacity_repl
         assert!(fixture.ingress.try_recv_if(|_| true).is_none());
     }
 }
-
 #[test]
 fn durable_view_cut_retires_carrierless_leader_wire_without_exact_retry() {
     for cut in [
@@ -174,7 +169,6 @@ fn durable_view_cut_retires_carrierless_leader_wire_without_exact_retry() {
             unreachable!("leader-wire restart fixture carries Proposal");
         };
         proposal.round.view = next_view;
-
         assert!(matches!(
             fixture.ingress.try_push(InboundBlockMessage::new(
                 newer.clone(),
@@ -211,7 +205,6 @@ fn durable_view_cut_retires_carrierless_leader_wire_without_exact_retry() {
         assert!(restore.records().is_empty(), "{cut:?}");
         assert_eq!(restore.last_admission_ordinal(), 7, "{cut:?}");
         assert_eq!(restore.scheduler_ordinal_high_watermark(), 41, "{cut:?}");
-
         assert!(matches!(
             fixture.ingress.try_push(InboundBlockMessage::new(
                 fixture.message,
@@ -236,7 +229,6 @@ fn durable_view_cut_retires_carrierless_leader_wire_without_exact_retry() {
         assert!(replacement.token.scheduler_ordinal > 41, "{cut:?}");
     }
 }
-
 #[test]
 fn durable_view_cut_drains_live_obsolete_carrier_despite_downstream_backpressure() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
@@ -251,7 +243,6 @@ fn durable_view_cut_drains_live_obsolete_carrier_despite_downstream_backpressure
     };
     let round = proposal.round;
     let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(
             message.clone(),
@@ -266,7 +257,6 @@ fn durable_view_cut_drains_live_obsolete_carrier_despite_downstream_backpressure
             .is_none(),
         "temporary downstream backpressure must retain a current-view carrier"
     );
-
     let next_view = round
         .view
         .checked_add(1)
@@ -285,7 +275,6 @@ fn durable_view_cut_drains_live_obsolete_carrier_despite_downstream_backpressure
         0,
         "a carrier-owning Ingress record must cross Runtime before retirement"
     );
-
     let (mut obsolete, disposition) = ingress
         .try_recv_if_checked_retiring_obsolete(|_| false)
         .expect("classify obsolete live carrier")
@@ -304,7 +293,6 @@ fn durable_view_cut_drains_live_obsolete_carrier_despite_downstream_backpressure
     ingress
         .mark_obsolete_leader_wire_volatile_terminal(runtime)
         .expect("publish WAL-authorized volatile terminal");
-
     let mut replacement = message.clone();
     let BlockMessage::V2(envelope) = &mut replacement else {
         unreachable!("replacement fixture is a v2 envelope");
@@ -339,7 +327,6 @@ fn durable_view_cut_drains_live_obsolete_carrier_despite_downstream_backpressure
     assert!(replacement.token.admission_ordinal() > runtime.token().admission_ordinal());
     assert!(replacement.token.scheduler_ordinal() > runtime.token().scheduler_ordinal());
 }
-
 #[test]
 fn certified_body_response_survives_view_and_decision_cuts_at_fair_ingress() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
@@ -368,7 +355,6 @@ fn certified_body_response_survives_view_and_decision_cuts_at_fair_ingress() {
             .expect("publish the live certified-view cut"),
         0
     );
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(
             message.clone(),
@@ -383,7 +369,6 @@ fn certified_body_response_survives_view_and_decision_cuts_at_fair_ingress() {
         )),
         Ok(super::FairV2IngressPushDisposition::Coalesced)
     ));
-
     let mut conflicting = message.clone();
     let BlockMessage::V2(envelope) = &mut conflicting else {
         unreachable!("conflicting fixture is a v2 envelope");
@@ -407,7 +392,6 @@ fn certified_body_response_survives_view_and_decision_cuts_at_fair_ingress() {
             .is_none(),
         "a view cut must not misclassify the response as an obsolete carrier"
     );
-
     let (mut drained, disposition) = ingress
         .try_recv_if_checked_retiring_obsolete(|_| true)
         .expect("drain the request-bound historical response")
@@ -427,7 +411,6 @@ fn certified_body_response_survives_view_and_decision_cuts_at_fair_ingress() {
     ingress
         .mark_leader_wire_volatile_terminal(runtime)
         .expect("publish the exact response terminal");
-
     let decision_cut =
         super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
             round.context_id,
@@ -447,7 +430,6 @@ fn certified_body_response_survives_view_and_decision_cuts_at_fair_ingress() {
         Ok(super::FairV2IngressPushDisposition::Coalesced)
     ));
 }
-
 #[test]
 fn durable_decision_cut_retires_and_closes_carrierless_leader_wire_height() {
     let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Runtime);
@@ -465,7 +447,6 @@ fn durable_decision_cut_retires_and_closes_carrierless_leader_wire_height() {
             .expect("publish the durable Decision cut"),
         1
     );
-
     let mut later = fixture.message.clone();
     let BlockMessage::V2(envelope) = &mut later else {
         unreachable!("leader-wire restart fixture is a v2 envelope");

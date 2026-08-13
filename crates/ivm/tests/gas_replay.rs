@@ -1,5 +1,4 @@
 //! Replay harness to ensure gas metering remains deterministic across runs.
-
 fn gas_used_for_program(program: &[u8], gas_limit: u64) -> u64 {
     let mut vm = ivm::IVM::new(0);
     vm.set_gas_limit(gas_limit);
@@ -7,7 +6,6 @@ fn gas_used_for_program(program: &[u8], gas_limit: u64) -> u64 {
     vm.run().expect("run program");
     gas_limit.saturating_sub(vm.remaining_gas())
 }
-
 #[test]
 fn gas_replays_consistently_across_vms() {
     let meta = ivm::ProgramMetadata {
@@ -25,11 +23,9 @@ fn gas_replays_consistently_across_vms() {
             .to_le_bytes(),
     );
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-
     let gas_limit = 128;
     let used_first = gas_used_for_program(&program, gas_limit);
     let used_second = gas_used_for_program(&program, gas_limit);
-
     assert!(used_first > 0);
     assert_eq!(used_first, used_second);
 }

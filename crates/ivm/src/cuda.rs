@@ -1,9 +1,7 @@
 #![cfg_attr(not(feature = "cuda"), allow(dead_code))]
-
 fn ed25519_public_key_bytes_are_invalid(pk: &[u8; 32]) -> bool {
     crate::signature::ed25519_public_key_bytes_are_invalid(pk)
 }
-
 #[cfg(feature = "cuda")]
 mod imp {
     use std::cell::Cell;
@@ -17,16 +15,13 @@ mod imp {
         thread,
         time::{Duration, Instant},
     };
-
     use cust::{
         context::CurrentContext,
         memory::{AsyncCopyDestination, CopyDestination, DeviceCopy, LockedBuffer},
         prelude::*,
         sys::{cuStreamQuery, cudaError_enum},
     };
-
     use crate::bn254_vec::FieldElem;
-
     static PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/add.ptx"));
     static VEC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/vector.ptx"));
     static SHA_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/sha256.ptx"));
@@ -43,7 +38,6 @@ mod imp {
     static POSEIDON2_MDS_FLAT: OnceLock<Vec<u64>> = OnceLock::new();
     static POSEIDON6_RC_FLAT: OnceLock<Vec<u64>> = OnceLock::new();
     static POSEIDON6_MDS_FLAT: OnceLock<Vec<u64>> = OnceLock::new();
-
     static CUDA_DISABLED: AtomicBool = AtomicBool::new(false);
     static CUDA_FORCED_DISABLED: AtomicBool = AtomicBool::new(false);
     static CUDA_ABANDON_DEVICE_ALLOCS: AtomicBool = AtomicBool::new(false);
@@ -52,19 +46,15 @@ mod imp {
     thread_local! {
         static CUDA_SELFTEST_RUNNING: Cell<bool> = const { Cell::new(false) };
     }
-
     fn cuda_error_slot() -> &'static Mutex<Option<String>> {
         CUDA_LAST_ERROR.get_or_init(|| Mutex::new(None))
     }
-
     fn cuda_selftest_cache() -> &'static Mutex<Option<bool>> {
         CUDA_SELFTEST_OK.get_or_init(|| Mutex::new(None))
     }
-
     fn cuda_selftest_running() -> bool {
         CUDA_SELFTEST_RUNNING.with(Cell::get)
     }
-
     fn bind_cuda_context_for_current_thread() -> bool {
         let Some(mgr) = crate::GpuManager::shared() else {
             set_cuda_status_message(Some(
@@ -89,9 +79,7 @@ mod imp {
         }
         rebound
     }
-
     struct SelftestRunningGuard;
-
     impl SelftestRunningGuard {
         fn enter() -> Option<Self> {
             let already_running = CUDA_SELFTEST_RUNNING.with(|running| {
@@ -104,25 +92,21 @@ mod imp {
             if already_running { None } else { Some(Self) }
         }
     }
-
     impl Drop for SelftestRunningGuard {
         fn drop(&mut self) {
             CUDA_SELFTEST_RUNNING.with(|running| running.set(false));
         }
     }
-
     fn trace_cuda_selftest(step: &str) {
         if std::env::var_os("IVM_CUDA_SELFTEST_TRACE").is_some() {
             eprintln!("ivm cuda selftest: {step}");
         }
     }
-
     fn set_cuda_status_message(message: Option<String>) {
         if let Ok(mut guard) = cuda_error_slot().lock() {
             *guard = message;
         }
     }
-
     fn record_cuda_disable(reason: impl Into<String>) {
         let message = reason.into();
         CUDA_DISABLED.store(true, Ordering::SeqCst);
@@ -131,16 +115,13 @@ mod imp {
         }
         eprintln!("ivm: cuda backend disabled: {message}");
     }
-
     const CUDA_STREAM_TIMEOUT: Duration = Duration::from_secs(120);
-
     #[derive(Clone, Copy, Debug, PartialEq)]
     enum CudaWaitStatus {
         Ready,
         TimedOut,
         Failed(cudaError_enum),
     }
-
     fn wait_until_cuda_ready(
         timeout: Duration,
         mut query: impl FnMut() -> cudaError_enum,
@@ -159,7 +140,6 @@ mod imp {
             }
         }
     }
-
     fn wait_for_cuda_stream(stream: &Stream, context: &str) -> Option<()> {
         finish_cuda_wait(
             wait_until_cuda_ready(CUDA_STREAM_TIMEOUT, || unsafe {
@@ -168,7 +148,6 @@ mod imp {
             context,
         )
     }
-
     fn finish_cuda_wait(status: CudaWaitStatus, context: &str) -> Option<()> {
         match status {
             CudaWaitStatus::Ready => Some(()),
@@ -185,24 +164,19 @@ mod imp {
             }
         }
     }
-
     pub(crate) fn cuda_should_abandon_device_allocations() -> bool {
         CUDA_ABANDON_DEVICE_ALLOCS.load(Ordering::SeqCst)
     }
-
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
     struct KernelStatus {
         code: u32,
         detail: u32,
     }
-
     unsafe impl DeviceCopy for KernelStatus {}
-
     struct CudaDeviceBuffer<T: DeviceCopy> {
         inner: ManuallyDrop<DeviceBuffer<T>>,
     }
-
     impl<T: DeviceCopy> CudaDeviceBuffer<T> {
         fn new(buffer: DeviceBuffer<T>) -> Self {
             Self {
@@ -210,21 +184,17 @@ mod imp {
             }
         }
     }
-
     impl<T: DeviceCopy> Deref for CudaDeviceBuffer<T> {
         type Target = DeviceBuffer<T>;
-
         fn deref(&self) -> &Self::Target {
             &self.inner
         }
     }
-
     impl<T: DeviceCopy> DerefMut for CudaDeviceBuffer<T> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.inner
         }
     }
-
     impl<T: DeviceCopy> Drop for CudaDeviceBuffer<T> {
         fn drop(&mut self) {
             if !cuda_should_abandon_device_allocations() {
@@ -234,13 +204,11 @@ mod imp {
             }
         }
     }
-
     fn cuda_buffer_from_slice<T: DeviceCopy>(slice: &[T]) -> Option<CudaDeviceBuffer<T>> {
         DeviceBuffer::from_slice(slice)
             .ok()
             .map(CudaDeviceBuffer::new)
     }
-
     fn cuda_buffer_from_slice_async<T: DeviceCopy + Clone>(
         slice: &[T],
         stream: &Stream,
@@ -259,7 +227,6 @@ mod imp {
         }
         Some(device)
     }
-
     fn copy_device_to_host_bounded<T: DeviceCopy + Copy>(
         device: &DeviceBuffer<T>,
         dest: &mut [T],
@@ -279,11 +246,9 @@ mod imp {
         dest.copy_from_slice(&staging);
         Some(())
     }
-
     fn device_buffer_uninitialized<T: DeviceCopy>(len: usize) -> Option<CudaDeviceBuffer<T>> {
         unsafe { DeviceBuffer::<T>::uninitialized(len).ok() }.map(CudaDeviceBuffer::new)
     }
-
     const BN254_LIMBS: usize = 4;
     const POSEIDON2_WIDTH: usize = 3;
     const POSEIDON6_WIDTH: usize = 6;
@@ -327,22 +292,18 @@ mod imp {
     const BUFFER_POSEIDON2_MDS: &str = "poseidon2_mds";
     const BUFFER_POSEIDON6_RC: &str = "poseidon6_rc";
     const BUFFER_POSEIDON6_MDS: &str = "poseidon6_mds";
-
     fn mix_task_id(mut state: u64, value: u64) -> u64 {
         state ^= value.wrapping_add(0x9e37_79b9_7f4a_7c15);
         state = state.rotate_left(27);
         state = state.wrapping_mul(0x94d0_49bb_1331_11eb);
         state ^ (state >> 31)
     }
-
     fn cuda_task_id(seed: u64, dims: &[u64]) -> u64 {
         dims.iter().copied().fold(seed, mix_task_id)
     }
-
     fn with_cuda_task_scope<T>(task_id: u64, func: impl FnOnce() -> T) -> T {
         crate::gpu_manager::with_task_scope(task_id, func)
     }
-
     fn kernel_name_tag(name: &str) -> u64 {
         let mut tag = 0u64;
         for &byte in name.as_bytes().iter().take(8) {
@@ -350,7 +311,6 @@ mod imp {
         }
         tag
     }
-
     fn flatten_round_constants<const WIDTH: usize>(
         rc: &Vec<[[u64; BN254_LIMBS]; WIDTH]>,
     ) -> Vec<u64> {
@@ -362,7 +322,6 @@ mod imp {
         }
         flat
     }
-
     fn flatten_mds<const WIDTH: usize>(mds: &[[[u64; BN254_LIMBS]; WIDTH]; WIDTH]) -> Vec<u64> {
         let mut flat = Vec::with_capacity(WIDTH * WIDTH * BN254_LIMBS);
         for row in mds.iter() {
@@ -372,7 +331,6 @@ mod imp {
         }
         flat
     }
-
     #[allow(dead_code)]
     pub(super) fn bitonic_sort_pairs(hi: &mut [u64], lo: &mut [u64]) -> Option<()> {
         if hi.len() != lo.len() {
@@ -389,15 +347,12 @@ mod imp {
         if pow2 > u32::MAX as usize {
             return None;
         }
-
         let mut hi_pad = Vec::with_capacity(pow2);
         hi_pad.extend_from_slice(hi);
         hi_pad.resize(pow2, u64::MAX);
-
         let mut lo_pad = Vec::with_capacity(pow2);
         lo_pad.extend_from_slice(lo);
         lo_pad.resize(pow2, u64::MAX);
-
         let task_id = cuda_task_id(TASK_BITONIC, &[len as u64, pow2 as u64]);
         with_cuda_task_scope(task_id, || {
             let mgr = crate::GpuManager::shared()?;
@@ -407,10 +362,8 @@ mod imp {
                     let function = module.get_function("bitonic_step").ok()?;
                     let d_hi = cuda_buffer_from_slice(&hi_pad)?;
                     let d_lo = cuda_buffer_from_slice(&lo_pad)?;
-
                     let threads: u32 = 256;
                     let blocks: u32 = (pow2 as u32).div_ceil(threads);
-
                     let mut k = 2usize;
                     while k <= pow2 {
                         let mut j = k >> 1;
@@ -429,13 +382,11 @@ mod imp {
                         }
                         k <<= 1;
                     }
-
                     wait_for_cuda_stream(stream, "cuda kernel")?;
                     let mut hi_out = vec![0u64; pow2];
                     let mut lo_out = vec![0u64; pow2];
                     d_hi.copy_to(&mut hi_out).ok()?;
                     d_lo.copy_to(&mut lo_out).ok()?;
-
                     hi[..len].copy_from_slice(&hi_out[..len]);
                     lo[..len].copy_from_slice(&lo_out[..len]);
                     Some(())
@@ -443,7 +394,6 @@ mod imp {
             })?
         })
     }
-
     fn flatten_bn254_operands(elements: &[[u64; BN254_LIMBS]]) -> Vec<u64> {
         let mut flat = Vec::with_capacity(elements.len() * BN254_LIMBS);
         for element in elements {
@@ -451,7 +401,6 @@ mod imp {
         }
         flat
     }
-
     fn collect_bn254_outputs(words: &[u64], elem_count: usize) -> Option<Vec<[u64; BN254_LIMBS]>> {
         if words.len() != elem_count.checked_mul(BN254_LIMBS)? {
             return None;
@@ -464,7 +413,6 @@ mod imp {
         }
         Some(out)
     }
-
     fn bn254_launch_kernel_words(
         kernel_name: &str,
         lhs_words: &[u64],
@@ -527,7 +475,6 @@ mod imp {
             })?
         })
     }
-
     fn bn254_launch_kernel(
         kernel_name: &str,
         lhs: &[u64; BN254_LIMBS],
@@ -537,7 +484,6 @@ mod imp {
         bn254_launch_kernel_words(kernel_name, lhs, rhs, &mut out, 1)?;
         Some(out)
     }
-
     fn bn254_launch_kernel_batch(
         kernel_name: &str,
         lhs: &[[u64; BN254_LIMBS]],
@@ -555,7 +501,6 @@ mod imp {
         bn254_launch_kernel_words(kernel_name, &flat_lhs, &flat_rhs, &mut flat_out, lhs.len())?;
         collect_bn254_outputs(&flat_out, lhs.len())
     }
-
     fn sha256_scalar_ref(state: &mut [u32; 8], block: &[u8; 64]) {
         const K: [u32; 64] = [
             0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
@@ -618,7 +563,6 @@ mod imp {
         state[6] = state[6].wrapping_add(g);
         state[7] = state[7].wrapping_add(h);
     }
-
     fn sha256_pairs_reduce_device_buffer(
         function: &Function,
         stream: &Stream,
@@ -652,7 +596,6 @@ mod imp {
             current_count = next_count;
             current_is_initial = !current_is_initial;
         }
-
         wait_for_cuda_stream(stream, "cuda kernel")?;
         let final_buf = if current_is_initial {
             initial_digests
@@ -663,7 +606,6 @@ mod imp {
         final_buf.index(0..32).copy_to(&mut root).ok()?;
         Some(root)
     }
-
     fn sha256_pairs_reduce_on_gpu(
         function: &Function,
         gpu: &crate::gpu_manager::GpuContext,
@@ -678,7 +620,6 @@ mod imp {
             sha256_pairs_reduce_device_buffer(function, stream, &current, digest_count)
         })
     }
-
     fn poseidon_cuda_selftest() -> bool {
         let sample2 = (1u64, 2u64);
         let expected2 = crate::poseidon::poseidon2_simd(sample2.0, sample2.1);
@@ -696,7 +637,6 @@ mod imp {
             record_cuda_disable("poseidon2 CUDA self-test mismatch");
             return false;
         }
-
         let sample6 = [1u64, 2, 3, 4, 5, 6];
         let expected6 = crate::poseidon::poseidon6_simd(sample6);
         let Some((outputs6, status6)) = poseidon6_cuda_many_impl(
@@ -713,19 +653,15 @@ mod imp {
             record_cuda_disable("poseidon6 CUDA self-test mismatch");
             return false;
         }
-
         true
     }
-
     fn ed25519_cuda_selftest() -> bool {
         use ed25519_dalek::{Signer, SigningKey};
-
         let key = SigningKey::from_bytes(&[9u8; 32]);
         let pk = key.verifying_key();
         let msg = b"ivm-cuda-ed25519-selftest";
         let sig = key.sign(msg).to_bytes();
         let hram = crate::signature::ed25519_challenge_scalar_bytes(&sig, pk.as_bytes(), msg);
-
         let mgr = match crate::GpuManager::shared() {
             Some(mgr) => mgr,
             None => {
@@ -767,7 +703,6 @@ mod imp {
             record_cuda_disable("golden self-test mismatch: ed25519 single");
             return false;
         }
-
         let mut bad_sig = sig;
         bad_sig[0] ^= 0x80;
         let sigs = [sig, bad_sig];
@@ -815,10 +750,8 @@ mod imp {
             record_cuda_disable("golden self-test mismatch: ed25519 batch");
             return false;
         }
-
         true
     }
-
     fn bn254_cuda_selftest() -> bool {
         let add_lhs = FieldElem::from_u64(3);
         let add_rhs = FieldElem::from_u64(4);
@@ -831,7 +764,6 @@ mod imp {
             record_cuda_disable("golden self-test mismatch: bn254 add");
             return false;
         }
-
         let sub_lhs = FieldElem::from_u64(2);
         let sub_rhs = FieldElem::from_u64(5);
         let sub_expected = crate::bn254_vec::sub_scalar(sub_lhs, sub_rhs).0;
@@ -843,7 +775,6 @@ mod imp {
             record_cuda_disable("golden self-test mismatch: bn254 sub");
             return false;
         }
-
         let mul_lhs = FieldElem::from_u64(u32::MAX as u64 + 17);
         let mul_rhs = FieldElem::from_u64(11);
         let mul_expected = crate::bn254_vec::mul_scalar(mul_lhs, mul_rhs).0;
@@ -855,10 +786,8 @@ mod imp {
             record_cuda_disable("golden self-test mismatch: bn254 mul");
             return false;
         }
-
         true
     }
-
     fn ensure_cuda_selftest() -> bool {
         if CUDA_FORCED_DISABLED.load(Ordering::SeqCst) || CUDA_DISABLED.load(Ordering::SeqCst) {
             return false;
@@ -1207,18 +1136,15 @@ mod imp {
         }
         result
     }
-
     pub fn cuda_last_error_message() -> Option<String> {
         cuda_error_slot()
             .lock()
             .ok()
             .and_then(|guard| guard.clone())
     }
-
     pub fn cuda_disabled() -> bool {
         CUDA_FORCED_DISABLED.load(Ordering::SeqCst) || CUDA_DISABLED.load(Ordering::SeqCst)
     }
-
     pub fn cuda_available() -> bool {
         if !ensure_cuda_selftest() {
             return false;
@@ -1229,7 +1155,6 @@ mod imp {
             && !CUDA_FORCED_DISABLED.load(Ordering::SeqCst)
             && !CUDA_DISABLED.load(Ordering::SeqCst)
     }
-
     pub fn set_cuda_enabled(enabled: bool) {
         CUDA_FORCED_DISABLED.store(!enabled, Ordering::SeqCst);
         if enabled {
@@ -1245,7 +1170,6 @@ mod imp {
         }
         crate::gpu_manager::GpuManager::invalidate_cache();
     }
-
     #[doc(hidden)]
     pub fn reset_cuda_backend_for_tests() {
         CUDA_DISABLED.store(false, Ordering::SeqCst);
@@ -1257,7 +1181,6 @@ mod imp {
         set_cuda_status_message(None);
         crate::gpu_manager::GpuManager::invalidate_cache();
     }
-
     pub fn vector_add_f32(a: &[f32], b: &[f32]) -> Option<Vec<f32>> {
         if a.len() != b.len() {
             return None;
@@ -1296,7 +1219,6 @@ mod imp {
             })?
         })
     }
-
     fn launch_u32_kernel(name: &str, a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
         if a.len() != b.len() {
             return None;
@@ -1329,7 +1251,6 @@ mod imp {
             })?
         })
     }
-
     fn launch_u64_kernel(name: &str, a: &[u64], b: &[u64]) -> Option<Vec<u64>> {
         if a.len() != b.len() {
             return None;
@@ -1362,7 +1283,6 @@ mod imp {
             })?
         })
     }
-
     fn vadd64_cuda_selftest() -> bool {
         let a = [0xffff_ffff, (0x8000_0000u64 << 32) | 0x0000_0001];
         let b = [
@@ -1374,7 +1294,6 @@ mod imp {
             .map(|actual| actual == expected)
             .unwrap_or(false)
     }
-
     fn bit_ops_cuda_selftest() -> bool {
         let lhs = [0xffff_0000u32, 0x1234_5678, 0x0f0f_0f0f, 0xaaaa_5555];
         let rhs = [0x00ff_ff00u32, 0xf0f0_f0f0, 0x3333_cccc, 0x5555_aaaa];
@@ -1413,7 +1332,6 @@ mod imp {
             .unwrap_or(false);
         and_ok && xor_ok && or_ok
     }
-
     fn aes_batch_cuda_selftest() -> bool {
         let states = [
             [
@@ -1437,7 +1355,6 @@ mod imp {
             .iter()
             .map(|&state| crate::aes::aesdec_impl(state, rk))
             .collect();
-
         let mgr = match crate::GpuManager::shared() {
             Some(mgr) => mgr,
             None => return false,
@@ -1490,11 +1407,9 @@ mod imp {
                 .collect();
             Some(actual == expected)
         };
-
         run_batch("aesenc_round_batch", &expected_enc).unwrap_or(false)
             && run_batch("aesdec_round_batch", &expected_dec).unwrap_or(false)
     }
-
     pub fn vadd32_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
         if a.len() != b.len() {
             return None;
@@ -1510,7 +1425,6 @@ mod imp {
             launch_u32_kernel("vadd32", a, b)
         })
     }
-
     pub fn vand_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
         if a.len() != b.len() {
             return None;
@@ -1526,7 +1440,6 @@ mod imp {
             launch_u32_kernel("vand", a, b)
         })
     }
-
     pub fn vxor_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
         if a.len() != b.len() {
             return None;
@@ -1542,7 +1455,6 @@ mod imp {
             launch_u32_kernel("vxor", a, b)
         })
     }
-
     pub fn vor_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
         if a.len() != b.len() {
             return None;
@@ -1558,7 +1470,6 @@ mod imp {
             launch_u32_kernel("vor", a, b)
         })
     }
-
     pub fn vadd64_cuda(a: &[u64], b: &[u64]) -> Option<Vec<u64>> {
         if a.len() != b.len() {
             return None;
@@ -1574,7 +1485,6 @@ mod imp {
             launch_u64_kernel("vadd64", a, b)
         })
     }
-
     /// Attempt to perform a SHA-256 compression round on the GPU.
     /// Returns true on success, false if the CUDA path failed.
     pub fn sha256_compress_cuda(state: &mut [u32; 8], block: &[u8; 64]) -> bool {
@@ -1631,7 +1541,6 @@ mod imp {
             }
         })
     }
-
     fn sha256_leaves_cuda_selftest() -> bool {
         let mut block_a = [0u8; 64];
         block_a[0] = b'a';
@@ -1639,7 +1548,6 @@ mod imp {
         block_a[2] = b'c';
         block_a[3] = 0x80;
         block_a[63] = 24;
-
         let mut block_b = [0u8; 64];
         block_b[0] = b'n';
         block_b[1] = b'o';
@@ -1649,7 +1557,6 @@ mod imp {
         block_b[5] = b'o';
         block_b[6] = 0x80;
         block_b[63] = 48;
-
         let blocks = [block_a, block_b];
         let expected: Vec<[u8; 32]> = blocks
             .iter()
@@ -1672,12 +1579,10 @@ mod imp {
                 digest
             })
             .collect();
-
         let mgr = match crate::GpuManager::shared() {
             Some(mgr) => mgr,
             None => return false,
         };
-
         let flat: Vec<u8> = blocks
             .iter()
             .flat_map(|block| block.iter())
@@ -1712,7 +1617,6 @@ mod imp {
         if result.is_none() || result.flatten().is_none() {
             return false;
         }
-
         let actual: Vec<[u8; 32]> = out
             .chunks_exact(32)
             .map(|chunk| {
@@ -1723,7 +1627,6 @@ mod imp {
             .collect();
         actual == expected
     }
-
     fn sha256_pairs_reduce_cuda_selftest() -> bool {
         fn cpu_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
             let mut state = [
@@ -1751,7 +1654,6 @@ mod imp {
             }
             out
         }
-
         let mut d0 = [0u8; 32];
         let mut d1 = [0u8; 32];
         let mut d2 = [0u8; 32];
@@ -1767,12 +1669,10 @@ mod imp {
         let digests = [d0, d1, d2];
         let first = cpu_pair(&digests[0], &digests[1]);
         let expected = cpu_pair(&first, &digests[2]);
-
         let mgr = match crate::GpuManager::shared() {
             Some(mgr) => mgr,
             None => return false,
         };
-
         let selftest_task = cuda_task_id(TASK_SHA256_PAIRS, &[digests.len() as u64, TASK_SELFTEST]);
         let result = with_cuda_task_scope(selftest_task, || {
             let flat: Vec<u8> = digests
@@ -1787,10 +1687,8 @@ mod imp {
             })
             .flatten()
         });
-
         matches!(result, Some(root) if root == expected)
     }
-
     /// Compute SHA-256 digests for many 64-byte blocks in parallel on the GPU.
     /// Each block must be a fully padded single-block message. Returns digest
     /// bytes (big-endian) per block on success.
@@ -1841,7 +1739,6 @@ mod imp {
             )
         })
     }
-
     /// Compute a SHA-256 Merkle root by hashing padded leaves and reducing
     /// parents entirely on the GPU before copying back the final digest.
     pub(crate) fn sha256_merkle_root_cuda(blocks: &[[u8; 64]]) -> Option<[u8; 32]> {
@@ -1883,7 +1780,6 @@ mod imp {
             })?
         })
     }
-
     /// Reduce a vector of digests by hashing pairs (left||right) using GPU until one remains.
     /// Left-promotion when right is absent. Returns the root digest.
     pub fn sha256_pairs_reduce_cuda(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
@@ -1900,7 +1796,6 @@ mod imp {
                 return None;
             }
             let mgr = crate::GpuManager::shared()?;
-
             let flat: Vec<u8> = digests.iter().flat_map(|d| d.iter()).copied().collect();
             mgr.with_gpu_for_task(0, |gpu| {
                 let module = gpu.cached_module(MODULE_SHA256_PAIRS, SHA_PAIRS_PTX)?;
@@ -1910,13 +1805,11 @@ mod imp {
             .flatten()
         })
     }
-
     #[derive(Clone, Copy)]
     enum PoseidonKernel {
         Poseidon2,
         Poseidon6,
     }
-
     #[allow(clippy::too_many_arguments)]
     fn launch_poseidon_kernel(
         kernel: PoseidonKernel,
@@ -2026,7 +1919,6 @@ mod imp {
         })?;
         Some(status[0])
     }
-
     fn poseidon2_cuda_many_impl(
         inputs: &[(u64, u64)],
         full_rounds: u32,
@@ -2050,7 +1942,6 @@ mod imp {
         let rc_flat =
             POSEIDON2_RC_FLAT.get_or_init(|| flatten_round_constants::<POSEIDON2_WIDTH>(rc));
         let mds_flat = POSEIDON2_MDS_FLAT.get_or_init(|| flatten_mds::<POSEIDON2_WIDTH>(mds));
-
         let mut state_words = vec![0u64; inputs.len() * POSEIDON2_STATE_WORDS];
         for (idx, &(a, b)) in inputs.iter().enumerate() {
             let lanes = [
@@ -2063,7 +1954,6 @@ mod imp {
                 state_words[start..start + BN254_LIMBS].copy_from_slice(&lane.0);
             }
         }
-
         let status = launch_poseidon_kernel(
             PoseidonKernel::Poseidon2,
             &mut state_words,
@@ -2091,7 +1981,6 @@ mod imp {
         }
         Some((outputs, status))
     }
-
     fn poseidon6_cuda_many_impl(
         inputs: &[[u64; 6]],
         full_rounds: u32,
@@ -2115,7 +2004,6 @@ mod imp {
         let rc_flat =
             POSEIDON6_RC_FLAT.get_or_init(|| flatten_round_constants::<POSEIDON6_WIDTH>(rc));
         let mds_flat = POSEIDON6_MDS_FLAT.get_or_init(|| flatten_mds::<POSEIDON6_WIDTH>(mds));
-
         let mut state_words = vec![0u64; inputs.len() * POSEIDON6_STATE_WORDS];
         for (idx, values) in inputs.iter().enumerate() {
             for (lane_idx, value) in values.iter().enumerate() {
@@ -2124,7 +2012,6 @@ mod imp {
                 state_words[start..start + BN254_LIMBS].copy_from_slice(&elem.0);
             }
         }
-
         let status = launch_poseidon_kernel(
             PoseidonKernel::Poseidon6,
             &mut state_words,
@@ -2152,11 +2039,9 @@ mod imp {
         }
         Some((outputs, status))
     }
-
     pub fn poseidon2_cuda(a: u64, b: u64) -> Option<u64> {
         poseidon2_cuda_many(&[(a, b)]).and_then(|mut outputs| outputs.pop())
     }
-
     pub fn poseidon2_cuda_many(inputs: &[(u64, u64)]) -> Option<Vec<u64>> {
         let task_id = cuda_task_id(TASK_POSEIDON2, &[inputs.len() as u64]);
         with_cuda_task_scope(task_id, || {
@@ -2173,11 +2058,9 @@ mod imp {
             Some(outputs)
         })
     }
-
     pub fn poseidon6_cuda(inputs: [u64; 6]) -> Option<u64> {
         poseidon6_cuda_many(&[inputs]).and_then(|mut outputs| outputs.pop())
     }
-
     pub fn poseidon6_cuda_many(inputs: &[[u64; 6]]) -> Option<Vec<u64>> {
         let task_id = cuda_task_id(TASK_POSEIDON6, &[inputs.len() as u64]);
         with_cuda_task_scope(task_id, || {
@@ -2194,7 +2077,6 @@ mod imp {
             Some(outputs)
         })
     }
-
     pub fn keccak_f1600_cuda(state: &mut [u64; 25]) -> bool {
         let task_id = cuda_task_id(TASK_KECCAK, &[state[0]]);
         with_cuda_task_scope(task_id, || {
@@ -2241,7 +2123,6 @@ mod imp {
             }
         })
     }
-
     pub fn aesenc_cuda(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
         let task_id = cuda_task_id(TASK_AES_ROUND, &[u64::from(state[0]), 0]);
         with_cuda_task_scope(task_id, || {
@@ -2253,7 +2134,6 @@ mod imp {
                 .or_else(|| Some(crate::aes::aesenc_impl(state, rk)))
         })
     }
-
     pub fn aesdec_cuda(state: [u8; 16], rk: [u8; 16]) -> Option<[u8; 16]> {
         let task_id = cuda_task_id(TASK_AES_ROUND, &[u64::from(state[0]), 1]);
         with_cuda_task_scope(task_id, || {
@@ -2265,7 +2145,6 @@ mod imp {
                 .or_else(|| Some(crate::aes::aesdec_impl(state, rk)))
         })
     }
-
     /// Batch AESENC round: process N blocks with a single launch. Common round key for all.
     pub fn aesenc_batch_cuda(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
         if states.is_empty() {
@@ -2318,7 +2197,6 @@ mod imp {
             Some(vec_out)
         })
     }
-
     /// Batch AESDEC round.
     pub fn aesdec_batch_cuda(states: &[[u8; 16]], rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
         if states.is_empty() {
@@ -2371,7 +2249,6 @@ mod imp {
             Some(vec_out)
         })
     }
-
     fn aesenc_rounds_batch_cpu(states: &[[u8; 16]], round_keys: &[[u8; 16]]) -> Vec<[u8; 16]> {
         let mut current = states.to_vec();
         for &round_key in round_keys {
@@ -2381,7 +2258,6 @@ mod imp {
         }
         current
     }
-
     /// Fused N-round AESENC for many blocks with a single launch.
     pub fn aesenc_rounds_batch_cuda(
         states: &[[u8; 16]],
@@ -2438,7 +2314,6 @@ mod imp {
             Some(vec_out)
         })
     }
-
     fn aesdec_rounds_batch_cpu(states: &[[u8; 16]], round_keys: &[[u8; 16]]) -> Vec<[u8; 16]> {
         let mut current = states.to_vec();
         for &round_key in round_keys {
@@ -2448,7 +2323,6 @@ mod imp {
         }
         current
     }
-
     /// Fused N-round AESDEC for many blocks with a single launch.
     pub fn aesdec_rounds_batch_cuda(
         states: &[[u8; 16]],
@@ -2505,7 +2379,6 @@ mod imp {
             Some(vec_out)
         })
     }
-
     /// Batch BN254 add: process many field-element pairs with one CUDA launch.
     ///
     /// Returns `None` when CUDA is unavailable, disabled, or the input slices
@@ -2524,7 +2397,6 @@ mod imp {
             bn254_launch_kernel_batch("bn254_add_kernel", lhs, rhs)
         })
     }
-
     /// Batch BN254 subtract: process many field-element pairs with one CUDA launch.
     ///
     /// Returns `None` when CUDA is unavailable, disabled, or the input slices
@@ -2543,7 +2415,6 @@ mod imp {
             bn254_launch_kernel_batch("bn254_sub_kernel", lhs, rhs)
         })
     }
-
     /// Batch BN254 multiply: process many field-element pairs with one CUDA launch.
     ///
     /// Returns `None` when CUDA is unavailable, disabled, or the input slices
@@ -2562,7 +2433,6 @@ mod imp {
             bn254_launch_kernel_batch("bn254_mul_kernel", lhs, rhs)
         })
     }
-
     /// Attempt to add one BN254 field-element pair on the GPU.
     pub fn bn254_add_cuda(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
         let task_id = cuda_task_id(TASK_BN254, &[0, a[0], b[0]]);
@@ -2575,7 +2445,6 @@ mod imp {
             bn254_launch_kernel("bn254_add_kernel", &a, &b)
         })
     }
-
     /// Attempt to subtract one BN254 field-element pair on the GPU.
     pub fn bn254_sub_cuda(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
         let task_id = cuda_task_id(TASK_BN254, &[1, a[0], b[0]]);
@@ -2586,7 +2455,6 @@ mod imp {
             bn254_launch_kernel("bn254_sub_kernel", &a, &b)
         })
     }
-
     /// Attempt to multiply one BN254 field-element pair on the GPU.
     pub fn bn254_mul_cuda(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
         let task_id = cuda_task_id(TASK_BN254, &[2, a[0], b[0]]);
@@ -2597,7 +2465,6 @@ mod imp {
             bn254_launch_kernel("bn254_mul_kernel", &a, &b)
         })
     }
-
     pub fn ed25519_verify_cuda(msg: &[u8], sig: &[u8; 64], pk: &[u8; 32]) -> Option<bool> {
         if crate::signature::signature_bytes_are_all_zero(sig) {
             return Some(false);
@@ -2614,7 +2481,6 @@ mod imp {
                 return None;
             }
             use ed25519_dalek::Signature;
-
             let signature = Signature::from_slice(sig).ok()?;
             let sig_bytes = signature.to_bytes();
             let verifying_key = crate::signature::parse_ed25519_public_key_for_verification(pk)?;
@@ -2630,7 +2496,6 @@ mod imp {
             }
         })
     }
-
     pub fn ed25519_verify_batch_cuda(
         signatures: &[[u8; 64]],
         public_keys: &[[u8; 32]],
@@ -2667,7 +2532,6 @@ mod imp {
             if !ensure_cuda_selftest() {
                 return None;
             }
-
             let mut valid_indices = Vec::with_capacity(valid_count);
             let mut flat_sigs = Vec::with_capacity(valid_count * 64);
             let mut flat_pks = Vec::with_capacity(valid_count * 32);
@@ -2683,7 +2547,6 @@ mod imp {
                 flat_pks.extend_from_slice(pk);
                 flat_hrams.extend_from_slice(hram);
             }
-
             let mgr = crate::GpuManager::shared()?;
             let gpu_result = mgr.with_gpu_for_task(0, |gpu| {
                 gpu.with_stream(|stream| {
@@ -2711,7 +2574,6 @@ mod imp {
                     Some(out.into_iter().map(|b| b != 0).collect::<Vec<_>>())
                 })
             });
-
             match gpu_result {
                 Some(Some(result)) if result.len() == valid_count => {
                     let mut merged = vec![false; count];
@@ -2729,22 +2591,17 @@ mod imp {
             }
         })
     }
-
     #[cfg(all(test, feature = "cuda"))]
     mod tests {
         use std::sync::atomic::Ordering;
-
         use super::*;
-
         fn with_cuda_selftest_running_for_tests<T>(func: impl FnOnce() -> T) -> T {
             struct ResetGuard(bool);
-
             impl Drop for ResetGuard {
                 fn drop(&mut self) {
                     CUDA_SELFTEST_RUNNING.with(|running| running.set(self.0));
                 }
             }
-
             let previous = CUDA_SELFTEST_RUNNING.with(|running| {
                 let old = running.get();
                 running.set(true);
@@ -2753,7 +2610,6 @@ mod imp {
             let _reset = ResetGuard(previous);
             func()
         }
-
         #[test]
         fn poseidon_kernel_reports_round_errors_without_disabling_backend() {
             let disabled_before = CUDA_DISABLED.load(Ordering::SeqCst);
@@ -2784,7 +2640,6 @@ mod imp {
                 "fault injection must not disable CUDA backend"
             );
         }
-
         #[test]
         fn nested_cuda_selftest_requests_fail_closed() {
             with_cuda_selftest_running_for_tests(|| {
@@ -2801,7 +2656,6 @@ mod imp {
                 );
             });
         }
-
         #[test]
         fn cuda_wait_timeout_fails_closed_and_abandons_device_allocations() {
             reset_cuda_backend_for_tests();
@@ -2824,7 +2678,6 @@ mod imp {
             );
             reset_cuda_backend_for_tests();
         }
-
         #[test]
         fn cuda_wait_ready_after_retries_preserves_backend_flags() {
             reset_cuda_backend_for_tests();
@@ -2838,7 +2691,6 @@ mod imp {
                     cudaError_enum::CUDA_SUCCESS
                 }
             });
-
             assert_eq!(status, CudaWaitStatus::Ready);
             assert_eq!(polls.get(), 3);
             assert_eq!(finish_cuda_wait(status, "test ready path"), Some(()));
@@ -2852,14 +2704,12 @@ mod imp {
             );
             reset_cuda_backend_for_tests();
         }
-
         #[test]
         fn cuda_wait_query_failure_disables_without_abandoning_allocations() {
             reset_cuda_backend_for_tests();
             let status = wait_until_cuda_ready(std::time::Duration::from_millis(50), || {
                 cudaError_enum::CUDA_ERROR_INVALID_VALUE
             });
-
             assert_eq!(
                 status,
                 CudaWaitStatus::Failed(cudaError_enum::CUDA_ERROR_INVALID_VALUE)
@@ -2875,11 +2725,9 @@ mod imp {
             );
             reset_cuda_backend_for_tests();
         }
-
         #[test]
         fn cuda_enable_disable_and_reset_update_status_flags() {
             reset_cuda_backend_for_tests();
-
             set_cuda_enabled(false);
             assert!(cuda_disabled());
             assert_eq!(
@@ -2887,12 +2735,10 @@ mod imp {
                 Some("disabled by configuration")
             );
             assert!(!cuda_should_abandon_device_allocations());
-
             set_cuda_enabled(true);
             assert!(!cuda_disabled());
             assert_eq!(cuda_last_error_message(), None);
             assert!(!cuda_should_abandon_device_allocations());
-
             let timeout = wait_until_cuda_ready(std::time::Duration::from_millis(1), || {
                 cudaError_enum::CUDA_ERROR_NOT_READY
             });
@@ -2900,17 +2746,14 @@ mod imp {
             assert!(cuda_disabled());
             assert!(cuda_should_abandon_device_allocations());
             assert!(cuda_last_error_message().is_some());
-
             reset_cuda_backend_for_tests();
             assert!(!cuda_disabled());
             assert_eq!(cuda_last_error_message(), None);
             assert!(!cuda_should_abandon_device_allocations());
         }
-
         #[test]
         fn explicit_cuda_disable_records_message_and_reset_clears_it() {
             reset_cuda_backend_for_tests();
-
             record_cuda_disable("coverage explicit disable");
             assert!(cuda_disabled());
             assert_eq!(
@@ -2921,12 +2764,10 @@ mod imp {
                 !cuda_should_abandon_device_allocations(),
                 "explicit non-timeout disable should not abandon allocations"
             );
-
             reset_cuda_backend_for_tests();
             assert!(!cuda_disabled());
             assert_eq!(cuda_last_error_message(), None);
         }
-
         #[test]
         fn poseidon_kernel_reports_stride_errors_without_disabling_backend() {
             let rc = crate::poseidon::poseidon2_round_constants_words();
@@ -2992,7 +2833,6 @@ mod imp {
                 "fault injection must not disable CUDA backend"
             );
         }
-
         #[test]
         fn ed25519_selftest_covers_signature_kernel() {
             if !ensure_cuda_selftest() {
@@ -3004,7 +2844,6 @@ mod imp {
                 "ed25519 CUDA self-test must accept the golden truth set",
             );
         }
-
         #[test]
         fn sha256_merkle_selftest_covers_cuda_kernels() {
             if !ensure_cuda_selftest() {
@@ -3020,7 +2859,6 @@ mod imp {
                 "sha256 pairs-reduce CUDA self-test must accept the golden truth set",
             );
         }
-
         #[test]
         fn vector_selftest_covers_cuda_kernels() {
             if !ensure_cuda_selftest() {
@@ -3036,7 +2874,6 @@ mod imp {
                 "bitwise CUDA self-test must accept the golden truth set",
             );
         }
-
         #[test]
         fn aes_batch_selftest_covers_cuda_kernels() {
             if !ensure_cuda_selftest() {
@@ -3048,7 +2885,6 @@ mod imp {
                 "AES batch CUDA self-test must accept the golden truth set",
             );
         }
-
         #[test]
         fn sha256_merkle_selftest_survives_prior_cuda_truth_sets() {
             if !ensure_cuda_selftest() {
@@ -3076,7 +2912,6 @@ mod imp {
                 "sha256 pairs-reduce CUDA self-test must remain green after prior truth sets",
             );
         }
-
         #[test]
         fn cached_cuda_selftest_rebinds_context_on_new_thread() {
             reset_cuda_backend_for_tests();
@@ -3084,7 +2919,6 @@ mod imp {
                 eprintln!("CUDA unavailable; skipping cached self-test thread rebind regression");
                 return;
             }
-
             let blocks = std::thread::spawn(|| {
                 let mut block_a = [0u8; 64];
                 block_a[0] = b'a';
@@ -3092,7 +2926,6 @@ mod imp {
                 block_a[2] = b'c';
                 block_a[3] = 0x80;
                 block_a[63] = 24;
-
                 let mut block_b = [0u8; 64];
                 block_b[0] = b'n';
                 block_b[1] = b'o';
@@ -3102,31 +2935,26 @@ mod imp {
                 block_b[5] = b'o';
                 block_b[6] = 0x80;
                 block_b[63] = 48;
-
                 sha256_leaves_cuda(&[block_a, block_b])
             })
             .join()
             .expect("worker thread must complete");
-
             assert!(
                 blocks.is_some(),
                 "cached self-test should rebind a CUDA context on fresh worker threads",
             );
         }
-
         #[test]
         fn public_bitonic_sort_pairs_match_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public bitonic-sort parity regression");
                 return;
             }
-
             let mut hi = [5u64, 3, 5, 3, 3];
             let mut lo = [7u64, 9, 1, 2, 1];
             let mut expected: Vec<(u64, u64)> =
                 hi.iter().copied().zip(lo.iter().copied()).collect();
             expected.sort_unstable();
-
             assert_eq!(bitonic_sort_pairs(&mut hi, &mut lo), Some(()));
             assert_eq!(
                 hi.into_iter().zip(lo).collect::<Vec<_>>(),
@@ -3134,14 +2962,12 @@ mod imp {
                 "bitonic_sort_pairs should match scalar lexicographic ordering",
             );
         }
-
         #[test]
         fn public_vector_helpers_match_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public vector parity regression");
                 return;
             }
-
             let a32 = [0xffff_0000u32, 0x1234_5678, 0x0f0f_0f0f, 0xaaaa_5555];
             let b32 = [0x00ff_ff00u32, 0xf0f0_f0f0, 0x3333_cccc, 0x5555_aaaa];
             let expected_add32: Vec<u32> = a32
@@ -3164,12 +2990,10 @@ mod imp {
                 .zip(b32.iter())
                 .map(|(&lhs, &rhs)| lhs | rhs)
                 .collect();
-
             assert_eq!(vadd32_cuda(&a32, &b32), Some(expected_add32));
             assert_eq!(vand_cuda(&a32, &b32), Some(expected_and));
             assert_eq!(vxor_cuda(&a32, &b32), Some(expected_xor));
             assert_eq!(vor_cuda(&a32, &b32), Some(expected_or));
-
             let a64 = [0xffff_ffff_ffff_ff00u64, 0x1234_5678_9abc_def0];
             let b64 = [0x0000_0000_0000_0201u64, 0x0fed_cba9_8765_4321];
             let expected_add64: Vec<u64> = a64
@@ -3178,7 +3002,6 @@ mod imp {
                 .map(|(&lhs, &rhs)| lhs.wrapping_add(rhs))
                 .collect();
             assert_eq!(vadd64_cuda(&a64, &b64), Some(expected_add64));
-
             let fa = [1.0f32, -2.5, 3.25, 4.5];
             let fb = [2.0f32, 0.5, -1.25, 3.5];
             let expected_f32: Vec<f32> = fa
@@ -3188,21 +3011,18 @@ mod imp {
                 .collect();
             assert_eq!(vector_add_f32(&fa, &fb), Some(expected_f32));
         }
-
         #[test]
         fn public_sha256_compress_matches_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public sha256-compress parity regression");
                 return;
             }
-
             let mut block = [0u8; 64];
             block[0] = b'a';
             block[1] = b'b';
             block[2] = b'c';
             block[3] = 0x80;
             block[63] = 24;
-
             let mut scalar = [
                 0x6a09e667u32,
                 0xbb67ae85,
@@ -3215,55 +3035,46 @@ mod imp {
             ];
             let mut cuda = scalar;
             sha256_scalar_ref(&mut scalar, &block);
-
             assert!(sha256_compress_cuda(&mut cuda, &block));
             assert_eq!(cuda, scalar);
         }
-
         #[test]
         fn public_keccak_matches_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public keccak parity regression");
                 return;
             }
-
             let mut scalar = [0u64; 25];
             for (index, lane) in scalar.iter_mut().enumerate() {
                 *lane = index as u64;
             }
             let mut cuda = scalar;
             crate::sha3::keccak_f1600(&mut scalar);
-
             assert!(keccak_f1600_cuda(&mut cuda));
             assert_eq!(cuda, scalar);
         }
-
         #[test]
         fn public_poseidon_helpers_match_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public Poseidon parity regression");
                 return;
             }
-
             let single2 = (1u64, 2u64);
             assert_eq!(
                 poseidon2_cuda(single2.0, single2.1),
                 Some(crate::poseidon::poseidon2_simd(single2.0, single2.1))
             );
-
             let single6 = [1u64, 2, 3, 4, 5, 6];
             assert_eq!(
                 poseidon6_cuda(single6),
                 Some(crate::poseidon::poseidon6_simd(single6))
             );
-
             let many2 = [(0u64, 1u64), (7, 9), (11, 13), (21, 34)];
             let expected_many2: Vec<u64> = many2
                 .iter()
                 .map(|&(lhs, rhs)| crate::poseidon::poseidon2_simd(lhs, rhs))
                 .collect();
             assert_eq!(poseidon2_cuda_many(&many2), Some(expected_many2));
-
             let many6 = [
                 [1u64, 2, 3, 4, 5, 6],
                 [7u64, 8, 9, 10, 11, 12],
@@ -3276,14 +3087,12 @@ mod imp {
                 .collect();
             assert_eq!(poseidon6_cuda_many(&many6), Some(expected_many6));
         }
-
         #[test]
         fn public_aes_round_helpers_match_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public AES round parity regression");
                 return;
             }
-
             let state = [
                 0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
                 0xdd, 0xee, 0xff,
@@ -3294,25 +3103,21 @@ mod imp {
             ];
             let expected_enc = crate::aes::aesenc_impl(state, rk);
             let expected_dec = crate::aes::aesdec_impl(expected_enc, rk);
-
             assert_eq!(aesenc_cuda(state, rk), Some(expected_enc));
             assert_eq!(aesdec_cuda(expected_enc, rk), Some(expected_dec));
         }
-
         #[test]
         fn public_sha256_leaves_matches_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public sha256-leaves parity regression");
                 return;
             }
-
             let mut block_a = [0u8; 64];
             block_a[0] = b'a';
             block_a[1] = b'b';
             block_a[2] = b'c';
             block_a[3] = 0x80;
             block_a[63] = 24;
-
             let mut block_b = [0u8; 64];
             block_b[0] = b'n';
             block_b[1] = b'o';
@@ -3322,7 +3127,6 @@ mod imp {
             block_b[5] = b'o';
             block_b[6] = 0x80;
             block_b[63] = 48;
-
             let blocks = [block_a, block_b];
             let expected: Vec<[u8; 32]> = blocks
                 .iter()
@@ -3345,10 +3149,8 @@ mod imp {
                     digest
                 })
                 .collect();
-
             assert_eq!(sha256_leaves_cuda(&blocks), Some(expected));
         }
-
         #[test]
         fn public_sha256_pairs_reduce_matches_scalar_when_cuda_available() {
             fn cpu_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
@@ -3377,12 +3179,10 @@ mod imp {
                 }
                 out
             }
-
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public sha256-pairs parity regression");
                 return;
             }
-
             let mut d0 = [0u8; 32];
             let mut d1 = [0u8; 32];
             let mut d2 = [0u8; 32];
@@ -3398,17 +3198,14 @@ mod imp {
             let digests = [d0, d1, d2];
             let first = cpu_pair(&digests[0], &digests[1]);
             let expected = cpu_pair(&first, &digests[2]);
-
             assert_eq!(sha256_pairs_reduce_cuda(&digests), Some(expected));
         }
-
         #[test]
         fn public_aes_batch_matches_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public AES batch regression");
                 return;
             }
-
             let states = [
                 [
                     0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
@@ -3431,18 +3228,15 @@ mod imp {
                 .iter()
                 .map(|&state| crate::aes::aesdec_impl(state, rk))
                 .collect();
-
             assert_eq!(aesenc_batch_cuda(&states, rk), Some(expected_enc));
             assert_eq!(aesdec_batch_cuda(&states, rk), Some(expected_dec));
         }
-
         #[test]
         fn public_aes_rounds_batch_matches_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public AES rounds batch regression");
                 return;
             }
-
             let states = [
                 [
                     0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
@@ -3487,7 +3281,6 @@ mod imp {
                         .fold(state, crate::aes::aesdec_impl)
                 })
                 .collect();
-
             assert_eq!(
                 aesenc_rounds_batch_cuda(&states, &round_keys),
                 Some(expected_enc)
@@ -3497,21 +3290,18 @@ mod imp {
                 Some(expected_dec)
             );
         }
-
         #[test]
         fn public_bn254_helpers_match_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public BN254 parity regression");
                 return;
             }
-
             let add_lhs = crate::bn254_vec::FieldElem::from_u64(0x1234_5678_9abc_def0);
             let add_rhs = crate::bn254_vec::FieldElem::from_u64(0x0fed_cba9_8765_4321);
             let sub_lhs = crate::bn254_vec::FieldElem::from_u64(0x0fff_ffff_ffff_fffb);
             let sub_rhs = crate::bn254_vec::FieldElem::from_u64(0x0000_0000_0000_0011);
             let mul_lhs = crate::bn254_vec::FieldElem::from_u64(0x0102_0304_0506_0708);
             let mul_rhs = crate::bn254_vec::FieldElem::from_u64(0x1112_1314_1516_1718);
-
             assert_eq!(
                 bn254_add_cuda(add_lhs.0, add_rhs.0),
                 Some(crate::bn254_vec::add_scalar(add_lhs, add_rhs).0)
@@ -3525,14 +3315,12 @@ mod imp {
                 Some(crate::bn254_vec::mul_scalar(mul_lhs, mul_rhs).0)
             );
         }
-
         #[test]
         fn public_bn254_batch_helpers_match_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public BN254 batch parity regression");
                 return;
             }
-
             let add_lhs = [
                 crate::bn254_vec::FieldElem::from_u64(0x1234_5678_9abc_def0),
                 crate::bn254_vec::FieldElem::from_u64(0x2222_3333_4444_5555),
@@ -3563,7 +3351,6 @@ mod imp {
                 crate::bn254_vec::FieldElem::from_u64(0x0102_0304_0506_0708),
                 crate::bn254_vec::FieldElem::from_u64(0x3334_3536_3738_393a),
             ];
-
             let add_lhs_words: Vec<[u64; BN254_LIMBS]> =
                 add_lhs.iter().map(|elem| elem.0).collect();
             let add_rhs_words: Vec<[u64; BN254_LIMBS]> =
@@ -3576,7 +3363,6 @@ mod imp {
                 mul_lhs.iter().map(|elem| elem.0).collect();
             let mul_rhs_words: Vec<[u64; BN254_LIMBS]> =
                 mul_rhs.iter().map(|elem| elem.0).collect();
-
             let expected_add: Vec<[u64; BN254_LIMBS]> = add_lhs
                 .iter()
                 .copied()
@@ -3595,7 +3381,6 @@ mod imp {
                 .zip(mul_rhs.iter().copied())
                 .map(|(lhs, rhs)| crate::bn254_vec::mul_scalar(lhs, rhs).0)
                 .collect();
-
             assert_eq!(
                 bn254_add_batch_cuda(&add_lhs_words, &add_rhs_words),
                 Some(expected_add)
@@ -3614,16 +3399,13 @@ mod imp {
                 None
             );
         }
-
         #[test]
         fn public_ed25519_verify_helpers_match_cpu_when_cuda_available() {
             use ed25519_dalek::{Signature, Signer, SigningKey};
-
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public ed25519 parity regression");
                 return;
             }
-
             let signing_key = SigningKey::from_bytes(&[0x11; 32]);
             let msg = b"cuda ed25519 public parity";
             let sig = signing_key.sign(msg).to_bytes();
@@ -3632,14 +3414,12 @@ mod imp {
                 .verifying_key()
                 .verify_strict(msg, &Signature::from_bytes(&sig))
                 .is_ok();
-
             let mut bad_sig = sig;
             bad_sig[0] ^= 0x42;
             let expected_bad = signing_key
                 .verifying_key()
                 .verify_strict(msg, &Signature::from_bytes(&bad_sig))
                 .is_ok();
-
             assert_eq!(
                 ed25519_verify_cuda(msg, &sig, &pk_bytes),
                 Some(expected_good)
@@ -3654,7 +3434,6 @@ mod imp {
                 ed25519_verify_batch_cuda(&[sig], &[pk_bytes], &[singleton_hram]),
                 Some(vec![expected_good])
             );
-
             let key1 = SigningKey::from_bytes(&[0x22; 32]);
             let key2 = SigningKey::from_bytes(&[0x33; 32]);
             let msg1 = b"cuda batch one";
@@ -3663,7 +3442,6 @@ mod imp {
             let sig2_good = key2.sign(msg2).to_bytes();
             let mut sig2_bad = sig2_good;
             sig2_bad[0] ^= 0x11;
-
             let pks = vec![
                 key1.verifying_key().to_bytes(),
                 key2.verifying_key().to_bytes(),
@@ -3681,13 +3459,11 @@ mod imp {
                     .verify_strict(msg2, &Signature::from_bytes(&sigs[1]))
                     .is_ok(),
             ];
-
             assert_eq!(
                 ed25519_verify_batch_cuda(&sigs, &pks, &hrams),
                 Some(expected_batch)
             );
         }
-
         #[test]
         fn public_ed25519_verify_helpers_reject_all_zero_signature_and_public_key_material() {
             let zero_sig = [0_u8; 64];
@@ -3700,7 +3476,6 @@ mod imp {
             let public_key = [0x42_u8; 32];
             let zero_public_key = [0_u8; 32];
             let hram = [0x24_u8; 32];
-
             assert_eq!(
                 ed25519_verify_cuda(b"message", &zero_sig, &public_key),
                 Some(false)
@@ -3726,16 +3501,13 @@ mod imp {
                 Some(vec![false])
             );
         }
-
         #[test]
         fn public_ed25519_single_helper_matches_singleton_batch_when_cuda_available() {
             use ed25519_dalek::{Signer, SigningKey};
-
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping single-vs-batch ed25519 regression");
                 return;
             }
-
             let signing_key = SigningKey::from_bytes(&[0x44; 32]);
             let msg = b"cuda singletons should follow batch path";
             let sig = signing_key.sign(msg).to_bytes();
@@ -3746,16 +3518,13 @@ mod imp {
                 .and_then(|mut out| out.pop());
             assert_eq!(single, batch);
         }
-
         #[test]
         fn cuda_public_helpers_are_repeat_deterministic_against_cpu() {
             use ed25519_dalek::{Signature, Signer, SigningKey};
-
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping repeated determinism fixture");
                 return;
             }
-
             let a32 = [0x0102_0304u32, 0xffff_ffff, 0x1357_9bdf, 0x2468_ace0];
             let b32 = [0xf0e0_d0c0u32, 1, 0xaaaa_5555, 0x1111_2222];
             let expected_add32: Vec<u32> = a32
@@ -3763,7 +3532,6 @@ mod imp {
                 .zip(b32.iter())
                 .map(|(&lhs, &rhs)| lhs.wrapping_add(rhs))
                 .collect();
-
             let mut block = [0u8; 64];
             block[..11].copy_from_slice(b"determinism");
             block[11] = 0x80;
@@ -3780,13 +3548,11 @@ mod imp {
             ];
             let mut expected_sha = initial_sha;
             sha256_scalar_ref(&mut expected_sha, &block);
-
             let mut keccak_expected = [0u64; 25];
             for (index, lane) in keccak_expected.iter_mut().enumerate() {
                 *lane = (index as u64).wrapping_mul(0x0101_0101_0101_0101);
             }
             crate::sha3::keccak_f1600(&mut keccak_expected);
-
             let state = [
                 0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
                 0xdd, 0xee, 0xff,
@@ -3796,11 +3562,9 @@ mod imp {
                 0x67, 0x98,
             ];
             let expected_aes = crate::aes::aesenc_impl(state, rk);
-
             let bn_lhs = crate::bn254_vec::FieldElem::from_u64(0x0102_0304_0506_0708);
             let bn_rhs = crate::bn254_vec::FieldElem::from_u64(0x1112_1314_1516_1718);
             let expected_bn = crate::bn254_vec::mul_scalar(bn_lhs, bn_rhs).0;
-
             let signing_key = SigningKey::from_bytes(&[0x5a; 32]);
             let msg = b"cuda repeated determinism";
             let sig = signing_key.sign(msg).to_bytes();
@@ -3809,7 +3573,6 @@ mod imp {
                 .verifying_key()
                 .verify_strict(msg, &Signature::from_bytes(&sig))
                 .is_ok();
-
             let mut previous_tuple = None;
             for iteration in 0..3 {
                 if iteration == 0 {
@@ -3817,14 +3580,12 @@ mod imp {
                 }
                 let add32 = vadd32_cuda(&a32, &b32).expect("vadd32 cuda");
                 assert_eq!(add32, expected_add32);
-
                 if iteration == 0 {
                     trace_cuda_selftest("determinism sha256");
                 }
                 let mut sha_state = initial_sha;
                 assert!(sha256_compress_cuda(&mut sha_state, &block));
                 assert_eq!(sha_state, expected_sha);
-
                 if iteration == 0 {
                     trace_cuda_selftest("determinism keccak");
                 }
@@ -3834,25 +3595,21 @@ mod imp {
                 }
                 assert!(keccak_f1600_cuda(&mut keccak_state));
                 assert_eq!(keccak_state, keccak_expected);
-
                 if iteration == 0 {
                     trace_cuda_selftest("determinism aes");
                 }
                 let aes = aesenc_cuda(state, rk).expect("aes cuda");
                 assert_eq!(aes, expected_aes);
-
                 if iteration == 0 {
                     trace_cuda_selftest("determinism bn254");
                 }
                 let bn = bn254_mul_cuda(bn_lhs.0, bn_rhs.0).expect("bn254 cuda");
                 assert_eq!(bn, expected_bn);
-
                 if iteration == 0 {
                     trace_cuda_selftest("determinism ed25519");
                 }
                 let sig_ok = ed25519_verify_cuda(msg, &sig, &pk).expect("ed25519 cuda");
                 assert_eq!(sig_ok, expected_sig);
-
                 let current_tuple = (add32, sha_state, keccak_state, aes, bn, sig_ok);
                 if let Some(previous) = &previous_tuple {
                     assert_eq!(
@@ -3863,7 +3620,6 @@ mod imp {
                 previous_tuple = Some(current_tuple);
             }
         }
-
         #[test]
         fn bn254_selftest_covers_cuda_kernels() {
             if !ensure_cuda_selftest() {
@@ -3877,12 +3633,10 @@ mod imp {
         }
     }
 }
-
 #[cfg(feature = "cuda")]
 pub(crate) use imp::sha256_merkle_root_cuda;
 #[cfg(feature = "cuda")]
 pub use imp::*;
-
 #[cfg(feature = "cuda")]
 /// Sort `(hi, lo)` key pairs lexicographically with the CUDA bitonic kernel.
 ///
@@ -3892,26 +3646,21 @@ pub use imp::*;
 pub fn bitonic_sort_pairs(hi: &mut [u64], lo: &mut [u64]) -> Option<()> {
     imp::bitonic_sort_pairs(hi, lo)
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn cuda_available() -> bool {
     false
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn cuda_disabled() -> bool {
     false
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn cuda_last_error_message() -> Option<String> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 #[doc(hidden)]
 pub fn reset_cuda_backend_for_tests() {}
-
 #[cfg(not(feature = "cuda"))]
 /// Sort `(hi, lo)` key pairs lexicographically with the CUDA bitonic kernel.
 ///
@@ -3919,102 +3668,82 @@ pub fn reset_cuda_backend_for_tests() {}
 pub fn bitonic_sort_pairs(_hi: &mut [u64], _lo: &mut [u64]) -> Option<()> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn vector_add_f32(_a: &[f32], _b: &[f32]) -> Option<Vec<f32>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn vadd32_cuda(_a: &[u32], _b: &[u32]) -> Option<Vec<u32>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn vadd64_cuda(_a: &[u64], _b: &[u64]) -> Option<Vec<u64>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn vand_cuda(_a: &[u32], _b: &[u32]) -> Option<Vec<u32>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn vxor_cuda(_a: &[u32], _b: &[u32]) -> Option<Vec<u32>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn vor_cuda(_a: &[u32], _b: &[u32]) -> Option<Vec<u32>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn sha256_compress_cuda(_state: &mut [u32; 8], _block: &[u8; 64]) -> bool {
     false
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn sha256_leaves_cuda(_blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn sha256_pairs_reduce_cuda(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub(crate) fn sha256_merkle_root_cuda(_blocks: &[[u8; 64]]) -> Option<[u8; 32]> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn poseidon2_cuda(_a: u64, _b: u64) -> Option<u64> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn poseidon2_cuda_many(_inputs: &[(u64, u64)]) -> Option<Vec<u64>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn poseidon6_cuda(_inputs: [u64; 6]) -> Option<u64> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn poseidon6_cuda_many(_inputs: &[[u64; 6]]) -> Option<Vec<u64>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn keccak_f1600_cuda(_state: &mut [u64; 25]) -> bool {
     false
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn aesenc_cuda(_state: [u8; 16], _rk: [u8; 16]) -> Option<[u8; 16]> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn aesdec_cuda(_state: [u8; 16], _rk: [u8; 16]) -> Option<[u8; 16]> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn aesenc_batch_cuda(_states: &[[u8; 16]], _rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn aesdec_batch_cuda(_states: &[[u8; 16]], _rk: [u8; 16]) -> Option<Vec<[u8; 16]>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn aesenc_rounds_batch_cuda(
     _states: &[[u8; 16]],
@@ -4022,7 +3751,6 @@ pub fn aesenc_rounds_batch_cuda(
 ) -> Option<Vec<[u8; 16]>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn aesdec_rounds_batch_cuda(
     _states: &[[u8; 16]],
@@ -4030,40 +3758,33 @@ pub fn aesdec_rounds_batch_cuda(
 ) -> Option<Vec<[u8; 16]>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 /// Batch BN254 add: unavailable when the crate is built without CUDA support.
 pub fn bn254_add_batch_cuda(_lhs: &[[u64; 4]], _rhs: &[[u64; 4]]) -> Option<Vec<[u64; 4]>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 /// Batch BN254 subtract: unavailable when the crate is built without CUDA support.
 pub fn bn254_sub_batch_cuda(_lhs: &[[u64; 4]], _rhs: &[[u64; 4]]) -> Option<Vec<[u64; 4]>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 /// Batch BN254 multiply: unavailable when the crate is built without CUDA support.
 pub fn bn254_mul_batch_cuda(_lhs: &[[u64; 4]], _rhs: &[[u64; 4]]) -> Option<Vec<[u64; 4]>> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn bn254_add_cuda(_a: [u64; 4], _b: [u64; 4]) -> Option<[u64; 4]> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn bn254_sub_cuda(_a: [u64; 4], _b: [u64; 4]) -> Option<[u64; 4]> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn bn254_mul_cuda(_a: [u64; 4], _b: [u64; 4]) -> Option<[u64; 4]> {
     None
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn ed25519_verify_cuda(_msg: &[u8], sig: &[u8; 64], pk: &[u8; 32]) -> Option<bool> {
     (crate::signature::signature_bytes_are_all_zero(sig)
@@ -4071,7 +3792,6 @@ pub fn ed25519_verify_cuda(_msg: &[u8], sig: &[u8; 64], pk: &[u8; 32]) -> Option
         || ed25519_public_key_bytes_are_invalid(pk))
     .then_some(false)
 }
-
 #[cfg(not(feature = "cuda"))]
 pub fn ed25519_verify_batch_cuda(
     signatures: &[[u8; 64]],
@@ -4094,35 +3814,29 @@ pub fn ed25519_verify_batch_cuda(
         })
         .then(|| vec![false; signatures.len()])
 }
-
 #[cfg(all(test, not(feature = "cuda")))]
 mod tests {
     use super::{ed25519_verify_batch_cuda, ed25519_verify_cuda};
     use ed25519_dalek::{Signer as _, SigningKey};
-
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const NONCANONICAL_ED25519_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     const NONCANONICAL_NON_SMALL_ORDER_ED25519_PUBLIC_KEY: [u8; 32] = [
         0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn signature_with_replacement_r(signature: &[u8; 64], replacement_r: &[u8; 32]) -> [u8; 64] {
         let mut malformed = *signature;
         malformed[..replacement_r.len()].copy_from_slice(replacement_r);
         malformed
     }
-
     #[test]
     fn ed25519_cuda_stubs_reject_invalid_signature_and_public_key_material() {
         let signing_key = SigningKey::from_bytes(&[0x42; 32]);
@@ -4140,7 +3854,6 @@ mod tests {
             0xff, 0xff, 0xff, 0x7f,
         ];
         let hram = [0x24_u8; 32];
-
         assert_eq!(
             ed25519_verify_cuda(b"message", &zero_sig, &public_key),
             Some(false)

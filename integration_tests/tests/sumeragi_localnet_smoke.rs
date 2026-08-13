@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Bounded-latency localnet smoke and throughput tests for permissioned and `NPoS` Sumeragi.
-
 use std::{
     cmp::Ordering,
     fs,
@@ -12,7 +11,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use blake3::Hasher as Blake3Hasher;
 use eyre::{Result, WrapErr, bail, ensure, eyre};
 use futures_util::{
@@ -86,10 +84,8 @@ use reqwest::Client as HttpClient;
 use tempfile::tempdir;
 use tokio::{sync::Mutex, task, time::sleep};
 use toml::{Table, Value as TomlValue};
-
 #[path = "sumeragi_localnet_smoke/idle_chain.rs"]
 mod idle_chain;
-
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
 const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(15);

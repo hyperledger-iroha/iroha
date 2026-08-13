@@ -5,7 +5,6 @@
 //! returned by Torii (or a separately authenticated candidate receipt).  The
 //! archive self-digest detects drift; the caller remains responsible for
 //! authenticating the transport or receipt that supplied the bytes.
-
 use iroha_core::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 use iroha_data_model::privacy::{
     PrivacyCapabilityActivationStateV1, PrivacyCapabilityLimitationV1,
@@ -19,7 +18,6 @@ use pyo3::{
     prelude::*,
     types::{PyBytes, PyDict, PyList},
 };
-
 /// Validated canonical manifest bytes retained for transaction construction.
 ///
 /// The Python class intentionally exposes no public constructor.  Instances
@@ -36,7 +34,6 @@ pub(crate) struct PyPrivacyExact12CapabilityManifestV1 {
     manifest: PrivacyExact12CapabilityManifestV1,
     canonical_archive: Vec<u8>,
 }
-
 impl PyPrivacyExact12CapabilityManifestV1 {
     pub(crate) fn decode(archive: &[u8]) -> PyResult<Self> {
         let status = validate_privacy_capability_archive_v1(archive);
@@ -67,7 +64,6 @@ impl PyPrivacyExact12CapabilityManifestV1 {
             canonical_archive,
         })
     }
-
     pub(crate) fn require_network_profile(
         &self,
         protocol_id: PrivacyProtocolIdV1,
@@ -111,7 +107,6 @@ impl PyPrivacyExact12CapabilityManifestV1 {
         }
         Ok(local_profile)
     }
-
     #[cfg(test)]
     pub(crate) fn test_binding_for_protocol(protocol_id: PrivacyProtocolIdV1) -> Self {
         use iroha_data_model::privacy::{
@@ -119,7 +114,6 @@ impl PyPrivacyExact12CapabilityManifestV1 {
             PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
             PrivacyProtocolLifecycleV1,
         };
-
         let catalog = iroha_core::privacy_profiles::compiled_privacy_profile_catalog_v1()
             .expect("test compiled-profile catalog");
         let protocols = catalog
@@ -156,29 +150,24 @@ impl PyPrivacyExact12CapabilityManifestV1 {
         Self::decode(&archive).expect("test manifest binding")
     }
 }
-
 #[pymethods]
 impl PyPrivacyExact12CapabilityManifestV1 {
     #[getter]
     fn canonical_archive<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.canonical_archive)
     }
-
     #[getter]
     fn manifest_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, self.manifest.manifest_digest.as_bytes())
     }
-
     #[getter]
     const fn version(&self) -> u32 {
         self.manifest.version
     }
-
     #[getter]
     const fn committed_height(&self) -> u64 {
         self.manifest.committed_height
     }
-
     /// Return the exact twelve validated public capability tuples.
     fn protocol_tuples(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
         let rows = PyList::empty(py);
@@ -187,7 +176,6 @@ impl PyPrivacyExact12CapabilityManifestV1 {
         }
         Ok(rows.unbind())
     }
-
     /// Require one active committed row and exact equality with this binary.
     fn require_network_capability(
         &self,
@@ -205,7 +193,6 @@ impl PyPrivacyExact12CapabilityManifestV1 {
         capability_tuple_dict(py, &self.manifest, row)
     }
 }
-
 fn parse_protocol_id(label: &str) -> PyResult<PrivacyProtocolIdV1> {
     PrivacyProtocolIdV1::from_canonical_label(label).ok_or_else(|| {
         PyValueError::new_err(
@@ -213,7 +200,6 @@ fn parse_protocol_id(label: &str) -> PyResult<PrivacyProtocolIdV1> {
         )
     })
 }
-
 fn readiness_label(value: PrivacyCapabilityReadinessV1) -> &'static str {
     match value {
         PrivacyCapabilityReadinessV1::Available => "available",
@@ -221,7 +207,6 @@ fn readiness_label(value: PrivacyCapabilityReadinessV1) -> &'static str {
         PrivacyCapabilityReadinessV1::Unavailable(_) => "unavailable",
     }
 }
-
 fn unavailable_reason_label(value: PrivacyCompiledProfileUnavailableReasonV1) -> &'static str {
     match value {
         PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable => "engine-unavailable",
@@ -233,7 +218,6 @@ fn unavailable_reason_label(value: PrivacyCompiledProfileUnavailableReasonV1) ->
         }
     }
 }
-
 fn activation_state_label(value: PrivacyCapabilityActivationStateV1) -> &'static str {
     match value {
         PrivacyCapabilityActivationStateV1::NotRegistered => "not-registered",
@@ -243,7 +227,6 @@ fn activation_state_label(value: PrivacyCapabilityActivationStateV1) -> &'static
         PrivacyCapabilityActivationStateV1::Retired => "retired",
     }
 }
-
 fn limitation_label(value: PrivacyCapabilityLimitationV1) -> &'static str {
     match value {
         PrivacyCapabilityLimitationV1::MissingDistributionWideKnowledgeSoundnessEvidence => {
@@ -251,7 +234,6 @@ fn limitation_label(value: PrivacyCapabilityLimitationV1) -> &'static str {
         }
     }
 }
-
 fn proof_system_label(value: PrivacyProofSystemIdV1) -> &'static str {
     match value {
         PrivacyProofSystemIdV1::StarkFriSha256Goldilocks => "stark-fri-sha256-goldilocks",
@@ -271,7 +253,6 @@ fn proof_system_label(value: PrivacyProofSystemIdV1) -> &'static str {
         PrivacyProofSystemIdV1::LanternLnp22ModuleLinearNorm => "lantern-lnp22-module-linear-norm",
     }
 }
-
 fn engine_label(value: PrivacyEngineIdV1) -> &'static str {
     match value {
         PrivacyEngineIdV1::NativeGoldilocksStarkFri => "native-goldilocks-stark-fri",
@@ -287,7 +268,6 @@ fn engine_label(value: PrivacyEngineIdV1) -> &'static str {
         PrivacyEngineIdV1::NativeLanternLnp22 => "native-lantern-lnp22",
     }
 }
-
 fn capability_tuple_dict(
     py: Python<'_>,
     manifest: &PrivacyExact12CapabilityManifestV1,
@@ -363,13 +343,11 @@ fn capability_tuple_dict(
     }
     Ok(output.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "privacy_validate_exact12_capability_manifest_v1")]
 pub(crate) fn privacy_validate_exact12_capability_manifest_v1_py(archive: &[u8]) -> i32 {
     validate_privacy_capability_archive_v1(archive).code()
 }
-
 #[pyfunction]
 #[pyo3(name = "privacy_exact12_capability_manifest_v1")]
 pub(crate) fn privacy_exact12_capability_manifest_v1_py(
@@ -378,12 +356,10 @@ pub(crate) fn privacy_exact12_capability_manifest_v1_py(
 ) -> PyResult<Py<PyPrivacyExact12CapabilityManifestV1>> {
     Py::new(py, PyPrivacyExact12CapabilityManifestV1::decode(archive)?)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1;
-
     #[test]
     fn validation_status_codes_remain_the_data_model_contract() {
         assert_eq!(
@@ -395,7 +371,6 @@ mod tests {
             PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
         );
     }
-
     #[test]
     fn retired_and_alias_protocol_labels_are_not_selectable() {
         for label in [
@@ -408,7 +383,6 @@ mod tests {
             assert!(parse_protocol_id(label).is_err(), "accepted {label}");
         }
     }
-
     #[test]
     fn validated_binding_preserves_bytes_and_does_not_authorize_another_row() {
         let binding = PyPrivacyExact12CapabilityManifestV1::test_binding_for_protocol(

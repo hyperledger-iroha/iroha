@@ -3330,7 +3330,9 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
     for token, count in (
         ('lock_path="${artifact_root}/.sumeragi-v2-cargo.lock"', 2),
         ("lock.rmdir()", 1),
+        ("os.rmdir(lock.name, dir_fd=root_fd)", 1),
         ("release_invocation_cargo_lock || return $?", 1),
+        ("&& ! release_invocation_cargo_lock; then", 1),
     ):
         if policy.count(token) != count:
             errors.append(

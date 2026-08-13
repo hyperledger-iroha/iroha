@@ -4,14 +4,12 @@
 //! driving manifest lifecycle, alias bindings, replication orders, and
 //! governance policy snapshots. Validation helpers ensure the records obey
 //! canonical encoding and governance constraints before they are persisted.
-
 use blake3::Hasher;
 use norito::{
     Error as NoritoError,
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use thiserror::Error;
-
 use crate::{
     BLAKE3_256_MULTIHASH_CODE, CouncilSignature, chunker_registry,
     provider_admission::{
@@ -20,7 +18,6 @@ use crate::{
     },
     validation::{ManifestValidationError, validate_manifest_root_cid},
 };
-
 fn validate_first_release_manifest_cid(cid: &[u8]) -> Result<(), ManifestValidationError> {
     validate_manifest_root_cid(
         cid,
@@ -28,7 +25,6 @@ fn validate_first_release_manifest_cid(cid: &[u8]) -> Result<(), ManifestValidat
         BLAKE3_256_MULTIHASH_CODE,
     )
 }
-
 /// Alias binding that maps a human-friendly alias to a manifest CID.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct AliasBindingV1 {
@@ -41,7 +37,6 @@ pub struct AliasBindingV1 {
     /// Epoch (inclusive) when the alias expires unless renewed.
     pub expiry_epoch: u64,
 }
-
 impl AliasBindingV1 {
     /// Checks alias syntax and lifetime ordering.
     pub fn validate(&self) -> Result<(), AliasBindingValidationError> {
@@ -63,7 +58,6 @@ impl AliasBindingV1 {
         Ok(())
     }
 }
-
 fn validate_alias(alias: &str) -> Result<(), AliasBindingValidationError> {
     let trimmed = alias.trim();
     if trimmed.is_empty() {
@@ -86,7 +80,6 @@ fn validate_alias(alias: &str) -> Result<(), AliasBindingValidationError> {
     }
     Ok(())
 }
-
 /// Errors raised while validating [`AliasBindingV1`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AliasBindingValidationError {
@@ -105,7 +98,6 @@ pub enum AliasBindingValidationError {
     #[error("alias expiry {expiry_epoch} precedes binding epoch {bound_at}")]
     ExpiryBeforeBound { bound_at: u64, expiry_epoch: u64 },
 }
-
 /// Alias proof bundle propagated alongside SoraFS responses.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[norito(decode_from_slice)]
@@ -127,50 +119,42 @@ pub struct AliasProofBundleV1 {
     #[norito(default)]
     pub council_signatures: Vec<CouncilSignature>,
 }
-
 /// Maximum encoded alias proof accepted by first-release consumers.
 pub const MAX_ALIAS_PROOF_ENCODED_BYTES: usize = 1024 * 1024;
 /// Maximum Merkle-tree height represented by an alias inclusion proof.
 pub const MAX_ALIAS_PROOF_MERKLE_DEPTH: usize = 64;
 /// Maximum distinct council signatures carried by one alias proof.
 pub const MAX_ALIAS_PROOF_COUNCIL_SIGNATURES: usize = 64;
-
 impl AliasProofBundleV1 {
     /// Validates structural invariants for the bundle.
     pub fn validate(&self) -> Result<(), AliasProofBundleValidationError> {
         self.binding
             .validate()
             .map_err(AliasProofBundleValidationError::InvalidAliasBinding)?;
-
         if self.registry_root.iter().all(|&byte| byte == 0) {
             return Err(AliasProofBundleValidationError::EmptyRegistryRoot);
         }
-
         if self.generated_at_unix == 0 {
             return Err(AliasProofBundleValidationError::InvalidGeneratedAt);
         }
-
         if self.expires_at_unix <= self.generated_at_unix {
             return Err(AliasProofBundleValidationError::GeneratedAfterExpiry {
                 generated_at_unix: self.generated_at_unix,
                 expires_at_unix: self.expires_at_unix,
             });
         }
-
         if self.merkle_path.len() > MAX_ALIAS_PROOF_MERKLE_DEPTH {
             return Err(AliasProofBundleValidationError::MerklePathTooDeep {
                 found: self.merkle_path.len(),
                 maximum: MAX_ALIAS_PROOF_MERKLE_DEPTH,
             });
         }
-
         if self.council_signatures.len() > MAX_ALIAS_PROOF_COUNCIL_SIGNATURES {
             return Err(AliasProofBundleValidationError::TooManyCouncilSignatures {
                 found: self.council_signatures.len(),
                 maximum: MAX_ALIAS_PROOF_COUNCIL_SIGNATURES,
             });
         }
-
         let mut previous_signer = None;
         for (index, signature) in self.council_signatures.iter().enumerate() {
             if signature.signer.iter().all(|&byte| byte == 0) {
@@ -194,11 +178,9 @@ impl AliasProofBundleV1 {
                 return Err(AliasProofBundleValidationError::InertCouncilSignature { index });
             }
         }
-
         Ok(())
     }
 }
-
 /// Errors produced when an [`AliasProofBundleV1`] fails validation.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AliasProofBundleValidationError {
@@ -228,14 +210,12 @@ pub enum AliasProofBundleValidationError {
     #[error("council signature at index {index} must not be all zero")]
     InertCouncilSignature { index: usize },
 }
-
 /// Domain separator applied when hashing alias leaves.
 const ALIAS_LEAF_DOMAIN: &[u8] = b"sorafs:alias:leaf:v1";
 /// Domain separator applied when hashing alias parent nodes.
 const ALIAS_PARENT_DOMAIN: &[u8] = b"sorafs:alias:parent:v1";
 /// Domain separator applied when deriving the signature digest.
 const ALIAS_SIGNATURE_DOMAIN: &[u8] = b"sorafs:alias:root:v1";
-
 /// Errors produced when verifying an [`AliasProofBundleV1`].
 #[derive(Debug, Error)]
 pub enum AliasProofVerificationError {
@@ -255,7 +235,6 @@ pub enum AliasProofVerificationError {
     #[error("alias proof council authorization failed: {0}")]
     CouncilAuthorization(#[source] ProviderAdmissionSignatureError),
 }
-
 fn alias_binding_leaf_hash(binding: &AliasBindingV1) -> Result<[u8; 32], NoritoError> {
     let bytes = norito::to_bytes(binding)?;
     let mut hasher = Hasher::new();
@@ -265,7 +244,6 @@ fn alias_binding_leaf_hash(binding: &AliasBindingV1) -> Result<[u8; 32], NoritoE
     output.copy_from_slice(hasher.finalize().as_bytes());
     Ok(output)
 }
-
 fn merkle_parent_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let (a, b) = if left <= right {
         (left, right)
@@ -280,7 +258,6 @@ fn merkle_parent_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     output.copy_from_slice(hasher.finalize().as_bytes());
     output
 }
-
 fn recompute_merkle_root(
     binding: &AliasBindingV1,
     path: &[[u8; 32]],
@@ -291,7 +268,6 @@ fn recompute_merkle_root(
     }
     Ok(node)
 }
-
 #[must_use]
 fn alias_signature_message(bundle: &AliasProofBundleV1) -> [u8; 32] {
     let mut hasher = Hasher::new();
@@ -304,7 +280,6 @@ fn alias_signature_message(bundle: &AliasProofBundleV1) -> [u8; 32] {
     output.copy_from_slice(hasher.finalize().as_bytes());
     output
 }
-
 /// Recompute the Merkle root for an alias binding and its Merkle path.
 ///
 /// # Errors
@@ -317,7 +292,6 @@ pub fn alias_merkle_root(
 ) -> Result<[u8; 32], AliasProofVerificationError> {
     recompute_merkle_root(binding, path).map_err(AliasProofVerificationError::EncodeAliasBinding)
 }
-
 /// Compute the digest that council members sign for an alias-registry root.
 ///
 /// Council signatures deliberately authorize the root and its lifetime rather
@@ -328,7 +302,6 @@ pub fn alias_merkle_root(
 pub fn alias_proof_signature_digest(bundle: &AliasProofBundleV1) -> [u8; 32] {
     alias_signature_message(bundle)
 }
-
 /// Verify an alias proof bundle against an operator-controlled council policy.
 ///
 /// # Errors
@@ -344,7 +317,6 @@ pub fn verify_alias_proof_bundle(
         verify_council_signatures_over_digest(signatures, digest, policy)
     })
 }
-
 /// Verify alias-proof integrity without establishing signer trust.
 ///
 /// This helper is reserved for fixture generation, language-neutral reference
@@ -361,7 +333,6 @@ pub fn verify_alias_proof_bundle_untrusted_signers(
 ) -> Result<(), AliasProofVerificationError> {
     verify_alias_proof_bundle_inner(bundle, verify_council_signatures_without_trust)
 }
-
 fn verify_alias_proof_bundle_inner<F>(
     bundle: &AliasProofBundleV1,
     verify_signatures: F,
@@ -370,7 +341,6 @@ where
     F: FnOnce(&[CouncilSignature], &[u8; 32]) -> Result<(), ProviderAdmissionSignatureError>,
 {
     bundle.validate()?;
-
     let computed_root = alias_merkle_root(&bundle.binding, &bundle.merkle_path)?;
     if computed_root != bundle.registry_root {
         return Err(AliasProofVerificationError::MerkleRootMismatch {
@@ -381,12 +351,10 @@ where
     if bundle.council_signatures.is_empty() {
         return Err(AliasProofVerificationError::MissingCouncilSignatures);
     }
-
     let message = alias_signature_message(bundle);
     verify_signatures(&bundle.council_signatures, &message)
         .map_err(AliasProofVerificationError::CouncilAuthorization)
 }
-
 /// Provider acknowledgement for a replication order.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ReplicationReceiptV1 {
@@ -402,7 +370,6 @@ pub struct ReplicationReceiptV1 {
     #[norito(default)]
     pub por_sample_digest: Option<[u8; 32]>,
 }
-
 impl ReplicationReceiptV1 {
     /// Validates structural invariants for the receipt.
     pub fn validate(&self) -> Result<(), ReplicationReceiptValidationError> {
@@ -428,7 +395,6 @@ impl ReplicationReceiptV1 {
         Ok(())
     }
 }
-
 /// Receipt status outcomes reported by providers.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -440,7 +406,6 @@ pub enum ReplicationReceiptStatus {
     /// Provider rejected the order (capacity issues, policy mismatch, etc.).
     Rejected = 3,
 }
-
 /// Errors produced when a [`ReplicationReceiptV1`] fails validation.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ReplicationReceiptValidationError {
@@ -455,7 +420,6 @@ pub enum ReplicationReceiptValidationError {
     #[error("PoR sample digest must be non-zero when present")]
     InvalidPorSampleDigest,
 }
-
 /// Governance policy snapshot associated with the pin registry.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ManifestPolicyV1 {
@@ -469,7 +433,6 @@ pub struct ManifestPolicyV1 {
     /// Fee charged for pinning, expressed in basis points.
     pub pin_fee_basis_points: u16,
 }
-
 impl ManifestPolicyV1 {
     /// Validates governance policy structure and constraints.
     pub fn validate(&self) -> Result<(), ManifestPolicyValidationError> {
@@ -509,7 +472,6 @@ impl ManifestPolicyV1 {
         Ok(())
     }
 }
-
 /// Errors produced when a [`ManifestPolicyV1`] fails validation.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ManifestPolicyValidationError {
@@ -526,14 +488,11 @@ pub enum ManifestPolicyValidationError {
     #[error("pin fee {basis_points} basis points exceeds 100%")]
     FeeOutOfRange { basis_points: u16 },
 }
-
 #[cfg(test)]
 mod tests {
     use std::convert::TryInto;
-
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
-
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -543,11 +502,9 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn canonical_cid(seed: u8) -> Vec<u8> {
         crate::canonical_manifest_root_cid([seed; 32])
     }
-
     fn sample_alias_binding() -> AliasBindingV1 {
         AliasBindingV1 {
             alias: "docs/main".into(),
@@ -556,13 +513,11 @@ mod tests {
             expiry_epoch: 1_700_086_400,
         }
     }
-
     #[test]
     fn alias_binding_validation() {
         let binding = sample_alias_binding();
         binding.validate().expect("valid alias binding");
     }
-
     #[test]
     fn alias_binding_accepts_account_style_alias() {
         let binding = AliasBindingV1 {
@@ -571,10 +526,8 @@ mod tests {
             bound_at: 1,
             expiry_epoch: 2,
         };
-
         binding.validate().expect("account-style alias");
     }
-
     #[test]
     fn alias_binding_rejects_whitespace() {
         let binding = AliasBindingV1 {
@@ -589,7 +542,6 @@ mod tests {
             AliasBindingValidationError::AliasHasWhitespace
         ));
     }
-
     #[test]
     fn alias_binding_rejects_noncanonical_manifest_cid() {
         let mut binding = sample_alias_binding();
@@ -599,7 +551,6 @@ mod tests {
             Err(AliasBindingValidationError::MalformedManifestCid { .. })
         ));
     }
-
     fn sample_alias_proof_bundle() -> AliasProofBundleV1 {
         AliasProofBundleV1 {
             binding: sample_alias_binding(),
@@ -614,7 +565,6 @@ mod tests {
             }],
         }
     }
-
     fn signed_alias_proof_bundle() -> (AliasProofBundleV1, KeyPair) {
         let mut bundle = AliasProofBundleV1 {
             binding: sample_alias_binding(),
@@ -647,7 +597,6 @@ mod tests {
         });
         (bundle, keypair)
     }
-
     fn council_policy_for(keypair: &KeyPair) -> ProviderAdmissionCouncilPolicy {
         let signer: [u8; 32] = keypair
             .public_key()
@@ -658,13 +607,11 @@ mod tests {
             .expect("ed25519 public key must be 32 bytes");
         ProviderAdmissionCouncilPolicy::new([signer], 1).expect("valid fixture council policy")
     }
-
     #[test]
     fn alias_proof_bundle_validate() {
         let bundle = sample_alias_proof_bundle();
         bundle.validate().expect("valid proof bundle");
     }
-
     #[test]
     fn alias_proof_bundle_rejects_zero_root() {
         let mut bundle = sample_alias_proof_bundle();
@@ -675,7 +622,6 @@ mod tests {
             AliasProofBundleValidationError::EmptyRegistryRoot
         ));
     }
-
     #[test]
     fn alias_proof_bundle_rejects_generated_after_expiry() {
         let mut bundle = sample_alias_proof_bundle();
@@ -686,7 +632,6 @@ mod tests {
             AliasProofBundleValidationError::GeneratedAfterExpiry { .. }
         ));
     }
-
     #[test]
     fn alias_proof_bundle_rejects_zero_generation_and_zero_lifetime() {
         let mut zero_generation = sample_alias_proof_bundle();
@@ -695,7 +640,6 @@ mod tests {
             zero_generation.validate(),
             Err(AliasProofBundleValidationError::InvalidGeneratedAt)
         ));
-
         let mut zero_lifetime = sample_alias_proof_bundle();
         zero_lifetime.expires_at_unix = zero_lifetime.generated_at_unix;
         assert!(matches!(
@@ -703,7 +647,6 @@ mod tests {
             Err(AliasProofBundleValidationError::GeneratedAfterExpiry { .. })
         ));
     }
-
     #[test]
     fn alias_proof_bundle_rejects_resource_exhaustion_shapes() {
         let mut deep = sample_alias_proof_bundle();
@@ -712,7 +655,6 @@ mod tests {
             deep.validate(),
             Err(AliasProofBundleValidationError::MerklePathTooDeep { .. })
         ));
-
         let mut signature_flood = sample_alias_proof_bundle();
         signature_flood.council_signatures = (0..=MAX_ALIAS_PROOF_COUNCIL_SIGNATURES)
             .map(|index| crate::CouncilSignature {
@@ -725,7 +667,6 @@ mod tests {
             Err(AliasProofBundleValidationError::TooManyCouncilSignatures { .. })
         ));
     }
-
     #[test]
     fn alias_proof_bundle_rejects_duplicate_and_unsorted_signers() {
         for signers in [vec![[0x11; 32], [0x11; 32]], vec![[0x22; 32], [0x11; 32]]] {
@@ -743,7 +684,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn alias_proof_bundle_rejects_empty_council_signature() {
         let mut bundle = sample_alias_proof_bundle();
@@ -754,7 +694,6 @@ mod tests {
             AliasProofBundleValidationError::InvalidCouncilSignatureLength { found: 0, .. }
         ));
     }
-
     #[test]
     fn alias_proof_bundle_verification_succeeds() {
         let (bundle, keypair) = signed_alias_proof_bundle();
@@ -763,7 +702,6 @@ mod tests {
         verify_alias_proof_bundle_untrusted_signers(&bundle)
             .expect("untrusted fixture verification must preserve integrity checks");
     }
-
     #[test]
     fn alias_proof_bundle_rejects_self_asserted_council() {
         let (bundle, _) = signed_alias_proof_bundle();
@@ -772,7 +710,6 @@ mod tests {
         let trusted =
             KeyPair::from_private_key(trusted_private).expect("derive trusted fixture keypair");
         let policy = council_policy_for(&trusted);
-
         let err = verify_alias_proof_bundle(&bundle, &policy)
             .expect_err("a self-signed bundle outside the trust set must fail");
         assert!(matches!(
@@ -782,7 +719,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn signed_alias_proof_bundle_checked_signature_verifies_digest() {
         let (bundle, keypair) = signed_alias_proof_bundle();
@@ -790,12 +726,10 @@ mod tests {
         let signature = &bundle.council_signatures[0].signature;
         let signature = Signature::try_from_bytes(signature)
             .expect("checked alias proof fixture signature passes admission");
-
         signature
             .verify(keypair.public_key(), digest.as_ref())
             .expect("checked alias proof fixture signature verifies");
     }
-
     #[test]
     fn alias_proof_bundle_verification_rejects_root_mismatch() {
         let (mut bundle, keypair) = signed_alias_proof_bundle();
@@ -807,7 +741,6 @@ mod tests {
             AliasProofVerificationError::MerkleRootMismatch { .. }
         ));
     }
-
     #[test]
     fn alias_proof_bundle_verification_rejects_bad_signature() {
         let (mut bundle, keypair) = signed_alias_proof_bundle();
@@ -821,7 +754,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn alias_proof_bundle_verification_rejects_all_zero_signature_material() {
         let (mut bundle, keypair) = signed_alias_proof_bundle();
@@ -835,7 +767,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn alias_proof_bundle_verification_rejects_malformed_signature_r() {
         for (label, replacement_r, expected_reason) in [
@@ -845,7 +776,6 @@ mod tests {
             let (mut bundle, keypair) = signed_alias_proof_bundle();
             let policy = council_policy_for(&keypair);
             bundle.council_signatures[0].signature[..32].copy_from_slice(&replacement_r);
-
             let err =
                 verify_alias_proof_bundle(&bundle, &policy).expect_err("verification must fail");
             assert!(
@@ -859,7 +789,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn alias_proof_bundle_rejects_zero_council_signer() {
         let mut bundle = sample_alias_proof_bundle();
@@ -870,7 +799,6 @@ mod tests {
             AliasProofBundleValidationError::EmptyCouncilSigner { .. }
         ));
     }
-
     #[test]
     fn alias_proof_bundle_rewraps_alias_binding_error() {
         let mut bundle = sample_alias_proof_bundle();
@@ -883,7 +811,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn receipt_requires_digest_for_completed() {
         let mut receipt = ReplicationReceiptV1 {
@@ -901,7 +828,6 @@ mod tests {
             ReplicationReceiptValidationError::MissingPorSampleDigest
         );
     }
-
     #[test]
     fn manifest_policy_validate() {
         let policy = ManifestPolicyV1 {
@@ -912,7 +838,6 @@ mod tests {
         };
         policy.validate().expect("valid policy");
     }
-
     #[test]
     fn manifest_policy_rejects_unknown_profile() {
         let policy = ManifestPolicyV1 {

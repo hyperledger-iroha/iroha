@@ -1,6 +1,5 @@
 //! Automatic unlock sweep at block height.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -10,24 +9,19 @@ use iroha_crypto::KeyPair;
 use iroha_data_model::{block::BlockHeader, events::data::governance::GovernanceEvent};
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-
 fn checked_random_governance_unlock_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked governance unlock keypair")
 }
-
 #[test]
 fn governance_unlock_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_governance_unlock_keypair();
 }
-
 #[test]
 fn unlocks_after_expiry_height() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
-
     let _kp = checked_random_governance_unlock_keypair();
-
     // Block H=1: insert a lock expiring at H=2 (will unlock at H>=3 per current policy)
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     {
@@ -59,7 +53,6 @@ fn unlocks_after_expiry_height() {
         sblock1.world.take_external_events();
         sblock1.commit().expect("commit block at H=1");
     }
-
     // Block H=2: still not unlocked
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     {
@@ -79,7 +72,6 @@ fn unlocks_after_expiry_height() {
         }));
         sblock2.commit().expect("commit block at H=2");
     }
-
     // Block H=3: unlock should occur
     let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     {

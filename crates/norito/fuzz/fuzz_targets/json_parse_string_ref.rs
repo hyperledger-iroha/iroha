@@ -1,6 +1,5 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-
 fn escape_as_json_string_content(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len());
     for &b in data {
@@ -24,7 +23,6 @@ fn escape_as_json_string_content(data: &[u8]) -> String {
     }
     out
 }
-
 fn expected_from_bytes(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len());
     for &b in data {
@@ -38,7 +36,6 @@ fn expected_from_bytes(data: &[u8]) -> String {
     }
     out
 }
-
 fuzz_target!(|data: &[u8]| {
     let content = escape_as_json_string_content(data);
     let s = format!("\"{}\"", content);

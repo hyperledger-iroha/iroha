@@ -1,11 +1,9 @@
 //! Built-in handling for multisig instructions without requiring an executor upgrade.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     str::FromStr,
     sync::LazyLock,
 };
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ValidationFail,
@@ -29,7 +27,6 @@ use iroha_executor_data_model::isi::multisig::{
     MultisigPropose, MultisigRegister, MultisigSpec,
 };
 use mv::storage::StorageReadOnly;
-
 use crate::{
     smartcontracts::Execute,
     smartcontracts::isi::domain::isi::ensure_controller_capabilities,
@@ -3102,7 +3099,6 @@ fn map_validation_fail(err: ValidationFail) -> InstructionExecutionError {
 #[cfg(test)]
 mod tests {
     mod cancellation;
-
     use super::*;
     use crate::{
         executor::Executor,
@@ -4917,7 +4913,6 @@ mod tests {
     #[test]
     fn governance_lock_owner_rekey_keeps_expiry_index_exact() {
         use crate::state::{GovernanceLockRecord, GovernanceLocksForReferendum};
-
         let state = State::new_with_chain(
             World::new(),
             Kura::blank_kura_for_testing(),

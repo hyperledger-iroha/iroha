@@ -1,7 +1,5 @@
 //! Kotodama rejects retired source-level schema codec plumbing.
-
 use ivm::kotodama::compiler::Compiler as KotodamaCompiler;
-
 #[test]
 fn kotodama_source_rejects_retired_schema_codec_helpers() {
     let src = r#"

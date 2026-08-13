@@ -1,9 +1,7 @@
 use ivm::{IVM, VMError, encoding};
 mod common;
 use common::assemble;
-
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
-
 #[test]
 fn test_compressed_ebreak() {
     let mut vm = IVM::new(u64::MAX);
@@ -15,7 +13,6 @@ fn test_compressed_ebreak() {
     let err = vm.load_program(&prog).unwrap_err();
     assert!(matches!(err, VMError::MemoryAccessViolation { .. }));
 }
-
 #[test]
 fn test_invalid_opcode() {
     let mut vm = IVM::new(u64::MAX);
@@ -30,7 +27,6 @@ fn test_invalid_opcode() {
         Err(err) => panic!("unexpected error: {err:?}"),
     }
 }
-
 #[test]
 fn test_unknown_compressed_traps() {
     let mut vm = IVM::new(u64::MAX);
@@ -45,7 +41,6 @@ fn test_unknown_compressed_traps() {
         Err(err) => panic!("unexpected error: {err:?}"),
     }
 }
-
 #[test]
 fn test_ebreak_instruction() {
     let mut vm = IVM::new(u64::MAX);

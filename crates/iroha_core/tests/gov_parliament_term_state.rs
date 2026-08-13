@@ -1,11 +1,9 @@
 //! `ParliamentTerm` state shape and defaults.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "bls")]
-
 use iroha_core::governance::state::ParliamentTerm;
 use iroha_data_model::isi::governance::CouncilDerivationKind;
 use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
-
 #[test]
 fn parliament_term_defaults_and_fields() {
     let term = ParliamentTerm::default();
@@ -15,7 +13,6 @@ fn parliament_term_defaults_and_fields() {
     assert_eq!(term.candidate_count, 0);
     assert_eq!(term.derived_by, CouncilDerivationKind::Manual);
 }
-
 #[test]
 fn parliament_term_roundtrips() {
     let members = vec![ALICE_ID.clone(), BOB_ID.clone()];
@@ -37,7 +34,6 @@ fn parliament_term_roundtrips() {
     assert_eq!(back.candidate_count, 4);
     assert_eq!(back.derived_by, CouncilDerivationKind::Sortition);
 }
-
 #[test]
 fn parliament_term_replaces_member_with_alternate() {
     let mut term = ParliamentTerm {

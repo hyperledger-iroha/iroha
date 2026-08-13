@@ -1,5 +1,4 @@
 //! Developer automation entrypoint for repository maintenance tasks.
-
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
@@ -19,7 +18,6 @@ use std::{
     ffi::OsString,
     os::unix::ffi::{OsStrExt, OsStringExt},
 };
-
 use axum::{
     Router,
     body::{self, Body},
@@ -74,7 +72,6 @@ use time::{
 };
 use tokio::runtime::Builder as TokioRuntimeBuilder;
 use tower::ServiceExt;
-
 mod da;
 mod vote_tally;
 use fastpq::{BenchInput, BenchManifestOptions};
@@ -11505,9 +11502,7 @@ fn update_sha256_os_str_component(hasher: &mut Sha256, label: &[u8], value: &OsS
 #[cfg(test)]
 mod acceleration_state_tests {
     use serde_json::Value;
-
     use super::*;
-
     #[test]
     fn parse_supports_acceleration_state_command() {
         let args = ["xtask", "acceleration-state", "--format", "json"];
@@ -11676,9 +11671,7 @@ mod acceleration_state_tests {
 #[cfg(test)]
 mod openapi_tests {
     use tempfile::tempdir;
-
     use super::*;
-
     const RELEASE_OPENAPI_FIXTURE: &[u8] = br#"{
   "openapi": "3.1.0",
   "info": {"title": "Torii fixture", "version": "1.0.0"},
@@ -12832,7 +12825,6 @@ mod openapi_tests {
     #[test]
     fn openapi_generator_ignored_lock_rejects_executable_symlink_and_hardlink_inputs() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         let executable_fixture = tempdir().expect("executable tempdir");
         initialize_git_fixture(executable_fixture.path());
         let executable_lock = executable_fixture
@@ -12903,7 +12895,6 @@ mod openapi_tests {
     #[test]
     fn openapi_generator_pin_rejects_missing_executable_and_symlinked_git_blobs() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         for mutation in 0..3 {
             let fixture = tempdir().expect("pin tempdir");
             initialize_git_fixture(fixture.path());
@@ -13569,7 +13560,6 @@ mod openapi_tests {
     #[test]
     fn openapi_signer_allowlist_refuses_unsafe_permissions() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let tmp = tempdir().expect("tempdir");
         let allowlist_path = tmp.path().join("allow.json");
         fs::write(&allowlist_path, r#"{"version":1,"allow":[]}"#).expect("write empty allowlist");
@@ -13670,9 +13660,7 @@ mod openapi_tests {
 #[cfg(test)]
 mod space_directory_tests {
     use tempfile::tempdir;
-
     use super::*;
-
     const SAMPLE_MANIFEST: &str = r#"{
   "version": 1,
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
@@ -13745,7 +13733,6 @@ mod space_directory_tests {
 #[cfg(test)]
 mod streaming_bundle_tests {
     use super::*;
-
     fn fixtures_dir() -> PathBuf {
         workspace_root()
             .join("crates")

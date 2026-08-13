@@ -1,11 +1,9 @@
 use iroha_crypto::Hash;
-
 use super::*;
 use crate::kaigi::{
     KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRelayHealthStatus,
     KaigiRelayManifest, KaigiRelayRegistration, NewKaigi,
 };
-
 isi! {
     /// Create a new Kaigi session anchored to a domain.
     pub struct CreateKaigi {
@@ -22,7 +20,6 @@ isi! {
         pub proof: Option<Vec<u8>>,
     }
 }
-
 isi! {
     /// Add a participant to an active Kaigi.
     pub struct JoinKaigi {
@@ -41,7 +38,6 @@ isi! {
     pub proof: Option<Vec<u8>>,
     }
 }
-
 isi! {
     /// Remove a participant from an active Kaigi.
     pub struct LeaveKaigi {
@@ -60,7 +56,6 @@ isi! {
     pub proof: Option<Vec<u8>>,
     }
 }
-
 isi! {
     /// Conclude an active Kaigi.
     pub struct EndKaigi {
@@ -79,7 +74,6 @@ isi! {
         pub proof: Option<Vec<u8>>,
     }
 }
-
 isi! {
     /// Record usage metrics for a Kaigi segment.
     pub struct RecordKaigiUsage {
@@ -96,7 +90,6 @@ isi! {
     pub proof: Option<Vec<u8>>,
 }
 }
-
 isi! {
     /// Update the relay manifest advertised for a Kaigi session.
     pub struct SetKaigiRelayManifest {
@@ -106,7 +99,6 @@ isi! {
         pub relay_manifest: Option<KaigiRelayManifest>,
     }
 }
-
 isi! {
     /// Register or update a Kaigi relay within its home domain.
     pub struct RegisterKaigiRelay {
@@ -114,7 +106,6 @@ isi! {
         pub relay: KaigiRelayRegistration,
     }
 }
-
 isi! {
     /// Report the observed health for a relay participating in a Kaigi session.
     pub struct ReportKaigiRelayHealth {
@@ -130,7 +121,6 @@ isi! {
         pub notes: Option<String>,
     }
 }
-
 // Seal implementations
 impl crate::seal::Instruction for CreateKaigi {}
 impl crate::seal::Instruction for JoinKaigi {}
@@ -140,11 +130,9 @@ impl crate::seal::Instruction for RecordKaigiUsage {}
 impl crate::seal::Instruction for SetKaigiRelayManifest {}
 impl crate::seal::Instruction for RegisterKaigiRelay {}
 impl crate::seal::Instruction for ReportKaigiRelayHealth {}
-
 fn kaigi_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_kaigi_decode_from_slice {
     ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -153,7 +141,6 @@ macro_rules! impl_kaigi_decode_from_slice {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -170,7 +157,6 @@ macro_rules! impl_kaigi_decode_from_slice {
         }
     };
 }
-
 impl_kaigi_decode_from_slice!(CreateKaigi {
     call: NewKaigi,
     commitment: Option<KaigiParticipantCommitment>,
@@ -178,7 +164,6 @@ impl_kaigi_decode_from_slice!(CreateKaigi {
     roster_root: Option<Hash>,
     proof: Option<Vec<u8>>,
 });
-
 impl_kaigi_decode_from_slice!(JoinKaigi {
     call_id: KaigiId,
     participant: AccountId,
@@ -187,7 +172,6 @@ impl_kaigi_decode_from_slice!(JoinKaigi {
     roster_root: Option<Hash>,
     proof: Option<Vec<u8>>,
 });
-
 impl_kaigi_decode_from_slice!(LeaveKaigi {
     call_id: KaigiId,
     participant: AccountId,
@@ -196,7 +180,6 @@ impl_kaigi_decode_from_slice!(LeaveKaigi {
     roster_root: Option<Hash>,
     proof: Option<Vec<u8>>,
 });
-
 impl_kaigi_decode_from_slice!(EndKaigi {
     call_id: KaigiId,
     ended_at_ms: Option<u64>,
@@ -205,7 +188,6 @@ impl_kaigi_decode_from_slice!(EndKaigi {
     roster_root: Option<Hash>,
     proof: Option<Vec<u8>>,
 });
-
 impl_kaigi_decode_from_slice!(RecordKaigiUsage {
     call_id: KaigiId,
     duration_ms: u64,
@@ -213,16 +195,13 @@ impl_kaigi_decode_from_slice!(RecordKaigiUsage {
     usage_commitment: Option<Hash>,
     proof: Option<Vec<u8>>,
 });
-
 impl_kaigi_decode_from_slice!(SetKaigiRelayManifest {
     call_id: KaigiId,
     relay_manifest: Option<KaigiRelayManifest>,
 });
-
 impl_kaigi_decode_from_slice!(RegisterKaigiRelay {
     relay: KaigiRelayRegistration,
 });
-
 impl_kaigi_decode_from_slice!(ReportKaigiRelayHealth {
     call_id: KaigiId,
     relay_id: AccountId,
@@ -230,48 +209,40 @@ impl_kaigi_decode_from_slice!(ReportKaigiRelayHealth {
     reported_at_ms: u64,
     notes: Option<String>,
 });
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr as _;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         domain::DomainId,
         kaigi::{KaigiPrivacyMode, KaigiRelayHop, KaigiRoomPolicy},
         name::Name,
     };
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked Kaigi ISI fixture keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn call_id() -> KaigiId {
         KaigiId::new(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             Name::from_str("standup").expect("call name"),
         )
     }
-
     fn participant_commitment(byte: u8) -> KaigiParticipantCommitment {
         KaigiParticipantCommitment {
             commitment: Hash::new([byte; 32]),
             alias_tag: Some(format!("participant-{byte}")),
         }
     }
-
     fn participant_nullifier(byte: u8) -> KaigiParticipantNullifier {
         KaigiParticipantNullifier {
             digest: Hash::new([byte; 32]),
             issued_at_ms: 1_700_000_000 + u64::from(byte),
         }
     }
-
     fn relay_manifest() -> KaigiRelayManifest {
         KaigiRelayManifest {
             hops: vec![KaigiRelayHop {
@@ -282,7 +253,6 @@ mod tests {
             expiry_ms: 1_700_100_000,
         }
     }
-
     fn relay_registration() -> KaigiRelayRegistration {
         KaigiRelayRegistration {
             relay_id: account(4),
@@ -290,7 +260,6 @@ mod tests {
             bandwidth_class: 7,
         }
     }
-
     fn new_kaigi() -> NewKaigi {
         let mut call = NewKaigi::with_defaults(call_id(), account(1));
         call.title = Some("Daily standup".to_owned());
@@ -304,7 +273,6 @@ mod tests {
         call.relay_manifest = Some(relay_manifest());
         call
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -315,7 +283,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
     where
         T: crate::isi::Instruction
@@ -333,14 +300,12 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn kaigi_decode_from_slice_roundtrips() {
         let call_id = call_id();
         let commitment = participant_commitment(0x11);
         let nullifier = participant_nullifier(0x22);
         let roster_root = Hash::new("kaigi-roster-root");
-
         assert_slice_roundtrip(CreateKaigi {
             call: new_kaigi(),
             commitment: Some(commitment.clone()),
@@ -394,12 +359,10 @@ mod tests {
             notes: Some("packet loss".to_owned()),
         });
     }
-
     #[test]
     fn kaigi_default_registry_decodes_type_names() {
         let registry = crate::isi::registry::default();
         let call_id = call_id();
-
         assert_registry_decodes(
             &registry,
             CreateKaigi {

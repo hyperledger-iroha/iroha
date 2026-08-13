@@ -1,5 +1,4 @@
 //! Kotodama ZK-related builtin tests for the namespaced, typed V1 surface.
-
 #[test]
 fn raw_norito_and_opaque_submission_are_not_source_apis() {
     let diagnostics = ivm::kotodama::session::CompilerSession::default()

@@ -8,7 +8,6 @@ fn subscription_mutations_document_exact_account_authentication() {
         "X-Iroha-Nonce".to_owned(),
         "X-Iroha-Witness".to_owned(),
     ]);
-
     for descriptor in [
         iroha_torii_shared::route_catalog::application_api::SUBSCRIPTIONS_PLANS_POST,
         iroha_torii_shared::route_catalog::application_api::SUBSCRIPTIONS_POST,
@@ -40,7 +39,6 @@ fn subscription_mutations_document_exact_account_authentication() {
         assert_eq!(names, expected, "POST {}", descriptor.path());
     }
 }
-
 #[test]
 fn application_drafts_and_cryptographic_services_document_exact_account_authentication() {
     let document = generate_spec();
@@ -51,7 +49,6 @@ fn application_drafts_and_cryptographic_services_document_exact_account_authenti
         "X-Iroha-Nonce".to_owned(),
         "X-Iroha-Witness".to_owned(),
     ]);
-
     for descriptor in [
         iroha_torii_shared::route_catalog::application_api::SPACE_DIRECTORY_MANIFESTS_POST,
         iroha_torii_shared::route_catalog::application_api::SPACE_DIRECTORY_MANIFESTS_REVOKE_POST,
@@ -82,7 +79,6 @@ fn application_drafts_and_cryptographic_services_document_exact_account_authenti
         );
     }
 }
-
 #[test]
 fn expensive_application_queries_document_exact_account_authentication() {
     let document = generate_spec();
@@ -93,7 +89,6 @@ fn expensive_application_queries_document_exact_account_authentication() {
         "X-Iroha-Nonce".to_owned(),
         "X-Iroha-Witness".to_owned(),
     ]);
-
     for descriptor in [
         iroha_torii_shared::route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
         iroha_torii_shared::route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
@@ -121,7 +116,6 @@ fn expensive_application_queries_document_exact_account_authentication() {
         assert!(operation.get("security").is_some(), "POST {} security", descriptor.path());
     }
 }
-
 #[test]
 fn proof_query_documents_body_signed_authentication_without_account_headers() {
     let document = generate_spec();
@@ -140,7 +134,6 @@ fn proof_query_documents_body_signed_authentication_without_account_headers() {
             .is_some_and(|description| description.contains("SignedQuery"))
     );
 }
-
 #[test]
 fn offline_receiver_lineage_documents_exact_account_authentication() {
     let document = generate_spec();
@@ -167,7 +160,6 @@ fn offline_receiver_lineage_documents_exact_account_authentication() {
         .collect::<BTreeSet<_>>();
     assert_eq!(headers, expected_headers);
     assert!(operation.get("security").is_some());
-
     let responses = operation
         .get("responses")
         .and_then(Value::as_object)
@@ -195,7 +187,6 @@ fn offline_receiver_lineage_documents_exact_account_authentication() {
         "private caching must not erase the exact reject-code contract"
     );
 }
-
 #[test]
 fn soracloud_sensitive_reads_document_exact_account_authentication() {
     let document = generate_spec();
@@ -206,7 +197,6 @@ fn soracloud_sensitive_reads_document_exact_account_authentication() {
         "X-Iroha-Nonce".to_owned(),
         "X-Iroha-Witness".to_owned(),
     ]);
-
     for descriptor in [
         iroha_torii_shared::route_catalog::application_api::SORACLOUD_STATUS_GET,
         iroha_torii_shared::route_catalog::application_api::SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET,
@@ -223,7 +213,6 @@ fn soracloud_sensitive_reads_document_exact_account_authentication() {
             .collect::<BTreeSet<_>>();
         assert_eq!(headers, expected_headers, "GET {}", descriptor.path());
         assert!(operation.get("security").is_some(), "GET {} security", descriptor.path());
-
         let responses = operation
             .get("responses")
             .and_then(Value::as_object)
@@ -242,7 +231,6 @@ fn soracloud_sensitive_reads_document_exact_account_authentication() {
         }
     }
 }
-
 #[test]
 fn webhook_registry_documents_required_operator_signatures() {
     let document = generate_spec();

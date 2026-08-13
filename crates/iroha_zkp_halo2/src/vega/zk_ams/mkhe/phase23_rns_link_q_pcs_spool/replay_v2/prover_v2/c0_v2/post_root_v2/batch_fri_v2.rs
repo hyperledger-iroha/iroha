@@ -7,26 +7,20 @@
 //! 380 layer-0 alphas, authenticates paired B0 blocks, and roots B1. A bounded
 //! child continues B1 through B17 and the equal terminal. No proof, ZK, RSS,
 //! receipt, or release authority is produced.
-
 use core::convert::Infallible;
 use std::path::Path;
-
 use iroha_confidential_spool::ConfidentialSpoolChunkV1;
-
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
     ProverBatchChallengesV2, ProverBatchRowsCompleteV2, ProverFriLayer0ChallengesV2,
     ProverFriLayer0FoldCompleteV2,
 };
-
 use super::*;
-
 #[path = "batch_fri_v2/storage_v2.rs"]
 mod storage_v2;
 use storage_v2::*;
 #[path = "batch_fri_v2/fri_layers2_17_v2.rs"]
 mod fri_layers2_17_v2;
 pub(super) use fri_layers2_17_v2::*;
-
 const BATCH_FRI0_RECORDS_V2: u64 = 512 * 380;
 const BATCH_FRI0_VALUES_V2: u64 = BATCH_FRI0_RECORDS_V2 * 1_024;
 const BATCH_FRI0_INPUT_READ_BYTES_V2: u64 = 2 * 3_190_784_000;
@@ -69,7 +63,6 @@ const BATCH_FRI_OPERATIONAL_RECEIPT_ACCEPTED_V2: bool = false;
 const BATCH_FRI_MEASURED_RSS_WITHIN_CAP_V2: bool = false;
 const BATCH_FRI_RELEASE_READY_V2: bool = false;
 const BATCH_FRI_RELEASE_COMPLETE_V2: bool = false;
-
 const _: () = {
     assert!(BATCH_FRI0_RECORDS_V2 == RELEASE_LDE_SLOTS_V2);
     assert!(BATCH_FRI0_VALUES_V2 == 199_229_440);
@@ -134,7 +127,6 @@ const _: () = {
     assert!(!BATCH_FRI_RELEASE_READY_V2);
     assert!(!BATCH_FRI_RELEASE_COMPLETE_V2);
 };
-
 pub(super) enum BatchFriLayer0AuthorityV2 {
     Production {
         exact_batch: Infallible,
@@ -144,7 +136,6 @@ pub(super) enum BatchFriLayer0AuthorityV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 pub(super) enum BatchFriLayer1AuthorityV2 {
     Production {
         authenticated_layer0_replay: Infallible,
@@ -154,28 +145,23 @@ pub(super) enum BatchFriLayer1AuthorityV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 struct LiveBatchReplayPairV2 {
     c0: C0BatchReplayV2,
     cq: CqBatchReplayV2,
     challenges: ProverBatchChallengesV2,
     writer: FriLayer0WriterV2,
 }
-
 struct BatchReplayPairV2 {
     live: Option<LiveBatchReplayPairV2>,
 }
-
 struct LiveFriLayer1FoldV2 {
     replay: FriLayer0FoldReplayV2,
     challenges: ProverFriLayer0ChallengesV2,
     writer: FriLayer1WriterV2,
 }
-
 struct FriLayer1FoldV2 {
     live: Option<LiveFriLayer1FoldV2>,
 }
-
 impl BatchReplayPairV2 {
     fn write_next_v2(&mut self, block: u64, column: u16) -> Result<(), ProverPrerequisiteErrorV2> {
         let mut live = self
@@ -196,7 +182,6 @@ impl BatchReplayPairV2 {
         self.live = Some(live);
         Ok(())
     }
-
     fn complete_v2(
         mut self,
     ) -> Result<
@@ -219,7 +204,6 @@ impl BatchReplayPairV2 {
         Ok((accepted_c0, accepted_cq, transcript, accepted_fri0))
     }
 }
-
 impl FriLayer1FoldV2 {
     fn fold_next_v2(
         &mut self,
@@ -243,7 +227,6 @@ impl FriLayer1FoldV2 {
         self.live = Some(live);
         Ok(())
     }
-
     fn complete_v2(
         mut self,
     ) -> Result<
@@ -264,7 +247,6 @@ impl FriLayer1FoldV2 {
         Ok((accepted_fri0, accepted_fri1, transcript))
     }
 }
-
 /// Non-authorizing owner of every authenticated artifact through FRI layer 0.
 pub(super) struct BatchFriLayer0RootPreparedV2 {
     accepted_c0: Option<QPcsC0StoredV2>,
@@ -279,7 +261,6 @@ pub(super) struct BatchFriLayer0RootPreparedV2 {
     quotient_root: [u8; 32],
     layer0_root: [u8; 32],
 }
-
 /// Non-authorizing owner of every authenticated artifact through FRI layer 1.
 pub(super) struct BatchFriLayer1RootPreparedV2 {
     accepted_c0: Option<QPcsC0StoredV2>,
@@ -296,7 +277,6 @@ pub(super) struct BatchFriLayer1RootPreparedV2 {
     layer0_root: [u8; 32],
     layer1_root: [u8; 32],
 }
-
 impl QuotientRootPreparedV2 {
     pub(super) fn prepare_batch_fri_layer0_root_v2(
         self,
@@ -315,7 +295,6 @@ impl QuotientRootPreparedV2 {
         prepare_batch_fri_layer0_operation_v2(self, directory)
     }
 }
-
 fn prepare_batch_fri_layer0_operation_v2(
     mut prepared: QuotientRootPreparedV2,
     directory: &Path,
@@ -381,7 +360,6 @@ fn prepare_batch_fri_layer0_operation_v2(
         layer0_root,
     })
 }
-
 impl BatchFriLayer0RootPreparedV2 {
     pub(super) fn prepare_batch_fri_layer1_root_v2(
         self,
@@ -400,7 +378,6 @@ impl BatchFriLayer0RootPreparedV2 {
         prepare_batch_fri_layer1_operation_v2(self, directory)
     }
 }
-
 fn prepare_batch_fri_layer1_operation_v2(
     mut prepared: BatchFriLayer0RootPreparedV2,
     directory: &Path,
@@ -474,7 +451,6 @@ fn prepare_batch_fri_layer1_operation_v2(
         layer1_root,
     })
 }
-
 #[cfg(test)]
 #[path = "batch_fri_v2_tests.rs"]
 mod tests;

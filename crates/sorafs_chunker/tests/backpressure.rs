@@ -1,8 +1,6 @@
 use std::{fs, path::PathBuf};
-
 use norito::json::Value;
 use sorafs_chunker::{Chunker, fixtures::FixtureProfile};
-
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -10,22 +8,18 @@ fn repo_root() -> PathBuf {
         .canonicalize()
         .expect("resolve repository root")
 }
-
 fn fuzz_dir() -> PathBuf {
     repo_root().join("fuzz").join("sorafs_chunker")
 }
-
 fn load_backpressure_json() -> Value {
     let path = fuzz_dir().join("sf1_profile_v1_backpressure.json");
     let bytes = fs::read(path).expect("read backpressure corpus json");
     norito::json::from_slice(&bytes).expect("parse backpressure json corpus")
 }
-
 fn load_input_bytes() -> Vec<u8> {
     let path = fuzz_dir().join("sf1_profile_v1_input.bin");
     fs::read(path).expect("read backpressure input corpus")
 }
-
 fn as_array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
     value
         .get(key)
@@ -33,7 +27,6 @@ fn as_array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
         .as_array()
         .unwrap_or_else(|| panic!("{key} is not an array"))
 }
-
 fn as_str<'a>(value: &'a Value, key: &str) -> &'a str {
     value
         .get(key)
@@ -41,18 +34,15 @@ fn as_str<'a>(value: &'a Value, key: &str) -> &'a str {
         .as_str()
         .unwrap_or_else(|| panic!("{key} is not a string"))
 }
-
 fn as_usize(value: &Value) -> usize {
     value
         .as_u64()
         .unwrap_or_else(|| panic!("expected positive integer, got {value:?}")) as usize
 }
-
 #[test]
 fn backpressure_corpus_matches_fixture_vectors() {
     let vectors = FixtureProfile::SF1_V1.generate_vectors();
     let json = load_backpressure_json();
-
     let profile = json
         .get("profile")
         .and_then(Value::as_str)
@@ -73,7 +63,6 @@ fn backpressure_corpus_matches_fixture_vectors() {
             .expect("digest string"),
         vectors.sha3_digest_hex()
     );
-
     let scenarios = json
         .get("scenarios")
         .and_then(Value::as_array)
@@ -82,7 +71,6 @@ fn backpressure_corpus_matches_fixture_vectors() {
         !scenarios.is_empty(),
         "backpressure corpus must contain at least one scenario"
     );
-
     for scenario in scenarios {
         let name = as_str(scenario, "name");
         let feed_sizes: Vec<usize> = as_array(scenario, "feed_sizes")
@@ -98,7 +86,6 @@ fn backpressure_corpus_matches_fixture_vectors() {
             feed_sum, vectors.input_length,
             "scenario {name} feed sizes must equal input length"
         );
-
         let expected_lengths: Vec<usize> = as_array(scenario, "expected_chunk_lengths")
             .iter()
             .map(as_usize)
@@ -107,7 +94,6 @@ fn backpressure_corpus_matches_fixture_vectors() {
             expected_lengths, vectors.chunk_lengths,
             "scenario {name} expected lengths must match canonical fixture"
         );
-
         assert_eq!(
             scenario
                 .get("chunk_count")
@@ -116,7 +102,6 @@ fn backpressure_corpus_matches_fixture_vectors() {
             vectors.chunk_lengths.len(),
             "scenario {name} chunk count mismatch"
         );
-
         // Ensure feed bounds are consistent.
         let max_feed = scenario
             .get("max_feed_size")
@@ -150,7 +135,6 @@ fn backpressure_corpus_matches_fixture_vectors() {
         );
     }
 }
-
 #[test]
 fn streaming_chunker_matches_backpressure_scenarios() {
     let vectors = FixtureProfile::SF1_V1.generate_vectors();
@@ -160,10 +144,8 @@ fn streaming_chunker_matches_backpressure_scenarios() {
         input, vectors.input,
         "input corpus must match fixture vectors"
     );
-
     let json = load_backpressure_json();
     let scenarios = as_array(&json, "scenarios");
-
     for scenario in scenarios {
         let name = as_str(scenario, "name");
         let feed_sizes: Vec<usize> = as_array(scenario, "feed_sizes")
@@ -174,7 +156,6 @@ fn streaming_chunker_matches_backpressure_scenarios() {
             !feed_sizes.is_empty(),
             "scenario {name} must have feed sizes"
         );
-
         let mut chunker = Chunker::new();
         let mut lengths = Vec::new();
         let mut offsets = Vec::new();
@@ -194,7 +175,6 @@ fn streaming_chunker_matches_backpressure_scenarios() {
                 offsets.push(chunk.offset);
             }
         });
-
         assert_eq!(
             consumed,
             input.len(),

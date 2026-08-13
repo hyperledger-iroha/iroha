@@ -6,7 +6,6 @@ pub enum GovernanceDagSigningPayloadValidationErrorV1 {
     /// The decoded payload violates a frozen Governance DAG invariant.
     Invalid,
 }
-
 fn decode_governance_signing_payload_v1<T>(
     bytes: &[u8],
 ) -> Result<T, GovernanceDagSigningPayloadValidationErrorV1>
@@ -19,7 +18,6 @@ where
     norito::decode_canonical(bytes)
         .map_err(|_| GovernanceDagSigningPayloadValidationErrorV1::Malformed)
 }
-
 fn validate_governance_node_signing_fields_v1(
     node: &GovernanceLogSignaturePayloadV1,
 ) -> Result<(), GovernanceDagSigningPayloadValidationErrorV1> {
@@ -52,7 +50,6 @@ fn validate_governance_node_signing_fields_v1(
     }
     Ok(())
 }
-
 /// Validate one exact canonical governance log-node signing payload.
 pub fn validate_governance_log_node_signing_payload_v1(
     bytes: &[u8],
@@ -60,7 +57,6 @@ pub fn validate_governance_log_node_signing_payload_v1(
     let node: GovernanceLogSignaturePayloadV1 = decode_governance_signing_payload_v1(bytes)?;
     validate_governance_node_signing_fields_v1(&node)
 }
-
 /// Validate a log-node payload for one exact configured publisher identity.
 pub fn validate_governance_log_node_signing_payload_for_publisher_v1(
     bytes: &[u8],
@@ -73,7 +69,6 @@ pub fn validate_governance_log_node_signing_payload_for_publisher_v1(
     }
     Ok(())
 }
-
 /// Validate one exact canonical Governance DAG block signing payload.
 pub fn validate_governance_dag_block_signing_payload_v1(
     bytes: &[u8],
@@ -81,7 +76,6 @@ pub fn validate_governance_dag_block_signing_payload_v1(
     let block: GovernanceDagBlockSignaturePayloadV1 = decode_governance_signing_payload_v1(bytes)?;
     validate_governance_dag_block_signing_fields_v1(&block)
 }
-
 fn validate_governance_dag_block_signing_fields_v1(
     block: &GovernanceDagBlockSignaturePayloadV1,
 ) -> Result<(), GovernanceDagSigningPayloadValidationErrorV1> {
@@ -116,7 +110,6 @@ fn validate_governance_dag_block_signing_fields_v1(
     }
     Ok(())
 }
-
 /// Validate a block payload for one exact configured publisher identity/key.
 pub fn validate_governance_dag_block_signing_payload_for_publisher_v1(
     bytes: &[u8],
@@ -132,7 +125,6 @@ pub fn validate_governance_dag_block_signing_payload_for_publisher_v1(
     }
     Ok(())
 }
-
 /// Validate one exact canonical Governance DAG head signing payload.
 pub fn validate_governance_dag_head_signing_payload_v1(
     bytes: &[u8],
@@ -140,7 +132,6 @@ pub fn validate_governance_dag_head_signing_payload_v1(
     let head: GovernanceDagHeadSignaturePayloadV1 = decode_governance_signing_payload_v1(bytes)?;
     validate_governance_dag_head_signing_fields_v1(&head)
 }
-
 fn validate_governance_dag_head_signing_fields_v1(
     head: &GovernanceDagHeadSignaturePayloadV1,
 ) -> Result<(), GovernanceDagSigningPayloadValidationErrorV1> {
@@ -159,7 +150,6 @@ fn validate_governance_dag_head_signing_fields_v1(
     }
     Ok(())
 }
-
 /// Validate a head payload for one exact configured publisher identity.
 pub fn validate_governance_dag_head_signing_payload_for_publisher_v1(
     bytes: &[u8],

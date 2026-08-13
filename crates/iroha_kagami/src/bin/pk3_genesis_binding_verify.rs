@@ -1,6 +1,5 @@
 //! Verify that one canonical signed genesis is the semantic realization of
 //! one policy genesis and is signed by the expected root account.
-
 use std::{
     fs::{self, OpenOptions},
     io::Read as _,
@@ -8,7 +7,6 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
-
 use clap::Parser;
 use iroha_core::validate_genesis_block;
 use iroha_crypto::PublicKey;
@@ -23,10 +21,8 @@ use iroha_genesis::{
     GENESIS_MANIFEST_JSON_MAX_BYTES_V1, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
     decode_signed_genesis,
 };
-
 const MAX_POLICY_GENESIS_BYTES: usize = GENESIS_MANIFEST_JSON_MAX_BYTES_V1;
 const MAX_SIGNED_GENESIS_BYTES: usize = SIGNED_GENESIS_MAX_BYTES_V1;
-
 #[derive(Debug, Parser)]
 #[command(about = "Verify a PK3 policy-genesis/signed-genesis/root-signer binding")]
 struct Args {
@@ -39,7 +35,6 @@ struct Args {
     #[arg(long, value_name = "PUBLIC_KEY")]
     genesis_public_key: PublicKey,
 }
-
 #[derive(norito::JsonSerialize)]
 struct Receipt {
     schema: &'static str,
@@ -49,7 +44,6 @@ struct Receipt {
     transaction_count: u64,
     block_hash: String,
 }
-
 fn main() -> ExitCode {
     let args = Args::parse();
     match run(&args) {
@@ -69,11 +63,9 @@ fn main() -> ExitCode {
         }
     }
 }
-
 fn run(args: &Args) -> Result<Receipt, String> {
     let (policy_bytes, policy_metadata) =
         read_owner_file(&args.genesis, "policy genesis", MAX_POLICY_GENESIS_BYTES)?;
-
     iroha_genesis::init_instruction_registry();
     let manifest = RawGenesisTransaction::from_json_slice(&policy_bytes)
         .map_err(|error| format!("policy genesis is invalid: {error}"))?;
@@ -87,7 +79,6 @@ fn run(args: &Args) -> Result<Receipt, String> {
     if manifest.chain_id() != &args.chain_id {
         return Err("policy genesis chain differs from --chain-id".to_owned());
     }
-
     let (signed_bytes, _) = read_owner_file(
         &args.signed_genesis,
         "signed genesis",
@@ -106,7 +97,6 @@ fn run(args: &Args) -> Result<Receipt, String> {
     let genesis_account = AccountId::new(args.genesis_public_key.clone());
     validate_genesis_block(&block, &genesis_account)
         .map_err(|error| format!("root signature or genesis invariants failed: {error}"))?;
-
     let expected = manifest
         .with_consensus_meta()
         .parse()
@@ -152,7 +142,6 @@ fn run(args: &Args) -> Result<Receipt, String> {
             }
         }
     }
-
     Ok(Receipt {
         schema: "pkdeploy.pk3.genesis_binding_verification.v1",
         status: "verified",
@@ -163,7 +152,6 @@ fn run(args: &Args) -> Result<Receipt, String> {
         block_hash: block.hash().to_string(),
     })
 }
-
 fn is_staged_consensus_commitment(instruction: &InstructionBox) -> bool {
     let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() else {
         return false;
@@ -173,7 +161,6 @@ fn is_staged_consensus_commitment(instruction: &InstructionBox) -> bool {
     };
     custom.id() == &consensus_metadata::handshake_meta_id()
 }
-
 fn read_owner_file(
     path: &Path,
     label: &str,
@@ -223,7 +210,6 @@ fn read_owner_file(
     }
     Ok((bytes, before))
 }
-
 fn reject_symlink_components(path: &Path, label: &str) -> Result<(), String> {
     let mut current = if path.is_absolute() {
         path.to_path_buf()
@@ -251,11 +237,9 @@ fn reject_symlink_components(path: &Path, label: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_identity(left, right)
         && left.mode() == right.mode()
@@ -268,13 +252,10 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt as _;
-
     use super::*;
-
     #[test]
     fn owner_file_reader_rejects_first_byte_over_limit() {
         let directory = tempfile::tempdir().expect("create owner-file test directory");
@@ -286,7 +267,6 @@ mod tests {
         fs::write(&path, [0xA5; 33]).expect("write bounded owner file");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
             .expect("set owner-only test permissions");
-
         assert_eq!(
             read_owner_file(&path, "test genesis", 32)
                 .expect_err("oversized owner file must fail before reading")

@@ -1,8 +1,6 @@
 //! Effect-free deterministic owner for the two shared signed Musubi V1 fixtures.
-
 mod musubi_fixture_values;
 mod musubi_sdk_fixture_values;
-
 use std::{
     collections::BTreeSet,
     env,
@@ -11,24 +9,18 @@ use std::{
     io::{self, Write as _},
     path::{Component, Path},
 };
-
 use musubi_fixture_values::MUSUBI_FIXTURE_OUTPUTS;
 use norito::json::{self, Value};
-
 const OWNER_ENVELOPE_SCHEMA_V1: &str = "iroha.musubi.signed_fixtures.owner.v1";
-
 type AnyError = Box<dyn Error + 'static>;
-
 #[derive(Debug)]
 struct RenderedFixture {
     relative_path: &'static str,
     contents: String,
 }
-
 fn invalid(message: impl Into<String>) -> AnyError {
     io::Error::new(io::ErrorKind::InvalidInput, message.into()).into()
 }
-
 fn parse_options<I>(arguments: I) -> Result<(), AnyError>
 where
     I: IntoIterator<Item = OsString>,
@@ -40,7 +32,6 @@ where
     }
     Ok(())
 }
-
 fn validate_relative_output(path: &str) -> Result<(), AnyError> {
     let path = Path::new(path);
     if path.is_absolute()
@@ -55,7 +46,6 @@ fn validate_relative_output(path: &str) -> Result<(), AnyError> {
     }
     Ok(())
 }
-
 fn reject_legacy_keys(value: &Value, location: &str) -> Result<(), AnyError> {
     if let Some(object) = value.as_object() {
         for (key, child) in object {
@@ -76,7 +66,6 @@ fn reject_legacy_keys(value: &Value, location: &str) -> Result<(), AnyError> {
     }
     Ok(())
 }
-
 fn render_fixture(relative_path: &'static str, value: Value) -> Result<RenderedFixture, AnyError> {
     reject_legacy_keys(&value, relative_path)?;
     let contents = format!("{}\n", json::to_string_pretty(&value)?);
@@ -97,7 +86,6 @@ fn render_fixture(relative_path: &'static str, value: Value) -> Result<RenderedF
         contents,
     })
 }
-
 fn rendered_fixtures() -> Result<Vec<RenderedFixture>, AnyError> {
     let outputs = MUSUBI_FIXTURE_OUTPUTS
         .iter()
@@ -117,7 +105,6 @@ fn rendered_fixtures() -> Result<Vec<RenderedFixture>, AnyError> {
     for output in outputs {
         validate_relative_output(output)?;
     }
-
     Ok(vec![
         render_fixture(
             MUSUBI_FIXTURE_OUTPUTS[0],
@@ -129,7 +116,6 @@ fn rendered_fixtures() -> Result<Vec<RenderedFixture>, AnyError> {
         )?,
     ])
 }
-
 fn rendered_envelope(fixtures: &[RenderedFixture]) -> Result<String, AnyError> {
     let outputs = fixtures
         .iter()
@@ -159,7 +145,6 @@ fn rendered_envelope(fixtures: &[RenderedFixture]) -> Result<String, AnyError> {
     }
     Ok(contents)
 }
-
 fn run<I>(arguments: I) -> Result<String, AnyError>
 where
     I: IntoIterator<Item = OsString>,
@@ -167,7 +152,6 @@ where
     parse_options(arguments)?;
     rendered_envelope(&rendered_fixtures()?)
 }
-
 fn main() -> Result<(), AnyError> {
     let envelope = run(env::args_os().skip(1))?;
     let stdout = io::stdout();
@@ -176,11 +160,9 @@ fn main() -> Result<(), AnyError> {
     stdout.flush()?;
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn owner_accepts_no_pathname_or_mutation_arguments() {
         parse_options(Vec::<OsString>::new()).expect("argument-free emitter");
@@ -188,7 +170,6 @@ mod tests {
             assert!(parse_options([OsString::from(rejected)]).is_err());
         }
     }
-
     #[test]
     fn output_paths_are_the_exact_safe_closed_pair() {
         assert_eq!(
@@ -204,7 +185,6 @@ mod tests {
         assert!(validate_relative_output("../sdk_v1.json").is_err());
         assert!(validate_relative_output("/tmp/sdk_v1.json").is_err());
     }
-
     #[test]
     fn legacy_deployment_keys_are_rejected_recursively() {
         for key in ["chain_id", "genesis_hash", "genesis_block_hash"] {
@@ -219,7 +199,6 @@ mod tests {
         )
         .expect("NetworkId-only fixture");
     }
-
     #[test]
     fn envelope_is_deterministic_and_contains_only_the_closed_pair() {
         let fixtures = rendered_fixtures().expect("render fixtures");
@@ -227,7 +206,6 @@ mod tests {
         let second = rendered_envelope(&fixtures).expect("rerender envelope");
         assert_eq!(first, second);
         assert!(first.ends_with('\n'));
-
         let decoded: Value = json::from_str(&first).expect("decode envelope");
         assert_eq!(
             decoded

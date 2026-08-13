@@ -2,7 +2,6 @@ use super::super::{Fq2ParametersV1, Fq2V1};
 use super::*;
 use crate::vega::sponge::shake256;
 use sha2::{Digest as _, Sha256};
-
 const SOURCE_DIGEST: [u8; 32] = [0x22; 32];
 const ALGEBRA_DIGEST: [u8; 32] = [0x33; 32];
 const INITIAL_ROOT: [u8; 32] = [0x44; 32];
@@ -43,14 +42,12 @@ const QUERY_ARRAY_KAT: [u8; 32] = [
     0x67, 0x55, 0x6e, 0x20, 0x05, 0xa1, 0x42, 0xda, 0x7c, 0x40, 0xa6, 0x84, 0x9c, 0x29, 0xef, 0xfb,
     0xc7, 0x98, 0x45, 0x41, 0x38, 0xee, 0x91, 0x3d, 0xbe, 0xfa, 0x0f, 0xfa, 0x79, 0xab, 0xb5, 0x2f,
 ];
-
 fn context() -> ExpectedPublicContextV2 {
     ExpectedPublicContextV2 {
         sealed_source_transcript_digest: SOURCE_DIGEST,
         source_algebra_binding_digest: ALGEBRA_DIGEST,
     }
 }
-
 fn manual_parameter_digest() -> [u8; 32] {
     let mut frame = b"iroha.zk-ams.v2.q-pcs.soundness.parameters\0".to_vec();
     frame.extend_from_slice(&[2, 17, 19]);
@@ -67,7 +64,6 @@ fn manual_parameter_digest() -> [u8; 32] {
     }
     keccak256(&frame)
 }
-
 fn manual_initial_transcript(root: [u8; 32]) -> [u8; 32] {
     let mut frame = b"iroha.zk-ams.v2.q-pcs.soundness.initial-root\0".to_vec();
     frame.push(2);
@@ -77,7 +73,6 @@ fn manual_initial_transcript(root: [u8; 32]) -> [u8; 32] {
     frame.extend_from_slice(&root);
     keccak256(&frame)
 }
-
 fn manual_points(transcript: [u8; 32]) -> [u64; RELATION_COUNT_V2] {
     let mut points = [0_u64; RELATION_COUNT_V2];
     for limb in 0..LIMBS_V2 {
@@ -111,7 +106,6 @@ fn manual_points(transcript: [u8; 32]) -> [u64; RELATION_COUNT_V2] {
     }
     points
 }
-
 fn manual_absorb_evaluations(transcript: [u8; 32], encoded: &[u8]) -> [u8; 32] {
     let mut frame = b"iroha.zk-ams.v2.q-pcs.soundness.evaluations\0".to_vec();
     frame.push(2);
@@ -120,7 +114,6 @@ fn manual_absorb_evaluations(transcript: [u8; 32], encoded: &[u8]) -> [u8; 32] {
     frame.extend_from_slice(encoded);
     keccak256(&frame)
 }
-
 fn manual_absorb_root(
     domain: &[u8],
     transcript: [u8; 32],
@@ -134,7 +127,6 @@ fn manual_absorb_root(
     frame.extend_from_slice(&root);
     keccak256(&frame)
 }
-
 fn manual_fq2_challenge(
     domain: &[u8],
     transcript: [u8; 32],
@@ -164,7 +156,6 @@ fn manual_fq2_challenge(
     }
     panic!("manual challenge rejection bound exhausted")
 }
-
 fn manual_absorb_schedule_value(
     digest: [u8; 32],
     kind: u8,
@@ -182,7 +173,6 @@ fn manual_absorb_schedule_value(
     frame.extend_from_slice(&value[1].to_be_bytes());
     keccak256(&frame)
 }
-
 fn manual_batch_schedule(transcript: [u8; 32]) -> ([u8; 32], usize) {
     let mut digest = transcript;
     let mut challenge_count = 0_usize;
@@ -215,7 +205,6 @@ fn manual_batch_schedule(transcript: [u8; 32]) -> ([u8; 32], usize) {
     }
     (digest, challenge_count)
 }
-
 fn manual_transcript_through_quotient(wire: &[u8]) -> [u8; 32] {
     let evaluations = &wire[HEADER_BYTES_V2..HEADER_BYTES_V2 + EVALUATION_BYTES_V2];
     let transcript =
@@ -231,7 +220,6 @@ fn manual_transcript_through_quotient(wire: &[u8]) -> [u8; 32] {
         quotient_root,
     )
 }
-
 fn manual_fold_schedule(wire: &[u8]) -> ([u8; 32], usize, usize) {
     let mut transcript = manual_transcript_through_quotient(wire);
     let (mut schedule, batch_count) = manual_batch_schedule(transcript);
@@ -264,7 +252,6 @@ fn manual_fold_schedule(wire: &[u8]) -> ([u8; 32], usize, usize) {
     }
     (schedule, batch_count, fold_count)
 }
-
 fn manual_query_array_digest(queries: &[u32; QUERY_COUNT_V2]) -> [u8; 32] {
     let mut frame = Vec::with_capacity(QUERY_COUNT_V2 * 4);
     for query in queries {
@@ -272,7 +259,6 @@ fn manual_query_array_digest(queries: &[u32; QUERY_COUNT_V2]) -> [u8; 32] {
     }
     keccak256(&frame)
 }
-
 fn manual_absorb_terminal(transcript: [u8; 32], terminal: &[u8]) -> [u8; 32] {
     let mut frame = b"iroha.zk-ams.v2.q-pcs.soundness.fri-terminal\0".to_vec();
     frame.push(2);
@@ -281,7 +267,6 @@ fn manual_absorb_terminal(transcript: [u8; 32], terminal: &[u8]) -> [u8; 32] {
     frame.extend_from_slice(terminal);
     keccak256(&frame)
 }
-
 fn manual_queries(transcript: [u8; 32]) -> [u32; QUERY_COUNT_V2] {
     let bound = 262_144_u64;
     let zone = u64::MAX - u64::MAX % bound;
@@ -306,7 +291,6 @@ fn manual_queries(transcript: [u8; 32]) -> [u32; QUERY_COUNT_V2] {
     }
     queries
 }
-
 fn manual_queries_from_wire(wire: &[u8]) -> [u32; QUERY_COUNT_V2] {
     let mut transcript = manual_transcript_through_quotient(wire);
     let roots_offset = HEADER_BYTES_V2 + EVALUATION_BYTES_V2 + 32;
@@ -328,7 +312,6 @@ fn manual_queries_from_wire(wire: &[u8]) -> [u32; QUERY_COUNT_V2] {
     );
     manual_queries(transcript)
 }
-
 fn manual_indices(queries: &[u32; QUERY_COUNT_V2], length: usize) -> Vec<u32> {
     let half = (length / 2) as u32;
     let mut indices = Vec::with_capacity(2 * QUERY_COUNT_V2);
@@ -340,7 +323,6 @@ fn manual_indices(queries: &[u32; QUERY_COUNT_V2], length: usize) -> Vec<u32> {
     indices.dedup();
     indices
 }
-
 fn manual_authentication_count(mut indices: Vec<u32>, mut length: usize) -> usize {
     let mut authentication = 0_usize;
     while length > 1 {
@@ -357,7 +339,6 @@ fn manual_authentication_count(mut indices: Vec<u32>, mut length: usize) -> usiz
     }
     authentication
 }
-
 fn authentication_cap_witness_queries(auth_only: bool) -> [u32; QUERY_COUNT_V2] {
     let mut states = [0_u8; QUERY_COUNT_V2];
     let mut next = 0_usize;
@@ -377,7 +358,6 @@ fn authentication_cap_witness_queries(auth_only: bool) -> [u32; QUERY_COUNT_V2] 
         }
     }
     assert_eq!(next, QUERY_COUNT_V2);
-
     let mut queries = [0_u32; QUERY_COUNT_V2];
     for (query, state) in queries.iter_mut().zip(states) {
         let start = if auth_only { 1_usize } else { 0 };
@@ -388,7 +368,6 @@ fn authentication_cap_witness_queries(auth_only: bool) -> [u32; QUERY_COUNT_V2] 
     }
     queries
 }
-
 fn sha256_query_array(queries: &[u32; QUERY_COUNT_V2]) -> [u8; 32] {
     let mut digest = Sha256::new();
     for query in queries {
@@ -396,7 +375,6 @@ fn sha256_query_array(queries: &[u32; QUERY_COUNT_V2]) -> [u8; 32] {
     }
     digest.finalize().into()
 }
-
 fn manual_fri_geometry(mut queries: [u32; QUERY_COUNT_V2]) -> (usize, usize) {
     let mut opened = 0_usize;
     let mut authentication = 0_usize;
@@ -414,19 +392,15 @@ fn manual_fri_geometry(mut queries: [u32; QUERY_COUNT_V2]) -> (usize, usize) {
     assert_eq!(length, 2);
     (opened, authentication)
 }
-
 fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
-
 fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
 }
-
 fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_be_bytes());
 }
-
 fn append_manual_section(wire: &mut Vec<u8>, queries: &[u32; QUERY_COUNT_V2], length: usize) {
     let indices = manual_indices(queries, length);
     let authentication = manual_authentication_count(indices.clone(), length);
@@ -435,7 +409,6 @@ fn append_manual_section(wire: &mut Vec<u8>, queries: &[u32; QUERY_COUNT_V2], le
     wire.resize(wire.len() + indices.len() * LEAF_BYTES_V2, 0);
     wire.resize(wire.len() + authentication * 32, 0xa5);
 }
-
 fn canonical_wire_for_queries(query_override: Option<[u32; QUERY_COUNT_V2]>) -> Vec<u8> {
     let mut wire = vec![0_u8; FIXED_BEFORE_SECTIONS_V2];
     wire[..16].copy_from_slice(b"IROHA-QPCSV2\0\0\0\0");
@@ -454,7 +427,6 @@ fn canonical_wire_for_queries(query_override: Option<[u32; QUERY_COUNT_V2]>) -> 
     wire[96..128].copy_from_slice(&SOURCE_DIGEST);
     wire[128..160].copy_from_slice(&ALGEBRA_DIGEST);
     wire[160..192].copy_from_slice(&INITIAL_ROOT);
-
     let initial_transcript = manual_initial_transcript(INITIAL_ROOT);
     let points = manual_points(initial_transcript);
     let evaluation_start = HEADER_BYTES_V2;
@@ -510,23 +482,19 @@ fn canonical_wire_for_queries(query_override: Option<[u32; QUERY_COUNT_V2]>) -> 
     assert!(wire.len() <= MAX_PROOF_BYTES_V2);
     wire
 }
-
 fn canonical_wire() -> Vec<u8> {
     canonical_wire_for_queries(None)
 }
-
 fn through_relations<'a>(wire: &'a [u8]) -> RelationsCheckedV2<'a> {
     let mut header = begin_v2(wire, context(), SourceReplaySealV2::TestOnly).unwrap();
     let mut points = header.derive_points_v2().unwrap();
     points.check_relations_v2().unwrap()
 }
-
 fn through_fri<'a>(wire: &'a [u8]) -> FriTranscriptBoundV2<'a> {
     let mut relations = through_relations(wire);
     let mut quotient = relations.bind_quotient_root_v2().unwrap();
     quotient.bind_fri_transcript_v2().unwrap()
 }
-
 #[test]
 fn independent_authentication_cap_witness_geometry_is_exact_and_correlated() {
     const AUTH_ONLY_QUERY_SHA256: [u8; 32] = [
@@ -539,7 +507,6 @@ fn independent_authentication_cap_witness_geometry_is_exact_and_correlated() {
         0xa5, 0xd3, 0xbd, 0x12, 0xcb, 0x10, 0x55, 0x78, 0xbd, 0x45, 0x2a, 0x1d, 0xeb, 0xf4, 0x7b,
         0xdf, 0x2c,
     ];
-
     let auth_only = authentication_cap_witness_queries(true);
     assert_eq!(sha256_query_array(&auth_only), AUTH_ONLY_QUERY_SHA256);
     assert_eq!(manual_fri_geometry(auth_only), (3_710, 20_030));
@@ -562,7 +529,6 @@ fn independent_authentication_cap_witness_geometry_is_exact_and_correlated() {
     assert!(auth_only_fri.parse_exact_sections_v2().is_ok());
     drop(auth_only_fri);
     drop(auth_only_wire);
-
     let combined_max = authentication_cap_witness_queries(false);
     assert_eq!(sha256_query_array(&combined_max), COMBINED_MAX_QUERY_SHA256);
     assert_eq!(manual_fri_geometry(combined_max), (4_028, 19_712));
@@ -594,7 +560,6 @@ fn independent_authentication_cap_witness_geometry_is_exact_and_correlated() {
         begin_v2(&combined_max_wire, context(), SourceReplaySealV2::TestOnly),
         Err(SoundnessErrorV2::InvalidHeader)
     ));
-
     assert!(matches!(
         checked_fri_multiproof_bytes_v2(4_028, 19_713),
         Err(SoundnessErrorV2::InvalidSectionCount)
@@ -603,7 +568,6 @@ fn independent_authentication_cap_witness_geometry_is_exact_and_correlated() {
     assert_eq!(MAX_MULTIPROOF_SECTION_BYTES_V2, 29_229_312);
     assert_eq!(GLOBAL_PROOF_CAP_BYTES_V2 - MAX_PROOF_BYTES_V2, 4_308_640);
 }
-
 #[test]
 fn independent_manual_transcript_oracle_matches_all_points() {
     let wire = canonical_wire();
@@ -628,7 +592,6 @@ fn independent_manual_transcript_oracle_matches_all_points() {
     assert_eq!(batch_count, 38 * 10 * 2);
     assert_eq!(batch_schedule, BATCH_SCHEDULE_KAT);
     assert_eq!(quotient_live.batch_schedule_digest, batch_schedule);
-
     let (fold_schedule, manual_batch_count, fold_count) = manual_fold_schedule(&wire);
     assert_eq!(manual_batch_count, 760);
     assert_eq!(fold_count, 18 * 38 * 10);
@@ -642,7 +605,6 @@ fn independent_manual_transcript_oracle_matches_all_points() {
     assert_eq!(fri.live.as_ref().unwrap().queries, queries);
     assert_eq!(manual_query_array_digest(&queries), QUERY_ARRAY_KAT);
 }
-
 #[test]
 fn prover_post_root_typestate_matches_the_independent_t0_t1_t2_oracle() {
     let wire = canonical_wire();
@@ -683,7 +645,6 @@ fn prover_post_root_typestate_matches_the_independent_t0_t1_t2_oracle() {
         BATCH_SCHEDULE_KAT
     );
 }
-
 #[test]
 fn move_only_batch_owner_reuses_the_exact_760_value_schedule_and_poison_order() {
     let wire = canonical_wire();
@@ -714,7 +675,6 @@ fn move_only_batch_owner_reuses_the_exact_760_value_schedule_and_poison_order() 
         batch.context_v2().unwrap(),
         (expected_t1, expected_t2, BATCH_SCHEDULE_KAT)
     );
-
     let mut committed = [0_u8; 16_384];
     let mut quotient = [0_u8; 16_384];
     for value in committed.chunks_exact_mut(16) {
@@ -806,7 +766,6 @@ fn move_only_batch_owner_reuses_the_exact_760_value_schedule_and_poison_order() 
         Err(SoundnessErrorV2::Poisoned)
     ));
 }
-
 #[test]
 fn layer0_root_owner_derives_exact_380_alphas_folds_and_poisons_hostile_order() {
     let wire = canonical_wire();
@@ -834,7 +793,6 @@ fn layer0_root_owner_derives_exact_380_alphas_folds_and_poisons_hostile_order() 
     assert_eq!(fold.live.as_ref().unwrap().alphas.len(), 380);
     let last_alpha = fold.live.as_ref().unwrap().alphas[379];
     assert_eq!((last_alpha.c0, last_alpha.c1), ALPHA0_LAST_KAT);
-
     let mut positive = [0_u8; 16_384];
     let mut negative = [0_u8; 16_384];
     for value in positive.chunks_exact_mut(16) {
@@ -869,7 +827,6 @@ fn layer0_root_owner_derives_exact_380_alphas_folds_and_poisons_hostile_order() 
             [0x60; 32],
         )
     );
-
     let rows = ProverBatchRowsCompleteV2 {
         transcript: PRE_FRI_TRANSCRIPT_KAT,
         batch_schedule_digest: BATCH_SCHEDULE_KAT,
@@ -883,7 +840,6 @@ fn layer0_root_owner_derives_exact_380_alphas_folds_and_poisons_hostile_order() 
         hostile.fold_next_pair_v2(0, 0, &positive, &negative, &mut output),
         Err(SoundnessErrorV2::Poisoned)
     ));
-
     positive[..8].copy_from_slice(&RELEASE_MODULI_V1[0].to_be_bytes());
     let rows = ProverBatchRowsCompleteV2 {
         transcript: PRE_FRI_TRANSCRIPT_KAT,
@@ -899,7 +855,6 @@ fn layer0_root_owner_derives_exact_380_alphas_folds_and_poisons_hostile_order() 
         Err(SoundnessErrorV2::Poisoned)
     ));
 }
-
 #[test]
 fn canonical_envelope_reaches_only_non_authorizing_structural_state() {
     let wire = canonical_wire();
@@ -924,7 +879,6 @@ fn canonical_envelope_reaches_only_non_authorizing_structural_state() {
     assert!(TEN_ROW_FRI_EQUATIONS_VERIFIED_V2);
     assert!(!RELEASE_READY_V2);
 }
-
 #[test]
 fn relation_and_encoding_fail_before_quotient_binding() {
     let wire = canonical_wire();
@@ -936,7 +890,6 @@ fn relation_and_encoding_fail_before_quotient_binding() {
         points.check_relations_v2(),
         Err(SoundnessErrorV2::RelationMismatch)
     ));
-
     let mut noncanonical = wire;
     noncanonical[HEADER_BYTES_V2..HEADER_BYTES_V2 + 8]
         .copy_from_slice(&RELEASE_MODULI_V1[0].to_be_bytes());
@@ -947,7 +900,6 @@ fn relation_and_encoding_fail_before_quotient_binding() {
         Err(SoundnessErrorV2::NonCanonicalResidue)
     ));
 }
-
 #[test]
 fn root_context_order_and_terminal_mutations_fail_closed() {
     let wire = canonical_wire();
@@ -965,7 +917,6 @@ fn root_context_order_and_terminal_mutations_fail_closed() {
         begin_v2(&wire, wrong_context, SourceReplaySealV2::TestOnly),
         Err(SoundnessErrorV2::InvalidPublicContext)
     ));
-
     let mut reordered = wire.clone();
     reordered[HEADER_BYTES_V2..HEADER_BYTES_V2 + EVALUATION_BYTES_V2 + 32].rotate_right(32);
     let mut header = begin_v2(&reordered, context(), SourceReplaySealV2::TestOnly).unwrap();
@@ -974,7 +925,6 @@ fn root_context_order_and_terminal_mutations_fail_closed() {
         points.check_relations_v2(),
         Err(SoundnessErrorV2::NonCanonicalResidue | SoundnessErrorV2::RelationMismatch)
     ));
-
     let quotient_offset = HEADER_BYTES_V2 + EVALUATION_BYTES_V2;
     let mut zero_quotient = wire.clone();
     zero_quotient[quotient_offset..quotient_offset + 32].fill(0);
@@ -983,7 +933,6 @@ fn root_context_order_and_terminal_mutations_fail_closed() {
         relations.bind_quotient_root_v2(),
         Err(SoundnessErrorV2::InvalidRoot)
     ));
-
     let terminal_offset = quotient_offset + 32 + FRI_ROOT_BYTES_V2;
     let mut terminal_mismatch = wire;
     terminal_mismatch[terminal_offset + LEAF_BYTES_V2 + 7] = 1;
@@ -994,7 +943,6 @@ fn root_context_order_and_terminal_mutations_fail_closed() {
         Err(SoundnessErrorV2::InvalidTerminal)
     ));
 }
-
 #[test]
 fn every_bound_root_controls_later_challenges() {
     let wire = canonical_wire();
@@ -1009,7 +957,6 @@ fn every_bound_root_controls_later_challenges() {
         original_points.live.as_ref().unwrap().relation_points,
         changed_points.live.as_ref().unwrap().relation_points
     );
-
     let first_fri_root = HEADER_BYTES_V2 + EVALUATION_BYTES_V2 + 32;
     let mut fri_mutation = wire.clone();
     fri_mutation[first_fri_root] ^= 1;
@@ -1024,7 +971,6 @@ fn every_bound_root_controls_later_challenges() {
         changed.live.as_ref().unwrap().queries
     );
 }
-
 #[test]
 fn section_counts_canonical_values_caps_and_trailing_bytes_are_strict() {
     let wire = canonical_wire();
@@ -1035,7 +981,6 @@ fn section_counts_canonical_values_caps_and_trailing_bytes_are_strict() {
         fri.parse_exact_sections_v2(),
         Err(SoundnessErrorV2::InvalidSectionCount)
     ));
-
     let mut bad_value = wire.clone();
     let first_value = FIXED_BEFORE_SECTIONS_V2 + SECTION_HEADER_BYTES_V2;
     bad_value[first_value..first_value + 8].copy_from_slice(&RELEASE_MODULI_V1[0].to_be_bytes());
@@ -1044,7 +989,6 @@ fn section_counts_canonical_values_caps_and_trailing_bytes_are_strict() {
         fri.parse_exact_sections_v2(),
         Err(SoundnessErrorV2::NonCanonicalResidue)
     ));
-
     let mut trailing = wire.clone();
     trailing.push(0);
     let mut fri = through_fri(&trailing);
@@ -1061,7 +1005,6 @@ fn section_counts_canonical_values_caps_and_trailing_bytes_are_strict() {
         Err(SoundnessErrorV2::ProofCapExceeded)
     ));
 }
-
 #[test]
 fn source_guards_keep_the_slice_private_bounded_and_honest() {
     let source = include_str!("phase23_rns_link_q_pcs_v2_soundness.rs");

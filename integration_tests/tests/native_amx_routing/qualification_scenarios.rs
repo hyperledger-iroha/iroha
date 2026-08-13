@@ -1,7 +1,5 @@
 //! Native AMX routing, replay, and rotating-validator qualification scenarios.
-
 use super::*;
-
 pub(super) async fn run_mixed_dataspace_native_amx_routes_and_commits_with_receipts() -> Result<()>
 {
     init_instruction_registry();
@@ -10,7 +8,6 @@ pub(super) async fn run_mixed_dataspace_native_amx_routes_and_commits_with_recei
     else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         let submit_peer = network
             .peers()
@@ -42,7 +39,6 @@ pub(super) async fn run_mixed_dataspace_native_amx_routes_and_commits_with_recei
             Metadata::default(),
         );
         let entrypoint_hash = transaction.hash_as_entrypoint();
-
         let approved_route =
             submit_and_wait_for_approval(&submitter, transaction.clone()).await?;
         if let Some((lane_id, dataspace_id)) = approved_route {
@@ -56,7 +52,6 @@ pub(super) async fn run_mixed_dataspace_native_amx_routes_and_commits_with_recei
                 dataspace_id.as_u64()
             );
         }
-
         let committed_block =
             wait_for_block_with_entrypoint(&submitter, entrypoint_hash, context).await?;
         let receipt = assert_native_amx_execution_context(&committed_block, &transaction)?;
@@ -70,7 +65,6 @@ pub(super) async fn run_mixed_dataspace_native_amx_routes_and_commits_with_recei
         .await?;
         assert_native_amx_relay_tamper_matrix(&relay, &receipt)?;
         wait_for_diagnostics_native_amx_receipt(&submitter, &receipt, context).await?;
-
         submitter.submit::<InstructionBox>(
             Log::new(
                 Level::INFO,
@@ -79,15 +73,12 @@ pub(super) async fn run_mixed_dataspace_native_amx_routes_and_commits_with_recei
             .into(),
             FeePaymentIntent::authority(Vec::new(), None),
         )?;
-
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result
 }
-
 pub(super) async fn run_native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
     init_instruction_registry();
     let context = stringify!(native_amx_queue_journal_replays_plan_after_restart);
@@ -95,7 +86,6 @@ pub(super) async fn run_native_amx_queue_journal_replays_plan_after_restart() ->
     else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         let config_layers: Vec<ConfigLayer> = network
             .config_layers()
@@ -132,20 +122,17 @@ pub(super) async fn run_native_amx_queue_journal_replays_plan_after_restart() ->
             Metadata::default(),
         );
         let entrypoint_hash = transaction.hash_as_entrypoint();
-
         let submitter_for_submit = submitter.clone();
         let transaction_for_submit = transaction.clone();
         spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction_for_submit))
             .await
             .map_err(|err| eyre!("submit task join error: {err}"))?
             .map_err(|err| eyre!("failed to submit journaled native AMX transaction: {err}"))?;
-
         admitting_peer.shutdown().await;
         admitting_peer
             .start_checked(config_layers.iter().cloned(), None)
             .await
             .wrap_err("restart admitting peer")?;
-
         let restarted_client =
             admitting_peer.client_for(&ALICE_ID, PrivateKey::clone(ALICE_KEYPAIR.private_key()));
         let block = timeout(
@@ -171,15 +158,12 @@ pub(super) async fn run_native_amx_queue_journal_replays_plan_after_restart() ->
         .await?;
         assert_native_amx_relay_tamper_matrix(&relay, &receipt)?;
         wait_for_diagnostics_native_amx_receipt(&restarted_client, &receipt, context).await?;
-
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result
 }
-
 pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps_projection_tuple_absent()
 -> Result<()> {
     init_instruction_registry();
@@ -191,7 +175,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
     else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         let config_layers: Vec<ConfigLayer> = network
             .config_layers()
@@ -207,7 +190,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             .cloned()
             .ok_or_else(|| eyre!("Musubi crash replay has no admitting peer"))?;
         let submitter = admitting_peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
-
         let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
         let domain =
             DomainId::try_new(MUSUBI_FAULT_DOMAIN, "acme").expect("Musubi fault namespace domain");
@@ -226,7 +208,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             "establish Musubi crash-replay namespace home",
         )
         .await?;
-
         let binding = musubi_fault_namespace_binding();
         let binding_transaction = submitter.build_transaction(
             [InstructionBox::from(RegisterMusubiNamespaceBindingV1::new(
@@ -244,7 +225,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         )
         .await?;
         assert_musubi_universal_home_execution_context(&binding_block, &binding_transaction)?;
-
         let commitment = musubi_fault_archive_commitment();
         let archive_id = commitment.archive_id();
         let (manifest, lock) = musubi_fault_release_manifest_and_lock();
@@ -272,7 +252,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             "register unavailable Musubi crash-replay archive",
         )
         .await?;
-
         let (snapshot, _, _) = musubi_fault_snapshot_and_time(&submitter)?;
         let publication = MusubiPublicationV1 {
             manifest: manifest.clone(),
@@ -290,7 +269,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
                 &format!("pre-crash peer {index}"),
             )?;
         }
-
         let publish_transaction = submitter.build_transaction(
             [InstructionBox::from(PublishMusubiReleaseV1::new(
                 binding.namespace,
@@ -303,7 +281,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             Metadata::default(),
         );
         let publish_entrypoint = publish_transaction.hash_as_entrypoint();
-
         // Stop every other validator before Torii acceptance so the publication cannot
         // acquire a consensus QC. The final peer durably queues the exact publication
         // transaction and then crashes; restart must replay that queue entry.
@@ -317,7 +294,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             .map_err(|error| eyre!("Musubi fault submit task join error: {error}"))?
             .wrap_err("submit journaled Musubi publication while below consensus quorum")?;
         admitting_peer.shutdown().await;
-
         // The selectable-archive three-cut matrix below covers the execution
         // phases; this unavailable-archive case remains a queue-journal replay smoke.
         for peer in &peers {
@@ -327,7 +303,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
                     format!("restart Musubi crash-replay peer {}", peer.mnemonic())
                 })?;
         }
-
         let restarted_client =
             admitting_peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
         wait_for_rejected_transaction(
@@ -337,7 +312,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             "replayed Musubi publication",
         )
         .await?;
-
         let barrier_transaction = restarted_client.build_transaction(
             [InstructionBox::from(Log::new(
                 Level::INFO,
@@ -353,7 +327,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             "Musubi crash-replay post-rejection barrier",
         )
         .await?;
-
         let mut canonical_snapshot: Option<MusubiRegistrySnapshotV1> = None;
         let mut canonical_rejection_block: Option<HashOf<Header>> = None;
         for (index, peer) in peers.iter().enumerate() {
@@ -405,7 +378,6 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
                 canonical_rejection_block = Some(rejection_block.hash());
             }
         }
-
         wait_for_rejected_transaction(
             &restarted_client,
             &publish_transaction,
@@ -416,11 +388,9 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result
 }
-
 pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs()
 -> Result<()> {
     init_instruction_registry();
@@ -435,7 +405,6 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
     else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         let config_layers: Vec<ConfigLayer> = network
             .config_layers()
@@ -465,10 +434,8 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
             "Native AMX dataspace bootstrap convergence",
         )
         .await?;
-
         let mut observed_sources = BTreeSet::new();
         let mut pruning_evidence: Option<GroupedNativeAmxEvidence> = None;
-
         for iteration in 0..iterations {
             let offline_index = iteration % PEERS;
             let submit_index = (offline_index + 1) % PEERS;
@@ -484,9 +451,7 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
             let submitter =
                 submit_peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
             let transactions = native_amx_soak_transactions(&submitter, iteration)?;
-
             offline_peer.shutdown().await;
-
             // Always restart the rotated validator, even if the three-live-peer
             // commit attempt fails. This keeps the failure diagnostic local to
             // the iteration and lets network teardown remain deterministic.
@@ -516,7 +481,6 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
                 Ok(evidence)
             }
             .await;
-
             let restart_result = offline_peer
                 .start_checked(config_layers.iter().cloned(), None)
                 .await
@@ -525,7 +489,6 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
                 });
             restart_result?;
             let evidence = outage_result?;
-
             let mut canonical_group_relay: Option<LaneRelayEnvelope> = None;
             for (member, (transaction, receipt)) in evidence
                 .transactions
@@ -570,7 +533,6 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
                         .collect::<BTreeSet<_>>(),
                 "iteration {iteration}: coordinator relay did not bind the exact grouped source membership"
             );
-
             for (peer_index, peer) in network.peers().iter().enumerate() {
                 let client = peer.client();
                 for transaction in &evidence.transactions {
@@ -605,12 +567,10 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
             }
             pruning_evidence = Some(evidence);
         }
-
         ensure!(
             observed_sources.len() == iterations.saturating_mul(NATIVE_AMX_GROUP_SIZE),
             "fault soak lost or duplicated Native AMX source identities"
         );
-
         let pruning_evidence =
             pruning_evidence.ok_or_else(|| eyre!("fault soak produced no grouped evidence"))?;
         let pruning_peer = network
@@ -686,7 +646,6 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
                 == (EVICTED_BLOCK_INDEX_START, evicted_payload_len),
             "Native AMX restart reinserted the evicted carrier body into inline Kura storage"
         );
-
         let recovered_block = wait_for_block_with_entrypoint(
             &pruning_peer.client(),
             pruning_evidence.transactions[0].hash_as_entrypoint(),
@@ -741,7 +700,6 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result?;
     eprintln!("[multilane-release-gate] completed: {context}");

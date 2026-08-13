@@ -1,10 +1,8 @@
 // Wire-schema regression tests included in the parent consensus test module.
-
 #[test]
 fn cert_phase_schema_matches_canonical_wire_discriminants() {
     use iroha_schema::{IntoSchema as _, Metadata};
     use norito::codec::{DecodeAll as _, Encode as _};
-
     let cases = [
         (CertPhase::Prepare, 1_u32),
         (CertPhase::Commit, 2),
@@ -21,7 +19,6 @@ fn cert_phase_schema_matches_canonical_wire_discriminants() {
             phase
         );
     }
-
     let schema = CertPhase::schema();
     let Metadata::Enum(metadata) = schema.get::<CertPhase>().expect("phase schema") else {
         panic!("CertPhase schema must be an enum");

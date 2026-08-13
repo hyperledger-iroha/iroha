@@ -6,9 +6,7 @@
 //! different roles.  Every probability is evaluated in Q256, every decision
 //! consumes one explicitly big-endian 256-bit draw, and every retry loop has a
 //! fixed public ceiling.
-
 use std::sync::OnceLock;
-
 use p256::elliptic_curve::bigint::{Encoding as _, Limb, NonZero, U256, U512, U1024};
 use rand_core_06::{CryptoRng, RngCore};
 use sha3::{
@@ -17,11 +15,9 @@ use sha3::{
 };
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-
 use crate::privacy_engines::prover_randomness::{
     CURVE_PROVER_RANDOMNESS_POLICY_V1, HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
 };
-
 use super::{
     params::{
         APPLICATION_RING_DEGREE_V1, GAUSSIAN_SIGMA_DENOMINATOR_V1, GAUSSIAN_SIGMA_NUMERATOR_V1,
@@ -32,7 +28,6 @@ use super::{
     },
     ring::ProofPolynomialV1,
 };
-
 const RANDOMNESS_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.prover-randomness.v1";
 const SAMPLING_PROFILE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.sampling-profile-digest.v1";
@@ -44,7 +39,6 @@ const GAUSSIAN_VARIANCE_NUMERATOR_V1: u64 =
     GAUSSIAN_SIGMA_NUMERATOR_V1 * GAUSSIAN_SIGMA_NUMERATOR_V1;
 const GAUSSIAN_HALF_VARIANCE_DENOMINATOR_V1: u64 =
     GAUSSIAN_SIGMA_DENOMINATOR_V1 * GAUSSIAN_SIGMA_DENOMINATOR_V1 / 2;
-
 // The decay kernel splits x into floor(x), twelve fractional seed bits, and a
 // residual below 2^-12.  The independently pinned Q256 seeds are within one
 // ulp.  The 96-term unit series has remainder below 2^-504, the fractional
@@ -57,7 +51,6 @@ const MAX_DECAY_INTEGER_V1: usize = 178;
 const UNIT_DECAY_SERIES_TERMS_V1: usize = 96;
 const FRACTION_STEP_SERIES_TERMS_V1: usize = 32;
 const RESIDUAL_DECAY_SERIES_TERMS_V1: usize = 16;
-
 // Q256 nearest-integer tails for the distribution on non-negative integers
 // proportional to exp(-200*m^2/961), which is the exact base width 31/20.
 // Each entry is P[M > index] * 2^256.  They were generated at 600 decimal
@@ -96,7 +89,6 @@ const CDF_155_Q256_V1: [U256; 30] = [
     U256::from_be_hex("0000000000000000000000000000000000000000000000000000000000000005"),
     U256::ZERO,
 ];
-
 /// Closed sampling roles for the first Bootle/Lantern profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BootleSamplingProfileV1 {
@@ -109,7 +101,6 @@ pub(crate) enum BootleSamplingProfileV1 {
     /// Bimodal rejection for the projected `z4` response.
     ProjectionZ4,
 }
-
 impl BootleSamplingProfileV1 {
     const ALL: [Self; 4] = [
         Self::ResponseZ1,
@@ -117,7 +108,6 @@ impl BootleSamplingProfileV1 {
         Self::ProjectionZ3,
         Self::ProjectionZ4,
     ];
-
     const fn index(self) -> usize {
         match self {
             Self::ResponseZ1 => 0,
@@ -126,7 +116,6 @@ impl BootleSamplingProfileV1 {
             Self::ProjectionZ4 => 3,
         }
     }
-
     const fn log2_sigma(self) -> u8 {
         match self {
             Self::ResponseZ1 => 23,
@@ -135,14 +124,12 @@ impl BootleSamplingProfileV1 {
             Self::ProjectionZ4 => 29,
         }
     }
-
     const fn rejection_kind(self) -> RejectionKindV1 {
         match self {
             Self::ResponseZ1 => RejectionKindV1::Standard,
             Self::ResponseZ2 | Self::ProjectionZ3 | Self::ProjectionZ4 => RejectionKindV1::Bimodal,
         }
     }
-
     pub(crate) const fn expected_polynomials(self) -> usize {
         match self {
             Self::ResponseZ1 => TBOX_M1_V1,
@@ -150,20 +137,16 @@ impl BootleSamplingProfileV1 {
             Self::ProjectionZ3 | Self::ProjectionZ4 => 256 / APPLICATION_RING_DEGREE_V1,
         }
     }
-
     const fn expected_coefficients(self) -> usize {
         self.expected_polynomials() * APPLICATION_RING_DEGREE_V1
     }
-
     const fn truncation_bound(self) -> i64 {
         GAUSSIAN_TRUNCATION_BOUNDS_V1[self.index()]
     }
-
     fn rejection_m_q256(self) -> U512 {
         let [a, b, c, d, e] = REJECTION_M_Q256_LIMBS_V1[self.index()];
         U512::from_words([a, b, c, d, e, 0, 0, 0])
     }
-
     const fn fraction_domain(self) -> &'static [u8] {
         match self {
             Self::ResponseZ1 => b"gaussian-z1-fraction-v1",
@@ -172,7 +155,6 @@ impl BootleSamplingProfileV1 {
             Self::ProjectionZ4 => b"gaussian-z4-fraction-v1",
         }
     }
-
     const fn sign_domain(self) -> &'static [u8] {
         match self {
             Self::ResponseZ1 => b"gaussian-z1-sign-v1",
@@ -181,7 +163,6 @@ impl BootleSamplingProfileV1 {
             Self::ProjectionZ4 => b"gaussian-z4-sign-v1",
         }
     }
-
     const fn cdf_domain(self) -> &'static [u8] {
         match self {
             Self::ResponseZ1 => b"gaussian-z1-cdf-v1",
@@ -190,7 +171,6 @@ impl BootleSamplingProfileV1 {
             Self::ProjectionZ4 => b"gaussian-z4-cdf-v1",
         }
     }
-
     const fn gaussian_accept_domain(self) -> &'static [u8] {
         match self {
             Self::ResponseZ1 => b"gaussian-z1-accept-v1",
@@ -199,7 +179,6 @@ impl BootleSamplingProfileV1 {
             Self::ProjectionZ4 => b"gaussian-z4-accept-v1",
         }
     }
-
     const fn rejection_domain(self) -> &'static [u8] {
         match self {
             Self::ResponseZ1 => b"response-z1-rejection-v1",
@@ -209,7 +188,6 @@ impl BootleSamplingProfileV1 {
         }
     }
 }
-
 #[derive(Clone)]
 struct BootleSamplingProfileBindingV1 {
     algorithm_descriptor: &'static [u8],
@@ -243,7 +221,6 @@ struct BootleSamplingProfileBindingV1 {
     gaussian_accept_domains: [&'static [u8]; 4],
     rejection_domains: [&'static [u8]; 4],
 }
-
 fn bootle_sampling_profile_binding_v1() -> BootleSamplingProfileBindingV1 {
     let profiles = BootleSamplingProfileV1::ALL;
     BootleSamplingProfileBindingV1 {
@@ -282,18 +259,15 @@ fn bootle_sampling_profile_binding_v1() -> BootleSamplingProfileBindingV1 {
         rejection_domains: profiles.map(BootleSamplingProfileV1::rejection_domain),
     }
 }
-
 fn absorb_sampling_profile_field_v1(state: &mut Shake256, label: &[u8], value: &[u8]) {
     absorb_frame(state, label);
     absorb_frame(state, value);
 }
-
 fn usize_to_u64_be_v1(value: usize) -> [u8; 8] {
     u64::try_from(value)
         .expect("fixed sampling-profile value fits u64")
         .to_be_bytes()
 }
-
 fn sampling_profile_digest_from_binding_v1(binding: &BootleSamplingProfileBindingV1) -> [u8; 32] {
     let mut state = Shake256::default();
     absorb_frame(&mut state, SAMPLING_PROFILE_DIGEST_DOMAIN_V1);
@@ -415,7 +389,6 @@ fn sampling_profile_digest_from_binding_v1(binding: &BootleSamplingProfileBindin
     reader.read(&mut output);
     output
 }
-
 /// Digest of every fixed sampling distribution, domain, cap, and approximation.
 #[must_use]
 pub(crate) fn bootle_sampling_profile_digest_v1() -> [u8; 32] {
@@ -424,7 +397,6 @@ pub(crate) fn bootle_sampling_profile_digest_v1() -> [u8; 32] {
         sampling_profile_digest_from_binding_v1(&bootle_sampling_profile_binding_v1())
     })
 }
-
 fn decay_tables_digest_v1() -> [u8; 32] {
     let mut state = Shake256::default();
     absorb_frame(&mut state, DECAY_TABLES_DIGEST_DOMAIN_V1);
@@ -441,26 +413,22 @@ fn decay_tables_digest_v1() -> [u8; 32] {
     reader.read(&mut output);
     output
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RejectionKindV1 {
     Standard,
     Bimodal,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BernoulliThresholdV1 {
     Never,
     Finite(U256),
     Always,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SignedQ256V1 {
     negative: bool,
     magnitude: U512,
 }
-
 impl SignedQ256V1 {
     fn new(negative: bool, magnitude: U512) -> Self {
         Self {
@@ -469,13 +437,11 @@ impl SignedQ256V1 {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SignedMagnitudeV1 {
     negative: bool,
     magnitude: U256,
 }
-
 impl SignedMagnitudeV1 {
     fn difference(lhs: U256, rhs: U256) -> Self {
         match lhs.cmp(&rhs) {
@@ -494,26 +460,22 @@ impl SignedMagnitudeV1 {
         }
     }
 }
-
 /// Domain-separated deterministic expansion of one caller-provided seed.
 pub(crate) struct ProofRandomnessV1 {
     seed: Zeroizing<[u8; 32]>,
     stream: u64,
 }
-
 impl core::fmt::Debug for ProofRandomnessV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ProofRandomnessV1(<redacted>)")
     }
 }
-
 impl Drop for ProofRandomnessV1 {
     fn drop(&mut self) {
         self.seed.zeroize();
         self.stream.zeroize();
     }
 }
-
 impl ProofRandomnessV1 {
     /// Collect a fresh seed from a fallible cryptographic RNG.
     ///
@@ -536,7 +498,6 @@ impl ProofRandomnessV1 {
         }
         Ok(Self { seed, stream: 0 })
     }
-
     /// Construct a deterministic stream for known-answer and differential
     /// tests.  This is deliberately crate-private so production callers must
     /// supply a `CryptoRng`.
@@ -550,7 +511,6 @@ impl ProofRandomnessV1 {
             stream: 0,
         })
     }
-
     /// Fill bytes from a separately framed SHAKE256 stream.
     pub(crate) fn fill_bytes(&mut self, domain: &[u8], output: &mut [u8]) {
         let mut state = Shake256::default();
@@ -565,14 +525,12 @@ impl ProofRandomnessV1 {
         let mut reader = state.finalize_xof();
         reader.read(output);
     }
-
     /// Draw one unbiased sign in `{ -1, +1 }`.
     pub(crate) fn sign(&mut self, domain: &[u8]) -> i64 {
         let mut byte = [0_u8; 1];
         self.fill_bytes(domain, &mut byte);
         if byte[0] & 1 == 0 { 1 } else { -1 }
     }
-
     /// Draw one unbiased ternary coefficient within the fixed work budget.
     ///
     /// # Errors
@@ -589,7 +547,6 @@ impl ProofRandomnessV1 {
         }
         Err(SamplingErrorV1::UniformSamplingExhausted)
     }
-
     /// Draw one uniform proof-ring polynomial.
     pub(crate) fn uniform_polynomial(
         &mut self,
@@ -601,7 +558,6 @@ impl ProofRandomnessV1 {
         }
         ProofPolynomialV1::new(coefficients).map_err(|_| SamplingErrorV1::InternalInvariant)
     }
-
     /// Draw one polynomial with independent ternary coefficients.
     pub(crate) fn ternary_polynomial(
         &mut self,
@@ -613,7 +569,6 @@ impl ProofRandomnessV1 {
         }
         Ok(ProofPolynomialV1::from_centered_coefficients(coefficients))
     }
-
     /// Draw one centered discrete-Gaussian polynomial for a closed profile.
     pub(crate) fn gaussian_polynomial(
         &mut self,
@@ -625,7 +580,6 @@ impl ProofRandomnessV1 {
         }
         Ok(ProofPolynomialV1::from_centered_coefficients(coefficients))
     }
-
     /// Apply the rejection decision fixed by `profile`.
     ///
     /// The exact sampled variance is `961 * 2^(2k) / 400`; no rounded
@@ -649,7 +603,6 @@ impl ProofRandomnessV1 {
         };
         Ok(self.bernoulli_q256(profile.rejection_domain(), threshold))
     }
-
     fn gaussian_coefficient(
         &mut self,
         profile: BootleSamplingProfileV1,
@@ -692,13 +645,11 @@ impl ProofRandomnessV1 {
         }
         Err(SamplingErrorV1::GaussianSamplingExhausted)
     }
-
     fn cdf155_sample(&mut self, domain: &[u8]) -> u32 {
         let mut bytes = [0_u8; 32];
         self.fill_bytes(domain, &mut bytes);
         cdf155_index_v1(U256::from_be_bytes(bytes))
     }
-
     fn bernoulli_q256(&mut self, domain: &[u8], threshold: BernoulliThresholdV1) -> bool {
         let mut bytes = [0_u8; 32];
         self.fill_bytes(domain, &mut bytes);
@@ -709,7 +660,6 @@ impl ProofRandomnessV1 {
             BernoulliThresholdV1::Always => true,
         }
     }
-
     fn uniform_modulus(&mut self, domain: &[u8], modulus: u64) -> Result<u64, SamplingErrorV1> {
         if modulus == 0 {
             return Err(SamplingErrorV1::InternalInvariant);
@@ -730,13 +680,11 @@ impl ProofRandomnessV1 {
         Err(SamplingErrorV1::UniformSamplingExhausted)
     }
 }
-
 fn absorb_frame(state: &mut Shake256, bytes: &[u8]) {
     let length = u32::try_from(bytes.len()).expect("fixed randomness frame fits u32");
     state.update(&length.to_be_bytes());
     state.update(bytes);
 }
-
 fn cdf155_index_v1(draw: U256) -> u32 {
     let mut sample = 0_usize;
     while sample + 1 < CDF_155_Q256_V1.len() && draw < CDF_155_Q256_V1[sample] {
@@ -744,7 +692,6 @@ fn cdf155_index_v1(draw: U256) -> u32 {
     }
     u32::try_from(sample).expect("fixed CDF index fits u32")
 }
-
 fn gaussian_correction_exponent_q256_v1(
     magnitude: u64,
     positive_branch: bool,
@@ -776,7 +723,6 @@ fn gaussian_correction_exponent_q256_v1(
     );
     rational_to_q256_round_v1(numerator, denominator)
 }
-
 fn standard_rejection_threshold_v1(
     dot: i128,
     norm: u128,
@@ -804,7 +750,6 @@ fn standard_rejection_threshold_v1(
         )
     }
 }
-
 fn bimodal_rejection_threshold_v1(
     dot: i128,
     norm: u128,
@@ -825,7 +770,6 @@ fn bimodal_rejection_threshold_v1(
     let difference_decay = decay_q256_v1(difference.magnitude);
     let twice_t_decay = decay_q256_v1(twice_t);
     let one_plus_twice_t_decay = q256_one_v1().wrapping_add(&twice_t_decay);
-
     if difference.negative {
         // d = |<z,v>|/sigma^2 - ||v||^2/(2*sigma^2) < 0:
         // p = 2 / (M * exp(d) * (1 + exp(-2|<z,v>|/sigma^2))).
@@ -841,7 +785,6 @@ fn bimodal_rejection_threshold_v1(
         ratio_threshold_q256_v1(difference_decay.shl_vartime(1), denominator)
     }
 }
-
 fn scaled_profile_exponent_q256_v1(
     value: SignedMagnitudeV1,
     factor: u64,
@@ -852,7 +795,6 @@ fn scaled_profile_exponent_q256_v1(
         unsigned_profile_exponent_q256_v1(value.magnitude, factor, profile),
     )
 }
-
 fn unsigned_profile_exponent_q256_v1(
     value: U256,
     factor: u64,
@@ -864,7 +806,6 @@ fn unsigned_profile_exponent_q256_v1(
         .shl_vartime(usize::from(profile.log2_sigma()) * 2);
     rational_to_q256_round_v1(numerator, denominator)
 }
-
 fn rational_to_q256_round_v1(numerator: U512, denominator: U512) -> U512 {
     let nonzero = Option::<NonZero<U512>>::from(NonZero::new(denominator))
         .expect("closed rational denominator is non-zero");
@@ -875,11 +816,9 @@ fn rational_to_q256_round_v1(numerator: U512, denominator: U512) -> U512 {
         quotient
     }
 }
-
 fn q256_one_v1() -> U512 {
     U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1)
 }
-
 fn q256_mul_round_v1(left: U512, right: U512) -> U512 {
     // All callers prove operands below 6 * 2^256.  The product and half-ulp
     // rounding term therefore fit U1024, and the rounded result fits U512.
@@ -891,7 +830,6 @@ fn q256_mul_round_v1(left: U512, right: U512) -> U512 {
     debug_assert_eq!(high, U512::ZERO);
     low
 }
-
 fn q256_div_small_round_v1(value: U512, divisor: u64) -> U512 {
     debug_assert!(divisor > 0);
     let divisor = u32::try_from(divisor).expect("fixed Taylor divisor fits u32");
@@ -902,7 +840,6 @@ fn q256_div_small_round_v1(value: U512, divisor: u64) -> U512 {
         .div_rem_limb(nonzero)
         .0
 }
-
 fn small_decay_q256_v1(value: U512, terms: usize) -> U512 {
     let mut sum = q256_one_v1();
     let mut term = sum;
@@ -920,7 +857,6 @@ fn small_decay_q256_v1(value: U512, terms: usize) -> U512 {
     }
     sum
 }
-
 fn integer_decay_table_q256_v1() -> &'static [U512; MAX_DECAY_INTEGER_V1 + 1] {
     static TABLE: OnceLock<Box<[U512; MAX_DECAY_INTEGER_V1 + 1]>> = OnceLock::new();
     TABLE.get_or_init(|| {
@@ -937,7 +873,6 @@ fn integer_decay_table_q256_v1() -> &'static [U512; MAX_DECAY_INTEGER_V1 + 1] {
             .unwrap_or_else(|_| unreachable!("fixed integer-decay table length"))
     })
 }
-
 fn fraction_decay_table_q256_v1() -> &'static [U512; FRACTION_TABLE_LEN_V1] {
     // Keep the 256 KiB table heap-owned. Returning a fixed array from the
     // `OnceLock` initializer makes unoptimized builds materialize several
@@ -959,7 +894,6 @@ fn fraction_decay_table_q256_v1() -> &'static [U512; FRACTION_TABLE_LEN_V1] {
             .unwrap_or_else(|_| unreachable!("fixed fractional-decay table length"))
     })
 }
-
 fn decay_q256_v1(value: U512) -> U512 {
     let bytes = value.to_be_bytes();
     if bytes[..31].iter().any(|byte| *byte != 0) {
@@ -987,7 +921,6 @@ fn decay_q256_v1(value: U512) -> U512 {
         residual_decay,
     )
 }
-
 fn decay_threshold_v1(value: U512) -> BernoulliThresholdV1 {
     let (high, low) = decay_q256_v1(value).split();
     if high != U256::ZERO {
@@ -998,7 +931,6 @@ fn decay_threshold_v1(value: U512) -> BernoulliThresholdV1 {
         BernoulliThresholdV1::Finite(low)
     }
 }
-
 fn ratio_threshold_q256_v1(numerator: U512, denominator: U512) -> BernoulliThresholdV1 {
     if numerator == U512::ZERO {
         return BernoulliThresholdV1::Never;
@@ -1021,7 +953,6 @@ fn ratio_threshold_q256_v1(numerator: U512, denominator: U512) -> BernoulliThres
         BernoulliThresholdV1::Finite(low)
     }
 }
-
 fn dot_and_norm(lhs: &[i64], rhs: &[i64]) -> Result<(i128, u128), SamplingErrorV1> {
     let mut dot = 0_i128;
     let mut norm = 0_u128;
@@ -1040,7 +971,6 @@ fn dot_and_norm(lhs: &[i64], rhs: &[i64]) -> Result<(i128, u128), SamplingErrorV
     }
     Ok((dot, norm))
 }
-
 /// Bounded sampling failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum SamplingErrorV1 {
@@ -1069,9 +999,7 @@ pub enum SamplingErrorV1 {
     #[error("Bootle/Lantern sampling internal invariant failed")]
     InternalInvariant,
 }
-
 // INTEGER_ONLY_PRODUCTION_END
-
 #[cfg(test)]
 #[path = "sampling_integer_tests.rs"]
 mod tests;

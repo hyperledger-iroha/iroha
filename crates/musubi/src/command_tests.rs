@@ -1,12 +1,10 @@
 // Test body included from command.rs to keep the production source budget bounded.
-
 use std::{
     io::{Read as _, Write as _},
     net::TcpListener,
     thread,
     time::Duration,
 };
-
 use clap::CommandFactory as _;
 use iroha::crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -24,7 +22,6 @@ use iroha_data_model::{
     nexus::DataSpaceId,
 };
 use tempfile::TempDir;
-
 #[cfg(unix)]
 use iroha_data_model::{
     musubi::{MUSUBI_REGISTRY_VERSION_V1, MusubiPublicationV1, MusubiVerificationLockV1},
@@ -32,7 +29,6 @@ use iroha_data_model::{
 };
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
 use super::*;
 #[cfg(unix)]
 use crate::package::PackageCar;
@@ -41,13 +37,11 @@ use crate::{
     output::{OUTPUT_SCHEMA, OUTPUT_VERSION},
     publish::{PublicationAmxSubmissionV1, PublicationFinalCheckpointV1},
 };
-
 fn test_network_id(byte: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         [byte; Hash::LENGTH],
     )))
 }
-
 fn authenticated_registry_config(torii_url: &str, chain_discriminant: u16) -> String {
     let signer =
         KeyPair::try_from_seed(vec![0x5B; 32], Algorithm::Ed25519).expect("registry signer");
@@ -68,13 +62,11 @@ private_key = "{}"
         ExposedPrivateKey(signer.private_key().clone()),
     )
 }
-
 #[test]
 fn resolver_search_limit_has_a_resource_corridor_diagnostic() {
     let diagnostic = graph_diagnostic(GraphErrorV1::Resolver(ResolverError::SearchLimitExceeded {
         limit: 16_384,
     }));
-
     assert_eq!(diagnostic.code(), ErrorCode::ResolutionConflict);
     assert_eq!(
         diagnostic
@@ -84,14 +76,12 @@ fn resolver_search_limit_has_a_resource_corridor_diagnostic() {
         Some("16384")
     );
 }
-
 fn command_names(command: &clap::Command) -> BTreeSet<String> {
     command
         .get_subcommands()
         .map(|command| command.get_name().to_owned())
         .collect()
 }
-
 fn command_aliases(command: &clap::Command) -> BTreeSet<String> {
     let mut aliases = command
         .get_all_aliases()
@@ -102,7 +92,6 @@ fn command_aliases(command: &clap::Command) -> BTreeSet<String> {
     }
     aliases
 }
-
 fn command_long_options(command: &clap::Command) -> BTreeSet<String> {
     let mut options = command
         .get_arguments()
@@ -113,7 +102,6 @@ fn command_long_options(command: &clap::Command) -> BTreeSet<String> {
     }
     options
 }
-
 fn create_test_package(temp: &TempDir) -> (PathBuf, PathBuf) {
     let root = temp.path().join("demo");
     let invocation = invoke([
@@ -129,20 +117,17 @@ fn create_test_package(temp: &TempDir) -> (PathBuf, PathBuf) {
     let manifest = root.join(MANIFEST_FILE_NAME);
     (root, manifest)
 }
-
 fn test_account(seed: u8) -> AccountId {
     let keypair =
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("derive test account");
     AccountId::new(keypair.public_key().clone())
 }
-
 #[cfg(unix)]
 struct RecoveryPackageFixture {
     publication: MusubiPublicationV1,
     archive_commitment: iroha_data_model::musubi::MusubiArchiveCommitmentV1,
     car: PackageCar,
 }
-
 #[cfg(unix)]
 fn recovery_snapshot() -> MusubiRegistrySnapshotV1 {
     MusubiRegistrySnapshotV1 {
@@ -151,7 +136,6 @@ fn recovery_snapshot() -> MusubiRegistrySnapshotV1 {
         index_revision: 3,
     }
 }
-
 #[cfg(unix)]
 fn fixture_release(manifest_path: &Path, home_dataspace: u64, domain: &str) -> MusubiReleaseIdV1 {
     let workspace = load_workspace(manifest_path).expect("load fixture workspace");
@@ -167,7 +151,6 @@ fn fixture_release(manifest_path: &Path, home_dataspace: u64, domain: &str) -> M
         member.package.version.clone(),
     )
 }
-
 #[cfg(unix)]
 fn fixture_verification_lock(
     release: MusubiReleaseIdV1,
@@ -185,7 +168,6 @@ fn fixture_verification_lock(
     lock.validate().expect("valid fixture verification lock");
     lock
 }
-
 #[cfg(unix)]
 fn build_recovery_package(
     manifest_path: &Path,
@@ -225,7 +207,6 @@ fn build_recovery_package(
         car,
     }
 }
-
 #[cfg(unix)]
 fn recovery_request(namespace: &str, package: &RecoveryPackageFixture) -> PublicationRequestV1 {
     let request = PublicationRequestV1 {
@@ -244,7 +225,6 @@ fn recovery_request(namespace: &str, package: &RecoveryPackageFixture) -> Public
     request.validate().expect("valid recovery request");
     request
 }
-
 #[cfg(unix)]
 fn persist_recovery_request(
     state_root: &Path,
@@ -261,7 +241,6 @@ fn persist_recovery_request(
     );
     journal.operation_id
 }
-
 #[cfg(unix)]
 fn create_private_fixture_directory(path: &Path) {
     fs::create_dir(path).expect("create private fixture directory");
@@ -269,7 +248,6 @@ fn create_private_fixture_directory(path: &Path) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
         .expect("secure private fixture directory");
 }
-
 #[cfg(unix)]
 fn recovery_publish_args(
     operation_id: PublicationOperationIdV1,
@@ -292,7 +270,6 @@ fn recovery_publish_args(
         recover: Some(operation_id),
     }
 }
-
 #[cfg(unix)]
 fn write_poisoned_recovery_config(root: &Path) -> PathBuf {
     let config = root.join("client.toml");
@@ -321,7 +298,6 @@ operator_private_key_file = "missing-provider.key"
     .expect("write poisoned recovery config");
     config
 }
-
 #[cfg(unix)]
 fn assert_archive_transport_is_poisoned(config: &Path) {
     let bytes = fs::read(config).expect("read poisoned recovery config");
@@ -332,7 +308,6 @@ fn assert_archive_transport_is_poisoned(config: &Path) {
         "the absent operator key must make runtime transport construction fail"
     );
 }
-
 #[cfg(unix)]
 fn assert_no_recovery_sidecars(
     state_root: &Path,
@@ -346,7 +321,6 @@ fn assert_no_recovery_sidecars(
         "recovery plan must remain absent"
     );
 }
-
 #[cfg(unix)]
 fn build_and_install_dependency_fixture(
     root: &Path,
@@ -402,7 +376,6 @@ fn build_and_install_dependency_fixture(
     edge.validate().expect("valid dependency fixture edge");
     (edge, node)
 }
-
 #[cfg(unix)]
 fn add_dependency_to_fixture_manifest(manifest_path: &Path) {
     let mut document = fs::read_to_string(manifest_path).expect("read fixture manifest");
@@ -411,7 +384,6 @@ fn add_dependency_to_fixture_manifest(manifest_path: &Path) {
     );
     fs::write(manifest_path, document).expect("add fixture dependency");
 }
-
 #[cfg(unix)]
 fn build_root_recovery_request(
     manifest_path: &Path,
@@ -427,7 +399,6 @@ fn build_root_recovery_request(
     );
     recovery_request("apps.sora", &package)
 }
-
 #[cfg(unix)]
 fn retarget_recovery_request(
     mut request: PublicationRequestV1,
@@ -450,7 +421,6 @@ fn retarget_recovery_request(
         .expect("retargeted recovery request remains internally valid");
     request
 }
-
 #[cfg(unix)]
 fn add_unreachable_recovery_node_unchecked(
     mut request: PublicationRequestV1,
@@ -482,7 +452,6 @@ fn add_unreachable_recovery_node_unchecked(
         request.publication.resolution.lock.digest();
     request
 }
-
 fn publication_receipt_fixture() -> (MusubiNamespaceV1, PublicationResultV1) {
     let namespace = "apps.sora".parse().expect("fixture namespace");
     let release = MusubiReleaseIdV1::new(
@@ -526,7 +495,6 @@ fn publication_receipt_fixture() -> (MusubiNamespaceV1, PublicationResultV1) {
         },
     )
 }
-
 fn serve_json_sequence(responses: Vec<Vec<u8>>) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("loopback registry listener");
     let address = listener.local_addr().expect("loopback registry address");
@@ -576,7 +544,6 @@ fn serve_json_sequence(responses: Vec<Vec<u8>>) -> (String, thread::JoinHandle<(
     });
     (format!("http://{address}/"), server)
 }
-
 fn retention_snapshot() -> MusubiRegistrySnapshotV1 {
     MusubiRegistrySnapshotV1 {
         finalized_height: 17,
@@ -584,7 +551,6 @@ fn retention_snapshot() -> MusubiRegistrySnapshotV1 {
         index_revision: 19,
     }
 }
-
 fn retention_page(
     network_byte: u8,
     archive_ids: &[iroha_data_model::musubi::ArchiveId],
@@ -629,7 +595,6 @@ fn retention_page(
         finalized_time_ms: 1_700_000_000_000,
     }
 }
-
 #[cfg(unix)]
 fn create_cache_archive_directory(
     cache: &MusubiCache,
@@ -645,7 +610,6 @@ fn create_cache_archive_directory(
         .expect("secure archive cache directory");
     path
 }
-
 #[cfg(unix)]
 #[test]
 fn cache_prune_dry_run_reports_without_mutating() {
@@ -664,7 +628,6 @@ fn cache_prune_dry_run_reports_without_mutating() {
         753,
     )
     .expect("authenticated registry client");
-
     let result = prune_cache_targets(&cache, &[archive_id], &registry, true)
         .expect("dry-run retention proof");
     assert_eq!(result.message, "would prune 1 cached archive(s)");
@@ -687,7 +650,6 @@ fn cache_prune_dry_run_reports_without_mutating() {
     );
     server.join().expect("registry server");
 }
-
 #[cfg(unix)]
 #[test]
 fn cache_prune_live_fails_closed_without_touching_any_candidate() {
@@ -715,7 +677,6 @@ fn cache_prune_live_fails_closed_without_touching_any_candidate() {
         753,
     )
     .expect("authenticated registry client");
-
     let error = match prune_cache_targets(&cache, &archive_ids, &registry, false) {
         Err(error) => error,
         Ok(_) => panic!("non-empty live prune must fail closed"),
@@ -756,7 +717,6 @@ fn cache_prune_live_fails_closed_without_touching_any_candidate() {
     );
     server.join().expect("registry server");
 }
-
 #[cfg(unix)]
 #[test]
 fn cache_prune_rejects_cross_batch_deployment_drift_before_mutation() {
@@ -789,7 +749,6 @@ fn cache_prune_rejects_cross_batch_deployment_drift_before_mutation() {
         753,
     )
     .expect("authenticated registry client");
-
     let error = match prune_cache_targets(&cache, &archive_ids, &registry, false) {
         Err(error) => error,
         Ok(_) => panic!("deployment drift must fail closed"),
@@ -801,11 +760,9 @@ fn cache_prune_rejects_cross_batch_deployment_drift_before_mutation() {
     );
     server.join().expect("registry server");
 }
-
 fn write_test_lock(root: &Path) {
     write_test_lock_graph(root, Vec::new(), Vec::new());
 }
-
 fn write_test_lock_with_registry_node(root: &Path) {
     let dependency_package = MusubiPackageIdV1::new(
         DataSpaceId::new(8),
@@ -836,7 +793,6 @@ fn write_test_lock_with_registry_node(root: &Path) {
         }],
     );
 }
-
 fn write_test_lock_graph(
     root: &Path,
     root_dependencies: Vec<MusubiExactDependencyEdgeV1>,
@@ -863,7 +819,6 @@ fn write_test_lock_graph(
     fs::write(&lock_path, &bytes).expect("write lock");
     LockfileV1::read(&lock_path).expect("written lock parses");
 }
-
 #[test]
 fn top_level_and_nested_command_inventory_is_exact() {
     let command = Cli::command();
@@ -908,7 +863,6 @@ fn top_level_and_nested_command_inventory_is_exact() {
         BTreeSet::from_iter(["prune", "repair", "verify"].map(str::to_owned))
     );
 }
-
 #[test]
 fn retired_commands_and_subcommands_are_rejected() {
     for argv in [
@@ -924,7 +878,6 @@ fn retired_commands_and_subcommands_are_rejected() {
         assert_eq!(invocation.output.exit_code(), ErrorCode::Usage.exit_code());
     }
 }
-
 #[test]
 fn argv_has_no_secret_or_arbitrary_cache_source_controls() {
     let options = command_long_options(&Cli::command());
@@ -952,7 +905,6 @@ fn argv_has_no_secret_or_arbitrary_cache_source_controls() {
         );
     }
 }
-
 #[test]
 fn frozen_combines_locked_and_offline_at_typed_boundary() {
     let cli = Cli::try_parse_from(["musubi", "fetch", "--frozen"]).expect("parse frozen fetch");
@@ -962,7 +914,6 @@ fn frozen_combines_locked_and_offline_at_typed_boundary() {
     assert!(args.mode.effective_locked());
     assert!(args.mode.effective_offline());
 }
-
 #[test]
 fn graph_commands_accept_an_explicit_authenticated_registry_config() {
     let cli = Cli::try_parse_from(["musubi", "build", "--config", "/platform/client.toml"])
@@ -975,7 +926,6 @@ fn graph_commands_accept_an_explicit_authenticated_registry_config() {
         Some(Path::new("/platform/client.toml"))
     );
 }
-
 #[test]
 fn search_uses_the_authenticated_finalized_projection_route() {
     let selector: MusubiPackageSelectorV1 = "apps.sora/proofs".parse().expect("selector");
@@ -1017,7 +967,6 @@ fn search_uses_the_authenticated_finalized_projection_route() {
     let config = temporary.path().join("client.toml");
     fs::write(&config, authenticated_registry_config(&torii_url, 753))
         .expect("write authenticated config");
-
     let invocation = invoke([
         OsString::from("musubi"),
         OsString::from("--format"),
@@ -1045,7 +994,6 @@ fn search_uses_the_authenticated_finalized_projection_route() {
     );
     server.join().expect("registry server");
 }
-
 #[test]
 fn owner_roles_require_explicit_nonempty_maintainer_permissions() {
     assert_eq!(
@@ -1084,7 +1032,6 @@ fn owner_roles_require_explicit_nonempty_maintainer_permissions() {
         })
     );
 }
-
 #[test]
 fn workspace_test_failures_keep_their_stable_boundary_codes() {
     assert_eq!(
@@ -1116,7 +1063,6 @@ fn workspace_test_failures_keep_their_stable_boundary_codes() {
         ErrorCode::Io
     );
 }
-
 #[test]
 fn invitation_ids_and_compare_and_set_revisions_are_canonical() {
     let invitation = format!("{}1", "0".repeat(63));
@@ -1139,7 +1085,6 @@ fn invitation_ids_and_compare_and_set_revisions_are_canonical() {
     require_nonzero_revision(1, "revision").expect("non-zero revision");
     assert!(require_nonzero_revision(0, "revision").is_err());
 }
-
 #[test]
 fn owner_invite_parser_requires_explicit_identity_expiry_and_permissions() {
     let invitation = format!("{}1", "0".repeat(63));
@@ -1175,7 +1120,6 @@ fn owner_invite_parser_requires_explicit_identity_expiry_and_permissions() {
     assert_eq!(expires_at_height, 42);
     assert_eq!(expected_revision, 7);
     assert!(permissions.publish);
-
     assert!(
         Cli::try_parse_from([
             "musubi",
@@ -1195,7 +1139,6 @@ fn owner_invite_parser_requires_explicit_identity_expiry_and_permissions() {
         "invitation ids must never be synthesized by the CLI"
     );
 }
-
 #[test]
 fn owner_remove_selects_exactly_one_member_or_pending_invitation() {
     let invitation = format!("{}1", "0".repeat(63));
@@ -1222,7 +1165,6 @@ fn owner_remove_selects_exactly_one_member_or_pending_invitation() {
     };
     assert_eq!(account.as_deref(), Some("ed0120deadbeef"));
     assert!(pending.is_none());
-
     let pending = Cli::try_parse_from([
         "musubi",
         "owner",
@@ -1247,7 +1189,6 @@ fn owner_remove_selects_exactly_one_member_or_pending_invitation() {
     };
     assert!(account.is_none());
     assert_eq!(pending.as_deref(), Some(invitation.as_str()));
-
     assert!(
         Cli::try_parse_from([
             "musubi",
@@ -1276,7 +1217,6 @@ fn owner_remove_selects_exactly_one_member_or_pending_invitation() {
         "accepted and pending targets are mutually exclusive"
     );
 }
-
 #[test]
 #[allow(
     clippy::too_many_lines,
@@ -1371,7 +1311,6 @@ fn owner_list_is_authenticated_and_includes_pending_invitations() {
     let config = temporary.path().join("client.toml");
     fs::write(&config, authenticated_registry_config(&torii_url, 753))
         .expect("write authenticated config");
-
     let invocation = invoke([
         OsString::from("musubi"),
         OsString::from("--format"),
@@ -1406,7 +1345,6 @@ fn owner_list_is_authenticated_and_includes_pending_invitations() {
     );
     server.join().expect("registry server");
 }
-
 #[test]
 fn targeted_update_parser_requires_structural_package_and_exact_version() {
     let target = "std/math@1.2.3"
@@ -1420,7 +1358,6 @@ fn targeted_update_parser_requires_structural_package_and_exact_version() {
     assert!("math@1.2.3".parse::<UpdateTarget>().is_err());
     assert!("std/math@1.2.3+local".parse::<UpdateTarget>().is_err());
 }
-
 #[test]
 fn json_parse_failure_is_one_stdout_document() {
     let invocation = invoke(["musubi", "--format", "json", "install"]);
@@ -1434,14 +1371,12 @@ fn json_parse_failure_is_one_stdout_document() {
     let value: Value = norito::json::from_str(rendered.stdout()).expect("JSON document");
     assert_eq!(value.get("ok").and_then(Value::as_bool), Some(false));
 }
-
 #[test]
 fn local_new_add_metadata_tree_remove_roundtrip() {
     let temp = TempDir::new().expect("temporary directory");
     let (_root, manifest_path) = create_test_package(&temp);
     let manifest = fs::read_to_string(&manifest_path).expect("new manifest");
     parse_manifest(&manifest).expect("strict generated manifest");
-
     let add = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1454,7 +1389,6 @@ fn local_new_add_metadata_tree_remove_roundtrip() {
         OsString::from("math"),
     ]);
     assert_eq!(add.output.exit_code(), 0);
-
     let add_local_dev = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1466,7 +1400,6 @@ fn local_new_add_metadata_tree_remove_roundtrip() {
         OsString::from("--dev"),
     ]);
     assert_eq!(add_local_dev.output.exit_code(), 0);
-
     let metadata = invoke([
         OsString::from("musubi"),
         OsString::from("--format"),
@@ -1496,7 +1429,6 @@ fn local_new_add_metadata_tree_remove_roundtrip() {
             .and_then(Value::as_str),
         Some("apps.sora/demo")
     );
-
     let tree = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1507,7 +1439,6 @@ fn local_new_add_metadata_tree_remove_roundtrip() {
     let tree = tree.output.render(tree.format).expect("tree output");
     assert!(tree.stdout().contains("math -> std/math ^1.0.0"));
     assert!(tree.stdout().contains("[dev] local-test-support ->"));
-
     let remove = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1524,7 +1455,6 @@ fn local_new_add_metadata_tree_remove_roundtrip() {
             .contains_key("math")
     );
 }
-
 #[test]
 fn add_rejects_a_hardlinked_manifest_without_mutation() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1532,7 +1462,6 @@ fn add_rejects_a_hardlinked_manifest_without_mutation() {
     let alias = root.join("Musubi.manifest-alias.toml");
     let before = fs::read(&manifest_path).expect("read original manifest");
     fs::hard_link(&manifest_path, &alias).expect("create manifest hard link");
-
     let add = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1542,20 +1471,17 @@ fn add_rejects_a_hardlinked_manifest_without_mutation() {
         OsString::from("--version"),
         OsString::from("^1.0.0"),
     ]);
-
     assert_ne!(add.output.exit_code(), 0);
     assert_eq!(
         fs::read(&manifest_path).expect("reread rejected manifest"),
         before
     );
 }
-
 #[test]
 fn metadata_and_tree_include_only_the_validated_exact_lock_graph() {
     let temp = TempDir::new().expect("temporary directory");
     let (root, manifest_path) = create_test_package(&temp);
     write_test_lock(&root);
-
     let metadata = invoke([
         OsString::from("musubi"),
         OsString::from("--format"),
@@ -1585,7 +1511,6 @@ fn metadata_and_tree_include_only_the_validated_exact_lock_graph() {
     for forbidden in ["cache_path", "provider_url", "credential", "bearer"] {
         assert!(!rendered.stdout().contains(forbidden));
     }
-
     let tree = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1600,7 +1525,6 @@ fn metadata_and_tree_include_only_the_validated_exact_lock_graph() {
             .contains("apps.sora/demo exact lock graph")
     );
 }
-
 #[test]
 fn locked_fetch_rejects_legacy_lock_without_rewriting_it() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1608,7 +1532,6 @@ fn locked_fetch_rejects_legacy_lock_without_rewriting_it() {
     let lock_path = root.join(LOCK_FILE_NAME);
     let legacy = b"schema = \"musubi-lock\"\nversion = 2\n";
     fs::write(&lock_path, legacy).expect("write legacy lock");
-
     let fetch = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1632,13 +1555,11 @@ fn locked_fetch_rejects_legacy_lock_without_rewriting_it() {
     );
     assert!(rendered.stderr().contains("never rewrites retired formats"));
 }
-
 #[test]
 fn consumer_lock_is_not_used_as_package_or_cache_authentication() {
     let temp = TempDir::new().expect("temporary directory");
     let (root, manifest_path) = create_test_package(&temp);
     write_test_lock_with_registry_node(&root);
-
     let package = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1657,7 +1578,6 @@ fn consumer_lock_is_not_used_as_package_or_cache_authentication() {
         .expect("package diagnostic");
     assert!(rendered.stderr().contains("cached Musubi resolver index"));
     assert!(rendered.stderr().contains("resolver cache"));
-
     let verify = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1679,19 +1599,16 @@ fn consumer_lock_is_not_used_as_package_or_cache_authentication() {
     );
     assert!(!rendered.stderr().contains("healthy"));
 }
-
 #[cfg(unix)]
 #[test]
 fn empty_cache_maintenance_is_signer_and_network_free() {
     let temp = TempDir::new().expect("temporary directory");
     let cache = MusubiCache::open(temp.path().join("cache")).expect("private cache");
     let targets = BTreeSet::new();
-
     let verified = verify_cache_targets(&cache, &targets, None).expect("empty verification");
     assert_eq!(verified.message, "verified 0 cached archive(s)");
     let repaired = repair_cache_targets(&cache, &targets, None, true).expect("empty repair");
     assert_eq!(repaired.message, "repaired 0 cached archive(s)");
-
     let graph = ResolvedWorkspaceGraphV1 {
         lock: LockfileV1::new(
             test_network_id(1),
@@ -1719,7 +1636,6 @@ fn empty_cache_maintenance_is_signer_and_network_free() {
             .is_empty()
     );
 }
-
 #[test]
 fn package_output_writer_creates_confined_target_directory() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1734,13 +1650,11 @@ fn package_output_writer_creates_confined_target_directory() {
         b"canonical-car"
     );
 }
-
 #[test]
 fn offline_fetch_with_a_valid_lock_requires_authenticated_cache_inputs() {
     let temp = TempDir::new().expect("temporary directory");
     let (root, manifest_path) = create_test_package(&temp);
     write_test_lock(&root);
-
     let fetch = invoke([
         OsString::from("musubi"),
         OsString::from("--manifest-path"),
@@ -1756,7 +1670,6 @@ fn offline_fetch_with_a_valid_lock_requires_authenticated_cache_inputs() {
     assert!(rendered.stderr().contains("cached Musubi resolver index"));
     assert!(rendered.stderr().contains("resolver cache"));
 }
-
 #[test]
 fn compiler_command_requires_an_authenticated_v1_graph_offline() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1780,7 +1693,6 @@ fn compiler_command_requires_an_authenticated_v1_graph_offline() {
     assert!(rendered.stderr().contains("resolver cache"));
     assert!(!rendered.stderr().contains("install"));
 }
-
 #[test]
 fn publish_resume_and_recover_accept_only_canonical_detached_operations() {
     let operation = "0101010101010101010101010101010101010101010101010101010101010101";
@@ -1792,7 +1704,6 @@ fn publish_resume_and_recover_accept_only_canonical_detached_operations() {
     assert_eq!(arguments.resume.expect("operation").to_string(), operation);
     assert!(!arguments.detach);
     assert!(arguments.recover.is_none());
-
     let parsed = Cli::try_parse_from(["musubi", "publish", "--recover", operation])
         .expect("canonical recovery command");
     let Command::Publish(arguments) = parsed.command else {
@@ -1801,7 +1712,6 @@ fn publish_resume_and_recover_accept_only_canonical_detached_operations() {
     assert_eq!(arguments.recover.expect("operation").to_string(), operation);
     assert!(!arguments.detach);
     assert!(arguments.resume.is_none());
-
     assert!(
         Cli::try_parse_from(["musubi", "publish", "--resume", operation, "--detach"]).is_err(),
         "detach and resume are mutually exclusive"
@@ -1833,7 +1743,6 @@ fn publish_resume_and_recover_accept_only_canonical_detached_operations() {
         "operation id uses canonical lowercase hex"
     );
 }
-
 #[test]
 fn publish_recovery_rejects_explicit_workspace_selection() {
     let operation = "0101010101010101010101010101010101010101010101010101010101010101";
@@ -1856,7 +1765,6 @@ fn publish_recovery_rejects_explicit_workspace_selection() {
             .contains("derives its exact package selection")
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn publish_recovery_is_signer_free_and_ignores_the_locked_consumer_graph() {
@@ -1875,7 +1783,6 @@ fn publish_recovery_is_signer_free_and_ignores_the_locked_consumer_graph() {
         "MUSUBI_REGISTRY_SIGNING_CONFIG_INVALID"
     );
     assert_archive_transport_is_poisoned(&config);
-
     let lock_path = root.join(LOCK_FILE_NAME);
     let lock_bytes = b"retired lock bytes that recovery must never parse or replace\n";
     fs::write(&lock_path, lock_bytes).expect("write deliberately invalid consumer lock");
@@ -1894,7 +1801,6 @@ fn publish_recovery_is_signer_free_and_ignores_the_locked_consumer_graph() {
         before.mtime(),
         before.mtime_nsec(),
     );
-
     let args = recovery_publish_args(operation_id, &config, true, true);
     let success = recover_publication_sidecars_at(
         Some(&manifest_path),
@@ -1908,7 +1814,6 @@ fn publish_recovery_is_signer_free_and_ignores_the_locked_consumer_graph() {
         success.message,
         format!("recovered publication sidecars {operation_id}")
     );
-
     let source = PublicationStagedCarSourceV1::new(
         &state_root,
         operation_id,
@@ -1926,7 +1831,6 @@ fn publish_recovery_is_signer_free_and_ignores_the_locked_consumer_graph() {
         journal.phase,
         crate::publish::PublicationPhaseV1::Validation
     );
-
     let after = fs::metadata(&lock_path).expect("consumer lock metadata after recovery");
     assert_eq!(
         fs::read(&lock_path).expect("consumer lock bytes"),
@@ -1953,7 +1857,6 @@ fn publish_recovery_is_signer_free_and_ignores_the_locked_consumer_graph() {
         before_identity
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn offline_publish_recovery_uses_cached_nodes_without_transport() {
@@ -1968,7 +1871,6 @@ fn offline_publish_recovery_uses_cached_nodes_without_transport() {
     let operation_id = persist_recovery_request(&state_root, &request);
     let config = write_poisoned_recovery_config(temp.path());
     assert_archive_transport_is_poisoned(&config);
-
     let args = recovery_publish_args(operation_id, &config, false, true);
     recover_publication_sidecars_at(
         Some(&manifest_path),
@@ -1978,7 +1880,6 @@ fn offline_publish_recovery_uses_cached_nodes_without_transport() {
         Some(&cache),
     )
     .expect("offline recovery must accept an authenticated cache hit");
-
     let source = PublicationStagedCarSourceV1::new(
         &state_root,
         operation_id,
@@ -1993,7 +1894,6 @@ fn offline_publish_recovery_uses_cached_nodes_without_transport() {
     assert_eq!(journal.request, request);
     assert_eq!(journal.revision, 1);
 }
-
 #[cfg(unix)]
 #[test]
 fn offline_publish_recovery_reports_cache_miss_before_transport() {
@@ -2014,7 +1914,6 @@ fn offline_publish_recovery_reports_cache_miss_before_transport() {
     let journal_before = store.load(operation_id).expect("pristine recovery journal");
     let config = write_poisoned_recovery_config(temp.path());
     assert_archive_transport_is_poisoned(&config);
-
     let args = recovery_publish_args(operation_id, &config, false, true);
     let error = match recover_publication_sidecars_at(
         Some(&manifest_path),
@@ -2039,7 +1938,6 @@ fn offline_publish_recovery_reports_cache_miss_before_transport() {
         request.archive_commitment.car_size,
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn publish_recovery_rejects_identity_mismatches_before_sidecars() {
@@ -2062,7 +1960,6 @@ fn publish_recovery_rejects_identity_mismatches_before_sidecars() {
             "version differs from the immutable recovery journal",
         ),
     ];
-
     for (request, expected_code, expected_message) in cases {
         let operation_id = persist_recovery_request(&state_root, &request);
         let store = PublicationJournalStore::open(&state_root).expect("reopen journal store");
@@ -2104,7 +2001,6 @@ fn publish_recovery_rejects_identity_mismatches_before_sidecars() {
         "early mismatch checks must not create or require platform config"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn publish_rejects_unreachable_verification_nodes_before_journal_or_sidecars() {
@@ -2127,7 +2023,6 @@ fn publish_rejects_unreachable_verification_nodes_before_journal_or_sidecars() {
             .to_string()
             .contains("unreachable exact nodes")
     );
-
     let state_root = temp.path().join("state");
     create_private_fixture_directory(&state_root);
     let store = PublicationJournalStore::open(&state_root).expect("open recovery journal store");
@@ -2141,7 +2036,6 @@ fn publish_rejects_unreachable_verification_nodes_before_journal_or_sidecars() {
     ));
     assert_no_recovery_sidecars(&state_root, operation_id, expected_size);
 }
-
 #[test]
 fn recovered_publication_json_is_one_secret_free_resume_instruction() {
     let (namespace, result) = publication_receipt_fixture();
@@ -2185,7 +2079,6 @@ fn recovered_publication_json_is_one_secret_free_resume_instruction() {
         Some(expected_next.as_str())
     );
 }
-
 #[test]
 fn fresh_publish_selects_one_explicit_workspace_package() {
     let parsed = Cli::try_parse_from([
@@ -2217,7 +2110,6 @@ fn fresh_publish_selects_one_explicit_workspace_package() {
     assert!(arguments.resume.is_none());
     assert!(arguments.recover.is_none());
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn completed_publication_json_is_one_origin_independent_exact_receipt() {
@@ -2237,7 +2129,6 @@ fn completed_publication_json_is_one_origin_independent_exact_receipt() {
     let second = CommandOutput::success("publish", resumed_success.message, resumed_success.data)
         .render(OutputFormat::Json)
         .expect("second publication JSON");
-
     assert_eq!(first, second);
     assert_eq!(first.exit_code(), 0);
     assert!(first.stderr().is_empty());
@@ -2266,7 +2157,6 @@ fn completed_publication_json_is_one_origin_independent_exact_receipt() {
         Some("publish")
     );
     assert_eq!(document.get("ok").and_then(Value::as_bool), Some(true));
-
     let data = document
         .get("data")
         .and_then(Value::as_object)
@@ -2325,7 +2215,6 @@ fn completed_publication_json_is_one_origin_independent_exact_receipt() {
         data.get("checkpoint_digest").and_then(Value::as_str),
         Some(hex::encode([0x17; 32]).as_str())
     );
-
     let snapshot = data
         .get("snapshot")
         .and_then(Value::as_object)
@@ -2346,7 +2235,6 @@ fn completed_publication_json_is_one_origin_independent_exact_receipt() {
         snapshot.get("finalized_block_hash").and_then(Value::as_str),
         Some(hex::encode([0x12; 32]).as_str())
     );
-
     let submission = data
         .get("amx_submission")
         .and_then(Value::as_object)
@@ -2371,7 +2259,6 @@ fn completed_publication_json_is_one_origin_independent_exact_receipt() {
         Some(hex::encode([0x19; 32]).as_str())
     );
 }
-
 #[test]
 fn detached_publication_json_is_namespaced_and_discriminated() {
     let (namespace, result) = publication_receipt_fixture();
@@ -2385,7 +2272,6 @@ fn detached_publication_json_is_namespaced_and_discriminated() {
         .get("data")
         .and_then(Value::as_object)
         .expect("detached receipt data");
-
     assert_eq!(
         data.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         BTreeSet::from([
@@ -2410,7 +2296,6 @@ fn detached_publication_json_is_namespaced_and_discriminated() {
         Some(release.to_string().as_str())
     );
 }
-
 #[test]
 fn publication_release_labels_stay_namespaced_for_both_structural_scopes() {
     let (namespace, result) = publication_receipt_fixture();
@@ -2420,7 +2305,6 @@ fn publication_release_labels_stay_namespaced_for_both_structural_scopes() {
         "apps.sora/demo@1.2.3"
     );
     assert_ne!(domain_release.to_string(), "apps.sora/demo@1.2.3");
-
     let root_namespace = "sora".parse().expect("fixture root namespace");
     let mut root_release = domain_release;
     root_release.package.scope = MusubiPackageScopeV1::DataspaceRoot;
@@ -2430,7 +2314,6 @@ fn publication_release_labels_stay_namespaced_for_both_structural_scopes() {
     );
     assert_ne!(root_release.to_string(), "sora/demo@1.2.3");
 }
-
 #[test]
 fn publication_receipts_and_diagnostics_do_not_expose_secret_controls() {
     let (namespace, result) = publication_receipt_fixture();
@@ -2457,7 +2340,6 @@ fn publication_receipts_and_diagnostics_do_not_expose_secret_controls() {
             "publication receipt exposed {forbidden}"
         );
     }
-
     for (error, secret, expected_code) in [
         (
             PublicationError::CarSource(io::Error::new(
@@ -2499,7 +2381,6 @@ fn publication_receipts_and_diagnostics_do_not_expose_secret_controls() {
             Some("publication operation failed")
         );
     }
-
     #[cfg(unix)]
     {
         let temporary = TempDir::new().expect("temporary publication state");
@@ -2526,7 +2407,6 @@ fn publication_receipts_and_diagnostics_do_not_expose_secret_controls() {
         );
     }
 }
-
 #[test]
 fn prepared_car_validation_stream_is_bounded_and_exact() {
     let bytes = b"canonical-publication-car";
@@ -2534,7 +2414,6 @@ fn prepared_car_validation_stream_is_bounded_and_exact() {
     let digest = MusubiContentDigestV1::new(*blake3::hash(bytes).as_bytes());
     validate_prepared_car_stream(&mut bytes.as_slice(), size, digest)
         .expect("exact stream validates");
-
     let length_error = validate_prepared_car_stream(
         &mut bytes.as_slice(),
         size.checked_sub(1).expect("non-empty fixture"),
@@ -2542,7 +2421,6 @@ fn prepared_car_validation_stream_is_bounded_and_exact() {
     )
     .expect_err("oversized stream must fail before accepting trailing bytes");
     assert_eq!(length_error.code(), "PACKAGE_VALIDATION_LENGTH_INVALID");
-
     let digest_error = validate_prepared_car_stream(
         &mut bytes.as_slice(),
         size,
@@ -2551,7 +2429,6 @@ fn prepared_car_validation_stream_is_bounded_and_exact() {
     .expect_err("substituted digest must fail");
     assert_eq!(digest_error.code(), "PACKAGE_VALIDATION_CAR_MISMATCH");
 }
-
 #[test]
 fn publication_compiler_evidence_and_nonce_are_domain_bound() {
     let interface = MusubiContentDigestV1::new([1; 32]);
@@ -2563,7 +2440,6 @@ fn publication_compiler_evidence_and_nonce_are_domain_bound() {
         digest,
         publication_compiler_output_digest(MusubiContentDigestV1::new([4; 32]), release, lock,)
     );
-
     let first = unpredictable_publication_nonce();
     let second = unpredictable_publication_nonce();
     assert!(first.iter().any(|byte| *byte != 0));

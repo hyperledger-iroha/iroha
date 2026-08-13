@@ -5,9 +5,7 @@
 //! time; overriding them requires rebuilding Norito with a different profile.
 //! Decisions depend only on payload size and hardware capabilities and never
 //! affect on-wire layout semantics.
-
 use super::{Compression, hw};
-
 /// Adaptive compression plan produced by the selector.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompressionPlan {
@@ -15,7 +13,6 @@ pub enum CompressionPlan {
     CpuZstd { level: i32 },
     GpuZstd { level: i32 },
 }
-
 /// Tunable thresholds and levels used by the selector.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Heuristics {
@@ -31,7 +28,6 @@ pub struct Heuristics {
     pub zstd_level_gpu: i32,
     /// Size threshold distinguishing small vs large for CPU zstd level.
     pub large_threshold: usize,
-
     /// Small-N threshold for AoS vs NCB adaptive selection in `columnar` helpers.
     ///
     /// For row counts `<= aos_ncb_small_n`, adaptive encoders will do a two-pass
@@ -39,7 +35,6 @@ pub struct Heuristics {
     /// `> aos_ncb_small_n`, encoders will choose NCB directly (subject to minor
     /// content heuristics for deltas/dictionaries inside NCB). Defaults to 64.
     pub aos_ncb_small_n: usize,
-
     /// Columnar 4-column combos (u64, &str/bytes, u32, bool):
     /// If the number of rows is less than or equal to this threshold and there exists
     /// an empty string/byte element in the column, delta encoding for the corresponding
@@ -47,44 +42,35 @@ pub struct Heuristics {
     ///
     /// Default: 2 (only disable deltas for 1–2 rows with an empty element present).
     pub combo_no_delta_small_n_if_empty: usize,
-
     /// Minimum rows to consider ID delta encoding for 4-column combos.
     /// Default: 2
     pub combo_id_delta_min_rows: usize,
-
     /// Minimum rows to consider u32 delta encoding for 4-column combos.
     /// Default: 2
     pub combo_u32_delta_min_rows: usize,
-
     /// Enable/disable ID delta encoding in 4-column combos.
     /// Default: true
     pub combo_enable_id_delta: bool,
-
     /// Enable/disable u32 delta encoding in (u64, &str, u32, bool) combos.
     /// Default: true
     pub combo_enable_u32_delta_names: bool,
     /// Enable/disable u32 delta encoding in (u64, &[u8], u32, bool) combos.
     /// Default: true
     pub combo_enable_u32_delta_bytes: bool,
-
     /// Enable/disable name dictionary in (u64, &str, u32, bool) combos.
     /// Default: true
     pub combo_enable_name_dict: bool,
-
     /// Maximum distinct/name-count ratio to allow building a dictionary.
     /// Default: 0.40
     pub combo_dict_ratio_max: f64,
-
     /// Minimum average string length to use the dictionary.
     /// Default: 8.0
     pub combo_dict_avg_len_min: f64,
-
     /// Maximum number of distinct strings to include in a combo dictionary.
     /// A value of `0` disables the cap (allow unbounded dictionary growth).
     /// Defaults to 1024 to cap memory growth while preserving compression wins.
     pub combo_dict_max_entries: usize,
 }
-
 impl Heuristics {
     /// Canonical heuristics baked into this Norito release.
     pub const fn canonical() -> Self {
@@ -122,22 +108,18 @@ impl Heuristics {
         }
     }
 }
-
 impl Default for Heuristics {
     fn default() -> Self {
         Self::canonical()
     }
 }
-
 /// Canonical heuristics baked into this build of Norito.
 const CANONICAL_HEURISTICS: Heuristics = Heuristics::canonical();
-
 /// Get the global heuristics (initialize with defaults on first use).
 #[inline]
 pub fn get() -> Heuristics {
     CANONICAL_HEURISTICS
 }
-
 /// Select a compression plan for a given payload length.
 #[inline]
 pub fn select_compression_for_len(len: usize) -> CompressionPlan {
@@ -157,7 +139,6 @@ pub fn select_compression_for_len(len: usize) -> CompressionPlan {
     };
     CompressionPlan::CpuZstd { level }
 }
-
 /// Compress payload according to heuristics and return the Norito compression tag
 /// and compressed bytes (or the original payload for `None`).
 pub fn compress_auto(payload: Vec<u8>) -> std::io::Result<(Compression, Vec<u8>)> {
@@ -203,7 +184,6 @@ pub fn compress_auto(payload: Vec<u8>) -> std::io::Result<(Compression, Vec<u8>)
         }
     }
 }
-
 /// Compute layout flags for a payload size estimate.
 ///
 /// Norito v1 uses a fixed layout; size-based toggles are not applied.
@@ -211,20 +191,16 @@ pub fn select_layout_flags_for_size(len_estimate: usize) -> u8 {
     let h = get();
     select_layout_flags_for_size_with(&h, len_estimate)
 }
-
 /// Compute adaptive layout flag bits for a given payload size using the provided
 /// heuristics, without mutating global overrides.
 pub fn select_layout_flags_for_size_with(h: &Heuristics, len_estimate: usize) -> u8 {
     let _ = (h, len_estimate);
     super::default_encode_flags()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     struct GpuPolicyGuard(bool);
-
     impl GpuPolicyGuard {
         fn set(allowed: bool) -> Self {
             let previous = hw::gpu_policy_allowed();
@@ -232,13 +208,11 @@ mod tests {
             Self(previous)
         }
     }
-
     impl Drop for GpuPolicyGuard {
         fn drop(&mut self) {
             hw::set_gpu_compression_allowed(self.0);
         }
     }
-
     #[test]
     fn canonical_gpu_cutoff_stays_above_measured_cuda_window() {
         let h = get();
@@ -248,12 +222,10 @@ mod tests {
             "automatic CUDA zstd offload should stay above the measured slow range"
         );
     }
-
     #[test]
     fn compression_selector_uses_cpu_thresholds_when_gpu_policy_is_disabled() {
         let _guard = GpuPolicyGuard::set(false);
         let h = get();
-
         assert_eq!(
             select_compression_for_len(h.min_compress_bytes_cpu.saturating_sub(1)),
             CompressionPlan::None
@@ -278,13 +250,11 @@ mod tests {
             "GPU policy disable should force CPU selection even at the GPU cutoff"
         );
     }
-
     #[test]
     fn compression_selector_keeps_below_gpu_cutoff_on_cpu() {
         let _guard = GpuPolicyGuard::set(true);
         let h = get();
         let below_gpu_cutoff = h.min_compress_bytes_gpu.saturating_sub(1);
-
         assert_eq!(
             select_compression_for_len(below_gpu_cutoff),
             CompressionPlan::CpuZstd {

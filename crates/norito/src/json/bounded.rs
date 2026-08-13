@@ -1,13 +1,10 @@
 //! Count-first, allocation-bounded JSON serialization.
-
 use std::{
     alloc::{Layout, alloc},
     collections::{BTreeMap, BTreeSet},
     mem::MaybeUninit,
 };
-
 use super::{JsonSerialize, MAX_JSON_VALUE_NESTING_DEPTH, Value, native};
-
 /// Fixed, data-independent failures from bounded JSON serialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BoundedJsonError {
@@ -24,7 +21,6 @@ pub enum BoundedJsonError {
     #[error("bounded JSON serializer length changed between passes")]
     LengthMismatch,
 }
-
 /// A JSON output sink which checks every append before accepting it.
 ///
 /// Implementations used by [`to_json_bounded`] never expose their destination
@@ -33,10 +29,8 @@ pub enum BoundedJsonError {
 pub trait JsonWriteSink {
     /// Append one Unicode scalar value.
     fn push(&mut self, value: char) -> Result<(), BoundedJsonError>;
-
     /// Append one UTF-8 string slice.
     fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError>;
-
     /// Reserve capacity for an ordinary unbounded sink.
     ///
     /// Counted and exact sinks ignore this hint because their capacity is
@@ -44,7 +38,6 @@ pub trait JsonWriteSink {
     fn reserve(&mut self, _additional: usize) -> Result<(), BoundedJsonError> {
         Ok(())
     }
-
     /// Enter a JSON array or object.
     ///
     /// Checked built-in sinks reserve one structural level for the terminal
@@ -52,54 +45,44 @@ pub trait JsonWriteSink {
     fn begin_container(&mut self) -> Result<(), BoundedJsonError> {
         Ok(())
     }
-
     /// Leave a JSON array or object after a successful write.
     fn end_container(&mut self) {}
-
     /// Return the legacy output only for an ordinary unbounded write.
     #[doc(hidden)]
     fn unbounded_output(&mut self) -> Option<&mut String> {
         None
     }
 }
-
 pub(super) struct UnboundedJsonSink<'a> {
     output: &'a mut String,
 }
-
 impl<'a> UnboundedJsonSink<'a> {
     pub(super) fn new(output: &'a mut String) -> Self {
         Self { output }
     }
 }
-
 impl JsonWriteSink for UnboundedJsonSink<'_> {
     fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
         self.output.push(value);
         Ok(())
     }
-
     fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
         self.output.push_str(value);
         Ok(())
     }
-
     fn reserve(&mut self, additional: usize) -> Result<(), BoundedJsonError> {
         self.output.reserve(additional);
         Ok(())
     }
-
     fn unbounded_output(&mut self) -> Option<&mut String> {
         Some(self.output)
     }
 }
-
 struct CountingJsonSink {
     length: usize,
     limit: usize,
     depth: usize,
 }
-
 impl CountingJsonSink {
     fn new(limit: usize) -> Self {
         Self {
@@ -108,7 +91,6 @@ impl CountingJsonSink {
             depth: 0,
         }
     }
-
     fn admit(&mut self, additional: usize) -> Result<(), BoundedJsonError> {
         let next = self
             .length
@@ -121,16 +103,13 @@ impl CountingJsonSink {
         Ok(())
     }
 }
-
 impl JsonWriteSink for CountingJsonSink {
     fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
         self.admit(value.len_utf8())
     }
-
     fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
         self.admit(value.len())
     }
-
     fn begin_container(&mut self) -> Result<(), BoundedJsonError> {
         let next = self
             .depth
@@ -142,13 +121,11 @@ impl JsonWriteSink for CountingJsonSink {
         self.depth = next;
         Ok(())
     }
-
     fn end_container(&mut self) {
         debug_assert!(self.depth > 0);
         self.depth = self.depth.saturating_sub(1);
     }
 }
-
 #[cfg(test)]
 struct ExactJsonSink<'a> {
     output: &'a mut String,
@@ -156,7 +133,6 @@ struct ExactJsonSink<'a> {
     expected: usize,
     depth: usize,
 }
-
 #[cfg(test)]
 impl<'a> ExactJsonSink<'a> {
     fn new(output: &'a mut String, expected: usize) -> Self {
@@ -167,7 +143,6 @@ impl<'a> ExactJsonSink<'a> {
             depth: 0,
         }
     }
-
     fn admit(&mut self, additional: usize) -> Result<(), BoundedJsonError> {
         let next = self
             .length
@@ -180,7 +155,6 @@ impl<'a> ExactJsonSink<'a> {
         Ok(())
     }
 }
-
 #[cfg(test)]
 impl JsonWriteSink for ExactJsonSink<'_> {
     fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
@@ -188,13 +162,11 @@ impl JsonWriteSink for ExactJsonSink<'_> {
         self.output.push(value);
         Ok(())
     }
-
     fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
         self.admit(value.len())?;
         self.output.push_str(value);
         Ok(())
     }
-
     fn begin_container(&mut self) -> Result<(), BoundedJsonError> {
         let next = self
             .depth
@@ -206,19 +178,16 @@ impl JsonWriteSink for ExactJsonSink<'_> {
         self.depth = next;
         Ok(())
     }
-
     fn end_container(&mut self) {
         debug_assert!(self.depth > 0);
         self.depth = self.depth.saturating_sub(1);
     }
 }
-
 struct ExactBoxedJsonSink<'a> {
     output: &'a mut [MaybeUninit<u8>],
     length: usize,
     depth: usize,
 }
-
 impl<'a> ExactBoxedJsonSink<'a> {
     fn new(output: &'a mut [MaybeUninit<u8>]) -> Self {
         Self {
@@ -227,7 +196,6 @@ impl<'a> ExactBoxedJsonSink<'a> {
             depth: 0,
         }
     }
-
     fn admit(&mut self, additional: usize) -> Result<std::ops::Range<usize>, BoundedJsonError> {
         let start = self.length;
         let end = start
@@ -240,13 +208,11 @@ impl<'a> ExactBoxedJsonSink<'a> {
         Ok(start..end)
     }
 }
-
 impl JsonWriteSink for ExactBoxedJsonSink<'_> {
     fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
         let mut bytes = [0_u8; 4];
         self.push_str(value.encode_utf8(&mut bytes))
     }
-
     fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
         let range = self.admit(value.len())?;
         for (slot, byte) in self.output[range].iter_mut().zip(value.bytes()) {
@@ -254,7 +220,6 @@ impl JsonWriteSink for ExactBoxedJsonSink<'_> {
         }
         Ok(())
     }
-
     fn begin_container(&mut self) -> Result<(), BoundedJsonError> {
         let next = self
             .depth
@@ -266,13 +231,11 @@ impl JsonWriteSink for ExactBoxedJsonSink<'_> {
         self.depth = next;
         Ok(())
     }
-
     fn end_container(&mut self) {
         debug_assert!(self.depth > 0);
         self.depth = self.depth.saturating_sub(1);
     }
 }
-
 fn allocate_exact_json_destination(
     length: usize,
 ) -> Result<Box<[MaybeUninit<u8>]>, BoundedJsonError> {
@@ -292,7 +255,6 @@ fn allocate_exact_json_destination(
     // `MaybeUninit<u8>` values has that same layout and safely owns raw storage.
     Ok(unsafe { Box::from_raw(slice) })
 }
-
 fn to_json_bounded_boxed_with_allocator<T, A>(
     value: &T,
     max_bytes: usize,
@@ -305,7 +267,6 @@ where
     let mut counter = CountingJsonSink::new(max_bytes);
     value.json_serialize_to(&mut counter)?;
     let expected = counter.length;
-
     crate::core::reserve_decode_allocation(expected)
         .map_err(|_| BoundedJsonError::AllocationFailed)?;
     record_destination_allocation_attempt();
@@ -313,7 +274,6 @@ where
     if output.len() != expected {
         return Err(BoundedJsonError::LengthMismatch);
     }
-
     let actual = {
         let mut sink = ExactBoxedJsonSink::new(&mut output);
         value
@@ -324,7 +284,6 @@ where
     if actual != expected {
         return Err(BoundedJsonError::LengthMismatch);
     }
-
     // SAFETY: a successful exact second pass initialized every element in the
     // slice. `MaybeUninit<u8>` and `u8` have identical layouts, and ownership
     // transfers without reallocating the destination.
@@ -334,7 +293,6 @@ where
     }
     Ok(output)
 }
-
 /// Serialize `value` only when its compact JSON body fits in `max_bytes`.
 ///
 /// The first pass executes the checked serializer against an allocation-free
@@ -359,7 +317,6 @@ pub fn to_json_bounded<T: JsonSerialize + ?Sized>(
     let output = to_json_bounded_boxed(value, max_bytes)?;
     String::from_utf8(output.into_vec()).map_err(|_| BoundedJsonError::LengthMismatch)
 }
-
 /// Serialize `value` into one exact-layout boxed UTF-8 destination.
 ///
 /// This performs the same allocation-free count and checked second pass as
@@ -372,20 +329,16 @@ pub fn to_json_bounded_boxed<T: JsonSerialize + ?Sized>(
 ) -> Result<Box<[u8]>, BoundedJsonError> {
     to_json_bounded_boxed_with_allocator(value, max_bytes, allocate_exact_json_destination)
 }
-
 #[cfg(test)]
 std::thread_local! {
     static DESTINATION_ALLOCATION_ATTEMPTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
-
 #[cfg(test)]
 fn record_destination_allocation_attempt() {
     DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(attempts.get() + 1));
 }
-
 #[cfg(not(test))]
 fn record_destination_allocation_attempt() {}
-
 /// Write a JSON string with the canonical Norito escaping rules.
 pub fn write_json_string_to<S: JsonWriteSink + ?Sized>(
     value: &str,
@@ -414,7 +367,6 @@ pub fn write_json_string_to<S: JsonWriteSink + ?Sized>(
     }
     output.push('"')
 }
-
 fn write_u128_to<S: JsonWriteSink + ?Sized>(
     mut value: u128,
     output: &mut S,
@@ -433,7 +385,6 @@ fn write_u128_to<S: JsonWriteSink + ?Sized>(
     // SAFETY: the buffer suffix contains only ASCII decimal digits.
     output.push_str(unsafe { std::str::from_utf8_unchecked(&buffer[start..]) })
 }
-
 fn write_i64_to<S: JsonWriteSink + ?Sized>(
     value: i64,
     output: &mut S,
@@ -445,7 +396,6 @@ fn write_i64_to<S: JsonWriteSink + ?Sized>(
         write_u128_to(u128::from(value.unsigned_abs()), output)
     }
 }
-
 fn write_f64_to<S: JsonWriteSink + ?Sized>(
     value: f64,
     output: &mut S,
@@ -469,7 +419,6 @@ fn write_f64_to<S: JsonWriteSink + ?Sized>(
         output.push_str(formatted)
     }
 }
-
 fn encode_hex_to<S: JsonWriteSink + ?Sized>(
     bytes: &[u8],
     output: &mut S,
@@ -483,12 +432,10 @@ fn encode_hex_to<S: JsonWriteSink + ?Sized>(
     }
     output.push('"')
 }
-
 /// Typed, straight-line JSON writer with an opt-in checked sink path.
 pub trait FastJsonWrite {
     /// Serialize into the legacy unbounded string destination.
     fn write_json(&self, output: &mut String);
-
     /// Serialize into a checked sink.
     ///
     /// Existing manual implementations inherit a fail-closed bounded path but
@@ -501,7 +448,6 @@ pub trait FastJsonWrite {
         Ok(())
     }
 }
-
 /// Run a checked typed writer against the legacy unbounded destination.
 #[doc(hidden)]
 pub fn write_json_unbounded<T: FastJsonWrite + ?Sized>(value: &T, output: &mut String) {
@@ -510,48 +456,39 @@ pub fn write_json_unbounded<T: FastJsonWrite + ?Sized>(value: &T, output: &mut S
         .write_json_to(&mut sink)
         .expect("checked JSON writer must accept the legacy unbounded sink");
 }
-
 impl FastJsonWrite for Value {
     fn write_json(&self, output: &mut String) {
         super::write_value_to_string(self, output, false, 0);
     }
-
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         write_value_to(self, output, 0)
     }
 }
-
 impl<T: JsonSerialize + ?Sized> FastJsonWrite for Box<T> {
     fn write_json(&self, output: &mut String) {
         (**self).json_serialize(output);
     }
-
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         (**self).json_serialize_to(output)
     }
 }
-
 /// Bridge: any type with a typed writer can serve as a JSON serializer.
 impl<T: FastJsonWrite> JsonSerialize for T {
     fn json_serialize(&self, output: &mut String) {
         self.write_json(output)
     }
-
     fn json_serialize_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         self.write_json_to(output)
     }
 }
-
 impl JsonSerialize for bool {
     fn json_serialize(&self, output: &mut String) {
         output.push_str(if *self { "true" } else { "false" });
     }
-
     fn json_serialize_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         output.push_str(if *self { "true" } else { "false" })
     }
 }
-
 macro_rules! impl_nonzero_json {
     ($($ty:ty),+ $(,)?) => {$(impl_nonzero_json!(@one $ty);)+};
     (@one $ty:ty) => {
@@ -559,7 +496,6 @@ macro_rules! impl_nonzero_json {
             fn json_serialize(&self, output: &mut String) {
                 super::write_u128_json(output, u128::from(self.get()));
             }
-
             fn json_serialize_to(
                 &self,
                 output: &mut dyn JsonWriteSink,
@@ -569,34 +505,28 @@ macro_rules! impl_nonzero_json {
         }
     };
 }
-
 impl_nonzero_json!(
     core::num::NonZeroU128,
     core::num::NonZeroU64,
     core::num::NonZeroU32,
     core::num::NonZeroU16,
 );
-
 impl JsonSerialize for core::num::NonZeroUsize {
     fn json_serialize(&self, output: &mut String) {
         super::write_u128_json(output, u128::from(self.get() as u64));
     }
-
     fn json_serialize_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         write_u128_to(u128::from(self.get() as u64), output)
     }
 }
-
 impl JsonSerialize for str {
     fn json_serialize(&self, output: &mut String) {
         super::write_json_string(self, output);
     }
-
     fn json_serialize_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         write_json_string_to(self, output)
     }
 }
-
 impl JsonSerialize for std::time::Duration {
     fn json_serialize(&self, output: &mut String) {
         output.push_str("{\"secs\":");
@@ -605,7 +535,6 @@ impl JsonSerialize for std::time::Duration {
         JsonSerialize::json_serialize(&self.subsec_nanos(), output);
         output.push('}');
     }
-
     fn json_serialize_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         output.begin_container()?;
         output.push_str("{\"secs\":")?;
@@ -617,7 +546,6 @@ impl JsonSerialize for std::time::Duration {
         Ok(())
     }
 }
-
 impl<T: JsonSerialize> JsonSerialize for Option<T> {
     fn json_serialize(&self, output: &mut String) {
         match self {
@@ -625,7 +553,6 @@ impl<T: JsonSerialize> JsonSerialize for Option<T> {
             None => output.push_str("null"),
         }
     }
-
     fn json_serialize_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         match self {
             Some(value) => value.json_serialize_to(output),
@@ -633,17 +560,14 @@ impl<T: JsonSerialize> JsonSerialize for Option<T> {
         }
     }
 }
-
 impl JsonSerialize for () {
     fn json_serialize(&self, output: &mut String) {
         output.push_str("null");
     }
-
     fn json_serialize_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         output.push_str("null")
     }
 }
-
 impl<T: JsonSerialize> JsonSerialize for Vec<T> {
     fn json_serialize(&self, output: &mut String) {
         output.push('[');
@@ -655,7 +579,6 @@ impl<T: JsonSerialize> JsonSerialize for Vec<T> {
         }
         output.push(']');
     }
-
     fn json_serialize_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         output.begin_container()?;
         output.push('[')?;
@@ -670,7 +593,6 @@ impl<T: JsonSerialize> JsonSerialize for Vec<T> {
         Ok(())
     }
 }
-
 macro_rules! impl_unsigned_fast_json {
     ($($ty:ty),+ $(,)?) => {$(impl_unsigned_fast_json!(@one $ty);)+};
     (@one $ty:ty) => {
@@ -678,7 +600,6 @@ macro_rules! impl_unsigned_fast_json {
             fn write_json(&self, output: &mut String) {
                 super::write_u128_json(output, u128::from(*self));
             }
-
             fn write_json_to(
                 &self,
                 output: &mut dyn JsonWriteSink,
@@ -688,7 +609,6 @@ macro_rules! impl_unsigned_fast_json {
         }
     };
 }
-
 macro_rules! impl_signed_fast_json {
     ($($ty:ty),+ $(,)?) => {$(impl_signed_fast_json!(@one $ty);)+};
     (@one $ty:ty) => {
@@ -696,7 +616,6 @@ macro_rules! impl_signed_fast_json {
             fn write_json(&self, output: &mut String) {
                 super::write_i64_json(output, i64::from(*self));
             }
-
             fn write_json_to(
                 &self,
                 output: &mut dyn JsonWriteSink,
@@ -706,30 +625,24 @@ macro_rules! impl_signed_fast_json {
         }
     };
 }
-
 impl_unsigned_fast_json!(u8, u16, u32, u64, u128);
 impl_signed_fast_json!(i8, i16, i32, i64);
-
 impl FastJsonWrite for usize {
     fn write_json(&self, output: &mut String) {
         super::write_u128_json(output, u128::from(*self as u64));
     }
-
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         write_u128_to(u128::from(*self as u64), output)
     }
 }
-
 impl FastJsonWrite for isize {
     fn write_json(&self, output: &mut String) {
         super::write_i64_json(output, *self as i64);
     }
-
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         write_i64_to(*self as i64, output)
     }
 }
-
 impl<T: JsonSerialize + Ord> FastJsonWrite for BTreeSet<T> {
     fn write_json(&self, output: &mut String) {
         output.push('[');
@@ -741,7 +654,6 @@ impl<T: JsonSerialize + Ord> FastJsonWrite for BTreeSet<T> {
         }
         output.push(']');
     }
-
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         output.begin_container()?;
         output.push('[')?;
@@ -756,7 +668,6 @@ impl<T: JsonSerialize + Ord> FastJsonWrite for BTreeSet<T> {
         Ok(())
     }
 }
-
 impl<K, V> FastJsonWrite for BTreeMap<K, V>
 where
     K: JsonSerialize + Ord,
@@ -774,7 +685,6 @@ where
         }
         output.push('}');
     }
-
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         output.begin_container()?;
         output.push('{')?;
@@ -791,64 +701,52 @@ where
         Ok(())
     }
 }
-
 impl FastJsonWrite for f64 {
     fn write_json(&self, output: &mut String) {
         super::write_f64_json(*self, output);
     }
-
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         write_f64_to(*self, output)
     }
 }
-
 impl<T: FastJsonWrite + ?Sized> FastJsonWrite for &T {
     fn write_json(&self, output: &mut String) {
         (**self).write_json(output);
     }
-
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         (**self).write_json_to(output)
     }
 }
-
 impl<T: FastJsonWrite + ?Sized> FastJsonWrite for &mut T {
     fn write_json(&self, output: &mut String) {
         (**self).write_json(output);
     }
-
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         (**self).write_json_to(output)
     }
 }
-
 impl FastJsonWrite for str {
     fn write_json(&self, output: &mut String) {
         super::write_json_string(self, output);
     }
-
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         write_json_string_to(self, output)
     }
 }
-
 impl FastJsonWrite for String {
     fn write_json(&self, output: &mut String) {
         super::write_json_string(self, output);
     }
-
     fn write_json_to(&self, output: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
         write_json_string_to(self, output)
     }
 }
-
 pub(super) fn write_hex_to<S: JsonWriteSink + ?Sized>(
     bytes: &[u8],
     output: &mut S,
 ) -> Result<(), BoundedJsonError> {
     encode_hex_to(bytes, output)
 }
-
 pub(super) fn write_value_to<S: JsonWriteSink + ?Sized>(
     value: &Value,
     output: &mut S,
@@ -896,7 +794,6 @@ pub(super) fn write_value_to<S: JsonWriteSink + ?Sized>(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -904,22 +801,18 @@ mod tests {
         collections::BTreeMap,
         sync::atomic::{AtomicUsize, Ordering},
     };
-
     use super::*;
-
     #[derive(crate::derive::JsonSerialize)]
     struct Payload {
         label: String,
         values: Vec<Option<u64>>,
         by_name: BTreeMap<String, u64>,
     }
-
     #[derive(crate::derive::JsonSerialize)]
     #[norito(tag = "kind", content = "payload", rename_all = "snake_case")]
     enum Choice {
         Named { note: String, enabled: bool },
     }
-
     fn fixture() -> Payload {
         Payload {
             label: "quote=\" slash=\\ newline=\n cent=¢".to_owned(),
@@ -927,7 +820,6 @@ mod tests {
             by_name: BTreeMap::from([("alpha".to_owned(), 1), ("beta".to_owned(), 2)]),
         }
     }
-
     #[test]
     fn derived_compound_output_matches_the_unbounded_golden() {
         let payload = fixture();
@@ -940,7 +832,6 @@ mod tests {
             bounded,
             r#"{"label":"quote=\" slash=\\ newline=\n cent=¢","values":[7,null,18446744073709551615],"by_name":{"alpha":1,"beta":2}}"#
         );
-
         let choice = Choice::Named {
             note: "ok".to_owned(),
             enabled: true,
@@ -955,7 +846,6 @@ mod tests {
             r#"{"kind":"named","payload":{"note":"ok","enabled":true}}"#
         );
     }
-
     #[test]
     fn checked_string_writer_matches_canonical_escaping() {
         let value = "\"\\\n\r\t\u{08}\u{0c}\u{1f}/¢";
@@ -966,13 +856,11 @@ mod tests {
             ordinary
         );
     }
-
     fn assert_bounded_parity<T: JsonSerialize + ?Sized>(value: &T) {
         let ordinary = super::super::to_json(value).expect("ordinary JSON");
         let bounded = to_json_bounded(value, ordinary.len()).expect("bounded JSON");
         assert_eq!(bounded, ordinary);
     }
-
     #[test]
     fn built_in_checked_writers_preserve_container_and_value_bytes() {
         let value = Value::Object(BTreeMap::from([
@@ -990,7 +878,6 @@ mod tests {
             ),
         ]));
         assert_bounded_parity(&value);
-
         let hash_set = std::collections::HashSet::from([9_u64, 1, 7, 3]);
         assert_bounded_parity(&hash_set);
         assert_bounded_parity(&BTreeSet::from([9_u64, 1, 7, 3]));
@@ -998,17 +885,14 @@ mod tests {
         assert_bounded_parity(&std::time::Duration::new(9, 17));
         assert_bounded_parity(&Box::new(vec![Some(1_u64), None]));
     }
-
     fn nested_array_value(containers: usize) -> Value {
         (0..containers).fold(Value::Null, |value, _| Value::Array(vec![value]))
     }
-
     fn nested_object_value(containers: usize) -> Value {
         (0..containers).fold(Value::Null, |value, _| {
             Value::Object(BTreeMap::from([("nested".to_owned(), value)]))
         })
     }
-
     fn assert_programmatic_depth_boundary(builder: fn(usize) -> Value) {
         let accepted = builder(MAX_JSON_VALUE_NESTING_DEPTH - 1);
         let ordinary = super::super::to_json(&accepted).expect("ordinary depth-boundary JSON");
@@ -1016,7 +900,6 @@ mod tests {
             to_json_bounded(&accepted, ordinary.len()).expect("bounded depth-boundary JSON"),
             ordinary
         );
-
         let rejected = builder(MAX_JSON_VALUE_NESTING_DEPTH);
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(0));
         assert_eq!(
@@ -1024,7 +907,6 @@ mod tests {
             Err(BoundedJsonError::Unsupported)
         );
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 0));
-
         let rejected_bytes =
             super::super::to_json(&rejected).expect("ordinary over-depth JSON bytes");
         let mut output = String::new();
@@ -1037,17 +919,14 @@ mod tests {
             Err(BoundedJsonError::LengthMismatch)
         );
     }
-
     #[test]
     fn programmatic_array_depth_matches_the_parser_boundary() {
         assert_programmatic_depth_boundary(nested_array_value);
     }
-
     #[test]
     fn programmatic_object_depth_matches_the_parser_boundary() {
         assert_programmatic_depth_boundary(nested_object_value);
     }
-
     #[test]
     fn unchecked_raw_value_fails_closed_before_destination_allocation() {
         let raw = super::super::RawValue::from_string(r#"{"ok":[1,true,null]}"#.to_owned());
@@ -1055,21 +934,18 @@ mod tests {
             super::super::to_json(&raw).expect("legacy raw JSON serialization"),
             raw.get()
         );
-
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(0));
         assert_eq!(
             to_json_bounded(&raw, usize::MAX),
             Err(BoundedJsonError::Unsupported)
         );
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 0));
-
         let mut counter = CountingJsonSink::new(usize::MAX);
         assert_eq!(
             raw.json_serialize_to(&mut counter),
             Err(BoundedJsonError::Unsupported)
         );
         assert_eq!(counter.length, 0);
-
         let mut output = String::new();
         let initial_capacity = output.capacity();
         assert_eq!(initial_capacity, 0);
@@ -1084,7 +960,6 @@ mod tests {
         assert_eq!(output.len(), 0);
         assert_eq!(output.capacity(), initial_capacity);
     }
-
     #[test]
     fn cap_rejection_happens_before_destination_allocation() {
         let payload = fixture();
@@ -1101,24 +976,19 @@ mod tests {
             Err(BoundedJsonError::BodyTooLarge)
         );
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 0));
-
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(0));
         let string = to_json_bounded(&payload, exact).expect("exact String cap");
         assert_eq!(string.len(), exact);
         assert_eq!(string.capacity(), exact);
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 1));
-
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(0));
         let boxed = to_json_bounded_boxed(&payload, exact).expect("exact boxed cap");
         assert_eq!(boxed.len(), exact);
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 1));
     }
-
     struct EmptyChecked;
-
     impl JsonSerialize for EmptyChecked {
         fn json_serialize(&self, _output: &mut String) {}
-
         fn json_serialize_to(
             &self,
             _output: &mut dyn JsonWriteSink,
@@ -1126,13 +996,11 @@ mod tests {
             Ok(())
         }
     }
-
     #[test]
     fn boxed_destination_supports_an_exact_zero_length() {
         let output = to_json_bounded_boxed(&EmptyChecked, 0).expect("zero-byte destination");
         assert!(output.is_empty());
     }
-
     #[test]
     fn boxed_destination_allocation_failure_is_recoverable() {
         let payload = fixture();
@@ -1149,7 +1017,6 @@ mod tests {
         );
         assert_eq!(attempted.get(), Some(exact));
     }
-
     #[test]
     fn active_decode_budget_rejects_destination_before_reserve() {
         let payload = fixture();
@@ -1163,7 +1030,6 @@ mod tests {
             exact - 1,
             usize::MAX,
         );
-
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(0));
         assert_eq!(
             crate::core::with_decode_limits_scope(limits, || { to_json_bounded(&payload, exact) }),
@@ -1171,7 +1037,6 @@ mod tests {
         );
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 0));
     }
-
     #[test]
     fn active_decode_budget_accounts_for_exact_boxed_destination() {
         let payload = fixture();
@@ -1191,7 +1056,6 @@ mod tests {
             }),
             Err(BoundedJsonError::AllocationFailed)
         );
-
         let exact_limit =
             crate::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, exact, usize::MAX);
         assert!(
@@ -1201,15 +1065,12 @@ mod tests {
             .is_ok()
         );
     }
-
     struct UnsupportedManual;
-
     impl JsonSerialize for UnsupportedManual {
         fn json_serialize(&self, output: &mut String) {
             output.push_str("null");
         }
     }
-
     #[test]
     fn legacy_manual_serializer_fails_closed_before_allocation() {
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(0));
@@ -1223,18 +1084,15 @@ mod tests {
             "null"
         );
     }
-
     struct Stateful {
         calls: Cell<usize>,
         first: &'static str,
         second: &'static str,
     }
-
     impl JsonSerialize for Stateful {
         fn json_serialize(&self, output: &mut String) {
             output.push_str(self.first);
         }
-
         fn json_serialize_to(
             &self,
             output: &mut dyn JsonWriteSink,
@@ -1244,7 +1102,6 @@ mod tests {
             output.push_str(if call == 0 { self.first } else { self.second })
         }
     }
-
     #[test]
     fn stateful_second_pass_overrun_is_rejected_before_append() {
         static HOSTILE_SECOND_PASS: [u8; 1024 * 1024] = [b'0'; 1024 * 1024];
@@ -1259,7 +1116,6 @@ mod tests {
             to_json_bounded(&value, 1),
             Err(BoundedJsonError::LengthMismatch)
         );
-
         let boxed_value = Stateful {
             calls: Cell::new(0),
             first: "0",
@@ -1269,7 +1125,6 @@ mod tests {
             to_json_bounded_boxed(&boxed_value, 1),
             Err(BoundedJsonError::LengthMismatch)
         );
-
         let mut output = String::with_capacity(1);
         let initial_capacity = output.capacity();
         let mut sink = ExactJsonSink::new(&mut output, 1);
@@ -1280,7 +1135,6 @@ mod tests {
         assert!(output.is_empty(), "overrun must reject before append");
         assert_eq!(output.capacity(), initial_capacity);
     }
-
     #[test]
     fn stateful_short_second_pass_is_rejected_by_final_check() {
         let value = Stateful {
@@ -1292,7 +1146,6 @@ mod tests {
             to_json_bounded(&value, 2),
             Err(BoundedJsonError::LengthMismatch)
         );
-
         let boxed_value = Stateful {
             calls: Cell::new(0),
             first: "00",
@@ -1303,16 +1156,13 @@ mod tests {
             Err(BoundedJsonError::LengthMismatch)
         );
     }
-
     struct ErrorsOnSecondPass {
         calls: Cell<usize>,
     }
-
     impl JsonSerialize for ErrorsOnSecondPass {
         fn json_serialize(&self, output: &mut String) {
             output.push_str("00");
         }
-
         fn json_serialize_to(
             &self,
             output: &mut dyn JsonWriteSink,
@@ -1327,7 +1177,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn second_pass_error_discards_the_partial_destination() {
         let value = ErrorsOnSecondPass {
@@ -1338,7 +1187,6 @@ mod tests {
             Err(BoundedJsonError::LengthMismatch)
         );
         assert_eq!(value.calls.get(), 2);
-
         let boxed_value = ErrorsOnSecondPass {
             calls: Cell::new(0),
         };
@@ -1348,18 +1196,14 @@ mod tests {
         );
         assert_eq!(boxed_value.calls.get(), 2);
     }
-
     static CUSTOM_BOUNDED_CALLS: AtomicUsize = AtomicUsize::new(0);
-
     mod custom {
         use super::*;
-
         pub fn serialize(value: &u64, output: &mut String) {
             output.push('"');
             output.push_str(&value.to_string());
             output.push('"');
         }
-
         pub fn serialize_bounded(
             value: &u64,
             output: &mut dyn JsonWriteSink,
@@ -1370,25 +1214,21 @@ mod tests {
             output.push('"')
         }
     }
-
     #[derive(crate::derive::JsonSerialize)]
     struct ExplicitCustom {
         #[norito(with = "custom", bounded_with = "custom::serialize_bounded")]
         value: u64,
     }
-
     #[derive(crate::derive::JsonSerialize)]
     struct UnsupportedCustom {
         #[norito(with = "custom")]
         value: u64,
     }
-
     #[derive(crate::derive::JsonSerialize)]
     struct ExtraFields {
         depth: u64,
         label: String,
     }
-
     fn write_flattened_extra(
         value: &ExtraFields,
         output: &mut dyn JsonWriteSink,
@@ -1404,21 +1244,18 @@ mod tests {
         output.push_str(",\"label\":")?;
         value.label.json_serialize_to(output)
     }
-
     #[derive(crate::derive::JsonSerialize)]
     struct ExplicitFlatten {
         id: u64,
         #[norito(flatten, bounded_with = "write_flattened_extra")]
         extra: ExtraFields,
     }
-
     #[derive(crate::derive::JsonSerialize)]
     struct UnsupportedFlatten {
         id: u64,
         #[norito(flatten)]
         extra: ExtraFields,
     }
-
     #[test]
     fn custom_field_requires_an_explicit_bounded_seam() {
         CUSTOM_BOUNDED_CALLS.store(0, Ordering::Relaxed);
@@ -1428,7 +1265,6 @@ mod tests {
             r#"{"value":"42"}"#
         );
         assert_eq!(CUSTOM_BOUNDED_CALLS.load(Ordering::Relaxed), 2);
-
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| attempts.set(0));
         assert_eq!(
             to_json_bounded(&UnsupportedCustom { value: 42 }, usize::MAX),
@@ -1436,7 +1272,6 @@ mod tests {
         );
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 0));
     }
-
     #[test]
     fn flattened_field_requires_an_explicit_bounded_seam() {
         let explicit = ExplicitFlatten {
@@ -1452,7 +1287,6 @@ mod tests {
             to_json_bounded(&explicit, ordinary.len()).expect("bounded flattened JSON"),
             ordinary
         );
-
         let unsupported = UnsupportedFlatten {
             id: 7,
             extra: ExtraFields {
@@ -1467,7 +1301,6 @@ mod tests {
         );
         DESTINATION_ALLOCATION_ATTEMPTS.with(|attempts| assert_eq!(attempts.get(), 0));
     }
-
     #[test]
     fn error_messages_are_fixed() {
         assert_eq!(

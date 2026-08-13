@@ -2,7 +2,6 @@
 use iroha_data_model::parameter::TransactionParameters;
 use nonzero_ext::nonzero;
 use norito::json::{JsonDeserialize, JsonSerialize, Parser};
-
 #[test]
 fn transaction_parameters_json_serializes_max_signatures() {
     let defaults = TransactionParameters::default();
@@ -16,7 +15,6 @@ fn transaction_parameters_json_serializes_max_signatures() {
     );
     let mut out = String::new();
     JsonSerialize::json_serialize(&params, &mut out);
-
     assert!(
         out.contains("\"max_signatures\":3"),
         "serialized parameters must encode max_signatures; got {out}"
@@ -34,14 +32,12 @@ fn transaction_parameters_json_serializes_max_signatures() {
         "serialized parameters must include the deterministic TTL ceiling; got {out}"
     );
 }
-
 #[test]
 fn transaction_parameters_json_defaults_missing_max_signatures() {
     let json = r#"{"max_instructions":4096,"ivm_bytecode_size":4194304}"#;
     let mut parser = Parser::new(json);
     let parsed =
         TransactionParameters::json_deserialize(&mut parser).expect("json parameters decode");
-
     assert_eq!(
         parsed.max_signatures(),
         TransactionParameters::default().max_signatures()
@@ -63,14 +59,12 @@ fn transaction_parameters_json_defaults_missing_max_signatures() {
         TransactionParameters::default().max_time_to_live_ms()
     );
 }
-
 #[test]
 fn transaction_parameters_json_roundtrips_explicit_maximum_ttl() {
     let json = r#"{"max_time_to_live_ms":5000}"#;
     let mut parser = Parser::new(json);
     let parsed =
         TransactionParameters::json_deserialize(&mut parser).expect("json parameters decode");
-
     assert_eq!(parsed.max_time_to_live_ms(), nonzero!(5_000_u64));
     let mut encoded = String::new();
     JsonSerialize::json_serialize(&parsed, &mut encoded);

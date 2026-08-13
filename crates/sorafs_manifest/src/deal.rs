@@ -6,16 +6,11 @@
 //! projected from native ledger state. They enable deterministic Norito
 //! encoding for agreement terms, probabilistic micropayment receipts, and
 //! audit-driven settlement records without introducing a second authority.
-
 #[cfg(test)]
 use iroha_crypto::numeric::Quantity;
 use norito::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
-pub use iroha_crypto::numeric::{
-    XOR_QUANTITY_SCALE, XorQuantity, XorQuantityError as DealAmountError,
-};
-
+pub use iroha_crypto::numeric::{XOR_QUANTITY_SCALE, XorQuantity, XorQuantityError as DealAmountError};
 /// Schema version for [`DealTermsV1`].
 pub const DEAL_TERMS_VERSION_V1: u8 = 1;
 /// Schema version for [`MicropaymentPolicyV1`].
@@ -26,7 +21,6 @@ pub const DEAL_MICROPAYMENT_VERSION_V1: u8 = 1;
 pub const DEAL_LEDGER_VERSION_V1: u8 = 1;
 /// Schema version for [`DealSettlementV1`].
 pub const DEAL_SETTLEMENT_VERSION_V1: u8 = 1;
-
 /// Basis points per unit probability (10_000 = 100%).
 pub const BASIS_POINTS_PER_UNIT: u16 = 10_000;
 /// Legacy micro-XOR scale used only by exact migration adapters and fixtures.
@@ -43,7 +37,6 @@ pub const MAX_DEAL_METADATA_ENTRIES: usize = 64;
 pub const MAX_DEAL_METADATA_KEY_BYTES: usize = 64;
 /// Maximum metadata-value byte length.
 pub const MAX_DEAL_METADATA_VALUE_BYTES: usize = 1_024;
-
 /// Probability and payout configuration for probabilistic micropayments.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct MicropaymentPolicyV1 {
@@ -56,7 +49,6 @@ pub struct MicropaymentPolicyV1 {
     /// Maximum exact XOR liability per window.
     pub max_window_liability: XorQuantity,
 }
-
 impl MicropaymentPolicyV1 {
     /// Validate policy constraints.
     pub fn validate(&self) -> Result<(), MicropaymentPolicyError> {
@@ -79,7 +71,6 @@ impl MicropaymentPolicyV1 {
         Ok(())
     }
 }
-
 /// Deal metadata entry used for telemetry or policy hints.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealMetadataEntry {
@@ -88,7 +79,6 @@ pub struct DealMetadataEntry {
     /// Metadata value.
     pub value: String,
 }
-
 impl DealMetadataEntry {
     /// Validate the metadata entry.
     pub fn validate(&self) -> Result<(), DealTermsValidationError> {
@@ -112,7 +102,6 @@ impl DealMetadataEntry {
         Ok(())
     }
 }
-
 /// Storage or retrieval agreement recorded by governance.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealTermsV1 {
@@ -146,7 +135,6 @@ pub struct DealTermsV1 {
     #[norito(default)]
     pub metadata: Vec<DealMetadataEntry>,
 }
-
 impl DealTermsV1 {
     /// Derive the domain-separated identifier that binds every deal term.
     pub fn derive_deal_id(&self) -> Result<[u8; 32], DealTermsValidationError> {
@@ -162,7 +150,6 @@ impl DealTermsV1 {
         hasher.update(&bytes);
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Validate the agreement against registry policy.
     pub fn validate(&self) -> Result<(), DealTermsValidationError> {
         if self.version != DEAL_TERMS_VERSION_V1 {
@@ -277,7 +264,6 @@ impl DealTermsV1 {
         Ok(())
     }
 }
-
 /// Micropayment issued for a successful storage window.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealMicropaymentV1 {
@@ -294,7 +280,6 @@ pub struct DealMicropaymentV1 {
     /// Deterministic proof binding the micropayment window (BLAKE3 hash).
     pub determinism_hint: [u8; 32],
 }
-
 impl DealMicropaymentV1 {
     /// Validates the micropayment payload.
     pub fn validate(&self) -> Result<(), DealMicropaymentValidationError> {
@@ -317,7 +302,6 @@ impl DealMicropaymentV1 {
         }
         Ok(())
     }
-
     /// Validate the receipt against its exact deal policy and deterministic window.
     pub fn validate_against_terms(
         &self,
@@ -367,7 +351,6 @@ impl DealMicropaymentV1 {
         Ok(())
     }
 }
-
 /// Derive the deterministic hash committed by a deal micropayment receipt.
 ///
 /// # Errors
@@ -393,7 +376,6 @@ pub fn derive_micropayment_hint(
     hasher.update(&issued_at.to_le_bytes());
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// Provider/client ledger snapshot tracked for audit purposes.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealLedgerSnapshotV1 {
@@ -460,7 +442,6 @@ pub struct DealLedgerSnapshotV1 {
     /// Timestamp when the snapshot was recorded.
     pub captured_at: u64,
 }
-
 impl DealLedgerSnapshotV1 {
     /// Derive the domain-separated identifier of this exact snapshot.
     pub fn derive_snapshot_id(&self) -> Result<[u8; 32], DealLedgerValidationError> {
@@ -476,7 +457,6 @@ impl DealLedgerSnapshotV1 {
         hasher.update(&bytes);
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Validate snapshot invariants.
     pub fn validate(&self) -> Result<(), DealLedgerValidationError> {
         if self.version != DEAL_LEDGER_VERSION_V1 {
@@ -522,7 +502,6 @@ impl DealLedgerSnapshotV1 {
         if self.captured_at == 0 || self.captured_at != self.window_end_epoch {
             return Err(DealLedgerValidationError::InvalidCapturedAt);
         }
-
         let generated = self
             .micropayment_credit_applied
             .checked_add(&self.micropayment_credit_carry)
@@ -572,7 +551,6 @@ impl DealLedgerSnapshotV1 {
         }
         Ok(())
     }
-
     /// Validate this snapshot as the exact successor of `previous`.
     pub fn validate_transition(
         &self,
@@ -613,7 +591,6 @@ impl DealLedgerSnapshotV1 {
             window_bond_released: XorQuantity::zero(),
             captured_at: self.window_start_epoch,
         });
-
         if let Some(previous) = previous {
             previous
                 .validate()
@@ -644,7 +621,6 @@ impl DealLedgerSnapshotV1 {
         } else if self.sequence != 1 || self.previous_snapshot_id.is_some() {
             return Err(DealLedgerTransitionError::InvalidFirstSnapshot);
         }
-
         validate_cumulative_delta(
             &baseline.client_liability,
             &self.client_liability,
@@ -675,7 +651,6 @@ impl DealLedgerSnapshotV1 {
             &self.bond_released,
             &self.window_bond_released,
         )?;
-
         let expected_locked = self
             .bond_locked
             .checked_add(&self.window_bond_slashed)
@@ -711,7 +686,6 @@ impl DealLedgerSnapshotV1 {
         Ok(())
     }
 }
-
 fn validate_cumulative_delta(
     previous: &XorQuantity,
     current: &XorQuantity,
@@ -725,7 +699,6 @@ fn validate_cumulative_delta(
     }
     Ok(())
 }
-
 /// Canonical settlement record emitted after each deal billing window.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct DealSettlementV1 {
@@ -745,7 +718,6 @@ pub struct DealSettlementV1 {
     #[norito(default)]
     pub audit_notes: Option<String>,
 }
-
 impl DealSettlementV1 {
     /// Derive the identifier of this exact settlement payload.
     pub fn derive_settlement_id(&self) -> Result<[u8; 32], DealSettlementValidationError> {
@@ -761,7 +733,6 @@ impl DealSettlementV1 {
         hasher.update(&bytes);
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Validate settlement consistency.
     pub fn validate(&self) -> Result<(), DealSettlementValidationError> {
         if self.version != DEAL_SETTLEMENT_VERSION_V1 {
@@ -847,7 +818,6 @@ impl DealSettlementV1 {
         }
         Ok(())
     }
-
     /// Validate this settlement as the exact successor of `previous`.
     pub fn validate_transition(
         &self,
@@ -873,7 +843,6 @@ impl DealSettlementV1 {
         Ok(())
     }
 }
-
 /// Settlement outcome.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub enum DealSettlementStatusV1 {
@@ -886,7 +855,6 @@ pub enum DealSettlementStatusV1 {
     /// Deal finalised after exhausting collateral; liability may remain outstanding.
     Defaulted,
 }
-
 /// Errors raised during micropayment policy validation.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum MicropaymentPolicyError {
@@ -903,7 +871,6 @@ pub enum MicropaymentPolicyError {
     #[error("max window liability must be non-zero")]
     ZeroLiabilityCap,
 }
-
 /// Validation errors for [`DealTermsV1`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DealTermsValidationError {
@@ -962,7 +929,6 @@ pub enum DealTermsValidationError {
     #[error("deal terms serialization failed: {0}")]
     Serialization(String),
 }
-
 /// Validation errors for [`DealMicropaymentV1`].
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum DealMicropaymentValidationError {
@@ -1001,7 +967,6 @@ pub enum DealMicropaymentValidationError {
     #[error("micropayment amount serialization failed: {0}")]
     Serialization(String),
 }
-
 /// Validation errors for [`DealLedgerSnapshotV1`].
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum DealLedgerValidationError {
@@ -1048,7 +1013,6 @@ pub enum DealLedgerValidationError {
     #[error("ledger snapshot serialization failed: {0}")]
     Serialization(String),
 }
-
 /// Validation errors for a ledger predecessor transition.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum DealLedgerTransitionError {
@@ -1077,7 +1041,6 @@ pub enum DealLedgerTransitionError {
     #[error("ledger window liability sources and uses do not balance")]
     WindowLiabilityMismatch,
 }
-
 /// Validation errors for [`DealSettlementV1`].
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum DealSettlementValidationError {
@@ -1108,7 +1071,6 @@ pub enum DealSettlementValidationError {
     #[error("settlement serialization failed: {0}")]
     Serialization(String),
 }
-
 /// Validation errors for a settlement-chain transition.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum DealSettlementTransitionError {
@@ -1121,11 +1083,9 @@ pub enum DealSettlementTransitionError {
     #[error("ledger transition validation failed: {0}")]
     LedgerTransition(DealLedgerTransitionError),
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn xor_nanos(value: u128) -> XorQuantity {
         let whole = value / 1_000_000_000;
         let fractional = value % 1_000_000_000;
@@ -1133,7 +1093,6 @@ mod tests {
             .parse()
             .expect("nano-XOR fixture is canonical")
     }
-
     fn sample_terms() -> DealTermsV1 {
         let mut terms = DealTermsV1 {
             version: DEAL_TERMS_VERSION_V1,
@@ -1165,7 +1124,6 @@ mod tests {
         terms.deal_id = terms.derive_deal_id().expect("derive sample deal id");
         terms
     }
-
     #[test]
     fn xor_quantity_checked_add_overflow() {
         let lhs: XorQuantity =
@@ -1176,7 +1134,6 @@ mod tests {
         let err = lhs.checked_add(&rhs).expect_err("overflow");
         assert_eq!(err, DealAmountError::Overflow);
     }
-
     #[test]
     fn xor_quantity_legacy_micro_projection_is_exact_and_checked() {
         let sub_micro: XorQuantity = "0.0000001".parse().expect("canonical quantity");
@@ -1184,13 +1141,11 @@ mod tests {
             sub_micro.try_to_micro(),
             Err(DealAmountError::InexactMicroProjection)
         );
-
         let too_wide: XorQuantity = "340282366920938463463374607431768211456"
             .parse()
             .expect("value fits the 512-bit quantity domain");
         assert_eq!(too_wide.try_to_micro(), Err(DealAmountError::Overflow));
     }
-
     #[test]
     fn xor_quantity_rejects_negative_input_without_relabeling_it_overflow() {
         assert_eq!(
@@ -1198,12 +1153,10 @@ mod tests {
             Err(DealAmountError::NegativeQuantity)
         );
     }
-
     #[test]
     fn xor_quantity_enforces_nine_digit_scale_at_every_decode_boundary() {
         let nano: XorQuantity = "0.000000001".parse().expect("nano-XOR is canonical");
         assert_eq!(nano.to_string(), "0.000000001");
-
         let too_precise = "0.0000000001".parse::<Quantity>().expect("valid quantity");
         assert_eq!(
             XorQuantity::try_from_quantity(too_precise.clone()),
@@ -1214,11 +1167,9 @@ mod tests {
             Err(DealAmountError::ScaleOverflow { scale: 10, max: 9 })
         );
         assert!(norito::json::from_str::<XorQuantity>("\"0.0000000001\"").is_err());
-
         let bytes = norito::to_bytes(&too_precise).expect("encode raw quantity");
         assert!(norito::decode_from_bytes::<XorQuantity>(&bytes).is_err());
     }
-
     #[test]
     fn xor_quantity_roundtrips_with_canonical_string_json() {
         let amount: XorQuantity = "1.25".parse().expect("canonical quantity");
@@ -1226,12 +1177,10 @@ mod tests {
         assert_eq!(json, "\"1.25\"");
         let decoded: XorQuantity = norito::json::from_str(&json).expect("deserialize JSON");
         assert_eq!(decoded, amount);
-
         let bytes = norito::to_bytes(&amount).expect("serialize Norito");
         let decoded = norito::decode_from_bytes::<XorQuantity>(&bytes).expect("decode Norito");
         assert_eq!(decoded, amount);
     }
-
     #[test]
     fn xor_amount_checked_sub_underflow() {
         let lhs = XorQuantity::try_from_micro(5).expect("legacy micro-XOR value is representable");
@@ -1239,7 +1188,6 @@ mod tests {
         let err = lhs.checked_sub(&rhs).expect_err("underflow");
         assert_eq!(err, DealAmountError::Underflow);
     }
-
     #[test]
     fn micropayment_policy_validation_bounds() {
         let mut policy = MicropaymentPolicyV1 {
@@ -1250,7 +1198,6 @@ mod tests {
                 .expect("legacy micro-XOR value is representable"),
         };
         policy.validate().expect("valid policy");
-
         policy.probability_bps = 0;
         assert!(matches!(
             policy.validate(),
@@ -1262,7 +1209,6 @@ mod tests {
             Err(MicropaymentPolicyError::InvalidProbability { .. })
         ));
     }
-
     #[test]
     fn xor_quantity_min_and_checked_sub() {
         let larger =
@@ -1275,7 +1221,6 @@ mod tests {
             Err(DealAmountError::Underflow)
         );
     }
-
     #[test]
     fn xor_amount_checked_mul_helpers() {
         let base =
@@ -1289,7 +1234,6 @@ mod tests {
                 .expect("XOR quantity has exact legacy micro representation"),
             4_000
         );
-
         let scaled = base
             .checked_mul_basis_points(2_500)
             .expect("basis-point scaling");
@@ -1300,7 +1244,6 @@ mod tests {
                 .expect("XOR quantity has exact legacy micro representation"),
             500
         );
-
         let maximum: XorQuantity =
             "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
                 .parse()
@@ -1308,7 +1251,6 @@ mod tests {
         let overflow = maximum.checked_mul_u64(2);
         assert!(matches!(overflow, Err(DealAmountError::Overflow)));
     }
-
     #[test]
     fn basis_point_scaling_preserves_sub_micro_and_nano_amounts() {
         let one_micro: XorQuantity = "0.000001".parse().expect("canonical XOR quantity");
@@ -1319,7 +1261,6 @@ mod tests {
                 .to_string(),
             "0.0000001"
         );
-
         let one_tenth_micro: XorQuantity = "0.00000001".parse().expect("canonical XOR quantity");
         assert_eq!(
             one_tenth_micro
@@ -1329,13 +1270,11 @@ mod tests {
             "0.000000001"
         );
     }
-
     #[test]
     fn deal_terms_validation_succeeds() {
         let terms = sample_terms();
         terms.validate().expect("valid terms");
     }
-
     #[test]
     fn deal_terms_rejects_duplicate_metadata() {
         let mut terms = sample_terms();
@@ -1349,7 +1288,6 @@ mod tests {
             DealTermsValidationError::DuplicateMetadataKey { .. }
         ));
     }
-
     #[test]
     fn deal_micropayment_validation() {
         let micropayment = DealMicropaymentV1 {
@@ -1363,7 +1301,6 @@ mod tests {
         };
         micropayment.validate().expect("valid micropayment");
     }
-
     #[test]
     fn deal_identifier_binds_every_canonical_term() {
         let terms = sample_terms();
@@ -1371,7 +1308,6 @@ mod tests {
             terms.deal_id,
             terms.derive_deal_id().expect("derive canonical deal id")
         );
-
         let mut tampered = terms;
         tampered.price_per_gib_month = tampered
             .price_per_gib_month
@@ -1385,7 +1321,6 @@ mod tests {
             Err(DealTermsValidationError::DealIdMismatch { .. })
         ));
     }
-
     #[test]
     fn deal_terms_reject_noncanonical_and_unbounded_fields() {
         let mut terms = sample_terms();
@@ -1394,28 +1329,24 @@ mod tests {
             terms.validate(),
             Err(DealTermsValidationError::InvalidValidFrom)
         );
-
         let mut terms = sample_terms();
         terms.client_account = vec![0; MAX_DEAL_CLIENT_ACCOUNT_BYTES + 1];
         assert!(matches!(
             terms.validate(),
             Err(DealTermsValidationError::ClientAccountTooLong { .. })
         ));
-
         let mut terms = sample_terms();
         terms.profile_handle = " sorafs.sf1@1.0.0".into();
         assert!(matches!(
             terms.validate(),
             Err(DealTermsValidationError::UnknownProfileHandle { .. })
         ));
-
         let mut terms = sample_terms();
         terms.valid_until = terms.valid_from + terms.max_duration_secs + 1;
         assert!(matches!(
             terms.validate(),
             Err(DealTermsValidationError::ValidityOutsideDurationWindow { .. })
         ));
-
         let mut terms = sample_terms();
         terms.metadata = vec![
             DealMetadataEntry {
@@ -1431,7 +1362,6 @@ mod tests {
             terms.validate(),
             Err(DealTermsValidationError::MetadataNotSorted)
         );
-
         let mut terms = sample_terms();
         terms.metadata = (0..=MAX_DEAL_METADATA_ENTRIES)
             .map(|index| DealMetadataEntry {
@@ -1447,7 +1377,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn metadata_rejects_padding_controls_and_oversize() {
         for key in ["", " Region", "region ", "REGION", "region/"] {
@@ -1479,7 +1408,6 @@ mod tests {
             Err(DealTermsValidationError::InvalidMetadataValue)
         );
     }
-
     #[test]
     fn micropayment_receipt_is_bound_to_terms_window_cap_and_hint() {
         let terms = sample_terms();
@@ -1504,14 +1432,12 @@ mod tests {
         receipt
             .validate_against_terms(&terms)
             .expect("terms-bound receipt");
-
         let mut tampered = receipt.clone();
         tampered.determinism_hint[0] ^= 1;
         assert_eq!(
             tampered.validate_against_terms(&terms),
             Err(DealMicropaymentValidationError::DeterminismHintMismatch)
         );
-
         let mut excessive = receipt.clone();
         excessive.amount = terms
             .micropayment
@@ -1532,7 +1458,6 @@ mod tests {
             excessive.validate_against_terms(&terms),
             Err(DealMicropaymentValidationError::LiabilityCapExceeded)
         );
-
         let mut outside = receipt;
         outside.window_index = u64::MAX;
         assert_eq!(
@@ -1540,7 +1465,6 @@ mod tests {
             Err(DealMicropaymentValidationError::WindowArithmeticOverflow)
         );
     }
-
     #[test]
     fn micropayment_hint_binds_exact_quantity_bytes() {
         let deal_id = [0xA5; 32];
@@ -1553,7 +1477,6 @@ mod tests {
         let wide = "340282366920938463463374607431768211456.000000001"
             .parse::<XorQuantity>()
             .expect("wide XOR quantity fits the exact domain");
-
         let sub_micro_hint = derive_micropayment_hint(deal_id, 7, &sub_micro, 1_700_000_000)
             .expect("derive sub-micro hint");
         assert_ne!(
@@ -1566,12 +1489,10 @@ mod tests {
             derive_micropayment_hint(deal_id, 7, &wide, 1_700_000_000).expect("derive wide hint")
         );
     }
-
     fn seal_ledger(mut ledger: DealLedgerSnapshotV1) -> DealLedgerSnapshotV1 {
         ledger.snapshot_id = ledger.derive_snapshot_id().expect("derive ledger id");
         ledger
     }
-
     fn first_ledger() -> DealLedgerSnapshotV1 {
         seal_ledger(DealLedgerSnapshotV1 {
             version: DEAL_LEDGER_VERSION_V1,
@@ -1607,7 +1528,6 @@ mod tests {
             captured_at: 107,
         })
     }
-
     fn completed_ledger(previous: &DealLedgerSnapshotV1) -> DealLedgerSnapshotV1 {
         seal_ledger(DealLedgerSnapshotV1 {
             version: DEAL_LEDGER_VERSION_V1,
@@ -1643,7 +1563,6 @@ mod tests {
             captured_at: 114,
         })
     }
-
     fn seal_settlement(
         ledger: DealLedgerSnapshotV1,
         status: DealSettlementStatusV1,
@@ -1663,7 +1582,6 @@ mod tests {
             .expect("derive settlement id");
         settlement
     }
-
     #[test]
     fn ledger_snapshot_id_and_first_transition_are_canonical() {
         let ledger = first_ledger();
@@ -1671,7 +1589,6 @@ mod tests {
         ledger
             .validate_transition(None)
             .expect("valid first transition");
-
         let mut tampered = ledger.clone();
         tampered.client_debit = tampered
             .client_debit
@@ -1683,7 +1600,6 @@ mod tests {
                 | Err(DealLedgerValidationError::ClientLiabilityMismatch)
                 | Err(DealLedgerValidationError::SnapshotIdMismatch { .. })
         ));
-
         let mut skipped_window = ledger;
         skipped_window.window_end_epoch += 1;
         skipped_window.captured_at += 1;
@@ -1693,7 +1609,6 @@ mod tests {
             Err(DealLedgerValidationError::InvalidWindow)
         );
     }
-
     #[test]
     fn ledger_transition_binds_predecessor_sequence_parties_terms_and_window() {
         let first = first_ledger();
@@ -1701,7 +1616,6 @@ mod tests {
         second
             .validate_transition(Some(&first))
             .expect("valid exact successor");
-
         let mut cases = Vec::new();
         let mut sequence_gap = second.clone();
         sequence_gap.sequence = 3;
@@ -1729,7 +1643,6 @@ mod tests {
             assert!(tampered.validate_transition(Some(&first)).is_err());
         }
     }
-
     #[test]
     fn ledger_transition_rejects_credit_liability_and_bond_forgery() {
         let first = first_ledger();
@@ -1760,7 +1673,6 @@ mod tests {
             assert!(tampered.validate_transition(Some(&first)).is_err());
         }
     }
-
     #[test]
     fn settlement_chain_binds_ids_finality_and_terminal_status() {
         let first = seal_settlement(
@@ -1777,7 +1689,6 @@ mod tests {
         final_settlement
             .validate_transition(Some(&first))
             .expect("terminal successor");
-
         let mut id_tamper = final_settlement.clone();
         id_tamper.settlement_id[0] ^= 1;
         assert!(matches!(
@@ -1788,7 +1699,6 @@ mod tests {
             first.validate_transition(Some(&final_settlement)),
             Err(DealSettlementTransitionError::PreviousSettlementFinal)
         );
-
         let mut exhausted = first_ledger();
         exhausted.bond_total = xor_nanos(100);
         exhausted.bond_locked = XorQuantity::zero();
@@ -1803,7 +1713,6 @@ mod tests {
         early_default
             .validate_transition(None)
             .expect("collateral exhaustion is immediately final");
-
         let mut cancellation_ledger = first_ledger();
         cancellation_ledger.provider_accrual = XorQuantity::zero();
         cancellation_ledger.client_liability = XorQuantity::zero();
@@ -1831,7 +1740,6 @@ mod tests {
         cancelled
             .validate_transition(None)
             .expect("non-terminal cancellation is canonical and final");
-
         let terminal_cancel = seal_settlement(
             completed_ledger(&first.ledger),
             DealSettlementStatusV1::Cancelled,
@@ -1842,7 +1750,6 @@ mod tests {
             Err(DealSettlementValidationError::StatusFinalityMismatch)
         );
     }
-
     #[test]
     fn settlement_rejects_stale_time_blank_notes_and_status_substitution() {
         let first = seal_settlement(
@@ -1870,7 +1777,6 @@ mod tests {
             Err(DealSettlementValidationError::StatusFinalityMismatch)
         );
     }
-
     #[test]
     fn ledger_rejects_overflow_zero_ids_and_bond_nonconservation() {
         let mut overflow = first_ledger();
@@ -1884,7 +1790,6 @@ mod tests {
             overflow.validate(),
             Err(DealLedgerValidationError::AccountingOverflow)
         );
-
         let mut zero_party = first_ledger();
         zero_party.provider_id = [0; 32];
         zero_party.snapshot_id = zero_party.derive_snapshot_id().expect("reseal");
@@ -1892,7 +1797,6 @@ mod tests {
             zero_party.validate(),
             Err(DealLedgerValidationError::InvalidProviderId)
         );
-
         let mut forged_bond = first_ledger();
         forged_bond.bond_locked = forged_bond
             .bond_locked

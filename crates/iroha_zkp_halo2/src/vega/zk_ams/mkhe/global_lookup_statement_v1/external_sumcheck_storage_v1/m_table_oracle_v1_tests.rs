@@ -1,10 +1,8 @@
 use super::*;
-
 const TOPOLOGY_KAT_V1: [u8; 32] =
     hex_literal::hex!("3af9a6ad67383c32b06bb5d95a05863b8cb0b3338660177bc2a92e1bbf40b4ab");
 const PARENT_STORAGE_MANIFEST_KAT_V1: [u8; 32] =
     hex_literal::hex!("32f5dfeb2ba549c07d37c06f6ef10ae6fb66c5bff745046560cc00b690d4573b");
-
 fn scalar_chunk_v1(values: &[u64]) -> ConfidentialSpoolChunkV1 {
     let mut chunk = ConfidentialSpoolChunkV1::new_zeroed_v1(SLOT_PLAINTEXT_BYTES_V1).unwrap();
     for (lane, value) in values.iter().copied().enumerate() {
@@ -13,7 +11,6 @@ fn scalar_chunk_v1(values: &[u64]) -> ConfidentialSpoolChunkV1 {
     }
     chunk
 }
-
 fn manual_mapping_v1(completed_plane_rounds: u8) -> [u8; 32] {
     let values = 32_768_u64 >> completed_plane_rounds;
     let slots = values.div_ceil(256);
@@ -36,7 +33,6 @@ fn manual_mapping_v1(completed_plane_rounds: u8) -> [u8; 32] {
     }
     hash.finalize()
 }
-
 fn manual_manifest_v1() -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.phase23.global-lookup.m-table-oracle.manifest\0");
@@ -70,7 +66,6 @@ fn manual_manifest_v1() -> [u8; 32] {
     hash.update(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     hash.finalize()
 }
-
 fn manual_context_v1(public: [u8; 32], completed_plane_rounds: u8, lineage: [u8; 32]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.phase23.global-lookup.m-table.context\0");
@@ -82,7 +77,6 @@ fn manual_context_v1(public: [u8; 32], completed_plane_rounds: u8, lineage: [u8;
     hash.update(&[completed_plane_rounds]);
     hash.finalize()
 }
-
 #[test]
 fn independent_literal_frames_pin_release_tiny_manifest_and_contexts() {
     let release = m_descriptor_v1(0).unwrap();
@@ -116,7 +110,6 @@ fn independent_literal_frames_pin_release_tiny_manifest_and_contexts() {
         hex_literal::hex!("3b0e275c2d2667c5bc1b10443ba243d00921a3dc8d6f5112f132e95b2bd04ba8")
     );
 }
-
 #[test]
 fn release_geometry_accounting_and_false_gates_are_exact() {
     let release = m_descriptor_v1(0).unwrap();
@@ -145,7 +138,6 @@ fn release_geometry_accounting_and_false_gates_are_exact() {
         assert!(!gate);
     }
 }
-
 #[test]
 fn canonical_u32_sum_is_authenticated_and_invalid_input_poisoned() {
     let directory = tempfile::tempdir().unwrap();
@@ -168,7 +160,6 @@ fn canonical_u32_sum_is_authenticated_and_invalid_input_poisoned() {
         decode_scalar_be_v1(&first.as_slice_v1()[..32]).unwrap(),
         Scalar::from_u64(ACTIVE_LOOKUP_VALUES_V1)
     );
-
     let mut poisoned = begin_m_table_v1(
         [0x22; 32],
         MProducerSealV1::TestOnly {
@@ -187,7 +178,6 @@ fn canonical_u32_sum_is_authenticated_and_invalid_input_poisoned() {
         Err(MOracleErrorV1::Order)
     );
 }
-
 fn round12_pair_v1(directory: &Path, public: [u8; 32]) -> ExternalTablePairV1 {
     let mut writer = begin_initial_pair_v1(
         public,
@@ -209,7 +199,6 @@ fn round12_pair_v1(directory: &Path, public: [u8; 32]) -> ExternalTablePairV1 {
     }
     writer.seal_v1().unwrap()
 }
-
 fn round12_m_v1(directory: &Path, public: [u8; 32]) -> MTableV1 {
     let mut writer = begin_m_table_v1(
         public,
@@ -225,11 +214,9 @@ fn round12_m_v1(directory: &Path, public: [u8; 32]) -> MTableV1 {
     }
     writer.seal_v1().unwrap()
 }
-
 fn kat_scalar_v1(bytes: [u8; 32]) -> Scalar {
     Scalar::from_be_bytes_exact(bytes).unwrap()
 }
-
 fn continue_oracle_v1(
     evaluated: EvaluatedGlobalRoundV1,
     challenge: u64,
@@ -248,7 +235,6 @@ fn continue_oracle_v1(
         OracleTransitionV1::Complete(_) => panic!("unexpected early completion"),
     }
 }
-
 #[test]
 fn independent_round12_through_plane_round_kat_pins_m_fold_and_masks() {
     let directory = tempfile::tempdir().unwrap();
@@ -285,7 +271,6 @@ fn independent_round12_through_plane_round_kat_pins_m_fold_and_masks() {
         message_override: None,
     })
     .unwrap();
-
     // These literals were computed modulo the pinned P-256 base-field prime by
     // a separate integer model; no production evaluator/interpolator is used.
     let evaluated = oracle.evaluate_next_v1().unwrap();
@@ -311,7 +296,6 @@ fn independent_round12_through_plane_round_kat_pins_m_fold_and_masks() {
             "7fffffff80000000800000000000000000000000800000000000000000000026"
         ))
     );
-
     let evaluated = oracle.evaluate_next_v1().unwrap();
     assert_eq!(
         evaluated.message_v1(),
@@ -336,7 +320,6 @@ fn independent_round12_through_plane_round_kat_pins_m_fold_and_masks() {
             "bfffffff40000000c00000000000000000000000c0000000000000000000014a"
         ))
     );
-
     let evaluated = oracle.evaluate_next_v1().unwrap();
     assert_eq!(
         evaluated.message_v1(),
@@ -369,7 +352,6 @@ fn independent_round12_through_plane_round_kat_pins_m_fold_and_masks() {
         ))
     );
 }
-
 #[test]
 fn interpolation_mask_and_lineage_hostile_mutations_diverge() {
     let coefficients = [
@@ -389,7 +371,6 @@ fn interpolation_mask_and_lineage_hostile_mutations_diverge() {
     assert!(m_fold_lineage_v1([0; 32], [1; 32], 1).is_err());
     assert!(m_fold_lineage_v1([1; 32], [0; 32], 1).is_err());
     assert!(m_fold_lineage_v1([1; 32], [2; 32], 0).is_err());
-
     let mut axes = OracleAxesV1 {
         z: Scalar::from_u64(40_000),
         rho: [Scalar::one(); 29],
@@ -418,12 +399,10 @@ fn interpolation_mask_and_lineage_hostile_mutations_diverge() {
         Err(MOracleErrorV1::Order)
     );
 }
-
 fn fail_with_scalar_bytes_v1() -> Result<(), MOracleErrorV1> {
     let _bytes = ZeroizingScalarBytesV1([0x5a; 32]);
     Err(MOracleErrorV1::Spool)
 }
-
 #[test]
 fn scalar_bytes_owner_drops_on_success_error_and_unwind() {
     assert!(core::mem::needs_drop::<ZeroizingScalarBytesV1>());
@@ -437,7 +416,6 @@ fn scalar_bytes_owner_drops_on_success_error_and_unwind() {
         .is_err()
     );
 }
-
 #[test]
 fn source_guards_freeze_real_oracle_privacy_and_budgets() {
     let source = include_str!("m_table_oracle_v1.rs");

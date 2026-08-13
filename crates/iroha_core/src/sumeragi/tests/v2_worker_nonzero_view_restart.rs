@@ -16,7 +16,6 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
     service.key_pair = keys[local_index].clone();
     let signature_policy =
         BlockSignaturePolicy::GenesisAuthority(keys[local_index].public_key().clone());
-
     let proofs_of_possession = keys
         .iter()
         .map(|key| {
@@ -51,7 +50,6 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
     )
     .expect("open pre-crash adapter");
     assert!(startup.is_empty());
-
     let timeout_round = wire::ConsensusRound {
         context_id: context.id(),
         height: context.height,
@@ -107,7 +105,6 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
         .expect("read post-timeout proposal directive");
     assert_eq!(directive.tag(), pre_crash_tag);
     assert_eq!(directive.leader(), local_validator);
-
     let (canonical_wire, payload) = proposal_body_and_payload_at_view(&context, &keys, target_view);
     let proposal_round = payload.manifest().round;
     let proposal_subject = payload.manifest().subject;
@@ -152,7 +149,6 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
     ));
     drop(adapter);
     drop(body_store);
-
     let verified = VerifiedHeightContext::genesis(context.clone(), proofs_of_possession)
         .expect("reverify restart context");
     let (adapter, startup_effects) = SumeragiV2Adapter::open(
@@ -186,7 +182,6 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
     let expected_replayed_tag =
         EventTag::new(context.height, target_view, Generation::new(context.height));
     assert_eq!(replayed_tag, expected_replayed_tag);
-
     let started_at = Instant::now();
     let (runtime, startup_effects) = SerializedV2Runtime::new(
         adapter,
@@ -220,7 +215,6 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
             .expect("read recovered proposal body")
             .is_some()
     );
-
     let (command_tx, command_rx, admission) = test_io_command_channel(4);
     let (completion_tx, completion_rx) = mpsc::sync_channel(4);
     service.active_tag = replayed_tag;
@@ -300,7 +294,6 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
     assert_eq!(retained.owner, replayed_tag);
     assert_eq!(retained.round, proposal_round);
     assert_eq!(retained.subject, proposal_subject);
-
     executor
         .arm_live_clocks(started_at)
         .expect("arm post-recovery pacemaker");

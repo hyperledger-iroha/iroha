@@ -14,7 +14,6 @@ async fn check_access_with_rate_limiter(
     }
     Ok(())
 }
-
 // Operator-signature routes have already completed exact-network authentication
 // before entering their handlers. Keep their ingress throttle independent from
 // the legacy API-token switch so enabling tokens cannot turn them into a
@@ -34,7 +33,6 @@ async fn check_operator_rate_limit(
     }
     Ok(())
 }
-
 async fn check_operator_proof_access(
     app: &AppState,
     headers: &axum::http::HeaderMap,

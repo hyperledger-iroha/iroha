@@ -1,5 +1,4 @@
 //! Oracle query wire-format roundtrip tests.
-
 use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     nexus::UniversalAccountId,
@@ -7,7 +6,6 @@ use iroha_data_model::{
     prelude::AccountId,
     query::oracle::prelude::*,
 };
-
 macro_rules! assert_roundtrip {
     ($value:expr, $ty:ty) => {{
         let value: $ty = $value;
@@ -16,7 +14,6 @@ macro_rules! assert_roundtrip {
         assert_eq!(decoded, value);
     }};
 }
-
 fn checked_random_account_id() -> AccountId {
     AccountId::new(
         KeyPair::try_random()
@@ -25,7 +22,6 @@ fn checked_random_account_id() -> AccountId {
             .clone(),
     )
 }
-
 #[test]
 fn oracle_queries_roundtrip_through_norito() {
     let feed_id: FeedId = "price_xor_usd".parse().expect("feed id");
@@ -35,7 +31,6 @@ fn oracle_queries_roundtrip_through_norito() {
     let change_id = OracleChangeId(Hash::new(b"oracle-change-query"));
     let uaid = UniversalAccountId::from_hash(Hash::new(b"oracle-query-uaid"));
     let binding_hash = KeyedHash::new("pepper", b"pepper-bytes", b"twitter-user");
-
     assert_roundtrip!(FindOracleFeeds, FindOracleFeeds);
     assert_roundtrip!(FindOracleFeedById::new(feed_id.clone()), FindOracleFeedById);
     assert_roundtrip!(
@@ -70,14 +65,12 @@ fn oracle_queries_roundtrip_through_norito() {
         FindTwitterBindingByHash
     );
 }
-
 #[test]
 fn oracle_query_decode_rejects_truncated_norito_payloads() {
     let feed_id: FeedId = "price_xor_usd".parse().expect("feed id");
     let query = FindOracleFeedById::new(feed_id);
     let bytes = norito::to_bytes(&query).expect("encode query");
     let truncated_lengths = [0_usize, 1, bytes.len() / 2, bytes.len().saturating_sub(1)];
-
     for len in truncated_lengths {
         assert!(
             norito::decode_from_bytes::<FindOracleFeedById>(&bytes[..len]).is_err(),

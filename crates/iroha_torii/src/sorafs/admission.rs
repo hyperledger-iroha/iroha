@@ -1,5 +1,4 @@
 //! Provider admission registry loading and verification for SoraFS adverts.
-
 use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
@@ -7,10 +6,8 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-
 use iroha_logger::{trace, warn};
 pub use sorafs_manifest::ProviderAdmissionAdvertError as AdmissionCheckError;
 use sorafs_manifest::{
@@ -20,19 +17,16 @@ use sorafs_manifest::{
     verify_advert_against_record,
 };
 use thiserror::Error;
-
 /// Maximum number of admission envelopes loaded from one registry directory.
 pub const MAX_ADMISSION_ENVELOPES: usize = 4_096;
 /// Maximum canonical Norito size of one admission envelope (1 MiB).
 pub const MAX_ADMISSION_ENVELOPE_BYTES: u64 = 1024 * 1024;
-
 /// Admission registry loaded from governance envelopes.
 #[derive(Debug, Clone)]
 pub struct AdmissionRegistry {
     policy: Option<Arc<ProviderAdmissionCouncilPolicy>>,
     by_provider: HashMap<[u8; 32], Arc<AdmissionRecord>>,
 }
-
 impl AdmissionRegistry {
     /// Construct an empty registry (used when admission is optional).
     #[must_use]
@@ -42,7 +36,6 @@ impl AdmissionRegistry {
             by_provider: HashMap::new(),
         }
     }
-
     /// Construct an empty registry capable of accepting records under `policy`.
     #[must_use]
     pub fn with_policy(policy: ProviderAdmissionCouncilPolicy) -> Self {
@@ -51,7 +44,6 @@ impl AdmissionRegistry {
             by_provider: HashMap::new(),
         }
     }
-
     /// Borrow the operator-controlled council policy used to verify this registry.
     ///
     /// Empty optional registries have no trust policy and therefore cannot be
@@ -60,7 +52,6 @@ impl AdmissionRegistry {
     pub fn council_policy(&self) -> Option<&ProviderAdmissionCouncilPolicy> {
         self.policy.as_deref()
     }
-
     /// Construct a registry from an iterator of admission envelopes.
     ///
     /// # Errors
@@ -86,7 +77,6 @@ impl AdmissionRegistry {
             by_provider,
         })
     }
-
     /// Populate the registry from the provided directory.
     ///
     /// # Errors
@@ -129,7 +119,6 @@ impl AdmissionRegistry {
             paths.push(entry.path());
         }
         paths.sort_unstable();
-
         let mut envelope_count = 0_usize;
         for path in paths {
             if !validate_registry_entry(&path)? {
@@ -157,20 +146,17 @@ impl AdmissionRegistry {
                 }
             }
         }
-
         if by_provider.is_empty() {
             warn!(
                 ?dir,
                 "provider admission registry directory contains no envelopes"
             );
         }
-
         Ok(Self {
             policy: Some(Arc::new(policy)),
             by_provider,
         })
     }
-
     /// Atomically replace this registry with a freshly loaded trust store and council policy.
     ///
     /// The current registry remains untouched unless every directory entry decodes canonically
@@ -190,7 +176,6 @@ impl AdmissionRegistry {
         *self = replacement;
         Ok(())
     }
-
     /// Register a newly approved envelope under this registry's council policy.
     ///
     /// # Errors
@@ -213,7 +198,6 @@ impl AdmissionRegistry {
         self.by_provider.insert(provider_id, Arc::new(record));
         Ok(())
     }
-
     /// Apply a council-approved renewal atomically to an existing provider.
     ///
     /// # Errors
@@ -239,7 +223,6 @@ impl AdmissionRegistry {
         self.by_provider.insert(provider_id, Arc::new(updated));
         Ok(())
     }
-
     /// Verify and apply a council-approved revocation atomically.
     ///
     /// # Errors
@@ -266,26 +249,22 @@ impl AdmissionRegistry {
             .remove(&provider_id)
             .ok_or(AdmissionRegistryUpdateError::UnknownProvider { provider_id })
     }
-
     /// Look up an admission entry for the given provider identifier.
     #[must_use]
     pub fn entry(&self, provider_id: &[u8; 32]) -> Option<Arc<AdmissionRecord>> {
         self.by_provider.get(provider_id).cloned()
     }
-
     /// Return the number of governance-admitted provider identities.
     #[must_use]
     pub fn len(&self) -> usize {
         self.by_provider.len()
     }
-
     /// Return whether the registry contains no governance-admitted providers.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_provider.is_empty()
     }
 }
-
 fn load_single_envelope(
     path: &Path,
     policy: &ProviderAdmissionCouncilPolicy,
@@ -299,7 +278,6 @@ fn load_single_envelope(
     }
     prepare_entry(envelope, policy)
 }
-
 fn validate_registry_entry(path: &Path) -> Result<bool, AdmissionRegistryError> {
     let metadata = fs::symlink_metadata(path).map_err(|err| AdmissionRegistryError::Metadata {
         path: path.into(),
@@ -319,7 +297,6 @@ fn validate_registry_entry(path: &Path) -> Result<bool, AdmissionRegistryError> 
     }
     Ok(true)
 }
-
 fn read_bounded_envelope(path: &Path) -> Result<Vec<u8>, SingleEnvelopeError> {
     let mut options = OpenOptions::new();
     options.read(true);
@@ -340,7 +317,6 @@ fn read_bounded_envelope(path: &Path) -> Result<Vec<u8>, SingleEnvelopeError> {
             limit: MAX_ADMISSION_ENVELOPE_BYTES,
         });
     }
-
     #[cfg(unix)]
     {
         let path_metadata =
@@ -351,7 +327,6 @@ fn read_bounded_envelope(path: &Path) -> Result<Vec<u8>, SingleEnvelopeError> {
             return Err(SingleEnvelopeError::EntryChangedDuringLoad);
         }
     }
-
     let allocation = usize::try_from(opened_metadata.len())
         .unwrap_or(usize::MAX)
         .min(usize::try_from(MAX_ADMISSION_ENVELOPE_BYTES).unwrap_or(usize::MAX));
@@ -369,7 +344,6 @@ fn read_bounded_envelope(path: &Path) -> Result<Vec<u8>, SingleEnvelopeError> {
     }
     Ok(bytes)
 }
-
 fn prepare_entry(
     envelope: ProviderAdmissionEnvelopeV1,
     policy: &ProviderAdmissionCouncilPolicy,
@@ -378,7 +352,6 @@ fn prepare_entry(
     let provider_id = *record.provider_id();
     Ok((provider_id, record))
 }
-
 /// Verify that the given advert is authorised by the provided admission entry.
 ///
 /// # Errors
@@ -391,11 +364,9 @@ pub fn verify_advert_against_envelope(
 ) -> Result<(), AdmissionCheckError> {
     verify_advert_against_record(advert, record)
 }
-
 fn decode_envelope(bytes: &[u8]) -> Result<ProviderAdmissionEnvelopeV1, EnvelopeDecodeError> {
     norito::decode_from_bytes(bytes).map_err(EnvelopeDecodeError::Norito)
 }
-
 /// Errors raised while constructing the admission registry.
 #[derive(Debug, Error)]
 pub enum AdmissionRegistryError {
@@ -488,7 +459,6 @@ pub enum AdmissionRegistryError {
         source: SingleEnvelopeError,
     },
 }
-
 /// Errors raised while mutating an in-memory provider admission registry.
 #[derive(Debug, Error)]
 pub enum AdmissionRegistryUpdateError {
@@ -517,7 +487,6 @@ pub enum AdmissionRegistryUpdateError {
     #[error("provider admission revocation rejected: {0}")]
     Revocation(ProviderAdmissionRevocationError),
 }
-
 /// Errors emitted while loading a single envelope.
 #[derive(Debug, Error)]
 pub enum SingleEnvelopeError {
@@ -575,7 +544,6 @@ pub enum SingleEnvelopeError {
         provider_id: [u8; 32],
     },
 }
-
 /// Errors that occur while decoding a provider admission envelope.
 #[derive(Debug, Error)]
 pub enum EnvelopeDecodeError {
@@ -583,11 +551,9 @@ pub enum EnvelopeDecodeError {
     #[error("failed to decode provider admission envelope: {0}")]
     Norito(#[from] norito::core::Error),
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fs::File, path::Path};
-
     use ed25519_dalek::{Signer as _, SigningKey};
     use sorafs_manifest::{
         CouncilSignature, ProviderAdmissionEnvelopeV1, ProviderAdmissionRenewalV1,
@@ -595,9 +561,7 @@ mod tests {
         compute_envelope_authorization_digest,
     };
     use tempfile::TempDir;
-
     use super::*;
-
     fn fixture_bytes(name: &str) -> Vec<u8> {
         fs::read(
             Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -606,27 +570,22 @@ mod tests {
         )
         .expect("read provider admission fixture")
     }
-
     fn fixture_envelope() -> ProviderAdmissionEnvelopeV1 {
         norito::decode_from_bytes(&fixture_bytes("envelope_v1.to"))
             .expect("decode provider admission fixture")
     }
-
     fn fixture_policy() -> ProviderAdmissionCouncilPolicy {
         let key = SigningKey::from_bytes(&[0x45; 32]);
         ProviderAdmissionCouncilPolicy::new([*key.verifying_key().as_bytes()], 1)
             .expect("valid fixture policy")
     }
-
     fn write_fixture(dir: &Path, name: &str) {
         fs::write(dir.join(name), fixture_bytes("envelope_v1.to"))
             .expect("write provider admission fixture");
     }
-
     #[test]
     fn registry_exposes_only_explicit_council_policy() {
         assert!(AdmissionRegistry::empty().council_policy().is_none());
-
         let registry = AdmissionRegistry::with_policy(fixture_policy());
         let policy = registry
             .council_policy()
@@ -634,20 +593,17 @@ mod tests {
         assert_eq!(policy.trusted_signer_count(), 1);
         assert_eq!(policy.signature_threshold().get(), 1);
     }
-
     #[test]
     fn registry_loads_canonical_envelope_under_explicit_policy() {
         let temp = TempDir::new().expect("temp directory");
         let envelope = fixture_envelope();
         let policy = fixture_policy();
         write_fixture(temp.path(), "provider.to");
-
         let registry =
             AdmissionRegistry::load_from_dir(temp.path(), policy).expect("load registry");
         assert_eq!(registry.len(), 1);
         assert!(registry.entry(&envelope.proposal.provider_id).is_some());
     }
-
     #[test]
     fn registry_rejects_duplicate_and_corrupt_entries_fail_closed() {
         let policy = fixture_policy();
@@ -658,7 +614,6 @@ mod tests {
             AdmissionRegistry::load_from_dir(duplicates.path(), policy.clone()),
             Err(AdmissionRegistryError::DuplicateProvider { .. })
         ));
-
         let corrupt = TempDir::new().expect("temp directory");
         write_fixture(corrupt.path(), "a.to");
         fs::write(corrupt.path().join("b.to"), b"not-norito").expect("write corrupt entry");
@@ -667,11 +622,9 @@ mod tests {
             Err(AdmissionRegistryError::LoadEnvelope { .. })
         ));
     }
-
     #[test]
     fn registry_rejects_unknown_nonregular_and_oversized_entries() {
         let policy = fixture_policy();
-
         let unknown = TempDir::new().expect("temp directory");
         fs::write(
             unknown.path().join("unexpected.json"),
@@ -682,14 +635,12 @@ mod tests {
             AdmissionRegistry::load_from_dir(unknown.path(), policy.clone()),
             Err(AdmissionRegistryError::UnexpectedEntry { .. })
         ));
-
         let nonregular = TempDir::new().expect("temp directory");
         fs::create_dir(nonregular.path().join("nested.to")).expect("create nested directory");
         assert!(matches!(
             AdmissionRegistry::load_from_dir(nonregular.path(), policy.clone()),
             Err(AdmissionRegistryError::NonRegularEntry { .. })
         ));
-
         let oversized = TempDir::new().expect("temp directory");
         let file = File::create(oversized.path().join("oversized.to")).expect("create envelope");
         file.set_len(MAX_ADMISSION_ENVELOPE_BYTES + 1)
@@ -702,23 +653,19 @@ mod tests {
             })
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn registry_rejects_symlinked_envelope() {
         use std::os::unix::fs::symlink;
-
         let policy = fixture_policy();
         let temp = TempDir::new().expect("temp directory");
         let target = temp.path().join("target.bin");
         fs::write(&target, fixture_bytes("envelope_v1.to")).expect("write target");
         symlink(&target, temp.path().join("provider.to")).expect("create symlink");
-
         assert!(matches!(
             AdmissionRegistry::load_from_dir(temp.path(), policy),
             Err(AdmissionRegistryError::SymlinkEntry { .. })
         ));
-
         let root_parent = TempDir::new().expect("root parent");
         let registry_target = root_parent.path().join("registry-target");
         fs::create_dir(&registry_target).expect("create target directory");
@@ -730,7 +677,6 @@ mod tests {
             Err(AdmissionRegistryError::SymlinkDirectory { .. })
         ));
     }
-
     #[test]
     fn registry_bounds_entry_count_before_decoding() {
         let policy = fixture_policy();
@@ -738,13 +684,11 @@ mod tests {
         for index in 0..=MAX_ADMISSION_ENVELOPES {
             File::create(temp.path().join(format!("{index:04}.to"))).expect("create entry");
         }
-
         assert!(matches!(
             AdmissionRegistry::load_from_dir(temp.path(), policy),
             Err(AdmissionRegistryError::TooManyEntries { .. })
         ));
     }
-
     #[test]
     fn registry_mutations_require_policy_and_verify_renewal_and_revocation() {
         let envelope = fixture_envelope();
@@ -754,7 +698,6 @@ mod tests {
             deny_all.register(envelope.clone()),
             Err(AdmissionRegistryUpdateError::PolicyUnavailable)
         ));
-
         let renewal: ProviderAdmissionRenewalV1 =
             norito::decode_from_bytes(&fixture_bytes("renewal_v1.to")).expect("decode renewal");
         let mut renewal_registry =
@@ -770,7 +713,6 @@ mod tests {
                 .envelope_digest(),
             &renewal.envelope_digest
         );
-
         let revocation: ProviderAdmissionRevocationV1 =
             norito::decode_from_bytes(&fixture_bytes("revocation_v1.to"))
                 .expect("decode revocation");
@@ -781,7 +723,6 @@ mod tests {
             .expect("apply trusted revocation");
         assert!(revocation_registry.is_empty());
     }
-
     #[test]
     fn registry_reload_is_atomic_and_supports_explicit_council_rotation() {
         let envelope = fixture_envelope();
@@ -798,7 +739,6 @@ mod tests {
                 .expect("replacement policy");
         let temp = TempDir::new().expect("temp directory");
         write_fixture(temp.path(), "provider.to");
-
         let error = registry
             .reload_from_dir(temp.path(), rotated_policy.clone())
             .unwrap_err();
@@ -818,7 +758,6 @@ mod tests {
                 .envelope_digest(),
             &initial_digest
         );
-
         let mut rotated_envelope = envelope;
         rotated_envelope.council_signatures.clear();
         let digest = compute_envelope_authorization_digest(&rotated_envelope)
@@ -832,7 +771,6 @@ mod tests {
             norito::to_bytes(&rotated_envelope).expect("encode rotated envelope"),
         )
         .expect("write rotated envelope");
-
         registry
             .reload_from_dir(temp.path(), rotated_policy)
             .expect("reload explicitly rotated trust store");

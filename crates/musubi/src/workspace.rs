@@ -7,19 +7,16 @@
 //! before it becomes part of the effective package graph. Ancestor validation
 //! remains path-based and does not claim protection from a deliberately timed
 //! ABA.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt, fs, io,
     path::{Component, Path, PathBuf},
 };
-
 use iroha_data_model::{
     musubi::{MusubiPackageSelectorV1, MusubiVersionReqV1},
     name::Name,
 };
-
 use crate::{
     local_file::read_bounded_single_link_regular_file_v1,
     manifest::{
@@ -27,12 +24,9 @@ use crate::{
         ManifestError, PortablePath, ResolvedPackageManifest, WorkspaceManifest, parse_manifest,
     },
 };
-
 /// Maximum local bytes accepted for one first-release manifest.
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
-
 type MemberSeed = (PathBuf, PathBuf, Manifest);
-
 /// Stable category of a workspace discovery or validation failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspaceErrorKind {
@@ -53,7 +47,6 @@ pub enum WorkspaceErrorKind {
     /// Two packages or portable paths collide.
     Collision,
 }
-
 /// Structured workspace error with a stable category and implicated path.
 #[derive(Debug)]
 pub struct WorkspaceError {
@@ -61,7 +54,6 @@ pub struct WorkspaceError {
     path: Option<PathBuf>,
     message: String,
 }
-
 impl WorkspaceError {
     fn new(kind: WorkspaceErrorKind, path: Option<PathBuf>, message: impl Into<String>) -> Self {
         Self {
@@ -70,7 +62,6 @@ impl WorkspaceError {
             message: message.into(),
         }
     }
-
     fn io(operation: &str, path: &Path, error: &io::Error) -> Self {
         Self::new(
             WorkspaceErrorKind::Io,
@@ -78,7 +69,6 @@ impl WorkspaceError {
             format!("failed to {operation}: {error}"),
         )
     }
-
     fn manifest(path: &Path, error: &ManifestError) -> Self {
         Self::new(
             WorkspaceErrorKind::Manifest,
@@ -86,26 +76,22 @@ impl WorkspaceError {
             error.to_string(),
         )
     }
-
     /// Return the stable error category.
     #[must_use]
     pub const fn kind(&self) -> WorkspaceErrorKind {
         self.kind
     }
-
     /// Return the implicated filesystem path, when one exists.
     #[must_use]
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
-
     /// Return the human-readable reason without its path prefix.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 }
-
 impl fmt::Display for WorkspaceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.path {
@@ -114,9 +100,7 @@ impl fmt::Display for WorkspaceError {
         }
     }
 }
-
 impl Error for WorkspaceError {}
-
 /// Whether an effective dependency participates in publication or only a root-local test graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DependencyKind {
@@ -125,7 +109,6 @@ pub enum DependencyKind {
     /// Selected-root-only development dependency.
     Development,
 }
-
 /// Concrete dependency after workspace inheritance, including path provenance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EffectiveDependency {
@@ -140,7 +123,6 @@ pub struct EffectiveDependency {
     /// Canonical local manifest path for a path dependency.
     pub local_manifest: Option<PathBuf>,
 }
-
 /// One loaded package member with fully applied package/dependency inheritance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceMember {
@@ -159,7 +141,6 @@ pub struct WorkspaceMember {
     /// Effective development dependencies in alias order.
     pub dev_dependencies: BTreeMap<Name, EffectiveDependency>,
 }
-
 /// Deterministic metadata for one dependency edge.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DependencyMetadata {
@@ -174,7 +155,6 @@ pub struct DependencyMetadata {
     /// Portable local path, if present.
     pub path: Option<String>,
 }
-
 /// Deterministic metadata for one workspace member.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MemberMetadata {
@@ -187,7 +167,6 @@ pub struct MemberMetadata {
     /// Effective dependencies sorted by kind and alias.
     pub dependencies: Vec<DependencyMetadata>,
 }
-
 /// Stable semantic workspace metadata without timestamps or cache/network state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceMetadata {
@@ -198,7 +177,6 @@ pub struct WorkspaceMetadata {
     /// Default-member portable paths in sorted order.
     pub default_members: Vec<String>,
 }
-
 /// Fully loaded owning workspace, or a synthetic one-package workspace for a standalone package.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Workspace {
@@ -209,44 +187,37 @@ pub struct Workspace {
     default_members: BTreeSet<PortablePath>,
     synthetic: bool,
 }
-
 impl Workspace {
     /// Return the canonical workspace root directory.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
-
     /// Return the canonical root manifest path.
     #[must_use]
     pub fn root_manifest_path(&self) -> &Path {
         &self.root_manifest_path
     }
-
     /// Return the parsed root manifest.
     #[must_use]
     pub const fn root_manifest(&self) -> &Manifest {
         &self.root_manifest
     }
-
     /// Return all members in deterministic portable-path order.
     #[must_use]
     pub const fn members(&self) -> &BTreeMap<PortablePath, WorkspaceMember> {
         &self.members
     }
-
     /// Return default members in deterministic portable-path order.
     #[must_use]
     pub const fn default_members(&self) -> &BTreeSet<PortablePath> {
         &self.default_members
     }
-
     /// Return whether this is the implicit workspace of a standalone package.
     #[must_use]
     pub const fn is_synthetic(&self) -> bool {
         self.synthetic
     }
-
     /// Select members using Cargo-style default/all/package/exclude semantics.
     ///
     /// `packages` contains canonical namespaced package selectors. Exclusions
@@ -307,7 +278,6 @@ impl Workspace {
             })
             .collect())
     }
-
     /// Build deterministic semantic metadata for `metadata` and JSON rendering.
     #[must_use]
     pub fn metadata(&self) -> WorkspaceMetadata {
@@ -340,7 +310,6 @@ impl Workspace {
                 .collect(),
         }
     }
-
     /// Load a validated local path package below this workspace root.
     ///
     /// Active workspace members are returned from the already materialized
@@ -367,7 +336,6 @@ impl Workspace {
         {
             return Ok(member.clone());
         }
-
         let package_root = manifest_path.parent().ok_or_else(|| {
             WorkspaceError::new(
                 WorkspaceErrorKind::Dependency,
@@ -448,7 +416,6 @@ impl Workspace {
         })
     }
 }
-
 /// Discover the nearest ancestor `Musubi.toml` without following symlinks.
 ///
 /// `start` may name a directory, an ordinary file within a package, or the
@@ -467,7 +434,6 @@ pub fn discover_manifest(start: &Path) -> Result<PathBuf, WorkspaceError> {
     verify_discovery_ancestors(start)?;
     let canonical_start = fs::canonicalize(start)
         .map_err(|error| WorkspaceError::io("canonicalize discovery start", start, &error))?;
-
     if start_metadata.is_file()
         && start.file_name().and_then(|name| name.to_str()) == Some(MANIFEST_FILE_NAME)
     {
@@ -521,7 +487,6 @@ pub fn discover_manifest(start: &Path) -> Result<PathBuf, WorkspaceError> {
         format!("no ancestor `{MANIFEST_FILE_NAME}` was found"),
     ))
 }
-
 /// Discover the root manifest of the workspace owning `start`.
 ///
 /// A package with no ancestor workspace is its own synthetic workspace. A
@@ -542,7 +507,6 @@ pub fn discover_workspace_manifest(start: &Path) -> Result<PathBuf, WorkspaceErr
     if nearest_manifest.workspace.is_some() {
         return Ok(nearest);
     }
-
     let mut directory = nearest_root
         .parent()
         .map_or_else(|| nearest_root.clone(), Path::to_path_buf);
@@ -600,7 +564,6 @@ pub fn discover_workspace_manifest(start: &Path) -> Result<PathBuf, WorkspaceErr
     }
     Ok(nearest)
 }
-
 /// Load the workspace owning `start`, apply inheritance, and validate every
 /// local dependency manifest.
 ///
@@ -643,7 +606,6 @@ pub fn load_workspace(start: &Path) -> Result<Workspace, WorkspaceError> {
         synthetic,
     })
 }
-
 fn collect_member_seeds(
     root: &Path,
     root_manifest_path: &Path,
@@ -725,7 +687,6 @@ fn collect_member_seeds(
     }
     Ok(seeds)
 }
-
 fn validate_nearest_member(
     nearest_manifest_path: &Path,
     root_manifest_path: &Path,
@@ -744,7 +705,6 @@ fn validate_nearest_member(
     }
     Ok(())
 }
-
 fn resolve_member_packages(
     seeds: &BTreeMap<PortablePath, MemberSeed>,
     package_defaults: Option<&crate::manifest::WorkspacePackageDefaults>,
@@ -769,7 +729,6 @@ fn resolve_member_packages(
     }
     Ok(resolved_packages)
 }
-
 fn materialize_members(
     root: &Path,
     seeds: BTreeMap<PortablePath, MemberSeed>,
@@ -821,7 +780,6 @@ fn materialize_members(
     }
     Ok(members)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn resolve_dependencies(
     workspace_root: &Path,
@@ -899,7 +857,6 @@ fn resolve_dependencies(
     }
     Ok(result)
 }
-
 fn validate_declared_path_identity(
     alias: &Name,
     manifest_path: &Path,
@@ -932,7 +889,6 @@ fn validate_declared_path_identity(
     }
     Ok(())
 }
-
 fn resolve_dependency_root(
     workspace_root: &Path,
     defined_in: &Path,
@@ -940,7 +896,6 @@ fn resolve_dependency_root(
 ) -> Result<PathBuf, WorkspaceError> {
     confined_directory(workspace_root, defined_in, &path.to_path_buf())
 }
-
 fn default_member_set(
     workspace: Option<&WorkspaceManifest>,
     members: &BTreeMap<PortablePath, WorkspaceMember>,
@@ -962,7 +917,6 @@ fn default_member_set(
     }
     Ok(result)
 }
-
 fn dependency_metadata(dependency: &EffectiveDependency) -> DependencyMetadata {
     match &dependency.dependency {
         ConcreteDependency::Registry {
@@ -988,11 +942,9 @@ fn dependency_metadata(dependency: &EffectiveDependency) -> DependencyMetadata {
         },
     }
 }
-
 fn read_manifest(path: &Path) -> Result<Manifest, WorkspaceError> {
     read_manifest_with_reader(path, read_bounded_single_link_regular_file_v1)
 }
-
 fn read_manifest_with_reader<F>(path: &Path, read_file: F) -> Result<Manifest, WorkspaceError>
 where
     F: FnOnce(&Path, u64) -> io::Result<Vec<u8>>,
@@ -1009,7 +961,6 @@ where
     })?;
     parse_manifest(&source).map_err(|error| WorkspaceError::manifest(path, &error))
 }
-
 fn validate_manifest_file(path: &Path) -> Result<(), WorkspaceError> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| WorkspaceError::io("inspect manifest", path, &error))?;
@@ -1028,7 +979,6 @@ fn validate_manifest_file(path: &Path) -> Result<(), WorkspaceError> {
     }
     Ok(())
 }
-
 fn confined_directory(
     root: &Path,
     base: &Path,
@@ -1072,7 +1022,6 @@ fn confined_directory(
     }
     Ok(canonical)
 }
-
 fn verify_no_symlink_descendant(root: &Path, target: &Path) -> Result<(), WorkspaceError> {
     let relative = target.strip_prefix(root).map_err(|_| {
         WorkspaceError::new(
@@ -1103,7 +1052,6 @@ fn verify_no_symlink_descendant(root: &Path, target: &Path) -> Result<(), Worksp
     }
     Ok(())
 }
-
 fn verify_discovery_ancestors(path: &Path) -> Result<(), WorkspaceError> {
     let absolute = if path.is_absolute() {
         lexical_normalize(path)?
@@ -1135,7 +1083,6 @@ fn verify_discovery_ancestors(path: &Path) -> Result<(), WorkspaceError> {
     }
     Ok(())
 }
-
 fn lexical_normalize(path: &Path) -> Result<PathBuf, WorkspaceError> {
     let mut output = PathBuf::new();
     for component in path.components() {
@@ -1157,7 +1104,6 @@ fn lexical_normalize(path: &Path) -> Result<PathBuf, WorkspaceError> {
     }
     Ok(output)
 }
-
 fn portable_from_relative_path(path: &Path) -> Result<PortablePath, WorkspaceError> {
     if path.as_os_str().is_empty() {
         return PortablePath::new(".").map_err(|error| {
@@ -1189,7 +1135,6 @@ fn portable_from_relative_path(path: &Path) -> Result<PortablePath, WorkspaceErr
         )
     })
 }
-
 fn path_is_excluded(path: &PortablePath, excludes: &[PortablePath]) -> bool {
     excludes.iter().any(|excluded| {
         path == excluded
@@ -1200,7 +1145,6 @@ fn path_is_excluded(path: &PortablePath, excludes: &[PortablePath]) -> bool {
                     .is_some_and(|suffix| suffix.starts_with('/')))
     })
 }
-
 fn unsafe_path(path: &Path, message: impl Into<String>) -> WorkspaceError {
     WorkspaceError::new(
         WorkspaceErrorKind::UnsafeFilesystem,
@@ -1208,18 +1152,13 @@ fn unsafe_path(path: &Path, message: impl Into<String>) -> WorkspaceError {
         message,
     )
 }
-
 #[cfg(all(test, unix))]
 mod tests {
     use std::io::Write as _;
-
     #[cfg(unix)]
     use std::process::Command;
-
     use tempfile::TempDir;
-
     use super::*;
-
     const ROOT: &str = r#"manifest-version = 1
 [workspace]
 members = ["packages/app", "packages/lib"]
@@ -1235,7 +1174,6 @@ license = "Apache-2.0"
 [workspace.dependencies]
 lib = { path = "packages/lib", package = "apps.sora/lib", version = "^1.0.0" }
 "#;
-
     const APP: &str = r#"manifest-version = 1
 [package]
 namespace = { workspace = true }
@@ -1252,7 +1190,6 @@ lib = { workspace = true }
 [dev-dependencies]
 fixture = { path = "../lib" }
 "#;
-
     const LIB: &str = r#"manifest-version = 1
 [package]
 namespace = { workspace = true }
@@ -1263,7 +1200,6 @@ abi-version = { workspace = true }
 [lib]
 exports = ["value"]
 "#;
-
     const STANDALONE: &str = r#"manifest-version = 1
 [package]
 namespace = "apps.sora"
@@ -1274,14 +1210,12 @@ abi-version = 1
 [lib]
 exports = []
 "#;
-
     fn write_file(path: &Path, body: &str) {
         fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
         let mut file = fs::File::create(path).expect("create file");
         file.write_all(body.as_bytes()).expect("write file");
         file.sync_all().expect("sync file");
     }
-
     fn fixture() -> TempDir {
         let temp = TempDir::new().expect("temporary directory");
         write_file(&temp.path().join(MANIFEST_FILE_NAME), ROOT);
@@ -1296,7 +1230,6 @@ exports = []
         fs::create_dir_all(temp.path().join("packages/app/src")).expect("app source");
         temp
     }
-
     #[test]
     fn discovers_ancestor_and_owning_workspace() {
         let temp = fixture();
@@ -1311,7 +1244,6 @@ exports = []
             canonical_root.join(MANIFEST_FILE_NAME)
         );
     }
-
     #[test]
     fn loads_inheritance_and_keeps_dev_dependencies_nontransitive() {
         let temp = fixture();
@@ -1349,7 +1281,6 @@ exports = []
                 .is_empty()
         );
     }
-
     #[test]
     fn loads_reachable_nonmember_path_package_without_workspace_inheritance() {
         let temp = fixture();
@@ -1376,7 +1307,6 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
             package.dependencies["lib"].local_manifest.as_deref(),
             Some(root.join("packages/lib/Musubi.toml").as_path())
         );
-
         let inherited = helper.replace("version = \"1.0.0\"", "version = { workspace = true }");
         write_file(&temp.path().join("packages/helper/Musubi.toml"), &inherited);
         assert_eq!(
@@ -1387,7 +1317,6 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
             WorkspaceErrorKind::Manifest
         );
     }
-
     #[test]
     fn metadata_and_selection_are_deterministic() {
         let temp = fixture();
@@ -1415,7 +1344,6 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
             1
         );
     }
-
     #[test]
     fn rejects_path_escape_and_declared_identity_mismatch() {
         let temp = fixture();
@@ -1425,7 +1353,6 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
             load_workspace(temp.path()).expect_err("escape").kind(),
             WorkspaceErrorKind::Escape
         );
-
         write_file(&temp.path().join("packages/app/Musubi.toml"), APP);
         let mismatch = ROOT.replace("apps.sora/lib", "apps.sora/other");
         write_file(&temp.path().join(MANIFEST_FILE_NAME), &mismatch);
@@ -1436,12 +1363,10 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
             WorkspaceErrorKind::Dependency
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_symlinked_members_and_manifests() {
         use std::os::unix::fs::symlink;
-
         let temp = TempDir::new().expect("temporary directory");
         write_file(&temp.path().join(MANIFEST_FILE_NAME), ROOT);
         let outside = TempDir::new().expect("outside");
@@ -1457,18 +1382,15 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
             WorkspaceErrorKind::UnsafeFilesystem
         );
     }
-
     #[test]
     fn manifest_reader_accepts_a_bounded_regular_leaf() {
         let temp = TempDir::new().expect("temporary directory");
         let manifest = temp.path().join(MANIFEST_FILE_NAME);
         write_file(&manifest, STANDALONE);
-
         let parsed = read_manifest(&manifest).expect("bounded regular manifest");
         assert_eq!(parsed.schema_version, 1);
         assert!(parsed.package.is_some());
     }
-
     #[cfg(unix)]
     #[test]
     fn manifest_reader_rejects_a_raced_regular_replacement() {
@@ -1477,7 +1399,6 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
         let replacement = temp.path().join("replacement.toml");
         write_file(&manifest, STANDALONE);
         write_file(&replacement, STANDALONE);
-
         let error = read_manifest_with_reader(&manifest, |path, maximum| {
             crate::local_file::read_bounded_single_link_regular_file_with_hook_v1(
                 path,
@@ -1491,14 +1412,12 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
         .expect_err("raced manifest replacement must fail");
         assert_eq!(error.kind(), WorkspaceErrorKind::Io);
     }
-
     #[cfg(unix)]
     #[test]
     fn manifest_reader_rejects_a_raced_fifo_without_blocking() {
         let temp = TempDir::new().expect("temporary directory");
         let manifest = temp.path().join(MANIFEST_FILE_NAME);
         write_file(&manifest, STANDALONE);
-
         let error = read_manifest_with_reader(&manifest, |path, maximum| {
             crate::local_file::read_bounded_single_link_regular_file_with_hook_v1(
                 path,
@@ -1516,7 +1435,6 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
         .expect_err("raced FIFO manifest must fail without hanging");
         assert_eq!(error.kind(), WorkspaceErrorKind::Io);
     }
-
     #[test]
     fn manifest_reader_rejects_hardlinked_and_oversized_leaves() {
         let temp = TempDir::new().expect("temporary directory");
@@ -1530,7 +1448,6 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
                 .kind(),
             WorkspaceErrorKind::Io
         );
-
         fs::remove_file(&alias).expect("remove hard link");
         fs::File::create(&manifest)
             .expect("replace manifest")
@@ -1543,7 +1460,6 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
             WorkspaceErrorKind::Manifest
         );
     }
-
     #[test]
     fn excluded_nested_package_is_standalone() {
         let temp = TempDir::new().expect("temporary directory");
@@ -1563,7 +1479,6 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
                 .join("vendor/tool/Musubi.toml")
         );
     }
-
     #[test]
     fn standalone_package_gets_synthetic_workspace() {
         let temp = TempDir::new().expect("temporary directory");

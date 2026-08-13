@@ -1,12 +1,9 @@
 //! Lane compliance policy data structures shared across hosts and SDKs.
-
 use std::collections::BTreeSet;
-
 use iroha_crypto::{Hash, LaneCommitmentId};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -16,40 +13,34 @@ use crate::{
     metadata::Metadata,
     nexus::{DataSpaceId, LaneId, UniversalAccountId},
 };
-
 /// Identifier attached to a [`LaneCompliancePolicy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
 pub struct LaneCompliancePolicyId(Hash);
-
 impl LaneCompliancePolicyId {
     /// Construct a new identifier from a hash.
     #[must_use]
     pub const fn new(hash: Hash) -> Self {
         Self(hash)
     }
-
     /// Borrow the underlying hash.
     #[must_use]
     pub const fn as_hash(&self) -> &Hash {
         &self.0
     }
 }
-
 impl From<Hash> for LaneCompliancePolicyId {
     fn from(value: Hash) -> Self {
         Self::new(value)
     }
 }
-
 impl Default for LaneCompliancePolicyId {
     fn default() -> Self {
         Self(Hash::prehashed([0_u8; Hash::LENGTH]))
     }
 }
-
 /// Declarative policy describing per-lane allow/deny rules and audit controls.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -81,7 +72,6 @@ pub struct LaneCompliancePolicy {
     #[norito(default)]
     pub metadata: Metadata,
 }
-
 impl LaneCompliancePolicy {
     /// Borrow the policy identifier.
     #[must_use]
@@ -89,7 +79,6 @@ impl LaneCompliancePolicy {
         self.id
     }
 }
-
 /// Rule evaluated against incoming transactions.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -102,7 +91,6 @@ pub struct LaneComplianceRule {
     #[norito(default)]
     pub jurisdiction_override: JurisdictionSet,
 }
-
 impl LaneComplianceRule {
     /// Human-readable reason code (if supplied).
     #[must_use]
@@ -110,7 +98,6 @@ impl LaneComplianceRule {
         self.reason_code.as_deref()
     }
 }
-
 /// Participant selector matching incoming transactions.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -137,7 +124,6 @@ pub struct ParticipantSelector {
     #[norito(default)]
     pub privacy_commitments_any_of: Vec<LaneCommitmentId>,
 }
-
 /// Transfer limits expressed per asset or policy bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -155,7 +141,6 @@ pub struct TransferLimit {
     #[norito(default)]
     pub bucket: Option<String>,
 }
-
 /// Audit knobs controlling how long decision records are persisted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -167,7 +152,6 @@ pub struct AuditControls {
     /// Retention in milliseconds for stored decision records.
     pub retention_ms: u64,
 }
-
 impl Default for AuditControls {
     fn default() -> Self {
         Self {
@@ -177,7 +161,6 @@ impl Default for AuditControls {
         }
     }
 }
-
 /// Jurisdiction labels applied to a policy or rule override.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -186,7 +169,6 @@ pub struct JurisdictionSet {
     #[norito(default)]
     pub flags: BTreeSet<JurisdictionFlag>,
 }
-
 impl JurisdictionSet {
     /// Create an empty set.
     #[must_use]
@@ -195,19 +177,16 @@ impl JurisdictionSet {
             flags: BTreeSet::new(),
         }
     }
-
     /// Insert a new flag.
     pub fn insert(&mut self, flag: JurisdictionFlag) {
         self.flags.insert(flag);
     }
-
     /// Whether the set contains the provided flag.
     #[must_use]
     pub fn contains(&self, flag: JurisdictionFlag) -> bool {
         self.flags.contains(&flag)
     }
 }
-
 /// Enumerates common jurisdiction tags used for reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -222,13 +201,10 @@ pub enum JurisdictionFlag {
     /// Indicates the policy enforces sanctioned-party screening.
     SanctionsScreened,
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_primitives::numeric::Numeric;
-
     use super::*;
-
     #[derive(Encode)]
     struct ForgedTransferLimit {
         asset_id: Option<AssetDefinitionId>,
@@ -236,7 +212,6 @@ mod tests {
         max_daily_notional_xor: Option<Numeric>,
         bucket: Option<String>,
     }
-
     #[test]
     fn transfer_limit_rejects_forged_negative_quantity() {
         let forged = ForgedTransferLimit {
@@ -247,7 +222,6 @@ mod tests {
         };
         let encoded = forged.encode();
         let mut input = encoded.as_slice();
-
         assert!(
             <TransferLimit as Decode>::decode(&mut input).is_err(),
             "compliance notional caps must reject forged negative quantities"

@@ -4,9 +4,7 @@
 //! strictly smaller than `2^b`.  The rules below intentionally use only
 //! triangle inequality and the exact `N`-term negacyclic convolution bound;
 //! no heuristic Gaussian cancellation is credited to correctness.
-
 use super::{ZkAmsMkheErrorV1, phase23_max_composed_rotation_key_switch_count};
-
 /// Exact symbolic certificate for the Phase-II/III ciphertext path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheNoiseCertificateV1 {
@@ -75,10 +73,8 @@ pub struct ZkAmsMkheNoiseCertificateV1 {
     /// Strict headroom below the centered `Q/2` correctness boundary.
     pub correctness_margin_bits: u16,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Bound(u16);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IngressErrorBoundsV1 {
     sampled_min: i16,
@@ -92,7 +88,6 @@ struct IngressErrorBoundsV1 {
     upper_half_correction_min: u8,
     upper_half_correction_max: u8,
 }
-
 fn derive_ingress_error_bounds_v1(
     sampled_error_eta: u8,
 ) -> Result<IngressErrorBoundsV1, ZkAmsMkheErrorV1> {
@@ -133,7 +128,6 @@ fn derive_ingress_error_bounds_v1(
     validate_ingress_error_bounds_v1(bounds, sampled_error_eta)?;
     Ok(bounds)
 }
-
 fn validate_ingress_error_bounds_v1(
     bounds: IngressErrorBoundsV1,
     sampled_error_eta: u8,
@@ -178,14 +172,12 @@ fn validate_ingress_error_bounds_v1(
     }
     Ok(())
 }
-
 fn strict_magnitude_bound_bits(max_abs: u8) -> Result<u8, ZkAmsMkheErrorV1> {
     let exclusive = usize::from(max_abs)
         .checked_add(1)
         .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
     u8::try_from(ceil_log2(exclusive)?).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)
 }
-
 impl Bound {
     fn add(self, rhs: Self) -> Result<Self, ZkAmsMkheErrorV1> {
         Ok(Self(
@@ -195,7 +187,6 @@ impl Bound {
                 .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?,
         ))
     }
-
     fn sum(self, count: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         if count == 0 {
             return Err(ZkAmsMkheErrorV1::InvalidProfile);
@@ -206,7 +197,6 @@ impl Bound {
                 .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?,
         ))
     }
-
     fn scalar_mul(self, rhs: Self) -> Result<Self, ZkAmsMkheErrorV1> {
         Ok(Self(
             self.0
@@ -214,7 +204,6 @@ impl Bound {
                 .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?,
         ))
     }
-
     fn polynomial_mul(self, rhs: Self, log_ring_degree: u16) -> Result<Self, ZkAmsMkheErrorV1> {
         Ok(Self(
             self.0
@@ -224,7 +213,6 @@ impl Bound {
         ))
     }
 }
-
 /// Derive the complete conservative schedule for the frozen construction.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn derive_noise_certificate_v1(
@@ -256,7 +244,6 @@ pub(super) fn derive_noise_certificate_v1(
     let ternary = Bound(1);
     let sampled_rlwe_error = Bound(u16::from(error_bounds.sampled_bound_bits));
     let natural_lift_effective_error = Bound(u16::from(error_bounds.effective_bound_bits));
-
     // Key error and c1 encryption error retain the actual CBD-eta sampling
     // distribution. Only the c0 proof witness uses the canonical natural-lift
     // effective bound, derived above from `e0' = e0 - h` rather than silently
@@ -271,7 +258,6 @@ pub(super) fn derive_noise_certificate_v1(
         .max(independent_encryption_error_times_secret.0);
     let independent_fresh_quotient = Bound(independent_fresh_quotient).sum(3)?;
     let independent_fresh_residual = plaintext_modulus.scalar_mul(independent_fresh_quotient)?;
-
     // CKS samples a quotient error at least 2^(lambda+1) wider than the
     // complete source quotient.  All roster contributions are included.
     let cks_smudge_quotient = Bound(
@@ -284,7 +270,6 @@ pub(super) fn derive_noise_certificate_v1(
     let aggregate_cks_smudge = cks_smudge_quotient.sum(party_count)?;
     let cks_smudge_residual = plaintext_modulus.scalar_mul(aggregate_cks_smudge)?;
     let collective_ingress_residual = independent_fresh_residual.add(cks_smudge_residual)?;
-
     // The three-round collective RKG terms are bounded as
     // s*sum(e0), (sum(u)-s)*sum(e2), and sum(e1/e3).
     let collective_secret = ternary.sum(party_count)?;
@@ -300,18 +285,15 @@ pub(super) fn derive_noise_certificate_v1(
     )
     .sum(3)?;
     let collective_rkg_residual = plaintext_modulus.scalar_mul(rkg_quotient)?;
-
     // Each hybrid digit is one centered ~60-bit RNS limb and is consumed,
     // multiplied, and released before the next limb is expanded.
     let hybrid_digit = Bound(60);
     let hybrid_key_switch_residual = hybrid_digit
         .polynomial_mul(collective_rkg_residual, log_n)?
         .sum(hybrid_limb_count)?;
-
     let slot_count = ring_degree / 2;
     let max_composed_rotation_key_switch_count =
         phase23_max_composed_rotation_key_switch_count(slot_count)?;
-
     // A canonical arbitrary rotation is a sequence of binary automorphisms.
     // Automorphisms preserve the infinity norm, so its residual is the source
     // plus one complete switch residual for every constituent key switch.
@@ -321,7 +303,6 @@ pub(super) fn derive_noise_certificate_v1(
         collective_ingress_residual
             .add(hybrid_key_switch_residual.sum(max_composed_rotation_key_switch_count)?)?
     };
-
     let mapped_fresh = composed_rotation_residual
         .polynomial_mul(plaintext, log_n)?
         .sum(sparse_map_fan_in)?;
@@ -331,7 +312,6 @@ pub(super) fn derive_noise_certificate_v1(
     let phase23_fresh_operand = Bound(mapped_fresh.0.max(collective_ingress_residual.0));
     let challenge_times_mapped = mapped_fresh.polynomial_mul(plaintext, log_n)?;
     let linear_accumulator = challenge_times_mapped.sum(max_batch_size)?;
-
     // Multiplication of phases `(m1+r1)(m2+r2)` includes the exact plaintext
     // reduction quotient, both mixed terms, and the residual product.
     let plaintext_product_quotient = plaintext.polynomial_mul(plaintext, log_n)?.add(plaintext)?;
@@ -348,7 +328,6 @@ pub(super) fn derive_noise_certificate_v1(
     .sum(4)?
     .add(hybrid_key_switch_residual)?;
     let equation_6_cross_term = cross_product.sum(4)?;
-
     let challenge_times_cross = equation_6_cross_term.polynomial_mul(plaintext, log_n)?;
     let fresh_product = Bound(
         plaintext_product_quotient.0.max(first_mixed.0).max(
@@ -362,14 +341,12 @@ pub(super) fn derive_noise_certificate_v1(
     let challenge_squared_times_fresh = fresh_product.polynomial_mul(plaintext, log_n)?;
     let per_row_level_one = challenge_times_cross.add(challenge_squared_times_fresh)?;
     let level_one_accumulator = per_row_level_one.sum(max_batch_size)?;
-
     // Equation (7) applies one additional public sparse map but no encrypted
     // multiplication; it is tracked separately even though E/rE dominate it.
     let encrypted_commitment = linear_accumulator
         .add(hybrid_key_switch_residual)?
         .polynomial_mul(plaintext, log_n)?
         .sum(sparse_map_fan_in)?;
-
     // Public partial-decryption shares must statistically hide the full
     // evaluated quotient.  Since p > 2^255, division by p loses at least 255
     // bits.  Smudging is summed over every roster member before decoding.
@@ -388,7 +365,6 @@ pub(super) fn derive_noise_certificate_v1(
         plaintext_modulus.scalar_mul(aggregate_decryption_smudge)?;
     let final_decryption_residual =
         Bound(evaluated_residual).add(aggregate_decryption_smudge_residual)?;
-
     let ciphertext_modulus_bits =
         u16::try_from(ciphertext_modulus_bits).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
     let centered_capacity = ciphertext_modulus_bits
@@ -397,7 +373,6 @@ pub(super) fn derive_noise_certificate_v1(
     let correctness_margin_bits = centered_capacity
         .checked_sub(final_decryption_residual.0)
         .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
-
     Ok(ZkAmsMkheNoiseCertificateV1 {
         ring_degree: u32::try_from(ring_degree).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
         party_count: u8::try_from(party_count).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
@@ -437,7 +412,6 @@ pub(super) fn derive_noise_certificate_v1(
         correctness_margin_bits,
     })
 }
-
 fn ceil_log2(value: usize) -> Result<u16, ZkAmsMkheErrorV1> {
     if value == 0 {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
@@ -445,11 +419,9 @@ fn ceil_log2(value: usize) -> Result<u16, ZkAmsMkheErrorV1> {
     u16::try_from(usize::BITS - (value - 1).leading_zeros())
         .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn release_schedule_has_strict_margin_and_every_phase_is_monotone() {
         let certificate = derive_noise_certificate_v1(131_072, 8, 38, 524_378, 8, 2_280, 128, 2)
@@ -492,7 +464,6 @@ mod tests {
                 < certificate.final_decryption_residual_bits
         );
     }
-
     #[test]
     fn sampled_and_natural_lift_error_bounds_cross_power_boundaries_exactly() {
         let eta_one = derive_ingress_error_bounds_v1(1).unwrap();
@@ -503,11 +474,9 @@ mod tests {
         assert_eq!(eta_one.effective_max, 1);
         assert_eq!(eta_one.effective_verifier_max_abs, 2);
         assert_eq!(eta_one.effective_bound_bits, 2);
-
         let eta_two = derive_ingress_error_bounds_v1(2).unwrap();
         assert_eq!(eta_two.sampled_bound_bits, 2);
         assert_eq!(eta_two.effective_bound_bits, 2);
-
         let eta_three = derive_ingress_error_bounds_v1(3).unwrap();
         assert_eq!(eta_three.sampled_min, -3);
         assert_eq!(eta_three.sampled_max, 3);
@@ -516,7 +485,6 @@ mod tests {
         assert_eq!(eta_three.effective_max, 3);
         assert_eq!(eta_three.effective_verifier_max_abs, 4);
         assert_eq!(eta_three.effective_bound_bits, 3);
-
         for (maximum, expected_bits) in [(0, 0), (1, 1), (2, 2), (3, 2), (4, 3)] {
             assert_eq!(strict_magnitude_bound_bits(maximum), Ok(expected_bits));
         }
@@ -527,7 +495,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn every_error_bound_or_correction_splice_fails_invariant_validation() {
         let expected = derive_ingress_error_bounds_v1(2).unwrap();
@@ -583,7 +550,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn one_bit_less_than_required_modulus_is_rejected() {
         let baseline = derive_noise_certificate_v1(131_072, 8, 38, 524_378, 8, 2_280, 128, 2)
@@ -602,7 +568,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidProfile)
         );
     }
-
     #[test]
     fn adversarial_fan_in_roster_and_statistical_downgrades_fail_closed() {
         for invalid in [
@@ -618,7 +583,6 @@ mod tests {
             assert_eq!(invalid, Err(ZkAmsMkheErrorV1::InvalidProfile));
         }
     }
-
     #[test]
     fn signed_binary_composition_counts_cover_every_power_of_two_boundary() {
         for (slots, expected_composed) in [

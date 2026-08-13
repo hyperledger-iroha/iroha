@@ -4,7 +4,6 @@
 //! home [`DataSpaceId`], package scope, and package name.  Human-facing
 //! `namespace/package` selectors are resolved through immutable namespace
 //! bindings before they enter releases, resolver rows, or lock graphs.
-
 use core::cmp::Ordering;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -13,16 +12,13 @@ use std::{
     string::String,
     vec::Vec,
 };
-
 use iroha_crypto::{Hash, HashOf, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 mod streaming;
 use streaming::canonical_frame_len;
 #[cfg(feature = "json")]
 use streaming::musubi_json_len_bounded;
-
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{

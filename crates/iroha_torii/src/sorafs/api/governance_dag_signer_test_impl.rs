@@ -2,19 +2,15 @@ impl GovernanceDagRuntimeSigner for ApiTestGovernanceDagSigner {
     fn handle(&self) -> &str {
         Self::HANDLE
     }
-
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
         Ok(Self::expected_qualification())
     }
-
     fn publisher_peer_id(&self) -> &[u8] {
         Self::PEER_ID
     }
-
     fn public_key(&self) -> [u8; 32] {
         self.public_key_bytes()
     }
-
     fn sign(
         &self,
         _purpose: sorafs_node::GovernanceDagSigningPurposeV1,

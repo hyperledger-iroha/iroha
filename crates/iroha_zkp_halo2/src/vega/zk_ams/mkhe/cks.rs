@@ -4,9 +4,7 @@
 //! streaming corridor. The former native full-roster owner and replay path is
 //! retained only for differential tests; compiling it into production would
 //! make simultaneous ownership of the source and contribution set possible.
-
 use core::mem::size_of;
-
 use super::{
     BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1, ZkAmsMkheErrorV1,
     ZkAmsMkheGovernedRosterWireV1, ZkAmsMkhePartyIdV1, ZkAmsMkheWireBindingV1,
@@ -20,7 +18,6 @@ use super::{
     wire::{ZK_AMS_MKHE_MAX_PROOF_BYTES_V1, derive_wire_length_certificate_v1},
 };
 use crate::vega::sponge::{Keccak256, keccak256, shake256};
-
 #[cfg(test)]
 use super::{
     ArtifactAuthentication, MaskedRelaxedRandomSourceV1, RnsPolynomial, SecretPolynomial,
@@ -35,7 +32,6 @@ use super::{
     manifest::zk_ams_mkhe_release_manifest_v1,
     wire::zk_ams_mkhe_cks_statement_digest_v1,
 };
-
 const CKS_PROOF_TAG_V1: [u8; 4] = *b"ZACP";
 const CKS_PROOF_HEADER_BYTES_V1: usize = 4 + 1 + 2 + 4 + 32 + 4 + 4 + 4;
 const CKS_SIGNED_SMALL_BYTES_V1: usize = size_of::<i64>();
@@ -47,7 +43,6 @@ const CKS_AUTH_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.authenticated-cks-contr
 const CKS_PROOF_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.cks-wide-relation-proof";
 const CKS_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.cks-proof-fiat-shamir";
 const CKS_SPARSE_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.cks-proof-sparse-challenge";
-
 /// Canonical full-roster extension of an independently keyed source ciphertext.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,7 +59,6 @@ pub(super) struct ZkAmsMkheCksSourceCiphertextV1 {
     components: [Option<ZkAmsMkheRnsPolynomialWireV1>; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     source_digest: [u8; 32],
 }
-
 #[cfg(test)]
 impl ZkAmsMkheCksSourceCiphertextV1 {
     /// Construct and canonically extend an ordered source component list to the full roster.
@@ -126,49 +120,41 @@ impl ZkAmsMkheCksSourceCiphertextV1 {
         value.source_digest = value.recompute_digest()?;
         Ok(value)
     }
-
     /// Digest of the exact source metadata, constant, and zero-extended component vector.
     #[must_use]
     pub const fn source_digest(&self) -> [u8; 32] {
         self.source_digest
     }
-
     /// Source transcript digest inherited by every contribution and the compact output.
     #[must_use]
     pub const fn transcript_digest(&self) -> [u8; 32] {
         self.transcript_digest
     }
-
     /// Source record index used for the compact output binding.
     #[must_use]
     pub const fn record_index(&self) -> u32 {
         self.record_index
     }
-
     /// RLWE sample index retained by the compact output.
     #[must_use]
     pub const fn sample_index(&self) -> u64 {
         self.sample_index
     }
-
     /// BGV level retained by the compact output.
     #[must_use]
     pub const fn level(&self) -> u8 {
         self.level
     }
-
     /// Constant source polynomial `c_0`.
     #[must_use]
     pub const fn constant(&self) -> &ZkAmsMkheRnsPolynomialWireV1 {
         &self.constant
     }
-
     /// Present source component for one roster slot; absence means canonical zero.
     #[must_use]
     pub fn component(&self, party_index: usize) -> Option<&ZkAmsMkheRnsPolynomialWireV1> {
         self.components.get(party_index).and_then(Option::as_ref)
     }
-
     fn validate_for_roster(
         &self,
         roster: &ZkAmsMkheGovernedRosterWireV1,
@@ -195,7 +181,6 @@ impl ZkAmsMkheCksSourceCiphertextV1 {
         }
         Ok(())
     }
-
     fn recompute_digest(&self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
         let mut hash = Keccak256::new();
@@ -220,7 +205,6 @@ impl ZkAmsMkheCksSourceCiphertextV1 {
         Ok(hash.finalize())
     }
 }
-
 /// Borrowed legacy CKS statement for one governed source ciphertext.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
@@ -232,7 +216,6 @@ pub(super) struct ZkAmsMkheCksStatementV1<'a> {
     party_public_b: &'a [&'a ZkAmsMkheRnsPolynomialWireV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     key_context_digest: [u8; 32],
 }
-
 #[cfg(test)]
 impl<'a> ZkAmsMkheCksStatementV1<'a> {
     /// Construct the complete release statement for all ordered CKS contributions.
@@ -267,34 +250,29 @@ impl<'a> ZkAmsMkheCksStatementV1<'a> {
             key_context_digest,
         })
     }
-
     /// Exact governed roster.
     #[must_use]
     #[expect(dead_code, reason = "native CKS statement inspection surface")]
     pub const fn roster(&self) -> &'a ZkAmsMkheGovernedRosterWireV1 {
         self.roster
     }
-
     /// Canonically zero-extended source ciphertext.
     #[must_use]
     #[expect(dead_code, reason = "native CKS statement inspection surface")]
     pub const fn source(&self) -> &'a ZkAmsMkheCksSourceCiphertextV1 {
         self.source
     }
-
     /// Compact-output linear polynomial `a_target`.
     #[must_use]
     #[expect(dead_code, reason = "native CKS statement inspection surface")]
     pub const fn target_a(&self) -> &'a ZkAmsMkheRnsPolynomialWireV1 {
         self.target_a
     }
-
     /// Common public-key relation polynomial `a_pk`.
     #[must_use]
     pub const fn public_key_a(&self) -> &'a ZkAmsMkheRnsPolynomialWireV1 {
         self.public_key_a
     }
-
     /// Ordered public-key relation polynomials `b_i`.
     #[must_use]
     pub const fn party_public_b(
@@ -302,14 +280,12 @@ impl<'a> ZkAmsMkheCksStatementV1<'a> {
     ) -> &'a [&'a ZkAmsMkheRnsPolynomialWireV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] {
         self.party_public_b
     }
-
     /// Digest binding the target and complete governed public-key relation set.
     #[must_use]
     #[expect(dead_code, reason = "native CKS statement inspection surface")]
     pub const fn key_context_digest(&self) -> [u8; 32] {
         self.key_context_digest
     }
-
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         self.source.validate_for_roster(self.roster)?;
         if self.key_context_digest
@@ -319,7 +295,6 @@ impl<'a> ZkAmsMkheCksStatementV1<'a> {
         }
         Ok(())
     }
-
     fn internal_for_party(
         &self,
         party_index: usize,
@@ -365,27 +340,23 @@ impl<'a> ZkAmsMkheCksStatementV1<'a> {
         Ok((profile, parties, relation))
     }
 }
-
 fn clear_cks_i64_slice_v1(values: &mut [i64]) {
     let values = core::hint::black_box(values);
     values.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *values);
 }
-
 fn clear_cks_byte_slice_v1(values: &mut [u8]) {
     let values = core::hint::black_box(values);
     values.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *values);
 }
-
 #[cfg(test)]
 std::thread_local! {
     static CKS_ZEROIZING_DROP_AUDIT_V1: core::cell::Cell<(usize, usize)> =
         const { core::cell::Cell::new((0, 0)) };
 }
-
 #[cfg(test)]
 fn record_cks_zeroizing_drop_v1(all_zero: bool) {
     CKS_ZEROIZING_DROP_AUDIT_V1.with(|audit| {
@@ -393,33 +364,26 @@ fn record_cks_zeroizing_drop_v1(all_zero: bool) {
         audit.set((drops + 1, failed + usize::from(!all_zero)));
     });
 }
-
 struct ZeroizingCksI64BufferV1(Vec<i64>);
-
 impl ZeroizingCksI64BufferV1 {
     fn new() -> Self {
         Self(Vec::new())
     }
-
     fn into_vec(mut self) -> Vec<i64> {
         core::mem::take(&mut self.0)
     }
 }
-
 impl core::ops::Deref for ZeroizingCksI64BufferV1 {
     type Target = Vec<i64>;
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl core::ops::DerefMut for ZeroizingCksI64BufferV1 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-
 impl Drop for ZeroizingCksI64BufferV1 {
     fn drop(&mut self) {
         clear_cks_i64_slice_v1(&mut self.0);
@@ -427,33 +391,26 @@ impl Drop for ZeroizingCksI64BufferV1 {
         record_cks_zeroizing_drop_v1(self.0.iter().all(|value| *value == 0));
     }
 }
-
 struct ZeroizingCksByteBufferV1(Vec<u8>);
-
 impl ZeroizingCksByteBufferV1 {
     fn new() -> Self {
         Self(Vec::new())
     }
-
     fn into_vec(mut self) -> Vec<u8> {
         core::mem::take(&mut self.0)
     }
 }
-
 impl core::ops::Deref for ZeroizingCksByteBufferV1 {
     type Target = Vec<u8>;
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl core::ops::DerefMut for ZeroizingCksByteBufferV1 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-
 impl Drop for ZeroizingCksByteBufferV1 {
     fn drop(&mut self) {
         clear_cks_byte_slice_v1(&mut self.0);
@@ -461,7 +418,6 @@ impl Drop for ZeroizingCksByteBufferV1 {
         record_cks_zeroizing_drop_v1(self.0.iter().all(|value| *value == 0));
     }
 }
-
 /// Canonical fixed-width wide-coefficient CKS relation proof.
 #[cfg_attr(test, derive(Clone))]
 #[derive(PartialEq, Eq)]
@@ -478,7 +434,6 @@ pub struct ZkAmsMkheCksProofV1 {
     /// retaining the 33 MiB expanded table.
     smudge_response: Vec<u8>,
 }
-
 impl core::fmt::Debug for ZkAmsMkheCksProofV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -489,7 +444,6 @@ impl core::fmt::Debug for ZkAmsMkheCksProofV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl Drop for ZkAmsMkheCksProofV1 {
     fn drop(&mut self) {
         clear_cks_i64_slice_v1(&mut self.secret_response);
@@ -506,7 +460,6 @@ impl Drop for ZkAmsMkheCksProofV1 {
         );
     }
 }
-
 impl ZkAmsMkheCksProofV1 {
     fn smudge_response_count(&self) -> Option<usize> {
         let width = usize::from(self.wide_response_bytes);
@@ -516,7 +469,6 @@ impl ZkAmsMkheCksProofV1 {
             Some(self.smudge_response.len() / width)
         }
     }
-
     pub(super) fn smudge_responses(
         &self,
     ) -> Result<
@@ -532,19 +484,15 @@ impl ZkAmsMkheCksProofV1 {
             .chunks_exact(width)
             .map(SignedWideV1::decode_fixed))
     }
-
     pub(super) const fn challenge_seed(&self) -> [u8; 32] {
         self.challenge_seed
     }
-
     pub(super) fn secret_responses(&self) -> &[i64] {
         &self.secret_response
     }
-
     pub(super) fn public_key_error_responses(&self) -> &[i64] {
         &self.public_key_error_response
     }
-
     pub(super) fn validate_release_response_bounds(
         &self,
         smudge_bits: usize,
@@ -577,7 +525,6 @@ impl ZkAmsMkheCksProofV1 {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn replace_smudge_response_for_test(
         &mut self,
@@ -603,7 +550,6 @@ impl ZkAmsMkheCksProofV1 {
         destination.copy_from_slice(&encoded);
         Ok(())
     }
-
     /// Exact length of the canonical fixed-width native proof.
     pub fn encoded_len(&self) -> Result<usize, ZkAmsMkheErrorV1> {
         if self.challenge_seed == [0; 32]
@@ -618,7 +564,6 @@ impl ZkAmsMkheCksProofV1 {
             usize::from(self.wide_response_bytes),
         )
     }
-
     /// Encode the sole canonical `ZACP` proof layout.
     pub fn encode(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
         let length = self.encoded_len()?;
@@ -660,7 +605,6 @@ impl ZkAmsMkheCksProofV1 {
         }
         Ok(bytes)
     }
-
     fn decode_exact(
         bytes: &[u8],
         expected_degree: usize,
@@ -730,7 +674,6 @@ impl ZkAmsMkheCksProofV1 {
             smudge_response: smudge_response.into_vec(),
         })
     }
-
     /// Decode the exact release-profile proof shape after complete length preflight.
     pub fn decode_release_exact(bytes: &[u8]) -> Result<Self, ZkAmsMkheErrorV1> {
         let evidence = zk_ams_mkhe_cks_resource_evidence_v1()?;
@@ -741,7 +684,6 @@ impl ZkAmsMkheCksProofV1 {
         )
     }
 }
-
 /// One proof-bound and authentication-key-bound CKS contribution.
 #[cfg(test)]
 #[cfg_attr(test, derive(Clone))]
@@ -752,7 +694,6 @@ pub(super) struct ZkAmsMkheAuthenticatedCksContributionV1 {
     proof: ZkAmsMkheCksProofV1,
     authentication: ArtifactAuthentication,
 }
-
 #[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheAuthenticatedCksContributionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -768,7 +709,6 @@ impl core::fmt::Debug for ZkAmsMkheAuthenticatedCksContributionV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Exact release proof and contribution-record size evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCksResourceEvidenceV1 {
@@ -797,7 +737,6 @@ pub struct ZkAmsMkheCksResourceEvidenceV1 {
     /// Digest of every accounting field and proof domain.
     pub evidence_digest: [u8; 32],
 }
-
 /// Deterministic reason for rejecting an ordered CKS contribution set.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -816,7 +755,6 @@ pub(super) enum ZkAmsMkheCksAbortReasonV1 {
     /// The native public-key/CKS relation proof failed.
     ProofFailure = 6,
 }
-
 /// First governed roster slot rejected during CKS combination.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -832,7 +770,6 @@ pub(super) struct ZkAmsMkheIdentifiableCksAbortV1 {
     /// Digest binding the rejected evidence and statement.
     pub evidence_digest: [u8; 32],
 }
-
 /// Return exact governed release accounting for one CKS contribution.
 pub fn zk_ams_mkhe_cks_resource_evidence_v1()
 -> Result<ZkAmsMkheCksResourceEvidenceV1, ZkAmsMkheErrorV1> {
@@ -870,7 +807,6 @@ pub fn zk_ams_mkhe_cks_resource_evidence_v1()
     evidence.evidence_digest = cks_resource_digest(evidence);
     Ok(evidence)
 }
-
 fn cks_proof_bytes(
     ring_degree: usize,
     wide_response_bytes: usize,
@@ -880,7 +816,6 @@ fn cks_proof_bytes(
         .and_then(|value| value.checked_add(CKS_PROOF_HEADER_BYTES_V1))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn cks_resource_digest(evidence: ZkAmsMkheCksResourceEvidenceV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(256);
     frame.extend_from_slice(CKS_RESOURCE_DOMAIN_V1);
@@ -907,7 +842,6 @@ fn cks_resource_digest(evidence: ZkAmsMkheCksResourceEvidenceV1) -> [u8; 32] {
     frame.push(evidence.contribution_ceiling_met.into());
     keccak256(&frame)
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CksBindingV1 {
     profile_digest: [u8; 32],
@@ -922,7 +856,6 @@ pub(super) struct CksBindingV1 {
     party: ZkAmsMkhePartyIdV1,
     level: u8,
 }
-
 impl CksBindingV1 {
     pub(super) fn update_hash(&self, hash: &mut Keccak256) {
         hash.update(CKS_BINDING_DOMAIN_V1);
@@ -939,7 +872,6 @@ impl CksBindingV1 {
         hash.update(&[self.level]);
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn streaming_cks_binding_v1(
     roster: &ZkAmsMkheGovernedRosterWireV1,
@@ -973,7 +905,6 @@ pub(super) fn streaming_cks_binding_v1(
         level,
     })
 }
-
 #[cfg(test)]
 fn wire_polynomial_digest(
     polynomial: &ZkAmsMkheRnsPolynomialWireV1,
@@ -991,7 +922,6 @@ fn wire_polynomial_digest(
     }
     Ok(hash.finalize())
 }
-
 fn zero_polynomial_digest(profile: &BgvProfile) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let count = profile
         .ring_degree
@@ -1015,7 +945,6 @@ fn zero_polynomial_digest(profile: &BgvProfile) -> Result<[u8; 32], ZkAmsMkheErr
     }
     Ok(hash.finalize())
 }
-
 #[cfg(test)]
 fn key_context_digest(
     target_a: &ZkAmsMkheRnsPolynomialWireV1,
@@ -1031,7 +960,6 @@ fn key_context_digest(
     }
     Ok(hash.finalize())
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn streaming_cks_source_digest_v1(
     roster: &ZkAmsMkheGovernedRosterWireV1,
@@ -1060,7 +988,6 @@ pub(super) fn streaming_cks_source_digest_v1(
     }
     Ok(hash.finalize())
 }
-
 pub(super) fn streaming_cks_key_context_digest_v1(
     target_a_digest: [u8; 32],
     public_key_a_digest: [u8; 32],
@@ -1075,7 +1002,6 @@ pub(super) fn streaming_cks_key_context_digest_v1(
     }
     hash.finalize()
 }
-
 pub(super) fn streaming_cks_wire_statement_digest_v1(
     binding: ZkAmsMkheWireBindingV1,
     source_digest: [u8; 32],
@@ -1095,7 +1021,6 @@ pub(super) fn streaming_cks_wire_statement_digest_v1(
     frame.extend_from_slice(&contribution_wire_digest);
     keccak256(&frame)
 }
-
 pub(super) fn streaming_cks_record_digest_v1(
     binding: &CksBindingV1,
     contribution_digest: [u8; 32],
@@ -1113,11 +1038,9 @@ pub(super) fn streaming_cks_record_digest_v1(
     hash.update(proof_bytes);
     Ok(hash.finalize())
 }
-
 pub(super) const fn streaming_cks_auth_domain_v1() -> &'static [u8] {
     CKS_AUTH_DOMAIN_V1
 }
-
 fn expect(cursor: &mut usize, bytes: &[u8], expected: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
     let end = cursor
         .checked_add(expected.len())
@@ -1128,7 +1051,6 @@ fn expect(cursor: &mut usize, bytes: &[u8], expected: &[u8]) -> Result<(), ZkAms
     *cursor = end;
     Ok(())
 }
-
 fn read_array<const N: usize>(
     cursor: &mut usize,
     bytes: &[u8],
@@ -1144,7 +1066,6 @@ fn read_array<const N: usize>(
     *cursor = end;
     Ok(value)
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CksRelationV1 {
@@ -1154,7 +1075,6 @@ struct CksRelationV1 {
     source_component: RnsPolynomial,
     target_a: RnsPolynomial,
 }
-
 #[cfg(test)]
 impl CksRelationV1 {
     fn validate(
@@ -1192,25 +1112,21 @@ impl CksRelationV1 {
         }
         Ok(())
     }
-
     fn multiplier(&self, profile: &BgvProfile) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
         self.source_component.sub(&self.target_a, profile)
     }
 }
-
 #[cfg(test)]
 struct CksPartyWitnessV1<'a> {
     secret: &'a SecretPolynomial,
     public_key_error: &'a SecretPolynomial,
 }
-
 #[cfg(test)]
 impl core::fmt::Debug for CksPartyWitnessV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("CksPartyWitnessV1([REDACTED])")
     }
 }
-
 #[cfg(test)]
 fn validate_witness(
     profile: &BgvProfile,
@@ -1250,7 +1166,6 @@ fn validate_witness(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn native_polynomial_digest(
     profile: &BgvProfile,
@@ -1269,7 +1184,6 @@ fn native_polynomial_digest(
     }
     Ok(hash.finalize())
 }
-
 #[cfg(test)]
 fn cks_challenge_seed(
     profile: &BgvProfile,
@@ -1307,7 +1221,6 @@ fn cks_challenge_seed(
     }
     Ok(hash.finalize())
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn streaming_cks_challenge_seed_v1(
     profile: &BgvProfile,
@@ -1349,7 +1262,6 @@ pub(super) fn streaming_cks_challenge_seed_v1(
     }
     Ok(hash.finalize())
 }
-
 pub(super) fn derive_cks_sparse_challenge(
     ring_degree: usize,
     challenge_seed: [u8; 32],
@@ -1400,7 +1312,6 @@ pub(super) fn derive_cks_sparse_challenge(
     }
     Err(ZkAmsMkheErrorV1::InvalidCksProof)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 fn prove_cks_relation<R: MaskedRelaxedRandomSourceV1>(
@@ -1432,7 +1343,6 @@ fn prove_cks_relation<R: MaskedRelaxedRandomSourceV1>(
     if expected != *contribution {
         return Err(ZkAmsMkheErrorV1::InvalidCksProof);
     }
-
     let weight = wide_relation_challenge_weight(profile.ring_degree)?;
     let (secret_mask_bound, secret_response_limit) = small_response_parameters(1, weight, profile)?;
     let (error_mask_bound, error_response_limit) =
@@ -1444,7 +1354,6 @@ fn prove_cks_relation<R: MaskedRelaxedRandomSourceV1>(
     }
     checked_ring_multiplication_work(profile, 8)?;
     validate_wide_relation_random_health(random)?;
-
     for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
         let mut secret_mask = (0..profile.ring_degree)
             .map(|_| sample_signed_small(secret_mask_bound, random))
@@ -1551,7 +1460,6 @@ fn prove_cks_relation<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
-
 #[cfg(test)]
 fn verify_cks_relation(
     profile: &BgvProfile,
@@ -1643,7 +1551,6 @@ fn verify_cks_relation(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn create_cks_contribution<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
@@ -1689,7 +1596,6 @@ fn create_cks_contribution<R: MaskedRelaxedRandomSourceV1>(
         },
     })
 }
-
 #[cfg(test)]
 impl ZkAmsMkheAuthenticatedCksContributionV1 {
     /// Governed roster index authenticated by this contribution.
@@ -1697,33 +1603,28 @@ impl ZkAmsMkheAuthenticatedCksContributionV1 {
     pub const fn party_index(&self) -> u8 {
         self.binding.party_index
     }
-
     /// Authentication-key-derived governed party.
     #[must_use]
     pub const fn party(&self) -> ZkAmsMkhePartyIdV1 {
         self.binding.party
     }
-
     /// Canonical contribution residues `d_i`.
     #[must_use]
     #[expect(dead_code, reason = "native CKS contribution inspection surface")]
     pub fn contribution_residues(&self) -> &[u64] {
         &self.contribution.coefficients
     }
-
     /// Native fixed-width proof.
     #[must_use]
     #[expect(dead_code, reason = "native CKS contribution inspection surface")]
     pub const fn proof(&self) -> &ZkAmsMkheCksProofV1 {
         &self.proof
     }
-
     /// Canonical native proof bytes.
     #[expect(dead_code, reason = "native CKS contribution inspection surface")]
     pub fn canonical_proof_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
         self.proof.encode()
     }
-
     fn record_digest(&self, profile: &BgvProfile) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         let proof = self.proof.encode()?;
         let mut hash = Keccak256::new();
@@ -1738,7 +1639,6 @@ impl ZkAmsMkheAuthenticatedCksContributionV1 {
         hash.update(&proof);
         Ok(hash.finalize())
     }
-
     /// Convert the verified native contribution to the canonical public `ZACK` record.
     pub fn to_release_wire(
         &self,
@@ -1787,7 +1687,6 @@ impl ZkAmsMkheAuthenticatedCksContributionV1 {
             proof,
         )
     }
-
     /// Convert, authenticate, and verify a decoded canonical public `ZACK` record.
     pub fn from_release_wire(
         statement: ZkAmsMkheCksStatementV1<'_>,
@@ -1842,7 +1741,6 @@ impl ZkAmsMkheAuthenticatedCksContributionV1 {
         verify_zk_ams_mkhe_cks_contribution_v1(statement, &value)?;
         Ok(value)
     }
-
     /// Decode, bind, authenticate, and verify one exact canonical `ZACK` byte string.
     #[expect(
         dead_code,
@@ -1868,7 +1766,6 @@ impl ZkAmsMkheAuthenticatedCksContributionV1 {
         Self::from_release_wire(statement, &wire)
     }
 }
-
 /// Prove and authenticate one governed CKS contribution.
 #[cfg(test)]
 pub(super) fn prove_zk_ams_mkhe_cks_contribution_v1<R: MaskedRelaxedRandomSourceV1>(
@@ -1916,7 +1813,6 @@ pub(super) fn prove_zk_ams_mkhe_cks_contribution_v1<R: MaskedRelaxedRandomSource
     verify_zk_ams_mkhe_cks_contribution_v1(statement, &contribution)?;
     Ok(contribution)
 }
-
 /// Verify one governed CKS contribution against the complete public statement.
 #[cfg(test)]
 pub(super) fn verify_zk_ams_mkhe_cks_contribution_v1(
@@ -1955,7 +1851,6 @@ pub(super) fn verify_zk_ams_mkhe_cks_contribution_v1(
         &contribution.proof,
     )
 }
-
 /// Verify and combine the exact ordered full-roster CKS contribution set.
 #[cfg(test)]
 pub(super) fn combine_zk_ams_mkhe_cks_v1(
@@ -2011,7 +1906,6 @@ pub(super) fn combine_zk_ams_mkhe_cks_v1(
     )
     .map_err(|_| abort(0, None, ZkAmsMkheCksAbortReasonV1::BindingMismatch))
 }
-
 #[cfg(test)]
 fn first_cks_set_shape_error(
     expected_parties: &[ZkAmsMkhePartyIdV1],
@@ -2050,7 +1944,6 @@ fn first_cks_set_shape_error(
     }
     None
 }
-
 #[cfg(test)]
 fn identifiable_cks_abort(
     statement: ZkAmsMkheCksStatementV1<'_>,
@@ -2092,17 +1985,14 @@ fn identifiable_cks_abort(
         evidence_digest: keccak256(&frame),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::super::{AuthenticationSecret, PlaintextModulus, reduce_test_polynomial};
     use super::*;
     use crate::vega::MaskedRelaxedRandomErrorV1;
-
     const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
     const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
     const TEST_SMUDGE_BITS: usize = 8;
-
     #[test]
     fn production_surface_keeps_only_bounded_cks_hooks() {
         let source = include_str!("cks.rs");
@@ -2171,7 +2061,6 @@ mod tests {
             );
         }
     }
-
     fn test_profile() -> BgvProfile {
         BgvProfile {
             profile_id: [0xc5; 32],
@@ -2191,12 +2080,10 @@ mod tests {
             max_work_units: 1 << 20,
         }
     }
-
     struct KatRandom {
         state: [u8; 32],
         counter: u64,
     }
-
     impl KatRandom {
         fn new(label: &[u8]) -> Self {
             Self {
@@ -2205,7 +2092,6 @@ mod tests {
             }
         }
     }
-
     impl MaskedRelaxedRandomSourceV1 for KatRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             let mut cursor = 0;
@@ -2222,7 +2108,6 @@ mod tests {
             Ok(())
         }
     }
-
     struct Fixture {
         profile: BgvProfile,
         parties: super::super::PartySet,
@@ -2232,7 +2117,6 @@ mod tests {
         relations: Vec<CksRelationV1>,
         constant: RnsPolynomial,
     }
-
     fn fixture() -> Fixture {
         let profile = test_profile();
         let mut random = KatRandom::new(b"zk-ams.cks.tiny.fixture.auth");
@@ -2346,7 +2230,6 @@ mod tests {
             constant,
         }
     }
-
     fn contributions(
         fixture: &Fixture,
         label: &[u8],
@@ -2381,7 +2264,6 @@ mod tests {
             })
             .collect()
     }
-
     fn verify_native(
         fixture: &Fixture,
         index: usize,
@@ -2403,7 +2285,6 @@ mod tests {
             &contribution.proof,
         )
     }
-
     #[test]
     fn tiny_full_roster_cks_relation_oracle_and_kat() {
         let fixture = fixture();
@@ -2459,7 +2340,6 @@ mod tests {
             "ba0dad2a52a03a43fa2262081f9d1577cdd3eff4689cd64fb5dd5cb6834d9f96"
         );
     }
-
     #[test]
     fn proof_codec_is_canonical_and_preflights_every_count() {
         let fixture = fixture();
@@ -2494,7 +2374,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn wrong_secret_error_and_party_relation_fail_before_proving() {
         let fixture = fixture();
@@ -2517,7 +2396,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn every_binding_axis_and_polynomial_splice_invalidates_proof() {
         let fixture = fixture();
@@ -2563,7 +2441,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn contribution_proof_and_authentication_mutations_fail_closed() {
         let fixture = fixture();
@@ -2572,7 +2449,6 @@ mod tests {
         changed.contribution.coefficients[0] =
             (changed.contribution.coefficients[0] + 1) % fixture.profile.moduli[0];
         assert!(verify_native(&fixture, 0, &changed).is_err());
-
         let mut challenge = contribution.clone();
         challenge.proof.challenge_seed[0] ^= 1;
         assert!(verify_native(&fixture, 0, &challenge).is_err());
@@ -2603,7 +2479,6 @@ mod tests {
         auth_key.authentication.public_key = fixture.authentication[1].public_key().unwrap();
         assert!(verify_native(&fixture, 0, &auth_key).is_err());
     }
-
     #[test]
     fn missing_duplicate_reordered_and_excess_sets_are_identified_first() {
         let fixture = fixture();
@@ -2654,7 +2529,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn release_resource_evidence_is_exact_and_below_both_ceilings() {
         let evidence = zk_ams_mkhe_cks_resource_evidence_v1().unwrap();
@@ -2675,7 +2549,6 @@ mod tests {
         assert_ne!(evidence.evidence_digest, [0; 32]);
         assert_eq!(evidence.evidence_digest, cks_resource_digest(evidence));
     }
-
     #[test]
     fn streaming_challenge_digest_matches_dense_algebra() {
         let fixture = fixture();
@@ -2707,7 +2580,6 @@ mod tests {
         .unwrap();
         assert_eq!(streamed, dense);
     }
-
     #[test]
     fn wide_and_small_response_boundaries_reject_malformed_proofs() {
         let fixture = fixture();
@@ -2755,12 +2627,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cks_secret_owners_zeroize_on_success_error_and_unwind() {
         let reset = || CKS_ZEROIZING_DROP_AUDIT_V1.with(|audit| audit.set((0, 0)));
         let observed = || CKS_ZEROIZING_DROP_AUDIT_V1.with(core::cell::Cell::get);
-
         reset();
         {
             let mut signed = ZeroizingCksI64BufferV1::new();
@@ -2769,7 +2639,6 @@ mod tests {
             bytes.extend([4, 5, 6]);
         }
         assert_eq!(observed(), (2, 0));
-
         fn fail_after_secret_owner() -> Result<(), ZkAmsMkheErrorV1> {
             let mut signed = ZeroizingCksI64BufferV1::new();
             signed.extend([7, -8]);
@@ -2781,7 +2650,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
         assert_eq!(observed(), (1, 0));
-
         reset();
         let unwound = std::panic::catch_unwind(|| {
             let _proof = ZkAmsMkheCksProofV1 {
@@ -2795,7 +2663,6 @@ mod tests {
         });
         assert!(unwound.is_err());
         assert_eq!(observed(), (1, 0));
-
         let source = include_str!("cks.rs");
         let corridor = source
             .split("fn clear_cks_i64_slice_v1")

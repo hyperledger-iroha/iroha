@@ -1,6 +1,5 @@
 #![allow(unexpected_cfgs)]
 //! pass: allowed attributes on named fields
-
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct WithAttrs {
     #[norito(rename = "id2")]
@@ -10,5 +9,4 @@ struct WithAttrs {
     #[norito(default)]
     opt: Option<u32>,
 }
-
 fn main() {}

@@ -8,7 +8,6 @@ fn genesis_transaction_builder_cannot_be_reconstructed_as_an_ordinary_draft() {
     )
     .with_instructions([Log::new(Level::INFO, "genesis-only".into())]);
     genesis_builder.set_creation_time(Duration::from_millis(42));
-
     let payload_bytes = genesis_builder.encode_payload();
     let payload = genesis_builder
         .clone()
@@ -31,7 +30,6 @@ fn genesis_transaction_builder_cannot_be_reconstructed_as_an_ordinary_draft() {
             .to_string()
             .contains("explicit genesis construction")
     );
-
     let signed = TransactionBuilder::decode_genesis_payload(&payload_bytes)
         .expect("explicit genesis decoding accepts the canonical genesis payload")
         .try_sign(key_pair.private_key())
@@ -44,7 +42,6 @@ fn genesis_transaction_builder_cannot_be_reconstructed_as_an_ordinary_draft() {
         .expect("genesis transactions remain structurally decodable on the fixed V1 wire");
     assert_eq!(decoded, signed);
     assert_eq!(decoded.encode_versioned(), signed_wire);
-
     let mut hostile = TransactionBuilder::new(
         test_network_id(0x1F),
         authority,

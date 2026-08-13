@@ -1,23 +1,19 @@
 use std::{fs, io::Write, path::PathBuf};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use tempfile::TempDir;
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .to_path_buf()
 }
-
 #[test]
 fn streaming_entropy_bench_emits_metrics() {
     let temp = TempDir::new().expect("temp dir");
     let json_out = temp.path().join("entropy_bench.json");
     let bundle_out = temp.path().join("bundle.norito");
     let reference_y4m = temp.path().join("baseline.y4m");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(workspace_root());
     cmd.args([
@@ -38,7 +34,6 @@ fn streaming_entropy_bench_emits_metrics() {
         reference_y4m.to_str().expect("utf8 path"),
     ]);
     cmd.assert().success();
-
     let raw = fs::read_to_string(json_out).expect("bench json");
     let report: Value = json::from_str(&raw).expect("parse bench json");
     let root = report.as_object().expect("bench root object");
@@ -57,7 +52,6 @@ fn streaming_entropy_bench_emits_metrics() {
         Some("y"),
         "psnr_mode should be recorded in the output"
     );
-
     let quantizer_runs = root
         .get("quantizer_runs")
         .and_then(Value::as_array)
@@ -88,7 +82,6 @@ fn streaming_entropy_bench_emits_metrics() {
         bench_encode >= 0.0,
         "bench encode_ms should be non-negative"
     );
-
     let targets = root
         .get("bitrate_targets")
         .and_then(Value::as_array)
@@ -97,13 +90,11 @@ fn streaming_entropy_bench_emits_metrics() {
         targets.is_empty(),
         "bitrate_targets should be empty when no ladder is requested"
     );
-
     assert_eq!(
         root.get("bundled_available").and_then(Value::as_bool),
         Some(true),
         "bundled builds should advertise bundled_available = true"
     );
-
     assert!(
         bundle_out.exists(),
         "streaming-entropy-bench should emit bundle output when requested"
@@ -112,7 +103,6 @@ fn streaming_entropy_bench_emits_metrics() {
         reference_y4m.exists(),
         "streaming-entropy-bench should emit decoded Y4M when requested"
     );
-
     let decoded_y4m = temp.path().join("decoded.y4m");
     let mut decode_cmd = cargo_bin_cmd!("xtask");
     decode_cmd.current_dir(workspace_root());
@@ -143,7 +133,6 @@ fn streaming_entropy_bench_emits_metrics() {
     );
     assert!(decoded_y4m.exists(), "decoder should write Y4M output");
 }
-
 #[test]
 fn streaming_entropy_bench_roundtrips_chroma_and_yuv_psnr() {
     let temp = TempDir::new().expect("temp dir");
@@ -152,9 +141,7 @@ fn streaming_entropy_bench_roundtrips_chroma_and_yuv_psnr() {
     let bundle_out = temp.path().join("bundle.norito");
     let bench_y4m_out = temp.path().join("bench_ref.y4m");
     let decoded_out = temp.path().join("decoded.y4m");
-
     write_test_y4m(&y4m_input);
-
     let mut bench_cmd = cargo_bin_cmd!("xtask");
     bench_cmd.current_dir(workspace_root());
     bench_cmd.args([
@@ -176,7 +163,6 @@ fn streaming_entropy_bench_roundtrips_chroma_and_yuv_psnr() {
         bench_y4m_out.exists(),
         "bench reference Y4M should be written"
     );
-
     let mut decode_cmd = cargo_bin_cmd!("xtask");
     decode_cmd.current_dir(workspace_root());
     decode_cmd.args([
@@ -210,7 +196,6 @@ fn streaming_entropy_bench_roundtrips_chroma_and_yuv_psnr() {
         psnr_yuv > 0.0,
         "expected finite PSNR when chroma is preserved, got {psnr_yuv}"
     );
-
     let original_chroma = read_y4m_chroma(&y4m_input);
     let decoded_chroma = read_y4m_chroma(&decoded_out);
     assert_eq!(
@@ -227,7 +212,6 @@ fn streaming_entropy_bench_roundtrips_chroma_and_yuv_psnr() {
         "decoded chroma should reflect encoded output rather than a copied sidecar"
     );
 }
-
 #[test]
 fn streaming_entropy_bench_respects_quantizer_override() {
     let mut cmd = cargo_bin_cmd!("xtask");
@@ -255,7 +239,6 @@ fn streaming_entropy_bench_respects_quantizer_override() {
         "bench quantizer should respect override"
     );
 }
-
 #[test]
 fn streaming_entropy_bench_supports_quantizer_ladder_and_tiny_preset() {
     let mut cmd = cargo_bin_cmd!("xtask");
@@ -309,7 +292,6 @@ fn streaming_entropy_bench_supports_quantizer_ladder_and_tiny_preset() {
         "ladder entry should be recorded"
     );
 }
-
 fn write_test_y4m(path: &std::path::Path) {
     let mut file = std::fs::File::create(path).expect("create y4m");
     writeln!(file, "YUV4MPEG2 W2 H2 F30:1 Ip A0:0 C420mpeg2").expect("header");
@@ -328,10 +310,8 @@ fn write_test_y4m(path: &std::path::Path) {
         file.write_all(&v).expect("v plane");
     }
 }
-
 fn read_y4m_chroma(path: &std::path::Path) -> Vec<(Vec<u8>, Vec<u8>)> {
     use std::io::{BufRead, BufReader, Read};
-
     let file = std::fs::File::open(path).expect("open y4m");
     let mut reader = BufReader::new(file);
     let mut header = String::new();
@@ -349,7 +329,6 @@ fn read_y4m_chroma(path: &std::path::Path) -> Vec<(Vec<u8>, Vec<u8>)> {
     let height = height.expect("height");
     let luma_len = width * height;
     let chroma_len = luma_len / 4;
-
     let mut chroma = Vec::new();
     loop {
         let mut tag = String::new();

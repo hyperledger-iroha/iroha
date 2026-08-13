@@ -55,7 +55,6 @@ use std::{
     time::{Duration, Instant},
     vec::Vec,
 };
-
 use block::ConcreteBlock;
 use fastpq_isi::poseidon::STATE_WIDTH;
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
@@ -67,7 +66,6 @@ use metal::{
 use norito::json::{self, Value};
 use smallvec::SmallVec;
 use tracing::{debug, warn};
-
 use crate::{
     backend::GpuBackend,
     bn254_poseidon::Bn254PoseidonBatchSlice,
@@ -536,7 +534,6 @@ fn unwrap_or_skip<T>(result: MetalResult<T>, context: &str) -> Option<T> {
 #[cfg(test)]
 mod bn254_parity {
     use super::{ensure_multi_queue_env, unwrap_or_skip, *};
-
     fn sample_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
         let len = 1usize << log_size;
         let mut columns = Vec::with_capacity(column_count);
@@ -5027,7 +5024,6 @@ mod helper_tests {
         queue_total_columns_hint, select_poseidon_batch,
     };
     use crate::metal_config::{self, DeviceHints};
-
     #[test]
     fn post_tile_stage_start_only_dispatches_when_needed() {
         assert_eq!(post_tile_stage_start(10, 4), Some(4));
@@ -5137,9 +5133,7 @@ mod helper_tests {
 #[cfg(test)]
 mod bn254_helper_tests {
     use metal::Device;
-
     use super::*;
-
     #[test]
     fn upload_bn254_twiddles_rejects_non_limb_multiple() {
         if Device::system_default().is_none() {
@@ -5216,13 +5210,10 @@ mod bn254_helper_tests {
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod tests {
     use std::{thread, time::Duration};
-
     use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
     use iroha_crypto::Hash;
-
     use super::{ensure_multi_queue_env, unwrap_or_skip, *};
     use crate::fft::Planner;
-
     const TRACE_NODE_DOMAIN_FOR_TESTS: &[u8] = b"fastpq:v1:trace:node";
     fn sample_fft_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
         let len = 1usize << log_size;

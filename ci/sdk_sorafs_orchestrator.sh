@@ -540,6 +540,9 @@ run_swift_parity() {
 run_sdk_test rust "orchestrator parity" \
   cargo test -p sorafs_orchestrator rust_orchestrator_fetch_suite_is_deterministic -- --nocapture
 
+run_sdk_test rust "signed orderbook submission boundary" \
+  cargo test -p iroha_data_model sorafs::orderbook_submission::tests -- --nocapture
+
 run_sdk_test python "bindings parity (iroha_python_rs)" \
   cargo test -p iroha_python_rs sorafs_multi_fetch_local -- --nocapture
 

@@ -1,14 +1,10 @@
 //! Regression tests for SM3 and SM4 helpers.
 #![cfg(feature = "sm")]
-
 use hex::decode as hex_decode;
 use iroha_crypto::{Sm3Digest, Sm4Key};
-
 #[path = "sm4_wycheproof_fixture.rs"]
 mod sm4_wycheproof_fixture;
-
 use sm4_wycheproof_fixture::{Sm4WycheproofMode, load_sm4_wycheproof_cases};
-
 fn hex_to_vec(input: &str) -> Vec<u8> {
     if input.is_empty() {
         Vec::new()
@@ -16,7 +12,6 @@ fn hex_to_vec(input: &str) -> Vec<u8> {
         hex_decode(input).unwrap_or_else(|err| panic!("invalid hex {input}: {err}"))
     }
 }
-
 fn hex_to_array<const N: usize>(input: &str) -> [u8; N] {
     let bytes = hex_to_vec(input);
     bytes
@@ -24,7 +19,6 @@ fn hex_to_array<const N: usize>(input: &str) -> [u8; N] {
         .try_into()
         .unwrap_or_else(|_| panic!("expected {N} bytes"))
 }
-
 #[test]
 fn sm3_known_hashes() {
     let cases = [
@@ -41,7 +35,6 @@ fn sm3_known_hashes() {
             "debe9ff92275b8a138604889c18e5a4d6fdb70e5387e5765293dcba39c0c5732",
         ),
     ];
-
     for (input, expected_hex) in cases {
         let digest = Sm3Digest::hash(input.as_bytes());
         let expected = hex_to_array::<32>(expected_hex);
@@ -52,7 +45,6 @@ fn sm3_known_hashes() {
         );
     }
 }
-
 #[test]
 fn sm4_ecb_vectors() {
     let cases = [
@@ -69,11 +61,9 @@ fn sm4_ecb_vectors() {
             "ffeeddccbbaa99887766554433221100",
         ),
     ];
-
     for (key_hex, pt_hex) in cases {
         let key = Sm4Key::new(hex_to_array::<16>(key_hex));
         let plaintext = hex_to_array::<16>(pt_hex);
-
         let ciphertext = key.encrypt_block(&plaintext);
         let decrypted = key.decrypt_block(&ciphertext);
         assert_eq!(
@@ -82,31 +72,26 @@ fn sm4_ecb_vectors() {
         );
     }
 }
-
 #[test]
 fn sm4_gcm_vector() {
     let key = Sm4Key::new(hex_to_array::<16>("0123456789abcdeffedcba9876543210"));
     let nonce = hex_to_array::<12>("00001234567800000000abcd");
     let aad = hex_to_vec("feedfacedeadbeeffeedfacedeadbeefabaddad2");
     let plaintext = hex_to_vec("d9313225f88406e5a55909c5aff5269a");
-
     let (ciphertext, tag) = key
         .encrypt_gcm(&nonce, &aad, &plaintext)
         .expect("SM4-GCM encrypt");
-
     let decrypted = key
         .decrypt_gcm(&nonce, &aad, &ciphertext, &tag)
         .expect("SM4-GCM decrypt");
     assert_eq!(decrypted, plaintext, "SM4-GCM round-trip mismatch");
 }
-
 #[test]
 fn sm4_gcm_rejects_modified_tag() {
     let key = Sm4Key::new(hex_to_array::<16>("0123456789abcdeffedcba9876543210"));
     let nonce = hex_to_array::<12>("00001234567800000000abcd");
     let aad = hex_to_vec("feedfacedeadbeeffeedfacedeadbeefabaddad2");
     let plaintext = hex_to_vec("d9313225f88406e5a55909c5aff5269a");
-
     let (ciphertext, mut tag) = key
         .encrypt_gcm(&nonce, &aad, &plaintext)
         .expect("SM4-GCM encrypt");
@@ -117,7 +102,6 @@ fn sm4_gcm_rejects_modified_tag() {
         "modified tag must cause decryption failure"
     );
 }
-
 #[test]
 fn sm4_gcm_wycheproof_invalid_cases() {
     for case in load_sm4_wycheproof_cases()
@@ -135,7 +119,6 @@ fn sm4_gcm_wycheproof_invalid_cases() {
             .as_slice()
             .try_into()
             .unwrap_or_else(|_| panic!("GCM test {} must use 16-byte tag", case.tc_id));
-
         let result = key.decrypt_gcm(&nonce, &case.aad, &case.ciphertext, &tag);
         assert!(
             result.is_err(),
@@ -145,7 +128,6 @@ fn sm4_gcm_wycheproof_invalid_cases() {
         );
     }
 }
-
 #[test]
 fn sm4_ccm_wycheproof_invalid_cases() {
     for case in load_sm4_wycheproof_cases()
@@ -162,49 +144,39 @@ fn sm4_ccm_wycheproof_invalid_cases() {
         );
     }
 }
-
 #[test]
 fn sm4_ccm_vector() {
     let key = Sm4Key::new(hex_to_array::<16>("404142434445464748494a4b4c4d4e4f"));
     let nonce = hex_to_vec("10111213141516");
     let aad = hex_to_vec("000102030405060708090a0b0c0d0e0f");
     let plaintext = hex_to_vec("202122232425262728292a2b2c2d2e2f");
-
     let (ciphertext, tag) = key
         .encrypt_ccm(&nonce, &aad, &plaintext, 4)
         .expect("SM4-CCM encryption should succeed");
-
     let decrypted = key
         .decrypt_ccm(&nonce, &aad, &ciphertext, &tag)
         .expect("SM4-CCM decryption should succeed");
-
     assert_eq!(decrypted, plaintext);
     assert_eq!(ciphertext, hex_to_vec("a9550cebab5f227d9590e8979caafd1f"));
     assert_eq!(tag, hex_to_vec("03a1f305"));
 }
-
 #[test]
 fn sm4_ccm_rejects_bad_tag() {
     let key = Sm4Key::new(hex_to_array::<16>("404142434445464748494a4b4c4d4e4f"));
     let nonce = hex_to_vec("10111213141516");
     let aad = hex_to_vec("000102030405060708090a0b0c0d0e0f");
     let plaintext = hex_to_vec("202122232425262728292a2b2c2d2e2f");
-
     let (ciphertext, mut tag) = key
         .encrypt_ccm(&nonce, &aad, &plaintext, 4)
         .expect("SM4-CCM encryption should succeed");
-
     tag[0] ^= 0x01;
-
     assert!(
         key.decrypt_ccm(&nonce, &aad, &ciphertext, &tag).is_err(),
         "SM4-CCM must reject altered tag"
     );
 }
-
 mod deterministic_tamper_tests {
     use super::*;
-
     fn array16(seed: u8) -> [u8; 16] {
         let mut out = [0u8; 16];
         for (idx, byte) in out.iter_mut().enumerate() {
@@ -213,7 +185,6 @@ mod deterministic_tamper_tests {
         }
         out
     }
-
     fn array12(seed: u8) -> [u8; 12] {
         let mut out = [0u8; 12];
         for (idx, byte) in out.iter_mut().enumerate() {
@@ -222,7 +193,6 @@ mod deterministic_tamper_tests {
         }
         out
     }
-
     fn bytes(seed: u8, len: usize) -> Vec<u8> {
         (0..len)
             .map(|idx| {
@@ -231,7 +201,6 @@ mod deterministic_tamper_tests {
             })
             .collect()
     }
-
     #[test]
     fn sm4_gcm_rejects_tampered_ciphertext() {
         for seed in [0_u8, 1, 7, 31, 127, 255] {
@@ -252,7 +221,6 @@ mod deterministic_tamper_tests {
             );
         }
     }
-
     #[test]
     fn sm4_gcm_rejects_tampered_tag() {
         for seed in [0_u8, 1, 7, 31, 127, 255] {
@@ -272,7 +240,6 @@ mod deterministic_tamper_tests {
             );
         }
     }
-
     #[test]
     fn sm4_ccm_rejects_tampered_tag() {
         for seed in [0_u8, 1, 7, 31, 127, 255] {

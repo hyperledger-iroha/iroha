@@ -3,12 +3,10 @@
 //! Generates a post-quantum readiness summary for SoraGlobal gateway PoPs by
 //! validating the supplied SRCv2 bundle, TLS/ECH artefacts, and trustless
 //! verifier configuration, then emitting JSON/Markdown evidence for runbooks.
-
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 use blake3::Hasher as Blake3;
 use ed25519_dalek::VerifyingKey;
 use eyre::{Result, WrapErr, eyre};
@@ -18,7 +16,6 @@ use iroha_crypto::soranet::{
 };
 use norito::json::{self, Map, Number, Value};
 use sorafs_car::trustless::TrustlessVerifierConfig;
-
 /// Execution options for the gateway PQ readiness helper.
 #[derive(Debug)]
 pub struct GatewayPqOptions {
@@ -37,7 +34,6 @@ pub struct GatewayPqOptions {
     /// Certificate validation phase; defaults to Phase3 (dual signatures required).
     pub validation_phase: CertificateValidationPhase,
 }
-
 /// Paths to generated outputs.
 #[derive(Debug)]
 pub struct GatewayPqOutcome {
@@ -46,14 +42,12 @@ pub struct GatewayPqOutcome {
     /// Markdown summary path.
     pub summary_markdown: PathBuf,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ComponentState {
     Ok,
     Warn,
     Error,
 }
-
 impl ComponentState {
     fn as_str(self) -> &'static str {
         match self {
@@ -62,7 +56,6 @@ impl ComponentState {
             Self::Error => "error",
         }
     }
-
     fn elevate(self, other: ComponentState) -> ComponentState {
         match (self, other) {
             (ComponentState::Error, _) | (_, ComponentState::Error) => ComponentState::Error,
@@ -71,7 +64,6 @@ impl ComponentState {
         }
     }
 }
-
 /// Generate the SNNet-15PQ readiness bundle.
 pub fn run_gateway_pq_readiness(options: GatewayPqOptions) -> Result<GatewayPqOutcome> {
     fs::create_dir_all(&options.output_dir).wrap_err_with(|| {
@@ -80,24 +72,19 @@ pub fn run_gateway_pq_readiness(options: GatewayPqOptions) -> Result<GatewayPqOu
             options.output_dir.display()
         )
     })?;
-
     let mut overall = ComponentState::Ok;
     let mut summary_root = Map::new();
     summary_root.insert("pop".into(), Value::String(options.pop.clone()));
-
     let (src_state, src_summary) =
         load_srcv2_status(&options.srcv2_bundle, options.validation_phase)?;
     summary_root.insert("srcv2".into(), src_summary);
     overall = overall.elevate(src_state);
-
     let (tls_state, tls_summary) = load_tls_status(&options.tls_bundle_dir)?;
     summary_root.insert("tls".into(), tls_summary);
     overall = overall.elevate(tls_state);
-
     let (trustless_state, trustless_summary) = load_trustless_status(&options.trustless_config)?;
     summary_root.insert("trustless".into(), trustless_summary);
     overall = overall.elevate(trustless_state);
-
     let canary_hosts = if options.canary_hosts.is_empty() {
         default_canaries(&options.pop)
     } else {
@@ -107,7 +94,6 @@ pub fn run_gateway_pq_readiness(options: GatewayPqOptions) -> Result<GatewayPqOu
         "canary_hosts".into(),
         Value::Array(canary_hosts.into_iter().map(Value::String).collect()),
     );
-
     // Dashboards/operators follow the SNNet-16 telemetry artefacts.
     summary_root.insert(
         "dashboards".into(),
@@ -116,18 +102,15 @@ pub fn run_gateway_pq_readiness(options: GatewayPqOptions) -> Result<GatewayPqOu
             "alerts": "dashboards/alerts/soranet_handshake_rules.yml",
         }),
     );
-
     summary_root.insert(
         "overall_status".into(),
         Value::String(overall.as_str().to_string()),
     );
-
     let summary_json = options.output_dir.join("gateway_pq_summary.json");
     let summary_markdown = options.output_dir.join("gateway_pq_summary.md");
     if let Some(parent) = summary_json.parent() {
         fs::create_dir_all(parent)?;
     }
-
     let json_payload = json::to_string_pretty(&Value::Object(summary_root.clone()))
         .wrap_err("failed to encode PQ readiness JSON")?;
     fs::write(&summary_json, format!("{json_payload}\n")).wrap_err_with(|| {
@@ -136,7 +119,6 @@ pub fn run_gateway_pq_readiness(options: GatewayPqOptions) -> Result<GatewayPqOu
             summary_json.display()
         )
     })?;
-
     let markdown = render_markdown(&summary_root);
     fs::write(&summary_markdown, markdown).wrap_err_with(|| {
         format!(
@@ -144,13 +126,11 @@ pub fn run_gateway_pq_readiness(options: GatewayPqOptions) -> Result<GatewayPqOu
             summary_markdown.display()
         )
     })?;
-
     Ok(GatewayPqOutcome {
         summary_json,
         summary_markdown,
     })
 }
-
 fn load_srcv2_status(
     path: &Path,
     phase: CertificateValidationPhase,
@@ -160,10 +140,8 @@ fn load_srcv2_status(
     let bundle = RelayCertificateBundleV2::from_cbor(&bytes)
         .wrap_err_with(|| format!("failed to parse SRCv2 bundle from `{}`", path.display()))?;
     let certificate = bundle.certificate.clone();
-
     let ed_pub = parse_srcv2_identity_ed25519_key(&certificate.identity_ed25519)?;
     let mldsa_key = certificate.identity_mldsa65.clone();
-
     let mut state = ComponentState::Ok;
     let mut details = Map::new();
     details.insert(
@@ -186,7 +164,6 @@ fn load_srcv2_status(
             certificate.kem_policy.preferred_suite,
         ))),
     );
-
     let has_pq_suite = certificate.handshake_suites.iter().any(|suite| {
         matches!(
             suite,
@@ -200,7 +177,6 @@ fn load_srcv2_status(
             Value::String("SRCv2 handshake suites missing PQ entry".into()),
         );
     }
-
     let mut capability_flags = Map::new();
     capability_flags.insert(
         "blinded_cid".into(),
@@ -223,13 +199,11 @@ fn load_srcv2_status(
         "has_pq_kem_public".into(),
         Value::Bool(!certificate.pq_kem_public.is_empty()),
     );
-
     let dual_signature = bundle.signatures.mldsa65.is_some();
     details.insert("dual_signature".into(), Value::Bool(dual_signature));
     if !dual_signature {
         state = ComponentState::Error;
     }
-
     // Validate signatures when possible.
     match bundle.verify_signatures(&ed_pub, &mldsa_key, phase) {
         Ok(()) => {
@@ -243,38 +217,30 @@ fn load_srcv2_status(
             state = ComponentState::Error;
         }
     }
-
     details.insert("state".into(), Value::String(state.as_str().to_string()));
-
     Ok((state, Value::Object(details)))
 }
-
 fn parse_srcv2_identity_ed25519_key(public_key: &[u8; 32]) -> Result<VerifyingKey> {
     let parsed = iroha_crypto::ed25519_parse_public_key(public_key)
         .map_err(|err| eyre!("invalid Ed25519 identity key in SRCv2: {err}"))?;
     VerifyingKey::from_bytes(parsed.as_bytes())
         .map_err(|err| eyre!("invalid Ed25519 identity key in SRCv2: {err}"))
 }
-
 fn load_tls_status(dir: &Path) -> Result<(ComponentState, Value)> {
     let mut state = ComponentState::Ok;
     let fullchain = dir.join("fullchain.pem");
     let privkey = dir.join("privkey.pem");
     let ech = dir.join("ech.json");
-
     let fullchain_exists = fullchain.exists();
     let privkey_exists = privkey.exists();
     let ech_exists = ech.exists();
-
     if !(fullchain_exists && privkey_exists && ech_exists) {
         state = ComponentState::Error;
     }
-
     let mut details = Map::new();
     details.insert("fullchain_present".into(), Value::Bool(fullchain_exists));
     details.insert("privkey_present".into(), Value::Bool(privkey_exists));
     details.insert("ech_present".into(), Value::Bool(ech_exists));
-
     if fullchain_exists {
         let digest = file_blake3_hex(&fullchain)?;
         details.insert("fullchain_blake3_hex".into(), Value::String(digest));
@@ -302,12 +268,9 @@ fn load_tls_status(dir: &Path) -> Result<(ComponentState, Value)> {
             }
         }
     }
-
     details.insert("state".into(), Value::String(state.as_str().to_string()));
-
     Ok((state, Value::Object(details)))
 }
-
 fn load_trustless_status(path: &Path) -> Result<(ComponentState, Value)> {
     let config = TrustlessVerifierConfig::from_file(path)?;
     let mut details = Map::new();
@@ -331,7 +294,6 @@ fn load_trustless_status(path: &Path) -> Result<(ComponentState, Value)> {
         "allow_hybrid_manifest".into(),
         Value::Bool(config.pipeline_allow_hybrid_manifest),
     );
-
     let mut state = ComponentState::Ok;
     if !config.pipeline_reject_stale_cache_versions || !config.pipeline_verify_cache_binding_header
     {
@@ -340,12 +302,9 @@ fn load_trustless_status(path: &Path) -> Result<(ComponentState, Value)> {
     if config.sdr_receipt_dir.trim().is_empty() || config.kzg_trusted_setup.trim().is_empty() {
         state = ComponentState::Warn;
     }
-
     details.insert("state".into(), Value::String(state.as_str().to_string()));
-
     Ok((state, Value::Object(details)))
 }
-
 fn render_markdown(summary: &Map) -> String {
     let pop = summary
         .get("pop")
@@ -360,7 +319,6 @@ fn render_markdown(summary: &Map) -> String {
     let trustless_state = component_state(summary, "trustless");
     let dashboards = summary.get("dashboards").cloned().unwrap_or(Value::Null);
     let dashboards_text = dashboards_label(&dashboards);
-
     format!(
         "# SNNet-15PQ Gateway Readiness — {pop}\n\
 \n\
@@ -371,14 +329,12 @@ fn render_markdown(summary: &Map) -> String {
 - Dashboards: {dashboards_text}\n",
     )
 }
-
 fn default_canaries(pop: &str) -> Vec<String> {
     vec![
         format!("canary1.{pop}.gw.sora.id"),
         format!("canary2.{pop}.gw.sora.id"),
     ]
 }
-
 fn file_blake3_hex(path: &Path) -> Result<String> {
     let mut hasher = Blake3::new();
     let bytes = fs::read(path)
@@ -386,7 +342,6 @@ fn file_blake3_hex(path: &Path) -> Result<String> {
     hasher.update(&bytes);
     Ok(hasher.finalize().to_hex().to_string())
 }
-
 fn component_state(summary: &Map, key: &str) -> String {
     summary
         .get(key)
@@ -396,7 +351,6 @@ fn component_state(summary: &Map, key: &str) -> String {
         .unwrap_or("error")
         .to_string()
 }
-
 fn dashboards_label(dashboards: &Value) -> String {
     dashboards
         .as_object()
@@ -416,7 +370,6 @@ fn dashboards_label(dashboards: &Value) -> String {
         })
         .unwrap_or_else(|| "no dashboard references".to_string())
 }
-
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::SigningKey;
@@ -424,21 +377,17 @@ mod tests {
     use rand_core_06::OsRng;
     use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
     use tempfile::TempDir;
-
     use super::*;
-
     const NONCANONICAL_ED25519_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     const NONCANONICAL_NON_SMALL_ORDER_ED25519_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn sample_certificate() -> RelayCertificateV2 {
         let identity_ed25519 = [0x22; 32];
         RelayCertificateV2 {
@@ -486,7 +435,6 @@ mod tests {
             pq_kem_public: vec![0x77; 1184],
         }
     }
-
     #[test]
     fn generates_readiness_summary() {
         let temp = TempDir::new().expect("tempdir");
@@ -500,7 +448,6 @@ mod tests {
             r#"{"ech_config_b64":"ZmFrZS1jb25maWc="}"#,
         )
         .expect("ech");
-
         let mut rng = OsRng;
         let ed_signing = SigningKey::generate(&mut rng);
         let ed_public = ed_signing.verifying_key();
@@ -512,17 +459,14 @@ mod tests {
         .expect("ml keypair");
         let ml_public = ml_keypair.public_key.clone();
         let ml_secret = ml_keypair.secret_key;
-
         let mut certificate = sample_certificate();
         certificate.identity_ed25519 = ed_public.to_bytes();
         certificate.identity_mldsa65 = ml_public.clone();
         let bundle = certificate
             .issue(&ed_signing, &ml_secret)
             .expect("issue certificate");
-
         let src_path = temp.path().join("srcv2.cbor");
         fs::write(&src_path, bundle.to_cbor()).expect("write srcv2");
-
         let trustless_path = temp.path().join("trustless.toml");
         fs::write(
             &trustless_path,
@@ -553,7 +497,6 @@ emit_metrics = true
 "#,
         )
         .expect("trustless config");
-
         let outcome = run_gateway_pq_readiness(GatewayPqOptions {
             output_dir: out_dir.clone(),
             pop: "sjc-01".to_string(),
@@ -564,7 +507,6 @@ emit_metrics = true
             validation_phase: CertificateValidationPhase::Phase3RequireDual,
         })
         .expect("runs readiness");
-
         let raw = fs::read_to_string(outcome.summary_json).expect("read summary");
         let summary: Value = json::from_str(&raw).expect("parse summary");
         let overall = summary
@@ -572,28 +514,24 @@ emit_metrics = true
             .and_then(Value::as_str)
             .unwrap_or("error");
         assert_eq!(overall, "ok");
-
         let src = summary
             .get("srcv2")
             .and_then(Value::as_object)
             .expect("srcv2 summary");
         assert_eq!(src.get("dual_signature"), Some(&Value::Bool(true)));
         assert_eq!(src.get("signature_valid"), Some(&Value::Bool(true)));
-
         let tls = summary
             .get("tls")
             .and_then(Value::as_object)
             .expect("tls summary");
         assert_eq!(tls.get("fullchain_present"), Some(&Value::Bool(true)));
         assert_eq!(tls.get("ech_present"), Some(&Value::Bool(true)));
-
         let canaries = summary
             .get("canary_hosts")
             .and_then(Value::as_array)
             .expect("canaries");
         assert!(!canaries.is_empty());
     }
-
     #[test]
     fn rejects_noncanonical_srcv2_identity_key() {
         for public_key in [

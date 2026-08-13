@@ -1,6 +1,5 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::{AssertEqCircuit, AssertRangeCircuit, AssertZeroCircuit};
-
 #[test]
 fn test_assert_zero_circuit() {
     let ok = AssertZeroCircuit { value: 0 };
@@ -8,7 +7,6 @@ fn test_assert_zero_circuit() {
     let fail = AssertZeroCircuit { value: 5 };
     assert!(fail.verify().is_err());
 }
-
 #[test]
 fn test_assert_eq_circuit() {
     let ok = AssertEqCircuit { a: 42, b: 42 };
@@ -16,7 +14,6 @@ fn test_assert_eq_circuit() {
     let fail = AssertEqCircuit { a: 5, b: 7 };
     assert!(fail.verify().is_err());
 }
-
 #[test]
 fn test_assert_range_circuit() {
     let pass_low = AssertRangeCircuit { value: 0, bits: 8 };

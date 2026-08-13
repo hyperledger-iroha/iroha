@@ -1,12 +1,9 @@
 //! Hostile-path and parity tests for the fused global-lookup suffix bridge.
-
 use std::path::Path;
-
 use super::super::super::external_sumcheck_storage_v1::{
     global_cubic_final_round_fixture_v1, global_cubic_hollow_fixture_v1,
 };
 use super::*;
-
 fn context_v1() -> GlobalLookupContextV1 {
     GlobalLookupContextV1 {
         fixed_axes_digest: [0x11; 32],
@@ -17,7 +14,6 @@ fn context_v1() -> GlobalLookupContextV1 {
         qpcs_initial_root: [0x66; 32],
     }
 }
-
 fn frames_v1() -> BoundTranscriptFramesV1 {
     BoundTranscriptFramesV1 {
         commitment_digest: [0x71; 32],
@@ -37,7 +33,6 @@ fn frames_v1() -> BoundTranscriptFramesV1 {
         gates: ENDPOINT_GATES_V1,
     }
 }
-
 fn seals_v1() -> BoundOwnerSealsV1 {
     BoundOwnerSealsV1 {
         source_packing_seal: SourcePackingOwnerSealV1::TestOnly,
@@ -45,7 +40,6 @@ fn seals_v1() -> BoundOwnerSealsV1 {
         proof_seal: ProofOwnerSealV1::TestOnly,
     }
 }
-
 fn gtilde_v1(ordinal: usize) -> [u8; CUBIC_MESSAGE_BYTES_V1] {
     let mut bytes = [0_u8; CUBIC_MESSAGE_BYTES_V1];
     for coefficient in 0..3 {
@@ -54,7 +48,6 @@ fn gtilde_v1(ordinal: usize) -> [u8; CUBIC_MESSAGE_BYTES_V1] {
     }
     bytes
 }
-
 fn endpoint_v1(ordinal: usize) -> [u8; 33] {
     Point::canonical_generator()
         .expect("canonical generator")
@@ -62,7 +55,6 @@ fn endpoint_v1(ordinal: usize) -> [u8; 33] {
         .to_non_identity_wire_bytes()
         .expect("non-identity endpoint")
 }
-
 fn sumcheck_after_v1(count: usize) -> GlobalLookupTranscriptV1<SumcheckStageV1> {
     let mut transcript = GlobalLookupTranscriptV1::begin_v1(context_v1(), seals_v1(), frames_v1())
         .unwrap()
@@ -82,7 +74,6 @@ fn sumcheck_after_v1(count: usize) -> GlobalLookupTranscriptV1<SumcheckStageV1> 
     }
     transcript
 }
-
 fn point_v1(transcript: &GlobalLookupTranscriptV1<SumcheckStageV1>, round: usize) -> [Scalar; 29] {
     let mut point = [Scalar::zero(); 29];
     point[..round].copy_from_slice(
@@ -90,7 +81,6 @@ fn point_v1(transcript: &GlobalLookupTranscriptV1<SumcheckStageV1>, round: usize
     );
     point
 }
-
 fn hollow_prefix_v1(
     public_context: [u8; 32],
     round: usize,
@@ -112,7 +102,6 @@ fn hollow_prefix_v1(
     )
     .unwrap_or_else(|error| panic!("hollow fixture failed: {error:?}"))
 }
-
 fn exact_hollow_prefix_v1(
     transcript: &GlobalLookupTranscriptV1<SumcheckStageV1>,
     message: Option<[u8; 96]>,
@@ -132,7 +121,6 @@ fn exact_hollow_prefix_v1(
         message,
     )
 }
-
 fn different_nonzero_v1(value: Scalar) -> Scalar {
     if value == Scalar::one() {
         Scalar::from_u64(2)
@@ -140,7 +128,6 @@ fn different_nonzero_v1(value: Scalar) -> Scalar {
         Scalar::one()
     }
 }
-
 #[test]
 #[rustfmt::skip]
 fn bound_context_digest_covers_each_exact_nonzero_context_frame() {
@@ -167,7 +154,6 @@ fn bound_context_digest_covers_each_exact_nonzero_context_frame() {
         Err(GlobalLookupErrorV1::Context)
     );
 }
-
 #[test]
 fn exact_handoff_accepts_only_208_257_round_three_and_bound_prefix() {
     assert!(core::mem::needs_drop::<GlobalCubicPrefixReadyV1>());
@@ -178,7 +164,6 @@ fn exact_handoff_accepts_only_208_257_round_three_and_bound_prefix() {
     let session = GlobalLookupExternalSumcheckSessionV1::begin_v1(transcript, prefix).unwrap();
     assert!(core::mem::needs_drop::<GlobalLookupExternalSumcheckSessionV1>());
     drop(session);
-
     let mut early = sumcheck_after_v1(HANDOFF_NEXT_SUMCHECK_V1);
     early.next_sumcheck -= 1;
     let prefix = exact_hollow_prefix_v1(&early, None);
@@ -188,12 +173,10 @@ fn exact_handoff_accepts_only_208_257_round_three_and_bound_prefix() {
             GlobalLookupErrorV1::Order
         ))
     ));
-
     let mut wrong_ordinal = sumcheck_after_v1(HANDOFF_NEXT_SUMCHECK_V1);
     wrong_ordinal.challenge_ordinal -= 1;
     let prefix = exact_hollow_prefix_v1(&wrong_ordinal, None);
     assert!(GlobalLookupExternalSumcheckSessionV1::begin_v1(wrong_ordinal, prefix).is_err());
-
     let transcript = sumcheck_after_v1(HANDOFF_NEXT_SUMCHECK_V1);
     let mut point = point_v1(&transcript, 4);
     point[3] = Scalar::one();
@@ -213,7 +196,6 @@ fn exact_handoff_accepts_only_208_257_round_three_and_bound_prefix() {
     );
     assert!(GlobalLookupExternalSumcheckSessionV1::begin_v1(transcript, prefix).is_err());
 }
-
 #[test]
 fn context_axis_and_point_splices_are_rejected_one_at_a_time() {
     for mutation in 0..8 {
@@ -256,7 +238,6 @@ fn context_axis_and_point_splices_are_rejected_one_at_a_time() {
         assert!(GlobalLookupExternalSumcheckSessionV1::begin_v1(transcript, prefix).is_err());
     }
 }
-
 #[test]
 fn missing_malformed_and_fold_failure_poison_the_move_only_session() {
     let directory = tempfile::tempdir().unwrap();
@@ -271,7 +252,6 @@ fn missing_malformed_and_fold_failure_poison_the_move_only_session() {
             MOracleErrorV1::Order
         ))
     ));
-
     let transcript = sumcheck_after_v1(HANDOFF_NEXT_SUMCHECK_V1);
     let prefix = exact_hollow_prefix_v1(&transcript, Some([0xff; 96]));
     let session = GlobalLookupExternalSumcheckSessionV1::begin_v1(transcript, prefix).unwrap();
@@ -283,7 +263,6 @@ fn missing_malformed_and_fold_failure_poison_the_move_only_session() {
             GlobalLookupErrorV1::Encoding
         ))
     ));
-
     let transcript = sumcheck_after_v1(HANDOFF_NEXT_SUMCHECK_V1);
     let prefix = exact_hollow_prefix_v1(&transcript, Some(gtilde_v1(HANDOFF_NEXT_SUMCHECK_V1)));
     let session = GlobalLookupExternalSumcheckSessionV1::begin_v1(transcript, prefix).unwrap();
@@ -296,7 +275,6 @@ fn missing_malformed_and_fold_failure_poison_the_move_only_session() {
         ))
     ));
 }
-
 fn final_prefix_v1(
     transcript: &GlobalLookupTranscriptV1<SumcheckStageV1>,
     directory: &Path,
@@ -315,7 +293,6 @@ fn final_prefix_v1(
     )
     .unwrap_or_else(|error| panic!("final fixture failed: {error:?}"))
 }
-
 #[test]
 fn final_bridge_message_has_exact_transcript_parity_kat_and_is_terminal() {
     let directory = tempfile::tempdir().unwrap();
@@ -360,7 +337,6 @@ fn final_bridge_message_has_exact_transcript_parity_kat_and_is_terminal() {
     );
     drop(oracle);
 }
-
 #[test]
 fn real_fold_sink_failure_returns_no_message_or_reusable_owner() {
     let directory = tempfile::tempdir().unwrap();
@@ -380,7 +356,6 @@ fn real_fold_sink_failure_returns_no_message_or_reusable_owner() {
         ))
     ));
 }
-
 #[test]
 fn source_guards_keep_the_bridge_fused_private_and_move_only() {
     let source = include_str!("global_lookup_external_sumcheck_v1.rs");

@@ -1,11 +1,8 @@
 use std::io::Write as _;
-
 use clap::Args as ClapArgs;
 use color_eyre::eyre::WrapErr as _;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
-
 use crate::{Outcome, RunArgs, tui};
-
 /// Produce a BLS-normal Proof-of-Possession (PoP) for a validator key.
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
@@ -27,7 +24,6 @@ pub struct Args {
     #[clap(long)]
     expose_private_key: bool,
 }
-
 impl<T: std::io::Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         tui::status("Producing validator Proof-of-Possession");
@@ -38,7 +34,6 @@ impl<T: std::io::Write> RunArgs<T> for Args {
         if alg != Algorithm::BlsNormal {
             color_eyre::eyre::bail!("PoP requires --algorithm bls_normal");
         }
-
         let (kp, generated) = match (self.private_key, self.seed) {
             (Some(sk_hex), None) => {
                 let sk = PrivateKey::from_hex(alg, sk_hex).wrap_err("decode private key")?;
@@ -60,11 +55,9 @@ impl<T: std::io::Write> RunArgs<T> for Args {
             ),
             _ => unreachable!("clap conflicts"),
         };
-
         let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key()).wrap_err("prove pop")?;
         let pop_hex = encode_hex(&pop);
         let expose_private_key = self.expose_private_key || generated;
-
         if self.json {
             #[derive(crate::json_macros::JsonSerialize)]
             struct Payload {
@@ -92,16 +85,13 @@ impl<T: std::io::Write> RunArgs<T> for Args {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         io::{BufWriter, Write},
         str::FromStr,
     };
-
     use super::*;
-
     #[test]
     fn pop_json_parses_and_verifies() {
         // Build args to emit JSON PoP using a seed
@@ -127,7 +117,6 @@ mod tests {
         let pop = decode_hex(pop_hex.trim_start_matches("0x")).expect("pop hex");
         iroha_crypto::bls_normal_pop_verify(&pk, &pop).expect("pop verify");
     }
-
     #[test]
     fn pop_plaintext_omits_private_key_without_flag() {
         let args = Args {
@@ -148,7 +137,6 @@ mod tests {
         assert!(out.contains("pop_hex:"));
         assert!(!out.contains("private_key (multihash):"));
     }
-
     #[test]
     fn pop_plaintext_includes_private_key_with_flag() {
         let args = Args {
@@ -167,7 +155,6 @@ mod tests {
         let out = String::from_utf8(buf).expect("utf8");
         assert!(out.contains("private_key (multihash):"));
     }
-
     #[test]
     fn pop_plaintext_includes_private_key_when_generated() {
         let args = Args {
@@ -187,7 +174,6 @@ mod tests {
         assert!(out.contains("private_key (multihash):"));
     }
 }
-
 fn encode_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -197,7 +183,6 @@ fn encode_hex(bytes: &[u8]) -> String {
     }
     out
 }
-
 #[cfg(test)]
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
     let s = s.trim();
@@ -214,7 +199,6 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
     }
     Ok(out)
 }
-
 #[cfg(test)]
 fn from_hex_nibble(c: u8) -> Result<u8, String> {
     match c {

@@ -1,7 +1,5 @@
 //! Exact ABI-v1 helper, host-private, generic-program, AXT, and access-profile tests.
-
 use super::*;
-
 #[test]
 fn koto_test_syscalls_are_host_private() {
     let private = [
@@ -11,14 +9,12 @@ fn koto_test_syscalls_are_host_private() {
         SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
         SYSCALL_KOTO_TEST_EXPECT_REJECT_AS,
     ];
-
     for syscall in private {
         assert!(is_koto_test_syscall(syscall));
         assert!(!is_syscall_allowed(crate::SyscallPolicy::AbiV1, syscall));
         assert!(syscall > u8::MAX as u32);
     }
 }
-
 #[test]
 fn generic_program_syscall_profile_is_sorted_complete_and_fail_closed() {
     assert!(
@@ -80,7 +76,6 @@ fn generic_program_syscall_profile_is_sorted_complete_and_fail_closed() {
         u32::MAX
     ));
 }
-
 #[test]
 fn axt_syscall_classifier_is_exact() {
     for syscall in [
@@ -96,7 +91,6 @@ fn axt_syscall_classifier_is_exact() {
         assert!(!is_axt_syscall(syscall));
     }
 }
-
 #[test]
 fn syscall_access_classification_is_conservative() {
     assert_eq!(syscall_access(SYSCALL_STATE_GET), SyscallAccess::StateRead);
@@ -139,7 +133,6 @@ fn syscall_access_classification_is_conservative() {
     );
     assert_eq!(syscall_access(SYSCALL_SHA256_HASH), SyscallAccess::None);
     assert_eq!(syscall_access(0x00ff_fffe), SyscallAccess::Dynamic);
-
     for number in abi_syscall_list() {
         assert!(
             syscall_name(*number).is_some(),
@@ -147,7 +140,6 @@ fn syscall_access_classification_is_conservative() {
         );
     }
 }
-
 #[test]
 fn gas_text_is_not_part_of_the_abi_surface_hash() {
     let canonical = &syscalls_doc_gen::DOCS[0];

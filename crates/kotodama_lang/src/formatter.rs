@@ -1,15 +1,12 @@
 //! Deterministic formatter for the canonical Kotodama V1 token stream.
-
 use crate::{
     ast::Item,
     diagnostic::{Diagnostic, DiagnosticBundle, DiagnosticPhase, SourcePosition, SourceSpan},
     source::{FrontendBudget, MAX_SOURCE_BYTES, SourceFile},
     syntax::{GreenToken, SyntaxKind},
 };
-
 const INDENT: &str = "    ";
 const TARGET_COLUMNS: usize = 100;
-
 /// Format one syntactically valid Kotodama V1 source file.
 ///
 /// The formatter consumes the same lossless tokens used to build the compiler
@@ -54,7 +51,6 @@ pub fn format_source(
         .format()
         .ok_or_else(|| formatted_source_too_large(source))
 }
-
 fn formatted_source_too_large(source: &SourceFile) -> DiagnosticBundle {
     let range = source.full_range();
     let end = source.line_column(range.end);
@@ -81,7 +77,6 @@ fn formatted_source_too_large(source: &SourceFile) -> DiagnosticBundle {
     );
     DiagnosticBundle::single(diagnostic)
 }
-
 struct TokenFormatter<'source, 'tokens> {
     source: &'source SourceFile,
     tokens: &'tokens [GreenToken],
@@ -98,7 +93,6 @@ struct TokenFormatter<'source, 'tokens> {
     previous_was_prefix: bool,
     overflowed: bool,
 }
-
 #[derive(Clone, Copy)]
 enum BraceFormat {
     Block,
@@ -112,20 +106,17 @@ enum BraceFormat {
         bracket_depth: usize,
     },
 }
-
 #[derive(Clone, Copy)]
 enum ParenFormat {
     Inline,
     Multiline { trailing_comma: bool },
 }
-
 #[derive(Clone, Copy)]
 enum BracketFormat {
     Attribute,
     Inline,
     Multiline { trailing_comma: bool },
 }
-
 impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
     fn new(
         source: &'source SourceFile,
@@ -149,7 +140,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
             overflowed: false,
         }
     }
-
     fn format(mut self) -> Option<String> {
         for (index, token) in self.tokens.iter().enumerate() {
             let next = self.tokens.get(index + 1).map(|token| token.kind);
@@ -316,11 +306,9 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.newlines(1);
         (!self.overflowed).then_some(self.output)
     }
-
     fn parentheses_exceed_target(&self, open: usize) -> bool {
         self.delimited_exceeds_target(open, SyntaxKind::LParen, SyntaxKind::RParen)
     }
-
     fn question_starts_ternary_at(&self, question: usize) -> bool {
         if self.tokens.get(question).map(|token| token.kind) != Some(SyntaxKind::Question) {
             return false;
@@ -337,7 +325,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         if !first.is_some_and(syntax_kind_starts_expression) {
             return false;
         }
-
         let mut paren_depth = 0_usize;
         let mut bracket_depth = 0_usize;
         let mut brace_depth = 0_usize;
@@ -373,7 +360,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         }
         false
     }
-
     fn delimited_exceeds_target(
         &self,
         open: usize,
@@ -405,7 +391,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.projected_inline_column(open, close)
             .is_none_or(|column| column > TARGET_COLUMNS)
     }
-
     /// Project the canonical inline rendering through `close`.
     ///
     /// Token ranges include discarded source whitespace and are measured in
@@ -441,7 +426,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         let mut bracket_depth = self.brackets.len();
         let mut generic_depth = self.generic_depth;
         let mut ternaries = self.ternaries.clone();
-
         for index in open..=close {
             let token = &self.tokens[index];
             let text = self.source.slice(token.range).unwrap_or_default();
@@ -452,7 +436,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
                 .checked_sub(1)
                 .and_then(|previous| self.tokens.get(previous))
                 .and_then(|previous| self.source.slice(previous.range));
-
             match token.kind {
                 SyntaxKind::LineComment | SyntaxKind::LBrace | SyntaxKind::RBrace => return None,
                 SyntaxKind::BlockComment => {
@@ -565,10 +548,8 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
                 ),
             }
         }
-
         Some(line.column)
     }
-
     fn bracket_contains_top_level_for(&self, open: usize) -> bool {
         let mut depth = 0_usize;
         for token in self.tokens.iter().skip(open) {
@@ -586,7 +567,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         }
         false
     }
-
     fn ordinary(&mut self, kind: SyntaxKind, text: &str) {
         let is_prefix = is_prefix_operator(kind) && prefix_position(self.previous);
         if needs_space(self.previous, self.previous_was_prefix, kind, is_prefix) {
@@ -596,7 +576,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.previous = Some(kind);
         self.previous_was_prefix = is_prefix;
     }
-
     fn open_brace(&mut self, struct_literal: bool, json_object: bool, match_body: bool) {
         if needs_space(
             self.previous,
@@ -627,7 +606,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.previous_was_prefix = false;
         self.newlines(1);
     }
-
     fn close_brace(&mut self, next: Option<SyntaxKind>) {
         let format = self.braces.pop().unwrap_or(BraceFormat::Block);
         if matches!(
@@ -647,7 +625,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.write("}");
         self.previous = Some(SyntaxKind::RBrace);
         self.previous_was_prefix = false;
-
         match next {
             Some(SyntaxKind::KwElse) => self.space(),
             Some(SyntaxKind::RBrace) => self.newlines(1),
@@ -664,7 +641,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
             None => self.newlines(1),
         }
     }
-
     fn semicolon(&mut self) {
         self.trim_trailing_spaces();
         self.write(";");
@@ -676,7 +652,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
             self.space();
         }
     }
-
     fn open_generic(&mut self) {
         self.trim_trailing_spaces();
         self.write("<");
@@ -685,7 +660,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.previous = Some(SyntaxKind::LBracket);
         self.previous_was_prefix = false;
     }
-
     fn close_generic(&mut self) {
         self.trim_trailing_spaces();
         self.write(">");
@@ -693,7 +667,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.previous = Some(SyntaxKind::RBracket);
         self.previous_was_prefix = false;
     }
-
     fn comma(&mut self) {
         self.trim_trailing_spaces();
         self.write(",");
@@ -719,7 +692,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
             self.space();
         }
     }
-
     fn line_comment(&mut self, text: &str) {
         if !self.at_line_start {
             self.space();
@@ -729,7 +701,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.previous_was_prefix = false;
         self.newlines(1);
     }
-
     fn block_comment(&mut self, text: &str) {
         let standalone = self.at_line_start;
         if !self.at_line_start {
@@ -744,7 +715,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
             self.space();
         }
     }
-
     fn ternary_question(&mut self) {
         self.space();
         self.write("?");
@@ -754,13 +724,11 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.previous = Some(SyntaxKind::Question);
         self.previous_was_prefix = false;
     }
-
     fn at_ternary_colon(&self) -> bool {
         self.ternaries.last().is_some_and(|snapshot| {
             *snapshot == (self.parens.len(), self.braces.len(), self.brackets.len())
         })
     }
-
     fn ternary_colon(&mut self) {
         self.space();
         self.write(":");
@@ -769,7 +737,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.previous = Some(SyntaxKind::Colon);
         self.previous_was_prefix = false;
     }
-
     fn write(&mut self, text: &str) {
         if self.overflowed {
             return;
@@ -798,7 +765,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.output.push_str(text);
         self.at_line_start = self.output.ends_with('\n');
     }
-
     fn space(&mut self) {
         if !self.at_line_start
             && !self
@@ -814,7 +780,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
             }
         }
     }
-
     fn newlines(&mut self, count: usize) {
         self.trim_trailing_spaces();
         let existing = self
@@ -833,7 +798,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         }
         self.at_line_start = true;
     }
-
     fn trim_trailing_spaces(&mut self) {
         while self
             .output
@@ -844,7 +808,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
             self.output.pop();
         }
     }
-
     fn trim_trailing_newlines(&mut self) {
         self.trim_trailing_spaces();
         while self.output.ends_with('\n') {
@@ -853,13 +816,11 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
         self.at_line_start = self.output.is_empty();
     }
 }
-
 struct InlineProjection {
     column: usize,
     trailing_spaces: usize,
     at_line_start: bool,
 }
-
 impl InlineProjection {
     fn write(&mut self, text: &str) {
         self.column = self.column.saturating_add(text.chars().count());
@@ -870,20 +831,17 @@ impl InlineProjection {
             .count();
         self.at_line_start = false;
     }
-
     fn space(&mut self) {
         if !self.at_line_start && self.trailing_spaces == 0 {
             self.column = self.column.saturating_add(1);
             self.trailing_spaces = 1;
         }
     }
-
     fn trim_trailing_spaces(&mut self) {
         self.column = self.column.saturating_sub(self.trailing_spaces);
         self.trailing_spaces = 0;
     }
 }
-
 fn project_ordinary(
     line: &mut InlineProjection,
     previous: &mut Option<SyntaxKind>,
@@ -899,7 +857,6 @@ fn project_ordinary(
     *previous = Some(kind);
     *previous_was_prefix = is_prefix;
 }
-
 const fn is_word(kind: SyntaxKind) -> bool {
     matches!(
         kind,
@@ -936,7 +893,6 @@ const fn is_word(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwFalse
     )
 }
-
 const fn is_operator(kind: SyntaxKind) -> bool {
     matches!(
         kind,
@@ -964,21 +920,18 @@ const fn is_operator(kind: SyntaxKind) -> bool {
             | SyntaxKind::OrOr
     )
 }
-
 const fn is_prefix_operator(kind: SyntaxKind) -> bool {
     matches!(
         kind,
         SyntaxKind::Bang | SyntaxKind::Minus | SyntaxKind::Plus
     )
 }
-
 fn is_generic_type_name(name: &str) -> bool {
     matches!(
         name,
         "Option" | "Result" | "Secret" | "StateMap" | "List" | "QueryPage"
     )
 }
-
 const fn syntax_kind_starts_expression(kind: SyntaxKind) -> bool {
     matches!(
         kind,
@@ -997,7 +950,6 @@ const fn syntax_kind_starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::Bang
     )
 }
-
 const fn prefix_position(previous: Option<SyntaxKind>) -> bool {
     match previous {
         None => true,
@@ -1037,7 +989,6 @@ const fn prefix_position(previous: Option<SyntaxKind>) -> bool {
         ),
     }
 }
-
 const fn needs_space(
     previous: Option<SyntaxKind>,
     previous_was_prefix: bool,
@@ -1106,17 +1057,14 @@ const fn needs_space(
     is_word(previous) && is_word(current)
         || matches!(previous, SyntaxKind::RParen | SyntaxKind::RBracket) && is_word(current)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::source::SourceId;
-
     fn format(source: &str) -> String {
         let source = SourceFile::new(SourceId(0), "format.ko", source);
         format_source(&source, FrontendBudget::v1()).expect("valid source")
     }
-
     #[test]
     fn canonicalizes_blocks_operators_and_declarations() {
         let formatted = format(
@@ -1145,7 +1093,6 @@ mod tests {
         );
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn preserves_comments_literals_and_canonical_keywords() {
         let source =
@@ -1157,14 +1104,12 @@ mod tests {
         assert!(formatted.starts_with("seiyaku Demo {\n"));
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn preserves_decimal_literal_spelling_idempotently() {
         let formatted = format("seiyaku Demo{view fn value()->decimal{return 1.250_0;}}");
         assert!(formatted.contains("return 1.250_0;"));
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn formats_named_struct_literals_with_multiline_trailing_commas() {
         let formatted = format(
@@ -1182,7 +1127,6 @@ mod tests {
         );
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn wraps_long_named_calls_at_one_hundred_columns_with_trailing_comma() {
         let formatted = format(
@@ -1192,7 +1136,6 @@ mod tests {
         assert!(formatted.contains("third: \"cccccccccccccccccccccccccccccccccccccccc\",\n"));
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn wraps_when_canonical_spaces_cross_the_compressed_source_boundary() {
         // With nineteen-character literals the compressed source span ends at
@@ -1201,7 +1144,6 @@ mod tests {
         let formatted = format(
             "seiyaku Demo{fn target(string first,string second,string third){}fn run(){target(first:\"aaaaaaaaaaaaaaaaaaa\",second:\"bbbbbbbbbbbbbbbbbbb\",third:\"ccccccccccccccccccc\");}}",
         );
-
         assert!(formatted.contains("target(\n"), "{formatted}");
         assert!(
             formatted
@@ -1211,7 +1153,6 @@ mod tests {
         );
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn unicode_literal_bytes_do_not_cause_spurious_wrapping() {
         let snow = "雪".repeat(30);
@@ -1219,7 +1160,6 @@ mod tests {
             "seiyaku Demo{{fn target(string value){{}}fn run(){{target(value:\"{snow}\");}}}}"
         );
         let formatted = format(&source);
-
         assert!(
             formatted.contains(&format!("target(value: \"{snow}\");")),
             "{formatted}"
@@ -1227,13 +1167,11 @@ mod tests {
         assert!(!formatted.contains("target(\n"), "{formatted}");
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn branded_unicode_and_comments_remain_stable_in_multiline_calls() {
         let formatted = format(
             "誓約 Branding{始まり(){}言挙げ fn run()authorize(\"Run\"){target(first:\"雪\",// 保持\nsecond:\"月\",third:\"星\");}改善(){}}",
         );
-
         for spelling in [
             "誓約",
             "始まり",
@@ -1252,7 +1190,6 @@ mod tests {
         assert!(formatted.contains("target(\n"), "{formatted}");
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn wraps_long_list_literals_with_trailing_commas_idempotently() {
         let source = concat!(
@@ -1270,7 +1207,6 @@ mod tests {
         );
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn preserves_list_comprehension_comments_and_literal_spelling() {
         let source = "seiyaku Lists{fn values()->List<int,4>{let List<int,4> source = [1,2];[value*10 for value in source if value>0]// stable\n}}";
@@ -1282,7 +1218,6 @@ mod tests {
         assert!(formatted.contains("// stable"));
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn formats_native_json_with_stable_keys_literals_and_trailing_commas() {
         let formatted = format(
@@ -1301,7 +1236,6 @@ mod tests {
         );
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn formats_amount_div_round_named_arguments_within_the_target() {
         let formatted = format(
@@ -1318,7 +1252,6 @@ mod tests {
         );
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn multiline_authorize_modifier_never_gains_a_trailing_comma() {
         let formatted = format(
@@ -1335,7 +1268,6 @@ mod tests {
         );
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn distinguishes_generic_delimiters_from_comparisons() {
         let formatted = format(
@@ -1345,7 +1277,6 @@ mod tests {
         assert!(formatted.contains("return a < b;"));
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn formats_tail_match_and_postfix_propagation_idempotently() {
         let formatted = format(
@@ -1366,7 +1297,6 @@ mod tests {
         );
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn formats_list_ternary_and_propagation_indexing_without_ambiguity() {
         let formatted = format(
@@ -1376,7 +1306,6 @@ mod tests {
         assert!(formatted.contains("Option::some(value?[0])"), "{formatted}");
         assert_eq!(format(&formatted), formatted);
     }
-
     #[test]
     fn refuses_to_rewrite_invalid_sources() {
         let source = SourceFile::new(SourceId(0), "bad.ko", "seiyaku Demo { return ; }");
@@ -1384,7 +1313,6 @@ mod tests {
             .expect_err("invalid source must not be formatted");
         assert!(!diagnostics.diagnostics.is_empty());
     }
-
     #[test]
     fn refuses_output_expansion_beyond_the_source_budget() {
         let mut text = String::from("seiyaku Demo { view fn run() {");
@@ -1399,7 +1327,6 @@ mod tests {
         }
         text.push_str("} }");
         assert!(text.len() < MAX_SOURCE_BYTES);
-
         let source = SourceFile::new(SourceId(0), "expansion.ko", text);
         let diagnostics = format_source(&source, FrontendBudget::v1())
             .expect_err("formatter expansion must remain bounded");

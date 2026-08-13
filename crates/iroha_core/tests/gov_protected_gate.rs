@@ -1,9 +1,7 @@
 //! Protected namespace admission gate test for IVM deploys.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::too_many_lines, clippy::items_after_statements)]
-
 use std::num::NonZeroU64;
-
 use iroha_config::parameters::actual::{GovernanceCatalog, LaneRegistry};
 use iroha_core::{
     governance::manifest::LaneManifestRegistry,
@@ -14,23 +12,19 @@ use iroha_core::{
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{NetworkId, nexus::DataSpaceId};
-
 const TEST_GAS_LIMIT: u64 = 1_000_000;
-
 fn fee_payment_with_gas_limit() -> iroha_data_model::transaction::FeePaymentIntent {
     iroha_data_model::transaction::FeePaymentIntent::authority(
         Vec::new(),
         NonZeroU64::new(TEST_GAS_LIMIT),
     )
 }
-
 fn compute_proposal_id(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     code_hex: &str,
     abi_hex: &str,
 ) -> [u8; 32] {
     use core::convert::TryInto;
-
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
     let contract_address = contract_address.as_ref();
     let code = hex::decode(code_hex).expect("valid code hex");
@@ -56,7 +50,6 @@ fn compute_proposal_id(
     out.copy_from_slice(&digest[..32]);
     out
 }
-
 fn sample_contract_address(
     network_id: &NetworkId,
     authority: &iroha_data_model::account::AccountId,
@@ -69,20 +62,16 @@ fn sample_contract_address(
     )
     .expect("contract address")
 }
-
 fn checked_random_protected_gate_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked protected gate keypair")
 }
-
 #[test]
 fn protected_gate_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_protected_gate_keypair();
 }
-
 #[test]
 fn protected_namespace_requires_enacted_proposal() {
     use std::str::FromStr;
-
     use iroha_data_model::{
         isi::governance::{EnactReferendum, ProposeDeployContract},
         permission::Permission,
@@ -93,7 +82,6 @@ fn protected_namespace_requires_enacted_proposal() {
         CanEnactGovernance, CanProposeContractDeployment,
     };
     use nonzero_ext::nonzero;
-
     // Build minimal world with one authority
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -112,7 +100,6 @@ fn protected_namespace_requires_enacted_proposal() {
         &GovernanceCatalog::default(),
         &LaneRegistry::default(),
     )));
-
     // Set custom parameter gov_protected_namespaces = ["apps"]
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block1 = state.block(header1);
@@ -127,7 +114,6 @@ fn protected_namespace_requires_enacted_proposal() {
     set.execute(&authority, &mut stx1).expect("set param");
     stx1.apply();
     block1.commit().unwrap();
-
     // Prepare one exact self-describing artifact. It omits hajimari so the protected
     // transaction entrypoint can run immediately after the governance binding is enacted.
     let (prog, _) = ivm::KotodamaCompiler::new()
@@ -143,9 +129,7 @@ seiyaku ProtectedGate {
     let code_hash = verified.code_hash;
     let abi_hash = verified.abi_hash;
     let exact_manifest = verified.manifest;
-
     let contract_address = sample_contract_address(&network_id, &authority);
-
     // Build tx with metadata for protected namespace
     let mut md = iroha_data_model::metadata::Metadata::default();
     md.insert(
@@ -164,7 +148,6 @@ seiyaku ProtectedGate {
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog.clone())))
         .with_metadata(md)
         .sign(&sk);
-
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
@@ -181,7 +164,6 @@ seiyaku ProtectedGate {
         other => panic!("expected protected-namespace rejection, got {other:?}"),
     }
     drop(block2);
-
     // Enact a matching proposal via public instructions
     let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut block3 = state.block(header3);
@@ -268,7 +250,6 @@ seiyaku ProtectedGate {
     .expect("enact");
     stx3.apply();
     block3.commit().unwrap();
-
     // Retry with same tx; should accept now
     let header4 = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let mut block4 = state.block(header4);

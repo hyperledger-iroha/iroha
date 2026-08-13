@@ -1,8 +1,6 @@
 //! ZK referenda auto-close should not emit decisions without a finalized tally.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use core::num::NonZeroU64;
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -15,15 +13,12 @@ use iroha_data_model::{
     block::BlockHeader,
     events::data::{DataEvent, governance::GovernanceEvent},
 };
-
 #[test]
 fn zk_referendum_auto_close_defers_decision_without_tally() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
-
     let rid = hex::encode([0x11_u8; 32]);
-
     let header1 = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock1 = state.block(header1);
     let mut stx1 = sblock1.transaction();
@@ -56,7 +51,6 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
     );
     stx1.apply();
     sblock1.commit().unwrap();
-
     let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut sblock2 = state.block(header2);
     let events_at_end = sblock2.world.take_external_events();
@@ -70,7 +64,6 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
         "inclusive h_end must remain open for ballots"
     );
     sblock2.commit().unwrap();
-
     let header3 = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
     let mut sblock3 = state.block(header3);
     let events = sblock3.world.take_external_events();
@@ -81,7 +74,6 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
         )
     });
     assert!(has_closed, "expected ReferendumClosed at h_end + 1");
-
     let has_decision = events.iter().any(|event| {
         matches!(
             event.as_data_event(),

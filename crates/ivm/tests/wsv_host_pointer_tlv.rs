@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::isi::transfer::{TransferAssetBatch, TransferAssetBatchEntry};
 use iroha_data_model::nexus::DataSpaceId;
@@ -12,10 +11,8 @@ use ivm::{
     syscalls,
 };
 use norito::to_bytes;
-
 mod common;
 use common::assemble_syscalls;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -26,26 +23,21 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn make_account_tlv(account: &AccountId) -> Vec<u8> {
     let buf = to_bytes(account).expect("encode account into Norito");
     make_tlv(PointerType::AccountId as u16, &buf)
 }
-
 fn make_asset_tlv(asset: &AssetDefinitionId) -> Vec<u8> {
     let buf = to_bytes(asset).expect("encode asset into Norito");
     make_tlv(PointerType::AssetDefinitionId as u16, &buf)
 }
-
 fn make_quantity_tlv(amount: impl Into<Quantity>) -> Vec<u8> {
     ivm::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
 }
-
 fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {
     let buf = to_bytes(&dataspace).expect("encode DataSpaceId into Norito");
     make_tlv(PointerType::DataSpaceId as u16, &buf)
 }
-
 fn make_transfer_batch_tlv(
     entries: &[(AccountId, AccountId, AssetDefinitionId, Quantity)],
 ) -> Vec<u8> {
@@ -59,15 +51,12 @@ fn make_transfer_batch_tlv(
     let buf = to_bytes(&batch).expect("encode transfer batch into Norito");
     make_tlv(PointerType::NoritoBytes as u16, &buf)
 }
-
 fn num(value: u64) -> Quantity {
     Quantity::from(value)
 }
-
 fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
     AccountId::new(public_key)
 }
-
 #[test]
 fn balance_syscall_with_tlv_pointers() {
     let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
@@ -84,12 +73,10 @@ fn balance_syscall_with_tlv_pointers() {
             iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
-
     let wsv = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
     let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // Preload TLVs for alice and asset
     let acc = make_account_tlv(&alice);
     vm.memory.preload_input(0, &acc).expect("preload input");
@@ -99,12 +86,10 @@ fn balance_syscall_with_tlv_pointers() {
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START); // account ptr
     vm.set_register(11, Memory::INPUT_START + acc.len() as u64 + 8); // asset ptr
-
     let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE as u8]);
     vm.load_program(&prog).unwrap();
     // Bob lacks permission -> PermissionDenied
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
-
     // Grant and retry
     let mut wsv2 = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
     wsv2.grant_permission(&bob, PermissionToken::ReadAccountAssets(alice.clone()));
@@ -119,7 +104,6 @@ fn balance_syscall_with_tlv_pointers() {
         .into_quantity();
     assert_eq!(value, Quantity::from(50_u64));
 }
-
 #[test]
 fn transfer_syscall_with_tlv_pointers() {
     let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
@@ -136,7 +120,6 @@ fn transfer_syscall_with_tlv_pointers() {
             iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
-
     let wsv = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), num(50)),
         ((bob.clone(), asset.clone()), num(0)),
@@ -144,7 +127,6 @@ fn transfer_syscall_with_tlv_pointers() {
     let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     let acc_from = make_account_tlv(&alice);
     vm.memory
         .preload_input(0, &acc_from)
@@ -175,11 +157,9 @@ fn transfer_syscall_with_tlv_pointers() {
         .preload_input(dataspace_offset, &dataspace_tlv)
         .expect("preload input");
     vm.set_register(14, Memory::INPUT_START + dataspace_offset);
-
     let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET_SCOPED as u8]);
     vm.load_program(&prog).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
-
     let mut wsv2 = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), num(50)),
         ((bob.clone(), asset.clone()), num(0)),
@@ -190,7 +170,6 @@ fn transfer_syscall_with_tlv_pointers() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer tlv syscall failed");
 }
-
 #[test]
 fn mint_syscall_with_tlv_pointers() {
     let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
@@ -203,12 +182,10 @@ fn mint_syscall_with_tlv_pointers() {
             iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
-
     let wsv = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
     let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     let asset_tlv = make_asset_tlv(&asset);
@@ -223,11 +200,9 @@ fn mint_syscall_with_tlv_pointers() {
     vm.set_register(10, Memory::INPUT_START);
     vm.set_register(11, Memory::INPUT_START + acc.len() as u64 + 8);
     vm.set_register(12, Memory::INPUT_START + amount_offset);
-
     let prog = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
     vm.load_program(&prog).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
-
     let mut wsv2 = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));
     let host = WsvHost::new_with_subject(wsv2, bob.clone(), HashMap::new());
@@ -235,7 +210,6 @@ fn mint_syscall_with_tlv_pointers() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("mint tlv syscall failed");
 }
-
 #[test]
 fn transfer_batch_syscalls_buffer_entries() {
     let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
@@ -256,7 +230,6 @@ fn transfer_batch_syscalls_buffer_entries() {
             iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
-
     let mut wsv = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), num(50)),
         ((bob.clone(), asset.clone()), num(0)),
@@ -271,10 +244,8 @@ fn transfer_batch_syscalls_buffer_entries() {
     asset_map.insert(1, asset.clone());
     let mut host = WsvHost::new_with_subject_map(wsv, bob.clone(), account_map, asset_map);
     let mut vm = IVM::new(u64::MAX);
-
     host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm)
         .expect("begin batch");
-
     vm.set_register(10, 1);
     vm.set_register(11, 2);
     vm.set_register(12, 1);
@@ -283,7 +254,6 @@ fn transfer_batch_syscalls_buffer_entries() {
     vm.set_register(13, amount1_ptr);
     host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm)
         .expect("push entry 1");
-
     vm.set_register(10, 1);
     vm.set_register(11, 3);
     vm.set_register(12, 1);
@@ -292,10 +262,8 @@ fn transfer_batch_syscalls_buffer_entries() {
     vm.set_register(13, amount2_ptr);
     host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm)
         .expect("push entry 2");
-
     host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_END, &mut vm)
         .expect("finish batch");
-
     assert_eq!(
         host.wsv.balance(bob.clone(), asset.clone()),
         num(10),
@@ -312,7 +280,6 @@ fn transfer_batch_syscalls_buffer_entries() {
         "alice balance must decrease by combined amount"
     );
 }
-
 #[test]
 fn transfer_batch_apply_syscall_executes_batch() {
     let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
@@ -333,7 +300,6 @@ fn transfer_batch_apply_syscall_executes_batch() {
             iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
-
     let mut wsv = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), num(50)),
         ((bob.clone(), asset.clone()), num(0)),
@@ -343,7 +309,6 @@ fn transfer_batch_apply_syscall_executes_batch() {
     let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     let batch_tlv = make_transfer_batch_tlv(&[
         (alice.clone(), bob.clone(), asset.clone(), num(10)),
         (alice.clone(), carol.clone(), asset.clone(), num(5)),
@@ -352,11 +317,9 @@ fn transfer_batch_apply_syscall_executes_batch() {
         .preload_input(0, &batch_tlv)
         .expect("preload batch tlv");
     vm.set_register(10, Memory::INPUT_START);
-
     let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY as u8]);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer batch apply should succeed");
-
     let host = vm
         .host_mut_any()
         .and_then(|host| host.downcast_mut::<WsvHost>())

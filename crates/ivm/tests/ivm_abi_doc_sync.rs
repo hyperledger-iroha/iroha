@@ -1,5 +1,4 @@
 //! Verify the canonical ABI hash table and runtime sample are up to date.
-
 fn docs_source_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent() // crates/
@@ -7,7 +6,6 @@ fn docs_source_dir() -> std::path::PathBuf {
         .expect("workspace root")
         .join("specs")
 }
-
 #[test]
 fn generated_abi_hashes_section_in_ivm_header_is_up_to_date() {
     const BEGIN: &str = "<!-- BEGIN GENERATED ABI HASHES -->";
@@ -31,7 +29,6 @@ fn generated_abi_hashes_section_in_ivm_header_is_up_to_date() {
         path.display()
     );
 }
-
 #[test]
 fn runtime_abi_hash_samples_match_the_descriptor() {
     let sample_dir = docs_source_dir().join("samples");

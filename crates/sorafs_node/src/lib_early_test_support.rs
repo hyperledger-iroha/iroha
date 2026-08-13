@@ -5,7 +5,6 @@ fn transaction_network_id(seed: u8) -> iroha_data_model::NetworkId {
         iroha_crypto::Hash::prehashed([seed; iroha_crypto::Hash::LENGTH]),
     ))
 }
-
 #[test]
 fn finalized_capacity_projection_has_no_production_local_mutation_entrypoints() {
     let source = include_str!("lib.rs");
@@ -37,14 +36,12 @@ fn finalized_capacity_projection_has_no_production_local_mutation_entrypoints() 
         );
     }
 }
-
 #[test]
 fn potr_receipt_admission_requires_explicit_chain_authoritative_handoff() {
     let source = include_str!("lib.rs");
     let retired_default_impl = ["impl potr::PotrLatencyRepairHandoff", " for NodeHandle"].concat();
     let retired_implicit_api = ["pub fn ", "record_potr_receipt", "("].concat();
     let explicit_api = ["pub fn ", "record_potr_receipt_with_handoff", "("].concat();
-
     assert!(
         !source.contains(&retired_default_impl),
         "NodeHandle must not provide a partial process-local PoTR repair handoff"
@@ -58,7 +55,6 @@ fn potr_receipt_admission_requires_explicit_chain_authoritative_handoff() {
         "PoTR receipt admission must require an explicit chain-authoritative handoff"
     );
 }
-
 #[test]
 fn appeal_finance_publication_has_no_unauthenticated_node_handle_entrypoint() {
     let source = include_str!("lib.rs");
@@ -75,10 +71,8 @@ fn appeal_finance_publication_has_no_unauthenticated_node_handle_entrypoint() {
         );
     }
 }
-
 #[derive(Debug)]
 struct SuccessfulPorRepairHandoff;
-
 impl PorRepairHandoff for SuccessfulPorRepairHandoff {
     fn enqueue_failed_por_repair(
         &self,
@@ -87,10 +81,8 @@ impl PorRepairHandoff for SuccessfulPorRepairHandoff {
         Ok(intent.repair_task_id())
     }
 }
-
 #[derive(Debug)]
 struct FailingPorRepairHandoff;
-
 impl PorRepairHandoff for FailingPorRepairHandoff {
     fn enqueue_failed_por_repair(
         &self,
@@ -101,7 +93,6 @@ impl PorRepairHandoff for FailingPorRepairHandoff {
         ))
     }
 }
-
 #[derive(Debug, Default)]
 struct RecordingReputationAdmission {
     retained: Mutex<
@@ -112,7 +103,6 @@ struct RecordingReputationAdmission {
     >,
     calls: AtomicU64,
 }
-
 impl reputation::runtime::ReputationNativeOutcomeAdmissionApiV1 for RecordingReputationAdmission {
     fn activation_state(
         &self,
@@ -122,7 +112,6 @@ impl reputation::runtime::ReputationNativeOutcomeAdmissionApiV1 for RecordingRep
     > {
         Ok(reputation::runtime::ReputationNativeOutcomeAdmissionStateV1::Active)
     }
-
     fn record_por_terminal(
         &self,
         provider_id: ProviderId,
@@ -154,7 +143,6 @@ impl reputation::runtime::ReputationNativeOutcomeAdmissionApiV1 for RecordingRep
             Some(_) => Err(reputation::runtime::ReputationRuntimeError::JournalSourceConflict),
         }
     }
-
     fn record_authenticated_stream_token_validation(
         &self,
         _provider_id: ProviderId,

@@ -3,7 +3,6 @@ use std::{
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use axum::{
     http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
@@ -40,16 +39,13 @@ use iroha_executor_data_model::permission::soranet::CanIssueSoranetVpnQuote;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use mv::storage::StorageReadOnly;
 use sha2::{Digest as _, Sha256};
-
 use crate::{Error, SharedAppState};
-
 const SUPPORTED_EXIT_CLASSES: [&str; 3] = ["standard", "low-latency", "high-security"];
 const DEFAULT_TUNNEL_ADDRESSES: [&str; 2] = ["10.208.0.2/32", "fd53:7261:6574::2/128"];
 // Runtime VPN state is deliberately bounded independently of the number of
 // registered accounts. At most one quote and one session are retained per
 // account, and a full cache fails closed instead of evicting unrelated users.
 const VPN_RUNTIME_ACCOUNT_CAPACITY: usize = 4_096;
-
 /// Immutable VPN relay trust derived from an authenticated guard-directory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VpnRelayTrust {
@@ -70,7 +66,6 @@ pub struct VpnRelayTrust {
     /// Exclusive upper bound on authenticated relay trust, in Unix milliseconds.
     pub valid_until_ms: u64,
 }
-
 impl VpnRelayTrust {
     /// Authenticate a directory snapshot and select one exact VPN relay endpoint.
     ///
@@ -117,7 +112,6 @@ impl VpnRelayTrust {
         })
     }
 }
-
 #[derive(
     Debug,
     Clone,
@@ -158,7 +152,6 @@ pub struct VpnProfileResponseDto {
     pub relay_certificate_sha256_hex: String,
     pub directory_snapshot_digest_hex: String,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -176,7 +169,6 @@ pub struct VpnQuoteCreateRequestDto {
     #[norito(default)]
     pub metering_public_key_hex: String,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -218,7 +210,6 @@ pub struct VpnQuoteResponseDto {
     pub metering_public_key_hex: String,
     pub open_lease_instruction: VpnTxInstructionDto,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -240,7 +231,6 @@ pub struct VpnSessionCreateRequestDto {
     #[norito(default)]
     pub metering_public_key_hex: String,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -289,7 +279,6 @@ pub struct VpnSessionResponseDto {
     pub bytes_out: u64,
     pub status: String,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -326,7 +315,6 @@ pub struct VpnReceiptResponseDto {
     #[norito(default)]
     pub settle_lease_instruction: Option<VpnTxInstructionDto>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -344,7 +332,6 @@ pub struct VpnReceiptSubmitRequestDto {
     #[norito(default)]
     pub lease_id_hex: String,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -359,7 +346,6 @@ pub struct VpnTxInstructionDto {
     pub wire_id: String,
     pub payload_hex: String,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -375,7 +361,6 @@ pub struct VpnReceiptListResponseDto {
     pub items: Vec<VpnReceiptResponseDto>,
     pub total: u64,
 }
-
 #[derive(Debug, Clone)]
 pub(crate) struct VpnSessionRecord {
     pub session_id: String,
@@ -414,7 +399,6 @@ pub(crate) struct VpnSessionRecord {
     pub bytes_in: u64,
     pub bytes_out: u64,
 }
-
 #[derive(Debug, Clone)]
 pub(crate) struct VpnReceiptRecord {
     pub session_id: String,
@@ -440,7 +424,6 @@ pub(crate) struct VpnReceiptRecord {
     pub lease_id_hex: String,
     pub settle_lease_instruction: Option<VpnTxInstructionDto>,
 }
-
 #[derive(Debug, Clone)]
 pub(crate) struct VpnQuoteRecord {
     pub quote_id: String,
@@ -476,7 +459,6 @@ pub(crate) struct VpnQuoteRecord {
     pub directory_snapshot_digest: [u8; 32],
     pub relay_trust_valid_until_ms: u64,
 }
-
 /// Reverse indexes, in-flight reservations, and bounds for the compound VPN
 /// runtime caches.
 ///
@@ -496,7 +478,6 @@ pub(crate) struct VpnRuntimeState {
     #[cfg(test)]
     session_account_lookups: usize,
 }
-
 impl Default for VpnRuntimeState {
     fn default() -> Self {
         Self {
@@ -512,7 +493,6 @@ impl Default for VpnRuntimeState {
         }
     }
 }
-
 #[cfg(test)]
 impl VpnRuntimeState {
     fn with_capacities(quote_capacity: usize, session_capacity: usize) -> Self {
@@ -523,7 +503,6 @@ impl VpnRuntimeState {
         }
     }
 }
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -532,24 +511,20 @@ fn now_ms() -> u64 {
         .try_into()
         .unwrap_or(u64::MAX)
 }
-
 fn conversion_error(message: impl Into<String>) -> Error {
     Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
         message.into(),
     )))
 }
-
 fn not_permitted_error(message: impl Into<String>) -> Error {
     Error::Query(ValidationFail::NotPermitted(message.into()))
 }
-
 fn inconsistent_vpn_state(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
         code: "vpn_state_inconsistent",
         message: message.into(),
     }
 }
-
 fn normalize_exit_class(value: &str, default_value: &str) -> Result<String, Error> {
     let candidate = if value.trim().is_empty() {
         default_value.trim()
@@ -564,14 +539,12 @@ fn normalize_exit_class(value: &str, default_value: &str) -> Result<String, Erro
     })?;
     Ok(parsed.as_label().to_owned())
 }
-
 fn default_tunnel_addresses() -> Vec<String> {
     DEFAULT_TUNNEL_ADDRESSES
         .iter()
         .map(|item| (*item).to_owned())
         .collect()
 }
-
 fn build_profile_at(
     dto: &ConfigGetDTO,
     trust: Option<&VpnRelayTrust>,
@@ -636,7 +609,6 @@ fn build_profile_at(
             .unwrap_or_default(),
     }
 }
-
 fn require_signed_request(
     app: &SharedAppState,
     headers: &HeaderMap,
@@ -657,7 +629,6 @@ fn require_signed_request(
         None => Err(not_permitted_error("signed account headers are required")),
     }
 }
-
 fn relay_session_id_from_session_id(session_id: &str) -> [u8; 16] {
     let normalized = session_id
         .trim()
@@ -668,19 +639,15 @@ fn relay_session_id_from_session_id(session_id: &str) -> [u8; 16] {
         .try_into()
         .expect("stored VPN session id must encode exactly 16 bytes")
 }
-
 fn fixed_hash_hex(input: &str) -> String {
     hex::encode(blake3::hash(input.as_bytes()).as_bytes())
 }
-
 fn fixed_hash_bytes(input: &str) -> [u8; 32] {
     *blake3::hash(input.as_bytes()).as_bytes()
 }
-
 fn account_hash(account_id: &AccountId) -> [u8; 32] {
     fixed_hash_bytes(&account_id.to_string())
 }
-
 fn decode_hex_32(raw: &str, field: &str) -> Result<[u8; 32], Error> {
     let normalized = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
     let decoded =
@@ -689,7 +656,6 @@ fn decode_hex_32(raw: &str, field: &str) -> Result<[u8; 32], Error> {
         .try_into()
         .map_err(|_| conversion_error(format!("{field} must decode to 32 bytes")))
 }
-
 fn parse_metering_public_key(raw: &str) -> Result<PublicKey, Error> {
     let normalized = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
     if normalized.is_empty() {
@@ -703,27 +669,23 @@ fn parse_metering_public_key(raw: &str) -> Result<PublicKey, Error> {
         ))
     })
 }
-
 fn public_key_payload_hex(public_key: &PublicKey) -> Result<String, Error> {
     let (_, payload) = public_key
         .try_to_bytes()
         .map_err(|err| conversion_error(format!("metering public key is malformed: {err}")))?;
     Ok(hex::encode(payload))
 }
-
 fn xor_asset_definition_id() -> AssetDefinitionId {
     let domain =
         DomainId::parse_fully_qualified("universal.universal").expect("static XOR domain id");
     let name = Name::from_str("xor").expect("static XOR asset name");
     AssetDefinitionId::derive_from_components(domain, name)
 }
-
 fn parse_profile_account_id(raw: &str, field: &str) -> Result<AccountId, Error> {
     AccountId::parse_encoded(raw.trim())
         .map(|parsed| parsed.into_account_id())
         .map_err(|err| conversion_error(format!("{field} must be a canonical account id: {err}")))
 }
-
 fn active_fee_per_minute(lease_fee: &Quantity, lease_secs: u64) -> Result<Quantity, Error> {
     if lease_secs == 0 {
         return Err(conversion_error("vpn lease_secs must be greater than zero"));
@@ -737,7 +699,6 @@ fn active_fee_per_minute(lease_fee: &Quantity, lease_secs: u64) -> Result<Quanti
         )
         .map_err(|err| conversion_error(format!("vpn tariff arithmetic failed: {err}")))
 }
-
 fn vpn_tariff_for_lease(lease_fee: &Quantity, lease_secs: u64) -> Result<VpnTariffV1, Error> {
     Ok(VpnTariffV1 {
         lease_fee: lease_fee.clone(),
@@ -746,7 +707,6 @@ fn vpn_tariff_for_lease(lease_fee: &Quantity, lease_secs: u64) -> Result<VpnTari
         egress_fee_per_mib: Quantity::zero(),
     })
 }
-
 fn build_helper_ticket_hex(
     record: &VpnSessionRecord,
     expires_at_ms: u64,
@@ -768,7 +728,6 @@ fn build_helper_ticket_hex(
     .try_to_hex(secret)
     .map_err(|err| conversion_error(format!("invalid vpn helper ticket: {err}")))
 }
-
 fn build_quote_id(
     account_id: &AccountId,
     exit_class: &str,
@@ -779,18 +738,14 @@ fn build_quote_id(
         "soranet-vpn-quote-v1:{account_id}:{exit_class}:{nonce}:{current_ms}"
     ))
 }
-
 fn build_session_id_from_quote(quote: &VpnQuoteRecord) -> String {
     hex::encode(quote.session_id)
 }
-
 fn default_lease_id_hex(record: &VpnSessionRecord) -> String {
     hex::encode(record.lease_id)
 }
-
 fn tx_instr_from_box(boxed: InstructionBox) -> VpnTxInstructionDto {
     use iroha_data_model::isi::Instruction;
-
     let type_name = Instruction::id(&*boxed);
     let wire_id = type_name.to_string();
     let payload = Instruction::dyn_encode(&*boxed);
@@ -801,7 +756,6 @@ fn tx_instr_from_box(boxed: InstructionBox) -> VpnTxInstructionDto {
         payload_hex: hex::encode(framed),
     }
 }
-
 fn settle_lease_instruction(
     lease_id: [u8; 32],
     relay_receipt: VpnSessionReceiptV1,
@@ -810,11 +764,9 @@ fn settle_lease_instruction(
     let instruction: InstructionBox = SettleVpnLease::new(lease_id, relay_receipt, voucher).into();
     tx_instr_from_box(instruction)
 }
-
 fn quote_policy_from_record(record: &VpnQuoteRecord) -> VpnQuotePolicyV1 {
     record.signed_quote.body.policy.clone()
 }
-
 fn validate_quote_record_projection(
     record: &VpnQuoteRecord,
     expected_network_id: &iroha_data_model::NetworkId,
@@ -845,7 +797,6 @@ fn validate_quote_record_projection(
             "stored VPN quote contains non-canonical lease or session identifiers",
         ));
     }
-
     macro_rules! require_projection {
         ($label:literal, $record_value:expr, $signed_value:expr) => {
             if $record_value != $signed_value {
@@ -857,7 +808,6 @@ fn validate_quote_record_projection(
             }
         };
     }
-
     require_projection!("quote id", &record.quote_id, &quote_id);
     require_projection!("payment reference", &record.payment_reference, &quote_id);
     require_projection!("lease id", &record.lease_id, &body.lease_id);
@@ -959,7 +909,6 @@ fn validate_quote_record_projection(
     );
     Ok(())
 }
-
 fn open_lease_instruction(
     record: &VpnQuoteRecord,
     expected_network_id: &iroha_data_model::NetworkId,
@@ -968,7 +917,6 @@ fn open_lease_instruction(
     let instruction: InstructionBox = OpenVpnLeaseEscrow::new(record.signed_quote.clone()).into();
     Ok(tx_instr_from_box(instruction))
 }
-
 fn ensure_vpn_quote_operator_authorized(
     app: &SharedAppState,
     operator_account_id: &AccountId,
@@ -999,7 +947,6 @@ fn ensure_vpn_quote_operator_authorized(
         ))
     }
 }
-
 fn settlement_lease_id_from_request_or_index(
     request: &VpnReceiptSubmitRequestDto,
     indexed_lease_id: [u8; 32],
@@ -1016,7 +963,6 @@ fn settlement_lease_id_from_request_or_index(
     }
     Ok((lease_id, hex::encode(lease_id)))
 }
-
 fn quote_response_from_record(
     record: &VpnQuoteRecord,
     expected_network_id: &iroha_data_model::NetworkId,
@@ -1054,7 +1000,6 @@ fn quote_response_from_record(
         open_lease_instruction,
     })
 }
-
 fn response_from_record(record: &VpnSessionRecord) -> VpnSessionResponseDto {
     VpnSessionResponseDto {
         session_id: record.session_id.clone(),
@@ -1091,7 +1036,6 @@ fn response_from_record(record: &VpnSessionRecord) -> VpnSessionResponseDto {
         status: "active".to_owned(),
     }
 }
-
 fn receipt_response_from_record(record: &VpnReceiptRecord) -> VpnReceiptResponseDto {
     VpnReceiptResponseDto {
         session_id: record.session_id.clone(),
@@ -1118,7 +1062,6 @@ fn receipt_response_from_record(record: &VpnReceiptRecord) -> VpnReceiptResponse
         settle_lease_instruction: record.settle_lease_instruction.clone(),
     }
 }
-
 fn build_receipt_record(
     record: &VpnSessionRecord,
     disconnected_at_ms: u64,
@@ -1150,7 +1093,6 @@ fn build_receipt_record(
         settle_lease_instruction: None,
     }
 }
-
 fn build_settled_receipt_record(
     record: &VpnSessionRecord,
     relay_receipt: &VpnSessionReceiptV1,
@@ -1198,7 +1140,6 @@ fn build_settled_receipt_record(
         )),
     })
 }
-
 fn store_receipt(app: &SharedAppState, receipt: VpnReceiptRecord) {
     let key = receipt.account_id.to_string();
     let mut entry = app.vpn_receipts.entry(key).or_default();
@@ -1207,17 +1148,14 @@ fn store_receipt(app: &SharedAppState, receipt: VpnReceiptRecord) {
         entry.truncate(MAX_RECEIPTS_PER_ACCOUNT);
     }
 }
-
 fn account_runtime_key(account_id: &AccountId) -> String {
     account_id.to_string()
 }
-
 fn lock_vpn_runtime(app: &SharedAppState) -> std::sync::MutexGuard<'_, VpnRuntimeState> {
     app.vpn_state_lock
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
-
 fn remove_quote_by_id_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1234,7 +1172,6 @@ fn remove_quote_by_id_locked(
     }
     Some(record)
 }
-
 fn quote_for_account_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1256,7 +1193,6 @@ fn quote_for_account_locked(
         }
     }
 }
-
 fn expire_quote_for_account_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1270,7 +1206,6 @@ fn expire_quote_for_account_locked(
         let _ = remove_quote_by_id_locked(app, state, &record.quote_id);
     }
 }
-
 fn quote_by_id_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1284,7 +1219,6 @@ fn quote_by_id_locked(
     }
     Some(record)
 }
-
 fn insert_quote_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1314,7 +1248,6 @@ fn insert_quote_locked(
     app.vpn_quotes.insert(record.quote_id.clone(), record);
     Ok(())
 }
-
 fn remove_session_by_id_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1326,7 +1259,6 @@ fn remove_session_by_id_locked(
         .map(|entry| entry.clone())?;
     remove_session_record_locked(app, state, &record)
 }
-
 fn remove_session_record_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1350,7 +1282,6 @@ fn remove_session_record_locked(
     }
     removed
 }
-
 fn session_for_account_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1372,7 +1303,6 @@ fn session_for_account_locked(
         }
     }
 }
-
 fn expire_session_record_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1390,7 +1320,6 @@ fn expire_session_record_locked(
     }
     true
 }
-
 fn expire_session_for_account_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1402,7 +1331,6 @@ fn expire_session_for_account_locked(
     };
     let _ = expire_session_record_locked(app, state, &record, current_ms);
 }
-
 fn session_by_id_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1418,7 +1346,6 @@ fn session_by_id_locked(
     }
     Some(record)
 }
-
 fn reserve_session_settlement_locked(
     state: &mut VpnRuntimeState,
     session_id: &str,
@@ -1436,13 +1363,11 @@ fn reserve_session_settlement_locked(
     state.settling_session_ids.insert(session_id.to_owned());
     Ok(())
 }
-
 struct VpnSettlementReservation {
     app: SharedAppState,
     session_id: String,
     active: bool,
 }
-
 impl VpnSettlementReservation {
     fn reserve(app: &SharedAppState, session_id: String) -> Result<Self, Error> {
         {
@@ -1455,7 +1380,6 @@ impl VpnSettlementReservation {
             active: true,
         })
     }
-
     fn finish(mut self, record: &VpnSessionRecord, receipt: VpnReceiptRecord) {
         self.active = false;
         let mut state = lock_vpn_runtime(&self.app);
@@ -1464,7 +1388,6 @@ impl VpnSettlementReservation {
         store_receipt(&self.app, receipt);
     }
 }
-
 impl Drop for VpnSettlementReservation {
     fn drop(&mut self) {
         if !self.active {
@@ -1474,7 +1397,6 @@ impl Drop for VpnSettlementReservation {
         state.settling_session_ids.remove(&self.session_id);
     }
 }
-
 fn insert_session_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
@@ -1523,7 +1445,6 @@ fn insert_session_locked(
     app.vpn_sessions.insert(record.session_id.clone(), record);
     Ok(())
 }
-
 fn list_receipts_for_account(
     app: &SharedAppState,
     account_id: &AccountId,
@@ -1574,7 +1495,6 @@ fn list_receipts_for_account(
     records.truncate(MAX_RECEIPTS_PER_ACCOUNT);
     Ok(records.iter().map(receipt_response_from_record).collect())
 }
-
 fn external_signed_transaction_results(
     block: &SignedBlock,
 ) -> impl Iterator<
@@ -1601,7 +1521,6 @@ fn external_signed_transaction_results(
             Some((entrypoint_hash, signed, result))
         })
 }
-
 fn committed_transaction_by_hash(
     app: &SharedAppState,
     payment_tx_hash: &str,
@@ -1644,7 +1563,6 @@ fn committed_transaction_by_hash(
         "vpn payment transaction was indexed but not found in its block",
     ))
 }
-
 fn open_lease_matches_quote(
     open: &OpenVpnLeaseEscrow,
     quote: &VpnQuoteRecord,
@@ -1654,7 +1572,6 @@ fn open_lease_matches_quote(
     })?;
     Ok(open.quote == quote.signed_quote)
 }
-
 fn verify_vpn_payment(
     app: &SharedAppState,
     quote: &VpnQuoteRecord,
@@ -1671,12 +1588,10 @@ fn verify_vpn_payment(
             "vpn payment transaction was already used for a session",
         ));
     }
-
     #[cfg(test)]
     if app.state.committed_height() == 0 && payment_hash == quote.quote_id {
         return Ok(());
     }
-
     let (tx, _) = committed_transaction_by_hash(app, payment_hash)?;
     if tx.authority() != &quote.account_id {
         return Err(not_permitted_error(
@@ -1713,7 +1628,6 @@ fn verify_vpn_payment(
     }
     Ok(())
 }
-
 fn decode_norito_hex<T: norito::codec::Decode>(raw: &str, field: &str) -> Result<T, Error> {
     let normalized = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
     let bytes =
@@ -1728,12 +1642,10 @@ fn decode_norito_hex<T: norito::codec::Decode>(raw: &str, field: &str) -> Result
     }
     Ok(decoded)
 }
-
 fn lease_record_by_id(app: &SharedAppState, lease_id: &[u8; 32]) -> Option<VpnLeaseRecordV1> {
     let world = app.state.world_view();
     world.vpn_leases().get(lease_id).cloned()
 }
-
 fn lease_id_from_session_lookup(app: &SharedAppState, session_id: &str) -> Option<[u8; 32]> {
     let normalized = session_id
         .trim()
@@ -1750,11 +1662,9 @@ fn lease_id_from_session_lookup(app: &SharedAppState, session_id: &str) -> Optio
     let lease = world.vpn_leases().get(&lease_id)?;
     (lease.session_id == session_id).then_some(lease_id)
 }
-
 fn session_id_hex_from_lease(record: &VpnLeaseRecordV1) -> String {
     hex::encode(record.session_id)
 }
-
 fn ensure_lease_matches_authenticated_trust(
     record: &VpnLeaseRecordV1,
     trust: &VpnRelayTrust,
@@ -1777,7 +1687,6 @@ fn ensure_lease_matches_authenticated_trust(
     }
     Ok(())
 }
-
 fn session_record_from_lease(record: &VpnLeaseRecordV1) -> Result<VpnSessionRecord, Error> {
     let policy = &record.quote_policy;
     if record.relay_id != policy.relay_id {
@@ -1828,7 +1737,6 @@ fn session_record_from_lease(record: &VpnLeaseRecordV1) -> Result<VpnSessionReco
         bytes_out: 0,
     })
 }
-
 fn active_session_record_from_wsv(
     app: &SharedAppState,
     session_id: &str,
@@ -1855,7 +1763,6 @@ fn active_session_record_from_wsv(
     )?;
     Ok(Some(record))
 }
-
 fn receipt_record_from_settled_lease(
     record: &VpnLeaseRecordV1,
 ) -> Result<Option<VpnReceiptRecord>, Error> {
@@ -1896,7 +1803,6 @@ fn receipt_record_from_settled_lease(
         settle_lease_instruction: None,
     }))
 }
-
 fn verify_relay_receipt_for_session(
     record: &VpnSessionRecord,
     relay_receipt: &VpnSessionReceiptV1,
@@ -1990,7 +1896,6 @@ fn verify_relay_receipt_for_session(
             "vpn voucher issuance timestamp falls outside the signed session",
         ));
     }
-
     let expected_earned_fee = session_earned_fee(record, voucher)?;
     if relay_receipt.earned_fee != expected_earned_fee {
         return Err(not_permitted_error(
@@ -1999,7 +1904,6 @@ fn verify_relay_receipt_for_session(
     }
     Ok(())
 }
-
 fn session_earned_fee(
     record: &VpnSessionRecord,
     voucher: &VpnUsageVoucherV1,
@@ -2009,7 +1913,6 @@ fn session_earned_fee(
         .earned_fee(&voucher.body)
         .map_err(|err| conversion_error(format!("vpn tariff arithmetic failed: {err}")))
 }
-
 pub(crate) async fn handle_get_vpn_profile(app: SharedAppState) -> Result<Response, Error> {
     let dto = app.kiso.get_dto().await?;
     Ok(crate::utils::JsonBody(build_profile_at(
@@ -2019,7 +1922,6 @@ pub(crate) async fn handle_get_vpn_profile(app: SharedAppState) -> Result<Respon
     ))
     .into_response())
 }
-
 pub(crate) async fn handle_create_vpn_quote(
     app: SharedAppState,
     method: &Method,
@@ -2061,7 +1963,6 @@ pub(crate) async fn handle_create_vpn_quote(
     }
     ensure_vpn_quote_operator_authorized(&app, &operator_account_id)?;
     let metering_public_key = parse_metering_public_key(&request.metering_public_key_hex)?;
-
     let nonce = headers
         .get(crate::HEADER_NONCE)
         .and_then(|value| value.to_str().ok())
@@ -2183,7 +2084,6 @@ pub(crate) async fn handle_create_vpn_quote(
     insert_quote_locked(&app, &mut vpn_state, record)?;
     Ok((StatusCode::CREATED, crate::utils::JsonBody(response)).into_response())
 }
-
 pub(crate) async fn handle_create_vpn_session(
     app: SharedAppState,
     method: &Method,
@@ -2237,11 +2137,9 @@ pub(crate) async fn handle_create_vpn_session(
         remove_quote_by_id_locked(&app, &mut vpn_state, quote_id)
             .ok_or_else(|| conversion_error("vpn quote disappeared while creating the session"))?
     };
-
     // Payment verification reads committed WSV/block state and must not hold
     // the compound runtime-cache lock while doing so.
     verify_vpn_payment(&app, &quote, &payment_tx_hash)?;
-
     let session_id = build_session_id_from_quote(&quote);
     let expires_at_ms = quote.quote_expires_at_ms;
     let mut record = VpnSessionRecord {
@@ -2291,7 +2189,6 @@ pub(crate) async fn handle_create_vpn_session(
     insert_session_locked(&app, &mut vpn_state, record, current_ms)?;
     Ok((StatusCode::CREATED, crate::utils::JsonBody(response)).into_response())
 }
-
 pub(crate) async fn handle_get_vpn_session(
     app: SharedAppState,
     method: &Method,
@@ -2325,7 +2222,6 @@ pub(crate) async fn handle_get_vpn_session(
     }
     Ok(crate::utils::JsonBody(response_from_record(&record)).into_response())
 }
-
 pub(crate) async fn handle_delete_vpn_session(
     app: SharedAppState,
     method: &Method,
@@ -2368,7 +2264,6 @@ pub(crate) async fn handle_delete_vpn_session(
     )
         .into_response())
 }
-
 pub(crate) async fn handle_list_vpn_receipts(
     app: SharedAppState,
     method: &Method,
@@ -2386,7 +2281,6 @@ pub(crate) async fn handle_list_vpn_receipts(
     let total = u64::try_from(items.len()).unwrap_or(u64::MAX);
     Ok(crate::utils::JsonBody(VpnReceiptListResponseDto { items, total }).into_response())
 }
-
 pub(crate) async fn handle_submit_vpn_receipt(
     app: SharedAppState,
     method: &Method,
@@ -2401,7 +2295,6 @@ pub(crate) async fn handle_submit_vpn_receipt(
         decode_norito_hex(&request.relay_receipt_hex, "relay_receipt_hex")?;
     let voucher: VpnUsageVoucherV1 =
         decode_norito_hex(&request.client_voucher_hex, "client_voucher_hex")?;
-
     let current_ms = now_ms();
     let session_id_hex = hex::encode(relay_receipt.session_id);
     let settlement = VpnSettlementReservation::reserve(&app, session_id_hex.clone())?;
@@ -2453,7 +2346,6 @@ pub(crate) async fn handle_submit_vpn_receipt(
     )
         .into_response())
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
     include!("vpn_tests.rs");

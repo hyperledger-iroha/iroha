@@ -28,7 +28,6 @@ async fn signed_query_proxy_tries_next_candidate_only_before_dispatch() {
     let attempts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let attempts_ref = attempts.clone();
     let first_peer_id_for_closure = first_peer_id.clone();
-
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![
             ToriiProxyCandidate::P2p(first_peer_id.clone()),
@@ -62,7 +61,6 @@ async fn signed_query_proxy_tries_next_candidate_only_before_dispatch() {
         |_request_id| async move {},
     )
     .await;
-
     assert_eq!(
         attempts
             .lock()

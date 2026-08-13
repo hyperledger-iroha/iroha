@@ -19,7 +19,6 @@ fn distinct_body(fixture: &Fixture) -> (wire::BlockSubject, Vec<u8>) {
     };
     (subject, body)
 }
-
 fn timeout_at_view(fixture: &Fixture, view: u64) -> wire::TimeoutCertificate {
     wire::TimeoutCertificate {
         round: round(&fixture.context, view),
@@ -30,7 +29,6 @@ fn timeout_at_view(fixture: &Fixture, view: u64) -> wire::TimeoutCertificate {
         }],
     }
 }
-
 fn timeout_sign(fixture: &Fixture, view: u64) -> AdapterEffect {
     AdapterEffect::Sign {
         tag: tag(view),
@@ -42,7 +40,6 @@ fn timeout_sign(fixture: &Fixture, view: u64) -> AdapterEffect {
         }),
     }
 }
-
 fn prepare_qc_for_subject(
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
@@ -57,7 +54,6 @@ fn prepare_qc_for_subject(
         aggregate_signature: vec![1],
     }
 }
-
 fn certified_sources(fixture: &Fixture, _certificate: &wire::QuorumCertificate) -> Vec<PeerId> {
     fixture
         .context
@@ -66,7 +62,6 @@ fn certified_sources(fixture: &Fixture, _certificate: &wire::QuorumCertificate) 
         .map(|entry| entry.validator.clone())
         .collect()
 }
-
 fn signed_payload_chunk(fixture: &Fixture) -> wire::PayloadChunk {
     let mut chunk = wire::PayloadChunk {
         manifest_hash: HashOf::new(&fixture.manifest),
@@ -85,7 +80,6 @@ fn signed_payload_chunk(fixture: &Fixture) -> wire::PayloadChunk {
     .to_vec();
     chunk
 }
-
 fn signed_certified_response(
     fixture: &Fixture,
     task: &BodyFetchTask,
@@ -111,7 +105,6 @@ fn signed_certified_response(
     .to_vec();
     response
 }
-
 fn certified_response_ingress_ownership(
     response: &wire::CertifiedBodyResponse,
     responder: PeerId,
@@ -123,7 +116,6 @@ fn certified_response_ingress_ownership(
         responder,
     )
 }
-
 fn certified_response_runtime_ingress_ownership(
     fixture: &Fixture,
     response: &wire::CertifiedBodyResponse,
@@ -222,7 +214,6 @@ fn certified_response_runtime_ingress_ownership(
         .expect("bind response leader-wire runtime receipt");
     (directory, ingress, gate, ownership)
 }
-
 fn payload_chunk_ingress_ownership(
     chunk: &wire::PayloadChunk,
     sender: PeerId,
@@ -232,7 +223,6 @@ fn payload_chunk_ingress_ownership(
         sender,
     )
 }
-
 fn fair_transport_ingress_ownership(
     message: wire::ConsensusMessageV2,
     sender: PeerId,
@@ -245,7 +235,6 @@ fn fair_transport_ingress_ownership(
         .take_ingress_ownership()
         .expect("real fair ingress attaches certified-response ownership")
 }
-
 fn manifest_for_payload(fixture: &Fixture, label: &'static [u8]) -> wire::PayloadManifest {
     let body = label.to_vec();
     let subject = wire::BlockSubject {
@@ -255,7 +244,6 @@ fn manifest_for_payload(fixture: &Fixture, label: &'static [u8]) -> wire::Payloa
     };
     canonical_payload_manifest(&fixture.context, fixture.manifest.round, subject, &body)
 }
-
 fn pending_merge_validation(
     fixture: &Fixture,
 ) -> (
@@ -313,7 +301,6 @@ fn pending_merge_validation(
         entry_hash,
     )
 }
-
 fn begin_reachable_merge_validation(
     fixture: &Fixture,
     executor: &mut V2EffectExecutor<FakeRuntime>,
@@ -353,7 +340,6 @@ fn begin_reachable_merge_validation(
         .expect("production validation task")
         .clone()
 }
-
 fn complete_local_proposal_chain(
     executor: &mut V2EffectExecutor<FakeRuntime>,
     services: &mut FakeServices,
@@ -373,7 +359,6 @@ fn complete_local_proposal_chain(
         .complete_body_validation(validation_completion, services)
         .expect("local validation completion");
 }
-
 fn persist_fsynced_validation_marker(
     executor: &mut V2EffectExecutor<FakeRuntime>,
     services: &mut FakeServices,
@@ -389,7 +374,6 @@ fn persist_fsynced_validation_marker(
         )
         .expect("admit exact body before vote signing");
     complete_local_proposal_chain(executor, services);
-
     // The helper's purpose is only to cross the real body/marker fsync
     // boundary. Keep each caller's assertions focused on the subsequent
     // signature operation.
@@ -398,7 +382,6 @@ fn persist_fsynced_validation_marker(
     services.validation_tasks.clear();
     services.statuses.clear();
 }
-
 #[test]
 fn queue_configuration_rejects_zero_and_pending_capacity_retains_causal_tail() {
     let fixture = Fixture::new();
@@ -413,7 +396,6 @@ fn queue_configuration_rejects_zero_and_pending_capacity_retains_causal_tail() {
         ),
         Err(EffectExecutorError::InvalidQueueConfig)
     ));
-
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 1, 1_048_576, 1));
     let mut services = fixture.services();
     persist_fsynced_validation_marker(
@@ -442,7 +424,6 @@ fn queue_configuration_rejects_zero_and_pending_capacity_retains_causal_tail() {
     assert!(!executor.can_admit_local_proposal());
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
-
     let first = services.sign_tasks[0].clone();
     let signature = Signature::new(
         fixture.validator_keys[0].private_key(),
@@ -467,7 +448,6 @@ fn queue_configuration_rejects_zero_and_pending_capacity_retains_causal_tail() {
         0,
         "capacity retry is not scheduler debt and cannot transfer between FIFO heads"
     );
-
     let second = services.sign_tasks[1].clone();
     let signature = Signature::new(
         fixture.validator_keys[0].private_key(),
@@ -489,7 +469,6 @@ fn queue_configuration_rejects_zero_and_pending_capacity_retains_causal_tail() {
     assert_eq!(executor.status().effect_dispatch_queue.depth, 0);
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn executor_threads_its_independent_pending_bound_into_runtime_ownership() {
     let fixture = Fixture::new();
@@ -500,13 +479,11 @@ fn executor_threads_its_independent_pending_bound_into_runtime_ownership() {
         Some(config.max_pending_work + 2 * MAX_EFFECTS_PER_STEP)
     );
 }
-
 #[test]
 fn proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::new(2, 4, 1 << 20, 4));
     let mut services = fixture.services();
-
     // reducer.rs::on_proposal: an authenticated Proposal A with a missing
     // body emits the ordinary reconstruction request.
     fixture
@@ -527,7 +504,6 @@ fn proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two() 
         )
         .expect("Proposal A starts ordinary reconstruction");
     let proposal_a_work = services.fetch_tasks[0].id();
-
     // reducer.rs::on_prepare_qc: a valid same-view PrepareQC for distinct
     // subject B is independently progress-relevant and starts a certified
     // reconstruction owner.
@@ -551,7 +527,6 @@ fn proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two() 
         )
         .expect("PrepareQC B starts certified reconstruction");
     assert_eq!(executor.pending_work(), 2);
-
     // reducer.rs::on_timeout: durable TimeoutVote signing must not fail
     // closed behind either body source. It deterministically retires the
     // lower-evidence Proposal A fetch and owns the released slot.
@@ -572,7 +547,6 @@ fn proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two() 
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
     let ProductionTransportFixture {
@@ -638,7 +612,6 @@ fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
         requester_key: Some(requester_key),
         ..FakeServices::default()
     };
-
     let round = round(&context, 0);
     let body_a = b"authenticated Proposal A body".to_vec();
     let subject_a = wire::BlockSubject {
@@ -687,7 +660,6 @@ fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
         "a passive network fetch must not become the actor-global scheduler minimum"
     );
     let proposal_a_work = services.fetch_tasks[0].id();
-
     let body_b = b"distinct certified subject B".to_vec();
     let subject_b = wire::BlockSubject {
         parent_block_hash: None,
@@ -742,7 +714,6 @@ fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
         }
     }
     assert_eq!(executor.pending_fetches.len(), 2);
-
     let timeout_now = started + Duration::from_secs(30);
     for _ in 0..8 {
         let _ = executor
@@ -764,7 +735,6 @@ fn passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime() {
     ));
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps() {
     let mut fixture = ProductionTransportFixture::new();
@@ -842,7 +812,6 @@ fn late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps(
             .is_none(),
         "passive Fetch transport work alone cannot block Serve"
     );
-
     fixture
         .executor
         .complete_body_reconstruction(&task, manifest, body, &mut services)
@@ -881,7 +850,6 @@ fn late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps(
         1,
         "the late Fetch successor is runnable inside serialized runtime"
     );
-
     assert!(matches!(
         fixture
             .executor
@@ -925,7 +893,6 @@ fn late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps(
     assert_eq!(replenished.episode(), 2);
     assert!(!fixture.executor.status().fail_closed);
 }
-
 #[test]
 fn full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases() {
     let fixture = Fixture::new();
@@ -945,7 +912,6 @@ fn full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases
         )
         .expect("fill the only slot with Proposal A reconstruction");
     let proposal_a_task = services.fetch_tasks[0].clone();
-
     let (subject_b, _) = distinct_body(&fixture);
     let prepare_b = prepare_qc_for_subject(fixture.manifest.round, subject_b);
     let fetch_b = AdapterEffect::FetchBody {
@@ -978,7 +944,6 @@ fn full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases
         .ownership
         .clone();
     assert!(!executor.status().fail_closed);
-
     executor
         .complete_body_reconstruction(
             &proposal_a_task,
@@ -1005,7 +970,6 @@ fn full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owner() {
     let mut fixture = ProductionTransportFixture::new_validator();
@@ -1022,7 +986,6 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
         requester_key: Some(fixture.requester_key.clone()),
         ..FakeServices::default()
     };
-
     let certificate_a =
         fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
     let tag_a = fixture.executor.current_tag();
@@ -1043,7 +1006,6 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
         .expect("A occupies the sole certified-request slot");
     let task_a = services.fetch_tasks[0].clone();
     assert_eq!(fixture.executor.outstanding_requests.len(), 1);
-
     let body_b = b"source-faithful certified-request debt B".to_vec();
     let subject_b = wire::BlockSubject {
         parent_block_hash: None,
@@ -1071,7 +1033,6 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
             .expect("PrepareQC B emits the source-refined FetchBody"),
         EffectExecutorStep::Advanced { .. }
     ));
-
     assert_eq!(services.fetch_tasks.len(), 1);
     assert_eq!(fixture.executor.outstanding_requests.len(), 1);
     assert!(fixture.executor.pending_fetches.values().all(|pending| {
@@ -1094,7 +1055,6 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
         .expect("request-saturated Fetch B retains its exact runtime owner")
         .ownership
         .clone();
-
     // Fetch B remains exact ordinary debt, but transport capacity is not
     // pacemaker authority. The absolute timeout gets one typed turn,
     // preempts the reconstructible Fetch A slot, and leaves B parked with
@@ -1122,7 +1082,6 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
             .max_service_debt,
         1
     );
-
     assert_eq!(
         fixture
             .executor
@@ -1147,7 +1106,6 @@ fn certified_request_pressure_cannot_suppress_timeout_signing_or_lose_fetch_owne
     assert!(fixture.executor.parked_effect_batch.is_none());
     assert!(!fixture.executor.status().fail_closed);
 }
-
 #[test]
 fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_request_pressure() {
     let mut fixture = ProductionTransportFixture::new_validator();
@@ -1164,7 +1122,6 @@ fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_re
         requester_key: Some(fixture.requester_key.clone()),
         ..FakeServices::default()
     };
-
     let certificate_a =
         fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
     let tag_a = fixture.executor.current_tag();
@@ -1205,7 +1162,6 @@ fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_re
             .is_ok(),
         "A is present in both exact outstanding-request indexes"
     );
-
     let proposal_b_message = fixture.signed_normal_proposal(0xb);
     let wire::ConsensusMessageV2Payload::Proposal(proposal_b) = &proposal_b_message.payload else {
         panic!("normal production fixture emits a Proposal")
@@ -1247,7 +1203,6 @@ fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_re
     let service_tasks_before_upgrade = services.fetch_tasks.len();
     assert_eq!(service_tasks_before_upgrade, 2);
     assert_eq!(services.operation_calls.get("body-sign").copied(), Some(1));
-
     let certificate_b = fixture.quorum_certificate_for(
         round_b,
         subject_b,
@@ -1267,7 +1222,6 @@ fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_re
             .expect("drive pressured PrepareQC B transition"),
         EffectExecutorStep::Advanced { .. }
     ));
-
     assert_eq!(fixture.executor.next_work_id, next_work_id_before_upgrade);
     assert_eq!(services.fetch_tasks.len(), service_tasks_before_upgrade);
     assert_eq!(services.operation_calls.get("body-sign").copied(), Some(1));
@@ -1308,7 +1262,6 @@ fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_re
     );
     assert!(fixture.executor.retained_effect_batch.is_some());
     assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
-
     let mut response_a = wire::CertifiedBodyResponse {
         request_hash: request_hash_a,
         manifest: fixture.manifest.clone(),
@@ -1339,7 +1292,6 @@ fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_re
         fixture.executor.pending_fetches[&work_id_b], pending_b_before_upgrade,
         "releasing A does not replace B's ordinary service owner"
     );
-
     assert_eq!(
         fixture
             .executor
@@ -1347,7 +1299,6 @@ fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_re
             .expect("retry the original admitted upgrade after capacity release"),
         EffectExecutorStep::Advanced { effects: 1 }
     );
-
     let upgraded_b = services
         .fetch_tasks
         .last()
@@ -1406,7 +1357,6 @@ fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_re
     assert!(fixture.executor.retained_effect_batch.is_none());
     assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 0);
     assert!(!fixture.executor.status().fail_closed);
-
     assert_eq!(
         fixture
             .executor
@@ -1422,7 +1372,6 @@ fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_re
     assert_eq!(services.operation_calls.get("body-sign").copied(), Some(2));
     assert!(fixture.executor.retained_effect_batch.is_none());
 }
-
 #[test]
 fn certified_request_pressure_retains_higher_authority_upgrade_under_one_owner() {
     let fixture = Fixture::new();
@@ -1443,7 +1392,6 @@ fn certified_request_pressure_retains_higher_authority_upgrade_under_one_owner()
         )
         .expect("admit the sole certified-request owner");
     let first_task = services.fetch_tasks[0].clone();
-
     let (second_subject, second_body) = distinct_body(&fixture);
     let second_round = round(&fixture.context, 1);
     let second_manifest =
@@ -1471,7 +1419,6 @@ fn certified_request_pressure_retains_higher_authority_upgrade_under_one_owner()
         certified_sources: certified_sources(&fixture, &higher_prepare),
         certificate: Some(higher_prepare),
     };
-
     assert_eq!(
         executor
             .consume_effects(vec![certified_upgrade], &mut services)
@@ -1492,7 +1439,6 @@ fn certified_request_pressure_retains_higher_authority_upgrade_under_one_owner()
     assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
     assert!(executor.retained_effect_batch.is_some());
     assert!(!executor.status().fail_closed);
-
     let response = signed_certified_response(
         &fixture,
         &first_task,
@@ -1511,7 +1457,6 @@ fn certified_request_pressure_retains_higher_authority_upgrade_under_one_owner()
         CompletionDisposition::Accepted
     );
     assert!(executor.outstanding_requests.is_empty());
-
     assert_eq!(
         executor
             .step(Instant::now(), &mut services)
@@ -1528,7 +1473,6 @@ fn certified_request_pressure_retains_higher_authority_upgrade_under_one_owner()
     assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn reconstructible_new_certified_fetch_acquires_ownership_from_retained_admission() {
     let mut fixture = ProductionTransportFixture::new();
@@ -1540,7 +1484,6 @@ fn reconstructible_new_certified_fetch_acquires_ownership_from_retained_admissio
         requester_key: Some(fixture.requester_key.clone()),
         ..FakeServices::default()
     };
-
     let certificate_a =
         fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
     let sources_a = fixture.certified_sources(&certificate_a);
@@ -1573,7 +1516,6 @@ fn reconstructible_new_certified_fetch_acquires_ownership_from_retained_admissio
         fixture.executor.certified_work.get(&request_hash_a),
         Some(&task_a.id())
     );
-
     let round_b = round(&fixture.context, 1);
     let body_b = b"independent production certified body B".to_vec();
     let subject_b = wire::BlockSubject {
@@ -1620,7 +1562,6 @@ fn reconstructible_new_certified_fetch_acquires_ownership_from_retained_admissio
             .expect("certified-request pressure retains independent Fetch B"),
         0
     );
-
     assert_eq!(fixture.executor.pending_work(), 1);
     assert_eq!(fixture.executor.next_work_id, next_work_id_before_b);
     assert_eq!(fixture.executor.outstanding_requests.len(), 1);
@@ -1649,7 +1590,6 @@ fn reconstructible_new_certified_fetch_acquires_ownership_from_retained_admissio
     assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
     assert!(fixture.executor.retained_effect_batch.is_some());
     assert!(!fixture.executor.status().fail_closed);
-
     let mut response_a = wire::CertifiedBodyResponse {
         request_hash: request_hash_a,
         manifest: fixture.manifest.clone(),
@@ -1691,7 +1631,6 @@ fn reconstructible_new_certified_fetch_acquires_ownership_from_retained_admissio
     );
     assert!(fixture.executor.outstanding_requests.is_empty());
     assert!(fixture.executor.certified_work.is_empty());
-
     assert_eq!(
         fixture
             .executor
@@ -1734,7 +1673,6 @@ fn reconstructible_new_certified_fetch_acquires_ownership_from_retained_admissio
     assert!(fixture.executor.retained_effect_batch.is_none());
     assert!(!fixture.executor.status().fail_closed);
 }
-
 #[test]
 fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     let mut fixture = ProductionTransportFixture::new();
@@ -1743,7 +1681,6 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         requester_key: Some(fixture.requester_key.clone()),
         ..FakeServices::default()
     };
-
     let initial_queues = fixture.executor.status().runtime_queues;
     assert_eq!(initial_queues.normal.capacity, 639);
     assert_eq!(initial_queues.progress.capacity, 767);
@@ -1752,7 +1689,6 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         fixture.executor.runtime.remaining_completion_capacity(),
         1_023
     );
-
     let request_capacity = fixture.executor.config.max_certified_requests;
     assert_eq!(request_capacity, 256);
     let generation = fixture.executor.current_tag().generation();
@@ -1827,7 +1763,6 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         services.operation_calls.get("body-sign").copied(),
         Some(request_capacity)
     );
-
     for ordinal in 0..initial_queues.normal.capacity {
         let message = fixture
             .signed_normal_proposal(u64::try_from(ordinal).expect("normal saturation ordinal"));
@@ -1841,7 +1776,6 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         u64::try_from(initial_queues.normal.capacity).expect("blocked Normal ordinal"),
     );
     assert!(!fixture.executor.can_admit_network_message(&blocked_normal));
-
     let progress_reserve = initial_queues
         .progress
         .capacity
@@ -1868,7 +1802,6 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
             .executor
             .can_admit_network_message(&blocked_progress)
     );
-
     let saturated_queues = fixture.executor.status().runtime_queues;
     assert_eq!(
         saturated_queues.normal.depth,
@@ -1888,7 +1821,6 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
             .checked_sub(initial_queues.progress.capacity)
             .expect("production Completion reserve")
     );
-
     let round_b = round(
         &fixture.context,
         u64::try_from(request_capacity).expect("deferred Fetch B view"),
@@ -1981,7 +1913,6 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
     assert!(fixture.executor.retained_effect_batch.is_some());
     assert!(!fixture.executor.status().fail_closed);
-
     let mut response_a = wire::CertifiedBodyResponse {
         request_hash: request_hash_a,
         manifest: fixture.manifest.clone(),
@@ -2058,7 +1989,6 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     );
     assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
     assert!(!fixture.executor.status().fail_closed);
-
     assert_eq!(
         fixture
             .executor

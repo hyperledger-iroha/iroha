@@ -1,19 +1,14 @@
 //! pass: FastJson derives handle tagged enums with custom helpers
-
 use norito::json::{JsonDeserialize, JsonSerialize, Parser};
-
 mod passthrough {
     use super::*;
-
     pub fn serialize(value: &u32, out: &mut String) {
         JsonSerialize::json_serialize(value, out);
     }
-
     pub fn deserialize(parser: &mut Parser<'_>) -> Result<u32, norito::Error> {
         JsonDeserialize::json_deserialize(parser).map_err(Into::into)
     }
 }
-
 #[derive(norito::derive::FastJson, norito::derive::FastJsonWrite)]
 #[norito(tag = "kind", content = "content")]
 enum Tagged {
@@ -29,5 +24,4 @@ enum Tagged {
         label: Option<String>,
     },
 }
-
 fn main() {}

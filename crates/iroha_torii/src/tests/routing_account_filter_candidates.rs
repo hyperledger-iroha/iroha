@@ -23,11 +23,9 @@ fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
         FieldPath("id".to_owned()),
         norito::json::Value::from(first.to_string()),
     );
-
     let candidates = account_filter_candidate_ids(Some(&exact))
         .expect("account id equality should produce direct lookup candidates");
     assert_eq!(candidates, BTreeSet::from([first.clone()]));
-
     let combined = FilterExpr::And(vec![
         exact.clone(),
         FilterExpr::Eq(
@@ -38,7 +36,6 @@ fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
     let candidates = account_filter_candidate_ids(Some(&combined))
         .expect("AND should preserve safe account id candidates");
     assert_eq!(candidates, BTreeSet::from([first]));
-
     let many = FilterExpr::In(
         FieldPath("id".to_owned()),
         vec![
@@ -49,7 +46,6 @@ fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
     let candidates =
         account_filter_candidate_ids(Some(&many)).expect("account id IN should produce candidates");
     assert_eq!(candidates, BTreeSet::from([second]));
-
     let unsafe_or = FilterExpr::Or(vec![
         exact,
         FilterExpr::Eq(

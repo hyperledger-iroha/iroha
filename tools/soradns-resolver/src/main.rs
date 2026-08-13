@@ -3,7 +3,6 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-
 use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr, bail};
 use hex::{decode as hex_decode, encode as hex_encode};
@@ -21,14 +20,12 @@ use soradns_resolver::{
     rad::{compute_rad_digest, decode_rad_entries, validate_rad},
 };
 use tracing_subscriber::EnvFilter;
-
 #[derive(Debug, Parser)]
 #[command(author, version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 }
-
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Launch the resolver daemon using the supplied configuration.
@@ -47,7 +44,6 @@ enum Command {
     #[command(subcommand)]
     Directory(DirectoryCommand),
 }
-
 #[derive(Debug, Subcommand)]
 enum RadCommand {
     /// Validate resolver attestation documents (RADs).
@@ -57,7 +53,6 @@ enum RadCommand {
         rad: Vec<PathBuf>,
     },
 }
-
 #[derive(Debug, Subcommand)]
 enum DirectoryCommand {
     /// Fetch and verify the latest resolver directory bundle.
@@ -85,18 +80,15 @@ enum DirectoryCommand {
         bundle: PathBuf,
     },
 }
-
 #[derive(Debug)]
 enum FetchSource {
     Url(String),
     File(PathBuf),
 }
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing();
-
     match cli.command.unwrap_or_else(|| Command::Serve {
         config: PathBuf::from("soradns-resolver.json"),
         sync_interval_secs: None,
@@ -125,7 +117,6 @@ async fn main() -> Result<()> {
         },
     }
 }
-
 async fn run_serve(config_path: PathBuf, sync_interval_override: Option<u64>) -> Result<()> {
     let mut config = ResolverConfig::load_from_path(&config_path)
         .wrap_err_with(|| format!("failed to load config `{}`", config_path.display()))?;
@@ -136,11 +127,9 @@ async fn run_serve(config_path: PathBuf, sync_interval_override: Option<u64>) ->
             .wrap_err("failed to apply sync interval override")?;
     }
     config.validate()?;
-
     let daemon = ResolverDaemon::new(config)?;
     daemon.run().await
 }
-
 fn parse_fetch_source(
     url: Option<String>,
     file: Option<PathBuf>,
@@ -152,7 +141,6 @@ fn parse_fetch_source(
         _ => bail!("provide either --{label}-url or --{label}-file"),
     }
 }
-
 fn run_rad_verify(paths: Vec<PathBuf>) -> Result<()> {
     if paths.is_empty() {
         bail!("supply at least one RAD file to verify");
@@ -163,7 +151,6 @@ fn run_rad_verify(paths: Vec<PathBuf>) -> Result<()> {
             paths.len()
         );
     }
-
     let mut verified = 0usize;
     for path in paths {
         let bytes = read_bounded_file(&path, MAX_RAD_SNAPSHOT_BYTES, "RAD input")?;
@@ -193,11 +180,9 @@ fn run_rad_verify(paths: Vec<PathBuf>) -> Result<()> {
             );
         }
     }
-
     println!("Validated {verified} RAD entries");
     Ok(())
 }
-
 async fn run_directory_fetch(
     record_source: FetchSource,
     directory_source: FetchSource,
@@ -207,7 +192,6 @@ async fn run_directory_fetch(
         .user_agent("soradns-resolver-cli/0.1.0")
         .build()
         .wrap_err("failed to build HTTP client")?;
-
     let record_bytes = read_source(
         &client,
         &record_source,
@@ -216,7 +200,6 @@ async fn run_directory_fetch(
     )
     .await?;
     let record = decode_directory_record(&record_bytes)?;
-
     let directory_bytes = read_source(
         &client,
         &directory_source,
@@ -226,7 +209,6 @@ async fn run_directory_fetch(
     .await?;
     let (listing, digest) =
         parse_directory_listing(&directory_bytes).wrap_err("failed to parse directory.json")?;
-
     if digest != record.directory_json_sha256 {
         bail!(
             "directory.json digest mismatch (expected {}, got {})",
@@ -241,7 +223,6 @@ async fn run_directory_fetch(
             listing.entry_count()
         );
     }
-
     fs::create_dir_all(&output)
         .wrap_err_with(|| format!("failed to create `{}`", output.display()))?;
     let record_path = output.join("record.json");
@@ -250,7 +231,6 @@ async fn run_directory_fetch(
     let directory_path = output.join("directory.json");
     fs::write(&directory_path, &directory_bytes)
         .wrap_err_with(|| format!("failed to write `{}`", directory_path.display()))?;
-
     println!(
         "Fetched resolver directory root {} ({} RAD entries)",
         hex_encode(record.root_hash),
@@ -262,19 +242,16 @@ async fn run_directory_fetch(
     );
     Ok(())
 }
-
 fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
     let record_path = bundle_root.join("record.json");
     let directory_path = bundle_root.join("directory.json");
     let rad_root = bundle_root.join("rad");
-
     let record_bytes = read_bounded_file(
         &record_path,
         MAX_DIRECTORY_RECORD_BYTES,
         "resolver directory record",
     )?;
     let record = decode_directory_record(&record_bytes)?;
-
     let directory_bytes = read_bounded_file(
         &directory_path,
         MAX_DIRECTORY_JSON_BYTES,
@@ -282,7 +259,6 @@ fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
     )?;
     let (listing, digest) =
         parse_directory_listing(&directory_bytes).wrap_err("failed to parse directory.json")?;
-
     if digest != record.directory_json_sha256 {
         bail!(
             "directory.json digest mismatch (record declares {}, computed {})",
@@ -305,16 +281,13 @@ fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
             hex_encode(listing_root)
         );
     }
-
     verify_directory_record_signature(&record)?;
-
     if !rad_root.is_dir() {
         bail!(
             "`{}` does not contain a `rad/` directory",
             bundle_root.display()
         );
     }
-
     let mut leaves = Vec::new();
     leaves
         .try_reserve_exact(listing.entry_count())
@@ -342,7 +315,6 @@ fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
                 rad_path.display()
             )
         })?;
-
         let digest =
             compute_rad_digest(&rad).wrap_err("failed to compute resolver attestation digest")?;
         let digest_hex = hex_encode(digest);
@@ -354,7 +326,6 @@ fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
                 digest_hex
             );
         }
-
         let leaf = hash_leaf(&digest);
         let expected_leaf = parse_hex_hash(&entry.leaf_hash, "directory.rad[].leaf_hash")?;
         if leaf != expected_leaf {
@@ -367,11 +338,9 @@ fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
         }
         leaves.push(leaf);
     }
-
     if leaves.is_empty() {
         bail!("directory bundle does not contain any RAD entries");
     }
-
     let leaf_count = leaves.len();
     let computed_root = compute_merkle_root(leaves)?;
     if computed_root != record.root_hash {
@@ -381,7 +350,6 @@ fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
             hex_encode(record.root_hash)
         );
     }
-
     println!(
         "Verified {} RAD entries in `{}`",
         leaf_count,
@@ -390,7 +358,6 @@ fn run_directory_verify(bundle_root: PathBuf) -> Result<()> {
     println!("Directory root {}", hex_encode(record.root_hash));
     Ok(())
 }
-
 async fn fetch_bytes(
     client: &reqwest::Client,
     url: &str,
@@ -404,7 +371,6 @@ async fn fetch_bytes(
         .wrap_err_with(|| format!("failed to fetch `{url}`"))?;
     read_http_body_bounded(response, max_bytes, label).await
 }
-
 async fn read_source(
     client: &reqwest::Client,
     source: &FetchSource,
@@ -416,7 +382,6 @@ async fn read_source(
         FetchSource::File(path) => read_bounded_file(path, max_bytes, label),
     }
 }
-
 fn decode_directory_record(bytes: &[u8]) -> Result<ResolverDirectoryRecordV1> {
     let decode_limits = directory_record_decode_limits();
     preflight_json(
@@ -436,7 +401,6 @@ fn decode_directory_record(bytes: &[u8]) -> Result<ResolverDirectoryRecordV1> {
     }
     Ok(record)
 }
-
 fn init_tracing() {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,soradns_resolver=debug"));
@@ -446,7 +410,6 @@ fn init_tracing() {
         .with_timer(tracing_subscriber::fmt::time::SystemTime)
         .init();
 }
-
 fn verify_directory_record_signature(record: &ResolverDirectoryRecordV1) -> Result<()> {
     let payload =
         signing_payload_bytes(record).wrap_err("failed to build directory signing payload")?;
@@ -455,7 +418,6 @@ fn verify_directory_record_signature(record: &ResolverDirectoryRecordV1) -> Resu
         .verify(&record.builder_public_key, &payload)
         .wrap_err("directory record builder signature is invalid")
 }
-
 fn parse_hex_hash(value: &str, label: &str) -> Result<[u8; 32]> {
     let decoded =
         hex_decode(value).wrap_err_with(|| format!("`{label}` is not valid hex: {value}"))?;
@@ -469,14 +431,12 @@ fn parse_hex_hash(value: &str, label: &str) -> Result<[u8; 32]> {
     hash.copy_from_slice(&decoded);
     Ok(hash)
 }
-
 fn hash_leaf(rad_digest: &[u8; 32]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update([0x00]);
     hasher.update(rad_digest);
     hasher.finalize().into()
 }
-
 fn hash_branch(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update([0x01]);
@@ -484,7 +444,6 @@ fn hash_branch(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     hasher.update(right);
     hasher.finalize().into()
 }
-
 fn compute_merkle_root(mut level: Vec<[u8; 32]>) -> Result<[u8; 32]> {
     if level.is_empty() {
         bail!("at least one Merkle leaf is required");

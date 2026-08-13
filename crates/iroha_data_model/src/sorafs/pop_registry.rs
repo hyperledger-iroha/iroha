@@ -4,14 +4,11 @@
 //! only issuer-attested credential and revocation-nonce commitments together
 //! with the exact signed public root and revocation-list publications needed by
 //! verifiers.
-
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::account::AccountId;
-
 /// First-release schema version for issuer policies.
 pub const POP_ISSUER_POLICY_VERSION_V1: u16 = 1;
 /// First-release schema version for credential commitment batches.
@@ -42,7 +39,6 @@ pub const POP_CREDENTIAL_PAYLOAD_COMMITMENT_DOMAIN_V1: &[u8] =
 pub const POP_REGISTRY_AUDIT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pop.registry-audit.v1";
 /// Domain separator for exact registry operation payload digests.
 pub const POP_REGISTRY_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pop.registry-payload.v1";
-
 /// Governance-controlled issuer identity and bounded admission policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -78,7 +74,6 @@ pub struct PopIssuerPolicyV1 {
     /// Whether issuer publications are paused.
     pub paused: bool,
 }
-
 impl PopIssuerPolicyV1 {
     /// Validate the complete first-release issuer policy.
     ///
@@ -138,7 +133,6 @@ impl PopIssuerPolicyV1 {
         }
         Ok(())
     }
-
     /// Compute the canonical domain-separated policy digest.
     ///
     /// # Errors
@@ -151,20 +145,16 @@ impl PopIssuerPolicyV1 {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-
 struct Blake3Writer<'a>(&'a mut blake3::Hasher);
-
 impl std::io::Write for Blake3Writer<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.0.update(bytes);
         Ok(bytes.len())
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
-
 fn validate_issuer_id(issuer_id: &str) -> Result<(), PopIssuerPolicyValidationError> {
     const NON_PRODUCTION_MARKERS: &[&str] =
         &["demo", "dev", "local", "mock", "sandbox", "staging", "test"];
@@ -186,7 +176,6 @@ fn validate_issuer_id(issuer_id: &str) -> Result<(), PopIssuerPolicyValidationEr
     }
     Ok(())
 }
-
 /// Issuer-policy validation failures.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum PopIssuerPolicyValidationError {
@@ -236,7 +225,6 @@ pub enum PopIssuerPolicyValidationError {
         found: u64,
     },
 }
-
 /// Payload-free issuer commitment to one private signed credential.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -262,7 +250,6 @@ pub struct PopCredentialCommitmentV1 {
     /// Credential expiry epoch.
     pub expires_at_epoch: u64,
 }
-
 impl PopCredentialCommitmentV1 {
     /// Validate payload-free commitment invariants.
     ///
@@ -289,7 +276,6 @@ impl PopCredentialCommitmentV1 {
         Ok(())
     }
 }
-
 /// Credential-commitment validation failures.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum PopCredentialCommitmentValidationError {
@@ -309,7 +295,6 @@ pub enum PopCredentialCommitmentValidationError {
     #[error("PoP credential commitment validity window is invalid")]
     InvalidValidityWindow,
 }
-
 /// Atomic first-release credential commitment, root, and revocation snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -331,7 +316,6 @@ pub struct PopCredentialCommitmentBatchV1 {
     /// Strictly credential-commitment-ordered payload-free issuer records.
     pub commitments: Vec<PopCredentialCommitmentV1>,
 }
-
 impl PopCredentialCommitmentBatchV1 {
     /// Validate hard resource bounds and canonical commitment ordering.
     ///
@@ -398,7 +382,6 @@ impl PopCredentialCommitmentBatchV1 {
         Ok(())
     }
 }
-
 /// Credential-batch validation failures.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum PopCredentialCommitmentBatchValidationError {
@@ -442,7 +425,6 @@ pub enum PopCredentialCommitmentBatchValidationError {
     #[error("PoP credential batch contains a duplicate revocation-nonce commitment")]
     DuplicateRevocationCommitment,
 }
-
 /// Activated issuer policy with ledger provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -465,7 +447,6 @@ pub struct PopIssuerPolicyRecordV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub audit_digest: [u8; 32],
 }
-
 /// Durable payload-free credential commitment record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -488,7 +469,6 @@ pub struct PopCredentialCommitmentRecordV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub audit_digest: [u8; 32],
 }
-
 /// Authoritative signed commitment-root publication record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -519,7 +499,6 @@ pub struct PopCommitmentRootRecordV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub audit_digest: [u8; 32],
 }
-
 /// Authoritative signed revocation-list publication record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -553,7 +532,6 @@ pub struct PopRevocationPublicationRecordV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub audit_digest: [u8; 32],
 }
-
 /// Stable public reason recorded for a private nonce commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -576,7 +554,6 @@ pub enum PopRegistryRevocationReasonV1 {
     /// Credential expired.
     Expired,
 }
-
 /// Durable payload-free revocation record keyed by nonce commitment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -612,7 +589,6 @@ pub struct PopRevocationRecordV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub audit_digest: [u8; 32],
 }
-
 /// Kind of transition committed into the registry audit chain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -631,7 +607,6 @@ pub enum PopRegistryAuditEventKindV1 {
     /// A strict revocation-list extension was published.
     RevocationListPublished,
 }
-
 impl PopRegistryAuditEventKindV1 {
     /// Stable digest tag for the event kind.
     #[must_use]
@@ -643,7 +618,6 @@ impl PopRegistryAuditEventKindV1 {
         }
     }
 }
-
 /// One link in the deterministic registry audit chain.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -672,7 +646,6 @@ pub struct PopRegistryAuditDigestRecordV1 {
     /// Account that authorised the transition.
     pub recorded_by: AccountId,
 }
-
 /// Constant-time authoritative registry counters and active anchors.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -711,7 +684,6 @@ pub struct PopRegistryStatusV1 {
     /// Last authoritative ledger transition timestamp.
     pub updated_at_epoch: u64,
 }
-
 /// Commit a private nonce into the public registry without revealing it.
 #[must_use]
 pub fn pop_revocation_nonce_commitment_v1(nonce: [u8; 32]) -> [u8; 32] {
@@ -720,7 +692,6 @@ pub fn pop_revocation_nonce_commitment_v1(nonce: [u8; 32]) -> [u8; 32] {
     hasher.update(&nonce);
     *hasher.finalize().as_bytes()
 }
-
 /// Commit exact canonical signed credential bytes without publishing them.
 #[must_use]
 pub fn pop_credential_payload_commitment_v1(canonical_credential: &[u8]) -> [u8; 32] {
@@ -729,7 +700,6 @@ pub fn pop_credential_payload_commitment_v1(canonical_credential: &[u8]) -> [u8;
     hasher.update(canonical_credential);
     *hasher.finalize().as_bytes()
 }
-
 /// Digest an exact canonical registry operation payload.
 #[must_use]
 pub fn pop_registry_payload_digest_v1(payload: &[u8]) -> [u8; 32] {
@@ -738,19 +708,16 @@ pub fn pop_registry_payload_digest_v1(payload: &[u8]) -> [u8; 32] {
     hasher.update(payload);
     *hasher.finalize().as_bytes()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         norito::to_bytes(value).expect("encode alternate-layout PoP registry value")
     }
-
     fn assert_canonical_norito_round_trip<T>(value: &T)
     where
         T: core::fmt::Debug + PartialEq + norito::NoritoSerialize,
@@ -760,7 +727,6 @@ mod tests {
         let decoded: T =
             norito::decode_canonical(&encoded).expect("decode canonical PoP registry value");
         assert_eq!(&decoded, value);
-
         let alternate = encode_with_alternate_norito_layout(value);
         assert_ne!(alternate, encoded);
         let alternate_decoded: T = norito::decode_from_bytes(&alternate)
@@ -771,15 +737,12 @@ mod tests {
             Err(norito::Error::NonCanonicalEncoding)
         ));
     }
-
     fn keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("valid test key")
     }
-
     fn account(seed: u8) -> AccountId {
         AccountId::new(keypair(seed).public_key().clone())
     }
-
     fn public_key_bytes(seed: u8) -> [u8; 32] {
         let keypair = keypair(seed);
         let (_, bytes) = keypair
@@ -788,7 +751,6 @@ mod tests {
             .expect("encode Ed25519 public key");
         bytes.try_into().expect("Ed25519 public key length")
     }
-
     fn policy() -> PopIssuerPolicyV1 {
         PopIssuerPolicyV1 {
             version: POP_ISSUER_POLICY_VERSION_V1,
@@ -804,7 +766,6 @@ mod tests {
             paused: false,
         }
     }
-
     fn commitment(value: u8) -> PopCredentialCommitmentV1 {
         PopCredentialCommitmentV1 {
             credential_commitment: [value; 32],
@@ -816,7 +777,6 @@ mod tests {
             expires_at_epoch: 200,
         }
     }
-
     #[test]
     fn policy_validation_and_digest_are_deterministic() {
         let policy = policy();
@@ -829,7 +789,6 @@ mod tests {
         assert_eq!(digest, *historical.finalize().as_bytes());
         assert_eq!(digest, policy.digest().expect("repeat policy digest"));
         assert_canonical_norito_round_trip(&policy);
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -841,7 +800,6 @@ mod tests {
             ambient_digest, digest,
             "issuer-policy identity must ignore ambient Norito layout"
         );
-
         let mut invalid = policy.clone();
         invalid.issuer_id = "POP-ISSUER-NONCANONICAL".to_owned();
         assert_eq!(
@@ -860,7 +818,6 @@ mod tests {
             Err(PopIssuerPolicyValidationError::InvalidIssuerPublicKey)
         );
     }
-
     #[test]
     fn commitment_batch_rejects_duplicate_and_unsorted_entries() {
         let mut batch = PopCredentialCommitmentBatchV1 {
@@ -874,7 +831,6 @@ mod tests {
             batch.validate(),
             Err(PopCredentialCommitmentBatchValidationError::CommitmentsNotStrictlyOrdered)
         );
-
         batch.commitments = vec![commitment(1), commitment(2)];
         batch.commitments[1].revocation_nonce_commitment =
             batch.commitments[0].revocation_nonce_commitment;
@@ -883,7 +839,6 @@ mod tests {
             Err(PopCredentialCommitmentBatchValidationError::DuplicateRevocationCommitment)
         );
     }
-
     #[test]
     fn revocation_nonce_commitments_are_domain_separated_and_stable() {
         let nonce = [0xA5; 32];
@@ -901,7 +856,6 @@ mod tests {
             pop_credential_payload_commitment_v1(b"canonical credential")
         );
     }
-
     #[test]
     fn records_roundtrip_with_norito() {
         let record = PopRegistryStatusV1 {

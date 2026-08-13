@@ -5,22 +5,17 @@
 //! delta is an arbitrary canonical `R_512` target, returning both preimage
 //! halves, portable emulated floating-point arithmetic, explicit proposal
 //! exhaustion, and no signature/message codec.
-
 mod flr;
 mod poly;
 mod sampler;
-
 use super::{DEGREE, LOG_DEGREE, Preimage, Trapdoor, comm};
 use zeroize::Zeroizing;
-
 pub(super) const PREIMAGE_COEFFICIENT_SAMPLES: u32 = 2 * DEGREE as u32;
 pub(super) const MAX_PROPOSALS_PER_COEFFICIENT: u32 = sampler::MAX_PROPOSALS_PER_COEFFICIENT;
 pub(super) const TOTAL_GAUSSIAN_PROPOSAL_BUDGET: u32 =
     PREIMAGE_COEFFICIENT_SAMPLES * MAX_PROPOSALS_PER_COEFFICIENT;
-
 // 1 / 12289, rounded exactly as in the pinned Falcon implementation.
 const INV_Q: flr::FLR = flr::FLR::scaled(6_004_310_871_091_074, -66);
-
 pub(super) fn sample_preimage_from_seed(
     trapdoor: &Trapdoor,
     target: &[u16; DEGREE],
@@ -44,7 +39,6 @@ pub(super) fn sample_preimage_from_seed(
     {
         return None;
     }
-
     let mut basis = Zeroizing::new(vec![flr::FLR::ZERO; 4 * DEGREE]);
     compute_basis(
         &**trapdoor.f,
@@ -54,7 +48,6 @@ pub(super) fn sample_preimage_from_seed(
         &mut basis,
     );
     let mut work = Zeroizing::new(vec![flr::FLR::ZERO; 9 * DEGREE]);
-
     // Compute the Gram matrix G = B*adj(B), keeping b11 and b01 for the
     // target transformation. Layout: g00 | g01 | g11 | b11 | b01.
     {
@@ -67,29 +60,24 @@ pub(super) fn sample_preimage_from_seed(
         let (g11, rest) = rest.split_at_mut(DEGREE);
         let (temporary_zero, rest) = rest.split_at_mut(DEGREE);
         let (temporary_one, _) = rest.split_at_mut(DEGREE);
-
         g00.copy_from_slice(b00);
         poly::poly_mulownadj_fft(LOG_DEGREE, g00);
         temporary_zero.copy_from_slice(b01);
         poly::poly_mulownadj_fft(LOG_DEGREE, temporary_zero);
         poly::poly_add(LOG_DEGREE, g00, temporary_zero);
-
         g01.copy_from_slice(b00);
         poly::poly_muladj_fft(LOG_DEGREE, g01, b10);
         temporary_zero.copy_from_slice(b01);
         poly::poly_muladj_fft(LOG_DEGREE, temporary_zero, b11);
         poly::poly_add(LOG_DEGREE, g01, temporary_zero);
-
         g11.copy_from_slice(b10);
         poly::poly_mulownadj_fft(LOG_DEGREE, g11);
         temporary_zero.copy_from_slice(b11);
         poly::poly_mulownadj_fft(LOG_DEGREE, temporary_zero);
         poly::poly_add(LOG_DEGREE, g11, temporary_zero);
-
         temporary_zero.copy_from_slice(b11);
         temporary_one.copy_from_slice(b01);
     }
-
     // Convert [target, 0] to coordinates in the lattice basis.
     {
         let (_, rest) = work.split_at_mut(3 * DEGREE);
@@ -108,7 +96,6 @@ pub(super) fn sample_preimage_from_seed(
         poly::poly_mulconst(LOG_DEGREE, target_zero, INV_Q);
     }
     work.copy_within(5 * DEGREE..7 * DEGREE, 3 * DEGREE);
-
     let mut gaussian = sampler::Sampler::<comm::chacha::ChaCha20Prng>::new(
         LOG_DEGREE,
         seed,
@@ -124,7 +111,6 @@ pub(super) fn sample_preimage_from_seed(
             return None;
         }
     }
-
     // Map the sampled coordinates back to a lattice point.
     work.copy_within(3 * DEGREE..5 * DEGREE, 4 * DEGREE);
     work[..4 * DEGREE].copy_from_slice(&basis[..4 * DEGREE]);
@@ -137,7 +123,6 @@ pub(super) fn sample_preimage_from_seed(
         let (target_one, rest) = rest.split_at_mut(DEGREE);
         let (temporary_x, rest) = rest.split_at_mut(DEGREE);
         let (temporary_y, _) = rest.split_at_mut(DEGREE);
-
         temporary_x.copy_from_slice(target_zero);
         temporary_y.copy_from_slice(target_one);
         poly::poly_mul_fft(LOG_DEGREE, temporary_x, b00);
@@ -151,7 +136,6 @@ pub(super) fn sample_preimage_from_seed(
         poly::iFFT(LOG_DEGREE, target_zero);
         poly::iFFT(LOG_DEGREE, target_one);
     }
-
     let mut first = Zeroizing::new(vec![0_i16; DEGREE].into_boxed_slice());
     let mut second = Zeroizing::new(vec![0_i16; DEGREE].into_boxed_slice());
     let target_zero = &work[4 * DEGREE..5 * DEGREE];
@@ -182,7 +166,6 @@ pub(super) fn sample_preimage_from_seed(
         norm_squared,
     })
 }
-
 pub(super) fn preimage_equation_holds(
     target: &[u16; DEGREE],
     public_key: &[u16],
@@ -214,7 +197,6 @@ pub(super) fn preimage_equation_holds(
         .zip(target.iter().copied())
         .all(|(actual, expected)| actual.rem_euclid(modulus) == i64::from(expected))
 }
-
 fn compute_basis(f: &[i8], g: &[i8], capital_f: &[i8], capital_g: &[i8], basis: &mut [flr::FLR]) {
     let (b00, rest) = basis.split_at_mut(DEGREE);
     let (b01, rest) = rest.split_at_mut(DEGREE);
@@ -231,7 +213,6 @@ fn compute_basis(f: &[i8], g: &[i8], capital_f: &[i8], capital_g: &[i8], basis: 
     poly::poly_neg(LOG_DEGREE, b01);
     poly::poly_neg(LOG_DEGREE, b11);
 }
-
 #[cfg(test)]
 pub(super) fn sampler_exhausts_with_zero_budget_for_test(
     trapdoor: &Trapdoor,

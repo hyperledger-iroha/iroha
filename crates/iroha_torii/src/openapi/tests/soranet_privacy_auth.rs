@@ -1,5 +1,4 @@
 /// OpenAPI assertions for exact SoraNet collector request authentication.
-
 #[test]
 fn soranet_privacy_ingest_requires_exact_operator_headers() {
     let document = generate_spec();
@@ -9,7 +8,6 @@ fn soranet_privacy_ingest_requires_exact_operator_headers() {
         "X-Iroha-Operator-Nonce".to_owned(),
         "X-Iroha-Operator-Signature".to_owned(),
     ]);
-
     for path in ["/v1/soranet/privacy/event", "/v1/soranet/privacy/share"] {
         let operation = openapi_operation(&document, path, "post");
         let headers = operation_header_requirements(operation)

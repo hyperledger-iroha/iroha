@@ -9,13 +9,11 @@ struct PostWsvLaneArtifactExecutionIdentity {
     proposal_hash: Hash,
     receipt_hash: HashOf<LaneBlockApplicationReceiptArtifact>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PostWsvLaneArtifactStableComponentId {
     Receipt(PostWsvLaneArtifactExecutionIdentity),
     Frontier(PostWsvLaneArtifactExecutionIdentity),
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PostWsvLaneArtifactExecutionPlan {
     identity: PostWsvLaneArtifactExecutionIdentity,
@@ -24,7 +22,6 @@ struct PostWsvLaneArtifactExecutionPlan {
     terminal_source: AutonomousLifecycleTerminalOutcomeSourceV1,
     executable_payload: LaneExecutablePayloadV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PostWsvLaneArtifactBudgetPlan {
     entry_hash: HashOf<MergeLedgerEntry>,
@@ -34,7 +31,6 @@ struct PostWsvLaneArtifactBudgetPlan {
     executions: BTreeMap<PostWsvLaneArtifactExecutionIdentity, PostWsvLaneArtifactExecutionPlan>,
     shared_transient_bytes: u64,
 }
-
 impl PostWsvLaneArtifactBudgetPlan {
     fn initial_reserved_bytes(&self) -> Option<u64> {
         self.stable_components
@@ -44,14 +40,12 @@ impl PostWsvLaneArtifactBudgetPlan {
             })
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PostWsvLaneArtifactBudgetReservation {
     plan: PostWsvLaneArtifactBudgetPlan,
     outstanding_components: BTreeSet<PostWsvLaneArtifactStableComponentId>,
     incomplete_terminal_outcomes: BTreeSet<PostWsvLaneArtifactExecutionIdentity>,
 }
-
 impl PostWsvLaneArtifactBudgetReservation {
     fn new(plan: PostWsvLaneArtifactBudgetPlan) -> Self {
         Self {
@@ -60,7 +54,6 @@ impl PostWsvLaneArtifactBudgetReservation {
             plan,
         }
     }
-
     fn reserved_bytes(&self) -> Option<u64> {
         self.outstanding_components
             .iter()
@@ -69,7 +62,6 @@ impl PostWsvLaneArtifactBudgetReservation {
             })
     }
 }
-
 impl Kura {
     fn post_wsv_lane_artifact_budget_plan(
         &self,
@@ -221,7 +213,6 @@ impl Kura {
             shared_transient_bytes,
         }))
     }
-
     fn merge_lane_application_artifact_required_bytes_for_carrier(
         &self,
         entry: &MergeLedgerEntry,
@@ -238,7 +229,6 @@ impl Kura {
                 })
             })
     }
-
     fn merge_lane_application_artifact_required_bytes_for_block(
         &self,
         block: &SignedBlock,
@@ -268,7 +258,6 @@ impl Kura {
             block.hash(),
         )
     }
-
     /// Read exact active evidence for one immutable carrier plan while the
     /// caller holds lane geometry and sidecar locks. A complete terminal record
     /// is an authenticated tombstone for receipt/frontier bytes that later
@@ -302,7 +291,6 @@ impl Kura {
                     "post-WSV active execution count overflowed",
                 )
             })?;
-
             let terminal_path = Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
                 &entry,
                 &self.store_root,
@@ -340,7 +328,6 @@ impl Kura {
                     continue;
                 }
             }
-
             let (receipt_data_path, receipt_index_path) =
                 Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
             if let Some(receipt) = self
@@ -360,7 +347,6 @@ impl Kura {
                 }
                 consumed.insert(PostWsvLaneArtifactStableComponentId::Receipt(identity));
             }
-
             let frontier_path =
                 Self::lane_merge_application_frontier_path_for_entry(&entry, &self.store_root);
             if let Some(frontier) =
@@ -391,7 +377,6 @@ impl Kura {
         }
         Ok(Some((consumed, complete)))
     }
-
     fn ensure_post_wsv_lane_artifact_budget_plan_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -430,7 +415,6 @@ impl Kura {
                 )
             });
         }
-
         let mut reservation = PostWsvLaneArtifactBudgetReservation::new(plan);
         reservation
             .outstanding_components
@@ -498,7 +482,6 @@ impl Kura {
         reservations.insert(reservation.plan.entry_hash, reservation);
         Ok(reserved_bytes)
     }
-
     fn authenticate_post_wsv_lane_artifact_carrier_under_prune_and_canonical_guards(
         &self,
         entry: &MergeLedgerEntry,
@@ -531,7 +514,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Authenticate the sole pre-finality carrier publication corridor.
     ///
     /// `store_block_durable` installs the process-local post-WSV reservation
@@ -599,7 +581,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Authenticate an exact committed carrier while the caller holds prune
     /// and canonical-chain guards, then acquire geometry and sidecar in the
     /// sole permitted order before installing or reconciling its envelope.
@@ -625,7 +606,6 @@ impl Kura {
             carrier_hash,
         )
     }
-
     /// Install a post-WSV reservation at the canonical block's pre-finality
     /// publication boundary.
     fn ensure_post_wsv_lane_artifact_budget_reservation_pre_finality_under_prune_and_canonical_guards(
@@ -649,7 +629,6 @@ impl Kura {
             carrier_hash,
         )
     }
-
     fn ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -664,7 +643,6 @@ impl Kura {
         };
         self.ensure_post_wsv_lane_artifact_budget_plan_locked(pending_canonical_bytes, plan)
     }
-
     fn ensure_post_wsv_lane_artifact_budget_reservation_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -684,7 +662,6 @@ impl Kura {
             carrier_hash,
         )
     }
-
     fn ensure_post_wsv_lane_artifact_budget_reservation(
         &self,
         entry: &MergeLedgerEntry,
@@ -700,7 +677,6 @@ impl Kura {
             carrier_hash,
         )
     }
-
     fn reconcile_post_wsv_lane_artifact_budget_for_receipt_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -762,7 +738,6 @@ impl Kura {
         )?;
         Ok(())
     }
-
     fn reconcile_post_wsv_lane_artifact_budget_for_terminal_outcome_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -814,7 +789,6 @@ impl Kura {
         )?;
         Ok(())
     }
-
     fn post_wsv_lane_artifact_budget_reserved_bytes(&self) -> Result<u64> {
         self.post_wsv_lane_artifact_budget_reservations
             .lock()
@@ -834,7 +808,6 @@ impl Kura {
                 })
             })
     }
-
     pub(crate) fn release_post_wsv_lane_artifact_budget_reservation(
         &self,
         entry: &MergeLedgerEntry,
@@ -903,7 +876,6 @@ impl Kura {
         reservations.remove(&plan.entry_hash);
         Ok(())
     }
-
     /// Rebuild process-local envelopes from the bounded set of active,
     /// incomplete lifecycle identities. The route/incarnation latest-execution
     /// index handles tips; one bounded chronological reconstruction maps older
@@ -991,7 +963,6 @@ impl Kura {
                         carrier_hashes.insert(entry_hash);
                         continue;
                     }
-
                     let (receipt_data_path, receipt_index_path) =
                         Self::lane_block_application_receipt_paths_for_entry(
                             &lane_entry,
@@ -1015,7 +986,6 @@ impl Kura {
                         carrier_hashes.insert(entry_hash);
                         continue;
                     }
-
                     let (incarnation, _) = self.active_lane_incarnation_marker(&lane_entry)?;
                     let latest = self.merge_log.lock().latest_execution_entry(
                         lane_entry.lane_id,
@@ -1140,7 +1110,6 @@ impl Kura {
             };
             authenticated_carriers.push((entry_hash, carrier));
         }
-
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _sidecar_guard = self.sidecar_lock.lock();
         for (entry_hash, carrier) in authenticated_carriers {
@@ -1163,7 +1132,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn lane_artifact_required_bytes_for_block(
         &self,
         block: &SignedBlock,
@@ -1187,7 +1155,6 @@ impl Kura {
                 );
             }
         }
-
         let native_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
             block,
             merge_entry,
@@ -1236,7 +1203,6 @@ impl Kura {
         }
         Ok(total)
     }
-
     fn native_amx_manifest_for_committed_block(
         &self,
         block: &SignedBlock,

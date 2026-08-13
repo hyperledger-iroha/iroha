@@ -4,7 +4,6 @@ use std::cell::Cell;
 use std::collections::HashMap;
 #[cfg(feature = "cuda")]
 use std::sync::{Arc, OnceLock, atomic::AtomicU64};
-
 #[cfg(feature = "cuda")]
 use cust::context::CurrentContext;
 #[cfg(feature = "cuda")]
@@ -15,7 +14,6 @@ use cust::init;
 use cust::prelude::*;
 #[cfg(feature = "cuda")]
 use parking_lot::{Mutex, RwLock};
-
 #[cfg(feature = "cuda")]
 #[derive(Debug)]
 pub struct GpuContext {
@@ -25,7 +23,6 @@ pub struct GpuContext {
     stream: Mutex<Stream>,
     pub context: Context,
 }
-
 #[cfg(feature = "cuda")]
 impl GpuContext {
     fn new(device: Device) -> cust::error::CudaResult<Self> {
@@ -55,7 +52,6 @@ impl GpuContext {
             context,
         })
     }
-
     pub fn with_stream<F, T>(&self, func: F) -> Option<T>
     where
         F: FnOnce(&Stream) -> Option<T>,
@@ -64,7 +60,6 @@ impl GpuContext {
         let stream = self.stream.lock();
         func(&stream)
     }
-
     pub fn cached_module(&self, key: &'static str, ptx: &'static str) -> Option<Arc<Module>> {
         CurrentContext::set_current(&self.context).ok()?;
         if let Some(module) = self.modules.read().get(key).cloned() {
@@ -79,7 +74,6 @@ impl GpuContext {
                 .clone(),
         )
     }
-
     pub fn with_cached_u64_buffer<T>(
         &self,
         key: &'static str,
@@ -97,7 +91,6 @@ impl GpuContext {
         func(buffer)
     }
 }
-
 #[cfg(feature = "cuda")]
 impl Drop for GpuContext {
     fn drop(&mut self) {
@@ -108,7 +101,6 @@ impl Drop for GpuContext {
         }
     }
 }
-
 #[cfg(feature = "cuda")]
 fn map_host_flag_fallback(err: CudaError) -> Option<ContextFlags> {
     match err {
@@ -116,42 +108,35 @@ fn map_host_flag_fallback(err: CudaError) -> Option<ContextFlags> {
         _ => None,
     }
 }
-
 #[cfg(feature = "cuda")]
 #[derive(Debug)]
 pub struct GpuManager {
     gpus: Vec<GpuContext>,
 }
-
 #[cfg(feature = "cuda")]
 #[derive(Default)]
 struct GpuManagerCache {
     manager: Option<Arc<GpuManager>>,
     version: u64,
 }
-
 #[cfg(feature = "cuda")]
 #[derive(Clone, Debug)]
 pub struct GpuManagerHandle {
     inner: Arc<GpuManager>,
 }
-
 #[cfg(feature = "cuda")]
 impl std::ops::Deref for GpuManagerHandle {
     type Target = GpuManager;
-
     fn deref(&self) -> &GpuManager {
         &self.inner
     }
 }
-
 #[cfg(feature = "cuda")]
 impl GpuManagerHandle {
     fn new(inner: Arc<GpuManager>) -> Self {
         Self { inner }
     }
 }
-
 #[cfg(feature = "cuda")]
 static GPU_MANAGER: OnceLock<RwLock<GpuManagerCache>> = OnceLock::new();
 #[cfg(feature = "cuda")]
@@ -162,17 +147,14 @@ static CONFIG_VERSION: AtomicU64 = AtomicU64::new(0);
 thread_local! {
     static GPU_TASK_OVERRIDE: Cell<Option<u64>> = const { Cell::new(None) };
 }
-
 #[cfg(feature = "cuda")]
 fn manager_cache() -> &'static RwLock<GpuManagerCache> {
     GPU_MANAGER.get_or_init(|| RwLock::new(GpuManagerCache::default()))
 }
-
 #[cfg(feature = "cuda")]
 fn cuda_manager_enabled() -> bool {
     !crate::cuda::cuda_disabled()
 }
-
 #[cfg(feature = "cuda")]
 fn resolve_task_id(task_id: u64) -> u64 {
     if task_id != 0 {
@@ -180,17 +162,14 @@ fn resolve_task_id(task_id: u64) -> u64 {
     }
     GPU_TASK_OVERRIDE.with(|slot| slot.get().unwrap_or(0))
 }
-
 #[cfg(feature = "cuda")]
 pub(crate) fn with_task_scope<T>(task_id: u64, func: impl FnOnce() -> T) -> T {
     struct ResetGuard(Option<u64>);
-
     impl Drop for ResetGuard {
         fn drop(&mut self) {
             GPU_TASK_OVERRIDE.with(|slot| slot.set(self.0));
         }
     }
-
     let previous = GPU_TASK_OVERRIDE.with(|slot| {
         let old = slot.get();
         slot.set(Some(task_id));
@@ -199,7 +178,6 @@ pub(crate) fn with_task_scope<T>(task_id: u64, func: impl FnOnce() -> T) -> T {
     let _reset = ResetGuard(previous);
     func()
 }
-
 #[cfg(feature = "cuda")]
 fn clear_cached_manager(version: u64) {
     let cache = manager_cache();
@@ -207,7 +185,6 @@ fn clear_cached_manager(version: u64) {
     guard.manager = None;
     guard.version = version;
 }
-
 #[cfg(feature = "cuda")]
 impl GpuManager {
     /// Initialize and create contexts for all detected GPUs.
@@ -234,12 +211,10 @@ impl GpuManager {
         }
         Some(Self { gpus })
     }
-
     /// Number of GPU devices initialized.
     pub fn device_count(&self) -> usize {
         self.gpus.len()
     }
-
     /// Map a task ID deterministically to a GPU index.
     pub fn gpu_for_task(&self, task_id: u64) -> usize {
         if self.gpus.is_empty() {
@@ -247,7 +222,6 @@ impl GpuManager {
         }
         (resolve_task_id(task_id) as usize) % self.gpus.len()
     }
-
     /// Execute a closure on the GPU assigned for the given task ID.
     pub fn with_gpu_for_task<F, T>(&self, task_id: u64, func: F) -> Option<T>
     where
@@ -259,7 +233,6 @@ impl GpuManager {
         let idx = self.gpu_for_task(task_id);
         self.gpus.get(idx).map(func)
     }
-
     /// Return a handle to the global GPU manager, initializing it on first use.
     pub fn shared() -> Option<GpuManagerHandle> {
         if !cuda_manager_enabled() {
@@ -282,7 +255,6 @@ impl GpuManager {
         } {
             return Some(handle);
         }
-
         // Slow path: upgrade to write lock and (re)initialize if needed.
         let cache = manager_cache();
         let mut guard = cache.write();
@@ -299,12 +271,10 @@ impl GpuManager {
             .as_ref()
             .map(|mgr| GpuManagerHandle::new(Arc::clone(mgr)))
     }
-
     pub(crate) fn invalidate_cache() {
         let new_version = CONFIG_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         clear_cached_manager(new_version);
     }
-
     /// Set a configuration cap for the number of GPUs (0 = auto/no cap).
     pub fn set_max_gpus(limit: Option<usize>) {
         let v = limit.unwrap_or(0);
@@ -312,17 +282,14 @@ impl GpuManager {
         Self::invalidate_cache();
     }
 }
-
 #[cfg(all(test, feature = "cuda"))]
 pub(crate) fn test_cache_version() -> u64 {
     manager_cache().read().version
 }
-
 #[cfg(all(test, feature = "cuda"))]
 pub(crate) fn test_has_cached_manager() -> bool {
     manager_cache().read().manager.is_some()
 }
-
 #[cfg(all(test, feature = "cuda"))]
 pub(crate) fn test_current_max_gpus() -> Option<usize> {
     match CONFIG_MAX_GPUS.load(std::sync::atomic::Ordering::SeqCst) {
@@ -330,20 +297,16 @@ pub(crate) fn test_current_max_gpus() -> Option<usize> {
         v => Some(v),
     }
 }
-
 #[cfg(all(test, feature = "cuda"))]
 pub(crate) fn test_resolve_task_id(task_id: u64) -> u64 {
     resolve_task_id(task_id)
 }
-
 #[cfg(not(feature = "cuda"))]
 #[derive(Debug)]
 pub struct GpuManager;
-
 #[cfg(not(feature = "cuda"))]
 #[derive(Clone, Debug)]
 pub struct GpuManagerHandle;
-
 #[cfg(not(feature = "cuda"))]
 impl GpuManager {
     pub fn init() -> Option<Self> {
@@ -361,21 +324,16 @@ impl GpuManager {
     {
         None
     }
-
     pub fn shared() -> Option<GpuManagerHandle> {
         None
     }
     pub fn set_max_gpus(_limit: Option<usize>) {}
 }
-
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use std::sync::Arc;
-
     use super::*;
-
     static ADD_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/add.ptx"));
-
     #[test]
     fn map_host_flag_fallback_drops_map_host_for_known_primary_context_errors() {
         assert_eq!(
@@ -391,17 +349,14 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn set_max_gpus_invalidates_cached_manager() {
         let baseline_limit = super::test_current_max_gpus();
         // Touch the cache once so we can observe transitions even without GPUs.
         let _ = GpuManager::shared();
         let version_after_shared = super::test_cache_version();
-
         let new_limit = baseline_limit.unwrap_or(0).saturating_add(1);
         GpuManager::set_max_gpus(Some(new_limit));
-
         let version_after_set = super::test_cache_version();
         assert!(
             version_after_set > version_after_shared,
@@ -411,7 +366,6 @@ mod tests {
             !super::test_has_cached_manager(),
             "cache must be cleared after configuration change"
         );
-
         GpuManager::set_max_gpus(baseline_limit);
         let version_after_restore = super::test_cache_version();
         assert!(
@@ -419,20 +373,16 @@ mod tests {
             "restoring configuration should also update cache version"
         );
     }
-
     #[test]
     fn task_scope_overrides_default_task_zero_only() {
         assert_eq!(super::test_resolve_task_id(0), 0);
         assert_eq!(super::test_resolve_task_id(17), 17);
-
         super::with_task_scope(42, || {
             assert_eq!(super::test_resolve_task_id(0), 42);
             assert_eq!(super::test_resolve_task_id(17), 17);
         });
-
         assert_eq!(super::test_resolve_task_id(0), 0);
     }
-
     #[test]
     fn cached_module_reuses_loaded_handle_for_same_key() {
         let Some(manager) = GpuManager::shared() else {
@@ -450,7 +400,6 @@ mod tests {
             "GpuContext should reuse a cached module handle for repeated loads of the same PTX key",
         );
     }
-
     #[test]
     fn with_stream_reuses_cached_stream_for_same_gpu() {
         let Some(manager) = GpuManager::shared() else {
@@ -468,7 +417,6 @@ mod tests {
             "GpuContext should reuse the same cached stream across repeated helper calls",
         );
     }
-
     #[test]
     fn cached_u64_buffer_reuses_device_allocation_for_same_key() {
         let Some(manager) = GpuManager::shared() else {

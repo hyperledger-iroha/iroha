@@ -1,5 +1,4 @@
 //! Soracles evidence helpers (audit bundle generation).
-
 use std::{
     collections::{BTreeMap, HashSet},
     fmt::Write as _,
@@ -7,7 +6,6 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
@@ -28,10 +26,8 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json::{self, JsonDeserializeOwned, Value},
 };
-
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
-
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Build and submit oracle transactions.
@@ -48,7 +44,6 @@ pub enum Command {
     #[command(name = "evidence-gc")]
     Gc(GcArgs),
 }
-
 #[derive(Args, Debug)]
 pub struct Bundle {
     /// Path to a JSON file containing `FeedEventRecord` values (array or single record).
@@ -73,7 +68,6 @@ pub struct Bundle {
     #[arg(long, value_name = "PATH")]
     telemetry: Option<PathBuf>,
 }
-
 #[derive(Args, Debug)]
 pub struct Catalog {
     /// Output format (`json` for machine consumption, `markdown` for docs/runbooks).
@@ -82,7 +76,6 @@ pub struct Catalog {
     #[arg(long, value_enum, default_value_t = CatalogFormat::Json)]
     format: CatalogFormat,
 }
-
 /// Prune expired soracles evidence bundles and unreferenced artifacts.
 #[derive(Args, Debug)]
 pub struct GcArgs {
@@ -105,13 +98,11 @@ pub struct GcArgs {
     #[arg(long)]
     dry_run: bool,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum CatalogFormat {
     Json,
     Markdown,
 }
-
 #[derive(Subcommand, Debug)]
 pub enum TxCommand {
     /// Register an oracle feed from a Norito JSON feed config file.
@@ -145,7 +136,6 @@ pub enum TxCommand {
     #[command(name = "revoke-twitter-binding")]
     RevokeTwitterBinding(RevokeTwitterBindingTx),
 }
-
 #[derive(Subcommand, Debug)]
 pub enum QueryCommand {
     /// List all registered oracle feeds.
@@ -172,21 +162,18 @@ pub enum QueryCommand {
     #[command(name = "defi-attestation")]
     DefiAttestation(DefiAttestationQuery),
 }
-
 #[derive(Args, Debug)]
 pub struct RegisterTx {
     /// Norito JSON file containing `FeedConfig`.
     #[arg(long, value_name = "PATH")]
     feed_json: PathBuf,
 }
-
 #[derive(Args, Debug)]
 pub struct SubmitTx {
     /// Norito JSON file containing `Observation`.
     #[arg(long, value_name = "PATH")]
     observation_json: PathBuf,
 }
-
 #[derive(Args, Debug)]
 pub struct AggregateTx {
     /// Feed identifier.
@@ -202,7 +189,6 @@ pub struct AggregateTx {
     #[arg(long = "evidence-hash")]
     evidence_hashes: Vec<Hash>,
 }
-
 #[derive(Args, Debug)]
 pub struct OpenDisputeTx {
     /// Feed identifier.
@@ -227,7 +213,6 @@ pub struct OpenDisputeTx {
     #[arg(long, default_value = "")]
     reason: String,
 }
-
 #[derive(Args, Debug)]
 pub struct ResolveDisputeTx {
     /// Dispute identifier.
@@ -240,7 +225,6 @@ pub struct ResolveDisputeTx {
     #[arg(long, default_value = "")]
     notes: String,
 }
-
 #[derive(Args, Debug)]
 pub struct ProposeChangeTx {
     /// Change id hash.
@@ -259,7 +243,6 @@ pub struct ProposeChangeTx {
     #[arg(long = "evidence-hash")]
     evidence_hashes: Vec<Hash>,
 }
-
 #[derive(Args, Debug)]
 pub struct VoteChangeStageTx {
     /// Change id hash.
@@ -275,7 +258,6 @@ pub struct VoteChangeStageTx {
     #[arg(long = "evidence-hash")]
     evidence_hashes: Vec<Hash>,
 }
-
 #[derive(Args, Debug)]
 pub struct RollbackChangeTx {
     /// Change id hash.
@@ -288,7 +270,6 @@ pub struct RollbackChangeTx {
     #[arg(long)]
     reason: String,
 }
-
 #[derive(Args, Debug)]
 pub struct RecordTwitterBindingTx {
     /// Norito JSON file containing `TwitterBindingAttestation`.
@@ -298,7 +279,6 @@ pub struct RecordTwitterBindingTx {
     #[arg(long)]
     feed_id: FeedId,
 }
-
 #[derive(Args, Debug)]
 pub struct RevokeTwitterBindingTx {
     /// Norito JSON file containing the keyed binding hash.
@@ -308,21 +288,18 @@ pub struct RevokeTwitterBindingTx {
     #[arg(long, default_value = "")]
     reason: String,
 }
-
 #[derive(Args, Debug)]
 pub struct AttestDefiTx {
     /// Norito JSON file containing `DefiOracleAttestation`.
     #[arg(long, value_name = "PATH")]
     attestation_json: PathBuf,
 }
-
 #[derive(Args, Debug)]
 pub struct FeedQuery {
     /// Feed identifier.
     #[arg(long)]
     feed_id: FeedId,
 }
-
 #[derive(Args, Debug)]
 pub struct ProviderStatsQuery {
     /// Feed identifier.
@@ -332,35 +309,30 @@ pub struct ProviderStatsQuery {
     #[arg(long)]
     provider: Option<String>,
 }
-
 #[derive(Args, Debug)]
 pub struct DisputesQuery {
     /// Optional feed identifier filter.
     #[arg(long)]
     feed_id: Option<FeedId>,
 }
-
 #[derive(Args, Debug)]
 pub struct DisputeQuery {
     /// Dispute identifier.
     #[arg(long)]
     dispute_id: u64,
 }
-
 #[derive(Args, Debug)]
 pub struct ChangeQuery {
     /// Change id hash.
     #[arg(long)]
     change_id: Hash,
 }
-
 #[derive(Args, Debug)]
 pub struct TwitterBindingsQuery {
     /// Norito JSON file containing `UniversalAccountId`.
     #[arg(long, value_name = "PATH")]
     uaid_json: PathBuf,
 }
-
 #[derive(Args, Debug)]
 pub struct DefiAttestationQuery {
     /// DeFi oracle domain (`1=perps_market`, `2=options_series`,
@@ -371,21 +343,18 @@ pub struct DefiAttestationQuery {
     #[arg(long = "subject-id")]
     subject_id: u64,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum DisputeOutcomeArg {
     Upheld,
     Reduced,
     Frivolous,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ChangeClassArg {
     Low,
     Medium,
     High,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ChangeStageArg {
     Intake,
@@ -395,7 +364,6 @@ pub enum ChangeStageArg {
     PolicyJury,
     Enactment,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum EvidenceKind {
     Observation,
@@ -404,7 +372,6 @@ pub enum EvidenceKind {
     Dispute,
     Telemetry,
 }
-
 impl EvidenceKind {
     fn as_label(self) -> &'static str {
         match self {
@@ -416,7 +383,6 @@ impl EvidenceKind {
         }
     }
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct EvidenceEntry {
     pub kind: String,
@@ -425,7 +391,6 @@ pub struct EvidenceEntry {
     pub bundled_path: String,
     pub size_bytes: u64,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct FeedEventDigest {
     pub feed_id: FeedId,
@@ -435,7 +400,6 @@ pub struct FeedEventDigest {
     pub evidence_hashes: Vec<Hash>,
     pub missing_evidence_hashes: Vec<Hash>,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct BundleSummary {
     pub generated_at_unix: u64,
@@ -444,13 +408,11 @@ pub struct BundleSummary {
     pub evidence: Vec<EvidenceEntry>,
     pub coverage: BundleCoverage,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct BundleOutput {
     manifest_path: String,
     summary: BundleSummary,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct BundleCoverage {
     pub total_feed_events: usize,
@@ -460,7 +422,6 @@ pub struct BundleCoverage {
     pub missing_hashes_total: usize,
     pub missing_hashes_by_feed: BTreeMap<String, usize>,
 }
-
 /// Garbage-collection summary for evidence bundles.
 #[derive(Debug, Default, JsonSerialize)]
 pub struct GcReport {
@@ -474,46 +435,39 @@ pub struct GcReport {
     pub skipped_bundles: Vec<SkippedBundle>,
     pub bytes_freed: u64,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct GcOutput {
     report_path: String,
     report: GcReport,
 }
-
 #[derive(Debug, JsonSerialize)]
 pub struct PrunedBundle {
     pub path: String,
     pub reason: String,
     pub bytes_freed: u64,
 }
-
 #[derive(Debug, JsonSerialize)]
 pub struct PrunedFile {
     pub path: String,
     pub bundle: String,
     pub bytes_freed: u64,
 }
-
 #[derive(Debug, JsonSerialize)]
 pub struct SkippedBundle {
     pub path: String,
     pub reason: String,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct RejectionCatalog {
     pub version: u8,
     pub observation_errors: Vec<CatalogEntry>,
     pub aggregation_errors: Vec<CatalogEntry>,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct CatalogEntry {
     pub code: String,
     pub meaning: String,
 }
-
 impl CatalogEntry {
     fn new(code: impl Into<String>, meaning: impl Into<String>) -> Self {
         Self {
@@ -522,7 +476,6 @@ impl CatalogEntry {
         }
     }
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -534,7 +487,6 @@ impl Run for Command {
         }
     }
 }
-
 impl From<DisputeOutcomeArg> for OracleDisputeOutcome {
     fn from(value: DisputeOutcomeArg) -> Self {
         match value {
@@ -544,7 +496,6 @@ impl From<DisputeOutcomeArg> for OracleDisputeOutcome {
         }
     }
 }
-
 impl From<ChangeClassArg> for OracleChangeClass {
     fn from(value: ChangeClassArg) -> Self {
         match value {
@@ -554,7 +505,6 @@ impl From<ChangeClassArg> for OracleChangeClass {
         }
     }
 }
-
 impl From<ChangeStageArg> for OracleChangeStage {
     fn from(value: ChangeStageArg) -> Self {
         match value {
@@ -567,7 +517,6 @@ impl From<ChangeStageArg> for OracleChangeStage {
         }
     }
 }
-
 impl Run for TxCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let instruction = match self {
@@ -645,11 +594,9 @@ impl Run for TxCommand {
                 })
             }
         };
-
         context.finish(vec![instruction])
     }
 }
-
 impl Run for QueryCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
@@ -734,7 +681,6 @@ impl Run for QueryCommand {
         }
     }
 }
-
 impl Run for Bundle {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let bundle_root = normalize_dir(&self.output)?;
@@ -746,7 +692,6 @@ impl Run for Bundle {
             .wrap_err_with(|| format!("failed to create {}", bundle_root.display()))?;
         fs::write(&manifest_path, rendered)
             .wrap_err_with(|| format!("failed to write {}", manifest_path.display()))?;
-
         let text = format!(
             "soracles bundle wrote manifest={} (artifacts={} entries, feed_events={}, missing_hashes={})",
             manifest_path.display(),
@@ -761,7 +706,6 @@ impl Run for Bundle {
         print_with_optional_text(context, Some(text), &output)
     }
 }
-
 impl Run for Catalog {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let catalog = build_rejection_catalog();
@@ -774,7 +718,6 @@ impl Run for Catalog {
         }
     }
 }
-
 impl Run for GcArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let now = SystemTime::now();
@@ -798,7 +741,6 @@ impl Run for GcArgs {
         }
         fs::write(&report_path, rendered)
             .wrap_err_with(|| format!("failed to write {}", report_path.display()))?;
-
         let verb = if self.dry_run { "scanned" } else { "pruned" };
         let text = format!(
             "soracles evidence-gc {verb}: removed_bundles={} pruned_files={} bytes_freed={} retained={} report={}",
@@ -815,7 +757,6 @@ impl Run for GcArgs {
         print_with_optional_text(context, Some(text), &output)
     }
 }
-
 fn build_bundle(options: &Bundle, bundle_root: &Path) -> Result<BundleSummary> {
     let artifacts_root = bundle_root.join("artifacts");
     fs::create_dir_all(&artifacts_root).wrap_err_with(|| {
@@ -824,10 +765,8 @@ fn build_bundle(options: &Bundle, bundle_root: &Path) -> Result<BundleSummary> {
             artifacts_root.display()
         )
     })?;
-
     let feed_events = load_feed_events(&options.events)?;
     let mut evidence = BTreeMap::<Hash, EvidenceEntry>::new();
-
     if let Some(path) = &options.observations {
         ingest_path(
             path,
@@ -853,21 +792,17 @@ fn build_bundle(options: &Bundle, bundle_root: &Path) -> Result<BundleSummary> {
             &mut evidence,
         )?;
     }
-
     for entry in evidence.values_mut() {
         entry.sources.sort();
         entry.sources.dedup();
     }
-
     let feed_events = feed_events
         .into_iter()
         .map(|record| digest_event(record, &evidence))
         .collect::<Vec<_>>();
     let coverage = compute_coverage(&feed_events, &evidence);
     let evidence_entries: Vec<EvidenceEntry> = evidence.into_values().collect();
-
     write_artifact_index(&artifacts_root, &evidence_entries)?;
-
     let summary = BundleSummary {
         generated_at_unix: now_unix(SystemTime::now())?,
         artifact_root: "artifacts".to_string(),
@@ -875,10 +810,8 @@ fn build_bundle(options: &Bundle, bundle_root: &Path) -> Result<BundleSummary> {
         evidence: evidence_entries,
         coverage,
     };
-
     Ok(summary)
 }
-
 fn compute_coverage(
     feed_events: &[FeedEventDigest],
     evidence: &BTreeMap<Hash, EvidenceEntry>,
@@ -887,7 +820,6 @@ fn compute_coverage(
     for entry in evidence.values() {
         *evidence_by_kind.entry(entry.kind.clone()).or_insert(0) += 1usize;
     }
-
     let mut events_with_evidence = 0usize;
     let mut missing_hashes_total = 0usize;
     let mut missing_hashes_by_feed = BTreeMap::new();
@@ -902,7 +834,6 @@ fn compute_coverage(
             *missing_hashes_by_feed.entry(key).or_insert(0) += missing;
         }
     }
-
     BundleCoverage {
         total_feed_events: feed_events.len(),
         events_with_evidence,
@@ -912,7 +843,6 @@ fn compute_coverage(
         missing_hashes_by_feed,
     }
 }
-
 fn write_artifact_index(root: &Path, evidence: &[EvidenceEntry]) -> Result<()> {
     let index_path = root.join("index.json");
     let rendered = json::to_json_pretty(&evidence.to_vec())
@@ -921,7 +851,6 @@ fn write_artifact_index(root: &Path, evidence: &[EvidenceEntry]) -> Result<()> {
         .wrap_err_with(|| format!("failed to write {}", index_path.display()))?;
     Ok(())
 }
-
 fn build_rejection_catalog() -> RejectionCatalog {
     let observation_errors = vec![
         CatalogEntry::new(
@@ -942,19 +871,16 @@ fn build_rejection_catalog() -> RejectionCatalog {
             "Connector-specific error code recorded in `ObservationErrorCode::Other`.",
         ),
     ];
-
     let aggregation_errors = OracleRejectionCode::all()
         .iter()
         .map(|code| CatalogEntry::new(code.as_code(), code.description()))
         .collect();
-
     RejectionCatalog {
         version: 1,
         observation_errors,
         aggregation_errors,
     }
 }
-
 fn render_catalog_markdown(catalog: &RejectionCatalog) -> String {
     fn render_section(title: &str, entries: &[CatalogEntry], out: &mut String) {
         out.push_str("### ");
@@ -969,7 +895,6 @@ fn render_catalog_markdown(catalog: &RejectionCatalog) -> String {
         }
         out.push('\n');
     }
-
     let mut rendered = String::new();
     let _ = writeln!(&mut rendered, "Catalog version {}", catalog.version);
     rendered.push('\n');
@@ -985,7 +910,6 @@ fn render_catalog_markdown(catalog: &RejectionCatalog) -> String {
     );
     rendered
 }
-
 fn digest_event(
     record: FeedEventRecord,
     evidence: &BTreeMap<Hash, EvidenceEntry>,
@@ -996,7 +920,6 @@ fn digest_event(
         .filter(|hash| !evidence.contains_key(hash))
         .copied()
         .collect::<Vec<_>>();
-
     FeedEventDigest {
         feed_id: record.event.feed_id,
         feed_config_version: record.event.feed_config_version,
@@ -1006,7 +929,6 @@ fn digest_event(
         missing_evidence_hashes: missing,
     }
 }
-
 fn load_feed_events(path: &Path) -> Result<Vec<FeedEventRecord>> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read feed events from {}", path.display()))?;
@@ -1030,7 +952,6 @@ fn load_feed_events(path: &Path) -> Result<Vec<FeedEventRecord>> {
         }
     }
 }
-
 fn load_json_file<T>(path: &Path) -> Result<T>
 where
     T: JsonDeserializeOwned,
@@ -1038,7 +959,6 @@ where
     let bytes = fs::read(path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
     json::from_slice(&bytes).wrap_err_with(|| format!("failed to parse {}", path.display()))
 }
-
 fn ingest_path(
     path: &Path,
     kind: EvidenceKind,
@@ -1057,13 +977,11 @@ fn ingest_path(
         }
         return Ok(());
     }
-
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read evidence file {}", path.display()))?;
     let hash = Hash::new(&bytes);
     let bundled_name = bundled_name(&hash, path);
     let bundled_path = artifact_root.join(&bundled_name);
-
     if !bundled_path.exists() {
         fs::write(&bundled_path, &bytes).wrap_err_with(|| {
             format!(
@@ -1073,7 +991,6 @@ fn ingest_path(
             )
         })?;
     }
-
     let source = path.display().to_string();
     let entry = evidence.entry(hash).or_insert_with(|| EvidenceEntry {
         kind: kind.as_label().to_string(),
@@ -1082,14 +999,11 @@ fn ingest_path(
         bundled_path: format!("artifacts/{bundled_name}"),
         size_bytes: bytes.len() as u64,
     });
-
     if !entry.sources.contains(&source) {
         entry.sources.push(source);
     }
-
     Ok(())
 }
-
 fn bundled_name(hash: &Hash, source: &Path) -> String {
     let digest = hex::encode_upper(hash.as_ref());
     match source.extension().and_then(|ext| ext.to_str()) {
@@ -1097,7 +1011,6 @@ fn bundled_name(hash: &Hash, source: &Path) -> String {
         _ => digest,
     }
 }
-
 fn normalize_dir(path: &Path) -> Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -1108,7 +1021,6 @@ fn normalize_dir(path: &Path) -> Result<PathBuf> {
     };
     Ok(absolute)
 }
-
 struct GcContext {
     retention: Option<Duration>,
     dispute_retention: Option<Duration>,
@@ -1118,7 +1030,6 @@ struct GcContext {
     dry_run: bool,
     now: SystemTime,
 }
-
 fn garbage_collect(
     root: &Path,
     retention_days: u64,
@@ -1134,11 +1045,9 @@ fn garbage_collect(
         dry_run,
         ..GcReport::default()
     };
-
     if !root.exists() {
         return Ok(report);
     }
-
     let ctx = GcContext {
         retention: retention_window(retention_days),
         dispute_retention: retention_window(dispute_retention_days),
@@ -1148,7 +1057,6 @@ fn garbage_collect(
         dry_run,
         now,
     };
-
     for entry in
         fs::read_dir(root).wrap_err_with(|| format!("failed to read {}", root.display()))?
     {
@@ -1159,16 +1067,13 @@ fn garbage_collect(
         }
         process_bundle_root(&bundle_root, &ctx, &mut report)?;
     }
-
     Ok(report)
 }
-
 fn process_bundle_root(bundle_root: &Path, ctx: &GcContext, report: &mut GcReport) -> Result<()> {
     let manifest_path = bundle_root.join("bundle.json");
     if !manifest_path.exists() {
         return Ok(());
     }
-
     let manifest_meta = match manifest_path.metadata() {
         Ok(meta) => meta,
         Err(err) => {
@@ -1179,7 +1084,6 @@ fn process_bundle_root(bundle_root: &Path, ctx: &GcContext, report: &mut GcRepor
             return Ok(());
         }
     };
-
     let manifest_bytes = fs::read(&manifest_path)
         .wrap_err_with(|| format!("failed to read {}", manifest_path.display()))?;
     let summary: BundleSummary = match json::from_slice(&manifest_bytes) {
@@ -1192,7 +1096,6 @@ fn process_bundle_root(bundle_root: &Path, ctx: &GcContext, report: &mut GcRepor
             return Ok(());
         }
     };
-
     let age = compute_bundle_age(&summary, &manifest_meta, ctx.now);
     let has_dispute = summary
         .evidence
@@ -1203,19 +1106,16 @@ fn process_bundle_root(bundle_root: &Path, ctx: &GcContext, report: &mut GcRepor
     } else {
         ctx.retention.as_ref()
     };
-
     let expired = match (window, age) {
         (None, _) => true,
         (Some(limit), Some(duration)) => duration >= *limit,
         (Some(_), None) => false,
     };
-
     let bundle_label = bundle_root
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let artifacts_root = bundle_root.join(&summary.artifact_root);
-
     if expired {
         let reason_days = if has_dispute {
             ctx.dispute_retention_days
@@ -1239,9 +1139,7 @@ fn process_bundle_root(bundle_root: &Path, ctx: &GcContext, report: &mut GcRepor
         }
         return Ok(());
     }
-
     report.retained_bundles = report.retained_bundles.saturating_add(1);
-
     if ctx.prune_unreferenced && artifacts_root.exists() {
         let referenced = referenced_artifacts(bundle_root, &summary);
         prune_unreferenced_files(
@@ -1252,10 +1150,8 @@ fn process_bundle_root(bundle_root: &Path, ctx: &GcContext, report: &mut GcRepor
             report,
         )?;
     }
-
     Ok(())
 }
-
 fn compute_bundle_age(
     summary: &BundleSummary,
     manifest_meta: &fs::Metadata,
@@ -1268,7 +1164,6 @@ fn compute_bundle_age(
     };
     now.duration_since(generated).ok()
 }
-
 fn retention_window(days: u64) -> Option<Duration> {
     if days == 0 {
         None
@@ -1276,7 +1171,6 @@ fn retention_window(days: u64) -> Option<Duration> {
         Some(Duration::from_secs(days.saturating_mul(86_400)))
     }
 }
-
 fn referenced_artifacts(bundle_root: &Path, summary: &BundleSummary) -> HashSet<PathBuf> {
     summary
         .evidence
@@ -1284,7 +1178,6 @@ fn referenced_artifacts(bundle_root: &Path, summary: &BundleSummary) -> HashSet<
         .map(|entry| bundle_root.join(&entry.bundled_path))
         .collect()
 }
-
 fn prune_unreferenced_files(
     artifact_root: &Path,
     referenced: &HashSet<PathBuf>,
@@ -1306,7 +1199,6 @@ fn prune_unreferenced_files(
             if !path.is_file() || referenced.contains(&path) {
                 continue;
             }
-
             let bytes_freed = path.metadata().map(|m| m.len()).unwrap_or(0);
             report.pruned_files.push(PrunedFile {
                 path: path.display().to_string(),
@@ -1321,10 +1213,8 @@ fn prune_unreferenced_files(
             }
         }
     }
-
     Ok(())
 }
-
 fn dir_size(root: &Path) -> Result<u64> {
     let mut total: u64 = 0;
     let mut stack = vec![root.to_path_buf()];
@@ -1343,13 +1233,11 @@ fn dir_size(root: &Path) -> Result<u64> {
     }
     Ok(total)
 }
-
 fn now_unix(now: SystemTime) -> Result<u64> {
     now.duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .map_err(|err| eyre!("system clock before unix epoch: {err}"))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1363,7 +1251,6 @@ mod tests {
     use iroha_i18n::{Bundle as I18nBundle, Language, Localizer};
     use std::fmt::Display;
     use tempfile::TempDir;
-
     struct TestContext {
         output_format: crate::CliOutputFormat,
         printed: Vec<String>,
@@ -1371,7 +1258,6 @@ mod tests {
         i18n: Localizer,
         output_instructions: bool,
     }
-
     impl TestContext {
         fn new(output_format: crate::CliOutputFormat) -> Self {
             Self {
@@ -1382,38 +1268,30 @@ mod tests {
                 output_instructions: false,
             }
         }
-
         fn with_output_instructions(mut self) -> Self {
             self.output_instructions = true;
             self
         }
     }
-
     impl RunContext for TestContext {
         fn config(&self) -> &iroha::config::Config {
             &self.config
         }
-
         fn transaction_metadata(&self) -> Option<&iroha::data_model::metadata::Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             self.output_instructions
         }
-
         fn i18n(&self) -> &Localizer {
             &self.i18n
         }
-
         fn output_format(&self) -> crate::CliOutputFormat {
             self.output_format
         }
-
         fn print_data<T>(&mut self, data: &T) -> eyre::Result<()>
         where
             T: norito::json::JsonSerialize + ?Sized,
@@ -1422,20 +1300,17 @@ mod tests {
             self.printed.push(rendered);
             Ok(())
         }
-
         fn println(&mut self, data: impl Display) -> eyre::Result<()> {
             self.printed.push(data.to_string());
             Ok(())
         }
     }
-
     fn test_oracle_account_id() -> AccountId {
         let signatory = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("oracle signatory");
         AccountId::new(signatory)
     }
-
     fn write_json_file<T>(dir: &TempDir, name: &str, value: &T) -> PathBuf
     where
         T: norito::json::JsonSerialize + ?Sized,
@@ -1445,13 +1320,11 @@ mod tests {
         std::fs::write(&path, rendered).expect("write json fixture");
         path
     }
-
     fn write_invalid_json_file(dir: &TempDir, name: &str) -> PathBuf {
         let path = dir.path().join(name);
         std::fs::write(&path, b"{not valid norito json").expect("write invalid json fixture");
         path
     }
-
     fn assert_failed_to_parse(error: eyre::Report) {
         let rendered = format!("{error:?}");
         assert!(
@@ -1459,7 +1332,6 @@ mod tests {
             "expected malformed JSON parse error, got: {rendered}"
         );
     }
-
     fn sample_twitter_attestation() -> TwitterBindingAttestation {
         TwitterBindingAttestation {
             binding_hash: KeyedHash::new("pepper-social-v1", b"test-pepper", b"twitter-user-123"),
@@ -1474,13 +1346,11 @@ mod tests {
             feed_config_version: FeedConfigVersion(1),
         }
     }
-
     #[derive(Parser, Debug)]
     struct SoraclesHarness {
         #[command(subcommand)]
         command: Command,
     }
-
     #[test]
     fn parses_tx_and_query_subcommands() {
         let request_hash = Hash::new(b"cli-request").to_string();
@@ -1503,7 +1373,6 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
-
         let provider = test_oracle_account_id().to_string();
         let parsed = SoraclesHarness::try_parse_from([
             "soracles",
@@ -1523,13 +1392,11 @@ mod tests {
             other => panic!("unexpected command: {other:?}"),
         }
     }
-
     #[test]
     fn parses_all_query_subcommands_without_live_node() {
         let provider = test_oracle_account_id().to_string();
         let change_id = Hash::new(b"query-change").to_string();
         let uaid_path = "/tmp/uaid.json";
-
         let parse_query = |argv: Vec<&str>| {
             let parsed = SoraclesHarness::try_parse_from(argv).expect("parse query command");
             match parsed.command {
@@ -1537,7 +1404,6 @@ mod tests {
                 other => panic!("unexpected top-level command: {other:?}"),
             }
         };
-
         assert!(matches!(
             parse_query(vec!["soracles", "query", "feeds"]),
             QueryCommand::Feeds
@@ -1625,7 +1491,6 @@ mod tests {
             other => panic!("unexpected command: {other:?}"),
         }
     }
-
     #[test]
     fn tx_aggregate_generates_output_instruction_without_live_node() {
         let mut ctx = TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
@@ -1638,7 +1503,6 @@ mod tests {
         .run(&mut ctx)
         .expect("generate aggregate instruction");
     }
-
     #[test]
     fn tx_commands_generate_output_instructions_without_live_node() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -1652,7 +1516,6 @@ mod tests {
         let feed_id: FeedId = "xor_usd".parse().expect("feed id");
         let target = test_oracle_account_id().to_string();
         let change_id = Hash::new(b"cli-change");
-
         let commands = vec![
             TxCommand::Register(RegisterTx {
                 feed_json: feed_path.clone(),
@@ -1707,7 +1570,6 @@ mod tests {
                 reason: "stale".to_string(),
             }),
         ];
-
         for command in commands {
             let mut ctx = TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
             command
@@ -1715,14 +1577,12 @@ mod tests {
                 .expect("generate output instruction without live node");
         }
     }
-
     #[test]
     fn tx_file_backed_commands_reject_malformed_json_without_live_node() {
         let tmp = TempDir::new().expect("tmpdir");
         let invalid_path = write_invalid_json_file(&tmp, "invalid.json");
         let feed_id: FeedId = "xor_usd".parse().expect("feed id");
         let change_id = Hash::new(b"cli-invalid-json-change");
-
         let commands = vec![
             TxCommand::Register(RegisterTx {
                 feed_json: invalid_path.clone(),
@@ -1746,7 +1606,6 @@ mod tests {
                 reason: "malformed".to_string(),
             }),
         ];
-
         for command in commands {
             let mut ctx = TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
             let err = command
@@ -1759,14 +1618,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn tx_file_backed_commands_reject_missing_files_without_live_node() {
         let tmp = TempDir::new().expect("tmpdir");
         let missing_path = tmp.path().join("missing.json");
         let feed_id: FeedId = "xor_usd".parse().expect("feed id");
         let change_id = Hash::new(b"cli-missing-file-change");
-
         let commands = vec![
             TxCommand::Register(RegisterTx {
                 feed_json: missing_path.clone(),
@@ -1790,7 +1647,6 @@ mod tests {
                 reason: "missing file".to_string(),
             }),
         ];
-
         for command in commands {
             let mut ctx = TestContext::new(crate::CliOutputFormat::Json).with_output_instructions();
             let err = command
@@ -1807,7 +1663,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn query_file_backed_command_rejects_malformed_uaid_json_without_live_node() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -1821,7 +1676,6 @@ mod tests {
         assert_failed_to_parse(err);
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn query_file_backed_command_rejects_missing_uaid_json_without_live_node() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -1839,7 +1693,6 @@ mod tests {
         );
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn rejects_unknown_change_stage_and_class_values_at_parse_time() {
         let change_id = Hash::new(b"bad-stage").to_string();
@@ -1858,7 +1711,6 @@ mod tests {
             stage_err.contains("invalid value"),
             "unexpected stage parse error: {stage_err}"
         );
-
         let tmp = TempDir::new().expect("tmpdir");
         let feed_path = tmp.path().join("feed.json");
         let payload_hash = Hash::new(b"bad-class").to_string();
@@ -1882,7 +1734,6 @@ mod tests {
             "unexpected class parse error: {class_err}"
         );
     }
-
     #[test]
     fn rejects_unknown_dispute_outcome_and_invalid_approve_values_at_parse_time() {
         let change_id = Hash::new(b"bad-approve").to_string();
@@ -1901,7 +1752,6 @@ mod tests {
             outcome_err.contains("invalid value"),
             "unexpected outcome parse error: {outcome_err}"
         );
-
         let approve_err = SoraclesHarness::try_parse_from([
             "soracles",
             "tx",
@@ -1920,7 +1770,6 @@ mod tests {
             "unexpected approve parse error: {approve_err}"
         );
     }
-
     #[test]
     fn rejects_missing_required_tx_arguments_at_parse_time() {
         let change_id = Hash::new(b"missing-required").to_string();
@@ -1973,7 +1822,6 @@ mod tests {
                 "xor_usd",
             ],
         ];
-
         for argv in cases {
             let err = SoraclesHarness::try_parse_from(argv)
                 .expect_err("missing required argument must fail clap parsing")
@@ -1984,7 +1832,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn rejects_missing_required_query_arguments_at_parse_time() {
         let cases = vec![
@@ -1995,7 +1842,6 @@ mod tests {
             vec!["soracles", "query", "change"],
             vec!["soracles", "query", "twitter-bindings"],
         ];
-
         for argv in cases {
             let err = SoraclesHarness::try_parse_from(argv)
                 .expect_err("missing required query argument must fail clap parsing")
@@ -2006,7 +1852,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn rejects_invalid_hash_and_numeric_values_at_parse_time() {
         let valid_hash = Hash::new(b"valid-cli-hash").to_string();
@@ -2045,7 +1890,6 @@ mod tests {
             vec!["soracles", "query", "change", "--change-id", "not-a-hash"],
             vec!["soracles", "query", "dispute", "--dispute-id", "not-an-id"],
         ];
-
         for argv in cases {
             let err = SoraclesHarness::try_parse_from(argv)
                 .expect_err("invalid scalar argument must fail clap parsing")
@@ -2056,7 +1900,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn builds_bundle_and_marks_missing_hashes() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -2064,11 +1907,9 @@ mod tests {
         let artifacts_root = tmp.path().join("evidence");
         let missing_hash = Hash::new(b"missing");
         let observed_payload = br#"{"dummy":"payload"}"#;
-
         let feed_id: FeedId = "xor_usd".parse().expect("feed id");
         let observed = Hash::new(observed_payload);
         let observation_hash = HashOf::<ObservationBody>::from_untyped_unchecked(Hash::new(b"req"));
-
         let event = FeedEventRecord {
             event: FeedEvent {
                 feed_id: feed_id.clone(),
@@ -2088,15 +1929,12 @@ mod tests {
             recorded_at_ms: 1_700_000_000_000,
             evidence_hashes: vec![observed, missing_hash],
         };
-
         let rendered = json::to_json_pretty(&event).expect("serialize feed event");
         fs::write(&events_path, rendered).expect("write events");
-
         let observation_dir = tmp.path().join("observations");
         fs::create_dir(&observation_dir).expect("mkdir observations");
         let observation_path = observation_dir.join("obs.json");
         fs::write(&observation_path, observed_payload).expect("write observation");
-
         let options = Bundle {
             events: events_path.clone(),
             output: artifacts_root.clone(),
@@ -2106,7 +1944,6 @@ mod tests {
             disputes: None,
             telemetry: None,
         };
-
         let bundle_root = normalize_dir(&options.output).expect("normalize output");
         let summary = build_bundle(&options, &bundle_root).expect("build bundle");
         assert_eq!(summary.feed_events.len(), 1);
@@ -2150,7 +1987,6 @@ mod tests {
             other => panic!("unexpected index format: {other:?}"),
         }
     }
-
     #[test]
     fn catalog_markdown_lists_codes() {
         let catalog = build_rejection_catalog();
@@ -2180,7 +2016,6 @@ mod tests {
             "expected catalog version header"
         );
     }
-
     #[test]
     fn catalog_run_ignores_markdown_when_output_is_json() {
         let mut ctx = TestContext::new(crate::CliOutputFormat::Json);
@@ -2194,7 +2029,6 @@ mod tests {
         let obj = value.as_object().expect("object");
         assert!(obj.contains_key("observation_errors"));
     }
-
     #[test]
     fn bundle_run_emits_json_output() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -2229,7 +2063,6 @@ mod tests {
         fs::create_dir(&observation_dir).expect("mkdir observations");
         let observation_path = observation_dir.join("obs.json");
         fs::write(&observation_path, observed_payload).expect("write observation");
-
         let mut ctx = TestContext::new(crate::CliOutputFormat::Json);
         Bundle {
             events: events_path,
@@ -2248,7 +2081,6 @@ mod tests {
         assert!(obj.contains_key("manifest_path"));
         assert!(obj.contains_key("summary"));
     }
-
     #[test]
     fn gc_run_emits_json_output() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -2275,7 +2107,6 @@ mod tests {
         );
         assert!(obj.get("report").is_some());
     }
-
     #[test]
     fn gc_removes_expired_bundles_and_keeps_fresh() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -2285,7 +2116,6 @@ mod tests {
             .expect("time travel");
         let old_secs = now_unix(old_time).expect("unix time");
         let fresh_secs = now_unix(now).expect("unix time");
-
         let expired = write_test_bundle(
             tmp.path(),
             "expired",
@@ -2300,13 +2130,11 @@ mod tests {
             "observation",
             &[("artifacts/fresh.json", b"fresh")],
         );
-
         let report = garbage_collect(tmp.path(), 1, 365, false, false, now).expect("gc succeeds");
         assert_eq!(report.removed_bundles.len(), 1);
         assert!(!expired.exists(), "expired bundle should be removed");
         assert!(fresh.exists(), "fresh bundle should remain");
     }
-
     #[test]
     fn gc_prunes_unreferenced_files_in_dry_run() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -2321,7 +2149,6 @@ mod tests {
         let orphan = bundle.join("artifacts/orphan.bin");
         fs::create_dir_all(orphan.parent().expect("parent")).expect("mkdir orphan parent");
         fs::write(&orphan, b"orphaned").expect("write orphan");
-
         let report = garbage_collect(tmp.path(), 365, 365, true, true, now)
             .expect("gc succeeds with dry-run");
         assert_eq!(
@@ -2332,7 +2159,6 @@ mod tests {
         assert!(orphan.exists(), "dry-run must not delete files");
         assert_eq!(report.retained_bundles, 1);
     }
-
     #[test]
     fn gc_respects_longer_dispute_retention() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -2341,7 +2167,6 @@ mod tests {
             .checked_sub(Duration::from_secs(200 * 86_400))
             .expect("time travel");
         let old_secs = now_unix(old_time).expect("unix time");
-
         let dispute_bundle = write_test_bundle(
             tmp.path(),
             "dispute",
@@ -2353,7 +2178,6 @@ mod tests {
             dispute_bundle.exists(),
             "bundle should be laid out for gc test"
         );
-
         let report = garbage_collect(tmp.path(), 180, 365, false, false, now)
             .expect("gc succeeds with dispute retention");
         assert_eq!(
@@ -2363,7 +2187,6 @@ mod tests {
         );
         assert!(dispute_bundle.exists(), "dispute evidence not pruned early");
     }
-
     fn write_test_bundle(
         root: &Path,
         name: &str,
@@ -2374,7 +2197,6 @@ mod tests {
         let bundle_root = root.join(name);
         let artifact_dir = bundle_root.join("artifacts");
         fs::create_dir_all(&artifact_dir).expect("create artifact dir");
-
         let mut evidence_entries = Vec::new();
         for &(relative_path, contents) in artifacts {
             let full_path = bundle_root.join(relative_path);
@@ -2391,7 +2213,6 @@ mod tests {
                 size_bytes: contents.len() as u64,
             });
         }
-
         let mut evidence_by_kind = BTreeMap::new();
         evidence_by_kind.insert(kind.to_string(), evidence_entries.len());
         let summary = BundleSummary {

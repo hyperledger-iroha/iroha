@@ -1,27 +1,22 @@
 use core::{fmt, str::FromStr};
-
 use pqcrypto_mlkem as _;
 use pqcrypto_traits::Error as PqError;
 use rand_core::{RngCore, TryCryptoRng};
 use sha3::{Digest, Sha3_256};
 use thiserror::Error;
 use zeroize::Zeroizing;
-
 use crate::{
     HedgedChaCha20Rng, HedgedRngSeed, RngError, deterministic_chacha20_rng,
     hedged_chacha20_rng_from_rng,
 };
-
 const MLKEM512_PUBLIC_KEY_BYTES: usize = 800;
 const MLKEM512_SECRET_KEY_BYTES: usize = 1632;
 const MLKEM512_CIPHERTEXT_BYTES: usize = 768;
 const MLKEM512_SHARED_SECRET_BYTES: usize = 32;
-
 const MLKEM768_PUBLIC_KEY_BYTES: usize = 1184;
 const MLKEM768_SECRET_KEY_BYTES: usize = 2400;
 const MLKEM768_CIPHERTEXT_BYTES: usize = 1088;
 const MLKEM768_SHARED_SECRET_BYTES: usize = 32;
-
 const MLKEM1024_PUBLIC_KEY_BYTES: usize = 1568;
 const MLKEM1024_SECRET_KEY_BYTES: usize = 3168;
 const MLKEM1024_CIPHERTEXT_BYTES: usize = 1568;
@@ -30,7 +25,6 @@ const MLKEM_PUBLIC_KEY_HASH_BYTES: usize = 32;
 const MLKEM_IMPLICIT_REJECTION_SEED_BYTES: usize = 32;
 const MLKEM_PUBLIC_KEY_SEED_BYTES: usize = 32;
 const MLKEM_FIELD_MODULUS: u16 = 3329;
-
 /// Supported ML-KEM parameter sets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MlKemSuite {
@@ -41,11 +35,9 @@ pub enum MlKemSuite {
     /// ML-KEM-1024 as specified in FIPS 203.
     MlKem1024,
 }
-
 impl MlKemSuite {
     /// All supported parameter sets ordered by ascending security level.
     pub const ALL: [Self; 3] = [Self::MlKem512, Self::MlKem768, Self::MlKem1024];
-
     /// Identifier used inside `SoraNet` capability TLVs for this parameter set.
     #[must_use]
     pub const fn kem_id(self) -> u8 {
@@ -55,7 +47,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => 2,
         }
     }
-
     /// Look up a suite by its capability identifier.
     #[must_use]
     pub const fn from_kem_id(id: u8) -> Option<Self> {
@@ -66,7 +57,6 @@ impl MlKemSuite {
             _ => None,
         }
     }
-
     /// Return the public key length in bytes for this parameter set.
     #[must_use]
     pub const fn public_key_len(self) -> usize {
@@ -76,7 +66,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => MLKEM1024_PUBLIC_KEY_BYTES,
         }
     }
-
     /// Return the secret key length in bytes for this parameter set.
     #[must_use]
     pub const fn secret_key_len(self) -> usize {
@@ -86,7 +75,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => MLKEM1024_SECRET_KEY_BYTES,
         }
     }
-
     /// Return the ciphertext length in bytes for this parameter set.
     #[must_use]
     pub const fn ciphertext_len(self) -> usize {
@@ -96,7 +84,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => MLKEM1024_CIPHERTEXT_BYTES,
         }
     }
-
     /// Return the shared-secret length in bytes for this parameter set.
     #[must_use]
     pub fn shared_secret_len(self) -> usize {
@@ -106,7 +93,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => MLKEM1024_SHARED_SECRET_BYTES,
         }
     }
-
     /// Return the full tuple of byte lengths for this parameter set.
     ///
     /// # Examples
@@ -146,7 +132,6 @@ impl MlKemSuite {
             },
         }
     }
-
     /// Validate a public key encoding for this suite.
     ///
     /// # Errors
@@ -157,7 +142,6 @@ impl MlKemSuite {
         self.validate_key_material_not_all_zero(self.public_key_kind(), bytes)?;
         self.validate_public_key_canonical(bytes)
     }
-
     /// Validate a secret key encoding for this suite.
     ///
     /// # Errors
@@ -181,7 +165,6 @@ impl MlKemSuite {
             self.implicit_rejection_seed_from_validated_secret_key(bytes),
         )
     }
-
     /// Validate a ciphertext encoding for this suite.
     ///
     /// # Errors
@@ -191,7 +174,6 @@ impl MlKemSuite {
         validate_len(self.ciphertext_kind(), bytes.len(), self.ciphertext_len())?;
         self.validate_key_material_not_all_zero(self.ciphertext_kind(), bytes)
     }
-
     /// Return the public key embedded in a FIPS 203 decapsulation key.
     ///
     /// ML-KEM decapsulation keys contain the matching encapsulation key near the
@@ -208,7 +190,6 @@ impl MlKemSuite {
         self.validate_secret_key(secret_key)?;
         Ok(self.public_key_from_validated_secret_key(secret_key))
     }
-
     /// Return the public-key hash embedded in a FIPS 203 decapsulation key.
     ///
     /// # Errors
@@ -219,7 +200,6 @@ impl MlKemSuite {
         self.validate_secret_key(secret_key)?;
         Ok(self.public_key_hash_from_validated_secret_key(secret_key))
     }
-
     /// Validate that a public key and secret key belong to the same ML-KEM key pair.
     ///
     /// # Errors
@@ -247,7 +227,6 @@ impl MlKemSuite {
         }
         Ok(())
     }
-
     const fn public_key_kind(self) -> &'static str {
         match self {
             MlKemSuite::MlKem512 => "ML-KEM-512 public key",
@@ -255,7 +234,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => "ML-KEM-1024 public key",
         }
     }
-
     const fn secret_key_kind(self) -> &'static str {
         match self {
             MlKemSuite::MlKem512 => "ML-KEM-512 secret key",
@@ -263,7 +241,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => "ML-KEM-1024 secret key",
         }
     }
-
     const fn ciphertext_kind(self) -> &'static str {
         match self {
             MlKemSuite::MlKem512 => "ML-KEM-512 ciphertext",
@@ -271,7 +248,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => "ML-KEM-1024 ciphertext",
         }
     }
-
     const fn shared_secret_kind(self) -> &'static str {
         match self {
             MlKemSuite::MlKem512 => "ML-KEM-512 shared secret",
@@ -279,7 +255,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => "ML-KEM-1024 shared secret",
         }
     }
-
     const fn key_pair_kind(self) -> &'static str {
         match self {
             MlKemSuite::MlKem512 => "ML-KEM-512 key pair",
@@ -287,7 +262,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => "ML-KEM-1024 key pair",
         }
     }
-
     const fn key_pair_hash_kind(self) -> &'static str {
         match self {
             MlKemSuite::MlKem512 => "ML-KEM-512 key pair public hash",
@@ -295,7 +269,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => "ML-KEM-1024 key pair public hash",
         }
     }
-
     const fn secret_key_private_component_kind(self) -> &'static str {
         match self {
             MlKemSuite::MlKem512 => "ML-KEM-512 secret key private component",
@@ -303,7 +276,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => "ML-KEM-1024 secret key private component",
         }
     }
-
     const fn secret_key_embedded_public_kind(self) -> &'static str {
         match self {
             MlKemSuite::MlKem512 => "ML-KEM-512 secret key embedded public key",
@@ -311,7 +283,6 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => "ML-KEM-1024 secret key embedded public key",
         }
     }
-
     const fn secret_key_implicit_rejection_seed_kind(self) -> &'static str {
         match self {
             MlKemSuite::MlKem512 => "ML-KEM-512 secret key implicit rejection seed",
@@ -319,23 +290,18 @@ impl MlKemSuite {
             MlKemSuite::MlKem1024 => "ML-KEM-1024 secret key implicit rejection seed",
         }
     }
-
     const fn secret_key_public_key_offset(self) -> usize {
         self.secret_key_public_key_hash_offset() - self.public_key_len()
     }
-
     const fn secret_key_public_key_hash_offset(self) -> usize {
         self.secret_key_len() - MLKEM_PUBLIC_KEY_HASH_BYTES - MLKEM_IMPLICIT_REJECTION_SEED_BYTES
     }
-
     const fn secret_key_implicit_rejection_seed_offset(self) -> usize {
         self.secret_key_len() - MLKEM_IMPLICIT_REJECTION_SEED_BYTES
     }
-
     fn validate_secret_key_len(self, bytes: &[u8]) -> Result<(), MlKemError> {
         validate_len(self.secret_key_kind(), bytes.len(), self.secret_key_len())
     }
-
     fn validate_key_material_not_all_zero(
         self,
         kind: &'static str,
@@ -346,14 +312,12 @@ impl MlKemSuite {
         }
         Ok(())
     }
-
     fn validate_secret_key_private_component(self, secret_key: &[u8]) -> Result<(), MlKemError> {
         self.validate_12_bit_coefficients(
             self.secret_key_private_component_kind(),
             self.secret_key_private_component_from_validated_secret_key(secret_key),
         )
     }
-
     fn validate_public_key_canonical(self, public_key: &[u8]) -> Result<(), MlKemError> {
         let polynomial_bytes = public_key
             .len()
@@ -370,7 +334,6 @@ impl MlKemSuite {
             })?;
         self.validate_12_bit_coefficients(self.public_key_kind(), &public_key[..polynomial_bytes])
     }
-
     fn validate_12_bit_coefficients(
         self,
         kind: &'static str,
@@ -413,7 +376,6 @@ impl MlKemSuite {
         }
         Ok(())
     }
-
     fn validate_secret_key_public_hash(self, secret_key: &[u8]) -> Result<(), MlKemError> {
         let embedded_public = self.public_key_from_validated_secret_key(secret_key);
         let embedded_public_hash = self.public_key_hash_from_validated_secret_key(secret_key);
@@ -425,39 +387,32 @@ impl MlKemSuite {
         }
         Ok(())
     }
-
     fn secret_key_private_component_from_validated_secret_key(self, secret_key: &[u8]) -> &[u8] {
         &secret_key[..self.secret_key_public_key_offset()]
     }
-
     fn public_key_from_validated_secret_key(self, secret_key: &[u8]) -> &[u8] {
         let start = self.secret_key_public_key_offset();
         &secret_key[start..start + self.public_key_len()]
     }
-
     fn public_key_hash_from_validated_secret_key(self, secret_key: &[u8]) -> &[u8] {
         let start = self.secret_key_public_key_hash_offset();
         &secret_key[start..start + MLKEM_PUBLIC_KEY_HASH_BYTES]
     }
-
     fn implicit_rejection_seed_from_validated_secret_key(self, secret_key: &[u8]) -> &[u8] {
         let start = self.secret_key_implicit_rejection_seed_offset();
         &secret_key[start..start + MLKEM_IMPLICIT_REJECTION_SEED_BYTES]
     }
 }
-
 fn mlkem_public_key_hash(public_key: &[u8]) -> [u8; MLKEM_PUBLIC_KEY_HASH_BYTES] {
     let digest = Sha3_256::digest(public_key);
     let mut out = [0u8; MLKEM_PUBLIC_KEY_HASH_BYTES];
     out.copy_from_slice(&digest);
     out
 }
-
 /// Errors produced when parsing an [`MlKemSuite`] from text.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[error("unknown ML-KEM suite '{0}'")]
 pub struct SuiteParseError(pub String);
-
 impl fmt::Display for MlKemSuite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -467,10 +422,8 @@ impl fmt::Display for MlKemSuite {
         })
     }
 }
-
 impl FromStr for MlKemSuite {
     type Err = SuiteParseError;
-
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         match input.to_ascii_lowercase().as_str() {
             "mlkem512" | "kyber512" => Ok(MlKemSuite::MlKem512),
@@ -480,7 +433,6 @@ impl FromStr for MlKemSuite {
         }
     }
 }
-
 /// Byte lengths for an ML-KEM suite.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MlKemParameters {
@@ -493,13 +445,11 @@ pub struct MlKemParameters {
     /// Shared secret size in bytes.
     pub shared_secret: usize,
 }
-
 impl From<MlKemSuite> for MlKemParameters {
     fn from(suite: MlKemSuite) -> Self {
         suite.parameters()
     }
 }
-
 /// Detailed metadata for an ML-KEM suite as specified in FIPS 203.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MlKemMetadata {
@@ -530,7 +480,6 @@ pub struct MlKemMetadata {
     /// Byte lengths for the suite.
     pub parameters: MlKemParameters,
 }
-
 impl MlKemSuite {
     /// Return the metadata record describing this suite.
     #[must_use]
@@ -599,7 +548,6 @@ impl MlKemSuite {
         }
     }
 }
-
 /// Wrapper around an ML-KEM keypair (public + secret).
 #[derive(Debug)]
 pub struct MlKemKeyPair {
@@ -608,47 +556,40 @@ pub struct MlKemKeyPair {
     /// Secret key bytes, zeroized on drop.
     pub secret_key: Zeroizing<Vec<u8>>,
 }
-
 impl MlKemKeyPair {
     /// Return the public key as raw bytes.
     #[must_use]
     pub fn public_key(&self) -> &[u8] {
         &self.public_key
     }
-
     /// Return the secret key as raw bytes.
     #[must_use]
     pub fn secret_key(&self) -> &[u8] {
         &self.secret_key
     }
 }
-
 /// Encapsulated ML-KEM ciphertext.
 #[derive(Debug, Clone)]
 pub struct MlKemCiphertext {
     bytes: Vec<u8>,
 }
-
 impl MlKemCiphertext {
     /// Construct from raw ciphertext bytes.
     fn try_new(suite: MlKemSuite, bytes: Vec<u8>) -> Result<Self, MlKemError> {
         suite.validate_ciphertext(&bytes)?;
         Ok(Self { bytes })
     }
-
     /// Access the ciphertext bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 }
-
 /// Shared secret output of an ML-KEM operation.
 #[derive(Debug, Clone)]
 pub struct MlKemSharedSecret {
     bytes: Zeroizing<Vec<u8>>,
 }
-
 impl MlKemSharedSecret {
     fn try_new(suite: MlKemSuite, bytes: Zeroizing<Vec<u8>>) -> Result<Self, MlKemError> {
         validate_len(
@@ -659,14 +600,12 @@ impl MlKemSharedSecret {
         suite.validate_key_material_not_all_zero(suite.shared_secret_kind(), bytes.as_slice())?;
         Ok(Self { bytes })
     }
-
     /// Access the shared secret bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 }
-
 /// Errors that can arise while working with ML-KEM wrappers.
 #[derive(Clone, Debug, Error)]
 pub enum MlKemError {
@@ -729,7 +668,6 @@ pub enum MlKemError {
     #[error(transparent)]
     Rng(#[from] RngError),
 }
-
 impl MlKemError {
     fn bad_encoding(kind: &'static str, source: PqError) -> Self {
         MlKemError::BadEncoding {
@@ -738,7 +676,6 @@ impl MlKemError {
         }
     }
 }
-
 fn validate_len(kind: &'static str, actual: usize, expected: usize) -> Result<(), MlKemError> {
     if actual == expected {
         Ok(())
@@ -753,7 +690,6 @@ fn validate_len(kind: &'static str, actual: usize, expected: usize) -> Result<()
         ))
     }
 }
-
 fn validate_mlkem_seed_material_not_all_zero(
     suite: MlKemSuite,
     seed: &HedgedRngSeed,
@@ -766,7 +702,6 @@ fn validate_mlkem_seed_material_not_all_zero(
     }
     Ok(())
 }
-
 fn mlkem_backend_status(
     suite: MlKemSuite,
     operation: &'static str,
@@ -782,7 +717,6 @@ fn mlkem_backend_status(
         })
     }
 }
-
 /// Fallibly generate an ML-KEM keypair for the given parameter set.
 ///
 /// # Errors
@@ -794,7 +728,6 @@ pub fn try_generate_mlkem_keypair(
 ) -> Result<MlKemKeyPair, MlKemError> {
     generate_mlkem_keypair(suite, rng)
 }
-
 /// Generate an ML-KEM keypair for the given parameter set.
 ///
 /// # Errors
@@ -808,7 +741,6 @@ pub fn generate_mlkem_keypair(
     rng.fill_bytes(coins.as_mut());
     generate_mlkem_keypair_from_coins(suite, &coins)
 }
-
 /// Generate an ML-KEM keypair using a seed plus live OS entropy when available.
 ///
 /// # Errors
@@ -819,7 +751,6 @@ pub fn generate_mlkem_keypair_from_os(suite: MlKemSuite) -> Result<MlKemKeyPair,
     let mut rng = rand::rngs::OsRng;
     generate_mlkem_keypair_from_rng(suite, &mut rng)
 }
-
 /// Generate an ML-KEM keypair using caller-supplied seed entropy plus live OS
 /// entropy when available.
 ///
@@ -834,7 +765,6 @@ pub fn generate_mlkem_keypair_from_rng<R: TryCryptoRng + ?Sized>(
     let mut rng = hedged_chacha20_rng_from_rng(b"soranet-pq:mlkem:keypair", rng)?;
     try_generate_mlkem_keypair(suite, &mut rng)
 }
-
 /// Fallibly and deterministically generate an ML-KEM keypair from explicit seed material.
 ///
 /// # Errors
@@ -847,7 +777,6 @@ pub fn try_generate_mlkem_keypair_from_seed(
 ) -> Result<MlKemKeyPair, MlKemError> {
     generate_mlkem_keypair_from_seed(suite, seed, personalization)
 }
-
 /// Deterministically generate an ML-KEM keypair from explicit seed material.
 ///
 /// # Errors
@@ -863,7 +792,6 @@ pub fn generate_mlkem_keypair_from_seed(
     let mut rng = deterministic_chacha20_rng(seed, personalization);
     generate_mlkem_keypair(suite, &mut rng)
 }
-
 fn generate_mlkem_keypair_from_coins(
     suite: MlKemSuite,
     coins: &[u8; 64],
@@ -879,14 +807,12 @@ fn generate_mlkem_keypair_from_coins(
     validate_generated_mlkem_keypair(suite, &keypair)?;
     Ok(keypair)
 }
-
 fn validate_generated_mlkem_keypair(
     suite: MlKemSuite,
     keypair: &MlKemKeyPair,
 ) -> Result<(), MlKemError> {
     validate_mlkem_key_pair(suite, keypair.public_key(), keypair.secret_key())
 }
-
 /// Encapsulate against a provided public key.
 ///
 /// # Errors
@@ -903,7 +829,6 @@ pub fn encapsulate_mlkem(
     rng.fill_bytes(coins.as_mut());
     encapsulate_mlkem_from_coins(suite, public_key, &coins)
 }
-
 /// Encapsulate using seed material plus live OS entropy when available.
 ///
 /// # Errors
@@ -918,7 +843,6 @@ pub fn encapsulate_mlkem_from_os(
     let mut rng = rand::rngs::OsRng;
     encapsulate_mlkem_from_rng(suite, public_key, &mut rng)
 }
-
 /// Encapsulate using caller-supplied seed entropy plus live OS entropy when
 /// available.
 ///
@@ -936,7 +860,6 @@ pub fn encapsulate_mlkem_from_rng<R: TryCryptoRng + ?Sized>(
     let mut rng = hedged_chacha20_rng_from_rng(b"soranet-pq:mlkem:encapsulate", rng)?;
     encapsulate_mlkem(suite, public_key, &mut rng)
 }
-
 /// Deterministically encapsulate from explicit seed material.
 ///
 /// # Errors
@@ -954,7 +877,6 @@ pub fn encapsulate_mlkem_from_seed(
     let mut rng = deterministic_chacha20_rng(seed, personalization);
     encapsulate_mlkem(suite, public_key, &mut rng)
 }
-
 fn encapsulate_mlkem_from_coins(
     suite: MlKemSuite,
     public_key: &[u8],
@@ -970,7 +892,6 @@ fn encapsulate_mlkem_from_coins(
         MlKemCiphertext::try_new(suite, ciphertext)?,
     ))
 }
-
 /// Decapsulate a ciphertext with the provided secret key.
 ///
 /// # Errors
@@ -988,19 +909,16 @@ pub fn decapsulate_mlkem(
     mlkem_ffi::decapsulate(suite, shared.as_mut(), ciphertext, secret_key)?;
     MlKemSharedSecret::try_new(suite, shared)
 }
-
 /// Return parameter lengths for the given ML-KEM suite.
 #[must_use]
 pub fn mlkem_parameters(suite: MlKemSuite) -> MlKemParameters {
     suite.metadata().parameters
 }
-
 /// Return the metadata record for the provided ML-KEM suite.
 #[must_use]
 pub fn mlkem_metadata(suite: MlKemSuite) -> MlKemMetadata {
     suite.metadata()
 }
-
 /// Validate the encoding of an ML-KEM public key.
 ///
 /// # Errors
@@ -1009,7 +927,6 @@ pub fn mlkem_metadata(suite: MlKemSuite) -> MlKemMetadata {
 pub fn validate_mlkem_public_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), MlKemError> {
     suite.validate_public_key(bytes)
 }
-
 /// Validate the encoding of an ML-KEM secret key.
 ///
 /// # Errors
@@ -1019,7 +936,6 @@ pub fn validate_mlkem_public_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), 
 pub fn validate_mlkem_secret_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), MlKemError> {
     suite.validate_secret_key(bytes)
 }
-
 /// Validate the encoding of an ML-KEM ciphertext.
 ///
 /// # Errors
@@ -1028,7 +944,6 @@ pub fn validate_mlkem_secret_key(suite: MlKemSuite, bytes: &[u8]) -> Result<(), 
 pub fn validate_mlkem_ciphertext(suite: MlKemSuite, bytes: &[u8]) -> Result<(), MlKemError> {
     suite.validate_ciphertext(bytes)
 }
-
 /// Validate that public and secret ML-KEM keys belong to the same key pair.
 ///
 /// # Errors
@@ -1045,13 +960,10 @@ pub fn validate_mlkem_key_pair(
 ) -> Result<(), MlKemError> {
     suite.validate_key_pair(public_key, secret_key)
 }
-
 #[allow(unsafe_code)]
 mod mlkem_ffi {
     use core::ffi::c_int;
-
     use super::{MlKemError, MlKemSuite, mlkem_backend_status};
-
     pub fn keypair_derand(
         suite: MlKemSuite,
         public_key: &mut [u8],
@@ -1079,7 +991,6 @@ mod mlkem_ffi {
         };
         mlkem_backend_status(suite, "derandomized keygen", status)
     }
-
     pub fn encapsulate_derand(
         suite: MlKemSuite,
         ciphertext: &mut [u8],
@@ -1111,7 +1022,6 @@ mod mlkem_ffi {
         };
         mlkem_backend_status(suite, "derandomized encapsulation", status)
     }
-
     pub fn decapsulate(
         suite: MlKemSuite,
         shared_secret: &mut [u8],
@@ -1139,7 +1049,6 @@ mod mlkem_ffi {
         };
         mlkem_backend_status(suite, "decapsulation", status)
     }
-
     unsafe extern "C" {
         fn PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair_derand(
             pk: *mut u8,
@@ -1157,7 +1066,6 @@ mod mlkem_ffi {
             ct: *const u8,
             sk: *const u8,
         ) -> c_int;
-
         fn PQCLEAN_MLKEM768_CLEAN_crypto_kem_keypair_derand(
             pk: *mut u8,
             sk: *mut u8,
@@ -1174,7 +1082,6 @@ mod mlkem_ffi {
             ct: *const u8,
             sk: *const u8,
         ) -> c_int;
-
         fn PQCLEAN_MLKEM1024_CLEAN_crypto_kem_keypair_derand(
             pk: *mut u8,
             sk: *mut u8,
@@ -1193,62 +1100,45 @@ mod mlkem_ffi {
         ) -> c_int;
     }
 }
-
 #[cfg(test)]
 mod tests {
     use rand_core::{TryCryptoRng, TryRngCore};
-
     use crate::{deterministic_chacha20_rng, hedged_chacha20_rng};
-
     use super::*;
-
     #[derive(Debug)]
     struct FailingPqSeedRng;
-
     #[derive(Debug)]
     struct FailingPqSeedRngError;
-
     impl core::fmt::Display for FailingPqSeedRngError {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             f.write_str("failing ML-KEM seed RNG")
         }
     }
-
     impl std::error::Error for FailingPqSeedRngError {}
-
     impl TryRngCore for FailingPqSeedRng {
         type Error = FailingPqSeedRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingPqSeedRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(FailingPqSeedRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingPqSeedRngError)
         }
     }
-
     impl TryCryptoRng for FailingPqSeedRng {}
-
     struct FixedPqSeedRng {
         seed: [u8; 32],
     }
-
     impl TryRngCore for FixedPqSeedRng {
         type Error = core::convert::Infallible;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes(self.seed[..4].try_into().unwrap()))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok(u64::from_le_bytes(self.seed[..8].try_into().unwrap()))
         }
-
         fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
             for (index, byte) in dst.iter_mut().enumerate() {
                 *byte = self.seed[index % self.seed.len()];
@@ -1256,18 +1146,14 @@ mod tests {
             Ok(())
         }
     }
-
     impl TryCryptoRng for FixedPqSeedRng {}
-
     fn set_first_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
         bytes[0] = 0xFF;
         bytes[1] = (bytes[1] & 0xF0) | 0x0F;
     }
-
     fn set_first_public_key_coefficient_noncanonical(public_key: &mut [u8]) {
         set_first_12_bit_coefficient_noncanonical(public_key);
     }
-
     fn assert_noncanonical_encoding(
         err: MlKemError,
         suite: MlKemSuite,
@@ -1287,11 +1173,9 @@ mod tests {
             other => panic!("expected noncanonical {expected_kind_fragment} error, got {other:?}"),
         }
     }
-
     fn assert_noncanonical_public_key(err: MlKemError, suite: MlKemSuite) {
         assert_noncanonical_encoding(err, suite, "public key");
     }
-
     fn assert_inert_key_material(err: MlKemError, suite: MlKemSuite, expected_kind_fragment: &str) {
         match err {
             MlKemError::InertKeyMaterial {
@@ -1307,14 +1191,12 @@ mod tests {
             other => panic!("expected inert {expected_kind_fragment} error, got {other:?}"),
         }
     }
-
     #[test]
     fn coefficient_validation_rejects_partial_12_bit_group() {
         let suite = MlKemSuite::MlKem512;
         let err = suite
             .validate_12_bit_coefficients(suite.public_key_kind(), &[0xAA, 0xBB])
             .expect_err("partial 12-bit coefficient group must fail validation");
-
         match err {
             MlKemError::BadEncoding { kind, source } => {
                 assert!(kind.contains("public key"));
@@ -1334,12 +1216,10 @@ mod tests {
             other => panic!("unexpected partial-group validation result: {other:?}"),
         }
     }
-
     #[test]
     fn backend_status_reports_nonzero_failures() {
         mlkem_backend_status(MlKemSuite::MlKem768, "test operation", 0)
             .expect("zero status succeeds");
-
         let err = mlkem_backend_status(MlKemSuite::MlKem768, "test operation", 7)
             .expect_err("nonzero status fails");
         match err {
@@ -1355,46 +1235,37 @@ mod tests {
             other => panic!("unexpected backend status error: {other:?}"),
         }
     }
-
     #[test]
     fn ciphertext_constructor_preserves_guarded_payload() {
         let suite = MlKemSuite::MlKem768;
         let expected = vec![0xA7; suite.ciphertext_len()];
         let ciphertext =
             MlKemCiphertext::try_new(suite, expected.clone()).expect("ML-KEM ciphertext");
-
         assert_eq!(ciphertext.as_bytes(), expected.as_slice());
     }
-
     #[test]
     fn ciphertext_constructor_rejects_all_zero_payload() {
         let suite = MlKemSuite::MlKem768;
         let err = MlKemCiphertext::try_new(suite, vec![0u8; suite.ciphertext_len()])
             .expect_err("all-zero ML-KEM ciphertext must be rejected");
-
         assert_inert_key_material(err, suite, "ciphertext");
     }
-
     #[test]
     fn shared_secret_constructor_preserves_guarded_payload() {
         let expected = vec![0xA7; MlKemSuite::MlKem768.shared_secret_len()];
         let secret =
             MlKemSharedSecret::try_new(MlKemSuite::MlKem768, Zeroizing::new(expected.clone()))
                 .expect("nonzero ML-KEM shared secret should be accepted");
-
         assert_eq!(secret.as_bytes(), expected.as_slice());
     }
-
     #[test]
     fn shared_secret_constructor_rejects_all_zero_payload() {
         let suite = MlKemSuite::MlKem768;
         let err =
             MlKemSharedSecret::try_new(suite, Zeroizing::new(vec![0u8; suite.shared_secret_len()]))
                 .expect_err("all-zero ML-KEM shared secret must be rejected");
-
         assert_inert_key_material(err, suite, "shared secret");
     }
-
     fn roundtrip(suite: MlKemSuite) {
         let mut rng = hedged_chacha20_rng(
             HedgedRngSeed::from_entropy([suite.kem_id(); 32]),
@@ -1409,22 +1280,18 @@ mod tests {
         let shared_b = decapsulate_mlkem(suite, keys.secret_key(), ct.as_bytes()).unwrap();
         assert_eq!(shared_a.as_bytes(), shared_b.as_bytes());
     }
-
     #[test]
     fn roundtrip_512() {
         roundtrip(MlKemSuite::MlKem512);
     }
-
     #[test]
     fn roundtrip_768() {
         roundtrip(MlKemSuite::MlKem768);
     }
-
     #[test]
     fn roundtrip_1024() {
         roundtrip(MlKemSuite::MlKem1024);
     }
-
     #[test]
     fn from_os_helpers_roundtrip() {
         let suite = MlKemSuite::MlKem512;
@@ -1434,10 +1301,8 @@ mod tests {
             .expect("OS-backed ML-KEM encapsulation");
         let receiver_shared = decapsulate_mlkem(suite, keypair.secret_key(), ciphertext.as_bytes())
             .expect("ML-KEM decapsulation");
-
         assert_eq!(sender_shared.as_bytes(), receiver_shared.as_bytes());
     }
-
     #[test]
     fn from_rng_keypair_reports_seed_failure() {
         let mut rng = FailingPqSeedRng;
@@ -1447,7 +1312,6 @@ mod tests {
             Err(other) => panic!("expected ML-KEM RNG error, got {other:?}"),
         }
     }
-
     #[test]
     fn from_rng_keypair_rejects_all_zero_seed_material() {
         let mut rng = FixedPqSeedRng { seed: [0_u8; 32] };
@@ -1457,7 +1321,6 @@ mod tests {
             Err(other) => panic!("expected ML-KEM inert seed RNG error, got {other:?}"),
         }
     }
-
     #[test]
     fn from_rng_encapsulation_reports_seed_failure() {
         let suite = MlKemSuite::MlKem512;
@@ -1468,14 +1331,12 @@ mod tests {
         )
         .expect("seeded ML-KEM keypair generation should succeed");
         let mut rng = FailingPqSeedRng;
-
         match encapsulate_mlkem_from_rng(suite, keypair.public_key(), &mut rng) {
             Err(MlKemError::Rng(RngError)) => {}
             Ok(_) => panic!("ML-KEM encapsulation seed RNG failure must be reported"),
             Err(other) => panic!("expected ML-KEM encapsulation RNG error, got {other:?}"),
         }
     }
-
     #[test]
     fn from_rng_encapsulation_rejects_all_zero_seed_material() {
         let suite = MlKemSuite::MlKem512;
@@ -1486,20 +1347,17 @@ mod tests {
         )
         .expect("seeded ML-KEM keypair generation should succeed");
         let mut rng = FixedPqSeedRng { seed: [0_u8; 32] };
-
         match encapsulate_mlkem_from_rng(suite, keypair.public_key(), &mut rng) {
             Err(MlKemError::Rng(RngError)) => {}
             Ok(_) => panic!("ML-KEM encapsulation all-zero seed material must be rejected"),
             Err(other) => panic!("expected ML-KEM inert encapsulation seed error, got {other:?}"),
         }
     }
-
     #[test]
     fn direct_keypair_rejects_all_zero_coin_material() {
         let suite = MlKemSuite::MlKem512;
         let err = generate_mlkem_keypair_from_coins(suite, &[0_u8; 64])
             .expect_err("all-zero ML-KEM keypair coins must be rejected");
-
         match err {
             MlKemError::InertKeyMaterial {
                 suite: actual,
@@ -1511,7 +1369,6 @@ mod tests {
             other => panic!("expected ML-KEM inert keypair coin error, got {other:?}"),
         }
     }
-
     #[test]
     fn direct_encapsulation_rejects_all_zero_coin_material() {
         let suite = MlKemSuite::MlKem512;
@@ -1523,7 +1380,6 @@ mod tests {
         .expect("seeded ML-KEM keypair generation should succeed");
         let err = encapsulate_mlkem_from_coins(suite, keypair.public_key(), &[0_u8; 32])
             .expect_err("all-zero ML-KEM encapsulation coins must be rejected");
-
         match err {
             MlKemError::InertKeyMaterial {
                 suite: actual,
@@ -1535,7 +1391,6 @@ mod tests {
             other => panic!("expected ML-KEM inert encapsulation coin error, got {other:?}"),
         }
     }
-
     #[test]
     fn checked_keypair_generation_validates_output() {
         for suite in MlKemSuite::ALL {
@@ -1545,12 +1400,10 @@ mod tests {
             );
             let keys =
                 try_generate_mlkem_keypair(suite, &mut rng).expect("checked keygen succeeds");
-
             validate_mlkem_key_pair(suite, keys.public_key(), keys.secret_key())
                 .expect("checked ML-KEM keypair validates");
         }
     }
-
     #[test]
     fn generated_keypair_validator_rejects_public_secret_mismatch() {
         let suite = MlKemSuite::MlKem512;
@@ -1565,7 +1418,6 @@ mod tests {
             secret_key: Zeroizing::new(keypair.secret_key().to_vec()),
         };
         mismatched.public_key[0] ^= 0x80;
-
         let err = validate_generated_mlkem_keypair(suite, &mismatched)
             .expect_err("generated ML-KEM keypair mismatch must fail");
         assert!(matches!(
@@ -1576,7 +1428,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn checked_seeded_keypair_matches_compatibility_helper() {
         for suite in MlKemSuite::ALL {
@@ -1587,12 +1438,10 @@ mod tests {
             let compatibility =
                 generate_mlkem_keypair_from_seed(suite, seed, b"checked-seeded-keygen")
                     .expect("seeded keygen succeeds");
-
             assert_eq!(checked.public_key(), compatibility.public_key());
             assert_eq!(checked.secret_key(), compatibility.secret_key());
         }
     }
-
     #[test]
     fn seeded_keypair_is_deterministic() {
         for suite in MlKemSuite::ALL {
@@ -1601,12 +1450,10 @@ mod tests {
                 .expect("first seeded keygen succeeds");
             let second = generate_mlkem_keypair_from_seed(suite, seed, b"seeded-keygen")
                 .expect("second seeded keygen succeeds");
-
             assert_eq!(first.public_key(), second.public_key());
             assert_eq!(first.secret_key(), second.secret_key());
         }
     }
-
     #[test]
     fn seeded_keypair_rejects_all_zero_seed_material() {
         for suite in MlKemSuite::ALL {
@@ -1616,7 +1463,6 @@ mod tests {
                 b"seeded-keygen",
             )
             .expect_err("all-zero ML-KEM keypair seed material must be rejected");
-
             match err {
                 MlKemError::InertKeyMaterial {
                     suite: actual,
@@ -1629,7 +1475,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn seeded_keypair_personalization_changes_output() {
         for suite in MlKemSuite::ALL {
@@ -1638,12 +1483,10 @@ mod tests {
                 .expect("first seeded keygen succeeds");
             let second = generate_mlkem_keypair_from_seed(suite, seed, b"seeded-keygen-b")
                 .expect("second seeded keygen succeeds");
-
             assert_ne!(first.public_key(), second.public_key());
             assert_ne!(first.secret_key(), second.secret_key());
         }
     }
-
     #[test]
     fn seeded_encapsulation_is_deterministic() {
         for suite in MlKemSuite::ALL {
@@ -1651,26 +1494,22 @@ mod tests {
             let enc_seed = HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xC0); 32]);
             let keys = generate_mlkem_keypair_from_seed(suite, key_seed, b"seeded-enc-keygen")
                 .expect("seeded keygen succeeds");
-
             let (first_shared, first_ct) =
                 encapsulate_mlkem_from_seed(suite, keys.public_key(), enc_seed.clone(), b"enc")
                     .expect("seeded encapsulation succeeds");
             let (second_shared, second_ct) =
                 encapsulate_mlkem_from_seed(suite, keys.public_key(), enc_seed, b"enc")
                     .expect("seeded encapsulation succeeds");
-
             assert_eq!(first_ct.as_bytes(), second_ct.as_bytes());
             assert_eq!(first_shared.as_bytes(), second_shared.as_bytes());
         }
     }
-
     #[test]
     fn seeded_encapsulation_rejects_all_zero_seed_material() {
         for suite in MlKemSuite::ALL {
             let key_seed = HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(0xB8); 32]);
             let keys = generate_mlkem_keypair_from_seed(suite, key_seed, b"seeded-enc-keygen")
                 .expect("seeded keygen succeeds");
-
             let err = encapsulate_mlkem_from_seed(
                 suite,
                 keys.public_key(),
@@ -1678,7 +1517,6 @@ mod tests {
                 b"enc",
             )
             .expect_err("all-zero ML-KEM encapsulation seed material must be rejected");
-
             match err {
                 MlKemError::InertKeyMaterial {
                     suite: actual,
@@ -1693,7 +1531,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn seeded_encapsulation_personalization_changes_output() {
         let suite = MlKemSuite::MlKem768;
@@ -1701,18 +1538,15 @@ mod tests {
         let enc_seed = HedgedRngSeed::from_entropy([0xC7; 32]);
         let keys = generate_mlkem_keypair_from_seed(suite, key_seed, b"seeded-enc-keygen")
             .expect("seeded keygen succeeds");
-
         let (first_shared, first_ct) =
             encapsulate_mlkem_from_seed(suite, keys.public_key(), enc_seed.clone(), b"enc-a")
                 .expect("seeded encapsulation succeeds");
         let (second_shared, second_ct) =
             encapsulate_mlkem_from_seed(suite, keys.public_key(), enc_seed, b"enc-b")
                 .expect("seeded encapsulation succeeds");
-
         assert_ne!(first_ct.as_bytes(), second_ct.as_bytes());
         assert_ne!(first_shared.as_bytes(), second_shared.as_bytes());
     }
-
     #[test]
     fn invalid_public_key_length() {
         let mut rng = hedged_chacha20_rng(
@@ -1732,7 +1566,6 @@ mod tests {
             MlKemError::Rng(_) => panic!("unexpected RNG error"),
         }
     }
-
     #[test]
     fn encapsulation_helpers_reject_invalid_public_key_before_entropy() {
         let suite = MlKemSuite::MlKem512;
@@ -1741,7 +1574,6 @@ mod tests {
             HedgedRngSeed::from_entropy([0xF1; 32]),
             b"mlkem-invalid-public-key-preflight",
         );
-
         for (label, result) in [
             (
                 "direct",
@@ -1767,7 +1599,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn decapsulation_rejects_invalid_secret_and_ciphertext_lengths() {
         let suite = MlKemSuite::MlKem512;
@@ -1784,7 +1615,6 @@ mod tests {
             b"decap-length-enc",
         )
         .expect("encapsulation succeeds");
-
         let short_secret = &keys.secret_key()[..keys.secret_key().len() - 1];
         let err =
             decapsulate_mlkem(suite, short_secret, ciphertext.as_bytes()).expect_err("bad secret");
@@ -1799,7 +1629,6 @@ mod tests {
             MlKemError::BackendFailure { .. } => panic!("unexpected backend failure"),
             MlKemError::Rng(_) => panic!("unexpected RNG error"),
         }
-
         let short_ciphertext = &ciphertext.as_bytes()[..ciphertext.as_bytes().len() - 1];
         let err =
             decapsulate_mlkem(suite, keys.secret_key(), short_ciphertext).expect_err("bad ct");
@@ -1815,7 +1644,6 @@ mod tests {
             MlKemError::Rng(_) => panic!("unexpected RNG error"),
         }
     }
-
     #[test]
     fn validation_rejects_all_zero_ciphertext_material() {
         for suite in MlKemSuite::ALL {
@@ -1825,7 +1653,6 @@ mod tests {
             assert_inert_key_material(err, suite, "ciphertext");
         }
     }
-
     #[test]
     fn decapsulation_rejects_all_zero_ciphertext_material() {
         let suite = MlKemSuite::MlKem768;
@@ -1836,12 +1663,10 @@ mod tests {
         )
         .expect("seeded keygen succeeds");
         let all_zero_ciphertext = vec![0_u8; suite.ciphertext_len()];
-
         let err = decapsulate_mlkem(suite, keys.secret_key(), all_zero_ciphertext.as_slice())
             .expect_err("all-zero ML-KEM ciphertext must fail before decapsulation");
         assert_inert_key_material(err, suite, "ciphertext");
     }
-
     #[test]
     fn decapsulation_with_wrong_secret_does_not_match_sender_secret() {
         let suite = MlKemSuite::MlKem768;
@@ -1864,14 +1689,11 @@ mod tests {
             b"wrong-secret-enc",
         )
         .expect("encapsulation succeeds");
-
         let wrong_shared =
             decapsulate_mlkem(suite, wrong_recipient.secret_key(), ciphertext.as_bytes())
                 .expect("ML-KEM decapsulation returns an implicit-rejection secret");
-
         assert_ne!(sender_shared.as_bytes(), wrong_shared.as_bytes());
     }
-
     #[test]
     fn decapsulation_with_tampered_ciphertext_does_not_match_sender_secret() {
         let suite = MlKemSuite::MlKem768;
@@ -1890,13 +1712,10 @@ mod tests {
         .expect("encapsulation succeeds");
         let mut tampered = ciphertext.as_bytes().to_vec();
         tampered[0] ^= 0x80;
-
         let tampered_shared = decapsulate_mlkem(suite, recipient.secret_key(), &tampered)
             .expect("ML-KEM decapsulation returns an implicit-rejection secret");
-
         assert_ne!(sender_shared.as_bytes(), tampered_shared.as_bytes());
     }
-
     #[test]
     fn encapsulation_rejects_public_key_from_different_suite() {
         let keypair = generate_mlkem_keypair_from_seed(
@@ -1907,10 +1726,8 @@ mod tests {
         .expect("seeded keygen succeeds");
         let mut rng =
             deterministic_chacha20_rng(HedgedRngSeed::from_entropy([0xE7; 32]), b"wrong-suite-enc");
-
         let err = encapsulate_mlkem(MlKemSuite::MlKem768, keypair.public_key(), &mut rng)
             .expect_err("ML-KEM-512 public key must not validate as ML-KEM-768");
-
         match err {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("public key")),
             MlKemError::KeyPairMismatch { .. }
@@ -1923,7 +1740,6 @@ mod tests {
             MlKemError::Rng(_) => panic!("unexpected RNG error"),
         }
     }
-
     #[test]
     fn validation_accepts_generated_exact_lengths() {
         for suite in MlKemSuite::ALL {
@@ -1940,13 +1756,11 @@ mod tests {
                 b"exact-length-enc",
             )
             .expect("encapsulation succeeds");
-
             validate_mlkem_public_key(suite, keys.public_key()).expect("public key validates");
             validate_mlkem_secret_key(suite, keys.secret_key()).expect("secret key validates");
             validate_mlkem_ciphertext(suite, ciphertext.as_bytes()).expect("ciphertext validates");
         }
     }
-
     #[test]
     fn validation_rejects_noncanonical_public_key_coefficients() {
         for suite in MlKemSuite::ALL {
@@ -1958,11 +1772,9 @@ mod tests {
             .expect("seeded keygen succeeds");
             let mut public_key = keys.public_key().to_vec();
             set_first_public_key_coefficient_noncanonical(&mut public_key);
-
             let err = validate_mlkem_public_key(suite, public_key.as_slice())
                 .expect_err("noncanonical public key must fail validation");
             assert_noncanonical_public_key(err, suite);
-
             let err = encapsulate_mlkem_from_seed(
                 suite,
                 public_key.as_slice(),
@@ -1973,16 +1785,13 @@ mod tests {
             assert_noncanonical_public_key(err, suite);
         }
     }
-
     #[test]
     fn validation_rejects_all_zero_public_key_material() {
         for suite in MlKemSuite::ALL {
             let all_zero_public = vec![0_u8; suite.public_key_len()];
-
             let err = validate_mlkem_public_key(suite, all_zero_public.as_slice())
                 .expect_err("all-zero ML-KEM public key must fail validation");
             assert_inert_key_material(err, suite, "public key");
-
             let err = encapsulate_mlkem_from_seed(
                 suite,
                 all_zero_public.as_slice(),
@@ -1993,7 +1802,6 @@ mod tests {
             assert_inert_key_material(err, suite, "public key");
         }
     }
-
     #[test]
     fn secret_key_embeds_generated_public_key_for_each_suite() {
         for suite in MlKemSuite::ALL {
@@ -2003,7 +1811,6 @@ mod tests {
                 b"embedded-public-key",
             )
             .expect("seeded keygen succeeds");
-
             assert_eq!(
                 suite
                     .public_key_from_secret_key(keys.secret_key())
@@ -2020,7 +1827,6 @@ mod tests {
                 .expect("generated ML-KEM key pair validates");
         }
     }
-
     #[test]
     fn validation_rejects_mismatched_key_pair() {
         let suite = MlKemSuite::MlKem768;
@@ -2036,7 +1842,6 @@ mod tests {
             b"keypair-mismatch-b",
         )
         .expect("seeded keygen succeeds");
-
         let err = validate_mlkem_key_pair(suite, keys.public_key(), other.secret_key())
             .expect_err("mismatched ML-KEM key pair must fail");
         assert!(matches!(
@@ -2047,7 +1852,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn validation_rejects_secret_key_public_hash_drift() {
         let suite = MlKemSuite::MlKem768;
@@ -2059,7 +1863,6 @@ mod tests {
         .expect("seeded keygen succeeds");
         let mut secret_key = keys.secret_key().to_vec();
         secret_key[suite.secret_key_public_key_hash_offset()] ^= 0x80;
-
         let err = validate_mlkem_key_pair(suite, keys.public_key(), secret_key.as_slice())
             .expect_err("secret-key embedded public hash drift must fail");
         assert!(matches!(
@@ -2070,7 +1873,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn secret_key_validation_rejects_public_hash_drift() {
         let suite = MlKemSuite::MlKem768;
@@ -2082,7 +1884,6 @@ mod tests {
         .expect("seeded keygen succeeds");
         let mut secret_key = keys.secret_key().to_vec();
         secret_key[suite.secret_key_public_key_hash_offset()] ^= 0x40;
-
         let err = validate_mlkem_secret_key(suite, secret_key.as_slice())
             .expect_err("standalone secret-key hash drift must fail");
         assert!(matches!(
@@ -2093,7 +1894,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn secret_key_validation_rejects_noncanonical_embedded_public_key() {
         let suite = MlKemSuite::MlKem768;
@@ -2113,12 +1913,10 @@ mod tests {
         let public_hash_start = suite.secret_key_public_key_hash_offset();
         secret_key[public_hash_start..public_hash_start + MLKEM_PUBLIC_KEY_HASH_BYTES]
             .copy_from_slice(&public_hash);
-
         let err = validate_mlkem_secret_key(suite, secret_key.as_slice())
             .expect_err("secret-key embedded public key must be canonical");
         assert_noncanonical_public_key(err, suite);
     }
-
     #[test]
     fn secret_key_validation_rejects_all_zero_embedded_public_key() {
         let suite = MlKemSuite::MlKem768;
@@ -2136,13 +1934,10 @@ mod tests {
         let public_hash_start = suite.secret_key_public_key_hash_offset();
         secret_key[public_hash_start..public_hash_start + MLKEM_PUBLIC_KEY_HASH_BYTES]
             .copy_from_slice(&public_hash);
-
         let err = validate_mlkem_secret_key(suite, secret_key.as_slice())
             .expect_err("secret-key embedded all-zero public key must fail validation");
-
         assert_inert_key_material(err, suite, "embedded public key");
     }
-
     #[test]
     fn secret_key_validation_rejects_all_zero_implicit_rejection_seed() {
         for suite in MlKemSuite::ALL {
@@ -2155,17 +1950,14 @@ mod tests {
             let mut secret_key = keys.secret_key().to_vec();
             let seed_start = suite.secret_key_implicit_rejection_seed_offset();
             secret_key[seed_start..].fill(0);
-
             let err = validate_mlkem_secret_key(suite, secret_key.as_slice())
                 .expect_err("all-zero implicit-rejection seed must fail validation");
             assert_inert_key_material(err, suite, "implicit rejection seed");
-
             let err = validate_mlkem_key_pair(suite, keys.public_key(), secret_key.as_slice())
                 .expect_err("all-zero implicit-rejection seed must fail key-pair validation");
             assert_inert_key_material(err, suite, "implicit rejection seed");
         }
     }
-
     #[test]
     fn secret_key_validation_rejects_noncanonical_private_component() {
         for suite in MlKemSuite::ALL {
@@ -2177,13 +1969,11 @@ mod tests {
             .expect("seeded keygen succeeds");
             let mut secret_key = keys.secret_key().to_vec();
             set_first_12_bit_coefficient_noncanonical(&mut secret_key);
-
             let err = validate_mlkem_secret_key(suite, secret_key.as_slice())
                 .expect_err("secret-key private component must be canonical");
             assert_noncanonical_encoding(err, suite, "private component");
         }
     }
-
     #[test]
     fn validation_rejects_all_zero_secret_key_material() {
         for suite in MlKemSuite::ALL {
@@ -2201,21 +1991,17 @@ mod tests {
             )
             .expect("encapsulation succeeds");
             let all_zero_secret = vec![0_u8; suite.secret_key_len()];
-
             let err = validate_mlkem_secret_key(suite, all_zero_secret.as_slice())
                 .expect_err("all-zero ML-KEM secret key must fail validation");
             assert_inert_key_material(err, suite, "secret key");
-
             let err = validate_mlkem_key_pair(suite, keys.public_key(), all_zero_secret.as_slice())
                 .expect_err("all-zero ML-KEM secret key must fail key-pair validation");
             assert_inert_key_material(err, suite, "secret key");
-
             let err = decapsulate_mlkem(suite, all_zero_secret.as_slice(), ciphertext.as_bytes())
                 .expect_err("all-zero ML-KEM secret key must fail before decapsulation");
             assert_inert_key_material(err, suite, "secret key");
         }
     }
-
     #[test]
     fn decapsulation_rejects_secret_key_public_hash_drift() {
         let suite = MlKemSuite::MlKem768;
@@ -2234,7 +2020,6 @@ mod tests {
         .expect("encapsulation succeeds");
         let mut secret_key = keys.secret_key().to_vec();
         secret_key[suite.secret_key_public_key_hash_offset()] ^= 0x20;
-
         let err = decapsulate_mlkem(suite, secret_key.as_slice(), ciphertext.as_bytes())
             .expect_err("corrupted secret-key hash must fail before decapsulation");
         assert!(matches!(
@@ -2245,7 +2030,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn decapsulation_rejects_all_zero_implicit_rejection_seed() {
         let suite = MlKemSuite::MlKem768;
@@ -2265,12 +2049,10 @@ mod tests {
         let mut secret_key = keys.secret_key().to_vec();
         let seed_start = suite.secret_key_implicit_rejection_seed_offset();
         secret_key[seed_start..].fill(0);
-
         let err = decapsulate_mlkem(suite, secret_key.as_slice(), ciphertext.as_bytes())
             .expect_err("all-zero implicit-rejection seed must fail before decapsulation");
         assert_inert_key_material(err, suite, "implicit rejection seed");
     }
-
     #[test]
     fn decapsulation_rejects_noncanonical_secret_key_private_component() {
         let suite = MlKemSuite::MlKem768;
@@ -2289,25 +2071,21 @@ mod tests {
         .expect("encapsulation succeeds");
         let mut secret_key = keys.secret_key().to_vec();
         set_first_12_bit_coefficient_noncanonical(&mut secret_key);
-
         let err = decapsulate_mlkem(suite, secret_key.as_slice(), ciphertext.as_bytes())
             .expect_err("noncanonical secret-key private component must fail before decapsulation");
         assert_noncanonical_encoding(err, suite, "private component");
     }
-
     #[test]
     fn metadata_names_are_unique_across_suites() {
         let names: Vec<_> = MlKemSuite::ALL
             .iter()
             .map(|suite| suite.metadata().name)
             .collect();
-
         assert_eq!(names.len(), 3);
         assert_ne!(names[0], names[1]);
         assert_ne!(names[0], names[2]);
         assert_ne!(names[1], names[2]);
     }
-
     #[test]
     fn mlkem_parameters_align_with_bindings() {
         let params = mlkem_parameters(MlKemSuite::MlKem768);
@@ -2316,31 +2094,26 @@ mod tests {
         assert_eq!(params.ciphertext, MLKEM768_CIPHERTEXT_BYTES);
         assert_eq!(params.shared_secret, MLKEM768_SHARED_SECRET_BYTES);
     }
-
     #[test]
     fn validation_rejects_short_inputs() {
         let res = validate_mlkem_public_key(MlKemSuite::MlKem1024, &[0u8; 16]);
         assert!(res.is_err());
     }
-
     #[test]
     fn validation_error_display_includes_kind_and_lengths() {
         let err = validate_mlkem_secret_key(MlKemSuite::MlKem768, &[0u8; 7])
             .expect_err("short secret key must be rejected");
         let rendered = err.to_string();
-
         assert!(rendered.contains("ML-KEM-768 secret key"));
         assert!(rendered.contains('7'));
         assert!(rendered.contains("2400"));
     }
-
     #[test]
     fn validation_rejects_long_inputs_for_each_kind() {
         let suite = MlKemSuite::MlKem512;
         let long_public = vec![0u8; suite.public_key_len() + 1];
         let long_secret = vec![0u8; suite.secret_key_len() + 1];
         let long_ciphertext = vec![0u8; suite.ciphertext_len() + 1];
-
         for (label, result) in [
             ("public key", validate_mlkem_public_key(suite, &long_public)),
             ("secret key", validate_mlkem_secret_key(suite, &long_secret)),
@@ -2358,7 +2131,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn suite_parameters_cover_all_lengths() {
         for suite in MlKemSuite::ALL {
@@ -2371,14 +2143,12 @@ mod tests {
             assert_eq!(via_method.shared_secret, suite.shared_secret_len());
         }
     }
-
     #[test]
     fn suite_into_parameters_matches_method() {
         let params_from_into: MlKemParameters = MlKemSuite::MlKem768.into();
         let params_from_method = MlKemSuite::MlKem768.parameters();
         assert_eq!(params_from_into, params_from_method);
     }
-
     #[test]
     fn metadata_roundtrips_kem_id() {
         for suite in MlKemSuite::ALL {
@@ -2392,7 +2162,6 @@ mod tests {
         }
         assert!(MlKemSuite::from_kem_id(0xFF).is_none());
     }
-
     #[test]
     fn metadata_matches_bindings() {
         for suite in MlKemSuite::ALL {
@@ -2400,7 +2169,6 @@ mod tests {
             let params = metadata.parameters;
             assert_eq!(params, mlkem_parameters(suite));
             assert_eq!(params, suite.parameters());
-
             match suite {
                 MlKemSuite::MlKem512 => {
                     assert_eq!(metadata.name, "ML-KEM-512");
@@ -2427,14 +2195,12 @@ mod tests {
                     assert_eq!(metadata.dv, 5);
                 }
             }
-
             assert_eq!(metadata.module_degree, 256);
             assert_eq!(metadata.modulus_q, 3329);
             assert_eq!(metadata.eta2, 2);
             assert_eq!(metadata.parameters.shared_secret, 32);
         }
     }
-
     #[test]
     fn suite_parsing_accepts_common_aliases() {
         assert_eq!(
@@ -2460,14 +2226,11 @@ mod tests {
         let err = MlKemSuite::from_str("unknown-suite").unwrap_err();
         assert_eq!(err, SuiteParseError("unknown-suite".to_string()));
     }
-
     #[test]
     fn suite_parse_error_display_preserves_input() {
         let err = MlKemSuite::from_str("mlkem999").unwrap_err();
-
         assert_eq!(err.to_string(), "unknown ML-KEM suite 'mlkem999'");
     }
-
     #[test]
     fn suite_display_uses_canonical_lowercase_names() {
         assert_eq!(MlKemSuite::MlKem512.to_string(), "mlkem512");

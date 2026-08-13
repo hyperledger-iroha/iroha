@@ -1,17 +1,12 @@
 //! Crate with utilities for implementing smart contract FFI
 // This crate relies on the standard library.
 #![allow(unsafe_code)]
-
 pub use dbg::*;
 pub use getrandom;
-pub use iroha_smart_contract_codec::{
-    decode_with_length_prefix_from_raw, encode_with_length_prefix,
-};
+pub use iroha_smart_contract_codec::{decode_with_length_prefix_from_raw, encode_with_length_prefix};
 pub use norito::{NoritoDeserialize, NoritoSerialize};
-
 mod dbg;
 pub mod log;
-
 /// Registers a custom `getrandom` function that:
 ///
 /// 1. prints `error` message to the log
@@ -66,7 +61,6 @@ macro_rules! register_getrandom_err_callback {
         }
     };
 }
-
 /// Encode the given object and call the given function with the pointer and length of the allocation
 ///
 /// # Warning
@@ -84,13 +78,10 @@ pub unsafe fn encode_and_execute<T: NoritoSerialize, O>(
     // NOTE: It's imperative that encoded object is stored on the heap
     // because heap corresponds to linear memory when compiled for the IVM
     let bytes = norito::to_bytes(obj).expect("Norito serialization must succeed");
-
     unsafe { fun(bytes.as_ptr(), bytes.len()) }
 }
-
 #[cfg(test)]
 register_getrandom_err_callback!();
-
 #[cfg(test)]
 mod tests {
     // The Norito derive macros may reference cfg(feature = "packed-struct")
@@ -98,7 +89,6 @@ mod tests {
     // unexpected-cfgs lint in this test module only.
     #![allow(unexpected_cfgs)]
     use core::{convert::TryInto, ptr};
-
     // Silence unexpected-cfgs emitted from norito derives inside tests where
     // the workspace enables strict cfg checking for feature names.
     #[allow(unexpected_cfgs)]
@@ -108,7 +98,6 @@ mod tests {
         a: u32,
         b: bool,
     }
-
     #[test]
     fn encode_decode_roundtrip() {
         let value = Dummy { a: 5, b: true };
@@ -118,13 +107,11 @@ mod tests {
             bytes.len(),
             usize::from_le_bytes(bytes[..len_size_bytes].try_into().unwrap())
         );
-
         // SAFETY: `decode_with_length_prefix_from_raw` takes ownership of the pointer.
         let ptr = Box::into_raw(bytes) as *const u8;
         let decoded = unsafe { super::decode_with_length_prefix_from_raw::<Dummy>(ptr) };
         assert_eq!(decoded, value);
     }
-
     #[test]
     fn getrandom_callback_fills_deterministically() {
         // Safety: destination buffer is valid for writes.
@@ -137,7 +124,6 @@ mod tests {
             [0xA5, 0xFF, 0x59, 0xB3, 0x0D, 0x67, 0xC1, 0x1B],
             "deterministic pattern must remain stable"
         );
-
         // Null pointer should be rejected.
         let err = unsafe { super::__getrandom_v03_custom(ptr::null_mut(), 1) }
             .expect_err("expected error on null dest");

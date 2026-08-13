@@ -19,7 +19,6 @@ impl ValidQueryRequest {
             limits,
         )
     }
-
     /// Validate a query for an API client using world-state and latest committed block header.
     ///
     /// # Errors
@@ -42,7 +41,6 @@ impl ValidQueryRequest {
         )?;
         Ok(Self { request, limits })
     }
-
     /// Validate a query for an IVM program.
     ///
     /// NOTE: The previous API used `ivm::state` types directly which are no longer exposed.
@@ -70,7 +68,6 @@ impl ValidQueryRequest {
             limits,
         })
     }
-
     /// Execute a validated query request.
     ///
     /// # Errors
@@ -84,7 +81,6 @@ impl ValidQueryRequest {
     ) -> Result<QueryResponse, Error> {
         self.execute_stored_and_bind_revalidation(live_query_store, state, authority, None, None)
     }
-
     /// Execute a validated query request with an optional state handle for
     /// bounded stored cursors that can replay one continuation page at a time.
     ///
@@ -107,7 +103,6 @@ impl ValidQueryRequest {
             None,
         )
     }
-
     /// Execute a validated stored query with an owning replay state and the
     /// client-provided budget for the initial `Start` request.
     ///
@@ -130,7 +125,6 @@ impl ValidQueryRequest {
             stored_start_budget,
         )
     }
-
     fn execute_stored_and_bind_revalidation(
         self,
         live_query_store: &LiveQueryStoreHandle,
@@ -161,7 +155,6 @@ impl ValidQueryRequest {
             replay_state,
             stored_start_budget,
         )?;
-
         if let (
             Some(archive),
             QueryResponse::Iterable(QueryOutput {
@@ -175,10 +168,8 @@ impl ValidQueryRequest {
             live_query_store.drop_query(&cursor.query);
             return Err(error);
         }
-
         Ok(response)
     }
-
     #[allow(clippy::too_many_lines)] // not much we can do, we _need_ to list all the box types here
     fn execute_stored_inner(
         self,
@@ -196,7 +187,6 @@ impl ValidQueryRequest {
             }
             QueryRequest::Start(iter_query) => {
                 use iroha_data_model::query;
-
                 fn try_decode_query<Q>(
                     erased: &query::ErasedIterQuery<
                         impl HasProjection<PredicateMarker>
@@ -210,7 +200,6 @@ impl ValidQueryRequest {
                 {
                     decode_iter_query_payload_exact(erased.payload())
                 }
-
                 #[allow(clippy::too_many_arguments)]
                 fn run_dispatch<T, Q, F>(
                     qbox: &query::QueryBox<query::QueryOutputBatchBox>,
@@ -263,7 +252,6 @@ impl ValidQueryRequest {
                             ordinary_memory::OrdinaryCursorMode::Stored,
                             state,
                         )?;
-
                         // Postprocess and register a live iterator (or prepared fast-start).
                         let output = handle_iter_start_stored_replayable(
                             iter,
@@ -279,7 +267,6 @@ impl ValidQueryRequest {
                     }
                     Ok(None)
                 }
-
                 let params = &iter_query.params;
                 #[cfg_attr(not(feature = "fast_dsl"), allow(unused_variables))]
                 let stored_cursor_budget = {
@@ -1117,7 +1104,6 @@ impl ValidQueryRequest {
                         ),
                     }
                 };
-
                 // Try dispatch for all supported iterable queries, keyed by their item type.
                 // For item types that have multiple concrete query variants (e.g., Account),
                 // attempt decodes in priority order.
@@ -1742,7 +1728,6 @@ impl ValidQueryRequest {
                 )? {
                     return Ok(resp);
                 }
-
                 // Boxed registry parity for the variants which are also
                 // available through the fast-DSL item-kind path.
                 macro_rules! try_remaining_stored_dispatch {
@@ -1802,7 +1787,6 @@ impl ValidQueryRequest {
                     iroha_data_model::nexus::FeeSponsorProgramId,
                     iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
                 );
-
                 Err(Error::Conversion(
                     "unsupported iterable query type".to_string(),
                 ))
@@ -1812,7 +1796,6 @@ impl ValidQueryRequest {
             )),
         }
     }
-
     /// Execute a validated query request using an ephemeral iterator for iterable queries.
     ///
     /// Iterable queries return only the first batch and do not allocate a
@@ -1830,7 +1813,6 @@ impl ValidQueryRequest {
         self.execute_ephemeral_with_stats(live_query_store, state, authority, None)
             .map(|(response, _)| response)
     }
-
     pub(crate) fn execute_ephemeral_with_stats(
         self,
         live_query_store: &LiveQueryStoreHandle,
@@ -1843,7 +1825,6 @@ impl ValidQueryRequest {
         stats.record_response(&response, budget)?;
         Ok((response, stats))
     }
-
     #[allow(clippy::too_many_lines)]
     fn execute_ephemeral_inner_with_stats(
         self,
@@ -1894,7 +1875,6 @@ impl ValidQueryRequest {
             }
             QueryRequest::Start(iter_query) => {
                 use iroha_data_model::query;
-
                 fn try_decode_query<Q>(
                     erased: &query::ErasedIterQuery<
                         impl HasProjection<PredicateMarker>
@@ -1908,7 +1888,6 @@ impl ValidQueryRequest {
                 {
                     decode_iter_query_payload_exact(erased.payload())
                 }
-
                 #[allow(clippy::too_many_arguments)]
                 fn run_dispatch<T, Q, F>(
                     qbox: &query::QueryBox<query::QueryOutputBatchBox>,
@@ -1981,7 +1960,6 @@ impl ValidQueryRequest {
                             ordinary_memory::OrdinaryCursorMode::Ephemeral,
                             state,
                         )?;
-
                         // Postprocess: sort/paginate/project and return only the first batch (no cursor)
                         let (output, stats) = apply_query_postprocessing_ephemeral_with_budget(
                             iter,
@@ -1994,7 +1972,6 @@ impl ValidQueryRequest {
                     }
                     Ok(None)
                 }
-
                 let params = &iter_query.params;
                 // Fast-DSL path: when the boxed query payload is not present, reconstruct
                 // from item kind and encoded predicate/selector.
@@ -2334,7 +2311,6 @@ impl ValidQueryRequest {
                 let Some(qbox) = legacy_query_box(&iter_query) else {
                     return Err(Error::Conversion("missing iterator payload".into()));
                 };
-
                 if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::domain::Domain,
                     iroha_data_model::query::domain::prelude::FindDomainsByAccountId,
@@ -2930,7 +2906,6 @@ impl ValidQueryRequest {
                 )? {
                     return Ok((resp, processed_items));
                 }
-
                 macro_rules! try_remaining_ephemeral_dispatch {
                     ($item:ty, $query:ty) => {
                         if let Some((response, processed_items)) = run_dispatch::<$item, $query, _>(
@@ -2992,7 +2967,6 @@ impl ValidQueryRequest {
                     iroha_data_model::nexus::FeeSponsorProgramId,
                     iroha_data_model::query::nexus::prelude::FindFeeSponsorProgramIds
                 );
-
                 Err(Error::Conversion(
                     "unsupported iterable query in ephemeral execution".into(),
                 ))

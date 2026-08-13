@@ -26,6 +26,123 @@ RELEASE_LANGUAGE_TOOL_NAMES = (
 REQUIRED_RUNNER_TOOL_NAMES = tuple(
     sorted((*RELEASE_SHELL_UTILITY_NAMES, *RELEASE_LANGUAGE_TOOL_NAMES))
 )
+PROBE_OPERATION_IDS = {
+    "awk": "release-tool.awk-program.v1",
+    "basename": "release-tool.basename-path.v1",
+    "cargo": "release-tool.cargo-version.v1",
+    "cargo-verus": "release-tool.cargo-verus-help.v1",
+    "cat": "release-tool.cat-file.v1",
+    "chmod": "release-tool.chmod-mode.v1",
+    "cmp": "release-tool.cmp-different-quiet.v1",
+    "cp": "release-tool.cp-file.v1",
+    "cut": "release-tool.cut-byte.v1",
+    "diff": "release-tool.diff-different-brief.v1",
+    "dirname": "release-tool.dirname-path.v1",
+    "env": "release-tool.env-closed.v1",
+    "find": "release-tool.find-file.v1",
+    "git-index-pack": "release-tool.git-index-pack-empty.v1",
+    "git-upload-pack": "release-tool.git-upload-pack-missing.v1",
+    "grep": "release-tool.grep-exact.v1",
+    "java": "release-tool.java-version.v1",
+    "ln": "release-tool.ln-hardlink.v1",
+    "ls": "release-tool.ls-entry.v1",
+    "mkdir": "release-tool.mkdir-directory.v1",
+    "mkfifo": "release-tool.mkfifo-fifo.v1",
+    "mktemp": "release-tool.mktemp-file.v1",
+    "mv": "release-tool.mv-file.v1",
+    "node": "release-tool.node-exec-path.v1",
+    "openssl": "release-tool.openssl-sha256.v1",
+    "rm": "release-tool.rm-file.v1",
+    "rmdir": "release-tool.rmdir-directory.v1",
+    "rustc": "release-tool.rustc-version.v1",
+    "sed": "release-tool.sed-first-line.v1",
+    "sh": "release-tool.sh-builtin-output.v1",
+    ("shasum" if sys.platform == "darwin" else "sha256sum"): (
+        "release-tool.shasum-empty.v1"
+        if sys.platform == "darwin"
+        else "release-tool.sha256sum-empty.v1"
+    ),
+    "sleep": "release-tool.sleep-duration.v1",
+    "swift": "release-tool.swift-version.v1",
+    "tail": "release-tool.tail-last-line.v1",
+    "tee": "release-tool.tee-file.v1",
+    "tlapm": "release-tool.tlapm-version.v1",
+    "tr": "release-tool.tr-byte.v1",
+    "uname": "release-tool.uname-system.v1",
+    "verus": "release-tool.verus-version.v1",
+    "wc": "release-tool.wc-empty.v1",
+    "xargs": "release-tool.xargs-protected-shell.v1",
+}
+
+
+def fixture_tool_probe_helper() -> bytes:
+    """Return a deterministic fixture producer for probe-plumbing tests.
+
+    The production helper has its own adversarial suite. Bootstrap/receipt
+    fixtures use this non-executing producer so those tests cannot launch
+    Cargo, SDK engines, or host utilities merely to exercise provenance flow.
+    """
+
+    operations = repr(dict(sorted(PROBE_OPERATION_IDS.items())))
+    names = repr(REQUIRED_RUNNER_TOOL_NAMES)
+    return f'''from pathlib import Path
+import argparse
+import hashlib
+import json
+import os
+
+OPERATIONS = {operations}
+NAMES = {names}
+parser = argparse.ArgumentParser()
+parser.add_argument("--tool-manifest", type=Path, required=True)
+parser.add_argument("--expected-tool-manifest-sha256", required=True)
+parser.add_argument("--probe-root", type=Path, required=True)
+args = parser.parse_args()
+data = args.tool_manifest.read_bytes()
+if hashlib.sha256(data).hexdigest() != args.expected_tool_manifest_sha256:
+    raise SystemExit(2)
+manifest = json.loads(data)
+if set(manifest) != {{"schema_version", "tools"}} or manifest["schema_version"] != 1:
+    raise SystemExit(2)
+tools = manifest["tools"]
+if tuple(sorted(tools)) != NAMES or len(tools) != 41:
+    raise SystemExit(2)
+if args.probe_root.exists() or args.probe_root.is_symlink():
+    raise SystemExit(2)
+digest = hashlib.sha256(b"fixture-probe-contract-v1").hexdigest()
+records = {{}}
+for name in NAMES:
+    record = tools[name]
+    if set(record) != {{"archive_id", "path", "sha256"}}:
+        raise SystemExit(2)
+    path = Path(record["path"])
+    metadata = path.lstat()
+    if hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"]:
+        raise SystemExit(2)
+    records[name] = {{
+        "archive_id": record["archive_id"],
+        "exit_status": 128 if name in {{"git-index-pack", "git-upload-pack"}} else 1 if name in {{"cmp", "diff"}} else 0,
+        "invocation_sha256": hashlib.sha256(("invocation:" + OPERATIONS[name]).encode()).hexdigest(),
+        "mode": "0500",
+        "operation_id": OPERATIONS[name],
+        "postcondition_sha256": hashlib.sha256(("postcondition:" + OPERATIONS[name]).encode()).hexdigest(),
+        "sha256": record["sha256"],
+        "size_bytes": metadata.st_size,
+        "stderr_sha256": hashlib.sha256(b"").hexdigest(),
+        "stderr_size_bytes": 0,
+        "stdout_sha256": hashlib.sha256(b"").hexdigest(),
+        "stdout_size_bytes": 0,
+    }}
+value = {{
+    "format": "iroha-sumeragi-v2-release-tool-functional-probes",
+    "host_family": "darwin" if os.uname().sysname == "Darwin" else "linux",
+    "probe_contract_sha256": digest,
+    "schema_version": 1,
+    "tool_count": 41,
+    "tools": records,
+}}
+print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+'''.encode()
 
 
 def provision_future_archived_python_runtime(source: Path, root: Path) -> None:

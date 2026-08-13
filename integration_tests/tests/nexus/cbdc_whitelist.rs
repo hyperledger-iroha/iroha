@@ -1,14 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Nexus CBDC whitelist validation workflow.
 #![cfg(target_family = "unix")]
-
 use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
     str::FromStr,
 };
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -22,18 +20,15 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use norito::{decode_from_bytes, json::Value, to_bytes};
-
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("integration_tests workspace root")
         .to_path_buf()
 }
-
 fn profile_path(root: &Path) -> PathBuf {
     root.join("fixtures/space_directory/profile/cbdc_lane_profile.json")
 }
-
 fn load_cbdc_profile() -> Result<(Value, PathBuf)> {
     let root = repo_root();
     let path = profile_path(&root);
@@ -52,27 +47,22 @@ fn load_cbdc_profile() -> Result<(Value, PathBuf)> {
         norito::json::from_str(&profile_text).wrap_err("failed to parse CBDC profile JSON")?;
     Ok((profile, profile_dir))
 }
-
 fn parse_uaid(value: &str) -> Result<UniversalAccountId> {
     UniversalAccountId::from_str(value).wrap_err_with(|| {
         format!("invalid UAID literal {value} (expected `uaid:<hex>` or 64-hex digest)")
     })
 }
-
 #[test]
 fn parse_uaid_accepts_raw_or_prefixed() {
     let hash = Hash::new(b"cbdc-whitelist-uaid");
     let hex = hash.to_string();
     let prefixed = format!("uaid:{hex}");
     let expected = UniversalAccountId::from_hash(hash);
-
     let parsed_raw = parse_uaid(&hex).expect("parse raw UAID");
     let parsed_prefixed = parse_uaid(&prefixed).expect("parse prefixed UAID");
-
     assert_eq!(parsed_raw, expected);
     assert_eq!(parsed_prefixed, expected);
 }
-
 fn parse_numeric(value: &Value, context: &str) -> Result<Quantity> {
     let raw = match value {
         Value::String(text) => text.clone(),
@@ -82,7 +72,6 @@ fn parse_numeric(value: &Value, context: &str) -> Result<Quantity> {
     Quantity::from_str(&raw)
         .wrap_err_with(|| format!("{context}: failed to parse numeric value {raw}"))
 }
-
 fn parse_role(value: Option<&Value>, context: &str) -> Result<Option<AmxRole>> {
     match value.and_then(Value::as_str) {
         Some("Initiator") => Ok(Some(AmxRole::Initiator)),
@@ -91,7 +80,6 @@ fn parse_role(value: Option<&Value>, context: &str) -> Result<Option<AmxRole>> {
         None => Ok(None),
     }
 }
-
 fn parse_window(value: &Value, context: &str) -> Result<AllowanceWindow> {
     match value.as_str() {
         Some("PerSlot") => Ok(AllowanceWindow::PerSlot),
@@ -101,7 +89,6 @@ fn parse_window(value: &Value, context: &str) -> Result<AllowanceWindow> {
         None => Err(eyre!("{context}: allowance window must be a string")),
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn decode_capability_manifest(value: &Value) -> Result<AssetPermissionManifest> {
     let manifest_obj = value
@@ -137,7 +124,6 @@ fn decode_capability_manifest(value: &Value) -> Result<AssetPermissionManifest> 
         .get("entries")
         .and_then(Value::as_array)
         .ok_or_else(|| eyre!("capability manifest missing entries array"))?;
-
     let mut entries: Vec<ManifestEntry> = Vec::with_capacity(entries_value.len());
     for (idx, entry_value) in entries_value.iter().enumerate() {
         let entry_obj = entry_value
@@ -175,7 +161,6 @@ fn decode_capability_manifest(value: &Value) -> Result<AssetPermissionManifest> 
                 &format!("manifest entry #{idx} role"),
             )?,
         };
-
         let effect_value = entry_obj
             .get("effect")
             .and_then(Value::as_object)
@@ -216,7 +201,6 @@ fn decode_capability_manifest(value: &Value) -> Result<AssetPermissionManifest> 
                 ));
             }
         };
-
         let notes = entry_obj
             .get("notes")
             .and_then(Value::as_str)
@@ -227,7 +211,6 @@ fn decode_capability_manifest(value: &Value) -> Result<AssetPermissionManifest> 
             notes,
         });
     }
-
     Ok(AssetPermissionManifest {
         version,
         uaid,
@@ -238,7 +221,6 @@ fn decode_capability_manifest(value: &Value) -> Result<AssetPermissionManifest> 
         entries,
     })
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn cbdc_whitelist_entries_match_capability_manifests() -> Result<()> {
@@ -246,7 +228,6 @@ fn cbdc_whitelist_entries_match_capability_manifests() -> Result<()> {
     let profile_obj = profile
         .as_object()
         .ok_or_else(|| eyre!("CBDC profile must be a JSON object"))?;
-
     let group = profile_obj
         .get("composability_group")
         .and_then(Value::as_object)
@@ -275,7 +256,6 @@ fn cbdc_whitelist_entries_match_capability_manifests() -> Result<()> {
         !whitelist.is_empty(),
         "composability_group whitelist must not be empty"
     );
-
     let mut seen_uaids = HashSet::new();
     for entry in whitelist {
         let entry_obj = entry
@@ -289,7 +269,6 @@ fn cbdc_whitelist_entries_match_capability_manifests() -> Result<()> {
             dataspace > 0,
             "dataspace must be positive (got {dataspace})"
         );
-
         let uaid = entry_obj
             .get("uaid")
             .and_then(Value::as_str)
@@ -306,7 +285,6 @@ fn cbdc_whitelist_entries_match_capability_manifests() -> Result<()> {
             seen_uaids.insert(uaid.clone()),
             "duplicate UAID {uaid} found in whitelist"
         );
-
         let manifest_rel = entry_obj
             .get("capability_manifest")
             .and_then(Value::as_str)
@@ -322,7 +300,6 @@ fn cbdc_whitelist_entries_match_capability_manifests() -> Result<()> {
             "capability manifest {} not found",
             manifest_path.display()
         );
-
         let manifest_text = fs::read_to_string(&manifest_path).wrap_err_with(|| {
             format!(
                 "failed to read capability manifest {}",
@@ -372,10 +349,8 @@ fn cbdc_whitelist_entries_match_capability_manifests() -> Result<()> {
             manifest_path.display()
         );
     }
-
     Ok(())
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn cbdc_capability_manifests_enforce_policy_semantics() -> Result<()> {
@@ -383,7 +358,6 @@ fn cbdc_capability_manifests_enforce_policy_semantics() -> Result<()> {
     let profile_obj = profile
         .as_object()
         .ok_or_else(|| eyre!("CBDC profile must be a JSON object"))?;
-
     let audit_hooks = profile_obj
         .get("audit_hooks")
         .and_then(Value::as_object)
@@ -423,7 +397,6 @@ fn cbdc_capability_manifests_enforce_policy_semantics() -> Result<()> {
         !pagerduty_service.trim().is_empty(),
         "audit_hooks.pagerduty_service must not be empty"
     );
-
     let group = profile_obj
         .get("composability_group")
         .and_then(Value::as_object)
@@ -436,7 +409,6 @@ fn cbdc_capability_manifests_enforce_policy_semantics() -> Result<()> {
         !whitelist.is_empty(),
         "composability_group whitelist must not be empty"
     );
-
     for entry in whitelist {
         let entry_obj = entry
             .as_object()
@@ -460,7 +432,6 @@ fn cbdc_capability_manifests_enforce_policy_semantics() -> Result<()> {
             "capability manifest {} not found",
             manifest_path.display()
         );
-
         let manifest_text = fs::read_to_string(&manifest_path).wrap_err_with(|| {
             format!(
                 "failed to read capability manifest {}",
@@ -553,7 +524,6 @@ fn cbdc_capability_manifests_enforce_policy_semantics() -> Result<()> {
             "capability manifest {} must declare version 1",
             manifest_path.display()
         );
-
         let (allow_idx, allow_scope, allowance) = manifest
             .entries
             .iter()
@@ -585,7 +555,6 @@ fn cbdc_capability_manifests_enforce_policy_semantics() -> Result<()> {
                 manifest_path.display()
             )
         })?;
-
         match manifest.evaluate(&allow_request) {
             ManifestVerdict::Allowed(grant) => ensure!(
                 grant.entry_index == allow_idx_u32,
@@ -622,7 +591,6 @@ fn cbdc_capability_manifests_enforce_policy_semantics() -> Result<()> {
                 expiry
             );
         }
-
         let (deny_idx, deny_scope) = manifest
             .entries
             .iter()
@@ -653,7 +621,6 @@ fn cbdc_capability_manifests_enforce_policy_semantics() -> Result<()> {
                 manifest_path.display()
             )
         })?;
-
         ensure!(
             matches!(
                 manifest.evaluate(&deny_request),
@@ -667,6 +634,5 @@ fn cbdc_capability_manifests_enforce_policy_semantics() -> Result<()> {
             deny_idx
         );
     }
-
     Ok(())
 }

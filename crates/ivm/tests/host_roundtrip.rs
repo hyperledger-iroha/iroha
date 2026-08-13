@@ -1,13 +1,10 @@
 //! CoreHost roundtrip harness for IVM syscalls.
-
 use ivm::{
     CoreHost, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
     EmbeddedStateType, IVM, Memory, PointerType, ProgramMetadata, encoding, instruction,
     state_value, syscalls,
 };
-
 mod common;
-
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
@@ -19,13 +16,11 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 fn state_path_tlv(path: &str) -> Vec<u8> {
     let path: iroha_data_model::state_path::StatePath = path.parse().expect("canonical state path");
     let payload = norito::to_bytes(&path).expect("encode state path");
     make_tlv(PointerType::NoritoBytes, &payload)
 }
-
 fn bytes_state_value(value: &[u8]) -> Vec<u8> {
     let schema = state_value::StateValueSchemaV1 {
         nodes: vec![state_value::StateValueNodeV1::Leaf(
@@ -42,7 +37,6 @@ fn bytes_state_value(value: &[u8]) -> Vec<u8> {
     };
     norito::to_bytes(&record).expect("encode bytes state value")
 }
-
 fn state_program(number: u32, write: bool) -> Vec<u8> {
     let access_key = "state:roundtrip_key".to_owned();
     let entrypoint = EmbeddedEntrypointDescriptor {
@@ -90,24 +84,20 @@ fn state_program(number: u32, write: bool) -> Vec<u8> {
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     program
 }
-
 #[test]
 fn host_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-
     let path_tlv = state_path_tlv("roundtrip_key");
     let value = bytes_state_value(&[0xA5, 0x5A, 0x01]);
     let value_tlv = make_tlv(PointerType::NoritoBytes, &value);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_val = vm.alloc_input_tlv(&value_tlv).expect("alloc value");
-
     let set_prog = state_program(syscalls::SYSCALL_STATE_SET, true);
     vm.set_register(10, p_path);
     vm.set_register(11, p_val);
     vm.load_program(&set_prog).expect("load set");
     vm.run().expect("state set");
-
     let get_prog = state_program(syscalls::SYSCALL_STATE_GET, false);
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");

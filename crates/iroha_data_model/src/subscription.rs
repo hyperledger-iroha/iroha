@@ -1,17 +1,13 @@
 //! Subscription metadata schemas for trigger-based billing.
-
 use std::collections::BTreeMap;
-
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{
     AssetDefinitionId, DeriveJsonDeserialize, DeriveJsonSerialize, account::AccountId, name::Name,
     nft::NftId, trigger::TriggerId,
 };
-
 /// Metadata key storing a subscription plan payload on an asset definition.
 pub const SUBSCRIPTION_PLAN_METADATA_KEY: &str = "subscription_plan";
 /// Metadata key storing a subscription state payload on an NFT.
@@ -20,7 +16,6 @@ pub const SUBSCRIPTION_METADATA_KEY: &str = "subscription";
 pub const SUBSCRIPTION_INVOICE_METADATA_KEY: &str = "subscription_invoice";
 /// Metadata key storing a trigger reference to a subscription.
 pub const SUBSCRIPTION_TRIGGER_REF_METADATA_KEY: &str = "subscription_ref";
-
 /// Subscription plan metadata stored on asset definitions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -32,7 +27,6 @@ pub struct SubscriptionPlan {
     /// Pricing rules for fixed or usage billing.
     pub pricing: SubscriptionPricing,
 }
-
 /// Billing schedule and retry policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -48,7 +42,6 @@ pub struct SubscriptionBilling {
     /// Grace window in milliseconds before suspension.
     pub grace_ms: u64,
 }
-
 /// Calendar-month cadence detail payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -58,7 +51,6 @@ pub struct SubscriptionMonthlyCalendarCadence {
     /// Anchor time-of-day in UTC milliseconds from 00:00.
     pub anchor_time_ms: u32,
 }
-
 /// Fixed-period cadence detail payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -66,7 +58,6 @@ pub struct SubscriptionFixedPeriodCadence {
     /// Fixed period in milliseconds for non-calendar cadence.
     pub period_ms: u64,
 }
-
 /// Billing cadence settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -80,7 +71,6 @@ pub enum SubscriptionCadence {
     /// Fixed-length cadence expressed in milliseconds.
     FixedPeriod(SubscriptionFixedPeriodCadence),
 }
-
 /// Selects which billing period the charge applies to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -94,7 +84,6 @@ pub enum SubscriptionBillFor {
     /// Charge for the upcoming period.
     NextPeriod,
 }
-
 /// Fixed-amount pricing detail payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -104,7 +93,6 @@ pub struct SubscriptionFixedPricing {
     /// Asset definition used for charging.
     pub asset_definition: AssetDefinitionId,
 }
-
 /// Usage-based pricing detail payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -116,7 +104,6 @@ pub struct SubscriptionUsagePricing {
     /// Asset definition used for charging.
     pub asset_definition: AssetDefinitionId,
 }
-
 /// Usage increment payload for subscription usage recording.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -128,7 +115,6 @@ pub struct SubscriptionUsageDelta {
     /// Non-negative usage increment.
     pub delta: Quantity,
 }
-
 /// Pricing rules for a subscription plan.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -142,7 +128,6 @@ pub enum SubscriptionPricing {
     /// Usage-based pricing.
     Usage(SubscriptionUsagePricing),
 }
-
 /// Subscription state stored on a subscription NFT.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -175,7 +160,6 @@ pub struct SubscriptionState {
     /// Billing trigger ID.
     pub billing_trigger_id: TriggerId,
 }
-
 /// Status of a subscription.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -195,7 +179,6 @@ pub enum SubscriptionStatus {
     /// Subscription is suspended after failures.
     Suspended,
 }
-
 /// Trigger metadata referencing the subscription NFT.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -203,7 +186,6 @@ pub struct SubscriptionTriggerRef {
     /// Subscription NFT identifier.
     pub subscription_nft_id: NftId,
 }
-
 /// Subscription invoice metadata stored on subscription or invoice NFTs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -226,7 +208,6 @@ pub struct SubscriptionInvoice {
     #[norito(default)]
     pub tx_hash: Option<Hash>,
 }
-
 /// Status of a subscription invoice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -240,7 +221,6 @@ pub enum SubscriptionInvoiceStatus {
     /// Charge failed or was rejected.
     Failed,
 }
-
 /// Re-exports of commonly used subscription types.
 pub mod prelude {
     pub use super::{
@@ -251,42 +231,35 @@ pub mod prelude {
         SubscriptionUsageDelta, SubscriptionUsagePricing,
     };
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
-
     use super::*;
     use crate::domain::DomainId;
-
     #[derive(Encode)]
     struct ForgedSubscriptionFixedPricing {
         amount: Numeric,
         asset_definition: AssetDefinitionId,
     }
-
     #[derive(Encode)]
     struct ForgedSubscriptionUsageDelta {
         subscription_nft_id: NftId,
         unit_key: Name,
         delta: Numeric,
     }
-
     #[derive(Encode)]
     struct ForgedSubscriptionUsagePricing {
         unit_price: Numeric,
         unit_key: Name,
         asset_definition: AssetDefinitionId,
     }
-
     fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "usd".parse().expect("asset name"),
         )
     }
-
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_subscription_quantities() {
         let fixed = ForgedSubscriptionFixedPricing {
@@ -298,7 +271,6 @@ mod tests {
             SubscriptionFixedPricing::decode(&mut fixed_bytes.as_slice()).is_err(),
             "negative fixed charges must not cross the subscription quantity boundary"
         );
-
         let usage = ForgedSubscriptionUsageDelta {
             subscription_nft_id: "subscription$wonderland.universal"
                 .parse()
@@ -311,7 +283,6 @@ mod tests {
             SubscriptionUsageDelta::decode(&mut usage_bytes.as_slice()).is_err(),
             "negative usage must not cross the subscription quantity boundary"
         );
-
         let pricing = ForgedSubscriptionUsagePricing {
             unit_price: Numeric::new(-1_i32, 0),
             unit_key: "requests".parse().expect("unit key"),

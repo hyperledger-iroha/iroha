@@ -191,6 +191,8 @@ MATERIAL_CLOSURE_PATHS_BY_WORKFLOW = {
         ),
         "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
         "integration_tests/tests/native_escrow.rs",
+        "python/iroha_torii_client/tests/orderbook_submission_test.py",
+        "crates/iroha_data_model/src/sorafs/orderbook_submission_tests.rs",
         "scripts/deploy_localnet.sh",
         "scripts/norito_bridge_source_seal.py",
         "scripts/package_mobile_sdk_artifacts.sh",
@@ -276,6 +278,20 @@ def test_material_closure_files_are_routed_to_relevant_workflows(
         if not workflow_filter_covers(path, filters)
     )
     assert not uncovered, f"{workflow_name} omits closure triggers: {uncovered}"
+
+
+def test_pure_orderbook_submit_suite_requires_its_orchestrator_trigger() -> None:
+    path = "python/iroha_torii_client/tests/orderbook_submission_test.py"
+    filters = pull_request_paths("sorafs-orchestrator-sdk.yml")
+    trigger = "python/iroha_torii_client/**"
+    assert trigger in filters and workflow_filter_covers(path, filters)
+    assert not workflow_filter_covers(path, filters - {trigger})
+
+
+def test_orchestrator_runner_executes_shared_orderbook_submission_boundary() -> None:
+    runner = read("ci/sdk_sorafs_orchestrator.sh")
+    assert "cargo test -p iroha_data_model sorafs::orderbook_submission::tests" in runner
+    assert "signed orderbook submission boundary" in runner
 
 
 def test_openapi_push_and_pull_request_filters_cover_moderation_sources() -> None:
@@ -662,6 +678,7 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert '"cancelAssetLockV1.test.js"' in javascript_profile_runner
     assert '"sorafsAppealFinanceValidation.test.js"' in javascript_profile_runner
     assert '"sorafsFixtureBundleValidation.test.js"' in javascript_profile_runner
+    assert '"sorafsOrderbookSubmission.test.js"' in javascript_profile_runner
     assert '"sorafsOrchestrator.parity.test.js"' in javascript_profile_runner
     assert '"sorafsPdpValidation.test.js"' in javascript_profile_runner
     assert "swift test --filter SorafsOrchestratorParityTests" in parity_runner
@@ -673,6 +690,7 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert 'IROHA_JS_NATIVE_BUILD_PROFILE: "release"' in parity
     assert parity.count('IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"') == 3
     assert '"crates/iroha_js_host/**"' in parity
+    assert '"python/iroha_torii_client/**"' in parity
     assert "bash ci/sdk_sorafs_orchestrator.sh" in parity
     assert "  mobile-parity:" in parity
     assert "  csharp-parity:" in parity
@@ -786,8 +804,10 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
     assert "tests/cancel_asset_lock_client_helpers_test.py" in runner
     assert "tests/client_hard_cut_contract_test.py" in runner
     assert "tests/client_ledger_helpers_test.py" in runner
+    assert "tests/client_sorafs_orderbook_test.py" in runner
     assert "tests/sorafs_reference_validation_test.py" in runner
     assert "tests/sorafs_replication_instruction_test.py" in runner
+    assert "../iroha_torii_client/tests/orderbook_submission_test.py" in runner
     assert '--junitxml "${JUNIT_REPORT}"' in runner
     assert 'skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)' in runner
     assert "SoraFS native Python SDK parity may not contain skipped tests" in runner

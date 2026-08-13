@@ -1,15 +1,10 @@
 //! Faucet configuration parsing tests.
-
 use std::sync::atomic::{AtomicU64, Ordering};
-
 use super::*;
 use iroha_crypto::PublicKey;
 use iroha_data_model::DomainId;
-
 static NEXT_KEY_FILE: AtomicU64 = AtomicU64::new(0);
-
 struct TestKeyFile(PathBuf);
-
 impl TestKeyFile {
     fn create(contents: &str) -> Self {
         let sequence = NEXT_KEY_FILE.fetch_add(1, Ordering::Relaxed);
@@ -20,18 +15,15 @@ impl TestKeyFile {
         fs::write(&path, contents).expect("write faucet key file");
         Self(path)
     }
-
     fn path(&self) -> &Path {
         &self.0
     }
 }
-
 impl Drop for TestKeyFile {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
     }
 }
-
 fn sample_faucet() -> (ToriiFaucet, TestKeyFile) {
     let public_key: PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -65,7 +57,6 @@ fn sample_faucet() -> (ToriiFaucet, TestKeyFile) {
         key_file,
     )
 }
-
 #[test]
 fn torii_faucet_parse_maps_enabled_config() {
     let (faucet, _key_file) = sample_faucet();
@@ -87,7 +78,6 @@ fn torii_faucet_parse_maps_enabled_config() {
     assert_eq!(parsed.pow_adaptive_max_extra_bits, 5);
     assert!(parsed.pow_vrf_seed_enabled);
 }
-
 #[test]
 fn torii_faucet_parse_returns_none_when_disabled() {
     let (mut faucet, _key_file) = sample_faucet();
@@ -96,7 +86,6 @@ fn torii_faucet_parse_returns_none_when_disabled() {
     assert!(faucet.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_ok());
 }
-
 #[test]
 fn torii_faucet_parse_rejects_zero_amount() {
     let (mut faucet, _key_file) = sample_faucet();
@@ -105,7 +94,6 @@ fn torii_faucet_parse_rejects_zero_amount() {
     assert!(faucet.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn torii_faucet_parse_rejects_zero_pow_difficulty_when_enabled() {
     let (mut faucet, _key_file) = sample_faucet();
@@ -114,7 +102,6 @@ fn torii_faucet_parse_rejects_zero_pow_difficulty_when_enabled() {
     assert!(faucet.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn torii_faucet_parse_accepts_asset_alias_selector() {
     let (mut faucet, _key_file) = sample_faucet();
@@ -126,7 +113,6 @@ fn torii_faucet_parse_accepts_asset_alias_selector() {
     assert!(emitter.into_result().is_ok());
     assert_eq!(parsed.asset_definition_id, "xor#universal");
 }
-
 #[test]
 fn torii_faucet_parse_rejects_invalid_asset_selector() {
     let (mut faucet, _key_file) = sample_faucet();
@@ -135,7 +121,6 @@ fn torii_faucet_parse_rejects_invalid_asset_selector() {
     assert!(faucet.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn torii_faucet_parse_rejects_non_positive_pow_anchor_age() {
     let (mut faucet, _key_file) = sample_faucet();
@@ -144,7 +129,6 @@ fn torii_faucet_parse_rejects_non_positive_pow_anchor_age() {
     assert!(faucet.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn torii_faucet_parse_rejects_non_positive_scrypt_log_n() {
     let (mut faucet, _key_file) = sample_faucet();
@@ -153,7 +137,6 @@ fn torii_faucet_parse_rejects_non_positive_scrypt_log_n() {
     assert!(faucet.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn torii_faucet_parse_rejects_signer_authority_mismatch_without_panicking() {
     let (mut faucet, _key_file) = sample_faucet();

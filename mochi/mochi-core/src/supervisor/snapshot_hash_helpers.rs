@@ -1,25 +1,21 @@
 const SNAPSHOT_DIRECTORY_SORT_WINDOW_V1: usize = 4_096;
 const SNAPSHOT_TREE_MAX_DEPTH_V1: usize = 64;
-
 #[derive(Debug, Eq, PartialEq)]
 struct SnapshotDirectoryEntry {
     name: std::ffi::OsString,
     path: PathBuf,
     is_directory: bool,
 }
-
 impl Ord for SnapshotDirectoryEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.name.cmp(&other.name)
     }
 }
-
 impl PartialOrd for SnapshotDirectoryEntry {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-
 fn snapshot_directory_window_after(
     directory: &Path,
     cursor: Option<&OsStr>,
@@ -41,7 +37,6 @@ fn snapshot_directory_window_after(
             ),
         ));
     }
-
     let mut storage = Vec::new();
     storage.try_reserve_exact(window_entries).map_err(|_| {
         io::Error::new(
@@ -92,7 +87,6 @@ fn snapshot_directory_window_after(
     window.sort_unstable();
     Ok(window)
 }
-
 fn visit_snapshot_files_sorted(
     root: &Path,
     visit: &mut impl FnMut(&Path) -> io::Result<()>,
@@ -148,13 +142,11 @@ fn visit_snapshot_files_sorted(
             }
         }
     }
-
     if !root.exists() {
         return Ok(());
     }
     visit_directory(root, 0, visit)
 }
-
 fn normalized_relative_path(base: &Path, path: &Path) -> io::Result<String> {
     let relative = path.strip_prefix(base).unwrap_or(path);
     let mut normalized = String::new();
@@ -181,7 +173,6 @@ fn normalized_relative_path(base: &Path, path: &Path) -> io::Result<String> {
     }
     Ok(normalized)
 }
-
 fn snapshot_file_metadata_unchanged(expected: &fs::Metadata, observed: &fs::Metadata) -> bool {
     if !expected.is_file() || !observed.is_file() || expected.len() != observed.len() {
         return false;
@@ -200,7 +191,6 @@ fn snapshot_file_metadata_unchanged(expected: &fs::Metadata, observed: &fs::Meta
         expected.modified().ok() == observed.modified().ok()
     }
 }
-
 fn hash_snapshot_file_bounded(path: &Path, max_bytes: u64) -> io::Result<(Hash, u64)> {
     let named = fs::symlink_metadata(path)?;
     if named.file_type().is_symlink() || !named.is_file() {
@@ -250,14 +240,11 @@ fn hash_snapshot_file_bounded(path: &Path, max_bytes: u64) -> io::Result<(Hash, 
     }
     Ok((hash, observed_bytes))
 }
-
 fn hash_snapshot_file(path: &Path) -> io::Result<(Hash, u64)> {
     hash_snapshot_file_bounded(path, u64::MAX)
 }
-
 fn regular_snapshot_files_equal(left: &Path, right: &Path) -> io::Result<bool> {
     const COMPARE_BUFFER_BYTES: usize = 64 * 1024;
-
     let left_named = fs::symlink_metadata(left)?;
     let right_named = fs::symlink_metadata(right)?;
     if left_named.file_type().is_symlink()
@@ -273,7 +260,6 @@ fn regular_snapshot_files_equal(left: &Path, right: &Path) -> io::Result<bool> {
     if left_named.len() != right_named.len() {
         return Ok(false);
     }
-
     let mut left_file = fs::File::open(left)?;
     let mut right_file = fs::File::open(right)?;
     let left_opened = left_file.metadata()?;
@@ -286,7 +272,6 @@ fn regular_snapshot_files_equal(left: &Path, right: &Path) -> io::Result<bool> {
             "snapshot comparison input changed while opening",
         ));
     }
-
     let mut left_buffer = [0_u8; COMPARE_BUFFER_BYTES];
     let mut right_buffer = [0_u8; COMPARE_BUFFER_BYTES];
     let mut remaining = left_named.len();
@@ -326,7 +311,6 @@ fn regular_snapshot_files_equal(left: &Path, right: &Path) -> io::Result<bool> {
     }
     Ok(true)
 }
-
 fn read_snapshot_file_bounded(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
     let named = fs::symlink_metadata(path)?;
     if named.file_type().is_symlink() || !named.is_file() {
@@ -390,7 +374,6 @@ fn read_snapshot_file_bounded(path: &Path, max_bytes: usize) -> io::Result<Vec<u
     }
     Ok(bytes)
 }
-
 fn hash_directory(root: &Path) -> io::Result<Hash> {
     Hash::new_from_writer(|writer| {
         visit_snapshot_files_sorted(root, &mut |file| {
@@ -410,11 +393,9 @@ fn hash_directory(root: &Path) -> io::Result<Hash> {
         })
     })
 }
-
 #[cfg(test)]
 mod snapshot_hash_helper_tests {
     use super::*;
-
     #[test]
     fn snapshot_file_hash_streams_without_changing_digest() {
         let temp = tempfile::tempdir().expect("temporary snapshot root");
@@ -423,14 +404,11 @@ mod snapshot_hash_helper_tests {
             .map(|index| (index % 251) as u8)
             .collect::<Vec<_>>();
         fs::write(&path, &bytes).expect("write multi-chunk snapshot artifact");
-
         let (observed, observed_bytes) =
             hash_snapshot_file(&path).expect("stream snapshot artifact hash");
-
         assert_eq!(observed, Hash::new(&bytes));
         assert_eq!(observed_bytes, bytes.len() as u64);
     }
-
     #[test]
     fn snapshot_file_comparison_streams_and_detects_a_late_difference() {
         let temp = tempfile::tempdir().expect("temporary snapshot root");
@@ -440,12 +418,10 @@ mod snapshot_hash_helper_tests {
         fs::write(&left, &bytes).expect("write left snapshot artifact");
         fs::write(&right, &bytes).expect("write matching right snapshot artifact");
         assert!(regular_snapshot_files_equal(&left, &right).expect("compare matching files"));
-
         *bytes.last_mut().expect("fixture is not empty") ^= 0xFF;
         fs::write(&right, &bytes).expect("write differing right snapshot artifact");
         assert!(!regular_snapshot_files_equal(&left, &right).expect("compare differing files"));
     }
-
     #[test]
     fn bounded_snapshot_reader_accepts_exact_and_rejects_max_plus_one() {
         let temp = tempfile::tempdir().expect("temporary snapshot root");
@@ -456,13 +432,11 @@ mod snapshot_hash_helper_tests {
             read_snapshot_file_bounded(&path, expected.len()).expect("read exact artifact"),
             expected
         );
-
         fs::write(&path, [0x2A_u8; 33]).expect("write oversized snapshot artifact");
         let error = read_snapshot_file_bounded(&path, expected.len())
             .expect_err("max plus one must reject before allocation");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[test]
     fn directory_hash_streams_the_canonical_sorted_records() {
         let temp = tempfile::tempdir().expect("temporary snapshot root");
@@ -470,7 +444,6 @@ mod snapshot_hash_helper_tests {
         fs::create_dir(&nested).expect("create nested snapshot directory");
         fs::write(temp.path().join("z.bin"), b"zeta").expect("write root artifact");
         fs::write(nested.join("a.bin"), b"alpha").expect("write nested artifact");
-
         let mut canonical = Vec::new();
         for (relative, bytes) in [("nested/a.bin", b"alpha".as_slice()), ("z.bin", b"zeta")] {
             canonical.extend_from_slice(&(relative.len() as u64).to_le_bytes());
@@ -478,20 +451,17 @@ mod snapshot_hash_helper_tests {
             canonical.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
             canonical.extend_from_slice(Hash::new(&bytes).as_ref());
         }
-
         assert_eq!(
             hash_directory(temp.path()).expect("stream directory digest"),
             Hash::new(canonical)
         );
     }
-
     #[test]
     fn directory_window_retains_only_the_smallest_bounded_suffix() {
         let temp = tempfile::tempdir().expect("temporary snapshot root");
         for name in ["d", "b", "a", "c"] {
             fs::write(temp.path().join(name), name).expect("write window fixture");
         }
-
         let first = snapshot_directory_window_after(temp.path(), None, 3)
             .expect("select first bounded directory window");
         assert_eq!(

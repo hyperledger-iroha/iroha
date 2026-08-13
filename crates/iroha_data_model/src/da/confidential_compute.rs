@@ -4,10 +4,8 @@
 //! must keep payloads off the public DA surface while still advertising
 //! deterministic availability and proof parameters. Policies are derived from
 //! lane metadata and enforced during DA validation.
-
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 /// Confidential-compute protection mechanism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub enum ConfidentialComputeMechanism {
@@ -16,7 +14,6 @@ pub enum ConfidentialComputeMechanism {
     /// Payload is split across shares (e.g., SMPC/secret sharing).
     SecretSharing,
 }
-
 impl ConfidentialComputeMechanism {
     /// Parse a mechanism string from lane metadata.
     #[must_use]
@@ -27,7 +24,6 @@ impl ConfidentialComputeMechanism {
             _ => None,
         }
     }
-
     /// Returns the canonical string representation.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -37,7 +33,6 @@ impl ConfidentialComputeMechanism {
         }
     }
 }
-
 /// Lane-level confidentiality policy derived from metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct ConfidentialComputePolicy {
@@ -48,7 +43,6 @@ pub struct ConfidentialComputePolicy {
     /// Allowed audiences (roles, operators, or labels) permitted to fetch the payload.
     pub allowed_audiences: Vec<String>,
 }
-
 impl ConfidentialComputePolicy {
     /// Construct a new policy.
     #[must_use]

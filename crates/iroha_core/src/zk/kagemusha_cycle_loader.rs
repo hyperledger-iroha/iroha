@@ -4,9 +4,7 @@
 //! arithmetic stays native to the containing Pasta circuit, while the proof
 //! curve's scalar field uses three canonical 86-bit limbs. Exact CRT bridges at
 //! transcript and audit boundaries preserve canonical coordinate encodings.
-
 use std::{cell::RefCell, collections::BTreeMap, marker::PhantomData, ops::Deref, rc::Rc};
-
 use der_parser::num_bigint::BigUint;
 use ff::PrimeField as _;
 use halo2_base::{
@@ -36,13 +34,11 @@ use snark_verifier::{
     loader::halo2::{EccInstructions, IntegerInstructions},
     system::halo2::transcript::halo2::NativeEncoding,
 };
-
 use super::kagemusha_accumulation::{
     KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4, kagemusha_ipa_accumulator_instance_limbs_v4,
 };
 use super::kagemusha_dense_msm::{KagemushaDenseMsmJobsV5, KagemushaDenseMsmSourceV5};
 use super::kagemusha_sha256_v4::KagemushaSha256ByteV4;
-
 /// Domain absorbed by the compact deferred-audit Poseidon sponge.
 pub(super) const KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V6: &[u8] =
     b"iroha:kagemusha:deferred-audit-poseidon:v6";
@@ -50,7 +46,6 @@ pub(super) const KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V6: &[u8] =
 pub(super) const KAGEMUSHA_DEFERRED_AUDIT_SHA256_DOMAIN_V6: &[u8] = b"kg-audit-sha-v6!";
 /// Version encoded in both compact deferred-audit commitment layers.
 pub(super) const KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6: u32 = 6;
-
 /// Encode a Poseidon domain and version injectively as native field elements.
 pub(super) fn kagemusha_poseidon_domain_elements<F: ff::PrimeField>(
     domain: &[u8],
@@ -68,21 +63,17 @@ pub(super) fn kagemusha_poseidon_domain_elements<F: ff::PrimeField>(
     elements.push(F::from(u64::from(version)));
     elements
 }
-
 /// Limb width chosen so products of three-limb Pasta integers retain
 /// ample native-field headroom in either parity.
 pub(super) const LIMB_BITS: usize = 86;
 /// Both Pasta fields fit in three 86-bit limbs.
 pub(super) const LIMBS: usize = 3;
-
 type Outer<C> = <C as CurveAffine>::Base;
 type Inner<C> = <C as CurveAffine>::ScalarExt;
 type Integer<C> = ProperCrtUint<Outer<C>>;
 type Point<C> = AssignedEcPoint<Outer<C>, NativePastaFieldPoint<Outer<C>>>;
-
 type ScalarContext<C> = SinglePhaseCoreManager<Inner<C>>;
 type AssignedCoordinate<C> = ProperCrtUint<Inner<C>>;
-
 /// Canonical non-native coordinate whose integer limbs are known to be below
 /// the represented Pasta modulus.
 ///
@@ -96,7 +87,6 @@ pub(super) struct CanonicalCoordinate<C>(AssignedCoordinate<C>)
 where
     C: CurveAffineExt,
     Inner<C>: BigPrimeField;
-
 impl<C> CanonicalCoordinate<C>
 where
     C: CurveAffineExt,
@@ -111,7 +101,6 @@ where
         let coordinate = chip.load_private(ctx, coordinate);
         Self(chip.enforce_less_than(ctx, coordinate).into())
     }
-
     fn load_constant(
         chip: &FpChip<'_, Inner<C>, Outer<C>>,
         ctx: &mut halo2_base::Context<Inner<C>>,
@@ -119,12 +108,10 @@ where
     ) -> Self {
         Self(chip.load_constant(ctx, coordinate))
     }
-
     fn integer(&self) -> &AssignedCoordinate<C> {
         &self.0
     }
 }
-
 /// One cell in a Pasta base field that is native to the containing circuit.
 ///
 /// `halo2_ecc` is parameterized over a `FieldChip`, including when the curve
@@ -133,19 +120,16 @@ where
 /// not pay for, or rely on, a three-limb emulation of its own field.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct NativePastaFieldPoint<F: BigPrimeField>(AssignedValue<F>);
-
 impl<F: BigPrimeField> From<&NativePastaFieldPoint<F>> for NativePastaFieldPoint<F> {
     fn from(value: &NativePastaFieldPoint<F>) -> Self {
         *value
     }
 }
-
 impl<F: BigPrimeField> NativePastaFieldPoint<F> {
     fn assigned(self) -> AssignedValue<F> {
         self.0
     }
 }
-
 /// Native-field adapter used only for reciprocal Pasta curve arithmetic.
 ///
 /// Every operation is an ordinary gate operation modulo `F`.  Canonical byte
@@ -157,7 +141,6 @@ struct NativePastaFieldChip<'range, F: BigPrimeField> {
     range: &'range halo2_base::gates::RangeChip<F>,
     native_modulus: BigUint,
 }
-
 impl<'range, F: BigPrimeField> NativePastaFieldChip<'range, F> {
     fn new(range: &'range halo2_base::gates::RangeChip<F>) -> Self {
         Self {
@@ -165,7 +148,6 @@ impl<'range, F: BigPrimeField> NativePastaFieldChip<'range, F> {
             native_modulus: modulus::<F>(),
         }
     }
-
     fn signed_constant(value: i64) -> F {
         let magnitude = F::from(value.unsigned_abs());
         if value.is_negative() {
@@ -175,32 +157,25 @@ impl<'range, F: BigPrimeField> NativePastaFieldChip<'range, F> {
         }
     }
 }
-
 impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
     const PRIME_FIELD_NUM_BITS: u32 = F::NUM_BITS;
-
     type UnsafeFieldPoint = NativePastaFieldPoint<F>;
     type FieldPoint = NativePastaFieldPoint<F>;
     type ReducedFieldPoint = NativePastaFieldPoint<F>;
     type FieldType = F;
     type RangeChip = halo2_base::gates::RangeChip<F>;
-
     fn native_modulus(&self) -> &BigUint {
         &self.native_modulus
     }
-
     fn range(&self) -> &Self::RangeChip {
         self.range
     }
-
     fn limb_bits(&self) -> usize {
         F::NUM_BITS as usize
     }
-
     fn get_assigned_value(&self, value: &Self::UnsafeFieldPoint) -> Self::FieldType {
         *value.0.value()
     }
-
     fn load_private(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -208,7 +183,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
     ) -> Self::FieldPoint {
         NativePastaFieldPoint(ctx.load_witness(value))
     }
-
     fn load_constant(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -216,7 +190,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
     ) -> Self::FieldPoint {
         NativePastaFieldPoint(ctx.load_constant(value))
     }
-
     fn add_no_carry(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -227,7 +200,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
         let rhs = rhs.into();
         NativePastaFieldPoint(self.gate().add(ctx, Existing(lhs.0), Existing(rhs.0)))
     }
-
     fn add_constant_no_carry(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -237,7 +209,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
         let value = value.into();
         NativePastaFieldPoint(self.gate().add(ctx, Existing(value.0), Constant(constant)))
     }
-
     fn sub_no_carry(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -253,7 +224,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
             Existing(rhs.0),
         ))
     }
-
     fn negate(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -265,7 +235,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
             Existing(value.0),
         ))
     }
-
     fn scalar_mul_no_carry(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -279,7 +248,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
             Constant(Self::signed_constant(constant)),
         ))
     }
-
     fn scalar_mul_and_add_no_carry(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -296,7 +264,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
             Existing(addend.0),
         ))
     }
-
     fn mul_no_carry(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -307,7 +274,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
         let rhs = rhs.into();
         NativePastaFieldPoint(self.gate().mul(ctx, Existing(lhs.0), Existing(rhs.0)))
     }
-
     fn check_carry_mod_to_zero(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -315,7 +281,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
     ) {
         self.gate().assert_is_const(ctx, &value.0, &F::ZERO);
     }
-
     fn carry_mod(
         &self,
         _ctx: &mut halo2_base::Context<F>,
@@ -323,7 +288,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
     ) -> Self::FieldPoint {
         value
     }
-
     fn range_check(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -338,7 +302,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
             self.range.range_check(ctx, value.into().0, max_bits);
         }
     }
-
     fn enforce_less_than(
         &self,
         _ctx: &mut halo2_base::Context<F>,
@@ -347,7 +310,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
         // An assigned native-field cell is already a unique element modulo F.
         value
     }
-
     fn is_soft_zero(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -355,7 +317,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
     ) -> AssignedValue<F> {
         self.gate().is_zero(ctx, value.into().0)
     }
-
     fn is_soft_nonzero(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -364,7 +325,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
         let is_zero = self.gate().is_zero(ctx, value.into().0);
         self.gate().not(ctx, is_zero)
     }
-
     fn is_zero(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -372,7 +332,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
     ) -> AssignedValue<F> {
         self.gate().is_zero(ctx, value.into().0)
     }
-
     fn is_equal_unenforced(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -381,7 +340,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
     ) -> AssignedValue<F> {
         self.gate().is_equal(ctx, Existing(lhs.0), Existing(rhs.0))
     }
-
     fn assert_equal(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -391,7 +349,6 @@ impl<F: BigPrimeField> FieldChip<F> for NativePastaFieldChip<'_, F> {
         ctx.constrain_equal(&lhs.into().0, &rhs.into().0);
     }
 }
-
 impl<F: BigPrimeField> Selectable<F, NativePastaFieldPoint<F>> for NativePastaFieldChip<'_, F> {
     fn select(
         &self,
@@ -408,7 +365,6 @@ impl<F: BigPrimeField> Selectable<F, NativePastaFieldPoint<F>> for NativePastaFi
             selector,
         ))
     }
-
     fn select_by_indicator(
         &self,
         ctx: &mut halo2_base::Context<F>,
@@ -428,7 +384,6 @@ impl<F: BigPrimeField> Selectable<F, NativePastaFieldPoint<F>> for NativePastaFi
         ))
     }
 }
-
 /// Decompose one canonical Pasta integer into its exact 32-byte little-endian
 /// representation.
 ///
@@ -452,7 +407,6 @@ pub(super) fn proper_uint_le_bytes<F: BigPrimeField>(
     let bytes = std::array::from_fn(|index| {
         KagemushaSha256ByteV4::range_checked(ctx, range, assigned_bytes[index])
     });
-
     fn split_byte<F: BigPrimeField>(
         ctx: &mut halo2_base::Context<F>,
         range: &halo2_base::gates::RangeChip<F>,
@@ -476,10 +430,8 @@ pub(super) fn proper_uint_le_bytes<F: BigPrimeField>(
         ctx.constrain_equal(&recomposed, &byte);
         (low, high)
     }
-
     let (byte_10_low_6, byte_10_high_2) = split_byte(ctx, range, assigned_bytes[10], 6);
     let (byte_21_low_4, byte_21_high_4) = split_byte(ctx, range, assigned_bytes[21], 4);
-
     let limb_0 = gate.inner_product(
         ctx,
         assigned_bytes[..10]
@@ -514,7 +466,6 @@ pub(super) fn proper_uint_le_bytes<F: BigPrimeField>(
     }
     bytes
 }
-
 /// Constrain the canonical Pasta compressed encoding `x || parity(y)` from
 /// already canonical affine coordinates.
 pub(super) fn compressed_point_bytes<F: BigPrimeField>(
@@ -533,7 +484,6 @@ pub(super) fn compressed_point_bytes<F: BigPrimeField>(
     encoded[31] = KagemushaSha256ByteV4::from_bits_le(ctx, gate, &high_bits);
     encoded
 }
-
 /// Pack at most sixteen proven little-endian bytes into one native field cell.
 fn pack_constrained_bytes_u128<F: BigPrimeField>(
     ctx: &mut halo2_base::Context<F>,
@@ -553,7 +503,6 @@ fn pack_constrained_bytes_u128<F: BigPrimeField>(
         (0..bytes.len()).map(|index| Constant(F::from_u128(1_u128 << (8 * index)))),
     )
 }
-
 /// One exact curve source consumed by the deferred point half.
 ///
 /// Coordinates are represented in canonical non-native limbs in the scalar
@@ -581,7 +530,6 @@ where
     /// protocol and deferred-audit commitments.
     pub(super) commitment_encoding: Option<[AssignedValue<Inner<C>>; 2]>,
 }
-
 /// One source-indexed coefficient in a constrained deferred curve equation.
 #[derive(Clone, Debug)]
 pub(super) struct DeferredEquationTerm<C>
@@ -594,7 +542,6 @@ where
     /// Coefficient derived by constrained native-scalar arithmetic.
     pub(super) coefficient: AssignedValue<Inner<C>>,
 }
-
 /// One curve equality emitted by the native-scalar verifier half.
 #[derive(Clone, Debug)]
 pub(super) struct DeferredEquation<C>
@@ -605,7 +552,6 @@ where
     /// Canonically source-ordered complete linear equation.
     pub(super) terms: Vec<DeferredEquationTerm<C>>,
 }
-
 /// Host witness passed from a native-scalar half to the reciprocal point half.
 ///
 /// This value has no authority by itself.  Both half circuits recompute the
@@ -622,7 +568,6 @@ where
     /// Source-indexed scalar coefficients for every deferred equality.
     pub(super) equations: Vec<Vec<(usize, Inner<C>)>>,
 }
-
 /// Assigned reciprocal-point view of one deferred verifier output.
 #[derive(Clone, Debug)]
 pub(super) struct AssignedDeferredPointAudit<C>
@@ -637,7 +582,6 @@ where
     /// Canonical non-native scalar coefficients, grouped by equation.
     pub(super) equations: Vec<Vec<(usize, Integer<C>)>>,
 }
-
 /// Source-indexed reciprocal encodings shared by V6 audit and V2 protocol identity.
 #[derive(Clone, Debug)]
 pub(super) struct AssignedDeferredSourceEncodingsV6<C>
@@ -648,7 +592,6 @@ where
     source_values: Vec<C>,
     pub(super) poseidon_elements: Vec<[Integer<C>; 2]>,
 }
-
 impl<C> AssignedDeferredSourceEncodingsV6<C>
 where
     C: CurveAffineExt,
@@ -681,7 +624,6 @@ where
         Ok(mapped)
     }
 }
-
 #[derive(Clone, Debug)]
 struct SymbolicTerm<C>
 where
@@ -691,7 +633,6 @@ where
     source_index: usize,
     coefficient: AssignedValue<Inner<C>>,
 }
-
 /// Assigned curve value whose group expression is retained symbolically.
 #[derive(Clone, Debug)]
 pub(super) struct DeferredScalarPoint<C>
@@ -703,7 +644,6 @@ where
     source_index: Option<usize>,
     terms: Vec<SymbolicTerm<C>>,
 }
-
 #[derive(Debug)]
 struct DeferredScalarState<C>
 where
@@ -715,7 +655,6 @@ where
     equations: Vec<DeferredEquation<C>>,
     constant_sources: BTreeMap<Vec<u8>, usize>,
 }
-
 impl<C> Default for DeferredScalarState<C>
 where
     C: CurveAffineExt,
@@ -730,7 +669,6 @@ where
         }
     }
 }
-
 /// Native-scalar/symbolic-point instructions for one fixed verifier half.
 ///
 /// Scalar arithmetic, transcript challenges, and residual coefficients are
@@ -751,7 +689,6 @@ where
     scalar_integer: &'chip FpChip<'chip, Inner<C>, Inner<C>>,
     state: Rc<RefCell<DeferredScalarState<C>>>,
 }
-
 impl<'chip, C> DeferredScalarEccChip<'chip, C>
 where
     C: CurveAffineExt,
@@ -770,12 +707,10 @@ where
             state: Rc::new(RefCell::new(DeferredScalarState::default())),
         }
     }
-
     /// Return the current deferred-equation count without cloning the audit.
     pub(super) fn equation_count(&self) -> usize {
         self.state.borrow().equations.len()
     }
-
     /// Materialize the reciprocal point-half witness directly from the shared
     /// audit state without first cloning every assigned source and equation.
     pub(super) fn witness(&self) -> DeferredEquationWitness<C> {
@@ -795,12 +730,10 @@ where
                 .collect(),
         }
     }
-
     /// Shared native-scalar range chip used by transcript and identity gadgets.
     pub(super) fn range(&self) -> &halo2_base::gates::RangeChip<Inner<C>> {
         self.scalar_integer.range
     }
-
     /// Constrain the complete V6 selector-bound deferred audit for Poseidon.
     pub(super) fn assigned_equation_poseidon_elements_v6(
         &self,
@@ -816,7 +749,6 @@ where
             }
             (state.sources.len(), state.equations.clone())
         };
-
         let mut elements = kagemusha_poseidon_domain_elements::<Inner<C>>(
             KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V6,
             KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6,
@@ -866,7 +798,6 @@ where
         }
         Ok(elements)
     }
-
     /// Constrain the exact canonical bytes of one native scalar cell.
     pub(super) fn assigned_scalar_bytes(
         &self,
@@ -883,7 +814,6 @@ where
         ctx.main().constrain_equal(scalar_integer.native(), &scalar);
         proper_uint_le_bytes(ctx.main(), self.scalar_integer.range, &scalar_integer)
     }
-
     /// Return the stable deferred-source index carried by one assigned point.
     pub(super) fn assigned_point_source_index(
         &self,
@@ -894,7 +824,6 @@ where
         }
         point.source_index.ok_or(Error::InvalidInstances)
     }
-
     /// Constrain the injective two-`u128` encoding of one symbolic point.
     pub(super) fn assigned_point_poseidon_elements_v2(
         &self,
@@ -925,7 +854,6 @@ where
         };
         Ok(self.source_commitment_encoding(ctx, source_index))
     }
-
     /// Constrain the exact canonical compressed bytes of one symbolic point.
     ///
     /// A derived point first emits an equation tying a fresh canonical source
@@ -967,7 +895,6 @@ where
             source.y.integer(),
         ))
     }
-
     /// Constrain the degree-parameterized V4 accumulator representation.
     ///
     /// The round count comes from the authenticated circuit parameters.  It is
@@ -984,13 +911,11 @@ where
         if usize::try_from(authenticated_round_count).ok() != Some(round_challenges.len()) {
             return Err(Error::InvalidInstances);
         }
-
         let mut bytes = Vec::with_capacity((round_challenges.len() + 1) * 32);
         for challenge in round_challenges {
             bytes.extend(self.assigned_scalar_bytes(ctx, *challenge));
         }
         bytes.extend(self.assigned_point_bytes(ctx, folded_generator)?);
-
         let gate = self.scalar.clone();
         let mut limbs = Vec::with_capacity(expected_len);
         limbs.push(ctx.main().load_constant(Inner::<C>::from(u64::from(
@@ -1017,7 +942,6 @@ where
         }
         Ok(limbs)
     }
-
     /// Select between two non-identity symbolic points using an assigned
     /// Boolean scalar.
     ///
@@ -1040,16 +964,13 @@ where
         );
         self.scalar.assert_bit(ctx.main(), selector);
         let not_selector = self.scalar.not(ctx.main(), selector);
-
         let mut selected_terms = self.scale_terms(ctx, &when_true.terms, selector);
         selected_terms.extend(self.scale_terms(ctx, &when_false.terms, not_selector));
         let selected_terms = self.normalize_terms(ctx, selected_terms);
-
         // Arithmetic selection computes only the witness value; the deferred
         // equation below is the authority. This avoids a host Boolean branch.
         let difference = when_true.value.to_curve() - when_false.value.to_curve();
         let value = (when_false.value.to_curve() + difference * *selector.value()).to_affine();
-
         // Both candidates are non-identity and the selector is Boolean, so the
         // selected value is always a valid source without witness-dependent
         // circuit shape.
@@ -1070,7 +991,6 @@ where
             terms: self.one_term(ctx, source_index),
         }
     }
-
     fn coordinate_to_native_scalar(
         &self,
         _ctx: &mut ScalarContext<C>,
@@ -1084,7 +1004,6 @@ where
         // the same reduction would add no invariant.
         *coordinate.integer().native()
     }
-
     fn assign_source(&self, ctx: &mut ScalarContext<C>, point: C, constant: bool) -> usize {
         assert!(
             !bool::from(point.is_identity()),
@@ -1126,7 +1045,6 @@ where
         }
         source_index
     }
-
     /// Return the exact Poseidon encoding for one fixed source, assigning its
     /// cross-field residues only on first use.
     fn source_transcript_encoding(
@@ -1143,7 +1061,6 @@ where
         {
             return encoding;
         }
-
         let (x, y) = {
             let state = self.state.borrow();
             let source = state
@@ -1170,7 +1087,6 @@ where
         );
         encoding
     }
-
     /// Return the exact compressed-point chunks for one fixed source,
     /// assigning and caching them only on first use.
     fn source_commitment_encoding(
@@ -1187,7 +1103,6 @@ where
         {
             return encoding;
         }
-
         let (x, y) = {
             let state = self.state.borrow();
             let source = state
@@ -1219,14 +1134,12 @@ where
         );
         encoding
     }
-
     fn one_term(&self, ctx: &mut ScalarContext<C>, source_index: usize) -> Vec<SymbolicTerm<C>> {
         vec![SymbolicTerm {
             source_index,
             coefficient: ctx.main().load_constant(Inner::<C>::ONE),
         }]
     }
-
     fn normalize_terms(
         &self,
         ctx: &mut ScalarContext<C>,
@@ -1253,7 +1166,6 @@ where
             })
             .collect()
     }
-
     fn scale_terms(
         &self,
         ctx: &mut ScalarContext<C>,
@@ -1272,7 +1184,6 @@ where
             })
             .collect()
     }
-
     fn record_equation(
         &self,
         ctx: &mut ScalarContext<C>,
@@ -1291,7 +1202,6 @@ where
             .equations
             .push(DeferredEquation { terms });
     }
-
     fn assign_derived_encoding(
         &self,
         ctx: &mut ScalarContext<C>,
@@ -1320,7 +1230,6 @@ where
         Ok(self.source_transcript_encoding(ctx, source_index))
     }
 }
-
 impl<C> EccInstructions<C> for DeferredScalarEccChip<'_, C>
 where
     C: CurveAffineExt,
@@ -1332,11 +1241,9 @@ where
     type AssignedCell = AssignedValue<Inner<C>>;
     type AssignedScalar = AssignedValue<Inner<C>>;
     type AssignedEcPoint = DeferredScalarPoint<C>;
-
     fn scalar_chip(&self) -> &Self::ScalarChip {
         &self.scalar
     }
-
     fn assign_constant(&self, ctx: &mut Self::Context, point: C) -> Self::AssignedEcPoint {
         if bool::from(point.is_identity()) {
             return DeferredScalarPoint {
@@ -1352,7 +1259,6 @@ where
             terms: self.one_term(ctx, source_index),
         }
     }
-
     fn assign_point(&self, ctx: &mut Self::Context, point: C) -> Self::AssignedEcPoint {
         if bool::from(point.is_identity()) {
             return DeferredScalarPoint {
@@ -1368,7 +1274,6 @@ where
             terms: self.one_term(ctx, source_index),
         }
     }
-
     fn sum_with_const(
         &self,
         ctx: &mut Self::Context,
@@ -1391,7 +1296,6 @@ where
             terms: self.normalize_terms(ctx, terms),
         }
     }
-
     fn fixed_base_msm(
         &mut self,
         ctx: &mut Self::Context,
@@ -1416,7 +1320,6 @@ where
             terms: self.normalize_terms(ctx, terms),
         }
     }
-
     fn variable_base_msm(
         &mut self,
         ctx: &mut Self::Context,
@@ -1437,7 +1340,6 @@ where
             terms: self.normalize_terms(ctx, terms),
         }
     }
-
     fn assert_equal(
         &self,
         ctx: &mut Self::Context,
@@ -1456,7 +1358,6 @@ where
         self.record_equation(ctx, terms);
     }
 }
-
 impl<C> NativeEncoding<C> for DeferredScalarEccChip<'_, C>
 where
     C: CurveAffineExt,
@@ -1471,7 +1372,6 @@ where
         Ok(self.assign_derived_encoding(ctx, point)?.to_vec())
     }
 }
-
 /// Non-native scalar instructions used by `snark-verifier`.
 #[derive(Clone, Debug)]
 pub(super) struct PastaCycleScalarChip<'chip, C>
@@ -1483,7 +1383,6 @@ where
     field: &'chip FpChip<'chip, Outer<C>, Inner<C>>,
     _curve: PhantomData<C>,
 }
-
 impl<'chip, C> PastaCycleScalarChip<'chip, C>
 where
     C: CurveAffineExt,
@@ -1496,11 +1395,9 @@ where
             _curve: PhantomData,
         }
     }
-
     fn canonical(&self, ctx: &mut halo2_base::Context<Outer<C>>, value: Integer<C>) -> Integer<C> {
         self.field.enforce_less_than(ctx, value).into()
     }
-
     fn add(
         &self,
         ctx: &mut halo2_base::Context<Outer<C>>,
@@ -1510,7 +1407,6 @@ where
         let sum = self.field.add_no_carry(ctx, lhs, rhs);
         self.field.carry_mod(ctx, sum)
     }
-
     fn mul(
         &self,
         ctx: &mut halo2_base::Context<Outer<C>>,
@@ -1520,7 +1416,6 @@ where
         self.field.mul(ctx, lhs, rhs)
     }
 }
-
 impl<C> IntegerInstructions<Inner<C>> for PastaCycleScalarChip<'_, C>
 where
     C: CurveAffineExt,
@@ -1530,16 +1425,13 @@ where
     type Context = SinglePhaseCoreManager<Outer<C>>;
     type AssignedCell = AssignedValue<Outer<C>>;
     type AssignedInteger = Integer<C>;
-
     fn assign_integer(&self, ctx: &mut Self::Context, integer: Inner<C>) -> Self::AssignedInteger {
         let value = self.field.load_private(ctx.main(), integer);
         self.canonical(ctx.main(), value)
     }
-
     fn assign_constant(&self, ctx: &mut Self::Context, integer: Inner<C>) -> Self::AssignedInteger {
         self.field.load_constant(ctx.main(), integer)
     }
-
     fn sum_with_coeff_and_const(
         &self,
         ctx: &mut Self::Context,
@@ -1555,7 +1447,6 @@ where
         }
         sum
     }
-
     fn sum_products_with_coeff_and_const(
         &self,
         ctx: &mut Self::Context,
@@ -1576,7 +1467,6 @@ where
         }
         sum
     }
-
     fn sub(
         &self,
         ctx: &mut Self::Context,
@@ -1588,11 +1478,9 @@ where
             .sub_no_carry(ctx.main(), lhs.clone(), rhs.clone());
         self.field.carry_mod(ctx.main(), difference)
     }
-
     fn neg(&self, ctx: &mut Self::Context, value: &Self::AssignedInteger) -> Self::AssignedInteger {
         self.field.negate(ctx.main(), value.clone())
     }
-
     fn invert(
         &self,
         ctx: &mut Self::Context,
@@ -1601,7 +1489,6 @@ where
         let one = self.field.load_constant(ctx.main(), Inner::<C>::ONE);
         self.field.divide(ctx.main(), one, value.clone())
     }
-
     fn assert_equal(
         &self,
         ctx: &mut Self::Context,
@@ -1611,7 +1498,6 @@ where
         self.field
             .assert_equal(ctx.main(), lhs.clone(), rhs.clone());
     }
-
     fn pow_var(
         &self,
         ctx: &mut Self::Context,
@@ -1629,7 +1515,6 @@ where
         for bit in bits.iter().skip(max_bits) {
             gate.assert_is_const(ctx.main(), bit, &Outer::<C>::ZERO);
         }
-
         let mut result = self.field.load_constant(ctx.main(), Inner::<C>::ONE);
         let mut power = base.clone();
         for bit in bits.into_iter().take(max_bits) {
@@ -1640,7 +1525,6 @@ where
         result
     }
 }
-
 /// Opposite-field curve instructions for one Pasta parity.
 #[derive(Clone, Debug)]
 pub(super) struct PastaCycleEccChip<'chip, C>
@@ -1653,7 +1537,6 @@ where
     base: &'chip FpChip<'chip, Outer<C>, Outer<C>>,
     scalar: PastaCycleScalarChip<'chip, C>,
 }
-
 impl<'chip, C> PastaCycleEccChip<'chip, C>
 where
     C: CurveAffineExt,
@@ -1670,11 +1553,9 @@ where
             scalar: PastaCycleScalarChip::new(scalar),
         }
     }
-
     fn curve(&self) -> EccChip<'_, Outer<C>, NativePastaFieldChip<'chip, Outer<C>>> {
         EccChip::new(&self.native_base)
     }
-
     fn canonical_scalar(
         &self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
@@ -1685,7 +1566,6 @@ where
             .limbs()
             .to_vec()
     }
-
     /// Assign the `halo2_ecc` canonical `(0, 0)` representation of the point
     /// at infinity without passing `C::identity()` through the affine-only
     /// constant-point loader.
@@ -1693,7 +1573,6 @@ where
         let zero = self.native_base.load_constant(ctx.main(), Outer::<C>::ZERO);
         AssignedEcPoint::new(zero, zero)
     }
-
     fn canonical_coordinate(
         &self,
         ctx: &mut halo2_base::Context<Outer<C>>,
@@ -1704,7 +1583,6 @@ where
         ctx.constrain_equal(canonical.native(), &coordinate.0);
         canonical
     }
-
     /// Assign and canonicalize every deferred source and coefficient.
     ///
     /// Assignment is deliberately separate from enforcement. The complete
@@ -1729,7 +1607,6 @@ where
         {
             return Err("Kagemusha deferred point witness is empty or non-canonical".to_owned());
         }
-
         let sources = witness
             .sources
             .iter()
@@ -1767,7 +1644,6 @@ where
             equations,
         })
     }
-
     /// Derive the V5 batch challenge from seven complete SHA-256 words.
     ///
     /// Words are packed little-endian by word into a 224-bit integer and one
@@ -1788,7 +1664,6 @@ where
             self.base.range.range_check(ctx, word, 32);
             weights.push(Constant(weight));
             weight *= radix;
-
             let digits = fe_to_biguint(word.value()).to_u32_digits();
             if digits.len() > 1 {
                 return Err(format!(
@@ -1808,7 +1683,6 @@ where
                 .gate()
                 .add(ctx, Existing(packed), Constant(Outer::<C>::ONE));
         self.base.range.range_check(ctx, native_challenge, 225);
-
         let maximum = BigUint::from(1_u8) << 224;
         if challenge_integer > maximum {
             return Err("Kagemusha V5 batch challenge exceeds 2^224".to_owned());
@@ -1821,7 +1695,6 @@ where
         ctx.constrain_equal(challenge.native(), &native_challenge);
         Ok(challenge)
     }
-
     /// Accumulate all selector-gated equations by stable source index.
     fn deferred_equation_batch_coefficients_v5(
         &self,
@@ -1838,7 +1711,6 @@ where
         {
             return Err("Kagemusha V5 deferred-equation batch shape is invalid".to_owned());
         }
-
         let challenge = self.deferred_batch_challenge_v5(ctx, digest_words)?;
         let mut power = self.scalar.field.load_constant(ctx.main(), Inner::<C>::ONE);
         let zero = self
@@ -1846,7 +1718,6 @@ where
             .field
             .load_constant(ctx.main(), Inner::<C>::ZERO);
         let mut by_source = BTreeMap::<usize, Integer<C>>::new();
-
         for (equation, selector) in audit.equations.iter().zip(selectors.iter().copied()) {
             self.base.gate().assert_bit(ctx.main(), selector);
             for (source_index, coefficient) in equation {
@@ -1871,7 +1742,6 @@ where
         }
         Ok(by_source)
     }
-
     /// Enforce all selector-gated equations with one dense normalized-GLV MSM.
     ///
     /// The power advances for every equation, including disabled equations.
@@ -1907,7 +1777,6 @@ where
             .collect::<Vec<_>>();
         dense_jobs.queue_constrained(ctx.main(), self.scalar.field, &sources)
     }
-
     /// Retain the former generic MSM only for focused legacy-equivalence tests.
     #[cfg(test)]
     pub(super) fn constrain_deferred_equation_batch_generic_v5(
@@ -1936,7 +1805,6 @@ where
         );
         Ok(())
     }
-
     /// Convert one assigned outer-field value below `2^bit_len` into the exact
     /// non-native scalar integer used by the reciprocal Poseidon sponge.
     fn assigned_native_as_scalar_integer(
@@ -1959,7 +1827,6 @@ where
         ctx.main().constrain_equal(assigned.native(), &value);
         Ok(assigned)
     }
-
     /// Constrain the injective two-`u128` compressed encoding of one point.
     pub(super) fn assigned_point_poseidon_elements_v2(
         &self,
@@ -1979,7 +1846,6 @@ where
             self.assigned_native_as_scalar_integer(ctx, packed[1], 128)?,
         ])
     }
-
     /// Constrain the complete reciprocal V6 audit Poseidon input and retain
     /// its source encodings for the V2 protocol-identity commitment.
     pub(super) fn assigned_equation_poseidon_elements_v6(
@@ -1997,7 +1863,6 @@ where
         {
             return Err("Kagemusha V6 deferred-audit selector shape mismatch".to_owned());
         }
-
         let mut elements = kagemusha_poseidon_domain_elements::<Inner<C>>(
             KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V6,
             KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6,
@@ -2017,7 +1882,6 @@ where
                 u64::try_from(audit.equations.len()).expect("fixed equation count fits u64"),
             ),
         ));
-
         let mut poseidon_elements = Vec::with_capacity(audit.sources.len());
         for source in &audit.sources {
             let encoding = self.assigned_point_poseidon_elements_v2(ctx, source)?;
@@ -2062,7 +1926,6 @@ where
             },
         ))
     }
-
     /// Constrain the canonical bytes of a reciprocal non-native scalar.
     pub(super) fn assigned_scalar_bytes(
         &self,
@@ -2071,7 +1934,6 @@ where
     ) -> [KagemushaSha256ByteV4<Outer<C>>; 32] {
         proper_uint_le_bytes(ctx.main(), self.scalar.field.range, scalar)
     }
-
     /// Constrain the canonical compressed bytes of an assigned on-curve point.
     pub(super) fn assigned_point_bytes(
         &self,
@@ -2082,7 +1944,6 @@ where
         let y = self.canonical_coordinate(ctx.main(), point.y);
         compressed_point_bytes(ctx.main(), self.base.range, &x, &y)
     }
-
     /// Convert a canonical base-field coordinate to the exact residue
     /// used by the native Poseidon transcript.  The quotient and every
     /// radix carry are boolean-constrained, so an outer-field wrap
@@ -2106,11 +1967,9 @@ where
         let residue_value = biguint_to_fe::<Inner<C>>(&residue_integer);
         let residue = self.scalar.field.load_private(ctx, residue_value);
         self.scalar.field.enforce_less_than_p(ctx, residue.clone());
-
         let quotient_u64 = quotient.to_u64_digits().first().copied().unwrap_or(0);
         let quotient_cell = ctx.load_witness(Outer::<C>::from(quotient_u64));
         self.base.gate().assert_bit(ctx, quotient_cell);
-
         let one = quotient.clone() - quotient.clone() + 1u64;
         let radix_integer = &one << LIMB_BITS;
         let limb_mask = &radix_integer - &one;
@@ -2131,7 +1990,6 @@ where
             assert!(carry_u64 <= 1);
             let next_carry = ctx.load_witness(Outer::<C>::from(carry_u64));
             self.base.gate().assert_bit(ctx, next_carry);
-
             let quotient_modulus =
                 self.base
                     .gate()
@@ -2163,7 +2021,6 @@ where
         residue
     }
 }
-
 impl<'chip, C> EccInstructions<C> for PastaCycleEccChip<'chip, C>
 where
     C: CurveAffineExt,
@@ -2175,19 +2032,15 @@ where
     type AssignedCell = AssignedValue<Outer<C>>;
     type AssignedScalar = Integer<C>;
     type AssignedEcPoint = Point<C>;
-
     fn scalar_chip(&self) -> &Self::ScalarChip {
         &self.scalar
     }
-
     fn assign_constant(&self, ctx: &mut Self::Context, point: C) -> Self::AssignedEcPoint {
         self.curve().assign_constant_point(ctx.main(), point)
     }
-
     fn assign_point(&self, ctx: &mut Self::Context, point: C) -> Self::AssignedEcPoint {
         self.curve().assign_point(ctx.main(), point)
     }
-
     fn sum_with_const(
         &self,
         ctx: &mut Self::Context,
@@ -2203,7 +2056,6 @@ where
                 .chain(values.iter().map(|point| point.deref().clone())),
         )
     }
-
     fn fixed_base_msm(
         &mut self,
         ctx: &mut Self::Context,
@@ -2220,7 +2072,6 @@ where
         self.curve()
             .fixed_base_msm::<C>(ctx, &points, scalars, LIMB_BITS)
     }
-
     fn variable_base_msm(
         &mut self,
         ctx: &mut Self::Context,
@@ -2243,7 +2094,6 @@ where
         self.curve()
             .variable_base_msm::<C>(ctx, &points, scalars, LIMB_BITS)
     }
-
     fn assert_equal(
         &self,
         ctx: &mut Self::Context,
@@ -2254,7 +2104,6 @@ where
             .assert_equal(ctx.main(), lhs.clone(), rhs.clone());
     }
 }
-
 impl<C> NativeEncoding<C> for PastaCycleEccChip<'_, C>
 where
     C: CurveAffineExt,
@@ -2278,11 +2127,9 @@ where
         ])
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::mem;
-
     use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
     use halo2_ecc::fields::fp::FpChip;
     use halo2_proofs::{
@@ -2294,15 +2141,12 @@ mod tests {
         },
     };
     use snark_verifier::{loader::halo2::EccInstructions, util::arithmetic::PrimeCurveAffine as _};
-
     use super::*;
     use crate::zk::{
         kagemusha_recursion_adapter::constrain_reciprocal_poseidon_v6,
         kagemusha_sha256_v4::KagemushaSha256JobsV4,
     };
-
     const TEST_K: usize = 17;
-
     fn assigned_preimage_bytes<F: BigPrimeField>(bytes: &[KagemushaSha256ByteV4<F>]) -> Vec<u8> {
         bytes
             .iter()
@@ -2310,7 +2154,6 @@ mod tests {
             .map(KagemushaSha256ByteV4::test_value)
             .collect()
     }
-
     fn reciprocal_builder<C>(
         witness: &DeferredEquationWitness<C>,
         selectors: &[u64],
@@ -2368,7 +2211,6 @@ mod tests {
         builder.calculate_params(Some(9));
         builder
     }
-
     fn reciprocal_source_encoding_fixture<C>(
         sources: Vec<C>,
     ) -> (
@@ -2403,7 +2245,6 @@ mod tests {
         builder.calculate_params(Some(9));
         (builder, source_encodings)
     }
-
     fn native_curve_arithmetic_builder<C>() -> BaseCircuitBuilder<Outer<C>>
     where
         C: CurveAffineExt,
@@ -2417,7 +2258,6 @@ mod tests {
         let native = NativePastaFieldChip::<Outer<C>>::new(&range);
         let curve = EccChip::new(&native);
         let mut ctx = mem::take(builder.pool(0));
-
         let generator = C::generator();
         let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
         let tripled = (doubled.to_curve() + generator.to_curve()).to_affine();
@@ -2429,7 +2269,6 @@ mod tests {
         );
         let expected = curve.assign_constant_point(ctx.main(), tripled);
         curve.assert_equal(ctx.main(), sum, expected);
-
         let negated = curve.negate(ctx.main(), assigned_generator.clone());
         let identity = curve.sum::<C>(ctx.main(), [assigned_generator.clone(), negated]);
         native
@@ -2438,18 +2277,15 @@ mod tests {
         native
             .gate()
             .assert_is_const(ctx.main(), &identity.y.assigned(), &Outer::<C>::ZERO);
-
         let zero = native.load_constant(ctx.main(), Outer::<C>::ZERO);
         let encoded_identity = AssignedEcPoint::new(zero, zero);
         let identity_ignored =
             curve.sum::<C>(ctx.main(), [encoded_identity, assigned_generator.clone()]);
         curve.assert_equal(ctx.main(), identity_ignored, assigned_generator);
-
         *builder.pool(0) = ctx;
         builder.calculate_params(Some(9));
         builder
     }
-
     fn reciprocal_msm_builder<C>() -> BaseCircuitBuilder<Outer<C>>
     where
         C: CurveAffineExt,
@@ -2464,7 +2300,6 @@ mod tests {
         let scalar = FpChip::<Outer<C>, Inner<C>>::new(&range, LIMB_BITS, LIMBS);
         let mut chip = PastaCycleEccChip::<C>::new(&base, &scalar);
         let mut ctx = mem::take(builder.pool(0));
-
         let generator = C::generator();
         let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
         let scalar_three = chip.scalar.assign_integer(&mut ctx, Inner::<C>::from(3));
@@ -2488,12 +2323,10 @@ mod tests {
         let expected = chip.assign_constant(&mut ctx, expected);
         chip.assert_equal(&mut ctx, &variable, &expected);
         chip.assert_equal(&mut ctx, &fixed, &expected);
-
         *builder.pool(0) = ctx;
         builder.calculate_params(Some(9));
         builder
     }
-
     #[test]
     fn reciprocal_residual_is_gated_only_by_the_assigned_selector() {
         let generator = EqAffine::generator();
@@ -2505,19 +2338,16 @@ mod tests {
             sources: vec![generator],
             equations: vec![vec![(0, Fp::ONE)]],
         };
-
         for selector in [0, 1] {
             let builder = reciprocal_builder(&valid, &[selector]);
             MockProver::run(builder.config_params.k as u32, &builder, vec![])
                 .expect("valid selector-gated residual prover")
                 .assert_satisfied();
         }
-
         let disabled = reciprocal_builder(&invalid, &[0]);
         MockProver::run(disabled.config_params.k as u32, &disabled, vec![])
             .expect("disabled invalid residual prover")
             .assert_satisfied();
-
         let enabled = reciprocal_builder(&invalid, &[1]);
         assert!(
             MockProver::run(enabled.config_params.k as u32, &enabled, vec![])
@@ -2527,7 +2357,6 @@ mod tests {
             "selector one must reject a non-identity deferred residual"
         );
     }
-
     #[test]
     fn reciprocal_equation_selectors_are_independent() {
         let generator = EqAffine::generator();
@@ -2535,7 +2364,6 @@ mod tests {
             sources: vec![generator],
             equations: vec![vec![(0, Fp::ONE)], vec![(0, Fp::ZERO)]],
         };
-
         let disabled_invalid = reciprocal_builder(&invalid_then_valid, &[0, 1]);
         MockProver::run(
             disabled_invalid.config_params.k as u32,
@@ -2544,7 +2372,6 @@ mod tests {
         )
         .expect("independently disabled residual prover")
         .assert_satisfied();
-
         let enabled_invalid = reciprocal_builder(&invalid_then_valid, &[1, 1]);
         assert!(
             MockProver::run(
@@ -2556,7 +2383,6 @@ mod tests {
             .verify()
             .is_err()
         );
-
         let invalid_then_invalid = DeferredEquationWitness {
             sources: vec![generator],
             equations: vec![vec![(0, Fp::ONE)], vec![(0, Fp::ONE)]],
@@ -2574,7 +2400,6 @@ mod tests {
             "disabling one equation must not disable its enabled neighbor"
         );
     }
-
     #[test]
     fn native_reciprocal_curve_arithmetic_matches_both_pasta_host_groups() {
         fn check<C>()
@@ -2599,7 +2424,6 @@ mod tests {
         check::<EqAffine>();
         check::<EpAffine>();
     }
-
     #[test]
     fn native_reciprocal_msm_matches_both_pasta_host_groups() {
         fn check<C>()
@@ -2616,7 +2440,6 @@ mod tests {
         check::<EqAffine>();
         check::<EpAffine>();
     }
-
     #[test]
     fn native_reciprocal_point_encoding_matches_both_pasta_host_encodings() {
         fn check<C>()
@@ -2638,7 +2461,6 @@ mod tests {
             let actual = assigned_preimage_bytes(&chip.assigned_point_bytes(&mut ctx, &assigned));
             let expected = generator.to_bytes();
             assert_eq!(actual.as_slice(), expected.as_ref());
-
             *builder.pool(0) = ctx;
             builder.calculate_params(Some(9));
             MockProver::run(builder.config_params.k as u32, &builder, vec![])
@@ -2648,7 +2470,6 @@ mod tests {
         check::<EqAffine>();
         check::<EpAffine>();
     }
-
     #[test]
     fn reciprocal_v6_source_map_reuses_native_chunks_in_both_pasta_parities() {
         fn check<C>()
@@ -2666,7 +2487,6 @@ mod tests {
                 .mapped_poseidon_elements_v2(&[generator, tripled], &[0, 2])
                 .expect("strict V6-to-V2 source map");
             assert_eq!(mapped.len(), 4);
-
             for (mapped_point, (source_index, point)) in
                 mapped.chunks_exact(2).zip([(0, generator), (2, tripled)])
             {
@@ -2687,16 +2507,13 @@ mod tests {
                     );
                 }
             }
-
             MockProver::run(builder.config_params.k as u32, &builder, vec![])
                 .expect("V6-to-V2 source reuse mock prover")
                 .assert_satisfied();
         }
-
         check::<EqAffine>();
         check::<EpAffine>();
     }
-
     #[test]
     fn reciprocal_v6_source_map_rejects_ambiguous_or_mismatched_indices() {
         let generator = EqAffine::generator();
@@ -2704,7 +2521,6 @@ mod tests {
         let tripled = (doubled.to_curve() + generator.to_curve()).to_affine();
         let (_, source_encodings) =
             reciprocal_source_encoding_fixture(vec![generator, doubled, tripled]);
-
         assert!(
             source_encodings
                 .mapped_poseidon_elements_v2(&[tripled, generator], &[2, 0])
@@ -2736,7 +2552,6 @@ mod tests {
             "point/index shape mismatches must fail"
         );
     }
-
     #[test]
     fn byte_oriented_proper_uint_matches_both_pasta_canonical_encodings() {
         fn check<F, P>(value: P)
@@ -2763,7 +2578,6 @@ mod tests {
                 .iter()
                 .map(|manager| manager.total_rows())
                 .sum::<usize>();
-
             let host_encoding = fe_to_biguint(&value).to_bytes_le();
             let expected: [u8; 32] =
                 std::array::from_fn(|index| host_encoding.get(index).copied().unwrap_or(0));
@@ -2773,18 +2587,15 @@ mod tests {
                 72,
                 "32 Range8 bytes and four split pieces each consume two lookup rows"
             );
-
             *builder.pool(0) = ctx;
             builder.calculate_params(Some(9));
             MockProver::run(builder.config_params.k as u32, &builder, vec![])
                 .expect("byte-oriented canonical Pasta integer mock prover")
                 .assert_satisfied();
         }
-
         check::<Fp, Fq>(-Fq::ONE);
         check::<Fq, Fp>(-Fp::ONE);
     }
-
     #[test]
     fn reciprocal_residual_enforcement_supports_both_pasta_parities() {
         let eq_generator = EqAffine::generator();
@@ -2811,7 +2622,6 @@ mod tests {
                 .verify()
                 .is_err()
         );
-
         let ep_generator = EpAffine::generator();
         let ep_valid = DeferredEquationWitness {
             sources: vec![ep_generator],
@@ -2837,7 +2647,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn transcript_challenge_rejects_fixed_sum_equation_cancellation() {
         fn check<C>()
@@ -2863,7 +2672,6 @@ mod tests {
         check::<EqAffine>();
         check::<EpAffine>();
     }
-
     #[test]
     fn constant_sources_are_interned_but_equal_witness_sources_remain_distinct() {
         let mut builder = BaseCircuitBuilder::<Fp>::new(false)
@@ -2875,24 +2683,20 @@ mod tests {
         let chip = DeferredScalarEccChip::<EqAffine>::new(&coordinate, &scalar_integer);
         let mut ctx = mem::take(builder.pool(0));
         let generator = EqAffine::generator();
-
         let first_constant = chip.assign_constant(&mut ctx, generator);
         let second_constant = chip.assign_constant(&mut ctx, generator);
         assert_eq!(first_constant.source_index, second_constant.source_index);
         assert_eq!(chip.witness().sources.len(), 1);
-
         let first_witness = chip.assign_point(&mut ctx, generator);
         let second_witness = chip.assign_point(&mut ctx, generator);
         assert_ne!(first_witness.source_index, second_witness.source_index);
         assert_eq!(chip.witness().sources.len(), 3);
-
         *builder.pool(0) = ctx;
         builder.calculate_params(Some(9));
         MockProver::run(builder.config_params.k as u32, &builder, vec![])
             .expect("constant-source interning mock prover")
             .assert_satisfied();
     }
-
     #[test]
     fn constant_source_byte_serialization_keeps_transcript_encoding_lazy() {
         let mut builder = BaseCircuitBuilder::<Fp>::new(false)
@@ -2903,7 +2707,6 @@ mod tests {
         let scalar_integer = FpChip::<Fp, Fp>::new(&range, LIMB_BITS, LIMBS);
         let chip = DeferredScalarEccChip::<EqAffine>::new(&coordinate, &scalar_integer);
         let mut ctx = mem::take(builder.pool(0));
-
         let point = chip.assign_constant(&mut ctx, EqAffine::generator());
         let encoded = chip
             .assigned_point_bytes(&mut ctx, &point)
@@ -2916,7 +2719,6 @@ mod tests {
             chip.state.borrow().sources[0].transcript_encoding.is_none(),
             "canonical byte serialization must not construct Poseidon residues"
         );
-
         *builder.pool(0) = ctx;
         assert_eq!(
             builder
@@ -2932,7 +2734,6 @@ mod tests {
             .expect("constant canonical-coordinate mock prover")
             .assert_satisfied();
     }
-
     #[test]
     fn transcript_encoding_is_lazy_and_cached_by_source_index() {
         let mut builder = BaseCircuitBuilder::<Fp>::new(false)
@@ -2943,7 +2744,6 @@ mod tests {
         let scalar_integer = FpChip::<Fp, Fp>::new(&range, LIMB_BITS, LIMBS);
         let chip = DeferredScalarEccChip::<EqAffine>::new(&coordinate, &scalar_integer);
         let mut ctx = mem::take(builder.pool(0));
-
         let generator = chip.assign_point(&mut ctx, EqAffine::generator());
         let doubled_value =
             (EqAffine::generator().to_curve() + EqAffine::generator().to_curve()).to_affine();
@@ -2956,7 +2756,6 @@ mod tests {
                 .all(|source| source.transcript_encoding.is_none()),
             "source assignment must not eagerly build cross-field residues"
         );
-
         let first = chip
             .assign_derived_encoding(&mut ctx, &generator)
             .expect("generator transcript encoding");
@@ -2971,7 +2770,6 @@ mod tests {
                 .is_none(),
             "encoding one source must not materialize an equal-shaped neighbor"
         );
-
         let cells_after_first = ctx.main().advice.len();
         let repeated = chip
             .assign_derived_encoding(&mut ctx, &generator)
@@ -2986,7 +2784,6 @@ mod tests {
             cells_after_first,
             "re-encoding one source index must assign no additional cells"
         );
-
         let _ = chip
             .assign_derived_encoding(&mut ctx, &doubled)
             .expect("doubled transcript encoding");
@@ -2997,19 +2794,16 @@ mod tests {
                 .iter()
                 .all(|source| source.transcript_encoding.is_some())
         );
-
         *builder.pool(0) = ctx;
         builder.calculate_params(Some(9));
         MockProver::run(builder.config_params.k as u32, &builder, vec![])
             .expect("lazy source-indexed transcript encoding mock prover")
             .assert_satisfied();
     }
-
     #[test]
     fn symbolic_point_selection_records_a_selector_bound_source_equation() {
         let generator = EqAffine::generator();
         let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
-
         for selector_value in [0, 1] {
             let mut builder = BaseCircuitBuilder::<Fp>::new(false)
                 .use_k(TEST_K)
@@ -3031,7 +2825,6 @@ mod tests {
                     doubled
                 }
             );
-
             let witness = chip.witness();
             assert_eq!(witness.equations.len(), 1);
             for equation in &witness.equations {
@@ -3043,7 +2836,6 @@ mod tests {
                 );
                 assert!(bool::from(residual.is_identity()));
             }
-
             *builder.pool(0) = ctx;
             builder.calculate_params(Some(9));
             MockProver::run(builder.config_params.k as u32, &builder, vec![])

@@ -1,7 +1,6 @@
 use super::{
     CoerceKey, Error, JsonDeserialize, KeyRef, Parser, Visitor, try_decode_string_copy, visit_value,
 };
-
 /// Streaming visitor for a JSON object.
 pub struct MapVisitor<'a, 'p> {
     parser: &'p mut Parser<'a>,
@@ -10,7 +9,6 @@ pub struct MapVisitor<'a, 'p> {
     after_comma: bool,
     total_entries: usize,
 }
-
 impl<'a, 'p> MapVisitor<'a, 'p> {
     /// Begin visiting an object at the parser's current position.
     pub fn new(parser: &'p mut Parser<'a>) -> Result<Self, Error> {
@@ -28,26 +26,22 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
         }
         Ok(visitor)
     }
-
     /// Access the underlying parser.
     #[inline]
     pub fn parser(&mut self) -> &mut Parser<'a> {
         self.parser
     }
-
     /// Return whether the closing delimiter has been consumed.
     #[inline]
     pub fn is_finished(&self) -> bool {
         self.finished && !self.value_pending
     }
-
     /// Number of entries lexically admitted for this object.
     #[doc(hidden)]
     #[inline]
     pub fn total_entries(&self) -> usize {
         self.total_entries
     }
-
     /// Parse the next object key without materializing its value.
     pub fn next_key(&mut self) -> Result<Option<KeyRef<'a>>, Error> {
         if self.finished {
@@ -68,12 +62,10 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
         self.value_pending = true;
         Ok(Some(key))
     }
-
     /// Parse the value belonging to the current key.
     pub fn parse_value<T: JsonDeserialize>(&mut self) -> Result<T, Error> {
         self.parse_value_with_parser(T::json_deserialize)
     }
-
     /// Parse the pending value directly from the underlying parser.
     ///
     /// The closure must consume exactly one JSON value. Object delimiter
@@ -91,7 +83,6 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
         self.finish_value()?;
         Ok(value)
     }
-
     /// Parse the current value with a custom streaming visitor.
     pub fn parse_value_with<V>(&mut self, visitor: V) -> Result<V::Value, Error>
     where
@@ -104,7 +95,6 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
         self.finish_value()?;
         Ok(value)
     }
-
     /// Skip the value belonging to the current key.
     pub fn skip_value(&mut self) -> Result<(), Error> {
         if !self.value_pending {
@@ -113,7 +103,6 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
         self.parser.skip_value_lexical()?;
         self.finish_value()
     }
-
     /// Parse the next key and typed value as one owned entry.
     pub fn next_entry<T: JsonDeserialize>(&mut self) -> Result<Option<(String, T)>, Error> {
         match self.next_key()? {
@@ -128,7 +117,6 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
             None => Ok(None),
         }
     }
-
     /// Fetch the next key and coerce it into `T` using `FromStr`.
     ///
     /// Returns `Ok(None)` when the object has no more entries. Any parse
@@ -147,7 +135,6 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
             None => Ok(None),
         }
     }
-
     /// Fetch the next key/value pair, coercing the key via `FromStr` and
     /// deserializing the value using `JsonDeserialize`.
     pub fn next_entry_coerced<T, V>(&mut self) -> Result<Option<(T, V)>, Error>
@@ -165,7 +152,6 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
             None => Ok(None),
         }
     }
-
     /// Finish the object and require its closing delimiter.
     pub fn finish(mut self) -> Result<(), Error> {
         if self.value_pending {
@@ -185,25 +171,21 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
         }
         Ok(())
     }
-
     /// Construct a missing-field error.
     #[inline]
     pub fn missing_field(field: &'static str) -> Error {
         Error::missing_field(field)
     }
-
     /// Construct a duplicate-field error.
     #[inline]
     pub fn duplicate_field(_field: &str) -> Error {
         Error::Message("duplicate JSON object field".to_owned())
     }
-
     /// Construct an unknown-field error.
     #[inline]
     pub fn unknown_field(field: &str) -> Error {
         Error::unknown_field(field)
     }
-
     fn reject_trailing_comma(&mut self) -> Result<(), Error> {
         self.parser.skip_ws();
         if self.after_comma && self.parser.peek() == Some(b'}') {
@@ -211,7 +193,6 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
         }
         Ok(())
     }
-
     fn finish_value(&mut self) -> Result<(), Error> {
         self.parser.skip_ws();
         match self.parser.peek() {
@@ -240,14 +221,12 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
         }
     }
 }
-
 /// Streaming visitor for a JSON array.
 pub struct SeqVisitor<'a, 'p> {
     parser: &'p mut Parser<'a>,
     finished: bool,
     after_comma: bool,
 }
-
 impl<'a, 'p> SeqVisitor<'a, 'p> {
     /// Begin visiting an array at the parser's current position.
     pub fn new(parser: &'p mut Parser<'a>) -> Result<Self, Error> {
@@ -263,19 +242,16 @@ impl<'a, 'p> SeqVisitor<'a, 'p> {
         }
         Ok(visitor)
     }
-
     /// Access the underlying parser.
     #[inline]
     pub fn parser(&mut self) -> &mut Parser<'a> {
         self.parser
     }
-
     /// Return whether the closing delimiter has been consumed.
     #[inline]
     pub fn is_finished(&self) -> bool {
         self.finished
     }
-
     /// Parse the next typed array element.
     pub fn next_element<T: JsonDeserialize>(&mut self) -> Result<Option<T>, Error> {
         if self.finished {
@@ -286,7 +262,6 @@ impl<'a, 'p> SeqVisitor<'a, 'p> {
         self.finish_element()?;
         Ok(Some(value))
     }
-
     /// Parse the next element with a custom streaming visitor.
     pub fn next_element_with<V>(&mut self, visitor: V) -> Result<Option<V::Value>, Error>
     where
@@ -300,7 +275,6 @@ impl<'a, 'p> SeqVisitor<'a, 'p> {
         self.finish_element()?;
         Ok(Some(value))
     }
-
     /// Skip the next array element.
     pub fn skip_element(&mut self) -> Result<(), Error> {
         if self.finished {
@@ -310,7 +284,6 @@ impl<'a, 'p> SeqVisitor<'a, 'p> {
         self.parser.skip_value_lexical()?;
         self.finish_element()
     }
-
     /// Finish the array and require its closing delimiter.
     pub fn finish(mut self) -> Result<(), Error> {
         if !self.finished {
@@ -325,13 +298,11 @@ impl<'a, 'p> SeqVisitor<'a, 'p> {
         }
         Ok(())
     }
-
     fn prepare_element(&mut self) -> Result<(), Error> {
         self.reject_trailing_comma()?;
         self.after_comma = false;
         Ok(())
     }
-
     fn reject_trailing_comma(&mut self) -> Result<(), Error> {
         self.parser.skip_ws();
         if self.after_comma && self.parser.peek() == Some(b']') {
@@ -339,7 +310,6 @@ impl<'a, 'p> SeqVisitor<'a, 'p> {
         }
         Ok(())
     }
-
     fn finish_element(&mut self) -> Result<(), Error> {
         self.parser.skip_ws();
         match self.parser.peek() {

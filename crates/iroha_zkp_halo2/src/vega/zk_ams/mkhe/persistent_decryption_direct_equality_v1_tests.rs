@@ -1,21 +1,16 @@
 use super::*;
 use sha2::{Digest as _, Sha256};
-
 const POINT_WIRE_V1: &str = "8025a4e3128f042d728e58b7e09a51b72585be4435f4e94aac8517f2e158b3eae6";
-
 fn sha256_hex_v1(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
-
 fn point_v1() -> Point {
     Point::from_non_identity_wire_bytes_exact(&hex::decode(POINT_WIRE_V1).expect("literal hex"))
         .expect("literal canonical T256 point")
 }
-
 fn digest_v1(value: u8) -> [u8; 32] {
     [value; 32]
 }
-
 fn independent_t256_residue_v1(modulus: u64) -> u64 {
     let modulus_wide = u128::from(modulus);
     let radix = (1_u128 << 64) % modulus_wide;
@@ -26,7 +21,6 @@ fn independent_t256_residue_v1(modulus: u64) -> u64 {
             ((u128::from(accumulator) * radix + u128::from(word)) % modulus_wide) as u64
         })
 }
-
 fn language_v1() -> PersistentDecryptionDirectEqualityLanguageV1 {
     PersistentDecryptionDirectEqualityLanguageV1 {
         axes: DirectEqualityStatementAxesV1 {
@@ -72,7 +66,6 @@ fn language_v1() -> PersistentDecryptionDirectEqualityLanguageV1 {
         integration_seal: DirectEqualityIntegrationSealV1::TestOnly,
     }
 }
-
 fn negacyclic_integer_product_v1(left: &[i64; 4], right: &[i64; 4]) -> [i64; 4] {
     let mut output = [0_i64; 4];
     for (left_index, left_value) in left.iter().copied().enumerate() {
@@ -87,13 +80,11 @@ fn negacyclic_integer_product_v1(left: &[i64; 4], right: &[i64; 4]) -> [i64; 4] 
     }
     output
 }
-
 fn evaluate_mod_v1(polynomial: &[i64; 4], point: i64, modulus: i64) -> i64 {
     polynomial.iter().rev().fold(0, |value, coefficient| {
         (value * point + coefficient).rem_euclid(modulus)
     })
 }
-
 #[test]
 fn f17_n4_counterexample_decisively_rejects_the_shortcut() {
     let modulus = 17_i64;
@@ -102,7 +93,6 @@ fn f17_n4_counterexample_decisively_rejects_the_shortcut() {
     let difference = core::array::from_fn(|index| d[index] - d_prime[index]);
     let annihilator = [13_i64, 15, 16, 8];
     let product = negacyclic_integer_product_v1(&difference, &annihilator);
-
     assert_eq!(difference, [2, 1, -1, 0]);
     assert_eq!(product, [34, 51, 34, 17]);
     assert!(
@@ -119,7 +109,6 @@ fn f17_n4_counterexample_decisively_rejects_the_shortcut() {
     assert_eq!((2_i64.pow(4) + 1).rem_euclid(modulus), 0);
     assert_eq!(evaluate_mod_v1(&d, 2, modulus), 3);
     assert_eq!(evaluate_mod_v1(&d_prime, 2, modulus), 3);
-
     assert_eq!(SHORTCUT_FIELD_MODULUS_V1, modulus);
     assert_eq!(SHORTCUT_D_V1, d);
     assert_eq!(SHORTCUT_D_PRIME_V1, d_prime);
@@ -128,7 +117,6 @@ fn f17_n4_counterexample_decisively_rejects_the_shortcut() {
     assert_eq!(SHORTCUT_INTEGER_PRODUCT_V1, product);
     assert_eq!(SHORTCUT_EVALUATION_POINT_V1, 2);
     assert_eq!(SHORTCUT_COMMON_EVALUATION_V1, 3);
-
     let mut hostile_annihilator = annihilator;
     hostile_annihilator[0] += 1;
     let hostile_product = negacyclic_integer_product_v1(&difference, &hostile_annihilator);
@@ -141,33 +129,26 @@ fn f17_n4_counterexample_decisively_rejects_the_shortcut() {
     hostile_d_prime[0] += 1;
     assert_ne!(evaluate_mod_v1(&hostile_d_prime, 2, modulus), 3);
 }
-
 #[test]
 fn direct_language_has_exact_axes_and_rejects_axis_mutations() {
     let exact = language_v1();
     assert!(exact.has_exact_frozen_shape_v1());
-
     let mut wrong_limb = language_v1();
     wrong_limb.rns_limbs[17].limb_index = 18;
     assert!(!wrong_limb.has_exact_frozen_shape_v1());
-
     let mut wrong_modulus = language_v1();
     wrong_modulus.rns_limbs[0].modulus -= 1;
     assert!(!wrong_modulus.has_exact_frozen_shape_v1());
-
     let mut wrong_residue = language_v1();
     wrong_residue.rns_limbs[37].plaintext_modulus_residue ^= 1;
     assert!(!wrong_residue.has_exact_frozen_shape_v1());
-
     let mut missing_artifact = language_v1();
     missing_artifact.artifacts.backend_digest = [0; 32];
     assert!(!missing_artifact.has_exact_frozen_shape_v1());
-
     let mut split_wide_witness = language_v1();
     split_wide_witness.witness_shape.shared_wide_z_limb_count = 37;
     assert!(!split_wide_witness.has_exact_frozen_shape_v1());
 }
-
 #[test]
 fn cap_ledger_arithmetic_is_independently_recomputed() {
     let worker_cap = 160_u64 * 1_048_576;
@@ -178,14 +159,12 @@ fn cap_ledger_arithmetic_is_independently_recomputed() {
     let verifier_existing = 77_317_655_u64;
     let work_cap = 100_000_000_000_u64;
     let existing_work = 69_492_485_649_u64;
-
     assert_eq!(worker_cap, 167_772_160);
     assert_eq!(proof_cap, 33_554_432);
     assert_eq!(existing_manifest + pointer_bytes, 540);
     assert_eq!(worker_cap - prover_existing, 90_065_014);
     assert_eq!(worker_cap - verifier_existing, 90_454_505);
     assert_eq!(work_cap - existing_work, 30_507_514_351);
-
     let ledger = &DIRECT_EQUALITY_CAP_LEDGER_V1;
     assert_eq!(ledger.direct_proof_cap_bytes, proof_cap);
     assert_eq!(
@@ -206,7 +185,6 @@ fn cap_ledger_arithmetic_is_independently_recomputed() {
     assert!(ledger.one_party_max_total_bytes <= worker_cap);
     assert!(ledger.sequential_noncoexistence_required);
 }
-
 #[test]
 fn repetition_fallback_is_over_cap_until_nine_sound_rounds() {
     let per_round_bytes = 33_032_907_u64;
@@ -219,7 +197,6 @@ fn repetition_fallback_is_over_cap_until_nine_sound_rounds() {
     let loss_hundredths = 2_916_u32;
     let eight_round_bits = 8 * per_round_bits_hundredths - loss_hundredths;
     let nine_round_bits = 9 * per_round_bits_hundredths - loss_hundredths;
-
     assert_eq!(32_u64 * 1_048_576 - per_round_bytes, 521_525);
     assert_eq!(per_round_bytes * 3, 99_098_721);
     assert_eq!(per_round_bytes * 9, 297_296_163);
@@ -234,7 +211,6 @@ fn repetition_fallback_is_over_cap_until_nine_sound_rounds() {
     assert!(eight_round_bits < 12_800);
     assert!(nine_round_bits >= 12_800);
     assert!(116_177_911_296_u64 > 100_000_000_000);
-
     let ledger = &REPETITION_FALLBACK_LEDGER_V1;
     assert_eq!(ledger.per_round_envelope_bytes, per_round_bytes);
     assert_eq!(ledger.three_round_bytes, per_round_bytes * 3);
@@ -252,7 +228,6 @@ fn repetition_fallback_is_over_cap_until_nine_sound_rounds() {
     assert!(!FALLBACK_EIGHT_ROUNDS_SUFFICIENT_V1);
     assert!(FALLBACK_NINE_ROUNDS_SUFFICIENT_V1);
 }
-
 #[test]
 fn every_artifact_and_operational_gate_remains_closed() {
     assert_eq!(UNPINNED_ARTIFACT_DIGEST_SLOTS_V1.theorem_digest, [0; 32]);
@@ -295,7 +270,6 @@ fn every_artifact_and_operational_gate_remains_closed() {
         RESPONSE_LINK_STATUS_V1.starts_with(b"persistent_decryption_response_link is auxiliary")
     );
 }
-
 #[test]
 fn frozen_inputs_and_parent_declaration_are_exact() {
     let expected_parent = "370c605f7d740f1b91310942999ab2690d1c29f21496d53d7090cc0130e3e64d";
@@ -310,7 +284,6 @@ fn frozen_inputs_and_parent_declaration_are_exact() {
     let parent = include_str!("persistent_decryption_equality.rs");
     let response_link = include_str!("persistent_decryption_response_link.rs");
     let response_link_tests = include_str!("persistent_decryption_response_link_tests.rs");
-
     assert_eq!(parent.matches(DECLARATION).count(), 1);
     let restored_parent = parent.replacen(DECLARATION, "", 1);
     assert_eq!(PARENT_BEFORE_DECLARATION_SHA256_V1, expected_parent);
@@ -329,7 +302,6 @@ fn frozen_inputs_and_parent_declaration_are_exact() {
         expected_response_link_tests
     );
 }
-
 #[test]
 fn privacy_api_and_source_budgets_are_fail_closed() {
     let production = include_str!("persistent_decryption_direct_equality_v1.rs");
@@ -337,7 +309,6 @@ fn privacy_api_and_source_budgets_are_fail_closed() {
     assert!(production.lines().count() <= 700);
     assert!(tests.lines().count() <= 450);
     assert!(production.lines().count() + tests.lines().count() <= 1_150);
-
     let code_lines = production
         .lines()
         .map(str::trim_start)
@@ -357,7 +328,6 @@ fn privacy_api_and_source_budgets_are_fail_closed() {
     assert!(!production.contains("PersistentDecryptionDirectEqualityProofV1"));
     assert!(!production.contains("VerifiedPersistentDecryptionDirectEqualityReceiptV1"));
     assert!(!production.contains("fn verify_direct_equality"));
-
     for seal in [
         "enum DirectEqualityWitnessSealV1",
         "enum DirectEqualityBackendSealV1",

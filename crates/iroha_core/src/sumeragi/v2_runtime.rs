@@ -16,7 +16,6 @@
 //! Within the exact eligible set, a small deterministic arbiter and cyclic
 //! class service prevent a saturated normal prefix from starving a locked
 //! Commit vote or trusted local completion.
-
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
@@ -26,7 +25,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 #[cfg(test)]
 use super::v2_core::check_production_effect_to_candidate_transition;
 use super::v2_core::{
@@ -55,7 +53,6 @@ use super::v2_core::{
 };
 use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode as _, Encode as _};
-
 use super::{
     FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSlot, FairV2IngressLeaderWireToken,
     FairV2IngressOwnershipEvidence,
@@ -76,23 +73,23 @@ use super::{
         proposal_is_safe_for_lock,
     },
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
+    v2_first_release_recovery::{
+        LocalBodyPreIntentReplaySealV1, LocalValidateReplayEvidenceV1,
+        RemoteProposalFetchReplayEvidenceV1,
+    },
     v2_lifecycle_coordinator::{
         AuthenticatedRecoveredWalControlProjection,
         AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
         DurableCertifiedFetchPendingMintPermit, DurableValidateReplayEvidenceV1,
-        LocalBodyPreIntentReplaySealV1, LocalValidateReplayEvidenceV1,
         RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
-        RecoveredWalVoteReplayEvidenceV1, RemoteProposalFetchReplayEvidenceV1,
+        RecoveredWalVoteReplayEvidenceV1,
     },
 };
-
 #[cfg(test)]
 use super::v2::{AdapterEquivocationEvidence, DeferredPriority};
-
 const RETRANSMIT_DIVISOR: u32 = 5;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
-
 /// Actor-global source for immutable lifecycle admission ordinals.
 ///
 /// Runtime FIFO admissions, fresh clock/effect roots, and the exact Serve
@@ -104,7 +101,6 @@ const NANOS_PER_SECOND: u128 = 1_000_000_000;
 pub(crate) struct RuntimeLifecycleOrdinalSource {
     next: Arc<Mutex<Option<u128>>>,
 }
-
 impl RuntimeLifecycleOrdinalSource {
     /// Construct a source strictly after a durable high-watermark.
     pub(crate) fn after_high_watermark(high_watermark: u128) -> Self {
@@ -112,20 +108,17 @@ impl RuntimeLifecycleOrdinalSource {
             next: Arc::new(Mutex::new(high_watermark.checked_add(1))),
         }
     }
-
     fn lock_next(&self) -> Result<std::sync::MutexGuard<'_, Option<u128>>, String> {
         self.next
             .lock()
             .map_err(|_| "Sumeragi v2 lifecycle ordinal source was poisoned".to_owned())
     }
-
     /// Reserve one globally unique ordinal.
     pub(crate) fn reserve_one(&self) -> Result<u128, String> {
         self.reserve_range(1)?
             .0
             .ok_or_else(|| "Sumeragi v2 lifecycle ordinal source returned no owner".to_owned())
     }
-
     fn prospective_range(
         next: Option<u128>,
         count: usize,
@@ -146,7 +139,6 @@ impl RuntimeLifecycleOrdinalSource {
         })?;
         Ok((Some(first), Some(successor)))
     }
-
     /// Hold the actor-global source while a prospective FIFO owner is fully
     /// checked and committed to its local ingress.
     ///
@@ -170,7 +162,6 @@ impl RuntimeLifecycleOrdinalSource {
         *next = Some(successor);
         Ok(committed)
     }
-
     /// Hold the source at one already-minted successor while a reservation is
     /// materialized without allocating another ordinal.
     fn with_checked_current<T>(
@@ -181,12 +172,10 @@ impl RuntimeLifecycleOrdinalSource {
         let current = (*next).ok_or(EnqueueError::FailClosed)?;
         commit(current)
     }
-
     /// Return whether two handles share the same actor-global ordinal source.
     pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.next, &other.next)
     }
-
     fn reserve_range(&self, count: usize) -> Result<(Option<u128>, Option<u128>), String> {
         let mut next = self.lock_next()?;
         let reserved = Self::prospective_range(*next, count)?;
@@ -195,7 +184,6 @@ impl RuntimeLifecycleOrdinalSource {
         }
         Ok(reserved)
     }
-
     /// Advance a live source past a high-watermark restored by another owner.
     pub(crate) fn advance_past(&self, high_watermark: u128) -> Result<(), String> {
         let mut next = self.lock_next()?;
@@ -214,7 +202,6 @@ impl RuntimeLifecycleOrdinalSource {
         }
         Ok(())
     }
-
     /// Read the next unused ordinal without reserving it.
     ///
     /// Runtime ingress uses this to initialize its diagnostic mirror from the
@@ -222,13 +209,11 @@ impl RuntimeLifecycleOrdinalSource {
     pub(super) fn next_ordinal(&self) -> Result<Option<u128>, String> {
         self.lock_next().map(|next| *next)
     }
-
     /// Inspect the next actor-global lifecycle ordinal in tests.
     #[cfg(test)]
     pub(crate) fn next_ordinal_for_test(&self) -> Result<Option<u128>, String> {
         self.next_ordinal()
     }
-
     fn recognizes_minted(&self, ordinal: u128) -> Result<bool, String> {
         if ordinal == 0 {
             return Ok(false);
@@ -236,7 +221,6 @@ impl RuntimeLifecycleOrdinalSource {
         self.lock_next()
             .map(|next| (*next).is_some_and(|next| ordinal < next))
     }
-
     #[cfg(test)]
     pub(crate) fn exhaust_for_test(&self) {
         *self
@@ -245,7 +229,6 @@ impl RuntimeLifecycleOrdinalSource {
             .expect("test lifecycle ordinal source is not poisoned") = None;
     }
 }
-
 /// Derive the deadline for one certified view from the immutable base timeout.
 ///
 /// View zero receives the configured base timeout. Each later view adds one
@@ -263,7 +246,6 @@ fn round_timeout_for_view(base_timeout: Duration, view: u64) -> Duration {
         .expect("subsecond nanoseconds are below one billion");
     Duration::new(seconds, nanoseconds)
 }
-
 /// Capacity allocation for the single serialized command ingress.
 ///
 /// Normal network traffic may use only the non-reserved prefix. Progress
@@ -280,7 +262,6 @@ pub(crate) struct RuntimeQueueConfig {
     progress_reserve: usize,
     completion_reserve: usize,
 }
-
 impl RuntimeQueueConfig {
     /// Construct a bounded class-aware ingress allocation.
     pub(crate) const fn new(
@@ -294,7 +275,6 @@ impl RuntimeQueueConfig {
             completion_reserve,
         }
     }
-
     fn validate(self) -> Result<Self, RuntimeConfigError> {
         if self.capacity == 0
             || self.progress_reserve == 0
@@ -309,26 +289,21 @@ impl RuntimeQueueConfig {
         }
         Ok(self)
     }
-
     const fn normal_limit(self) -> usize {
         self.capacity - self.progress_reserve - self.completion_reserve - 1
     }
-
     const fn progress_limit(self) -> usize {
         self.capacity - self.completion_reserve - 1
     }
-
     const fn ordinary_total_limit(self) -> usize {
         self.capacity - 1
     }
 }
-
 impl Default for RuntimeQueueConfig {
     fn default() -> Self {
         Self::new(1024, 128, 256)
     }
 }
-
 /// Invalid immutable runtime configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeConfigError {
@@ -340,7 +315,6 @@ pub(crate) enum RuntimeConfigError {
     /// Startup lifecycle ownership could not be allocated or validated.
     InvalidLifecycleOwnership,
 }
-
 impl fmt::Display for RuntimeConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -356,9 +330,7 @@ impl fmt::Display for RuntimeConfigError {
         }
     }
 }
-
 impl std::error::Error for RuntimeConfigError {}
-
 /// Invalid activation of the live pacemaker clocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeClockError {
@@ -368,7 +340,6 @@ pub(crate) enum RuntimeClockError {
     /// the live timeout clock was armed.
     ProducerReservation,
 }
-
 impl fmt::Display for RuntimeClockError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -381,9 +352,7 @@ impl fmt::Display for RuntimeClockError {
         }
     }
 }
-
 impl std::error::Error for RuntimeClockError {}
-
 /// Backpressure result from the bounded command ingress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EnqueueError {
@@ -399,7 +368,6 @@ pub(crate) enum EnqueueError {
     /// than one serialized owner.
     DuplicateCompletionOwnership,
 }
-
 impl fmt::Display for EnqueueError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -414,9 +382,7 @@ impl fmt::Display for EnqueueError {
         }
     }
 }
-
 impl std::error::Error for EnqueueError {}
-
 /// Rejection while authenticating or admitting a network message.
 #[derive(Debug)]
 pub(crate) enum NetworkIngressError {
@@ -429,7 +395,6 @@ pub(crate) enum NetworkIngressError {
     /// The serialized runtime has already failed closed.
     FailClosed,
 }
-
 impl fmt::Display for NetworkIngressError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -442,7 +407,6 @@ impl fmt::Display for NetworkIngressError {
         }
     }
 }
-
 impl std::error::Error for NetworkIngressError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -452,7 +416,6 @@ impl std::error::Error for NetworkIngressError {
         }
     }
 }
-
 /// Fatal result from executing an already-admitted adapter input.
 #[derive(Debug)]
 pub(crate) enum RuntimeError<E> {
@@ -465,7 +428,6 @@ pub(crate) enum RuntimeError<E> {
     /// Interrupted-tip recovery was attempted after live scheduling began.
     RecoveryAfterClocksArmed,
 }
-
 impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -480,7 +442,6 @@ impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
         }
     }
 }
-
 impl<E> std::error::Error for RuntimeError<E>
 where
     E: std::error::Error + 'static,
@@ -492,14 +453,12 @@ where
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum CommandClass {
     Normal,
     Progress,
     Completion,
 }
-
 impl CommandClass {
     const fn service_code(self) -> u8 {
         match self {
@@ -508,7 +467,6 @@ impl CommandClass {
             Self::Normal => SERVICE_CLASS_NORMAL,
         }
     }
-
     const fn from_service_code(code: u8) -> Option<Self> {
         match code {
             SERVICE_CLASS_COMPLETION => Some(Self::Completion),
@@ -518,7 +476,6 @@ impl CommandClass {
         }
     }
 }
-
 /// Exact production command variant selected from serialized ingress.
 ///
 /// The discriminant is carried separately from the canonical bytes so source
@@ -549,7 +506,6 @@ pub(crate) enum RuntimeCommandKind {
     /// Deterministic scheduling test command.
     Test,
 }
-
 /// Immutable, lossless command identity derived by the command implementation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeCommandIdentity {
@@ -560,7 +516,6 @@ pub(crate) struct RuntimeCommandIdentity {
     /// Hash of `canonical_bytes`, derived alongside the immutable bytes.
     pub(crate) canonical_hash: iroha_crypto::Hash,
 }
-
 /// Constant-size identity retained after a physical command carrier leaves
 /// runtime ingress.
 ///
@@ -578,7 +533,6 @@ pub(crate) struct RuntimeCommandIdentityDigest {
     /// corruption without re-encoding or re-hashing the command payload.
     projection_hash: iroha_crypto::Hash,
 }
-
 fn runtime_command_identity_digest_projection_hash(
     identity: &RuntimeCommandIdentityDigest,
 ) -> iroha_crypto::Hash {
@@ -588,7 +542,6 @@ fn runtime_command_identity_digest_projection_hash(
     append_runtime_identity_field(&mut projection, identity.canonical_hash.as_ref());
     iroha_crypto::Hash::new(projection)
 }
-
 impl RuntimeCommandIdentityDigest {
     fn new(kind: RuntimeCommandKind, canonical_hash: iroha_crypto::Hash) -> Self {
         let mut identity = Self {
@@ -599,22 +552,18 @@ impl RuntimeCommandIdentityDigest {
         identity.projection_hash = runtime_command_identity_digest_projection_hash(&identity);
         identity
     }
-
     fn validate_exact(&self) -> bool {
         self.projection_hash == runtime_command_identity_digest_projection_hash(self)
     }
 }
-
 impl RuntimeCommandIdentity {
     fn validate_exact(&self) -> bool {
         self.canonical_hash == iroha_crypto::Hash::new(self.canonical_bytes.as_ref())
     }
-
     fn digest(&self) -> RuntimeCommandIdentityDigest {
         RuntimeCommandIdentityDigest::new(self.kind, self.canonical_hash)
     }
 }
-
 /// Exact fair-ingress ownership retained for one authenticated runtime
 /// command.
 ///
@@ -630,7 +579,6 @@ impl RuntimeCommandIdentity {
 /// every slot is occupied, a new disjoint carrier is rejected rather than
 /// summarized without its source identity.
 const MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM: usize = wire::MAX_VALIDATORS_PER_HEIGHT;
-
 /// Immutable receiver-local position of one runtime causal root.
 ///
 /// This sidecar is local scheduling evidence. It is never serialized or
@@ -641,13 +589,11 @@ struct RuntimeIngressPhysicalOwnership {
     source_ordinal: u64,
     physical_cut: u128,
 }
-
 impl RuntimeIngressPhysicalOwnership {
     fn validate_exact(self) -> bool {
         self.source_ordinal != 0 && u128::from(self.source_ordinal) < self.physical_cut
     }
 }
-
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeIngressOwnershipEvidence {
     runtime_bytes: Arc<[u8]>,
@@ -655,14 +601,12 @@ pub(crate) struct RuntimeIngressOwnershipEvidence {
     commit_certificate_response: Vec<FairV2IngressOwnershipEvidence>,
     projection_hash: iroha_crypto::Hash,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeIngressMergeError {
     Capacity,
     Conflict,
     IndependentOccurrence,
 }
-
 impl RuntimeIngressOwnershipEvidence {
     fn leader_wire_token(
         &self,
@@ -689,7 +633,6 @@ impl RuntimeIngressOwnershipEvidence {
         }
         Ok(exact)
     }
-
     fn leader_wire_runtime_receipt(
         &self,
     ) -> Result<Option<&LeaderWireLifecycleRuntimeReceipt>, RuntimeIngressMergeError> {
@@ -730,12 +673,10 @@ impl RuntimeIngressOwnershipEvidence {
         }
         Ok(exact)
     }
-
     fn leader_wire_scheduler_ordinal(&self) -> Result<Option<u128>, RuntimeIngressMergeError> {
         self.leader_wire_token()
             .map(|token| token.map(super::FairV2IngressLeaderWireToken::scheduler_ordinal))
     }
-
     /// Exact physical occurrence and dequeue-time predecessor cut for a
     /// productive leader-wire carrier.
     fn leader_wire_physical_carrier(
@@ -767,7 +708,6 @@ impl RuntimeIngressOwnershipEvidence {
         }
         Ok(exact)
     }
-
     /// Whether this carrier is a later physical delivery of an already
     /// reserved productive lifecycle.
     fn is_physical_leader_wire_replay(&self) -> Result<bool, RuntimeIngressMergeError> {
@@ -782,7 +722,6 @@ impl RuntimeIngressOwnershipEvidence {
             (Some(_), None) | (None, Some(_)) => Err(RuntimeIngressMergeError::Conflict),
         }
     }
-
     /// Earliest receiver-local physical occurrence retained by this exact
     /// runtime command, paired with the cut frozen for that same carrier.
     /// Aggregate certificates may carry several independent authenticated
@@ -825,7 +764,6 @@ impl RuntimeIngressOwnershipEvidence {
                 },
             )
     }
-
     fn contains_physical_carrier(
         &self,
         expected: RuntimeIngressPhysicalOwnership,
@@ -851,7 +789,6 @@ impl RuntimeIngressOwnershipEvidence {
                 Ok(found || candidate == expected)
             })
     }
-
     fn earliest_lifecycle_ordinal(&self) -> Result<Option<u128>, RuntimeIngressMergeError> {
         let mut earliest = None;
         let mut saw_untagged = false;
@@ -875,7 +812,6 @@ impl RuntimeIngressOwnershipEvidence {
         }
         Ok(earliest)
     }
-
     fn from_fair_ingress(
         message: &wire::ConsensusMessageV2,
         ownership: FairV2IngressOwnershipEvidence,
@@ -903,7 +839,6 @@ impl RuntimeIngressOwnershipEvidence {
         evidence.projection_hash = runtime_ingress_ownership_projection_hash(&evidence);
         evidence.validate_exact().then_some(evidence)
     }
-
     fn merge_downstream(&mut self, candidate: Self) -> Result<(), RuntimeIngressMergeError> {
         if !self.validate_exact()
             || !candidate.validate_exact()
@@ -960,12 +895,10 @@ impl RuntimeIngressOwnershipEvidence {
         *self = merged;
         Ok(())
     }
-
     fn can_merge_downstream(&self, candidate: &Self) -> bool {
         let mut merged = self.clone();
         merged.merge_downstream(candidate.clone()).is_ok()
     }
-
     /// Validate the physical occurrence/cut pair after checked fair-ingress
     /// dequeue has committed. The general identity validator deliberately
     /// permits an absent cut because the read-only capacity predicate runs
@@ -982,7 +915,6 @@ impl RuntimeIngressOwnershipEvidence {
                 (Ok(None), Ok(None), Ok(None)) | (Ok(Some(_)), Ok(Some(_)), Ok(Some(_)))
             )
     }
-
     /// Match this frozen receiver carrier to one exact authenticated envelope.
     pub(in crate::sumeragi) fn exactly_matches_authenticated(
         &self,
@@ -991,7 +923,6 @@ impl RuntimeIngressOwnershipEvidence {
         self.validate_frozen_physical()
             && self.runtime_bytes.as_ref() == authenticated.canonical_wire_bytes().as_slice()
     }
-
     fn validate_exact(&self) -> bool {
         if (self.direct.is_empty() && self.commit_certificate_response.is_empty())
             || self.direct.len() > MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM
@@ -1050,7 +981,6 @@ impl RuntimeIngressOwnershipEvidence {
             && self.projection_hash == runtime_ingress_ownership_projection_hash(self)
     }
 }
-
 impl PartialEq for RuntimeIngressOwnershipEvidence {
     fn eq(&self, other: &Self) -> bool {
         self.runtime_bytes == other.runtime_bytes
@@ -1061,9 +991,7 @@ impl PartialEq for RuntimeIngressOwnershipEvidence {
             && other.validate_exact()
     }
 }
-
 impl Eq for RuntimeIngressOwnershipEvidence {}
-
 fn merge_runtime_ingress_slot(
     retained: &mut Vec<FairV2IngressOwnershipEvidence>,
     candidates: Vec<FairV2IngressOwnershipEvidence>,
@@ -1108,7 +1036,6 @@ fn merge_runtime_ingress_slot(
     }
     Ok(())
 }
-
 fn runtime_ingress_ownership_projection_hash(
     evidence: &RuntimeIngressOwnershipEvidence,
 ) -> iroha_crypto::Hash {
@@ -1129,11 +1056,9 @@ fn runtime_ingress_ownership_projection_hash(
     }
     iroha_crypto::Hash::new(projection)
 }
-
 mod exact_runtime_command_identity_sealed {
     pub trait Sealed {}
 }
-
 /// Derive the exact identity of a command rather than accepting an asserted
 /// identity from the scheduler's caller.
 ///
@@ -1145,16 +1070,13 @@ pub(crate) trait ExactRuntimeCommandIdentity:
 {
     /// Project every command field which can distinguish reducer behavior.
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity;
-
     /// Return whether this exact command is an authenticated certificate which
     /// may be charged to the runtime's final physical fence-escape slot.
     fn is_certified_fence_escape(&self) -> bool {
         false
     }
 }
-
 impl exact_runtime_command_identity_sealed::Sealed for AuthenticatedConsensusMessage {}
-
 impl ExactRuntimeCommandIdentity for AuthenticatedConsensusMessage {
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
         let canonical_bytes = self.canonical_wire_bytes();
@@ -1165,12 +1087,10 @@ impl ExactRuntimeCommandIdentity for AuthenticatedConsensusMessage {
             canonical_hash,
         }
     }
-
     fn is_certified_fence_escape(&self) -> bool {
         wire_payload_is_certified_fence_escape(self.payload())
     }
 }
-
 /// Immutable scheduler-local identity of the first admitted command in one
 /// causal reducer lifecycle.
 ///
@@ -1213,23 +1133,19 @@ pub(crate) struct RuntimeCandidateCausalOrigin {
     /// Integrity hash over the complete carrier, including diagnostic tag.
     pub(crate) projection_hash: iroha_crypto::Hash,
 }
-
 fn append_runtime_identity_field(identity: &mut Vec<u8>, field: &[u8]) {
     let len = u64::try_from(field.len()).expect("runtime command identity field fits u64");
     identity.extend_from_slice(&len.to_le_bytes());
     identity.extend_from_slice(field);
 }
-
 fn append_runtime_identity_u64(identity: &mut Vec<u8>, value: u64) {
     append_runtime_identity_field(identity, &value.to_le_bytes());
 }
-
 fn append_runtime_identity_tag(identity: &mut Vec<u8>, tag: EventTag) {
     append_runtime_identity_u64(identity, tag.height());
     append_runtime_identity_u64(identity, tag.view());
     append_runtime_identity_u64(identity, tag.generation().get());
 }
-
 fn runtime_ingress_causal_origin_projection_hash(
     evidence: &RuntimeIngressOwnershipEvidence,
 ) -> iroha_crypto::Hash {
@@ -1288,7 +1204,6 @@ fn runtime_ingress_causal_origin_projection_hash(
     }
     iroha_crypto::Hash::new(projection)
 }
-
 fn runtime_candidate_causal_origin_projection_hash(
     origin: &RuntimeCandidateCausalOrigin,
 ) -> iroha_crypto::Hash {
@@ -1340,7 +1255,6 @@ fn runtime_candidate_causal_origin_projection_hash(
     append_runtime_identity_field(&mut projection, origin.lifecycle_key.as_ref());
     iroha_crypto::Hash::new(projection)
 }
-
 fn runtime_candidate_causal_origin_lifecycle_key(
     origin: &RuntimeCandidateCausalOrigin,
 ) -> iroha_crypto::Hash {
@@ -1369,7 +1283,6 @@ fn runtime_candidate_causal_origin_lifecycle_key(
     }
     iroha_crypto::Hash::new(projection)
 }
-
 impl RuntimeCandidateCausalOrigin {
     fn mint<C: ExactRuntimeCommandIdentity>(
         tag: EventTag,
@@ -1418,7 +1331,6 @@ impl RuntimeCandidateCausalOrigin {
         origin.projection_hash = runtime_candidate_causal_origin_projection_hash(&origin);
         origin
     }
-
     fn mint_fresh_root(
         tag: EventTag,
         class: CommandClass,
@@ -1451,7 +1363,6 @@ impl RuntimeCandidateCausalOrigin {
         origin.projection_hash = runtime_candidate_causal_origin_projection_hash(&origin);
         origin
     }
-
     /// Reconstruct an exact persisted producer lifecycle around a replayed
     /// command. The adapter has already matched the complete route-neutral
     /// serviced-candidate identity before returning this key and ordinal.
@@ -1482,7 +1393,6 @@ impl RuntimeCandidateCausalOrigin {
         origin.projection_hash = runtime_candidate_causal_origin_projection_hash(&origin);
         RuntimeLifecycleOwner::new(origin, admission_ordinal)
     }
-
     fn validate_exact(&self) -> bool {
         self.root_class != SERVICE_CLASS_NONE
             && self.root_identity.validate_exact()
@@ -1494,7 +1404,6 @@ impl RuntimeCandidateCausalOrigin {
             && self.lifecycle_key == runtime_candidate_causal_origin_lifecycle_key(self)
             && self.projection_hash == runtime_candidate_causal_origin_projection_hash(self)
     }
-
     fn bind_lifecycle_ordinal(&mut self, lifecycle_ordinal: u128) -> bool {
         match self.root_lifecycle_ordinal {
             Some(existing) if existing != lifecycle_ordinal => return false,
@@ -1504,7 +1413,6 @@ impl RuntimeCandidateCausalOrigin {
         self.projection_hash = runtime_candidate_causal_origin_projection_hash(self);
         self.validate_exact()
     }
-
     /// Whether two exact carriers identify one lifecycle despite diagnostic
     /// process-generation retagging.
     #[cfg(test)]
@@ -1512,7 +1420,6 @@ impl RuntimeCandidateCausalOrigin {
         self.validate_exact() && other.validate_exact() && self.lifecycle_key == other.lifecycle_key
     }
 }
-
 /// Existing TLA root constructor mirrored by a process-local scheduler root.
 ///
 /// The value is internal evidence only; it is neither a wire field nor a
@@ -1530,7 +1437,6 @@ pub(crate) enum RuntimeFreshRootKind {
     /// `AssembleBody` accepted from the deterministic local proposal builder.
     LocalProposalAdmission,
 }
-
 impl RuntimeFreshRootKind {
     const fn code(self) -> u8 {
         match self {
@@ -1542,7 +1448,6 @@ impl RuntimeFreshRootKind {
         }
     }
 }
-
 /// Immutable logical owner transferred from ingress through every local
 /// asynchronous causal successor.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1551,7 +1456,6 @@ pub(crate) struct RuntimeLifecycleOwner {
     lifecycle_ordinal: u128,
     projection_hash: iroha_crypto::Hash,
 }
-
 /// Process-local evidence that one completed service result can enter runtime.
 ///
 /// The production worker derives this value only from its retained completion
@@ -1563,7 +1467,6 @@ pub(crate) struct ExactServePredecessorCompletionEvidence {
     lifecycle_ordinal: u128,
     lifecycle_ordinal_complement: u128,
 }
-
 impl ExactServePredecessorCompletionEvidence {
     pub(crate) fn try_new(lifecycle_ordinal: u128) -> Option<Self> {
         let evidence = Self {
@@ -1572,16 +1475,13 @@ impl ExactServePredecessorCompletionEvidence {
         };
         evidence.validate_exact().then_some(evidence)
     }
-
     pub(crate) const fn lifecycle_ordinal(self) -> u128 {
         self.lifecycle_ordinal
     }
-
     pub(crate) const fn validate_exact(self) -> bool {
         self.lifecycle_ordinal > 0 && self.lifecycle_ordinal_complement == !self.lifecycle_ordinal
     }
 }
-
 /// Process-local evidence that an exact Serve target acquired a newly
 /// runnable, strictly older runtime prefix after previously observing none.
 ///
@@ -1595,7 +1495,6 @@ pub(crate) struct ExactServePredecessorEpisodeWitness {
     predecessor_lifecycle_ordinal: u128,
     episode: u128,
 }
-
 impl ExactServePredecessorEpisodeWitness {
     fn try_new(
         serve_lifecycle_ordinal: u128,
@@ -1609,7 +1508,6 @@ impl ExactServePredecessorEpisodeWitness {
         };
         witness.validate_exact().then_some(witness)
     }
-
     #[cfg(test)]
     pub(crate) fn for_test(
         serve_lifecycle_ordinal: u128,
@@ -1623,19 +1521,15 @@ impl ExactServePredecessorEpisodeWitness {
         )
         .expect("exact Serve predecessor episode test witness must be valid")
     }
-
     pub(crate) const fn serve_lifecycle_ordinal(self) -> u128 {
         self.serve_lifecycle_ordinal
     }
-
     pub(crate) const fn predecessor_lifecycle_ordinal(self) -> u128 {
         self.predecessor_lifecycle_ordinal
     }
-
     pub(crate) const fn episode(self) -> u128 {
         self.episode
     }
-
     pub(crate) const fn validate_exact(self) -> bool {
         self.serve_lifecycle_ordinal > 0
             && self.predecessor_lifecycle_ordinal > 0
@@ -1643,7 +1537,6 @@ impl ExactServePredecessorEpisodeWitness {
             && self.episode > 0
     }
 }
-
 impl RuntimeLifecycleOwner {
     fn new(
         mut causal_origin: RuntimeCandidateCausalOrigin,
@@ -1663,23 +1556,19 @@ impl RuntimeLifecycleOwner {
             .then_some(owner)
             .ok_or(EnqueueError::FailClosed)
     }
-
     fn validate_exact(&self) -> bool {
         self.causal_origin.validate_exact()
             && self.causal_origin.root_lifecycle_ordinal == Some(self.lifecycle_ordinal)
             && self.projection_hash == runtime_lifecycle_owner_projection_hash(self)
     }
-
     /// Immutable first-admission origin.
     pub(crate) const fn causal_origin(&self) -> &RuntimeCandidateCausalOrigin {
         &self.causal_origin
     }
-
     /// Monotone actor-local lifecycle ordinal.
     pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
         self.lifecycle_ordinal
     }
-
     /// Whether this causal lifecycle descends from receiver ingress admitted
     /// at or after `physical_cut`. Local successors keep the root pair even
     /// after they no longer carry the authenticated envelope itself.
@@ -1688,7 +1577,6 @@ impl RuntimeLifecycleOwner {
             .root_ingress_physical_ownership
             .is_some_and(|ownership| u128::from(ownership.source_ordinal) >= physical_cut)
     }
-
     fn rebase_deferred_ingress(
         &self,
         lifecycle_ordinal: u128,
@@ -1722,7 +1610,6 @@ impl RuntimeLifecycleOwner {
             .ok_or(RuntimeIngressMergeError::Conflict)
     }
 }
-
 fn runtime_lifecycle_owner_projection_hash(owner: &RuntimeLifecycleOwner) -> iroha_crypto::Hash {
     let mut projection = Vec::new();
     projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-lifecycle-owner:v1");
@@ -1733,7 +1620,6 @@ fn runtime_lifecycle_owner_projection_hash(owner: &RuntimeLifecycleOwner) -> iro
     append_runtime_identity_field(&mut projection, &owner.lifecycle_ordinal.to_le_bytes());
     iroha_crypto::Hash::new(projection)
 }
-
 /// How one effect acquired its immutable lifecycle owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeEffectCausality {
@@ -1742,21 +1628,18 @@ pub(crate) enum RuntimeEffectCausality {
     /// The effect is an independently reconstructed TLA root.
     Fresh(RuntimeFreshRootKind),
 }
-
 fn runtime_effect_causality_code(causality: RuntimeEffectCausality) -> u8 {
     match causality {
         RuntimeEffectCausality::Inherit => RUNTIME_EFFECT_CAUSALITY_INHERIT,
         RuntimeEffectCausality::Fresh(_) => RUNTIME_EFFECT_CAUSALITY_FRESH,
     }
 }
-
 fn runtime_effect_fresh_root_code(causality: RuntimeEffectCausality) -> u8 {
     match causality {
         RuntimeEffectCausality::Inherit => 0,
         RuntimeEffectCausality::Fresh(kind) => kind.code(),
     }
 }
-
 fn runtime_effect_identity_hash(effect_kind: u8, semantic_identity: &[u8]) -> iroha_crypto::Hash {
     let mut projection = Vec::new();
     projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-effect:v1");
@@ -1764,7 +1647,6 @@ fn runtime_effect_identity_hash(effect_kind: u8, semantic_identity: &[u8]) -> ir
     append_runtime_identity_field(&mut projection, semantic_identity);
     iroha_crypto::Hash::new(projection)
 }
-
 /// Compare one complete adapter effect with a closed lifecycle digest.
 ///
 /// This fixed oracle lets a dedicated lifecycle executor reauthenticate an
@@ -1781,7 +1663,6 @@ pub(in crate::sumeragi) fn adapter_effect_matches_lifecycle_digest(
     .as_ref()
         == digest
 }
-
 #[cfg(test)]
 /// Hash one adapter effect through the production semantic-identity projection.
 pub(in crate::sumeragi) fn adapter_effect_identity_for_test(
@@ -1792,7 +1673,6 @@ pub(in crate::sumeragi) fn adapter_effect_identity_for_test(
         &production_adapter_effect_semantic_identity(effect),
     )
 }
-
 fn runtime_effect_candidate_semantic_hash(
     candidate_kind: u8,
     semantic_identity: &[u8],
@@ -1803,7 +1683,6 @@ fn runtime_effect_candidate_semantic_hash(
     append_runtime_identity_field(&mut projection, semantic_identity);
     iroha_crypto::Hash::new(projection)
 }
-
 fn runtime_effect_candidate_identity_hash(
     owner: &RuntimeLifecycleOwner,
     candidate_kind: u8,
@@ -1819,7 +1698,6 @@ fn runtime_effect_candidate_identity_hash(
     append_runtime_identity_field(&mut projection, semantic_identity.as_ref());
     iroha_crypto::Hash::new(projection)
 }
-
 /// Complete route-neutral statement retained by one internal candidate.
 ///
 /// This is process-local refinement evidence. It is never serialized, and it
@@ -1834,7 +1712,6 @@ pub(crate) struct RuntimeCandidateSemanticStatement {
     phase: Option<wire::GlobalPhase>,
     execution_commitment: Option<wire::ExecutionCommitment>,
 }
-
 impl RuntimeCandidateSemanticStatement {
     fn new(
         round: wire::ConsensusRound,
@@ -1852,7 +1729,6 @@ impl RuntimeCandidateSemanticStatement {
             execution_commitment,
         }
     }
-
     fn validate_exact(self) -> bool {
         self.context_id == self.round.context_id
             && self.context_id == self.proposal_round.context_id
@@ -1863,37 +1739,30 @@ impl RuntimeCandidateSemanticStatement {
                 .execution_commitment
                 .is_none_or(|_| self.subject.is_some())
     }
-
     /// Return the frozen height-context identity.
     pub(crate) const fn context_id(self) -> wire::HeightContextId {
         self.context_id
     }
-
     /// Return the exact execution/certificate round.
     pub(crate) const fn round(self) -> wire::ConsensusRound {
         self.round
     }
-
     /// Return the exact proposal/body origin round.
     pub(crate) const fn proposal_round(self) -> wire::ConsensusRound {
         self.proposal_round
     }
-
     /// Return the optional exact block subject.
     pub(crate) const fn subject(self) -> Option<wire::BlockSubject> {
         self.subject
     }
-
     /// Return inherited Prepare/Commit authority, when present.
     pub(crate) const fn phase(self) -> Option<wire::GlobalPhase> {
         self.phase
     }
-
     /// Return the deterministic execution commitment paired with authority.
     pub(crate) const fn execution_commitment(self) -> Option<wire::ExecutionCommitment> {
         self.execution_commitment
     }
-
     fn binds_exact_body_manifest(self, manifest: &wire::PayloadManifest) -> bool {
         self.validate_exact()
             && self.context_id == manifest.round.context_id
@@ -1901,7 +1770,6 @@ impl RuntimeCandidateSemanticStatement {
             && self.proposal_round == manifest.round
             && self.subject == Some(manifest.subject)
     }
-
     /// Classify the only authority refinement allowed within an immutable
     /// body owner. A local/ordinary body starts without quorum authority, and
     /// a Prepare-certified body can later acquire the exact durable CommitQC.
@@ -1930,7 +1798,6 @@ impl RuntimeCandidateSemanticStatement {
             _ => None,
         }
     }
-
     /// Compare two carriers for the same physical body-fetch lineage.
     ///
     /// The candidate statement deliberately includes quorum authority, while
@@ -1949,7 +1816,6 @@ impl RuntimeCandidateSemanticStatement {
         {
             return None;
         }
-
         match (
             self.phase,
             self.execution_commitment,
@@ -1991,7 +1857,6 @@ impl RuntimeCandidateSemanticStatement {
             _ => None,
         }
     }
-
     /// Compare two carriers for one physical StoreBody or ValidateBody stage.
     ///
     /// EventTag incarnation may advance independently, but the certified and
@@ -2004,7 +1869,6 @@ impl RuntimeCandidateSemanticStatement {
     ) -> Option<RuntimeFetchAuthorityRelation> {
         self.fetch_authority_relation_to(incoming)
     }
-
     fn semantic_identity(self) -> Vec<u8> {
         let mut identity = Vec::new();
         identity.extend_from_slice(b"iroha:sumeragi:v2:tla-candidate-semantic:v2");
@@ -2027,7 +1891,6 @@ impl RuntimeCandidateSemanticStatement {
         identity
     }
 }
-
 /// Provenance-sensitive authority transition under one immutable local owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeCandidateAuthorityRefinement {
@@ -2038,7 +1901,6 @@ enum RuntimeCandidateAuthorityRefinement {
     /// An exact Commit-authorized retry retained all six coordinates.
     RetainCommit,
 }
-
 /// Authority relation between two exact carriers for one physical FetchBody.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeFetchAuthorityRelation {
@@ -2049,7 +1911,6 @@ pub(crate) enum RuntimeFetchAuthorityRelation {
     /// The incoming carrier is weaker and must not downgrade the task.
     Stale,
 }
-
 /// Candidate bytes plus the independently retained typed statement which
 /// produced them. Synthetic runtime drivers may omit the production-only
 /// statement; every production candidate kind must carry it.
@@ -2059,7 +1920,6 @@ pub(crate) struct RuntimeEffectCandidateSemantic {
     semantic_identity: Vec<u8>,
     statement: Option<RuntimeCandidateSemanticStatement>,
 }
-
 fn runtime_candidate_kind_requires_statement(kind: u8) -> bool {
     matches!(
         kind,
@@ -2072,7 +1932,6 @@ fn runtime_candidate_kind_requires_statement(kind: u8) -> bool {
             | RUNTIME_CANDIDATE_KIND_APPLY
     )
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RuntimeEffectCandidateBinding {
     owner_projection_hash: iroha_crypto::Hash,
@@ -2089,7 +1948,6 @@ struct RuntimeEffectCandidateBinding {
     candidate_count: u8,
     projection_hash: iroha_crypto::Hash,
 }
-
 #[derive(Clone, Copy)]
 struct RuntimeEffectCandidateBindingProjectionParts<'a> {
     owner_projection_hash: &'a iroha_crypto::Hash,
@@ -2105,7 +1963,6 @@ struct RuntimeEffectCandidateBindingProjectionParts<'a> {
     candidate_position: u8,
     candidate_count: u8,
 }
-
 fn append_optional_runtime_hash(projection: &mut Vec<u8>, value: Option<&iroha_crypto::Hash>) {
     match value {
         None => projection.push(0),
@@ -2115,7 +1972,6 @@ fn append_optional_runtime_hash(projection: &mut Vec<u8>, value: Option<&iroha_c
         }
     }
 }
-
 fn runtime_effect_candidate_binding_projection_hash(
     owner: &RuntimeLifecycleOwner,
     causality: RuntimeEffectCausality,
@@ -2146,7 +2002,6 @@ fn runtime_effect_candidate_binding_projection_hash(
     projection.push(parts.candidate_count);
     iroha_crypto::Hash::new(projection)
 }
-
 impl RuntimeEffectCandidateBinding {
     fn projection_parts(&self) -> RuntimeEffectCandidateBindingProjectionParts<'_> {
         RuntimeEffectCandidateBindingProjectionParts {
@@ -2164,7 +2019,6 @@ impl RuntimeEffectCandidateBinding {
             candidate_count: self.candidate_count,
         }
     }
-
     #[allow(clippy::too_many_arguments)]
     fn new(
         owner: &RuntimeLifecycleOwner,
@@ -2268,7 +2122,6 @@ impl RuntimeEffectCandidateBinding {
             .then_some(binding)
             .ok_or(EnqueueError::FailClosed)
     }
-
     fn validate_exact(
         &self,
         owner: &RuntimeLifecycleOwner,
@@ -2334,7 +2187,6 @@ impl RuntimeEffectCandidateBinding {
                 )
     }
 }
-
 /// Sidecar metadata paired positionally with one reducer effect.
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeEffectOwnership {
@@ -2343,7 +2195,6 @@ pub(crate) struct RuntimeEffectOwnership {
     binding: Option<RuntimeEffectCandidateBinding>,
     remote_proposal_fetch_replay: Option<RemoteProposalFetchReplayEvidenceV1>,
 }
-
 /// One-shot runtime-only permit for minting authenticated remote Proposal replay evidence.
 ///
 /// Only the production dispatch carrier can construct this value after the
@@ -2353,14 +2204,11 @@ pub(crate) struct RuntimeEffectOwnership {
 pub(in crate::sumeragi) struct RemoteProposalReplayMintPermit {
     _linearity: RemoteProposalReplayMintLinearity,
 }
-
 #[derive(Debug)]
 struct RemoteProposalReplayMintLinearity;
-
 impl Drop for RemoteProposalReplayMintLinearity {
     fn drop(&mut self) {}
 }
-
 impl RemoteProposalReplayMintPermit {
     fn new() -> Self {
         Self {
@@ -2368,7 +2216,6 @@ impl RemoteProposalReplayMintPermit {
         }
     }
 }
-
 /// Exact authenticated Proposal plus its frozen direct-ingress carrier.
 ///
 /// This value exists only between adapter dispatch and exact effect binding,
@@ -2378,7 +2225,6 @@ pub(crate) struct AuthenticatedRemoteProposalDispatchOrigin {
     authenticated: AuthenticatedConsensusMessage,
     ingress: RuntimeIngressOwnershipEvidence,
 }
-
 impl AuthenticatedRemoteProposalDispatchOrigin {
     fn new(
         authenticated: AuthenticatedConsensusMessage,
@@ -2396,7 +2242,6 @@ impl AuthenticatedRemoteProposalDispatchOrigin {
             ingress,
         })
     }
-
     fn rebind_retained_ingress(self, retained: RuntimeIngressOwnershipEvidence) -> Option<Self> {
         if !retained.exactly_matches_authenticated(&self.authenticated) {
             return None;
@@ -2413,7 +2258,6 @@ impl AuthenticatedRemoteProposalDispatchOrigin {
             ingress: retained,
         })
     }
-
     fn merge_retained(
         self,
         incumbent: Self,
@@ -2430,7 +2274,6 @@ impl AuthenticatedRemoteProposalDispatchOrigin {
         }
         self.rebind_retained_ingress(retained)
     }
-
     fn bind_exact_fetch(
         self,
         effect: &AdapterEffect,
@@ -2445,7 +2288,6 @@ impl AuthenticatedRemoteProposalDispatchOrigin {
         )
     }
 }
-
 /// One-shot runtime-only permit for minting local pre-intent replay authority.
 ///
 /// Only the serialized active-view producer cut can construct this value. Its
@@ -2455,14 +2297,11 @@ impl AuthenticatedRemoteProposalDispatchOrigin {
 pub(in crate::sumeragi) struct LocalBodyReplayMintPermit {
     _linearity: LocalBodyReplayMintLinearity,
 }
-
 #[derive(Debug)]
 struct LocalBodyReplayMintLinearity;
-
 impl Drop for LocalBodyReplayMintLinearity {
     fn drop(&mut self) {}
 }
-
 impl LocalBodyReplayMintPermit {
     fn new() -> Self {
         Self {
@@ -2470,7 +2309,6 @@ impl LocalBodyReplayMintPermit {
         }
     }
 }
-
 /// Linear composite owning both one local Store capability and its replay seal.
 ///
 /// Cloneable Store/Validate scheduling metadata may be projected only after an
@@ -2482,7 +2320,6 @@ pub(crate) struct LocalProposalEffectOwnership {
     ownership: RuntimeEffectOwnership,
     replay: LocalBodyPreIntentReplaySealV1,
 }
-
 /// Inert exact key for one owned `LocalProposalReady` runtime command.
 ///
 /// The key is not replay authority: it only lets the executor keep a
@@ -2495,7 +2332,6 @@ pub(crate) struct LocalProposalReadyCommandIdentity {
     causal_lifecycle_key: iroha_crypto::Hash,
     projection_hash: iroha_crypto::Hash,
 }
-
 fn local_proposal_ready_command_projection_hash(
     identity: &LocalProposalReadyCommandIdentity,
 ) -> iroha_crypto::Hash {
@@ -2506,7 +2342,6 @@ fn local_proposal_ready_command_projection_hash(
     append_runtime_identity_field(&mut projection, identity.causal_lifecycle_key.as_ref());
     iroha_crypto::Hash::new(projection)
 }
-
 impl LocalProposalReadyCommandIdentity {
     /// Derive the inert key only from an exact owned Validate completion.
     pub(in crate::sumeragi) fn from_exact_handoff(
@@ -2547,11 +2382,9 @@ impl LocalProposalReadyCommandIdentity {
         identity.projection_hash = local_proposal_ready_command_projection_hash(&identity);
         identity.validate_exact().then_some(identity)
     }
-
     fn validate_exact(&self) -> bool {
         self.projection_hash == local_proposal_ready_command_projection_hash(self)
     }
-
     /// Compare the cloneable FIFO command with its retained Validate owner.
     pub(in crate::sumeragi) fn exactly_matches_handoff(
         &self,
@@ -2579,7 +2412,6 @@ impl LocalProposalReadyCommandIdentity {
             && self.causal_lifecycle_key == validate_pending.causal_lifecycle_key
             && validate_pending.exactly_binds_adapter_effect(&validate_effect)
     }
-
     /// Match only the exact ProposalIntent successor of this queued handoff.
     pub(in crate::sumeragi) fn exactly_matches_proposal_intent(
         &self,
@@ -2612,7 +2444,6 @@ impl LocalProposalReadyCommandIdentity {
             && ownership.owner().causal_origin().lifecycle_key == self.causal_lifecycle_key
     }
 }
-
 impl LocalProposalEffectOwnership {
     fn from_exact_assemble_body(
         ownership: RuntimeEffectOwnership,
@@ -2628,7 +2459,6 @@ impl LocalProposalEffectOwnership {
         )?;
         Some(Self { ownership, replay })
     }
-
     /// Project scheduling metadata only for this composite's exact Store work.
     pub(in crate::sumeragi) fn exact_store_task_ownership(
         &self,
@@ -2639,7 +2469,6 @@ impl LocalProposalEffectOwnership {
             && self.replay.exactly_matches_store(effect, manifest))
         .then(|| self.ownership.clone())
     }
-
     /// Compare a retained Store task without exposing either authority part.
     pub(in crate::sumeragi) fn exactly_matches_store_task(
         &self,
@@ -2651,7 +2480,6 @@ impl LocalProposalEffectOwnership {
             && self.ownership.exactly_binds_adapter_effect(effect)
             && self.replay.exactly_matches_store(effect, manifest)
     }
-
     /// Preflight the fixed Store-to-Validate projection without releasing the seal.
     pub(in crate::sumeragi) fn exactly_projects_validate_task(
         &self,
@@ -2674,7 +2502,6 @@ impl LocalProposalEffectOwnership {
             &validate_pending,
         )
     }
-
     /// Consume the composite through the exact durable Store-to-Validate cut.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn project_exact_validate(
@@ -2702,7 +2529,6 @@ impl LocalProposalEffectOwnership {
             Err(replay) => Err(Self { ownership, replay }),
         }
     }
-
     /// Construct the same closed composite for production-shaped executor tests.
     #[cfg(test)]
     pub(crate) fn for_test(
@@ -2713,7 +2539,6 @@ impl LocalProposalEffectOwnership {
         Self::from_exact_assemble_body(ownership, effect, manifest)
     }
 }
-
 /// Move-only, ordinal-free authority for one exact adapter effect awaiting
 /// lifecycle admission.
 ///
@@ -2733,7 +2558,6 @@ pub(crate) struct PendingRuntimeEffectBinding {
     candidate_semantic_identity: Option<iroha_crypto::Hash>,
     projection_hash: iroha_crypto::Hash,
 }
-
 /// Move-only restart successor derived from one exact recovered WAL vote.
 ///
 /// The consuming projection retains the complete verified WAL
@@ -2752,7 +2576,6 @@ pub(crate) struct RecoveredWalVoteSuccessor {
     pending: PendingRuntimeEffectBinding,
     _prepare_certificate: Option<wire::QuorumCertificate>,
 }
-
 /// Unforgeable one-shot permit for the recovered-WAL candidate projection seam.
 ///
 /// Its field and constructor are private to this runtime module. Replay and
@@ -2761,7 +2584,6 @@ pub(crate) struct RecoveredWalVoteSuccessor {
 pub(in crate::sumeragi) struct RecoveredWalCandidateProjectionPermit {
     _linearity: RecoveredWalCandidateProjectionLinearity,
 }
-
 /// Runtime-private one-shot permit for consuming one sealed follow-on WAL Vote.
 ///
 /// The recovered seal owns the exact WAL identity, unsigned Sign effect, replay
@@ -2771,7 +2593,6 @@ pub(in crate::sumeragi) struct RecoveredWalCandidateProjectionPermit {
 pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1 {
     _linearity: RecoveredLifecycleNextWalVoteCandidateProjectionLinearityV1,
 }
-
 /// Runtime-private one-shot permit for a recovered-frame pending owner.
 ///
 /// The constructor stays in this module. The recovered control token consumes
@@ -2780,7 +2601,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteCandidateProjectionP
 pub(in crate::sumeragi) struct RecoveredWalControlPendingMintPermit {
     _linearity: RecoveredWalControlPendingMintLinearity,
 }
-
 /// Runtime-private one-shot permit for a recovered Decision Fetch owner.
 ///
 /// Only the consuming WAL token projection can construct this permit, so
@@ -2789,13 +2609,10 @@ pub(in crate::sumeragi) struct RecoveredWalControlPendingMintPermit {
 pub(in crate::sumeragi) struct RecoveredWalDecisionFetchPendingMintPermit {
     _linearity: RecoveredWalDecisionFetchPendingMintLinearity,
 }
-
 struct RecoveredWalDecisionFetchPendingMintLinearity;
-
 impl Drop for RecoveredWalDecisionFetchPendingMintLinearity {
     fn drop(&mut self) {}
 }
-
 impl RecoveredWalDecisionFetchPendingMintPermit {
     fn new() -> Self {
         Self {
@@ -2803,13 +2620,10 @@ impl RecoveredWalDecisionFetchPendingMintPermit {
         }
     }
 }
-
 struct RecoveredWalControlPendingMintLinearity;
-
 impl Drop for RecoveredWalControlPendingMintLinearity {
     fn drop(&mut self) {}
 }
-
 impl RecoveredWalControlPendingMintPermit {
     fn new() -> Self {
         Self {
@@ -2817,13 +2631,10 @@ impl RecoveredWalControlPendingMintPermit {
         }
     }
 }
-
 struct RecoveredWalCandidateProjectionLinearity;
-
 impl Drop for RecoveredWalCandidateProjectionLinearity {
     fn drop(&mut self) {}
 }
-
 impl RecoveredWalCandidateProjectionPermit {
     fn new() -> Self {
         Self {
@@ -2831,13 +2642,10 @@ impl RecoveredWalCandidateProjectionPermit {
         }
     }
 }
-
 struct RecoveredLifecycleNextWalVoteCandidateProjectionLinearityV1;
-
 impl Drop for RecoveredLifecycleNextWalVoteCandidateProjectionLinearityV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1 {
     fn new() -> Self {
         Self {
@@ -2845,7 +2653,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1 {
         }
     }
 }
-
 /// Consume one adapter-authenticated follow-on WAL Vote into its complete
 /// replay-authorized standalone Sign projection.
 ///
@@ -2863,7 +2670,6 @@ pub(in crate::sumeragi) fn project_recovered_lifecycle_next_wal_vote_candidate(
         verified,
     )
 }
-
 /// Consume one adapter-authenticated recovered control token into its exact
 /// pending owner and replay-authorized lifecycle admission.
 #[allow(clippy::result_large_err)]
@@ -2877,7 +2683,6 @@ pub(crate) fn project_recovered_wal_control_sign(
         verified,
     )
 }
-
 /// Consume one authenticated Decision Fetch token into its closed lifecycle projection.
 #[allow(clippy::result_large_err)]
 pub(crate) fn project_recovered_wal_decision_fetch(
@@ -2890,7 +2695,6 @@ pub(crate) fn project_recovered_wal_decision_fetch(
         verified,
     )
 }
-
 /// Ownership-preserving failure from the consuming recovered-WAL projection.
 #[must_use = "failed recovered WAL projection retains its move-only successor"]
 pub(crate) enum RecoveredWalVoteProjectionFailure {
@@ -2903,14 +2707,12 @@ pub(crate) enum RecoveredWalVoteProjectionFailure {
     /// The recovered WAL evidence could not authorize its exact Sign child.
     Child(RecoveredWalVoteSuccessor),
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredWalVoteSuccessor {
     /// Revalidate the complete opaque WAL-frame identity retained by this successor.
     fn wal_identity_is_exact(&self) -> bool {
         self.wal_identity.is_exact()
     }
-
     /// Revalidate the inert canonical replay envelope against the retained Sign effect.
     pub(in crate::sumeragi) fn replay_evidence_is_exact(&self) -> bool {
         let AdapterEffect::Sign {
@@ -2923,7 +2725,6 @@ impl RecoveredWalVoteSuccessor {
         self.replay_evidence
             .exactly_matches_recovered_vote(self.wal_identity, *tag, vote)
     }
-
     /// Consume this successor through an exact persisted ledger-parent seal.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn into_ledger_lifecycle_projection(
@@ -2965,7 +2766,6 @@ impl RecoveredWalVoteSuccessor {
             ),
         )
     }
-
     /// Consume this successor through its retained durable Validate origin.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn into_durable_lifecycle_projection(
@@ -3009,14 +2809,12 @@ impl RecoveredWalVoteSuccessor {
             ),
         )
     }
-
     /// Revalidate both retained effects against their opaque pending bindings.
     pub(in crate::sumeragi) fn concrete_pair_is_exact(&self) -> bool {
         self.predecessor_pending
             .exactly_binds_adapter_effect(&self.predecessor_effect)
             && self.pending.exactly_binds_adapter_effect(&self.effect)
     }
-
     /// Match one validated body to the retained Validate-to-Sign coordinates.
     pub(in crate::sumeragi) fn concrete_pair_matches_validation(
         &self,
@@ -3054,12 +2852,10 @@ impl RecoveredWalVoteSuccessor {
             && vote.subject == *validate_subject
             && vote.execution_commitment == validated.execution_commitment()
     }
-
     /// Borrow only the child effect needed by closed registry installation.
     pub(in crate::sumeragi) const fn installed_child_effect(&self) -> &AdapterEffect {
         &self.effect
     }
-
     /// Derive the mandatory signed Broadcast binding without releasing the
     /// recovered vote's pending owner or WAL identity.
     pub(in crate::sumeragi) fn project_signed_broadcast_successor(
@@ -3069,7 +2865,6 @@ impl RecoveredWalVoteSuccessor {
         self.pending
             .project_signed_broadcast_successor(&self.effect, broadcast)
     }
-
     /// Recheck one retained signed-Broadcast binding without releasing the vote owner.
     pub(in crate::sumeragi) fn signed_broadcast_successor_is_exact(
         &self,
@@ -3079,7 +2874,6 @@ impl RecoveredWalVoteSuccessor {
         self.project_signed_broadcast_successor(broadcast).as_ref() == Some(pending)
     }
 }
-
 fn pending_runtime_effect_binding_projection_hash(
     causal_lifecycle_key: &iroha_crypto::Hash,
     effect_kind: u8,
@@ -3104,7 +2898,6 @@ fn pending_runtime_effect_binding_projection_hash(
     append_optional_runtime_hash(&mut projection, candidate_semantic_identity);
     iroha_crypto::Hash::new(projection)
 }
-
 /// Reconstruct the exact ordinal-free Validate-to-Sign successor named by a
 /// ledger-authenticated parent and the adapter-authenticated current WAL vote.
 ///
@@ -3183,13 +2976,11 @@ pub(crate) fn reconstruct_recovered_wal_vote_successor(
         .project_recovered_wal_vote_successor(&predecessor, recovered)
         .map_err(|(_pending, recovered)| recovered)
 }
-
 #[derive(Clone, Copy)]
 enum CommitSuccessorTagRelation {
     LiveExact,
     RecoveredMonotone,
 }
-
 fn commit_tags_match(
     predecessor: EventTag,
     successor: EventTag,
@@ -3211,7 +3002,6 @@ fn commit_tags_match(
         }
     }
 }
-
 fn recovered_prepare_matches_commit_vote(
     prepare: &wire::QuorumCertificate,
     vote: &wire::Vote,
@@ -3223,7 +3013,6 @@ fn recovered_prepare_matches_commit_vote(
         && prepare.subject == vote.subject
         && prepare.execution_commitment == vote.execution_commitment
 }
-
 impl PendingRuntimeEffectBinding {
     /// Reconstruct the unique pending owner of a frame-bound Certified Fetch.
     ///
@@ -3273,7 +3062,6 @@ impl PendingRuntimeEffectBinding {
         };
         pending.validate_exact(effect).then_some(pending)
     }
-
     /// Mint the unique pending owner of one exact payload-free live-WAL continuation.
     ///
     /// The causal key is derived from the non-decodable post-fsync frame seal
@@ -3299,7 +3087,6 @@ impl PendingRuntimeEffectBinding {
         }
         Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
     }
-
     /// Mint the unique pending owner of one recovered Proposal/Timeout control Sign.
     ///
     /// The one-shot permit is private to the consuming recovered-token join.
@@ -3323,7 +3110,6 @@ impl PendingRuntimeEffectBinding {
         }
         Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
     }
-
     /// Mint the unique pending owner of one adapter-sealed recovered phase Vote.
     ///
     /// The permit is minted only by the consuming runtime projection. A raw
@@ -3347,7 +3133,6 @@ impl PendingRuntimeEffectBinding {
         }
         Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
     }
-
     /// Mint the unique pending owner of one exact Decision-owned Fetch.
     pub(in crate::sumeragi) fn from_exact_recovered_wal_decision_fetch(
         _permit: RecoveredWalDecisionFetchPendingMintPermit,
@@ -3368,7 +3153,6 @@ impl PendingRuntimeEffectBinding {
         }
         Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
     }
-
     fn from_exact_wal_locator(
         locator: PersistedWalFrameLocatorV1,
         effect: &AdapterEffect,
@@ -3415,22 +3199,18 @@ impl PendingRuntimeEffectBinding {
         };
         pending.validate_exact(effect).then_some(pending)
     }
-
     /// Borrow the immutable runtime causal-origin lifecycle key.
     pub(crate) const fn causal_lifecycle_key(&self) -> &iroha_crypto::Hash {
         &self.causal_lifecycle_key
     }
-
     /// Borrow the exact physical identity already bound to the complete effect.
     pub(crate) const fn exact_effect_identity(&self) -> &iroha_crypto::Hash {
         &self.effect_identity
     }
-
     /// Return the route-neutral candidate statement retained by the runtime.
     pub(crate) const fn candidate_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
         self.candidate_statement
     }
-
     fn validate_exact(&self, effect: &AdapterEffect) -> bool {
         let exact_candidate = match (
             self.candidate_kind,
@@ -3470,13 +3250,11 @@ impl PendingRuntimeEffectBinding {
                     self.candidate_semantic_identity.as_ref(),
                 )
     }
-
     /// Return whether this sealed pending binding still names the supplied
     /// complete concrete effect.
     pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {
         self.validate_exact(effect)
     }
-
     /// Project the mandatory signed Broadcast successor of one exact Sign.
     ///
     /// The signed wire payload must be byte-for-byte the predecessor request
@@ -3530,7 +3308,6 @@ impl PendingRuntimeEffectBinding {
         if !signed_request_matches {
             return None;
         }
-
         let effect_kind = production_adapter_effect_kind(successor);
         let effect_identity = runtime_effect_identity_hash(
             effect_kind,
@@ -3557,7 +3334,6 @@ impl PendingRuntimeEffectBinding {
             .validate_exact(successor)
             .then_some(successor_binding)
     }
-
     /// Project the exact `StoreBody` successor of one certified Fetch without
     /// consulting or minting a legacy runtime lifecycle ordinal.
     ///
@@ -3599,7 +3375,6 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-
         let inherited = self.candidate_statement?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
@@ -3636,7 +3411,6 @@ impl PendingRuntimeEffectBinding {
             .validate_exact(successor)
             .then_some(successor_binding)
     }
-
     /// Project the exact ordinary Proposal-Fetch successor into Store.
     ///
     /// The Proposal signature and receiver ingress remain in the opaque replay
@@ -3674,7 +3448,6 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-
         let inherited = self.candidate_statement?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
@@ -3711,7 +3484,6 @@ impl PendingRuntimeEffectBinding {
             .validate_exact(successor)
             .then_some(successor_binding)
     }
-
     /// Project the exact `ValidateBody` successor of one durable `StoreBody`.
     ///
     /// The returned binding retains the Store's immutable causal key and full
@@ -3748,7 +3520,6 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-
         let inherited = self.candidate_statement?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
@@ -3785,7 +3556,6 @@ impl PendingRuntimeEffectBinding {
             .validate_exact(successor)
             .then_some(successor_binding)
     }
-
     /// Project the exact `Apply` successor of one successfully completed
     /// `ValidateBody` without consulting or minting a legacy lifecycle ordinal.
     ///
@@ -3826,7 +3596,6 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-
         let inherited = self.candidate_statement?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
@@ -3862,7 +3631,6 @@ impl PendingRuntimeEffectBinding {
             .validate_exact(successor)
             .then_some(successor_binding)
     }
-
     /// Project the exact Prepare-vote `Sign` successor of one successfully
     /// completed ordinary `ValidateBody`.
     ///
@@ -3905,7 +3673,6 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-
         let inherited = self.candidate_statement?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
@@ -3951,7 +3718,6 @@ impl PendingRuntimeEffectBinding {
             .validate_exact(successor)
             .then_some(successor_binding)
     }
-
     /// Project the exact Commit-vote `Sign` successor of one successfully
     /// completed Prepare-authorized `ValidateBody`.
     ///
@@ -3976,7 +3742,6 @@ impl PendingRuntimeEffectBinding {
             CommitSuccessorTagRelation::LiveExact,
         )
     }
-
     fn project_inherited_validate_commit_successor(
         &self,
         predecessor: &AdapterEffect,
@@ -4007,7 +3772,6 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-
         let inherited = self.candidate_statement?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
@@ -4047,7 +3811,6 @@ impl PendingRuntimeEffectBinding {
             .validate_exact(successor)
             .then_some(successor_binding)
     }
-
     /// Project a Commit-vote successor for an ordinary Validate only while an
     /// opaque adapter capability proves the exact concurrently registered
     /// Prepare certificate.
@@ -4072,7 +3835,6 @@ impl PendingRuntimeEffectBinding {
             CommitSuccessorTagRelation::LiveExact,
         )
     }
-
     /// Consume one adapter-authenticated WAL vote into its exact Validate
     /// successor binding.
     ///
@@ -4138,7 +3900,6 @@ impl PendingRuntimeEffectBinding {
             _prepare_certificate: prepare_certificate,
         })
     }
-
     fn project_recovered_ordinary_validate_commit_successor(
         &self,
         predecessor: &AdapterEffect,
@@ -4155,14 +3916,12 @@ impl PendingRuntimeEffectBinding {
         if !recovered_prepare_matches_commit_vote(prepare, vote) {
             return None;
         }
-
         self.project_ordinary_validate_commit_after_registered_prepare(
             predecessor,
             successor,
             CommitSuccessorTagRelation::RecoveredMonotone,
         )
     }
-
     fn project_recovered_inherited_validate_commit_successor(
         &self,
         predecessor: &AdapterEffect,
@@ -4185,7 +3944,6 @@ impl PendingRuntimeEffectBinding {
             CommitSuccessorTagRelation::RecoveredMonotone,
         )
     }
-
     fn project_ordinary_validate_commit_after_registered_prepare(
         &self,
         predecessor: &AdapterEffect,
@@ -4216,7 +3974,6 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-
         let inherited = self.candidate_statement?;
         if inherited.phase.is_some()
             || inherited.execution_commitment.is_some()
@@ -4243,7 +4000,6 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-
         let effect_kind = production_adapter_effect_kind(successor);
         let effect_identity = runtime_effect_identity_hash(
             effect_kind,
@@ -4274,7 +4030,6 @@ impl PendingRuntimeEffectBinding {
             .validate_exact(successor)
             .then_some(successor_binding)
     }
-
     /// Project the exact invalid-certified-body report emitted by one failed
     /// Prepare-authorized `ValidateBody` completion.
     ///
@@ -4319,7 +4074,6 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-
         let inherited = self.candidate_statement?;
         let registered_carrier = RuntimeCandidateSemanticStatement::new(
             certificate.round,
@@ -4362,7 +4116,6 @@ impl PendingRuntimeEffectBinding {
             .validate_exact(successor)
             .then_some(successor_binding)
     }
-
     /// Project the exact invalid-body report observed after an ordinary
     /// Validate owner was installed but before its matching PrepareQC arrived.
     ///
@@ -4404,7 +4157,6 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-
         let inherited = self.candidate_statement?;
         if inherited.phase.is_some()
             || inherited.execution_commitment.is_some()
@@ -4455,7 +4207,6 @@ impl PendingRuntimeEffectBinding {
             .then_some(successor_binding)
     }
 }
-
 impl PartialEq for RuntimeEffectOwnership {
     // Equality names the immutable lifecycle owner, not the replaceable
     // positional effect binding. Fetch-route upgrades and later consumer-stage
@@ -4465,9 +4216,7 @@ impl PartialEq for RuntimeEffectOwnership {
         self.owner == other.owner && self.causality == other.causality
     }
 }
-
 impl Eq for RuntimeEffectOwnership {}
-
 impl RuntimeEffectOwnership {
     fn inherited(owner: RuntimeLifecycleOwner) -> Self {
         Self {
@@ -4477,7 +4226,6 @@ impl RuntimeEffectOwnership {
             remote_proposal_fetch_replay: None,
         }
     }
-
     fn fresh(owner: RuntimeLifecycleOwner, kind: RuntimeFreshRootKind) -> Self {
         Self {
             owner,
@@ -4486,7 +4234,6 @@ impl RuntimeEffectOwnership {
             remote_proposal_fetch_replay: None,
         }
     }
-
     fn validate_exact(&self) -> bool {
         self.owner.validate_exact()
             && self
@@ -4494,11 +4241,9 @@ impl RuntimeEffectOwnership {
                 .as_ref()
                 .is_none_or(|binding| binding.validate_exact(&self.owner, self.causality))
     }
-
     fn validate_bound_exact(&self) -> bool {
         self.validate_exact() && self.binding.is_some()
     }
-
     /// Return whether this non-forgeable sidecar names one exact production
     /// adapter effect, including all of the effect's concrete coordinates.
     pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {
@@ -4514,7 +4259,6 @@ impl RuntimeEffectOwnership {
                     &production_adapter_effect_semantic_identity(effect),
                 )
     }
-
     /// Mint an ordinal-free lifecycle-admission binding only for the exact
     /// concrete effect named by this legacy ownership sidecar.
     ///
@@ -4554,7 +4298,6 @@ impl RuntimeEffectOwnership {
         };
         pending.validate_exact(effect).then_some(pending)
     }
-
     /// Clone the opaque authenticated-Proposal replay envelope only for its exact Fetch.
     pub(in crate::sumeragi) fn exact_remote_proposal_fetch_replay(
         &self,
@@ -4566,7 +4309,6 @@ impl RuntimeEffectOwnership {
             .exactly_matches_fetch_pending(effect, &pending)
             .then(|| replay.clone())
     }
-
     /// Attach genuine authenticated-Proposal replay evidence to one test Fetch owner.
     ///
     /// This uses the same frozen fair-ingress projection and private production
@@ -4609,7 +4351,6 @@ impl RuntimeEffectOwnership {
         self.remote_proposal_fetch_replay = Some(replay);
         true
     }
-
     /// Return whether this exact predecessor capability authorizes one body
     /// pipeline successor. The mapping is deliberately closed: matching body
     /// coordinates alone never authorize a lifecycle-owner handoff.
@@ -4697,7 +4438,6 @@ impl RuntimeEffectOwnership {
             _ => false,
         }
     }
-
     #[allow(clippy::too_many_arguments)]
     fn bind_runtime_effect(
         mut self,
@@ -4729,32 +4469,27 @@ impl RuntimeEffectOwnership {
             .then_some(self)
             .ok_or(EnqueueError::FailClosed)
     }
-
     fn binding(&self) -> Option<&RuntimeEffectCandidateBinding> {
         self.binding.as_ref()
     }
-
     #[cfg(test)]
     pub(crate) fn candidate_identity(&self) -> Option<iroha_crypto::Hash> {
         self.binding
             .as_ref()
             .and_then(|binding| binding.candidate_identity)
     }
-
     /// Route-neutral semantic lifecycle used by the single-owner admission gate.
     pub(crate) fn candidate_semantic_identity(&self) -> Option<iroha_crypto::Hash> {
         self.binding
             .as_ref()
             .and_then(|binding| binding.candidate_semantic_identity)
     }
-
     /// Typed semantic statement retained through causal completion handoffs.
     fn candidate_semantic_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
         self.binding
             .as_ref()
             .and_then(|binding| binding.candidate_statement)
     }
-
     /// Return whether this exact effect binding carries one durable Decision's
     /// complete Commit authority statement.
     pub(crate) fn binds_durable_decision_authority(
@@ -4774,7 +4509,6 @@ impl RuntimeEffectOwnership {
                     Some(execution_commitment),
                 ))
     }
-
     fn binds_exact_fetch_body_manifest(&self, manifest: &wire::PayloadManifest) -> bool {
         let Some(binding) = self.binding.as_ref() else {
             return false;
@@ -4786,7 +4520,6 @@ impl RuntimeEffectOwnership {
                 .candidate_statement
                 .is_some_and(|statement| statement.binds_exact_body_manifest(manifest))
     }
-
     fn binds_body_pipeline_completion_predecessor(
         &self,
         completion: &BodyPipelineCompletionEvidence,
@@ -4840,18 +4573,15 @@ impl RuntimeEffectOwnership {
                 | BodyPipelineCompletionEvidence::ValidationFailed { .. } => true,
             }
     }
-
     /// Immutable owner carried into an asynchronous task or completion.
     pub(crate) const fn owner(&self) -> &RuntimeLifecycleOwner {
         &self.owner
     }
-
     /// Frozen inherit/fresh classification. Retries and rebinds retain it.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn causality(&self) -> RuntimeEffectCausality {
         self.causality
     }
-
     #[cfg(test)]
     pub(crate) fn fresh_for_test(tag: EventTag, lifecycle_ordinal: u128) -> Self {
         let kind = RuntimeFreshRootKind::StartupRecovery;
@@ -4868,7 +4598,6 @@ impl RuntimeEffectOwnership {
         )
     }
 }
-
 fn append_optional_runtime_identity_bytes(identity: &mut Vec<u8>, value: Option<Vec<u8>>) {
     match value {
         None => identity.push(0),
@@ -4878,7 +4607,6 @@ fn append_optional_runtime_identity_bytes(identity: &mut Vec<u8>, value: Option<
         }
     }
 }
-
 fn append_optional_runtime_qc_statement(
     identity: &mut Vec<u8>,
     certificate: Option<&wire::QuorumCertificate>,
@@ -4894,7 +4622,6 @@ fn append_optional_runtime_qc_statement(
     append_runtime_identity_field(identity, &certificate.subject.encode());
     append_runtime_identity_field(identity, &certificate.execution_commitment.encode());
 }
-
 /// Closed classification of every production adapter effect.
 pub(crate) const fn production_adapter_effect_kind(effect: &AdapterEffect) -> u8 {
     match effect {
@@ -4922,7 +4649,6 @@ pub(crate) const fn production_adapter_effect_kind(effect: &AdapterEffect) -> u8
         }
     }
 }
-
 /// Canonical exact identity bytes for every field of one production effect.
 ///
 /// These bytes are internal evidence only. They are never serialized as a wire
@@ -5015,7 +4741,6 @@ pub(crate) fn production_adapter_effect_semantic_identity(effect: &AdapterEffect
     }
     identity
 }
-
 fn production_adapter_effect_candidate_statement(
     effect: &AdapterEffect,
 ) -> Option<(u8, RuntimeCandidateSemanticStatement)> {
@@ -5111,7 +4836,6 @@ fn production_adapter_effect_candidate_statement(
         | AdapterEffect::ReportInvalidCertifiedBody { .. } => return None,
     })
 }
-
 /// Bind one production candidate, optionally inheriting the exact body-stage
 /// statement carried by its causal parent.
 fn production_adapter_effect_candidate_binding(
@@ -5189,7 +4913,6 @@ fn production_adapter_effect_candidate_binding(
         statement: Some(statement),
     }))
 }
-
 /// Route-neutral TLA work kind and semantic payload for candidate-producing
 /// effects.
 ///
@@ -5206,7 +4929,6 @@ pub(crate) fn production_adapter_effect_candidate_semantic_identity(
         .validate_exact()
         .then(|| (kind, statement.semantic_identity()))
 }
-
 /// Exact non-serialized ownership outcome for one candidate gate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeCandidateAdmissionDisposition {
@@ -5217,13 +4939,11 @@ pub(crate) enum RuntimeCandidateAdmissionDisposition {
     /// The adapter effect creates no TLA candidate owner (`0 -> 0`).
     NonCandidate,
 }
-
 impl RuntimeCandidateAdmissionDisposition {
     const fn owner_admitted(self) -> bool {
         matches!(self, Self::FirstAdmission)
     }
 }
-
 /// Classify only the three exact owner-count transitions admitted by the model.
 pub(crate) fn production_adapter_effect_candidate_admission_disposition(
     effect: &AdapterEffect,
@@ -5243,14 +4963,12 @@ pub(crate) fn production_adapter_effect_candidate_admission_disposition(
         ),
     }
 }
-
 fn runtime_identity_projection(
     kind: u8,
     identity: &iroha_crypto::Hash,
 ) -> CanonicalIdentityProjection {
     CanonicalIdentityProjection::from_bytes(IDENTITY_DOMAIN_PROCESS_LOCAL, kind, *identity.as_ref())
 }
-
 fn optional_runtime_identity_projection(
     kind: u8,
     identity: Option<&iroha_crypto::Hash>,
@@ -5259,7 +4977,6 @@ fn optional_runtime_identity_projection(
         runtime_identity_projection(kind, identity)
     })
 }
-
 /// Bind a complete test/executor effect batch to exact positional candidate
 /// identities. Production runtime drivers use the same low-level constructor.
 pub(crate) fn bind_adapter_effect_batch_ownership(
@@ -5323,7 +5040,6 @@ pub(crate) fn bind_adapter_effect_batch_ownership(
         })
         .collect()
 }
-
 impl RuntimeEffectOwnership {
     /// Replace the positional binding while retaining the same lifecycle root.
     /// This is used only when one completed local async stage atomically creates
@@ -5348,7 +5064,6 @@ impl RuntimeEffectOwnership {
             )
             .map_err(|_| "Sumeragi v2 successor effect binding failed closed".to_owned())
     }
-
     pub(crate) fn rebind_same_adapter_effect(
         &self,
         effect: &AdapterEffect,
@@ -5379,7 +5094,6 @@ impl RuntimeEffectOwnership {
             )
             .map_err(|_| "Sumeragi v2 exact effect rebind failed closed".to_owned())
     }
-
     /// Bind a later StoreBody or ValidateBody carrier to the one physical
     /// asynchronous task already serving its exact body stage.
     ///
@@ -5507,7 +5221,6 @@ impl RuntimeEffectOwnership {
                 "Sumeragi v2 body-stage retry could not retain its incumbent owner".to_owned()
             })
     }
-
     /// Bind one exact FetchBody carrier under its incumbent physical owner.
     ///
     /// Fetch authority is part of the route-neutral candidate statement, so a
@@ -5580,7 +5293,6 @@ impl RuntimeEffectOwnership {
                     .to_owned(),
             );
         }
-
         let ownership = match self.causality {
             RuntimeEffectCausality::Inherit => {
                 RuntimeEffectOwnership::inherited(self.owner.clone())
@@ -5607,7 +5319,6 @@ impl RuntimeEffectOwnership {
             })?;
         Ok((adopted, relation))
     }
-
     /// Bind a durable-Decision body-stage retry under its incumbent task owner.
     ///
     /// Storage and validation are physical work for one exact durable body. A
@@ -5717,7 +5428,6 @@ impl RuntimeEffectOwnership {
                 "Sumeragi v2 Decision body stage disagreed with its Commit binding".to_owned(),
             );
         }
-
         let ownership = match self.causality {
             RuntimeEffectCausality::Inherit => {
                 RuntimeEffectOwnership::inherited(self.owner.clone())
@@ -5744,7 +5454,6 @@ impl RuntimeEffectOwnership {
             })
     }
 }
-
 /// Recompute one total effect/candidate gate projection from concrete effect
 /// bytes and the independently retained runtime binding.
 #[allow(clippy::too_many_arguments)]
@@ -5853,7 +5562,6 @@ pub(crate) fn production_adapter_effect_candidate_trace_projection(
         producer_episode_retained,
     })
 }
-
 /// One exact FIFO candidate selected by the class-aware service cursor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeFifoCandidateOwnership {
@@ -5890,7 +5598,6 @@ pub(crate) struct RuntimeFifoCandidateOwnership {
     /// rather than trusting a caller-rehashed projection.
     selection_seal: RuntimeQueueSelectionSeal,
 }
-
 /// Exact physical FIFO occurrence granted one retryable fence-predecessor
 /// attempt. Causal siblings may share a logical lifecycle owner, so the
 /// admission ordinal and immutable command identity are both required.
@@ -5901,7 +5608,6 @@ struct RuntimeQueueOccurrenceOwner {
     identity: RuntimeCommandIdentityDigest,
     projection_hash: iroha_crypto::Hash,
 }
-
 impl PartialEq for RuntimeQueueOccurrenceOwner {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.source_identity, &other.source_identity)
@@ -5910,9 +5616,7 @@ impl PartialEq for RuntimeQueueOccurrenceOwner {
             && self.projection_hash == other.projection_hash
     }
 }
-
 impl Eq for RuntimeQueueOccurrenceOwner {}
-
 fn runtime_queue_occurrence_owner_projection_hash(
     owner: &RuntimeQueueOccurrenceOwner,
 ) -> iroha_crypto::Hash {
@@ -5926,7 +5630,6 @@ fn runtime_queue_occurrence_owner_projection_hash(
     append_runtime_identity_field(&mut projection, owner.identity.projection_hash.as_ref());
     iroha_crypto::Hash::new(projection)
 }
-
 impl RuntimeQueueOccurrenceOwner {
     fn from_queued<C: ExactRuntimeCommandIdentity>(
         source_identity: &Arc<()>,
@@ -5944,7 +5647,6 @@ impl RuntimeQueueOccurrenceOwner {
         owner.projection_hash = runtime_queue_occurrence_owner_projection_hash(&owner);
         owner.validate_exact().then_some(owner)
     }
-
     fn from_candidate(candidate: &RuntimeFifoCandidateOwnership) -> Option<Self> {
         let mut owner = Self {
             source_identity: Arc::clone(&candidate.selection_seal.source_identity),
@@ -5955,13 +5657,11 @@ impl RuntimeQueueOccurrenceOwner {
         owner.projection_hash = runtime_queue_occurrence_owner_projection_hash(&owner);
         owner.validate_exact().then_some(owner)
     }
-
     fn validate_exact(&self) -> bool {
         self.admission_ordinal != 0
             && self.identity.validate_exact()
             && self.projection_hash == runtime_queue_occurrence_owner_projection_hash(self)
     }
-
     fn matches_queued<C: ExactRuntimeCommandIdentity>(
         &self,
         source_identity: &Arc<()>,
@@ -5971,7 +5671,6 @@ impl RuntimeQueueOccurrenceOwner {
             && queued.cached_queue_occurrence_owner(source_identity) == Some(self)
     }
 }
-
 /// Queue rank observed immediately before or after one scheduler decision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeQueueOwnershipProjection {
@@ -5984,7 +5683,6 @@ pub(crate) struct RuntimeQueueOwnershipProjection {
     /// Greatest eligible-skip debt retained by any command.
     pub(crate) max_service_debt: u64,
 }
-
 /// Private snapshot of one bounded queue observation.
 ///
 /// The source identity is minted with the queue instance. Callers receive the
@@ -6006,7 +5704,6 @@ struct RuntimeQueueOwnershipSnapshot {
     normal_count: u64,
     projection_hash: iroha_crypto::Hash,
 }
-
 impl PartialEq for RuntimeQueueOwnershipSnapshot {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.source_identity, &other.source_identity)
@@ -6025,9 +5722,7 @@ impl PartialEq for RuntimeQueueOwnershipSnapshot {
             && self.projection_hash == other.projection_hash
     }
 }
-
 impl Eq for RuntimeQueueOwnershipSnapshot {}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeQueueSelectionKind {
     Ordinary,
@@ -6036,7 +5731,6 @@ enum RuntimeQueueSelectionKind {
     PacemakerProgress,
     PacemakerCertifiedProgress,
 }
-
 impl RuntimeQueueSelectionKind {
     const fn code(self) -> u8 {
         match self {
@@ -6048,7 +5742,6 @@ impl RuntimeQueueSelectionKind {
         }
     }
 }
-
 /// One-shot queue-issued authority for an exact physical FIFO selection.
 ///
 /// This is an internal ownership capability, not a deductive proof. Its facts
@@ -6082,7 +5775,6 @@ struct RuntimeQueueSelectionSeal {
     max_debt_after_upper_bound: u64,
     projection_hash: iroha_crypto::Hash,
 }
-
 impl PartialEq for RuntimeQueueSelectionSeal {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.source_identity, &other.source_identity)
@@ -6115,9 +5807,7 @@ impl PartialEq for RuntimeQueueSelectionSeal {
             && self.projection_hash == other.projection_hash
     }
 }
-
 impl Eq for RuntimeQueueSelectionSeal {}
-
 fn append_runtime_queue_projection(
     projection: &mut Vec<u8>,
     queue: RuntimeQueueOwnershipProjection,
@@ -6127,7 +5817,6 @@ fn append_runtime_queue_projection(
     projection.push(queue.service_cursor);
     append_runtime_identity_u64(projection, queue.max_service_debt);
 }
-
 fn append_runtime_optional_ordinal(projection: &mut Vec<u8>, ordinal: Option<u128>) {
     match ordinal {
         None => projection.push(0),
@@ -6137,7 +5826,6 @@ fn append_runtime_optional_ordinal(projection: &mut Vec<u8>, ordinal: Option<u12
         }
     }
 }
-
 fn append_runtime_optional_u64(projection: &mut Vec<u8>, value: Option<u64>) {
     match value {
         None => projection.push(0),
@@ -6147,7 +5835,6 @@ fn append_runtime_optional_u64(projection: &mut Vec<u8>, value: Option<u64>) {
         }
     }
 }
-
 fn runtime_queue_ownership_snapshot_projection_hash(
     snapshot: &RuntimeQueueOwnershipSnapshot,
 ) -> iroha_crypto::Hash {
@@ -6179,7 +5866,6 @@ fn runtime_queue_ownership_snapshot_projection_hash(
     append_runtime_identity_u64(&mut projection, snapshot.normal_count);
     iroha_crypto::Hash::new(projection)
 }
-
 impl RuntimeQueueOwnershipSnapshot {
     fn validate_identity(&self) -> bool {
         let total_count = self
@@ -6224,7 +5910,6 @@ impl RuntimeQueueOwnershipSnapshot {
                 _ => false,
             }
     }
-
     fn class_readiness(&self) -> (bool, bool, bool) {
         (
             self.completion_count != 0,
@@ -6233,7 +5918,6 @@ impl RuntimeQueueOwnershipSnapshot {
         )
     }
 }
-
 fn runtime_queue_occurrence_set_matches_snapshot(
     owners: &[RuntimeQueueOccurrenceOwner],
     snapshot: &RuntimeQueueOwnershipSnapshot,
@@ -6252,7 +5936,6 @@ fn runtime_queue_occurrence_set_matches_snapshot(
                 == Some(owner)
     })
 }
-
 fn runtime_queue_selection_seal_projection_hash(
     seal: &RuntimeQueueSelectionSeal,
 ) -> iroha_crypto::Hash {
@@ -6307,7 +5990,6 @@ fn runtime_queue_selection_seal_projection_hash(
     append_runtime_identity_u64(&mut projection, seal.max_debt_after_upper_bound);
     iroha_crypto::Hash::new(projection)
 }
-
 impl RuntimeQueueSelectionSeal {
     fn validate_identity(&self) -> bool {
         let total_count = self
@@ -6387,7 +6069,6 @@ impl RuntimeQueueSelectionSeal {
                 }
             }
     }
-
     fn claim_scheduler_handoff_once(&self) -> bool {
         self.validate_identity()
             && self
@@ -6395,11 +6076,9 @@ impl RuntimeQueueSelectionSeal {
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
     }
-
     fn scheduler_handoff_is_claimed(&self) -> bool {
         self.scheduler_handoff_claimed.load(Ordering::Acquire)
     }
-
     fn matches_scheduler_occurrence(
         &self,
         candidate: &RuntimeFifoCandidateOwnership,
@@ -6461,7 +6140,6 @@ impl RuntimeQueueSelectionSeal {
             })
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RuntimeSchedulerArbitrationInputs {
     live_mode: bool,
@@ -6483,7 +6161,6 @@ struct RuntimeSchedulerArbitrationInputs {
     fence_retry_blocked_fifo_before: Vec<RuntimeQueueOccurrenceOwner>,
     fence_retry_marker_required: bool,
 }
-
 /// Exact source selected for one live or recovery scheduler turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeSelectedOwnerKind {
@@ -6523,14 +6200,12 @@ pub(crate) enum RuntimeSelectedOwnerKind {
     /// Startup recovery had no ready owner.
     RecoveryIdle,
 }
-
 /// Validation result for a retained scheduler ownership carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeSchedulerEvidenceError {
     /// One exact production projection field was altered or inconsistent.
     InvalidProjection,
 }
-
 /// Candidate identity carried by a scheduler selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeSelectedCandidateOwnership {
@@ -6541,7 +6216,6 @@ pub(crate) enum RuntimeSelectedCandidateOwnership {
     /// An adapter-owned Busy-deferred selection owns this exact occurrence.
     ExactDeferred(RuntimeDeferredCandidateOwnership),
 }
-
 /// Exact adapter-deferred occurrence and the fair-ingress carrier which must
 /// remain attached until that occurrence crosses the reducer boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -6555,7 +6229,6 @@ pub(crate) struct RuntimeDeferredCandidateOwnership {
     /// this candidate under target-relative physical precedence.
     lifecycle_ownership: RuntimeDeferredLifecycleOwnership,
 }
-
 /// Complete scheduler ownership carrier retained at the production step seam.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeSchedulerOwnershipEvidence {
@@ -6627,7 +6300,6 @@ pub(crate) struct RuntimeSchedulerOwnershipEvidence {
     /// Derived integrity hash over the complete selected-owner projection.
     pub(crate) projection_hash: iroha_crypto::Hash,
 }
-
 impl RuntimeCommandKind {
     const fn code(self) -> u8 {
         match self {
@@ -6645,7 +6317,6 @@ impl RuntimeCommandKind {
         }
     }
 }
-
 impl RuntimeSelectedOwnerKind {
     const fn code(self) -> u8 {
         match self {
@@ -6666,7 +6337,6 @@ impl RuntimeSelectedOwnerKind {
         }
     }
 }
-
 fn runtime_fifo_candidate_projection_hash(
     candidate: &RuntimeFifoCandidateOwnership,
 ) -> iroha_crypto::Hash {
@@ -6697,7 +6367,6 @@ fn runtime_fifo_candidate_projection_hash(
     );
     iroha_crypto::Hash::new(projection)
 }
-
 fn runtime_fifo_candidate_ingress_is_exact(candidate: &RuntimeFifoCandidateOwnership) -> bool {
     match (&candidate.ingress_ownership, candidate.kind) {
         (None, kind) => kind != RuntimeCommandKind::Authenticated,
@@ -6718,7 +6387,6 @@ fn runtime_fifo_candidate_ingress_is_exact(candidate: &RuntimeFifoCandidateOwner
         (Some(_), _) => false,
     }
 }
-
 fn append_runtime_deferred_lifecycle_ownership(
     projection: &mut Vec<u8>,
     ownership: &RuntimeDeferredLifecycleOwnership,
@@ -6749,7 +6417,6 @@ fn append_runtime_deferred_lifecycle_ownership(
         ownership.runtime_seal.projection_hash().as_ref(),
     );
 }
-
 fn append_runtime_queue_occurrence_owners(
     projection: &mut Vec<u8>,
     owners: &[RuntimeQueueOccurrenceOwner],
@@ -6762,7 +6429,6 @@ fn append_runtime_queue_occurrence_owners(
         append_runtime_identity_field(projection, owner.projection_hash.as_ref());
     }
 }
-
 fn runtime_scheduler_projection_hash(
     evidence: &RuntimeSchedulerOwnershipEvidence,
 ) -> iroha_crypto::Hash {
@@ -6876,7 +6542,6 @@ fn runtime_scheduler_projection_hash(
     projection.push(u8::from(evidence.fifo_owed_after));
     iroha_crypto::Hash::new(projection)
 }
-
 impl RuntimeSchedulerOwnershipEvidence {
     /// Validate all locally closed scheduler-rank relations.
     ///
@@ -7420,7 +7085,6 @@ impl RuntimeSchedulerOwnershipEvidence {
         }
     }
 }
-
 #[derive(Clone)]
 pub(crate) struct TaggedCommand<C> {
     tag: EventTag,
@@ -7440,7 +7104,6 @@ pub(crate) struct TaggedCommand<C> {
     restored_producer_stage: Option<u8>,
     ingress_ownership: Option<RuntimeIngressOwnershipEvidence>,
 }
-
 impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
     fn new(tag: EventTag, class: CommandClass, command: C, admitted_at: Instant) -> Self {
         let exact_identity = command.exact_runtime_command_identity();
@@ -7464,7 +7127,6 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
             ingress_ownership: None,
         }
     }
-
     fn with_ingress_ownership(
         tag: EventTag,
         class: CommandClass,
@@ -7504,7 +7166,6 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
             ingress_ownership: Some(ingress_ownership),
         }
     }
-
     /// Construct a causal successor while retaining the first-admission root.
     ///
     /// The successor may deliberately rewrite command evidence, class, or
@@ -7541,12 +7202,10 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
             ingress_ownership: None,
         })
     }
-
     fn lifecycle_owner(&self) -> Result<RuntimeLifecycleOwner, EnqueueError> {
         let lifecycle_ordinal = self.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
         RuntimeLifecycleOwner::new(self.causal_origin.clone(), lifecycle_ordinal)
     }
-
     fn mint_queue_occurrence_owner(
         &mut self,
         source_identity: &Arc<()>,
@@ -7559,7 +7218,6 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
         self.queue_occurrence_owner = Some(owner);
         Ok(())
     }
-
     fn cached_queue_occurrence_owner(
         &self,
         source_identity: &Arc<()>,
@@ -7570,7 +7228,6 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
                 && self.identity == owner.identity
         })
     }
-
     /// Install a newly reconciled ingress carrier set before this queued
     /// command dispatches.
     ///
@@ -7624,7 +7281,6 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
         debug_assert!(self.validate_admission_identity());
         Ok(())
     }
-
     /// Validate the constant-size admission certificate retained by an
     /// immutable queued command.
     ///
@@ -7653,7 +7309,6 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
                 (None, _) => true,
             }
     }
-
     fn validate_admission_identity(&self) -> bool {
         self.validate_cached_admission_identity()
             && match self.identity.kind {
@@ -7671,7 +7326,6 @@ impl<C: ExactRuntimeCommandIdentity> TaggedCommand<C> {
             }
     }
 }
-
 struct BoundedIngress<C> {
     config: RuntimeQueueConfig,
     commands: VecDeque<TaggedCommand<C>>,
@@ -7688,7 +7342,6 @@ struct BoundedIngress<C> {
     next_admission_ordinal: Option<u128>,
     reserved_body_available: Option<BodyAvailableReservation>,
 }
-
 impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     #[cfg(test)]
     fn new(config: RuntimeQueueConfig) -> Self {
@@ -7697,7 +7350,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             RuntimeLifecycleOrdinalSource::after_high_watermark(0),
         )
     }
-
     fn with_lifecycle_ordinals(
         config: RuntimeQueueConfig,
         lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
@@ -7716,11 +7368,9 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             reserved_body_available: None,
         }
     }
-
     fn enqueue(&mut self, command: TaggedCommand<C>) -> Result<(), EnqueueError> {
         self.enqueue_classified_command(command)
     }
-
     fn install_dormant_local_fifo_reservations(
         &mut self,
         reservations: Vec<RuntimeDormantLocalFifoReservation>,
@@ -7768,7 +7418,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         self.dormant_local_fifo_reservations = reservations;
         Ok(())
     }
-
     fn restored_producer_alias_in<'a>(
         command: &TaggedCommand<C>,
         queued: impl Iterator<Item = &'a TaggedCommand<C>>,
@@ -7808,14 +7457,12 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         }
         Ok(coalesced)
     }
-
     fn enqueue_classified_command(
         &mut self,
         command: TaggedCommand<C>,
     ) -> Result<(), EnqueueError> {
         self.enqueue_classified_command_with_capacity(command)
     }
-
     fn enqueue_classified_command_with_capacity(
         &mut self,
         mut command: TaggedCommand<C>,
@@ -7914,7 +7561,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 let checked_transition = check_production_ingress_transition(ingress_trace)
                     .ok_or(EnqueueError::FailClosed)?;
                 let _authorized_transition = checked_transition.into_projection();
-
                 // Infallible commit tail: the source mutex remains held until the
                 // exact dormant replacement and queue publication both complete.
                 if let Some(reservation) = dormant_replacement.as_ref() {
@@ -7926,7 +7572,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             },
         )
     }
-
     fn enqueue_completion_batch(
         &mut self,
         commands: Vec<TaggedCommand<C>>,
@@ -7998,7 +7643,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                     }
                     command.mint_queue_occurrence_owner(&ingress.selection_source_identity)?;
                 }
-
                 let occupied_at_start = ingress
                     .commands
                     .len()
@@ -8100,7 +7744,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                     return Err(EnqueueError::FailClosed);
                 }
                 drop(checked_transitions);
-
                 // Infallible commit tail under the ordinal-source mutex.
                 for reservation in &unique_dormant_replacements {
                     let removed = ingress.dormant_local_fifo_reservations.remove(reservation);
@@ -8111,7 +7754,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             },
         )
     }
-
     fn reserve_admission_ordinal_range(
         &mut self,
         count: usize,
@@ -8123,7 +7765,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         self.next_admission_ordinal = reserved.1;
         Ok(reserved)
     }
-
     /// Atomically validate and publish one or more physical FIFO owners.
     ///
     /// The closure runs while the shared ordinal source is locked. It must put
@@ -8141,7 +7782,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             Ok(committed)
         })
     }
-
     /// Reserve one actor-global ordinal for a non-FIFO lifecycle root.
     ///
     /// Physical FIFO admissions and clock/startup roots deliberately share
@@ -8154,14 +7794,12 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         self.next_admission_ordinal = successor;
         Ok(ordinal)
     }
-
     fn dormant_local_fifo_replacement(
         &self,
         command: &TaggedCommand<C>,
     ) -> Result<Option<RuntimeDormantLocalFifoReservation>, EnqueueError> {
         self.dormant_local_fifo_replacement_inner(command, false)
     }
-
     fn dormant_local_fifo_replacement_inner(
         &self,
         command: &TaggedCommand<C>,
@@ -8228,7 +7866,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         // Completion position rather than aliasing dormant capacity.
         Ok(None)
     }
-
     /// Validate a lifecycle position carried in from another actor-owned
     /// stage before this FIFO spends a fresh physical admission position.
     ///
@@ -8269,7 +7906,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 == candidate_origin.leader_wire_lifecycle_key
             && existing_origin.root_lifecycle_ordinal == candidate_origin.root_lifecycle_ordinal
     }
-
     fn validate_preassigned_lifecycle_owner(
         &self,
         command: &TaggedCommand<C>,
@@ -8314,7 +7950,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         }
         Ok(())
     }
-
     fn occupied_with_dormant_reservations(&self) -> Result<usize, EnqueueError> {
         let dormant = self.active_dormant_local_fifo_reservation_count()?;
         self.commands
@@ -8323,7 +7958,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .and_then(|occupied| occupied.checked_add(dormant))
             .ok_or(EnqueueError::FailClosed)
     }
-
     fn certified_fence_escape_credit(&self) -> usize {
         usize::from(
             self.commands
@@ -8331,7 +7965,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 .any(|queued| queued.command.is_certified_fence_escape()),
         )
     }
-
     /// Count dormant FIFO owners which are not already represented by the
     /// exact unpublished body token. The aliased backing record remains in the
     /// set for retry identity, but cannot consume a second capacity slot.
@@ -8350,7 +7983,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .checked_sub(usize::from(aliased.is_some()))
             .ok_or(EnqueueError::FailClosed)
     }
-
     fn check_capacity_change(
         &self,
         class: CommandClass,
@@ -8359,11 +7991,9 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     ) -> Result<(), EnqueueError> {
         self.check_capacity_change_inner(class, dormant_replacements, additions, false)
     }
-
     fn check_certified_fence_escape_capacity(&self) -> Result<(), EnqueueError> {
         self.check_capacity_change_inner(CommandClass::Progress, 0, 1, true)
     }
-
     fn check_capacity_change_inner(
         &self,
         class: CommandClass,
@@ -8387,7 +8017,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         if occupied_after > self.config.capacity {
             return Err(EnqueueError::Full);
         }
-
         // Reservations are class allocations, not arrival-order allocations.
         // A Completion which arrived first cannot consume a Normal or Progress
         // prefix, although every class still consumes one position in the
@@ -8436,11 +8065,9 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         }
         Ok(())
     }
-
     fn check_capacity(&self, class: CommandClass) -> Result<(), EnqueueError> {
         self.check_capacity_change(class, 0, 1)
     }
-
     fn ownership_projection(&self) -> RuntimeQueueOwnershipProjection {
         RuntimeQueueOwnershipProjection {
             len: u64::try_from(self.commands.len())
@@ -8456,7 +8083,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 .unwrap_or(0),
         }
     }
-
     fn class_lifecycle_stats(&self, class: CommandClass) -> (Option<u128>, u64) {
         let mut minimum = None;
         let mut count = 0u64;
@@ -8470,7 +8096,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         }
         (minimum, count)
     }
-
     fn ownership_snapshot(&self) -> RuntimeQueueOwnershipSnapshot {
         let occurrence_owners = self
             .commands
@@ -8520,7 +8145,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         snapshot.projection_hash = runtime_queue_ownership_snapshot_projection_hash(&snapshot);
         snapshot
     }
-
     #[allow(clippy::too_many_arguments)]
     fn mint_selection_seal(
         &self,
@@ -8590,7 +8214,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .then_some(seal)
             .ok_or(EnqueueError::FailClosed)
     }
-
     fn oldest_lifecycle_ordinal(&self) -> Result<Option<u128>, EnqueueError> {
         self.commands
             .iter()
@@ -8609,7 +8232,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 ))
             })
     }
-
     fn oldest_active_lifecycle_ordinal(&self) -> Result<Option<u128>, EnqueueError> {
         let command_minimum = self.oldest_lifecycle_ordinal()?;
         for reservation in &self.dormant_local_fifo_reservations {
@@ -8628,7 +8250,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         // exact completion which opens the reducer fence.
         Ok(command_minimum)
     }
-
     /// Oldest owner which is allowed to precede an already-admitted producer
     /// continuation at `physical_cut`.
     ///
@@ -8713,7 +8334,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         // until materialized as an actual queue occurrence.
         Ok(command_minimum)
     }
-
     fn uses_lifecycle_ordinal(&self, lifecycle_ordinal: u128) -> Result<bool, EnqueueError> {
         if self
             .dormant_local_fifo_reservations
@@ -8745,7 +8365,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         }
         Ok(false)
     }
-
     fn contains_queue_occurrence_owner(
         &self,
         owner: &RuntimeQueueOccurrenceOwner,
@@ -8763,7 +8382,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         }
         Ok(false)
     }
-
     fn class_readiness(&self) -> (bool, bool, bool) {
         let class_ready = |class| self.commands.iter().any(|queued| queued.class == class);
         (
@@ -8772,7 +8390,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             class_ready(CommandClass::Normal),
         )
     }
-
     fn minimum_lifecycle_for_class(&self, class: CommandClass) -> Option<u128> {
         self.commands
             .iter()
@@ -8780,7 +8397,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .filter_map(|queued| queued.lifecycle_ordinal)
             .min()
     }
-
     /// Remove the exact target-relative FIFO minimum among the matching fence
     /// completion and every runnable predecessor at the same lifecycle rank.
     ///
@@ -8932,7 +8548,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         );
         Ok(Some((command, candidate, selected_is_completion)))
     }
-
     /// Remove one exact authenticated certified fence escape first, otherwise
     /// the oldest Progress root or one of its trusted Completion descendants,
     /// without advancing ordinary class debt.
@@ -9046,7 +8661,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .expect("selected pacemaker progress remains present");
         Ok(Some((command, candidate)))
     }
-
     /// Return exact physical occurrences of queued commands which the driver
     /// proves cannot cross its active reducer fence. Causal siblings share a
     /// logical lifecycle, so excluding only the root owner could accidentally
@@ -9069,7 +8683,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             })
             .collect()
     }
-
     /// Return the lifecycle owner of the exact command ordinary class
     /// rotation would select and the adapter's exact fence state for it.
     ///
@@ -9112,7 +8725,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let (blocked, deferred_alias) = fence_state(selected);
         Ok(Some((selected.lifecycle_owner()?, blocked, deferred_alias)))
     }
-
     fn pop_next_with_ownership(
         &mut self,
     ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError>
@@ -9290,7 +8902,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         );
         Ok(Some((command, candidate)))
     }
-
     /// Restore an exact command whose reducer transition reported retryable
     /// backpressure before acquiring adapter-deferred ownership.
     ///
@@ -9338,7 +8949,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         self.commands.insert(position, command);
         Ok(())
     }
-
     #[cfg(test)]
     fn pop_next(&mut self) -> Option<TaggedCommand<C>>
     where
@@ -9348,11 +8958,9 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .expect("test ingress commands always own admission ordinals")
             .map(|(command, _)| command)
     }
-
     fn len(&self) -> usize {
         self.commands.len()
     }
-
     fn remaining_capacity(&self) -> usize {
         let ordinary_occupied = self
             .occupied_with_dormant_reservations()
@@ -9362,7 +8970,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .ordinary_total_limit()
             .saturating_sub(ordinary_occupied)
     }
-
     fn lane_snapshot(&self, class: CommandClass, now: Instant) -> RuntimeQueueLaneSnapshot {
         let mut depth = 0usize;
         let mut oldest_age = None;
@@ -9392,7 +8999,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         }
     }
 }
-
 /// Local operational snapshot for one serialized runtime lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeQueueLaneSnapshot {
@@ -9407,7 +9013,6 @@ pub(crate) struct RuntimeQueueLaneSnapshot {
     /// Eligible dispatches observed by the most-delayed queued command.
     pub(crate) max_service_debt: u64,
 }
-
 /// Local operational snapshot for all serialized runtime lanes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeQueueSnapshot {
@@ -9418,7 +9023,6 @@ pub(crate) struct RuntimeQueueSnapshot {
     /// Trusted local I/O and application completions.
     pub(crate) completion: RuntimeQueueLaneSnapshot,
 }
-
 /// Exclusive reservation for one exact `BodyAvailable` runtime handoff.
 ///
 /// A new reservation consumes completion capacity without exposing a reducer
@@ -9444,14 +9048,12 @@ pub(crate) struct BodyAvailableReservation {
     /// cannot orphan or recreate the old producer stage.
     dormant_replacement: Option<RuntimeDormantLocalFifoReservation>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RestoredProducerRetirement {
     causal_lifecycle_key: iroha_crypto::Hash,
     admission_ordinal: u128,
     producer_stage: u8,
 }
-
 impl RestoredProducerRetirement {
     fn from_body_owner(
         causal_origin: &RuntimeCandidateCausalOrigin,
@@ -9480,7 +9082,6 @@ impl RestoredProducerRetirement {
         }))
     }
 }
-
 impl BodyAvailableReservation {
     /// Construct a runtime-minted token which owns one unpublished completion slot.
     fn reserved_with_admission_ordinal(
@@ -9508,7 +9109,6 @@ impl BodyAvailableReservation {
             dormant_replacement: None,
         })
     }
-
     /// Construct an ordinal-free reservation for isolated runtime-driver tests.
     ///
     /// Production reservations are minted only by `BoundedIngress`, which
@@ -9535,7 +9135,6 @@ impl BodyAvailableReservation {
             dormant_replacement: None,
         }
     }
-
     /// Construct a token which coalesces with one exact existing owner.
     pub(crate) fn coalesced(tag: EventTag, manifest: wire::PayloadManifest) -> Self {
         Self {
@@ -9550,7 +9149,6 @@ impl BodyAvailableReservation {
             dormant_replacement: None,
         }
     }
-
     fn coalesced_with_owner(
         tag: EventTag,
         manifest: wire::PayloadManifest,
@@ -9565,7 +9163,6 @@ impl BodyAvailableReservation {
         reservation.candidate_semantic_statement = ownership.candidate_semantic_statement();
         Ok(reservation)
     }
-
     fn coalesced_with_lifecycle_owner(
         tag: EventTag,
         manifest: wire::PayloadManifest,
@@ -9583,22 +9180,18 @@ impl BodyAvailableReservation {
         reservation.candidate_semantic_statement = candidate_semantic_statement;
         Ok(reservation)
     }
-
     /// Reducer incarnation which will consume the completion.
     pub(crate) const fn tag(&self) -> EventTag {
         self.tag
     }
-
     /// Exact canonical manifest carried by the completion.
     pub(crate) const fn manifest(&self) -> &wire::PayloadManifest {
         &self.manifest
     }
-
     /// Whether this token reserved a new bounded ingress slot.
     pub(crate) const fn owns_new_slot(&self) -> bool {
         self.owns_new_slot
     }
-
     /// Retag this exact unpublished token while preserving every physical and
     /// logical ownership field.
     pub(crate) fn rebind_consumer_if_exact(
@@ -9613,12 +9206,10 @@ impl BodyAvailableReservation {
         self.tag = rebound;
         true
     }
-
     fn lifecycle_owner(&self) -> Option<RuntimeLifecycleOwner> {
         RuntimeLifecycleOwner::new(self.causal_origin.clone()?, self.lifecycle_ordinal?).ok()
     }
 }
-
 /// Preflight ownership counts for exact decided local-proposal completions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DecisionLocalProposalCounts {
@@ -9626,7 +9217,6 @@ pub(crate) struct DecisionLocalProposalCounts {
     recovery_only: usize,
     conflicting: usize,
 }
-
 impl DecisionLocalProposalCounts {
     /// Record one classified exact Decision owner.
     pub(crate) fn record(&mut self, disposition: DecisionLocalProposalDisposition) {
@@ -9637,7 +9227,6 @@ impl DecisionLocalProposalCounts {
         };
         *count = count.saturating_add(1);
     }
-
     fn merge(self, other: Self) -> Self {
         Self {
             retainable: self.retainable.saturating_add(other.retainable),
@@ -9645,33 +9234,27 @@ impl DecisionLocalProposalCounts {
             conflicting: self.conflicting.saturating_add(other.conflicting),
         }
     }
-
     const fn total(self) -> usize {
         self.retainable
             .saturating_add(self.recovery_only)
             .saturating_add(self.conflicting)
     }
-
     const fn retainable(self) -> usize {
         self.retainable
     }
-
     const fn recovery_only(self) -> usize {
         self.recovery_only
     }
-
     const fn conflicting(self) -> usize {
         self.conflicting
     }
 }
-
 /// Result of atomically reconciling serialized proposal work with a Decision.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DecisionProposalRetirement {
     retained_local_proposal: Option<EventTag>,
     retired_for_recovery: usize,
 }
-
 impl DecisionProposalRetirement {
     /// Construct one verified serialized retirement result.
     pub(crate) const fn new(
@@ -9683,18 +9266,15 @@ impl DecisionProposalRetirement {
             retired_for_recovery,
         }
     }
-
     /// Current-tag completion preserved for direct reducer application.
     pub(crate) const fn retained_local_proposal(self) -> Option<EventTag> {
         self.retained_local_proposal
     }
-
     /// Exact stale completion owners removed so durable reconstruction can proceed.
     pub(crate) const fn retired_for_recovery(self) -> usize {
         self.retired_for_recovery
     }
 }
-
 /// Logical completion-stage slots retired when one body pipeline loses ownership.
 ///
 /// Distinct stages may coexist briefly while the serialized adapter is busy.
@@ -9708,28 +9288,23 @@ pub(crate) struct RetiredBodyPipelineCompletions {
     validation: usize,
     local_proposal: usize,
 }
-
 impl RetiredBodyPipelineCompletions {
     /// Record one exact reconstructed-body completion owner.
     pub(crate) fn record_body_available(&mut self) {
         self.body_available = self.body_available.saturating_add(1);
     }
-
     /// Record one exact durable-store completion owner.
     pub(crate) fn record_body_stored(&mut self) {
         self.body_stored = self.body_stored.saturating_add(1);
     }
-
     /// Record one exact validation completion owner.
     pub(crate) fn record_validation(&mut self) {
         self.validation = self.validation.saturating_add(1);
     }
-
     /// Record one exact locally built proposal completion owner.
     pub(crate) fn record_local_proposal(&mut self) {
         self.local_proposal = self.local_proposal.saturating_add(1);
     }
-
     fn record_matching_command(
         &mut self,
         command: &AdapterCommand,
@@ -9779,7 +9354,6 @@ impl RetiredBodyPipelineCompletions {
             | AdapterCommand::ApplicationCompleted(_) => false,
         }
     }
-
     fn merge(self, other: Self) -> Self {
         Self {
             body_available: self.body_available.saturating_add(other.body_available),
@@ -9788,7 +9362,6 @@ impl RetiredBodyPipelineCompletions {
             local_proposal: self.local_proposal.saturating_add(other.local_proposal),
         }
     }
-
     fn validate_unique(self) -> Result<Self, String> {
         if self.body_available > 1
             || self.body_stored > 1
@@ -9802,13 +9375,11 @@ impl RetiredBodyPipelineCompletions {
         }
         Ok(self)
     }
-
     /// Return whether the exact reconstructed-body acknowledgement was retired.
     pub(crate) const fn body_available(self) -> bool {
         self.body_available == 1
     }
 }
-
 #[derive(Clone)]
 pub(crate) enum AdapterCommand {
     Authenticated(AuthenticatedConsensusMessage),
@@ -9837,14 +9408,12 @@ pub(crate) enum AdapterCommand {
     SignatureCompleted(Vec<u8>),
     ApplicationCompleted(wire::BlockSubject),
 }
-
 fn manifests_conflict_for_same_body(
     left: &wire::PayloadManifest,
     right: &wire::PayloadManifest,
 ) -> bool {
     left.round == right.round && left.subject == right.subject && left != right
 }
-
 impl AdapterCommand {
     fn body_pipeline_completion_evidence(&self) -> Option<BodyPipelineCompletionEvidence> {
         match self {
@@ -9887,7 +9456,6 @@ impl AdapterCommand {
             | Self::ApplicationCompleted(_) => None,
         }
     }
-
     /// Return whether this command owns the candidate's logical stage slot
     /// and, if so, whether its full trusted evidence is exact.
     fn body_pipeline_completion_ownership(
@@ -9978,7 +9546,6 @@ impl AdapterCommand {
             _ => None,
         }
     }
-
     fn is_same_authenticated_envelope(
         &self,
         authenticated: &AuthenticatedConsensusMessage,
@@ -9989,14 +9556,12 @@ impl AdapterCommand {
                 if queued.same_wire_envelope(authenticated)
         )
     }
-
     fn matches_wire_envelope(&self, message: &wire::ConsensusMessageV2) -> bool {
         matches!(
             self,
             Self::Authenticated(queued) if queued.matches_wire_envelope(message)
         )
     }
-
     fn is_authenticated_proposal_conflicting_with(
         &self,
         canonical: &wire::PayloadManifest,
@@ -10010,7 +9575,6 @@ impl AdapterCommand {
         manifests_conflict_for_same_body(&proposal.manifest, canonical)
     }
 }
-
 fn append_durable_receipt_identity(identity: &mut Vec<u8>, receipt: &DurableBodyReceipt) {
     append_runtime_identity_field(identity, &receipt.context_id().encode());
     append_runtime_identity_field(identity, &receipt.round().encode());
@@ -10018,16 +9582,13 @@ fn append_durable_receipt_identity(identity: &mut Vec<u8>, receipt: &DurableBody
     append_runtime_identity_field(identity, &receipt.manifest_hash().encode());
     append_runtime_identity_field(identity, &receipt.frame_hash().encode());
 }
-
 fn append_validated_receipt_identity(identity: &mut Vec<u8>, receipt: &ValidatedBodyReceipt) {
     let mut durable = Vec::new();
     append_durable_receipt_identity(&mut durable, receipt.durable());
     append_runtime_identity_field(identity, &durable);
     append_runtime_identity_field(identity, &receipt.execution_commitment().encode());
 }
-
 impl exact_runtime_command_identity_sealed::Sealed for AdapterCommand {}
-
 impl ExactRuntimeCommandIdentity for AdapterCommand {
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
         let (kind, canonical_bytes) = match self {
@@ -10104,19 +9665,16 @@ impl ExactRuntimeCommandIdentity for AdapterCommand {
             canonical_hash,
         }
     }
-
     fn is_certified_fence_escape(&self) -> bool {
         matches!(self, Self::Authenticated(message) if message.is_certified_fence_escape())
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum RuntimeBodyCompletionStorageTarget {
     Queued(u128),
     Reserved(u128),
     Deferred(u128),
 }
-
 #[derive(Clone, Debug)]
 struct RuntimeBodyCompletionOwnershipPlan {
     tag: EventTag,
@@ -10126,12 +9684,10 @@ struct RuntimeBodyCompletionOwnershipPlan {
     target: RuntimeBodyCompletionStorageTarget,
     replacement_statement: Option<RuntimeCandidateSemanticStatement>,
 }
-
 impl RuntimeBodyCompletionOwnershipPlan {
     fn effective_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
         self.replacement_statement.or(self.retained_statement)
     }
-
     /// Rebind the reviewed retry under the immutable terminal owner without
     /// committing an authority refinement.
     ///
@@ -10170,7 +9726,6 @@ impl RuntimeBodyCompletionOwnershipPlan {
                     .to_owned(),
             );
         }
-
         let ownership = match incoming.causality() {
             RuntimeEffectCausality::Inherit => {
                 RuntimeEffectOwnership::inherited(self.retained_owner.clone())
@@ -10197,7 +9752,6 @@ impl RuntimeBodyCompletionOwnershipPlan {
             })
     }
 }
-
 #[derive(Clone, Debug, Default)]
 struct RuntimePreparedBodyCompletionRefinements {
     ingress: Vec<(
@@ -10206,7 +9760,6 @@ struct RuntimePreparedBodyCompletionRefinements {
     )>,
     deferred: BTreeMap<u128, RuntimeDeferredLifecycleOwnership>,
 }
-
 impl BoundedIngress<AdapterCommand> {
     fn body_pipeline_completion_ownership(
         &self,
@@ -10252,7 +9805,6 @@ impl BoundedIngress<AdapterCommand> {
                 .saturating_add(usize::from(&reservation.manifest == candidate_manifest)),
         )
     }
-
     fn exact_body_pipeline_completion_owners(
         &self,
         tag: EventTag,
@@ -10305,7 +9857,6 @@ impl BoundedIngress<AdapterCommand> {
         }
         Ok(owners)
     }
-
     fn exact_body_pipeline_completion_refinement_matches(
         &self,
         tag: EventTag,
@@ -10323,7 +9874,6 @@ impl BoundedIngress<AdapterCommand> {
                     && *retained_target == target
         ))
     }
-
     #[cfg(test)]
     fn authenticated_wire_tag(&self, message: &wire::ConsensusMessageV2) -> Option<EventTag> {
         self.commands.iter().find_map(|queued| {
@@ -10333,7 +9883,6 @@ impl BoundedIngress<AdapterCommand> {
                 .then_some(queued.tag)
         })
     }
-
     fn authenticated_wire_merge_preflight(
         &self,
         message: &wire::ConsensusMessageV2,
@@ -10357,7 +9906,6 @@ impl BoundedIngress<AdapterCommand> {
         }
         matching_envelope.then_some(Err(RuntimeIngressMergeError::IndependentOccurrence))
     }
-
     /// Check whether an independently authenticated form of `message` can
     /// either claim a new slot or coalesce with an exact queued owner.
     ///
@@ -10390,7 +9938,6 @@ impl BoundedIngress<AdapterCommand> {
             Err(error) => Err(error),
         }
     }
-
     #[cfg(test)]
     fn check_authenticated_wire_capacity(
         &self,
@@ -10410,7 +9957,6 @@ impl BoundedIngress<AdapterCommand> {
             Err(error) => Err(error),
         }
     }
-
     /// Enqueue one independently authenticated envelope unless its exact wire
     /// value is already owned by this serialized queue.
     ///
@@ -10434,7 +9980,6 @@ impl BoundedIngress<AdapterCommand> {
             None,
         )
     }
-
     fn enqueue_authenticated_with_ingress_ownership_and_owner(
         &mut self,
         tag: EventTag,
@@ -10515,7 +10060,6 @@ impl BoundedIngress<AdapterCommand> {
         self.enqueue_classified_command_with_capacity(tagged)?;
         Ok(tag)
     }
-
     #[cfg(test)]
     fn enqueue_authenticated(
         &mut self,
@@ -10535,7 +10079,6 @@ impl BoundedIngress<AdapterCommand> {
             .expect("direct test runtime ingress projection is exact");
         self.enqueue_authenticated_with_ingress_ownership(tag, class, authenticated, ownership)
     }
-
     #[cfg(test)]
     fn enqueue_canonical_body_available(
         &mut self,
@@ -10545,7 +10088,6 @@ impl BoundedIngress<AdapterCommand> {
         let reservation = self.reserve_canonical_body_available(tag, manifest)?;
         self.commit_canonical_body_available(reservation)
     }
-
     #[cfg(test)]
     fn reserve_canonical_body_available(
         &mut self,
@@ -10554,7 +10096,6 @@ impl BoundedIngress<AdapterCommand> {
     ) -> Result<BodyAvailableReservation, EnqueueError> {
         self.reserve_canonical_body_available_internal(tag, manifest, None, None, None)
     }
-
     fn reserve_canonical_body_available_internal(
         &mut self,
         tag: EventTag,
@@ -10596,7 +10137,6 @@ impl BoundedIngress<AdapterCommand> {
         {
             return Err(EnqueueError::FailClosed);
         }
-
         if let Some(existing) = &self.reserved_body_available {
             let physical_admission_ordinal =
                 existing.admission_ordinal.ok_or(EnqueueError::FailClosed)?;
@@ -10653,7 +10193,6 @@ impl BoundedIngress<AdapterCommand> {
             }
             return Err(EnqueueError::DuplicateCompletionOwnership);
         }
-
         let conflicting = self
             .commands
             .iter()
@@ -10753,7 +10292,6 @@ impl BoundedIngress<AdapterCommand> {
                 let checked_transition = check_production_ingress_transition(ingress_trace)
                     .ok_or(EnqueueError::FailClosed)?;
                 let _authorized_transition = checked_transition.into_projection();
-
                 // Infallible reservation commit while the source remains
                 // locked; a rejected owner or gate cannot burn an ordinal.
                 // Capacity above was computed after retiring proposals which
@@ -10768,7 +10306,6 @@ impl BoundedIngress<AdapterCommand> {
             },
         )
     }
-
     fn commit_canonical_body_available(
         &mut self,
         reservation: BodyAvailableReservation,
@@ -10888,7 +10425,6 @@ impl BoundedIngress<AdapterCommand> {
                 check_production_ingress_reservation_materialization_transition(ingress_trace)
                     .ok_or(EnqueueError::FailClosed)?;
             let _authorized_transition = checked_transition.into_projection();
-
             // Materialization does not mint another owner; keep the source
             // locked through the infallible reserved-slot replacement.
             if let Some(replacement) = dormant_replacement.as_ref() {
@@ -10900,7 +10436,6 @@ impl BoundedIngress<AdapterCommand> {
             Ok(())
         })
     }
-
     fn abort_canonical_body_available(&mut self, reservation: BodyAvailableReservation) {
         // Rejection by a later service boundary is retryable ownership, not a
         // terminal event. Retain the entire token (including its ordinal and
@@ -10911,7 +10446,6 @@ impl BoundedIngress<AdapterCommand> {
         let _retained_exact_owner = !reservation.owns_new_slot()
             || self.reserved_body_available.as_ref() == Some(&reservation);
     }
-
     fn discard_proposals_conflicting_with(&mut self, manifest: &wire::PayloadManifest) {
         self.commands.retain(|queued| {
             !queued
@@ -10919,7 +10453,6 @@ impl BoundedIngress<AdapterCommand> {
                 .is_authenticated_proposal_conflicting_with(manifest)
         });
     }
-
     fn rebind_canonical_body_available(
         &mut self,
         previous: EventTag,
@@ -10946,7 +10479,6 @@ impl BoundedIngress<AdapterCommand> {
         }
         rebound_count
     }
-
     fn retire_canonical_body_available(
         &mut self,
         tag: EventTag,
@@ -10979,7 +10511,6 @@ impl BoundedIngress<AdapterCommand> {
         }
         retired
     }
-
     fn restored_body_available_retirement(
         &self,
         tag: EventTag,
@@ -11019,7 +10550,6 @@ impl BoundedIngress<AdapterCommand> {
             _ => Err(EnqueueError::DuplicateCompletionOwnership),
         }
     }
-
     fn retire_body_pipeline_completions(
         &mut self,
         tag: EventTag,
@@ -11054,7 +10584,6 @@ impl BoundedIngress<AdapterCommand> {
         }
         retired
     }
-
     fn body_pipeline_completion_counts(
         &self,
         tag: EventTag,
@@ -11078,7 +10607,6 @@ impl BoundedIngress<AdapterCommand> {
         }
         counts
     }
-
     fn decided_local_proposal_counts(
         &self,
         decision_tag: EventTag,
@@ -11109,7 +10637,6 @@ impl BoundedIngress<AdapterCommand> {
         }
         counts
     }
-
     fn retire_proposal_work_after_decision(
         &mut self,
         decision_tag: EventTag,
@@ -11157,7 +10684,6 @@ impl BoundedIngress<AdapterCommand> {
             !remove
         });
     }
-
     fn retire_unsafe_proposals_for_lock(
         &mut self,
         locked_round: wire::ConsensusRound,
@@ -11183,7 +10709,6 @@ impl BoundedIngress<AdapterCommand> {
         });
         before.saturating_sub(self.commands.len())
     }
-
     fn conflicts_with_pending_body_available(
         &self,
         authenticated: &AuthenticatedConsensusMessage,
@@ -11204,7 +10729,6 @@ impl BoundedIngress<AdapterCommand> {
             })
     }
 }
-
 /// Minimal scheduling seam around the sole production adapter.
 ///
 /// The generic parameter exists so clock and queue behavior can be tested
@@ -11218,7 +10742,6 @@ pub(crate) struct RuntimeDriverDispatch<E> {
     producer_handoff: Option<ProducerContinuationHandoffToken>,
     remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>,
 }
-
 /// Current command carrier at the runtime-to-adapter dispatch seam.
 ///
 /// Causal successors retain their root ingress physical pair but do not carry
@@ -11233,7 +10756,6 @@ pub(crate) enum RuntimeDispatchIngress {
     /// The current command directly carries authenticated receiver ingress.
     DirectAuthenticated,
 }
-
 impl RuntimeDispatchIngress {
     const fn code(self) -> u8 {
         match self {
@@ -11242,7 +10764,6 @@ impl RuntimeDispatchIngress {
         }
     }
 }
-
 /// Read-only admission decision made before a command can consume a runtime
 /// ordinal or physical FIFO slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11275,13 +10796,11 @@ pub(crate) enum RuntimeCommandAdmissionPreflight {
     /// The internal command is malformed or conflicts with frozen authority.
     Reject,
 }
-
 impl RuntimeCommandAdmissionPreflight {
     const fn is_coalescence(self) -> bool {
         matches!(self, Self::Coalesce | Self::CoalesceOwned { .. })
     }
 }
-
 /// Read-only lookup result for a deterministic fresh root reconstructed after
 /// restart. Multiple exact stage records may share one lifecycle, but they
 /// must all retain the same immutable ordinal.
@@ -11294,7 +10813,6 @@ pub(crate) enum RuntimeDormantProducerLifecycle {
     /// Dormant metadata disagreed about status, durability, or ordinal.
     Conflict,
 }
-
 /// Restart-dormant local producer stage which already owns one latent FIFO slot.
 ///
 /// The adjacent producer-continuation snapshot carries only internal admission
@@ -11309,19 +10827,15 @@ pub(crate) struct RuntimeDormantLocalFifoReservation {
     producer_stage: u8,
     class: CommandClass,
 }
-
 impl RuntimeDormantLocalFifoReservation {
     const TIMEOUT_ELAPSED_STAGE: u8 = 6;
     const BODY_AVAILABLE_STAGE: u8 = 7;
-
     const fn is_known_stage(producer_stage: u8) -> bool {
         producer_stage <= 10
     }
-
     const fn is_local_fifo_stage(producer_stage: u8) -> bool {
         matches!(producer_stage, 0 | 8 | 9 | 10)
     }
-
     /// Bind one locally replayable producer stage to the trusted completion lane.
     pub(crate) const fn completion(
         causal_lifecycle_key: iroha_crypto::Hash,
@@ -11336,7 +10850,6 @@ impl RuntimeDormantLocalFifoReservation {
         }
     }
 }
-
 impl<E> RuntimeDriverDispatch<E> {
     #[cfg_attr(not(test), allow(dead_code))]
     fn completed(effects: Vec<E>) -> Self {
@@ -11350,7 +10863,6 @@ impl<E> RuntimeDriverDispatch<E> {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeEffectSource {
     Startup,
@@ -11359,7 +10871,6 @@ pub(crate) enum RuntimeEffectSource {
     Timeout,
     Retransmit,
 }
-
 pub(crate) trait RuntimeDriver {
     /// Command payload consumed by the driver.
     type Command: ExactRuntimeCommandIdentity + Clone;
@@ -11369,7 +10880,6 @@ pub(crate) trait RuntimeDriver {
     type Error: fmt::Display;
     /// Exact equality identity of one active signer incarnation.
     type SignatureFenceIdentity: Clone + Eq;
-
     /// Current authoritative reducer tag.
     fn current_tag(&self) -> EventTag;
     /// Frozen current-height TimeoutVote slot universe. Synthetic drivers have
@@ -11650,17 +11160,14 @@ pub(crate) trait RuntimeDriver {
     #[cfg(test)]
     fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool;
 }
-
 impl RuntimeDriver for SumeragiV2Adapter {
     type Command = AdapterCommand;
     type Effect = AdapterEffect;
     type Error = AdapterError;
     type SignatureFenceIdentity = (EventTag, super::v2_core::SignableMessage);
-
     fn current_tag(&self) -> EventTag {
         SumeragiV2Adapter::current_tag(self)
     }
-
     fn timeout_vote_owner_universe(&self) -> BTreeSet<FairV2IngressLeaderWireSlot> {
         self.wire_context()
             .roster
@@ -11672,7 +11179,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
             })
             .collect()
     }
-
     fn preflight_command_admission(
         &self,
         tag: EventTag,
@@ -11680,7 +11186,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
     ) -> RuntimeCommandAdmissionPreflight {
         self.preflight_runtime_command_admission(tag, command)
     }
-
     fn certified_progress_bypasses_signature_fence(&self, command: &Self::Command) -> bool {
         self.signature_fence_is_active()
             && matches!(
@@ -11689,21 +11194,17 @@ impl RuntimeDriver for SumeragiV2Adapter {
                     if wire_payload_is_certified_fence_escape(authenticated.payload())
             )
     }
-
     fn pacemaker_escape_is_parked(&self) -> bool {
         SumeragiV2Adapter::pacemaker_escape_is_parked(self)
     }
-
     fn signature_fence_is_active(&self) -> bool {
         SumeragiV2Adapter::signature_fence_is_active(self)
     }
-
     fn signature_fence_identity(
         &self,
     ) -> Result<Option<Self::SignatureFenceIdentity>, Self::Error> {
         Ok(SumeragiV2Adapter::signature_fence_identity(self))
     }
-
     fn owned_terminal_completion_matches_effect(
         &self,
         tag: EventTag,
@@ -11746,20 +11247,17 @@ impl RuntimeDriver for SumeragiV2Adapter {
             subject,
         })
     }
-
     fn dormant_producer_lifecycle(
         &self,
         causal_lifecycle_key: &iroha_crypto::Hash,
     ) -> RuntimeDormantProducerLifecycle {
         SumeragiV2Adapter::dormant_producer_lifecycle(self, causal_lifecycle_key)
     }
-
     fn dormant_local_fifo_reservations(
         &self,
     ) -> Result<Vec<RuntimeDormantLocalFifoReservation>, String> {
         SumeragiV2Adapter::dormant_local_fifo_reservations(self)
     }
-
     fn dispatch(
         &mut self,
         tagged: TaggedCommand<Self::Command>,
@@ -11863,7 +11361,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
             remote_proposal_replay,
         })
     }
-
     fn bind_remote_proposal_fetch_replay(
         &self,
         origin: AuthenticatedRemoteProposalDispatchOrigin,
@@ -11897,7 +11394,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
         ownership[index].remote_proposal_fetch_replay = Some(replay);
         Ok(())
     }
-
     fn bind_selected_producer_lifecycle(
         &mut self,
         owner: &RuntimeLifecycleOwner,
@@ -11911,11 +11407,9 @@ impl RuntimeDriver for SumeragiV2Adapter {
             owner.lifecycle_ordinal(),
         )
     }
-
     fn clear_selected_producer_lifecycle(&mut self) {
         SumeragiV2Adapter::clear_selected_producer_lifecycle(self);
     }
-
     fn producer_handoff_evidence(
         &self,
         token: ProducerContinuationHandoffToken,
@@ -11923,7 +11417,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
     ) -> Result<ProducerContinuationHandoffEvidence, Self::Error> {
         SumeragiV2Adapter::producer_handoff_evidence(self, token, has_concrete_successor)
     }
-
     fn acknowledge_producer_handoff(
         &mut self,
         token: ProducerContinuationHandoffToken,
@@ -11931,7 +11424,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
     ) -> Result<ProducerContinuationTerminalToken, Self::Error> {
         SumeragiV2Adapter::acknowledge_producer_handoff(self, token, evidence)
     }
-
     fn timeout_elapsed(
         &mut self,
         tag: EventTag,
@@ -11950,7 +11442,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
             }
         })
     }
-
     fn retransmit_elapsed(
         &mut self,
         tag: EventTag,
@@ -11969,15 +11460,12 @@ impl RuntimeDriver for SumeragiV2Adapter {
             }
         })
     }
-
     fn completion_unblocks_deferred_fence(&self, tag: EventTag, command: &Self::Command) -> bool {
         SumeragiV2Adapter::completion_unblocks_deferred_fence(self, tag, command)
     }
-
     fn command_is_blocked_by_deferred_fence(&self, tag: EventTag, command: &Self::Command) -> bool {
         SumeragiV2Adapter::command_is_blocked_by_deferred_fence(self, tag, command)
     }
-
     fn command_matches_deferred_authenticated_owner(&self, command: &Self::Command) -> bool {
         match command {
             AdapterCommand::Authenticated(authenticated) => self
@@ -11992,30 +11480,24 @@ impl RuntimeDriver for SumeragiV2Adapter {
             | AdapterCommand::ApplicationCompleted(_) => false,
         }
     }
-
     fn deferred_work_is_serviceable(&self) -> bool {
         SumeragiV2Adapter::deferred_work_is_serviceable(self)
     }
-
     fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource {
         SumeragiV2Adapter::deferred_admission_ordinal_source(self)
     }
-
     fn authenticated_deferred_admission_ordinals(&self) -> BTreeSet<u128> {
         SumeragiV2Adapter::authenticated_deferred_admission_ordinals(self)
     }
-
     fn all_deferred_admission_ordinals(&self) -> BTreeSet<u128> {
         SumeragiV2Adapter::all_deferred_admission_ordinals(self)
     }
-
     fn deferred_occurrence_ownership(
         &self,
         admission_ordinal: u128,
     ) -> Option<DeferredOccurrenceOwnershipEvidence> {
         SumeragiV2Adapter::deferred_occurrence_ownership(self, admission_ordinal)
     }
-
     fn seal_deferred_runtime_ownership(
         &mut self,
         admission_ordinal: u128,
@@ -12037,7 +11519,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
             physical_cut,
         )
     }
-
     fn dispatch_deferred(
         &mut self,
         eligible: &BTreeSet<u128>,
@@ -12051,7 +11532,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
     > {
         SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)
     }
-
     fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag> {
         match effect {
             AdapterEffect::EnterView { tag, .. } => Some(*tag),
@@ -12065,7 +11545,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
             | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
         }
     }
-
     fn effect_causality(
         effect: &Self::Effect,
         source: RuntimeEffectSource,
@@ -12081,19 +11560,15 @@ impl RuntimeDriver for SumeragiV2Adapter {
             RuntimeEffectCausality::Inherit
         }
     }
-
     fn effect_refinement_kind(effect: &Self::Effect) -> u8 {
         production_adapter_effect_kind(effect)
     }
-
     fn effect_semantic_identity(effect: &Self::Effect) -> Vec<u8> {
         production_adapter_effect_semantic_identity(effect)
     }
-
     fn effect_candidate_semantic_identity(effect: &Self::Effect) -> Option<(u8, Vec<u8>)> {
         production_adapter_effect_candidate_semantic_identity(effect)
     }
-
     fn effect_candidate_semantic_binding(
         &self,
         effect: &Self::Effect,
@@ -12139,7 +11614,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
         };
         production_adapter_effect_candidate_binding(effect, effective_inherited.as_ref())
     }
-
     fn fresh_effect_semantic_identity(
         effect: &Self::Effect,
         kind: RuntimeFreshRootKind,
@@ -12234,7 +11708,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
         }
         identity
     }
-
     fn effect_root_tag(effect: &Self::Effect) -> Option<EventTag> {
         match effect {
             AdapterEffect::Sign { tag, .. }
@@ -12248,13 +11721,11 @@ impl RuntimeDriver for SumeragiV2Adapter {
             | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
         }
     }
-
     #[cfg(test)]
     fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool {
         SumeragiV2Adapter::wire_ingress_may_use_progress(self, payload)
     }
 }
-
 /// Result of one serialized scheduling step.
 ///
 /// A step invokes the adapter at most once. Consequently, if that invocation
@@ -12266,7 +11737,6 @@ pub(crate) enum RuntimeStep<E> {
     /// One timer or command was delivered; effects remain in adapter order.
     Advanced(Vec<E>),
 }
-
 /// Exact last-consumer outcome for one generic productive-wire lifecycle.
 ///
 /// The serialized runtime emits this only after it has either retained every
@@ -12286,7 +11756,6 @@ pub(crate) enum LeaderWireRuntimeTerminal {
         terminal: ProducerContinuationTerminalToken,
     },
 }
-
 /// Scheduler-visible ownership of the local proposal producer for one active
 /// view. The first live view mints this owner before clocks are armed; a later
 /// `EnterView` inherits the exact positional owner of the persisted install
@@ -12297,7 +11766,6 @@ struct ActiveViewProducerReservation {
     tag: EventTag,
     ownership: RuntimeEffectOwnership,
 }
-
 /// One adapter-deferred producer together with its immutable receiver-local
 /// ingress cut.
 ///
@@ -12324,7 +11792,6 @@ struct RuntimeDeferredLifecycleOwnership {
     /// occurrence, causal lifecycle, provenance, and frozen physical cut.
     runtime_seal: DeferredRuntimeOwnershipSeal,
 }
-
 impl RuntimeDeferredLifecycleOwnership {
     fn new(
         owner: RuntimeLifecycleOwner,
@@ -12348,7 +11815,6 @@ impl RuntimeDeferredLifecycleOwnership {
             .then_some(ownership)
             .ok_or(EnqueueError::FailClosed)
     }
-
     fn validate_exact(&self) -> bool {
         let source_matches_root = match self.owner.causal_origin().root_ingress_physical_ownership {
             Some(root) => {
@@ -12384,7 +11850,6 @@ impl RuntimeDeferredLifecycleOwnership {
                 .source_physical_ordinal
                 .is_none_or(|ordinal| u128::from(ordinal) < self.physical_cut)
     }
-
     fn with_candidate_semantic_statement(
         mut self,
         statement: Option<RuntimeCandidateSemanticStatement>,
@@ -12394,7 +11859,6 @@ impl RuntimeDeferredLifecycleOwnership {
             .then_some(self)
             .ok_or(EnqueueError::FailClosed)
     }
-
     fn validate_against_ingress(&self, ingress: Option<&RuntimeIngressOwnershipEvidence>) -> bool {
         if !self.validate_exact() {
             return false;
@@ -12425,7 +11889,6 @@ impl RuntimeDeferredLifecycleOwnership {
             | (RuntimeDispatchIngress::LocalOrCausal, Some(_)) => false,
         }
     }
-
     fn validate_active_against_ingress(
         &self,
         ingress: Option<&RuntimeIngressOwnershipEvidence>,
@@ -12435,11 +11898,9 @@ impl RuntimeDeferredLifecycleOwnership {
             && self.runtime_seal.belongs_to(source)
             && self.validate_against_ingress(ingress)
     }
-
     const fn owner(&self) -> &RuntimeLifecycleOwner {
         &self.owner
     }
-
     fn rebase_deferred_ingress(
         &self,
         lifecycle_ordinal: u128,
@@ -12463,15 +11924,12 @@ impl RuntimeDeferredLifecycleOwnership {
             .ok_or(RuntimeIngressMergeError::Conflict)
     }
 }
-
 impl std::ops::Deref for RuntimeDeferredLifecycleOwnership {
     type Target = RuntimeLifecycleOwner;
-
     fn deref(&self) -> &Self::Target {
         self.owner()
     }
 }
-
 /// The formal producer-continuation partition permits at most one live
 /// adapter-deferred occurrence for a logical lifecycle. Executor and FIFO
 /// aliases may temporarily share a causal owner, but two distinct Busy
@@ -12485,7 +11943,6 @@ fn deferred_lifecycle_ordinals_are_unique(
         .values()
         .all(|owner| logical_ordinals.insert(owner.owner().lifecycle_ordinal()))
 }
-
 /// Frozen clock episodes whose immutable physical cuts reject one ingress
 /// occurrence.
 ///
@@ -12498,7 +11955,6 @@ struct RuntimeClockReservationBlockers {
     timeout: bool,
     retransmit: bool,
 }
-
 /// How one authenticated TimeoutVote participates in the finite producer
 /// episode opened by a durable local timeout.
 ///
@@ -12513,7 +11969,6 @@ enum RuntimeTimeoutVoteEpisodeDisposition {
     RestoredDescent,
     FreshReplenishment,
 }
-
 /// Immutable owner retained for one roster source in a timeout-recovery
 /// episode.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -12522,7 +11977,6 @@ struct RuntimeTimeoutVoteEpisodeOwner {
     carrier_physical_ordinal: u64,
     disposition: RuntimeTimeoutVoteEpisodeDisposition,
 }
-
 impl RuntimeTimeoutVoteEpisodeOwner {
     /// Whether two concrete carriers retain the same immutable lifecycle
     /// owner.
@@ -12534,7 +11988,6 @@ impl RuntimeTimeoutVoteEpisodeOwner {
     fn same_lifecycle_owner_as(&self, other: &Self) -> bool {
         self.token == other.token
     }
-
     fn validate_against(&self, timeout_ordinal: u128, physical_cut: u128) -> bool {
         let admission_ordinal = u128::from(self.token.admission_ordinal());
         let carrier_physical_ordinal = u128::from(self.carrier_physical_ordinal);
@@ -12562,7 +12015,6 @@ impl RuntimeTimeoutVoteEpisodeOwner {
             }
     }
 }
-
 /// Exact source/slot candidate checked before authentication mutates runtime
 /// ownership.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -12570,7 +12022,6 @@ struct RuntimeTimeoutVoteEpisodeCandidate {
     slot: FairV2IngressLeaderWireSlot,
     owner: RuntimeTimeoutVoteEpisodeOwner,
 }
-
 /// Exact 0→0, 0→1, or 1→1 admission projection for one timeout-vote producer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RuntimeTimeoutVoteEpisodeAdmissionPlan {
@@ -12584,12 +12035,10 @@ enum RuntimeTimeoutVoteEpisodeAdmissionPlan {
         prospective: BTreeMap<FairV2IngressLeaderWireSlot, RuntimeTimeoutVoteEpisodeOwner>,
     },
 }
-
 impl RuntimeTimeoutVoteEpisodeAdmissionPlan {
     const fn is_candidate(&self) -> bool {
         !matches!(self, Self::NonCandidate)
     }
-
     fn count_transition(&self) -> (u8, u8) {
         match self {
             Self::NonCandidate => (0, 0),
@@ -12613,7 +12062,6 @@ impl RuntimeTimeoutVoteEpisodeAdmissionPlan {
             }
         }
     }
-
     fn prospective(
         self,
     ) -> Option<BTreeMap<FairV2IngressLeaderWireSlot, RuntimeTimeoutVoteEpisodeOwner>> {
@@ -12625,17 +12073,14 @@ impl RuntimeTimeoutVoteEpisodeAdmissionPlan {
         }
     }
 }
-
 impl RuntimeClockReservationBlockers {
     const fn any(self) -> bool {
         self.timeout || self.retransmit
     }
-
     const fn timeout_only(self) -> bool {
         self.timeout && !self.retransmit
     }
 }
-
 /// Finite current-view producer prefix opened by one durable timeout.
 ///
 /// The inclusive lifecycle cut is the exact `BeginTimeout` owner. Every
@@ -12654,7 +12099,6 @@ struct RuntimeTimeoutRecoveryEpisode {
     admitted_timeout_vote_owners:
         BTreeMap<FairV2IngressLeaderWireSlot, RuntimeTimeoutVoteEpisodeOwner>,
 }
-
 impl RuntimeTimeoutRecoveryEpisode {
     fn validate_exact(&self) -> bool {
         self.timeout_owner.validate_exact()
@@ -12692,7 +12136,6 @@ impl RuntimeTimeoutRecoveryEpisode {
                 })
     }
 }
-
 /// One-owner, class-aware scheduling shell for Sumeragi v2.
 pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     driver: D,
@@ -12773,7 +12216,6 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     fail_closed: bool,
     fail_closed_reason: Option<String>,
 }
-
 impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn latch_fail_closed(&mut self, reason: impl Into<String>) {
         if self.fail_closed_reason.is_none() {
@@ -12790,7 +12232,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         self.fail_closed = true;
     }
-
     #[cfg_attr(not(test), allow(dead_code))]
     fn with_driver(
         driver: D,
@@ -12808,7 +12249,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             RuntimeLifecycleOrdinalSource::after_high_watermark(0),
         )
     }
-
     fn with_driver_and_lifecycle_ordinals(
         driver: D,
         started_at: Instant,
@@ -12886,7 +12326,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .map_err(|_| RuntimeConfigError::InvalidLifecycleOwnership)?;
         Ok((runtime, startup_effects))
     }
-
     fn mint_fresh_lifecycle_owner(
         &mut self,
         tag: EventTag,
@@ -12941,7 +12380,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .insert(cache_key, owner.clone());
         Ok(owner)
     }
-
     fn retain_fresh_lifecycle_alias(
         &mut self,
         tag: EventTag,
@@ -12975,7 +12413,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             }
         }
     }
-
     fn retain_effect_ownership(
         &mut self,
         source: RuntimeEffectSource,
@@ -13100,7 +12537,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.pending_effect_ownership = Some(ownership);
         Ok(())
     }
-
     /// Consume the positional lifecycle sidecar for one returned effect batch.
     /// A second runtime step cannot overwrite this owner before the executor
     /// has accepted it.
@@ -13125,7 +12561,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(ownership)
     }
-
     /// Bind an externally constructed historical-lock retransmit batch to the
     /// same exact fresh lifecycle ownership used by the production timer.
     #[cfg(test)]
@@ -13135,7 +12570,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     ) -> Result<(), EnqueueError> {
         self.retain_effect_ownership(RuntimeEffectSource::Retransmit, None, None, effects)
     }
-
     /// Publish the receiver-local physical admission high-watermark before a
     /// serialized runtime turn. The value may only advance; refreshing an
     /// already-created continuation is forbidden because each continuation
@@ -13148,7 +12582,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.ingress_physical_cut = physical_cut;
         Ok(())
     }
-
     fn validate_clock_owner_physical_cuts(&self) -> Result<(), EnqueueError> {
         let timeout_is_paired =
             self.timeout_owner.is_some() == self.timeout_owner_physical_cut.is_some();
@@ -13176,7 +12609,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             Err(EnqueueError::FailClosed)
         }
     }
-
     fn clock_owner_physical_cut_for(
         &self,
         parent: &RuntimeLifecycleOwner,
@@ -13197,7 +12629,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             (true, true) => Err(EnqueueError::FailClosed),
         }
     }
-
     /// Frozen clock episodes which one physically later occurrence would
     /// overtake by resurrecting an older logical position.
     ///
@@ -13230,7 +12661,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 .is_some_and(|(owner, physical_cut)| occurrence_is_blocked(owner, physical_cut)),
         })
     }
-
     /// Whether one physically later occurrence would resurrect a logical
     /// position at or ahead of any already-frozen clock owner.
     ///
@@ -13246,7 +12676,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.clock_owner_reservation_blockers_occurrence(lifecycle_ordinal, source_physical_ordinal)
             .map(RuntimeClockReservationBlockers::any)
     }
-
     fn clock_owner_reservation_blocks(
         &self,
         owner: &RuntimeLifecycleOwner,
@@ -13263,7 +12692,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             physical.source_ordinal,
         )
     }
-
     /// Return the exact timeout root whose durable dispatch opened the
     /// current view's finite restart-recovery episode.
     ///
@@ -13293,7 +12721,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(Some(episode.timeout_owner.clone()))
     }
-
     /// Whether the current clock owners are outside the frozen timeout
     /// recovery prefix.
     ///
@@ -13331,7 +12758,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             (Some(_), None) | (None, Some(_)) => Err(EnqueueError::FailClosed),
         }
     }
-
     /// Supersede the one best-effort retransmit which was frozen before the
     /// absolute timeout cut.
     ///
@@ -13373,7 +12799,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             _ => Err(EnqueueError::FailClosed),
         }
     }
-
     fn enqueue_after_clock_reservation(
         &mut self,
         command: TaggedCommand<D::Command>,
@@ -13393,7 +12818,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         self.ingress.enqueue(command)
     }
-
     /// Replace the bounded set of exact owners currently held by retained
     /// executor effects or asynchronous Sign/Store/Validate/Apply tasks.
     ///
@@ -13417,13 +12841,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.external_lifecycle_owners = owners;
         Ok(())
     }
-
     /// Return the number of external owners published to the runtime.
     #[cfg(test)]
     pub(crate) fn external_lifecycle_owner_count(&self) -> usize {
         self.external_lifecycle_owners.len()
     }
-
     /// Bind external lifecycle capacity to the effect executor's existing
     /// pending-work limit plus one ordinary and one typed-control retained
     /// reducer-effect batch.
@@ -13448,7 +12870,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.external_lifecycle_owner_capacity = capacity;
         Ok(())
     }
-
     /// Mint the `AssembleBody` root when a deterministic local proposal is
     /// accepted into the bounded asynchronous Store -> Validate pipeline.
     pub(crate) fn mint_local_proposal_effect_ownership(
@@ -13535,7 +12956,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 "local proposal StoreBody replay seal did not match its fresh owner".to_owned()
             })
     }
-
     /// Return whether the runner may begin one local proposal for this view.
     ///
     /// An armed leader reservation is deliberately one-shot: guarded Proposal
@@ -13568,7 +12988,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(true)
     }
-
     /// Retain or release the scheduler-visible producer for the authoritative
     /// active view. `retain = true` reuses an inherited `EnterView` carrier when
     /// present and otherwise mints the startup owner before live clocks arm.
@@ -13623,7 +13042,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         });
         Ok(())
     }
-
     /// Retire the exact active-view producer after its signed Proposal and
     /// canonical chunks have atomically entered guarded remote fanout.
     ///
@@ -13649,7 +13067,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             self.latch_fail_closed("Proposal fanout changed its active-view producer");
             return Err("Sumeragi v2 Proposal fanout changed producer ownership".to_owned());
         }
-
         if reservation.ownership.owner() != ownership.owner() {
             let owner = ownership.owner();
             let fresh_kind = self
@@ -13684,7 +13101,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.active_view_producer = None;
         Ok(())
     }
-
     fn command_admission_preflight(
         &mut self,
         tag: EventTag,
@@ -13712,7 +13128,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             }
         }
     }
-
     fn reject_authenticated_preflight_coalescence(
         &mut self,
         preflight: RuntimeCommandAdmissionPreflight,
@@ -13731,7 +13146,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(preflight)
     }
-
     fn owned_preflight_is_coalesced(
         &mut self,
         tag: EventTag,
@@ -13776,7 +13190,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             | RuntimeCommandAdmissionPreflight::Reject => Ok(false),
         }
     }
-
     fn restored_command_owner(
         &self,
         tag: EventTag,
@@ -13803,7 +13216,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             admission_ordinal,
         )
     }
-
     fn restored_tagged_command(
         &self,
         tag: EventTag,
@@ -13833,7 +13245,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         tagged.restored_producer_stage = Some(producer_stage);
         Ok(tagged)
     }
-
     fn enqueue(
         &mut self,
         tag: EventTag,
@@ -13871,7 +13282,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         result
     }
-
     fn enqueue_with_lifecycle_owner(
         &mut self,
         tag: EventTag,
@@ -13925,7 +13335,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         result
     }
-
     fn reconcile_deferred_ingress_ownership(
         &mut self,
         handoff: Option<(u128, RuntimeIngressOwnershipEvidence)>,
@@ -14001,7 +13410,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.deferred_lifecycle_ownership = lifecycle_ownership;
         Ok(())
     }
-
     /// Atomically prune runtime wrappers whose adapter-owned Busy occurrence
     /// was retired outside ordinary deferred service.
     ///
@@ -14052,7 +13460,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.deferred_ingress_ownership = ingress;
         self.retire_orphaned_leader_wire_runtime_receipts()
     }
-
     fn active_leader_wire_runtime_ordinals(
         &self,
     ) -> Result<BTreeSet<u128>, RuntimeIngressMergeError> {
@@ -14078,7 +13485,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(active)
     }
-
     fn retire_orphaned_leader_wire_runtime_receipts(
         &mut self,
     ) -> Result<(), RuntimeIngressMergeError> {
@@ -14099,7 +13505,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(())
     }
-
     fn register_leader_wire_runtime_receipt(
         &mut self,
         ownership: &RuntimeIngressOwnershipEvidence,
@@ -14123,7 +13528,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             }
         }
     }
-
     fn complete_leader_wire_runtime_owner(
         &mut self,
         parent: &RuntimeLifecycleOwner,
@@ -14165,7 +13569,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.pending_leader_wire_terminals.push_back(event);
         Ok(())
     }
-
     /// Terminalize the selected leader-wire lifecycle, then any different
     /// lifecycle which the same reducer macro-step retired from Busy storage.
     ///
@@ -14195,13 +13598,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(())
     }
-
     /// Move the bounded terminal sidecar into the effect executor. A later
     /// scheduler turn is forbidden until this exact batch is consumed.
     pub(crate) fn take_leader_wire_runtime_terminals(&mut self) -> Vec<LeaderWireRuntimeTerminal> {
         self.pending_leader_wire_terminals.drain(..).collect()
     }
-
     fn accept_driver_dispatch(
         &mut self,
         dispatch: RuntimeDriverDispatch<D::Effect>,
@@ -14439,7 +13840,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             retained_deferred_ingress,
         ))
     }
-
     fn freeze_due_clock_owners(&mut self, now: Instant) -> Result<(), EnqueueError> {
         // Validate every active owner before a clock can bypass it.
         let _ = self.minimum_active_lifecycle_ordinal()?;
@@ -14548,11 +13948,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(())
     }
-
     fn minimum_active_lifecycle_ordinal(&self) -> Result<Option<u128>, EnqueueError> {
         self.minimum_active_lifecycle_ordinal_excluding(&[])
     }
-
     /// Oldest owner which can actually consume one serialized runner turn.
     ///
     /// This deliberately differs from the complete active-owner inventory.
@@ -14580,7 +13978,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             }));
             Ok(())
         };
-
         if self.driver.deferred_work_is_serviceable() {
             for admission_ordinal in self.eligible_deferred_admission_ordinals()? {
                 let owner = self
@@ -14590,7 +13987,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 observe(owner.owner())?;
             }
         }
-
         if self.clocks_armed {
             let timeout_due = !self.timeout_emitted
                 && now.saturating_duration_since(self.round_started_at)
@@ -14624,7 +14020,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(minimum)
     }
-
     /// Return the oldest exact active owner after removing only aliases of the
     /// supplied blocked adapter-deferred set.
     fn minimum_active_lifecycle_ordinal_excluding(
@@ -14696,7 +14091,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(minimum)
     }
-
     /// Global logical minimum as observed by one already-admitted deferred
     /// continuation.
     ///
@@ -14711,7 +14105,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     ) -> Result<Option<u128>, EnqueueError> {
         self.minimum_active_lifecycle_ordinal_for_deferred_excluding(target, &[])
     }
-
     fn minimum_active_lifecycle_ordinal_for_deferred_excluding(
         &self,
         target: &RuntimeDeferredLifecycleOwnership,
@@ -14723,7 +14116,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             &[],
         )
     }
-
     fn minimum_active_lifecycle_ordinal_for_deferred_excluding_occurrences(
         &self,
         target: &RuntimeDeferredLifecycleOwnership,
@@ -14786,7 +14178,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // continuation from making progress.
         Ok(minimum)
     }
-
     /// Adapter-deferred occurrences which are not physically behind another
     /// active continuation or a frozen clock.
     ///
@@ -14842,7 +14233,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 .collect::<BTreeSet<_>>();
         Ok(physically_eligible)
     }
-
     /// Adapter-deferred occurrences which may own the next runner turn under
     /// every active continuation's immutable physical cut and logical rank.
     fn eligible_deferred_admission_ordinals(&self) -> Result<BTreeSet<u128>, EnqueueError> {
@@ -14853,7 +14243,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .filter(|(admission_ordinal, _)| !physically_eligible.contains(admission_ordinal))
             .map(|(_, ownership)| ownership.owner().clone())
             .collect::<Vec<_>>();
-
         let mut eligible = BTreeSet::new();
         for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership {
             if !physically_eligible.contains(admission_ordinal) {
@@ -14869,7 +14258,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(eligible)
     }
-
     fn active_lifecycle_uses_ordinal(&self, lifecycle_ordinal: u128) -> Result<bool, EnqueueError> {
         if self.ingress.uses_lifecycle_ordinal(lifecycle_ordinal)? {
             return Ok(true);
@@ -14916,7 +14304,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(false)
     }
-
     /// Freeze every due clock and return the current predecessor episode for
     /// one exact Serve ingress ticket from the shared ordinal source.
     ///
@@ -15041,7 +14428,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(Some(witness))
     }
-
     /// Return whether one runnable owner belongs to the currently witnessed
     /// strictly older prefix of an exact Serve ticket.
     #[cfg(test)]
@@ -15053,7 +14439,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.exact_serve_predecessor_episode_witness(now, serve_lifecycle_ordinal, None)
             .map(|witness| witness.is_some())
     }
-
     /// Return whether one runnable owner strictly predates a retained
     /// certified-response target without mutating selected-Serve witness state.
     pub(crate) fn older_lifecycle_predates_retained_response(
@@ -15114,7 +14499,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(predecessor_exists)
     }
-
     fn current_signature_fence_identity(
         &self,
     ) -> Result<Option<D::SignatureFenceIdentity>, EnqueueError> {
@@ -15127,12 +14511,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(identity)
     }
-
     fn clear_fence_retry_blocked_fifo_owners(&mut self) {
         self.fence_retry_blocked_fifo_owners.clear();
         self.fence_retry_signature_fence_identity = None;
     }
-
     fn reconcile_fence_retry_blocked_fifo_owners(&mut self) -> Result<(), EnqueueError> {
         if self.fence_retry_blocked_fifo_owners.is_empty() {
             return if self.fence_retry_signature_fence_identity.is_none() {
@@ -15191,7 +14573,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(())
     }
-
     fn retain_fence_retry_blocked_fifo_owner(
         &mut self,
         owner: RuntimeQueueOccurrenceOwner,
@@ -15225,7 +14606,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.fence_retry_blocked_fifo_owners.push(owner);
         Ok(())
     }
-
     fn periodic_timer_owns_runnable_turn(&self) -> Result<bool, EnqueueError> {
         let (Some(owner), Some(physical_cut)) = (
             self.retransmit_owner.as_ref(),
@@ -15264,7 +14644,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     && candidate.lifecycle_ordinal() < owner_ordinal
             }))
     }
-
     fn scheduler_arbitration_inputs(
         &self,
         now: Instant,
@@ -15376,7 +14755,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             fence_retry_marker_required: false,
         })
     }
-
     fn retain_scheduler_ownership(
         &mut self,
         selected: RuntimeSelectedOwnerKind,
@@ -15441,7 +14819,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.last_scheduler_ownership = Some(evidence);
         Ok(())
     }
-
     /// Run at most one adapter-deferred transition, timer, or admitted command.
     ///
     /// Serviceable adapter debt is filtered first by each target's immutable
@@ -15486,7 +14863,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             self.latch_fail_closed("clock lifecycle ownership could not be frozen");
             return Err(RuntimeError::FailClosed);
         }
-
         // A due view timeout is an absolute pacemaker boundary, not another
         // lifecycle-ordered work item. In particular, do not give an older
         // Busy-deferred occurrence or its completion dependency another turn
@@ -15498,7 +14874,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 RuntimeError::FailClosed
             })?
             .timeout_due;
-
         // An older timer or ingress occurrence can already belong to the
         // adapter's Busy-deferred set while a later Sign effect owns the only
         // completion which can open that reducer fence. Immutable lifecycle
@@ -15509,7 +14884,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if !timeout_preempts && let Some(step) = self.dispatch_one_fence_dependency(now, None)? {
             return Ok(step);
         }
-
         // Work which already crossed runtime ingress and acquired the
         // adapter's Busy-deferred ownership competes by its frozen physical
         // cut and then by logical rank inside that retained predecessor set.
@@ -15519,7 +14893,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if !timeout_preempts && let Some(step) = self.dispatch_one_adapter_deferred(now, None)? {
             return Ok(step);
         }
-
         let selected_round_tag = self.round_tag;
         let schedule_before = self.schedule;
         let queue_before = self.ingress.ownership_snapshot();
@@ -15533,7 +14906,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             arbitration.fifo_ready,
         );
         self.schedule = next_schedule;
-
         let (
             effects,
             effect_source,
@@ -15789,7 +15161,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             retained_deferred_ingress,
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn finish_dispatched_step(
         &mut self,
@@ -15874,7 +15245,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(RuntimeStep::Advanced(effects))
     }
-
     /// Try one typed pacemaker/control turn without admitting ordinary work.
     ///
     /// A due absolute timeout is emitted first. Otherwise only a deeply
@@ -15930,7 +15300,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         self.dispatch_one_pacemaker_progress(now)
     }
-
     fn dispatch_one_pacemaker_progress(
         &mut self,
         now: Instant,
@@ -16115,7 +15484,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         )
         .map(Some)
     }
-
     /// Dispatch the exact runnable FIFO dependency required by currently
     /// unserviceable adapter debt.
     ///
@@ -16249,7 +15617,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         else {
             return Ok(None);
         };
-
         let round_tag = self.round_tag;
         let queue_before = self.ingress.ownership_snapshot();
         let schedule = self.schedule;
@@ -16499,7 +15866,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(Some(RuntimeStep::Advanced(effects)))
     }
-
     /// Drain at most one adapter-deferred transition or startup-recovery
     /// command without running live timers.
     ///
@@ -16708,7 +16074,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(RuntimeStep::Advanced(effects))
     }
-
     /// Dispatch one target-relative eligible adapter-owned transition without
     /// concatenating it with a timer or runtime-ingress command.
     ///
@@ -16962,7 +16327,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(Some(RuntimeStep::Advanced(effects)))
     }
-
     /// Last exact scheduling ownership carrier produced by `step` or
     /// `step_recovery`.
     #[cfg(test)]
@@ -16971,7 +16335,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     ) -> Option<&RuntimeSchedulerOwnershipEvidence> {
         self.last_scheduler_ownership.as_ref()
     }
-
     /// Move the most recent exact scheduler carrier into the runner bridge.
     ///
     /// Taking the carrier before the next scheduling call prevents a later
@@ -16982,7 +16345,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     ) -> Option<RuntimeSchedulerOwnershipEvidence> {
         self.last_scheduler_ownership.take()
     }
-
     /// Advance one live scheduler turn and model the production runner taking
     /// its exact ownership carrier before another turn can enter.
     #[cfg(test)]
@@ -17001,7 +16363,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         result
     }
-
     /// Advance one recovery scheduler turn and model the production runner
     /// taking its exact ownership carrier before another turn can enter.
     #[cfg(test)]
@@ -17020,12 +16381,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         result
     }
-
     /// Number of admitted commands awaiting serialized delivery.
     pub(crate) fn queued_commands(&self) -> usize {
         self.ingress.len()
     }
-
     /// Per-class queue ownership, age, and service debt for diagnostics.
     pub(crate) fn queue_snapshot(&self, now: Instant) -> RuntimeQueueSnapshot {
         RuntimeQueueSnapshot {
@@ -17034,7 +16393,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             completion: self.ingress.lane_snapshot(CommandClass::Completion, now),
         }
     }
-
     /// View-aware diagnostic deadline for declaring a no-progress interval.
     ///
     /// The watchdog allows the complete current-view round deadline plus one
@@ -17046,7 +16404,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .checked_add(self.retransmit_interval)
             .unwrap_or(Duration::MAX)
     }
-
     /// Slots into which trusted asynchronous completions can be admitted now.
     ///
     /// Completion producers must consult this bound before removing work from
@@ -17058,13 +16415,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     pub(crate) fn remaining_completion_capacity(&self) -> usize {
         self.ingress.remaining_capacity()
     }
-
     /// Whether the runtime currently charges one exact authenticated
     /// certificate to the physical fence-escape slot.
     pub(crate) fn has_certified_fence_escape_credit(&self) -> bool {
         self.ingress.certified_fence_escape_credit() == 1
     }
-
     /// Return whether removing this network head can be coupled to immediate
     /// runtime admission.
     ///
@@ -17087,12 +16442,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         };
         class.is_none_or(|class| self.ingress.check_capacity(class).is_ok())
     }
-
     /// Tag of the view which owns the absolute clocks.
     pub(crate) const fn round_tag(&self) -> EventTag {
         self.round_tag
     }
-
     /// Inclusive root-ordinal cut for the active post-timeout recovery
     /// episode. Completions at or below this cut may receive one bounded turn
     /// while a retained transport response owns ordinary service.
@@ -17101,7 +16454,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .map(|owner| owner.map(|owner| owner.lifecycle_ordinal()))
             .map_err(|_| "timeout recovery episode was invalid".to_owned())
     }
-
     /// Arm the live clocks after all height constructors and startup effects.
     ///
     /// This one-shot boundary prevents WAL replay, body-store recovery, worker
@@ -17119,36 +16471,30 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.clocks_armed = true;
         Ok(())
     }
-
     /// View-indexed deadline currently owned by the runtime clock.
     #[cfg(test)]
     pub(crate) fn round_timeout(&self) -> Duration {
         round_timeout_for_view(self.base_round_timeout, self.round_tag.view())
     }
-
     /// Constant retransmission interval derived from the configured timeout.
     #[cfg(test)]
     pub(crate) const fn retransmit_interval(&self) -> Duration {
         self.retransmit_interval
     }
-
     /// Borrow the sole reducer driver without transferring ownership.
     pub(crate) const fn driver(&self) -> &D {
         &self.driver
     }
-
     /// Mutably borrow the driver for tests which must hold an exact
     /// persistence crash cut across runtime construction.
     #[cfg(test)]
     pub(crate) fn driver_mut_for_test(&mut self) -> &mut D {
         &mut self.driver
     }
-
     /// Consume the shell and recover ownership of the adapter.
     pub(crate) fn into_driver(self) -> D {
         self.driver
     }
-
     /// Freeze and return the deterministic timeout owner used by restart
     /// lifecycle tests before dispatch mutates the adapter.
     #[cfg(test)]
@@ -17162,7 +16508,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .clone()
             .ok_or_else(|| "timeout lifecycle owner was not due".to_owned())
     }
-
     fn observe_effects(&mut self, now: Instant, effects: &[D::Effect]) -> Result<(), EnqueueError> {
         for (index, effect) in effects.iter().enumerate() {
             if let Some(tag) = D::enter_view_tag(effect) {
@@ -17192,7 +16537,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(())
     }
-
     #[cfg(test)]
     pub(crate) fn observe_effects_with_test_ownership(
         &mut self,
@@ -17226,7 +16570,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.pending_effect_ownership = None;
         result
     }
-
     fn close(&mut self, error: D::Error) -> RuntimeError<D::Error> {
         self.latch_fail_closed(format!(
             "runtime driver rejected a serialized transition: {error}"
@@ -17234,7 +16577,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         RuntimeError::Driver(error)
     }
 }
-
 impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// Freeze the serialized shell around one lifecycle-owned signature.
     pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(
@@ -17253,7 +16595,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.driver
             .prepare_recovered_lifecycle_sign_completion(authority)
     }
-
     /// Freeze the serialized shell around one recovered Decision Store preview.
     pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_store(
         &mut self,
@@ -17270,7 +16611,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.driver
             .prepare_recovered_decision_fetch_store(authority)
     }
-
     /// Freeze the serialized shell around one registry-owned Apply completion.
     pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(
         &mut self,
@@ -17287,7 +16627,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.driver
             .prepare_recovered_decision_apply_completion(authority)
     }
-
     fn timeout_vote_recovery_candidate_from_fair(
         &self,
         payload: &wire::ConsensusMessageV2Payload,
@@ -17301,7 +16640,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         };
         self.timeout_vote_recovery_candidate(payload, token, physical_ordinal)
     }
-
     fn timeout_vote_recovery_candidate_from_runtime(
         &self,
         payload: &wire::ConsensusMessageV2Payload,
@@ -17321,7 +16659,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             (Some(_), None) | (None, Some(_)) => Err(EnqueueError::FailClosed),
         }
     }
-
     /// Classify one exact current-view TimeoutVote in the finite episode opened
     /// by the already-dispatched local timeout.
     ///
@@ -17419,7 +16756,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             owner,
         }))
     }
-
     /// Project the exact 0→0, 0→1, or 1→1 owner-count transition before
     /// authentication can produce reducer refinement evidence.
     fn timeout_vote_episode_admission_plan(
@@ -17497,7 +16833,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         Ok(disposition)
     }
-
     /// Build the reducer-owned status which the runner will publish at the
     /// one-shot live-height activation boundary.
     ///
@@ -17511,7 +16846,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         self.driver.successor_activation_status()
     }
-
     fn body_pipeline_completion_is_owned(
         &mut self,
         tag: EventTag,
@@ -17542,7 +16876,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
         }
     }
-
     fn resolve_body_pipeline_completion_owner(
         &mut self,
         tag: EventTag,
@@ -17662,7 +16995,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             replacement_statement,
         }))
     }
-
     fn prepare_body_pipeline_completion_refinements(
         &mut self,
         plans: &[RuntimeBodyCompletionOwnershipPlan],
@@ -17764,7 +17096,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         Ok(prepared)
     }
-
     fn commit_prepared_body_pipeline_completion_refinements(
         &mut self,
         prepared: RuntimePreparedBodyCompletionRefinements,
@@ -17795,7 +17126,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             );
             return Err(EnqueueError::FailClosed);
         }
-
         // Every target was validated above and the serialized runtime admits
         // only vacant batch keys before this assignment-only commit tail.
         for (target, replacement) in prepared.ingress {
@@ -17831,7 +17161,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         Ok(())
     }
-
     fn body_pipeline_completion_predecessor(
         tag: EventTag,
         candidate: &BodyPipelineCompletionEvidence,
@@ -17857,7 +17186,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             BodyPipelineCompletionEvidence::BodyAvailable { .. } => None,
         }
     }
-
     /// Resolve the sole serialized terminal for an exact Store/Validate
     /// candidate without committing an authority refinement.
     fn body_pipeline_candidate_terminal_ownership_plan(
@@ -17878,7 +17206,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             self.latch_fail_closed("body terminal query omitted its exact predecessor capability");
             return Err("Sumeragi v2 body terminal query failed closed".to_owned());
         }
-
         let mut candidates = self
             .ingress
             .commands
@@ -17915,7 +17242,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             })?;
         Ok(Some(plan))
     }
-
     /// Plan one terminal Store/Validate retry under its immutable incumbent
     /// owner. This is a read-only success path: the returned binding can be
     /// passed through the complete effect/candidate refinement gate before a
@@ -17929,7 +17255,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .map(|plan| plan.adopt_effect_ownership(effect, ownership))
             .transpose()
     }
-
     /// Commit previously checked terminal authority refinements atomically.
     ///
     /// The serialized runtime cannot advance between plan and commit. The
@@ -17959,7 +17284,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.commit_prepared_body_pipeline_completion_refinements(prepared)
             .map_err(|error| error.to_string())
     }
-
     /// Commit one source-audited terminal refinement through the atomic batch API.
     #[allow(dead_code)]
     pub(crate) fn commit_body_pipeline_candidate_terminal(
@@ -17969,7 +17293,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     ) -> Result<(), String> {
         self.commit_body_pipeline_candidate_terminals(&[(effect, ownership)])
     }
-
     /// Return whether the runtime already owns the terminal completion for an
     /// exact Store/Validate candidate, committing an authority upgrade only
     /// after producing the incumbent-owner plan. Executor production uses the
@@ -17987,7 +17310,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.commit_body_pipeline_candidate_terminal(effect, &adopted)?;
         Ok(true)
     }
-
     fn body_pipeline_completion_is_owned_by(
         &mut self,
         tag: EventTag,
@@ -18010,7 +17332,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.commit_prepared_body_pipeline_completion_refinements(prepared)?;
         Ok(Some(result))
     }
-
     fn enqueue_body_pipeline_completion(
         &mut self,
         tag: EventTag,
@@ -18022,7 +17343,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         self.enqueue(tag, CommandClass::Completion, command)
     }
-
     fn enqueue_body_pipeline_completion_with_owner(
         &mut self,
         tag: EventTag,
@@ -18046,7 +17366,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         self.enqueue_with_lifecycle_owner(tag, CommandClass::Completion, command, ownership)
     }
-
     fn body_available_is_uniquely_owned(
         &mut self,
         tag: EventTag,
@@ -18072,7 +17391,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
         }
     }
-
     /// Return whether the exact body owner is the process carrier for a
     /// persistent adapter producer reservation.
     ///
@@ -18121,7 +17439,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         Ok(ingress || deferred)
     }
-
     fn retire_restored_body_producer(
         &mut self,
         retirement: Option<RestoredProducerRetirement>,
@@ -18155,7 +17472,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
         }
     }
-
     /// Take exclusive ownership of an opened adapter and preserve its recovery
     /// effects for immediate asynchronous dispatch.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -18174,7 +17490,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             startup_effects,
         )
     }
-
     /// Open a runtime whose FIFO and fresh roots share the active height's
     /// actor-global source with exact Serve ingress reservations.
     pub(crate) fn new_with_lifecycle_ordinals(
@@ -18194,7 +17509,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             lifecycle_ordinals,
         )
     }
-
     /// Read the reducer-owned proposal constraint without exposing mutable
     /// access to the authoritative adapter.
     pub(crate) fn local_proposal_directive(
@@ -18202,7 +17516,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     ) -> Result<super::v2::LocalProposalDirective, AdapterError> {
         self.driver.local_proposal_directive()
     }
-
     /// Return the exact Decision key reconstructed by safety-WAL replay.
     pub(crate) fn replayed_decision_key(
         &self,
@@ -18217,7 +17530,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     > {
         self.driver.replayed_decision_key()
     }
-
     /// Rebind one independently durable validation marker before replayed
     /// startup effects are dispatched.
     pub(crate) fn recover_validated_body(
@@ -18231,7 +17543,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.driver
             .recover_validated_body(manifest, validated_receipt)
     }
-
     /// Bind one live, independently durable validation marker without
     /// delivering an obsolete reducer event.
     ///
@@ -18248,7 +17559,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         self.driver.bind_validated_body(manifest, validated_receipt)
     }
-
     /// Authenticate and enqueue one reducer-directed network message.
     ///
     /// Traffic which passes the bounded capacity check, exactly matches an
@@ -18590,7 +17900,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             Err(error) => Err(NetworkIngressError::Backpressure(error)),
         }
     }
-
     /// Test-only direct ingress helper. Production callers must preserve the
     /// fair-ingress carrier obtained from the authenticated network boundary.
     #[cfg(test)]
@@ -18607,7 +17916,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .expect("real test fair ingress produces exact ownership");
         self.enqueue_network_with_ingress_ownership(message, ingress_ownership)
     }
-
     /// Return whether the fair-ingress head can reach authentication and then
     /// either claim its exact runtime prefix or coalesce with an exact queued
     /// authenticated owner.
@@ -18622,7 +17930,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         if ownership.leader_wire_runtime_receipt().is_some() {
             return None;
         }
-
         // Productive fair ingress owns the durable Ingress token while the
         // packet is still physically queued. Its Runtime receipt can only be
         // minted by the atomic dequeue immediately after this read-only
@@ -18646,7 +17953,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             // lane forever.
             return Some(true);
         }
-
         if self.fail_closed {
             return Some(false);
         }
@@ -18658,7 +17964,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         {
             return Some(false);
         }
-
         if let Some((_, admission_ordinal)) = self
             .driver
             .deferred_authenticated_message_owner(runtime_message)
@@ -18674,7 +17979,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 == Some(token);
             return Some(same_token);
         }
-
         for queued in &self.ingress.commands {
             if !queued.command.matches_wire_envelope(runtime_message) {
                 continue;
@@ -18689,7 +17993,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 Err(_) => return Some(true),
             }
         }
-
         let Some(source_physical_ordinal) = ownership.physical_admission_ordinal() else {
             return Some(true);
         };
@@ -18740,7 +18043,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             // expose the invariant failure instead of pinning a fair lane.
             Err(_) => return Some(true),
         }
-
         let may_use_progress = self
             .driver
             .wire_ingress_may_use_progress(&runtime_message.payload);
@@ -18755,7 +18057,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         };
         Some(capacity.is_ok())
     }
-
     /// Whether one pre-runtime fair-ingress head belongs to the finite
     /// TimeoutVote episode needed to close a timeout cycle.
     ///
@@ -18822,7 +18123,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.can_admit_pre_runtime_leader_wire(message, message, CommandClass::Progress, ownership)
             == Some(true)
     }
-
     pub(crate) fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,
@@ -18930,7 +18230,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             )
             .is_ok()
     }
-
     #[cfg(test)]
     pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
         let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
@@ -18942,7 +18241,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .expect("real test fair ingress produces exact ownership");
         self.can_admit_network_message_with_ingress_ownership(message, &ownership)
     }
-
     /// Enqueue a completed local proposal build with its original reducer tag.
     pub(crate) fn enqueue_local_proposal(
         &mut self,
@@ -18966,7 +18264,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             },
         )
     }
-
     /// Enqueue a completed local proposal without changing the immutable
     /// `AssembleBody` lifecycle owner minted when the proposal entered the
     /// asynchronous Store -> Validate pipeline.
@@ -19003,7 +18300,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         )?;
         Ok(identity)
     }
-
     /// Enqueue successful canonical reconstruction with the exact fetch tag.
     ///
     /// Authenticated proposals already waiting in the FIFO are discarded only
@@ -19019,7 +18315,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let reservation = self.reserve_body_available(tag, manifest)?;
         self.commit_body_available(reservation)
     }
-
     /// Install an ordinary volatile body owner without consulting adapter
     /// restart metadata, for crash-cut coalescence tests only.
     #[cfg(test)]
@@ -19030,7 +18325,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     ) -> Result<(), EnqueueError> {
         self.ingress.enqueue_canonical_body_available(tag, manifest)
     }
-
     /// Reserve exact runtime ownership for a reconstructed body completion.
     ///
     /// Capacity and conflicting queued proposals are evaluated without
@@ -19106,7 +18400,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         result
     }
-
     /// Reserve a reconstructed-body successor while retaining the FetchBody
     /// lifecycle owner.
     pub(crate) fn reserve_body_available_with_owner(
@@ -19267,7 +18560,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         result
     }
-
     /// Publish one previously reserved completion without another capacity
     /// check. A stale or mismatched token is an internal ownership violation
     /// and permanently closes the serialized runtime.
@@ -19281,7 +18573,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         result
     }
-
     /// Retain an unpublished completion reservation after an all-or-error
     /// service transfer rejected the operation. The exact retry reclaims the
     /// same token and ordinal; this is not a terminal release. A stale or
@@ -19290,7 +18581,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     pub(crate) fn abort_body_available(&mut self, reservation: BodyAvailableReservation) {
         self.ingress.abort_canonical_body_available(reservation);
     }
-
     /// Transfer one already admitted exact-body completion to a certified later incarnation.
     ///
     /// The completion can be waiting either in runtime ingress or in the adapter's Busy-deferred
@@ -19327,7 +18617,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         if !source_owned {
             return Ok(false);
         }
-
         let transferred = if destination_owned {
             let source_persistent =
                 self.body_available_has_persistent_producer(previous, manifest)?;
@@ -19341,7 +18630,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                     "Sumeragi v2 body completion has two persistent producer roots".to_owned(),
                 );
             }
-
             if source_persistent {
                 // Keep the sole crash-recoverable producer. Retiring the
                 // ordinary destination first is crash-safe: until the final
@@ -19424,7 +18712,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 "Sumeragi v2 body completion rebind lost deferred runtime ownership".to_owned(),
             );
         }
-
         match self.body_available_is_uniquely_owned(rebound, manifest) {
             Ok(true) => {}
             Ok(false) => {
@@ -19438,7 +18725,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         Ok(true)
     }
-
     /// Transfer the sole unpublished exact-body completion owned by a
     /// protected fetch to its certified successor incarnation.
     ///
@@ -19495,7 +18781,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         self.rebind_body_available(previous, rebound, &manifest)
     }
-
     /// Retire the sole unpublished exact-body completion for a fetch which no
     /// longer belongs to the installed safety frontier.
     ///
@@ -19527,7 +18812,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         };
         self.retire_body_available(tag, &manifest)
     }
-
     /// Retire the restart-dormant stage-7 parent of an exact body fetch which
     /// became terminal before reserving any `BodyAvailable` token.
     ///
@@ -19582,7 +18866,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
         }
     }
-
     /// Retire one superseded exact-body completion from its serialized owner.
     ///
     /// The completion may still be waiting in runtime ingress or may already
@@ -19645,7 +18928,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         Ok(true)
     }
-
     /// Retire every queued completion stage for one exact superseded body pipeline.
     ///
     /// The command may still be in runtime ingress or may have crossed into
@@ -19738,7 +19020,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         Ok(retired)
     }
-
     /// Retire proposal work made terminal by an exact durable decision.
     ///
     /// Every authenticated proposal and nonmatching local proposal completion
@@ -19851,7 +19132,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             expected.recovery_only(),
         ))
     }
-
     /// Retire authenticated proposals which a newly installed lock makes unsafe.
     ///
     /// The exact locked subject may remain queued for unchanged reproposal.
@@ -19892,7 +19172,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         Ok(ingress.saturating_add(deferred))
     }
-
     /// Enqueue the durable body-store acknowledgement with its exact tag.
     pub(crate) fn enqueue_body_stored(
         &mut self,
@@ -19916,7 +19195,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             },
         )
     }
-
     pub(crate) fn enqueue_body_stored_with_owner(
         &mut self,
         tag: EventTag,
@@ -19941,7 +19219,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             ownership,
         )
     }
-
     /// Enqueue successful deterministic validation with its non-forgeable
     /// receipt and the tag of its currently attached reducer consumer.
     pub(crate) fn enqueue_validation_succeeded(
@@ -19966,7 +19243,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             },
         )
     }
-
     pub(crate) fn enqueue_validation_succeeded_with_owner(
         &mut self,
         tag: EventTag,
@@ -19991,7 +19267,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             ownership,
         )
     }
-
     /// Enqueue deterministic validation rejection for its currently attached
     /// reducer consumer.
     pub(crate) fn enqueue_validation_failed(
@@ -20007,7 +19282,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             AdapterCommand::ValidationFailed { round, subject },
         )
     }
-
     pub(crate) fn enqueue_validation_failed_with_owner(
         &mut self,
         tag: EventTag,
@@ -20023,7 +19297,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             ownership,
         )
     }
-
     /// Atomically enqueue a set of deterministic validation rejections.
     ///
     /// Exact pre-existing owners coalesce. Every vacant owner and the complete
@@ -20080,7 +19353,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         result
     }
-
     /// Atomically enqueue validation rejections while preserving the exact
     /// lifecycle owner of every independently admitted validation task.
     pub(crate) fn enqueue_validation_failures_atomically_with_owners(
@@ -20196,7 +19468,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             Err(error) => Err(error),
         }
     }
-
     /// Enqueue a signer completion without retagging it to the current view.
     pub(crate) fn enqueue_signature(
         &mut self,
@@ -20209,7 +19480,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             AdapterCommand::SignatureCompleted(signature),
         )
     }
-
     pub(crate) fn enqueue_signature_with_owner(
         &mut self,
         tag: EventTag,
@@ -20223,7 +19493,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             ownership,
         )
     }
-
     /// Enqueue an application completion without retagging it.
     pub(crate) fn enqueue_application_completed(
         &mut self,
@@ -20236,7 +19505,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             AdapterCommand::ApplicationCompleted(subject),
         )
     }
-
     pub(crate) fn enqueue_application_completed_with_owner(
         &mut self,
         tag: EventTag,
@@ -20251,7 +19519,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         )
     }
 }
-
 pub(crate) const fn wire_payload_is_certified_fence_escape(
     payload: &wire::ConsensusMessageV2Payload,
 ) -> bool {
@@ -20273,7 +19540,6 @@ pub(crate) const fn wire_payload_is_certified_fence_escape(
             )
     )
 }
-
 /// Whether a direct productive certificate can cross the absolute timeout cut
 /// after retaining an older durable leader-wire owner.
 ///
@@ -20293,7 +19559,6 @@ const fn wire_payload_is_direct_certificate_recovery_shape(
             })
     )
 }
-
 fn wire_payload_matches_current_strict_timeout_recovery_round(
     payload: &wire::ConsensusMessageV2Payload,
     context: &wire::HeightContext,
@@ -20321,7 +19586,6 @@ fn wire_payload_matches_current_strict_timeout_recovery_round(
     };
     round.context_id == context.id() && round.height == tag.height() && round.view == tag.view()
 }
-
 fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<CommandClass> {
     match payload {
         wire::ConsensusMessageV2Payload::QuorumCertificate(_)
@@ -20340,7 +19604,6 @@ fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<Co
         | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
     }
 }
-
 fn classify_reducer_network_ingress(
     fail_closed: bool,
     payload: &wire::ConsensusMessageV2Payload,
@@ -20350,7 +19613,6 @@ fn classify_reducer_network_ingress(
     }
     network_command_class(payload).ok_or(NetworkIngressError::TransportPayload)
 }
-
 #[cfg(test)]
 fn network_admission_class(payload: &wire::ConsensusMessageV2Payload) -> Option<CommandClass> {
     match payload {
@@ -20363,7 +19625,6 @@ fn network_admission_class(payload: &wire::ConsensusMessageV2Payload) -> Option<
         _ => network_command_class(payload),
     }
 }
-
 #[cfg(test)]
 mod tests {
     include!("tests/v2_runtime_pending_binding_cases.rs");

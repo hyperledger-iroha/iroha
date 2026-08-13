@@ -1,15 +1,12 @@
 use std::{fs::OpenOptions, io::Write as _, num::NonZeroU64, time::Duration};
-
 #[cfg(feature = "bls")]
 use std::collections::BTreeMap;
-
 use iroha_config::parameters::actual::{
     SUMERAGI_V2_CONFIG_FORMAT_VERSION, SumeragiV2Config, SumeragiV2KeyPolicy, SumeragiV2Limits,
 };
 use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
 use tempfile::TempDir;
-
 use super::super::serviced_candidate_store::ProducerContinuationSourceClass;
 use super::*;
 use crate::sumeragi::{
@@ -18,7 +15,6 @@ use crate::sumeragi::{
         PendingRuntimeEffectBinding, RuntimeEffectOwnership, bind_adapter_effect_batch_ownership,
     },
 };
-
 fn test_network_id(seed: u8) -> iroha_data_model::NetworkId {
     iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
@@ -26,7 +22,6 @@ fn test_network_id(seed: u8) -> iroha_data_model::NetworkId {
         [seed; Hash::LENGTH],
     )))
 }
-
 #[test]
 fn recovered_lifecycle_kura_binding_releases_paths_only_to_exact_kura() {
     let kura = Kura::blank_kura_for_testing();
@@ -35,7 +30,6 @@ fn recovered_lifecycle_kura_binding_releases_paths_only_to_exact_kura() {
     let foreign_signer = KeyPair::random();
     let binding =
         RecoveredLifecycleOwnerKuraBindingV1::for_test(kura.as_ref(), Some(&local_signer));
-
     let storage_root = kura.sumeragi_v2_storage_root();
     let expected_chunk_root = storage_root.join("chunks");
     let paths = binding
@@ -57,10 +51,8 @@ fn recovered_lifecycle_kura_binding_releases_paths_only_to_exact_kura() {
     );
     assert_eq!(paths.into_chunk_root(), expected_chunk_root);
 }
-
 #[derive(Debug)]
 struct TestAggregator;
-
 impl SignatureAggregator for TestAggregator {
     fn aggregate(&self, signatures: &[&[u8]]) -> Result<Vec<u8>, String> {
         let mut aggregate = Vec::new();
@@ -75,13 +67,11 @@ impl SignatureAggregator for TestAggregator {
         Ok(aggregate)
     }
 }
-
 fn peer(seed: u8) -> PeerId {
     let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
         .expect("deterministic peer key");
     PeerId::new(key.public_key().clone())
 }
-
 fn context() -> wire::HeightContext {
     let mut roster = (1_u8..=4)
         .map(|seed| wire::ValidatorPower {
@@ -115,7 +105,6 @@ fn context() -> wire::HeightContext {
         leader_seed: [0xA5; 32],
     }
 }
-
 fn verified_genesis(context: wire::HeightContext) -> VerifiedHeightContext {
     let mut keys = (1_u8..=4)
         .map(|seed| {
@@ -137,9 +126,7 @@ fn verified_genesis(context: wire::HeightContext) -> VerifiedHeightContext {
         .collect();
     VerifiedHeightContext::genesis(context, proofs).expect("verified genesis context")
 }
-
 include!("v2_adapter_activation_context.rs");
-
 #[cfg(feature = "bls")]
 fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) {
     let mut keys = (1_u8..=4)
@@ -188,7 +175,6 @@ fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) 
     };
     (context, keys, pops)
 }
-
 #[cfg(feature = "bls")]
 fn authenticate_qc(certificate: &mut wire::QuorumCertificate, keys: &[KeyPair]) {
     let signer = certificate
@@ -221,7 +207,6 @@ fn authenticate_qc(certificate: &mut wire::QuorumCertificate, keys: &[KeyPair]) 
     )
     .expect("aggregate fixture certificate");
 }
-
 #[cfg(feature = "bls")]
 fn authenticated_timeout_certificate(
     round: wire::ConsensusRound,
@@ -262,7 +247,6 @@ fn authenticated_timeout_certificate(
         }],
     }
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn height_context_rejects_missing_and_rogue_proofs_of_possession() {
@@ -280,13 +264,11 @@ fn height_context_rejects_missing_and_rogue_proofs_of_possession() {
         Err(AdapterError::Cryptography(_))
     ));
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn aggregate_verification_rejects_signer_without_aligned_pop() {
     let (context, _keys, proofs) = authenticated_context();
     let signer = u32::try_from(context.roster.len() - 1).expect("small fixture roster");
-
     assert!(matches!(
         verify_aggregate_signature(
             &context,
@@ -298,7 +280,6 @@ fn aggregate_verification_rejects_signer_without_aligned_pop() {
         Err(AdapterError::ValidatorIndexOutOfRange(index)) if index == signer
     ));
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn boundary_context_rejects_missing_invalid_and_foreign_future_pops_before_voting() {
@@ -315,7 +296,6 @@ fn boundary_context_rejects_missing_invalid_and_foreign_future_pops_before_votin
     });
     VerifiedHeightContext::genesis(context.clone(), proofs.clone())
         .expect("valid future PoPs are admitted before voting");
-
     let mut missing = context.clone();
     missing
         .next_epoch_snapshot
@@ -329,7 +309,6 @@ fn boundary_context_rejects_missing_invalid_and_foreign_future_pops_before_votin
             wire::ValidationError::NextEpochProofOfPossessionCount
         ))
     ));
-
     let foreign_key =
         KeyPair::try_from_seed(vec![0xE9; 32], Algorithm::BlsNormal).expect("foreign BLS key");
     let foreign_pop =
@@ -344,7 +323,6 @@ fn boundary_context_rejects_missing_invalid_and_foreign_future_pops_before_votin
         VerifiedHeightContext::genesis(foreign, proofs.clone()),
         Err(AdapterError::Cryptography(_))
     ));
-
     let mut corrupted = context;
     corrupted
         .next_epoch_snapshot
@@ -356,7 +334,6 @@ fn boundary_context_rejects_missing_invalid_and_foreign_future_pops_before_votin
         Err(AdapterError::Cryptography(_))
     ));
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn successor_context_requires_the_durable_cryptographic_parent() {
@@ -411,7 +388,6 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
     let mut successor = parent_context.clone();
     successor.height = 2;
     successor.parent_commit_qc = Some(parent_qc.clone());
-
     let verified_successor = VerifiedHeightContext::successor(
         successor.clone(),
         proofs.clone(),
@@ -424,7 +400,6 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         verified_successor.verified_predecessor_context(),
         Some(&parent_context)
     );
-
     let mut substituted_execution_policy = successor.clone();
     substituted_execution_policy.execution_policy_hash =
         Hash::new(b"substituted successor execution policy");
@@ -438,7 +413,6 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         ),
         Err(AdapterError::ParentContextMismatch)
     ));
-
     let mut substituted_successor_pops = proofs.clone();
     substituted_successor_pops.swap(0, 1);
     assert!(matches!(
@@ -451,7 +425,6 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         ),
         Err(AdapterError::EpochTransitionMismatch)
     ));
-
     let mut substituted_parent_artifact = artifact.clone();
     substituted_parent_artifact.validator_set_pops.swap(0, 1);
     let substituted_receipt = KuraV2CommitReceipt::for_test(&substituted_parent_artifact);
@@ -465,7 +438,6 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         ),
         Err(AdapterError::ParentContextMismatch)
     ));
-
     // The same parent decision can acquire a valid CommitQC in another
     // view. Semantic proposal admission accepts it, but the authentication
     // boundary must still verify that alternate certificate under the
@@ -553,12 +525,10 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
             wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
         ))
         .expect("alternate-view parent CommitQC is cryptographically verified");
-
     let mut alternate_registry = adapter.registry.clone();
     alternate_registry
         .proposal_to_core(&proposal, &successor)
         .expect("alternate-view parent CommitQC retains the durable parent decision");
-
     let foreign_parent_subject = subject(0x73);
     let foreign_parent_commitment = execution_commitment(0x73);
     let foreign_preimage = wire::Vote {
@@ -623,7 +593,6 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
     assert_registry_eq(&adapter.registry, &registry_before_retargeting);
     assert!(adapter.ingress_equivocations.is_empty());
     assert!(adapter.ingress_deliveries.is_empty());
-
     let admitted = adapter
         .receive_authenticated(authenticated)
         .expect("parent CommitQC remains bound to the predecessor during conversion");
@@ -643,7 +612,6 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         ),
         Err(AdapterError::ParentContextMismatch)
     ));
-
     if let wire::ProposalJustification::ParentCommit(parent) = &mut proposal.justification {
         parent
             .certificate
@@ -665,7 +633,6 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         )),
         Err(AdapterError::Cryptography(_))
     ));
-
     successor
         .parent_commit_qc
         .as_mut()
@@ -675,7 +642,6 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         VerifiedHeightContext::successor(successor, proofs.clone(), &artifact, &receipt, &proofs,),
         Err(AdapterError::Cryptography(_))
     ));
-
     let mut different_artifact = artifact.clone();
     different_artifact.commit_qc.aggregate_signature[0] ^= 0x40;
     let wrong_receipt = KuraV2CommitReceipt::for_test(&different_artifact);
@@ -693,7 +659,6 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         Err(AdapterError::ParentContextMismatch)
     ));
 }
-
 fn fingerprints() -> AdapterFingerprints {
     AdapterFingerprints {
         node: Hash::new(b"node"),
@@ -701,7 +666,6 @@ fn fingerprints() -> AdapterFingerprints {
         config: Hash::new(b"config"),
     }
 }
-
 fn subject(byte: u8) -> wire::BlockSubject {
     wire::BlockSubject {
         parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new([byte, 0]))),
@@ -709,7 +673,6 @@ fn subject(byte: u8) -> wire::BlockSubject {
         payload_hash: Hash::new([byte, 2]),
     }
 }
-
 fn execution_commitment(byte: u8) -> wire::ExecutionCommitment {
     wire::ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new([byte, 3]),
@@ -719,7 +682,6 @@ fn execution_commitment(byte: u8) -> wire::ExecutionCommitment {
         Hash::new([byte, 6]),
     )
 }
-
 #[test]
 fn commit_qc_status_reports_equal_vote_projection_in_npos_mode() {
     let mut context = context();
@@ -741,9 +703,7 @@ fn commit_qc_status_reports_equal_vote_projection_in_npos_mode() {
         signers: vec![0, 2, 3],
         aggregate_signature: vec![0xA5; 48],
     };
-
     let summary = commit_qc_status(&certificate, &context).expect("valid CommitQC summary");
-
     assert_eq!(summary.certificate, certificate.as_ref());
     assert_eq!(summary.validator_count, 4);
     assert_eq!(summary.signer_count, 3);
@@ -751,7 +711,6 @@ fn commit_qc_status_reports_equal_vote_projection_in_npos_mode() {
     assert_eq!(summary.signed_power, 3);
     assert_eq!(summary.total_power, 4);
 }
-
 #[test]
 fn vote_body_ownership_uses_the_authenticated_proposal_origin() {
     let context = context();
@@ -773,10 +732,8 @@ fn vote_body_ownership_uses_the_authenticated_proposal_origin() {
         signer: 0,
         signature: Vec::new(),
     });
-
     assert_eq!(request.body_round(), Some(proposal_round));
 }
-
 #[test]
 fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
     let context = context();
@@ -806,7 +763,6 @@ fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
         locked_round,
         locked_subject
     ));
-
     let later_round = wire::ConsensusRound {
         view: locked_round.view + 1,
         ..locked_round
@@ -825,7 +781,6 @@ fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
         locked_round,
         locked_subject
     ));
-
     let prepared_subject = subject(0x33);
     let prepared_round = wire::ConsensusRound {
         view: locked_round.view + 1,
@@ -880,7 +835,6 @@ fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
     registry
         .justification_to_core(&prepared_proposal.justification, &context)
         .expect("matching strict-higher PrepareQC authorizes the proposal subject");
-
     let mut missing_repeated_high = prepared_proposal.clone();
     let wire::ProposalJustification::Timeout(timeout) = &mut missing_repeated_high.justification
     else {
@@ -902,7 +856,6 @@ fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
             && missing_registry.certificates.is_empty(),
         "the omitted repeated-QC gate must reject before registry mutation"
     );
-
     let mut invented_repeated_high = prepared_proposal.clone();
     let wire::ProposalJustification::Timeout(timeout) = &mut invented_repeated_high.justification
     else {
@@ -924,7 +877,6 @@ fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
             && invented_registry.certificates.is_empty(),
         "the invented repeated-QC gate must reject before registry mutation"
     );
-
     let mut alternate_evidence = prepared_proposal.clone();
     let wire::ProposalJustification::Timeout(timeout) = &mut alternate_evidence.justification
     else {
@@ -958,7 +910,6 @@ fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
             && alternate_registry.certificates.is_empty(),
         "the exact repeated-QC gate must reject before registry mutation"
     );
-
     let mut equal_rank = prepared_proposal.clone();
     let wire::ProposalJustification::Timeout(timeout) = &mut equal_rank.justification else {
         unreachable!("prepared fixture carries a timeout")
@@ -975,7 +926,6 @@ fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
         "an equal-rank PrepareQC cannot release a different lock subject"
     );
 }
-
 fn proposal(
     context: &wire::HeightContext,
     proposer: wire::ValidatorIndex,
@@ -1008,7 +958,6 @@ fn proposal(
         signature: vec![0x91],
     }))
 }
-
 #[test]
 fn adapter_equivocation_evidence_derives_authority_from_all_three_signed_pairs() {
     let context = context();
@@ -1028,7 +977,6 @@ fn adapter_equivocation_evidence_derives_authority_from_all_three_signed_pairs()
     else {
         unreachable!("proposal helper returns a proposal")
     };
-
     let first_vote = wire::Vote {
         round,
         proposal_round: round,
@@ -1044,7 +992,6 @@ fn adapter_equivocation_evidence_derives_authority_from_all_three_signed_pairs()
         signature: vec![0xE4],
         ..first_vote.clone()
     };
-
     let high_prepare = wire::QuorumCertificate {
         round,
         proposal_round: round,
@@ -1066,7 +1013,6 @@ fn adapter_equivocation_evidence_derives_authority_from_all_three_signed_pairs()
         signature: vec![0xE7],
         ..first_timeout.clone()
     };
-
     let cases = [
         (
             AdapterEquivocationEvidence::proposal(first_proposal, second_proposal),
@@ -1101,7 +1047,6 @@ fn adapter_equivocation_evidence_derives_authority_from_all_three_signed_pairs()
         );
     }
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn forged_conflict_cannot_mint_adapter_equivocation_evidence() {
@@ -1120,7 +1065,6 @@ fn forged_conflict_cannot_mint_adapter_equivocation_evidence() {
     )
     .expect("open observing adapter");
     assert!(startup.is_empty());
-
     let proposer = context.leader(0);
     let proposer_index = usize::try_from(proposer).expect("small proposer index");
     let mut first = proposal(&context, proposer, subject(0xE8));
@@ -1140,7 +1084,6 @@ fn forged_conflict_cannot_mint_adapter_equivocation_evidence() {
     adapter
         .receive_authenticated(authenticated_first)
         .expect("admit the first proposal");
-
     let mut conflicting = proposal(&context, proposer, subject(0xE9));
     let wrong_index = (proposer_index + 1) % keys.len();
     let wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal) = &mut conflicting.payload
@@ -1169,7 +1112,6 @@ fn forged_conflict_cannot_mint_adapter_equivocation_evidence() {
             .equivocation_reported,
         "a forged conflicting signature cannot consume the one evidence report"
     );
-
     let wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal) = &mut conflicting.payload
     else {
         unreachable!("proposal helper returns a proposal")
@@ -1196,7 +1138,6 @@ fn forged_conflict_cannot_mint_adapter_equivocation_evidence() {
     assert_eq!(retained_first, &expected_first);
     assert_eq!(retained_second, &expected_second);
 }
-
 fn synthetic_ingress_proposal(
     context: &wire::HeightContext,
     round: wire::ConsensusRound,
@@ -1215,11 +1156,9 @@ fn synthetic_ingress_proposal(
     proposal.signature = vec![salt];
     IngressEquivocationArtifact::Proposal(Arc::new(proposal))
 }
-
 fn authenticated_wire_identity(payload: wire::ConsensusMessageV2Payload) -> Arc<[u8]> {
     Arc::from(wire::ConsensusMessageV2::new(payload).encode())
 }
-
 fn durable_body_receipt(
     adapter: &SumeragiV2Adapter,
     round: wire::ConsensusRound,
@@ -1238,7 +1177,6 @@ fn durable_body_receipt(
         HashOf::new(manifest),
     )
 }
-
 fn only_pending_persist(outcome: reducer::StepOutcome) -> reducer::Effect {
     let mut effects = outcome.into_effects();
     assert_eq!(effects.len(), 1, "fixture must stage one exact Persist");
@@ -1246,7 +1184,6 @@ fn only_pending_persist(outcome: reducer::StepOutcome) -> reducer::Effect {
     assert!(matches!(&effect, reducer::Effect::Persist { .. }));
     effect
 }
-
 fn preview_live_wal_owned_effect(
     adapter: &SumeragiV2Adapter,
     persist: &reducer::Effect,
@@ -1329,7 +1266,6 @@ fn preview_live_wal_owned_effect(
     }
     owned.expect("Persisted continuation has one WAL-owned effect")
 }
-
 fn drive_live_wal_fixture(
     adapter: &mut SumeragiV2Adapter,
     persist: reducer::Effect,
@@ -1369,7 +1305,6 @@ fn drive_live_wal_fixture(
     );
     assert!(!adapter.fail_closed);
 }
-
 fn validated_receipts_for_manifest(
     context: &wire::HeightContext,
     manifest: &wire::PayloadManifest,
@@ -1383,18 +1318,15 @@ fn validated_receipts_for_manifest(
     let validated = ValidatedBodyReceipt::for_test(durable.clone());
     (durable, validated)
 }
-
 fn deferred_admission_ordinals() -> DeferredAdmissionOrdinalSource {
     DeferredAdmissionOrdinalSource::new(1)
 }
-
 struct ProcessOnlyProducerReplacement {
     address: ProducerContinuationAddress,
     incumbent: ProducerContinuationRecord,
     candidate: (ServicedCandidateKey, wire::View, ServicedCandidatePolicy),
     reservation: ProducerReservationToken,
 }
-
 fn reserve_process_only_producer_replacement(
     adapter: &mut SumeragiV2Adapter,
     marker: u8,
@@ -1431,7 +1363,6 @@ fn reserve_process_only_producer_replacement(
             .contains_key(&address),
         "volatile predecessor must not have restart-stable state"
     );
-
     let replacement_key = ServicedCandidateKey::new(
         adapter.wire_context.id(),
         adapter.wire_context.height,
@@ -1466,7 +1397,6 @@ fn reserve_process_only_producer_replacement(
         durable_previous.is_none(),
         "replacement must retain the absence of durable predecessor state"
     );
-
     ProcessOnlyProducerReplacement {
         address,
         incumbent,
@@ -1474,7 +1404,6 @@ fn reserve_process_only_producer_replacement(
         reservation,
     }
 }
-
 fn assert_process_only_predecessor_absent_after_restart(directory: &TempDir) {
     let (restarted, startup) = open_test(directory).expect("restart adapter");
     assert!(startup.is_empty());
@@ -1485,7 +1414,6 @@ fn assert_process_only_predecessor_absent_after_restart(directory: &TempDir) {
         "a process-only predecessor must not be synthesized during restart"
     );
 }
-
 fn open_test(directory: &TempDir) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), AdapterError> {
     SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
@@ -1498,7 +1426,6 @@ fn open_test(directory: &TempDir) -> Result<(SumeragiV2Adapter, Vec<AdapterEffec
         deferred_admission_ordinals(),
     )
 }
-
 #[test]
 fn production_leader_wire_launch_authority_requires_exact_wal_and_opens_gate() {
     let directory = TempDir::new().expect("temporary leader-wire launch directory");
@@ -1507,7 +1434,6 @@ fn production_leader_wire_launch_authority_requires_exact_wal_and_opens_gate() {
     assert!(effects.is_empty());
     let context = adapter.wire_context.clone();
     let mut startup = ProductionLifecycleAdapterStartupV1::recovered(adapter, effects);
-
     assert!(
         startup
             .prepare_leader_wire_launch(&directory.path().join("foreign.wal"))
@@ -1536,13 +1462,11 @@ fn production_leader_wire_launch_authority_requires_exact_wal_and_opens_gate() {
     assert_eq!(restore.scheduler_ordinal_high_watermark(), 0);
     assert!(gate.restore().is_ok());
 }
-
 fn open_recovered_startup_test(
     directory: &TempDir,
 ) -> Result<RecoveredAdapterStartup, AdapterError> {
     open_recovered_startup_at_test_path(directory.path().join("safety.wal"))
 }
-
 fn open_recovered_startup_at_test_path(
     wal_path: impl Into<PathBuf>,
 ) -> Result<RecoveredAdapterStartup, AdapterError> {
@@ -1557,7 +1481,6 @@ fn open_recovered_startup_at_test_path(
         deferred_admission_ordinals(),
     )
 }
-
 fn open_recovered_leader_startup_test(
     directory: &TempDir,
 ) -> Result<RecoveredAdapterStartup, AdapterError> {

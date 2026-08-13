@@ -4,17 +4,14 @@
 //! syscall implementation. It contains no scalar-register arithmetic and no
 //! host-width fallback, so folding cannot disagree with runtime execution at a
 //! width, sign, scale, normalization, or exact-division boundary.
-
 use iroha_primitives::{
     bigint::{BigInt, BigIntError},
     numeric::{MAX_MANTISSA_BYTES, Numeric, NumericOperationError, Quantity},
 };
-
 use crate::{
     ast::{BinaryOp, UnaryOp},
     semantic::{ExprKind, Type, TypedExpr},
 };
-
 /// One fully evaluated source numeric value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ConstantNumeric {
@@ -25,7 +22,6 @@ pub(crate) enum ConstantNumeric {
     /// Canonical non-negative quantity.
     Quantity(Quantity),
 }
-
 /// Stable compile-time failure from the shared exact numeric implementation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConstantNumericError {
@@ -36,7 +32,6 @@ pub(crate) enum ConstantNumericError {
     /// Typed HIR violated the normative operator matrix.
     InvalidTypedOperation,
 }
-
 impl ConstantNumericError {
     /// Consensus-visible diagnostic class corresponding to the runtime fault.
     pub(crate) const fn code(self) -> &'static str {
@@ -60,7 +55,6 @@ impl ConstantNumericError {
         }
     }
 }
-
 impl core::fmt::Display for ConstantNumericError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -72,19 +66,16 @@ impl core::fmt::Display for ConstantNumericError {
         }
     }
 }
-
 impl From<BigIntError> for ConstantNumericError {
     fn from(error: BigIntError) -> Self {
         Self::Int(error)
     }
 }
-
 impl From<NumericOperationError> for ConstantNumericError {
     fn from(error: NumericOperationError) -> Self {
         Self::Numeric(error)
     }
 }
-
 impl ConstantNumeric {
     /// Materialize a canonical literal typed expression.
     pub(crate) fn into_typed_expr(self) -> TypedExpr {
@@ -113,7 +104,6 @@ impl ConstantNumeric {
         }
     }
 }
-
 /// Evaluate a numeric typed expression exactly.
 ///
 /// `Ok(None)` means that the expression depends on a runtime value.
@@ -196,7 +186,6 @@ pub(crate) fn evaluate(
         _ => Ok(None),
     }
 }
-
 fn value_type(value: &ConstantNumeric) -> Type {
     match value {
         ConstantNumeric::Int(_) => Type::Int,
@@ -204,14 +193,12 @@ fn value_type(value: &ConstantNumeric) -> Type {
         ConstantNumeric::Quantity(_) => Type::Quantity,
     }
 }
-
 fn ensure_int_v1(value: BigInt) -> Result<BigInt, ConstantNumericError> {
     if value.to_twos_bytes().len() > MAX_MANTISSA_BYTES {
         return Err(ConstantNumericError::Int(BigIntError::Overflow));
     }
     Ok(value)
 }
-
 fn evaluate_binary(
     operation: BinaryOp,
     left: ConstantNumeric,
@@ -269,15 +256,12 @@ fn evaluate_binary(
         _ => Err(ConstantNumericError::InvalidTypedOperation),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn int(value: BigInt) -> TypedExpr {
         ConstantNumeric::Int(value).into_typed_expr()
     }
-
     fn binary(operation: BinaryOp, left: TypedExpr, right: TypedExpr, ty: Type) -> TypedExpr {
         TypedExpr {
             expr: ExprKind::Binary {
@@ -288,7 +272,6 @@ mod tests {
             ty,
         }
     }
-
     #[test]
     fn integer_folding_uses_the_full_signed_domain() {
         let mut maximum_bytes = vec![0xff; MAX_MANTISSA_BYTES];
@@ -303,7 +286,6 @@ mod tests {
             )),
             Err(ConstantNumericError::Int(BigIntError::Overflow))
         ));
-
         let mut minimum_bytes = vec![0; MAX_MANTISSA_BYTES];
         minimum_bytes[MAX_MANTISSA_BYTES - 1] = 0x80;
         let minimum = BigInt::from_twos_bytes(&minimum_bytes).expect("negative endpoint");
@@ -326,7 +308,6 @@ mod tests {
             Err(ConstantNumericError::Int(BigIntError::Overflow))
         ));
     }
-
     #[test]
     fn decimal_failures_keep_runtime_classes() {
         let one = ConstantNumeric::Decimal(Numeric::one()).into_typed_expr();
@@ -342,7 +323,6 @@ mod tests {
             "E_DECIMAL_MANTISSA_OVERFLOW"
         );
     }
-
     #[test]
     fn quantity_underflow_is_not_generic_overflow() {
         let one = ConstantNumeric::Quantity(Quantity::one()).into_typed_expr();

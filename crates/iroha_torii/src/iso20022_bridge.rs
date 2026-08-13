@@ -8,7 +8,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::DashMap;
 use eyre::WrapErr as _;
@@ -50,9 +49,7 @@ use x509_parser::{
     revocation_list::CertificateRevocationList,
     time::ASN1Time,
 };
-
 use crate::routing::{self, MaybeTelemetry};
-
 #[derive(Clone)]
 struct IsoCurrencyBinding {
     asset_definition: String,
@@ -9017,7 +9014,6 @@ fn dedup_codes(codes: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use std::{io::Write as _, str::FromStr, time::SystemTime};
-
     use iroha_core::iso_bridge::reference_data::SnapshotState;
     use iroha_core::state::World;
     use iroha_crypto::{Algorithm, KeyPair};
@@ -9042,9 +9038,7 @@ mod tests {
         PKCS_ECDSA_P384_SHA384, PublicKeyData, SignatureAlgorithm, SigningKey as _, date_time_ymd,
     };
     use tempfile::{NamedTempFile, TempDir};
-
     use super::*;
-
     const LEGACY_PUBLIC_KEY_LITERAL: &str =
         "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@test";
     const XML_SIGNATURE_TEST_SIGNING_TIME: &str = "2026-06-02T12:00:00Z";
@@ -17887,7 +17881,6 @@ mod tests {
     }
     /// Cross-rail MDR/XSD and checked-in securities lifecycle fixture coverage.
     mod live_profile_fixture_tests;
-
     #[test]
     fn securities_profile_rejects_unknown_reference_crosswalk_values() {
         let (mut config, _reference_files) = sample_config_with_live_reference_data();

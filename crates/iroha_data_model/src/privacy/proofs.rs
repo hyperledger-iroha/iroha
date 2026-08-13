@@ -23,7 +23,6 @@ pub enum PrivacyActivationStatementLimitsError {
         max: u32,
     },
 }
-
 /// Validated raw proof payload for a protocol-specific proof variant.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -35,20 +34,17 @@ pub struct PrivacyProofBytesV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub bytes: Vec<u8>,
 }
-
 impl PrivacyProofBytesV1 {
     /// Construct a proof payload for subsequent validation.
     #[must_use]
     pub fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
-
     /// Borrow the exact native proof bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
-
     /// Validate proof presence, non-degeneracy, and the configured byte bound.
     ///
     /// # Errors
@@ -79,7 +75,6 @@ impl PrivacyProofBytesV1 {
         Ok(())
     }
 }
-
 /// Action-typed native ZK-AMS proof.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -96,7 +91,6 @@ pub enum IrohaZkAmsProofV1 {
     /// Canonical one-layer MLSAGS/LSAG Ristretto255 provisioning signature.
     Ristretto255LsagProvisionAccount(PrivacyProofBytesV1),
 }
-
 impl IrohaZkAmsProofV1 {
     /// Borrow the exact native proof or signature bytes.
     #[must_use]
@@ -106,7 +100,6 @@ impl IrohaZkAmsProofV1 {
             | Self::Ristretto255LsagProvisionAccount(bytes) => bytes,
         }
     }
-
     /// Mutably borrow the exact native proof or signature bytes.
     #[must_use]
     pub const fn bytes_mut(&mut self) -> &mut PrivacyProofBytesV1 {
@@ -115,7 +108,6 @@ impl IrohaZkAmsProofV1 {
             | Self::Ristretto255LsagProvisionAccount(bytes) => bytes,
         }
     }
-
     /// Return whether this proof variant matches a typed public action.
     #[must_use]
     pub const fn matches_action(&self, action: &PrivacyZkAmsActionV1) -> bool {
@@ -131,7 +123,6 @@ impl IrohaZkAmsProofV1 {
         )
     }
 }
-
 /// Protocol-typed native proof payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.proof.v1")]
@@ -169,7 +160,6 @@ pub enum PrivacyProofV1 {
     /// Post-quantum MASP STARK proof.
     PqMaspStarkV0(PrivacyProofBytesV1),
 }
-
 impl PrivacyProofV1 {
     /// Exact protocol carried by this proof variant.
     #[must_use]
@@ -193,7 +183,6 @@ impl PrivacyProofV1 {
             Self::PqMaspStarkV0(_) => PrivacyProtocolIdV1::PqMaspStarkV0,
         }
     }
-
     /// Borrow the protocol-specific native proof payload.
     #[must_use]
     pub const fn bytes(&self) -> &PrivacyProofBytesV1 {
@@ -212,7 +201,6 @@ impl PrivacyProofV1 {
             Self::IrohaZkAmsV1(proof) => proof.bytes(),
         }
     }
-
     /// Mutably borrow the protocol-specific native proof payload.
     ///
     /// Transaction-intent normalization uses this exhaustive accessor to
@@ -235,7 +223,6 @@ impl PrivacyProofV1 {
         }
     }
 }
-
 /// Fixed typed field used by statement validation diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyTypedFieldV1 {
@@ -288,7 +275,6 @@ pub enum PrivacyTypedFieldV1 {
     /// Digest of the authoritative ZK-AMS registry record.
     ZkAmsRegistryRecordDigest,
 }
-
 /// Epoch or height field used by statement validation diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyEpochFieldV1 {
@@ -321,7 +307,6 @@ pub enum PrivacyEpochFieldV1 {
     /// Transaction expiry block height.
     ExpiryHeight,
 }
-
 /// Proof-managed root transition selected by validation diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyRootTransitionFieldV1 {
@@ -332,7 +317,6 @@ pub enum PrivacyRootTransitionFieldV1 {
     /// FCMP++ complete output set.
     OutputSet,
 }
-
 /// Twisted-ElGamal ciphertext component selected by validation diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyP256CiphertextComponentV1 {
@@ -341,7 +325,6 @@ pub enum PrivacyP256CiphertextComponentV1 {
     /// Right ciphertext point `C_R`.
     Right,
 }
-
 /// Declared protocol count field used by validation diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyCountFieldV1 {
@@ -350,7 +333,6 @@ pub enum PrivacyCountFieldV1 {
     /// Jindo claimed evaluations in polynomial-commitment order.
     JindoClaimedEvaluations,
 }
-
 /// Validation failure for a protocol-specific [`PrivacyStatementV1`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyStatementValidationError {
@@ -954,7 +936,6 @@ pub enum PrivacyStatementValidationError {
     #[error("privacy statement payload length overflow")]
     PayloadLengthOverflow,
 }
-
 /// Validation failure for [`PrivacyProofBytesV1`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyProofValidationError {
@@ -979,7 +960,6 @@ pub enum PrivacyProofValidationError {
     #[error("privacy proof length overflow")]
     LengthOverflow,
 }
-
 /// Complete protocol-bound privacy proof admission envelope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.proof-envelope.v1")]
@@ -1012,7 +992,6 @@ pub struct PrivacyProofEnvelopeV1 {
     /// Protocol-typed proof bytes.
     pub proof: PrivacyProofV1,
 }
-
 impl PrivacyProofEnvelopeV1 {
     /// Validate internal protocol bindings and resource limits.
     ///
@@ -1038,7 +1017,6 @@ impl PrivacyProofEnvelopeV1 {
         self.validate_statement_digest()?;
         self.validate_encoded_size(limits)
     }
-
     fn validate_protocol_bindings(&self) -> Result<(), PrivacyProofEnvelopeValidationError> {
         let expected_proof_system = self.protocol_id.expected_proof_system();
         if self.proof_system_id != expected_proof_system {
@@ -1078,7 +1056,6 @@ impl PrivacyProofEnvelopeV1 {
         }
         Ok(())
     }
-
     fn validate_artifact_bindings(&self) -> Result<(), PrivacyProofEnvelopeValidationError> {
         if self.parameter_id.is_zero() {
             return Err(PrivacyProofEnvelopeValidationError::ZeroParameterId);
@@ -1116,7 +1093,6 @@ impl PrivacyProofEnvelopeV1 {
         }
         Ok(())
     }
-
     fn validate_statement_and_proof(
         &self,
         limits: &PrivacyConsensusLimitsV1,
@@ -1129,7 +1105,6 @@ impl PrivacyProofEnvelopeV1 {
             .validate(limits)
             .map_err(PrivacyProofEnvelopeValidationError::Proof)
     }
-
     fn validate_statement_digest(&self) -> Result<(), PrivacyProofEnvelopeValidationError> {
         let computed_statement_digest = self
             .statement
@@ -1145,7 +1120,6 @@ impl PrivacyProofEnvelopeV1 {
         }
         Ok(())
     }
-
     fn validate_encoded_size(
         &self,
         limits: &PrivacyConsensusLimitsV1,
@@ -1170,7 +1144,6 @@ impl PrivacyProofEnvelopeV1 {
         }
         Ok(())
     }
-
     /// Validate this envelope against an active governed protocol record.
     ///
     /// # Errors
@@ -1248,7 +1221,6 @@ impl PrivacyProofEnvelopeV1 {
         self.validate_with_limits(consensus_limits)
     }
 }
-
 /// Validation failure for [`PrivacyProofEnvelopeV1`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyProofEnvelopeValidationError {
@@ -1422,7 +1394,6 @@ pub enum PrivacyProofEnvelopeValidationError {
     #[error("privacy statement violates active protocol limits: {0}")]
     ActivationStatementLimits(PrivacyActivationStatementLimitsError),
 }
-
 #[cfg(any(test, feature = "privacy-exact12-conformance"))]
 mod exact12_fixture {
     use std::{
@@ -1430,10 +1401,8 @@ mod exact12_fixture {
         num::{NonZeroU32, NonZeroU64},
         str::FromStr as _,
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_version::codec::EncodeVersioned as _;
-
     use super::*;
     use crate::{
         NetworkId,
@@ -1447,7 +1416,6 @@ mod exact12_fixture {
             TransactionPayload, signed::PrivacyTransactionIntentErrorV1,
         },
     };
-
     const _: [(); 12] = [(); PrivacyProtocolIdV1::COUNT];
     const EXACT12_CANONICAL_HEADER_V1: [&str; 4] = [
         "# Iroha first-release privacy parity matrix v1.",
@@ -1455,11 +1423,9 @@ mod exact12_fixture {
         "# registry-sha256 hashes the concatenation of every protocol label plus LF in index order.",
         "# typed-envelope hashes bind the canonical sample statement digest and complete Norito envelope.",
     ];
-
     pub(super) fn raw(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
-
     #[cfg(test)]
     pub(super) fn assert_fixed_width_norito<T, const N: usize>(value: &T, raw: &[u8; N])
     where
@@ -1480,19 +1446,16 @@ mod exact12_fixture {
             Some(u8::try_from(N).expect("test fixed width fits one compact-length byte"))
         );
         assert_eq!(&encoded[1..], raw);
-
         let (decoded, used) = norito::core::decode_field_canonical::<T>(&encoded)
             .expect("decode exact fixed-width value");
         assert_eq!(&decoded, value);
         assert_eq!(used, encoded.len());
-
         let mut truncated = encoded.clone();
         truncated.truncate(encoded.len() - 1);
         assert!(
             norito::core::decode_field_canonical::<T>(&truncated).is_err(),
             "truncated fixed-width value must fail closed"
         );
-
         let mut tailed = encoded;
         tailed.push(0);
         assert!(
@@ -1500,33 +1463,28 @@ mod exact12_fixture {
             "trailing fixed-width bytes must fail closed"
         );
     }
-
     pub(super) fn p256_point(seed: u8) -> PrivacyP256PointV1 {
         let mut bytes = [seed; 33];
         bytes[0] = 0x02;
         PrivacyP256PointV1::new(bytes)
     }
-
     pub(super) fn p256_ciphertext(seed: u8) -> PrivacyP256CiphertextV1 {
         PrivacyP256CiphertextV1 {
             left: p256_point(seed),
             right: p256_point(seed.wrapping_add(64)),
         }
     }
-
     pub(super) fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     pub(super) fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("asset").expect("asset name"),
         )
     }
-
     pub(super) fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
             network_id: network_id(200),
@@ -1539,24 +1497,20 @@ mod exact12_fixture {
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(5)),
         }
     }
-
     pub(super) fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
     }
-
     pub(super) fn commitment(seed: u8) -> PrivacyCommitmentV1 {
         PrivacyCommitmentV1::new(raw(seed))
     }
-
     #[cfg(test)]
     pub(super) fn zk_ace_allowlist() -> Vec<AccountId> {
         let mut allowlist = vec![account(13), account(14), account(15)];
         allowlist.sort_unstable();
         allowlist
     }
-
     #[cfg(test)]
     pub(super) fn zk_ace_policy(
         epoch: u64,
@@ -1574,7 +1528,6 @@ mod exact12_fixture {
         )
         .expect("canonical ZK-ACE policy fixture")
     }
-
     #[cfg(test)]
     pub(super) fn redigest_zk_ace_policy(record: &mut PrivacyZkAcePolicyRecordV1) {
         record.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0; 32]);
@@ -1582,7 +1535,6 @@ mod exact12_fixture {
             .compute_record_digest()
             .expect("canonical ZK-ACE policy digest material");
     }
-
     #[cfg(test)]
     pub(super) fn zk_x509_trust_anchor(
         epoch: u64,
@@ -1605,7 +1557,6 @@ mod exact12_fixture {
         )
         .expect("canonical X.509 trust-anchor fixture")
     }
-
     #[cfg(test)]
     pub(super) fn zk_x509_certificate_policy(
         epoch: u64,
@@ -1635,7 +1586,6 @@ mod exact12_fixture {
         )
         .expect("canonical X.509 certificate-policy fixture")
     }
-
     #[cfg(test)]
     pub(super) fn zk_x509_crl(
         epoch: u64,
@@ -1658,22 +1608,18 @@ mod exact12_fixture {
         )
         .expect("canonical X.509 signed-CRL fixture")
     }
-
     pub(super) fn nullifier(seed: u8) -> PrivacyNullifierV1 {
         PrivacyNullifierV1::new(raw(seed))
     }
-
     pub(super) fn zk_ams_seed_key(seed: u8) -> PrivacyZkAmsSeedPublicKeyV1 {
         PrivacyZkAmsSeedPublicKeyV1::new(raw(seed))
     }
-
     pub(super) fn zk_ams_anchor(seed: u8) -> PrivacyZkAmsAdmissionAnchorV1 {
         PrivacyZkAmsAdmissionAnchorV1 {
             phc_hash: PrivacyZkAmsPhcHashV1::new(raw(seed)),
             seed_public_key: zk_ams_seed_key(seed.wrapping_add(32)),
         }
     }
-
     #[cfg(test)]
     pub(super) fn zk_ams_provision_statement(ring_size: u8) -> PrivacyStatementV1 {
         PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
@@ -1694,19 +1640,16 @@ mod exact12_fixture {
             }),
         })
     }
-
     pub(super) fn jindo_field(seed: u8) -> PrivacyJindoFieldElementV1 {
         let mut encoding = [0; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1];
         encoding[0] = seed;
         PrivacyJindoFieldElementV1::new(encoding)
     }
-
     pub(super) fn jindo_commitment(seed: u8) -> PrivacyJindoLatticeCommitmentV1 {
         let mut encoding = vec![0; IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1];
         encoding[..4].copy_from_slice(&i32::from(seed).to_le_bytes());
         PrivacyJindoLatticeCommitmentV1::new(encoding)
     }
-
     pub(super) fn encrypted_output(
         commitment_seed: u8,
         recipient_seed: u8,
@@ -1721,7 +1664,6 @@ mod exact12_fixture {
             ciphertext,
         }
     }
-
     pub(super) fn fcmp_output(seed: u8) -> PrivacyFcmpOutputTupleV1 {
         PrivacyFcmpOutputTupleV1 {
             output_key: raw(seed),
@@ -1729,14 +1671,12 @@ mod exact12_fixture {
             amount_commitment: raw(seed.wrapping_add(2)),
         }
     }
-
     #[cfg(test)]
     pub(super) fn sorted_fcmp_outputs(seeds: &[u8]) -> Vec<PrivacyFcmpOutputTupleV1> {
         let mut outputs = seeds.iter().copied().map(fcmp_output).collect::<Vec<_>>();
         outputs.sort_unstable_by_key(|output| output.output_id());
         outputs
     }
-
     pub(super) fn fcmp_input(seed: u8) -> PrivacyFcmpInputPublicV1 {
         PrivacyFcmpInputPublicV1 {
             output_key_tilde: raw(seed),
@@ -1746,7 +1686,6 @@ mod exact12_fixture {
             key_image: PrivacyFcmpKeyImageV1::new(raw(seed.wrapping_add(4))),
         }
     }
-
     pub(super) fn fcmp_encrypted_output(
         output: PrivacyFcmpOutputTupleV1,
         recipient_seed: u8,
@@ -1761,7 +1700,6 @@ mod exact12_fixture {
             ciphertext,
         }
     }
-
     pub(super) fn orchard_action(seed: u8) -> PrivacyOrchardActionV1 {
         PrivacyOrchardActionV1 {
             nullifier: raw(seed),
@@ -1773,7 +1711,6 @@ mod exact12_fixture {
             value_commitment: raw(seed.wrapping_add(6)),
         }
     }
-
     #[cfg(test)]
     pub(super) fn bootle_lantern_policy() -> BootleLanternIssuerPolicyV1 {
         let first_column = core::array::from_fn(|block| BootleLanternPolynomialV1 {
@@ -1814,7 +1751,6 @@ mod exact12_fixture {
         redigest_bootle_lantern_policy(&mut record);
         record
     }
-
     #[cfg(test)]
     pub(super) fn redigest_bootle_lantern_policy(record: &mut BootleLanternIssuerPolicyV1) {
         record.issuer_parameter_digest = record
@@ -1825,7 +1761,6 @@ mod exact12_fixture {
             .computed_record_digest()
             .expect("test issuer-policy digest");
     }
-
     fn sample_authorization_statements(asset: &AssetDefinitionId) -> [PrivacyStatementV1; 5] {
         [
             PrivacyStatementV1::ZkAcePqAuthorizationV0(ZkAcePqAuthorizationStatementV1 {
@@ -1901,7 +1836,6 @@ mod exact12_fixture {
             }),
         ]
     }
-
     fn sample_identity_statements() -> [PrivacyStatementV1; 3] {
         [
             PrivacyStatementV1::IrohaZkX509StarkP256V0(IrohaZkX509StarkP256StatementV1 {
@@ -1978,7 +1912,6 @@ mod exact12_fixture {
             ),
         ]
     }
-
     fn sample_pool_statements(asset: &AssetDefinitionId) -> [PrivacyStatementV1; 4] {
         [
             PrivacyStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
@@ -2047,7 +1980,6 @@ mod exact12_fixture {
             }),
         ]
     }
-
     pub(super) fn sample_statements() -> Vec<PrivacyStatementV1> {
         let asset = asset_definition_id();
         let mut statements = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
@@ -2056,7 +1988,6 @@ mod exact12_fixture {
         statements.extend(sample_pool_statements(&asset));
         statements
     }
-
     #[cfg(test)]
     pub(super) fn statement_for(protocol: PrivacyProtocolIdV1) -> PrivacyStatementV1 {
         sample_statements()
@@ -2064,7 +1995,6 @@ mod exact12_fixture {
             .find(|statement| statement.protocol_id() == protocol)
             .expect("sample statement for every protocol")
     }
-
     pub(super) fn proof_for(protocol: PrivacyProtocolIdV1) -> PrivacyProofV1 {
         let bytes = PrivacyProofBytesV1::new(vec![0xA5, 0x5A, 1]);
         match protocol {
@@ -2104,7 +2034,6 @@ mod exact12_fixture {
             PrivacyProtocolIdV1::PqMaspStarkV0 => PrivacyProofV1::PqMaspStarkV0(bytes),
         }
     }
-
     pub(super) fn statement_variant_name(statement: &PrivacyStatementV1) -> &'static str {
         match statement {
             PrivacyStatementV1::ZkAcePqAuthorizationV0(_) => "ZkAcePqAuthorizationV0",
@@ -2123,7 +2052,6 @@ mod exact12_fixture {
             PrivacyStatementV1::PqMaspStarkV0(_) => "PqMaspStarkV0",
         }
     }
-
     pub(super) fn proof_variant_name(proof: &PrivacyProofV1) -> &'static str {
         match proof {
             PrivacyProofV1::ZkAcePqAuthorizationV0(_) => "ZkAcePqAuthorizationV0",
@@ -2142,7 +2070,6 @@ mod exact12_fixture {
             PrivacyProofV1::PqMaspStarkV0(_) => "PqMaspStarkV0",
         }
     }
-
     fn try_envelope(
         statement: PrivacyStatementV1,
     ) -> Result<PrivacyProofEnvelopeV1, norito::Error> {
@@ -2174,12 +2101,10 @@ mod exact12_fixture {
             proof,
         })
     }
-
     #[cfg(test)]
     pub(super) fn envelope(statement: PrivacyStatementV1) -> PrivacyProofEnvelopeV1 {
         try_envelope(statement).expect("fixture statement has a canonical digest")
     }
-
     /// One compiled semantic row of the canonical exact-12 cross-SDK fixture.
     ///
     /// This conformance-only type is derived from actual typed statements,
@@ -2198,7 +2123,6 @@ mod exact12_fixture {
         /// SHA-256 of the actual canonical Norito proof envelope.
         pub envelope_sha256: [u8; 32],
     }
-
     /// One complete byte-level KAT row derived from the canonical typed Rust
     /// fixture.
     ///
@@ -2230,7 +2154,6 @@ mod exact12_fixture {
         /// Canonical pipeline transaction hash, which excludes authorization malleability.
         pub signed_transaction_hash: [u8; 32],
     }
-
     /// Signed byte-level KAT material for all first-release privacy protocols.
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-bundle.v1")]
@@ -2240,11 +2163,9 @@ mod exact12_fixture {
         /// Twelve rows in [`PrivacyProtocolIdV1::ALL`] order.
         pub rows: Vec<PrivacyExact12TypedFixtureRowV1>,
     }
-
     /// Maximum accepted encoded size of the complete exact-12 fixture bundle.
     pub const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
     const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_NESTING_DEPTH_V1: usize = 64;
-
     /// Stable result of validating one untrusted exact-12 fixture bundle.
     #[repr(i32)]
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2268,21 +2189,18 @@ mod exact12_fixture {
         /// The typed bundle differs from the one compiled Rust fixture.
         InvalidBundle = 8,
     }
-
     impl PrivacyExact12FixtureBundleValidationStatusV1 {
         /// Stable native ABI integer representation.
         #[must_use]
         pub const fn code(self) -> i32 {
             self as i32
         }
-
         /// Return whether the archive was accepted.
         #[must_use]
         pub const fn is_valid(self) -> bool {
             matches!(self, Self::Valid)
         }
     }
-
     /// Failure to derive the fixed exact-12 semantic fixture from current
     /// typed values and canonical Norito serialization.
     #[derive(Debug, Error)]
@@ -2303,7 +2221,6 @@ mod exact12_fixture {
         #[error("exact12 deterministic transaction fixture failed: {0}")]
         Transaction(String),
     }
-
     struct PrivacyExact12CompleteRowV1 {
         statement: PrivacyStatementV1,
         envelope: PrivacyProofEnvelopeV1,
@@ -2314,12 +2231,10 @@ mod exact12_fixture {
         signed_transaction_versioned_norito: Vec<u8>,
         signed_transaction_hash: [u8; 32],
     }
-
     fn exact12_signing_key_pair_v1() -> KeyPair {
         KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::Ed25519)
             .expect("fixed exact12 Ed25519 signing seed is valid")
     }
-
     fn replace_exact12_submission_v1(
         payload: &mut TransactionPayload,
         intent: PrivacyTransactionIntentDigestV1,
@@ -2359,7 +2274,6 @@ mod exact12_fixture {
             Executable::Instructions(vec![InstructionBox::from(submission.clone())].into());
         Ok(submission)
     }
-
     fn exact12_complete_row_v1(
         statement: PrivacyStatementV1,
         row_index: usize,
@@ -2397,7 +2311,6 @@ mod exact12_fixture {
             metadata: Metadata::default(),
             attachments: None,
         };
-
         let intent = payload.privacy_transaction_intent_digest_v1()?;
         let submission = replace_exact12_submission_v1(&mut payload, intent)?;
         let observed = payload.validate_privacy_transaction_intent_binding_v1()?;
@@ -2421,7 +2334,6 @@ mod exact12_fixture {
             .map_err(|error| PrivacyExact12FixtureErrorV1::Transaction(error.to_string()))?;
         let signed_transaction_hash = *signed.hash().as_ref();
         let signed_transaction_versioned_norito = signed.encode_versioned();
-
         Ok(PrivacyExact12CompleteRowV1 {
             statement: submission.envelope.statement.clone(),
             envelope: submission.envelope,
@@ -2433,7 +2345,6 @@ mod exact12_fixture {
             signed_transaction_hash,
         })
     }
-
     /// Recompute all 12 canonical cross-SDK semantic rows from current Rust
     /// types and canonical Norito serialization.
     ///
@@ -2471,7 +2382,6 @@ mod exact12_fixture {
                 PrivacyExact12FixtureErrorV1::RowCount { actual: rows.len() }
             })
     }
-
     /// Build the complete exact-12 byte-level KAT bundle from typed Rust
     /// values.
     ///
@@ -2511,7 +2421,6 @@ mod exact12_fixture {
         }
         Ok(PrivacyExact12FixtureBundleV1 { version: 1, rows })
     }
-
     /// Encode the complete exact-12 byte-level KAT bundle as canonical Norito.
     ///
     /// # Errors
@@ -2522,7 +2431,6 @@ mod exact12_fixture {
         let bundle = privacy_exact12_fixture_bundle_v1()?;
         Ok(norito::encode_canonical(&bundle)?)
     }
-
     /// Validate an untrusted byte-level KAT bundle against the exact bundle
     /// compiled from current typed Rust fixtures.
     ///
@@ -2536,7 +2444,6 @@ mod exact12_fixture {
         archive: &[u8],
     ) -> PrivacyExact12FixtureBundleValidationStatusV1 {
         use PrivacyExact12FixtureBundleValidationStatusV1 as Status;
-
         if archive.is_empty() {
             return Status::Empty;
         }
@@ -2579,7 +2486,6 @@ mod exact12_fixture {
         }
         Status::Valid
     }
-
     fn canonical_sha256_hex_v1(digest: &[u8; 32]) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut output = String::with_capacity(64);
@@ -2589,7 +2495,6 @@ mod exact12_fixture {
         }
         output
     }
-
     /// Generate the complete canonical exact-12 cross-SDK matrix from the
     /// current compiled protocol registry and typed Norito envelope fixtures.
     ///
@@ -2609,7 +2514,6 @@ mod exact12_fixture {
             registry_preimage.push(b'\n');
         }
         let registry_sha256: [u8; 32] = Sha256::digest(&registry_preimage).into();
-
         let mut output = String::new();
         for header in EXACT12_CANONICAL_HEADER_V1 {
             writeln!(&mut output, "{header}").expect("writing to String cannot fail");

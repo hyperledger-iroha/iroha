@@ -1,9 +1,7 @@
 use std::{fs, path::Path};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use tempfile::tempdir;
-
 #[test]
 fn bug_bounty_pack_is_emitted() {
     let temp = tempdir().expect("tempdir");
@@ -15,7 +13,6 @@ fn bug_bounty_pack_is_emitted() {
         .join("fixtures")
         .join("soranet_bug_bounty")
         .join("sample_plan.json");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     let output = cmd
         .args([
@@ -35,7 +32,6 @@ fn bug_bounty_pack_is_emitted() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
     for path in [
         out_dir.join("bug_bounty_summary.json"),
         out_dir.join("bug_bounty_overview.md"),
@@ -48,7 +44,6 @@ fn bug_bounty_pack_is_emitted() {
             path.display()
         );
     }
-
     let summary_bytes = fs::read(out_dir.join("bug_bounty_summary.json")).expect("summary exists");
     let summary: Value = json::from_slice(&summary_bytes).expect("parse summary");
     assert_eq!(

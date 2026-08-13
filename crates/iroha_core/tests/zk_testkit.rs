@@ -1,7 +1,6 @@
 #![doc = "Helpers for generating minimal Halo2 proofs for governance tests."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(dead_code, unused_imports)]
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_bundle {
     use base64::Engine as _;
@@ -25,45 +24,36 @@ mod halo2_bundle {
         zk::{BackendTag, OpenVerifyEnvelope},
     };
     use rand_core_06::OsRng;
-
     mod zk1 {
         use halo2_proofs::{
             SerdeFormat,
             halo2curves::pasta::{EqAffine as Curve, Fp},
             plonk::VerifyingKey,
         };
-
         const MAGIC: &[u8; 4] = b"ZK1\0";
-
         fn write_tlv(buf: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
             buf.extend_from_slice(&tag);
             let len = u32::try_from(payload.len()).expect("ZK1 TLV payload length should fit u32");
             buf.extend_from_slice(&len.to_le_bytes());
             buf.extend_from_slice(payload);
         }
-
         pub fn wrap_start() -> Vec<u8> {
             MAGIC.to_vec()
         }
-
         pub fn wrap_append_proof(buf: &mut Vec<u8>, transcript_bytes: &[u8]) {
             write_tlv(buf, *b"PROF", transcript_bytes);
         }
-
         pub fn wrap_append_ipa_k(buf: &mut Vec<u8>, k: u32) {
             let mut payload = Vec::with_capacity(4);
             payload.extend_from_slice(&k.to_le_bytes());
             write_tlv(buf, *b"IPAK", &payload);
         }
-
         pub fn wrap_append_vk_pasta(buf: &mut Vec<u8>, vk: &VerifyingKey<Curve>) {
             let bytes = vk.to_bytes(SerdeFormat::Processed);
             write_tlv(buf, *b"H2VK", &bytes);
         }
-
         pub fn wrap_append_instances_pasta_fp_cols(columns: &[&[Fp]], buf: &mut Vec<u8>) {
             use halo2_proofs::halo2curves::ff::PrimeField as _;
-
             if columns.is_empty() {
                 return;
             }
@@ -88,7 +78,6 @@ mod halo2_bundle {
             write_tlv(buf, *b"I10P", &payload);
         }
     }
-
     /// Deterministic Halo2/IPA vote tally circuit (depth 8) exercising the production backend.
     pub struct VoteTallyProofBundle {
         /// Backend identifier for the proof attachment (`halo2/ipa`).
@@ -108,32 +97,26 @@ mod halo2_bundle {
         /// Deterministic Merkle root witness used when generating the proof.
         pub root: Scalar,
     }
-
     impl VoteTallyProofBundle {
         /// Return the commitment as raw 32-byte little-endian bytes.
         pub fn commit_bytes(&self) -> [u8; 32] {
             use halo2_proofs::halo2curves::ff::PrimeField as _;
-
             let mut out = [0u8; 32];
             out.copy_from_slice(self.commit.to_repr().as_ref());
             out
         }
-
         /// Return the root as raw 32-byte little-endian bytes.
         pub fn root_bytes(&self) -> [u8; 32] {
             use halo2_proofs::halo2curves::ff::PrimeField as _;
-
             let mut out = [0u8; 32];
             out.copy_from_slice(self.root.to_repr().as_ref());
             out
         }
-
         /// Base64-encode the proof envelope bytes.
         pub fn proof_b64(&self) -> String {
             base64::engine::general_purpose::STANDARD.encode(&self.proof_bytes)
         }
     }
-
     /// Generate a Halo2/IPA proof bundle for the production vote tally circuit.
     pub fn vote_merkle8_bundle() -> VoteTallyProofBundle {
         use halo2_proofs::{
@@ -144,19 +127,16 @@ mod halo2_bundle {
             plonk::{create_proof, keygen_pk, keygen_vk},
             transcript::{Blake2bWrite, Challenge255},
         };
-
         let backend = "halo2/ipa";
         let envelope_circuit_id = "halo2/pasta/ipa/vote-bool-commit-merkle8";
         let circuit_id = "halo2/pasta/vote-bool-commit-merkle8";
         let name = "tally_current";
         let k: u32 = 6;
-
         let params: <IPACommitmentScheme<Curve> as CommitmentScheme>::ParamsProver =
             ParamsIPA::<Curve>::new(k);
         let circuit = iroha_core::zk::depth::VoteBoolCommitMerkle::<8>::default();
         let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
         let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
-
         let rc0 = Scalar::from(7u64);
         let rc1 = Scalar::from(13u64);
         let two = Scalar::from(2u64);
@@ -172,7 +152,6 @@ mod halo2_bundle {
             let b5 = b4 * b_shift;
             two * a5 + three * b5
         };
-
         let commit = compress(Scalar::one(), Scalar::from(12345u64));
         let siblings: [Scalar; 8] = core::array::from_fn(|i| Scalar::from(20u64 + i as u64));
         let mut root = commit;
@@ -181,7 +160,6 @@ mod halo2_bundle {
             let expected = compress(root, sib);
             root = expected;
         }
-
         let inst_commit = [commit];
         let inst_root = [root];
         let inst_refs = [&inst_commit[..], &inst_root[..]];
@@ -205,13 +183,10 @@ mod halo2_bundle {
         )
         .expect("create proof");
         let proof_raw = transcript.finalize();
-
         // Sanity check: the generated proof should verify before wrapping.
         {
             use std::io::Cursor;
-
             use halo2_proofs::transcript::{Blake2bRead, TranscriptReadBuffer};
-
             let cursor = Cursor::new(proof_raw.as_slice());
             let mut transcript = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(cursor);
             let strategy = halo2_proofs::poly::ipa::strategy::SingleStrategy::new(&params);
@@ -243,7 +218,6 @@ mod halo2_bundle {
             }
             assert!(res.is_ok(), "vote tally halo2 verify_proof failed: {res:?}");
         }
-
         let commit_col = [commit];
         let root_col = [root];
         let mut proof_payload = zk1::wrap_start();
@@ -252,16 +226,13 @@ mod halo2_bundle {
             &[&commit_col[..], &root_col[..]],
             &mut proof_payload,
         );
-
         let mut vk_bytes = zk1::wrap_start();
         zk1::wrap_append_ipa_k(&mut vk_bytes, k);
         zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
-
         let mut public_inputs = Vec::with_capacity(64);
         public_inputs.extend_from_slice(commit.to_repr().as_ref());
         public_inputs.extend_from_slice(root.to_repr().as_ref());
         let public_inputs_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
-
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_bytes.clone());
         let commitment = zk::hash_vk(&vk_box);
         let mut vk_record = VerifyingKeyRecord::new(
@@ -278,7 +249,6 @@ mod halo2_bundle {
         vk_record.gas_schedule_id = Some("halo2_default".into());
         vk_record.key = Some(vk_box);
         vk_record.status = ConfidentialStatus::Active;
-
         let envelope = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
             circuit_id: envelope_circuit_id.to_string(),
@@ -290,12 +260,10 @@ mod halo2_bundle {
         let proof_bytes =
             norito::to_bytes(&envelope).expect("OpenVerifyEnvelope Norito serialization must work");
         vk_record.max_proof_bytes = proof_bytes.len() as u32;
-
         let proof_box = ProofBox::new(backend.into(), proof_bytes.clone());
         let vk_box = vk_record.key.as_ref().expect("VK bytes populated").clone();
         let report = zk::verify_backend_with_timing(backend, &proof_box, Some(&vk_box));
         assert!(report.ok, "vote tally proof must verify: {report:?}");
-
         VoteTallyProofBundle {
             backend,
             circuit_id,
@@ -308,10 +276,8 @@ mod halo2_bundle {
         }
     }
 }
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub use halo2_bundle::{VoteTallyProofBundle, vote_merkle8_bundle};
-
 #[cfg(all(
     test,
     feature = "zk-tests",
@@ -324,9 +290,7 @@ mod vote_bundle_sanity {
         plonk::{Circuit, ConstraintSystem},
         poly::{commitment::ParamsProver as _, ipa::commitment::ParamsIPA},
     };
-
     use super::halo2_bundle::vote_merkle8_bundle;
-
     #[test]
     fn mock_prover_satisfies_vote_bundle() {
         let bundle = vote_merkle8_bundle();
@@ -336,7 +300,6 @@ mod vote_bundle_sanity {
         // Ensure circuit config does not panic when synthesized without witnesses.
         let mut cs = ConstraintSystem::<Scalar>::default();
         let _ = iroha_core::zk::depth::VoteBoolCommitMerkle::<8>::configure(&mut cs);
-
         let instances = vec![vec![bundle.commit], vec![bundle.root]];
         let prover = MockProver::run(k, &circuit, instances).expect("mock prover should run");
         assert!(prover.verify().is_ok());

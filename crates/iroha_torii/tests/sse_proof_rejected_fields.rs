@@ -1,16 +1,13 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Assert `ProofRejected` SSE JSON includes `proof_hash`, `call_hash`, `vk_ref`, `vk_commitment`.
 #![cfg(feature = "app_api")]
-
 #[path = "common/proof_events.rs"]
 mod proof_events;
-
 use axum::{Router, routing::get};
 use futures_util::StreamExt as _;
 // use http_body_util::BodyExt as _;
 use proof_events::ProofEventFixture;
 use tower::ServiceExt as _;
-
 #[tokio::test]
 async fn proof_rejected_fields() {
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
@@ -21,7 +18,6 @@ async fn proof_rejected_fields() {
             move |q| async move { iroha_torii::handle_v1_events_sse(events, q) }
         }),
     );
-
     // No filter
     let req = http::Request::builder()
         .method("GET")
@@ -30,13 +26,11 @@ async fn proof_rejected_fields() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
-
     let ev = ProofEventFixture::new("halo2/ipa", [0x44; 32])
         .with_vk("vk_r", [0x77; 32])
         .with_call_hash(Some([0xBB; 32]))
         .rejected();
     let _ = events.send(ev);
-
     // Consume until data line
     let mut body_stream = resp.into_body().into_data_stream();
     let mut data_json: Option<String> = None;

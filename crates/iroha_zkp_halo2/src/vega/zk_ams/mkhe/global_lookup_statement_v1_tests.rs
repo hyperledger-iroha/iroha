@@ -1,5 +1,4 @@
 use super::*;
-
 fn tiny_radix_v1(digits: &[u64], top: u64, base: u64) -> Option<u128> {
     if base < 2 || top > 1 || digits.iter().any(|digit| *digit >= base) {
         return None;
@@ -10,7 +9,6 @@ fn tiny_radix_v1(digits: &[u64], top: u64, base: u64) -> Option<u128> {
     }
     Some(value)
 }
-
 fn mod_pow_v1(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     let mut result = 1_u64;
     while exponent != 0 {
@@ -22,7 +20,6 @@ fn mod_pow_v1(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     }
     result
 }
-
 fn log_derivative_v1(
     z: u64,
     values: &[u64],
@@ -48,7 +45,6 @@ fn log_derivative_v1(
     }
     Some((left, right))
 }
-
 #[test]
 fn exact_added_role_inventory_and_boundaries_are_bijective() {
     let mut counts = [0_usize; 12];
@@ -89,7 +85,6 @@ fn exact_added_role_inventory_and_boundaries_are_bijective() {
         Err(GlobalLookupErrorV1::Shape)
     );
 }
-
 #[test]
 fn active_lookup_and_virtual_padding_enumerate_exactly() {
     let mut existing = 0;
@@ -118,7 +113,6 @@ fn active_lookup_and_virtual_padding_enumerate_exactly() {
         Err(GlobalLookupErrorV1::Shape)
     );
 }
-
 #[test]
 #[rustfmt::skip]
 fn existing_d_and_slack_ranges_are_distinct() {
@@ -126,7 +120,6 @@ fn existing_d_and_slack_ranges_are_distinct() {
         assert!(matches!(lookup_plane_coordinate_v1(slot), Ok(LookupPlaneCoordinateV1::Existing { ordinal, role: actual }) if ordinal == slot && actual == role));
     }
 }
-
 #[test]
 #[rustfmt::skip]
 fn active_role_ranges_are_contiguous_and_role_major() {
@@ -142,7 +135,6 @@ fn active_role_ranges_are_contiguous_and_role_major() {
         }
     }
 }
-
 #[test]
 #[rustfmt::skip]
 fn equations_endpoints_ipas_and_exclusive_gate_schedule_are_exact() {
@@ -222,7 +214,6 @@ fn equations_endpoints_ipas_and_exclusive_gate_schedule_are_exact() {
         Err(GlobalLookupErrorV1::Shape)
     );
 }
-
 #[test]
 #[rustfmt::skip]
 fn cubic_extension_tiny_equations_and_log_derivative_oracles_hold() {
@@ -255,7 +246,6 @@ fn cubic_extension_tiny_equations_and_log_derivative_oracles_hold() {
         None
     );
 }
-
 #[test]
 #[rustfmt::skip]
 fn centering_boundary_recurrence_has_exact_sign_and_eighteen_borrows() {
@@ -278,7 +268,6 @@ fn centering_boundary_recurrence_has_exact_sign_and_eighteen_borrows() {
     assert!(!formulas.windows(b"borrow_{h+1}".len()).any(|w| w == b"borrow_{h+1}"));
     assert!(!formulas.windows(b"b18".len()).any(|w| w == b"b18"));
 }
-
 #[test]
 #[rustfmt::skip]
 fn independent_lookup_language_and_telescoping_mask_oracle_hold() {
@@ -291,7 +280,6 @@ fn independent_lookup_language_and_telescoping_mask_oracle_hold() {
     assert_ne!(carry,0);
     for schema in [LOOKUP_INDEX_LANGUAGE_V1,LOOKUP_RELATION_LANGUAGE_V1,LOOKUP_MASK_LANGUAGE_V1,LOOKUP_ENDPOINT_LANGUAGE_V1,LOOKUP_SOUNDNESS_LANGUAGE_V1] { assert!(!schema.is_empty()); }
 }
-
 #[test]
 #[rustfmt::skip]
 fn conditional_accounting_soundness_and_fail_closed_gates_are_frozen() {
@@ -330,7 +318,6 @@ fn conditional_accounting_soundness_and_fail_closed_gates_are_frozen() {
         assert!(!gate);
     }
 }
-
 #[test]
 #[rustfmt::skip]
 fn opaque_owner_and_source_guards_are_static() {

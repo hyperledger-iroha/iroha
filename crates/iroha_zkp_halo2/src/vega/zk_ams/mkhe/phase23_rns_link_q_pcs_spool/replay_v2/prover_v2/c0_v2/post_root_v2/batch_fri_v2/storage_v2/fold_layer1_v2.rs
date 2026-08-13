@@ -1,21 +1,15 @@
 //! Purpose-bound authenticated B0 replay and B1 storage/root construction.
-
 use core::sync::atomic;
 use std::path::Path;
-
 use iroha_confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
-
 use crate::vega::sponge::Keccak256;
-
 use super::*;
-
 #[path = "fold_layer1_v2/fold_layers2_17_v2.rs"]
 mod fold_layers2_17_v2;
 pub(in super::super) use fold_layers2_17_v2::*;
-
 const FRI1_CONTEXT_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.batch-fri.layer1.context\0";
 const FRI1_LEAF_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-leaf\0";
@@ -31,7 +25,6 @@ const FRI1_LEAVES_V2: usize = 1 << 18;
 const FRI1_LEAF_BYTES_V2: usize = 380 * 16;
 const FRI1_WINDOW_BYTES_V2: usize = 1_024 * FRI1_LEAF_BYTES_V2;
 const FRI1_FRONTIER_NODES_V2: usize = 19;
-
 const _: () = {
     assert!(FRI1_SLOT_COUNT_V2 == 97_280);
     assert!(FRI1_LEAVES_V2 == 262_144);
@@ -39,7 +32,6 @@ const _: () = {
     assert!(FRI1_WINDOW_BYTES_V2 == 6_225_920);
     assert!(FRI1_FRONTIER_NODES_V2 * 32 == 608);
 };
-
 #[derive(Clone, Copy)]
 pub(in super::super) struct FriLayer1BindingV2 {
     layer0_binding: FriLayer0BindingV2,
@@ -47,7 +39,6 @@ pub(in super::super) struct FriLayer1BindingV2 {
     post_layer0_transcript: [u8; 32],
     layer0_fold_schedule_digest: [u8; 32],
 }
-
 fn same_layer0_binding_v2(left: FriLayer0BindingV2, right: FriLayer0BindingV2) -> bool {
     left.parameter_digest == right.parameter_digest
         && left.context.sealed_source_transcript_digest
@@ -58,14 +49,12 @@ fn same_layer0_binding_v2(left: FriLayer0BindingV2, right: FriLayer0BindingV2) -
         && left.pre_layer_transcript == right.pre_layer_transcript
         && left.batch_schedule_digest == right.batch_schedule_digest
 }
-
 fn same_layer1_binding_v2(left: FriLayer1BindingV2, right: FriLayer1BindingV2) -> bool {
     same_layer0_binding_v2(left.layer0_binding, right.layer0_binding)
         && left.layer0_root == right.layer0_root
         && left.post_layer0_transcript == right.post_layer0_transcript
         && left.layer0_fold_schedule_digest == right.layer0_fold_schedule_digest
 }
-
 impl FriLayer1BindingV2 {
     #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn new_v2(
@@ -94,7 +83,6 @@ impl FriLayer1BindingV2 {
         })
     }
 }
-
 pub(in super::super) fn fri1_context_digest_v2(
     descriptor: StorageLayoutDescriptorV2,
     binding: FriLayer1BindingV2,
@@ -132,23 +120,19 @@ pub(in super::super) fn fri1_context_digest_v2(
     }
     Ok(digest)
 }
-
 pub(in super::super) struct FriLayer0FoldPairV2 {
     pub(in super::super) lower: AuthenticatedReplayChunkV2,
     pub(in super::super) upper: AuthenticatedReplayChunkV2,
 }
-
 pub(in super::super) struct FriLayer0FoldReplayV2 {
     owner: Option<FriLayer0RootedV2>,
     binding: FriLayer1BindingV2,
     next_pair_block: u64,
     next_column: u16,
 }
-
 pub(in super::super) struct FriLayer0ReplayCompleteV2 {
     binding: FriLayer1BindingV2,
 }
-
 impl FriLayer0RootedV2 {
     #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn begin_layer1_fold_replay_v2(
@@ -189,7 +173,6 @@ impl FriLayer0RootedV2 {
         ))
     }
 }
-
 impl FriLayer0FoldReplayV2 {
     pub(in super::super) fn read_next_pair_v2(
         &mut self,
@@ -234,7 +217,6 @@ impl FriLayer0FoldReplayV2 {
         self.owner = Some(owner);
         Ok(FriLayer0FoldPairV2 { lower, upper })
     }
-
     pub(in super::super) fn complete_v2(
         mut self,
     ) -> Result<(FriLayer0RootedV2, FriLayer0ReplayCompleteV2), ProverPrerequisiteErrorV2> {
@@ -253,7 +235,6 @@ impl FriLayer0FoldReplayV2 {
         ))
     }
 }
-
 pub(in super::super) struct FriLayer1WriterV2 {
     writer: Option<ConfidentialSpoolWriterV1>,
     descriptor: StorageLayoutDescriptorV2,
@@ -261,7 +242,6 @@ pub(in super::super) struct FriLayer1WriterV2 {
     binding: FriLayer1BindingV2,
     next_slot: u64,
 }
-
 impl FriLayer1WriterV2 {
     pub(in super::super) fn create_v2(
         directory: &Path,
@@ -292,7 +272,6 @@ impl FriLayer1WriterV2 {
             next_slot: 0,
         })
     }
-
     pub(in super::super) fn push_next_v2(
         &mut self,
         pair_block: u64,
@@ -335,7 +314,6 @@ impl FriLayer1WriterV2 {
         self.writer = Some(writer);
         Ok(())
     }
-
     pub(in super::super) fn seal_v2(
         mut self,
         replay_complete: FriLayer0ReplayCompleteV2,
@@ -366,7 +344,6 @@ impl FriLayer1WriterV2 {
         })
     }
 }
-
 pub(in super::super) fn fri1_leaf_hash_v2(
     parameter_digest: [u8; 32],
     values: &[u8],
@@ -384,7 +361,6 @@ pub(in super::super) fn fri1_leaf_hash_v2(
     hash.update(values);
     Ok(hash.finalize())
 }
-
 pub(in super::super) fn fri1_node_hash_v2(
     parameter_digest: [u8; 32],
     height: usize,
@@ -404,14 +380,12 @@ pub(in super::super) fn fri1_node_hash_v2(
     hash.update(&right);
     Ok(hash.finalize())
 }
-
 struct FriLayer1FrontierV2 {
     nodes: [[u8; 32]; FRI1_FRONTIER_NODES_V2],
     occupied: u32,
     leaves: usize,
     parameter_digest: [u8; 32],
 }
-
 impl FriLayer1FrontierV2 {
     const fn new_v2(parameter_digest: [u8; 32]) -> Self {
         Self {
@@ -421,7 +395,6 @@ impl FriLayer1FrontierV2 {
             parameter_digest,
         }
     }
-
     fn push_v2(&mut self, mut digest: [u8; 32]) -> Result<(), ProverPrerequisiteErrorV2> {
         let mut level = 0;
         let mut prior = self.leaves;
@@ -441,7 +414,6 @@ impl FriLayer1FrontierV2 {
         self.leaves += 1;
         Ok(())
     }
-
     fn finish_v2(self) -> Result<[u8; 32], ProverPrerequisiteErrorV2> {
         let level = FRI1_LEAVES_V2.ilog2() as usize;
         if self.leaves != FRI1_LEAVES_V2
@@ -453,11 +425,9 @@ impl FriLayer1FrontierV2 {
         Ok(self.nodes[level])
     }
 }
-
 struct ZeroizingFriLayer1WindowV2 {
     bytes: Vec<u8>,
 }
-
 impl ZeroizingFriLayer1WindowV2 {
     fn new_v2() -> Result<Self, ProverPrerequisiteErrorV2> {
         let mut bytes = Vec::new();
@@ -470,7 +440,6 @@ impl ZeroizingFriLayer1WindowV2 {
         bytes.resize(FRI1_WINDOW_BYTES_V2, 0);
         Ok(Self { bytes })
     }
-
     fn absorb_v2(&mut self, column: u16, chunk: &[u8]) -> Result<(), ProverPrerequisiteErrorV2> {
         if chunk.len() != usize::from(FRI1_VALUES_PER_BLOCK_V2) * 16 {
             return Err(ProverPrerequisiteErrorV2::InvalidSourceShape);
@@ -482,14 +451,12 @@ impl ZeroizingFriLayer1WindowV2 {
         Ok(())
     }
 }
-
 impl Drop for ZeroizingFriLayer1WindowV2 {
     fn drop(&mut self) {
         self.bytes.fill(0);
         atomic::compiler_fence(atomic::Ordering::SeqCst);
     }
 }
-
 pub(in super::super) struct FriLayer1SealedV2 {
     snapshot: Option<ConfidentialSpoolSnapshotV1>,
     descriptor: StorageLayoutDescriptorV2,
@@ -497,7 +464,6 @@ pub(in super::super) struct FriLayer1SealedV2 {
     binding: FriLayer1BindingV2,
     replay_complete: Option<FriLayer0ReplayCompleteV2>,
 }
-
 pub(in super::super) struct FriLayer1RootedV2 {
     snapshot: ConfidentialSpoolSnapshotV1,
     descriptor: StorageLayoutDescriptorV2,
@@ -506,13 +472,11 @@ pub(in super::super) struct FriLayer1RootedV2 {
     replay_complete: FriLayer0ReplayCompleteV2,
     root: [u8; 32],
 }
-
 impl FriLayer1RootedV2 {
     pub(in super::super) const fn root_digest_v2(&self) -> [u8; 32] {
         self.root
     }
 }
-
 impl FriLayer1SealedV2 {
     pub(in super::super) fn root_v2(
         mut self,

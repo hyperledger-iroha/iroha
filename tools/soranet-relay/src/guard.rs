@@ -1,14 +1,11 @@
 //! Guard directory validation helpers used by the relay runtime.
-
 #![allow(unexpected_cfgs)]
-
 use std::{
     fs,
     io::Write as _,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use hex::{FromHexError, encode as hex_encode};
 use iroha_crypto::soranet::{
     certificate::{
@@ -26,18 +23,15 @@ use norito::{
 };
 use tempfile::NamedTempFile;
 use thiserror::Error;
-
 use crate::{
     checked_ed25519_verifying_key_from_bytes,
     config::{ConfigError, GuardDirectoryConfig},
 };
-
 // Keep the producer's admission contract aligned with the directory builder's
 // first-release guard-proof consumer: every decoded string is capped at 4 KiB
 // and the complete JSON document at the 64 KiB SRCv2 bundle ceiling.
 const GUARD_PINNING_PROOF_JSON_MAX_BYTES_V1: usize = SRC_V2_MAX_BUNDLE_BYTES;
 const GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1: usize = 4 * 1024;
-
 /// Result of resolving the relay entry from a guard directory snapshot.
 #[derive(Debug)]
 pub struct GuardDirectoryEntry {
@@ -50,7 +44,6 @@ pub struct GuardDirectoryEntry {
     /// Validation phase encoded in the snapshot metadata.
     pub validation_phase: CertificateValidationPhase,
 }
-
 /// Errors raised when resolving or validating guard directory metadata.
 #[derive(Debug, Error)]
 pub enum GuardDirectoryError {
@@ -99,7 +92,6 @@ pub enum GuardDirectoryError {
     )]
     DescriptorCommitMismatch { expected: String, found: String },
 }
-
 /// Errors raised when persisting guard pinning proofs.
 #[derive(Debug, Error)]
 pub enum GuardPinningProofError {
@@ -142,7 +134,6 @@ pub enum GuardPinningProofError {
         source: std::io::Error,
     },
 }
-
 /// Errors raised when validating persisted guard pinning proofs.
 #[derive(Debug, Error)]
 pub enum GuardPinningProofValidationError {
@@ -195,7 +186,6 @@ pub enum GuardPinningProofValidationError {
     #[error("PQ KEM public key mismatch for relay `{relay_hex}`")]
     PqKemMismatch { relay_hex: String },
 }
-
 /// Resolve and verify the relay entry referenced by the supplied configuration.
 pub fn load_guard_entry_at(
     config: &GuardDirectoryConfig,
@@ -220,28 +210,24 @@ pub fn load_guard_entry_at(
             path: path.clone(),
             source,
         })?;
-
     let validation_phase = decode_validation_phase(snapshot.validation_phase).ok_or(
         GuardDirectoryError::UnknownValidationPhase {
             path: path.clone(),
             raw: snapshot.validation_phase,
         },
     )?;
-
     let bundle = find_relay_entry(&snapshot.relays, identity_ed25519).ok_or_else(|| {
         GuardDirectoryError::RelayEntryMissing {
             path: path.clone(),
             identity_hex: hex_encode(identity_ed25519),
         }
     })?;
-
     if bundle.certificate.descriptor_commit != *expected_descriptor_commit {
         return Err(GuardDirectoryError::DescriptorCommitMismatch {
             expected: hex_encode(expected_descriptor_commit),
             found: hex_encode(bundle.certificate.descriptor_commit),
         });
     }
-
     let issuer = snapshot
         .issuers
         .iter()
@@ -258,7 +244,6 @@ pub fn load_guard_entry_at(
             }
         })?;
     bundle.verify_at(&ed25519, &issuer.mldsa65_public, validation_phase, at_unix)?;
-
     Ok(GuardDirectoryEntry {
         bundle,
         snapshot_valid_until_unix: snapshot.valid_until_unix,
@@ -266,7 +251,6 @@ pub fn load_guard_entry_at(
         validation_phase,
     })
 }
-
 fn find_relay_entry(
     entries: &[GuardDirectoryRelayEntryV2],
     identity_ed25519: &[u8; 32],
@@ -277,7 +261,6 @@ fn find_relay_entry(
             .filter(|bundle| bundle.certificate.identity_ed25519 == *identity_ed25519)
     })
 }
-
 /// Persist guard pinning metadata for directory publisher consumption.
 pub fn persist_guard_pinning_proof(
     path: &Path,
@@ -320,7 +303,6 @@ pub fn persist_guard_pinning_proof(
     };
     persist_guard_pinning_proof_value(path, &proof)
 }
-
 fn bounded_snapshot_path(snapshot_path: &Path) -> Result<String, GuardPinningProofError> {
     // `to_string_lossy` may allocate for non-Unicode paths. Bound the encoded
     // source first, then check the exact UTF-8 field produced for JSON.
@@ -332,7 +314,6 @@ fn bounded_snapshot_path(snapshot_path: &Path) -> Result<String, GuardPinningPro
     ensure_guard_pinning_proof_field_len("snapshot_path", snapshot_path.len())?;
     Ok(snapshot_path.into_owned())
 }
-
 fn ensure_guard_pinning_proof_field_len(
     field: &'static str,
     found: usize,
@@ -346,7 +327,6 @@ fn ensure_guard_pinning_proof_field_len(
     }
     Ok(())
 }
-
 fn validate_guard_pinning_proof_fields(
     proof: &GuardPinningProof,
 ) -> Result<(), GuardPinningProofError> {
@@ -369,7 +349,6 @@ fn validate_guard_pinning_proof_fields(
     }
     Ok(())
 }
-
 fn render_guard_pinning_proof(proof: &GuardPinningProof) -> Result<String, GuardPinningProofError> {
     validate_guard_pinning_proof_fields(proof)?;
     // The checked typed writer preserves Norito's canonical field order and
@@ -384,7 +363,6 @@ fn render_guard_pinning_proof(proof: &GuardPinningProof) -> Result<String, Guard
         Err(source) => Err(GuardPinningProofError::Serialize(source)),
     }
 }
-
 fn persist_guard_pinning_proof_value(
     path: &Path,
     proof: &GuardPinningProof,
@@ -427,7 +405,6 @@ fn persist_guard_pinning_proof_value(
         })?;
     Ok(())
 }
-
 /// Validate a guard pinning proof against the supplied directory snapshot.
 pub fn verify_guard_pinning_proof(
     snapshot: &GuardDirectorySnapshotV2,
@@ -438,7 +415,6 @@ pub fn verify_guard_pinning_proof(
             found: proof.version,
         });
     }
-
     let proof_hash = hex_array_from_str::<32>(&proof.directory_hash_hex, "directory_hash_hex")?;
     if snapshot.directory_hash != proof_hash {
         return Err(GuardPinningProofValidationError::DirectoryHashMismatch {
@@ -446,7 +422,6 @@ pub fn verify_guard_pinning_proof(
             found: proof.directory_hash_hex.clone(),
         });
     }
-
     let relay_id = hex_array_from_str::<32>(&proof.relay_id_hex, "relay_id_hex")?;
     let descriptor_commit =
         hex_array_from_str::<32>(&proof.descriptor_commit_hex, "descriptor_commit_hex")?;
@@ -458,7 +433,6 @@ pub fn verify_guard_pinning_proof(
             source,
         }
     })?;
-
     let proof_phase = parse_validation_phase_label(&proof.validation_phase).ok_or_else(|| {
         GuardPinningProofValidationError::InvalidValidationPhase {
             found: proof.validation_phase.clone(),
@@ -476,14 +450,12 @@ pub fn verify_guard_pinning_proof(
             found: proof.validation_phase.clone(),
         });
     }
-
     let bundle = find_relay_entry(&snapshot.relays, &relay_id).ok_or_else(|| {
         GuardPinningProofValidationError::RelayMissing {
             relay_hex: proof.relay_id_hex.clone(),
         }
     })?;
     let certificate = bundle.certificate;
-
     if certificate.descriptor_commit != descriptor_commit {
         return Err(GuardPinningProofValidationError::DescriptorCommitMismatch {
             relay_hex: proof.relay_id_hex.clone(),
@@ -540,10 +512,8 @@ pub fn verify_guard_pinning_proof(
             relay_hex: proof.relay_id_hex.clone(),
         });
     }
-
     Ok(())
 }
-
 fn validation_phase_label(phase: CertificateValidationPhase) -> &'static str {
     match phase {
         CertificateValidationPhase::Phase1AllowSingle => "phase1_allow_single",
@@ -551,7 +521,6 @@ fn validation_phase_label(phase: CertificateValidationPhase) -> &'static str {
         CertificateValidationPhase::Phase3RequireDual => "phase3_require_dual",
     }
 }
-
 fn parse_validation_phase_label(label: &str) -> Option<CertificateValidationPhase> {
     match label {
         "phase1_allow_single" => Some(CertificateValidationPhase::Phase1AllowSingle),
@@ -560,7 +529,6 @@ fn parse_validation_phase_label(label: &str) -> Option<CertificateValidationPhas
         _ => None,
     }
 }
-
 fn hex_array_from_str<const N: usize>(
     hex_value: &str,
     field: &'static str,
@@ -578,7 +546,6 @@ fn hex_array_from_str<const N: usize>(
     bytes.copy_from_slice(&decoded);
     Ok(bytes)
 }
-
 /// Guard pinning proof persisted by relays for directory publisher ingestion.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct GuardPinningProof {
@@ -611,80 +578,65 @@ pub struct GuardPinningProof {
     /// ML-KEM public key (hex) advertised by the relay certificate.
     pq_kem_public_hex: String,
 }
-
 impl GuardPinningProof {
     /// Returns the on-disk path to the snapshot this proof references.
     pub fn snapshot_path(&self) -> &str {
         &self.snapshot_path
     }
-
     /// Relay identifier encoded as lowercase hex.
     pub fn relay_id_hex(&self) -> &str {
         &self.relay_id_hex
     }
-
     /// Directory hash advertised by this proof.
     pub fn directory_hash_hex(&self) -> &str {
         &self.directory_hash_hex
     }
-
     /// UNIX timestamp recorded when the proof was generated.
     pub fn recorded_at_unix(&self) -> i64 {
         self.recorded_at_unix
     }
-
     /// Validation phase recorded by the relay when the proof was created.
     pub fn validation_phase(&self) -> &str {
         &self.validation_phase
     }
-
     /// Descriptor commit hex encoded string.
     pub fn descriptor_commit_hex(&self) -> &str {
         &self.descriptor_commit_hex
     }
-
     /// Issuer fingerprint hex encoded string.
     pub fn issuer_fingerprint_hex(&self) -> &str {
         &self.issuer_fingerprint_hex
     }
-
     /// Relay PQ KEM public key recorded by the proof.
     pub fn pq_kem_public_hex(&self) -> &str {
         &self.pq_kem_public_hex
     }
-
     /// Valid-after timestamp advertised by the certificate.
     pub fn valid_after_unix(&self) -> i64 {
         self.valid_after_unix
     }
-
     /// Valid-until timestamp advertised by the certificate.
     pub fn valid_until_unix(&self) -> i64 {
         self.valid_until_unix
     }
-
     /// Guard weight advertised in the proof.
     pub fn guard_weight(&self) -> u32 {
         self.guard_weight
     }
-
     /// Bandwidth weight advertised in the proof.
     pub fn bandwidth_bytes_per_sec(&self) -> u64 {
         self.bandwidth_bytes_per_sec
     }
-
     /// Reputation weight advertised in the proof.
     pub fn reputation_weight(&self) -> u32 {
         self.reputation_weight
     }
 }
-
 impl From<GuardDirectoryError> for ConfigError {
     fn from(err: GuardDirectoryError) -> Self {
         ConfigError::GuardDirectory(err.to_string())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::SigningKey;
@@ -703,10 +655,8 @@ mod tests {
     use rand::{RngCore, SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use tempfile::NamedTempFile;
-
     use super::*;
     use crate::config::GuardDirectoryConfig;
-
     struct SnapshotFixture {
         config: GuardDirectoryConfig,
         relay_id: [u8; 32],
@@ -715,7 +665,6 @@ mod tests {
         valid_until_unix: i64,
         _temp: NamedTempFile,
     }
-
     #[test]
     fn load_guard_entry_validates_snapshot() {
         let fixture = snapshot_fixture();
@@ -732,7 +681,6 @@ mod tests {
         );
         assert_eq!(entry.snapshot_valid_until_unix, fixture.valid_until_unix);
     }
-
     #[test]
     fn load_guard_entry_rejects_oversized_snapshot_before_decode() {
         let fixture = snapshot_fixture();
@@ -745,7 +693,6 @@ mod tests {
                     + 1,
             )
             .expect("extend oversized sparse snapshot");
-
         let error = load_guard_entry_at(
             &fixture.config,
             &fixture.relay_id,
@@ -761,7 +708,6 @@ mod tests {
             other => panic!("expected bounded file-read error, got {other:?}"),
         }
     }
-
     #[test]
     fn load_guard_entry_detects_descriptor_mismatch() {
         let fixture = snapshot_fixture();
@@ -776,7 +722,6 @@ mod tests {
         .expect_err("mismatched descriptor commit should fail validation");
         matches!(err, GuardDirectoryError::DescriptorCommitMismatch { .. });
     }
-
     #[test]
     fn load_guard_entry_rejects_invalid_expected_digest_without_panic() {
         let mut fixture = snapshot_fixture();
@@ -796,7 +741,6 @@ mod tests {
             other => panic!("expected invalid expected-digest error, got {other:?}"),
         }
     }
-
     #[test]
     fn load_guard_entry_rejects_unpinned_or_expired_snapshot() {
         let mut unpinned = snapshot_fixture();
@@ -813,7 +757,6 @@ mod tests {
             GuardDirectoryError::SnapshotAuthentication { .. }
         ));
         assert!(err.to_string().contains("digest mismatch"));
-
         let expired = snapshot_fixture();
         let err = load_guard_entry_at(
             &expired.config,
@@ -828,7 +771,6 @@ mod tests {
         ));
         assert!(err.to_string().contains("expired"));
     }
-
     #[test]
     fn load_guard_entry_rejects_pre_release_validation_phase() {
         let mut fixture = snapshot_fixture();
@@ -840,7 +782,6 @@ mod tests {
         let bytes = snapshot.to_bytes().expect("snapshot encodes");
         fs::write(fixture.config.snapshot_path(), &bytes).expect("rewrite snapshot");
         fixture.config.expected_snapshot_digest_hex = hex_encode(compute_snapshot_digest(&bytes));
-
         let err = load_guard_entry_at(
             &fixture.config,
             &fixture.relay_id,
@@ -854,11 +795,9 @@ mod tests {
         );
         assert!(err.to_string().contains("phase 3 dual signatures"));
     }
-
     #[test]
     fn persist_guard_pinning_proof_serializes_metadata() {
         use std::{fs, time::Duration};
-
         let fixture = snapshot_fixture();
         let entry = load_guard_entry_at(
             &fixture.config,
@@ -904,11 +843,9 @@ mod tests {
         );
         assert!(contents.len() <= GUARD_PINNING_PROOF_JSON_MAX_BYTES_V1);
     }
-
     #[test]
     fn guard_pinning_proof_field_limits_accept_exact_and_reject_oversize_before_io() {
         use std::time::Duration;
-
         let fixture = snapshot_fixture();
         let mut entry = load_guard_entry_at(
             &fixture.config,
@@ -935,7 +872,6 @@ mod tests {
             proof.snapshot_path().len(),
             GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1
         );
-
         let rejected_parent = dir.path().join("must-not-exist");
         let oversized_proof_path = rejected_parent.join("oversized.json");
         let oversized_snapshot_path =
@@ -955,7 +891,6 @@ mod tests {
             }) if found == GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1 + 1
         ));
         assert!(!rejected_parent.exists());
-
         entry.bundle.certificate.pq_kem_public =
             vec![0; GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1 / 2];
         let exact_path = dir.path().join("exact-pq.json");
@@ -982,7 +917,6 @@ mod tests {
                 maximum: GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1,
             }) if found == GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1 + 1
         ));
-
         entry.bundle.certificate.pq_kem_public.push(0);
         let oversized_path = rejected_parent.join("oversized-pq.json");
         assert!(matches!(
@@ -1001,7 +935,6 @@ mod tests {
         ));
         assert!(!rejected_parent.exists());
     }
-
     #[test]
     fn guard_pinning_proof_document_limit_accepts_exact_and_rejects_plus_one_before_io() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -1018,7 +951,6 @@ mod tests {
         );
         crate::directory::read_guard_pinning_proof_file(&exact_path)
             .expect("consumer must admit producer's exact-limit document");
-
         let rejected_parent = dir.path().join("must-not-exist");
         let oversized_path = rejected_parent.join("oversized-document.json");
         let oversized_proof =
@@ -1031,11 +963,9 @@ mod tests {
         ));
         assert!(!rejected_parent.exists());
     }
-
     #[test]
     fn verify_guard_pinning_proof_accepts_valid_metadata() {
         use std::{fs, time::Duration};
-
         let fixture = snapshot_fixture();
         let entry = load_guard_entry_at(
             &fixture.config,
@@ -1061,11 +991,9 @@ mod tests {
             GuardDirectorySnapshotV2::inspect_bytes(&snapshot_bytes).expect("snapshot decodes");
         verify_guard_pinning_proof(&snapshot, &proof).expect("proof validates");
     }
-
     #[test]
     fn guard_pinning_proof_accessors_surface_metadata() {
         use std::{fs, time::Duration};
-
         let fixture = snapshot_fixture();
         let entry = load_guard_entry_at(
             &fixture.config,
@@ -1086,7 +1014,6 @@ mod tests {
         .expect("proof serializes");
         let proof_bytes = fs::read(&proof_path).expect("load proof");
         let proof: GuardPinningProof = json::from_slice(&proof_bytes).expect("decode guard proof");
-
         let expected_snapshot = fixture
             .config
             .snapshot_path()
@@ -1097,11 +1024,9 @@ mod tests {
         assert_eq!(proof.directory_hash_hex(), hex_encode(entry.directory_hash));
         assert_eq!(proof.recorded_at_unix(), 7);
     }
-
     #[test]
     fn verify_guard_pinning_proof_detects_descriptor_mismatch() {
         use std::{fs, time::Duration};
-
         let fixture = snapshot_fixture();
         let entry = load_guard_entry_at(
             &fixture.config,
@@ -1134,7 +1059,6 @@ mod tests {
             GuardPinningProofValidationError::DescriptorCommitMismatch { .. }
         );
     }
-
     fn empty_guard_pinning_proof() -> GuardPinningProof {
         GuardPinningProof {
             version: 1,
@@ -1153,7 +1077,6 @@ mod tests {
             pq_kem_public_hex: String::new(),
         }
     }
-
     fn guard_pinning_proof_with_json_len(target: usize) -> GuardPinningProof {
         let mut proof = empty_guard_pinning_proof();
         let base_len = json::to_json(&proof).expect("serialize empty proof").len();
@@ -1181,7 +1104,6 @@ mod tests {
         );
         proof
     }
-
     fn json_string_with_encoded_body_len(encoded_len: usize) -> String {
         let escaped_controls = encoded_len / 6;
         let literal_bytes = encoded_len % 6;
@@ -1192,7 +1114,6 @@ mod tests {
         value.extend(std::iter::repeat_n('a', literal_bytes));
         value
     }
-
     fn snapshot_fixture() -> SnapshotFixture {
         let mut rng = StdRng::seed_from_u64(7);
         let issuer_seed = {
@@ -1206,7 +1127,6 @@ mod tests {
         let issuer_fingerprint =
             compute_issuer_fingerprint(&issuer_public, issuer_mldsa.public_key())
                 .expect("sample issuer fingerprint should compute");
-
         let relay_id = issuer_public;
         let descriptor_commit = [0xAB; 32];
         let bundle = build_bundle(
@@ -1216,7 +1136,6 @@ mod tests {
             &issuer_signing,
             issuer_mldsa.secret_key(),
         );
-
         let snapshot = GuardDirectorySnapshotV2 {
             version: GUARD_DIRECTORY_VERSION_V2,
             directory_hash: [0x44; 32],
@@ -1246,7 +1165,6 @@ mod tests {
             allow_missing_entry: false,
             pinning_proof_path: None,
         };
-
         SnapshotFixture {
             config,
             relay_id,
@@ -1256,7 +1174,6 @@ mod tests {
             _temp: temp,
         }
     }
-
     #[allow(clippy::too_many_arguments)]
     fn build_bundle(
         relay_id: [u8; 32],
@@ -1309,7 +1226,6 @@ mod tests {
             issuer_fingerprint,
             pq_kem_public: vec![0x55; 1_184],
         };
-
         certificate
             .issue(issuer_signing, issuer_mldsa_secret)
             .expect("issue certificate")

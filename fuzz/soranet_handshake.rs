@@ -1,26 +1,22 @@
 #![no_main]
-
 use arbitrary::Arbitrary;
 use iroha_crypto::{
     Algorithm, KeyPair,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
         DEFAULT_TLS_SERVER_NAME, HandshakeSuite, RuntimeParams, SORANET_QUIC_ALPN,
-        SimulationParams, build_client_hello,
-        client_handle_relay_hello, relay_finalize_handshake, simulate_handshake,
-        simulation_report_json,
+        SimulationParams, build_client_hello, client_handle_relay_hello, relay_finalize_handshake,
+        simulate_handshake, simulation_report_json,
     },
 };
 use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
-
 #[derive(Debug, Arbitrary)]
 struct ByteMutation {
     index: u8,
     value: u8,
 }
-
 #[derive(Debug, Arbitrary)]
 struct FuzzInput {
     client_suite_bytes: [u8; 4],
@@ -40,7 +36,6 @@ struct FuzzInput {
     client_seed: [u8; 32],
     relay_seed: [u8; 32],
 }
-
 fn build_suite_order(bytes: &[u8]) -> Vec<HandshakeSuite> {
     let mut suites = Vec::new();
     for &raw in bytes {
@@ -58,7 +53,6 @@ fn build_suite_order(bytes: &[u8]) -> Vec<HandshakeSuite> {
     }
     suites
 }
-
 fn encode_suite_list(suites: &[HandshakeSuite], required: bool) -> Vec<u8> {
     let mut bytes = suites
         .iter()
@@ -73,7 +67,6 @@ fn encode_suite_list(suites: &[HandshakeSuite], required: bool) -> Vec<u8> {
     }
     bytes
 }
-
 fn rewrite_suite_list(buf: &mut Vec<u8>, suites: &[HandshakeSuite], required: bool) {
     const SUITE_TLV: u16 = 0x0104;
     let mut offset = 0;
@@ -93,7 +86,6 @@ fn rewrite_suite_list(buf: &mut Vec<u8>, suites: &[HandshakeSuite], required: bo
         offset = end;
     }
 }
-
 fn apply_mutations(buf: &mut [u8], mutations: &[ByteMutation]) {
     if buf.is_empty() {
         return;
@@ -104,38 +96,30 @@ fn apply_mutations(buf: &mut [u8], mutations: &[ByteMutation]) {
         buf[idx] ^= mutation.value;
     }
 }
-
 fn seed_rng(seed_bytes: &[u8; 32]) -> ChaCha20Rng {
     ChaCha20Rng::from_seed(*seed_bytes)
 }
-
 fn seeded_keypair(seed: &[u8; 32]) -> Option<KeyPair> {
     KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519).ok()
 }
-
 fn run_simulation(case: &FuzzInput) {
     let mut client_caps = DEFAULT_CLIENT_CAPABILITIES.to_vec();
     let mut relay_caps = DEFAULT_RELAY_CAPABILITIES.to_vec();
-
     let client_suites = build_suite_order(&case.client_suite_bytes);
     let relay_suites = build_suite_order(&case.relay_suite_bytes);
     rewrite_suite_list(&mut client_caps, &client_suites, case.client_required);
     rewrite_suite_list(&mut relay_caps, &relay_suites, case.relay_required);
     apply_mutations(&mut client_caps, &case.client_mutations);
     apply_mutations(&mut relay_caps, &case.relay_mutations);
-
     let resume_vec = case.resume_hash.map(|hash| hash.to_vec());
     let resume_slice = resume_vec.as_deref();
-
     let descriptor = if case.descriptor_commit == [0u8; 32] {
         DEFAULT_DESCRIPTOR_COMMIT.to_vec()
     } else {
         case.descriptor_commit.to_vec()
     };
-
     let kem_id = case.kem_id % 3;
     let sig_id = if case.sig_id == 0 { 1 } else { case.sig_id };
-
     let params = SimulationParams {
         client_capabilities: &client_caps,
         relay_capabilities: &relay_caps,
@@ -148,13 +132,11 @@ fn run_simulation(case: &FuzzInput) {
         kem_id,
         sig_id,
     };
-
     if let Ok(result) = simulate_handshake(&params) {
         // Exercise JSON rendering path; ignore serialization failures.
         let _ = simulation_report_json(&result, None::<&[u16]>);
     }
 }
-
 fn run_runtime_handshake(case: &FuzzInput) {
     let mut client_caps = DEFAULT_CLIENT_CAPABILITIES.to_vec();
     let mut relay_caps = DEFAULT_RELAY_CAPABILITIES.to_vec();
@@ -164,7 +146,6 @@ fn run_runtime_handshake(case: &FuzzInput) {
     rewrite_suite_list(&mut relay_caps, &relay_suites, case.relay_required);
     apply_mutations(&mut client_caps, &case.client_mutations);
     apply_mutations(&mut relay_caps, &case.relay_mutations);
-
     let resume_vec = case.resume_hash.map(|hash| hash.to_vec());
     let resume_slice = resume_vec.as_deref();
     let descriptor = if case.descriptor_commit == [0u8; 32] {
@@ -172,7 +153,6 @@ fn run_runtime_handshake(case: &FuzzInput) {
     } else {
         case.descriptor_commit.as_slice()
     };
-
     let runtime = RuntimeParams {
         descriptor_commit: descriptor,
         client_capabilities: &client_caps,
@@ -183,13 +163,11 @@ fn run_runtime_handshake(case: &FuzzInput) {
         tls_server_name: DEFAULT_TLS_SERVER_NAME,
         resume_hash: resume_slice,
     };
-
     let mut rng_client = seed_rng(&case.client_seed);
     let mut rng_relay = seed_rng(&case.relay_seed);
     let Some(relay_keys) = seeded_keypair(&case.relay_seed) else {
         return;
     };
-
     let Ok((client_hello, client_state)) = build_client_hello(&runtime, &mut rng_client) else {
         return;
     };
@@ -210,35 +188,29 @@ fn run_runtime_handshake(case: &FuzzInput) {
     ) else {
         return;
     };
-
     let _ = relay_finalize_handshake(
         relay_state,
         client_finish.as_deref().unwrap_or(&[]),
         &relay_keys,
     );
 }
-
 fuzz_target!(|case: FuzzInput| {
     run_simulation(&case);
     run_runtime_handshake(&case);
 });
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn seeded_keypair_rejects_checked_weak_seed() {
         assert!(seeded_keypair(&[0; 32]).is_none());
     }
-
     #[test]
     fn seeded_keypair_uses_checked_seed_derivation() {
         let seed = [0x5A; 32];
         let keypair = seeded_keypair(&seed).expect("derive fuzz fixture key");
         let expected = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
             .expect("derive fuzz fixture key");
-
         assert_eq!(keypair.public_key(), expected.public_key());
     }
 }

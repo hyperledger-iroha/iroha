@@ -4,7 +4,6 @@
 //! immutable context and safety WAL before processing network traffic, routes
 //! authenticated control and body messages, schedules bounded proposal work,
 //! and performs an explicit Kura-authorized rollover after application.
-
 use std::{
     collections::BTreeSet,
     num::{NonZeroU64, NonZeroUsize},
@@ -14,7 +13,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use super::v2_core::{
     CanonicalIdentityProjection, EventTag, Generation, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
     IDENTITY_KIND_FINALITY_ARTIFACT, ProductionSuccessorPredecessorBindingProjection,
@@ -38,10 +36,8 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use thiserror::Error;
-
 #[cfg(test)]
 use super::v2_recovery::RecoveredCompleteTipActivationAuthority;
-
 use super::{
     FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressCapacityError,
     FairV2IngressDequeueDisposition, FairV2IngressOwnershipEvidence, GenesisWithPubKey,
@@ -73,6 +69,9 @@ use super::{
         EffectExecutorStep, EffectQueueConfig, EffectTransportError, PendingKuraApplyRecoveryStage,
         PostFinalityCleanupTarget, V2EffectExecutor, network_ingress_is_certified_fence_escape,
     },
+    v2_first_release_recovery::{
+        CompleteTipPredecessorStorageErrorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
+    },
     v2_lane_work::{
         AuthenticatedGenesisNexusAmxContext, CanonicalExecutedBlockRecovery, GlobalBodyLockOutcome,
         HistoricalRecoveryServiceOutcome, LaneApplicationEvidenceRepairPlanning,
@@ -81,9 +80,6 @@ use super::{
         apply_lane_application_evidence_repair,
         persist_canonical_historical_recovery_payload_custody,
         plan_lane_application_evidence_repair, require_validator_storage_platform,
-    },
-    v2_lifecycle_coordinator::{
-        CompleteTipPredecessorStorageErrorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
     },
     v2_lifecycle_recovery::{
         AutonomousLifecycleDeferredTerminalRecoveryHandoff, reconcile_autonomous_lifecycle_startup,
@@ -114,11 +110,9 @@ use crate::{
     queue::{GlobalQueueSelectionLease, Queue},
     state::{PendingCertifiedMergeSelection, State},
 };
-
 const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
 const PENDING_TIP_RECOVERY_DEADLINE_ROUNDS: u32 = 3;
-
 /// Move-only authority for binding runner-owned lifecycle execution dependencies.
 ///
 /// The future runner cutover will mint this private seal immediately before it
@@ -130,13 +124,10 @@ pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryDependencyPermitV1 
     _seal: RecoveredLifecycleOwnerFactoryDependencyPermitSealV1,
     local_signer: KeyPair,
 }
-
 struct RecoveredLifecycleOwnerFactoryDependencyPermitSealV1;
-
 impl Drop for RecoveredLifecycleOwnerFactoryDependencyPermitSealV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleOwnerFactoryDependencyPermitV1 {
     // TODO: Mint this private permit at the atomic runner/owner cutover which
     // moves the runner's exact Queue, archives, and EventsSender into startup.
@@ -147,19 +138,16 @@ impl RecoveredLifecycleOwnerFactoryDependencyPermitV1 {
             local_signer,
         }
     }
-
     #[cfg(test)]
     /// Mint the same sealed dependency permit for production-shaped unit tests.
     pub(in crate::sumeragi) fn for_test(local_signer: KeyPair) -> Self {
         Self::mint_for_recovered_runner(local_signer)
     }
-
     /// Consume the runner seal into its factory-owned local signer.
     pub(in crate::sumeragi) fn into_local_signer(self) -> KeyPair {
         self.local_signer
     }
 }
-
 /// Cadence-derived process-local deadline for closed-ingress interrupted-tip recovery.
 #[derive(Clone, Copy, Debug)]
 struct PendingTipRecoveryDeadline {
@@ -167,7 +155,6 @@ struct PendingTipRecoveryDeadline {
     deadline: Instant,
     timeout: Duration,
 }
-
 impl PendingTipRecoveryDeadline {
     fn new(started_at: Instant, round_timeout: Duration) -> Result<Self, V2RunnerError> {
         let timeout = round_timeout
@@ -182,20 +169,16 @@ impl PendingTipRecoveryDeadline {
             timeout,
         })
     }
-
     fn expired(self, now: Instant) -> bool {
         now >= self.deadline
     }
-
     fn remaining(self, now: Instant) -> Duration {
         self.deadline.saturating_duration_since(now)
     }
-
     fn elapsed(self, now: Instant) -> Duration {
         now.saturating_duration_since(self.started_at)
     }
 }
-
 /// Exact reducer facts which own one local proposal-side work item.
 ///
 /// A higher PrepareQC can replace the lock without changing [`EventTag`].
@@ -208,7 +191,6 @@ struct LocalProposalOwner {
     locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     decided_subject: Option<wire::BlockSubject>,
 }
-
 impl From<LocalProposalDirective> for LocalProposalOwner {
     fn from(directive: LocalProposalDirective) -> Self {
         Self {
@@ -218,7 +200,6 @@ impl From<LocalProposalDirective> for LocalProposalOwner {
         }
     }
 }
-
 impl LocalProposalOwner {
     /// Return whether this owner installs the first exact lock for prior
     /// unlocked proposal work from the same reducer incarnation.
@@ -233,14 +214,12 @@ impl LocalProposalOwner {
             })
     }
 }
-
 #[derive(Debug)]
 struct PendingLocalEvents {
     owner: LocalProposalOwner,
     subject: wire::BlockSubject,
     events: Vec<PipelineEventBox>,
 }
-
 /// Queue ownership retained until the exact local proposal is decided or abandoned.
 ///
 /// The ordinary transaction remains in the queue while this process-local fence prevents the
@@ -252,21 +231,18 @@ struct PendingGlobalSelection {
     subject: wire::BlockSubject,
     _lease: GlobalQueueSelectionLease,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct CandidateWorkWait {
     owner: LocalProposalOwner,
     started_at: Instant,
     next_retry: Instant,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ReplayedProposalSign {
     tag: EventTag,
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
 }
-
 /// Fallible construction ownership of an applied predecessor's successor.
 ///
 /// Starting construction changes the predecessor's durable diagnostic witness
@@ -276,13 +252,11 @@ struct ReplayedProposalSign {
 struct PendingSuccessorConstruction {
     predecessor: DurableV2PredecessorIdentity,
 }
-
 impl PendingSuccessorConstruction {
     fn begin(predecessor: DurableV2PredecessorIdentity) -> Result<Self, V2RunnerError> {
         super::status::begin_v2_successor_activation(predecessor)?;
         Ok(Self { predecessor })
     }
-
     fn bind(
         self,
         authority: DurableSuccessorActivationAuthority,
@@ -306,7 +280,6 @@ impl PendingSuccessorConstruction {
         })
     }
 }
-
 /// One-shot ownership of an authenticated successor's activation handoff.
 ///
 /// Construction failure simply drops this token, leaving the predecessor's
@@ -332,7 +305,6 @@ enum PendingSuccessorActivation {
         authority: SnapshotSuccessorActivationAuthority,
     },
 }
-
 impl PendingSuccessorActivation {
     fn recovered(
         authority: RecoveredSuccessorActivationAuthority,
@@ -391,7 +363,6 @@ impl PendingSuccessorActivation {
             }
         })
     }
-
     /// Reauthenticate retained restart storage before constructing live H+1 services.
     fn preflight_recovered_startup(&self) -> Result<(), V2RunnerError> {
         match self {
@@ -407,7 +378,6 @@ impl PendingSuccessorActivation {
             | Self::SnapshotBootstrap { .. } => Ok(()),
         }
     }
-
     /// Bind the prepared status to its retained restart authority before ingress opens.
     fn preflight_ingress_open(
         &self,
@@ -426,7 +396,6 @@ impl PendingSuccessorActivation {
             | Self::SnapshotBootstrap { .. } => Ok(()),
         }
     }
-
     fn publish(self, successor: wire::SumeragiV2Status) -> Result<(), V2RunnerError> {
         match self {
             Self::Applied {
@@ -449,14 +418,12 @@ impl PendingSuccessorActivation {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalValidationDisposition {
     Ignored,
     RetryNonEmpty,
     FatalNonEmpty,
 }
-
 #[derive(Default, Debug)]
 struct LocalProposalState {
     attempted: Option<LocalProposalOwner>,
@@ -466,7 +433,6 @@ struct LocalProposalState {
     pending_events: Option<PendingLocalEvents>,
     global_selection: Option<PendingGlobalSelection>,
 }
-
 impl LocalProposalState {
     fn from_replayed_proposal(
         replayed: Option<ReplayedProposalSign>,
@@ -491,7 +457,6 @@ impl LocalProposalState {
             ..Self::default()
         }
     }
-
     /// Retire every volatile item which is not owned by the exact current
     /// lock/decision snapshot. A Decision owns no further proposal work.
     fn reconcile(&mut self, owner: LocalProposalOwner) -> LocalProposalOwner {
@@ -570,7 +535,6 @@ impl LocalProposalState {
         }
         owner
     }
-
     /// Keep retrying deferred autonomous work for the bounded observation
     /// window, then arm one ordinary non-empty recovery retry for this owner.
     ///
@@ -601,7 +565,6 @@ impl LocalProposalState {
         self.non_empty_retry = Some(owner);
         self.candidate_work_wait = None;
     }
-
     /// Retire an armed recovery retry which completed assembly without finding
     /// any publishable work. A later retry must cross a fresh bounded
     /// observation window instead of re-running full assembly every runner
@@ -615,7 +578,6 @@ impl LocalProposalState {
         self.candidate_work_wait = None;
         true
     }
-
     fn handle_validation_rejection(
         &mut self,
         owner: LocalProposalOwner,
@@ -648,7 +610,6 @@ impl LocalProposalState {
         self.candidate_work_wait = None;
         LocalValidationDisposition::RetryNonEmpty
     }
-
     /// Abandon a candidate whose lane-local ownership could not be bound
     /// before the body was submitted, then give the exact owner one ordinary
     /// non-empty retry. The caller releases the candidate's selection lease
@@ -666,7 +627,6 @@ impl LocalProposalState {
         self.candidate_work_wait = None;
         LocalValidationDisposition::RetryNonEmpty
     }
-
     fn take_prepared_events(
         &mut self,
         owner: LocalProposalOwner,
@@ -687,7 +647,6 @@ impl LocalProposalState {
         })
     }
 }
-
 /// Run the v2-only worker until shutdown or a fail-closed error.
 pub(super) fn run(worker: SumeragiWorker) {
     let mut status_clear = V2StatusClearGuard::new();
@@ -711,7 +670,6 @@ pub(super) fn run(worker: SumeragiWorker) {
     }
     ingress_ready.store(false, Ordering::Release);
 }
-
 /// Latch process-lifetime restart recovery when the runner exits abnormally.
 ///
 /// In particular, this guard covers panics before production services exist;
@@ -721,7 +679,6 @@ struct V2RunnerFailureGuard {
     output_guard: Arc<ConsensusOutputGuard>,
     armed: bool,
 }
-
 impl V2RunnerFailureGuard {
     fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
         Self {
@@ -729,12 +686,10 @@ impl V2RunnerFailureGuard {
             armed: true,
         }
     }
-
     fn disarm(&mut self) {
         self.armed = false;
     }
 }
-
 impl Drop for V2RunnerFailureGuard {
     fn drop(&mut self) {
         if !self.armed {
@@ -746,12 +701,10 @@ impl Drop for V2RunnerFailureGuard {
         }
     }
 }
-
 struct V2IngressClearGuard {
     ingress_ready: Arc<AtomicBool>,
     block_ingress: Arc<FairV2Ingress>,
 }
-
 impl V2IngressClearGuard {
     fn new(ingress_ready: Arc<AtomicBool>, block_ingress: Arc<FairV2Ingress>) -> Self {
         ingress_ready.store(false, Ordering::Release);
@@ -762,20 +715,17 @@ impl V2IngressClearGuard {
         }
     }
 }
-
 impl Drop for V2IngressClearGuard {
     fn drop(&mut self) {
         self.ingress_ready.store(false, Ordering::Release);
         self.block_ingress.close();
     }
 }
-
 struct CertifiedServeIngressBinding {
     ingress_ready: Arc<AtomicBool>,
     block_ingress: Arc<FairV2Ingress>,
     gate: Option<CertifiedServeIngressGate>,
 }
-
 impl CertifiedServeIngressBinding {
     fn bind(
         ingress_ready: Arc<AtomicBool>,
@@ -791,7 +741,6 @@ impl CertifiedServeIngressBinding {
             gate: Some(gate),
         })
     }
-
     fn retire(&mut self) -> Result<(), V2RunnerError> {
         let Some(gate) = self.gate.as_ref() else {
             return Ok(());
@@ -804,7 +753,6 @@ impl CertifiedServeIngressBinding {
         Ok(())
     }
 }
-
 impl Drop for CertifiedServeIngressBinding {
     fn drop(&mut self) {
         if let Err(error) = self.retire() {
@@ -815,14 +763,12 @@ impl Drop for CertifiedServeIngressBinding {
         }
     }
 }
-
 /// Per-height binding of durable generic leader-wire ownership to fair ingress.
 struct LeaderWireIngressBinding {
     ingress_ready: Arc<AtomicBool>,
     block_ingress: Arc<FairV2Ingress>,
     gate: Option<Arc<LeaderWireLifecycleStoreGate>>,
 }
-
 impl LeaderWireIngressBinding {
     fn bind(
         ingress_ready: Arc<AtomicBool>,
@@ -848,7 +794,6 @@ impl LeaderWireIngressBinding {
             gate: Some(gate),
         })
     }
-
     fn retire(&mut self) -> Result<(), V2RunnerError> {
         let Some(gate) = self.gate.as_ref() else {
             return Ok(());
@@ -861,7 +806,6 @@ impl LeaderWireIngressBinding {
         Ok(())
     }
 }
-
 impl Drop for LeaderWireIngressBinding {
     fn drop(&mut self) {
         if let Err(error) = self.retire() {
@@ -872,10 +816,8 @@ impl Drop for LeaderWireIngressBinding {
         }
     }
 }
-
 include!("v2_runner/height_ingress_bindings.rs");
 include!("v2_runner/lifecycle_terminal_recovery.rs");
-
 #[allow(clippy::too_many_lines)]
 fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let SumeragiWorker {
@@ -900,7 +842,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         consensus_frame_byte_capacity,
         block_sync_frame_byte_capacity,
     } = worker;
-
     // Reject an unsupported voting host before any recovery or durable
     // consensus constructor can touch validator storage. Observers remain
     // available for sync and query service on other platforms.
@@ -908,7 +849,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         config.role == NodeRole::Validator,
         crate::kura::sumeragi_v2_validator_storage_supported(),
     )?;
-
     let GenesisWithPubKey {
         genesis,
         public_key: genesis_public_key,
@@ -1010,7 +950,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
             .map_err(V2RunnerError::Service)?,
     );
-
     loop {
         cleanup_supervisor.reap_finished();
         if output_guard.restart_required() {
@@ -1348,7 +1287,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             certified_serve_ingress_binding,
             leader_wire_ingress_binding,
         );
-
         // A Native receipt at the durable tip may have crossed its
         // finality/manifest/receipt boundary before WSV checkpoint and commit
         // metadata were published. Finish the exact local replay first.
@@ -1872,10 +1810,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 &services,
             )?;
         }
-
         let mut block_sync_request = None;
         let mut admitted_discovered_commit_qc = false;
-
         let finality = loop {
             committed_lane_status_publisher.publish_if_changed(&lane_work);
             cleanup_supervisor.reap_finished();
@@ -1910,7 +1846,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 )?;
                 next_npos_vrf_retransmit = deadline_after(now, retransmit_interval);
             }
-
             if executor.has_retained_certified_body_response() {
                 let target_ordinal = executor
                     .retained_certified_body_response_scheduler_ordinal()?
@@ -2020,7 +1955,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 let _ = wake_rx.recv_timeout(IDLE_POLL);
                 continue;
             }
-
             // The network thread installs an exact certified-body ticket before
             // its carrier becomes visible in fair ingress. Give that target a
             // dedicated runner turn before completions, runtime work, lock
@@ -2263,9 +2197,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 let _ = wake_rx.recv_timeout(IDLE_POLL);
                 continue;
             };
-
             debug_assert!(startup_effects.is_empty());
-
             // Retry actor-owned output first, but keep servicing bounded
             // reducer and completion sources while one target is unavailable.
             // Each producer either transfers its complete fanout into the
@@ -2328,7 +2260,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         }
                     }
                 }
-
                 let terminal_decision = directive.decided_subject().is_some();
                 if !terminal_decision {
                     drive_block_sync(
@@ -2443,7 +2374,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 }
                 dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
             }
-
             if recovering_interrupted_tip {
                 advance_pending_tip_recovery_executor(
                     &mut executor,
@@ -2499,7 +2429,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     .replay_buffered_chunks(&mut executor)
                     .map_err(V2RunnerError::Service)?;
             }
-
             committed_lane_status_publisher.publish_if_changed(&lane_work);
             if executor.ready_to_finish() {
                 let (durable_receipt, durable_artifact) = executor
@@ -2538,7 +2467,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 debug_assert_eq!(durable_artifact, artifact);
                 break (receipt, artifact, lane_work, services);
             }
-
             if recovering_interrupted_tip {
                 // Global body/application recovery is local to the durable
                 // Decision. Exact decided-lane votes or QCs may still wake
@@ -2549,7 +2477,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 let _ = wake_rx.recv_timeout(IDLE_POLL);
                 continue;
             }
-
             schedule_local_proposal(
                 candidate_limits,
                 &context,
@@ -2570,11 +2497,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 retransmit_interval,
             )?;
             dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
-
             committed_lane_status_publisher.publish_if_changed(&lane_work);
             let _ = wake_rx.recv_timeout(IDLE_POLL);
         };
-
         let (receipt, artifact, lane_work, mut finalized_services) = finality;
         eager_block_sync =
             retain_eager_block_sync(recovering_interrupted_tip, admitted_discovered_commit_qc);
@@ -2649,12 +2574,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         staged_genesis_nexus_amx_context = None;
     }
 }
-
 #[derive(Default)]
 pub(super) struct CommittedLaneStatusPublisher {
     published_revision: Option<(u64, u64, u64)>,
 }
-
 impl CommittedLaneStatusPublisher {
     pub(super) fn publish_if_changed(&mut self, lane_work: &V2LaneWorkAdapter) -> bool {
         self.publish_if_changed_with(
@@ -2662,7 +2585,6 @@ impl CommittedLaneStatusPublisher {
             || lane_work.committed_lane_block_status_snapshot(),
         )
     }
-
     fn publish_if_changed_with(
         &mut self,
         mut observe_revision: impl FnMut() -> (u64, u64, u64),
@@ -2681,7 +2603,6 @@ impl CommittedLaneStatusPublisher {
         true
     }
 }
-
 fn replayed_proposal_sign(effects: &[AdapterEffect]) -> Option<ReplayedProposalSign> {
     effects.iter().find_map(|effect| match effect {
         AdapterEffect::Sign {
@@ -2703,13 +2624,11 @@ fn replayed_proposal_sign(effects: &[AdapterEffect]) -> Option<ReplayedProposalS
         | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
     })
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LockedBodyRecoveryPlan {
     request: Option<(EventTag, wire::ConsensusRound, wire::BlockSubject)>,
     may_repropose: bool,
 }
-
 fn locked_body_recovery_plan(
     directive: LocalProposalDirective,
     local_validator: wire::ValidatorIndex,
@@ -2731,13 +2650,11 @@ fn locked_body_recovery_plan(
             && can_admit_local_proposal,
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LocalConsensusDuties {
     autonomous_lane_view: Option<wire::View>,
     global_validator: Option<wire::ValidatorIndex>,
 }
-
 fn local_consensus_duties(
     directive: LocalProposalDirective,
     global_validator: Option<wire::ValidatorIndex>,
@@ -2749,7 +2666,6 @@ fn local_consensus_duties(
         global_validator,
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn schedule_local_proposal(
     candidate_limits: CandidateLimits,
@@ -2906,7 +2822,6 @@ fn schedule_local_proposal(
     if directive.locked_body().is_some() {
         return Ok(());
     }
-
     if context.height == 1 {
         let body = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
         // Genesis staging retains its deterministic execution image for application, while
@@ -3077,16 +2992,13 @@ fn schedule_local_proposal(
         });
         proposal_state.attempted = Some(owner);
     }
-
     Ok(())
 }
-
 fn canonical_height_one_proposal_wire(body: &SignedBlock) -> Result<Vec<u8>, V2RunnerError> {
     body.canonical_resultless_proposal()
         .encode_wire()
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))
 }
-
 fn submit_exact_body(
     context: &wire::HeightContext,
     directive: LocalProposalDirective,
@@ -3110,7 +3022,6 @@ fn submit_exact_body(
         proposal_state,
     )
 }
-
 fn encode_exact_local_body(
     context: &wire::HeightContext,
     tag: EventTag,
@@ -3134,7 +3045,6 @@ fn encode_exact_local_body(
     encode_payload(context, round, subject, canonical_wire)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))
 }
-
 fn submit_encoded_body(
     owner: LocalProposalOwner,
     canonical_wire: Vec<u8>,
@@ -3150,7 +3060,6 @@ fn submit_encoded_body(
     executor.admit_local_proposal(owner.tag, manifest, canonical_wire, services)?;
     Ok(())
 }
-
 fn drive_block_sync(
     now: Instant,
     next_attempt: &mut Instant,
@@ -3164,7 +3073,6 @@ fn drive_block_sync(
     if now < *next_attempt {
         return Ok(());
     }
-
     let next = deadline_after(now, retransmit_interval);
     if let Some(hash) = request_hash.as_ref() {
         let operation = output_guard
@@ -3197,7 +3105,6 @@ fn drive_block_sync(
     *next_attempt = next;
     Ok(())
 }
-
 fn broadcast_npos_vrf_messages(
     messages: impl IntoIterator<Item = wire::ConsensusMessageV2>,
     output_guard: &ConsensusOutputGuard,
@@ -3214,7 +3121,6 @@ fn broadcast_npos_vrf_messages(
     }
     Ok(())
 }
-
 include!("v2_runner/decided_lane_recovery.rs");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OuterIngressTurn {
@@ -3222,7 +3128,6 @@ enum OuterIngressTurn {
     Runtime,
     Ingress,
 }
-
 /// Closed outer-runner target named by one lifecycle rank observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -3241,7 +3146,6 @@ pub(crate) enum LifecycleRunnerRankTarget {
     /// The next authenticated fair-ingress service turn.
     Ingress,
 }
-
 impl LifecycleRunnerRankTarget {
     #[cfg(test)]
     const fn turn(self) -> OuterIngressTurn {
@@ -3252,7 +3156,6 @@ impl LifecycleRunnerRankTarget {
         }
     }
 }
-
 impl From<OuterIngressTurn> for LifecycleRunnerRankTarget {
     fn from(turn: OuterIngressTurn) -> Self {
         match turn {
@@ -3262,7 +3165,6 @@ impl From<OuterIngressTurn> for LifecycleRunnerRankTarget {
         }
     }
 }
-
 /// Borrow-bound proof of the outer runner cursor's exact current turn.
 ///
 /// Construction is private to [`OuterIngressTurns::next_current`]. While this
@@ -3276,40 +3178,33 @@ pub(crate) struct LifecycleCurrentRunnerTurn<'cursor> {
     cursor: &'cursor mut OuterIngressTurns,
     turn: OuterIngressTurn,
 }
-
 impl LifecycleCurrentRunnerTurn<'_> {
     /// Frozen height-context identity owned by the borrowed cursor.
     pub(crate) const fn context_id(&self) -> wire::HeightContextId {
         self.cursor.context_id
     }
-
     /// Frozen height owned by the borrowed cursor.
     pub(crate) const fn height(&self) -> wire::Height {
         self.cursor.height
     }
-
     /// Exact current outer-runner target.
     pub(crate) fn target(&self) -> LifecycleRunnerRankTarget {
         self.turn.into()
     }
-
     /// Current-turn reach debt. A borrow can represent only the turn presently
     /// at the cursor, so its debt is necessarily zero.
     pub(crate) const fn debt(&self) -> u64 {
         0
     }
-
     const fn turn(&self) -> OuterIngressTurn {
         self.turn
     }
 }
-
 impl Drop for LifecycleCurrentRunnerTurn<'_> {
     fn drop(&mut self) {
         self.cursor.advance_current(self.turn);
     }
 }
-
 /// Test-only runner reach-debt observation for one outer turn.
 ///
 /// Production cannot mint or consume this free-standing shape; its planner
@@ -3324,39 +3219,32 @@ pub(crate) struct LifecycleRunnerRankSnapshot {
     debt: u64,
     _linearity: LifecycleRunnerRankSnapshotLinearity,
 }
-
 #[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 struct LifecycleRunnerRankSnapshotLinearity;
-
 #[cfg(test)]
 impl Drop for LifecycleRunnerRankSnapshotLinearity {
     fn drop(&mut self) {}
 }
-
 #[cfg(test)]
 impl LifecycleRunnerRankSnapshot {
     /// Frozen height-context identity owning this cursor observation.
     pub(crate) const fn context_id(&self) -> wire::HeightContextId {
         self.context_id
     }
-
     /// Frozen height owning this cursor observation.
     pub(crate) const fn height(&self) -> wire::Height {
         self.height
     }
-
     /// Closed outer turn whose reach was measured.
     pub(crate) const fn target(&self) -> LifecycleRunnerRankTarget {
         self.target
     }
-
     /// Number of cursor turns strictly before the target.
     pub(crate) const fn debt(&self) -> u64 {
         self.debt
     }
 }
-
 /// Move-only cursor for the exact outer Completion/Runtime/Ingress cycle.
 ///
 /// Reifying the cursor preserves the existing iterator order while giving the
@@ -3372,7 +3260,6 @@ struct OuterIngressTurns {
     cycles_remaining: usize,
     next_turn: OuterIngressTurn,
 }
-
 impl OuterIngressTurns {
     fn new(limit: usize, context_id: wire::HeightContextId, height: wire::Height) -> Self {
         Self {
@@ -3382,7 +3269,6 @@ impl OuterIngressTurns {
             next_turn: OuterIngressTurn::Completion,
         }
     }
-
     #[cfg(test)]
     fn reach_debt(&self, target: OuterIngressTurn) -> Option<u64> {
         if self.cycles_remaining == 0 {
@@ -3395,7 +3281,6 @@ impl OuterIngressTurns {
         }
         (self.cycles_remaining > 1).then(|| u64::from(3 - next + target))
     }
-
     #[cfg(test)]
     fn lifecycle_rank_snapshot(
         &self,
@@ -3409,7 +3294,6 @@ impl OuterIngressTurns {
             _linearity: LifecycleRunnerRankSnapshotLinearity,
         })
     }
-
     /// Borrow the exact current turn without advancing the cursor early.
     fn next_current(&mut self) -> Option<LifecycleCurrentRunnerTurn<'_>> {
         if self.cycles_remaining == 0 {
@@ -3420,7 +3304,6 @@ impl OuterIngressTurns {
             cursor: self,
         })
     }
-
     fn advance_current(&mut self, turn: OuterIngressTurn) {
         assert_eq!(
             self.next_turn, turn,
@@ -3436,7 +3319,6 @@ impl OuterIngressTurns {
         };
     }
 }
-
 /// Mint the exact Ingress reach observation after Completion and Runtime for
 /// the production-owner cross-module transaction regression.
 #[cfg(test)]
@@ -3468,7 +3350,6 @@ pub(in crate::sumeragi) fn lifecycle_ingress_rank_snapshot_for_test(
         _linearity: LifecycleRunnerRankSnapshotLinearity,
     }
 }
-
 #[cfg(test)]
 const fn outer_ingress_turn_index(turn: OuterIngressTurn) -> u8 {
     match turn {
@@ -3477,7 +3358,6 @@ const fn outer_ingress_turn_index(turn: OuterIngressTurn) -> u8 {
         OuterIngressTurn::Ingress => 2,
     }
 }
-
 fn outer_ingress_turns(
     limit: usize,
     context_id: wire::HeightContextId,
@@ -3485,7 +3365,6 @@ fn outer_ingress_turns(
 ) -> OuterIngressTurns {
     OuterIngressTurns::new(limit, context_id, height)
 }
-
 fn v2_ingress_head_can_drain(
     inbound: &InboundBlockMessage,
     executor: &V2EffectExecutor,
@@ -3524,7 +3403,6 @@ fn v2_ingress_head_can_drain(
     }
     true
 }
-
 fn certified_body_request_is_superseded_after_decision(
     request: &wire::CertifiedBodyRequest,
     terminal_subject: Option<wire::BlockSubject>,
@@ -3533,7 +3411,6 @@ fn certified_body_request_is_superseded_after_decision(
     terminal_subject
         .is_some_and(|decided| request.round.height == active_height && request.subject != decided)
 }
-
 const fn v2_payload_is_terminal_reducer_control(payload: &wire::ConsensusMessageV2Payload) -> bool {
     matches!(
         payload,
@@ -3545,7 +3422,6 @@ const fn v2_payload_is_terminal_reducer_control(payload: &wire::ConsensusMessage
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
     )
 }
-
 fn is_remote_block_sync_rejection(error: &V2BlockSyncError) -> bool {
     matches!(
         error,
@@ -3555,20 +3431,17 @@ fn is_remote_block_sync_rejection(error: &V2BlockSyncError) -> bool {
             | V2BlockSyncError::ConflictingHistoricalBodyRequest { .. }
     )
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GuardedBlockSyncServeOutcome {
     Posted,
     NoResponse,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BoundBlockSyncServeOutcome {
     Posted,
     VolatileNoResponse,
     VolatileRemoteRejection,
 }
-
 fn serve_block_sync_while_guarded<Response>(
     output_guard: &ConsensusOutputGuard,
     serve: impl FnOnce() -> Result<Option<Response>, V2BlockSyncError>,
@@ -3600,7 +3473,6 @@ fn serve_block_sync_while_guarded<Response>(
         }
     }
 }
-
 fn finalize_bound_block_sync_serve(
     served: Result<GuardedBlockSyncServeOutcome, V2BlockSyncError>,
     retire_volatile: impl FnOnce() -> Result<(), V2RunnerError>,
@@ -3620,7 +3492,6 @@ fn finalize_bound_block_sync_serve(
         Err(error) => Err(error.into()),
     }
 }
-
 fn enqueue_control(
     executor: &mut V2EffectExecutor,
     receiver: &FairV2Ingress,
@@ -3634,7 +3505,6 @@ fn enqueue_control(
         executor.enqueue_network_with_ingress_ownership(message, ingress_ownership),
     )
 }
-
 fn complete_control_ingress_admission(
     receiver: &FairV2Ingress,
     terminal_ownership: &FairV2IngressOwnershipEvidence,
@@ -3663,7 +3533,6 @@ fn complete_control_ingress_admission(
         }
     }
 }
-
 fn mark_leader_wire_volatile(
     receiver: &FairV2Ingress,
     ownership: &FairV2IngressOwnershipEvidence,
@@ -3675,7 +3544,6 @@ fn mark_leader_wire_volatile(
     }
     Ok(())
 }
-
 fn commit_certificate_admission_completed(
     admission: Result<(), CommitCertificateAdmissionError<NetworkIngressError>>,
 ) -> Result<bool, V2RunnerError> {
@@ -3712,7 +3580,6 @@ fn commit_certificate_admission_completed(
         }
     }
 }
-
 fn advance_executor(
     receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor,
@@ -3734,7 +3601,6 @@ fn advance_executor(
     }
     Ok(())
 }
-
 /// Execute at most one serialized transition from an older lifecycle before
 /// an exact Serve target turn.
 ///
@@ -3750,14 +3616,12 @@ fn advance_executor_once_before_exact_serve(
     let _ = executor.step(Instant::now(), services)?;
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CertifiedServeBarrierLivenessAction {
     TimeoutVoteEpisode,
     TimeoutRecoveryPrefix,
     Pacemaker,
 }
-
 /// Service the complete timeout-recovery suffix of one selected Serve turn.
 ///
 /// The one-shot predecessor claim is deliberately not an episode owner. Once
@@ -3779,7 +3643,6 @@ fn service_certified_serve_barrier_liveness_turn<E>(
         || service(CertifiedServeBarrierLivenessAction::Pacemaker),
     )
 }
-
 /// Keep the pacemaker live for the full lifetime of a certified Serve barrier.
 ///
 /// `older_runtime_episode_claimed` deliberately does not gate service. The
@@ -3796,7 +3659,6 @@ fn service_certified_serve_barrier_pacemaker_turn<E>(
     }
     service()
 }
-
 /// Execute at most one typed timeout/Progress-root transition while an exact
 /// transport episode retains ordinary ownership.
 fn advance_pacemaker_once(
@@ -3808,7 +3670,6 @@ fn advance_pacemaker_once(
     let _ = executor.step_pacemaker_once(Instant::now(), services)?;
     Ok(())
 }
-
 fn reconcile_executor_locked_body(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
@@ -3821,7 +3682,6 @@ fn reconcile_executor_locked_body(
     }
     Ok(directive)
 }
-
 /// Keep lane-work construction behind the completed interrupted-tip
 /// application boundary.
 ///
@@ -3839,7 +3699,6 @@ fn construct_after_pending_tip_application_recovery<T>(
     }
     construct()
 }
-
 fn pending_tip_recovery_deadline_error(
     output_guard: &ConsensusOutputGuard,
     timeout: Duration,
@@ -3854,7 +3713,6 @@ fn pending_tip_recovery_deadline_error(
         stage,
     }
 }
-
 fn advance_pending_tip_recovery_executor(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
@@ -3871,7 +3729,6 @@ fn advance_pending_tip_recovery_executor(
     }
     Ok(advanced)
 }
-
 fn local_validator_index(
     context: &wire::HeightContext,
     local_peer: &PeerId,
@@ -3894,7 +3751,6 @@ fn local_validator_index(
         (NodeRole::Validator, None) => Ok(None),
     }
 }
-
 /// Claim the immutable process capability independently of this height's roster duty.
 ///
 /// Configured validators must own one generation even while absent from the recovered global
@@ -3918,7 +3774,6 @@ fn claim_runner_lifecycle_process_generation(
             }),
     }
 }
-
 fn round_for_tag(
     context: &wire::HeightContext,
     tag: EventTag,
@@ -3932,7 +3787,6 @@ fn round_for_tag(
         view: tag.view(),
     })
 }
-
 fn runtime_queue_config(config: &SumeragiV2Config) -> Result<RuntimeQueueConfig, V2RunnerError> {
     Ok(RuntimeQueueConfig::new(
         usize::try_from(config.limits.runtime_command_capacity)?,
@@ -3940,7 +3794,6 @@ fn runtime_queue_config(config: &SumeragiV2Config) -> Result<RuntimeQueueConfig,
         usize::try_from(config.limits.runtime_completion_reserve)?,
     ))
 }
-
 fn effect_queue_config(config: &SumeragiV2Config) -> Result<EffectQueueConfig, V2RunnerError> {
     let max_pending_work = usize::try_from(config.limits.effect_work_capacity)?;
     let completion_reserve = usize::try_from(config.limits.runtime_completion_reserve)?;
@@ -3957,7 +3810,6 @@ fn effect_queue_config(config: &SumeragiV2Config) -> Result<EffectQueueConfig, V
         usize::try_from(config.limits.certified_request_capacity)?,
     ))
 }
-
 fn lane_work_limits(
     config: &SumeragiV2Config,
     reply_source_capacity: usize,
@@ -4040,7 +3892,6 @@ fn lane_work_limits(
         native_amx_signing_guard_limits,
     ))
 }
-
 fn candidate_limits(
     context: &wire::HeightContext,
     config: &SumeragiV2Config,
@@ -4059,7 +3910,6 @@ fn candidate_limits(
     )
     .map_err(Into::into)
 }
-
 fn candidate_attachments(
     context: &wire::HeightContext,
     state: &State,
@@ -4139,7 +3989,6 @@ fn candidate_attachments(
         ..CandidateAttachments::default()
     })
 }
-
 const fn certified_merge_selection_for_npos(
     has_npos_effects: bool,
 ) -> PendingCertifiedMergeSelection {
@@ -4149,7 +3998,6 @@ const fn certified_merge_selection_for_npos(
         PendingCertifiedMergeSelection::Any
     }
 }
-
 fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> AdapterFingerprints {
     let node = Hash::new(local_peer.encode());
     let mut build_preimage = env!("CARGO_PKG_VERSION").as_bytes().to_vec();
@@ -4164,7 +4012,6 @@ fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> Adapt
         config: config.fingerprint(),
     }
 }
-
 fn apply_bounded_sidecar_admissions<T, Error>(
     limit: usize,
     mut next: impl FnMut() -> Result<Option<T>, Error>,
@@ -4180,7 +4027,6 @@ fn apply_bounded_sidecar_admissions<T, Error>(
     }
     Ok(applied)
 }
-
 fn apply_certified_merge_sidecar_chunk_admissions(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -4202,7 +4048,6 @@ fn apply_certified_merge_sidecar_chunk_admissions(
     )?;
     Ok(())
 }
-
 fn retry_exact_output_and_apply_sidecar_admissions(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -4215,9 +4060,7 @@ fn retry_exact_output_and_apply_sidecar_admissions(
     apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
     Ok(pending)
 }
-
 include!("v2_runner/finalized_output_rollover.rs");
-
 fn apply_certified_merge_sidecar_closed_prefixes(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -4228,7 +4071,6 @@ fn apply_certified_merge_sidecar_closed_prefixes(
             .map(|_| ())
     })
 }
-
 fn apply_certified_merge_sidecar_closed_prefixes_with(
     lane_work: &mut V2LaneWorkAdapter,
     mut apply: impl FnMut(&CertifiedMergeSidecarClosedPrefix) -> Result<(), String>,
@@ -4246,7 +4088,6 @@ fn apply_certified_merge_sidecar_closed_prefixes_with(
     }
     Ok(())
 }
-
 /// Require the exact queue owner observed by the preceding guarded peek.
 ///
 /// The runner holds exclusive access to the lane adapter, so an empty second
@@ -4258,9 +4099,7 @@ fn require_peeked_lane_work_effect(
 ) -> Result<V2LaneWorkEffect, V2RunnerError> {
     drained.ok_or(V2RunnerError::RestartRequired)
 }
-
 include!("v2_runner/canonical_recovery_ingress.rs");
-
 pub(in crate::sumeragi) fn dispatch_lane_work_effects(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -4313,15 +4152,12 @@ pub(in crate::sumeragi) fn dispatch_lane_work_effects(
     }
     Ok(())
 }
-
 include!("v2_runner/reply_route_retention.rs");
-
 #[derive(Debug)]
 enum LaneWorkEffectDispatch {
     Complete,
     SourceRetained(V2LaneWorkEffect),
 }
-
 fn dispatch_lane_work_effect(
     services: &ProductionV2Services,
     effect: V2LaneWorkEffect,
@@ -4415,9 +4251,7 @@ fn dispatch_lane_work_effect(
     }
     Ok(LaneWorkEffectDispatch::Complete)
 }
-
 include!("v2_runner/merge_sidecar_recovery.rs");
-
 fn drain_lane_relay_ingress(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     lane_work: &mut V2LaneWorkAdapter,
@@ -4441,7 +4275,6 @@ fn drain_lane_relay_ingress(
     }
     Ok(())
 }
-
 /// Fail-closed live-runner error.
 #[derive(Debug, Error)]
 pub(super) enum V2RunnerError {
@@ -4614,7 +4447,6 @@ pub(super) enum V2RunnerError {
     #[error("Sumeragi v2 CommitQC discovery request disappeared before reducer admission")]
     BlockSyncRequestDisappeared,
 }
-
 #[cfg(test)]
 #[path = "v2_runner_tests.rs"]
 mod tests;

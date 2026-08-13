@@ -1,12 +1,9 @@
 use iroha_primitives::numeric::Numeric;
 use norito::codec::Encode;
-
 use super::*;
-
 fn numeric(values: &[u32]) -> QueryOutputBatchBox {
     QueryOutputBatchBox::Numeric(values.iter().copied().map(Numeric::from).collect())
 }
-
 #[test]
 fn construction_rejects_missing_columns() {
     assert_eq!(
@@ -14,7 +11,6 @@ fn construction_rejects_missing_columns() {
         Err(QueryOutputBatchBoxTupleError::NoColumns)
     );
 }
-
 #[test]
 fn construction_rejects_every_unequal_column_position() {
     for (expected_column, tuple) in [
@@ -31,7 +27,6 @@ fn construction_rejects_every_unequal_column_position() {
         ));
     }
 }
-
 #[test]
 fn construction_allows_equal_zero_row_columns() {
     let batch = QueryOutputBatchBoxTuple::new(vec![numeric(&[]), numeric(&[])])
@@ -40,11 +35,9 @@ fn construction_allows_equal_zero_row_columns() {
     assert_eq!(batch.len(), 0);
     assert!(batch.is_empty());
 }
-
 #[test]
 fn extend_is_atomic_on_count_or_type_mismatch() {
     let original = QueryOutputBatchBoxTuple::from_batch(numeric(&[1]));
-
     let mut count_mismatch = original.clone();
     let two_columns = QueryOutputBatchBoxTuple::new(vec![numeric(&[2]), numeric(&[3])])
         .expect("equal column lengths");
@@ -56,7 +49,6 @@ fn extend_is_atomic_on_count_or_type_mismatch() {
         })
     );
     assert_eq!(count_mismatch, original);
-
     let mut type_mismatch = original.clone();
     let strings =
         QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(vec!["two".to_owned()]));
@@ -65,7 +57,6 @@ fn extend_is_atomic_on_count_or_type_mismatch() {
         Err(QueryOutputBatchBoxTupleError::ColumnTypeMismatch { column: 0 })
     );
     assert_eq!(type_mismatch, original);
-
     let mut late_mismatch = QueryOutputBatchBoxTuple::new(vec![
         numeric(&[1]),
         QueryOutputBatchBox::String(vec!["one".to_owned()]),
@@ -80,20 +71,16 @@ fn extend_is_atomic_on_count_or_type_mismatch() {
     );
     assert_eq!(late_mismatch, late_snapshot, "preflight must be atomic");
 }
-
 #[test]
 fn extend_preserves_equal_column_lengths() {
     let mut left = QueryOutputBatchBoxTuple::new(vec![numeric(&[1]), numeric(&[10])])
         .expect("equal column lengths");
     let right = QueryOutputBatchBoxTuple::new(vec![numeric(&[2, 3]), numeric(&[20, 30])])
         .expect("equal column lengths");
-
     left.extend(right).expect("matching tuples extend");
-
     assert_eq!(left.len(), 3);
     assert!(left.iter().all(|column| column.len() == 3));
 }
-
 #[test]
 fn erased_batch_extend_is_total_and_supports_json() {
     assert!(QueryOutputBatchBox::Json(Vec::new()).is_empty());
@@ -104,7 +91,6 @@ fn erased_batch_extend_is_total_and_supports_json() {
     .expect("matching JSON batches extend");
     assert_eq!(left.len(), 2);
     assert!(!left.is_empty());
-
     let snapshot = left.clone();
     assert_eq!(
         left.extend(numeric(&[3])),
@@ -112,7 +98,6 @@ fn erased_batch_extend_is_total_and_supports_json() {
     );
     assert_eq!(left, snapshot, "type mismatch must not mutate the batch");
 }
-
 #[test]
 fn norito_decode_rejects_missing_and_unequal_columns() {
     for candidate in [
@@ -140,7 +125,6 @@ fn norito_decode_rejects_missing_and_unequal_columns() {
         );
     }
 }
-
 #[test]
 fn exact_slice_decode_roundtrips_valid_columns() {
     let batch = QueryOutputBatchBoxTuple::new(vec![numeric(&[1, 2]), numeric(&[3, 4])])
@@ -150,7 +134,6 @@ fn exact_slice_decode_roundtrips_valid_columns() {
         .expect("valid exact slice decode");
     assert_eq!(decoded, batch);
 }
-
 #[test]
 fn query_output_norito_decode_rejects_hostile_nested_batch() {
     #[derive(Encode)]
@@ -160,7 +143,6 @@ fn query_output_norito_decode_rejects_hostile_nested_batch() {
         has_more: bool,
         continue_cursor: Option<ForwardCursor>,
     }
-
     let hostile = QueryOutputCandidate {
         batch: QueryOutputBatchBoxTupleCandidate {
             tuple: vec![numeric(&[1]), numeric(&[])],
@@ -173,13 +155,11 @@ fn query_output_norito_decode_rejects_hostile_nested_batch() {
         .expect_err("hostile nested batch must fail query-output decode");
     assert!(error.to_string().to_lowercase().contains("column"));
 }
-
 #[test]
 fn norito_decode_rejects_every_truncated_prefix_and_trailing_data() {
     let batch = QueryOutputBatchBoxTuple::new(vec![numeric(&[1, 2]), numeric(&[3, 4])])
         .expect("equal column lengths");
     let encoded = batch.encode();
-
     for cut in 0..encoded.len() {
         assert!(
             norito::codec::decode_adaptive::<QueryOutputBatchBoxTuple>(&encoded[..cut]).is_err(),
@@ -187,7 +167,6 @@ fn norito_decode_rejects_every_truncated_prefix_and_trailing_data() {
             encoded.len()
         );
     }
-
     let mut with_trailing_data = encoded;
     with_trailing_data.extend_from_slice(&[0xA5, 0x5A]);
     assert!(
@@ -195,7 +174,6 @@ fn norito_decode_rejects_every_truncated_prefix_and_trailing_data() {
         "trailing bytes must not be accepted"
     );
 }
-
 #[cfg(feature = "json")]
 #[test]
 fn json_decode_rejects_hostile_column_shapes() {
@@ -210,7 +188,6 @@ fn json_decode_rejects_hostile_column_shapes() {
         assert!(error.to_string().to_lowercase().contains("column"));
     }
 }
-
 #[cfg(feature = "json")]
 #[test]
 fn query_response_json_rejects_hostile_batch_before_iteration() {
@@ -225,7 +202,6 @@ fn query_response_json_rejects_hostile_batch_before_iteration() {
             "continue_cursor": null
         }
     });
-
     let error = norito::json::from_value::<QueryResponse>(response)
         .expect_err("hostile query response must fail at its decode boundary");
     assert!(error.to_string().to_lowercase().contains("column"));

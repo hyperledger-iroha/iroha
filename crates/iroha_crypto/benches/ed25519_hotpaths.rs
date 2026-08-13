@@ -1,22 +1,17 @@
 //! Benchmarks for Ed25519 parse and verification hot paths.
-
 use std::hint::black_box;
-
 use criterion::Criterion;
 use iroha_crypto::{
     Algorithm, Ed25519BatchScratch, KeyPair, PrivateKey, Signature, ed25519_parse_public_key,
     ed25519_verify_batch_preparsed_deterministic_with_scratch,
 };
-
 fn seeded_keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("bench Ed25519 seeded keypair should be valid")
 }
-
 fn checked_signature(private_key: &PrivateKey, message: &[u8]) -> Signature {
     Signature::try_new(private_key, message).expect("bench Ed25519 signature should succeed")
 }
-
 fn checked_ed25519_public_key_payload(keypair: &KeyPair) -> &[u8] {
     let (algorithm, payload) = keypair
         .public_key()
@@ -25,16 +20,13 @@ fn checked_ed25519_public_key_payload(keypair: &KeyPair) -> &[u8] {
     assert_eq!(algorithm, Algorithm::Ed25519);
     payload
 }
-
 fn bench_public_key_parse(c: &mut Criterion) {
     let warm = seeded_keypair(7);
     let warm_payload = checked_ed25519_public_key_payload(&warm);
     ed25519_parse_public_key(warm_payload).expect("warm public key parse");
-
     c.bench_function("ed25519/public_key_parse/warm_same_key", |b| {
         b.iter(|| black_box(ed25519_parse_public_key(black_box(warm_payload)).unwrap()))
     });
-
     let keys = (0..=u8::MAX)
         .map(seeded_keypair)
         .map(|keypair| checked_ed25519_public_key_payload(&keypair).to_vec())
@@ -47,12 +39,10 @@ fn bench_public_key_parse(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_single_verify(c: &mut Criterion) {
     let keypair = seeded_keypair(11);
     let message = b"iroha-ed25519-hotpath-message";
     let signature = checked_signature(keypair.private_key(), message);
-
     c.bench_function("ed25519/verify/single", |b| {
         b.iter(|| {
             signature
@@ -61,7 +51,6 @@ fn bench_single_verify(c: &mut Criterion) {
             black_box(())
         })
     });
-
     let cache_message = [0x42_u8; 32];
     let cache_signature = checked_signature(keypair.private_key(), &cache_message);
     cache_signature
@@ -76,7 +65,6 @@ fn bench_single_verify(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_batch_verify(c: &mut Criterion) {
     for &count in &[16usize, 64, 256] {
         let keypairs = (0..count)
@@ -104,7 +92,6 @@ fn bench_batch_verify(c: &mut Criterion) {
         let message_refs = messages.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let mut scratch = Ed25519BatchScratch::default();
-
         c.bench_function(&format!("ed25519/verify_batch_preparsed/{count}"), |b| {
             b.iter(|| {
                 ed25519_verify_batch_preparsed_deterministic_with_scratch(
@@ -120,7 +107,6 @@ fn bench_batch_verify(c: &mut Criterion) {
         });
     }
 }
-
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_public_key_parse(&mut c);

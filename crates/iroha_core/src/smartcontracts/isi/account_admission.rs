@@ -3,9 +3,7 @@
 //! This module provides a deterministic implementation of "implicit accounts":
 //! when global policy allows receipt-like operations (asset mint/transfer, NFT transfer), the
 //! destination `Account` object may be created automatically if it does not exist yet.
-
 use std::sync::LazyLock;
-
 use iroha_data_model::query::error::FindError;
 use iroha_data_model::{
     IntoKeyValue,
@@ -24,18 +22,15 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
-
 use crate::{
     role::RoleIdWithOwner,
     state::{StateTransaction, WorldReadOnly},
 };
-
 static IMPLICIT_CREATED_VIA_KEY: LazyLock<Name> = LazyLock::new(|| {
     "iroha:created_via"
         .parse()
         .expect("implicit created_via metadata key must be a valid Name")
 });
-
 fn first_disallowed_algorithm(
     controller: &AccountController,
     allowed: &[iroha_crypto::Algorithm],
@@ -57,7 +52,6 @@ fn first_disallowed_algorithm(
         }
     }
 }
-
 fn controller_algorithm(
     public_key: &iroha_crypto::PublicKey,
 ) -> Result<iroha_crypto::Algorithm, AccountAdmissionError> {
@@ -67,7 +61,6 @@ fn controller_algorithm(
         })
     })
 }
-
 fn algorithm_if_disallowed(
     algorithm: iroha_crypto::Algorithm,
     allowed: &[iroha_crypto::Algorithm],
@@ -78,7 +71,6 @@ fn algorithm_if_disallowed(
         Some(algorithm)
     }
 }
-
 fn ensure_controller_allowed_for_implicit_admission(
     controller: &AccountController,
     allowed_algorithms: &[iroha_crypto::Algorithm],
@@ -87,7 +79,6 @@ fn ensure_controller_allowed_for_implicit_admission(
     if let Some(disallowed) = first_disallowed_algorithm(controller, allowed_algorithms)? {
         return Err(AccountAdmissionError::AlgorithmNotAllowed(disallowed));
     }
-
     let validate_curve = |algorithm| {
         let Ok(curve) = CurveId::try_from_algorithm(algorithm) else {
             return Err(AccountAdmissionError::AlgorithmNotAllowed(algorithm));
@@ -99,7 +90,6 @@ fn ensure_controller_allowed_for_implicit_admission(
             Err(AccountAdmissionError::AlgorithmNotAllowed(algorithm))
         }
     };
-
     match controller {
         AccountController::Single(signatory) => validate_curve(controller_algorithm(signatory)?)?,
         AccountController::Multisig(policy) => {
@@ -108,10 +98,8 @@ fn ensure_controller_allowed_for_implicit_admission(
             }
         }
     }
-
     Ok(())
 }
-
 fn load_account_admission_policy(
     _destination: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
@@ -135,10 +123,8 @@ fn load_account_admission_policy(
                 .into()
             });
     }
-
     Ok(AccountAdmissionPolicy::default())
 }
-
 fn apply_implicit_creation_fee(
     authority: &AccountId,
     created_account: &AccountId,
@@ -157,7 +143,6 @@ fn apply_implicit_creation_fee(
         .world
         .asset(&payer_asset_id)
         .map_or_else(|_| Quantity::zero(), |asset| asset.value().as_ref().clone());
-
     if available < fee.amount {
         return Err(
             AccountAdmissionError::FeeUnsatisfied(AccountAdmissionFeeUnsatisfied {
@@ -168,7 +153,6 @@ fn apply_implicit_creation_fee(
             .into(),
         );
     }
-
     match &fee.destination {
         ImplicitAccountFeeDestination::Burn => {
             crate::smartcontracts::isi::asset::isi::execute_account_admission_fee_burn(
@@ -198,10 +182,8 @@ fn apply_implicit_creation_fee(
             )?;
         }
     }
-
     Ok(())
 }
-
 fn resolve_existing_account_for_subject(
     state_transaction: &StateTransaction<'_, '_>,
     account: &AccountId,
@@ -211,7 +193,6 @@ fn resolve_existing_account_for_subject(
         Err(FindError::Account(_)) => {}
         Err(err) => return Err(err.into()),
     }
-
     state_transaction
         .world
         .accounts_for_subject_iter(&account.subject_id())
@@ -219,7 +200,6 @@ fn resolve_existing_account_for_subject(
         .map(|entry| entry.id().clone())
         .ok_or_else(|| FindError::Account(account.clone()).into())
 }
-
 fn create_implicit_account(
     _authority: &AccountId,
     destination: &AccountId,
@@ -240,7 +220,6 @@ fn create_implicit_account(
         .world
         .accounts
         .insert(account_id, account_value);
-
     let mut default_role_granted = None;
     if let Some(role) = default_role_on_create {
         let role_key = RoleIdWithOwner::new(destination.clone(), role.clone());
@@ -263,11 +242,9 @@ fn create_implicit_account(
         default_role_granted = Some(role.clone());
         state_transaction.invalidate_permission_cache_for_account(destination);
     }
-
     state_transaction
         .world
         .emit_events(Some(AccountEvent::Created(AccountCreated::new(account))));
-
     if let Some(role) = default_role_granted {
         state_transaction
             .world
@@ -276,10 +253,8 @@ fn create_implicit_account(
                 role,
             })));
     }
-
     Ok(())
 }
-
 /// Ensure `destination` account exists, creating it implicitly when allowed by policy.
 ///
 /// Returns `Ok(true)` when the account was created, `Ok(false)` when it already existed.
@@ -292,13 +267,10 @@ pub(super) fn ensure_receiving_account(
     if state_transaction.world.account(destination).is_ok() {
         return Ok(false);
     }
-
     let policy = load_account_admission_policy(destination, state_transaction)?;
-
     if policy.mode != AccountAdmissionMode::ImplicitReceive {
         return Err(AccountAdmissionError::ImplicitAccountCreationDisabled.into());
     }
-
     if let Some((asset_def_id, amount)) = value_hint {
         if let Some(required) = policy.min_initial_amount_for(asset_def_id) {
             if amount < required {
@@ -313,7 +285,6 @@ pub(super) fn ensure_receiving_account(
             }
         }
     }
-
     let max_creations = policy.max_implicit_creations_per_tx();
     if state_transaction.implicit_account_creations_in_tx >= max_creations {
         return Err(
@@ -325,7 +296,6 @@ pub(super) fn ensure_receiving_account(
             .into(),
         );
     }
-
     if let Some(max_creations) = policy.max_implicit_creations_per_block() {
         let created_so_far = state_transaction
             .implicit_account_creations_in_block_so_far
@@ -341,9 +311,7 @@ pub(super) fn ensure_receiving_account(
             );
         }
     }
-
     let default_role_on_create = policy.default_role_on_create().cloned();
-
     if let Some(default_role) = &default_role_on_create {
         state_transaction.world.role(default_role).map_err(|err| {
             AccountAdmissionError::DefaultRoleError(AccountAdmissionDefaultRoleError {
@@ -352,33 +320,26 @@ pub(super) fn ensure_receiving_account(
             })
         })?;
     }
-
     ensure_controller_allowed_for_implicit_admission(
         destination.controller(),
         &state_transaction.crypto.allowed_signing,
         &state_transaction.crypto.allowed_curve_ids,
     )?;
-
     if let Some(fee) = policy.implicit_creation_fee() {
         apply_implicit_creation_fee(authority, destination, fee, state_transaction)?;
     }
-
     create_implicit_account(
         authority,
         destination,
         default_role_on_create.as_ref(),
         state_transaction,
     )?;
-
     state_transaction.implicit_account_creations_in_tx += 1;
-
     Ok(true)
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::{ACCOUNT_ADMISSION_POLICY_METADATA_KEY, admission::ImplicitAccountCreationFee},
@@ -388,7 +349,6 @@ mod tests {
     use iroha_test_samples::ALICE_ID;
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         kura::Kura,
@@ -396,33 +356,27 @@ mod tests {
         smartcontracts::Execute,
         state::{State, StateTransaction, World},
     };
-
     static POLICY_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
         ACCOUNT_ADMISSION_POLICY_METADATA_KEY
             .parse()
             .expect("account admission policy metadata key must be a valid Name")
     });
-
     fn checked_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("account admission fixture key generation should succeed")
     }
-
     fn random_account_id() -> AccountId {
         let key_pair = checked_ed25519_keypair();
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn checked_ed25519_keypair_preserves_algorithm() {
         assert_eq!(checked_ed25519_keypair().algorithm(), Algorithm::Ed25519);
     }
-
     fn fixture_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], algorithm)
             .expect("fixture seed must derive a valid keypair")
     }
-
     fn open_domain(domain_id: DomainId, policy: AccountAdmissionPolicy) -> Domain {
         let mut metadata = Metadata::default();
         metadata.insert((*POLICY_METADATA_KEY).clone(), Json::new(policy));
@@ -430,7 +384,6 @@ mod tests {
             .with_metadata(metadata)
             .build(&ALICE_ID)
     }
-
     fn build_account_in_domain(
         account_id: AccountId,
         _domain_id: DomainId,
@@ -438,7 +391,6 @@ mod tests {
     ) -> iroha_data_model::account::Account {
         iroha_data_model::account::NewAccount::new(account_id.clone()).build(authority)
     }
-
     fn test_state(mut world: World) -> State {
         let mut policy = None::<AccountAdmissionPolicy>;
         for (_, domain) in world.domains.view().iter() {
@@ -457,23 +409,19 @@ mod tests {
                 policy = Some(decoded);
             }
         }
-
         if let Some(policy) = policy {
             let custom = policy.into_custom_parameter();
             let mut params = Parameters::default();
             params.custom.insert(custom.id.clone(), custom);
             world.parameters = mv::cell::Cell::new(params);
         }
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(world, kura, query)
     }
-
     fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
         state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
     }
-
     #[test]
     fn implicit_admission_controller_checks_use_checked_algorithm_access() {
         let ed25519 = fixture_keypair(0x41, Algorithm::Ed25519);
@@ -481,27 +429,23 @@ mod tests {
         let allowed = [Algorithm::Ed25519];
         let allowed_curve_ids =
             iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(&allowed);
-
         ensure_controller_allowed_for_implicit_admission(
             &AccountController::Single(ed25519.public_key().clone()),
             &allowed,
             &allowed_curve_ids,
         )
         .expect("Ed25519 controller should be allowed");
-
         let err = ensure_controller_allowed_for_implicit_admission(
             &AccountController::Single(secp256k1.public_key().clone()),
             &allowed,
             &allowed_curve_ids,
         )
         .expect_err("Secp256k1 controller should be rejected by allowed_signing");
-
         assert!(matches!(
             err,
             AccountAdmissionError::AlgorithmNotAllowed(Algorithm::Secp256k1)
         ));
     }
-
     #[test]
     fn fixture_keypair_uses_checked_seed_derivation() {
         assert_eq!(
@@ -513,7 +457,6 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[test]
     fn transfer_asset_creates_destination_account_in_open_domain() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -546,10 +489,8 @@ mod tests {
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
-
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -558,11 +499,9 @@ mod tests {
         Transfer::asset_quantity(alice_asset_id.clone(), 10_u32, dest.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("transfer succeeds");
-
         stx.world
             .account(&dest)
             .expect("destination account should be created");
-
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         let alice_balance = stx
             .world
@@ -578,7 +517,6 @@ mod tests {
             .into_inner();
         assert_eq!(alice_balance, Quantity::from(90_u32));
         assert_eq!(dest_balance, Quantity::from(10_u32));
-
         // AccountCreated must come before any receipt events.
         let events = &stx.world.internal_event_buf;
         assert!(!events.is_empty(), "events must be emitted");
@@ -590,7 +528,6 @@ mod tests {
             "first event should be destination AccountCreated, got {:?}",
             events[0]
         );
-
         // The created account must advertise its origin in metadata.
         let account = stx.world.account(&dest).expect("account");
         let account_details = account.value();
@@ -600,7 +537,6 @@ mod tests {
             Some(&Json::new("implicit"))
         );
     }
-
     #[test]
     fn transfer_asset_batch_creates_destination_account_in_open_domain() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -633,15 +569,12 @@ mod tests {
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
-
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx, 0xA2);
-
         let dest = random_account_id();
         let entry = TransferAssetBatchEntry::new(
             ALICE_ID.clone(),
@@ -652,11 +585,9 @@ mod tests {
         TransferAssetBatch::new(vec![entry])
             .execute(&ALICE_ID, &mut stx)
             .expect("batch transfer succeeds");
-
         stx.world
             .account(&dest)
             .expect("destination account should be created");
-
         let dest_asset_id = AssetId::new(asset_def_id, dest);
         let alice_balance = stx
             .world
@@ -673,7 +604,6 @@ mod tests {
         assert_eq!(alice_balance, Quantity::from(95_u32));
         assert_eq!(dest_balance, Quantity::from(5_u32));
     }
-
     #[test]
     fn mint_asset_creates_destination_account_in_open_domain() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -704,20 +634,16 @@ mod tests {
             )
         }
         .build(&ALICE_ID);
-
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         Mint::asset_quantity(7_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint succeeds");
-
         stx.world
             .account(&dest)
             .expect("destination account should be created");
@@ -728,7 +654,6 @@ mod tests {
             .clone()
             .into_inner();
         assert_eq!(dest_balance, Quantity::from(7_u32));
-
         let events = &stx.world.internal_event_buf;
         assert!(
             matches!(
@@ -738,7 +663,6 @@ mod tests {
             "first event should be destination AccountCreated"
         );
     }
-
     #[test]
     fn transfer_nft_creates_destination_account_in_open_domain() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -756,25 +680,20 @@ mod tests {
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let nft_id: NftId = "n0$wonderland.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&ALICE_ID);
-
         let world = World::with_assets([domain], [alice_account], [], [], [nft]);
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let dest = random_account_id();
         Transfer::nft(ALICE_ID.clone(), nft_id.clone(), dest.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("nft transfer succeeds");
-
         stx.world
             .account(&dest)
             .expect("destination account should be created");
         let nft_entry = stx.world.nft(&nft_id).expect("nft exists");
         assert_eq!(nft_entry.value().owned_by, dest);
-
         let events = &stx.world.internal_event_buf;
         assert_eq!(events.len(), 2, "expected account + nft events");
         assert!(
@@ -792,7 +711,6 @@ mod tests {
             "second event should be NFT owner change"
         );
     }
-
     #[test]
     fn transfer_asset_rejects_missing_destination_in_explicit_domain() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -825,14 +743,11 @@ mod tests {
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
-
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let dest = random_account_id();
         let err = Transfer::asset_quantity(alice_asset_id.clone(), 10_u32, dest.clone())
             .execute(&ALICE_ID, &mut stx)
@@ -851,11 +766,9 @@ mod tests {
             "destination must not exist"
         );
     }
-
     #[test]
     fn chain_default_policy_disables_implicit_receive_without_domain_metadata() {
         use iroha_data_model::parameter::Parameters;
-
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
@@ -876,7 +789,6 @@ mod tests {
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
-
         let mut world =
             World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let policy = AccountAdmissionPolicy {
@@ -891,17 +803,14 @@ mod tests {
         let mut params = Parameters::default();
         params.custom.insert(custom.id.clone(), custom);
         world.parameters = mv::cell::Cell::new(params);
-
         let state = test_state(world);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let dest = random_account_id();
         let err = Transfer::asset_quantity(alice_asset_id.clone(), 10_u32, dest.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("transfer should be rejected via chain default explicit policy");
-
         assert!(
             matches!(
                 err,
@@ -916,7 +825,6 @@ mod tests {
             "destination must not exist"
         );
     }
-
     #[test]
     fn implicit_creation_cap_is_enforced_per_transaction() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -947,20 +855,16 @@ mod tests {
             )
         }
         .build(&ALICE_ID);
-
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let dest1 = random_account_id();
         let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
         Mint::asset_quantity(1_u32, dest1_asset_id)
             .execute(&ALICE_ID, &mut stx)
             .expect("first mint creates account");
-
         let dest2 = random_account_id();
         let dest2_asset_id = AssetId::new(asset_def_id.clone(), dest2.clone());
         let err = Mint::asset_quantity(1_u32, dest2_asset_id)
@@ -980,7 +884,6 @@ mod tests {
         );
         assert!(stx.world.account(&dest2).is_err(), "dest2 must not exist");
     }
-
     #[test]
     fn implicit_creation_cap_is_enforced_per_block_across_transactions() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1011,13 +914,10 @@ mod tests {
             )
         }
         .build(&ALICE_ID);
-
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let dest1 = random_account_id();
         let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
         {
@@ -1027,7 +927,6 @@ mod tests {
                 .expect("first mint creates account");
             stx.apply();
         }
-
         let dest2 = random_account_id();
         let dest2_asset_id = AssetId::new(asset_def_id.clone(), dest2.clone());
         let mut stx = block.transaction();
@@ -1048,7 +947,6 @@ mod tests {
         );
         assert!(stx.world.account(&dest2).is_err(), "dest2 must not exist");
     }
-
     #[test]
     fn implicit_creation_fee_is_enforced_and_charged() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1088,7 +986,6 @@ mod tests {
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(20_u32));
-
         let world = World::with_assets(
             [domain],
             [alice_account, fee_sink_account],
@@ -1097,17 +994,14 @@ mod tests {
             [],
         );
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         Mint::asset_quantity(10_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint should succeed with fee payment");
-
         stx.world.account(&dest).expect("destination exists");
         let alice_balance = stx
             .world
@@ -1132,7 +1026,6 @@ mod tests {
             .into_inner();
         assert_eq!(dest_balance, Quantity::from(10_u32));
     }
-
     #[test]
     fn implicit_creation_fee_rejects_when_insufficient_balance() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1169,14 +1062,11 @@ mod tests {
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(3_u32));
-
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         let err = Mint::asset_quantity(1_u32, dest_asset_id.clone())
@@ -1203,7 +1093,6 @@ mod tests {
             .into_inner();
         assert_eq!(alice_balance, Quantity::from(3_u32));
     }
-
     #[test]
     fn min_initial_amount_is_enforced() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1236,14 +1125,11 @@ mod tests {
             )
         }
         .build(&ALICE_ID);
-
         let world = World::with([domain], [alice_account], [asset_def]);
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         let err = Mint::asset_quantity(5_u32, dest_asset_id.clone())
@@ -1269,7 +1155,6 @@ mod tests {
             "destination asset must not exist"
         );
     }
-
     #[test]
     fn default_role_is_assigned_on_implicit_creation() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -1301,7 +1186,6 @@ mod tests {
             )
         }
         .build(&ALICE_ID);
-
         let mut world = World::with([domain], [alice_account], [asset_def]);
         let role = iroha_data_model::role::Role {
             id: role_id.clone(),
@@ -1309,26 +1193,21 @@ mod tests {
             permission_epochs: BTreeMap::new(),
         };
         world.roles.insert(role_id.clone(), role);
-
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let dest = random_account_id();
         let dest_asset_id = AssetId::new(asset_def_id.clone(), dest.clone());
         Mint::asset_quantity(1_u32, dest_asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint should create account and assign role");
-
         let mut roles = stx.world.account_roles_iter(&dest);
         assert_eq!(
             roles.next(),
             Some(&role_id),
             "implicit account should receive default role"
         );
-
         let events = &stx.world.internal_event_buf;
         let created_pos = events.iter().position(|event| {
             matches!(event.as_ref(), DataEvent::Account(AccountEvent::Created(_)))
@@ -1352,7 +1231,6 @@ mod tests {
             "account creation should happen before default role grant"
         );
     }
-
     #[test]
     fn default_role_missing_rejects_implicit_creation() {
         let domain_id: DomainId = DomainId::try_new("missing-role", "world").expect("domain id");
@@ -1369,18 +1247,14 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-
         let world = World::with([domain], [alice_account], []);
         let state = test_state(world);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-
         let dest = random_account_id();
         let err = ensure_receiving_account(&ALICE_ID, &dest, None, &mut stx)
             .expect_err("implicit creation should fail when role is absent");
-
         assert!(
             matches!(
                 err,

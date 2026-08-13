@@ -1,24 +1,19 @@
 //! This module contains [`Domain`](`crate::domain::Domain`) structure
 //! and related implementations and trait implementations.
 use std::{format, str::FromStr, string::String, vec::Vec};
-
 use derive_more::Display;
 use iroha_data_model_derive::{IdEqOrdHash, model};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 pub use self::model::*;
 use crate::{
     HasMetadata, Identifiable, Name, Registered, Registrable, error::ParseError,
     metadata::Metadata, name, prelude::*, sorafs_uri::SorafsUri,
 };
-
 #[model]
 mod model {
     use getset::Getters;
-
     use super::*;
-
     /// Identification of a [`Domain`].
     #[derive(
         Debug,
@@ -43,7 +38,6 @@ mod model {
         /// Dataspace alias that owns the domain namespace.
         pub dataspace: Name,
     }
-
     /// Named group of [`Account`] and [`Asset`](`crate::asset::value::Asset`) entities.
     #[derive(Debug, Display, Clone, IdEqOrdHash, Getters, Decode, Encode, IntoSchema)]
     #[allow(clippy::multiple_inherent_impl)]
@@ -70,7 +64,6 @@ mod model {
         #[getset(get = "pub")]
         pub owned_by: AccountId,
     }
-
     /// Builder which can be submitted in a transaction to create a new [`Domain`]
     #[derive(Debug, Display, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -93,17 +86,14 @@ mod model {
         pub metadata: Metadata,
     }
 }
-
 impl DomainId {
     fn parse_label(raw: &str) -> Result<Name, ParseError> {
         let canonical = name::canonicalize_domain_label(raw)?;
         Name::from_str(&canonical)
     }
-
     fn from_canonical_parts(name: Name, dataspace: Name) -> Self {
         Self { name, dataspace }
     }
-
     /// Build a dataspace-qualified domain identifier from explicit parts.
     ///
     /// # Errors
@@ -116,7 +106,6 @@ impl DomainId {
             Self::parse_label(dataspace.as_ref())?,
         ))
     }
-
     /// Parse a fully qualified `domain.dataspace` literal.
     ///
     /// # Errors
@@ -132,31 +121,26 @@ impl DomainId {
                 "domain id must not contain leading or trailing whitespace",
             ));
         }
-
         let dot_count = candidate.bytes().filter(|byte| *byte == b'.').count();
         if dot_count != 1 {
             return Err(ParseError::new(
                 "domain id must use `domain.dataspace` format",
             ));
         }
-
         let (name, dataspace) = candidate
             .split_once('.')
             .expect("validated domain literal must contain exactly one dot");
         if name.is_empty() || dataspace.is_empty() {
             return Err(ParseError::new("domain id segments must not be empty"));
         }
-
         Self::try_new(name, dataspace)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for DomainId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.to_string(), out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -164,7 +148,6 @@ impl norito::json::FastJsonWrite for DomainId {
         norito::json::write_json_string_to(&self.to_string(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for DomainId {
     fn json_deserialize(
@@ -175,14 +158,12 @@ impl norito::json::JsonDeserialize for DomainId {
             .map_err(|err| norito::json::Error::Message(err.reason().into()))
     }
 }
-
 impl HasMetadata for NewDomain {
     #[inline]
     fn metadata(&self) -> &crate::metadata::Metadata {
         &self.metadata
     }
 }
-
 impl NewDomain {
     /// Create a [`NewDomain`], reserved for internal use.
     #[must_use]
@@ -193,14 +174,12 @@ impl NewDomain {
             metadata: Metadata::default(),
         }
     }
-
     /// Add [`logo`](SorafsUri) to the domain replacing previously defined value.
     #[must_use]
     pub fn with_logo(mut self, logo: SorafsUri) -> Self {
         self.logo = Some(logo);
         self
     }
-
     /// Add [`Metadata`] to the domain replacing previously defined value
     #[must_use]
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
@@ -208,21 +187,17 @@ impl NewDomain {
         self
     }
 }
-
 impl HasMetadata for Domain {
     #[inline]
     fn metadata(&self) -> &crate::metadata::Metadata {
         &self.metadata
     }
 }
-
 impl Registered for Domain {
     type With = NewDomain;
 }
-
 impl Registrable for NewDomain {
     type Target = Domain;
-
     #[inline]
     fn build(self, authority: &AccountId) -> Self::Target {
         Self::Target {
@@ -233,45 +208,37 @@ impl Registrable for NewDomain {
         }
     }
 }
-
 impl Domain {
     /// Construct builder for [`Domain`] identifiable by [`DomainId`].
     #[inline]
     pub fn new(id: DomainId) -> <Self as Registered>::With {
         <Self as Registered>::With::new(id)
     }
-
     /// Mutable access to domain metadata for in-place updates.
     pub fn metadata_mut(&mut self) -> &mut Metadata {
         &mut self.metadata
     }
-
     /// Set the domain owner.
     pub fn set_owned_by(&mut self, owner: AccountId) {
         self.owned_by = owner;
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::query::dsl::{HasProjection, PredicateMarker, SelectorMarker};
-
     fn assert_predicate<T: HasProjection<PredicateMarker>>() {}
     fn assert_selector<T: HasProjection<SelectorMarker>>() {}
-
     #[test]
     fn domain_has_projection_impls() {
         assert_predicate::<Domain>();
         assert_selector::<Domain>();
     }
-
     #[test]
     fn domain_id_try_new_canonicalizes_both_segments() {
         let domain_id = DomainId::try_new("Treasury", "CentralBank").expect("domain id");
         assert_eq!(domain_id.to_string(), "treasury.centralbank");
     }
-
     #[test]
     fn domain_id_parse_fully_qualified_requires_both_segments() {
         let domain_id = DomainId::parse_fully_qualified("treasury.centralbank").expect("domain id");
@@ -279,7 +246,6 @@ mod tests {
         assert!(DomainId::parse_fully_qualified("treasury").is_err());
     }
 }
-
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{Domain, DomainId};

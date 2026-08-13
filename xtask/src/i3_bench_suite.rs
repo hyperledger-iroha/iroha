@@ -6,7 +6,6 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-
 use axum::{
     Router,
     body::Body,
@@ -27,7 +26,6 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use tokio::runtime::Runtime;
 use tower::ServiceExt;
-
 #[derive(Clone, Debug)]
 pub struct I3BenchOptions {
     pub iterations: u32,
@@ -39,7 +37,6 @@ pub struct I3BenchOptions {
     pub threshold: Option<PathBuf>,
     pub flamegraph_hint: bool,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 pub struct I3BenchReport {
     pub timestamp: String,
@@ -47,14 +44,12 @@ pub struct I3BenchReport {
     pub config: BenchConfig,
     pub scenarios: Vec<ScenarioResult>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 pub struct BenchConfig {
     pub iterations: u32,
     pub sample_size: u32,
     pub flamegraph_hint: bool,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 pub struct ScenarioResult {
     pub name: String,
@@ -63,19 +58,16 @@ pub struct ScenarioResult {
     pub allocations_per_iter: f64,
     pub note: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct Thresholds {
     allow_slowdown_bps: u32,
     scenarios: Vec<ScenarioBound>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ScenarioBound {
     name: String,
     max_nanos_per_iter: u64,
 }
-
 #[derive(Clone)]
 struct ProofFixtures {
     commit_message: Vec<u8>,
@@ -83,34 +75,29 @@ struct ProofFixtures {
     attestation: ProofSignature,
     bridge: ProofSignature,
 }
-
 #[derive(Clone)]
 struct ProofSignature {
     public_key: PublicKey,
     signature: Signature,
     message: Vec<u8>,
 }
-
 #[derive(Clone)]
 struct SchedulerAccess {
     reads: BTreeSet<u64>,
     writes: BTreeSet<u64>,
 }
-
 #[derive(Clone)]
 struct FeeLedger {
     payer: u128,
     sponsor: u128,
     collector: u128,
 }
-
 #[derive(Clone)]
 struct StakeLedger {
     bonded: u128,
     pending_unbond: u128,
     slashed: u128,
 }
-
 pub fn run_i3_bench_suite(options: I3BenchOptions) -> Result<I3BenchReport, Box<dyn Error>> {
     if options.iterations == 0 {
         return Err("iterations must be greater than zero".into());
@@ -118,7 +105,6 @@ pub fn run_i3_bench_suite(options: I3BenchOptions) -> Result<I3BenchReport, Box<
     if options.sample_size == 0 {
         return Err("sample size must be greater than zero".into());
     }
-
     let fixtures = BenchFixtures::new()?;
     let scenarios = vec![
         bench_fee(
@@ -204,7 +190,6 @@ pub fn run_i3_bench_suite(options: I3BenchOptions) -> Result<I3BenchReport, Box<
             &fixtures.endpoint,
         )?,
     ];
-
     let report = I3BenchReport {
         timestamp: OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)?
@@ -217,7 +202,6 @@ pub fn run_i3_bench_suite(options: I3BenchOptions) -> Result<I3BenchReport, Box<
         },
         scenarios,
     };
-
     write_json(&report, &options.json_out, options.allow_overwrite)?;
     if let Some(csv) = &options.csv_out {
         write_csv(&report, csv, options.allow_overwrite)?;
@@ -228,10 +212,8 @@ pub fn run_i3_bench_suite(options: I3BenchOptions) -> Result<I3BenchReport, Box<
     if let Some(thresholds) = &options.threshold {
         check_thresholds(thresholds, &report)?;
     }
-
     Ok(report)
 }
-
 fn detect_git_hash() -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
@@ -245,7 +227,6 @@ fn detect_git_hash() -> Option<String> {
         None
     }
 }
-
 fn bench_fee(
     name: &str,
     note: &str,
@@ -262,7 +243,6 @@ fn bench_fee(
             .charge(3_000_000_000, FeeSource::SponsorProgram),
     })
 }
-
 fn bench_staking(
     name: &str,
     note: &str,
@@ -279,7 +259,6 @@ fn bench_staking(
         }
     })
 }
-
 fn bench_proof_verify(
     name: &str,
     note: &str,
@@ -299,7 +278,6 @@ fn bench_proof_verify(
         allocs
     })
 }
-
 fn bench_single_proof(
     name: &str,
     note: &str,
@@ -315,7 +293,6 @@ fn bench_single_proof(
         1
     })
 }
-
 fn bench_commit_assembly(
     name: &str,
     note: &str,
@@ -336,7 +313,6 @@ fn bench_commit_assembly(
         allocs
     })
 }
-
 fn bench_scheduler(
     name: &str,
     note: &str,
@@ -367,7 +343,6 @@ fn bench_scheduler(
         allocs
     })
 }
-
 fn bench_proof_endpoint(
     name: &str,
     note: &str,
@@ -378,7 +353,6 @@ fn bench_proof_endpoint(
     let runtime = Runtime::new()?;
     let router = endpoint.router.clone();
     let request_body = json::to_vec(&endpoint.request)?;
-
     Ok(bench_scenario(name, note, iterations, sample_size, || {
         let request = Request::builder()
             .uri("/proof")
@@ -395,7 +369,6 @@ fn bench_proof_endpoint(
         2
     }))
 }
-
 fn bench_scenario<F>(
     name: &str,
     note: &str,
@@ -415,12 +388,10 @@ where
         }
         durations.push(start.elapsed());
     }
-
     let nanos = median_duration(&mut durations).as_nanos() as u64 / iterations as u64;
     let throughput = 1_000_000_000.0 / nanos as f64;
     let total_iters = (iterations as u64) * (sample_size as u64);
     let allocs_per_iter = allocations as f64 / total_iters as f64;
-
     ScenarioResult {
         name: name.to_string(),
         nanos_per_iter: nanos,
@@ -429,7 +400,6 @@ where
         note: note.to_string(),
     }
 }
-
 fn median_duration(values: &mut [Duration]) -> Duration {
     values.sort_unstable();
     let mid = values.len() / 2;
@@ -439,7 +409,6 @@ fn median_duration(values: &mut [Duration]) -> Duration {
         values[mid]
     }
 }
-
 fn write_json(
     report: &I3BenchReport,
     path: &Path,
@@ -455,7 +424,6 @@ fn write_json(
     fs::write(path, bytes)?;
     Ok(())
 }
-
 fn write_csv(
     report: &I3BenchReport,
     path: &Path,
@@ -486,7 +454,6 @@ fn write_csv(
     fs::write(path, out)?;
     Ok(())
 }
-
 fn write_markdown(
     report: &I3BenchReport,
     path: &Path,
@@ -533,7 +500,6 @@ fn write_markdown(
     fs::write(path, out)?;
     Ok(())
 }
-
 fn check_thresholds(thresholds: &Path, report: &I3BenchReport) -> Result<(), eyre::Error> {
     let data = fs::read(thresholds)?;
     let thresholds: Thresholds = json::from_slice(&data)?;
@@ -586,25 +552,21 @@ fn check_thresholds(thresholds: &Path, report: &I3BenchReport) -> Result<(), eyr
     }
     Ok(())
 }
-
 fn conflicts(left: &SchedulerAccess, right: &SchedulerAccess) -> bool {
     left.writes.intersection(&right.reads).next().is_some()
         || right.writes.intersection(&left.reads).next().is_some()
         || left.writes.intersection(&right.writes).next().is_some()
 }
-
 enum FeeScenario {
     PayerOnly,
     SponsorSelected,
     Insufficient,
 }
-
 #[derive(Clone, Copy)]
 enum FeeSource {
     Authority,
     SponsorProgram,
 }
-
 impl FeeLedger {
     fn charge(mut self, fee: u128, source: FeeSource) -> u64 {
         let allocs = 1;
@@ -623,12 +585,10 @@ impl FeeLedger {
         }
     }
 }
-
 enum StakingScenario {
     BondThenWithdraw,
     SlashBeforeApply,
 }
-
 impl StakeLedger {
     fn bond_cycle(&mut self, amount: u128) -> u64 {
         let mut allocs = 1;
@@ -638,7 +598,6 @@ impl StakeLedger {
         allocs += 1;
         allocs
     }
-
     fn slash_cycle(&mut self, amount: u128, bps: u16) -> u64 {
         let mut allocs = 1;
         self.bonded = self.bonded.saturating_add(amount);
@@ -649,7 +608,6 @@ impl StakeLedger {
         allocs
     }
 }
-
 struct BenchFixtures {
     fee_ledger: FeeLedger,
     stake_ledger: StakeLedger,
@@ -657,7 +615,6 @@ struct BenchFixtures {
     scheduler: Vec<SchedulerAccess>,
     endpoint: ProofEndpointFixture,
 }
-
 impl BenchFixtures {
     fn new() -> Result<Self, Box<dyn Error>> {
         let mut rng = ChaCha20Rng::from_seed([0x42; 32]);
@@ -674,7 +631,6 @@ impl BenchFixtures {
         let proofs = ProofFixtures::new(&mut rng)?;
         let scheduler = scheduler_fixtures(&mut rng);
         let endpoint = ProofEndpointFixture::new(&proofs);
-
         Ok(Self {
             fee_ledger,
             stake_ledger,
@@ -684,13 +640,11 @@ impl BenchFixtures {
         })
     }
 }
-
 impl ProofFixtures {
     fn new(rng: &mut ChaCha20Rng) -> Result<Self, Box<dyn Error>> {
         let commit_message = random_bytes(rng, 96);
         let attestation_msg = random_bytes(rng, 512);
         let bridge_msg = random_bytes(rng, 256);
-
         let commit_signatures = (1_u8..=16)
             .map(|idx| {
                 let mut seed = [0_u8; 32];
@@ -702,18 +656,15 @@ impl ProofFixtures {
                 )
             })
             .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
-
         let attestation_pair =
             checked_seed_keypair(vec![0xA5; 32], "I3 attestation fixture keypair")?;
         let bridge_pair = checked_seed_keypair(vec![0xB4; 32], "I3 bridge fixture keypair")?;
-
         let attestation = signed_proof(
             &attestation_pair,
             &attestation_msg,
             "I3 attestation fixture signature",
         )?;
         let bridge = signed_proof(&bridge_pair, &bridge_msg, "I3 bridge fixture signature")?;
-
         Ok(Self {
             commit_message,
             commit_signatures,
@@ -722,12 +673,10 @@ impl ProofFixtures {
         })
     }
 }
-
 fn checked_seed_keypair(seed: Vec<u8>, context: &'static str) -> Result<KeyPair, Box<dyn Error>> {
     KeyPair::try_from_seed(seed, Algorithm::Ed25519)
         .map_err(|err| format!("{context} generation failed: {err}").into())
 }
-
 fn signed_proof(
     key_pair: &KeyPair,
     message: &[u8],
@@ -744,13 +693,11 @@ fn signed_proof(
         message: message.to_vec(),
     })
 }
-
 fn random_bytes(rng: &mut ChaCha20Rng, len: usize) -> Vec<u8> {
     let mut out = vec![0_u8; len];
     rng.fill_bytes(&mut out[..]);
     out
 }
-
 fn scheduler_fixtures(rng: &mut ChaCha20Rng) -> Vec<SchedulerAccess> {
     let mut fixtures = Vec::with_capacity(12);
     for lane in 0_u64..12 {
@@ -770,20 +717,17 @@ fn scheduler_fixtures(rng: &mut ChaCha20Rng) -> Vec<SchedulerAccess> {
     }
     fixtures
 }
-
 #[derive(Clone, JsonSerialize, JsonDeserialize)]
 struct ProofRequest {
     signature_hex: String,
     payload_hex: String,
     version: String,
 }
-
 #[derive(Clone)]
 struct ProofEndpointFixture {
     router: Router,
     request: ProofRequest,
 }
-
 impl ProofEndpointFixture {
     fn new(fixtures: &ProofFixtures) -> Self {
         let signer = fixtures
@@ -796,7 +740,6 @@ impl ProofEndpointFixture {
             payload_hex: hex::encode_upper(&fixtures.commit_message),
             version: version.clone(),
         };
-
         let router = Router::new()
             .route(
                 "/proof",
@@ -807,11 +750,9 @@ impl ProofEndpointFixture {
                 ),
             )
             .with_state(signer.clone());
-
         Self { router, request }
     }
 }
-
 async fn proof_handler(
     signature: ProofSignature,
     body: axum::body::Bytes,
@@ -834,13 +775,10 @@ async fn proof_handler(
         .body(Body::from(response_bytes))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
-
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
-
     use super::*;
-
     #[test]
     fn bench_suite_smoke() {
         let temp = TempDir::new().expect("temp dir");
@@ -865,7 +803,6 @@ mod tests {
                 .all(|s| s.nanos_per_iter > 0 && s.throughput_per_sec > 0.0)
         );
     }
-
     #[test]
     fn thresholds_detect_regression() {
         let temp = TempDir::new().expect("temp dir");
@@ -879,7 +816,6 @@ mod tests {
         };
         let bytes = json::to_vec(&thresholds).expect("serialize thresholds");
         fs::write(&thresholds_path, bytes).expect("write thresholds");
-
         let report = I3BenchReport {
             timestamp: "now".to_string(),
             git_hash: None,
@@ -896,11 +832,9 @@ mod tests {
                 note: "test".to_string(),
             }],
         };
-
         let err = check_thresholds(&thresholds_path, &report).expect_err("should fail");
         assert!(err.to_string().contains("exceeded bound"));
     }
-
     #[test]
     fn proof_handler_rejects_malformed_ed25519_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -912,7 +846,6 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let key_pair = KeyPair::try_from_seed(vec![0x5B; 32], Algorithm::Ed25519)
             .expect("derive I3 proof handler fixture keypair");
         let payload = b"i3 proof handler signature admission";
@@ -937,7 +870,6 @@ mod tests {
                     .into(),
             ))
             .expect("valid proof request succeeds");
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -961,7 +893,6 @@ mod tests {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{label} R status");
         }
     }
-
     #[test]
     fn bench_scenario_records_allocations() {
         let result = bench_scenario("alloc", "counts", 4, 2, || 2);

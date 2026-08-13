@@ -8,14 +8,11 @@ fn roundtrip_raw_genesis_serialization() -> Result<()> {
     let de: RawGenesisTransaction = norito::json::from_str(&json)?;
     let json2 = norito::json::to_json(&de)?;
     assert_eq!(json, json2);
-
     Ok(())
 }
-
 #[test]
 fn build_raw_coalesces_parameters_into_one_authoritative_snapshot() -> Result<()> {
     use iroha_data_model::parameter::system::SumeragiParameter;
-
     init_instruction_registry();
     let raw = GenesisBuilder::new_without_executor(
         ChainId::from("iroha:test:build-raw-authoritative"),
@@ -28,7 +25,6 @@ fn build_raw_coalesces_parameters_into_one_authoritative_snapshot() -> Result<()
     .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
     .build_raw()
     .with_consensus_mode(SumeragiConsensusMode::Permissioned);
-
     let transactions = &raw.transactions;
     assert_eq!(transactions.len(), 3);
     let parameter_positions = transactions
@@ -37,7 +33,6 @@ fn build_raw_coalesces_parameters_into_one_authoritative_snapshot() -> Result<()
         .filter_map(|(index, tx)| tx.parameters.as_ref().map(|_| index))
         .collect::<Vec<_>>();
     assert_eq!(parameter_positions, vec![0]);
-
     let authoritative = transactions[0]
         .parameters
         .as_ref()
@@ -49,7 +44,6 @@ fn build_raw_coalesces_parameters_into_one_authoritative_snapshot() -> Result<()
         333
     );
     raw.clone().parse()?;
-
     let json = norito::json::to_json(&raw)?;
     let decoded: RawGenesisTransaction = norito::json::from_str(&json)?;
     let decoded_positions = decoded
@@ -76,10 +70,8 @@ fn build_raw_coalesces_parameters_into_one_authoritative_snapshot() -> Result<()
         333
     );
     decoded.parse()?;
-
     Ok(())
 }
-
 #[test]
 fn default_genesis_deserializes() {
     init_instruction_registry();
@@ -88,11 +80,9 @@ fn default_genesis_deserializes() {
     let result = RawGenesisTransaction::from_path(&genesis_path);
     assert!(result.is_ok());
 }
-
 #[test]
 fn default_genesis_block_roundtrips() -> Result<()> {
     use iroha_data_model::parameter::system::SumeragiNposParameters;
-
     init_instruction_registry();
     if norito::debug_trace_enabled() {
         // Debug tracing interferes with ConstVec decode guards; skip engineering checks in this mode.
@@ -101,10 +91,8 @@ fn default_genesis_block_roundtrips() -> Result<()> {
     let genesis_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
     let genesis = RawGenesisTransaction::from_path(&genesis_path)?;
-
     let kp = checked_genesis_fixture_keypair();
     let block = genesis.build_and_sign(&kp)?;
-
     let mut saw_handshake_mode = false;
     let mut saw_npos_custom = false;
     for tx in block.0.external_transactions() {
@@ -154,7 +142,6 @@ fn default_genesis_block_roundtrips() -> Result<()> {
         saw_npos_custom,
         "Default genesis must emit SetParameter for `sumeragi_npos_parameters`"
     );
-
     let encoded = block.0.encode_versioned();
     norito::core::reset_decode_state();
     let decoded = SignedBlock::decode_all_versioned(&encoded)
@@ -163,10 +150,8 @@ fn default_genesis_block_roundtrips() -> Result<()> {
         decoded, block.0,
         "Encoded + decoded default genesis block must preserve all fields"
     );
-
     Ok(())
 }
-
 #[test]
 fn instruction_registry_decodes_register_domain_box() {
     let registry = default_instruction_registry();
@@ -181,7 +166,6 @@ fn instruction_registry_decodes_register_domain_box() {
         .expect("entry")
         .expect("decode register-domain instruction");
 }
-
 fn prepared_bundle_fixture() -> (RawGenesisTransaction, KeyPair, SignedBlock, Vec<u8>) {
     init_instruction_registry();
     let topology = (0..4)
@@ -206,7 +190,6 @@ fn prepared_bundle_fixture() -> (RawGenesisTransaction, KeyPair, SignedBlock, Ve
     let wire = block.encode_wire().expect("encode verifier fixture");
     (manifest, genesis_key, block, wire)
 }
-
 fn sign_modified_batches(
     manifest: &RawGenesisTransaction,
     key_pair: &KeyPair,
@@ -237,7 +220,6 @@ fn sign_modified_batches(
         .collect();
     SignedBlock::genesis(transactions, key_pair.private_key(), None, None)
 }
-
 fn sign_modified_envelopes(
     manifest: &RawGenesisTransaction,
     key_pair: &KeyPair,
@@ -268,7 +250,6 @@ fn sign_modified_envelopes(
         .collect();
     SignedBlock::genesis(transactions, key_pair.private_key(), None, None)
 }
-
 #[test]
 fn prepared_bundle_verifier_accepts_exact_canonical_bundle() {
     let (manifest, key_pair, block, wire) = prepared_bundle_fixture();
@@ -278,7 +259,6 @@ fn prepared_bundle_verifier_accepts_exact_canonical_bundle() {
     assert_eq!(validated.canonical_wire(), wire);
     assert_eq!(validated.validator_pops().len(), 4);
 }
-
 #[test]
 fn prepared_bundle_verifier_rejects_noncanonical_wrong_hash_and_key() {
     let (manifest, key_pair, block, wire) = prepared_bundle_fixture();
@@ -287,13 +267,11 @@ fn prepared_bundle_verifier_rejects_noncanonical_wrong_hash_and_key() {
         validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), wrong_hash)
             .expect_err("wrong exact hash must fail");
     assert!(error.to_string().contains("hashes to"));
-
     let wrong_key = checked_genesis_fixture_keypair();
     let error =
         validate_prepared_genesis_bundle(&wire, &manifest, wrong_key.public_key(), block.hash())
             .expect_err("wrong verifier key must fail");
     assert!(error.to_string().contains("differs from verifier key"));
-
     let mut noncanonical = wire;
     noncanonical.push(0);
     let _ = validate_prepared_genesis_bundle(
@@ -304,7 +282,6 @@ fn prepared_bundle_verifier_rejects_noncanonical_wrong_hash_and_key() {
     )
     .expect_err("trailing bytes must not be admitted as canonical Norito");
 }
-
 #[test]
 fn prepared_bundle_verifier_rejects_missing_and_duplicate_consensus_metadata() {
     let (manifest, key_pair, _, _) = prepared_bundle_fixture();
@@ -333,7 +310,6 @@ fn prepared_bundle_verifier_rejects_missing_and_duplicate_consensus_metadata() {
     )
     .expect_err("missing consensus metadata must fail");
     assert!(error.to_string().contains("no consensus metadata"));
-
     let duplicate = sign_modified_batches(&manifest, &key_pair, |batches| {
         let metadata = batches
                 .iter()
@@ -366,7 +342,6 @@ fn prepared_bundle_verifier_rejects_missing_and_duplicate_consensus_metadata() {
             .contains("more than one consensus metadata")
     );
 }
-
 #[test]
 fn prepared_bundle_verifier_rejects_noncanonical_transaction_envelopes() {
     let (manifest, key_pair, _, _) = prepared_bundle_fixture();
@@ -386,7 +361,6 @@ fn prepared_bundle_verifier_rejects_noncanonical_transaction_envelopes() {
     )
     .expect_err("a genesis transaction nonce must fail closed");
     assert!(error.to_string().contains("non-canonical envelope fields"));
-
     let with_wrong_ttl = sign_modified_envelopes(&manifest, &key_pair, |index, builder| {
         if index == 0 {
             builder.set_ttl(Duration::from_secs(1));
@@ -404,7 +378,6 @@ fn prepared_bundle_verifier_rejects_noncanonical_transaction_envelopes() {
     .expect_err("a non-canonical genesis transaction TTL must fail closed");
     assert!(error.to_string().contains("non-canonical envelope fields"));
 }
-
 #[test]
 fn prepared_bundle_verifier_rejects_nonconsecutive_transaction_times() {
     let (manifest, key_pair, _, _) = prepared_bundle_fixture();
@@ -423,7 +396,6 @@ fn prepared_bundle_verifier_rejects_nonconsecutive_transaction_times() {
             .expect_err("non-consecutive genesis transaction times must fail closed");
     assert!(error.to_string().contains("next canonical millisecond"));
 }
-
 #[test]
 fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
     let (manifest, key_pair, block, wire) = prepared_bundle_fixture();
@@ -443,7 +415,6 @@ fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
     )
     .expect_err("semantic manifest drift must fail");
     assert!(error.to_string().contains("differs from genesis manifest"));
-
     let mut bad_entries = (0..4)
         .map(|_| {
             let validator = checked_genesis_fixture_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -472,7 +443,6 @@ fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
     )
     .expect_err("bad validator PoP must fail");
     assert!(error.to_string().contains("invalid PoP"));
-
     let duplicate_block = sign_modified_batches(&manifest, &key_pair, |batches| {
         let duplicate = batches
             .iter()
@@ -512,12 +482,10 @@ fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
     .expect_err("duplicate validator PoP must fail");
     assert!(error.to_string().contains("more than once"));
 }
-
 #[test]
 fn uses_shared_instruction_registry() {
     let shared = iroha_data_model::instruction_registry::default();
     let local = default_instruction_registry();
-
     assert_eq!(local.len(), shared.len());
     for name in shared.names() {
         assert!(local.contains(name), "missing {name}");

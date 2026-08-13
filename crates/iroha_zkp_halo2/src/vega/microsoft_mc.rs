@@ -1,17 +1,14 @@
 //! First-party Microsoft Vega-MC compatibility implementation.
-
 use super::{
     VegaMdlProofDimensionsV1, VegaT256ScalarV1 as Scalar,
     engine::VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1,
 };
-
 type ValidatedFixture = (
     [u8; 32],
     VegaMdlProofDimensionsV1,
     Vec<Vec<Scalar>>,
     Vec<Scalar>,
 );
-
 #[path = "microsoft_mc/sha256.rs"]
 mod sha256;
 #[path = "microsoft_mc/verifier_key.rs"]
@@ -20,7 +17,6 @@ mod verifier_key;
 mod verify;
 #[path = "microsoft_mc/wire.rs"]
 mod wire;
-
 /// Return the released Figure 9 dimensions independently of runtime setup.
 ///
 /// These values were derived from the canonical Microsoft verifier key and
@@ -68,12 +64,10 @@ pub(super) fn canonical_figure9_dimensions() -> VegaMdlProofDimensionsV1 {
         relaxed_opening_scalars: 32,
     }
 }
-
 /// Return the governed digest of the canonical Figure 9 Microsoft key.
 pub(super) const fn canonical_figure9_verifier_digest() -> [u8; 32] {
     VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1
 }
-
 /// Validate only the canonical structure of one released Figure 9 proof.
 ///
 /// This does not verify equations without the governed Figure 9 verifier key;
@@ -85,7 +79,6 @@ pub(super) fn scan_canonical_figure9_proof(proof: &[u8]) -> Result<(), wire::McC
     }
     Ok(())
 }
-
 /// Decode, re-encode, and verify an independent Microsoft fixture pair.
 pub(super) fn validate_fixture(
     verifier_key: &[u8],
@@ -103,11 +96,9 @@ pub(super) fn validate_fixture(
     let (steps, core) = verify::verify(&decoded, &key, dimensions.num_steps)?;
     Ok((key.digest()?, dimensions, steps, core))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn governed_figure9_dimensions_match_the_compiled_profile() {
         let dimensions = canonical_figure9_dimensions();

@@ -2,9 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #![allow(clippy::items_after_statements)]
-
 mod zk_testkit;
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -17,11 +15,9 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
-
 fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
-
 fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -33,11 +29,9 @@ fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddr
     )
     .expect("proposal contract address")
 }
-
 #[test]
 fn zk_ballot_rejected_on_plain_referendum() {
     use core::num::NonZeroU64;
-
     use iroha_data_model::{
         events::data::{DataEvent, governance::GovernanceEvent},
         isi::governance::{CastZkBallot, ProposeDeployContract, VotingMode},
@@ -48,7 +42,6 @@ fn zk_ballot_rejected_on_plain_referendum() {
         CanProposeContractDeployment, CanSubmitGovernanceBallot,
     };
     use iroha_test_samples::ALICE_ID;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId =
@@ -73,7 +66,6 @@ fn zk_ballot_rejected_on_plain_referendum() {
         name: vk_name,
     });
     state.set_gov(cfg);
-
     // Create a block at H=1 and open a Plain referendum via ProposeDeployContract
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).unwrap(),

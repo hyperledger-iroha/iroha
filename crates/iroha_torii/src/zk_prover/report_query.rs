@@ -38,20 +38,17 @@ fn filter_report_summary(
         _ => true,
     }
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ReportOrderKey {
     processed_ms: u64,
     id: String,
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 enum BoundedReportKeys {
     Asc(BinaryHeap<ReportOrderKey>),
     Desc(BinaryHeap<std::cmp::Reverse<ReportOrderKey>>),
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 impl BoundedReportKeys {
     fn new(descending: bool) -> Self {
@@ -61,7 +58,6 @@ impl BoundedReportKeys {
             Self::Asc(BinaryHeap::new())
         }
     }
-
     fn consider(&mut self, key: ReportOrderKey, capacity: usize) {
         if capacity == 0 {
             return;
@@ -86,7 +82,6 @@ impl BoundedReportKeys {
             }
         }
     }
-
     fn into_ordered(self) -> Vec<ReportOrderKey> {
         match self {
             Self::Asc(heap) => heap.into_sorted_vec(),
@@ -98,7 +93,6 @@ impl BoundedReportKeys {
         }
     }
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 fn report_query_window(q: &ProverListQuery) -> Result<(usize, usize), &'static str> {
     if q.latest.unwrap_or(false) {
@@ -114,7 +108,6 @@ fn report_query_window(q: &ProverListQuery) -> Result<(usize, usize), &'static s
         .min(REPORT_QUERY_MAX_LIMIT);
     Ok((offset, limit))
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 fn select_report_summaries_locked(
     q: &ProverListQuery,
@@ -149,7 +142,6 @@ fn select_report_summaries_locked(
     } else {
         visit_report_summaries_locked(consider);
     }
-
     let mut selected = Vec::with_capacity(limit);
     for key in keys.into_ordered().into_iter().skip(offset).take(limit) {
         if let Some(summary) = load_or_repair_report_summary_locked(&key.id) {
@@ -158,7 +150,6 @@ fn select_report_summaries_locked(
     }
     Ok(selected)
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 fn select_report_summaries(
     q: &ProverListQuery,
@@ -169,7 +160,6 @@ fn select_report_summaries(
     let _guard = report_summary_lock().lock();
     select_report_summaries_locked(q, requested_id, ok_req, failed_req)
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 fn count_report_summaries(
     q: &ProverListQuery,
@@ -194,7 +184,6 @@ fn count_report_summaries(
     }
     count
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 fn encode_full_report_page(summaries: Vec<ProverReportSummary>) -> Result<String, &'static str> {
     let mut output = String::from("[");
@@ -220,7 +209,6 @@ fn encode_full_report_page(summaries: Vec<ProverReportSummary>) -> Result<String
     output.push(']');
     Ok(output)
 }
-
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 fn validate_zk1_tag_filter(q: &ProverListQuery) -> Result<(), &'static str> {
     let Some(tag) = q.has_tag.as_deref() else {

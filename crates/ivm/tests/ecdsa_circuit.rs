@@ -6,7 +6,6 @@ use k256::{
     elliptic_curve::{rand_core::OsRng, sec1::ToEncodedPoint},
 };
 use sha2::Digest;
-
 #[test]
 fn test_secp256k1_add() {
     let p = ProjectivePoint::GENERATOR * Scalar::from(3u64);
@@ -25,7 +24,6 @@ fn test_secp256k1_add() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_secp256k1_mul() {
     let p = ProjectivePoint::GENERATOR;
@@ -47,7 +45,6 @@ fn test_secp256k1_mul() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_ecdsa_verify_ok() {
     let mut rng = OsRng;
@@ -68,7 +65,6 @@ fn test_ecdsa_verify_ok() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_ecdsa_verify_bad_sig() {
     let mut rng = OsRng;
@@ -90,7 +86,6 @@ fn test_ecdsa_verify_bad_sig() {
     };
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_ecdsa_verify_all_zero_public_key_is_false() {
     let mut rng = OsRng;
@@ -106,10 +101,8 @@ fn test_ecdsa_verify_all_zero_public_key_is_false() {
         signature: sig_bytes,
         result: false,
     };
-
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_ecdsa_verify_all_zero_signature_is_false() {
     let mut rng = OsRng;
@@ -125,6 +118,5 @@ fn test_ecdsa_verify_all_zero_signature_is_false() {
         signature: [0u8; 64],
         result: false,
     };
-
     assert!(circuit.verify().is_ok());
 }

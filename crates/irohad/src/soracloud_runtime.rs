@@ -33,7 +33,6 @@ use std::{
     thread,
     time::Duration,
 };
-
 use eyre::WrapErr;
 use iroha_core::soracloud_runtime::{
     SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_MAX_BYTES_V1,
@@ -53,9 +52,7 @@ use iroha_core::soracloud_runtime::{
     soracloud_hf_generated_source_binding,
 };
 use iroha_core::state::{State, StateView, WorldReadOnly};
-use iroha_core::{
-    executor::quote_nexus_fee_admission_draft, queue::Queue, tx::AcceptedTransaction,
-};
+use iroha_core::{executor::quote_nexus_fee_admission_draft, queue::Queue, tx::AcceptedTransaction};
 use iroha_crypto::Hash;
 #[cfg(test)]
 use iroha_crypto::KeyPair;
@@ -138,9 +135,7 @@ use sorafs_car::{
 use sorafs_node::store::StoredManifest;
 use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
-
 mod remote_stream_token_auth;
-
 const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_VERSION_V1: u32 = 1;
 const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_DIR: &str = "uploaded_model_keys";
 const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_FILE: &str = "x25519_v1.bin";
@@ -339,13 +334,11 @@ fn open_soracloud_regular_file_no_follow(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
@@ -1112,13 +1105,11 @@ fn open_soracloud_artifact_for_validation(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
@@ -12578,7 +12569,6 @@ impl HfLocalRunnerWorker {
         }
         {
             use io::Write as _;
-
             self.stdin.write_all(request_payload).map_err(|error| {
                 SoracloudRuntimeExecutionError::new(
                     SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -15093,7 +15083,6 @@ fn materialize_inrou_bundle_entry(
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt as _;
-
                 options.mode(entry.mode());
             }
             let mut file = options.open(&target)?;
@@ -17003,7 +16992,6 @@ fn write_atomic_file<T>(
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
-
             options.mode(0o600);
         }
         match options.open(&tmp_path) {
@@ -17227,7 +17215,6 @@ where
 #[cfg(test)]
 mod tests {
     //! Tests for the embedded Soracloud runtime manager.
-
     use super::*;
     use std::{
         fmt,
@@ -17237,12 +17224,9 @@ mod tests {
         thread,
         time::{SystemTime, UNIX_EPOCH},
     };
-
     use eyre::Result;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-    use iroha_crypto::{
-        Algorithm, BlsNormal, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature,
-    };
+    use iroha_crypto::{Algorithm, BlsNormal, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature};
     use iroha_data_model::asset::AssetDefinitionId;
     use iroha_data_model::{
         Level,
@@ -17286,7 +17270,6 @@ mod tests {
         bundle_archive::{BundleArchiveFile, write_gzip_ustar},
         compute_chunk_plan_digest_sha3,
     };
-
     use sorafs_manifest::{
         AdvertEndpoint, AvailabilityTier, BLAKE3_256_MULTIHASH_CODE, CapabilityTlv, CapabilityType,
         CouncilSignature, DagCodecId, EndpointAdmissionV1, EndpointAttestationKind,
@@ -18460,9 +18443,7 @@ mod tests {
         );
         assert!(error.to_string().contains("failing uploaded model RNG"));
     }
-
     use sorafs_node::{NodeHandle, config::StorageConfig};
-
     #[test]
     fn local_read_snapshot_allows_bounded_lag_but_rejects_wrong_tip() {
         let committed = Hash::prehashed([0x11; Hash::LENGTH]);
@@ -20385,7 +20366,6 @@ mod tests {
             crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1,
         > {
             use crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1 as Error;
-
             let client = reqwest::blocking::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()

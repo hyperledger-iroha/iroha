@@ -1,7 +1,5 @@
 //! Build and sign a Taira localnet genesis overlay that seeds Kaigi relay metadata.
-
 use std::{fs, io::Read as _, path::PathBuf, str::FromStr};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{ArgGroup, Parser};
 use color_eyre::{
@@ -30,9 +28,7 @@ use iroha_executor_data_model::permission::{
 use iroha_genesis::RawGenesisTransaction;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use zeroize::Zeroizing;
-
 const LOCALNET_GENESIS_SEED_SUFFIX: &[u8] = b"genesis";
-
 #[derive(Parser, Debug)]
 #[command(group(
     ArgGroup::new("genesis_signer")
@@ -94,14 +90,12 @@ struct Args {
     #[arg(long, default_value_t = 1_000_000_000u64)]
     bootstrap_authority_fee_amount: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RelaySpec {
     public_key: PublicKey,
     hpke_public_key_b64: String,
     bandwidth_class: u8,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BootstrapAuthority {
     account_id: AccountId,
@@ -109,7 +103,6 @@ struct BootstrapAuthority {
     fee_asset_id: AssetDefinitionId,
     fee_amount: u64,
 }
-
 impl RelaySpec {
     fn parse(raw: &str) -> Result<Self> {
         let mut parts = raw.splitn(3, ':');
@@ -142,17 +135,14 @@ impl RelaySpec {
         })
     }
 }
-
 fn registration_key(public_key: &PublicKey) -> Result<Name> {
     kaigi_relay_metadata_key(&AccountId::new(public_key.clone()))
         .wrap_err("invalid relay metadata key")
 }
-
 fn feedback_key(public_key: &PublicKey) -> Result<Name> {
     kaigi_relay_feedback_key(&AccountId::new(public_key.clone()))
         .wrap_err("invalid relay feedback key")
 }
-
 fn relay_registration(spec: &RelaySpec) -> KaigiRelayRegistration {
     KaigiRelayRegistration {
         relay_id: AccountId::new(spec.public_key.clone()),
@@ -162,7 +152,6 @@ fn relay_registration(spec: &RelaySpec) -> KaigiRelayRegistration {
         bandwidth_class: spec.bandwidth_class,
     }
 }
-
 fn relay_feedback(
     spec: &RelaySpec,
     host: &AccountId,
@@ -179,7 +168,6 @@ fn relay_feedback(
         notes: Some(notes.to_owned()),
     }
 }
-
 fn manifest_registers_domain(manifest: &RawGenesisTransaction, domain: &DomainId) -> bool {
     manifest.instructions().any(|instruction| {
         let Some(RegisterBox::Domain(register_domain)) =
@@ -190,7 +178,6 @@ fn manifest_registers_domain(manifest: &RawGenesisTransaction, domain: &DomainId
         &register_domain.object().id == domain
     })
 }
-
 fn parse_bootstrap_authority(args: &Args) -> Result<Option<BootstrapAuthority>> {
     match (
         args.bootstrap_authority_account.as_deref(),
@@ -217,7 +204,6 @@ fn parse_bootstrap_authority(args: &Args) -> Result<Option<BootstrapAuthority>> 
         )),
     }
 }
-
 fn append_kaigi_overlay(
     manifest: RawGenesisTransaction,
     relay_domain: &DomainId,
@@ -250,7 +236,6 @@ fn append_kaigi_overlay(
     }
     Ok(builder.build_raw())
 }
-
 fn append_bootstrap_authority_overlay(
     manifest: RawGenesisTransaction,
     authority: &BootstrapAuthority,
@@ -274,7 +259,6 @@ fn append_bootstrap_authority_overlay(
     let mut has_manage_soracloud = false;
     let mut has_manage_alias = false;
     let mut has_publish_manifest = false;
-
     for instruction in manifest.instructions() {
         if let Some(RegisterBox::Domain(register_domain)) =
             instruction.as_any().downcast_ref::<RegisterBox>()
@@ -313,7 +297,6 @@ fn append_bootstrap_authority_overlay(
             has_publish_manifest = true;
         }
     }
-
     let mut builder = manifest.into_builder().next_transaction();
     if !has_linked_domain_registration {
         builder = builder.append_instruction(Register::domain(Domain::new(
@@ -351,7 +334,6 @@ fn append_bootstrap_authority_overlay(
     }
     builder.build_raw()
 }
-
 fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> Result<KeyPair> {
     let seed = base_seed.ok_or_else(|| {
         color_eyre::eyre::eyre!(
@@ -366,16 +348,13 @@ fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> Result<KeyPair> 
     )
     .wrap_err("failed to derive localnet genesis key pair from seed")
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
 ))]
 fn load_genesis_private_key_file(path: &std::path::Path) -> Result<KeyPair> {
     use std::{fs::File, os::unix::fs::MetadataExt as _};
-
     use rustix::fs::{Mode, OFlags, open};
-
     let fd = open(
         path,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -398,7 +377,6 @@ fn load_genesis_private_key_file(path: &std::path::Path) -> Result<KeyPair> {
         metadata.len() <= 4096,
         "genesis private-key file exceeds the 4096-byte safety limit"
     );
-
     let capacity =
         usize::try_from(metadata.len()).expect("the 4096-byte file bound always fits usize");
     let mut raw = Zeroizing::new(Vec::with_capacity(capacity));
@@ -430,7 +408,6 @@ fn load_genesis_private_key_file(path: &std::path::Path) -> Result<KeyPair> {
     );
     KeyPair::from_private_key(exposed.0).wrap_err("derive genesis key pair from private-key file")
 }
-
 #[cfg(any(
     not(unix),
     target_os = "espidf",
@@ -442,7 +419,6 @@ fn load_genesis_private_key_file(_path: &std::path::Path) -> Result<KeyPair> {
         "owner-only genesis private-key files require a supported Unix platform"
     )
 }
-
 fn load_genesis_key_pair(args: &Args) -> Result<KeyPair> {
     match (&args.genesis_private_key_file, &args.seed) {
         (Some(path), None) => load_genesis_private_key_file(path),
@@ -450,7 +426,6 @@ fn load_genesis_key_pair(args: &Args) -> Result<KeyPair> {
         (Some(_), Some(_)) => unreachable!("clap enforces conflicts"),
     }
 }
-
 fn load_peer_config(config_path: &std::path::Path) -> Result<actual::Root> {
     let source = TomlSource::from_file(config_path).map_err(|err| {
         color_eyre::eyre::eyre!(
@@ -465,31 +440,26 @@ fn load_peer_config(config_path: &std::path::Path) -> Result<actual::Root> {
         )
     })
 }
-
 fn resolve_da_proof_policies(
     config_path: Option<&std::path::Path>,
 ) -> Result<Option<iroha_data_model::da::commitment::DaProofPolicyBundle>> {
     let Some(config_path) = config_path else {
         return Ok(None);
     };
-
     let config = load_peer_config(config_path)?;
     Ok(Some(iroha_core::da::proof_policy_bundle(
         &config.nexus.lane_config,
     )))
 }
-
 fn resolve_confidential_policy_hash(config_path: Option<&std::path::Path>) -> Result<[u8; 32]> {
     let Some(config_path) = config_path else {
         return Ok(iroha_core::state::default_genesis_confidential_policy_hash());
     };
-
     let config = load_peer_config(config_path)?;
     Ok(iroha_core::state::compute_genesis_confidential_policy_hash(
         &config.zk,
     ))
 }
-
 fn ensure_expected_genesis_public_key(
     key_pair: &KeyPair,
     expected_public_key: Option<&str>,
@@ -497,7 +467,6 @@ fn ensure_expected_genesis_public_key(
     let Some(expected_public_key) = expected_public_key else {
         return Ok(());
     };
-
     let expected = PublicKey::from_str(expected_public_key)
         .wrap_err("failed to parse expected genesis public key")?;
     ensure!(
@@ -508,7 +477,6 @@ fn ensure_expected_genesis_public_key(
     );
     Ok(())
 }
-
 fn run(args: &Args) -> Result<()> {
     ensure!(
         !args.relay_specs.is_empty(),
@@ -560,13 +528,11 @@ fn run(args: &Args) -> Result<()> {
             Some(confidential_policy_hash),
         )
         .wrap_err("failed to sign Kaigi overlay genesis")?;
-
     let framed = signed
         .0
         .encode_wire()
         .wrap_err("failed to frame signed genesis as Norito wire bytes")?;
     fs::write(&args.out_file, framed).wrap_err("failed to write signed genesis output")?;
-
     println!(
         "Wrote signed Taira Kaigi overlay with {} relays to {} using genesis public key {}",
         relay_specs.len(),
@@ -575,17 +541,14 @@ fn run(args: &Args) -> Result<()> {
     );
     Ok(())
 }
-
 fn main() -> Result<()> {
     color_eyre::install()?;
     run(&Args::parse())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_genesis::GenesisBuilder;
-
     #[test]
     fn relay_spec_parses_expected_fields() {
         let raw = "ea0130B99B89AD5D2F51D17AB69D32BC3A44C2CC5FF65E28590022B972148AD4DF00712FEC4EFF5BC6B3AEF33ABCF18F5CAD5B:K4NiAXqV5L1V3aD+/9NItPlFhEtm3qD4Q4K/1M8jewQ=:3";
@@ -600,7 +563,6 @@ mod tests {
             "ea0130B99B89AD5D2F51D17AB69D32BC3A44C2CC5FF65E28590022B972148AD4DF00712FEC4EFF5BC6B3AEF33ABCF18F5CAD5B"
         );
     }
-
     #[test]
     fn relay_metadata_keys_use_the_same_canonical_account_digest() {
         let public_key = PublicKey::from_str(
@@ -614,12 +576,10 @@ mod tests {
         let digest = registration
             .strip_prefix("kaigi_relay__")
             .expect("registration prefix");
-
         assert_eq!(digest.len(), 64);
         assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert_eq!(feedback, format!("kaigi_relay_feedback__{digest}"));
     }
-
     #[test]
     fn confidential_policy_hash_defaults_to_runtime_default_without_config() {
         assert_eq!(
@@ -627,7 +587,6 @@ mod tests {
             iroha_core::state::default_genesis_confidential_policy_hash(),
         );
     }
-
     #[test]
     fn manifest_chain_discriminant_scopes_overlay_account_literals() {
         let manifest = GenesisBuilder::new_without_executor(
@@ -653,7 +612,6 @@ mod tests {
             value.get()
         );
     }
-
     #[test]
     fn kaigi_overlay_registers_missing_relay_domain_before_metadata() {
         let manifest = GenesisBuilder::new_without_executor(
@@ -682,7 +640,6 @@ mod tests {
             hpke_public_key_b64: "K4NiAXqV5L1V3aD+/9NItPlFhEtm3qD4Q4K/1M8jewQ=".to_string(),
             bandwidth_class: 3,
         }];
-
         let overlaid = append_kaigi_overlay(
             manifest,
             &relay_domain,
@@ -716,7 +673,6 @@ mod tests {
             "relay domain must be registered before relay metadata is written"
         );
     }
-
     #[test]
     fn bootstrap_authority_overlay_keeps_canonical_taira_literals() {
         let manifest = GenesisBuilder::new_without_executor(
@@ -737,7 +693,6 @@ mod tests {
                 .expect("asset id"),
             fee_amount: 25_000,
         };
-
         let overlaid = append_bootstrap_authority_overlay(manifest, &bootstrap);
         assert_eq!(
             bootstrap.account_id.to_string(),
@@ -750,7 +705,6 @@ mod tests {
             "overlay should append domain/register/mint/grant bootstrap instructions"
         );
     }
-
     #[test]
     fn bootstrap_authority_overlay_skips_existing_bootstrap_seed() {
         let manifest = GenesisBuilder::new_without_executor(
@@ -782,7 +736,6 @@ mod tests {
         .into();
         let authority_fee_asset =
             AssetId::new(bootstrap.fee_asset_id.clone(), bootstrap.account_id.clone());
-
         let seeded = manifest
             .into_builder()
             .next_transaction()
@@ -810,7 +763,6 @@ mod tests {
             ))
             .build_raw();
         let seeded_instruction_count = seeded.instructions().count();
-
         let overlaid = append_bootstrap_authority_overlay(seeded, &bootstrap);
         assert_eq!(
             overlaid.instructions().count(),
@@ -818,7 +770,6 @@ mod tests {
             "overlay should skip bootstrap instructions that are already present in the manifest"
         );
     }
-
     #[test]
     fn bootstrap_authority_overlay_tops_up_existing_low_funding() {
         let manifest = GenesisBuilder::new_without_executor(
@@ -850,7 +801,6 @@ mod tests {
         .into();
         let authority_fee_asset =
             AssetId::new(bootstrap.fee_asset_id.clone(), bootstrap.account_id.clone());
-
         let seeded = manifest
             .into_builder()
             .next_transaction()
@@ -878,7 +828,6 @@ mod tests {
             ))
             .build_raw();
         let seeded_instruction_count = seeded.instructions().count();
-
         let overlaid = append_bootstrap_authority_overlay(seeded, &bootstrap);
         assert_eq!(
             overlaid.instructions().count(),
@@ -907,7 +856,6 @@ mod tests {
             "overlay should top up the old low seed mint to the requested amount"
         );
     }
-
     #[test]
     fn localnet_seed_derives_checked_genesis_key_contract_as_kagami_localnet() {
         let derived =
@@ -916,7 +864,6 @@ mod tests {
             .expect("expected checked seeded key");
         assert_eq!(derived.public_key(), expected.public_key());
     }
-
     #[cfg(all(
         unix,
         not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
@@ -928,7 +875,6 @@ mod tests {
             io::Write as _,
             os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
         };
-
         let sandbox = tempfile::tempdir().expect("create signer custody sandbox");
         let path = sandbox.path().join("genesis.private_key");
         let expected = KeyPair::try_from_seed([23_u8; 32].to_vec(), Algorithm::default())
@@ -942,17 +888,14 @@ mod tests {
             .expect("create owner-only signer file");
         writeln!(file, "{exposed}").expect("write canonical signer record");
         drop(file);
-
         let loaded = load_genesis_private_key_file(&path).expect("load owner-only signer file");
         assert_eq!(loaded.public_key(), expected.public_key());
-
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
             .expect("weaken fixture permissions");
         let error = load_genesis_private_key_file(&path)
             .expect_err("group/world-readable signer file must fail closed");
         assert!(error.to_string().contains("mode-0600"));
     }
-
     #[test]
     fn missing_seed_has_no_builtin_genesis_signer() {
         let error = derive_localnet_genesis_key_pair(None)

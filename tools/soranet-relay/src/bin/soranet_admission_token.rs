@@ -1,5 +1,4 @@
 //! Offline minting, inspection, and revocation tooling for SoraNet admission tokens.
-
 use std::{
     fs::{self, File, Metadata as FsMetadata, OpenOptions},
     io::{self, Read as _},
@@ -7,7 +6,6 @@ use std::{
     process,
     time::{Duration, SystemTime},
 };
-
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use norito::json::{self, Value};
 use rand::{RngCore, SeedableRng, rng, rngs::StdRng};
@@ -17,7 +15,6 @@ use soranet_relay::token_tool::{
     encode_token_base64, encode_token_hex, inspect_token, mint_token, parse_hex_array,
     parse_hex_bytes, parse_rfc3339, read_revocation_file,
 };
-
 const DEFAULT_TTL_SECS: u64 = 900;
 // AdmissionToken v1 encodes a 4-byte magic, fixed body fields, and a u16
 // signature length before the signature. This admits every structurally
@@ -39,7 +36,6 @@ const ML_DSA_KEY_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1: usize = 256;
 const REVOCATION_LIST_CANONICAL_ENTRY_BYTES: usize = 70;
 const REVOCATION_LIST_MAX_CANONICAL_BYTES_V1: usize =
     REVOCATION_LIST_MAX_ENTRIES_V1 * REVOCATION_LIST_CANONICAL_ENTRY_BYTES + 3;
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const TOKEN_FILE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -65,59 +61,46 @@ const TOKEN_FILE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
     ))
 ))]
 compile_error!("SoraNet admission-token file loading requires a defined no-follow flag");
-
 #[cfg(unix)]
 type TokenFileIdentity = (u64, u64);
 #[cfg(windows)]
 type TokenFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type TokenFileIdentity = ();
-
 #[cfg(unix)]
 fn token_file_identity(metadata: &FsMetadata) -> TokenFileIdentity {
     use std::os::unix::fs::MetadataExt as _;
-
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(windows)]
 fn token_file_identity(metadata: &FsMetadata) -> TokenFileIdentity {
     use std::os::windows::fs::MetadataExt as _;
-
     (metadata.volume_serial_number(), metadata.file_index())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn token_file_identity(_metadata: &FsMetadata) -> TokenFileIdentity {}
-
 #[cfg(unix)]
 const fn token_file_identity_available(_identity: TokenFileIdentity) -> bool {
     true
 }
-
 #[cfg(windows)]
 const fn token_file_identity_available(identity: TokenFileIdentity) -> bool {
     identity.0.is_some() && identity.1.is_some()
 }
-
 #[cfg(not(any(unix, windows)))]
 const fn token_file_identity_available(_identity: TokenFileIdentity) -> bool {
     false
 }
-
 #[cfg(windows)]
 fn token_file_is_reparse_point(metadata: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
-
 #[cfg(not(windows))]
 fn token_file_is_reparse_point(_metadata: &FsMetadata) -> bool {
     false
 }
-
 fn validate_token_file_metadata(metadata: &FsMetadata, artifact: &str) -> io::Result<()> {
     if metadata.file_type().is_symlink()
         || token_file_is_reparse_point(metadata)
@@ -131,20 +114,16 @@ fn validate_token_file_metadata(metadata: &FsMetadata, artifact: &str) -> io::Re
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn open_token_file_direct(path: &Path) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt as _;
-
     let mut options = OpenOptions::new();
     options.read(true).custom_flags(TOKEN_FILE_O_NOFOLLOW_FLAG);
     options.open(path)
 }
-
 #[cfg(windows)]
 fn open_token_file_direct(path: &Path) -> io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     let mut options = OpenOptions::new();
     options
@@ -152,7 +131,6 @@ fn open_token_file_direct(path: &Path) -> io::Result<File> {
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options.open(path)
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_token_file_direct(_path: &Path) -> io::Result<File> {
     Err(io::Error::new(
@@ -160,11 +138,9 @@ fn open_token_file_direct(_path: &Path) -> io::Result<File> {
         "stable direct-file opens are unavailable on this platform",
     ))
 }
-
 #[cfg(unix)]
 fn token_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     token_file_identity(left) == token_file_identity(right)
         && left.len() == right.len()
         && left.mtime() == right.mtime()
@@ -173,11 +149,9 @@ fn token_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool 
         && left.ctime_nsec() == right.ctime_nsec()
         && left.mode() == right.mode()
 }
-
 #[cfg(windows)]
 fn token_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     token_file_identity_available(token_file_identity(left))
         && token_file_identity(left) == token_file_identity(right)
         && left.file_size() == right.file_size()
@@ -185,16 +159,13 @@ fn token_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool 
         && left.creation_time() == right.creation_time()
         && left.file_attributes() == right.file_attributes()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn token_file_metadata_unchanged(_left: &FsMetadata, _right: &FsMetadata) -> bool {
     false
 }
-
 #[cfg(test)]
 static TOKEN_FILE_READ_REPLACEMENT: std::sync::Mutex<Option<(PathBuf, PathBuf)>> =
     std::sync::Mutex::new(None);
-
 #[cfg(test)]
 fn replace_token_file_for_test(path: &Path) -> io::Result<()> {
     let replacement = {
@@ -212,12 +183,10 @@ fn replace_token_file_for_test(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 /// Read one immutable token snapshot at the complete v1 framing ceiling.
 fn read_admission_token_file(path: &Path) -> io::Result<Vec<u8>> {
     read_bounded_direct_file(path, ADMISSION_TOKEN_V1_MAX_FILE_BYTES, "admission token")
 }
-
 fn read_bounded_direct_file(path: &Path, maximum: usize, artifact: &str) -> io::Result<Vec<u8>> {
     let before = fs::symlink_metadata(path)?;
     validate_token_file_metadata(&before, artifact)?;
@@ -231,10 +200,8 @@ fn read_bounded_direct_file(path: &Path, maximum: usize, artifact: &str) -> io::
             ),
         ));
     }
-
     #[cfg(test)]
     replace_token_file_for_test(path)?;
-
     let mut file = open_token_file_direct(path)?;
     let opened = file.metadata()?;
     validate_token_file_metadata(&opened, artifact)?;
@@ -272,7 +239,6 @@ fn read_bounded_direct_file(path: &Path, maximum: usize, artifact: &str) -> io::
             format!("{artifact} grew while being read or exceeds its {maximum}-byte limit"),
         ));
     }
-
     let after_file = file.metadata()?;
     let after_path = fs::symlink_metadata(path)?;
     validate_token_file_metadata(&after_file, artifact)?;
@@ -287,7 +253,6 @@ fn read_bounded_direct_file(path: &Path, maximum: usize, artifact: &str) -> io::
     }
     Ok(bytes)
 }
-
 #[derive(Parser, Debug)]
 #[command(
     name = "soranet-admission-token",
@@ -298,7 +263,6 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Mint a new admission token signed with an ML-DSA issuer key.
@@ -310,7 +274,6 @@ enum Command {
     /// Print all token identifiers present in a revocation list.
     ListRevocations(ListArgs),
 }
-
 #[derive(Args, Debug)]
 struct MintArgs {
     #[arg(long, conflicts_with = "issuer_public_file")]
@@ -340,7 +303,6 @@ struct MintArgs {
     #[arg(long, value_enum, default_value_t = SuiteArg::MlDsa44)]
     suite: SuiteArg,
 }
-
 #[derive(Args, Debug)]
 #[command(group(
     ArgGroup::new("inspect_source")
@@ -355,7 +317,6 @@ struct InspectArgs {
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     format: OutputFormat,
 }
-
 #[derive(Args, Debug)]
 #[command(group(
     ArgGroup::new("revoke_source")
@@ -374,27 +335,23 @@ struct RevokeArgs {
     #[arg(long)]
     dry_run: bool,
 }
-
 #[derive(Args, Debug)]
 struct ListArgs {
     #[arg(long)]
     list: PathBuf,
 }
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum OutputFormat {
     Json,
     Base64,
     Hex,
 }
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum SuiteArg {
     MlDsa44,
     MlDsa65,
     MlDsa87,
 }
-
 impl From<SuiteArg> for MlDsaSuite {
     fn from(value: SuiteArg) -> Self {
         match value {
@@ -404,14 +361,12 @@ impl From<SuiteArg> for MlDsaSuite {
         }
     }
 }
-
 fn main() {
     if let Err(err) = run() {
         eprintln!("soranet-admission-token: {err}");
         process::exit(1);
     }
 }
-
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.command {
@@ -421,7 +376,6 @@ fn run() -> Result<(), String> {
         Command::ListRevocations(args) => command_list(args),
     }
 }
-
 fn command_mint(args: MintArgs) -> Result<(), String> {
     let issuer_public = load_hex_source(
         args.issuer_public_hex,
@@ -437,12 +391,10 @@ fn command_mint(args: MintArgs) -> Result<(), String> {
         parse_hex_array::<32>(&args.relay_id_hex, "relay_id_hex").map_err(|err| err.to_string())?;
     let transcript_hash = parse_hex_array::<32>(&args.transcript_hash_hex, "transcript_hash_hex")
         .map_err(|err| err.to_string())?;
-
     let issued_at = match args.issued_at {
         Some(ref value) => parse_rfc3339(value, "issued_at").map_err(|err| err.to_string())?,
         None => SystemTime::now(),
     };
-
     let expires_at = if let Some(ref value) = args.expires_at {
         parse_rfc3339(value, "expires_at").map_err(|err| err.to_string())?
     } else {
@@ -451,7 +403,6 @@ fn command_mint(args: MintArgs) -> Result<(), String> {
             .checked_add(Duration::from_secs(ttl))
             .ok_or_else(|| "expiry timestamp overflowed SystemTime".to_owned())?
     };
-
     let suite: MlDsaSuite = args.suite.into();
     let request = MintRequest {
         suite,
@@ -463,7 +414,6 @@ fn command_mint(args: MintArgs) -> Result<(), String> {
         expires_at,
         flags: args.flags,
     };
-
     let mut seed = [0u8; 32];
     rng().fill_bytes(&mut seed);
     let mut rng = StdRng::from_seed(seed);
@@ -471,7 +421,6 @@ fn command_mint(args: MintArgs) -> Result<(), String> {
     let output = render_bundle(&bundle, args.format)?;
     write_output(args.output.as_deref(), &output)
 }
-
 fn command_inspect(args: InspectArgs) -> Result<(), String> {
     let bytes = if let Some(token_str) = args.token {
         decode_token_string(&token_str).map_err(|err| err.to_string())?
@@ -484,7 +433,6 @@ fn command_inspect(args: InspectArgs) -> Result<(), String> {
     let output = render_bundle(&bundle, args.format)?;
     write_output(None, &output)
 }
-
 fn command_revoke(args: RevokeArgs) -> Result<(), String> {
     let token_id = if let Some(hex) = args.token_id_hex {
         parse_hex_array::<32>(&hex, "token_id_hex").map_err(|err| err.to_string())?
@@ -499,16 +447,13 @@ fn command_revoke(args: RevokeArgs) -> Result<(), String> {
         let bundle = inspect_token(&bytes).map_err(|err| err.to_string())?;
         bundle.metadata.token_id
     };
-
     let mut list = RevocationList::load_or_default(&args.list)
         .map_err(|err| format!("failed to load {}: {err}", args.list.display()))?;
     let inserted = list.insert(token_id);
-
     if !args.dry_run && inserted {
         list.write(&args.list)
             .map_err(|err| format!("failed to write {}: {err}", args.list.display()))?;
     }
-
     let mut payload = json::Map::new();
     payload.insert("token_id_hex".into(), Value::from(hex::encode(token_id)));
     payload.insert("inserted".into(), Value::from(inserted));
@@ -522,7 +467,6 @@ fn command_revoke(args: RevokeArgs) -> Result<(), String> {
     text.push('\n');
     write_output(None, &text)
 }
-
 fn command_list(args: ListArgs) -> Result<(), String> {
     let ids = read_revocation_file(&args.list)
         .map_err(|err| format!("failed to load {}: {err}", args.list.display()))?;
@@ -531,7 +475,6 @@ fn command_list(args: ListArgs) -> Result<(), String> {
     write_revocation_list_json(&mut output, &ids)
         .map_err(|err| format!("failed to write revocation list: {err}"))
 }
-
 fn write_revocation_list_json<W: io::Write>(writer: &mut W, ids: &[[u8; 32]]) -> io::Result<()> {
     if ids.len() > REVOCATION_LIST_MAX_ENTRIES_V1 {
         return Err(io::Error::new(
@@ -565,7 +508,6 @@ fn write_revocation_list_json<W: io::Write>(writer: &mut W, ids: &[[u8; 32]]) ->
         writer.write_all(b"[]\n")?;
         return writer.flush();
     }
-
     // This fixed hexadecimal schema matches Norito's pretty JSON layout while
     // retaining only one 64-byte stack encoding at a time.
     writer.write_all(b"[")?;
@@ -580,7 +522,6 @@ fn write_revocation_list_json<W: io::Write>(writer: &mut W, ids: &[[u8; 32]]) ->
     writer.write_all(b"\n]\n")?;
     writer.flush()
 }
-
 fn token_id_hex_bytes(id: &[u8; 32]) -> [u8; 64] {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = [0_u8; 64];
@@ -590,7 +531,6 @@ fn token_id_hex_bytes(id: &[u8; 32]) -> [u8; 64] {
     }
     encoded
 }
-
 fn render_bundle(bundle: &TokenBundle, format: OutputFormat) -> Result<String, String> {
     match format {
         OutputFormat::Json => {
@@ -611,7 +551,6 @@ fn render_bundle(bundle: &TokenBundle, format: OutputFormat) -> Result<String, S
         }
     }
 }
-
 fn write_output(path: Option<&Path>, data: &str) -> Result<(), String> {
     if let Some(path) = path {
         if let Some(dir) = path.parent()
@@ -626,13 +565,11 @@ fn write_output(path: Option<&Path>, data: &str) -> Result<(), String> {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy)]
 struct KeyFileLimits {
     artifact: &'static str,
     maximum_hex_bytes: usize,
 }
-
 fn key_file_limits(field: &'static str) -> Result<KeyFileLimits, String> {
     match field {
         "issuer_public_key" => Ok(KeyFileLimits {
@@ -648,7 +585,6 @@ fn key_file_limits(field: &'static str) -> Result<KeyFileLimits, String> {
         )),
     }
 }
-
 fn load_hex_key_file(
     path: &Path,
     field: &'static str,
@@ -684,7 +620,6 @@ fn load_hex_key_file(
     }
     parse_hex_bytes(trimmed, field).map_err(|err| err.to_string())
 }
-
 fn load_hex_source(
     inline: Option<String>,
     path: Option<&Path>,
@@ -702,18 +637,14 @@ fn load_hex_source(
         (None, None) => Err(format!("--{field}-hex or --{field}-file must be provided")),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
-
     use super::*;
-
     #[derive(Default)]
     struct CountingWriter {
         bytes: usize,
     }
-
     impl io::Write for CountingWriter {
         fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
             self.bytes = self
@@ -722,12 +653,10 @@ mod tests {
                 .ok_or_else(|| io::Error::other("test byte count overflowed"))?;
             Ok(buffer.len())
         }
-
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
     }
-
     #[test]
     fn key_file_limits_match_largest_supported_mldsa_suite() {
         let suites = [
@@ -744,7 +673,6 @@ mod tests {
             Some(ML_DSA_MAX_SECRET_KEY_BYTES_V1)
         );
     }
-
     #[test]
     fn key_files_accept_exact_payload_and_whitespace_limits() {
         let dir = tempdir().expect("tmp");
@@ -762,7 +690,6 @@ mod tests {
                 .expect("exact public key file must load"),
             vec![0xab; ML_DSA_MAX_PUBLIC_KEY_BYTES_V1]
         );
-
         let secret_path = dir.path().join("issuer-secret.hex");
         fs::write(&secret_path, "cd".repeat(ML_DSA_MAX_SECRET_KEY_BYTES_V1))
             .expect("write exact secret key file");
@@ -772,7 +699,6 @@ mod tests {
             vec![0xcd; ML_DSA_MAX_SECRET_KEY_BYTES_V1]
         );
     }
-
     #[test]
     fn key_files_reject_payload_and_whitespace_plus_one() {
         let dir = tempdir().expect("tmp");
@@ -785,7 +711,6 @@ mod tests {
         let error = load_hex_source(None, Some(&oversized_payload), "issuer_public_key")
             .expect_err("decoded key limit + 1 must fail");
         assert!(error.contains("supported ML-DSA limit"), "{error}");
-
         let oversized_whitespace = dir.path().join("oversized-whitespace.hex");
         let mut text = "cd".repeat(ML_DSA_MAX_SECRET_KEY_BYTES_V1);
         text.push_str(&" ".repeat(ML_DSA_KEY_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1 + 1));
@@ -793,7 +718,6 @@ mod tests {
         let error = load_hex_source(None, Some(&oversized_whitespace), "issuer_secret_key")
             .expect_err("raw key file limit + 1 must fail");
         assert!(error.contains("first-release limit"), "{error}");
-
         let excessive_padding = dir.path().join("excessive-padding.hex");
         let mut text = "ef".repeat(MlDsaSuite::MlDsa44.public_key_len());
         text.push_str(&" ".repeat(ML_DSA_KEY_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1 + 1));
@@ -802,24 +726,20 @@ mod tests {
             .expect_err("surrounding whitespace limit + 1 must fail");
         assert!(error.contains("surrounding whitespace bytes"), "{error}");
     }
-
     #[cfg(unix)]
     #[test]
     fn key_file_reader_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tmp");
         let target = dir.path().join("issuer-public.hex");
         let link = dir.path().join("issuer-public-link.hex");
         fs::write(&target, "ab".repeat(ML_DSA_MAX_PUBLIC_KEY_BYTES_V1))
             .expect("write public key target");
         symlink(&target, &link).expect("create key symlink");
-
         let error = load_hex_source(None, Some(&link), "issuer_public_key")
             .expect_err("key symlink must fail");
         assert!(error.contains("direct regular file"), "{error}");
     }
-
     #[test]
     fn inline_hex_source_preserves_prior_argument_length_handling() {
         let inline = "ab".repeat(ML_DSA_MAX_SECRET_KEY_BYTES_V1 + 1);
@@ -830,7 +750,6 @@ mod tests {
             ML_DSA_MAX_SECRET_KEY_BYTES_V1 + 1
         );
     }
-
     #[test]
     fn token_file_limit_accepts_exact_and_rejects_plus_one() {
         assert_eq!(ADMISSION_TOKEN_V1_MAX_FILE_BYTES, 65_671);
@@ -849,7 +768,6 @@ mod tests {
                 .len(),
             ADMISSION_TOKEN_V1_MAX_FILE_BYTES
         );
-
         let plus_one = dir.path().join("plus-one.token");
         let oversized_file = File::create(&plus_one).expect("create oversized token file");
         oversized_file
@@ -861,22 +779,18 @@ mod tests {
         let error = read_admission_token_file(&plus_one).expect_err("limit + 1 must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[cfg(unix)]
     #[test]
     fn token_file_reader_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tmp");
         let target = dir.path().join("target.token");
         let link = dir.path().join("link.token");
         fs::write(&target, b"token").expect("write target");
         symlink(&target, &link).expect("create symlink");
-
         let error = read_admission_token_file(&link).expect_err("symlink must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[cfg(unix)]
     #[test]
     fn token_file_reader_rejects_path_replacement_race() {
@@ -887,11 +801,9 @@ mod tests {
         fs::write(&replacement, b"token").expect("write replacement token");
         *TOKEN_FILE_READ_REPLACEMENT.lock().expect("race hook lock") =
             Some((configured.clone(), replacement));
-
         let error = read_admission_token_file(&configured).expect_err("path replacement must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[test]
     fn revocation_output_matches_norito_pretty_layout() {
         let ids = [[0x11; 32], [0x22; 32]];
@@ -907,7 +819,6 @@ mod tests {
             .into_bytes()
         );
     }
-
     #[test]
     fn revocation_output_accepts_exact_count_and_rejects_plus_one() {
         let exact = vec![[0x33; 32]; REVOCATION_LIST_MAX_ENTRIES_V1];
@@ -915,7 +826,6 @@ mod tests {
         write_revocation_list_json(&mut exact_writer, &exact)
             .expect("exact entry count must stream");
         assert_eq!(exact_writer.bytes, REVOCATION_LIST_MAX_CANONICAL_BYTES_V1);
-
         let plus_one = vec![[0x44; 32]; REVOCATION_LIST_MAX_ENTRIES_V1 + 1];
         let mut rejected_writer = CountingWriter::default();
         let error = write_revocation_list_json(&mut rejected_writer, &plus_one)

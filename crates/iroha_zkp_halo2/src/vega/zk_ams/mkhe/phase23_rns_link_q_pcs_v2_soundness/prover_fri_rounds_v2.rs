@@ -1,10 +1,7 @@
 //! Move-only prover transcript and fold continuation for FRI layers B1 through B17.
-
 use super::*;
-
 const FIRST_CONTINUATION_LAYER_V2: u8 = 1;
 const LAST_CONTINUATION_LAYER_V2: u8 = 17;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) struct ProverFriRoundContextV2 {
     pub(in super::super) layer: u8,
@@ -15,25 +12,21 @@ pub(in super::super) struct ProverFriRoundContextV2 {
     pub(in super::super) fold_schedule_digest: [u8; 32],
     pub(in super::super) root: [u8; 32],
 }
-
 struct ProverFriRoundsLiveV2 {
     transcript: [u8; 32],
     batch_schedule_digest: [u8; 32],
     fold_schedule_digest: [u8; 32],
     next_layer: u8,
 }
-
 struct ProverFriRoundLiveV2 {
     continuation: ProverFriRoundsLiveV2,
     context: ProverFriRoundContextV2,
     alphas: [BatchValueV2; COORDINATE_COUNT_V2],
 }
-
 /// Move-only transcript owner ready to bind the next authenticated FRI root.
 pub(in super::super) struct ProverFriRoundsReadyV2 {
     live: Option<ProverFriRoundsLiveV2>,
 }
-
 /// Move-only owner of all 380 challenges for one exact FRI round.
 pub(in super::super) struct ProverFriRoundChallengesV2 {
     live: Option<ProverFriRoundLiveV2>,
@@ -44,20 +37,17 @@ pub(in super::super) struct ProverFriRoundChallengesV2 {
     next_pair_block: u64,
     next_column: u16,
 }
-
 /// Move-only transcript owner after one complete authenticated FRI fold.
 pub(in super::super) struct ProverFriRoundCompleteV2 {
     live: Option<ProverFriRoundsLiveV2>,
     context: ProverFriRoundContextV2,
 }
-
 /// Move-only owner of the transcript after the equal terminal leaves are bound.
 pub(in super::super) struct ProverFriTerminalBoundV2 {
     transcript: [u8; 32],
     batch_schedule_digest: [u8; 32],
     fold_schedule_digest: [u8; 32],
 }
-
 /// Move-only owner of the exact 160 unique qPCS query indices.
 pub(in super::super) struct ProverFriQueriesV2 {
     pub(super) transcript: [u8; 32],
@@ -65,7 +55,6 @@ pub(in super::super) struct ProverFriQueriesV2 {
     pub(super) fold_schedule_digest: [u8; 32],
     pub(super) queries: [u32; QUERY_COUNT_V2],
 }
-
 fn round_shape_v2(layer: u8) -> Result<(u64, u16), SoundnessErrorV2> {
     if !(FIRST_CONTINUATION_LAYER_V2..=LAST_CONTINUATION_LAYER_V2).contains(&layer) {
         return Err(SoundnessErrorV2::InvalidFriEquation);
@@ -81,7 +70,6 @@ fn round_shape_v2(layer: u8) -> Result<(u64, u16), SoundnessErrorV2> {
     };
     Ok((pair_blocks, values_per_half))
 }
-
 pub(in super::super) fn validate_equal_terminal_v2(
     terminal: &[u8],
 ) -> Result<(), SoundnessErrorV2> {
@@ -94,7 +82,6 @@ pub(in super::super) fn validate_equal_terminal_v2(
     }
     Ok(())
 }
-
 fn bind_round_live_v2(
     continuation: ProverFriRoundsLiveV2,
     root: [u8; 32],
@@ -156,7 +143,6 @@ fn bind_round_live_v2(
         alphas,
     })
 }
-
 impl ProverFriLayer0FoldCompleteV2 {
     pub(in super::super) fn begin_fri_rounds_v2(
         self,
@@ -178,7 +164,6 @@ impl ProverFriLayer0FoldCompleteV2 {
         })
     }
 }
-
 impl ProverFriRoundsReadyV2 {
     pub(in super::super) fn bind_next_root_v2(
         mut self,
@@ -215,7 +200,6 @@ impl ProverFriRoundsReadyV2 {
         })
     }
 }
-
 impl ProverFriRoundChallengesV2 {
     pub(in super::super) fn context_v2(&self) -> Result<ProverFriRoundContextV2, SoundnessErrorV2> {
         Ok(self
@@ -224,15 +208,12 @@ impl ProverFriRoundChallengesV2 {
             .ok_or(SoundnessErrorV2::Poisoned)?
             .context)
     }
-
     pub(in super::super) const fn pair_blocks_v2(&self) -> u64 {
         self.pair_blocks
     }
-
     pub(in super::super) const fn values_per_half_v2(&self) -> u16 {
         self.values_per_half
     }
-
     pub(in super::super) fn fold_next_pair_v2(
         &mut self,
         pair_block: u64,
@@ -297,7 +278,6 @@ impl ProverFriRoundChallengesV2 {
         self.live = Some(live);
         Ok(())
     }
-
     pub(in super::super) fn fold_terminal_column_in_place_v2(
         &mut self,
         column: u16,
@@ -358,7 +338,6 @@ impl ProverFriRoundChallengesV2 {
         self.live = Some(live);
         Ok(())
     }
-
     pub(in super::super) fn complete_v2(
         mut self,
     ) -> Result<ProverFriRoundCompleteV2, SoundnessErrorV2> {
@@ -373,12 +352,10 @@ impl ProverFriRoundChallengesV2 {
         })
     }
 }
-
 impl ProverFriRoundCompleteV2 {
     pub(in super::super) const fn context_v2(&self) -> ProverFriRoundContextV2 {
         self.context
     }
-
     pub(in super::super) fn continue_v2(
         mut self,
     ) -> Result<ProverFriRoundsReadyV2, SoundnessErrorV2> {
@@ -389,7 +366,6 @@ impl ProverFriRoundCompleteV2 {
             live: self.live.take(),
         })
     }
-
     pub(in super::super) fn bind_terminal_v2(
         mut self,
         terminal: &[u8],
@@ -406,7 +382,6 @@ impl ProverFriRoundCompleteV2 {
         })
     }
 }
-
 impl ProverFriTerminalBoundV2 {
     pub(in super::super) fn derive_queries_v2(
         self,
@@ -419,7 +394,6 @@ impl ProverFriTerminalBoundV2 {
         })
     }
 }
-
 impl ProverFriQueriesV2 {
     pub(in super::super) const fn context_v2(&self) -> ([u8; 32], [u8; 32], [u8; 32]) {
         (
@@ -428,12 +402,10 @@ impl ProverFriQueriesV2 {
             self.fold_schedule_digest,
         )
     }
-
     pub(in super::super) const fn queries_v2(&self) -> &[u32; QUERY_COUNT_V2] {
         &self.queries
     }
 }
-
 #[cfg(test)]
 #[path = "prover_fri_rounds_v2_tests.rs"]
 mod tests;

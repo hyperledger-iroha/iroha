@@ -1,14 +1,9 @@
 //! Fixed-stack cleanup state for recursively owned JSON values.
-
-use super::{
-    Error, MAX_JSON_VALUE_NESTING_DEPTH, Value, native::Map, try_decode_vec_with_capacity,
-};
-
+use super::{Error, MAX_JSON_VALUE_NESTING_DEPTH, Value, native::Map, try_decode_vec_with_capacity};
 enum ValueDropFrame {
     Array(std::vec::IntoIter<Value>),
     Object(std::collections::btree_map::IntoValues<String, Value>),
 }
-
 impl ValueDropFrame {
     fn next(&mut self) -> Option<Value> {
         match self {
@@ -17,12 +12,10 @@ impl ValueDropFrame {
         }
     }
 }
-
 struct ValueDropStack {
     frames: [Option<ValueDropFrame>; MAX_JSON_VALUE_NESTING_DEPTH],
     len: usize,
 }
-
 impl ValueDropStack {
     fn new() -> Self {
         Self {
@@ -30,7 +23,6 @@ impl ValueDropStack {
             len: 0,
         }
     }
-
     fn push(&mut self, frame: ValueDropFrame) -> Result<(), ValueDropFrame> {
         let Some(slot) = self.frames.get_mut(self.len) else {
             return Err(frame);
@@ -39,7 +31,6 @@ impl ValueDropStack {
         self.len += 1;
         Ok(())
     }
-
     fn next(&mut self) -> Option<Value> {
         loop {
             let frame = self.frames.get_mut(self.len.checked_sub(1)?)?;
@@ -55,7 +46,6 @@ impl ValueDropStack {
         }
     }
 }
-
 fn drop_overdeep_json_frame(frame: ValueDropFrame) {
     match frame {
         ValueDropFrame::Array(values) => {
@@ -70,7 +60,6 @@ fn drop_overdeep_json_frame(frame: ValueDropFrame) {
         }
     }
 }
-
 /// Drop a recursive JSON value without an attacker-sized cleanup `Vec`.
 ///
 /// Parsed values are limited to [`MAX_JSON_VALUE_NESTING_DEPTH`], so the fixed
@@ -116,19 +105,15 @@ pub fn drop_json_value_iteratively(value: Value) {
         next = Some(value);
     }
 }
-
 pub(super) struct IterativeValueDropGuard(Option<Value>);
-
 impl IterativeValueDropGuard {
     pub(super) fn new(value: Value) -> Self {
         Self(Some(value))
     }
-
     pub(super) fn take(&mut self) -> Value {
         self.0.take().expect("iterative JSON value guard is empty")
     }
 }
-
 impl Drop for IterativeValueDropGuard {
     fn drop(&mut self) {
         if let Some(value) = self.0.take() {
@@ -136,7 +121,6 @@ impl Drop for IterativeValueDropGuard {
         }
     }
 }
-
 pub(super) enum ValueParseFrame {
     Array {
         values: Vec<Value>,
@@ -148,7 +132,6 @@ pub(super) enum ValueParseFrame {
         child_depth: usize,
     },
 }
-
 impl ValueParseFrame {
     fn drop_values(self) {
         match self {
@@ -160,7 +143,6 @@ impl ValueParseFrame {
             }
         }
     }
-
     pub(super) fn finish(self) -> Value {
         match self {
             Self::Array { values, .. } => Value::Array(values),
@@ -168,12 +150,10 @@ impl ValueParseFrame {
         }
     }
 }
-
 pub(super) struct ValueParseState {
     pub(super) frames: Vec<ValueParseFrame>,
     pub(super) completed: Option<Value>,
 }
-
 impl ValueParseState {
     pub(super) fn with_frame_capacity(frames: usize) -> Result<Self, Error> {
         Ok(Self {
@@ -181,14 +161,12 @@ impl ValueParseState {
             completed: None,
         })
     }
-
     pub(super) fn take_completed(&mut self) -> Value {
         self.completed
             .take()
             .expect("iterative JSON parser has no completed value")
     }
 }
-
 impl Drop for ValueParseState {
     fn drop(&mut self) {
         if let Some(value) = self.completed.take() {

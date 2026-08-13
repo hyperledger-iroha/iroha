@@ -3,12 +3,10 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
 };
-
 use http::StatusCode;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::gen_account_in;
 use norito::json::{JsonSerialize, Value as JsonValue};
-
 use super::evidence_http_tests::{
     SnapshotStore, base_url, client_with_base_url, json_response, with_mock_http,
 };
@@ -37,11 +35,9 @@ use crate::{
         SubscriptionPlanCreateResponse, SubscriptionPlanListItem,
     },
 };
-
 fn encode_json<T: JsonSerialize>(value: &T) -> String {
     norito::json::to_json(value).expect("encode json")
 }
-
 fn match_body<T: JsonSerialize>(snapshot: &RequestSnapshot, expected: &T) {
     let body: JsonValue = norito::json::from_slice(&snapshot.body).expect("decode request body");
     let expected = norito::json::to_value(expected).expect("encode expected body");
@@ -51,7 +47,6 @@ fn match_body<T: JsonSerialize>(snapshot: &RequestSnapshot, expected: &T) {
         snapshot.url
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn subscription_endpoints_build_requests() {
@@ -90,7 +85,6 @@ fn subscription_endpoints_build_requests() {
             },
         ),
     };
-
     let subscription_state = SubscriptionState {
         plan_id: plan_id.clone(),
         provider: provider.clone(),
@@ -105,7 +99,6 @@ fn subscription_endpoints_build_requests() {
         usage_accumulated: BTreeMap::new(),
         billing_trigger_id: billing_trigger_id.clone(),
     };
-
     let plan_request = SubscriptionPlanCreateRequest {
         authority: provider.clone(),
         plan_id: plan_id.clone(),
@@ -145,7 +138,6 @@ fn subscription_endpoints_build_requests() {
         delta: Quantity::from(3_u32),
         usage_trigger_id: None,
     };
-
     let plan_create_response = SubscriptionPlanCreateResponse {
         submitted: false,
         plan_id: plan_id.clone(),
@@ -217,7 +209,6 @@ fn subscription_endpoints_build_requests() {
         transaction_payload_b64: "AA==".to_string(),
         signing_message_b64: "AA==".to_string(),
     };
-
     let responder = {
         let store = Arc::clone(&store);
         let plan_create_json = encode_json(&plan_create_response);
@@ -267,7 +258,6 @@ fn subscription_endpoints_build_requests() {
             Ok(response)
         }
     };
-
     with_mock_http(responder, || {
         client
             .create_subscription_plan(&plan_request)
@@ -300,7 +290,6 @@ fn subscription_endpoints_build_requests() {
             .record_subscription_usage(&subscription_id, &usage_request)
             .expect("record usage");
     });
-
     let snapshots = store.lock().expect("lock snapshots").clone();
     assert_eq!(snapshots.len(), 10);
     let signed = snapshots
@@ -368,7 +357,6 @@ fn subscription_endpoints_build_requests() {
         }
     }
 }
-
 #[test]
 fn subscription_authority_mismatch_fails_before_transport() {
     let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -391,7 +379,6 @@ fn subscription_authority_mismatch_fails_before_transport() {
             .body(Vec::new())
             .expect("response"))
     };
-
     let error = with_mock_http(responder, || {
         client
             .record_subscription_usage(&subscription_id, &request)

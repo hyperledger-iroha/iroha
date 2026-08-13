@@ -208,7 +208,6 @@ fn app_with_indexed_sccp_message_for_test(
     artifact
         .verify()
         .expect("SCCP finality fixture is cryptographically valid");
-
     // Seed the retired QC model as an adversarial control. Proof routes
     // must still require the exact durable v2 artifact below; a valid
     // legacy QC in world state is not an alternative finality source.
@@ -220,7 +219,6 @@ fn app_with_indexed_sccp_message_for_test(
         HEIGHT.saturating_add(1),
         0,
     );
-
     let stored_block_hash = store_block(&app, block);
     assert_eq!(stored_block_hash, artifact.block_hash);
     if persist_finality {
@@ -249,7 +247,6 @@ fn app_with_indexed_sccp_message_for_test(
     );
     (app, message_id, artifact)
 }
-
 #[tokio::test]
 async fn sccp_bundle_endpoint_uses_exact_v2_artifact_and_authoritative_index() {
     let (app, message_id, expected_artifact) = app_with_indexed_sccp_message_for_test(true);
@@ -277,7 +274,6 @@ async fn sccp_bundle_endpoint_uses_exact_v2_artifact_and_authoritative_index() {
         )
         .expect("bundle carries a cryptographically self-consistent exact-v2 proof");
     assert_eq!(verified_finality.finality_artifact, expected_artifact);
-
     let request_error = routing::handle_v1_sccp_proof_request(
         Arc::clone(&app.state),
         message_id_hex,

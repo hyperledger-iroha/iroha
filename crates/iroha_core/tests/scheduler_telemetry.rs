@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensures layer metrics and utilization are populated after block application.
 #![allow(unused_imports)]
-
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -11,7 +10,6 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
-
 use iroha_config::parameters::actual::{
     LaneCompliance, LaneConfig as RuntimeLaneConfig, LaneRelayEmergency, NexusAxt,
     NexusEndorsement, NexusFees, NexusRelayWorker, NexusStaking, NexusStorage,
@@ -32,7 +30,6 @@ use iroha_data_model::{
     },
     prelude::*,
 };
-
 #[test]
 #[cfg(feature = "telemetry")]
 #[allow(clippy::too_many_lines)]
@@ -40,7 +37,6 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (carol_id, _) = iroha_test_samples::gen_account_in("wonderland");
-
     // World: two accounts + one asset def
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
@@ -69,7 +65,6 @@ fn scheduler_layer_metrics_and_utilization_populated() {
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     let network_id = *state.network_id_ref();
-
     // Build 3 txs with trivial conflicts to force at least two layers:
     // 1) Mint to Alice (independent)
     // 2) Transfer from Alice to Bob (depends on 1)
@@ -109,7 +104,6 @@ fn scheduler_layer_metrics_and_utilization_populated() {
         iroha_primitives::json::Json::new("v"),
     )])
     .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-
     let acc: Vec<_> = vec![tx1, tx2, tx3]
         .into_iter()
         .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
@@ -122,7 +116,6 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
     let _events = sb.apply_without_execution(&cb, Vec::new());
-
     // Assert telemetry populated
     let m = Arc::clone(&metrics);
     assert!(
@@ -210,17 +203,14 @@ fn scheduler_layer_metrics_and_utilization_populated() {
         0
     );
 }
-
 #[test]
 #[cfg(feature = "telemetry")]
 #[allow(clippy::too_many_lines)]
 fn nexus_lane_and_dataspace_metadata_exposed() {
     use iroha_telemetry::metrics::Metrics;
     use nonzero_ext::nonzero;
-
     let metrics = Arc::new(Metrics::default());
     let telemetry = iroha_core::telemetry::StateTelemetry::new(metrics.clone(), true);
-
     let mut lane_core = ModelLaneConfig {
         id: LaneId::new(0),
         dataspace_id: DataSpaceId::new(7),
@@ -264,9 +254,7 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
     let dataspace_catalog =
         DataSpaceCatalog::new(vec![primary_dataspace.clone(), secondary_dataspace.clone()])
             .expect("dataspace catalog");
-
     telemetry.set_nexus_catalogs(&lane_catalog, &dataspace_catalog);
-
     telemetry.record_nexus_scheduler_lane_teu(
         LaneId::new(0),
         iroha_core::telemetry::LaneTeuGaugeUpdate {
@@ -282,7 +270,6 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
             starvation_bound_slots: 10,
         },
     );
-
     telemetry.record_nexus_scheduler_dataspace_teu(
         LaneId::new(0),
         DataSpaceId::new(7),
@@ -292,7 +279,6 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
             virtual_finish: 11,
         },
     );
-
     let lane_snapshot = metrics
         .nexus_scheduler_lane_teu_status
         .read()
@@ -310,7 +296,6 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
     assert_eq!(lane_snapshot.settlement.as_deref(), Some("xor"));
     assert_eq!(lane_snapshot.scheduler_teu_capacity_override, Some(4_096));
     assert_eq!(lane_snapshot.scheduler_starvation_bound_override, Some(33));
-
     let dataspace_snapshot = metrics
         .nexus_scheduler_dataspace_teu_status
         .read()
@@ -323,15 +308,12 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
         dataspace_snapshot.description.as_deref(),
         Some("Primary execution dataspace")
     );
-
     telemetry.inc_nexus_scheduler_lane_teu_deferral(LaneId::new(0), "cap_exceeded", 5);
-
     let deferral_metric = metrics
         .nexus_scheduler_lane_teu_deferral_total
         .with_label_values(&["0", "cap_exceeded"])
         .get();
     assert_eq!(deferral_metric, 5);
-
     let lane_snapshot_updated = metrics
         .nexus_scheduler_lane_teu_status
         .read()
@@ -340,14 +322,12 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
         .cloned()
         .expect("lane snapshot missing after deferral update");
     assert_eq!(lane_snapshot_updated.deferrals.cap_exceeded, 5);
-
     // Trim catalogs so the secondary lane/dataspace disappear and caches drop stale entries.
     let trimmed_lane_catalog =
         LaneCatalog::new(nonzero!(2_u32), vec![lane_core.clone()]).expect("trimmed lane catalog");
     let trimmed_dataspace_catalog =
         DataSpaceCatalog::new(vec![primary_dataspace.clone()]).expect("trimmed dataspace catalog");
     telemetry.set_nexus_catalogs(&trimmed_lane_catalog, &trimmed_dataspace_catalog);
-
     let stale_lane_snapshot = metrics
         .nexus_scheduler_lane_teu_status
         .read()
@@ -358,7 +338,6 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
         stale_lane_snapshot.is_none(),
         "secondary lane entry should be purged when catalog shrinks"
     );
-
     let stale_dataspace_snapshot = metrics
         .nexus_scheduler_dataspace_teu_status
         .read()
@@ -370,19 +349,16 @@ fn nexus_lane_and_dataspace_metadata_exposed() {
         "stale dataspace pair should be removed"
     );
 }
-
 #[test]
 #[cfg(feature = "telemetry")]
 fn lane_manifest_details_exposed_via_telemetry() {
     let (metrics, telemetry, validators, allowed_ids) = governance_lane_setup();
     install_governance_manifest(&telemetry, &validators, &allowed_ids);
-
     let governance_sealed = metrics
         .nexus_lane_governance_sealed
         .with_label_values(&["governance"])
         .get();
     assert_eq!(governance_sealed, 0);
-
     telemetry.record_nexus_scheduler_lane_teu(
         LaneId::new(1),
         LaneTeuGaugeUpdate {
@@ -391,22 +367,18 @@ fn lane_manifest_details_exposed_via_telemetry() {
             ..LaneTeuGaugeUpdate::default()
         },
     );
-
     assert_governance_manifest_snapshot(metrics.as_ref(), &validators, &allowed_ids);
     clear_governance_manifest(&telemetry);
-
     let governance_sealed_after_loss = metrics
         .nexus_lane_governance_sealed
         .with_label_values(&["governance"])
         .get();
     assert_eq!(governance_sealed_after_loss, 1);
 }
-
 #[test]
 #[cfg(feature = "telemetry")]
 fn sealed_lane_gauges_reset_when_lane_removed() {
     let (metrics, telemetry, _validators, _allowed_ids) = governance_lane_setup();
-
     // Simulate a governance lane that is still sealed (manifest missing).
     clear_governance_manifest(&telemetry);
     let sealed_before = metrics
@@ -414,7 +386,6 @@ fn sealed_lane_gauges_reset_when_lane_removed() {
         .with_label_values(&["governance"])
         .get();
     assert_eq!(sealed_before, 1);
-
     // Lane disappears from the registry; the gauges should be reset.
     telemetry.record_lane_governance_statuses(&[]);
     let sealed_after = metrics
@@ -432,15 +403,12 @@ fn sealed_lane_gauges_reset_when_lane_removed() {
         "cached sealed alias list should be cleared"
     );
 }
-
 #[test]
 #[cfg(feature = "telemetry")]
 fn lane_catalog_size_reflected_in_metric() {
     use iroha_telemetry::metrics::Metrics;
-
     let metrics = Arc::new(Metrics::default());
     let telemetry = iroha_core::telemetry::StateTelemetry::new(metrics.clone(), true);
-
     let initial_catalog = LaneCatalog::new(
         NonZeroU32::new(3).expect("non-zero"),
         vec![
@@ -463,13 +431,11 @@ fn lane_catalog_size_reflected_in_metric() {
     )
     .expect("lane catalog");
     telemetry.set_nexus_catalogs(&initial_catalog, &DataSpaceCatalog::default());
-
     assert_eq!(
         metrics.nexus_lane_configured_total.get(),
         3,
         "gauge should reflect initial lane count"
     );
-
     let trimmed_catalog = LaneCatalog::new(
         NonZeroU32::new(2).expect("non-zero"),
         vec![
@@ -487,14 +453,12 @@ fn lane_catalog_size_reflected_in_metric() {
     )
     .expect("lane catalog");
     telemetry.set_nexus_catalogs(&trimmed_catalog, &DataSpaceCatalog::default());
-
     assert_eq!(
         metrics.nexus_lane_configured_total.get(),
         2,
         "gauge should update when the lane catalog shrinks"
     );
 }
-
 #[cfg(feature = "telemetry")]
 fn governance_lane_setup() -> (
     Arc<iroha_telemetry::metrics::Metrics>,
@@ -503,7 +467,6 @@ fn governance_lane_setup() -> (
     BTreeSet<String>,
 ) {
     use iroha_telemetry::metrics::Metrics;
-
     let metrics = Arc::new(Metrics::default());
     let telemetry = iroha_core::telemetry::StateTelemetry::new(metrics.clone(), true);
     let lane_catalog = LaneCatalog::new(
@@ -522,7 +485,6 @@ fn governance_lane_setup() -> (
     )
     .expect("lane catalog");
     telemetry.set_nexus_catalogs(&lane_catalog, &DataSpaceCatalog::default());
-
     let validators = vec![
         iroha_test_samples::ALICE_ID.clone(),
         iroha_test_samples::BOB_ID.clone(),
@@ -530,10 +492,8 @@ fn governance_lane_setup() -> (
     let allowed_ids = ["upgrade-1".to_string(), "upgrade-2".to_string()]
         .into_iter()
         .collect::<BTreeSet<_>>();
-
     (metrics, telemetry, validators, allowed_ids)
 }
-
 #[cfg(feature = "telemetry")]
 fn governance_rules(validators: &[AccountId], allowed_ids: &BTreeSet<String>) -> GovernanceRules {
     let protected_namespaces = ["governance", "treasury"]
@@ -565,7 +525,6 @@ fn governance_rules(validators: &[AccountId], allowed_ids: &BTreeSet<String>) ->
         },
     }
 }
-
 #[cfg(feature = "telemetry")]
 fn install_governance_manifest(
     telemetry: &iroha_core::telemetry::StateTelemetry,
@@ -588,7 +547,6 @@ fn install_governance_manifest(
     )]));
     telemetry.set_lane_manifest_registry(Arc::new(registry));
 }
-
 #[cfg(feature = "telemetry")]
 fn clear_governance_manifest(telemetry: &iroha_core::telemetry::StateTelemetry) {
     let registry = LaneManifestRegistry::from_statuses(BTreeMap::from([(
@@ -607,7 +565,6 @@ fn clear_governance_manifest(telemetry: &iroha_core::telemetry::StateTelemetry) 
     )]));
     telemetry.set_lane_manifest_registry(Arc::new(registry));
 }
-
 #[cfg(feature = "telemetry")]
 fn assert_governance_manifest_snapshot(
     metrics: &iroha_telemetry::metrics::Metrics,
@@ -647,7 +604,6 @@ fn assert_governance_manifest_snapshot(
     let expected_ids = allowed_ids.iter().cloned().collect::<Vec<_>>();
     assert_eq!(hook.allowed_ids, expected_ids);
 }
-
 #[test]
 #[cfg(feature = "telemetry")]
 fn nexus_config_diff_counter_and_event_emitted() {
@@ -657,10 +613,8 @@ fn nexus_config_diff_counter_and_event_emitted() {
     };
     use nonzero_ext::nonzero;
     use norito::json::to_string as to_json_string;
-
     let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
     let telemetry = iroha_core::telemetry::StateTelemetry::new(metrics.clone(), true);
-
     let lane_catalog = LaneCatalog::new(
         nonzero!(2_u32),
         vec![
@@ -697,27 +651,22 @@ fn nexus_config_diff_counter_and_event_emitted() {
             },
         }],
     };
-
     let registry = LaneRegistry {
         poll_interval: std::time::Duration::from_secs(120),
         ..LaneRegistry::default()
     };
-
     let governance = GovernanceCatalog {
         default_module: Some("parliament".to_string()),
         ..GovernanceCatalog::default()
     };
-
     let fusion = Fusion {
         floor_teu: 5_000,
         ..Fusion::default()
     };
-
     let da = Da {
         sample_size_base: nonzero!(80_u16),
         ..Da::default()
     };
-
     let nexus = Nexus {
         enabled: true,
         storage: NexusStorage::default(),
@@ -743,7 +692,6 @@ fn nexus_config_diff_counter_and_event_emitted() {
         commit: Commit::default(),
         da,
     };
-
     let event = telemetry
         .record_nexus_config_diff(&nexus)
         .expect("diff event expected");
@@ -752,7 +700,6 @@ fn nexus_config_diff_counter_and_event_emitted() {
         event_json.contains("nexus.lane_catalog.count"),
         "diff event should mention lane catalog count"
     );
-
     let counter = metrics
         .nexus_config_diff_total
         .with_label_values(&["nexus.lane_catalog.count", "active"])

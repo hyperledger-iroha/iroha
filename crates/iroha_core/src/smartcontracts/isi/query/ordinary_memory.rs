@@ -6,13 +6,11 @@
 //! the source-specific preflight and output limits installed below. Iterable
 //! admission is coupled to source-specific immutable-world adapters in
 //! `ordinary_iterable` before a query implementation can clone any row.
-
 use std::{
     fmt,
     str::FromStr,
     sync::{Arc, Mutex},
 };
-
 use iroha_data_model::{
     query::{
         QueryRequest, QueryResponse, SingularQueryBox, error::QueryExecutionFail as Error,
@@ -23,38 +21,31 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly as _;
 use norito::core::{DecodeFlagsGuard, NoritoSerialize};
-
 use super::{QueryCountMode, QueryExecutionBudget, QueryLimits, STREAMING_SORTED_PREFIX_LIMIT};
 use crate::state::{StateReadOnly, WorldReadOnly};
-
 /// Conservative resident charge for one name-backed identifier source row.
 ///
 /// `Name` is protocol-limited to 255 bytes. The additional allowance covers
 /// the owned string, the identifier wrapper, and allocator bookkeeping before
 /// post-processing can measure the exact encoded row.
 pub const ORDINARY_NAME_ID_SOURCE_BYTES: u64 = 1_024;
-
 /// Conservative resident charge for the fixed-width ABI-version result.
 pub const ORDINARY_ABI_VERSION_SOURCE_BYTES: u64 = 64;
-
 /// Fixed resident charge for query/cursor containers, allocator metadata, and
 /// move-only ownership tokens that do not scale with the result count.
 pub const ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES: u64 = 4 * 1_024;
-
 /// Conservative resident charge for each slot in a page or retained cursor.
 ///
 /// This is deliberately separate from the source-value charge. It covers the
 /// `Vec` slot, enum/tuple wrappers, iterator bookkeeping, and allocator
 /// metadata that remain live alongside the value itself.
 pub const ORDINARY_QUERY_RETAINED_ITEM_OVERHEAD_BYTES: u64 = 128;
-
 /// The admitted peer adapter measures once, then owns the bounded prefix in a
 /// second immutable-world pass.
 const ORDINARY_SOURCE_SCAN_PASSES: u64 = 2;
 /// One row is traversed once for its exact length and twice by the canonical
 /// writer in each of the two source passes.
 const ORDINARY_SOURCE_FRAME_TRAVERSALS: u64 = 6;
-
 /// Fixed failure categories for invalid ordinary-query memory geometry.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum OrdinaryQueryExecutionLimitError {
@@ -78,7 +69,6 @@ pub enum OrdinaryQueryExecutionLimitError {
     /// archived Start request, and deterministic container overhead.
     CursorRetentionTooSmall,
 }
-
 impl fmt::Display for OrdinaryQueryExecutionLimitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
@@ -103,9 +93,7 @@ impl fmt::Display for OrdinaryQueryExecutionLimitError {
         f.write_str(message)
     }
 }
-
 impl std::error::Error for OrdinaryQueryExecutionLimitError {}
-
 /// A weighted reservation owned by the embedding server.
 ///
 /// Core never assumes how the reservation is implemented. Torii may back it
@@ -116,20 +104,17 @@ impl std::error::Error for OrdinaryQueryExecutionLimitError {}
 pub trait OrdinaryQueryMemoryReservation: fmt::Debug + Send + Sync + 'static {
     /// Number of aggregate pool bytes represented by this reservation.
     fn reserved_bytes(&self) -> u64;
-
     /// Generation of the embedding server's weighted memory pool.
     ///
     /// Pool replacement or reconfiguration must advance this value. Every
     /// child returned by [`Self::split_off`] must report the same generation.
     fn pool_generation(&self) -> u64;
-
     /// Transfer `bytes` from this reservation into a new independently
     /// releasable reservation.
     ///
     /// Returning `None` must leave this reservation unchanged.
     fn split_off(&mut self, bytes: u64) -> Option<Box<dyn OrdinaryQueryMemoryReservation>>;
 }
-
 /// Move-only semantic ownership token for ordinary-query resident memory.
 ///
 /// A token is moved through worker execution and response encoding. Stored
@@ -138,7 +123,6 @@ pub trait OrdinaryQueryMemoryReservation: fmt::Debug + Send + Sync + 'static {
 pub struct OrdinaryQueryMemoryLease {
     reservation: Box<dyn OrdinaryQueryMemoryReservation>,
 }
-
 impl OrdinaryQueryMemoryLease {
     /// Wrap an embedding-server weighted reservation.
     pub fn new(reservation: impl OrdinaryQueryMemoryReservation) -> Self {
@@ -146,19 +130,16 @@ impl OrdinaryQueryMemoryLease {
             reservation: Box::new(reservation),
         }
     }
-
     /// Return the aggregate pool weight owned by this token.
     #[must_use]
     pub fn reserved_bytes(&self) -> u64 {
         self.reservation.reserved_bytes()
     }
-
     /// Return the weighted-pool generation that owns this token.
     #[must_use]
     pub fn pool_generation(&self) -> u64 {
         self.reservation.pool_generation()
     }
-
     /// Split an independently releasable child token from this token.
     pub(crate) fn split_off(&mut self, bytes: u64) -> Option<Self> {
         if bytes == 0 {
@@ -173,7 +154,6 @@ impl OrdinaryQueryMemoryLease {
         Some(Self { reservation })
     }
 }
-
 impl fmt::Debug for OrdinaryQueryMemoryLease {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OrdinaryQueryMemoryLease")
@@ -182,7 +162,6 @@ impl fmt::Debug for OrdinaryQueryMemoryLease {
             .finish_non_exhaustive()
     }
 }
-
 /// Server-owned limits for one ordinary Torii query execution.
 ///
 /// Encoded-byte ceilings are deterministic codec work limits, not estimates
@@ -203,7 +182,6 @@ pub struct OrdinaryQueryExecutionLimits {
     max_request_graph_bytes: u64,
     revalidation_decode_limits: norito::DecodeLimits,
 }
-
 impl OrdinaryQueryExecutionLimits {
     /// Construct and validate the complete Core-side limit set.
     ///
@@ -246,7 +224,6 @@ impl OrdinaryQueryExecutionLimits {
         execution_budget
             .ensure(source_items, probe_source_bytes)
             .map_err(|_| OrdinaryQueryExecutionLimitError::ExecutionBudgetTooSmall)?;
-
         let revalidation_graph_bytes =
             u64::try_from(revalidation_decode_limits.max_total_allocated_bytes())
                 .map_err(|_| OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
@@ -273,7 +250,6 @@ impl OrdinaryQueryExecutionLimits {
         if max_cursor_retained_bytes < required_cursor {
             return Err(OrdinaryQueryExecutionLimitError::CursorRetentionTooSmall);
         }
-
         Ok(Self {
             policy_generation,
             execution_budget,
@@ -289,7 +265,6 @@ impl OrdinaryQueryExecutionLimits {
             revalidation_decode_limits,
         })
     }
-
     /// Compute the minimum fresh execution reservation for the decoded request,
     /// source/work, page materialization, response ownership, and encoding
     /// overlap.
@@ -331,7 +306,6 @@ impl OrdinaryQueryExecutionLimits {
         let request_graph = max_request_graph_bytes
             .checked_add(request_inline)
             .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
-
         // The Start request remains live while its exact (Q, T) source plan is
         // consumed and while the first page is materialized. The response frame
         // is encoded only after that request and the source iterator are gone.
@@ -353,7 +327,6 @@ impl OrdinaryQueryExecutionLimits {
             .checked_add(page_container)
             .and_then(|bytes| bytes.checked_add(max_response_bytes))
             .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
-
         // On `Continue`, the retained archive remains charged to `R` while a
         // decoded Start request and its bounded canonical re-encode coexist in
         // fresh headroom `P`. Revalidation completes before source execution,
@@ -367,7 +340,6 @@ impl OrdinaryQueryExecutionLimits {
             .max(response_phase)
             .max(revalidation_phase))
     }
-
     /// Compute the minimum retained reservation `R` for cursor values, the
     /// canonical Start archive, and deterministic container overhead.
     pub fn required_cursor_retained_bytes(
@@ -389,37 +361,31 @@ impl OrdinaryQueryExecutionLimits {
             .and_then(|bytes| bytes.checked_add(container))
             .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)
     }
-
     /// Configuration generation that produced this policy.
     #[must_use]
     pub const fn policy_generation(self) -> u64 {
         self.policy_generation
     }
-
     /// Deterministic work budget applied while producing an ephemeral page.
     #[must_use]
     pub const fn execution_budget(self) -> QueryExecutionBudget {
         self.execution_budget
     }
-
     /// Maximum response-page item count covered by the peak geometry.
     #[must_use]
     pub const fn max_page_items(self) -> u64 {
         self.max_page_items
     }
-
     /// Weighted resident bytes required in addition to any stored cursor.
     #[must_use]
     pub const fn execution_headroom_bytes(self) -> u64 {
         self.execution_headroom_bytes
     }
-
     /// Maximum resident bytes allowed for one source row before exact sizing.
     #[must_use]
     pub const fn max_source_item_bytes(self) -> u64 {
         self.max_source_item_bytes
     }
-
     /// Maximum canonical preflight and final HTTP response-body bytes.
     ///
     /// Core checks the canonical Norito frame before returning ownership;
@@ -428,31 +394,26 @@ impl OrdinaryQueryExecutionLimits {
     pub const fn max_response_bytes(self) -> u64 {
         self.max_response_bytes
     }
-
     /// Maximum values retained by one stored cursor.
     #[must_use]
     pub const fn max_cursor_retained_items(self) -> u64 {
         self.max_cursor_retained_items
     }
-
     /// Maximum encoded bytes occupied by retained cursor values.
     #[must_use]
     pub const fn max_cursor_value_bytes(self) -> u64 {
         self.max_cursor_value_bytes
     }
-
     /// Aggregate weighted charge split into a stored cursor token.
     #[must_use]
     pub const fn max_cursor_retained_bytes(self) -> u64 {
         self.max_cursor_retained_bytes
     }
-
     /// Maximum canonical request archive retained for continuation revalidation.
     #[must_use]
     pub const fn max_revalidation_archive_bytes(self) -> u64 {
         self.max_revalidation_archive_bytes
     }
-
     /// Maximum allocator-owned graph retained by one decoded Start request.
     ///
     /// This is the embedding server's measured decode-allocation ceiling, not
@@ -461,7 +422,6 @@ impl OrdinaryQueryExecutionLimits {
     pub const fn max_request_graph_bytes(self) -> u64 {
         self.max_request_graph_bytes
     }
-
     /// Schema-audited limits for decoding a stored Start archive during
     /// continuation revalidation.
     #[must_use]
@@ -469,7 +429,6 @@ impl OrdinaryQueryExecutionLimits {
         self.revalidation_decode_limits
     }
 }
-
 /// Immutable policy identity archived alongside one ordinary stored cursor.
 ///
 /// Exact equality is intentional. A continuation may not combine retained
@@ -483,7 +442,6 @@ pub(crate) struct OrdinaryQueryCursorPolicy {
     count_mode: QueryCountMode,
     pool_generation: u64,
 }
-
 impl OrdinaryQueryCursorPolicy {
     pub(crate) const fn new(
         limits: OrdinaryQueryExecutionLimits,
@@ -498,23 +456,19 @@ impl OrdinaryQueryCursorPolicy {
             pool_generation,
         }
     }
-
     pub(crate) const fn pool_generation(self) -> u64 {
         self.pool_generation
     }
-
     pub(crate) const fn retained_bytes(self) -> u64 {
         self.limits.max_cursor_retained_bytes()
     }
 }
-
 /// Move-only retained cursor memory and the exact policy that admitted it.
 #[derive(Debug)]
 pub(crate) struct OrdinaryQueryCursorMemory {
     lease: OrdinaryQueryMemoryLease,
     policy: OrdinaryQueryCursorPolicy,
 }
-
 impl OrdinaryQueryCursorMemory {
     fn new(lease: OrdinaryQueryMemoryLease, policy: OrdinaryQueryCursorPolicy) -> Option<Self> {
         if lease.pool_generation() != policy.pool_generation()
@@ -524,7 +478,6 @@ impl OrdinaryQueryCursorMemory {
         }
         Some(Self { lease, policy })
     }
-
     pub(crate) fn binding(&self) -> OrdinaryQueryCursorBinding {
         OrdinaryQueryCursorBinding {
             retained_bytes: self.lease.reserved_bytes(),
@@ -532,24 +485,20 @@ impl OrdinaryQueryCursorMemory {
         }
     }
 }
-
 /// Copyable continuation admission facts returned without leaking a map guard.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) struct OrdinaryQueryCursorBinding {
     retained_bytes: u64,
     policy: OrdinaryQueryCursorPolicy,
 }
-
 impl OrdinaryQueryCursorBinding {
     pub(crate) const fn retained_bytes(self) -> u64 {
         self.retained_bytes
     }
-
     pub(crate) fn is_compatible_with(self, current: OrdinaryQueryCursorPolicy) -> bool {
         self.policy == current && self.retained_bytes >= current.retained_bytes()
     }
 }
-
 /// Shared mutable ownership used only while a Start request may split a cursor
 /// reservation from its admitted peak reservation.
 ///
@@ -562,13 +511,11 @@ pub(crate) struct OrdinaryQueryMemoryAdmission {
     cursor_retained_bytes: u64,
     cursor_policy: Option<OrdinaryQueryCursorPolicy>,
 }
-
 #[derive(Debug)]
 struct OrdinaryQueryMemoryAdmissionState {
     lease: Option<OrdinaryQueryMemoryLease>,
     cursor_split: bool,
 }
-
 impl OrdinaryQueryMemoryAdmission {
     pub(crate) fn new(
         lease: OrdinaryQueryMemoryLease,
@@ -595,7 +542,6 @@ impl OrdinaryQueryMemoryAdmission {
             cursor_policy,
         })
     }
-
     pub(crate) fn split_cursor_lease(&self) -> Result<OrdinaryQueryCursorMemory, Error> {
         let mut state = self.state.lock().map_err(|_| Error::CapacityLimit)?;
         if state.cursor_split {
@@ -612,7 +558,6 @@ impl OrdinaryQueryMemoryAdmission {
         state.cursor_split = true;
         Ok(cursor_memory)
     }
-
     pub(crate) fn take_response_lease(
         &self,
         release_unused_cursor_charge: bool,
@@ -632,13 +577,11 @@ impl OrdinaryQueryMemoryAdmission {
         Ok(lease)
     }
 }
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(super) enum OrdinaryCursorMode {
     Ephemeral,
     Stored,
 }
-
 pub(super) fn ensure_request_admitted(
     request: &QueryRequest,
     mode: OrdinaryCursorMode,
@@ -669,7 +612,6 @@ pub(super) fn ensure_request_admitted(
         )),
     }
 }
-
 pub(crate) fn ensure_stored_revalidation_admitted(
     request: &QueryRequest,
     query_limits: QueryLimits,
@@ -677,14 +619,12 @@ pub(crate) fn ensure_stored_revalidation_admitted(
 ) -> Result<(), Error> {
     ensure_request_admitted(request, OrdinaryCursorMode::Stored, query_limits, limits)
 }
-
 pub(crate) fn ensure_response_admitted(
     response: &QueryResponse,
     limits: OrdinaryQueryExecutionLimits,
 ) -> Result<(), Error> {
     super::bounded_framed_encoded_len(response, limits.max_response_bytes()).map(drop)
 }
-
 fn ensure_source_bound(
     limits: OrdinaryQueryExecutionLimits,
     required_bytes: u64,
@@ -694,7 +634,6 @@ fn ensure_source_bound(
     }
     Ok(())
 }
-
 fn ensure_world_state_start_shape(
     start: &iroha_data_model::query::QueryWithParams,
     mode: OrdinaryCursorMode,
@@ -702,7 +641,6 @@ fn ensure_world_state_start_shape(
     limits: OrdinaryQueryExecutionLimits,
 ) -> Result<(), Error> {
     ensure_source_bound(limits, ORDINARY_NAME_ID_SOURCE_BYTES)?;
-
     let peer_source = if let Some(query_box) = super::legacy_query_box(start) {
         non_fast_peer_source_shape(query_box)
     } else {
@@ -716,7 +654,6 @@ fn ensure_world_state_start_shape(
             "ordinary iterable producer is awaiting a source-specific bounded adapter".to_owned(),
         ));
     }
-
     if mode != OrdinaryCursorMode::Ephemeral
         || start.params.pagination.offset_value() != 0
         || start.params.sorting.sort_by_metadata_key.is_some()
@@ -726,10 +663,8 @@ fn ensure_world_state_start_shape(
                 .to_owned(),
         ));
     }
-
     ensure_iterable_params(&start.params, mode, query_limits, limits)
 }
-
 fn non_fast_peer_source_shape(
     query_box: &iroha_data_model::query::QueryBox<iroha_data_model::query::QueryOutputBatchBox>,
 ) -> bool {
@@ -745,7 +680,6 @@ fn non_fast_peer_source_shape(
         && erased.predicate().is_pass()
         && erased.selector().iter().next().is_none()
 }
-
 #[cfg(feature = "fast_dsl")]
 fn fast_peer_source_shape(
     start: &iroha_data_model::query::QueryWithParams,
@@ -756,7 +690,6 @@ fn fast_peer_source_shape(
         dsl::{CompoundPredicate, SelectorTuple},
         peer::prelude::FindPeers,
     };
-
     let Some((item, predicate, selector, payload)) = start.fast_dsl_parts() else {
         return Ok(false);
     };
@@ -770,7 +703,6 @@ fn fast_peer_source_shape(
     let selector: SelectorTuple<iroha_data_model::peer::PeerId> = decoder.decode(selector)?;
     Ok(predicate.is_pass() && selector.iter().next().is_none())
 }
-
 #[cfg(not(feature = "fast_dsl"))]
 fn fast_peer_source_shape(
     _start: &iroha_data_model::query::QueryWithParams,
@@ -778,7 +710,6 @@ fn fast_peer_source_shape(
 ) -> Result<bool, Error> {
     Ok(false)
 }
-
 fn ensure_iterable_params(
     params: &QueryParams,
     mode: OrdinaryCursorMode,
@@ -793,7 +724,6 @@ fn ensure_iterable_params(
     if fetch_size > limits.max_page_items() || fetch_size > limits.execution_budget().max_items() {
         return Err(Error::CapacityLimit);
     }
-
     if mode == OrdinaryCursorMode::Stored {
         if params.sorting.sort_by_metadata_key.is_some() {
             let requested = params.pagination.limit_value().ok_or_else(|| {
@@ -875,7 +805,6 @@ fn ensure_iterable_params(
         }
         return Ok(());
     }
-
     let Some(_sort_key) = params.sorting.sort_by_metadata_key.as_ref() else {
         return Ok(());
     };
@@ -893,7 +822,6 @@ fn ensure_iterable_params(
     }
     Ok(())
 }
-
 fn sns_record_source_bytes(
     world: &impl WorldReadOnly,
     selector: &NameSelectorV1,
@@ -911,7 +839,6 @@ fn sns_record_source_bytes(
         })
         .ok_or(Error::GasBudgetExceeded)
 }
-
 fn sns_record_prefix_source_bytes(
     world: &impl WorldReadOnly,
     suffix_id: SuffixId,
@@ -936,13 +863,11 @@ fn sns_record_prefix_source_bytes(
     }
     Ok(total)
 }
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SingularSourceAdmission {
     ProvenBounded,
 }
-
 #[cfg(test)]
 macro_rules! define_singular_source_admission {
     ($($number:literal => $variant:ident: $class:ident),+ $(,)?) => {
@@ -951,13 +876,11 @@ macro_rules! define_singular_source_admission {
                 $(SingularQueryBox::$variant(_) => SingularSourceAdmission::$class,)+
             }
         }
-
         const SINGULAR_SOURCE_ADMISSION_AUDIT: &[(u8, &str, SingularSourceAdmission)] = &[
             $(($number, stringify!($variant), SingularSourceAdmission::$class),)+
         ];
     };
 }
-
 #[cfg(test)]
 define_singular_source_admission! {
     1 => FindExecutorDataModel: ProvenBounded,
@@ -1057,7 +980,6 @@ define_singular_source_admission! {
     95 => FindDomainEndorsementPolicy: ProvenBounded,
     96 => FindDomainCommittee: ProvenBounded,
 }
-
 /// Measure a singular source before a metered server lane can clone or decode it.
 ///
 /// The capability match is deliberately exhaustive. A new singular query must
@@ -1080,20 +1002,17 @@ pub(super) fn preflight_server_singular_source_materialization(
             .ok_or(Error::GasBudgetExceeded)?;
         Ok(())
     }
-
     fn charge_fixed(bytes: u64, remaining: &mut u64) -> Result<(), Error> {
         *remaining = remaining
             .checked_sub(bytes)
             .ok_or(Error::GasBudgetExceeded)?;
         Ok(())
     }
-
     fn reject_unbounded(name: &str) -> Error {
         Error::Conversion(format!(
             "metered server singular query `{name}` has no pre-execute bounded materialization adapter"
         ))
     }
-
     fn require_active_adapter(active: bool, name: &str) -> Result<(), Error> {
         if active {
             Ok(())
@@ -1101,14 +1020,12 @@ pub(super) fn preflight_server_singular_source_materialization(
             Err(reject_unbounded(name))
         }
     }
-
     let _canonical_flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let limit = budget.remaining_bytes(1, 0)?;
     let world = state.world();
     let catalog = &state.nexus().dataspace_catalog;
     let now_ms = state.query_ledger_time_ms();
     let mut remaining = limit;
-
     let charge_alias_resolution = |alias: &iroha_data_model::account::rekey::AccountAlias,
                                    repetitions: u64,
                                    remaining: &mut u64|
@@ -1118,7 +1035,6 @@ pub(super) fn preflight_server_singular_source_materialization(
                 .checked_mul(repetitions)
                 .ok_or(Error::GasBudgetExceeded)?;
         charge_fixed(dataspace_scan, remaining)?;
-
         if let Ok(selector) =
             crate::sns::active_account_alias_selector(world, catalog, alias, now_ms)
         {
@@ -1139,7 +1055,6 @@ pub(super) fn preflight_server_singular_source_materialization(
         }
         Ok(())
     };
-
     match query {
         SingularQueryBox::FindExecutorDataModel(_) => {
             let model = world.executor_data_model();
@@ -1185,7 +1100,6 @@ pub(super) fn preflight_server_singular_source_materialization(
                     charge(primary, &mut remaining)?;
                 }
             }
-
             let labels = world.account_aliases_by_account().get(query.account_id());
             let label_count = u64::try_from(labels.map_or(0, |labels| labels.len()))
                 .map_err(|_| Error::GasBudgetExceeded)?;
@@ -1193,7 +1107,6 @@ pub(super) fn preflight_server_singular_source_materialization(
                 .checked_mul(ORDINARY_NAME_ID_SOURCE_BYTES)
                 .ok_or(Error::GasBudgetExceeded)?;
             charge_fixed(label_source_bytes, &mut remaining)?;
-
             let dataspace_scans_per_label = 4_u64;
             let filter_scans = u64::from(query.dataspace().is_some());
             let scan_repetitions = label_count
@@ -1205,7 +1118,6 @@ pub(super) fn preflight_server_singular_source_materialization(
                     .checked_mul(scan_repetitions)
                     .ok_or(Error::GasBudgetExceeded)?;
             charge_fixed(dataspace_scan, &mut remaining)?;
-
             if let Some(filter) = query.dataspace()
                 && let Ok(selector) = crate::sns::selector_for_dataspace_alias(filter.trim())
             {
@@ -1524,44 +1436,36 @@ pub(super) fn preflight_server_singular_source_materialization(
     }
     limit.checked_sub(remaining).ok_or(Error::GasBudgetExceeded)
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     };
-
     use iroha_data_model::query::{
         parameters::{FetchSize, Pagination},
         runtime::prelude::FindAbiVersion,
     };
     use nonzero_ext::nonzero;
-
     use super::*;
-
     #[derive(Debug)]
     struct TestReservation {
         bytes: u64,
         pool_generation: u64,
         released: Arc<AtomicU64>,
     }
-
     impl Drop for TestReservation {
         fn drop(&mut self) {
             self.released.fetch_add(self.bytes, Ordering::SeqCst);
         }
     }
-
     impl OrdinaryQueryMemoryReservation for TestReservation {
         fn reserved_bytes(&self) -> u64 {
             self.bytes
         }
-
         fn pool_generation(&self) -> u64 {
             self.pool_generation
         }
-
         fn split_off(&mut self, bytes: u64) -> Option<Box<dyn OrdinaryQueryMemoryReservation>> {
             if bytes == 0 || bytes > self.bytes {
                 return None;
@@ -1574,24 +1478,19 @@ mod tests {
             }))
         }
     }
-
     #[derive(Debug)]
     struct FailingSplitReservation(TestReservation);
-
     impl OrdinaryQueryMemoryReservation for FailingSplitReservation {
         fn reserved_bytes(&self) -> u64 {
             self.0.bytes
         }
-
         fn pool_generation(&self) -> u64 {
             self.0.pool_generation
         }
-
         fn split_off(&mut self, _bytes: u64) -> Option<Box<dyn OrdinaryQueryMemoryReservation>> {
             None
         }
     }
-
     fn limits() -> OrdinaryQueryExecutionLimits {
         OrdinaryQueryExecutionLimits::try_new(
             11,
@@ -1609,7 +1508,6 @@ mod tests {
         )
         .expect("valid ordinary query geometry")
     }
-
     fn cursor_policy(
         limits: OrdinaryQueryExecutionLimits,
         pool_generation: u64,
@@ -1620,7 +1518,6 @@ mod tests {
             .ordinary_cursor_policy(pool_generation)
             .expect("ordinary policy")
     }
-
     fn peer_start(params: QueryParams) -> QueryRequest {
         use iroha_data_model::{
             peer::PeerId,
@@ -1630,7 +1527,6 @@ mod tests {
                 peer::prelude::FindPeers,
             },
         };
-
         let query: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<PeerId>::new(
             CompoundPredicate::PASS,
             SelectorTuple::default(),
@@ -1642,7 +1538,6 @@ mod tests {
         let query = QueryWithParams::new(&query, params);
         QueryRequest::Start(query)
     }
-
     #[test]
     fn singular_source_admission_audit_covers_all_96_variants() {
         assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 96);
@@ -1651,7 +1546,6 @@ mod tests {
             assert!(!name.is_empty());
             assert_eq!(*class, SingularSourceAdmission::ProvenBounded);
         }
-
         let representative = SingularQueryBox::FindAbiVersion(
             iroha_data_model::query::runtime::prelude::FindAbiVersion,
         );
@@ -1660,7 +1554,6 @@ mod tests {
             SingularSourceAdmission::ProvenBounded
         );
     }
-
     #[test]
     fn validated_geometry_requires_two_exact_source_passes() {
         let max_page_items = 4_u64;
@@ -1693,7 +1586,6 @@ mod tests {
             1_024,
         )
         .expect("cursor geometry");
-
         OrdinaryQueryExecutionLimits::try_new(
             1,
             QueryExecutionBudget::from_weighted_limit(exact_units, 1, 1),
@@ -1709,7 +1601,6 @@ mod tests {
             decode,
         )
         .expect("two exact F + 1 source passes must be admitted");
-
         assert_eq!(
             OrdinaryQueryExecutionLimits::try_new(
                 1,
@@ -1728,7 +1619,6 @@ mod tests {
             Err(OrdinaryQueryExecutionLimitError::ExecutionBudgetTooSmall)
         );
     }
-
     #[test]
     fn validated_geometry_rejects_a_zero_weight_work_budget() {
         let decode = norito::DecodeLimits::new(16, 1_024, 32, 4 * 1_024, 8);
@@ -1748,7 +1638,6 @@ mod tests {
             1_024,
         )
         .expect("cursor geometry");
-
         assert_eq!(
             OrdinaryQueryExecutionLimits::try_new(
                 1,
@@ -1767,7 +1656,6 @@ mod tests {
             Err(OrdinaryQueryExecutionLimitError::UnmeteredExecutionBudget)
         );
     }
-
     #[test]
     fn validated_geometry_rejects_underreservation_and_overflow() {
         let decode = norito::DecodeLimits::new(16, 1_024, 32, 4 * 1_024, 8);
@@ -1788,7 +1676,6 @@ mod tests {
         )
         .expect("cursor geometry");
         let budget = QueryExecutionBudget::from_weighted_limit(64 * 1_024, 1, 1);
-
         assert_eq!(
             OrdinaryQueryExecutionLimits::try_new(
                 1,
@@ -1839,7 +1726,6 @@ mod tests {
             Err(OrdinaryQueryExecutionLimitError::GeometryOverflow)
         );
     }
-
     #[test]
     fn validated_geometry_covers_continue_decode_and_reencode_overlap() {
         let decode = norito::DecodeLimits::new(8, 32, 8, 16 * 1_024, 4);
@@ -1859,7 +1745,6 @@ mod tests {
                 + u64::try_from(core::mem::size_of::<QueryRequest>()).expect("request size")
                 + ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES
         );
-
         let retained =
             OrdinaryQueryExecutionLimits::required_cursor_retained_bytes(1, 1, 1, 8 * 1_024)
                 .expect("cursor geometry");
@@ -1881,7 +1766,6 @@ mod tests {
             Err(OrdinaryQueryExecutionLimitError::ExecutionHeadroomTooSmall)
         );
     }
-
     #[test]
     fn cursor_policy_rejects_config_and_pool_generation_changes() {
         let limits = limits();
@@ -1892,7 +1776,6 @@ mod tests {
         };
         assert!(binding.is_compatible_with(original));
         assert!(!binding.is_compatible_with(cursor_policy(limits, 8)));
-
         let changed_limits = OrdinaryQueryExecutionLimits::try_new(
             limits.policy_generation() + 1,
             limits.execution_budget(),
@@ -1910,7 +1793,6 @@ mod tests {
         .expect("same geometry with a new policy generation");
         assert!(!binding.is_compatible_with(cursor_policy(changed_limits, 7)));
     }
-
     #[test]
     fn split_cursor_charge_releases_independently() {
         let released = Arc::new(AtomicU64::new(0));
@@ -1928,7 +1810,6 @@ mod tests {
         let admission =
             OrdinaryQueryMemoryAdmission::new(lease, retained, Some(cursor_policy(limits, 7)))
                 .expect("admission");
-
         let cursor = admission.split_cursor_lease().expect("cursor split");
         let response = admission
             .take_response_lease(false)
@@ -1940,7 +1821,6 @@ mod tests {
         drop(response);
         assert_eq!(released.load(Ordering::SeqCst), total);
     }
-
     #[test]
     fn failed_split_leaves_the_whole_reservation_owned() {
         let released = Arc::new(AtomicU64::new(0));
@@ -1958,7 +1838,6 @@ mod tests {
         let admission =
             OrdinaryQueryMemoryAdmission::new(lease, retained, Some(cursor_policy(limits, 7)))
                 .expect("admission");
-
         assert!(matches!(
             admission.split_cursor_lease(),
             Err(Error::CapacityLimit)
@@ -1971,7 +1850,6 @@ mod tests {
         drop(response);
         assert_eq!(released.load(Ordering::SeqCst), total);
     }
-
     #[test]
     fn fixed_scalar_singular_is_admitted() {
         let request = QueryRequest::Singular(FindAbiVersion.into());
@@ -1983,7 +1861,6 @@ mod tests {
         )
         .expect("fixed scalar must be admitted");
     }
-
     #[test]
     fn peer_adapter_admission_is_exact_and_pre_source() {
         let ordinary = limits();
@@ -1995,7 +1872,6 @@ mod tests {
             ordinary,
         )
         .expect("the exact peer pass-through shape must be admitted");
-
         let mut offset = QueryParams::default();
         offset.pagination = Pagination::new(None, 1);
         assert!(matches!(
@@ -2017,7 +1893,6 @@ mod tests {
             Err(Error::Conversion(_))
         ));
     }
-
     #[test]
     fn state_backed_singular_requires_an_active_output_lane() {
         let request = QueryRequest::Singular(
@@ -2034,7 +1909,6 @@ mod tests {
         )
         .expect_err("state-backed output requires the singular lane");
         assert!(matches!(error, Error::Conversion(_)));
-
         ensure_request_admitted(
             &request,
             OrdinaryCursorMode::Ephemeral,
@@ -2048,7 +1922,6 @@ mod tests {
         )
         .expect("the server-owned singular lane admits the bounded producer");
     }
-
     #[test]
     fn stored_exact_requires_and_bounds_pagination_before_execution() {
         let query_limits = QueryLimits::new(16);
@@ -2058,17 +1931,14 @@ mod tests {
             ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits())
                 .expect_err("exact count without a limit must fail closed");
         assert!(matches!(error, Error::Conversion(_)));
-
         params.pagination = Pagination::new(Some(nonzero!(16_u64)), 0);
         ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits())
             .expect("the configured retained bound is admitted");
-
         params.pagination = Pagination::new(Some(nonzero!(17_u64)), 0);
         assert_eq!(
             ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
             Err(Error::CapacityLimit)
         );
-
         params.pagination = Pagination::new(Some(nonzero!(16_u64)), 112);
         assert_eq!(
             ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
@@ -2076,7 +1946,6 @@ mod tests {
             "offset plus limit may not scan beyond the server work budget"
         );
     }
-
     #[test]
     fn stored_bounded_offset_and_tail_share_the_weighted_work_budget() {
         let query_limits = QueryLimits::new(16).with_count_mode(QueryCountMode::Bounded);
@@ -2087,14 +1956,12 @@ mod tests {
         params.pagination = Pagination::new(Some(nonzero!(16_u64)), 111);
         ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits())
             .expect("offset plus page fits the shared item/byte budget exactly enough");
-
         params.pagination = Pagination::new(Some(nonzero!(16_u64)), 112);
         assert_eq!(
             ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),
             Err(Error::CapacityLimit),
             "offset and page bytes may not each consume the same weighted pool"
         );
-
         params.pagination = Pagination::new(None, 95);
         assert_eq!(
             ensure_iterable_params(&params, OrdinaryCursorMode::Stored, query_limits, limits(),),

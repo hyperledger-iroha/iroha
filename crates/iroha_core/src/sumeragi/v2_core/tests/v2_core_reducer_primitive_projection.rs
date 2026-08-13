@@ -7,11 +7,9 @@ fn primitive_projection_cannot_hide_a_safety_violation() {
     };
     let mut projection = before.transition_projection(&event, &after, &[]);
     assert!(refinement::accepts(projection));
-
     projection.safety_before.invalid_pending_append = 1;
     assert!(!refinement::accepts(projection));
 }
-
 #[test]
 fn enter_view_accepts_incoming_equal_projection_with_distinct_full_evidence() {
     let fixture = reducer();
@@ -23,7 +21,6 @@ fn enter_view_accepts_incoming_equal_projection_with_distinct_full_evidence() {
     let incoming_prepare = certificate(&context, 0, Phase::Prepare, subject, 0xbe);
     assert_eq!(local_prepare.reference(), incoming_prepare.reference());
     assert_ne!(local_prepare, incoming_prepare);
-
     let commit = Vote::new(context.id(), round, Phase::Commit, subject, local);
     let initial_timeout = timeout_certificate(&context, 0, None);
     let mut pending = Reducer::recover(
@@ -63,7 +60,6 @@ fn enter_view_accepts_incoming_equal_projection_with_distinct_full_evidence() {
             signature: OpaqueSignature::new(vec![0xbf; 8]),
         })
         .expect("complete the recovered Commit signature");
-
     let incoming_timeout = timeout_certificate(&context, 1, Some(incoming_prepare.clone()));
     let begin = pending
         .step(Event::TimeoutCertificateReceived {
@@ -100,7 +96,6 @@ fn enter_view_accepts_incoming_equal_projection_with_distinct_full_evidence() {
             }
         ] if protected == &local_prepare && fetched == &local_prepare && *vote == commit
     ));
-
     let projection = pending.transition_projection(&event, &after, outcome.effects());
     for incoming in [
         projection.enter_view.pending_record_timeout.highest_prepare,
@@ -138,7 +133,6 @@ fn enter_view_accepts_incoming_equal_projection_with_distinct_full_evidence() {
         refinement::accepts(projection),
         "a valid incoming QC may share the fixed-width signer projection without being the exact local evidence"
     );
-
     let mut false_local_claim = projection;
     false_local_claim
         .enter_view
@@ -152,14 +146,12 @@ fn enter_view_accepts_incoming_equal_projection_with_distinct_full_evidence() {
         local_projection.signer_bitmap = 0b1011;
     }
     assert!(!refinement::accepts(false_local_claim));
-
     let mut foreign_incoming = projection;
     foreign_incoming
         .enter_view
         .incoming_highest_for_control
         .evidence_class = CERTIFICATE_EVIDENCE_FOREIGN;
     assert!(!refinement::accepts(foreign_incoming));
-
     let mut production = pending;
     let applied = production
         .step(event)

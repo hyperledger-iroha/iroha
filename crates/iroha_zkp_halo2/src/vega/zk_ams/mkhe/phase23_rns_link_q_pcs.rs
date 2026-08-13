@@ -45,26 +45,19 @@
 //! still accepts only two batch rows, and no production uniform sampler,
 //! source link, ten-row prover, or wire integration exists.
 //! All qualification booleans below consequently remain false.
-
 use core::fmt;
-
 use crate::vega::sponge::{keccak256, shake256};
-
 use super::super::manifest::{
     RELEASE_MODULI_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, release_profile_v1,
 };
 use super::super::{ZkAmsMkheErrorV1, is_prime_u64};
-
 #[cfg(test)]
 #[path = "phase23_rns_link_q_pcs_masking.rs"]
 mod masking;
-
 #[path = "phase23_rns_link_q_pcs_spool.rs"]
 mod spool;
-
 #[path = "phase23_rns_link_q_pcs_v2_soundness.rs"]
 mod v2_soundness;
-
 const PCS_VERSION_V1: u8 = 1;
 const OPENING_REPETITIONS_V1: usize = 5;
 const BATCH_ROWS_V1: usize = 2;
@@ -81,7 +74,6 @@ const CROSS_LIMB_LEAF_BYTES_V1: usize = RELEASE_LIMBS_V1 * BATCH_ROWS_V1 * FQ2_W
 const HASH_BYTES_V1: usize = 32;
 const PROOF_CAP_BYTES_V1: usize = 32 * 1024 * 1024;
 const RESIDENT_CAP_BYTES_V1: usize = 160 * 1024 * 1024;
-
 const MERKLE_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.q-pcs.merkle-leaf";
 const MERKLE_NODE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.q-pcs.merkle-node";
 const PARAMETER_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.q-pcs.parameters";
@@ -89,7 +81,6 @@ const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.q-pcs.chal
 const BATCH_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.q-pcs.batch";
 const FOLD_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.q-pcs.fold";
 const QUERY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.q-pcs.query";
-
 // Exact maximum for the frozen cross-limb envelope.  The derivation is
 // executable in `release_accounting_is_exact_and_fail_closed` below.
 const RELEASE_INITIAL_MULTIPROOF_AUTH_HASHES_V1: usize = 3_392;
@@ -104,7 +95,6 @@ const RELEASE_PROOF_FIXED_BYTES_V1: usize = 6_752;
 const RELEASE_MAX_ENCODED_PROOF_BYTES_V1: usize = 6_530_912;
 const RELEASE_REMAINING_GLOBAL_PROOF_BUDGET_BYTES_V1: usize =
     PROOF_CAP_BYTES_V1 - RELEASE_MAX_ENCODED_PROOF_BYTES_V1;
-
 const RELEASE_COEFFICIENT_HEAP_BYTES_V1: usize = 6_291_344;
 const RELEASE_FRI_CURRENT_AND_NEXT_HEAP_BYTES_V1: usize = 25_165_824;
 const RELEASE_EXTERNAL_IO_BUFFER_BYTES_V1: usize = 8 * 1024 * 1024;
@@ -117,7 +107,6 @@ const RELEASE_ENUMERATED_HEAP_BYTES_V1: usize = RELEASE_COEFFICIENT_HEAP_BYTES_V
     + RELEASE_MERKLE_FRONTIER_BYTES_V1
     + RELEASE_LEAF_BUFFER_BYTES_V1;
 const RELEASE_EXTERNAL_SCRATCH_BYTES_V1: usize = 956_301_312;
-
 const RELEASE_FFT_BUTTERFLIES_PER_TRANSFORM_V1: u64 = 4_980_736;
 // Twelve transforms per limb: two for commitment, two for the opening-
 // quotient root pass, four for the batch/root pass, and four for proof-path
@@ -134,7 +123,6 @@ const RELEASE_CLASSIFIED_WORK_UNITS_V1: u64 = RELEASE_FFT_BUTTERFLIES_V1
     + RELEASE_MERKLE_HASH_INVOCATIONS_V1
     + RELEASE_FRI_FOLDED_ROW_VALUES_V1;
 const RELEASE_WORK_CEILING_V1: u64 = 100_000_000_000;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QPcsErrorV1 {
     InvalidGeometry,
@@ -154,13 +142,11 @@ enum QPcsErrorV1 {
     ResourceCeilingExceeded,
     ExternalStoreRequired,
 }
-
 impl fmt::Display for QPcsErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
-
 /// Exact release-shape feasibility result.  It is information, not authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ZkAmsPhase23RnsLinkQPcsReleasePlanV1 {
@@ -204,7 +190,6 @@ struct ZkAmsPhase23RnsLinkQPcsReleasePlanV1 {
     non_pcs_sections_measured_within_remaining_budget: bool,
     release_qualified: bool,
 }
-
 fn zk_ams_phase23_rns_link_q_pcs_release_plan_v1()
 -> Result<ZkAmsPhase23RnsLinkQPcsReleasePlanV1, QPcsErrorV1> {
     release_profile_v1()
@@ -217,7 +202,6 @@ fn zk_ams_phase23_rns_link_q_pcs_release_plan_v1()
     {
         return Err(QPcsErrorV1::InvalidGeometry);
     }
-
     let mut minimum_base_two_adicity = u32::MAX;
     let mut minimum_extension_two_adicity = u32::MAX;
     for (limb, &modulus) in RELEASE_MODULI_V1.iter().enumerate() {
@@ -252,7 +236,6 @@ fn zk_ams_phase23_rns_link_q_pcs_release_plan_v1()
     if release_parameter_digest == [0; 32] {
         return Err(QPcsErrorV1::InvalidGeometry);
     }
-
     let plan = ZkAmsPhase23RnsLinkQPcsReleasePlanV1 {
         release_parameter_digest,
         limb_count: RELEASE_LIMBS_V1 as u8,
@@ -294,7 +277,6 @@ fn zk_ams_phase23_rns_link_q_pcs_release_plan_v1()
         non_pcs_sections_measured_within_remaining_budget: false,
         release_qualified: false,
     };
-
     // These inequalities show only that the frozen PCS envelope has room.
     // They deliberately do not turn any of the qualification bits above on.
     if plan.maximum_encoded_proof_bytes >= PROOF_CAP_BYTES_V1 as u64
@@ -307,7 +289,6 @@ fn zk_ams_phase23_rns_link_q_pcs_release_plan_v1()
     }
     Ok(plan)
 }
-
 /// Public parameter identity for private prerequisite stages.
 ///
 /// This exposes neither a commitment nor release authority.  In particular,
@@ -319,7 +300,6 @@ pub(super) fn zk_ams_phase23_rns_link_q_pcs_release_parameter_digest_v1()
         .map(|plan| plan.release_parameter_digest)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 /// Release proving cannot begin until the global external-store implementation
 /// and the independent qualification evidence exist.
 fn require_zk_ams_phase23_rns_link_q_pcs_release_prover_v1() -> Result<(), QPcsErrorV1> {
@@ -342,21 +322,17 @@ fn require_zk_ams_phase23_rns_link_q_pcs_release_prover_v1() -> Result<(), QPcsE
     }
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Fq2V1 {
     c0: u64,
     c1: u64,
 }
-
 impl Fq2V1 {
     const ZERO: Self = Self { c0: 0, c1: 0 };
     const ONE: Self = Self { c0: 1, c1: 0 };
-
     const fn base(value: u64) -> Self {
         Self { c0: value, c1: 0 }
     }
-
     fn encode(self, modulus: u64) -> Result<[u8; FQ2_WIRE_BYTES_V1], QPcsErrorV1> {
         if self.c0 >= modulus || self.c1 >= modulus {
             return Err(QPcsErrorV1::NonCanonicalResidue);
@@ -366,7 +342,6 @@ impl Fq2V1 {
         bytes[8..].copy_from_slice(&self.c1.to_be_bytes());
         Ok(bytes)
     }
-
     fn decode(bytes: [u8; FQ2_WIRE_BYTES_V1], modulus: u64) -> Result<Self, QPcsErrorV1> {
         let c0 = u64::from_be_bytes(bytes[..8].try_into().expect("fixed first coordinate"));
         let c1 = u64::from_be_bytes(bytes[8..].try_into().expect("fixed second coordinate"));
@@ -376,7 +351,6 @@ impl Fq2V1 {
         Ok(Self { c0, c1 })
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Fq2ParametersV1 {
     modulus: u64,
@@ -384,7 +358,6 @@ struct Fq2ParametersV1 {
     domain_root: Fq2V1,
     domain_log: u8,
 }
-
 impl Fq2ParametersV1 {
     fn derive(modulus: u64, domain_log: usize) -> Result<Self, QPcsErrorV1> {
         if modulus < 3
@@ -431,21 +404,18 @@ impl Fq2ParametersV1 {
         }
         Ok(parameters)
     }
-
     fn add(self, left: Fq2V1, right: Fq2V1) -> Fq2V1 {
         Fq2V1 {
             c0: mod_add_v1(left.c0, right.c0, self.modulus),
             c1: mod_add_v1(left.c1, right.c1, self.modulus),
         }
     }
-
     fn sub(self, left: Fq2V1, right: Fq2V1) -> Fq2V1 {
         Fq2V1 {
             c0: mod_sub_v1(left.c0, right.c0, self.modulus),
             c1: mod_sub_v1(left.c1, right.c1, self.modulus),
         }
     }
-
     fn mul(self, left: Fq2V1, right: Fq2V1) -> Fq2V1 {
         let ac = mod_mul_v1(left.c0, right.c0, self.modulus);
         let bd = mod_mul_v1(left.c1, right.c1, self.modulus);
@@ -463,14 +433,12 @@ impl Fq2ParametersV1 {
             c1: cross,
         }
     }
-
     fn scale(self, value: Fq2V1, scalar: u64) -> Fq2V1 {
         Fq2V1 {
             c0: mod_mul_v1(value.c0, scalar, self.modulus),
             c1: mod_mul_v1(value.c1, scalar, self.modulus),
         }
     }
-
     fn pow(self, mut base: Fq2V1, mut exponent: u128) -> Fq2V1 {
         let mut result = Fq2V1::ONE;
         while exponent != 0 {
@@ -482,7 +450,6 @@ impl Fq2ParametersV1 {
         }
         result
     }
-
     fn inverse(self, value: Fq2V1) -> Result<Fq2V1, QPcsErrorV1> {
         if value == Fq2V1::ZERO {
             return Err(QPcsErrorV1::InvalidFriProof);
@@ -494,23 +461,19 @@ impl Fq2ParametersV1 {
         Ok(self.pow(value, exponent))
     }
 }
-
 const fn mod_add_v1(left: u64, right: u64, modulus: u64) -> u64 {
     let sum = left + right;
     let (reduced, borrow) = sum.overflowing_sub(modulus);
     let mask = 0_u64.wrapping_sub(borrow as u64);
     (reduced & !mask) | (sum & mask)
 }
-
 const fn mod_sub_v1(left: u64, right: u64, modulus: u64) -> u64 {
     let (difference, borrow) = left.overflowing_sub(right);
     difference.wrapping_add(modulus & 0_u64.wrapping_sub(borrow as u64))
 }
-
 fn mod_mul_v1(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) * u128::from(right)) % u128::from(modulus)) as u64
 }
-
 fn mod_pow_v1(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     let mut result = 1_u64;
     while exponent != 0 {
@@ -522,13 +485,11 @@ fn mod_pow_v1(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     }
     result
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RelationPolynomialRoleV1 {
     Product,
     NegacyclicQuotient,
 }
-
 impl RelationPolynomialRoleV1 {
     const fn tag(self) -> u8 {
         match self {
@@ -537,14 +498,12 @@ impl RelationPolynomialRoleV1 {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct QPcsGeometryV1 {
     ring_degree: usize,
     domain_log: usize,
     query_count: usize,
 }
-
 impl QPcsGeometryV1 {
     fn validate(self) -> Result<(), QPcsErrorV1> {
         let domain_size = self.domain_size()?;
@@ -572,18 +531,15 @@ impl QPcsGeometryV1 {
         }
         Ok(())
     }
-
     fn domain_size(self) -> Result<usize, QPcsErrorV1> {
         let shift = u32::try_from(self.domain_log).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
         1_usize
             .checked_shl(shift)
             .ok_or(QPcsErrorV1::ResourceCeilingExceeded)
     }
-
     fn fri_rounds(self) -> usize {
         self.ring_degree.ilog2() as usize + 1
     }
-
     fn degree_bound(self, role: RelationPolynomialRoleV1) -> usize {
         match role {
             RelationPolynomialRoleV1::Product => 2 * self.ring_degree - 2,
@@ -591,13 +547,11 @@ impl QPcsGeometryV1 {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InMemoryReferenceOperationV1 {
     Commit,
     Open,
 }
-
 fn in_memory_reference_residency_bytes_v1(
     geometry: QPcsGeometryV1,
     limb_count: usize,
@@ -624,7 +578,6 @@ fn in_memory_reference_residency_bytes_v1(
             .checked_add(tree_bytes)
             .ok_or(QPcsErrorV1::ResourceCeilingExceeded);
     }
-
     // The reference opening helper retains public and opening-quotient layers
     // and trees while its in-memory FRI helper retains a geometric sequence of
     // batch layers.  Four full layers plus three full trees conservatively
@@ -665,7 +618,6 @@ fn in_memory_reference_residency_bytes_v1(
         .and_then(|value| value.checked_add(proof_authentication))
         .ok_or(QPcsErrorV1::ResourceCeilingExceeded)
 }
-
 fn preflight_in_memory_reference_v1(
     geometry: QPcsGeometryV1,
     limb_count: usize,
@@ -678,32 +630,27 @@ fn preflight_in_memory_reference_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 std::thread_local! {
     static IN_MEMORY_MATERIALIZATION_ATTEMPTS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 #[cfg(test)]
 fn reset_in_memory_materialization_attempts_v1() {
     let _ = IN_MEMORY_MATERIALIZATION_ATTEMPTS_V1.try_with(|attempts| attempts.set(0));
 }
-
 #[cfg(test)]
 fn in_memory_materialization_attempts_v1() -> usize {
     IN_MEMORY_MATERIALIZATION_ATTEMPTS_V1
         .try_with(std::cell::Cell::get)
         .unwrap_or(usize::MAX)
 }
-
 #[cfg(test)]
 fn record_in_memory_materialization_attempt_v1() {
     let _ = IN_MEMORY_MATERIALIZATION_ATTEMPTS_V1
         .try_with(|attempts| attempts.set(attempts.get().saturating_add(1)));
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Caller-supplied challenge tuples exist only for the private reference
 /// prover and hostile tests.  A release caller must not choose them: the
@@ -714,7 +661,6 @@ struct QPcsChallengeTupleV1 {
     gamma: u64,
     beta: u64,
 }
-
 fn validate_challenge_tuples_v1(
     modulus: u64,
     challenges: &[QPcsChallengeTupleV1; OPENING_REPETITIONS_V1],
@@ -735,7 +681,6 @@ fn validate_challenge_tuples_v1(
     }
     Ok(())
 }
-
 fn validate_cross_limb_challenges_v1(
     moduli: &[u64],
     challenges: &[[QPcsChallengeTupleV1; OPENING_REPETITIONS_V1]],
@@ -755,10 +700,8 @@ fn validate_cross_limb_challenges_v1(
     }
     Ok(())
 }
-
 trait CanonicalQPolynomialChunkSourceV1 {
     fn coefficient_count(&self) -> usize;
-
     /// Read the exact next coefficient chunk.  Full chunks contain 1,024
     /// big-endian `u64` residues; the final chunk has the exact remainder.
     /// Returning a different length, or data after the declared final chunk,
@@ -769,7 +712,6 @@ trait CanonicalQPolynomialChunkSourceV1 {
         destination: &mut [u8; 8 * 1_024],
     ) -> Result<usize, QPcsErrorV1>;
 }
-
 fn read_canonical_polynomial_v1<S: CanonicalQPolynomialChunkSourceV1>(
     source: &mut S,
     modulus: u64,
@@ -819,13 +761,11 @@ fn read_canonical_polynomial_v1<S: CanonicalQPolynomialChunkSourceV1>(
     }
     Ok(coefficients)
 }
-
 fn evaluate_base_polynomial_v1(coefficients: &[u64], point: u64, modulus: u64) -> u64 {
     coefficients.iter().rev().fold(0_u64, |accumulator, value| {
         mod_add_v1(mod_mul_v1(accumulator, point, modulus), *value, modulus)
     })
 }
-
 fn opening_vanishing_polynomial_v1(
     modulus: u64,
     challenges: &[QPcsChallengeTupleV1; OPENING_REPETITIONS_V1],
@@ -845,7 +785,6 @@ fn opening_vanishing_polynomial_v1(
     }
     polynomial
 }
-
 fn interpolate_openings_v1(
     modulus: u64,
     challenges: &[QPcsChallengeTupleV1; OPENING_REPETITIONS_V1],
@@ -895,7 +834,6 @@ fn interpolate_openings_v1(
     }
     Ok(interpolation)
 }
-
 fn five_point_opening_quotient_v1(
     coefficients: &[u64],
     modulus: u64,
@@ -943,7 +881,6 @@ fn five_point_opening_quotient_v1(
     }
     Ok(quotient)
 }
-
 fn fft_forward_v1(
     coefficients: &[u64],
     parameters: Fq2ParametersV1,
@@ -987,21 +924,18 @@ fn fft_forward_v1(
     }
     Ok(values)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MerkleLayerKindV1 {
     Public = 1,
     OpeningQuotient = 2,
     FriBatch = 3,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CrossLimbLayerV1 {
     moduli: Vec<u64>,
     rows_per_limb: usize,
     columns: Vec<Vec<Fq2V1>>,
 }
-
 impl CrossLimbLayerV1 {
     fn validate(&self) -> Result<usize, QPcsErrorV1> {
         if self.moduli.is_empty()
@@ -1032,11 +966,9 @@ impl CrossLimbLayerV1 {
         }
         Ok(length)
     }
-
     fn coordinate_count(&self) -> usize {
         self.columns.len()
     }
-
     fn leaf_values(&self, index: usize) -> Result<Vec<Fq2V1>, QPcsErrorV1> {
         let length = self.validate()?;
         if index >= length {
@@ -1045,7 +977,6 @@ impl CrossLimbLayerV1 {
         Ok(self.columns.iter().map(|column| column[index]).collect())
     }
 }
-
 fn q_pcs_parameter_digest_v1(
     geometry: QPcsGeometryV1,
     moduli: &[u64],
@@ -1100,7 +1031,6 @@ fn q_pcs_parameter_digest_v1(
     }
     Ok(keccak256(&frame))
 }
-
 fn merkle_leaf_hash_v1(
     parameter_digest: [u8; 32],
     kind: MerkleLayerKindV1,
@@ -1135,7 +1065,6 @@ fn merkle_leaf_hash_v1(
     }
     Ok(keccak256(&frame))
 }
-
 fn merkle_node_hash_v1(
     parameter_digest: [u8; 32],
     kind: MerkleLayerKindV1,
@@ -1158,7 +1087,6 @@ fn merkle_node_hash_v1(
     frame.extend_from_slice(&right);
     Ok(keccak256(&frame))
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MerkleMultiProofV1 {
     /// Values are leaf-major and then coordinate-major, in the verifier's
@@ -1166,7 +1094,6 @@ struct MerkleMultiProofV1 {
     values: Vec<Fq2V1>,
     authentication_nodes: Vec<[u8; 32]>,
 }
-
 impl MerkleMultiProofV1 {
     fn encoded_len(&self) -> Result<usize, QPcsErrorV1> {
         8_usize
@@ -1182,7 +1109,6 @@ impl MerkleMultiProofV1 {
             .ok_or(QPcsErrorV1::ResourceCeilingExceeded)
     }
 }
-
 struct MerkleTreeV1 {
     parameter_digest: [u8; 32],
     kind: MerkleLayerKindV1,
@@ -1192,7 +1118,6 @@ struct MerkleTreeV1 {
     moduli: Vec<u64>,
     hashes: Vec<[u8; 32]>,
 }
-
 impl MerkleTreeV1 {
     fn build(
         parameter_digest: [u8; 32],
@@ -1254,11 +1179,9 @@ impl MerkleTreeV1 {
             hashes,
         })
     }
-
     fn root(&self) -> [u8; 32] {
         self.hashes[1]
     }
-
     fn open(
         &self,
         values: &CrossLimbLayerV1,
@@ -1278,7 +1201,6 @@ impl MerkleTreeV1 {
         for &index in &indices {
             opened_values.extend(values.leaf_values(index)?);
         }
-
         let mut current: Vec<usize> = indices.iter().map(|index| self.length + index).collect();
         let mut authentication_nodes = Vec::new();
         while current.first().copied() != Some(1) || current.len() != 1 {
@@ -1305,7 +1227,6 @@ impl MerkleTreeV1 {
         })
     }
 }
-
 fn canonical_indices_v1(indices: &[usize], length: usize) -> Result<Vec<usize>, QPcsErrorV1> {
     if indices.is_empty() || length < 2 || !length.is_power_of_two() {
         return Err(QPcsErrorV1::InvalidMerkleProof);
@@ -1318,7 +1239,6 @@ fn canonical_indices_v1(indices: &[usize], length: usize) -> Result<Vec<usize>, 
     }
     Ok(canonical)
 }
-
 fn verify_merkle_multi_proof_v1(
     expected_root: [u8; 32],
     parameter_digest: [u8; 32],
@@ -1409,7 +1329,6 @@ fn verify_merkle_multi_proof_v1(
     }
     Ok(())
 }
-
 fn opened_leaf_v1<'a>(
     proof: &'a MerkleMultiProofV1,
     indices: &[usize],
@@ -1427,7 +1346,6 @@ fn opened_leaf_v1<'a>(
         .get(start..start + coordinate_count)
         .ok_or(QPcsErrorV1::InvalidMerkleProof)
 }
-
 fn query_pair_indices_v1(query_positions: &[usize], length: usize) -> Vec<usize> {
     let half = length / 2;
     let mut indices = Vec::with_capacity(query_positions.len() * 2);
@@ -1440,7 +1358,6 @@ fn query_pair_indices_v1(query_positions: &[usize], length: usize) -> Vec<usize>
     indices.dedup();
     indices
 }
-
 fn derive_field_challenge_v1(
     domain: &[u8],
     transcript_digest: [u8; 32],
@@ -1475,7 +1392,6 @@ fn derive_field_challenge_v1(
     }
     Err(QPcsErrorV1::InvalidChallenge)
 }
-
 fn fold_cross_limb_layer_v1(
     current: &CrossLimbLayerV1,
     parameters: &[Fq2ParametersV1],
@@ -1523,7 +1439,6 @@ fn fold_cross_limb_layer_v1(
         columns,
     })
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CrossLimbFriProofV1 {
     /// Roots for lengths `M, M/2, ..., 4`; the length-two terminal is opened.
@@ -1531,7 +1446,6 @@ struct CrossLimbFriProofV1 {
     terminal_values: Vec<Fq2V1>,
     layer_openings: Vec<MerkleMultiProofV1>,
 }
-
 impl CrossLimbFriProofV1 {
     fn encoded_len(&self) -> Result<usize, QPcsErrorV1> {
         let roots = self
@@ -1557,7 +1471,6 @@ impl CrossLimbFriProofV1 {
         )
     }
 }
-
 fn absorb_fri_root_v1(transcript_digest: [u8; 32], layer: usize, root: [u8; 32]) -> [u8; 32] {
     let mut frame = Vec::with_capacity(FOLD_DOMAIN_V1.len() + 70);
     frame.extend_from_slice(FOLD_DOMAIN_V1);
@@ -1567,7 +1480,6 @@ fn absorb_fri_root_v1(transcript_digest: [u8; 32], layer: usize, root: [u8; 32])
     frame.extend_from_slice(&root);
     keccak256(&frame)
 }
-
 fn absorb_fri_terminal_v1(
     transcript_digest: [u8; 32],
     terminal_values: &[Fq2V1],
@@ -1587,7 +1499,6 @@ fn absorb_fri_terminal_v1(
     }
     Ok(keccak256(&frame))
 }
-
 fn derive_common_query_positions_v1(
     transcript_digest: [u8; 32],
     query_count: usize,
@@ -1631,7 +1542,6 @@ fn derive_common_query_positions_v1(
     }
     Ok(positions)
 }
-
 fn fri_alphas_v1(
     transcript_digest: [u8; 32],
     moduli: &[u64],
@@ -1649,7 +1559,6 @@ fn fri_alphas_v1(
     }
     Ok(alphas)
 }
-
 fn prove_cross_limb_fri_in_memory_v1(
     parameter_digest: [u8; 32],
     seed_digest: [u8; 32],
@@ -1749,7 +1658,6 @@ fn prove_cross_limb_fri_in_memory_v1(
         layer_openings,
     })
 }
-
 fn verify_cross_limb_fri_v1(
     parameter_digest: [u8; 32],
     seed_digest: [u8; 32],
@@ -1858,13 +1766,11 @@ fn verify_cross_limb_fri_v1(
     }
     Ok(initial_queries)
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CanonicalLimbPolynomialPairV1 {
     product: Vec<u64>,
     quotient: Vec<u64>,
 }
-
 fn validate_polynomial_coefficients_v1(
     coefficients: &[u64],
     modulus: u64,
@@ -1887,7 +1793,6 @@ fn validate_polynomial_coefficients_v1(
     }
     Ok(())
 }
-
 fn build_public_layer_v1(
     geometry: QPcsGeometryV1,
     moduli: &[u64],
@@ -1931,7 +1836,6 @@ fn build_public_layer_v1(
         columns,
     })
 }
-
 fn validate_opening_quotient_degree_bounds_v1(
     geometry: QPcsGeometryV1,
     polynomials: &[CanonicalLimbPolynomialPairV1],
@@ -1964,14 +1868,12 @@ fn validate_opening_quotient_degree_bounds_v1(
     }
     Ok(())
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CrossLimbQPcsCommitmentV1 {
     parameter_digest: [u8; 32],
     ordered_moduli: Vec<u64>,
     public_root: [u8; 32],
 }
-
 fn commit_cross_limb_q_polynomials_in_memory_v1(
     geometry: QPcsGeometryV1,
     moduli: &[u64],
@@ -1992,7 +1894,6 @@ fn commit_cross_limb_q_polynomials_in_memory_v1(
         public_root: tree.root(),
     })
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CrossLimbQPcsOpeningProofV1 {
     evaluations: Vec<[[u64; 2]; OPENING_REPETITIONS_V1]>,
@@ -2001,7 +1902,6 @@ struct CrossLimbQPcsOpeningProofV1 {
     opening_quotient_opening: MerkleMultiProofV1,
     fri: CrossLimbFriProofV1,
 }
-
 impl CrossLimbQPcsOpeningProofV1 {
     fn encoded_len(&self) -> Result<usize, QPcsErrorV1> {
         let evaluations = self
@@ -2017,7 +1917,6 @@ impl CrossLimbQPcsOpeningProofV1 {
             .ok_or(QPcsErrorV1::ResourceCeilingExceeded)
     }
 }
-
 fn validate_proof_evaluations_v1(
     moduli: &[u64],
     evaluations: &[[[u64; 2]; OPENING_REPETITIONS_V1]],
@@ -2036,7 +1935,6 @@ fn validate_proof_evaluations_v1(
     }
     Ok(())
 }
-
 fn opening_seed_digest_v1(
     commitment: &CrossLimbQPcsCommitmentV1,
     opening_quotient_root: [u8; 32],
@@ -2074,7 +1972,6 @@ fn opening_seed_digest_v1(
     }
     Ok(keccak256(&frame))
 }
-
 fn derive_batch_coefficients_v1(
     seed_digest: [u8; 32],
     moduli: &[u64],
@@ -2101,7 +1998,6 @@ fn derive_batch_coefficients_v1(
     }
     Ok(coefficients)
 }
-
 fn build_batch_layer_v1(
     geometry: QPcsGeometryV1,
     parameters: &[Fq2ParametersV1],
@@ -2158,7 +2054,6 @@ fn build_batch_layer_v1(
         columns,
     })
 }
-
 fn prove_cross_limb_q_pcs_openings_in_memory_v1(
     geometry: QPcsGeometryV1,
     commitment: &CrossLimbQPcsCommitmentV1,
@@ -2198,7 +2093,6 @@ fn prove_cross_limb_q_pcs_openings_in_memory_v1(
     if public_tree.root() != commitment.public_root {
         return Err(QPcsErrorV1::CommitmentMismatch);
     }
-
     let mut evaluations = Vec::new();
     let mut opening_pairs = Vec::new();
     for limb in 0..commitment.ordered_moduli.len() {
@@ -2284,7 +2178,6 @@ fn prove_cross_limb_q_pcs_openings_in_memory_v1(
         fri,
     })
 }
-
 fn evaluate_base_coefficients_in_fq2_v1(
     coefficients: &[u64],
     point: Fq2V1,
@@ -2297,7 +2190,6 @@ fn evaluate_base_coefficients_in_fq2_v1(
             field.add(field.mul(accumulator, point), Fq2V1::base(*coefficient))
         })
 }
-
 fn verify_cross_limb_q_pcs_openings_v1(
     geometry: QPcsGeometryV1,
     commitment: &CrossLimbQPcsCommitmentV1,
@@ -2436,18 +2328,14 @@ fn verify_cross_limb_q_pcs_openings_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const TEST_MODULI: [u64; 2] = [97, 193];
-
     struct ChunkSourceV1 {
         declared_coefficients: usize,
         chunks: Vec<Vec<u8>>,
     }
-
     impl ChunkSourceV1 {
         fn from_coefficients(coefficients: &[u64]) -> Self {
             let encoded: Vec<u8> = coefficients
@@ -2460,12 +2348,10 @@ mod tests {
             }
         }
     }
-
     impl CanonicalQPolynomialChunkSourceV1 for ChunkSourceV1 {
         fn coefficient_count(&self) -> usize {
             self.declared_coefficients
         }
-
         fn read_chunk(
             &mut self,
             chunk_index: usize,
@@ -2478,7 +2364,6 @@ mod tests {
             Ok(chunk.len())
         }
     }
-
     fn test_geometry() -> QPcsGeometryV1 {
         QPcsGeometryV1 {
             ring_degree: 8,
@@ -2486,7 +2371,6 @@ mod tests {
             query_count: 4,
         }
     }
-
     fn test_polynomials() -> Vec<CanonicalLimbPolynomialPairV1> {
         TEST_MODULI
             .iter()
@@ -2501,7 +2385,6 @@ mod tests {
             })
             .collect()
     }
-
     fn test_challenges() -> Vec<[QPcsChallengeTupleV1; OPENING_REPETITIONS_V1]> {
         vec![
             [
@@ -2560,7 +2443,6 @@ mod tests {
             ],
         ]
     }
-
     fn maximum_authentication_nodes(tree_length: usize, opened_leaves: usize) -> usize {
         let mut length = tree_length;
         let mut occupied = opened_leaves;
@@ -2573,7 +2455,6 @@ mod tests {
         }
         authentication
     }
-
     #[test]
     fn release_accounting_is_exact_and_fail_closed() {
         let plan = zk_ams_phase23_rns_link_q_pcs_release_plan_v1().unwrap();
@@ -2596,7 +2477,6 @@ mod tests {
         assert_eq!(plan.maximum_relation_quotient_degree, (1 << 17) - 2);
         assert_eq!(plan.common_query_count, 160);
         assert_eq!(plan.cross_limb_leaf_bytes, 1_216);
-
         let initial_opened = 2 * RELEASE_FRI_QUERY_COUNT_V1;
         let initial_auth = maximum_authentication_nodes(RELEASE_DOMAIN_SIZE_V1, initial_opened);
         assert_eq!(initial_auth, RELEASE_INITIAL_MULTIPROOF_AUTH_HASHES_V1);
@@ -2651,7 +2531,6 @@ mod tests {
             Err(QPcsErrorV1::ExternalStoreRequired)
         );
     }
-
     #[test]
     fn every_release_prime_has_the_required_extension_root() {
         assert_eq!(
@@ -2670,7 +2549,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn transcript_dimensions_and_modulus_order_have_no_aliases() {
         let geometry = QPcsGeometryV1 {
@@ -2711,7 +2589,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cumulative_residency_fails_before_materialization() {
         let geometry = QPcsGeometryV1 {
@@ -2741,7 +2618,6 @@ mod tests {
             .unwrap()
                 >= RESIDENT_CAP_BYTES_V1
         );
-
         let commitment = CrossLimbQPcsCommitmentV1 {
             parameter_digest: [0; 32],
             ordered_moduli: vec![TEST_MODULI[0]; limb_count],
@@ -2761,7 +2637,6 @@ mod tests {
         );
         assert_eq!(in_memory_materialization_attempts_v1(), 0);
     }
-
     #[test]
     fn genuine_cross_limb_fri_opening_round_trip_rejects_tampering() {
         let geometry = test_geometry();
@@ -2821,7 +2696,6 @@ mod tests {
             cancellation_witness.is_some(),
             "one FRI row admits a high-degree cancellation that the independent second row must reject"
         );
-
         let mut changed_value = proof.clone();
         changed_value.evaluations[0][0][0] =
             (changed_value.evaluations[0][0][0] + 1) % TEST_MODULI[0];
@@ -2829,7 +2703,6 @@ mod tests {
             verify_cross_limb_q_pcs_openings_v1(geometry, &commitment, &challenges, &changed_value)
                 .is_err()
         );
-
         let mut plus_q_evaluation = proof.clone();
         plus_q_evaluation.evaluations[0][0][0] += TEST_MODULI[0];
         assert_eq!(
@@ -2841,7 +2714,6 @@ mod tests {
             ),
             Err(QPcsErrorV1::NonCanonicalResidue)
         );
-
         let mut changed_authentication = proof.clone();
         changed_authentication.fri.layer_openings[0].authentication_nodes[0][0] ^= 1;
         assert!(
@@ -2853,7 +2725,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut changed_public_value = proof.clone();
         changed_public_value.public_opening.values[0].c0 =
             (changed_public_value.public_opening.values[0].c0 + 1) % TEST_MODULI[0];
@@ -2866,7 +2737,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut changed_commitment_root = commitment.clone();
         changed_commitment_root.public_root[0] ^= 1;
         assert!(
@@ -2878,7 +2748,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut changed_fri_root = proof.clone();
         changed_fri_root.fri.layer_roots[1][0] ^= 1;
         assert!(
@@ -2890,7 +2759,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut changed_fold_value = proof.clone();
         changed_fold_value.fri.layer_openings[1].values[0].c0 =
             (changed_fold_value.fri.layer_openings[1].values[0].c0 + 1) % TEST_MODULI[0];
@@ -2903,7 +2771,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut changed_terminal = proof.clone();
         changed_terminal.fri.terminal_values[0].c0 =
             (changed_terminal.fri.terminal_values[0].c0 + 1) % TEST_MODULI[0];
@@ -2916,7 +2783,6 @@ mod tests {
             )
             .is_err()
         );
-
         // Coordinate one is the independently mixed second row for limb zero.
         let mut changed_second_row = proof.clone();
         changed_second_row.fri.layer_openings[0].values[1].c0 =
@@ -2930,7 +2796,6 @@ mod tests {
             )
             .is_err()
         );
-
         // Gamma is transcript-bound before common query derivation.
         let mut changed_query_seed = challenges.clone();
         changed_query_seed[0][0].gamma = 31;
@@ -2938,7 +2803,6 @@ mod tests {
             verify_cross_limb_q_pcs_openings_v1(geometry, &commitment, &changed_query_seed, &proof)
                 .is_err()
         );
-
         let mut limb_splice = polynomials.clone();
         limb_splice.swap(0, 1);
         let spliced_commitment =
@@ -2949,7 +2813,6 @@ mod tests {
             verify_cross_limb_q_pcs_openings_v1(geometry, &spliced_commitment, &challenges, &proof)
                 .is_err()
         );
-
         let reordered_moduli = [TEST_MODULI[1], TEST_MODULI[0]];
         let mut reordered_polynomials = polynomials.clone();
         reordered_polynomials.swap(0, 1);
@@ -2974,7 +2837,6 @@ mod tests {
             )
             .is_err()
         );
-
         let substituted_moduli = [TEST_MODULI[0], 257];
         let substituted_commitment = commit_cross_limb_q_polynomials_in_memory_v1(
             geometry,
@@ -2996,7 +2858,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn canonical_source_rejects_plus_q_noncanonical_and_chunk_splice() {
         let geometry = QPcsGeometryV1 {
@@ -3056,7 +2917,6 @@ mod tests {
             ),
             Err(QPcsErrorV1::TrailingChunk)
         );
-
         let coefficients: Vec<u64> = (0..2_048).map(|index| index as u64 % 97).collect();
         let chunk_modulus = RELEASE_MODULI_V1[0];
         let mut canonical = ChunkSourceV1::from_coefficients(&coefficients);
@@ -3100,7 +2960,6 @@ mod tests {
             changed_commitment.public_root
         );
     }
-
     #[test]
     fn degree_n_minus_one_quotient_and_reused_challenges_are_rejected() {
         let geometry = test_geometry();
@@ -3124,7 +2983,6 @@ mod tests {
             ),
             Err(QPcsErrorV1::InvalidCoefficientCount)
         );
-
         let product_opening_bound =
             geometry.degree_bound(RelationPolynomialRoleV1::Product) - OPENING_REPETITIONS_V1;
         let quotient_opening_bound = geometry
@@ -3150,7 +3008,6 @@ mod tests {
             ),
             Err(QPcsErrorV1::NonCanonicalDegree)
         );
-
         let mut reused = test_challenges();
         reused[0][1].r = reused[0][0].r;
         assert_eq!(
@@ -3176,7 +3033,6 @@ mod tests {
             Err(QPcsErrorV1::ReusedChallenge)
         );
     }
-
     #[test]
     fn release_source_guards_keep_the_prototype_private_and_fail_closed() {
         let source = include_str!("phase23_rns_link_q_pcs.rs");

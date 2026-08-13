@@ -4,32 +4,26 @@
 //! existing `sha3` feature. Vega needs the original Keccak-256 delimiter and
 //! SHAKE256 XOF, so this module applies their standardized sponge padding
 //! directly without adding or changing dependencies.
-
 use tiny_keccak::keccakf;
-
 const KECCAK_256_RATE: usize = 136;
-
 fn clear_sensitive_bytes_v1(bytes: &mut [u8]) {
     let bytes = core::hint::black_box(bytes);
     bytes.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *bytes);
 }
-
 fn clear_sensitive_lanes_v1(lanes: &mut [u64]) {
     let lanes = core::hint::black_box(lanes);
     lanes.fill(0);
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *lanes);
 }
-
 fn clear_sensitive_usize_v1(value: &mut usize) {
     let value = core::hint::black_box(value);
     *value = 0;
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     let _ = core::hint::black_box(&mut *value);
 }
-
 #[cfg(test)]
 std::thread_local! {
     static KECCAK_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
@@ -42,13 +36,11 @@ std::thread_local! {
         std::cell::Cell::new(0)
     };
 }
-
 pub(super) struct Keccak256 {
     state: [u64; 25],
     pending: [u8; KECCAK_256_RATE],
     pending_len: usize,
 }
-
 impl Keccak256 {
     pub(super) const fn new() -> Self {
         Self {
@@ -57,7 +49,6 @@ impl Keccak256 {
             pending_len: 0,
         }
     }
-
     pub(super) fn update(&mut self, mut input: &[u8]) {
         if self.pending_len != 0 {
             let take = input
@@ -78,7 +69,6 @@ impl Keccak256 {
                 return;
             }
         }
-
         let mut chunks = input.chunks_exact(KECCAK_256_RATE);
         for chunk in &mut chunks {
             xor_rate_block(&mut self.state, chunk);
@@ -88,7 +78,6 @@ impl Keccak256 {
         self.pending[..remainder.len()].copy_from_slice(remainder);
         self.pending_len = remainder.len();
     }
-
     /// Fork the exact internal absorb state without exposing a general-purpose
     /// `Clone` capability. Both descendants retain independent zeroizing owners
     /// and produce the same digest until different suffixes are absorbed.
@@ -99,13 +88,11 @@ impl Keccak256 {
             pending_len: self.pending_len,
         }
     }
-
     pub(super) fn finalize(mut self) -> [u8; 32] {
         let mut output = [0_u8; 32];
         self.finalize_into(&mut output);
         output
     }
-
     /// Finalize directly into caller-owned storage.
     ///
     /// The caller retains the owner so secret-derived users can keep the
@@ -118,19 +105,16 @@ impl Keccak256 {
         self.pending[KECCAK_256_RATE - 1] ^= 0x80;
         xor_rate_block(&mut self.state, &self.pending);
         keccakf(&mut self.state);
-
         for (index, byte) in output.iter_mut().enumerate() {
             *byte = (self.state[index / 8] >> (8 * (index % 8))) as u8;
         }
     }
 }
-
 impl Drop for Keccak256 {
     fn drop(&mut self) {
         clear_sensitive_lanes_v1(&mut self.state);
         clear_sensitive_bytes_v1(&mut self.pending);
         clear_sensitive_usize_v1(&mut self.pending_len);
-
         #[cfg(test)]
         if self.state == [0; 25] && self.pending == [0; KECCAK_256_RATE] && self.pending_len == 0 {
             let _ =
@@ -138,28 +122,22 @@ impl Drop for Keccak256 {
         }
     }
 }
-
 /// One-shot permutation state erased on success, error, and unwind.
 struct ZeroizingSpongeStateV1([u64; 25]);
-
 impl ZeroizingSpongeStateV1 {
     const fn zeroed() -> Self {
         Self([0; 25])
     }
-
     fn as_slice(&self) -> &[u64; 25] {
         &self.0
     }
-
     fn as_mut_array(&mut self) -> &mut [u64; 25] {
         &mut self.0
     }
 }
-
 impl Drop for ZeroizingSpongeStateV1 {
     fn drop(&mut self) {
         clear_sensitive_lanes_v1(&mut self.0);
-
         #[cfg(test)]
         if self.0 == [0; 25] {
             let _ = ONE_SHOT_SPONGE_ZEROIZED_DROPS_V1
@@ -167,30 +145,24 @@ impl Drop for ZeroizingSpongeStateV1 {
         }
     }
 }
-
 /// Final padded rate block erased after absorption or during unwind.
 struct ZeroizingRateBlockV1([u8; KECCAK_256_RATE]);
-
 impl ZeroizingRateBlockV1 {
     const fn zeroed() -> Self {
         Self([0; KECCAK_256_RATE])
     }
-
     fn as_slice(&self) -> &[u8; KECCAK_256_RATE] {
         &self.0
     }
-
     fn as_mut_array(&mut self) -> &mut [u8; KECCAK_256_RATE] {
         &mut self.0
     }
 }
-
 impl Drop for ZeroizingRateBlockV1 {
     fn drop(&mut self) {
         clear_sensitive_bytes_v1(&mut self.0);
     }
 }
-
 fn absorb_and_finalize_into(input: &[u8], delimiter: u8, state: &mut [u64; 25]) {
     state.fill(0);
     let mut chunks = input.chunks_exact(KECCAK_256_RATE);
@@ -198,7 +170,6 @@ fn absorb_and_finalize_into(input: &[u8], delimiter: u8, state: &mut [u64; 25]) 
         xor_rate_block(state, chunk);
         keccakf(state);
     }
-
     let remainder = chunks.remainder();
     let mut final_block = ZeroizingRateBlockV1::zeroed();
     final_block.as_mut_array()[..remainder.len()].copy_from_slice(remainder);
@@ -207,11 +178,9 @@ fn absorb_and_finalize_into(input: &[u8], delimiter: u8, state: &mut [u64; 25]) 
     xor_rate_block(state, final_block.as_slice());
     keccakf(state);
 }
-
 fn sponge(input: &[u8], delimiter: u8, output_len: usize) -> Vec<u8> {
     let mut state = ZeroizingSpongeStateV1::zeroed();
     absorb_and_finalize_into(input, delimiter, state.as_mut_array());
-
     let mut output = Vec::with_capacity(output_len);
     while output.len() < output_len {
         let take = (output_len - output.len()).min(KECCAK_256_RATE);
@@ -224,7 +193,6 @@ fn sponge(input: &[u8], delimiter: u8, output_len: usize) -> Vec<u8> {
     }
     output
 }
-
 /// Incremental SHAKE256 output reader.
 ///
 /// This keeps only one Keccak rate block in memory, which is required by the
@@ -235,7 +203,6 @@ pub(super) struct Shake256Reader {
     block: [u8; KECCAK_256_RATE],
     cursor: usize,
 }
-
 impl Shake256Reader {
     pub(super) fn new(input: &[u8]) -> Self {
         let mut reader = Self {
@@ -247,7 +214,6 @@ impl Shake256Reader {
         reader.materialize_block();
         reader
     }
-
     pub(super) fn read(&mut self, mut output: &mut [u8]) {
         while !output.is_empty() {
             if self.cursor == KECCAK_256_RATE {
@@ -263,20 +229,17 @@ impl Shake256Reader {
             output = &mut output[take..];
         }
     }
-
     fn materialize_block(&mut self) {
         for index in 0..self.block.len() {
             self.block[index] = (self.state[index / 8] >> (8 * (index % 8))) as u8;
         }
     }
 }
-
 impl Drop for Shake256Reader {
     fn drop(&mut self) {
         clear_sensitive_lanes_v1(&mut self.state);
         clear_sensitive_bytes_v1(&mut self.block);
         clear_sensitive_usize_v1(&mut self.cursor);
-
         #[cfg(test)]
         if self.state == [0; 25] && self.block == [0; KECCAK_256_RATE] && self.cursor == 0 {
             let _ = SHAKE256_READER_ZEROIZED_DROPS_V1
@@ -284,7 +247,6 @@ impl Drop for Shake256Reader {
         }
     }
 }
-
 fn xor_rate_block(state: &mut [u64; 25], block: &[u8]) {
     debug_assert_eq!(block.len(), KECCAK_256_RATE);
     for (lane, bytes) in state
@@ -302,58 +264,47 @@ fn xor_rate_block(state: &mut [u64; 25], block: &[u8]) {
             | (u64::from(bytes[7]) << 56);
     }
 }
-
 pub(super) fn keccak256(input: &[u8]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(input);
     hash.finalize()
 }
-
 pub(super) fn shake256(input: &[u8], output_len: usize) -> Vec<u8> {
     sponge(input, 0x1f, output_len)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn production_source_v1() -> &'static str {
         include_str!("sponge.rs")
             .split("\n#[cfg(test)]\nmod tests")
             .next()
             .expect("production sponge source")
     }
-
     fn reset_keccak_zeroized_drops_v1() {
         let _ = KECCAK_ZEROIZED_DROPS_V1.try_with(|drops| drops.set(0));
     }
-
     fn keccak_zeroized_drops_v1() -> usize {
         KECCAK_ZEROIZED_DROPS_V1
             .try_with(std::cell::Cell::get)
             .unwrap_or(usize::MAX)
     }
-
     fn reset_shake256_reader_zeroized_drops_v1() {
         let _ = SHAKE256_READER_ZEROIZED_DROPS_V1.try_with(|drops| drops.set(0));
     }
-
     fn shake256_reader_zeroized_drops_v1() -> usize {
         SHAKE256_READER_ZEROIZED_DROPS_V1
             .try_with(std::cell::Cell::get)
             .unwrap_or(usize::MAX)
     }
-
     fn reset_one_shot_sponge_zeroized_drops_v1() {
         let _ = ONE_SHOT_SPONGE_ZEROIZED_DROPS_V1.try_with(|drops| drops.set(0));
     }
-
     fn one_shot_sponge_zeroized_drops_v1() -> usize {
         ONE_SHOT_SPONGE_ZEROIZED_DROPS_V1
             .try_with(std::cell::Cell::get)
             .unwrap_or(usize::MAX)
     }
-
     #[test]
     fn keccak256_and_shake256_match_independent_standard_vectors() {
         assert_eq!(
@@ -375,7 +326,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn sponge_handles_full_and_partial_rate_blocks() {
         for len in [
@@ -391,7 +341,6 @@ mod tests {
             assert_eq!(shake256(&input, 257).len(), 257);
         }
     }
-
     #[test]
     fn one_shot_sponge_state_zeroizes_on_success_error_and_unwind() {
         reset_one_shot_sponge_zeroized_drops_v1();
@@ -400,7 +349,6 @@ mod tests {
             sponge(b"one-shot secret sampler input", 0x1f, 73)
         );
         assert_eq!(one_shot_sponge_zeroized_drops_v1(), 2);
-
         reset_one_shot_sponge_zeroized_drops_v1();
         let failed: Result<(), ()> = {
             let mut state = ZeroizingSpongeStateV1::zeroed();
@@ -409,7 +357,6 @@ mod tests {
         };
         assert_eq!(failed, Err(()));
         assert_eq!(one_shot_sponge_zeroized_drops_v1(), 1);
-
         reset_one_shot_sponge_zeroized_drops_v1();
         let unwind = std::panic::catch_unwind(|| {
             let mut state = ZeroizingSpongeStateV1::zeroed();
@@ -418,7 +365,6 @@ mod tests {
         });
         assert!(unwind.is_err());
         assert_eq!(one_shot_sponge_zeroized_drops_v1(), 1);
-
         let production = production_source_v1();
         let one_shot = production
             .split("fn sponge(")
@@ -437,7 +383,6 @@ mod tests {
             .expect("one-shot state drop implementation");
         assert!(state_drop.contains("clear_sensitive_lanes_v1(&mut self.0)"));
     }
-
     #[test]
     fn keccak_fork_preserves_exact_prefix_state_and_independent_suffixes() {
         assert_eq!(core::mem::size_of::<Keccak256>(), 344);
@@ -454,7 +399,6 @@ mod tests {
             let mut fork = original.fork_v1();
             original.update(b"first suffix");
             fork.update(b"second suffix");
-
             let mut expected_first = prefix.clone();
             expected_first.extend_from_slice(b"first suffix");
             let mut expected_second = prefix;
@@ -463,7 +407,6 @@ mod tests {
             assert_eq!(fork.finalize(), keccak256(&expected_second));
         }
     }
-
     #[test]
     fn streaming_shake_matches_one_shot_under_adversarial_chunkings() {
         let input = (0..2 * KECCAK_256_RATE + 19)
@@ -479,18 +422,15 @@ mod tests {
             assert_eq!(actual, expected, "chunk_size={chunk_size}");
         }
     }
-
     #[test]
     fn streaming_shake_reader_zeroizes_on_success_error_and_unwind() {
         assert_eq!(core::mem::size_of::<Shake256Reader>(), 344);
-
         reset_shake256_reader_zeroized_drops_v1();
         {
             let mut reader = Shake256Reader::new(b"secret common-a sampler prefix");
             reader.read(&mut [0_u8; 31]);
         }
         assert_eq!(shake256_reader_zeroized_drops_v1(), 1);
-
         reset_shake256_reader_zeroized_drops_v1();
         let failed: Result<(), ()> = {
             let mut reader = Shake256Reader::new(b"secret abandoned sampler prefix");
@@ -499,7 +439,6 @@ mod tests {
         };
         assert_eq!(failed, Err(()));
         assert_eq!(shake256_reader_zeroized_drops_v1(), 1);
-
         reset_shake256_reader_zeroized_drops_v1();
         let unwind = std::panic::catch_unwind(|| {
             let mut reader = Shake256Reader::new(b"secret panicking sampler prefix");
@@ -508,7 +447,6 @@ mod tests {
         });
         assert!(unwind.is_err());
         assert_eq!(shake256_reader_zeroized_drops_v1(), 1);
-
         let production = production_source_v1();
         let reader_impl = production
             .split("impl Shake256Reader")
@@ -526,7 +464,6 @@ mod tests {
         assert!(drop_impl.contains("clear_sensitive_bytes_v1(&mut self.block)"));
         assert!(drop_impl.contains("clear_sensitive_usize_v1(&mut self.cursor)"));
     }
-
     #[test]
     fn incremental_keccak_matches_one_shot_across_every_rate_boundary() {
         let input = (0..3 * KECCAK_256_RATE + 17)
@@ -548,12 +485,10 @@ mod tests {
             assert_eq!(hash.finalize(), expected, "chunk_size={chunk_size}");
         }
     }
-
     #[test]
     fn finalize_into_matches_finalize_and_zeroizes_on_success_and_unwind() {
         let input = b"secret-derived nonce material crossing a rate boundary";
         let expected = keccak256(input);
-
         reset_keccak_zeroized_drops_v1();
         let mut hash = Keccak256::new();
         hash.update(input);
@@ -563,14 +498,12 @@ mod tests {
         assert_eq!(keccak_zeroized_drops_v1(), 0);
         drop(hash);
         assert_eq!(keccak_zeroized_drops_v1(), 1);
-
         reset_keccak_zeroized_drops_v1();
         {
             let mut abandoned = Keccak256::new();
             abandoned.update(input);
         }
         assert_eq!(keccak_zeroized_drops_v1(), 1);
-
         reset_keccak_zeroized_drops_v1();
         let unwind = std::panic::catch_unwind(|| {
             let mut hash = Keccak256::new();
@@ -579,7 +512,6 @@ mod tests {
         });
         assert!(unwind.is_err());
         assert_eq!(keccak_zeroized_drops_v1(), 1);
-
         let source = production_source_v1();
         assert!(source.contains("pub(super) fn finalize_into(&mut self"));
         assert!(source.contains("impl Drop for Keccak256"));

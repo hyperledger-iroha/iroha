@@ -1,10 +1,8 @@
 //! Shared row/aggregate executor for app-facing `QueryEnvelope` routes.
-
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, BinaryHeap},
 };
-
 use axum::{
     body::Body,
     http::header,
@@ -12,20 +10,17 @@ use axum::{
 };
 use iroha_primitives::numeric::{Numeric, RoundingMode};
 use norito::json::{Map, Value};
-
 use crate::{
     Error, Result,
     filter::{
         AggregateFn, AggregateMetric, AggregateSpec, FieldPath, FilterExpr, Order, QueryEnvelope,
     },
 };
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CountMode {
     Bounded,
     Exact,
 }
-
 impl CountMode {
     fn from_raw(raw: Option<&str>) -> Self {
         match raw {
@@ -40,7 +35,6 @@ impl CountMode {
             }
         }
     }
-
     const fn label(self) -> &'static str {
         match self {
             Self::Bounded => "bounded",
@@ -48,7 +42,6 @@ impl CountMode {
         }
     }
 }
-
 /// Stable resource identifier for account inventory rows.
 pub(crate) const RESOURCE_ACCOUNTS: &str = "accounts";
 /// Stable resource identifier for account transaction rows.
@@ -67,7 +60,6 @@ pub(crate) const RESOURCE_NFTS: &str = "nfts";
 pub(crate) const RESOURCE_RWAS: &str = "rwas";
 /// Stable resource identifier for asset holder rows.
 pub(crate) const RESOURCE_ASSET_HOLDERS: &str = "asset_holders";
-
 /// Field value capability exposed to the generic DSL.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QueryFieldType {
@@ -80,13 +72,11 @@ pub(crate) enum QueryFieldType {
     /// JSON value that may be non-scalar.
     Json,
 }
-
 impl QueryFieldType {
     const fn is_scalar(self) -> bool {
         matches!(self, Self::String | Self::Number | Self::Bool)
     }
 }
-
 /// One flat field in a resource DSL namespace.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct QueryFieldSpec {
@@ -95,7 +85,6 @@ pub(crate) struct QueryFieldSpec {
     /// Type/capability class.
     pub(crate) field_type: QueryFieldType,
 }
-
 /// A registered query resource.
 #[derive(Debug)]
 pub(crate) struct QueryResourceSpec {
@@ -110,7 +99,6 @@ pub(crate) struct QueryResourceSpec {
     /// Deterministic tie-break fields appended when absent from user sort.
     pub(crate) tie_breakers: &'static [&'static str],
 }
-
 /// Indexed snapshot metadata attached to row/aggregate envelopes.
 #[derive(Clone, Debug)]
 pub(crate) struct QuerySnapshot {
@@ -121,7 +109,6 @@ pub(crate) struct QuerySnapshot {
     /// Backend source label.
     pub(crate) query_source: &'static str,
 }
-
 impl QuerySnapshot {
     /// Construct a snapshot descriptor.
     pub(crate) const fn new(
@@ -136,11 +123,9 @@ impl QuerySnapshot {
         }
     }
 }
-
 const fn field(name: &'static str, field_type: QueryFieldType) -> QueryFieldSpec {
     QueryFieldSpec { name, field_type }
 }
-
 const ACCOUNT_FIELDS: &[QueryFieldSpec] = &[
     field("id", QueryFieldType::String),
     field("primary_alias", QueryFieldType::String),
@@ -149,7 +134,6 @@ const ACCOUNT_FIELDS: &[QueryFieldSpec] = &[
     field("primary_alias_domain", QueryFieldType::String),
     field("has_primary_alias", QueryFieldType::Bool),
 ];
-
 const ACCOUNT_TRANSACTION_FIELDS: &[QueryFieldSpec] = &[
     field("authority", QueryFieldType::String),
     field("timestamp_ms", QueryFieldType::Number),
@@ -158,7 +142,6 @@ const ACCOUNT_TRANSACTION_FIELDS: &[QueryFieldSpec] = &[
     field("result_ok", QueryFieldType::Bool),
     field("asset_id", QueryFieldType::Json),
 ];
-
 const ACCOUNT_ASSET_FIELDS: &[QueryFieldSpec] = &[
     field("account_id", QueryFieldType::String),
     field("asset", QueryFieldType::String),
@@ -172,7 +155,6 @@ const ACCOUNT_ASSET_FIELDS: &[QueryFieldSpec] = &[
     field("primary_alias_domain", QueryFieldType::String),
     field("has_primary_alias", QueryFieldType::Bool),
 ];
-
 const REPO_AGREEMENT_FIELDS: &[QueryFieldSpec] = &[
     field("id", QueryFieldType::String),
     field("initiator", QueryFieldType::String),
@@ -193,9 +175,7 @@ const REPO_AGREEMENT_FIELDS: &[QueryFieldSpec] = &[
     field("settlement_timestamp_ms", QueryFieldType::Number),
     field("status", QueryFieldType::String),
 ];
-
 const DOMAIN_FIELDS: &[QueryFieldSpec] = &[field("id", QueryFieldType::String)];
-
 const ASSET_DEFINITION_FIELDS: &[QueryFieldSpec] = &[
     field("id", QueryFieldType::String),
     field("name", QueryFieldType::String),
@@ -206,10 +186,8 @@ const ASSET_DEFINITION_FIELDS: &[QueryFieldSpec] = &[
     field("alias_binding.grace_until_ms", QueryFieldType::Number),
     field("alias_binding.bound_at_ms", QueryFieldType::Number),
 ];
-
 const NFT_FIELDS: &[QueryFieldSpec] = &[field("id", QueryFieldType::String)];
 const RWA_FIELDS: &[QueryFieldSpec] = &[field("id", QueryFieldType::String)];
-
 const ASSET_HOLDER_FIELDS: &[QueryFieldSpec] = &[
     field("account_id", QueryFieldType::String),
     field("asset", QueryFieldType::String),
@@ -222,7 +200,6 @@ const ASSET_HOLDER_FIELDS: &[QueryFieldSpec] = &[
     field("primary_alias_domain", QueryFieldType::String),
     field("has_primary_alias", QueryFieldType::Bool),
 ];
-
 const ACCOUNTS_SPEC: QueryResourceSpec = QueryResourceSpec {
     id: RESOURCE_ACCOUNTS,
     fields: ACCOUNT_FIELDS,
@@ -286,7 +263,6 @@ const ASSET_HOLDERS_SPEC: QueryResourceSpec = QueryResourceSpec {
     default_sort: &["account_id", "scope"],
     tie_breakers: &["account_id", "scope"],
 };
-
 /// Return the registry descriptor for a stable resource id.
 pub(crate) fn registered_resource(id: &str) -> Option<&'static QueryResourceSpec> {
     match id {
@@ -302,7 +278,6 @@ pub(crate) fn registered_resource(id: &str) -> Option<&'static QueryResourceSpec
         _ => None,
     }
 }
-
 /// Stable resource ids that support aggregate mode.
 pub(crate) const fn aggregate_supported_resources() -> &'static [&'static str] {
     &[
@@ -317,7 +292,6 @@ pub(crate) const fn aggregate_supported_resources() -> &'static [&'static str] {
         RESOURCE_ASSET_HOLDERS,
     ]
 }
-
 /// Stable resource ids that have DA projection export support.
 pub(crate) const fn projection_export_supported_resources() -> &'static [&'static str] {
     &[
@@ -328,7 +302,6 @@ pub(crate) const fn projection_export_supported_resources() -> &'static [&'stati
         RESOURCE_DOMAINS,
     ]
 }
-
 /// Execute row or aggregate mode for one registered resource.
 pub(crate) fn execute_query_envelope<I>(
     resource: &QueryResourceSpec,
@@ -348,16 +321,13 @@ where
     validate_filter(resource, envelope.filter.as_ref())?;
     validate_sort(resource, &envelope.sort)?;
     validate_select(resource, envelope.select.as_ref())?;
-
     let filtered = rows.into_iter().filter(|row| {
         envelope
             .filter
             .as_ref()
             .map_or(true, |expr| evaluate_filter(expr, row))
     });
-
     let count_mode = CountMode::from_raw(envelope.count_mode.as_deref());
-
     if let Some(aggregate) = envelope.aggregate.as_ref() {
         return execute_aggregate_mode(
             resource,
@@ -371,7 +341,6 @@ where
             count_mode,
         );
     }
-
     let select = envelope
         .select
         .as_ref()
@@ -392,7 +361,6 @@ where
         .collect::<Vec<_>>();
     build_common_response(items, page.total, page.has_more, count_mode, snapshot)
 }
-
 fn execute_aggregate_mode<I>(
     resource: &QueryResourceSpec,
     rows: I,
@@ -415,7 +383,6 @@ where
     let page = collect_sorted_page(rows, resource, sort, limit, offset, limit_cap, count_mode)?;
     build_common_response(page.items, page.total, page.has_more, count_mode, snapshot)
 }
-
 fn build_common_response(
     items: Vec<Map>,
     total: Option<usize>,
@@ -454,14 +421,12 @@ fn build_common_response(
     );
     Ok(response.into_response())
 }
-
 fn validation_error(message: impl Into<String>) -> Error {
     Error::AppQueryValidation {
         code: "unsupported_query_shape",
         message: message.into(),
     }
 }
-
 fn field_spec(resource: &QueryResourceSpec, name: &str) -> Option<QueryFieldSpec> {
     if resource.allow_metadata
         && name
@@ -479,7 +444,6 @@ fn field_spec(resource: &QueryResourceSpec, name: &str) -> Option<QueryFieldSpec
         .copied()
         .find(|field| field.name == name)
 }
-
 fn validate_field(resource: &QueryResourceSpec, field: &FieldPath) -> Result<QueryFieldSpec> {
     field_spec(resource, &field.0).ok_or_else(|| {
         validation_error(format!(
@@ -488,7 +452,6 @@ fn validate_field(resource: &QueryResourceSpec, field: &FieldPath) -> Result<Que
         ))
     })
 }
-
 fn validate_filter(resource: &QueryResourceSpec, filter: Option<&FilterExpr>) -> Result<()> {
     let Some(filter) = filter else {
         return Ok(());
@@ -535,7 +498,6 @@ fn validate_filter(resource: &QueryResourceSpec, filter: Option<&FilterExpr>) ->
     }
     validate_rec(resource, filter, 0)
 }
-
 fn validate_filter_literal(
     resource: &QueryResourceSpec,
     field: &FieldPath,
@@ -545,7 +507,6 @@ fn validate_filter_literal(
     validate_value_type(field, spec.field_type, value)?;
     Ok(spec)
 }
-
 fn validate_value_type(field: &FieldPath, field_type: QueryFieldType, value: &Value) -> Result<()> {
     if value.is_null() {
         return Ok(());
@@ -565,14 +526,12 @@ fn validate_value_type(field: &FieldPath, field_type: QueryFieldType, value: &Va
         )))
     }
 }
-
 fn validate_sort(resource: &QueryResourceSpec, sort: &[crate::filter::SortKey]) -> Result<()> {
     for key in sort {
         validate_field(resource, &key.key)?;
     }
     Ok(())
 }
-
 fn validate_select(
     resource: &QueryResourceSpec,
     select: Option<&crate::filter::Selector>,
@@ -585,7 +544,6 @@ fn validate_select(
     }
     Ok(())
 }
-
 fn validate_aggregate(
     resource: &QueryResourceSpec,
     aggregate: &AggregateSpec,
@@ -633,7 +591,6 @@ fn validate_aggregate(
     }
     Ok(())
 }
-
 fn validate_metric(resource: &QueryResourceSpec, metric: &AggregateMetric) -> Result<()> {
     match metric.r#fn {
         AggregateFn::Count => {
@@ -674,7 +631,6 @@ fn validate_metric(resource: &QueryResourceSpec, metric: &AggregateMetric) -> Re
         }
     }
 }
-
 fn validate_having(expr: &FilterExpr, output_fields: &BTreeSet<String>) -> Result<()> {
     match expr {
         FilterExpr::And(list) | FilterExpr::Or(list) => {
@@ -705,13 +661,11 @@ fn validate_having(expr: &FilterExpr, output_fields: &BTreeSet<String>) -> Resul
         }
     }
 }
-
 fn is_valid_alias(alias: &str) -> bool {
     let mut chars = alias.chars();
     matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
-
 fn row_field_value<'a>(row: &'a Map, field: &str) -> Option<&'a Value> {
     if let Some(value) = row.get(field) {
         return Some(value);
@@ -727,7 +681,6 @@ fn row_field_value<'a>(row: &'a Map, field: &str) -> Option<&'a Value> {
     }
     Some(current)
 }
-
 fn evaluate_filter(expr: &FilterExpr, row: &Map) -> bool {
     match expr {
         FilterExpr::And(list) => list.iter().all(|nested| evaluate_filter(nested, row)),
@@ -767,7 +720,6 @@ fn evaluate_filter(expr: &FilterExpr, row: &Map) -> bool {
         FilterExpr::IsNull(field) => row_field_value(row, &field.0).is_none_or(Value::is_null),
     }
 }
-
 fn values_equal(field: &str, left: &Value, right: &Value) -> bool {
     if let Value::Array(items) = left {
         return items.iter().any(|item| values_equal(field, item, right));
@@ -784,7 +736,6 @@ fn values_equal(field: &str, left: &Value, right: &Value) -> bool {
     }
     compare_values(left, right) == Ordering::Equal
 }
-
 fn compare_values(left: &Value, right: &Value) -> Ordering {
     if let (Some(lhs), Some(rhs)) = (numeric_from_value(left), numeric_from_value(right)) {
         return lhs.cmp(&rhs);
@@ -799,7 +750,6 @@ fn compare_values(left: &Value, right: &Value) -> Ordering {
         .cmp(&value_rank(right))
         .then_with(|| json_sort_string(left).cmp(&json_sort_string(right)))
 }
-
 fn value_rank(value: &Value) -> u8 {
     if value.is_null() {
         0
@@ -813,7 +763,6 @@ fn value_rank(value: &Value) -> u8 {
         4
     }
 }
-
 fn numeric_from_value(value: &Value) -> Option<Numeric> {
     value
         .as_u64()
@@ -824,11 +773,9 @@ fn numeric_from_value(value: &Value) -> Option<Numeric> {
         })
         .or_else(|| value.as_str()?.parse().ok())
 }
-
 fn json_sort_string(value: &Value) -> String {
     norito::json::to_json(value).unwrap_or_else(|_| "null".to_owned())
 }
-
 fn json_key_string(value: &Value) -> String {
     if value.is_null() {
         "null".to_owned()
@@ -850,13 +797,11 @@ fn json_key_string(value: &Value) -> String {
         json_sort_string(value)
     }
 }
-
 #[derive(Clone)]
 struct SortField {
     name: String,
     order: Order,
 }
-
 fn sort_fields(resource: &QueryResourceSpec, sort: &[crate::filter::SortKey]) -> Vec<SortField> {
     let mut sort_fields = if sort.is_empty() {
         resource
@@ -885,13 +830,11 @@ fn sort_fields(resource: &QueryResourceSpec, sort: &[crate::filter::SortKey]) ->
     }
     sort_fields
 }
-
 #[derive(Clone)]
 struct RowSortComponent {
     value: RowSortValue,
     order: Order,
 }
-
 #[derive(Clone, Eq, PartialEq)]
 enum RowSortValue {
     Null,
@@ -900,7 +843,6 @@ enum RowSortValue {
     String(String),
     Other(String),
 }
-
 impl RowSortValue {
     fn from_value(value: &Value) -> Self {
         if value.is_null() {
@@ -915,7 +857,6 @@ impl RowSortValue {
             Self::Other(json_sort_string(value))
         }
     }
-
     const fn rank(&self) -> u8 {
         match self {
             Self::Null => 0,
@@ -926,7 +867,6 @@ impl RowSortValue {
         }
     }
 }
-
 impl Ord for RowSortValue {
     fn cmp(&self, other: &Self) -> Ordering {
         let rank = self.rank().cmp(&other.rank());
@@ -944,16 +884,13 @@ impl Ord for RowSortValue {
         }
     }
 }
-
 impl PartialOrd for RowSortValue {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 #[derive(Clone)]
 struct RowSortKey(Vec<RowSortComponent>);
-
 impl RowSortKey {
     fn from_row(row: &Map, fields: &[SortField]) -> Self {
         Self(
@@ -969,21 +906,17 @@ impl RowSortKey {
         )
     }
 }
-
 impl PartialEq for RowSortKey {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
     }
 }
-
 impl Eq for RowSortKey {}
-
 impl PartialOrd for RowSortKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for RowSortKey {
     fn cmp(&self, other: &Self) -> Ordering {
         for (left, right) in self.0.iter().zip(other.0.iter()) {
@@ -1000,27 +933,22 @@ impl Ord for RowSortKey {
         self.0.len().cmp(&other.0.len())
     }
 }
-
 struct SortedPageEntry {
     key: RowSortKey,
     seq: usize,
     row: Map,
 }
-
 impl PartialEq for SortedPageEntry {
     fn eq(&self, other: &Self) -> bool {
         self.seq == other.seq && self.key == other.key
     }
 }
-
 impl Eq for SortedPageEntry {}
-
 impl PartialOrd for SortedPageEntry {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for SortedPageEntry {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.key.cmp(&other.key) {
@@ -1029,13 +957,11 @@ impl Ord for SortedPageEntry {
         }
     }
 }
-
 struct PageResult {
     items: Vec<Map>,
     total: Option<usize>,
     has_more: bool,
 }
-
 fn collect_sorted_page<I>(
     rows: I,
     resource: &QueryResourceSpec,
@@ -1066,7 +992,6 @@ where
         .checked_add(take)
         .and_then(|rows| rows.checked_add(1))
         .ok_or_else(|| validation_error("pagination working-set size overflowed"))?;
-
     if take == 0 {
         let total = match count_mode {
             CountMode::Exact => rows.into_iter().count(),
@@ -1079,10 +1004,8 @@ where
             has_more,
         });
     }
-
     let mut seq = 0usize;
     let mut heap = BinaryHeap::new();
-
     for row in rows {
         let entry = SortedPageEntry {
             key: RowSortKey::from_row(&row, &fields),
@@ -1095,7 +1018,6 @@ where
             heap.pop();
         }
     }
-
     let mut entries = heap.into_vec();
     entries.sort_by(|left, right| {
         let ordering = left.key.cmp(&right.key);
@@ -1119,7 +1041,6 @@ where
         has_more,
     })
 }
-
 fn project_row(row: &Map, select: &crate::filter::Selector) -> Map {
     let mut projected = Map::new();
     for field in &select.0 {
@@ -1130,7 +1051,6 @@ fn project_row(row: &Map, select: &crate::filter::Selector) -> Map {
     }
     projected
 }
-
 #[derive(Debug)]
 enum MetricState {
     Count(u64),
@@ -1140,7 +1060,6 @@ enum MetricState {
     Max(Option<Numeric>),
     Avg { sum: Option<Numeric>, count: u64 },
 }
-
 impl MetricState {
     fn new(metric: &AggregateMetric) -> Self {
         match metric.r#fn {
@@ -1155,7 +1074,6 @@ impl MetricState {
             },
         }
     }
-
     fn update(
         &mut self,
         row: &Map,
@@ -1228,7 +1146,6 @@ impl MetricState {
             }
         }
     }
-
     fn finalize(self) -> Result<Value> {
         match self {
             Self::Count(total) => Ok(Value::from(total)),
@@ -1253,7 +1170,6 @@ impl MetricState {
         }
     }
 }
-
 fn metric_numeric_value(row: &Map, metric: &AggregateMetric) -> Result<Option<Numeric>> {
     let field = metric
         .field
@@ -1261,12 +1177,10 @@ fn metric_numeric_value(row: &Map, metric: &AggregateMetric) -> Result<Option<Nu
         .ok_or_else(|| validation_error("numeric aggregate requires a field"))?;
     Ok(row_field_value(row, &field.0).and_then(numeric_from_value))
 }
-
 struct GroupState {
     group_values: Vec<(String, Value)>,
     metrics: Vec<MetricState>,
 }
-
 fn aggregate_rows<I>(
     resource: &QueryResourceSpec,
     rows: I,
@@ -1330,13 +1244,11 @@ where
     }
     Ok(out)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::filter::{AggregateMetric, Pagination, Selector, SortKey};
     use http_body_util::BodyExt as _;
-
     fn row(fields: &[(&str, Value)]) -> Map {
         let mut row = Map::new();
         for (key, value) in fields {
@@ -1344,7 +1256,6 @@ mod tests {
         }
         row
     }
-
     async fn response_json(response: Response) -> Value {
         let bytes = response
             .into_body()
@@ -1354,13 +1265,11 @@ mod tests {
             .to_bytes();
         norito::json::from_slice(&bytes).expect("json")
     }
-
     #[test]
     fn json_key_string_preserves_json_scalar_identity() {
         let string_one = Value::from("1");
         let number_one = Value::from(1_u64);
         let quoted = Value::from("a\"b");
-
         assert_eq!(json_key_string(&Value::Null), "null");
         assert_eq!(json_key_string(&Value::from(true)), "true");
         assert_ne!(json_key_string(&string_one), json_key_string(&number_one));
@@ -1369,7 +1278,6 @@ mod tests {
             norito::json::to_json(&quoted).expect("json")
         );
     }
-
     #[tokio::test]
     async fn select_projects_only_requested_fields() {
         let envelope = QueryEnvelope {
@@ -1397,7 +1305,6 @@ mod tests {
         assert_eq!(payload["indexed_height"].as_u64(), Some(7));
         assert_eq!(payload["query_source"].as_str(), Some("live"));
     }
-
     #[tokio::test]
     async fn aggregate_distinct_count_is_exact_without_input_sorting() {
         let envelope = QueryEnvelope {
@@ -1440,7 +1347,6 @@ mod tests {
         let payload = response_json(response).await;
         assert_eq!(payload["items"][0]["users"].as_u64(), Some(2));
     }
-
     #[tokio::test]
     async fn aggregate_distinct_count_preserves_json_scalar_identity() {
         let envelope = QueryEnvelope {
@@ -1473,7 +1379,6 @@ mod tests {
         let payload = response_json(response).await;
         assert_eq!(payload["items"][0]["ids"].as_u64(), Some(2));
     }
-
     #[tokio::test]
     async fn select_sort_applies_offset_and_limit_after_ordering() {
         let envelope = QueryEnvelope {
@@ -1508,7 +1413,6 @@ mod tests {
         assert_eq!(payload["items"][0]["id"].as_str(), Some("charlie"));
         assert_eq!(payload["items"][1]["id"].as_str(), Some("bravo"));
     }
-
     #[tokio::test]
     async fn select_sort_handles_numeric_strings_numerically() {
         let envelope = QueryEnvelope {
@@ -1552,7 +1456,6 @@ mod tests {
         assert_eq!(payload["items"][1]["asset"].as_str(), Some("coin#two"));
         assert_eq!(payload["items"][2]["asset"].as_str(), Some("coin#ten"));
     }
-
     #[tokio::test]
     async fn having_runs_before_pagination() {
         let envelope = QueryEnvelope {
@@ -1608,7 +1511,6 @@ mod tests {
             Some("hbl.paynet")
         );
     }
-
     #[test]
     fn sorted_query_rejects_a_window_beyond_the_fetch_budget() {
         let envelope = QueryEnvelope {
@@ -1629,7 +1531,6 @@ mod tests {
         .expect_err("offset plus limit must stay within the fetch budget");
         assert!(error.to_string().contains("offset plus limit"));
     }
-
     #[test]
     fn aggregate_group_working_set_is_bounded_by_the_fetch_budget() {
         let envelope = QueryEnvelope {
@@ -1662,7 +1563,6 @@ mod tests {
         .expect_err("group cardinality must stay within the fetch budget");
         assert!(error.to_string().contains("aggregate group count"));
     }
-
     #[test]
     fn distinct_count_working_set_is_bounded_by_the_fetch_budget() {
         let envelope = QueryEnvelope {
@@ -1694,7 +1594,6 @@ mod tests {
         .expect_err("distinct cardinality must stay within the fetch budget");
         assert!(error.to_string().contains("distinct_count"));
     }
-
     #[test]
     fn select_and_aggregate_are_mutually_exclusive() {
         let envelope = QueryEnvelope {

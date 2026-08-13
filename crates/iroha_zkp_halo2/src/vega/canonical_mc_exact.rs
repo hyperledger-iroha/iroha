@@ -4,7 +4,6 @@
 //! remain fixed while the upstream implementation is internalized. The
 //! production Figure 9 path is deliberately fail-closed until its exact
 //! verifier key, setup, and prover are all first-party code.
-
 use super::{
     MAX_VEGA_PROOF_BYTES_V1, VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1, VegaT256ScalarV1 as Scalar,
     engine::{
@@ -15,13 +14,11 @@ use super::{
     microsoft_mc,
     sponge::keccak256,
 };
-
 const ENVELOPE_MAGIC: &[u8; 8] = b"IROVEGMC";
 const ENVELOPE_VERSION: u8 = 1;
 const ENVELOPE_HEADER_BYTES: usize = ENVELOPE_MAGIC.len() + 1 + 32;
 const CONTEXT_DOMAIN: &[u8] = b"iroha.vega.figure9.microsoft-mc.context.v1";
 const PINNED_SOURCE_COMMIT: &[u8] = b"c0ee259053cd12eaf43ed71b5cde375452b3ee4d";
-
 /// Reject proving until the exact Microsoft Figure 9 prover is internalized.
 pub(super) fn prove_figure9_mc<R: VegaRandomSourceV1>(
     context: &VegaMdlProofContextV1<'_>,
@@ -37,7 +34,6 @@ pub(super) fn prove_figure9_mc<R: VegaRandomSourceV1>(
     // order, and the pinned verifier digest pass cross-conformance tests.
     Err(VegaMdlProofErrorV1::InvalidCompiledProfile)
 }
-
 /// Parse the fixed envelope and reject until equation verification is enabled.
 pub(super) fn verify_figure9_mc(
     context: &VegaMdlProofContextV1<'_>,
@@ -66,17 +62,14 @@ pub(super) fn verify_figure9_mc(
     // every Microsoft equation check. This is intentionally fail-closed.
     Err(VegaMdlProofErrorV1::VerificationFailed)
 }
-
 /// Return the governed Microsoft verifier-key digest.
 pub(super) fn verifier_digest() -> Result<[u8; 32], VegaMdlProofErrorV1> {
     Ok(microsoft_mc::canonical_figure9_verifier_digest())
 }
-
 /// Return every governed Microsoft proof sequence dimension.
 pub(super) fn proof_dimensions() -> Result<VegaMdlProofDimensionsV1, VegaMdlProofErrorV1> {
     Ok(microsoft_mc::canonical_figure9_dimensions())
 }
-
 /// Validate an independently generated Microsoft fixture with first-party code.
 pub(super) fn validate_microsoft_fixture(
     verifier_key: &[u8],
@@ -86,7 +79,6 @@ pub(super) fn validate_microsoft_fixture(
         .map_err(|_| VegaMdlProofErrorV1::VerificationFailed)?;
     Ok((digest, dimensions, steps.len(), core.len()))
 }
-
 fn validate_context(context: &VegaMdlProofContextV1<'_>) -> Result<[u8; 32], VegaMdlProofErrorV1> {
     if context.action_index != VEGA_MDL_ACTION_INDEX_V1
         || context.chain_id.is_empty()
@@ -117,7 +109,6 @@ fn validate_context(context: &VegaMdlProofContextV1<'_>) -> Result<[u8; 32], Veg
     push_context_field(&mut frame, &context.engine_manifest_digest)?;
     Ok(keccak256(&frame))
 }
-
 fn push_context_field(output: &mut Vec<u8>, field: &[u8]) -> Result<(), VegaMdlProofErrorV1> {
     output.extend_from_slice(
         &u64::try_from(field.len())
@@ -127,7 +118,6 @@ fn push_context_field(output: &mut Vec<u8>, field: &[u8]) -> Result<(), VegaMdlP
     output.extend_from_slice(field);
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,15 +125,12 @@ mod tests {
         engine::{VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1, VegaRandomSourceErrorV1},
         figure9_layout::FIGURE9_LAYOUT,
     };
-
     struct PanicRandom;
-
     impl VegaRandomSourceV1 for PanicRandom {
         fn fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), VegaRandomSourceErrorV1> {
             panic!("disabled prover must not request randomness")
         }
     }
-
     fn context() -> VegaMdlProofContextV1<'static> {
         VegaMdlProofContextV1 {
             chain_id: b"fail-closed-test",
@@ -156,7 +143,6 @@ mod tests {
             engine_manifest_digest: [5; 32],
         }
     }
-
     #[test]
     fn production_prover_is_explicitly_fail_closed() {
         let one = [1_u8; 32];
@@ -181,7 +167,6 @@ mod tests {
             Err(VegaMdlProofErrorV1::InvalidCompiledProfile)
         );
     }
-
     #[test]
     fn production_verifier_accepts_no_placeholder_or_alternate_wire() {
         let context = context();

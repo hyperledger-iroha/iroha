@@ -1,7 +1,5 @@
 //! Sealed second-pass canonical source reopener for source/packing columns.
-
 use super::*;
-
 struct CanonicalReopenRecordV1 {
     source_receipt_digest: [u8; 32],
     source_opening_record_digest: [u8; 32],
@@ -21,7 +19,6 @@ struct CanonicalReopenRecordV1 {
     release_complete: bool,
     record_digest: [u8; 32],
 }
-
 /// Opaque next state retaining the complete replay owner and bounded columns.
 #[must_use = "dropping this owner closes the source openings and canonical replay"]
 pub(in crate::vega::zk_ams::mkhe) struct Phase23GlobalLookupSourceReopenedV1<K, P> {
@@ -29,7 +26,6 @@ pub(in crate::vega::zk_ams::mkhe) struct Phase23GlobalLookupSourceReopenedV1<K, 
     weighted_columns: WeightedOpeningColumnsV1,
     record: CanonicalReopenRecordV1,
 }
-
 impl<K, P> Phase23GlobalLookupSourceReplayV1<K, P> {
     /// Consume this owner into the later authenticated canonical pass. The
     /// production seal is currently uninhabited; no generic callback escapes.
@@ -44,12 +40,10 @@ impl<K, P> Phase23GlobalLookupSourceReplayV1<K, P> {
         .run_v1()
     }
 }
-
 struct CanonicalReopenIngressV1<K, P> {
     replay: Option<Phase23GlobalLookupSourceReplayV1<K, P>>,
     seal: Option<GlobalLookupCanonicalReopenSealV1>,
 }
-
 impl<K, P> CanonicalReopenIngressV1<K, P> {
     fn run_v1(mut self) -> Result<Phase23GlobalLookupSourceReopenedV1<K, P>, ZkAmsMkheErrorV1> {
         // Take both authority owners before validation or authenticated I/O.
@@ -163,7 +157,6 @@ impl<K, P> CanonicalReopenIngressV1<K, P> {
         })
     }
 }
-
 fn canonical_reopen_record_digest_v1(
     record: &CanonicalReopenRecordV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -194,7 +187,6 @@ fn canonical_reopen_record_digest_v1(
     ]);
     require_nonzero_opening_digest_v1(hash.finalize())
 }
-
 fn validate_canonical_reopen_record_v1(
     record: &CanonicalReopenRecordV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {

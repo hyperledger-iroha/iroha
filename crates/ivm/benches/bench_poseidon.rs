@@ -1,9 +1,7 @@
 //! Benchmarks for Poseidon hash functions used by IVM.
 use std::hint::black_box;
-
 use criterion::{BenchmarkId, Criterion};
 use ivm::{poseidon2, poseidon2_many, poseidon6, poseidon6_many};
-
 fn bench_poseidon2(c: &mut Criterion) {
     c.bench_function("poseidon2", |b| {
         b.iter(|| {
@@ -11,7 +9,6 @@ fn bench_poseidon2(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_poseidon6(c: &mut Criterion) {
     let inputs = [1u64, 2, 3, 4, 5, 6];
     c.bench_function("poseidon6", |b| {
@@ -20,7 +17,6 @@ fn bench_poseidon6(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_poseidon2_many(c: &mut Criterion) {
     let mut group = c.benchmark_group("poseidon2_many");
     for &size in &[1usize, 16, 64, 256, 1024] {
@@ -36,7 +32,6 @@ fn bench_poseidon2_many(c: &mut Criterion) {
     }
     group.finish();
 }
-
 fn bench_poseidon6_many(c: &mut Criterion) {
     let mut group = c.benchmark_group("poseidon6_many");
     for &size in &[1usize, 16, 64, 256] {
@@ -62,7 +57,6 @@ fn bench_poseidon6_many(c: &mut Criterion) {
     }
     group.finish();
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     let mut c = Criterion::default().configure_from_args();

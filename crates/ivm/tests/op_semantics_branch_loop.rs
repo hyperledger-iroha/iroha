@@ -1,5 +1,4 @@
 use ivm::{IVM, ProgramMetadata, encoding, instruction, kotodama::wide as kwide};
-
 #[test]
 fn backward_branch_negative_offset_loop() {
     // Build a tiny loop that increments x1 three times using BNE with a negative offset.
@@ -17,7 +16,6 @@ fn backward_branch_negative_offset_loop() {
     let bne_back =
         kwide::encode_branch_checked(instruction::wide::control::BNE, 5, 0, -2).expect("loop back");
     let halt = encoding::wide::encode_halt();
-
     let mut bytes = ProgramMetadata::default().encode();
     for w in [a_cnt, a_acc0, a_inc, a_dec, bne_back, halt] {
         bytes.extend_from_slice(&w.to_le_bytes());
@@ -30,7 +28,6 @@ fn backward_branch_negative_offset_loop() {
     assert_eq!(vm.register(1), 3);
     assert_eq!(vm.register(5), 0);
 }
-
 #[test]
 fn backward_branch_beq_to_nonzero_sentinel() {
     // Similar to the BNE loop, but use BEQ against a non-zero sentinel to branch back exactly once.
@@ -50,7 +47,6 @@ fn backward_branch_beq_to_nonzero_sentinel() {
     let beq_back = kwide::encode_branch_checked(instruction::wide::control::BEQ, 5, 6, -2)
         .expect("branch back");
     let halt = encoding::wide::encode_halt();
-
     let mut bytes = ProgramMetadata::default().encode();
     for w in [a_cnt, a_sen, a_acc0, a_inc, a_dec, beq_back, halt] {
         bytes.extend_from_slice(&w.to_le_bytes());
@@ -63,20 +59,17 @@ fn backward_branch_beq_to_nonzero_sentinel() {
     assert_eq!(vm.register(1), 2);
     assert_eq!(vm.register(5), 1);
 }
-
 #[test]
 fn forward_beq_skips_block() {
     // Build a forward BEQ that skips over a two-instruction block when equal.
     // Case 1 (taken): x5==x6 => skip two adds (5 and 6) and only execute final add (+1).
     // Case 2 (not taken): x5!=x6 => execute both adds (5 and 6) plus final add (+1).
-
     // Common prologue: x1=0
     let a_acc0 = ivm::kotodama::compiler::encode_addi(1, 0, 0).expect("encode addi");
     let inc5 = ivm::kotodama::compiler::encode_addi(1, 1, 5).expect("encode addi");
     let inc6 = ivm::kotodama::compiler::encode_addi(1, 1, 6).expect("encode addi");
     let inc1 = ivm::kotodama::compiler::encode_addi(1, 1, 1).expect("encode addi");
     let halt = encoding::wide::encode_halt();
-
     // Taken: x5=7, x6=7, beq x5,x6, +12 (skip two 32-bit instructions)
     // High-8 branch immediates are relative to the current PC (not fallthrough),
     // so skipping two 32-bit words requires +12 bytes.
@@ -93,7 +86,6 @@ fn forward_beq_skips_block() {
     let res = vm.run();
     assert!(res.is_ok());
     assert_eq!(vm.register(1), 1, "branch taken should skip +5 and +6");
-
     // Not taken: x5=7, x6=6 -> branch not taken, so +5 and +6 execute, then +1 → total 12
     let a5_7 = ivm::kotodama::compiler::encode_addi(5, 0, 7).expect("encode addi");
     let a6_6 = ivm::kotodama::compiler::encode_addi(6, 0, 6).expect("encode addi");

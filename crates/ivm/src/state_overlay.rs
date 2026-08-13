@@ -1,5 +1,4 @@
 //! Bounded durable state storage for development and test hosts.
-
 use std::{
     collections::BTreeMap,
     fs,
@@ -7,13 +6,10 @@ use std::{
     ops::Bound,
     path::{Path, PathBuf},
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64_STANDARD};
 use iroha_data_model::state_path::StatePath;
 use norito::json;
-
 use crate::VMError;
-
 /// Maximum number of entries retained by one first-release development overlay.
 pub(crate) const STATE_OVERLAY_MAX_ENTRIES_V1: usize = 4_096;
 /// Maximum aggregate UTF-8 bytes retained in overlay paths.
@@ -22,13 +18,11 @@ pub(crate) const STATE_OVERLAY_MAX_PATH_BYTES_V1: usize = 4 * 1024 * 1024;
 pub(crate) const STATE_OVERLAY_MAX_VALUE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum encoded size of one persisted overlay file.
 pub(crate) const STATE_OVERLAY_MAX_FILE_BYTES_V1: usize = 30 * 1024 * 1024;
-
 const STATE_OVERLAY_MAX_BASE64_VALUE_BYTES_V1: usize =
     ((crate::syscalls::STATE_MAX_VALUE_BYTES + 2) / 3) * 4;
 const STATE_OVERLAY_MAX_RAW_JSON_PATH_BYTES_V1: usize = crate::syscalls::STATE_MAX_PATH_BYTES * 6;
 const STATE_OVERLAY_MAX_RAW_JSON_VALUE_BYTES_V1: usize =
     STATE_OVERLAY_MAX_BASE64_VALUE_BYTES_V1 * 6;
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const STATE_OVERLAY_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -54,13 +48,11 @@ const STATE_OVERLAY_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
     ))
 ))]
 compile_error!("durable state overlay loading requires a defined no-follow flag on this target");
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct OverlayResourceUsage {
     path_bytes: usize,
     value_bytes: usize,
 }
-
 /// Durable host-backed state overlay used by dev/test hosts.
 ///
 /// Values are stored as raw `NoritoBytes` payloads keyed by a canonical state
@@ -74,19 +66,16 @@ pub struct DurableStateOverlay {
     path_bytes: usize,
     value_bytes: usize,
 }
-
 /// Snapshot of a durable state overlay.
 #[derive(Clone, Debug, Default)]
 pub struct DurableStateSnapshot {
     data: BTreeMap<StatePath, Vec<u8>>,
 }
-
 impl DurableStateOverlay {
     fn validate_entry(path: &StatePath, value: &[u8]) -> Result<(), VMError> {
         crate::host::validate_state_path(path)?;
         crate::host::validate_state_value_payload_len(value.len())
     }
-
     fn ensure_resource_limits(
         entry_count: usize,
         path_bytes: usize,
@@ -100,7 +89,6 @@ impl DurableStateOverlay {
         }
         Ok(())
     }
-
     fn validate_collection(
         data: &BTreeMap<StatePath, Vec<u8>>,
     ) -> Result<OverlayResourceUsage, VMError> {
@@ -120,7 +108,6 @@ impl DurableStateOverlay {
         }
         Ok(usage)
     }
-
     /// Create an in-memory overlay with no persistence.
     #[must_use]
     pub fn in_memory() -> Self {
@@ -131,7 +118,6 @@ impl DurableStateOverlay {
             value_bytes: 0,
         }
     }
-
     /// Create an overlay that persists to the given path.
     pub fn with_persist_path(path: PathBuf) -> Result<Self, VMError> {
         let mut overlay = Self {
@@ -143,12 +129,10 @@ impl DurableStateOverlay {
         overlay.reload_from_disk()?;
         Ok(overlay)
     }
-
     /// Return a copy of the raw `NoritoBytes` payload for a path, if present.
     pub fn get(&self, path: &StatePath) -> Option<Vec<u8>> {
         self.data.get(path).cloned()
     }
-
     /// Borrow a stored raw payload without materializing a copy.
     ///
     /// Stateful syscall handlers use this to inspect the response length and
@@ -156,7 +140,6 @@ impl DurableStateOverlay {
     pub fn get_ref(&self, path: &StatePath) -> Option<&[u8]> {
         self.data.get(path).map(Vec::as_slice)
     }
-
     /// Borrow a validated state-value payload.
     ///
     /// `set`, `restore`, and persisted-state loading enforce the payload-size
@@ -165,7 +148,6 @@ impl DurableStateOverlay {
     pub(crate) fn value_payload_ref(&self, path: &StatePath) -> Result<Option<&[u8]>, VMError> {
         Ok(self.get_ref(path))
     }
-
     /// Insert or replace the raw payload for the provided path.
     pub fn set(&mut self, path: &StatePath, value: Vec<u8>) -> Result<(), VMError> {
         Self::validate_entry(path, &value)?;
@@ -185,7 +167,6 @@ impl DurableStateOverlay {
             .and_then(|bytes| bytes.checked_add(value.len()))
             .ok_or(VMError::NoritoInvalid)?;
         Self::ensure_resource_limits(next_entry_count, next_path_bytes, next_value_bytes)?;
-
         let key = path.clone();
         let prev = self.data.insert(key.clone(), value);
         let previous_usage = OverlayResourceUsage {
@@ -209,12 +190,10 @@ impl DurableStateOverlay {
         }
         Ok(())
     }
-
     /// Iterate over the stored state paths.
     pub fn keys(&self) -> impl Iterator<Item = &StatePath> {
         self.data.keys()
     }
-
     /// Visit only keys in the ordered range sharing `prefix` as text.
     ///
     /// Callers apply any stricter path-segment rule. Starting at the ordered
@@ -229,7 +208,6 @@ impl DurableStateOverlay {
             .map(|(key, _)| key)
             .take_while(move |key| (*key).as_ref().starts_with(prefix))
     }
-
     /// Delete the raw payload for the provided path.
     pub fn del(&mut self, path: &StatePath) -> Result<(), VMError> {
         let previous_usage = OverlayResourceUsage {
@@ -263,7 +241,6 @@ impl DurableStateOverlay {
         }
         Ok(())
     }
-
     /// Take a snapshot of the current overlay contents.
     #[must_use]
     pub fn checkpoint(&self) -> DurableStateSnapshot {
@@ -271,7 +248,6 @@ impl DurableStateOverlay {
             data: self.data.clone(),
         }
     }
-
     /// Restore from a previously taken snapshot and persist to disk if needed.
     pub fn restore(&mut self, snapshot: &DurableStateSnapshot) -> Result<(), VMError> {
         let usage = Self::validate_collection(&snapshot.data)?;
@@ -289,7 +265,6 @@ impl DurableStateOverlay {
         }
         Ok(())
     }
-
     /// Force a flush of the current in-memory overlay to disk (no-op if no path).
     pub fn flush(&self) -> Result<(), VMError> {
         let Some(path) = &self.persist_path else {
@@ -322,7 +297,6 @@ impl DurableStateOverlay {
         fs::write(path, serialized.as_bytes()).map_err(|_| VMError::NoritoInvalid)?;
         Ok(())
     }
-
     fn reload_from_disk(&mut self) -> Result<(), VMError> {
         let Some(path) = &self.persist_path else {
             return Ok(());
@@ -337,7 +311,6 @@ impl DurableStateOverlay {
         self.value_bytes = usage.value_bytes;
         Ok(())
     }
-
     fn decode_persisted(
         bytes: Vec<u8>,
     ) -> Result<(BTreeMap<StatePath, Vec<u8>>, OverlayResourceUsage), VMError> {
@@ -345,7 +318,6 @@ impl DurableStateOverlay {
         let persisted: BTreeMap<String, String> =
             json::from_slice(&bytes).map_err(|_| VMError::NoritoInvalid)?;
         drop(bytes);
-
         let mut map = BTreeMap::new();
         let mut usage = OverlayResourceUsage::default();
         for (k, v) in persisted {
@@ -381,7 +353,6 @@ impl DurableStateOverlay {
         Ok((map, usage))
     }
 }
-
 fn persisted_json_encoded_len(data: &BTreeMap<StatePath, Vec<u8>>) -> Result<usize, VMError> {
     let mut bytes = 2usize;
     for (index, (path, value)) in data.iter().enumerate() {
@@ -403,7 +374,6 @@ fn persisted_json_encoded_len(data: &BTreeMap<StatePath, Vec<u8>>) -> Result<usi
     }
     Ok(bytes)
 }
-
 fn json_string_encoded_len(value: &str) -> Result<usize, VMError> {
     value.chars().try_fold(2usize, |bytes, character| {
         let added = match character {
@@ -414,7 +384,6 @@ fn json_string_encoded_len(value: &str) -> Result<usize, VMError> {
         bytes.checked_add(added).ok_or(VMError::NoritoInvalid)
     })
 }
-
 fn preflight_persisted_json(bytes: &[u8]) -> Result<(), VMError> {
     if bytes.len() > STATE_OVERLAY_MAX_FILE_BYTES_V1 {
         return Err(VMError::NoritoInvalid);
@@ -428,7 +397,6 @@ fn preflight_persisted_json(bytes: &[u8]) -> Result<(), VMError> {
         cursor.skip_whitespace();
         return cursor.finish();
     }
-
     let mut entries = 0usize;
     loop {
         if entries == STATE_OVERLAY_MAX_ENTRIES_V1 {
@@ -449,17 +417,14 @@ fn preflight_persisted_json(bytes: &[u8]) -> Result<(), VMError> {
         cursor.skip_whitespace();
     }
 }
-
 struct FlatOverlayJsonCursor<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
-
 impl<'a> FlatOverlayJsonCursor<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
-
     fn skip_whitespace(&mut self) {
         while matches!(
             self.bytes.get(self.offset),
@@ -468,7 +433,6 @@ impl<'a> FlatOverlayJsonCursor<'a> {
             self.offset = self.offset.saturating_add(1);
         }
     }
-
     fn consume(&mut self, expected: u8) -> bool {
         if self.bytes.get(self.offset).copied() == Some(expected) {
             self.offset = self.offset.saturating_add(1);
@@ -477,7 +441,6 @@ impl<'a> FlatOverlayJsonCursor<'a> {
             false
         }
     }
-
     fn expect(&mut self, expected: u8) -> Result<(), VMError> {
         if self.consume(expected) {
             Ok(())
@@ -485,7 +448,6 @@ impl<'a> FlatOverlayJsonCursor<'a> {
             Err(VMError::NoritoInvalid)
         }
     }
-
     fn scan_string(&mut self, maximum_raw_bytes: usize) -> Result<(), VMError> {
         self.expect(b'"')?;
         let start = self.offset;
@@ -505,7 +467,6 @@ impl<'a> FlatOverlayJsonCursor<'a> {
         }
         Err(VMError::NoritoInvalid)
     }
-
     fn finish(&self) -> Result<(), VMError> {
         if self.offset == self.bytes.len() {
             Ok(())
@@ -514,7 +475,6 @@ impl<'a> FlatOverlayJsonCursor<'a> {
         }
     }
 }
-
 fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     let named_before = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -532,19 +492,16 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     if named_before.len() > maximum {
         return Err(state_overlay_file_too_large());
     }
-
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(STATE_OVERLAY_O_NOFOLLOW_FLAG);
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
@@ -560,7 +517,6 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
             "durable state overlay changed identity or type while opening",
         ));
     }
-
     let capacity = usize::try_from(opened_before.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -574,7 +530,6 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     if bytes.len() > STATE_OVERLAY_MAX_FILE_BYTES_V1 {
         return Err(state_overlay_file_too_large());
     }
-
     let opened_after = file.metadata()?;
     let named_after = fs::symlink_metadata(path)?;
     let observed = u64::try_from(bytes.len()).map_err(|_| {
@@ -598,14 +553,12 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
     Ok(Some(bytes))
 }
-
 fn state_overlay_file_too_large() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         "durable state overlay exceeds the first-release file limit",
     )
 }
-
 fn state_overlay_metadata_is_link(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
@@ -613,51 +566,41 @@ fn state_overlay_metadata_is_link(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
-
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
         return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
     }
     #[cfg(not(windows))]
     false
 }
-
 #[cfg(unix)]
 fn state_overlay_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(windows)]
 fn state_overlay_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     left.volume_serial_number().is_some()
         && left.file_index().is_some()
         && left.volume_serial_number() == right.volume_serial_number()
         && left.file_index() == right.file_index()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn state_overlay_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 impl DurableStateSnapshot {
     #[must_use]
     pub fn new(data: BTreeMap<StatePath, Vec<u8>>) -> Self {
         Self { data }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn path(value: &str) -> StatePath {
         value.parse().expect("canonical state path")
     }
-
     #[test]
     fn raw_payload_ingress_enforces_value_bound() {
         let mut overlay = DurableStateOverlay::in_memory();
@@ -673,7 +616,6 @@ mod tests {
                 .expect("stored payload"),
             maximum
         );
-
         let oversized = vec![0xcdu8; crate::syscalls::STATE_MAX_VALUE_BYTES + 1];
         let oversized_path = path("oversized");
         assert_eq!(
@@ -682,7 +624,6 @@ mod tests {
         );
         assert!(overlay.get_ref(&oversized_path).is_none());
     }
-
     #[test]
     fn restore_validates_all_entries_before_replacing_state() {
         let mut overlay = DurableStateOverlay::in_memory();
@@ -697,12 +638,10 @@ mod tests {
                 vec![0u8; crate::syscalls::STATE_MAX_VALUE_BYTES + 1],
             ),
         ]));
-
         assert_eq!(overlay.restore(&snapshot), Err(VMError::NoritoInvalid));
         assert_eq!(overlay.get_ref(&existing), Some(b"kept".as_slice()));
         assert!(overlay.get_ref(&path("valid")).is_none());
     }
-
     #[test]
     fn text_prefix_iterator_starts_at_the_ordered_lower_bound() {
         let mut overlay = DurableStateOverlay::in_memory();
@@ -719,7 +658,6 @@ mod tests {
             vec!["orders/1", "orders/2"]
         );
     }
-
     #[test]
     fn persisted_overlay_rejects_canonically_duplicate_state_paths() {
         let duplicate = r#"{"root/e\u0301":"AQ==","root/é":"Ag=="}"#;
@@ -728,7 +666,6 @@ mod tests {
             Err(VMError::NoritoInvalid)
         );
     }
-
     #[test]
     fn aggregate_limits_accept_boundaries_and_reject_first_overflow() {
         assert_eq!(
@@ -762,7 +699,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn aggregate_value_overflow_is_rejected_before_mutation() {
         let mut overlay = DurableStateOverlay::in_memory();
@@ -787,7 +723,6 @@ mod tests {
         assert!(overlay.get_ref(&overflow).is_none());
         assert_eq!(overlay.value_bytes, STATE_OVERLAY_MAX_VALUE_BYTES_V1);
     }
-
     #[test]
     fn persisted_json_rejects_entry_count_before_typed_decode() {
         let mut encoded = String::from("{");
@@ -803,11 +738,9 @@ mod tests {
             Err(VMError::NoritoInvalid)
         );
     }
-
     #[test]
     fn persisted_reader_rejects_sparse_file_above_limit() {
         use std::time::{SystemTime, UNIX_EPOCH};
-
         let directory = std::env::temp_dir().join(format!(
             "ivm_state_overlay_bound_{}",
             SystemTime::now()
@@ -823,7 +756,6 @@ mod tests {
         )
         .expect("extend sparse state file");
         drop(file);
-
         let error = read_persisted_overlay_file(&file_path).expect_err("oversize must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         fs::remove_dir_all(directory).expect("remove temporary directory");

@@ -1,7 +1,5 @@
 //! Transfer gadget validation shared between the planner and trace builder.
-
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -14,12 +12,9 @@ use iroha_data_model::{
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_zkp_halo2::poseidon;
 use norito::{codec::Encode as NoritoEncode, decode_from_bytes};
-
 use crate::{Error, OperationKind, StateTransition};
-
 /// Height of the V1 transfer SMT used by the transfer gadget.
 pub const TRANSFER_MERKLE_HEIGHT: usize = 32;
-
 /// Witness describing a single transfer delta after validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferDeltaWitness {
@@ -44,7 +39,6 @@ pub struct TransferDeltaWitness {
     /// SMT proofs captured from the host.
     pub smt_proof: TransferSmtProof,
 }
-
 /// Structured transcript input ready for the transfer gadget.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferGadgetInput {
@@ -55,14 +49,12 @@ pub struct TransferGadgetInput {
     /// Validated deltas covered by the transcript.
     pub deltas: Vec<TransferDeltaWitness>,
 }
-
 /// Lightweight summary of the transfer gadget workload scheduled for this batch.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TransferGadgetPlan {
     witnesses: Vec<TransferGadgetInput>,
     total_deltas: usize,
 }
-
 impl TransferGadgetPlan {
     /// Construct a plan from the validated witnesses.
     #[must_use]
@@ -73,33 +65,28 @@ impl TransferGadgetPlan {
             total_deltas,
         }
     }
-
     /// Returns the total number of batches carrying transfer witnesses.
     #[must_use]
     pub fn batch_count(&self) -> usize {
         self.witnesses.len()
     }
-
     /// Returns the total number of transfer deltas covered by this plan.
     #[must_use]
     pub fn total_deltas(&self) -> usize {
         self.total_deltas
     }
-
     /// Returns the estimated gadget row budget used by the V1 planner.
     #[must_use]
     pub fn estimated_row_budget(&self) -> usize {
         const ROWS_PER_DELTA_ESTIMATE: usize = 2;
         self.total_deltas * ROWS_PER_DELTA_ESTIMATE
     }
-
     /// Borrow the structured witnesses scheduled for the gadget.
     #[must_use]
     pub fn witnesses(&self) -> &[TransferGadgetInput] {
         &self.witnesses
     }
 }
-
 /// Lookup key identifying a transfer row inside a FASTPQ batch.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TransferRowKey {
@@ -107,7 +94,6 @@ pub struct TransferRowKey {
     pre_value: Vec<u8>,
     post_value: Vec<u8>,
 }
-
 impl TransferRowKey {
     /// Construct a key from explicit components.
     #[must_use]
@@ -118,7 +104,6 @@ impl TransferRowKey {
             post_value,
         }
     }
-
     /// Construct a key from a transition row.
     #[must_use]
     pub fn from_transition(transition: &StateTransition) -> Self {
@@ -129,7 +114,6 @@ impl TransferRowKey {
         }
     }
 }
-
 /// Build an index of transfer proofs keyed by transition rows.
 #[must_use]
 pub fn index_row_proofs(
@@ -160,7 +144,6 @@ pub fn index_row_proofs(
     }
     map
 }
-
 /// Wrapper containing SMT update proofs for both participants of a transfer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferSmtProof {
@@ -169,7 +152,6 @@ pub struct TransferSmtProof {
     /// Receiver Merkle proof emitted by the host.
     pub to: TransferMerkleProof,
 }
-
 impl TransferSmtProof {
     fn from_transcript(
         delta: &TransferDeltaTranscript,
@@ -191,7 +173,6 @@ impl TransferSmtProof {
         )?;
         Ok(Self { from, to })
     }
-
     /// Returns true if both sender and receiver proofs are present.
     #[must_use]
     pub fn has_paired_paths(&self) -> bool {
@@ -199,7 +180,6 @@ impl TransferSmtProof {
             && self.from.path_bits.len() == self.to.path_bits.len()
     }
 }
-
 /// Merkle proof payload describing the path for a single leaf.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferMerkleProof {
@@ -212,7 +192,6 @@ pub struct TransferMerkleProof {
     /// Sibling node hashes encountered along the path.
     pub siblings: Vec<[u8; 32]>,
 }
-
 impl TransferMerkleProof {
     fn from_witness(witness: &TransferSmtWitness) -> Result<Self, Error> {
         let required_path_bytes = TRANSFER_MERKLE_HEIGHT.div_ceil(8);
@@ -239,7 +218,6 @@ impl TransferMerkleProof {
             siblings: witness.siblings.clone(),
         })
     }
-
     fn verify_update(
         &self,
         key: &[u8],
@@ -261,7 +239,6 @@ impl TransferMerkleProof {
         }
         Ok(())
     }
-
     fn compute_root(&self, key: &[u8], balance: u64) -> Hash {
         let mut current = leaf_hash(key, balance);
         for level in 0..TRANSFER_MERKLE_HEIGHT {
@@ -275,7 +252,6 @@ impl TransferMerkleProof {
         }
         current
     }
-
     /// Returns the bit value for the given depth.
     #[must_use]
     pub fn bit(&self, level: usize) -> u64 {
@@ -291,7 +267,6 @@ impl TransferMerkleProof {
                 .map_or(0, |byte| (byte >> bit_index) & 1),
         )
     }
-
     /// Returns the sibling hash for the given depth.
     #[must_use]
     pub fn sibling(&self, level: usize) -> [u8; 32] {
@@ -304,13 +279,11 @@ impl TransferMerkleProof {
             .expect("validated transfer Merkle proof contains every sibling")
     }
 }
-
 const KEY_DOMAIN: &[u8] = b"fastpq:v1:smt:key|";
 const VALUE_DOMAIN: &[u8] = b"fastpq:v1:smt:value|";
 const LEAF_DOMAIN: &[u8] = b"fastpq:v1:smt:leaf|";
 const NODE_DOMAIN: &[u8] = b"fastpq:v1:smt:node|";
 const PAD_DOMAIN: &[u8] = b"fastpq:v1:smt:pad|";
-
 pub(crate) fn leaf_hash(key: &[u8], balance: u64) -> Hash {
     let mut payload = Vec::with_capacity(LEAF_DOMAIN.len() + 64);
     payload.extend_from_slice(LEAF_DOMAIN);
@@ -318,7 +291,6 @@ pub(crate) fn leaf_hash(key: &[u8], balance: u64) -> Hash {
     payload.extend_from_slice(value_hash(balance).as_ref());
     Hash::new(payload)
 }
-
 pub(crate) fn internal_hash(left: &Hash, right: &Hash) -> Hash {
     let mut payload = Vec::with_capacity(NODE_DOMAIN.len() + 64);
     payload.extend_from_slice(NODE_DOMAIN);
@@ -326,28 +298,24 @@ pub(crate) fn internal_hash(left: &Hash, right: &Hash) -> Hash {
     payload.extend_from_slice(right.as_ref());
     Hash::new(payload)
 }
-
 fn key_hash(key: &[u8]) -> Hash {
     let mut payload = Vec::with_capacity(KEY_DOMAIN.len() + key.len());
     payload.extend_from_slice(KEY_DOMAIN);
     payload.extend_from_slice(key);
     Hash::new(payload)
 }
-
 fn value_hash(balance: u64) -> Hash {
     let mut payload = Vec::with_capacity(VALUE_DOMAIN.len() + 8);
     payload.extend_from_slice(VALUE_DOMAIN);
     payload.extend_from_slice(&balance.to_le_bytes());
     Hash::new(payload)
 }
-
 fn padding_hash(level: usize) -> Hash {
     let mut payload = Vec::with_capacity(PAD_DOMAIN.len() + 8);
     payload.extend_from_slice(PAD_DOMAIN);
     payload.extend_from_slice(&(level as u64).to_le_bytes());
     Hash::new(payload)
 }
-
 /// Build real V1 SMT update witnesses for a sender debit followed by a receiver
 /// credit in the same transfer delta.
 ///
@@ -369,7 +337,6 @@ pub fn build_transfer_smt_witness_pair(
     let receiver = state.update_witness(receiver_key, receiver_before, receiver_after)?;
     Ok((sender, receiver))
 }
-
 /// Attach chained V1 transfer SMT witnesses to all deltas in transcript order
 /// and return the resulting `(old_root, new_root)` pair.
 ///
@@ -463,12 +430,10 @@ pub fn attach_transfer_smt_witnesses(
     }
     Ok((old_root, state.root().into()))
 }
-
 struct TransferSmtState {
     levels: Vec<BTreeMap<u32, Hash>>,
     balances: BTreeMap<u32, (Vec<u8>, u64)>,
 }
-
 impl Default for TransferSmtState {
     fn default() -> Self {
         Self {
@@ -479,7 +444,6 @@ impl Default for TransferSmtState {
         }
     }
 }
-
 impl TransferSmtState {
     fn insert(&mut self, key: &[u8], value: u64) -> Result<(), Error> {
         let path = path_index(key);
@@ -503,7 +467,6 @@ impl TransferSmtState {
         self.recompute_path(path);
         Ok(())
     }
-
     fn current_value(&self, key: &[u8]) -> Result<u64, Error> {
         let path = path_index(key);
         match self.balances.get(&path) {
@@ -516,7 +479,6 @@ impl TransferSmtState {
             }),
         }
     }
-
     fn update_witness(
         &mut self,
         key: &[u8],
@@ -558,7 +520,6 @@ impl TransferSmtState {
             siblings,
         ))
     }
-
     fn siblings_for(&self, path: u32) -> Vec<[u8; 32]> {
         let mut siblings = Vec::with_capacity(TRANSFER_MERKLE_HEIGHT);
         let mut index = path;
@@ -573,7 +534,6 @@ impl TransferSmtState {
         }
         siblings
     }
-
     fn root(&self) -> Hash {
         if self.levels[0].is_empty() {
             return padding_hash(TRANSFER_MERKLE_HEIGHT);
@@ -583,7 +543,6 @@ impl TransferSmtState {
             .copied()
             .unwrap_or_else(|| padding_hash(TRANSFER_MERKLE_HEIGHT))
     }
-
     fn recompute_path(&mut self, path: u32) {
         let mut index = path;
         for level in 0..TRANSFER_MERKLE_HEIGHT {
@@ -601,13 +560,11 @@ impl TransferSmtState {
         }
     }
 }
-
 fn path_index(key: &[u8]) -> u32 {
     let hash = key_hash(key);
     let bytes = hash.as_ref();
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
-
 /// Decode transfer transcripts embedded in the batch metadata.
 ///
 /// # Errors
@@ -631,7 +588,6 @@ pub fn decode_transcripts(
     }
     Ok(Some(transcripts))
 }
-
 /// Convert validated transcripts into structured gadget inputs.
 ///
 /// # Errors
@@ -661,7 +617,6 @@ pub fn transcripts_to_witnesses(
             current_root = smt_proof.from.root_after;
             require_root(smt_proof.to.root_before, current_root, "receiver pre-root")?;
             current_root = smt_proof.to.root_after;
-
             deltas.push(TransferDeltaWitness {
                 from_account: delta.from_account.clone(),
                 to_account: delta.to_account.clone(),
@@ -684,7 +639,6 @@ pub fn transcripts_to_witnesses(
     require_root(current_root, *expected_new_root, "final post-root")?;
     Ok(inputs)
 }
-
 fn require_root(actual: [u8; 32], expected: [u8; 32], label: &'static str) -> Result<(), Error> {
     if actual != expected {
         return Err(Error::TransferInvariant {
@@ -693,7 +647,6 @@ fn require_root(actual: [u8; 32], expected: [u8; 32], label: &'static str) -> Re
     }
     Ok(())
 }
-
 /// Verify arithmetic and digest invariants for transfer transcripts.
 ///
 /// # Errors
@@ -722,7 +675,6 @@ pub fn verify_transcripts(
     }
     Ok(())
 }
-
 fn enforce_poseidon_policy(transcript: &TransferTranscript, digest: &Hash) -> Result<(), Error> {
     if let Some(expected) = &transcript.poseidon_preimage_digest {
         if transcript.deltas.len() == 1 {
@@ -744,7 +696,6 @@ fn enforce_poseidon_policy(transcript: &TransferTranscript, digest: &Hash) -> Re
     }
     Ok(())
 }
-
 fn ensure_transfer_rows(
     index: &mut HashMap<Vec<u8>, VecDeque<usize>>,
     transitions: &[StateTransition],
@@ -760,7 +711,6 @@ fn ensure_transfer_rows(
         snapshot.sender_after_bytes(),
         "sender",
     )?;
-
     let receiver_key = balance_key(&delta.asset_definition, &delta.to_account);
     take_matching_row(
         index,
@@ -771,7 +721,6 @@ fn ensure_transfer_rows(
         "receiver",
     )
 }
-
 fn take_matching_row(
     index: &mut HashMap<Vec<u8>, VecDeque<usize>>,
     transitions: &[StateTransition],
@@ -821,7 +770,6 @@ fn take_matching_row(
     }
     Ok(())
 }
-
 fn index_transfers(transitions: &[StateTransition]) -> HashMap<Vec<u8>, VecDeque<usize>> {
     let mut map = HashMap::new();
     for (idx, transition) in transitions.iter().enumerate() {
@@ -833,11 +781,9 @@ fn index_transfers(transitions: &[StateTransition]) -> HashMap<Vec<u8>, VecDeque
     }
     map
 }
-
 fn balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
     format!("asset/{asset}/{account}").into_bytes()
 }
-
 /// Compute the Poseidon digest committed by a transfer transcript entry.
 pub fn compute_poseidon_digest(delta: &TransferDeltaTranscript, batch_hash: &Hash) -> Hash {
     let mut hasher = poseidon::PoseidonByteHasher::new();
@@ -848,11 +794,9 @@ pub fn compute_poseidon_digest(delta: &TransferDeltaTranscript, batch_hash: &Has
     hasher.update(batch_hash.as_ref());
     Hash::prehashed(hasher.finalize())
 }
-
 fn append_encoded<W: std::io::Write>(writer: &mut W, value: &impl NoritoEncode) {
     value.encode_to(writer);
 }
-
 struct BalanceSnapshot {
     amount: u64,
     from_before: u64,
@@ -860,7 +804,6 @@ struct BalanceSnapshot {
     to_before: u64,
     to_after: u64,
 }
-
 impl BalanceSnapshot {
     fn from_delta(delta: &TransferDeltaTranscript) -> Result<Self, Error> {
         let target_scale = delta.normalized_scale();
@@ -878,7 +821,6 @@ impl BalanceSnapshot {
         let to_before =
             numeric_to_u64("to_balance_before", &delta.to_balance_before, target_scale)?;
         let to_after = numeric_to_u64("to_balance_after", &delta.to_balance_after, target_scale)?;
-
         if from_before < amount {
             return Err(Error::TransferInvariant {
                 details: format!("sender balance underflow: before={from_before}, amount={amount}"),
@@ -904,7 +846,6 @@ impl BalanceSnapshot {
                 ),
             });
         }
-
         Ok(Self {
             amount,
             from_before,
@@ -913,33 +854,26 @@ impl BalanceSnapshot {
             to_after,
         })
     }
-
     fn sender_before_bytes(&self) -> [u8; 8] {
         self.from_before.to_le_bytes()
     }
-
     fn sender_after_bytes(&self) -> [u8; 8] {
         self.from_after.to_le_bytes()
     }
-
     fn receiver_before_bytes(&self) -> [u8; 8] {
         self.to_before.to_le_bytes()
     }
-
     fn receiver_after_bytes(&self) -> [u8; 8] {
         self.to_after.to_le_bytes()
     }
-
     fn transfer_amount(&self) -> u64 {
         self.amount
     }
 }
-
 fn numeric_to_u64(field: &'static str, value: &Quantity, target_scale: u32) -> Result<u64, Error> {
     normalized_numeric_to_u64(value.as_numeric(), target_scale)
         .ok_or(Error::TransferNumericBounds { field })
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::Hash;
@@ -951,16 +885,13 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
-
     use super::*;
     use crate::{OperationKind, StateTransition};
-
     #[test]
     fn decode_transcripts_absent_metadata() {
         let metadata = BTreeMap::new();
         assert!(decode_transcripts(&metadata).expect("decode").is_none());
     }
-
     #[test]
     fn decode_transcripts_round_trip() {
         let transcript = sample_transcript();
@@ -974,7 +905,6 @@ mod tests {
             .expect("present");
         assert_eq!(decoded, vec![transcript]);
     }
-
     #[test]
     fn decode_transcripts_rejects_alternate_norito_layout() {
         let transcripts = vec![sample_transcript()];
@@ -991,7 +921,6 @@ mod tests {
                 .expect("ordinary Norito accepts advertised alternate layout"),
             transcripts
         );
-
         let mut metadata = BTreeMap::new();
         metadata.insert(TRANSFER_TRANSCRIPTS_METADATA_KEY.into(), alternate);
         let err = decode_transcripts(&metadata).expect_err("alternate transcript layout must fail");
@@ -999,7 +928,6 @@ mod tests {
             matches!(err, Error::TransferInvariant { details } if details.contains("canonical Norito"))
         );
     }
-
     #[test]
     fn decode_transcripts_accepts_empty_transcript_list() {
         let mut metadata = BTreeMap::new();
@@ -1007,22 +935,18 @@ mod tests {
             TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
             to_bytes(&Vec::<TransferTranscript>::new()).expect("encode empty transcripts"),
         );
-
         let decoded = decode_transcripts(&metadata)
             .expect("decode")
             .expect("metadata is present");
         assert!(decoded.is_empty());
     }
-
     #[test]
     fn decode_transcripts_rejects_malformed_metadata() {
         let mut metadata = BTreeMap::new();
         metadata.insert(TRANSFER_TRANSCRIPTS_METADATA_KEY.into(), vec![0xFF, 0x00]);
-
         let err = decode_transcripts(&metadata).expect_err("malformed transcript metadata");
         assert!(matches!(err, Error::TransferMetadataDecode { .. }));
     }
-
     #[test]
     fn verify_transcripts_checks_balances() {
         let transcript = sample_transcript();
@@ -1030,7 +954,6 @@ mod tests {
         let result = verify_transcripts(&transitions, &[transcript]);
         assert!(result.is_ok());
     }
-
     #[test]
     fn verify_transcripts_accepts_empty_transcript_set() {
         let transitions = vec![StateTransition::new(
@@ -1039,10 +962,8 @@ mod tests {
             2_u64.to_le_bytes().to_vec(),
             OperationKind::Transfer,
         )];
-
         verify_transcripts(&transitions, &[]).expect("empty transcript set is a no-op");
     }
-
     #[test]
     fn verify_transcripts_detects_sender_mismatch() {
         let mut transcript = sample_transcript();
@@ -1051,7 +972,6 @@ mod tests {
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("must fail");
         assert!(matches!(err, Error::TransferInvariant { .. }));
     }
-
     #[test]
     fn verify_transcripts_rejects_sender_underflow() {
         let mut transcript = sample_transcript();
@@ -1059,25 +979,21 @@ mod tests {
         transcript.deltas[0].from_balance_after = Quantity::from(0u32);
         transcript.deltas[0].to_balance_after = Quantity::from(202u32);
         let transitions = sample_transitions(&transcript);
-
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("underflow fails");
         assert!(
             matches!(err, Error::TransferInvariant { details } if details.contains("underflow"))
         );
     }
-
     #[test]
     fn verify_transcripts_rejects_receiver_mismatch() {
         let mut transcript = sample_transcript();
         transcript.deltas[0].to_balance_after = Quantity::from(44u32);
         let transitions = sample_transitions(&transcript);
-
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("receiver mismatch");
         assert!(
             matches!(err, Error::TransferInvariant { details } if details.contains("receiver balance mismatch"))
         );
     }
-
     #[test]
     fn verify_transcripts_rejects_receiver_overflow() {
         let mut transcript = sample_transcript();
@@ -1086,13 +1002,11 @@ mod tests {
         transcript.deltas[0].to_balance_before = Quantity::from(u64::MAX);
         transcript.deltas[0].to_balance_after = Quantity::from(u64::MAX);
         let transitions = sample_transitions(&transcript);
-
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("overflow fails");
         assert!(
             matches!(err, Error::TransferInvariant { details } if details.contains("overflow"))
         );
     }
-
     #[test]
     fn transcript_quantity_domain_and_gadget_bounds_reject_invalid_amounts() {
         assert!(
@@ -1106,7 +1020,6 @@ mod tests {
             Error::TransferNumericBounds { field } if field == "amount"
         ));
     }
-
     #[test]
     fn verify_transcripts_detects_poseidon_mismatch() {
         let mut transcript = sample_transcript();
@@ -1115,7 +1028,6 @@ mod tests {
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("digest mismatch");
         assert!(matches!(err, Error::TransferInvariant { .. }));
     }
-
     #[test]
     fn compute_poseidon_digest_matches_canonical_encoded_preimage() {
         let transcript = sample_transcript();
@@ -1126,13 +1038,11 @@ mod tests {
         preimage.extend_from_slice(&delta.asset_definition.encode());
         preimage.extend_from_slice(&delta.amount.encode());
         preimage.extend_from_slice(transcript.batch_hash.as_ref());
-
         assert_eq!(
             compute_poseidon_digest(delta, &transcript.batch_hash),
             Hash::prehashed(poseidon::hash_bytes(&preimage))
         );
     }
-
     #[test]
     fn verify_transcripts_rejects_unmatched_transfer_rows() {
         let transcript = sample_transcript();
@@ -1146,7 +1056,6 @@ mod tests {
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("extra row fails");
         assert!(matches!(err, Error::TransferInvariant { .. }));
     }
-
     #[test]
     fn verify_transcripts_ignores_non_transfer_rows() {
         let transcript = sample_transcript();
@@ -1157,10 +1066,8 @@ mod tests {
             b"after".to_vec(),
             OperationKind::MetaSet,
         ));
-
         verify_transcripts(&transitions, &[transcript]).expect("non-transfer rows are ignored");
     }
-
     #[test]
     fn verify_transcripts_rejects_sender_row_balance_mismatch() {
         let transcript = sample_transcript();
@@ -1174,13 +1081,11 @@ mod tests {
             .find(|transition| transition.key == sender_key)
             .expect("sender transition");
         sender.post_value = 157_u64.to_le_bytes().to_vec();
-
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("sender row mismatch");
         assert!(
             matches!(err, Error::TransferInvariant { details } if details.contains("no transfer row (sender) matched"))
         );
     }
-
     #[test]
     fn verify_transcripts_rejects_missing_receiver_row() {
         let transcript = sample_transcript();
@@ -1190,13 +1095,11 @@ mod tests {
         );
         let mut transitions = sample_transitions(&transcript);
         transitions.retain(|transition| transition.key != receiver_key);
-
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("receiver row absent");
         assert!(
             matches!(err, Error::TransferInvariant { details } if details.contains("missing transfer row (receiver)"))
         );
     }
-
     fn sample_transcript() -> TransferTranscript {
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         let alice = (*ALICE_ID).clone();
@@ -1227,7 +1130,6 @@ mod tests {
             poseidon_preimage_digest: Some(digest),
         }
     }
-
     fn sample_transitions(transcript: &TransferTranscript) -> Vec<StateTransition> {
         transcript
             .deltas
@@ -1250,7 +1152,6 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn transcripts_to_witnesses_emit_structured_witness() {
         let transcript = sample_transcript();
@@ -1266,7 +1167,6 @@ mod tests {
         assert_eq!(delta.to_balance_after, 43);
         assert!(delta.smt_proof.has_paired_paths());
     }
-
     #[test]
     fn transcripts_to_witnesses_accept_multi_delta_batches() {
         let transcript = sample_multi_transcript();
@@ -1283,7 +1183,6 @@ mod tests {
                 .all(|delta| delta.smt_proof.has_paired_paths())
         );
     }
-
     #[test]
     fn transcripts_to_witnesses_decodes_smt_witnesses() {
         let transcript = sample_transcript();
@@ -1295,7 +1194,6 @@ mod tests {
         assert_eq!(smt.from.path_bits.len(), TRANSFER_MERKLE_HEIGHT.div_ceil(8));
         assert_eq!(smt.to.siblings.len(), TRANSFER_MERKLE_HEIGHT);
     }
-
     #[test]
     fn transfer_merkle_proof_out_of_range_accessors_are_stable() {
         let transcript = sample_transcript();
@@ -1303,24 +1201,20 @@ mod tests {
         let witnesses =
             transcripts_to_witnesses(&[transcript], &old_root, &new_root).expect("witnesses");
         let proof = &witnesses[0].deltas[0].smt_proof.from;
-
         assert_eq!(proof.bit(TRANSFER_MERKLE_HEIGHT), 0);
         assert_eq!(
             proof.sibling(TRANSFER_MERKLE_HEIGHT),
             <[u8; 32]>::from(padding_hash(TRANSFER_MERKLE_HEIGHT))
         );
     }
-
     #[test]
     fn transfer_merkle_proof_rejects_extra_siblings() {
         let transcript = sample_transcript();
         let mut witness = transcript.deltas[0].from_smt_witness.clone();
         witness.siblings.push([0xAA; 32]);
-
         let err = TransferMerkleProof::from_witness(&witness).expect_err("extra sibling fails");
         assert!(matches!(err, Error::TransferInvariant { details } if details.contains("sibling")));
     }
-
     #[test]
     fn attach_transfer_smt_witnesses_rejects_empty_material() {
         let err = attach_transfer_smt_witnesses(&mut []).expect_err("empty witnesses must fail");
@@ -1328,13 +1222,11 @@ mod tests {
             matches!(err, Error::TransferInvariant { details } if details.contains("at least one delta"))
         );
     }
-
     #[test]
     fn attach_transfer_smt_witnesses_chains_multiple_transcripts() {
         let mut transcripts = vec![sample_transcript(), chained_second_transcript()];
         let (old_root, new_root) =
             attach_transfer_smt_witnesses(&mut transcripts).expect("attach witnesses");
-
         let witnesses =
             transcripts_to_witnesses(&transcripts, &old_root, &new_root).expect("witnesses");
         assert_eq!(witnesses.len(), 2);
@@ -1345,11 +1237,9 @@ mod tests {
         let transitions: Vec<_> = transcripts.iter().flat_map(sample_transitions).collect();
         verify_transcripts(&transitions, &transcripts).expect("transcripts verify");
     }
-
     #[test]
     fn attach_transfer_smt_witnesses_chains_stale_repeated_balances() {
         let mut transcripts = vec![sample_transcript(), sample_transcript()];
-
         let (old_root, new_root) =
             attach_transfer_smt_witnesses(&mut transcripts).expect("attach witnesses");
         let second = &transcripts[1].deltas[0];
@@ -1357,64 +1247,53 @@ mod tests {
         assert_eq!(second.from_balance_after, Quantity::from(116u32));
         assert_eq!(second.to_balance_before, Quantity::from(43u32));
         assert_eq!(second.to_balance_after, Quantity::from(85u32));
-
         transcripts_to_witnesses(&transcripts, &old_root, &new_root)
             .expect("chained witnesses verify");
     }
-
     #[test]
     fn transcripts_to_witnesses_accepts_empty_list_when_roots_match() {
         let root = [0x5A; 32];
         let witnesses = transcripts_to_witnesses(&[], &root, &root).expect("empty witnesses");
         assert!(witnesses.is_empty());
     }
-
     #[test]
     fn transcripts_to_witnesses_rejects_empty_list_when_roots_differ() {
         let old_root = [0x5A; 32];
         let new_root = [0xA5; 32];
-
         let err =
             transcripts_to_witnesses(&[], &old_root, &new_root).expect_err("root mismatch fails");
         assert!(
             matches!(err, Error::TransferInvariant { details } if details.contains("final post-root"))
         );
     }
-
     #[test]
     fn transcripts_to_witnesses_reject_missing_receiver_proof() {
         let mut transcript = sample_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
         transcript.deltas[0].to_smt_witness = TransferSmtWitness::default();
-
         let err = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
             .expect_err("missing receiver proof must fail");
         assert!(matches!(err, Error::TransferInvariant { .. }));
     }
-
     #[test]
     fn transcripts_to_witnesses_reject_missing_sender_proof() {
         let mut transcript = sample_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
         transcript.deltas[0].from_smt_witness = TransferSmtWitness::default();
-
         let err = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
             .expect_err("missing sender proof must fail");
         assert!(matches!(err, Error::TransferInvariant { .. }));
     }
-
     #[test]
     fn transcripts_to_witnesses_reject_unchained_transcript_roots() {
         let transcript = sample_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
-
         let err = transcripts_to_witnesses(&[transcript.clone(), transcript], &old_root, &new_root)
             .expect_err("second transcript must chain from first post-root");
         assert!(
             matches!(err, Error::TransferInvariant { details } if details.contains("sender pre-root"))
         );
     }
-
     #[test]
     fn transcripts_to_witnesses_reject_wrong_final_root() {
         let transcript = sample_transcript();
@@ -1424,20 +1303,17 @@ mod tests {
             .expect_err("wrong final root");
         assert!(matches!(err, Error::TransferInvariant { .. }));
     }
-
     #[test]
     fn transcripts_to_witnesses_reject_wrong_initial_root() {
         let transcript = sample_transcript();
         let (mut old_root, new_root) = transcript_roots(&transcript);
         old_root[0] ^= 0x01;
-
         let err = transcripts_to_witnesses(&[transcript], &old_root, &new_root)
             .expect_err("wrong initial root");
         assert!(
             matches!(err, Error::TransferInvariant { details } if details.contains("sender pre-root"))
         );
     }
-
     #[test]
     fn transcripts_to_witnesses_reject_wrong_sibling() {
         let mut transcript = sample_transcript();
@@ -1447,7 +1323,6 @@ mod tests {
             .expect_err("wrong sibling");
         assert!(matches!(err, Error::TransferInvariant { .. }));
     }
-
     #[test]
     fn transcripts_to_witnesses_reject_truncated_merkle_proofs() {
         let mut transcript = sample_transcript();
@@ -1457,7 +1332,6 @@ mod tests {
             .expect_err("truncated proof");
         assert!(matches!(err, Error::TransferInvariant { .. }));
     }
-
     #[test]
     fn transcripts_to_witnesses_reject_multi_delta_digest() {
         let mut transcript = sample_multi_transcript();
@@ -1468,14 +1342,12 @@ mod tests {
             transcripts_to_witnesses(&[transcript], &old_root, &new_root).expect_err("must fail");
         assert!(matches!(err, Error::TransferInvariant { .. }));
     }
-
     #[test]
     fn verify_transcripts_accepts_multi_delta_batches() {
         let transcript = sample_multi_transcript();
         let transitions = sample_transitions(&transcript);
         assert!(verify_transcripts(&transitions, &[transcript]).is_ok());
     }
-
     #[test]
     fn verify_transcripts_accepts_mixed_scale_balances() {
         let mut transcript = sample_transcript();
@@ -1489,11 +1361,9 @@ mod tests {
             &transcript.deltas[0],
             &transcript.batch_hash,
         ));
-
         let transitions = sample_transitions(&transcript);
         assert!(verify_transcripts(&transitions, &[transcript]).is_ok());
     }
-
     #[test]
     fn transfer_plan_summarises_witnesses() {
         let transcript = sample_multi_transcript();
@@ -1507,7 +1377,6 @@ mod tests {
         assert_eq!(plan.estimated_row_budget(), transcript.deltas.len() * 2);
         assert_eq!(plan.witnesses(), witnesses.as_slice());
     }
-
     #[test]
     fn row_proof_index_contains_sender_and_receiver_entries() {
         let transcript = sample_transcript();
@@ -1531,7 +1400,6 @@ mod tests {
         );
         assert!(index.contains_key(&receiver_key));
     }
-
     #[test]
     fn transfer_row_key_from_transition_matches_explicit_key() {
         let transition = StateTransition::new(
@@ -1540,7 +1408,6 @@ mod tests {
             4_u64.to_le_bytes().to_vec(),
             OperationKind::Transfer,
         );
-
         assert_eq!(
             TransferRowKey::from_transition(&transition),
             TransferRowKey::new(
@@ -1550,7 +1417,6 @@ mod tests {
             )
         );
     }
-
     fn sample_multi_transcript() -> TransferTranscript {
         let mut transcript = sample_transcript();
         let second_delta = TransferDeltaTranscript {
@@ -1573,7 +1439,6 @@ mod tests {
         attach_transcript_witnesses(&mut transcript);
         transcript
     }
-
     fn chained_second_transcript() -> TransferTranscript {
         let mut transcript = sample_transcript();
         transcript.batch_hash = Hash::prehashed([0x22; 32]);
@@ -1593,7 +1458,6 @@ mod tests {
         ));
         transcript
     }
-
     fn attach_delta_witnesses(delta: &mut TransferDeltaTranscript) {
         let (from_witness, to_witness) = build_transfer_smt_witness_pair(
             &balance_key(&delta.asset_definition, &delta.from_account),
@@ -1607,7 +1471,6 @@ mod tests {
         delta.from_smt_witness = from_witness;
         delta.to_smt_witness = to_witness;
     }
-
     fn attach_transcript_witnesses(transcript: &mut TransferTranscript) {
         let mut state = TransferSmtState::default();
         let mut seeded_keys = BTreeSet::new();
@@ -1646,7 +1509,6 @@ mod tests {
                 .expect("receiver update");
         }
     }
-
     fn transcript_roots(transcript: &TransferTranscript) -> ([u8; 32], [u8; 32]) {
         let old_root = transcript
             .deltas
@@ -1662,11 +1524,9 @@ mod tests {
             .root_after;
         (old_root, new_root)
     }
-
     fn numeric_to_u64(value: &Quantity, target_scale: u32) -> u64 {
         normalized_numeric_to_u64(value.as_numeric(), target_scale).expect("quantity fits u64")
     }
-
     fn numeric_to_le_bytes(value: &Quantity, target_scale: u32) -> Vec<u8> {
         let amount =
             normalized_numeric_to_u64(value.as_numeric(), target_scale).expect("quantity fits u64");

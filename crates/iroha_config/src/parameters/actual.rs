@@ -14,7 +14,6 @@
     clippy::assertions_on_constants,
     clippy::too_many_arguments
 )]
-
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -24,7 +23,6 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-
 use error_stack::{Report, ResultExt};
 use iroha_config_base::{WithOrigin, read::ConfigReader, toml::TomlSource, util::Bytes};
 use iroha_crypto::{
@@ -91,7 +89,6 @@ pub use sorafs_reputation::{
 use thiserror::Error;
 use url::Url;
 pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy, SnapshotResourcePolicy};
-
 use crate::{
     kura::{FsyncMode, InitMode},
     parameters::{defaults, user, user::ParseError},
@@ -1017,13 +1014,10 @@ pub(crate) fn sora_routing_policy() -> LaneRoutingPolicy {
 #[cfg(test)]
 mod sora_profile_tests {
     use std::num::NonZeroU32;
-
     use iroha_config_base::toml::TomlSource;
     use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneConfigMetadata};
     use toml::Table;
-
     use super::*;
-
     const MINIMAL_CONFIG: &str = r#"
 chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
@@ -9432,7 +9426,6 @@ pub struct SorafsAppealUrgencyMultipliers {
 impl Default for SorafsAppealUrgencyMultipliers {
     fn default() -> Self {
         use defaults::torii::sorafs_appeal_finance as policy;
-
         Self {
             normal: policy::numeric(policy::PRICING_URGENCY_NORMAL_MULTIPLIER),
             high: policy::numeric(policy::PRICING_URGENCY_HIGH_MULTIPLIER),
@@ -9454,7 +9447,6 @@ pub struct SorafsAppealPricingClasses {
 impl Default for SorafsAppealPricingClasses {
     fn default() -> Self {
         use defaults::torii::sorafs_appeal_finance as policy;
-
         Self {
             content: SorafsAppealPricingClassPolicy::baseline(
                 policy::PRICING_CONTENT_BASE_RATE_XOR,
@@ -9526,7 +9518,6 @@ impl SorafsAppealPricingClassPolicy {
         max_deposit_xor: &str,
     ) -> Self {
         use defaults::torii::sorafs_appeal_finance as policy;
-
         Self {
             base_rate_xor: policy::xor_quantity(base_rate_xor),
             backlog_target,
@@ -9572,7 +9563,6 @@ pub struct SorafsAppealPanelRewards {
 impl Default for SorafsAppealPanelRewards {
     fn default() -> Self {
         use defaults::torii::sorafs_appeal_finance as policy;
-
         Self {
             stipend_per_juror_xor: policy::xor_quantity(policy::SETTLEMENT_STIPEND_PER_JUROR_XOR),
             case_bonus_xor: policy::xor_quantity(policy::SETTLEMENT_CASE_BONUS_XOR),
@@ -9596,7 +9586,6 @@ pub struct SorafsAppealSettlementRules {
 impl Default for SorafsAppealSettlementRules {
     fn default() -> Self {
         use defaults::torii::sorafs_appeal_finance as policy;
-
         Self {
             decisions: SorafsAppealDecisionRules::default(),
             withdrawn_before_panel: SorafsAppealSettlementRule::baseline(
@@ -9631,7 +9620,6 @@ pub struct SorafsAppealDecisionRules {
 impl Default for SorafsAppealDecisionRules {
     fn default() -> Self {
         use defaults::torii::sorafs_appeal_finance as policy;
-
         Self {
             uphold: SorafsAppealSettlementRule::baseline(
                 policy::SETTLEMENT_UPHOLD_REFUND_RATE,
@@ -9659,7 +9647,6 @@ pub struct SorafsAppealSettlementRule {
 impl SorafsAppealSettlementRule {
     fn baseline(refund_rate: &str, treasury_rate: &str) -> Self {
         use defaults::torii::sorafs_appeal_finance as policy;
-
         Self {
             refund_rate: policy::numeric(refund_rate),
             treasury_rate: policy::numeric(treasury_rate),
@@ -10094,10 +10081,8 @@ pub struct SorafsPdpProviderPolicy {
     /// Minimum age of compact terminal replay records before pruning, in seconds.
     pub terminal_retention_secs: u64,
 }
-
 mod sorafs_pop_credentials;
 pub use sorafs_pop_credentials::{SorafsPopApprovalSigner, SorafsPopCredentialService};
-
 /// Non-secret production policy for finalized-chain moderation orchestration.
 #[derive(Debug, Clone)]
 pub struct SorafsModerationOrchestrator {
@@ -10369,8 +10354,8 @@ pub struct SorafsProviderAttestationRuntimeBinding {
 /// daemon registry projects as three independent public roles. Live adapter
 /// qualification and consumption remain gated, and stock `irohad` continues
 /// to reject activation until that wiring is complete.
-/// TODO: consume these projected bindings only after all three adapters and
-/// the capture child satisfy their qualification contracts.
+/// Stock daemon activation stays closed; an activation-qualified coordinator
+/// is the only supported consumer of these three adapter/capture bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsProviderAttestationJournal {
     /// Qualified rollback-resistant UNIX-time seal provider.
@@ -10681,7 +10666,6 @@ impl Default for SorafsStorage {
 impl Default for SorafsGovernanceDagService {
     fn default() -> Self {
         use defaults::sorafs::storage::governance_dag_service as service;
-
         Self {
             enabled: service::ENABLED,
             state_dir: service::state_dir(),
@@ -10737,7 +10721,6 @@ impl Default for SorafsRuntimeRetention {
 impl Default for SorafsPdpProviderPolicy {
     fn default() -> Self {
         use defaults::sorafs::storage::pdp_provider as pdp;
-
         Self {
             max_pending_records: pdp::MAX_PENDING_RECORDS,
             max_terminal_records: pdp::MAX_TERMINAL_RECORDS,
@@ -10754,7 +10737,6 @@ impl Default for SorafsPdpProviderPolicy {
 impl Default for SorafsOrderbookWorker {
     fn default() -> Self {
         use defaults::sorafs::storage::orderbook_worker as worker;
-
         Self {
             enabled: worker::ENABLED,
             scan_interval: Duration::from_millis(worker::SCAN_INTERVAL_MS.get()),
@@ -10771,7 +10753,6 @@ impl Default for SorafsOrderbookWorker {
 impl Default for SorafsReserveWorker {
     fn default() -> Self {
         use defaults::sorafs::storage::reserve_worker as worker;
-
         Self {
             enabled: worker::ENABLED,
             scan_interval: Duration::from_millis(worker::SCAN_INTERVAL_MS.get()),
@@ -12550,7 +12531,6 @@ impl NtsEnforcementMode {
 #[cfg(test)]
 #[path = "actual/npos_timeout_tests.rs"]
 mod tests_npos_timeouts;
-
 /// IVM runtime presentation toggles.
 #[derive(Debug, Clone, Copy)]
 pub struct Ivm {

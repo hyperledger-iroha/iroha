@@ -1,5 +1,4 @@
 use super::*;
-
 pub(super) fn localnet_client_identity(
     base_seed: Option<&[u8]>,
     fresh_random_keys: bool,

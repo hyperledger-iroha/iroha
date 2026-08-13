@@ -6,11 +6,8 @@
 //! particular, persistent-secret, RKG-ephemeral, and CPK-error evidence cannot
 //! be converted into one another and no verified membership capability alone
 //! establishes a polynomial relation.
-
 use core::{fmt::Debug, marker::PhantomData};
-
 use thiserror::Error;
-
 use crate::{
     generalized_bulletproof::ProofRandomSource,
     vega::{
@@ -18,23 +15,20 @@ use crate::{
         bulletproof_t256::{
             ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
             ZkAmsT256MembershipBoundV1, ZkAmsT256MembershipErrorV1, ZkAmsT256MembershipProofV1,
-            prove_zk_ams_t256_membership_chunk_v1, verify_zk_ams_t256_membership_chunk_v1,
+            preflight_zk_ams_t256_membership_chunk_wire_v1, prove_zk_ams_t256_membership_chunk_v1,
+            verify_zk_ams_t256_membership_chunk_v1,
             zk_ams_t256_bulletproof_generator_basis_digest_v1,
         },
         sponge::Keccak256,
     },
 };
-
 use super::ZkAmsMkhePartyIdV1;
-
 const EXACT_MEMBERSHIP_VERSION_V1: u8 = 1;
-
 /// Exact number of ordered proofs for one release-ring polynomial.
 pub(super) const ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1: usize = 8;
 /// Exact coefficient count covered by one complete membership set.
 pub(super) const ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1: usize =
     ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1 * ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1;
-
 const MEMBERSHIP_CHUNK_WIRE_HEADER_BYTES_V1: usize = 47;
 const BOUND_ONE_PROOF_BYTES_V1: usize = 1_447;
 const BOUND_TWO_PROOF_BYTES_V1: usize = 1_513;
@@ -42,7 +36,6 @@ const BOUND_ONE_CHUNK_WIRE_BYTES_V1: usize =
     MEMBERSHIP_CHUNK_WIRE_HEADER_BYTES_V1 + BOUND_ONE_PROOF_BYTES_V1;
 const BOUND_TWO_CHUNK_WIRE_BYTES_V1: usize =
     MEMBERSHIP_CHUNK_WIRE_HEADER_BYTES_V1 + BOUND_TWO_PROOF_BYTES_V1;
-
 const OFFSET_BOUND_V1: usize = 5;
 const OFFSET_CHUNK_COUNT_V1: usize = OFFSET_BOUND_V1 + 1;
 const OFFSET_COEFFICIENT_COUNT_V1: usize = OFFSET_CHUNK_COUNT_V1 + 1;
@@ -59,7 +52,6 @@ const OFFSET_PROOF_SET_DIGEST_V1: usize = OFFSET_COMMITMENT_SET_DIGEST_V1 + 32;
 const OFFSET_VERIFIER_TRANSCRIPT_DIGEST_V1: usize = OFFSET_PROOF_SET_DIGEST_V1 + 32;
 pub(super) const EXACT_MEMBERSHIP_HEADER_BYTES_V1: usize =
     OFFSET_VERIFIER_TRANSCRIPT_DIGEST_V1 + 32;
-
 /// Exact persistent-secret evidence width retained by the first-release wire.
 pub(super) const ZK_AMS_MKHE_PERSISTENT_SECRET_MEMBERSHIP_WIRE_BYTES_V1: usize =
     EXACT_MEMBERSHIP_HEADER_BYTES_V1
@@ -72,7 +64,14 @@ pub(super) const ZK_AMS_MKHE_RKG_EPHEMERAL_MEMBERSHIP_WIRE_BYTES_V1: usize =
 pub(super) const ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1: usize =
     EXACT_MEMBERSHIP_HEADER_BYTES_V1
         + ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 * BOUND_TWO_CHUNK_WIRE_BYTES_V1;
-
+/// Exact direct-relation bound-one evidence width.
+pub(super) const ZK_AMS_MKHE_DIRECT_BOUND_ONE_MEMBERSHIP_WIRE_BYTES_V1: usize =
+    EXACT_MEMBERSHIP_HEADER_BYTES_V1
+        + ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 * BOUND_ONE_CHUNK_WIRE_BYTES_V1;
+/// Exact direct-relation bound-two evidence width.
+pub(super) const ZK_AMS_MKHE_DIRECT_BOUND_TWO_MEMBERSHIP_WIRE_BYTES_V1: usize =
+    EXACT_MEMBERSHIP_HEADER_BYTES_V1
+        + ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 * BOUND_TWO_CHUNK_WIRE_BYTES_V1;
 const _: () = {
     assert!(ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 == 8);
     assert!(ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1 == 131_072);
@@ -84,28 +83,32 @@ const _: () = {
     assert!(ZK_AMS_MKHE_PERSISTENT_SECRET_MEMBERSHIP_WIRE_BYTES_V1 == 12_291);
     assert!(ZK_AMS_MKHE_RKG_EPHEMERAL_MEMBERSHIP_WIRE_BYTES_V1 == 12_291);
     assert!(ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1 == 12_819);
+    assert!(ZK_AMS_MKHE_DIRECT_BOUND_ONE_MEMBERSHIP_WIRE_BYTES_V1 == 12_291);
+    assert!(ZK_AMS_MKHE_DIRECT_BOUND_TWO_MEMBERSHIP_WIRE_BYTES_V1 == 12_819);
 };
-
 mod sealed {
     pub trait Sealed {}
 }
-
 /// Compile-time persistent-secret role.  It has no constructible values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PersistentSecretMembershipRoleV1 {}
-
 /// Compile-time RKG-ephemeral role. It has no constructible values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RkgEphemeralMembershipRoleV1 {}
-
 /// Compile-time CPK public-error role.  It has no constructible values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CpkErrorMembershipRoleV1 {}
-
+/// Compile-time direct-relation bound-one role. It has no constructible values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DirectRelationBoundOneMembershipRoleV1 {}
+/// Compile-time direct-relation bound-two role. It has no constructible values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DirectRelationBoundTwoMembershipRoleV1 {}
 impl sealed::Sealed for PersistentSecretMembershipRoleV1 {}
 impl sealed::Sealed for RkgEphemeralMembershipRoleV1 {}
 impl sealed::Sealed for CpkErrorMembershipRoleV1 {}
-
+impl sealed::Sealed for DirectRelationBoundOneMembershipRoleV1 {}
+impl sealed::Sealed for DirectRelationBoundTwoMembershipRoleV1 {}
 pub(super) trait ExactEightChunkMembershipRoleV1:
     sealed::Sealed + Clone + Copy + Debug + PartialEq + Eq
 {
@@ -119,7 +122,6 @@ pub(super) trait ExactEightChunkMembershipRoleV1:
     const PROOF_SET_DIGEST_DOMAIN: &'static [u8];
     const VERIFIER_TRANSCRIPT_DIGEST_DOMAIN: &'static [u8];
 }
-
 impl ExactEightChunkMembershipRoleV1 for PersistentSecretMembershipRoleV1 {
     const MAGIC: [u8; 4] = *b"ZPME";
     const BOUND: ZkAmsT256MembershipBoundV1 = ZkAmsT256MembershipBoundV1::One;
@@ -135,7 +137,6 @@ impl ExactEightChunkMembershipRoleV1 for PersistentSecretMembershipRoleV1 {
     const VERIFIER_TRANSCRIPT_DIGEST_DOMAIN: &'static [u8] =
         b"iroha.zk-ams.v1.mkhe.persistent-membership.verifier-transcript-set";
 }
-
 impl ExactEightChunkMembershipRoleV1 for RkgEphemeralMembershipRoleV1 {
     const MAGIC: [u8; 4] = *b"ZRME";
     const BOUND: ZkAmsT256MembershipBoundV1 = ZkAmsT256MembershipBoundV1::One;
@@ -151,7 +152,6 @@ impl ExactEightChunkMembershipRoleV1 for RkgEphemeralMembershipRoleV1 {
     const VERIFIER_TRANSCRIPT_DIGEST_DOMAIN: &'static [u8] =
         b"iroha.zk-ams.v1.mkhe.rkg-ephemeral-membership.verifier-transcript-set";
 }
-
 impl ExactEightChunkMembershipRoleV1 for CpkErrorMembershipRoleV1 {
     const MAGIC: [u8; 4] = *b"ZCEM";
     const BOUND: ZkAmsT256MembershipBoundV1 = ZkAmsT256MembershipBoundV1::Two;
@@ -167,7 +167,36 @@ impl ExactEightChunkMembershipRoleV1 for CpkErrorMembershipRoleV1 {
     const VERIFIER_TRANSCRIPT_DIGEST_DOMAIN: &'static [u8] =
         b"iroha.zk-ams.v1.mkhe.cpk-error-membership.verifier-transcript-set";
 }
-
+impl ExactEightChunkMembershipRoleV1 for DirectRelationBoundOneMembershipRoleV1 {
+    const MAGIC: [u8; 4] = *b"ZDB1";
+    const BOUND: ZkAmsT256MembershipBoundV1 = ZkAmsT256MembershipBoundV1::One;
+    const PROOF_BYTES: usize = BOUND_ONE_PROOF_BYTES_V1;
+    const CHUNK_WIRE_BYTES: usize = BOUND_ONE_CHUNK_WIRE_BYTES_V1;
+    const WIRE_BYTES: usize = ZK_AMS_MKHE_DIRECT_BOUND_ONE_MEMBERSHIP_WIRE_BYTES_V1;
+    const CONTEXT_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.direct-relation-membership.bound-one.context";
+    const COMMITMENT_SET_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.direct-relation-membership.bound-one.commitment-set";
+    const PROOF_SET_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.direct-relation-membership.bound-one.proof-set";
+    const VERIFIER_TRANSCRIPT_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.direct-relation-membership.bound-one.verifier-transcript-set";
+}
+impl ExactEightChunkMembershipRoleV1 for DirectRelationBoundTwoMembershipRoleV1 {
+    const MAGIC: [u8; 4] = *b"ZDB2";
+    const BOUND: ZkAmsT256MembershipBoundV1 = ZkAmsT256MembershipBoundV1::Two;
+    const PROOF_BYTES: usize = BOUND_TWO_PROOF_BYTES_V1;
+    const CHUNK_WIRE_BYTES: usize = BOUND_TWO_CHUNK_WIRE_BYTES_V1;
+    const WIRE_BYTES: usize = ZK_AMS_MKHE_DIRECT_BOUND_TWO_MEMBERSHIP_WIRE_BYTES_V1;
+    const CONTEXT_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.direct-relation-membership.bound-two.context";
+    const COMMITMENT_SET_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.direct-relation-membership.bound-two.commitment-set";
+    const PROOF_SET_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.direct-relation-membership.bound-two.proof-set";
+    const VERIFIER_TRANSCRIPT_DIGEST_DOMAIN: &'static [u8] =
+        b"iroha.zk-ams.v1.mkhe.direct-relation-membership.bound-two.verifier-transcript-set";
+}
 /// Stable failures shared by the three sealed exact-eight-chunk roles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum ExactEightChunkMembershipErrorV1 {
@@ -190,7 +219,6 @@ pub(super) enum ExactEightChunkMembershipErrorV1 {
     #[error(transparent)]
     Membership(#[from] ZkAmsT256MembershipErrorV1),
 }
-
 /// Complete public context absorbed by every chunk and ordered-set root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ExactEightChunkMembershipContextV1<R> {
@@ -203,7 +231,6 @@ pub(super) struct ExactEightChunkMembershipContextV1<R> {
     share_statement_digest: [u8; 32],
     role: PhantomData<fn() -> R>,
 }
-
 impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipContextV1<R> {
     /// Construct an exact nonzero seven-axis context for one sealed role.
     #[allow(clippy::too_many_arguments)]
@@ -229,7 +256,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipContextV1<R> {
         context.validate()?;
         Ok(context)
     }
-
     pub(super) fn validate(self) -> Result<(), ExactEightChunkMembershipErrorV1> {
         if self.profile_digest == [0; 32]
             || self.roster_digest == [0; 32]
@@ -243,35 +269,27 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipContextV1<R> {
         }
         Ok(())
     }
-
     pub(super) const fn profile_digest(self) -> [u8; 32] {
         self.profile_digest
     }
-
     pub(super) const fn roster_digest(self) -> [u8; 32] {
         self.roster_digest
     }
-
     pub(super) const fn key_material_digest(self) -> [u8; 32] {
         self.key_material_digest
     }
-
     pub(super) const fn epoch(self) -> u64 {
         self.epoch
     }
-
     pub(super) const fn cpk_transcript_digest(self) -> [u8; 32] {
         self.cpk_transcript_digest
     }
-
     pub(super) const fn party(self) -> ZkAmsMkhePartyIdV1 {
         self.party
     }
-
     pub(super) const fn share_statement_digest(self) -> [u8; 32] {
         self.share_statement_digest
     }
-
     /// Role-separated digest absorbed by every chunk proof and ordered root.
     pub(super) fn context_digest(self) -> [u8; 32] {
         let mut hash = Keccak256::new();
@@ -287,7 +305,121 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipContextV1<R> {
         hash.finalize()
     }
 }
-
+/// Allocation-free, role-typed view of one canonically preflighted evidence frame.
+///
+/// Construction scans every wrapper, point, scalar, digest root, and terminal
+/// offset. Owned proof buffers can only be materialized by consuming this view.
+pub(super) struct PreflightedExactEightChunkMembershipWireV1<'a, R> {
+    bytes: &'a [u8],
+    context: ExactEightChunkMembershipContextV1<R>,
+    commitments: [Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
+    commitment_set_digest: [u8; 32],
+    proof_set_digest: [u8; 32],
+    verifier_transcript_digest: [u8; 32],
+}
+impl<'a, R: ExactEightChunkMembershipRoleV1> PreflightedExactEightChunkMembershipWireV1<'a, R> {
+    pub(super) fn preflight(bytes: &'a [u8]) -> Result<Self, ExactEightChunkMembershipErrorV1> {
+        if bytes.len() != R::WIRE_BYTES
+            || bytes[..4] != R::MAGIC
+            || bytes[4] != EXACT_MEMBERSHIP_VERSION_V1
+            || bytes[OFFSET_BOUND_V1] != R::BOUND as u8
+            || usize::from(bytes[OFFSET_CHUNK_COUNT_V1]) != ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1
+            || u32::from_be_bytes(array_at::<4>(bytes, OFFSET_COEFFICIENT_COUNT_V1)?)
+                != u32::try_from(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1)
+                    .map_err(|_| ExactEightChunkMembershipErrorV1::Shape)?
+        {
+            return Err(ExactEightChunkMembershipErrorV1::WireEncoding);
+        }
+        let generator_basis_digest = array_at::<32>(bytes, OFFSET_GENERATOR_BASIS_DIGEST_V1)?;
+        if generator_basis_digest != ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1 {
+            return Err(ExactEightChunkMembershipErrorV1::GeneratorBasis);
+        }
+        let context = ExactEightChunkMembershipContextV1::new(
+            array_at::<32>(bytes, OFFSET_PROFILE_DIGEST_V1)?,
+            array_at::<32>(bytes, OFFSET_ROSTER_DIGEST_V1)?,
+            array_at::<32>(bytes, OFFSET_KEY_MATERIAL_DIGEST_V1)?,
+            u64::from_be_bytes(array_at::<8>(bytes, OFFSET_EPOCH_V1)?),
+            array_at::<32>(bytes, OFFSET_CPK_TRANSCRIPT_DIGEST_V1)?,
+            ZkAmsMkhePartyIdV1::new(array_at::<32>(bytes, OFFSET_PARTY_V1)?)
+                .map_err(|_| ExactEightChunkMembershipErrorV1::Context)?,
+            array_at::<32>(bytes, OFFSET_SHARE_STATEMENT_DIGEST_V1)?,
+        )?;
+        let commitment_set_digest = array_at::<32>(bytes, OFFSET_COMMITMENT_SET_DIGEST_V1)?;
+        let proof_set_digest = array_at::<32>(bytes, OFFSET_PROOF_SET_DIGEST_V1)?;
+        let verifier_transcript_digest =
+            array_at::<32>(bytes, OFFSET_VERIFIER_TRANSCRIPT_DIGEST_V1)?;
+        let mut commitments = [Point::identity(); ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1];
+        let mut terminal = EXACT_MEMBERSHIP_HEADER_BYTES_V1;
+        for (index, commitment) in commitments.iter_mut().enumerate() {
+            let start = EXACT_MEMBERSHIP_HEADER_BYTES_V1
+                .checked_add(
+                    index
+                        .checked_mul(R::CHUNK_WIRE_BYTES)
+                        .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?,
+                )
+                .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?;
+            let end = start
+                .checked_add(R::CHUNK_WIRE_BYTES)
+                .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?;
+            let chunk = bytes
+                .get(start..end)
+                .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?;
+            *commitment = preflight_zk_ams_t256_membership_chunk_wire_v1(
+                chunk,
+                u16::try_from(index).map_err(|_| ExactEightChunkMembershipErrorV1::Shape)?,
+                R::BOUND,
+                ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1,
+            )?;
+            terminal = end;
+        }
+        if terminal != bytes.len() {
+            return Err(ExactEightChunkMembershipErrorV1::WireEncoding);
+        }
+        let context_digest = context.context_digest();
+        if context_digest == [0; 32]
+            || commitment_set_digest == [0; 32]
+            || proof_set_digest == [0; 32]
+            || verifier_transcript_digest == [0; 32]
+            || commitment_set_digest_from_points::<R>(generator_basis_digest, &commitments)?
+                != commitment_set_digest
+            || proof_set_digest_from_borrowed_wire::<R>(
+                context_digest,
+                generator_basis_digest,
+                bytes,
+            )? != proof_set_digest
+        {
+            return Err(ExactEightChunkMembershipErrorV1::DigestMismatch);
+        }
+        Ok(Self {
+            bytes,
+            context,
+            commitments,
+            commitment_set_digest,
+            proof_set_digest,
+            verifier_transcript_digest,
+        })
+    }
+    pub(super) fn materialize(
+        self,
+    ) -> Result<ExactEightChunkMembershipEvidenceV1<R>, ExactEightChunkMembershipErrorV1> {
+        ExactEightChunkMembershipEvidenceV1::from_wire_bytes_exact(self.bytes)
+    }
+    pub(super) const fn context(&self) -> ExactEightChunkMembershipContextV1<R> {
+        self.context
+    }
+    pub(super) const fn commitments(&self) -> &[Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1] {
+        &self.commitments
+    }
+    pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
+        self.commitment_set_digest
+    }
+    pub(super) const fn proof_set_digest(&self) -> [u8; 32] {
+        self.proof_set_digest
+    }
+    pub(super) const fn verifier_transcript_digest(&self) -> [u8; 32] {
+        self.verifier_transcript_digest
+    }
+}
 /// Canonical public evidence for one compile-time-selected membership role.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ExactEightChunkMembershipEvidenceV1<R> {
@@ -298,7 +430,6 @@ pub(super) struct ExactEightChunkMembershipEvidenceV1<R> {
     proof_set_digest: [u8; 32],
     verifier_transcript_digest: [u8; 32],
 }
-
 impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> {
     /// Prove and locally verify all eight production-shape chunks.
     pub(super) fn prove<Random: ProofRandomSource>(
@@ -316,7 +447,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         if context_digest == [0; 32] {
             return Err(ExactEightChunkMembershipErrorV1::Context);
         }
-
         let mut chunks = Vec::with_capacity(ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1);
         let mut prover_transcripts = [[0_u8; 32]; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1];
         for (index, coefficients) in coefficients
@@ -350,7 +480,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         }
         Ok(evidence)
     }
-
     /// Verify and assemble an exact ordered set of externally supplied chunks.
     pub(super) fn from_proof_chunks_verified(
         context: ExactEightChunkMembershipContextV1<R>,
@@ -371,7 +500,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         }
         Self::assemble(context, chunks, transcript_digests)
     }
-
     fn assemble(
         context: ExactEightChunkMembershipContextV1<R>,
         chunks: [ZkAmsT256MembershipProofV1; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
@@ -403,7 +531,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         evidence.validate_structural_digests()?;
         Ok(evidence)
     }
-
     /// Reconstruct a decoded public container and recheck its structural roots.
     ///
     /// This does not verify any chunk proof and therefore cannot return a
@@ -428,7 +555,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         evidence.validate_structural_digests()?;
         Ok(evidence)
     }
-
     /// Strictly decode one exact role-specific canonical evidence frame.
     pub(super) fn from_wire_bytes_exact(
         bytes: &[u8],
@@ -444,7 +570,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         {
             return Err(ExactEightChunkMembershipErrorV1::WireEncoding);
         }
-
         let generator_basis_digest = array_at::<32>(bytes, OFFSET_GENERATOR_BASIS_DIGEST_V1)?;
         if generator_basis_digest != ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1 {
             return Err(ExactEightChunkMembershipErrorV1::GeneratorBasis);
@@ -463,7 +588,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         let proof_set_digest = array_at::<32>(bytes, OFFSET_PROOF_SET_DIGEST_V1)?;
         let verifier_transcript_digest =
             array_at::<32>(bytes, OFFSET_VERIFIER_TRANSCRIPT_DIGEST_V1)?;
-
         let mut chunks = Vec::with_capacity(ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1);
         for index in 0..ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 {
             let start = EXACT_MEMBERSHIP_HEADER_BYTES_V1
@@ -495,7 +619,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         evidence.validate_structural_digests()?;
         Ok(evidence)
     }
-
     /// Encode the fixed-layout role-specific representation after rechecking roots.
     pub(super) fn to_wire_bytes(&self) -> Result<Vec<u8>, ExactEightChunkMembershipErrorV1> {
         self.validate_structural_digests()?;
@@ -533,7 +656,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         }
         Ok(bytes)
     }
-
     /// Replay all eight proofs and return a move-only membership capability.
     pub(super) fn into_verified(
         self,
@@ -544,7 +666,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
                 .map_err(Into::into)
         })
     }
-
     /// Replay all proofs without retaining the resulting typed capability.
     pub(super) fn verify(&self) -> Result<(), ExactEightChunkMembershipErrorV1> {
         ensure_canonical_generator_basis()?;
@@ -554,7 +675,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         })
         .map(|_| ())
     }
-
     fn verify_with<F>(
         self,
         verify_chunk: F,
@@ -577,7 +697,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
             role: PhantomData,
         })
     }
-
     fn verify_with_ref<F>(
         &self,
         mut verify_chunk: F,
@@ -614,7 +733,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         }
         Ok(recomputed)
     }
-
     fn validate_structural_digests(&self) -> Result<(), ExactEightChunkMembershipErrorV1> {
         self.context.validate()?;
         if self.generator_basis_digest != ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1 {
@@ -635,37 +753,29 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         }
         Ok(())
     }
-
     pub(super) const fn context(&self) -> ExactEightChunkMembershipContextV1<R> {
         self.context
     }
-
     pub(super) const fn chunks(
         &self,
     ) -> &[ZkAmsT256MembershipProofV1; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1] {
         &self.chunks
     }
-
     pub(super) fn commitments(&self) -> [Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1] {
         core::array::from_fn(|index| self.chunks[index].commitment())
     }
-
     pub(super) const fn generator_basis_digest(&self) -> [u8; 32] {
         self.generator_basis_digest
     }
-
     pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
         self.commitment_set_digest
     }
-
     pub(super) const fn proof_set_digest(&self) -> [u8; 32] {
         self.proof_set_digest
     }
-
     pub(super) const fn verifier_transcript_digest(&self) -> [u8; 32] {
         self.verifier_transcript_digest
     }
-
     #[cfg(test)]
     pub(super) fn assemble_for_test(
         context: ExactEightChunkMembershipContextV1<R>,
@@ -674,7 +784,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
     ) -> Result<Self, ExactEightChunkMembershipErrorV1> {
         Self::assemble(context, chunks, transcript_digests)
     }
-
     #[cfg(test)]
     pub(super) fn into_verified_with_for_test<F>(
         self,
@@ -689,7 +798,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
     {
         self.verify_with(verify_chunk)
     }
-
     #[cfg(test)]
     pub(super) fn verify_with_for_test<F>(
         &self,
@@ -705,7 +813,6 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         self.verify_with_ref(verify_chunk).map(|_| ())
     }
 }
-
 /// Move-only proof-verified membership capability for exactly one sealed role.
 ///
 /// This capability deliberately has no relation or active-binding conversion.
@@ -722,33 +829,26 @@ pub(super) struct VerifiedExactEightChunkMembershipV1<R> {
     verifier_transcript_digest: [u8; 32],
     role: PhantomData<fn() -> R>,
 }
-
 impl<R: ExactEightChunkMembershipRoleV1> VerifiedExactEightChunkMembershipV1<R> {
     pub(super) const fn context(&self) -> ExactEightChunkMembershipContextV1<R> {
         self.context
     }
-
     pub(super) const fn commitments(&self) -> &[Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1] {
         &self.commitments
     }
-
     pub(super) const fn generator_basis_digest(&self) -> [u8; 32] {
         self.generator_basis_digest
     }
-
     pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
         self.commitment_set_digest
     }
-
     pub(super) const fn proof_set_digest(&self) -> [u8; 32] {
         self.proof_set_digest
     }
-
     pub(super) const fn verifier_transcript_digest(&self) -> [u8; 32] {
         self.verifier_transcript_digest
     }
 }
-
 fn ensure_canonical_generator_basis() -> Result<(), ExactEightChunkMembershipErrorV1> {
     if zk_ams_t256_bulletproof_generator_basis_digest_v1()
         != ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1
@@ -757,7 +857,6 @@ fn ensure_canonical_generator_basis() -> Result<(), ExactEightChunkMembershipErr
     }
     Ok(())
 }
-
 fn validate_chunk_shape<R: ExactEightChunkMembershipRoleV1>(
     chunks: &[ZkAmsT256MembershipProofV1; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
 ) -> Result<(), ExactEightChunkMembershipErrorV1> {
@@ -775,7 +874,6 @@ fn validate_chunk_shape<R: ExactEightChunkMembershipRoleV1>(
     }
     Ok(())
 }
-
 fn digest_shape_prefix<R: ExactEightChunkMembershipRoleV1>(
     hash: &mut Keccak256,
     domain: &[u8],
@@ -794,10 +892,18 @@ fn digest_shape_prefix<R: ExactEightChunkMembershipRoleV1>(
     );
     hash.update(&[ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 as u8]);
 }
-
 pub(super) fn commitment_set_digest<R: ExactEightChunkMembershipRoleV1>(
     generator_basis_digest: [u8; 32],
     chunks: &[ZkAmsT256MembershipProofV1; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
+) -> Result<[u8; 32], ExactEightChunkMembershipErrorV1> {
+    commitment_set_digest_from_points::<R>(
+        generator_basis_digest,
+        &core::array::from_fn(|index| chunks[index].commitment()),
+    )
+}
+fn commitment_set_digest_from_points<R: ExactEightChunkMembershipRoleV1>(
+    generator_basis_digest: [u8; 32],
+    commitments: &[Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
 ) -> Result<[u8; 32], ExactEightChunkMembershipErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(R::COMMITMENT_SET_DIGEST_DOMAIN);
@@ -808,22 +914,68 @@ pub(super) fn commitment_set_digest<R: ExactEightChunkMembershipRoleV1>(
             .to_be_bytes(),
     );
     hash.update(&[ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 as u8]);
-    for (index, chunk) in chunks.iter().enumerate() {
+    for (index, commitment) in commitments.iter().enumerate() {
         hash.update(
             &u32::try_from(index)
                 .map_err(|_| ExactEightChunkMembershipErrorV1::Shape)?
                 .to_be_bytes(),
         );
         hash.update(
-            &chunk
-                .commitment()
+            &commitment
                 .to_non_identity_wire_bytes()
                 .map_err(|_| ExactEightChunkMembershipErrorV1::Shape)?,
         );
     }
     Ok(hash.finalize())
 }
-
+fn proof_set_digest_from_borrowed_wire<R: ExactEightChunkMembershipRoleV1>(
+    context_digest: [u8; 32],
+    generator_basis_digest: [u8; 32],
+    bytes: &[u8],
+) -> Result<[u8; 32], ExactEightChunkMembershipErrorV1> {
+    if bytes.len() != R::WIRE_BYTES {
+        return Err(ExactEightChunkMembershipErrorV1::WireEncoding);
+    }
+    let mut hash = Keccak256::new();
+    digest_shape_prefix::<R>(
+        &mut hash,
+        R::PROOF_SET_DIGEST_DOMAIN,
+        context_digest,
+        generator_basis_digest,
+    );
+    let mut terminal = EXACT_MEMBERSHIP_HEADER_BYTES_V1;
+    for index in 0..ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 {
+        let start = EXACT_MEMBERSHIP_HEADER_BYTES_V1
+            .checked_add(
+                index
+                    .checked_mul(R::CHUNK_WIRE_BYTES)
+                    .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?,
+            )
+            .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?;
+        let end = start
+            .checked_add(R::CHUNK_WIRE_BYTES)
+            .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?;
+        let wire = bytes
+            .get(start..end)
+            .ok_or(ExactEightChunkMembershipErrorV1::WireEncoding)?;
+        hash.update(
+            &u16::try_from(index)
+                .map_err(|_| ExactEightChunkMembershipErrorV1::Shape)?
+                .to_be_bytes(),
+        );
+        hash.update(
+            &u16::try_from(wire.len())
+                .map_err(|_| ExactEightChunkMembershipErrorV1::Shape)?
+                .to_be_bytes(),
+        );
+        hash.update(wire);
+        terminal = end;
+    }
+    if terminal != bytes.len() {
+        return Err(ExactEightChunkMembershipErrorV1::WireEncoding);
+    }
+    Ok(hash.finalize())
+}
 pub(super) fn proof_set_digest<R: ExactEightChunkMembershipRoleV1>(
     context_digest: [u8; 32],
     generator_basis_digest: [u8; 32],
@@ -855,7 +1007,6 @@ pub(super) fn proof_set_digest<R: ExactEightChunkMembershipRoleV1>(
     }
     Ok(hash.finalize())
 }
-
 pub(super) fn verifier_transcript_set_digest<R: ExactEightChunkMembershipRoleV1>(
     context_digest: [u8; 32],
     generator_basis_digest: [u8; 32],
@@ -878,7 +1029,6 @@ pub(super) fn verifier_transcript_set_digest<R: ExactEightChunkMembershipRoleV1>
     }
     hash.finalize()
 }
-
 fn array_at<const N: usize>(
     bytes: &[u8],
     offset: usize,
@@ -892,15 +1042,128 @@ fn array_at<const N: usize>(
         .try_into()
         .map_err(|_| ExactEightChunkMembershipErrorV1::WireEncoding)
 }
-
+#[cfg(test)]
+pub(super) fn canonical_membership_syntax_wire_fixture_for_test<
+    R: ExactEightChunkMembershipRoleV1,
+>(
+    seed: &[u8],
+    point_offset: usize,
+) -> Vec<u8> {
+    let digest = |label: &[u8]| {
+        let mut hash = Keccak256::new();
+        hash.update(seed);
+        hash.update(label);
+        hash.finalize()
+    };
+    let context = ExactEightChunkMembershipContextV1::new(
+        digest(b"profile"),
+        digest(b"roster"),
+        digest(b"key-material"),
+        7,
+        digest(b"cpk-transcript"),
+        ZkAmsMkhePartyIdV1::new(digest(b"party")).expect("fixture party"),
+        digest(b"share-statement"),
+    )
+    .expect("fixture context");
+    let points = crate::vega::derive_t256_generators_v1(
+        b"iroha.zk-ams.v1.mkhe.direct-membership.syntax-fixture",
+        point_offset + 1 + ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1,
+    )
+    .expect("fixture points");
+    let proof_point = points[point_offset]
+        .to_non_identity_wire_bytes()
+        .expect("fixture proof point");
+    let ipa_point_count = R::PROOF_BYTES
+        .checked_sub(9 * core::mem::size_of::<[u8; 33]>() + 5 * core::mem::size_of::<[u8; 32]>())
+        .expect("fixture proof shape")
+        / core::mem::size_of::<[u8; 33]>();
+    assert_eq!(ipa_point_count % 2, 0);
+    let chunks = core::array::from_fn(|index| {
+        let scalar = Scalar::from_u64(index as u64 + 1).to_le_bytes();
+        let mut proof = Vec::with_capacity(R::PROOF_BYTES);
+        for _ in 0..9 {
+            proof.extend_from_slice(&proof_point);
+        }
+        for _ in 0..3 {
+            proof.extend_from_slice(&scalar);
+        }
+        for _ in 0..ipa_point_count {
+            proof.extend_from_slice(&proof_point);
+        }
+        for _ in 0..2 {
+            proof.extend_from_slice(&scalar);
+        }
+        assert_eq!(proof.len(), R::PROOF_BYTES);
+        let mut wire = Vec::with_capacity(R::CHUNK_WIRE_BYTES);
+        wire.extend_from_slice(b"ZMBP");
+        wire.push(1);
+        wire.push(R::BOUND as u8);
+        wire.extend_from_slice(&(index as u16).to_be_bytes());
+        wire.extend_from_slice(
+            &u32::try_from(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1)
+                .expect("fixed fixture count")
+                .to_be_bytes(),
+        );
+        wire.extend_from_slice(
+            &points[point_offset + 1 + index]
+                .to_non_identity_wire_bytes()
+                .expect("fixture commitment"),
+        );
+        wire.extend_from_slice(
+            &u16::try_from(proof.len())
+                .expect("fixed fixture proof length")
+                .to_be_bytes(),
+        );
+        wire.extend_from_slice(&proof);
+        ZkAmsT256MembershipProofV1::from_wire_bytes_exact(&wire).expect("fixture chunk")
+    });
+    let transcript_digests = core::array::from_fn(|index| {
+        let mut hash = Keccak256::new();
+        hash.update(b"iroha.zk-ams.v1.mkhe.direct-membership.syntax-fixture-transcript");
+        hash.update(&context.context_digest());
+        hash.update(&(index as u16).to_be_bytes());
+        hash.update(&chunks[index].to_wire_bytes());
+        hash.finalize()
+    });
+    ExactEightChunkMembershipEvidenceV1::assemble_for_test(context, chunks, transcript_digests)
+        .expect("fixture evidence")
+        .to_wire_bytes()
+        .expect("fixture wire")
+}
+#[cfg(test)]
+pub(super) fn repair_membership_proof_set_digest_for_test<R: ExactEightChunkMembershipRoleV1>(
+    bytes: &mut [u8],
+) {
+    assert_eq!(bytes.len(), R::WIRE_BYTES);
+    let context = ExactEightChunkMembershipContextV1::<R>::new(
+        array_at::<32>(bytes, OFFSET_PROFILE_DIGEST_V1).expect("fixture profile"),
+        array_at::<32>(bytes, OFFSET_ROSTER_DIGEST_V1).expect("fixture roster"),
+        array_at::<32>(bytes, OFFSET_KEY_MATERIAL_DIGEST_V1).expect("fixture key material"),
+        u64::from_be_bytes(array_at::<8>(bytes, OFFSET_EPOCH_V1).expect("fixture epoch")),
+        array_at::<32>(bytes, OFFSET_CPK_TRANSCRIPT_DIGEST_V1).expect("fixture transcript"),
+        ZkAmsMkhePartyIdV1::new(
+            array_at::<32>(bytes, OFFSET_PARTY_V1).expect("fixture party bytes"),
+        )
+        .expect("fixture party"),
+        array_at::<32>(bytes, OFFSET_SHARE_STATEMENT_DIGEST_V1).expect("fixture statement"),
+    )
+    .expect("fixture context");
+    let generator_basis_digest =
+        array_at::<32>(bytes, OFFSET_GENERATOR_BASIS_DIGEST_V1).expect("fixture basis");
+    let repaired = proof_set_digest_from_borrowed_wire::<R>(
+        context.context_digest(),
+        generator_basis_digest,
+        bytes,
+    )
+    .expect("fixture proof-set digest");
+    bytes[OFFSET_PROOF_SET_DIGEST_V1..OFFSET_PROOF_SET_DIGEST_V1 + 32].copy_from_slice(&repaired);
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::{derive_t256_generators_v1, sponge::keccak256};
-
     const INNER_COMMITMENT_OFFSET_V1: usize = 12;
     const INNER_PROOF_OFFSET_V1: usize = 47;
-
     fn context<R: ExactEightChunkMembershipRoleV1>(
         seed: &[u8],
     ) -> ExactEightChunkMembershipContextV1<R> {
@@ -921,7 +1184,6 @@ mod tests {
         )
         .expect("canonical context")
     }
-
     fn fake_chunks<R: ExactEightChunkMembershipRoleV1>(
         context: ExactEightChunkMembershipContextV1<R>,
         point_offset: usize,
@@ -960,7 +1222,6 @@ mod tests {
             ZkAmsT256MembershipProofV1::from_wire_bytes_exact(&wire).expect("synthetic chunk")
         })
     }
-
     fn fake_verify<R: ExactEightChunkMembershipRoleV1>(
         context_digest: [u8; 32],
         ordinal: u16,
@@ -980,7 +1241,6 @@ mod tests {
         hash.update(&chunk.to_wire_bytes());
         Ok(hash.finalize())
     }
-
     fn fake_evidence<R: ExactEightChunkMembershipRoleV1>(
         seed: &[u8],
         point_offset: usize,
@@ -994,7 +1254,6 @@ mod tests {
         ExactEightChunkMembershipEvidenceV1::assemble_for_test(context, chunks, transcripts)
             .expect("synthetic evidence")
     }
-
     fn assert_role_roundtrip<R: ExactEightChunkMembershipRoleV1>() {
         let evidence = fake_evidence::<R>(b"role-roundtrip", 0);
         let wire = evidence.to_wire_bytes().expect("wire");
@@ -1030,7 +1289,6 @@ mod tests {
             evidence.verifier_transcript_digest()
         );
     }
-
     #[test]
     fn all_roles_have_exact_release_sizes_and_move_only_verified_outputs() {
         assert_eq!(ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1, 8);
@@ -1044,10 +1302,15 @@ mod tests {
         assert_eq!(CpkErrorMembershipRoleV1::PROOF_BYTES, 1_513);
         assert_eq!(CpkErrorMembershipRoleV1::CHUNK_WIRE_BYTES, 1_560);
         assert_eq!(CpkErrorMembershipRoleV1::WIRE_BYTES, 12_819);
+        assert_eq!(DirectRelationBoundOneMembershipRoleV1::MAGIC, *b"ZDB1");
+        assert_eq!(DirectRelationBoundOneMembershipRoleV1::WIRE_BYTES, 12_291);
+        assert_eq!(DirectRelationBoundTwoMembershipRoleV1::MAGIC, *b"ZDB2");
+        assert_eq!(DirectRelationBoundTwoMembershipRoleV1::WIRE_BYTES, 12_819);
         assert_role_roundtrip::<PersistentSecretMembershipRoleV1>();
         assert_role_roundtrip::<RkgEphemeralMembershipRoleV1>();
         assert_role_roundtrip::<CpkErrorMembershipRoleV1>();
-
+        assert_role_roundtrip::<DirectRelationBoundOneMembershipRoleV1>();
+        assert_role_roundtrip::<DirectRelationBoundTwoMembershipRoleV1>();
         fn consume_persistent(
             _: VerifiedExactEightChunkMembershipV1<PersistentSecretMembershipRoleV1>,
         ) {
@@ -1068,7 +1331,6 @@ mod tests {
         consume_ephemeral(ephemeral);
         consume_error(error);
     }
-
     fn assert_exact_length_rejection<R: ExactEightChunkMembershipRoleV1>() {
         let wire = fake_evidence::<R>(b"length-adversary", 0)
             .to_wire_bytes()
@@ -1089,14 +1351,14 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn all_roles_reject_every_truncation_and_representative_trailing_bytes() {
         assert_exact_length_rejection::<PersistentSecretMembershipRoleV1>();
         assert_exact_length_rejection::<RkgEphemeralMembershipRoleV1>();
         assert_exact_length_rejection::<CpkErrorMembershipRoleV1>();
+        assert_exact_length_rejection::<DirectRelationBoundOneMembershipRoleV1>();
+        assert_exact_length_rejection::<DirectRelationBoundTwoMembershipRoleV1>();
     }
-
     #[test]
     fn role_substitution_is_rejected_even_after_length_and_prefix_reframing() {
         let persistent = fake_evidence::<PersistentSecretMembershipRoleV1>(b"cross-role", 0)
@@ -1132,7 +1394,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut padded_persistent = persistent;
         padded_persistent.resize(CpkErrorMembershipRoleV1::WIRE_BYTES, 0);
         padded_persistent[..4].copy_from_slice(&CpkErrorMembershipRoleV1::MAGIC);
@@ -1142,7 +1403,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut truncated_error = error;
         truncated_error.truncate(PersistentSecretMembershipRoleV1::WIRE_BYTES);
         truncated_error[..4].copy_from_slice(&PersistentSecretMembershipRoleV1::MAGIC);
@@ -1153,7 +1413,6 @@ mod tests {
             .is_err()
         );
     }
-
     fn changed_context<R: ExactEightChunkMembershipRoleV1>(
         context: ExactEightChunkMembershipContextV1<R>,
         axis: usize,
@@ -1186,7 +1445,6 @@ mod tests {
         )
         .expect("changed nonzero context")
     }
-
     fn assert_all_context_axes_bound<R: ExactEightChunkMembershipRoleV1>() {
         let evidence = fake_evidence::<R>(b"axis-binding", 0);
         for axis in 0..7 {
@@ -1218,12 +1476,13 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn every_context_axis_is_bound_for_all_roles_and_domains_are_disjoint() {
         assert_all_context_axes_bound::<PersistentSecretMembershipRoleV1>();
         assert_all_context_axes_bound::<RkgEphemeralMembershipRoleV1>();
         assert_all_context_axes_bound::<CpkErrorMembershipRoleV1>();
+        assert_all_context_axes_bound::<DirectRelationBoundOneMembershipRoleV1>();
+        assert_all_context_axes_bound::<DirectRelationBoundTwoMembershipRoleV1>();
         let persistent = context::<PersistentSecretMembershipRoleV1>(b"same-axes");
         let ephemeral = ExactEightChunkMembershipContextV1::<RkgEphemeralMembershipRoleV1>::new(
             persistent.profile_digest(),
@@ -1265,7 +1524,6 @@ mod tests {
             CpkErrorMembershipRoleV1::VERIFIER_TRANSCRIPT_DIGEST_DOMAIN
         );
     }
-
     fn assert_mutations_rejected<R: ExactEightChunkMembershipRoleV1>() {
         let evidence = fake_evidence::<R>(b"mutation-adversary", 0);
         let wire = evidence.to_wire_bytes().expect("wire");
@@ -1293,7 +1551,6 @@ mod tests {
                 "outer mutation at {offset} was accepted"
             );
         }
-
         let first_chunk = EXACT_MEMBERSHIP_HEADER_BYTES_V1;
         for inner in [
             0,
@@ -1313,7 +1570,6 @@ mod tests {
                 "inner mutation at {inner} was accepted"
             );
         }
-
         let mut transcript_root = wire;
         transcript_root[OFFSET_VERIFIER_TRANSCRIPT_DIGEST_V1] ^= 1;
         let decoded =
@@ -1324,14 +1580,12 @@ mod tests {
             Err(ExactEightChunkMembershipErrorV1::DigestMismatch)
         );
     }
-
     #[test]
     fn outer_inner_and_digest_mutations_fail_closed_for_all_roles() {
         assert_mutations_rejected::<PersistentSecretMembershipRoleV1>();
         assert_mutations_rejected::<RkgEphemeralMembershipRoleV1>();
         assert_mutations_rejected::<CpkErrorMembershipRoleV1>();
     }
-
     #[test]
     fn zero_context_axes_are_rejected_for_all_roles() {
         fn assert_role<R: ExactEightChunkMembershipRoleV1>() {
@@ -1381,7 +1635,6 @@ mod tests {
         assert_role::<RkgEphemeralMembershipRoleV1>();
         assert_role::<CpkErrorMembershipRoleV1>();
     }
-
     #[test]
     fn rkg_ephemeral_role_has_distinct_frozen_wire_and_domains() {
         assert_eq!(RkgEphemeralMembershipRoleV1::MAGIC, *b"ZRME");
@@ -1403,7 +1656,37 @@ mod tests {
             CpkErrorMembershipRoleV1::PROOF_SET_DIGEST_DOMAIN
         );
     }
-
+    #[test]
+    fn direct_relation_roles_have_frozen_disjoint_wires_and_domains() {
+        assert_eq!(DirectRelationBoundOneMembershipRoleV1::MAGIC, *b"ZDB1");
+        assert_eq!(DirectRelationBoundOneMembershipRoleV1::WIRE_BYTES, 12_291);
+        assert_eq!(DirectRelationBoundTwoMembershipRoleV1::MAGIC, *b"ZDB2");
+        assert_eq!(DirectRelationBoundTwoMembershipRoleV1::WIRE_BYTES, 12_819);
+        assert_ne!(
+            DirectRelationBoundOneMembershipRoleV1::CONTEXT_DIGEST_DOMAIN,
+            DirectRelationBoundTwoMembershipRoleV1::CONTEXT_DIGEST_DOMAIN
+        );
+        assert_ne!(
+            DirectRelationBoundOneMembershipRoleV1::COMMITMENT_SET_DIGEST_DOMAIN,
+            DirectRelationBoundTwoMembershipRoleV1::COMMITMENT_SET_DIGEST_DOMAIN
+        );
+        assert_ne!(
+            DirectRelationBoundOneMembershipRoleV1::PROOF_SET_DIGEST_DOMAIN,
+            DirectRelationBoundTwoMembershipRoleV1::PROOF_SET_DIGEST_DOMAIN
+        );
+        assert_ne!(
+            DirectRelationBoundOneMembershipRoleV1::VERIFIER_TRANSCRIPT_DIGEST_DOMAIN,
+            DirectRelationBoundTwoMembershipRoleV1::VERIFIER_TRANSCRIPT_DIGEST_DOMAIN
+        );
+        assert_ne!(
+            DirectRelationBoundOneMembershipRoleV1::CONTEXT_DIGEST_DOMAIN,
+            PersistentSecretMembershipRoleV1::CONTEXT_DIGEST_DOMAIN
+        );
+        assert_ne!(
+            DirectRelationBoundTwoMembershipRoleV1::CONTEXT_DIGEST_DOMAIN,
+            CpkErrorMembershipRoleV1::CONTEXT_DIGEST_DOMAIN
+        );
+    }
     #[test]
     fn persistent_role_keeps_the_frozen_wire_and_digest_domains() {
         assert_eq!(PersistentSecretMembershipRoleV1::MAGIC, *b"ZPME");
@@ -1423,7 +1706,6 @@ mod tests {
             PersistentSecretMembershipRoleV1::VERIFIER_TRANSCRIPT_DIGEST_DOMAIN,
             b"iroha.zk-ams.v1.mkhe.persistent-membership.verifier-transcript-set"
         );
-
         let evidence = fake_evidence::<PersistentSecretMembershipRoleV1>(b"legacy-wire", 0);
         let wire = evidence.to_wire_bytes().expect("wire");
         assert_eq!(wire.len(), 12_291);

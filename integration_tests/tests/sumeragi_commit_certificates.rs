@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for commit certificates in permissioned and `NPoS` modes.
-
 use std::time::{Duration, Instant};
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::crypto::{Algorithm, KeyPair};
@@ -31,16 +29,13 @@ use iroha_test_samples::ALICE_ID;
 use norito::json;
 use tokio::time::{sleep, timeout};
 use toml::Table;
-
 const COMMIT_CERT_TIMEOUT: Duration = Duration::from_secs(120);
 const COMMIT_CERT_POLL: Duration = Duration::from_millis(200);
 const HIGH_STAKE: u64 = 7_000;
 const LOW_STAKE: u64 = 1_000;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STAKE_QUORUM_WAIT: Duration = Duration::from_secs(5);
-
 type CommitCertificate = Qc;
-
 fn validator_account_id_for_index(index: usize) -> AccountId {
     let key_pair = KeyPair::try_from_seed(
         format!("integration_tests::sumeragi_commit_certificates::{index}").into_bytes(),
@@ -49,7 +44,6 @@ fn validator_account_id_for_index(index: usize) -> AccountId {
     .expect("fixture Sumeragi commit-certificate validator key");
     AccountId::new(key_pair.public_key().clone())
 }
-
 #[test]
 fn validator_account_id_for_index_uses_checked_seed_derivation() {
     let expected_key_pair = KeyPair::try_from_seed(
@@ -57,35 +51,29 @@ fn validator_account_id_for_index_uses_checked_seed_derivation() {
         Algorithm::Ed25519,
     )
     .expect("fixture Sumeragi commit-certificate validator key");
-
     assert_eq!(
         validator_account_id_for_index(0),
         AccountId::new(expected_key_pair.public_key().clone()),
     );
 }
-
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
-
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
 }
-
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("universal", "universal").expect("fee asset domain"),
         "xor".parse().expect("fee asset name"),
     )
 }
-
 fn nexus_fee_asset_id_literal() -> String {
     nexus_fee_asset_definition_id().to_string()
 }
-
 fn npos_commit_quorum_network_builder() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(4)
@@ -124,11 +112,9 @@ fn npos_commit_quorum_network_builder() -> NetworkBuilder {
             )
         })
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
     init_instruction_registry();
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -138,7 +124,6 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full");
         });
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(permissioned_commit_certificates_reach_quorum),
@@ -147,7 +132,6 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
     else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         let client = network.client();
         let baseline = client.get_status()?.blocks_non_empty;
@@ -185,20 +169,16 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
     init_instruction_registry();
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_permissioned_consensus();
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(commit_certificate_block_sync_restores_restart_peer),
@@ -207,7 +187,6 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
     else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         let peers = network.peers();
         let restart_peer = peers
@@ -222,9 +201,7 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
             .config_layers()
             .map(|layer| ConfigLayer(layer.into_owned()))
             .collect();
-
         restart_peer.shutdown().await;
-
         let client = submit_peer.client();
         let baseline = client.get_status()?.blocks_non_empty;
         client.submit_blocking(
@@ -238,7 +215,6 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
                     eyre!("timed out waiting for non-empty block before peer restart")
                 })?;
         let expected_height = status.blocks;
-
         restart_peer
             .start_checked(config_layers.iter().cloned(), None)
             .await
@@ -254,7 +230,6 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
                 network.sync_timeout()
             )
         })?;
-
         let http = integration_tests::http::client();
         let restart_torii = restart_peer.torii_url();
         let cert =
@@ -275,15 +250,12 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn npos_commit_quorum_requires_stake() -> Result<()> {
     init_instruction_registry();
-
     let Some(network) = sandbox::start_network_async_or_skip(
         npos_commit_quorum_network_builder(),
         stringify!(npos_commit_quorum_requires_stake),
@@ -292,7 +264,6 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
     else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         let peers = network.peers();
         let high_stake_peer = peers
@@ -303,16 +274,13 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
             .get(1)
             .cloned()
             .ok_or_else(|| eyre!("expected at least 2 peers"))?;
-
         high_stake_peer.shutdown().await;
-
         let client = submit_peer.client();
         let baseline = client.get_status()?.blocks_non_empty;
         client.submit(
             Log::new(Level::INFO, "npos stake quorum".to_string()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-
         let blocked = wait_for_non_empty_blocks(&client, baseline + 1, STAKE_QUORUM_WAIT).await?;
         ensure!(
             blocked.is_none(),
@@ -321,11 +289,9 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     drop(network);
     result?;
-
     let Some(network) = sandbox::start_network_async_or_skip(
         npos_commit_quorum_network_builder(),
         stringify!(npos_commit_quorum_requires_stake),
@@ -334,7 +300,6 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
     else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         let high_stake_peer = network
             .peers()
@@ -358,7 +323,6 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
             "expected NPoS quorum to commit with high-stake validator online"
         );
         let expected_height = status.blocks;
-
         let http = integration_tests::http::client();
         let submit_torii = network
             .torii_urls()
@@ -380,24 +344,19 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result
 }
-
 #[derive(Clone)]
 struct ConfigLayer(Table);
-
 impl AsRef<Table> for ConfigLayer {
     fn as_ref(&self) -> &Table {
         &self.0
     }
 }
-
 fn commit_certificate_signer_count(cert: &CommitCertificate) -> usize {
     qc_signer_count(cert)
 }
-
 fn commit_certificate_has_signer(cert: &CommitCertificate, index: usize) -> bool {
     let byte_idx = index / 8;
     let bit_idx = index % 8;
@@ -406,7 +365,6 @@ fn commit_certificate_has_signer(cert: &CommitCertificate, index: usize) -> bool
         .get(byte_idx)
         .is_some_and(|byte| (byte >> bit_idx) & 1 == 1)
 }
-
 async fn wait_for_commit_certificate_quorum(
     http: &reqwest::Client,
     torii_urls: &[String],
@@ -416,7 +374,6 @@ async fn wait_for_commit_certificate_quorum(
 ) -> Result<()> {
     let deadline = Instant::now() + COMMIT_CERT_TIMEOUT;
     let mut missing = Vec::new();
-
     loop {
         missing.clear();
         for torii in torii_urls {
@@ -456,7 +413,6 @@ async fn wait_for_commit_certificate_quorum(
         sleep(COMMIT_CERT_POLL).await;
     }
 }
-
 async fn wait_for_commit_certificate(
     http: &reqwest::Client,
     torii: &str,
@@ -480,7 +436,6 @@ async fn wait_for_commit_certificate(
         sleep(COMMIT_CERT_POLL).await;
     }
 }
-
 async fn fetch_commit_certificates(
     http: &reqwest::Client,
     torii: &str,
@@ -514,7 +469,6 @@ async fn fetch_commit_certificates(
     let body = response.text().await.wrap_err("commit certificates body")?;
     json::from_str(&body).wrap_err("parse commit certificates JSON")
 }
-
 async fn wait_for_committed_height_quorum(
     peers: &[NetworkPeer],
     expected_height: u64,
@@ -553,7 +507,6 @@ async fn wait_for_committed_height_quorum(
         sleep(COMMIT_CERT_POLL).await;
     }
 }
-
 async fn wait_for_commit_vote_metrics(
     http: &reqwest::Client,
     metrics_urls: &[reqwest::Url],
@@ -591,7 +544,6 @@ async fn wait_for_commit_vote_metrics(
         sleep(COMMIT_CERT_POLL).await;
     }
 }
-
 fn commit_vote_metrics_reached(
     present: Option<f64>,
     counted: Option<f64>,
@@ -607,7 +559,6 @@ fn commit_vote_metrics_reached(
                 && required_metric >= required_f64
     )
 }
-
 #[test]
 fn commit_vote_metrics_reached_requires_all_quorum_metrics() {
     assert!(commit_vote_metrics_reached(
@@ -624,7 +575,6 @@ fn commit_vote_metrics_reached_requires_all_quorum_metrics() {
     ));
     assert!(!commit_vote_metrics_reached(Some(3.0), None, Some(3.0), 3));
 }
-
 async fn fetch_metrics(
     http: &reqwest::Client,
     metrics_url: &reqwest::Url,
@@ -642,13 +592,11 @@ async fn fetch_metrics(
     let body = response.text().await.wrap_err("metrics body")?;
     Ok(MetricsReader::new(&body))
 }
-
 fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
     let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = nexus_fee_asset_definition_id();
     let gas_account_id = ALICE_ID.clone();
-
     let definition = {
         let __asset_definition_id = stake_asset_id.clone();
         AssetDefinition::new(
@@ -671,7 +619,6 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
         )
     }
     .with_metadata(Metadata::default());
-
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::asset_definition(definition).into(),
@@ -708,7 +655,6 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
             .into(),
         );
     }
-
     let mut validator_tx = Vec::new();
     for (idx, peer) in topology.iter().enumerate() {
         let validator_id = validator_account_id_for_index(idx);
@@ -726,10 +672,8 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
         );
         validator_tx.push(ActivatePublicLaneValidator::new(LaneId::SINGLE, validator_id).into());
     }
-
     vec![bootstrap_tx, validator_tx]
 }
-
 async fn wait_for_non_empty_blocks(
     client: &iroha::client::Client,
     target: u64,

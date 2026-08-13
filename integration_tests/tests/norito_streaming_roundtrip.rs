@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for the Norito Streaming baseline codec and chunk helpers.
-
 use crate::streaming;
 use hex::encode as hex_encode;
 use norito::streaming::{
@@ -12,14 +11,12 @@ use norito::streaming::{
         FrameDimensions, RawFrame, default_bundle_tables,
     },
 };
-
 struct SegmentFixture {
     label: &'static str,
     config: BaselineEncoderConfig,
     segment: EncodedSegment,
     frames: Vec<RawFrame>,
 }
-
 fn bundled_segment_with_default_tables(
     frame_count: usize,
     bundle_width: u8,
@@ -32,11 +29,9 @@ fn bundled_segment_with_default_tables(
     for _ in 0..frame_count {
         frames.push(RawFrame::new(dims, base_luma.clone()).expect("valid frame"));
     }
-
     let tables = default_bundle_tables();
     let max_width = tables.max_width().max(2);
     let configured_width = bundle_width.clamp(2, max_width);
-
     let config = BaselineEncoderConfig {
         frame_dimensions: dims,
         frame_duration_ns,
@@ -48,18 +43,14 @@ fn bundled_segment_with_default_tables(
         bundle_tables: tables,
         ..BaselineEncoderConfig::default()
     };
-
     let mut encoder = BaselineEncoder::new(config.clone());
     let segment = encoder
         .encode_segment(6, 2_000_000, 9, &frames, None)
         .expect("encode bundled segment");
-
     (config, segment, frames)
 }
-
 fn segment_fixtures() -> Vec<SegmentFixture> {
     let mut fixtures = Vec::new();
-
     let (config, segment, frames) = streaming::baseline_segment(2);
     fixtures.push(SegmentFixture {
         label: "baseline",
@@ -67,7 +58,6 @@ fn segment_fixtures() -> Vec<SegmentFixture> {
         segment,
         frames,
     });
-
     let (config, segment, frames) = bundled_segment_with_default_tables(2, 4);
     fixtures.push(SegmentFixture {
         label: "rans_bundled",
@@ -75,22 +65,18 @@ fn segment_fixtures() -> Vec<SegmentFixture> {
         segment,
         frames,
     });
-
     fixtures
 }
-
 fn sample_hash(seed: u8) -> Hash {
     let mut bytes = [0u8; 32];
     bytes.fill(seed);
     bytes
 }
-
 fn sample_signature(seed: u8) -> Signature {
     let mut bytes = [0u8; 64];
     bytes.fill(seed);
     bytes
 }
-
 #[test]
 fn segment_manifest_roundtrip() {
     for fixture in segment_fixtures() {
@@ -130,7 +116,6 @@ fn segment_manifest_roundtrip() {
             neural_bundle: None,
             transport_capabilities_hash: sample_hash(22),
         });
-
         fixture
             .segment
             .verify_manifest(&manifest)
@@ -151,7 +136,6 @@ fn segment_manifest_roundtrip() {
             "{} transport capability hash mismatch",
             fixture.label
         );
-
         let decoder = BaselineDecoder::new(
             fixture.config.frame_dimensions,
             fixture.config.frame_duration_ns,
@@ -193,7 +177,6 @@ fn segment_manifest_roundtrip() {
         }
     }
 }
-
 #[test]
 fn chunk_merkle_proof_roundtrip() {
     for fixture in segment_fixtures() {
@@ -212,14 +195,12 @@ fn chunk_merkle_proof_roundtrip() {
             "{} commitment count mismatch",
             fixture.label
         );
-
         let root = chunk::merkle_root(&commitments).expect("merkle root");
         assert_eq!(
             root, fixture.segment.header.chunk_merkle_root,
             "{} chunk root mismatch",
             fixture.label
         );
-
         let proof_index = usize::from(commitments.len() > 1);
         let proof = chunk::merkle_proof(&commitments, proof_index, payload_refs[proof_index].0)
             .expect("merkle proof");
@@ -229,7 +210,6 @@ fn chunk_merkle_proof_roundtrip() {
             "{} merkle proof validation failed",
             fixture.label
         );
-
         let chunk_ids: Vec<u16> = payload_refs.iter().map(|(id, _)| *id).collect();
         let storage_commitment = chunk::storage_commitment(
             fixture.segment.header.segment_number,
@@ -245,7 +225,6 @@ fn chunk_merkle_proof_roundtrip() {
             &chunk_ids,
         )
         .expect("da root");
-
         assert_ne!(
             storage_commitment, [0u8; 32],
             "{} storage commitment unexpectedly zeroed",
@@ -261,7 +240,6 @@ fn chunk_merkle_proof_roundtrip() {
             "{} storage/DA roots must use distinct labels",
             fixture.label
         );
-
         let storage_hex = hex_encode(storage_commitment);
         let da_hex = hex_encode(da_root);
         assert_eq!(

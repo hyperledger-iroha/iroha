@@ -1,21 +1,16 @@
 //! One-shot, purpose-bound replay capabilities for the canonical qPCS proof.
-
 use core::array;
-
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
     CanonicalProofSectionV2, CanonicalProofTreeKindV2, ProverCanonicalProofPlanV2,
 };
-
 use super::prover_v2::ProverPrerequisiteErrorV2;
 use super::*;
-
 const CANONICAL_REPLAY_PURPOSE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.qpcs.canonical-proof-replay-purpose\0";
 const CANONICAL_TREE_PURPOSE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.qpcs.canonical-proof-replay-purpose.tree-purpose\0";
 const CANONICAL_TREE_COUNT_V2: usize = 20;
 const CANONICAL_FRI_ROOTS_V2: usize = 18;
-
 #[derive(Clone, Copy)]
 pub(super) struct CanonicalProofReplayBindingV2 {
     pub(super) parameter_digest: [u8; 32],
@@ -25,39 +20,31 @@ pub(super) struct CanonicalProofReplayBindingV2 {
     pub(super) fri_roots: [[u8; 32]; CANONICAL_FRI_ROOTS_V2],
     pub(super) terminal_digest: [u8; 32],
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct CanonicalTreeReplayShapeV2 {
     pub(super) length: u32,
     pub(super) columns: u16,
     pub(super) values_per_block: u16,
 }
-
 /// A replay can only advance by its internally selected next logical column.
 pub(super) trait CanonicalTreeReplayV2 {
     type Owner;
-
     fn shape_v2(&self) -> Result<CanonicalTreeReplayShapeV2, ProverPrerequisiteErrorV2>;
-
     fn read_next_column_v2(
         &mut self,
     ) -> Result<AuthenticatedReplayChunkV2, ProverPrerequisiteErrorV2>;
-
     fn complete_v2(self) -> Result<Self::Owner, ProverPrerequisiteErrorV2>;
 }
-
 pub(super) struct CanonicalTreeReplayPurposeV2 {
     master_binding: [u8; 32],
     section: CanonicalProofSectionV2,
     expected_root: [u8; 32],
     purpose_digest: [u8; 32],
 }
-
 pub(super) struct CanonicalTreePurposeBoundV2 {
     ordinal: u8,
     purpose_digest: [u8; 32],
 }
-
 impl CanonicalTreePurposeBoundV2 {
     pub(super) fn complete_v2(self, ordinal: u8) -> Result<(), ProverPrerequisiteErrorV2> {
         if self.ordinal != ordinal || self.purpose_digest == [0; 32] {
@@ -66,24 +53,20 @@ impl CanonicalTreePurposeBoundV2 {
         Ok(())
     }
 }
-
 pub(super) struct CanonicalProofReplayPurposesV2 {
     plan: Option<ProverCanonicalProofPlanV2>,
     master_binding: [u8; 32],
     purposes: [Option<CanonicalTreeReplayPurposeV2>; CANONICAL_TREE_COUNT_V2],
     next_ordinal: u8,
 }
-
 pub(super) struct CanonicalProofReplayCompleteV2 {
     binding_digest: [u8; 32],
 }
-
 impl CanonicalProofReplayCompleteV2 {
     pub(super) const fn binding_digest_v2(&self) -> [u8; 32] {
         self.binding_digest
     }
 }
-
 fn expected_root_v2(
     binding: &CanonicalProofReplayBindingV2,
     section: CanonicalProofSectionV2,
@@ -98,7 +81,6 @@ fn expected_root_v2(
             .ok_or(ProverPrerequisiteErrorV2::InvalidCanonicalProof),
     }
 }
-
 fn master_binding_digest_v2(
     binding: &CanonicalProofReplayBindingV2,
     transcript: [u8; 32],
@@ -150,7 +132,6 @@ fn master_binding_digest_v2(
     }
     Ok(digest)
 }
-
 fn tree_purpose_digest_v2(
     master_binding: [u8; 32],
     section: CanonicalProofSectionV2,
@@ -178,7 +159,6 @@ fn tree_purpose_digest_v2(
     }
     Ok(digest)
 }
-
 impl CanonicalTreeReplayPurposeV2 {
     pub(super) fn bind_v2(
         self,
@@ -200,7 +180,6 @@ impl CanonicalTreeReplayPurposeV2 {
         })
     }
 }
-
 impl CanonicalProofReplayPurposesV2 {
     pub(super) fn bind_v2(
         plan: ProverCanonicalProofPlanV2,
@@ -235,17 +214,14 @@ impl CanonicalProofReplayPurposesV2 {
             next_ordinal: 0,
         })
     }
-
     pub(super) fn plan_v2(&self) -> Result<&ProverCanonicalProofPlanV2, ProverPrerequisiteErrorV2> {
         self.plan
             .as_ref()
             .ok_or(ProverPrerequisiteErrorV2::Poisoned)
     }
-
     pub(super) const fn master_binding_v2(&self) -> [u8; 32] {
         self.master_binding
     }
-
     pub(super) fn take_next_purpose_v2(
         &mut self,
         ordinal: u8,
@@ -259,7 +235,6 @@ impl CanonicalProofReplayPurposesV2 {
         self.next_ordinal += 1;
         Ok(purpose)
     }
-
     pub(super) fn complete_v2(
         mut self,
     ) -> Result<CanonicalProofReplayCompleteV2, ProverPrerequisiteErrorV2> {
@@ -277,11 +252,9 @@ impl CanonicalProofReplayPurposesV2 {
         })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const SHAPE_DIGEST_KAT_V2: [u8; 32] = [
         0x03, 0xb8, 0x27, 0x20, 0x89, 0x43, 0xc7, 0x25, 0xf2, 0x02, 0x34, 0x24, 0x09, 0x0c, 0x5a,
         0x1a, 0x9a, 0x1a, 0xd1, 0x75, 0x20, 0x76, 0x43, 0x87, 0xd2, 0x90, 0xf9, 0xc4, 0x91, 0xa1,
@@ -297,7 +270,6 @@ mod tests {
         0x0f, 0xe2, 0x44, 0x55, 0x07, 0x23, 0x45, 0x6c, 0x1c, 0x39, 0xd9, 0x57, 0xeb, 0xc2, 0x08,
         0xbf, 0x6e,
     ];
-
     fn synthetic_binding_v2() -> CanonicalProofReplayBindingV2 {
         CanonicalProofReplayBindingV2 {
             parameter_digest: [0x11; 32],
@@ -311,7 +283,6 @@ mod tests {
             terminal_digest: [0x43; 32],
         }
     }
-
     #[test]
     fn transparent_master_and_c0_permit_frames_are_frozen() {
         let binding = synthetic_binding_v2();
@@ -332,7 +303,6 @@ mod tests {
             C0_PERMIT_KAT_V2
         );
     }
-
     #[test]
     fn wrong_root_master_or_shape_cannot_rebind_a_one_shot_permit() {
         let section = CanonicalProofSectionV2::test_only_v2(0, 1, 0xff, 524_288, 320, 3_096);

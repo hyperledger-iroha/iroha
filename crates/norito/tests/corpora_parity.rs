@@ -1,11 +1,8 @@
 //! Parity tests for large corpora (citm_catalog/twitter), if present locally.
 //! Looks for JSON and matching .tape files under `crates/norito/tests/corpora/`.
 #![cfg(feature = "json")]
-
 use std::{fs, path::Path};
-
 use norito::json::build_struct_index;
-
 #[test]
 fn corpora_parity_if_present() {
     let dir = Path::new("crates/norito/tests/corpora");

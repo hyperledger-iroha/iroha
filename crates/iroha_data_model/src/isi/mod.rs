@@ -26,13 +26,11 @@ use std::{
     sync::{Arc, OnceLock, RwLock},
     vec::Vec,
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use derive_more::{Constructor, Display};
 use iroha_schema::{IntoSchema, Metadata as SchemaMetadata, UnnamedFieldsMeta};
 use norito::codec::{Decode, Encode};
 use rustc_hash::FxHashMap as HashMap;
-
 use super::prelude::*;
 use crate::{Level, Registered, seal};
 /// Consensus key lifecycle instructions.
@@ -44,7 +42,6 @@ pub mod endorsement;
 pub mod governance;
 /// Ministry agenda intake instructions.
 pub mod ministry;
-
 /// Owned trait-object wrapper for any [`crate::isi::Instruction`].
 ///
 /// This newtype wraps `Box<dyn Instruction>` to allow implementing blanket traits
@@ -2205,7 +2202,6 @@ fn json_quantity_opt(
     field: &str,
 ) -> Result<Option<iroha_primitives::numeric::Quantity>, norito::json::Error> {
     use std::str::FromStr as _;
-
     let Some(value) = value else {
         return Ok(None);
     };
@@ -2239,7 +2235,6 @@ fn json_asset_transfer_target(
     params: &norito::json::Map,
 ) -> Result<(crate::account::AccountId, crate::asset::AssetDefinitionId), norito::json::Error> {
     use std::str::FromStr as _;
-
     let account_id = crate::account::AccountId::parse_encoded(
         json_required_string(params, "account_id")?.as_str(),
     )
@@ -2256,7 +2251,6 @@ fn instruction_box_from_object(
     map: &norito::json::Map,
 ) -> Result<InstructionBox, norito::json::Error> {
     use std::str::FromStr as _;
-
     let name = json_required_string(map, "name")?;
     let params = map
         .get("params")
@@ -3197,7 +3191,6 @@ pub mod verifying_keys;
 pub mod vpn;
 /// Zero-knowledge instruction wrappers.
 pub mod zk;
-
 pub use account_recovery::*;
 pub use asset_alias::*;
 pub use asset_transfer_control::*;
@@ -3224,7 +3217,6 @@ pub use transfer::*;
 pub use transparent::*;
 pub use vpn::*;
 pub use zk::*;
-
 isi_box! {
     /// Enum with all supported [`SetKeyValue`] instructions.
     ///
@@ -3378,17 +3370,13 @@ enum_type! {
         Custom,
     }
 }
-
 pub mod error {
     //! Module containing errors that can occur during instruction evaluation
-
     use std::{boxed::Box, fmt::Debug, format, string::String, vec::Vec};
-
     use derive_more::Display;
     use iroha_data_model_derive::model;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-
     pub use self::model::*;
     use crate::{
         IdBox,
@@ -3399,9 +3387,7 @@ pub mod error {
     #[model]
     mod model {
         use getset::Getters;
-
         use super::*;
-
         /// Instruction execution error type
         #[derive(
             Debug,
@@ -3781,7 +3767,6 @@ pub mod error {
                 parser: &mut norito::json::Parser<'_>,
             ) -> Result<Self, norito::json::Error> {
                 use norito::json::MapVisitor;
-
                 let mut visitor = MapVisitor::new(parser)?;
                 let mut expected: Option<T> = None;
                 let mut actual: Option<T> = None;

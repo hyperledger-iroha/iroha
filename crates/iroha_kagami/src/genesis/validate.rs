@@ -2,35 +2,29 @@ use std::{
     io::{BufWriter, Write},
     path::PathBuf,
 };
-
 #[cfg(test)]
 use std::fs;
-
 use clap::Parser;
 use color_eyre::eyre::{WrapErr as _, eyre};
 use iroha_data_model::{account::address::ChainDiscriminantGuard, name::Name};
 use iroha_genesis::{
     ManifestCrypto, RawGenesisTransaction, genesis_instructions_json, read_genesis_manifest_bytes,
 };
-
 use crate::{
     Outcome, RunArgs,
     genesis::{ConsensusPolicy, build_line_from_env, validate_consensus_mode_for_line},
     tui,
 };
-
 /// Validate a genesis JSON file and report offending fields (e.g., invalid `Name`s)
 #[derive(Clone, Debug, Parser)]
 pub struct Args {
     /// Path to genesis json file
     genesis_file: PathBuf,
 }
-
 struct Offense {
     path: String,
     message: String,
 }
-
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Validating genesis manifest");
@@ -41,7 +35,6 @@ impl<T: Write> RunArgs<T> for Args {
         validate_consensus_manifest(&manifest, build_line_from_env())?;
         let chain_discriminant = manifest.chain_discriminant();
         drop(manifest);
-
         let json: norito::json::Value = norito::json::from_slice(&bytes)?;
         drop(bytes);
         let consensus_mode = json.get("consensus_mode");
@@ -51,7 +44,6 @@ impl<T: Write> RunArgs<T> for Args {
             ));
         }
         let offenses = collect_offenses_from_value(&json, Some(chain_discriminant));
-
         if offenses.is_empty() {
             writeln!(writer, "OK: no offending identifiers found")?;
             tui::success("Genesis manifest validated");
@@ -64,11 +56,9 @@ impl<T: Write> RunArgs<T> for Args {
             tui::warn("Validation failed");
             color_eyre::eyre::bail!("genesis validation failed")
         }
-
         Ok(())
     }
 }
-
 fn validate_consensus_manifest(
     manifest: &RawGenesisTransaction,
     build_line: iroha_version::BuildLine,
@@ -91,19 +81,16 @@ fn validate_consensus_manifest(
     }
     Ok(())
 }
-
 fn collect_offenses_from_value(
     json: &norito::json::Value,
     chain_discriminant: Option<u16>,
 ) -> Vec<Offense> {
     let _chain_discriminant = chain_discriminant.map(ChainDiscriminantGuard::enter);
     let mut offenses: Vec<Offense> = Vec::new();
-
     // Validate top-level fields if present
     validate_parameters("/parameters", json.get("parameters"), &mut offenses);
     validate_instructions_array("/instructions", json.get("instructions"), &mut offenses);
     validate_crypto("/crypto", json.get("crypto"), &mut offenses);
-
     // Validate per-transaction fields
     if let Some(txs) = json.get("transactions").and_then(|v| v.as_array()) {
         for (i, tx) in txs.iter().enumerate() {
@@ -119,10 +106,8 @@ fn collect_offenses_from_value(
             );
         }
     }
-
     offenses
 }
-
 fn validate_parameters(
     path: &str,
     params: Option<&norito::json::Value>,
@@ -145,7 +130,6 @@ fn validate_parameters(
         }
     }
 }
-
 fn validate_crypto(path: &str, value: Option<&norito::json::Value>, offenses: &mut Vec<Offense>) {
     let Some(value) = value else {
         return;
@@ -165,7 +149,6 @@ fn validate_crypto(path: &str, value: Option<&norito::json::Value>, offenses: &m
         }),
     }
 }
-
 fn validate_instructions_array(
     path: &str,
     maybe_instrs: Option<&norito::json::Value>,
@@ -184,11 +167,9 @@ fn validate_instructions_array(
         });
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{io::BufWriter, path::PathBuf};
-
     use iroha_data_model::{
         ChainId,
         parameter::{
@@ -198,9 +179,7 @@ mod tests {
     };
     use iroha_genesis::GenesisBuilder;
     use tempfile::NamedTempFile;
-
     use super::*;
-
     fn manifest_file_with_protocols(versions: &[u32]) -> NamedTempFile {
         let manifest = GenesisBuilder::new_without_executor(ChainId::from("v2-only"), ".")
             .build_raw()
@@ -222,7 +201,6 @@ mod tests {
         .expect("write genesis fixture");
         file
     }
-
     #[test]
     fn validation_rejects_legacy_mixed_empty_and_duplicate_protocol_lists() {
         for versions in [Vec::new(), vec![1], vec![1, 2], vec![2, 1], vec![2, 2]] {
@@ -240,7 +218,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn detects_invalid_custom_parameter_key() {
         let json = norito::json!({
@@ -254,7 +231,6 @@ mod tests {
                 "instructions": []
             }]
         });
-
         // Call internal validator directly to avoid filesystem use in tests
         let offenses = collect_offenses_from_value(&json, None);
         let out = offenses
@@ -265,7 +241,6 @@ mod tests {
         assert!(out.contains("/transactions/0/parameters/custom/bad key"));
         assert!(out.contains("invalid Name"));
     }
-
     #[test]
     fn instruction_validation_respects_manifest_chain_discriminant() {
         let json = norito::json!({
@@ -280,15 +255,12 @@ mod tests {
                 }]
             }]
         });
-
         let offenses = collect_offenses_from_value(&json, Some(369));
-
         assert!(
             offenses.is_empty(),
             "Taira account literals must validate under the manifest chain discriminant"
         );
     }
-
     #[test]
     fn run_rejects_missing_consensus_mode() {
         let manifest = r#"{
@@ -300,14 +272,11 @@ mod tests {
                 {}
             ]
         }"#;
-
         let temp = NamedTempFile::new().expect("create temp file");
         fs::write(temp.path(), manifest).expect("write manifest");
-
         let args = Args {
             genesis_file: temp.path().to_path_buf(),
         };
-
         let mut sink = BufWriter::new(Vec::<u8>::new());
         let err = args
             .run(&mut sink)
@@ -317,7 +286,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn run_accepts_permissioned_on_iroha3() {
         let manifest = GenesisBuilder::new_without_executor(ChainId::from("0"), PathBuf::from("."))
@@ -325,19 +293,15 @@ mod tests {
             .with_consensus_mode(SumeragiConsensusMode::Permissioned)
             .with_consensus_meta();
         let manifest = norito::json::to_json_pretty(&manifest).expect("serialize manifest");
-
         let temp = NamedTempFile::new().expect("create temp file");
         fs::write(temp.path(), manifest).expect("write manifest");
-
         let args = Args {
             genesis_file: temp.path().to_path_buf(),
         };
-
         let mut sink = BufWriter::new(Vec::<u8>::new());
         args.run(&mut sink)
             .expect("permissioned consensus should be allowed on Iroha3");
     }
-
     #[test]
     fn run_accepts_canonical_npos_on_iroha3() {
         let manifest = GenesisBuilder::new_without_executor(
@@ -351,14 +315,11 @@ mod tests {
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize manifest");
-
         let temp = NamedTempFile::new().expect("create temp file");
         fs::write(temp.path(), json).expect("write manifest");
-
         let args = Args {
             genesis_file: temp.path().to_path_buf(),
         };
-
         let mut sink = BufWriter::new(Vec::<u8>::new());
         args.run(&mut sink)
             .expect("canonical NPoS consensus should be accepted on Iroha3");

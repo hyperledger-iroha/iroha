@@ -5,15 +5,12 @@
 //! authenticates the canonical proof digest.  PoTR keeps the exact canonical
 //! dual-signed receipt because that receipt is the exactly-once identity used by
 //! latency repair and downstream audit consumers.
-
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{
     account::AccountId,
     sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
 };
-
 /// First-release proof-outcome projection version.
 pub const PROOF_OUTCOME_RECORD_VERSION_V1: u16 = 1;
 /// Hard item ceiling for one committed proof-outcome event query.
@@ -26,7 +23,6 @@ pub const PROOF_OUTCOME_MAX_POTR_RECEIPT_BYTES_V1: usize = 64 * 1024;
 pub const PROOF_OUTCOME_SIGNER_POLICY_VERSION_V1: u16 = 1;
 /// Maximum canonical ML-DSA provider public-key bytes retained by signer policy.
 pub const PROOF_OUTCOME_MAX_PROVIDER_KEY_BYTES_V1: usize = 8 * 1024;
-
 /// Provider-scoped governed keys used to validate relayed PDP and `PoTR` outcomes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -63,7 +59,6 @@ pub struct ProofOutcomeSignerPolicyV1 {
     /// Inclusive Unix timestamp after which this key set may not authorize new outcomes.
     pub valid_until_unix: u64,
 }
-
 /// Activated provider-scoped proof signer policy with governance provenance.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -81,7 +76,6 @@ pub struct ProofOutcomeSignerPolicyRecordV1 {
     /// Committing block timestamp in milliseconds since Unix epoch.
     pub activated_at_unix_ms: u64,
 }
-
 /// Stable proof protocol discriminator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -95,7 +89,6 @@ pub enum ProofOutcomeKindV1 {
     /// Proof-of-timed-retrieval terminal outcome.
     Potr,
 }
-
 /// Payload-free stable PDP terminal classification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -121,7 +114,6 @@ pub enum PdpOutcomeStatusV1 {
     /// Retained storage was unavailable for safe proof generation.
     StorageUnavailable,
 }
-
 impl PdpOutcomeStatusV1 {
     /// Whether the terminal archive must carry an authenticated proof.
     #[must_use]
@@ -131,7 +123,6 @@ impl PdpOutcomeStatusV1 {
             Self::Accepted | Self::SubmissionLate | Self::FutureTimestamp
         )
     }
-
     /// Whether the terminal archive may carry an authenticated proof.
     #[must_use]
     pub const fn allows_proof(self) -> bool {
@@ -141,7 +132,6 @@ impl PdpOutcomeStatusV1 {
         )
     }
 }
-
 /// Payload-free stable `PoTR` terminal classification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -161,7 +151,6 @@ pub enum PotrOutcomeStatusV1 {
     /// The client cancelled the retrieval.
     ClientCancelled,
 }
-
 /// Detached Ed25519 provider attestation over a canonical PDP proof digest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -176,7 +165,6 @@ pub struct ProofOutcomeEd25519AttestationV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub signature: [u8; 64],
 }
-
 /// Payload-free PDP-specific terminal projection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -212,7 +200,6 @@ pub struct PdpOutcomeProjectionV1 {
     /// Terminal decision time in seconds since Unix epoch.
     pub decided_at_unix: u64,
 }
-
 /// PoTR-specific terminal projection retaining the canonical signed receipt.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -246,7 +233,6 @@ pub struct PotrOutcomeProjectionV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub canonical_signed_receipt: Vec<u8>,
 }
-
 /// Protocol-specific terminal projection.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -260,7 +246,6 @@ pub enum ProofOutcomeProjectionV1 {
     /// `PoTR` metadata and exact dual-signed receipt.
     Potr(PotrOutcomeProjectionV1),
 }
-
 impl ProofOutcomeProjectionV1 {
     /// Return the stable protocol discriminator.
     #[must_use]
@@ -271,7 +256,6 @@ impl ProofOutcomeProjectionV1 {
         }
     }
 }
-
 /// One chain-authoritative proof terminal outcome.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -301,7 +285,6 @@ pub struct ProofOutcomeRecordV1 {
     /// Protocol-specific terminal projection.
     pub projection: ProofOutcomeProjectionV1,
 }
-
 impl ProofOutcomeRecordV1 {
     /// Return the stable proof protocol discriminator.
     #[must_use]
@@ -309,7 +292,6 @@ impl ProofOutcomeRecordV1 {
         self.projection.kind()
     }
 }
-
 /// Finalized block anchor for one coherent proof-outcome query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -323,7 +305,6 @@ pub struct ProofOutcomeFinalizedCursorV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
-
 /// One authoritative proof outcome anchored to finalized chain state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -336,7 +317,6 @@ pub struct ProofOutcomeFinalizedRecordV1 {
     /// Chain-authoritative PDP or `PoTR` outcome.
     pub outcome: ProofOutcomeRecordV1,
 }
-
 /// Exclusive cursor for one committed proof-outcome event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -354,7 +334,6 @@ pub struct ProofOutcomeFinalizedEventCursorV1 {
     /// Proof-outcome event index within the committing block.
     pub event_index: u32,
 }
-
 /// Typed proof-outcome event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -374,7 +353,6 @@ pub struct ProofOutcomeFinalizedEventV1 {
     /// Chain-authoritative proof outcome committed by this event.
     pub outcome: ProofOutcomeRecordV1,
 }
-
 impl ProofOutcomeFinalizedEventV1 {
     /// Return the exclusive cursor identifying this event.
     #[must_use]
@@ -387,7 +365,6 @@ impl ProofOutcomeFinalizedEventV1 {
         }
     }
 }
-
 /// Cursor-bounded page of typed committed proof-outcome events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -404,11 +381,9 @@ pub struct ProofOutcomeFinalizedEventPageV1 {
     /// Exclusive continuation cursor, present only when `has_more` is true.
     pub next_after: Option<ProofOutcomeFinalizedEventCursorV1>,
 }
-
 #[cfg(test)]
 mod tests {
     use super::PdpOutcomeStatusV1;
-
     #[test]
     fn pdp_proof_presence_contract_is_tri_state() {
         for status in [
@@ -419,10 +394,8 @@ mod tests {
             assert!(status.requires_proof());
             assert!(status.allows_proof());
         }
-
         assert!(!PdpOutcomeStatusV1::InvalidProof.requires_proof());
         assert!(PdpOutcomeStatusV1::InvalidProof.allows_proof());
-
         for status in [
             PdpOutcomeStatusV1::DeadlineExpired,
             PdpOutcomeStatusV1::AdmissionRevoked,

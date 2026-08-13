@@ -1,7 +1,5 @@
 //! Focused coverage for the stable map-helper surface.
-
 use std::{collections::HashMap, str::FromStr};
-
 use ivm::{
     IVM,
     kotodama::{
@@ -13,7 +11,6 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
 mod common;
-
 #[test]
 fn ephemeral_map_constructor_is_rejected() {
     let src = r#"
@@ -32,7 +29,6 @@ fn ephemeral_map_constructor_is_rejected() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn get_or_state_map() {
     let src = r#"
@@ -55,7 +51,6 @@ fn get_or_state_map() {
     vm.run().expect("execute");
     assert_eq!(common::decode_i64_register(&vm, 10), 111 * 2 + 9);
 }
-
 #[test]
 fn ir_lower_ensure_state_map() {
     let src = r#"
@@ -85,7 +80,6 @@ fn ir_lower_ensure_state_map() {
     }
     assert!(saw_get && saw_set && saw_branch);
 }
-
 #[test]
 fn semantic_ensure_pointer_requires_explicit_default() {
     let src = r#"
@@ -101,7 +95,6 @@ fn semantic_ensure_pointer_requires_explicit_default() {
             .contains("requires an explicit default for pointer-valued maps")
     );
 }
-
 #[test]
 fn semantic_ensure_non_int_requires_explicit_default() {
     let src = r#"
@@ -114,7 +107,6 @@ fn semantic_ensure_non_int_requires_explicit_default() {
     let err = analyze(&prog).expect_err("non-int map should require explicit default");
     assert!(err.message().contains("auto-default is only available"));
 }
-
 #[test]
 fn ir_lower_ensure_pointer_variants_use_pointer_syscalls() {
     let cases = [
@@ -214,7 +206,6 @@ fn ir_lower_ensure_pointer_variants_use_pointer_syscalls() {
         );
     }
 }
-
 #[test]
 fn runtime_durable_ensure_state_map() {
     let src = r#"
@@ -243,7 +234,6 @@ fn runtime_durable_ensure_state_map() {
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("exec");
     assert_eq!(common::decode_i64_register(&vm, 10), 0);
-
     let host_ref = vm.host_mut_any().unwrap();
     let host = host_ref.downcast_ref::<WsvHost>().unwrap();
     let base = iroha_data_model::prelude::Name::from_str("S").expect("valid Name literal");

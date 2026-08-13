@@ -3,9 +3,7 @@
 //! Petal stream encodes the raw `QrStreamFrame` bytes into a custom optical
 //! grid with calibration anchors so a dedicated scanner can recover frames
 //! from sakura-style animations.
-
 use thiserror::Error;
-
 /// Magic bytes that start every petal stream payload (`PS`).
 pub const PETAL_STREAM_MAGIC: [u8; 2] = [0x50, 0x53];
 /// Petal stream payload format version.
@@ -22,7 +20,6 @@ pub const PETAL_STREAM_GRID_SIZES: &[u16] = &[33, 37, 41, 45, 49, 53, 57, 61, 65
 pub const PETAL_CAPTURE_RATIO_BPS_SCALE: u16 = 10_000;
 /// Default minimum success ratio for production capture gates (95%).
 pub const PETAL_CAPTURE_DEFAULT_MIN_SUCCESS_RATIO_BPS: u16 = 9_500;
-
 /// Errors raised while encoding or decoding petal stream frames.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PetalStreamError {
@@ -42,7 +39,6 @@ pub enum PetalStreamError {
     #[error("petal stream checksum mismatch")]
     ChecksumMismatch,
 }
-
 /// Encoder/decoder options for the petal stream grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PetalStreamOptions {
@@ -53,7 +49,6 @@ pub struct PetalStreamOptions {
     /// Anchor size in cells.
     pub anchor_size: u8,
 }
-
 impl Default for PetalStreamOptions {
     fn default() -> Self {
         Self {
@@ -63,7 +58,6 @@ impl Default for PetalStreamOptions {
         }
     }
 }
-
 /// Bit grid representing a petal stream frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PetalStreamGrid {
@@ -72,7 +66,6 @@ pub struct PetalStreamGrid {
     /// Row-major bits for each cell.
     pub cells: Vec<bool>,
 }
-
 impl PetalStreamGrid {
     /// Create a grid from raw cells.
     ///
@@ -86,7 +79,6 @@ impl PetalStreamGrid {
         }
         Ok(Self { grid_size, cells })
     }
-
     /// Read a cell value at (x, y).
     pub fn get(&self, x: u16, y: u16) -> Option<bool> {
         if x >= self.grid_size || y >= self.grid_size {
@@ -96,7 +88,6 @@ impl PetalStreamGrid {
         self.cells.get(idx).copied()
     }
 }
-
 /// Sampled luminance grid for decoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PetalStreamSampleGrid {
@@ -105,7 +96,6 @@ pub struct PetalStreamSampleGrid {
     /// Row-major samples per cell (0..=255).
     pub samples: Vec<u8>,
 }
-
 impl PetalStreamSampleGrid {
     /// Create a sample grid from raw values.
     ///
@@ -122,7 +112,6 @@ impl PetalStreamSampleGrid {
         Ok(Self { grid_size, samples })
     }
 }
-
 /// Deterministic capture profile used to score Petal Stream readability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PetalStreamCaptureProfile {
@@ -135,7 +124,6 @@ pub struct PetalStreamCaptureProfile {
     /// Per-cell deterministic luminance jitter applied to each attempt.
     pub luminance_jitter: u8,
 }
-
 impl Default for PetalStreamCaptureProfile {
     fn default() -> Self {
         Self {
@@ -146,7 +134,6 @@ impl Default for PetalStreamCaptureProfile {
         }
     }
 }
-
 /// Deterministic capture score for a Petal Stream payload/profile pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PetalStreamCaptureScore {
@@ -155,7 +142,6 @@ pub struct PetalStreamCaptureScore {
     /// Number of attempts that decoded back to the original payload.
     pub successes: u16,
 }
-
 impl PetalStreamCaptureScore {
     /// Return the success ratio in basis points.
     pub fn success_ratio_bps(&self) -> u16 {
@@ -165,7 +151,6 @@ impl PetalStreamCaptureScore {
         let numerator = u32::from(self.successes) * u32::from(PETAL_CAPTURE_RATIO_BPS_SCALE);
         u16::try_from(numerator / u32::from(self.attempts)).unwrap_or(PETAL_CAPTURE_RATIO_BPS_SCALE)
     }
-
     /// Return whether the score meets the requested minimum success ratio.
     ///
     /// # Errors
@@ -182,7 +167,6 @@ impl PetalStreamCaptureScore {
         Ok(self.success_ratio_bps() >= min_success_ratio_bps)
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CellRole {
     Border,
@@ -190,11 +174,9 @@ enum CellRole {
     AnchorLight,
     Data,
 }
-
 /// Encoder for petal stream frames.
 #[derive(Debug, Clone, Copy)]
 pub struct PetalStreamEncoder;
-
 impl PetalStreamEncoder {
     /// Encode payload bytes into a petal stream bit grid.
     ///
@@ -214,12 +196,10 @@ impl PetalStreamEncoder {
         if bits_needed > capacity {
             return Err(PetalStreamError::CapacityExceeded);
         }
-
         let header = encode_header(payload)?;
         let mut bits = Vec::with_capacity(bits_needed);
         push_bytes_as_bits(&header, &mut bits);
         push_bytes_as_bits(payload, &mut bits);
-
         let mut cells = vec![false; grid_size as usize * grid_size as usize];
         let mut bit_idx = 0usize;
         for y in 0..grid_size {
@@ -237,15 +217,12 @@ impl PetalStreamEncoder {
                 }
             }
         }
-
         Ok(PetalStreamGrid { grid_size, cells })
     }
 }
-
 /// Decoder for petal stream frames.
 #[derive(Debug, Clone, Copy)]
 pub struct PetalStreamDecoder;
-
 impl PetalStreamDecoder {
     /// Decode payload bytes from a petal stream bit grid.
     ///
@@ -274,7 +251,6 @@ impl PetalStreamDecoder {
         let bytes = bits_to_bytes(&bits);
         decode_payload(&bytes)
     }
-
     /// Decode payload bytes from a sampled luminance grid.
     ///
     /// # Errors
@@ -328,7 +304,6 @@ impl PetalStreamDecoder {
         Self::decode_grid(&grid, options)
     }
 }
-
 /// Score deterministic capture readability for a payload.
 ///
 /// # Errors
@@ -341,7 +316,6 @@ pub fn score_petal_capture_profile(
 ) -> Result<PetalStreamCaptureScore, PetalStreamError> {
     score_petal_capture_profile_with_seed(payload, options, profile, 0)
 }
-
 /// Score deterministic capture readability for a payload with an explicit seed.
 ///
 /// The seed is mixed only into the deterministic luminance perturbation stream;
@@ -373,7 +347,6 @@ pub fn score_petal_capture_profile_with_seed(
         successes,
     })
 }
-
 /// Render one deterministic capture-attempt sample grid for a Petal bit grid.
 ///
 /// The `attempt` and `seed` values select the deterministic luminance
@@ -392,7 +365,6 @@ pub fn render_petal_capture_samples_with_seed(
     validate_capture_profile(profile)?;
     render_capture_samples(grid, profile, attempt, seed)
 }
-
 fn validate_capture_profile(profile: PetalStreamCaptureProfile) -> Result<(), PetalStreamError> {
     if profile.attempts == 0 {
         return Err(PetalStreamError::InvalidOptions(
@@ -406,7 +378,6 @@ fn validate_capture_profile(profile: PetalStreamCaptureProfile) -> Result<(), Pe
     }
     Ok(())
 }
-
 fn render_capture_samples(
     grid: &PetalStreamGrid,
     profile: PetalStreamCaptureProfile,
@@ -430,7 +401,6 @@ fn render_capture_samples(
     }
     PetalStreamSampleGrid::new(grid.grid_size, samples)
 }
-
 fn apply_luminance_jitter(base: u8, jitter: u8, index: usize, attempt: u16, seed: u64) -> u8 {
     if jitter == 0 {
         return base;
@@ -450,7 +420,6 @@ fn apply_luminance_jitter(base: u8, jitter: u8, index: usize, attempt: u16, seed
     let value = i16::from(base) + offset;
     u8::try_from(value.clamp(0, i16::from(u8::MAX))).expect("clamped luminance fits u8")
 }
-
 fn resolve_grid_size(
     payload_len: usize,
     options: PetalStreamOptions,
@@ -483,7 +452,6 @@ fn resolve_grid_size(
     }
     Err(PetalStreamError::CapacityExceeded)
 }
-
 fn resolve_grid_size_for_decode(
     grid_size: u16,
     options: PetalStreamOptions,
@@ -496,7 +464,6 @@ fn resolve_grid_size_for_decode(
     }
     Ok(grid_size)
 }
-
 fn capacity_bits(size_cells: u16, options: PetalStreamOptions) -> Result<usize, PetalStreamError> {
     let border = i32::from(options.border);
     let anchor = i32::from(options.anchor_size);
@@ -518,7 +485,6 @@ fn capacity_bits(size_cells: u16, options: PetalStreamOptions) -> Result<usize, 
     let data_cells = total.saturating_sub(border_cells + anchor_cells);
     Ok(data_cells)
 }
-
 fn cell_role(x: u16, y: u16, grid_size: u16, options: PetalStreamOptions) -> CellRole {
     let border = u16::from(options.border);
     let anchor = u16::from(options.anchor_size);
@@ -545,7 +511,6 @@ fn cell_role(x: u16, y: u16, grid_size: u16, options: PetalStreamOptions) -> Cel
     }
     CellRole::Data
 }
-
 fn encode_header(payload: &[u8]) -> Result<Vec<u8>, PetalStreamError> {
     let payload_len =
         u16::try_from(payload.len()).map_err(|_| PetalStreamError::PayloadTooLarge)?;
@@ -557,7 +522,6 @@ fn encode_header(payload: &[u8]) -> Result<Vec<u8>, PetalStreamError> {
     header.extend_from_slice(&crc.to_le_bytes());
     Ok(header)
 }
-
 fn decode_payload(bytes: &[u8]) -> Result<Vec<u8>, PetalStreamError> {
     if bytes.len() < PETAL_STREAM_HEADER_LEN {
         return Err(PetalStreamError::InvalidHeader("header too short"));
@@ -584,7 +548,6 @@ fn decode_payload(bytes: &[u8]) -> Result<Vec<u8>, PetalStreamError> {
     }
     Ok(payload)
 }
-
 fn push_bytes_as_bits(bytes: &[u8], out: &mut Vec<bool>) {
     for &byte in bytes {
         for bit in (0..8).rev() {
@@ -592,7 +555,6 @@ fn push_bytes_as_bits(bytes: &[u8], out: &mut Vec<bool>) {
         }
     }
 }
-
 fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bits.len() / 8 + 1);
     for chunk in bits.chunks(8) {
@@ -606,7 +568,6 @@ fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
     }
     out
 }
-
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
     for &byte in bytes {
@@ -622,11 +583,9 @@ fn crc32(bytes: &[u8]) -> u32 {
     }
     crc ^ 0xFFFF_FFFF
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn petal_grid_roundtrip() {
         let payload = b"petal-stream-payload";
@@ -636,7 +595,6 @@ mod tests {
             PetalStreamDecoder::decode_grid(&grid, PetalStreamOptions::default()).expect("decode");
         assert_eq!(decoded, payload);
     }
-
     #[test]
     fn petal_grid_rejects_crc_mismatch() {
         let payload = b"petal-stream-payload";
@@ -669,7 +627,6 @@ mod tests {
             .expect_err("decode should fail");
         assert_eq!(err, PetalStreamError::ChecksumMismatch);
     }
-
     #[test]
     fn petal_samples_decode_roundtrip() {
         let payload = b"petal-stream-samples";
@@ -686,7 +643,6 @@ mod tests {
                 .expect("decode");
         assert_eq!(decoded, payload);
     }
-
     #[test]
     fn petal_auto_grid_selects_candidate() {
         let payload = vec![0u8; 128];
@@ -694,7 +650,6 @@ mod tests {
             .expect("encode");
         assert!(PETAL_STREAM_GRID_SIZES.contains(&grid.grid_size));
     }
-
     #[test]
     fn default_capture_profile_meets_production_gate() {
         let payload = b"sora-temple-capture-baseline";
@@ -704,7 +659,6 @@ mod tests {
             PetalStreamCaptureProfile::default(),
         )
         .expect("score profile");
-
         assert_eq!(
             score.attempts,
             PetalStreamCaptureProfile::default().attempts
@@ -717,7 +671,6 @@ mod tests {
                 .expect("valid threshold")
         );
     }
-
     #[test]
     fn seeded_capture_profile_is_deterministic_and_default_seed_matches_unseeded() {
         let payload = b"sora-temple-capture-baseline";
@@ -731,11 +684,9 @@ mod tests {
             score_petal_capture_profile_with_seed(payload, options, profile, 42).expect("seeded b");
         let seed_zero =
             score_petal_capture_profile_with_seed(payload, options, profile, 0).expect("seed zero");
-
         assert_eq!(seeded_a, seeded_b);
         assert_eq!(seed_zero, unseeded);
     }
-
     #[test]
     fn luminance_jitter_folds_seed_words_and_clamps() {
         assert_eq!(
@@ -745,15 +696,12 @@ mod tests {
         assert_eq!(apply_luminance_jitter(0, u8::MAX, 0, 0, 0), 0);
         assert_eq!(apply_luminance_jitter(u8::MAX, u8::MAX, 42, 0, 0), u8::MAX);
     }
-
     #[test]
     fn luminance_jitter_folds_high_seed_bits_without_truncating() {
         let low_seed = apply_luminance_jitter(128, 24, 7, 5, 1);
         let high_seed = apply_luminance_jitter(128, 24, 7, 5, 2_u64 << 32);
-
         assert_ne!(low_seed, high_seed);
     }
-
     #[test]
     fn low_contrast_capture_profile_fails_gate() {
         let payload = b"sora-temple-low-contrast";
@@ -768,7 +716,6 @@ mod tests {
             },
         )
         .expect("score profile");
-
         assert_eq!(score.successes, 0);
         assert_eq!(score.success_ratio_bps(), 0);
         assert!(
@@ -777,7 +724,6 @@ mod tests {
                 .expect("valid threshold")
         );
     }
-
     #[test]
     fn capture_profile_rejects_invalid_options() {
         let err = score_petal_capture_profile(
@@ -793,7 +739,6 @@ mod tests {
             err,
             PetalStreamError::InvalidOptions("capture attempts must be > 0")
         );
-
         let err = score_petal_capture_profile(
             b"payload",
             PetalStreamOptions::default(),
@@ -808,7 +753,6 @@ mod tests {
             err,
             PetalStreamError::InvalidOptions("dark_luma must be lower than light_luma")
         );
-
         let err = PetalStreamCaptureScore {
             attempts: 1,
             successes: 1,
@@ -820,21 +764,18 @@ mod tests {
             PetalStreamError::InvalidOptions("min_success_ratio_bps exceeds 100%")
         );
     }
-
     #[test]
     fn render_capture_samples_with_seed_is_public_and_deterministic() {
         let payload = b"sora-temple-capture-baseline";
         let grid = PetalStreamEncoder::encode_grid(payload, PetalStreamOptions::default())
             .expect("encode");
         let profile = PetalStreamCaptureProfile::default();
-
         let samples_a =
             render_petal_capture_samples_with_seed(&grid, profile, 3, 99).expect("samples a");
         let samples_b =
             render_petal_capture_samples_with_seed(&grid, profile, 3, 99).expect("samples b");
         let samples_other_attempt =
             render_petal_capture_samples_with_seed(&grid, profile, 4, 99).expect("samples c");
-
         assert_eq!(samples_a, samples_b);
         assert_ne!(samples_a, samples_other_attempt);
         let decoded = PetalStreamDecoder::decode_samples(&samples_a, PetalStreamOptions::default())

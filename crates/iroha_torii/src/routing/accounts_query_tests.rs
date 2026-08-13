@@ -1,7 +1,6 @@
 #[cfg(all(test, feature = "app_api"))]
 mod accounts_query_tests {
     use std::sync::Arc;
-
     use axum::http::StatusCode;
     use http_body_util::BodyExt as _;
     use iroha_core::{
@@ -11,9 +10,7 @@ mod accounts_query_tests {
     };
     use iroha_crypto::Algorithm;
     use iroha_data_model::prelude as dm;
-
     use super::*;
-
     fn checked_accounts_query_authority(seed: u8, context: &'static str) -> dm::AccountId {
         dm::AccountId::new(
             checked_routing_fixture_keypair(seed, Algorithm::Ed25519, context)
@@ -21,7 +18,6 @@ mod accounts_query_tests {
                 .clone(),
         )
     }
-
     #[tokio::test]
     async fn accounts_query_streams_without_sort() {
         let kura = Kura::blank_kura_for_testing();
@@ -45,7 +41,6 @@ mod accounts_query_tests {
             kura,
             query,
         ));
-
         // Query with limit + fetch_size smaller than number of accounts.
         let env = crate::filter::QueryEnvelope {
             query: None,
@@ -74,7 +69,6 @@ mod accounts_query_tests {
         assert_eq!(doc["items"].as_array().unwrap().len(), 2);
         assert_eq!(doc["total"].as_u64(), Some(4));
     }
-
     #[tokio::test]
     async fn accounts_query_filter_accepts_canonical_and_alias_and_rejects_non_canonical_i105_literals()
      {
@@ -86,7 +80,6 @@ mod accounts_query_tests {
             checked_accounts_query_authority(0xB6, "derive accounts-query alias executor key");
         let exec_id = exec_authority.clone();
         let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
-
         let labelled_authority =
             checked_accounts_query_authority(0xB7, "derive accounts-query labelled account key");
         let account_id = labelled_authority.clone();
@@ -109,10 +102,8 @@ mod accounts_query_tests {
             kura,
             query,
         ));
-
         let expected = account_id.account().to_string();
         let non_canonical_i105_literal = expected.replacen("sora", "ｓｏｒａ", 1);
-
         let alias_literal = label
             .to_literal(&state.nexus_snapshot().dataspace_catalog)
             .expect("canonical alias literal");
@@ -173,7 +164,6 @@ mod accounts_query_tests {
             alias_ids.iter().all(|id| !id.contains('@')),
             "alias queries must still return canonical account ids, got {alias_ids:?}"
         );
-
         let canonical_env = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
@@ -230,7 +220,6 @@ mod accounts_query_tests {
             ids.iter().all(|id| !id.contains('@')),
             "response should expose canonical ids, got {ids:?}"
         );
-
         let i105_env = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
@@ -258,7 +247,6 @@ mod accounts_query_tests {
             "non-canonical I105 literal `{non_canonical_i105_literal}` must be rejected"
         );
     }
-
     #[tokio::test]
     async fn accounts_list_filter_accepts_alias_and_returns_canonical_i105_ids() {
         let kura = Kura::blank_kura_for_testing();
@@ -269,7 +257,6 @@ mod accounts_query_tests {
             checked_accounts_query_authority(0xB8, "derive accounts-list alias executor key");
         let exec_id = exec_authority.clone();
         let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
-
         let labelled_authority =
             checked_accounts_query_authority(0xB9, "derive accounts-list labelled account key");
         let account_id = labelled_authority.clone();
@@ -292,7 +279,6 @@ mod accounts_query_tests {
             kura,
             query,
         ));
-
         let expected = account_id.account().to_string();
         let alias_literal = label
             .to_literal(&state.nexus_snapshot().dataspace_catalog)
@@ -314,7 +300,6 @@ mod accounts_query_tests {
             sort: None,
             count_mode: None,
         };
-
         let response = handle_v1_accounts(
             state,
             crate::NoritoQuery(params),
@@ -355,7 +340,6 @@ mod accounts_query_tests {
             "GET /v1/accounts must still emit canonical account ids, got {ids:?}"
         );
     }
-
     #[tokio::test]
     async fn accounts_query_aggregate_groups_by_primary_alias_domain() {
         let kura = Kura::blank_kura_for_testing();
@@ -366,14 +350,12 @@ mod accounts_query_tests {
             checked_accounts_query_authority(0xBA, "derive accounts-aggregate executor key");
         let exec_id = exec_authority.clone();
         let domain = dm::Domain::new(domain_id).build(&exec_authority);
-
         let hbl_authority =
             checked_accounts_query_authority(0xBB, "derive accounts-aggregate hbl account key");
         let hbl_id = hbl_authority.clone();
         let ubl_authority =
             checked_accounts_query_authority(0xBC, "derive accounts-aggregate ubl account key");
         let ubl_id = ubl_authority.clone();
-
         let state = Arc::new(State::new_for_testing(
             World::with(
                 [domain],
@@ -389,7 +371,6 @@ mod accounts_query_tests {
         ));
         bind_account_alias_for_test(&state, &hbl_id, "alice@hbl.universal");
         bind_account_alias_for_test(&state, &ubl_id, "bob@ubl.universal");
-
         let env = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::In(
@@ -427,7 +408,6 @@ mod accounts_query_tests {
             fetch_size: None,
             count_mode: Some("exact".to_owned()),
         };
-
         let response = handle_v1_accounts_query(
             state,
             crate::utils::extractors::NoritoJson(env),
@@ -444,11 +424,9 @@ mod accounts_query_tests {
             .expect("response bytes")
             .to_bytes();
         let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid JSON");
-
         assert_eq!(doc["total"].as_u64(), Some(2));
         assert!(doc["indexed_height"].as_u64().is_some());
         assert!(doc["indexed_block_hash"].is_string() || doc["indexed_block_hash"].is_null());
-
         let items = doc["items"].as_array().expect("items array");
         assert_eq!(items.len(), 2);
         assert_eq!(

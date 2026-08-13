@@ -1,3 +1,6 @@
+use crate::sumeragi::v2_lifecycle_coordinator::{
+    reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
+};
 #[test]
 fn exact_install_borrow_and_take_are_one_shot() {
     let work = concrete(effect(1), 91);
@@ -8,7 +11,6 @@ fn exact_install_borrow_and_take_are_one_shot() {
     let lease = lease(owner, 1, slot, digest);
     let expected = work.effect().clone();
     let mut registry = ConcreteLifecycleWorkRegistry::default();
-
     registry
         .install(address, digest, work)
         .expect("install exact work");
@@ -32,7 +34,6 @@ fn exact_install_borrow_and_take_are_one_shot() {
     ));
     assert!(registry.is_empty());
 }
-
 #[test]
 fn certified_fetch_execution_rejects_unclosed_or_inexact_leases_without_mutation() {
     let work = concrete(effect(0x31), 0x31);
@@ -45,21 +46,18 @@ fn certified_fetch_execution_rejects_unclosed_or_inexact_leases_without_mutation
     registry
         .install(address, digest, work)
         .expect("install still-pending work");
-
     let store_lease = lease(owner, 0x31, slot, digest);
     assert!(matches!(
         registry.prepare_certified_fetch_execution(&store_lease, slot),
         Err(CertifiedFetchExecutionError::InvalidLeaseShape)
     ));
     assert!(registry.exactly_contains(address, &expected));
-
     let exact_fetch_lease = fetch_lease(owner, 0x31, slot, digest);
     assert!(matches!(
         registry.prepare_certified_fetch_execution(&exact_fetch_lease, slot),
         Err(CertifiedFetchExecutionError::WrongWorkKind)
     ));
     assert!(registry.exactly_contains(address, &expected));
-
     let wrong_digest_lease = fetch_lease(owner, 0x31, slot, LifecycleDigest::new([0xFF; 32]));
     assert!(matches!(
         registry.prepare_certified_fetch_execution(&wrong_digest_lease, slot),
@@ -68,7 +66,6 @@ fn certified_fetch_execution_rejects_unclosed_or_inexact_leases_without_mutation
         ))
     ));
     assert!(registry.exactly_contains(address, &expected));
-
     let other_slot =
         super::super::PhysicalSlotId::for_capacity(super::super::CapacityClass::Effect, 1);
     let mut multi_slot_lease = exact_fetch_lease.clone();
@@ -86,7 +83,6 @@ fn certified_fetch_execution_rejects_unclosed_or_inexact_leases_without_mutation
     assert!(registry.exactly_contains(address, &expected));
     assert_eq!(registry.len(), 1);
 }
-
 #[test]
 fn installation_unwind_removes_unpublished_work() {
     let work = concrete(effect(0x21), 0x21);
@@ -95,7 +91,6 @@ fn installation_unwind_removes_unpublished_work() {
     let slot = super::super::PhysicalSlotId::for_capacity(super::super::CapacityClass::Effect, 0);
     let address = ConcreteWorkAddress::new(owner, 0x21, slot).expect("valid address");
     let mut registry = ConcreteLifecycleWorkRegistry::default();
-
     let unwind = catch_unwind(AssertUnwindSafe(|| {
         let _ = registry.install_before_publication(address, digest, work, || -> Result<(), ()> {
             panic!("injected admission publication unwind")
@@ -104,7 +99,6 @@ fn installation_unwind_removes_unpublished_work() {
     assert!(unwind.is_err());
     assert!(registry.is_empty());
 }
-
 #[test]
 fn mismatches_and_duplicates_never_remove_or_overwrite() {
     let first = concrete(effect(2), 92);
@@ -117,14 +111,12 @@ fn mismatches_and_duplicates_never_remove_or_overwrite() {
     registry
         .install(address, digest, first)
         .expect("install first work");
-
     let duplicate = concrete(effect(3), 93);
     assert!(matches!(
         registry.install(address, duplicate.digest, duplicate),
         Err((RegistryError::Occupied, _))
     ));
     assert_eq!(registry.len(), 1);
-
     let wrong_owner = owner(9, 2);
     let wrong_owner_lease = lease(wrong_owner, 2, slot, digest);
     assert!(matches!(
@@ -158,7 +150,6 @@ fn mismatches_and_duplicates_never_remove_or_overwrite() {
         .expect("exact rollback returns work");
     assert!(registry.is_empty());
 }
-
 #[test]
 fn physical_digest_does_not_alias_distinct_logical_addresses() {
     let first = concrete(effect(4), 94);
@@ -179,7 +170,6 @@ fn physical_digest_does_not_alias_distinct_logical_addresses() {
         .expect("install second logical address");
     assert_eq!(registry.len(), 2);
 }
-
 #[test]
 fn install_rejects_a_foreign_causal_owner_without_consuming_work() {
     let work = concrete(effect(7), 97);
@@ -195,7 +185,6 @@ fn install_rejects_a_foreign_causal_owner_without_consuming_work() {
     assert!(returned.1.validate_exact());
     assert!(registry.is_empty());
 }
-
 #[test]
 fn exact_replacement_commits_or_restores_the_incumbent_atomically() {
     let incumbent = concrete(effect_at_generation(0xB1, 7), 0xB7);
@@ -213,7 +202,6 @@ fn exact_replacement_commits_or_restores_the_incumbent_atomically() {
     registry
         .install(address, incumbent_digest, incumbent)
         .expect("install replacement incumbent");
-
     let error = registry
         .replace_before_publication(
             address,
@@ -230,7 +218,6 @@ fn exact_replacement_commits_or_restores_the_incumbent_atomically() {
     assert_eq!(returned.effect(), &replacement_effect);
     assert!(returned.validate_exact());
     assert!(registry.exactly_contains(address, &incumbent_effect));
-
     let (published, retired) = registry
         .replace_before_publication(
             address,
@@ -246,7 +233,6 @@ fn exact_replacement_commits_or_restores_the_incumbent_atomically() {
     assert!(registry.exactly_contains(address, &replacement_effect));
     assert_eq!(registry.len(), 1);
 }
-
 #[test]
 fn replacement_unwind_restores_the_incumbent() {
     let incumbent = concrete(effect_at_generation(0xD1, 9), 0xD9);
@@ -262,7 +248,6 @@ fn replacement_unwind_restores_the_incumbent() {
     registry
         .install(address, incumbent_digest, incumbent)
         .expect("install unwind incumbent");
-
     let unwind = catch_unwind(AssertUnwindSafe(|| {
         let _ = registry.replace_before_publication(
             address,
@@ -276,7 +261,6 @@ fn replacement_unwind_restores_the_incumbent() {
     assert!(registry.exactly_contains(address, &incumbent_effect));
     assert_eq!(registry.len(), 1);
 }
-
 #[test]
 fn replacement_validation_never_changes_the_incumbent() {
     let incumbent = concrete(effect_at_generation(0xC1, 8), 0xC8);
@@ -291,7 +275,6 @@ fn replacement_validation_never_changes_the_incumbent() {
     registry
         .install(address, incumbent_digest, incumbent)
         .expect("install validation incumbent");
-
     let wrong_digest = LifecycleDigest::new([0xFF; 32]);
     let error = registry
         .replace_before_publication(
@@ -309,7 +292,6 @@ fn replacement_validation_never_changes_the_incumbent() {
     assert_eq!(returned.digest(), replacement_digest);
     assert!(registry.exactly_contains(address, &incumbent_effect));
     assert_eq!(registry.len(), 1);
-
     let foreign_owner = owner(0xEE, 12);
     let foreign_address =
         ConcreteWorkAddress::new(foreign_owner, 12, slot).expect("syntactic foreign address");
@@ -329,7 +311,6 @@ fn replacement_validation_never_changes_the_incumbent() {
     assert!(registry.exactly_contains(address, &incumbent_effect));
     assert_eq!(registry.len(), 1);
 }
-
 #[test]
 fn mismatched_pending_binding_never_becomes_registry_work() {
     let first = effect(5);
@@ -356,7 +337,6 @@ fn mismatched_pending_binding_never_becomes_registry_work() {
     assert!(!returned_pending.exactly_binds_adapter_effect(&returned_effect));
     assert!(ConcreteLifecycleWorkRegistry::default().is_empty());
 }
-
 #[test]
 fn direct_signed_replay_pre_admission_is_closed_exact_and_drop_inert() {
     let tag = EventTag::new(7, 2, Generation::new(1));
@@ -379,7 +359,6 @@ fn direct_signed_replay_pre_admission_is_closed_exact_and_drop_inert() {
     ));
     drop(broadcast);
     assert_eq!(format!("{registry:?}"), before);
-
     let second_vote = direct_signed_vote(0xD1, 0xD3);
     let report = AdapterEffect::ReportEquivocation {
         evidence: crate::sumeragi::v2::AdapterEquivocationEvidence::vote_for_test(
@@ -399,7 +378,6 @@ fn direct_signed_replay_pre_admission_is_closed_exact_and_drop_inert() {
     ));
     drop(report);
     assert_eq!(format!("{registry:?}"), before);
-
     let unsupported = effect(0xD4);
     let AdapterEffect::StoreBody {
         tag: unsupported_tag,
@@ -415,10 +393,9 @@ fn direct_signed_replay_pre_admission_is_closed_exact_and_drop_inert() {
     );
     assert_eq!(format!("{registry:?}"), before);
 }
-
 #[test]
 fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -481,7 +458,7 @@ fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
         "the inert prerequisite has no production admission caller"
     );
     for outside in [
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_effects.rs"),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
@@ -489,10 +466,9 @@ fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
         assert!(!outside.contains("PreparedLiveWalReplayPreAdmission"));
     }
 }
-
 #[test]
 fn direct_signed_replay_pre_admission_surface_is_move_only_inert_and_unwired() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -574,10 +550,9 @@ fn direct_signed_replay_pre_admission_surface_is_move_only_inert_and_unwired() {
         assert!(!caller.contains("PreparedDirectSignedReplayPreAdmission"));
     }
 }
-
 #[test]
 fn remote_proposal_replay_pre_admission_is_closed_exact_and_unwired() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -678,10 +653,9 @@ fn remote_proposal_replay_pre_admission_is_closed_exact_and_unwired() {
         assert!(!caller.contains("PreparedRemoteProposalFetchReplayPreAdmission"));
     }
 }
-
 #[test]
 fn invalid_body_replay_pre_admission_is_closed_exact_and_unwired() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -751,7 +725,7 @@ fn invalid_body_replay_pre_admission_is_closed_exact_and_unwired() {
         "only the fixed Ready registry join may invoke the adapter seal"
     );
     for outside in [
-        include_str!("../v2_lifecycle_ledger.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
         include_str!("../v2_effects.rs"),
         include_str!("../v2_worker.rs"),
         include_str!("../v2_runner.rs"),
@@ -764,10 +738,9 @@ fn invalid_body_replay_pre_admission_is_closed_exact_and_unwired() {
         assert!(!outside.contains("InvalidBodyReportReplayEvidenceV1"));
     }
 }
-
 #[test]
 fn live_validate_sign_join_is_linear_opaque_and_unwired_from_runner() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -804,7 +777,6 @@ fn live_validate_sign_join_is_linear_opaque_and_unwired_from_runner() {
             "Validate Sign predecessor authority exposed {forbidden}"
         );
     }
-
     let join = production
         .split("pub(super) fn seal_live_wal_validate_sign(")
         .nth(1)
@@ -860,7 +832,6 @@ fn live_validate_sign_join_is_linear_opaque_and_unwired_from_runner() {
         assert!(!caller.contains("PreparedReadyDurableValidatePersistedSignPreAdmission"));
     }
 }
-
 #[test]
 fn sealed_validate_no_successor_branch_inventory_is_exact() {
     for publication in [
@@ -919,10 +890,9 @@ fn sealed_validate_no_successor_branch_inventory_is_exact() {
         }
     }
 }
-
 #[test]
 fn registry_remains_inert_and_scheduler_free() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("#[cfg(test)]")
         .next()
@@ -976,10 +946,9 @@ fn registry_remains_inert_and_scheduler_free() {
     assert!(!export.contains("ReadyDurableValidateExecutionError"));
     assert!(!coordinator.contains("pub(crate) use wal_recovery"));
 }
-
 #[test]
 fn installed_body_projection_and_recovered_prepare_fixture_keep_authority_closed() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let permit = source
         .split("pub(in crate::sumeragi) struct InstalledBodyCandidateProjectionPermit")
         .nth(1)
@@ -1002,7 +971,6 @@ fn installed_body_projection_and_recovered_prepare_fixture_keep_authority_closed
     }
     assert!(!permit.contains("derive(Clone"));
     assert!(!permit.contains("derive(Copy"));
-
     let fixture = source
         .split("fn install_remote_proposal_validate_completion_for_test")
         .nth(1)
@@ -1036,8 +1004,11 @@ fn installed_body_projection_and_recovered_prepare_fixture_keep_authority_closed
             "recovered Prepare fixture fabricated authority through {forbidden}"
         );
     }
-
-    let replay = include_str!("../v2_lifecycle_replay_authority.rs");
+    let replay = include_str!("../v2_lifecycle_replay_authority.rs").replacen(
+        "include!(\"v2_lifecycle_replay_authority_certified_body.rs\");\n",
+        include_str!("../v2_lifecycle_replay_authority_certified_body.rs"),
+        1,
+    );
     for required in [
         "fn project_installed_store_candidate(",
         "fn project_installed_validate_candidate(",
@@ -1052,7 +1023,6 @@ fn installed_body_projection_and_recovered_prepare_fixture_keep_authority_closed
             "installed-body replay projection omitted {required}"
         );
     }
-
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
@@ -1103,10 +1073,9 @@ fn installed_body_projection_and_recovered_prepare_fixture_keep_authority_closed
         );
     }
 }
-
 #[test]
 fn certified_fetch_execution_surface_is_borrow_bound_and_commit_free() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let execution_impl = source
         .split("impl<'a> PreparedCertifiedFetchExecution<'a>")
         .nth(1)
@@ -1125,7 +1094,6 @@ fn certified_fetch_execution_surface_is_borrow_bound_and_commit_free() {
         !execution_impl.contains("for_test"),
         "the execution token must not acquire a raw test mint"
     );
-
     let successor_declaration = source
         .split("pub(super) struct PreparedCertifiedFetchStoreSuccessor<'a>")
         .nth(1)
@@ -1140,15 +1108,13 @@ fn certified_fetch_execution_surface_is_borrow_bound_and_commit_free() {
     assert!(successor_declaration.contains("_expected_manifest_hash"));
     assert!(!successor_declaration.contains("derive(Clone"));
 }
-
 #[test]
 fn durable_store_execution_surface_is_closed_borrow_bound_and_inert() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("registry has one production prefix");
-
     let carrier = production
         .split("struct DurableStoreBody {")
         .nth(1)
@@ -1169,7 +1135,6 @@ fn durable_store_execution_surface_is_closed_borrow_bound_and_inert() {
         );
     }
     assert!(!carrier.contains("derive(Clone"));
-
     let validation = production
         .split("impl DurableStoreBody {")
         .nth(1)
@@ -1192,7 +1157,6 @@ fn durable_store_execution_surface_is_closed_borrow_bound_and_inert() {
             "durable Store validation omitted {required}"
         );
     }
-
     let preparation = production
         .split("pub(super) fn prepare_durable_store_execution(")
         .nth(1)
@@ -1220,7 +1184,6 @@ fn durable_store_execution_surface_is_closed_borrow_bound_and_inert() {
     assert!(!preparation.contains("projection::admission_request("));
     assert!(!preparation.contains(".insert("));
     assert!(!preparation.contains(".remove("));
-
     let execution_impl = production
         .split("impl<'a> PreparedDurableStoreExecution<'a>")
         .nth(1)
@@ -1255,7 +1218,6 @@ fn durable_store_execution_surface_is_closed_borrow_bound_and_inert() {
             "durable Store token acquired forbidden authority: {forbidden}"
         );
     }
-
     let validate_token = production
         .split("pub(super) struct PreparedDurableStoreValidateSuccessor<'a>")
         .nth(1)
@@ -1269,7 +1231,6 @@ fn durable_store_execution_surface_is_closed_borrow_bound_and_inert() {
     assert!(validate_token.contains("_durable_body: DurableBodyReceipt"));
     assert!(validate_token.contains("_expected_manifest_hash"));
     assert!(!validate_token.contains("derive(Clone"));
-
     let fetch_execution = production
         .split("impl<'a> PreparedCertifiedFetchExecution<'a>")
         .nth(1)
@@ -1283,7 +1244,6 @@ fn durable_store_execution_surface_is_closed_borrow_bound_and_inert() {
         !fetch_execution.contains("durable_body.manifest_hash()"),
         "parent manifest authority must not be re-read from the body receipt"
     );
-
     assert_eq!(
         production
             .matches("fn prepare_durable_store_execution(")
@@ -1299,15 +1259,13 @@ fn durable_store_execution_surface_is_closed_borrow_bound_and_inert() {
         assert!(!caller_source.contains("prepare_durable_store_execution"));
     }
 }
-
 #[test]
 fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("registry has one production prefix");
-
     let carrier = production
         .split("struct DurableValidateBody {")
         .nth(1)
@@ -1328,7 +1286,6 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
         );
     }
     assert!(!carrier.contains("derive(Clone"));
-
     let validation = production
         .split("impl DurableValidateBody {")
         .nth(1)
@@ -1359,7 +1316,6 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
             "durable Validate carrier acquired a raw authority seam: {forbidden}"
         );
     }
-
     let common_work = production
         .split("impl ConcreteLifecycleWork {")
         .nth(1)
@@ -1388,7 +1344,6 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
         5,
         "recovered Decision Fetch must remain exhaustive in validation, address, causal-root, effect-borrow, and generic-adapter rejection paths"
     );
-
     assert!(production.contains("pub(super) struct ConcreteLifecycleWork {"));
     assert!(!production.contains("pub(in crate::sumeragi) struct ConcreteLifecycleWork {"));
     let live_sign_work = production
@@ -1433,7 +1388,6 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
             "opaque live Sign work exposes forbidden surface {forbidden}"
         );
     }
-
     let preparation = production
         .split("pub(super) fn prepare_durable_validate_execution(")
         .nth(1)
@@ -1479,7 +1433,6 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
             "durable Validate preparation acquired forbidden authority: {forbidden}"
         );
     }
-
     let execution_impl = production
         .split("impl<'a> PreparedDurableValidateExecution<'a>")
         .nth(1)
@@ -1524,7 +1477,6 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
             "durable Validate token acquired forbidden authority: {forbidden}"
         );
     }
-
     let completion = production
         .split("pub(super) struct PreparedValidatedBodyCompletion<'a>")
         .nth(1)
@@ -1541,7 +1493,6 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
         assert!(completion.contains(required));
     }
     assert!(!completion.contains("derive(Clone"));
-
     let completion_impl = production
         .split("impl PreparedValidatedBodyCompletion<'_>")
         .nth(1)
@@ -1566,7 +1517,6 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
     ] {
         assert!(!completion_impl.contains(forbidden));
     }
-
     let validate_successor = production
         .split("pub(super) struct PreparedDurableStoreValidateSuccessor<'a>")
         .nth(1)
@@ -1589,7 +1539,6 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
         );
     }
     assert!(!validate_successor.contains("derive(Clone"));
-
     assert_eq!(
         production
             .matches("prepare_durable_validate_execution(")
@@ -1607,15 +1556,13 @@ fn durable_validate_execution_surface_is_closed_borrow_bound_and_inert() {
         assert!(!caller_source.contains("prepare_durable_validate_execution"));
     }
 }
-
 #[test]
 fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
-    let source = include_str!("../v2_lifecycle_work_registry.rs");
+    let source = reviewed_lifecycle_work_registry_source_for_test();
     let production = source
         .split("\n#[cfg(test)]\nmod tests {")
         .next()
         .expect("registry has one production prefix");
-
     let declaration = production
         .split("pub(crate) struct PreparedReadyDurableValidateExecution<'a>")
         .nth(1)
@@ -1631,7 +1578,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         declaration.contains("_adapter: PreparedReadyDurableValidateAdapterPublication<'adapter>")
     );
     assert!(!declaration.contains("derive(Clone"));
-
     let preview_oracles = production
         .split("impl PreparedReadyDurableValidateAdapterPreview<'_, '_>")
         .nth(1)
@@ -1669,7 +1615,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
             "Ready Validate preview exposed body authority {forbidden}"
         );
     }
-
     assert_eq!(
         production
             .matches("pub(super) fn prepare_ready_durable_validate_execution(")
@@ -1730,7 +1675,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
             "Ready Validate preflight acquired forbidden authority {forbidden}"
         );
     }
-
     let fixed_join = production
         .split_once("// READY_DURABLE_VALIDATE_ADAPTER_JOIN_BEGIN")
         .expect("Ready Validate fixed join begins")
@@ -1775,7 +1719,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
             "Ready Validate fixed join exposed forbidden authority {forbidden}"
         );
     }
-
     let recovered_detach = production
         .split_once("// RECOVERED_WAL_VALIDATE_REGISTRY_DETACH_BEGIN")
         .expect("recovered WAL Validate detach begins")
@@ -1801,7 +1744,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
             "recovered WAL Validate detach exposed forbidden authority {forbidden}"
         );
     }
-
     let live_publication = production
         .split("pub(super) fn prepare_registry_publication(")
         .nth(1)
@@ -1837,7 +1779,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
             "live Validate-to-Sign registry publication exposes {forbidden}"
         );
     }
-
     let recovered_join = production
         .split_once("// RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_BEGIN")
         .expect("recovered WAL Validate join begins")
@@ -1873,7 +1814,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
             "recovered WAL Validate join exposed forbidden authority {forbidden}"
         );
     }
-
     let recovered_fsync = production
         .split_once("// RECOVERED_WAL_VALIDATE_LEDGER_FSYNC_BEGIN")
         .expect("recovered WAL Validate ledger fsync begins")
@@ -1916,7 +1856,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
             "recovered WAL Validate fsync splice exposed forbidden authority {forbidden}"
         );
     }
-
     let recovered_install = production
         .split_once("// RECOVERED_WAL_SIGN_REGISTRY_INSTALL_BEGIN")
         .expect("recovered WAL Sign registry install begins")
@@ -1978,7 +1917,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
             "post-insert recovered Sign path acquired fallible check {forbidden}"
         );
     }
-
     let carrier_inventory = production
         .split("struct DurableRecoveredWalSignWork")
         .nth(1)
@@ -2022,7 +1960,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         1,
         "the durable recovered phase-vote handoff owns exactly one closed work variant"
     );
-
     let wal_recovery = include_str!("../v2_lifecycle_wal_recovery.rs");
     let child_effect_borrow = wal_recovery
         .split("pub(super) const fn installed_child_effect(")
@@ -2043,8 +1980,7 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         1,
         "only the closed concrete carrier may borrow the durable child effect"
     );
-
-    let ledger_source = include_str!("../v2_lifecycle_ledger.rs");
+    let ledger_source = reviewed_lifecycle_ledger_source_for_test();
     let frame_revalidation = ledger_source
         .split("pub(super) fn revalidates_durable_authenticated_wal_vote_repair(")
         .nth(1)
@@ -2070,7 +2006,6 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
         1,
         "receipt hash and repaired-pair shape must share one loaded frame"
     );
-
     for caller_source in [
         include_str!("../v2.rs"),
         include_str!("../v2_lifecycle_selector.rs"),

@@ -1,5 +1,4 @@
 use std::time::Duration;
-
 use iroha_config::parameters::actual::SoranetVpn;
 use iroha_data_model::soranet::vpn::{
     VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
@@ -8,7 +7,6 @@ use iroha_data_model::soranet::vpn::{
 };
 use iroha_primitives::numeric::Quantity;
 use thiserror::Error;
-
 /// Errors raised when assembling VPN control-plane/receipt payloads from config.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum VpnConfigError {
@@ -22,7 +20,6 @@ pub enum VpnConfigError {
         lease_secs: u64,
     },
 }
-
 /// Build a deterministic cover/data schedule from runtime configuration.
 pub fn cover_schedule_from_config(
     cfg: &SoranetVpn,
@@ -37,12 +34,10 @@ pub fn cover_schedule_from_config(
     }
     .plan(seed, frames)
 }
-
 /// Convert an exit class label into the Norito enum.
 pub fn exit_class_from_label(label: &str) -> Result<VpnExitClassV1, VpnConfigError> {
     VpnExitClassV1::try_from_label(label).map_err(VpnConfigError::from)
 }
-
 /// Assemble a control-plane envelope for guard/exit selection and DNS/route push.
 pub fn control_plane_from_config(
     cfg: &SoranetVpn,
@@ -61,7 +56,6 @@ pub fn control_plane_from_config(
         lease_seconds,
     })
 }
-
 #[derive(Clone, Copy)]
 pub struct FrameMeta {
     pub sequence: u64,
@@ -69,7 +63,6 @@ pub struct FrameMeta {
     pub class: VpnCellClassV1,
     pub flags: VpnCellFlagsV1,
 }
-
 /// Build a padded VPN frame using scheduler and padding hints from config.
 ///
 /// The configured cell size is validated against the pinned [`VPN_CELL_LEN`].
@@ -87,7 +80,6 @@ pub fn frame_payload(
             actual: VPN_CELL_LEN,
         });
     }
-
     let header = VpnCellHeaderV1 {
         version: 1,
         class: meta.class,
@@ -102,7 +94,6 @@ pub fn frame_payload(
     let cell = VpnCellV1 { header, payload };
     cell.into_padded_frame()
 }
-
 /// Build a billing/telemetry receipt for an exit session.
 pub fn session_receipt(
     cfg: &SoranetVpn,
@@ -132,20 +123,16 @@ pub fn session_receipt(
         client_voucher_hash: [0u8; 32],
     })
 }
-
 fn lease_secs_u32(lease: Duration) -> Result<u32, VpnConfigError> {
     let secs = lease.as_secs();
     u32::try_from(secs).map_err(|_| VpnConfigError::LeaseOverflow { lease_secs: secs })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn default_cfg() -> SoranetVpn {
         SoranetVpn::default()
     }
-
     #[test]
     fn cover_schedule_respects_ratio_and_burst() {
         let cfg = default_cfg();
@@ -166,7 +153,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn framing_respects_cell_size() {
         let cfg = default_cfg();
@@ -187,7 +173,6 @@ mod tests {
         assert_eq!(VPN_CELL_LEN, frame.as_ref().len());
         assert_eq!(0xAA, frame.as_ref()[3]);
     }
-
     #[test]
     fn framing_rejects_mismatched_cell_size() {
         let mut cfg = default_cfg();
@@ -211,7 +196,6 @@ mod tests {
             if expected == cfg.cell_size_bytes as usize && actual == VPN_CELL_LEN
         ));
     }
-
     #[test]
     fn framing_zero_pads_and_threads_padding_budget() {
         let mut cfg = default_cfg();
@@ -234,7 +218,6 @@ mod tests {
         let parsed = frame.parse().expect("parsed");
         assert_eq!(cfg.padding_budget_ms, parsed.header.padding_budget_ms);
         assert_eq!(payload, parsed.payload);
-
         let payload_offset = VPN_CELL_LEN - VpnCellV1::max_payload_len();
         let padding_start = payload_offset + payload.len();
         assert!(
@@ -243,7 +226,6 @@ mod tests {
                 .all(|byte| *byte == 0)
         );
     }
-
     #[test]
     fn framing_rejects_flow_label_overflow_for_bits() {
         let mut cfg = default_cfg();
@@ -266,7 +248,6 @@ mod tests {
             Err(VpnCellError::FlowLabelOverflow { max_bits: 8, .. })
         ));
     }
-
     #[test]
     fn control_plane_serializes_keys() {
         let cfg = default_cfg();
@@ -281,7 +262,6 @@ mod tests {
         assert_eq!(control.entry_guard, [0x01; 32]);
         assert_eq!(control.exit_guard, [0x02; 32]);
     }
-
     #[test]
     fn receipt_uses_exit_label() {
         let mut cfg = default_cfg();
@@ -290,7 +270,6 @@ mod tests {
             session_receipt(&cfg, [0x11; 16], 10, 20, 5, 30, [0x55; 32]).expect("receipt");
         assert_eq!(VpnExitClassV1::HighSecurity, receipt.exit_class);
     }
-
     #[test]
     fn control_plane_rejects_unknown_exit_class() {
         let mut cfg = default_cfg();
@@ -299,7 +278,6 @@ mod tests {
             .expect_err("exit class should fail");
         assert!(matches!(err, VpnConfigError::ExitClass(_)));
     }
-
     #[test]
     fn session_receipt_rejects_unknown_exit_class() {
         let mut cfg = default_cfg();
@@ -308,7 +286,6 @@ mod tests {
             .expect_err("exit class should fail");
         assert!(matches!(err, VpnConfigError::ExitClass(_)));
     }
-
     #[test]
     fn control_plane_accepts_max_lease() {
         let mut cfg = default_cfg();
@@ -318,7 +295,6 @@ mod tests {
                 .expect("max lease should be accepted");
         assert_eq!(u32::MAX, control.lease_seconds);
     }
-
     #[test]
     fn control_plane_rejects_lease_overflow() {
         let mut cfg = default_cfg();

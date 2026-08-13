@@ -1,11 +1,9 @@
 //! Data-model smoke tests and roundtrips
 use std::str::FromStr as _;
-
 use iroha_crypto::KeyPair;
 use iroha_data_model::{parameter::BlockParameters, prelude::*};
 use iroha_schema::Ident;
 // Lightweight DSL does not track predicate depth; skip related tests.
-
 fn checked_random_account_id() -> AccountId {
     AccountId::new(
         KeyPair::try_random()
@@ -14,7 +12,6 @@ fn checked_random_account_id() -> AccountId {
             .clone(),
     )
 }
-
 #[test]
 fn transfer_isi_should_be_valid() {
     let _domain: DomainId = DomainId::try_new("crypto", "universal").expect("domain");
@@ -28,11 +25,9 @@ fn transfer_isi_should_be_valid() {
     let source_asset_id = AssetId::new(asset_definition_id, source_account);
     let _instruction = Transfer::asset_quantity(source_asset_id, 12u32, destination_account);
 }
-
 #[test]
 fn block_parameters_roundtrip() {
     use std::num::NonZeroU64;
-
     let params = BlockParameters::new(NonZeroU64::new(1).unwrap());
     // Use stable header-framed Norito path over the inner value and reconstruct
     let inner: u64 = params.max_transactions().get();
@@ -42,7 +37,6 @@ fn block_parameters_roundtrip() {
     let decoded = BlockParameters::new(core::num::NonZeroU64::new(decoded_inner).unwrap());
     assert_eq!(decoded.max_transactions(), params.max_transactions());
 }
-
 #[test]
 fn compound_predicate_roundtrip() {
     // Build a real predicate payload and ensure it round-trips via Norito.
@@ -54,7 +48,6 @@ fn compound_predicate_roundtrip() {
         <CompoundPredicate<Domain> as norito::core::NoritoDeserialize>::deserialize(archived);
     assert_eq!(decoded.json_payload(), predicate.json_payload());
 }
-
 #[test]
 fn role_permission_changed_permission_accessor_exposes_inner_permission() {
     let role_id: RoleId = "moderator".parse().expect("valid role id");
@@ -64,11 +57,9 @@ fn role_permission_changed_permission_accessor_exposes_inner_permission() {
         norito::json!({"account": account_ref}),
     );
     let record = RolePermissionChanged::new(role_id.clone(), permission.clone());
-
     assert_eq!(record.permission(), &permission);
     assert_eq!(&record.role, &role_id);
 }
-
 #[test]
 fn account_permission_changed_permission_accessor_exposes_inner_permission() {
     let _domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
@@ -79,9 +70,7 @@ fn account_permission_changed_permission_accessor_exposes_inner_permission() {
         norito::json!({"account": account_ref}),
     );
     let record = AccountPermissionChanged::new(account_id.clone(), permission.clone());
-
     assert_eq!(record.permission(), &permission);
     assert_eq!(&record.account, &account_id);
 }
-
 // Removed: depth-limit tests relied on heavy DSL representation.

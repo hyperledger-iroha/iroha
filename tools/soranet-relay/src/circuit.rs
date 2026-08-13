@@ -1,5 +1,4 @@
 //! Circuit tracking and padding scheduler for the SoraNet relay runtime.
-
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -9,7 +8,6 @@ use std::{
     },
     time::Instant,
 };
-
 use bytes::Bytes;
 use quinn::Connection;
 use thiserror::Error;
@@ -18,13 +16,11 @@ use tokio::{
     time::{self, Duration, MissedTickBehavior},
 };
 use tracing::{debug, warn};
-
 use crate::{
     capability::{ConstantRateCapability, KemId, NegotiatedCapabilities, SignatureId},
     config::{CONGESTION_MAX_ACTIVE_CIRCUITS_V1, PaddingConfig},
     metrics::Metrics,
 };
-
 /// Tracks active circuits for introspection/debugging.
 #[derive(Debug)]
 pub struct CircuitRegistry {
@@ -32,13 +28,11 @@ pub struct CircuitRegistry {
     max_entries: usize,
     inner: RwLock<CircuitRegistryInner>,
 }
-
 #[derive(Debug, Default)]
 struct CircuitRegistryInner {
     entries: HashMap<u64, CircuitState>,
     constant_rate_active: u64,
 }
-
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CircuitState {
@@ -55,7 +49,6 @@ pub struct CircuitState {
     /// Optional constant-rate capability details.
     pub constant_rate: Option<ConstantRateCapability>,
 }
-
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct KemSignature {
@@ -64,7 +57,6 @@ pub struct KemSignature {
     /// Whether the signature algorithm was marked required.
     pub required: bool,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegisterCircuitOutcome {
     /// Assigned circuit identifier.
@@ -72,7 +64,6 @@ pub struct RegisterCircuitOutcome {
     /// Updated count of active constant-rate neighbors, if applicable.
     pub constant_rate_active: Option<u64>,
 }
-
 #[derive(Debug)]
 pub struct CircuitRemoval {
     /// Removed circuit state.
@@ -80,7 +71,6 @@ pub struct CircuitRemoval {
     /// Updated count of active constant-rate neighbors, if applicable.
     pub constant_rate_active: Option<u64>,
 }
-
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CircuitAdmissionError {
     /// The relay reached the configured constant-rate neighbor cap.
@@ -93,7 +83,6 @@ pub enum CircuitAdmissionError {
     #[error("circuit registry memory capacity is unavailable")]
     MemoryCapacity,
 }
-
 impl Default for CircuitRegistry {
     fn default() -> Self {
         Self {
@@ -103,7 +92,6 @@ impl Default for CircuitRegistry {
         }
     }
 }
-
 impl CircuitRegistry {
     /// Creates a registry whose logical ceiling cannot exceed the protocol
     /// first-release corridor.
@@ -114,7 +102,6 @@ impl CircuitRegistry {
             inner: RwLock::new(CircuitRegistryInner::default()),
         }
     }
-
     /// Registers a new circuit and returns its identifier.
     pub fn register(
         &self,
@@ -165,7 +152,6 @@ impl CircuitRegistry {
             constant_rate_active: is_constant_rate.then_some(guard.constant_rate_active),
         })
     }
-
     /// Removes a circuit entry if present.
     pub fn remove(&self, circuit_id: u64) -> Option<CircuitRemoval> {
         let mut guard = self.inner.write().expect("circuit registry poisoned");
@@ -182,21 +168,18 @@ impl CircuitRegistry {
             }
         })
     }
-
     /// Returns the number of active circuits currently tracked.
     #[must_use]
     pub fn active_len(&self) -> usize {
         let guard = self.inner.read().expect("circuit registry poisoned");
         guard.entries.len()
     }
-
     /// Returns the number of active constant-rate circuits.
     #[must_use]
     pub fn constant_rate_active_len(&self) -> u64 {
         let guard = self.inner.read().expect("circuit registry poisoned");
         guard.constant_rate_active
     }
-
     /// Returns the list of active constant-rate neighbors sorted deterministically.
     #[must_use]
     pub fn constant_rate_neighbors(&self) -> Vec<SocketAddr> {
@@ -212,7 +195,6 @@ impl CircuitRegistry {
         neighbors
     }
 }
-
 /// Spawn a task that periodically emits padding cells on an active QUIC connection.
 pub fn spawn_padding_task(
     connection: Connection,
@@ -226,7 +208,6 @@ pub fn spawn_padding_task(
     if safe_cell_size == 0 || max_idle_millis == 0 {
         return None;
     }
-
     if safe_cell_size != cell_size {
         warn!(
             requested = cell_size,
@@ -234,7 +215,6 @@ pub fn spawn_padding_task(
             "clamping padding cell size to MTU-safe limit"
         );
     }
-
     let payload = Bytes::from(vec![0u8; safe_cell_size as usize]);
     let interval = Duration::from_millis(max_idle_millis);
     Some(tokio::spawn(async move {
@@ -265,14 +245,12 @@ pub fn spawn_padding_task(
         }
     }))
 }
-
 /// Abort a running padding task if present.
 pub fn abort_padding_task(task: Option<JoinHandle<()>>) {
     if let Some(handle) = task {
         handle.abort();
     }
 }
-
 /// Token bucket limiting padding egress per second with burst allowance.
 #[derive(Debug)]
 pub struct PaddingBudget {
@@ -280,13 +258,11 @@ pub struct PaddingBudget {
     burst_bytes: u64,
     state: Mutex<TokenBucketState>,
 }
-
 #[derive(Debug)]
 struct TokenBucketState {
     last_refill: Instant,
     tokens: u64,
 }
-
 impl PaddingBudget {
     /// Create a new token bucket limiting padding bytes per second.
     #[must_use]
@@ -301,7 +277,6 @@ impl PaddingBudget {
             }),
         }
     }
-
     /// Build a [`PaddingBudget`] from the relay padding configuration when enabled.
     #[must_use]
     pub fn from_config(config: &PaddingConfig) -> Option<Self> {
@@ -309,7 +284,6 @@ impl PaddingBudget {
         if limit == 0 {
             return None;
         }
-
         let mut burst = if config.burst_bytes == 0 {
             limit
         } else {
@@ -319,17 +293,14 @@ impl PaddingBudget {
         if burst < min_cell {
             burst = min_cell;
         }
-
         Some(Self::new(limit, burst))
     }
-
     /// Attempt to reserve `cost` bytes from the bucket. Returns `true` when
     /// sufficient tokens exist, otherwise `false`.
     pub fn try_acquire(&self, cost: u64, now: Instant) -> bool {
         if self.limit_per_sec == 0 {
             return true;
         }
-
         let mut guard = self.state.lock().expect("padding budget lock poisoned");
         let elapsed = now.saturating_duration_since(guard.last_refill);
         if elapsed.as_nanos() > 0 {
@@ -340,7 +311,6 @@ impl PaddingBudget {
                 guard.last_refill = now;
             }
         }
-
         if guard.tokens >= cost {
             guard.tokens -= cost;
             true
@@ -348,31 +318,26 @@ impl PaddingBudget {
             false
         }
     }
-
     #[must_use]
     pub fn limit_per_sec(&self) -> u64 {
         self.limit_per_sec
     }
-
     #[must_use]
     pub fn burst_bytes(&self) -> u64 {
         self.burst_bytes
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         net::{IpAddr, Ipv4Addr},
         time::Duration,
     };
-
     use super::*;
     use crate::{
         capability::{ConstantRateMode, KemAdvertisement, SignatureAdvertisement},
         constant_rate::CONSTANT_RATE_CELL_BYTES,
     };
-
     fn sample_negotiated() -> NegotiatedCapabilities {
         NegotiatedCapabilities {
             kem: KemAdvertisement {
@@ -389,7 +354,6 @@ mod tests {
             constant_rate: None,
         }
     }
-
     fn strict_constant_rate() -> ConstantRateCapability {
         ConstantRateCapability {
             version: 1,
@@ -397,19 +361,16 @@ mod tests {
             cell_bytes: CONSTANT_RATE_CELL_BYTES as u16,
         }
     }
-
     #[test]
     fn registry_registers_and_removes_entries() {
         let registry = CircuitRegistry::default();
         let remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4433);
         let negotiated = sample_negotiated();
-
         let outcome = registry
             .register(remote, &negotiated, None)
             .expect("registry insert");
         assert_eq!(outcome.circuit_id, 0);
         assert!(outcome.constant_rate_active.is_none());
-
         let removed = registry.remove(outcome.circuit_id);
         assert!(removed.is_some());
         assert!(
@@ -421,14 +382,12 @@ mod tests {
                 .is_empty()
         );
     }
-
     #[test]
     fn registry_rejects_when_constant_rate_cap_reached() {
         let registry = CircuitRegistry::default();
         let remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4433);
         let mut negotiated = sample_negotiated();
         negotiated.constant_rate = Some(strict_constant_rate());
-
         for expected in 0..2 {
             let outcome = registry
                 .register(remote, &negotiated, Some(2))
@@ -443,7 +402,6 @@ mod tests {
             CircuitAdmissionError::ConstantRateNeighborCap { limit: 2 }
         );
     }
-
     #[test]
     fn registry_rejects_before_exceeding_its_entry_corridor() {
         let registry = CircuitRegistry::with_max_entries(2);
@@ -470,7 +428,6 @@ mod tests {
         );
         assert_eq!(registry.active_len(), 2);
     }
-
     #[test]
     fn padding_budget_blocks_when_exhausted() {
         let budget = PaddingBudget::new(1024, 2048);
@@ -479,7 +436,6 @@ mod tests {
         assert!(budget.try_acquire(1024, now));
         assert!(!budget.try_acquire(1024, now));
     }
-
     #[test]
     fn padding_budget_refills_after_interval() {
         let budget = PaddingBudget::new(1024, 2048);
@@ -488,7 +444,6 @@ mod tests {
         let later = now + Duration::from_millis(1_000);
         assert!(budget.try_acquire(1024, later));
     }
-
     #[test]
     fn padding_budget_from_config_enforces_cell_floor() {
         let config = PaddingConfig {
@@ -501,32 +456,26 @@ mod tests {
         let now = Instant::now();
         assert!(budget.try_acquire(1500, now));
     }
-
     #[test]
     fn registry_reports_constant_rate_neighbors() {
         let registry = CircuitRegistry::default();
         let mut negotiated = sample_negotiated();
         negotiated.constant_rate = Some(strict_constant_rate());
-
         let remote_a = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 4433);
         let remote_b = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)), 4433);
         let remote_c = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)), 4433);
-
         registry
             .register(remote_a, &negotiated, Some(4))
             .expect("insert remote_a");
         registry
             .register(remote_b, &negotiated, Some(4))
             .expect("insert remote_b");
-
         // Non constant-rate circuits should be ignored.
         registry
             .register(remote_c, &sample_negotiated(), None)
             .expect("insert remote_c");
-
         let mut neighbors = registry.constant_rate_neighbors();
         neighbors.sort();
-
         assert_eq!(neighbors, vec![remote_a, remote_b]);
     }
 }

@@ -5,9 +5,7 @@
 //! `specs/sorafs_appeal_pricing_plan.md`. The settlement helpers wire in
 //! the initial escrow/payout policy so treasury dashboards, CLI tools, and SDKs
 //! can deterministically compute refund/slash amounts and panel rewards.
-
 use std::{collections::BTreeMap, fmt, str::FromStr};
-
 use iroha_data_model::account::AccountId;
 use iroha_primitives::numeric::{
     DecimalProductError, Numeric, NumericOperationError, Quantity, RoundingMode,
@@ -15,9 +13,7 @@ use iroha_primitives::numeric::{
 };
 use norito::json::{Map as JsonMap, Value};
 use thiserror::Error;
-
 const APPEAL_CALCULATION_SCALE: u32 = 28;
-
 /// Supported appeal classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AppealClass {
@@ -30,7 +26,6 @@ pub enum AppealClass {
     /// Fallback bucket for specialised workflows.
     Other,
 }
-
 impl AppealClass {
     /// Stable string identifier used in configs and telemetry.
     #[must_use]
@@ -43,23 +38,19 @@ impl AppealClass {
         }
     }
 }
-
 impl fmt::Display for AppealClass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 /// Error surfaced when parsing [`AppealClass`] values.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("unknown appeal class `{raw}` (expected content|access|fraud|other)")]
 pub struct AppealClassParseError {
     raw: String,
 }
-
 impl FromStr for AppealClass {
     type Err = AppealClassParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let normalized = s.trim().to_ascii_lowercase();
         match normalized.as_str() {
@@ -73,7 +64,6 @@ impl FromStr for AppealClass {
         }
     }
 }
-
 /// Urgency hint supplied by moderators when quoting a deposit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppealUrgency {
@@ -82,7 +72,6 @@ pub enum AppealUrgency {
     /// Elevated SLA approved by moderators.
     High,
 }
-
 impl AppealUrgency {
     /// Stable string identifier.
     #[must_use]
@@ -93,23 +82,19 @@ impl AppealUrgency {
         }
     }
 }
-
 impl fmt::Display for AppealUrgency {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 /// Error surfaced when parsing [`AppealUrgency`] values.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("unknown urgency `{raw}` (expected normal|high)")]
 pub struct AppealUrgencyParseError {
     raw: String,
 }
-
 impl FromStr for AppealUrgency {
     type Err = AppealUrgencyParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let normalized = s.trim().to_ascii_lowercase();
         match normalized.as_str() {
@@ -121,7 +106,6 @@ impl FromStr for AppealUrgency {
         }
     }
 }
-
 /// Governance-supplied parameters for a given appeal class.
 #[derive(Clone, Debug)]
 pub struct AppealClassConfig {
@@ -134,7 +118,6 @@ pub struct AppealClassConfig {
     pub max_deposit_xor: Quantity,
     pub surge_multiplier: Numeric,
 }
-
 impl AppealClassConfig {
     /// Construct a class configuration.
     #[must_use]
@@ -158,7 +141,6 @@ impl AppealClassConfig {
             surge_multiplier: Numeric::one(),
         }
     }
-
     /// Apply a surge multiplier override.
     #[must_use]
     pub fn with_surge_multiplier(mut self, multiplier: Numeric) -> Self {
@@ -166,7 +148,6 @@ impl AppealClassConfig {
         self
     }
 }
-
 /// Pricing configuration spanning all appeal classes.
 #[derive(Clone, Debug)]
 pub struct AppealPricingConfig {
@@ -177,7 +158,6 @@ pub struct AppealPricingConfig {
     urgency_high_multiplier: Numeric,
     classes: BTreeMap<AppealClass, AppealClassConfig>,
 }
-
 impl AppealPricingConfig {
     /// Baseline configuration derived from the roadmap specification (rev 2026-03-11).
     /// Governance-managed manifests can be loaded via [`Self::from_manifest_value`].
@@ -232,7 +212,6 @@ impl AppealPricingConfig {
                 Quantity::from(2_500u32),
             ),
         );
-
         Self {
             version: "baseline-v1".to_string(),
             quote_ttl_secs: 15 * 60,
@@ -242,25 +221,21 @@ impl AppealPricingConfig {
             classes,
         }
     }
-
     /// Access the configured version label.
     #[must_use]
     pub fn version(&self) -> &str {
         &self.version
     }
-
     /// Validity window for quotes (seconds).
     #[must_use]
     pub fn quote_ttl_secs(&self) -> u64 {
         self.quote_ttl_secs
     }
-
     /// Default panel size used for `panel_multiplier` when callers omit overrides.
     #[must_use]
     pub fn default_panel_size(&self) -> u32 {
         self.default_panel_size
     }
-
     /// Construct a configuration from a governance-managed JSON manifest.
     pub fn from_manifest_value(manifest: &Value) -> Result<Self, AppealPricingManifestError> {
         let root = manifest.as_object().ok_or_else(|| {
@@ -274,7 +249,6 @@ impl AppealPricingConfig {
                 "`default_panel_size` must be greater than zero",
             ));
         }
-
         let urgency_obj = require_object_field(root, "urgency_multipliers")?;
         let urgency_normal =
             parse_numeric_from_map(urgency_obj, "normal", "urgency_multipliers.normal")?;
@@ -289,14 +263,12 @@ impl AppealPricingConfig {
                 "`urgency_multipliers.high` must be greater than zero",
             ));
         }
-
         let classes_obj = require_object_field(root, "classes")?;
         if classes_obj.is_empty() {
             return Err(AppealPricingManifestError::new(
                 "`classes` must contain at least one entry",
             ));
         }
-
         let mut classes = BTreeMap::new();
         for (class_label, entry) in classes_obj {
             let class = class_label.parse::<AppealClass>().map_err(|err| {
@@ -388,7 +360,6 @@ impl AppealPricingConfig {
             } else {
                 Numeric::one()
             };
-
             let config = AppealClassConfig::new(
                 base_rate,
                 backlog_target,
@@ -401,7 +372,6 @@ impl AppealPricingConfig {
             .with_surge_multiplier(surge_multiplier);
             classes.insert(class, config);
         }
-
         let config = Self {
             version,
             quote_ttl_secs,
@@ -413,7 +383,6 @@ impl AppealPricingConfig {
         config.validate_quote_domain()?;
         Ok(config)
     }
-
     fn validate_quote_domain(&self) -> Result<(), AppealPricingManifestError> {
         let maximum_input = Numeric::from(u32::MAX);
         let xor_scale_factor = Numeric::from(
@@ -430,7 +399,6 @@ impl AppealPricingConfig {
             .map_err(|error| {
                 appeal_pricing_domain_error("maximum reachable panel multiplier", error)
             })?;
-
         for (class, class_config) in &self.classes {
             let maximum_backlog_ratio = maximum_input
                 .try_decimal_div_round(
@@ -480,7 +448,6 @@ impl AppealPricingConfig {
                         error,
                     )
                 })?;
-
             for (urgency, urgency_multiplier) in [
                 ("normal", &self.urgency_normal_multiplier),
                 ("high", &self.urgency_high_multiplier),
@@ -516,16 +483,13 @@ impl AppealPricingConfig {
                     })?;
             }
         }
-
         Ok(())
     }
-
     /// Borrow a class configuration.
     #[must_use]
     pub fn class_config(&self, class: AppealClass) -> Option<&AppealClassConfig> {
         self.classes.get(&class)
     }
-
     /// Quote the required deposit for `input`.
     ///
     /// # Errors
@@ -539,7 +503,6 @@ impl AppealPricingConfig {
         if self.default_panel_size == 0 {
             return Err(AppealPricingError::InvalidDefaultPanelSize);
         }
-
         let class_cfg = self
             .class_config(input.class)
             .ok_or(AppealPricingError::MissingClassConfig { class: input.class })?;
@@ -556,14 +519,12 @@ impl AppealPricingConfig {
                 }
             })?;
         }
-
         if class_cfg.backlog_target == 0 {
             return Err(AppealPricingError::InvalidBacklogTarget { class: input.class });
         }
         if class_cfg.size_divisor_mb.is_zero() {
             return Err(AppealPricingError::InvalidSizeDivisor { class: input.class });
         }
-
         let backlog_factor = {
             let target = Numeric::from(class_cfg.backlog_target);
             let ratio = Numeric::from(input.backlog).try_decimal_div_round(
@@ -594,7 +555,6 @@ impl AppealPricingConfig {
             APPEAL_CALCULATION_SCALE,
             RoundingMode::NearestEven,
         )?;
-
         let backlog_multiplier = Numeric::one().try_decimal_add(&backlog_factor)?;
         let raw = class_cfg.base_rate_xor.try_product_decimals_round(
             [
@@ -612,7 +572,6 @@ impl AppealPricingConfig {
             class_cfg.min_deposit_xor.clone(),
             class_cfg.max_deposit_xor.clone(),
         );
-
         Ok(AppealQuote {
             deposit_xor: clamped,
             breakdown: AppealQuoteBreakdown {
@@ -629,7 +588,6 @@ impl AppealPricingConfig {
         })
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 pub struct AppealQuoteInput {
     pub class: AppealClass,
@@ -638,7 +596,6 @@ pub struct AppealQuoteInput {
     pub urgency: AppealUrgency,
     pub panel_size: u32,
 }
-
 /// Detailed multiplier breakdown for diagnostics.
 #[derive(Clone, Debug)]
 pub struct AppealQuoteBreakdown {
@@ -652,14 +609,12 @@ pub struct AppealQuoteBreakdown {
     pub min_deposit_xor: Quantity,
     pub max_deposit_xor: Quantity,
 }
-
 /// Quote output.
 #[derive(Clone, Debug)]
 pub struct AppealQuote {
     pub deposit_xor: Quantity,
     pub breakdown: AppealQuoteBreakdown,
 }
-
 /// Settlement disposition for a resolved appeal deposit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppealVerdict {
@@ -674,7 +629,6 @@ pub enum AppealVerdict {
     /// Escalated / pending follow-up, funds remain in escrow.
     Escalated,
 }
-
 /// Panel decision outcome as described by the moderation roadmap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AppealDecision {
@@ -682,7 +636,6 @@ pub enum AppealDecision {
     Overturn,
     Modify,
 }
-
 impl AppealDecision {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -693,23 +646,19 @@ impl AppealDecision {
         }
     }
 }
-
 impl fmt::Display for AppealDecision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 /// Error returned when parsing [`AppealDecision`] values.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("unknown decision `{raw}` (expected uphold|overturn|modify)")]
 pub struct AppealDecisionParseError {
     raw: String,
 }
-
 impl FromStr for AppealDecision {
     type Err = AppealDecisionParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let normalized = s.trim().to_ascii_lowercase();
         match normalized.as_str() {
@@ -722,7 +671,6 @@ impl FromStr for AppealDecision {
         }
     }
 }
-
 /// Error returned when parsing [`AppealVerdict`] values.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error(
@@ -731,10 +679,8 @@ impl FromStr for AppealDecision {
 pub struct AppealVerdictParseError {
     raw: String,
 }
-
 impl FromStr for AppealVerdict {
     type Err = AppealVerdictParseError;
-
     /// Parse one exact canonical V1 verdict spelling.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -749,14 +695,12 @@ impl FromStr for AppealVerdict {
         }
     }
 }
-
 /// Mapping of refund/slash ratios for a particular verdict.
 #[derive(Clone, Debug)]
 pub struct AppealSettlementRule {
     refund_rate: Numeric,
     treasury_rate: Numeric,
 }
-
 impl AppealSettlementRule {
     fn new(
         refund_rate: Numeric,
@@ -786,7 +730,6 @@ impl AppealSettlementRule {
             treasury_rate,
         })
     }
-
     fn refund_component(&self, deposit: &Quantity) -> Result<Quantity, DecimalProductError> {
         deposit.try_product_decimals_round(
             [&self.refund_rate],
@@ -794,7 +737,6 @@ impl AppealSettlementRule {
             RoundingMode::TowardZero,
         )
     }
-
     fn treasury_component(&self, deposit: &Quantity) -> Result<Quantity, DecimalProductError> {
         deposit.try_product_decimals_round(
             [&self.treasury_rate],
@@ -803,7 +745,6 @@ impl AppealSettlementRule {
         )
     }
 }
-
 impl fmt::Display for AppealVerdict {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -815,14 +756,12 @@ impl fmt::Display for AppealVerdict {
         }
     }
 }
-
 /// Per-panel reward configuration used to calculate juror stipends.
 #[derive(Clone, Debug)]
 pub struct PanelRewardConfig {
     stipend_per_juror_xor: Quantity,
     case_bonus_xor: Quantity,
 }
-
 impl PanelRewardConfig {
     #[must_use]
     pub fn new(stipend_per_juror_xor: Quantity, case_bonus_xor: Quantity) -> Self {
@@ -831,19 +770,16 @@ impl PanelRewardConfig {
             case_bonus_xor,
         }
     }
-
     /// Reward per juror for a single case.
     #[must_use]
     pub fn stipend_per_juror(&self) -> &Quantity {
         &self.stipend_per_juror_xor
     }
-
     /// Case-level bonus paid out once per case.
     #[must_use]
     pub fn case_bonus(&self) -> &Quantity {
         &self.case_bonus_xor
     }
-
     /// Total reward for a panel size.
     pub fn total_reward(&self, panel_size: u32) -> Result<Quantity, NumericOperationError> {
         if panel_size == 0 {
@@ -854,7 +790,6 @@ impl PanelRewardConfig {
             .try_add(&self.case_bonus_xor)
     }
 }
-
 /// Settlement configuration sourced from governance manifests.
 #[derive(Clone, Debug)]
 pub struct AppealSettlementConfig {
@@ -867,7 +802,6 @@ pub struct AppealSettlementConfig {
     frivolous: AppealSettlementRule,
     escalated: AppealSettlementRule,
 }
-
 impl AppealSettlementConfig {
     /// Baseline configuration derived from the moderation finance roadmap.
     #[must_use]
@@ -906,7 +840,6 @@ impl AppealSettlementConfig {
                 .expect("valid rule"),
         }
     }
-
     /// Load configuration from a governance-managed JSON manifest.
     pub fn from_manifest_value(manifest: &Value) -> Result<Self, AppealSettlementManifestError> {
         let root = manifest.as_object().ok_or_else(|| {
@@ -919,7 +852,6 @@ impl AppealSettlementConfig {
                 "`default_panel_size` must be greater than zero",
             ));
         }
-
         let panel_obj = require_object_field_settlement(root, "panel_rewards")?;
         let stipend_per_juror = parse_quantity_from_map_settlement(
             panel_obj,
@@ -953,7 +885,6 @@ impl AppealSettlementConfig {
         ensure_decision_rule(&decision_rules, AppealDecision::Uphold)?;
         ensure_decision_rule(&decision_rules, AppealDecision::Overturn)?;
         ensure_decision_rule(&decision_rules, AppealDecision::Modify)?;
-
         Ok(Self {
             version,
             default_panel_size,
@@ -965,25 +896,21 @@ impl AppealSettlementConfig {
             escalated: parse_required_rule(rules_obj, "escalated")?,
         })
     }
-
     /// Human-readable version label.
     #[must_use]
     pub fn version(&self) -> &str {
         &self.version
     }
-
     /// Default panel size used for CLI helpers.
     #[must_use]
     pub fn default_panel_size(&self) -> u32 {
         self.default_panel_size
     }
-
     /// Panel reward configuration.
     #[must_use]
     pub fn panel_rewards(&self) -> &PanelRewardConfig {
         &self.panel_rewards
     }
-
     /// Compute the settlement breakdown for a deposit.
     pub fn settle(
         &self,
@@ -1030,7 +957,6 @@ impl AppealSettlementConfig {
             panel_reward_total_xor: panel_reward_total,
         })
     }
-
     /// Compute the full disbursement plan, including deposit flows and panel rewards.
     pub fn disburse(
         &self,
@@ -1040,7 +966,6 @@ impl AppealSettlementConfig {
         if input.jurors.is_empty() {
             return Err(AppealDisbursementError::NoJurorsProvided);
         }
-
         let panel_size_usize = usize::try_from(input.panel_size).map_err(|_| {
             AppealDisbursementError::PanelSizeOverflow {
                 provided: input.panel_size as usize,
@@ -1052,14 +977,12 @@ impl AppealSettlementConfig {
                 provided: input.jurors.len(),
             });
         }
-
         let mut seen: BTreeMap<AccountId, ()> = BTreeMap::new();
         for juror in input.jurors {
             if seen.insert(juror.clone(), ()).is_some() {
                 return Err(AppealDisbursementError::DuplicateJuror(juror.clone()));
             }
         }
-
         let mut no_show_set: BTreeMap<AccountId, ()> = BTreeMap::new();
         for account in input.no_shows {
             if !seen.contains_key(account) {
@@ -1069,7 +992,6 @@ impl AppealSettlementConfig {
                 return Err(AppealDisbursementError::DuplicateNoShow(account.clone()));
             }
         }
-
         let attending: Vec<AccountId> = input
             .jurors
             .iter()
@@ -1085,7 +1007,6 @@ impl AppealSettlementConfig {
             }
         })?;
         let attending_count = Numeric::from(attending_count_u32);
-
         let stipend = self.panel_rewards.stipend_per_juror();
         let bonus = self.panel_rewards.case_bonus();
         // Round toward zero so aggregate juror payouts can never exceed the
@@ -1097,7 +1018,6 @@ impl AppealSettlementConfig {
                 RoundingMode::TowardZero,
             )
             .map_err(AppealDisbursementError::Arithmetic)?;
-
         let mut juror_payouts = Vec::with_capacity(attending.len());
         for juror in &attending {
             juror_payouts.push(JurorPayout {
@@ -1106,7 +1026,6 @@ impl AppealSettlementConfig {
                 bonus_xor: bonus_share.clone(),
             });
         }
-
         let payout_per_juror = stipend.try_add(&bonus_share)?;
         let rewards_paid_total_xor =
             payout_per_juror.try_mul_decimal(&Numeric::from(attending_count_u32))?;
@@ -1117,7 +1036,6 @@ impl AppealSettlementConfig {
         let total_treasury_xor = settlement
             .treasury_xor
             .try_add(&rewards_forfeited_treasury_xor)?;
-
         Ok(AppealDisbursementPlan {
             deposit_xor: input.deposit_xor,
             verdict: input.verdict,
@@ -1135,7 +1053,6 @@ impl AppealSettlementConfig {
         })
     }
 }
-
 fn ensure_decision_rule(
     rules: &BTreeMap<AppealDecision, AppealSettlementRule>,
     decision: AppealDecision,
@@ -1149,7 +1066,6 @@ fn ensure_decision_rule(
         )))
     }
 }
-
 fn parse_settlement_rule(
     value: &Value,
     label: &str,
@@ -1163,7 +1079,6 @@ fn parse_settlement_rule(
         parse_numeric_from_map_settlement(obj, "treasury_rate", &format!("{label}.treasury_rate"))?;
     AppealSettlementRule::new(refund, treasury)
 }
-
 fn parse_required_rule(
     rules_obj: &JsonMap,
     key: &'static str,
@@ -1173,7 +1088,6 @@ fn parse_required_rule(
     })?;
     parse_settlement_rule(value, &format!("rules.{key}"))
 }
-
 /// Resulting settlement breakdown for treasury tooling / dashboards.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppealSettlementBreakdown {
@@ -1183,7 +1097,6 @@ pub struct AppealSettlementBreakdown {
     pub panel_reward_per_juror_xor: Quantity,
     pub panel_reward_total_xor: Quantity,
 }
-
 /// Inputs required to derive per-account disbursement flows.
 pub struct AppealDisbursementInput<'a> {
     pub deposit_xor: Quantity,
@@ -1195,7 +1108,6 @@ pub struct AppealDisbursementInput<'a> {
     pub treasury_account: &'a AccountId,
     pub escrow_account: &'a AccountId,
 }
-
 /// Per-juror payout detail (stipend + bonus share).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JurorPayout {
@@ -1203,14 +1115,12 @@ pub struct JurorPayout {
     pub stipend_xor: Quantity,
     pub bonus_xor: Quantity,
 }
-
 impl JurorPayout {
     /// Total payout for the juror.
     pub fn total(&self) -> Result<Quantity, NumericOperationError> {
         self.stipend_xor.try_add(&self.bonus_xor)
     }
 }
-
 /// Deterministic disbursement plan combining deposit settlement and panel rewards.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppealDisbursementPlan {
@@ -1228,7 +1138,6 @@ pub struct AppealDisbursementPlan {
     pub rewards_forfeited_treasury_xor: Quantity,
     pub total_treasury_xor: Quantity,
 }
-
 impl AppealDisbursementPlan {
     /// Number of jurors that receive payouts.
     #[must_use]
@@ -1236,7 +1145,6 @@ impl AppealDisbursementPlan {
         self.juror_payouts.len()
     }
 }
-
 /// Errors surfaced when computing disbursement plans.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AppealDisbursementError {
@@ -1268,7 +1176,6 @@ pub enum AppealDisbursementError {
     #[error("appeal disbursement arithmetic failed: {0}")]
     Arithmetic(#[from] NumericOperationError),
 }
-
 /// Errors produced by the pricing engine.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AppealPricingError {
@@ -1304,7 +1211,6 @@ pub enum AppealPricingError {
     #[error("appeal pricing arithmetic failed: {0}")]
     Arithmetic(#[from] NumericOperationError),
 }
-
 /// Errors surfaced when computing settlement outcomes.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AppealSettlementError {
@@ -1329,7 +1235,6 @@ pub enum AppealSettlementError {
     #[error("appeal settlement arithmetic failed: {0}")]
     Arithmetic(#[from] NumericOperationError),
 }
-
 fn clamp_numeric(value: Numeric, min: Numeric, max: Numeric) -> Numeric {
     if value < min {
         min
@@ -1339,7 +1244,6 @@ fn clamp_numeric(value: Numeric, min: Numeric, max: Numeric) -> Numeric {
         value
     }
 }
-
 fn clamp_quantity(value: Quantity, min: Quantity, max: Quantity) -> Quantity {
     if value < min {
         min
@@ -1349,7 +1253,6 @@ fn clamp_quantity(value: Quantity, min: Quantity, max: Quantity) -> Quantity {
         value
     }
 }
-
 fn appeal_pricing_domain_error(
     context: &str,
     error: impl fmt::Display,
@@ -1358,7 +1261,6 @@ fn appeal_pricing_domain_error(
         "appeal pricing manifest `{context}` is outside the bounded quote domain: {error}"
     ))
 }
-
 /// Error returned when parsing a canonical XOR quantity literal.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("failed to parse `{label}` quantity `{raw}`: {reason}")]
@@ -1367,7 +1269,6 @@ pub struct AppealQuantityParseError {
     raw: String,
     reason: String,
 }
-
 /// Parse a user-supplied canonical XOR quantity without JSON number heuristics.
 pub fn parse_appeal_quantity_literal(
     label: impl Into<String>,
@@ -1400,15 +1301,12 @@ pub fn parse_appeal_quantity_literal(
     })?;
     Ok(parsed)
 }
-
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::domain::DomainId;
-
     use super::*;
-
     fn make_account(label: u8, _domain: &DomainId) -> AccountId {
         let seed = [label; ed25519_dalek::SECRET_KEY_LENGTH];
         let signer = SigningKey::from_bytes(&seed);
@@ -1417,7 +1315,6 @@ mod tests {
             PublicKey::from_bytes(Algorithm::Ed25519, pk_bytes.as_slice()).expect("public key");
         AccountId::new(pk)
     }
-
     #[test]
     fn baseline_content_quote_matches_spec() {
         let config = AppealPricingConfig::baseline_v1();
@@ -1436,7 +1333,6 @@ mod tests {
             "expected 339.3 XOR"
         );
     }
-
     #[test]
     fn decimal_product_errors_preserve_their_class() {
         let product_error = DecimalProductError::TooManyFactors;
@@ -1455,7 +1351,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn appeal_pricing_manifest_preserves_decimal_product_error() {
         let error =
@@ -1463,7 +1358,6 @@ mod tests {
         assert!(error.to_string().contains("more than 64 factors"));
         assert!(!error.to_string().contains("invalid scale"));
     }
-
     #[test]
     fn baseline_quote_rounds_the_aggregate_product_once() {
         let config = AppealPricingConfig::baseline_v1();
@@ -1481,7 +1375,6 @@ mod tests {
         XorQuantity::try_from_quantity(quote.deposit_xor)
             .expect("quoted deposit must fit the canonical nano-XOR domain");
     }
-
     #[test]
     fn fraud_quote_respects_maximum() {
         let config = AppealPricingConfig::baseline_v1();
@@ -1500,7 +1393,6 @@ mod tests {
             "fraud class max clamp"
         );
     }
-
     #[test]
     fn quote_uses_one_wide_product_before_enforcing_quantity_bounds() {
         let boundary: Quantity =
@@ -1512,7 +1404,6 @@ mod tests {
             Err(NumericOperationError::MantissaOverflow),
             "the formerly staged growth factor must cross the public bound"
         );
-
         let mut classes = BTreeMap::new();
         classes.insert(
             AppealClass::Content,
@@ -1534,7 +1425,6 @@ mod tests {
             urgency_high_multiplier: Numeric::one(),
             classes,
         };
-
         let quote = config
             .quote(AppealQuoteInput {
                 class: AppealClass::Content,
@@ -1547,7 +1437,6 @@ mod tests {
         assert_eq!(quote.breakdown.raw_deposit_xor, boundary);
         assert_eq!(quote.deposit_xor, quote.breakdown.raw_deposit_xor);
     }
-
     #[test]
     fn quote_normalizes_scale_after_all_factors_are_applied() {
         let tiny: Numeric = "0.0000000000000000000000000001"
@@ -1567,7 +1456,6 @@ mod tests {
             Err(NumericOperationError::ScaleOverflow),
             "the formerly staged reductions must cross the public scale bound"
         );
-
         let mut class = AppealClassConfig::new(
             Quantity::one(),
             1,
@@ -1590,7 +1478,6 @@ mod tests {
             urgency_high_multiplier: Numeric::one(),
             classes,
         };
-
         let quote = config
             .quote(AppealQuoteInput {
                 class: AppealClass::Content,
@@ -1602,7 +1489,6 @@ mod tests {
             .expect("the final conceptual product rounds once at nano-XOR precision");
         assert_eq!(quote.breakdown.raw_deposit_xor.to_string(), "0.333333333");
     }
-
     #[test]
     fn invalid_panel_size_rejected() {
         let config = AppealPricingConfig::baseline_v1();
@@ -1617,7 +1503,6 @@ mod tests {
             .expect_err("zero panel size must fail");
         assert_eq!(err, AppealPricingError::InvalidPanelSize);
     }
-
     #[test]
     fn manifest_loader_matches_baseline() {
         let manifest = norito::json!({
@@ -1655,7 +1540,6 @@ mod tests {
             .expect("quote");
         assert!(quote.deposit_xor > Quantity::zero());
     }
-
     #[test]
     fn pricing_manifest_rejects_unrepresentable_reachable_raw_deposit() {
         let manifest = norito::json!({
@@ -1685,7 +1569,6 @@ mod tests {
             "unexpected validation error: {error}"
         );
     }
-
     #[test]
     fn pricing_manifest_reserves_mantissa_headroom_for_nano_xor_rounding() {
         let manifest = norito::json!({
@@ -1717,7 +1600,6 @@ mod tests {
             "unexpected validation error: {error}"
         );
     }
-
     #[test]
     fn pricing_manifest_bounds_caps_by_reachable_u32_inputs() {
         let unreachable_cap = "1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
@@ -1755,7 +1637,6 @@ mod tests {
         assert_eq!(quote.deposit_xor, Quantity::one());
         assert!(quote.breakdown.raw_deposit_xor > quote.deposit_xor);
     }
-
     #[test]
     fn manifest_loader_rejects_unknown_class() {
         let manifest = norito::json!({
@@ -1782,7 +1663,6 @@ mod tests {
             .expect_err("unknown class should fail");
         assert!(err.0.contains("unknown appeal class"));
     }
-
     #[test]
     fn settlement_baseline_refunds_overturn() {
         let config = AppealSettlementConfig::baseline_v1();
@@ -1806,7 +1686,6 @@ mod tests {
                 .expect("bounded baseline reward")
         );
     }
-
     #[test]
     fn appeal_verdict_parser_accepts_only_exact_v1_spellings() {
         let cases = [
@@ -1843,7 +1722,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn appeal_quantity_literal_parser_accepts_only_canonical_nonnegative_strings() {
         assert_eq!(
@@ -1865,7 +1743,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn pricing_manifest_rejects_sub_nano_xor_amounts() {
         let manifest = norito::json!({
@@ -1892,7 +1769,6 @@ mod tests {
             .expect_err("sub-nano base rates must fail closed");
         assert!(error.to_string().contains("valid XOR quantity"));
     }
-
     #[test]
     fn settlement_rounds_partitions_toward_zero_and_conserves_nano_dust() {
         let config = AppealSettlementConfig::baseline_v1();
@@ -1900,7 +1776,6 @@ mod tests {
         let breakdown = config
             .settle(deposit.clone(), 7, AppealVerdict::Frivolous)
             .expect("bounded settlement");
-
         assert_eq!(breakdown.refund_xor.to_string(), "0.5");
         assert_eq!(breakdown.treasury_xor.to_string(), "0.5");
         assert_eq!(breakdown.held_xor.to_string(), "0.000000001");
@@ -1923,7 +1798,6 @@ mod tests {
                 .expect("every settlement output must fit nano-XOR precision");
         }
     }
-
     #[test]
     fn settlement_manifest_rejects_sub_nano_reward_amounts() {
         let manifest = norito::json!({
@@ -1949,7 +1823,6 @@ mod tests {
             .expect_err("sub-nano rewards must fail closed");
         assert!(error.to_string().contains("valid XOR quantity"));
     }
-
     #[test]
     fn settlement_manifest_loader_supports_rules() {
         let manifest = norito::json!({
@@ -1982,7 +1855,6 @@ mod tests {
         assert_eq!(breakdown.refund_xor, Quantity::from(180u32));
         assert_eq!(breakdown.treasury_xor, Quantity::zero());
     }
-
     #[test]
     fn disbursement_handles_no_shows_and_forfeits_rewards() {
         let config = AppealSettlementConfig::baseline_v1();
@@ -1995,7 +1867,6 @@ mod tests {
         let treasury_account = make_account(101, &domain);
         let escrow_account = make_account(102, &domain);
         let no_shows = vec![jurors[0].clone(), jurors[1].clone()];
-
         let plan = config
             .disburse(AppealDisbursementInput {
                 deposit_xor: Quantity::from(420u32),
@@ -2008,7 +1879,6 @@ mod tests {
                 escrow_account: &escrow_account,
             })
             .expect("disbursement");
-
         assert_eq!(plan.settlement.refund_xor, Quantity::from(420u32));
         assert_eq!(plan.rewards_available_xor, Quantity::from(185u32));
         assert_eq!(plan.juror_payouts.len(), 5);
@@ -2024,7 +1894,6 @@ mod tests {
                 .all(|account| no_shows.contains(account))
         );
     }
-
     #[test]
     fn disbursement_routes_fractional_bonus_dust_to_treasury() {
         let config = AppealSettlementConfig::baseline_v1();
@@ -2036,7 +1905,6 @@ mod tests {
         let refund_account = make_account(100, &domain);
         let treasury_account = make_account(101, &domain);
         let escrow_account = make_account(102, &domain);
-
         let plan = config
             .disburse(AppealDisbursementInput {
                 deposit_xor: Quantity::from(100_u32),
@@ -2049,7 +1917,6 @@ mod tests {
                 escrow_account: &escrow_account,
             })
             .expect("bounded disbursement");
-
         assert_eq!(plan.juror_payouts.len(), 3);
         for payout in &plan.juror_payouts {
             assert_eq!(payout.bonus_xor.to_string(), "3.333333333");
@@ -2064,7 +1931,6 @@ mod tests {
         );
         assert_eq!(plan.total_treasury_xor, plan.rewards_forfeited_treasury_xor);
     }
-
     #[test]
     fn disbursement_rejects_panel_mismatch() {
         let config = AppealSettlementConfig::baseline_v1();
@@ -2075,7 +1941,6 @@ mod tests {
         let refund_account = make_account(120, &domain);
         let treasury_account = make_account(121, &domain);
         let escrow_account = make_account(122, &domain);
-
         let err = config
             .disburse(AppealDisbursementInput {
                 deposit_xor: Quantity::from(100u32),
@@ -2094,33 +1959,27 @@ mod tests {
         ));
     }
 }
-
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("{0}")]
 pub struct AppealPricingManifestError(String);
-
 impl AppealPricingManifestError {
     fn new(msg: impl Into<String>) -> Self {
         Self(msg.into())
     }
 }
-
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("{0}")]
 pub struct AppealSettlementManifestError(String);
-
 impl AppealSettlementManifestError {
     fn new(msg: impl Into<String>) -> Self {
         Self(msg.into())
     }
-
     fn arithmetic(error: NumericOperationError) -> Self {
         Self(format!(
             "appeal settlement arithmetic is outside the numeric domain: {error}"
         ))
     }
 }
-
 fn require_string_field<'a>(
     map: &'a JsonMap,
     field: &'static str,
@@ -2132,7 +1991,6 @@ fn require_string_field<'a>(
         .as_str()
         .ok_or_else(|| AppealPricingManifestError::new(format!("`{field}` must be a string")))
 }
-
 fn require_object_field<'a>(
     map: &'a JsonMap,
     field: &'static str,
@@ -2144,7 +2002,6 @@ fn require_object_field<'a>(
         .as_object()
         .ok_or_else(|| AppealPricingManifestError::new(format!("`{field}` must be an object")))
 }
-
 fn parse_u64_field(map: &JsonMap, field: &'static str) -> Result<u64, AppealPricingManifestError> {
     let value = map.get(field).ok_or_else(|| {
         AppealPricingManifestError::new(format!("missing `{field}` in appeal pricing manifest"))
@@ -2158,7 +2015,6 @@ fn parse_u64_field(map: &JsonMap, field: &'static str) -> Result<u64, AppealPric
         ))),
     }
 }
-
 fn parse_u32_field(map: &JsonMap, field: &'static str) -> Result<u32, AppealPricingManifestError> {
     let value = parse_u64_field(map, field)?;
     u32::try_from(value).map_err(|_| {
@@ -2167,7 +2023,6 @@ fn parse_u32_field(map: &JsonMap, field: &'static str) -> Result<u32, AppealPric
         ))
     })
 }
-
 fn parse_numeric_from_map(
     map: &JsonMap,
     key: &'static str,
@@ -2178,7 +2033,6 @@ fn parse_numeric_from_map(
     })?;
     parse_numeric_value(value, label)
 }
-
 fn parse_numeric_value(value: &Value, label: &str) -> Result<Numeric, AppealPricingManifestError> {
     let raw = value.as_str().ok_or_else(|| {
         AppealPricingManifestError::new(format!("`{label}` must be a canonical decimal string"))
@@ -2193,7 +2047,6 @@ fn parse_numeric_value(value: &Value, label: &str) -> Result<Numeric, AppealPric
     }
     Ok(parsed)
 }
-
 fn parse_quantity_from_map(
     map: &JsonMap,
     key: &'static str,
@@ -2218,7 +2071,6 @@ fn parse_quantity_from_map(
     })?;
     Ok(parsed)
 }
-
 fn require_string_field_settlement<'a>(
     map: &'a JsonMap,
     field: &'static str,
@@ -2234,7 +2086,6 @@ fn require_string_field_settlement<'a>(
         ))
     })
 }
-
 fn require_object_field_settlement<'a>(
     map: &'a JsonMap,
     field: &'static str,
@@ -2250,7 +2101,6 @@ fn require_object_field_settlement<'a>(
         ))
     })
 }
-
 fn parse_u32_field_settlement(
     map: &JsonMap,
     field: &'static str,
@@ -2280,7 +2130,6 @@ fn parse_u32_field_settlement(
         ))),
     }
 }
-
 fn parse_numeric_from_map_settlement(
     map: &JsonMap,
     key: &'static str,
@@ -2293,7 +2142,6 @@ fn parse_numeric_from_map_settlement(
     })?;
     parse_numeric_value(value, label).map_err(|err| AppealSettlementManifestError(err.0))
 }
-
 fn parse_quantity_from_map_settlement(
     map: &JsonMap,
     key: &'static str,

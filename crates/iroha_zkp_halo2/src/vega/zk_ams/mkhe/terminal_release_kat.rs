@@ -5,10 +5,8 @@
 //! batch size.  A release engineer must run it in an externally resource-
 //! contained process, archive the emitted digest and resource record, and only
 //! then pin that digest in the production implementation certificate.
-
 use super::*;
 use std::sync::Arc;
-
 use crate::vega::{
     circuit::CircuitAssignment,
     masked_relaxed::{
@@ -19,7 +17,6 @@ use crate::vega::{
     sponge::Keccak256,
 };
 use hex_literal::hex;
-
 use super::super::super::{
     ZK_AMS_ACTION_INDEX_V1, ZkAmsAdmissionPublicInputV1, ZkAmsAdmissionRelationWitnessV1,
     ZkAmsProofContextV1,
@@ -27,16 +24,13 @@ use super::super::super::{
 use super::super::phase23_encrypted::{
     ZkAmsPhase23AccumulatorShapeV1, zk_ams_phase23_release_map_manifest_v1,
 };
-
 const RELEASE_TERMINAL_KAT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase3.release-terminal-kat";
 const RELEASE_TERMINAL_NEGATIVE_CASE_COUNT_V1: u32 = 21;
-
 #[derive(Clone)]
 struct ReleaseKatRandom {
     seed: [u8; 32],
     counter: u64,
 }
-
 impl ReleaseKatRandom {
     fn new() -> Self {
         Self {
@@ -45,7 +39,6 @@ impl ReleaseKatRandom {
         }
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for ReleaseKatRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         for (chunk_index, chunk) in destination.chunks_mut(32).enumerate() {
@@ -67,7 +60,6 @@ impl MaskedRelaxedRandomSourceV1 for ReleaseKatRandom {
         Ok(())
     }
 }
-
 fn release_proof_context() -> ZkAmsProofContextV1<'static> {
     ZkAmsProofContextV1 {
         chain_id: b"taira-zk-ams-phase3-release-kat",
@@ -82,7 +74,6 @@ fn release_proof_context() -> ZkAmsProofContextV1<'static> {
         generator_digest: [0x18; 32],
     }
 }
-
 fn release_admission_public() -> ZkAmsAdmissionPublicInputV1 {
     ZkAmsAdmissionPublicInputV1 {
         issuer_key_x: hex!("8e533b6fa0bf7b4625bb30667c01fb607ef9f8b8a80fef5b300628703187b2a3"),
@@ -106,7 +97,6 @@ fn release_admission_public() -> ZkAmsAdmissionPublicInputV1 {
         anchor_index: 0,
     }
 }
-
 fn release_admission_assignment(shape: Arc<Shape>) -> CircuitAssignment {
     let public = release_admission_public();
     let subject_commitment = [0x41; 32];
@@ -132,7 +122,6 @@ fn release_admission_assignment(shape: Arc<Shape>) -> CircuitAssignment {
         .expect("fixed release assignment must satisfy the canonical relation");
     assignment
 }
-
 fn materialized_digest_for_release_kat(
     materialized: &ZkAmsPhase23MaterializedAccumulatorsV1,
 ) -> [u8; 32] {
@@ -169,7 +158,6 @@ fn materialized_digest_for_release_kat(
     }
     hash.finalize()
 }
-
 fn encode_mutated_relation(
     governed_count: usize,
     proof: &[u8],
@@ -182,7 +170,6 @@ fn encode_mutated_relation(
     super::super::super::encode_zk_ams_admission_relation_wire_v1(relation)
         .expect("bounded structural mutation must remain encodable")
 }
-
 #[test]
 #[ignore = "release-parameter max-fold proof; run in the isolated release resource harness"]
 fn release_terminal_max_fold_kat_emits_candidate_digest() {
@@ -307,7 +294,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
     validate_materialized_accumulators_v1(&materialized)
         .expect("release materialized accumulator validation");
     let materialized_digest = materialized.digest;
-
     let output = prove_terminal_inner(
         &proof_context,
         context,
@@ -337,7 +323,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
             .expect("release proof canonical re-encode"),
         output.proof_bytes
     );
-
     let verify = |proof_context: &ZkAmsProofContextV1<'_>,
                   context: ZkAmsPhase3TerminalContextV1,
                   governed: &ZkAmsPhase3GovernedBatchV1,
@@ -509,7 +494,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         RELEASE_TERMINAL_NEGATIVE_CASE_COUNT_V1 as usize
     );
     assert!(rejected.iter().all(|rejected| *rejected));
-
     let mut kat = Keccak256::new();
     kat.update(RELEASE_TERMINAL_KAT_DOMAIN_V1);
     kat.update(&context.digest);
@@ -543,7 +527,6 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         RELEASE_TERMINAL_NEGATIVE_CASE_COUNT_V1,
     );
 }
-
 #[test]
 fn release_terminal_kat_keeps_strict_assignments_streamed() {
     let source = include_str!("terminal_release_kat.rs");

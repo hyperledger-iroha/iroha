@@ -5,10 +5,8 @@
 //! The definitions intentionally cover a subset of the full Norito DSL and
 //! focus on deterministic encoding so that the resulting `CompoundPredicate`
 //! payload can be signed and compared reliably across platforms.
-
 mod envelope;
 mod predicate;
-
 pub use envelope::{
     IterableQueryJson, IterableQueryKind, IterableQueryParamsJson, QueryEnvelopeJson,
     QueryJsonError, SingularQueryJson,

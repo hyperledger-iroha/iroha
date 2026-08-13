@@ -16,9 +16,7 @@
 //! proof because its release witness bound cannot fit in `i64`. The readiness
 //! gate remains closed until both families are wired to canonical records and
 //! release KATs.
-
 use std::sync::Arc;
-
 use super::packing::{
     ZK_AMS_T256_GALOIS_KEY_COUNT_V1, validate_zk_ams_t256_galois_key_schedule_v1,
     zk_ams_t256_galois_key_schedule_v1,
@@ -34,7 +32,6 @@ use crate::vega::{
     MaskedRelaxedRandomSourceV1, VegaT256PointV1,
     sponge::{Keccak256, keccak256, shake256},
 };
-
 #[path = "active/source_stream.rs"]
 mod source_stream;
 pub(super) use source_stream::{
@@ -42,7 +39,6 @@ pub(super) use source_stream::{
     decode_indexed_active_source_proof_v1, indexed_source_limb_hashers_v1,
     verify_indexed_active_source_proof_v1,
 };
-
 const ACTIVE_ROSTER_KEY_MATERIAL_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.active-governed-key-material";
 const ROSTER_POP_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.active-roster-key-pop";
@@ -76,27 +72,23 @@ const ACTIVE_RKG_EVIDENCE_TAG_V1: [u8; 4] = *b"ZARE";
 const ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1: usize = 4 + 1 + 32 + 1 + 4;
 const ACTIVE_RKG_EVIDENCE_CONTRIBUTION_BYTES_V1: usize =
     1 + 32 + 32 + 8 + 32 + 1 + 4 + 32 + 32 + 1 + 32 + 33 + 65;
-
 /// One proof of possession for a governed T256 authentication key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheRosterKeyProofV1 {
     commitment: [u8; 33],
     response: [u8; 32],
 }
-
 impl ZkAmsMkheRosterKeyProofV1 {
     /// Canonical nonidentity Schnorr commitment.
     #[must_use]
     pub const fn commitment(self) -> [u8; 33] {
         self.commitment
     }
-
     /// Canonical T256 Schnorr response.
     #[must_use]
     pub const fn response(self) -> [u8; 32] {
         self.response
     }
-
     #[cfg(test)]
     fn signature_bytes(self) -> [u8; ROSTER_POP_BYTES_V1] {
         let mut bytes = [0_u8; ROSTER_POP_BYTES_V1];
@@ -105,7 +97,6 @@ impl ZkAmsMkheRosterKeyProofV1 {
         bytes
     }
 }
-
 /// Secret authentication state for one governed active party.
 ///
 /// The scalar is generated from a caller-supplied cryptographic random source,
@@ -114,7 +105,6 @@ impl ZkAmsMkheRosterKeyProofV1 {
 pub struct ZkAmsMkheActivePartySecretV1 {
     authentication: AuthenticationSecret,
 }
-
 impl ZkAmsMkheActivePartySecretV1 {
     /// Generate one fresh nonzero T256 authentication secret.
     pub fn generate<R: MaskedRelaxedRandomSourceV1>(
@@ -124,17 +114,14 @@ impl ZkAmsMkheActivePartySecretV1 {
             authentication: AuthenticationSecret::generate(random)?,
         })
     }
-
     /// Authentication-key-derived party identifier.
     pub fn party(&self) -> Result<ZkAmsMkhePartyIdV1, ZkAmsMkheErrorV1> {
         self.authentication.party_id()
     }
-
     /// Canonical nonidentity T256 authentication public key.
     pub fn public_key(&self) -> Result<[u8; 33], ZkAmsMkheErrorV1> {
         self.authentication.public_key()
     }
-
     /// Authenticate an internal protocol artifact without exposing the scalar.
     pub(super) fn authenticate_artifact<R: MaskedRelaxedRandomSourceV1>(
         &self,
@@ -145,13 +132,11 @@ impl ZkAmsMkheActivePartySecretV1 {
         ArtifactAuthentication::sign(domain, statement_digest, &self.authentication, random)
     }
 }
-
 impl core::fmt::Debug for ZkAmsMkheActivePartySecretV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkAmsMkheActivePartySecretV1([REDACTED])")
     }
 }
-
 /// One authentication-key-bound member of a governed MKHE roster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheGovernedParticipantV1 {
@@ -159,27 +144,23 @@ pub struct ZkAmsMkheGovernedParticipantV1 {
     authentication_public_key: [u8; 33],
     key_proof: ZkAmsMkheRosterKeyProofV1,
 }
-
 impl ZkAmsMkheGovernedParticipantV1 {
     /// Authentication-key-derived participant identifier.
     #[must_use]
     pub const fn party(self) -> ZkAmsMkhePartyIdV1 {
         self.party
     }
-
     /// Canonical nonidentity T256 authentication public key.
     #[must_use]
     pub const fn authentication_public_key(self) -> [u8; 33] {
         self.authentication_public_key
     }
-
     /// Proof of possession bound to the complete ordered roster.
     #[must_use]
     pub const fn key_proof(self) -> ZkAmsMkheRosterKeyProofV1 {
         self.key_proof
     }
 }
-
 /// The sole governed roster form: exactly eight ordered keys in one nonzero epoch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheGovernedActiveRosterV1 {
@@ -190,7 +171,6 @@ pub struct ZkAmsMkheGovernedActiveRosterV1 {
     roster_digest: [u8; 32],
     key_material_digest: [u8; 32],
 }
-
 impl ZkAmsMkheGovernedActiveRosterV1 {
     /// Build and verify an exact eight-party release roster.
     ///
@@ -204,19 +184,16 @@ impl ZkAmsMkheGovernedActiveRosterV1 {
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         assemble_governed_active_roster(epoch, parties.map(|party| &party.authentication), random)
     }
-
     /// Frozen release-profile digest.
     #[must_use]
     pub const fn profile_digest(&self) -> [u8; 32] {
         self.profile_digest
     }
-
     /// Nonzero governed secret/key epoch.
     #[must_use]
     pub const fn epoch(&self) -> u64 {
         self.epoch
     }
-
     /// Exact ordered authentication-key roster.
     #[must_use]
     pub const fn participants(
@@ -224,19 +201,16 @@ impl ZkAmsMkheGovernedActiveRosterV1 {
     ) -> &[ZkAmsMkheGovernedParticipantV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] {
         &self.participants
     }
-
     /// Consensus digest of the release profile, epoch, and ordered party IDs.
     #[must_use]
     pub const fn roster_digest(&self) -> [u8; 32] {
         self.roster_digest
     }
-
     /// Digest of the exact ordered authentication keys certified by the PoPs.
     #[must_use]
     pub const fn key_material_digest(&self) -> [u8; 32] {
         self.key_material_digest
     }
-
     /// Convert to the canonical wire roster without changing its consensus identity.
     pub fn to_wire_roster(self) -> Result<super::ZkAmsMkheGovernedRosterWireV1, ZkAmsMkheErrorV1> {
         self.validate()?;
@@ -248,7 +222,6 @@ impl ZkAmsMkheGovernedActiveRosterV1 {
         }
         Ok(wire)
     }
-
     /// Revalidate the complete roster and every proof of possession.
     pub fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         let expected_profile = release_profile_v1().digest()?;
@@ -289,7 +262,6 @@ impl ZkAmsMkheGovernedActiveRosterV1 {
         }
         Ok(())
     }
-
     fn participant(
         &self,
         index: usize,
@@ -299,14 +271,12 @@ impl ZkAmsMkheGovernedActiveRosterV1 {
             .copied()
             .ok_or(ZkAmsMkheErrorV1::InvalidPartySet)
     }
-
     fn index_of(&self, party: ZkAmsMkhePartyIdV1) -> Option<usize> {
         self.participants
             .binary_search_by_key(&party, |participant| participant.party)
             .ok()
     }
 }
-
 fn assemble_governed_active_roster<R: MaskedRelaxedRandomSourceV1>(
     epoch: u64,
     authentication_secrets: [&AuthenticationSecret; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
@@ -359,9 +329,7 @@ fn assemble_governed_active_roster<R: MaskedRelaxedRandomSourceV1>(
     roster.validate()?;
     Ok(roster)
 }
-
 type ActiveRosterIdentityV1 = (Vec<ZkAmsMkhePartyIdV1>, [u8; 32], [u8; 32]);
-
 fn active_roster_identity(
     profile_digest: [u8; 32],
     epoch: u64,
@@ -403,7 +371,6 @@ fn active_roster_identity(
     }
     Ok((parties, roster_digest, keccak256(&frame)))
 }
-
 #[allow(clippy::too_many_arguments)]
 fn prove_roster_key_possession<R: MaskedRelaxedRandomSourceV1>(
     profile_digest: [u8; 32],
@@ -458,7 +425,6 @@ fn prove_roster_key_possession<R: MaskedRelaxedRandomSourceV1>(
     )?;
     Ok(proof)
 }
-
 fn verify_roster_key_proof(
     profile_digest: [u8; 32],
     epoch: u64,
@@ -500,7 +466,6 @@ fn verify_roster_key_proof(
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn roster_pop_challenge(
     profile_digest: [u8; 32],
@@ -529,7 +494,6 @@ fn roster_pop_challenge(
     frame.extend_from_slice(&commitment);
     scalar_challenge(&frame)
 }
-
 fn scalar_challenge(frame: &[u8]) -> Result<Scalar, ZkAmsMkheErrorV1> {
     for counter in 0..RANDOM_REJECTION_ATTEMPTS_V1 {
         let mut challenge_frame = Vec::with_capacity(frame.len() + 4);
@@ -549,7 +513,6 @@ fn scalar_challenge(frame: &[u8]) -> Result<Scalar, ZkAmsMkheErrorV1> {
     }
     Err(ZkAmsMkheErrorV1::InvalidAuthentication)
 }
-
 fn sample_nonzero_scalar<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<ZeroizingScalarV1, ZkAmsMkheErrorV1> {
@@ -565,7 +528,6 @@ fn sample_nonzero_scalar<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
-
 /// Exact active-party ceremony round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -581,12 +543,10 @@ pub enum ZkAmsMkheActiveRoundV1 {
     /// Automorphism-linked source encryption for one collective Galois-key digit.
     GaloisSource = 5,
 }
-
 impl ZkAmsMkheActiveRoundV1 {
     fn tag(self) -> u8 {
         self as u8
     }
-
     fn decode(tag: u8) -> Result<Self, ZkAmsMkheErrorV1> {
         match tag {
             1 => Ok(Self::CollectivePublicKey),
@@ -598,7 +558,6 @@ impl ZkAmsMkheActiveRoundV1 {
         }
     }
 }
-
 /// One exactly bound and authenticated active-party contribution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheActiveContributionV1 {
@@ -613,32 +572,27 @@ pub struct ZkAmsMkheActiveContributionV1 {
     payload_digest: [u8; 32],
     authentication: ArtifactAuthentication,
 }
-
 impl ZkAmsMkheActiveContributionV1 {
     /// Bound ceremony round.
     #[must_use]
     pub const fn round(&self) -> ZkAmsMkheActiveRoundV1 {
         self.round
     }
-
     /// Canonical roster position.
     #[must_use]
     pub const fn contribution_index(&self) -> u32 {
         self.contribution_index
     }
-
     /// Authentication-key-derived contributor.
     #[must_use]
     pub const fn party(&self) -> ZkAmsMkhePartyIdV1 {
         self.party
     }
-
     /// Digest of the exact canonical contribution payload and its proof.
     #[must_use]
     pub const fn payload_digest(&self) -> [u8; 32] {
         self.payload_digest
     }
-
     /// Consensus digest of every contribution field including authentication.
     pub fn digest(&self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         let statement = active_contribution_statement_digest(self)?;
@@ -650,7 +604,6 @@ impl ZkAmsMkheActiveContributionV1 {
         Ok(keccak256(&frame))
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn authenticate_active_contribution<R: MaskedRelaxedRandomSourceV1>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -709,7 +662,6 @@ fn authenticate_active_contribution<R: MaskedRelaxedRandomSourceV1>(
     .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)?;
     Ok(contribution)
 }
-
 fn active_contribution_statement_digest(
     contribution: &ZkAmsMkheActiveContributionV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -737,7 +689,6 @@ fn active_contribution_statement_digest(
     frame.extend_from_slice(&contribution.payload_digest);
     Ok(keccak256(&frame))
 }
-
 fn validate_active_contribution(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -787,7 +738,6 @@ fn validate_active_contribution(
         .verify(ACTIVE_CONTRIBUTION_DOMAIN_V1, statement)
         .map_err(|_| ZkAmsMkheAbortReasonV1::InvalidAuthentication)
 }
-
 /// Stable first-failure reason carried by identifiable-abort evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -823,7 +773,6 @@ pub enum ZkAmsMkheAbortReasonV1 {
     /// The active record used an unsupported version.
     InvalidVersion = 15,
 }
-
 /// Deterministic evidence for the first invalid active-round position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheIdentifiableAbortV1 {
@@ -836,57 +785,48 @@ pub struct ZkAmsMkheIdentifiableAbortV1 {
     reason: ZkAmsMkheAbortReasonV1,
     evidence_digest: [u8; 32],
 }
-
 impl ZkAmsMkheIdentifiableAbortV1 {
     /// Failed round.
     #[must_use]
     pub const fn round(self) -> ZkAmsMkheActiveRoundV1 {
         self.round
     }
-
     /// First expected roster position that failed.
     #[must_use]
     pub const fn expected_index(self) -> u32 {
         self.expected_index
     }
-
     /// Governed party expected at the failed position.
     #[must_use]
     pub const fn expected_party(self) -> ZkAmsMkhePartyIdV1 {
         self.expected_party
     }
-
     /// Observed record index, or `None` when the record was missing.
     #[must_use]
     pub const fn observed_index(self) -> Option<u32> {
         self.observed_index
     }
-
     /// Observed party, or `None` when the record was missing.
     #[must_use]
     pub const fn observed_party(self) -> Option<ZkAmsMkhePartyIdV1> {
         self.observed_party
     }
-
     /// Digest of the observed contribution, or zero for a missing record.
     #[must_use]
     pub const fn observed_contribution_digest(self) -> [u8; 32] {
         self.observed_contribution_digest
     }
-
     /// Stable failure classification.
     #[must_use]
     pub const fn reason(self) -> ZkAmsMkheAbortReasonV1 {
         self.reason
     }
-
     /// Consensus digest of all evidence fields.
     #[must_use]
     pub const fn evidence_digest(self) -> [u8; 32] {
         self.evidence_digest
     }
 }
-
 /// Exact receipt for one complete eight-party active round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheActiveRoundReceiptV1 {
@@ -898,27 +838,23 @@ pub struct ZkAmsMkheActiveRoundReceiptV1 {
     contribution_digests: [[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     receipt_digest: [u8; 32],
 }
-
 impl ZkAmsMkheActiveRoundReceiptV1 {
     /// Completed round.
     #[must_use]
     pub const fn round(self) -> ZkAmsMkheActiveRoundV1 {
         self.round
     }
-
     /// Exact ordered contribution digests.
     #[must_use]
     pub const fn contribution_digests(&self) -> &[[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] {
         &self.contribution_digests
     }
-
     /// Consensus digest of the complete ordered round.
     #[must_use]
     pub const fn receipt_digest(self) -> [u8; 32] {
         self.receipt_digest
     }
 }
-
 /// Verify and collect exactly one contribution from every roster party in order.
 #[allow(
     clippy::result_large_err,
@@ -1035,7 +971,6 @@ pub fn zk_ams_mkhe_collect_active_round_v1(
         receipt_digest,
     })
 }
-
 fn active_round_receipt_digest(
     profile_digest: [u8; 32],
     roster_digest: [u8; 32],
@@ -1058,7 +993,6 @@ fn active_round_receipt_digest(
     }
     keccak256(&frame)
 }
-
 fn identifiable_abort(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     round: ZkAmsMkheActiveRoundV1,
@@ -1101,17 +1035,14 @@ fn identifiable_abort(
         evidence_digest: keccak256(&frame),
     }
 }
-
 fn append_optional_u32(frame: &mut Vec<u8>, value: Option<u32>) {
     frame.push(value.is_some().into());
     frame.extend_from_slice(&value.unwrap_or_default().to_be_bytes());
 }
-
 fn append_optional_party(frame: &mut Vec<u8>, value: Option<ZkAmsMkhePartyIdV1>) {
     frame.push(value.is_some().into());
     frame.extend_from_slice(&value.map_or([0; 32], ZkAmsMkhePartyIdV1::to_bytes));
 }
-
 fn active_contribution_fallback_digest(contribution: &ZkAmsMkheActiveContributionV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(320);
     frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.invalid-active-contribution-evidence");
@@ -1130,7 +1061,6 @@ fn active_contribution_fallback_digest(contribution: &ZkAmsMkheActiveContributio
     frame.extend_from_slice(&contribution.authentication.signature);
     keccak256(&frame)
 }
-
 /// Identity of the complete governed collective-key ceremony.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheGovernedCollectiveKeyMaterialIdentityV1 {
@@ -1143,7 +1073,6 @@ pub struct ZkAmsMkheGovernedCollectiveKeyMaterialIdentityV1 {
     rkg_round_two_receipt_digest: [u8; 32],
     material_digest: [u8; 32],
 }
-
 impl ZkAmsMkheGovernedCollectiveKeyMaterialIdentityV1 {
     /// Construct material identity only from four complete, same-roster receipts.
     pub fn from_receipts(
@@ -1202,56 +1131,47 @@ impl ZkAmsMkheGovernedCollectiveKeyMaterialIdentityV1 {
             material_digest: keccak256(&frame),
         })
     }
-
     /// Consensus digest of all four complete ordered contribution rounds.
     #[must_use]
     pub const fn material_digest(self) -> [u8; 32] {
         self.material_digest
     }
-
     /// Frozen release-profile digest.
     #[must_use]
     pub const fn profile_digest(self) -> [u8; 32] {
         self.profile_digest
     }
-
     /// Governed roster digest.
     #[must_use]
     pub const fn roster_digest(self) -> [u8; 32] {
         self.roster_digest
     }
-
     /// Governed secret/key epoch.
     #[must_use]
     pub const fn epoch(self) -> u64 {
         self.epoch
     }
-
     /// Complete collective-public-key round receipt.
     #[must_use]
     pub const fn public_key_receipt_digest(self) -> [u8; 32] {
         self.public_key_receipt_digest
     }
-
     /// Complete CKS round receipt.
     #[must_use]
     pub const fn cks_receipt_digest(self) -> [u8; 32] {
         self.cks_receipt_digest
     }
-
     /// Complete RKG round-one receipt.
     #[must_use]
     pub const fn rkg_round_one_receipt_digest(self) -> [u8; 32] {
         self.rkg_round_one_receipt_digest
     }
-
     /// Complete RKG round-two receipt.
     #[must_use]
     pub const fn rkg_round_two_receipt_digest(self) -> [u8; 32] {
         self.rkg_round_two_receipt_digest
     }
 }
-
 /// Machine-checkable security parameters of the release RKG linear proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheActiveRkgLinearProofSecurityV1 {
@@ -1296,7 +1216,6 @@ pub struct ZkAmsMkheActiveRkgLinearProofSecurityV1 {
     /// Digest of every active proof domain and exact numeric parameter above.
     pub parameter_digest: [u8; 32],
 }
-
 impl ZkAmsMkheActiveRkgLinearProofSecurityV1 {
     /// Recompute every arithmetic and domain-separation invariant.
     pub fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1334,7 +1253,6 @@ impl ZkAmsMkheActiveRkgLinearProofSecurityV1 {
         Ok(())
     }
 }
-
 /// Return the exact release security certificate for active RKG linear proofs.
 pub fn zk_ams_mkhe_active_rkg_linear_proof_security_v1()
 -> Result<ZkAmsMkheActiveRkgLinearProofSecurityV1, ZkAmsMkheErrorV1> {
@@ -1342,7 +1260,6 @@ pub fn zk_ams_mkhe_active_rkg_linear_proof_security_v1()
     certificate.validate()?;
     Ok(certificate)
 }
-
 fn derive_active_rkg_linear_proof_security_v1()
 -> Result<ZkAmsMkheActiveRkgLinearProofSecurityV1, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
@@ -1427,7 +1344,6 @@ fn derive_active_rkg_linear_proof_security_v1()
     certificate.parameter_digest = active_rkg_linear_proof_parameter_digest(certificate);
     Ok(certificate)
 }
-
 fn active_rkg_linear_proof_parameter_digest(
     certificate: ZkAmsMkheActiveRkgLinearProofSecurityV1,
 ) -> [u8; 32] {
@@ -1475,7 +1391,6 @@ fn active_rkg_linear_proof_parameter_digest(
     frame.extend_from_slice(b"signed-i64-big-endian-twos-complement");
     keccak256(&frame)
 }
-
 /// Borrowed public statement linking one party's bounded secret to its
 /// collective-public-key share.
 #[derive(Clone, Copy, Debug)]
@@ -1483,7 +1398,6 @@ pub struct ZkAmsMkheActiveCollectivePublicKeyStatementV1<'a> {
     public_a: &'a super::ZkAmsMkheRnsPolynomialWireV1,
     party_public_b: &'a super::ZkAmsMkheRnsPolynomialWireV1,
 }
-
 impl<'a> ZkAmsMkheActiveCollectivePublicKeyStatementV1<'a> {
     /// Construct the exact release statement `b_i = -a*s_i + t*e_i`.
     pub fn new(
@@ -1497,33 +1411,28 @@ impl<'a> ZkAmsMkheActiveCollectivePublicKeyStatementV1<'a> {
             party_public_b,
         })
     }
-
     /// Common public `a` polynomial.
     #[must_use]
     pub const fn public_a(&self) -> &'a super::ZkAmsMkheRnsPolynomialWireV1 {
         self.public_a
     }
-
     /// This party's public `b_i` contribution.
     #[must_use]
     pub const fn party_public_b(&self) -> &'a super::ZkAmsMkheRnsPolynomialWireV1 {
         self.party_public_b
     }
 }
-
 /// Borrowed bounded witnesses for one collective-public-key share.
 #[derive(Clone, Copy)]
 pub struct ZkAmsMkheActiveCollectivePublicKeyWitnessV1<'a> {
     secret: &'a [i64],
     public_error: &'a [i64],
 }
-
 impl core::fmt::Debug for ZkAmsMkheActiveCollectivePublicKeyWitnessV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkAmsMkheActiveCollectivePublicKeyWitnessV1([REDACTED])")
     }
 }
-
 impl<'a> ZkAmsMkheActiveCollectivePublicKeyWitnessV1<'a> {
     /// Construct witnesses with exact release dimensions and coefficient bounds.
     pub fn new(secret: &'a [i64], public_error: &'a [i64]) -> Result<Self, ZkAmsMkheErrorV1> {
@@ -1535,7 +1444,6 @@ impl<'a> ZkAmsMkheActiveCollectivePublicKeyWitnessV1<'a> {
         })
     }
 }
-
 /// Borrowed public statement for one streamed RKG round-one digit.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
@@ -1548,7 +1456,6 @@ pub struct ZkAmsMkheActiveRkgRoundOneStatementV1<'a> {
     right: ZkAmsMkhePartyIdV1,
     digit_index: u32,
 }
-
 #[cfg(test)]
 impl<'a> ZkAmsMkheActiveRkgRoundOneStatementV1<'a> {
     /// Construct the exact two-equation RKG round-one statement for one digit.
@@ -1583,7 +1490,6 @@ impl<'a> ZkAmsMkheActiveRkgRoundOneStatementV1<'a> {
             digit_index,
         })
     }
-
     /// Canonical hybrid-RNS digit index.
     #[must_use]
     #[expect(
@@ -1594,7 +1500,6 @@ impl<'a> ZkAmsMkheActiveRkgRoundOneStatementV1<'a> {
         self.digit_index
     }
 }
-
 /// Borrowed bounded witnesses for one streamed RKG round-one digit.
 #[cfg(test)]
 #[derive(Clone, Copy)]
@@ -1605,14 +1510,12 @@ pub struct ZkAmsMkheActiveRkgRoundOneWitnessV1<'a> {
     error_zero: &'a [i64],
     error_one: &'a [i64],
 }
-
 #[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheActiveRkgRoundOneWitnessV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkAmsMkheActiveRkgRoundOneWitnessV1([REDACTED])")
     }
 }
-
 #[cfg(test)]
 impl<'a> ZkAmsMkheActiveRkgRoundOneWitnessV1<'a> {
     /// Construct all five witnesses with exact release dimensions and bounds.
@@ -1637,7 +1540,6 @@ impl<'a> ZkAmsMkheActiveRkgRoundOneWitnessV1<'a> {
         })
     }
 }
-
 /// Borrowed public statement for one streamed RKG round-two digit.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
@@ -1647,7 +1549,6 @@ pub struct ZkAmsMkheActiveRkgRoundTwoStatementV1<'a> {
     aggregate_h1: &'a super::ZkAmsMkheRnsPolynomialWireV1,
     k0: &'a super::ZkAmsMkheRnsPolynomialWireV1,
 }
-
 #[cfg(test)]
 impl<'a> ZkAmsMkheActiveRkgRoundTwoStatementV1<'a> {
     /// Construct the exact round-two statement, including this party's
@@ -1668,7 +1569,6 @@ impl<'a> ZkAmsMkheActiveRkgRoundTwoStatementV1<'a> {
             k0,
         })
     }
-
     /// Canonical hybrid-RNS digit index inherited from round one.
     #[must_use]
     #[expect(
@@ -1679,7 +1579,6 @@ impl<'a> ZkAmsMkheActiveRkgRoundTwoStatementV1<'a> {
         self.round_one.digit_index
     }
 }
-
 /// Borrowed bounded witnesses for one streamed RKG round-two digit.
 #[cfg(test)]
 #[derive(Clone, Copy)]
@@ -1687,14 +1586,12 @@ pub struct ZkAmsMkheActiveRkgRoundTwoWitnessV1<'a> {
     round_one: ZkAmsMkheActiveRkgRoundOneWitnessV1<'a>,
     error_two: &'a [i64],
 }
-
 #[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheActiveRkgRoundTwoWitnessV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkAmsMkheActiveRkgRoundTwoWitnessV1([REDACTED])")
     }
 }
-
 #[cfg(test)]
 impl<'a> ZkAmsMkheActiveRkgRoundTwoWitnessV1<'a> {
     /// Construct the round-two witness while retaining every round-one opening.
@@ -1709,7 +1606,6 @@ impl<'a> ZkAmsMkheActiveRkgRoundTwoWitnessV1<'a> {
         })
     }
 }
-
 /// Borrowed exact relation for one automorphism-linked Galois-source digit.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
@@ -1721,7 +1617,6 @@ pub(super) struct ZkAmsMkheActiveGaloisSourceStatementV1<'a> {
     exponent: u32,
     digit_index: u32,
 }
-
 #[cfg(test)]
 impl<'a> ZkAmsMkheActiveGaloisSourceStatementV1<'a> {
     /// Bind a verified public share and exact source ciphertext to the frozen schedule.
@@ -1748,7 +1643,6 @@ impl<'a> ZkAmsMkheActiveGaloisSourceStatementV1<'a> {
         })
     }
 }
-
 fn validate_galois_source_coordinate(
     schedule_index: usize,
     exponent: u32,
@@ -1768,7 +1662,6 @@ fn validate_galois_source_coordinate(
     }
     Ok(())
 }
-
 /// Borrowed bounded witness for one automorphism-linked Galois-source digit.
 #[cfg(test)]
 #[allow(
@@ -1783,14 +1676,12 @@ pub(super) struct ZkAmsMkheActiveGaloisSourceWitnessV1<'a> {
     error_zero: &'a [i64],
     error_one: &'a [i64],
 }
-
 #[cfg(test)]
 impl core::fmt::Debug for ZkAmsMkheActiveGaloisSourceWitnessV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkAmsMkheActiveGaloisSourceWitnessV1([REDACTED])")
     }
 }
-
 #[allow(
     dead_code,
     reason = "used by the private fail-closed collective Galois-key generator"
@@ -1819,7 +1710,6 @@ impl<'a> ZkAmsMkheActiveGaloisSourceWitnessV1<'a> {
         })
     }
 }
-
 /// Authenticated canonical narrow-coefficient proof for one collective-key or
 /// streamed RKG record.
 #[derive(Clone, PartialEq, Eq)]
@@ -1829,7 +1719,6 @@ pub struct ZkAmsMkheActiveRkgProofV1 {
     proof_bytes: Vec<u8>,
     contribution: ZkAmsMkheActiveContributionV1,
 }
-
 impl core::fmt::Debug for ZkAmsMkheActiveRkgProofV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1841,37 +1730,31 @@ impl core::fmt::Debug for ZkAmsMkheActiveRkgProofV1 {
             .finish()
     }
 }
-
 impl ZkAmsMkheActiveRkgProofV1 {
     /// Digest of the complete exact algebraic statement.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Exact number of bounded witness polynomials.
     #[must_use]
     pub const fn witness_polynomials(&self) -> u8 {
         self.witness_polynomials
     }
-
     /// Canonical fixed-width Fiat--Shamir-with-aborts proof bytes.
     #[must_use]
     pub fn proof_bytes(&self) -> &[u8] {
         &self.proof_bytes
     }
-
     /// Authenticated active-round contribution whose payload is this proof.
     #[must_use]
     pub const fn contribution(&self) -> &ZkAmsMkheActiveContributionV1 {
         &self.contribution
     }
-
     /// Exact bytes in the complete durable proof/authentication record.
     pub fn evidence_encoded_len(&self) -> Result<usize, ZkAmsMkheErrorV1> {
         self.validate_evidence()
     }
-
     /// Visit the complete durable proof/authentication record without first
     /// materializing a second release-sized byte vector.
     ///
@@ -1908,7 +1791,6 @@ impl ZkAmsMkheActiveRkgProofV1 {
         write(&contribution.authentication.public_key)?;
         write(&contribution.authentication.signature)
     }
-
     /// Encode the complete durable audit record, including authentication bytes.
     pub fn encode_evidence(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
         let total = self.evidence_encoded_len()?;
@@ -1925,7 +1807,6 @@ impl ZkAmsMkheActiveRkgProofV1 {
         }
         Ok(bytes)
     }
-
     fn validate_evidence(&self) -> Result<usize, ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
         if self.statement_digest == [0; 32]
@@ -1953,7 +1834,6 @@ impl ZkAmsMkheActiveRkgProofV1 {
             .and_then(|value| value.checked_add(ACTIVE_RKG_EVIDENCE_CONTRIBUTION_BYTES_V1))
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
     }
-
     /// Decode one exact durable audit record with complete length preflight.
     pub fn decode_evidence_exact(bytes: &[u8]) -> Result<Self, ZkAmsMkheErrorV1> {
         if bytes.len()
@@ -2023,7 +1903,6 @@ impl ZkAmsMkheActiveRkgProofV1 {
         }
         Ok(value)
     }
-
     /// Decode one exact framed proof record from a reader without retaining a
     /// second encoded copy. The caller supplies the enclosing record's trusted
     /// length and owns any desired EOF check.
@@ -2093,7 +1972,6 @@ impl ZkAmsMkheActiveRkgProofV1 {
         Ok(value)
     }
 }
-
 fn decode_active_evidence_contribution_exact(
     bytes: &[u8],
 ) -> Result<ZkAmsMkheActiveContributionV1, ZkAmsMkheErrorV1> {
@@ -2146,7 +2024,6 @@ fn decode_active_evidence_contribution_exact(
         .verify(ACTIVE_CONTRIBUTION_DOMAIN_V1, statement)?;
     Ok(contribution)
 }
-
 fn read_active_evidence_io_exact(
     reader: &mut impl std::io::Read,
     bytes: &mut [u8],
@@ -2155,7 +2032,6 @@ fn read_active_evidence_io_exact(
         .read_exact(bytes)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
-
 fn read_active_evidence_array<const N: usize>(
     bytes: &[u8],
     cursor: &mut usize,
@@ -2171,7 +2047,6 @@ fn read_active_evidence_array<const N: usize>(
     *cursor = end;
     Ok(value)
 }
-
 fn read_active_evidence_u8(bytes: &[u8], cursor: &mut usize) -> Result<u8, ZkAmsMkheErrorV1> {
     let value = bytes
         .get(*cursor)
@@ -2182,7 +2057,6 @@ fn read_active_evidence_u8(bytes: &[u8], cursor: &mut usize) -> Result<u8, ZkAms
         .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
     Ok(value)
 }
-
 /// Derive the sole uniformly sampled collective-public-key `a` polynomial for
 /// a governed roster and protocol transcript.
 pub fn zk_ams_mkhe_active_collective_public_a_v1(
@@ -2193,7 +2067,6 @@ pub fn zk_ams_mkhe_active_collective_public_a_v1(
     let polynomial = derive_active_collective_public_a(&profile, roster, transcript_digest)?;
     super::ZkAmsMkheRnsPolynomialWireV1::new(polynomial.coefficients)
 }
-
 /// Prove and authenticate one bounded collective-public-key share relation.
 #[allow(clippy::too_many_arguments)]
 pub fn prove_zk_ams_mkhe_active_collective_public_key_v1<R: MaskedRelaxedRandomSourceV1>(
@@ -2231,7 +2104,6 @@ pub fn prove_zk_ams_mkhe_active_collective_public_key_v1<R: MaskedRelaxedRandomS
         random,
     )
 }
-
 /// Verify one authenticated collective-public-key share proof against an
 /// independently trusted roster position and transcript.
 pub fn verify_zk_ams_mkhe_active_collective_public_key_v1(
@@ -2255,7 +2127,6 @@ pub fn verify_zk_ams_mkhe_active_collective_public_key_v1(
     let relation = collective_public_key_relation(&profile, statement)?;
     verify_authenticated_active_relation(&profile, roster, context, &relation, proof)
 }
-
 /// Prove and authenticate one exact streamed RKG round-one pair/digit record.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -2290,7 +2161,6 @@ pub fn prove_zk_ams_mkhe_active_rkg_round_one_v1<R: MaskedRelaxedRandomSourceV1>
         random,
     )
 }
-
 /// Verify one exact streamed RKG round-one pair/digit proof.
 #[cfg(test)]
 pub fn verify_zk_ams_mkhe_active_rkg_round_one_v1(
@@ -2312,7 +2182,6 @@ pub fn verify_zk_ams_mkhe_active_rkg_round_one_v1(
     let relation = rkg_round_one_relation(&profile, statement, context.party)?;
     verify_authenticated_active_relation(&profile, roster, context, &relation, proof)
 }
-
 /// Prove and authenticate one exact streamed RKG round-two pair/digit record.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -2351,7 +2220,6 @@ pub fn prove_zk_ams_mkhe_active_rkg_round_two_v1<R: MaskedRelaxedRandomSourceV1>
         random,
     )
 }
-
 /// Verify one exact streamed RKG round-two pair/digit proof.
 #[cfg(test)]
 pub fn verify_zk_ams_mkhe_active_rkg_round_two_v1(
@@ -2373,7 +2241,6 @@ pub fn verify_zk_ams_mkhe_active_rkg_round_two_v1(
     let relation = rkg_round_two_relation(&profile, statement, context.party)?;
     verify_authenticated_active_relation(&profile, roster, context, &relation, proof)
 }
-
 /// Prove and authenticate one exact automorphism-linked Galois-source digit.
 #[cfg(test)]
 #[allow(
@@ -2410,7 +2277,6 @@ pub(super) fn prove_zk_ams_mkhe_active_galois_source_v1<R: MaskedRelaxedRandomSo
         random,
     )
 }
-
 /// Verify one automorphism-linked Galois-source digit against trusted context.
 #[cfg(test)]
 pub(super) fn verify_zk_ams_mkhe_active_galois_source_v1(
@@ -2426,7 +2292,6 @@ pub(super) fn verify_zk_ams_mkhe_active_galois_source_v1(
     let relation = galois_source_relation(&profile, statement)?;
     verify_authenticated_active_relation(&profile, roster, context, &relation, proof)
 }
-
 fn derive_active_collective_public_a(
     profile: &super::BgvProfile,
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2443,7 +2308,6 @@ fn derive_active_collective_public_a(
     context.extend_from_slice(&transcript_digest);
     super::derive_uniform_rns_from_context(profile, ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1, &context)
 }
-
 fn validate_collective_public_a(
     profile: &super::BgvProfile,
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2472,7 +2336,6 @@ fn validate_collective_public_a(
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn active_linear_context(
     profile: &super::BgvProfile,
@@ -2499,7 +2362,6 @@ fn active_linear_context(
     context.validate(profile)?;
     Ok(context)
 }
-
 #[cfg(test)]
 fn rkg_linear_context(
     profile: &super::BgvProfile,
@@ -2556,7 +2418,6 @@ fn rkg_linear_context(
         pair_index,
     )
 }
-
 #[cfg(test)]
 fn galois_source_linear_context(
     profile: &super::BgvProfile,
@@ -2599,7 +2460,6 @@ fn galois_source_linear_context(
         statement.exponent,
     )
 }
-
 fn active_party_set(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
 ) -> Result<super::PartySet, ZkAmsMkheErrorV1> {
@@ -2612,7 +2472,6 @@ fn active_party_set(
             .collect(),
     )
 }
-
 fn canonical_rkg_pair_index(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     left: ZkAmsMkhePartyIdV1,
@@ -2641,7 +2500,6 @@ fn canonical_rkg_pair_index(
     }
     Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
 }
-
 #[cfg(test)]
 fn release_wire_polynomial(
     profile: &super::BgvProfile,
@@ -2650,38 +2508,31 @@ fn release_wire_polynomial(
     polynomial.encoded_len()?;
     super::RnsPolynomial::from_flat(profile, polynomial.residues().to_vec())
 }
-
 #[cfg(test)]
 std::thread_local! {
     static ACTIVE_SECRET_TABLE_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 #[cfg(test)]
 fn record_active_secret_table_zeroized_drop_v1(zeroized: bool) {
     if zeroized {
         ACTIVE_SECRET_TABLE_ZEROIZED_DROPS_V1.with(|count| count.set(count.get() + 1));
     }
 }
-
 #[cfg(test)]
 fn reset_active_secret_table_zeroized_drop_count_v1() {
     ACTIVE_SECRET_TABLE_ZEROIZED_DROPS_V1.with(|count| count.set(0));
 }
-
 #[cfg(test)]
 fn active_secret_table_zeroized_drop_count_v1() -> usize {
     ACTIVE_SECRET_TABLE_ZEROIZED_DROPS_V1.with(std::cell::Cell::get)
 }
-
 struct ZeroizingActiveRnsV1(super::RnsPolynomial);
-
 impl ZeroizingActiveRnsV1 {
     fn as_polynomial(&self) -> &super::RnsPolynomial {
         &self.0
     }
-
     fn into_public(mut self) -> super::RnsPolynomial {
         core::mem::replace(
             &mut self.0,
@@ -2691,7 +2542,6 @@ impl ZeroizingActiveRnsV1 {
         )
     }
 }
-
 impl Drop for ZeroizingActiveRnsV1 {
     fn drop(&mut self) {
         let coefficients = core::hint::black_box(&mut self.0.coefficients);
@@ -2704,15 +2554,12 @@ impl Drop for ZeroizingActiveRnsV1 {
         let _ = core::hint::black_box(&mut *coefficients);
     }
 }
-
 struct ZeroizingActiveI64V1(Vec<i64>);
-
 impl ZeroizingActiveI64V1 {
     fn as_slice(&self) -> &[i64] {
         &self.0
     }
 }
-
 impl Drop for ZeroizingActiveI64V1 {
     fn drop(&mut self) {
         let coefficients = core::hint::black_box(&mut self.0);
@@ -2725,23 +2572,19 @@ impl Drop for ZeroizingActiveI64V1 {
         let _ = core::hint::black_box(&mut *coefficients);
     }
 }
-
 trait LinearRelationRnsV1 {
     fn linear_relation_polynomial(&self) -> &super::RnsPolynomial;
 }
-
 impl LinearRelationRnsV1 for super::RnsPolynomial {
     fn linear_relation_polynomial(&self) -> &super::RnsPolynomial {
         self
     }
 }
-
 impl LinearRelationRnsV1 for ZeroizingActiveRnsV1 {
     fn linear_relation_polynomial(&self) -> &super::RnsPolynomial {
         self.as_polynomial()
     }
 }
-
 fn try_zero_active_rns_v1(
     profile: &super::BgvProfile,
 ) -> Result<super::RnsPolynomial, ZkAmsMkheErrorV1> {
@@ -2757,7 +2600,6 @@ fn try_zero_active_rns_v1(
     coefficients.resize(coefficient_count, 0);
     super::RnsPolynomial::from_flat(profile, coefficients)
 }
-
 fn zeroizing_active_rns_from_signed_v1(
     profile: &super::BgvProfile,
     values: &[i64],
@@ -2779,7 +2621,6 @@ fn zeroizing_active_rns_from_signed_v1(
     }
     Ok(polynomial)
 }
-
 #[cfg(test)]
 fn scaled_identity(
     profile: &super::BgvProfile,
@@ -2803,7 +2644,6 @@ fn scaled_identity(
     }
     Ok(polynomial)
 }
-
 fn combine_rns_in_place(
     target: &mut super::RnsPolynomial,
     source: &super::RnsPolynomial,
@@ -2824,7 +2664,6 @@ fn combine_rns_in_place(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn push_nonzero_term(
     terms: &mut Vec<LinearRelationTermV1>,
@@ -2843,7 +2682,6 @@ fn push_nonzero_term(
         });
     }
 }
-
 fn collective_public_key_relation(
     profile: &super::BgvProfile,
     statement: ZkAmsMkheActiveCollectivePublicKeyStatementV1<'_>,
@@ -2860,7 +2698,6 @@ fn collective_public_key_relation(
     relation.validate(profile)?;
     Ok(relation)
 }
-
 #[cfg(test)]
 fn rkg_round_one_relation(
     profile: &super::BgvProfile,
@@ -2911,7 +2748,6 @@ fn rkg_round_one_relation(
     relation.validate(profile)?;
     Ok(relation)
 }
-
 #[cfg(test)]
 fn rkg_round_two_relation(
     profile: &super::BgvProfile,
@@ -2940,7 +2776,6 @@ fn rkg_round_two_relation(
     relation.validate(profile)?;
     Ok(relation)
 }
-
 #[cfg(test)]
 fn galois_source_relation(
     profile: &super::BgvProfile,
@@ -3009,7 +2844,6 @@ fn galois_source_relation(
     relation.validate(profile)?;
     Ok(relation)
 }
-
 fn secret_polynomial_exact(
     profile: &super::BgvProfile,
     coefficients: &[i64],
@@ -3027,7 +2861,6 @@ fn secret_polynomial_exact(
         coefficients: coefficients.to_vec(),
     })
 }
-
 #[cfg(test)]
 fn round_one_witness_polynomials(
     profile: &super::BgvProfile,
@@ -3041,7 +2874,6 @@ fn round_one_witness_polynomials(
         secret_polynomial_exact(profile, witness.error_one, i64::from(profile.error_eta))?,
     ])
 }
-
 #[allow(clippy::too_many_arguments)]
 fn prove_authenticated_active_relation<R: MaskedRelaxedRandomSourceV1>(
     profile: &super::BgvProfile,
@@ -3073,7 +2905,6 @@ fn prove_authenticated_active_relation<R: MaskedRelaxedRandomSourceV1>(
         contribution,
     })
 }
-
 fn verify_authenticated_active_relation(
     profile: &super::BgvProfile,
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -3110,7 +2941,6 @@ fn verify_authenticated_active_relation(
     )
     .map_err(|_| ZkAmsMkheErrorV1::InvalidAuthentication)
 }
-
 fn validate_release_narrow_witness(values: &[i64], bound: i64) -> Result<(), ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
     profile.validate()?;
@@ -3123,7 +2953,6 @@ fn validate_release_narrow_witness(values: &[i64], bound: i64) -> Result<(), ZkA
     }
     Ok(())
 }
-
 /// Exact binding for one streamed collective-public-key or RKG relation proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LinearProofContextV1 {
@@ -3137,7 +2966,6 @@ struct LinearProofContextV1 {
     record_index: u32,
     relation_index: u32,
 }
-
 impl LinearProofContextV1 {
     fn validate(&self, profile: &super::BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
         if self.profile_digest != profile.digest()?
@@ -3158,27 +2986,23 @@ impl LinearProofContextV1 {
         Ok(())
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LinearRelationTermV1 {
     witness_index: usize,
     multiplier: super::RnsPolynomial,
     witness_automorphism_exponent: usize,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LinearRelationOutputV1 {
     target: super::RnsPolynomial,
     challenge_automorphism_exponent: usize,
     terms: Vec<LinearRelationTermV1>,
 }
-
 #[derive(Clone, PartialEq, Eq)]
 struct StreamingCollectivePublicKeyRelationV1 {
     public_a: Arc<Vec<u64>>,
     party_public_b: Arc<Vec<u64>>,
 }
-
 impl core::fmt::Debug for StreamingCollectivePublicKeyRelationV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -3188,7 +3012,6 @@ impl core::fmt::Debug for StreamingCollectivePublicKeyRelationV1 {
             .finish_non_exhaustive()
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LinearRelationStatementV1 {
     witness_bounds: Vec<i64>,
@@ -3196,7 +3019,6 @@ struct LinearRelationStatementV1 {
     outputs: Vec<LinearRelationOutputV1>,
     streaming_collective_public_key: Option<StreamingCollectivePublicKeyRelationV1>,
 }
-
 impl LinearRelationStatementV1 {
     fn output_count(&self) -> Result<usize, ZkAmsMkheErrorV1> {
         self.outputs
@@ -3204,7 +3026,6 @@ impl LinearRelationStatementV1 {
             .checked_add(usize::from(self.streaming_collective_public_key.is_some()))
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
     }
-
     fn validate(&self, profile: &super::BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
         profile.validate()?;
         if self.witness_bounds.is_empty()
@@ -3320,7 +3141,6 @@ impl LinearRelationStatementV1 {
         }
         Ok(())
     }
-
     fn digest(&self, profile: &super::BgvProfile) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.validate(profile)?;
         let mut hash = Keccak256::new();
@@ -3391,7 +3211,6 @@ impl LinearRelationStatementV1 {
         }
         Ok(hash.finalize())
     }
-
     fn outputs_match(&self, outputs: &[super::RnsPolynomial]) -> Result<bool, ZkAmsMkheErrorV1> {
         if outputs.len() != self.output_count()? {
             return Ok(false);
@@ -3409,7 +3228,6 @@ impl LinearRelationStatementV1 {
             .all(|(actual, expected)| actual == &expected.target))
     }
 }
-
 /// Fiat--Shamir-with-aborts proof of one or more exact linear RNS relations.
 ///
 /// This is a lattice proof, not a signature and not a digest-as-proof. The
@@ -3423,7 +3241,6 @@ struct LinearRelationProofV1 {
     challenge_seed: [u8; 32],
     responses: Vec<Vec<i64>>,
 }
-
 impl LinearRelationProofV1 {
     fn encode_wire(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
         if self.challenge_seed == [0; 32]
@@ -3473,7 +3290,6 @@ impl LinearRelationProofV1 {
         }
         Ok(bytes)
     }
-
     fn decode_wire_exact(
         bytes: &[u8],
         expected_witnesses: usize,
@@ -3552,7 +3368,6 @@ impl LinearRelationProofV1 {
             responses,
         })
     }
-
     fn digest(
         &self,
         profile: &super::BgvProfile,
@@ -3568,7 +3383,6 @@ impl LinearRelationProofV1 {
         Ok(hash.finalize())
     }
 }
-
 fn linear_proof_wire_bytes(
     witness_count: usize,
     ring_degree: usize,
@@ -3581,7 +3395,6 @@ fn linear_proof_wire_bytes(
         .and_then(|bytes| bytes.checked_add(RKG_LINEAR_PROOF_WIRE_HEADER_BYTES_V1))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn prove_linear_relation_v1<R: MaskedRelaxedRandomSourceV1>(
     profile: &super::BgvProfile,
     context: LinearProofContextV1,
@@ -3674,7 +3487,6 @@ fn prove_linear_relation_v1<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
-
 fn verify_linear_relation_proof(
     profile: &super::BgvProfile,
     context: LinearProofContextV1,
@@ -3716,7 +3528,6 @@ fn verify_linear_relation_proof(
     }
     Ok(())
 }
-
 fn validate_linear_response_coefficients(
     response: &[i64],
     ring_degree: usize,
@@ -3733,7 +3544,6 @@ fn validate_linear_response_coefficients(
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn authenticate_verified_linear_contribution<R: MaskedRelaxedRandomSourceV1>(
     profile: &super::BgvProfile,
@@ -3768,7 +3578,6 @@ fn authenticate_verified_linear_contribution<R: MaskedRelaxedRandomSourceV1>(
         random,
     )
 }
-
 fn validate_linear_witnesses(
     profile: &super::BgvProfile,
     statement: &LinearRelationStatementV1,
@@ -3789,7 +3598,6 @@ fn validate_linear_witnesses(
     }
     Ok(())
 }
-
 fn apply_linear_relation_from_signed_v1(
     profile: &super::BgvProfile,
     statement: &LinearRelationStatementV1,
@@ -3822,7 +3630,6 @@ fn apply_linear_relation_from_signed_v1(
     }
     Ok(outputs)
 }
-
 fn apply_streaming_collective_public_key_relation_v1(
     profile: &super::BgvProfile,
     relation: &StreamingCollectivePublicKeyRelationV1,
@@ -3847,7 +3654,6 @@ fn apply_streaming_collective_public_key_relation_v1(
     accumulate_scaled_identity_signed_v1(&mut output.0, error, profile, None)?;
     Ok(output.into_public())
 }
-
 fn accumulate_scaled_identity_signed_v1(
     output: &mut super::RnsPolynomial,
     values: &[i64],
@@ -3881,7 +3687,6 @@ fn accumulate_scaled_identity_signed_v1(
     }
     Ok(())
 }
-
 fn reconstruct_linear_commitments_v1(
     profile: &super::BgvProfile,
     statement: &LinearRelationStatementV1,
@@ -3917,7 +3722,6 @@ fn reconstruct_linear_commitments_v1(
     }
     Ok(commitments)
 }
-
 fn apply_linear_relation<T: LinearRelationRnsV1>(
     profile: &super::BgvProfile,
     statement: &LinearRelationStatementV1,
@@ -3955,7 +3759,6 @@ fn apply_linear_relation<T: LinearRelationRnsV1>(
         })
         .collect()
 }
-
 fn linear_response_parameters(
     witness_bound: i64,
     challenge_weight: usize,
@@ -3976,7 +3779,6 @@ fn linear_response_parameters(
     }
     Ok((mask_bound, response_limit))
 }
-
 fn linear_challenge_weight(ring_degree: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     if ring_degree < 2 || !ring_degree.is_power_of_two() {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
@@ -3989,7 +3791,6 @@ fn linear_challenge_weight(ring_degree: usize) -> Result<usize, ZkAmsMkheErrorV1
         },
     )
 }
-
 fn sample_signed_mask<R: MaskedRelaxedRandomSourceV1>(
     count: usize,
     bound: i64,
@@ -4017,7 +3818,6 @@ fn sample_signed_mask<R: MaskedRelaxedRandomSourceV1>(
     }
     Ok(mask)
 }
-
 fn validate_linear_random_health<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -4043,18 +3843,15 @@ fn validate_linear_random_health<R: MaskedRelaxedRandomSourceV1>(
     first.fill(0);
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SparseChallengeTermV1 {
     position: u32,
     sign: i8,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SparseChallengeV1 {
     terms: Vec<SparseChallengeTermV1>,
 }
-
 impl SparseChallengeV1 {
     fn new(
         ring_degree: usize,
@@ -4073,7 +3870,6 @@ impl SparseChallengeV1 {
         }
         Ok(Self { terms })
     }
-
     fn to_dense(&self, ring_degree: usize) -> Result<Vec<i64>, ZkAmsMkheErrorV1> {
         let mut dense = vec![0_i64; ring_degree];
         for term in &self.terms {
@@ -4090,7 +3886,6 @@ impl SparseChallengeV1 {
         Ok(dense)
     }
 }
-
 fn derive_sparse_challenge(
     ring_degree: usize,
     challenge_seed: [u8; 32],
@@ -4151,7 +3946,6 @@ fn derive_sparse_challenge(
     }
     Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
 }
-
 fn sparse_negacyclic_mul_signed(
     sparse: &[i64],
     dense: &[i64],
@@ -4186,7 +3980,6 @@ fn sparse_negacyclic_mul_signed(
     }
     Ok(output)
 }
-
 fn automorphism_signed(
     coefficients: &[i64],
     exponent: usize,
@@ -4218,7 +4011,6 @@ fn automorphism_signed(
     }
     Ok(output)
 }
-
 fn linear_context_digest(
     profile: &super::BgvProfile,
     context: LinearProofContextV1,
@@ -4238,7 +4030,6 @@ fn linear_context_digest(
     frame.extend_from_slice(&context.relation_index.to_be_bytes());
     Ok(keccak256(&frame))
 }
-
 fn linear_commitment_challenge_seed(
     profile: &super::BgvProfile,
     context: LinearProofContextV1,
@@ -4263,7 +4054,6 @@ fn linear_commitment_challenge_seed(
     }
     Ok(hash.finalize())
 }
-
 fn validate_borrowed_rns_residues_v1(
     profile: &super::BgvProfile,
     residues: &[u64],
@@ -4282,7 +4072,6 @@ fn validate_borrowed_rns_residues_v1(
     }
     Ok(())
 }
-
 fn update_borrowed_rns_hash_v1(
     hash: &mut Keccak256,
     profile: &super::BgvProfile,
@@ -4315,7 +4104,6 @@ fn update_borrowed_rns_hash_v1(
     }
     Ok(())
 }
-
 fn update_scaled_identity_rns_hash_v1(
     hash: &mut Keccak256,
     profile: &super::BgvProfile,
@@ -4353,7 +4141,6 @@ fn update_scaled_identity_rns_hash_v1(
     }
     Ok(())
 }
-
 fn update_rns_hash(
     hash: &mut Keccak256,
     profile: &super::BgvProfile,
@@ -4383,7 +4170,6 @@ fn update_rns_hash(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     include!("active_tests.rs");

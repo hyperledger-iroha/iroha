@@ -1,7 +1,5 @@
 //! Deterministic tests for optional columns and NCB invariants.
-
 use norito::columnar::*;
-
 #[test]
 fn optstr_invariants() {
     let cases: Vec<Vec<(u64, Option<&str>, bool)>> = vec![
@@ -15,7 +13,6 @@ fn optstr_invariants() {
             (14, Some("gamma"), false),
         ],
     ];
-
     for rows in cases {
         let ncb = encode_ncb_u64_optstr_bool(&rows);
         let view = view_ncb_u64_optstr_bool(&ncb).expect("view optstr");
@@ -25,7 +22,6 @@ fn optstr_invariants() {
             assert_eq!(view.name(idx).expect("name call ok"), row.1);
             assert_eq!(view.flag(idx), row.2);
         }
-
         let mut prefixed = Vec::with_capacity(ncb.len() + 1);
         prefixed.push(0xCC);
         prefixed.extend_from_slice(&ncb);
@@ -38,7 +34,6 @@ fn optstr_invariants() {
         }
     }
 }
-
 #[test]
 fn optu32_invariants() {
     let cases: Vec<Vec<(u64, Option<u32>, bool)>> = vec![
@@ -56,7 +51,6 @@ fn optu32_invariants() {
             (14, Some(44), false),
         ],
     ];
-
     for rows in cases {
         let ncb = encode_ncb_u64_optu32_bool(&rows);
         let view = view_ncb_u64_optu32_bool(&ncb).expect("view optu32");
@@ -66,7 +60,6 @@ fn optu32_invariants() {
             assert_eq!(view.val(idx), row.1);
             assert_eq!(view.flag(idx), row.2);
         }
-
         let mut prefixed = Vec::with_capacity(ncb.len() + 2);
         prefixed.extend_from_slice(&[0xAA, 0xBB]);
         prefixed.extend_from_slice(&ncb);

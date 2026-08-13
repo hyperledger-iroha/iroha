@@ -2,14 +2,10 @@ use std::{
     alloc::{GlobalAlloc, Layout, System},
     sync::atomic::{AtomicUsize, Ordering},
 };
-
 use iroha_schema::IntoSchema;
 use norito::core::*;
-
 struct CountingAlloc;
-
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
-
 unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::SeqCst);
@@ -19,21 +15,17 @@ unsafe impl GlobalAlloc for CountingAlloc {
         unsafe { System.dealloc(ptr, layout) }
     }
 }
-
 #[global_allocator]
 static A: CountingAlloc = CountingAlloc;
-
 #[derive(IntoSchema, NoritoSerialize)]
 #[repr(C)]
 struct Named {
     x: u32,
     y: u64,
 }
-
 #[derive(IntoSchema, NoritoSerialize)]
 #[repr(C)]
 struct Tuple(u32, u64);
-
 #[test]
 fn named_struct_no_extra_allocations() {
     // Warm up any one-time allocations (e.g., tables) outside measurement
@@ -55,7 +47,6 @@ fn named_struct_no_extra_allocations() {
         ALLOCATIONS.load(Ordering::SeqCst)
     );
 }
-
 #[test]
 fn tuple_struct_no_extra_allocations() {
     let _ = to_bytes(&0u8).unwrap();

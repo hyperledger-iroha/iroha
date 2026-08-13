@@ -12,7 +12,6 @@ v2_apply_test!(
             block::consensus::{NativeAmxPhase, SumeragiAutonomousLaneExecutionStage},
             isi::SetKeyValue,
         };
-
         let fixture = ApplyFixture::new_with_native_lane_lifecycle();
         let assert_fixture_context = |stage: &str| {
             assert_eq!(
@@ -186,7 +185,6 @@ v2_apply_test!(
                 && key.lane_block_height == origin_descriptor.lane_block_height
                 && key.lane_block_view == origin_descriptor.lane_block_view
         }));
-
         let diagnostic_at = |queue: &Queue, stage: SumeragiAutonomousLaneExecutionStage| {
             let rows = fixture
                 .state
@@ -216,7 +214,6 @@ v2_apply_test!(
                 .expect("autonomous execution diagnostics row remains self-consistent");
             row
         };
-
         fixture
             .kura
             .install_lane_incarnation_marker_for_test(
@@ -250,7 +247,6 @@ v2_apply_test!(
         assert_eq!(reserved_row.source_bundle_hash, None);
         assert_eq!(reserved_row.merge_entry_hash, None);
         assert_eq!(reserved_row.application_block_height, None);
-
         let active_context = verified_successor_context_after_fixture_tip(&fixture);
         assert_eq!(
             active_context.context().execution_policy_hash,
@@ -286,7 +282,6 @@ v2_apply_test!(
                 ordered_keys: expected_reservation_keys.clone(),
             }]
         );
-
         let planning = plan_lane_reservation_ownership(
             fixture.state.as_ref(),
             queue.as_ref(),
@@ -335,7 +330,6 @@ v2_apply_test!(
         assert_eq!(anchored_hint.proposal_height, 2);
         assert_eq!(anchored_hint.proposal_view, 0);
         assert_eq!(anchored_hint.proposal_block_hash, successor.body.hash());
-
         assert_eq!(
             install_historical_autonomous_lane_recovery(
                 fixture.state.as_ref(),
@@ -397,7 +391,6 @@ v2_apply_test!(
             payload_row.executable_payload_hash,
             Some(install.payload.payload_hash)
         );
-
         let validator_keys = fixture_validator_keys();
         let nonzero = NonZeroUsize::new(8).expect("non-zero lane-work bound");
         let limits = crate::sumeragi::v2_lane_work::V2LaneWorkLimits::new(
@@ -458,7 +451,6 @@ v2_apply_test!(
             reservation_group,
             "historical lifecycle cursor must bind the exact recovery reservation group",
         );
-
         let availability_body = crate::lane_consensus::lane_payload_availability_body(
             &install.payload,
             &anchored_proposal,
@@ -546,7 +538,6 @@ v2_apply_test!(
             crate::sumeragi::v2_lane_work::HistoricalRecoveryServiceOutcome::Complete(_)
         ));
         assert!(!lane_work.has_pending_historical_recovery());
-
         let source = fixture
             .kura
             .durable_autonomous_lane_merge_source(
@@ -627,7 +618,6 @@ v2_apply_test!(
             .expect("historical Native receipt validates against live authority");
         }
         drop(state_view);
-
         let application_header = lane_work
             .merge_carrier_context_header(0)
             .expect("derive the exact canonical merge application header");
@@ -688,7 +678,6 @@ v2_apply_test!(
             execution.proposal.descriptor.lane_block_height,
             origin_descriptor.lane_block_height
         );
-
         let validator_set = active_context
             .context()
             .roster
@@ -763,7 +752,6 @@ v2_apply_test!(
             SumeragiAutonomousLaneExecutionStage::MergeCandidateDurable,
         );
         assert_eq!(merge_row.merge_entry_hash, Some(entry_hash));
-
         let service = V2ApplyService::new(
             Arc::clone(&fixture.state),
             Arc::clone(&queue),
@@ -902,7 +890,6 @@ v2_apply_test!(
             certificate,
             validated,
         );
-
         assert_eq!(
             queue.live_lane_reservations().len(),
             expected_reservation_keys.len()
@@ -1071,7 +1058,6 @@ v2_apply_test!(
         assert!(
             queue.lane_reservation_group_is_finalized_for_diagnostics(&expected_reservation_keys)
         );
-
         let receipt = fixture
             .kura
             .read_lane_block_application_receipt(
@@ -1122,7 +1108,6 @@ v2_apply_test!(
         assert_eq!(finalized_row.application_block_height, Some(3));
         assert_eq!(finalized_row.application_block_hash, Some(carrier.hash()));
         assert_eq!(finalized_row.stuck_reason, None);
-
         service
             .execute(active_context.context(), &mut body_store, &task)
             .expect("retry the exact canonical autonomous merge application");
@@ -1154,7 +1139,6 @@ v2_apply_test!(
         assert!(
             queue.lane_reservation_group_is_finalized_for_diagnostics(&expected_reservation_keys)
         );
-
         let native_marker = native_amx_frontiers[0];
         let native_receipt = fixture
             .kura
@@ -1181,7 +1165,6 @@ v2_apply_test!(
         let pre_startup_merge_ledger = fixture.state.merge_ledger.snapshot();
         let pre_startup_balance = autonomous_balance();
         assert!(participant_metadata_is_committed());
-
         drop(service);
         drop(queue);
         drop(body_store);
@@ -1259,7 +1242,6 @@ v2_apply_test!(
                 Some(&entry),
             )
             .expect("planned merge association authorizes exact Native startup repair");
-
         let startup_context = {
             let state_view = fixture.state.view();
             crate::sumeragi::v2_context::build_successor_height_context_from_state(
@@ -1358,7 +1340,6 @@ v2_apply_test!(
         };
         assert!(empty_plan.is_empty());
         assert_eq!(empty_plan.item_count(), 0);
-
         let terminal_queue = fixture_queue(fixture.state.as_ref(), events_sender);
         let terminal_replay = terminal_queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)

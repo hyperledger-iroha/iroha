@@ -1,15 +1,12 @@
 //! Structures traits and impls related to `Trigger`s.
-
 // If editing this file, consider updating `iroha_core/src/smartcontracts/isi/triggers/specialized.rs`
 // It mirrors structures from this file.
-
 use std::{
     cmp, format,
     num::{NonZeroU32, NonZeroU64},
     string::String,
     vec::Vec,
 };
-
 #[cfg(feature = "json")]
 use base64::Engine as _;
 #[cfg(feature = "json")]
@@ -22,14 +19,11 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-
 pub use self::model::*;
 use crate::{Identifiable, Name, Registered, metadata::Metadata, transaction::Executable};
-
 #[model]
 mod model {
     use super::*;
-
     /// Identification of a `Trigger`.
     #[derive(
         Debug,
@@ -55,7 +49,6 @@ mod model {
         /// Name given to trigger by its creator.
         pub name: Name,
     }
-
     /// Represents a trigger, binding an identifier to its action.
     #[derive(Debug, Display, Clone, IdEqOrdHash, IntoSchema)]
     #[display("{id}")]
@@ -67,9 +60,7 @@ mod model {
         pub action: action::Action,
     }
 }
-
 string_id!(TriggerId);
-
 #[ffi_impl_opaque]
 impl Trigger {
     // we can derive this with `derive_more::Constructor`, but RustRover freaks out and thinks it's signature is (TriggerId, TriggerId, Action, Action), giving bogus errors
@@ -77,66 +68,53 @@ impl Trigger {
     pub fn new(id: TriggerId, action: action::Action) -> Trigger {
         Trigger { id, action }
     }
-
     /// Unique identifier of the [`Trigger`].
     pub fn id(&self) -> &TriggerId {
         &self.id
     }
-
     /// Action to be performed when the trigger matches.
     pub fn action(&self) -> &action::Action {
         &self.action
     }
 }
-
 impl Registered for Trigger {
     type With = Self;
 }
-
 impl crate::HasMetadata for Trigger {
     fn metadata(&self) -> &crate::metadata::Metadata {
         crate::HasMetadata::metadata(self.action())
     }
 }
-
 mod candidate {
     use super::*;
-
     #[derive(Encode, Decode)]
     pub(super) struct TriggerCandidate {
         pub id: TriggerId,
         pub action: action::Action,
     }
-
     struct BorrowedValue<'a, T>(&'a T);
-
     impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize for BorrowedValue<'_, T> {
         fn schema_hash() -> [u8; 16] {
             T::schema_hash()
         }
-
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
             self.0.serialize(writer)
         }
-
         fn encoded_len_hint(&self) -> Option<usize> {
             self.0.encoded_len_hint()
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             self.0.encoded_len_exact()
         }
     }
-
     #[derive(norito::derive::NoritoSerialize)]
     struct TriggerCandidateRef<'a> {
         id: BorrowedValue<'a, TriggerId>,
         action: BorrowedValue<'a, action::Action>,
     }
-
     impl<'a> From<&'a Trigger> for TriggerCandidateRef<'a> {
         fn from(trigger: &'a Trigger) -> Self {
             Self {
@@ -145,7 +123,6 @@ mod candidate {
             }
         }
     }
-
     impl TriggerCandidate {
         fn into_trigger(self) -> Trigger {
             Trigger {
@@ -154,7 +131,6 @@ mod candidate {
             }
         }
     }
-
     impl<'de> norito::core::NoritoDeserialize<'de> for Trigger {
         fn deserialize(archived: &'de norito::core::Archived<Trigger>) -> Self {
             let candidate =
@@ -162,7 +138,6 @@ mod candidate {
             candidate.into_trigger()
         }
     }
-
     impl norito::core::NoritoSerialize for Trigger {
         fn serialize(
             &self,
@@ -170,20 +145,16 @@ mod candidate {
         ) -> Result<(), norito::core::Error> {
             norito::core::NoritoSerialize::serialize(&TriggerCandidateRef::from(self), writer)
         }
-
         fn encoded_len_hint(&self) -> Option<usize> {
             norito::core::NoritoSerialize::encoded_len_hint(&TriggerCandidateRef::from(self))
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             norito::core::NoritoSerialize::encoded_len_exact(&TriggerCandidateRef::from(self))
         }
     }
-
     #[cfg(test)]
     mod tests {
         use iroha_crypto::{Algorithm, KeyPair};
-
         use super::*;
         use crate::{
             account::AccountId,
@@ -191,7 +162,6 @@ mod candidate {
             transaction::IvmBytecode,
             trigger::action::Repeats,
         };
-
         fn trigger_fixture() -> Trigger {
             let key_pair = KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519)
                 .expect("fixed trigger key seed is valid");
@@ -207,7 +177,6 @@ mod candidate {
             .expect("trigger fixture is valid");
             Trigger::new("bounded_trigger".parse().expect("valid trigger id"), action)
         }
-
         #[test]
         fn borrowed_candidate_preserves_owned_candidate_payload() {
             let trigger = trigger_fixture();
@@ -228,7 +197,6 @@ mod candidate {
                 Some(owned_bytes.len())
             );
         }
-
         #[cfg(feature = "json")]
         #[test]
         fn manual_trigger_json_families_have_closed_bounds() {
@@ -243,7 +211,6 @@ mod candidate {
                     Err(json::BoundedJsonError::BodyTooLarge)
                 );
             }
-
             let trigger = trigger_fixture();
             assert_bounded(&trigger);
             assert_bounded(trigger.action());
@@ -256,13 +223,11 @@ mod candidate {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for Trigger {
     fn json_serialize(&self, out: &mut String) {
         json::write_canonical_base64_json(self, out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -270,7 +235,6 @@ impl JsonSerialize for Trigger {
         json::write_canonical_base64_json_to(self, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for Trigger {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -282,12 +246,9 @@ impl JsonDeserialize for Trigger {
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-
 pub mod action {
     //! Contains trigger action and common trait for all actions
-
     use iroha_data_model_derive::model;
-
     pub use self::model::*;
     use super::*;
     use crate::{
@@ -297,7 +258,6 @@ pub mod action {
             pipeline::PipelineEventFilterBox, time::TimeEventFilter,
         },
     };
-
     /// Failure to construct or decode a trigger action that violates its invariants.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
     pub enum ActionValidationError {
@@ -311,7 +271,6 @@ pub mod action {
         #[error("retry policy is only supported for scheduled time-trigger actions")]
         RetryPolicyRequiresScheduledTimeTrigger,
     }
-
     /// Ensures that trigger filters enforce the declared action authority when applicable.
     pub trait EnsureTriggerAuthority: Sized {
         /// Returns a filter bound to the provided authority, or an error if the filter already
@@ -325,7 +284,6 @@ pub mod action {
             authority: &AccountId,
         ) -> Result<Self, ActionValidationError>;
     }
-
     impl EnsureTriggerAuthority for EventFilterBox {
         fn ensure_trigger_authority(
             self,
@@ -340,7 +298,6 @@ pub mod action {
             }
         }
     }
-
     impl EnsureTriggerAuthority for ExecuteTriggerEventFilter {
         fn ensure_trigger_authority(
             self,
@@ -350,7 +307,6 @@ pub mod action {
                 .map_err(|_| ActionValidationError::ExecuteTriggerAuthorityMismatch)
         }
     }
-
     impl EnsureTriggerAuthority for DataEventFilter {
         fn ensure_trigger_authority(
             self,
@@ -359,7 +315,6 @@ pub mod action {
             Ok(self)
         }
     }
-
     impl EnsureTriggerAuthority for PipelineEventFilterBox {
         fn ensure_trigger_authority(
             self,
@@ -368,7 +323,6 @@ pub mod action {
             Ok(self)
         }
     }
-
     impl EnsureTriggerAuthority for TimeEventFilter {
         fn ensure_trigger_authority(
             self,
@@ -377,11 +331,9 @@ pub mod action {
             Ok(self)
         }
     }
-
     #[model]
     mod model {
         use super::*;
-
         /// Core definition of a trigger action, including the executable, firing policy, and persistent storage.
         #[derive(Debug, Clone, PartialEq, Eq, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -403,7 +355,6 @@ pub mod action {
             /// Arbitrary metadata stored for this trigger.
             pub metadata: Metadata,
         }
-
         /// Retry policy for scheduled time triggers.
         ///
         /// The initial scheduled firing does not count toward
@@ -420,7 +371,6 @@ pub mod action {
             /// Delay in milliseconds before the next retry becomes eligible.
             pub retry_after_ms: NonZeroU64,
         }
-
         /// Repetition policy for a trigger action.
         #[derive(Debug, Copy, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -431,13 +381,11 @@ pub mod action {
             Exactly(u32),
         }
     }
-
     impl crate::HasMetadata for Action {
         fn metadata(&self) -> &crate::metadata::Metadata {
             &self.metadata
         }
     }
-
     #[ffi_impl_opaque]
     impl Action {
         /// The executable linked to this action
@@ -463,7 +411,6 @@ pub mod action {
             self.retry_policy
         }
     }
-
     impl Action {
         /// Construct an action given `executable`, `repeats`, `authority` and `filter`.
         ///
@@ -489,14 +436,12 @@ pub mod action {
             }
             .validate()
         }
-
         /// Add [`Metadata`] to the trigger replacing previously defined
         #[must_use]
         pub fn with_metadata(mut self, metadata: Metadata) -> Self {
             self.metadata = metadata;
             self
         }
-
         /// Attach a retry policy for scheduled time-trigger execution.
         ///
         /// Only scheduled time triggers accept retry policies. Runtime retry
@@ -521,12 +466,9 @@ pub mod action {
             .validate()
         }
     }
-
     #[cfg(test)]
     mod tests {
-
         use iroha_crypto::KeyPair;
-
         use super::*;
         use crate::{
             account::AccountId,
@@ -538,20 +480,16 @@ pub mod action {
             transaction::{Executable, IvmBytecode},
             trigger::TriggerId,
         };
-
         fn sample_executable() -> Executable {
             Executable::Ivm(IvmBytecode::from_compiled(Vec::new()))
         }
-
         fn checked_random_keypair() -> KeyPair {
             KeyPair::try_random().expect("generate checked trigger fixture keypair")
         }
-
         fn account_in(_domain: &str) -> AccountId {
             let kp = checked_random_keypair();
             AccountId::new(kp.public_key().clone())
         }
-
         #[test]
         fn bind_execute_trigger_filter_authority() {
             let authority = account_in("wonderland");
@@ -564,13 +502,11 @@ pub mod action {
                 filter,
             )
             .expect("execute-trigger fixture has a matching authority");
-
             let EventFilterBox::ExecuteTrigger(bound) = action.filter().clone() else {
                 panic!("expected execute trigger filter");
             };
             assert_eq!(bound.authority(), Some(&authority));
         }
-
         #[test]
         fn new_rejects_mismatched_execute_trigger_authority() {
             let authority = account_in("wonderland");
@@ -582,10 +518,8 @@ pub mod action {
                 ExecuteTriggerEventFilter::new().under_authority(other),
             )
             .expect_err("mismatched authority must be rejected");
-
             assert_eq!(err, ActionValidationError::ExecuteTriggerAuthorityMismatch);
         }
-
         #[test]
         fn new_rejects_trigger_completed_filter() {
             let authority = account_in("wonderland");
@@ -596,10 +530,8 @@ pub mod action {
                 TriggerCompletedEventFilter::new(),
             )
             .expect_err("trigger-completed filters must be rejected");
-
             assert_eq!(err, ActionValidationError::TriggerCompletedFilter);
         }
-
         #[test]
         fn retry_policy_accepts_scheduled_time_trigger() {
             let authority = account_in("wonderland");
@@ -618,10 +550,8 @@ pub mod action {
             .expect("scheduled time-trigger fixture is valid")
             .with_retry_policy(retry_policy)
             .expect("scheduled time triggers accept retry policies");
-
             assert_eq!(action.retry_policy(), Some(retry_policy));
         }
-
         #[test]
         fn retry_policy_rejects_non_scheduled_trigger() {
             let authority = account_in("wonderland");
@@ -645,7 +575,6 @@ pub mod action {
                 ActionValidationError::RetryPolicyRequiresScheduledTimeTrigger
             );
         }
-
         #[test]
         fn action_with_retry_policy_norito_roundtrip() {
             let authority = account_in("wonderland");
@@ -665,14 +594,12 @@ pub mod action {
             .expect("scheduled time-trigger fixture is valid")
             .with_retry_policy(retry_policy)
             .expect("scheduled time triggers accept retry policies");
-
             let bytes = norito::to_bytes(&action).expect("serialize action");
             let decoded = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
             let restored = norito::core::NoritoDeserialize::try_deserialize(decoded)
                 .expect("deserialize action");
             assert_eq!(restored, action);
         }
-
         #[test]
         fn action_try_deserialize_rejects_invalid_filter_without_panicking() {
             let authority = account_in("wonderland");
@@ -684,19 +611,16 @@ pub mod action {
                 retry_policy: None,
                 metadata: Metadata::default(),
             };
-
             let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
             let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
             let err = norito::core::NoritoDeserialize::try_deserialize(archived)
                 .expect_err("invalid action must be rejected");
-
             assert!(
                 err.to_string()
                     .contains("TriggerCompleted cannot be used as filter"),
                 "unexpected error: {err}"
             );
         }
-
         #[test]
         fn action_try_deserialize_rejects_mismatched_execute_authority_without_panicking() {
             let authority = account_in("wonderland");
@@ -711,19 +635,16 @@ pub mod action {
                 retry_policy: None,
                 metadata: Metadata::default(),
             };
-
             let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
             let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
             let err = norito::core::NoritoDeserialize::try_deserialize(archived)
                 .expect_err("mismatched action authority must be rejected");
-
             assert!(
                 err.to_string()
                     .contains("ExecuteTrigger filter authority must match trigger owner"),
                 "unexpected error: {err}"
             );
         }
-
         #[test]
         fn action_try_deserialize_rejects_non_scheduled_retry_policy_without_panicking() {
             let authority = account_in("wonderland");
@@ -742,19 +663,16 @@ pub mod action {
                 }),
                 metadata: Metadata::default(),
             };
-
             let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
             let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
             let err = norito::core::NoritoDeserialize::try_deserialize(archived)
                 .expect_err("retry policy on non-scheduled action must be rejected");
-
             assert!(
                 err.to_string()
                     .contains("retry policy is only supported for scheduled time-trigger actions"),
                 "unexpected error: {err}"
             );
         }
-
         #[cfg(feature = "json")]
         #[test]
         fn action_with_retry_policy_json_roundtrip() {
@@ -774,11 +692,9 @@ pub mod action {
             .expect("scheduled time-trigger fixture is valid")
             .with_retry_policy(retry_policy)
             .expect("scheduled time triggers accept retry policies");
-
             let json = norito::json::to_json(&action).expect("serialize action to json");
             let restored: Action = norito::json::from_json(&json).expect("deserialize action");
             assert_eq!(restored, action);
-
             let alternate_flags =
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
             {
@@ -797,7 +713,6 @@ pub mod action {
             norito::json::from_json::<Action>(&alternate_json)
                 .expect_err("alternate-layout action JSON must be rejected");
         }
-
         #[cfg(feature = "json")]
         #[test]
         fn action_json_deserialize_rejects_invalid_filter_without_panicking() {
@@ -810,54 +725,45 @@ pub mod action {
                 retry_policy: None,
                 metadata: Metadata::default(),
             };
-
             let json = norito::json::to_json(&invalid_action).expect("serialize action to json");
             let err = norito::json::from_json::<Action>(&json)
                 .expect_err("invalid action json must be rejected");
-
             assert!(
                 err.to_string()
                     .contains("TriggerCompleted cannot be used as filter"),
                 "unexpected error: {err}"
             );
         }
-
         #[cfg(feature = "json")]
         #[test]
         fn action_json_deserialize_rejects_non_base64_payload_without_panicking() {
             let err = norito::json::from_json::<Action>(r#""not valid base64!!!""#)
                 .expect_err("non-base64 action payload must be rejected");
-
             assert!(
                 err.to_string().contains("Invalid symbol"),
                 "unexpected error: {err}"
             );
         }
-
         #[cfg(feature = "json")]
         #[test]
         fn action_json_deserialize_rejects_invalid_norito_payload_without_panicking() {
             let err = norito::json::from_json::<Action>(r#""AQIDBA==""#)
                 .expect_err("base64 payload with invalid Norito bytes must be rejected");
-
             assert!(
                 !err.to_string().is_empty(),
                 "decode failure should produce a diagnostic"
             );
         }
-
         #[cfg(feature = "json")]
         #[test]
         fn action_json_deserialize_rejects_non_string_payload_without_panicking() {
             let err = norito::json::from_json::<Action>(r#"{"not":"an action"}"#)
                 .expect_err("Action JSON must be encoded as a base64 string");
-
             assert!(
                 !err.to_string().is_empty(),
                 "wrong JSON shape should produce a diagnostic"
             );
         }
-
         #[cfg(feature = "json")]
         #[test]
         fn action_json_deserialize_rejects_mismatched_execute_authority_without_panicking() {
@@ -873,18 +779,15 @@ pub mod action {
                 retry_policy: None,
                 metadata: Metadata::default(),
             };
-
             let json = norito::json::to_json(&invalid_action).expect("serialize action to json");
             let err = norito::json::from_json::<Action>(&json)
                 .expect_err("mismatched action authority json must be rejected");
-
             assert!(
                 err.to_string()
                     .contains("ExecuteTrigger filter authority must match trigger owner"),
                 "unexpected error: {err}"
             );
         }
-
         #[cfg(feature = "json")]
         #[test]
         fn action_json_deserialize_rejects_non_scheduled_retry_policy_without_panicking() {
@@ -900,11 +803,9 @@ pub mod action {
                 }),
                 metadata: Metadata::default(),
             };
-
             let json = norito::json::to_json(&invalid_action).expect("serialize action to json");
             let err = norito::json::from_json::<Action>(&json)
                 .expect_err("retry policy on pre-commit action json must be rejected");
-
             assert!(
                 err.to_string()
                     .contains("retry policy is only supported for scheduled time-trigger actions"),
@@ -912,13 +813,11 @@ pub mod action {
             );
         }
     }
-
     impl PartialOrd for Action {
         fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
             Some(self.cmp(other))
         }
     }
-
     impl Ord for Action {
         fn cmp(&self, other: &Self) -> cmp::Ordering {
             // Exclude the executable. When debugging and replacing
@@ -928,17 +827,14 @@ pub mod action {
                 cmp::Ordering::Equal => {}
                 ord => return ord,
             }
-
             self.authority.cmp(&other.authority)
         }
     }
-
     impl PartialOrd for Repeats {
         fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
             Some(self.cmp(other))
         }
     }
-
     impl Ord for Repeats {
         fn cmp(&self, other: &Self) -> cmp::Ordering {
             match (self, other) {
@@ -949,20 +845,17 @@ pub mod action {
             }
         }
     }
-
     impl From<u32> for Repeats {
         fn from(num: u32) -> Self {
             Repeats::Exactly(num)
         }
     }
-
     impl Repeats {
         /// Returns `true` if this repeat policy has no remaining executions.
         pub fn is_depleted(&self) -> bool {
             matches!(self, Repeats::Exactly(0))
         }
     }
-
     #[cfg(feature = "json")]
     impl JsonSerialize for Repeats {
         fn json_serialize(&self, out: &mut String) {
@@ -980,7 +873,6 @@ pub mod action {
             }
             out.push('}');
         }
-
         fn json_serialize_to(
             &self,
             out: &mut dyn json::JsonWriteSink,
@@ -999,7 +891,6 @@ pub mod action {
             Ok(())
         }
     }
-
     #[cfg(feature = "json")]
     impl JsonDeserialize for Repeats {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1025,13 +916,11 @@ pub mod action {
             Ok(result)
         }
     }
-
     #[cfg(feature = "json")]
     impl JsonSerialize for Action {
         fn json_serialize(&self, out: &mut String) {
             json::write_canonical_base64_json(self, out);
         }
-
         fn json_serialize_to(
             &self,
             out: &mut dyn json::JsonWriteSink,
@@ -1039,7 +928,6 @@ pub mod action {
             json::write_canonical_base64_json_to(self, out)
         }
     }
-
     #[cfg(feature = "json")]
     impl JsonDeserialize for Action {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1051,13 +939,11 @@ pub mod action {
                 .map_err(|err| json::Error::Message(err.to_string()))
         }
     }
-
     #[cfg(feature = "json")]
     impl JsonSerialize for TimeTriggerRetryPolicy {
         fn json_serialize(&self, out: &mut String) {
             json::write_canonical_base64_json(self, out);
         }
-
         fn json_serialize_to(
             &self,
             out: &mut dyn json::JsonWriteSink,
@@ -1065,7 +951,6 @@ pub mod action {
             json::write_canonical_base64_json_to(self, out)
         }
     }
-
     #[cfg(feature = "json")]
     impl JsonDeserialize for TimeTriggerRetryPolicy {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1077,10 +962,8 @@ pub mod action {
                 .map_err(|err| json::Error::Message(err.to_string()))
         }
     }
-
     mod candidate {
         use super::{EnsureTriggerAuthority, *};
-
         #[derive(Encode, Decode)]
         pub(super) struct ActionCandidate {
             pub executable: Executable,
@@ -1090,30 +973,24 @@ pub mod action {
             pub retry_policy: Option<TimeTriggerRetryPolicy>,
             pub metadata: Metadata,
         }
-
         struct BorrowedValue<'a, T>(&'a T);
-
         impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize for BorrowedValue<'_, T> {
             fn schema_hash() -> [u8; 16] {
                 T::schema_hash()
             }
-
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
             ) -> Result<(), norito::core::Error> {
                 self.0.serialize(writer)
             }
-
             fn encoded_len_hint(&self) -> Option<usize> {
                 self.0.encoded_len_hint()
             }
-
             fn encoded_len_exact(&self) -> Option<usize> {
                 self.0.encoded_len_exact()
             }
         }
-
         #[derive(norito::derive::NoritoSerialize)]
         struct ActionCandidateRef<'a> {
             executable: BorrowedValue<'a, Executable>,
@@ -1123,13 +1000,11 @@ pub mod action {
             retry_policy: Option<TimeTriggerRetryPolicy>,
             metadata: BorrowedValue<'a, Metadata>,
         }
-
         impl ActionCandidate {
             pub(super) fn validate(self) -> Result<Action, ActionValidationError> {
                 if matches!(self.filter, EventFilterBox::TriggerCompleted(_)) {
                     return Err(ActionValidationError::TriggerCompletedFilter);
                 }
-
                 if self.retry_policy.is_some()
                     && !matches!(
                         self.filter,
@@ -1140,7 +1015,6 @@ pub mod action {
                 {
                     return Err(ActionValidationError::RetryPolicyRequiresScheduledTimeTrigger);
                 }
-
                 let Self {
                     executable,
                     repeats,
@@ -1149,9 +1023,7 @@ pub mod action {
                     retry_policy,
                     metadata,
                 } = self;
-
                 let filter = filter.ensure_trigger_authority(&authority)?;
-
                 Ok(Action {
                     executable,
                     repeats,
@@ -1162,12 +1034,10 @@ pub mod action {
                 })
             }
         }
-
         impl<'de> norito::core::NoritoDeserialize<'de> for Action {
             fn deserialize(archived: &'de norito::core::Archived<Action>) -> Self {
                 Self::try_deserialize(archived).expect("invalid Action")
             }
-
             fn try_deserialize(
                 archived: &'de norito::core::Archived<Action>,
             ) -> Result<Self, norito::core::Error> {
@@ -1180,7 +1050,6 @@ pub mod action {
                     .map_err(|error| norito::core::Error::Message(error.to_string()))
             }
         }
-
         impl norito::core::NoritoSerialize for Action {
             fn serialize(
                 &self,
@@ -1196,7 +1065,6 @@ pub mod action {
                 };
                 norito::core::NoritoSerialize::serialize(&candidate, writer)
             }
-
             fn encoded_len_hint(&self) -> Option<usize> {
                 norito::core::NoritoSerialize::encoded_len_hint(&ActionCandidateRef {
                     executable: BorrowedValue(&self.executable),
@@ -1207,7 +1075,6 @@ pub mod action {
                     metadata: BorrowedValue(&self.metadata),
                 })
             }
-
             fn encoded_len_exact(&self) -> Option<usize> {
                 norito::core::NoritoSerialize::encoded_len_exact(&ActionCandidateRef {
                     executable: BorrowedValue(&self.executable),
@@ -1219,17 +1086,14 @@ pub mod action {
                 })
             }
         }
-
         #[cfg(test)]
         mod tests {
             use iroha_crypto::{Algorithm, KeyPair};
-
             use super::*;
             use crate::{
                 events::time::{ExecutionTime, Schedule, TimeEventFilter},
                 transaction::IvmBytecode,
             };
-
             #[test]
             fn borrowed_candidate_preserves_owned_action_payload() {
                 let key_pair = KeyPair::try_from_seed(vec![11; 32], Algorithm::Ed25519)
@@ -1273,30 +1137,24 @@ pub mod action {
             }
         }
     }
-
     pub mod prelude {
         //! Re-exports of commonly used types.
         pub use super::{Action, ActionValidationError, Repeats, TimeTriggerRetryPolicy};
     }
 }
-
 pub mod prelude {
     //! Re-exports of commonly used types.
-
     pub use super::{Trigger, TriggerId, action::prelude::*};
 }
-
 #[cfg(test)]
 mod tests {
     use crate::prelude::Repeats;
-
     #[test]
     fn repeats_is_depleted() {
         assert!(!Repeats::Indefinitely.is_depleted());
         assert!(!Repeats::Exactly(1).is_depleted());
         assert!(Repeats::Exactly(0).is_depleted());
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn repeats_json_roundtrip() {
@@ -1304,7 +1162,6 @@ mod tests {
         let json = norito::json::to_json(&exact).expect("serialize exactly");
         let decoded: Repeats = norito::json::from_str(&json).expect("deserialize exactly");
         assert_eq!(exact, decoded);
-
         let indefinite = Repeats::Indefinitely;
         let json = norito::json::to_json(&indefinite).expect("serialize indefinitely");
         let decoded: Repeats = norito::json::from_str(&json).expect("deserialize indefinitely");

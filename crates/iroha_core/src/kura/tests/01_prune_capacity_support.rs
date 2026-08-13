@@ -12,7 +12,6 @@ fn unsealed_prune_capacity_fixture() -> KuraPruneCapacityAdmissionV2 {
         admitted_peak_bytes: 0,
     }
 }
-
 fn seal_prune_intent_fixture(mut intent: KuraPruneIntentV2) -> KuraPruneIntentV2 {
     for _ in 0..4 {
         intent.capacity.intent_bytes = u64::try_from(
@@ -36,7 +35,6 @@ fn seal_prune_intent_fixture(mut intent: KuraPruneIntentV2) -> KuraPruneIntentV2
     assert!(intent.capacity.is_canonical(intent.sidecar_rewrite));
     intent
 }
-
 fn admit_prune_intent_fixture(kura: &Kura, mut intent: KuraPruneIntentV2) -> KuraPruneIntentV2 {
     let pending_canonical_bytes = kura
         .pending_canonical_capacity_bytes_under_prune_and_canonical_guards()
@@ -60,7 +58,6 @@ fn admit_prune_intent_fixture(kura: &Kura, mut intent: KuraPruneIntentV2) -> Kur
     kura.seal_and_validate_canonical_prune_capacity_admission(intent)
         .expect("seal prune-intent fixture admission")
 }
-
 fn archival_roster_row_fixture(
     height: u64,
     block_hash: HashOf<BlockHeader>,
@@ -103,7 +100,6 @@ fn archival_roster_row_fixture(
     );
     (qc, checkpoint)
 }
-
 #[test]
 fn recovery_control_files_reject_cap_plus_one_before_decode() {
     fn create_sparse(path: &std::path::Path, len: u64) {

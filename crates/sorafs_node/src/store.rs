@@ -5,7 +5,6 @@
 //! canonical Proof-of-Data-Possession (PDP) commitments, and quota enforcement
 //! derived from Torii storage configuration.
 #![allow(unexpected_cfgs)]
-
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
@@ -19,12 +18,10 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-
 use blake3::Hash;
 use hex::ToHex;
 use iroha_data_model::da::{ingest::DaStripeLayout, manifest::ChunkRole};
@@ -48,9 +45,7 @@ use sorafs_manifest::{
     retention::{RetentionMetadataError, RetentionSourceV1},
 };
 use thiserror::Error;
-
 use crate::{config::StorageConfig, scheduler::StorageSchedulersRuntime};
-
 const INDEX_VERSION_V1: u8 = 1;
 const MANIFEST_DIR_NAME: &str = "manifests";
 const MANIFEST_FILE_NAME: &str = "manifest.to";
@@ -5795,7 +5790,6 @@ fn invalid_chunk_file(record: &ChunkFileRecord, reason: &str) -> ChunkStoreError
         format!("chunk path `{}` {reason}", record.path.display()),
     ))
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -5805,14 +5799,11 @@ mod tests {
         thread,
         time::Duration,
     };
-
     use blake3;
     use sorafs_car::{CarPlanError, CarWriter, FileEntry, compute_chunk_plan_digest_sha3};
     use sorafs_manifest::{DagCodecId, ManifestBuilder, PinPolicy};
     use tempfile::TempDir;
-
     use super::*;
-
     // Keep one target-gated assertion for every ABI branch. Overlapping branches
     // fail with duplicate definitions; missing branches fail to resolve the flag.
     #[cfg(all(
@@ -6518,7 +6509,6 @@ mod tests {
     #[test]
     fn staged_car_reconstruction_rejects_symlink_chunks() {
         use std::os::unix::fs::symlink;
-
         let payload = b"staged CAR reconstruction never follows chunk symlinks";
         let plan = single_file_plan(payload).expect("plan");
         assert_eq!(plan.chunks.len(), 1, "fixture must use one chunk");
@@ -7495,7 +7485,6 @@ mod tests {
     #[test]
     fn chunk_reads_reject_symlink_replacement() {
         use std::os::unix::fs::symlink;
-
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
         let payload = b"symlink replacement must fail closed";
@@ -8122,7 +8111,6 @@ mod tests {
     #[test]
     fn pdp_witness_reads_reject_symlink_and_hardlink_chunks() {
         use std::os::unix::fs::symlink;
-
         for hardlink in [false, true] {
             let temp_dir = tempfile::tempdir().expect("create temp dir");
             let payload = vec![0x2A; 32_768];
@@ -8421,7 +8409,6 @@ mod tests {
     #[test]
     fn restart_rejects_symlinked_manifest_artifacts() {
         use std::os::unix::fs::symlink;
-
         for artifact_name in [MANIFEST_FILE_NAME, METADATA_FILE_NAME] {
             let temp_dir = tempfile::tempdir().expect("create temp dir");
             let payload = b"symlinked storage metadata";

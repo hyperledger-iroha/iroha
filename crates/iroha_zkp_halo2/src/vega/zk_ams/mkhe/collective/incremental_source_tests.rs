@@ -1,19 +1,15 @@
 use crate::vega::MaskedRelaxedRandomErrorV1;
-
 use super::super::tests::{
     KatRandom, encrypt_test_with_opening, test_canonical_plaintext, test_input_topology, test_key,
     test_profile,
 };
 use super::*;
-
 struct FailingRandom;
-
 impl MaskedRelaxedRandomSourceV1 for FailingRandom {
     fn fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         Err(MaskedRelaxedRandomErrorV1::Unavailable)
     }
 }
-
 struct TestStageV1 {
     staging_identity: [u8; 32],
     seal_identity: Option<[u8; 32]>,
@@ -21,13 +17,11 @@ struct TestStageV1 {
     payload_bytes: u64,
     bytes: Vec<u8>,
 }
-
 struct TestPublishedV1 {
     pointer: ZkAmsMkheDirectObjectPointerV1,
     published_object_identity: [u8; 32],
     bytes: Vec<u8>,
 }
-
 struct TestStreamingCasV1 {
     provider_identity: [u8; 32],
     snapshot_identity: [u8; 32],
@@ -38,7 +32,6 @@ struct TestStreamingCasV1 {
     read_calls: usize,
     fail_read_at: Option<usize>,
 }
-
 impl TestStreamingCasV1 {
     fn new(domain: u8) -> Self {
         Self {
@@ -52,14 +45,12 @@ impl TestStreamingCasV1 {
             fail_read_at: None,
         }
     }
-
     fn next_distinct_identity(&mut self, domain: u8) -> [u8; 32] {
         let mut identity = [domain; 32];
         identity[24..].copy_from_slice(&self.next_identity.to_be_bytes());
         self.next_identity += 1;
         identity
     }
-
     fn published_bytes(&self, pointer: ZkAmsMkheDirectObjectPointerV1) -> &[u8] {
         &self
             .published
@@ -68,7 +59,6 @@ impl TestStreamingCasV1 {
             .expect("test pointer must be published")
             .bytes
     }
-
     fn decode_limb(&self, pointer: ZkAmsMkheDirectObjectPointerV1) -> Vec<u64> {
         let bytes = self.published_bytes(pointer);
         let count = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
@@ -80,16 +70,13 @@ impl TestStreamingCasV1 {
         values
     }
 }
-
 impl ZkAmsMkheDirectObjectReadAtProviderV1 for TestStreamingCasV1 {
     fn provider_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         Ok(self.provider_identity)
     }
-
     fn snapshot_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         Ok(self.snapshot_identity)
     }
-
     fn object_len(
         &mut self,
         pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -100,7 +87,6 @@ impl ZkAmsMkheDirectObjectReadAtProviderV1 for TestStreamingCasV1 {
             .and_then(|published| u64::try_from(published.bytes.len()).ok())
             .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
-
     fn read_at(
         &mut self,
         pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -129,12 +115,10 @@ impl ZkAmsMkheDirectObjectReadAtProviderV1 for TestStreamingCasV1 {
         Ok(destination.len())
     }
 }
-
 impl ZkAmsMkheDirectObjectCasPublicationV1 for TestStreamingCasV1 {
     fn publication_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         Ok(self.publication_identity)
     }
-
     fn begin_staging(
         &mut self,
         kind: ZkAmsMkheDirectObjectKindV1,
@@ -155,7 +139,6 @@ impl ZkAmsMkheDirectObjectCasPublicationV1 for TestStreamingCasV1 {
             payload_bytes,
         )
     }
-
     fn staged_len(
         &mut self,
         staging: &ZkAmsMkheDirectObjectStagingTokenV1,
@@ -166,7 +149,6 @@ impl ZkAmsMkheDirectObjectCasPublicationV1 for TestStreamingCasV1 {
             .and_then(|candidate| u64::try_from(candidate.bytes.len()).ok())
             .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
-
     fn write_staged_at(
         &mut self,
         staging: &ZkAmsMkheDirectObjectStagingTokenV1,
@@ -188,7 +170,6 @@ impl ZkAmsMkheDirectObjectCasPublicationV1 for TestStreamingCasV1 {
         candidate.bytes.extend_from_slice(source);
         Ok(source.len())
     }
-
     fn seal_staged(
         &mut self,
         staging: ZkAmsMkheDirectObjectStagingTokenV1,
@@ -207,7 +188,6 @@ impl ZkAmsMkheDirectObjectCasPublicationV1 for TestStreamingCasV1 {
         candidate.seal_identity = Some(seal_identity);
         ZkAmsMkheDirectObjectSealTokenV1::from_staging(staging, seal_identity)
     }
-
     fn sealed_len(
         &mut self,
         seal: &ZkAmsMkheDirectObjectSealTokenV1,
@@ -218,7 +198,6 @@ impl ZkAmsMkheDirectObjectCasPublicationV1 for TestStreamingCasV1 {
             .and_then(|candidate| u64::try_from(candidate.bytes.len()).ok())
             .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
-
     fn read_sealed_at(
         &mut self,
         seal: &ZkAmsMkheDirectObjectSealTokenV1,
@@ -243,7 +222,6 @@ impl ZkAmsMkheDirectObjectCasPublicationV1 for TestStreamingCasV1 {
         );
         Ok(destination.len())
     }
-
     fn publish_sealed_by_pointer(
         &mut self,
         seal: &ZkAmsMkheDirectObjectSealTokenV1,
@@ -271,7 +249,6 @@ impl ZkAmsMkheDirectObjectCasPublicationV1 for TestStreamingCasV1 {
         });
         Ok(())
     }
-
     fn lookup_published_pointer(
         &mut self,
         pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -289,12 +266,10 @@ impl ZkAmsMkheDirectObjectCasPublicationV1 for TestStreamingCasV1 {
             .transpose()
     }
 }
-
 struct CountingKatRandomV1 {
     inner: KatRandom,
     calls: usize,
 }
-
 impl CountingKatRandomV1 {
     fn new(label: &'static [u8]) -> Self {
         Self {
@@ -303,14 +278,12 @@ impl CountingKatRandomV1 {
         }
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for CountingKatRandomV1 {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         self.calls += 1;
         self.inner.fill_bytes(destination)
     }
 }
-
 fn test_streaming_key_authority_v1(
     profile: &BgvProfile,
     key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -371,12 +344,10 @@ fn test_streaming_key_authority_v1(
     authority.validate_for_profile_v1(profile).unwrap();
     authority
 }
-
 #[test]
 fn component_major_incremental_key_digest_matches_native_and_rejects_order_drift() {
     let profile = test_profile();
     let (key, _) = test_key(0xa4);
-
     let mut early = ComponentMajorCollectivePublicKeyDigestV1::new(&key, &profile).unwrap();
     assert_eq!(
         early
@@ -387,7 +358,6 @@ fn component_major_incremental_key_digest_matches_native_and_rejects_order_drift
         early.finish(&key.share_digests),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     );
-
     let mut incremental = ComponentMajorCollectivePublicKeyDigestV1::new(&key, &profile).unwrap();
     assert_eq!(
         incremental.absorb_next_public_a_limb_v1(1, key.public_a.limb(&profile, 1)),
@@ -429,7 +399,6 @@ fn component_major_incremental_key_digest_matches_native_and_rejects_order_drift
         incremental_digest,
         collective_public_key_digest(&key, &profile).unwrap()
     );
-
     let release = release_profile_v1();
     let release_flat_coefficient_count = release.ring_degree * release.moduli.len();
     assert_eq!(release_flat_coefficient_count, 4_980_736);
@@ -440,7 +409,6 @@ fn component_major_incremental_key_digest_matches_native_and_rejects_order_drift
         [0x00, 0x4c, 0x00, 0x00]
     );
 }
-
 #[test]
 fn two_limb_incremental_encryption_matches_native_bytes_digest_and_nonce_lineage() {
     let profile = test_profile();
@@ -459,7 +427,6 @@ fn two_limb_incremental_encryption_matches_native_bytes_digest_and_nonce_lineage
         &mut KatRandom::new(label),
     )
     .unwrap();
-
     assert_eq!(
         kernel.input_identity.encryption_nonce.as_bytes(),
         opening.input_identity.encryption_nonce.as_bytes()
@@ -470,12 +437,10 @@ fn two_limb_incremental_encryption_matches_native_bytes_digest_and_nonce_lineage
         opening.error_zero.coefficients
     );
     assert_eq!(kernel.error_one.as_slice(), opening.error_one.coefficients);
-
     assert!(matches!(
         kernel.absorb_next_linear_limb_v1(0),
         Err(ZkAmsMkheErrorV1::InvalidCiphertext)
     ));
-
     for limb in 0..profile.moduli.len() {
         let filled = kernel.absorb_next_constant_limb_v1(limb).unwrap();
         assert_eq!(filled.component(), CollectiveRnsComponentV1::First);
@@ -486,12 +451,10 @@ fn two_limb_incremental_encryption_matches_native_bytes_digest_and_nonce_lineage
             ciphertext.constant().limb(&profile, limb)
         );
     }
-
     assert!(matches!(
         kernel.absorb_next_constant_limb_v1(0),
         Err(ZkAmsMkheErrorV1::InvalidCiphertext)
     ));
-
     for limb in 0..profile.moduli.len() {
         let filled = kernel.absorb_next_linear_limb_v1(limb).unwrap();
         assert_eq!(filled.component(), CollectiveRnsComponentV1::Second);
@@ -502,13 +465,11 @@ fn two_limb_incremental_encryption_matches_native_bytes_digest_and_nonce_lineage
             ciphertext.linear().limb(&profile, limb)
         );
     }
-
     let completed = kernel.finish().unwrap();
     assert_eq!(completed.transcript_digest, transcript_digest);
     assert_eq!(completed.ciphertext_digest, ciphertext.digest());
     drop(opening);
 }
-
 #[test]
 fn streaming_automorphism_output_digest_matches_native_component_major_bytes() {
     let profile = test_profile();
@@ -543,7 +504,6 @@ fn streaming_automorphism_output_digest_matches_native_component_major_bytes() {
         Some(key.digest()),
     )
     .unwrap();
-
     let coefficient_count = profile.ring_degree * profile.moduli.len();
     let mut hash = Keccak256::new();
     hash.update(COLLECTIVE_CIPHERTEXT_DOMAIN_V1);
@@ -573,7 +533,6 @@ fn streaming_automorphism_output_digest_matches_native_component_major_bytes() {
     }
     assert_eq!(streaming.finish().unwrap(), native.digest());
 }
-
 #[test]
 fn source_authenticated_streaming_encryption_matches_native_tiny_limbs_and_digests() {
     let profile = test_profile();
@@ -613,7 +572,6 @@ fn source_authenticated_streaming_encryption_matches_native_tiny_limbs_and_diges
         active.kernel.error_one.as_slice(),
         opening.error_one.coefficients
     );
-
     let mut ciphertext_store = TestStreamingCasV1::new(0x61);
     active
         .publish_all_v1(&mut key_store, &mut ciphertext_store)
@@ -646,7 +604,6 @@ fn source_authenticated_streaming_encryption_matches_native_tiny_limbs_and_diges
             ciphertext.linear().limb(&profile, limb)
         );
     }
-
     let binding = manifest
         .sealed_binding_with_profile_v1(&profile)
         .expect("tiny-profile sealed binding");
@@ -672,7 +629,6 @@ fn source_authenticated_streaming_encryption_matches_native_tiny_limbs_and_diges
         )
         .expect("same reusable limb accepts C1");
     assert_eq!(destination, ciphertext.linear().limb(&profile, 0));
-
     ciphertext_store.provider_identity[0] ^= 1;
     assert_eq!(
         binding.read_constant_limb_into_v1(
@@ -685,7 +641,6 @@ fn source_authenticated_streaming_encryption_matches_native_tiny_limbs_and_diges
         Err(ZkAmsMkheErrorV1::InvalidCiphertext)
     );
     ciphertext_store.provider_identity[0] ^= 1;
-
     ciphertext_store.snapshot_identity[0] ^= 1;
     assert_eq!(
         binding.read_constant_limb_into_v1(
@@ -698,7 +653,6 @@ fn source_authenticated_streaming_encryption_matches_native_tiny_limbs_and_diges
         Err(ZkAmsMkheErrorV1::InvalidCiphertext)
     );
     ciphertext_store.snapshot_identity[0] ^= 1;
-
     let constant_pointer = manifest.constant_limb_pointers()[0];
     ciphertext_store
         .published
@@ -718,7 +672,6 @@ fn source_authenticated_streaming_encryption_matches_native_tiny_limbs_and_diges
     );
     drop(opening);
 }
-
 #[test]
 fn streaming_prepass_precedes_entropy_and_late_source_failure_cannot_authorize_output() {
     let profile = test_profile();
@@ -727,7 +680,6 @@ fn streaming_prepass_precedes_entropy_and_late_source_failure_cannot_authorize_o
     let topology = test_input_topology(&profile, b"streaming-failure-order");
     let mut key_store = TestStreamingCasV1::new(0x71);
     let authority = test_streaming_key_authority_v1(&profile, &key, &mut key_store, 48);
-
     let prepared =
         PreparedStreamingCollectiveEncryptionV1::new_v1(&authority.binding, &profile).unwrap();
     key_store.fail_read_at = Some(key_store.read_calls + 1);
@@ -737,7 +689,6 @@ fn streaming_prepass_precedes_entropy_and_late_source_failure_cannot_authorize_o
     assert_eq!(untouched_random.calls, 0);
     assert!(untouched_output.stages.is_empty());
     assert!(untouched_output.published.is_empty());
-
     key_store.fail_read_at = None;
     let prepared =
         PreparedStreamingCollectiveEncryptionV1::new_v1(&authority.binding, &profile).unwrap();
@@ -756,7 +707,6 @@ fn streaming_prepass_precedes_entropy_and_late_source_failure_cannot_authorize_o
     assert!(active.records.constant_publication_receipts.is_empty());
     assert!(active.records.linear_publication_receipts.is_empty());
 }
-
 #[test]
 fn two_limb_incremental_kernel_rejects_foreign_key_and_zeroizes_preallocated_drop_paths() {
     let reset_drop_audits = || {
@@ -775,7 +725,6 @@ fn two_limb_incremental_kernel_rejects_foreign_key_and_zeroizes_preallocated_dro
     let (mut key, _) = test_key(0xa6);
     let canonical = test_canonical_plaintext(&[0, 1, 2, 3, 5, 8, 13, 16]);
     let topology = test_input_topology(&profile, b"incremental-poison");
-
     reset_drop_audits();
     let mut failing_random = FailingRandom;
     assert!(matches!(
@@ -790,7 +739,6 @@ fn two_limb_incremental_kernel_rejects_foreign_key_and_zeroizes_preallocated_dro
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     ));
     assert_eq!(drop_audits(), (2, 1, 3));
-
     key.digest[0] ^= 1;
     let mut healthy_random = KatRandom::new(b"incremental-foreign-key");
     assert!(
@@ -805,7 +753,6 @@ fn two_limb_incremental_kernel_rejects_foreign_key_and_zeroizes_preallocated_dro
         .is_err()
     );
     assert_eq!(drop_audits(), (2, 1, 3));
-
     let mut witness = ZeroizingCollectiveEncryptionWitnessV1::new_zeroed_v1(8).unwrap();
     assert!(witness.is_zero());
     witness.as_mut_slice()[0] = 1;
@@ -816,7 +763,6 @@ fn two_limb_incremental_kernel_rejects_foreign_key_and_zeroizes_preallocated_dro
         4
     );
 }
-
 #[test]
 fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_reference() {
     let source = include_str!("incremental_source.rs");
@@ -831,7 +777,6 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
         .split("// END PRIVATE INCREMENTAL COLLECTIVE ENCRYPTION PREREQUISITE V1")
         .next()
         .expect("incremental prerequisite end");
-
     for forbidden in [
         "plaintext_lift",
         "RnsPolynomial",
@@ -863,7 +808,6 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
     assert!(prerequisite.contains("self.key.public_a.limb"));
     assert_eq!(prerequisite.matches("key.validate(profile)?").count(), 1);
     assert!(!prerequisite.contains("key.validate(&profile)?"));
-
     let borrowed_core = source
         .split("fn encrypt_zk_ams_mkhe_collective_packed_streaming_borrowed_with_prepublication_v1")
         .nth(1)
@@ -907,7 +851,6 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
     assert!(prepared < prepass);
     assert!(prepass < entropy);
     assert!(entropy < output);
-
     let second_pass = source
         .split("fn publish_next_limb_v1")
         .nth(1)
@@ -930,7 +873,6 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
     assert!(reread < source_finish);
     assert!(source_finish < source_compare);
     assert!(source_compare < output_finish);
-
     for kind in [
         "CollectivePublicA",
         "CollectivePublicB",
@@ -943,7 +885,6 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
     assert!(source.contains("StreamingCollectiveEvalAdmissionSealV1"));
     assert!(source.contains("StreamingCollectiveCiphertextBindingSealV1"));
     assert!(!source.contains("from_raw_digest"));
-
     let ciphertext_binding = source
         .split("impl ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_>")
         .nth(1)
@@ -964,7 +905,6 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
     assert!(
         source.contains("streaming_source_snapshot_axes_v1(receipt.post_publish_read_receipt())")
     );
-
     let work_gate = prerequisite
         .find("checked_ring_multiplication_work(profile, 2)?")
         .expect("two-multiplication work gate");
@@ -997,7 +937,6 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
     assert!(nonce < ephemeral);
     assert!(ephemeral < error_zero);
     assert!(error_zero < error_one);
-
     let witness_is_zero = source
         .split("fn is_zero(&self) -> bool {")
         .nth(1)
@@ -1008,7 +947,6 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
     assert!(witness_is_zero.contains("iter().all"));
     assert!(!witness_is_zero.contains("Vec"));
     assert!(!witness_is_zero.contains("Box"));
-
     let release = release_profile_v1();
     let limb_bytes = release.ring_degree * core::mem::size_of::<u64>();
     let canonical_plaintext_bytes = release.ring_degree * 32;

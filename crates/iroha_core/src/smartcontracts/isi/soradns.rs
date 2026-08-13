@@ -1,5 +1,4 @@
 //! Resolver attestation directory governance ISIs.
-
 use hex::encode as hex_encode;
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{
@@ -14,10 +13,8 @@ use iroha_data_model::{
     },
 };
 use norito::json::{self, Value};
-
 use super::*;
 use crate::state::StateTransaction;
-
 impl Execute for iroha_data_model::isi::soradns::SubmitDirectoryDraft {
     fn execute(
         self,
@@ -32,16 +29,13 @@ impl Execute for iroha_data_model::isi::soradns::SubmitDirectoryDraft {
             builder_public_key,
             builder_signature,
         } = self;
-
         ensure_release_signer(state_transaction, &builder_public_key)?;
         ensure_directory_record_supported(&record)?;
-
         if record.directory_json_sha256 != directory_json_sha256 {
             return Err(invalid_parameter(
                 "directory_json_sha256 field must match record payload",
             ));
         }
-
         if record.builder_public_key != builder_public_key {
             return Err(invalid_parameter(
                 "builder_public_key inside the record must match the submission payload",
@@ -52,12 +46,10 @@ impl Execute for iroha_data_model::isi::soradns::SubmitDirectoryDraft {
                 "builder_signature inside the record must match the submission payload",
             ));
         }
-
         let directory_id = record.root_hash;
         ensure_directory_id_available(state_transaction, directory_id)?;
         ensure_previous_pointer_matches(state_transaction, &record)?;
         verify_builder_signature(&record)?;
-
         let draft = PendingDirectoryDraftV1 {
             record,
             car_cid: car_cid.clone(),
@@ -70,7 +62,6 @@ impl Execute for iroha_data_model::isi::soradns::SubmitDirectoryDraft {
             .world
             .soradns_directory_pending
             .insert(directory_id, draft);
-
         emit_directory_event(
             state_transaction,
             ResolverDirectoryEventV1::DraftSubmitted(DirectoryDraftSubmittedEventV1 {
@@ -79,11 +70,9 @@ impl Execute for iroha_data_model::isi::soradns::SubmitDirectoryDraft {
                 builder_public_key,
             }),
         );
-
         Ok(())
     }
 }
-
 impl Execute for iroha_data_model::isi::soradns::PublishDirectory {
     fn execute(
         self,
@@ -105,7 +94,6 @@ impl Execute for iroha_data_model::isi::soradns::PublishDirectory {
                     hex_directory_id(&directory_id)
                 ))
             })?;
-
         ensure_directory_record_supported(&draft.record)?;
         ensure_previous_pointer_matches(state_transaction, &draft.record)?;
         if let Some(expected_prev) = expected_prev {
@@ -116,7 +104,6 @@ impl Execute for iroha_data_model::isi::soradns::PublishDirectory {
                 )));
             }
         }
-
         verify_builder_signature(&draft.record)?;
         enforce_rotation_policy(
             state_transaction,
@@ -124,35 +111,30 @@ impl Execute for iroha_data_model::isi::soradns::PublishDirectory {
             directory_id,
             block_timestamp_ms,
         )?;
-
         let previous = *state_transaction.world.soradns_directory_latest.get();
         if draft.record.previous_root.is_none() && previous.is_some() {
             return Err(invalid_parameter(
                 "record.previous_root must reference the latest directory when one exists",
             ));
         }
-
         let history_index = *state_transaction.world.soradns_history_len.get();
         state_transaction
             .world
             .soradns_directory_history
             .insert(history_index, directory_id);
         *state_transaction.world.soradns_history_len.get_mut() = history_index.saturating_add(1);
-
         if let Some(prev_id) = previous {
             state_transaction
                 .world
                 .soradns_directory_prev_of
                 .insert(directory_id, prev_id);
         }
-
         state_transaction
             .world
             .soradns_directory_records
             .insert(directory_id, draft.record.clone());
         *state_transaction.world.soradns_directory_latest.get_mut() = Some(directory_id);
         *state_transaction.world.soradns_last_publish_ms.get_mut() = Some(block_timestamp_ms);
-
         emit_directory_event(
             state_transaction,
             ResolverDirectoryEventV1::Published(DirectoryPublishedEventV1 {
@@ -163,11 +145,9 @@ impl Execute for iroha_data_model::isi::soradns::PublishDirectory {
                 block_height: state_transaction.block_height(),
             }),
         );
-
         Ok(())
     }
 }
-
 impl Execute for iroha_data_model::isi::soradns::RevokeResolver {
     fn execute(
         self,
@@ -179,7 +159,6 @@ impl Execute for iroha_data_model::isi::soradns::RevokeResolver {
             resolver_id,
             reason,
         } = self;
-
         if state_transaction
             .world
             .soradns_directory_revocations
@@ -191,7 +170,6 @@ impl Execute for iroha_data_model::isi::soradns::RevokeResolver {
                 hex::encode(resolver_id)
             )));
         }
-
         let record = ResolverRevocationRecordV1 {
             resolver_id,
             reason,
@@ -201,7 +179,6 @@ impl Execute for iroha_data_model::isi::soradns::RevokeResolver {
             .world
             .soradns_directory_revocations
             .insert(resolver_id, record);
-
         emit_directory_event(
             state_transaction,
             ResolverDirectoryEventV1::Revoked(DirectoryRevokedEventV1 {
@@ -213,7 +190,6 @@ impl Execute for iroha_data_model::isi::soradns::RevokeResolver {
         Ok(())
     }
 }
-
 impl Execute for iroha_data_model::isi::soradns::UnrevokeResolver {
     fn execute(
         self,
@@ -232,7 +208,6 @@ impl Execute for iroha_data_model::isi::soradns::UnrevokeResolver {
                 hex::encode(resolver_id)
             )));
         }
-
         emit_directory_event(
             state_transaction,
             ResolverDirectoryEventV1::Unrevoked(DirectoryUnrevokedEventV1 {
@@ -243,7 +218,6 @@ impl Execute for iroha_data_model::isi::soradns::UnrevokeResolver {
         Ok(())
     }
 }
-
 impl Execute for iroha_data_model::isi::soradns::AddReleaseSigner {
     fn execute(
         self,
@@ -271,7 +245,6 @@ impl Execute for iroha_data_model::isi::soradns::AddReleaseSigner {
         Ok(())
     }
 }
-
 impl Execute for iroha_data_model::isi::soradns::RemoveReleaseSigner {
     fn execute(
         self,
@@ -295,7 +268,6 @@ impl Execute for iroha_data_model::isi::soradns::RemoveReleaseSigner {
         Ok(())
     }
 }
-
 impl Execute for iroha_data_model::isi::soradns::SetDirectoryRotationPolicy {
     fn execute(
         self,
@@ -313,7 +285,6 @@ impl Execute for iroha_data_model::isi::soradns::SetDirectoryRotationPolicy {
         Ok(())
     }
 }
-
 fn ensure_release_signer(
     state_transaction: &StateTransaction<'_, '_>,
     public_key: &iroha_crypto::PublicKey,
@@ -331,7 +302,6 @@ fn ensure_release_signer(
         ))
     }
 }
-
 fn ensure_directory_id_available(
     state_transaction: &StateTransaction<'_, '_>,
     directory_id: DirectoryId,
@@ -360,7 +330,6 @@ fn ensure_directory_id_available(
     }
     Ok(())
 }
-
 fn ensure_directory_record_supported(record: &ResolverDirectoryRecordV1) -> Result<(), Error> {
     if record.record_version != DIRECTORY_RECORD_VERSION_V1 {
         return Err(invalid_parameter(format!(
@@ -375,7 +344,6 @@ fn ensure_directory_record_supported(record: &ResolverDirectoryRecordV1) -> Resu
     }
     Ok(())
 }
-
 fn ensure_previous_pointer_matches(
     state_transaction: &StateTransaction<'_, '_>,
     record: &ResolverDirectoryRecordV1,
@@ -391,7 +359,6 @@ fn ensure_previous_pointer_matches(
         _ => Ok(()),
     }
 }
-
 fn enforce_rotation_policy(
     state_transaction: &StateTransaction<'_, '_>,
     record: &ResolverDirectoryRecordV1,
@@ -414,7 +381,6 @@ fn enforce_rotation_policy(
             "rotation policy council_threshold must be greater than zero",
         ));
     }
-
     if let Some(last_publish) = *state_transaction.world.soradns_last_publish_ms.get() {
         let spacing = block_timestamp_ms.saturating_sub(last_publish);
         if spacing < policy.min_interval_ms {
@@ -425,7 +391,6 @@ fn enforce_rotation_policy(
             )));
         }
     }
-
     let created_delta = record.created_at_ms.abs_diff(block_timestamp_ms);
     if created_delta > policy.max_skew_ms {
         return Err(invalid_parameter(format!(
@@ -433,7 +398,6 @@ fn enforce_rotation_policy(
             policy.max_skew_ms
         )));
     }
-
     if policy.require_change
         && *state_transaction.world.soradns_directory_latest.get() == Some(directory_id)
     {
@@ -441,10 +405,8 @@ fn enforce_rotation_policy(
             "rotation policy requires the directory to change between publishes",
         ));
     }
-
     Ok(())
 }
-
 fn validate_rotation_policy(policy: &DirectoryRotationPolicyV1) -> Result<(), Error> {
     if policy.min_interval_ms == 0 {
         return Err(invalid_parameter(
@@ -463,7 +425,6 @@ fn validate_rotation_policy(policy: &DirectoryRotationPolicyV1) -> Result<(), Er
     }
     Ok(())
 }
-
 fn verify_builder_signature(record: &ResolverDirectoryRecordV1) -> Result<(), Error> {
     let payload = signing_payload_bytes(record)?;
     verify_signature_for_signer(
@@ -473,7 +434,6 @@ fn verify_builder_signature(record: &ResolverDirectoryRecordV1) -> Result<(), Er
     )
     .map_err(|err| invalid_parameter(format!("builder signature verification failed: {err}")))
 }
-
 fn verify_signature_for_signer(
     signature: &Signature,
     signer: &PublicKey,
@@ -490,7 +450,6 @@ fn verify_signature_for_signer(
     }
     signature.verify(signer, payload)
 }
-
 fn signing_payload_bytes(record: &ResolverDirectoryRecordV1) -> Result<Vec<u8>, Error> {
     let (_, pk_bytes) = record
         .builder_public_key
@@ -530,14 +489,12 @@ fn signing_payload_bytes(record: &ResolverDirectoryRecordV1) -> Result<Vec<u8>, 
         "published_at_unix".into(),
         Value::from(record.published_at_unix),
     );
-
     json::to_vec(&Value::Object(payload)).map_err(|err| {
         InstructionExecutionError::InvariantViolation(
             format!("failed to serialize signing payload: {err}").into(),
         )
     })
 }
-
 fn emit_directory_event(
     state_transaction: &mut StateTransaction<'_, '_>,
     event: ResolverDirectoryEventV1,
@@ -563,45 +520,34 @@ fn emit_directory_event(
         .world
         .emit_events(Some(DataEvent::Soradns(soradns_event)));
 }
-
 fn current_block_time_millis(state_transaction: &StateTransaction<'_, '_>) -> Result<u64, Error> {
     u64::try_from(state_transaction._curr_block.creation_time().as_millis())
         .map_err(|_| invariant_violation("block creation time exceeds the u64 millisecond range"))
 }
-
 fn invalid_parameter(message: impl Into<String>) -> Error {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
     ))
 }
-
 fn invariant_violation(message: impl Into<String>) -> Error {
     InstructionExecutionError::InvariantViolation(message.into().into_boxed_str())
 }
-
 fn hex_directory_id(id: &DirectoryId) -> String {
     hex::encode(id)
 }
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
-
     use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::{
-        account::AccountId, ipfs::IpfsPath, soradns::ResolverDirectoryRecordV1,
-    };
+    use iroha_data_model::{account::AccountId, ipfs::IpfsPath, soradns::ResolverDirectoryRecordV1};
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
     const BLOCK_TIMESTAMP_MS: u64 = 1_700_000_000_000;
-
     fn block_header() -> iroha_data_model::block::BlockHeader {
         iroha_data_model::block::BlockHeader::new(
             nonzero!(1_u64),
@@ -612,13 +558,11 @@ mod tests {
             0,
         )
     }
-
     fn make_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let handle = LiveQueryStore::start_test();
         State::new_for_testing(World::new(), kura, handle)
     }
-
     fn sample_record(builder_keys: &KeyPair) -> ResolverDirectoryRecordV1 {
         ResolverDirectoryRecordV1 {
             root_hash: [1; 32],
@@ -636,27 +580,22 @@ mod tests {
                 .expect("nonzero SoraDNS directory signature fixture"),
         }
     }
-
     fn checked_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("SoraDNS fixture key generation should succeed")
     }
-
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} SoraDNS fixture key generation should succeed: {err}")
         })
     }
-
     #[test]
     fn checked_ed25519_keypair_preserves_algorithm() {
         assert_eq!(checked_ed25519_keypair().algorithm(), Algorithm::Ed25519);
     }
-
     fn signed_record() -> (ResolverDirectoryRecordV1, KeyPair) {
         signed_record_with_keypair(checked_ed25519_keypair())
     }
-
     fn signed_record_with_keypair(keypair: KeyPair) -> (ResolverDirectoryRecordV1, KeyPair) {
         let mut record = sample_record(&keypair);
         let payload = signing_payload_bytes(&record).expect("payload");
@@ -664,18 +603,15 @@ mod tests {
             .expect("directory record should sign");
         (record, keypair)
     }
-
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const NONCANONICAL_ED25519_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn signature_with_malformed_ed25519_r(
         signature: &Signature,
         replacement_r: &[u8; 32],
@@ -684,7 +620,6 @@ mod tests {
         payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
-
     fn authority_account() -> AccountId {
         AccountId::new(
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
@@ -692,7 +627,6 @@ mod tests {
                 .expect("public key"),
         )
     }
-
     #[test]
     fn submit_directory_draft_succeeds() {
         crate::test_alias::ensure();
@@ -704,7 +638,6 @@ mod tests {
         stx.world
             .soradns_release_signers
             .insert(keypair.public_key().clone(), ());
-
         let submit = iroha_data_model::isi::soradns::SubmitDirectoryDraft {
             record: record.clone(),
             car_cid: IpfsPath::from_str("/ipfs/bafyreidraftaaaaaaaaaaaaaaaaaaaaaaaa").expect("cid"),
@@ -723,7 +656,6 @@ mod tests {
             "draft timestamp must come from the canonical block header"
         );
     }
-
     #[test]
     fn publish_directory_moves_draft() {
         crate::test_alias::ensure();
@@ -735,7 +667,6 @@ mod tests {
         stx.world
             .soradns_release_signers
             .insert(keypair.public_key().clone(), ());
-
         let submit = iroha_data_model::isi::soradns::SubmitDirectoryDraft {
             record: record.clone(),
             car_cid: IpfsPath::from_str("/ipfs/bafyreisubmitbbbbbbbbbbbbbbbbbbbbbbbb")
@@ -745,7 +676,6 @@ mod tests {
             builder_signature: record.builder_signature.clone(),
         };
         submit.execute(&authority, &mut stx).expect("submit");
-
         let publish = iroha_data_model::isi::soradns::PublishDirectory {
             directory_id: record.root_hash,
             expected_prev: None,
@@ -769,7 +699,6 @@ mod tests {
             "publish timestamp must be the same canonical value used by policy checks"
         );
     }
-
     #[test]
     fn revoke_resolver_uses_block_timestamp() {
         crate::test_alias::ensure();
@@ -777,14 +706,12 @@ mod tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let resolver_id = [0xA5; 32];
-
         iroha_data_model::isi::soradns::RevokeResolver {
             resolver_id,
             reason: iroha_data_model::soradns::RadRevokeReason::OperatorRequest,
         }
         .execute(&authority_account(), &mut stx)
         .expect("revoke resolver");
-
         let revocation = stx
             .world
             .soradns_directory_revocations
@@ -795,11 +722,9 @@ mod tests {
             "revocation timestamp must come from the canonical block header"
         );
     }
-
     #[test]
     fn directory_builder_signature_rejects_malformed_ed25519_signature_r() {
         let (record, _) = signed_record();
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
             ("noncanonical", NONCANONICAL_ED25519_R),
@@ -807,7 +732,6 @@ mod tests {
             let mut invalid_record = record.clone();
             invalid_record.builder_signature =
                 signature_with_malformed_ed25519_r(&record.builder_signature, &replacement_r);
-
             let err = verify_builder_signature(&invalid_record)
                 .expect_err("malformed builder signature R must be rejected");
             let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
@@ -822,7 +746,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn directory_builder_signature_rejects_malformed_mldsa_signature_lengths() {
         let (record, _) =
@@ -830,7 +753,6 @@ mod tests {
         verify_builder_signature(&record)
             .expect("valid SoraDNS ML-DSA builder signature should verify");
         let valid_signature = record.builder_signature.payload().to_vec();
-
         for (label, replacement_signature) in [
             (
                 "short",
@@ -844,7 +766,6 @@ mod tests {
         ] {
             let mut invalid_record = record.clone();
             invalid_record.builder_signature = Signature::from_bytes(&replacement_signature);
-
             let err = verify_builder_signature(&invalid_record)
                 .expect_err("malformed ML-DSA builder signature length must be rejected");
             let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(

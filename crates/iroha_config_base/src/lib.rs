@@ -141,24 +141,18 @@
 //! Here we also use nesting.
 //!
 //! See macro documentation for details.
-
 #![deny(missing_docs)]
-
 pub mod attach;
 pub mod env;
 pub mod read;
 pub mod toml;
 pub mod util;
-
 use std::{
     fmt::{Debug, Display, Formatter},
     path::{Path, PathBuf},
 };
-
 pub use iroha_derive::ReadConfig;
-
 use crate::attach::ConfigValueAndOrigin;
-
 /// Config parameter ID, which is a path in config file, e.g. `foo.bar`.
 ///
 /// ```
@@ -172,7 +166,6 @@ use crate::attach::ConfigValueAndOrigin;
 pub struct ParameterId {
     segments: Vec<String>,
 }
-
 impl Display for ParameterId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut print_dot = false;
@@ -187,13 +180,11 @@ impl Display for ParameterId {
         Ok(())
     }
 }
-
 impl Debug for ParameterId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "ParameterId({self})")
     }
 }
-
 impl<P> From<P> for ParameterId
 where
     P: IntoIterator,
@@ -205,7 +196,6 @@ where
         }
     }
 }
-
 /// Indicates the origin where a configuration parameter value came from.
 #[derive(Debug, Clone)]
 pub enum ParameterOrigin {
@@ -234,42 +224,35 @@ pub enum ParameterOrigin {
         message: String,
     },
 }
-
 impl ParameterOrigin {
     /// Construct [`Self::File`]
     pub fn file(id: ParameterId, path: PathBuf) -> Self {
         Self::File { id, path }
     }
-
     /// Construct [`Self::Env`]
     pub fn env(id: ParameterId, var: String) -> Self {
         Self::Env { var, id }
     }
-
     /// Construct [`Self::Default`]
     pub fn default(id: ParameterId) -> Self {
         Self::Default { id }
     }
-
     /// Construct [`Self::Custom`]
     pub fn custom(message: String) -> Self {
         Self::Custom { message }
     }
 }
-
 /// A container with information on where the value came from, in terms of [`ParameterOrigin`]
 #[derive(Debug, Clone)]
 pub struct WithOrigin<T> {
     value: T,
     origin: ParameterOrigin,
 }
-
 impl<T> WithOrigin<T> {
     /// Constructor
     pub fn new(value: T, origin: ParameterOrigin) -> Self {
         Self { value, origin }
     }
-
     /// Construct, using caller's location as the origin.
     ///
     /// Primarily for testing purposes.
@@ -280,41 +263,34 @@ impl<T> WithOrigin<T> {
             ParameterOrigin::custom(format!("inlined at `{}`", std::panic::Location::caller())),
         )
     }
-
     /// Borrow the value
     pub fn value(&self) -> &T {
         &self.value
     }
-
     /// Exclusively borrow the value
     pub fn value_mut(&mut self) -> &mut T {
         &mut self.value
     }
-
     /// Extract the value, dropping the origin.
     ///
     /// Use [`Self::into_tuple`] to extract both the value and the origin.
     pub fn into_value(self) -> T {
         self.value
     }
-
     /// Extract the value and the origin.
     ///
     /// Use [`Self::into_value`] to extract only the value.
     pub fn into_tuple(self) -> (T, ParameterOrigin) {
         (self.value, self.origin)
     }
-
     /// Borrow the origin
     pub fn origin(&self) -> &ParameterOrigin {
         &self.origin
     }
-
     /// Construct [`ConfigValueAndOrigin`] attachment to use with [`error_stack::Report::attach_printable`].
     pub fn into_attachment(self) -> ConfigValueAndOrigin<T> {
         ConfigValueAndOrigin::new(self.value, self.origin)
     }
-
     /// Convert the value with a function
     pub fn map<F, U>(self, fun: F) -> WithOrigin<U>
     where
@@ -327,7 +303,6 @@ impl<T> WithOrigin<T> {
         }
     }
 }
-
 impl<T> norito::json::JsonSerialize for WithOrigin<T>
 where
     T: norito::json::JsonSerialize,
@@ -336,7 +311,6 @@ where
         self.value.json_serialize(out);
     }
 }
-
 impl<T> norito::json::JsonDeserialize for WithOrigin<T>
 where
     T: norito::json::JsonDeserialize,
@@ -345,18 +319,15 @@ where
         let value = T::json_deserialize(p)?;
         Ok(WithOrigin::inline(value))
     }
-
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         let inner = T::json_from_value(value)?;
         Ok(WithOrigin::inline(inner))
     }
-
     fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
         let inner = T::json_from_map_key(key)?;
         Ok(WithOrigin::inline(inner))
     }
 }
-
 impl<T: AsRef<Path>> WithOrigin<T> {
     /// If the origin is [`ParameterOrigin::File`], will resolve the contained path relative to the origin.
     /// Otherwise, will return the value as-is.

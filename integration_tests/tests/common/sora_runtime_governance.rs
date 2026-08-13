@@ -1,10 +1,8 @@
 //! Shared runtime-governance fixture and round helpers used by SORA integration tests.
-
 use std::{
     collections::BTreeSet,
     time::{Duration, Instant},
 };
-
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::{sandbox, sync};
 use iroha::client::Client;
@@ -34,7 +32,6 @@ use iroha_executor_data_model::permission::governance::{
 };
 use iroha_test_network::{NetworkBuilder, ensure_domain_setup_for_network};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
-
 const CITIZEN_COUNT: usize = 20;
 const CITIZEN_FUND: u128 = 15_000;
 const CITIZEN_BOND: u128 = 10_000;
@@ -53,24 +50,20 @@ const TX_STATUS_TIMEOUT: Duration = Duration::from_secs(900);
 const TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const TX_TTL: Duration = Duration::from_secs(1_200);
 const BALANCE_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
-
 pub fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
-
 fn governance_escrow_account_literal() -> String {
     ALICE_ID
         .canonical_i105()
         .expect("alice account id should encode to canonical I105")
 }
-
 fn governance_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::parse_fully_qualified(GOV_DOMAIN_ID).expect("governance domain id must parse"),
         "xor".parse().expect("governance asset name must parse"),
     )
 }
-
 fn governance_contract_address(contract_id: &str) -> ContractAddress {
     let deploy_nonce = match contract_id {
         FIRST_CONTRACT_ID => 1,
@@ -87,13 +80,11 @@ fn governance_contract_address(contract_id: &str) -> ContractAddress {
     )
     .expect("governance test contract address")
 }
-
 pub fn tune_client_timeouts(client: &mut Client) {
     client.transaction_status_timeout = TX_STATUS_TIMEOUT;
     client.torii_request_timeout = TORII_REQUEST_TIMEOUT;
     client.transaction_ttl = Some(TX_TTL);
 }
-
 async fn wait_for_ready_torii_peer(
     network: &sandbox::SerializedNetwork,
     http: &reqwest::Client,
@@ -135,17 +126,14 @@ async fn wait_for_ready_torii_peer(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 pub fn parse_hex32(input: &str) -> [u8; 32] {
     let bytes = hex::decode(input).expect("hex should decode");
     let mut out = [0_u8; 32];
     out.copy_from_slice(&bytes);
     out
 }
-
 pub fn compute_runtime_upgrade_proposal_id(manifest: &RuntimeUpgradeManifest) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
-
     let canonical = norito::to_bytes(manifest).expect("runtime manifest must encode");
     let manifest_len =
         u32::try_from(canonical.len()).expect("runtime manifest length should fit u32");
@@ -157,26 +145,22 @@ pub fn compute_runtime_upgrade_proposal_id(manifest: &RuntimeUpgradeManifest) ->
     input.extend_from_slice(b"iroha:gov:runtime-upgrade:proposal:v1|");
     input.extend_from_slice(&manifest_len.to_le_bytes());
     input.extend_from_slice(&canonical);
-
     let digest = Blake2b512::digest(&input);
     let mut out = [0_u8; 32];
     out.copy_from_slice(&digest[..32]);
     out
 }
-
 fn json_u128(value: &norito::json::Value) -> Option<u128> {
     value
         .as_u64()
         .map(u128::from)
         .or_else(|| value.as_str().and_then(|raw| raw.parse::<u128>().ok()))
 }
-
 fn json_u64(value: &norito::json::Value) -> Option<u64> {
     value
         .as_u64()
         .or_else(|| value.as_str().and_then(|raw| raw.parse::<u64>().ok()))
 }
-
 fn max_runtime_upgrade_end_height(client: &Client) -> Result<Option<u64>> {
     let payload = client
         .get_runtime_upgrades_json()
@@ -195,7 +179,6 @@ fn max_runtime_upgrade_end_height(client: &Client) -> Result<Option<u64>> {
         .max();
     Ok(max_end_height)
 }
-
 fn integer_sqrt_u128(value: u128) -> u128 {
     if value < 2 {
         return value;
@@ -208,14 +191,12 @@ fn integer_sqrt_u128(value: u128) -> u128 {
     }
     x0
 }
-
 fn expected_plain_total_weight(voter_count: usize) -> u128 {
     let conviction_factor = (1_u64 + BALLOT_DURATION_BLOCKS).min(GOV_MAX_CONVICTION);
     integer_sqrt_u128(BALLOT_LOCK)
         .saturating_mul(u128::from(conviction_factor))
         .saturating_mul(u128::try_from(voter_count).expect("voter count should fit u128"))
 }
-
 pub async fn wait_for_proposal_found(
     client: &Client,
     proposal_id_hex: &str,
@@ -243,7 +224,6 @@ pub async fn wait_for_proposal_found(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_referendum_found(
     client: &Client,
     referendum_id: &str,
@@ -271,7 +251,6 @@ async fn wait_for_referendum_found(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_proposal_status(
     client: &Client,
     proposal_id_hex: &str,
@@ -305,7 +284,6 @@ async fn wait_for_proposal_status(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_referendum_status(
     client: &Client,
     referendum_id: &str,
@@ -339,7 +317,6 @@ async fn wait_for_referendum_status(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_tally_total(
     client: &Client,
     referendum_id: &str,
@@ -385,7 +362,6 @@ async fn wait_for_tally_total(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 pub async fn wait_for_runtime_upgrade_status(
     client: &Client,
     runtime_upgrade_id_hex: &str,
@@ -432,7 +408,6 @@ pub async fn wait_for_runtime_upgrade_status(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_account_registration(
     client: &Client,
     account_id: &iroha::data_model::account::AccountId,
@@ -466,7 +441,6 @@ async fn wait_for_account_registration(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_council_member_present(
     client: &Client,
     expected_member: &iroha::data_model::account::AccountId,
@@ -513,7 +487,6 @@ async fn wait_for_council_member_present(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_domain_registration(
     client: &Client,
     domain_id: &DomainId,
@@ -547,7 +520,6 @@ async fn wait_for_domain_registration(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_asset_definition_registration(
     client: &Client,
     asset_definition_id: &AssetDefinitionId,
@@ -581,7 +553,6 @@ async fn wait_for_asset_definition_registration(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn wait_for_all_citizen_balances(
     client: &Client,
     asset_def_id: &AssetDefinitionId,
@@ -626,7 +597,6 @@ async fn wait_for_all_citizen_balances(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> Result<Option<u128>> {
     let asset = match client.query_single(FindAssetById::new(asset_id.clone())) {
         Ok(asset) => asset,
@@ -652,7 +622,6 @@ fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> Result<Opt
     }
     Ok(asset.value().as_numeric().try_mantissa_u128())
 }
-
 async fn wait_for_asset_balance(
     client: &Client,
     asset_id: AssetId,
@@ -674,7 +643,6 @@ async fn wait_for_asset_balance(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
     let status = payload
         .get("content")
@@ -686,7 +654,6 @@ fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
         _ => None,
     }
 }
-
 pub async fn wait_for_tx_applied(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
@@ -703,7 +670,6 @@ pub async fn wait_for_tx_applied(
     let mut last_kind = String::from("unavailable");
     let mut last_payload = String::new();
     let mut last_error = String::new();
-
     loop {
         match http
             .get(status_url.clone())
@@ -759,7 +725,6 @@ pub async fn wait_for_tx_applied(
                 last_error = format!("{err}");
             }
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "{stage}: timed out waiting for tx `{tx_hash_hex}` to reach Applied; last_kind={last_kind}, last_payload={last_payload}, last_error={last_error}"
@@ -768,7 +733,6 @@ pub async fn wait_for_tx_applied(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 pub async fn wait_for_tx_rejected(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
@@ -785,7 +749,6 @@ pub async fn wait_for_tx_rejected(
     let mut last_kind = String::from("unavailable");
     let mut last_payload = String::new();
     let mut last_error = String::new();
-
     loop {
         match http
             .get(status_url.clone())
@@ -841,7 +804,6 @@ pub async fn wait_for_tx_rejected(
                 last_error = format!("{err}");
             }
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "{stage}: timed out waiting for tx `{tx_hash_hex}` to reach Rejected; last_kind={last_kind}, last_payload={last_payload}, last_error={last_error}"
@@ -850,9 +812,7 @@ pub async fn wait_for_tx_rejected(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 pub type AccountId = iroha::data_model::account::AccountId;
-
 pub struct RuntimeGovernanceFixture {
     pub network: sandbox::SerializedNetwork,
     pub http: reqwest::Client,
@@ -862,14 +822,12 @@ pub struct RuntimeGovernanceFixture {
     pub asset_def_id: AssetDefinitionId,
     pub alice_asset_id: AssetId,
 }
-
 pub struct RuntimeRoundOutcome {
     pub runtime_upgrade_id_hex: String,
     pub activated_height: u64,
     pub scheduled_start_height: u64,
     pub scheduled_end_height: u64,
 }
-
 pub fn governance_builder_for_runtime_resilience() -> NetworkBuilder {
     let alice_escrow_account = governance_escrow_account_literal();
     let governance_asset_id = governance_asset_definition_id().to_string();
@@ -941,7 +899,6 @@ pub fn governance_builder_for_runtime_resilience() -> NetworkBuilder {
                 .write(["gov", "parliament_alternate_size"], 1);
         })
 }
-
 #[allow(clippy::too_many_lines)]
 pub async fn setup_runtime_governance_fixture(
     test_name: &'static str,
@@ -950,7 +907,6 @@ pub async fn setup_runtime_governance_fixture(
     let Some(network) = sandbox::start_network_async_or_skip(builder, test_name).await? else {
         return Ok(None);
     };
-
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
@@ -963,7 +919,6 @@ pub async fn setup_runtime_governance_fixture(
     sync::get_status_with_retry_async(&alice)
         .await
         .wrap_err("wait for selected Torii peer status readiness")?;
-
     let citizens: Vec<_> = (0..CITIZEN_COUNT)
         .map(|_| gen_account_in("wonderland"))
         .collect();
@@ -973,7 +928,6 @@ pub async fn setup_runtime_governance_fixture(
         CITIZEN_COUNT,
         "generated citizen identities must be unique"
     );
-
     let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
     ensure_domain_setup_for_network(&network, &gov_domain_id)
@@ -1004,7 +958,6 @@ pub async fn setup_runtime_governance_fixture(
     wait_for_asset_definition_registration(&alice, &asset_def_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance asset definition registration")?;
-
     let enact_perm: Permission = CanEnactGovernance.into();
     let primary_propose_perm: Permission = CanProposeContractDeployment {
         contract_address: governance_contract_address(FIRST_CONTRACT_ID),
@@ -1035,7 +988,6 @@ pub async fn setup_runtime_governance_fixture(
     )
     .await
     .wrap_err("grant governance proposal/enact permissions to alice")?;
-
     let register_accounts_tx_hash = alice
         .submit_all(
             citizens
@@ -1058,7 +1010,6 @@ pub async fn setup_runtime_governance_fixture(
             .await
             .wrap_err_with(|| format!("wait for account registration `{account_id}`"))?;
     }
-
     let extra_runtime_budget = 250_000_u128;
     let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count"))
         + extra_runtime_budget;
@@ -1089,7 +1040,6 @@ pub async fn setup_runtime_governance_fixture(
         "wait for fixture setup proposer funding mint",
     )
     .await?;
-
     let funding_distribution_tx_hash = alice
         .submit_all(
             citizens.iter().map(|(account_id, _)| {
@@ -1120,7 +1070,6 @@ pub async fn setup_runtime_governance_fixture(
         "wait for runtime-governance fixture citizen funding distribution",
     )
     .await?;
-
     for (idx, (account_id, key_pair)) in citizens.iter().enumerate() {
         let mut citizen_client = ready_peer.client_for(account_id, key_pair.private_key().clone());
         tune_client_timeouts(&mut citizen_client);
@@ -1156,7 +1105,6 @@ pub async fn setup_runtime_governance_fixture(
         "wait for fixture post-bond citizen balances",
     )
     .await?;
-
     let council_split = CITIZEN_COUNT / 2;
     let council_members: Vec<_> = citizens
         .iter()
@@ -1185,7 +1133,6 @@ pub async fn setup_runtime_governance_fixture(
     wait_for_council_member_present(&alice, &first_council_member, 0, Duration::from_secs(180))
         .await
         .wrap_err("wait for persisted council epoch 0 member in runtime-governance fixture")?;
-
     Ok(Some(RuntimeGovernanceFixture {
         network,
         http,
@@ -1196,7 +1143,6 @@ pub async fn setup_runtime_governance_fixture(
         alice_asset_id,
     }))
 }
-
 fn tuned_client_for_account(
     fixture: &RuntimeGovernanceFixture,
     account_id: &AccountId,
@@ -1207,7 +1153,6 @@ fn tuned_client_for_account(
     tune_client_timeouts(&mut client);
     client
 }
-
 fn parliament_body_json_key(body: ParliamentBody) -> &'static str {
     match body {
         ParliamentBody::RulesCommittee => "rules-committee",
@@ -1219,7 +1164,6 @@ fn parliament_body_json_key(body: ParliamentBody) -> &'static str {
         ParliamentBody::FmaCommittee => "fma-committee",
     }
 }
-
 fn proposal_snapshot_body_members(
     proposal_payload: &norito::json::Value,
     body: ParliamentBody,
@@ -1262,7 +1206,6 @@ fn proposal_snapshot_body_members(
     }
     Ok(Some(parsed))
 }
-
 fn find_account_keypair<'a>(
     accounts: &'a [(AccountId, KeyPair)],
     account_id: &AccountId,
@@ -1273,7 +1216,6 @@ fn find_account_keypair<'a>(
         .map(|(_, keypair)| keypair)
         .ok_or_else(|| eyre!("missing key pair for parliament member `{account_id}`"))
 }
-
 async fn cast_stage_approvals_from_snapshot(
     fixture: &RuntimeGovernanceFixture,
     proposal_payload: &norito::json::Value,
@@ -1319,7 +1261,6 @@ async fn cast_stage_approvals_from_snapshot(
     }
     Ok(())
 }
-
 async fn restart_peer_and_wait_for_height(
     network: &sandbox::SerializedNetwork,
     peer_idx: usize,
@@ -1332,13 +1273,11 @@ async fn restart_peer_and_wait_for_height(
             network.peers().len()
         )
     })?;
-
     let _ = peer.shutdown_if_started().await;
     let config_layers = network.config_layers().collect::<Vec<_>>();
     peer.start_checked(config_layers.iter(), None)
         .await
         .wrap_err_with(|| format!("{context}: restart peer {peer_idx}"))?;
-
     let mut restart_client = peer.client();
     tune_client_timeouts(&mut restart_client);
     sync::get_status_with_retry_async(&restart_client)
@@ -1346,14 +1285,12 @@ async fn restart_peer_and_wait_for_height(
         .wrap_err_with(|| {
             format!("{context}: wait for restarted peer {peer_idx} status readiness")
         })?;
-
     let deadline = Instant::now() + Duration::from_secs(180);
     loop {
         match restart_client.get_status() {
             Ok(status) if status.blocks >= target_height => return Ok(()),
             Ok(_) | Err(_) => {}
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "{context}: restarted peer {peer_idx} did not reach block height {target_height} within {:?}",
@@ -1363,7 +1300,6 @@ async fn restart_peer_and_wait_for_height(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 #[allow(clippy::too_many_lines)]
 pub async fn enact_runtime_upgrade_round(
     fixture: &mut RuntimeGovernanceFixture,
@@ -1395,7 +1331,6 @@ pub async fn enact_runtime_upgrade_round(
     let runtime_proposal_id_hex = hex::encode(runtime_proposal_id);
     let runtime_referendum_id = runtime_proposal_id_hex.clone();
     let runtime_upgrade_id_hex = hex::encode(runtime_manifest.id().0);
-
     let runtime_propose_tx_hash = fixture
         .alice
         .submit(
@@ -1427,7 +1362,6 @@ pub async fn enact_runtime_upgrade_round(
     .wrap_err_with(|| {
         format!("wait for runtime-upgrade proposal to be queryable ({round_label})")
     })?;
-
     let runtime_voters: Vec<_> = fixture
         .citizens
         .iter()
@@ -1446,7 +1380,6 @@ pub async fn enact_runtime_upgrade_round(
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err_with(|| format!("grant runtime referendum ballot permissions ({round_label})"))?;
-
     let runtime_transfer_amount =
         u64::try_from(BALLOT_LOCK).expect("runtime ballot lock should fit u64");
     let runtime_expected_balances: Vec<_> = runtime_voters
@@ -1486,7 +1419,6 @@ pub async fn enact_runtime_upgrade_round(
             format!("wait for runtime referendum voter funding `{account_id}` ({round_label})")
         })?;
     }
-
     let runtime_proposal_payload = fixture
         .alice
         .get_gov_proposal_json(&runtime_proposal_id_hex)
@@ -1518,7 +1450,6 @@ pub async fn enact_runtime_upgrade_round(
     )
     .await
     .wrap_err_with(|| format!("wait for runtime referendum to remain proposed ({round_label})"))?;
-
     if let Some(peer_idx) = restart_peer_idx {
         let target_height = fixture.alice.get_status()?.blocks;
         restart_peer_and_wait_for_height(
@@ -1529,7 +1460,6 @@ pub async fn enact_runtime_upgrade_round(
         )
         .await?;
     }
-
     cast_stage_approvals_from_snapshot(
         fixture,
         &runtime_proposal_payload,
@@ -1553,7 +1483,6 @@ pub async fn enact_runtime_upgrade_round(
     )
     .await
     .wrap_err_with(|| format!("wait for runtime referendum status to open ({round_label})"))?;
-
     for (idx, (account_id, key_pair)) in runtime_voters.iter().enumerate() {
         let citizen_client = tuned_client_for_account(fixture, account_id, key_pair);
         citizen_client
@@ -1581,7 +1510,6 @@ pub async fn enact_runtime_upgrade_round(
     .wrap_err_with(|| {
         format!("wait for runtime referendum ballot tally ingestion ({round_label})")
     })?;
-
     let runtime_finalize_tx_hash = fixture
         .alice
         .submit(
@@ -1609,7 +1537,6 @@ pub async fn enact_runtime_upgrade_round(
     )
     .await
     .wrap_err_with(|| format!("wait for runtime proposal to become approved ({round_label})"))?;
-
     let runtime_enact_tx_hash = fixture
         .alice
         .submit(
@@ -1649,7 +1576,6 @@ pub async fn enact_runtime_upgrade_round(
     )
     .await
     .wrap_err_with(|| format!("wait for runtime proposal to become enacted ({round_label})"))?;
-
     let mut runtime_status = wait_for_runtime_upgrade_status(
         &fixture.alice,
         &runtime_upgrade_id_hex,
@@ -1697,7 +1623,6 @@ pub async fn enact_runtime_upgrade_round(
             }
         }
     }
-
     let runtime_status = runtime_status.ok_or_else(|| {
         eyre!(
             "runtime upgrade `{runtime_upgrade_id_hex}` was not observed as ActivatedAt after enactment and ticking ({round_label})"
@@ -1711,7 +1636,6 @@ pub async fn enact_runtime_upgrade_round(
         activated_height, runtime_start_height,
         "runtime upgrade should activate exactly at the scheduled start height ({round_label})"
     );
-
     Ok(RuntimeRoundOutcome {
         runtime_upgrade_id_hex,
         activated_height,

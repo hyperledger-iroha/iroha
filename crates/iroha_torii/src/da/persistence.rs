@@ -1,7 +1,6 @@
 //! Persistence helpers for DA replay cursors, receipts, and spool artifacts.
 
 #![allow(clippy::redundant_pub_crate)]
-
 use std::{
     collections::BTreeMap,
     ffi::OsStr,
@@ -14,7 +13,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-
 use eyre::{WrapErr, eyre};
 use iroha_core::da::{LaneEpoch, ReplayFingerprint};
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
@@ -27,7 +25,6 @@ use norito::{
 };
 use parking_lot::{Mutex as NonPoisoningMutex, MutexGuard as NonPoisoningMutexGuard};
 use sorafs_manifest::pdp::{PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PdpCommitmentV1};
-
 const CURSOR_FILE_NAME: &str = "replay_cursors.norito.json";
 const CURSOR_JOURNAL_FILE_NAME: &str = "replay_cursors.journal";
 const CURSOR_SNAPSHOT_VERSION: u32 = 1;
@@ -54,12 +51,10 @@ pub(super) const STORED_RECEIPT_VERSION: u16 = 1;
 const RECEIPT_SIGNING_PAYLOAD_VERSION: u16 = 1;
 const DA_COMMITMENT_SCHEDULE_ENTRY_VERSION: u16 = 1;
 static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 pub(crate) fn receipt_signature_placeholder() -> Signature {
     Signature::try_from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER)
         .expect("DA receipt placeholder signature is non-empty and nonzero")
 }
-
 /// Persistent store tracking the highest sequence observed per `(lane, epoch)`.
 pub struct ReplayCursorStore {
     dir: PathBuf,
@@ -68,7 +63,6 @@ pub struct ReplayCursorStore {
     // mutex non-poisoning so a caught panic cannot permanently disable every later ingest.
     inner: NonPoisoningMutex<ReplayCursorState>,
 }
-
 struct ReplayCursorState {
     highest: BTreeMap<LaneEpoch, u64>,
     journal: Option<File>,
@@ -76,20 +70,17 @@ struct ReplayCursorState {
     checkpoint_pending: bool,
     journal_healthy: bool,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct CursorSnapshot {
     version: u32,
     entries: Vec<CursorEntry>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct CursorEntry {
     lane_id: u32,
     epoch: u64,
     highest_sequence: u64,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct CursorJournalRecord {
     version: u32,
@@ -97,7 +88,6 @@ struct CursorJournalRecord {
     epoch: u64,
     highest_sequence: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CursorSnapshotRelation {
     Equal,
@@ -105,7 +95,6 @@ enum CursorSnapshotRelation {
     CandidateBehind,
     Conflicting,
 }
-
 impl ReplayCursorStore {
     /// Load the replay cursor store from disk, returning an empty store when no snapshot exists.
     pub fn open(path: PathBuf) -> eyre::Result<Self> {
@@ -115,7 +104,6 @@ impl ReplayCursorStore {
                 .expect("default DA replay lane/epoch capacity is non-zero"),
         )
     }
-
     /// Load a replay cursor store with an explicit global `(lane, epoch)` bound.
     pub fn open_with_max_lane_epochs(
         path: PathBuf,
@@ -192,7 +180,6 @@ impl ReplayCursorStore {
                 }
             },
         };
-
         let journal_path = replay_cursor_journal_path(&path);
         let recovery = read_cursor_journal(&journal_path, max_lane_epochs)?;
         for record in recovery.records {
@@ -205,7 +192,6 @@ impl ReplayCursorStore {
             recovery.valid_bytes,
             recovery.had_torn_tail,
         )?);
-
         let store = Self::with_state(path, max_lane_epochs, state);
         let checkpoint_pending = store.lock_state().checkpoint_pending;
         if checkpoint_pending {
@@ -213,7 +199,6 @@ impl ReplayCursorStore {
         }
         Ok(store)
     }
-
     /// Create an empty store backed by the provided directory (creating it if missing).
     pub fn empty(path: PathBuf) -> eyre::Result<Self> {
         Self::empty_with_max_lane_epochs(
@@ -222,7 +207,6 @@ impl ReplayCursorStore {
                 .expect("default DA replay lane/epoch capacity is non-zero"),
         )
     }
-
     /// Create an empty persistent store with an explicit global `(lane, epoch)` bound.
     pub fn empty_with_max_lane_epochs(
         path: PathBuf,
@@ -249,7 +233,6 @@ impl ReplayCursorStore {
         state.journal = Some(journal);
         Ok(Self::with_state(path, max_lane_epochs, state))
     }
-
     /// Create an in-memory store (persistence disabled).
     pub fn in_memory() -> Self {
         Self::in_memory_with_max_lane_epochs(
@@ -257,7 +240,6 @@ impl ReplayCursorStore {
                 .expect("default DA replay lane/epoch capacity is non-zero"),
         )
     }
-
     /// Create an in-memory store with an explicit global `(lane, epoch)` bound.
     pub fn in_memory_with_max_lane_epochs(max_lane_epochs: NonZeroUsize) -> Self {
         Self {
@@ -266,7 +248,6 @@ impl ReplayCursorStore {
             inner: NonPoisoningMutex::new(ReplayCursorState::empty()),
         }
     }
-
     fn with_state(path: PathBuf, max_lane_epochs: NonZeroUsize, state: ReplayCursorState) -> Self {
         Self {
             dir: path,
@@ -274,7 +255,6 @@ impl ReplayCursorStore {
             inner: NonPoisoningMutex::new(state),
         }
     }
-
     /// Access the known highest sequences for seeding the replay cache.
     pub fn highest_sequences(&self) -> Vec<(LaneEpoch, u64)> {
         let guard = self.lock_state();
@@ -284,15 +264,12 @@ impl ReplayCursorStore {
             .map(|(lane_epoch, highest)| (*lane_epoch, *highest))
             .collect()
     }
-
     fn highest_sequence(&self, lane_epoch: LaneEpoch) -> Option<u64> {
         self.lock_state().highest.get(&lane_epoch).copied()
     }
-
     const fn max_lane_epochs(&self) -> NonZeroUsize {
         self.max_lane_epochs
     }
-
     /// Record a newly observed sequence for the provided `(lane, epoch)` window.
     pub fn record(&self, lane_epoch: LaneEpoch, sequence: u64) -> eyre::Result<()> {
         let mut guard = self.lock_state();
@@ -311,11 +288,9 @@ impl ReplayCursorStore {
                 self.max_lane_epochs
             ));
         }
-
         if guard.checkpoint_pending {
             self.checkpoint_locked(&mut guard)?;
         }
-
         if !self.dir.as_os_str().is_empty() {
             if !guard.journal_healthy {
                 return Err(eyre!(
@@ -335,7 +310,6 @@ impl ReplayCursorStore {
                 return Err(err);
             }
         }
-
         guard.highest.insert(lane_epoch, sequence);
         if guard.journal.is_some() {
             guard.journal_records = guard.journal_records.saturating_add(1);
@@ -351,13 +325,11 @@ impl ReplayCursorStore {
         }
         Ok(())
     }
-
     /// Force a durable checkpoint and truncate the applied journal.
     pub(crate) fn checkpoint(&self) -> eyre::Result<()> {
         let mut guard = self.lock_state();
         self.checkpoint_locked(&mut guard)
     }
-
     fn checkpoint_locked(&self, guard: &mut ReplayCursorState) -> eyre::Result<()> {
         if self.dir.as_os_str().is_empty() {
             guard.checkpoint_pending = false;
@@ -369,7 +341,6 @@ impl ReplayCursorStore {
                 "DA replay cursor journal is unhealthy; refusing to checkpoint"
             ));
         }
-
         self.persist_snapshot(&guard.to_snapshot())?;
         validate_replay_cursor_dir_no_follow(&self.dir).wrap_err_with(|| {
             format!(
@@ -395,17 +366,14 @@ impl ReplayCursorStore {
         guard.checkpoint_pending = false;
         Ok(())
     }
-
     fn lock_state(&self) -> NonPoisoningMutexGuard<'_, ReplayCursorState> {
         self.inner.lock()
     }
-
     fn persist_snapshot(&self, snapshot: &CursorSnapshot) -> eyre::Result<()> {
         if self.dir.as_os_str().is_empty() {
             // Persistence disabled; operate in-memory only.
             return Ok(());
         }
-
         let data = json::to_vec(snapshot).wrap_err("failed to encode DA replay snapshot")?;
         let file_path = self.dir.join(CURSOR_FILE_NAME);
         let tmp_path = replay_cursor_temp_path(&file_path);
@@ -471,14 +439,12 @@ impl ReplayCursorStore {
         Ok(())
     }
 }
-
 struct CursorJournalRecovery {
     records: Vec<CursorJournalRecord>,
     record_count: usize,
     valid_bytes: u64,
     had_torn_tail: bool,
 }
-
 fn read_cursor_journal(
     path: &Path,
     max_lane_epochs: NonZeroUsize,
@@ -514,12 +480,10 @@ fn read_cursor_journal(
             max_bytes
         ));
     }
-
     let max_bytes = usize::try_from(max_bytes)
         .map_err(|_| eyre!("DA replay cursor journal bound does not fit usize"))?;
     let bytes = read_regular_spool_artifact(path, "DA replay cursor journal", max_bytes)
         .wrap_err_with(|| format!("failed to read DA replay journal at {}", path.display()))?;
-
     let mut records = Vec::new();
     let mut offset = 0usize;
     let mut had_torn_tail = false;
@@ -553,7 +517,6 @@ fn read_cursor_journal(
             had_torn_tail = true;
             break;
         }
-
         let payload = &bytes[prefix_end..payload_end];
         let expected_checksum = cursor_journal_checksum(payload);
         if bytes[payload_end..frame_end] != expected_checksum {
@@ -580,7 +543,6 @@ fn read_cursor_journal(
         }
         offset = frame_end;
     }
-
     Ok(CursorJournalRecovery {
         record_count: records.len(),
         records,
@@ -589,7 +551,6 @@ fn read_cursor_journal(
         had_torn_tail,
     })
 }
-
 fn max_cursor_journal_bytes(max_lane_epochs: NonZeroUsize) -> eyre::Result<u64> {
     let max_frame_bytes = CURSOR_JOURNAL_FRAME_PREFIX_BYTES
         .checked_add(CURSOR_JOURNAL_MAX_PAYLOAD_BYTES)
@@ -601,7 +562,6 @@ fn max_cursor_journal_bytes(max_lane_epochs: NonZeroUsize) -> eyre::Result<u64> 
         .ok_or_else(|| eyre!("DA replay cursor journal size bound overflowed"))?;
     u64::try_from(bytes).map_err(|_| eyre!("DA replay cursor journal size bound exceeds u64"))
 }
-
 fn max_cursor_snapshot_bytes(max_lane_epochs: NonZeroUsize) -> eyre::Result<u64> {
     let entries_bytes = max_lane_epochs
         .get()
@@ -612,14 +572,12 @@ fn max_cursor_snapshot_bytes(max_lane_epochs: NonZeroUsize) -> eyre::Result<u64>
         .ok_or_else(|| eyre!("DA replay cursor snapshot size bound overflowed"))?;
     u64::try_from(bytes).map_err(|_| eyre!("DA replay cursor snapshot size bound exceeds u64"))
 }
-
 fn cursor_journal_checksum(payload: &[u8]) -> [u8; blake3::OUT_LEN] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(CURSOR_JOURNAL_DOMAIN);
     hasher.update(payload);
     hasher.finalize().into()
 }
-
 fn encode_cursor_journal_frame(record: &CursorJournalRecord) -> eyre::Result<Vec<u8>> {
     let payload =
         json::to_vec(record).wrap_err("failed to encode DA replay cursor journal entry")?;
@@ -642,11 +600,9 @@ fn encode_cursor_journal_frame(record: &CursorJournalRecord) -> eyre::Result<Vec
     frame.extend_from_slice(&cursor_journal_checksum(&payload));
     Ok(frame)
 }
-
 fn replay_cursor_journal_path(dir: &Path) -> PathBuf {
     dir.join(CURSOR_JOURNAL_FILE_NAME)
 }
-
 fn create_cursor_journal(path: &Path) -> eyre::Result<File> {
     let file = fs::OpenOptions::new()
         .create_new(true)
@@ -675,7 +631,6 @@ fn create_cursor_journal(path: &Path) -> eyre::Result<File> {
     }
     Ok(file)
 }
-
 fn open_cursor_journal(path: &Path, valid_bytes: u64, had_torn_tail: bool) -> eyre::Result<File> {
     let mut file = match fs::OpenOptions::new().read(true).append(true).open(path) {
         Ok(file) => file,
@@ -720,7 +675,6 @@ fn open_cursor_journal(path: &Path, valid_bytes: u64, had_torn_tail: bool) -> ey
     }
     Ok(file)
 }
-
 fn validate_open_cursor_journal(path: &Path, file: &File) -> eyre::Result<()> {
     let path_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
         format!(
@@ -759,7 +713,6 @@ fn validate_open_cursor_journal(path: &Path, file: &File) -> eyre::Result<()> {
     }
     Ok(())
 }
-
 fn append_cursor_journal_record(
     dir: &Path,
     max_lane_epochs: NonZeroUsize,
@@ -803,17 +756,14 @@ fn append_cursor_journal_record(
         .wrap_err("failed to sync DA replay cursor journal entry")?;
     Ok(())
 }
-
 fn create_replay_cursor_dir_no_follow(path: &Path) -> eyre::Result<()> {
     fs::create_dir_all(path)?;
     validate_replay_cursor_dir_no_follow(path)
 }
-
 fn validate_replay_cursor_dir_no_follow(path: &Path) -> eyre::Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     validate_replay_cursor_dir_metadata(path, &metadata)
 }
-
 fn validate_replay_cursor_dir_metadata(path: &Path, metadata: &fs::Metadata) -> eyre::Result<()> {
     if !metadata.file_type().is_dir() {
         return Err(eyre!(
@@ -823,16 +773,13 @@ fn validate_replay_cursor_dir_metadata(path: &Path, metadata: &fs::Metadata) -> 
     }
     Ok(())
 }
-
 pub(super) fn replay_cursor_temp_path(path: &Path) -> PathBuf {
     path.with_added_extension("tmp")
 }
-
 fn sync_dir(path: &Path) -> std::io::Result<()> {
     let file = fs::File::open(path)?;
     file.sync_all()
 }
-
 fn read_cursor_snapshot(
     path: &Path,
     max_lane_epochs: NonZeroUsize,
@@ -870,7 +817,6 @@ fn read_cursor_snapshot(
     validate_cursor_snapshot(path, &snapshot, max_lane_epochs)?;
     Ok(Some(snapshot))
 }
-
 fn validate_cursor_snapshot(
     path: &Path,
     snapshot: &CursorSnapshot,
@@ -891,7 +837,6 @@ fn validate_cursor_snapshot(
             max_lane_epochs
         ));
     }
-
     let mut seen = BTreeMap::new();
     for entry in &snapshot.entries {
         let lane_epoch = LaneEpoch::new(LaneId::from(entry.lane_id), entry.epoch);
@@ -904,10 +849,8 @@ fn validate_cursor_snapshot(
             ));
         }
     }
-
     Ok(())
 }
-
 fn compare_cursor_snapshots(
     current: &CursorSnapshot,
     candidate: &CursorSnapshot,
@@ -916,7 +859,6 @@ fn compare_cursor_snapshots(
     let candidate_entries = cursor_snapshot_map(candidate);
     let mut ahead = false;
     let mut behind = false;
-
     for key in current_entries.keys().chain(candidate_entries.keys()) {
         match (current_entries.get(key), candidate_entries.get(key)) {
             (Some(current), Some(candidate)) if candidate > current => ahead = true,
@@ -929,7 +871,6 @@ fn compare_cursor_snapshots(
             return CursorSnapshotRelation::Conflicting;
         }
     }
-
     match (ahead, behind) {
         (false, false) => CursorSnapshotRelation::Equal,
         (true, false) => CursorSnapshotRelation::CandidateAhead,
@@ -937,7 +878,6 @@ fn compare_cursor_snapshots(
         (true, true) => CursorSnapshotRelation::Conflicting,
     }
 }
-
 fn cursor_snapshot_map(snapshot: &CursorSnapshot) -> BTreeMap<LaneEpoch, u64> {
     let mut entries = BTreeMap::new();
     for entry in &snapshot.entries {
@@ -953,7 +893,6 @@ fn cursor_snapshot_map(snapshot: &CursorSnapshot) -> BTreeMap<LaneEpoch, u64> {
     }
     entries
 }
-
 fn remove_replay_cursor_temp(tmp_path: &Path) -> eyre::Result<()> {
     match fs::remove_file(tmp_path) {
         Ok(()) => Ok(()),
@@ -966,7 +905,6 @@ fn remove_replay_cursor_temp(tmp_path: &Path) -> eyre::Result<()> {
         }),
     }
 }
-
 fn promote_replay_cursor_temp(tmp_path: &Path, file_path: &Path) -> eyre::Result<()> {
     match fs::rename(tmp_path, file_path) {
         Ok(()) => {}
@@ -994,7 +932,6 @@ fn promote_replay_cursor_temp(tmp_path: &Path, file_path: &Path) -> eyre::Result
             });
         }
     };
-
     if let Some(parent) = file_path.parent() {
         if !parent.as_os_str().is_empty() {
             sync_dir(parent).wrap_err_with(|| {
@@ -1007,7 +944,6 @@ fn promote_replay_cursor_temp(tmp_path: &Path, file_path: &Path) -> eyre::Result
     }
     Ok(())
 }
-
 /// Receipt entry captured in the durable receipt log.
 #[derive(Clone, Debug)]
 pub struct DaReceiptLogEntry {
@@ -1020,21 +956,18 @@ pub struct DaReceiptLogEntry {
     /// Full DA ingest receipt payload.
     pub receipt: DaIngestReceipt,
 }
-
 #[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub(super) struct StoredDaReceipt {
     pub(super) version: u16,
     pub(super) sequence: u64,
     pub(super) receipt: DaIngestReceipt,
 }
-
 #[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct DaReceiptSigningPayload {
     version: u16,
     sequence: u64,
     receipt: DaIngestReceipt,
 }
-
 /// Outcome returned after attempting to insert a receipt into the log.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReceiptInsertOutcome {
@@ -1082,7 +1015,6 @@ pub enum ReceiptInsertOutcome {
         observed: u64,
     },
 }
-
 #[derive(Clone)]
 struct ReceiptHead {
     sequence: u64,
@@ -1091,9 +1023,7 @@ struct ReceiptHead {
     path: PathBuf,
     receipt_digest: [u8; blake3::OUT_LEN],
 }
-
 type ReceiptIndex = BTreeMap<LaneEpoch, ReceiptHead>;
-
 struct ReceiptScanSummary {
     count: u64,
     minimum_sequence: u64,
@@ -1101,7 +1031,6 @@ struct ReceiptScanSummary {
     sequence_digest_xor: [u8; blake3::OUT_LEN],
     head: ReceiptHead,
 }
-
 impl ReceiptScanSummary {
     fn new(sequence: u64, head: ReceiptHead) -> Self {
         Self {
@@ -1112,7 +1041,6 @@ impl ReceiptScanSummary {
             head,
         }
     }
-
     fn observe(&mut self, sequence: u64, head: ReceiptHead) -> eyre::Result<()> {
         if sequence == self.head.sequence {
             if head.manifest_hash != self.head.manifest_hash {
@@ -1157,7 +1085,6 @@ impl ReceiptScanSummary {
         }
         Ok(())
     }
-
     fn validate_contiguous(&self, lane_epoch: LaneEpoch) -> eyre::Result<()> {
         let expected_count = self
             .maximum_sequence
@@ -1178,7 +1105,6 @@ impl ReceiptScanSummary {
                 self.maximum_sequence
             ));
         }
-
         let mut expected_digest = [0_u8; blake3::OUT_LEN];
         for sequence in self.minimum_sequence..=self.maximum_sequence {
             xor_digest(&mut expected_digest, receipt_sequence_digest(sequence));
@@ -1192,20 +1118,17 @@ impl ReceiptScanSummary {
         Ok(())
     }
 }
-
 fn receipt_sequence_digest(sequence: u64) -> [u8; blake3::OUT_LEN] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"iroha.da.receipt.sequence.v1\0");
     hasher.update(&sequence.to_be_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn xor_digest(target: &mut [u8; blake3::OUT_LEN], value: [u8; blake3::OUT_LEN]) {
     for (target, value) in target.iter_mut().zip(value) {
         *target ^= value;
     }
 }
-
 pub(super) fn unsigned_receipt_bytes(
     receipt: &DaIngestReceipt,
     sequence: u64,
@@ -1219,7 +1142,6 @@ pub(super) fn unsigned_receipt_bytes(
     })
     .map_err(|err| eyre!(err))
 }
-
 fn verify_receipt_signature(
     receipt: &DaIngestReceipt,
     sequence: u64,
@@ -1242,7 +1164,6 @@ fn verify_receipt_signature(
         .verify(signer_public_key, &unsigned_bytes)
         .map_err(|err| eyre!(err))
 }
-
 fn validate_receipt_resource_bounds(receipt: &DaIngestReceipt) -> eyre::Result<()> {
     if receipt
         .pdp_commitment
@@ -1262,7 +1183,6 @@ fn validate_receipt_resource_bounds(receipt: &DaIngestReceipt) -> eyre::Result<(
     }
     Ok(())
 }
-
 /// Durable log of DA ingest receipts keyed by `(lane, epoch, sequence)`.
 #[derive(Clone)]
 pub struct DaReceiptLog {
@@ -1275,7 +1195,6 @@ pub struct DaReceiptLog {
     // payloads are loaded directly from their deterministic paths instead of accumulating here.
     index: Arc<NonPoisoningMutex<ReceiptIndex>>,
 }
-
 impl DaReceiptLog {
     /// Open (or create) a receipt log rooted at `dir`.
     pub fn open(
@@ -1288,7 +1207,6 @@ impl DaReceiptLog {
         }
         create_spool_dir_no_follow(&dir)
             .wrap_err_with(|| format!("failed to create DA receipt directory {}", dir.display()))?;
-
         let index = Self::load_existing(&dir, &signer_public_key, cursor_store.max_lane_epochs())?;
         let mut known_lane_epochs = BTreeMap::new();
         for (lane_epoch, _) in cursor_store.highest_sequences() {
@@ -1312,7 +1230,6 @@ impl DaReceiptLog {
                     format!("failed to seed receipt cursor from disk for {lane_epoch:?}")
                 })?;
         }
-
         Ok(Self {
             dir,
             cursor_store,
@@ -1320,7 +1237,6 @@ impl DaReceiptLog {
             index: Arc::new(NonPoisoningMutex::new(index)),
         })
     }
-
     /// Construct a non-durable in-memory receipt log.
     ///
     /// This is suitable for tests and diagnostics only. Production startup rejects an unavailable
@@ -1334,7 +1250,6 @@ impl DaReceiptLog {
             index: Arc::new(NonPoisoningMutex::new(BTreeMap::new())),
         }
     }
-
     /// Append a receipt to the log, enforcing monotonic sequence ordering per lane/epoch.
     pub fn append(
         &self,
@@ -1355,7 +1270,6 @@ impl DaReceiptLog {
                 "DA receipt log is not durable; refusing to acknowledge ingest without a receipt file"
             ));
         }
-
         validate_receipt_fingerprint(&receipt, &fingerprint)?;
         validate_receipt_resource_bounds(&receipt)?;
         verify_receipt_signature(&receipt, sequence, &self.signer_public_key)
@@ -1364,7 +1278,6 @@ impl DaReceiptLog {
         let receipt_digest = *blake3::hash(&encoded).as_bytes();
         let manifest_hash = receipt.manifest_hash;
         let mut guard = self.lock_index();
-
         if let Some(existing) = guard.get(&lane_epoch) {
             if sequence == existing.sequence && existing.receipt_digest == receipt_digest {
                 if existing.fingerprint != fingerprint {
@@ -1408,7 +1321,6 @@ impl DaReceiptLog {
                 self.cursor_store.max_lane_epochs()
             ));
         }
-
         if let Some(highest) = self.cursor_store.highest_sequence(lane_epoch) {
             if sequence <= highest {
                 return Ok(ReceiptInsertOutcome::StaleSequence { highest });
@@ -1422,12 +1334,10 @@ impl DaReceiptLog {
                 });
             }
         }
-
         let path = self.write_receipt_file(&receipt, sequence, &fingerprint, &encoded)?;
         self.cursor_store
             .record(lane_epoch, sequence)
             .wrap_err("failed to persist receipt cursor")?;
-
         guard.insert(
             lane_epoch,
             ReceiptHead {
@@ -1438,12 +1348,10 @@ impl DaReceiptLog {
                 receipt_digest,
             },
         );
-
         Ok(ReceiptInsertOutcome::Stored {
             cursor_advanced: true,
         })
     }
-
     /// Return a logged durable receipt for an idempotent ingest retry.
     ///
     /// The receipt is reloaded from disk before returning it so duplicate acknowledgements do not
@@ -1459,14 +1367,12 @@ impl DaReceiptLog {
                 "DA receipt log is not durable; duplicate receipt cannot be recovered from disk"
             ));
         }
-
         let path = receipt_file_path(&self.dir, lane_epoch, sequence, fingerprint);
         match fs::symlink_metadata(&path) {
             Ok(_) => {}
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.into()),
         }
-
         let stored = Self::decode_receipt(&path)
             .wrap_err_with(|| format!("failed to reload durable DA receipt {}", path.display()))?;
         if stored.sequence != sequence
@@ -1486,10 +1392,8 @@ impl DaReceiptLog {
                     path.display()
                 )
             })?;
-
         Ok(Some((path, stored.receipt)))
     }
-
     /// Load receipts for a `(lane, epoch)` window in sequence order.
     #[cfg(test)]
     pub fn receipts_for(&self, lane_epoch: LaneEpoch) -> Vec<DaReceiptLogEntry> {
@@ -1508,18 +1412,15 @@ impl DaReceiptLog {
             })
             .collect()
     }
-
     fn load_existing(
         dir: &Path,
         signer_public_key: &PublicKey,
         max_lane_epochs: NonZeroUsize,
     ) -> eyre::Result<ReceiptIndex> {
         let mut summaries: BTreeMap<LaneEpoch, ReceiptScanSummary> = BTreeMap::new();
-
         let Some(dir_entries) = open_spool_dir_no_follow(dir)? else {
             return Ok(BTreeMap::new());
         };
-
         for entry in dir_entries {
             let entry = entry?;
             let path = entry.path();
@@ -1573,7 +1474,6 @@ impl DaReceiptLog {
                 }
             }
         }
-
         let mut index = BTreeMap::new();
         for (lane_epoch, summary) in summaries {
             summary.validate_contiguous(lane_epoch)?;
@@ -1581,11 +1481,9 @@ impl DaReceiptLog {
         }
         Ok(index)
     }
-
     fn lock_index(&self) -> NonPoisoningMutexGuard<'_, ReceiptIndex> {
         self.index.lock()
     }
-
     fn write_receipt_file(
         &self,
         receipt: &DaIngestReceipt,
@@ -1596,18 +1494,15 @@ impl DaReceiptLog {
         if self.dir.as_os_str().is_empty() {
             return Ok(PathBuf::new());
         }
-
         match persist_encoded_da_receipt(&self.dir, receipt, sequence, fingerprint, encoded) {
             Ok(Some(path)) => Ok(path),
             Ok(None) => Ok(PathBuf::new()),
             Err(err) => Err(err.into()),
         }
     }
-
     fn decode_receipt(path: &Path) -> eyre::Result<StoredDaReceipt> {
         Self::decode_receipt_with_key(path).map(|(_, stored)| stored)
     }
-
     fn decode_receipt_with_key(path: &Path) -> eyre::Result<(ReceiptFileKey, StoredDaReceipt)> {
         let data = read_regular_spool_artifact(
             path,
@@ -1632,7 +1527,6 @@ impl DaReceiptLog {
         Ok((key, stored))
     }
 }
-
 #[derive(Clone, Copy)]
 struct ReceiptFileKey {
     lane_id: LaneId,
@@ -1641,7 +1535,6 @@ struct ReceiptFileKey {
     storage_ticket: StorageTicketId,
     fingerprint: ReplayFingerprint,
 }
-
 fn receipt_file_path(
     spool_dir: &Path,
     lane_epoch: LaneEpoch,
@@ -1656,7 +1549,6 @@ fn receipt_file_path(
         epoch = lane_epoch.epoch,
     ))
 }
-
 fn parse_receipt_file_key(path: &Path) -> eyre::Result<ReceiptFileKey> {
     let name = path
         .file_name()
@@ -1667,7 +1559,6 @@ fn parse_receipt_file_key(path: &Path) -> eyre::Result<ReceiptFileKey> {
         .and_then(|name| name.strip_prefix('-'))
         .and_then(|name| name.strip_suffix(".norito"))
         .ok_or_else(|| eyre!("receipt filename does not use the expected prefix/suffix"))?;
-
     let mut fields = rest.split('-');
     let lane_hex = fields
         .next()
@@ -1687,7 +1578,6 @@ fn parse_receipt_file_key(path: &Path) -> eyre::Result<ReceiptFileKey> {
     if fields.next().is_some() {
         return Err(eyre!("receipt filename contains extra fields"));
     }
-
     let lane_id = parse_fixed_hex_u32(lane_hex, 8)
         .map(LaneId::new)
         .ok_or_else(|| eyre!("receipt filename lane id is not fixed-width hexadecimal u32"))?;
@@ -1702,7 +1592,6 @@ fn parse_receipt_file_key(path: &Path) -> eyre::Result<ReceiptFileKey> {
     let fingerprint = parse_fixed_hex_32(fingerprint_hex)
         .map(ReplayFingerprint::from)
         .ok_or_else(|| eyre!("receipt filename fingerprint is not 32-byte hex"))?;
-
     Ok(ReceiptFileKey {
         lane_id,
         epoch,
@@ -1711,7 +1600,6 @@ fn parse_receipt_file_key(path: &Path) -> eyre::Result<ReceiptFileKey> {
         fingerprint,
     })
 }
-
 fn validate_receipt_filename(
     path: &Path,
     stored: &StoredDaReceipt,
@@ -1743,11 +1631,9 @@ fn validate_receipt_filename(
     }
     Ok(key)
 }
-
 fn receipt_fingerprint_from_storage_ticket(receipt: &DaIngestReceipt) -> ReplayFingerprint {
     ReplayFingerprint::from(*receipt.storage_ticket.as_bytes())
 }
-
 fn validate_receipt_fingerprint(
     receipt: &DaIngestReceipt,
     fingerprint: &ReplayFingerprint,
@@ -1762,7 +1648,6 @@ fn validate_receipt_fingerprint(
     }
     Ok(())
 }
-
 fn validate_receipt_manifest_artifact_if_present(
     spool_dir: &Path,
     receipt_key: &ReceiptFileKey,
@@ -1788,10 +1673,8 @@ fn validate_receipt_manifest_artifact_if_present(
             "receipt manifest hash does not match ticket-indexed DA manifest artifact"
         ));
     }
-
     Ok(())
 }
-
 fn read_regular_spool_artifact(
     path: &Path,
     artifact: &str,
@@ -1815,13 +1698,11 @@ fn read_regular_spool_artifact(
             ),
         ));
     }
-
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
     let mut file = options.open(path)?;
@@ -1835,7 +1716,6 @@ fn read_regular_spool_artifact(
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         if opened_metadata.dev() != path_metadata.dev()
             || opened_metadata.ino() != path_metadata.ino()
         {
@@ -1848,7 +1728,6 @@ fn read_regular_spool_artifact(
             ));
         }
     }
-
     let expected_len = usize::try_from(opened_metadata.len()).map_err(|_| {
         std::io::Error::new(
             ErrorKind::InvalidData,
@@ -1889,7 +1768,6 @@ fn read_regular_spool_artifact(
     }
     Ok(bytes)
 }
-
 impl ReplayCursorState {
     fn empty() -> Self {
         Self {
@@ -1900,7 +1778,6 @@ impl ReplayCursorState {
             journal_healthy: true,
         }
     }
-
     fn from_snapshot(snapshot: CursorSnapshot) -> Self {
         let mut state = Self::empty();
         for entry in snapshot.entries {
@@ -1909,7 +1786,6 @@ impl ReplayCursorState {
         }
         state
     }
-
     fn apply_journal_record(
         &mut self,
         record: CursorJournalRecord,
@@ -1928,7 +1804,6 @@ impl ReplayCursorState {
             .or_insert(record.highest_sequence);
         Ok(())
     }
-
     fn to_snapshot(&self) -> CursorSnapshot {
         let mut entries = Vec::with_capacity(self.highest.len());
         for (lane_epoch, highest_sequence) in &self.highest {
@@ -1945,7 +1820,6 @@ impl ReplayCursorState {
         }
     }
 }
-
 fn existing_artifact_path_if_matching(
     target_path: &Path,
     expected: &[u8],
@@ -1965,12 +1839,10 @@ fn existing_artifact_path_if_matching(
             ),
         ));
     }
-
     let existing = read_regular_spool_artifact(target_path, artifact, expected.len())?;
     if existing == expected {
         return Ok(Some(target_path.to_path_buf()));
     }
-
     Err(std::io::Error::new(
         ErrorKind::InvalidData,
         format!(
@@ -1979,7 +1851,6 @@ fn existing_artifact_path_if_matching(
         ),
     ))
 }
-
 fn install_artifact_without_overwrite(
     tmp_path: &Path,
     target_path: &Path,
@@ -2006,28 +1877,24 @@ fn install_artifact_without_overwrite(
         }
     }
 }
-
 fn write_temp_artifact(tmp_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut options = fs::OpenOptions::new();
     options.create_new(true).write(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-
         options.mode(0o600);
     }
     let mut file = options.open(tmp_path)?;
     file.write_all(bytes)?;
     file.sync_all()
 }
-
 fn temp_artifact_write_error(tmp_path: &Path, err: std::io::Error) -> std::io::Error {
     if err.kind() == ErrorKind::AlreadyExists {
         return err;
     }
     remove_temp_artifact(tmp_path).err().unwrap_or(err)
 }
-
 fn allocate_artifact_temp_counter(counter: &AtomicU64) -> std::io::Result<u64> {
     counter
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -2040,12 +1907,10 @@ fn allocate_artifact_temp_counter(counter: &AtomicU64) -> std::io::Result<u64> {
             )
         })
 }
-
 fn artifact_temp_suffix() -> std::io::Result<String> {
     let counter = allocate_artifact_temp_counter(&ARTIFACT_TEMP_COUNTER)?;
     Ok(format!("{}-{counter:016x}", std::process::id()))
 }
-
 fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -2054,7 +1919,6 @@ fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
     }
     Ok(())
 }
-
 fn remove_temp_artifact(tmp_path: &Path) -> std::io::Result<()> {
     match fs::remove_file(tmp_path) {
         Ok(()) => Ok(()),
@@ -2068,48 +1932,38 @@ fn remove_temp_artifact(tmp_path: &Path) -> std::io::Result<()> {
         )),
     }
 }
-
 #[cfg(test)]
 mod temp_artifact_tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
-
     use iroha_crypto::{Algorithm, KeyPair};
     use tempfile::tempdir;
-
     use super::*;
-
     fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
     }
-
     fn checked_random_keypair(context: &str) -> KeyPair {
         KeyPair::try_random()
             .unwrap_or_else(|err| panic!("{context}: checked random key generation failed: {err}"))
     }
-
     fn checked_ed25519_keypair(context: &str) -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519).unwrap_or_else(|err| {
             panic!("{context}: checked Ed25519 random key generation failed: {err}")
         })
     }
-
     fn checked_mldsa_keypair(context: &str) -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::MlDsa).unwrap_or_else(|err| {
             panic!("{context}: checked ML-DSA random key generation failed: {err}")
         })
     }
-
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn signature_with_malformed_ed25519_r(
         signature: &Signature,
         replacement_r: &[u8; 32],
@@ -2118,7 +1972,6 @@ mod temp_artifact_tests {
         payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
-
     fn panic_while_holding_replay_cursor_store(store: &ReplayCursorStore) {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let _guard = store.inner.lock();
@@ -2126,7 +1979,6 @@ mod temp_artifact_tests {
         }));
         assert!(result.is_err(), "replay-cursor panic should be caught");
     }
-
     fn panic_while_holding_receipt_log(log: &DaReceiptLog) {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let _guard = log.index.lock();
@@ -2134,11 +1986,9 @@ mod temp_artifact_tests {
         }));
         assert!(result.is_err(), "receipt-log panic should be caught");
     }
-
     fn test_fingerprint(seed: u8) -> ReplayFingerprint {
         ReplayFingerprint::from([seed; blake3::OUT_LEN])
     }
-
     fn test_receipt(
         signer: &KeyPair,
         lane_id: LaneId,
@@ -2164,7 +2014,6 @@ mod temp_artifact_tests {
         receipt.operator_signature = checked_signature(signer.private_key(), &unsigned);
         receipt
     }
-
     #[test]
     fn unsigned_receipt_bytes_use_checked_nonzero_placeholder_signature() {
         let signer = checked_random_keypair("receipt placeholder");
@@ -2173,12 +2022,10 @@ mod temp_artifact_tests {
         let payload: DaReceiptSigningPayload =
             decode_from_bytes(&unsigned).expect("unsigned receipt payload decodes");
         let placeholder = payload.receipt.operator_signature.payload();
-
         assert_eq!(placeholder, RECEIPT_SIGNATURE_PLACEHOLDER);
         assert!(!placeholder.iter().all(|byte| *byte == 0));
         assert_eq!(placeholder, receipt_signature_placeholder().payload());
     }
-
     #[test]
     fn da_receipt_log_rejects_malformed_ed25519_signature_r() {
         let dir = tempdir().expect("tempdir");
@@ -2193,7 +2040,6 @@ mod temp_artifact_tests {
         .expect("receipt log");
         let lane_epoch = LaneEpoch::new(LaneId::new(8), 13);
         let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xB2);
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
             ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
@@ -2201,7 +2047,6 @@ mod temp_artifact_tests {
             let mut invalid_receipt = receipt.clone();
             invalid_receipt.operator_signature =
                 signature_with_malformed_ed25519_r(&receipt.operator_signature, &replacement_r);
-
             let err = log
                 .append(lane_epoch, 1, invalid_receipt, test_fingerprint(0xB2))
                 .expect_err("DA receipt log must reject malformed Ed25519 signature R");
@@ -2213,7 +2058,6 @@ mod temp_artifact_tests {
             );
         }
     }
-
     #[test]
     fn da_receipt_log_rejects_malformed_mldsa_signature_lengths() {
         let dir = tempdir().expect("tempdir");
@@ -2228,7 +2072,6 @@ mod temp_artifact_tests {
         .expect("receipt log");
         let lane_epoch = LaneEpoch::new(LaneId::new(9), 14);
         let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xB3);
-
         let mut extended = receipt.operator_signature.payload().to_vec();
         extended.push(0);
         for (label, malformed_payload) in [
@@ -2242,7 +2085,6 @@ mod temp_artifact_tests {
         ] {
             let mut invalid_receipt = receipt.clone();
             invalid_receipt.operator_signature = Signature::from_bytes(&malformed_payload);
-
             let err = log
                 .append(lane_epoch, 1, invalid_receipt, test_fingerprint(0xB3))
                 .expect_err("DA receipt log must reject malformed ML-DSA signature length");
@@ -2254,15 +2096,12 @@ mod temp_artifact_tests {
             );
         }
     }
-
     #[test]
     fn da_temp_artifact_cleanup_reports_unremovable_path() {
         let dir = tempdir().expect("tempdir");
         let tmp_path = dir.path().join(".da.tmp");
         fs::create_dir(&tmp_path).expect("block temp cleanup");
-
         let err = remove_temp_artifact(&tmp_path).expect_err("directory cleanup should fail");
-
         assert!(
             err.to_string()
                 .contains("failed to remove DA temp artifact"),
@@ -2273,22 +2112,18 @@ mod temp_artifact_tests {
             "failed cleanup should leave temp path visible for operator repair"
         );
     }
-
     #[test]
     fn da_temp_artifact_write_rejects_existing_path_without_truncating() {
         let dir = tempdir().expect("tempdir");
         let tmp_path = dir.path().join(".da.tmp");
         fs::write(&tmp_path, b"existing").expect("seed temp artifact");
-
         let err = write_temp_artifact(&tmp_path, b"replacement")
             .expect_err("existing temp artifact should not be overwritten");
-
         assert_eq!(err.kind(), ErrorKind::AlreadyExists);
         assert_eq!(
             fs::read(&tmp_path).expect("read existing temp artifact"),
             b"existing"
         );
-
         let err =
             temp_artifact_write_error(&tmp_path, std::io::Error::from(ErrorKind::AlreadyExists));
         assert_eq!(err.kind(), ErrorKind::AlreadyExists);
@@ -2297,18 +2132,14 @@ mod temp_artifact_tests {
             b"existing"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn da_temp_artifact_write_uses_owner_only_permissions() {
         use std::os::unix::fs::PermissionsExt;
-
         let dir = tempdir().expect("tempdir");
         let tmp_path = dir.path().join(".da.tmp");
-
         write_temp_artifact(&tmp_path, b"sensitive DA artifact")
             .expect("write owner-only temp artifact");
-
         let mode = fs::metadata(&tmp_path)
             .expect("inspect temp artifact")
             .permissions()
@@ -2319,14 +2150,11 @@ mod temp_artifact_tests {
             "DA temp artifact must not grant group or world access"
         );
     }
-
     #[test]
     fn da_temp_artifact_counter_rejects_exhaustion_without_wrapping() {
         let counter = AtomicU64::new(u64::MAX);
-
         let err =
             allocate_artifact_temp_counter(&counter).expect_err("exhausted counter must reject");
-
         assert_eq!(err.kind(), ErrorKind::Other);
         assert!(
             err.to_string().contains("temp suffix counter exhausted"),
@@ -2334,14 +2162,11 @@ mod temp_artifact_tests {
         );
         assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
     }
-
     #[test]
     fn da_temp_artifact_counter_allocates_pre_exhaustion_suffix_once() {
         let counter = AtomicU64::new(u64::MAX - 1);
-
         let suffix = allocate_artifact_temp_counter(&counter)
             .expect("last non-exhausted temp counter should allocate");
-
         assert_eq!(suffix, u64::MAX - 1);
         assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
         assert!(
@@ -2350,18 +2175,15 @@ mod temp_artifact_tests {
         );
         assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
     }
-
     #[test]
     fn da_install_artifact_reports_temp_cleanup_failure_after_link_error() {
         let dir = tempdir().expect("tempdir");
         let tmp_path = dir.path().join(".da.tmp");
         let target_path = dir.path().join("da-target.norito");
         fs::create_dir(&tmp_path).expect("block temp cleanup");
-
         let err =
             install_artifact_without_overwrite(&tmp_path, &target_path, b"expected", "DA artifact")
                 .expect_err("directory temp artifact should fail cleanup");
-
         assert!(
             err.to_string()
                 .contains("failed to remove DA temp artifact"),
@@ -2376,12 +2198,10 @@ mod temp_artifact_tests {
             "failed hard-link install must not create the target artifact"
         );
     }
-
     #[test]
     fn da_replay_cursor_store_remains_usable_after_caught_action_panic() {
         let store = ReplayCursorStore::in_memory();
         panic_while_holding_replay_cursor_store(&store);
-
         assert!(
             store.highest_sequences().is_empty(),
             "caught panic must leave the unchanged cursor state readable"
@@ -2396,7 +2216,6 @@ mod temp_artifact_tests {
             "later cursor updates must remain visible"
         );
     }
-
     #[test]
     fn da_receipt_log_remains_usable_after_caught_action_panic() {
         let dir = tempdir().expect("tempdir");
@@ -2411,7 +2230,6 @@ mod temp_artifact_tests {
         .expect("receipt log");
         let lane_epoch = LaneEpoch::new(LaneId::new(4), 10);
         panic_while_holding_receipt_log(&log);
-
         assert!(
             log.receipts_for(lane_epoch).is_empty(),
             "caught panic must not fabricate receipt-log entries"
@@ -2422,7 +2240,6 @@ mod temp_artifact_tests {
                 .is_none(),
             "empty receipt log must not report a duplicate"
         );
-
         let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xA1);
         assert!(
             matches!(
@@ -2438,7 +2255,6 @@ mod temp_artifact_tests {
             .expect("durable receipt should be recoverable");
         assert_eq!(recovered, receipt);
     }
-
     fn receipt_head(sequence: u64, seed: u8) -> ReceiptHead {
         ReceiptHead {
             sequence,
@@ -2448,7 +2264,6 @@ mod temp_artifact_tests {
             receipt_digest: [seed.wrapping_add(1); blake3::OUT_LEN],
         }
     }
-
     #[test]
     fn receipt_scan_summary_is_constant_size_and_rejects_gaps_and_duplicates() {
         let lane_epoch = LaneEpoch::new(LaneId::new(8), 21);
@@ -2459,7 +2274,6 @@ mod temp_artifact_tests {
             .validate_contiguous(lane_epoch)
             .expect("contiguous receipt summary");
         assert_eq!(valid.head.sequence, 3);
-
         let mut corrupt = ReceiptScanSummary::new(1, receipt_head(1, 1));
         assert!(
             corrupt.observe(1, receipt_head(1, 4)).is_err(),
@@ -2472,33 +2286,26 @@ mod temp_artifact_tests {
             "a duplicate must not conceal a missing sequence"
         );
     }
-
     #[test]
     fn bounded_spool_reader_rejects_oversize_before_reading_body() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("oversize.norito");
         fs::write(&path, [0_u8; 17]).expect("write oversize fixture");
-
         let err = read_regular_spool_artifact(&path, "test artifact", 16)
             .expect_err("oversize artifact must reject");
-
         assert_eq!(err.kind(), ErrorKind::InvalidData);
         assert!(err.to_string().contains("exceeding the 16-byte limit"));
     }
-
     #[test]
     fn bounded_spool_reader_accepts_the_exact_file_length() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("exact.norito");
         let expected = [0xA5_u8; 16];
         fs::write(&path, expected).expect("write exact fixture");
-
         let observed = read_regular_spool_artifact(&path, "test artifact", expected.len())
             .expect("read exact-size artifact");
-
         assert_eq!(observed, expected);
     }
-
     #[test]
     fn receipt_log_retains_only_one_head_per_lane() {
         let dir = tempdir().expect("tempdir");
@@ -2512,7 +2319,6 @@ mod temp_artifact_tests {
         )
         .expect("receipt log");
         let lane_epoch = LaneEpoch::new(LaneId::new(5), 12);
-
         for (sequence, seed) in [(1, 0x31), (2, 0x32)] {
             let receipt = test_receipt(
                 &signer,
@@ -2527,13 +2333,11 @@ mod temp_artifact_tests {
                 ReceiptInsertOutcome::Stored { .. }
             ));
         }
-
         let index = log.lock_index();
         assert_eq!(index.len(), 1);
         assert_eq!(index.get(&lane_epoch).map(|head| head.sequence), Some(2));
     }
 }
-
 pub(super) fn persist_da_receipt(
     spool_dir: &Path,
     receipt: &DaIngestReceipt,
@@ -2548,7 +2352,6 @@ pub(super) fn persist_da_receipt(
     let encoded = encode_stored_da_receipt(receipt, sequence)?;
     persist_encoded_da_receipt(spool_dir, receipt, sequence, fingerprint, &encoded)
 }
-
 fn encode_stored_da_receipt(receipt: &DaIngestReceipt, sequence: u64) -> std::io::Result<Vec<u8>> {
     let encoded = to_bytes(&StoredDaReceipt {
         version: STORED_RECEIPT_VERSION,
@@ -2568,7 +2371,6 @@ fn encode_stored_da_receipt(receipt: &DaIngestReceipt, sequence: u64) -> std::io
     }
     Ok(encoded)
 }
-
 fn persist_encoded_da_receipt(
     spool_dir: &Path,
     receipt: &DaIngestReceipt,
@@ -2579,7 +2381,6 @@ fn persist_encoded_da_receipt(
     if spool_dir.as_os_str().is_empty() {
         return Ok(None);
     }
-
     create_spool_dir_no_follow(spool_dir)?;
     if receipt_fingerprint_from_storage_ticket(receipt) != *fingerprint {
         return Err(std::io::Error::new(
@@ -2591,7 +2392,6 @@ fn persist_encoded_da_receipt(
             ),
         ));
     }
-
     if encoded.len() > DA_RECEIPT_ARTIFACT_MAX_BYTES_V1 {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
@@ -2602,7 +2402,6 @@ fn persist_encoded_da_receipt(
             ),
         ));
     }
-
     let lane = receipt.lane_id.as_u32();
     let ticket_hex = hex::encode(receipt.storage_ticket.as_ref());
     let fingerprint_hex = hex::encode(fingerprint.as_bytes());
@@ -2617,21 +2416,17 @@ fn persist_encoded_da_receipt(
     {
         return Ok(Some(path));
     }
-
     let tmp_name = format!(
         ".{RECEIPT_FILE_PREFIX}-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
         artifact_temp_suffix()?,
         epoch = receipt.epoch,
     );
     let tmp_path = spool_dir.join(tmp_name);
-
     match write_temp_artifact(&tmp_path, encoded) {
         Ok(()) => {}
         Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
-
     install_artifact_without_overwrite(&tmp_path, &target_path, encoded, "DA receipt artifact")?;
-
     debug!(
         path = ?target_path,
         lane = lane,
@@ -2640,10 +2435,8 @@ fn persist_encoded_da_receipt(
         ticket = %ticket_hex,
         "queued DA ingest receipt for fanout spool"
     );
-
     Ok(Some(target_path))
 }
-
 fn open_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<Option<fs::ReadDir>> {
     let metadata = match fs::symlink_metadata(spool_dir) {
         Ok(metadata) => metadata,
@@ -2653,21 +2446,18 @@ fn open_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<Option<fs::Read
     validate_spool_dir_metadata(spool_dir, &metadata)?;
     fs::read_dir(spool_dir).map(Some)
 }
-
 fn create_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-
         builder.mode(0o700);
     }
     builder.create(spool_dir)?;
     let metadata = fs::symlink_metadata(spool_dir)?;
     validate_spool_dir_metadata(spool_dir, &metadata)
 }
-
 fn validate_spool_dir_metadata(spool_dir: &Path, metadata: &fs::Metadata) -> std::io::Result<()> {
     if !metadata.file_type().is_dir() {
         return Err(std::io::Error::new(
@@ -2677,7 +2467,6 @@ fn validate_spool_dir_metadata(spool_dir: &Path, metadata: &fs::Metadata) -> std
     }
     Ok(())
 }
-
 pub(super) fn ticket_artifact_dir(spool_dir: &Path, storage_ticket: &StorageTicketId) -> PathBuf {
     let ticket_hex = hex::encode(storage_ticket.as_bytes());
     let shard = format!("{:02x}", storage_ticket.as_bytes()[0]);
@@ -2686,7 +2475,6 @@ pub(super) fn ticket_artifact_dir(spool_dir: &Path, storage_ticket: &StorageTick
         .join(shard)
         .join(ticket_hex)
 }
-
 fn create_ticket_artifact_dir(
     spool_dir: &Path,
     storage_ticket: &StorageTicketId,
@@ -2700,7 +2488,6 @@ fn create_ticket_artifact_dir(
     create_spool_dir_no_follow(&ticket_dir)?;
     Ok(ticket_dir)
 }
-
 fn existing_ticket_artifact_dir(
     spool_dir: &Path,
     storage_ticket: &StorageTicketId,
@@ -2723,13 +2510,11 @@ fn existing_ticket_artifact_dir(
     }
     Ok(Some(ticket_dir))
 }
-
 #[cfg(test)]
 pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDaReceipt>> {
     if spool_dir.as_os_str().is_empty() {
         return Ok(Vec::new());
     }
-
     let mut receipts = Vec::new();
     let mut by_key: BTreeMap<(u32, u64, u64), (usize, ReplayFingerprint)> = BTreeMap::new();
     let mut paths = Vec::new();
@@ -2745,7 +2530,6 @@ pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDa
         paths.push((name.to_owned(), entry.path()));
     }
     paths.sort_by(|lhs, rhs| lhs.1.cmp(&rhs.1));
-
     for (name, path) in paths {
         if !fs::symlink_metadata(&path)?.file_type().is_file() {
             return Err(std::io::Error::new(
@@ -2790,7 +2574,6 @@ pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDa
         by_key.insert(key, (receipts.len(), receipt_key.fingerprint));
         receipts.push(stored);
     }
-
     receipts.sort_by(|lhs, rhs| {
         (
             lhs.receipt.lane_id.as_u32(),
@@ -2807,21 +2590,18 @@ pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDa
     });
     Ok(receipts)
 }
-
 pub(super) fn load_manifest_from_spool(
     spool_dir: &Path,
     ticket: &StorageTicketId,
 ) -> std::io::Result<Vec<u8>> {
     load_manifest_artifact_from_spool(spool_dir, ticket).map(|artifact| artifact.bytes)
 }
-
 pub(super) struct LoadedManifestArtifact {
     pub(super) bytes: Vec<u8>,
     lane_id: LaneId,
     epoch: u64,
     storage_ticket: StorageTicketId,
 }
-
 pub(super) fn load_manifest_artifact_from_spool(
     spool_dir: &Path,
     ticket: &StorageTicketId,
@@ -2852,7 +2632,6 @@ pub(super) fn load_manifest_artifact_from_spool(
         storage_ticket: manifest.storage_ticket,
     })
 }
-
 pub(super) fn load_pdp_commitment_from_spool(
     spool_dir: &Path,
     ticket: &StorageTicketId,
@@ -2872,7 +2651,6 @@ pub(super) fn load_pdp_commitment_from_spool(
     validate_pdp_commitment_spool_body(&bytes)?;
     Ok(bytes)
 }
-
 pub(super) fn load_pdp_commitment_for_manifest_artifact(
     spool_dir: &Path,
     manifest: &LoadedManifestArtifact,
@@ -2893,7 +2671,6 @@ pub(super) fn load_pdp_commitment_for_manifest_artifact(
     validate_pdp_commitment_spool_body_for_manifest(&bytes, manifest_hash)?;
     Ok(bytes)
 }
-
 fn load_ticket_artifact_path(
     spool_dir: &Path,
     ticket: &StorageTicketId,
@@ -2919,14 +2696,12 @@ fn load_ticket_artifact_path(
         Err(err) => Err(err),
     }
 }
-
 fn artifact_path_matches(path: &Path, prefix: &str) -> std::io::Result<bool> {
     let Some(name) = path.file_name() else {
         return Ok(false);
     };
     artifact_file_name(name, prefix).map(|name| name.is_some())
 }
-
 fn artifact_file_name<'a>(name: &'a OsStr, prefix: &str) -> std::io::Result<Option<&'a str>> {
     if let Some(name) = name.to_str() {
         return Ok((name.starts_with(prefix) && name.ends_with(".norito")).then_some(name));
@@ -2939,29 +2714,23 @@ fn artifact_file_name<'a>(name: &'a OsStr, prefix: &str) -> std::io::Result<Opti
     }
     Ok(None)
 }
-
 #[cfg(unix)]
 fn non_utf8_artifact_name_matches(name: &OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
     use std::os::unix::ffi::OsStrExt;
-
     let bytes = name.as_bytes();
     bytes.starts_with(prefix) && bytes.ends_with(suffix)
 }
-
 #[cfg(not(unix))]
 fn non_utf8_artifact_name_matches(_name: &OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
     false
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[cfg(unix)]
     #[test]
     fn artifact_file_name_rejects_non_utf8_shaped_names() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
-
         for (prefix, raw_name) in [
             ("manifest-", b"manifest-\xFF.norito".to_vec()),
             ("pdp-commitment-", b"pdp-commitment-\xFF.norito".to_vec()),
@@ -2973,12 +2742,10 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::InvalidData);
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn artifact_file_name_ignores_unrelated_non_utf8_names() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
-
         let name = OsString::from_vec(b"unrelated-\xFF.norito".to_vec());
         assert!(
             artifact_file_name(name.as_os_str(), "manifest-")
@@ -2987,7 +2754,6 @@ mod tests {
         );
     }
 }
-
 fn decode_manifest_spool_body(bytes: &[u8]) -> std::io::Result<(DaManifestV1, ReplayFingerprint)> {
     let manifest = decode_from_bytes::<DaManifestV1>(bytes).map_err(|err| {
         std::io::Error::new(
@@ -2995,7 +2761,6 @@ fn decode_manifest_spool_body(bytes: &[u8]) -> std::io::Result<(DaManifestV1, Re
             format!("manifest spool body is not a DA manifest: {err}"),
         )
     })?;
-
     let mut template = manifest.clone();
     template.storage_ticket = StorageTicketId::default();
     template.issued_at_unix = 0;
@@ -3012,14 +2777,11 @@ fn decode_manifest_spool_body(bytes: &[u8]) -> std::io::Result<(DaManifestV1, Re
             "manifest storage ticket does not match its canonical fingerprint",
         ));
     }
-
     Ok((manifest, fingerprint))
 }
-
 fn validate_pdp_commitment_spool_body(bytes: &[u8]) -> std::io::Result<()> {
     decode_pdp_commitment_spool_body(bytes).map(|_| ())
 }
-
 fn validate_pdp_commitment_spool_body_for_manifest(
     bytes: &[u8],
     manifest_hash: &BlobDigest,
@@ -3033,7 +2795,6 @@ fn validate_pdp_commitment_spool_body_for_manifest(
     }
     Ok(())
 }
-
 fn decode_pdp_commitment_spool_body(bytes: &[u8]) -> std::io::Result<PdpCommitmentV1> {
     let commitment = decode_from_bytes::<PdpCommitmentV1>(bytes).map_err(|err| {
         std::io::Error::new(
@@ -3049,11 +2810,9 @@ fn decode_pdp_commitment_spool_body(bytes: &[u8]) -> std::io::Result<PdpCommitme
     })?;
     Ok(commitment)
 }
-
 fn invalid_artifact_input(message: &'static str) -> std::io::Error {
     std::io::Error::new(ErrorKind::InvalidInput, message)
 }
-
 fn validate_manifest_artifact_inputs(
     manifest_bytes: &[u8],
     lane_id: LaneId,
@@ -3080,7 +2839,6 @@ fn validate_manifest_artifact_inputs(
     }
     Ok(())
 }
-
 fn validate_pdp_commitment_artifact_inputs(commitment: &PdpCommitmentV1) -> std::io::Result<()> {
     commitment.validate().map_err(|err| {
         std::io::Error::new(
@@ -3089,7 +2847,6 @@ fn validate_pdp_commitment_artifact_inputs(commitment: &PdpCommitmentV1) -> std:
         )
     })
 }
-
 fn validate_ticket_fingerprint(
     storage_ticket: &StorageTicketId,
     fingerprint: &ReplayFingerprint,
@@ -3101,7 +2858,6 @@ fn validate_ticket_fingerprint(
     }
     Ok(())
 }
-
 fn validate_da_commitment_artifact_inputs(
     record: &DaCommitmentRecord,
     lane_id: LaneId,
@@ -3120,7 +2876,6 @@ fn validate_da_commitment_artifact_inputs(
     }
     Ok(())
 }
-
 fn validate_da_schedule_artifact_inputs(
     record: &DaCommitmentRecord,
     pdp_commitment_bytes: &[u8],
@@ -3149,7 +2904,6 @@ fn validate_da_schedule_artifact_inputs(
     }
     Ok(())
 }
-
 fn validate_pin_intent_artifact_inputs(
     intent: &DaPinIntent,
     lane_id: LaneId,
@@ -3168,19 +2922,16 @@ fn validate_pin_intent_artifact_inputs(
     }
     Ok(())
 }
-
 fn parse_fixed_hex_u32(value: &str, width: usize) -> Option<u32> {
     (value.len() == width && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| u32::from_str_radix(value, 16).ok())
         .flatten()
 }
-
 fn parse_fixed_hex_u64(value: &str, width: usize) -> Option<u64> {
     (value.len() == width && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| u64::from_str_radix(value, 16).ok())
         .flatten()
 }
-
 fn parse_fixed_hex_32(value: &str) -> Option<[u8; 32]> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
@@ -3189,7 +2940,6 @@ fn parse_fixed_hex_32(value: &str) -> Option<[u8; 32]> {
     hex::decode_to_slice(value, &mut bytes).ok()?;
     Some(bytes)
 }
-
 pub(super) fn persist_manifest_for_sorafs(
     spool_dir: &Path,
     manifest_bytes: &[u8],
@@ -3220,7 +2970,6 @@ pub(super) fn persist_manifest_for_sorafs(
         storage_ticket,
         fingerprint,
     )?;
-
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
     let artifact_dir = create_ticket_artifact_dir(spool_dir, storage_ticket)?;
@@ -3230,25 +2979,21 @@ pub(super) fn persist_manifest_for_sorafs(
     {
         return Ok(Some(path));
     }
-
     let tmp_name = format!(
         ".{MANIFEST_ARTIFACT_FILE_NAME}.tmp-{}",
         artifact_temp_suffix()?
     );
     let tmp_path = artifact_dir.join(tmp_name);
-
     match write_temp_artifact(&tmp_path, manifest_bytes) {
         Ok(()) => {}
         Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
-
     install_artifact_without_overwrite(
         &tmp_path,
         &target_path,
         manifest_bytes,
         "DA manifest artifact",
     )?;
-
     debug!(
         path = ?target_path,
         lane = lane,
@@ -3257,10 +3002,8 @@ pub(super) fn persist_manifest_for_sorafs(
         ticket = %ticket_hex,
         "queued DA manifest for SoraFS orchestration"
     );
-
     Ok(Some(target_path))
 }
-
 pub(super) fn persist_pdp_commitment(
     spool_dir: &Path,
     commitment: &PdpCommitmentV1,
@@ -3275,7 +3018,6 @@ pub(super) fn persist_pdp_commitment(
     }
     validate_pdp_commitment_artifact_inputs(commitment)?;
     validate_ticket_fingerprint(storage_ticket, fingerprint)?;
-
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
     let artifact_dir = create_ticket_artifact_dir(spool_dir, storage_ticket)?;
@@ -3287,25 +3029,21 @@ pub(super) fn persist_pdp_commitment(
     {
         return Ok(Some(path));
     }
-
     let tmp_name = format!(
         ".{PDP_COMMITMENT_ARTIFACT_FILE_NAME}.tmp-{}",
         artifact_temp_suffix()?
     );
     let tmp_path = artifact_dir.join(tmp_name);
-
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
-
     install_artifact_without_overwrite(
         &tmp_path,
         &target_path,
         &encoded,
         "PDP commitment artifact",
     )?;
-
     debug!(
         path = ?target_path,
         lane = lane,
@@ -3314,10 +3052,8 @@ pub(super) fn persist_pdp_commitment(
         ticket = %ticket_hex,
         "queued PDP commitment for SoraFS orchestration"
     );
-
     Ok(Some(target_path))
 }
-
 pub(super) fn persist_da_commitment_record(
     spool_dir: &Path,
     record: &DaCommitmentRecord,
@@ -3331,9 +3067,7 @@ pub(super) fn persist_da_commitment_record(
         return Ok(None);
     }
     validate_da_commitment_artifact_inputs(record, lane_id, epoch, sequence, storage_ticket)?;
-
     create_spool_dir_no_follow(spool_dir)?;
-
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
     let fingerprint_hex = hex::encode(fingerprint.as_bytes());
@@ -3348,25 +3082,21 @@ pub(super) fn persist_da_commitment_record(
     {
         return Ok(Some(path));
     }
-
     let tmp_name = format!(
         ".da-commitment-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
         artifact_temp_suffix()?
     );
     let tmp_path = spool_dir.join(tmp_name);
-
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
-
     install_artifact_without_overwrite(
         &tmp_path,
         &target_path,
         &encoded,
         "DA commitment artifact",
     )?;
-
     debug!(
         path = ?target_path,
         lane = lane,
@@ -3375,10 +3105,8 @@ pub(super) fn persist_da_commitment_record(
         ticket = %ticket_hex,
         "queued DA commitment record for bundle ingestion"
     );
-
     Ok(Some(target_path))
 }
-
 #[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 /// On-disk schedule entry combining commitment record and PDP commitment bytes.
 pub(super) struct DaCommitmentScheduleEntry {
@@ -3389,7 +3117,6 @@ pub(super) struct DaCommitmentScheduleEntry {
     /// Encoded PDP commitment bytes.
     pub(super) pdp_commitment: Vec<u8>,
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn persist_da_commitment_schedule_entry(
     spool_dir: &Path,
@@ -3412,9 +3139,7 @@ pub(super) fn persist_da_commitment_schedule_entry(
         sequence,
         storage_ticket,
     )?;
-
     create_spool_dir_no_follow(spool_dir)?;
-
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
     let fingerprint_hex = hex::encode(fingerprint.as_bytes());
@@ -3436,25 +3161,21 @@ pub(super) fn persist_da_commitment_schedule_entry(
     )? {
         return Ok(Some(path));
     }
-
     let tmp_name = format!(
         ".da-commitment-schedule-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
         artifact_temp_suffix()?
     );
     let tmp_path = spool_dir.join(tmp_name);
-
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
-
     install_artifact_without_overwrite(
         &tmp_path,
         &target_path,
         &encoded,
         "DA commitment schedule artifact",
     )?;
-
     debug!(
         path = ?target_path,
         lane = lane,
@@ -3463,10 +3184,8 @@ pub(super) fn persist_da_commitment_schedule_entry(
         ticket = %ticket_hex,
         "queued DA commitment schedule entry for bundle ingestion"
     );
-
     Ok(Some(target_path))
 }
-
 pub(super) fn persist_da_pin_intent(
     spool_dir: &Path,
     intent: &DaPinIntent,
@@ -3480,9 +3199,7 @@ pub(super) fn persist_da_pin_intent(
         return Ok(None);
     }
     validate_pin_intent_artifact_inputs(intent, lane_id, epoch, sequence, storage_ticket)?;
-
     create_spool_dir_no_follow(spool_dir)?;
-
     let lane = lane_id.as_u32();
     let ticket_hex = hex::encode(storage_ticket.as_ref());
     let fingerprint_hex = hex::encode(fingerprint.as_bytes());
@@ -3497,25 +3214,21 @@ pub(super) fn persist_da_pin_intent(
     {
         return Ok(Some(path));
     }
-
     let tmp_name = format!(
         ".da-pin-intent-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
         artifact_temp_suffix()?
     );
     let tmp_path = spool_dir.join(tmp_name);
-
     match write_temp_artifact(&tmp_path, &encoded) {
         Ok(()) => {}
         Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
-
     install_artifact_without_overwrite(
         &tmp_path,
         &target_path,
         &encoded,
         "DA pin intent artifact",
     )?;
-
     debug!(
         path = ?target_path,
         lane = lane,
@@ -3524,6 +3237,5 @@ pub(super) fn persist_da_pin_intent(
         ticket = %ticket_hex,
         "queued DA pin intent for registry ingestion"
     );
-
     Ok(Some(target_path))
 }

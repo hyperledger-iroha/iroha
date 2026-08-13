@@ -1,11 +1,8 @@
 //! This module provides parsing of `#[derive(...)]` attributes
-
 use darling::FromAttributes;
 use quote::ToTokens;
 use syn::{Attribute, Token, punctuated::Punctuated};
-
 use super::getset::GetSetDerive;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RustcDerive {
     Eq,
@@ -18,11 +15,9 @@ pub enum RustcDerive {
     Default,
     Debug,
 }
-
 impl RustcDerive {
     fn try_from_path(path: &syn::Path) -> Option<Self> {
         let ident = path.get_ident()?;
-
         match ident.to_string().as_str() {
             "Eq" => Some(Self::Eq),
             "PartialEq" => Some(Self::PartialEq),
@@ -37,7 +32,6 @@ impl RustcDerive {
         }
     }
 }
-
 #[allow(variant_size_differences)] // it's not like it's possible to change that..
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Derive {
@@ -45,7 +39,6 @@ pub enum Derive {
     GetSet(GetSetDerive),
     Other(String),
 }
-
 /// Represents a collection of all `#[derive(...)]` attributes placed on the item
 ///
 /// NOTE: strictly speaking, correctly parsing this is impossible, since it requires
@@ -60,12 +53,10 @@ pub enum Derive {
 pub struct DeriveAttrs {
     pub derives: Vec<Derive>,
 }
-
 impl FromAttributes for DeriveAttrs {
     fn from_attributes(attrs: &[Attribute]) -> darling::Result<Self> {
         let mut derives = Vec::new();
         let mut accumulator = darling::error::Accumulator::default();
-
         for attr in attrs {
             if attr.path().is_ident("derive") {
                 let Some(list) = accumulator.handle(attr.meta.require_list().map_err(Into::into))
@@ -78,7 +69,6 @@ impl FromAttributes for DeriveAttrs {
                 ) else {
                     continue;
                 };
-
                 for path in paths {
                     // what clippy suggests here is much harder to read
                     #[allow(clippy::option_if_let_else)]
@@ -89,7 +79,6 @@ impl FromAttributes for DeriveAttrs {
                     } else {
                         Derive::Other(path.to_token_stream().to_string())
                     };
-
                     // Funnily, rust allows the usage of the same derive multiple times
                     // In most cases this will lead to a "Conflicting implementations of trait" errors,
                     //      but technically it's not an error by itself
@@ -98,24 +87,19 @@ impl FromAttributes for DeriveAttrs {
                 }
             }
         }
-
         accumulator.finish_with(Self { derives })
     }
 }
-
 #[cfg(test)]
 mod test {
     use darling::FromAttributes;
     use proc_macro2::TokenStream;
     use quote::quote;
-
     use super::{Derive, DeriveAttrs, GetSetDerive, RustcDerive};
-
     fn parse_derives(attrs: TokenStream) -> darling::Result<DeriveAttrs> {
         let attrs = crate::parse_attributes(attrs);
         DeriveAttrs::from_attributes(&attrs)
     }
-
     macro_rules! assert_derive_ok {
         ($( #[$meta:meta] )*,
             $expected:expr
@@ -127,7 +111,6 @@ mod test {
             )
         };
     }
-
     #[test]
     fn derive_rustc() {
         assert_derive_ok!(
@@ -147,7 +130,6 @@ mod test {
             }
         );
     }
-
     #[test]
     fn derive_getset() {
         assert_derive_ok!(
@@ -162,7 +144,6 @@ mod test {
             }
         );
     }
-
     #[test]
     fn derive_unknown() {
         assert_derive_ok!(

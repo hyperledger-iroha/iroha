@@ -1,17 +1,12 @@
 //! Deterministic fixed-shape R1CS synthesis for the closed Vega relation.
-
-use std::sync::Arc;
-
-use thiserror::Error;
-
 use super::{
     VegaT256ScalarV1 as Scalar,
     r1cs::{CoefficientDictionaryCounter, R1csError, Shape, SparseMatrixRowBuilder},
 };
-
+use std::sync::Arc;
+use thiserror::Error;
 /// Hard synthesis bound shared with the polynomial evaluation work cap.
 pub(super) const MAX_CIRCUIT_ROWS: usize = 1 << 20;
-
 /// Failure while synthesizing a deterministic Vega R1CS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum CircuitError {
@@ -24,28 +19,23 @@ pub(super) enum CircuitError {
     #[error(transparent)]
     R1cs(#[from] R1csError),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Variable {
     Private(usize),
     Public(usize),
     One,
 }
-
 #[derive(Clone, Debug, Default)]
 pub(super) struct LinearCombination {
     terms: Vec<(Variable, Scalar)>,
 }
-
 impl LinearCombination {
     pub(super) fn zero() -> Self {
         Self::default()
     }
-
     pub(super) fn one() -> Self {
         Self::constant(Scalar::one())
     }
-
     pub(super) fn constant(value: Scalar) -> Self {
         if value.is_zero() {
             Self::zero()
@@ -55,18 +45,15 @@ impl LinearCombination {
             }
         }
     }
-
     pub(super) fn variable(variable: Variable) -> Self {
         Self {
             terms: vec![(variable, Scalar::one())],
         }
     }
-
     pub(super) fn plus(mut self, rhs: &Self) -> Self {
         self.terms.extend_from_slice(&rhs.terms);
         self
     }
-
     pub(super) fn minus(mut self, rhs: &Self) -> Self {
         self.terms.extend(
             rhs.terms
@@ -75,21 +62,18 @@ impl LinearCombination {
         );
         self
     }
-
     pub(super) fn scaled(mut self, factor: Scalar) -> Self {
         for (_, coefficient) in &mut self.terms {
             *coefficient *= factor;
         }
         self
     }
-
     pub(super) fn add_term(mut self, variable: Variable, coefficient: Scalar) -> Self {
         if !coefficient.is_zero() {
             self.terms.push((variable, coefficient));
         }
         self
     }
-
     fn canonicalize(&mut self) {
         self.terms.sort_unstable_by_key(|(variable, _)| *variable);
         let mut read = 0;
@@ -108,81 +92,64 @@ impl LinearCombination {
         }
         self.terms.truncate(write);
     }
-
     fn into_canonical_terms(mut self) -> Vec<(Variable, Scalar)> {
         self.canonicalize();
         self.terms
     }
 }
-
 impl From<Variable> for LinearCombination {
     fn from(variable: Variable) -> Self {
         Self::variable(variable)
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Bit {
     pub(super) variable: Variable,
 }
-
 impl Bit {
     pub(super) fn lc(self) -> LinearCombination {
         self.variable.into()
     }
-
     pub(super) fn variable(self) -> Variable {
         self.variable
     }
 }
-
 #[cfg(test)]
 struct Constraint {
     a: LinearCombination,
     b: LinearCombination,
     c: LinearCombination,
 }
-
 struct SecretCircuitValues(Vec<Scalar>);
-
 impl SecretCircuitValues {
     fn new() -> Self {
         Self(Vec::new())
     }
-
     fn with_capacity(capacity: usize) -> Self {
         Self(Vec::with_capacity(capacity))
     }
-
     fn len(&self) -> usize {
         self.0.len()
     }
-
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-
     fn push(&mut self, value: Scalar) {
         self.0.push(value);
     }
-
     fn resize(&mut self, length: usize, value: Scalar) {
         self.0.resize(length, value);
     }
-
     fn get(&self, index: usize) -> Option<Scalar> {
         self.0.get(index).copied()
     }
-
     fn as_slice(&self) -> &[Scalar] {
         &self.0
     }
-
     fn into_inner(mut self) -> Vec<Scalar> {
         core::mem::take(&mut self.0)
     }
 }
-
 impl Drop for SecretCircuitValues {
     fn drop(&mut self) {
         for value in &mut self.0 {
@@ -192,7 +159,6 @@ impl Drop for SecretCircuitValues {
         let _ = core::hint::black_box(&mut self.0);
     }
 }
-
 #[derive(Clone, Copy)]
 pub(super) struct CircuitDimensions {
     pub(super) variable_count: usize,
@@ -206,7 +172,6 @@ pub(super) struct CircuitDimensions {
     pub(super) b_coefficient_count: usize,
     pub(super) c_coefficient_count: usize,
 }
-
 /// Canonical fixed-shape topology plus the exact unpadded synthesis counts.
 ///
 /// The raw counts distinguish a relation's emitted rows and private values
@@ -225,7 +190,6 @@ pub(super) struct CircuitProfile {
     b_coefficient_count: usize,
     c_coefficient_count: usize,
 }
-
 impl CircuitProfile {
     pub(super) fn new(
         shape: Arc<Shape>,
@@ -268,19 +232,15 @@ impl CircuitProfile {
             c_coefficient_count,
         })
     }
-
     pub(super) fn shape(&self) -> &Arc<Shape> {
         &self.shape
     }
-
     fn raw_private_value_count(&self) -> usize {
         self.raw_private_value_count
     }
-
     fn raw_constraint_count(&self) -> usize {
         self.raw_constraint_count
     }
-
     fn has_exact_storage_counts(&self) -> bool {
         self.a_nonzero_count == self.shape.a.nonzero_count()
             && self.b_nonzero_count == self.shape.b.nonzero_count()
@@ -290,7 +250,6 @@ impl CircuitProfile {
             && self.c_coefficient_count == self.shape.c.coefficient_count()
     }
 }
-
 enum CircuitBuilderMode {
     #[cfg(test)]
     Shape(Vec<Constraint>),
@@ -309,7 +268,6 @@ enum CircuitBuilderMode {
         emitted_constraint_count: usize,
     },
 }
-
 struct CompileCircuitBuilderMode {
     variable_count: usize,
     constraint_count: usize,
@@ -320,20 +278,17 @@ struct CompileCircuitBuilderMode {
     b: SparseMatrixRowBuilder,
     c: SparseMatrixRowBuilder,
 }
-
 pub(super) struct CircuitBuilder {
     public_inputs: Vec<Scalar>,
     private_values: SecretCircuitValues,
     mode: CircuitBuilderMode,
 }
-
 #[derive(Clone)]
 pub(super) struct CircuitAssignment {
     pub(super) shape: Arc<Shape>,
     pub(super) witness: Vec<Scalar>,
     pub(super) public_inputs: Vec<Scalar>,
 }
-
 impl CircuitBuilder {
     #[cfg(test)]
     pub(super) fn new(public_inputs: Vec<Scalar>) -> Result<Self, CircuitError> {
@@ -346,7 +301,6 @@ impl CircuitBuilder {
             mode: CircuitBuilderMode::Shape(Vec::new()),
         })
     }
-
     /// Count canonical A/B/C nonzeros and distinct coefficients fallibly.
     pub(super) fn new_counting(public_inputs: Vec<Scalar>) -> Result<Self, CircuitError> {
         if public_inputs.is_empty() {
@@ -366,7 +320,6 @@ impl CircuitBuilder {
             },
         })
     }
-
     /// Compile directly into fallibly preallocated, exactly counted CSR matrices.
     pub(super) fn new_compiling(
         public_inputs: Vec<Scalar>,
@@ -444,7 +397,6 @@ impl CircuitBuilder {
             })),
         })
     }
-
     /// Synthesize one witness against an immutable canonical profile.
     /// Constraints are checked and discarded as they are emitted.
     pub(super) fn new_with_profile(
@@ -466,13 +418,11 @@ impl CircuitBuilder {
             },
         })
     }
-
     pub(super) fn public(&self, index: usize) -> Result<Variable, CircuitError> {
         (index < self.public_inputs.len())
             .then_some(Variable::Public(index))
             .ok_or(CircuitError::InvalidDimension)
     }
-
     pub(super) fn alloc(&mut self, value: Scalar) -> Result<Variable, CircuitError> {
         let limit = match &self.mode {
             CircuitBuilderMode::Compile(state) => state.expected_private_value_count,
@@ -488,7 +438,6 @@ impl CircuitBuilder {
         self.private_values.push(value);
         Ok(variable)
     }
-
     pub(super) fn alloc_bit(&mut self, value: bool) -> Result<Bit, CircuitError> {
         let variable = self.alloc(Scalar::from_u64(u64::from(value)))?;
         let bit = Bit { variable };
@@ -499,7 +448,6 @@ impl CircuitBuilder {
         )?;
         Ok(bit)
     }
-
     pub(super) fn enforce(
         &mut self,
         a: LinearCombination,
@@ -547,7 +495,6 @@ impl CircuitBuilder {
                 .ok_or(CircuitError::InvalidDimension)?;
             return Ok(());
         }
-
         let compile_mode = match &self.mode {
             CircuitBuilderMode::Compile(state) => Some((
                 state.variable_count,
@@ -577,7 +524,6 @@ impl CircuitBuilder {
                 .ok_or(CircuitError::InvalidDimension)?;
             return Ok(());
         }
-
         if let CircuitBuilderMode::Count {
             emitted_constraint_count,
             a_nonzero_count,
@@ -621,7 +567,6 @@ impl CircuitBuilder {
             *c_nonzero_count = next_c_nonzero_count;
             return Ok(());
         }
-
         #[cfg(test)]
         {
             let CircuitBuilderMode::Shape(constraints) = &mut self.mode else {
@@ -633,15 +578,12 @@ impl CircuitBuilder {
             constraints.push(Constraint { a, b, c });
             Ok(())
         }
-
         #[cfg(not(test))]
         unreachable!("all production streaming modes returned above")
     }
-
     pub(super) fn enforce_zero(&mut self, value: LinearCombination) -> Result<(), CircuitError> {
         self.enforce(LinearCombination::one(), value, LinearCombination::zero())
     }
-
     pub(super) fn enforce_equal(
         &mut self,
         left: LinearCombination,
@@ -649,7 +591,6 @@ impl CircuitBuilder {
     ) -> Result<(), CircuitError> {
         self.enforce_zero(left.minus(&right))
     }
-
     pub(super) fn evaluate(&self, value: &LinearCombination) -> Scalar {
         value
             .terms
@@ -665,7 +606,6 @@ impl CircuitBuilder {
                 sum + assigned * *coefficient
             })
     }
-
     pub(super) fn multiply(
         &mut self,
         left: LinearCombination,
@@ -676,7 +616,6 @@ impl CircuitBuilder {
         self.enforce(left, right, output.into())?;
         Ok(output)
     }
-
     pub(super) fn select(
         &mut self,
         condition: Bit,
@@ -697,12 +636,10 @@ impl CircuitBuilder {
         )?;
         Ok(output)
     }
-
     /// Return a bit equal to one exactly when `value` is zero.
     pub(super) fn is_zero(&mut self, value: LinearCombination) -> Result<Bit, CircuitError> {
         self.inverse_or_zero(value).map(|(bit, _)| bit)
     }
-
     /// Return `(is_zero, inverse_or_zero)` with both branches constrained.
     pub(super) fn inverse_or_zero(
         &mut self,
@@ -726,7 +663,6 @@ impl CircuitBuilder {
         self.enforce(value, bit.lc(), LinearCombination::zero())?;
         Ok((bit, inverse))
     }
-
     pub(super) fn and(&mut self, left: Bit, right: Bit) -> Result<Bit, CircuitError> {
         let value = self.evaluate(&left.lc()) == Scalar::one()
             && self.evaluate(&right.lc()) == Scalar::one();
@@ -734,7 +670,6 @@ impl CircuitBuilder {
         self.enforce(left.lc(), right.lc(), output.lc())?;
         Ok(output)
     }
-
     pub(super) fn or(&mut self, left: Bit, right: Bit) -> Result<Bit, CircuitError> {
         let both = self.and(left, right)?;
         let value = self.evaluate(&left.lc()) == Scalar::one()
@@ -743,7 +678,6 @@ impl CircuitBuilder {
         self.enforce_equal(output.lc(), left.lc().plus(&right.lc()).minus(&both.lc()))?;
         Ok(output)
     }
-
     pub(super) fn xor(&mut self, left: Bit, right: Bit) -> Result<Bit, CircuitError> {
         let left_value = self.evaluate(&left.lc()) == Scalar::one();
         let right_value = self.evaluate(&right.lc()) == Scalar::one();
@@ -759,14 +693,12 @@ impl CircuitBuilder {
         )?;
         Ok(output)
     }
-
     pub(super) fn not(&mut self, bit: Bit) -> Result<Bit, CircuitError> {
         let value = self.evaluate(&bit.lc()) == Scalar::zero();
         let output = self.alloc_bit(value)?;
         self.enforce_equal(output.lc(), LinearCombination::one().minus(&bit.lc()))?;
         Ok(output)
     }
-
     #[cfg(test)]
     pub(super) fn finalize(self) -> Result<CircuitAssignment, CircuitError> {
         let Self {
@@ -874,7 +806,6 @@ impl CircuitBuilder {
             public_inputs,
         })
     }
-
     /// Return the dimensions and canonical CSR totals from a count-only pass.
     pub(super) fn finish_counting(self) -> Result<CircuitDimensions, CircuitError> {
         let Self {
@@ -936,7 +867,6 @@ impl CircuitBuilder {
             c_coefficient_count,
         })
     }
-
     /// Finish the append-only compile pass without validating dummy shape values.
     pub(super) fn finalize_compiled(self) -> Result<CircuitAssignment, CircuitError> {
         let Self {
@@ -991,7 +921,6 @@ impl CircuitBuilder {
             public_inputs,
         })
     }
-
     /// Finish a deterministic synthesis against a previously verified shape.
     ///
     /// Fixed relations use this after the canonical shape has been built once,
@@ -1037,12 +966,10 @@ impl CircuitBuilder {
         })
     }
 }
-
 struct CanonicalMatrixRow {
     variable_count: usize,
     terms: Vec<(Variable, Scalar)>,
 }
-
 impl CanonicalMatrixRow {
     fn entries(&self) -> impl ExactSizeIterator<Item = (usize, Scalar)> + '_ {
         self.terms.iter().map(|(variable, coefficient)| {
@@ -1054,7 +981,6 @@ impl CanonicalMatrixRow {
         })
     }
 }
-
 fn matrix_row_entries(
     variable_count: usize,
     combination: LinearCombination,
@@ -1071,7 +997,6 @@ fn matrix_row_entries(
         terms,
     })
 }
-
 fn matrix_column(variable_count: usize, variable: Variable) -> Result<usize, CircuitError> {
     match variable {
         Variable::Private(index) if index < variable_count => Ok(index),
@@ -1083,16 +1008,13 @@ fn matrix_column(variable_count: usize, variable: Variable) -> Result<usize, Cir
             .ok_or(CircuitError::InvalidDimension),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::r1cs::SparseMatrix;
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     fn profile(
         shape: Arc<Shape>,
         raw_private_value_count: usize,
@@ -1103,7 +1025,6 @@ mod tests {
                 .expect("canonical profile"),
         )
     }
-
     #[test]
     fn builder_synthesizes_one_strict_fixed_shape_relation() {
         let mut builder = CircuitBuilder::new(vec![s(12)]).expect("public");
@@ -1119,7 +1040,6 @@ mod tests {
             .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .expect("satisfying assignment");
     }
-
     #[test]
     fn boolean_zero_test_and_selection_are_constrained() {
         let mut builder = CircuitBuilder::new(vec![s(1)]).expect("public");
@@ -1146,7 +1066,6 @@ mod tests {
             .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .expect("satisfying assignment");
     }
-
     #[test]
     fn finalization_pads_csr_rows_without_padding_constraint_owners() {
         let mut builder = CircuitBuilder::new(vec![s(2)]).expect("public");
@@ -1171,7 +1090,6 @@ mod tests {
             .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .expect("padded relation remains strict");
     }
-
     fn synthesize_three_equal_rows(
         builder: &mut CircuitBuilder,
         value: Scalar,
@@ -1183,13 +1101,11 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     fn count_then_compile_matches_materialized_shape_and_keeps_dummy_unsatisfied() {
         let mut materialized = CircuitBuilder::new(vec![s(2)]).expect("public");
         synthesize_three_equal_rows(&mut materialized, s(2)).expect("materialized rows");
         let materialized = materialized.finalize().expect("materialized shape");
-
         let mut counter = CircuitBuilder::new_counting(vec![s(2)]).expect("public");
         synthesize_three_equal_rows(&mut counter, s(2)).expect("counted rows");
         let dimensions = counter.finish_counting().expect("counted dimensions");
@@ -1201,14 +1117,12 @@ mod tests {
         assert_eq!(dimensions.a_coefficient_count, 1);
         assert_eq!(dimensions.b_coefficient_count, 1);
         assert_eq!(dimensions.c_coefficient_count, 1);
-
         let mut compiler = CircuitBuilder::new_compiling(vec![s(2)], dimensions).expect("compiler");
         synthesize_three_equal_rows(&mut compiler, s(2)).expect("compiled rows");
         let compiled = compiler.finalize_compiled().expect("compiled shape");
         assert_eq!(compiled.shape.as_ref(), materialized.shape.as_ref());
         assert_eq!(compiled.witness, materialized.witness);
         assert_eq!(compiled.public_inputs, materialized.public_inputs);
-
         let mut dummy_counter = CircuitBuilder::new_counting(vec![s(2)]).expect("public");
         synthesize_three_equal_rows(&mut dummy_counter, s(3)).expect("dummy rows");
         let dummy_dimensions = dummy_counter.finish_counting().expect("dummy dimensions");
@@ -1225,7 +1139,6 @@ mod tests {
             Err(R1csError::Unsatisfied)
         ));
     }
-
     #[test]
     fn count_and_compile_use_post_cancellation_nonzero_totals() {
         fn synthesize_cancelled_row(builder: &mut CircuitBuilder) -> Result<(), CircuitError> {
@@ -1237,7 +1150,6 @@ mod tests {
                 LinearCombination::zero(),
             )
         }
-
         let mut counter = CircuitBuilder::new_counting(vec![s(1)]).expect("public");
         synthesize_cancelled_row(&mut counter).expect("counted row");
         let dimensions = counter.finish_counting().expect("counted dimensions");
@@ -1247,7 +1159,6 @@ mod tests {
         assert_eq!(dimensions.a_coefficient_count, 0);
         assert_eq!(dimensions.b_coefficient_count, 1);
         assert_eq!(dimensions.c_coefficient_count, 0);
-
         let mut compiler =
             CircuitBuilder::new_compiling(vec![s(1)], dimensions).expect("exact compiler");
         synthesize_cancelled_row(&mut compiler).expect("compiled row");
@@ -1260,13 +1171,11 @@ mod tests {
             .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .expect("cancelled relation remains strict");
     }
-
     #[test]
     fn compile_rejects_counted_csr_overfill_and_underfill() {
         let mut counter = CircuitBuilder::new_counting(vec![s(2)]).expect("public");
         synthesize_three_equal_rows(&mut counter, s(2)).expect("counted rows");
         let dimensions = counter.finish_counting().expect("counted dimensions");
-
         let mut overfill_profile = dimensions;
         overfill_profile.a_nonzero_count -= 1;
         let mut overfilled =
@@ -1275,7 +1184,6 @@ mod tests {
             synthesize_three_equal_rows(&mut overfilled, s(2)),
             Err(CircuitError::R1cs(R1csError::CsrEntryCountMismatch))
         ));
-
         let mut underfill_profile = dimensions;
         underfill_profile.a_nonzero_count += 1;
         let mut underfilled =
@@ -1286,13 +1194,11 @@ mod tests {
             Err(CircuitError::R1cs(R1csError::CsrEntryCountMismatch))
         ));
     }
-
     #[test]
     fn compile_rejects_under_and_over_counted_coefficient_dictionaries() {
         let mut counter = CircuitBuilder::new_counting(vec![s(2)]).expect("public");
         synthesize_three_equal_rows(&mut counter, s(2)).expect("counted rows");
         let dimensions = counter.finish_counting().expect("counted dimensions");
-
         let mut undercounted_profile = dimensions;
         undercounted_profile.a_coefficient_count = 0;
         let mut undercounted = CircuitBuilder::new_compiling(vec![s(2)], undercounted_profile)
@@ -1301,7 +1207,6 @@ mod tests {
             synthesize_three_equal_rows(&mut undercounted, s(2)),
             Err(CircuitError::R1cs(R1csError::CsrEntryCountMismatch))
         ));
-
         let mut overcounted_profile = dimensions;
         overcounted_profile.a_coefficient_count = 2;
         let mut overcounted = CircuitBuilder::new_compiling(vec![s(2)], overcounted_profile)
@@ -1312,7 +1217,6 @@ mod tests {
             Err(CircuitError::R1cs(R1csError::CsrEntryCountMismatch))
         ));
     }
-
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn compile_rejects_nonzero_profiles_outside_u32_before_allocating() {
@@ -1333,7 +1237,6 @@ mod tests {
             Err(CircuitError::R1cs(R1csError::CsrStorageOverflow))
         ));
     }
-
     #[test]
     fn witness_mode_matches_the_canonical_shape_and_rejects_unsatisfied_rows() {
         let mut shape_builder = CircuitBuilder::new(vec![s(2)]).expect("public");
@@ -1344,7 +1247,6 @@ mod tests {
             .expect("canonical constraint");
         let canonical = shape_builder.finalize().expect("canonical shape");
         let profile = profile(Arc::clone(&canonical.shape), 1, 1);
-
         let mut witness_builder =
             CircuitBuilder::new_with_profile(vec![s(2)], Arc::clone(&profile))
                 .expect("shared shape");
@@ -1358,7 +1260,6 @@ mod tests {
             .expect("matching witness");
         assert!(Arc::ptr_eq(&witness.shape, &canonical.shape));
         assert_eq!(witness.witness, canonical.witness);
-
         let mut mismatched = CircuitBuilder::new_with_profile(vec![s(2)], Arc::clone(&profile))
             .expect("shared shape");
         let public = mismatched.public(0).expect("public index");
@@ -1371,7 +1272,6 @@ mod tests {
             ),
             Err(CircuitError::ShapeMismatch)
         ));
-
         let mut unsatisfied = CircuitBuilder::new_with_profile(vec![s(2)], Arc::clone(&profile))
             .expect("shared shape");
         let public = unsatisfied.public(0).expect("public index");
@@ -1383,7 +1283,6 @@ mod tests {
             unsatisfied.finalize_with_shape(),
             Err(CircuitError::R1cs(R1csError::Unsatisfied))
         ));
-
         let mut short =
             CircuitBuilder::new_with_profile(vec![s(2)], profile).expect("shared shape");
         let _ = short.alloc(s(2)).expect("value");
@@ -1392,7 +1291,6 @@ mod tests {
             Err(CircuitError::InvalidDimension)
         ));
     }
-
     #[test]
     fn witness_mode_rejects_a_satisfying_nonempty_padded_tail() {
         let a = SparseMatrix::new(
@@ -1422,7 +1320,6 @@ mod tests {
             Err(CircuitError::ShapeMismatch)
         ));
     }
-
     #[test]
     fn circuit_profile_records_exact_shape_nonzero_totals() {
         let mut builder = CircuitBuilder::new(vec![s(2)]).expect("public");
@@ -1447,7 +1344,6 @@ mod tests {
         );
         assert!(profile.has_exact_storage_counts());
     }
-
     #[test]
     fn shape_synthesis_does_not_retain_three_global_entry_vectors() {
         let source = include_str!("circuit.rs");

@@ -1,9 +1,7 @@
 use ivm::{IVM, encoding, field, instruction};
 mod common;
 use common::assemble_zk;
-
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
-
 #[test]
 fn test_field_arithmetic() {
     let mut vm = IVM::new(u64::MAX);
@@ -32,7 +30,6 @@ fn test_field_arithmetic() {
     let inv = field::inv(5).unwrap();
     assert_eq!(vm.register(6), inv);
 }
-
 #[test]
 fn test_assert_range() {
     let mut vm = IVM::new(u64::MAX);

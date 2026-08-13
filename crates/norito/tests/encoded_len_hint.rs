@@ -2,14 +2,12 @@
 //! Tests for encoded_len_hint to ensure capacity reservations are reasonable.
 use iroha_schema::IntoSchema;
 use norito::core::{Encoder, Error, NoritoSerialize, encoded_payload_len};
-
 fn assert_exact_hint<T: NoritoSerialize>(value: &T) {
     assert_eq!(
         value.encoded_len_hint(),
         Some(encoded_payload_len(value).expect("serialize hinted value"))
     );
 }
-
 #[test]
 fn primitives_hint_sizes() {
     assert_eq!(7u8.encoded_len_hint(), Some(1));
@@ -18,19 +16,16 @@ fn primitives_hint_sizes() {
     assert_eq!(0x12345678u32.encoded_len_hint(), Some(4));
     assert_eq!(0x123456789abcdef0u64.encoded_len_hint(), Some(8));
 }
-
 #[test]
 fn string_hint_size() {
     let s = String::from("hello");
     assert_exact_hint(&s);
 }
-
 #[test]
 fn vec_hint_size() {
     let v = vec![1u16, 2u16, 3u16];
     assert_exact_hint(&v);
 }
-
 // Custom type that provides no size hint regardless of content
 struct NoHint(u32);
 impl NoritoSerialize for NoHint {
@@ -43,7 +38,6 @@ impl NoritoSerialize for NoHint {
         None
     }
 }
-
 // Custom type that advertises a very large hint to exercise saturating math
 struct BigHint;
 impl NoritoSerialize for BigHint {
@@ -55,44 +49,37 @@ impl NoritoSerialize for BigHint {
         Some(usize::MAX)
     }
 }
-
 #[test]
 fn vec_hint_empty() {
     let v: Vec<u8> = Vec::new();
     assert_exact_hint(&v);
 }
-
 #[test]
 fn vec_hint_strings() {
     let v = vec![String::from("a"), String::from("bc")];
     assert_exact_hint(&v);
 }
-
 #[test]
 fn vec_hint_nested_vecs() {
     let v = vec![vec![1u8, 2u8], vec![3u8]];
     assert_exact_hint(&v);
 }
-
 #[test]
 fn vec_hint_nohint_element() {
     let v = vec![NoHint(1), NoHint(2)];
     // If any element lacks a hint, the vector reports None (both layouts)
     assert_eq!(v.encoded_len_hint(), None);
 }
-
 #[test]
 fn vec_hint_saturating_big() {
     let v = vec![BigHint];
     assert_eq!(v.encoded_len_hint(), None);
 }
-
 #[derive(IntoSchema, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct Pair {
     a: u32,
     b: u64,
 }
-
 #[test]
 fn derive_struct_hint() {
     let p = Pair { a: 1, b: 2 };

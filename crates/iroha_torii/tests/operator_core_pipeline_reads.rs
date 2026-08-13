@@ -1,8 +1,6 @@
 //! Router-level authentication regressions for node-local core and pipeline reads.
-
 #[path = "common/norito_rpc_harness.rs"]
 mod norito_rpc_harness;
-
 use axum::{
     body::Body,
     http::{HeaderMap, Method, Request, StatusCode, Uri},
@@ -10,11 +8,9 @@ use axum::{
 use iroha_data_model::NetworkId;
 use norito_rpc_harness::NoritoRpcHarness;
 use tower::ServiceExt as _;
-
 fn request(uri: Uri, headers: HeaderMap) -> Request<Body> {
     request_with_body(uri, headers, Body::empty())
 }
-
 fn request_with_body(uri: Uri, headers: HeaderMap, body: Body) -> Request<Body> {
     let mut request = Request::builder()
         .method(Method::GET)
@@ -27,17 +23,14 @@ fn request_with_body(uri: Uri, headers: HeaderMap, body: Body) -> Request<Body> 
         .insert(norito_rpc_harness::loopback_connect_info());
     request
 }
-
 fn foreign_network_id() -> NetworkId {
     "hash:0000000000000000000000000000000000000000000000000000000000000003#E54C"
         .parse()
         .expect("canonical foreign NetworkId")
 }
-
 #[tokio::test]
 async fn core_and_pipeline_reads_reject_missing_or_inexact_operator_auth_before_handlers() {
     let harness = NoritoRpcHarness::new(|_| {});
-
     for path in [
         "/v1/peers",
         "/v1/time/status",
@@ -54,7 +47,6 @@ async fn core_and_pipeline_reads_reject_missing_or_inexact_operator_auth_before_
             .expect("missing-signature response");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
     }
-
     let peers_uri: Uri = "/v1/peers".parse().expect("peers URI");
     let wrong_network_headers = iroha_torii::operator_signed_request_headers(
         &harness.cfg.common.key_pair,
@@ -71,7 +63,6 @@ async fn core_and_pipeline_reads_reject_missing_or_inexact_operator_auth_before_
         .await
         .expect("wrong-network response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
     let method_headers = iroha_torii::operator_signed_request_headers(
         &harness.cfg.common.key_pair,
         &harness.network_id,
@@ -87,7 +78,6 @@ async fn core_and_pipeline_reads_reject_missing_or_inexact_operator_auth_before_
         .await
         .expect("method-mismatch response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
     let empty_body_headers = iroha_torii::operator_signed_request_headers(
         &harness.cfg.common.key_pair,
         &harness.network_id,
@@ -107,7 +97,6 @@ async fn core_and_pipeline_reads_reject_missing_or_inexact_operator_auth_before_
         .await
         .expect("body-mismatch response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
     let signed_path: Uri = "/v1/pipeline/preflight"
         .parse()
         .expect("signed preflight URI");
@@ -129,7 +118,6 @@ async fn core_and_pipeline_reads_reject_missing_or_inexact_operator_auth_before_
         .await
         .expect("path-mismatch response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
     let retention_uri: Uri = "/v1/proofs/retention".parse().expect("retention URI");
     let query_headers = iroha_torii::operator_signed_request_headers(
         &harness.cfg.common.key_pair,
@@ -152,7 +140,6 @@ async fn core_and_pipeline_reads_reject_missing_or_inexact_operator_auth_before_
         .expect("query-mismatch response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[tokio::test]
 async fn core_operator_read_rejects_an_exact_signature_replay() {
     let harness = NoritoRpcHarness::new(|_| {});
@@ -165,7 +152,6 @@ async fn core_operator_read_rejects_an_exact_signature_replay() {
         &[],
     )
     .expect("time status signature fixture");
-
     let first = harness
         .app
         .clone()
@@ -173,7 +159,6 @@ async fn core_operator_read_rejects_an_exact_signature_replay() {
         .await
         .expect("first signed response");
     assert_eq!(first.status(), StatusCode::OK);
-
     let replay = harness
         .app
         .clone()
@@ -182,14 +167,12 @@ async fn core_operator_read_rejects_an_exact_signature_replay() {
         .expect("replayed response");
     assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[tokio::test]
 async fn operator_reads_do_not_become_api_token_routes_when_legacy_tokens_are_enabled() {
     let harness = NoritoRpcHarness::new(|cfg| {
         cfg.torii.require_api_token = true;
         cfg.torii.api_tokens = vec!["legacy-token-must-not-be-needed".to_owned()];
     });
-
     for path in [
         "/v1/configuration",
         "/v1/peers",
@@ -212,7 +195,6 @@ async fn operator_reads_do_not_become_api_token_routes_when_legacy_tokens_are_en
             !headers.contains_key("authorization") && !headers.contains_key("x-api-token"),
             "fixture must prove token-free operator admission"
         );
-
         let response = harness
             .app
             .clone()

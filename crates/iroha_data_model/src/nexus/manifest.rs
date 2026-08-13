@@ -1,19 +1,15 @@
 //! Space Directory manifest representations and evaluation helpers.
-
 use std::{convert::TryFrom, fmt, str::FromStr};
-
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use super::DataSpaceId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{asset::AssetDefinitionId, name::Name};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonSerialize, Map, Value};
-
 /// Universal account identifier shared across all dataspaces.
 ///
 /// UAIDs provide a stable capability anchor for multi-lane Nexus deployments.
@@ -30,42 +26,35 @@ use norito::json::{self, JsonSerialize, Map, Value};
     ffi_type(opaque)
 )]
 pub struct UniversalAccountId(Hash);
-
 impl UniversalAccountId {
     /// Construct a UAID from a pre-hashed value (blake2b-32, LSB set to 1).
     #[must_use]
     pub fn from_hash(hash: Hash) -> Self {
         Self(hash)
     }
-
     /// Borrow the underlying hash.
     #[must_use]
     pub fn as_hash(&self) -> &Hash {
         &self.0
     }
 }
-
 impl fmt::Display for UniversalAccountId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "uaid:{}", self.0)
     }
 }
-
 impl From<Hash> for UniversalAccountId {
     fn from(value: Hash) -> Self {
         Self::from_hash(value)
     }
 }
-
 impl From<UniversalAccountId> for Hash {
     fn from(value: UniversalAccountId) -> Self {
         value.0
     }
 }
-
 impl FromStr for UniversalAccountId {
     type Err = iroha_crypto::error::ParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let trimmed = s.trim();
         let hex_literal = match trimmed.get(..5) {
@@ -75,7 +64,6 @@ impl FromStr for UniversalAccountId {
         Hash::from_str(hex_literal).map(Self::from_hash)
     }
 }
-
 /// Canonical smart-contract identifier scoped to a dataspace.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -90,47 +78,39 @@ impl FromStr for UniversalAccountId {
     ffi_type(opaque)
 )]
 pub struct SmartContractId(Name);
-
 impl SmartContractId {
     /// Construct an identifier from a [`Name`].
     #[must_use]
     pub fn new(name: Name) -> Self {
         Self(name)
     }
-
     /// Borrow the underlying [`Name`].
     #[must_use]
     pub fn as_name(&self) -> &Name {
         &self.0
     }
 }
-
 impl fmt::Display for SmartContractId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
     }
 }
-
 impl From<Name> for SmartContractId {
     fn from(value: Name) -> Self {
         Self::new(value)
     }
 }
-
 impl From<SmartContractId> for Name {
     fn from(value: SmartContractId) -> Self {
         value.0
     }
 }
-
 impl FromStr for SmartContractId {
     type Err = crate::ParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Name::from_str(s).map(Self::new)
     }
 }
-
 /// Manifest version supported by the Space Directory.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
@@ -150,7 +130,6 @@ pub enum ManifestVersion {
     #[default]
     V1,
 }
-
 impl From<ManifestVersion> for u16 {
     fn from(value: ManifestVersion) -> Self {
         match value {
@@ -158,7 +137,6 @@ impl From<ManifestVersion> for u16 {
         }
     }
 }
-
 /// Capability manifest describing deterministic allowances for a UAID.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -187,7 +165,6 @@ pub struct AssetPermissionManifest {
     #[norito(default)]
     pub entries: Vec<ManifestEntry>,
 }
-
 impl AssetPermissionManifest {
     fn ensure_epoch_active(&self, epoch: u64) -> Result<(), DenyReason> {
         if epoch < self.activation_epoch {
@@ -208,25 +185,20 @@ impl AssetPermissionManifest {
         }
         Ok(())
     }
-
     /// Evaluate the manifest against a capability request, applying deny-wins semantics.
     #[must_use]
     pub fn evaluate(&self, request: &CapabilityRequest<'_>) -> ManifestVerdict {
         if request.dataspace != self.dataspace {
             return ManifestVerdict::Denied(DenyReason::NoMatchingRule);
         }
-
         if let Err(reason) = self.ensure_epoch_active(request.epoch) {
             return ManifestVerdict::Denied(reason);
         }
-
         let mut allow_candidate: Option<(usize, Allowance)> = None;
-
         for (idx, entry) in self.entries.iter().enumerate() {
             if !entry.scope.matches(request) {
                 continue;
             }
-
             match &entry.effect {
                 ManifestEffect::Deny(directive) => {
                     let note = directive.reason.clone().or_else(|| entry.notes.clone());
@@ -238,7 +210,6 @@ impl AssetPermissionManifest {
                 }
             }
         }
-
         if let Some((idx, allowance)) = allow_candidate {
             if let (Some(requested), Some(limit)) =
                 (request.amount.as_ref(), allowance.max_amount.as_ref())
@@ -249,29 +220,24 @@ impl AssetPermissionManifest {
                     permitted: limit.clone(),
                 });
             }
-
             let entry_index = Self::clamp_entry_index(idx);
             return ManifestVerdict::Allowed(ManifestGrant {
                 entry_index,
                 allowance,
             });
         }
-
         ManifestVerdict::Denied(DenyReason::NoMatchingRule)
     }
-
     fn clamp_entry_index(idx: usize) -> u32 {
         u32::try_from(idx).unwrap_or(u32::MAX)
     }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonSerialize for AssetPermissionManifest {
     fn json_serialize(&self, out: &mut String) {
         let value = manifest_to_json_value(self);
         value.json_serialize(out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -304,7 +270,6 @@ impl json::JsonSerialize for AssetPermissionManifest {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 fn entry_json_serialize_to(
     entry: &ManifestEntry,
@@ -325,7 +290,6 @@ fn entry_json_serialize_to(
     out.end_container();
     Ok(())
 }
-
 #[cfg(feature = "json")]
 fn scope_json_serialize_to(
     scope: &CapabilityScope,
@@ -374,7 +338,6 @@ fn scope_json_serialize_to(
     out.end_container();
     Ok(())
 }
-
 #[cfg(feature = "json")]
 fn effect_json_serialize_to(
     effect: &ManifestEffect,
@@ -409,19 +372,16 @@ fn effect_json_serialize_to(
     out.end_container();
     Ok(())
 }
-
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for AssetPermissionManifest {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = Value::json_deserialize(parser)?;
         manifest_from_json_value(&value)
     }
-
     fn json_from_value(value: &Value) -> Result<Self, json::Error> {
         manifest_from_json_value(value)
     }
 }
-
 #[cfg(feature = "json")]
 fn manifest_to_json_value(manifest: &AssetPermissionManifest) -> Value {
     let mut root = Map::new();
@@ -443,7 +403,6 @@ fn manifest_to_json_value(manifest: &AssetPermissionManifest) -> Value {
     root.insert("entries".into(), Value::Array(entries));
     Value::Object(root)
 }
-
 #[cfg(feature = "json")]
 fn entry_to_json_value(entry: &ManifestEntry) -> Value {
     let mut entry_obj = Map::new();
@@ -454,7 +413,6 @@ fn entry_to_json_value(entry: &ManifestEntry) -> Value {
     }
     Value::Object(entry_obj)
 }
-
 #[cfg(feature = "json")]
 fn scope_to_json_value(scope: &CapabilityScope) -> Value {
     let mut scope_obj = Map::new();
@@ -475,7 +433,6 @@ fn scope_to_json_value(scope: &CapabilityScope) -> Value {
     }
     Value::Object(scope_obj)
 }
-
 #[cfg(feature = "json")]
 fn role_label(role: AmxRole) -> &'static str {
     match role {
@@ -483,7 +440,6 @@ fn role_label(role: AmxRole) -> &'static str {
         AmxRole::Participant => "Participant",
     }
 }
-
 #[cfg(feature = "json")]
 fn effect_to_json_value(effect: &ManifestEffect) -> Value {
     let mut effect_obj = Map::new();
@@ -506,7 +462,6 @@ fn effect_to_json_value(effect: &ManifestEffect) -> Value {
     }
     Value::Object(effect_obj)
 }
-
 #[cfg(feature = "json")]
 fn window_label(window: AllowanceWindow) -> &'static str {
     match window {
@@ -515,7 +470,6 @@ fn window_label(window: AllowanceWindow) -> &'static str {
         AllowanceWindow::PerDay => "PerDay",
     }
 }
-
 #[cfg(feature = "json")]
 fn manifest_from_json_value(value: &Value) -> Result<AssetPermissionManifest, json::Error> {
     let manifest_obj = value.as_object().ok_or_else(|| json::Error::InvalidField {
@@ -563,7 +517,6 @@ fn manifest_from_json_value(value: &Value) -> Result<AssetPermissionManifest, js
     for (idx, entry_value) in entries_array.iter().enumerate() {
         entries.push(parse_entry(entry_value, idx)?);
     }
-
     Ok(AssetPermissionManifest {
         version,
         uaid,
@@ -574,7 +527,6 @@ fn manifest_from_json_value(value: &Value) -> Result<AssetPermissionManifest, js
         entries,
     })
 }
-
 #[cfg(feature = "json")]
 fn parse_manifest_version(value: &Value) -> Result<ManifestVersion, json::Error> {
     let Some(raw) = value.as_u64() else {
@@ -591,7 +543,6 @@ fn parse_manifest_version(value: &Value) -> Result<ManifestVersion, json::Error>
         }),
     }
 }
-
 #[cfg(feature = "json")]
 fn parse_uaid_value(value: &Value) -> Result<UniversalAccountId, json::Error> {
     let Some(text) = value.as_str() else {
@@ -617,7 +568,6 @@ fn parse_uaid_value(value: &Value) -> Result<UniversalAccountId, json::Error> {
     })?;
     Ok(UniversalAccountId::from_hash(hash))
 }
-
 #[cfg(feature = "json")]
 fn parse_u64_field(value: &Value, field: &str) -> Result<u64, json::Error> {
     value.as_u64().ok_or_else(|| json::Error::InvalidField {
@@ -625,7 +575,6 @@ fn parse_u64_field(value: &Value, field: &str) -> Result<u64, json::Error> {
         message: "value must be an unsigned integer".into(),
     })
 }
-
 #[cfg(feature = "json")]
 fn parse_entry(value: &Value, idx: usize) -> Result<ManifestEntry, json::Error> {
     let entry_obj = value.as_object().ok_or_else(|| json::Error::InvalidField {
@@ -662,7 +611,6 @@ fn parse_entry(value: &Value, idx: usize) -> Result<ManifestEntry, json::Error> 
         notes,
     })
 }
-
 #[cfg(feature = "json")]
 fn parse_scope(value: &Value, idx: usize) -> Result<CapabilityScope, json::Error> {
     let scope_obj = value.as_object().ok_or_else(|| json::Error::InvalidField {
@@ -716,7 +664,6 @@ fn parse_scope(value: &Value, idx: usize) -> Result<CapabilityScope, json::Error
             });
         }
     };
-
     Ok(CapabilityScope {
         dataspace,
         program,
@@ -725,7 +672,6 @@ fn parse_scope(value: &Value, idx: usize) -> Result<CapabilityScope, json::Error
         role,
     })
 }
-
 #[cfg(feature = "json")]
 fn parse_optional_str<'a>(
     obj: &'a Map,
@@ -741,7 +687,6 @@ fn parse_optional_str<'a>(
         }),
     }
 }
-
 #[cfg(feature = "json")]
 fn parse_role(value: &str, idx: usize) -> Result<AmxRole, json::Error> {
     match value {
@@ -753,7 +698,6 @@ fn parse_role(value: &str, idx: usize) -> Result<AmxRole, json::Error> {
         }),
     }
 }
-
 #[cfg(feature = "json")]
 fn parse_effect(value: &Value, idx: usize) -> Result<ManifestEffect, json::Error> {
     let effect_obj = value.as_object().ok_or_else(|| json::Error::InvalidField {
@@ -777,7 +721,6 @@ fn parse_effect(value: &Value, idx: usize) -> Result<ManifestEffect, json::Error
         message: "effect must contain Allow or Deny".into(),
     })
 }
-
 #[cfg(feature = "json")]
 fn parse_allowance(value: &Value, idx: usize) -> Result<Allowance, json::Error> {
     let details = value.as_object().ok_or_else(|| json::Error::InvalidField {
@@ -797,7 +740,6 @@ fn parse_allowance(value: &Value, idx: usize) -> Result<Allowance, json::Error> 
     };
     Ok(Allowance { max_amount, window })
 }
-
 #[cfg(feature = "json")]
 fn parse_deny(value: &Value, idx: usize) -> Result<DenyDirective, json::Error> {
     let details = value.as_object().ok_or_else(|| json::Error::InvalidField {
@@ -816,7 +758,6 @@ fn parse_deny(value: &Value, idx: usize) -> Result<DenyDirective, json::Error> {
     };
     Ok(DenyDirective { reason })
 }
-
 #[cfg(feature = "json")]
 fn parse_window(value: &Value, idx: usize) -> Result<AllowanceWindow, json::Error> {
     let Some(label) = value.as_str() else {
@@ -835,7 +776,6 @@ fn parse_window(value: &Value, idx: usize) -> Result<AllowanceWindow, json::Erro
         }),
     }
 }
-
 #[cfg(feature = "json")]
 fn parse_quantity(value: &Value, idx: usize) -> Result<Quantity, json::Error> {
     let raw = match value {
@@ -862,7 +802,6 @@ fn parse_quantity(value: &Value, idx: usize) -> Result<Quantity, json::Error> {
         message: format!("invalid quantity literal {raw}: {err}"),
     })
 }
-
 /// Manifest entry describing a scoped allow/deny rule.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -884,7 +823,6 @@ pub struct ManifestEntry {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 /// AMX role enforced by a manifest entry.
 #[derive(
     Debug,
@@ -916,7 +854,6 @@ pub enum AmxRole {
     /// Participant leg in an AMX group.
     Participant,
 }
-
 /// Scope definition that determines whether a manifest entry matches a capability request.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -946,7 +883,6 @@ pub struct CapabilityScope {
     #[norito(default)]
     pub role: Option<AmxRole>,
 }
-
 impl CapabilityScope {
     fn matches(&self, request: &CapabilityRequest<'_>) -> bool {
         if let Some(dataspace) = self.dataspace
@@ -954,38 +890,32 @@ impl CapabilityScope {
         {
             return false;
         }
-
         if let Some(program) = &self.program {
             match request.program {
                 Some(candidate) if candidate == program => {}
                 _ => return false,
             }
         }
-
         if let Some(method) = &self.method {
             match request.method {
                 Some(candidate) if candidate == method => {}
                 _ => return false,
             }
         }
-
         if let Some(asset) = &self.asset {
             match request.asset {
                 Some(candidate) if candidate == asset => {}
                 _ => return false,
             }
         }
-
         if let Some(role) = self.role
             && request.role != Some(role)
         {
             return false;
         }
-
         true
     }
 }
-
 /// Decision encoded by a manifest entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1005,7 +935,6 @@ pub enum ManifestEffect {
     /// Deny the scoped capability with an optional reason.
     Deny(DenyDirective),
 }
-
 /// Allowance constraints attached to an `Allow` entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1025,7 +954,6 @@ pub struct Allowance {
     /// Accounting window applied to the allowance.
     pub window: AllowanceWindow,
 }
-
 /// Allowance accounting window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1046,7 +974,6 @@ pub enum AllowanceWindow {
     /// Rolling per-day allowance.
     PerDay,
 }
-
 impl AllowanceWindow {
     /// Millisecond duration of the accounting window.
     #[must_use]
@@ -1058,7 +985,6 @@ impl AllowanceWindow {
         }
     }
 }
-
 /// Deny directive metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1076,7 +1002,6 @@ pub struct DenyDirective {
     #[norito(default)]
     pub reason: Option<String>,
 }
-
 /// Capability request evaluated against a manifest.
 #[derive(Debug, Clone)]
 pub struct CapabilityRequest<'a> {
@@ -1095,7 +1020,6 @@ pub struct CapabilityRequest<'a> {
     /// Epoch associated with the request.
     pub epoch: u64,
 }
-
 impl<'a> CapabilityRequest<'a> {
     /// Construct a new capability request helper.
     #[must_use]
@@ -1120,7 +1044,6 @@ impl<'a> CapabilityRequest<'a> {
         }
     }
 }
-
 /// Result of evaluating a manifest against a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManifestVerdict {
@@ -1129,7 +1052,6 @@ pub enum ManifestVerdict {
     /// Request denied with the provided reason.
     Denied(DenyReason),
 }
-
 /// Allowance grant returned on successful evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestGrant {
@@ -1138,7 +1060,6 @@ pub struct ManifestGrant {
     /// Allowance metadata applied to the request.
     pub allowance: Allowance,
 }
-
 /// Deny reason emitted during manifest evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DenyReason {
@@ -1168,24 +1089,19 @@ pub enum DenyReason {
     /// Manifest did not contain a matching allow rule.
     NoMatchingRule,
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fs, path::Path};
-
     use iroha_primitives::numeric::Numeric;
     #[cfg(feature = "json")]
     use norito::json::JsonDeserialize;
-
     use super::*;
     use crate::domain::DomainId;
-
     #[derive(Encode)]
     struct ForgedAllowance {
         max_amount: Option<Numeric>,
         window: AllowanceWindow,
     }
-
     #[test]
     fn allowance_rejects_forged_negative_quantity() {
         let forged = ForgedAllowance {
@@ -1194,26 +1110,21 @@ mod tests {
         };
         let encoded = forged.encode();
         let mut input = encoded.as_slice();
-
         assert!(
             <Allowance as Decode>::decode(&mut input).is_err(),
             "manifest allowance decoding must enforce the Quantity sign invariant"
         );
     }
-
     fn sample_uaid() -> UniversalAccountId {
         UniversalAccountId::from_hash(Hash::new(b"uaid::sample"))
     }
-
     fn sample_name(value: &str) -> Name {
         value.parse().expect("valid name")
     }
-
     #[test]
     fn uaid_from_str_accepts_literal_and_hex() {
         let uaid = sample_uaid();
         let hex = uaid.as_hash().to_string();
-
         let parsed_hex = UniversalAccountId::from_str(&hex).expect("hex uaid must parse");
         let parsed_literal =
             UniversalAccountId::from_str(&format!("uaid:{hex}")).expect("uaid literal must parse");
@@ -1223,24 +1134,19 @@ mod tests {
             .to_string()
             .parse::<UniversalAccountId>()
             .expect("display uaid must parse");
-
         assert_eq!(parsed_hex, uaid);
         assert_eq!(parsed_literal, uaid);
         assert_eq!(parsed_upper, uaid);
         assert_eq!(parsed_display, uaid);
     }
-
     #[test]
     fn uaid_from_str_trims_after_prefix() {
         let uaid = sample_uaid();
         let hex = uaid.as_hash().to_string();
         let literal = format!("  uaid:  {hex}  ");
-
         let parsed = UniversalAccountId::from_str(&literal).expect("uaid literal must parse");
-
         assert_eq!(parsed, uaid);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn manifest_json_accepts_raw_hex_or_prefixed_uaid() {
@@ -1253,7 +1159,6 @@ mod tests {
             uaid_hex.clone(),
             format!("UAID:{}", uaid_hex.to_uppercase()),
         ];
-
         for literal in variants {
             let mut value: norito::json::Value =
                 norito::json::from_str(&fixture).expect("parse manifest JSON");
@@ -1266,7 +1171,6 @@ mod tests {
             assert_eq!(parsed.uaid, expected.uaid);
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn manifest_json_rejects_negative_allowance_quantity() {
@@ -1287,13 +1191,11 @@ mod tests {
             panic!("allow effect must serialize as an object");
         };
         allow.insert("max_amount".into(), Value::String("-1".to_owned()));
-
         assert!(
             AssetPermissionManifest::json_from_value(&value).is_err(),
             "manifest JSON must reject a negative amount cap"
         );
     }
-
     fn manifest_with_entries(
         dataspace: DataSpaceId,
         entries: Vec<ManifestEntry>,
@@ -1308,7 +1210,6 @@ mod tests {
             entries,
         }
     }
-
     fn manifest_request(
         dataspace: DataSpaceId,
         method: &Name,
@@ -1324,7 +1225,6 @@ mod tests {
             5,
         )
     }
-
     fn cbdc_manifest_fixture() -> AssetPermissionManifest {
         let uaid_hex = "0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
         let uaid = UniversalAccountId::from_hash(
@@ -1374,7 +1274,6 @@ mod tests {
             entries: vec![allow_entry, deny_entry],
         }
     }
-
     #[test]
     fn cbdc_manifest_fixture_matches_serialized_json() {
         let manifest = cbdc_manifest_fixture();
@@ -1390,7 +1289,6 @@ mod tests {
             norito::json::from_str(&fixture).expect("parse fixture JSON");
         assert_eq!(fixture_value, expected);
     }
-
     #[test]
     fn cbdc_manifest_fixture_roundtrips_json() {
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1400,7 +1298,6 @@ mod tests {
             norito::json::from_str(&fixture).expect("parse manifest JSON");
         assert_eq!(parsed, cbdc_manifest_fixture());
     }
-
     fn matching_scope(method: &Name) -> CapabilityScope {
         CapabilityScope {
             dataspace: None,
@@ -1410,7 +1307,6 @@ mod tests {
             role: Some(AmxRole::Initiator),
         }
     }
-
     fn foreign_scope(foreign_dataspace: DataSpaceId) -> CapabilityScope {
         CapabilityScope {
             dataspace: Some(foreign_dataspace),
@@ -1420,7 +1316,6 @@ mod tests {
             role: Some(AmxRole::Participant),
         }
     }
-
     #[derive(Clone, Copy, Debug)]
     enum EntryKind {
         MatchingAllow,
@@ -1428,7 +1323,6 @@ mod tests {
         NonMatchingAllow,
         NonMatchingDeny,
     }
-
     fn matching_deny_cases() -> Vec<Vec<EntryKind>> {
         vec![
             vec![EntryKind::MatchingDeny],
@@ -1447,7 +1341,6 @@ mod tests {
             ],
         ]
     }
-
     fn matching_allow_only_cases() -> Vec<Vec<EntryKind>> {
         vec![
             vec![EntryKind::MatchingAllow],
@@ -1464,7 +1357,6 @@ mod tests {
             ],
         ]
     }
-
     fn build_entries(
         kinds: &[EntryKind],
         method: &Name,
@@ -1504,7 +1396,6 @@ mod tests {
             })
             .collect()
     }
-
     fn first_matching_deny_index(
         entries: &[ManifestEntry],
         request: &CapabilityRequest<'_>,
@@ -1516,7 +1407,6 @@ mod tests {
             None
         })
     }
-
     fn last_matching_allow_index(
         entries: &[ManifestEntry],
         request: &CapabilityRequest<'_>,
@@ -1528,7 +1418,6 @@ mod tests {
             None
         })
     }
-
     #[test]
     fn deny_rule_wins_over_allow() {
         let allowance = Allowance {
@@ -1562,7 +1451,6 @@ mod tests {
                 notes: None,
             },
         ];
-
         let manifest = AssetPermissionManifest {
             version: ManifestVersion::V1,
             uaid: sample_uaid(),
@@ -1572,7 +1460,6 @@ mod tests {
             expiry_epoch: None,
             entries,
         };
-
         let request = CapabilityRequest::new(
             manifest.dataspace,
             None,
@@ -1582,7 +1469,6 @@ mod tests {
             Some(Quantity::from(1_u32)),
             12,
         );
-
         match manifest.evaluate(&request) {
             ManifestVerdict::Denied(DenyReason::ExplicitRule { entry_index, .. }) => {
                 assert_eq!(entry_index, 1);
@@ -1590,7 +1476,6 @@ mod tests {
             other => panic!("expected explicit deny, got {other:?}"),
         }
     }
-
     #[test]
     fn manifest_inactive_outside_epoch_window() {
         let manifest = AssetPermissionManifest {
@@ -1602,23 +1487,18 @@ mod tests {
             expiry_epoch: Some(10),
             entries: Vec::new(),
         };
-
         let request = CapabilityRequest::new(manifest.dataspace, None, None, None, None, None, 4);
-
         assert!(matches!(
             manifest.evaluate(&request),
             ManifestVerdict::Denied(DenyReason::ManifestInactive { .. })
         ));
-
         let late_request =
             CapabilityRequest::new(manifest.dataspace, None, None, None, None, None, 11);
-
         assert!(matches!(
             manifest.evaluate(&late_request),
             ManifestVerdict::Denied(DenyReason::ManifestInactive { .. })
         ));
     }
-
     #[test]
     fn allowance_enforced_for_amounts() {
         let method = sample_name("mint");
@@ -1636,7 +1516,6 @@ mod tests {
             }),
             notes: None,
         }];
-
         let manifest = AssetPermissionManifest {
             version: ManifestVersion::V1,
             uaid: sample_uaid(),
@@ -1646,7 +1525,6 @@ mod tests {
             expiry_epoch: None,
             entries,
         };
-
         let ok_request = CapabilityRequest::new(
             manifest.dataspace,
             None,
@@ -1656,12 +1534,10 @@ mod tests {
             Some(Quantity::from(3_u32)),
             1,
         );
-
         assert!(matches!(
             manifest.evaluate(&ok_request),
             ManifestVerdict::Allowed(ManifestGrant { entry_index: 0, .. })
         ));
-
         let over_request = CapabilityRequest::new(
             manifest.dataspace,
             None,
@@ -1671,13 +1547,11 @@ mod tests {
             Some(Quantity::from(10_u32)),
             1,
         );
-
         match manifest.evaluate(&over_request) {
             ManifestVerdict::Denied(DenyReason::AmountExceeded { .. }) => {}
             other => panic!("expected amount exceeded, got {other:?}"),
         }
     }
-
     #[test]
     fn matching_deny_always_wins_for_deterministic_cases() {
         for kinds in matching_deny_cases() {
@@ -1686,7 +1560,6 @@ mod tests {
             let entries = build_entries(&kinds, &method, DataSpaceId::new(99));
             let manifest = manifest_with_entries(dataspace, entries.clone());
             let request = manifest_request(dataspace, &method, Quantity::from(1_u32));
-
             let expected_idx = first_matching_deny_index(&entries, &request)
                 .expect("generated at least one matching deny");
             match manifest.evaluate(&request) {
@@ -1702,7 +1575,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn last_matching_allow_applied_when_no_denies_for_deterministic_cases() {
         for kinds in matching_allow_only_cases() {
@@ -1711,7 +1583,6 @@ mod tests {
             let entries = build_entries(&kinds, &method, DataSpaceId::new(11));
             let manifest = manifest_with_entries(dataspace, entries.clone());
             let request = manifest_request(dataspace, &method, Quantity::from(1_u32));
-
             let expected_idx = last_matching_allow_index(&entries, &request)
                 .expect("generated at least one matching allow");
             match manifest.evaluate(&request) {

@@ -1,15 +1,11 @@
 //! Deployment-owned sealed checkpoint authority for moderation orchestration.
-
 use super::*;
-
 /// Canonical sealed-record schema version.
 pub const MODERATION_CHECKPOINT_STORE_RECORD_VERSION_V1: u16 = 1;
-
 const MODERATION_CHECKPOINT_NAMESPACE_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.checkpoint-namespace.v1";
 const MODERATION_CHECKPOINT_RECORD_REVISION_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.checkpoint-record-revision.v1";
-
 /// Fixed, payload-free failures from the external checkpoint authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationCheckpointStoreExternalErrorV1 {
@@ -20,7 +16,6 @@ pub enum ModerationCheckpointStoreExternalErrorV1 {
     /// The write may have committed and requires authoritative readback.
     Ambiguous,
 }
-
 /// One sealed, predecessor-bound moderation checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationCheckpointStoreRecordV1 {
@@ -49,7 +44,6 @@ pub struct ModerationCheckpointStoreRecordV1 {
     /// Deterministic revision of every preceding field.
     pub revision: [u8; 32],
 }
-
 impl ModerationCheckpointStoreRecordV1 {
     /// Verify the canonical envelope fields visible at a runtime-provider boundary.
     ///
@@ -91,7 +85,6 @@ impl ModerationCheckpointStoreRecordV1 {
             && self.revision == record_revision(self)
     }
 }
-
 /// Deployment-owned linearizable sealed checkpoint authority.
 ///
 /// Implementations must durably reject a different record for an already
@@ -101,19 +94,16 @@ pub trait ModerationCheckpointStoreV1: ModerationRuntimeProviderV1 {
     /// Return the archive-lifetime-stable Ed25519 trust anchor authenticating
     /// terminal-set attestations. HSM-internal rotation must preserve it in V1.
     fn attestation_public_key(&self) -> [u8; 32];
-
     /// Load the latest committed record for this configured moderation namespace.
     fn load_latest(
         &self,
     ) -> Result<Option<ModerationCheckpointStoreRecordV1>, ModerationCheckpointStoreExternalErrorV1>;
-
     /// Atomically commit `next` only when the latest revision equals `expected_revision`.
     fn compare_and_swap_latest(
         &self,
         expected_revision: Option<[u8; 32]>,
         next: &ModerationCheckpointStoreRecordV1,
     ) -> Result<(), ModerationCheckpointStoreExternalErrorV1>;
-
     /// Sign a terminal-set statement only when its source record is the exact
     /// currently committed record in this checkpoint namespace.
     fn attest_terminal_set(
@@ -121,14 +111,12 @@ pub trait ModerationCheckpointStoreV1: ModerationRuntimeProviderV1 {
         statement: &ModerationPanelNotificationSourceAttestationV1,
     ) -> Result<[u8; 64], ModerationCheckpointStoreExternalErrorV1>;
 }
-
 pub(super) struct QualifiedModerationCheckpointStoreV1 {
     handle: String,
     qualification: ModerationRuntimeProviderQualificationV1,
     attestation_public_key: [u8; 32],
     store: Arc<dyn ModerationCheckpointStoreV1>,
 }
-
 impl QualifiedModerationCheckpointStoreV1 {
     pub(super) fn try_new(
         handle: &str,
@@ -151,7 +139,6 @@ impl QualifiedModerationCheckpointStoreV1 {
             store,
         })
     }
-
     fn revalidate(&self) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
         revalidate_moderation_runtime_provider_v1(
             &self.handle,
@@ -159,7 +146,6 @@ impl QualifiedModerationCheckpointStoreV1 {
             self.store.as_ref(),
         )
     }
-
     fn load_latest(
         &self,
     ) -> Result<Option<ModerationCheckpointStoreRecordV1>, ModerationCheckpointStoreExternalErrorV1>
@@ -171,7 +157,6 @@ impl QualifiedModerationCheckpointStoreV1 {
             .map_err(|_| ModerationCheckpointStoreExternalErrorV1::Ambiguous)?;
         result
     }
-
     fn compare_and_swap_latest(
         &self,
         expected_revision: Option<[u8; 32]>,
@@ -184,7 +169,6 @@ impl QualifiedModerationCheckpointStoreV1 {
             .map_err(|_| ModerationCheckpointStoreExternalErrorV1::Ambiguous)?;
         result
     }
-
     pub(super) fn attest_terminal_set(
         &self,
         statement: &ModerationPanelNotificationSourceAttestationV1,
@@ -222,7 +206,6 @@ impl QualifiedModerationCheckpointStoreV1 {
         result
     }
 }
-
 impl fmt::Debug for QualifiedModerationCheckpointStoreV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -234,7 +217,6 @@ impl fmt::Debug for QualifiedModerationCheckpointStoreV1 {
             .finish()
     }
 }
-
 pub(super) fn open_authoritative_checkpoint(
     config: &ModerationOrchestratorConfigV1,
     network_id: &iroha_data_model::NetworkId,
@@ -286,7 +268,6 @@ pub(super) fn open_authoritative_checkpoint(
     persist_local_cache(config, &record.checkpoint_bytes)?;
     Ok((state, record))
 }
-
 pub(super) fn persist_authoritative_checkpoint(
     config: &ModerationOrchestratorConfigV1,
     network_id: &iroha_data_model::NetworkId,
@@ -323,7 +304,6 @@ pub(super) fn persist_authoritative_checkpoint(
     *previous = next;
     Ok(())
 }
-
 fn build_record(
     config: &ModerationOrchestratorConfigV1,
     network_id: &iroha_data_model::NetworkId,
@@ -362,7 +342,6 @@ fn build_record(
     validate_record(config, network_id, &record, previous)?;
     Ok(record)
 }
-
 fn decode_validated_record(
     config: &ModerationOrchestratorConfigV1,
     network_id: &iroha_data_model::NetworkId,
@@ -384,7 +363,6 @@ fn decode_validated_record(
     }
     Ok((state, record.clone()))
 }
-
 fn validate_record(
     config: &ModerationOrchestratorConfigV1,
     network_id: &iroha_data_model::NetworkId,
@@ -421,7 +399,6 @@ fn validate_record(
     }
     Ok(())
 }
-
 fn decode_checkpoint(
     config: &ModerationOrchestratorConfigV1,
     network_id: &iroha_data_model::NetworkId,
@@ -446,7 +423,6 @@ fn decode_checkpoint(
     validate_checkpoint(&checkpoint, config, network_id)?;
     Ok(checkpoint)
 }
-
 fn persist_local_cache(
     config: &ModerationOrchestratorConfigV1,
     bytes: &[u8],
@@ -465,14 +441,12 @@ fn persist_local_cache(
     }
     Ok(())
 }
-
 pub(super) fn checkpoint_namespace(network_id: &iroha_data_model::NetworkId) -> [u8; 32] {
     domain_hash(
         MODERATION_CHECKPOINT_NAMESPACE_DOMAIN_V1,
         &[network_id.as_bytes()],
     )
 }
-
 pub(super) fn record_revision(record: &ModerationCheckpointStoreRecordV1) -> [u8; 32] {
     let predecessor_revision = record.predecessor_revision.unwrap_or([0; 32]);
     let predecessor_checkpoint_digest = record.predecessor_checkpoint_digest.unwrap_or([0; 32]);
@@ -492,7 +466,6 @@ pub(super) fn record_revision(record: &ModerationCheckpointStoreRecordV1) -> [u8
         ],
     )
 }
-
 fn map_checkpoint_store_read_error(
     error: ModerationCheckpointStoreExternalErrorV1,
 ) -> ModerationOrchestratorError {

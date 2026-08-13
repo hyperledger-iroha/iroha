@@ -9,7 +9,6 @@ fn fee_sponsor_program_ids_require_exact_canonical_literals() {
     assert!(parse_fee_sponsor_program_id(&format!(" {literal}")).is_err());
     assert!(parse_fee_sponsor_program_id(&sponsor_literal).is_err());
 }
-
 #[test]
 fn i105_discriminant_hint_decodes_valid_literals_only() {
     let custom_account = custom_i105_from_seed(0x70, 42);
@@ -17,10 +16,8 @@ fn i105_discriminant_hint_decodes_valid_literals_only() {
         AccountAddress::i105_discriminant(&custom_account).ok(),
         Some(42)
     );
-
     let noncanonical = custom_account.replacen("n42", "n00042", 1);
     assert_eq!(AccountAddress::i105_discriminant(&noncanonical).ok(), None);
-
     let mut chars = custom_account.chars().collect::<Vec<_>>();
     let last = chars.len().saturating_sub(1);
     chars[last] = if chars[last] == '1' { '2' } else { '1' };
@@ -33,7 +30,6 @@ fn i105_discriminant_hint_decodes_valid_literals_only() {
         None
     );
 }
-
 #[test]
 fn parse_account_id_accepts_taira_i105_literals_without_global_discriminant() {
     let taira_account = taira_i105_from_seed(0x71);
@@ -46,7 +42,6 @@ fn parse_account_id_accepts_taira_i105_literals_without_global_discriminant() {
         sample_account(0x71)
     );
 }
-
 #[test]
 fn parse_account_id_accepts_numeric_custom_i105_literals_without_global_discriminant() {
     let custom_account = custom_i105_from_seed(0x72, 42);
@@ -59,7 +54,6 @@ fn parse_account_id_accepts_numeric_custom_i105_literals_without_global_discrimi
         sample_account(0x72)
     );
 }
-
 #[test]
 fn parse_account_id_rejects_noncanonical_and_tampered_numeric_custom_i105_literals() {
     let custom_account = custom_i105_from_seed(0x73, 42);
@@ -68,7 +62,6 @@ fn parse_account_id_rejects_noncanonical_and_tampered_numeric_custom_i105_litera
         parse_account_id(&noncanonical).is_err(),
         "noncanonical numeric sentinel must be rejected"
     );
-
     let mut chars = custom_account.chars().collect::<Vec<_>>();
     let last = chars.len().saturating_sub(1);
     chars[last] = if chars[last] == '1' { '2' } else { '1' };
@@ -87,14 +80,12 @@ fn seed_derivation_pyfunctions_use_checked_backend_derivation() {
     let (_, expected_private) = expected.private_key().to_bytes();
     let (_, expected_public) = public_key_to_bytes(expected.public_key(), "expected public key")
         .expect("expected public key payload is well-formed");
-
     Python::attach(|py| {
         let (generic_private, generic_public) =
             derive_keypair_from_seed_py(py, seed, Algorithm::Ed25519.as_static_str())
                 .expect("generic checked seed derivation succeeds");
         let (ed25519_private, ed25519_public) = derive_ed25519_keypair_from_seed_py(py, seed)
             .expect("Ed25519 checked seed derivation succeeds");
-
         assert_eq!(
             generic_private.bind(py).as_bytes(),
             expected_private.as_slice()
@@ -107,7 +98,6 @@ fn seed_derivation_pyfunctions_use_checked_backend_derivation() {
         assert_eq!(ed25519_public.bind(py).as_bytes(), expected_public);
     });
 }
-
 #[test]
 fn parse_algorithm_arg_accepts_exact_supported_aliases() {
     for (label, expected) in [
@@ -124,7 +114,6 @@ fn parse_algorithm_arg_accepts_exact_supported_aliases() {
         assert_eq!(parse_algorithm_arg(label).unwrap(), expected, "{label}");
     }
 }
-
 #[test]
 fn parse_algorithm_arg_rejects_empty_padded_control_and_non_ascii_labels() {
     for (label, expected_message) in [
@@ -166,7 +155,6 @@ fn parse_algorithm_arg_rejects_empty_padded_control_and_non_ascii_labels() {
         );
     }
 }
-
 #[test]
 fn privacy_compiled_profile_catalog_is_the_exact_closed_registry() {
     let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
@@ -182,7 +170,6 @@ fn privacy_compiled_profile_catalog_is_the_exact_closed_registry() {
             .eq(PrivacyProtocolIdV1::ALL)
     );
 }
-
 fn bind_test_network_privacy_capability(
     builder: &mut TransactionBuilder,
     protocol_id: PrivacyProtocolIdV1,
@@ -193,7 +180,6 @@ fn bind_test_network_privacy_capability(
         ),
     );
 }
-
 #[test]
 fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple() {
     ensure_python();
@@ -206,7 +192,6 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
         )
         .expect("builder constructs")
     };
-
     let missing = new_builder()
         .require_empty_privacy_action_builder_v1(
             PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
@@ -219,7 +204,6 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
             .to_string()
             .contains("requires a validated Torii Exact12")
     );
-
     let mut wrong_protocol = new_builder();
     bind_test_network_privacy_capability(
         &mut wrong_protocol,
@@ -238,7 +222,6 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
             .contains("is not available in the committed")
     );
 }
-
 fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
     PyProviderMetadata {
         provider_id: Some(provider_id.to_string()),
@@ -269,7 +252,6 @@ fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
         transport_hints: None,
     }
 }
-
 #[test]
 fn generate_sm2_keypair_roundtrip() {
     ensure_python();
@@ -285,7 +267,6 @@ fn generate_sm2_keypair_roundtrip() {
         assert_eq!(derived_public.as_slice(), public_bytes);
     });
 }
-
 #[test]
 fn parse_public_key_multihash_returns_checked_payload() {
     ensure_python();
@@ -299,7 +280,6 @@ fn parse_public_key_multihash_returns_checked_payload() {
         .public_key()
         .try_to_prefixed_string()
         .expect("fixture public key prefixed multihash formats");
-
     Python::attach(|py| {
         let (parsed_algorithm, parsed_payload) =
             parse_public_key_multihash_py(py, &encoded).expect("public key multihash parses");
@@ -307,7 +287,6 @@ fn parse_public_key_multihash_returns_checked_payload() {
         assert_eq!(parsed_payload.bind(py).as_bytes(), expected_payload);
     });
 }
-
 #[test]
 fn public_key_multihash_rejects_malformed_ed25519_public_key_material() {
     for (label, public_key, expected_error) in MALFORMED_ED25519_PUBLIC_KEYS {
@@ -327,7 +306,6 @@ fn public_key_multihash_rejects_malformed_ed25519_public_key_material() {
         }
     }
 }
-
 #[test]
 fn multihash_helpers_use_checked_formatters() {
     ensure_python();
@@ -339,7 +317,6 @@ fn multihash_helpers_use_checked_formatters() {
     let (private_algorithm, private_payload) = key_pair.private_key().to_bytes();
     assert_eq!(private_algorithm, Algorithm::Ed25519);
     let exposed_private = ExposedPrivateKey(key_pair.private_key().clone());
-
     assert_eq!(
         public_key_multihash_py(Algorithm::Ed25519.as_static_str(), &public_payload, false)
             .expect("public key multihash formats"),
@@ -373,14 +350,12 @@ fn multihash_helpers_use_checked_formatters() {
             .expect("expected prefixed private key multihash formats")
     );
 }
-
 #[test]
 fn sm2_fixture_from_seed_uses_checked_public_key_formatters() {
     ensure_python();
     let distid = "1234567812345678";
     let seed = [0x42_u8; SM2_PRIVATE_KEY_LENGTH];
     let message = b"python sm2 fixture checked multihash";
-
     Python::attach(|py| {
         let fixture =
             sm2_fixture_from_seed_py(py, distid, &seed, message).expect("SM2 fixture generates");
@@ -409,7 +384,6 @@ fn sm2_fixture_from_seed_uses_checked_public_key_formatters() {
             .expect("fixture SM2 public key payload encodes");
         let public_key = PublicKey::from_bytes(Algorithm::Sm2, &payload)
             .expect("fixture SM2 public key constructs");
-
         assert_eq!(
             sm2_public_key_multihash_py(&public_key_sec1, Some(distid))
                 .expect("SM2 public key multihash formats"),
@@ -423,7 +397,6 @@ fn sm2_fixture_from_seed_uses_checked_public_key_formatters() {
         );
     });
 }
-
 #[test]
 fn keypair_and_account_public_exports_use_checked_payloads() {
     ensure_python();
@@ -436,20 +409,17 @@ fn keypair_and_account_public_exports_use_checked_payloads() {
     let authority = AccountId::new(key_pair.public_key().clone())
         .canonical_i105()
         .expect("canonical authority");
-
     Python::attach(|py| {
         let (private_py, public_py) = keypair_to_py(py, key_pair.clone()).expect("keypair exports");
         assert_eq!(public_py.bind(py).as_bytes(), expected_public.as_slice());
         assert_eq!(private_py.bind(py).as_bytes(), expected_private.as_slice());
     });
-
     let account = PyAccountId::new(&authority).expect("account id parses");
     assert_eq!(
         account.public_key_hex().expect("public key hex"),
         hex::encode(expected_public)
     );
 }
-
 #[test]
 fn sorafs_alias_proof_fixture_generates_servable_checked_signer() {
     ensure_python();
@@ -469,7 +439,6 @@ fn sorafs_alias_proof_fixture_generates_servable_checked_signer() {
             .expect("generated item exists")
             .extract::<u64>()
             .expect("generated timestamp is integer");
-
         let evaluation =
             sorafs_evaluate_alias_proof_py(py, &proof_b64, None, Some(generated_at_unix))
                 .expect("alias proof evaluates");
@@ -486,12 +455,10 @@ fn sorafs_alias_proof_fixture_generates_servable_checked_signer() {
             .expect("servable item exists")
             .extract::<bool>()
             .expect("servable is boolean");
-
         assert_eq!(state, "fresh");
         assert!(servable);
     });
 }
-
 #[test]
 fn decode_transaction_receipt_json_roundtrip() {
     let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -510,12 +477,10 @@ fn decode_transaction_receipt_json_roundtrip() {
     let expected = json::to_json(&receipt).expect("serialize receipt");
     assert_eq!(decoded, expected);
 }
-
 #[test]
 fn privacy_bridge_abi_version_python_function_matches_first_release() {
     assert_eq!(privacy_bridge_abi_version_py(), 22);
 }
-
 #[test]
 fn privacy_compiled_profile_catalog_python_validator_calls_the_exact_local_boundary() {
     let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
@@ -532,7 +497,6 @@ fn privacy_compiled_profile_catalog_python_validator_calls_the_exact_local_bound
         iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid
             .code()
     );
-
     let mut substituted = catalog;
     let profile = substituted
         .protocols
@@ -564,7 +528,6 @@ fn privacy_compiled_profile_catalog_python_validator_calls_the_exact_local_bound
                 .code()
         );
 }
-
 #[test]
 fn component_python_nonzero_digest_boundary_rejects_ambiguous_encodings() {
     assert!(python_nonzero_privacy_digest_v1(&[0x11; 32], "digest").is_ok());
@@ -572,11 +535,9 @@ fn component_python_nonzero_digest_boundary_rejects_ambiguous_encodings() {
     assert!(python_nonzero_privacy_digest_v1(&[0x11; 33], "digest").is_err());
     assert!(python_nonzero_privacy_digest_v1(&[0; 32], "digest").is_err());
 }
-
 #[test]
 fn vega_python_device_digest_binds_intent_and_session() {
     use iroha_core::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
-
     let profile =
         python_compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0, "Vega")
             .expect("compiled Vega profile");
@@ -611,7 +572,6 @@ fn vega_python_device_digest_binds_intent_and_session() {
         )
         .expect("valid Vega public statement")
     };
-
     let bound_intent = statement([0xD2; 32], [0xB4; 32]);
     let other_intent = statement([0xD3; 32], [0xB4; 32]);
     let other_session = statement([0xD2; 32], [0xB5; 32]);
@@ -676,7 +636,6 @@ fn vega_python_device_digest_binds_intent_and_session() {
         .is_err()
     );
 }
-
 #[test]
 fn component_python_inspectors_reject_empty_and_malformed_signed_wire() {
     ensure_python();
@@ -706,7 +665,6 @@ fn component_python_inspectors_reject_empty_and_malformed_signed_wire() {
         }
     });
 }
-
 #[test]
 fn x509_statement_archive_boundary_is_nonempty_fixed_capacity_and_canonical() {
     assert!(python_zk_x509_statement_archive_v1(&[]).is_err());
@@ -720,7 +678,6 @@ fn x509_statement_archive_boundary_is_nonempty_fixed_capacity_and_canonical() {
         .is_err()
     );
 }
-
 #[test]
 fn x509_python_result_keeps_exact_action_and_ledger_semantics() {
     assert_eq!(

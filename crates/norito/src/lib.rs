@@ -40,9 +40,7 @@
 //!   supplied layout flags. `norito::codec::encode_with_header_flags(value)`
 //!   returns both the bare payload and the recorded flags so callers can persist
 //!   the metadata alongside the bytes without relying on thread-local state.
-
 extern crate self as norito;
-
 use std::{
     alloc::{Layout, alloc, dealloc},
     cell::Cell,
@@ -69,15 +67,12 @@ pub use core::{
     to_bytes, to_bytes_auto, to_bytes_in, to_compressed_bytes, with_decode_limits,
     with_decode_limits_scope,
 };
-
 #[cfg(feature = "parallel-decode")]
 #[doc(hidden)]
 pub use core::decode_planned_sequence_parallel;
 #[doc(hidden)]
 pub use core::{BinarySequenceLayout, SequencePlan, SequenceSpan, plan_binary_sequence};
-
 pub use codec::disable_packed_struct_layout;
-
 struct ArchiveSlice {
     ptr: *mut u8,
     len: usize,
@@ -160,36 +155,27 @@ pub fn debug_trace_enabled() -> bool {
         false
     }
 }
-
 #[cfg(test)]
 mod trace_tests {
     use std::env;
-
     use super::debug_trace_enabled;
-
     #[test]
     fn debug_trace_follows_env_flag() {
         let env_enabled = env::var_os("NORITO_TRACE").is_some();
         assert_eq!(debug_trace_enabled(), env_enabled);
     }
 }
-
 // Re-export selected JSON traits at the crate root for convenience
 pub use self::json::FastJsonWrite;
-
 pub mod yaml;
-
 pub mod derive {
     pub use norito_derive::{
         Decode, Encode, FastJson, FastJsonWrite, JsonDeserialize, JsonSerialize, NoritoDeserialize,
         NoritoSerialize,
     };
 }
-
 pub use derive::*;
-
 pub mod sequential;
-
 /// Bare Norito `Encode` and `Decode` traits used for compact payloads without a
 /// Norito header.
 pub mod codec {
@@ -200,16 +186,13 @@ pub mod codec {
             atomic::{AtomicBool, Ordering},
         },
     };
-
     pub use super::Error;
     use super::{NoritoDeserialize, NoritoSerialize, core};
     pub use crate::derive::{Decode, Encode};
-
     // Lightweight telemetry for the generic two-pass `encode_adaptive` path.
     // Separate from the columnar bucket to avoid conflating concerns.
     mod telemetry {
         use std::sync::atomic::{AtomicU64, Ordering};
-
         static CALLS: AtomicU64 = AtomicU64::new(0);
         static REENCODES: AtomicU64 = AtomicU64::new(0);
         static BYTES_ABS_DIFF_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -489,14 +472,12 @@ pub mod codec {
         core::record_last_header_flags(final_flags);
         Ok(payload_len)
     }
-
     #[cfg(test)]
     #[allow(clippy::items_after_test_module)]
     mod encode_tests {
         use super::Encode;
         use crate::{NoritoDeserialize, NoritoSerialize};
         use std::sync::atomic::{AtomicUsize, Ordering};
-
         static HINT_CALLS: AtomicUsize = AtomicUsize::new(0);
         static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
         #[derive(Clone, Copy)]
@@ -858,7 +839,6 @@ pub mod codec {
         Value::Object(out)
     }
 }
-
 /// Telemetry helpers aggregating Norito metrics for easy ingestion.
 pub mod telemetry {
     /// Reset all Norito telemetry buckets (columnar, codec, compression).
@@ -952,15 +932,11 @@ pub mod telemetry {
 ///   benchmarking scenarios.
 pub mod json {
     use std::cell::Cell;
-
     use url::Url;
-
     mod exact_string;
-
     pub use super::{
         JsonDeserialize as Deserialize, JsonDeserialize, JsonSerialize as Serialize, JsonSerialize,
     };
-
     /// Maximum structural nesting accepted while constructing a JSON [`Value`].
     ///
     /// A Kotodama boundary value may use the complete 256-level public type
@@ -1265,7 +1241,6 @@ pub mod json {
             }
         }
     }
-
     mod bounded;
     mod canonical_base64;
     mod validated;
@@ -1281,7 +1256,6 @@ pub mod json {
     };
     #[doc(hidden)]
     pub use validated::write_validated_json_to;
-
     /// Stream bytes as one uppercase-hex JSON string through a checked sink.
     #[doc(hidden)]
     pub fn write_upper_hex_json_string_to(
@@ -1308,7 +1282,6 @@ pub mod json {
     pub mod value {
         pub use super::RawValue;
         use super::{Error, Value, parse_value, to_json};
-
         pub fn to_raw_value(value: &Value) -> Result<Box<RawValue>, Error> {
             let json = to_json(value)?;
             Ok(Box::new(RawValue::from_string(json)))
@@ -1344,9 +1317,7 @@ pub mod json {
     pub mod native {
         use core::mem;
         use std::{collections::BTreeMap, ops::Index};
-
         use super::ValueIndex;
-
         #[derive(Debug, Clone, Copy)]
         pub enum Number {
             I64(i64),
@@ -1771,21 +1742,16 @@ pub mod json {
             }
         }};
     }
-
     mod schema_support {
         use core::{any::TypeId, convert::TryFrom};
         use std::collections::{BTreeMap, btree_map::Entry as BTreeEntry};
-
         use iroha_schema::{
             ArrayMeta, BitmapMask, BitmapMeta, EnumMeta, EnumVariant, FixedMeta, FloatMode, Ident,
             IntMode, IntoSchema, MapMeta, MetaMap, MetaMapEntry, Metadata, NamedFieldsMeta,
             ResultMeta, TypeId as SchemaTypeId, UnnamedFieldsMeta,
         };
-
         use super::{JsonSerialize, Map, Number, Value};
-
         type EntryMap = BTreeMap<TypeId, MetaMapEntry>;
-
         impl JsonSerialize for MetaMap {
             fn json_serialize(&self, out: &mut String) {
                 let entries: EntryMap = self.clone().into_iter().collect();
@@ -2178,11 +2144,9 @@ pub mod json {
             out.push_str(formatted);
         }
     }
-
     // Native variants for Value
     fn write_value_to_string(v: &Value, out: &mut String, pretty: bool, depth: usize) {
         use native::Value as V;
-
         enum Task<'a> {
             Value(&'a Value, usize),
             Array {
@@ -2410,11 +2374,9 @@ pub mod json {
         // SAFETY: `value` is UTF-8 and was copied without modification.
         Ok(unsafe { String::from_utf8_unchecked(decoded) })
     }
-
     mod value_drop;
     pub use value_drop::drop_json_value_iteratively;
     use value_drop::{IterativeValueDropGuard, ValueParseFrame, ValueParseState};
-
     fn parse_object_key(p: &mut Parser<'_>) -> Result<String, Error> {
         let key = p.parse_string()?;
         p.skip_ws();
@@ -2703,12 +2665,10 @@ pub mod json {
         let s = std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
         parse_value(s)
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
         use crate::json;
-
         #[test]
         fn owned_value_decode_depth_guard_is_bounded_and_restores() {
             let guards = (0..crate::core::MAX_OWNED_VALUE_DECODE_DEPTH)
@@ -3095,11 +3055,9 @@ pub mod json {
                 );
             }
         }
-
         #[test]
         fn fast_writer_handles_reference_fields() {
             use crate::derive::JsonSerialize;
-
             #[derive(JsonSerialize)]
             struct Borrowed<'a> {
                 field: &'a u32,
@@ -5057,11 +5015,8 @@ pub mod json {
     }
     /// Marker trait mirroring `serde::de::DeserializeOwned` for Norito JSON.
     pub trait JsonDeserializeOwned: JsonDeserialize {}
-
     impl<T: JsonDeserialize> JsonDeserializeOwned for T {}
-
     pub use JsonDeserializeOwned as DeserializeOwned;
-
     fn json_from_value_via_string<T: JsonDeserialize>(value: &Value) -> Result<T, Error> {
         let json = to_json(value)?;
         let mut parser = Parser::new(&json);
@@ -5807,11 +5762,9 @@ pub mod json {
         }
         build_struct_index_scalar(input)
     }
-
     #[cfg(test)]
     mod accel_tape_validation_tests {
         use std::{ptr, slice};
-
         #[cfg(feature = "parallel-stage1")]
         use super::build_struct_index_parallel;
         use super::{
@@ -6217,7 +6170,6 @@ pub mod json {
     const STAGE1_GPU_MIN_DEFAULT: usize = 192 * 1024;
     #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
     static STAGE1_GPU_MIN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
     #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
     fn stage1_gpu_min_bytes_locked(_guard: &std::sync::MutexGuard<'static, ()>) -> usize {
         use std::sync::atomic::Ordering;
@@ -6245,13 +6197,10 @@ pub mod json {
         let guard = stage1_gpu_min_lock();
         stage1_gpu_min_bytes_locked(&guard)
     }
-
     #[cfg(test)]
     mod stage1_gpu_min_tests {
         use std::sync::atomic::Ordering;
-
         use super::{STAGE1_GPU_MIN, stage1_gpu_min_bytes_locked};
-
         #[test]
         fn defaults_when_env_missing() {
             let guard = super::stage1_gpu_min_lock();
@@ -6725,16 +6674,13 @@ pub mod json {
             Some(StructIndex { offsets })
         }
     }
-
     #[cfg(feature = "metal-stage1")]
     mod metal {
         use std::{
             ffi::{c_char, c_int, c_void},
             sync::{Mutex, OnceLock},
         };
-
         use super::StructIndex;
-
         #[cfg(unix)]
         unsafe extern "C" {
             fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
@@ -6779,9 +6725,7 @@ pub mod json {
                 if !avail {
                     return None;
                 }
-
                 use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
-
                 let mut lib = std::ptr::null_mut();
                 let mut candidates: Vec<PathBuf> = Vec::new();
                 if let Ok(exe) = env::current_exe()
@@ -6841,16 +6785,13 @@ pub mod json {
             }
         }
     }
-
     #[cfg(feature = "cuda-stage1")]
     mod cuda {
         use std::{
             ffi::{c_char, c_int, c_void},
             sync::{Mutex, OnceLock},
         };
-
         use super::StructIndex;
-
         #[cfg(unix)]
         unsafe extern "C" {
             fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
@@ -6870,11 +6811,9 @@ pub mod json {
                 *cache.lock().expect("cuda cache poisoned") = None;
             }
         }
-
         #[cfg(target_os = "macos")]
         unsafe fn load_cuda_library() -> Option<CudaLib> {
             use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
-
             let mut h = std::ptr::null_mut();
             let mut candidates: Vec<PathBuf> = Vec::new();
             if let Ok(exe) = env::current_exe()
@@ -6915,11 +6854,9 @@ pub mod json {
             }
             Some(CudaLib { _handle: h, func })
         }
-
         #[cfg(all(unix, not(target_os = "macos")))]
         unsafe fn load_cuda_library() -> Option<CudaLib> {
             use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
-
             let mut h = std::ptr::null_mut();
             let mut candidates: Vec<PathBuf> = Vec::new();
             if let Ok(exe) = env::current_exe()
@@ -6958,11 +6895,9 @@ pub mod json {
             }
             Some(CudaLib { _handle: h, func })
         }
-
         #[cfg(windows)]
         unsafe fn load_cuda_library() -> Option<CudaLib> {
             use std::{env, os::windows::ffi::OsStrExt, path::PathBuf, ptr};
-
             unsafe extern "system" {
                 fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
                 fn LoadLibraryExW(
@@ -9181,19 +9116,15 @@ pub mod json {
                 .map_err(|e| Error::Message(format!("failed to parse map key `{key}`: {e}")))
         }
     }
-
     mod raw_value;
     pub use raw_value::RawValue;
-
     mod preflight;
     pub use preflight::{
         JsonPreflightError, JsonPreflightLimits, JsonPreflightProfile, JsonPreflightResource,
         JsonPreflightSyntax, preflight_slice,
     };
-
     mod visitors;
     pub use visitors::{MapVisitor, SeqVisitor};
-
     pub trait Visitor<'a> {
         type Value;
         fn visit_null(self) -> Result<Self::Value, Error>;
@@ -9394,7 +9325,6 @@ pub mod json {
         use core::arch::aarch64::__crc32cb;
         __crc32cb(crc, byte)
     }
-
     #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
     #[target_feature(enable = "sse4.2")]
     unsafe fn crc32c_hw_update_byte(crc: u32, byte: u8) -> u32 {
@@ -9435,7 +9365,6 @@ where
     for<'de> T: NoritoDeserialize<'de>,
 {
     use core::Header;
-
     let header = Header::read(&mut reader)?;
     core::prepare_header_decode(header.flags, header.minor, false)?;
     if header.schema != T::schema_hash() {
@@ -9585,7 +9514,6 @@ where
         <T as NoritoDeserialize>::try_deserialize(archived.archived())
     })
 }
-
 /// Prelude with commonly used items.
 pub mod prelude {
     pub use super::{
@@ -9789,7 +9717,6 @@ where
     for<'de> T: NoritoDeserialize<'de>,
 {
     use std::io::Cursor;
-
     // Canonical frames are always uncompressed. Header flags are
     // value-dependent because the encoder removes dynamic layout flags that
     // the concrete value did not use, so validate the advertised combination
@@ -9997,13 +9924,9 @@ fn install_decode_panic_hook() {
         }));
     });
 }
-
 #[cfg(all(test, feature = "strict-safe"))]
 mod guarded_tests {
-    use super::{
-        Error, SUPPRESSED_DECODE_PANICS, decode_panic_suppressed, guarded_try_deserialize,
-    };
-
+    use super::{Error, SUPPRESSED_DECODE_PANICS, decode_panic_suppressed, guarded_try_deserialize};
     #[test]
     fn guarded_try_deserialize_catches_panics() {
         SUPPRESSED_DECODE_PANICS.with(|counter| counter.set(0));
@@ -10028,11 +9951,9 @@ mod guarded_tests {
         assert!(!decode_panic_suppressed());
     }
 }
-
 #[cfg(all(test, not(feature = "strict-safe")))]
 mod guarded_non_strict_tests {
     use super::{Error, guarded_try_deserialize};
-
     #[test]
     fn guarded_try_deserialize_propagates_panics_without_strict_safe() {
         let result = std::panic::catch_unwind(|| {
@@ -10252,7 +10173,6 @@ where
     Insert: FnMut(&mut M, K, V) -> Result<(), Error>,
 {
     use core::{Header, header_flags};
-
     let mut reader = reader;
     let header = Header::read(&mut reader)?;
     core::prepare_header_decode(header.flags, header.minor, false)?;
@@ -10621,7 +10541,6 @@ impl<T: Finishable> Drop for StreamFinishGuard<T> {
         }
     }
 }
-
 #[cfg(test)]
 mod json_stage1_reset_tests {
     #[test]
@@ -10629,10 +10548,8 @@ mod json_stage1_reset_tests {
         crate::json::reset_stage1_backends();
     }
 }
-
 /// Canonical JSON literal helpers used by higher-level codecs.
 pub mod literal;
-
 /// Convenience to wrap a stream iterator and ensure `finish()` is called on drop.
 pub fn finish_on_drop<T: Finishable>(iter: T, name: &'static str) -> StreamFinishGuard<T> {
     StreamFinishGuard::new(iter, name)
@@ -10686,7 +10603,6 @@ where
     /// Returns an error when the archive header or sequence metadata is invalid.
     pub fn new<R: Read + 'static>(mut reader: R) -> Result<Self, Error> {
         use core::Header;
-
         let header = Header::read(&mut reader)?;
         core::prepare_header_decode(header.flags, header.minor, true)?;
         type Top<U> = Vec<U>;

@@ -4,7 +4,6 @@
 //! Council. Requests can then reference manifests using a BLAKE3 digest derived
 //! from the salt and canonical CID instead of exposing the raw identifier on
 //! the wire.
-
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -13,23 +12,19 @@ use std::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
-
 use dashmap::DashMap;
 use hex::FromHex;
 use iroha_crypto::soranet::blinding::canonical_cache_key;
 use norito::json::Value as JsonValue;
 use sorafs_node::store::StoredManifest;
 use thiserror::Error;
-
 /// Width of the blinded CID digest (BLAKE3-256).
 pub const BLINDED_CID_LEN: usize = 32;
-
 /// Salt schedule loaded from Norito JSON announcements on disk.
 #[derive(Debug)]
 pub struct SaltSchedule {
     salts: DashMap<u32, [u8; 32]>,
 }
-
 impl SaltSchedule {
     /// Load salt announcements from the supplied directory.
     ///
@@ -44,11 +39,9 @@ impl SaltSchedule {
         let schedule = SaltSchedule {
             salts: DashMap::new(),
         };
-
         if !dir.exists() {
             return Err(SaltScheduleError::DirectoryMissing(dir.to_path_buf()));
         }
-
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -60,14 +53,12 @@ impl SaltSchedule {
                     continue;
                 }
             }
-
             let contents = fs::read_to_string(&path)?;
             let value: norito::json::Value =
                 norito::json::from_str(&contents).map_err(|source| SaltScheduleError::Parse {
                     path: path.clone(),
                     source,
                 })?;
-
             let epoch = value
                 .get("epoch_id")
                 .and_then(JsonValue::as_u64)
@@ -80,7 +71,6 @@ impl SaltSchedule {
                     path: path.clone(),
                     epoch,
                 })?;
-
             let salt_hex = value
                 .get("blinded_cid_salt_hex")
                 .and_then(|value| value.as_str())
@@ -88,7 +78,6 @@ impl SaltSchedule {
                     path: path.clone(),
                     field: "blinded_cid_salt_hex",
                 })?;
-
             let mut salt = [0u8; 32];
             let decoded =
                 Vec::from_hex(salt_hex.trim()).map_err(|source| SaltScheduleError::SaltDecode {
@@ -102,7 +91,6 @@ impl SaltSchedule {
                 });
             }
             salt.copy_from_slice(&decoded);
-
             if schedule.salts.insert(epoch_u32, salt).is_some() {
                 return Err(SaltScheduleError::DuplicateEpoch {
                     path: path.clone(),
@@ -110,21 +98,17 @@ impl SaltSchedule {
                 });
             }
         }
-
         if schedule.salts.is_empty() {
             return Err(SaltScheduleError::NoAnnouncementsFound(dir.to_path_buf()));
         }
-
         Ok(schedule)
     }
-
     /// Returns the 32-byte salt for the supplied epoch.
     #[must_use]
     pub fn salt(&self, epoch: u32) -> Option<[u8; 32]> {
         self.salts.get(&epoch).map(|entry| *entry)
     }
 }
-
 /// Error raised while loading the salt schedule.
 #[derive(Debug, Error)]
 pub enum SaltScheduleError {
@@ -186,7 +170,6 @@ pub enum SaltScheduleError {
     #[error("no salt announcements found in {0}")]
     NoAnnouncementsFound(PathBuf),
 }
-
 /// Error raised when resolving a blinded CID.
 #[derive(Debug, Error, PartialEq, Eq, Copy, Clone)]
 pub enum ResolveError {
@@ -194,7 +177,6 @@ pub enum ResolveError {
     #[error("salt epoch {0} is not known on this gateway")]
     UnknownEpoch(u32),
 }
-
 /// Resolver that maps blinded CIDs to canonical manifest identifiers.
 #[derive(Debug)]
 pub struct BlindedCidResolver {
@@ -202,7 +184,6 @@ pub struct BlindedCidResolver {
     cache: DashMap<(u32, [u8; BLINDED_CID_LEN]), String>,
     filters: DashMap<u32, Arc<EpochBloom>>,
 }
-
 impl BlindedCidResolver {
     /// Construct a new resolver backed by the supplied schedule.
     #[must_use]
@@ -213,7 +194,6 @@ impl BlindedCidResolver {
             filters: DashMap::new(),
         }
     }
-
     /// Resolve a blinded CID into a manifest identifier using the gateway's
     /// stored manifests.
     ///
@@ -232,7 +212,6 @@ impl BlindedCidResolver {
         if let Some(entry) = self.cache.get(&(epoch, *blinded)) {
             return Ok(Some(entry.clone()));
         }
-
         let manifest_count = manifests.len();
         let expected_capacity = manifest_count.max(1);
         let filter = match self.filters.entry(epoch) {
@@ -249,18 +228,15 @@ impl BlindedCidResolver {
                 Arc::clone(&vacant.insert(Arc::new(EpochBloom::new(expected_capacity))))
             }
         };
-
         let observed = filter.observed_items();
         let can_short_circuit = observed > 0 && observed >= manifest_count;
         if can_short_circuit && !filter.probably_contains(blinded) {
             return Ok(None);
         }
-
         let salt = self
             .schedule
             .salt(epoch)
             .ok_or(ResolveError::UnknownEpoch(epoch))?;
-
         let mut matched_id: Option<String> = None;
         for manifest in manifests {
             let derived = canonical_cache_key(&salt, manifest.manifest_cid());
@@ -270,16 +246,13 @@ impl BlindedCidResolver {
                 matched_id = Some(manifest.manifest_id().to_string());
             }
         }
-
         filter.record_population(manifest_count);
-
         matched_id.map_or(Ok(None), |manifest_id| {
             self.cache.insert((epoch, *blinded), manifest_id.clone());
             Ok(Some(manifest_id))
         })
     }
 }
-
 /// Lightweight bloom filter used to short-circuit blinded CID lookups.
 #[derive(Debug)]
 struct EpochBloom {
@@ -289,7 +262,6 @@ struct EpochBloom {
     capacity_hint: usize,
     observed_items: AtomicUsize,
 }
-
 impl EpochBloom {
     fn new(expected_items: usize) -> Self {
         let expected = expected_items.max(1);
@@ -307,32 +279,26 @@ impl EpochBloom {
             observed_items: AtomicUsize::new(0),
         }
     }
-
     fn capacity_hint(&self) -> usize {
         self.capacity_hint
     }
-
     fn observed_items(&self) -> usize {
         self.observed_items.load(Ordering::Relaxed)
     }
-
     fn record_population(&self, count: usize) {
         self.observed_items.store(count, Ordering::Relaxed);
     }
-
     fn probably_contains(&self, data: &[u8]) -> bool {
         self.check_bits(data, |word, mask| {
             word.load(Ordering::Relaxed) & mask == mask
         })
     }
-
     fn insert(&self, data: &[u8]) {
         self.check_bits(data, |word, mask| {
             word.fetch_or(mask, Ordering::Relaxed);
             true
         });
     }
-
     fn check_bits<F>(&self, data: &[u8], mut op: F) -> bool
     where
         F: FnMut(&AtomicU64, u64) -> bool,
@@ -357,15 +323,12 @@ impl EpochBloom {
         true
     }
 }
-
 #[cfg(test)]
 mod tests {
     use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
     use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
     use sorafs_node::{config::StorageConfig, store::StorageBackend};
-
     use super::*;
-
     fn storage_backend(temp_dir: &tempfile::TempDir) -> StorageBackend {
         StorageBackend::new(
             StorageConfig::builder()
@@ -375,7 +338,6 @@ mod tests {
         )
         .expect("open canonical test storage")
     }
-
     fn ingest_test_manifest(backend: &StorageBackend, payload: &[u8]) -> StoredManifest {
         let plan = CarBuildPlan::single_file(payload).expect("build canonical manifest plan");
         let car_stats = CarWriter::new(&plan, payload)
@@ -408,7 +370,6 @@ mod tests {
             .manifest(&manifest_id)
             .expect("read back canonical stored manifest")
     }
-
     #[test]
     fn salt_schedule_loads_announcements() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -420,7 +381,6 @@ mod tests {
             "blinded_cid_salt_hex": "ee4fd5a8a2b4e9c0f1dc1a67c962e8d9b4a1c0ffee112233445566778899aabb"
         }"#;
         fs::write(&path, payload).expect("write");
-
         let schedule = SaltSchedule::load_from_dir(dir.path()).expect("schedule");
         let salt = schedule.salt(1).expect("epoch");
         assert_eq!(
@@ -429,7 +389,6 @@ mod tests {
         );
         assert!(schedule.salt(2).is_none());
     }
-
     #[test]
     fn resolver_matches_manifest_by_blinded_cid() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -441,34 +400,28 @@ mod tests {
             "blinded_cid_salt_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
         }"#;
         fs::write(&path, payload).expect("write");
-
         let schedule = Arc::new(SaltSchedule::load_from_dir(dir.path()).expect("schedule"));
         let resolver = BlindedCidResolver::new(schedule);
         let backend = storage_backend(&dir);
-
         let manifests = vec![
             ingest_test_manifest(&backend, b"cid-alpha"),
             ingest_test_manifest(&backend, b"cid-beta"),
         ];
         let expected_manifest_id = manifests[1].manifest_id().to_owned();
-
         let salt = resolver.schedule.salt(42).expect("salt");
         let canonical = canonical_cache_key(&salt, manifests[1].manifest_cid());
         let mut blinded = [0u8; BLINDED_CID_LEN];
         blinded.copy_from_slice(canonical.as_bytes());
-
         let hit = resolver
             .resolve_manifest_id(&manifests, 42, &blinded)
             .expect("resolution");
         assert_eq!(hit.as_deref(), Some(expected_manifest_id.as_str()));
-
         // Cached lookups should not require manifest iteration.
         let cached = resolver
             .resolve_manifest_id(&[], 42, &blinded)
             .expect("cached resolution");
         assert_eq!(cached.as_deref(), Some(expected_manifest_id.as_str()));
     }
-
     #[test]
     fn resolver_bloom_updates_on_manifest_growth() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -480,16 +433,13 @@ mod tests {
             "blinded_cid_salt_hex": "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff00112233445566778899aabbccddeeff"
         }"#;
         fs::write(&path, payload).expect("write");
-
         let schedule = Arc::new(SaltSchedule::load_from_dir(dir.path()).expect("schedule"));
         let resolver = BlindedCidResolver::new(schedule);
         let backend = storage_backend(&dir);
-
         let mut manifests = vec![
             ingest_test_manifest(&backend, b"cid-alpha"),
             ingest_test_manifest(&backend, b"cid-beta"),
         ];
-
         // Prime the bloom filter.
         for manifest in &manifests {
             let salt = resolver.schedule.salt(100).expect("salt");
@@ -500,17 +450,14 @@ mod tests {
                 .resolve_manifest_id(&manifests, 100, &blinded)
                 .expect("resolution pass");
         }
-
         // Add a new manifest and ensure resolver still returns it.
         let new_manifest = ingest_test_manifest(&backend, b"cid-gamma");
         let expected_manifest_id = new_manifest.manifest_id().to_owned();
-
         let salt = resolver.schedule.salt(100).expect("salt");
         let canonical_new = canonical_cache_key(&salt, new_manifest.manifest_cid());
         let mut blinded_new = [0u8; BLINDED_CID_LEN];
         blinded_new.copy_from_slice(canonical_new.as_bytes());
         manifests.push(new_manifest);
-
         let resolved_manifest = resolver
             .resolve_manifest_id(&manifests, 100, &blinded_new)
             .expect("resolution");

@@ -1,6 +1,5 @@
 //! Benchmarks for phase-separated Kotodama compilation and execution in IVM.
 use std::{collections::BTreeMap, sync::Arc};
-
 use criterion::{BatchSize, Criterion};
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
@@ -16,14 +15,11 @@ use ivm::{
     kotodama::{parser, semantic::SemanticContext},
     pointer_abi::PointerType,
 };
-
 const LITERAL_BENCH_SIZE: usize = 512;
-
 fn kotodama_program() -> Vec<u8> {
     let src = "seiyaku Add { view fn add(int a, int b) -> int { return a + b; } }";
     Compiler::new().compile_source(src).expect("compile failed")
 }
-
 fn entrypoint_pc(program: &[u8], name: &str) -> u64 {
     let parsed = ProgramMetadata::parse(program).expect("parse Kotodama metadata");
     let entrypoint = parsed
@@ -36,7 +32,6 @@ fn entrypoint_pc(program: &[u8], name: &str) -> u64 {
         .expect("benchmark entrypoint exists");
     u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + entrypoint.entry_pc
 }
-
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -50,7 +45,6 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(Hash::new(payload).as_ref());
     out
 }
-
 fn int_result_i64(vm: &IVM) -> i64 {
     let tlv = vm
         .validate_tlv(vm.register(10))
@@ -62,7 +56,6 @@ fn int_result_i64(vm: &IVM) -> i64 {
         .try_to_i64()
         .expect("benchmark int result fits i64")
 }
-
 fn add_argument_host(program: &[u8]) -> DefaultHost {
     let parsed = ProgramMetadata::parse(program).expect("parse Kotodama metadata");
     let schema = parsed
@@ -85,7 +78,6 @@ fn add_argument_host(program: &[u8]) -> DefaultHost {
         tlv(PointerType::NoritoBytes, &payload),
     )]))
 }
-
 fn asm_program() -> Vec<u8> {
     let mut prog = ProgramMetadata::default().encode();
     let add = encode_add(3, 10, 11).to_le_bytes();
@@ -93,7 +85,6 @@ fn asm_program() -> Vec<u8> {
     prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     prog
 }
-
 // The measured reset statement is byte-for-byte the predecessor workload.
 // Exercise and check the dirty reset immediately before sampling instead.
 #[allow(unused_must_use)]
@@ -118,7 +109,6 @@ fn bench_kotodama(c: &mut Criterion) {
     let prepared =
         ivm::prepare_contract(Arc::from(code.clone())).expect("prepare benchmark contract once");
     assert_eq!(prepared.entrypoint_pc("add"), Some(pc));
-
     // Keep the benchmark honest: CNTR artifacts deliberately halt until an
     // entrypoint is selected, so validate the measured path before sampling.
     let mut verification_vm = IVM::new(u64::MAX);
@@ -131,7 +121,6 @@ fn bench_kotodama(c: &mut Criterion) {
     verification_vm.set_host(host.clone());
     verification_vm.run().expect("execute benchmark add");
     assert_eq!(int_result_i64(&verification_vm), 11);
-
     c.bench_function("kotodama_runtime_phase_prepare_validate_predecode", |b| {
         b.iter_batched(
             || Arc::<[u8]>::from(code.clone()),
@@ -144,7 +133,6 @@ fn bench_kotodama(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("kotodama_runtime_phase_argument_decode", |b| {
         b.iter_batched(
             || Arc::<[u8]>::from(argument_record.clone()),
@@ -157,7 +145,6 @@ fn bench_kotodama(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("kotodama_runtime_phase_load_prepared", |b| {
         b.iter_batched(
             || IVM::new(u64::MAX),
@@ -169,7 +156,6 @@ fn bench_kotodama(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     let mut vm = IVM::new(u64::MAX);
     vm.load_prepared(&prepared)
         .expect("load warm prepared benchmark artifact");
@@ -181,7 +167,6 @@ fn bench_kotodama(c: &mut Criterion) {
     assert_eq!(int_result_i64(&vm), 11);
     vm.reset_from_runtime_template(&template)
         .expect("preflight dirty warm runtime benchmark geometry");
-
     c.bench_function("kotodama_runtime_phase_dirty_reset", |b| {
         b.iter_batched(
             || {
@@ -205,7 +190,6 @@ fn bench_kotodama(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("kotodama_runtime_phase_execute_prepared", |b| {
         b.iter_batched(
             || {
@@ -226,7 +210,6 @@ fn bench_kotodama(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("kotodama_runtime_cold_add", |b| {
         b.iter(|| {
             let mut vm = IVM::new(u64::MAX);
@@ -237,7 +220,6 @@ fn bench_kotodama(c: &mut Criterion) {
             std::hint::black_box(vm.register(10));
         })
     });
-
     c.bench_function("kotodama_runtime_warm_add", |b| {
         b.iter(|| {
             vm.reset_from_runtime_template(&template);
@@ -247,7 +229,6 @@ fn bench_kotodama(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_asm(c: &mut Criterion) {
     let code = asm_program();
     c.bench_function("asm_add", |b| {
@@ -261,7 +242,6 @@ fn bench_asm(c: &mut Criterion) {
         })
     });
 }
-
 fn literal_heavy_source(count: usize) -> String {
     let mut src = String::from("seiyaku Literals {\n  kotoage fn main() authorize(\"Bench\") {\n");
     for i in 0..count {
@@ -272,7 +252,6 @@ fn literal_heavy_source(count: usize) -> String {
     src.push_str("  }\n}\n");
     src
 }
-
 fn bench_compiler_phases(c: &mut Criterion) {
     let source = literal_heavy_source(64);
     let source_phase = SourcePhase::new(
@@ -293,7 +272,6 @@ fn bench_compiler_phases(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     let parsed = source_phase
         .parse()
         .expect("prepare parsed benchmark source");
@@ -310,7 +288,6 @@ fn bench_compiler_phases(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     let resolved = parsed
         .resolve()
         .expect("prepare resolved-HIR benchmark source");
@@ -354,7 +331,6 @@ fn bench_compiler_phases(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     let typed = resolved
         .type_effect()
         .expect("prepare typed/effect-HIR benchmark source");
@@ -367,7 +343,6 @@ fn bench_compiler_phases(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("kotodama_phase_ssa_construct", |b| {
         b.iter_batched(
             || {
@@ -386,7 +361,6 @@ fn bench_compiler_phases(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("kotodama_phase_ssa_optimize", |b| {
         b.iter_batched(
             || {
@@ -401,7 +375,6 @@ fn bench_compiler_phases(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("kotodama_phase_de_ssa", |b| {
         b.iter_batched(
             || {
@@ -420,7 +393,6 @@ fn bench_compiler_phases(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("kotodama_phase_codegen", |b| {
         b.iter_batched(
             || {
@@ -442,7 +414,6 @@ fn bench_compiler_phases(c: &mut Criterion) {
         )
     });
 }
-
 fn bounded_list_source() -> String {
     let values = (0..64)
         .map(|value| value.to_string())
@@ -456,7 +427,6 @@ fn bounded_list_source() -> String {
         }} }}"
     )
 }
-
 fn bounded_list_runtime_source(manual: bool) -> String {
     let values = (0..64)
         .map(|value| value.to_string())
@@ -479,7 +449,6 @@ fn bounded_list_runtime_source(manual: bool) -> String {
         }} }}"
     )
 }
-
 fn warm_list_runtime(source: &str) -> (IVM, ivm::RuntimeTemplate) {
     let code = Compiler::new()
         .compile_source(source)
@@ -497,7 +466,6 @@ fn warm_list_runtime(source: &str) -> (IVM, ivm::RuntimeTemplate) {
         .expect("bounded List benchmark geometry must match");
     (vm, template)
 }
-
 // `warm_list_runtime` checks the dirty reset and result before Criterion starts;
 // retain the predecessor's exact measured reset statement in both workloads.
 #[allow(unused_must_use)]
@@ -512,7 +480,6 @@ fn bench_compiled_bounded_list_runtime(c: &mut Criterion) {
             std::hint::black_box(sugar_vm.register(10));
         })
     });
-
     let (mut manual_vm, manual_template) = warm_list_runtime(&bounded_list_runtime_source(true));
     c.bench_function("kotodama_list_manual_runtime_64", |b| {
         b.iter(|| {
@@ -522,7 +489,6 @@ fn bench_compiled_bounded_list_runtime(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_bounded_lists(c: &mut Criterion) {
     let source = bounded_list_source();
     let parsed = SourcePhase::new(
@@ -546,7 +512,6 @@ fn bench_bounded_lists(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     let typed = resolved
         .type_effect()
         .expect("analyze bounded List benchmark");
@@ -557,13 +522,11 @@ fn bench_bounded_lists(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     let layout = ivm::list::ListLayoutV1::try_new(64, 1).expect("bounded List layout");
     let elements = (0..63).map(|value| vec![value]).collect::<Vec<_>>();
     let mut vm = IVM::new(u64::MAX);
     let handle = ivm::list::allocate_words(&mut vm, layout, &elements)
         .expect("allocate contiguous bounded List");
-
     c.bench_function("kotodama_list_get_64", |b| {
         b.iter(|| {
             std::hint::black_box(
@@ -596,15 +559,12 @@ fn bench_bounded_lists(c: &mut Criterion) {
         })
     });
 }
-
 fn quantity(value: &str) -> Quantity {
     value.parse().expect("benchmark quantity literal parses")
 }
-
 fn decimal(value: &str) -> Numeric {
     value.parse().expect("benchmark decimal literal parses")
 }
-
 fn bench_decimal_arithmetic(c: &mut Criterion) {
     let add_lhs = decimal("-1234567890123456789012345678901234567890.1234567890123456789012345678");
     let add_rhs = decimal("0.8765432109876543210987654321");
@@ -614,7 +574,6 @@ fn bench_decimal_arithmetic(c: &mut Criterion) {
     let exact_lhs = decimal("-123456789012345678901234567890.125");
     let exact_divisor = decimal("8");
     let rounded_divisor = decimal("7");
-
     c.bench_function("kotodama_decimal_add", |b| {
         b.iter(|| {
             std::hint::black_box(
@@ -670,7 +629,6 @@ fn bench_decimal_arithmetic(c: &mut Criterion) {
         });
     }
 }
-
 fn bench_quantity_arithmetic(c: &mut Criterion) {
     let add_lhs = quantity("1234567890123456789012345678901234567890.1234567890123456789012345678");
     let add_rhs = quantity("0.8765432109876543210987654321");
@@ -680,7 +638,6 @@ fn bench_quantity_arithmetic(c: &mut Criterion) {
     let exact_lhs = quantity("123456789012345678901234567890.125");
     let exact_divisor = quantity("8");
     let rounded_divisor = quantity("7");
-
     c.bench_function("kotodama_quantity_add", |b| {
         b.iter(|| {
             std::hint::black_box(
@@ -736,7 +693,6 @@ fn bench_quantity_arithmetic(c: &mut Criterion) {
         });
     }
 }
-
 fn bench_literal_heavy_compile(c: &mut Criterion) {
     let src = literal_heavy_source(LITERAL_BENCH_SIZE);
     let compiler = Compiler::new();
@@ -749,7 +705,6 @@ fn bench_literal_heavy_compile(c: &mut Criterion) {
         })
     });
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     // Silence ASCII banner and feature selection in benches.

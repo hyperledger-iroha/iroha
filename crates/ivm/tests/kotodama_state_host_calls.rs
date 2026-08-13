@@ -1,8 +1,6 @@
 //! Kotodama calls to durable state helpers through the public `state` namespace.
-
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
-
 fn encoded_state_path(name: &str, key: i64) -> String {
     let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
         i128::from(key),
@@ -10,7 +8,6 @@ fn encoded_state_path(name: &str, key: i64) -> String {
     .expect("encode canonical pointer-backed StateMap key");
     format!("{name}/{}", hex::encode(key))
 }
-
 #[test]
 fn kotodama_host_state_calls_run() {
     // Store a small bytes payload under a canonical StateMap path, then read and

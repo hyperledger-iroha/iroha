@@ -5,14 +5,11 @@
 //! helpers. They are split out of `iroha_core` so that other crates (e.g.,
 //! Torii, genesis tooling, or test harnesses) can construct and inspect
 //! consensus payloads without depending on the core runtime crate.
-
 use core::{fmt, num::NonZeroU64};
 use std::{string::String, vec::Vec};
-
 use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, DecodeAll, Encode};
-
 use super::{BlockSignature, Header as BlockHeader};
 use crate::{
     NetworkId,
@@ -23,18 +20,15 @@ use crate::{
     transaction::TransactionSubmissionReceipt,
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
-
 /// Wire protocol version for the legacy Sumeragi v1 archival message family.
 ///
 /// Live consensus rejects this family. New validators use
 /// [`super::consensus_v2`] and its explicit v2 envelope.
 pub const PROTO_VERSION: u32 = 1;
-
 /// Legacy permissioned-mode tag retained for decoding and archival verification.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v1";
 /// Legacy `NPoS` mode tag retained for decoding and archival verification.
 pub const NPOS_TAG: &str = "iroha2-consensus::npos-sumeragi@v1";
-
 /// Chain-order hash used by fixtures that do not model live validator ordering.
 ///
 /// Live consensus code should populate QC votes and certificates with the
@@ -43,14 +37,12 @@ pub const NPOS_TAG: &str = "iroha2-consensus::npos-sumeragi@v1";
 pub fn default_chain_order_hash() -> Hash {
     Hash::new(b"iroha:sumeragi:v1:chain-order:default")
 }
-
 /// Height alias for consensus.
 pub type Height = u64;
 /// View/round number alias.
 pub type View = u64;
 /// Validator index within the active set.
 pub type ValidatorIndex = u32;
-
 /// Canonical consensus parameters included in the genesis fingerprint.
 ///
 /// These parameters are encoded with Norito (binary) in a fixed order to
@@ -68,7 +60,6 @@ pub struct ConsensusGenesisParams {
     /// Required signed inputs for constructing Sumeragi v2 height contexts.
     pub v2_context: super::consensus_v2::SumeragiV2GenesisContextParameters,
 }
-
 /// Type-safe first-release consensus mode carrier.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ConsensusGenesisModeParams {
@@ -77,7 +68,6 @@ pub enum ConsensusGenesisModeParams {
     /// Nominated proof-of-stake consensus and its signed election inputs.
     Npos(NposGenesisParams),
 }
-
 impl ConsensusGenesisParams {
     /// Validate every frozen first-release consensus input before fingerprinting or use.
     ///
@@ -100,7 +90,6 @@ impl ConsensusGenesisParams {
         Ok(())
     }
 }
-
 /// `NPoS`-specific consensus parameters hashed into the genesis fingerprint.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct NposGenesisParams {
@@ -133,7 +122,6 @@ pub struct NposGenesisParams {
     /// Slashing delay in blocks before evidence penalties apply.
     pub slashing_delay_blocks: u64,
 }
-
 impl NposGenesisParams {
     /// Validate signed `NPoS` election and reconfiguration inputs.
     ///
@@ -179,7 +167,6 @@ impl NposGenesisParams {
         Ok(())
     }
 }
-
 /// Consensus certificate phases (BLS-only).
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
@@ -196,18 +183,15 @@ pub enum CertPhase {
     /// New-view certificate for view change.
     NewView = 3,
 }
-
 impl TypeId for CertPhase {
     fn id() -> Ident {
         "CertPhase".to_owned()
     }
 }
-
 impl IntoSchema for CertPhase {
     fn type_name() -> Ident {
         "CertPhase".to_owned()
     }
-
     fn update_schema_map(metamap: &mut MetaMap) {
         let variants = vec![
             EnumVariant {
@@ -229,7 +213,6 @@ impl IntoSchema for CertPhase {
         metamap.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
     }
 }
-
 /// Reference to an existing QC header for embedding in proposals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -248,7 +231,6 @@ pub struct QcRef {
     /// Phase certified by the certificate.
     pub phase: CertPhase,
 }
-
 /// Block header fields essential for consensus (proposal header subset).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct ConsensusBlockHeader {
@@ -269,7 +251,6 @@ pub struct ConsensusBlockHeader {
     /// Embedded reference to the highest QC known to the proposer.
     pub highest_qc: QcRef,
 }
-
 /// Proposal message with payload commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct Proposal {
@@ -278,7 +259,6 @@ pub struct Proposal {
     /// Hash of the full block payload (DA). Used for availability tracking.
     pub payload_hash: Hash,
 }
-
 /// QC vote over a specific block and phase (BLS-only).
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -313,7 +293,6 @@ pub struct QcVote {
     /// BLS signature over the canonical QC-vote preimage.
     pub bls_sig: Vec<u8>,
 }
-
 /// BLS aggregate signature envelope with signer bitmap for constant-size certificates.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -326,7 +305,6 @@ pub struct QcAggregate {
     /// BLS12-381 aggregate signature bytes (compressed).
     pub bls_aggregate_signature: Vec<u8>,
 }
-
 /// QC certifying a phase for a block.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -367,7 +345,6 @@ pub struct Qc {
     /// Aggregate signature and signer bitmap.
     pub aggregate: QcAggregate,
 }
-
 /// Evidence kinds for slashing or governance penalties.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub enum EvidenceKind {
@@ -385,7 +362,6 @@ pub enum EvidenceKind {
     /// height context.
     SumeragiV2Equivocation = 5,
 }
-
 /// Self-contained frozen context and exact signed artifacts for one Sumeragi
 /// v2 equivocation proof.
 ///
@@ -407,7 +383,6 @@ pub struct SumeragiV2EquivocationEvidence {
     /// Exact pair of conflicting signed artifacts.
     pub conflict: super::consensus_v2::SumeragiV2Equivocation,
 }
-
 /// Schema projection of the named fields in [`EvidencePayload::DoubleVote`].
 #[derive(IntoSchema)]
 pub struct DoubleVoteEvidencePayloadSchema {
@@ -416,7 +391,6 @@ pub struct DoubleVoteEvidencePayloadSchema {
     /// Second observed vote.
     pub v2: QcVote,
 }
-
 /// Schema projection of the named fields in [`EvidencePayload::InvalidQc`].
 #[derive(IntoSchema)]
 pub struct InvalidQcEvidencePayloadSchema {
@@ -425,7 +399,6 @@ pub struct InvalidQcEvidencePayloadSchema {
     /// Human-readable invalidity reason.
     pub reason: String,
 }
-
 /// Schema projection of the named fields in
 /// [`EvidencePayload::InvalidProposal`].
 #[derive(IntoSchema)]
@@ -435,7 +408,6 @@ pub struct InvalidProposalEvidencePayloadSchema {
     /// Human-readable invalidity reason.
     pub reason: String,
 }
-
 /// Schema projection of the named fields in [`EvidencePayload::Censorship`].
 #[derive(IntoSchema)]
 pub struct CensorshipEvidencePayloadSchema {
@@ -444,7 +416,6 @@ pub struct CensorshipEvidencePayloadSchema {
     /// Signed submission receipts from validators.
     pub receipts: Vec<TransactionSubmissionReceipt>,
 }
-
 /// Evidence payloads.
 #[expect(
     clippy::large_enum_variant,
@@ -484,7 +455,6 @@ pub enum EvidencePayload {
     /// Exact, independently verifiable Sumeragi v2 equivocation material.
     SumeragiV2Equivocation(SumeragiV2EquivocationEvidence),
 }
-
 /// Evidence wrapper.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct Evidence {
@@ -493,18 +463,15 @@ pub struct Evidence {
     /// Detailed payload carrying the offending material.
     pub payload: EvidencePayload,
 }
-
 impl TypeId for EvidenceKind {
     fn id() -> Ident {
         "EvidenceKind".to_owned()
     }
 }
-
 impl IntoSchema for EvidenceKind {
     fn type_name() -> Ident {
         "EvidenceKind".to_owned()
     }
-
     fn update_schema_map(metamap: &mut MetaMap) {
         let variants = vec![
             EnumVariant {
@@ -541,18 +508,15 @@ impl IntoSchema for EvidenceKind {
         metamap.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
     }
 }
-
 impl TypeId for EvidencePayload {
     fn id() -> Ident {
         "EvidencePayload".to_owned()
     }
 }
-
 impl IntoSchema for EvidencePayload {
     fn type_name() -> Ident {
         "EvidencePayload".to_owned()
     }
-
     fn update_schema_map(metamap: &mut MetaMap) {
         if metamap.contains_key::<Self>() {
             return;
@@ -593,7 +557,6 @@ impl IntoSchema for EvidencePayload {
         }));
     }
 }
-
 impl Ord for Evidence {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         let left = self.encode();
@@ -601,13 +564,11 @@ impl Ord for Evidence {
         left.cmp(&right)
     }
 }
-
 impl PartialOrd for Evidence {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-
 /// Persisted evidence entry annotated with commit metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct EvidenceRecord {
@@ -641,7 +602,6 @@ pub struct EvidenceRecord {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub consensus_admitted_at_height: Option<Height>,
 }
-
 /// Membership snapshot exported through `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -663,7 +623,6 @@ pub struct SumeragiMembershipStatus {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub view_hash: Option<[u8; 32]>,
 }
-
 /// Membership mismatch snapshot exported through `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -699,7 +658,6 @@ pub struct SumeragiMembershipMismatchStatus {
     #[norito(default)]
     pub last_timestamp_ms: u64,
 }
-
 /// Aggregated per-lane commitment summary reported by Sumeragi status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -722,7 +680,6 @@ pub struct SumeragiLaneCommitment {
     /// Block hash anchoring the commitment.
     pub block_hash: HashOf<BlockHeader>,
 }
-
 /// Aggregated per-dataspace commitment summary reported by Sumeragi status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -747,7 +704,6 @@ pub struct SumeragiDataspaceCommitment {
     /// Block hash anchoring the commitment.
     pub block_hash: HashOf<BlockHeader>,
 }
-
 /// Execution status for a certified lane block whose payload is not locally recoverable yet.
 pub const COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD: &str = "awaiting_executable_payload";
 /// Execution status for a certified lane block whose payload can be recovered for execution.
@@ -774,7 +730,6 @@ pub const COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK: &str =
 /// Execution status for a certified lane block directly applied to the local WSV.
 pub const COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION: &str =
     "state_applied_by_direct_execution";
-
 /// Whether a committed lane-block status may count as rollout progress evidence.
 ///
 /// Rejected preflight evidence is an execution blocker, not progress: it proves
@@ -797,7 +752,6 @@ pub fn committed_lane_block_status_counts_as_progress(
         _ => false,
     }
 }
-
 /// Certified standalone lane-local block summary reported by Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -840,7 +794,6 @@ pub struct SumeragiCommittedLaneBlock {
     /// Signers present in the commit QC.
     pub commit_qc_signer_count: u32,
 }
-
 /// Planned lane-local payload ownership exported by Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -890,7 +843,6 @@ pub struct SumeragiLanePayloadOwnership {
     /// Stable digest naming the lane-local RBC instance for this payload.
     pub rbc_instance_hash: Hash,
 }
-
 #[derive(Clone, Debug, Encode)]
 struct LaneBlockProposalPreimage {
     purpose: String,
@@ -914,7 +866,6 @@ struct LaneBlockProposalPreimage {
     min_quorum: u32,
     qc_mode_tag: String,
 }
-
 /// Canonical descriptor for a standalone lane-local block proposal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -966,7 +917,6 @@ pub struct LaneBlockDescriptorV1 {
     /// Stable descriptor digest binding predecessor, work, ownership, committee, and quorum.
     pub descriptor_hash: Hash,
 }
-
 impl LaneBlockDescriptorV1 {
     /// Compute the canonical descriptor hash from all descriptor fields except `descriptor_hash`.
     #[must_use]
@@ -998,14 +948,12 @@ impl LaneBlockDescriptorV1 {
             .expect("lane block descriptor must encode"),
         )
     }
-
     /// Compute the canonical validator-set hash for the embedded validator order.
     #[must_use]
     pub fn computed_validator_set_hash(&self) -> HashOf<Vec<PeerId>> {
         HashOf::new(&self.validator_set)
     }
 }
-
 /// Advisory pointer to the canonical global block that carried a lane payload.
 ///
 /// This is deliberately not part of [`LaneBlockProposalV1::computed_proposal_hash`].
@@ -1026,7 +974,6 @@ pub struct LaneBlockProposalPayloadHintV1 {
     /// Hash of the global block body that carried the lane payload ownership.
     pub proposal_block_hash: HashOf<BlockHeader>,
 }
-
 /// Canonical standalone lane-local block proposal artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1044,7 +991,6 @@ pub struct LaneBlockProposalV1 {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub payload_block_hint: Option<LaneBlockProposalPayloadHintV1>,
 }
-
 impl LaneBlockProposalV1 {
     /// Compute the canonical proposal hash from the embedded descriptor.
     #[must_use]
@@ -1076,20 +1022,17 @@ impl LaneBlockProposalV1 {
             .expect("lane block proposal must encode"),
         )
     }
-
     /// Return `true` when two proposals identify the same certified lane block.
     #[must_use]
     pub fn same_consensus_identity(&self, other: &Self) -> bool {
         self.descriptor == other.descriptor && self.proposal_hash == other.proposal_hash
     }
-
     /// Attach a payload recovery hint without changing the proposal identity.
     #[must_use]
     pub fn with_payload_block_hint(mut self, hint: LaneBlockProposalPayloadHintV1) -> Self {
         self.payload_block_hint = Some(hint);
         self
     }
-
     /// Build a canonical lane-block vote body for this proposal and phase.
     #[must_use]
     pub fn vote_body(&self, phase: CertPhase) -> LaneBlockVoteBodyV1 {
@@ -1117,7 +1060,6 @@ impl LaneBlockProposalV1 {
         }
     }
 }
-
 /// Canonical lane-local block vote payload signed by lane committees.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1164,7 +1106,6 @@ pub struct LaneBlockVoteBodyV1 {
     /// Domain-separated QC mode tag for this lane block.
     pub qc_mode_tag: String,
 }
-
 impl LaneBlockVoteBodyV1 {
     /// Build the domain-separated signature preimage for this lane-block vote body.
     #[must_use]
@@ -1177,7 +1118,6 @@ impl LaneBlockVoteBodyV1 {
         out
     }
 }
-
 /// Exact autonomous lane payload retained by one READY signer.
 ///
 /// The body names both the immutable payload's origin proposal and the
@@ -1237,7 +1177,6 @@ pub struct LanePayloadAvailabilityBodyV1 {
     /// Lane consensus domain tag.
     pub qc_mode_tag: String,
 }
-
 impl LanePayloadAvailabilityBodyV1 {
     /// Build the domain-separated READY signature preimage.
     #[must_use]
@@ -1250,7 +1189,6 @@ impl LanePayloadAvailabilityBodyV1 {
         out
     }
 }
-
 /// Quorum proof that the exact autonomous executable payload is durably held.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1273,7 +1211,6 @@ pub struct LanePayloadAvailabilityQcV1 {
     /// BLS12-381 aggregate READY signature bytes (compressed).
     pub bls_aggregate_signature: Vec<u8>,
 }
-
 /// Validator-set proof for a standalone lane-local block proposal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1301,7 +1238,6 @@ pub struct LaneBlockQcV1 {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub payload_availability_qc: Option<LanePayloadAvailabilityQcV1>,
 }
-
 /// Complete certified lane-block artifact used for authenticated recovery.
 ///
 /// A lagging validator retransmits the exact canonical proposal as an
@@ -1321,7 +1257,6 @@ pub struct LaneBlockCertificateV1 {
     /// Commit quorum certificate for [`Self::proposal`].
     pub commit_qc: LaneBlockQcV1,
 }
-
 #[derive(Clone, Debug, Encode)]
 struct LanePayloadOwnershipSubjectPreimage {
     version: u8,
@@ -1334,7 +1269,6 @@ struct LanePayloadOwnershipSubjectPreimage {
     candidate_hashes: Vec<Hash>,
     qc_mode_tag: String,
 }
-
 #[derive(Clone, Debug, Encode)]
 struct LanePayloadOwnershipPreimage {
     purpose: String,
@@ -1349,7 +1283,6 @@ struct LanePayloadOwnershipPreimage {
     candidate_hashes: Vec<Hash>,
     qc_mode_tag: String,
 }
-
 #[derive(Clone, Debug, Encode)]
 struct LanePayloadOwnershipRbcPreimage {
     purpose: String,
@@ -1362,7 +1295,6 @@ struct LanePayloadOwnershipRbcPreimage {
     subject_hash: Hash,
     payload_ownership_hash: Hash,
 }
-
 #[derive(Clone, Debug, Encode)]
 struct LaneBlockDescriptorPreimage {
     purpose: String,
@@ -1387,7 +1319,6 @@ struct LaneBlockDescriptorPreimage {
     min_quorum: u32,
     qc_mode_tag: String,
 }
-
 /// Canonical lane payload ownership replay hashes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SumeragiLanePayloadOwnershipReplayHashes {
@@ -1400,7 +1331,6 @@ pub struct SumeragiLanePayloadOwnershipReplayHashes {
     /// Expected standalone lane block descriptor hash.
     pub lane_block_descriptor_hash: Hash,
 }
-
 /// Validation error for lane payload ownership replay material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SumeragiLanePayloadOwnershipReplayError {
@@ -1441,7 +1371,6 @@ pub enum SumeragiLanePayloadOwnershipReplayError {
     /// Descriptor hash does not match the replay material.
     DescriptorHashMismatch,
 }
-
 impl fmt::Display for SumeragiLanePayloadOwnershipReplayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
@@ -1469,7 +1398,6 @@ impl fmt::Display for SumeragiLanePayloadOwnershipReplayError {
         f.write_str(message)
     }
 }
-
 impl SumeragiLanePayloadOwnership {
     /// Compute the canonical lane-local subject hash from replay material.
     ///
@@ -1506,7 +1434,6 @@ impl SumeragiLanePayloadOwnership {
             .map_err(|_| SumeragiLanePayloadOwnershipReplayError::Encode)?,
         ))
     }
-
     /// Compute the canonical lane-local payload ownership hash.
     ///
     /// # Errors
@@ -1545,7 +1472,6 @@ impl SumeragiLanePayloadOwnership {
             .map_err(|_| SumeragiLanePayloadOwnershipReplayError::Encode)?,
         ))
     }
-
     /// Compute the canonical lane-local RBC instance hash.
     ///
     /// # Errors
@@ -1576,7 +1502,6 @@ impl SumeragiLanePayloadOwnership {
             .map_err(|_| SumeragiLanePayloadOwnershipReplayError::Encode)?,
         ))
     }
-
     /// Compute canonical replay hashes from the embedded descriptor material.
     ///
     /// # Errors
@@ -1651,7 +1576,6 @@ impl SumeragiLanePayloadOwnership {
             lane_block_descriptor_hash,
         })
     }
-
     /// Validate embedded replay material and all canonical ownership hashes.
     ///
     /// # Errors
@@ -1674,7 +1598,6 @@ impl SumeragiLanePayloadOwnership {
         }
         Ok(())
     }
-
     fn validate_replay_shape(&self) -> Result<(), SumeragiLanePayloadOwnershipReplayError> {
         if self.lane_incarnation.as_ref().iter().all(|byte| *byte == 0) {
             return Err(SumeragiLanePayloadOwnershipReplayError::ZeroLaneIncarnation);
@@ -1738,7 +1661,6 @@ impl SumeragiLanePayloadOwnership {
         Ok(())
     }
 }
-
 /// Deterministic settlement receipt emitted for audit and reconciliation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1760,7 +1682,6 @@ pub struct LaneSettlementReceipt {
     /// UTC timestamp in milliseconds when the receipt was generated.
     pub timestamp_ms: u64,
 }
-
 /// Deterministic Nexus fee schedule inputs captured for asynchronous settlement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1783,7 +1704,6 @@ pub struct NexusFeeScheduleInputs {
     /// Per-gas-unit fee from `nexus.fees.per_gas_unit_fee`.
     pub per_gas_unit_fee: Quantity,
 }
-
 /// Versioned Nexus fee receipt committed by a finalized lane block.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1818,12 +1738,10 @@ pub struct NexusFeeReceipt {
     /// Fee schedule inputs needed to recompute [`Self::fee_amount`].
     pub schedule: NexusFeeScheduleInputs,
 }
-
 impl NexusFeeReceipt {
     /// Clean-break receipt version carrying typed debit sources and canonical assets.
     pub const VERSION: u16 = 2;
 }
-
 /// Native AMX v2 receipt version accepted by live diagnostics clients.
 pub const NATIVE_AMX_RECEIPT_VERSION_V2: u16 = 2;
 /// Maximum number of ordered transaction sources in one grouped Native AMX control.
@@ -1834,7 +1752,6 @@ pub const NATIVE_AMX_PARTICIPANT_LEGS_MAX: usize = 255;
 pub const NATIVE_AMX_VALIDATORS_MAX: usize = 128;
 /// Canonical compressed BLS-normal proof-of-possession and signature size.
 pub const NATIVE_AMX_BLS_PROOF_BYTES: usize = 96;
-
 /// Phase certified by a native AMX participant committee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1853,7 +1770,6 @@ pub enum NativeAmxPhase {
     /// Participant committed its dataspace-local leg.
     Commit,
 }
-
 /// Canonical Sumeragi v2 native AMX attestation payload.
 ///
 /// The exact frozen round and election epoch are part of the signed payload,
@@ -1919,7 +1835,6 @@ pub struct NativeAmxAttestationBodyV2 {
     /// Exact coordinator lane-block proposal authenticated by the full-plan request.
     pub coordinator_proposal_hash: Hash,
 }
-
 impl NativeAmxAttestationBodyV2 {
     /// Build the domain-separated signature preimage for this v2 attestation.
     #[must_use]
@@ -1931,7 +1846,6 @@ impl NativeAmxAttestationBodyV2 {
         );
         out
     }
-
     /// Build the exact grouped zero-effect participant settlement certified by this body.
     ///
     /// The ordered source group is shared by every receipt in one Native AMX
@@ -1990,7 +1904,6 @@ impl NativeAmxAttestationBodyV2 {
             native_amx_receipts: Vec::new(),
         })
     }
-
     /// Compute the commitment to an exact grouped participant settlement.
     ///
     /// # Errors
@@ -2008,7 +1921,6 @@ impl NativeAmxAttestationBodyV2 {
         ))
     }
 }
-
 /// Error returned when a native AMX validator set and its proofs of possession
 /// are not aligned one-for-one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2016,7 +1928,6 @@ pub struct NativeAmxAttestationQcV2AlignmentError {
     validator_count: usize,
     proof_count: usize,
 }
-
 impl NativeAmxAttestationQcV2AlignmentError {
     const fn new(validator_count: usize, proof_count: usize) -> Self {
         Self {
@@ -2024,20 +1935,17 @@ impl NativeAmxAttestationQcV2AlignmentError {
             proof_count,
         }
     }
-
     /// Number of validators supplied to the rejected constructor or decoder.
     #[must_use]
     pub const fn validator_count(self) -> usize {
         self.validator_count
     }
-
     /// Number of proofs of possession supplied to the rejected constructor or decoder.
     #[must_use]
     pub const fn proof_count(self) -> usize {
         self.proof_count
     }
 }
-
 impl fmt::Display for NativeAmxAttestationQcV2AlignmentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -2047,9 +1955,7 @@ impl fmt::Display for NativeAmxAttestationQcV2AlignmentError {
         )
     }
 }
-
 impl std::error::Error for NativeAmxAttestationQcV2AlignmentError {}
-
 /// Validator-set proof for a context-bound native AMX v2 attestation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
@@ -2072,7 +1978,6 @@ pub struct NativeAmxAttestationQcV2 {
     /// BLS12-381 aggregate signature bytes (compressed).
     pub bls_aggregate_signature: Vec<u8>,
 }
-
 impl NativeAmxAttestationQcV2 {
     /// Construct a certificate with an aligned validator set and proof vector.
     ///
@@ -2105,25 +2010,21 @@ impl NativeAmxAttestationQcV2 {
             bls_aggregate_signature,
         })
     }
-
     /// Return the ordered validator set certified by this QC.
     #[must_use]
     pub fn validator_set(&self) -> &[PeerId] {
         &self.validator_set
     }
-
     /// Return the proofs of possession aligned with [`Self::validator_set`].
     #[must_use]
     pub fn validator_set_pops(&self) -> &[Vec<u8>] {
         &self.validator_set_pops
     }
-
     /// Recompute the canonical hash of the embedded validator set.
     #[must_use]
     pub fn computed_validator_set_hash(&self) -> HashOf<Vec<PeerId>> {
         HashOf::new(&self.validator_set)
     }
-
     /// Iterate over validator/proof pairs without independent indexing.
     pub fn validators_with_pops(&self) -> impl ExactSizeIterator<Item = (&PeerId, &[u8])> {
         self.validator_set
@@ -2132,7 +2033,6 @@ impl NativeAmxAttestationQcV2 {
             .map(|(validator, pop)| (validator, pop.as_slice()))
     }
 }
-
 #[derive(Clone, Debug, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -2145,10 +2045,8 @@ struct NativeAmxAttestationQcV2Wire {
     signers_bitmap: Vec<u8>,
     bls_aggregate_signature: Vec<u8>,
 }
-
 impl TryFrom<NativeAmxAttestationQcV2Wire> for NativeAmxAttestationQcV2 {
     type Error = NativeAmxAttestationQcV2AlignmentError;
-
     fn try_from(wire: NativeAmxAttestationQcV2Wire) -> Result<Self, Self::Error> {
         Self::try_new(
             wire.body,
@@ -2161,16 +2059,13 @@ impl TryFrom<NativeAmxAttestationQcV2Wire> for NativeAmxAttestationQcV2 {
         )
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for NativeAmxAttestationQcV2 {
     fn schema_hash() -> [u8; 16] {
         <Self as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("native AMX attestation QC wire invariant must hold")
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -2181,7 +2076,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for NativeAmxAttestationQcV2 {
         Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for NativeAmxAttestationQcV2 {
     fn json_deserialize(
@@ -2194,7 +2088,6 @@ impl norito::json::JsonDeserialize for NativeAmxAttestationQcV2 {
         Self::try_from(wire).map_err(|error| norito::json::Error::Message(error.to_string()))
     }
 }
-
 /// Per-dataspace native AMX v2 leg committed by the routing-plan coordinator.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2218,19 +2111,16 @@ pub struct NativeAmxLegRecordV2 {
     /// Context-bound participant commit QC.
     pub commit_qc: NativeAmxAttestationQcV2,
 }
-
 impl Ord for NativeAmxLegRecordV2 {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.encode().cmp(&other.encode())
     }
 }
-
 impl PartialOrd for NativeAmxLegRecordV2 {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-
 /// Versioned native AMX receipt committed by a finalized coordinator block.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2264,7 +2154,6 @@ pub struct NativeAmxReceipt {
     /// Prepared and committed dataspace legs.
     pub legs: Vec<NativeAmxLegRecordV2>,
 }
-
 impl NativeAmxLegRecordV2 {
     /// Return whether this leg needs block-wide mixed-role anchor validation.
     ///
@@ -2283,7 +2172,6 @@ impl NativeAmxLegRecordV2 {
             .contains(&entrypoint_hash)
     }
 }
-
 /// Liquidity profile applied when computing XOR conversions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2299,7 +2187,6 @@ pub enum LaneLiquidityProfile {
     /// Thin pools or credit-constrained venues.
     Tier3,
 }
-
 /// Volatility bucket applied when computing the safety margin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -2316,7 +2203,6 @@ pub enum LaneVolatilityClass {
     /// Dislocated markets requiring maximal margin.
     Dislocated,
 }
-
 /// Swap metadata describing the deterministic conversion parameters.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2336,7 +2222,6 @@ pub struct LaneSwapMetadata {
     #[norito(default)]
     pub volatility_class: LaneVolatilityClass,
 }
-
 /// Aggregated per-lane settlement commitment captured within a block.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2376,15 +2261,12 @@ pub struct LaneBlockCommitment {
     #[norito(default)]
     pub native_amx_receipts: Vec<NativeAmxReceipt>,
 }
-
 fn native_amx_nonzero(bytes: &[u8]) -> bool {
     bytes.iter().any(|byte| *byte != 0)
 }
-
 fn native_amx_expected_quorum(validator_count: usize) -> usize {
     validator_count.saturating_sub(validator_count.saturating_sub(1) / 3)
 }
-
 fn validate_native_amx_participant_proposal_shape(
     proposal: &LaneBlockProposalV1,
 ) -> Result<(), &'static str> {
@@ -2453,7 +2335,6 @@ fn validate_native_amx_participant_proposal_shape(
     }
     Ok(())
 }
-
 fn validate_native_amx_qc_shape(
     qc: &NativeAmxAttestationQcV2,
     expected_phase: NativeAmxPhase,
@@ -2524,7 +2405,6 @@ fn validate_native_amx_qc_shape(
     }
     Ok(())
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the ordered Native AMX V2 audit preserves stable first-error precedence across one cross-field protocol record"
@@ -2540,7 +2420,6 @@ fn validate_native_amx_leg_shape(
     validate_native_amx_participant_proposal_shape(&leg.participant_proposal)?;
     validate_native_amx_qc_shape(&leg.prepare_qc, NativeAmxPhase::Prepare)?;
     validate_native_amx_qc_shape(&leg.commit_qc, NativeAmxPhase::Commit)?;
-
     let prepare = &leg.prepare_qc;
     let commit = &leg.commit_qc;
     let body = &prepare.body;
@@ -2554,7 +2433,6 @@ fn validate_native_amx_leg_shape(
     {
         return Err("Native AMX prepare and commit certificates disagree");
     }
-
     let descriptor = &leg.participant_proposal.descriptor;
     if body.round != expected_round
         || body.epoch != expected_epoch
@@ -2589,7 +2467,6 @@ fn validate_native_amx_leg_shape(
     {
         return Err("Native AMX participant leg identity is internally inconsistent");
     }
-
     let settlement = &leg.participant_settlement;
     let settlement_hash = crate::nexus::compute_settlement_hash(settlement)
         .map_err(|_| "Native AMX participant settlement cannot be hashed")?;
@@ -2636,7 +2513,6 @@ fn validate_native_amx_leg_shape(
     {
         return Err("Native AMX participant settlement is structurally invalid");
     }
-
     let entrypoint_hash = Hash::from(body.tx_entrypoint_hash);
     let entrypoint_position = descriptor
         .accepted_transaction_hashes
@@ -2652,7 +2528,6 @@ fn validate_native_amx_leg_shape(
     }) {
         return Err("Native AMX participant proposal and grouped settlement are not aligned");
     }
-
     let same_route = leg.lane_id == receipt.lane_id && leg.dataspace_id == receipt.dataspace_id;
     let proposal_uses_coordinator_authority_context =
         descriptor.proposal_height == receipt.authority_context_height;
@@ -2668,7 +2543,6 @@ fn validate_native_amx_leg_shape(
     }
     Ok(())
 }
-
 impl LaneBlockCommitment {
     /// Validate grouped Native AMX receipt structure without live authority state.
     ///
@@ -2697,7 +2571,6 @@ impl LaneBlockCommitment {
         if expected_sources.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err("Native AMX receipt sources must be strictly ordered");
         }
-
         for receipt in &self.native_amx_receipts {
             let receipt_belongs_to_commitment_height =
                 receipt.lane_block_height == self.block_height;
@@ -2727,7 +2600,6 @@ impl LaneBlockCommitment {
             {
                 return Err("Native AMX receipt contains duplicate participant routes");
             }
-
             let first_body = &receipt.legs[0].prepare_qc.body;
             let expected_round = first_body.round;
             let expected_epoch = first_body.epoch;
@@ -2746,13 +2618,11 @@ impl LaneBlockCommitment {
         Ok(())
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for LaneSwapMetadata {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         decode_from_slice_canonical(bytes)
     }
 }
-
 /// Runtime-upgrade governance hook snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -2771,7 +2641,6 @@ pub struct SumeragiRuntimeUpgradeHook {
     #[norito(default)]
     pub allowed_ids: Vec<String>,
 }
-
 /// Governance manifest readiness snapshot for a lane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -2806,7 +2675,6 @@ pub struct SumeragiLaneGovernance {
     #[norito(default)]
     pub runtime_upgrade: Option<SumeragiRuntimeUpgradeHook>,
 }
-
 /// DA availability reason reported by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -2829,7 +2697,6 @@ pub enum SumeragiDaGateReason {
     /// Manifest spool could not be scanned.
     ManifestSpoolScan,
 }
-
 /// Which DA availability condition was satisfied most recently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -2846,7 +2713,6 @@ pub enum SumeragiDaGateSatisfaction {
     /// Manifest guard was satisfied after previously reporting missing or invalid manifests.
     ManifestGuardRecovered,
 }
-
 /// Snapshot of DA availability tracking counters for `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -2864,7 +2730,6 @@ pub struct SumeragiDaGateStatus {
     #[norito(default)]
     pub manifest_guard_total: u64,
 }
-
 /// Snapshot of missing-block fetch attempts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -2879,7 +2744,6 @@ pub struct SumeragiMissingBlockFetchStatus {
     /// Dwell time in milliseconds observed before the most recent fetch attempt.
     pub last_dwell_ms: u64,
 }
-
 /// Snapshot of kura persistence failures and retries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -2947,7 +2811,6 @@ pub struct SumeragiKuraStoreStatus {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub last_hash: Option<HashOf<BlockHeader>>,
 }
-
 /// Session evicted from the RBC store due to TTL or capacity enforcement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -2962,7 +2825,6 @@ pub struct SumeragiRbcEvictedSession {
     /// View index for the evicted session.
     pub view: u64,
 }
-
 impl Default for SumeragiRbcEvictedSession {
     fn default() -> Self {
         Self {
@@ -2972,7 +2834,6 @@ impl Default for SumeragiRbcEvictedSession {
         }
     }
 }
-
 /// Snapshot of the RBC on-disk store state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -2997,7 +2858,6 @@ pub struct SumeragiRbcStoreStatus {
     #[norito(default)]
     pub persist_drops_total: u64,
 }
-
 /// Per-peer RBC payload mismatch counters.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -3016,7 +2876,6 @@ pub struct SumeragiRbcMismatchEntry {
     /// Timestamp (ms since UNIX epoch) when the last mismatch was recorded.
     pub last_timestamp_ms: u64,
 }
-
 /// Snapshot of RBC mismatch counters.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3028,7 +2887,6 @@ pub struct SumeragiRbcMismatchStatus {
     #[norito(default)]
     pub entries: Vec<SumeragiRbcMismatchEntry>,
 }
-
 /// Snapshot of pending (pre-INIT) RBC stashes.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -3068,7 +2926,6 @@ pub struct SumeragiPendingRbcEntry {
     #[norito(default)]
     pub age_ms: u64,
 }
-
 impl Default for SumeragiPendingRbcEntry {
     fn default() -> Self {
         Self {
@@ -3087,7 +2944,6 @@ impl Default for SumeragiPendingRbcEntry {
         }
     }
 }
-
 /// Aggregated pending RBC stash telemetry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3167,7 +3023,6 @@ pub struct SumeragiPendingRbcStatus {
     #[norito(default)]
     pub entries: Vec<SumeragiPendingRbcEntry>,
 }
-
 /// Block-sync roster selection counters exposed via Sumeragi status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3197,7 +3052,6 @@ pub struct SumeragiBlockSyncRosterStatus {
     #[norito(default)]
     pub drop_unsolicited_share_blocks_total: u64,
 }
-
 /// View-change cause counters surfaced via `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3267,7 +3121,6 @@ pub struct SumeragiViewChangeCauseStatus {
     #[norito(default)]
     pub last_validation_reject_timestamp_ms: u64,
 }
-
 /// Validation-gate reject counters and last-occurrence snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3313,7 +3166,6 @@ pub struct SumeragiValidationRejectStatus {
     #[norito(default)]
     pub last_timestamp_ms: u64,
 }
-
 /// Peer consensus-key policy reject counters and last-occurrence snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3353,7 +3205,6 @@ pub struct SumeragiPeerKeyPolicyStatus {
     #[norito(default)]
     pub last_timestamp_ms: u64,
 }
-
 /// Consensus message drop/deferral counter entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -3370,7 +3221,6 @@ pub struct SumeragiConsensusMessageHandlingEntry {
     /// Total observed for the `(kind,outcome,reason)` tuple.
     pub total: u64,
 }
-
 /// Consensus message drop/deferral counters surfaced via Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3382,7 +3232,6 @@ pub struct SumeragiConsensusMessageHandlingStatus {
     #[norito(default)]
     pub entries: Vec<SumeragiConsensusMessageHandlingEntry>,
 }
-
 /// Vote validation drop entry with roster context.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -3415,7 +3264,6 @@ pub struct SumeragiVoteValidationDropEntry {
     /// Milliseconds since UNIX epoch when the drop was recorded.
     pub timestamp_ms: u64,
 }
-
 /// Aggregated count for a vote-validation drop reason.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -3428,7 +3276,6 @@ pub struct SumeragiVoteValidationDropReasonCount {
     /// Total drops recorded for the reason.
     pub total: u64,
 }
-
 /// Aggregated vote validation drops for a peer/roster hash pairing.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -3458,7 +3305,6 @@ pub struct SumeragiVoteValidationDropPeerEntry {
     /// Milliseconds since UNIX epoch when the last drop was recorded.
     pub last_timestamp_ms: u64,
 }
-
 /// Vote validation drop snapshot surfaced via Sumeragi status.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3476,7 +3322,6 @@ pub struct SumeragiVoteValidationDropStatus {
     #[norito(default)]
     pub peer_entries: Vec<SumeragiVoteValidationDropPeerEntry>,
 }
-
 /// Deterministic consensus configuration caps captured alongside status snapshots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3491,7 +3336,6 @@ pub struct SumeragiConsensusCapsStatus {
     #[norito(default)]
     pub v2_config_fingerprint: [u8; 32],
 }
-
 /// Queue depth snapshot for Sumeragi worker-loop channels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3521,7 +3365,6 @@ pub struct SumeragiWorkerQueueDepths {
     #[norito(default)]
     pub background_rx: u64,
 }
-
 /// Per-queue totals for worker-loop diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3551,7 +3394,6 @@ pub struct SumeragiWorkerQueueTotals {
     #[norito(default)]
     pub background_rx: u64,
 }
-
 /// Worker-loop queue diagnostics (drops/blocking).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3572,7 +3414,6 @@ pub struct SumeragiWorkerQueueDiagnostics {
     #[norito(default)]
     pub dropped_total: SumeragiWorkerQueueTotals,
 }
-
 /// Worker-loop diagnostics exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3596,7 +3437,6 @@ pub struct SumeragiWorkerLoopStatus {
     #[norito(default)]
     pub queue_diagnostics: SumeragiWorkerQueueDiagnostics,
 }
-
 /// Commit inflight diagnostics exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3664,7 +3504,6 @@ pub struct SumeragiCommitInflightStatus {
     #[norito(default)]
     pub resume_queue_depths: SumeragiWorkerQueueDepths,
 }
-
 /// Commit-pipeline timing snapshot exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3718,7 +3557,6 @@ pub struct SumeragiCommitPipelineStatus {
     #[norito(default)]
     pub ema_finalize_ms: u64,
 }
-
 /// DELIVER-to-next-proposal gap snapshot exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3745,7 +3583,6 @@ pub struct SumeragiRoundGapStatus {
     #[norito(default)]
     pub ema_deliver_to_next_propose_ms: u64,
 }
-
 /// Latest commit-quorum signature tally exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3779,7 +3616,6 @@ pub struct SumeragiCommitQuorumStatus {
     #[norito(default)]
     pub last_updated_ms: u64,
 }
-
 /// Latest commit QC summary exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3811,7 +3647,6 @@ pub struct SumeragiQcStatus {
     #[norito(default)]
     pub signatures_total: u64,
 }
-
 /// Observational `NPoS` repair fanout stake-coverage snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3841,7 +3676,6 @@ pub struct SumeragiNposRepairCoverageStatus {
     #[norito(default)]
     pub reached_stake_quorum_coverage: bool,
 }
-
 /// Fail-closed consensus safety halt exposed via `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -3887,7 +3721,6 @@ pub struct SumeragiSafetyHaltStatus {
     #[norito(default)]
     pub conflicting_post_state_root: Option<Hash>,
 }
-
 /// Cached standalone lane-block consensus session status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -3946,7 +3779,6 @@ pub struct SumeragiLaneBlockSessionStatus {
     #[norito(default)]
     pub min_quorum: u32,
 }
-
 /// Proposal-gate inputs from the most recent pacemaker evaluation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -4051,7 +3883,6 @@ pub struct SumeragiNposDiagnostics {
     /// Validators that revealed after the reveal window in the latest epoch snapshot.
     pub vrf_late_reveals_total: u64,
 }
-
 impl SumeragiNposDiagnostics {
     /// Validate cross-field invariants that scalar wire types cannot express.
     ///
@@ -4074,7 +3905,6 @@ impl SumeragiNposDiagnostics {
         Ok(())
     }
 }
-
 /// Aggregate execution diagnostics for the latest block pipeline run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -4118,7 +3948,6 @@ pub struct SumeragiPipelineExecutionStatus {
     /// Quarantine transactions executed sequentially.
     pub quarantine_executed_total: u64,
 }
-
 /// Maximum number of Native AMX participant-application rows exposed by one
 /// `/v1/sumeragi/diagnostics` response.
 ///
@@ -4127,18 +3956,15 @@ pub struct SumeragiPipelineExecutionStatus {
 /// still refusing an unbounded operator payload.
 pub const SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX: usize =
     crate::nexus::MAX_ACTIVE_EXECUTION_LANES;
-
 /// Maximum number of grouped Native AMX sources represented by one
 /// participant-application row.
 pub const SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATION_SOURCES_MAX: u64 = 4_096;
-
 /// Maximum number of autonomous lane-execution rows exposed by one
 /// `/v1/sumeragi/diagnostics` response.
 ///
 /// This reuses the core lane-diagnostics suffix bound. The projection retains
 /// identifiers and counters only; executable payload bytes remain in Kura.
 pub const SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX: usize = 128;
-
 /// Highest independently durable autonomous lane-execution stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
@@ -4164,7 +3990,6 @@ pub enum SumeragiAutonomousLaneExecutionStage {
     /// Durable evidence disagrees for the same lane-local slot.
     Conflict,
 }
-
 impl SumeragiAutonomousLaneExecutionStage {
     /// Stable JSON/OpenAPI label used by diagnostics clients.
     #[must_use]
@@ -4183,13 +4008,11 @@ impl SumeragiAutonomousLaneExecutionStage {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for SumeragiAutonomousLaneExecutionStage {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -4197,7 +4020,6 @@ impl norito::json::FastJsonWrite for SumeragiAutonomousLaneExecutionStage {
         norito::json::write_json_string_to(self.as_str(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStage {
     fn json_deserialize(
@@ -4220,7 +4042,6 @@ impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStage {
         }
     }
 }
-
 /// Evidence-derived reason that an autonomous lane execution is not advancing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
@@ -4244,7 +4065,6 @@ pub enum SumeragiAutonomousLaneExecutionStuckReason {
     /// Same-height durable identities or cross-stage hashes disagree.
     EvidenceConflict,
 }
-
 impl SumeragiAutonomousLaneExecutionStuckReason {
     /// Stable JSON/OpenAPI label used by diagnostics clients.
     #[must_use]
@@ -4262,13 +4082,11 @@ impl SumeragiAutonomousLaneExecutionStuckReason {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for SumeragiAutonomousLaneExecutionStuckReason {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -4276,7 +4094,6 @@ impl norito::json::FastJsonWrite for SumeragiAutonomousLaneExecutionStuckReason 
         norito::json::write_json_string_to(self.as_str(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStuckReason {
     fn json_deserialize(
@@ -4298,7 +4115,6 @@ impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStuckReaso
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AutonomousLaneEvidenceGeometry {
     ReservationsOnly,
@@ -4307,7 +4123,6 @@ enum AutonomousLaneEvidenceGeometry {
     MergeSelected,
     Applied,
 }
-
 impl AutonomousLaneEvidenceGeometry {
     const fn from_presence(
         presence: (bool, bool, bool, bool),
@@ -4322,7 +4137,6 @@ impl AutonomousLaneEvidenceGeometry {
         }
     }
 }
-
 impl SumeragiAutonomousLaneExecutionStage {
     const fn expected_stuck_reason(self) -> Option<SumeragiAutonomousLaneExecutionStuckReason> {
         match self {
@@ -4354,7 +4168,6 @@ impl SumeragiAutonomousLaneExecutionStage {
             Self::Conflict => Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict),
         }
     }
-
     const fn expected_evidence_geometry(self) -> Option<AutonomousLaneEvidenceGeometry> {
         match self {
             Self::ReservationsDurable => Some(AutonomousLaneEvidenceGeometry::ReservationsOnly),
@@ -4372,7 +4185,6 @@ impl SumeragiAutonomousLaneExecutionStage {
         }
     }
 }
-
 /// One bounded, payload-free autonomous lane-execution diagnostics row.
 ///
 /// Rows are ordered by their complete lane slot and proposal identity. Optional
@@ -4445,7 +4257,6 @@ pub struct SumeragiAutonomousLaneExecution {
     #[norito(default)]
     pub stuck_reason: Option<SumeragiAutonomousLaneExecutionStuckReason>,
 }
-
 impl SumeragiAutonomousLaneExecution {
     /// Return the canonical ordering key for this row.
     #[must_use]
@@ -4460,7 +4271,6 @@ impl SumeragiAutonomousLaneExecution {
             self.proposal_identity_hash,
         )
     }
-
     fn validate_identity_and_counts(&self) -> Result<(), &'static str> {
         let nonzero = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
         if self.lane_block_height == 0
@@ -4509,7 +4319,6 @@ impl SumeragiAutonomousLaneExecution {
         }
         Ok(())
     }
-
     /// Validate bounded counters, paired carrier identity, and stage geometry.
     ///
     /// # Errors
@@ -4582,7 +4391,6 @@ impl SumeragiAutonomousLaneExecution {
         Ok(())
     }
 }
-
 /// Durable-application state of one Native AMX participant control.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
@@ -4596,7 +4404,6 @@ pub enum SumeragiNativeAmxParticipantApplicationState {
     /// Same-height durable evidence contains conflicting authenticated identities.
     Conflict,
 }
-
 impl SumeragiNativeAmxParticipantApplicationState {
     /// Stable JSON/OpenAPI label used by diagnostics clients.
     #[must_use]
@@ -4609,13 +4416,11 @@ impl SumeragiNativeAmxParticipantApplicationState {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for SumeragiNativeAmxParticipantApplicationState {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -4623,7 +4428,6 @@ impl norito::json::FastJsonWrite for SumeragiNativeAmxParticipantApplicationStat
         norito::json::write_json_string_to(self.as_str(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for SumeragiNativeAmxParticipantApplicationState {
     fn json_deserialize(
@@ -4640,7 +4444,6 @@ impl norito::json::JsonDeserialize for SumeragiNativeAmxParticipantApplicationSt
         }
     }
 }
-
 /// One bounded Native AMX participant-application diagnostics row.
 ///
 /// Rows are ordered by `(lane_id, dataspace_id, lane_incarnation)` in the
@@ -4689,7 +4492,6 @@ pub struct SumeragiNativeAmxParticipantApplication {
     /// Current evidence-derived application state.
     pub state: SumeragiNativeAmxParticipantApplicationState,
 }
-
 impl SumeragiNativeAmxParticipantApplication {
     /// Validate geometry, bounded grouping, and optional carrier identity.
     ///
@@ -4754,7 +4556,6 @@ impl SumeragiNativeAmxParticipantApplication {
         Ok(())
     }
 }
-
 /// Operator and lane diagnostics returned by `/v1/sumeragi/diagnostics`.
 ///
 /// This payload deliberately excludes reducer phase, height, view, leader,
@@ -4820,7 +4621,6 @@ pub struct SumeragiDiagnosticsStatus {
     /// Bounded restart-stable autonomous lane execution stages.
     pub autonomous_lane_executions: Vec<SumeragiAutonomousLaneExecution>,
 }
-
 impl SumeragiDiagnosticsStatus {
     /// Validate Native AMX receipts embedded directly in diagnostics settlements.
     ///
@@ -4841,7 +4641,6 @@ impl SumeragiDiagnosticsStatus {
         }
         Ok(())
     }
-
     /// Validate bounded, canonical Native AMX participant diagnostics.
     ///
     /// # Errors
@@ -4867,7 +4666,6 @@ impl SumeragiDiagnosticsStatus {
         }
         Ok(())
     }
-
     /// Validate bounded, canonical autonomous lane-execution diagnostics.
     ///
     /// # Errors
@@ -4892,7 +4690,6 @@ impl SumeragiDiagnosticsStatus {
         Ok(())
     }
 }
-
 /// Entry describing a QC snapshot used by `/v1/sumeragi/qc`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -4908,7 +4705,6 @@ pub struct SumeragiQcEntry {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub subject_block_hash: Option<HashOf<BlockHeader>>,
 }
-
 /// Norito payload returned by Torii for `/v1/sumeragi/qc`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
@@ -4921,7 +4717,6 @@ pub struct SumeragiQcSnapshot {
     /// `LockedQC` snapshot.
     pub locked_qc: SumeragiQcEntry,
 }
-
 /// Minimal execution witness KV pair for SBV-AM prototypes.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -4934,7 +4729,6 @@ pub struct ExecKv {
     /// Raw value bytes.
     pub value: Vec<u8>,
 }
-
 /// Execution witness containing reads and writes for SMT recomputation.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -4951,7 +4745,6 @@ pub struct ExecWitness {
     /// FASTPQ transition batches prepared for prover ingestion.
     pub fastpq_batches: Vec<FastpqTransitionBatch>,
 }
-
 /// Execution witness message bound to a specific block and round. Used on-wire.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct ExecWitnessMsg {
@@ -4966,7 +4759,6 @@ pub struct ExecWitnessMsg {
     /// The execution witness payload.
     pub witness: ExecWitness,
 }
-
 /// VRF commit used by the Sumeragi epoch-randomness path.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct VrfCommit {
@@ -4979,7 +4771,6 @@ pub struct VrfCommit {
     /// BLS signature over the canonical VRF-commit preimage.
     pub bls_sig: Vec<u8>,
 }
-
 /// VRF reveal used by the Sumeragi epoch-randomness path.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct VrfReveal {
@@ -4992,7 +4783,6 @@ pub struct VrfReveal {
     /// BLS signature over the canonical VRF-reveal preimage.
     pub bls_sig: Vec<u8>,
 }
-
 /// Reconfiguration payload (permissioned governance path).
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct Reconfig {
@@ -5001,7 +4791,6 @@ pub struct Reconfig {
     /// First height at which the new set becomes active.
     pub activation_height: Height,
 }
-
 /// RBC payload encoding used for chunk distribution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, Default)]
 #[cfg_attr(
@@ -5016,7 +4805,6 @@ pub enum RbcEncoding {
     /// RS16 stripe encoding with parity shards.
     Rs16,
 }
-
 impl RbcEncoding {
     /// Stable operator-facing label for the encoding.
     pub const fn as_str(self) -> &'static str {
@@ -5026,7 +4814,6 @@ impl RbcEncoding {
         }
     }
 }
-
 /// RBC init message for payload distribution scaffolding.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcInit {
@@ -5065,7 +4852,6 @@ pub struct RbcInit {
     /// Leader signature over the block header.
     pub leader_signature: BlockSignature,
 }
-
 /// RBC payload chunk.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcChunk {
@@ -5082,7 +4868,6 @@ pub struct RbcChunk {
     /// Chunk bytes.
     pub bytes: Vec<u8>,
 }
-
 /// Request the RBC INIT scaffold for a specific `(block_hash, height, view)` session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcInitRequest {
@@ -5093,7 +4878,6 @@ pub struct RbcInitRequest {
     /// View.
     pub view: View,
 }
-
 /// Request missing RBC payload chunks for a specific `(block_hash, height, view)` session.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcChunkRequest {
@@ -5106,7 +4890,6 @@ pub struct RbcChunkRequest {
     /// Missing encoded chunk indices requested from the peer.
     pub missing_indices: Vec<u32>,
 }
-
 /// RBC READY signal.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcReady {
@@ -5127,7 +4910,6 @@ pub struct RbcReady {
     /// Signature authenticating the sender for this READY.
     pub signature: Vec<u8>,
 }
-
 /// READY signature included with RBC DELIVER to seed quorum recovery.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcReadySignature {
@@ -5136,7 +4918,6 @@ pub struct RbcReadySignature {
     /// Signature authenticating the sender for this READY.
     pub signature: Vec<u8>,
 }
-
 /// RBC DELIVER notification.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcDeliver {
@@ -5159,7 +4940,6 @@ pub struct RbcDeliver {
     /// READY signatures observed by the sender for this session.
     pub ready_signatures: Vec<RbcReadySignature>,
 }
-
 // --- Helpers for Norito slice decoding bridges ---
 fn decode_from_slice_canonical<T>(bytes: &[u8]) -> Result<(T, usize), norito::core::Error>
 where
@@ -5178,7 +4958,6 @@ where
     }
     Ok((value, used))
 }
-
 macro_rules! impl_decode_from_slice_via_codec {
     ($t:ty) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $t {
@@ -5188,7 +4967,6 @@ macro_rules! impl_decode_from_slice_via_codec {
         }
     };
 }
-
 impl_decode_from_slice_via_codec!(QcRef);
 impl_decode_from_slice_via_codec!(ConsensusBlockHeader);
 impl_decode_from_slice_via_codec!(Proposal);
@@ -5232,7 +5010,6 @@ impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV2);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV2);
 impl_decode_from_slice_via_codec!(NativeAmxLegRecordV2);
 impl_decode_from_slice_via_codec!(NativeAmxReceipt);
-
 // Provide nicer `Debug` rendering for validator indices in test snapshots.
 impl fmt::Display for CertPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -5244,13 +5021,11 @@ impl fmt::Display for CertPhase {
         f.write_str(s)
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for LaneSettlementReceipt {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         decode_from_slice_canonical(bytes)
     }
 }
-
 #[cfg(test)]
 #[path = "consensus_model_tests.rs"]
 mod tests;

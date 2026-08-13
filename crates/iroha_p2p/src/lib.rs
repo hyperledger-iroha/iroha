@@ -4,7 +4,6 @@
 #![allow(unexpected_cfgs)]
 #![allow(clippy::all)]
 use std::{io, net::AddrParseError};
-
 use aead::{Nonce, Tag};
 use iroha_crypto::{Algorithm, KeyPair, encryption::ChaCha20Poly1305};
 pub use iroha_data_model::{
@@ -13,12 +12,10 @@ pub use iroha_data_model::{
 pub use network::message::{UpdateTrustedPeers, *};
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 pub mod network;
 pub mod peer;
 pub mod streaming;
 pub mod transport;
-
 pub(crate) mod sampler {
     //! Simple per-event log sampler: emits once per period and accumulates a suppressed count.
     #[derive(Debug, Clone)]
@@ -26,7 +23,6 @@ pub(crate) mod sampler {
         last: tokio::time::Instant,
         suppressed: u64,
     }
-
     impl LogSampler {
         pub fn new() -> Self {
             Self {
@@ -49,10 +45,8 @@ pub(crate) mod sampler {
         }
     }
 }
-
 /// The main type to use for secure communication.
 pub type NetworkHandle<T> = network::NetworkBaseHandle<T, ChaCha20Poly1305>;
-
 /// Cryptographic identities with separate, validated protocol roles.
 ///
 /// The node identity is the BLS-normal consensus identity advertised as the
@@ -65,7 +59,6 @@ pub struct P2pIdentityKeys {
     pub(crate) node: KeyPair,
     pub(crate) soranet_transport: KeyPair,
 }
-
 impl P2pIdentityKeys {
     /// Validate and assign the only supported first-release identity roles.
     ///
@@ -95,20 +88,17 @@ impl P2pIdentityKeys {
             soranet_transport,
         })
     }
-
     /// Return the BLS-normal node identity.
     #[must_use]
     pub fn node(&self) -> &KeyPair {
         &self.node
     }
-
     /// Return the delegated Ed25519 `SoraNet` transport identity.
     #[must_use]
     pub fn soranet_transport(&self) -> &KeyPair {
         &self.soranet_transport
     }
 }
-
 /// Fail-closed errors for the BLS-authorized `SoraNet` transport identity.
 #[derive(Debug, Error)]
 pub enum SoranetTransportDelegationError {
@@ -211,15 +201,12 @@ pub enum SoranetTransportDelegationError {
     #[error("failed to encode SoraNet transport delegation: {0}")]
     DelegationEncoding(String),
 }
-
 #[cfg(test)]
 const P2P_ENCRYPTION_OVERHEAD_BYTES: usize =
     core::mem::size_of::<Nonce<ChaCha20Poly1305>>() + core::mem::size_of::<Tag<ChaCha20Poly1305>>();
 const P2P_FRAME_LENGTH_PREFIX_BYTES: usize = core::mem::size_of::<u32>();
-
 /// Largest encrypted P2P frame body representable by the on-wire length prefix.
 pub const MAX_WIRE_ENCRYPTED_FRAME_BYTES: usize = u32::MAX as usize;
-
 /// Largest encrypted P2P frame body accepted by the runtime configuration.
 ///
 /// A stream frame is buffered contiguously as its four-byte length prefix plus
@@ -227,12 +214,10 @@ pub const MAX_WIRE_ENCRYPTED_FRAME_BYTES: usize = u32::MAX as usize;
 /// allocation within `i32::MAX` bytes, so 32-bit and 64-bit validators accept
 /// the same configuration and frame geometry.
 pub const MAX_ENCRYPTED_FRAME_BYTES: usize = 2_147_483_643;
-
 /// Return the maximum plaintext payload that fits the default ChaCha20-Poly1305 frame.
 pub fn frame_plaintext_cap(max_frame_bytes: usize) -> usize {
     frame_plaintext_cap_for::<ChaCha20Poly1305>(max_frame_bytes)
 }
-
 /// Return the maximum plaintext payload that fits an encrypted frame for `E`.
 pub fn frame_plaintext_cap_for<E: aead::AeadCore>(max_frame_bytes: usize) -> usize {
     let encryption_overhead = core::mem::size_of::<Nonce<E>>() + core::mem::size_of::<Tag<E>>();
@@ -240,7 +225,6 @@ pub fn frame_plaintext_cap_for<E: aead::AeadCore>(max_frame_bytes: usize) -> usi
         .min(MAX_ENCRYPTED_FRAME_BYTES)
         .saturating_sub(encryption_overhead)
 }
-
 /// Return the outbound byte-queue charge for one plaintext frame.
 ///
 /// The default P2P transport queues a four-byte encrypted-frame length prefix,
@@ -249,7 +233,6 @@ pub fn frame_plaintext_cap_for<E: aead::AeadCore>(max_frame_bytes: usize) -> usi
 pub fn frame_queue_charge(plaintext_frame_bytes: usize) -> Option<usize> {
     frame_queue_charge_for::<ChaCha20Poly1305>(plaintext_frame_bytes)
 }
-
 /// Return the stream-queue charge for one plaintext frame encrypted by `E`.
 pub fn frame_queue_charge_for<E: aead::AeadCore>(plaintext_frame_bytes: usize) -> Option<usize> {
     let encryption_overhead = core::mem::size_of::<Nonce<E>>() + core::mem::size_of::<Tag<E>>();
@@ -257,14 +240,11 @@ pub fn frame_queue_charge_for<E: aead::AeadCore>(plaintext_frame_bytes: usize) -
         .checked_add(encryption_overhead)?
         .checked_add(P2P_FRAME_LENGTH_PREFIX_BYTES)
 }
-
 pub mod boilerplate {
     //! Module containing trait shorthands. Remove when trait aliases
     //! are stable <https://github.com/rust-lang/rust/issues/41517>
-
     use super::*;
     use aead::{Aead, AeadInOut, KeyInit};
-
     /// Shorthand for traits required for payload
     pub trait Pload:
         Encode + Decode + for<'a> norito::core::DecodeFromSlice<'a> + Send + Clone + 'static
@@ -274,12 +254,10 @@ pub mod boilerplate {
         T: Encode + Decode + for<'a> norito::core::DecodeFromSlice<'a> + Send + Clone + 'static
     {
     }
-
     /// Shorthand for traits required for encryptor type marker.
     pub trait Enc: Aead + AeadInOut + KeyInit + Clone + Send + 'static {}
     impl<T> Enc for T where T: Aead + AeadInOut + KeyInit + Clone + Send + 'static {}
 }
-
 /// Errors used in [`crate`].
 #[derive(Debug, Error, displaydoc::Display)]
 pub enum Error {
@@ -363,35 +341,28 @@ pub enum Error {
     /// `SoraNet` transport identity delegation failed: {0}
     HandshakeSoranetDelegation(#[from] SoranetTransportDelegationError),
 }
-
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         Self::Io(std::sync::Arc::new(e))
     }
 }
-
 /// Result shorthand.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
-
 #[cfg(test)]
 mod p2p_identity_keys_tests {
     use super::*;
-
     fn seeded_key_pair(seed: u8, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], algorithm)
             .expect("test key pair generation must succeed")
     }
-
     #[test]
     fn p2p_identity_keys_accept_canonical_bls_normal_and_ed25519_roles() {
         let node = seeded_key_pair(0x31, Algorithm::BlsNormal);
         let soranet_transport = seeded_key_pair(0x32, Algorithm::Ed25519);
         let expected_node_public_key = node.public_key().clone();
         let expected_transport_public_key = soranet_transport.public_key().clone();
-
         let identities = P2pIdentityKeys::new(node, soranet_transport)
             .expect("canonical P2P identity roles must be accepted");
-
         assert_eq!(identities.node().algorithm(), Algorithm::BlsNormal);
         assert_eq!(
             identities.soranet_transport().algorithm(),
@@ -403,15 +374,12 @@ mod p2p_identity_keys_tests {
             &expected_transport_public_key
         );
     }
-
     #[test]
     fn p2p_identity_keys_reject_swapped_roles_with_exact_node_error() {
         let node = seeded_key_pair(0x33, Algorithm::Ed25519);
         let soranet_transport = seeded_key_pair(0x34, Algorithm::BlsNormal);
-
         let error = P2pIdentityKeys::new(node, soranet_transport)
             .expect_err("swapped P2P identity roles must be rejected");
-
         match error {
             Error::HandshakeSoranetDelegation(
                 SoranetTransportDelegationError::LocalNodeAlgorithmMismatch { found },
@@ -419,15 +387,12 @@ mod p2p_identity_keys_tests {
             other => panic!("expected exact local-node algorithm error, found {other:?}"),
         }
     }
-
     #[test]
     fn p2p_identity_keys_reject_noncanonical_node_algorithm_with_exact_error() {
         let node = seeded_key_pair(0x35, Algorithm::BlsSmall);
         let soranet_transport = seeded_key_pair(0x36, Algorithm::Ed25519);
-
         let error = P2pIdentityKeys::new(node, soranet_transport)
             .expect_err("noncanonical node algorithm must be rejected");
-
         match error {
             Error::HandshakeSoranetDelegation(
                 SoranetTransportDelegationError::LocalNodeAlgorithmMismatch { found },
@@ -435,15 +400,12 @@ mod p2p_identity_keys_tests {
             other => panic!("expected exact local-node algorithm error, found {other:?}"),
         }
     }
-
     #[test]
     fn p2p_identity_keys_reject_noncanonical_transport_algorithm_with_exact_error() {
         let node = seeded_key_pair(0x37, Algorithm::BlsNormal);
         let soranet_transport = seeded_key_pair(0x38, Algorithm::BlsSmall);
-
         let error = P2pIdentityKeys::new(node, soranet_transport)
             .expect_err("noncanonical transport algorithm must be rejected");
-
         match error {
             Error::HandshakeSoranetDelegation(
                 SoranetTransportDelegationError::LocalTransportAlgorithmMismatch { found },
@@ -452,23 +414,19 @@ mod p2p_identity_keys_tests {
         }
     }
 }
-
 #[cfg(test)]
 mod frame_tests {
     use super::*;
-
     #[test]
     fn frame_plaintext_cap_subtracts_overhead() {
         let cap = P2P_ENCRYPTION_OVERHEAD_BYTES + 64;
         assert_eq!(frame_plaintext_cap(cap), 64);
     }
-
     #[test]
     fn frame_plaintext_cap_saturates_when_too_small() {
         let cap = P2P_ENCRYPTION_OVERHEAD_BYTES.saturating_sub(1);
         assert_eq!(frame_plaintext_cap(cap), 0);
     }
-
     #[test]
     fn frame_plaintext_cap_clamps_to_cross_platform_runtime_limit() {
         assert_eq!(MAX_WIRE_ENCRYPTED_FRAME_BYTES, u32::MAX as usize);
@@ -485,7 +443,6 @@ mod frame_tests {
             MAX_ENCRYPTED_FRAME_BYTES - P2P_ENCRYPTION_OVERHEAD_BYTES
         );
     }
-
     #[test]
     fn frame_queue_charge_includes_encryption_and_length_prefix() {
         assert_eq!(
@@ -499,7 +456,6 @@ mod frame_tests {
         );
     }
 }
-
 /// Optional consensus handshake capabilities exchanged during p2p handshake.
 ///
 /// These fields allow peers to gate connections by consensus mode/protocol
@@ -516,7 +472,6 @@ pub struct ConsensusConfigCaps {
     /// Canonical digest of the complete IVM gas schedule in this binary.
     pub ivm_gas_schedule_hash: [u8; 32],
 }
-
 /// Optional consensus handshake capabilities exchanged during p2p handshake.
 ///
 /// These fields allow peers to gate connections by consensus mode/protocol
@@ -532,7 +487,6 @@ pub struct ConsensusHandshakeCaps {
     /// Canonical v2 shared-config fingerprint.
     pub config: ConsensusConfigCaps,
 }
-
 /// Optional confidential-handshake capabilities exchanged during p2p handshake.
 ///
 /// Nodes that advertise confidential capabilities signal whether they enforce
@@ -552,7 +506,6 @@ pub struct ConfidentialHandshakeCaps {
     /// Optional digest of confidential registry/parameter expectations.
     pub features: Option<ConfidentialFeatureDigest>,
 }
-
 /// Optional crypto handshake capabilities exchanged during p2p handshake.
 ///
 /// These values communicate whether SM helpers are enabled locally and whether
@@ -570,7 +523,6 @@ pub struct CryptoHandshakeCaps {
     /// Require peers to match the OpenSSL preview toggle during handshake.
     pub require_sm_openssl_preview_match: bool,
 }
-
 /// Relay role advertised during the p2p handshake.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum RelayRole {

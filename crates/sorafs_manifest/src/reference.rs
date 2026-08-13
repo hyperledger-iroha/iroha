@@ -6,15 +6,12 @@
 // Reference validators intentionally return the full structured outcome as the
 // error so FFI/CLI callers can render identical diagnostics without side state.
 #![allow(clippy::result_large_err)]
-
 use std::collections::BTreeSet;
-
 use ed25519_dalek::SigningKey;
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
 use crate::{
     AdmissionRecord, AdvertValidationError, BillingLineDirectionV1, BillingLineItemKindV1,
     BillingLineItemV1, BillingStatementV1, ByteRangeV1, GovernanceDagBlockV1,
@@ -6579,11 +6576,9 @@ fn replication_order_signature_verification_category(
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
-
     use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use norito::{decode_from_bytes, to_bytes};
-
     use super::*;
     use crate::repair::QueuedRepairStateV1;
     use crate::{
@@ -7687,7 +7682,6 @@ mod tests {
     #[test]
     fn submission_provenance_errors_have_stable_reference_mappings() {
         use crate::GovernanceDagSubmissionOriginV1;
-
         let errors = [
             GovernanceLogValidationError::MissingSubmissionProvenance {
                 expected: GovernanceDagSubmissionOriginV1::AppealFinanceReport,

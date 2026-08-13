@@ -1,6 +1,5 @@
 // Certified-Serve decision and restart worker regression tests.
 // Included lexically by v2_worker::tests to preserve canonical test names.
-
 #[test]
 fn prepared_serve_carrier_is_atomically_superseded_by_decision() {
     let (service, keys) = fixture_with_block_payload();
@@ -21,7 +20,6 @@ fn prepared_serve_carrier_is_atomically_superseded_by_decision() {
         ..proposal.subject
     };
     assert_ne!(decided_subject, proposal.subject);
-
     for (saturated, cancel_after_failure) in
         [(false, false), (true, false), (false, true), (true, true)]
     {
@@ -125,7 +123,6 @@ fn prepared_serve_carrier_is_atomically_superseded_by_decision() {
                 "a non-Decision negative cannot overwrite a prepared handoff"
             );
         }
-
         command_tx
             .begin_decision_serve_reconciliation()
             .expect("raise the Decision/Serve fence");
@@ -243,7 +240,6 @@ fn prepared_serve_carrier_is_atomically_superseded_by_decision() {
             1,
             "failed publication retains either the predecessor or reserved Serve admission"
         );
-
         if cancel_after_failure {
             ingress.close();
             ingress
@@ -419,7 +415,6 @@ fn prepared_serve_carrier_is_atomically_superseded_by_decision() {
             .expect("retire prepared Decision supersession gate");
     }
 }
-
 #[test]
 fn established_serve_owner_survives_decision_retry_carrier_retirement() {
     let (service, keys) = fixture_with_block_payload();
@@ -446,7 +441,6 @@ fn established_serve_owner_survives_decision_retry_carrier_retirement() {
         ..proposal.subject
     };
     assert_ne!(decided_subject, proposal.subject);
-
     // Cover Queued and Active owners, a response sealed before the retry,
     // and the worker/Decision race where sealing occurs while the retry
     // carrier is still selected.
@@ -490,7 +484,6 @@ fn established_serve_owner_survives_decision_retry_carrier_retirement() {
                     .expect("seal response before admitting its exact retry")
             );
         }
-
         assert!(matches!(
             ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
             Ok(FairV2IngressPushDisposition::Enqueued)
@@ -530,7 +523,6 @@ fn established_serve_owner_survives_decision_retry_carrier_retirement() {
         command_tx
             .finish_decision_serve_reconciliation(Some(decided_subject))
             .expect("publish Decision over established retry");
-
         if seal_after_decision {
             assert!(
                 command_rx
@@ -846,7 +838,6 @@ fn established_serve_owner_survives_decision_retry_carrier_retirement() {
             .expect("retire established retry Decision gate");
     }
 }
-
 #[test]
 fn decision_serve_fence_rejects_conflicting_durable_subject_without_ordinals() {
     let (service, keys) = fixture_with_block_payload();
@@ -869,7 +860,6 @@ fn decision_serve_fence_rejects_conflicting_durable_subject_without_ordinals() {
         ..proposal.subject
     };
     assert_ne!(conflicting_subject, proposal.subject);
-
     let body_root = TempDir::new().expect("Decision conflict body root");
     let body_store = V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
     let serve_root = TempDir::new().expect("Decision conflict Serve root");
@@ -927,7 +917,6 @@ fn decision_serve_fence_rejects_conflicting_durable_subject_without_ordinals() {
             state.serve_replacements.keys().copied().collect::<Vec<_>>(),
         )
     };
-
     command_tx
         .begin_decision_serve_reconciliation()
         .expect("raise the second pre-WAL Serve admission fence");
@@ -952,7 +941,6 @@ fn decision_serve_fence_rejects_conflicting_durable_subject_without_ordinals() {
         )),
         Err(FairV2IngressPushError::Full(_))
     ));
-
     {
         let state = command_tx.queue.lock();
         assert!(
@@ -1003,13 +991,11 @@ fn decision_serve_fence_rejects_conflicting_durable_subject_without_ordinals() {
         actor_ordinal_before,
         "the conflict cannot mint an actor-global logical ordinal"
     );
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire Decision conflict gate");
 }
-
 #[test]
 fn decision_serve_fence_rolls_back_failed_batch_and_converts_before_ordinals() {
     let (service, keys) = fixture_with_block_payload();
@@ -1049,7 +1035,6 @@ fn decision_serve_fence_rolls_back_failed_batch_and_converts_before_ordinals() {
         ..proposal.subject
     };
     assert_ne!(decided_subject, proposal.subject);
-
     let body_root = TempDir::new().expect("Decision fence body root");
     let mut body_store =
         V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
@@ -1107,7 +1092,6 @@ fn decision_serve_fence_rolls_back_failed_batch_and_converts_before_ordinals() {
             state.serve_replacements.keys().copied().collect::<Vec<_>>(),
         )
     };
-
     command_tx
         .begin_decision_serve_reconciliation()
         .expect("raise the pre-WAL Serve admission fence");
@@ -1125,7 +1109,6 @@ fn decision_serve_fence_rolls_back_failed_batch_and_converts_before_ordinals() {
         actor_ordinal_before,
         "the WAL fence blocks before the actor-global scheduler source"
     );
-
     let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
     let durable_before = fs::read(&state_path).expect("read the pre-Decision terminal snapshot");
     let temporary_state = state_path.with_extension("norito.tmp");
@@ -1187,7 +1170,6 @@ fn decision_serve_fence_rolls_back_failed_batch_and_converts_before_ordinals() {
         actor_ordinal_before
     );
     assert_eq!(fair_ingress_accounting_snapshot(&ingress), fair_before);
-
     fs::remove_dir(&temporary_state).expect("unblock atomic Decision publication");
     command_tx
         .finish_decision_serve_reconciliation(Some(decided_subject))
@@ -1281,7 +1263,6 @@ fn decision_serve_fence_rolls_back_failed_batch_and_converts_before_ordinals() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire Decision fence gate");
 }
-
 #[test]
 fn active_serve_completion_after_decision_publishes_negative_without_response() {
     let (service, keys) = fixture_with_block_payload();
@@ -1332,7 +1313,6 @@ fn active_serve_completion_after_decision_publishes_negative_without_response() 
             if lifecycle_id == serve_admission.lifecycle_id
     ));
     assert_eq!(io_admission.queued.load(AtomicOrdering::Acquire), 1);
-
     let fair_before = fair_ingress_accounting_snapshot(&ingress);
     let actor_ordinal_before = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
     let (
@@ -1490,7 +1470,6 @@ fn active_serve_completion_after_decision_publishes_negative_without_response() 
         command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
         actor_ordinal_before
     );
-
     fs::remove_dir(&temporary_state).expect("unblock active-worker Decision supersession");
     assert!(
         !command_rx
@@ -1585,7 +1564,6 @@ fn active_serve_completion_after_decision_publishes_negative_without_response() 
         .unbind_certified_serve_gate(&gate)
         .expect("retire active supersession gate");
 }
-
 #[test]
 fn completion_pending_serve_is_suppressed_after_decision_before_delivery() {
     let (service, keys) = fixture_with_block_payload();
@@ -1642,7 +1620,6 @@ fn completion_pending_serve_is_suppressed_after_decision_before_delivery() {
         "the response is initially eligible for delivery"
     );
     assert_eq!(io_admission.queued.load(AtomicOrdering::Acquire), 1);
-
     let fair_before = fair_ingress_accounting_snapshot(&ingress);
     let actor_ordinal_before = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
     let (
@@ -1788,7 +1765,6 @@ fn completion_pending_serve_is_suppressed_after_decision_before_delivery() {
         command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
         actor_ordinal_before
     );
-
     fs::remove_dir(&temporary_state).expect("unblock completion-pending Decision supersession");
     assert!(
         command_tx
@@ -1885,7 +1861,6 @@ fn completion_pending_serve_is_suppressed_after_decision_before_delivery() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire completion-pending supersession gate");
 }
-
 #[test]
 fn production_restart_retires_raw_terminal_replay_waiter_without_resigning() {
     let (service, keys) = fixture_with_block_payload();
@@ -1921,7 +1896,6 @@ fn production_restart_retires_raw_terminal_replay_waiter_without_resigning() {
         1,
         &response,
     );
-
     {
         let (command_tx, command_rx, _admission) =
             persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
@@ -1950,7 +1924,6 @@ fn production_restart_retires_raw_terminal_replay_waiter_without_resigning() {
         );
         assert_eq!(persisted.next_ingress_reservation_ordinal, 1);
         assert_eq!(persisted.next_lifecycle_admission_ordinal, 1);
-
         // Crash before checked Fair dequeue: no physical drain, replay
         // preparation, or response post is allowed to run.
         drop(ingress);
@@ -1958,7 +1931,6 @@ fn production_restart_retires_raw_terminal_replay_waiter_without_resigning() {
         drop(command_rx);
         drop(command_tx);
     }
-
     let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
     let (command_tx, _command_rx, _admission) = production_persistent_test_io_command_channel(
         2,
@@ -2014,7 +1986,6 @@ fn production_restart_retires_raw_terminal_replay_waiter_without_resigning() {
         "all requester-independent terminal replay debt is gone before producers are exposed"
     );
 }
-
 #[test]
 fn production_restart_atomically_supersedes_raw_terminal_replay_waiter() {
     let (service, keys) = fixture_with_block_payload();
@@ -2057,7 +2028,6 @@ fn production_restart_atomically_supersedes_raw_terminal_replay_waiter() {
         1,
         &response,
     );
-
     {
         let (command_tx, command_rx, _admission) =
             persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
@@ -2087,7 +2057,6 @@ fn production_restart_atomically_supersedes_raw_terminal_replay_waiter() {
         drop(command_rx);
         drop(command_tx);
     }
-
     let (command_tx, _command_rx, _admission) = production_persistent_test_io_command_channel(
         2,
         serve_root.path(),
@@ -2149,7 +2118,6 @@ fn production_restart_atomically_supersedes_raw_terminal_replay_waiter() {
             .is_some()
     );
 }
-
 #[test]
 fn production_restart_rejects_negative_tombstone_with_physical_retry_waiter() {
     let (service, keys) = fixture_with_block_payload();
@@ -2197,7 +2165,6 @@ fn production_restart_rejects_negative_tombstone_with_physical_retry_waiter() {
     store
         .persist(&persisted)
         .expect("persist impossible negative retry crash shape");
-
     let result = production_persistent_test_io_command_channel(
         2,
         serve_root.path(),
@@ -2224,7 +2191,6 @@ fn production_restart_rejects_negative_tombstone_with_physical_retry_waiter() {
         .expect("rejected startup leaves source-sealed state unchanged");
     assert_eq!(persisted_after, persisted);
 }
-
 #[test]
 fn same_height_foreign_context_is_rejected_before_every_serve_ordinal() {
     let (service, keys) = fixture_with_block_payload();
@@ -2248,7 +2214,6 @@ fn same_height_foreign_context_is_rejected_before_every_serve_ordinal() {
     foreign.signature = Signature::new(keys[1].private_key(), &foreign.signature_preimage())
         .payload()
         .to_vec();
-
     let body_root = TempDir::new().expect("foreign-context body root");
     let serve_root = TempDir::new().expect("foreign-context Serve root");
     let body_store = V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
@@ -2284,7 +2249,6 @@ fn same_height_foreign_context_is_rejected_before_every_serve_ordinal() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire foreign-context Serve gate");
 }
-
 #[test]
 fn fair_ingress_rollover_retires_ticket_before_old_service_teardown() {
     let (service, keys) = fixture_with_block_payload();
@@ -2306,7 +2270,6 @@ fn fair_ingress_rollover_retires_ticket_before_old_service_teardown() {
     let via = service.context.roster[0].validator.clone();
     let (first_tx, first_rx, _first_admission) = test_io_command_channel(2);
     let (ingress, first_gate) = gated_fair_ingress(&service.context, &first_tx);
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound(first.request(), via.clone())),
         Ok(FairV2IngressPushDisposition::Enqueued)
@@ -2337,7 +2300,6 @@ fn fair_ingress_rollover_retires_ticket_before_old_service_teardown() {
         assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
         assert_eq!(state.next_serve_admission_ordinal, 1);
     }
-
     let (second_tx, _second_rx, _second_admission) = test_io_command_channel(2);
     let second_gate = CertifiedServeIngressGate {
         queue: Arc::clone(&second_tx.queue),

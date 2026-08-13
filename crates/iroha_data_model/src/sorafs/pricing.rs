@@ -7,19 +7,15 @@
 //! relying on out-of-band config.
 //! Public pin admission fees are computed here, while provider credit deposits,
 //! settlement, and slashing remain separate authority-checked ledger flows.
-
 use std::collections::BTreeSet;
-
 use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::{
     metadata::Metadata,
     sorafs::{capacity::ProviderId, pin_registry::StorageClass},
 };
-
 /// First-version schema identifier for [`PricingScheduleRecord`].
 pub const PRICING_SCHEDULE_VERSION_V1: u16 = 1;
 /// Seconds used for billing a "month" when converting average utilisation to GiB·month.
@@ -34,10 +30,8 @@ const BYTES_PER_GIB: u128 = sorafs_manifest::orderbook::BYTES_PER_GIB as u128;
 pub const MAX_COMMITMENT_DISCOUNT_TIERS: usize = 64;
 /// Maximum UTF-8 byte length of governance pricing notes.
 pub const MAX_PRICING_NOTES_BYTES: usize = 4_096;
-
 const STORAGE_CLASSES: [StorageClass; 3] =
     [StorageClass::Hot, StorageClass::Warm, StorageClass::Cold];
-
 /// Pricing for a single storage class (GiB-month + egress).
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Ord, PartialOrd, Default,
@@ -54,7 +48,6 @@ pub struct TierRate {
     /// Nominal price per GiB of egress.
     pub egress_price_per_gib: Quantity,
 }
-
 impl TierRate {
     /// Construct a tier rate.
     #[must_use]
@@ -70,7 +63,6 @@ impl TierRate {
         }
     }
 }
-
 /// Collateral policy controlling minimum bonded amounts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -85,7 +77,6 @@ pub struct CollateralPolicy {
     /// Duration (seconds) of the onboarding period where the discount applies.
     pub onboarding_period_secs: u64,
 }
-
 impl CollateralPolicy {
     /// Compute the discount multiplier (basis points) that should be applied to the
     /// collateral requirement at `now_epoch`, given the onboarding start epoch.
@@ -107,7 +98,6 @@ impl CollateralPolicy {
         }
     }
 }
-
 impl Default for CollateralPolicy {
     fn default() -> Self {
         Self {
@@ -117,7 +107,6 @@ impl Default for CollateralPolicy {
         }
     }
 }
-
 /// Credit settlement configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -132,7 +121,6 @@ pub struct CreditPolicy {
     /// Threshold (basis points of expected settlement charge) that triggers low-credit alerts.
     pub low_balance_alert_bps: u16,
 }
-
 impl CreditPolicy {
     /// Returns the total duration (settlement + grace).
     ///
@@ -148,7 +136,6 @@ impl CreditPolicy {
             ))
     }
 }
-
 impl Default for CreditPolicy {
     fn default() -> Self {
         Self {
@@ -158,7 +145,6 @@ impl Default for CreditPolicy {
         }
     }
 }
-
 /// Commitment-based discount tier (e.g., loyalty or capacity commitment).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -171,7 +157,6 @@ pub struct CommitmentDiscountTier {
     /// Discount applied when commitment >= threshold (basis points).
     pub discount_bps: u16,
 }
-
 /// Discount schedule applied on top of base tier pricing.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -186,7 +171,6 @@ pub struct DiscountSchedule {
     /// Additional commitment-based discount tiers.
     pub commitment_tiers: Vec<CommitmentDiscountTier>,
 }
-
 /// Governance-controlled pricing schedule and credit policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -212,7 +196,6 @@ pub struct PricingScheduleRecord {
     #[cfg_attr(feature = "json", norito(default))]
     pub notes: Option<String>,
 }
-
 impl PricingScheduleRecord {
     /// Default launch schedule for the canonical SF-8a pricing policy.
     #[must_use]
@@ -254,7 +237,6 @@ impl PricingScheduleRecord {
                 },
             ],
         };
-
         Self {
             version: PRICING_SCHEDULE_VERSION_V1,
             currency_code: "xor".to_string(),
@@ -269,7 +251,6 @@ impl PricingScheduleRecord {
             ),
         }
     }
-
     /// Lookup the exact tier rate for a storage class.
     ///
     /// # Errors
@@ -281,7 +262,6 @@ impl PricingScheduleRecord {
         self.validate()?;
         self.tier_rate_validated(class)
     }
-
     fn tier_rate_validated(
         &self,
         class: StorageClass,
@@ -291,7 +271,6 @@ impl PricingScheduleRecord {
             .find(|tier| tier.storage_class == class)
             .ok_or(PricingComputationError::MissingTier(class))
     }
-
     /// Validate invariants for the pricing schedule.
     ///
     /// # Errors
@@ -418,7 +397,6 @@ impl PricingScheduleRecord {
         }
         Ok(())
     }
-
     /// Compute nominal storage charges for a telemetry window.
     ///
     /// # Errors
@@ -433,7 +411,6 @@ impl PricingScheduleRecord {
         self.validate()?;
         self.storage_charge_validated(class, u128::from(avg_utilised_gib), window_secs)
     }
-
     fn storage_charge_validated(
         &self,
         class: StorageClass,
@@ -456,7 +433,6 @@ impl PricingScheduleRecord {
             RoundingMode::NearestAway,
         )?)
     }
-
     /// Compute the prepaid storage fee for admitting a public pin.
     ///
     /// Empty payloads are charged as one GiB because even an empty collection
@@ -502,7 +478,6 @@ impl PricingScheduleRecord {
         let billing_window = requested_window.max(self.credit.settlement_window_secs);
         self.storage_charge_validated(class, replicated_gib, billing_window)
     }
-
     /// Compute egress charges for `egress_gib` volume.
     ///
     /// # Errors
@@ -521,7 +496,6 @@ impl PricingScheduleRecord {
             .egress_price_per_gib
             .try_mul_decimal(&Numeric::from(egress_gib))?)
     }
-
     /// Compute egress charges for `egress_bytes` volume.
     ///
     /// # Errors
@@ -543,7 +517,6 @@ impl PricingScheduleRecord {
             RoundingMode::TowardZero,
         )?)
     }
-
     /// Expected storage charge for one settlement window at the current utilisation.
     ///
     /// # Errors
@@ -555,7 +528,6 @@ impl PricingScheduleRecord {
     ) -> Result<Quantity, PricingComputationError> {
         self.storage_charge(class, avg_utilised_gib, self.credit.settlement_window_secs)
     }
-
     /// Required nominal bonded collateral for the given utilisation.
     ///
     /// # Errors
@@ -590,7 +562,6 @@ impl PricingScheduleRecord {
             RoundingMode::NearestAway,
         )?)
     }
-
     /// Low-balance alert threshold derived from the expected settlement charge.
     ///
     /// # Errors
@@ -608,13 +579,11 @@ impl PricingScheduleRecord {
         )?)
     }
 }
-
 impl Default for PricingScheduleRecord {
     fn default() -> Self {
         Self::launch_default()
     }
 }
-
 /// Validation error surfaced when verifying a [`PricingScheduleRecord`].
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PricingValidationError {
@@ -722,7 +691,6 @@ pub enum PricingValidationError {
         maximum: usize,
     },
 }
-
 /// Errors raised while calculating deterministic `SoraFS` pricing values.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PricingComputationError {
@@ -763,7 +731,6 @@ pub enum PricingComputationError {
     #[error("pricing quantity arithmetic failed: {0}")]
     Quantity(#[from] NumericOperationError),
 }
-
 /// Credit ledger record persisted for each provider.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -803,7 +770,6 @@ pub struct ProviderCreditRecord {
     /// Optional metadata annotations.
     pub metadata: Metadata,
 }
-
 impl ProviderCreditRecord {
     /// Create a new provider credit record.
     #[allow(clippy::too_many_arguments)]
@@ -833,7 +799,6 @@ impl ProviderCreditRecord {
             metadata,
         }
     }
-
     /// Apply a debit (charge) against the available credit.
     ///
     /// # Errors
@@ -862,7 +827,6 @@ impl ProviderCreditRecord {
         self.last_settlement_epoch = epoch;
         Ok(())
     }
-
     /// Update low-balance tracking depending on whether the threshold is crossed.
     pub fn track_low_balance(&mut self, threshold: &Quantity, epoch: u64) {
         if &self.available_credit <= threshold {
@@ -873,7 +837,6 @@ impl ProviderCreditRecord {
             self.low_balance_since_epoch = None;
         }
     }
-
     /// Record an under-delivery strike.
     ///
     /// # Errors
@@ -887,12 +850,10 @@ impl ProviderCreditRecord {
             .ok_or(CreditMutationError::StrikeOverflow)?;
         Ok(())
     }
-
     /// Clear consecutive strike tracking.
     pub fn reset_strikes(&mut self) {
         self.under_delivery_strikes = 0;
     }
-
     /// Move a penalty from the usable bond into its custody-backed slash lien.
     ///
     /// # Errors
@@ -933,7 +894,6 @@ impl ProviderCreditRecord {
         Ok(())
     }
 }
-
 fn multiply_ratio(
     value: &Quantity,
     multiplier: u128,
@@ -947,7 +907,6 @@ fn multiply_ratio(
         mode,
     )
 }
-
 /// Errors raised while applying provider-credit mutations.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum CreditMutationError {
@@ -993,7 +952,6 @@ pub enum CreditMutationError {
     #[error("provider credit quantity arithmetic failed: {0}")]
     Quantity(#[from] NumericOperationError),
 }
-
 fn checked_mul_div_floor(
     value: u128,
     multiplier: u128,
@@ -1002,7 +960,6 @@ fn checked_mul_div_floor(
 ) -> Result<u128, PricingComputationError> {
     checked_mul_div_parts(value, multiplier, divisor, context).map(|(quotient, _)| quotient)
 }
-
 /// Compute `(value × multiplier) / divisor`, rounded down, without overflowing
 /// intermediate `u128` products.
 ///
@@ -1018,7 +975,6 @@ pub fn checked_mul_div_floor_u128(
 ) -> Result<u128, PricingComputationError> {
     checked_mul_div_floor(value, multiplier, divisor, "u128 multiply/divide")
 }
-
 /// Compute `(value × multiplier) / divisor`, rounded half-up, without
 /// overflowing intermediate `u128` products.
 ///
@@ -1034,7 +990,6 @@ pub fn checked_mul_div_round_u128(
 ) -> Result<u128, PricingComputationError> {
     checked_mul_div_round(value, multiplier, divisor, "u128 multiply/divide")
 }
-
 fn checked_mul_div_round(
     value: u128,
     multiplier: u128,
@@ -1053,7 +1008,6 @@ fn checked_mul_div_round(
         Ok(quotient)
     }
 }
-
 fn checked_mul_div_parts(
     value: u128,
     multiplier: u128,
@@ -1063,7 +1017,6 @@ fn checked_mul_div_parts(
     if divisor == 0 {
         return Err(PricingComputationError::DivisionByZero(context));
     }
-
     let whole = value / divisor;
     let remainder = value % divisor;
     let high = whole
@@ -1075,7 +1028,6 @@ fn checked_mul_div_parts(
         .ok_or(PricingComputationError::ArithmeticOverflow(context))?;
     Ok((quotient, product_remainder))
 }
-
 fn multiply_remainder_div(
     value: u128,
     multiplier: u128,
@@ -1084,7 +1036,6 @@ fn multiply_remainder_div(
 ) -> Result<(u128, u128), PricingComputationError> {
     debug_assert!(divisor > 0);
     debug_assert!(value < divisor);
-
     let mut quotient = 0u128;
     let mut remainder = 0u128;
     for bit in (0..u128::BITS).rev() {
@@ -1096,7 +1047,6 @@ fn multiply_remainder_div(
         quotient = quotient
             .checked_add(u128::from(carry))
             .ok_or(PricingComputationError::ArithmeticOverflow(context))?;
-
         if (multiplier >> bit) & 1 == 1 {
             let (next_remainder, carry) = add_mod(remainder, value, divisor);
             remainder = next_remainder;
@@ -1107,7 +1057,6 @@ fn multiply_remainder_div(
     }
     Ok((quotient, remainder))
 }
-
 fn add_mod(left: u128, right: u128, modulus: u128) -> (u128, bool) {
     debug_assert!(modulus > 0);
     debug_assert!(left < modulus);
@@ -1118,31 +1067,25 @@ fn add_mod(left: u128, right: u128, modulus: u128) -> (u128, bool) {
         (left + right, false)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::convert::TryFrom;
-
     use super::*;
-
     fn quantity_nanos(value: u128) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, XOR_QUANTITY_SCALE))
             .expect("u128 nano-XOR fixture fits Quantity")
     }
-
     fn maximum_quantity() -> Quantity {
         "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
             .parse()
             .expect("signed 512-bit maximum quantity")
     }
-
     #[derive(Encode)]
     struct ForgedTierRate {
         storage_class: StorageClass,
         storage_price_per_gib_month: Numeric,
         egress_price_per_gib: Quantity,
     }
-
     #[test]
     fn ratio_helper_bounds_only_the_final_result() {
         let maximum = maximum_quantity();
@@ -1151,13 +1094,11 @@ mod tests {
             Ok(maximum)
         );
     }
-
     #[test]
     fn default_schedule_validates() {
         let schedule = PricingScheduleRecord::launch_default();
         assert!(schedule.validate().is_ok());
     }
-
     #[test]
     fn storage_charge_scales_with_duration() {
         let schedule = PricingScheduleRecord::launch_default();
@@ -1170,7 +1111,6 @@ mod tests {
         assert!(charge_month > charge_week);
         assert_eq!(charge_month, quantity_nanos(50_000_000_000));
     }
-
     #[test]
     fn egress_charge_scales_with_bytes() {
         let schedule = PricingScheduleRecord::launch_default();
@@ -1186,7 +1126,6 @@ mod tests {
                 .egress_price_per_gib
                 .clone()
         );
-
         let half_bytes = u64::try_from(BYTES_PER_GIB / 2).expect("half GiB fits within u64");
         let half = schedule
             .egress_charge_bytes(StorageClass::Hot, half_bytes)
@@ -1198,7 +1137,6 @@ mod tests {
             per_gib
         );
     }
-
     #[test]
     fn collateral_discount_applies_during_onboarding() {
         let schedule = PricingScheduleRecord::launch_default();
@@ -1210,7 +1148,6 @@ mod tests {
             .expect("bounded discounted collateral");
         assert!(requirement_discount < requirement_no_discount);
     }
-
     #[test]
     fn schedule_validation_rejects_noncanonical_governance_inputs() {
         let mut currency = PricingScheduleRecord::launch_default();
@@ -1219,35 +1156,30 @@ mod tests {
             currency.validate(),
             Err(PricingValidationError::InvalidCurrencyCode(_))
         ));
-
         let mut missing_tier = PricingScheduleRecord::launch_default();
         missing_tier.tiers.pop();
         assert!(matches!(
             missing_tier.validate(),
             Err(PricingValidationError::InvalidTierCount { .. })
         ));
-
         let mut reordered = PricingScheduleRecord::launch_default();
         reordered.tiers.swap(0, 1);
         assert!(matches!(
             reordered.validate(),
             Err(PricingValidationError::NonCanonicalTierOrder { .. })
         ));
-
         let mut excessive_onboarding = PricingScheduleRecord::launch_default();
         excessive_onboarding.collateral.onboarding_discount_bps = 10_001;
         assert!(matches!(
             excessive_onboarding.validate(),
             Err(PricingValidationError::OnboardingDiscountOutOfRange(10_001))
         ));
-
         let mut zero_onboarding_period = PricingScheduleRecord::launch_default();
         zero_onboarding_period.collateral.onboarding_period_secs = 0;
         assert!(matches!(
             zero_onboarding_period.validate(),
             Err(PricingValidationError::InvalidOnboardingPeriod)
         ));
-
         let mut window_overflow = PricingScheduleRecord::launch_default();
         window_overflow.credit.settlement_window_secs = u64::MAX;
         window_overflow.credit.settlement_grace_secs = 1;
@@ -1255,7 +1187,6 @@ mod tests {
             window_overflow.validate(),
             Err(PricingValidationError::SettlementWindowOverflow)
         ));
-
         let mut notes = PricingScheduleRecord::launch_default();
         notes.notes = Some("x".repeat(MAX_PRICING_NOTES_BYTES + 1));
         assert!(matches!(
@@ -1263,7 +1194,6 @@ mod tests {
             Err(PricingValidationError::InvalidNotes { .. })
         ));
     }
-
     #[test]
     fn schedule_validation_rejects_discount_ambiguity_and_floods() {
         let mut reversed = PricingScheduleRecord::launch_default();
@@ -1272,14 +1202,12 @@ mod tests {
             reversed.validate(),
             Err(PricingValidationError::NonCanonicalCommitmentTierOrder { .. })
         ));
-
         let mut decreasing_discount = PricingScheduleRecord::launch_default();
         decreasing_discount.discounts.commitment_tiers[1].discount_bps = 100;
         assert!(matches!(
             decreasing_discount.validate(),
             Err(PricingValidationError::InvalidCommitmentDiscount { .. })
         ));
-
         let mut combined = PricingScheduleRecord::launch_default();
         combined.discounts.loyalty_discount_bps = 9_000;
         combined.discounts.commitment_tiers[1].discount_bps = 2_000;
@@ -1287,7 +1215,6 @@ mod tests {
             combined.validate(),
             Err(PricingValidationError::CombinedDiscountExceedsFullPrice)
         ));
-
         let mut flood = PricingScheduleRecord::launch_default();
         flood.discounts.commitment_tiers = (1..=MAX_COMMITMENT_DISCOUNT_TIERS + 1)
             .map(|index| CommitmentDiscountTier {
@@ -1301,7 +1228,6 @@ mod tests {
             Err(PricingValidationError::TooManyCommitmentDiscountTiers { .. })
         ));
     }
-
     #[test]
     fn checked_mul_div_handles_wide_intermediates_and_overflow() {
         assert_eq!(
@@ -1321,7 +1247,6 @@ mod tests {
             Err(PricingComputationError::DivisionByZero("test"))
         ));
     }
-
     #[test]
     fn checked_mul_div_matches_native_arithmetic_across_adversarial_sweep() {
         let mut state = 0xD1B5_4A32_D192_ED03u64;
@@ -1338,7 +1263,6 @@ mod tests {
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
             let divisor = state.max(1);
-
             let product = u128::from(value) * u128::from(multiplier);
             let divisor = u128::from(divisor);
             assert_eq!(
@@ -1353,7 +1277,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn public_pin_fee_rejects_invalid_windows_and_charges_empty_payloads() {
         let schedule = PricingScheduleRecord::launch_default();
@@ -1361,7 +1284,6 @@ mod tests {
             .public_pin_fee(StorageClass::Hot, 0, 1, 10, 11)
             .expect("empty payload receives minimum capacity charge");
         assert!(!empty_fee.is_zero());
-
         assert!(matches!(
             schedule.public_pin_fee(StorageClass::Hot, 1, 0, 10, 11),
             Err(PricingComputationError::ZeroReplicaCount)
@@ -1375,7 +1297,6 @@ mod tests {
             Err(PricingComputationError::EpochBeforeOnboarding { .. })
         ));
     }
-
     #[test]
     fn public_pin_fee_scales_with_bytes_replicas_and_retention() {
         let schedule = PricingScheduleRecord::launch_default();
@@ -1406,7 +1327,6 @@ mod tests {
                     .expect("two settlement windows fit u64"),
             )
             .expect("longer public pin fee");
-
         assert!(larger > base, "stored bytes must increase the prepaid fee");
         assert!(
             replicated > base,
@@ -1417,7 +1337,6 @@ mod tests {
             "retention duration must increase the prepaid fee"
         );
     }
-
     #[test]
     fn provider_credit_low_balance_tracking() {
         let mut credit = ProviderCreditRecord::new(
@@ -1436,7 +1355,6 @@ mod tests {
         credit.track_low_balance(&quantity_nanos(2_000), 20);
         assert_eq!(credit.low_balance_since_epoch, None);
     }
-
     #[test]
     fn tier_rate_rejects_forged_negative_price() {
         let forged = ForgedTierRate {
@@ -1451,7 +1369,6 @@ mod tests {
             "pricing tier must reject a forged negative storage price"
         );
     }
-
     #[test]
     fn provider_credit_mutations_fail_atomically() {
         let mut credit = ProviderCreditRecord::new(
@@ -1464,34 +1381,29 @@ mod tests {
             5,
             Metadata::default(),
         );
-
         let before = credit.clone();
         assert!(matches!(
             credit.apply_charge(&quantity_nanos(101), 6),
             Err(CreditMutationError::InsufficientCredit { .. })
         ));
         assert_eq!(credit, before);
-
         assert!(matches!(
             credit.apply_charge(&quantity_nanos(1), 5),
             Err(CreditMutationError::NonMonotonicSettlementEpoch { .. })
         ));
         assert_eq!(credit, before);
-
         credit.under_delivery_strikes = u32::MAX;
         assert!(matches!(
             credit.add_strike(),
             Err(CreditMutationError::StrikeOverflow)
         ));
         assert_eq!(credit.under_delivery_strikes, u32::MAX);
-
         let before_penalty = credit.clone();
         assert!(matches!(
             credit.apply_penalty(&quantity_nanos(51), 10),
             Err(CreditMutationError::PenaltyExceedsBond { .. })
         ));
         assert_eq!(credit, before_penalty);
-
         credit.slashed = maximum_quantity();
         let before_overflow = credit.clone();
         assert!(matches!(
@@ -1500,7 +1412,6 @@ mod tests {
         ));
         assert_eq!(credit, before_overflow);
     }
-
     #[test]
     fn provider_credit_mutations_enforce_epoch_progression() {
         let mut credit = ProviderCreditRecord::new(

@@ -56,7 +56,6 @@ fn service_default_request_bound_covers_single_entry_archive_ceiling() {
         block_prefix_archive_decode_limits(BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1);
     assert!(archive_decode_limits.max_total_elements() > MAX_REPUTATION_TRUST_EDGES);
 }
-
 #[test]
 fn maximum_admitted_block_has_exact_archive_and_request_boundary() {
     let request_ceiling = u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1)
@@ -159,7 +158,6 @@ fn apple_and_bsd_no_follow_flag_matches_target_abi() {
 const TEST_CID_PAYLOAD: &str = "bafkreibdt5m62vphg7dxcr6pkwwqygydbnwx5z2iu5bgsuxzxbjnlkjv4u";
 const TEST_CID_BLOCK: &str = "bafkreicjnlfibzgy6kp3r2gnqfwdv62i2pyqhfylhixocyambdfgomtn5y";
 const TEST_CID_HEAD: &str = "bafkreie7fzwthi3rp3ucmnj2ibf2iymndlxlnb4226jwxtuo2x2gqfesju";
-
 fn xor(value: &str) -> XorQuantity {
     value.parse().expect("canonical XOR quantity")
 }
@@ -183,7 +181,6 @@ const TEST_PRODUCER_SIGNER_QUALIFICATION: GovernanceDagRuntimeProviderQualificat
 const TEST_RECEIVER_POLICY_DIGEST: [u8; 32] = [0x91; 32];
 const TEST_REPLAY_NAMESPACE_DIGEST: [u8; 32] = [0x92; 32];
 const TEST_INGRESS_REPLICA_SET_DIGEST: [u8; 32] = [0x93; 32];
-
 struct TestAuthenticator {
     handle: String,
     private_key: PrivateKey,
@@ -196,7 +193,6 @@ struct TestAuthenticator {
     drift_during_authentication: AtomicBool,
     refuse: AtomicBool,
 }
-
 impl fmt::Debug for TestAuthenticator {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -206,7 +202,6 @@ impl fmt::Debug for TestAuthenticator {
             .finish()
     }
 }
-
 impl TestAuthenticator {
     fn new(handle: &str, provider_secret: &str) -> Self {
         let (private_key, public_key) = test_request_auth_keypair(handle);
@@ -223,7 +218,6 @@ impl TestAuthenticator {
             refuse: AtomicBool::new(false),
         }
     }
-
     fn with_ingress_binding(
         mut self,
         ingress_binding: GovernanceDagRequestIngressBindingV1,
@@ -234,28 +228,24 @@ impl TestAuthenticator {
             .expect("access test ingress binding") = ingress_binding;
         self
     }
-
     fn ingress_binding(&self) -> GovernanceDagRequestIngressBindingV1 {
         *self
             .ingress_binding
             .lock()
             .expect("lock test ingress binding")
     }
-
     fn rebind_ingress(&self, ingress_binding: GovernanceDagRequestIngressBindingV1) {
         *self
             .ingress_binding
             .lock()
             .expect("lock test ingress binding") = ingress_binding;
     }
-
     fn rotate(&self, provider_secret: &str) {
         *self
             .provider_secret
             .lock()
             .expect("lock test provider diagnostic") = provider_secret.to_owned();
     }
-
     fn signed_envelope(
         &self,
         request: &GovernanceDagCanonicalRequestV1,
@@ -288,7 +278,6 @@ impl TestAuthenticator {
         .map_err(str::to_owned)
     }
 }
-
 fn test_request_auth_keypair(handle: &str) -> (PrivateKey, [u8; 32]) {
     let seed = blake3_array(handle.as_bytes());
     let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, &seed)
@@ -305,11 +294,9 @@ fn test_request_auth_keypair(handle: &str) -> (PrivateKey, [u8; 32]) {
         .expect("test Ed25519 public key has 32 bytes");
     (private_key, public_key)
 }
-
 fn test_request_auth_public_key(handle: &str) -> [u8; 32] {
     test_request_auth_keypair(handle).1
 }
-
 fn default_test_request_ingress_binding(handle: &str) -> GovernanceDagRequestIngressBindingV1 {
     let config = SorafsGovernanceDagService::default();
     let (scope, endpoint, max_body_bytes) = if handle == TEST_HEAD_AUTH_HANDLE {
@@ -337,7 +324,6 @@ fn default_test_request_ingress_binding(handle: &str) -> GovernanceDagRequestIng
     )
     .expect("construct test request-ingress binding")
 }
-
 fn test_ingress_qualification(
     provider: GovernanceDagRuntimeProviderQualificationV1,
     binding: GovernanceDagRequestIngressBindingV1,
@@ -351,7 +337,6 @@ fn test_ingress_qualification(
     )
     .expect("construct live test request-ingress qualification")
 }
-
 fn signed_test_request_auth_envelope(
     handle: &str,
     request: &GovernanceDagCanonicalRequestV1,
@@ -374,7 +359,6 @@ fn signed_test_request_auth_envelope(
     )
     .expect("construct test request-auth envelope")
 }
-
 fn request_auth_header_fields(
     envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
 ) -> Vec<(String, Vec<u8>)> {
@@ -383,7 +367,6 @@ fn request_auth_header_fields(
         .map(|(name, value)| (name.to_owned(), value.into_bytes()))
         .collect()
 }
-
 fn verify_request_before_test_backend(
     request: &GovernanceDagCanonicalRequestV1,
     headers: &[(String, Vec<u8>)],
@@ -468,10 +451,8 @@ fn verify_request_before_test_backend(
     backend_calls.fetch_add(1, AtomicOrdering::SeqCst);
     Ok(())
 }
-
 #[derive(Debug)]
 struct UnavailableTestReplayStore;
-
 impl crate::GovernanceDagRequestAuthenticationReplayStoreV1 for UnavailableTestReplayStore {
     fn consume_nonce(
         &mut self,
@@ -482,7 +463,6 @@ impl crate::GovernanceDagRequestAuthenticationReplayStoreV1 for UnavailableTestR
         Err(GovernanceDagRequestAuthenticationErrorV1::ReplayStoreUnavailable)
     }
 }
-
 fn canonical_test_request(
     scope: GovernanceDagAuthenticationScope,
     method: &str,
@@ -509,12 +489,10 @@ fn canonical_test_request(
     )
     .expect("canonical test request")
 }
-
 impl GovernanceDagRequestAuthenticator for TestAuthenticator {
     fn handle(&self) -> &str {
         &self.handle
     }
-
     fn ingress_qualification(&self) -> Result<GovernanceDagRequestIngressQualificationV1, String> {
         if self.qualification_refuse.load(AtomicOrdering::SeqCst) {
             return Err("auth_token=must-never-escape".to_owned());
@@ -527,7 +505,6 @@ impl GovernanceDagRequestAuthenticator for TestAuthenticator {
             self.ingress_binding(),
         ))
     }
-
     fn authenticate(
         &self,
         request: &GovernanceDagCanonicalRequestV1,
@@ -548,17 +525,14 @@ impl GovernanceDagRequestAuthenticator for TestAuthenticator {
         self.signed_envelope(request)
     }
 }
-
 trait TestRebindableRequestAuthenticator: GovernanceDagRequestAuthenticator {
     fn rebind_ingress(&self, ingress_binding: GovernanceDagRequestIngressBindingV1);
 }
-
 impl TestRebindableRequestAuthenticator for TestAuthenticator {
     fn rebind_ingress(&self, ingress_binding: GovernanceDagRequestIngressBindingV1) {
         TestAuthenticator::rebind_ingress(self, ingress_binding);
     }
 }
-
 struct FinalRequestAuthenticator {
     signer: TestAuthenticator,
     expected_body_length: u64,
@@ -567,7 +541,6 @@ struct FinalRequestAuthenticator {
     expected_condition_value: HeaderValue,
     observed_put: AtomicBool,
 }
-
 impl fmt::Debug for FinalRequestAuthenticator {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -577,7 +550,6 @@ impl fmt::Debug for FinalRequestAuthenticator {
             .finish_non_exhaustive()
     }
 }
-
 impl FinalRequestAuthenticator {
     fn new(
         expected_body: &[u8],
@@ -594,16 +566,13 @@ impl FinalRequestAuthenticator {
         }
     }
 }
-
 impl GovernanceDagRequestAuthenticator for FinalRequestAuthenticator {
     fn handle(&self) -> &str {
         TEST_HEAD_AUTH_HANDLE
     }
-
     fn ingress_qualification(&self) -> Result<GovernanceDagRequestIngressQualificationV1, String> {
         self.signer.ingress_qualification()
     }
-
     fn authenticate(
         &self,
         request: &GovernanceDagCanonicalRequestV1,
@@ -635,13 +604,11 @@ impl GovernanceDagRequestAuthenticator for FinalRequestAuthenticator {
         self.signer.signed_envelope(request)
     }
 }
-
 impl TestRebindableRequestAuthenticator for FinalRequestAuthenticator {
     fn rebind_ingress(&self, ingress_binding: GovernanceDagRequestIngressBindingV1) {
         self.signer.rebind_ingress(ingress_binding);
     }
 }
-
 #[derive(Default)]
 struct TestSealedStoreInner {
     checkpoint: Option<GovernanceDagSealedStateRecord>,
@@ -657,7 +624,6 @@ struct TestSealedStoreInner {
     ipfs_request_replay_generation_floor: u64,
     signed_head_request_replay_generation_floor: u64,
 }
-
 struct TestSealedStore {
     handle: String,
     inner: StdMutex<TestSealedStoreInner>,
@@ -676,7 +642,6 @@ struct TestSealedStore {
     replay_cas_completed: AtomicBool,
     diverge_replay_readback: AtomicBool,
 }
-
 impl fmt::Debug for TestSealedStore {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -685,7 +650,6 @@ impl fmt::Debug for TestSealedStore {
             .finish_non_exhaustive()
     }
 }
-
 impl TestSealedStore {
     fn new(handle: &str) -> Self {
         Self {
@@ -707,13 +671,11 @@ impl TestSealedStore {
             diverge_replay_readback: AtomicBool::new(false),
         }
     }
-
     fn with_replay_load_barrier(mut self, barrier: Arc<Barrier>) -> Self {
         self.replay_load_barrier = Some(barrier);
         self.replay_initial_loads_remaining = AtomicU64::new(2);
         self
     }
-
     fn maybe_drift(&self) {
         if self
             .drift_during_operation
@@ -723,7 +685,6 @@ impl TestSealedStore {
                 .fetch_add(1, AtomicOrdering::SeqCst);
         }
     }
-
     fn return_checkpoint_on_second_load(&self, record: GovernanceDagSealedStateRecord) {
         *self
             .checkpoint_second_load
@@ -731,7 +692,6 @@ impl TestSealedStore {
             .expect("lock checkpoint race fixture") = Some(record);
         self.checkpoint_load_count.store(0, AtomicOrdering::SeqCst);
     }
-
     fn return_intent_on_second_load(&self, record: GovernanceDagSealedStateRecord) {
         *self
             .intent_second_load
@@ -739,7 +699,6 @@ impl TestSealedStore {
             .expect("lock intent race fixture") = Some(record);
         self.intent_load_count.store(0, AtomicOrdering::SeqCst);
     }
-
     fn slot(
         inner: &TestSealedStoreInner,
         slot: GovernanceDagSealedStateSlot,
@@ -755,7 +714,6 @@ impl TestSealedStore {
             }
         }
     }
-
     fn slot_mut(
         inner: &mut TestSealedStoreInner,
         slot: GovernanceDagSealedStateSlot,
@@ -774,12 +732,10 @@ impl TestSealedStore {
         }
     }
 }
-
 impl GovernanceDagSealedCheckpointStore for TestSealedStore {
     fn handle(&self) -> &str {
         &self.handle
     }
-
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
         if self.qualification_refuse.load(AtomicOrdering::SeqCst) {
             return Err("kms_access_token=must-never-escape".to_owned());
@@ -789,7 +745,6 @@ impl GovernanceDagSealedCheckpointStore for TestSealedStore {
             [0x82; 32],
         ))
     }
-
     fn load(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -864,7 +819,6 @@ impl GovernanceDagSealedCheckpointStore for TestSealedStore {
         }
         Ok(record)
     }
-
     fn compare_and_swap(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -957,7 +911,6 @@ impl GovernanceDagSealedCheckpointStore for TestSealedStore {
         }
         Ok(())
     }
-
     fn delete(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -978,12 +931,10 @@ impl GovernanceDagSealedCheckpointStore for TestSealedStore {
         Ok(())
     }
 }
-
 fn test_request_auth_policy(public_key: [u8; 32]) -> GovernanceDagRequestAuthenticationPolicyV1 {
     validate_request_auth_policy(public_key, 30, 5, "test authenticator")
         .expect("construct test request-auth policy")
 }
-
 fn test_authenticator(
     handle: &str,
     authentication_scope: GovernanceDagAuthenticationScope,
@@ -999,7 +950,6 @@ fn test_authenticator(
     )
     .expect("bind test authenticator")
 }
-
 fn bind_test_authenticator_to_endpoint<T>(
     provider: Arc<T>,
     scope: GovernanceDagAuthenticationScope,
@@ -1037,7 +987,6 @@ where
     )
     .expect("qualify exact test endpoint authenticator")
 }
-
 fn test_runtime_providers(
     view: &SorafsGovernanceDagServiceView,
     checkpoint_store: Arc<TestSealedStore>,
@@ -1059,13 +1008,11 @@ fn test_runtime_providers(
         checkpoint_store: Some(checkpoint_store),
     }
 }
-
 struct TestRuntimeProviderRegistry {
     providers: GovernanceDagServiceRuntimeProviders,
     failure: Option<GovernanceDagServiceRuntimeProviderRegistryErrorV1>,
     observed_bindings: StdMutex<Option<GovernanceDagServiceRuntimeProviderBindingsV1>>,
 }
-
 impl TestRuntimeProviderRegistry {
     fn returning(providers: GovernanceDagServiceRuntimeProviders) -> Self {
         Self {
@@ -1074,7 +1021,6 @@ impl TestRuntimeProviderRegistry {
             observed_bindings: StdMutex::new(None),
         }
     }
-
     fn failing(failure: GovernanceDagServiceRuntimeProviderRegistryErrorV1) -> Self {
         Self {
             providers: GovernanceDagServiceRuntimeProviders::default(),
@@ -1083,7 +1029,6 @@ impl TestRuntimeProviderRegistry {
         }
     }
 }
-
 impl GovernanceDagServiceRuntimeProviderRegistryV1 for TestRuntimeProviderRegistry {
     fn resolve(
         &self,
@@ -1102,7 +1047,6 @@ impl GovernanceDagServiceRuntimeProviderRegistryV1 for TestRuntimeProviderRegist
         Ok(self.providers.clone())
     }
 }
-
 fn test_checkpoint_store(provider: Arc<TestSealedStore>) -> OpaqueCheckpointStore {
     OpaqueCheckpointStore::try_new(
         TEST_CHECKPOINT_STORE_HANDLE,
@@ -1111,7 +1055,6 @@ fn test_checkpoint_store(provider: Arc<TestSealedStore>) -> OpaqueCheckpointStor
     )
     .expect("bind test sealed checkpoint store")
 }
-
 fn test_sealed_http_receiver(
     scope: GovernanceDagAuthenticationScope,
     provider: Arc<TestSealedStore>,
@@ -1130,7 +1073,6 @@ fn test_sealed_http_receiver(
     )
     .expect("bind sealed HTTP ingress receiver")
 }
-
 fn sealed_receiver_request_parts(
     scope: GovernanceDagAuthenticationScope,
     method: &str,
@@ -1159,7 +1101,6 @@ fn sealed_receiver_request_parts(
     ));
     (request, headers)
 }
-
 fn runtime_boundary_view(root: &Path) -> SorafsGovernanceDagServiceView {
     let source_dir = root.join("source");
     let state_dir = root.join("state");
@@ -1205,7 +1146,6 @@ fn runtime_boundary_view(root: &Path) -> SorafsGovernanceDagServiceView {
         },
     }
 }
-
 #[test]
 fn configured_publisher_key_requires_one_canonical_strong_ed25519_point() {
     let valid = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
@@ -1216,7 +1156,6 @@ fn configured_publisher_key_requires_one_canonical_strong_ed25519_point() {
             .expect("strong canonical key"),
         valid
     );
-
     let identity = {
         let mut encoded = [0_u8; 32];
         encoded[0] = 1;
@@ -1227,7 +1166,6 @@ fn configured_publisher_key_requires_one_canonical_strong_ed25519_point() {
         Err(GovernanceDagServiceError::Config(message))
             if message.contains("canonical strong Ed25519")
     ));
-
     let mut noncanonical = [0xff_u8; 32];
     noncanonical[0] = 0xed;
     noncanonical[31] = 0x7f;
@@ -1239,7 +1177,6 @@ fn configured_publisher_key_requires_one_canonical_strong_ed25519_point() {
         "mixed-torsion Ed25519 encodings must fail the production subgroup check"
     );
 }
-
 struct KuboHarness {
     _root: TempDir,
     repo: PathBuf,
@@ -1248,7 +1185,6 @@ struct KuboHarness {
     daemon_log: PathBuf,
     child: Option<Child>,
 }
-
 impl KuboHarness {
     async fn start() -> Self {
         assert_eq!(
@@ -1265,7 +1201,6 @@ impl KuboHarness {
         #[cfg(unix)]
         fs::set_permissions(&repo, fs::Permissions::from_mode(0o700))
             .expect("secure isolated Kubo repository");
-
         let version_bytes = Self::run_command(&binary, &repo, &["version", "--number"]);
         let version = std::str::from_utf8(&version_bytes)
             .expect("Kubo version must be UTF-8")
@@ -1274,7 +1209,6 @@ impl KuboHarness {
             version, KUBO_CONFORMANCE_VERSION_V1,
             "the fixed UnixFS profile must be checked against the release-pinned Kubo version"
         );
-
         Self::run_command(
             &binary,
             &repo,
@@ -1310,7 +1244,6 @@ impl KuboHarness {
             &["config", "--bool", "Discovery.MDNS.Enabled", "false"],
         );
         Self::assert_network_isolation(&binary, &repo);
-
         let daemon_log = root.path().join("kubo-daemon.log");
         let stdout = File::create(&daemon_log).expect("create Kubo daemon log");
         let stderr = stdout.try_clone().expect("clone Kubo daemon log handle");
@@ -1335,7 +1268,6 @@ impl KuboHarness {
         harness.wait_until_ready().await;
         harness
     }
-
     fn run_command(binary: &Path, repo: &Path, args: &[&str]) -> Vec<u8> {
         let output = Command::new(binary)
             .args(args)
@@ -1353,7 +1285,6 @@ impl KuboHarness {
         );
         output.stdout
     }
-
     fn assert_network_isolation(binary: &Path, repo: &Path) {
         let bytes = Self::run_command(binary, repo, &["config", "show"]);
         let config: JsonValue =
@@ -1422,7 +1353,6 @@ impl KuboHarness {
             "isolated Kubo must expose only one loopback swarm listener"
         );
     }
-
     async fn wait_for_api(&mut self) -> String {
         let api_path = self.repo.join("api");
         let deadline = time::Instant::now() + Duration::from_secs(20);
@@ -1460,7 +1390,6 @@ impl KuboHarness {
             time::sleep(Duration::from_millis(25)).await;
         }
     }
-
     async fn wait_until_ready(&self) {
         let endpoint = self.endpoint();
         let url = endpoint
@@ -1496,7 +1425,6 @@ impl KuboHarness {
             time::sleep(Duration::from_millis(25)).await;
         }
     }
-
     fn endpoint(&self) -> PinnedEndpoint {
         let authenticated_wire_body_max_bytes = authenticated_ipfs_wire_body_max_bytes(
             GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1 as u64,
@@ -1525,12 +1453,10 @@ impl KuboHarness {
             authenticated_wire_body_max_bytes,
         }
     }
-
     fn log_text(&self) -> String {
         fs::read_to_string(&self.daemon_log)
             .unwrap_or_else(|err| format!("cannot read Kubo daemon log: {err}"))
     }
-
     fn stop_child(&mut self) {
         let Some(mut child) = self.child.take() else {
             return;
@@ -1559,23 +1485,19 @@ impl KuboHarness {
             }
         }
     }
-
     fn shutdown(mut self) {
         self.stop_child();
     }
 }
-
 impl Drop for KuboHarness {
     fn drop(&mut self) {
         self.stop_child();
     }
 }
-
 struct TestSigner {
     private_key: PrivateKey,
     public_key: [u8; 32],
 }
-
 impl TestSigner {
     fn new(seed: u8) -> Self {
         let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
@@ -1594,7 +1516,6 @@ impl TestSigner {
             public_key,
         }
     }
-
     fn sign(&self, payload: &[u8]) -> GovernanceLogSignatureV1 {
         let signature = IrohaSignature::try_new(&self.private_key, payload)
             .expect("sign test governance payload");
@@ -1605,13 +1526,11 @@ impl TestSigner {
         }
     }
 }
-
 struct PublisherTestSigner {
     handle: String,
     peer_id: Vec<u8>,
     signer: TestSigner,
 }
-
 impl fmt::Debug for PublisherTestSigner {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1621,26 +1540,21 @@ impl fmt::Debug for PublisherTestSigner {
             .finish_non_exhaustive()
     }
 }
-
 impl GovernanceDagRuntimeSigner for PublisherTestSigner {
     fn handle(&self) -> &str {
         &self.handle
     }
-
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
         Ok(GovernanceDagRuntimeProviderQualificationV1::new(
             1, [0x83; 32],
         ))
     }
-
     fn publisher_peer_id(&self) -> &[u8] {
         &self.peer_id
     }
-
     fn public_key(&self) -> [u8; 32] {
         self.signer.public_key
     }
-
     fn sign(
         &self,
         _purpose: GovernanceDagSigningPurposeV1,
@@ -1653,7 +1567,6 @@ impl GovernanceDagRuntimeSigner for PublisherTestSigner {
             .map_err(|_| "test signature length".to_owned())
     }
 }
-
 fn empty_signature() -> GovernanceLogSignatureV1 {
     GovernanceLogSignatureV1 {
         algorithm: GovernanceSignatureAlgorithm::Ed25519,
@@ -1661,7 +1574,6 @@ fn empty_signature() -> GovernanceLogSignatureV1 {
         signature: Vec::new(),
     }
 }
-
 fn settlement(sequence: u64, timestamp: u64) -> DealSettlementV1 {
     let mut deal_id = [0x11; 32];
     deal_id[..8].copy_from_slice(&sequence.saturating_add(1).to_le_bytes());
@@ -1712,7 +1624,6 @@ fn settlement(sequence: u64, timestamp: u64) -> DealSettlementV1 {
     settlement.settlement_id = settlement.derive_settlement_id().expect("settlement id");
     settlement
 }
-
 fn signed_source(count: usize, seed: u8, first_timestamp: u64) -> SourceSnapshot {
     let signer = TestSigner::new(seed);
     let peer_id = TEST_PRODUCER_PEER_ID.as_bytes().to_vec();
@@ -1808,7 +1719,6 @@ fn signed_source(count: usize, seed: u8, first_timestamp: u64) -> SourceSnapshot
         blocks: source_blocks,
     }
 }
-
 fn appeal_finance_report(timestamp: u64) -> SoraFsAppealFinanceReportV1 {
     SoraFsAppealFinanceReportV1 {
         version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
@@ -1853,7 +1763,6 @@ fn appeal_finance_report(timestamp: u64) -> SoraFsAppealFinanceReportV1 {
         no_show_juror_ids: vec!["juror-c".to_owned()],
     }
 }
-
 fn signed_finance_source(seed: u8, timestamp: u64) -> SourceSnapshot {
     let signer = TestSigner::new(seed);
     let account_key = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
@@ -1897,7 +1806,6 @@ fn signed_finance_source(seed: u8, timestamp: u64) -> SourceSnapshot {
         norito::to_bytes(&source_block.block).expect("encode attributed source block");
     source_block.encoded_blake3 = blake3_array(&source_block.bytes);
     source_block.payload_kind = "appeal_finance_report".to_owned();
-
     source.head.head_block_cid = source_block.block.block_cid.clone();
     source.head.head_signature = signer.sign(
         &source
@@ -1911,7 +1819,6 @@ fn signed_finance_source(seed: u8, timestamp: u64) -> SourceSnapshot {
     source.chain_blake3 = source_chain_blake3_v1(&source.head_bytes, &source.blocks);
     source
 }
-
 fn test_runtime_config(source: &SourceSnapshot, root: &Path) -> RuntimeConfig {
     let mut expected_public_key = [0_u8; 32];
     expected_public_key.copy_from_slice(&source.head.head_signature.public_key);
@@ -1939,7 +1846,6 @@ fn test_runtime_config(source: &SourceSnapshot, root: &Path) -> RuntimeConfig {
         expected_public_key,
     }
 }
-
 fn checkpoint_from_source(source: &SourceSnapshot) -> CheckpointBodyV1 {
     let mirror_blocks = source
         .blocks
@@ -1972,7 +1878,6 @@ fn checkpoint_from_source(source: &SourceSnapshot) -> CheckpointBodyV1 {
         mirror_blocks,
     }
 }
-
 fn checkpoint_with_canonical_mirror(source: &SourceSnapshot) -> CheckpointBodyV1 {
     let mut checkpoint = checkpoint_from_source(source);
     let mirror = mirror_index_value(
@@ -1991,7 +1896,6 @@ fn checkpoint_with_canonical_mirror(source: &SourceSnapshot) -> CheckpointBodyV1
     );
     checkpoint
 }
-
 fn intent_from_source(source: &SourceSnapshot) -> PublishIntentBodyV1 {
     PublishIntentBodyV1 {
         version: PUBLISH_INTENT_VERSION_V1,
@@ -2027,7 +1931,6 @@ fn intent_from_source(source: &SourceSnapshot) -> PublishIntentBodyV1 {
         ),
     }
 }
-
 fn block_prefix_archive_test_endpoint() -> PinnedEndpoint {
     PinnedEndpoint {
         url: Url::parse("http://127.0.0.1:1/").expect("parse test archive endpoint"),
@@ -2044,7 +1947,6 @@ fn block_prefix_archive_test_endpoint() -> PinnedEndpoint {
         authenticated_wire_body_max_bytes: 1024 * 1024,
     }
 }
-
 fn signed_block_prefix_archive_fixture(
     source: &SourceSnapshot,
     start: u64,
@@ -2066,7 +1968,6 @@ fn signed_block_prefix_archive_fixture(
         endpoint,
     )
 }
-
 fn signed_block_prefix_archive_fixture_with_checkpoint(
     source: &SourceSnapshot,
     start: u64,
@@ -2160,7 +2061,6 @@ fn signed_block_prefix_archive_fixture_with_checkpoint(
         .expect("verify archive publication fixture");
     (archive, bytes, head)
 }
-
 fn secure_temp_dir() -> TempDir {
     let temp_root = std::env::temp_dir()
         .canonicalize()
@@ -2174,7 +2074,6 @@ fn secure_temp_dir() -> TempDir {
         .expect("secure test directory");
     dir
 }
-
 fn write_test_sidecar_file(path: &Path, bytes: &[u8]) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("create source sidecar parent");
@@ -2186,7 +2085,6 @@ fn write_test_sidecar_file(path: &Path, bytes: &[u8]) {
     )
     .expect("write source sidecar digest");
 }
-
 fn materialize_source_snapshot(root: &Path, source: &mut SourceSnapshot) {
     fs::create_dir_all(root).expect("create Governance DAG source root");
     let mut entries = Vec::with_capacity(source.blocks.len());
@@ -2241,7 +2139,6 @@ fn materialize_source_snapshot(root: &Path, source: &mut SourceSnapshot) {
             &source_payload_bytes,
         );
         write_test_sidecar_file(&root.join(&source_json_path_label), &source_json_bytes);
-
         let digest_hex = hex::encode(block.encoded_blake3);
         let mut entry = JsonMap::new();
         entry.insert("position".into(), JsonValue::from(position as u64));
@@ -2422,7 +2319,6 @@ fn materialize_source_snapshot(root: &Path, source: &mut SourceSnapshot) {
     write_runtime_dag_committed_snapshot_fixture_v1(root, source.head_bytes.clone(), index_bytes)
         .expect("commit typed Governance DAG runtime head/index fixture");
 }
-
 fn producer_checkpoint_from_source(
     root: &Path,
     source: &SourceSnapshot,
@@ -2460,7 +2356,6 @@ fn producer_checkpoint_from_source(
         qualification_archive_digest: [0; 32],
     }
 }
-
 fn seed_producer_checkpoint(
     provider: &TestSealedStore,
     root: &Path,
@@ -2487,7 +2382,6 @@ fn seed_producer_checkpoint(
         .expect("seed test producer checkpoint");
     record
 }
-
 async fn kubo_unpin(endpoint: &PinnedEndpoint, cid: &str) {
     let url = endpoint
         .ipfs_url("api/v0/pin/rm", &[("arg", cid), ("recursive", "true")])
@@ -2504,7 +2398,6 @@ async fn kubo_unpin(endpoint: &PinnedEndpoint, cid: &str) {
         .await
         .expect("read Kubo unpin response");
 }
-
 async fn assert_kubo_has_no_swarm_peers(endpoint: &PinnedEndpoint) {
     let url = endpoint
         .ipfs_url("api/v0/swarm/peers", &[])
@@ -2528,7 +2421,6 @@ async fn assert_kubo_has_no_swarm_peers(endpoint: &PinnedEndpoint) {
         "isolated Kubo must have no swarm peers: {value:?}"
     );
 }
-
 fn real_kubo_service_view(
     source: &SourceSnapshot,
     source_dir: &Path,
@@ -2600,7 +2492,6 @@ listen_addr = "127.0.0.1:0"
     fs::write(&config_path, config).expect("write standalone G-DAG service config");
     load_service_config(&config_path).expect("parse standalone G-DAG service config")
 }
-
 async fn spawn_router_with_authenticator<T>(
     router: Router,
     path: &str,
@@ -2648,7 +2539,6 @@ where
         handle,
     )
 }
-
 async fn spawn_router(router: Router, path: &str) -> (PinnedEndpoint, JoinHandle<()>) {
     spawn_router_with_authenticator(
         router,
@@ -2661,28 +2551,23 @@ async fn spawn_router(router: Router, path: &str) -> (PinnedEndpoint, JoinHandle
     )
     .await
 }
-
 fn test_response(status: StatusCode, body: impl Into<Body>) -> Response {
     let mut response = Response::new(body.into());
     *response.status_mut() = status;
     response
 }
-
 #[derive(Clone)]
 struct MockIpfsState {
     add_body: Arc<Vec<u8>>,
     cat_body: Arc<Vec<u8>>,
     pin_present: bool,
 }
-
 async fn mock_ipfs_add(State(state): State<MockIpfsState>, _body: Bytes) -> Response {
     test_response(StatusCode::OK, state.add_body.as_ref().clone())
 }
-
 async fn mock_ipfs_pin_add() -> Response {
     test_response(StatusCode::OK, "{}")
 }
-
 async fn mock_ipfs_pin_ls(State(state): State<MockIpfsState>) -> Response {
     let body = if state.pin_present {
         let cid = json::from_slice::<JsonValue>(&state.add_body)
@@ -2700,11 +2585,9 @@ async fn mock_ipfs_pin_ls(State(state): State<MockIpfsState>) -> Response {
     };
     test_response(StatusCode::OK, body)
 }
-
 async fn mock_ipfs_cat(State(state): State<MockIpfsState>) -> Response {
     test_response(StatusCode::OK, state.cat_body.as_ref().clone())
 }
-
 fn mock_ipfs_router(state: MockIpfsState) -> Router {
     Router::new()
         .route("/api/v0/add", post(mock_ipfs_add))
@@ -2714,12 +2597,10 @@ fn mock_ipfs_router(state: MockIpfsState) -> Router {
         .layer(axum::extract::DefaultBodyLimit::disable())
         .with_state(state)
 }
-
 async fn count_unexpected_publication_io(State(request_count): State<Arc<AtomicU64>>) -> Response {
     request_count.fetch_add(1, AtomicOrdering::SeqCst);
     test_response(StatusCode::INTERNAL_SERVER_ERROR, "unexpected request")
 }
-
 #[derive(Default)]
 struct SignedHeadInner {
     bytes: Option<Vec<u8>>,
@@ -2729,10 +2610,8 @@ struct SignedHeadInner {
     readback_override: Option<Vec<u8>>,
     put_count: u64,
 }
-
 #[derive(Clone)]
 struct SignedHeadState(Arc<Mutex<SignedHeadInner>>);
-
 async fn mock_signed_head_get(State(state): State<SignedHeadState>) -> Response {
     let state = state.0.lock().await;
     let Some(bytes) = &state.bytes else {
@@ -2750,7 +2629,6 @@ async fn mock_signed_head_get(State(state): State<SignedHeadState>) -> Response 
     }
     response
 }
-
 async fn mock_signed_head_put(
     State(state): State<SignedHeadState>,
     _headers: HeaderMap,
@@ -2770,7 +2648,6 @@ async fn mock_signed_head_put(
     state.etag = "\"v2\"".to_owned();
     test_response(StatusCode::NO_CONTENT, Body::empty())
 }
-
 async fn spawn_signed_head(
     inner: SignedHeadInner,
 ) -> (PinnedEndpoint, SignedHeadState, JoinHandle<()>) {
@@ -2783,7 +2660,6 @@ async fn spawn_signed_head(
     )
     .await
 }
-
 async fn spawn_signed_head_with_authenticator<T>(
     inner: SignedHeadInner,
     provider: Arc<T>,
@@ -2804,7 +2680,6 @@ where
     .await;
     (endpoint, state, handle)
 }
-
 async fn response_header_bomb() -> Response {
     let mut response = test_response(StatusCode::OK, "ok");
     for index in 0..=MAX_RESPONSE_HEADERS {
@@ -2816,11 +2691,9 @@ async fn response_header_bomb() -> Response {
     }
     response
 }
-
 async fn response_body_bomb() -> Response {
     test_response(StatusCode::OK, vec![0_u8; 17])
 }
-
 async fn response_gzip() -> Response {
     let mut response = test_response(StatusCode::OK, "abc");
     response
@@ -2828,7 +2701,6 @@ async fn response_gzip() -> Response {
         .insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
     response
 }
-
 async fn mock_authenticator_drift(State(provider): State<Arc<TestAuthenticator>>) -> Response {
     provider
         .qualification_revision

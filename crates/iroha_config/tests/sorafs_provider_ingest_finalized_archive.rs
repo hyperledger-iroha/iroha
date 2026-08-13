@@ -1,12 +1,9 @@
 //! Validate the public `SoraFS` provider-ingest finalized-archive hard cut.
-
 use std::path::PathBuf;
-
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
-
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()
@@ -14,7 +11,6 @@ fn base_reader() -> ConfigReader {
         .read_toml_with_extends(base_path)
         .expect("base config should load")
 }
-
 fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
     let table = source
         .parse()
@@ -26,13 +22,11 @@ fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
         .parse()
         .map_err(|error| format!("{error:?}"))
 }
-
 fn completion_signer_public_key_hex() -> String {
     let key_pair =
         KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519).expect("test Ed25519 keypair");
     hex::encode(key_pair.public_key().to_bytes().1)
 }
-
 fn native_signer_bindings() -> String {
     [
         ("proof_outcome", "proof-outcome", 0x53),
@@ -64,7 +58,6 @@ policy_digest_hex = "{policy_digest_hex}"
     .collect::<Vec<_>>()
     .join("")
 }
-
 fn enabled_overlay(archive_policy: &str) -> String {
     let native_signers = native_signer_bindings();
     format!(
@@ -108,7 +101,6 @@ max_pages_per_tick = 2
         "a7".repeat(32),
     )
 }
-
 fn valid_archive_policy() -> &'static str {
     r#"
 relative_root = "provider-ingest/finalized-v1"
@@ -122,7 +114,6 @@ max_page_rows = 2
 max_kura_tip_lag_blocks = 0
 "#
 }
-
 fn attestation_journal_overlay(extra: &str) -> String {
     format!(
         r#"{}
@@ -145,7 +136,6 @@ inventory_policy_digest_hex = "{}"
         "c3".repeat(32),
     )
 }
-
 #[test]
 fn explicit_nested_archive_policy_projects_exact_relative_root_and_bounds() {
     let actual = parse_overlay(&enabled_overlay(valid_archive_policy()))
@@ -157,7 +147,6 @@ fn explicit_nested_archive_policy_projects_exact_relative_root_and_bounds() {
         .as_ref()
         .expect("enabled provider-ingest runtime");
     let archive = &runtime.finalized_archive;
-
     assert_eq!(runtime.authenticated_source_fetch_revision, 5);
     assert_eq!(runtime.authenticated_source_fetch_policy_digest, [0xB1; 32]);
     assert_eq!(runtime.completion_signer_resolver_revision, 6);
@@ -179,7 +168,6 @@ fn explicit_nested_archive_policy_projects_exact_relative_root_and_bounds() {
         "manual/no-retention must remain the default"
     );
 }
-
 #[test]
 fn attestation_journal_projects_exact_public_bindings_and_bounds() {
     let source = attestation_journal_overlay(
@@ -195,7 +183,6 @@ fn attestation_journal_projects_exact_public_bindings_and_bounds() {
         .provider_attestation_journal
         .as_ref()
         .expect("enabled attestation journal");
-
     assert_eq!(
         journal.clock_seal.handle,
         "sealed://sorafs/provider-attestation/clock-primary"
@@ -223,7 +210,6 @@ fn attestation_journal_projects_exact_public_bindings_and_bounds() {
     assert_eq!(journal.checkpoint_max_bytes, 8 * 1024 * 1024);
     assert_eq!(journal.max_cas_retries, 5);
 }
-
 #[test]
 fn attestation_journal_checkpoint_minimum_is_inclusive() {
     let minimum =
@@ -244,7 +230,6 @@ fn attestation_journal_checkpoint_minimum_is_inclusive() {
         minimum
     );
 }
-
 #[test]
 fn attestation_journal_checkpoint_below_minimum_is_rejected() {
     let minimum =
@@ -257,7 +242,6 @@ fn attestation_journal_checkpoint_below_minimum_is_rejected() {
         "unexpected minimum-bound diagnostic: {error}"
     );
 }
-
 #[test]
 fn attestation_journal_rejects_path_nonce_endpoint_and_secret_fields() {
     for selector in [
@@ -279,7 +263,6 @@ fn attestation_journal_rejects_path_nonce_endpoint_and_secret_fields() {
         );
     }
 }
-
 #[test]
 fn enabled_retention_projects_only_credential_free_exact_authority_binding() {
     let policy = format!(
@@ -306,7 +289,6 @@ fn enabled_retention_projects_only_credential_free_exact_authority_binding() {
     assert_eq!(binding.revision, 9);
     assert_eq!(binding.policy_digest, [0xD9; 32]);
 }
-
 #[test]
 fn retention_authority_is_all_or_nothing_and_rejects_test_marked_handles() {
     for (extra, expected) in [
@@ -333,7 +315,6 @@ fn retention_authority_is_all_or_nothing_and_rejects_test_marked_handles() {
         assert!(error.contains(expected), "unexpected diagnostic: {error}");
     }
 }
-
 #[test]
 fn archive_policy_rejects_unsafe_roots_and_inconsistent_bounds() {
     for (policy, expected) in [
@@ -379,7 +360,6 @@ fn archive_policy_rejects_unsafe_roots_and_inconsistent_bounds() {
         );
     }
 }
-
 #[test]
 fn retired_snapshot_and_top_level_lag_selectors_are_rejected() {
     for selector in [

@@ -22,7 +22,6 @@ fn serviced_candidate_snapshot_is_bound_to_the_local_validator_owner() {
             .serviced_candidate_store_path_for_test()
             .to_path_buf();
     }
-
     let owner_b_wal = directory.path().join("owner-b.wal");
     let owner_b_snapshot = directory.path().join("owner-b.wal.serviced-candidates");
     std::fs::copy(&owner_a_snapshot, &owner_b_snapshot)
@@ -43,7 +42,6 @@ fn serviced_candidate_snapshot_is_bound_to_the_local_validator_owner() {
         Err(AdapterError::ServicedCandidateStore(_))
     ));
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate() {
@@ -117,7 +115,6 @@ fn aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate() 
         marker_count + 1,
         "all valid QC carrier variants share one transient identity"
     );
-
     let mut tc_key = None;
     for (variant, signers) in signer_subsets.iter().enumerate() {
         let marker = u8::try_from(variant).expect("small carrier variant");
@@ -165,7 +162,6 @@ fn aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate() 
         adapter.serviced_candidate_count_for_test(),
         marker_count + 2
     );
-
     let mut timeout_vote_key = None;
     for (variant, signers) in signer_subsets.iter().enumerate() {
         let marker = u8::try_from(variant).expect("small carrier variant");
@@ -219,7 +215,6 @@ fn aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate() 
         adapter.serviced_candidate_count_for_test(),
         marker_count + 3
     );
-
     let proposal_round = wire::ConsensusRound { view: 1, ..round };
     let proposal_subject = subject(0xC3);
     let proposal_payload = [0xC3, 2];
@@ -289,7 +284,6 @@ fn aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate() 
         adapter.serviced_candidate_count_for_test(),
         marker_count + 4
     );
-
     let mut vote_key = None;
     for variant in 0_u8..5 {
         let vote = wire::Vote {
@@ -336,7 +330,6 @@ fn aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate() 
         marker_count + 5
     );
 }
-
 #[test]
 fn serviced_candidate_capacity_exhaustion_never_evicts_an_old_owner() {
     let directory = TempDir::new().expect("temporary directory");
@@ -398,7 +391,6 @@ fn serviced_candidate_capacity_exhaustion_never_evicts_an_old_owner() {
         "capacity must be reserved before the consuming reducer transition"
     );
 }
-
 #[test]
 fn persistence_macro_step_budgets_have_exact_four_effect_maximum() {
     let expected = [
@@ -457,7 +449,6 @@ fn persistence_macro_step_budgets_have_exact_four_effect_maximum() {
         "local TC formation is the four-effect persistence witness"
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn exact_live_wal_cut_seals_all_six_real_persisted_continuations() {
@@ -500,7 +491,6 @@ fn exact_live_wal_cut_seals_all_six_real_persisted_continuations() {
         );
         drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::SignProposal);
     }
-
     {
         let directory = TempDir::new().expect("temporary Prepare WAL directory");
         let (mut adapter, startup) = open_test(&directory).expect("open Prepare adapter");
@@ -526,7 +516,6 @@ fn exact_live_wal_cut_seals_all_six_real_persisted_continuations() {
         );
         drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::SignPrepare);
     }
-
     {
         let directory = TempDir::new().expect("temporary Commit WAL directory");
         let (mut adapter, startup) = open_test(&directory).expect("open Commit adapter");
@@ -569,7 +558,6 @@ fn exact_live_wal_cut_seals_all_six_real_persisted_continuations() {
         );
         drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::SignCommit);
     }
-
     {
         let directory = TempDir::new().expect("temporary timeout WAL directory");
         let (mut adapter, startup) = open_test(&directory).expect("open timeout adapter");
@@ -583,7 +571,6 @@ fn exact_live_wal_cut_seals_all_six_real_persisted_continuations() {
         );
         drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::SignTimeout);
     }
-
     {
         let directory = TempDir::new().expect("temporary EnterView WAL directory");
         let (mut adapter, startup) = open_test(&directory).expect("open EnterView adapter");
@@ -615,7 +602,6 @@ fn exact_live_wal_cut_seals_all_six_real_persisted_continuations() {
         );
         drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::EnterView);
     }
-
     {
         let directory = TempDir::new().expect("temporary Apply WAL directory");
         let (mut adapter, startup) = open_test(&directory).expect("open Apply adapter");
@@ -655,7 +641,6 @@ fn exact_live_wal_cut_seals_all_six_real_persisted_continuations() {
         drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::Apply);
     }
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn recovered_timeout_signature_preview_is_exact_and_drop_inert() {
@@ -676,7 +661,6 @@ fn recovered_timeout_signature_preview_is_exact_and_drop_inert() {
     let registry_before = adapter.registry.clone();
     let fence_before = adapter.reducer_fence_generation;
     let wal_before = adapter.wal.recovered_records().len();
-
     let invalid = super::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1::for_test(
         1,
         tag,
@@ -694,7 +678,6 @@ fn recovered_timeout_signature_preview_is_exact_and_drop_inert() {
     assert_registry_eq(&adapter.registry, &registry_before);
     assert_eq!(adapter.reducer_fence_generation, fence_before);
     assert_eq!(adapter.wal.recovered_records().len(), wal_before);
-
     let mut keys = (1_u8..=4)
         .map(|seed| {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -728,13 +711,11 @@ fn recovered_timeout_signature_preview_is_exact_and_drop_inert() {
         }) if !vote.signature.is_empty()
     ));
     drop(preview);
-
     assert_eq!(adapter.reducer, reducer_before);
     assert_registry_eq(&adapter.registry, &registry_before);
     assert_eq!(adapter.reducer_fence_generation, fence_before);
     assert_eq!(adapter.wal.recovered_records().len(), wal_before);
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
@@ -840,7 +821,6 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
             ..
         } if vote == &prepare
     ));
-
     let mut late_prepare_sign = next_sign.clone();
     let AdapterEffect::Sign { tag, .. } = &mut late_prepare_sign else {
         unreachable!("fixture successor is a Vote Sign")
@@ -859,7 +839,6 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
         .is_none(),
         "a Prepare successor cannot move to a later EventTag view"
     );
-
     let mut signed_prepare = prepare.clone();
     signed_prepare.signature = Signature::new(
         keys[local_index].private_key(),
@@ -889,7 +868,6 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
         .is_some(),
         "a Commit successor may retain a later EventTag view than its vote round"
     );
-
     let expected_manifest_hash = Some(HashOf::new(&manifest));
     let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
     let exact_body_lookup = preview
@@ -898,7 +876,6 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
             Arc::clone(&output_guard),
         )
         .expect("bind exact reducer body lookup to the preview/store owner");
-
     let foreign_durable =
         DurableBodyReceipt::for_test(context.id(), round, subject(0xD7), HashOf::new(&manifest));
     let foreign_body = ValidatedBodyReceipt::for_test(foreign_durable);
@@ -962,7 +939,6 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
             .is_err(),
         "a substituted next Sign cannot consume exact body authority"
     );
-
     let dispatch_key = preview.dispatch_key();
     let exact_body = RecoveredLifecycleNextVoteBodyAuthorityV1::for_test(
         exact_body_lookup,
@@ -1043,7 +1019,6 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
         ),
         "the combined authority retains the exact validated body"
     );
-
     let cold_adapter = RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1::from_recovered_wal(
         super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
         broadcast,
@@ -1078,7 +1053,6 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
         prepare
     );
 }
-
 #[cfg(feature = "bls")]
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -1191,7 +1165,6 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
             super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1::ControlProposal,
         )
     };
-
     let mut body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
         directory.path().join("exact-next-vote-body"),
         context.clone(),
@@ -1205,7 +1178,6 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
         .validate(&durable, |_| Ok::<_, String>(commitment))
         .expect("persist exact next-Vote validation");
     let body_store_identity = body_store.instance_identity();
-
     let [
         AdapterEffect::Sign {
             tag: cold_tag,
@@ -1313,7 +1285,6 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
             .expect("reconstruct advanced cold next Vote"),
         prepare,
     );
-
     let now = Instant::now();
     let (mut runtime, startup_effects) = super::super::v2_runtime::SerializedV2Runtime::new(
         adapter,
@@ -1339,7 +1310,6 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
             super::super::v2_effects::EffectQueueConfig::default(),
         )
         .expect("open executor with exact recovered body catalogs");
-
     let (mut services, _) = super::super::v2_worker::tests::fixture();
     let service_io =
         super::super::v2_worker::tests::install_lifecycle_planner_io_for_validator_for_test(
@@ -1374,7 +1344,6 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
             foreign_store_identity,
             1,
         );
-
     let status_before = executor.status();
     let tag_before = executor.current_tag();
     let error = match foreign_services
@@ -1389,7 +1358,6 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     assert_eq!(status_after, status_before);
     assert_eq!(executor.current_tag(), tag_before);
     assert!(!output_guard.restart_required());
-
     let (mut preview, body_authority) = services
         .prepare_recovered_lifecycle_sign_completion_with_body(&mut executor, completion())
         .expect("the exact production service authenticates the next-Vote body");
@@ -1459,15 +1427,12 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
         &next_sign,
         &validated,
     ));
-
     foreign_service_io.detach(&mut foreign_services);
     service_io.detach(&mut services);
 }
-
 include!("v2_adapter_04_wal_recovery.rs");
 include!("v2_adapter_04b_lifecycle_startup.rs");
 include!("v2_adapter_05_direct_lifecycle.rs");
-
 #[test]
 fn recovered_wal_sign_status_publication_is_exact_last_and_unwired() {
     let source = include_str!("../v2.rs");

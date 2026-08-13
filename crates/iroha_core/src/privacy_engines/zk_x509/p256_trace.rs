@@ -13,14 +13,12 @@
 //! value-id layout: all initial writers first, followed by one result writer
 //! for each arithmetic operation.  This avoids forward IDs and interleaved
 //! allocator state without introducing aliases or legacy layouts.
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use p256::{
     FieldBytes, FieldElement, ProjectivePoint, Scalar,
     elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _},
 };
 use thiserror::Error;
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     p256_air::{
@@ -49,13 +47,11 @@ use super::{
     },
     p256_window_air::P256WindowScalarV1,
 };
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const ZERO_BE_V1: [u8; 32] = [0; 32];
 const ONE_BE_V1: [u8; 32] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
 ];
-
 /// Canonical value-bus binding for one selected point.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,7 +65,6 @@ pub(crate) struct P256BoundWindowTraceV1 {
     /// Arithmetic operation whose scalar result supplies the 256 bits.
     pub(crate) scalar_source_operation: u32,
 }
-
 /// Origin of a word reduced modulo the scalar-field order.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,7 +82,6 @@ pub(crate) enum P256ReductionSourceV1 {
         word_be: [u8; 32],
     },
 }
-
 /// One exact reduction and its value-bus endpoints.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,7 +93,6 @@ pub(crate) struct P256BoundReductionTraceV1 {
     /// Exact one-subtraction reduction trace.
     pub(crate) trace: P256ReductionTraceV1,
 }
-
 /// One wallet-only low-s comparison bound to a scalar ID.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,7 +102,6 @@ pub(crate) struct P256BoundLowSTraceV1 {
     /// Exact comparison trace.
     pub(crate) trace: P256LowSTraceV1,
 }
-
 /// Canonical resolved IDs retained from the generic ECDSA composition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ResolvedEcdsaAssignedV1 {
@@ -132,7 +124,6 @@ pub(crate) struct P256ResolvedEcdsaAssignedV1 {
     /// Scalar reduction of `result_x`, constrained equal to r.
     pub(crate) reduced_x: P256ValueIdV1,
 }
-
 /// Verifier-owned topology for one four-bit selector.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256BoundWindowTopologyV1 {
@@ -143,7 +134,6 @@ pub(crate) struct P256BoundWindowTopologyV1 {
     /// Arithmetic operation supplying the scalar bits.
     pub(crate) scalar_source_operation: u32,
 }
-
 /// Value-free origin of one scalar reduction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256ReductionSourceTopologyV1 {
@@ -155,7 +145,6 @@ pub(crate) enum P256ReductionSourceTopologyV1 {
         id: P256ValueIdV1,
     },
 }
-
 /// Verifier-owned reduction topology.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256BoundReductionTopologyV1 {
@@ -164,7 +153,6 @@ pub(crate) struct P256BoundReductionTopologyV1 {
     /// Canonical scalar output.
     pub(crate) output: P256ValueIdV1,
 }
-
 /// Complete value-free topology for one role-separated ECDSA equation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256EcdsaTopologyV1 {
@@ -187,7 +175,6 @@ pub(crate) struct P256EcdsaTopologyV1 {
     /// Canonical retained equation outputs.
     pub(crate) assigned: P256ResolvedEcdsaAssignedV1,
 }
-
 /// Final one-signature witness material before aggregate column streaming.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
@@ -211,7 +198,6 @@ pub(crate) struct P256EcdsaTraceMaterialV1 {
     /// Resolved outputs of the complete equation.
     pub(crate) assigned: P256ResolvedEcdsaAssignedV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256EcdsaTraceMaterialV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -222,7 +208,6 @@ impl core::fmt::Debug for P256EcdsaTraceMaterialV1 {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256EcdsaTraceMaterialV1 {
     /// Recursively overwrite every witness-derived scalar, coordinate, and
@@ -257,7 +242,6 @@ impl P256EcdsaTraceMaterialV1 {
         }
         self.low_s.clear();
     }
-
     #[cfg(test)]
     pub(crate) fn private_is_zeroized_v1(&self) -> bool {
         self.initial_values.is_empty()
@@ -268,7 +252,6 @@ impl P256EcdsaTraceMaterialV1 {
             && self.reductions.is_empty()
             && self.low_s.is_empty()
     }
-
     /// Materialize the exact wide arithmetic rows.
     ///
     /// Aggregate proving should stream/shard these columns.  This helper is
@@ -283,7 +266,6 @@ impl P256EcdsaTraceMaterialV1 {
             .collect::<Vec<_>>();
         build_zk_x509_p256_arithmetic_trace_v1(&operations)
     }
-
     fn value_free_topology_v1(&self) -> Result<P256EcdsaTopologyV1, P256TraceCompilerErrorV1> {
         let mut windows = Vec::new();
         windows
@@ -307,7 +289,6 @@ impl P256EcdsaTraceMaterialV1 {
                 scalar_source_operation: window.scalar_source_operation,
             });
         }
-
         let mut reductions = Vec::new();
         reductions
             .try_reserve_exact(self.reductions.len())
@@ -333,7 +314,6 @@ impl P256EcdsaTraceMaterialV1 {
                 .validate()
                 .map_err(|_| P256TraceCompilerErrorV1::Reduction)?;
         }
-
         Ok(P256EcdsaTopologyV1 {
             role: self.role,
             initial_values: self
@@ -364,7 +344,6 @@ impl P256EcdsaTraceMaterialV1 {
             assigned: self.assigned,
         })
     }
-
     /// Reject any witness-owned identifier, role, operation, window,
     /// reduction, or comparison schedule that differs from the independently
     /// compiled verifier topology.
@@ -378,7 +357,6 @@ impl P256EcdsaTraceMaterialV1 {
         Ok(())
     }
 }
-
 /// Witness compilation failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum P256TraceCompilerErrorV1 {
@@ -411,7 +389,6 @@ pub(crate) enum P256TraceCompilerErrorV1 {
     #[error("zk-X509 P-256 trace compiler resource bound is exceeded")]
     Resource,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SymbolicOriginV1 {
     Initial {
@@ -422,7 +399,6 @@ enum SymbolicOriginV1 {
         operation: usize,
     },
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SymbolicValueRecordV1 {
@@ -430,13 +406,10 @@ struct SymbolicValueRecordV1 {
     value_be: [u8; 32],
     origin: SymbolicOriginV1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256BaseValueV1(usize);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256ScalarValueV1(usize);
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256ScalarBitV1 {
@@ -445,14 +418,12 @@ struct P256ScalarBitV1 {
     global_be: u16,
     value: u8,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256TopologyScalarBitV1 {
     source: P256ScalarValueV1,
     role: P256WindowScalarV1,
     global_be: u16,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RecordedOperationV1 {
@@ -461,7 +432,6 @@ struct RecordedOperationV1 {
     c: usize,
     operation: ZkX509P256ArithmeticOperationV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SymbolicWindowV1 {
@@ -470,14 +440,12 @@ struct SymbolicWindowV1 {
     output: [usize; 3],
     scalar_source: usize,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SymbolicReductionSourceV1 {
     Digest { word_be: [u8; 32] },
     BaseCoordinate { handle: usize, word_be: [u8; 32] },
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SymbolicReductionV1 {
@@ -485,14 +453,12 @@ struct SymbolicReductionV1 {
     output: usize,
     trace: P256ReductionTraceV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SymbolicLowSV1 {
     scalar: usize,
     trace: P256LowSTraceV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Default)]
 struct P256TraceCompilerV1 {
@@ -504,13 +470,11 @@ struct P256TraceCompilerV1 {
     reductions: Vec<SymbolicReductionV1>,
     low_s: Vec<SymbolicLowSV1>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TopologyValueRecordV1 {
     modulus: ZkX509P256ModulusV1,
     origin: SymbolicOriginV1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TopologyOperationRecordV1 {
     a: usize,
@@ -519,7 +483,6 @@ struct TopologyOperationRecordV1 {
     kind: ZkX509P256ArithmeticKindV1,
     modulus: ZkX509P256ModulusV1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TopologyWindowRecordV1 {
     candidates: [[usize; 3]; 16],
@@ -528,19 +491,16 @@ struct TopologyWindowRecordV1 {
     scalar: P256WindowScalarV1,
     window: u8,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TopologyReductionSourceV1 {
     Digest,
     BaseCoordinate(usize),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TopologyReductionRecordV1 {
     source: TopologyReductionSourceV1,
     output: usize,
 }
-
 /// Value-free second implementation of the fixed ECDSA program.
 ///
 /// This recorder executes the generic equation compiler without performing
@@ -557,7 +517,6 @@ struct P256TopologyCompilerV1 {
     reductions: Vec<TopologyReductionRecordV1>,
     low_s: Vec<usize>,
 }
-
 impl P256TopologyCompilerV1 {
     fn record_v1(&self, handle: usize) -> Result<TopologyValueRecordV1, P256TraceCompilerErrorV1> {
         self.values
@@ -565,7 +524,6 @@ impl P256TopologyCompilerV1 {
             .copied()
             .ok_or(P256TraceCompilerErrorV1::Resource)
     }
-
     fn push_initial_v1(
         &mut self,
         modulus: ZkX509P256ModulusV1,
@@ -580,7 +538,6 @@ impl P256TopologyCompilerV1 {
         self.initial_handles.push(handle);
         Ok(handle)
     }
-
     fn push_operation_v1(
         &mut self,
         kind: ZkX509P256ArithmeticKindV1,
@@ -608,7 +565,6 @@ impl P256TopologyCompilerV1 {
         });
         Ok(c)
     }
-
     fn assert_equal_v1(
         &mut self,
         left: usize,
@@ -622,7 +578,6 @@ impl P256TopologyCompilerV1 {
         }
         Ok(())
     }
-
     fn resolve_id_v1(&self, handle: usize) -> Result<P256ValueIdV1, P256TraceCompilerErrorV1> {
         let index = match self.record_v1(handle)?.origin {
             SymbolicOriginV1::Initial { index, .. } => index,
@@ -636,7 +591,6 @@ impl P256TopologyCompilerV1 {
             u32::try_from(index).map_err(|_| P256TraceCompilerErrorV1::Resource)?,
         ))
     }
-
     fn generator_table_v1(
         &mut self,
     ) -> Result<[P256ProjectiveValueV1<P256BaseValueV1>; 16], P256TraceCompilerErrorV1> {
@@ -672,7 +626,6 @@ impl P256TopologyCompilerV1 {
         }
         Ok(table)
     }
-
     fn finalize_v1(
         self,
         role: P256EcdsaRoleV1,
@@ -694,7 +647,6 @@ impl P256TopologyCompilerV1 {
         {
             return Err(P256TraceCompilerErrorV1::BindingTopology);
         }
-
         let mut initial_values = Vec::new();
         initial_values
             .try_reserve_exact(self.initial_handles.len())
@@ -719,7 +671,6 @@ impl P256TopologyCompilerV1 {
                 kind,
             });
         }
-
         let mut linked_operations = Vec::new();
         linked_operations
             .try_reserve_exact(self.operations.len())
@@ -752,7 +703,6 @@ impl P256TopologyCompilerV1 {
                 modulus: operation.modulus,
             });
         }
-
         let equalities = self
             .equalities
             .iter()
@@ -763,7 +713,6 @@ impl P256TopologyCompilerV1 {
                 })
             })
             .collect::<Result<Vec<_>, P256TraceCompilerErrorV1>>()?;
-
         let mut windows = Vec::new();
         windows
             .try_reserve_exact(self.windows.len())
@@ -812,7 +761,6 @@ impl P256TopologyCompilerV1 {
                 scalar_source_operation,
             });
         }
-
         let reductions = self
             .reductions
             .iter()
@@ -835,7 +783,6 @@ impl P256TopologyCompilerV1 {
             .iter()
             .map(|handle| self.resolve_id_v1(*handle))
             .collect::<Result<Vec<_>, _>>()?;
-
         Ok(P256EcdsaTopologyV1 {
             role,
             initial_values,
@@ -867,11 +814,9 @@ impl P256TopologyCompilerV1 {
         })
     }
 }
-
 impl P256BaseFieldCircuitV1 for P256TopologyCompilerV1 {
     type Value = P256BaseValueV1;
     type Error = P256TraceCompilerErrorV1;
-
     fn constant_v1(&mut self, _value: [u8; 32]) -> Result<Self::Value, Self::Error> {
         self.push_initial_v1(
             ZkX509P256ModulusV1::BaseField,
@@ -879,7 +824,6 @@ impl P256BaseFieldCircuitV1 for P256TopologyCompilerV1 {
         )
         .map(P256BaseValueV1)
     }
-
     fn add_v1(
         &mut self,
         left: Self::Value,
@@ -893,7 +837,6 @@ impl P256BaseFieldCircuitV1 for P256TopologyCompilerV1 {
         )
         .map(P256BaseValueV1)
     }
-
     fn subtract_v1(
         &mut self,
         left: Self::Value,
@@ -907,7 +850,6 @@ impl P256BaseFieldCircuitV1 for P256TopologyCompilerV1 {
         )
         .map(P256BaseValueV1)
     }
-
     fn multiply_v1(
         &mut self,
         left: Self::Value,
@@ -921,7 +863,6 @@ impl P256BaseFieldCircuitV1 for P256TopologyCompilerV1 {
         )
         .map(P256BaseValueV1)
     }
-
     fn assert_equal_v1(
         &mut self,
         left: Self::Value,
@@ -929,7 +870,6 @@ impl P256BaseFieldCircuitV1 for P256TopologyCompilerV1 {
     ) -> Result<(), Self::Error> {
         P256TopologyCompilerV1::assert_equal_v1(self, left.0, right.0)
     }
-
     fn inverse_nonzero_v1(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error> {
         if self.record_v1(value.0)?.modulus != ZkX509P256ModulusV1::BaseField {
             return Err(P256TraceCompilerErrorV1::ValueTopology);
@@ -944,10 +884,8 @@ impl P256BaseFieldCircuitV1 for P256TopologyCompilerV1 {
         Ok(inverse)
     }
 }
-
 impl P256WindowCircuitV1 for P256TopologyCompilerV1 {
     type Bit = P256TopologyScalarBitV1;
-
     fn select_window_v1(
         &mut self,
         table: &[P256ProjectiveValueV1<Self::Value>; 16],
@@ -980,7 +918,6 @@ impl P256WindowCircuitV1 for P256TopologyCompilerV1 {
         if self.record_v1(source.0)?.modulus != ZkX509P256ModulusV1::ScalarField {
             return Err(P256TraceCompilerErrorV1::WindowTopology);
         }
-
         let candidates = core::array::from_fn(|candidate| {
             [
                 table[candidate].x.0,
@@ -1021,10 +958,8 @@ impl P256WindowCircuitV1 for P256TopologyCompilerV1 {
         })
     }
 }
-
 impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
     type Scalar = P256ScalarValueV1;
-
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn base_input_v1(&mut self, _value_be: [u8; 32]) -> Result<Self::Value, Self::Error> {
         self.push_initial_v1(
@@ -1033,7 +968,6 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
         )
         .map(P256BaseValueV1)
     }
-
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn scalar_input_v1(&mut self, _value_be: [u8; 32]) -> Result<Self::Scalar, Self::Error> {
         self.push_initial_v1(
@@ -1042,7 +976,6 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
         )
         .map(P256ScalarValueV1)
     }
-
     fn scalar_inverse_nonzero_v1(
         &mut self,
         value: Self::Scalar,
@@ -1062,7 +995,6 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
         self.scalar_assert_equal_v1(product, one)?;
         Ok(inverse)
     }
-
     fn scalar_multiply_v1(
         &mut self,
         left: Self::Scalar,
@@ -1076,7 +1008,6 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
         )
         .map(P256ScalarValueV1)
     }
-
     fn scalar_assert_equal_v1(
         &mut self,
         left: Self::Scalar,
@@ -1084,7 +1015,6 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
     ) -> Result<(), Self::Error> {
         P256TopologyCompilerV1::assert_equal_v1(self, left.0, right.0)
     }
-
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn reduce_digest_v1(&mut self, _digest_be: [u8; 32]) -> Result<Self::Scalar, Self::Error> {
         let output = self.push_initial_v1(
@@ -1097,7 +1027,6 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
         });
         Ok(P256ScalarValueV1(output))
     }
-
     fn reduce_base_coordinate_v1(
         &mut self,
         coordinate: Self::Value,
@@ -1115,7 +1044,6 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
         });
         Ok(P256ScalarValueV1(output))
     }
-
     fn scalar_bits_be_v1(
         &mut self,
         scalar: Self::Scalar,
@@ -1135,7 +1063,6 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
             global_be: global_be as u16,
         }))
     }
-
     fn constrain_low_s_v1(&mut self, scalar: Self::Scalar) -> Result<(), Self::Error> {
         if self.record_v1(scalar.0)?.modulus != ZkX509P256ModulusV1::ScalarField {
             return Err(P256TraceCompilerErrorV1::BindingTopology);
@@ -1144,10 +1071,8 @@ impl P256EcdsaCircuitV1 for P256TopologyCompilerV1 {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, Default)]
 struct P256TopologyInputSourceV1;
-
 impl P256EcdsaInputSourceV1<P256TopologyCompilerV1> for P256TopologyInputSourceV1 {
     fn public_key_v1(
         &mut self,
@@ -1164,7 +1089,6 @@ impl P256EcdsaInputSourceV1<P256TopologyCompilerV1> for P256TopologyInputSourceV
             )?),
         ))
     }
-
     fn signature_v1(
         &mut self,
         circuit: &mut P256TopologyCompilerV1,
@@ -1180,7 +1104,6 @@ impl P256EcdsaInputSourceV1<P256TopologyCompilerV1> for P256TopologyInputSourceV
             )?),
         ))
     }
-
     fn reduced_digest_v1(
         &mut self,
         circuit: &mut P256TopologyCompilerV1,
@@ -1196,7 +1119,6 @@ impl P256EcdsaInputSourceV1<P256TopologyCompilerV1> for P256TopologyInputSourceV
         Ok(P256ScalarValueV1(output))
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256TraceCompilerV1 {
     fn record(&self, handle: usize) -> Result<SymbolicValueRecordV1, P256TraceCompilerErrorV1> {
@@ -1205,7 +1127,6 @@ impl P256TraceCompilerV1 {
             .copied()
             .ok_or(P256TraceCompilerErrorV1::Resource)
     }
-
     fn push_initial_v1(
         &mut self,
         modulus: ZkX509P256ModulusV1,
@@ -1232,7 +1153,6 @@ impl P256TraceCompilerV1 {
         self.initial_handles.push(handle);
         Ok(handle)
     }
-
     fn record_operation_v1(
         &mut self,
         kind: ZkX509P256ArithmeticKindV1,
@@ -1274,7 +1194,6 @@ impl P256TraceCompilerV1 {
         });
         Ok(c)
     }
-
     fn base_field_v1(
         &self,
         value: P256BaseValueV1,
@@ -1286,7 +1205,6 @@ impl P256TraceCompilerV1 {
         Option::<FieldElement>::from(FieldElement::from_bytes(&FieldBytes::from(record.value_be)))
             .ok_or(P256TraceCompilerErrorV1::NonCanonical)
     }
-
     fn scalar_field_v1(
         &self,
         value: P256ScalarValueV1,
@@ -1298,7 +1216,6 @@ impl P256TraceCompilerV1 {
         Option::<Scalar>::from(Scalar::from_repr(record.value_be.into()))
             .ok_or(P256TraceCompilerErrorV1::NonCanonical)
     }
-
     fn assert_equal_handles_v1(
         &mut self,
         left: usize,
@@ -1316,7 +1233,6 @@ impl P256TraceCompilerV1 {
         }
         Ok(())
     }
-
     fn generator_table_v1(
         &mut self,
     ) -> Result<[P256ProjectiveValueV1<P256BaseValueV1>; 16], P256TraceCompilerErrorV1> {
@@ -1359,7 +1275,6 @@ impl P256TraceCompilerV1 {
         }
         Ok(table)
     }
-
     fn resolve_id_v1(&self, handle: usize) -> Result<P256ValueIdV1, P256TraceCompilerErrorV1> {
         let record = self.record(handle)?;
         let index = match record.origin {
@@ -1374,7 +1289,6 @@ impl P256TraceCompilerV1 {
             u32::try_from(index).map_err(|_| P256TraceCompilerErrorV1::Resource)?,
         ))
     }
-
     fn validate_final_topology_v1(
         &self,
         role: P256EcdsaRoleV1,
@@ -1393,7 +1307,6 @@ impl P256TraceCompilerV1 {
         {
             return Err(P256TraceCompilerErrorV1::ValueTopology);
         }
-
         for (index, handle) in self.initial_handles.iter().copied().enumerate() {
             if !matches!(
                 self.record(handle)?.origin,
@@ -1440,7 +1353,6 @@ impl P256TraceCompilerV1 {
                 return Err(P256TraceCompilerErrorV1::ValueTopology);
             }
         }
-
         for (ordinal, window) in self.windows.iter().enumerate() {
             let expected_role = if ordinal % 2 == 0 {
                 P256WindowScalarV1::U1
@@ -1493,7 +1405,6 @@ impl P256TraceCompilerV1 {
                 return Err(P256TraceCompilerErrorV1::BindingTopology);
             }
         }
-
         let digest = self
             .reductions
             .first()
@@ -1524,7 +1435,6 @@ impl P256TraceCompilerV1 {
         {
             return Err(P256TraceCompilerErrorV1::BindingTopology);
         }
-
         match role {
             P256EcdsaRoleV1::WalletOwnership => {
                 let [low_s] = self.low_s.as_slice() else {
@@ -1544,7 +1454,6 @@ impl P256TraceCompilerV1 {
             }
             P256EcdsaRoleV1::CertificateOrCrl => {}
         }
-
         let required_initials = [
             (
                 assigned.public_key.x.0,
@@ -1627,7 +1536,6 @@ impl P256TraceCompilerV1 {
         }
         Ok(())
     }
-
     fn finalize_v1(
         self,
         role: P256EcdsaRoleV1,
@@ -1796,12 +1704,10 @@ impl P256TraceCompilerV1 {
         })
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256BaseFieldCircuitV1 for P256TraceCompilerV1 {
     type Value = P256BaseValueV1;
     type Error = P256TraceCompilerErrorV1;
-
     fn constant_v1(&mut self, value: [u8; 32]) -> Result<Self::Value, Self::Error> {
         self.push_initial_v1(
             ZkX509P256ModulusV1::BaseField,
@@ -1810,7 +1716,6 @@ impl P256BaseFieldCircuitV1 for P256TraceCompilerV1 {
         )
         .map(P256BaseValueV1)
     }
-
     fn add_v1(
         &mut self,
         left: Self::Value,
@@ -1828,7 +1733,6 @@ impl P256BaseFieldCircuitV1 for P256TraceCompilerV1 {
         )
         .map(P256BaseValueV1)
     }
-
     fn subtract_v1(
         &mut self,
         left: Self::Value,
@@ -1846,7 +1750,6 @@ impl P256BaseFieldCircuitV1 for P256TraceCompilerV1 {
         )
         .map(P256BaseValueV1)
     }
-
     fn multiply_v1(
         &mut self,
         left: Self::Value,
@@ -1864,7 +1767,6 @@ impl P256BaseFieldCircuitV1 for P256TraceCompilerV1 {
         )
         .map(P256BaseValueV1)
     }
-
     fn assert_equal_v1(
         &mut self,
         left: Self::Value,
@@ -1872,7 +1774,6 @@ impl P256BaseFieldCircuitV1 for P256TraceCompilerV1 {
     ) -> Result<(), Self::Error> {
         self.assert_equal_handles_v1(left.0, right.0)
     }
-
     fn inverse_nonzero_v1(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error> {
         let inverse = Option::<FieldElement>::from(self.base_field_v1(value)?.invert())
             .ok_or(P256TraceCompilerErrorV1::ZeroInverse)?;
@@ -1887,11 +1788,9 @@ impl P256BaseFieldCircuitV1 for P256TraceCompilerV1 {
         Ok(inverse)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256WindowCircuitV1 for P256TraceCompilerV1 {
     type Bit = P256ScalarBitV1;
-
     fn select_window_v1(
         &mut self,
         table: &[P256ProjectiveValueV1<Self::Value>; 16],
@@ -1921,7 +1820,6 @@ impl P256WindowCircuitV1 for P256TraceCompilerV1 {
         if role != expected_role || window != expected_ordinal / 2 {
             return Err(P256TraceCompilerErrorV1::WindowTopology);
         }
-
         let candidate_handles = core::array::from_fn(|candidate| {
             [
                 table[candidate].x.0,
@@ -1987,11 +1885,9 @@ impl P256WindowCircuitV1 for P256TraceCompilerV1 {
         })
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
     type Scalar = P256ScalarValueV1;
-
     fn base_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Value, Self::Error> {
         self.push_initial_v1(
             ZkX509P256ModulusV1::BaseField,
@@ -2000,7 +1896,6 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
         )
         .map(P256BaseValueV1)
     }
-
     fn scalar_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Scalar, Self::Error> {
         self.push_initial_v1(
             ZkX509P256ModulusV1::ScalarField,
@@ -2009,7 +1904,6 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
         )
         .map(P256ScalarValueV1)
     }
-
     fn scalar_inverse_nonzero_v1(
         &mut self,
         value: Self::Scalar,
@@ -2030,7 +1924,6 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
         self.scalar_assert_equal_v1(product, one)?;
         Ok(inverse)
     }
-
     fn scalar_multiply_v1(
         &mut self,
         left: Self::Scalar,
@@ -2048,7 +1941,6 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
         )
         .map(P256ScalarValueV1)
     }
-
     fn scalar_assert_equal_v1(
         &mut self,
         left: Self::Scalar,
@@ -2056,7 +1948,6 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
     ) -> Result<(), Self::Error> {
         self.assert_equal_handles_v1(left.0, right.0)
     }
-
     fn reduce_digest_v1(&mut self, digest_be: [u8; 32]) -> Result<Self::Scalar, Self::Error> {
         let trace = build_p256_reduction_trace_v1(digest_be)
             .map_err(|_| P256TraceCompilerErrorV1::Reduction)?;
@@ -2072,7 +1963,6 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
         });
         Ok(P256ScalarValueV1(output))
     }
-
     fn reduce_base_coordinate_v1(
         &mut self,
         coordinate: Self::Value,
@@ -2098,7 +1988,6 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
         });
         Ok(P256ScalarValueV1(output))
     }
-
     fn scalar_bits_be_v1(
         &mut self,
         scalar: Self::Scalar,
@@ -2117,7 +2006,6 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
             value: (record.value_be[global_be / 8] >> (7 - global_be % 8)) & 1,
         }))
     }
-
     fn constrain_low_s_v1(&mut self, scalar: Self::Scalar) -> Result<(), Self::Error> {
         let record = self.record(scalar.0)?;
         let trace = build_p256_low_s_trace_v1(record.value_be)
@@ -2129,7 +2017,6 @@ impl P256EcdsaCircuitV1 for P256TraceCompilerV1 {
         Ok(())
     }
 }
-
 /// Independently compile the exact value-free verifier topology for one
 /// role-separated ECDSA equation.
 pub(crate) fn compile_p256_ecdsa_topology_v1(
@@ -2145,7 +2032,6 @@ pub(crate) fn compile_p256_ecdsa_topology_v1(
     )?;
     compiler.finalize_v1(role, assigned)
 }
-
 /// Compile one complete role-separated ECDSA witness into native AIR material.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn compile_p256_ecdsa_trace_material_v1(
@@ -2160,20 +2046,16 @@ pub(crate) fn compile_p256_ecdsa_trace_material_v1(
     material.validate_topology_v1(&topology)?;
     Ok(material)
 }
-
 #[cfg(test)]
 mod tests {
     use p256::ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _};
-
     use super::*;
     use crate::privacy_engines::zk_x509::p256_group_air::P256_TWO_SCALAR_ARITHMETIC_OPERATIONS_V1;
-
     fn signing_key_v1(seed: u8) -> SigningKey {
         let mut bytes = [0_u8; 32];
         bytes[31] = seed.max(1);
         SigningKey::from_slice(&bytes).expect("valid nonzero key")
     }
-
     fn witness_v1(
         key: &SigningKey,
         digest_be: [u8; 32],
@@ -2192,7 +2074,6 @@ mod tests {
             digest_be,
         }
     }
-
     fn valid_compiler_v1() -> (
         P256TraceCompilerV1,
         P256EcdsaAssignedV1<P256ScalarValueV1, P256BaseValueV1>,
@@ -2212,14 +2093,12 @@ mod tests {
         .expect("compile symbolic equation");
         (compiler, assigned)
     }
-
     fn valid_material_v1() -> P256EcdsaTraceMaterialV1 {
         let (compiler, assigned) = valid_compiler_v1();
         compiler
             .finalize_v1(P256EcdsaRoleV1::WalletOwnership, assigned)
             .expect("finalize exact witness")
     }
-
     #[test]
     fn complete_compiler_emits_canonical_ssa_windows_and_bindings() {
         let material = valid_material_v1();
@@ -2232,7 +2111,6 @@ mod tests {
         assert_eq!(material.reductions.len(), 2);
         assert_eq!(material.low_s.len(), 1);
         assert!(material.boolean_bridges.is_empty());
-
         for (index, initial) in material.initial_values.iter().enumerate() {
             assert_eq!(initial.id, P256ValueIdV1(index as u32));
         }
@@ -2265,7 +2143,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn independent_verifier_topology_matches_both_roles_and_is_deterministic() {
         let wallet = compile_p256_ecdsa_topology_v1(P256EcdsaRoleV1::WalletOwnership)
@@ -2278,7 +2155,6 @@ mod tests {
         valid_material_v1()
             .validate_topology_v1(&wallet)
             .expect("witness compiler matches independent wallet topology");
-
         let certificate = compile_p256_ecdsa_topology_v1(P256EcdsaRoleV1::CertificateOrCrl)
             .expect("certificate topology");
         assert_eq!(wallet.initial_values, certificate.initial_values);
@@ -2295,7 +2171,6 @@ mod tests {
             P256_TWO_SCALAR_ARITHMETIC_OPERATIONS_V1 + 18
         );
     }
-
     #[test]
     fn verifier_topology_rejects_every_witness_owned_schedule_family() {
         let material = valid_material_v1();
@@ -2307,11 +2182,9 @@ mod tests {
                 Err(P256TraceCompilerErrorV1::BindingTopology)
             );
         };
-
         let mut changed = material.clone();
         changed.role = P256EcdsaRoleV1::CertificateOrCrl;
         reject(&changed);
-
         changed = material.clone();
         changed.initial_values[0].id.0 ^= 1;
         reject(&changed);
@@ -2324,7 +2197,6 @@ mod tests {
             P256InitialValueKindV1::Constant => P256InitialValueKindV1::Input,
         };
         reject(&changed);
-
         changed = material.clone();
         changed.linked_operations[0].a = changed.linked_operations[0].c;
         reject(&changed);
@@ -2339,7 +2211,6 @@ mod tests {
         changed = material.clone();
         changed.linked_operations[0].operation.modulus = ZkX509P256ModulusV1::ScalarField;
         reject(&changed);
-
         changed = material.clone();
         changed.equalities[0].left.0 ^= 1;
         reject(&changed);
@@ -2349,7 +2220,6 @@ mod tests {
             base_bit: material.assigned.public_key.x,
         });
         reject(&changed);
-
         changed = material.clone();
         changed.windows[0].candidates[0][0].0 ^= 1;
         reject(&changed);
@@ -2365,7 +2235,6 @@ mod tests {
             changed.validate_topology_v1(&expected),
             Err(P256TraceCompilerErrorV1::WindowTopology)
         );
-
         changed = material.clone();
         changed.reductions.swap(0, 1);
         reject(&changed);
@@ -2379,7 +2248,6 @@ mod tests {
         changed.assigned.result_x.0 ^= 1;
         reject(&changed);
     }
-
     #[test]
     fn sampled_operations_are_exact_native_arithmetic_traces() {
         let material = valid_material_v1();
@@ -2395,7 +2263,6 @@ mod tests {
             binding.trace.validate().expect("exact low-s");
         }
     }
-
     #[test]
     fn certificate_role_omits_low_s_but_invalid_equations_fail() {
         let key = signing_key_v1(79);
@@ -2410,7 +2277,6 @@ mod tests {
         )
         .expect("RFC 5280 high-s");
         assert!(material.low_s.is_empty());
-
         let mut wrong = witness_v1(&key, digest, signature);
         wrong.digest_be[0] ^= 1;
         assert_eq!(
@@ -2418,7 +2284,6 @@ mod tests {
             Err(P256TraceCompilerErrorV1::Equality)
         );
     }
-
     #[test]
     fn zero_noncanonical_and_high_s_inputs_fail_closed() {
         let key = signing_key_v1(83);
@@ -2426,14 +2291,12 @@ mod tests {
         let signature: Signature = key.sign_prehash(&digest).expect("sign");
         let signature = signature.normalize_s().unwrap_or(signature);
         let witness = witness_v1(&key, digest, signature);
-
         let mut zero = witness;
         zero.r_be = [0; 32];
         assert_eq!(
             compile_p256_ecdsa_trace_material_v1(P256EcdsaRoleV1::WalletOwnership, zero,),
             Err(P256TraceCompilerErrorV1::ZeroInverse)
         );
-
         let high = Signature::from_scalars(signature.r().to_bytes(), (-*signature.s()).to_bytes())
             .expect("high-s representative");
         assert_eq!(
@@ -2443,7 +2306,6 @@ mod tests {
             ),
             Err(P256TraceCompilerErrorV1::Reduction)
         );
-
         let mut noncanonical = witness;
         noncanonical.s_be = P256_SCALAR_MODULUS_BE_V1;
         assert_eq!(
@@ -2451,46 +2313,39 @@ mod tests {
             Err(P256TraceCompilerErrorV1::NonCanonical)
         );
     }
-
     #[test]
     fn finalization_rejects_value_window_reduction_and_low_s_rebinding() {
         let (compiler, assigned) = valid_compiler_v1();
-
         let mut forward_read = compiler.clone();
         forward_read.operations[0].a = forward_read.operations[0].c;
         assert_eq!(
             forward_read.finalize_v1(P256EcdsaRoleV1::WalletOwnership, assigned),
             Err(P256TraceCompilerErrorV1::ValueTopology)
         );
-
         let mut wrong_source = compiler.clone();
         wrong_source.windows[0].scalar_source = assigned.u2.0;
         assert_eq!(
             wrong_source.finalize_v1(P256EcdsaRoleV1::WalletOwnership, assigned),
             Err(P256TraceCompilerErrorV1::BindingTopology)
         );
-
         let mut wrong_position = compiler.clone();
         wrong_position.windows[0].trace.fixed[0].scalar = P256WindowScalarV1::U2;
         assert_eq!(
             wrong_position.finalize_v1(P256EcdsaRoleV1::WalletOwnership, assigned),
             Err(P256TraceCompilerErrorV1::BindingTopology)
         );
-
         let mut swapped_reductions = compiler.clone();
         swapped_reductions.reductions.swap(0, 1);
         assert_eq!(
             swapped_reductions.finalize_v1(P256EcdsaRoleV1::WalletOwnership, assigned),
             Err(P256TraceCompilerErrorV1::BindingTopology)
         );
-
         let mut wrong_low_s = compiler.clone();
         wrong_low_s.low_s[0].scalar = assigned.r.0;
         assert_eq!(
             wrong_low_s.finalize_v1(P256EcdsaRoleV1::WalletOwnership, assigned),
             Err(P256TraceCompilerErrorV1::BindingTopology)
         );
-
         let mut wrong_output = compiler;
         wrong_output.windows[0].output[0] = assigned.public_key.x.0;
         assert_eq!(

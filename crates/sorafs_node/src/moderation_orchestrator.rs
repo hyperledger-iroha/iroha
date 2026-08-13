@@ -1,6 +1,5 @@
 //! Finalized-chain SoraFS moderation orchestration.
 //!
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -12,12 +11,10 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
-
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature as IrohaSignature};
 use iroha_data_model::{
@@ -52,7 +49,6 @@ use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_from_bytes
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use sorafs_manifest::pop_credentials::{POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopMembershipProofV1};
 use thiserror::Error;
-
 #[path = "moderation_orchestrator/checkpoint_store.rs"]
 mod checkpoint_store;
 #[path = "moderation_orchestrator/terminal_handoff.rs"]
@@ -65,7 +61,6 @@ use terminal_handoff::{
     terminal_finalization_event_matches_outcome, terminal_handoff_id,
     validate_retained_terminal_handoff,
 };
-
 pub use iroha_data_model::sorafs::moderation_ledger::{
     MODERATION_FINALIZED_SNAPSHOT_VERSION_V1, ModerationFinalizedAppealViewV1,
     ModerationFinalizedCaseViewV1, ModerationFinalizedCursorV1, ModerationFinalizedEventCursorV1,
@@ -11170,7 +11165,6 @@ pub enum ModerationOrchestratorError {
     #[error("moderation orchestrator checkpoint record lock is poisoned")]
     CheckpointStoreLockPoisoned,
 }
-
 #[cfg(test)]
 mod tests {
     include!("moderation_orchestrator/support_and_provider_tests.rs");

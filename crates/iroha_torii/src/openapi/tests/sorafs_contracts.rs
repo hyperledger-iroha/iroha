@@ -23,7 +23,6 @@ fn evidence_audit_openapi_requires_and_returns_exact_cursors() {
             "evidence audit description omitted `{required_phrase}`"
         );
     }
-
     let parameters = operation
         .get("parameters")
         .and_then(Value::as_array)
@@ -116,7 +115,6 @@ fn evidence_audit_openapi_requires_and_returns_exact_cursors() {
             "X-Iroha-Witness",
         ])
     );
-
     let success_description = operation
         .get("responses")
         .and_then(Value::as_object)
@@ -157,7 +155,6 @@ fn evidence_audit_openapi_requires_and_returns_exact_cursors() {
             "#/components/schemas/SorafsEvidenceApiErrorV1"
         );
     }
-
     let status_operation = openapi_operation(&document, "/v1/evidence/status", "get");
     assert_eq!(
         operation_response_schema_ref(status_operation, "200", "/v1/evidence/status"),
@@ -182,11 +179,9 @@ fn evidence_audit_openapi_requires_and_returns_exact_cursors() {
         assert!(schemas.contains_key(schema), "missing `{schema}` schema");
     }
 }
-
 #[test]
 fn evidence_openapi_matches_authenticated_protocol_contract() {
     use iroha_torii_shared::route_catalog::AuthenticationPolicy;
-
     fn method_name(method: CatalogHttpMethod) -> &'static str {
         match method {
             CatalogHttpMethod::Get => "get",
@@ -199,7 +194,6 @@ fn evidence_openapi_matches_authenticated_protocol_contract() {
             }
         }
     }
-
     fn assert_opaque_token_schema(schema: &Map, context: &str) {
         assert_eq!(
             schema.get("type").and_then(Value::as_str),
@@ -222,7 +216,6 @@ fn evidence_openapi_matches_authenticated_protocol_contract() {
             "{context} printable-ASCII pattern"
         );
     }
-
     fn assert_nonzero_digest_schema(schema: &Map, context: &str) {
         assert_eq!(
             schema.get("type").and_then(Value::as_str),
@@ -245,7 +238,6 @@ fn evidence_openapi_matches_authenticated_protocol_contract() {
             "{context} canonical non-zero digest pattern"
         );
     }
-
     let document = generate_spec();
     let evidence_routes = RouteCatalog::new(CATALOGED_ROUTES)
         .project(
@@ -260,7 +252,6 @@ fn evidence_openapi_matches_authenticated_protocol_contract() {
         12,
         "the evidence protocol must expose exactly twelve authenticated operations"
     );
-
     let expected_auth_headers = BTreeSet::from([
         ("X-Iroha-Account".to_owned(), false),
         ("X-Iroha-Signature".to_owned(), false),
@@ -268,7 +259,6 @@ fn evidence_openapi_matches_authenticated_protocol_contract() {
         ("X-Iroha-Nonce".to_owned(), false),
         ("X-Iroha-Witness".to_owned(), false),
     ]);
-
     for route in evidence_routes {
         assert_eq!(
             route.authentication(),
@@ -289,7 +279,6 @@ fn evidence_openapi_matches_authenticated_protocol_contract() {
             "{method} {} canonical authentication headers",
             route.path()
         );
-
         let expected_secret_headers: BTreeSet<&str> = match (route.path(), method) {
             ("/v1/evidence/session", "post") => BTreeSet::from(["X-SoraFS-Evidence-Challenge"]),
             ("/v1/evidence/manifest/{session_id_hex}", "get")
@@ -337,7 +326,6 @@ fn evidence_openapi_matches_authenticated_protocol_contract() {
                 &format!("{method} {} {name} request", route.path()),
             );
         }
-
         let (success_status, expected_response_headers): (&str, BTreeSet<&str>) =
             match (route.path(), method) {
                 ("/v1/evidence/session/challenge", "post") => {
@@ -430,7 +418,6 @@ fn evidence_openapi_matches_authenticated_protocol_contract() {
             }
         }
     }
-
     let manifest = openapi_operation(&document, "/v1/evidence/manifest/{session_id_hex}", "get");
     let manifest_queries = manifest
         .get("parameters")
@@ -456,7 +443,6 @@ fn evidence_openapi_matches_authenticated_protocol_contract() {
             .expect("evidence manifest idempotency key schema"),
         "evidence manifest idempotency key",
     );
-
     let segment = openapi_operation(&document, "/v1/evidence/segment/{session_id_hex}", "get");
     let segment_queries = segment
         .get("parameters")
@@ -526,7 +512,6 @@ fn evidence_openapi_matches_authenticated_protocol_contract() {
         "evidence segment idempotency key",
     );
 }
-
 #[test]
 fn sorafs_pin_register_openapi_is_caller_signed_transaction_transport() {
     let document = generate_spec();
@@ -590,7 +575,6 @@ fn sorafs_pin_register_openapi_is_caller_signed_transaction_transport() {
             && description.contains("never accepts or handles a private key"),
         "pin-register operation must document the signature-bound transport contract"
     );
-
     let schemas = component_schemas(&document);
     assert!(
         !schemas.contains_key("SorafsPinRegisterRequestV1"),
@@ -605,11 +589,9 @@ fn sorafs_pin_register_openapi_is_caller_signed_transaction_transport() {
     assert!(!schemas.contains_key("SorafsPinAliasV1"));
     assert!(!schemas.contains_key("SorafsPinSuccessorDigestV1"));
 }
-
 #[test]
 fn sorafs_storage_token_openapi_requires_operator_and_diagnostic_headers() {
     use iroha_torii_shared::route_catalog::AuthenticationPolicy;
-
     assert_eq!(
         iroha_torii_shared::route_catalog::sorafs::STORAGE_TOKEN.authentication(),
         AuthenticationPolicy::OperatorSignature
@@ -639,7 +621,6 @@ fn sorafs_storage_token_openapi_requires_operator_and_diagnostic_headers() {
             })
     );
 }
-
 #[test]
 fn sorafs_storage_and_inventory_openapi_matches_authenticated_catalog() {
     let document = generate_spec();
@@ -649,7 +630,6 @@ fn sorafs_storage_and_inventory_openapi_matches_authenticated_catalog() {
         .expect("OpenAPI paths");
     assert!(!paths.contains_key("/v1/sorafs/storage/state"));
     assert!(!paths.contains_key("/v1/sorafs/storage/fetch"));
-
     let canonical_headers = BTreeSet::from([
         "X-Iroha-Account",
         "X-Iroha-Nonce",
@@ -670,7 +650,6 @@ fn sorafs_storage_and_inventory_openapi_matches_authenticated_catalog() {
             );
         }
     }
-
     for (path, expected_headers) in [
         (
             "/v1/sorafs/storage/car/{manifest_id}",
@@ -699,7 +678,6 @@ fn sorafs_storage_and_inventory_openapi_matches_authenticated_catalog() {
         }
     }
 }
-
 #[test]
 fn sorafs_pin_list_openapi_is_finalized_bounded_keyset_readback() {
     const PATH: &str = "/v1/sorafs/pin";
@@ -735,7 +713,6 @@ fn sorafs_pin_list_openapi_is_finalized_bounded_keyset_readback() {
             && description.contains("bounded detail route"),
         "pin-list operation must document the finalized bounded hard cut"
     );
-
     let parameters = operation
         .get("parameters")
         .and_then(Value::as_array)
@@ -759,7 +736,6 @@ fn sorafs_pin_list_openapi_is_finalized_bounded_keyset_readback() {
             .iter()
             .all(|parameter| parameter.get("name").and_then(Value::as_str) != Some("offset"))
     );
-
     let schemas = component_schemas(&document);
     assert_strict_object_schema(
         schemas,
@@ -795,7 +771,6 @@ fn sorafs_pin_list_openapi_is_finalized_bounded_keyset_readback() {
         "#/components/schemas/PinResourceUsage"
     );
 }
-
 #[test]
 fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
     const PATH: &str = "/v1/sorafs/pin/{digest_hex}";
@@ -811,7 +786,6 @@ fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
         "replication_orders_returned",
         "replication_orders_truncated",
     ];
-
     let document = generate_spec();
     let operation = openapi_operation(&document, PATH, "get");
     assert_eq!(
@@ -829,7 +803,6 @@ fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
             && description.contains("retired projection `limit`"),
         "pin-manifest operation must document finalized native readback and paired-anchor semantics"
     );
-
     let parameters = operation
         .get("parameters")
         .and_then(Value::as_array)
@@ -852,7 +825,6 @@ fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
             .all(|parameter| parameter.get("name").and_then(Value::as_str) != Some("limit")),
         "the retired projection limit must not remain in the operation"
     );
-
     let height = parameters
         .iter()
         .find(|parameter| {
@@ -870,7 +842,6 @@ fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
             .and_then(Value::as_u64),
         Some(1)
     );
-
     let block_hash = parameters
         .iter()
         .find(|parameter| {
@@ -900,7 +871,6 @@ fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
         block_hash_schema.get("pattern").and_then(Value::as_str),
         Some("^(?!0{64}$)[0-9a-f]{64}$")
     );
-
     let schemas = component_schemas(&document);
     assert_strict_object_schema(
         schemas,
@@ -958,7 +928,6 @@ fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
         nullable_property_ref(schemas, "PinManifestRecord", "council_envelope_digest"),
         "#/components/schemas/PinManifestBytes32V1"
     );
-
     let content_length = component_properties(schemas, "PinManifestRecord")
         .get("content_length")
         .and_then(Value::as_object)
@@ -971,7 +940,6 @@ fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
         content_length.get("format").and_then(Value::as_str),
         Some("uint64")
     );
-
     let response_properties = component_properties(schemas, "PinManifestFinalizedRecordV1");
     for retired in RETIRED_TOP_LEVEL_FIELDS {
         assert!(
@@ -1007,11 +975,9 @@ fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
         BTreeSet::from(["Pending", "Approved", "Retired"])
     );
 }
-
 #[test]
 fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
     const PATH: &str = "/v1/sorafs/replication";
-
     let document = generate_spec();
     let operation = openapi_operation(&document, PATH, "get");
     assert_eq!(
@@ -1030,7 +996,6 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
             && description.contains("unknown, duplicate, empty, aliased, or out-of-range"),
         "replication operation must document the V1 hard-cut projection and selectors"
     );
-
     let parameters = operation
         .get("parameters")
         .and_then(Value::as_array)
@@ -1070,7 +1035,6 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
         digest_parameter.get("pattern").and_then(Value::as_str),
         Some("^(?!0{64}$)[0-9a-f]{64}$")
     );
-
     let schemas = component_schemas(&document);
     assert_strict_object_schema(
         schemas,
@@ -1174,7 +1138,6 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
         ],
         &[],
     );
-
     assert_eq!(
         property_ref(
             schemas,
@@ -1203,7 +1166,6 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
         property_ref(schemas, "SorafsReplicationOrderProjectionV1", "status"),
         "#/components/schemas/SorafsReplicationOrderStatusV1"
     );
-
     let status_variants = schemas
         .get("SorafsReplicationOrderStatusV1")
         .and_then(Value::as_object)
@@ -1243,7 +1205,6 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
         BTreeSet::from(["state"]),
         "pending must not carry a compatibility epoch"
     );
-
     let policy_variants = schemas
         .get("SorafsProviderIngestSignerPolicyV1")
         .and_then(Value::as_object)
@@ -1291,7 +1252,6 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
             .and_then(Value::as_str),
         Some("#/components/schemas/SorafsReplicationNonzeroHex32V1")
     );
-
     let projection_properties = component_properties(schemas, "SorafsReplicationOrderProjectionV1");
     assert_eq!(
         projection_properties
@@ -1322,7 +1282,6 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
         Some(349_528)
     );
 }
-
 #[test]
 fn moderation_dead_letter_openapi_is_typed_bounded_and_dual_control() {
     let document = generate_spec();
@@ -1356,7 +1315,6 @@ fn moderation_dead_letter_openapi_is_typed_bounded_and_dual_control() {
         &["schema", "status", "identity_hex", "kind", "action"],
         &[],
     );
-
     let resolution_schema = schemas
         .get("SorafsModerationDeadLetterResolutionNoritoBase64V1")
         .and_then(Value::as_object)
@@ -1386,7 +1344,6 @@ fn moderation_dead_letter_openapi_is_typed_bounded_and_dual_control() {
             .map(Vec::len),
         Some(2)
     );
-
     let expected_auth_headers = BTreeSet::from([
         "X-Iroha-Account".to_owned(),
         "X-Iroha-Signature".to_owned(),
@@ -1458,7 +1415,6 @@ fn moderation_dead_letter_openapi_is_typed_bounded_and_dual_control() {
             }
         }
 }
-
 #[test]
 fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
     let document = generate_spec();
@@ -1550,7 +1506,6 @@ fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
             );
         }
     }
-
     for path in [
         "/v1/sorafs/billing/statements",
         "/v1/sorafs/hedging/exposure",
@@ -1585,7 +1540,6 @@ fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
             Some(true)
         );
     }
-
     let statement_content = openapi_operation(
         &document,
         "/v1/sorafs/billing/statements/{statement_id}",
@@ -1615,7 +1569,6 @@ fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
             .and_then(Value::as_str),
         Some("BillingPublishedStatementV1")
     );
-
     let acknowledgement_content = openapi_operation(
         &document,
         "/v1/sorafs/billing/statements/{statement_id}/acknowledgements",
@@ -1657,7 +1610,6 @@ fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
             .and_then(Value::as_u64),
         Some(69_632)
     );
-
     let schemas = component_schemas(&document);
     let hedge_intent = schemas
         .get("HedgeIntentV1")
@@ -1725,7 +1677,6 @@ fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
         assert_eq!(actual, variants.iter().copied().collect::<BTreeSet<_>>());
     }
 }
-
 #[test]
 fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
     let document = generate_spec();
@@ -1734,7 +1685,6 @@ fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
         operation_request_schema_ref(operation, "/v1/sorafs/proof/stream"),
         "#/components/schemas/SorafsProofStreamHttpRequestV1"
     );
-
     let success_content = operation
         .get("responses")
         .and_then(Value::as_object)
@@ -1760,7 +1710,6 @@ fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
             .and_then(Value::as_str),
         Some("#/components/schemas/SorafsProofStreamItemV1")
     );
-
     let schemas = component_schemas(&document);
     assert!(
         document
@@ -1798,7 +1747,6 @@ fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
             "#/components/schemas/SorafsProofStreamPotrRequestV1",
         ]
     );
-
     for (name, kind, required_field, allowed_kind_fields, forbidden_kind_fields) in [
         (
             "SorafsProofStreamPorRequestV1",
@@ -1946,7 +1894,6 @@ fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
             Some("^(?!0{64}$)[0-9a-f]{64}$")
         );
     }
-
     let por_properties = schemas
         .get("SorafsProofStreamPorRequestV1")
         .and_then(|schema| schema.get("properties"))
@@ -1960,7 +1907,6 @@ fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
             .and_then(Value::as_u64),
         Some(500)
     );
-
     let por_proof = schemas
         .get("SorafsPorProofV1")
         .and_then(Value::as_object)
@@ -2083,7 +2029,6 @@ fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
         .expect("chunk Merkle path schema");
     assert_eq!(chunk_path.get("minItems").and_then(Value::as_u64), Some(0));
     assert_eq!(chunk_path.get("maxItems").and_then(Value::as_u64), Some(22));
-
     let item = schemas
         .get("SorafsProofStreamItemV1")
         .and_then(Value::as_object)
@@ -2135,7 +2080,6 @@ fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
             .and_then(Value::as_bool),
         Some(true)
     );
-
     let kind_variants = item
         .get("allOf")
         .and_then(Value::as_array)

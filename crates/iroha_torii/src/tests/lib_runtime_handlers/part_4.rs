@@ -71,7 +71,6 @@ async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
         .expect("response body should be readable");
     assert_eq!(body.as_ref(), b"retry");
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable_without_candidates()
@@ -133,7 +132,6 @@ async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable
         &[request_id]
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_response() {
@@ -188,7 +186,6 @@ async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_re
         .expect("response body should be readable");
     assert_eq!(body.as_ref(), b"retry-later");
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() {
@@ -215,7 +212,6 @@ async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() 
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, unknown);
         }
         let response = strongest.expect("one reducer candidate must remain").2;
-
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             response
@@ -241,7 +237,6 @@ async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() 
         );
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_completion_orders() {
@@ -249,7 +244,6 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
         b"outcome-unknown-nonretryable-order",
     ));
     let expected_hash_literal = expected_hash.to_string();
-
     for unknown_arrives_first in [true, false] {
         let mut strongest = None;
         let unknown = super::queue_plan_outcome_unknown_response(
@@ -261,7 +255,6 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
             "routing_plan_mismatch",
             "stale authority route view",
         );
-
         if unknown_arrives_first {
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, unknown);
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 0, nonretryable);
@@ -269,7 +262,6 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 0, nonretryable);
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, unknown);
         }
-
         let response = strongest.expect("one reducer candidate must remain").2;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
@@ -294,7 +286,6 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
             Some(expected_hash_literal.as_str())
         );
     }
-
     for candidate_zero_arrives_first in [true, false] {
         let mut strongest = None;
         let candidate_zero = super::torii_proxy_error_response(
@@ -307,7 +298,6 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
             "candidate_one",
             "candidate one failure",
         );
-
         if candidate_zero_arrives_first {
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 0, candidate_zero);
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, candidate_one);
@@ -315,7 +305,6 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, candidate_one);
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 0, candidate_zero);
         }
-
         let (priority, candidate_index, response) =
             strongest.expect("equal-priority reducer candidate must remain");
         assert_eq!(priority, 1);
@@ -330,7 +319,6 @@ async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_compl
         );
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
@@ -360,7 +348,6 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
         usize::MAX,
     )
     .await;
-
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
@@ -374,7 +361,6 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
         |_request_id| async move {},
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         response
@@ -399,7 +385,6 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
         "a forged authority hash must be replaced with the submitted transaction identity"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritative_peer() {
@@ -419,7 +404,6 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
     let final_authority_snapshot =
         exact_queue_plan_synced_acceptance_snapshot(&app, &request).await;
     let forwarding_authority_for_closure = forwarding_authority.clone();
-
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![
             ToriiProxyCandidate::P2p(forwarding_authority.clone()),
@@ -448,7 +432,6 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
         |_request_id| async move {},
     )
     .await;
-
     assert_eq!(
         response.status(),
         StatusCode::ACCEPTED,
@@ -474,7 +457,6 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
         final_authority
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn proxied_transaction_submission_preserves_public_accept_and_prefer_contracts() {
@@ -496,7 +478,6 @@ async fn proxied_transaction_submission_preserves_public_accept_and_prefer_contr
             value: b"p2p_proxy".to_vec(),
         });
     let private_body = private_snapshot.body.clone();
-
     for (format, minimal_response) in [
         (ResponseFormat::Norito, false),
         (ResponseFormat::Json, false),
@@ -521,7 +502,6 @@ async fn proxied_transaction_submission_preserves_public_accept_and_prefer_contr
             minimal_response,
             format,
         );
-
         assert_eq!(proxied.status(), local.status());
         assert_eq!(proxied.status(), StatusCode::ACCEPTED);
         for header_name in [
@@ -553,7 +533,6 @@ async fn proxied_transaction_submission_preserves_public_accept_and_prefer_contr
                 .and_then(|value| value.to_str().ok()),
             Some("proxy")
         );
-
         let local_body = axum::body::to_bytes(local.into_body(), usize::MAX)
             .await
             .expect("read local public submission response");
@@ -597,7 +576,6 @@ async fn proxied_transaction_submission_preserves_public_accept_and_prefer_contr
         assert_eq!(proxied_receipt.payload.signer, local_receipt.payload.signer);
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
@@ -607,7 +585,6 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
     let peer_id = PeerId::from(app.torii_proxy_bridge_signer.public_key().clone());
     let expected_hash_literal = accepted_queue_hash_for_proxy_submit(&app, &request).to_string();
     let valid_snapshot = exact_queue_plan_synced_acceptance_snapshot(&app, &request).await;
-
     let response =
             super::execute_torii_proxy_request_across_candidates(
                 vec![ToriiProxyCandidate::P2p(peer_id.clone())],
@@ -632,7 +609,6 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
         StatusCode::ACCEPTED,
         "the exact signed durable-acceptance response must remain successful"
     );
-
     let forged_success = ToriiProxyHttpResponseV1 {
         status_code: StatusCode::OK.as_u16(),
         headers: Vec::new(),
@@ -649,32 +625,27 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
                 .expect("encode mutated strict acceptance certificate");
             snapshot
         };
-
     let mut wrong_hash_certificate = valid_certificate.clone();
     wrong_hash_certificate.binding.entrypoint_hash =
         HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
             b"forged-strict-acceptance-entrypoint-hash",
         ));
     let wrong_hash = rewrite_certificate(valid_snapshot.clone(), wrong_hash_certificate);
-
     let mut wrong_request_certificate = valid_certificate.clone();
     wrong_request_certificate.binding.request_id =
         Hash::new(b"replayed-queue-plan-synced-request-id");
     let wrong_request = rewrite_certificate(valid_snapshot.clone(), wrong_request_certificate);
-
     let mut wrong_journal_version_certificate = valid_certificate.clone();
     wrong_journal_version_certificate
         .binding
         .queue_plan_journal_version = queue::QUEUE_PLAN_JOURNAL_VERSION.saturating_add(1);
     let wrong_journal_version =
         rewrite_certificate(valid_snapshot.clone(), wrong_journal_version_certificate);
-
     let mut wrong_plan_digest_certificate = valid_certificate.clone();
     wrong_plan_digest_certificate.binding.routing_plan_digest =
         Hash::new(b"forged-queue-plan-synced-routing-plan-digest");
     let wrong_plan_digest =
         rewrite_certificate(valid_snapshot.clone(), wrong_plan_digest_certificate);
-
     let mut wrong_exact_plan_certificate = valid_certificate.clone();
     wrong_exact_plan_certificate
         .binding
@@ -684,11 +655,9 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
         .route = RoutingDecision::new(LaneId::new(9), DataSpaceId::new(12));
     let wrong_exact_plan =
         rewrite_certificate(valid_snapshot.clone(), wrong_exact_plan_certificate);
-
     let mut wrong_version_certificate = valid_certificate.clone();
     wrong_version_certificate.version = wrong_version_certificate.version.saturating_add(1);
     let wrong_version = rewrite_certificate(valid_snapshot.clone(), wrong_version_certificate);
-
     let outsider = checked_torii_test_ed25519_keypair(
         0xae,
         "derive forged strict acceptance signer fixture key",
@@ -706,7 +675,6 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
             attestations: vec![outsider_attestation],
         },
     );
-
     for (label, snapshot) in [
         ("forged arbitrary 2xx", forged_success),
         ("missing receipt evidence", missing_evidence),
@@ -731,7 +699,6 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
             |_request_id| async move {},
         )
         .await;
-
         assert_eq!(
             response.status(),
             StatusCode::SERVICE_UNAVAILABLE,
@@ -766,7 +733,6 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
         );
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
@@ -796,7 +762,6 @@ async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
         headers: Vec::new(),
         body: b"malformed post-admission failure".to_vec(),
     };
-
     for (label, snapshot) in [
         ("receipt-signing failure", receipt_signing_failure),
         ("malformed 500", malformed_failure),
@@ -814,7 +779,6 @@ async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
             |_request_id| async move {},
         )
         .await;
-
         assert_eq!(
             response.status(),
             StatusCode::SERVICE_UNAVAILABLE,
@@ -849,7 +813,6 @@ async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
         );
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_transport() {
@@ -898,7 +861,6 @@ async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_
             |_request_id| async move {},
         )
         .await;
-
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             response
@@ -930,7 +892,6 @@ async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_
         );
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_p2p_missing_network_is_pre_dispatch() {
@@ -950,7 +911,6 @@ async fn queue_plan_synced_p2p_missing_network_is_pre_dispatch() {
     ));
     assert!(!error.may_have_reached_authority());
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_p2p_closed_actor_is_pre_dispatch_and_cleans_pending() {
@@ -965,7 +925,6 @@ async fn queue_plan_synced_p2p_closed_actor_is_pre_dispatch_and_cleans_pending()
             .clone(),
     );
     let pending_key = (request.request_id.clone(), peer_id.clone());
-
     let error = super::execute_torii_proxy_request_via_peer(&app, peer_id, Arc::new(request))
         .await
         .expect_err("closed P2P actor must reject exact admission before dispatch");
@@ -982,7 +941,6 @@ async fn queue_plan_synced_p2p_closed_actor_is_pre_dispatch_and_cleans_pending()
         "failed exact admission must remove the response waiter"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
@@ -996,7 +954,6 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
         "127.0.0.1:23001".parse().expect("valid busy peer address"),
         busy_peer_key.public_key().clone(),
     );
-
     let capacity_rejection_completed_inline: () =
         super::reject_incoming_torii_proxy_request_capacity(
             &network,
@@ -1005,7 +962,6 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
             super::torii_proxy_test_deadline_unix_ms(),
         );
     let () = capacity_rejection_completed_inline;
-
     let responder_key = checked_torii_test_ed25519_keypair(
         0xc6,
         "derive response-pump liveness responder fixture key",
@@ -1036,7 +992,6 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
         },
     )
     .await;
-
     assert_eq!(
         tokio::time::timeout(Duration::from_millis(100), rx)
             .await
@@ -1045,7 +1000,6 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
         expected
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn backpressured_response_admission_obeys_local_egress_deadline() {
@@ -1082,7 +1036,6 @@ async fn backpressured_response_admission_obeys_local_egress_deadline() {
     )
     .await
     .expect("local egress deadline must stop backpressured response admission");
-
     assert!(
         result
             .expect_err("a permanently backpressured actor cannot accept the response")
@@ -1090,12 +1043,10 @@ async fn backpressured_response_admission_obeys_local_egress_deadline() {
         "the local monotonic owner, not the wider skew-tolerant wire horizon, must terminate admission"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_http_connect_loss_is_pre_dispatch_and_body_loss_is_post_dispatch() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     let (app, send_request) =
         incoming_proxy_submit_fixture(0xc5, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
     let peer_id = PeerId::from(
@@ -1103,7 +1054,6 @@ async fn queue_plan_synced_http_connect_loss_is_pre_dispatch_and_body_loss_is_po
             .public_key()
             .clone(),
     );
-
     let send_error = super::execute_torii_proxy_request_via_http_bridge(
         &app,
         peer_id.clone(),
@@ -1117,7 +1067,6 @@ async fn queue_plan_synced_http_connect_loss_is_pre_dispatch_and_body_loss_is_po
         ToriiProxyAttemptError::DefinitelyNotDispatched(_)
     ));
     assert!(!send_error.may_have_reached_authority());
-
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind truncated-body HTTP server");
@@ -1152,7 +1101,6 @@ async fn queue_plan_synced_http_connect_loss_is_pre_dispatch_and_body_loss_is_po
     ));
     assert!(body_error.may_have_reached_authority());
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_http_redirect_to_connect_loss_is_not_followed() {
@@ -1193,7 +1141,6 @@ async fn queue_plan_synced_http_redirect_to_connect_loss_is_not_followed() {
             .public_key()
             .clone(),
     );
-
     let snapshot = super::execute_torii_proxy_request_via_http_bridge(
         &app,
         peer_id,
@@ -1203,7 +1150,6 @@ async fn queue_plan_synced_http_redirect_to_connect_loss_is_not_followed() {
     .await
     .expect("strict proxy must return the redirect response without following it");
     upstream_task.abort();
-
     assert_eq!(reached_authority.load(Ordering::SeqCst), 1);
     assert_eq!(
         snapshot.status_code,
@@ -1215,7 +1161,6 @@ async fn queue_plan_synced_http_redirect_to_connect_loss_is_not_followed() {
             && header.value.as_slice() == b"http://127.0.0.1:0/redirect-connect-loss"
     }));
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailable() {
@@ -1246,7 +1191,6 @@ async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailabl
         |_request_id| async move {},
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         response
@@ -1268,7 +1212,6 @@ async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailabl
         "definitely undispatched failures must not publish an indeterminate queue identity"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable_after_transport_errors()
@@ -1295,7 +1238,6 @@ async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable
     };
     let completed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let completed_ref = completed.clone();
-
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
@@ -1318,7 +1260,6 @@ async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable
         },
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         response
@@ -1335,7 +1276,6 @@ async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable
         &[request_id]
     );
 }
-
 #[cfg(feature = "telemetry")]
 fn sample_privacy_event_dto() -> RecordSoranetPrivacyEventDto {
     RecordSoranetPrivacyEventDto {
@@ -1352,7 +1292,6 @@ fn sample_privacy_event_dto() -> RecordSoranetPrivacyEventDto {
         source: None,
     }
 }
-
 #[cfg(feature = "telemetry")]
 fn sample_privacy_share_dto() -> RecordSoranetPrivacyShareDto {
     let mut share = SoranetPrivacyPrioShareV1::new(1, 1_720_000_020, 60);
@@ -1367,7 +1306,6 @@ fn sample_privacy_share_dto() -> RecordSoranetPrivacyShareDto {
         forwarded_by: None,
     }
 }
-
 #[cfg(feature = "telemetry")]
 fn privacy_operator(
     app: &SharedAppState,
@@ -1376,13 +1314,11 @@ fn privacy_operator(
         app.da_receipt_signer.public_key().clone(),
     ))
 }
-
 #[tokio::test]
 #[cfg(feature = "telemetry")]
 async fn privacy_ingest_rejects_when_disabled() {
     let app = mk_app_state_for_tests();
     let dto = sample_privacy_event_dto();
-
     let response = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
         HeaderMap::new(),
@@ -1392,7 +1328,6 @@ async fn privacy_ingest_rejects_when_disabled() {
     )
     .await
     .expect("handler executes");
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let metrics = app.telemetry.metrics().await;
     let disabled = metrics
@@ -1402,7 +1337,6 @@ async fn privacy_ingest_rejects_when_disabled() {
         .get();
     assert!(disabled >= 1, "disabled counter should increment");
 }
-
 #[tokio::test]
 #[cfg(feature = "telemetry")]
 async fn privacy_ingest_denies_without_allowlist() {
@@ -1413,7 +1347,6 @@ async fn privacy_ingest_denies_without_allowlist() {
         app_mut.soranet_privacy_ingest.enabled = true;
         app_mut.soranet_privacy_allow_nets = Arc::new(Vec::new());
     }
-
     let response = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
         HeaderMap::new(),
@@ -1423,7 +1356,6 @@ async fn privacy_ingest_denies_without_allowlist() {
     )
     .await
     .expect("handler executes");
-
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let metrics = app.telemetry.metrics().await;
     let blocked = metrics
@@ -1433,7 +1365,6 @@ async fn privacy_ingest_denies_without_allowlist() {
         .get();
     assert!(blocked >= 1, "namespace block counter should increment");
 }
-
 #[tokio::test]
 #[cfg(feature = "telemetry")]
 async fn privacy_ingest_enforces_operator_namespace_and_rate() {
@@ -1461,7 +1392,6 @@ async fn privacy_ingest_enforces_operator_namespace_and_rate() {
                 .map(std::num::NonZeroU32::get),
         );
     }
-
     let dto = sample_privacy_event_dto();
     // Retired bearer credentials are rejected even after exact operator authentication.
     let mut retired_headers = HeaderMap::new();
@@ -1486,7 +1416,6 @@ async fn privacy_ingest_enforces_operator_namespace_and_rate() {
         .unwrap()
         .get();
     assert!(retired >= 1);
-
     // Wrong namespace
     let resp = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
@@ -1498,7 +1427,6 @@ async fn privacy_ingest_enforces_operator_namespace_and_rate() {
     .await
     .expect("handler executes");
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-
     // Happy path
     let ok_resp = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
@@ -1510,7 +1438,6 @@ async fn privacy_ingest_enforces_operator_namespace_and_rate() {
     .await
     .expect("handler executes");
     assert_eq!(ok_resp.status(), StatusCode::ACCEPTED);
-
     // Rate limit on second immediate call
     let limited_resp = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
@@ -1523,7 +1450,6 @@ async fn privacy_ingest_enforces_operator_namespace_and_rate() {
     .expect("handler executes");
     assert_eq!(limited_resp.status(), StatusCode::TOO_MANY_REQUESTS);
 }
-
 #[tokio::test]
 #[cfg(feature = "telemetry")]
 async fn privacy_ingest_denies_without_namespace_allowlist() {
@@ -1535,7 +1461,6 @@ async fn privacy_ingest_denies_without_namespace_allowlist() {
         app_mut.soranet_privacy_ingest.allow_cidrs.clear();
         app_mut.soranet_privacy_allow_nets = Arc::new(Vec::new());
     }
-
     let dto = sample_privacy_event_dto();
     let resp = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
@@ -1547,7 +1472,6 @@ async fn privacy_ingest_denies_without_namespace_allowlist() {
     .await
     .expect("handler executes");
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-
     let metrics = app.telemetry.metrics().await;
     let blocked = metrics
         .soranet_privacy_ingest_reject_total
@@ -1559,7 +1483,6 @@ async fn privacy_ingest_denies_without_namespace_allowlist() {
         "namespace rejection counter should increment for missing allow-list"
     );
 }
-
 #[tokio::test]
 #[cfg(feature = "telemetry")]
 async fn privacy_ingest_authenticates_before_body_decode() {
@@ -1573,7 +1496,6 @@ async fn privacy_ingest_authenticates_before_body_decode() {
             &app_mut.soranet_privacy_ingest.allow_cidrs,
         ));
     }
-
     let descriptor = route_catalog::telemetry::SORANET_PRIVACY_EVENT;
     let routes = [descriptor];
     let mut builder = RouterBuilder::new(
@@ -1591,7 +1513,6 @@ async fn privacy_ingest_authenticates_before_body_decode() {
             .authenticated_soranet_privacy_collector(app.clone(), "event"),
     );
     let (router, _) = builder.finish().expect("privacy route mounts exactly once");
-
     let mut request = Request::builder()
         .method(HttpMethod::POST)
         .uri(descriptor.path())
@@ -1611,7 +1532,6 @@ async fn privacy_ingest_authenticates_before_body_decode() {
         .await
         .expect("privacy route response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
     let body = b"{";
     let uri = descriptor
         .path()
@@ -1644,7 +1564,6 @@ async fn privacy_ingest_authenticates_before_body_decode() {
         .expect("signed privacy route response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 #[cfg(feature = "telemetry")]
 async fn privacy_ingest_blocks_without_allowlist() {
@@ -1656,7 +1575,6 @@ async fn privacy_ingest_blocks_without_allowlist() {
         app_mut.soranet_privacy_allow_nets = Arc::new(Vec::new());
         app_mut.soranet_privacy_rate_limiter = crate::limits::RateLimiter::new(None, None);
     }
-
     let resp = super::test_handler_post_soranet_privacy_event_with_ingress(
         State(app.clone()),
         HeaderMap::new(),
@@ -1667,7 +1585,6 @@ async fn privacy_ingest_blocks_without_allowlist() {
     .await
     .expect("handler executes");
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-
     let metrics = app.telemetry.metrics().await;
     let namespace_blocked = metrics
         .soranet_privacy_ingest_reject_total
@@ -1679,7 +1596,6 @@ async fn privacy_ingest_blocks_without_allowlist() {
         "namespace reject counter must increment"
     );
 }
-
 #[tokio::test]
 #[cfg(feature = "telemetry")]
 async fn privacy_share_ingest_enforces_policy() {
@@ -1707,9 +1623,7 @@ async fn privacy_share_ingest_enforces_policy() {
                 .map(std::num::NonZeroU32::get),
         );
     }
-
     let share_dto = sample_privacy_share_dto();
-
     // Retired bearer credential -> 400, even with an authenticated operator.
     let mut retired_headers = HeaderMap::new();
     retired_headers.insert("x-api-token", HeaderValue::from_static("retired-secret"));
@@ -1723,7 +1637,6 @@ async fn privacy_share_ingest_enforces_policy() {
     .await
     .expect("handler executes");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     // Wrong namespace -> 403
     let resp = super::test_handler_post_soranet_privacy_share_with_ingress(
         State(app.clone()),
@@ -1735,7 +1648,6 @@ async fn privacy_share_ingest_enforces_policy() {
     .await
     .expect("handler executes");
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-
     // Happy path -> 202
     let ok = super::test_handler_post_soranet_privacy_share_with_ingress(
         State(app.clone()),
@@ -1747,7 +1659,6 @@ async fn privacy_share_ingest_enforces_policy() {
     .await
     .expect("handler executes");
     assert_eq!(ok.status(), StatusCode::ACCEPTED);
-
     // Rate limit -> 429
     let limited = super::test_handler_post_soranet_privacy_share_with_ingress(
         State(app.clone()),
@@ -1759,7 +1670,6 @@ async fn privacy_share_ingest_enforces_policy() {
     .await
     .expect("handler executes");
     assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
-
     let metrics = app.telemetry.metrics().await;
     let retired = metrics
         .soranet_privacy_ingest_reject_total
@@ -1774,12 +1684,10 @@ async fn privacy_share_ingest_enforces_policy() {
         .get();
     assert!(namespace >= 1);
 }
-
 #[tokio::test]
 async fn runtime_metrics_and_node_capabilities_ok() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
-
     let metrics_resp = super::handler_runtime_metrics(
         State(app.clone()),
         headers.clone(),
@@ -1795,7 +1703,6 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     let metrics: crate::runtime::RuntimeMetricsResponse =
         norito::json::from_slice(&metrics_bytes).expect("decode json");
     assert_eq!(metrics.abi_version, 1);
-
     let caps_resp = super::handler_node_capabilities(
         State(app.clone()),
         headers,
@@ -1903,7 +1810,6 @@ async fn runtime_metrics_and_node_capabilities_ok() {
         !caps.crypto.sm.allowed_signing.is_empty(),
         "allowed_signing must advertise at least one algorithm"
     );
-
     let checkpoint_absent = super::handler_node_query_projection_checkpoint(
         State(app),
         HeaderMap::new(),
@@ -1917,7 +1823,6 @@ async fn runtime_metrics_and_node_capabilities_ok() {
         axum::http::StatusCode::NOT_FOUND
     );
 }
-
 #[tokio::test]
 async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
     let app = mk_app_state_for_tests();
@@ -1943,7 +1848,6 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
                 }],
             ),
         ));
-
     let response = super::handler_node_query_projection_checkpoint(
         State(app),
         HeaderMap::new(),
@@ -1972,7 +1876,6 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
     assert_eq!(checkpoint.shards.len(), 1);
     assert_eq!(checkpoint.shards[0].resource, "accounts");
 }
-
 #[cfg(feature = "app_api")]
 async fn projection_checkpoint_request_for_app(
     app: &SharedAppState,
@@ -2007,13 +1910,11 @@ async fn projection_checkpoint_request_for_app(
             next_seed = next_seed.wrapping_add(1);
         }
     }
-
     crate::runtime::NodeProjectionCheckpointPublishRequest {
         emitted_at_unix: Some(emitted_at_unix),
         shards,
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn projection_checkpoint_request_for_app_with_real_manifests(
     app: &SharedAppState,
@@ -2091,19 +1992,16 @@ async fn projection_checkpoint_request_for_app_with_real_manifests(
             next_seed = next_seed.wrapping_add(1);
         }
     }
-
     crate::runtime::NodeProjectionCheckpointPublishRequest {
         emitted_at_unix: Some(emitted_at_unix),
         shards,
     }
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn node_query_projection_checkpoint_plan_handler_returns_preview_payload() {
     use iroha_data_model::Registrable;
     use iroha_data_model::prelude::{Account, Domain, DomainId};
-
     let authority =
         checked_torii_test_ed25519_keypair(0x99, "derive projection plan authority fixture key");
     let alice =
@@ -2122,7 +2020,6 @@ async fn node_query_projection_checkpoint_plan_handler_returns_preview_payload()
     let app = mk_app_state_for_tests_with_world(world);
     let request =
         projection_checkpoint_request_for_app(&app, 1_714_002_111, 1_714_002_000, 0x21, 0x31).await;
-
     let response = super::handler_node_query_projection_checkpoint_plan(
         State(app.clone()),
         HeaderMap::new(),
@@ -2154,13 +2051,11 @@ async fn node_query_projection_checkpoint_plan_handler_returns_preview_payload()
         "plan route must not persist checkpoint state"
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn node_query_projection_checkpoint_publish_handler_persists_payload() {
     use iroha_data_model::Registrable;
     use iroha_data_model::prelude::{Account, Domain, DomainId};
-
     let authority =
         checked_torii_test_ed25519_keypair(0x9b, "derive projection publish authority fixture key");
     let alice =
@@ -2179,7 +2074,6 @@ async fn node_query_projection_checkpoint_publish_handler_persists_payload() {
     let app = mk_app_state_for_tests_with_world(world);
     let request =
         projection_checkpoint_request_for_app(&app, 1_714_002_333, 1_714_002_222, 0x41, 0x51).await;
-
     let response = super::handler_node_query_projection_checkpoint_publish(
         State(app.clone()),
         HeaderMap::new(),
@@ -2214,13 +2108,11 @@ async fn node_query_projection_checkpoint_publish_handler_persists_payload() {
         1_714_002_333
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn node_query_projection_checkpoint_publish_handler_seeds_local_projection_store() {
     use iroha_data_model::Registrable;
     use iroha_data_model::prelude::{Account, Domain, DomainId};
-
     let authority = checked_torii_test_ed25519_keypair(
         0x9d,
         "derive durable projection publish authority fixture key",
@@ -2261,7 +2153,6 @@ async fn node_query_projection_checkpoint_publish_handler_seeds_local_projection
         0x61,
     )
     .await;
-
     let response = super::handler_node_query_projection_checkpoint_publish(
         State(app.clone()),
         HeaderMap::new(),
@@ -2283,7 +2174,6 @@ async fn node_query_projection_checkpoint_publish_handler_seeds_local_projection
         .expect("body");
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
         norito::decode_from_bytes(&body).expect("decode default Norito response");
-
     for shard in &checkpoint.shards {
         let manifest_digest_bytes =
             hex::decode(&shard.manifest_digest_hex).expect("decode manifest digest");
@@ -2297,7 +2187,6 @@ async fn node_query_projection_checkpoint_publish_handler_seeds_local_projection
         );
     }
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
@@ -2333,7 +2222,6 @@ async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
     assert_eq!(catalog.offset, 0);
     assert!(catalog.total_entries >= catalog.entries.len() as u64);
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn node_query_projection_shard_export_handler_returns_binary_archive() {
@@ -2368,12 +2256,10 @@ async fn node_query_projection_shard_export_handler_returns_binary_archive() {
     );
     assert_eq!(archive.partition_id, 0);
 }
-
 #[tokio::test]
 async fn core_info_handlers_ok() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
-
     // configuration
     let resp = super::handler_get_configuration(
         State(app.clone()),
@@ -2401,7 +2287,6 @@ async fn core_info_handlers_ok() {
         config.network.soranet_handshake.pow.puzzle.is_some(),
         "puzzle gate should be advertised in configuration payload"
     );
-
     // peers
     let mut peer_headers = headers.clone();
     peer_headers.insert(
@@ -2428,7 +2313,6 @@ async fn core_info_handlers_ok() {
         .expect("peers body");
     let peers: HashSet<Peer> = norito::json::from_slice(&peer_bytes).expect("peers JSON");
     assert!(peers.is_empty());
-
     // A generic test state intentionally has no authenticated ABI-21/V4
     // release, issuer, or escrow catalog. `/health` is readiness (not
     // liveness), so it must fail closed for this fixture.
@@ -2465,12 +2349,10 @@ async fn core_info_handlers_ok() {
         Some(false)
     );
 }
-
 #[tokio::test]
 async fn time_handlers_ok() {
     let app = mk_app_state_for_tests();
     let headers = HeaderMap::new();
-
     let resp = super::handler_time_now(
         State(app.clone()),
         headers.clone(),
@@ -2480,14 +2362,12 @@ async fn time_handlers_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
     let resp = super::handler_time_status(State(app), headers, crate::loopback_connect_info())
         .await
         .expect("ok")
         .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn push_test_identity(seed: u8) -> (KeyPair, AccountId) {
     let key_pair = checked_torii_test_keypair(
@@ -2498,7 +2378,6 @@ fn push_test_identity(seed: u8) -> (KeyPair, AccountId) {
     let account_id = AccountId::new(key_pair.public_key().clone());
     (key_pair, account_id)
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn push_test_config() -> iroha_config::parameters::actual::Push {
     iroha_config::parameters::actual::Push {
@@ -2508,7 +2387,6 @@ fn push_test_config() -> iroha_config::parameters::actual::Push {
         ..Default::default()
     }
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn mk_push_request(account_id: &AccountId, token: &str) -> push::RegisterDeviceRequest {
     push::RegisterDeviceRequest {
@@ -2518,7 +2396,6 @@ fn mk_push_request(account_id: &AccountId, token: &str) -> push::RegisterDeviceR
         topics: Some(vec!["orders".into()]),
     }
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn signed_push_json<T>(
     account_id: &AccountId,
@@ -2538,7 +2415,6 @@ where
     );
     (method, uri, headers, axum::body::Bytes::from(body))
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 async fn extract_error(resp: AxResponse) -> ErrorEnvelope {
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
@@ -2546,7 +2422,6 @@ async fn extract_error(resp: AxResponse) -> ErrorEnvelope {
         .expect("error body");
     norito::decode_from_bytes(&bytes).expect("decode error envelope")
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 #[tokio::test]
 async fn push_registration_rejected_when_disabled() {
@@ -2556,7 +2431,6 @@ async fn push_registration_rejected_when_disabled() {
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
         signed_push_json(&account_id, &key_pair, Method::POST, uri, req);
-
     let resp =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -2567,7 +2441,6 @@ async fn push_registration_rejected_when_disabled() {
         "push bridge should be absent by default"
     );
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 #[tokio::test]
 async fn push_registration_requires_credentials() {
@@ -2584,7 +2457,6 @@ async fn push_registration_requires_credentials() {
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
         signed_push_json(&account_id, &key_pair, Method::POST, uri, req);
-
     let resp =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -2593,7 +2465,6 @@ async fn push_registration_requires_credentials() {
     let bridge = app.push.as_ref().expect("push bridge configured");
     assert_eq!(bridge.device_count(), 0);
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 #[tokio::test]
 async fn push_registration_succeeds_with_credentials() {
@@ -2607,14 +2478,12 @@ async fn push_registration_succeeds_with_credentials() {
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
         signed_push_json(&account_id, &key_pair, Method::POST, uri, req);
-
     let resp =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
     let bridge = app.push.as_ref().expect("push bridge configured");
     assert_eq!(bridge.device_count(), 1);
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 #[tokio::test]
 async fn push_registration_accepts_account_alias_and_stores_canonical_i105() {
@@ -2630,18 +2499,15 @@ async fn push_registration_accepts_account_alias_and_stores_canonical_i105() {
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
         signed_push_json(&canonical_account, &key_pair, Method::POST, uri, req);
-
     let resp =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
-
     let bridge = app.push.as_ref().expect("push bridge configured");
     let device = bridge
         .registered_device("t-alias")
         .expect("registered device should exist");
     assert_eq!(device.account_id, canonical_account.to_string());
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 #[tokio::test]
 async fn push_device_writes_authenticate_before_media_and_body_decode() {
@@ -2673,7 +2539,6 @@ async fn push_device_writes_authenticate_before_media_and_body_decode() {
         assert_eq!(error.code(), "push_auth_required");
     }
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 #[tokio::test]
 async fn push_registration_rejects_body_account_mismatch_without_mutation() {
@@ -2695,7 +2560,6 @@ async fn push_registration_rejects_body_account_mismatch_without_mutation() {
     let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
     let (method, uri, headers, body) =
         signed_push_json(&signer, &signer_keys, Method::POST, uri, request);
-
     let response =
         super::handler_push_register_device(State(app.clone()), method, uri, headers, body).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -2709,7 +2573,6 @@ async fn push_registration_rejects_body_account_mismatch_without_mutation() {
         0
     );
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 #[tokio::test]
 async fn push_unregister_removes_device() {
@@ -2732,7 +2595,6 @@ async fn push_unregister_removes_device() {
         super::handler_push_register_device(State(app.clone()), method, signed_uri, headers, body)
             .await;
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
-
     let (method, signed_uri, headers, body) =
         signed_push_json(&account_id, &key_pair, Method::DELETE, uri, req);
     let resp = super::handler_push_unregister_device(
@@ -2747,7 +2609,6 @@ async fn push_unregister_removes_device() {
     let bridge = app.push.as_ref().expect("push bridge configured");
     assert_eq!(bridge.device_count(), 0);
 }
-
 fn make_signed_block(
     height: u64,
     prev_hash: Option<HashOf<BlockHeader>>,
@@ -2789,7 +2650,6 @@ fn make_signed_block(
         .expect("test block entrypoint hash should match payload");
     (block, entry_hash)
 }
-
 struct PersistedDataTriggerCompletionBlock {
     block: SignedBlock,
     tx_hash: HashOf<SignedTransaction>,
@@ -2797,7 +2657,6 @@ struct PersistedDataTriggerCompletionBlock {
     trigger_execution_hash: HashOf<TransactionEntrypoint>,
     trigger_id: TriggerId,
 }
-
 fn make_persisted_data_trigger_completion_block(
     height: u64,
     prev_hash: Option<HashOf<BlockHeader>>,
@@ -2828,7 +2687,6 @@ fn make_persisted_data_trigger_completion_block(
     }
     .hash_as_entrypoint();
     assert_ne!(trigger_execution_hash, entrypoint_hash);
-
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("nonzero height"),
         prev_hash,
@@ -2857,7 +2715,6 @@ fn make_persisted_data_trigger_completion_block(
         0,
         TriggerCompletedOutcome::Success,
     )]);
-
     PersistedDataTriggerCompletionBlock {
         block,
         tx_hash,
@@ -2866,7 +2723,6 @@ fn make_persisted_data_trigger_completion_block(
         trigger_id,
     }
 }
-
 fn make_sealed_reveal_block(
     height: u64,
     prev_hash: Option<HashOf<BlockHeader>>,
@@ -2915,13 +2771,11 @@ fn make_sealed_reveal_block(
         .expect("test block entrypoint hash should match payload");
     (block, entry_hash)
 }
-
 fn store_block(app: &SharedAppState, block: SignedBlock) -> HashOf<BlockHeader> {
     let hash = block.hash();
     app.kura.store_block(Arc::new(block)).expect("store block");
     hash
 }
-
 fn record_committed_block_hash_for_test(
     app: &SharedAppState,
     header: BlockHeader,
@@ -2932,7 +2786,6 @@ fn record_committed_block_hash_for_test(
     block_hashes.commit_for_tests();
     app.state.update_latest_block_header_cache_for_tests(header);
 }
-
 fn make_empty_signed_block(
     height: u64,
     prev_hash: Option<HashOf<BlockHeader>>,
@@ -2955,7 +2808,6 @@ fn make_empty_signed_block(
     );
     SignedBlock::presigned(signature, header, Vec::new())
 }
-
 pub(crate) fn record_latest_committed_header_for_test(
     app: &SharedAppState,
     height: u64,
@@ -2975,7 +2827,6 @@ pub(crate) fn record_latest_committed_header_for_test(
         height > durable_height,
         "latest test header height must advance durable Kura height"
     );
-
     let mut prev_hash = NonZeroUsize::new(durable_height.try_into().expect("height fits usize"))
         .and_then(|height| app.kura.get_block(height))
         .map(|block| block.hash());

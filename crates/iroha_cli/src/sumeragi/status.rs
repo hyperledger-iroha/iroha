@@ -1,12 +1,8 @@
 #![allow(clippy::redundant_pub_crate, clippy::needless_pass_by_value)]
-
 use eyre::Result;
 use norito::json::Value;
-
 use crate::{CliOutputFormat, RunContext};
-
 use super::commands::{DiagnosticsArgs, LeaderArgs, ParamsArgs, QcArgs, StatusArgs};
-
 pub(crate) fn status<C: RunContext>(context: &mut C, _args: StatusArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_status_json()?;
@@ -15,7 +11,6 @@ pub(crate) fn status<C: RunContext>(context: &mut C, _args: StatusArgs) -> Resul
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
-
 pub(crate) fn diagnostics<C: RunContext>(context: &mut C, _args: DiagnosticsArgs) -> Result<()> {
     let client = context.client_from_config();
     let diagnostics = client.get_sumeragi_diagnostics()?;
@@ -25,7 +20,6 @@ pub(crate) fn diagnostics<C: RunContext>(context: &mut C, _args: DiagnosticsArgs
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
-
 pub(crate) fn leader<C: RunContext>(context: &mut C, _args: LeaderArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_leader_json()?;
@@ -34,7 +28,6 @@ pub(crate) fn leader<C: RunContext>(context: &mut C, _args: LeaderArgs) -> Resul
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
-
 pub(crate) fn params<C: RunContext>(context: &mut C, _args: ParamsArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_params_json()?;
@@ -43,7 +36,6 @@ pub(crate) fn params<C: RunContext>(context: &mut C, _args: ParamsArgs) -> Resul
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
-
 pub(crate) fn qc<C: RunContext>(context: &mut C, _args: QcArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_qc_json()?;
@@ -52,7 +44,6 @@ pub(crate) fn qc<C: RunContext>(context: &mut C, _args: QcArgs) -> Result<()> {
         CliOutputFormat::Json => context.print_data(&value),
     }
 }
-
 fn summarize_status(value: &Value) -> String {
     let protocol = value
         .get("protocol_version")
@@ -79,7 +70,6 @@ fn summarize_status(value: &Value) -> String {
         "protocol={protocol} height={height} view={view} phase={phase} leader={leader} body={body} pending_persistence={persistence} last_committed={committed} restart_required={restart_required}"
     )
 }
-
 fn tagged_unit<'a>(value: Option<&'a Value>, tag: &str) -> &'a str {
     value
         .and_then(Value::as_object)
@@ -88,7 +78,6 @@ fn tagged_unit<'a>(value: Option<&'a Value>, tag: &str) -> &'a str {
         .or_else(|| value.and_then(Value::as_str))
         .unwrap_or("unknown")
 }
-
 fn summarize_diagnostics(value: &Value) -> String {
     let depth = value
         .get("tx_queue_depth")
@@ -137,7 +126,6 @@ fn summarize_diagnostics(value: &Value) -> String {
         "queue={depth}/{capacity} saturated={saturated} election={election} lanes={lanes} relays={relays} sealed={sealed}"
     )
 }
-
 fn summarize_leader(value: &Value) -> String {
     let leader = value
         .get("leader_index")
@@ -158,7 +146,6 @@ fn summarize_leader(value: &Value) -> String {
         .map_or("-", |s| if s.len() > 8 { &s[..8] } else { s });
     format!("leader={leader} prf_h={height} prf_v={view} seed={seed}")
 }
-
 fn summarize_params(value: &Value) -> String {
     let cadence = value
         .get("block_cadence_ms")
@@ -174,7 +161,6 @@ fn summarize_params(value: &Value) -> String {
         .unwrap_or(0);
     format!("block_cadence={cadence}ms max_clock_drift={drift}ms chain_height={height}")
 }
-
 fn summarize_qc(value: &Value) -> String {
     let hq = value.get("highest_qc").and_then(|v| v.as_object());
     let lq = value.get("locked_qc").and_then(|v| v.as_object());
@@ -200,11 +186,9 @@ fn summarize_qc(value: &Value) -> String {
         .unwrap_or(0);
     format!("hqc={hqc_height}/{hqc_view} subj={subj} lqc={lqc_height}/{lqc_view}")
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn summarize_status_handles_defaults() {
         let value = norito::json!({
@@ -222,7 +206,6 @@ mod tests {
             "protocol=4 height=7 view=3 phase=prepare leader=4 body=validated pending_persistence=- last_committed=6 restart_required=false"
         );
     }
-
     #[test]
     fn summarize_diagnostics_keeps_operator_state_separate() {
         let value = norito::json!({
@@ -243,7 +226,6 @@ mod tests {
             "queue=4/10 saturated=false election=npos(epoch=100,commit=20,reveal=40) lanes=1 relays=0 sealed=0"
         );
     }
-
     #[test]
     fn summarize_leader_truncates_seed() {
         let value = norito::json!({
@@ -259,7 +241,6 @@ mod tests {
             "leader=1 prf_h=10 prf_v=2 seed=0x123456"
         );
     }
-
     #[test]
     fn summarize_params_reports_signed_cadence_and_height() {
         let value = norito::json!({
@@ -272,7 +253,6 @@ mod tests {
             "block_cadence=1000ms max_clock_drift=500ms chain_height=42"
         );
     }
-
     #[test]
     fn summarize_qc_reports_subject_hash() {
         let value = norito::json!({

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { sha256 } from "@noble/hashes/sha2";
+import { ed25519 } from "@noble/curves/ed25519";
 
 import { AccountAddress } from "../src/address.js";
 import { blake2b256 } from "../src/blake2b.js";
@@ -10,14 +11,18 @@ import {
   ToriiBrowserHttpError,
   ToriiBrowserStreamGapError,
 } from "../src/toriiBrowserClient.js";
-import { browserSignedTransactionHashHex } from "../src/transactionCodec.js";
+import {
+  browserSignedTransactionHashHex,
+  browserTransactionPayloadHashHex,
+  buildBrowserTransferPayload,
+  finalizeBrowserSignedTransaction,
+} from "../src/transactionCodec.js";
 import { NetworkId } from "../src/networkId.js";
 import * as browserSdk from "../src/browser.js";
 import * as browserDistSdk from "../dist/browser.js";
 import {
   browserSumeragiDiagnosticsFixture,
   browserSumeragiStatusFixture,
-  hashLiteral,
 } from "./sumeragiBrowserFixtures.js";
 
 const BASE_URL = "https://localhost:8080/v1/explorer";
@@ -65,26 +70,32 @@ function jsonResponse(payload, init = {}) {
 }
 
 function compactHashSignedTransactionFixture() {
-  const fixture = readFileSync(
-    new URL(
-      "../../../fixtures/norito_rpc/iroha_compact_hash_vector.properties",
-      import.meta.url,
-    ),
-    "utf8",
+  const privateKey = Buffer.alloc(32, 7);
+  const publicKey = Buffer.from(ed25519.getPublicKey(privateKey));
+  const networkId = NetworkId.parse(
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
   );
-  const prefix = "versioned.base64=";
-  const encoded = fixture
-    .split(/\r?\n/u)
-    .find((line) => line.startsWith(prefix))
-    ?.slice(prefix.length);
-  assert.ok(encoded, "compact-hash fixture must contain versioned signed bytes");
-  return Buffer.from(encoded, "base64");
-}
-
-function innerSignedTransactionHashHexForTest(versionedSignedTransaction) {
-  const digest = Buffer.from(blake2b256(versionedSignedTransaction.subarray(1)));
-  digest[digest.length - 1] |= 1;
-  return digest.toString("hex");
+  const authority = AccountAddress.fromAccount({ publicKey }).toI105();
+  const payload = buildBrowserTransferPayload({
+    networkId,
+    authority,
+    sourceAssetHoldingId: `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${authority}`,
+    quantity: "1",
+    destinationAccountId: FIXTURE_BOB_ID,
+    feePayment: { payer: "authority", chargeLimits: [] },
+    creationTimeMs: 1_700_000_000_000,
+    ttlMs: 5_000,
+    nonce: 42,
+  });
+  const payloadHashHex = browserTransactionPayloadHashHex(payload);
+  const signature = Buffer.from(
+    ed25519.sign(Buffer.from(payloadHashHex, "hex"), privateKey),
+  );
+  return finalizeBrowserSignedTransaction(
+    { networkId, payloadBytes: payload, payloadHashHex, authority, signingPublicKey: publicKey },
+    { algorithm: "ed25519", signature },
+    publicKey,
+  ).signedTransaction;
 }
 
 function blockProofResponseFixture() {
@@ -1170,7 +1181,10 @@ test("ToriiBrowserClient posts selector-explicit multisig proposal reads", async
           },
     );
   };
-  const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl,
+    networkId: QUERY_NETWORK_ID,
+  });
 
   await client.queryMultisigProposals(
     {
@@ -1300,21 +1314,14 @@ test("ToriiBrowserClient submits multisig Norito payloads to registered routes",
   assert.equal(calls[2].init.headers["Content-Type"], "application/x-norito");
 });
 
-test("ToriiBrowserClient validates distinct entrypoint and signed-wire receipt hashes", async () => {
+test("ToriiBrowserClient requires equal raw lowercase receipt identities", async () => {
   const signedTransaction = compactHashSignedTransactionFixture();
   const entrypointHash = browserSignedTransactionHashHex(signedTransaction);
-  const signedTransactionHash =
-    innerSignedTransactionHashHexForTest(signedTransaction);
-  assert.notEqual(
-    signedTransactionHash,
-    entrypointHash,
-    "the inner signed-wire hash must remain distinct from the External entrypoint hash",
-  );
 
   const correctHeaders = {
-    "x-iroha-entrypoint-hash": hashLiteral(entrypointHash),
-    "x-iroha-transaction-hash": hashLiteral(entrypointHash),
-    "x-iroha-signed-transaction-hash": hashLiteral(signedTransactionHash),
+    "x-iroha-entrypoint-hash": entrypointHash,
+    "x-iroha-transaction-hash": entrypointHash,
+    "x-iroha-signed-transaction-hash": entrypointHash,
   };
   let acceptedInit;
   const acceptedClient = new ToriiBrowserClient("https://torii.example", {
@@ -1332,26 +1339,36 @@ test("ToriiBrowserClient validates distinct entrypoint and signed-wire receipt h
   assert.equal(acceptedInit.redirect, "error");
 
   const forgedHash = "01".repeat(32);
-  for (const [label, override, expectedHeader] of [
+  for (const [label, override, expectedHeader, message] of [
     [
-      "swapped entrypoint domain",
-      { "x-iroha-entrypoint-hash": hashLiteral(signedTransactionHash) },
+      "forged entrypoint hash",
+      { "x-iroha-entrypoint-hash": forgedHash },
       "x-iroha-entrypoint-hash",
-    ],
-    [
-      "swapped signed-wire domain",
-      { "x-iroha-signed-transaction-hash": hashLiteral(entrypointHash) },
-      "x-iroha-signed-transaction-hash",
+      "does not match",
     ],
     [
       "forged compatibility hash",
-      { "x-iroha-transaction-hash": hashLiteral(forgedHash) },
+      { "x-iroha-transaction-hash": forgedHash },
       "x-iroha-transaction-hash",
+      "does not match",
     ],
     [
-      "forged signed-wire hash",
-      { "x-iroha-signed-transaction-hash": hashLiteral(forgedHash) },
+      "forged signed transaction hash",
+      { "x-iroha-signed-transaction-hash": forgedHash },
       "x-iroha-signed-transaction-hash",
+      "does not match",
+    ],
+    [
+      "coalesced signed transaction hash",
+      { "x-iroha-signed-transaction-hash": `${entrypointHash}, ${entrypointHash}` },
+      "x-iroha-signed-transaction-hash",
+      "exactly once",
+    ],
+    [
+      "uppercase transaction hash",
+      { "x-iroha-transaction-hash": entrypointHash.toUpperCase() },
+      "x-iroha-transaction-hash",
+      "exactly once",
     ],
   ]) {
     const client = new ToriiBrowserClient("https://torii.example", {
@@ -1363,8 +1380,20 @@ test("ToriiBrowserClient validates distinct entrypoint and signed-wire receipt h
     });
     await assert.rejects(
       client.submitTransaction(signedTransaction),
-      new RegExp(`${expectedHeader} does not match`, "u"),
+      new RegExp(`${expectedHeader}.*${message}`, "u"),
       label,
+    );
+  }
+
+  for (const missing of Object.keys(correctHeaders)) {
+    const headers = { ...correctHeaders };
+    delete headers[missing];
+    const client = new ToriiBrowserClient("https://torii.example", {
+      fetchImpl: async () => jsonResponse({ accepted: true }, { status: 202, headers }),
+    });
+    await assert.rejects(
+      client.submitTransaction(signedTransaction),
+      new RegExp(`${missing}.*exactly once`, "u"),
     );
   }
 });

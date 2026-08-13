@@ -8,7 +8,6 @@ fn copy_file_if_exists(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::copy(src, dst)?;
     Ok(())
 }
-
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     if !src.exists() {

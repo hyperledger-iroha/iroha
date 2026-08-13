@@ -1,5 +1,4 @@
 // Default storage-class coverage for declaration metadata without an override.
-
 #[test]
 fn storage_class_metadata_defaults_when_missing() {
     let metadata = Metadata::default();

@@ -1,13 +1,9 @@
 //! One-pass canonical multiproof emission with a bounded transposition window.
-
 use core::{array, sync::atomic};
-
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
     CanonicalProofSectionV2, CanonicalProofTreeKindV2, ProverCanonicalProofPlanV2,
 };
-
 use super::*;
-
 const CANONICAL_LEAF_BYTES_V2: usize = 6_080;
 const CANONICAL_COLUMNS_V2: usize = 380;
 const CANONICAL_MAX_OPENED_V2: usize = 320;
@@ -16,28 +12,23 @@ const CANONICAL_MAX_WINDOW_BYTES_V2: usize = 6_225_920;
 const CANONICAL_MAX_AUTH_HEAP_BYTES_V2: usize = 108_544;
 const CANONICAL_MAX_CHUNK_BYTES_V2: usize = 16_384;
 const CANONICAL_REPLAY_PEAK_HEAP_BYTES_V2: usize = 6_350_848;
-
 #[derive(Clone, Copy)]
 struct SelectedIndicesV2 {
     values: [u32; CANONICAL_MAX_OPENED_V2],
     len: usize,
 }
-
 #[derive(Clone, Copy)]
 struct ProofFrontierNodeV2 {
     digest: [u8; 32],
     selected: bool,
 }
-
 const EMPTY_PROOF_NODE_V2: ProofFrontierNodeV2 = ProofFrontierNodeV2 {
     digest: [0; 32],
     selected: false,
 };
-
 struct ZeroizingCanonicalWindowV2 {
     bytes: Vec<u8>,
 }
-
 impl ZeroizingCanonicalWindowV2 {
     fn new_v2(values_per_block: u16) -> Result<Self, ProverPrerequisiteErrorV2> {
         let bytes_len = usize::from(values_per_block)
@@ -56,7 +47,6 @@ impl ZeroizingCanonicalWindowV2 {
         bytes.resize(bytes_len, 0);
         Ok(Self { bytes })
     }
-
     fn scatter_column_v2(
         &mut self,
         column: usize,
@@ -86,7 +76,6 @@ impl ZeroizingCanonicalWindowV2 {
         }
         Ok(())
     }
-
     fn leaf_v2(&self, lane: usize) -> Result<&[u8], ProverPrerequisiteErrorV2> {
         let start = lane
             .checked_mul(CANONICAL_LEAF_BYTES_V2)
@@ -96,19 +85,16 @@ impl ZeroizingCanonicalWindowV2 {
             .ok_or(ProverPrerequisiteErrorV2::InvalidCanonicalProof)
     }
 }
-
 impl Drop for ZeroizingCanonicalWindowV2 {
     fn drop(&mut self) {
         self.bytes.fill(0);
         atomic::compiler_fence(atomic::Ordering::SeqCst);
     }
 }
-
 struct AuthenticationBucketsV2 {
     nodes: [Vec<[u8; 32]>; CANONICAL_MAX_HEIGHT_V2],
     expected: [usize; CANONICAL_MAX_HEIGHT_V2],
 }
-
 impl AuthenticationBucketsV2 {
     fn new_v2(
         expected: [usize; CANONICAL_MAX_HEIGHT_V2],
@@ -124,7 +110,6 @@ impl AuthenticationBucketsV2 {
         }
         Ok(Self { nodes, expected })
     }
-
     fn push_v2(
         &mut self,
         height: usize,
@@ -140,7 +125,6 @@ impl AuthenticationBucketsV2 {
         bucket.push(digest);
         Ok(())
     }
-
     fn validate_v2(&self) -> Result<(), ProverPrerequisiteErrorV2> {
         if self
             .nodes
@@ -153,7 +137,6 @@ impl AuthenticationBucketsV2 {
         Ok(())
     }
 }
-
 struct CanonicalMerkleFrontierV2 {
     nodes: [ProofFrontierNodeV2; CANONICAL_MAX_HEIGHT_V2],
     occupied: u32,
@@ -162,7 +145,6 @@ struct CanonicalMerkleFrontierV2 {
     section: CanonicalProofSectionV2,
     authentication: AuthenticationBucketsV2,
 }
-
 fn selected_indices_v2(
     queries: &[u32; 160],
     length: u32,
@@ -191,7 +173,6 @@ fn selected_indices_v2(
     result.len = unique;
     Ok(result)
 }
-
 fn authentication_counts_v2(
     selected: &SelectedIndicesV2,
     mut length: u32,
@@ -223,7 +204,6 @@ fn authentication_counts_v2(
     }
     Ok(counts)
 }
-
 fn canonical_leaf_hash_v2(
     parameter_digest: [u8; 32],
     section: CanonicalProofSectionV2,
@@ -242,7 +222,6 @@ fn canonical_leaf_hash_v2(
     hash.update(values);
     Ok(hash.finalize())
 }
-
 fn canonical_node_hash_v2(
     parameter_digest: [u8; 32],
     section: CanonicalProofSectionV2,
@@ -263,7 +242,6 @@ fn canonical_node_hash_v2(
     hash.update(&right);
     Ok(hash.finalize())
 }
-
 impl CanonicalMerkleFrontierV2 {
     fn new_v2(
         parameter_digest: [u8; 32],
@@ -279,7 +257,6 @@ impl CanonicalMerkleFrontierV2 {
             authentication,
         }
     }
-
     fn push_v2(
         &mut self,
         digest: [u8; 32],
@@ -323,7 +300,6 @@ impl CanonicalMerkleFrontierV2 {
         self.leaves += 1;
         Ok(())
     }
-
     fn finish_v2(
         self,
         expected_root: [u8; 32],
@@ -341,7 +317,6 @@ impl CanonicalMerkleFrontierV2 {
         Ok(self.authentication)
     }
 }
-
 fn emit_merkle_section_with_queries_v2<R, S>(
     mut replay: R,
     queries: &[u32; 160],
@@ -411,7 +386,6 @@ where
     }
     replay.complete_v2()
 }
-
 pub(super) fn emit_merkle_section_v2<R, S>(
     replay: R,
     plan: &ProverCanonicalProofPlanV2,
@@ -433,7 +407,6 @@ where
         writer,
     )
 }
-
 const _: () = {
     assert!(CANONICAL_MAX_WINDOW_BYTES_V2 == 1_024 * CANONICAL_LEAF_BYTES_V2);
     assert!(CANONICAL_MAX_AUTH_HEAP_BYTES_V2 == 3_392 * 32);
@@ -444,31 +417,24 @@ const _: () = {
                 + CANONICAL_MAX_CHUNK_BYTES_V2
     );
 };
-
 #[cfg(test)]
 mod tests {
     use iroha_confidential_spool::ConfidentialSpoolChunkV1;
-
     use super::*;
-
     struct VecSinkV2 {
         bytes: Vec<u8>,
         expected: usize,
     }
-
     impl BatchFriCanonicalProofSinkV2 for VecSinkV2 {
         type Output = Vec<u8>;
-
         fn begin_exact_v2(&mut self, exact_bytes: usize) -> Result<(), ProverPrerequisiteErrorV2> {
             self.expected = exact_bytes;
             Ok(())
         }
-
         fn write_next_v2(&mut self, bytes: &[u8]) -> Result<(), ProverPrerequisiteErrorV2> {
             self.bytes.extend_from_slice(bytes);
             Ok(())
         }
-
         fn finish_exact_v2(self) -> Result<Self::Output, ProverPrerequisiteErrorV2> {
             if self.bytes.len() != self.expected {
                 return Err(ProverPrerequisiteErrorV2::CanonicalProofSink);
@@ -476,16 +442,13 @@ mod tests {
             Ok(self.bytes)
         }
     }
-
     struct TinyReplayV2 {
         next: u16,
         noncanonical: bool,
         malformed_chunk: bool,
     }
-
     impl CanonicalTreeReplayV2 for TinyReplayV2 {
         type Owner = ();
-
         fn shape_v2(&self) -> Result<CanonicalTreeReplayShapeV2, ProverPrerequisiteErrorV2> {
             Ok(CanonicalTreeReplayShapeV2 {
                 length: 4,
@@ -493,7 +456,6 @@ mod tests {
                 values_per_block: 4,
             })
         }
-
         fn read_next_column_v2(
             &mut self,
         ) -> Result<AuthenticatedReplayChunkV2, ProverPrerequisiteErrorV2> {
@@ -510,7 +472,6 @@ mod tests {
             self.next += 1;
             Ok(AuthenticatedReplayChunkV2 { chunk })
         }
-
         fn complete_v2(self) -> Result<Self::Owner, ProverPrerequisiteErrorV2> {
             if self.next != 380 {
                 return Err(ProverPrerequisiteErrorV2::InvalidCanonicalProof);
@@ -518,13 +479,11 @@ mod tests {
             Ok(())
         }
     }
-
     fn tiny_root_v2(section: CanonicalProofSectionV2) -> [u8; 32] {
         let leaf = canonical_leaf_hash_v2([0x11; 32], section, &[0; 6_080]).unwrap();
         let parent = canonical_node_hash_v2([0x11; 32], section, 1, leaf, leaf).unwrap();
         canonical_node_hash_v2([0x11; 32], section, 2, parent, parent).unwrap()
     }
-
     #[test]
     fn one_pass_emits_sorted_values_then_height_major_minimal_authentication() {
         let section = CanonicalProofSectionV2::test_only_v2(2, 3, 0, 4, 2, 2);
@@ -552,7 +511,6 @@ mod tests {
         assert_eq!(&bytes[4..8], &2_u32.to_be_bytes());
         assert_eq!(bytes.len(), exact);
     }
-
     #[test]
     fn wrong_root_and_noncanonical_replay_fail_closed() {
         let section = CanonicalProofSectionV2::test_only_v2(2, 3, 0, 4, 2, 2);
@@ -600,7 +558,6 @@ mod tests {
             Err(ProverPrerequisiteErrorV2::NonCanonicalResidue)
         ));
     }
-
     #[test]
     fn hostile_replay_with_malformed_authenticated_chunk_fails_closed() {
         let section = CanonicalProofSectionV2::test_only_v2(2, 3, 0, 4, 2, 2);

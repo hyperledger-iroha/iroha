@@ -22,7 +22,6 @@ fn tracker_handles_failure_verdict() {
         }
     );
 }
-
 #[test]
 fn successful_and_repaired_verdicts_never_invoke_repair_handoff() {
     for (index, outcome) in [AuditOutcomeV1::Success, AuditOutcomeV1::Repaired]
@@ -41,7 +40,6 @@ fn successful_and_repaired_verdicts_never_invoke_repair_handoff() {
         verdict.failure_reason = (outcome == AuditOutcomeV1::Repaired)
             .then(|| "repair verification succeeded".to_owned());
         resign_sample_verdict(&mut verdict);
-
         let transition = tracker
             .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
                 panic!("non-failed verdict must not invoke repair handoff")
@@ -50,7 +48,6 @@ fn successful_and_repaired_verdicts_never_invoke_repair_handoff() {
         assert_eq!(transition.repair_task_id, None);
     }
 }
-
 #[test]
 fn tracker_detects_mismatched_proof() {
     let tracker = PorTracker::default();
@@ -64,12 +61,10 @@ fn tracker_detects_mismatched_proof() {
         .unwrap_err();
     assert!(matches!(err, PorTrackerError::MismatchManifest));
     assert_eq!(tracker.proof_digest(&challenge.challenge_id), None);
-
     tracker
         .record_proof(&sample_proof(&challenge), &sample_provider_key())
         .expect("mismatched proof must not consume the challenge");
 }
-
 #[test]
 fn tracker_rejects_wrong_sample_coverage_and_late_or_predated_proofs() {
     let challenge = sample_challenge();
@@ -84,7 +79,6 @@ fn tracker_rejects_wrong_sample_coverage_and_late_or_predated_proofs() {
             _ => unreachable!(),
         }
         resign_sample_proof(&mut proof);
-
         let error = tracker
             .record_proof(&proof, &sample_provider_key())
             .expect_err("adversarial proof must fail");
@@ -99,7 +93,6 @@ fn tracker_rejects_wrong_sample_coverage_and_late_or_predated_proofs() {
         assert_eq!(tracker.proof_digest(&challenge.challenge_id), None);
     }
 }
-
 #[test]
 fn tracker_rejects_cross_bound_verdict_without_consuming_challenge() {
     let tracker = PorTracker::default();
@@ -110,7 +103,6 @@ fn tracker_rejects_cross_bound_verdict_without_consuming_challenge() {
         .record_proof(&proof, &sample_provider_key())
         .unwrap();
     let valid = sample_verdict(&challenge, proof.proof_digest());
-
     for mutation in 0..5 {
         let mut forged = valid.clone();
         match mutation {
@@ -136,20 +128,17 @@ fn tracker_rejects_cross_bound_verdict_without_consuming_challenge() {
             Some(proof.proof_digest())
         );
     }
-
     tracker
         .record_verdict(&valid, &sample_auditor_keys(), 1)
         .expect("valid verdict remains retryable after forged attempts");
     assert!(!tracker.contains_challenge(&challenge.challenge_id));
 }
-
 #[test]
 fn tracker_enforces_provider_admission_and_auditor_threshold_at_commit_boundary() {
     let tracker = PorTracker::default();
     let challenge = sample_challenge();
     let proof = sample_proof(&challenge);
     tracker.record_challenge(&challenge).unwrap();
-
     assert!(matches!(
         tracker.record_proof(&proof, &[0xFE; 32]),
         Err(PorTrackerError::ProofSignatureInvalid(
@@ -160,7 +149,6 @@ fn tracker_enforces_provider_admission_and_auditor_threshold_at_commit_boundary(
     tracker
         .record_proof(&proof, &sample_provider_key())
         .expect("admitted provider proof");
-
     let verdict = sample_verdict(&challenge, proof.proof_digest());
     assert!(matches!(
         tracker.record_verdict(&verdict, &[vec![0xFD; 32]], 1),
@@ -184,7 +172,6 @@ fn tracker_enforces_provider_admission_and_auditor_threshold_at_commit_boundary(
         .record_verdict(&verdict, &sample_auditor_keys(), 1)
         .expect("trusted auditor threshold");
 }
-
 #[test]
 fn tracker_requires_proof_for_success_but_allows_failure_without_one() {
     let challenge = sample_challenge();
@@ -196,7 +183,6 @@ fn tracker_requires_proof_for_success_but_allows_failure_without_one() {
         Err(PorTrackerError::UnexpectedVerdictProofDigest)
     ));
     assert!(tracker.contains_challenge(&challenge.challenge_id));
-
     let mut success_without_digest = success.clone();
     success_without_digest.proof_digest = None;
     resign_sample_verdict(&mut success_without_digest);
@@ -204,7 +190,6 @@ fn tracker_requires_proof_for_success_but_allows_failure_without_one() {
         tracker.record_verdict(&success_without_digest, &sample_auditor_keys(), 1),
         Err(PorTrackerError::MissingProofForSuccessfulVerdict)
     ));
-
     let mut failure = success_without_digest;
     failure.outcome = AuditOutcomeV1::Failed;
     failure.decided_at = challenge.deadline_at;
@@ -214,7 +199,6 @@ fn tracker_requires_proof_for_success_but_allows_failure_without_one() {
         .record_verdict(&failure, &sample_auditor_keys(), 1)
         .expect("failure without proof is a valid terminal transition");
 }
-
 #[test]
 fn failed_verdict_commits_before_repair_handoff_and_remains_pending() {
     let tracker = PorTracker::default();
@@ -228,7 +212,6 @@ fn failed_verdict_commits_before_repair_handoff_and_remains_pending() {
     verdict.outcome = AuditOutcomeV1::Failed;
     verdict.failure_reason = Some("proof verification failed".to_owned());
     resign_sample_verdict(&mut verdict);
-
     let transition = tracker
         .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
         .expect("verdict commits independently of repair admission");
@@ -240,7 +223,6 @@ fn failed_verdict_commits_before_repair_handoff_and_remains_pending() {
     assert_eq!(Some(pending.repair_task_id), transition.repair_task_id);
     assert_eq!(pending.intent.challenge_id, challenge.challenge_id);
 }
-
 #[test]
 fn failed_verdict_exact_replay_reuses_durable_pending_task() {
     let tracker = PorTracker::default();
@@ -258,7 +240,6 @@ fn failed_verdict_exact_replay_reuses_durable_pending_task() {
     let replay = tracker
         .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
         .expect("exact failed verdict replay");
-
     assert!(first.newly_finalized);
     assert!(!replay.newly_finalized);
     assert_eq!(replay.repair_task_id, first.repair_task_id);
@@ -269,7 +250,6 @@ fn failed_verdict_exact_replay_reuses_durable_pending_task() {
             .map(|work| work.repair_task_id),
         first.repair_task_id
     );
-
     let mut conflicting = verdict.clone();
     conflicting.failure_reason = Some("different terminal reason".to_owned());
     resign_sample_verdict(&mut conflicting);
@@ -278,7 +258,6 @@ fn failed_verdict_exact_replay_reuses_durable_pending_task() {
         Err(PorTrackerError::VerdictConflict)
     ));
 }
-
 #[test]
 fn failed_verdict_rejects_mismatched_handoff_acknowledgement() {
     let tracker = PorTracker::default();
@@ -290,7 +269,6 @@ fn failed_verdict_rejects_mismatched_handoff_acknowledgement() {
     verdict.decided_at = challenge.deadline_at;
     verdict.failure_reason = Some("provider missed the challenge".to_owned());
     resign_sample_verdict(&mut verdict);
-
     tracker
         .record_verdict_durable(&verdict, &sample_auditor_keys(), 1)
         .expect("failed verdict commits with pending repair work");
@@ -300,7 +278,6 @@ fn failed_verdict_rejects_mismatched_handoff_acknowledgement() {
     ));
     assert!(tracker.next_pending_repair_work().unwrap().is_some());
 }
-
 #[test]
 fn failed_verdict_cannot_compact_before_repair_handoff_acknowledgement() {
     let tracker = PorTracker::default();
@@ -344,7 +321,6 @@ fn failed_verdict_cannot_compact_before_repair_handoff_acknowledgement() {
     assert_eq!(statuses[0].status, PorChallengeOutcome::Failed);
     assert_eq!(statuses[0].repair_task_id, Some(repair.repair_task_id));
 }
-
 #[test]
 fn por_repair_source_and_report_are_canonical_and_payload_free() {
     let intent = PorFailedRepairIntentV1 {
@@ -357,7 +333,6 @@ fn por_repair_source_and_report_are_canonical_and_payload_free() {
     };
     let report = canonical_por_failure_repair_report_v1(intent, "repair@sora")
         .expect("canonical failed PoR repair report");
-
     assert_eq!(
         report.ticket_id.0,
         format!("POR-{}", hex::encode_upper(intent.challenge_id))

@@ -1,7 +1,5 @@
 //! Chain-authoritative SoraFS reserve, rent, credit, and appeal handlers.
-
 use std::{str::FromStr, sync::OnceLock};
-
 use iroha_data_model::{
     account::AccountId,
     asset::AssetId,
@@ -47,11 +45,9 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_from_bytes_with_limits};
 use sorafs_manifest::deal::XorQuantity;
-
 use super::*;
 use crate::smartcontracts::ValidSingularQuery;
 use crate::state::{StateTransaction, WorldReadOnly};
-
 const RESERVE_STATE_KEY: &str = "sorafs_reserve_state_v1";
 const PROVIDER_STATE_KEY_PREFIX: &str = "sorafs_reserve_provider_v1_";
 const MOVEMENT_STATE_KEY_PREFIX: &str = "sorafs_reserve_movement_v1_";
@@ -60,7 +56,6 @@ const EVENT_STATE_KEY_PREFIX: &str = "sorafs_reserve_event_v1_";
 const STATE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const STATE_LIMITS: DecodeLimits =
     DecodeLimits::new(4_096, STATE_MAX_BYTES, 32_768, STATE_MAX_BYTES * 2, 64);
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ReservePersistedEventV1 {
     sequence: u64,
@@ -68,20 +63,17 @@ struct ReservePersistedEventV1 {
     event_index: u32,
     event: SorafsReserveLedgerEvent,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ReserveEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
     last_event_index: u32,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ReserveStateV1 {
     policy: ReserveAuthorityPolicyRecordV1,
     journal_head: ReserveEventJournalHeadV1,
 }
-
 /// Non-reusable proof that the reserve state machine approved one exact
 /// provider withdrawal from protocol custody.
 pub(in crate::smartcontracts::isi) struct VerifiedSorafsReserveWithdrawal {
@@ -94,7 +86,6 @@ pub(in crate::smartcontracts::isi) struct VerifiedSorafsReserveWithdrawal {
     destination_id: AssetId,
     amount: Quantity,
 }
-
 impl VerifiedSorafsReserveWithdrawal {
     fn new(
         provider_id: ProviderId,
@@ -117,7 +108,6 @@ impl VerifiedSorafsReserveWithdrawal {
             amount,
         }
     }
-
     /// Consume the proof into the exact retained-state and balance binding.
     pub(in crate::smartcontracts::isi) fn into_parts(
         self,
@@ -143,17 +133,14 @@ impl VerifiedSorafsReserveWithdrawal {
         )
     }
 }
-
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
     ))
 }
-
 fn corrupt_state(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvariantViolation(message.into().into())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn emit_reserve_event(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -200,7 +187,6 @@ fn emit_reserve_event(
         .emit_events(Some(SorafsGatewayEvent::ReserveLedger(event)));
     Ok(())
 }
-
 fn emit_reserve_policy_activation(
     state_transaction: &mut StateTransaction<'_, '_>,
     policy: ReserveAuthorityPolicyRecordV1,
@@ -226,7 +212,6 @@ fn emit_reserve_policy_activation(
         .emit_events(Some(SorafsGatewayEvent::ReserveLedger(event)));
     Ok(())
 }
-
 fn has_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -241,14 +226,12 @@ fn has_permission(
     {
         return true;
     }
-
     state_transaction
         .world
         .account_roles_iter(authority)
         .filter_map(|role_id| state_transaction.world.roles.get(role_id))
         .any(|role| role.permissions().any(|candidate| candidate == &required))
 }
-
 fn require_governance(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -261,34 +244,27 @@ fn require_governance(
         ))
     }
 }
-
 fn reserve_state_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| StatePath::from_str(RESERVE_STATE_KEY).expect("static state key is valid"))
 }
-
 fn digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
     StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static prefix plus lowercase hex is a valid state key")
 }
-
 fn provider_key(provider_id: ProviderId) -> StatePath {
     digest_key(PROVIDER_STATE_KEY_PREFIX, *provider_id.as_bytes())
 }
-
 fn movement_key(movement_id: [u8; 32]) -> StatePath {
     digest_key(MOVEMENT_STATE_KEY_PREFIX, movement_id)
 }
-
 fn appeal_key(appeal_id: [u8; 32]) -> StatePath {
     digest_key(APPEAL_STATE_KEY_PREFIX, appeal_id)
 }
-
 fn event_key(sequence: u64) -> StatePath {
     StatePath::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
         .expect("static prefix plus fixed-width lowercase hex is a valid state key")
 }
-
 fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
@@ -296,14 +272,12 @@ fn encode_state<T: norito::core::NoritoSerialize>(
     norito::to_bytes(value)
         .map_err(|error| corrupt_state(format!("failed to encode {label}: {error}")))
 }
-
 fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
     decode_state_with_current(bytes, label, None)
 }
-
 fn decode_state_for_current<T>(
     bytes: &[u8],
     label: &str,
@@ -314,7 +288,6 @@ where
 {
     decode_state_with_current(bytes, label, Some(current))
 }
-
 fn decode_state_with_current<T>(
     bytes: &[u8],
     label: &str,
@@ -367,7 +340,6 @@ where
     }
     Ok(value)
 }
-
 fn validate_persisted_event(
     record: &ReservePersistedEventV1,
     expected_sequence: u64,
@@ -428,7 +400,6 @@ fn validate_persisted_event(
     }
     Ok(())
 }
-
 fn validate_event_successor(
     previous: Option<&ReservePersistedEventV1>,
     current: &ReservePersistedEventV1,
@@ -468,7 +439,6 @@ fn validate_event_successor(
         )),
     }
 }
-
 fn read_persisted_event(
     world: &impl WorldReadOnly,
     sequence: u64,
@@ -481,14 +451,12 @@ fn read_persisted_event(
     };
     decode_persisted_event(bytes, sequence).map(Some)
 }
-
 fn decode_persisted_event(
     bytes: &[u8],
     sequence: u64,
 ) -> Result<ReservePersistedEventV1, InstructionExecutionError> {
     decode_persisted_event_with_current(bytes, sequence, None)
 }
-
 fn decode_persisted_event_for_current(
     bytes: &[u8],
     sequence: u64,
@@ -496,7 +464,6 @@ fn decode_persisted_event_for_current(
 ) -> Result<ReservePersistedEventV1, InstructionExecutionError> {
     decode_persisted_event_with_current(bytes, sequence, Some(current))
 }
-
 fn decode_persisted_event_with_current(
     bytes: &[u8],
     sequence: u64,
@@ -514,7 +481,6 @@ fn decode_persisted_event_with_current(
     validate_persisted_event(&record, sequence)?;
     Ok(record)
 }
-
 fn validate_event_journal_head(
     world: &impl WorldReadOnly,
     head: ReserveEventJournalHeadV1,
@@ -543,7 +509,6 @@ fn validate_event_journal_head(
     validate_event_successor(predecessor.as_ref(), &record)?;
     Ok(())
 }
-
 fn ensure_reserve_namespace_empty(
     world: &impl WorldReadOnly,
 ) -> Result<(), InstructionExecutionError> {
@@ -560,7 +525,6 @@ fn ensure_reserve_namespace_empty(
     }
     Ok(())
 }
-
 fn ensure_no_event_after_head(
     world: &impl WorldReadOnly,
     head: Option<ReserveEventJournalHeadV1>,
@@ -608,7 +572,6 @@ fn ensure_no_event_after_head(
     }
     Ok(())
 }
-
 fn append_reserve_event_journal(
     state_transaction: &mut StateTransaction<'_, '_>,
     event: &SorafsReserveLedgerEvent,
@@ -732,7 +695,6 @@ fn append_reserve_event_journal(
         .insert(reserve_state_key().clone(), encoded_state);
     Ok(())
 }
-
 fn now_unix(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<u64, InstructionExecutionError> {
@@ -744,13 +706,11 @@ fn now_unix(
     }
     Ok(now)
 }
-
 fn read_policy(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ReserveAuthorityPolicyRecordV1>, InstructionExecutionError> {
     Ok(read_reserve_state(world)?.map(|state| state.policy))
 }
-
 /// Return whether `asset_id` is the exact asset held by active SoraFS reserve
 /// custody.
 pub(super) fn is_reserve_custody_asset(
@@ -762,7 +722,6 @@ pub(super) fn is_reserve_custody_asset(
             && record.policy.custody_account == *asset_id.account()
     }))
 }
-
 /// Return whether `account_id` is the active SoraFS reserve custody account.
 pub(super) fn is_reserve_custody_account(
     world: &impl WorldReadOnly,
@@ -770,7 +729,6 @@ pub(super) fn is_reserve_custody_account(
 ) -> Result<bool, InstructionExecutionError> {
     Ok(read_policy(world)?.is_some_and(|record| record.policy.custody_account == *account_id))
 }
-
 /// Return whether `definition_id` backs the active SoraFS reserve ledger.
 pub(super) fn is_reserve_asset_definition(
     world: &impl WorldReadOnly,
@@ -778,7 +736,6 @@ pub(super) fn is_reserve_asset_definition(
 ) -> Result<bool, InstructionExecutionError> {
     Ok(read_policy(world)?.is_some_and(|record| record.policy.asset_definition == *definition_id))
 }
-
 /// Revalidate a sealed withdrawal against the still-pending authoritative
 /// movement and provider records immediately before custody is debited.
 #[allow(clippy::too_many_arguments)]
@@ -829,7 +786,6 @@ pub(super) fn validate_verified_reserve_withdrawal(
     }
     Ok(())
 }
-
 fn read_reserve_state(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ReserveStateV1>, InstructionExecutionError> {
@@ -840,18 +796,15 @@ fn read_reserve_state(
     validate_event_journal_head(world, state.journal_head)?;
     Ok(Some(state))
 }
-
 fn decode_reserve_state(bytes: &[u8]) -> Result<ReserveStateV1, InstructionExecutionError> {
     decode_reserve_state_with_current(bytes, None)
 }
-
 fn decode_reserve_state_for_current(
     bytes: &[u8],
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
 ) -> Result<ReserveStateV1, InstructionExecutionError> {
     decode_reserve_state_with_current(bytes, Some(current))
 }
-
 fn decode_reserve_state_with_current(
     bytes: &[u8],
     current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
@@ -868,7 +821,6 @@ fn decode_reserve_state_with_current(
     }
     Ok(state)
 }
-
 fn validate_policy_record(
     record: &ReserveAuthorityPolicyRecordV1,
 ) -> Result<(), InstructionExecutionError> {
@@ -887,7 +839,6 @@ fn validate_policy_record(
     }
     Ok(())
 }
-
 fn active_policy(
     state_transaction: &StateTransaction<'_, '_>,
     expected_digest: [u8; 32],
@@ -909,7 +860,6 @@ fn active_policy(
     }
     Ok((record, now))
 }
-
 fn require_operations_authority(
     authority: &AccountId,
     policy: &ReserveAuthorityPolicyRecordV1,
@@ -922,7 +872,6 @@ fn require_operations_authority(
         ))
     }
 }
-
 fn require_decision_authority(
     authority: &AccountId,
     policy: &ReserveAuthorityPolicyRecordV1,
@@ -935,7 +884,6 @@ fn require_decision_authority(
         ))
     }
 }
-
 fn registered_provider_owner(
     world: &impl WorldReadOnly,
     provider_id: ProviderId,
@@ -946,7 +894,6 @@ fn registered_provider_owner(
         .cloned()
         .ok_or_else(|| invalid_parameter(format!("unknown SoraFS provider {provider_id}")))
 }
-
 fn credit_cap(
     policy: &ReserveAuthorityPolicyV1,
     terms: &iroha_data_model::sorafs::reserve::ReserveProviderTermsV1,
@@ -965,7 +912,6 @@ fn credit_cap(
         XorQuantity::min(&cap, &policy.max_provider_debt)
     }))
 }
-
 /// Read one canonical authoritative reserve-provider account by exact registry id.
 pub(super) fn read_provider(
     world: &impl WorldReadOnly,
@@ -976,7 +922,6 @@ pub(super) fn read_provider(
     };
     decode_provider_record(bytes, provider_id).map(Some)
 }
-
 fn total_reserved_custody(
     world: &impl WorldReadOnly,
 ) -> Result<XorQuantity, InstructionExecutionError> {
@@ -1002,7 +947,6 @@ fn total_reserved_custody(
     }
     Ok(total)
 }
-
 /// Resolve collateral that is backed by the native owner-funded reserve flow.
 ///
 /// The returned balance is not an administrator-authored credit projection.
@@ -1051,7 +995,6 @@ pub(super) fn verified_provider_bond(
             ))
         })
 }
-
 fn credit_after_verified_reserve_withdrawal(
     world: &impl WorldReadOnly,
     provider_id: ProviderId,
@@ -1089,7 +1032,6 @@ fn credit_after_verified_reserve_withdrawal(
             "provider {provider_id} bonded-plus-slashed credit commitment exceeds native reserve custody"
         )));
     }
-
     let remaining_owner_funded = remaining_reserve.checked_sub(debt_principal).map_err(
         |error| {
             invalid_parameter(format!(
@@ -1127,7 +1069,6 @@ fn credit_after_verified_reserve_withdrawal(
     credit.bonded = next_bonded.into_quantity();
     Ok(Some(credit))
 }
-
 #[cfg(test)]
 pub(super) fn seed_verified_provider_bond_for_test(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -1137,7 +1078,6 @@ pub(super) fn seed_verified_provider_bond_for_test(
     bonded: iroha_primitives::numeric::Quantity,
 ) -> Result<(), InstructionExecutionError> {
     use iroha_data_model::{IntoKeyValue, account::Account, asset::Asset};
-
     let policy = if let Some(policy) = read_policy(state_transaction.world())? {
         policy
     } else {
@@ -1190,7 +1130,6 @@ pub(super) fn seed_verified_provider_bond_for_test(
             "test reserve provider owner must differ from protocol custody",
         ));
     }
-
     let reserve_balance = XorQuantity::try_from_quantity(bonded)
         .map_err(|error| corrupt_state(format!("test reserve bond is invalid: {error}")))?;
     let account = ReserveProviderAccountV1 {
@@ -1220,7 +1159,6 @@ pub(super) fn seed_verified_provider_bond_for_test(
         provider_key(provider_id),
         encode_state(&account, "test reserve provider account")?,
     );
-
     let custody_asset_id = AssetId::of(
         policy.policy.asset_definition,
         policy.policy.custody_account,
@@ -1239,7 +1177,6 @@ pub(super) fn seed_verified_provider_bond_for_test(
     state_transaction.world.assets.insert(asset_id, asset);
     Ok(())
 }
-
 fn decode_provider_record(
     bytes: &[u8],
     provider_id: ProviderId,
@@ -1247,7 +1184,6 @@ fn decode_provider_record(
     let account: ReserveProviderAccountV1 = decode_state(bytes, "reserve provider account")?;
     validate_provider_record(account, provider_id)
 }
-
 fn validate_provider_record(
     account: ReserveProviderAccountV1,
     provider_id: ProviderId,
@@ -1271,7 +1207,6 @@ fn validate_provider_record(
     }
     Ok(account)
 }
-
 fn ensure_apr_rotation_has_no_debt(
     world: &impl WorldReadOnly,
     current: &ReserveAuthorityPolicyV1,
@@ -1295,7 +1230,6 @@ fn ensure_apr_rotation_has_no_debt(
     if !apr_changed {
         return Ok(());
     }
-
     let start =
         StatePath::from_str(PROVIDER_STATE_KEY_PREFIX).expect("static provider prefix is valid");
     for (key, payload) in world.smart_contract_state().range(start..) {
@@ -1324,7 +1258,6 @@ fn ensure_apr_rotation_has_no_debt(
     }
     Ok(())
 }
-
 fn provider_for_policy(
     world: &impl WorldReadOnly,
     provider_id: ProviderId,
@@ -1343,7 +1276,6 @@ fn provider_for_policy(
     }
     Ok(account)
 }
-
 fn ensure_revision(
     account: &ReserveProviderAccountV1,
     expected: u64,
@@ -1357,7 +1289,6 @@ fn ensure_revision(
         )))
     }
 }
-
 fn ensure_provider_timestamp(
     account: &ReserveProviderAccountV1,
     now: u64,
@@ -1371,7 +1302,6 @@ fn ensure_provider_timestamp(
         )))
     }
 }
-
 fn advance_provider_revision(
     account: &mut ReserveProviderAccountV1,
     now: u64,
@@ -1390,7 +1320,6 @@ fn advance_provider_revision(
     account.updated_at_unix = now;
     Ok(())
 }
-
 fn accrue_interest(
     account: &mut ReserveProviderAccountV1,
     policy: &ReserveAuthorityPolicyV1,
@@ -1405,7 +1334,6 @@ fn accrue_interest(
         .map_err(|error| invalid_parameter(format!("reserve interest accrual failed: {error}")))?;
     Ok(())
 }
-
 fn read_movement(
     world: &impl WorldReadOnly,
     movement_id: [u8; 32],
@@ -1415,7 +1343,6 @@ fn read_movement(
     };
     decode_movement_record(bytes, movement_id).map(Some)
 }
-
 fn decode_movement_record(
     bytes: &[u8],
     movement_id: [u8; 32],
@@ -1423,7 +1350,6 @@ fn decode_movement_record(
     let record: ReserveMovementRecordV1 = decode_state(bytes, "reserve movement")?;
     validate_movement_record(record, movement_id)
 }
-
 fn validate_movement_record(
     record: ReserveMovementRecordV1,
     movement_id: [u8; 32],
@@ -1452,7 +1378,6 @@ fn validate_movement_record(
     }
     Ok(record)
 }
-
 fn read_appeal(
     world: &impl WorldReadOnly,
     appeal_id: [u8; 32],
@@ -1462,7 +1387,6 @@ fn read_appeal(
     };
     decode_appeal_record(bytes, appeal_id).map(Some)
 }
-
 fn decode_appeal_record(
     bytes: &[u8],
     appeal_id: [u8; 32],
@@ -1470,7 +1394,6 @@ fn decode_appeal_record(
     let record: ReserveAppealRecordV1 = decode_state(bytes, "reserve appeal")?;
     validate_appeal_record(record, appeal_id)
 }
-
 fn validate_appeal_record(
     record: ReserveAppealRecordV1,
     appeal_id: [u8; 32],
@@ -1497,7 +1420,6 @@ fn validate_appeal_record(
     }
     Ok(record)
 }
-
 fn transfer(
     state_transaction: &mut StateTransaction<'_, '_>,
     policy: &ReserveAuthorityPolicyV1,
@@ -1514,7 +1436,6 @@ fn transfer(
     )
     .map_err(|error| invalid_parameter(format!("reserve custody transfer failed: {error}")))
 }
-
 fn provider_spendable_balance(
     world: &impl WorldReadOnly,
     policy: &ReserveAuthorityPolicyV1,
@@ -1532,7 +1453,6 @@ fn provider_spendable_balance(
         },
     )
 }
-
 impl Execute for SetSorafsReservePolicy {
     fn execute(
         self,
@@ -1608,7 +1528,6 @@ impl Execute for SetSorafsReservePolicy {
         Ok(())
     }
 }
-
 impl Execute for RegisterSorafsReserveAccount {
     fn execute(
         self,
@@ -1672,7 +1591,6 @@ impl Execute for RegisterSorafsReserveAccount {
         Ok(())
     }
 }
-
 impl Execute for RequestSorafsReserveMovement {
     fn execute(
         self,
@@ -1743,7 +1661,6 @@ impl Execute for RequestSorafsReserveMovement {
         Ok(())
     }
 }
-
 impl Execute for DecideSorafsReserveMovement {
     fn execute(
         self,
@@ -1770,7 +1687,6 @@ impl Execute for DecideSorafsReserveMovement {
             .pending_movements
             .checked_sub(1)
             .ok_or_else(|| corrupt_state("reserve pending-movement counter underflow"))?;
-
         let mut updated_credit = None;
         if self.approve {
             match movement.kind {
@@ -1848,7 +1764,6 @@ impl Execute for DecideSorafsReserveMovement {
         movement.rationale = Some(self.rationale);
         let encoded_account = encode_state(&account, "reserve provider account")?;
         let encoded_movement = encode_state(&movement, "reserve movement")?;
-
         if self.approve {
             match movement.kind {
                 ReserveMovementKindV1::TopUp => transfer(
@@ -1915,7 +1830,6 @@ impl Execute for DecideSorafsReserveMovement {
         Ok(())
     }
 }
-
 impl Execute for ChargeSorafsReserveRent {
     fn execute(
         self,
@@ -2009,7 +1923,6 @@ impl Execute for ChargeSorafsReserveRent {
         Ok(())
     }
 }
-
 impl Execute for AdvanceSorafsReserveLifecycle {
     fn execute(
         self,
@@ -2097,7 +2010,6 @@ impl Execute for AdvanceSorafsReserveLifecycle {
         Ok(())
     }
 }
-
 impl Execute for DrawSorafsReserveCredit {
     fn execute(
         self,
@@ -2156,7 +2068,6 @@ impl Execute for DrawSorafsReserveCredit {
         Ok(())
     }
 }
-
 impl Execute for RepaySorafsReserveCredit {
     fn execute(
         self,
@@ -2231,7 +2142,6 @@ impl Execute for RepaySorafsReserveCredit {
         Ok(())
     }
 }
-
 impl Execute for SubmitSorafsReserveAppeal {
     fn execute(
         self,
@@ -2306,7 +2216,6 @@ impl Execute for SubmitSorafsReserveAppeal {
         Ok(())
     }
 }
-
 impl Execute for DecideSorafsReserveAppeal {
     fn execute(
         self,
@@ -2371,27 +2280,23 @@ impl Execute for DecideSorafsReserveAppeal {
         Ok(())
     }
 }
-
 fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
     match error {
         InstructionExecutionError::Query(error) => error,
         error => QueryExecutionFail::Conversion(error.to_string()),
     }
 }
-
 const RESERVE_QUERY_MAX_EVENT_READ_BYTES_V1: usize = RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1 * 4;
 const RESERVE_QUERY_MAX_EVENT_STORAGE_PROBES_V1: u32 = RESERVE_QUERY_MAX_ITEMS_V1 * 2 + 24;
 const RESERVE_QUERY_MAX_EVENT_PROBE_KEY_BYTES_V1: usize = 1_024;
 const RESERVE_QUERY_MAX_EVENT_TOTAL_KEY_BYTES_V1: usize = 128 * 1_024;
 const RESERVE_QUERY_MAX_RECORD_BYTES_V1: usize = 64 * 1_024;
-
 #[derive(Debug, Default)]
 struct ReserveEventQueryBudgetV1 {
     storage_probes: u32,
     key_bytes: usize,
     read_bytes: usize,
 }
-
 impl ReserveEventQueryBudgetV1 {
     fn inspect_storage_probe(
         &mut self,
@@ -2446,7 +2351,6 @@ impl ReserveEventQueryBudgetV1 {
         }
         Ok(())
     }
-
     fn inspect_direct_read(
         &mut self,
         key: &StatePath,
@@ -2454,14 +2358,12 @@ impl ReserveEventQueryBudgetV1 {
     ) -> Result<(), QueryExecutionFail> {
         self.inspect_storage_probe(key.as_ref().len(), None, encoded_value_bytes)
     }
-
     fn inspect_finalized_hash_read(
         &mut self,
         encoded_value_bytes: usize,
     ) -> Result<(), QueryExecutionFail> {
         self.inspect_storage_probe(core::mem::size_of::<u64>(), None, encoded_value_bytes)
     }
-
     fn inspect_finalized_hash_metadata(&mut self) -> Result<(), QueryExecutionFail> {
         self.inspect_storage_probe(
             "finalized_block_hashes".len(),
@@ -2469,7 +2371,6 @@ impl ReserveEventQueryBudgetV1 {
             core::mem::size_of::<u64>(),
         )
     }
-
     fn inspect_range_read(
         &mut self,
         probe_key: &StatePath,
@@ -2482,7 +2383,6 @@ impl ReserveEventQueryBudgetV1 {
         )
     }
 }
-
 fn read_policy_for_query(
     world: &impl WorldReadOnly,
     budget: &mut ReserveEventQueryBudgetV1,
@@ -2500,7 +2400,6 @@ fn read_policy_for_query(
         .transpose()
         .map_err(query_failure)
 }
-
 fn checked_query_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
     if !(1..=RESERVE_QUERY_MAX_ITEMS_V1).contains(&limit) {
         return Err(QueryExecutionFail::Conversion(format!(
@@ -2513,7 +2412,6 @@ fn checked_query_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
         )
     })
 }
-
 fn resolve_finalized_cursor(
     state_ro: &impl crate::state::StateReadOnly,
     budget: &mut ReserveEventQueryBudgetV1,
@@ -2537,7 +2435,6 @@ fn resolve_finalized_cursor(
     }
     Ok(ReserveFinalizedCursorV1 { height, block_hash })
 }
-
 fn resolve_query_finalized_cursor(
     expected: Option<ReserveFinalizedCursorV1>,
     state_ro: &impl crate::state::StateReadOnly,
@@ -2549,7 +2446,6 @@ fn resolve_query_finalized_cursor(
     }
     Ok(actual)
 }
-
 fn read_persisted_event_for_query(
     world: &impl WorldReadOnly,
     sequence: u64,
@@ -2573,7 +2469,6 @@ fn read_persisted_event_for_query(
         .transpose()
         .map_err(query_failure)
 }
-
 fn read_event_journal_head_for_query(
     world: &impl WorldReadOnly,
     budget: &mut ReserveEventQueryBudgetV1,
@@ -2632,7 +2527,6 @@ fn read_event_journal_head_for_query(
     validate_query_event_successor(predecessor_position, &record)?;
     Ok(Some(head))
 }
-
 fn ensure_no_event_after_head_for_query(
     world: &impl WorldReadOnly,
     head: ReserveEventJournalHeadV1,
@@ -2653,7 +2547,6 @@ fn ensure_no_event_after_head_for_query(
             "reserve event journal does not begin at sequence one".into(),
         ));
     }
-
     let terminal_key = event_key(head.last_sequence);
     let mut tail_iter = world.smart_contract_state().range(terminal_key.clone()..);
     let mut probe_key = terminal_key.clone();
@@ -2676,7 +2569,6 @@ fn ensure_no_event_after_head_for_query(
     }
     Ok(())
 }
-
 fn resolve_committed_event(
     state_ro: &impl crate::state::StateReadOnly,
     record: ReservePersistedEventV1,
@@ -2713,14 +2605,12 @@ fn resolve_committed_event(
         event: record.event,
     })
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct ReserveQueryEventPosition {
     sequence: u64,
     target_block_height: u64,
     event_index: u32,
 }
-
 impl From<&ReservePersistedEventV1> for ReserveQueryEventPosition {
     fn from(record: &ReservePersistedEventV1) -> Self {
         Self {
@@ -2730,7 +2620,6 @@ impl From<&ReservePersistedEventV1> for ReserveQueryEventPosition {
         }
     }
 }
-
 fn validate_query_event_successor(
     previous: Option<ReserveQueryEventPosition>,
     current: &ReservePersistedEventV1,
@@ -2772,7 +2661,6 @@ fn validate_query_event_successor(
         )),
     }
 }
-
 fn query_reserve_event_page(
     query: &FindSorafsReserveEvents,
     state_ro: &impl crate::state::StateReadOnly,
@@ -2915,7 +2803,6 @@ fn query_reserve_event_page(
     }
     Ok(page)
 }
-
 fn scan_reserve_records<T>(
     world: &impl WorldReadOnly,
     prefix: &str,
@@ -2957,7 +2844,6 @@ where
     }
     Ok((records.into_vec()?, has_more))
 }
-
 fn checked_page_records<T, I: Copy>(
     records: Vec<T>,
     has_more: bool,
@@ -2974,7 +2860,6 @@ fn checked_page_records<T, I: Copy>(
     };
     Ok((records, has_more, next_after))
 }
-
 fn validate_encoded_record_page<T: norito::core::NoritoSerialize>(
     page: &T,
 ) -> Result<(), QueryExecutionFail> {
@@ -2993,7 +2878,6 @@ fn validate_encoded_record_page<T: norito::core::NoritoSerialize>(
     }
     Ok(())
 }
-
 impl ValidSingularQuery for FindSorafsReservePolicy {
     fn execute(
         &self,
@@ -3005,7 +2889,6 @@ impl ValidSingularQuery for FindSorafsReservePolicy {
             .ok_or_else(|| QueryExecutionFail::Find(FindError::SorafsReservePolicy))
     }
 }
-
 impl ValidSingularQuery for FindSorafsReserveProviderById {
     fn execute(
         &self,
@@ -3018,7 +2901,6 @@ impl ValidSingularQuery for FindSorafsReserveProviderById {
             })
     }
 }
-
 impl ValidSingularQuery for FindSorafsReserveMovementById {
     fn execute(
         &self,
@@ -3031,7 +2913,6 @@ impl ValidSingularQuery for FindSorafsReserveMovementById {
             })
     }
 }
-
 impl ValidSingularQuery for FindSorafsReserveAppealById {
     fn execute(
         &self,
@@ -3042,7 +2923,6 @@ impl ValidSingularQuery for FindSorafsReserveAppealById {
             .ok_or_else(|| QueryExecutionFail::Find(FindError::SorafsReserveAppeal(self.appeal_id)))
     }
 }
-
 impl ValidSingularQuery for FindSorafsReserveProviders {
     fn execute(
         &self,
@@ -3096,7 +2976,6 @@ impl ValidSingularQuery for FindSorafsReserveProviders {
         Ok(page)
     }
 }
-
 impl ValidSingularQuery for FindSorafsReserveMovements {
     fn execute(
         &self,
@@ -3150,7 +3029,6 @@ impl ValidSingularQuery for FindSorafsReserveMovements {
         Ok(page)
     }
 }
-
 impl ValidSingularQuery for FindSorafsReserveAppeals {
     fn execute(
         &self,
@@ -3200,7 +3078,6 @@ impl ValidSingularQuery for FindSorafsReserveAppeals {
         Ok(page)
     }
 }
-
 impl ValidSingularQuery for FindSorafsReserveEvents {
     fn execute(
         &self,
@@ -3212,6 +3089,5 @@ impl ValidSingularQuery for FindSorafsReserveEvents {
         query_reserve_event_page(self, state_ro, finalized_cursor, &mut budget)
     }
 }
-
 #[cfg(test)]
 mod tests;

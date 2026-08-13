@@ -1,11 +1,9 @@
 // Included inside the sequence-plan helper module to preserve test scope.
-
 mod tests {
     use super::{
         AbiSpan, BinarySequenceLayout, HelperOutcome, RC_NO_SPACE, RC_UNAVAILABLE, call_helper,
         load_sequence_plan_library, sequence_plan_helper_self_test,
     };
-
     unsafe extern "C" fn mismatched_helper(
         _input_ptr: *const u8,
         input_len: usize,
@@ -28,7 +26,6 @@ mod tests {
         }
         0
     }
-
     unsafe extern "C" fn backend_error_helper(
         _input_ptr: *const u8,
         _input_len: usize,
@@ -41,7 +38,6 @@ mod tests {
     ) -> i32 {
         4
     }
-
     unsafe extern "C" fn unavailable_helper(
         _input_ptr: *const u8,
         _input_len: usize,
@@ -54,12 +50,10 @@ mod tests {
     ) -> i32 {
         RC_UNAVAILABLE
     }
-
     #[test]
     fn sequence_plan_helper_self_test_rejects_mismatched_helper() {
         assert!(!sequence_plan_helper_self_test(mismatched_helper));
     }
-
     #[test]
     fn sequence_plan_loads_required_cuda_helper_when_requested() {
         let lib = unsafe { load_sequence_plan_library() };
@@ -72,7 +66,6 @@ mod tests {
             eprintln!("sequence-plan CUDA helper unavailable; skipping required-helper assertion");
         }
     }
-
     #[test]
     fn helper_backend_errors_are_distinguished_from_bad_input() {
         let bytes = super::make_unpacked_case(super::super::header_flags::COMPACT_LEN);
@@ -84,10 +77,8 @@ mod tests {
                 BinarySequenceLayout::LengthPrefixed,
             )
         };
-
         assert!(matches!(outcome, HelperOutcome::BackendFailure));
     }
-
     #[test]
     fn helper_unavailable_is_a_fallback_not_backend_failure() {
         let bytes = super::make_unpacked_case(super::super::header_flags::COMPACT_LEN);
@@ -99,7 +90,6 @@ mod tests {
                 BinarySequenceLayout::LengthPrefixed,
             )
         };
-
         assert!(matches!(outcome, HelperOutcome::BackendUnavailable));
     }
 }

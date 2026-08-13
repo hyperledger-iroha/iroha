@@ -4,9 +4,7 @@
 //! polynomials are indexed once and digest-checked on every arithmetic reread;
 //! one canonical contribution is decoded, verified, folded, and dropped before
 //! the next contribution is read.
-
 use super::*;
-
 fn cks_residue_digests(
     profile: &BgvProfile,
     residues: &[u64],
@@ -30,7 +28,6 @@ fn cks_residue_digests(
     update_rns_digest_hasher(&mut wire_hash, residues);
     Ok((native_hash.finalize(), wire_hash.finalize()))
 }
-
 #[cfg(test)]
 pub(super) fn trusted_context_from_verified_key_and_shares(
     active_roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -72,7 +69,6 @@ pub(super) fn trusted_context_from_verified_key_and_shares(
         party_public_b_wire_digests,
     )
 }
-
 fn zero_native_cks_polynomial_digest(profile: &BgvProfile) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let residue_count = canonical_polynomial_residue_count()?;
     let mut hash = new_rns_digest_hasher(RNS_NATIVE_DIGEST_DOMAIN_V1, residue_count)?;
@@ -88,7 +84,6 @@ fn zero_native_cks_polynomial_digest(profile: &BgvProfile) -> Result<[u8; 32], Z
     }
     Ok(hash.finalize())
 }
-
 fn signed_cks_response_limb(
     values: &[i64],
     modulus: u64,
@@ -97,7 +92,6 @@ fn signed_cks_response_limb(
     residues.extend(values.iter().map(|value| signed_mod(*value, modulus)));
     Ok(residues)
 }
-
 fn sparse_cks_challenge_limb(
     values: &[i8],
     modulus: u64,
@@ -110,7 +104,6 @@ fn sparse_cks_challenge_limb(
     );
     Ok(residues)
 }
-
 fn wide_cks_response_limb(
     proof: &ZkAmsMkheCksProofV1,
     modulus: u64,
@@ -125,7 +118,6 @@ fn wide_cks_response_limb(
     }
     Ok(residues)
 }
-
 fn zeroizing_negacyclic_multiply(
     left: &[u64],
     right: &[u64],
@@ -159,7 +151,6 @@ fn zeroizing_negacyclic_multiply(
     }
     Ok(left_twisted)
 }
-
 fn update_indexed_cks_reread_hashes(
     native_hash: &mut Keccak256,
     wire_hash: &mut Keccak256,
@@ -168,7 +159,6 @@ fn update_indexed_cks_reread_hashes(
     update_rns_digest_hasher(native_hash, residues);
     update_rns_digest_hasher(wire_hash, residues);
 }
-
 fn finish_indexed_cks_reread_hashes(
     native_hash: Keccak256,
     wire_hash: Keccak256,
@@ -181,7 +171,6 @@ fn finish_indexed_cks_reread_hashes(
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn verify_indexed_cks_contribution_limbwise<R>(
     reader: &mut R,
@@ -235,7 +224,6 @@ where
     proof.validate_release_response_bounds(smudge_bits)?;
     checked_ring_multiplication_work(&profile, 8)?;
     let challenge = derive_cks_sparse_challenge(profile.ring_degree, proof.challenge_seed())?;
-
     let residue_count = canonical_polynomial_residue_count()?;
     if accumulator.len() != residue_count || challenge.len() != profile.ring_degree {
         return Err(ZkAmsMkheErrorV1::InvalidCksProof);
@@ -259,7 +247,6 @@ where
         new_rns_digest_hasher(RNS_NATIVE_DIGEST_DOMAIN_V1, residue_count)?;
     let mut contribution_commitment_hash =
         new_rns_digest_hasher(RNS_NATIVE_DIGEST_DOMAIN_V1, residue_count)?;
-
     for limb in 0..profile.moduli.len() {
         let modulus = profile.moduli[limb];
         let root = profile.negacyclic_roots[limb];
@@ -281,13 +268,11 @@ where
         if let Some((native, wire_hash)) = &mut source_hashes {
             update_indexed_cks_reread_hashes(native, wire_hash, &source);
         }
-
         let secret_response = signed_cks_response_limb(proof.secret_responses(), modulus)?;
         let error_response = signed_cks_response_limb(proof.public_key_error_responses(), modulus)?;
         let smudge_response = wide_cks_response_limb(&proof, modulus, profile.ring_degree)?;
         let challenge_response = sparse_cks_challenge_limb(&challenge, modulus)?;
         let plaintext_modulus = profile.plaintext_modulus.residue(modulus);
-
         let mut public_key_commitment =
             zeroizing_negacyclic_multiply(&public_a, &secret_response, modulus, root)?;
         for (value, error) in public_key_commitment.iter_mut().zip(error_response.iter()) {
@@ -308,7 +293,6 @@ where
         drop(public_a);
         drop(party_b);
         drop(error_response);
-
         let mut multiplier = source;
         for (value, target) in multiplier.iter_mut().zip(target.iter()) {
             *value = mod_sub(*value, *target, modulus);
@@ -359,7 +343,6 @@ where
         drop(smudge_response);
         drop(challenge_response);
     }
-
     finish_indexed_cks_reread_hashes(public_a_native, public_a_wire, statement.public_key_a)?;
     finish_indexed_cks_reread_hashes(
         party_b_native,
@@ -391,7 +374,6 @@ where
     }
     Ok(contribution_digest)
 }
-
 fn compare_indexed_cks_polynomial<R>(
     reader: &mut R,
     indexed: IndexedCksPolynomialV1,
@@ -426,7 +408,6 @@ where
     }
     Ok(())
 }
-
 fn compare_indexed_cks_accumulator<R>(
     reader: &mut R,
     indexed: IndexedCksPolynomialV1,
@@ -442,7 +423,6 @@ where
         ZkAmsMkheErrorV1::InvalidCksSet,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn cks_validated_receipt_seal(
     trusted_context: &ZkAmsMkheTrustedCksContextV1,
@@ -469,7 +449,6 @@ fn cks_validated_receipt_seal(
         canonical_digest,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn cks_validated_receipt_seal_from_fields_v1(
     trusted_context: &ZkAmsMkheTrustedCksContextV1,
@@ -508,7 +487,6 @@ fn cks_validated_receipt_seal_from_fields_v1(
     hash.update(&canonical_digest);
     hash.finalize()
 }
-
 /// Return the fixed axes of a resealed trusted CKS context without exposing
 /// its share digests or polynomial identities to the sibling collector.
 pub(super) fn verified_evidence_context_summary_v1(
@@ -527,7 +505,6 @@ pub(super) fn verified_evidence_context_summary_v1(
         context_seal: trusted_context.verification_seal,
     })
 }
-
 /// Consume one move-only CKS receipt after recomputing its seal against the
 /// exact trusted context. The returned summary owns no proof or polynomial.
 pub(super) fn consume_verified_evidence_receipt_v1(
@@ -562,7 +539,6 @@ pub(super) fn consume_verified_evidence_receipt_v1(
         compact_constant_digest: receipt.compact_constant_digest,
     })
 }
-
 fn validate_cks_outer_coordinate_v1(
     profile: &BgvProfile,
     ordinal: u8,
@@ -587,7 +563,6 @@ fn validate_cks_outer_coordinate_v1(
     }
     Ok(())
 }
-
 pub(super) fn decode_and_verify_cks_evidence_record_streaming<R>(
     reader: &mut R,
     trusted_context: &ZkAmsMkheTrustedCksContextV1,
@@ -850,7 +825,6 @@ where
         verification_seal,
     })
 }
-
 #[cfg(test)]
 pub(super) fn test_mint_verified_evidence_receipt_v1(
     trusted_context: &ZkAmsMkheTrustedCksContextV1,
@@ -896,18 +870,15 @@ pub(super) fn test_mint_verified_evidence_receipt_v1(
         verification_seal,
     }
 }
-
 #[cfg(test)]
 pub(super) fn test_tamper_verified_evidence_receipt_seal_v1(
     receipt: &mut ZkAmsMkheOwnedCollectiveCksDigitEvidenceV1,
 ) {
     receipt.verification_seal[0] ^= 1;
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn owned_receipt_has_no_owned_evidence_graph_or_replay_api() {
         let parent = include_str!("../collective_eval_keys.rs");
@@ -962,7 +933,6 @@ mod tests {
         assert!(!implementation.contains("shares: [&"));
         assert!(!implementation.contains("pub fn verify("));
     }
-
     #[test]
     fn streaming_source_keeps_one_record_and_checks_before_receipt() {
         let source = include_str!("cks_stream.rs");
@@ -1026,16 +996,13 @@ mod tests {
         assert!(footer < first_eof && first_eof < context && context < compact);
         assert!(compact < final_eof && final_eof < receipt);
     }
-
     #[test]
     fn stream_scratch_owners_zeroize_on_success_error_and_unwind() {
         let reset = || CKS_STREAM_ZEROIZING_DROP_AUDIT_V1.with(|audit| audit.set((0, 0)));
         let observed = || CKS_STREAM_ZEROIZING_DROP_AUDIT_V1.with(core::cell::Cell::get);
-
         reset();
         drop(ZeroizingU64VectorV1::zeroed(4).unwrap());
         assert_eq!(observed(), (1, 0));
-
         fn fail_after_stream_owner() -> Result<(), ZkAmsMkheErrorV1> {
             let mut owner = ZeroizingU64VectorV1::with_capacity_exact(3)?;
             owner.extend([1, 2, 3]);
@@ -1047,7 +1014,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
         assert_eq!(observed(), (1, 0));
-
         reset();
         let unwound = std::panic::catch_unwind(|| {
             let _bytes = ZeroizingByteVectorV1(vec![4, 5, 6]);
@@ -1055,14 +1021,12 @@ mod tests {
         });
         assert!(unwound.is_err());
         assert_eq!(observed(), (1, 0));
-
         let source = include_str!("zeroizing_vectors.rs");
         let black_box = ["core::hint::black_", "box"].concat();
         let fence = ["compiler_", "fence"].concat();
         assert_eq!(source.matches(&black_box).count(), 4);
         assert_eq!(source.matches(&fence).count(), 2);
     }
-
     #[test]
     fn outer_coordinate_is_bound_to_authenticated_source_indices() {
         let profile = release_profile_v1();
@@ -1103,7 +1067,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
         );
-
         let source = include_str!("cks_stream.rs");
         let decoder = source
             .split("pub(super) fn decode_and_verify_cks_evidence_record_streaming")

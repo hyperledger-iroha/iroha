@@ -1,8 +1,6 @@
 //! Cross-SDK SM2 fixture validation.
 #![cfg(feature = "sm")]
-
 use std::{fs, path::PathBuf};
-
 use hex::FromHex;
 use iroha_crypto::{
     Algorithm, PublicKey,
@@ -10,10 +8,8 @@ use iroha_crypto::{
 };
 use norito::json::{self, JsonDeserialize};
 use sm3::{Digest, Sm3};
-
 const CURVE_SM2P256V1: &str = "sm2p256v1";
 const CURVE_GMT0003_ANNEX_D_FP256: &str = "gm-t-0003-annex-d-fp256";
-
 #[derive(Debug, JsonDeserialize)]
 struct FixtureRoot {
     algorithm: String,
@@ -30,7 +26,6 @@ struct FixtureRoot {
     s: String,
     vectors: Option<Vec<FixtureCase>>,
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct FixtureCase {
     case_id: String,
@@ -50,7 +45,6 @@ struct FixtureCase {
     signature_der_hex: Option<String>,
     hash_e_hex: Option<String>,
 }
-
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -59,7 +53,6 @@ fn fixture_path() -> PathBuf {
         .join("sm")
         .join("sm2_fixture.json")
 }
-
 fn hex_to_vec(value: &str) -> Vec<u8> {
     if value.is_empty() {
         Vec::new()
@@ -67,7 +60,6 @@ fn hex_to_vec(value: &str) -> Vec<u8> {
         Vec::from_hex(value).unwrap_or_else(|err| panic!("invalid hex '{value}': {err}"))
     }
 }
-
 fn hex_to_array<const N: usize>(value: &str) -> [u8; N] {
     let bytes = hex_to_vec(value);
     let len = bytes.len();
@@ -75,7 +67,6 @@ fn hex_to_array<const N: usize>(value: &str) -> [u8; N] {
         .try_into()
         .unwrap_or_else(|_| panic!("expected {N} bytes but received {len}"))
 }
-
 fn assert_root_alignment(root: &FixtureRoot, default: &FixtureCase) {
     let default_seed = default
         .seed_hex
@@ -156,7 +147,6 @@ fn assert_root_alignment(root: &FixtureRoot, default: &FixtureCase) {
         "root s component must mirror default vector"
     );
 }
-
 fn verify_public_encodings(case_id: &str, public_sec1: &[u8], case: &FixtureCase) {
     if let Some(multihash_expected) = &case.public_key_multihash {
         let payload = encode_sm2_public_key_payload(&case.distid, public_sec1)
@@ -183,7 +173,6 @@ fn verify_public_encodings(case_id: &str, public_sec1: &[u8], case: &FixtureCase
         }
     }
 }
-
 fn verify_signature_encoding(
     case_id: &str,
     case: &FixtureCase,
@@ -191,7 +180,6 @@ fn verify_signature_encoding(
     let signature_bytes = hex_to_array::<{ Sm2Signature::LENGTH }>(&case.signature);
     let signature = Sm2Signature::from_bytes(&signature_bytes)
         .unwrap_or_else(|err| panic!("case {case_id}: invalid SM2 signature bytes: {err}"));
-
     if let Some(r_hex) = case.r.as_deref() {
         assert_eq!(
             hex::encode_upper(&signature_bytes[..Sm2Signature::LENGTH / 2]),
@@ -206,7 +194,6 @@ fn verify_signature_encoding(
             "case {case_id}: s component mismatch"
         );
     }
-
     if let Some(der_hex) = case.signature_der_hex.as_deref() {
         let der = hex_to_vec(der_hex);
         let parsed = Sm2Signature::from_der(&der)
@@ -217,10 +204,8 @@ fn verify_signature_encoding(
             "case {case_id}: DER vs r∥s payload mismatch"
         );
     }
-
     (signature_bytes, signature)
 }
-
 fn verify_sm2p256v1_signature_artifacts(
     case_id: &str,
     case: &FixtureCase,
@@ -229,11 +214,9 @@ fn verify_sm2p256v1_signature_artifacts(
     public: &Sm2PublicKey,
 ) {
     let (signature_bytes, signature) = verify_signature_encoding(case_id, case);
-
     public
         .verify(message, &signature)
         .unwrap_or_else(|err| panic!("case {case_id}: signature verification failed: {err}"));
-
     if let Some(za_expected) = case.za.as_deref() {
         let za = public
             .compute_z(&case.distid)
@@ -244,7 +227,6 @@ fn verify_sm2p256v1_signature_artifacts(
             "case {case_id}: ZA mismatch"
         );
     }
-
     if let Some(seed_hex) = case.seed_hex.as_deref() {
         let seed = hex_to_vec(seed_hex);
         let private = Sm2PrivateKey::from_seed(&case.distid, &seed)
@@ -261,7 +243,6 @@ fn verify_sm2p256v1_signature_artifacts(
             "case {case_id}: derived public key mismatch"
         );
     }
-
     if let Some(private_hex) = case.private_key_hex.as_deref() {
         let private_bytes = hex_to_array::<32>(private_hex);
         let private = Sm2PrivateKey::from_bytes(&case.distid, &private_bytes)
@@ -278,7 +259,6 @@ fn verify_sm2p256v1_signature_artifacts(
             "case {case_id}: reconstructed public key mismatch"
         );
     }
-
     if let Some(expected_hash_e) = case.hash_e_hex.as_deref() {
         let za = public
             .compute_z(&case.distid)
@@ -294,7 +274,6 @@ fn verify_sm2p256v1_signature_artifacts(
         );
     }
 }
-
 fn verify_legacy_annex_d_fixture_case(case_id: &str, case: &FixtureCase, public_sec1: &[u8]) {
     assert_eq!(
         public_sec1.len(),
@@ -314,9 +293,7 @@ fn verify_legacy_annex_d_fixture_case(case_id: &str, case: &FixtureCase, public_
         case.seed_hex.is_none() && case.private_key_hex.is_none(),
         "case {case_id}: legacy Annex D vector must not be treated as a production signing key"
     );
-
     verify_signature_encoding(case_id, case);
-
     assert!(
         Sm2PublicKey::from_sec1_bytes(&case.distid, public_sec1).is_err(),
         "case {case_id}: legacy Annex D Fp-256 point must stay outside sm2p256v1 parsing"
@@ -326,7 +303,6 @@ fn verify_legacy_annex_d_fixture_case(case_id: &str, case: &FixtureCase, public_
         "case {case_id}: legacy Annex D fixture must carry ZA and e digests for the dedicated harness"
     );
 }
-
 fn verify_fixture_case(case: &FixtureCase) {
     let case_id = &case.case_id;
     if let Some(note) = case.note.as_ref() {
@@ -335,14 +311,12 @@ fn verify_fixture_case(case: &FixtureCase) {
             "case {case_id}: note must not be empty when present"
         );
     }
-
     let message = hex_to_vec(&case.message_hex);
     let public_sec1 = hex_to_vec(&case.public_key_sec1_hex);
     match case.curve.as_deref().unwrap_or(CURVE_SM2P256V1) {
         CURVE_SM2P256V1 => {
             let public = Sm2PublicKey::from_sec1_bytes(&case.distid, &public_sec1)
                 .unwrap_or_else(|err| panic!("case {case_id}: invalid SEC1 public key: {err}"));
-
             verify_public_encodings(case_id, &public_sec1, case);
             verify_sm2p256v1_signature_artifacts(case_id, case, &message, &public_sec1, &public);
         }
@@ -352,13 +326,11 @@ fn verify_fixture_case(case: &FixtureCase) {
         curve => panic!("case {case_id}: unsupported SM2 fixture curve '{curve}'"),
     }
 }
-
 #[test]
 fn sm2_vectors_cover_cross_sdk_fixtures() {
     let payload = fs::read_to_string(fixture_path()).expect("fixture present");
     let mut root: FixtureRoot = json::from_str(&payload).expect("valid SM2 fixture JSON");
     assert_eq!(root.algorithm, "sm2", "fixture algorithm mismatch");
-
     let vectors = root.vectors.take().unwrap_or_default();
     assert!(
         vectors.len() >= 2,
@@ -377,7 +349,6 @@ fn sm2_vectors_cover_cross_sdk_fixtures() {
         "root signature must mirror default vector"
     );
     assert_root_alignment(&root, default_vector);
-
     for case in &vectors {
         verify_fixture_case(case);
     }

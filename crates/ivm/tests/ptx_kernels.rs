@@ -1,9 +1,6 @@
 #![cfg(feature = "cuda")]
-
 //! CUDA PTX artifact completeness and structural validation.
-
 use std::{fs, path::Path};
-
 #[test]
 fn ptx_artifacts_are_present_and_non_empty() {
     let out_dir = env!("OUT_DIR");
@@ -20,7 +17,6 @@ fn ptx_artifacts_are_present_and_non_empty() {
         "signature.ptx",
         "vector.ptx",
     ];
-
     for file in files {
         let path = Path::new(out_dir).join(file);
         let bytes = fs::read(&path)

@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Data-trigger execution and rollback scenarios.
-
 use std::time::{Duration, Instant};
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{client, data_model::prelude::*};
@@ -13,21 +11,17 @@ use iroha_executor_data_model::permission::account::{
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use tokio::task::spawn_blocking;
-
 const ASSET_VALUE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ASSET_VALUE_TIMEOUT: Duration = Duration::from_secs(30);
-
 async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
     sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
 }
-
 async fn start_custom_network(
     builder: NetworkBuilder,
     context: &'static str,
 ) -> Result<Option<sandbox::SerializedNetwork>> {
     sandbox::start_network_async_or_skip(builder, context).await
 }
-
 async fn run_or_skip<F, Fut>(context: &'static str, test: F) -> Result<()>
 where
     F: FnOnce() -> Fut,
@@ -38,17 +32,14 @@ where
     }
     Ok(())
 }
-
 fn asset_value(client: &client::Client, asset_id: &AssetId) -> Result<Quantity> {
     let assets = client.query(FindAssets::new()).execute_all()?;
     let asset = assets
         .into_iter()
         .find(|asset| asset.id() == asset_id)
         .ok_or_else(|| eyre::eyre!("asset {asset_id} not found"))?;
-
     Ok(asset.value().clone())
 }
-
 fn wait_for_asset_value(
     client: &client::Client,
     asset_id: &AssetId,
@@ -57,7 +48,6 @@ fn wait_for_asset_value(
 ) -> Result<Quantity> {
     let deadline = Instant::now() + ASSET_VALUE_TIMEOUT;
     let mut last_observed = "asset was not queried".to_owned();
-
     while Instant::now() < deadline {
         match asset_value(client, asset_id) {
             Ok(value) => {
@@ -70,15 +60,12 @@ fn wait_for_asset_value(
                 last_observed = format!("query failed: {error}");
             }
         }
-
         std::thread::sleep(ASSET_VALUE_POLL_INTERVAL);
     }
-
     Err(eyre::eyre!(
         "timed out waiting for asset {asset_id} to equal {expected} after {context}; last_observed={last_observed}"
     ))
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_non_intersecting_execution_paths() -> Result<()> {
     let Some(network) = start_network(stringify!(two_non_intersecting_execution_paths)).await?
@@ -86,7 +73,6 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         return Ok(());
     };
     let test_client = network.client();
-
     run_or_skip(stringify!(two_non_intersecting_execution_paths), || async {
         let account_id = ALICE_ID.clone();
         let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -94,14 +80,12 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             "rose".parse()?,
         );
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
-
         let prev_value = spawn_blocking({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || asset_value(&client, &asset_id)
         })
         .await??;
-
         let instruction = Mint::asset_quantity(1u32, asset_id.clone());
         let alias_domain = DomainId::try_new("wonderland", "universal")?;
         let account_alias_literal = "mintrose@wonderland.universal";
@@ -152,7 +136,6 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             }
         })
         .await??;
-
         let register_trigger = Register::trigger(Trigger::new(
             "mint_rose_2".parse()?,
             Action::new(
@@ -173,7 +156,6 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             }
         })
         .await??;
-
         let setup_alias = account_alias_setup_instruction(
             account_alias_literal,
             &alias_target_account,
@@ -190,7 +172,6 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             }
         })
         .await??;
-
         let expected_new_value = prev_value.checked_add(&Quantity::one()).unwrap();
         let new_value = spawn_blocking({
             let client = test_client.clone();
@@ -205,7 +186,6 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             }
         })
         .await??;
-
         let neverland: DomainId = DomainId::try_new("neverland", "universal")?;
         let setup_neverland = domain_setup_instruction(&neverland, &test_client.account)?;
         spawn_blocking({
@@ -218,7 +198,6 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             }
         })
         .await??;
-
         let expected_newer_value = new_value.checked_add(&Quantity::one()).unwrap();
         let expected_newer_value_for_wait = expected_newer_value.clone();
         let newer_value = spawn_blocking({
@@ -235,12 +214,10 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
         assert_eq!(newer_value, expected_newer_value);
-
         Ok(())
     })
     .await
 }
-
 /// # Scenario
 ///
 /// 1. Capture the current maximum execution depth.
@@ -264,7 +241,6 @@ async fn cat_depth_and_mouse_depth() -> Result<()> {
         return Ok(());
     };
     let test_client = network.client();
-
     run_or_skip(stringify!(cat_depth_and_mouse_depth), || async {
         let mut parameters = spawn_blocking({
             let client = test_client.clone();
@@ -273,7 +249,6 @@ async fn cat_depth_and_mouse_depth() -> Result<()> {
         .await??;
         let base_depth = parameters.smart_contract().execution_depth();
         assert!(base_depth > 0, "execution depth should be positive");
-
         let new_depth = base_depth
             .checked_add(110)
             .expect("execution depth increase should fit in u8");
@@ -291,7 +266,6 @@ async fn cat_depth_and_mouse_depth() -> Result<()> {
             }
         })
         .await??;
-
         parameters = spawn_blocking({
             let client = test_client.clone();
             move || client.query_single(FindParameters)

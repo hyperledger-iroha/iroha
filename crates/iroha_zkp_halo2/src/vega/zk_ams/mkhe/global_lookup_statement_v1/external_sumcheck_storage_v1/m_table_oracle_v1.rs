@@ -1,11 +1,8 @@
 use core::convert::Infallible;
 use std::path::{Path, PathBuf};
-
 use crate::vega::bulletproof_t256::ZeroizingT256ScalarCopyV1 as SecretScalarV1;
-
 use super::super::ACTIVE_LOOKUP_VALUES_V1;
 use super::*;
-
 const M_ORACLE_VERSION_V1: u8 = 1;
 const M_VALUES_V1: u64 = 1 << 15;
 const M_INITIAL_SLOTS_V1: u64 = 128;
@@ -25,7 +22,6 @@ const EXTERNAL_FIRST_ROUND_V1: u8 = 3;
 const FIRST_PLANE_ROUND_V1: u8 = 14;
 const FINAL_ROUND_V1: u8 = 28;
 const MASK_ROUNDS_V1: usize = 26;
-
 const M_MAPPING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.global-lookup.m-table.mapping\0";
 const M_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.global-lookup.m-table.context\0";
 const M_LINEAGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.global-lookup.m-table.lineage\0";
@@ -34,7 +30,6 @@ const M_MANIFEST_DOMAIN_V1: &[u8] =
 const M_MAPPING_LANGUAGE_V1: &[u8] = b"M(y)=canonical-u32-multiplicity-before-z;sum(M)=520486912;bits=y0..y14-little-endian;initial-width=32768;slot=floor(index/256);lane=index%256;canonical-T256-scalar-big-endian-32;coordinate-rounds3..13=M-unchanged;plane-rounds14..28=M-low+r*(M-high-M-low);final-unused-lanes-zero";
 const ORACLE_LANGUAGE_V1: &[u8] = b"for-round-k=3..28,prefix=r0..r(k-1),suffix-boolean:chi=eq(rho,x);S=MLE(plane<31768);E0=prod-c(1-c);Qz=MLE_t((z-t)^-1);V=(z-A)U;F=alpha*chi*(V-S)+lambda*(U-E0*M*Qz)+mu*(E0*M-S);evaluate-current-line-at-t=0,1,2,3;sum-over-suffix;interpolate-cubic;require-g(0)+g(1)=base-claim;mask-Z=aT^3+bT^2+cT+(carry-a-b-c)/2;wire=(masked-constant,masked-quadratic,masked-cubic)-canonical-le;derive-nonzero-r-only-after-wire;fold-A,U,and-M-only-for-plane-rounds;final=(A*,U*,M*,R*=F(r),Z*=mask-carry)";
 const ACCOUNTING_LANGUAGE_V1: &[u8] = b"M-initial=write+seal-read;coordinate-rounds=11-authenticated-M-full-reads;plane-round=evaluator-M-read+fold-M-read+next-write+seal-read;combined-file-peak=AU-exact-peak+live-initial-M;derived-context-chains-prior-lineage+parent-snapshot+generation;Qz-and-S-derived-not-stored;OS-page-cache,allocator,stack,AAD,cipher-state,handles-excluded";
-
 const AUTHENTICATED_M_TABLE_COMPLETE_V1: bool = true;
 const REAL_GLOBAL_CUBIC_ORACLE_COMPLETE_V1: bool = true;
 const PREFIX_THREE_ROUNDS_WIRED_V1: bool = false;
@@ -46,7 +41,6 @@ const ZERO_KNOWLEDGE_ACCEPTED_V1: bool = false;
 const RECEIPT_ACCEPTED_V1: bool = false;
 const RSS_QUALIFIED_V1: bool = false;
 const RELEASE_READY_V1: bool = false;
-
 const _: () = {
     assert!(M_VALUES_V1 == M_INITIAL_SLOTS_V1 * SCALARS_PER_SLOT_V1);
     assert!(M_INITIAL_FILE_BYTES_V1 == M_INITIAL_SLOTS_V1 * SLOT_CIPHERTEXT_BYTES_V1);
@@ -65,7 +59,6 @@ const _: () = {
     assert!(!PROOF_VERIFIED_V1 && !ZERO_KNOWLEDGE_ACCEPTED_V1);
     assert!(!RECEIPT_ACCEPTED_V1 && !RSS_QUALIFIED_V1 && !RELEASE_READY_V1);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum MOracleErrorV1 {
     Shape,
@@ -76,7 +69,6 @@ pub(in super::super) enum MOracleErrorV1 {
     Relation,
     Spool,
 }
-
 fn map_parent_v1(error: ExternalStorageErrorV1) -> MOracleErrorV1 {
     match error {
         ExternalStorageErrorV1::Shape => MOracleErrorV1::Shape,
@@ -87,7 +79,6 @@ fn map_parent_v1(error: ExternalStorageErrorV1) -> MOracleErrorV1 {
         ExternalStorageErrorV1::Spool => MOracleErrorV1::Spool,
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MDescriptorV1 {
     completed_plane_rounds: u8,
@@ -96,7 +87,6 @@ struct MDescriptorV1 {
     file_bytes: u64,
     mapping_digest: [u8; 32],
 }
-
 fn m_descriptor_v1(completed_plane_rounds: u8) -> Result<MDescriptorV1, MOracleErrorV1> {
     if completed_plane_rounds > 15 {
         return Err(MOracleErrorV1::Shape);
@@ -116,7 +106,6 @@ fn m_descriptor_v1(completed_plane_rounds: u8) -> Result<MDescriptorV1, MOracleE
     descriptor.mapping_digest = m_mapping_digest_v1(&descriptor)?;
     Ok(descriptor)
 }
-
 fn m_valid_lanes_v1(descriptor: &MDescriptorV1, slot: u64) -> Result<usize, MOracleErrorV1> {
     if slot >= descriptor.slot_count {
         return Err(MOracleErrorV1::Shape);
@@ -129,7 +118,6 @@ fn m_valid_lanes_v1(descriptor: &MDescriptorV1, slot: u64) -> Result<usize, MOra
             .map_err(|_| MOracleErrorV1::Arithmetic)?,
     )
 }
-
 fn m_mapping_digest_v1(descriptor: &MDescriptorV1) -> Result<[u8; 32], MOracleErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(M_MAPPING_DOMAIN_V1);
@@ -158,7 +146,6 @@ fn m_mapping_digest_v1(descriptor: &MDescriptorV1) -> Result<[u8; 32], MOracleEr
         .then_some(digest)
         .ok_or(MOracleErrorV1::Context)
 }
-
 fn m_manifest_digest_v1() -> Result<[u8; 32], MOracleErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(M_MANIFEST_DOMAIN_V1);
@@ -207,7 +194,6 @@ fn m_manifest_digest_v1() -> Result<[u8; 32], MOracleErrorV1> {
         .then_some(digest)
         .ok_or(MOracleErrorV1::Context)
 }
-
 fn m_context_v1(
     public_context: [u8; 32],
     descriptor: &MDescriptorV1,
@@ -231,7 +217,6 @@ fn m_context_v1(
         .then_some(digest)
         .ok_or(MOracleErrorV1::Context)
 }
-
 enum MProducerSealV1 {
     Production {
         committed_m_opening: Infallible,
@@ -241,7 +226,6 @@ enum MProducerSealV1 {
         directory: PathBuf,
     },
 }
-
 impl MProducerSealV1 {
     fn directory_v1(self) -> PathBuf {
         match self {
@@ -253,7 +237,6 @@ impl MProducerSealV1 {
         }
     }
 }
-
 struct MWriterV1 {
     writer: Option<ConfidentialSpoolWriterV1>,
     descriptor: MDescriptorV1,
@@ -263,7 +246,6 @@ struct MWriterV1 {
     next_slot: u64,
     initial_sum: Option<SecretScalarV1>,
 }
-
 fn begin_m_table_v1(
     public_context: [u8; 32],
     seal: MProducerSealV1,
@@ -277,7 +259,6 @@ fn begin_m_table_v1(
         true,
     )
 }
-
 impl MWriterV1 {
     fn create_v1(
         directory: &Path,
@@ -308,7 +289,6 @@ impl MWriterV1 {
             initial_sum: initial.then_some(SecretScalarV1::new(Scalar::zero())),
         })
     }
-
     fn push_next_slot_v1(&mut self, chunk: ConfidentialSpoolChunkV1) -> Result<(), MOracleErrorV1> {
         let mut writer = self.writer.take().ok_or(MOracleErrorV1::Order)?;
         let slot = self.next_slot;
@@ -328,7 +308,6 @@ impl MWriterV1 {
         self.writer = Some(writer);
         Ok(())
     }
-
     fn seal_v1(mut self) -> Result<MTableV1, MOracleErrorV1> {
         let writer = self.writer.take().ok_or(MOracleErrorV1::Order)?;
         if self.next_slot != self.descriptor.slot_count
@@ -362,7 +341,6 @@ impl MWriterV1 {
         })
     }
 }
-
 struct MTableV1 {
     snapshot: Option<ConfidentialSpoolSnapshotV1>,
     descriptor: MDescriptorV1,
@@ -371,7 +349,6 @@ struct MTableV1 {
     context_digest: [u8; 32],
     snapshot_digest: [u8; 32],
 }
-
 impl MTableV1 {
     fn read_slot_v1(&mut self, slot: u64) -> Result<ConfidentialSpoolChunkV1, MOracleErrorV1> {
         let mut snapshot = self.snapshot.take().ok_or(MOracleErrorV1::Order)?;
@@ -383,7 +360,6 @@ impl MTableV1 {
         Ok(chunk)
     }
 }
-
 fn validate_m_chunk_v1(
     descriptor: &MDescriptorV1,
     slot: u64,
@@ -409,13 +385,11 @@ fn validate_m_chunk_v1(
     }
     Ok(sum)
 }
-
 struct ColumnCursorV1<'a> {
     column: &'a mut ExternalColumnSnapshotV1,
     next_index: u64,
     chunk: Option<ConfidentialSpoolChunkV1>,
 }
-
 impl ColumnCursorV1<'_> {
     fn next_v1(&mut self) -> Result<SecretScalarV1, MOracleErrorV1> {
         if self.next_index >= self.column.descriptor.value_count {
@@ -440,13 +414,11 @@ impl ColumnCursorV1<'_> {
         Ok(value)
     }
 }
-
 struct MCursorV1<'a> {
     table: &'a mut MTableV1,
     next_index: u64,
     chunk: Option<ConfidentialSpoolChunkV1>,
 }
-
 impl MCursorV1<'_> {
     fn next_v1(&mut self) -> Result<SecretScalarV1, MOracleErrorV1> {
         if self.next_index >= self.table.descriptor.value_count {
@@ -470,7 +442,6 @@ impl MCursorV1<'_> {
         Ok(value)
     }
 }
-
 #[derive(Clone, Copy)]
 struct OracleAxesV1 {
     z: Scalar,
@@ -479,9 +450,7 @@ struct OracleAxesV1 {
     lambda: Scalar,
     mu: Scalar,
 }
-
 struct MaskCoefficientsV1([[Scalar; 3]; MASK_ROUNDS_V1]);
-
 impl Drop for MaskCoefficientsV1 {
     fn drop(&mut self) {
         for row in &mut self.0 {
@@ -491,9 +460,7 @@ impl Drop for MaskCoefficientsV1 {
         }
     }
 }
-
 struct ZeroizingScalarArrayV1<const N: usize>([Scalar; N]);
-
 impl<const N: usize> Drop for ZeroizingScalarArrayV1<N> {
     fn drop(&mut self) {
         for value in &mut self.0 {
@@ -501,9 +468,7 @@ impl<const N: usize> Drop for ZeroizingScalarArrayV1<N> {
         }
     }
 }
-
 struct ZeroizingScalarBytesV1([u8; 32]);
-
 impl Drop for ZeroizingScalarBytesV1 {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -512,7 +477,6 @@ impl Drop for ZeroizingScalarBytesV1 {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
-
 /// Opaque ownership handoff produced only after the first three global rounds.
 ///
 /// There is intentionally no production constructor. The missing fused prefix
@@ -530,12 +494,10 @@ pub(in super::super) struct GlobalCubicPrefixReadyV1 {
     #[cfg(test)]
     message_override: Option<[u8; 96]>,
 }
-
 struct OracleLiveV1 {
     pair: ExternalTablePairV1,
     multiplicity: MTableV1,
 }
-
 #[must_use = "dropping this oracle closes all authenticated lookup columns"]
 pub(in super::super) struct GlobalCubicOracleV1 {
     live: Option<OracleLiveV1>,
@@ -548,14 +510,12 @@ pub(in super::super) struct GlobalCubicOracleV1 {
     #[cfg(test)]
     message_override: Option<[u8; 96]>,
 }
-
 impl Drop for GlobalCubicOracleV1 {
     fn drop(&mut self) {
         self.base_claim.clear_secret();
         self.mask_carry.clear_secret();
     }
 }
-
 pub(in super::super) fn begin_global_cubic_oracle_v1(
     prefix: GlobalCubicPrefixReadyV1,
 ) -> Result<GlobalCubicOracleV1, MOracleErrorV1> {
@@ -585,7 +545,6 @@ pub(in super::super) fn begin_global_cubic_oracle_v1(
         message_override,
     })
 }
-
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(in super::super) fn global_cubic_hollow_fixture_v1(
@@ -637,7 +596,6 @@ pub(in super::super) fn global_cubic_hollow_fixture_v1(
         message_override,
     })
 }
-
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(in super::super) fn global_cubic_final_round_fixture_v1(
@@ -672,7 +630,6 @@ pub(in super::super) fn global_cubic_final_round_fixture_v1(
         )
         .map_err(map_parent_v1)?;
     let mut pair = pair_writer.seal_v1().map_err(map_parent_v1)?;
-
     let descriptor = m_descriptor_v1(FINAL_ROUND_V1 - FIRST_PLANE_ROUND_V1)?;
     let lineage_digest = [0x91; 32];
     let mut m_writer =
@@ -682,7 +639,6 @@ pub(in super::super) fn global_cubic_final_round_fixture_v1(
         Scalar::from_u64(13),
     ])?)?;
     let mut multiplicity = m_writer.seal_v1()?;
-
     let axes = OracleAxesV1 {
         z,
         rho,
@@ -719,7 +675,6 @@ pub(in super::super) fn global_cubic_final_round_fixture_v1(
         message_override: None,
     })
 }
-
 #[cfg(test)]
 fn scalar_fixture_chunk_v1(values: &[Scalar]) -> Result<ConfidentialSpoolChunkV1, MOracleErrorV1> {
     let mut chunk = ConfidentialSpoolChunkV1::new_zeroed_v1(SLOT_PLAINTEXT_BYTES_V1)
@@ -729,7 +684,6 @@ fn scalar_fixture_chunk_v1(values: &[Scalar]) -> Result<ConfidentialSpoolChunkV1
     }
     Ok(chunk)
 }
-
 fn validate_axes_and_prefix_v1(
     axes: &OracleAxesV1,
     point: &[Scalar; 29],
@@ -750,7 +704,6 @@ fn validate_axes_and_prefix_v1(
     }
     Ok(())
 }
-
 fn validate_oracle_shape_v1(
     round: u8,
     pair: &ExternalTablePairV1,
@@ -768,19 +721,16 @@ fn validate_oracle_shape_v1(
     }
     Ok(())
 }
-
 pub(in super::super) struct EvaluatedGlobalRoundV1 {
     oracle: Option<GlobalCubicOracleV1>,
     message: [u8; 96],
     base_coefficients: ZeroizingScalarArrayV1<4>,
     mask_coefficients: ZeroizingScalarArrayV1<4>,
 }
-
 impl GlobalCubicOracleV1 {
     pub(in super::super) fn next_round_v1(&self) -> u8 {
         self.next_round
     }
-
     pub(in super::super) fn matches_transcript_v1(
         &self,
         public_context: &[u8; 32],
@@ -806,7 +756,6 @@ impl GlobalCubicOracleV1 {
             && &self.point[..round] == prefix
             && self.point[round..].iter().all(Scalar::is_zero)
     }
-
     pub(in super::super) fn evaluate_next_v1(
         mut self,
     ) -> Result<EvaluatedGlobalRoundV1, MOracleErrorV1> {
@@ -871,12 +820,10 @@ impl GlobalCubicOracleV1 {
         })
     }
 }
-
 pub(in super::super) enum OracleTransitionV1 {
     Continue(GlobalCubicOracleV1),
     Complete(GlobalCubicCompleteV1),
 }
-
 pub(in super::super) struct GlobalCubicCompleteV1 {
     live: OracleLiveV1,
     point: [Scalar; 29],
@@ -886,7 +833,6 @@ pub(in super::super) struct GlobalCubicCompleteV1 {
     relation: Scalar,
     mask_carry: Scalar,
 }
-
 impl Drop for GlobalCubicCompleteV1 {
     fn drop(&mut self) {
         self.candidate.clear_secret();
@@ -896,12 +842,10 @@ impl Drop for GlobalCubicCompleteV1 {
         self.mask_carry.clear_secret();
     }
 }
-
 impl EvaluatedGlobalRoundV1 {
     pub(in super::super) fn message_v1(&self) -> &[u8; 96] {
         &self.message
     }
-
     pub(in super::super) fn fold_with_raw_challenge_v1(
         mut self,
         challenge: Scalar,
@@ -957,7 +901,6 @@ impl EvaluatedGlobalRoundV1 {
         Ok(OracleTransitionV1::Continue(oracle))
     }
 }
-
 fn fold_pair_real_v1(
     mut pair: ExternalTablePairV1,
     challenge: Scalar,
@@ -977,7 +920,6 @@ fn fold_pair_real_v1(
         public_context: pair.public_context,
     })
 }
-
 fn fold_m_v1(
     mut current: MTableV1,
     challenge: Scalar,
@@ -1030,7 +972,6 @@ fn fold_m_v1(
     drop(current);
     next.seal_v1()
 }
-
 fn m_fold_lineage_v1(
     root_lineage: [u8; 32],
     parent_snapshot: [u8; 32],
@@ -1050,7 +991,6 @@ fn m_fold_lineage_v1(
         .then_some(digest)
         .ok_or(MOracleErrorV1::Context)
 }
-
 fn evaluate_round_polynomial_v1(
     round: u8,
     axes: &OracleAxesV1,
@@ -1143,7 +1083,6 @@ fn evaluate_round_polynomial_v1(
     pair.inverse = Some(inverse);
     Ok(evaluations)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn accumulate_pair_v1(
     evaluations: &mut [Scalar; 4],
@@ -1181,11 +1120,9 @@ fn accumulate_pair_v1(
     }
     Ok(())
 }
-
 fn affine_v1(low: &Scalar, high: &Scalar, t: Scalar) -> Scalar {
     *low + t * (*high - *low)
 }
-
 fn chi_line_v1(
     rho: &[Scalar; 29],
     point: &[Scalar; 29],
@@ -1207,7 +1144,6 @@ fn chi_line_v1(
     }
     Ok(weight)
 }
-
 fn coordinate_zero_line_v1(
     point: &[Scalar; 29],
     round: u8,
@@ -1227,7 +1163,6 @@ fn coordinate_zero_line_v1(
     }
     Ok(result)
 }
-
 fn public_plane_pair_v1(
     z: Scalar,
     prefix: &[Scalar],
@@ -1257,7 +1192,6 @@ fn public_plane_pair_v1(
     }
     Ok((selector, table_inverse))
 }
-
 fn endpoint_relation_v1(
     axes: &OracleAxesV1,
     point: &[Scalar; 29],
@@ -1283,7 +1217,6 @@ fn endpoint_relation_v1(
         + axes.lambda * (*inverse - coordinate_zero * *multiplicity * table_inverse)
         + axes.mu * (coordinate_zero * *multiplicity - selector))
 }
-
 fn interpolate_cubic_v1(
     evaluations: &[Scalar; 4],
 ) -> Result<ZeroizingScalarArrayV1<4>, MOracleErrorV1> {
@@ -1312,12 +1245,10 @@ fn interpolate_cubic_v1(
         cubic.get(),
     ]))
 }
-
 fn evaluate_cubic_v1(coefficients: &[Scalar; 4], point: Scalar) -> Scalar {
     ((coefficients[3] * point + coefficients[2]) * point + coefficients[1]) * point
         + coefficients[0]
 }
-
 fn read_only_scalar_v1(
     column: &mut ExternalColumnSnapshotV1,
 ) -> Result<SecretScalarV1, MOracleErrorV1> {
@@ -1329,7 +1260,6 @@ fn read_only_scalar_v1(
         decode_scalar_be_v1(&chunk.as_slice_v1()[..32]).map_err(map_parent_v1)?,
     ))
 }
-
 fn read_only_m_scalar_v1(table: &mut MTableV1) -> Result<SecretScalarV1, MOracleErrorV1> {
     if table.descriptor.value_count != 1 {
         return Err(MOracleErrorV1::Shape);
@@ -1339,7 +1269,6 @@ fn read_only_m_scalar_v1(table: &mut MTableV1) -> Result<SecretScalarV1, MOracle
         decode_scalar_be_v1(&chunk.as_slice_v1()[..32]).map_err(map_parent_v1)?,
     ))
 }
-
 #[cfg(test)]
 #[path = "m_table_oracle_v1_tests.rs"]
 mod tests;

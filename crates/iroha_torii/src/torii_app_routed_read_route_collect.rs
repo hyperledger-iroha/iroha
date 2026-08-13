@@ -27,7 +27,6 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
         ));
     }
     let routed_by = routed_by_for_routes(app, &routes);
-
     let collected = collect_torii_routed_list_json_payloads(
         &routes,
         app.query_fanout_working_set_bytes,
@@ -48,7 +47,6 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
         },
     )
     .await?;
-
     let ToriiFanoutRoutedJsonPayloads {
         payloads,
         diagnostics,
@@ -61,10 +59,8 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
     for (_, payload) in payloads {
         budget.push_retained(&mut values, payload)?;
     }
-
     Ok((values, diagnostics, routed_by, budget))
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_accounts_list_fanout_for_resolved_routes(
     app: &SharedAppState,
@@ -82,12 +78,10 @@ async fn execute_torii_accounts_list_fanout_for_resolved_routes(
             ToriiFanoutDiagnostics::default(),
         );
     }
-
     let request_decode_plan = match torii_routed_read_request_decode_plan(app) {
         Ok(plan) => plan,
         Err(response) => return response,
     };
-
     let mut params = match decode_torii_proxy_query::<routing::ListFilterParams>(
         request_decode_plan,
         query_string.as_deref(),
@@ -116,7 +110,6 @@ async fn execute_torii_accounts_list_fanout_for_resolved_routes(
     params.offset = 0;
     params.limit = Some(limits.max_page_limit.max(1));
     params.count_mode = Some("exact".to_owned());
-
     let collected = match collect_torii_paginated_list_json_payloads(
         &routes,
         limits.max_page_limit.max(1),
@@ -158,7 +151,6 @@ async fn execute_torii_accounts_list_fanout_for_resolved_routes(
         diagnostics,
         budget,
     } = collected;
-
     merge_with_torii_fanout_headers(diagnostics, || {
         merged_paginated_list_response(
             payloads,

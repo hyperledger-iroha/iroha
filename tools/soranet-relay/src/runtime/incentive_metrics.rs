@@ -9,7 +9,6 @@ fn render_incentive_prometheus(
     if summaries.len() > INCENTIVE_MAX_ACTIVE_EPOCHS_V1 {
         return Err(fmt::Error);
     }
-
     // Five fixed-format series per epoch fit in 1 KiB even with maximal
     // integer fields, a 64-byte relay ID, and the longest mode label.
     let max_bytes = 2_048_usize
@@ -18,7 +17,6 @@ fn render_incentive_prometheus(
     let mut output = IncentiveMetricsWriter::new(max_bytes)?;
     let mode_label = mode.as_label();
     let relay_hex = hex::encode(relay_id);
-
     writeln!(
         output,
         "# HELP soranet_relay_uptime_seconds_total Relay uptime observed within the incentive epoch."
@@ -34,7 +32,6 @@ fn render_incentive_prometheus(
             uptime = summary.uptime_seconds
         )?;
     }
-
     writeln!(
         output,
         "# HELP soranet_relay_scheduled_seconds_total Expected uptime window for the incentive epoch."
@@ -53,7 +50,6 @@ fn render_incentive_prometheus(
             scheduled = summary.scheduled_uptime_seconds
         )?;
     }
-
     writeln!(
         output,
         "# HELP soranet_relay_bandwidth_verified_bytes_total Verified relay bandwidth contribution for the epoch."
@@ -72,7 +68,6 @@ fn render_incentive_prometheus(
             bytes = summary.verified_bandwidth_bytes
         )?;
     }
-
     writeln!(
         output,
         "# HELP soranet_relay_measurements_total Accepted blinded measurement proofs per epoch."
@@ -88,7 +83,6 @@ fn render_incentive_prometheus(
             count = summary.measurement_ids.len()
         )?;
     }
-
     writeln!(
         output,
         "# HELP soranet_relay_confidence_floor_per_mille Minimum measurement confidence per epoch."
@@ -107,6 +101,5 @@ fn render_incentive_prometheus(
             confidence = u64::from(summary.confidence_floor_per_mille)
         )?;
     }
-
     Ok(output.output)
 }

@@ -18,7 +18,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
             .0,
         RUNTIME_CANDIDATE_KIND_STORE_BODY
     );
-
     let owner = RuntimeEffectOwnership::fresh_for_test(tag, 71);
     let bound = bind_adapter_effect_batch_ownership(&[store.clone()], vec![owner])
         .expect("one exact StoreBody candidate is within the bound");
@@ -62,7 +61,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         production_adapter_effect_candidate_admission_disposition(&store, 0, 1),
         Ok(RuntimeCandidateAdmissionDisposition::FirstAdmission)
     );
-
     let retry_owner = RuntimeEffectOwnership::fresh_for_test(tag, 71);
     let retry = bind_adapter_effect_batch_ownership(&[store.clone()], vec![retry_owner])
         .expect("same exact producer retry remains bindable");
@@ -77,7 +75,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         production_adapter_effect_candidate_admission_disposition(&store, 1, 1),
         Ok(RuntimeCandidateAdmissionDisposition::CoalescedRetry)
     );
-
     let diagnostic = AdapterEffect::ReportInvalidCertifiedBody {
         subject: manifest.subject,
         certificate: signed_runtime_quorum_certificate(&context, &keys, 0x6B),
@@ -99,7 +96,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         production_adapter_effect_candidate_admission_disposition(&diagnostic, 0, 1).is_err(),
         "a non-candidate cannot mint an owner"
     );
-
     let changed_tag = EventTag::new(context.height, 0, Generation::new(2));
     let changed = AdapterEffect::StoreBody {
         tag: changed_tag,
@@ -119,7 +115,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         production_adapter_effect_candidate_semantic_identity(&changed),
         "process-local generation is absent from abstract candidate identity"
     );
-
     let changed_subject = AdapterEffect::StoreBody {
         tag: changed_tag,
         round: manifest.round,
@@ -133,7 +128,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         production_adapter_effect_candidate_semantic_identity(&changed_subject),
         "the immutable subject remains part of abstract candidate identity"
     );
-
     let sources = keys[..2]
         .iter()
         .map(|key| PeerId::new(key.public_key().clone()))
@@ -160,7 +154,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         production_adapter_effect_candidate_semantic_identity(&second_route),
         "transport retries retain one route-neutral abstract candidate"
     );
-
     let certificate = signed_runtime_quorum_certificate(&context, &keys, 0x73);
     let apply = AdapterEffect::Apply {
         tag,
@@ -185,7 +178,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         production_adapter_effect_candidate_semantic_identity(&alternate_apply),
         "candidate identity excludes aggregate, signer, and local-incarnation carriers"
     );
-
     let protected_lock = signed_runtime_quorum_certificate_for_phase(
         &context,
         &keys,
@@ -220,7 +212,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         ),
         "fresh EnterView identity normalizes interchangeable QC carriers"
     );
-
     let mut conflicting_lock = protected_lock;
     conflicting_lock.execution_commitment =
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
@@ -247,7 +238,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         ),
         "fresh EnterView identity retains the protected lock statement"
     );
-
     let first_vote = wire::Vote {
         round: manifest.round,
         proposal_round: manifest.round,
@@ -299,7 +289,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         ),
         "logical diagnostic identity canonicalizes the unsigned statement pair"
     );
-
     let mut resigned_first = first_vote;
     resigned_first.signature = vec![0xB3; 96];
     let resigned_diagnostic = AdapterEffect::ReportEquivocation {
@@ -321,7 +310,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         ),
         "logical diagnostic identity excludes signature carrier bytes"
     );
-
     let mut changed_statement = certificate;
     changed_statement.execution_commitment =
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
@@ -341,7 +329,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         production_adapter_effect_candidate_semantic_identity(&changed_apply),
         "execution commitment remains part of the normalized statement"
     );
-
     let three_candidates = vec![store.clone(), first_route.clone(), apply.clone()];
     let three_owners = (1_u128..=3)
         .map(|ordinal| RuntimeEffectOwnership::fresh_for_test(tag, 90 + ordinal))
@@ -359,7 +346,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         assert!(check_production_effect_to_candidate_transition(projection).is_some());
         assert!(projection.candidate_owner_admitted);
     }
-
     let four_candidates = vec![store.clone(), store.clone(), store.clone(), store.clone()];
     let four_owners = (1_u128..=4)
         .map(|ordinal| RuntimeEffectOwnership::fresh_for_test(tag, 100 + ordinal))
@@ -368,7 +354,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         bind_adapter_effect_batch_ownership(&four_candidates, four_owners).is_err(),
         "a fourth causal successor must fail before retention"
     );
-
     let mut forged = bound[0].clone();
     forged
         .binding
@@ -384,7 +369,6 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         "positional binding mutation must fail before projection"
     );
 }
-
 #[test]
 fn certified_body_pipeline_retains_statement_and_owner_across_stage_kinds() {
     let (context, keys) = authenticated_runtime_context();
@@ -413,7 +397,6 @@ fn certified_body_pipeline_retains_statement_and_owner_across_stage_kinds() {
         statement.execution_commitment,
         Some(certificate.execution_commitment)
     );
-
     let store = AdapterEffect::StoreBody {
         tag,
         round: certificate.proposal_round,
@@ -438,7 +421,6 @@ fn certified_body_pipeline_retains_statement_and_owner_across_stage_kinds() {
     let apply_ownership = validate_ownership
         .rebind_as_inherited_adapter_effect(&apply)
         .expect("Apply retains the exact certified body authority");
-
     for ownership in [&store_ownership, &validate_ownership, &apply_ownership] {
         assert_eq!(ownership.owner(), fetch_ownership.owner());
         assert_eq!(ownership.candidate_semantic_statement(), Some(statement));
@@ -459,7 +441,6 @@ fn certified_body_pipeline_retains_statement_and_owner_across_stage_kinds() {
         stage_identities.len(),
         "the outer work kind distinguishes stage occurrences without replacing the owner"
     );
-
     let mut lost_phase_and_commitment = store_ownership.clone();
     let fresh_store = production_adapter_effect_candidate_statement(&store)
         .expect("Store is a candidate")
@@ -473,7 +454,6 @@ fn certified_body_pipeline_retains_statement_and_owner_across_stage_kinds() {
         !lost_phase_and_commitment.validate_exact(),
         "dropping inherited phase and commitment invalidates the sealed binding"
     );
-
     let wrong_round = wire::ConsensusRound {
         view: certificate.proposal_round.view + 1,
         ..certificate.proposal_round
@@ -489,7 +469,6 @@ fn certified_body_pipeline_retains_statement_and_owner_across_stage_kinds() {
             .is_err(),
         "a causal Store cannot drop or replace the frozen proposal round"
     );
-
     let mut wrong_certificate = certificate;
     wrong_certificate.execution_commitment =
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
@@ -511,7 +490,6 @@ fn certified_body_pipeline_retains_statement_and_owner_across_stage_kinds() {
         "Apply cannot replace the inherited execution commitment"
     );
 }
-
 #[test]
 fn body_pipeline_acquires_commit_authority_monotonically_under_one_owner() {
     let (context, keys) = authenticated_runtime_context();
@@ -532,7 +510,6 @@ fn body_pipeline_acquires_commit_authority_monotonically_under_one_owner() {
         subject: commit.subject,
         certificate: commit.clone(),
     };
-
     // A local proposal or ordinary body fetch has no quorum authority at
     // Store/Validate time. A late durable Decision supplies Commit
     // authority without replacing the body's immutable local owner.
@@ -564,7 +541,6 @@ fn body_pipeline_acquires_commit_authority_monotonically_under_one_owner() {
             .phase,
         Some(wire::GlobalPhase::Commit)
     );
-
     // A Prepare-certified reconstruction has already frozen the
     // commitment. The matching CommitQC may promote only the phase.
     let mut prepare = commit.clone();
@@ -605,7 +581,6 @@ fn body_pipeline_acquires_commit_authority_monotonically_under_one_owner() {
         prepare_apply.candidate_semantic_statement(),
         production_adapter_effect_candidate_statement(&apply).map(|(_, statement)| statement)
     );
-
     let rejects =
         |certificate: wire::QuorumCertificate, subject: wire::BlockSubject, mutation: &str| {
             let changed = AdapterEffect::Apply {
@@ -620,7 +595,6 @@ fn body_pipeline_acquires_commit_authority_monotonically_under_one_owner() {
                 "{mutation} must be rejected before candidate refinement"
             );
         };
-
     let mut changed_subject = commit.clone();
     changed_subject.subject = wire::BlockSubject {
         payload_hash: Hash::new(b"foreign Apply subject"),
@@ -636,7 +610,6 @@ fn body_pipeline_acquires_commit_authority_monotonically_under_one_owner() {
         commit.subject,
         "certificate/effect subject disagreement",
     );
-
     let mut changed_proposal_round = commit.clone();
     changed_proposal_round.proposal_round.view += 1;
     rejects(
@@ -644,11 +617,9 @@ fn body_pipeline_acquires_commit_authority_monotonically_under_one_owner() {
         commit.subject,
         "proposal-round drift",
     );
-
     let mut changed_round = commit.clone();
     changed_round.round.view += 1;
     rejects(changed_round, commit.subject, "round drift");
-
     let foreign_context = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
         b"foreign Apply height context",
     )));
@@ -656,7 +627,6 @@ fn body_pipeline_acquires_commit_authority_monotonically_under_one_owner() {
     changed_context.round.context_id = foreign_context;
     changed_context.proposal_round.context_id = foreign_context;
     rejects(changed_context, commit.subject, "context drift");
-
     let mut changed_commitment = commit;
     changed_commitment.execution_commitment =
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
@@ -673,7 +643,6 @@ fn body_pipeline_acquires_commit_authority_monotonically_under_one_owner() {
         "commitment drift",
     );
 }
-
 #[test]
 fn fetch_authority_relation_is_monotonic_and_recognizes_stale_carriers() {
     let (context, keys) = authenticated_runtime_context();
@@ -699,7 +668,6 @@ fn fetch_authority_relation_is_monotonic_and_recognizes_stale_carriers() {
         Some(wire::GlobalPhase::Commit),
         Some(commit.execution_commitment),
     );
-
     for statement in [ordinary, prepare, committed] {
         assert_eq!(
             statement.fetch_authority_relation_to(statement),
@@ -730,7 +698,6 @@ fn fetch_authority_relation_is_monotonic_and_recognizes_stale_carriers() {
         committed.fetch_authority_relation_to(ordinary),
         Some(RuntimeFetchAuthorityRelation::Stale)
     );
-
     let mut changed_commitment = prepare;
     changed_commitment.execution_commitment =
         Some(wire::ExecutionCommitment::without_topups_or_merge_carrier(
@@ -750,7 +717,6 @@ fn fetch_authority_relation_is_monotonic_and_recognizes_stale_carriers() {
         None,
         "reverse-phase commitment drift is not a stale carrier"
     );
-
     let mut changed_round = committed;
     changed_round.round.view += 1;
     assert_eq!(
@@ -769,7 +735,6 @@ fn fetch_authority_relation_is_monotonic_and_recognizes_stale_carriers() {
         "subject drift must fail closed"
     );
 }
-
 #[test]
 fn candidate_statement_binds_manifest_by_exact_consensus_coordinates() {
     let (context, _keys) = authenticated_runtime_context();
@@ -788,7 +753,6 @@ fn candidate_statement_binds_manifest_by_exact_consensus_coordinates() {
         )),
     );
     assert!(statement.binds_exact_body_manifest(&manifest));
-
     let certified_round = wire::ConsensusRound {
         view: manifest.round.view + 3,
         ..manifest.round
@@ -796,21 +760,17 @@ fn candidate_statement_binds_manifest_by_exact_consensus_coordinates() {
     let mut later_statement = statement;
     later_statement.round = certified_round;
     assert!(!later_statement.binds_exact_body_manifest(&manifest));
-
     let mut changed_round = manifest.clone();
     changed_round.round.view += 1;
     assert!(!statement.binds_exact_body_manifest(&changed_round));
-
     let mut changed_subject = manifest.clone();
     changed_subject.subject.payload_hash = Hash::new(b"foreign manifest payload");
     assert!(!statement.binds_exact_body_manifest(&changed_subject));
-
     let mut changed_context = manifest.clone();
     changed_context.round.context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(
         Hash::new(b"foreign manifest context"),
     ));
     assert!(!statement.binds_exact_body_manifest(&changed_context));
-
     let later_tag = EventTag::new(context.height, certified_round.view, Generation::new(5));
     let later_fetch = AdapterEffect::FetchBody {
         tag: later_tag,
@@ -841,7 +801,6 @@ fn candidate_statement_binds_manifest_by_exact_consensus_coordinates() {
         !later_fetch_ownership.binds_exact_fetch_body_manifest(&manifest),
         "a Fetch certificate outside the manifest round is not a valid production bridge"
     );
-
     let tag = EventTag::new(context.height, manifest.round.view, Generation::new(5));
     let fetch = AdapterEffect::FetchBody {
         tag,
@@ -871,7 +830,6 @@ fn candidate_statement_binds_manifest_by_exact_consensus_coordinates() {
     assert!(fetch_ownership.binds_exact_fetch_body_manifest(&manifest));
     assert!(!fetch_ownership.binds_exact_fetch_body_manifest(&changed_round));
     assert!(!fetch_ownership.binds_exact_fetch_body_manifest(&changed_subject));
-
     let store = AdapterEffect::StoreBody {
         tag,
         round: manifest.round,
@@ -890,7 +848,6 @@ fn candidate_statement_binds_manifest_by_exact_consensus_coordinates() {
         "matching body coordinates cannot substitute a non-Fetch candidate"
     );
 }
-
 #[test]
 fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
     let (context, keys) = authenticated_runtime_context();
@@ -920,7 +877,6 @@ fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
     .expect("ordinary fetch has one exact owner")
     .pop()
     .expect("one ordinary fetch owner");
-
     let mut prepare_certificate = commit.clone();
     prepare_certificate.phase = wire::GlobalPhase::Prepare;
     let prepare_fetch = AdapterEffect::FetchBody {
@@ -946,7 +902,6 @@ fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
     .expect("Prepare carrier retains its two-effect macro-step positions")
     .pop()
     .expect("Prepare fetch is the final effect");
-
     let (adopted, relation) = ordinary
         .adopt_incumbent_fetch_for_retry_or_authority(&incoming, &prepare_fetch)
         .expect("ordinary fetch adopts authenticated Prepare authority");
@@ -972,7 +927,6 @@ fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
         adopted.candidate_semantic_statement(),
         incoming.candidate_semantic_statement()
     );
-
     let (stale, stale_relation) = adopted
         .adopt_incumbent_fetch_for_retry_or_authority(&ordinary, &ordinary_fetch)
         .expect("ordinary retransmission is an exact stale carrier");
@@ -983,7 +937,6 @@ fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
         ordinary.candidate_semantic_statement(),
         "the carrier remains exact while the task reducer retains stronger authority"
     );
-
     let prefix_owner = bind_adapter_effect_batch_ownership(
         std::slice::from_ref(&prefix),
         vec![RuntimeEffectOwnership::fresh_for_test(tag, 4_204)],
@@ -998,7 +951,6 @@ fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
         "candidate-kind drift must fail before owner adoption"
     );
 }
-
 fn observe_enter_view_for_test(
     runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
     previous: EventTag,
@@ -1046,7 +998,6 @@ fn observe_enter_view_for_test(
         .expect("test EnterView retains positional producer ownership");
     assert_eq!(runtime.round_tag(), rebound);
 }
-
 #[test]
 fn body_available_rebind_accepts_same_view_higher_generation() {
     let directory = TempDir::new().expect("temporary same-view rebind directory");
@@ -1060,7 +1011,6 @@ fn body_available_rebind_accepts_same_view_higher_generation() {
     );
     let manifest = runtime_manifest(&context, 0x8A);
     observe_enter_view_for_test(&mut runtime, initial, view_one, &manifest);
-
     stage_completion_for_queue_test(
         &mut runtime,
         view_one,
@@ -1076,7 +1026,6 @@ fn body_available_rebind_accepts_same_view_higher_generation() {
         Generation::new(view_one.generation().get() + 1),
     );
     observe_enter_view_for_test(&mut runtime, view_one, rebound, &manifest);
-
     assert!(
         runtime
             .rebind_body_available(view_one, rebound, &manifest)
@@ -1100,7 +1049,6 @@ fn body_available_rebind_accepts_same_view_higher_generation() {
     );
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner() {
     let directory = TempDir::new().expect("temporary reserved-body rebind directory");
@@ -1145,7 +1093,6 @@ fn unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner() {
         .lifecycle_ordinals
         .next_ordinal_for_test()
         .expect("inspect ordinal source before exact token rebind");
-
     let foreign_subject = runtime_manifest(&context, 0x8C).subject;
     assert!(
         !runtime
@@ -1206,7 +1153,6 @@ fn unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner() {
         source_before_rebind,
         "retry cannot remint the rebound token",
     );
-
     assert!(
         runtime
             .retire_unpublished_body_available(rebound, manifest.round, manifest.subject,)
@@ -1216,7 +1162,6 @@ fn unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner() {
     assert_eq!(runtime.queued_commands(), 0);
     assert!(!runtime.fail_closed);
 }
-
 fn authenticated_network_runtime(
     directory: &TempDir,
     queue: RuntimeQueueConfig,
@@ -1227,7 +1172,6 @@ fn authenticated_network_runtime(
 ) {
     authenticated_network_runtime_with_local_validator(directory, queue, None)
 }
-
 fn authenticated_network_runtime_with_local_validator(
     directory: &TempDir,
     queue: RuntimeQueueConfig,
@@ -1273,7 +1217,6 @@ fn authenticated_network_runtime_with_local_validator(
     .0;
     (runtime, context, keys)
 }
-
 /// Stage an exact completion directly in the bounded FIFO for tests of
 /// queue ownership itself. Production tests use the public enqueue seams,
 /// whose reducer preflight correctly rejects callbacks without a live
@@ -1293,7 +1236,6 @@ fn stage_completion_for_queue_test(
         ))
         .expect("queue-ownership fixture stages an exact completion");
 }
-
 fn stage_owned_completion_for_queue_test(
     runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
     tag: EventTag,
@@ -1316,7 +1258,6 @@ fn stage_owned_completion_for_queue_test(
         .enqueue(tagged)
         .expect("owned queue fixture stages an exact completion");
 }
-
 /// Attach the same private local/causal runtime wrapper that production
 /// dispatch installs around one exact adapter-owned Busy occurrence.
 fn mint_local_lifecycle_owner_for_test(
@@ -1337,7 +1278,6 @@ fn mint_local_lifecycle_owner_for_test(
     RuntimeLifecycleOwner::new(origin, lifecycle_ordinal)
         .expect("bind the local deferred lifecycle ordinal")
 }
-
 fn bind_deferred_lifecycle_owner_for_test(
     runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
     deferred_admission_ordinal: u128,
@@ -1373,7 +1313,6 @@ fn bind_deferred_lifecycle_owner_for_test(
     );
     owner
 }
-
 fn bind_local_deferred_lifecycle_for_test(
     runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
     deferred_admission_ordinal: u128,
@@ -1382,7 +1321,6 @@ fn bind_local_deferred_lifecycle_for_test(
     let owner = mint_local_lifecycle_owner_for_test(runtime, semantic_identity);
     bind_deferred_lifecycle_owner_for_test(runtime, deferred_admission_ordinal, owner)
 }
-
 /// Inject one real Busy-deferred completion with both its persistent
 /// adapter reservation and its matching serialized-runtime wrapper.
 fn defer_persistent_body_available_for_test(
@@ -1394,7 +1332,6 @@ fn defer_persistent_body_available_for_test(
     let owner = mint_local_lifecycle_owner_for_test(runtime, semantic_identity);
     defer_persistent_body_available_with_owner_for_test(runtime, tag, manifest, owner)
 }
-
 fn defer_persistent_body_available_with_owner_for_test(
     runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
     tag: EventTag,
@@ -1435,7 +1372,6 @@ fn defer_persistent_body_available_with_owner_for_test(
     );
     (deferred_admission_ordinal, owner)
 }
-
 fn fair_network_ownership(
     message: &wire::ConsensusMessageV2,
     sender: PeerId,
@@ -1449,7 +1385,6 @@ fn fair_network_ownership(
         .take_ingress_ownership()
         .expect("real test fair ingress produces exact source ownership")
 }
-
 fn preowned_leader_wire_ownerships_with_dequeue_mode(
     context: &wire::HeightContext,
     messages: &[(wire::ConsensusMessageV2, PeerId)],
@@ -1523,7 +1458,6 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
         )
         .expect("bind preowned leader-wire gate");
     ingress.open().expect("open preowned fair ingress");
-
     if push_all_before_dequeue {
         for (message, semantic_origin) in messages {
             assert!(matches!(
@@ -1535,7 +1469,6 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
             ));
         }
     }
-
     let ownerships = messages
         .iter()
         .enumerate()
@@ -1602,7 +1535,6 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
         .collect();
     (directory, ingress, ownerships)
 }
-
 fn preowned_leader_wire_ownerships(
     context: &wire::HeightContext,
     messages: &[(wire::ConsensusMessageV2, PeerId)],
@@ -1614,7 +1546,6 @@ fn preowned_leader_wire_ownerships(
 ) {
     preowned_leader_wire_ownerships_with_dequeue_mode(context, messages, lifecycle_ordinals, false)
 }
-
 fn preowned_leader_wire_ownerships_at_shared_cut(
     context: &wire::HeightContext,
     messages: &[(wire::ConsensusMessageV2, PeerId)],
@@ -1626,7 +1557,6 @@ fn preowned_leader_wire_ownerships_at_shared_cut(
 ) {
     preowned_leader_wire_ownerships_with_dequeue_mode(context, messages, lifecycle_ordinals, true)
 }
-
 struct LeaderWireProposalFixture {
     ingress: Arc<super::super::FairV2Ingress>,
     gate: Arc<super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate>,
@@ -1634,7 +1564,6 @@ struct LeaderWireProposalFixture {
     ownership: FairV2IngressOwnershipEvidence,
     receipt: LeaderWireLifecycleRuntimeReceipt,
 }
-
 fn leader_wire_proposal_fixture(
     directory: &TempDir,
     context: &wire::HeightContext,
@@ -1765,7 +1694,6 @@ fn leader_wire_proposal_fixture(
         receipt,
     }
 }
-
 fn assert_volatile_leader_wire_release(
     fixture: &LeaderWireProposalFixture,
     receipt: &LeaderWireLifecycleRuntimeReceipt,
@@ -1792,7 +1720,6 @@ fn assert_volatile_leader_wire_release(
         Ok(super::super::FairV2IngressPushDisposition::Coalesced)
     ));
 }
-
 fn bind_authenticated_deferred_proposal_for_test(
     runtime: &mut SerializedV2Runtime,
     fixture: &LeaderWireProposalFixture,
@@ -1870,7 +1797,6 @@ fn bind_authenticated_deferred_proposal_for_test(
         .expect("register deferred leader-wire receipt");
     (proposal, deferred_ordinal)
 }
-
 fn fair_network_ownership_with_route(
     message: &wire::ConsensusMessageV2,
     semantic_origin: PeerId,
@@ -1889,7 +1815,6 @@ fn fair_network_ownership_with_route(
         .take_ingress_ownership()
         .expect("real test fair ingress produces exact routed ownership")
 }
-
 fn runtime(
     driver: FakeDriver,
     start: Instant,
@@ -1904,7 +1829,6 @@ fn runtime(
         .expect("arm fake runtime after startup");
     runtime
 }
-
 fn deferred_lifecycle_ownership_for_test(
     owner: RuntimeLifecycleOwner,
     deferred_admission_ordinal: u128,

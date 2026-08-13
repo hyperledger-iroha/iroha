@@ -1,5 +1,4 @@
 //! Minimal metrics tracking for the relay daemon.
-
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
@@ -9,12 +8,9 @@ use std::{
     },
     time::Duration,
 };
-
 use iroha_crypto::soranet::handshake::HandshakeSuite;
 use iroha_data_model::soranet::vpn::VpnSessionReceiptV1;
-
 use crate::{config::RelayMode, scheduler::CellClass};
-
 /// Maximum retained dynamic label series for each first-release metric family.
 const DYNAMIC_METRIC_SERIES_MAX_V1: usize = 256;
 /// Maximum bytes inspected while normalizing an untrusted metric label.
@@ -22,15 +18,12 @@ const DYNAMIC_METRIC_LABEL_INPUT_MAX_BYTES_V1: usize = 512;
 /// Maximum bytes retained in one normalized metric label.
 const DYNAMIC_METRIC_LABEL_MAX_BYTES_V1: usize = 64;
 const DYNAMIC_METRIC_OVERFLOW_LABEL: &str = "other";
-
 fn store_f64(atom: &AtomicU64, value: f64) {
     atom.store(value.to_bits(), Ordering::Relaxed);
 }
-
 fn load_f64(atom: &AtomicU64) -> f64 {
     f64::from_bits(atom.load(Ordering::Relaxed))
 }
-
 /// Key used for per-issuer token verification outcomes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TokenOutcomeKey {
@@ -41,7 +34,6 @@ pub struct TokenOutcomeKey {
     /// Outcome label (e.g., ok, expired, replayed).
     pub outcome: String,
 }
-
 /// Runtime status for the VPN tunnel overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VpnRuntimeState {
@@ -49,7 +41,6 @@ pub enum VpnRuntimeState {
     Active = 1,
     Stubbed = 2,
 }
-
 impl VpnRuntimeState {
     /// Return a human-readable label for the runtime state.
     pub fn as_label(self) -> &'static str {
@@ -59,7 +50,6 @@ impl VpnRuntimeState {
             Self::Stubbed => "stubbed",
         }
     }
-
     /// Decode a runtime state from a stored u8 sentinel.
     fn from_u8(value: u8) -> Self {
         match value {
@@ -69,7 +59,6 @@ impl VpnRuntimeState {
         }
     }
 }
-
 /// Mutable counters shared across async tasks.
 #[derive(Debug)]
 pub struct Metrics {
@@ -146,7 +135,6 @@ pub struct Metrics {
     vpn_receipt_cover_bytes: AtomicU64,
     vpn_receipt_uptime_secs: AtomicU64,
 }
-
 impl Default for Metrics {
     fn default() -> Self {
         Self {
@@ -225,65 +213,51 @@ impl Default for Metrics {
         }
     }
 }
-
 impl Metrics {
     /// Construct a metrics registry with zeroed counters.
     pub fn new() -> Self {
         Self::default()
     }
-
     pub fn record_success(&self) {
         self.success.fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_failure(&self) {
         self.failure.fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_throttled(&self) {
         self.throttled.fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_capacity_reject(&self) {
         self.capacity_reject.fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn set_pow_difficulty(&self, difficulty: u8) {
         self.pow_difficulty
             .store(difficulty as u64, Ordering::Relaxed);
     }
-
     pub fn record_remote_quota_throttle(&self) {
         self.throttled_remote_quota.fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_descriptor_quota_throttle(&self) {
         self.throttled_descriptor_quota
             .fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_descriptor_replay_throttle(&self) {
         self.throttled_descriptor_replay
             .fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_handshake_cooldown_throttle(&self) {
         self.throttled_cooldown.fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_emergency_throttle(&self) {
         self.throttled_emergency.fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn set_active_remote_cooldowns(&self, count: u64) {
         self.active_remote_cooldowns.store(count, Ordering::Relaxed);
     }
-
     pub fn set_active_descriptor_cooldowns(&self, count: u64) {
         self.active_descriptor_cooldowns
             .store(count, Ordering::Relaxed);
     }
-
     pub fn set_descriptor_commit_hex(&self, commit: Option<String>) {
         let mut guard = self
             .descriptor_commit
@@ -291,7 +265,6 @@ impl Metrics {
             .expect("metrics descriptor commit mutex poisoned");
         *guard = commit;
     }
-
     pub fn set_ml_kem_public_hex(&self, key: Option<String>) {
         let mut guard = self
             .ml_kem_public
@@ -299,7 +272,6 @@ impl Metrics {
             .expect("metrics ml-kem public mutex poisoned");
         *guard = key;
     }
-
     pub fn set_constant_rate_profile(
         &self,
         profile: &str,
@@ -331,17 +303,14 @@ impl Metrics {
         );
         self.constant_rate_degraded.store(false, Ordering::Relaxed);
     }
-
     pub fn set_constant_rate_active_neighbors(&self, count: u64) {
         self.constant_rate_active_neighbors
             .store(count, Ordering::Relaxed);
     }
-
     pub fn set_constant_rate_queue_depth(&self, depth: u64) {
         self.constant_rate_queue_depth
             .store(depth, Ordering::Relaxed);
     }
-
     pub fn set_constant_rate_queue_depths(&self, control: u64, interactive: u64, bulk: u64) {
         self.constant_rate_queue_control
             .store(control, Ordering::Relaxed);
@@ -349,54 +318,43 @@ impl Metrics {
             .store(interactive, Ordering::Relaxed);
         self.constant_rate_queue_bulk.store(bulk, Ordering::Relaxed);
     }
-
     pub fn set_constant_rate_saturation_percent(&self, percent: u64) {
         self.constant_rate_saturation_percent
             .store(percent, Ordering::Relaxed);
     }
-
     pub fn set_constant_rate_dummy_lanes(&self, lanes: u64) {
         self.constant_rate_dummy_lanes
             .store(lanes, Ordering::Relaxed);
     }
-
     pub fn set_constant_rate_dummy_ratio(&self, ratio: f64) {
         store_f64(&self.constant_rate_dummy_ratio, ratio.clamp(0.0, 1.0));
     }
-
     pub fn record_constant_rate_low_dummy(&self) {
         self.constant_rate_low_dummy_events
             .fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn set_constant_rate_degraded(&self, degraded: bool) {
         self.constant_rate_degraded
             .store(degraded, Ordering::Relaxed);
     }
-
     pub fn record_constant_rate_ceiling_hit(&self) {
         self.constant_rate_ceiling_hits
             .fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_constant_rate_congestion_event(&self, _buffer_space_bytes: u64) {
         self.constant_rate_congestion_events
             .fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_constant_rate_congestion_drop(&self, _class: CellClass) {
         self.constant_rate_congestion_drops
             .fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn set_vpn_runtime_state(&self, state: VpnRuntimeState) {
         self.vpn_runtime_state.store(state as u8, Ordering::Relaxed);
     }
-
     pub fn vpn_runtime_state(&self) -> VpnRuntimeState {
         VpnRuntimeState::from_u8(self.vpn_runtime_state.load(Ordering::Relaxed))
     }
-
     pub fn record_handshake_mode(&self, suite: HandshakeSuite) {
         let idx = match suite {
             HandshakeSuite::Nk2Hybrid => 0,
@@ -404,7 +362,6 @@ impl Metrics {
         };
         self.handshake_mode_counts[idx].fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_downgrade(&self, reason: &str) {
         let normalized = normalize_downgrade_reason(reason);
         let mut guard = self
@@ -423,27 +380,22 @@ impl Metrics {
         let count = guard.entry(retained).or_insert(0);
         *count = count.saturating_add(1);
     }
-
     pub fn record_handshake_bytes(&self, bytes: u64) {
         self.handshake_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
-
     pub fn record_puzzle_verify(&self, duration: Duration) {
         let micros = duration.as_micros().min(u128::from(u64::MAX)) as u64;
         self.puzzle_solve_count.fetch_add(1, Ordering::Relaxed);
         self.puzzle_solve_micros
             .fetch_add(micros, Ordering::Relaxed);
     }
-
     pub fn record_padding_cell_sent(&self, bytes: u64) {
         self.padding_cells.fetch_add(1, Ordering::Relaxed);
         self.padding_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
-
     pub fn record_padding_cell_throttled(&self) {
         self.padding_throttled.fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_token_outcome(&self, issuer_hex: &str, relay_hex: &str, outcome: &str) {
         let mut guard = self
             .token_outcomes
@@ -470,7 +422,6 @@ impl Metrics {
         let count = guard.entry(retained).or_insert(0);
         *count = count.saturating_add(1);
     }
-
     pub fn set_vpn_meter_labels(&self, session_label: &str, byte_label: &str) {
         let mut session = self
             .vpn_session_meter_label
@@ -483,19 +434,15 @@ impl Metrics {
         *session = Some(session_label.trim().to_owned());
         *bytes = Some(byte_label.trim().to_owned());
     }
-
     pub fn record_vpn_session(&self) {
         self.vpn_sessions.fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_vpn_frame_ingress(&self, is_cover: bool) {
         self.record_vpn_frame_ingress_count(1, is_cover);
     }
-
     pub fn record_vpn_frame_egress(&self, is_cover: bool) {
         self.record_vpn_frame_egress_count(1, is_cover);
     }
-
     pub fn record_vpn_frame_ingress_count(&self, frames: u64, is_cover: bool) {
         if frames == 0 {
             return;
@@ -512,7 +459,6 @@ impl Metrics {
                 .fetch_add(frames, Ordering::Relaxed);
         }
     }
-
     pub fn record_vpn_frame_egress_count(&self, frames: u64, is_cover: bool) {
         if frames == 0 {
             return;
@@ -529,11 +475,9 @@ impl Metrics {
                 .fetch_add(frames, Ordering::Relaxed);
         }
     }
-
     pub fn record_vpn_bytes(&self, bytes: u64) {
         self.vpn_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
-
     pub fn record_vpn_ingress(&self, bytes: u64, is_cover: bool) {
         self.vpn_bytes.fetch_add(bytes, Ordering::Relaxed);
         self.vpn_ingress_bytes.fetch_add(bytes, Ordering::Relaxed);
@@ -547,7 +491,6 @@ impl Metrics {
                 .fetch_add(bytes, Ordering::Relaxed);
         }
     }
-
     pub fn record_vpn_egress(&self, bytes: u64, is_cover: bool) {
         self.vpn_bytes.fetch_add(bytes, Ordering::Relaxed);
         self.vpn_egress_bytes.fetch_add(bytes, Ordering::Relaxed);
@@ -561,7 +504,6 @@ impl Metrics {
                 .fetch_add(bytes, Ordering::Relaxed);
         }
     }
-
     pub fn record_vpn_control_ingress(&self, bytes: u64) {
         if bytes == 0 {
             return;
@@ -573,7 +515,6 @@ impl Metrics {
         self.vpn_control_ingress_frames
             .fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_vpn_control_egress(&self, bytes: u64) {
         if bytes == 0 {
             return;
@@ -585,7 +526,6 @@ impl Metrics {
         self.vpn_control_egress_frames
             .fetch_add(1, Ordering::Relaxed);
     }
-
     pub fn record_vpn_receipt(&self, receipt: &VpnSessionReceiptV1) {
         self.vpn_session_receipts.fetch_add(1, Ordering::Relaxed);
         self.vpn_receipt_ingress_bytes
@@ -597,7 +537,6 @@ impl Metrics {
         self.vpn_receipt_uptime_secs
             .fetch_add(u64::from(receipt.uptime_secs), Ordering::Relaxed);
     }
-
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
             success: self.success.load(Ordering::Relaxed),
@@ -717,7 +656,6 @@ impl Metrics {
             vpn_receipt_uptime_secs: self.vpn_receipt_uptime_secs.load(Ordering::Relaxed),
         }
     }
-
     pub fn render_prometheus(&self, mode: RelayMode, proxy_queue_depth: u64) -> String {
         let snapshot = self.snapshot();
         let profile_label = snapshot
@@ -733,20 +671,17 @@ impl Metrics {
         );
         let labels = base_labels.as_str();
         let mut output = String::new();
-
         macro_rules! help_and_type {
             ($help:expr, $typ:expr) => {{
                 let _ = writeln!(output, $help);
                 let _ = writeln!(output, $typ);
             }};
         }
-
         macro_rules! metric_line {
             ($fmt:expr, $($arg:tt)*) => {{
                 let _ = writeln!(output, $fmt, $($arg)*);
             }};
         }
-
         help_and_type!(
             "# HELP soranet_handshake_success_total Total successful SoraNet relay handshakes.",
             "# TYPE soranet_handshake_success_total counter"
@@ -756,7 +691,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.success
         );
-
         help_and_type!(
             "# HELP soranet_handshake_failure_total Total failed SoraNet relay handshakes.",
             "# TYPE soranet_handshake_failure_total counter"
@@ -766,7 +700,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.failure
         );
-
         help_and_type!(
             "# HELP soranet_handshake_throttled_total Handshake attempts throttled by cooldown.",
             "# TYPE soranet_handshake_throttled_total counter"
@@ -776,7 +709,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.throttled
         );
-
         help_and_type!(
             "# HELP soranet_handshake_capacity_reject_total Handshake attempts rejected due to circuit limits.",
             "# TYPE soranet_handshake_capacity_reject_total counter"
@@ -786,7 +718,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.capacity_reject
         );
-
         help_and_type!(
             "# HELP soranet_constant_rate_active_neighbors Active constant-rate circuits permitted by the relay.",
             "# TYPE soranet_constant_rate_active_neighbors gauge"
@@ -905,7 +836,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.constant_rate_congestion_drops
         );
-
         let vpn_session_label = snapshot
             .vpn_session_meter_label
             .as_deref()
@@ -943,7 +873,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_sessions
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_bytes_total VPN bytes observed by the relay.",
                 "# TYPE soranet_vpn_bytes_total counter"
@@ -953,7 +882,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_ingress_bytes_total VPN ingress bytes observed by the relay.",
                 "# TYPE soranet_vpn_ingress_bytes_total counter"
@@ -963,7 +891,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_ingress_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_egress_bytes_total VPN egress bytes observed by the relay.",
                 "# TYPE soranet_vpn_egress_bytes_total counter"
@@ -973,7 +900,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_egress_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_data_bytes_total VPN data bytes observed by the relay.",
                 "# TYPE soranet_vpn_data_bytes_total counter"
@@ -983,7 +909,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_data_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_data_ingress_bytes_total VPN data ingress bytes observed by the relay.",
                 "# TYPE soranet_vpn_data_ingress_bytes_total counter"
@@ -993,7 +918,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_data_ingress_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_data_egress_bytes_total VPN data egress bytes observed by the relay.",
                 "# TYPE soranet_vpn_data_egress_bytes_total counter"
@@ -1003,7 +927,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_data_egress_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_cover_bytes_total VPN cover bytes observed by the relay.",
                 "# TYPE soranet_vpn_cover_bytes_total counter"
@@ -1013,7 +936,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_cover_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_cover_ingress_bytes_total VPN cover ingress bytes observed by the relay.",
                 "# TYPE soranet_vpn_cover_ingress_bytes_total counter"
@@ -1023,7 +945,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_cover_ingress_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_cover_egress_bytes_total VPN cover egress bytes observed by the relay.",
                 "# TYPE soranet_vpn_cover_egress_bytes_total counter"
@@ -1033,7 +954,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_cover_egress_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_control_bytes_total VPN control-plane bytes observed by the relay.",
                 "# TYPE soranet_vpn_control_bytes_total counter"
@@ -1043,7 +963,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_control_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_control_ingress_bytes_total VPN control-plane ingress bytes observed by the relay.",
                 "# TYPE soranet_vpn_control_ingress_bytes_total counter"
@@ -1053,7 +972,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_control_ingress_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_control_egress_bytes_total VPN control-plane egress bytes observed by the relay.",
                 "# TYPE soranet_vpn_control_egress_bytes_total counter"
@@ -1063,7 +981,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_control_egress_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_frames_total VPN frames observed by the relay.",
                 "# TYPE soranet_vpn_frames_total counter"
@@ -1073,7 +990,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_ingress_frames_total VPN ingress frames observed by the relay.",
                 "# TYPE soranet_vpn_ingress_frames_total counter"
@@ -1083,7 +999,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_ingress_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_egress_frames_total VPN egress frames observed by the relay.",
                 "# TYPE soranet_vpn_egress_frames_total counter"
@@ -1093,7 +1008,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_egress_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_data_frames_total VPN data frames observed by the relay.",
                 "# TYPE soranet_vpn_data_frames_total counter"
@@ -1103,7 +1017,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_data_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_data_ingress_frames_total VPN data ingress frames observed by the relay.",
                 "# TYPE soranet_vpn_data_ingress_frames_total counter"
@@ -1113,7 +1026,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_data_ingress_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_data_egress_frames_total VPN data egress frames observed by the relay.",
                 "# TYPE soranet_vpn_data_egress_frames_total counter"
@@ -1123,7 +1035,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_data_egress_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_cover_frames_total VPN cover frames observed by the relay.",
                 "# TYPE soranet_vpn_cover_frames_total counter"
@@ -1133,7 +1044,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_cover_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_cover_ingress_frames_total VPN cover ingress frames observed by the relay.",
                 "# TYPE soranet_vpn_cover_ingress_frames_total counter"
@@ -1143,7 +1053,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_cover_ingress_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_cover_egress_frames_total VPN cover egress frames observed by the relay.",
                 "# TYPE soranet_vpn_cover_egress_frames_total counter"
@@ -1153,7 +1062,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_cover_egress_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_control_frames_total VPN control-plane frames observed by the relay.",
                 "# TYPE soranet_vpn_control_frames_total counter"
@@ -1163,7 +1071,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_control_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_control_ingress_frames_total VPN control-plane ingress frames observed by the relay.",
                 "# TYPE soranet_vpn_control_ingress_frames_total counter"
@@ -1173,7 +1080,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_control_ingress_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_control_egress_frames_total VPN control-plane egress frames observed by the relay.",
                 "# TYPE soranet_vpn_control_egress_frames_total counter"
@@ -1183,7 +1089,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_control_egress_frames
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_session_receipts_total VPN session receipts emitted by the relay.",
                 "# TYPE soranet_vpn_session_receipts_total counter"
@@ -1193,7 +1098,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_session_receipts
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_receipt_ingress_bytes_total VPN ingress bytes captured in receipts.",
                 "# TYPE soranet_vpn_receipt_ingress_bytes_total counter"
@@ -1203,7 +1107,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_receipt_ingress_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_receipt_egress_bytes_total VPN egress bytes captured in receipts.",
                 "# TYPE soranet_vpn_receipt_egress_bytes_total counter"
@@ -1213,7 +1116,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_receipt_egress_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_receipt_cover_bytes_total VPN cover bytes captured in receipts.",
                 "# TYPE soranet_vpn_receipt_cover_bytes_total counter"
@@ -1223,7 +1125,6 @@ impl Metrics {
                 labels = vpn_labels,
                 value = snapshot.vpn_receipt_cover_bytes
             );
-
             help_and_type!(
                 "# HELP soranet_vpn_receipt_uptime_seconds_total VPN session uptime captured in receipts (seconds).",
                 "# TYPE soranet_vpn_receipt_uptime_seconds_total counter"
@@ -1234,7 +1135,6 @@ impl Metrics {
                 value = snapshot.vpn_receipt_uptime_secs
             );
         }
-
         help_and_type!(
             "# HELP soranet_padding_cells_sent_total Padding cells emitted by the relay.",
             "# TYPE soranet_padding_cells_sent_total counter"
@@ -1244,7 +1144,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.padding_cells
         );
-
         help_and_type!(
             "# HELP soranet_padding_bytes_sent_total Padding bytes emitted by the relay.",
             "# TYPE soranet_padding_bytes_sent_total counter"
@@ -1254,7 +1153,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.padding_bytes
         );
-
         help_and_type!(
             "# HELP soranet_padding_cells_throttled_total Padding cells skipped due to the global padding budget.",
             "# TYPE soranet_padding_cells_throttled_total counter"
@@ -1264,7 +1162,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.padding_throttled
         );
-
         if !snapshot.token_outcomes.is_empty() {
             help_and_type!(
                 "# HELP soranet_token_verify_total Admission token verification outcomes.",
@@ -1285,7 +1182,6 @@ impl Metrics {
                 );
             }
         }
-
         help_and_type!(
             "# HELP soranet_handshake_pow_difficulty Current PoW difficulty required by the relay.",
             "# TYPE soranet_handshake_pow_difficulty gauge"
@@ -1295,7 +1191,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.pow_difficulty
         );
-
         help_and_type!(
             "# HELP soranet_handshake_throttled_remote_quota_total Handshake attempts throttled by per-remote quotas.",
             "# TYPE soranet_handshake_throttled_remote_quota_total counter"
@@ -1305,7 +1200,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.throttled_remote_quota
         );
-
         help_and_type!(
             "# HELP soranet_handshake_throttled_descriptor_quota_total Handshake attempts throttled by per-descriptor quotas.",
             "# TYPE soranet_handshake_throttled_descriptor_quota_total counter"
@@ -1315,7 +1209,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.throttled_descriptor_quota
         );
-
         help_and_type!(
             "# HELP soranet_handshake_throttled_descriptor_replay_total Handshake attempts throttled by descriptor replay filter.",
             "# TYPE soranet_handshake_throttled_descriptor_replay_total counter"
@@ -1325,7 +1218,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.throttled_descriptor_replay
         );
-
         help_and_type!(
             "# HELP soranet_handshake_throttled_cooldown_total Handshake attempts throttled by the congestion cooldown.",
             "# TYPE soranet_handshake_throttled_cooldown_total counter"
@@ -1335,7 +1227,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.throttled_cooldown
         );
-
         help_and_type!(
             "# HELP soranet_handshake_throttled_emergency_total Handshake attempts throttled by consensus emergency policy.",
             "# TYPE soranet_handshake_throttled_emergency_total counter"
@@ -1345,7 +1236,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.throttled_emergency
         );
-
         help_and_type!(
             "# HELP soranet_abuse_remote_cooldowns Active remote cooldown entries enforced by the relay.",
             "# TYPE soranet_abuse_remote_cooldowns gauge"
@@ -1355,7 +1245,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.active_remote_cooldowns
         );
-
         help_and_type!(
             "# HELP soranet_abuse_descriptor_cooldowns Active descriptor cooldown entries enforced by the relay.",
             "# TYPE soranet_abuse_descriptor_cooldowns gauge"
@@ -1365,7 +1254,6 @@ impl Metrics {
             labels = labels,
             value = snapshot.active_descriptor_cooldowns
         );
-
         help_and_type!(
             "# HELP soranet_proxy_policy_queue_depth Downgrade events queued for proxy remediation.",
             "# TYPE soranet_proxy_policy_queue_depth gauge"
@@ -1375,7 +1263,6 @@ impl Metrics {
             labels = labels,
             value = proxy_queue_depth
         );
-
         const HANDSHAKE_LABELS: [&str; 2] = ["nk2", "nk3"];
         help_and_type!(
             "# HELP sn16_handshake_mode_total Count of negotiated SoraNet handshake suites.",
@@ -1390,7 +1277,6 @@ impl Metrics {
                 count = count
             );
         }
-
         help_and_type!(
             "# HELP sn16_handshake_bytes_total Total bytes transferred during SoraNet handshakes.",
             "# TYPE sn16_handshake_bytes_total counter"
@@ -1400,7 +1286,6 @@ impl Metrics {
             labels = labels,
             bytes = snapshot.handshake_bytes
         );
-
         help_and_type!(
             "# HELP sn16_puzzle_verify_seconds Duration of Argon2 ticket verification at the relay.",
             "# TYPE sn16_puzzle_verify_seconds summary"
@@ -1416,7 +1301,6 @@ impl Metrics {
             labels = labels,
             sum = sum_seconds
         );
-
         if !snapshot.downgrade_counts.is_empty() {
             help_and_type!(
                 "# HELP sn16_handshake_downgrade_total Downgrade detections grouped by reason.",
@@ -1431,7 +1315,6 @@ impl Metrics {
                 );
             }
         }
-
         if let Some(commit) = snapshot.descriptor_commit {
             help_and_type!(
                 "# HELP soranet_guard_descriptor_commit Relay descriptor commitment for guard pinning.",
@@ -1454,11 +1337,9 @@ impl Metrics {
                 kem = kem,
             );
         }
-
         output
     }
 }
-
 pub(crate) fn normalize_downgrade_reason(input: &str) -> String {
     let trimmed = bounded_utf8_prefix(input.trim(), DYNAMIC_METRIC_LABEL_INPUT_MAX_BYTES_V1);
     if trimmed.is_empty() {
@@ -1491,7 +1372,6 @@ pub(crate) fn normalize_downgrade_reason(input: &str) -> String {
     }
     sanitize_reason(trimmed)
 }
-
 fn sanitize_reason(input: &str) -> String {
     let mut slug = String::with_capacity(input.len().min(DYNAMIC_METRIC_LABEL_MAX_BYTES_V1));
     let mut last_was_sep = false;
@@ -1525,7 +1405,6 @@ fn sanitize_reason(input: &str) -> String {
         slug
     }
 }
-
 fn bounded_metric_label(input: &str) -> String {
     let trimmed = input.trim();
     let bounded = bounded_utf8_prefix(trimmed, DYNAMIC_METRIC_LABEL_MAX_BYTES_V1);
@@ -1535,7 +1414,6 @@ fn bounded_metric_label(input: &str) -> String {
         bounded.to_owned()
     }
 }
-
 fn bounded_utf8_prefix(input: &str, maximum_bytes: usize) -> &str {
     if input.len() <= maximum_bytes {
         return input;
@@ -1546,7 +1424,6 @@ fn bounded_utf8_prefix(input: &str, maximum_bytes: usize) -> &str {
     }
     &input[..end]
 }
-
 /// Snapshot of counters for logging or telemetry export.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricsSnapshot {
@@ -1695,13 +1572,10 @@ pub struct MetricsSnapshot {
     /// Session uptime recorded in receipts (seconds).
     pub vpn_receipt_uptime_secs: u64,
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_primitives::numeric::Quantity;
-
     use super::*;
-
     #[test]
     fn normalize_maps_known_patterns() {
         assert_eq!(
@@ -1735,7 +1609,6 @@ mod tests {
             "constant_rate_capability_missing_on_hop"
         );
     }
-
     #[test]
     fn normalize_falls_back_to_sanitized_slug() {
         assert_eq!(
@@ -1753,14 +1626,12 @@ mod tests {
                 <= DYNAMIC_METRIC_LABEL_MAX_BYTES_V1
         );
     }
-
     #[test]
     fn dynamic_downgrade_series_roll_over_at_first_release_limit() {
         let metrics = Metrics::new();
         for index in 0..DYNAMIC_METRIC_SERIES_MAX_V1 + 8 {
             metrics.record_downgrade(&format!("dynamic downgrade {index}"));
         }
-
         let snapshot = metrics.snapshot();
         assert_eq!(
             snapshot.downgrade_counts.len(),
@@ -1771,24 +1642,20 @@ mod tests {
             Some(&8)
         );
     }
-
     #[test]
     fn record_handshake_mode_maps_to_expected_slots() {
         let metrics = Metrics::new();
         metrics.record_handshake_mode(HandshakeSuite::Nk2Hybrid);
         metrics.record_handshake_mode(HandshakeSuite::Nk3PqForwardSecure);
-
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.handshake_mode_counts[0], 1);
         assert_eq!(snapshot.handshake_mode_counts[1], 1);
     }
-
     #[test]
     fn vpn_control_metrics_track_ingress_and_egress() {
         let metrics = Metrics::new();
         metrics.record_vpn_control_ingress(10);
         metrics.record_vpn_control_egress(20);
-
         let snapshot = metrics.snapshot();
         assert_eq!(30, snapshot.vpn_control_bytes);
         assert_eq!(10, snapshot.vpn_control_ingress_bytes);
@@ -1797,7 +1664,6 @@ mod tests {
         assert_eq!(1, snapshot.vpn_control_ingress_frames);
         assert_eq!(1, snapshot.vpn_control_egress_frames);
     }
-
     #[test]
     fn render_prometheus_output() {
         let metrics = Metrics::new();
@@ -1860,7 +1726,6 @@ mod tests {
             client_voucher_hash: [0x22; 32],
         });
         metrics.record_token_outcome("deadbeef", "cafebabe", "accepted");
-
         let rendered = metrics.render_prometheus(RelayMode::Middle, 2);
         let label_block =
             "mode=\"middle\",constant_rate_profile=\"core\",constant_rate_neighbors=\"8\"";
@@ -2042,14 +1907,12 @@ mod tests {
             "soranet_token_verify_total{{{label_block},issuer=\"deadbeef\",relay=\"cafebabe\",outcome=\"accepted\"}} 1"
         )));
     }
-
     #[test]
     fn token_outcome_metrics_accumulate() {
         let metrics = Metrics::new();
         metrics.record_token_outcome("issuer_hex", "relay_hex", "accepted");
         metrics.record_token_outcome("issuer_hex", "relay_hex", "accepted");
         metrics.record_token_outcome("issuer_hex", "relay_hex", "replay");
-
         let snapshot = metrics.snapshot();
         let accepted_key = TokenOutcomeKey {
             issuer: "issuer_hex".to_string(),
@@ -2064,7 +1927,6 @@ mod tests {
         assert_eq!(snapshot.token_outcomes.get(&accepted_key), Some(&2));
         assert_eq!(snapshot.token_outcomes.get(&replay_key), Some(&1));
     }
-
     #[test]
     fn token_outcome_series_and_labels_are_bounded() {
         let metrics = Metrics::new();
@@ -2072,7 +1934,6 @@ mod tests {
             metrics.record_token_outcome(&format!("issuer-{index}"), "relay", "accepted");
         }
         metrics.record_token_outcome(&"界".repeat(128), "relay", "accepted");
-
         let snapshot = metrics.snapshot();
         assert_eq!(
             snapshot.token_outcomes.len(),
@@ -2090,7 +1951,6 @@ mod tests {
                 && key.outcome.len() <= DYNAMIC_METRIC_LABEL_MAX_BYTES_V1
         }));
     }
-
     #[test]
     fn sanitize_reason_normalizes_labels() {
         assert_eq!(sanitize_reason("Hello World!"), "hello_world");

@@ -10,7 +10,6 @@ fn malformed_multisig_bundle_shapes_have_stable_rejection_code() {
         );
     }
 }
-
 #[test]
 fn malformed_domain_shape_errors_have_stable_rejection_code() {
     for error in [

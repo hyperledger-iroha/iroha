@@ -1,9 +1,7 @@
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
-
 use super::*;
 use crate::runtime::RuntimeUpgradeId;
-
 isi! {
     /// Propose a runtime upgrade by submitting a manifest.
     pub struct ProposeRuntimeUpgrade {
@@ -11,7 +9,6 @@ isi! {
         pub manifest_bytes: Vec<u8>,
     }
 }
-
 isi! {
     /// Activate a previously proposed runtime upgrade at the window start height.
     pub struct ActivateRuntimeUpgrade {
@@ -19,7 +16,6 @@ isi! {
         pub id: RuntimeUpgradeId,
     }
 }
-
 isi! {
     /// Cancel a proposed runtime upgrade prior to its start height.
     pub struct CancelRuntimeUpgrade {
@@ -27,12 +23,10 @@ isi! {
         pub id: RuntimeUpgradeId,
     }
 }
-
 // Seal implementations so these types participate as instructions
 impl crate::seal::Instruction for ProposeRuntimeUpgrade {}
 impl crate::seal::Instruction for ActivateRuntimeUpgrade {}
 impl crate::seal::Instruction for CancelRuntimeUpgrade {}
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ProposeRuntimeUpgrade {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -40,7 +34,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ProposeRuntimeUpgrade {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let manifest_bytes = super::decode_aos_slice_field::<Vec<u8>>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -53,7 +46,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ProposeRuntimeUpgrade {
         Ok((Self { manifest_bytes }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ActivateRuntimeUpgrade {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -61,7 +53,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateRuntimeUpgrade {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let id = super::decode_aos_slice_field::<RuntimeUpgradeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -74,7 +65,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateRuntimeUpgrade {
         Ok((Self { id }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for CancelRuntimeUpgrade {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -82,7 +72,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelRuntimeUpgrade {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let id = super::decode_aos_slice_field::<RuntimeUpgradeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -95,7 +84,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelRuntimeUpgrade {
         Ok((Self { id }, offset))
     }
 }
-
 // Stable wire IDs for runtime-upgrade instructions
 impl ProposeRuntimeUpgrade {
     /// Norito wire identifier for proposing a runtime upgrade.
@@ -109,7 +97,6 @@ impl CancelRuntimeUpgrade {
     /// Norito wire identifier for canceling a runtime upgrade.
     pub const WIRE_ID: &'static str = "iroha.runtime_upgrade.cancel";
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for ProposeRuntimeUpgrade {
     fn write_json(&self, out: &mut String) {
@@ -118,7 +105,6 @@ impl FastJsonWrite for ProposeRuntimeUpgrade {
         JsonSerialize::json_serialize(&self.manifest_bytes, out);
         out.push('}');
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -131,7 +117,6 @@ impl FastJsonWrite for ProposeRuntimeUpgrade {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for ActivateRuntimeUpgrade {
     fn write_json(&self, out: &mut String) {
@@ -140,7 +125,6 @@ impl FastJsonWrite for ActivateRuntimeUpgrade {
         JsonSerialize::json_serialize(&self.id, out);
         out.push('}');
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -153,7 +137,6 @@ impl FastJsonWrite for ActivateRuntimeUpgrade {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for CancelRuntimeUpgrade {
     fn write_json(&self, out: &mut String) {
@@ -162,7 +145,6 @@ impl FastJsonWrite for CancelRuntimeUpgrade {
         JsonSerialize::json_serialize(&self.id, out);
         out.push('}');
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -175,13 +157,10 @@ impl FastJsonWrite for CancelRuntimeUpgrade {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use norito::core::DecodeFromSlice;
-
     use super::*;
-
     #[cfg(feature = "json")]
     fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
@@ -194,7 +173,6 @@ mod tests {
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn runtime_upgrade_json_families_have_exact_checked_bounds() {
@@ -205,7 +183,6 @@ mod tests {
         assert_exact_json(&ActivateRuntimeUpgrade { id });
         assert_exact_json(&CancelRuntimeUpgrade { id });
     }
-
     #[test]
     fn encode_decode_runtime_upgrade_isis() {
         let pid = RuntimeUpgradeId([0xAA; 32]);
@@ -224,7 +201,6 @@ mod tests {
         assert_eq!(act, r2);
         assert_eq!(can, r3);
     }
-
     #[test]
     fn runtime_upgrade_isi_decode_from_slice_roundtrips() {
         let pid = RuntimeUpgradeId([0xBB; 32]);
@@ -233,26 +209,22 @@ mod tests {
         };
         let activate = ActivateRuntimeUpgrade { id: pid };
         let cancel = CancelRuntimeUpgrade { id: pid };
-
         let propose_bytes = propose.encode();
         let (decoded, used) =
             ProposeRuntimeUpgrade::decode_from_slice(&propose_bytes).expect("decode propose");
         assert_eq!(used, propose_bytes.len());
         assert_eq!(decoded, propose);
-
         let activate_bytes = activate.encode();
         let (decoded, used) =
             ActivateRuntimeUpgrade::decode_from_slice(&activate_bytes).expect("decode activate");
         assert_eq!(used, activate_bytes.len());
         assert_eq!(decoded, activate);
-
         let cancel_bytes = cancel.encode();
         let (decoded, used) =
             CancelRuntimeUpgrade::decode_from_slice(&cancel_bytes).expect("decode cancel");
         assert_eq!(used, cancel_bytes.len());
         assert_eq!(decoded, cancel);
     }
-
     #[test]
     fn runtime_upgrade_registry_decodes_stable_ids() {
         let pid = RuntimeUpgradeId([0xCC; 32]);
@@ -260,7 +232,6 @@ mod tests {
             .register_with_id_slice::<ProposeRuntimeUpgrade>(ProposeRuntimeUpgrade::WIRE_ID)
             .register_with_id_slice::<ActivateRuntimeUpgrade>(ActivateRuntimeUpgrade::WIRE_ID)
             .register_with_id_slice::<CancelRuntimeUpgrade>(CancelRuntimeUpgrade::WIRE_ID);
-
         let propose = ProposeRuntimeUpgrade {
             manifest_bytes: vec![5, 6, 7, 8],
         };
@@ -276,7 +247,6 @@ mod tests {
         .expect("registered propose")
         .expect("decode propose");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
-
         let activate = ActivateRuntimeUpgrade { id: pid };
         let (payload, flags) = norito::codec::encode_with_header_flags(&activate);
         let framed =
@@ -290,7 +260,6 @@ mod tests {
         .expect("registered activate")
         .expect("decode activate");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
-
         let cancel = CancelRuntimeUpgrade { id: pid };
         let (payload, flags) = norito::codec::encode_with_header_flags(&cancel);
         let framed =

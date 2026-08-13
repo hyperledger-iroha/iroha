@@ -9,7 +9,6 @@ pub enum ToriiMcpProfile {
     /// Operator profile (includes operator-only routes when exposed).
     Operator,
 }
-
 impl ToriiMcpProfile {
     /// Parse a user-provided profile label.
     pub fn parse(label: &str) -> Option<Self> {
@@ -20,7 +19,6 @@ impl ToriiMcpProfile {
             _ => None,
         }
     }
-
     /// Canonical label for configuration dumps.
     #[must_use]
     pub fn label(self) -> &'static str {

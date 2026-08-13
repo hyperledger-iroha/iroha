@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests_queue_metadata {
     use super::*;
-
     #[test]
     fn queue_errors_map_to_reason_codes() {
         let cases = [
@@ -38,7 +37,6 @@ mod tests_queue_metadata {
                 "transaction already present in the queue",
             ),
         ];
-
         for (error, expected_code, expected_detail) in cases {
             // array copy, pattern moves
             let (code, detail) = queue_rejection_metadata(&error);
@@ -46,7 +44,6 @@ mod tests_queue_metadata {
             assert_eq!(detail, expected_detail);
         }
     }
-
     #[test]
     fn queue_plan_journal_outcome_unknown_has_stable_code_and_exact_hash() {
         let transaction_hash =
@@ -55,7 +52,6 @@ mod tests_queue_metadata {
             transaction_hash,
             reason: "cleanup sync failed".to_owned(),
         };
-
         assert_eq!(
             super::Error::queue_error_summary(&error),
             (

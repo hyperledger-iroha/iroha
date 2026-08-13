@@ -12,7 +12,6 @@ impl ValidSingularQuery for FindMusubiExactPackageV1 {
             .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
     }
 }
-
 impl ValidSingularQuery for FindMusubiExactReleaseV1 {
     fn execute(
         &self,
@@ -52,7 +51,6 @@ impl ValidSingularQuery for FindMusubiExactReleaseV1 {
         Ok(response)
     }
 }
-
 impl ValidSingularQuery for FindMusubiProviderBundleAttestationV1 {
     fn execute(
         &self,
@@ -77,7 +75,6 @@ impl ValidSingularQuery for FindMusubiProviderBundleAttestationV1 {
         crate::smartcontracts::isi::query::own_singular_query_value(record)
     }
 }
-
 struct MusubiResolverIndexPageSource<'a> {
     query: &'a MusubiResolverIndexQueryV1,
     network_id: iroha_data_model::id::NetworkId,
@@ -85,12 +82,10 @@ struct MusubiResolverIndexPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl norito::core::NoritoSerialize for MusubiResolverIndexPageSource<'_> {
     fn schema_hash() -> [u8; 16] {
         <MusubiResolverIndexPageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiResolverIndexPageV1,
@@ -104,7 +99,6 @@ impl norito::core::NoritoSerialize for MusubiResolverIndexPageSource<'_> {
         ]);
         norito::core::NoritoSerialize::serialize(&borrowed, writer)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiResolverIndexPageV1,
@@ -119,19 +113,16 @@ impl norito::core::NoritoSerialize for MusubiResolverIndexPageSource<'_> {
         norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
     }
 }
-
 struct MusubiVersionPageSource<'a> {
     query: &'a MusubiPackagePageQueryV1,
     items: Vec<MusubiVersionV1>,
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl norito::core::NoritoSerialize for MusubiVersionPageSource<'_> {
     fn schema_hash() -> [u8; 16] {
         <MusubiVersionPageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiVersionPageV1,
@@ -139,7 +130,6 @@ impl norito::core::NoritoSerialize for MusubiVersionPageSource<'_> {
         >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
         norito::core::NoritoSerialize::serialize(&borrowed, writer)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiVersionPageV1,
@@ -148,19 +138,16 @@ impl norito::core::NoritoSerialize for MusubiVersionPageSource<'_> {
         norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
     }
 }
-
 struct MusubiMaintainerPageSource<'a> {
     query: &'a MusubiPackagePageQueryV1,
     items: Vec<MusubiMaintainerDirectoryEntryV1>,
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl norito::core::NoritoSerialize for MusubiMaintainerPageSource<'_> {
     fn schema_hash() -> [u8; 16] {
         <MusubiMaintainerPageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiMaintainerPageV1,
@@ -168,7 +155,6 @@ impl norito::core::NoritoSerialize for MusubiMaintainerPageSource<'_> {
         >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
         norito::core::NoritoSerialize::serialize(&borrowed, writer)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiMaintainerPageV1,
@@ -177,7 +163,6 @@ impl norito::core::NoritoSerialize for MusubiMaintainerPageSource<'_> {
         norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
     }
 }
-
 struct MusubiArchiveLocationPageSource<'a> {
     network_id: iroha_data_model::id::NetworkId,
     archive: &'a MusubiArchiveRecordV1,
@@ -185,12 +170,10 @@ struct MusubiArchiveLocationPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl norito::core::NoritoSerialize for MusubiArchiveLocationPageSource<'_> {
     fn schema_hash() -> [u8; 16] {
         <MusubiArchiveLocationPageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiArchiveLocationPageV1,
@@ -204,7 +187,6 @@ impl norito::core::NoritoSerialize for MusubiArchiveLocationPageSource<'_> {
         ]);
         norito::core::NoritoSerialize::serialize(&borrowed, writer)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiArchiveLocationPageV1,
@@ -219,19 +201,16 @@ impl norito::core::NoritoSerialize for MusubiArchiveLocationPageSource<'_> {
         norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
     }
 }
-
 struct MusubiAliasHistoryPageSource<'a> {
     query: &'a MusubiAliasQueryV1,
     items: Vec<MusubiAliasHistoryEntryV1>,
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl norito::core::NoritoSerialize for MusubiAliasHistoryPageSource<'_> {
     fn schema_hash() -> [u8; 16] {
         <MusubiAliasHistoryPageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiAliasHistoryPageV1,
@@ -239,7 +218,6 @@ impl norito::core::NoritoSerialize for MusubiAliasHistoryPageSource<'_> {
         >::new([self.query, &self.items, &self.next_cursor, &self.snapshot]);
         norito::core::NoritoSerialize::serialize(&borrowed, writer)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiAliasHistoryPageV1,
@@ -248,7 +226,6 @@ impl norito::core::NoritoSerialize for MusubiAliasHistoryPageSource<'_> {
         norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
     }
 }
-
 struct MusubiOrderedPackagePageSource<'a> {
     query: &'a MusubiOrderedPrefixQueryV1,
     network_id: iroha_data_model::id::NetworkId,
@@ -257,12 +234,10 @@ struct MusubiOrderedPackagePageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl norito::core::NoritoSerialize for MusubiOrderedPackagePageSource<'_> {
     fn schema_hash() -> [u8; 16] {
         <MusubiOrderedPackagePageV1 as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiOrderedPackagePageV1,
@@ -277,7 +252,6 @@ impl norito::core::NoritoSerialize for MusubiOrderedPackagePageSource<'_> {
         ]);
         norito::core::NoritoSerialize::serialize(&borrowed, writer)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let borrowed = crate::smartcontracts::isi::query::BorrowedSingularStruct::<
             MusubiOrderedPackagePageV1,
@@ -293,7 +267,6 @@ impl norito::core::NoritoSerialize for MusubiOrderedPackagePageSource<'_> {
         norito::core::NoritoSerialize::encoded_len_exact(&borrowed)
     }
 }
-
 /// Internal typed Musubi query failure retained through the Torii telemetry boundary.
 ///
 /// The public query error remains [`QueryExecutionFail`]. This wrapper carries
@@ -304,7 +277,6 @@ pub struct MusubiQueryExecutionErrorV1 {
     query_error: QueryExecutionFail,
     cursor_failure: Option<MusubiCursorFailureV1>,
 }
-
 impl MusubiQueryExecutionErrorV1 {
     fn cursor(reason: MusubiCursorFailureV1) -> Self {
         Self {
@@ -312,20 +284,17 @@ impl MusubiQueryExecutionErrorV1 {
             cursor_failure: Some(reason),
         }
     }
-
     /// Return the exact typed cursor failure, when this is a cursor error.
     #[must_use]
     pub const fn cursor_failure(&self) -> Option<MusubiCursorFailureV1> {
         self.cursor_failure
     }
-
     /// Drop the process-local telemetry detail and recover the stable public query error.
     #[must_use]
     pub fn into_query_error(self) -> QueryExecutionFail {
         self.query_error
     }
 }
-
 impl From<QueryExecutionFail> for MusubiQueryExecutionErrorV1 {
     fn from(query_error: QueryExecutionFail) -> Self {
         Self {
@@ -334,7 +303,6 @@ impl From<QueryExecutionFail> for MusubiQueryExecutionErrorV1 {
         }
     }
 }
-
 /// Execute a paged Musubi query while retaining its exact cursor-failure reason.
 ///
 /// Ordinary Core callers continue to use [`ValidSingularQuery`]. Torii uses
@@ -347,7 +315,6 @@ pub trait ValidMusubiSingularQuery: iroha_data_model::query::SingularQuery {
         state_ro: &impl StateReadOnly,
     ) -> Result<Self::Output, MusubiQueryExecutionErrorV1>;
 }
-
 macro_rules! impl_valid_singular_query_via_musubi {
     ($query:ty, $output:ty) => {
         impl ValidSingularQuery for $query {
@@ -361,7 +328,6 @@ macro_rules! impl_valid_singular_query_via_musubi {
         }
     };
 }
-
 impl ValidMusubiSingularQuery for FindMusubiResolverIndexV1 {
     fn execute_musubi(
         &self,
@@ -425,7 +391,6 @@ impl ValidMusubiSingularQuery for FindMusubiResolverIndexV1 {
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiResolverIndexV1, MusubiResolverIndexPageV1);
-
 impl ValidMusubiSingularQuery for FindMusubiVersionsV1 {
     fn execute_musubi(
         &self,
@@ -471,7 +436,6 @@ impl ValidMusubiSingularQuery for FindMusubiVersionsV1 {
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiVersionsV1, MusubiVersionPageV1);
-
 impl ValidMusubiSingularQuery for FindMusubiMaintainersV1 {
     fn execute_musubi(
         &self,
@@ -525,7 +489,6 @@ impl ValidMusubiSingularQuery for FindMusubiMaintainersV1 {
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiMaintainersV1, MusubiMaintainerPageV1);
-
 impl ValidMusubiSingularQuery for FindMusubiArchiveLocationsV1 {
     fn execute_musubi(
         &self,
@@ -592,7 +555,6 @@ impl ValidMusubiSingularQuery for FindMusubiArchiveLocationsV1 {
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiArchiveLocationsV1, MusubiArchiveLocationPageV1);
-
 impl ValidSingularQuery for FindMusubiArchiveRetentionV1 {
     fn execute(
         &self,
@@ -631,7 +593,6 @@ impl ValidSingularQuery for FindMusubiArchiveRetentionV1 {
         Ok(page)
     }
 }
-
 fn archive_retention_decision(
     archive_id: ArchiveId,
     world: &impl WorldReadOnly,
@@ -682,7 +643,6 @@ fn archive_retention_decision(
             "Musubi archive retention storage identity is inconsistent".to_owned(),
         ));
     }
-
     let mut active_releases = 0_u16;
     let mut yanked_releases = 0_u16;
     let mut taken_down_releases = 0_u16;
@@ -755,7 +715,6 @@ fn archive_retention_decision(
     decision.validate().map_err(query_invalid)?;
     Ok(decision)
 }
-
 impl ValidSingularQuery for FindMusubiAliasV1 {
     fn execute(
         &self,
@@ -770,7 +729,6 @@ impl ValidSingularQuery for FindMusubiAliasV1 {
             .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
     }
 }
-
 impl ValidMusubiSingularQuery for FindMusubiAliasHistoryV1 {
     fn execute_musubi(
         &self,
@@ -816,7 +774,6 @@ impl ValidMusubiSingularQuery for FindMusubiAliasHistoryV1 {
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiAliasHistoryV1, MusubiAliasHistoryPageV1);
-
 impl ValidMusubiSingularQuery for FindMusubiOrderedPrefixV1 {
     fn execute_musubi(
         &self,
@@ -877,7 +834,6 @@ impl ValidMusubiSingularQuery for FindMusubiOrderedPrefixV1 {
     }
 }
 impl_valid_singular_query_via_musubi!(FindMusubiOrderedPrefixV1, MusubiOrderedPackagePageV1);
-
 fn query_snapshot(
     state_ro: &impl StateReadOnly,
 ) -> Result<MusubiRegistrySnapshotV1, QueryExecutionFail> {
@@ -901,14 +857,12 @@ fn query_snapshot(
     snapshot.validate().map_err(query_invalid)?;
     Ok(snapshot)
 }
-
 fn canonical_page_request(page: &MusubiPageRequestV1) -> MusubiPageRequestV1 {
     MusubiPageRequestV1 {
         limit: page.limit,
         cursor: None,
     }
 }
-
 fn resolver_query_hash(
     request: &MusubiResolverIndexQueryV1,
 ) -> Result<MusubiQueryHashV1, QueryExecutionFail> {
@@ -919,7 +873,6 @@ fn resolver_query_hash(
     >::new([&request.package, &request.requirement, &page]);
     query_hash_value(b"resolver-index", &canonical)
 }
-
 fn package_page_query_hash(
     kind: &[u8],
     request: &MusubiPackagePageQueryV1,
@@ -931,7 +884,6 @@ fn package_page_query_hash(
     >::new([&request.package, &page]);
     query_hash_value(kind, &canonical)
 }
-
 fn archive_location_query_hash(
     request: &MusubiArchiveLocationQueryV1,
 ) -> Result<MusubiQueryHashV1, QueryExecutionFail> {
@@ -942,7 +894,6 @@ fn archive_location_query_hash(
     >::new([&request.archive_id, &page]);
     query_hash_value(b"archive-locations", &canonical)
 }
-
 fn alias_history_query_hash(
     request: &MusubiAliasQueryV1,
 ) -> Result<MusubiQueryHashV1, QueryExecutionFail> {
@@ -953,7 +904,6 @@ fn alias_history_query_hash(
     >::new([&request.alias, &page]);
     query_hash_value(b"alias-history", &canonical)
 }
-
 fn alias_history_page_start(
     request: &MusubiAliasQueryV1,
 ) -> Result<MusubiAliasHistoryKeyV1, MusubiQueryExecutionErrorV1> {
@@ -977,7 +927,6 @@ fn alias_history_page_start(
         revision,
     ))
 }
-
 fn ordered_prefix_query_hash(
     request: &MusubiOrderedPrefixQueryV1,
 ) -> Result<MusubiQueryHashV1, QueryExecutionFail> {
@@ -988,7 +937,6 @@ fn ordered_prefix_query_hash(
     >::new([&request.prefix, &page]);
     query_hash_value(b"ordered-prefix", &canonical)
 }
-
 fn directory_query_start(
     request: &MusubiOrderedPrefixQueryV1,
 ) -> Result<(MusubiPackageSelectorV1, MusubiNamespaceV1, String), MusubiQueryExecutionErrorV1> {
@@ -1048,7 +996,6 @@ fn directory_query_start(
     };
     Ok((start, namespace, name_prefix.to_owned()))
 }
-
 #[cfg(test)]
 fn query_hash(domain: &[u8], encoded: &[u8]) -> MusubiQueryHashV1 {
     let domain_len = u64::try_from(domain.len())
@@ -1061,7 +1008,6 @@ fn query_hash(domain: &[u8], encoded: &[u8]) -> MusubiQueryHashV1 {
         *Hash::new_from_chunks(&[&domain_len, domain, &encoded_len, encoded]).as_ref(),
     )
 }
-
 fn query_hash_value<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     value: &T,
@@ -1102,7 +1048,6 @@ fn query_hash_value<T: norito::core::NoritoSerialize>(
     })?;
     Ok(MusubiQueryHashV1::new(*hash.as_ref()))
 }
-
 #[cfg(test)]
 fn paginate<T>(
     rows: impl IntoIterator<Item = (String, T)>,
@@ -1116,7 +1061,6 @@ where
 {
     paginate_fallible(rows.into_iter().map(Ok), page, query_hash, snapshot)
 }
-
 fn paginate_fallible<T>(
     rows: impl IntoIterator<Item = Result<(String, T), QueryExecutionFail>>,
     page: &MusubiPageRequestV1,
@@ -1129,7 +1073,6 @@ where
 {
     paginate_for_caller_with_json_items_budget(rows, page, query_hash, snapshot, None, None)
 }
-
 #[cfg(test)]
 fn test_json_len_bounded<T: norito::json::JsonSerialize + ?Sized>(
     value: &T,
@@ -1137,7 +1080,6 @@ fn test_json_len_bounded<T: norito::json::JsonSerialize + ?Sized>(
 ) -> Result<usize, norito::json::BoundedJsonError> {
     norito::json::to_json_bounded(value, maximum).map(|encoded| encoded.len())
 }
-
 #[cfg(test)]
 fn paginate_with_json_items_budget<T>(
     rows: impl IntoIterator<Item = (String, T)>,
@@ -1159,7 +1101,6 @@ where
         Some((json_items_budget, test_json_len_bounded::<T>)),
     )
 }
-
 fn paginate_fallible_with_json_items_budget<T>(
     rows: impl IntoIterator<Item = Result<(String, T), QueryExecutionFail>>,
     page: &MusubiPageRequestV1,
@@ -1181,7 +1122,6 @@ where
         Some((json_items_budget, json_item_len)),
     )
 }
-
 #[cfg(test)]
 fn paginate_for_caller<T>(
     rows: impl IntoIterator<Item = (String, T)>,
@@ -1203,7 +1143,6 @@ where
         None,
     )
 }
-
 fn paginate_for_caller_with_json_items_budget<T>(
     rows: impl IntoIterator<Item = Result<(String, T), QueryExecutionFail>>,
     page: &MusubiPageRequestV1,
@@ -1328,7 +1267,6 @@ where
     };
     Ok((items.into_vec()?, next_cursor))
 }
-
 fn query_invalid(error: iroha_data_model::ParseError) -> QueryExecutionFail {
     QueryExecutionFail::Conversion(error.to_string())
 }

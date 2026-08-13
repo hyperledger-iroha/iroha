@@ -5,7 +5,6 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
         namespace.validate().expect("derived namespace");
         assert_eq!(namespace.protocol_id(), statement.protocol_id());
     }
-
     let incompatible = PrivacyNamespaceV1::new(
         PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
         PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
@@ -26,7 +25,6 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
         zero.validate(),
         Err(PrivacyNamespaceValidationError::ZeroComponent { .. })
     ));
-
     let x509_trust_anchor_namespace = PrivacyNamespaceV1::new(
         PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
         PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
@@ -46,7 +44,6 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
     let decoded_json: PrivacyNamespaceV1 =
         norito::json::from_json(&json).expect("decode trust-anchor namespace JSON");
     assert_eq!(decoded_json, x509_trust_anchor_namespace);
-
     let x509_statement = statement_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
     let x509_policy_namespace = PrivacyNamespaceV1::from_statement(&x509_statement);
     assert!(matches!(
@@ -101,7 +98,6 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
             component: PrivacyNamespaceComponentV1::Issuer,
         })
     );
-
     for role in [
         PrivacyRootRoleV1::PgcAccountState,
         PrivacyRootRoleV1::AccountRegistry,
@@ -120,7 +116,6 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
             PrivacyRootManagementV1::GovernanceManaged
         );
     }
-
     let pgc = statement_for(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1);
     let namespace = PrivacyNamespaceV1::from_statement(&pgc);
     let publication = PrivacyRootPublicationV1::new(
@@ -136,7 +131,6 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
         norito::decode_from_bytes(&bytes).expect("decode publication");
     assert_eq!(decoded, publication);
     assert!(!publication.digest().expect("publication digest").is_zero());
-
     let mut invalid = publication;
     invalid.epoch = 0;
     assert!(matches!(
@@ -156,7 +150,6 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
         Err(PrivacyRootPublicationValidationError::IncompatibleRole { .. })
     ));
 }
-
 #[test]
 fn pgc_bootstrap_is_canonical_bounded_and_has_distinct_provenance() {
     let bootstrap = pgc_bootstrap();
@@ -167,7 +160,6 @@ fn pgc_bootstrap_is_canonical_bounded_and_has_distinct_provenance() {
     assert_eq!(decoded, bootstrap);
     let digest = bootstrap.digest().expect("bootstrap digest");
     assert!(!digest.is_zero());
-
     let publication = PrivacyRootPublicationV1::new(
         bootstrap.namespace,
         PrivacyRootRoleV1::PgcAccountState,
@@ -180,7 +172,6 @@ fn pgc_bootstrap_is_canonical_bounded_and_has_distinct_provenance() {
         publication.digest().expect("publication digest").as_bytes(),
         "bootstrap and root-publication provenance domains must differ"
     );
-
     let mut invalid = bootstrap.clone();
     invalid.initial_root = PrivacyRootV1::new([0; 32]);
     assert!(invalid.validate().is_err());
@@ -235,7 +226,6 @@ fn pgc_bootstrap_is_canonical_bounded_and_has_distinct_provenance() {
         })
     ));
 }
-
 #[test]
 fn orchard_pool_bootstrap_has_one_node_derived_origin_and_distinct_provenance() {
     let bootstrap = PrivacyOrchardPoolBootstrapV1::new(
@@ -254,7 +244,6 @@ fn orchard_pool_bootstrap_has_one_node_derived_origin_and_distinct_provenance() 
     let decoded: PrivacyOrchardPoolBootstrapV1 =
         norito::decode_from_bytes(&encoded).expect("decode Orchard bootstrap");
     assert_eq!(decoded, bootstrap);
-
     let digest = bootstrap.digest().expect("digest Orchard bootstrap");
     assert!(!digest.is_zero());
     let mut changed_asset = bootstrap.clone();
@@ -293,7 +282,6 @@ fn orchard_pool_bootstrap_has_one_node_derived_origin_and_distinct_provenance() 
         Err(PrivacyOrchardPoolBootstrapValidationErrorV1::UniversalPublicBalanceScope)
     );
 }
-
 #[test]
 fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
     let variants = [
@@ -348,7 +336,6 @@ fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
             .is_err()
         );
     }
-
     let mut invalid =
         PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
             pool_id: PrivacyPoolIdV1::new(raw(218)),
@@ -406,7 +393,6 @@ fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
             }
         ) if count == PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1 + 1
     ));
-
     let invalid_program = PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
         PrivacyIvmPrivateNotePoolBootstrapV1 {
             pool_id: PrivacyPoolIdV1::new(raw(219)),
@@ -421,7 +407,6 @@ fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
         invalid_program.validate(),
         Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroProgramId)
     );
-
     let universal_scope = PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
         PrivacyIvmPrivateNotePoolBootstrapV1 {
             pool_id: PrivacyPoolIdV1::new(raw(219)),
@@ -439,7 +424,6 @@ fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
         Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::UniversalPublicBalanceScope)
     );
 }
-
 #[test]
 fn fcmp_output_and_typed_root_domains_match_known_answers() {
     let output = PrivacyFcmpOutputTupleV1 {
@@ -469,7 +453,6 @@ fn fcmp_output_and_typed_root_domains_match_known_answers() {
         "layer parity is part of the shared root-history commitment"
     );
 }
-
 #[test]
 fn pgc_bootstrap_proof_bytes_enforce_exact_cap_and_distinct_digest() {
     let max = usize::try_from(TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1)
@@ -478,7 +461,6 @@ fn pgc_bootstrap_proof_bytes_enforce_exact_cap_and_distinct_digest() {
     at_cap.validate().expect("exact byte cap is admitted");
     let digest = at_cap.digest().expect("digest proof at exact cap");
     assert!(!digest.is_zero());
-
     let mut changed = at_cap.clone();
     changed.bytes[max - 1] ^= 1;
     assert_ne!(
@@ -502,7 +484,6 @@ fn pgc_bootstrap_proof_bytes_enforce_exact_cap_and_distinct_digest() {
         }) if bytes == u64::from(TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1) + 1
     ));
 }
-
 #[test]
 fn every_caller_declared_root_transition_requires_a_distinct_exact_successor() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -526,12 +507,10 @@ fn every_caller_declared_root_transition_requires_a_distinct_exact_successor() {
         }
     }
 }
-
 #[test]
 fn pgc_public_memo_rejects_noncanonical_sizes_order_and_ciphertexts() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let base = statement_for(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1);
-
     let mutate = |f: fn(&mut AnonymousPgcKOutOfNStatementV1)| {
         let mut value = base.clone();
         let PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement) = &mut value else {
@@ -540,7 +519,6 @@ fn pgc_public_memo_rejects_noncanonical_sizes_order_and_ciphertexts() {
         f(statement);
         value.validate(&limits)
     };
-
     assert!(matches!(
         mutate(|statement| {
             statement.anonymity_set_public_keys.pop();
@@ -598,7 +576,6 @@ fn pgc_public_memo_rejects_noncanonical_sizes_order_and_ciphertexts() {
             ..
         })
     ));
-
     let mut thirty_two = base;
     let PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement) = &mut thirty_two else {
         unreachable!()
@@ -620,7 +597,6 @@ fn pgc_public_memo_rejects_noncanonical_sizes_order_and_ciphertexts() {
         })
     ));
 }
-
 #[test]
 fn verange_uses_only_closed_unsigned_ranges_and_effective_taira_cap() {
     assert_eq!(
@@ -629,7 +605,6 @@ fn verange_uses_only_closed_unsigned_ranges_and_effective_taira_cap() {
     );
     assert_eq!(PrivacyVeRangeBitLengthV1::Bits32.bits(), 32);
     assert_eq!(PrivacyVeRangeBitLengthV1::Bits64.bits(), 64);
-
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let base = statement_for(PrivacyProtocolIdV1::VeRangeTransparentRangeV1);
     let mutate = |f: fn(&mut VeRangeTransparentRangeStatementV1)| {
@@ -640,7 +615,6 @@ fn verange_uses_only_closed_unsigned_ranges_and_effective_taira_cap() {
         f(statement);
         value.validate(&limits)
     };
-
     assert!(matches!(
         mutate(|statement| {
             statement.value_commitments.clear();
@@ -682,7 +656,6 @@ fn verange_uses_only_closed_unsigned_ranges_and_effective_taira_cap() {
         )
     ));
 }
-
 #[test]
 fn protocol_activation_profiles_reject_zero_and_over_ceiling_values() {
     for protocol in PrivacyProtocolIdV1::ALL {
@@ -730,7 +703,6 @@ fn protocol_activation_profiles_reject_zero_and_over_ceiling_values() {
         assert!(value.validate().is_err(), "invalid activation: {value:?}");
     }
 }
-
 #[test]
 fn zk_ams_batch_rejects_malformed_or_duplicate_anchors() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -771,7 +743,6 @@ fn zk_ams_batch_rejects_malformed_or_duplicate_anchors() {
         Err(PrivacyStatementValidationError::DuplicateZkAmsSeedPublicKey)
     ));
 }
-
 #[test]
 fn zk_ams_provisioning_enforces_closed_canonical_ring_and_key_image() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -780,7 +751,6 @@ fn zk_ams_provisioning_enforces_closed_canonical_ring_and_key_image() {
             .validate(&limits)
             .expect("closed ZK-AMS ring size");
     }
-
     let mutate = |f: fn(&mut PrivacyZkAmsProvisionAccountV1)| {
         let mut value = zk_ams_provision_statement(16);
         let PrivacyStatementV1::IrohaZkAmsV1(statement) = &mut value else {
@@ -818,7 +788,6 @@ fn zk_ams_provisioning_enforces_closed_canonical_ring_and_key_image() {
         mutate(|provision| provision.key_image = PrivacyZkAmsKeyImageV1::new([0; 32])),
         Err(PrivacyStatementValidationError::ZeroZkAmsKeyImage)
     ));
-
     let governed = PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
         max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
         max_ring_size: 16,
@@ -832,7 +801,6 @@ fn zk_ams_provisioning_enforces_closed_canonical_ring_and_key_image() {
         })
     ));
 }
-
 fn mutate_jindo_statement(
     base: &PrivacyStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -845,7 +813,6 @@ fn mutate_jindo_statement(
     mutate(statement);
     value.validate(limits)
 }
-
 fn assert_jindo_field_and_batch_validation(
     base: &PrivacyStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -855,14 +822,12 @@ fn assert_jindo_field_and_batch_validation(
         statement.claimed_evaluations[0] = PrivacyJindoFieldElementV1::new([0; 32]);
     })
     .expect("zero is a canonical Jindo field element");
-
     mutate_jindo_statement(base, limits, |statement| {
         let mut value = IROHA_JINDO_FIELD_MODULUS_LE_V1;
         value[0] -= 1;
         statement.evaluation_point = PrivacyJindoFieldElementV1::new(value);
     })
     .expect("p - 1 is the largest canonical Jindo field element");
-
     assert!(matches!(
         mutate_jindo_statement(base, limits, |statement| {
             statement.evaluation_point =
@@ -884,7 +849,6 @@ fn assert_jindo_field_and_batch_validation(
         }),
         Err(PrivacyStatementValidationError::NonCanonicalJindoEvaluationPoint)
     ));
-
     assert!(matches!(
         mutate_jindo_statement(base, limits, |statement| {
             statement.claimed_evaluations.pop();
@@ -909,7 +873,6 @@ fn assert_jindo_field_and_batch_validation(
         ));
     }
 }
-
 fn assert_jindo_commitment_encoding_validation(
     base: &PrivacyStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -953,7 +916,6 @@ fn assert_jindo_commitment_encoding_validation(
         Err(PrivacyStatementValidationError::DuplicateJindoLatticeCommitment)
     ));
 }
-
 fn assert_jindo_coefficient_boundaries(
     base: &PrivacyStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -971,7 +933,6 @@ fn assert_jindo_coefficient_boundaries(
             .validate(limits)
             .expect("inclusive Jindo rounded-coefficient boundary");
     }
-
     for outside in [
         i64::from(IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1) + 1,
         i64::from(IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1) - 1,
@@ -999,7 +960,6 @@ fn assert_jindo_coefficient_boundaries(
         ));
     }
 }
-
 #[test]
 fn jindo_univariate_profile_rejects_noncanonical_and_out_of_bound_values() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -1021,7 +981,6 @@ fn jindo_univariate_profile_rejects_noncanonical_and_out_of_bound_values() {
         })
     ));
 }
-
 #[test]
 fn vega_figure9_public_inputs_are_closed_and_non_degenerate() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -1099,7 +1058,6 @@ fn vega_figure9_public_inputs_are_closed_and_non_degenerate() {
         })
     );
 }
-
 #[test]
 fn vega_issuer_records_are_self_digested_forward_only_and_policy_closed() {
     let issuer_id = PrivacyIssuerIdV1::new(raw(0x91));
@@ -1117,14 +1075,12 @@ fn vega_issuer_records_are_self_digested_forward_only_and_policy_closed() {
     )
     .expect("canonical Vega issuer origin");
     origin.validate_initial().expect("valid issuer origin");
-
     let mut tampered = origin;
     tampered.issuer_public_key = p256_point(0x93);
     assert_eq!(
         tampered.validate(),
         Err(PrivacyVegaIssuerRecordValidationErrorV1::RecordDigestMismatch)
     );
-
     let rotation = PrivacyVegaIssuerRecordV1::new(
         issuer_id,
         2,
@@ -1139,7 +1095,6 @@ fn vega_issuer_records_are_self_digested_forward_only_and_policy_closed() {
     )
     .expect("canonical issuer rotation");
     validate_vega_issuer_rotation_v1(&origin, &rotation).expect("one-step key rotation is valid");
-
     let no_op = PrivacyVegaIssuerRecordV1::new(
         issuer_id,
         2,
@@ -1157,7 +1112,6 @@ fn vega_issuer_records_are_self_digested_forward_only_and_policy_closed() {
         validate_vega_issuer_rotation_v1(&origin, &no_op),
         Err(PrivacyVegaIssuerTransitionValidationErrorV1::RotationContentsUnchanged)
     );
-
     let wrong_predecessor = PrivacyVegaIssuerRecordV1::new(
         issuer_id,
         2,
@@ -1175,7 +1129,6 @@ fn vega_issuer_records_are_self_digested_forward_only_and_policy_closed() {
         validate_vega_issuer_rotation_v1(&origin, &wrong_predecessor),
         Err(PrivacyVegaIssuerTransitionValidationErrorV1::PredecessorDigestMismatch)
     );
-
     let revocation = PrivacyVegaIssuerRecordV1::new(
         issuer_id,
         3,
@@ -1194,7 +1147,6 @@ fn vega_issuer_records_are_self_digested_forward_only_and_policy_closed() {
         validate_vega_issuer_rotation_v1(&revocation, &rotation),
         Err(PrivacyVegaIssuerTransitionValidationErrorV1::CurrentNotActive)
     );
-
     let encoded = norito::json::to_json(&origin).expect("encode Vega issuer record");
     let unknown_algorithm = encoded.replacen("Sha256", "Sha512", 1);
     assert_ne!(
@@ -1216,7 +1168,6 @@ fn vega_issuer_records_are_self_digested_forward_only_and_policy_closed() {
         "unknown legacy fields must reject"
     );
 }
-
 #[test]
 fn vega_presentation_date_is_strict_proleptic_gregorian() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -1229,7 +1180,6 @@ fn vega_presentation_date_is_strict_proleptic_gregorian() {
         statement.presentation_date = date;
         value.validate(&limits)
     };
-
     for year in [
         VEGA_MDL_MIN_PRESENTATION_YEAR_V1 - 1,
         VEGA_MDL_MAX_PRESENTATION_YEAR_V1 + 1,
@@ -1298,7 +1248,6 @@ fn vega_presentation_date_is_strict_proleptic_gregorian() {
         "the maximum presentation date has a possible later four-digit expiry"
     );
 }
-
 #[test]
 fn vega_release_constants_match_the_one_compiled_figure9_shape() {
     assert_eq!(VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1, 368);
@@ -1312,13 +1261,11 @@ fn vega_release_constants_match_the_one_compiled_figure9_shape() {
     assert_eq!(VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1, 1);
     assert_eq!(VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1, 150);
 }
-
 #[test]
 fn x509_key_usage_requirement_is_wire_and_json_transparent() {
     for required in [false, true] {
         let requirement = PrivacyX509KeyUsageRequirementV1::new(required);
         assert_eq!(Encode::encode(&requirement), Encode::encode(&required));
-
         let json = norito::json::to_json(&requirement).expect("encode key-usage requirement JSON");
         assert_eq!(json, required.to_string());
         let decoded: PrivacyX509KeyUsageRequirementV1 =
@@ -1326,7 +1273,6 @@ fn x509_key_usage_requirement_is_wire_and_json_transparent() {
         assert_eq!(decoded, requirement);
     }
 }
-
 fn validate_mutated_x509(
     base: &PrivacyStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -1339,7 +1285,6 @@ fn validate_mutated_x509(
     mutate(statement);
     value.validate(limits)
 }
-
 fn assert_x509_governance_and_usage_rejections(
     base: &PrivacyStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -1438,7 +1383,6 @@ fn assert_x509_governance_and_usage_rejections(
         Err(PrivacyStatementValidationError::X509ExtendedKeyUsagesNotStrictlyIncreasing)
     ));
 }
-
 fn assert_x509_disclosure_and_presentation_rejections(
     base: &PrivacyStatementV1,
     limits: &PrivacyConsensusLimitsV1,
@@ -1507,7 +1451,6 @@ fn assert_x509_disclosure_and_presentation_rejections(
         ));
     }
 }
-
 #[test]
 fn zk_x509_governance_sha256_frames_match_known_answers() {
     // A small, canonical DER SEQUENCE containing INTEGER 42 and NULL.
@@ -1539,7 +1482,6 @@ fn zk_x509_governance_sha256_frames_match_known_answers() {
         PrivacyX509CrlIssuerSpkiDigestV1::digest_exact_der(&exact_crl_der).as_bytes(),
         "identical bytes under distinct digest domains must not collide"
     );
-
     let record = PrivacyZkX509CrlRecordV1::new(
         PrivacyIssuerIdV1::new([0x11; 32]),
         PrivacyPolicyIdV1::new([0x22; 32]),
@@ -1557,7 +1499,6 @@ fn zk_x509_governance_sha256_frames_match_known_answers() {
         record.record_digest.as_bytes(),
         &hex!("d9cc3938a2fb3b8407f17c9e71ce926c627c144c1bf6c6a89a5fa2b73176c64d")
     );
-
     let trust_anchor = PrivacyZkX509TrustAnchorRecordV1::new(
         PrivacyIssuerIdV1::new([0x11; 32]),
         1,
@@ -1572,7 +1513,6 @@ fn zk_x509_governance_sha256_frames_match_known_answers() {
         trust_anchor.record_digest.as_bytes(),
         &hex!("e4a0cf77fc1f0acefeeb98e62c74f718a2aa44e6471f7d1ee4d8b9022743e429")
     );
-
     let policy = PrivacyZkX509CertificatePolicyRecordV1::new(
         PrivacyIssuerIdV1::new([0x11; 32]),
         PrivacyPolicyIdV1::new([0x22; 32]),
@@ -1598,7 +1538,6 @@ fn zk_x509_governance_sha256_frames_match_known_answers() {
         &hex!("9a1b485c0566abe3130bf29cacb9e2108adb6372174f8578021019a2f58c8ab0")
     );
 }
-
 #[test]
 fn x509_rejects_stale_roots_invalid_usage_and_invalid_presentation_windows() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -1606,7 +1545,6 @@ fn x509_rejects_stale_roots_invalid_usage_and_invalid_presentation_windows() {
     assert_x509_governance_and_usage_rejections(&x509, &limits);
     assert_x509_disclosure_and_presentation_rejections(&x509, &limits);
 }
-
 fn assert_zk_x509_trust_anchor_record_roundtrip(trust_anchor: PrivacyZkX509TrustAnchorRecordV1) {
     trust_anchor
         .validate_initial()
@@ -1638,7 +1576,6 @@ fn assert_zk_x509_trust_anchor_record_roundtrip(trust_anchor: PrivacyZkX509Trust
         .is_err()
     );
 }
-
 fn assert_zk_x509_certificate_policy_record_roundtrip(
     certificate_policy: &PrivacyZkX509CertificatePolicyRecordV1,
 ) {
@@ -1672,7 +1609,6 @@ fn assert_zk_x509_certificate_policy_record_roundtrip(
         .is_err()
     );
 }
-
 fn assert_zk_x509_record_tampering_rejected(
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
     certificate_policy: &PrivacyZkX509CertificatePolicyRecordV1,
@@ -1779,7 +1715,6 @@ fn assert_zk_x509_record_tampering_rejected(
             }
         )
     );
-
     let mut policy_tamperings = Vec::new();
     let mut tampered = certificate_policy.clone();
     tampered.policy_digest = PrivacyPolicyDigestV1::new(raw(84));
@@ -1800,7 +1735,6 @@ fn assert_zk_x509_record_tampering_rejected(
         );
     }
 }
-
 #[test]
 fn zk_x509_governance_records_are_self_digested_strict_and_roundtrip() {
     let trust_anchor = zk_x509_trust_anchor(
@@ -1820,7 +1754,6 @@ fn zk_x509_governance_records_are_self_digested_strict_and_roundtrip() {
     assert_zk_x509_certificate_policy_record_roundtrip(&certificate_policy);
     assert_zk_x509_record_tampering_rejected(trust_anchor, &certificate_policy);
 }
-
 #[test]
 fn zk_x509_signed_crl_records_are_canonical_bound_and_fail_closed() {
     let origin = zk_x509_crl(
@@ -1839,7 +1772,6 @@ fn zk_x509_signed_crl_records_are_canonical_bound_and_fail_closed() {
             .expect("recompute signed-CRL digest"),
         origin.record_digest
     );
-
     let encoded = norito::to_bytes(&origin).expect("encode signed-CRL record");
     let decoded: PrivacyZkX509CrlRecordV1 =
         norito::decode_from_bytes(&encoded).expect("decode signed-CRL record");
@@ -1860,7 +1792,6 @@ fn zk_x509_signed_crl_records_are_canonical_bound_and_fail_closed() {
         ))
         .is_err()
     );
-
     let construct = |trust_anchor_id,
                      certificate_policy_id,
                      record_epoch,
@@ -1937,7 +1868,6 @@ fn zk_x509_signed_crl_records_are_canonical_bound_and_fail_closed() {
         tampered.validate(),
         Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch)
     );
-
     let rotation = zk_x509_crl(
         2,
         102,
@@ -1959,7 +1889,6 @@ fn zk_x509_signed_crl_records_are_canonical_bound_and_fail_closed() {
         .expect("canonical post-rotation CRL revocation digest");
     validate_zk_x509_crl_revocation_v1(&rotation, &rotation_revocation)
         .expect("revocation preserves the most recent complete signed CRL");
-
     let stale_update = zk_x509_crl(
         2,
         102,
@@ -1991,7 +1920,6 @@ fn zk_x509_signed_crl_records_are_canonical_bound_and_fail_closed() {
         validate_zk_x509_crl_rotation_v1(&origin, &same_der),
         Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged)
     );
-
     let mut issuer_substitution = rotation;
     issuer_substitution.issuer_spki_digest = PrivacyX509CrlIssuerSpkiDigestV1::new(raw(104));
     issuer_substitution.record_digest = issuer_substitution
@@ -2001,7 +1929,6 @@ fn zk_x509_signed_crl_records_are_canonical_bound_and_fail_closed() {
         validate_zk_x509_crl_rotation_v1(&origin, &issuer_substitution),
         Err(PrivacyZkX509TransitionValidationErrorV1::CrlIssuerSpkiDigestMismatch)
     );
-
     let mut revoked = zk_x509_crl(
         2,
         100,
@@ -2042,7 +1969,6 @@ fn zk_x509_signed_crl_records_are_canonical_bound_and_fail_closed() {
         Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged)
     );
 }
-
 fn assert_zk_x509_policy_caps_and_ordering() {
     let key_usage = PrivacyX509KeyUsageV1 {
         digital_signature: PrivacyX509KeyUsageRequirementV1::new(true),
@@ -2119,7 +2045,6 @@ fn assert_zk_x509_policy_caps_and_ordering() {
         Err(PrivacyZkX509RecordValidationErrorV1::DisclosedAttributeIndicesNotStrictlyIncreasing)
     ));
 }
-
 fn assert_zk_x509_trust_anchor_transitions() {
     let anchor_origin = zk_x509_trust_anchor(1, 91, None, PrivacyZkX509RecordLifecycleV1::Active);
     let anchor_rotation = zk_x509_trust_anchor(
@@ -2217,7 +2142,6 @@ fn assert_zk_x509_trust_anchor_transitions() {
         Err(PrivacyZkX509TransitionValidationErrorV1::CurrentNotActive)
     );
 }
-
 fn assert_zk_x509_certificate_policy_transitions() {
     let policy_origin = zk_x509_certificate_policy(
         1,

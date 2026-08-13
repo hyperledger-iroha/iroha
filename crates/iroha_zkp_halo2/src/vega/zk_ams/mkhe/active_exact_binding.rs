@@ -63,15 +63,12 @@
 //! opened here.
 
 #![allow(dead_code)]
-
 use core::convert::Infallible;
-
 use crate::vega::{
     MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
     bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
     sponge::{Keccak256, keccak256},
 };
-
 use super::{
     BgvProfile, MKHE_VERSION_V1, PlaintextModulus, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
@@ -85,7 +82,7 @@ use super::{
     manifest::ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
     wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
-
+mod direct_relation_wire_v1;
 const RELEASE_RING_DEGREE_V1: usize = 131_072;
 const MAX_RELATION_WITNESSES_V1: usize = 6;
 const MAX_BOUND_ONE_WITNESSES_V1: usize = 2;
@@ -93,7 +90,6 @@ const MAX_BOUND_TWO_WITNESSES_V1: usize = 4;
 const WITNESS_CHUNK_COEFFICIENTS_V1: usize = 16_384;
 const CHUNKS_PER_WITNESS_V1: usize = RELEASE_RING_DEGREE_V1 / WITNESS_CHUNK_COEFFICIENTS_V1;
 const MAX_CHUNK_COMMITMENTS_V1: usize = MAX_RELATION_WITNESSES_V1 * CHUNKS_PER_WITNESS_V1;
-
 const CHALLENGE_REPETITIONS_V1: usize = 4;
 const CHALLENGE_BITS_PER_REPETITION_V1: usize = 32;
 const JOINT_CHALLENGE_BITS_V1: usize = CHALLENGE_REPETITIONS_V1 * CHALLENGE_BITS_PER_REPETITION_V1;
@@ -106,14 +102,12 @@ const RESPONSE_COEFFICIENT_BOUND_V1: i64 = MASK_COEFFICIENT_BOUND_V1 - CHALLENGE
 const MAX_FORK_INTEGER_LIFT_DIFFERENCE_V1: i64 =
     2 * RESPONSE_COEFFICIENT_BOUND_V1 + CHALLENGE_SHIFT_BOUND_V1;
 const MINIMUM_RELEASE_RNS_MODULUS_V1: u64 = 1_152_921_504_409_190_401;
-
 const WHOLE_ATTEMPT_RESPONSE_COORDINATES_V1: usize =
     CHALLENGE_REPETITIONS_V1 * MAX_RELATION_WITNESSES_V1 * RELEASE_RING_DEGREE_V1;
 const OUTER_RETRY_CEILING_V1: usize = 128;
 const OUTER_RETRY_EXHAUSTION_BITS_V1: usize = 309;
 const INTEGER_SAMPLER_RETRY_CEILING_V1: usize = 128;
 const INTEGER_SAMPLER_UNION_EXHAUSTION_BITS_V1: usize = 8_800;
-
 const SIGNED_RESPONSE_BYTES_V1: usize = 8;
 const T256_SCALAR_BYTES_V1: usize = 32;
 const T256_POINT_BYTES_V1: usize = 33;
@@ -125,7 +119,6 @@ const RESPONSE_PAYLOAD_BYTES_V1: usize = CHALLENGE_REPETITIONS_V1
 const BLIND_RESPONSE_PAYLOAD_BYTES_V1: usize =
     CHALLENGE_REPETITIONS_V1 * MAX_CHUNK_COMMITMENTS_V1 * T256_SCALAR_BYTES_V1;
 const CHUNK_COMMITMENT_PAYLOAD_BYTES_V1: usize = MAX_CHUNK_COMMITMENTS_V1 * T256_POINT_BYTES_V1;
-
 // A generalized-Bulletproof membership proof with one external vector
 // commitment has AI/AO/S (3 points), six committed non-constant t(X)
 // coefficients, two points per IPA round, and tau_x/u/t_hat/a/b (5 scalars).
@@ -161,7 +154,6 @@ const BOUND_TWO_MEMBERSHIP_CORE_BYTES_V1: usize =
 const MAX_MEMBERSHIP_CORE_PAYLOAD_BYTES_V1: usize =
     MAX_BOUND_ONE_WITNESSES_V1 * CHUNKS_PER_WITNESS_V1 * BOUND_ONE_MEMBERSHIP_CORE_BYTES_V1
         + MAX_BOUND_TWO_WITNESSES_V1 * CHUNKS_PER_WITNESS_V1 * BOUND_TWO_MEMBERSHIP_CORE_BYTES_V1;
-
 // Current authenticated active-evidence framing, counted separately from the
 // still-undefined replacement proof framing.
 const CURRENT_ACTIVE_EVIDENCE_HEADER_BYTES_V1: usize = 4 + 1 + 32 + 1 + 4;
@@ -176,7 +168,6 @@ const KNOWN_PAYLOAD_LOWER_BOUND_BYTES_V1: usize = RESPONSE_PAYLOAD_BYTES_V1
     + CURRENT_ACTIVE_AUTHENTICATION_BYTES_V1;
 const KNOWN_PAYLOAD_HEADROOM_BYTES_V1: usize =
     ZK_AMS_MKHE_MAX_PROOF_BYTES_V1 - KNOWN_PAYLOAD_LOWER_BOUND_BYTES_V1;
-
 const PERSISTENT_COMMITMENT_CHUNKS_V1: usize = CHUNKS_PER_WITNESS_V1;
 const PERSISTENT_COMMITMENT_POINT_BYTES_V1: usize =
     PERSISTENT_COMMITMENT_CHUNKS_V1 * T256_POINT_BYTES_V1;
@@ -184,7 +175,6 @@ const PERSISTENT_COMMITMENT_BLINDING_STATE_BYTES_V1: usize =
     PERSISTENT_COMMITMENT_CHUNKS_V1 * T256_SCALAR_BYTES_V1;
 const PERSISTENT_BOUND_ONE_MEMBERSHIP_CORE_BYTES_V1: usize =
     PERSISTENT_COMMITMENT_CHUNKS_V1 * BOUND_ONE_MEMBERSHIP_CORE_BYTES_V1;
-
 const SECRET_CONSUMER_CPK_V1: u8 = 1 << 0;
 const SECRET_CONSUMER_RKG_ONE_V1: u8 = 1 << 1;
 const SECRET_CONSUMER_RKG_TWO_V1: u8 = 1 << 2;
@@ -199,7 +189,6 @@ const EPHEMERAL_CONSUMER_RKG_ONE_V1: u8 = 1 << 0;
 const EPHEMERAL_CONSUMER_RKG_TWO_V1: u8 = 1 << 1;
 const EPHEMERAL_REQUIRED_CONSUMERS_V1: u8 =
     EPHEMERAL_CONSUMER_RKG_ONE_V1 | EPHEMERAL_CONSUMER_RKG_TWO_V1;
-
 // The allocation pattern of the existing generalized-Bulletproof code keeps
 // at least eight l/r vectors, three witness vectors, y, and y^-1 alive at
 // once.  At the unchunked eta=2 dimension this scalar-only lower bound already
@@ -214,7 +203,6 @@ const UNCHUNKED_SCALAR_VECTOR_LOWER_BOUND_BYTES_V1: usize = DIRECT_BP_SIMULTANEO
 const CHUNKED_SCALAR_VECTOR_LOWER_BOUND_BYTES_V1: usize =
     DIRECT_BP_SIMULTANEOUS_SCALAR_VECTORS_V1 * BOUND_TWO_PADDED_GATES_V1 * T256_SCALAR_BYTES_V1;
 const GOVERNED_WORKSPACE_CEILING_BYTES_V1: usize = 160 * 1024 * 1024;
-
 const BLOCKER_T256_MEMBERSHIP_BACKEND_V1: u16 = 1 << 0;
 const BLOCKER_GENERATOR_BASIS_KAT_V1: u16 = 1 << 1;
 const BLOCKER_CANONICAL_WIRE_V1: u16 = 1 << 2;
@@ -231,7 +219,6 @@ const ALL_RELEASE_BLOCKERS_V1: u16 = BLOCKER_T256_MEMBERSHIP_BACKEND_V1
     | BLOCKER_PERSISTENT_GRAPH_RUNTIME_V1
     | BLOCKER_SPLIT_DECRYPTION_WIDE_RELATION_V1
     | BLOCKER_RELEASE_KAT_V1;
-
 const AUDIT_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.active-exact-small-binding.fail-closed-audit";
 const PERSISTENT_IDENTITY_DOMAIN_V1: &[u8] =
@@ -248,7 +235,6 @@ const CHALLENGE_VECTOR_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.active-exact-small-binding.challenge-vector";
 const CHALLENGE_COORDINATE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.active-exact-small-binding.challenge-coordinate";
-
 const _: () = {
     assert!(RELEASE_RING_DEGREE_V1 == 1 << 17);
     assert!(CHUNKS_PER_WITNESS_V1 == 8);
@@ -287,14 +273,12 @@ const _: () = {
     assert!(CHUNKED_SCALAR_VECTOR_LOWER_BOUND_BYTES_V1 == 27_262_976);
     assert!(ALL_RELEASE_BLOCKERS_V1 == 0xff);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum PersistentWitnessRoleV1 {
     SecretEpoch = 1,
     RkgEphemeral = 2,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PersistentCommitmentIdentityV1 {
     profile_digest: [u8; 32],
@@ -309,7 +293,6 @@ struct PersistentCommitmentIdentityV1 {
     consumer_mask: u8,
     identity_digest: [u8; 32],
 }
-
 impl PersistentCommitmentIdentityV1 {
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -341,7 +324,6 @@ impl PersistentCommitmentIdentityV1 {
         identity.identity_digest = persistent_identity_digest(identity);
         Ok(identity)
     }
-
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         self.validate_fields()?;
         if self.identity_digest == [0; 32]
@@ -351,7 +333,6 @@ impl PersistentCommitmentIdentityV1 {
         }
         Ok(())
     }
-
     fn validate_fields(self) -> Result<(), ZkAmsMkheErrorV1> {
         let expected_consumers = match self.role {
             PersistentWitnessRoleV1::SecretEpoch => SECRET_REQUIRED_CONSUMERS_V1,
@@ -372,7 +353,6 @@ impl PersistentCommitmentIdentityV1 {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PersistentCommitmentGraphV1 {
     secret_identity: [u8; 32],
@@ -385,7 +365,6 @@ struct PersistentCommitmentGraphV1 {
     rkg_one_ephemeral: [u8; 32],
     rkg_two_ephemeral: [u8; 32],
 }
-
 impl PersistentCommitmentGraphV1 {
     fn new(
         secret: PersistentCommitmentIdentityV1,
@@ -415,7 +394,6 @@ impl PersistentCommitmentGraphV1 {
             rkg_two_ephemeral: ephemeral.identity_digest,
         })
     }
-
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         if self.secret_identity == [0; 32]
             || self.ephemeral_identity == [0; 32]
@@ -436,7 +414,6 @@ impl PersistentCommitmentGraphV1 {
         }
         Ok(())
     }
-
     fn digest(self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.validate()?;
         let mut frame = Vec::with_capacity(32 * 9 + 64);
@@ -457,7 +434,6 @@ impl PersistentCommitmentGraphV1 {
         Ok(keccak256(&frame))
     }
 }
-
 /// Protocol consumer which must reuse an already verified persistent witness.
 ///
 /// This is crate-private because callers outside the native MKHE proof stack
@@ -474,7 +450,6 @@ pub(super) enum PersistentWitnessConsumerV1 {
     Galois = 5,
     Decryption = 6,
 }
-
 /// RKG round which consumes the separate persistent ephemeral witness `u_i`.
 ///
 /// This is intentionally a distinct enum from the secret consumer mask: the
@@ -485,7 +460,6 @@ pub(super) enum PersistentRkgEphemeralConsumerV1 {
     RoundOne = 1,
     RoundTwo = 2,
 }
-
 impl PersistentRkgEphemeralConsumerV1 {
     const fn mask(self) -> u8 {
         match self {
@@ -494,7 +468,6 @@ impl PersistentRkgEphemeralConsumerV1 {
         }
     }
 }
-
 impl PersistentWitnessConsumerV1 {
     const fn mask(self) -> u8 {
         match self {
@@ -506,7 +479,6 @@ impl PersistentWitnessConsumerV1 {
         }
     }
 }
-
 /// Private normalized lineage used by the binding constructor.
 ///
 /// Production code obtains these fields only by consuming the sealed complete
@@ -525,7 +497,6 @@ struct ExactMembershipVerificationReceiptV1 {
     verifier_transcript_digest: [u8; 32],
     source_verification_digest: [u8; 32],
 }
-
 /// Opaque proof-verified capability for one persistent witness commitment.
 ///
 /// There is no decoder and no visible constructor.  Consumers can inspect an
@@ -560,7 +531,6 @@ pub(super) struct VerifiedPersistentWitnessBindingV1 {
     identity_digest: [u8; 32],
     verification_digest: [u8; 32],
 }
-
 impl VerifiedPersistentWitnessBindingV1 {
     /// Split one verified fact into its two purpose-bound ceremony successors.
     ///
@@ -596,7 +566,6 @@ impl VerifiedPersistentWitnessBindingV1 {
         };
         (self, verifier)
     }
-
     #[allow(clippy::too_many_arguments)]
     fn from_verified_membership(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -671,36 +640,30 @@ impl VerifiedPersistentWitnessBindingV1 {
         }
         Ok(binding)
     }
-
     /// Stable source-commitment identity.  This is evidence metadata, never a
     /// substitute for possession of this opaque verified type.
     pub(super) const fn identity_digest(&self) -> [u8; 32] {
         self.identity_digest
     }
-
     /// Canonical commitment-set digest certified by the exact membership
     /// verifier.  Consumers which need group arithmetic use `commitments`, not
     /// a caller-supplied digest.
     pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
         self.commitment_set_digest
     }
-
     /// Direct-ceremony context certified by the role-specific membership
     /// wrapper. Secret-epoch bindings deliberately retain the all-zero value.
     pub(super) const fn source_context_digest(&self) -> [u8; 32] {
         self.source_context_digest
     }
-
     /// Canonical wrapper statement certified by the exact verifier. This is
     /// nonzero only for an RKG-ephemeral binding.
     pub(super) const fn source_statement_digest(&self) -> [u8; 32] {
         self.source_statement_digest
     }
-
     pub(super) const fn commitments(&self) -> &[Point; PERSISTENT_COMMITMENT_CHUNKS_V1] {
         &self.commitments
     }
-
     /// Validate every immutable source axis before one protocol consumes the
     /// capability.  The requested purpose is checked against the sealed mask
     /// but is not folded into the stable identity.
@@ -743,7 +706,6 @@ impl VerifiedPersistentWitnessBindingV1 {
             self.commitment_set_digest,
         )
     }
-
     /// Validate the separate RKG-ephemeral commitment for one exact round.
     pub(super) fn validate_ephemeral_for(
         &self,
@@ -784,7 +746,6 @@ impl VerifiedPersistentWitnessBindingV1 {
         )
     }
 }
-
 /// Exact ordered eight-party set of opaque verified secret bindings.
 ///
 /// Construction accepts capabilities, not digests.  The stored root is stable
@@ -806,7 +767,6 @@ pub(super) struct VerifiedPersistentWitnessBindingSetV1 {
     commitment_sets: [[Point; PERSISTENT_COMMITMENT_CHUNKS_V1]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
     set_root: [u8; 32],
 }
-
 impl VerifiedPersistentWitnessBindingSetV1 {
     pub(super) fn new(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -874,23 +834,18 @@ impl VerifiedPersistentWitnessBindingSetV1 {
         set.validate_for_consumer(roster, PersistentWitnessConsumerV1::CollectivePublicKey)?;
         Ok(set)
     }
-
     pub(super) const fn identity_digests(&self) -> &[[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] {
         &self.identity_digests
     }
-
     pub(super) const fn set_root(&self) -> [u8; 32] {
         self.set_root
     }
-
     pub(super) const fn cpk_transcript_digest(&self) -> [u8; 32] {
         self.cpk_transcript_digest
     }
-
     pub(super) const fn collective_public_key_digest(&self) -> [u8; 32] {
         self.collective_public_key_digest
     }
-
     pub(super) fn aggregate_commitments(&self) -> [Point; PERSISTENT_COMMITMENT_CHUNKS_V1] {
         core::array::from_fn(|chunk| {
             self.commitment_sets
@@ -900,7 +855,6 @@ impl VerifiedPersistentWitnessBindingSetV1 {
                 .expect("release roster is nonempty")
         })
     }
-
     pub(super) fn validate_for_consumer(
         &self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -946,7 +900,6 @@ impl VerifiedPersistentWitnessBindingSetV1 {
         }
         Ok(())
     }
-
     /// Copy one party's public commitment material out of this consumed,
     /// proof-verified set. The sibling decryption module retains the authority;
     /// this tuple is never accepted from a caller.
@@ -972,7 +925,6 @@ impl VerifiedPersistentWitnessBindingSetV1 {
             self.commitment_sets[party_index],
         ))
     }
-
     /// Validate one retained RKG-ephemeral binding at its exact direct context.
     ///
     /// The caller receives no security-certificate or CPK-share digest. Those
@@ -1029,7 +981,6 @@ impl VerifiedPersistentWitnessBindingSetV1 {
         }
         Ok(())
     }
-
     /// Bind one party's actual persistent commitment points to one exact
     /// direct-ceremony relation.  A lineage digest is never accepted here.
     pub(super) fn bind_direct_relation_use(
@@ -1093,7 +1044,6 @@ impl VerifiedPersistentWitnessBindingSetV1 {
         Ok(capability)
     }
 }
-
 /// Exact direct-ceremony equation which consumes a persistent witness.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -1103,7 +1053,6 @@ pub(super) enum PersistentDirectRelationV1 {
     RkgNormalize = 3,
     Galois = 4,
 }
-
 impl PersistentDirectRelationV1 {
     const fn secret_consumer(self) -> PersistentWitnessConsumerV1 {
         match self {
@@ -1113,7 +1062,6 @@ impl PersistentDirectRelationV1 {
             Self::Galois => PersistentWitnessConsumerV1::Galois,
         }
     }
-
     const fn ephemeral_consumer(self) -> Option<PersistentRkgEphemeralConsumerV1> {
         match self {
             Self::RkgRoundOne => Some(PersistentRkgEphemeralConsumerV1::RoundOne),
@@ -1122,7 +1070,6 @@ impl PersistentDirectRelationV1 {
         }
     }
 }
-
 /// Canonical public-statement axes for one direct relation proof.
 ///
 /// Every digest is computed from a validated polynomial statement or stream
@@ -1144,7 +1091,6 @@ pub(super) struct PersistentDirectRelationUseSelectorV1 {
     contribution_statement_digest: [u8; 32],
     proof_commitment_transcript_digest: [u8; 32],
 }
-
 impl PersistentDirectRelationUseSelectorV1 {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -1178,7 +1124,6 @@ impl PersistentDirectRelationUseSelectorV1 {
         selector.validate()?;
         Ok(selector)
     }
-
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         if self.context_digest == [0; 32]
             || self.prior_round_digest == [0; 32]
@@ -1229,7 +1174,6 @@ impl PersistentDirectRelationUseSelectorV1 {
         Ok(())
     }
 }
-
 /// Non-serializable, single-use authorization for one exact direct relation.
 ///
 /// This type is deliberately not `Clone`.  It retains the actual commitment
@@ -1254,7 +1198,6 @@ pub(super) struct VerifiedPersistentWitnessDirectRelationUseV1 {
     selector: PersistentDirectRelationUseSelectorV1,
     use_digest: [u8; 32],
 }
-
 impl VerifiedPersistentWitnessDirectRelationUseV1 {
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         self.selector.validate()?;
@@ -1289,30 +1232,24 @@ impl VerifiedPersistentWitnessDirectRelationUseV1 {
         }
         Ok(())
     }
-
     pub(super) const fn use_digest(&self) -> [u8; 32] {
         self.use_digest
     }
-
     pub(super) const fn secret_identity_digest(&self) -> [u8; 32] {
         self.secret_identity_digest
     }
-
     pub(super) const fn ephemeral_identity_digest(&self) -> [u8; 32] {
         self.ephemeral_identity_digest
     }
-
     pub(super) const fn secret_commitments(&self) -> &[Point; PERSISTENT_COMMITMENT_CHUNKS_V1] {
         &self.secret_commitments
     }
-
     pub(super) const fn ephemeral_commitments(
         &self,
     ) -> Option<&[Point; PERSISTENT_COMMITMENT_CHUNKS_V1]> {
         self.ephemeral_commitments.as_ref()
     }
 }
-
 /// Opaque receipt returned only after the exact direct-relation verifier has
 /// consumed the single-use commitment capability and accepted the proof.
 ///
@@ -1338,7 +1275,6 @@ pub(super) struct VerifiedDirectRelationProofReceiptV1 {
     evidence_set_digest: [u8; 32],
     receipt_digest: [u8; 32],
 }
-
 impl VerifiedDirectRelationProofReceiptV1 {
     pub(super) fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         let ephemeral_required = self.relation.ephemeral_consumer().is_some();
@@ -1358,64 +1294,49 @@ impl VerifiedDirectRelationProofReceiptV1 {
         }
         Ok(())
     }
-
     pub(super) const fn relation(&self) -> PersistentDirectRelationV1 {
         self.relation
     }
-
     pub(super) const fn context_digest(&self) -> [u8; 32] {
         self.context_digest
     }
-
     pub(super) const fn prior_round_digest(&self) -> [u8; 32] {
         self.prior_round_digest
     }
-
     pub(super) const fn evaluated_key_ordinal(&self) -> u8 {
         self.evaluated_key_ordinal
     }
-
     pub(super) const fn digit_index(&self) -> u8 {
         self.digit_index
     }
-
     pub(super) const fn galois_exponent(&self) -> u32 {
         self.galois_exponent
     }
-
     pub(super) const fn party_index(&self) -> u8 {
         self.party_index
     }
-
     pub(super) const fn party(&self) -> ZkAmsMkhePartyIdV1 {
         self.party
     }
-
     pub(super) const fn secret_identity_digest(&self) -> [u8; 32] {
         self.secret_identity_digest
     }
-
     pub(super) const fn ephemeral_identity_digest(&self) -> [u8; 32] {
         self.ephemeral_identity_digest
     }
-
     pub(super) const fn contribution_statement_digest(&self) -> [u8; 32] {
         self.contribution_statement_digest
     }
-
     pub(super) const fn relation_use_digest(&self) -> [u8; 32] {
         self.relation_use_digest
     }
-
     pub(super) const fn proof_digest(&self) -> [u8; 32] {
         self.proof_digest
     }
-
     pub(super) const fn evidence_set_digest(&self) -> [u8; 32] {
         self.evidence_set_digest
     }
 }
-
 /// Sole exact direct-relation verification boundary.
 ///
 /// The neutral generalized-Bulletproof backend and T256 relation circuit must
@@ -1428,7 +1349,6 @@ pub(super) fn verify_and_consume_direct_relation_use_v1(
     capability.validate()?;
     Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
 }
-
 /// Sole production minting boundary for a collective party's persistent secret.
 ///
 /// The input is move-only and can only be produced by the complete native CPK
@@ -1480,7 +1400,6 @@ pub(super) fn mint_collective_secret_binding_from_verified_cpk_v1(
         },
     )
 }
-
 /// Mint one move-only RKG-ephemeral binding from exact verifier authority.
 ///
 /// Security-certificate and CPK-share provenance are inherited from the
@@ -1534,7 +1453,6 @@ pub(super) fn mint_rkg_ephemeral_binding_from_verified_membership_v1(
         },
     )
 }
-
 /// Test-only stand-in for the complete CPK verifier.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -1582,7 +1500,6 @@ pub(super) fn mint_test_state_owned_collective_secret_binding_v1(
         },
     )
 }
-
 fn validate_membership_receipt(
     receipt: &ExactMembershipVerificationReceiptV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1607,7 +1524,6 @@ fn validate_membership_receipt(
         receipt.commitment_set_digest,
     )
 }
-
 fn validate_canonical_commitment_set(
     generator_basis_digest: [u8; 32],
     commitments: &[Point; PERSISTENT_COMMITMENT_CHUNKS_V1],
@@ -1622,7 +1538,6 @@ fn validate_canonical_commitment_set(
     }
     Ok(())
 }
-
 pub(super) fn persistent_commitment_set_digest(
     generator_basis_digest: [u8; 32],
     commitments: &[Point; PERSISTENT_COMMITMENT_CHUNKS_V1],
@@ -1650,7 +1565,6 @@ pub(super) fn persistent_commitment_set_digest(
     }
     Ok(hash.finalize())
 }
-
 fn verified_binding_identity_digest(
     binding: &VerifiedPersistentWitnessBindingV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -1681,7 +1595,6 @@ fn verified_binding_identity_digest(
     hash.update(&binding.commitment_set_digest);
     Ok(hash.finalize())
 }
-
 fn verified_binding_verification_digest(
     binding: &VerifiedPersistentWitnessBindingV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -1704,7 +1617,6 @@ fn verified_binding_verification_digest(
     hash.update(&[binding.consumer_mask]);
     Ok(hash.finalize())
 }
-
 fn verified_binding_set_root(
     set: &VerifiedPersistentWitnessBindingSetV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -1732,7 +1644,6 @@ fn verified_binding_set_root(
     }
     Ok(hash.finalize())
 }
-
 fn persistent_direct_relation_use_digest(
     capability: &VerifiedPersistentWitnessDirectRelationUseV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -1791,7 +1702,6 @@ fn persistent_direct_relation_use_digest(
     }
     Ok(hash.finalize())
 }
-
 fn verified_direct_relation_receipt_digest(
     receipt: &VerifiedDirectRelationProofReceiptV1,
 ) -> [u8; 32] {
@@ -1813,7 +1723,6 @@ fn verified_direct_relation_receipt_digest(
     hash.update(&receipt.evidence_set_digest);
     hash.finalize()
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ExactBindingTranscriptContextV1 {
     profile_digest: [u8; 32],
@@ -1831,7 +1740,6 @@ struct ExactBindingTranscriptContextV1 {
     membership_proof_set_digest: [u8; 32],
     persistent_graph_digest: [u8; 32],
 }
-
 impl ExactBindingTranscriptContextV1 {
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         if self.profile_digest == [0; 32]
@@ -1852,7 +1760,6 @@ impl ExactBindingTranscriptContextV1 {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ExactBindingAuditV1 {
     ring_degree: u32,
@@ -1916,7 +1823,6 @@ struct ExactBindingAuditV1 {
     release_available: bool,
     digest: [u8; 32],
 }
-
 fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, ZkAmsMkheErrorV1> {
     require_release_profile_shape(profile)?;
     let exact_common_box_hiding_certified = true;
@@ -1930,7 +1836,6 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
         .all(|modulus| *modulus > MAX_CHALLENGE_V1);
     let membership_constraint_sets_exact = true;
     let persistent_graph_specified = true;
-
     // The native T256 membership backend and its release generator basis are
     // now implemented and consumed by the complete CPK relation.  Keep every
     // downstream direct-relation/runtime/evidence obligation independent:
@@ -1985,7 +1890,6 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
         && persistent_graph_wired_to_runtime
         && split_decryption_wide_relation_certified
         && release_kat_pinned;
-
     let mut audit = ExactBindingAuditV1 {
         ring_degree: as_u32(RELEASE_RING_DEGREE_V1)?,
         max_relation_witnesses: as_u8(MAX_RELATION_WITNESSES_V1)?,
@@ -2060,7 +1964,6 @@ fn exact_binding_audit_v1(profile: &BgvProfile) -> Result<ExactBindingAuditV1, Z
     audit.digest = audit_digest(audit);
     Ok(audit)
 }
-
 /// Compact release state consumed by the canonical MKHE readiness compiler.
 ///
 /// This does not expose partially verified proof artifacts. It reports only
@@ -2076,7 +1979,6 @@ pub(super) struct ZkAmsMkheActiveExactBindingReleaseStateV1 {
     /// Digest of the complete underlying audit.
     pub(super) audit_digest: [u8; 32],
 }
-
 /// Evaluate the exact-binding proof state for one governed profile.
 pub(super) fn exact_binding_release_state_v1(
     profile: &BgvProfile,
@@ -2089,7 +1991,6 @@ pub(super) fn exact_binding_release_state_v1(
         audit_digest: audit.digest,
     })
 }
-
 fn sample_exact_uniform_signed_box<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
     bound: i64,
@@ -2126,7 +2027,6 @@ fn sample_exact_uniform_signed_box<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
-
 fn signed_response_to_t256(response: i64, bound: i64) -> Result<Scalar, ZkAmsMkheErrorV1> {
     if bound <= 0 || response.unsigned_abs() > bound as u64 {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -2134,17 +2034,14 @@ fn signed_response_to_t256(response: i64, bound: i64) -> Result<Scalar, ZkAmsMkh
     let magnitude = Scalar::from_u64(response.unsigned_abs());
     Ok(if response < 0 { -magnitude } else { magnitude })
 }
-
 fn bound_one_constraint_value(positive: u8, negative: u8) -> Option<i64> {
     ([positive, negative].iter().all(|bit| *bit <= 1))
         .then_some(i64::from(positive) - i64::from(negative))
 }
-
 fn bound_two_constraint_value(low: u8, high: u8, negative_two: u8) -> Option<i64> {
     ([low, high, negative_two].iter().all(|bit| *bit <= 1))
         .then_some(i64::from(low) + i64::from(high) - 2 * i64::from(negative_two))
 }
-
 fn is_exact_small_member(value: i64, bound: i64) -> bool {
     match bound {
         1 => (-1..=1).contains(&value),
@@ -2152,7 +2049,6 @@ fn is_exact_small_member(value: i64, bound: i64) -> bool {
         _ => false,
     }
 }
-
 fn challenge_vector(
     context: ExactBindingTranscriptContextV1,
     rns_first_message_digests: [[u8; 32]; CHALLENGE_REPETITIONS_V1],
@@ -2198,7 +2094,6 @@ fn challenge_vector(
     });
     Ok((seed, challenges))
 }
-
 fn persistent_identity_digest(identity: PersistentCommitmentIdentityV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(PERSISTENT_IDENTITY_DOMAIN_V1.len() + 256);
     frame.extend_from_slice(PERSISTENT_IDENTITY_DOMAIN_V1);
@@ -2214,7 +2109,6 @@ fn persistent_identity_digest(identity: PersistentCommitmentIdentityV1) -> [u8; 
     frame.push(identity.consumer_mask);
     keccak256(&frame)
 }
-
 fn audit_digest(audit: ExactBindingAuditV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(AUDIT_DIGEST_DOMAIN_V1);
@@ -2302,7 +2196,6 @@ fn audit_digest(audit: ExactBindingAuditV1) -> [u8; 32] {
     hash.update(&[audit.release_available.into()]);
     hash.finalize()
 }
-
 fn require_release_profile_shape(profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
     profile.validate()?;
     if profile.ring_degree != RELEASE_RING_DEGREE_V1
@@ -2316,36 +2209,29 @@ fn require_release_profile_shape(profile: &BgvProfile) -> Result<(), ZkAmsMkheEr
     }
     Ok(())
 }
-
 fn preflight_exact_binding_v1(profile: &BgvProfile) -> Result<Infallible, ZkAmsMkheErrorV1> {
     let audit = exact_binding_audit_v1(profile)?;
     debug_assert!(!audit.release_available);
     Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
 }
-
 fn decode_exact_binding_proof_v1(
     profile: &BgvProfile,
     _attacker_bytes: &[u8],
 ) -> Result<Infallible, ZkAmsMkheErrorV1> {
     preflight_exact_binding_v1(profile)
 }
-
 fn as_u8(value: usize) -> Result<u8, ZkAmsMkheErrorV1> {
     u8::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn as_u16(value: usize) -> Result<u16, ZkAmsMkheErrorV1> {
     u16::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn as_u32(value: usize) -> Result<u32, ZkAmsMkheErrorV1> {
     u32::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn as_u64(value: usize) -> Result<u64, ZkAmsMkheErrorV1> {
     u64::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2354,19 +2240,16 @@ mod tests {
         zk_ams::mkhe::active::ZkAmsMkheActivePartySecretV1,
         zk_ams::mkhe::manifest::release_profile_v1,
     };
-
     #[derive(Clone)]
     struct BlockRandom {
         blocks: Vec<[u8; 16]>,
         cursor: usize,
     }
-
     impl BlockRandom {
         fn new(blocks: Vec<[u8; 16]>) -> Self {
             Self { blocks, cursor: 0 }
         }
     }
-
     impl MaskedRelaxedRandomSourceV1 for BlockRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             let block = self
@@ -2381,12 +2264,10 @@ mod tests {
             Ok(())
         }
     }
-
     struct StreamRandom {
         seed: Vec<u8>,
         counter: u64,
     }
-
     impl StreamRandom {
         fn new(seed: &[u8]) -> Self {
             Self {
@@ -2395,7 +2276,6 @@ mod tests {
             }
         }
     }
-
     impl MaskedRelaxedRandomSourceV1 for StreamRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             let mut written = 0;
@@ -2411,7 +2291,6 @@ mod tests {
             Ok(())
         }
     }
-
     fn governed_roster_fixture(
         label: &[u8],
     ) -> (
@@ -2428,7 +2307,6 @@ mod tests {
         let roster = ZkAmsMkheGovernedActiveRosterV1::new(77, references, &mut random).unwrap();
         (roster, secrets)
     }
-
     fn membership_receipt_fixture(
         label: &[u8],
         proof_variant: u8,
@@ -2462,7 +2340,6 @@ mod tests {
             source_verification_digest: keccak256(&relation_frame),
         }
     }
-
     fn verified_binding_fixture(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         cpk_transcript_digest: [u8; 32],
@@ -2482,7 +2359,6 @@ mod tests {
         )
         .unwrap()
     }
-
     fn legacy_secret_binding_digests(
         binding: &VerifiedPersistentWitnessBindingV1,
     ) -> ([u8; 32], [u8; 32]) {
@@ -2503,7 +2379,6 @@ mod tests {
         identity.update(&binding.generator_basis_digest);
         identity.update(&binding.commitment_set_digest);
         let identity = identity.finalize();
-
         let mut verification = Keccak256::new();
         verification.update(PERSISTENT_VERIFICATION_DOMAIN_V1);
         verification.update(&identity);
@@ -2513,7 +2388,6 @@ mod tests {
         verification.update(&[binding.consumer_mask]);
         (identity, verification.finalize())
     }
-
     fn verified_ephemeral_binding_fixture(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         cpk_transcript_digest: [u8; 32],
@@ -2549,7 +2423,6 @@ mod tests {
         )
         .unwrap()
     }
-
     #[test]
     fn staged_binding_fork_preserves_both_validated_successors() {
         let (roster, _secrets) = governed_roster_fixture(b"exact-binding-fork-roster");
@@ -2572,7 +2445,6 @@ mod tests {
             assert_eq!(successor.identity_digest(), identity);
         }
     }
-
     #[test]
     fn release_audit_pins_exact_algebra_and_stays_closed() {
         let audit = exact_binding_audit_v1(&release_profile_v1()).unwrap();
@@ -2600,7 +2472,6 @@ mod tests {
         assert_eq!(audit.blocker_mask, ALL_RELEASE_BLOCKERS_V1 & !0b11);
         assert!(!audit.release_available);
         assert_ne!(audit.digest, [0; 32]);
-
         for forged in [
             ExactBindingAuditV1 {
                 t256_membership_backend_implemented: false,
@@ -2622,7 +2493,6 @@ mod tests {
             assert_ne!(audit_digest(forged), audit.digest);
         }
     }
-
     #[test]
     fn fixed_common_box_is_exactly_witness_and_challenge_independent() {
         // Exhaust a tiny analogue of the release construction.  Every
@@ -2664,7 +2534,6 @@ mod tests {
         assert!(3_u16.pow(5) < (1_u16 << 8));
         assert_eq!(OUTER_RETRY_EXHAUSTION_BITS_V1, 309);
     }
-
     #[test]
     fn integer_sampler_uses_exact_u128_rejection_zone_and_signed_range() {
         let bound = MASK_COEFFICIENT_BOUND_V1;
@@ -2680,7 +2549,6 @@ mod tests {
         let sampled = sample_exact_uniform_signed_box(&mut random, bound).unwrap();
         assert!((-bound..=bound).contains(&sampled));
         assert_eq!(random.cursor, if threshold == 0 { 1 } else { 2 });
-
         let mut unavailable = BlockRandom::new(Vec::new());
         assert_eq!(
             sample_exact_uniform_signed_box(&mut unavailable, bound),
@@ -2688,7 +2556,6 @@ mod tests {
         );
         assert_eq!(INTEGER_SAMPLER_UNION_EXHAUSTION_BITS_V1, 8_800);
     }
-
     #[test]
     fn signed_t256_encoding_and_fork_lifts_are_unique() {
         for response in [
@@ -2715,7 +2582,6 @@ mod tests {
         assert!(MAX_FORK_INTEGER_LIFT_DIFFERENCE_V1 < (1_i64 << 59));
         assert!(RESPONSE_COEFFICIENT_BOUND_V1 < ((MINIMUM_RELEASE_RNS_MODULUS_V1 - 1) / 2) as i64);
     }
-
     #[test]
     fn membership_constraints_have_exact_small_integer_images() {
         let mut bound_one = Vec::new();
@@ -2727,7 +2593,6 @@ mod tests {
         bound_one.sort_unstable();
         bound_one.dedup();
         assert_eq!(bound_one, vec![-1, 0, 1]);
-
         let mut bound_two = Vec::new();
         for low in 0..=1 {
             for high in 0..=1 {
@@ -2741,7 +2606,6 @@ mod tests {
         assert_eq!(bound_two, vec![-2, -1, 0, 1, 2]);
         assert!(bound_one_constraint_value(2, 0).is_none());
         assert!(bound_two_constraint_value(0, 0, 2).is_none());
-
         // The scaled-language attack chooses a huge field representative that
         // satisfies a scalar equation after inversion.  Exact committed-set
         // membership rejects it before the linear proof is considered.
@@ -2749,7 +2613,6 @@ mod tests {
             assert!(!is_exact_small_member(invalid, 2));
         }
     }
-
     #[test]
     fn membership_core_wire_formula_comes_from_actual_ipa_round_counts() {
         assert_eq!(BOUND_ONE_PADDED_GATES_V1.ilog2(), 15);
@@ -2774,7 +2637,6 @@ mod tests {
         let audit = exact_binding_audit_v1(&release_profile_v1()).unwrap();
         assert!(!audit.canonical_complete_wire_certified);
     }
-
     #[test]
     fn unchunked_existing_bp_allocation_pattern_already_breaks_memory_gate() {
         assert_eq!(UNCHUNKED_SCALAR_VECTOR_LOWER_BOUND_BYTES_V1, 218_103_808);
@@ -2783,7 +2645,6 @@ mod tests {
         let audit = exact_binding_audit_v1(&release_profile_v1()).unwrap();
         assert!(!audit.chunked_workspace_certified);
     }
-
     fn identity_fixture(
         role: PersistentWitnessRoleV1,
         record_index: u32,
@@ -2805,7 +2666,6 @@ mod tests {
         )
         .unwrap()
     }
-
     #[test]
     fn persistent_secret_and_ephemeral_graph_rejects_every_substitution() {
         let secret = identity_fixture(PersistentWitnessRoleV1::SecretEpoch, 0);
@@ -2816,7 +2676,6 @@ mod tests {
         assert_eq!(PERSISTENT_COMMITMENT_POINT_BYTES_V1, 264);
         assert_eq!(PERSISTENT_COMMITMENT_BLINDING_STATE_BYTES_V1, 256);
         assert_eq!(PERSISTENT_BOUND_ONE_MEMBERSHIP_CORE_BYTES_V1, 11_576);
-
         for mutate in 0..7 {
             let mut forged = graph;
             match mutate {
@@ -2832,7 +2691,6 @@ mod tests {
             assert_eq!(forged.validate(), Err(ZkAmsMkheErrorV1::InvalidKeyMaterial));
         }
     }
-
     #[test]
     fn opaque_verified_binding_has_no_digest_mint_and_rejects_every_axis_splice() {
         let (roster, _secrets) = governed_roster_fixture(b"exact-binding-token-roster");
@@ -2857,13 +2715,11 @@ mod tests {
                 .validate_for(&roster, transcript, 0, share, consumer)
                 .unwrap();
         }
-
         // Membership proofs may be freshly randomized without changing the
         // persistent source-commitment identity.
         let reproved = verified_binding_fixture(&roster, transcript, 0, share, label, 2);
         assert_eq!(binding.identity_digest(), reproved.identity_digest());
         assert_ne!(binding.verification_digest, reproved.verification_digest);
-
         for mutation in 0..22 {
             let mut forged = verified_binding_fixture(&roster, transcript, 0, share, label, 1);
             match mutation {
@@ -2918,7 +2774,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
-
         let mut identity_point = membership_receipt_fixture(b"identity-point-receipt", 1);
         identity_point.commitments[0] = Point::identity();
         assert!(
@@ -2934,7 +2789,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn ordered_verified_set_rejects_duplicate_reordered_and_mixed_lineage() {
         let (roster, _secrets) = governed_roster_fixture(b"exact-binding-set-roster");
@@ -2973,7 +2827,6 @@ mod tests {
             set.validate_for_consumer(&roster, consumer).unwrap();
             assert_eq!(set.set_root(), stable_root);
         }
-
         let mut reordered = references;
         reordered.swap(0, 1);
         assert!(
@@ -3010,7 +2863,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut mixed_label = b"exact-binding-set-party-".to_vec();
         mixed_label.push(6);
         let mut mixed_security =
@@ -3043,7 +2895,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn direct_relation_capability_binds_actual_secret_and_ephemeral_points() {
         let (roster, _secrets) = governed_roster_fixture(b"exact-binding-direct-roster");
@@ -3133,7 +2984,6 @@ mod tests {
             )
             .unwrap();
         }
-
         let other_digit_context = super::super::direct_collective_eval_ceremony::ZkAmsMkheDirectCeremonyContextV1::from_verified_binding_set(
             &roster,
             &set,
@@ -3152,7 +3002,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
-
         let mut altered_record = verified_ephemeral_binding_fixture(
             &roster,
             transcript,
@@ -3186,7 +3035,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
-
         let other_wrapper_context =
             ZkAmsMkheDirectRkgEphemeralMembershipContextV1::from_verified_binding_set(
                 &roster,
@@ -3214,7 +3062,6 @@ mod tests {
             ephemeral.verification_digest,
             context_specific.verification_digest
         );
-
         let digest = |label: &[u8]| keccak256(label);
         let rkg_one = PersistentDirectRelationUseSelectorV1::new(
             PersistentDirectRelationV1::RkgRoundOne,
@@ -3267,7 +3114,6 @@ mod tests {
             verify_and_consume_direct_relation_use_v1(capability, &[0xff; 64]),
             Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
         );
-
         let rkg_two = PersistentDirectRelationUseSelectorV1::new(
             PersistentDirectRelationV1::RkgRoundTwo,
             direct_context.digest(),
@@ -3287,7 +3133,6 @@ mod tests {
             set.bind_direct_relation_use(&roster, 0, Some(&ephemeral), rkg_two)
                 .is_ok()
         );
-
         let normalize = PersistentDirectRelationUseSelectorV1::new(
             PersistentDirectRelationV1::RkgNormalize,
             digest(b"direct-context"),
@@ -3307,7 +3152,6 @@ mod tests {
             set.bind_direct_relation_use(&roster, 0, None, normalize)
                 .is_ok()
         );
-
         let galois = PersistentDirectRelationUseSelectorV1::new(
             PersistentDirectRelationV1::Galois,
             digest(b"direct-galois-context"),
@@ -3335,7 +3179,6 @@ mod tests {
             set.bind_direct_relation_use(&roster, 0, None, rkg_one)
                 .is_err()
         );
-
         // The set root now binds the generator basis and the actual points,
         // rather than merely accepting the stored commitment digest.
         set.commitment_sets[0][0] =
@@ -3345,7 +3188,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
     }
-
     #[test]
     fn membership_only_receipt_cannot_mint_without_complete_cpk_relation_provenance() {
         let (roster, _secrets) = governed_roster_fixture(b"exact-binding-mint-roster");
@@ -3367,7 +3209,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
     }
-
     fn transcript_fixture(graph_digest: [u8; 32]) -> ExactBindingTranscriptContextV1 {
         ExactBindingTranscriptContextV1 {
             profile_digest: keccak256(b"profile"),
@@ -3386,7 +3227,6 @@ mod tests {
             persistent_graph_digest: graph_digest,
         }
     }
-
     #[test]
     fn challenge_vector_binds_every_context_replay_and_round_axis() {
         let graph = PersistentCommitmentGraphV1::new(
@@ -3399,7 +3239,6 @@ mod tests {
         let commitments = core::array::from_fn(|index| keccak256(&[b'c', index as u8]));
         let baseline = challenge_vector(context, rns, commitments).unwrap();
         assert_ne!(baseline.0, [0; 32]);
-
         for mutate in 0..14 {
             let mut changed = context;
             match mutate {
@@ -3439,7 +3278,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn one_differing_scalar_coordinate_extracts_the_exact_relation() {
         const Q: i64 = 1_000_003;
@@ -3451,7 +3289,6 @@ mod tests {
         let commitment_blinding = 73_i64;
         let challenges = [0_i64, 17, 99, i64::from(u32::MAX)];
         let forked = [0_i64, 17, 100, i64::from(u32::MAX)];
-
         let responses = challenges.map(|challenge| mask + challenge * witness);
         let response_blindings =
             challenges.map(|challenge| first_blinding + challenge * commitment_blinding);
@@ -3472,7 +3309,6 @@ mod tests {
         assert_eq!(extracted, witness);
         assert_eq!(extracted_blinding, commitment_blinding);
         assert_eq!((A * extracted).rem_euclid(Q), target);
-
         // Simulator reconstruction agrees with the honest first messages.
         for ((challenge, response), rho) in challenges
             .into_iter()
@@ -3487,7 +3323,6 @@ mod tests {
             assert_eq!(rns_first, (A * mask).rem_euclid(Q));
         }
     }
-
     #[test]
     fn split_decryption_and_all_operational_paths_remain_fail_closed() {
         let profile = release_profile_v1();

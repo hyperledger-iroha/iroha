@@ -4,14 +4,11 @@
 //! `[tag: u64][active payload words...]`, reserved to the larger branch width
 //! but populated only for the branch selected by the tag. This keeps nested
 //! aggregate values fixed-width without constructing inactive placeholders.
-
 use core::fmt;
-
 /// Number of fixed header words in a sum allocation.
 pub const SUM_HEADER_WORDS_V1: u64 = 1;
 /// Width of one ABI word in bytes.
 pub const SUM_WORD_BYTES_V1: u64 = 8;
-
 /// Invalid compiler-owned sum layout or branch selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SumLayoutErrorV1 {
@@ -27,7 +24,6 @@ pub enum SumLayoutErrorV1 {
         actual: u64,
     },
 }
-
 impl fmt::Display for SumLayoutErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -42,16 +38,13 @@ impl fmt::Display for SumLayoutErrorV1 {
         }
     }
 }
-
 impl std::error::Error for SumLayoutErrorV1 {}
-
 /// Validated fixed allocation layout for an active-only two-branch sum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SumLayoutV1 {
     false_words: u64,
     true_words: u64,
 }
-
 impl SumLayoutV1 {
     /// Construct a layout from the flattened widths of the false and true branches.
     ///
@@ -66,7 +59,6 @@ impl SumLayoutV1 {
         layout.allocation_bytes()?;
         Ok(layout)
     }
-
     /// Construct the canonical layout for `Option<T>`.
     ///
     /// The false (`none`) branch has no payload and the true (`some`) branch
@@ -74,7 +66,6 @@ impl SumLayoutV1 {
     pub fn option(some_words: u64) -> Result<Self, SumLayoutErrorV1> {
         Self::try_new(0, some_words)
     }
-
     /// Flattened payload width selected by `tag`.
     ///
     /// # Errors
@@ -87,7 +78,6 @@ impl SumLayoutV1 {
             invalid => Err(SumLayoutErrorV1::InvalidTag(invalid)),
         }
     }
-
     /// Maximum branch width reserved by the allocation.
     #[must_use]
     pub const fn payload_capacity_words(self) -> u64 {
@@ -97,7 +87,6 @@ impl SumLayoutV1 {
             self.true_words
         }
     }
-
     /// Total bytes in the single contiguous allocation.
     ///
     /// # Errors
@@ -109,7 +98,6 @@ impl SumLayoutV1 {
             .and_then(|words| words.checked_mul(SUM_WORD_BYTES_V1))
             .ok_or(SumLayoutErrorV1::SizeOverflow)
     }
-
     /// Validate the exact active payload width for `tag`.
     ///
     /// # Errors
@@ -124,24 +112,20 @@ impl SumLayoutV1 {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn option_and_result_layouts_reserve_only_the_larger_branch() {
         let option = SumLayoutV1::option(3).expect("Option layout");
         assert_eq!(option.active_words(0), Ok(0));
         assert_eq!(option.active_words(1), Ok(3));
         assert_eq!(option.allocation_bytes(), Ok(32));
-
         let result = SumLayoutV1::try_new(5, 2).expect("Result layout");
         assert_eq!(result.active_words(0), Ok(5));
         assert_eq!(result.active_words(1), Ok(2));
         assert_eq!(result.allocation_bytes(), Ok(48));
     }
-
     #[test]
     fn tags_widths_and_overflow_fail_closed() {
         let layout = SumLayoutV1::try_new(1, 2).expect("layout");

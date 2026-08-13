@@ -8,7 +8,6 @@ struct BodyFrameBindingV1 {
     manifest: [u8; 32],
     frame: [u8; 32],
 }
-
 impl BodyFrameBindingV1 {
     const fn durable_reference(self) -> DurableBodyFrameReference {
         DurableBodyFrameReference::new(
@@ -19,7 +18,6 @@ impl BodyFrameBindingV1 {
             LifecycleDigest::new(self.frame),
         )
     }
-
     fn matches_origin(
         self,
         context: LifecycleContext,
@@ -32,14 +30,12 @@ impl BodyFrameBindingV1 {
             && self.subject == *block_subject(subject).as_bytes()
     }
 }
-
 #[derive(Clone, Copy)]
 struct ReplayShape {
     key: LifecycleKey,
     work_class: LifecycleWorkClass,
     stage_kind: LifecycleStageKind,
 }
-
 impl ReplayShape {
     const fn new(
         key: LifecycleKey,
@@ -53,7 +49,6 @@ impl ReplayShape {
         }
     }
 }
-
 fn project_broadcast(
     context: LifecycleContext,
     message: &wire::ConsensusMessageV2,
@@ -186,7 +181,6 @@ fn project_broadcast(
         .then_some(shape)
         .ok_or(ReplayAuthorityValidationError::RecordMismatch)
 }
-
 fn project_equivocation(
     context: LifecycleContext,
     evidence: &wire::SumeragiV2Equivocation,
@@ -247,14 +241,12 @@ fn project_equivocation(
         stage_kind,
     ))
 }
-
 fn proposal_shape(context: LifecycleContext, proposal: &wire::Proposal, signed: bool) -> bool {
     round_matches_context(context, proposal.round)
         && proposal.manifest.round == proposal.round
         && proposal.manifest.subject == proposal.subject
         && signature_presence_matches(&proposal.signature, signed)
 }
-
 fn vote_shape(context: LifecycleContext, vote: &wire::Vote, signed: bool) -> bool {
     round_matches_context(context, vote.round)
         && round_matches_context(context, vote.proposal_round)
@@ -262,7 +254,6 @@ fn vote_shape(context: LifecycleContext, vote: &wire::Vote, signed: bool) -> boo
         && vote.execution_commitment.validate().is_ok()
         && signature_presence_matches(&vote.signature, signed)
 }
-
 fn qc_shape(context: LifecycleContext, certificate: &wire::QuorumCertificate) -> bool {
     round_matches_context(context, certificate.round)
         && round_matches_context(context, certificate.proposal_round)
@@ -273,7 +264,6 @@ fn qc_shape(context: LifecycleContext, certificate: &wire::QuorumCertificate) ->
         && certificate.signers.windows(2).all(|pair| pair[0] < pair[1])
         && signature_present(&certificate.aggregate_signature)
 }
-
 fn timeout_vote_shape(context: LifecycleContext, vote: &wire::TimeoutVote, signed: bool) -> bool {
     round_matches_context(context, vote.round)
         && signature_presence_matches(&vote.signature, signed)
@@ -283,7 +273,6 @@ fn timeout_vote_shape(context: LifecycleContext, vote: &wire::TimeoutVote, signe
                 && highest.round.view <= vote.round.view
         })
 }
-
 fn timeout_certificate_shape(
     context: LifecycleContext,
     certificate: &wire::TimeoutCertificate,
@@ -301,7 +290,6 @@ fn timeout_certificate_shape(
                 })
         })
 }
-
 fn enter_view_shape(
     context: LifecycleContext,
     tag: ReplayEventTagV1,
@@ -328,7 +316,6 @@ fn enter_view_shape(
             }),
         }
 }
-
 fn manifest_matches_origin(
     context: LifecycleContext,
     manifest: &wire::PayloadManifest,
@@ -339,7 +326,6 @@ fn manifest_matches_origin(
         && manifest.round == proposal_round
         && manifest.subject == subject
 }
-
 fn signature_presence_matches(signature: &[u8], signed: bool) -> bool {
     if signed {
         signature_present(signature)
@@ -347,16 +333,13 @@ fn signature_presence_matches(signature: &[u8], signed: bool) -> bool {
         signature.is_empty()
     }
 }
-
 fn signature_present(signature: &[u8]) -> bool {
     !signature.is_empty() && signature.len() <= wire::MAX_CONSENSUS_SIGNATURE_BYTES
 }
-
 fn round_matches_context(context: LifecycleContext, round: wire::ConsensusRound) -> bool {
     round.height == context.height()
         && digest_from_bytes(round.context_id.0.as_ref()) == context.id()
 }
-
 fn lifecycle_key(
     context: LifecycleContext,
     round: wire::ConsensusRound,
@@ -374,7 +357,6 @@ fn lifecycle_key(
         commitment,
     )
 }
-
 fn equivocation_subject(evidence: &wire::SumeragiV2Equivocation) -> LifecycleDigest {
     let (kind, offender, mut first, mut second) = match evidence {
         wire::SumeragiV2Equivocation::Proposal { first, second } => (
@@ -407,7 +389,6 @@ fn equivocation_subject(evidence: &wire::SumeragiV2Equivocation) -> LifecycleDig
     append_field(&mut projection, &second);
     digest_from_hash(&Hash::new(projection))
 }
-
 fn append_field(projection: &mut Vec<u8>, field: &[u8]) {
     projection.extend_from_slice(
         &u64::try_from(field.len())
@@ -416,17 +397,14 @@ fn append_field(projection: &mut Vec<u8>, field: &[u8]) {
     );
     projection.extend_from_slice(field);
 }
-
 fn digest_from_hash(hash: &Hash) -> LifecycleDigest {
     digest_from_bytes(hash.as_ref())
 }
-
 fn digest_from_bytes(bytes: &[u8]) -> LifecycleDigest {
     let mut digest = [0; 32];
     digest.copy_from_slice(bytes);
     LifecycleDigest::new(digest)
 }
-
 // Decoded envelopes remain inert persisted evidence. TODO: Reauthenticate each
 // retained source against its owning durable store during startup before the
 // registry reconstructs executable replay work.

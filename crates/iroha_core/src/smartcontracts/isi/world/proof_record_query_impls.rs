@@ -1,5 +1,4 @@
 // Included from the world query implementation module to preserve its lexical scope.
-
 impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecords {
     #[metrics(+"find_proof_records")]
     fn execute(
@@ -10,9 +9,7 @@ impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecords {
         let world = state_ro.world();
         let predicate_json = filter
             .json_payload()
-            .and_then(
-                iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
-            );
+            .and_then(iroha_data_model::query::json::predicate_json_candidate_plan_for_execution);
         if let Some(candidate_ids) = predicate_json
             .as_ref()
             .and_then(|predicate| proof_record_candidate_ids(predicate, world))
@@ -33,7 +30,6 @@ impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecords {
                 }));
             return Ok(iter);
         }
-
         let iter: Box<dyn Iterator<Item = iroha_data_model::proof::ProofRecord> + '_> =
             Box::new(world.proofs().iter().filter_map(move |(_, record)| {
                 let matches = if let Some(predicate) = predicate_json.as_ref() {
@@ -46,7 +42,6 @@ impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecords {
         Ok(iter)
     }
 }
-
 impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecordsByBackend {
     #[metrics(+"find_proof_records_by_backend")]
     #[allow(clippy::needless_collect)]
@@ -71,7 +66,6 @@ impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecordsByB
         Ok(proofs.into_iter())
     }
 }
-
 impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecordsByStatus {
     #[metrics(+"find_proof_records_by_status")]
     #[allow(clippy::needless_collect)]

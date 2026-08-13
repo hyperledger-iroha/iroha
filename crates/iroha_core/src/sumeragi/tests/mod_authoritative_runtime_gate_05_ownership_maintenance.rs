@@ -11,7 +11,6 @@ fn fair_v2_ingress_ownership_projection_ignores_route_liveness_until_maintenance
         .configure_roster([source.clone()])
         .expect("validator and anonymous lanes fit");
     ingress.open().expect("open configured roster");
-
     let inbound = |route: NetworkReplyRoute| {
         InboundBlockMessage::try_from_transport_with_reply_route(
             request.clone(),
@@ -25,7 +24,6 @@ fn fair_v2_ingress_ownership_projection_ignores_route_liveness_until_maintenance
         ingress.try_push(inbound(initial_route.clone())),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
-
     let admitted = {
         let state = ingress.state.lock();
         state
@@ -38,7 +36,6 @@ fn fair_v2_ingress_ownership_projection_ignores_route_liveness_until_maintenance
     };
     assert!(admitted.validate_exact());
     let admitted_projection = admitted.process_local_projection_hash();
-
     assert!(routes.retire(&initial_route));
     assert!(!initial_route.is_active());
     assert!(admitted.validate_exact());
@@ -47,7 +44,6 @@ fn fair_v2_ingress_ownership_projection_ignores_route_liveness_until_maintenance
         admitted_projection,
         "transport cancellation cannot mutate immutable admission identity"
     );
-
     let mut projected_routes = admitted
         .current_reply_routes()
         .expect("admitted request retains its reply route")
@@ -65,7 +61,6 @@ fn fair_v2_ingress_ownership_projection_ignores_route_liveness_until_maintenance
         admitted_projection,
         "explicit route pruning must remain visible in the ownership projection"
     );
-
     let reconnect = routes.mint_via(semantic_origin.clone(), source.clone());
     assert!(matches!(
         ingress.try_push(inbound(reconnect.clone())),

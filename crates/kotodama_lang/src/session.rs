@@ -1,16 +1,13 @@
 //! Reusable canonical compiler session API.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
 };
-
 use indexmap::IndexMap;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard, smart_contract::manifest::ContractManifest,
 };
 use ivm_abi::metadata::EmbeddedContractInterfaceV1;
-
 use crate::{
     ast::{FunctionKind, Item, Program, SourceUnitKind},
     compiler::{CompileReport, Compiler, CompilerMode, CompilerOptions},
@@ -22,7 +19,6 @@ use crate::{
     semantic::TypedProgram,
     source::{FrontendBudget, MAX_SOURCE_BYTES, SourceFile, SourceId, TextRange},
 };
-
 /// One compilation request.
 #[derive(Clone, Copy, Debug)]
 pub struct CompileRequest<'source> {
@@ -31,7 +27,6 @@ pub struct CompileRequest<'source> {
     /// Logical source path used in diagnostics and sidecars.
     pub source_name: Option<&'source str>,
 }
-
 /// Successful canonical compiler output.
 #[derive(Clone, Debug)]
 pub struct CompileOutput {
@@ -52,7 +47,6 @@ pub struct CompileOutput {
     /// Source-map, budget, and access-hint sidecar data.
     pub report: CompileReport,
 }
-
 impl CompileOutput {
     /// Return the exact compiler-owned interface.
     ///
@@ -63,7 +57,6 @@ impl CompileOutput {
         &self.contract_interface
     }
 }
-
 /// Paired artifacts produced for one explicitly selected local test suite.
 #[derive(Clone, Debug)]
 pub struct TestCompileOutput {
@@ -75,7 +68,6 @@ pub struct TestCompileOutput {
     /// deployable projection and therefore return `None`.
     pub runtime: Option<CompileOutput>,
 }
-
 /// One source-identified input to the typed-HIR local test linker.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TestSourceUnit {
@@ -84,34 +76,28 @@ pub struct TestSourceUnit {
     /// Complete bounded Kotodama source text.
     pub source: String,
 }
-
 /// Explicit reusable compiler context used by CLIs, SDK bindings, and language tools.
 #[derive(Clone, Debug)]
 pub struct CompilerSession {
     options: CompilerOptions,
 }
-
 struct IterativeResolvedGuard {
     program: Option<crate::resolved::ResolvedProgram>,
 }
-
 impl Clone for IterativeResolvedGuard {
     fn clone(&self) -> Self {
         Self::new(self.get().clone())
     }
 }
-
 impl IterativeResolvedGuard {
     fn new(program: crate::resolved::ResolvedProgram) -> Self {
         Self {
             program: Some(program),
         }
     }
-
     fn get(&self) -> &crate::resolved::ResolvedProgram {
         self.program.as_ref().expect("resolved guard is populated")
     }
-
     fn take_program(mut self) -> Program {
         self.program
             .take()
@@ -119,7 +105,6 @@ impl IterativeResolvedGuard {
             .into_program()
     }
 }
-
 impl Drop for IterativeResolvedGuard {
     fn drop(&mut self) {
         if let Some(program) = self.program.take() {
@@ -127,7 +112,6 @@ impl Drop for IterativeResolvedGuard {
         }
     }
 }
-
 /// Canonically parsed source retained between compiler phases.
 ///
 /// The fields stay crate-private so instrumentation can time phase boundaries
@@ -138,7 +122,6 @@ pub(crate) struct ParsedCompilationUnit {
     program: crate::spanned_ast::SpannedProgram,
     source_name: Option<String>,
 }
-
 /// Canonically resolved HIR retained between compiler phases.
 ///
 /// The iterative guard preserves the normal compiler's bounded-drop behavior
@@ -149,13 +132,11 @@ pub(crate) struct ResolvedCompilationUnit {
     program: IterativeResolvedGuard,
     source_name: Option<String>,
 }
-
 impl CompilerSession {
     /// Create a session with deterministic compiler options.
     pub fn new(options: CompilerOptions) -> Self {
         Self { options }
     }
-
     /// Enter the exact account-literal network selected by this session.
     ///
     /// Build drivers call this inside worker threads because thread-local
@@ -163,7 +144,6 @@ impl CompilerSession {
     pub(crate) fn enter_chain_discriminant(&self) -> ChainDiscriminantGuard {
         ChainDiscriminantGuard::enter(self.options.chain_discriminant)
     }
-
     /// Return a deterministic cache identity for every caller-controlled
     /// compiler policy that can change deployable output.
     pub fn policy_fingerprint(&self) -> iroha_crypto::Hash {
@@ -179,7 +159,6 @@ impl CompilerSession {
             &[mode],
         ])
     }
-
     /// Derive typed-module linker capabilities from this compiler session.
     ///
     /// Keeping this mapping owned by the session prevents package frontends
@@ -193,7 +172,6 @@ impl CompilerSession {
             include_tests: test_mode,
         }
     }
-
     /// Validate a reusable package and its authenticated locked dependencies.
     ///
     /// Package frontends use this entry point so typed linking receives the
@@ -208,7 +186,6 @@ impl CompilerSession {
         let _chain_discriminant = self.enter_chain_discriminant();
         graph.validate_package(request, self.linker_options())
     }
-
     /// Parse and type/effect-check one seiyaku or reusable module without
     /// publishing deployable output.
     pub fn check(&self, request: CompileRequest<'_>) -> Result<(), DiagnosticBundle> {
@@ -217,7 +194,6 @@ impl CompilerSession {
         crate::ast::drop_program_iterative(program);
         Ok(())
     }
-
     /// Run the canonical check pipeline and return non-fatal lint findings.
     ///
     /// Parsing and semantic analysis occur exactly once. Frontends use this
@@ -233,7 +209,6 @@ impl CompilerSession {
         crate::ast::drop_program_iterative(program);
         Ok(warnings)
     }
-
     /// Parse one source through the canonical, budgeted lossless frontend.
     pub(crate) fn parse_compilation_unit(
         &self,
@@ -259,7 +234,6 @@ impl CompilerSession {
             source_name: request.source_name.map(ToOwned::to_owned),
         })
     }
-
     /// Resolve one canonical parsed source into fail-closed named HIR.
     pub(crate) fn resolve_compilation_unit(
         &self,
@@ -277,7 +251,6 @@ impl CompilerSession {
             source_name,
         })
     }
-
     /// Type- and effect-check one resolved-HIR source with this session's policy.
     pub(crate) fn type_effect_compilation_unit(
         &self,
@@ -286,7 +259,6 @@ impl CompilerSession {
         let _chain_discriminant = self.enter_chain_discriminant();
         self.type_effect_compilation_unit_ref(&resolved)
     }
-
     fn type_effect_compilation_unit_ref(
         &self,
         resolved: &ResolvedCompilationUnit,
@@ -308,7 +280,6 @@ impl CompilerSession {
         enforce_argument_register_window(&typed, &resolved.source, resolved.program.get())?;
         Ok(typed)
     }
-
     fn checked_program(&self, request: CompileRequest<'_>) -> Result<Program, DiagnosticBundle> {
         let parsed = self.parse_compilation_unit(request)?;
         let resolved = self.resolve_compilation_unit(parsed)?;
@@ -340,7 +311,6 @@ impl CompilerSession {
         })?;
         Ok(resolved.program.take_program())
     }
-
     /// Compile one named source unit into a deployable artifact and sidecar report.
     pub fn build(&self, request: CompileRequest<'_>) -> Result<CompileOutput, DiagnosticBundle> {
         let _chain_discriminant = self.enter_chain_discriminant();
@@ -349,7 +319,6 @@ impl CompilerSession {
         let typed = self.type_effect_compilation_unit(resolved)?;
         self.build_typed_program(typed, request.source_name)
     }
-
     /// Compile a source-identified local test graph and its verified runtime projection.
     ///
     /// Every file is parsed and resolved independently with a stable `SourceId`.
@@ -389,7 +358,6 @@ impl CompilerSession {
                 source_start_span(Some(&target.source_name)),
             )));
         }
-
         let mut ordered_tests = test_modules.iter().collect::<Vec<_>>();
         ordered_tests.sort_by(|left, right| {
             normalize_logical_path(Path::new(&left.source_name))
@@ -409,7 +377,6 @@ impl CompilerSession {
                 source_start_span(Some(&target.source_name)),
             )));
         }
-
         let units = std::iter::once(target)
             .chain(ordered_tests.iter().copied())
             .collect::<Vec<_>>();
@@ -437,7 +404,6 @@ impl CompilerSession {
             files.push(file);
             parsed.push(program);
         }
-
         require_deployable_contract(&parsed[0].program, Some(&target.source_name))?;
         for (index, program) in parsed.iter().enumerate().skip(1) {
             validate_test_module_source(
@@ -446,7 +412,6 @@ impl CompilerSession {
                 &target.source_name,
             )?;
         }
-
         let target_resolved = crate::resolved::resolve(parsed.remove(0), &files[0])?;
         let target_semantic =
             crate::semantic::SemanticContext::with_capabilities(self.options.force_zk, true);
@@ -482,7 +447,6 @@ impl CompilerSession {
                 .map(|(name, code)| (name.clone(), *code))
                 .collect(),
         };
-
         let mut resolved_modules = Vec::with_capacity(parsed.len());
         for (index, program) in parsed.into_iter().enumerate() {
             let file = &files[index + 1];
@@ -496,7 +460,6 @@ impl CompilerSession {
             std::iter::once((&target_resolved, &files[0]))
                 .chain(resolved_modules.iter().zip(files.iter().skip(1))),
         )?;
-
         let runtime_typed = crate::semantic::project_test_target_to_production(
             target_typed.clone(),
             self.options.force_zk,
@@ -544,7 +507,6 @@ impl CompilerSession {
         }
         crate::semantic::validate_linked_program(&suite_typed, self.options.force_zk)
             .map_err(|error| semantic_error_diagnostic(error, Some(&target.source_name)))?;
-
         let suite = self.build_typed_program(suite_typed, Some(&target.source_name))?;
         let has_runtime_entrypoint = runtime_typed.items.iter().any(|item| {
             let crate::semantic::TypedItem::Function(function) = item;
@@ -562,7 +524,6 @@ impl CompilerSession {
         };
         Ok(TestCompileOutput { suite, runtime })
     }
-
     /// Compile a fully resolved and linked typed-HIR program inside the trusted driver.
     ///
     /// This is the only post-link code-generation entry point. It deliberately
@@ -581,11 +542,9 @@ impl CompilerSession {
         compiler.compile_typed_program_with_manifest_and_report_diagnostics(program, source_name)
     }
 }
-
 fn source_range_span(source: &SourceFile, range: crate::source::SourceRange) -> Option<SourceSpan> {
     (source.id() == range.source).then(|| SourceSpan::from_range(source, range.range))
 }
-
 fn enforce_argument_register_window(
     program: &TypedProgram,
     source: &SourceFile,
@@ -624,7 +583,6 @@ fn enforce_argument_register_window(
         if function.param_types.len() <= limit && total_words <= limit {
             continue;
         }
-
         let mut cumulative_words = 0_usize;
         let crossing_index = counts
             .iter()
@@ -664,7 +622,6 @@ fn enforce_argument_register_window(
         Err(DiagnosticBundle::new(diagnostics))
     }
 }
-
 fn semantic_error_diagnostic(
     error: crate::semantic::SemanticError,
     source_name: Option<&str>,
@@ -676,7 +633,6 @@ fn semantic_error_diagnostic(
         source_start_span(source_name),
     ))
 }
-
 fn validate_test_module_source(
     program: &Program,
     source_name: Option<&str>,
@@ -738,7 +694,6 @@ fn validate_test_module_source(
     }
     Ok(())
 }
-
 fn normalize_logical_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -754,7 +709,6 @@ fn normalize_logical_path(path: &Path) -> PathBuf {
     }
     normalized
 }
-
 fn reject_duplicate_test_graph_symbols<'program>(
     units: impl IntoIterator<
         Item = (
@@ -798,7 +752,6 @@ fn reject_duplicate_test_graph_symbols<'program>(
         Err(DiagnosticBundle::new(diagnostics))
     }
 }
-
 fn merge_source_files(
     target: &mut TypedProgram,
     source: &mut TypedProgram,
@@ -836,14 +789,12 @@ fn merge_source_files(
     }
     Ok(())
 }
-
 #[derive(Clone, Copy)]
 enum ProductionTestSurface {
     TestTarget,
     Fixture,
     TestFunction,
 }
-
 impl ProductionTestSurface {
     fn message(self) -> &'static str {
         match self {
@@ -855,7 +806,6 @@ impl ProductionTestSurface {
         }
     }
 }
-
 fn reject_production_test_surface(
     mode: CompilerMode,
     program: &Program,
@@ -865,7 +815,6 @@ fn reject_production_test_surface(
     if mode == CompilerMode::Test {
         return Ok(());
     }
-
     let has_test_target = program.test_target.is_some();
     let has_fixture = !program.fixtures.is_empty();
     let first_test_function = program.items.iter().find_map(|item| match item {
@@ -879,7 +828,6 @@ fn reject_production_test_surface(
     if !has_test_target && !has_fixture && first_test_function.is_none() {
         return Ok(());
     }
-
     let exact = source_tokens.and_then(|(source, tokens)| {
         first_test_surface_token(
             tokens,
@@ -927,7 +875,6 @@ fn reject_production_test_surface(
         span,
     )))
 }
-
 fn first_test_surface_token(
     tokens: &[Token],
     has_test_target: bool,
@@ -988,7 +935,6 @@ fn first_test_surface_token(
     }
     None
 }
-
 fn require_deployable_contract(
     program: &Program,
     source_name: Option<&str>,
@@ -999,7 +945,6 @@ fn require_deployable_contract(
         Err(non_deployable_module_diagnostic(source_name))
     }
 }
-
 fn non_deployable_module_diagnostic(source_name: Option<&str>) -> DiagnosticBundle {
     let mut diagnostic = Diagnostic::error(
         "K4003",
@@ -1011,7 +956,6 @@ fn non_deployable_module_diagnostic(source_name: Option<&str>) -> DiagnosticBund
         Some("link the module into exactly one seiyaku root, then build that seiyaku".to_owned());
     DiagnosticBundle::single(diagnostic)
 }
-
 fn source_start_span(source_name: Option<&str>) -> Option<SourceSpan> {
     Some(SourceSpan {
         package_identity: None,
@@ -1021,7 +965,6 @@ fn source_start_span(source_name: Option<&str>) -> Option<SourceSpan> {
         byte_range: None,
     })
 }
-
 fn enforce_source_budget(request: CompileRequest<'_>) -> Result<(), DiagnosticBundle> {
     if request.source.len() <= MAX_SOURCE_BYTES {
         return Ok(());
@@ -1038,17 +981,14 @@ fn enforce_source_budget(request: CompileRequest<'_>) -> Result<(), DiagnosticBu
     diagnostic.help = Some("split reusable code into typed modules and import it".to_owned());
     Err(DiagnosticBundle::single(diagnostic))
 }
-
 impl Default for CompilerSession {
     fn default() -> Self {
         Self::new(CompilerOptions::default())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn session_returns_structured_success_and_failure() {
         let session = CompilerSession::default();
@@ -1067,7 +1007,6 @@ mod tests {
                 .iter()
                 .all(|entry| entry.source.source_path.as_deref() == Some("demo.ko"))
         );
-
         let error = session
             .build(CompileRequest {
                 source: "not a seiyaku",
@@ -1076,7 +1015,6 @@ mod tests {
             .expect_err("invalid source must return diagnostics");
         assert_eq!(error.diagnostics.len(), 1);
     }
-
     #[test]
     fn session_chain_discriminant_accepts_exact_taira_account_and_rejects_mismatch() {
         const TAIRA_RECIPIENT: &str =
@@ -1094,7 +1032,6 @@ mod tests {
                 source_name: Some("taira_literal.ko"),
             })
             .expect("the exact Taira I105 literal must compile under discriminant 369");
-
         let sora = CompilerSession::new(CompilerOptions {
             chain_discriminant: 753,
             ..CompilerOptions::default()
@@ -1116,7 +1053,6 @@ mod tests {
             "network account-literal policy must be cache-keyed"
         );
     }
-
     #[test]
     fn contextual_retired_type_words_remain_valid_value_and_entrypoint_names() {
         let source = "seiyaku ValueNames { \
@@ -1138,7 +1074,6 @@ mod tests {
             .expect("deployable seiyaku manifest entrypoints");
         assert_eq!(entrypoints.len(), 1);
         assert_eq!(entrypoints[0].name, "amount");
-
         let diagnostics = CompilerSession::default()
             .check(CompileRequest {
                 source: "module RetiredType { struct Amount { int value; } }",
@@ -1150,7 +1085,6 @@ mod tests {
                 && diagnostic.message.contains("identifier `Amount`")
         }));
     }
-
     #[test]
     fn retired_type_words_are_rejected_as_source_unit_identities() {
         let session = CompilerSession::default();
@@ -1164,7 +1098,6 @@ mod tests {
             diagnostic.code == "E_FORBIDDEN_SOURCE_IDENTIFIER"
                 && diagnostic.message.contains("identifier `Amount`")
         }));
-
         let module_diagnostics = session
             .check(CompileRequest {
                 source: "module i64 { fn run() {} }",
@@ -1176,7 +1109,6 @@ mod tests {
                 && diagnostic.message.contains("source unit `i64`")
         }));
     }
-
     #[test]
     fn check_drops_a_boundary_depth_program_iteratively() {
         let mut ty = String::from("int");
@@ -1198,7 +1130,6 @@ mod tests {
                 source_name: Some("deep.ko"),
             })
             .expect("lint cleanup at the nesting boundary must be stack-safe");
-
         let invalid = source.replace("int", "UnknownType");
         session
             .check(CompileRequest {
@@ -1207,7 +1138,6 @@ mod tests {
             })
             .expect_err("semantic-error cleanup at the nesting boundary must be stack-safe");
     }
-
     #[test]
     fn session_rejects_oversized_input_before_constructing_a_source_database() {
         let source = " ".repeat(MAX_SOURCE_BYTES + 1);
@@ -1229,7 +1159,6 @@ mod tests {
             Some("oversized.ko")
         );
     }
-
     #[test]
     fn session_rejects_aggregate_arguments_over_the_register_word_limit() {
         let source = r#"seiyaku WideCall {
@@ -1267,7 +1196,6 @@ mod tests {
             &source[usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()],
             "value"
         );
-
         let nested = r#"seiyaku NestedWideCall {
   struct Inner { int a, int b, int c, int d, int e, int f, int g }
   struct Outer { Inner left, Inner right }
@@ -1293,7 +1221,6 @@ mod tests {
             &nested[nested_range.start as usize..nested_range.end as usize],
             "payload"
         );
-
         let at_limit = source.replace("int f13", "");
         session
             .build(CompileRequest {
@@ -1302,7 +1229,6 @@ mod tests {
             })
             .expect("session preflight and lowering must admit exactly thirteen words");
     }
-
     #[test]
     fn modules_can_be_checked_but_never_emitted_directly() {
         let session = CompilerSession::default();
@@ -1318,7 +1244,6 @@ mod tests {
         assert_eq!(diagnostics.diagnostics[0].code, "K4003");
         assert_eq!(diagnostics.diagnostics[0].phase, DiagnosticPhase::Artifact);
     }
-
     #[test]
     fn check_and_build_return_identical_resolution_records_for_contracts_and_modules() {
         let session = CompilerSession::default();
@@ -1379,7 +1304,6 @@ mod tests {
             }));
         }
     }
-
     #[test]
     fn resolution_failures_are_collected_with_stable_source_spans() {
         let source = "seiyaku Broken {\nfn first() -> int { return missing_first; }\nfn second() -> int { return missing_second; }\n}";
@@ -1389,7 +1313,6 @@ mod tests {
                 source_name: Some("multi-error.ko"),
             })
             .expect_err("both invalid function bodies must be diagnosed");
-
         assert_eq!(diagnostics.diagnostics.len(), 2);
         for ((diagnostic, expected_line), expected_name) in diagnostics
             .diagnostics
@@ -1408,7 +1331,6 @@ mod tests {
                 expected_name
             );
         }
-
         let repeated = CompilerSession::default()
             .build(CompileRequest {
                 source,
@@ -1417,7 +1339,6 @@ mod tests {
             .expect_err("repeated invalid compilation must fail identically");
         assert_eq!(diagnostics, repeated);
     }
-
     #[test]
     fn compiler_session_preserves_explicit_semantic_code_and_plain_message() {
         let source = "seiyaku Broken { fn missing_context() { let values = []; } }";
@@ -1437,7 +1358,6 @@ mod tests {
             "an empty list requires an exact `List<T, N>` type context"
         );
         assert!(!diagnostic.message.contains("E_LIST_EMPTY_CONTEXT"));
-
         let human = diagnostics.render_human();
         let json = diagnostics.render_json().expect("JSON diagnostics");
         let sarif = diagnostics.render_sarif().expect("SARIF diagnostics");
@@ -1446,7 +1366,6 @@ mod tests {
             assert!(rendered.contains(&diagnostic.message));
         }
     }
-
     #[test]
     fn secret_signature_and_state_rejections_have_exact_type_spans() {
         let session = CompilerSession::new(CompilerOptions {
@@ -1491,7 +1410,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn v1_retired_and_unsafe_diagnostics_have_exact_ranges_and_safe_fixes() {
         fn reject(source: &str) -> DiagnosticBundle {
@@ -1502,7 +1420,6 @@ mod tests {
                 })
                 .expect_err("fixture must be rejected")
         }
-
         fn diagnostic<'a>(bundle: &'a DiagnosticBundle, code: &str) -> &'a Diagnostic {
             bundle
                 .diagnostics
@@ -1510,7 +1427,6 @@ mod tests {
                 .find(|diagnostic| diagnostic.code == code)
                 .unwrap_or_else(|| panic!("missing {code}: {bundle:#?}"))
         }
-
         fn primary_text<'a>(source: &'a str, diagnostic: &Diagnostic) -> &'a str {
             let range = diagnostic
                 .primary_span
@@ -1519,7 +1435,6 @@ mod tests {
                 .expect("exact primary byte range");
             &source[range.start as usize..range.end as usize]
         }
-
         fn fix_text<'source, 'diagnostic>(
             source: &'source str,
             diagnostic: &'diagnostic Diagnostic,
@@ -1531,7 +1446,6 @@ mod tests {
                 &fix.replacement,
             )
         }
-
         let positional =
             "seiyaku C { struct Pair { int left, int right } fn f() { let pair = Pair(1, 2); } }";
         let positional_error = reject(positional);
@@ -1544,14 +1458,12 @@ mod tests {
             fix_text(positional, positional_diagnostic),
             ("Pair(1, 2)", "Pair { left: 1, right: 2, }")
         );
-
         let mixed =
             "seiyaku C { fn target(int first, int second) {} fn f() { target(1, second: 2); } }";
         let mixed_error = reject(mixed);
         let mixed_diagnostic = diagnostic(&mixed_error, "E_MIXED_CALL_ARGUMENTS");
         assert_eq!(primary_text(mixed, mixed_diagnostic), "1");
         assert_eq!(fix_text(mixed, mixed_diagnostic), ("1", "first: 1"));
-
         let unresolved_mixed = "seiyaku C { fn f() { target(1, second: 2); } }";
         let unresolved_error = reject(unresolved_mixed);
         let unresolved_diagnostic = diagnostic(&unresolved_error, "E_MIXED_CALL_ARGUMENTS");
@@ -1560,7 +1472,6 @@ mod tests {
             "second"
         );
         assert!(unresolved_diagnostic.fix.is_none());
-
         let unsafe_read =
             "seiyaku C { fn read(List<int, 2> values) -> Option<int> { return values[0]; } }";
         let read_error = reject(unsafe_read);
@@ -1570,7 +1481,6 @@ mod tests {
             fix_text(unsafe_read, read_diagnostic),
             ("values[0]", "values.get(0)")
         );
-
         let mistyped_read = "seiyaku C { fn read(List<int, 2> values) -> Option<int> { return values[\"zero\"]; } }";
         let mistyped_read_error = reject(mistyped_read);
         assert!(
@@ -1579,7 +1489,6 @@ mod tests {
                 .is_none(),
             "a List.get recipe with a non-int index would not type-check"
         );
-
         let unsafe_write =
             "seiyaku C { fn write() { var List<int, 2> values = [1]; values[0] = 2; } }";
         let write_error = reject(unsafe_write);
@@ -1592,7 +1501,6 @@ mod tests {
             fix_text(unsafe_write, write_diagnostic),
             ("values[0] = 2;", "values.try_set(index: 0, value: 2);",)
         );
-
         for unsafe_without_recipe in [
             "seiyaku C { fn write() { let List<int, 2> values = [1]; values[0] = 2; } }",
             "seiyaku C { fn write() { var List<int, 2> values = [1]; values[\"zero\"] = 2; } }",
@@ -1607,7 +1515,6 @@ mod tests {
                 "unsafe, non-compiling, compound, or trivia-moving rewrite must fail closed: {diagnostic:#?}"
             );
         }
-
         let legacy_sum = "seiyaku C { fn f() -> Option<int> { option::none(0) } }";
         let legacy_error = reject(legacy_sum);
         let legacy_diagnostic = diagnostic(&legacy_error, "E_LEGACY_SUM_CONSTRUCTOR");
@@ -1619,7 +1526,6 @@ mod tests {
             fix_text(legacy_sum, legacy_diagnostic),
             ("option::none(0)", "Option::none")
         );
-
         let query_key = "seiyaku C { view fn account(bytes raw) { let account_view = ledger::query::account(raw); } }";
         let query_key_error = reject(query_key);
         let query_key_diagnostic = diagnostic(&query_key_error, "E_QUERY_KEY_TYPE");
@@ -1628,7 +1534,6 @@ mod tests {
             "ledger::query::account(raw)"
         );
         assert!(query_key_diagnostic.fix.is_none());
-
         let query_result = "seiyaku C { view fn account(AccountId id) { let bytes raw = ledger::query::account(id); } }";
         let query_result_error = reject(query_result);
         let query_result_diagnostic = diagnostic(&query_result_error, "E_QUERY_RESULT_TYPE");
@@ -1637,7 +1542,6 @@ mod tests {
             fix_text(query_result, query_result_diagnostic),
             ("bytes", "Option<AccountView>")
         );
-
         let comprehension = "seiyaku C { fn copy() { let List<int, 8> source = [1]; let List<int, 4> result = [item for item in source]; } }";
         let comprehension_error = reject(comprehension);
         let comprehension_diagnostic =
@@ -1650,7 +1554,6 @@ mod tests {
             fix_text(comprehension, comprehension_diagnostic),
             ("List<int, 4>", "List<int, 8>")
         );
-
         let retired_amount = "seiyaku C { fn quantity_value(Amount value) -> quantity { value } }";
         let retired_amount_error = reject(retired_amount);
         let retired_amount_diagnostic = diagnostic(&retired_amount_error, "E_RETIRED_NUMERIC_TYPE");
@@ -1662,7 +1565,6 @@ mod tests {
             fix_text(retired_amount, retired_amount_diagnostic),
             ("Amount", "quantity")
         );
-
         let forbidden_identifier = "seiyaku C { fn quantity_value(int Amount) -> int { Amount } }";
         let forbidden_identifier_error = reject(forbidden_identifier);
         let forbidden_identifier_diagnostic =
@@ -1672,7 +1574,6 @@ mod tests {
             "Amount"
         );
         assert!(forbidden_identifier_diagnostic.fix.is_none());
-
         for (retired_suffix, spelling, replacement) in [
             (
                 "seiyaku C { fn quantity_value() -> quantity { 1.25amt } }",
@@ -1693,7 +1594,6 @@ mod tests {
                 (spelling, replacement)
             );
         }
-
         let scale_29 = format!("0.{}1", "0".repeat(28));
         let invalid_quantity =
             format!("seiyaku C {{ fn quantity_value() -> quantity {{ return {scale_29}; }} }}");
@@ -1705,7 +1605,6 @@ mod tests {
         );
         assert!(quantity_diagnostic.fix.is_none());
     }
-
     #[test]
     fn parser_recovers_independent_items_into_one_spanned_bundle() {
         let source = "seiyaku Broken {\nfn first() { let int value = ; }\nfn second() { let bool value = ; }\n}";
@@ -1715,7 +1614,6 @@ mod tests {
                 source_name: Some("parse-errors.ko"),
             })
             .expect_err("both malformed function bodies must be diagnosed");
-
         assert_eq!(diagnostics.diagnostics.len(), 2);
         for (diagnostic, expected_line) in diagnostics.diagnostics.iter().zip([2, 3]) {
             assert_eq!(diagnostic.code, "K1001");
@@ -1724,7 +1622,6 @@ mod tests {
             assert_eq!(span.source.as_deref(), Some("parse-errors.ko"));
             assert_eq!(span.start.line, expected_line);
         }
-
         let human = diagnostics.render_human();
         let json = diagnostics.render_json().expect("render JSON diagnostics");
         let sarif = diagnostics
@@ -1740,7 +1637,6 @@ mod tests {
             "SARIF must embed the canonical diagnostic record"
         );
     }
-
     #[test]
     fn parser_spans_cover_the_complete_unexpected_token() {
         let source = "seiyaku Broken {\nfn first() { let int value = ; }\nfn second() { let bool value = ; }\n}";
@@ -1750,7 +1646,6 @@ mod tests {
                 source_name: Some("token-spans.ko"),
             })
             .expect_err("malformed expressions must fail");
-
         assert_eq!(diagnostics.diagnostics.len(), 2);
         for (diagnostic, line_number) in diagnostics.diagnostics.iter().zip([2, 3]) {
             let line = source.lines().nth(line_number - 1).expect("fixture line");
@@ -1762,7 +1657,6 @@ mod tests {
             assert_eq!(span.end.column, semicolon_column + 1);
         }
     }
-
     #[test]
     fn retired_english_declarations_and_unregistered_unicode_have_precise_spans() {
         for (retired, source) in [
@@ -1790,7 +1684,6 @@ mod tests {
             assert_eq!(span.start.column, start, "{retired}");
             assert_eq!(span.end.column, start + retired.len(), "{retired}");
         }
-
         let unicode_source = "seiyaku Demo { fn 利用者() {} }";
         let diagnostics = CompilerSession::default()
             .build(CompileRequest {
@@ -1828,7 +1721,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn invalid_escape_reports_the_full_literal_span() {
         let source = r#"module Escape { fn invalid() { let string value = "\q"; } }"#;
@@ -1847,7 +1739,6 @@ mod tests {
         assert_eq!(span.start.column, start);
         assert_eq!(span.end.column, start + r#""\q""#.len());
     }
-
     #[test]
     fn state_initialization_diagnostics_retain_actionable_spans() {
         let session = CompilerSession::default();
@@ -1891,7 +1782,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn adversarial_error_fanout_is_bounded_and_reported() {
         let mut source = String::from("seiyaku ErrorFanout {\n");
@@ -1904,7 +1794,6 @@ mod tests {
             .expect("write source fixture");
         }
         source.push_str("}\n");
-
         let diagnostics = CompilerSession::default()
             .build(CompileRequest {
                 source: &source,
@@ -1933,7 +1822,6 @@ mod tests {
             crate::diagnostic::MAX_DIAGNOSTICS - 1
         );
     }
-
     #[test]
     fn production_rejects_every_local_test_declaration_with_exact_spans() {
         let production = CompilerSession::default();
@@ -1973,13 +1861,11 @@ mod tests {
                 &source[usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()],
                 expected_span
             );
-
             test_mode
                 .build(request)
                 .expect("explicit test mode must retain local test syntax");
         }
     }
-
     #[test]
     fn production_rejects_test_only_helpers_and_test_capable_typed_hir() {
         let source = r#"seiyaku Demo {
@@ -2006,7 +1892,6 @@ mod tests {
                 "{diagnostics:?}"
             );
         }
-
         let test_options = CompilerOptions {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
@@ -2014,7 +1899,6 @@ mod tests {
         CompilerSession::new(test_options.clone())
             .build(request)
             .expect("explicit test mode enables test-only helpers");
-
         let program = crate::parser::parse(source).expect("parse helper program");
         let typed = crate::semantic::SemanticContext::with_capabilities(false, true)
             .analyze(&program)
@@ -2025,7 +1909,6 @@ mod tests {
             .expect_err("test-capable HIR must not cross into production codegen");
         assert_eq!(diagnostics.diagnostics[0].code, "E_TEST_ONLY_PRODUCTION");
     }
-
     #[test]
     fn typed_test_graph_is_restricted_to_test_mode_and_derives_a_clean_runtime() {
         let source = r#"seiyaku Demo {
@@ -2038,12 +1921,10 @@ mod tests {
             source_name: "suite.ko".to_owned(),
             source: source.to_owned(),
         };
-
         let diagnostics = CompilerSession::default()
             .build_test_sources(&target, &[])
             .expect_err("production sessions must not expose the local test build path");
         assert_eq!(diagnostics.diagnostics[0].code, "E_TEST_ONLY_PRODUCTION");
-
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
@@ -2091,7 +1972,6 @@ mod tests {
                 .all(|entry| entry.function_name != "smoke")
         );
     }
-
     #[test]
     fn typed_test_graph_projects_durable_state_map_intrinsics_into_runtime() {
         let target = TestSourceUnit {
@@ -2110,7 +1990,6 @@ mod tests {
             }"#
             .to_owned(),
         };
-
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
@@ -2155,7 +2034,6 @@ mod tests {
                 .all(|entry| entry.function_name != "absent_flag_is_zero")
         );
     }
-
     #[test]
     fn typed_test_graph_without_runtime_entrypoint_skips_runtime_artifact() {
         let target = TestSourceUnit {
@@ -2167,14 +2045,12 @@ mod tests {
             }"#
             .to_owned(),
         };
-
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
         })
         .build_test_sources(&target, &[])
         .expect("compile pure unit-test suite");
-
         assert!(outputs.runtime.is_none());
         assert!(
             outputs
@@ -2185,7 +2061,6 @@ mod tests {
                 .any(|entry| entry.function_name == "smoke")
         );
     }
-
     #[test]
     fn test_target_projection_retains_lowered_list_intrinsics() {
         let target = TestSourceUnit {
@@ -2204,20 +2079,17 @@ mod tests {
             }"#
             .to_owned(),
         };
-
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
         })
         .build_test_sources(&target, &[])
         .expect("lowered list intrinsics must survive runtime projection");
-
         assert!(
             outputs.runtime.is_some(),
             "public view requires runtime output"
         );
     }
-
     #[test]
     fn test_target_projection_retains_lowered_sum_type_intrinsics() {
         let target = TestSourceUnit {
@@ -2246,20 +2118,17 @@ mod tests {
             }"#
             .to_owned(),
         };
-
         let outputs = CompilerSession::new(CompilerOptions {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
         })
         .build_test_sources(&target, &[])
         .expect("lowered sum-type intrinsics must survive runtime projection");
-
         assert!(
             outputs.runtime.is_some(),
             "public view requires runtime output"
         );
     }
-
     #[test]
     fn standalone_test_graph_keeps_stable_distinct_sources_and_typed_target_state() {
         let target = TestSourceUnit {
@@ -2313,7 +2182,6 @@ mod tests {
                 .expect("target lifecycle requires runtime")
                 .artifact
         );
-
         let paths = forward
             .suite
             .report
@@ -2382,7 +2250,6 @@ mod tests {
             assert!(source.is_char_boundary(start) && source.is_char_boundary(end));
         }
     }
-
     #[test]
     fn standalone_test_graph_rejects_normalized_logical_path_aliases() {
         let target = TestSourceUnit {
@@ -2410,7 +2277,6 @@ mod tests {
         .expect_err("normalized aliases must not receive distinct SourceIds");
         assert_eq!(diagnostics.diagnostics[0].code, "E_DUPLICATE_SOURCE");
     }
-
     #[test]
     fn session_enforces_presence_aware_state_map_reads() {
         let session = CompilerSession::default();
@@ -2438,7 +2304,6 @@ mod tests {
                 "missing {expected_code}: {diagnostics:?}"
             );
         }
-
         let source = r#"
             seiyaku PresenceAware {
                 state StateMap<int, int> values;
@@ -2474,7 +2339,6 @@ mod tests {
             .expect("read entrypoint manifest");
         assert_eq!(interface.return_type.as_deref(), Some("Option<int>"));
     }
-
     #[test]
     fn session_rejects_unit_values_degenerate_tuple_types_and_uninitialized_vars() {
         let session = CompilerSession::default();
@@ -2501,7 +2365,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn session_builds_grouping_real_tuples_and_else_if_chains() {
         let source = r#"
@@ -2533,7 +2396,6 @@ mod tests {
             .expect("documented else-if, grouping, and real tuples must build");
         assert_eq!(output.manifest.seiyaku_name.as_deref(), Some("Branches"));
     }
-
     #[test]
     fn concurrent_builds_do_not_share_semantic_declarations() {
         let session = CompilerSession::default();
@@ -2565,7 +2427,6 @@ mod tests {
                 "BooleanContract",
             ),
         ];
-
         std::thread::scope(|scope| {
             let handles = (0..8)
                 .map(|worker| {

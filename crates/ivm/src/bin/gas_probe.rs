@@ -1,7 +1,5 @@
 use std::time::Instant;
-
 use ivm::{IVM, ProgramMetadata, encoding, instruction, ivm_mode, kotodama::wide as kwide};
-
 fn assemble(code: &[u8]) -> Vec<u8> {
     let mut meta = ProgramMetadata::default();
     meta.mode |= ivm_mode::VECTOR;
@@ -9,7 +7,6 @@ fn assemble(code: &[u8]) -> Vec<u8> {
     buf.extend_from_slice(code);
     buf
 }
-
 fn program_for_repeated(instr: u32, reps: usize) -> Vec<u8> {
     let mut code = Vec::with_capacity(4 * (reps + 1));
     for _ in 0..reps {
@@ -18,7 +15,6 @@ fn program_for_repeated(instr: u32, reps: usize) -> Vec<u8> {
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     assemble(&code)
 }
-
 fn run_case(name: &str, instr: u32, reps: usize, rounds: usize) {
     // Warm-up
     {
@@ -27,7 +23,6 @@ fn run_case(name: &str, instr: u32, reps: usize, rounds: usize) {
         vm.load_program(&code).expect("load");
         let _ = vm.run();
     }
-
     let mut total_ns = 0u128;
     let mut total_gas = 0u128;
     for _ in 0..rounds {
@@ -58,7 +53,6 @@ fn run_case(name: &str, instr: u32, reps: usize, rounds: usize) {
         "{name}: reps={reps}, rounds={rounds}, ns/op={ns_per_op:.2}, gas/op={gas_per_op:.3}, ns/gas={ns_per_gas:.2}"
     );
 }
-
 fn main() {
     // Ensure acceleration policy is applied consistently (defaults enable all backends
     // and auto-detect hardware; golden self-tests preserve determinism).
@@ -82,14 +76,11 @@ fn main() {
     let sha256 = encoding::wide::encode_rr(instruction::wide::crypto::SHA256BLOCK, 1, 2, 0);
     // Use a 128-bit load to mimic vector fetches
     let ldv = kwide::encode_load128(4, 1, 2);
-
     let reps = 200_000usize;
     let rounds = 5usize;
     run_case("ADD", add, reps, rounds);
-
     // Bench VADD32 with zero-initialized vectors (safe baseline)
     run_case("VADD32", vadd32, reps, rounds);
-
     // Bench LOAD_VECTOR from HEAP_START (address in x2)
     {
         let code = program_for_repeated(ldv, reps);
@@ -123,7 +114,6 @@ fn main() {
             "LOAD_VECTOR: reps={reps}, rounds={rounds}, ns/op={ns_per_op:.2}, gas/op={gas_per_op:.3}, ns/gas={ns_per_gas:.2}"
         );
     }
-
     // Bench SHA256BLOCK over a zero block at HEAP_START (x2 = addr)
     {
         let code = program_for_repeated(sha256, reps);

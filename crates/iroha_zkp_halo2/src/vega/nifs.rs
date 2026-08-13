@@ -1,14 +1,11 @@
 //! Canonical Nova non-interactive folding for Vega's relaxed R1CS instance.
-
-use thiserror::Error;
-
 use super::{
     VegaT256ScalarV1 as Scalar,
     commitment::{Commitment, CommitmentError, CommitmentKey, fold},
     r1cs::{Instance, R1csError, RelaxedInstance, RelaxedWitness, Shape, Witness},
     transcript::{VegaTranscriptError, VegaTranscriptV1},
 };
-
+use thiserror::Error;
 /// Failure while proving or verifying the canonical Vega Nova fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum NifsError {
@@ -23,13 +20,11 @@ pub(super) enum NifsError {
     #[error(transparent)]
     Transcript(#[from] VegaTranscriptError),
 }
-
 /// Nova's one-commitment non-interactive folding proof.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct NovaNifs {
     pub(super) cross_term_commitment: Commitment,
 }
-
 /// Complete borrowed input to one Nova NIFS prover invocation.
 pub(super) struct NovaNifsProverInput<'a> {
     pub(super) key: &'a CommitmentKey,
@@ -40,7 +35,6 @@ pub(super) struct NovaNifsProverInput<'a> {
     pub(super) regular_witness: &'a Witness,
     pub(super) cross_term_blindings: &'a [Scalar],
 }
-
 impl NovaNifs {
     /// Fold one satisfying relaxed pair with one satisfying regular pair.
     ///
@@ -71,7 +65,6 @@ impl NovaNifs {
         if cross_term_blindings.len() != commitment_rows(shape.constraint_count(), key.columns())? {
             return Err(NifsError::InvalidDimension);
         }
-
         transcript.absorb_relaxed_r1cs_instance(
             b"U1",
             &relaxed_instance.witness_commitment,
@@ -84,7 +77,6 @@ impl NovaNifs {
             &regular_instance.witness_commitment,
             &regular_instance.public_inputs,
         )?;
-
         let cross_term = compute_cross_term(
             shape,
             relaxed_instance,
@@ -95,7 +87,6 @@ impl NovaNifs {
         let cross_term_commitment = key.commit(&cross_term, cross_term_blindings)?;
         transcript.absorb_commitment(b"comm_T", &cross_term_commitment)?;
         let challenge = transcript.squeeze(b"r")?;
-
         let folded_instance = fold_public_instances(
             relaxed_instance,
             regular_instance,
@@ -109,7 +100,6 @@ impl NovaNifs {
             cross_term_blindings,
             challenge,
         )?;
-
         // These checks are redundant algebraically, but keep the native API
         // fail-closed if a future optimization changes either folding path.
         shape.validate_relaxed_assignment(
@@ -125,7 +115,6 @@ impl NovaNifs {
         {
             return Err(NifsError::CommitmentMismatch);
         }
-
         Ok((
             Self {
                 cross_term_commitment,
@@ -134,7 +123,6 @@ impl NovaNifs {
             folded_witness,
         ))
     }
-
     /// Replay the exact Fiat--Shamir schedule and fold public instance data.
     pub(super) fn verify(
         &self,
@@ -147,7 +135,6 @@ impl NovaNifs {
         self.verify_with_challenge(key, shape, transcript, relaxed_instance, regular_instance)
             .map(|(instance, _)| instance)
     }
-
     /// Replay one exact public fold and return both the resulting accumulator
     /// and the canonical Fiat--Shamir challenge used by encrypted producers.
     ///
@@ -192,7 +179,6 @@ impl NovaNifs {
         Ok((folded, challenge))
     }
 }
-
 fn validate_prover_inputs(
     key: &CommitmentKey,
     shape: &Shape,
@@ -219,7 +205,6 @@ fn validate_prover_inputs(
     {
         return Err(NifsError::InvalidDimension);
     }
-
     shape.validate_relaxed_assignment(
         &relaxed_witness.values,
         relaxed_instance.relaxation,
@@ -227,7 +212,6 @@ fn validate_prover_inputs(
         &relaxed_witness.error,
     )?;
     shape.validate_strict_assignment(&regular_witness.values, &regular_instance.public_inputs)?;
-
     if key.commit(&relaxed_witness.values, &relaxed_witness.witness_blindings)?
         != relaxed_instance.witness_commitment
         || key.commit(&relaxed_witness.error, &relaxed_witness.error_blindings)?
@@ -239,7 +223,6 @@ fn validate_prover_inputs(
     }
     Ok(())
 }
-
 fn validate_public_inputs(
     key: &CommitmentKey,
     shape: &Shape,
@@ -260,14 +243,12 @@ fn validate_public_inputs(
     }
     Ok(())
 }
-
 fn commitment_rows(length: usize, columns: usize) -> Result<usize, NifsError> {
     if length == 0 || columns == 0 {
         return Err(NifsError::InvalidDimension);
     }
     Ok(length.div_ceil(columns))
 }
-
 fn compute_cross_term(
     shape: &Shape,
     relaxed_instance: &RelaxedInstance,
@@ -286,7 +267,6 @@ fn compute_cross_term(
         )
         .map_err(NifsError::from)
 }
-
 fn fold_public_instances(
     relaxed: &RelaxedInstance,
     regular: &Instance,
@@ -315,7 +295,6 @@ fn fold_public_instances(
         relaxation: relaxed.relaxation + challenge,
     })
 }
-
 fn fold_private_witnesses(
     relaxed: &RelaxedWitness,
     regular: &Witness,
@@ -361,16 +340,13 @@ fn fold_private_witnesses(
             .collect(),
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::r1cs::SparseMatrix;
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     fn scalar_hex(value: &str) -> Scalar {
         let bytes: [u8; 32] = hex::decode(value)
             .expect("hex")
@@ -378,7 +354,6 @@ mod tests {
             .expect("32-byte scalar");
         Scalar::from_be_bytes_exact(bytes).expect("canonical scalar")
     }
-
     fn multiplication_shape() -> Shape {
         // z = [x, ONE, y], constraint x * x = y.
         let a = SparseMatrix::new(1, 3, &[(0, 0, s(1))]).expect("canonical A");
@@ -386,7 +361,6 @@ mod tests {
         let c = SparseMatrix::new(1, 3, &[(0, 2, s(1))]).expect("canonical C");
         Shape::new(1, 1, 1, a, b, c).expect("valid shape")
     }
-
     fn fixture() -> (
         CommitmentKey,
         Shape,
@@ -433,7 +407,6 @@ mod tests {
             regular_witness,
         )
     }
-
     #[test]
     fn nova_cross_term_streams_rows_without_full_matrix_products() {
         let source = include_str!("nifs.rs");
@@ -446,7 +419,6 @@ mod tests {
         assert!(!implementation.contains("combined_assignment"));
         assert!(!implementation.contains("shape.multiply"));
     }
-
     #[test]
     fn nova_nifs_roundtrip_produces_one_satisfying_fold() {
         let (key, shape, u1, w1, u2, w2) = fixture();
@@ -500,7 +472,6 @@ mod tests {
             verifier_instance.error_commitment
         );
     }
-
     #[test]
     fn nova_nifs_rejects_invalid_dimensions_witnesses_and_commitments() {
         let (key, shape, u1, w1, u2, w2) = fixture();
@@ -520,7 +491,6 @@ mod tests {
             ),
             Err(NifsError::InvalidDimension)
         );
-
         let mut bad_u2 = u2.clone();
         bad_u2.public_inputs[0] = s(8);
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
@@ -539,7 +509,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut bad_w1 = w1.clone();
         bad_w1.witness_blindings[0] = s(12);
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
@@ -558,7 +527,6 @@ mod tests {
             ),
             Err(NifsError::CommitmentMismatch)
         );
-
         let wider_key = CommitmentKey::derive(b"vega-nifs-wide-test", 1).expect("key");
         let oversized = wider_key
             .commit(&[s(1), s(2)], &[s(3), s(4)])
@@ -572,7 +540,6 @@ mod tests {
             Err(NifsError::InvalidDimension)
         );
     }
-
     #[test]
     fn nova_nifs_transcript_and_statement_mutations_cannot_reuse_the_witness() {
         let (key, shape, u1, w1, u2, w2) = fixture();
@@ -590,7 +557,6 @@ mod tests {
             &mut prover_transcript,
         )
         .expect("valid fold");
-
         let alternate_commitment = key.commit(&[-s(40)], &[s(20)]).expect("alternate T");
         let altered_proof = NovaNifs {
             cross_term_commitment: alternate_commitment,
@@ -614,7 +580,6 @@ mod tests {
                     .expect("original folded error")
                     != altered.error_commitment
         );
-
         let mut altered_u2 = u2.clone();
         altered_u2.public_inputs[0] += Scalar::one();
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
@@ -622,7 +587,6 @@ mod tests {
             .verify(&key, &shape, &mut transcript, &u1, &altered_u2)
             .expect("well-shaped statement folds");
         assert_ne!(altered_statement, folded_instance);
-
         let mut altered_schedule = VegaTranscriptV1::new_neutron_nova();
         altered_schedule
             .domain_separator(b"nifs-adversarial-prefix")

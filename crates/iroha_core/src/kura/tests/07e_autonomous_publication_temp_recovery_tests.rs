@@ -7,7 +7,6 @@ fn autonomous_temp_recovery_catalog() -> LaneCatalog {
     };
     LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("temp-recovery lane catalog")
 }
-
 fn open_authenticated_temp_recovery_kura(
     config: &KuraConfig,
     lane_config: &RuntimeLaneConfig,
@@ -15,7 +14,6 @@ fn open_authenticated_temp_recovery_kura(
 ) -> Result<(Arc<Kura>, BlockCount)> {
     Kura::new_with_configured_lane_catalog(config, lane_config, catalog)
 }
-
 fn publish_temp_recovery_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
     let lane_config = RuntimeLaneConfig::from_catalog(catalog);
     let mut incarnations = BTreeMap::new();
@@ -42,7 +40,6 @@ fn publish_temp_recovery_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
     )
     .expect("publish temp-recovery configured catalog baseline");
 }
-
 fn assert_retained_publication_quarantine(path: &Path, expected: &[u8]) {
     let metadata = fs::symlink_metadata(path).expect("stat retained publication quarantine");
     assert!(
@@ -56,7 +53,6 @@ fn assert_retained_publication_quarantine(path: &Path, expected: &[u8]) {
         expected,
     );
 }
-
 fn publication_quarantines(parent: &Path, prefix: &str) -> Vec<PathBuf> {
     let mut paths = fs::read_dir(parent)
         .expect("inventory retained publication quarantines")
@@ -70,7 +66,6 @@ fn publication_quarantines(parent: &Path, prefix: &str) -> Vec<PathBuf> {
     paths.sort();
     paths
 }
-
 #[derive(Debug, PartialEq, Eq)]
 struct ProcessGenerationClaimStateForTesting {
     disk_usage: DiskUsageAccountingSnapshotForTesting,
@@ -82,7 +77,6 @@ struct ProcessGenerationClaimStateForTesting {
     quarantines: Vec<(PathBuf, Vec<u8>)>,
     live_claim_present: bool,
 }
-
 fn process_generation_claim_state(kura: &Kura) -> ProcessGenerationClaimStateForTesting {
     let optional_bytes = |path: &Path| match fs::read(path) {
         Ok(bytes) => Some(bytes),
@@ -141,7 +135,6 @@ fn process_generation_claim_state(kura: &Kura) -> ProcessGenerationClaimStateFor
             .is_some(),
     }
 }
-
 fn assert_bootstrap_atomic_temp_recovery_controls(
     store_root: &Path,
     config: &KuraConfig,
@@ -161,7 +154,6 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
             .expect("startup quarantines an authenticated pre-rename bootstrap temporary"),
     );
     assert!(!atomic_temp.exists() && !bootstrap_path.exists());
-
     let quarantine = parent.join(format!(
         "{AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX}quarantine-{}",
         Hash::new(bootstrap_bytes)
@@ -180,7 +172,6 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
     );
     assert_retained_publication_quarantine(&quarantine, bootstrap_bytes);
     assert!(!bootstrap_path.exists());
-
     let mut tampered_quarantine = bootstrap_bytes.to_vec();
     *tampered_quarantine
         .last_mut()
@@ -191,7 +182,6 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
         "retained quarantine bytes must remain bound to their digest name",
     );
     fs::write(&quarantine, bootstrap_bytes).expect("restore retained bootstrap quarantine");
-
     let malformed_quarantine = parent.join(format!(
         "{AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX}quarantine-not-a-digest"
     ));
@@ -202,7 +192,6 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
         "reserved quarantine names must fail closed",
     );
     fs::remove_file(&malformed_quarantine).expect("remove malformed quarantine control");
-
     let mut malformed = bootstrap_bytes.to_vec();
     *malformed.last_mut().expect("bootstrap is non-empty") ^= 0x80;
     fs::write(&atomic_temp, malformed).expect("write malformed bootstrap temporary");
@@ -211,7 +200,6 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
             && atomic_temp.exists()
     );
     fs::remove_file(&atomic_temp).expect("remove malformed bootstrap temporary");
-
     fs::File::create(&atomic_temp)
         .expect("create oversized bootstrap temporary")
         .set_len(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES as u64 + 1)
@@ -221,7 +209,6 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
             && atomic_temp.exists()
     );
     fs::remove_file(&atomic_temp).expect("remove oversized bootstrap temporary");
-
     let second = parent.join(format!(
         "{AUTONOMOUS_LIFECYCLE_BOOTSTRAP_ATOMIC_TEMP_PREFIX}second"
     ));
@@ -231,7 +218,6 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
     assert!(atomic_temp.exists() && second.exists());
     fs::remove_file(&atomic_temp).expect("remove first ambiguous bootstrap temporary");
     fs::remove_file(&second).expect("remove second ambiguous bootstrap temporary");
-
     fs::write(&atomic_temp, bootstrap_bytes).expect("write hard-linked bootstrap temporary");
     let hardlink = parent.join("bootstrap-temp-hardlink");
     fs::hard_link(&atomic_temp, &hardlink).expect("hard-link bootstrap temporary");
@@ -239,11 +225,9 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
     assert!(atomic_temp.exists() && hardlink.exists());
     fs::remove_file(&hardlink).expect("remove bootstrap temporary hardlink");
     fs::remove_file(&atomic_temp).expect("remove hard-linked bootstrap temporary");
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-
         let target = store_root.join("bootstrap-temp-symlink-target");
         fs::write(&target, bootstrap_bytes).expect("write bootstrap temporary symlink target");
         symlink(&target, &atomic_temp).expect("symlink bootstrap temporary");
@@ -254,7 +238,6 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
         fs::remove_file(&atomic_temp).expect("remove bootstrap temporary symlink");
         fs::remove_file(&target).expect("remove bootstrap temporary symlink target");
     }
-
     let bootstrap_lane_id =
         Kura::decode_autonomous_lifecycle_bootstrap(bootstrap_path, bootstrap_bytes)
             .expect("decode bootstrap route for swapped-path control")
@@ -279,7 +262,6 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
             && wrong_path.exists()
     );
     fs::remove_file(&wrong_path).expect("remove route-swapped bootstrap temporary");
-
     let wrong_quarantine = wrong_parent.join(
         quarantine
             .file_name()
@@ -293,10 +275,8 @@ fn assert_bootstrap_atomic_temp_recovery_controls(
         "a retained quarantine moved to another route must fail closed",
     );
     fs::remove_file(&wrong_quarantine).expect("remove route-swapped retained quarantine");
-
     fs::write(bootstrap_path, bootstrap_bytes).expect("restore stable bootstrap after temp tests");
 }
-
 #[test]
 fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     let temp_dir = TempDir::new().expect("process-generation recovery temp dir");
@@ -307,7 +287,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     let local_peer = PeerId::new(signer.public_key().clone());
     let network_id = test_network_id(b"process-generation-real-writer-crash-genesis");
     let stable_path = Kura::autonomous_lifecycle_process_generation_path_for(temp_dir.path());
-
     let (crashing, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("initialize authenticated unclaimed Kura root");
     publish_temp_recovery_catalog_baseline(&crashing, &catalog);
@@ -355,7 +334,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
         Hash::new(&residue_bytes)
     ));
     drop(crashing);
-
     assert!(Kura::new(&config, &lane_config).is_err());
     assert!(
         atomic_temps[0].exists(),
@@ -373,7 +351,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
         residue_bytes.len() as u64,
     );
     assert!(!stable_path.exists());
-
     let conflicting_initial = AutonomousLifecycleProcessGenerationRecordV1::new(
         test_network_id(b"conflicting-retained-initial-genesis"),
         local_peer.clone(),
@@ -394,7 +371,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     );
     fs::remove_file(&conflicting_initial_path)
         .expect("remove conflicting retained initial process generation");
-
     let quarantines = publication_quarantines(
         temp_dir.path(),
         AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX,
@@ -418,7 +394,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     assert_eq!(claim.generation(), 1);
     let stable_bytes = fs::read(&stable_path).expect("read stable generation one");
     drop(recovered);
-
     let oversized = temp_dir.path().join(format!(
         "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}oversized"
     ));
@@ -429,7 +404,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     assert!(open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog).is_err());
     assert!(oversized.exists());
     fs::remove_file(&oversized).expect("remove rejected oversized temporary");
-
     let successor =
         AutonomousLifecycleProcessGenerationRecordV1::new(network_id, local_peer.clone(), 2)
             .expect("construct exact generation-two successor")
@@ -466,7 +440,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
         ),
         quarantines,
     );
-
     let mut tampered_successor = successor.clone();
     *tampered_successor
         .last_mut()
@@ -479,7 +452,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     );
     fs::write(&quarantined_successor, &successor)
         .expect("restore retained process-generation quarantine");
-
     let malformed_quarantine = temp_dir.path().join(format!(
         "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}quarantine-malformed"
     ));
@@ -487,7 +459,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
         .expect("write malformed process-generation quarantine name");
     assert!(open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog).is_err());
     fs::remove_file(&malformed_quarantine).expect("remove malformed process-generation quarantine");
-
     let skipped =
         AutonomousLifecycleProcessGenerationRecordV1::new(network_id, local_peer.clone(), 3)
             .expect("construct skipped process generation")
@@ -503,7 +474,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
         "a retained quarantine cannot jump beyond the exact stable successor",
     );
     fs::remove_file(&skipped_quarantine).expect("remove skipped-generation quarantine");
-
     let first = temp_dir.path().join(format!(
         "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}first"
     ));
@@ -516,7 +486,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     assert!(first.exists() && second.exists());
     fs::remove_file(&first).expect("remove first ambiguous temporary");
     fs::remove_file(&second).expect("remove second ambiguous temporary");
-
     fs::write(&first, &successor).expect("write hard-linked process-generation temporary");
     let hardlink = temp_dir.path().join("process-generation-temp-hardlink");
     fs::hard_link(&first, &hardlink).expect("hard-link process-generation temporary");
@@ -524,11 +493,9 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     assert!(first.exists() && hardlink.exists());
     fs::remove_file(&hardlink).expect("remove process-generation temporary hardlink");
     fs::remove_file(&first).expect("remove hard-linked process-generation temporary");
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-
         symlink(&stable_path, &first).expect("symlink process-generation temporary");
         assert!(open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog).is_err());
         assert!(first.is_symlink());
@@ -539,7 +506,6 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
         stable_bytes,
     );
 }
-
 #[test]
 fn retained_initial_process_generation_quarantine_constrains_first_durable_claim() {
     let temp_dir = TempDir::new().expect("retained initial authority temp dir");
@@ -565,14 +531,12 @@ fn retained_initial_process_generation_quarantine_constrains_first_durable_claim
         "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}quarantine-{}",
         Hash::new(&retained_bytes),
     ));
-
     let (initialized, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("initialize Kura root without a stable process generation");
     publish_temp_recovery_catalog_baseline(&initialized, &catalog);
     drop(initialized);
     fs::write(&quarantine_path, &retained_bytes)
         .expect("install authenticated retained generation-one quarantine");
-
     let (wrong_chain_kura, _) =
         open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
             .expect("startup authenticates the lone retained generation-one authority");
@@ -603,7 +567,6 @@ fn retained_initial_process_generation_quarantine_constrains_first_durable_claim
         "a conflicting chain claim must fail before stable/temp, accounting, quarantine, or live-claim mutation",
     );
     drop(wrong_chain_kura);
-
     let (wrong_peer_kura, _) =
         open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
             .expect("restart reauthenticates retained generation-one authority");
@@ -625,7 +588,6 @@ fn retained_initial_process_generation_quarantine_constrains_first_durable_claim
         "a conflicting peer claim must fail before stable/temp, accounting, quarantine, or live-claim mutation",
     );
     drop(wrong_peer_kura);
-
     let (exact_kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("restart preserves exact retained generation-one authority");
     exact_kura
@@ -656,7 +618,6 @@ fn retained_initial_process_generation_quarantine_constrains_first_durable_claim
         "an idempotent live retry must not rewrite stable state or consume its quarantine",
     );
     drop(exact_kura);
-
     let (restarted, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("restart revalidates stable generation one and its retained quarantine");
     let restarted_state = process_generation_claim_state(&restarted);
@@ -668,7 +629,6 @@ fn retained_initial_process_generation_quarantine_constrains_first_durable_claim
     );
     assert!(!restarted_state.live_claim_present);
 }
-
 #[test]
 fn provisional_catalog_open_detects_bootstrap_residue_without_mutating_it() {
     let temp_dir = TempDir::new().expect("provisional temp-recovery directory");
@@ -679,7 +639,6 @@ fn provisional_catalog_open_detects_bootstrap_residue_without_mutating_it() {
         .expect("establish provisional configured catalog");
     publish_configured_catalog_baseline(&kura, &catalog);
     drop(kura);
-
     let parent = Kura::lane_artifact_dir(&lane_config.primary().blocks_dir(temp_dir.path()));
     fs::create_dir_all(&parent).expect("create provisional bootstrap namespace");
     let residue = parent.join(format!(
@@ -704,7 +663,6 @@ fn provisional_catalog_open_detects_bootstrap_residue_without_mutating_it() {
         residue_bytes,
     );
 }
-
 #[test]
 fn provisional_catalog_open_never_repairs_merge_tail_or_prune_intent() {
     let temp_dir = TempDir::new().expect("provisional merge/prune directory");
@@ -723,7 +681,6 @@ fn provisional_catalog_open_never_repairs_merge_tail_or_prune_intent() {
     kura.extend_hash_only_suffix_from_verified_snapshot(&[first_hash, snapshot_tail_hash])
         .expect("publish verified hash-only tail");
     drop(kura);
-
     let merge_path = lane_config.primary().merge_log_path(temp_dir.path());
     let partial_tail = 73_u32.to_le_bytes();
     fs::OpenOptions::new()
@@ -750,7 +707,6 @@ fn provisional_catalog_open_never_repairs_merge_tail_or_prune_intent() {
         fs::read(&merge_path).expect("read retained partial merge tail"),
         merge_bytes,
     );
-
     let intent = seal_prune_intent_fixture(KuraPruneIntentV2 {
         version: 2,
         source_height: 2,
@@ -788,7 +744,6 @@ fn provisional_catalog_open_never_repairs_merge_tail_or_prune_intent() {
         merge_bytes,
     );
 }
-
 #[test]
 fn invalid_catalog_fails_before_process_residue_cleanup() {
     let temp_dir = TempDir::new().expect("invalid-catalog temp-recovery directory");
@@ -799,7 +754,6 @@ fn invalid_catalog_fails_before_process_residue_cleanup() {
         .expect("establish accepted configured catalog");
     publish_configured_catalog_baseline(&kura, &accepted);
     drop(kura);
-
     let residue = temp_dir.path().join(format!(
         "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}invalid-catalog"
     ));
@@ -814,7 +768,6 @@ fn invalid_catalog_fails_before_process_residue_cleanup() {
         residue_bytes,
     );
 }
-
 #[test]
 fn debug_block_dump_is_pinned_single_link_and_counted() {
     let temp_dir = TempDir::new().expect("bound debug-dump temp dir");
@@ -839,7 +792,6 @@ fn debug_block_dump_is_pinned_single_link_and_counted() {
         Kura::blocks_root_debug_file_bytes(parent).expect("count debug block dump"),
         bytes.len() as u64,
     );
-
     let hardlink = parent.join("blocks-jsonl-hardlink");
     fs::hard_link(&path, &hardlink).expect("hard-link debug block dump");
     assert!(
@@ -850,7 +802,6 @@ fn debug_block_dump_is_pinned_single_link_and_counted() {
     assert_eq!(fs::read(&path).expect("read unchanged linked dump"), bytes);
     fs::remove_file(&hardlink).expect("remove debug dump hardlink");
     fs::remove_file(&path).expect("remove regular debug dump");
-
     fs::create_dir(&path).expect("replace debug dump with directory");
     assert!(
         Kura::blocks_root_debug_file_bytes(parent).is_err()
@@ -858,11 +809,9 @@ fn debug_block_dump_is_pinned_single_link_and_counted() {
         "non-regular debug output must fail closed",
     );
     fs::remove_dir(&path).expect("remove debug dump directory");
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-
         let target = parent.join("blocks-jsonl-symlink-target");
         fs::write(&target, b"victim").expect("write debug symlink target");
         symlink(&target, &path).expect("symlink debug block dump");
@@ -877,7 +826,6 @@ fn debug_block_dump_is_pinned_single_link_and_counted() {
         );
     }
 }
-
 #[test]
 fn debug_block_dump_reserves_capacity_before_first_creation() {
     let temp_dir = TempDir::new().expect("debug capacity temp dir");
@@ -896,7 +844,6 @@ fn debug_block_dump_reserves_capacity_before_first_creation() {
     Arc::get_mut(&mut kura)
         .expect("exclusive debug capacity Kura")
         .max_disk_usage_bytes = baseline;
-
     kura.append_debug_block_dump(&DummyBlocks::new().next());
     assert!(
         !path.exists(),
@@ -908,7 +855,6 @@ fn debug_block_dump_reserves_capacity_before_first_creation() {
         baseline,
     );
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -938,7 +884,6 @@ fn exact_object_quarantine_retains_a_swapped_entry_instead_of_deleting_it() {
     let displaced = temp_dir.path().join("displaced-classified-residue");
     fs::rename(&path, &displaced).expect("displace classified residue after binding");
     fs::write(&path, replacement).expect("install path-swapped replacement");
-
     assert!(
         Kura::quarantine_and_retain_bound_autonomous_publication_temporary(
             temp_dir.path(),
@@ -968,7 +913,6 @@ fn exact_object_quarantine_retains_a_swapped_entry_instead_of_deleting_it() {
     );
     assert!(!path.exists());
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -1001,7 +945,6 @@ fn exact_object_quarantine_uses_the_pinned_parent_and_preserves_replacement_path
     fs::rename(&parent, &displaced_parent).expect("displace bound parent after binding");
     fs::create_dir(&parent).expect("create replacement parent path");
     fs::write(&path, victim).expect("install replacement-path victim");
-
     assert!(
         Kura::quarantine_and_retain_bound_autonomous_publication_temporary(
             temp_dir.path(),
@@ -1030,7 +973,6 @@ fn exact_object_quarantine_uses_the_pinned_parent_and_preserves_replacement_path
         victim,
     );
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -1048,7 +990,6 @@ fn exact_object_quarantine_retains_bounded_repeated_identical_residues() {
     let current_name =
         format!("{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}repeated");
     let path = temp_dir.path().join(&current_name);
-
     for _ in 0..2 {
         fs::write(&path, bytes).expect("recreate identical publication residue");
         let (namespace, file, metadata, bound) = Kura::bind_autonomous_publication_temporary(
@@ -1071,7 +1012,6 @@ fn exact_object_quarantine_retains_bounded_repeated_identical_residues() {
         )
         .expect("retain repeated publication residue");
     }
-
     let primary_name = format!(
         "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}quarantine-{}",
         Hash::new(bytes),
@@ -1091,7 +1031,6 @@ fn exact_object_quarantine_retains_bounded_repeated_identical_residues() {
     for quarantine in &quarantines {
         assert_retained_publication_quarantine(quarantine, bytes);
     }
-
     fs::write(&path, bytes).expect("recreate residue beyond bounded multiplicity");
     let (namespace, file, metadata, bound) = Kura::bind_autonomous_publication_temporary(
         temp_dir.path(),

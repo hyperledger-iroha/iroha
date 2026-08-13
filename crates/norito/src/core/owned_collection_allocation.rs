@@ -1,5 +1,4 @@
 // Allocation accounting for standard-library owned node collections.
-
 /// Resources charged by one measured [`DecodeLimits`] scope.
 ///
 /// The counters are cumulative allocation requests, not a sample of allocator
@@ -11,21 +10,18 @@ pub struct DecodeAllocationUsage {
     total_elements: usize,
     total_allocated_bytes: usize,
 }
-
 impl DecodeAllocationUsage {
     /// Sequence elements charged in the measured scope.
     #[must_use]
     pub const fn total_elements(self) -> usize {
         self.total_elements
     }
-
     /// Allocation bytes charged in the measured scope.
     #[must_use]
     pub const fn total_allocated_bytes(self) -> usize {
         self.total_allocated_bytes
     }
 }
-
 /// Run a synchronous decode scope and return its exact cumulative charges.
 ///
 /// Nested decode limits still compose normally: this scope records its own
@@ -52,7 +48,6 @@ pub fn with_decode_limits_measured<T>(
     };
     (result, usage)
 }
-
 /// Build a fixed array in its final storage and drop every initialized element
 /// if decoding fails or unwinds.
 fn try_decode_array<T, const N: usize>(
@@ -62,7 +57,6 @@ fn try_decode_array<T, const N: usize>(
         first: *mut T,
         len: usize,
     }
-
     impl<T> Drop for Initialized<T> {
         fn drop(&mut self) {
             // SAFETY: `first` points to the array's final storage and exactly
@@ -72,7 +66,6 @@ fn try_decode_array<T, const N: usize>(
             }
         }
     }
-
     let mut array = core::mem::MaybeUninit::<[T; N]>::uninit();
     let mut initialized = Initialized {
         first: array.as_mut_ptr().cast::<T>(),
@@ -90,13 +83,11 @@ fn try_decode_array<T, const N: usize>(
     // was forgotten only after the final successful write.
     Ok(unsafe { array.assume_init() })
 }
-
 /// Allocator-visible bytes owned by one `Box<T>` allocation.
 #[doc(hidden)]
 pub const fn owned_box_allocation_bytes<T>() -> usize {
     core::mem::size_of::<T>()
 }
-
 fn owned_counted_pointer_allocation_bytes<T, Counter>() -> Result<usize, Error> {
     let counters = Layout::array::<Counter>(2).map_err(|_| Error::LengthMismatch)?;
     let (layout, _) = counters
@@ -104,7 +95,6 @@ fn owned_counted_pointer_allocation_bytes<T, Counter>() -> Result<usize, Error> 
         .map_err(|_| Error::LengthMismatch)?;
     Ok(layout.pad_to_align().size())
 }
-
 /// Allocator-visible bytes owned by one `Rc<T>` allocation.
 ///
 /// The standard-library wrapper stores two `Cell<usize>` counters followed by
@@ -114,7 +104,6 @@ fn owned_counted_pointer_allocation_bytes<T, Counter>() -> Result<usize, Error> 
 pub fn owned_rc_allocation_bytes<T>() -> Result<usize, Error> {
     owned_counted_pointer_allocation_bytes::<T, Cell<usize>>()
 }
-
 /// Allocator-visible bytes owned by one `Arc<T>` allocation.
 ///
 /// The standard-library wrapper stores two atomic counters followed by `T` in
@@ -123,25 +112,21 @@ pub fn owned_rc_allocation_bytes<T>() -> Result<usize, Error> {
 pub fn owned_arc_allocation_bytes<T>() -> Result<usize, Error> {
     owned_counted_pointer_allocation_bytes::<T, std::sync::atomic::AtomicUsize>()
 }
-
 /// Charge a decoded `Box<T>` before constructing its allocation.
 #[doc(hidden)]
 pub fn reserve_decode_box_allocation<T>() -> Result<(), Error> {
     reserve_decode_allocation(owned_box_allocation_bytes::<T>())
 }
-
 /// Charge a decoded `Rc<T>` before constructing its allocation.
 #[doc(hidden)]
 pub fn reserve_decode_rc_allocation<T>() -> Result<(), Error> {
     reserve_decode_allocation(owned_rc_allocation_bytes::<T>()?)
 }
-
 /// Charge a decoded `Arc<T>` before constructing its allocation.
 #[doc(hidden)]
 pub fn reserve_decode_arc_allocation<T>() -> Result<(), Error> {
     reserve_decode_allocation(owned_arc_allocation_bytes::<T>()?)
 }
-
 /// `std::collections::BTreeMap` uses a degree-six B-tree in the pinned Rust
 /// toolchain: eleven key/value slots and twelve child edges per node.
 ///
@@ -175,7 +160,6 @@ const STD_HASH_TABLE_CONTROL_GROUP_BYTES: usize = 16;
     all(target_arch = "loongarch64", target_feature = "lsx", not(miri))
 )))]
 const STD_HASH_TABLE_CONTROL_GROUP_BYTES: usize = core::mem::size_of::<usize>();
-
 /// Return an upper bound for one Rust-layout struct with `field_count` fields.
 ///
 /// Rust-layout structs may reorder fields. Summing their sizes and allowing
@@ -194,7 +178,6 @@ fn checked_rust_struct_layout_upper_bound(
         .checked_add(padding)
         .ok_or(Error::LengthMismatch)
 }
-
 /// Bytes reserved by all `LinkedList<T>` nodes created for `elements`.
 fn linked_list_node_allocation_bytes<T>(elements: usize) -> Result<usize, Error> {
     let pointer_bytes = core::mem::size_of::<usize>();
@@ -208,7 +191,6 @@ fn linked_list_node_allocation_bytes<T>(elements: usize) -> Result<usize, Error>
         .checked_mul(node_bytes)
         .ok_or(Error::LengthMismatch)
 }
-
 /// Maximum live B-tree nodes while inserting `entries` distinct keys into one
 /// standard-library B-tree.
 ///
@@ -219,7 +201,6 @@ fn linked_list_node_allocation_bytes<T>(elements: usize) -> Result<usize, Error>
 pub fn owned_btree_node_count_upper_bound(entries: usize) -> Result<usize, Error> {
     btree_maps_node_count_upper_bound(1, entries)
 }
-
 fn btree_maps_node_count_upper_bound(maps: usize, entries: usize) -> Result<usize, Error> {
     let non_empty_maps = maps.min(entries);
     let remaining_entries = entries.saturating_sub(non_empty_maps);
@@ -227,7 +208,6 @@ fn btree_maps_node_count_upper_bound(maps: usize, entries: usize) -> Result<usiz
         .checked_add(remaining_entries / STD_BTREE_NODE_MIN_ENTRIES)
         .ok_or(Error::LengthMismatch)
 }
-
 /// Bytes reserved by all `BTreeMap<K, V>` nodes created for `entries`.
 ///
 /// An internal node is the largest standard-library B-tree node: it owns the
@@ -241,7 +221,6 @@ pub fn owned_btree_allocation_bytes<K, V>(entries: usize) -> Result<usize, Error
         .checked_mul(node_bytes)
         .ok_or(Error::LengthMismatch)
 }
-
 /// Bytes reserved by `maps` owned B-trees containing `entries` in aggregate.
 ///
 /// Empty maps allocate no nodes. Distributing entries across as many non-empty
@@ -257,7 +236,6 @@ pub fn owned_btree_maps_allocation_bytes<K, V>(
         .checked_mul(node_bytes)
         .ok_or(Error::LengthMismatch)
 }
-
 fn btree_node_allocation_bytes<K, V>() -> Result<usize, Error> {
     let pointer_bytes = core::mem::size_of::<usize>();
     let keys_bytes = core::mem::size_of::<K>()
@@ -281,13 +259,11 @@ fn btree_node_allocation_bytes<K, V>() -> Result<usize, Error> {
         .max(core::mem::align_of::<usize>());
     checked_rust_struct_layout_upper_bound(field_bytes, 6, max_alignment)
 }
-
 /// Charge a decoded B-tree's complete node allocation before insertion.
 #[doc(hidden)]
 pub fn reserve_decode_btree_allocation<K, V>(entries: usize) -> Result<(), Error> {
     reserve_decode_allocation(owned_btree_allocation_bytes::<K, V>(entries)?)
 }
-
 fn hash_table_bucket_count<T>(entries: usize) -> Result<usize, Error> {
     debug_assert_ne!(entries, 0);
     if entries < 15 {
@@ -311,7 +287,6 @@ fn hash_table_bucket_count<T>(entries: usize) -> Result<usize, Error> {
             16
         });
     }
-
     let adjusted_capacity = entries
         .checked_mul(STD_HASH_TABLE_LOAD_DENOMINATOR)
         .ok_or(Error::LengthMismatch)?
@@ -320,7 +295,6 @@ fn hash_table_bucket_count<T>(entries: usize) -> Result<usize, Error> {
         .checked_next_power_of_two()
         .ok_or(Error::LengthMismatch)
 }
-
 /// Bytes requested by the standard hash table for `entries` values of `T`.
 ///
 /// This mirrors the repository's pinned std/hashbrown `capacity_to_buckets`
@@ -351,17 +325,14 @@ pub fn owned_hash_table_allocation_bytes<T>(entries: usize) -> Result<usize, Err
     }
     Ok(allocation_bytes)
 }
-
 /// Charge a decoded standard hash table's complete allocation before reserve.
 #[doc(hidden)]
 pub fn reserve_decode_hash_table_allocation<T>(entries: usize) -> Result<(), Error> {
     reserve_decode_allocation(owned_hash_table_allocation_bytes::<T>(entries)?)
 }
-
 #[cfg(test)]
 mod owned_collection_allocation_tests {
     use super::*;
-
     fn allocation_limit_just_below(bytes: usize) -> DecodeLimits {
         DecodeLimits::new(
             usize::MAX,
@@ -371,7 +342,6 @@ mod owned_collection_allocation_tests {
             usize::MAX,
         )
     }
-
     #[test]
     fn measured_scope_reports_its_own_collection_charges() {
         reset_decode_state();
@@ -379,11 +349,9 @@ mod owned_collection_allocation_tests {
         let mut bytes = Vec::new();
         serialize_to_buffer(&value, &mut bytes).expect("serialize measured Vec");
         let limits = DecodeLimits::new(16, bytes.len(), 16, 1024, 16);
-
         let (decoded, usage) = with_decode_limits_measured(limits, || {
             <Vec<u32> as DecodeFromSlice>::decode_from_slice(&bytes)
         });
-
         assert_eq!(decoded.expect("decode measured Vec").0, value);
         assert_eq!(usage.total_elements(), value.len());
         assert!(
@@ -395,7 +363,6 @@ mod owned_collection_allocation_tests {
         );
         reset_decode_state();
     }
-
     #[test]
     fn linked_list_decoder_charges_all_nodes_before_insertion() {
         reset_decode_state();
@@ -404,7 +371,6 @@ mod owned_collection_allocation_tests {
         serialize_to_buffer(&value, &mut bytes).expect("serialize linked list");
         let node_bytes = linked_list_node_allocation_bytes::<u8>(value.len())
             .expect("linked-list node charge fits");
-
         let error = with_decode_limits(allocation_limit_just_below(node_bytes), || {
             <LinkedList<u8> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
         })
@@ -416,7 +382,6 @@ mod owned_collection_allocation_tests {
         ));
         reset_decode_state();
     }
-
     #[test]
     fn btree_set_decoder_charges_tree_nodes_before_insertion() {
         reset_decode_state();
@@ -425,7 +390,6 @@ mod owned_collection_allocation_tests {
         serialize_to_buffer(&value, &mut bytes).expect("serialize B-tree set");
         let node_bytes = owned_btree_allocation_bytes::<u16, ()>(value.len())
             .expect("B-tree set node charge fits");
-
         let error = with_decode_limits(allocation_limit_just_below(node_bytes), || {
             <BTreeSet<u16> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
         })
@@ -437,7 +401,6 @@ mod owned_collection_allocation_tests {
         ));
         reset_decode_state();
     }
-
     #[test]
     fn btree_map_decoder_charges_tree_nodes_before_insertion() {
         reset_decode_state();
@@ -446,7 +409,6 @@ mod owned_collection_allocation_tests {
         serialize_to_buffer(&value, &mut bytes).expect("serialize B-tree map");
         let node_bytes = owned_btree_allocation_bytes::<u16, u32>(value.len())
             .expect("B-tree map node charge fits");
-
         let error = with_decode_limits(allocation_limit_just_below(node_bytes), || {
             <BTreeMap<u16, u32> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
         })
@@ -458,7 +420,6 @@ mod owned_collection_allocation_tests {
         ));
         reset_decode_state();
     }
-
     #[test]
     fn hash_set_decoder_charges_buckets_and_control_bytes_before_reserve() {
         reset_decode_state();
@@ -467,7 +428,6 @@ mod owned_collection_allocation_tests {
         serialize_to_buffer(&value, &mut bytes).expect("serialize hash set");
         let table_bytes = owned_hash_table_allocation_bytes::<u16>(value.len())
             .expect("hash-set table charge fits");
-
         let error = with_decode_limits(allocation_limit_just_below(table_bytes), || {
             <HashSet<u16> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
         })
@@ -479,7 +439,6 @@ mod owned_collection_allocation_tests {
         ));
         reset_decode_state();
     }
-
     #[test]
     fn hash_table_allocation_matches_std_raw_table_layout() {
         let buckets = hash_table_bucket_count::<u8>(1).expect("small table bucket count fits");
@@ -493,13 +452,11 @@ mod owned_collection_allocation_tests {
             owned_hash_table_allocation_bytes::<u8>(1).expect("small table allocation fits"),
             expected_buckets + expected_buckets + STD_HASH_TABLE_CONTROL_GROUP_BYTES
         );
-
         assert_eq!(
             hash_table_bucket_count::<u64>(15).expect("large table bucket count fits"),
             32
         );
     }
-
     #[test]
     fn hash_map_decoder_charges_buckets_and_control_bytes_before_reserve() {
         reset_decode_state();
@@ -508,7 +465,6 @@ mod owned_collection_allocation_tests {
         serialize_to_buffer(&value, &mut bytes).expect("serialize hash map");
         let table_bytes = owned_hash_table_allocation_bytes::<(u16, u32)>(value.len())
             .expect("hash-map table charge fits");
-
         let error = with_decode_limits(allocation_limit_just_below(table_bytes), || {
             <HashMap<u16, u32> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
         })
@@ -520,7 +476,6 @@ mod owned_collection_allocation_tests {
         ));
         reset_decode_state();
     }
-
     #[test]
     fn aggregate_btree_estimator_charges_each_non_empty_root() {
         let single =
@@ -528,11 +483,9 @@ mod owned_collection_allocation_tests {
         let split =
             owned_btree_maps_allocation_bytes::<u8, u8>(6, 6).expect("multi-map charge fits");
         let node = owned_btree_allocation_bytes::<u8, u8>(1).expect("one node charge fits");
-
         assert_eq!(single, node.checked_mul(2).expect("test charge fits"));
         assert_eq!(split, node.checked_mul(6).expect("test charge fits"));
     }
-
     #[test]
     fn single_btree_node_estimator_handles_empty_root_and_split_boundary() {
         assert_eq!(

@@ -1,15 +1,11 @@
 //! Native account recovery policy and request types.
-
 use std::{collections::BTreeSet, num::NonZeroU64, vec::Vec};
-
 use iroha_crypto::HashOf;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use super::{AccountController, AccountId, rekey::AccountAlias};
 use crate::isi::InstructionBox;
-
 /// Guardian that can participate in social recovery for an account alias.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -23,7 +19,6 @@ pub struct RecoveryGuardian {
     /// Approval weight contributed by this guardian.
     pub weight: u16,
 }
-
 impl RecoveryGuardian {
     /// Construct a recovery guardian entry.
     #[must_use]
@@ -31,7 +26,6 @@ impl RecoveryGuardian {
         Self { account, weight }
     }
 }
-
 /// Alias-keyed social recovery policy for an account.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -47,7 +41,6 @@ pub struct AccountRecoveryPolicy {
     /// Delay before a quorum-approved recovery can be finalized.
     pub timelock_ms: NonZeroU64,
 }
-
 impl AccountRecoveryPolicy {
     /// Construct and validate a recovery policy.
     ///
@@ -65,7 +58,6 @@ impl AccountRecoveryPolicy {
         if quorum == 0 {
             return Err(AccountRecoveryPolicyError::ZeroQuorum);
         }
-
         let mut seen = BTreeSet::new();
         let mut total_weight = 0u32;
         for guardian in &guardians {
@@ -81,27 +73,23 @@ impl AccountRecoveryPolicy {
             }
             total_weight += u32::from(guardian.weight);
         }
-
         if u32::from(quorum) > total_weight {
             return Err(AccountRecoveryPolicyError::QuorumExceedsTotalWeight {
                 quorum,
                 total_weight,
             });
         }
-
         Ok(Self {
             guardians,
             quorum,
             timelock_ms,
         })
     }
-
     /// Borrow the guardian set.
     #[must_use]
     pub fn guardians(&self) -> &[RecoveryGuardian] {
         &self.guardians
     }
-
     /// Sum the configured guardian weights.
     #[must_use]
     pub fn total_weight(&self) -> u32 {
@@ -110,19 +98,16 @@ impl AccountRecoveryPolicy {
             .map(|guardian| u32::from(guardian.weight))
             .sum()
     }
-
     /// Return the configured quorum as a plain integer.
     #[must_use]
     pub fn quorum(&self) -> u16 {
         self.quorum
     }
-
     /// Return the configured timelock.
     #[must_use]
     pub fn timelock_ms(&self) -> NonZeroU64 {
         self.timelock_ms
     }
-
     /// Compute the cumulative weight of a set of guardian approvals.
     #[must_use]
     pub fn approval_weight(&self, approvals: &BTreeSet<AccountId>) -> u32 {
@@ -132,13 +117,11 @@ impl AccountRecoveryPolicy {
             .map(|guardian| u32::from(guardian.weight))
             .sum()
     }
-
     /// Return `true` when the approval set satisfies the quorum.
     #[must_use]
     pub fn quorum_reached(&self, approvals: &BTreeSet<AccountId>) -> bool {
         self.approval_weight(approvals) >= u32::from(self.quorum)
     }
-
     /// Return `true` when the account is configured as a guardian.
     #[must_use]
     pub fn contains_guardian(&self, account: &AccountId) -> bool {
@@ -148,7 +131,6 @@ impl AccountRecoveryPolicy {
             .any(|guardian| guardian.account.subject_id() == subject)
     }
 }
-
 /// Lifecycle state of an account recovery request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -167,7 +149,6 @@ pub enum AccountRecoveryStatus {
     /// Recovery request has already finalized.
     Finalized,
 }
-
 /// Alias-keyed account recovery request tracked in world state.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -197,7 +178,6 @@ pub struct AccountRecoveryRequest {
     /// Current lifecycle state of the request.
     pub status: AccountRecoveryStatus,
 }
-
 impl AccountRecoveryRequest {
     /// Construct a new pending recovery request.
     #[must_use]
@@ -219,29 +199,24 @@ impl AccountRecoveryRequest {
             status: AccountRecoveryStatus::Pending,
         }
     }
-
     /// Return `true` when the request is still active.
     #[must_use]
     pub fn is_pending(&self) -> bool {
         self.status == AccountRecoveryStatus::Pending
     }
-
     /// Add an approval keyed by guardian subject id.
     pub fn approve(&mut self, account: &AccountId) {
         self.approvals.insert(account.subject_id());
     }
-
     /// Mark the request as cancelled.
     pub fn cancel(&mut self) {
         self.status = AccountRecoveryStatus::Cancelled;
     }
-
     /// Mark the request as finalized.
     pub fn finalize(&mut self) {
         self.status = AccountRecoveryStatus::Finalized;
     }
 }
-
 /// Validation error returned by [`AccountRecoveryPolicy::new`].
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum AccountRecoveryPolicyError {
@@ -272,22 +247,17 @@ pub enum AccountRecoveryPolicyError {
         total_weight: u32,
     },
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, KeyPair};
-
     use super::*;
     use crate::{Level, isi::Log, nexus::DataSpaceId};
-
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked account-recovery fixture keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     #[test]
     fn recovery_policy_rejects_duplicate_guardians() {
         let guardian = RecoveryGuardian::new(account(1), 1);
@@ -302,7 +272,6 @@ mod tests {
             AccountRecoveryPolicyError::DuplicateGuardian { .. }
         ));
     }
-
     #[test]
     fn recovery_policy_rejects_zero_weight() {
         let err = AccountRecoveryPolicy::new(
@@ -316,7 +285,6 @@ mod tests {
             AccountRecoveryPolicyError::GuardianWeightZero { .. }
         ));
     }
-
     #[test]
     fn recovery_policy_rejects_unreachable_quorum() {
         let err = AccountRecoveryPolicy::new(
@@ -330,7 +298,6 @@ mod tests {
             AccountRecoveryPolicyError::QuorumExceedsTotalWeight { .. }
         ));
     }
-
     #[test]
     fn recovery_policy_computes_approval_weight() {
         let first = account(1);
@@ -344,12 +311,10 @@ mod tests {
             NonZeroU64::new(5_000).unwrap(),
         )
         .expect("policy");
-
         let approvals = BTreeSet::from([first.subject_id(), second.subject_id()]);
         assert_eq!(policy.approval_weight(&approvals), 5);
         assert!(policy.quorum_reached(&approvals));
     }
-
     #[test]
     fn recovery_request_roundtrips_terminal_multisig_evidence() {
         let alias = AccountAlias::domainless(
@@ -376,12 +341,10 @@ mod tests {
         ))];
         request.invalidated_multisig_proposal_hashes = vec![HashOf::new(&invalidated_instructions)];
         request.finalize();
-
         let encoded = norito::to_bytes(&request).expect("encode recovery request");
         let decoded = norito::decode_from_bytes::<AccountRecoveryRequest>(&encoded)
             .expect("decode recovery request");
         assert_eq!(decoded, request);
-
         #[cfg(feature = "json")]
         {
             let json = norito::json::to_json(&request).expect("encode recovery request JSON");

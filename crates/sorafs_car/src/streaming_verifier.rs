@@ -7,29 +7,24 @@
 //! making an admission decision must still run [`crate::verifier::CarVerifier`]
 //! on the completed archive (or compare against a canonical writer) so DAG and
 //! index canonicality are enforced rather than inferred from a signed digest.
-
 use blake3::Hasher;
 use sorafs_manifest::ManifestV1;
-
 use crate::{
     BLAKE3_256_MULTIHASH_CODE, DAG_CBOR_CODEC, HEADER_LEN, PRAGMA, RAW_CODEC,
     verifier::CarVerifyError,
 };
-
 /// Maximum CID prefix retained while waiting for a complete section CID.
 ///
 /// SoraFS v1 CIDs use two short varints, a BLAKE3 multihash prefix, and a
 /// 32-byte digest. This defensive ceiling prevents a forged section length
 /// from turning an incomplete CID into an unbounded buffer.
 const MAX_STREAMING_CID_SIZE: usize = 128;
-
 /// Configuration for the streaming verifier.
 #[derive(Debug, Clone)]
 pub struct StreamingVerifierConfig {
     /// Maximum allowed payload size for any raw chunk or DAG-CBOR section.
     pub max_chunk_size: usize,
 }
-
 impl Default for StreamingVerifierConfig {
     fn default() -> Self {
         Self {
@@ -37,7 +32,6 @@ impl Default for StreamingVerifierConfig {
         }
     }
 }
-
 /// State of the streaming verifier.
 #[derive(Debug)]
 enum State {
@@ -66,7 +60,6 @@ enum State {
     /// Error state.
     Error(CarVerifyError),
 }
-
 /// A streaming verifier for CARv2 archives.
 pub struct StreamingCarVerifier {
     config: StreamingVerifierConfig,
@@ -94,7 +87,6 @@ pub struct StreamingCarVerifier {
     /// Whether roots have been validated against the manifest.
     roots_validated: bool,
 }
-
 impl StreamingCarVerifier {
     /// Create a new streaming verifier for the given manifest.
     pub fn new(manifest: ManifestV1, config: StreamingVerifierConfig) -> Self {
@@ -116,7 +108,6 @@ impl StreamingCarVerifier {
             roots_validated: false,
         }
     }
-
     /// Process a chunk of bytes.
     /// Returns the number of bytes consumed. If less than `bytes.len()`, the caller should
     /// handle backpressure or store the remainder.
@@ -136,7 +127,6 @@ impl StreamingCarVerifier {
         if bytes.is_empty() {
             return Ok(0);
         }
-
         if let State::Complete = &self.state {
             // Consume trailing index bytes while preserving the archive digest.
             self.archive_hasher.update(bytes);
@@ -150,7 +140,6 @@ impl StreamingCarVerifier {
                 ))?;
             return Ok(bytes.len());
         }
-
         let mut consumed = 0;
         while consumed < bytes.len() {
             // If completion happens mid-update, hash the remaining index bytes and count the
@@ -160,7 +149,6 @@ impl StreamingCarVerifier {
                 self.processed_bytes = self.processed_bytes.saturating_add(bytes.len() as u64);
                 return Ok(bytes.len());
             }
-
             // The CARv2 index lives after the CARv1 data region. Once we've consumed the full
             // data region, we stop parsing sections and switch to `State::Complete` so the
             // remaining bytes are simply hashed and consumed.
@@ -174,18 +162,15 @@ impl StreamingCarVerifier {
                 self.transition(State::Complete);
                 continue;
             }
-
             let b = bytes[consumed];
             // We hash byte by byte for simplicity in this loop structure,
             // optimization would block-hash.
             self.archive_hasher.update(&[b]);
-
             match &mut self.state {
                 State::Pragma { buffered } => {
                     self.buffer.push(b);
                     *buffered += 1;
                     consumed += 1;
-
                     if *buffered == PRAGMA.len() {
                         if self.buffer != PRAGMA {
                             self.transition(State::Error(CarVerifyError::InvalidPragma));
@@ -199,7 +184,6 @@ impl StreamingCarVerifier {
                     self.buffer.push(b);
                     *buffered += 1;
                     consumed += 1;
-
                     if *buffered == HEADER_LEN {
                         // Parse offsets
                         let mut data_offset_bytes = [0u8; 8];
@@ -208,11 +192,9 @@ impl StreamingCarVerifier {
                         data_size_bytes.copy_from_slice(&self.buffer[24..32]);
                         let mut index_offset_bytes = [0u8; 8];
                         index_offset_bytes.copy_from_slice(&self.buffer[32..40]);
-
                         self.data_offset = u64::from_le_bytes(data_offset_bytes);
                         self.data_size = u64::from_le_bytes(data_size_bytes);
                         self.index_offset = u64::from_le_bytes(index_offset_bytes);
-
                         // Validation
                         let header_start = (PRAGMA.len() + HEADER_LEN) as u64;
                         if self.data_offset != header_start {
@@ -231,7 +213,6 @@ impl StreamingCarVerifier {
                             self.transition(State::Error(CarVerifyError::InvalidIndexOffset));
                             return Err(CarVerifyError::InvalidIndexOffset);
                         }
-
                         self.buffer.clear();
                         self.transition(State::HeaderLen { buffered: 0 });
                     }
@@ -244,7 +225,6 @@ impl StreamingCarVerifier {
                         self.transition(State::Error(CarVerifyError::HeaderTruncated));
                         return Err(CarVerifyError::HeaderTruncated);
                     }
-
                     match crate::verifier::decode_uleb128(&self.buffer) {
                         Ok((len, _)) => {
                             let len = match usize::try_from(len) {
@@ -285,7 +265,6 @@ impl StreamingCarVerifier {
                         self.transition(State::Error(CarVerifyError::HeaderTruncated));
                         return Err(CarVerifyError::HeaderTruncated);
                     }
-
                     if *buffered == *len {
                         match crate::verifier::parse_carv1_header(&self.buffer) {
                             Ok(roots) => {
@@ -317,7 +296,6 @@ impl StreamingCarVerifier {
                         }));
                         return Err(CarVerifyError::TruncatedSection { section_index });
                     }
-
                     match crate::verifier::decode_uleb128(&self.buffer) {
                         Ok((len, _)) => {
                             if len == 0 {
@@ -362,7 +340,6 @@ impl StreamingCarVerifier {
                         }));
                         return Err(CarVerifyError::TruncatedSection { section_index });
                     }
-
                     match crate::verifier::decode_cid(&self.buffer, self.section_index) {
                         Ok((info, cid_len)) => {
                             if info.digest.len() != 32 {
@@ -401,7 +378,6 @@ impl StreamingCarVerifier {
                                     codec: info.codec,
                                 });
                             }
-
                             let digest = info.digest;
                             let Some(payload_len) = len.checked_sub(cid_len) else {
                                 let section_index = self.section_index;
@@ -445,7 +421,6 @@ impl StreamingCarVerifier {
                                     max,
                                 });
                             }
-
                             self.buffer.clear();
                             self.transition(State::SectionPayload {
                                 len: payload_len,
@@ -487,7 +462,6 @@ impl StreamingCarVerifier {
                         };
                         self.payload_bytes = next_payload_bytes;
                     }
-
                     *buffered += 1;
                     consumed += 1;
                     if !record_data_byte(&mut self.current_data_read, self.data_size) {
@@ -497,7 +471,6 @@ impl StreamingCarVerifier {
                         }));
                         return Err(CarVerifyError::TruncatedSection { section_index });
                     }
-
                     if *buffered == *len {
                         let hash = blake3::hash(&self.buffer);
                         if hash.as_bytes() != cid_digest {
@@ -519,7 +492,6 @@ impl StreamingCarVerifier {
                                 });
                             }
                         }
-
                         if *is_raw_chunk {
                             if self.payload_bytes > self.manifest.content_length {
                                 let err = CarVerifyError::ManifestContentLengthMismatch {
@@ -565,7 +537,6 @@ impl StreamingCarVerifier {
                 }
             }
         }
-
         self.processed_bytes = self
             .processed_bytes
             .checked_add(u64::try_from(consumed).map_err(|_| {
@@ -576,7 +547,6 @@ impl StreamingCarVerifier {
             ))?;
         Ok(consumed)
     }
-
     /// Finalize verification.
     pub fn finalize(self) -> Result<(), CarVerifyError> {
         if let State::Error(e) = self.state {
@@ -595,43 +565,35 @@ impl StreamingCarVerifier {
             State::Complete => return Err(CarVerifyError::InvalidHeader),
             _ => return Err(CarVerifyError::Truncated),
         }
-
         if !self.roots_validated {
             return Err(CarVerifyError::InvalidCarv1Header("missing roots"));
         }
-
         if self.manifest.chunking.multihash_code != BLAKE3_256_MULTIHASH_CODE {
             return Err(CarVerifyError::ManifestMultihashMismatch(
                 self.manifest.chunking.multihash_code,
             ));
         }
-
         if self.payload_bytes != self.manifest.content_length {
             return Err(CarVerifyError::ManifestContentLengthMismatch {
                 expected: self.manifest.content_length,
                 actual: self.payload_bytes,
             });
         }
-
         if self.processed_bytes != self.manifest.car_size {
             return Err(CarVerifyError::ManifestCarSizeMismatch {
                 expected: self.manifest.car_size,
                 actual: self.processed_bytes,
             });
         }
-
         let archive_digest = self.archive_hasher.finalize();
         if archive_digest.as_bytes() != &self.manifest.car_digest {
             return Err(CarVerifyError::ManifestCarDigestMismatch);
         }
-
         Ok(())
     }
-
     fn transition(&mut self, new_state: State) {
         self.state = new_state;
     }
-
     fn validate_roots(&self, roots: &[Vec<u8>]) -> Result<(), CarVerifyError> {
         if roots.len() != 1 || roots[0] != self.manifest.root_cid {
             return Err(CarVerifyError::ManifestRootMismatch);
@@ -639,7 +601,6 @@ impl StreamingCarVerifier {
         Ok(())
     }
 }
-
 fn record_data_byte(current_data_read: &mut u64, data_size: u64) -> bool {
     let Some(next) = current_data_read.checked_add(1) else {
         return false;

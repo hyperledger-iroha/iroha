@@ -1,18 +1,15 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test for /v1/zk/verify-batch JSON handler (base64 of Norito envelopes).
 #![cfg(all(feature = "app_api", feature = "zk-verify-batch"))]
-
 use axum::{Router, routing::post};
 use base64::Engine;
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
-
 #[tokio::test]
 async fn zk_verify_batch_endpoint_accepts_json_b64_vec() {
     use h2::norito_helpers as nh;
     use iroha_zkp_halo2 as h2;
     use iroha_zkp_halo2::backend::pallas::PallasBackend;
-
     let app = Router::new().route(
         "/v1/zk/verify-batch",
         post(
@@ -30,7 +27,6 @@ async fn zk_verify_batch_endpoint_accepts_json_b64_vec() {
             },
         ),
     );
-
     // Build two envelopes: ok and bad (flip t)
     let params = h2::Params::new(8).unwrap();
     let coeffs: Vec<h2::PrimeField64> = (0u64..8).map(|i| h2::PrimeField64::from(i + 1)).collect();
@@ -61,7 +57,6 @@ async fn zk_verify_batch_endpoint_accepts_json_b64_vec() {
         base64::engine::general_purpose::STANDARD.encode(bad_bytes),
     ]);
     let body_json = norito::json::to_vec(&arr).unwrap();
-
     let req = http::Request::builder()
         .method("POST")
         .uri("/v1/zk/verify-batch")

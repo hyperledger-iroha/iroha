@@ -8,7 +8,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::{
     eyre::{Result, eyre},
@@ -20,9 +19,7 @@ use norito::{
     codec::{DecodeAll, Encode},
     json::{JsonDeserializeOwned, JsonSerialize},
 };
-
 use crate::{Outcome, RunArgs, tui};
-
 // RawGenesisTransaction is the largest type registered by this first-release diagnostic. Reuse
 // the signed-genesis corridor so stdin, local files, decoded values, and rendered output cannot
 // grow beyond the artifact class the command is intended to inspect.
@@ -30,7 +27,6 @@ const MAX_CODEC_INPUT_BYTES_V1: usize = iroha_genesis::SIGNED_GENESIS_MAX_BYTES_
 const MAX_CODEC_OUTPUT_BYTES_V1: usize = iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1;
 const CODEC_DECODE_LIMITS_V1: norito::DecodeLimits =
     iroha_genesis::signed_genesis_decode_limits_v1();
-
 /// Generate map with types and converter trait object
 fn generate_map() -> ConverterMap {
     fn insert_converter<T>(map: &mut ConverterMap)
@@ -41,16 +37,12 @@ fn generate_map() -> ConverterMap {
         let type_id = <T as iroha_schema::TypeId>::id();
         map.entry(type_id).or_insert_with(ConverterImpl::<T>::boxed);
     }
-
     let mut map = ConverterMap::new();
-
     insert_converter::<NewAccount>(&mut map);
     insert_converter::<AssetId>(&mut map);
     insert_converter::<Domain>(&mut map);
     insert_converter::<Peer>(&mut map);
-
     insert_converter::<RawGenesisTransaction>(&mut map);
-
     macro_rules! register_compact_as {
         ($compact:ty => $inner:ty) => {{
             let type_id = <$compact as iroha_schema::TypeId>::id();
@@ -58,21 +50,16 @@ fn generate_map() -> ConverterMap {
                 .or_insert_with(ConverterImpl::<$inner>::boxed);
         }};
     }
-
     register_compact_as!(iroha_schema::Compact<u128> => u128);
     register_compact_as!(iroha_schema::Compact<u64> => u64);
     register_compact_as!(iroha_schema::Compact<u32> => u32);
-
     map
 }
-
 type ConverterMap = BTreeMap<String, Arc<dyn Converter>>;
-
 struct BoundedDebugString {
     value: String,
     max_bytes: usize,
 }
-
 impl BoundedDebugString {
     const fn new(max_bytes: usize) -> Self {
         Self {
@@ -80,12 +67,10 @@ impl BoundedDebugString {
             max_bytes,
         }
     }
-
     fn finish(self) -> String {
         self.value
     }
 }
-
 impl fmt::Write for BoundedDebugString {
     fn write_str(&mut self, value: &str) -> fmt::Result {
         let next_len = self
@@ -103,7 +88,6 @@ impl fmt::Write for BoundedDebugString {
         Ok(())
     }
 }
-
 fn charge_guessed_output(
     retained_bytes: usize,
     type_name_bytes: usize,
@@ -124,9 +108,7 @@ fn charge_guessed_output(
     }
     Ok(retained_bytes)
 }
-
 struct ConverterImpl<T>(PhantomData<T>);
-
 impl<T> ConverterImpl<T>
 where
     T: Debug + Encode + DecodeAll + JsonSerialize + JsonDeserializeOwned,
@@ -136,13 +118,11 @@ where
         Arc::new(Self(PhantomData))
     }
 }
-
 trait Converter: Send + Sync {
     fn norito_to_rust(&self, input: &[u8]) -> Result<String>;
     fn norito_to_json(&self, input: &[u8]) -> Result<String>;
     fn json_to_norito(&self, input: &str) -> Result<Vec<u8>>;
 }
-
 impl<T> Converter for ConverterImpl<T>
 where
     T: Debug + Encode + DecodeAll + JsonSerialize + JsonDeserializeOwned,
@@ -181,14 +161,12 @@ where
         norito::core::to_bytes_bounded(&object, MAX_CODEC_OUTPUT_BYTES_V1).map_err(Into::into)
     }
 }
-
 /// Norito decoder for Iroha data types
 #[derive(Debug, ClapArgs, Clone)]
 pub struct Args {
     #[clap(subcommand)]
     command: Command,
 }
-
 #[derive(Debug, Clone, Subcommand)]
 enum Command {
     /// Show all available types
@@ -200,7 +178,6 @@ enum Command {
     /// Encode JSON as Norito. By default uses stdin and stdout
     JsonToNorito(NoritoJsonArgs),
 }
-
 #[derive(Debug, ClapArgs, Clone)]
 struct NoritoToRustArgs {
     /// Path to the binary with encoded Iroha structure
@@ -210,7 +187,6 @@ struct NoritoToRustArgs {
     #[clap(short, long = "type")]
     type_name: Option<String>,
 }
-
 #[derive(Debug, ClapArgs, Clone)]
 struct NoritoJsonArgs {
     /// Path to the input file
@@ -223,11 +199,9 @@ struct NoritoJsonArgs {
     #[clap(short, long = "type")]
     type_name: String,
 }
-
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let map = generate_map();
-
         match self.command {
             Command::NoritoToRust(decode_args) => {
                 tui::status("Decoding Norito payload to Rust debug view");
@@ -242,7 +216,6 @@ impl<T: Write> RunArgs<T> for Args {
                     None => None,
                     Some(path) => Some(BufWriter::new(File::create(path)?)),
                 };
-
                 let writer: &mut dyn Write = file_writer
                     .as_mut()
                     .map_or(writer, |file_writer| file_writer);
@@ -257,7 +230,6 @@ impl<T: Write> RunArgs<T> for Args {
                     None => None,
                     Some(path) => Some(BufWriter::new(File::create(path)?)),
                 };
-
                 let writer: &mut dyn Write = file_writer
                     .as_mut()
                     .map_or(writer, |file_writer| file_writer);
@@ -275,7 +247,6 @@ impl<T: Write> RunArgs<T> for Args {
         }
     }
 }
-
 fn read_codec_input_bounded<R: Read + ?Sized>(
     reader: &mut R,
     max_bytes: usize,
@@ -301,7 +272,6 @@ fn read_codec_input_bounded<R: Read + ?Sized>(
             .map_err(|error| eyre!("failed to reserve {label} buffer storage: {error}"))?;
         bytes.extend_from_slice(&chunk[..count]);
     }
-
     let mut growth_probe = [0_u8; 1];
     let extra = loop {
         match reader.read(&mut growth_probe) {
@@ -317,7 +287,6 @@ fn read_codec_input_bounded<R: Read + ?Sized>(
     }
     Ok(bytes)
 }
-
 fn read_codec_file_bounded(path: &Path) -> Result<Vec<u8>> {
     let mut file = File::open(path)?;
     let before = file.metadata()?;
@@ -344,29 +313,24 @@ fn read_codec_file_bounded(path: &Path) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-
 /// Type decoder
 struct NoritoToRustDecoder<'map> {
     args: NoritoToRustArgs,
     map: &'map ConverterMap,
 }
-
 impl<'map> NoritoToRustDecoder<'map> {
     /// Create new `Decoder` with `args` and `map`
     pub fn new(args: NoritoToRustArgs, map: &'map ConverterMap) -> Self {
         Self { args, map }
     }
-
     /// Decode type and print to `writer`
     pub fn decode<W: io::Write>(&self, writer: &mut W) -> Result<()> {
         let bytes = read_codec_file_bounded(&self.args.binary)?;
-
         if let Some(type_name) = &self.args.type_name {
             return self.decode_by_type(type_name, &bytes, writer);
         }
         self.decode_by_guess(&bytes, writer)
     }
-
     /// Decode concrete `type` from `bytes` and print to `writer`
     fn decode_by_type<W: io::Write>(
         &self,
@@ -379,7 +343,6 @@ impl<'map> NoritoToRustDecoder<'map> {
             |converter| Self::dump_decoded(converter.as_ref(), bytes, writer),
         )
     }
-
     /// Try to decode every type from `bytes` and print to `writer`
     fn decode_by_guess<W: io::Write>(&self, bytes: &[u8], writer: &mut W) -> Result<()> {
         // Guessing is deliberately sequential. Every successful converter can render up to the
@@ -404,7 +367,6 @@ impl<'map> NoritoToRustDecoder<'map> {
             )?;
             matches.push((type_name.clone(), formatted));
         }
-
         for (type_name, formatted) in &matches {
             writeln!(
                 writer,
@@ -413,7 +375,6 @@ impl<'map> NoritoToRustDecoder<'map> {
                 formatted
             )?;
         }
-
         match matches.len() {
             0 => writeln!(writer, "No compatible types found"),
             1 => writeln!(writer, "{} compatible type found", "1".bold()),
@@ -421,20 +382,17 @@ impl<'map> NoritoToRustDecoder<'map> {
         }
         .map_err(Into::into)
     }
-
     fn dump_decoded(converter: &dyn Converter, input: &[u8], w: &mut dyn io::Write) -> Result<()> {
         let result = converter.norito_to_rust(input)?;
         writeln!(w, "{result}")?;
         Ok(())
     }
 }
-
 struct NoritoJsonDecoder<'map, 'w> {
     reader: Box<dyn BufRead>,
     writer: &'w mut dyn Write,
     converter: &'map dyn Converter,
 }
-
 impl<'map, 'w> NoritoJsonDecoder<'map, 'w> {
     fn new(
         args: NoritoJsonArgs,
@@ -471,7 +429,6 @@ impl<'map, 'w> NoritoJsonDecoder<'map, 'w> {
             converter: converter.as_ref(),
         })
     }
-
     fn norito_to_json(self) -> Result<()> {
         let Self {
             mut reader,
@@ -487,7 +444,6 @@ impl<'map, 'w> NoritoJsonDecoder<'map, 'w> {
         writeln!(writer, "{output}")?;
         Ok(())
     }
-
     fn json_to_norito(self) -> Result<()> {
         let Self {
             mut reader,
@@ -506,7 +462,6 @@ impl<'map, 'w> NoritoJsonDecoder<'map, 'w> {
         Ok(())
     }
 }
-
 /// Print all supported types from `map` to `writer`
 fn list_types<W: io::Write>(map: &ConverterMap, writer: &mut W) -> Result<()> {
     for key in map.keys() {
@@ -515,7 +470,6 @@ fn list_types<W: io::Write>(map: &ConverterMap, writer: &mut W) -> Result<()> {
     if !map.is_empty() {
         writeln!(writer)?;
     }
-
     match map.len() {
         0 => writeln!(writer, "No type is supported"),
         1 => writeln!(writer, "{} type is supported", "1".bold()),
@@ -523,62 +477,48 @@ fn list_types<W: io::Write>(map: &ConverterMap, writer: &mut W) -> Result<()> {
     }
     .map_err(Into::into)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fmt::Write as _, path::PathBuf, sync::Arc};
-
     use color_eyre::eyre::Result as EyreResult;
     use iroha_data_model::{account::NewAccount, asset::AssetId, peer::Peer};
     use iroha_genesis::RawGenesisTransaction;
     use iroha_schema::{Compact, TypeId};
-
     use super::{
         BoundedDebugString, Converter, ConverterImpl, ConverterMap, NoritoToRustArgs,
         NoritoToRustDecoder, charge_guessed_output, generate_map, read_codec_input_bounded,
     };
-
     fn normalize_roundtrip_json(value: &mut norito::json::Value) {
         let norito::json::Value::Object(map) = value else {
             return;
         };
-
         if matches!(map.get("domain"), Some(norito::json::Value::Null)) {
             map.remove("domain");
         }
     }
-
     #[test]
     fn bounded_codec_reader_accepts_exact_limit() {
         let input = [0xA5; 32];
         let mut reader = input.as_slice();
-
         let bytes = read_codec_input_bounded(&mut reader, input.len(), "test input")
             .expect("exact limit is accepted");
-
         assert_eq!(bytes, input);
     }
-
     #[test]
     fn bounded_codec_reader_rejects_limit_plus_one() {
         let input = [0xA5; 33];
         let mut reader = input.as_slice();
-
         let error = read_codec_input_bounded(&mut reader, input.len() - 1, "test input")
             .expect_err("limit plus one must be rejected");
-
         assert!(error.to_string().contains("32-byte codec limit"));
     }
-
     #[test]
     fn bounded_debug_writer_rejects_growth_before_append() {
         let mut output = BoundedDebugString::new(3);
         output.write_str("abc").expect("exact limit");
-
         assert!(output.write_str("d").is_err());
         assert_eq!(output.finish(), "abc");
     }
-
     #[test]
     fn guessed_output_charge_accepts_exact_limit_and_rejects_plus_one() {
         assert_eq!(
@@ -587,7 +527,6 @@ mod tests {
         );
         assert!(charge_guessed_output(4, 2, 2, 10).is_err());
     }
-
     #[test]
     fn json_norito_roundtrip() {
         let converter = ConverterImpl::<NewAccount>::boxed();
@@ -608,7 +547,6 @@ mod tests {
         normalize_roundtrip_json(&mut actual);
         assert_eq!(expected, actual);
     }
-
     #[test]
     fn generate_map_covers_schema_types() {
         let map = generate_map();
@@ -618,7 +556,6 @@ mod tests {
             <Peer as TypeId>::id(),
             <RawGenesisTransaction as TypeId>::id(),
         ];
-
         for type_id in expected {
             assert!(
                 map.contains_key(&type_id),
@@ -626,45 +563,37 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn generate_map_contains_compact_numeric_aliases() {
         let map = generate_map();
         let long = <Compact<u128> as TypeId>::id();
         let medium = <Compact<u64> as TypeId>::id();
         let short = <Compact<u32> as TypeId>::id();
-
         assert!(map.contains_key(&long));
         assert!(map.contains_key(&medium));
         assert!(map.contains_key(&short));
     }
-
     #[test]
     fn decode_by_guess_preserves_order_and_reports_matches() {
         struct TestConverter {
             render: &'static str,
         }
-
         impl Converter for TestConverter {
             fn norito_to_rust(&self, _input: &[u8]) -> EyreResult<String> {
                 Ok(self.render.to_string())
             }
-
             fn norito_to_json(&self, _input: &[u8]) -> EyreResult<String> {
                 Ok(format!("\"{}\"", self.render))
             }
-
             fn json_to_norito(&self, _input: &str) -> EyreResult<Vec<u8>> {
                 Ok(self.render.as_bytes().to_vec())
             }
         }
-
         let mut map: ConverterMap = ConverterMap::new();
         let alpha: Arc<dyn Converter> = Arc::new(TestConverter { render: "alpha" });
         let beta: Arc<dyn Converter> = Arc::new(TestConverter { render: "beta" });
         map.insert("Alpha".to_owned(), alpha);
         map.insert("Beta".to_owned(), beta);
-
         let decoder = NoritoToRustDecoder::new(
             NoritoToRustArgs {
                 binary: PathBuf::new(),
@@ -672,13 +601,11 @@ mod tests {
             },
             &map,
         );
-
         let mut output = Vec::new();
         decoder
             .decode_by_guess(b"", &mut output)
             .expect("decoder succeeds");
         let output = String::from_utf8(output).expect("valid UTF-8");
-
         let alpha_pos = output.find("Alpha").expect("Alpha reported");
         let beta_pos = output.find("Beta").expect("Beta reported");
         assert!(

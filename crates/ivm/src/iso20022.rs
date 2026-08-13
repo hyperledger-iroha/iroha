@@ -6,7 +6,6 @@
 //! `MsgDefIdr` and `Document` XSD namespaces before schema-table validation is
 //! applied. Network transport is deliberately outside this module and outside
 //! consensus execution.
-
 use core::fmt;
 use std::{
     borrow::Cow,
@@ -14,12 +13,9 @@ use std::{
     collections::{BTreeMap, HashMap},
     io::Write,
 };
-
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_crypto::{Algorithm, EcdsaSecp256k1Sha256};
-
 use crate::signature::{SignatureScheme, verify_signature};
-
 /// Extremely small ISO 20022 message representation used for testing.
 #[derive(Clone, Default)]
 struct IsoMessage {
@@ -1673,9 +1669,7 @@ pub fn parse_message(message_type: &str, data: &[u8]) -> Result<ParsedMessage, M
 /// alongside the VM message stack without reimplementing field mapping.
 pub mod norito_schemas {
     use norito::codec::{Decode, Encode};
-
     use super::{InvalidValueKind, MsgError, ParsedMessage, msg_add, msg_create, msg_set};
-
     fn required_text(parsed: &ParsedMessage, field: &'static str) -> Result<String, MsgError> {
         parsed
             .field_text(field)
@@ -3909,7 +3903,6 @@ pub fn msg_sign(key: &[u8]) -> Vec<u8> {
     };
     use pqcrypto_mldsa::mldsa65 as dilithium;
     use pqcrypto_traits::sign::{DetachedSignature as _, SecretKey as _};
-
     if let Some((tag, rest)) = key.split_first() {
         if *tag == Algorithm::Ed25519 as u8 && rest.len() == 32 {
             let Ok(sk_bytes) = <[u8; 32]>::try_from(rest) else {
@@ -3980,7 +3973,6 @@ pub fn msg_verify_sig(sig: &[u8], key: &[u8]) -> bool {
 mod tests {
     use ed25519_dalek::SigningKey;
     use norito::codec::{Decode, Encode};
-
     use super::{
         norito_schemas::{Colr012, Linkage, Sese023, Sese025},
         *,

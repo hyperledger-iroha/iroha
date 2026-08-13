@@ -14,7 +14,6 @@ pub enum FheSchemeV1 {
     /// Approximate arithmetic CKKS scheme.
     Ckks,
 }
-
 /// Governance lifecycle state for a registered FHE parameter set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -33,7 +32,6 @@ pub enum FheParamLifecycleV1 {
     /// Parameter set is withdrawn and must be rejected for new jobs.
     Withdrawn,
 }
-
 /// Governance-managed FHE parameter-set descriptor for `Soracloud` workloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -82,7 +80,6 @@ pub struct FheParamSetV1 {
     /// Domain-separated digest of the backend key-switch decomposition RNS chain.
     pub key_switch_decomposition_chain_digest: Hash,
 }
-
 impl FheParamSetV1 {
     /// Validate schema version and deterministic lifecycle constraints.
     ///
@@ -98,14 +95,12 @@ impl FheParamSetV1 {
                 found: self.schema_version,
             });
         }
-
         if self.backend.trim().is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "fhe parameter set",
                 field: "backend",
             });
         }
-
         if self.scheme != FheSchemeV1::Bfv {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe parameter set",
@@ -113,7 +108,6 @@ impl FheParamSetV1 {
                 reason: "first-release FHE parameter sets currently support BFV only".to_string(),
             });
         }
-
         if self.backend != REGISTERED_SORACLOUD_BFV_BACKEND_V1 {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe parameter set",
@@ -123,7 +117,6 @@ impl FheParamSetV1 {
                 ),
             });
         }
-
         validate_soracloud_fhe_digest_hash(
             "fhe parameter set",
             "parameter_digest",
@@ -139,14 +132,12 @@ impl FheParamSetV1 {
             "key_switch_decomposition_chain_digest",
             self.key_switch_decomposition_chain_digest,
         )?;
-
         if self.ciphertext_modulus_bits.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "fhe parameter set",
                 field: "ciphertext_modulus_bits",
             });
         }
-
         let mut previous_bits = u16::MAX;
         for modulus_bits in &self.ciphertext_modulus_bits {
             let current = modulus_bits.get();
@@ -166,7 +157,6 @@ impl FheParamSetV1 {
             }
             previous_bits = current;
         }
-
         let largest_modulus = self
             .ciphertext_modulus_bits
             .first()
@@ -181,7 +171,6 @@ impl FheParamSetV1 {
                 ),
             });
         }
-
         if self.slot_count > self.polynomial_modulus_degree {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe parameter set",
@@ -189,7 +178,6 @@ impl FheParamSetV1 {
                 reason: "cannot exceed polynomial_modulus_degree".to_string(),
             });
         }
-
         let chain_len = u16::try_from(self.ciphertext_modulus_bits.len()).map_err(|_| {
             SoracloudManifestError::InvalidField {
                 manifest: "fhe parameter set",
@@ -217,7 +205,6 @@ impl FheParamSetV1 {
                 ),
             });
         }
-
         if let Some(deprecation_height) = self.deprecation_height {
             let Some(activation_height) = self.activation_height else {
                 return Err(SoracloudManifestError::InvalidField {
@@ -234,7 +221,6 @@ impl FheParamSetV1 {
                 });
             }
         }
-
         if let Some(withdraw_height) = self.withdraw_height {
             let Some(activation_height) = self.activation_height else {
                 return Err(SoracloudManifestError::InvalidField {
@@ -251,7 +237,6 @@ impl FheParamSetV1 {
                 });
             }
         }
-
         if let (Some(deprecation_height), Some(withdraw_height)) =
             (self.deprecation_height, self.withdraw_height)
             && withdraw_height <= deprecation_height
@@ -262,7 +247,6 @@ impl FheParamSetV1 {
                 reason: "must be strictly greater than deprecation_height".to_string(),
             });
         }
-
         match self.lifecycle {
             FheParamLifecycleV1::Proposed => {
                 if self.deprecation_height.is_some() || self.withdraw_height.is_some() {
@@ -304,11 +288,9 @@ impl FheParamSetV1 {
                 }
             }
         }
-
         Ok(())
     }
 }
-
 /// Rounding mode used for deterministic ciphertext arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -323,7 +305,6 @@ pub enum FheDeterministicRoundingModeV1 {
     #[default]
     NearestTiesToEven,
 }
-
 /// Public BFV refresh transcript derivation mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -341,7 +322,6 @@ pub enum BfvRefreshTranscriptModeV1 {
     /// Rounded bounded-noise encrypted-zero refresh transcript derivation.
     BoundedNoise,
 }
-
 /// Public BFV ciphertext bound semantics attached to FHE state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -356,7 +336,6 @@ pub enum BfvCiphertextBoundModeV1 {
     /// Bound is a rounded BFV centered-noise bound.
     BoundedNoise,
 }
-
 /// Public transcript seed for one BFV rotation refresh key.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -369,7 +348,6 @@ pub struct BfvRotationRefreshTranscriptV1 {
     /// Public deterministic seed for the encrypted-zero refresh key.
     pub seed: Vec<u8>,
 }
-
 /// Public transcript seed for the BFV bootstrap refresh key.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -384,7 +362,6 @@ pub struct BfvBootstrapRefreshTranscriptV1 {
     /// Public deterministic seed for the encrypted-zero refresh rounds.
     pub seed: Vec<u8>,
 }
-
 /// Public transcript inventory for BFV evaluation-key refresh material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -401,7 +378,6 @@ pub struct BfvEvaluationKeyRefreshTranscriptV1 {
     #[norito(default)]
     pub bootstrap_transcript: Option<BfvBootstrapRefreshTranscriptV1>,
 }
-
 fn validate_bfv_refresh_transcript_seed(
     manifest: &'static str,
     field: &'static str,
@@ -426,7 +402,6 @@ fn validate_bfv_refresh_transcript_seed(
     }
     Ok(())
 }
-
 fn validate_bfv_refresh_transcript_bootstrap_key_id(
     key_id: &str,
 ) -> Result<(), SoracloudManifestError> {
@@ -464,11 +439,9 @@ fn validate_bfv_refresh_transcript_bootstrap_key_id(
     }
     Ok(())
 }
-
 fn is_bfv_refresh_transcript_bootstrap_key_id_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
 }
-
 fn validate_bfv_refresh_transcript_bootstrap_rounds(
     max_refresh_rounds: u16,
 ) -> Result<(), SoracloudManifestError> {
@@ -490,7 +463,6 @@ fn validate_bfv_refresh_transcript_bootstrap_rounds(
     }
     Ok(())
 }
-
 impl BfvEvaluationKeyRefreshTranscriptV1 {
     /// Validate bounded public transcript metadata before recomputing refresh keys.
     ///
@@ -543,7 +515,6 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
         }
         Ok(())
     }
-
     /// Derive the exact-lift public-key proof statement digest.
     ///
     /// # Errors
@@ -558,7 +529,6 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
             BfvRefreshTranscriptModeV1::ExactLift,
         )
     }
-
     /// Derive the public-key proof statement digest for the selected BFV mode.
     ///
     /// The statement binds the transcript's public key to the BFV parameter
@@ -602,7 +572,6 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
             reason: err.to_string(),
         })
     }
-
     /// Derive the exact-lift ciphertext proof statement digest for this public key.
     ///
     /// # Errors
@@ -621,7 +590,6 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
             BfvRefreshTranscriptModeV1::ExactLift,
         )
     }
-
     /// Derive the ciphertext proof statement digest for the selected BFV mode.
     ///
     /// The statement binds the transcript's public key, public-key digest,
@@ -672,7 +640,6 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
             reason: err.to_string(),
         })
     }
-
     /// Validate and digest this transcript inventory against evaluation keys.
     ///
     /// # Errors
@@ -689,7 +656,6 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
             BfvRefreshTranscriptModeV1::ExactLift,
         )
     }
-
     /// Validate and digest this transcript inventory for the selected BFV mode.
     ///
     /// # Errors
@@ -746,7 +712,6 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
             reason: err.to_string(),
         })
     }
-
     /// Derive the bootstrap-key zero-refresh proof statement digest, if present.
     ///
     /// # Errors
@@ -821,7 +786,6 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
         })
     }
 }
-
 /// Deterministic execution policy for validator-side ciphertext operations.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -884,7 +848,6 @@ pub struct FheExecutionPolicyV1 {
     /// Canonical rounding mode used by evaluators.
     pub rounding_mode: FheDeterministicRoundingModeV1,
 }
-
 impl FheExecutionPolicyV1 {
     /// Validate schema version and deterministic policy constraints.
     ///
@@ -900,7 +863,6 @@ impl FheExecutionPolicyV1 {
                 found: self.schema_version,
             });
         }
-
         validate_soracloud_fhe_digest_hash(
             "fhe execution policy",
             "evaluation_key_digest",
@@ -911,7 +873,6 @@ impl FheExecutionPolicyV1 {
             "evaluation_key_refresh_transcript_digest",
             self.evaluation_key_refresh_transcript_digest,
         )?;
-
         if self.max_plaintext_bytes > self.max_ciphertext_bytes {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
@@ -919,7 +880,6 @@ impl FheExecutionPolicyV1 {
                 reason: "cannot exceed max_ciphertext_bytes".to_string(),
             });
         }
-
         if self.max_output_ciphertexts > self.max_input_ciphertexts {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
@@ -927,7 +887,6 @@ impl FheExecutionPolicyV1 {
                 reason: "cannot exceed max_input_ciphertexts".to_string(),
             });
         }
-
         if self.rounding_mode != FheDeterministicRoundingModeV1::NearestTiesToEven {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
@@ -936,7 +895,6 @@ impl FheExecutionPolicyV1 {
                     .to_string(),
             });
         }
-
         let evaluator_budget = BfvEvaluationBudget::exact_evaluator_v1();
         if self.max_multiplication_depth.get() > evaluator_budget.max_multiplicative_depth {
             return Err(SoracloudManifestError::InvalidField {
@@ -1156,10 +1114,8 @@ impl FheExecutionPolicyV1 {
                     .to_string(),
             });
         }
-
         Ok(())
     }
-
     /// Validate this policy against an admitted FHE parameter set.
     ///
     /// # Errors
@@ -1172,7 +1128,6 @@ impl FheExecutionPolicyV1 {
     ) -> Result<(), SoracloudManifestError> {
         self.validate()?;
         param_set.validate()?;
-
         if self.param_set != param_set.param_set {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
@@ -1183,7 +1138,6 @@ impl FheExecutionPolicyV1 {
                 ),
             });
         }
-
         if self.param_set_version != param_set.version {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
@@ -1194,7 +1148,6 @@ impl FheExecutionPolicyV1 {
                 ),
             });
         }
-
         if self.max_multiplication_depth > param_set.max_multiplicative_depth {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
@@ -1205,7 +1158,6 @@ impl FheExecutionPolicyV1 {
                 ),
             });
         }
-
         match param_set.lifecycle {
             FheParamLifecycleV1::Proposed => Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
@@ -1221,7 +1173,6 @@ impl FheExecutionPolicyV1 {
         }
     }
 }
-
 /// Governance admission bundle coupling an FHE parameter set and execution policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1236,7 +1187,6 @@ pub struct FheGovernanceBundleV1 {
     /// Deterministic execution policy bound to the parameter set.
     pub execution_policy: FheExecutionPolicyV1,
 }
-
 impl FheGovernanceBundleV1 {
     /// Validate deterministic admission constraints across FHE governance records.
     ///
@@ -1269,7 +1219,6 @@ impl FheGovernanceBundleV1 {
         Ok(())
     }
 }
-
 /// Exact immutable reference to one governed Soracloud FHE policy version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1286,7 +1235,6 @@ pub struct SoracloudFhePolicyReferenceV1 {
     /// Digest of the exact governed material authorized for execution.
     pub material_digest: Hash,
 }
-
 impl SoracloudFhePolicyReferenceV1 {
     /// Validate the exact governed-material reference.
     ///
@@ -1307,7 +1255,6 @@ impl SoracloudFhePolicyReferenceV1 {
         )
     }
 }
-
 /// Exact service-and-policy scope carried by the FHE governance permission.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1322,7 +1269,6 @@ pub struct SoracloudFheGovernancePermissionScopeV1 {
     /// Policy whose governed material may be changed.
     pub policy_name: Name,
 }
-
 impl SoracloudFheGovernancePermissionScopeV1 {
     /// Validate the permission scope version.
     ///
@@ -1339,7 +1285,6 @@ impl SoracloudFheGovernancePermissionScopeV1 {
         Ok(())
     }
 }
-
 /// Immutable, governance-authenticated material for one Soracloud FHE policy version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1366,10 +1311,8 @@ pub struct SoracloudFheGovernedMaterialV1 {
     /// Canonical domain-separated digest of every preceding material field.
     pub material_digest: Hash,
 }
-
 impl SoracloudFheGovernedMaterialV1 {
     const DIGEST_DOMAIN: &'static [u8] = b"iroha.soracloud.fhe.governed_material.v1";
-
     /// Compute the canonical digest for this immutable governed material.
     ///
     /// # Errors
@@ -1392,7 +1335,6 @@ impl SoracloudFheGovernedMaterialV1 {
         })?;
         Ok(Hash::new_from_chunks(&[Self::DIGEST_DOMAIN, &bytes]))
     }
-
     /// Return the exact immutable reference carried by execution instructions.
     #[must_use]
     pub fn policy_reference(&self) -> SoracloudFhePolicyReferenceV1 {
@@ -1403,7 +1345,6 @@ impl SoracloudFheGovernedMaterialV1 {
             material_digest: self.material_digest,
         }
     }
-
     /// Validate all governed material and its canonical digest.
     ///
     /// # Errors
@@ -1481,7 +1422,6 @@ impl SoracloudFheGovernedMaterialV1 {
                     .to_string(),
             });
         }
-
         match self.evaluation_keys.bootstrap_key.as_ref() {
             None => {
                 if self.full_bootstrap_circuit_artifacts.is_some() {
@@ -1590,7 +1530,6 @@ impl SoracloudFheGovernedMaterialV1 {
                 })?;
             }
         }
-
         let computed_digest = self.computed_material_digest()?;
         if self.material_digest != computed_digest {
             return Err(SoracloudManifestError::InvalidField {
@@ -1602,7 +1541,6 @@ impl SoracloudFheGovernedMaterialV1 {
         Ok(())
     }
 }
-
 /// Lifecycle of one immutable governed Soracloud FHE policy version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1618,7 +1556,6 @@ pub enum SoracloudFhePolicyVersionLifecycleV1 {
     /// Immutable historical version explicitly revoked by governance.
     Revoked,
 }
-
 /// Lifecycle wrapper for one immutable governed material version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1635,7 +1572,6 @@ pub struct SoracloudFhePolicyVersionStateV1 {
     /// Governance transaction that superseded or revoked this version.
     pub deactivated_by_transaction_hash: Option<Hash>,
 }
-
 impl SoracloudFhePolicyVersionStateV1 {
     /// Validate immutable material and lifecycle metadata.
     ///
@@ -1670,7 +1606,6 @@ impl SoracloudFhePolicyVersionStateV1 {
         }
     }
 }
-
 /// Complete monotonic lifecycle history for one service-scoped FHE policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1689,7 +1624,6 @@ pub struct SoracloudFhePolicyRecordV1 {
     /// Immutable version history keyed by consecutive monotonic version.
     pub versions: BTreeMap<NonZeroU32, SoracloudFhePolicyVersionStateV1>,
 }
-
 impl SoracloudFhePolicyRecordV1 {
     /// Validate monotonic version history and active/revoked lifecycle invariants.
     ///
@@ -1804,7 +1738,6 @@ impl SoracloudFhePolicyRecordV1 {
         Ok(())
     }
 }
-
 /// Proof envelope admitting a client-provided BFV ciphertext as Soracloud FHE input.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1830,7 +1763,6 @@ pub struct SoracloudFheInputAdmissionProofV1 {
     /// Verifier-backed proof attachment for the input-admission statement.
     pub proof: ProofAttachment,
 }
-
 impl SoracloudFheInputAdmissionProofV1 {
     /// Validate proof-envelope structure before verifier execution.
     ///
@@ -1972,7 +1904,6 @@ impl SoracloudFheInputAdmissionProofV1 {
         Ok(())
     }
 }
-
 /// Proof envelope admitting public BFV key material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1987,7 +1918,6 @@ pub struct SoracloudFhePublicKeyProofV1 {
     /// Verifier-backed proof attachment for the public-key statement.
     pub proof: ProofAttachment,
 }
-
 impl SoracloudFhePublicKeyProofV1 {
     /// Validate proof-envelope structure before verifier execution.
     ///
@@ -2077,7 +2007,6 @@ impl SoracloudFhePublicKeyProofV1 {
         Ok(())
     }
 }
-
 /// Proof envelope admitting public BFV bootstrap-key zero-refresh material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2092,7 +2021,6 @@ pub struct SoracloudFheBootstrapKeyProofV1 {
     /// Verifier-backed proof attachment for the bootstrap-key statement.
     pub proof: ProofAttachment,
 }
-
 impl SoracloudFheBootstrapKeyProofV1 {
     /// Validate proof-envelope structure before verifier execution.
     ///
@@ -2182,7 +2110,6 @@ impl SoracloudFheBootstrapKeyProofV1 {
         Ok(())
     }
 }
-
 /// Proof envelope admitting a governed BFV full-bootstrap execution output claim.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2197,7 +2124,6 @@ pub struct SoracloudFheFullBootstrapExecutionProofV1 {
     /// Verifier-backed proof attachment for the full-bootstrap execution statement.
     pub proof: ProofAttachment,
 }
-
 impl SoracloudFheFullBootstrapExecutionProofV1 {
     /// Validate proof-envelope structure before verifier execution.
     ///
@@ -2287,7 +2213,6 @@ impl SoracloudFheFullBootstrapExecutionProofV1 {
         Ok(())
     }
 }
-
 fn validate_soracloud_fhe_input_admission_backend(
     backend: &str,
 ) -> Result<(), SoracloudManifestError> {
@@ -2300,7 +2225,6 @@ fn validate_soracloud_fhe_input_admission_backend(
         reason: "must use the canonical BFV STARK/FRI backend".to_string(),
     })
 }
-
 fn validate_soracloud_fhe_public_key_proof_backend(
     backend: &str,
 ) -> Result<(), SoracloudManifestError> {
@@ -2313,7 +2237,6 @@ fn validate_soracloud_fhe_public_key_proof_backend(
         reason: "must use the canonical BFV STARK/FRI backend".to_string(),
     })
 }
-
 fn validate_soracloud_fhe_bootstrap_key_proof_backend(
     backend: &str,
 ) -> Result<(), SoracloudManifestError> {
@@ -2326,7 +2249,6 @@ fn validate_soracloud_fhe_bootstrap_key_proof_backend(
         reason: "must use the canonical BFV STARK/FRI backend".to_string(),
     })
 }
-
 fn validate_soracloud_fhe_full_bootstrap_execution_proof_backend(
     backend: &str,
 ) -> Result<(), SoracloudManifestError> {
@@ -2339,7 +2261,6 @@ fn validate_soracloud_fhe_full_bootstrap_execution_proof_backend(
         reason: "must use the canonical BFV full-bootstrap STARK/FRI backend".to_string(),
     })
 }
-
 fn validate_soracloud_fhe_statement_hash(
     manifest: &'static str,
     field: &'static str,
@@ -2347,7 +2268,6 @@ fn validate_soracloud_fhe_statement_hash(
 ) -> Result<(), SoracloudManifestError> {
     validate_soracloud_fhe_digest_hash(manifest, field, statement_hash)
 }
-
 fn validate_soracloud_fhe_digest_hash(
     manifest: &'static str,
     field: &'static str,
@@ -2355,7 +2275,6 @@ fn validate_soracloud_fhe_digest_hash(
 ) -> Result<(), SoracloudManifestError> {
     validate_soracloud_digest_hash(manifest, field, digest_hash)
 }
-
 const SORACLOUD_FULL_BOOTSTRAP_PLACEHOLDER_DIGEST_PREIMAGES: &[&[u8]] = &[
     b"placeholder BFV full-bootstrap material",
     b"pending BFV full-bootstrap material",
@@ -2388,7 +2307,6 @@ const SORACLOUD_FULL_BOOTSTRAP_PLACEHOLDER_DIGEST_PREIMAGES: &[&[u8]] = &[
     b"template",
     b"example",
 ];
-
 const SORACLOUD_FULL_BOOTSTRAP_PLACEHOLDER_DIGEST_DELAY_PREFIXES: &[&[u8]] = &[
     b"full-bootstrap material before placeholder: ",
     b"governed material digest before placeholder: ",
@@ -2414,7 +2332,6 @@ const SORACLOUD_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_SUFFIX: &[u8] =
     b" BFV full-bootstrap native proof key payload";
 const SORACLOUD_FULL_BOOTSTRAP_PENDING_NATIVE_PROOF_KEY_SUFFIX: &[u8] =
     b" pending BFV full-bootstrap native proof key payload";
-
 const SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS: &[&[u8]] = &[
     b"placeholder",
     b"not production ready",
@@ -2463,7 +2380,6 @@ const SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS: &[&[u8]] = &[
 ];
 const SORACLOUD_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES: usize = 5;
 static SORACLOUD_COLLAPSED_PLACEHOLDER_MARKERS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
-
 fn validate_soracloud_no_full_bootstrap_placeholder_digest(
     manifest: &'static str,
     field: &'static str,
@@ -2519,7 +2435,6 @@ fn validate_soracloud_no_full_bootstrap_placeholder_digest(
     }
     Ok(())
 }
-
 fn soracloud_full_bootstrap_placeholder_digest_matches_preimage(
     digest_hash: &Hash,
     preimage: &[u8],
@@ -2570,7 +2485,6 @@ fn soracloud_full_bootstrap_placeholder_digest_matches_preimage(
     }
     false
 }
-
 fn soracloud_separator_spell_ascii_token(token: &[u8], separator: u8) -> Vec<u8> {
     let mut spelled = Vec::with_capacity(token.len().saturating_mul(2).saturating_sub(1));
     for (index, byte) in token.iter().copied().enumerate() {
@@ -2581,7 +2495,6 @@ fn soracloud_separator_spell_ascii_token(token: &[u8], separator: u8) -> Vec<u8>
     }
     spelled
 }
-
 fn validate_soracloud_digest_hash(
     manifest: &'static str,
     field: &'static str,
@@ -2598,7 +2511,6 @@ fn validate_soracloud_digest_hash(
     }
     Ok(())
 }
-
 fn validate_soracloud_fhe_input_admission_bound_capacity(
     residual_multiple_bound: u128,
     bound_mode: BfvCiphertextBoundModeV1,
@@ -2611,7 +2523,6 @@ fn validate_soracloud_fhe_input_admission_bound_capacity(
         "soracloud fhe input admission bound",
     )
 }
-
 fn validate_soracloud_bfv_ciphertext_bound_capacity(
     residual_multiple_bound: u128,
     bound_mode: BfvCiphertextBoundModeV1,
@@ -2640,7 +2551,6 @@ fn validate_soracloud_bfv_ciphertext_bound_capacity(
         reason: format!("exceeds registered BFV capacity: {err}"),
     })
 }
-
 fn validate_soracloud_fhe_stark_native_envelope_bytes(
     manifest: &'static str,
     envelope_bytes: &[u8],
@@ -2688,7 +2598,6 @@ fn validate_soracloud_fhe_stark_native_envelope_bytes(
     }
     Ok(())
 }
-
 fn soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(envelope_bytes: &[u8]) -> bool {
     let is_text_byte = |byte: &u8| byte.is_ascii_graphic() || byte.is_ascii_whitespace();
     if envelope_bytes.iter().all(is_text_byte) {
@@ -2696,7 +2605,6 @@ fn soracloud_fhe_stark_native_envelope_bytes_are_placeholder_text(envelope_bytes
     }
     false
 }
-
 fn soracloud_fhe_stark_native_envelope_text_span_is_placeholder(text: &[u8]) -> bool {
     let mut lower = Vec::with_capacity(text.len());
     lower.extend(text.iter().map(u8::to_ascii_lowercase));
@@ -2705,7 +2613,6 @@ fn soracloud_fhe_stark_native_envelope_text_span_is_placeholder(text: &[u8]) -> 
         SORACLOUD_STARK_NATIVE_ENVELOPE_PLACEHOLDER_MARKERS,
     )
 }
-
 fn soracloud_ascii_text_contains_placeholder_marker(normalized: &[u8], markers: &[&[u8]]) -> bool {
     if markers
         .iter()
@@ -2721,7 +2628,6 @@ fn soracloud_ascii_text_contains_placeholder_marker(normalized: &[u8], markers: 
         .iter()
         .any(|marker| ascii_windows_contains(&collapsed_text, marker))
 }
-
 fn soracloud_collapsed_placeholder_markers(markers: &[&[u8]]) -> &'static [Vec<u8>] {
     debug_assert!(std::ptr::eq(
         markers,
@@ -2740,7 +2646,6 @@ fn soracloud_collapsed_placeholder_markers(markers: &[&[u8]]) -> &'static [Vec<u
         })
         .as_slice()
 }
-
 fn ascii_alnum_collapsed(bytes: &[u8]) -> Vec<u8> {
     bytes
         .iter()
@@ -2748,14 +2653,12 @@ fn ascii_alnum_collapsed(bytes: &[u8]) -> Vec<u8> {
         .filter(u8::is_ascii_alphanumeric)
         .collect()
 }
-
 fn ascii_windows_contains(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty()
         && haystack
             .windows(needle.len())
             .any(|window| window == needle)
 }
-
 fn validate_soracloud_fhe_input_admission_open_verify_envelope(
     proof_bytes: &[u8],
     vk_commitment: [u8; 32],
@@ -2844,7 +2747,6 @@ fn validate_soracloud_fhe_input_admission_open_verify_envelope(
     )?;
     Ok(())
 }
-
 fn validate_soracloud_fhe_public_key_proof_open_verify_envelope(
     proof_bytes: &[u8],
     vk_commitment: [u8; 32],
@@ -2933,7 +2835,6 @@ fn validate_soracloud_fhe_public_key_proof_open_verify_envelope(
     )?;
     Ok(())
 }
-
 fn validate_soracloud_fhe_bootstrap_key_proof_open_verify_envelope(
     proof_bytes: &[u8],
     vk_commitment: [u8; 32],
@@ -3022,7 +2923,6 @@ fn validate_soracloud_fhe_bootstrap_key_proof_open_verify_envelope(
     )?;
     Ok(())
 }
-
 fn validate_soracloud_fhe_full_bootstrap_execution_proof_open_verify_envelope(
     proof_bytes: &[u8],
     vk_commitment: [u8; 32],
@@ -3113,7 +3013,6 @@ fn validate_soracloud_fhe_full_bootstrap_execution_proof_open_verify_envelope(
     )?;
     Ok(())
 }
-
 /// Return shared `OpenVerifyEnvelope` bounds for Soracloud FHE input admission.
 ///
 /// Data-model validation and Core runtime admission both use these limits so
@@ -3130,7 +3029,6 @@ pub fn soracloud_fhe_input_admission_open_verify_bounds() -> OpenVerifyEnvelopeB
         ..OpenVerifyEnvelopeBounds::default()
     }
 }
-
 /// Return shared `OpenVerifyEnvelope` bounds for Soracloud FHE public-key proofs.
 ///
 /// Data-model validation and Core runtime admission both use these limits so
@@ -3147,7 +3045,6 @@ pub fn soracloud_fhe_public_key_proof_open_verify_bounds() -> OpenVerifyEnvelope
         ..OpenVerifyEnvelopeBounds::default()
     }
 }
-
 /// Return shared `OpenVerifyEnvelope` bounds for Soracloud FHE bootstrap-key proofs.
 ///
 /// Data-model validation and Core runtime admission both use these limits so
@@ -3164,7 +3061,6 @@ pub fn soracloud_fhe_bootstrap_key_proof_open_verify_bounds() -> OpenVerifyEnvel
         ..OpenVerifyEnvelopeBounds::default()
     }
 }
-
 /// Return shared `OpenVerifyEnvelope` bounds for full-bootstrap execution proofs.
 ///
 /// Data-model validation and Core runtime admission both use these limits so
@@ -3183,7 +3079,6 @@ pub fn soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds() -> Open
         ..OpenVerifyEnvelopeBounds::default()
     }
 }
-
 /// Encryption class for an opaque secret envelope payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3197,7 +3092,6 @@ pub enum SecretEnvelopeEncryptionV1 {
     /// Payload is FHE ciphertext and may be operated on homomorphically.
     FheCiphertext,
 }
-
 /// Opaque encrypted payload with commitment used by ciphertext-native state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3225,11 +3119,9 @@ pub struct SecretEnvelopeV1 {
     #[norito(default)]
     pub aad_digest: Option<Hash>,
 }
-
 impl SecretEnvelopeV1 {
     const MAX_NONCE_BYTES: usize = 256;
     const MAX_CIPHERTEXT_BYTES: usize = 33_554_432;
-
     /// Validate schema version and ciphertext envelope constraints.
     ///
     /// # Errors
@@ -3243,14 +3135,12 @@ impl SecretEnvelopeV1 {
                 found: self.schema_version,
             });
         }
-
         if self.key_id.trim().is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "secret envelope",
                 field: "key_id",
             });
         }
-
         if self.nonce.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "secret envelope",
@@ -3268,7 +3158,6 @@ impl SecretEnvelopeV1 {
                 ),
             });
         }
-
         if self.ciphertext.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "secret envelope",
@@ -3290,11 +3179,9 @@ impl SecretEnvelopeV1 {
         if let Some(aad_digest) = self.aad_digest {
             validate_soracloud_digest_hash("secret envelope", "aad_digest", aad_digest)?;
         }
-
         Ok(())
     }
 }
-
 /// Public metadata attached to ciphertext-native state records.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3315,7 +3202,6 @@ pub struct CiphertextStateMetadataV1 {
     #[norito(default)]
     pub tags: Vec<String>,
 }
-
 impl CiphertextStateMetadataV1 {
     /// Validate metadata fields for deterministic ciphertext state indexing.
     ///
@@ -3330,7 +3216,6 @@ impl CiphertextStateMetadataV1 {
             });
         }
         validate_soracloud_digest_hash("ciphertext state metadata", "commitment", self.commitment)?;
-
         if let Some(policy_tag) = self.policy_tag.as_ref()
             && policy_tag.trim().is_empty()
         {
@@ -3340,7 +3225,6 @@ impl CiphertextStateMetadataV1 {
                 reason: "must not be empty when provided".to_string(),
             });
         }
-
         let mut seen = BTreeSet::new();
         for tag in &self.tags {
             let normalized = tag.trim();
@@ -3359,11 +3243,9 @@ impl CiphertextStateMetadataV1 {
                 });
             }
         }
-
         Ok(())
     }
 }
-
 /// Ciphertext-native key-value record with public metadata and secret payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3382,7 +3264,6 @@ pub struct CiphertextStateRecordV1 {
     /// Encrypted payload envelope.
     pub secret: SecretEnvelopeV1,
 }
-
 impl CiphertextStateRecordV1 {
     /// Validate schema version and metadata/secret consistency constraints.
     ///
@@ -3397,7 +3278,6 @@ impl CiphertextStateRecordV1 {
                 found: self.schema_version,
             });
         }
-
         if self.state_key.trim().is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "ciphertext state record",
@@ -3411,10 +3291,8 @@ impl CiphertextStateRecordV1 {
                 reason: "must start with '/'".to_string(),
             });
         }
-
         self.metadata.validate()?;
         self.secret.validate()?;
-
         let ciphertext_len = u64::try_from(self.secret.ciphertext.len())
             .expect("ciphertext length always fits in u64");
         if self.metadata.payload_bytes.get() != ciphertext_len {
@@ -3427,7 +3305,6 @@ impl CiphertextStateRecordV1 {
                 ),
             });
         }
-
         if self.metadata.commitment != self.secret.commitment {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "ciphertext state record",
@@ -3435,11 +3312,9 @@ impl CiphertextStateRecordV1 {
                 reason: "must match secret.commitment".to_string(),
             });
         }
-
         Ok(())
     }
 }
-
 /// Deterministic FHE operation class admitted for Soracloud ciphertext jobs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3462,7 +3337,6 @@ pub enum FheJobOperationV1 {
     /// Deterministic bootstrap/relinearization refresh over one input.
     Bootstrap,
 }
-
 /// Input ciphertext reference for deterministic FHE job admission.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3477,7 +3351,6 @@ pub struct FheJobInputRefV1 {
     /// Input commitment hash bound to the ciphertext payload.
     pub commitment: Hash,
 }
-
 impl FheJobInputRefV1 {
     /// Validate deterministic input reference constraints.
     ///
@@ -3502,7 +3375,6 @@ impl FheJobInputRefV1 {
         Ok(())
     }
 }
-
 /// Deterministic FHE admission/execution job descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3534,7 +3406,6 @@ pub struct FheJobSpecV1 {
     /// Number of bootstrap/refresh operations requested.
     pub bootstrap_count: u16,
 }
-
 impl FheJobSpecV1 {
     /// Validate schema version and deterministic FHE job constraints.
     ///
@@ -3550,14 +3421,12 @@ impl FheJobSpecV1 {
                 found: self.schema_version,
             });
         }
-
         if self.job_id.trim().is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "fhe job spec",
                 field: "job_id",
             });
         }
-
         if self.output_state_key.trim().is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "fhe job spec",
@@ -3571,14 +3440,12 @@ impl FheJobSpecV1 {
                 reason: "must start with '/'".to_string(),
             });
         }
-
         if self.inputs.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "fhe job spec",
                 field: "inputs",
             });
         }
-
         let mut seen_inputs = BTreeSet::new();
         for input in &self.inputs {
             input.validate()?;
@@ -3590,7 +3457,6 @@ impl FheJobSpecV1 {
                 });
             }
         }
-
         match self.operation {
             FheJobOperationV1::Add => {
                 if self.requested_multiplication_depth != 0 {
@@ -3703,10 +3569,8 @@ impl FheJobSpecV1 {
                 }
             }
         }
-
         Ok(())
     }
-
     /// Validate job admission against deterministic policy + parameter constraints.
     ///
     /// # Errors
@@ -3720,7 +3584,6 @@ impl FheJobSpecV1 {
     ) -> Result<(), SoracloudManifestError> {
         self.validate()?;
         policy.validate_for_param_set(param_set)?;
-
         if self.policy_name != policy.policy_name {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe job spec",
@@ -3751,7 +3614,6 @@ impl FheJobSpecV1 {
                 ),
             });
         }
-
         let input_count =
             u16::try_from(self.inputs.len()).map_err(|_| SoracloudManifestError::InvalidField {
                 manifest: "fhe job spec",
@@ -3768,7 +3630,6 @@ impl FheJobSpecV1 {
                 ),
             });
         }
-
         if self.requested_multiplication_depth > policy.max_multiplication_depth.get() {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe job spec",
@@ -3799,7 +3660,6 @@ impl FheJobSpecV1 {
                 ),
             });
         }
-
         for input in &self.inputs {
             if input.payload_bytes > policy.max_ciphertext_bytes {
                 return Err(SoracloudManifestError::InvalidField {
@@ -3812,7 +3672,6 @@ impl FheJobSpecV1 {
                 });
             }
         }
-
         let output_bytes = self.try_deterministic_output_payload_bytes()?;
         if output_bytes > policy.max_ciphertext_bytes.get() {
             return Err(SoracloudManifestError::InvalidField {
@@ -3824,10 +3683,8 @@ impl FheJobSpecV1 {
                 ),
             });
         }
-
         Ok(())
     }
-
     /// Try to compute the deterministic projected output payload size in bytes.
     ///
     /// # Errors
@@ -3864,14 +3721,12 @@ impl FheJobSpecV1 {
                 ))
             })
     }
-
     /// Deterministic projected output payload size in bytes for admission checks.
     #[must_use]
     pub fn deterministic_output_payload_bytes(&self) -> u64 {
         self.try_deterministic_output_payload_bytes()
             .unwrap_or(u64::MAX)
     }
-
     /// Deterministic output commitment derived from operation + input commitments.
     #[must_use]
     pub fn deterministic_output_commitment(&self) -> Hash {
@@ -3893,7 +3748,6 @@ impl FheJobSpecV1 {
         )))
     }
 }
-
 /// Decryption authority mode enforced for private-state disclosure requests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3907,7 +3761,6 @@ pub enum DecryptionAuthorityModeV1 {
     /// Decryption requires threshold service approvals from policy members.
     ThresholdService,
 }
-
 /// Governance-managed policy for decryption authority and request gating.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3937,7 +3790,6 @@ pub struct DecryptionAuthorityPolicyV1 {
     /// Canonical audit tag attached to request records.
     pub audit_tag: String,
 }
-
 impl DecryptionAuthorityPolicyV1 {
     /// Validate schema version and deterministic decryption-policy constraints.
     ///
@@ -3959,7 +3811,6 @@ impl DecryptionAuthorityPolicyV1 {
                 field: "approver_ids",
             });
         }
-
         let mut seen = BTreeSet::new();
         for approver in &self.approver_ids {
             if !seen.insert(approver.clone()) {
@@ -3981,7 +3832,6 @@ impl DecryptionAuthorityPolicyV1 {
                 reason: "must be strictly sorted in ascending lexical order".to_string(),
             });
         }
-
         let approver_count =
             u16::try_from(self.approver_ids.len()).expect("approver count always fits into u16");
         match self.mode {
@@ -4028,7 +3878,6 @@ impl DecryptionAuthorityPolicyV1 {
                 }
             }
         }
-
         if self.jurisdiction_tag.trim().is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "decryption authority policy",
@@ -4042,7 +3891,6 @@ impl DecryptionAuthorityPolicyV1 {
                 reason: "must not contain control characters".to_string(),
             });
         }
-
         if self.audit_tag.trim().is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "decryption authority policy",
@@ -4056,11 +3904,9 @@ impl DecryptionAuthorityPolicyV1 {
                 reason: "must not contain control characters".to_string(),
             });
         }
-
         Ok(())
     }
 }
-
 /// Decryption request envelope gated by a [`DecryptionAuthorityPolicyV1`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -4097,7 +3943,6 @@ pub struct DecryptionRequestV1 {
     /// Governance linkage hash for policy-driven auditability.
     pub governance_tx_hash: Hash,
 }
-
 impl DecryptionRequestV1 {
     /// Validate schema version and base request integrity constraints.
     ///
@@ -4188,7 +4033,6 @@ impl DecryptionRequestV1 {
         }
         Ok(())
     }
-
     /// Validate request admission against decryption authority policy rules.
     ///
     /// # Errors
@@ -4200,7 +4044,6 @@ impl DecryptionRequestV1 {
     ) -> Result<(), SoracloudManifestError> {
         self.validate()?;
         policy.validate()?;
-
         if self.policy_name != policy.policy_name {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "decryption request",
@@ -4248,11 +4091,9 @@ impl DecryptionRequestV1 {
                 reason: "policy does not allow break-glass disclosure".to_string(),
             });
         }
-
         Ok(())
     }
 }
-
 /// Metadata projection level for ciphertext query responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -4266,7 +4107,6 @@ pub enum CiphertextQueryMetadataLevelV1 {
     /// Return canonical state keys in addition to digest references.
     Standard,
 }
-
 /// Deterministic query specification for ciphertext-only state lookups.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -4289,10 +4129,8 @@ pub struct CiphertextQuerySpecV1 {
     /// Whether inclusion proofs should be attached to each result row.
     pub include_proof: bool,
 }
-
 impl CiphertextQuerySpecV1 {
     const MAX_RESULTS_LIMIT: u16 = 256;
-
     /// Validate deterministic ciphertext query constraints.
     ///
     /// # Errors
@@ -4333,7 +4171,6 @@ impl CiphertextQuerySpecV1 {
         Ok(())
     }
 }
-
 /// Inclusion proof attached to ciphertext query results.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -4354,7 +4191,6 @@ pub struct CiphertextInclusionProofV1 {
     /// Sequence of the leaf event this proof attests to.
     pub event_sequence: u64,
 }
-
 impl CiphertextInclusionProofV1 {
     /// Validate inclusion-proof envelope constraints.
     ///
@@ -4394,7 +4230,6 @@ impl CiphertextInclusionProofV1 {
         Ok(())
     }
 }
-
 /// A single query result row for ciphertext metadata lookups.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -4423,7 +4258,6 @@ pub struct CiphertextQueryResultItemV1 {
     #[norito(default)]
     pub proof: Option<CiphertextInclusionProofV1>,
 }
-
 impl CiphertextQueryResultItemV1 {
     /// Validate a single ciphertext query result item.
     ///
@@ -4475,7 +4309,6 @@ impl CiphertextQueryResultItemV1 {
         Ok(())
     }
 }
-
 /// Deterministic response payload for ciphertext query execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -4503,7 +4336,6 @@ pub struct CiphertextQueryResponseV1 {
     #[norito(default)]
     pub results: Vec<CiphertextQueryResultItemV1>,
 }
-
 impl CiphertextQueryResponseV1 {
     /// Validate ciphertext query response constraints.
     ///
@@ -4557,7 +4389,6 @@ impl CiphertextQueryResponseV1 {
         Ok(())
     }
 }
-
 /// Admission bundle coupling container + service manifests for deterministic checks.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -4572,20 +4403,17 @@ pub struct SoraDeploymentBundleV1 {
     /// Routable service manifest.
     pub service: SoraServiceManifestV1,
 }
-
 impl SoraDeploymentBundleV1 {
     /// Compute the canonical hash of the container manifest.
     #[must_use]
     pub fn container_manifest_hash(&self) -> Hash {
         Hash::new(Encode::encode(&self.container))
     }
-
     /// Compute the canonical hash of the service manifest.
     #[must_use]
     pub fn service_manifest_hash(&self) -> Hash {
         Hash::new(Encode::encode(&self.service))
     }
-
     /// Validate deterministic admission constraints across container + service manifests.
     ///
     /// # Errors
@@ -4600,7 +4428,6 @@ impl SoraDeploymentBundleV1 {
                 found: self.schema_version,
             });
         }
-
         self.container.validate()?;
         self.service.validate()?;
         self.validate_container_reference()?;
@@ -4608,10 +4435,8 @@ impl SoraDeploymentBundleV1 {
         self.validate_runtime_requirements()?;
         self.validate_public_route_healthcheck_requirement()?;
         self.validate_http_service_quota_class()?;
-
         Ok(())
     }
-
     fn validate_container_reference(&self) -> Result<(), SoracloudManifestError> {
         if self.service.container.expected_schema_version != self.container.schema_version {
             return Err(SoracloudManifestError::InvalidField {
@@ -4623,7 +4448,6 @@ impl SoraDeploymentBundleV1 {
                 ),
             });
         }
-
         let computed_hash = self.container_manifest_hash();
         if self.service.container.manifest_hash != computed_hash {
             return Err(SoracloudManifestError::InvalidField {
@@ -4635,15 +4459,12 @@ impl SoraDeploymentBundleV1 {
                 ),
             });
         }
-
         Ok(())
     }
-
     fn validate_state_write_requirements(&self) -> Result<(), SoracloudManifestError> {
         if self.container.capabilities.allow_state_writes {
             return Ok(());
         }
-
         for binding in &self.service.state_bindings {
             if binding.mutability != SoraStateMutabilityV1::ReadOnly {
                 return Err(SoracloudManifestError::InvalidField {
@@ -4671,10 +4492,8 @@ impl SoraDeploymentBundleV1 {
                 });
             }
         }
-
         Ok(())
     }
-
     fn validate_runtime_requirements(&self) -> Result<(), SoracloudManifestError> {
         match self.service.execution_plane {
             SoraServiceExecutionPlaneV1::DeterministicService => {
@@ -4736,7 +4555,6 @@ impl SoraDeploymentBundleV1 {
                                 .to_string(),
                     });
                 }
-
                 if self
                     .container
                     .inrou
@@ -4752,10 +4570,8 @@ impl SoraDeploymentBundleV1 {
                 }
             }
         }
-
         Ok(())
     }
-
     fn validate_public_route_healthcheck_requirement(&self) -> Result<(), SoracloudManifestError> {
         if matches!(
             self.service.route.as_ref().map(|route| route.visibility),
@@ -4768,15 +4584,12 @@ impl SoraDeploymentBundleV1 {
                 reason: "public routes require an explicit healthcheck path".to_string(),
             });
         }
-
         Ok(())
     }
-
     fn validate_http_service_quota_class(&self) -> Result<(), SoracloudManifestError> {
         if self.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
             return Ok(());
         }
-
         let quota_class = self.service.economics.quota_class.as_str();
         let Some(policy) = http_service_quota_class_policy(quota_class) else {
             return Err(SoracloudManifestError::InvalidField {
@@ -4787,7 +4600,6 @@ impl SoraDeploymentBundleV1 {
                 ),
             });
         };
-
         if self.service.replicas.get() > policy.max_replicas {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora deployment bundle",
@@ -4798,7 +4610,6 @@ impl SoraDeploymentBundleV1 {
                 ),
             });
         }
-
         let resources = self.container.resources;
         for (field, value, max_value) in [
             (
@@ -4837,7 +4648,6 @@ impl SoraDeploymentBundleV1 {
                 });
             }
         }
-
         let total_lease_volume_bytes = self
             .service
             .lease_volumes
@@ -4855,10 +4665,8 @@ impl SoraDeploymentBundleV1 {
                 ),
             });
         }
-
         Ok(())
     }
-
     /// Validate that the effective service-scoped config and secret maps satisfy this revision.
     ///
     /// # Errors

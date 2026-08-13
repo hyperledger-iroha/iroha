@@ -4,9 +4,7 @@ fn record_twitter_binding_rejects_version_ttl_and_non_provider_revoke() {
     let (outsider, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = TWITTER_FOLLOW_FEED_ID.parse().expect("feed id");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-ttl-negative"));
-
     let (state, _, _, _) = oracle_state_with_accounts(&[provider.clone(), outsider.clone()]);
-
     let kit = iroha_data_model::oracle::kits::twitter_follow_binding();
     let mut feed_config = kit.feed_config;
     feed_config.providers = vec![provider.clone()];
@@ -19,7 +17,6 @@ fn record_twitter_binding_rejects_version_ttl_and_non_provider_revoke() {
         b"user-ttl-negative",
     );
     let attestation = twitter_binding_attestation(&feed_config, &uaid, binding_hash.clone(), 5_000);
-
     let mut sb = state.block(header(1));
     let mut stx = sb.transaction();
     execute_boxed(
@@ -30,7 +27,6 @@ fn record_twitter_binding_rejects_version_ttl_and_non_provider_revoke() {
         &mut stx,
     )
     .expect("register twitter feed");
-
     let mut wrong_version = attestation.clone();
     wrong_version.feed_config_version = FeedConfigVersion(2);
     assert_rejects_with(
@@ -44,7 +40,6 @@ fn record_twitter_binding_rejects_version_ttl_and_non_provider_revoke() {
         ),
         "does not match registered version",
     );
-
     let mut too_long = attestation.clone();
     too_long.expires_at_ms =
         too_long.observed_at_ms + defaults::oracle::twitter_binding_max_ttl_ms() + 1;
@@ -59,7 +54,6 @@ fn record_twitter_binding_rejects_version_ttl_and_non_provider_revoke() {
         ),
         "exceeds max",
     );
-
     let mut too_short = attestation.clone();
     too_short.expires_at_ms =
         too_short.observed_at_ms + defaults::oracle::twitter_binding_min_ttl_ms() - 1;
@@ -74,7 +68,6 @@ fn record_twitter_binding_rejects_version_ttl_and_non_provider_revoke() {
         ),
         "below min",
     );
-
     SubmitOracleObservation {
         observation: twitter_binding_observation(&provider, &signer, &feed_config, &attestation),
     }
@@ -94,7 +87,6 @@ fn record_twitter_binding_rejects_version_ttl_and_non_provider_revoke() {
     }
     .execute(&provider, &mut stx)
     .expect("record binding");
-
     assert_rejects_with(
         execute_boxed(
             RevokeTwitterBinding {
@@ -107,15 +99,12 @@ fn record_twitter_binding_rejects_version_ttl_and_non_provider_revoke() {
         "is not part of feed",
     );
 }
-
 #[test]
 fn record_twitter_binding_rejects_expired_and_duplicates_and_allows_revoke() {
     let (provider, signer) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = TWITTER_FOLLOW_FEED_ID.parse().expect("feed id");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-456"));
-
     let (state, _, _, _) = oracle_state_with_accounts(std::slice::from_ref(&provider));
-
     let kit = iroha_data_model::oracle::kits::twitter_follow_binding();
     let mut feed_config = kit.feed_config;
     feed_config.providers = vec![provider.clone()];
@@ -129,7 +118,6 @@ fn record_twitter_binding_rejects_expired_and_duplicates_and_allows_revoke() {
     );
     let base_attestation =
         twitter_binding_attestation(&feed_config, &uaid, binding_hash.clone(), 5_000);
-
     let mut sb = state.block(header(1));
     let mut stx = sb.transaction();
     record_twitter_binding_round(
@@ -141,7 +129,6 @@ fn record_twitter_binding_rejects_expired_and_duplicates_and_allows_revoke() {
     );
     stx.apply();
     sb.commit().expect("commit block");
-
     // Expired attestation rejected.
     let mut sb = state.block(header(2));
     let mut stx = sb.transaction();
@@ -155,7 +142,6 @@ fn record_twitter_binding_rejects_expired_and_duplicates_and_allows_revoke() {
         .execute(&provider, &mut stx)
         .is_err()
     );
-
     // Duplicate within spacing rejected.
     let mut duplicate = base_attestation.clone();
     duplicate.observed_at_ms += 1;
@@ -167,7 +153,6 @@ fn record_twitter_binding_rejects_expired_and_duplicates_and_allows_revoke() {
         .execute(&provider, &mut stx)
         .is_err()
     );
-
     // Revoke removes registry entries.
     RevokeTwitterBinding {
         binding_hash: binding_hash.clone(),
@@ -177,7 +162,6 @@ fn record_twitter_binding_rejects_expired_and_duplicates_and_allows_revoke() {
     .expect("revoke binding");
     stx.apply();
     sb.commit().expect("commit revoke block");
-
     let view = state.view();
     assert!(
         view.world()

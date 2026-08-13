@@ -38,11 +38,8 @@
 //! best-effort guarantee, so no confidentiality or release claim follows.
 
 #![cfg(test)]
-
 use core::fmt;
-
 use crate::vega::sponge::keccak256;
-
 use super::{
     BATCH_ROWS_V1, FQ2_WIRE_BYTES_V1, HASH_BYTES_V1, OPENING_REPETITIONS_V1, PROOF_CAP_BYTES_V1,
     QPcsChallengeTupleV1, QPcsErrorV1, RELEASE_DOMAIN_LOG_V1, RELEASE_DOMAIN_SIZE_V1,
@@ -50,7 +47,6 @@ use super::{
     RESIDENT_CAP_BYTES_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, is_prime_u64, mod_add_v1,
     mod_pow_v1, mod_sub_v1, validate_challenge_tuples_v1,
 };
-
 const MASKING_VERSION_V1: u8 = 1;
 const MASKED_ROWS_PER_REPETITION_V1: usize = 2;
 const MASKED_ROW_COUNT_V1: usize = OPENING_REPETITIONS_V1 * MASKED_ROWS_PER_REPETITION_V1;
@@ -67,7 +63,6 @@ const RELEASE_EXTERNAL_IO_BUFFER_BYTES_V1: usize = 8 * 1024 * 1024;
 const RELEASE_FIXED_ENVELOPE_HEADER_BYTES_V1: usize = 512;
 const RELEASE_COUNT_HEADER_BYTES_V1: usize = 8;
 const RELEASE_BASE_FIELD_WIRE_BYTES_V1: usize = 8;
-
 const SOURCE_OWNED_AGGREGATE_PAIRS_LINKED_V1: bool = false;
 const FIAT_SHAMIR_RELATION_BOUND_V1: bool = false;
 const PRODUCTION_UNIFORM_INDEPENDENT_SAMPLER_INTEGRATED_V1: bool = false;
@@ -80,7 +75,6 @@ const MASKED_ROW_ROOT_AUTHENTICITY_VERIFIED_V1: bool = false;
 const POSTCOMMIT_OPENING_POINTS_PCS_BOUND_V1: bool = false;
 const ONE_POINT_OPENING_QUOTIENTS_IMPLEMENTED_V1: bool = false;
 const COMPLETE_WORK_BOUND_DERIVED_V1: bool = false;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QPcsMaskingErrorV1 {
     InvalidGeometry,
@@ -96,20 +90,17 @@ enum QPcsMaskingErrorV1 {
     MaskingIdentityMismatch,
     ResourceCeilingExceeded,
 }
-
 impl fmt::Display for QPcsMaskingErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PrototypeMaskingRepetitionBindingV1 {
     repetition: u8,
     gamma: u64,
     beta: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PrototypeMaskingPublicContextV1 {
     q_pcs_parameter_digest: [u8; 32],
@@ -117,13 +108,11 @@ struct PrototypeMaskingPublicContextV1 {
     limb: u8,
     repetitions: [PrototypeMaskingRepetitionBindingV1; OPENING_REPETITIONS_V1],
 }
-
 #[derive(Clone, Copy)]
 struct PrototypeBorrowedRelationPairV1<'a> {
     product: &'a [u64],
     quotient: &'a [u64],
 }
-
 /// Public-only domain separation metadata passed to the private sampler.
 /// Possessing it does not reveal `S`, but neither does it enforce sampler
 /// uniformity or independence.
@@ -138,7 +127,6 @@ struct PrototypeMaskDomainV1 {
     gamma: u64,
     beta: u64,
 }
-
 impl PrototypeMaskDomainV1 {
     fn digest(self) -> [u8; 32] {
         let mut frame = Vec::with_capacity(MASK_DOMAIN_V1.len() + 160);
@@ -155,7 +143,6 @@ impl PrototypeMaskDomainV1 {
         keccak256(&frame)
     }
 }
-
 /// Prototype-only sampler contract. A production implementation must sample
 /// each destination uniformly from `Fq^(N-1)` with independent secret entropy
 /// for the supplied domain. This child validates canonical output and exact
@@ -167,21 +154,18 @@ trait PrototypeUniformCanonicalMaskSamplerV1 {
         destination: &mut [u64],
     ) -> Result<(), QPcsMaskingErrorV1>;
 }
-
 #[cfg(test)]
 std::thread_local! {
     static ZEROIZING_Q_POLYNOMIAL_DROPS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 /// Heap-stable owner allocated while all coefficients are zero and filled in
 /// place. Deliberately neither cloneable nor debuggable and has no raw-Vec
 /// extraction API.
 struct ZeroizingQPolynomialV1 {
     coefficients: Vec<u64>,
 }
-
 impl ZeroizingQPolynomialV1 {
     fn zeroed(coefficient_count: usize) -> Result<Self, QPcsMaskingErrorV1> {
         if coefficient_count == 0 {
@@ -194,16 +178,13 @@ impl ZeroizingQPolynomialV1 {
         coefficients.resize(coefficient_count, 0);
         Ok(Self { coefficients })
     }
-
     fn as_slice(&self) -> &[u64] {
         &self.coefficients
     }
-
     fn as_mut_slice(&mut self) -> &mut [u64] {
         &mut self.coefficients
     }
 }
-
 impl Drop for ZeroizingQPolynomialV1 {
     fn drop(&mut self) {
         let coefficients = core::hint::black_box(&mut self.coefficients);
@@ -217,26 +198,22 @@ impl Drop for ZeroizingQPolynomialV1 {
         let _ = core::hint::black_box(&mut *coefficients);
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MaskedRowRoleV1 {
     Product = 1,
     Quotient = 2,
 }
-
 struct ZeroizingMaskedRowV1 {
     repetition: u8,
     role: MaskedRowRoleV1,
     polynomial: ZeroizingQPolynomialV1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PrototypePostcommitOpeningBindingV1 {
     repetition: u8,
     r: u64,
     opening_transcript_digest: [u8; 32],
 }
-
 /// Move-only precommit state. Construction has sampled and masked all ten
 /// fixed-width rows, but no DEEP point has been accepted yet. It is not a
 /// commitment, proof, receipt, or capability.
@@ -247,14 +224,12 @@ struct PendingMaskedRowsV1 {
     precommit_order_digest: [u8; 32],
     rows: [ZeroizingMaskedRowV1; MASKED_ROW_COUNT_V1],
 }
-
 /// Intermediate state proving only that the caller supplied a nonzero root
 /// after row construction. The root is not authenticated by a PCS here.
 struct RootSealedMaskedRowsV1 {
     pending: PendingMaskedRowsV1,
     masked_rows_root: [u8; 32],
 }
-
 /// Private terminal prototype state after caller-supplied postcommit points
 /// pass local checks. Root authenticity and PCS/Fiat-Shamir binding are false;
 /// no production function consumes this state and it grants no authority.
@@ -264,7 +239,6 @@ struct BoundMaskedRowsV1 {
     masked_row_root_authenticity_verified: bool,
     postcommit_opening_points_pcs_bound: bool,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct QPcsFiveRepetitionMaskingAccountingV1 {
     repetition_count: u8,
@@ -305,7 +279,6 @@ struct QPcsFiveRepetitionMaskingAccountingV1 {
     one_point_opening_quotients_implemented: bool,
     complete_work_bound_derived: bool,
 }
-
 fn maximum_authentication_nodes_v1(tree_length: usize, opened_leaves: usize) -> usize {
     let mut length = tree_length;
     let mut occupied = opened_leaves;
@@ -318,7 +291,6 @@ fn maximum_authentication_nodes_v1(tree_length: usize, opened_leaves: usize) -> 
     }
     authentication
 }
-
 fn complete_merkle_tree_hashes_v1(leaves: usize) -> Result<u64, QPcsMaskingErrorV1> {
     u64::try_from(
         leaves
@@ -328,7 +300,6 @@ fn complete_merkle_tree_hashes_v1(leaves: usize) -> Result<u64, QPcsMaskingError
     )
     .map_err(|_| QPcsMaskingErrorV1::ResourceCeilingExceeded)
 }
-
 fn q_pcs_five_repetition_masking_accounting_v1()
 -> Result<QPcsFiveRepetitionMaskingAccountingV1, QPcsMaskingErrorV1> {
     let n = ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1;
@@ -340,7 +311,6 @@ fn q_pcs_five_repetition_masking_accounting_v1()
     {
         return Err(QPcsMaskingErrorV1::InvalidGeometry);
     }
-
     let initial_opened = 2_usize
         .checked_mul(RELEASE_FRI_QUERY_COUNT_V1)
         .ok_or(QPcsMaskingErrorV1::ResourceCeilingExceeded)?;
@@ -365,7 +335,6 @@ fn q_pcs_five_repetition_masking_accounting_v1()
             .checked_add(complete_merkle_tree_hashes_v1(length)?)
             .ok_or(QPcsMaskingErrorV1::ResourceCeilingExceeded)?;
     }
-
     let initial_value_bytes = 2_usize
         .checked_mul(initial_opened)
         .and_then(|count| count.checked_mul(RELEASE_MASKED_CROSS_LIMB_LEAF_BYTES_V1))
@@ -380,7 +349,6 @@ fn q_pcs_five_repetition_masking_accounting_v1()
     let authentication_bytes = authentication_hashes
         .checked_mul(HASH_BYTES_V1)
         .ok_or(QPcsMaskingErrorV1::ResourceCeilingExceeded)?;
-
     let fixed_envelope_bytes = HASH_BYTES_V1
         + RELEASE_FRI_ROUNDS_V1 * HASH_BYTES_V1
         + BATCH_ROWS_V1 * RELEASE_FRI_CROSS_LIMB_LEAF_BYTES_V1
@@ -395,7 +363,6 @@ fn q_pcs_five_repetition_masking_accounting_v1()
         .and_then(|bytes| bytes.checked_add(authentication_bytes))
         .and_then(|bytes| bytes.checked_add(fixed_envelope_bytes))
         .ok_or(QPcsMaskingErrorV1::ResourceCeilingExceeded)?;
-
     // Each independently aggregated pair owns fixed-width P~(2N-1), H~(N-1),
     // one-point QP(2N-2), and one-point QH(N-2): exactly 6N-6 u64 words. Five
     // pairs cannot reuse the one-pair coefficient storage.
@@ -450,7 +417,6 @@ fn q_pcs_five_repetition_masking_accounting_v1()
     let initial_leaf_hash_input_bytes = ten_row_lde_spool_bytes
         .checked_mul(4)
         .ok_or(QPcsMaskingErrorV1::ResourceCeilingExceeded)?;
-
     let butterflies_per_fft = u64::try_from(RELEASE_DOMAIN_SIZE_V1 / 2)
         .map_err(|_| QPcsMaskingErrorV1::ResourceCeilingExceeded)?
         .checked_mul(
@@ -494,14 +460,12 @@ fn q_pcs_five_repetition_masking_accounting_v1()
         .and_then(|count| count.checked_add(fri_folded_row_values))
         .and_then(|count| count.checked_add(masking_field_updates))
         .ok_or(QPcsMaskingErrorV1::ResourceCeilingExceeded)?;
-
     if mask_construction_peak_bytes > coefficient_heap_bytes
         || maximum_encoded_proof_bytes >= PROOF_CAP_BYTES_V1
         || isolated_kernel_heap_bytes >= RESIDENT_CAP_BYTES_V1
     {
         return Err(QPcsMaskingErrorV1::ResourceCeilingExceeded);
     }
-
     Ok(QPcsFiveRepetitionMaskingAccountingV1 {
         repetition_count: OPENING_REPETITIONS_V1 as u8,
         masked_row_count: MASKED_ROW_COUNT_V1 as u8,
@@ -544,7 +508,6 @@ fn q_pcs_five_repetition_masking_accounting_v1()
         complete_work_bound_derived: COMPLETE_WORK_BOUND_DERIVED_V1,
     })
 }
-
 fn validate_input_polynomial_v1(
     coefficients: &[u64],
     fixed_width: usize,
@@ -561,7 +524,6 @@ fn validate_input_polynomial_v1(
     }
     Ok(())
 }
-
 fn nonempty_u64_slices_overlap_v1(left: &[u64], right: &[u64]) -> Result<bool, QPcsMaskingErrorV1> {
     if left.is_empty() || right.is_empty() {
         return Err(QPcsMaskingErrorV1::InvalidCoefficientCount);
@@ -585,7 +547,6 @@ fn nonempty_u64_slices_overlap_v1(left: &[u64], right: &[u64]) -> Result<bool, Q
         .ok_or(QPcsMaskingErrorV1::ResourceCeilingExceeded)?;
     Ok(left_start < right_end && right_start < left_end)
 }
-
 fn mask_domain_v1(
     modulus: u64,
     ring_degree: usize,
@@ -604,7 +565,6 @@ fn mask_domain_v1(
         beta: binding.beta,
     })
 }
-
 fn validate_precommit_context_and_domains_v1(
     modulus: u64,
     ring_degree: usize,
@@ -649,11 +609,9 @@ fn validate_precommit_context_and_domains_v1(
     }
     Ok(domains)
 }
-
 fn coefficient_at_v1(coefficients: &[u64], index: usize) -> u64 {
     coefficients.get(index).copied().unwrap_or(0)
 }
-
 fn verify_preserved_residual_v1(
     product: &[u64],
     quotient: &[u64],
@@ -695,7 +653,6 @@ fn verify_preserved_residual_v1(
     }
     Ok(())
 }
-
 fn precommit_order_digest_v1(
     context: PrototypeMaskingPublicContextV1,
     domains: &[PrototypeMaskDomainV1; OPENING_REPETITIONS_V1],
@@ -719,7 +676,6 @@ fn precommit_order_digest_v1(
     }
     Ok(digest)
 }
-
 fn mask_one_limb_five_repetitions_v1<S: PrototypeUniformCanonicalMaskSamplerV1>(
     modulus: u64,
     ring_degree: usize,
@@ -765,7 +721,6 @@ fn mask_one_limb_five_repetitions_v1<S: PrototypeUniformCanonicalMaskSamplerV1>(
     let mut rows = Vec::new();
     rows.try_reserve_exact(MASKED_ROW_COUNT_V1)
         .map_err(|_| QPcsMaskingErrorV1::ResourceCeilingExceeded)?;
-
     for (repetition, domain) in domains.iter().copied().enumerate() {
         let mut mask = ZeroizingQPolynomialV1::zeroed(ring_degree - 1)?;
         sampler.fill_mask_polynomial_v1(domain, mask.as_mut_slice())?;
@@ -785,7 +740,6 @@ fn mask_one_limb_five_repetitions_v1<S: PrototypeUniformCanonicalMaskSamplerV1>(
         masks.push(mask);
         let mask = masks.last().ok_or(QPcsMaskingErrorV1::InvalidGeometry)?;
         let pair = &pairs[repetition];
-
         let mut masked_product = ZeroizingQPolynomialV1::zeroed(product_coefficient_count)?;
         let mut masked_quotient = ZeroizingQPolynomialV1::zeroed(ring_degree - 1)?;
         for (index, destination) in masked_product.as_mut_slice().iter_mut().enumerate() {
@@ -814,7 +768,6 @@ fn mask_one_limb_five_repetitions_v1<S: PrototypeUniformCanonicalMaskSamplerV1>(
             ring_degree,
             modulus,
         )?;
-
         let repetition =
             u8::try_from(repetition).map_err(|_| QPcsMaskingErrorV1::ResourceCeilingExceeded)?;
         rows.push(ZeroizingMaskedRowV1 {
@@ -828,7 +781,6 @@ fn mask_one_limb_five_repetitions_v1<S: PrototypeUniformCanonicalMaskSamplerV1>(
             polynomial: masked_quotient,
         });
     }
-
     let rows = rows
         .try_into()
         .map_err(|_: Vec<ZeroizingMaskedRowV1>| QPcsMaskingErrorV1::InvalidGeometry)?;
@@ -840,7 +792,6 @@ fn mask_one_limb_five_repetitions_v1<S: PrototypeUniformCanonicalMaskSamplerV1>(
         rows,
     })
 }
-
 impl PendingMaskedRowsV1 {
     fn seal_masked_rows_root_v1(
         self,
@@ -855,7 +806,6 @@ impl PendingMaskedRowsV1 {
         })
     }
 }
-
 impl RootSealedMaskedRowsV1 {
     /// Accepts postcommit points only from a root-sealed type state. This
     /// prototype validates ordering and field constraints but cannot
@@ -904,7 +854,6 @@ impl RootSealedMaskedRowsV1 {
                 return Err(QPcsMaskingErrorV1::DeepPointIsNegacyclicRoot);
             }
         }
-
         // Transcript order is explicit: the masked-row root is absorbed before
         // any postcommit r or opening-frame digest.
         let mut frame = Vec::with_capacity(MASK_POSTCOMMIT_ORDER_DOMAIN_V1.len() + 32 * 8 + 64);
@@ -931,16 +880,12 @@ impl RootSealedMaskedRowsV1 {
         })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
-
     use super::*;
-
     const TEST_MODULUS_V1: u64 = 97;
     const TEST_RING_DEGREE_V1: usize = 8;
-
     fn test_relation_owners_v1() -> ([Vec<u64>; 5], [Vec<u64>; 5]) {
         let quotients = core::array::from_fn(|repetition| {
             (0..TEST_RING_DEGREE_V1 - 1)
@@ -957,7 +902,6 @@ mod tests {
         });
         (products, quotients)
     }
-
     fn borrowed_pairs_v1<'a>(
         products: &'a [Vec<u64>; 5],
         quotients: &'a [Vec<u64>; 5],
@@ -967,7 +911,6 @@ mod tests {
             quotient: &quotients[index],
         })
     }
-
     fn test_context_v1() -> PrototypeMaskingPublicContextV1 {
         let gamma_beta = [(3, 4), (6, 7), (10, 11), (14, 15), (19, 20)];
         PrototypeMaskingPublicContextV1 {
@@ -981,7 +924,6 @@ mod tests {
             }),
         }
     }
-
     fn test_openings_v1() -> [PrototypePostcommitOpeningBindingV1; OPENING_REPETITIONS_V1] {
         let points = [2, 5, 9, 13, 17];
         core::array::from_fn(|index| PrototypePostcommitOpeningBindingV1 {
@@ -990,12 +932,10 @@ mod tests {
             opening_transcript_digest: [u8::try_from(index + 21).unwrap(); 32],
         })
     }
-
     #[derive(Default)]
     struct DomainAwareSamplerV1 {
         domains: Vec<PrototypeMaskDomainV1>,
     }
-
     impl PrototypeUniformCanonicalMaskSamplerV1 for DomainAwareSamplerV1 {
         fn fill_mask_polynomial_v1(
             &mut self,
@@ -1012,9 +952,7 @@ mod tests {
             Ok(())
         }
     }
-
     struct SameMaskSamplerV1;
-
     impl PrototypeUniformCanonicalMaskSamplerV1 for SameMaskSamplerV1 {
         fn fill_mask_polynomial_v1(
             &mut self,
@@ -1025,9 +963,7 @@ mod tests {
             Ok(())
         }
     }
-
     struct NonCanonicalSamplerV1;
-
     impl PrototypeUniformCanonicalMaskSamplerV1 for NonCanonicalSamplerV1 {
         fn fill_mask_polynomial_v1(
             &mut self,
@@ -1039,13 +975,11 @@ mod tests {
             Ok(())
         }
     }
-
     struct FailOrPanicSamplerV1 {
         calls: usize,
         fail_at: usize,
         panic_instead: bool,
     }
-
     impl PrototypeUniformCanonicalMaskSamplerV1 for FailOrPanicSamplerV1 {
         fn fill_mask_polynomial_v1(
             &mut self,
@@ -1069,17 +1003,14 @@ mod tests {
             Ok(())
         }
     }
-
     fn reset_zeroizing_drop_count_v1() {
         let _ = ZEROIZING_Q_POLYNOMIAL_DROPS_V1.try_with(|drops| drops.set(0));
     }
-
     fn zeroizing_drop_count_v1() -> usize {
         ZEROIZING_Q_POLYNOMIAL_DROPS_V1
             .try_with(std::cell::Cell::get)
             .unwrap_or(usize::MAX)
     }
-
     #[test]
     fn five_masks_preserve_the_residual_and_encode_exact_ten_row_order() {
         let (products, quotients) = test_relation_owners_v1();
@@ -1093,7 +1024,6 @@ mod tests {
             &mut sampler,
         )
         .unwrap();
-
         assert_eq!(pending.modulus, TEST_MODULUS_V1);
         assert_eq!(pending.ring_degree, TEST_RING_DEGREE_V1);
         assert_ne!(pending.precommit_order_digest, [0; 32]);
@@ -1119,7 +1049,6 @@ mod tests {
                 TEST_MODULUS_V1,
             )
             .unwrap();
-
             for index in 0..TEST_RING_DEGREE_V1 - 1 {
                 let mask = mod_sub_v1(
                     quotient_row.polynomial.as_slice()[index],
@@ -1168,11 +1097,9 @@ mod tests {
         assert!(!bound.masked_row_root_authenticity_verified);
         assert!(!bound.postcommit_opening_points_pcs_bound);
     }
-
     #[test]
     fn hostile_repetition_mask_reuse_and_slice_overlap_are_rejected() {
         let (products, quotients) = test_relation_owners_v1();
-
         let mut same_mask = SameMaskSamplerV1;
         assert!(matches!(
             mask_one_limb_five_repetitions_v1(
@@ -1240,7 +1167,6 @@ mod tests {
         )
         .expect("equal-valued independent allocations are not aliases");
         drop(equal_valued);
-
         let mut wrong_repetition = test_context_v1();
         wrong_repetition.repetitions[1].repetition = 0;
         assert_eq!(
@@ -1288,7 +1214,6 @@ mod tests {
             Err(QPcsMaskingErrorV1::NonCanonicalResidue)
         );
     }
-
     #[test]
     fn fixed_width_canonical_rows_and_postcommit_deep_points_are_enforced() {
         let (mut products, quotients) = test_relation_owners_v1();
@@ -1303,7 +1228,6 @@ mod tests {
             ),
             Err(QPcsMaskingErrorV1::NonCanonicalResidue)
         ));
-
         let (mut products, quotients) = test_relation_owners_v1();
         products[0].push(0);
         assert!(matches!(
@@ -1337,7 +1261,6 @@ mod tests {
                 .all(|row| row.polynomial.as_slice().last() == Some(&0))
         );
         drop(top_zero_pending);
-
         let (products, quotients) = test_relation_owners_v1();
         assert!(matches!(
             mask_one_limb_five_repetitions_v1(
@@ -1383,7 +1306,6 @@ mod tests {
             ),
             Err(QPcsMaskingErrorV1::MaskingIdentityMismatch)
         ));
-
         let root = (1..TEST_MODULUS_V1)
             .find(|candidate| {
                 mod_add_v1(
@@ -1465,11 +1387,9 @@ mod tests {
             .unwrap();
         assert_ne!(left.postcommit_order_digest, right.postcommit_order_digest);
     }
-
     #[test]
     fn zeroizing_polynomial_owners_cover_success_error_and_unwind() {
         let (products, quotients) = test_relation_owners_v1();
-
         reset_zeroizing_drop_count_v1();
         let masked = mask_one_limb_five_repetitions_v1(
             TEST_MODULUS_V1,
@@ -1482,7 +1402,6 @@ mod tests {
         assert_eq!(zeroizing_drop_count_v1(), 5);
         drop(masked);
         assert_eq!(zeroizing_drop_count_v1(), 15);
-
         reset_zeroizing_drop_count_v1();
         let pending = mask_one_limb_five_repetitions_v1(
             TEST_MODULUS_V1,
@@ -1498,7 +1417,6 @@ mod tests {
             Err(QPcsMaskingErrorV1::InvalidPublicBinding)
         ));
         assert_eq!(zeroizing_drop_count_v1(), 15);
-
         reset_zeroizing_drop_count_v1();
         let error = mask_one_limb_five_repetitions_v1(
             TEST_MODULUS_V1,
@@ -1513,7 +1431,6 @@ mod tests {
         );
         assert!(matches!(error, Err(QPcsMaskingErrorV1::RandomUnavailable)));
         assert_eq!(zeroizing_drop_count_v1(), 7);
-
         reset_zeroizing_drop_count_v1();
         let unwind = catch_unwind(AssertUnwindSafe(|| {
             let _ = mask_one_limb_five_repetitions_v1(
@@ -1531,7 +1448,6 @@ mod tests {
         assert!(unwind.is_err());
         assert_eq!(zeroizing_drop_count_v1(), 7);
     }
-
     #[test]
     fn release_resource_accounting_is_exact_but_work_is_a_non_authorizing_lower_bound() {
         let plan = q_pcs_five_repetition_masking_accounting_v1().unwrap();
@@ -1573,7 +1489,6 @@ mod tests {
         assert!(!plan.one_point_opening_quotients_implemented);
         assert!(!plan.complete_work_bound_derived);
     }
-
     #[test]
     fn source_guards_keep_masks_private_unwired_and_every_release_axis_false() {
         let source = include_str!("phase23_rns_link_q_pcs_masking.rs");

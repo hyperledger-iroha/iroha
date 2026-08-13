@@ -1,10 +1,8 @@
 use std::{fs, path::Path};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tempfile::tempdir;
-
 #[test]
 fn soranet_gateway_billing_runs_end_to_end() {
     let temp = tempdir().expect("tempdir");
@@ -12,7 +10,6 @@ fn soranet_gateway_billing_runs_end_to_end() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("workspace root");
-
     let usage = workspace_root
         .join("configs")
         .join("soranet")
@@ -28,7 +25,6 @@ fn soranet_gateway_billing_runs_end_to_end() {
         .join("soranet")
         .join("gateway_m0")
         .join("billing_guardrails.json");
-
     let mut cmd = cargo_bin_cmd!("xtask");
     let output = cmd
         .current_dir(workspace_root)
@@ -59,7 +55,6 @@ fn soranet_gateway_billing_runs_end_to_end() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let invoice_bytes =
         fs::read(out_dir.join("billing_invoice.json")).expect("invoice JSON exists");
     let invoice: Value = json::from_slice(&invoice_bytes).expect("invoice parses");
@@ -89,7 +84,6 @@ fn soranet_gateway_billing_runs_end_to_end() {
             .is_empty(),
         "merge notes should be empty for the sample"
     );
-
     let parquet_path = out_dir.join("billing_invoice.parquet");
     let file = fs::File::open(&parquet_path).expect("parquet exists");
     let reader = ParquetRecordBatchReaderBuilder::try_new(file)
@@ -102,7 +96,6 @@ fn soranet_gateway_billing_runs_end_to_end() {
         rows += batch.num_rows();
     }
     assert_eq!(rows, 6, "parquet row count mismatch");
-
     let ledger_bytes =
         fs::read(out_dir.join("billing_ledger_projection.json")).expect("ledger exists");
     let ledger: Value = json::from_slice(&ledger_bytes).expect("ledger parses");

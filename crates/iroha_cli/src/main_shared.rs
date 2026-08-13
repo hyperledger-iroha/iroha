@@ -39,7 +39,6 @@ use std::{
     sync::LazyLock,
     time::Duration,
 };
-
 use error_stack::{IntoReportCompat, Report, ResultExt, fmt::ColorMode};
 use eyre::{Result, WrapErr, eyre};
 use futures::{TryStreamExt, stream::TryStream};
@@ -61,7 +60,6 @@ use norito::json::{self, JsonDeserialize, JsonSerialize};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
-
 const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
     Some(value) => value,
     None => "unknown",
@@ -79,7 +77,6 @@ const MAX_CLI_JSON_FIELD_BYTES_V1: usize = 16 * 1024 * 1024;
 const MAX_CLI_JSON_TOTAL_ELEMENTS_V1: usize = 1_000_000;
 const MAX_CLI_JSON_DECODE_ALLOCATION_BYTES_V1: usize = 128 * 1024 * 1024;
 const MAX_CLI_JSON_NESTING_DEPTH_V1: usize = 64;
-
 const CLI_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
     MAX_CLI_JSON_SEQUENCE_ELEMENTS_V1,
     MAX_CLI_JSON_FIELD_BYTES_V1,
@@ -87,11 +84,9 @@ const CLI_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::ne
     MAX_CLI_JSON_DECODE_ALLOCATION_BYTES_V1,
     MAX_CLI_JSON_NESTING_DEPTH_V1,
 );
-
 fn build_line() -> BuildLine {
     BuildLine::from_bin_name(env!("CARGO_BIN_NAME"))
 }
-
 fn validate_executable_fee_payment(
     executable: &Executable,
     fee_payment: &FeePaymentIntent,
@@ -103,7 +98,6 @@ fn validate_executable_fee_payment(
         .map(|_| ())
         .map_err(|err| eyre!(format_gas_limit_validation_error(executable, err)))
 }
-
 fn format_gas_limit_validation_error(
     executable: &Executable,
     err: iroha::data_model::transaction::TransactionGasLimitError,
@@ -128,7 +122,6 @@ fn format_gas_limit_validation_error(
         }
     }
 }
-
 pub(crate) fn apply_cli_gas_limit_override(
     fee_payment: FeePaymentIntent,
     gas_limit: Option<u64>,
@@ -150,7 +143,6 @@ pub(crate) fn apply_cli_gas_limit_override(
         ),
     })
 }
-
 fn fee_quote_rejection_message(status: reqwest::StatusCode, body: &[u8]) -> String {
     let Ok(envelope) = norito::json::from_slice::<ErrorEnvelope>(body) else {
         let fallback = String::from_utf8_lossy(body);
@@ -159,7 +151,6 @@ fn fee_quote_rejection_message(status: reqwest::StatusCode, body: &[u8]) -> Stri
             fallback.trim()
         );
     };
-
     let mut message = format!(
         "fee quote rejected with HTTP {status} [{}]: {}",
         envelope.code, envelope.message
@@ -170,7 +161,6 @@ fn fee_quote_rejection_message(status: reqwest::StatusCode, body: &[u8]) -> Stri
         .and_then(|details| details.fee.as_ref())
     {
         use std::fmt::Write as _;
-
         let _ = write!(
             message,
             "; fee_code={}; retryable={}",
@@ -203,7 +193,6 @@ fn fee_quote_rejection_message(status: reqwest::StatusCode, body: &[u8]) -> Stri
     }
     message
 }
-
 pub(crate) fn quote_and_sign_transaction(
     client: &Client,
     executable: Executable,
@@ -241,7 +230,6 @@ pub(crate) fn quote_and_sign_transaction(
         .wrap_err("Failed to sign the exact quoted transaction payload")?;
     Ok((transaction, quote))
 }
-
 fn print_fee_quote_text<C: RunContext + ?Sized>(
     context: &mut C,
     quote: &FeeQuoteResponse,
@@ -273,7 +261,6 @@ fn print_fee_quote_text<C: RunContext + ?Sized>(
 pub mod json_macros {
     pub use norito::derive::{FastJsonWrite, JsonDeserialize, JsonSerialize};
 }
-
 /// Output format for CLI responses.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CliOutputFormat {
@@ -282,7 +269,6 @@ pub enum CliOutputFormat {
     /// Emit human-readable text when available.
     Text,
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TransactionWaitTerminalStatusArg {
     Queued,
@@ -292,7 +278,6 @@ pub(crate) enum TransactionWaitTerminalStatusArg {
     Rejected,
     Expired,
 }
-
 /// Signature-bound source selected for transaction fees.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum FeePayerArg {
@@ -301,7 +286,6 @@ enum FeePayerArg {
     /// Charge one exact immutable sponsor-program revision.
     Sponsor,
 }
-
 #[derive(clap::Args, Clone, Debug, Default)]
 struct FeePaymentArgs {
     /// Required fee source for every submitted transaction.
@@ -314,7 +298,6 @@ struct FeePaymentArgs {
     #[arg(long, global = true, value_name = "NONZERO_U64")]
     fee_program_revision: Option<u64>,
 }
-
 impl FeePaymentArgs {
     fn selection(&self) -> Result<FeePaymentIntent> {
         match self.fee_payer {
@@ -352,7 +335,6 @@ impl FeePaymentArgs {
         }
     }
 }
-
 impl From<TransactionWaitTerminalStatusArg> for iroha::client::TransactionWaitTerminalStatus {
     fn from(value: TransactionWaitTerminalStatusArg) -> Self {
         match value {
@@ -365,7 +347,6 @@ impl From<TransactionWaitTerminalStatusArg> for iroha::client::TransactionWaitTe
         }
     }
 }
-
 #[derive(clap::Args, Debug, Clone)]
 pub(crate) struct TransactionWaitArgs {
     /// Poll `/v1/pipeline/transactions/status` until the transaction reaches Applied finality.
@@ -388,17 +369,14 @@ pub(crate) struct TransactionWaitArgs {
     )]
     pub terminal_statuses: Vec<TransactionWaitTerminalStatusArg>,
 }
-
 impl TransactionWaitArgs {
     pub(crate) fn is_enabled(&self) -> bool {
         !self.submit_only
     }
-
     pub(crate) fn to_options(&self) -> Result<iroha::client::TransactionWaitOptions> {
         if self.poll_interval_ms == 0 {
             eyre::bail!("--poll-interval-ms must be greater than 0");
         }
-
         Ok(iroha::client::TransactionWaitOptions {
             timeout: Duration::from_millis(self.timeout_ms),
             poll_interval: Duration::from_millis(self.poll_interval_ms),
@@ -411,7 +389,6 @@ impl TransactionWaitArgs {
         })
     }
 }
-
 pub(crate) fn wait_for_transaction_status(
     client: &Client,
     hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
@@ -419,7 +396,6 @@ pub(crate) fn wait_for_transaction_status(
 ) -> Result<iroha::client::TransactionWaitOutcome> {
     client.wait_for_transaction_terminal_status(hash, wait.to_options()?)
 }
-
 /// Iroha Client CLI provides a simple way to interact with the Iroha Web API.
 #[derive(clap::Parser, Debug)]
 #[command(name = env!("CARGO_BIN_NAME"), version = env!("CARGO_PKG_VERSION"), author)]
@@ -472,7 +448,6 @@ struct Args {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(clap::Subcommand, Debug)]
 enum Command {
     /// Canonical account reads and account mutations
@@ -509,37 +484,26 @@ enum Command {
     #[command(subcommand)]
     Soracloud(crate::soracloud::Command),
 }
-
 /// Context inside which commands run
 trait RunContext {
     fn config(&self) -> &Config;
-
     fn transaction_metadata(&self) -> Option<&Metadata>;
-
     fn transaction_fee_payment(&self) -> Result<FeePaymentIntent> {
         eyre::bail!("this command context has no explicit fee payment selection")
     }
-
     fn input_instructions(&self) -> bool;
-
     fn output_instructions(&self) -> bool;
-
     fn i18n(&self) -> &Localizer;
-
     fn output_format(&self) -> CliOutputFormat {
         CliOutputFormat::Json
     }
-
     fn print_data<T>(&mut self, data: &T) -> Result<()>
     where
         T: JsonSerialize + ?Sized;
-
     fn println_data(&mut self, data: impl Display) -> Result<()> {
         self.println(data)
     }
-
     fn println(&mut self, data: impl Display) -> Result<()>;
-
     fn client_from_config(&self) -> Client {
         let mut client = Client::new(self.config().clone());
         if let Some(operator_key_pair) = self.operator_key_pair() {
@@ -547,25 +511,20 @@ trait RunContext {
         }
         client
     }
-
     fn operator_key_pair(&self) -> Option<&KeyPair> {
         None
     }
-
     fn server_version(&self) -> Result<String> {
         self.client_from_config().get_server_version()
     }
-
     /// Submit instructions or dump them to stdout depending on the flag
     fn finish(&mut self, instructions: impl Into<Executable>) -> Result<()> {
         self.finish_with_mode(instructions, true)
     }
-
     /// Submit instructions without waiting for confirmation.
     fn finish_unconfirmed(&mut self, instructions: impl Into<Executable>) -> Result<()> {
         self.finish_with_mode(instructions, false)
     }
-
     fn finish_with_mode(
         &mut self,
         instructions: impl Into<Executable>,
@@ -573,7 +532,6 @@ trait RunContext {
     ) -> Result<()> {
         self.submit_with_mode(instructions, wait_for_confirmation)
     }
-
     /// Combine instructions into a single transaction and submit it
     ///
     /// # Errors
@@ -583,7 +541,6 @@ trait RunContext {
     fn submit(&mut self, instructions: impl Into<Executable>) -> Result<()> {
         self.submit_with_mode(instructions, true)
     }
-
     /// Submit instructions without waiting for confirmation.
     ///
     /// Useful when the transaction can legitimately restart the node (e.g., executor upgrade)
@@ -592,7 +549,6 @@ trait RunContext {
     fn submit_without_confirmation(&mut self, instructions: impl Into<Executable>) -> Result<()> {
         self.submit_with_mode(instructions, false)
     }
-
     fn submit_with_mode(
         &mut self,
         instructions: impl Into<Executable>,
@@ -601,7 +557,6 @@ trait RunContext {
         let metadata = self.transaction_metadata().cloned().unwrap_or_default();
         self.submit_with_metadata(instructions, metadata, wait_for_confirmation)
     }
-
     fn submit_with_metadata(
         &mut self,
         instructions: impl Into<Executable>,
@@ -610,7 +565,6 @@ trait RunContext {
     ) -> Result<()> {
         self.submit_with_metadata_and_gas(instructions, metadata, wait_for_confirmation, None)
     }
-
     fn submit_with_metadata_and_gas(
         &mut self,
         instructions: impl Into<Executable>,
@@ -671,7 +625,6 @@ trait RunContext {
         let (transaction, fee_quote) =
             quote_and_sign_transaction(&client, executable, fee_payment, metadata)?;
         let i18n = self.i18n().clone();
-
         let err_msg = if cfg!(debug_assertions) {
             let tx = format!("{transaction:?}");
             i18n.t_with(
@@ -681,7 +634,6 @@ trait RunContext {
         } else {
             i18n.t("error.submit_transaction")
         };
-
         let (hash, confirmation_msg) = if wait_for_confirmation {
             let hash = client
                 .submit_transaction_blocking(&transaction)
@@ -696,7 +648,6 @@ trait RunContext {
                 .wrap_err(err_msg.clone())?;
             (hash, i18n.t("info.tx_submitted_no_confirmation"))
         };
-
         match self.output_format() {
             CliOutputFormat::Json => {
                 let result = json_utils::json_object(vec![
@@ -715,9 +666,7 @@ trait RunContext {
         }
     }
 }
-
 include!("print_json_context.rs");
-
 /// Runs command
 trait Run {
     /// Runs command
@@ -726,7 +675,6 @@ trait Run {
     /// if inner command errors
     fn run<C: RunContext>(self, context: &mut C) -> Result<()>;
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use Command::*;
@@ -745,7 +693,6 @@ impl Run for Command {
         }
     }
 }
-
 impl Command {
     fn allows_fallback_config(&self) -> bool {
         match self {
@@ -762,7 +709,6 @@ impl Command {
             Self::Soracloud(command) => command.allows_fallback_config(),
         }
     }
-
     fn allows_fallback_config_in_machine_mode(&self) -> bool {
         match self {
             Self::Offline(command) => command.allows_fallback_config(),
@@ -771,10 +717,8 @@ impl Command {
         }
     }
 }
-
 mod ledger {
     use super::*;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Read and write domains
@@ -818,7 +762,6 @@ mod ledger {
         /// Subscribe to blocks
         Blocks(crate::blocks::Args),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -841,10 +784,8 @@ mod ledger {
         }
     }
 }
-
 mod ops {
     use super::*;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Read and write the executor
@@ -867,7 +808,6 @@ mod ops {
         #[command(subcommand)]
         Bridge(crate::bridge::Command),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -883,10 +823,8 @@ mod ops {
         }
     }
 }
-
 mod app {
     use super::*;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Governance helpers (app API convenience)
@@ -956,7 +894,6 @@ mod app {
         #[command(subcommand)]
         Settlement(crate::settlement::Command),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -986,7 +923,6 @@ mod app {
             }
         }
     }
-
     impl Command {
         pub(super) fn allows_fallback_config(&self) -> bool {
             match self {
@@ -1024,10 +960,8 @@ mod app {
             }
         }
     }
-
     fn taikai_allows_fallback_config(command: &crate::commands::taikai::Command) -> bool {
         use crate::commands::taikai::{Command as TaikaiCommand, IngestCommand};
-
         match command {
             TaikaiCommand::Bundle(_)
             | TaikaiCommand::CekRotate(_)
@@ -1036,12 +970,10 @@ mod app {
             TaikaiCommand::Ingest(IngestCommand::Watch(args)) => !args.publish_da,
         }
     }
-
     fn sorafs_allows_fallback_config(command: &crate::commands::sorafs::Command) -> bool {
         use crate::commands::sorafs::{
             Command as SorafsCommand, IncentivesCommand, IncentivesServiceCommand, ReserveCommand,
         };
-
         match command {
             SorafsCommand::Reserve(
                 ReserveCommand::Quote(_) | ReserveCommand::Ledger(_) | ReserveCommand::Lifecycle(_),
@@ -1082,10 +1014,8 @@ mod app {
         }
     }
 }
-
 mod tools {
     use super::*;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Account address helpers (canonical I105 conversions)
@@ -1102,7 +1032,6 @@ mod tools {
         /// Show versions and git SHA of client and server
         Version(crate::Version),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -1115,14 +1044,12 @@ mod tools {
             }
         }
     }
-
     impl Command {
         pub(super) fn allows_fallback_config(&self) -> bool {
             matches!(self, Self::Address(_))
         }
     }
 }
-
 #[derive(Error, Debug)]
 enum MainError {
     #[error("Failed to parse command-line arguments: {0}")]
@@ -1136,7 +1063,6 @@ enum MainError {
     #[error("Failed to run the command: {0}")]
     Command(String),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CliErrorKind {
     Config,
@@ -1144,7 +1070,6 @@ enum CliErrorKind {
     Command,
     Internal,
 }
-
 impl CliErrorKind {
     fn label(self) -> &'static str {
         match self {
@@ -1154,7 +1079,6 @@ impl CliErrorKind {
             Self::Internal => "internal",
         }
     }
-
     fn exit_code(self) -> i32 {
         match self {
             Self::Config => 3,
@@ -1164,19 +1088,15 @@ impl CliErrorKind {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 struct MarkdownHelp;
-
 impl Run for MarkdownHelp {
     fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 struct Version;
-
 impl Run for Version {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client_version = env!("CARGO_PKG_VERSION");
@@ -1207,7 +1127,6 @@ impl Run for Version {
         }
     }
 }
-
 fn main() {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let output_format = output_format_override_from_args(
@@ -1223,7 +1142,6 @@ fn main() {
         std::process::exit(rendered.kind.exit_code());
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
@@ -1235,7 +1153,6 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
     );
     let help_language = detect_language(language_override.as_deref());
     let help_i18n = Localizer::new(Bundle::Cli, help_language);
-
     let cmd = Args::command();
     let matches = match cmd.try_get_matches_from(&raw_args) {
         Ok(matches) => matches,
@@ -1257,7 +1174,6 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
     };
     let args = Args::from_arg_matches(&matches)
         .map_err(|err| Report::new(MainError::CliArgs(err.to_string())))?;
-
     let language = detect_language(args.language.as_deref());
     let i18n = Localizer::new(Bundle::Cli, language);
     if !args.machine {
@@ -1271,14 +1187,11 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
             )
         );
     }
-
     if let Command::Tools(tools::Command::MarkdownHelp(_md)) = &args.command {
         clap_markdown::print_help_markdown::<Args>();
         return Ok(());
     }
-
     error_stack::Report::set_color_mode(color_mode());
-
     let (load_path, config_was_explicit) = args.config.as_ref().map_or_else(
         || (LoadPath::Default(PathBuf::from("client.toml")), false),
         |path| (LoadPath::Explicit(resolve_config_path(path)), true),
@@ -1286,7 +1199,6 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
     let config_path = match &load_path {
         LoadPath::Explicit(path) | LoadPath::Default(path) => Some(path.clone()),
     };
-
     let mut config = match Config::load(load_path) {
         Ok(cfg) => cfg,
         Err(_)
@@ -1318,7 +1230,6 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
     {
         apply_transaction_overrides(&mut config, &value);
     }
-
     if args.verbose {
         let config_json = config_to_json(&config).into_report().map_err(|report| {
             report
@@ -1333,7 +1244,6 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
             i18n.t_with("info.configuration_dump", &[("config", rendered.as_str())])
         );
     }
-
     let operator_key_pair = args
         .operator_private_key_file
         .as_deref()
@@ -1344,7 +1254,6 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
                 .attach("failed to load runtime operator signing key")
                 .attach(error.to_string())
         })?;
-
     let output_format = effective_output_format(&args);
     let mut context = PrintJsonContext {
         write: io::stdout(),
@@ -1369,7 +1278,6 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
             .map_err(|report| report.change_context(MainError::TransactionMetadata))?;
         context.transaction_metadata = Some(metadata);
     }
-
     let _account_chain_discriminant =
         ChainDiscriminantGuard::enter(context.config.account_chain_discriminant);
     args.command
@@ -1379,10 +1287,8 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
             let message = format!("{:#}", report.current_context());
             report.change_context(MainError::Command(message))
         })?;
-
     Ok(())
 }
-
 const HELP_REPLACEMENTS: &[(&str, &str)] = &[
     ("Usage:", "help.heading.usage"),
     ("Commands:", "help.heading.commands"),
@@ -1396,7 +1302,6 @@ const HELP_REPLACEMENTS: &[(&str, &str)] = &[
     ("Default:", "help.label.default"),
     ("Environment:", "help.label.env"),
 ];
-
 fn language_override_from_args<I, S>(args: I) -> Option<String>
 where
     I: IntoIterator<Item = S>,
@@ -1420,7 +1325,6 @@ where
     }
     None
 }
-
 fn localize_help_text(help: &str, i18n: &Localizer) -> String {
     let mut localized = help.to_string();
     for (needle, key) in HELP_REPLACEMENTS {
@@ -1431,7 +1335,6 @@ fn localize_help_text(help: &str, i18n: &Localizer) -> String {
     }
     localized
 }
-
 fn output_format_override_from_args<I, S>(args: I) -> Option<CliOutputFormat>
 where
     I: IntoIterator<Item = S>,
@@ -1454,7 +1357,6 @@ where
     }
     None
 }
-
 fn parse_output_format(value: &str) -> Option<CliOutputFormat> {
     match value.trim().to_ascii_lowercase().as_str() {
         "json" => Some(CliOutputFormat::Json),
@@ -1462,11 +1364,9 @@ fn parse_output_format(value: &str) -> Option<CliOutputFormat> {
         _ => None,
     }
 }
-
 fn effective_output_format(args: &Args) -> CliOutputFormat {
     args.output_format
 }
-
 fn color_mode() -> ColorMode {
     if supports_color::on(supports_color::Stream::Stdout).is_some()
         && supports_color::on(supports_color::Stream::Stderr).is_some()
@@ -1476,7 +1376,6 @@ fn color_mode() -> ColorMode {
         ColorMode::None
     }
 }
-
 fn resolve_config_path(path: &Path) -> PathBuf {
     if path.is_absolute() || path.exists() {
         return path.to_path_buf();
@@ -1487,7 +1386,6 @@ fn resolve_config_path(path: &Path) -> PathBuf {
     }
     path.to_path_buf()
 }
-
 fn parse_duration_value(raw: &toml::Value) -> Option<Duration> {
     match raw {
         toml::Value::Integer(ms) if *ms >= 0 => u64::try_from(*ms).ok().map(Duration::from_millis),
@@ -1495,7 +1393,6 @@ fn parse_duration_value(raw: &toml::Value) -> Option<Duration> {
         _ => None,
     }
 }
-
 fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
     if let Some(transaction) = raw.get("transaction").and_then(|v| v.as_table()) {
         if let Some(ttl) = transaction
@@ -1512,7 +1409,6 @@ fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
         }
     }
 }
-
 fn try_fallback_config() -> Result<Config> {
     let chain = ChainId::from("offline-cli");
     // Offline-only commands still share the complete client configuration type.
@@ -1554,12 +1450,10 @@ fn try_fallback_config() -> Result<Config> {
         sorafs_rollout_phase: SorafsRolloutPhase::Default,
     })
 }
-
 #[cfg(test)]
 pub(crate) fn fallback_config() -> Config {
     try_fallback_config().expect("offline fallback config should derive a deterministic key pair")
 }
-
 static WORKSPACE_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
@@ -1568,7 +1462,6 @@ static WORKSPACE_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
         .unwrap_or(&manifest_dir)
         .to_path_buf()
 });
-
 fn config_to_json(config: &Config) -> Result<norito::json::Value> {
     json_utils::json_object(vec![
         ("chain", json_utils::json_value(&config.chain)?),
@@ -1606,10 +1499,8 @@ fn config_to_json(config: &Config) -> Result<norito::json::Value> {
         ),
     ])
 }
-
 fn account_admission_hint(err: &(dyn std::error::Error + 'static)) -> Option<String> {
     use iroha::data_model::isi::error::{AccountAdmissionError, AccountAdmissionQuotaScope};
-
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(cause) = current {
         if let Some(admission) = cause.downcast_ref::<AccountAdmissionError>() {
@@ -1654,10 +1545,8 @@ fn account_admission_hint(err: &(dyn std::error::Error + 'static)) -> Option<Str
         }
         current = cause.source();
     }
-
     None
 }
-
 fn map_account_admission_error(err: eyre::Report, i18n: &Localizer) -> eyre::Report {
     if let Some(hint) = account_admission_hint(err.as_ref()) {
         eprintln!(
@@ -1667,17 +1556,13 @@ fn map_account_admission_error(err: eyre::Report, i18n: &Localizer) -> eyre::Rep
     }
     err
 }
-
 fn account_admission_rejected_message(hint: &str, i18n: &Localizer) -> String {
     i18n.t_with("error.account_admission_rejected", &[("hint", hint)])
 }
-
 mod filter {
     use iroha::data_model::query::dsl::CompoundPredicate;
-
     use super::*;
     use crate::list_support::{CommonArgs, FilterArgs};
-
     #[derive(clap::Args, Debug)]
     pub struct DomainFilter {
         /// Filtering condition specified as a JSON string
@@ -1686,13 +1571,11 @@ mod filter {
         #[command(flatten)]
         options: CommonArgs,
     }
-
     impl DomainFilter {
         pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Domain>> {
             FilterArgs::new(self.predicate, self.options)
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct AccountFilter {
         /// Filtering condition specified as a JSON string
@@ -1701,13 +1584,11 @@ mod filter {
         #[command(flatten)]
         options: CommonArgs,
     }
-
     impl AccountFilter {
         pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Account>> {
             FilterArgs::new(self.predicate, self.options)
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct AssetFilter {
         /// Filtering condition specified as a JSON string
@@ -1716,13 +1597,11 @@ mod filter {
         #[command(flatten)]
         options: CommonArgs,
     }
-
     impl AssetFilter {
         pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Asset>> {
             FilterArgs::new(self.predicate, self.options)
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct AssetDefinitionFilter {
         /// Filtering condition specified as a JSON string
@@ -1731,13 +1610,11 @@ mod filter {
         #[command(flatten)]
         options: CommonArgs,
     }
-
     impl AssetDefinitionFilter {
         pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<AssetDefinition>> {
             FilterArgs::new(self.predicate, self.options)
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct NftFilter {
         /// Filtering condition specified as a JSON string
@@ -1746,13 +1623,11 @@ mod filter {
         #[command(flatten)]
         options: CommonArgs,
     }
-
     impl NftFilter {
         pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Nft>> {
             FilterArgs::new(self.predicate, self.options)
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct RwaFilter {
         /// Filtering condition specified as a JSON string
@@ -1761,14 +1636,12 @@ mod filter {
         #[command(flatten)]
         options: CommonArgs,
     }
-
     impl RwaFilter {
         pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Rwa>> {
             FilterArgs::new(self.predicate, self.options)
         }
     }
 }
-
 async fn drive_try_stream_until_timeout<S, F>(
     stream: &mut S,
     mut on_item: F,
@@ -1789,7 +1662,6 @@ where
     eprintln!("{timeout_message}");
     Ok(())
 }
-
 fn listen_events_message(
     filter: &EventFilterBox,
     timeout: Option<Duration>,
@@ -1810,7 +1682,6 @@ fn listen_events_message(
         },
     )
 }
-
 fn listen_blocks_message(
     height: NonZeroU64,
     timeout: Option<Duration>,
@@ -1831,13 +1702,9 @@ fn listen_blocks_message(
         },
     )
 }
-
 mod events {
-
     use iroha::data_model::events::pipeline::{BlockEventFilter, TransactionEventFilter};
-
     use super::*;
-
     #[derive(clap::Args, Debug)]
     pub struct Args {
         /// Duration to listen for events.
@@ -1847,7 +1714,6 @@ mod events {
         #[command(subcommand)]
         command: Command,
     }
-
     #[derive(clap::Subcommand, Debug)]
     enum Command {
         /// Notify when the world state undergoes certain changes
@@ -1863,12 +1729,10 @@ mod events {
         /// Notify when a trigger execution is completed
         TriggerComplete,
     }
-
     impl Run for Args {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
             let timeout: Option<Duration> = self.timeout.map(Into::into);
-
             match self.command {
                 State => listen(DataEventFilter::Any, context, timeout),
                 Governance(args) => listen(args.into_filter(), context, timeout),
@@ -1879,7 +1743,6 @@ mod events {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct GovernanceArgs {
         /// Filter by proposal id (hex)
@@ -1889,7 +1752,6 @@ mod events {
         #[arg(long, value_name = "RID")]
         referendum_id: Option<String>,
     }
-
     impl GovernanceArgs {
         fn into_filter(self) -> DataEventFilter {
             let mut f = GovernanceEventFilter::new();
@@ -1907,7 +1769,6 @@ mod events {
             DataEventFilter::Governance(f)
         }
     }
-
     fn listen(
         filter: impl Into<EventFilterBox>,
         context: &mut impl RunContext,
@@ -1917,7 +1778,6 @@ mod events {
         let client = context.client_from_config();
         let i18n = context.i18n();
         eprintln!("{}", listen_events_message(&filter, timeout, i18n));
-
         if let Some(timeout) = timeout {
             let timeout_message = i18n.t("warning.timeout_expired");
             let rt = Runtime::new().wrap_err("Failed to create runtime")?;
@@ -1943,12 +1803,9 @@ mod events {
         Ok(())
     }
 }
-
 mod blocks {
     use std::num::NonZeroU64;
-
     use super::*;
-
     #[derive(clap::Args, Debug)]
     pub struct Args {
         /// Block height from which to start streaming blocks
@@ -1958,7 +1815,6 @@ mod blocks {
         #[arg(short, long)]
         timeout: Option<humantime::Duration>,
     }
-
     impl Run for Args {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let Args { height, timeout } = self;
@@ -1966,7 +1822,6 @@ mod blocks {
             listen(height, context, timeout)
         }
     }
-
     fn listen(
         height: NonZeroU64,
         context: &mut impl RunContext,
@@ -2000,10 +1855,8 @@ mod blocks {
         Ok(())
     }
 }
-
 mod domain {
     use super::*;
-
     #[allow(clippy::large_enum_variant)]
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
@@ -2020,7 +1873,6 @@ mod domain {
         #[command(subcommand)]
         Meta(metadata::domain::Command),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -2058,7 +1910,6 @@ mod domain {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
         /// Domain name
@@ -2071,14 +1922,12 @@ mod domain {
         #[arg(short, long)]
         pub to: String,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Id {
         /// Domain name
         #[arg(short, long, value_parser = parse_domain_id_literal)]
         pub id: DomainId,
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List all IDs, or full entries when `--verbose` is specified
@@ -2086,7 +1935,6 @@ mod domain {
         /// Filter by a given predicate
         Filter(filter::DomainFilter),
     }
-
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -2102,7 +1950,6 @@ mod domain {
             }
         }
     }
-
     fn list_all<C: RunContext>(
         context: &mut C,
         builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindDomains, Domain>,
@@ -2117,7 +1964,6 @@ mod domain {
             context.print_data(&ids)
         }
     }
-
     fn apply_common_args<'a>(
         builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindDomains, Domain>,
         common: &'a crate::list_support::CommonArgs,
@@ -2125,7 +1971,6 @@ mod domain {
     {
         use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
         use std::num::NonZeroU64;
-
         let mut builder = builder;
         if let Some(key) = common.sort_by_metadata_key.clone() {
             let sorting = Sorting::new(Some(key), common.order.map(Into::into));
@@ -2146,12 +1991,9 @@ mod domain {
         Ok(builder)
     }
 }
-
 mod account {
     use std::fmt::Debug;
-
     use super::*;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Read and write account roles
@@ -2173,7 +2015,6 @@ mod account {
         #[command(subcommand)]
         Meta(metadata::account::Command),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -2213,7 +2054,6 @@ mod account {
             }
         }
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum RoleCommand {
         /// List account role IDs
@@ -2223,7 +2063,6 @@ mod account {
         /// Revoke a role from an account
         Revoke(IdRole),
     }
-
     impl Run for RoleCommand {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::RoleCommand::*;
@@ -2268,7 +2107,6 @@ mod account {
             }
         }
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum PermissionCommand {
         /// List account permissions
@@ -2278,7 +2116,6 @@ mod account {
         /// Revoke an account permission using JSON input from stdin
         Revoke(PermissionId),
     }
-
     impl Run for PermissionCommand {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::PermissionCommand::*;
@@ -2331,14 +2168,12 @@ mod account {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Id {
         /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct PermissionId {
         /// Account identifier (canonical I105 literal)
@@ -2348,7 +2183,6 @@ mod account {
         #[arg(long)]
         no_wait: bool,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct RegisterId {
         /// Canonical global account identifier for registration (canonical I105 literal)
@@ -2358,7 +2192,6 @@ mod account {
         #[arg(long)]
         no_wait: bool,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct RoleList {
         /// Account identifier (canonical I105 literal)
@@ -2374,7 +2207,6 @@ mod account {
         #[arg(long)]
         fetch_size: Option<u64>,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct PermissionList {
         /// Account identifier (canonical I105 literal)
@@ -2390,7 +2222,6 @@ mod account {
         #[arg(long)]
         fetch_size: Option<u64>,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct IdRole {
         /// Account identifier (canonical I105 literal)
@@ -2400,7 +2231,6 @@ mod account {
         #[arg(short, long)]
         pub role: RoleId,
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List all IDs, or full entries when `--verbose` is specified
@@ -2408,7 +2238,6 @@ mod account {
         /// Filter by a given predicate
         Filter(filter::AccountFilter),
     }
-
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -2424,7 +2253,6 @@ mod account {
             }
         }
     }
-
     fn list_all<C: RunContext>(
         context: &mut C,
         client: &Client,
@@ -2448,7 +2276,6 @@ mod account {
             context.print_data(&ids)
         }
     }
-
     fn apply_common_args<'a>(
         builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindAccounts, Account>,
         common: &'a crate::list_support::CommonArgs,
@@ -2456,7 +2283,6 @@ mod account {
     {
         use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
         use std::num::NonZeroU64;
-
         let mut builder = builder;
         if let Some(key) = common.sort_by_metadata_key.clone() {
             let sorting = Sorting::new(Some(key), common.order.map(Into::into));
@@ -2476,7 +2302,6 @@ mod account {
         }
         Ok(builder)
     }
-
     fn apply_common_id_args<'a>(
         builder: iroha::data_model::query::builder::QueryBuilder<
             'a,
@@ -2490,7 +2315,6 @@ mod account {
     > {
         use iroha::data_model::query::parameters::{FetchSize, Pagination};
         use std::num::NonZeroU64;
-
         let mut builder = builder;
         if common.limit.is_some() || common.offset > 0 {
             let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
@@ -2503,18 +2327,15 @@ mod account {
         Ok(builder)
     }
 }
-
 mod asset {
     use super::*;
     use iroha::data_model::account::AccountAdmissionMode;
-
     fn admission_policy(
         client: &Client,
     ) -> Result<iroha::data_model::account::AccountAdmissionPolicy> {
         use iroha::data_model::{
             account::AccountAdmissionPolicy, parameter::Parameters, prelude::FindParameters,
         };
-
         let params: Parameters = client.query_single(FindParameters)?;
         params
             .custom()
@@ -2529,7 +2350,6 @@ mod asset {
                 },
             )
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Read and write asset definitions
@@ -2547,7 +2367,6 @@ mod asset {
         /// Transfer an asset between accounts
         Transfer(Transfer),
     }
-
     fn asset_transfer_instructions(
         id: AssetId,
         args: &Transfer,
@@ -2565,13 +2384,11 @@ mod asset {
                 "`--ensure-destination` no longer infers a registration domain; register the destination account explicitly before transferring when implicit account creation is disabled"
             );
         }
-
         instructions.push(InstructionBox::from(
             iroha::data_model::isi::Transfer::asset_quantity(id, args.quantity.clone(), to.clone()),
         ));
         Ok(instructions)
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -2631,7 +2448,6 @@ mod asset {
                     } else {
                         None
                     };
-
                     let instructions =
                         asset_transfer_instructions(id, &args, &to, policy.as_ref())?;
                     let submit = if args.no_wait {
@@ -2644,7 +2460,6 @@ mod asset {
             }
         }
     }
-
     fn resolve_asset_id_components<C: RunContext>(
         context: &C,
         definition: Option<AssetDefinitionId>,
@@ -2674,16 +2489,13 @@ mod asset {
             scope.unwrap_or(iroha::data_model::asset::AssetBalanceScope::Global),
         ))
     }
-
     mod definition {
         use iroha::{
             data_model::asset::{AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
             data_model::sorafs_uri::SorafsUri,
         };
         use iroha_primitives::numeric::MAX_DECIMAL_SCALE;
-
         use super::*;
-
         fn numeric_spec_from_scale(scale: Option<u32>) -> Result<NumericSpec> {
             scale.map_or_else(
                 || Ok(NumericSpec::unconstrained()),
@@ -2696,7 +2508,6 @@ mod asset {
                 },
             )
         }
-
         #[derive(clap::Subcommand, Debug)]
         pub enum Command {
             /// List asset definitions
@@ -2714,7 +2525,6 @@ mod asset {
             #[command(subcommand)]
             Meta(metadata::asset_definition::Command),
         }
-
         impl Run for Command {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
                 use self::Command::*;
@@ -2789,7 +2599,6 @@ mod asset {
                 }
             }
         }
-
         #[derive(clap::Args, Debug)]
         pub struct Register {
             /// Asset definition identifier (unprefixed Base58 address)
@@ -2822,7 +2631,6 @@ mod asset {
             #[arg(short, long)]
             pub scale: Option<u32>,
         }
-
         #[derive(clap::Args, Debug)]
         pub struct Transfer {
             /// Asset definition identifier (unprefixed Base58 address).
@@ -2838,7 +2646,6 @@ mod asset {
             #[arg(short, long)]
             pub to: String,
         }
-
         #[derive(clap::Args, Debug)]
         pub struct Id {
             /// Asset definition identifier (unprefixed Base58 address).
@@ -2848,7 +2655,6 @@ mod asset {
             #[arg(long, required_unless_present = "id", conflicts_with = "id")]
             pub alias: Option<AssetDefinitionAlias>,
         }
-
         #[derive(clap::Subcommand, Debug)]
         pub enum List {
             /// List all IDs, or full entries when `--verbose` is specified
@@ -2856,7 +2662,6 @@ mod asset {
             /// Filter by a given predicate
             Filter(filter::AssetDefinitionFilter),
         }
-
         impl Run for List {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
                 let client = context.client_from_config();
@@ -2874,7 +2679,6 @@ mod asset {
                 }
             }
         }
-
         fn list_all<C: RunContext>(
             context: &mut C,
             builder: iroha::data_model::query::builder::QueryBuilder<
@@ -2894,7 +2698,6 @@ mod asset {
                 context.print_data(&ids)
             }
         }
-
         fn apply_common_args<'a>(
             builder: iroha::data_model::query::builder::QueryBuilder<
                 'a,
@@ -2913,7 +2716,6 @@ mod asset {
         > {
             use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
             use std::num::NonZeroU64;
-
             let mut builder = builder;
             if let Some(key) = common.sort_by_metadata_key.clone() {
                 let sorting = Sorting::new(Some(key), common.order.map(Into::into));
@@ -2934,7 +2736,6 @@ mod asset {
             }
             Ok(builder)
         }
-
         fn register_alias_from_args(args: &Register) -> Result<Option<AssetDefinitionAlias>> {
             match (&args.alias, &args.alias_domain, &args.alias_dataspace) {
                 (Some(alias), None, None) => Ok(Some(alias.clone())),
@@ -2956,7 +2757,6 @@ mod asset {
                 ),
             }
         }
-
         fn resolve_definition_id<C: RunContext>(
             context: &C,
             id: Option<AssetDefinitionId>,
@@ -2971,23 +2771,19 @@ mod asset {
                 _ => eyre::bail!("provide either `--id` or `--alias`"),
             }
         }
-
         impl Id {
             fn resolve_id<C: RunContext>(&self, context: &C) -> Result<AssetDefinitionId> {
                 resolve_definition_id(context, self.id.clone(), self.alias.clone())
             }
         }
-
         impl Transfer {
             fn resolve_id<C: RunContext>(&self, context: &C) -> Result<AssetDefinitionId> {
                 resolve_definition_id(context, self.id.clone(), self.alias.clone())
             }
         }
-
         #[cfg(test)]
         mod tests {
             use super::*;
-
             fn base_register_args() -> Register {
                 Register {
                     id: AssetDefinitionId::derive_from_components(
@@ -3004,7 +2800,6 @@ mod asset {
                     scale: None,
                 }
             }
-
             #[test]
             fn numeric_spec_from_scale_validates_runtime_scale() {
                 assert_eq!(
@@ -3025,7 +2820,6 @@ mod asset {
                         .scale(),
                     Some(MAX_DECIMAL_SCALE)
                 );
-
                 let error = numeric_spec_from_scale(Some(MAX_DECIMAL_SCALE + 1))
                     .expect_err("scale above the V1 limit must fail");
                 assert!(
@@ -3035,24 +2829,20 @@ mod asset {
                     "{error:?}"
                 );
             }
-
             #[test]
             fn register_alias_derives_from_name_domain_and_dataspace() {
                 let mut args = base_register_args();
                 args.alias_domain = Some("issuer".parse().expect("valid alias domain"));
                 args.alias_dataspace = Some("main".parse().expect("valid alias dataspace"));
-
                 let alias = register_alias_from_args(&args)
                     .expect("alias should derive")
                     .expect("alias should be present");
                 assert_eq!(alias.as_ref(), "Rose#issuer.main");
             }
-
             #[test]
             fn register_alias_derives_short_form_from_name_and_dataspace() {
                 let mut args = base_register_args();
                 args.alias_dataspace = Some("main".parse().expect("valid alias dataspace"));
-
                 let alias = register_alias_from_args(&args)
                     .expect("alias should derive")
                     .expect("alias should be present");
@@ -3060,7 +2850,6 @@ mod asset {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
         /// Canonical asset definition id (unprefixed Base58 address) used with `--account`.
@@ -3089,7 +2878,6 @@ mod asset {
         #[arg(long)]
         pub no_wait: bool,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Id {
         /// Canonical asset definition id (unprefixed Base58 address) used with `--account`.
@@ -3106,7 +2894,6 @@ mod asset {
         #[arg(long, value_parser = parse_asset_balance_scope_literal)]
         pub scope: Option<iroha::data_model::asset::AssetBalanceScope>,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct IdQuantity {
         /// Canonical asset definition id (unprefixed Base58 address) used with `--account`.
@@ -3129,7 +2916,6 @@ mod asset {
         #[arg(long)]
         pub no_wait: bool,
     }
-
     impl Id {
         fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
             resolve_asset_id_components(
@@ -3141,7 +2927,6 @@ mod asset {
             )
         }
     }
-
     impl IdQuantity {
         fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
             resolve_asset_id_components(
@@ -3153,7 +2938,6 @@ mod asset {
             )
         }
     }
-
     impl Transfer {
         fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
             resolve_asset_id_components(
@@ -3165,7 +2949,6 @@ mod asset {
             )
         }
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List all IDs, or full entries when `--verbose` is specified
@@ -3173,7 +2956,6 @@ mod asset {
         /// Filter by a given predicate
         Filter(filter::AssetFilter),
     }
-
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -3189,7 +2971,6 @@ mod asset {
             }
         }
     }
-
     fn list_all<C: RunContext>(
         context: &mut C,
         builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindAssets, Asset>,
@@ -3204,7 +2985,6 @@ mod asset {
             context.print_data(&ids)
         }
     }
-
     fn apply_common_args<'a>(
         builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindAssets, Asset>,
         common: &'a crate::list_support::CommonArgs,
@@ -3212,7 +2992,6 @@ mod asset {
     {
         use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
         use std::num::NonZeroU64;
-
         let mut builder = builder;
         if let Some(key) = common.sort_by_metadata_key.clone() {
             let sorting = Sorting::new(Some(key), common.order.map(Into::into));
@@ -3232,18 +3011,15 @@ mod asset {
         }
         Ok(builder)
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
         use iroha::data_model::isi::{Instruction, TransferBox};
         use iroha_crypto::Algorithm;
-
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("fixture seed must derive a valid keypair")
         }
-
         fn sample_transfer_args(ensure_destination: bool) -> (Transfer, AccountId, AssetId) {
             let src = fixture_key_pair(1);
             let dest = fixture_key_pair(2);
@@ -3266,7 +3042,6 @@ mod asset {
             };
             (args, to, asset_id)
         }
-
         #[test]
         fn fixture_key_pair_uses_checked_seed_derivation() {
             assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
@@ -3275,7 +3050,6 @@ mod asset {
                 "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
             );
         }
-
         fn assert_transfer_destination(instruction: &InstructionBox, to: &AccountId) {
             let any: &dyn Instruction = &**instruction;
             let transfer = any
@@ -3287,7 +3061,6 @@ mod asset {
             };
             assert_eq!(&asset_transfer.destination, to);
         }
-
         #[test]
         fn explicit_policy_rejects_ensure_destination_without_explicit_scope() {
             let (args, to, asset_id) = sample_transfer_args(true);
@@ -3303,7 +3076,6 @@ mod asset {
                 "unexpected error: {err}"
             );
         }
-
         #[test]
         fn implicit_policy_skips_register_instruction() {
             let (args, to, asset_id) = sample_transfer_args(true);
@@ -3317,7 +3089,6 @@ mod asset {
             assert_eq!(instructions.len(), 1);
             assert_transfer_destination(&instructions[0], &to);
         }
-
         #[test]
         fn ensure_flag_off_sends_transfer_only() {
             let (args, to, asset_id) = sample_transfer_args(false);
@@ -3332,10 +3103,8 @@ mod asset {
         }
     }
 }
-
 mod nft {
     use super::*;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Retrieve details of a specific NFT
@@ -3353,7 +3122,6 @@ mod nft {
         #[command(subcommand)]
         Meta(metadata::nft::Command),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -3399,7 +3167,6 @@ mod nft {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
         /// NFT in the format "name$domain"
@@ -3412,14 +3179,12 @@ mod nft {
         #[arg(short, long)]
         pub to: String,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Id {
         /// NFT in the format "name$domain"
         #[arg(short, long)]
         pub id: NftId,
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List all IDs, or full entries when `--verbose` is specified
@@ -3427,7 +3192,6 @@ mod nft {
         /// Filter by a given predicate
         Filter(filter::NftFilter),
     }
-
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -3443,7 +3207,6 @@ mod nft {
             }
         }
     }
-
     fn list_all<C: RunContext>(
         context: &mut C,
         builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindNfts, Nft>,
@@ -3458,14 +3221,12 @@ mod nft {
             context.print_data(&ids)
         }
     }
-
     fn apply_common_args<'a>(
         builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindNfts, Nft>,
         common: &'a crate::list_support::CommonArgs,
     ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindNfts, Nft>> {
         use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
         use std::num::NonZeroU64;
-
         let mut builder = builder;
         if let Some(key) = common.sort_by_metadata_key.clone() {
             let sorting = Sorting::new(Some(key), common.order.map(Into::into));
@@ -3486,15 +3247,12 @@ mod nft {
         Ok(builder)
     }
 }
-
 mod rwa {
     use iroha::data_model::isi::rwa::{
         ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
         SetRwaControls, TransferRwa, UnfreezeRwa,
     };
-
     use super::*;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Retrieve details of a specific RWA lot
@@ -3526,7 +3284,6 @@ mod rwa {
         #[command(subcommand)]
         Meta(metadata::rwa::Command),
     }
-
     #[derive(crate::json_macros::JsonDeserialize)]
     struct MergeInput {
         parents: Vec<RwaParentRef>,
@@ -3534,7 +3291,6 @@ mod rwa {
         status: Option<Name>,
         metadata: Metadata,
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -3631,14 +3387,12 @@ mod rwa {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Id {
         /// RWA identifier in the format `hash$domain`
         #[arg(short, long)]
         pub id: RwaId,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Quantity {
         /// RWA identifier in the format `hash$domain`
@@ -3648,7 +3402,6 @@ mod rwa {
         #[arg(short, long)]
         pub quantity: iroha_primitives::numeric::Quantity,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
         /// RWA identifier in the format `hash$domain`
@@ -3664,7 +3417,6 @@ mod rwa {
         #[arg(short, long)]
         pub to: String,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct ForceTransfer {
         /// RWA identifier in the format `hash$domain`
@@ -3677,7 +3429,6 @@ mod rwa {
         #[arg(short, long)]
         pub to: String,
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List all IDs, or full entries when `--verbose` is specified
@@ -3685,7 +3436,6 @@ mod rwa {
         /// Filter by a given predicate
         Filter(filter::RwaFilter),
     }
-
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -3701,7 +3451,6 @@ mod rwa {
             }
         }
     }
-
     fn list_all<C: RunContext>(
         context: &mut C,
         builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindRwas, Rwa>,
@@ -3716,14 +3465,12 @@ mod rwa {
             context.print_data(&ids)
         }
     }
-
     fn apply_common_args<'a>(
         builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindRwas, Rwa>,
         common: &'a crate::list_support::CommonArgs,
     ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindRwas, Rwa>> {
         use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
         use std::num::NonZeroU64;
-
         let mut builder = builder;
         if let Some(key) = common.sort_by_metadata_key.clone() {
             let sorting = Sorting::new(Some(key), common.order.map(Into::into));
@@ -3744,11 +3491,9 @@ mod rwa {
         Ok(builder)
     }
 }
-
 mod peer {
     use super::*;
     use iroha::data_model::isi::register::RegisterPeerWithPop;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// List registered peers expected to connect with each other
@@ -3759,7 +3504,6 @@ mod peer {
         /// Unregister a peer
         Unregister(Id),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -3780,7 +3524,6 @@ mod peer {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct RegisterPeer {
         /// Peer's public key in multihash format (must be BLS-normal)
@@ -3790,7 +3533,6 @@ mod peer {
         #[arg(long, value_name = "HEX")]
         pub pop: String,
     }
-
     impl RegisterPeer {
         fn build_instruction(self) -> Result<InstructionBox> {
             let trimmed = self.pop.trim();
@@ -3802,13 +3544,11 @@ mod peer {
             Ok(RegisterPeerWithPop::new(self.key.into(), pop_bytes).into())
         }
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List all registered peers
         All(crate::list_support::AllArgs),
     }
-
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -3817,7 +3557,6 @@ mod peer {
             }
         }
     }
-
     fn list_all<C: RunContext>(
         context: &mut C,
         builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindPeers, PeerId>,
@@ -3832,11 +3571,9 @@ mod peer {
             context.print_data(&ids)
         }
     }
-
     fn peer_ids_only(entries: &[PeerId]) -> Vec<String> {
         entries.iter().map(ToString::to_string).collect()
     }
-
     fn apply_common_args<'a>(
         builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindPeers, PeerId>,
         common: &'a crate::list_support::CommonArgs,
@@ -3844,7 +3581,6 @@ mod peer {
     {
         use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
         use std::num::NonZeroU64;
-
         let mut builder = builder;
         if let Some(key) = common.sort_by_metadata_key.clone() {
             let sorting = Sorting::new(Some(key), common.order.map(Into::into));
@@ -3864,19 +3600,16 @@ mod peer {
         }
         Ok(builder)
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Id {
         /// Peer's public key in multihash format
         #[arg(short, long)]
         pub key: PublicKey,
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
         use iroha_test_samples::PEER_KEYPAIR;
-
         #[test]
         fn peer_ids_only_renders_public_key_strings() {
             let peer_id = PeerId::from(PEER_KEYPAIR.public_key().clone());
@@ -3885,7 +3618,6 @@ mod peer {
         }
     }
 }
-
 mod multisig {
     use core::convert::TryFrom;
     use std::{
@@ -3893,13 +3625,9 @@ mod multisig {
         num::{NonZeroU16, NonZeroU64},
         time::{Duration, SystemTime},
     };
-
     use iroha::executor_data_model::isi::multisig::*;
-
     use super::*;
-
     type ProposalKey = HashOf<Vec<InstructionBox>>;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// List pending multisig proposals for explicitly selected authorities
@@ -3916,7 +3644,6 @@ mod multisig {
         /// Inspect a multisig account controller and print the CTAP2 payload + digest
         Inspect(Inspect),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -3951,11 +3678,9 @@ mod multisig {
         #[arg(short, long, default_value_t = default_transaction_ttl())]
         pub transaction_ttl: humantime::Duration,
     }
-
     fn default_transaction_ttl() -> humantime::Duration {
         std::time::Duration::from_millis(DEFAULT_MULTISIG_TTL_MS).into()
     }
-
     impl Run for Register {
         #[allow(clippy::too_many_lines)]
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -3999,13 +3724,11 @@ mod multisig {
             }
             let instruction =
                 MultisigRegister::with_account(account.clone(), None::<DomainId>, spec);
-
             context
                 .finish([iroha::data_model::isi::InstructionBox::from(instruction)])
                 .wrap_err("Failed to register multisig account")
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Propose {
         /// Multisig authority managing the proposed transaction
@@ -4018,7 +3741,6 @@ mod multisig {
         #[arg(short, long)]
         pub transaction_ttl: Option<humantime::Duration>,
     }
-
     impl Run for Propose {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let instructions: Vec<InstructionBox> = parse_json_stdin(context)?;
@@ -4032,19 +3754,15 @@ mod multisig {
             });
             let account = resolve_account_id(context, &self.account)
                 .wrap_err("failed to resolve --account")?;
-
             if !context.output_instructions() {
                 surface_policy_ttl(context, &account, transaction_ttl_ms)?;
             }
-
             let instructions_hash = HashOf::new(&instructions);
             if matches!(context.output_format(), CliOutputFormat::Text) {
                 context.println(format_args!("instructions_hash: {instructions_hash}"))?;
             }
-
             let propose_multisig_transaction =
                 MultisigPropose::new(account, instructions, transaction_ttl_ms);
-
             context
                 .finish([iroha::data_model::isi::InstructionBox::from(
                     propose_multisig_transaction,
@@ -4052,7 +3770,6 @@ mod multisig {
                 .wrap_err("Failed to propose transaction")
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Approve {
         /// Multisig authority of the transaction
@@ -4062,14 +3779,12 @@ mod multisig {
         #[arg(short, long)]
         pub instructions_hash: ProposalKey,
     }
-
     impl Run for Approve {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let account = resolve_account_id(context, &self.account)
                 .wrap_err("failed to resolve --account")?;
             let approve_multisig_transaction =
                 MultisigApprove::new(account, self.instructions_hash);
-
             context
                 .finish([iroha::data_model::isi::InstructionBox::from(
                     approve_multisig_transaction,
@@ -4077,7 +3792,6 @@ mod multisig {
                 .wrap_err("Failed to approve transaction")
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Cancel {
         /// Multisig authority of the transaction
@@ -4090,7 +3804,6 @@ mod multisig {
         #[arg(short, long)]
         pub transaction_ttl: Option<humantime::Duration>,
     }
-
     impl Run for Cancel {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let transaction_ttl_ms = self.transaction_ttl.map(|duration| {
@@ -4103,11 +3816,9 @@ mod multisig {
             });
             let account = resolve_account_id(context, &self.account)
                 .wrap_err("failed to resolve --account")?;
-
             if !context.output_instructions() {
                 surface_policy_ttl(context, &account, transaction_ttl_ms)?;
             }
-
             let cancel_instructions = vec![InstructionBox::from(MultisigCancel::new(
                 account.clone(),
                 self.instructions_hash,
@@ -4116,16 +3827,13 @@ mod multisig {
             if matches!(context.output_format(), CliOutputFormat::Text) {
                 context.println(format_args!("cancel_proposal_hash: {cancel_hash}"))?;
             }
-
             let propose_cancel =
                 MultisigPropose::new(account, cancel_instructions, transaction_ttl_ms);
-
             context
                 .finish([iroha::data_model::isi::InstructionBox::from(propose_cancel)])
                 .wrap_err("Failed to propose cancellation")
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Inspect {
         /// Multisig account identifier to inspect
@@ -4135,7 +3843,6 @@ mod multisig {
         #[arg(long)]
         pub json: bool,
     }
-
     impl Run for Inspect {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use iroha::data_model::prelude::FindAccountById;
@@ -4145,18 +3852,15 @@ mod multisig {
             let account: Account = client
                 .query_single(FindAccountById::new(account_id.clone()))
                 .wrap_err_with(|| format!("account `{account_id}` not found"))?;
-
             let controller = account
                 .id()
                 .controller()
                 .multisig_policy()
                 .ok_or_else(|| eyre!("account `{}` is not multisig-controlled", account_id))?;
-
             let ctap2 = controller.encode_ctap2();
             let digest = controller.digest_blake2b256();
             let ctap2_hex = hex::encode_upper(&ctap2);
             let digest_hex = hex::encode_upper(digest);
-
             if self.json {
                 let members = controller
                     .members()
@@ -4234,7 +3938,6 @@ mod multisig {
             }
         }
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List pending proposals for an explicit finite set of multisig authorities
@@ -4253,7 +3956,6 @@ mod multisig {
             fetch_size: Option<u64>,
         },
     }
-
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -4284,20 +3986,16 @@ mod multisig {
             }
         }
     }
-
     fn spec_key() -> Name {
         "multisig/spec".parse().expect("valid multisig spec key")
     }
-
     const COLLECTING_SIGNATURES_STATUS: &str = "COLLECTING_SIGNATURES";
-
     fn surface_policy_ttl<C: RunContext>(
         context: &mut C,
         multisig_account: &AccountId,
         override_ttl_ms: Option<NonZeroU64>,
     ) -> Result<()> {
         use iroha::data_model::prelude::FindAccountById;
-
         let client = context.client_from_config();
         let account = match client.query_single(FindAccountById::new(multisig_account.clone())) {
             Ok(account) => account,
@@ -4308,7 +4006,6 @@ mod multisig {
                 return Ok(());
             }
         };
-
         let Some(policy) = account
             .metadata()
             .get(&spec_key())
@@ -4321,7 +4018,6 @@ mod multisig {
             ))?;
             return Ok(());
         };
-
         if let Some(ttl_ms) = override_ttl_ms {
             validate_ttl_override(ttl_ms, policy.transaction_ttl_ms)?;
             emit_ttl_hint(
@@ -4338,10 +4034,8 @@ mod multisig {
                 Some(multisig_account),
             )?;
         }
-
         Ok(())
     }
-
     fn validate_ttl_override(
         requested_ttl_ms: NonZeroU64,
         policy_ttl_ms: NonZeroU64,
@@ -4355,7 +4049,6 @@ mod multisig {
         }
         Ok(())
     }
-
     fn emit_ttl_hint<C: RunContext>(
         context: &mut C,
         effective_ttl_ms: NonZeroU64,
@@ -4370,13 +4063,11 @@ mod multisig {
                 || "expiry exceeds supported range".to_string(),
                 |value| value.to_string(),
             );
-
         let account_note = account.map_or_else(String::new, |id| format!(" on {id}"));
         context.println(format!(
             "Multisig TTL{account_note}: using {effective_ttl_ms} ms (policy cap {policy_ttl_ms} ms), expires approximately {expiry}"
         ))
     }
-
     #[derive(Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize)]
     struct MultisigListAllEntry {
         multisig_account_id: AccountId,
@@ -4389,7 +4080,6 @@ mod multisig {
         terminal_at_ms: Option<u64>,
         proposal: MultisigProposalValue,
     }
-
     fn proposal_query_request_for_selector(
         selector: &str,
         cursor: Option<String>,
@@ -4416,7 +4106,6 @@ mod multisig {
             limit,
         })
     }
-
     fn multisig_list_all_entry_from_proposal(
         multisig_account_id: AccountId,
         proposal: iroha::client::MultisigProposalEntry,
@@ -4442,7 +4131,6 @@ mod multisig {
             proposal,
         }
     }
-
     fn collect_multisig_proposals_with<F>(
         selectors: &[String],
         fetch_size: Option<u64>,
@@ -4458,7 +4146,6 @@ mod multisig {
         }
         let mut seen_selectors = BTreeSet::new();
         let mut merged = BTreeMap::<(AccountId, String), MultisigListAllEntry>::new();
-
         for selector in selectors {
             if !seen_selectors.insert(selector.clone()) {
                 eyre::bail!("duplicate multisig selector `{selector}`");
@@ -4466,7 +4153,6 @@ mod multisig {
             let mut cursor = None;
             let mut seen_cursors = BTreeSet::new();
             let mut resolved_account_id = None;
-
             loop {
                 let request =
                     proposal_query_request_for_selector(selector, cursor.clone(), fetch_size)?;
@@ -4480,7 +4166,6 @@ mod multisig {
                 } else {
                     resolved_account_id = Some(response.resolved_multisig_account_id.clone());
                 }
-
                 for proposal in response.proposals {
                     let entry = multisig_list_all_entry_from_proposal(
                         response.resolved_multisig_account_id.clone(),
@@ -4502,7 +4187,6 @@ mod multisig {
                         merged.insert(key, entry);
                     }
                 }
-
                 let Some(next_cursor) = response.next_cursor else {
                     break;
                 };
@@ -4514,7 +4198,6 @@ mod multisig {
                 cursor = Some(next_cursor);
             }
         }
-
         let mut entries = merged.into_values().collect::<Vec<_>>();
         entries.sort_by(|left, right| {
             right
@@ -4525,7 +4208,6 @@ mod multisig {
         });
         Ok(entries)
     }
-
     fn load_multisig_list_all_entries(
         client: &Client,
         selectors: &[String],
@@ -4549,7 +4231,6 @@ mod multisig {
             None => Ok("null".to_owned()),
         }
     }
-
     fn render_multisig_list_all_text(entries: &[MultisigListAllEntry]) -> Result<String> {
         let mut blocks = Vec::with_capacity(entries.len());
         for entry in entries {
@@ -4565,18 +4246,15 @@ mod multisig {
         }
         Ok(blocks.join("\n\n"))
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
         use iroha::crypto::{Algorithm, KeyPair};
         use std::collections::BTreeSet;
-
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("fixture seed must derive a valid keypair")
         }
-
         #[test]
         fn fixture_key_pair_uses_checked_seed_derivation() {
             assert_eq!(fixture_key_pair(0x40).algorithm(), Algorithm::Ed25519);
@@ -4585,7 +4263,6 @@ mod multisig {
                 "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
             );
         }
-
         fn sample_proposal_entry(
             suffix: &str,
             proposed_at_ms: u64,
@@ -4608,14 +4285,12 @@ mod multisig {
                 terminal_at_ms: None,
             }
         }
-
         #[test]
         fn ttl_override_within_policy_is_allowed() {
             let policy = NonZeroU64::new(5_000).unwrap();
             let requested = NonZeroU64::new(4_000).unwrap();
             assert!(validate_ttl_override(requested, policy).is_ok());
         }
-
         #[test]
         fn ttl_override_above_policy_is_rejected() {
             let policy = NonZeroU64::new(5_000).unwrap();
@@ -4626,7 +4301,6 @@ mod multisig {
             assert!(message.contains("6000"));
             assert!(message.contains("5000"));
         }
-
         #[test]
         fn selector_explicit_collection_merges_pages_and_authorities_deterministically() {
             let first_account = AccountId::new(fixture_key_pair(0x51).public_key().clone());
@@ -4664,10 +4338,8 @@ mod multisig {
                 };
                 Ok(page)
             };
-
             let actual = collect_multisig_proposals_with(&selectors, Some(2), &mut fetch_page)
                 .expect("collect proposals");
-
             let proposed_at = actual
                 .iter()
                 .map(|entry| entry.proposed_at_ms)
@@ -4686,7 +4358,6 @@ mod multisig {
                 ]
             );
         }
-
         #[test]
         fn selector_explicit_collection_rejects_empty_duplicate_and_repeated_cursor_inputs() {
             let mut never_fetch =
@@ -4708,7 +4379,6 @@ mod multisig {
                 )
                 .is_err()
             );
-
             let account = AccountId::new(fixture_key_pair(0x54).public_key().clone());
             let mut fetch = |_request| {
                 Ok(iroha::client::MultisigProposalsQueryResponse {
@@ -4721,7 +4391,6 @@ mod multisig {
                 .expect_err("repeated cursor must fail closed");
             assert!(error.to_string().contains("repeated cursor"));
         }
-
         #[test]
         fn selector_explicit_collection_deduplicates_identical_entries_and_rejects_conflicts() {
             let account = AccountId::new(fixture_key_pair(0x56).public_key().clone());
@@ -4738,7 +4407,6 @@ mod multisig {
                 collect_multisig_proposals_with(&selectors, None, &mut fetch_identical)
                     .expect("identical selector projections should deduplicate");
             assert_eq!(deduplicated.len(), 1);
-
             let mut calls = 0_u8;
             let mut fetch_conflict = |_request| {
                 calls += 1;
@@ -4760,7 +4428,6 @@ mod multisig {
                     .contains("conflicting multisig proposal payload")
             );
         }
-
         #[test]
         fn render_multisig_list_all_text_outputs_human_readable_blocks() {
             let account = AccountId::new(fixture_key_pair(0x55).public_key().clone());
@@ -4768,7 +4435,6 @@ mod multisig {
                 multisig_list_all_entry_from_proposal(account, sample_proposal_entry("a", 42));
             let rendered =
                 render_multisig_list_all_text(std::slice::from_ref(&entry)).expect("render text");
-
             assert!(rendered.contains("multisig_account_id: "));
             assert!(rendered.contains(&format!("proposal_id: {:0>64}", "a")));
             assert!(rendered.contains("status: COLLECTING_SIGNATURES"));
@@ -4776,7 +4442,6 @@ mod multisig {
             assert!(rendered.contains("intent: {\"sequence\":\"a\"}"));
             assert!(rendered.contains("proposed_at_ms: 42"));
         }
-
         #[test]
         fn render_multisig_list_all_text_is_empty_for_empty_results() {
             let rendered = render_multisig_list_all_text(&[]).expect("render empty text");
@@ -4784,10 +4449,8 @@ mod multisig {
         }
     }
 }
-
 mod query {
     use super::*;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Query using JSON input from stdin
@@ -4795,7 +4458,6 @@ mod query {
         /// Query using raw `SignedQuery` (base64 or hex) from stdin
         StdinRaw(StdinRaw),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             match self {
@@ -4804,10 +4466,8 @@ mod query {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Stdin;
-
     impl Run for Stdin {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             // Read a Norito-JSON-like envelope describing a singular/iterable query,
@@ -4830,14 +4490,12 @@ mod query {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct ContinueArgs {
         /// `ForwardCursor` encoded as base64 (preferred) or hex (0x...)
         #[arg(long, value_name = "B64_OR_HEX")]
         cursor: String,
     }
-
     impl Run for ContinueArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use iroha::data_model::query::QueryRequest;
@@ -4857,10 +4515,8 @@ mod query {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct StdinRaw;
-
     impl Run for StdinRaw {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -4876,7 +4532,6 @@ mod query {
         }
     }
 }
-
 mod transaction {
     use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, name::Name};
     use std::{
@@ -4887,9 +4542,7 @@ mod transaction {
         thread,
         time::{SystemTime, UNIX_EPOCH},
     };
-
     use super::*;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Read the typed pipeline status of a submitted transaction
@@ -4905,7 +4558,6 @@ mod transaction {
         /// Build and sign stdin instructions locally, then print their exact framed size without submitting
         SignedSize(SignedSize),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -4919,7 +4571,6 @@ mod transaction {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Status {
         /// Hash of the signed transaction to inspect
@@ -4932,7 +4583,6 @@ mod transaction {
         #[command(flatten)]
         pub wait: TransactionWaitArgs,
     }
-
     #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
     pub enum StatusScope {
         /// Query only the configured Torii peer.
@@ -4940,7 +4590,6 @@ mod transaction {
         /// Permit Torii's global/fanout status lookup.
         Global,
     }
-
     impl Run for Status {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -4961,14 +4610,12 @@ mod transaction {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Get {
         /// Hash of the transaction to retrieve
         #[arg(short('H'), long)]
         pub hash: HashOf<TransactionEntrypoint>,
     }
-
     impl Run for Get {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -4981,7 +4628,6 @@ mod transaction {
             context.print_data(&transaction)
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Ping {
         /// Log levels: TRACE, DEBUG, INFO, WARN, ERROR (in increasing order of visibility)
@@ -5006,34 +4652,28 @@ mod transaction {
         #[arg(long)]
         pub no_index: bool,
     }
-
     struct PingBatchResult {
         attempted: usize,
         failed: usize,
         first_error: Option<eyre::Report>,
     }
-
     pub const DEFAULT_PING_PARALLEL_CAP: usize = 1024;
-
     static PING_NONCE_KEY: LazyLock<Name> = LazyLock::new(|| {
         use std::str::FromStr;
         Name::from_str("ping_nonce").expect("ping nonce metadata key must be valid")
     });
-
     fn ping_message(base: &str, index: usize, count: usize, no_index: bool) -> String {
         if count <= 1 || no_index {
             return base.to_owned();
         }
         format!("{base}-{}", index + 1)
     }
-
     fn ping_nonce_seed() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0)
     }
-
     fn maybe_add_ping_nonce(metadata: &mut Metadata, seed: u64, index: usize) -> bool {
         if metadata.contains(&*PING_NONCE_KEY) {
             return false;
@@ -5042,7 +4682,6 @@ mod transaction {
         metadata.insert(PING_NONCE_KEY.clone(), value);
         true
     }
-
     fn resolve_ping_parallel(count: usize, parallel: usize, parallel_cap: usize) -> (usize, bool) {
         let cap = if parallel_cap == 0 {
             usize::MAX
@@ -5053,7 +4692,6 @@ mod transaction {
         let resolved = baseline.min(cap);
         (resolved, resolved < baseline)
     }
-
     fn dispatch_ping_work<F, G>(count: usize, parallel: usize, make_worker: F) -> PingBatchResult
     where
         F: Fn() -> G + Sync,
@@ -5063,7 +4701,6 @@ mod transaction {
         let next = AtomicUsize::new(0);
         let failures = AtomicUsize::new(0);
         let first_error: Mutex<Option<eyre::Report>> = Mutex::new(None);
-
         thread::scope(|scope| {
             for _ in 0..parallel {
                 let make_worker = &make_worker;
@@ -5088,14 +4725,12 @@ mod transaction {
                 });
             }
         });
-
         PingBatchResult {
             attempted: count,
             failed: failures.load(Ordering::Relaxed),
             first_error: first_error.lock().expect("lock").take(),
         }
     }
-
     impl Run for Ping {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let Ping {
@@ -5219,23 +4854,19 @@ mod transaction {
             }
         }
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
-
         #[test]
         fn ping_message_appends_index_when_multiple() {
             assert_eq!(ping_message("hello", 0, 3, false), "hello-1");
             assert_eq!(ping_message("hello", 2, 3, false), "hello-3");
         }
-
         #[test]
         fn ping_message_respects_no_index() {
             assert_eq!(ping_message("hello", 0, 3, true), "hello");
             assert_eq!(ping_message("hello", 0, 1, false), "hello");
         }
-
         #[test]
         fn dispatch_ping_work_tracks_failures() {
             let result = dispatch_ping_work(5, 3, || {
@@ -5250,21 +4881,18 @@ mod transaction {
             assert!(result.failed >= 2);
             assert!(result.first_error.is_some());
         }
-
         #[test]
         fn resolve_ping_parallel_caps_workers() {
             let (parallel, clamped) = resolve_ping_parallel(10, 8, 4);
             assert_eq!(parallel, 4);
             assert!(clamped);
         }
-
         #[test]
         fn resolve_ping_parallel_allows_cap_disable() {
             let (parallel, clamped) = resolve_ping_parallel(10, 8, 0);
             assert_eq!(parallel, 8);
             assert!(!clamped);
         }
-
         #[test]
         fn ping_nonce_inserts_when_missing() {
             let mut metadata = Metadata::default();
@@ -5277,7 +4905,6 @@ mod transaction {
                 .expect("ping nonce should be u64");
             assert_eq!(value, 12);
         }
-
         #[test]
         fn ping_nonce_skips_when_present() {
             let mut metadata = Metadata::default();
@@ -5292,7 +4919,6 @@ mod transaction {
             assert_eq!(value, 99);
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Ivm {
         /// Path to the IVM bytecode file. If omitted, reads from stdin
@@ -5302,7 +4928,6 @@ mod transaction {
         #[arg(long, value_name("U64"))]
         gas_limit: Option<u64>,
     }
-
     impl Run for Ivm {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let Ivm { path, gas_limit } = self;
@@ -5314,7 +4939,6 @@ mod transaction {
                     .wrap_err("Failed to read IVM bytecode from stdin into the buffer")?
             };
             let metadata = context.transaction_metadata().cloned().unwrap_or_default();
-
             context
                 .submit_with_metadata_and_gas(
                     IvmBytecode::from_compiled(blob),
@@ -5325,10 +4949,8 @@ mod transaction {
                 .wrap_err("Failed to submit an IVM transaction")
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Stdin;
-
     impl Run for Stdin {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let instructions: Vec<InstructionBox> = parse_json_stdin(context)?;
@@ -5337,10 +4959,8 @@ mod transaction {
                 .wrap_err("Failed to submit parsed instructions")
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct SignedSize;
-
     impl Run for SignedSize {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             if context.output_instructions() {
@@ -5360,7 +4980,6 @@ mod transaction {
                     .len(),
             )
             .unwrap_or(u64::MAX);
-
             match context.output_format() {
                 CliOutputFormat::Json => {
                     let result = json_utils::json_object(vec![
@@ -5382,11 +5001,9 @@ mod transaction {
         }
     }
 }
-
 mod role {
     use super::*;
     use crate::json_utils;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Read and write role permissions
@@ -5400,7 +5017,6 @@ mod role {
         /// Unregister a role
         Unregister(Id),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -5425,7 +5041,6 @@ mod role {
             }
         }
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum PermissionCommand {
         /// List role permissions
@@ -5435,7 +5050,6 @@ mod role {
         /// Revoke role permission using JSON input from stdin
         Revoke(Id),
     }
-
     impl Run for PermissionCommand {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::PermissionCommand::*;
@@ -5482,14 +5096,12 @@ mod role {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Id {
         /// Role name
         #[arg(short, long)]
         id: RoleId,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct RolePermList {
         /// Role name
@@ -5502,7 +5114,6 @@ mod role {
         #[arg(long, default_value_t = 0)]
         offset: u64,
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List all role IDs
@@ -5518,7 +5129,6 @@ mod role {
             fetch_size: Option<u64>,
         },
     }
-
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -5547,10 +5157,8 @@ mod role {
         }
     }
 }
-
 mod parameter {
     use super::*;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// List system parameters
@@ -5559,7 +5167,6 @@ mod parameter {
         /// Set a system parameter using JSON input from stdin
         Set(Set),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -5569,13 +5176,11 @@ mod parameter {
             }
         }
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List all system parameters
         All,
     }
-
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -5583,10 +5188,8 @@ mod parameter {
             context.print_data(&params)
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Set;
-
     impl Run for Set {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let entry: Parameter = parse_json_stdin(context)?;
@@ -5595,13 +5198,11 @@ mod parameter {
         }
     }
 }
-
 #[allow(clippy::large_enum_variant)]
 mod trigger {
     use super::*;
     use clap::ValueEnum;
     use std::collections::BTreeMap;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// List trigger IDs
@@ -5632,7 +5233,6 @@ mod trigger {
         #[command(subcommand)]
         Meta(metadata::trigger::Command),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -5681,7 +5281,6 @@ mod trigger {
             }
         }
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List registered trigger IDs
@@ -5700,7 +5299,6 @@ mod trigger {
             fetch_size: Option<u64>,
         },
     }
-
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -5750,14 +5348,12 @@ mod trigger {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Id {
         /// Trigger name
         #[arg(short, long)]
         pub id: TriggerId,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct IdInt {
         /// Trigger name
@@ -5767,13 +5363,11 @@ mod trigger {
         #[arg(short, long)]
         pub repetitions: u32,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct TriggerIdArg {
         /// Trigger name
         pub id: TriggerId,
     }
-
     fn set_trigger_enabled<C: RunContext>(
         context: &mut C,
         id: TriggerId,
@@ -5788,7 +5382,6 @@ mod trigger {
             .finish([instruction])
             .wrap_err("Failed to set trigger enabled metadata")
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Execute {
         /// Trigger name
@@ -5802,7 +5395,6 @@ mod trigger {
         #[command(flatten)]
         pub wait: TransactionWaitArgs,
     }
-
     impl Execute {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let args: norito::json::Value = crate::parse_json(&self.args_json)
@@ -5821,7 +5413,6 @@ mod trigger {
             client
                 .submit_transaction(&transaction)
                 .wrap_err("Failed to submit trigger execution transaction")?;
-
             let mut pairs = vec![
                 ("hash", json_utils::json_value(&hash)?),
                 ("trigger_id", json_utils::json_value(&self.id)?),
@@ -5889,7 +5480,6 @@ mod trigger {
             context.print_data(&response)
         }
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Completed {
         /// List matching trigger completions from committed block history.
@@ -5897,7 +5487,6 @@ mod trigger {
         /// Stream matching trigger completion events until interrupted, timed out, or limited.
         Watch(CompletedWatch),
     }
-
     impl Completed {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             match self {
@@ -5906,14 +5495,12 @@ mod trigger {
             }
         }
     }
-
     #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
     pub enum CompletedOutcomeArg {
         All,
         Success,
         Failure,
     }
-
     impl CompletedOutcomeArg {
         fn as_str(self) -> &'static str {
             match self {
@@ -5922,7 +5509,6 @@ mod trigger {
                 Self::Failure => "failure",
             }
         }
-
         fn apply(
             self,
             filter: iroha::data_model::events::trigger_completed::TriggerCompletedEventFilter,
@@ -5935,7 +5521,6 @@ mod trigger {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct CompletedList {
         /// Optional trigger ID filter.
@@ -5960,7 +5545,6 @@ mod trigger {
         #[arg(long, hide = true)]
         pub timeout_ms: Option<u64>,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct CompletedWatch {
         /// Optional trigger ID filter.
@@ -5976,7 +5560,6 @@ mod trigger {
         #[arg(long)]
         pub timeout_ms: Option<u64>,
     }
-
     impl CompletedList {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -5993,7 +5576,6 @@ mod trigger {
             context.print_data(&response)
         }
     }
-
     impl CompletedWatch {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let filter = completed_filter(self.id, self.outcome);
@@ -6019,7 +5601,6 @@ mod trigger {
             Ok(())
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Inspect {
         /// Trigger name.
@@ -6031,7 +5612,6 @@ mod trigger {
         #[arg(long, default_value_t = 5)]
         pub completion_limit: u64,
     }
-
     impl Inspect {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -6071,7 +5651,6 @@ mod trigger {
             context.print_data(&response)
         }
     }
-
     fn completed_filter(
         id: Option<TriggerId>,
         outcome: CompletedOutcomeArg,
@@ -6083,7 +5662,6 @@ mod trigger {
         }
         iroha::data_model::events::EventFilterBox::TriggerCompleted(outcome.apply(filter))
     }
-
     fn collect_completed_events<C: RunContext>(
         context: &mut C,
         filter: iroha::data_model::events::EventFilterBox,
@@ -6124,7 +5702,6 @@ mod trigger {
             Ok::<_, eyre::Report>(events)
         })
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Register {
         /// Trigger name
@@ -6209,14 +5786,12 @@ mod trigger {
         #[arg(long, value_name = "RFC3339")]
         pub time_start_rfc3339: Option<String>,
     }
-
     #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
     pub enum FilterType {
         Execute,
         Time,
         Data,
     }
-
     #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
     pub enum VkEventPreset {
         /// All verifying key events (default)
@@ -6226,7 +5801,6 @@ mod trigger {
         /// Only Updated events
         Updated,
     }
-
     pub(super) fn parse_data_verifying_key_id(
         spec: &str,
     ) -> Result<iroha::data_model::proof::VerifyingKeyId> {
@@ -6241,7 +5815,6 @@ mod trigger {
                 "--data-verifying-key backend uses unsupported verifier-registry label `{backend}`"
             );
         }
-
         let normalized_name = name.trim();
         if normalized_name.is_empty() {
             eyre::bail!("--data-verifying-key name must be non-empty");
@@ -6249,13 +5822,11 @@ mod trigger {
         if normalized_name.contains(':') {
             eyre::bail!("--data-verifying-key name must not contain ':'");
         }
-
         Ok(iroha::data_model::proof::VerifyingKeyId::new(
             backend.to_string(),
             normalized_name.to_string(),
         ))
     }
-
     pub(super) fn parse_data_proof_id(spec: &str) -> Result<iroha::data_model::proof::ProofId> {
         let (backend, hash_hex) = spec
             .split_once(':')
@@ -6268,7 +5839,6 @@ mod trigger {
                 "--data-proof backend uses unsupported verifier-registry label `{backend}`"
             );
         }
-
         let hash_hex = hash_hex.trim();
         let hash_hex = hash_hex.strip_prefix("0x").unwrap_or(hash_hex);
         if hash_hex.len() != 64 {
@@ -6281,13 +5851,11 @@ mod trigger {
             proof_hash[index] = u8::from_str_radix(byte_text, 16)
                 .map_err(|e| eyre!("invalid hex for proof hash: {e}"))?;
         }
-
         Ok(iroha::data_model::proof::ProofId {
             backend: backend.to_string(),
             proof_hash,
         })
     }
-
     #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
     pub enum ProofEventPreset {
         /// All proof events (default)
@@ -6297,7 +5865,6 @@ mod trigger {
         /// Only Rejected events
         Rejected,
     }
-
     #[allow(clippy::too_many_lines)]
     impl Run for Register {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -6310,7 +5877,6 @@ mod trigger {
                 },
                 trigger::action::Repeats,
             };
-
             // Choose executable: either bytecode from path or instructions from stdin
             let executable = match (
                 self.path.as_ref(),
@@ -6338,7 +5904,6 @@ mod trigger {
                     "Provide exactly one of: --path, --instructions, or --instructions-stdin"
                 ),
             };
-
             // Resolve authority and repeat policy
             let authority = match self.authority {
                 Some(literal) => resolve_account_id(context, &literal)
@@ -6472,7 +6037,6 @@ mod trigger {
                     EventFilterBox::Data(df)
                 }
             };
-
             // Choose repeats; ensure one-shot time triggers use Exactly(1)
             let repeats = if matches!(self.filter, FilterType::Time)
                 && self.time_period_ms.is_none()
@@ -6489,7 +6053,6 @@ mod trigger {
             {
                 eyre::bail!("Non-periodic time filter requires --repeats=1 (got {n})");
             }
-
             let action = iroha::data_model::trigger::action::Action::new(
                 executable, repeats, authority, filter_box,
             )?;
@@ -6498,23 +6061,19 @@ mod trigger {
             context.finish([instruction])
         }
     }
-
     fn trigger_pretty_json(
         trigger: &iroha::data_model::trigger::Trigger,
     ) -> Result<norito::json::Value> {
         use norito::json::{self, Value};
-
         fn to_value<T: JsonSerialize + ?Sized>(value: &T) -> Result<Value> {
             json::to_value(value).map_err(|err| eyre!("Failed to encode JSON value: {err}"))
         }
-
         let mut map = BTreeMap::<String, Value>::new();
         map.insert("id".into(), to_value(trigger.id())?);
         map.insert("authority".into(), to_value(trigger.action().authority())?);
         map.insert("repeats".into(), to_value(&trigger.action().repeats())?);
         map.insert("filter".into(), to_value(trigger.action().filter())?);
         map.insert("metadata".into(), to_value(trigger.action().metadata())?);
-
         let executable_value = match trigger.action().executable() {
             Executable::Instructions(instrs) => to_value(instrs)?,
             Executable::ContractCall(invocation) => {
@@ -6549,14 +6108,11 @@ mod trigger {
             }
         };
         map.insert("executable".into(), executable_value);
-
         Ok(Value::Object(map))
     }
 }
-
 mod executor {
     use super::*;
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Retrieve the executor data model
@@ -6564,7 +6120,6 @@ mod executor {
         /// Upgrade the executor
         Upgrade(Upgrade),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -6585,7 +6140,6 @@ mod executor {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Upgrade {
         /// Path to the compiled IVM bytecode file
@@ -6593,13 +6147,10 @@ mod executor {
         path: PathBuf,
     }
 }
-
 mod metadata {
     use super::*;
-
     pub mod domain {
         use super::*;
-
         #[derive(clap::Subcommand, Debug)]
         pub enum Command {
             /// Retrieve a value from the key-value store
@@ -6609,7 +6160,6 @@ mod metadata {
             /// Delete an entry from the key-value store
             Remove(IdKey),
         }
-
         #[derive(clap::Args, Debug)]
         pub struct IdKey {
             #[arg(short, long, value_parser = parse_domain_id_literal)]
@@ -6617,7 +6167,6 @@ mod metadata {
             #[arg(short, long)]
             pub key: Name,
         }
-
         impl Run for Command {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
                 use self::Command::*;
@@ -6654,10 +6203,8 @@ mod metadata {
             }
         }
     }
-
     pub mod account {
         use super::*;
-
         #[derive(clap::Subcommand, Debug)]
         pub enum Command {
             /// Retrieve a value from the key-value store
@@ -6667,7 +6214,6 @@ mod metadata {
             /// Delete an entry from the key-value store
             Remove(IdKey),
         }
-
         #[derive(clap::Args, Debug)]
         pub struct IdKey {
             #[arg(short, long)]
@@ -6675,7 +6221,6 @@ mod metadata {
             #[arg(short, long)]
             pub key: Name,
         }
-
         impl Run for Command {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
                 use self::Command::*;
@@ -6716,10 +6261,8 @@ mod metadata {
             }
         }
     }
-
     pub mod asset_definition {
         use super::*;
-
         #[derive(clap::Subcommand, Debug)]
         pub enum Command {
             /// Retrieve a value from the key-value store
@@ -6729,7 +6272,6 @@ mod metadata {
             /// Delete an entry from the key-value store
             Remove(IdKey),
         }
-
         #[derive(clap::Args, Debug)]
         pub struct IdKey {
             #[arg(short, long)]
@@ -6737,7 +6279,6 @@ mod metadata {
             #[arg(short, long)]
             pub key: Name,
         }
-
         impl Run for Command {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
                 use self::Command::*;
@@ -6776,10 +6317,8 @@ mod metadata {
             }
         }
     }
-
     pub mod nft {
         use super::*;
-
         #[derive(clap::Subcommand, Debug)]
         pub enum Command {
             /// Retrieve a value from the key-value store
@@ -6789,7 +6328,6 @@ mod metadata {
             /// Delete an entry from the key-value store
             Remove(IdKey),
         }
-
         #[derive(clap::Args, Debug)]
         pub struct IdKey {
             #[arg(short, long)]
@@ -6797,7 +6335,6 @@ mod metadata {
             #[arg(short, long)]
             pub key: Name,
         }
-
         impl Run for Command {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
                 use self::Command::*;
@@ -6834,10 +6371,8 @@ mod metadata {
             }
         }
     }
-
     pub mod rwa {
         use super::*;
-
         #[derive(clap::Subcommand, Debug)]
         pub enum Command {
             /// Retrieve a value from the key-value store
@@ -6847,7 +6382,6 @@ mod metadata {
             /// Delete an entry from the key-value store
             Remove(IdKey),
         }
-
         #[derive(clap::Args, Debug)]
         pub struct IdKey {
             #[arg(short, long)]
@@ -6855,7 +6389,6 @@ mod metadata {
             #[arg(short, long)]
             pub key: Name,
         }
-
         impl Run for Command {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
                 use self::Command::*;
@@ -6892,10 +6425,8 @@ mod metadata {
             }
         }
     }
-
     pub mod trigger {
         use super::*;
-
         #[derive(clap::Subcommand, Debug)]
         pub enum Command {
             /// Retrieve a value from the key-value store
@@ -6905,7 +6436,6 @@ mod metadata {
             /// Delete an entry from the key-value store
             Remove(IdKey),
         }
-
         #[derive(clap::Args, Debug)]
         pub struct IdKey {
             #[arg(short, long)]
@@ -6913,7 +6443,6 @@ mod metadata {
             #[arg(short, long)]
             pub key: Name,
         }
-
         impl Run for Command {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
                 use self::Command::*;
@@ -6946,7 +6475,6 @@ mod metadata {
         }
     }
 }
-
 mod repo {
     use super::*;
     use iroha::data_model::{
@@ -6960,7 +6488,6 @@ mod repo {
     };
     use iroha_data_model::metadata::Metadata;
     use std::time::{SystemTime, UNIX_EPOCH};
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Initiate or roll a repo agreement between two counterparties
@@ -6975,7 +6502,6 @@ mod repo {
         /// Record a margin call for an active repo agreement
         MarginCall(MarginCall),
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -6988,7 +6514,6 @@ mod repo {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Initiate {
         /// Stable identifier assigned to the repo agreement lifecycle
@@ -7028,7 +6553,6 @@ mod repo {
         #[arg(long)]
         pub margin_frequency_secs: u64,
     }
-
     impl Initiate {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let initiator = resolve_account_id(context, &self.initiator)
@@ -7070,14 +6594,12 @@ mod repo {
                 .wrap_err("Failed to initiate repo agreement")
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Unwind {
         /// Stable identifier to settle at maturity as any recorded participant
         #[arg(long)]
         pub agreement_id: RepoAgreementId,
     }
-
     impl Unwind {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let instruction = ReverseRepoIsi::new(self.agreement_id);
@@ -7087,7 +6609,6 @@ mod repo {
                 .wrap_err("Failed to settle repo agreement at maturity")
         }
     }
-
     #[derive(clap::Subcommand, Debug)]
     pub enum QueryCommand {
         /// List all repo agreements recorded on-chain
@@ -7095,7 +6616,6 @@ mod repo {
         /// Fetch a single repo agreement by identifier
         Get(QueryId),
     }
-
     impl Run for QueryCommand {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::QueryCommand::*;
@@ -7125,14 +6645,12 @@ mod repo {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct QueryId {
         /// Stable identifier assigned to the repo agreement lifecycle
         #[arg(long)]
         pub id: RepoAgreementId,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct Margin {
         /// Stable identifier assigned to the repo agreement lifecycle
@@ -7142,7 +6660,6 @@ mod repo {
         #[arg(long)]
         pub at_timestamp_ms: Option<u64>,
     }
-
     impl Margin {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
@@ -7156,13 +6673,11 @@ mod repo {
             else {
                 return Err(eyre!("Repo agreement `{}` not found", self.agreement_id));
             };
-
             let timestamp_ms = self
                 .at_timestamp_ms
                 .unwrap_or_else(current_unix_timestamp_ms);
             let next_due = agreement.next_margin_check_after(timestamp_ms);
             let is_due = agreement.is_margin_check_due(timestamp_ms);
-
             let result = json_utils::json_object(vec![
                 (
                     "agreement_id",
@@ -7183,14 +6698,12 @@ mod repo {
             context.print_data(&result)
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct MarginCall {
         /// Stable identifier assigned to the repo agreement lifecycle
         #[arg(long)]
         pub agreement_id: RepoAgreementId,
     }
-
     impl MarginCall {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let instruction = RepoMarginCallIsi::new(self.agreement_id);
@@ -7200,7 +6713,6 @@ mod repo {
                 .wrap_err("Failed to record repo margin call")
         }
     }
-
     fn current_unix_timestamp_ms() -> u64 {
         let millis = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -7209,10 +6721,8 @@ mod repo {
         u64::try_from(millis).unwrap_or(u64::MAX)
     }
 }
-
 mod settlement {
     use std::collections::BTreeSet;
-
     use super::*;
     use clap::ValueEnum;
     use iroha::data_model::{
@@ -7232,7 +6742,6 @@ mod settlement {
         prelude::{AssetDefinitionId, Name},
         query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
-
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Create a delivery-versus-payment instruction
@@ -7252,7 +6761,6 @@ mod settlement {
         /// Read the complete governed native FX corridor policy registry
         ListFxCorridorPolicies,
     }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             match self {
@@ -7272,7 +6780,6 @@ mod settlement {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct SetFxCorridorPolicyArgs {
         /// Stable policy identifier
@@ -7331,14 +6838,12 @@ mod settlement {
         #[arg(long)]
         pub disabled: bool,
     }
-
     #[derive(clap::Args, Debug)]
     pub struct GetFxCorridorPolicyArgs {
         /// Stable policy identifier
         #[arg(long)]
         pub policy_id: Name,
     }
-
     impl GetFxCorridorPolicyArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let policy = context
@@ -7347,7 +6852,6 @@ mod settlement {
             context.print_data(&policy)
         }
     }
-
     impl SetFxCorridorPolicyArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let allowed_domain_count = self.allowed_destination_alias_domains.len();
@@ -7387,7 +6891,6 @@ mod settlement {
             context.finish([InstructionBox::from(instruction)])
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct FxCorridorEscrowArgs {
         /// Stable corridor policy identifier
@@ -7403,7 +6906,6 @@ mod settlement {
         #[arg(long)]
         pub amount: iroha_primitives::numeric::Quantity,
     }
-
     impl FxCorridorEscrowArgs {
         fn run_fund<C: RunContext>(self, context: &mut C) -> Result<()> {
             let instruction: SettlementInstructionBox = FundFxCorridorEscrow {
@@ -7415,7 +6917,6 @@ mod settlement {
             .into();
             context.finish([InstructionBox::from(instruction)])
         }
-
         fn run_refund<C: RunContext>(self, context: &mut C) -> Result<()> {
             let instruction: SettlementInstructionBox = RefundFxCorridorEscrow {
                 policy_id: self.policy_id,
@@ -7427,7 +6928,6 @@ mod settlement {
             context.finish([InstructionBox::from(instruction)])
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct SettleFxCorridorArgs {
         /// Stable corridor policy identifier
@@ -7470,7 +6970,6 @@ mod settlement {
         #[arg(long)]
         pub oracle_event_hash: HashOf<FeedEvent>,
     }
-
     impl SettleFxCorridorArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             if self.expected_policy_revision == 0 {
@@ -7503,14 +7002,12 @@ mod settlement {
             context.finish([InstructionBox::from(instruction)])
         }
     }
-
     #[derive(ValueEnum, Clone, Copy, Debug)]
     #[value(rename_all = "kebab_case")]
     pub enum OrderArg {
         DeliveryThenPayment,
         PaymentThenDelivery,
     }
-
     impl From<OrderArg> for SettlementExecutionOrder {
         fn from(value: OrderArg) -> Self {
             match value {
@@ -7519,7 +7016,6 @@ mod settlement {
             }
         }
     }
-
     #[derive(ValueEnum, Clone, Copy, Debug)]
     #[value(rename_all = "kebab_case")]
     pub enum AtomicityArg {
@@ -7527,7 +7023,6 @@ mod settlement {
         CommitFirstLeg,
         CommitSecondLeg,
     }
-
     impl AtomicityArg {
         fn to_model(self) -> SettlementAtomicity {
             match self {
@@ -7537,7 +7032,6 @@ mod settlement {
             }
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct DvpArgs {
         /// Stable identifier shared across the settlement lifecycle
@@ -7601,7 +7095,6 @@ mod settlement {
         #[arg(long = "iso-xml-out")]
         pub iso_xml_out: Option<std::path::PathBuf>,
     }
-
     impl DvpArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let delivery_from = resolve_account_id(context, &self.delivery_from)
@@ -7613,7 +7106,6 @@ mod settlement {
             let payment_to = resolve_account_id(context, &self.payment_to)
                 .wrap_err("failed to resolve --payment-to account")?;
             let plan = SettlementPlan::new(self.order.into(), self.atomicity.to_model());
-
             let delivery_leg = SettlementLeg::new(
                 self.delivery_asset,
                 self.delivery_quantity,
@@ -7626,7 +7118,6 @@ mod settlement {
                 payment_from,
                 payment_to,
             );
-
             let instruction = DvpIsi {
                 settlement_id: self.settlement_id,
                 delivery_leg,
@@ -7657,7 +7148,6 @@ mod settlement {
             context.finish([InstructionBox::from(instruction)])
         }
     }
-
     #[derive(clap::Args, Debug)]
     pub struct PvpArgs {
         /// Stable identifier shared across the settlement lifecycle
@@ -7712,7 +7202,6 @@ mod settlement {
         #[arg(long = "iso-xml-out")]
         pub iso_xml_out: Option<std::path::PathBuf>,
     }
-
     impl PvpArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let primary_from = resolve_account_id(context, &self.primary_from)
@@ -7724,7 +7213,6 @@ mod settlement {
             let counter_to = resolve_account_id(context, &self.counter_to)
                 .wrap_err("failed to resolve --counter-to account")?;
             let plan = SettlementPlan::new(self.order.into(), self.atomicity.to_model());
-
             let primary_leg = SettlementLeg::new(
                 self.primary_asset,
                 self.primary_quantity,
@@ -7737,7 +7225,6 @@ mod settlement {
                 counter_from,
                 counter_to,
             );
-
             let instruction = PvpIsi {
                 settlement_id: self.settlement_id,
                 primary_leg,
@@ -7761,7 +7248,6 @@ mod settlement {
             context.finish([InstructionBox::from(instruction)])
         }
     }
-
     mod iso_preview {
         use super::*;
         use eyre::{Context, eyre};
@@ -7775,7 +7261,6 @@ mod settlement {
         };
         use std::{fs, path::Path};
         use time::{OffsetDateTime, format_description::well_known::Iso8601};
-
         #[derive(clap::ValueEnum, Clone, Debug, Default)]
         pub enum PartialIndicatorArg {
             #[default]
@@ -7784,7 +7269,6 @@ mod settlement {
             Parq,
             Parc,
         }
-
         impl PartialIndicatorArg {
             fn as_iso(&self) -> &'static str {
                 match self {
@@ -7795,13 +7279,11 @@ mod settlement {
                 }
             }
         }
-
         #[derive(Clone, Debug)]
         pub struct LinkageArg {
             pub relation: String,
             pub reference: String,
         }
-
         #[derive(Clone, Debug)]
         pub struct SettlementPreviewOptions {
             pub hold_indicator: bool,
@@ -7811,7 +7293,6 @@ mod settlement {
             pub linkages: Vec<LinkageArg>,
             pub settlement_date: Option<String>,
         }
-
         impl Default for SettlementPreviewOptions {
             fn default() -> Self {
                 Self {
@@ -7824,7 +7305,6 @@ mod settlement {
                 }
             }
         }
-
         pub fn parse_iso_date_arg(input: &str) -> Result<String, String> {
             let trimmed = input.trim();
             let bytes = trimmed.as_bytes();
@@ -7841,7 +7321,6 @@ mod settlement {
                 Err("ISO settlement date must use YYYY-MM-DD".to_owned())
             }
         }
-
         pub fn parse_linkage_arg(input: &str) -> Result<LinkageArg, String> {
             let (relation, reference) = input
                 .split_once(':')
@@ -7855,12 +7334,10 @@ mod settlement {
                 _ => Err("linkage TYPE must be WITH, BEFO, or AFTE".to_owned()),
             }
         }
-
         pub fn write_iso_preview(path: &Path, xml: &str) -> Result<()> {
             fs::write(path, xml).context("failed to write ISO 20022 preview")?;
             Ok(())
         }
-
         fn validate_instrument_id(id: &str) -> Result<()> {
             if ivm::iso20022::validate_instrument_identifier(id) {
                 Ok(())
@@ -7870,7 +7347,6 @@ mod settlement {
                 ))
             }
         }
-
         pub fn dvp_to_sese023(
             isi: &DvpIsi,
             instrument_id: Option<&str>,
@@ -7948,14 +7424,12 @@ mod settlement {
                 serialize_xml()
             })
         }
-
         pub fn load_reference_crosswalk(
             path: Option<&std::path::Path>,
         ) -> Result<Option<ReferenceDataSnapshots>> {
             let Some(path) = path else {
                 return Ok(None);
             };
-
             let config = IsoReferenceData {
                 isin_crosswalk_path: Some(path.to_path_buf()),
                 ..IsoReferenceData::default()
@@ -7979,7 +7453,6 @@ mod settlement {
                 }
             }
         }
-
         fn instrument_reference_error(id: &str, err: ReferenceDataError) -> eyre::Report {
             match err {
                 ReferenceDataError::DatasetUnavailable { .. } => {
@@ -8000,7 +7473,6 @@ mod settlement {
                 ),
             }
         }
-
         fn settlement_date_string(explicit: Option<&str>) -> String {
             explicit.map_or_else(
                 || {
@@ -8012,7 +7484,6 @@ mod settlement {
                 ToOwned::to_owned,
             )
         }
-
         pub fn pvp_to_sese025(isi: &PvpIsi, options: &SettlementPreviewOptions) -> Result<String> {
             iso_scope(|| {
                 msg_create("sese.025");
@@ -8063,12 +7534,10 @@ mod settlement {
                 serialize_xml()
             })
         }
-
         fn serialize_xml() -> Result<String> {
             let xml = msg_serialize("XML").map_err(|err| map_msg_err(&err))?;
             String::from_utf8(xml).wrap_err("ISO 20022 XML is not valid UTF-8")
         }
-
         fn iso_scope<F, T>(f: F) -> Result<T>
         where
             F: FnOnce() -> Result<T>,
@@ -8083,11 +7552,9 @@ mod settlement {
             msg_clear();
             f()
         }
-
         fn bool_to_bytes(value: bool) -> &'static [u8] {
             if value { b"true" } else { b"false" }
         }
-
         fn write_party(prefix: &str, account: &AccountId) {
             let bic = bic_from_account(account);
             msg_set(format!("{prefix}/Pty/Bic").as_str(), bic.as_bytes());
@@ -8096,7 +7563,6 @@ mod settlement {
                 account.to_string().as_bytes(),
             );
         }
-
         fn bic_from_account(account: &AccountId) -> String {
             let country = "XX";
             let mut location: String = account
@@ -8111,14 +7577,12 @@ mod settlement {
             }
             format!("IROA{country}{location}")
         }
-
         fn settlement_currency_code(_asset: &AssetDefinitionId) -> String {
             // Offline previews only see the canonical asset-definition address. The
             // human currency label belongs to the registered definition, so use a
             // schema-valid placeholder instead of trying to recover it from the id.
             "XXX".to_owned()
         }
-
         fn counter_info(leg: &SettlementLeg) -> String {
             format!(
                 "{{\"counter_currency\":\"{}\",\"amount\":\"{}\"}}",
@@ -8126,14 +7590,12 @@ mod settlement {
                 leg.quantity()
             )
         }
-
         fn execution_order(order: SettlementExecutionOrder) -> &'static str {
             match order {
                 SettlementExecutionOrder::DeliveryThenPayment => "DELIVERY_THEN_PAYMENT",
                 SettlementExecutionOrder::PaymentThenDelivery => "PAYMENT_THEN_DELIVERY",
             }
         }
-
         fn atomicity(atomicity: SettlementAtomicity) -> &'static str {
             match atomicity {
                 SettlementAtomicity::AllOrNothing => "ALL_OR_NOTHING",
@@ -8141,11 +7603,9 @@ mod settlement {
                 SettlementAtomicity::CommitSecondLeg => "COMMIT_SECOND_LEG",
             }
         }
-
         fn map_msg_err(err: &MsgError) -> eyre::Error {
             eyre!("ISO 20022 helper error: {err}")
         }
-
         #[cfg(test)]
         mod tests {
             use super::*;
@@ -8155,18 +7615,15 @@ mod settlement {
             use iroha_primitives::numeric::Quantity;
             use std::io::Write;
             use tempfile::NamedTempFile;
-
             fn fixture_key_pair(seed: u8) -> KeyPair {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                     .expect("fixture seed must derive a valid keypair")
             }
-
             fn account_with_seed(domain: &DomainId, seed: u8) -> AccountId {
                 let key_pair = fixture_key_pair(seed);
                 let _ = domain;
                 AccountId::new(key_pair.public_key().clone())
             }
-
             #[test]
             fn fixture_key_pair_uses_checked_seed_derivation() {
                 assert_eq!(fixture_key_pair(0x11).algorithm(), Algorithm::Ed25519);
@@ -8175,14 +7632,12 @@ mod settlement {
                     "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
                 );
             }
-
             fn sample_dvp() -> DvpIsi {
                 let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
                 let seller = account_with_seed(&domain, 0x11);
                 let buyer = account_with_seed(&domain, 0x22);
                 let payer = account_with_seed(&domain, 0x33);
                 let receiver = account_with_seed(&domain, 0x44);
-
                 let delivery_leg = SettlementLeg::new(
                     iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -8213,14 +7668,12 @@ mod settlement {
                     metadata: Metadata::default(),
                 }
             }
-
             fn sample_pvp() -> PvpIsi {
                 let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
                 let payer = account_with_seed(&domain, 0x55);
                 let receiver = account_with_seed(&domain, 0x66);
                 let counter_payer = account_with_seed(&domain, 0x77);
                 let counter_receiver = account_with_seed(&domain, 0x88);
-
                 let primary_leg = SettlementLeg::new(
                     iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -8251,7 +7704,6 @@ mod settlement {
                     metadata: Metadata::default(),
                 }
             }
-
             fn crosswalk_snapshot(contents: &str) -> ReferenceDataSnapshots {
                 let mut file = NamedTempFile::new().expect("snapshot file");
                 file.write_all(contents.as_bytes()).expect("write snapshot");
@@ -8259,7 +7711,6 @@ mod settlement {
                     .expect("load crosswalk")
                     .expect("snapshot present")
             }
-
             #[test]
             fn dvp_preview_accepts_instrument_present_in_crosswalk() {
                 let snapshots = crosswalk_snapshot(
@@ -8277,7 +7728,6 @@ mod settlement {
                 )
                 .expect("preview succeeds");
             }
-
             #[test]
             fn dvp_preview_rejects_unknown_instrument() {
                 let snapshots = crosswalk_snapshot(
@@ -8299,7 +7749,6 @@ mod settlement {
                         .contains("not present in the supplied ISO reference crosswalk")
                 );
             }
-
             #[test]
             fn instrument_reference_error_reports_missing_ledger_mapping() {
                 let err = instrument_reference_error(
@@ -8315,7 +7764,6 @@ mod settlement {
                 assert!(msg.contains("US0378331005"));
                 assert!(msg.contains("asset_definition_id_or_asset_id"));
             }
-
             #[test]
             fn dvp_preview_uses_placeholder_currency_without_definition_context() {
                 let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -8332,7 +7780,6 @@ mod settlement {
                     .to_string()
                     .parse()
                     .expect("canonical asset id should parse");
-
                 let dvp = DvpIsi {
                     settlement_id: "dvp_settlement".parse().unwrap(),
                     delivery_leg: SettlementLeg::new(
@@ -8356,7 +7803,6 @@ mod settlement {
                     ),
                     metadata: Metadata::default(),
                 };
-
                 let xml = dvp_to_sese023(
                     &dvp,
                     Some("US0378331005"),
@@ -8372,7 +7818,6 @@ mod settlement {
                     Some("COMMIT_FIRST_LEG")
                 );
             }
-
             #[test]
             fn dvp_preview_applies_hold_partial_mic_and_linkages() {
                 let options = SettlementPreviewOptions {
@@ -8415,7 +7860,6 @@ mod settlement {
                     Some("PACS009-CLS")
                 );
             }
-
             #[test]
             fn pvp_preview_applies_partial_and_condition() {
                 let options = SettlementPreviewOptions {
@@ -8441,7 +7885,6 @@ mod settlement {
         }
     }
 }
-
 fn dump_json_stdout<T>(value: &T) -> Result<()>
 where
     T: JsonSerialize + ?Sized,
@@ -8454,7 +7897,6 @@ where
     io::stdout().write_all(rendered.as_bytes())?;
     Ok(())
 }
-
 fn parse_json_stdin<T>(context: &impl RunContext) -> Result<T>
 where
     T: JsonDeserialize,
@@ -8464,14 +7906,12 @@ where
     }
     parse_json_stdin_unchecked()
 }
-
 fn parse_json_stdin_unchecked<T>() -> Result<T>
 where
     T: JsonDeserialize,
 {
     parse_json(&string_from_stdin()?)
 }
-
 fn parse_json<T>(s: &str) -> Result<T>
 where
     T: JsonDeserialize,
@@ -8487,13 +7927,11 @@ where
     norito::with_decode_limits_scope(CLI_JSON_DECODE_LIMITS_V1, || norito::json::from_json(s))
         .map_err(|err| eyre!("failed to parse JSON: {err}"))
 }
-
 fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
         eyre::bail!("account literal must not be empty");
     }
-
     if trimmed.contains('@') {
         eyre::bail!("account literal must not include '@domain'; use canonical I105 only");
     }
@@ -8503,16 +7941,13 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     {
         eyre::bail!("account literal must be canonical I105; canonical hex is not accepted");
     }
-
     let parsed = AccountId::parse_encoded(trimmed)
         .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
     Ok(parsed.into_account_id())
 }
-
 pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> Result<AccountId> {
     resolve_account_id_with(literal)
 }
-
 fn parse_asset_balance_scope_literal(
     literal: &str,
 ) -> Result<iroha::data_model::asset::AssetBalanceScope> {
@@ -8532,7 +7967,6 @@ fn parse_asset_balance_scope_literal(
         "asset balance scope must be `global` or `dataspace:<id>`"
     ))
 }
-
 fn resolve_asset_definition_id_by_alias(
     client: &Client,
     alias: &AssetDefinitionAlias,
@@ -8562,16 +7996,13 @@ fn resolve_asset_definition_id_by_alias(
     AssetDefinitionId::parse_address_literal(definition_raw)
         .map_err(|err| eyre!("invalid `asset_definition_id` in alias response: {err}"))
 }
-
 fn parse_asset_definition_literal(literal: &str) -> Result<AssetDefinitionId> {
     AssetDefinitionId::parse_address_literal(literal)
         .map_err(|err| eyre!("asset definition literal: {err}"))
 }
-
 fn parse_domain_id_literal(literal: &str) -> std::result::Result<DomainId, String> {
     DomainId::parse_fully_qualified(literal).map_err(|err| err.to_string())
 }
-
 fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
@@ -8590,22 +8021,18 @@ fn parse_register_account_id(literal: &str) -> Result<AccountId> {
             "`ledger account register --id` must be canonical I105; canonical hex is not accepted"
         );
     }
-
     let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
         eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
     })?;
     Ok(parsed.into_account_id())
 }
-
 fn string_from_stdin() -> Result<String> {
     let bytes = read_cli_input_bounded(&mut io::stdin().lock(), MAX_CLI_STDIN_BYTES_V1, "stdin")?;
     String::from_utf8(bytes).map_err(|error| eyre!("stdin is not valid UTF-8: {error}"))
 }
-
 fn bytes_from_stdin() -> Result<Vec<u8>> {
     read_cli_input_bounded(&mut io::stdin().lock(), MAX_CLI_STDIN_BYTES_V1, "stdin")
 }
-
 fn read_cli_input_bounded<R: Read>(
     reader: &mut R,
     max_bytes: usize,
@@ -8631,7 +8058,6 @@ fn read_cli_input_bounded<R: Read>(
             .map_err(|error| eyre!("failed to reserve {label} buffer storage: {error}"))?;
         bytes.extend_from_slice(&chunk[..count]);
     }
-
     let mut growth_probe = [0_u8; 1];
     let extra = loop {
         match reader.read(&mut growth_probe) {
@@ -8645,7 +8071,6 @@ fn read_cli_input_bounded<R: Read>(
     }
     Ok(bytes)
 }
-
 fn read_cli_file_bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
     let mut file = fs::File::open(path)
         .wrap_err_with(|| format!("failed to open {label} {}", path.display()))?;
@@ -8674,13 +8099,11 @@ fn read_cli_file_bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-
 fn read_cli_text_file_bounded(path: &Path, label: &str) -> Result<String> {
     let bytes = read_cli_file_bounded(path, label)?;
     String::from_utf8(bytes)
         .map_err(|error| eyre!("{label} {} is not valid UTF-8: {error}", path.display()))
 }
-
 fn decode_base64_or_hex(
     input: &str,
     hex_length_err: &'static str,
@@ -8690,12 +8113,10 @@ fn decode_base64_or_hex(
     if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(trimmed) {
         return Ok(bytes);
     }
-
     let stripped = trimmed.trim_start_matches("0x");
     if !stripped.len().is_multiple_of(2) {
         eyre::bail!(hex_length_err);
     }
-
     let mut out = Vec::with_capacity(stripped.len() / 2);
     let mut index = 0;
     while index < stripped.len() {
@@ -8706,9 +8127,7 @@ fn decode_base64_or_hex(
     }
     Ok(out)
 }
-
 type ReportResult<T, E> = core::result::Result<T, Report<E>>;
-
 fn error_kind_for_report(report: &Report<MainError>) -> CliErrorKind {
     match report.current_context() {
         MainError::CliArgs(_) => CliErrorKind::Input,
@@ -8718,12 +8137,10 @@ fn error_kind_for_report(report: &Report<MainError>) -> CliErrorKind {
         MainError::Command(_) => CliErrorKind::Command,
     }
 }
-
 struct CliRenderedError {
     kind: CliErrorKind,
     output: String,
 }
-
 fn render_cli_error(
     report: &Report<MainError>,
     output_format: CliOutputFormat,
@@ -8770,11 +8187,9 @@ fn render_cli_error(
     };
     CliRenderedError { kind, output }
 }
-
 #[cfg(test)]
 #[path = "main_shared_tests.rs"]
 mod tests;
-
 #[cfg(test)]
 mod multisig_json_tests {
     use super::*;
@@ -8789,17 +8204,14 @@ mod multisig_json_tests {
     };
     use std::collections::BTreeMap;
     use std::num::{NonZeroU16, NonZeroU64};
-
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
-
     fn multisig_account() -> AccountId {
         let key_pair = fixture_key_pair(0xD6);
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(fixture_key_pair(0xD6).algorithm(), Algorithm::Ed25519);
@@ -8808,7 +8220,6 @@ mod multisig_json_tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[test]
     fn multisig_register_payload_contains_account() {
         let account = multisig_account();
@@ -8834,7 +8245,6 @@ mod multisig_json_tests {
         );
     }
 }
-
 #[cfg(all(test, feature = "cli_integration_harness"))]
 mod cli_integration_harness_tests {
     use super::*;
@@ -8851,25 +8261,20 @@ mod cli_integration_harness_tests {
     use iroha_crypto::Algorithm;
     use std::cmp::Ordering as CmpOrdering;
     use std::num::NonZeroU64;
-
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
-
     struct DummyExec;
-
     impl QueryExecutor for DummyExec {
         type Cursor = ();
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             _query: QueryWithParams,
@@ -8882,7 +8287,6 @@ mod cli_integration_harness_tests {
                 None,
             ))
         }
-
         fn continue_query(
             _cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -8890,12 +8294,10 @@ mod cli_integration_harness_tests {
             unreachable!("no continuation in this test")
         }
     }
-
     fn sample_account_id(_domain: &str, seed: u8) -> AccountId {
         let key_pair = fixture_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
@@ -8904,16 +8306,13 @@ mod cli_integration_harness_tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[test]
     fn compound_predicate_json_roundtrip() {
         use iroha::data_model::query::dsl::CompoundPredicate;
-
         let owner = sample_account_id("wonderland", 1);
         let raw = format!(r#"{{"op":"eq","args":[{{"FieldPath":"authority"}},"{owner}"]}}"#);
         let predicate = super::parse_json::<CompoundPredicate<Domain>>(&raw)
             .expect("predicate JSON should parse");
-
         let serialized = norito::json::to_json(&predicate).expect("serialize predicate");
         assert!(serialized.contains("\"authority\""));
         assert_eq!(
@@ -8922,23 +8321,19 @@ mod cli_integration_harness_tests {
                 .expect("json payload should be stored"),
             serialized.as_str()
         );
-
         let encoded = norito::codec::Encode::encode(&predicate);
         let decoded: CompoundPredicate<Domain> =
             norito::codec::Decode::decode(&mut encoded.as_slice()).expect("decode predicate");
         let decoded_json = norito::json::to_json(&decoded).expect("re-serialize predicate");
         assert_eq!(decoded_json, serialized);
     }
-
     #[test]
     fn compound_predicate_json_invalid() {
         use iroha::data_model::query::dsl::CompoundPredicate;
-
         let err = super::parse_json::<CompoundPredicate<Domain>>("{invalid}")
             .expect_err("invalid JSON must fail");
         assert!(err.to_string().contains("failed to parse JSON"));
     }
-
     // Small helper: sort optional-JSON-key ascending/descending, then compute window bounds
     fn sort_and_bounds<T, Get>(
         items: &mut Vec<T>,
@@ -8974,13 +8369,11 @@ mod cli_integration_harness_tests {
         let first_end = start.saturating_add(fetch).min(end);
         (start, end, first_end)
     }
-
     #[test]
     fn parse_selector_and_apply_to_builder() {
         // Selector tuple parses from null under the lightweight DSL.
         let tuple: iroha::data_model::query::dsl::SelectorTuple<Domain> =
             super::parse_json("null").expect("parse selector JSON");
-
         // Build a query with a non-default selector and ensure it executes via a dummy executor
         let exec = DummyExec;
         let builder = QueryBuilder::new(&exec, FindDomains).with_selector_tuple(tuple);
@@ -8989,24 +8382,19 @@ mod cli_integration_harness_tests {
             .with_sorting(Sorting::default())
             .with_pagination(Pagination::default())
             .with_fetch_size(FetchSize::default());
-
         let out: Vec<Domain> = builder.execute_all().expect("exec ok");
         assert!(out.is_empty());
     }
-
     struct SortExec;
-
     impl QueryExecutor for SortExec {
         type Cursor = ();
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -9022,7 +8410,6 @@ mod cli_integration_harness_tests {
             let owner1 = sample_account_id("land", 0x10);
             let owner2 = sample_account_id("land", 0x11);
             let owner3 = sample_account_id("land", 0x12);
-
             let mut d1 = Domain::new(domain_id1).build(owner1.account());
             let mut d2 = Domain::new(domain_id2).build(owner2.account());
             let d3 = Domain::new(domain_id3).build(owner3.account());
@@ -9030,7 +8417,6 @@ mod cli_integration_harness_tests {
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
             d2.metadata_mut()
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-
             // Apply sorting if provided
             let mut v = vec![d1, d2, d3];
             if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
@@ -9052,14 +8438,12 @@ mod cli_integration_harness_tests {
                     }
                 });
             }
-
             Ok((
                 QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Domain(v)),
                 Some(0),
                 None,
             ))
         }
-
         fn continue_query(
             _cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -9067,7 +8451,6 @@ mod cli_integration_harness_tests {
             unreachable!("single batch only")
         }
     }
-
     #[test]
     fn metadata_sorting_end_to_end() {
         let exec = SortExec;
@@ -9087,7 +8470,6 @@ mod cli_integration_harness_tests {
         assert_eq!(out[1].id().name().as_ref(), "d1");
         assert_eq!(out[2].id().name().as_ref(), "d3");
     }
-
     #[test]
     fn metadata_sorting_domains_desc_end_to_end() {
         let exec = SortExec;
@@ -9106,20 +8488,16 @@ mod cli_integration_harness_tests {
         assert_eq!(out[1].id().name().as_ref(), "d2");
         assert_eq!(out[2].id().name().as_ref(), "d3");
     }
-
     struct SortAccountsExec;
-
     impl QueryExecutor for SortAccountsExec {
         type Cursor = ();
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -9127,23 +8505,19 @@ mod cli_integration_harness_tests {
         {
             use iroha::data_model::account::Account;
             use iroha::data_model::domain::DomainId;
-
             let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let id1 = sample_account_id("land", 0x20);
             let id2 = sample_account_id("land", 0x21);
             let id3 = sample_account_id("land", 0x22);
-
             // Build accounts; builder API needs an authority, use id1 for simplicity
             let mut a1 = Account::new(id1.clone()).build(&id1);
             let mut a2 = Account::new(id2.clone()).build(&id1);
             let a3 = Account::new(id3.clone()).build(&id1);
-
             // Insert ranks: a2=1, a1=2, a3=None
             a1.metadata
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
             a2.metadata
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-
             // Apply sorting if provided
             let mut v = vec![a1, a2, a3];
             if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
@@ -9165,14 +8539,12 @@ mod cli_integration_harness_tests {
                     }
                 });
             }
-
             Ok((
                 QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(v)),
                 Some(0),
                 None,
             ))
         }
-
         fn continue_query(
             _cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -9180,12 +8552,10 @@ mod cli_integration_harness_tests {
             unreachable!("single batch only")
         }
     }
-
     #[test]
     fn metadata_sorting_accounts_end_to_end() {
         use iroha::data_model::account::Account;
         use iroha::data_model::prelude::FindAccounts;
-
         let exec = SortAccountsExec;
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
@@ -9219,12 +8589,10 @@ mod cli_integration_harness_tests {
                 .is_none()
         );
     }
-
     #[test]
     fn metadata_sorting_accounts_desc_end_to_end() {
         use iroha::data_model::account::Account;
         use iroha::data_model::prelude::FindAccounts;
-
         let exec = SortAccountsExec;
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
@@ -9248,20 +8616,16 @@ mod cli_integration_harness_tests {
             .collect();
         assert_eq!(ranks, vec![Some(2), Some(1), None]);
     }
-
     struct SortAssetDefsExec;
-
     impl QueryExecutor for SortAssetDefsExec {
         type Cursor = ();
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -9270,7 +8634,6 @@ mod cli_integration_harness_tests {
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
-
             let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let owner = sample_account_id("land", 0x30);
             let id1: AssetDefinitionId =
@@ -9288,7 +8651,6 @@ mod cli_integration_harness_tests {
                     DomainId::try_new("land", "universal").unwrap(),
                     "bronze".parse().unwrap(),
                 );
-
             let mut ad1 = AssetDefinition::numeric(
                 id1,
                 "gold".to_owned(),
@@ -9310,13 +8672,11 @@ mod cli_integration_harness_tests {
                 None,
             )
             .build(owner.account());
-
             // Insert ranks: ad1=2, ad2=1, ad3=None
             ad1.metadata_mut()
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
             ad2.metadata_mut()
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-
             let mut v = vec![ad1, ad2, ad3];
             if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
                 let desc = matches!(
@@ -9337,14 +8697,12 @@ mod cli_integration_harness_tests {
                     }
                 });
             }
-
             Ok((
                 QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::AssetDefinition(v)),
                 Some(0),
                 None,
             ))
         }
-
         fn continue_query(
             _cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -9352,12 +8710,10 @@ mod cli_integration_harness_tests {
             unreachable!("single batch only")
         }
     }
-
     #[test]
     fn metadata_sorting_asset_defs_end_to_end() {
         use iroha::data_model::asset::definition::AssetDefinition;
         use iroha::data_model::prelude::FindAssetsDefinitions;
-
         let exec = SortAssetDefsExec;
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
@@ -9375,12 +8731,10 @@ mod cli_integration_harness_tests {
         assert_eq!(out[1].id().name().as_ref(), "gold");
         assert_eq!(out[2].id().name().as_ref(), "bronze");
     }
-
     #[test]
     fn metadata_sorting_asset_defs_desc_end_to_end() {
         use iroha::data_model::asset::definition::AssetDefinition;
         use iroha::data_model::prelude::FindAssetsDefinitions;
-
         let exec = SortAssetDefsExec;
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
@@ -9398,15 +8752,11 @@ mod cli_integration_harness_tests {
         assert_eq!(out[1].id().name().as_ref(), "silver");
         assert_eq!(out[2].id().name().as_ref(), "bronze");
     }
-
     // Pagination + fetch_size over Domains: ensure offset/limit and batching are respected
     use std::sync::atomic::{AtomicUsize, Ordering};
-
     static PAGED_DOMAINS_STARTS: AtomicUsize = AtomicUsize::new(0);
     static PAGED_DOMAINS_CONTS: AtomicUsize = AtomicUsize::new(0);
-
     struct PaginatedDomainsExec;
-
     enum DomCursor {
         Domains {
             items: Vec<Domain>,
@@ -9415,18 +8765,15 @@ mod cli_integration_harness_tests {
             fetch: usize,
         },
     }
-
     impl QueryExecutor for PaginatedDomainsExec {
         type Cursor = DomCursor;
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -9434,7 +8781,6 @@ mod cli_integration_harness_tests {
         {
             PAGED_DOMAINS_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::domain::DomainId;
-
             // Build 5 domains d0..d4
             let mut domains = Vec::new();
             for i in 0..5 {
@@ -9443,7 +8789,6 @@ mod cli_integration_harness_tests {
                 let owner = sample_account_id("universal", 0x40 + i as u8);
                 domains.push(Domain::new(did).build(&owner));
             }
-
             let fetch: usize = q
                 .params
                 .fetch_size
@@ -9477,7 +8822,6 @@ mod cli_integration_harness_tests {
                 next,
             ))
         }
-
         fn continue_query(
             cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -9512,14 +8856,12 @@ mod cli_integration_harness_tests {
             }
         }
     }
-
     #[test]
     fn pagination_and_fetch_size_domains() {
         use iroha::data_model::query::parameters::{FetchSize, Pagination};
         let exec = PaginatedDomainsExec;
         PAGED_DOMAINS_STARTS.store(0, Ordering::SeqCst);
         PAGED_DOMAINS_CONTS.store(0, Ordering::SeqCst);
-
         let builder = QueryBuilder::new(&exec, FindDomains)
             .with_pagination(Pagination {
                 limit: Some(NonZeroU64::new(3).unwrap()),
@@ -9528,7 +8870,6 @@ mod cli_integration_harness_tests {
             .with_fetch_size(FetchSize {
                 fetch_size: Some(NonZeroU64::new(2).unwrap()),
             });
-
         let out: Vec<Domain> = builder.execute_all().expect("exec ok");
         // Expect exactly 3 items: d1, d2, d3 (offset=1, limit=3), split across batches of 2 and 1 internally
         assert_eq!(out.len(), 3);
@@ -9539,7 +8880,6 @@ mod cli_integration_harness_tests {
         assert_eq!(PAGED_DOMAINS_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PAGED_DOMAINS_CONTS.load(Ordering::SeqCst), 1);
     }
-
     // Pagination + sorting combined for Domains (ascending and descending)
     enum PSDCursor {
         Domains {
@@ -9549,21 +8889,18 @@ mod cli_integration_harness_tests {
             fetch: usize,
         },
     }
-
     static PSD_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
     static PSD_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
     struct PagedSortedDomainsExecAsc;
     impl QueryExecutor for PagedSortedDomainsExecAsc {
         type Cursor = PSDCursor;
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -9571,7 +8908,6 @@ mod cli_integration_harness_tests {
         {
             PSD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::domain::DomainId;
-
             // Build domains d0..d4 with ranks: d0=2, d1=4, d2=None, d3=1, d4=3
             let mut domains = Vec::new();
             let mk = |name: &str, rank: Option<i64>| {
@@ -9589,7 +8925,6 @@ mod cli_integration_harness_tests {
             domains.push(mk("d2", None));
             domains.push(mk("d3", Some(1)));
             domains.push(mk("d4", Some(3)));
-
             let desc = matches!(
                 q.params.sorting.order,
                 Some(iroha::data_model::query::parameters::SortOrder::Desc)
@@ -9631,7 +8966,6 @@ mod cli_integration_harness_tests {
                 next,
             ))
         }
-
         fn continue_query(
             cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -9666,21 +9000,18 @@ mod cli_integration_harness_tests {
             }
         }
     }
-
     static PSD_DESC_STARTS: AtomicUsize = AtomicUsize::new(0);
     static PSD_DESC_CONTS: AtomicUsize = AtomicUsize::new(0);
     struct PagedSortedDomainsExecDesc;
     impl QueryExecutor for PagedSortedDomainsExecDesc {
         type Cursor = PSDCursor;
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -9688,7 +9019,6 @@ mod cli_integration_harness_tests {
         {
             PSD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::domain::DomainId;
-
             let mut domains = Vec::new();
             let mk = |name: &str, rank: Option<i64>| {
                 let did = DomainId::try_new(name, "universal").unwrap();
@@ -9705,7 +9035,6 @@ mod cli_integration_harness_tests {
             domains.push(mk("d2", None));
             domains.push(mk("d3", Some(1)));
             domains.push(mk("d4", Some(3)));
-
             if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
                 let desc = matches!(
                     q.params.sorting.order,
@@ -9723,7 +9052,6 @@ mod cli_integration_harness_tests {
                     }
                 });
             }
-
             let fetch: usize = q
                 .params
                 .fetch_size
@@ -9755,7 +9083,6 @@ mod cli_integration_harness_tests {
                 next,
             ))
         }
-
         fn continue_query(
             cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -9820,7 +9147,6 @@ mod cli_integration_harness_tests {
         assert_eq!(PSD_ASC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSD_ASC_CONTS.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn pagination_sorting_domains_desc() {
         PSD_DESC_STARTS.store(0, Ordering::SeqCst);
@@ -9851,12 +9177,10 @@ mod cli_integration_harness_tests {
         assert_eq!(PSD_DESC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSD_DESC_CONTS.load(Ordering::SeqCst), 1);
     }
-
     // Sorting + pagination + batching for Accounts
     static PSA_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
     static PSA_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
     struct PagedSortedAccountsExecAsc;
-
     enum PSACursor {
         Accounts {
             items: Vec<iroha::data_model::account::Account>,
@@ -9865,18 +9189,15 @@ mod cli_integration_harness_tests {
             fetch: usize,
         },
     }
-
     impl QueryExecutor for PagedSortedAccountsExecAsc {
         type Cursor = PSACursor;
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -9885,7 +9206,6 @@ mod cli_integration_harness_tests {
             PSA_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::Account;
             use iroha::data_model::domain::DomainId;
-
             let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             // Build accounts a0..a4 with ranks: a0=2, a1=4, a2=None, a3=1, a4=3
             let mut accounts: Vec<Account> = (0..5)
@@ -9909,7 +9229,6 @@ mod cli_integration_harness_tests {
             accounts[4]
                 .metadata
                 .insert(key, Json::from(norito::json!(3)));
-
             let desc = matches!(
                 q.params.sorting.order,
                 Some(iroha::data_model::query::parameters::SortOrder::Desc)
@@ -9951,7 +9270,6 @@ mod cli_integration_harness_tests {
                 next,
             ))
         }
-
         fn continue_query(
             cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -9986,21 +9304,18 @@ mod cli_integration_harness_tests {
             }
         }
     }
-
     static PSA_DESC_STARTS: AtomicUsize = AtomicUsize::new(0);
     static PSA_DESC_CONTS: AtomicUsize = AtomicUsize::new(0);
     struct PagedSortedAccountsExecDesc;
     impl QueryExecutor for PagedSortedAccountsExecDesc {
         type Cursor = PSACursor;
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -10009,7 +9324,6 @@ mod cli_integration_harness_tests {
             PSA_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::Account;
             use iroha::data_model::domain::DomainId;
-
             let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let mut accounts: Vec<Account> = (0..5)
                 .map(|index| {
@@ -10030,7 +9344,6 @@ mod cli_integration_harness_tests {
             accounts[4]
                 .metadata
                 .insert(key, Json::from(norito::json!(3)));
-
             if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
                 let desc = matches!(
                     q.params.sorting.order,
@@ -10048,7 +9361,6 @@ mod cli_integration_harness_tests {
                     }
                 });
             }
-
             let fetch: usize = q
                 .params
                 .fetch_size
@@ -10080,7 +9392,6 @@ mod cli_integration_harness_tests {
                 next,
             ))
         }
-
         fn continue_query(
             cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -10150,7 +9461,6 @@ mod cli_integration_harness_tests {
         assert_eq!(PSA_ASC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSA_ASC_CONTS.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn pagination_sorting_accounts_desc() {
         use iroha::data_model::prelude::FindAccounts;
@@ -10186,12 +9496,10 @@ mod cli_integration_harness_tests {
         assert_eq!(PSA_DESC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSA_DESC_CONTS.load(Ordering::SeqCst), 1);
     }
-
     // Sorting + pagination + batching for AssetDefinitions
     static PSAD_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
     static PSAD_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
     struct PagedSortedAssetDefsExecAsc;
-
     enum PSADCursor {
         Ads {
             items: Vec<iroha::data_model::asset::definition::AssetDefinition>,
@@ -10200,18 +9508,15 @@ mod cli_integration_harness_tests {
             fetch: usize,
         },
     }
-
     impl QueryExecutor for PagedSortedAssetDefsExecAsc {
         type Cursor = PSADCursor;
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -10221,10 +9526,8 @@ mod cli_integration_harness_tests {
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
-
             let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let owner = sample_account_id("land", 0x60);
-
             // Build asset defs ad0..ad4 with ranks: ad0=2, ad1=4, ad2=None, ad3=1, ad4=3
             let ids: Vec<AssetDefinitionId> = (0..5)
                 .map(|i| {
@@ -10261,7 +9564,6 @@ mod cli_integration_harness_tests {
             defs[4]
                 .metadata_mut()
                 .insert(key, Json::from(norito::json!(3)));
-
             let desc = matches!(
                 q.params.sorting.order,
                 Some(iroha::data_model::query::parameters::SortOrder::Desc)
@@ -10303,7 +9605,6 @@ mod cli_integration_harness_tests {
                 next,
             ))
         }
-
         fn continue_query(
             cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -10340,7 +9641,6 @@ mod cli_integration_harness_tests {
             }
         }
     }
-
     #[test]
     fn pagination_sorting_asset_defs_asc() {
         use iroha::data_model::prelude::FindAssetsDefinitions;
@@ -10377,7 +9677,6 @@ mod cli_integration_harness_tests {
         assert_eq!(PSAD_ASC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSAD_ASC_CONTS.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn pagination_sorting_asset_defs_desc() {
         use iroha::data_model::prelude::FindAssetsDefinitions;
@@ -10388,14 +9687,12 @@ mod cli_integration_harness_tests {
         impl QueryExecutor for PagedSortedAssetDefsExecDesc {
             type Cursor = PSADCursor;
             type Error = eyre::Report;
-
             fn execute_singular_query(
                 &self,
                 _query: iroha::data_model::query::SingularQueryBox,
             ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
                 unreachable!("not used in this test")
             }
-
             fn start_query(
                 &self,
                 q: QueryWithParams,
@@ -10405,7 +9702,6 @@ mod cli_integration_harness_tests {
                 use iroha::data_model::asset::definition::AssetDefinition;
                 use iroha::data_model::asset::id::AssetDefinitionId;
                 use iroha::data_model::domain::DomainId;
-
                 let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
                 let owner = sample_account_id("land", 0x61);
                 let ids: Vec<AssetDefinitionId> = (0..5)
@@ -10442,7 +9738,6 @@ mod cli_integration_harness_tests {
                 defs[4]
                     .metadata_mut()
                     .insert(key, Json::from(norito::json!(3)));
-
                 if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
                     let desc = matches!(
                         q.params.sorting.order,
@@ -10460,7 +9755,6 @@ mod cli_integration_harness_tests {
                         }
                     });
                 }
-
                 let fetch: usize = q
                     .params
                     .fetch_size
@@ -10495,7 +9789,6 @@ mod cli_integration_harness_tests {
                     next,
                 ))
             }
-
             fn continue_query(
                 cursor: Self::Cursor,
             ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -10532,7 +9825,6 @@ mod cli_integration_harness_tests {
                 }
             }
         }
-
         PSAD_DESC_STARTS.store(0, Ordering::SeqCst);
         PSAD_DESC_CONTS.store(0, Ordering::SeqCst);
         let exec = PagedSortedAssetDefsExecDesc;
@@ -10565,21 +9857,17 @@ mod cli_integration_harness_tests {
         assert_eq!(PSAD_DESC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSAD_DESC_CONTS.load(Ordering::SeqCst), 1);
     }
-
     // NFT sorting by content metadata
     struct SortNftsExec;
-
     impl QueryExecutor for SortNftsExec {
         type Cursor = ();
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -10587,22 +9875,18 @@ mod cli_integration_harness_tests {
         {
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
-
             let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
             let owner = sample_account_id("art", 0x70);
             let id1: NftId = "n1$art".parse().unwrap();
             let id2: NftId = "n2$art".parse().unwrap();
             let id3: NftId = "n3$art".parse().unwrap();
-
             let mut n1 = Nft::new(id1, Default::default()).build(owner.account());
             let mut n2 = Nft::new(id2, Default::default()).build(owner.account());
             let n3 = Nft::new(id3, Default::default()).build(owner.account());
-
             n1.content
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
             n2.content
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-
             let mut v = vec![n1, n2, n3];
             let desc = matches!(
                 q.params.sorting.order,
@@ -10624,14 +9908,12 @@ mod cli_integration_harness_tests {
                     }
                 });
             }
-
             Ok((
                 QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Nft(v)),
                 Some(0),
                 None,
             ))
         }
-
         fn continue_query(
             _cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -10639,12 +9921,10 @@ mod cli_integration_harness_tests {
             unreachable!("single batch only")
         }
     }
-
     #[test]
     fn metadata_sorting_nfts_end_to_end() {
         use iroha::data_model::nft::Nft;
         use iroha::data_model::prelude::FindNfts;
-
         let exec = SortNftsExec;
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
@@ -10662,12 +9942,10 @@ mod cli_integration_harness_tests {
         assert_eq!(out[1].id().name().as_ref(), "n1");
         assert_eq!(out[2].id().name().as_ref(), "n3");
     }
-
     #[test]
     fn metadata_sorting_nfts_desc_end_to_end() {
         use iroha::data_model::nft::Nft;
         use iroha::data_model::prelude::FindNfts;
-
         let exec = SortNftsExec;
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
@@ -10685,12 +9963,10 @@ mod cli_integration_harness_tests {
         assert_eq!(out[1].id().name().as_ref(), "n2");
         assert_eq!(out[2].id().name().as_ref(), "n3");
     }
-
     // Sorting + pagination + batching for NFTs
     static PSN_ASC_STARTS: AtomicUsize = AtomicUsize::new(0);
     static PSN_ASC_CONTS: AtomicUsize = AtomicUsize::new(0);
     struct PagedSortedNftsExecAsc;
-
     enum PSNCursor {
         Nfts {
             items: Vec<iroha::data_model::nft::Nft>,
@@ -10699,18 +9975,15 @@ mod cli_integration_harness_tests {
             fetch: usize,
         },
     }
-
     impl QueryExecutor for PagedSortedNftsExecAsc {
         type Cursor = PSNCursor;
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -10719,10 +9992,8 @@ mod cli_integration_harness_tests {
             PSN_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
-
             let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
             let owner = sample_account_id("art", 0x71);
-
             // Build NFTs n0..n4 with ranks: n0=2, n1=4, n2=None, n3=1, n4=3
             let ids: Vec<NftId> = (0..5)
                 .map(|i| format!("n{i}$art").parse().unwrap())
@@ -10743,7 +10014,6 @@ mod cli_integration_harness_tests {
                 .content
                 .insert(key.clone(), Json::from(norito::json!(1)));
             nfts[4].content.insert(key, Json::from(norito::json!(3)));
-
             if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
                 let desc = matches!(
                     q.params.sorting.order,
@@ -10761,7 +10031,6 @@ mod cli_integration_harness_tests {
                     }
                 });
             }
-
             let fetch: usize = q
                 .params
                 .fetch_size
@@ -10795,7 +10064,6 @@ mod cli_integration_harness_tests {
                 next,
             ))
         }
-
         fn continue_query(
             cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -10830,7 +10098,6 @@ mod cli_integration_harness_tests {
             }
         }
     }
-
     #[test]
     fn pagination_sorting_nfts_asc() {
         use iroha::data_model::prelude::FindNfts;
@@ -10859,7 +10126,6 @@ mod cli_integration_harness_tests {
         assert_eq!(PSN_ASC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSN_ASC_CONTS.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn pagination_sorting_nfts_desc() {
         use iroha::data_model::prelude::FindNfts;
@@ -10870,14 +10136,12 @@ mod cli_integration_harness_tests {
         impl QueryExecutor for PagedSortedNftsExecDesc {
             type Cursor = PSNCursor;
             type Error = eyre::Report;
-
             fn execute_singular_query(
                 &self,
                 _query: iroha::data_model::query::SingularQueryBox,
             ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
                 unreachable!("not used in this test")
             }
-
             fn start_query(
                 &self,
                 q: QueryWithParams,
@@ -10886,10 +10150,8 @@ mod cli_integration_harness_tests {
                 PSN_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
                 use iroha::data_model::domain::DomainId;
                 use iroha::data_model::nft::{Nft, NftId};
-
                 let _domain: DomainId = DomainId::try_new("art", "universal").unwrap();
                 let owner = sample_account_id("art", 0x72);
-
                 let ids: Vec<NftId> = (0..5)
                     .map(|i| format!("n{i}$art").parse().unwrap())
                     .collect();
@@ -10909,7 +10171,6 @@ mod cli_integration_harness_tests {
                     .content
                     .insert(key.clone(), Json::from(norito::json!(1)));
                 nfts[4].content.insert(key, Json::from(norito::json!(3)));
-
                 if let Some(key) = q.params.sorting.sort_by_metadata_key.clone() {
                     let desc = matches!(
                         q.params.sorting.order,
@@ -10927,7 +10188,6 @@ mod cli_integration_harness_tests {
                         }
                     });
                 }
-
                 let fetch: usize = q
                     .params
                     .fetch_size
@@ -10960,7 +10220,6 @@ mod cli_integration_harness_tests {
                     next,
                 ))
             }
-
             fn continue_query(
                 cursor: Self::Cursor,
             ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -10995,7 +10254,6 @@ mod cli_integration_harness_tests {
                 }
             }
         }
-
         PSN_DESC_STARTS.store(0, Ordering::SeqCst);
         PSN_DESC_CONTS.store(0, Ordering::SeqCst);
         let exec = PagedSortedNftsExecDesc;
@@ -11020,13 +10278,10 @@ mod cli_integration_harness_tests {
         assert_eq!(PSN_DESC_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PSN_DESC_CONTS.load(Ordering::SeqCst), 1);
     }
-
     // Pagination for Accounts and Asset Definitions
     static PAGED_ACCOUNTS_STARTS: AtomicUsize = AtomicUsize::new(0);
     static PAGED_ACCOUNTS_CONTS: AtomicUsize = AtomicUsize::new(0);
-
     struct PaginatedAccountsExec;
-
     enum AccCursor {
         Accounts {
             items: Vec<iroha::data_model::account::Account>,
@@ -11035,18 +10290,15 @@ mod cli_integration_harness_tests {
             fetch: usize,
         },
     }
-
     impl QueryExecutor for PaginatedAccountsExec {
         type Cursor = AccCursor;
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -11055,7 +10307,6 @@ mod cli_integration_harness_tests {
             PAGED_ACCOUNTS_STARTS.fetch_add(1, Ordering::SeqCst);
             use iroha::data_model::account::Account;
             use iroha::data_model::domain::DomainId;
-
             // Build 5 accounts a0..a4 in the same domain, annotate metadata pos = index
             let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let mut accounts = Vec::new();
@@ -11067,7 +10318,6 @@ mod cli_integration_harness_tests {
                     .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
                 accounts.push(a);
             }
-
             let fetch: usize = q
                 .params
                 .fetch_size
@@ -11101,7 +10351,6 @@ mod cli_integration_harness_tests {
                 next,
             ))
         }
-
         fn continue_query(
             cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -11133,13 +10382,11 @@ mod cli_integration_harness_tests {
             ))
         }
     }
-
     #[test]
     fn pagination_and_fetch_size_accounts() {
         use iroha::data_model::account::Account;
         use iroha::data_model::prelude::FindAccounts;
         use iroha::data_model::query::parameters::{FetchSize, Pagination};
-
         let exec = PaginatedAccountsExec;
         PAGED_ACCOUNTS_STARTS.store(0, Ordering::SeqCst);
         PAGED_ACCOUNTS_CONTS.store(0, Ordering::SeqCst);
@@ -11166,12 +10413,9 @@ mod cli_integration_harness_tests {
         assert_eq!(PAGED_ACCOUNTS_STARTS.load(Ordering::SeqCst), 1);
         assert_eq!(PAGED_ACCOUNTS_CONTS.load(Ordering::SeqCst), 1);
     }
-
     static PAGED_ADS_STARTS: AtomicUsize = AtomicUsize::new(0);
     static PAGED_ADS_CONTS: AtomicUsize = AtomicUsize::new(0);
-
     struct PaginatedAssetDefsExec;
-
     enum AdCursor {
         Ads {
             items: Vec<iroha::data_model::asset::definition::AssetDefinition>,
@@ -11180,18 +10424,15 @@ mod cli_integration_harness_tests {
             fetch: usize,
         },
     }
-
     impl QueryExecutor for PaginatedAssetDefsExec {
         type Cursor = AdCursor;
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             _query: iroha::data_model::query::SingularQueryBox,
         ) -> Result<iroha::data_model::query::SingularQueryOutputBox, Self::Error> {
             unreachable!("not used in this test")
         }
-
         fn start_query(
             &self,
             q: QueryWithParams,
@@ -11201,10 +10442,8 @@ mod cli_integration_harness_tests {
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
-
             let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let owner = sample_account_id("land", 0x90);
-
             // Build 5 defs ad0..ad4 and tag pos metadata
             let mut defs = Vec::new();
             for i in 0..5 {
@@ -11223,7 +10462,6 @@ mod cli_integration_harness_tests {
                     .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
                 defs.push(ad);
             }
-
             let fetch: usize = q
                 .params
                 .fetch_size
@@ -11257,7 +10495,6 @@ mod cli_integration_harness_tests {
                 next,
             ))
         }
-
         fn continue_query(
             cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -11294,13 +10531,11 @@ mod cli_integration_harness_tests {
             }
         }
     }
-
     #[test]
     fn pagination_and_fetch_size_asset_defs() {
         use iroha::data_model::asset::definition::AssetDefinition;
         use iroha::data_model::prelude::FindAssetsDefinitions;
         use iroha::data_model::query::parameters::{FetchSize, Pagination};
-
         let exec = PaginatedAssetDefsExec;
         PAGED_ADS_STARTS.store(0, Ordering::SeqCst);
         PAGED_ADS_CONTS.store(0, Ordering::SeqCst);
@@ -11328,7 +10563,6 @@ mod cli_integration_harness_tests {
         assert_eq!(PAGED_ADS_CONTS.load(Ordering::SeqCst), 1);
     }
 }
-
 // Experimental: feature-gated integration harness for CLI queries.
 //
 // This module sketches how to exercise CLI query flows against a mock server or
@@ -11339,7 +10573,6 @@ mod cli_integration_harness_tests {
 mod cli_integration_harness {
     use super::*;
     use std::collections::BTreeMap;
-
     use eyre::eyre;
     use iroha::crypto::KeyPair;
     #[cfg(feature = "ids_projection")]
@@ -11361,12 +10594,10 @@ mod cli_integration_harness {
     use iroha_crypto::{Algorithm, Hash};
     #[cfg(feature = "ids_projection")]
     use norito::codec::Decode;
-
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
-
     /// Minimal mock server for iterable queries; returns static payloads by type.
     pub struct MockQueryServer {
         pub domains: Vec<iroha::data_model::domain::Domain>,
@@ -11380,7 +10611,6 @@ mod cli_integration_harness {
         pub abi_version: Option<AbiVersion>,
         pub assets: BTreeMap<AssetId, Asset>,
     }
-
     impl Default for MockQueryServer {
         fn default() -> Self {
             Self {
@@ -11397,12 +10627,10 @@ mod cli_integration_harness {
             }
         }
     }
-
     fn sample_account_id(_domain: &str, seed: u8) -> AccountId {
         let key_pair = fixture_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
@@ -11411,7 +10639,6 @@ mod cli_integration_harness {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[cfg(feature = "ids_projection")]
     fn build_query_with_params<T, Q, F>(
         predicate: iroha::data_model::query::dsl::CompoundPredicate<T>,
@@ -11442,7 +10669,6 @@ mod cli_integration_harness {
             params,
         }
     }
-
     #[cfg(feature = "ids_projection")]
     fn query_projects_domain_ids(query: &QueryWithParams) -> bool {
         let (item_kind, _, selector_bytes, _) = query.parts();
@@ -11458,7 +10684,6 @@ mod cli_integration_harness {
         };
         selector.is_ids_only()
     }
-
     #[cfg(feature = "ids_projection")]
     fn query_projects_account_ids(query: &QueryWithParams) -> bool {
         let (item_kind, _, selector_bytes, _) = query.parts();
@@ -11474,7 +10699,6 @@ mod cli_integration_harness {
         };
         selector.is_ids_only()
     }
-
     #[cfg(feature = "ids_projection")]
     fn query_projects_asset_definition_ids(query: &QueryWithParams) -> bool {
         let (item_kind, _, selector_bytes, _) = query.parts();
@@ -11490,7 +10714,6 @@ mod cli_integration_harness {
         };
         selector.is_ids_only()
     }
-
     // Cursor that carries the remaining items and fetch size
     pub enum MockCursor {
         Domains {
@@ -11527,11 +10750,9 @@ mod cli_integration_harness {
             fetch: usize,
         },
     }
-
     impl QueryExecutor for MockQueryServer {
         type Cursor = MockCursor;
         type Error = eyre::Report;
-
         fn execute_singular_query(
             &self,
             query: SingularQueryBox,
@@ -11589,7 +10810,6 @@ mod cli_integration_harness {
                 ))),
             }
         }
-
         fn start_query(
             &self,
             query: QueryWithParams,
@@ -11615,7 +10835,6 @@ mod cli_integration_harness {
                 .pagination
                 .limit_value()
                 .map(|n| n.get() as usize);
-
             if !self.domains.is_empty() {
                 let mut v = self.domains.clone();
                 if let Some(key) = sort_by {
@@ -11802,7 +11021,6 @@ mod cli_integration_harness {
                 None,
             ))
         }
-
         fn continue_query(
             cursor: Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -11932,13 +11150,11 @@ mod cli_integration_harness {
             }
         }
     }
-
     #[test]
     fn mock_query_domains_roundtrip() {
         use iroha::data_model::domain::Domain;
         use iroha::data_model::prelude::FindDomains;
         use iroha::data_model::query::builder::QueryBuilder;
-
         // Prepare a mock server with two domains
         let owner_w1 = sample_account_id("w1", 9);
         let owner_w2 = sample_account_id("w2", 10);
@@ -11947,13 +11163,11 @@ mod cli_integration_harness {
             Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account()),
             Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account()),
         ];
-
         // Build and execute the query via QueryBuilder against the mock server
         let builder = QueryBuilder::new(&server, FindDomains);
         let out: Vec<Domain> = builder.execute_all().expect("exec ok");
         assert_eq!(out.len(), 2);
     }
-
     #[test]
     fn mock_query_domains_sorting_desc() {
         use iroha::data_model::domain::Domain;
@@ -11961,7 +11175,6 @@ mod cli_integration_harness {
         use iroha::data_model::query::builder::QueryBuilder;
         use iroha::data_model::query::parameters::{SortOrder, Sorting};
         use iroha_primitives::json::Json;
-
         // Mock server with three domains; two have a rank key
         let owner_w1 = sample_account_id("w1", 11);
         let owner_w2 = sample_account_id("w2", 12);
@@ -11978,7 +11191,6 @@ mod cli_integration_harness {
         w2.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
         server.domains = vec![w1.clone(), w2.clone(), w3.clone()];
-
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Desc),
@@ -11990,7 +11202,6 @@ mod cli_integration_harness {
         assert_eq!(out[1].id(), w1.id());
         assert_eq!(out[2].id(), w3.id());
     }
-
     #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_domains_ids_projection() {
@@ -11998,7 +11209,6 @@ mod cli_integration_harness {
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
         use iroha::data_model::query::{self};
-
         let owner_w1 = sample_account_id("w1", 1);
         let owner_w2 = sample_account_id("w2", 2);
         let mut server = MockQueryServer::default();
@@ -12006,14 +11216,12 @@ mod cli_integration_harness {
             Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account()),
             Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account()),
         ];
-
         let qwp = build_query_with_params(
             CompoundPredicate::PASS,
             SelectorTuple::<Domain>::ids_only(),
             QueryParams::default(),
             || query::domain::prelude::FindDomains,
         );
-
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
         let ids = match batch.into_iter().next().expect("slice") {
             query::QueryOutputBatchBox::DomainId(v) => v,
@@ -12023,7 +11231,6 @@ mod cli_integration_harness {
         assert_eq!(ids[0], DomainId::try_new("w1", "universal").unwrap());
         assert_eq!(ids[1], DomainId::try_new("w2", "universal").unwrap());
     }
-
     #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_accounts_ids_projection() {
@@ -12031,7 +11238,6 @@ mod cli_integration_harness {
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
         use iroha::data_model::query::{self};
-
         let alice = sample_account_id("w", 1);
         let bob = sample_account_id("w", 2);
         let mut server = MockQueryServer::default();
@@ -12039,14 +11245,12 @@ mod cli_integration_harness {
             Account::new(alice.clone()).build(&alice),
             Account::new(bob.clone()).build(&bob),
         ];
-
         let qwp = build_query_with_params(
             CompoundPredicate::PASS,
             SelectorTuple::<Account>::ids_only(),
             QueryParams::default(),
             || query::account::prelude::FindAccounts,
         );
-
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
         let ids = match batch.into_iter().next().expect("slice") {
             query::QueryOutputBatchBox::AccountId(v) => v,
@@ -12056,7 +11260,6 @@ mod cli_integration_harness {
         assert!(ids.iter().any(|id| id == &alice));
         assert!(ids.iter().any(|id| id == &bob));
     }
-
     #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_asset_defs_ids_projection() {
@@ -12065,7 +11268,6 @@ mod cli_integration_harness {
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
         use iroha::data_model::query::{self};
-
         let owner_w = sample_account_id("w", 1);
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
@@ -12100,14 +11302,12 @@ mod cli_integration_harness {
             }
             .build(owner_w.account()),
         ];
-
         let qwp = build_query_with_params(
             CompoundPredicate::PASS,
             SelectorTuple::<AssetDefinition>::ids_only(),
             QueryParams::default(),
             || query::asset::prelude::FindAssetsDefinitions,
         );
-
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
         let ids = match batch.into_iter().next().expect("slice") {
             query::QueryOutputBatchBox::AssetDefinitionId(v) => v,
@@ -12125,7 +11325,6 @@ mod cli_integration_harness {
                 "tulip".parse().unwrap()
             )));
     }
-
     #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_asset_defs_ids_projection_batched() {
@@ -12135,7 +11334,6 @@ mod cli_integration_harness {
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
         use iroha::data_model::query::{self};
         use std::num::NonZeroU64;
-
         let owner_w = sample_account_id("w", 2);
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
@@ -12185,7 +11383,6 @@ mod cli_integration_harness {
             }
             .build(owner_w.account()),
         ];
-
         let mut params = QueryParams::default();
         params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
         let qwp = build_query_with_params(
@@ -12194,7 +11391,6 @@ mod cli_integration_harness {
             params,
             || query::asset::prelude::FindAssetsDefinitions,
         );
-
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
         let ids1 = match batch1.into_iter().next().expect("slice") {
             query::QueryOutputBatchBox::AssetDefinitionId(v) => v,
@@ -12211,7 +11407,6 @@ mod cli_integration_harness {
         )));
         assert_eq!(rem, Some(1));
         let cur = cur.expect("should continue");
-
         let (batch2, rem2, cur2) =
             <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
                 .expect("cont ok");
@@ -12227,7 +11422,6 @@ mod cli_integration_harness {
         assert_eq!(rem2, Some(0));
         assert!(cur2.is_none());
     }
-
     #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_accounts_ids_projection_batched() {
@@ -12236,7 +11430,6 @@ mod cli_integration_harness {
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
         use iroha::data_model::query::{self};
         use std::num::NonZeroU64;
-
         let alice = sample_account_id("w", 3);
         let bob = sample_account_id("w", 4);
         let carol = sample_account_id("w", 5);
@@ -12246,7 +11439,6 @@ mod cli_integration_harness {
             Account::new(bob.clone()).build(&bob),
             Account::new(carol.clone()).build(&carol),
         ];
-
         let mut params = QueryParams::default();
         params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
         let qwp = build_query_with_params(
@@ -12255,7 +11447,6 @@ mod cli_integration_harness {
             params,
             || query::account::prelude::FindAccounts,
         );
-
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
         let ids1 = match batch1.into_iter().next().expect("slice") {
             query::QueryOutputBatchBox::AccountId(v) => v,
@@ -12266,7 +11457,6 @@ mod cli_integration_harness {
         assert!(ids1.contains(&bob));
         assert_eq!(rem, Some(1));
         let cur = cur.expect("should continue");
-
         let (batch2, rem2, cur2) =
             <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
                 .expect("cont ok");
@@ -12279,7 +11469,6 @@ mod cli_integration_harness {
         assert_eq!(rem2, Some(0));
         assert!(cur2.is_none());
     }
-
     #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_domains_ids_projection_batched() {
@@ -12288,7 +11477,6 @@ mod cli_integration_harness {
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
         use iroha::data_model::query::{self};
         use std::num::NonZeroU64;
-
         let owner_d1 = sample_account_id("d1", 1);
         let owner_d2 = sample_account_id("d2", 2);
         let owner_d3 = sample_account_id("d3", 3);
@@ -12298,7 +11486,6 @@ mod cli_integration_harness {
             Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(owner_d2.account()),
             Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(owner_d3.account()),
         ];
-
         let mut params = QueryParams::default();
         params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
         let qwp = build_query_with_params(
@@ -12307,7 +11494,6 @@ mod cli_integration_harness {
             params,
             || query::domain::prelude::FindDomains,
         );
-
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
         let ids1 = match batch1.into_iter().next().expect("slice") {
             query::QueryOutputBatchBox::DomainId(v) => v,
@@ -12318,7 +11504,6 @@ mod cli_integration_harness {
         assert!(ids1.contains(&DomainId::try_new("d2", "universal").unwrap()));
         assert_eq!(rem, Some(1));
         let cur = cur.expect("should continue");
-
         let (batch2, rem2, cur2) =
             <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
                 .expect("cont ok");
@@ -12331,7 +11516,6 @@ mod cli_integration_harness {
         assert_eq!(rem2, Some(0));
         assert!(cur2.is_none());
     }
-
     #[test]
     fn mock_query_domains_sorting_desc_batched() {
         use iroha::data_model::domain::Domain;
@@ -12340,7 +11524,6 @@ mod cli_integration_harness {
         use iroha::data_model::query::parameters::{FetchSize, SortOrder, Sorting};
         use iroha_primitives::json::Json;
         use std::num::NonZeroU64;
-
         let mut server = MockQueryServer::default();
         let owner_w1 = sample_account_id("w1", 6);
         let owner_w2 = sample_account_id("w2", 7);
@@ -12358,7 +11541,6 @@ mod cli_integration_harness {
         w3.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(0)));
         server.domains = vec![w1.clone(), w2.clone(), w3.clone()];
-
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Desc),
@@ -12377,14 +11559,12 @@ mod cli_integration_harness {
         assert_eq!(third.id(), w3.id());
         assert!(iter.next().is_none());
     }
-
     #[test]
     fn harness_singular_asset_roundtrip() {
         use iroha::data_model::{
             asset::{Asset, AssetId, id::AssetDefinitionId},
             query::asset::prelude::FindAssetById,
         };
-
         let mut server = MockQueryServer::default();
         let asset_def_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -12394,7 +11574,6 @@ mod cli_integration_harness {
         let asset_id = AssetId::new(asset_def_id, account_id.account().clone());
         let asset = Asset::new(asset_id.clone(), 77_u32);
         server.assets.insert(asset_id.clone(), asset.clone());
-
         let out = server
             .execute_singular_query(SingularQueryBox::FindAssetById(FindAssetById::new(
                 asset_id.clone(),
@@ -12408,17 +11587,13 @@ mod cli_integration_harness {
             other => panic!("unexpected output variant: {other:?}"),
         }
     }
-
     #[test]
     fn harness_singular_account_roundtrip() {
         use iroha::data_model::{account::Account, query::account::prelude::FindAccountById};
-
         let account_id = sample_account_id("wonderland", 15);
         let account = Account::new(account_id.clone()).build(&account_id);
-
         let mut server = MockQueryServer::default();
         server.accounts = vec![account.clone()];
-
         let out = server
             .execute_singular_query(SingularQueryBox::FindAccountById(FindAccountById::new(
                 account_id.account().clone(),
@@ -12429,7 +11604,6 @@ mod cli_integration_harness {
             other => panic!("unexpected output variant: {other:?}"),
         }
     }
-
     #[test]
     fn harness_singular_trigger_roundtrip() {
         use iroha::data_model::{
@@ -12441,7 +11615,6 @@ mod cli_integration_harness {
                 action::{Action, Repeats},
             },
         };
-
         let authority = sample_account_id("wonderland", 16);
         let trigger_id: TriggerId = "demo_trigger".parse().expect("trigger id");
         let action = Action::new(
@@ -12452,10 +11625,8 @@ mod cli_integration_harness {
         )
         .expect("trigger action fixture satisfies validation invariants");
         let trigger = Trigger::new(trigger_id.clone(), action);
-
         let mut server = MockQueryServer::default();
         server.triggers = vec![trigger.clone()];
-
         let out = server
             .execute_singular_query(SingularQueryBox::FindTriggerById(FindTriggerById::new(
                 trigger_id.clone(),
@@ -12466,11 +11637,9 @@ mod cli_integration_harness {
             other => panic!("unexpected output variant: {other:?}"),
         }
     }
-
     #[test]
     fn harness_singular_contract_manifest() {
         use iroha::data_model::query::smart_contract::prelude::FindContractManifestByCodeHash;
-
         let mut server = MockQueryServer::default();
         let code_hash = Hash::new(b"manifest-demo");
         let manifest = ContractManifest {
@@ -12487,7 +11656,6 @@ mod cli_integration_harness {
             provenance: None,
         };
         server.manifests.insert(code_hash.clone(), manifest.clone());
-
         let out = server
             .execute_singular_query(SingularQueryBox::FindContractManifestByCodeHash(
                 FindContractManifestByCodeHash { code_hash },
@@ -12498,14 +11666,12 @@ mod cli_integration_harness {
             other => panic!("unexpected output variant: {other:?}"),
         }
     }
-
     #[test]
     fn harness_singular_proof_record() {
         use iroha::data_model::{
             proof::{ProofId, ProofRecord, ProofStatus, VerifyingKeyId},
             query::proof::prelude::FindProofRecordById,
         };
-
         let mut server = MockQueryServer::default();
         let proof_id = ProofId {
             backend: "halo2/ipa".into(),
@@ -12522,7 +11688,6 @@ mod cli_integration_harness {
         server
             .proof_records
             .insert(proof_id.clone(), record.clone());
-
         let out = server
             .execute_singular_query(SingularQueryBox::FindProofRecordById(FindProofRecordById {
                 id: proof_id,
@@ -12533,7 +11698,6 @@ mod cli_integration_harness {
             other => panic!("unexpected output variant: {other:?}"),
         }
     }
-
     #[test]
     fn harness_singular_executor_and_parameters() {
         use iroha::data_model::{
@@ -12545,7 +11709,6 @@ mod cli_integration_harness {
             },
         };
         use std::collections::BTreeSet;
-
         let mut server = MockQueryServer::default();
         let executor_model = ExecutorDataModel {
             parameters: Default::default(),
@@ -12556,7 +11719,6 @@ mod cli_integration_harness {
         server.executor_data_model = Some(executor_model.clone());
         server.parameters = Some(Parameters::default());
         server.abi_version = Some(AbiVersion { abi_version: 1 });
-
         let exec_out = server
             .execute_singular_query(SingularQueryBox::FindExecutorDataModel(
                 FindExecutorDataModel,
@@ -12566,7 +11728,6 @@ mod cli_integration_harness {
             SingularQueryOutputBox::ExecutorDataModel(model) => assert_eq!(model, executor_model),
             other => panic!("unexpected output variant: {other:?}"),
         }
-
         let params_out = server
             .execute_singular_query(SingularQueryBox::FindParameters(FindParameters))
             .expect("parameters present");
@@ -12574,7 +11735,6 @@ mod cli_integration_harness {
             SingularQueryOutputBox::Parameters(params) => assert_eq!(params, Parameters::default()),
             other => panic!("unexpected output variant: {other:?}"),
         }
-
         let abi_out = server
             .execute_singular_query(SingularQueryBox::FindAbiVersion(FindAbiVersion))
             .expect("ABI version present");

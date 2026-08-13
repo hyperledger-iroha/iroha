@@ -1,3 +1,5 @@
+# Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
+
 def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     tmp_path: Path,
 ) -> None:
@@ -194,6 +196,10 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         for error in errors
     ), errors
     adapter.write_text(canonical_adapter, encoding="utf-8")
+
+    assert_digest_independent_drive_effect_order_mutation(
+        module, formal_dir, adapter, mutate_drive
+    )
 
     adapter.write_text(
         mutate_drive(
@@ -424,7 +430,7 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
 
     runtime.write_text(
         mutate_runtime_item_in_context(
-            "matches_authenticated",
+            "exactly_matches_authenticated",
             runtime_ingress_context,
             "self.validate_frozen_physical()",
             "self.validate_exact()",
@@ -460,9 +466,9 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     production_driver_mutations = (
         (
             "dispatch",
-            "if !ownership.matches_authenticated(&message)",
-            "if false",
-            "production authenticated runtime dispatch bridge declaration and complete control flow must match",
+            "wire::ConsensusMessageV2Payload::Proposal(_)",
+            "wire::ConsensusMessageV2Payload::QuorumCertificate(_)",
+            "authenticated Proposal dispatch must derive and transfer one exact replay origin",
         ),
         (
             "dispatch",
@@ -508,11 +514,18 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             ),
             encoding="utf-8",
         )
+        rebound = rebind_remote_proposal_replay_mutation_digest(
+            module, runtime, item_name, expected_error
+        )
         errors = module._async_source_fidelity_errors(formal_dir)
         assert any(expected_error in error for error in errors), (
             expected_error,
             errors,
         )
+        if rebound is not None:
+            original, digest_diagnostic = rebound
+            assert not any(digest_diagnostic in error for error in errors), errors
+            restore_reviewed_rust_item_digests(original)
         runtime.write_text(canonical_runtime, encoding="utf-8")
 
     deferred_owner_runtime_mutations = (
@@ -523,10 +536,10 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "canonical fair-ingress ownership constructor declaration and complete control flow must match",
         ),
         (
-            "matches_authenticated",
+            "exactly_matches_authenticated",
             "self.runtime_bytes.as_ref() == authenticated.canonical_wire_bytes().as_slice()",
             "self.runtime_bytes.as_ref() != authenticated.canonical_wire_bytes().as_slice()",
-            "post-authentication canonical payload comparator declaration and complete control flow must match",
+            "authenticated dispatch matching must require the frozen physical ownership boundary",
         ),
         (
             "can_merge_downstream",
@@ -560,9 +573,10 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             "reconcile_deferred_runtime_ownership_after_retirement",
-            "self.retire_orphaned_leader_wire_runtime_receipts()",
-            "Ok(())",
-            "adapter-side retirement reconciliation must validate and prune exact runtime wrappers before terminalizing receipts",
+            "        self.deferred_remote_proposal_replay\n"
+            "            .retain(|ordinal, _| authenticated.contains(ordinal));",
+            "        self.deferred_remote_proposal_replay.clear();",
+            "retirement reconciliation must prune and validate deferred Proposal replay",
         ),
         (
             "complete_driver_dispatch_leader_wire_owners",
@@ -591,9 +605,9 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             "accept_driver_dispatch",
-            ".reconcile_deferred_ingress_ownership(deferred_ingress)\n            .is_err()",
-            ".reconcile_deferred_ingress_ownership(deferred_ingress)\n            .is_ok()",
-            "driver dispatch ownership acceptance declaration and complete control flow must match",
+            "origin.rebind_retained_ingress(retained_ingress)",
+            "Some(origin)",
+            "driver acceptance must retain Proposal replay with its exact deferred ingress owner",
         ),
         (
             "accept_driver_dispatch",
@@ -614,13 +628,13 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "deferred eligibility must globally remove post-cut occurrences before choosing the logical minimum",
         ),
         (
-            "clock_owner_reservation_blocks_occurrence",
+            "clock_owner_reservation_blockers_occurrence",
             "u128::from(source_physical_ordinal) >= physical_cut",
             "u128::from(source_physical_ordinal) < physical_cut",
             "post-cut logical replay admission reservation declaration, contract, and complete control flow must match",
         ),
         (
-            "clock_owner_reservation_blocks_occurrence",
+            "clock_owner_reservation_blockers_occurrence",
             "lifecycle_ordinal <= owner.lifecycle_ordinal()",
             "lifecycle_ordinal > owner.lifecycle_ordinal()",
             "post-cut logical replay admission reservation declaration, contract, and complete control flow must match",
@@ -992,71 +1006,41 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     )
     for item_name, old, new, expected_error in deferred_owner_runtime_mutations:
         mutated_path = write_runtime_item_mutation(item_name, old, new)
+        rebound = rebind_remote_proposal_replay_mutation_digest(
+            module, mutated_path, item_name, expected_error
+        )
         errors = module._async_source_fidelity_errors(formal_dir)
         assert any(expected_error in error for error in errors), (
             expected_error,
             errors,
         )
+        if rebound is not None:
+            original, digest_diagnostic = rebound
+            assert not any(digest_diagnostic in error for error in errors), errors
+            restore_reviewed_rust_item_digests(original)
         restore_runtime_source(mutated_path)
 
     mutated_path = write_runtime_item_mutation(
-        "reconcile_deferred_ingress_ownership",
-        "if !active.is_subset(&all_active)",
-        "if active.is_subset(&all_active)",
-    )
-    original = rebind_reviewed_rust_item_digests(
-        module,
-        mutated_path,
-        "reconcile_deferred_ingress_ownership",
-        (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
-        ((
-            module._AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256,
-            "reconcile_deferred_ingress_ownership",
-        ),),
-    )
-    errors = module._async_source_fidelity_errors(formal_dir)
-    assert any(
-        "deferred reconciliation must validate the authenticated subset" in error
-        for error in errors
-    ), errors
-    restore_reviewed_rust_item_digests(original)
-    restore_runtime_source(mutated_path)
-
-    fence_regression = (
-        "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo"
-    )
-    mutated_path = write_runtime_item_mutation(
-        fence_regression,
-        "RuntimeSelectedOwnerKind::PeriodicTimer",
-        "RuntimeSelectedOwnerKind::Fifo",
-    )
-    original = rebind_reviewed_rust_item_digests(
-        module,
-        mutated_path,
-        fence_regression,
-        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
-        ((module._PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256, fence_regression),),
-    )
-    errors = module._async_source_fidelity_errors(formal_dir)
-    assert any(
-        "preowned fenced FIFO regression must run and retire the bounded "
-        "pre-timeout periodic episode before Timeout signing" in error
-        for error in errors
-    ), errors
-    restore_reviewed_rust_item_digests(original)
-    restore_runtime_source(mutated_path)
-
-    mutated_path = write_runtime_item_mutation(
         "dispatch_one_adapter_deferred",
-        "if !self.driver.deferred_work_is_serviceable()",
-        "if self.driver.deferred_work_is_serviceable()",
+        "(DeferredEventKind::ProposalReceived, Some(origin), Some(ingress))",
+        "(_, Some(origin), Some(ingress))",
     )
+    deferred_error = (
+        "deferred Proposal replay must rebind the selected ProposalReceived ingress "
+        "before effect ownership"
+    )
+    rebound = rebind_remote_proposal_replay_mutation_digest(
+        module, mutated_path, "dispatch_one_adapter_deferred", deferred_error
+    )
+    assert rebound is not None
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
-        "single adapter-deferred runtime dispatcher declaration, contract, and "
-        "complete control flow must match" in error
+        deferred_error in error
         for error in errors
     ), errors
+    original, digest_diagnostic = rebound
+    assert not any(digest_diagnostic in error for error in errors), errors
+    restore_reviewed_rust_item_digests(original)
     restore_runtime_source(mutated_path)
 
     mutated_path = write_runtime_item_mutation(

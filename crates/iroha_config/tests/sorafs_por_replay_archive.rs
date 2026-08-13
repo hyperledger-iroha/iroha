@@ -1,12 +1,9 @@
 //! Validate the public finalized-PoR replay-archive binding and worker bounds.
-
 use std::path::{Path, PathBuf};
-
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
-
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()
@@ -14,7 +11,6 @@ fn base_reader() -> ConfigReader {
         .read_toml_with_extends(base_path)
         .expect("base config should load")
 }
-
 fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
     let table = source
         .parse()
@@ -26,13 +22,11 @@ fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
         .parse()
         .map_err(|error| format!("{error:?}"))
 }
-
 fn ed25519_public_key_hex(seed: u8) -> String {
     let key_pair =
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test Ed25519 keypair");
     hex::encode(key_pair.public_key().to_bytes().1)
 }
-
 fn absolute_state_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -43,7 +37,6 @@ fn absolute_state_dir() -> PathBuf {
         PathBuf::from("/var/lib/iroha/sorafs/reputation")
     }
 }
-
 fn absolute_trust_policy_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -54,11 +47,9 @@ fn absolute_trust_policy_path() -> PathBuf {
         PathBuf::from("/etc/iroha/reputation-trust-policy.to")
     }
 }
-
 fn toml_path(path: &Path) -> String {
     path.display().to_string().replace('\\', "\\\\")
 }
-
 fn native_signer_bindings() -> String {
     [
         ("proof_outcome", "proof-outcome", 0x84),
@@ -90,7 +81,6 @@ policy_digest_hex = "{policy_digest_hex}"
     .collect::<Vec<_>>()
     .join("")
 }
-
 fn enabled_overlay(
     handle: &str,
     revision: u64,
@@ -146,7 +136,6 @@ max_successor_proof_bytes = 1048576
 "#
     )
 }
-
 #[test]
 fn enabled_archive_projects_one_exact_non_secret_binding() {
     let public_key_hex = ed25519_public_key_hex(0x83);
@@ -165,7 +154,6 @@ fn enabled_archive_projects_one_exact_non_secret_binding() {
         .sorafs_storage
         .por_replay_archive
         .expect("enabled archive");
-
     assert_eq!(
         archive.handle,
         "object-lock://sorafs/por-replay-archive/primary"
@@ -182,7 +170,6 @@ fn enabled_archive_projects_one_exact_non_secret_binding() {
     assert_eq!(archive.max_successor_receipts, 1_024);
     assert_eq!(archive.max_successor_proof_bytes, 1_048_576);
 }
-
 #[test]
 fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() {
     let key = ed25519_public_key_hex(0x83);
@@ -292,7 +279,6 @@ fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() 
             );
         }
     }
-
     for (label, source, expected) in [
         (
             "unbounded successor count",
@@ -343,7 +329,6 @@ fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() 
         );
     }
 }
-
 #[test]
 fn disabled_archive_rejects_dormant_identity_and_worker_claims() {
     for (source, expected) in [
@@ -369,7 +354,6 @@ poll_interval_ms = 900
         );
     }
 }
-
 #[test]
 fn enabled_archive_requires_storage_and_committed_reputation_runtime() {
     let source = format!(
@@ -387,11 +371,9 @@ signing_public_key_hex = "{}"
         ed25519_public_key_hex(0x83)
     );
     let error = parse_overlay(&source).expect_err("missing producer dependencies must fail");
-
     assert!(error.contains("requires sorafs.storage.enabled"));
     assert!(error.contains("requires sorafs.storage.reputation_runtime.enabled"));
 }
-
 #[test]
 fn archive_config_rejects_secret_fields_without_echoing_values() {
     let source = r#"
@@ -399,7 +381,6 @@ fn archive_config_rejects_secret_fields_without_echoing_values() {
 private_key = "do-not-echo-this-runtime-secret"
 "#;
     let error = parse_overlay(source).expect_err("secret-bearing field must be unknown");
-
     assert!(error.contains("private_key"));
     assert!(
         !error.contains("do-not-echo-this-runtime-secret"),

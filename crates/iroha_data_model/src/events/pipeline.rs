@@ -1,12 +1,10 @@
 //! Pipeline events.
 use std::{boxed::Box, format, num::NonZeroU64, string::String, vec::Vec};
-
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 pub use self::model::*;
 use crate::{
     block::{BlockHeader, consensus::ExecWitnessMsg},
@@ -14,13 +12,10 @@ use crate::{
     nexus::{DataSpaceId, LaneId},
     transaction::SignedTransaction,
 };
-
 #[model]
 mod model {
     use getset::{CopyGetters, Getters};
-
     use super::*;
-
     #[derive(Debug, Clone, PartialEq, Eq, FromVariant, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub enum PipelineEventBox {
@@ -33,7 +28,6 @@ mod model {
         /// Execution witness produced after block execution.
         Witness(super::ExecWitnessMsg),
     }
-
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[getset(get = "pub")]
@@ -41,7 +35,6 @@ mod model {
         pub header: BlockHeader,
         pub status: BlockStatus,
     }
-
     #[derive(
         Debug,
         Clone,
@@ -68,7 +61,6 @@ mod model {
         #[getset(get = "pub")]
         pub status: TransactionStatus,
     }
-
     /// Report of block's status in the pipeline
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
@@ -84,7 +76,6 @@ mod model {
         /// Changes have been reflected in the WSV
         Applied,
     }
-
     /// Pipeline warning payload.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
@@ -96,7 +87,6 @@ mod model {
         /// Human-readable details.
         pub details: String,
     }
-
     /// Merge-ledger entry that was appended to persistent storage.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -104,7 +94,6 @@ mod model {
         /// Merge-ledger entry payload.
         pub entry: MergeLedgerEntry,
     }
-
     /// Report of transaction's status in the pipeline
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
@@ -118,7 +107,6 @@ mod model {
         /// Transaction was stored in the block as invalid
         Rejected(Box<crate::transaction::error::TransactionRejectionReason>),
     }
-
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
     )]
@@ -129,7 +117,6 @@ mod model {
         Merge(MergeLedgerEventFilter),
         Witness(WitnessEventFilter),
     }
-
     #[derive(
         Debug,
         Clone,
@@ -151,7 +138,6 @@ mod model {
         #[getset(get = "pub")]
         pub status: Option<BlockStatus>,
     }
-
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
     )]
@@ -168,7 +154,6 @@ mod model {
         #[getset(get = "pub")]
         pub status: Option<TransactionStatus>,
     }
-
     /// Filter merge-ledger events by epoch.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
@@ -178,7 +163,6 @@ mod model {
         #[getset(get_copy = "pub")]
         pub epoch_id: Option<u64>,
     }
-
     /// Filter witness events by block metadata.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
@@ -195,7 +179,6 @@ mod model {
         /// Optional view filter.
         pub view: Option<u64>,
     }
-
     impl MergeLedgerEventFilter {
         /// Match only merge-ledger events for the given epoch identifier.
         #[must_use]
@@ -204,7 +187,6 @@ mod model {
             self
         }
     }
-
     impl WitnessEventFilter {
         /// Match only witnesses for the given block hash.
         #[must_use]
@@ -212,21 +194,18 @@ mod model {
             self.block_hash = Some(block_hash);
             self
         }
-
         /// Match only witnesses at the specified block height.
         #[must_use]
         pub fn for_height(mut self, height: NonZeroU64) -> Self {
             self.height = Some(height);
             self
         }
-
         /// Match only witnesses emitted in the specified view.
         #[must_use]
         pub fn for_view(mut self, view: u64) -> Self {
             self.view = Some(view);
             self
         }
-
         /// Returns `true` when the witness event satisfies the stored filter predicates.
         pub fn matches(&self, event: &super::ExecWitnessMsg) -> bool {
             self.block_hash
@@ -237,7 +216,6 @@ mod model {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
     PipelineEventBox,
@@ -254,15 +232,12 @@ impl_json_via_norito_bytes!(
     ExecWitnessMsg,
     WitnessEventFilter
 );
-
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod getter_tests {
     use iroha_crypto::Hash;
     use nonzero_ext::nonzero;
-
     use super::*;
-
     #[test]
     fn transaction_event_filter_block_height_getter_works() {
         let h = HashOf::from_untyped_unchecked(Hash::prehashed([0u8; Hash::LENGTH]));
@@ -270,7 +245,6 @@ mod getter_tests {
             .for_hash(h)
             .for_status(TransactionStatus::Queued)
             .for_block_height(Some(nonzero!(42_u64)));
-
         // Use generated getters where available
         assert!(filter.hash().is_some());
         assert!(filter.status().is_some());
@@ -278,7 +252,6 @@ mod getter_tests {
         assert_eq!(filter.block_height, Some(Some(nonzero!(42_u64))));
     }
 }
-
 impl BlockEventFilter {
     /// Construct new instance
     #[must_use]
@@ -288,21 +261,18 @@ impl BlockEventFilter {
             status: None,
         }
     }
-
     /// Match only block with the given height
     #[must_use]
     pub fn for_height(mut self, height: NonZeroU64) -> Self {
         self.height = Some(height);
         self
     }
-
     /// Match only block with the given status
     #[must_use]
     pub fn for_status(mut self, status: BlockStatus) -> Self {
         self.status = Some(status);
         self
     }
-
     #[cfg(feature = "transparent_api")]
     fn status_matches(filter: Option<&BlockStatus>, event: BlockStatus) -> bool {
         match filter {
@@ -321,7 +291,6 @@ impl BlockEventFilter {
         }
     }
 }
-
 impl TransactionEventFilter {
     /// Construct new instance
     #[must_use]
@@ -334,63 +303,53 @@ impl TransactionEventFilter {
             status: None,
         }
     }
-
     /// Match only transactions with the given block height
     #[must_use]
     pub fn for_block_height(mut self, block_height: Option<NonZeroU64>) -> Self {
         self.block_height = Some(block_height);
         self
     }
-
     /// Match only transactions with the given hash
     #[must_use]
     pub fn for_hash(mut self, hash: HashOf<SignedTransaction>) -> Self {
         self.hash = Some(hash);
         self
     }
-
     /// Match only transactions with the given status
     #[must_use]
     pub fn for_status(mut self, status: TransactionStatus) -> Self {
         self.status = Some(status);
         self
     }
-
     /// Match only transactions scheduled on the given lane.
     #[must_use]
     pub fn for_lane_id(mut self, lane_id: LaneId) -> Self {
         self.lane_id = Some(lane_id);
         self
     }
-
     /// Match only transactions targeting the given dataspace.
     #[must_use]
     pub fn for_dataspace_id(mut self, dataspace_id: DataSpaceId) -> Self {
         self.dataspace_id = Some(dataspace_id);
         self
     }
-
     // Getter is provided by `getset(get_copy = "pub")` above: `fn block_height(&self)`.
 }
-
 #[cfg(feature = "transparent_api")]
 impl TransactionEventFilter {
     fn field_matches<T: Eq>(filter: Option<&T>, event: &T) -> bool {
         filter.is_none_or(|field| field == event)
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl BlockEventFilter {
     fn field_matches<T: Eq>(filter: Option<&T>, event: &T) -> bool {
         filter.is_none_or(|field| field == event)
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl super::EventFilter for PipelineEventFilterBox {
     type Event = PipelineEventBox;
-
     /// Check if `self` accepts the `event`.
     #[inline]
     fn matches(&self, event: &PipelineEventBox) -> bool {
@@ -439,7 +398,6 @@ impl super::EventFilter for PipelineEventFilterBox {
         }
     }
 }
-
 /// Exports common structs and enums from this module.
 pub mod prelude {
     pub use super::{
@@ -447,21 +405,17 @@ pub mod prelude {
         PipelineEventFilterBox, TransactionEvent, TransactionStatus, WitnessEventFilter,
     };
 }
-
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod tests {
     use std::vec::Vec;
-
     use iroha_crypto::Hash;
     use nonzero_ext::nonzero;
-
     use super::{super::EventFilter, *};
     use crate::{
         ValidationFail, block::consensus::LaneBlockCommitment, merge::MergeQuorumCertificate,
         peer::PeerId, transaction::error::TransactionRejectionReason::*,
     };
-
     impl BlockHeader {
         fn dummy(height: NonZeroU64) -> Self {
             let merkle_root = HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH]));
@@ -549,10 +503,8 @@ mod tests {
             ),
         }
     }
-
     fn sample_pipeline_events() -> Vec<PipelineEventBox> {
         let merge_entry = sample_merge_entry();
-
         let tx_queued: PipelineEventBox = TransactionEvent {
             hash: HashOf::from_untyped_unchecked(Hash::prehashed([0_u8; Hash::LENGTH])),
             block_height: None,
@@ -596,7 +548,6 @@ mod tests {
             },
         }
         .into();
-
         let events = vec![
             tx_queued.clone(),
             tx_rejected.clone(),
@@ -605,10 +556,8 @@ mod tests {
             merge_event.clone(),
             witness_event.clone(),
         ];
-
         events
     }
-
     fn apply_filter(
         events: &[PipelineEventBox],
         filter: &PipelineEventFilterBox,
@@ -619,7 +568,6 @@ mod tests {
             .cloned()
             .collect()
     }
-
     #[test]
     fn transaction_filters_match_expected_hashes() {
         let events = sample_pipeline_events();
@@ -628,20 +576,16 @@ mod tests {
                 [0_u8; Hash::LENGTH],
             )))
             .into();
-
         let matched = apply_filter(&events, &filter);
         assert_eq!(matched, vec![events[0].clone(), events[1].clone()]);
     }
-
     #[test]
     fn block_filters_match_committed_events() {
         let events = sample_pipeline_events();
         let filter: PipelineEventFilterBox = BlockEventFilter::default().into();
-
         let matched = apply_filter(&events, &filter);
         assert_eq!(matched, vec![events[3].clone()]);
     }
-
     #[test]
     fn transaction_filters_match_other_hash() {
         let events = sample_pipeline_events();
@@ -650,20 +594,16 @@ mod tests {
                 [2_u8; Hash::LENGTH],
             )))
             .into();
-
         let matched = apply_filter(&events, &filter);
         assert_eq!(matched, vec![events[2].clone()]);
     }
-
     #[test]
     fn merge_filters_match_epoch() {
         let events = sample_pipeline_events();
         let filter: PipelineEventFilterBox = MergeLedgerEventFilter::default().for_epoch(42).into();
-
         let matched = apply_filter(&events, &filter);
         assert_eq!(matched, vec![events[4].clone()]);
     }
-
     #[test]
     fn witness_filters_match_metadata() {
         let events = sample_pipeline_events();
@@ -674,7 +614,6 @@ mod tests {
             .for_height(nonzero!(2_u64))
             .for_view(1)
             .into();
-
         let matched = apply_filter(&events, &filter);
         assert_eq!(matched, vec![events[5].clone()]);
     }

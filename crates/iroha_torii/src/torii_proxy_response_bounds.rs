@@ -8,7 +8,6 @@ const TORII_PROXY_MAX_HEADER_NAME_BYTES_V1: usize = 256;
 const TORII_PROXY_MAX_HEADER_VALUE_BYTES_V1: usize = 16 * 1024;
 /// Maximum retryable diagnostic body retained while the next authority runs.
 const TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1: usize = 64 * 1024;
-
 /// Drop an oversized retryable body before another full response is admitted.
 ///
 /// The original snapshot has already passed the route body limit, but keeping
@@ -23,7 +22,6 @@ fn bound_retained_retryable_torii_proxy_snapshot(
     if snapshot.body.len() <= TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1 {
         return snapshot;
     }
-
     const MESSAGE: &[u8] =
         b"proxied retryable response body exceeded the retained diagnostic limit";
     let mut body = Vec::new();
@@ -36,7 +34,6 @@ fn bound_retained_retryable_torii_proxy_snapshot(
         body,
     }
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 #[derive(Debug)]
 enum BoundedReqwestBodyError {
@@ -44,14 +41,12 @@ enum BoundedReqwestBodyError {
     Transport(String),
     Allocation(String),
 }
-
 #[cfg(feature = "app_api")]
 impl BoundedReqwestBodyError {
     const fn is_limit(&self) -> bool {
         matches!(self, Self::Limit(_))
     }
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 impl core::fmt::Display for BoundedReqwestBodyError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -62,7 +57,6 @@ impl core::fmt::Display for BoundedReqwestBodyError {
         }
     }
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn validate_reqwest_response_content_length(
     declared: Option<u64>,
@@ -77,7 +71,6 @@ fn validate_reqwest_response_content_length(
     }
     Ok(())
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn extend_bounded_reqwest_body(
     body: &mut Vec<u8>,
@@ -101,7 +94,6 @@ fn extend_bounded_reqwest_body(
     body.extend_from_slice(chunk);
     Ok(())
 }
-
 /// Read one decoded HTTP response body without trusting `Content-Length`.
 ///
 /// The declared length is only a fail-fast check; the streaming counter is the
@@ -113,7 +105,6 @@ async fn read_reqwest_response_body_bounded(
     label: &str,
 ) -> Result<Vec<u8>, BoundedReqwestBodyError> {
     validate_reqwest_response_content_length(response.content_length(), max_body_bytes, label)?;
-
     let initial_capacity = response
         .content_length()
         .and_then(|declared| usize::try_from(declared).ok())
@@ -133,7 +124,6 @@ async fn read_reqwest_response_body_bounded(
     }
     Ok(body)
 }
-
 #[cfg(feature = "app_api")]
 fn public_dataspace_upstream_response_body_limit(
     endpoint: ToriiReadEndpointV1,
@@ -149,7 +139,6 @@ fn public_dataspace_upstream_response_body_limit(
     }
     .max(1)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn bounded_torii_proxy_headers(
     headers: &HeaderMap,
@@ -184,7 +173,6 @@ fn bounded_torii_proxy_headers(
     }
     Ok(bounded)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn validate_torii_proxy_snapshot_bounds(
     snapshot: &ToriiProxyHttpResponseV1,
@@ -215,7 +203,6 @@ fn validate_torii_proxy_snapshot_bounds(
     }
     Ok(())
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_response_body_limit(app: &AppState, request: &ToriiProxyRequestKindV4) -> usize {
     match request {
@@ -239,11 +226,9 @@ fn torii_proxy_response_body_limit(app: &AppState, request: &ToriiProxyRequestKi
         _ => app.torii_proxy_max_response_bytes.max(1),
     }
 }
-
 #[cfg(all(test, any(feature = "p2p_ws", feature = "connect")))]
 mod retained_retryable_snapshot_tests {
     use super::*;
-
     #[test]
     fn exact_diagnostic_is_preserved_and_overflow_is_replaced() {
         let exact = ToriiProxyHttpResponseV1 {
@@ -255,7 +240,6 @@ mod retained_retryable_snapshot_tests {
             bound_retained_retryable_torii_proxy_snapshot(exact.clone()),
             exact
         );
-
         let overflow = ToriiProxyHttpResponseV1 {
             status_code: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
             headers: vec![iroha_core::torii_proxy::ToriiProxyHeaderV1 {
@@ -273,31 +257,26 @@ mod retained_retryable_snapshot_tests {
         assert!(bounded.body.len() < TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1);
     }
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod bounded_reqwest_body_tests {
     use super::*;
-
     #[test]
     fn chunk_admission_accepts_exact_limit_and_rejects_max_plus_one() {
         let mut body = Vec::new();
         extend_bounded_reqwest_body(&mut body, b"abcd", 8, "test").expect("first bounded chunk");
         extend_bounded_reqwest_body(&mut body, b"efgh", 8, "test").expect("exact response limit");
         assert_eq!(body, b"abcdefgh");
-
         let error = extend_bounded_reqwest_body(&mut body, b"i", 8, "test")
             .expect_err("response limit plus one must fail");
         assert!(error.is_limit());
         assert!(error.to_string().contains("8-byte limit"));
         assert_eq!(body, b"abcdefgh", "overflow must not mutate the body");
-
         validate_reqwest_response_content_length(Some(8), 8, "test")
             .expect("exact declared response limit");
         let declared_error = validate_reqwest_response_content_length(Some(9), 8, "test")
             .expect_err("declared response limit plus one must fail");
         assert!(declared_error.is_limit());
     }
-
     #[test]
     fn public_dataspace_contract_views_use_the_stricter_response_limit() {
         let configured = routing::CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES * 2;

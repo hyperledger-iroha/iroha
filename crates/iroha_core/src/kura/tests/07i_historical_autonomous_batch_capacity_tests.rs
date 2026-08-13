@@ -75,12 +75,10 @@ fn historical_capacity_payload_for_kura(
     .expect("historical capacity payload");
     (network_id, epoch, payload)
 }
-
 fn persist_historical_capacity_payload_fixture(kura: &Kura, payload: &LaneExecutablePayloadV1) {
     kura.persist_lane_executable_payload(payload, payload.network_id, payload.epoch)
         .expect("persist historical capacity payload dependency");
 }
-
 fn historical_capacity_required_limit(kura: &Kura, additional_peak: u64) -> u64 {
     kura.refresh_disk_usage_bytes()
         .expect("refresh historical capacity baseline accounting");
@@ -119,7 +117,6 @@ fn historical_capacity_required_limit(kura: &Kura, additional_peak: u64) -> u64 
         .and_then(|bytes| bytes.checked_add(additional_peak))
         .expect("historical capacity exact limit fits")
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rejection() {
@@ -171,7 +168,6 @@ fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rej
         record_one.clone(),
         record_other.clone(),
     ];
-
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("historical capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &lane_one_height_one);
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &lane_zero_height_one);
@@ -199,7 +195,6 @@ fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rej
     Arc::get_mut(&mut kura)
         .expect("historical capacity Kura is exclusive")
         .max_disk_usage_bytes = exact_limit - 1;
-
     assert!(
         kura.persist_historical_autonomous_lane_recovery_records(&records)
             .is_err(),
@@ -223,7 +218,6 @@ fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rej
         *kura.certified_bundle_capacity_reservations.lock(),
         certified_before,
     );
-
     Arc::get_mut(&mut kura)
         .expect("historical capacity Kura remains exclusive")
         .max_disk_usage_bytes = exact_limit;
@@ -243,7 +237,6 @@ fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rej
         vec![HistoricalAutonomousLaneRecoveryPersistOutcome::AlreadyInstalled; records.len()],
     );
 }
-
 #[test]
 fn historical_recovery_partial_batch_restart_completes_remaining_records() {
     let temp_dir = TempDir::new().expect("historical restart temp dir");
@@ -285,7 +278,6 @@ fn historical_recovery_partial_batch_restart_completes_remaining_records() {
         vec![HistoricalAutonomousLaneRecoveryPersistOutcome::Installed],
     );
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen partial historical batch");
     let remaining_peak = reopened
         .historical_autonomous_recovery_batch_additional_peak_for_test(&[
@@ -321,7 +313,6 @@ fn historical_recovery_partial_batch_restart_completes_remaining_records() {
             .expect("revalidate restarted historical record"),
     );
 }
-
 #[test]
 fn historical_recovery_append_crash_is_repaired_only_by_startup_before_replay() {
     let temp_dir = TempDir::new().expect("historical append-crash temp dir");
@@ -362,7 +353,6 @@ fn historical_recovery_append_crash_is_repaired_only_by_startup_before_replay() 
             .expect("persist append-crash prefix record"),
         vec![HistoricalAutonomousLaneRecoveryPersistOutcome::Installed],
     );
-
     fail_next_bound_progress_append_data_sync_for_tests();
     assert!(
         kura.persist_historical_autonomous_lane_recovery_records(std::slice::from_ref(&second))
@@ -388,7 +378,6 @@ fn historical_recovery_append_crash_is_repaired_only_by_startup_before_replay() 
         "the restart-required live retry must be byte-immutable",
     );
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config)
         .expect("startup repairs the historical execution-input append");
     assert!(
@@ -405,7 +394,6 @@ fn historical_recovery_append_crash_is_repaired_only_by_startup_before_replay() 
         ],
     );
 }
-
 #[test]
 fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() {
     let temp_dir = TempDir::new().expect("historical seal-temp temp dir");
@@ -439,7 +427,6 @@ fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() 
         seal_len,
         "the exact publication encoding is the one inode reserved for the no-clobber seal",
     );
-
     kura.fail_next_atomic_write_after_temporary_sync_for_test();
     assert!(
         kura.persist_historical_autonomous_lane_recovery_records(std::slice::from_ref(&record))
@@ -491,7 +478,6 @@ fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() 
         "rejection of generic seal residue must not mutate durable bytes",
     );
 }
-
 #[test]
 fn historical_recovery_acquires_prune_before_historical_mutation_lock() {
     let temp_dir = TempDir::new().expect("historical lock-order temp dir");

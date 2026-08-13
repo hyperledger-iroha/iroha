@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensure Sumeragi commits blocks end-to-end using the Vote/QC pipeline.
-
 use std::time::{Duration, Instant};
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::{
@@ -14,11 +12,9 @@ use iroha::data_model::{
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::gen_account_in;
 use reqwest::Client as HttpClient;
-
 #[test]
 fn commits_via_vote_qc_pipeline() -> Result<()> {
     init_instruction_registry();
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -32,25 +28,21 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
     else {
         return Ok(());
     };
-
     let result = (|| -> Result<()> {
         let client = network.client();
         let baseline_non_empty = client.get_status()?.blocks_non_empty;
-
         let (new_account_id, _) = gen_account_in("wonderland");
         let register_new_account = Register::account(Account::new(new_account_id.clone()));
         client.submit_blocking(
             register_new_account,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-
         let target_non_empty = baseline_non_empty + 1;
         rt.block_on(async {
             network
                 .ensure_blocks_with(|height| height.non_empty >= target_non_empty)
                 .await
         })?;
-
         let account_visibility_deadline = Instant::now() + Duration::from_secs(30);
         let accounts = loop {
             let accounts = client.query(FindAccounts).execute_all()?;
@@ -69,26 +61,22 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
                 .any(|account| account.id() == &new_account_id),
             "new account must exist in WSV after commit"
         );
-
         let status = client.get_sumeragi_status()?;
         assert!(
             status.last_committed_height >= target_non_empty,
             "exact reducer status should observe the committed transaction"
         );
         assert!(status.height >= status.last_committed_height);
-
         let qc_json = client.get_sumeragi_qc_json()?;
         assert!(
             qc_json.get("highest_qc").is_some() && qc_json.get("locked_qc").is_some(),
             "qc endpoint should include highest_qc and locked_qc"
         );
-
         let phases_json = client.get_sumeragi_phases_json()?;
         assert!(
             phases_json.get("commit_ms").is_some(),
             "phases endpoint should expose commit_ms"
         );
-
         let telemetry_url = client.torii_url.join("v1/sumeragi/telemetry")?;
         rt.block_on(async {
             let http = HttpClient::new();
@@ -122,11 +110,8 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
             );
             Ok::<(), eyre::Report>(())
         })?;
-
         Ok(())
     })();
-
     rt.block_on(async { network.shutdown().await });
-
     result
 }

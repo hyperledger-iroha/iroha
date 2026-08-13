@@ -10,7 +10,6 @@
 //! queued ISIs without mutating state) and to incorporate trigger side effects.
 //! For now the type is mostly a thin wrapper that keeps chunking logic and
 //! admission limits (`pipeline.overlay_max_*`) in one place.
-
 use core::str::FromStr;
 #[cfg(feature = "telemetry")]
 use std::time::Instant;
@@ -26,7 +25,6 @@ use std::{
     num::NonZeroU64,
     sync::{Arc, OnceLock},
 };
-
 use iroha_config::parameters::actual::QueryCursorMode;
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use iroha_data_model::{
@@ -59,7 +57,6 @@ use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
 use norito::{codec::Encode as NoritoEncode, streaming::CapabilityFlags};
 use sha2::{Digest as _, Sha256};
-
 use crate::{
     executor::{
         ContractEntrypointAuthorizationSnapshot, ensure_asset_definition_registration_allowed,
@@ -619,7 +616,6 @@ where
 }
 fn default_pipeline_config() -> iroha_config::parameters::actual::Pipeline {
     use iroha_config::parameters::{actual, defaults};
-
     actual::Pipeline {
         dynamic_prepass: defaults::pipeline::DYNAMIC_PREPASS,
         access_set_cache_enabled: defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
@@ -3555,10 +3551,8 @@ mod tests_overlay_manifest {
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::state::State;
-
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
@@ -4584,7 +4578,6 @@ seiyaku RawRebuildArguments {
     }
     fn parameterized_quarantine_fixture() -> (State, SignedTransaction, SignedTransaction) {
         use iroha_data_model::transaction::executable::ContractArgumentRecord;
-
         let program = ivm::KotodamaCompiler::new()
             .compile_source(
                 r#"
@@ -4841,9 +4834,7 @@ seiyaku PermissionlessStateFreeOverlay {
     }
     #[test]
     fn parameterized_contract_call_denial_precedes_argument_record_decode() {
-        use iroha_data_model::transaction::executable::{
-            ContractArgumentRecord, ContractInvocation,
-        };
+        use iroha_data_model::transaction::executable::{ContractArgumentRecord, ContractInvocation};
         const REQUIRED_PERMISSION: &str = "CanWriteParameterizedOverlay";
         let program = ivm::KotodamaCompiler::new()
             .compile_source(
@@ -5446,7 +5437,6 @@ seiyaku GuardedOverlayRebound {
     #[test]
     fn nested_overlay_effects_retain_and_revalidate_the_complete_authorization_chain() {
         use iroha_data_model::permission::{Permission, Permissions};
-
         const ROOT_PERMISSION: &str = "CanInvokeRoot";
         const CHILD_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (authority, _) = gen_account_in("wonderland");
@@ -6026,10 +6016,8 @@ mod tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::state::State;
-
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
@@ -6186,7 +6174,6 @@ mod tests {
             RemoteSpendIntent, SpendOp, TouchManifest,
         };
         use nonzero_ext::nonzero;
-
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let dsid = DataSpaceId::UNIVERSAL;
         let lane = LaneId::new(0);
@@ -6294,7 +6281,6 @@ mod tests {
     fn ivm_proved_axt_only_replay_is_not_dropped() {
         use iroha_data_model::block::BlockHeader;
         use nonzero_ext::nonzero;
-
         let (descriptor, binding) = ivm::axt::AxtDescriptor::builder()
             .dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
             .build_with_binding()
@@ -6406,7 +6392,6 @@ mod tests {
             zk::BackendTag,
         };
         use std::sync::Arc;
-
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
@@ -6506,7 +6491,6 @@ mod tests {
             zk::BackendTag,
         };
         use std::sync::Arc;
-
         const REQUIRED_PERMISSION: &str = "CanBuildProvedOverlay";
         let compiler =
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
@@ -7099,7 +7083,6 @@ seiyaku ProtectedProvedOverlay {
             zk::BackendTag,
         };
         use std::sync::Arc;
-
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
@@ -7215,7 +7198,6 @@ seiyaku ProtectedProvedOverlay {
             zk::BackendTag,
         };
         use std::sync::Arc;
-
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
@@ -7352,7 +7334,6 @@ seiyaku ProtectedProvedOverlay {
             zk::BackendTag,
         };
         use std::sync::Arc;
-
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
@@ -7477,7 +7458,6 @@ seiyaku ProtectedProvedOverlay {
             zk::BackendTag,
         };
         use std::sync::Arc;
-
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
@@ -7705,7 +7685,6 @@ seiyaku ProtectedProvedOverlay {
             zk::BackendTag,
         };
         use std::sync::Arc;
-
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay_ok: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
@@ -7811,7 +7790,6 @@ seiyaku ProtectedProvedOverlay {
             zk::BackendTag,
         };
         use std::sync::Arc;
-
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
@@ -7908,7 +7886,6 @@ seiyaku ProtectedProvedOverlay {
             zk::BackendTag,
         };
         use std::sync::Arc;
-
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> =
@@ -8047,7 +8024,6 @@ seiyaku ProtectedProvedOverlay {
             zk::BackendTag,
         };
         use std::sync::Arc;
-
         let (program, _header_len, _meta) = sample_program_zk_mode();
         let bytecode = IvmBytecode::from_compiled(program);
         let kp = checked_keypair();
@@ -8135,7 +8111,6 @@ seiyaku ProtectedProvedOverlay {
             zk::BackendTag,
         };
         use std::sync::Arc;
-
         let compiler =
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
                 force_zk: true,
@@ -8680,7 +8655,6 @@ seiyaku ProtectedProved {
         };
         use iroha_primitives::json::Json;
         use std::sync::Arc;
-
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
         let contract_address: ContractAddress =
@@ -8747,7 +8721,6 @@ seiyaku ProtectedProved {
         };
         use iroha_primitives::json::Json;
         use std::sync::Arc;
-
         let compiler =
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
                 force_zk: true,
@@ -8918,7 +8891,6 @@ seiyaku AliasBoundArguments {
         };
         use iroha_primitives::json::Json;
         use std::sync::Arc;
-
         let (stored_program, header_len, meta) = sample_program_zk_mode();
         let (code_hash, abi_hash) =
             super::compute_program_hashes(&meta, header_len, &stored_program);
@@ -9026,7 +8998,6 @@ seiyaku AliasBoundArguments {
             syscalls as ivm_sys,
         };
         use std::sync::Arc;
-
         let dsid = DataSpaceId::new(7);
         let descriptor = axt::AxtDescriptor {
             dsids: vec![dsid],
@@ -9178,7 +9149,6 @@ seiyaku AliasBoundArguments {
         };
         use iroha_primitives::json::Json;
         use std::sync::Arc;
-
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
         let contract_address: ContractAddress =
@@ -9244,7 +9214,6 @@ seiyaku AliasBoundArguments {
         };
         use iroha_primitives::json::Json;
         use std::sync::Arc;
-
         let (program, header_len, meta) = sample_program();
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
         let contract_address: ContractAddress =
@@ -9288,7 +9257,6 @@ seiyaku AliasBoundArguments {
         };
         use iroha_primitives::json::Json;
         use std::sync::Arc;
-
         let (program, header_len, meta) = sample_program();
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
         let contract_address: ContractAddress =
@@ -9378,7 +9346,6 @@ seiyaku AliasBoundArguments {
     fn pre_execution_policy_allows_scallx_opcode() {
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
         use std::sync::Arc;
-
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain: iroha_data_model::domain::Domain = iroha_data_model::domain::Domain::new(
@@ -9418,7 +9385,6 @@ seiyaku AliasBoundArguments {
     fn pre_execution_policy_ignores_literal_table() {
         use iroha_data_model::prelude::{AccountId, TransactionBuilder};
         use std::sync::Arc;
-
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let domain: iroha_data_model::domain::Domain = iroha_data_model::domain::Domain::new(
@@ -9458,11 +9424,8 @@ seiyaku AliasBoundArguments {
     #[test]
     fn redundant_contract_ops_are_pruned() {
         use std::sync::Arc;
-
         use iroha_data_model::smart_contract::manifest::ContractManifest;
-
         use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
-
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
         let mut world = crate::state::World::default();
@@ -9524,12 +9487,10 @@ seiyaku AliasBoundArguments {
     #[test]
     fn sample_smart_contract_overlay_executes() {
         use std::sync::Arc;
-
         use iroha_data_model::{
             metadata::Metadata, prelude::TransactionBuilder, transaction::Executable,
         };
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-
         let metadata = Metadata::default();
         let (program, _, _) = sample_program();
         let tx = TransactionBuilder::new(
@@ -9827,7 +9788,6 @@ fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
 #[cfg(test)]
 mod circuit_id_match_tests {
     use super::circuit_id_matches;
-
     #[test]
     fn circuit_id_matching_uses_the_verifier_canonicalizers_and_fails_closed() {
         assert!(circuit_id_matches(

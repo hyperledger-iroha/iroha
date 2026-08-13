@@ -1,7 +1,5 @@
 //! Checked and explicitly wrapping Kotodama `int` arithmetic regressions.
-
 use std::collections::BTreeMap;
-
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
 use iroha_primitives::{
@@ -15,16 +13,13 @@ use ivm::{
     numeric::NumericFaultV1, pointer_abi::PointerType, syscalls,
 };
 mod common;
-
 const MAX_INT: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
 const MIN_INT: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
-
 fn compile(source: &str) -> Vec<u8> {
     Compiler::new()
         .compile_source(source)
         .expect("compile arithmetic contract")
 }
-
 fn entrypoint_pc(program: &[u8]) -> u64 {
     let parsed = ProgramMetadata::parse(program).expect("parse checked arithmetic artifact");
     let entrypoint = parsed
@@ -37,7 +32,6 @@ fn entrypoint_pc(program: &[u8]) -> u64 {
         .expect("run entrypoint");
     u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + entrypoint.entry_pc
 }
-
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -51,7 +45,6 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(Hash::new(payload).as_ref());
     out
 }
-
 fn argument_host(program: &[u8], payload: &Json) -> Result<DefaultHost, VMError> {
     let parsed = ProgramMetadata::parse(program)?;
     let entrypoint = parsed
@@ -75,7 +68,6 @@ fn argument_host(program: &[u8], payload: &Json) -> Result<DefaultHost, VMError>
         tlv(PointerType::NoritoBytes, &record),
     )])))
 }
-
 fn run_binary(program: &[u8], left: &str, right: &str) -> Result<BigInt, VMError> {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(program)?;
@@ -86,7 +78,6 @@ fn run_binary(program: &[u8], left: &str, right: &str) -> Result<BigInt, VMError
     vm.run()?;
     Ok(common::decode_int_register(&vm, 10))
 }
-
 fn run_unary(program: &[u8], value: &str) -> Result<BigInt, VMError> {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(program)?;
@@ -97,7 +88,6 @@ fn run_unary(program: &[u8], value: &str) -> Result<BigInt, VMError> {
     vm.run()?;
     Ok(common::decode_int_register(&vm, 10))
 }
-
 fn run_mixed_int_decimal(program: &[u8], left: &str, right: &str) -> Result<Numeric, VMError> {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(program)?;
@@ -112,37 +102,31 @@ fn run_mixed_int_decimal(program: &[u8], left: &str, right: &str) -> Result<Nume
         .map(DecimalValueV1::into_numeric)
         .map_err(|_| VMError::DecodeError)
 }
-
 fn bigint(value: &str) -> BigInt {
     value.parse().expect("parse bounded integer fixture")
 }
-
 #[derive(Clone, Copy, Debug)]
 enum NumericReturnKind {
     Int,
     Decimal,
     Quantity,
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum NumericValue {
     Int(BigInt),
     Decimal(Numeric),
     Quantity(Quantity),
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum NumericOutcome {
     Value(NumericValue),
     Fault(NumericFaultV1),
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FoldedSyscallExpectation {
     Omitted,
     Retained,
 }
-
 fn contains_extended_syscall(program: &[u8], syscall: u32) -> bool {
     let metadata = ProgramMetadata::parse(program).expect("parse numeric differential artifact");
     let expected = encoding::wide::encode_syscallx(syscall);
@@ -150,7 +134,6 @@ fn contains_extended_syscall(program: &[u8], syscall: u32) -> bool {
         .chunks_exact(4)
         .any(|word| u32::from_le_bytes(word.try_into().expect("four-byte instruction")) == expected)
 }
-
 fn decode_numeric_return(vm: &IVM, kind: NumericReturnKind) -> NumericValue {
     match kind {
         NumericReturnKind::Int => NumericValue::Int(common::decode_int_register(vm, 10)),
@@ -178,7 +161,6 @@ fn decode_numeric_return(vm: &IVM, kind: NumericReturnKind) -> NumericValue {
         }
     }
 }
-
 fn numeric_fault_from_vm_error(error: &VMError) -> Option<NumericFaultV1> {
     match error {
         VMError::NumericFault(fault) => Some(*fault),
@@ -186,7 +168,6 @@ fn numeric_fault_from_vm_error(error: &VMError) -> Option<NumericFaultV1> {
         _ => None,
     }
 }
-
 fn execute_numeric_program(
     program: &[u8],
     payload: Option<&Json>,
@@ -218,7 +199,6 @@ fn execute_numeric_program(
         }
     }
 }
-
 fn compiler_numeric_fault(error: &str) -> NumericFaultV1 {
     for (code, fault) in [
         (
@@ -244,7 +224,6 @@ fn compiler_numeric_fault(error: &str) -> NumericFaultV1 {
     }
     panic!("unexpected folded numeric failure: {error}");
 }
-
 fn assert_numeric_fold_runtime_parity(
     case: &str,
     folded_source: &str,
@@ -261,7 +240,6 @@ fn assert_numeric_fold_runtime_parity(
     );
     let payload = Json::from_str_norito(runtime_payload).expect("valid numeric argument JSON");
     let runtime = execute_numeric_program(&runtime_program, Some(&payload), kind);
-
     let folded = match Compiler::new().compile_source(folded_source) {
         Ok(program) => {
             let contains = contains_extended_syscall(&program, syscall);
@@ -279,20 +257,17 @@ fn assert_numeric_fold_runtime_parity(
         }
         Err(error) => NumericOutcome::Fault(compiler_numeric_fault(&error)),
     };
-
     assert_eq!(
         folded, runtime,
         "{case}: constant folding and parameterized VM execution diverged"
     );
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum ArithmeticOutcome {
     Value(BigInt),
     MantissaOverflow,
     DivisionByZero,
 }
-
 fn classify_runtime(result: Result<BigInt, VMError>) -> ArithmeticOutcome {
     match result {
         Ok(value) => ArithmeticOutcome::Value(value),
@@ -305,7 +280,6 @@ fn classify_runtime(result: Result<BigInt, VMError>) -> ArithmeticOutcome {
         Err(error) => panic!("unexpected runtime arithmetic failure: {error:?}"),
     }
 }
-
 fn folded_outcome(expression: &str) -> ArithmeticOutcome {
     let source =
         format!("seiyaku FoldedArithmetic {{ view fn run() -> int {{ return {expression}; }} }}");
@@ -327,7 +301,6 @@ fn folded_outcome(expression: &str) -> ArithmeticOutcome {
     vm.run().expect("execute folded arithmetic result");
     ArithmeticOutcome::Value(common::decode_int_register(&vm, 10))
 }
-
 #[test]
 fn constant_folding_and_runtime_match_signed_512_bit_boundaries_and_failures() {
     for (operator, left, right) in [
@@ -357,7 +330,6 @@ fn constant_folding_and_runtime_match_signed_512_bit_boundaries_and_failures() {
             "folded/runtime mismatch for ({left}) {operator} ({right})"
         );
     }
-
     let negation =
         compile("seiyaku RuntimeNegation { view fn run(int value) -> int { return -value; } }");
     for value in [MAX_INT, MIN_INT] {
@@ -366,7 +338,6 @@ fn constant_folding_and_runtime_match_signed_512_bit_boundaries_and_failures() {
         assert_eq!(folded, runtime, "folded/runtime mismatch for -({value})");
     }
 }
-
 #[test]
 fn explicit_int_to_decimal_conversion_matches_contextual_literal_folding() {
     let runtime = compile(
@@ -381,7 +352,6 @@ fn explicit_int_to_decimal_conversion_matches_contextual_literal_folding() {
             .any(|window| window == conversion),
         "decimal::from_int must lower through DECIMAL_FROM_INT"
     );
-
     let runtime_value = run_mixed_int_decimal(&runtime, "9007199254740993", "0.125")
         .expect("execute mixed runtime arithmetic");
     let folded = compile(
@@ -402,11 +372,9 @@ fn explicit_int_to_decimal_conversion_matches_contextual_literal_folding() {
     let folded_value = DecimalValueV1::decode_frame(folded_output.payload)
         .expect("decode folded decimal")
         .into_numeric();
-
     assert_eq!(runtime_value, folded_value);
     assert_eq!(runtime_value.to_string(), "9007199254740993.125");
 }
-
 #[test]
 fn decimal_constant_folding_matches_parameterized_vm_arithmetic_and_faults() {
     for (case, operator, left, right, syscall) in [
@@ -500,7 +468,6 @@ fn decimal_constant_folding_matches_parameterized_vm_arithmetic_and_faults() {
         );
     }
 }
-
 #[test]
 fn every_decimal_rounding_mode_matches_between_folding_and_vm_execution() {
     for (mode, dividend) in [
@@ -543,7 +510,6 @@ fn every_decimal_rounding_mode_matches_between_folding_and_vm_execution() {
         );
     }
 }
-
 #[test]
 fn every_quantity_rounding_mode_matches_between_folding_and_vm_execution() {
     for mode in [
@@ -585,7 +551,6 @@ fn every_quantity_rounding_mode_matches_between_folding_and_vm_execution() {
         );
     }
 }
-
 #[test]
 fn decimal_to_int_conversions_match_folding_for_success_and_failure() {
     for (case, value) in [
@@ -619,7 +584,6 @@ fn decimal_to_int_conversions_match_folding_for_success_and_failure() {
             FoldedSyscallExpectation::Omitted,
         );
     }
-
     assert_numeric_fold_runtime_parity(
         "decimal-to-int-trunc",
         "seiyaku FoldedTruncConversion {\n\
@@ -637,7 +601,6 @@ fn decimal_to_int_conversions_match_folding_for_success_and_failure() {
         syscalls::SYSCALL_DECIMAL_TO_INT_TRUNC,
         FoldedSyscallExpectation::Omitted,
     );
-
     for mode in [
         "toward_zero",
         "away_from_zero",
@@ -674,7 +637,6 @@ fn decimal_to_int_conversions_match_folding_for_success_and_failure() {
         );
     }
 }
-
 #[test]
 fn quantity_arithmetic_folding_matches_parameterized_vm_execution() {
     for (case, constants, params, expression, payload, kind, syscall) in [
@@ -806,7 +768,6 @@ fn quantity_arithmetic_folding_matches_parameterized_vm_execution() {
         );
     }
 }
-
 #[test]
 fn constant_quantity_exact_division_rejects_each_failure_class_at_compile_time() {
     for (case, value, divisor, expected_code) in [
@@ -835,7 +796,6 @@ fn constant_quantity_exact_division_rejects_each_failure_class_at_compile_time()
         );
     }
 }
-
 #[test]
 fn explicit_quantity_conversions_match_for_values_and_negative_failures() {
     for (case, source_type, value, syscall) in [
@@ -892,7 +852,6 @@ fn explicit_quantity_conversions_match_for_values_and_negative_failures() {
             FoldedSyscallExpectation::Retained,
         );
     }
-
     for (case, source_type, value, syscall) in [
         (
             "negative-int-to-quantity",
@@ -945,7 +904,6 @@ fn explicit_quantity_conversions_match_for_values_and_negative_failures() {
             FoldedSyscallExpectation::Retained,
         );
     }
-
     assert_numeric_fold_runtime_parity(
         "quantity-to-decimal",
         "seiyaku FoldedQuantityToDecimal {\n\
@@ -965,7 +923,6 @@ fn explicit_quantity_conversions_match_for_values_and_negative_failures() {
         FoldedSyscallExpectation::Omitted,
     );
 }
-
 #[test]
 fn ordinary_addition_and_subtraction_trap_at_signed_512_bit_boundaries() {
     let add = compile(
@@ -981,7 +938,6 @@ fn ordinary_addition_and_subtraction_trap_at_signed_512_bit_boundaries() {
         run_binary(&add, MIN_INT, "-1"),
         Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow))
     ));
-
     let sub = compile(
         "seiyaku CheckedSub { view fn run(int left, int right) -> int { return left - right; } }",
     );
@@ -996,7 +952,6 @@ fn ordinary_addition_and_subtraction_trap_at_signed_512_bit_boundaries() {
         Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow))
     ));
 }
-
 #[test]
 fn ordinary_multiplication_and_negation_trap_at_signed_512_bit_boundaries() {
     let mul = compile(
@@ -1012,7 +967,6 @@ fn ordinary_multiplication_and_negation_trap_at_signed_512_bit_boundaries() {
         run_binary(&mul, MIN_INT, "-1"),
         Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow))
     ));
-
     let neg = compile("seiyaku CheckedNeg { view fn run(int value) -> int { return -value; } }");
     assert_eq!(
         run_unary(&neg, MAX_INT).unwrap(),
@@ -1024,7 +978,6 @@ fn ordinary_multiplication_and_negation_trap_at_signed_512_bit_boundaries() {
         Err(VMError::NumericFault(NumericFaultV1::MantissaOverflow))
     ));
 }
-
 #[test]
 fn constant_folding_uses_checked_signed_512_bit_rules() {
     let safe = compile(
@@ -1035,7 +988,6 @@ fn constant_folding_uses_checked_signed_512_bit_rules() {
     vm.set_program_counter(entrypoint_pc(&safe)).unwrap();
     vm.run().unwrap();
     assert_eq!(common::decode_int_register(&vm, 10), bigint(MAX_INT));
-
     for source in [
         "seiyaku OverflowAdd { view fn run() -> int { return 6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047 + 1; } }",
         "seiyaku OverflowNeg { view fn run() -> int { return -(-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048); } }",
@@ -1049,7 +1001,6 @@ fn constant_folding_uses_checked_signed_512_bit_rules() {
         );
     }
 }
-
 #[test]
 fn wrapping_builtins_are_the_explicit_modular_opt_in() {
     let program = compile(

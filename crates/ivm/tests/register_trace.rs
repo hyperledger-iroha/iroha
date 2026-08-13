@@ -1,7 +1,6 @@
 use ivm::{IVM, encoding};
 mod common;
 use common::assemble_zk;
-
 #[test]
 fn test_register_trace_length() {
     // Program consisting of a single HALT

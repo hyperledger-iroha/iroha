@@ -5,7 +5,6 @@
 //! host-compiled transition trace: it constrains the exact cells already
 //! assigned by the Step circuit and never reloads a state or operation value
 //! from a host witness.
-
 use ff::{Field as _, PrimeField};
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
@@ -22,10 +21,7 @@ use iroha_data_model::offline::{
     kagemusha_confidential_amount_encoding_v2, kagemusha_recursive_spend_transition_tag_v2,
 };
 use norito::codec::{Decode, Encode};
-
-use super::kagemusha_sha256_v4::{
-    KagemushaSha256BitV4, KagemushaSha256ByteV4, KagemushaSha256JobsV4,
-};
+use super::kagemusha_sha256_v4::{KagemushaSha256BitV4, KagemushaSha256ByteV4, KagemushaSha256JobsV4};
 use super::kagemusha_v2::{
     I_APPEND_PROFILE as O_APPEND_PROFILE, I_ARTIFACT_MANIFEST_SHA256 as O_ARTIFACT_MANIFEST_SHA256,
     I_ASSET_ID_DIGEST as O_ASSET_ID_DIGEST, I_ASSET_SCALE as O_ASSET_SCALE,
@@ -87,24 +83,20 @@ use super::kagemusha_v2::{
     S_PEER_HOP_COUNT, S_PROOF_STEP_COUNT, S_TOPUP_ANCHOR_COUNT, S_TOPUP_ANCHORS, S_VERIFIER_KEY_ID,
     S_VERSION,
 };
-
 /// Number of canonical Pallas-field elements in one ABI-21 V4 operation row.
 pub const KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4: usize = 135;
 /// Exact number of little-endian `u32` limbs carrying the operation row.
 pub const KAGEMUSHA_STEP_OPERATION_LIMBS_V4: usize = KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4 * 8;
 const _: [(); KAGEMUSHA_STEP_OPERATION_LIMBS_V4] =
     [(); iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];
-
 /// Pallas `Fp` modulus as eight little-endian `u32` limbs.
 ///
 /// Both Pasta parities use this bound. `Fp` is the smaller Pasta modulus, so a
 /// canonical value reconstructed in either native field cannot wrap.
 pub const KAGEMUSHA_STEP_OPERATION_FP_MODULUS_U32_LE_V4: [u32; 8] =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_OPERATION_FP_MODULUS_U32_LE_V4;
-
 const _: [(); KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4] = [(); O_UNSHIELD_PUBLIC_AMOUNT + 1];
 const _: [(); KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5] = [(); S_VERIFIER_KEY_ID + 8];
-
 const ANCHOR_LIMBS: usize = 16;
 const ANCHOR_SLOTS: usize = 2;
 const CLAIM_SLOTS: usize = 2;
@@ -112,14 +104,12 @@ const CLAIM_LINEAGE_ROOT: usize = 0;
 const CLAIM_DEPTH: usize = 8;
 const CLAIM_PATH: usize = 9;
 const CLAIM_HISTORY_ACCUMULATOR: usize = 11;
-
 /// Exact fixed-size field-neutral operation vector shared by StepEq and StepEp.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaStepOperationVectorV4 {
     /// Eight little-endian `u32` limbs per canonical Pallas-field element.
     pub limbs: [u32; KAGEMUSHA_STEP_OPERATION_LIMBS_V4],
 }
-
 impl From<&KagemushaRecursiveSpendOperationVectorV4> for KagemushaStepOperationVectorV4 {
     fn from(operation: &KagemushaRecursiveSpendOperationVectorV4) -> Self {
         Self {
@@ -127,7 +117,6 @@ impl From<&KagemushaRecursiveSpendOperationVectorV4> for KagemushaStepOperationV
         }
     }
 }
-
 impl From<&KagemushaStepOperationVectorV4> for KagemushaRecursiveSpendOperationVectorV4 {
     fn from(operation: &KagemushaStepOperationVectorV4) -> Self {
         Self {
@@ -135,7 +124,6 @@ impl From<&KagemushaStepOperationVectorV4> for KagemushaRecursiveSpendOperationV
         }
     }
 }
-
 impl Default for KagemushaStepOperationVectorV4 {
     fn default() -> Self {
         Self {
@@ -143,7 +131,6 @@ impl Default for KagemushaStepOperationVectorV4 {
         }
     }
 }
-
 impl KagemushaStepOperationVectorV4 {
     /// Encode 135 canonical Pallas elements as exact little-endian limbs.
     #[must_use]
@@ -158,7 +145,6 @@ impl KagemushaStepOperationVectorV4 {
         }
         Self { limbs }
     }
-
     /// Decode every exact limb group, rejecting values at or above `Fp::MODULUS`.
     pub fn to_fields(&self) -> Result<[Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4], String> {
         let mut fields = [Fp::ZERO; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4];
@@ -177,7 +163,6 @@ impl KagemushaStepOperationVectorV4 {
         }
         Ok(fields)
     }
-
     /// Match every operation field derivable from an ABI-21 terminal
     /// statement before accepting the proof pair.
     ///
@@ -202,7 +187,6 @@ impl KagemushaStepOperationVectorV4 {
             )?;
             put_digest(&mut expected, O_OPERATION_ID, operation_tag);
         }
-
         let require_range = |start: usize, len: usize, label: &str| {
             if actual[start..start + len] == expected[start..start + len] {
                 Ok(())
@@ -212,7 +196,6 @@ impl KagemushaStepOperationVectorV4 {
                 ))
             }
         };
-
         for (start, len, label) in [
             (O_LAYOUT_VERSION, 1, "layout version"),
             (O_PROOF_STEP_COUNT, 1, "proof-step count"),
@@ -240,7 +223,6 @@ impl KagemushaStepOperationVectorV4 {
         ] {
             require_range(start, len, label)?;
         }
-
         let require_transition_ranges =
             |ranges: &[(usize, usize, &'static str)]| -> Result<(), String> {
                 for &(start, len, label) in ranges {
@@ -248,7 +230,6 @@ impl KagemushaStepOperationVectorV4 {
                 }
                 Ok(())
             };
-
         match statement.transition.as_ref() {
             None => {
                 if statement.proof_step_count != 1 || statement.peer_hop_count != 0 {
@@ -457,7 +438,6 @@ impl KagemushaStepOperationVectorV4 {
         }
     }
 }
-
 /// Exact public cells emitted by the secure transfer relation, represented in
 /// canonical byte form before they enter StepEq.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -475,14 +455,12 @@ pub struct KagemushaStepTransferPublicV4 {
     /// Secure-relation network tag.
     pub network_tag: [u8; 32],
 }
-
 fn fp_from_bytes(bytes: [u8; 32], label: &str) -> Result<Fp, String> {
     let mut repr = <Fp as PrimeField>::Repr::default();
     repr.as_mut().copy_from_slice(&bytes);
     Option::<Fp>::from(Fp::from_repr(repr))
         .ok_or_else(|| format!("Kagemusha Step {label} is not a canonical Fp scalar"))
 }
-
 fn put_full_field(
     fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
     index: usize,
@@ -492,7 +470,6 @@ fn put_full_field(
     fields[index] = fp_from_bytes(bytes, label)?;
     Ok(())
 }
-
 fn put_digest(
     fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
     index: usize,
@@ -504,7 +481,6 @@ fn put_digest(
         ));
     }
 }
-
 fn put_amount(
     fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
     index: usize,
@@ -513,19 +489,16 @@ fn put_amount(
     fields[index] = Fp::from(amount as u64);
     fields[index + 1] = Fp::from((amount >> 64) as u64);
 }
-
 fn canonical_binding_digest<T: Encode>(value: &T) -> Result<[u8; 32], String> {
     let encoded = norito::encode_canonical(value)
         .map_err(|error| format!("failed to encode Kagemusha Step binding: {error}"))?;
     Ok(iroha_zkp_halo2::poseidon::hash_bytes(&encoded))
 }
-
 fn encode_u32_scalar(value: u32) -> [u8; 32] {
     let mut bytes = [0_u8; 32];
     bytes[..4].copy_from_slice(&value.to_le_bytes());
     bytes
 }
-
 fn fill_statement_fields_v4(
     statement: &KagemushaRecursiveSpendPublicStatementV4,
 ) -> Result<[Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4], String> {
@@ -561,7 +534,6 @@ fn fill_statement_fields_v4(
         statement.current_note.spend_nullifier,
         "V4 current nullifier",
     )?;
-
     let asset_tag =
         super::confidential_v2::derive_confidential_asset_tag_v3(&statement.asset.to_string())?;
     let network_tag =
@@ -593,7 +565,6 @@ fn fill_statement_fields_v4(
         O_VERIFIER_KEY_ID_DIGEST,
         canonical_binding_digest(&statement.verifier_key_id)?,
     );
-
     let first_anchor = statement
         .topup_anchor_refs
         .first()
@@ -617,7 +588,6 @@ fn fill_statement_fields_v4(
         O_TOPUP_RECEIPT_DIGEST,
         first_anchor.anchor_digest,
     );
-
     let first_claim = statement
         .branch_claims
         .first()
@@ -629,7 +599,6 @@ fn fill_statement_fields_v4(
         O_BRANCH_LINEAGE_ROOT,
         first_claim.path.lineage_root,
     );
-
     match statement.transition.as_ref() {
         None => {}
         Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(transition)) => {
@@ -711,7 +680,6 @@ fn fill_statement_fields_v4(
     }
     Ok(fields)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_init_operation_v4(
     statement: &KagemushaRecursiveSpendPublicStatementV4,
@@ -759,7 +727,6 @@ fn build_init_operation_v4(
     {
         return Err("Kagemusha Step V4 init semantic bindings mismatch".to_owned());
     }
-
     let mut fields = fill_statement_fields_v4(statement)?;
     put_digest(&mut fields, O_RECIPIENT_REQUEST_DIGEST, expected_payer_tag);
     put_digest(&mut fields, O_OPERATION_ID, expected_operation_tag);
@@ -791,7 +758,6 @@ fn build_init_operation_v4(
     fields[O_TRANSFER_OUTPUT_0] = fields[O_CURRENT_COMMITMENT];
     Ok(KagemushaStepOperationVectorV4::from_fields(fields))
 }
-
 impl KagemushaStepOperationVectorV4 {
     /// Construct an ABI-21 initialization operation directly from the V4
     /// finalized receipt and V4 public statement. The V4 carriers are
@@ -875,7 +841,6 @@ impl KagemushaStepOperationVectorV4 {
             expected_operation_tag,
         )
     }
-
     /// Construct the real initialization operation used to qualify an exact
     /// pre-promotion candidate, without fabricating consensus finality.
     ///
@@ -922,7 +887,6 @@ impl KagemushaStepOperationVectorV4 {
             expected_operation_tag,
         )
     }
-
     /// Construct an ABI-21 append operation directly from the V4 split intent
     /// and selected V4 child statement.
     pub fn from_append_v4(
@@ -1025,7 +989,6 @@ impl KagemushaStepOperationVectorV4 {
         {
             return Err("Kagemusha Step V4 append confidential tags mismatch".to_owned());
         }
-
         let input_amount = split.input_amount().map_err(|error| error.to_string())?;
         let mut fields = fill_statement_fields_v4(statement)?;
         fields[O_HAS_CHANGE] = Fp::from(split.change_output.is_some() as u64);
@@ -1125,7 +1088,6 @@ impl KagemushaStepOperationVectorV4 {
         fields[O_TRANSFER_OUTPUT_1] = fields[O_CHANGE_COMMITMENT];
         Ok(Self::from_fields(fields))
     }
-
     /// Construct an ABI-21 partial-redemption operation directly from the V4
     /// redemption intent and V4 change statement.
     pub fn from_redemption_change_v4(
@@ -1150,7 +1112,6 @@ impl KagemushaStepOperationVectorV4 {
         }
         Self::from_redemption_change_public_v4(intent, statement)
     }
-
     /// Reconstruct the exact public ABI-21 redemption-change operation at a
     /// terminal verifier. Confidential membership paths are proved inside the
     /// carried pair; no private witness is accepted or synthesized here.
@@ -1207,7 +1168,6 @@ impl KagemushaStepOperationVectorV4 {
         {
             return Err("Kagemusha Step V4 redemption public bindings mismatch".to_owned());
         }
-
         let mut fields = fill_statement_fields_v4(statement)?;
         fields[O_INPUT_SCALE] = fields[O_ASSET_SCALE];
         fields[O_TRANSFER_SCALE] = fields[O_ASSET_SCALE];
@@ -1287,7 +1247,6 @@ impl KagemushaStepOperationVectorV4 {
         Ok(Self::from_fields(fields))
     }
 }
-
 /// Assigned canonical operation values reconstructed from the exact public limbs.
 #[derive(Clone, Debug)]
 pub struct AssignedKagemushaStepOperationV4<F: BigPrimeField> {
@@ -1299,7 +1258,6 @@ pub struct AssignedKagemushaStepOperationV4<F: BigPrimeField> {
     /// array is boxed for the same bounded-stack guarantee as `limbs`.
     pub fields: Box<[AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4]>,
 }
-
 fn boxed_assigned_values_exact<F: BigPrimeField, const N: usize>(
     values: Vec<AssignedValue<F>>,
 ) -> Box<[AssignedValue<F>; N]> {
@@ -1308,7 +1266,6 @@ fn boxed_assigned_values_exact<F: BigPrimeField, const N: usize>(
         panic!("assigned-value length mismatch: expected {N}, got {actual_len}")
     })
 }
-
 fn assert_equal<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1318,7 +1275,6 @@ fn assert_equal<F: BigPrimeField>(
     let difference = range.gate.sub(ctx, lhs, rhs);
     range.gate.assert_is_const(ctx, &difference, &F::ZERO);
 }
-
 fn assert_equal_if<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1330,7 +1286,6 @@ fn assert_equal_if<F: BigPrimeField>(
     let selected = range.gate.mul(ctx, condition, difference);
     range.gate.assert_is_const(ctx, &selected, &F::ZERO);
 }
-
 fn assert_zero_if<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1340,11 +1295,9 @@ fn assert_zero_if<F: BigPrimeField>(
     let selected = range.gate.mul(ctx, condition, value);
     range.gate.assert_is_const(ctx, &selected, &F::ZERO);
 }
-
 fn field_limb_range(field: usize) -> std::ops::Range<usize> {
     field * 8..field * 8 + 8
 }
-
 fn enforce_fp_canonical_limbs<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1366,7 +1319,6 @@ fn enforce_fp_canonical_limbs<F: BigPrimeField>(
     }
     gate.assert_is_const(ctx, &is_less, &F::ONE);
 }
-
 fn reconstruct_u32_limbs<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1383,7 +1335,6 @@ fn reconstruct_u32_limbs<F: BigPrimeField>(
         .gate
         .inner_product(ctx, limbs.iter().copied(), weights)
 }
-
 fn constrain_typed_operation_fields<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1429,7 +1380,6 @@ fn constrain_typed_operation_fields<F: BigPrimeField>(
             .bits(),
     );
 }
-
 /// Range-check, canonically bound, and reconstruct the shared operation vector.
 ///
 /// Every one of the 1080 source cells is used directly. In particular, this
@@ -1458,7 +1408,6 @@ pub fn assign_kagemusha_step_operation_v4<F: BigPrimeField>(
         fields,
     }
 }
-
 /// Named exact cells exported to the Step recursion and Eq-only relations.
 #[derive(Clone, Debug)]
 pub struct NamedTransitionBindings<F: BigPrimeField> {
@@ -1499,7 +1448,6 @@ pub struct NamedTransitionBindings<F: BigPrimeField> {
     /// by `is_init` at the StepEq boundary.
     pub init_operation_tag_limbs: [AssignedValue<F>; 8],
 }
-
 /// Reconstruct one exact little-endian 256-bit scalar from eight already
 /// range-checked operation limbs. The operation loader has proved that the
 /// value is below the Pallas base-field modulus, so this cannot wrap in either
@@ -1511,7 +1459,6 @@ pub(crate) fn reconstruct_kagemusha_step_scalar_v4<F: BigPrimeField>(
 ) -> AssignedValue<F> {
     reconstruct_u32_limbs(ctx, range, limbs)
 }
-
 /// Copy-bind the two init-only scalar tags to outputs 9 and 10 of the secure
 /// top-up relation. The constraint is profile-gated because the same operation
 /// slots carry descendant metadata for append and redemption.
@@ -1534,14 +1481,12 @@ pub(crate) fn constrain_kagemusha_step_init_topup_tags_v4<F: BigPrimeField>(
         secure_operation_tag,
     );
 }
-
 fn operation_full_limbs<F: BigPrimeField>(
     operation: &AssignedKagemushaStepOperationV4<F>,
     field: usize,
 ) -> &[AssignedValue<F>] {
     &operation.limbs[field_limb_range(field)]
 }
-
 fn operation_digest_limbs<F: BigPrimeField>(
     operation: &AssignedKagemushaStepOperationV4<F>,
     first_field: usize,
@@ -1551,7 +1496,6 @@ fn operation_digest_limbs<F: BigPrimeField>(
         operation.limbs[field * 8 + limb % 2]
     })
 }
-
 fn assert_slices_equal_if<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1564,7 +1508,6 @@ fn assert_slices_equal_if<F: BigPrimeField>(
         assert_equal_if(ctx, range, condition, lhs, rhs);
     }
 }
-
 fn assert_slice_zero_if<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1575,7 +1518,6 @@ fn assert_slice_zero_if<F: BigPrimeField>(
         assert_zero_if(ctx, range, condition, *value);
     }
 }
-
 fn slices_equal<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1591,7 +1533,6 @@ fn slices_equal<F: BigPrimeField>(
         },
     )
 }
-
 fn any<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1603,7 +1544,6 @@ fn any<F: BigPrimeField>(
             range.gate.or(ctx, result, value)
         })
 }
-
 fn constrain_small_count<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1619,7 +1559,6 @@ fn constrain_small_count<F: BigPrimeField>(
         .is_equal(ctx, count, QuantumCell::Constant(F::from(2)));
     [first, second]
 }
-
 fn reconstruct_state_u128<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1628,7 +1567,6 @@ fn reconstruct_state_u128<F: BigPrimeField>(
     debug_assert_eq!(limbs.len(), 4);
     reconstruct_u32_limbs(ctx, range, limbs)
 }
-
 fn operation_u128<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1642,7 +1580,6 @@ fn operation_u128<F: BigPrimeField>(
         operation.fields[low_field],
     )
 }
-
 fn u32_le_bytes<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1657,7 +1594,6 @@ fn u32_le_bytes<F: BigPrimeField>(
         )
     })
 }
-
 fn byte_swap_u32<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1675,7 +1611,6 @@ fn byte_swap_u32<F: BigPrimeField>(
         ],
     )
 }
-
 fn native_bytes<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1687,7 +1622,6 @@ fn native_bytes<F: BigPrimeField>(
         .flat_map(|limb| u32_le_bytes(ctx, range, limb))
         .collect()
 }
-
 fn sha256_native_bytes<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1707,7 +1641,6 @@ fn sha256_native_bytes<F: BigPrimeField>(
     }
     bytes
 }
-
 fn lex_less<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1727,7 +1660,6 @@ fn lex_less<F: BigPrimeField>(
     }
     less
 }
-
 fn anchor_less<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1738,7 +1670,6 @@ fn anchor_less<F: BigPrimeField>(
     let rhs = native_bytes(ctx, range, rhs);
     lex_less(ctx, range, &lhs, &rhs, 8)
 }
-
 fn claim_path_less<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1762,7 +1693,6 @@ fn claim_path_less<F: BigPrimeField>(
     // Depth is <= 64 and every other key component is a byte; eight bits cover both.
     lex_less(ctx, range, &lhs_key, &rhs_key, 8)
 }
-
 fn constrain_set_union<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1804,7 +1734,6 @@ fn constrain_set_union<F: BigPrimeField>(
         );
     }
 }
-
 fn constrain_lineage_root_set_equality<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1819,7 +1748,6 @@ fn constrain_lineage_root_set_equality<F: BigPrimeField>(
         std::array::from_fn(|slot| (claim_roots[slot], claim_present[slot]));
     constrain_set_union(ctx, range, &anchors, &claims);
 }
-
 fn operation_path_from_state<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1833,7 +1761,6 @@ fn operation_path_from_state<F: BigPrimeField>(
         (0..8).map(|index| QuantumCell::Constant(F::from_u128(1_u128 << (8 * (7 - index))))),
     )
 }
-
 fn extend_claim<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1854,7 +1781,6 @@ fn extend_claim<F: BigPrimeField>(
     let depth_selectors: [AssignedValue<F>; 64] = std::array::from_fn(|candidate| {
         gate.is_equal(ctx, depth, QuantumCell::Constant(F::from(candidate as u64)))
     });
-
     let mut extended = Vec::with_capacity(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5);
     extended.extend_from_slice(&claim[CLAIM_LINEAGE_ROOT..CLAIM_DEPTH]);
     extended.push(gate.add(ctx, depth, QuantumCell::Constant(F::ONE)));
@@ -1876,7 +1802,6 @@ fn extend_claim<F: BigPrimeField>(
         let branch_bit = gate.mul(ctx, branch, added_bit);
         extended.push(gate.add(ctx, claim[CLAIM_PATH + path_limb], branch_bit));
     }
-
     let mut history_preimage = KAGEMUSHA_RECURSIVE_SPEND_STATE_HISTORY_SHA256_DOMAIN_V5
         .iter()
         .copied()
@@ -1899,7 +1824,6 @@ fn extend_claim<F: BigPrimeField>(
     );
     Ok(extended)
 }
-
 fn assert_nonzero_if<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1910,7 +1834,6 @@ fn assert_nonzero_if<F: BigPrimeField>(
     let selected = range.gate.mul(ctx, condition, is_zero);
     range.gate.assert_is_const(ctx, &selected, &F::ZERO);
 }
-
 fn bind_full_field_to_state_if<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1927,7 +1850,6 @@ fn bind_full_field_to_state_if<F: BigPrimeField>(
         state,
     );
 }
-
 fn bind_digest_to_state_if<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1939,7 +1861,6 @@ fn bind_digest_to_state_if<F: BigPrimeField>(
     let digest = operation_digest_limbs(operation, first_field);
     assert_slices_equal_if(ctx, range, condition, &digest, state);
 }
-
 /// Constrain the exact two-input application transition over already-assigned cells.
 ///
 /// The relation is symmetric in the two parent slots. Absent parents are
@@ -1977,13 +1898,11 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     {
         range.range_check(ctx, *limb, 32);
     }
-
     let operation = assign_kagemusha_step_operation_v4(ctx, range, operation_limbs);
     let gate = &range.gate;
     let fields = &operation.fields;
     let one = ctx.load_constant(F::ONE);
     let zero = ctx.load_constant(F::ZERO);
-
     let append = fields[O_APPEND_PROFILE];
     let redemption = fields[O_REDEMPTION_PROFILE];
     let extends = gate.add(ctx, append, redemption);
@@ -1991,7 +1910,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     let init = gate.not(ctx, extends);
     let profile_overlap = gate.mul(ctx, append, redemption);
     gate.assert_is_const(ctx, &profile_overlap, &F::ZERO);
-
     let parent_present = constrain_small_count(ctx, range, parent_count);
     let parent_absent = parent_present.map(|present| gate.not(ctx, present));
     for slot in 0..2 {
@@ -2013,7 +1931,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
             super::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
         )),
     );
-
     let input_next_zero_leaf_index = parent_states[0][S_NEXT_ZERO_LEAF_INDEX];
     let output_next_zero_leaf_index = result_state[S_NEXT_ZERO_LEAF_INDEX];
     range.range_check(
@@ -2035,7 +1952,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
             input_next_zero_leaf_index,
         );
     }
-
     // Parent cardinality is operation input cardinality. Init consumes zero,
     // append consumes one or two, and the current redemption wire consumes one.
     assert_equal(ctx, range, parent_count, fields[O_RECORD_INPUT_COUNT]);
@@ -2061,7 +1977,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         output_next_zero_leaf_index,
         expected_output_next_zero_leaf_index,
     );
-
     let branch = fields[O_BRANCH_CHANGE];
     let has_change = fields[O_HAS_CHANGE];
     let not_has_change = gate.not(ctx, has_change);
@@ -2090,7 +2005,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         assert_zero_if(ctx, range, redemption, swap);
         assert_zero_if(ctx, range, not_has_change, swap);
     }
-
     // Exact chain/asset context and artifact identity across active parents.
     bind_full_field_to_state_if(
         ctx,
@@ -2178,7 +2092,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     }
     let expected_change_scale = gate.mul(ctx, has_change, fields[O_ASSET_SCALE]);
     assert_equal(ctx, range, fields[O_CHANGE_SCALE], expected_change_scale);
-
     // Parent historical roots are equal by the local append contract and bind
     // to field 36. Field 38 remains operation-specific and is not used here as
     // a parent creation root.
@@ -2248,7 +2161,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     }
     let roots_equal = gate.is_equal(ctx, fields[O_RECORD_ROOT_BEFORE], fields[O_FINAL_ROOT]);
     gate.assert_is_const(ctx, &roots_equal, &F::ZERO);
-
     // Bind exact parent note material to both confidential/record views.
     for slot in 0..2 {
         let parent = parent_states[slot];
@@ -2303,7 +2215,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         fields[O_TRANSFER_NULLIFIER_1],
     );
     assert_zero_if(ctx, range, parent_present[1], duplicate_input_nullifiers);
-
     // Exact u128 conservation and result-note mapping.
     let parent_amounts: [AssignedValue<F>; 2] = std::array::from_fn(|slot| {
         reconstruct_state_u128(
@@ -2335,7 +2246,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     assert_nonzero_if(ctx, range, not_redemption, recipient_amount);
     assert_nonzero_if(ctx, range, has_change, change_amount);
     assert_zero_if(ctx, range, not_has_change, change_amount);
-
     let current_amount = operation_u128(ctx, range, &operation, O_CURRENT_AMOUNT_LO);
     let selected_amount = gate.select(ctx, change_amount, recipient_amount, branch);
     assert_equal(ctx, range, current_amount, selected_amount);
@@ -2369,7 +2279,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         result_state[S_CURRENT_SCALE],
         fields[O_CURRENT_SCALE],
     );
-
     let recipient_present = gate.not(ctx, redemption);
     assert_nonzero_if(
         ctx,
@@ -2419,7 +2328,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         O_CURRENT_NULLIFIER,
         &result_state[S_CURRENT_NULLIFIER..S_CURRENT_NULLIFIER + 8],
     );
-
     let append_change = gate.mul(ctx, append, has_change);
     let expected_output_count = gate.add(ctx, one, append_change);
     assert_equal(
@@ -2466,7 +2374,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     assert_equal_if(ctx, range, append, fields[O_TRANSFER_OUTPUT_1], transfer_1);
     assert_zero_if(ctx, range, not_append, fields[O_RECORD_OUTPUT_1]);
     assert_zero_if(ctx, range, not_append, fields[O_TRANSFER_OUTPUT_1]);
-
     // Counters are exact max-parent transitions, not host-provided summaries.
     let parent_step_lt = range.is_less_than(
         ctx,
@@ -2520,7 +2427,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         fields[O_PREVIOUS_PEER_HOP_COUNT],
         max_parent_hop,
     );
-
     // Canonical top-up anchor union.
     let result_anchor_count = result_state[S_TOPUP_ANCHOR_COUNT];
     let result_anchor_present = constrain_small_count(ctx, range, result_anchor_count);
@@ -2545,7 +2451,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         anchors_ordered,
         QuantumCell::Constant(F::ONE),
     );
-
     let topup_operation_id = operation_digest_limbs(&operation, O_TOPUP_OPERATION_ID);
     let topup_anchor_digest = operation_digest_limbs(&operation, O_TOPUP_ANCHOR_DIGEST);
     assert_slices_equal_if(
@@ -2569,7 +2474,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         result_anchor_count,
         QuantumCell::Constant(F::ONE),
     );
-
     let mut parent_anchor_storage: Vec<(&[AssignedValue<F>], AssignedValue<F>)> = Vec::new();
     for slot in 0..2 {
         let parent = parent_states[slot];
@@ -2618,7 +2522,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         &gated_parent_anchor_storage,
         &gated_result_anchor_storage,
     );
-
     // Exact branch-claim extension and canonical union.
     let result_claim_count = result_state[S_BRANCH_CLAIM_COUNT];
     let result_claim_present = constrain_small_count(ctx, range, result_claim_count);
@@ -2638,7 +2541,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         claims_ordered,
         QuantumCell::Constant(F::ONE),
     );
-
     let tag8 = operation_digest_limbs(&operation, O_CURRENT_HOP_DOMAIN_TAG);
     let tag: [AssignedValue<F>; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2] =
         tag8[..KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2]
@@ -2661,7 +2563,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     let tag_is_zero = slices_equal(ctx, range, &tag, &[zero; 6]);
     assert_zero_if(ctx, range, extends, tag_is_zero);
     assert_slice_zero_if(ctx, range, init, &tag);
-
     // Init root claim is the exact anchor digest with an empty path and the
     // all-zero initial history accumulator.
     assert_slices_equal_if(
@@ -2673,7 +2574,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     );
     assert_zero_if(ctx, range, init, result_claims[0][CLAIM_DEPTH]);
     assert_slice_zero_if(ctx, range, init, &result_claims[0][CLAIM_PATH..]);
-
     let mut extended_claims = Vec::new();
     let mut extended_presence = Vec::new();
     for slot in 0..2 {
@@ -2728,7 +2628,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         .map(|(claim, present)| (*claim, gate.mul(ctx, extends, present)))
         .collect::<Vec<_>>();
     constrain_set_union(ctx, range, &extended_sources, &extended_results);
-
     // Anchor references are canonicalized by `(topup_operation_id,
     // anchor_digest)`, while claims are canonicalized by lineage path beginning
     // with `anchor_digest`. Those independent orders need not agree, so bind
@@ -2745,7 +2644,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         result_claim_roots,
         result_claim_present,
     );
-
     // Bind canonical first-claim operation fields deterministically while the
     // rolling history accumulators remain in the exact result state. The
     // complete tag sequence remains in the public branch claim.
@@ -2800,7 +2698,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         parent_path = gate.sub(ctx, parent_path, bit);
     }
     assert_equal(ctx, range, fields[O_PARENT_BRANCH_PATH_BITS], parent_path);
-
     // Receipt/finality binding hook. This does not treat a host finality flag
     // as proof: init exposes its exact receipt, while descendants carry the
     // same receipt binding from the operation row.
@@ -2811,7 +2708,6 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     assert_slices_equal_if(ctx, range, extends, &receipt, &parent_receipt);
     let receipt_zero = slices_equal(ctx, range, &receipt, &[zero; 8]);
     assert_zero_if(ctx, range, one, receipt_zero);
-
     let statement_digest_limbs = operation_digest_limbs(&operation, O_STATEMENT_DIGEST);
     let init_payer_tag_limbs = operation_digest_limbs(&operation, O_RECIPIENT_REQUEST_DIGEST);
     let init_operation_tag_limbs = operation_digest_limbs(&operation, O_OPERATION_ID);
@@ -2840,20 +2736,15 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         has_change,
     })
 }
-
 #[cfg(test)]
 mod tests {
     use crate::zk::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
-    use halo2_base::{
-        AssignedValue, gates::circuit::builder::BaseCircuitBuilder, utils::BigPrimeField,
-    };
+    use halo2_base::{AssignedValue, gates::circuit::builder::BaseCircuitBuilder, utils::BigPrimeField};
     use halo2_proofs::{
         dev::MockProver,
         halo2curves::pasta::{Fp, Fq},
     };
-
     use super::*;
-
     #[test]
     fn step_binding_digest_ignores_ambient_norito_layout() {
         let binding = "kagemusha-step-binding".to_owned();
@@ -2871,7 +2762,6 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn v4_operation_constructors_have_direct_typed_inputs() {
         let _: fn(
@@ -2895,7 +2785,6 @@ mod tests {
         ) -> Result<KagemushaStepOperationVectorV4, String> =
             KagemushaStepOperationVectorV4::from_redemption_change_v4;
     }
-
     fn scalar_limbs(value: Fp) -> [u32; 8] {
         let repr = value.to_repr();
         std::array::from_fn(|index| {
@@ -2906,7 +2795,6 @@ mod tests {
             )
         })
     }
-
     fn scalar_bytes(value: Fp) -> [u8; 32] {
         value
             .to_repr()
@@ -2914,7 +2802,6 @@ mod tests {
             .try_into()
             .expect("Pallas scalar representation")
     }
-
     fn terminal_init_statement_v4() -> KagemushaRecursiveSpendPublicStatementV4 {
         use iroha_data_model::{
             NetworkId,
@@ -2926,7 +2813,6 @@ mod tests {
                 KagemushaSpendableNoteDescriptorV2, kagemusha_recursive_spend_verifier_key_id_v4,
             },
         };
-
         let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
         >::from_untyped_unchecked(
@@ -2974,7 +2860,6 @@ mod tests {
             verifier_key_id,
         }
     }
-
     #[test]
     fn terminal_v4_operation_projection_rejects_init_profile_and_tag_substitution() {
         let statement = terminal_init_statement_v4();
@@ -2991,7 +2876,6 @@ mod tests {
         operation
             .validate_terminal_statement_v4(&statement)
             .expect("canonical init operation projection");
-
         let mut wrong_tag = operation.to_fields().expect("canonical operation fields");
         wrong_tag[O_OPERATION_ID] += Fp::ONE;
         assert!(
@@ -2999,7 +2883,6 @@ mod tests {
                 .validate_terminal_statement_v4(&statement)
                 .is_err()
         );
-
         let mut wrong_profile = operation.to_fields().expect("canonical operation fields");
         wrong_profile[O_REDEMPTION_PROFILE] = Fp::ONE;
         assert!(
@@ -3008,7 +2891,6 @@ mod tests {
                 .is_err()
         );
     }
-
     fn exact_limbs(bytes: [u8; 32]) -> [u32; 8] {
         std::array::from_fn(|index| {
             u32::from_le_bytes(
@@ -3018,11 +2900,9 @@ mod tests {
             )
         })
     }
-
     fn write_full_state(state: &mut [u32], start: usize, value: Fp) {
         state[start..start + 8].copy_from_slice(&scalar_limbs(value));
     }
-
     fn write_digest_fields(
         fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
         start: usize,
@@ -3030,7 +2910,6 @@ mod tests {
     ) {
         put_digest(fields, start, bytes);
     }
-
     fn init_fixture() -> (KagemushaStepOperationVectorV4, [Vec<u32>; 2], Vec<u32>) {
         let mut fields = [Fp::ZERO; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4];
         fields[O_LAYOUT_VERSION] = Fp::ONE;
@@ -3068,7 +2947,6 @@ mod tests {
         fields[O_ASSET_TAG] = Fp::from(51);
         fields[O_NETWORK_TAG] = Fp::from(52);
         fields[O_TOPUP_ANCHOR_COUNT] = Fp::ONE;
-
         let operation_id = [0x21; 32];
         let anchor_digest = [0x31; 32];
         let manifest = [0x41; 32];
@@ -3086,7 +2964,6 @@ mod tests {
         write_digest_fields(&mut fields, O_BRANCH_LINEAGE_ROOT, anchor_digest);
         write_digest_fields(&mut fields, O_ARTIFACT_MANIFEST_SHA256, manifest);
         write_digest_fields(&mut fields, O_VERIFIER_KEY_ID_DIGEST, verifier);
-
         let mut result = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
         result[S_VERSION] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
         result[S_NEXT_ZERO_LEAF_INDEX] = 8;
@@ -3108,14 +2985,12 @@ mod tests {
         result[S_ARTIFACT_MANIFEST_SHA256..S_ARTIFACT_MANIFEST_SHA256 + 8]
             .copy_from_slice(&exact_limbs(manifest));
         result[S_VERIFIER_KEY_ID..S_VERIFIER_KEY_ID + 8].copy_from_slice(&exact_limbs(verifier));
-
         (
             KagemushaStepOperationVectorV4::from_fields(fields),
             std::array::from_fn(|_| vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5]),
             result,
         )
     }
-
     fn transition_builder<F: BigPrimeField>(
         operation: &KagemushaStepOperationVectorV4,
         parent_count: u32,
@@ -3167,7 +3042,6 @@ mod tests {
         builder.calculate_params(Some(9));
         builder
     }
-
     fn lineage_root_set_builder(
         anchor_roots: [[u32; 8]; ANCHOR_SLOTS],
         claim_roots: [[u32; 8]; CLAIM_SLOTS],
@@ -3193,7 +3067,6 @@ mod tests {
         builder.calculate_params(Some(9));
         builder
     }
-
     fn claim_extension_builder(
         claim: &[u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5],
         branch: u32,
@@ -3225,7 +3098,6 @@ mod tests {
         builder.calculate_params(Some(9));
         builder
     }
-
     #[test]
     fn operation_vector_round_trips_and_rejects_fp_modulus() {
         let (vector, _, _) = init_fixture();
@@ -3240,7 +3112,6 @@ mod tests {
             .copy_from_slice(&KAGEMUSHA_STEP_OPERATION_FP_MODULUS_U32_LE_V4);
         assert!(noncanonical.to_fields().is_err());
     }
-
     #[test]
     fn claim_extension_constrains_the_v5_rolling_history_accumulator() {
         let mut claim = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5];
@@ -3262,12 +3133,10 @@ mod tests {
         expected[CLAIM_DEPTH] = 1;
         expected[CLAIM_PATH] = 0x80;
         expected[CLAIM_HISTORY_ACCUMULATOR..].copy_from_slice(&exact_limbs(accumulator));
-
         let builder = claim_extension_builder(&claim, 1, &tag, &expected);
         MockProver::run(builder.config_params.k as u32, &builder, vec![])
             .expect("rolling-history claim-extension prover")
             .assert_satisfied();
-
         let mut substituted = expected;
         substituted[CLAIM_HISTORY_ACCUMULATOR] ^= 1;
         let builder = claim_extension_builder(&claim, 1, &tag, &substituted);
@@ -3278,7 +3147,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn assigned_operation_keeps_large_exact_arrays_off_stack() {
         assert_eq!(
@@ -3286,7 +3154,6 @@ mod tests {
             2 * std::mem::size_of::<usize>()
         );
     }
-
     #[test]
     fn assigned_loader_enforces_fp_canonicality_in_both_pasta_fields() {
         fn check<F: BigPrimeField>() {
@@ -3299,7 +3166,6 @@ mod tests {
         check::<Fp>();
         check::<Fq>();
     }
-
     #[test]
     fn init_secure_payer_and_operation_tags_are_copy_bound() {
         let (operation, parents, result) = init_fixture();
@@ -3308,7 +3174,6 @@ mod tests {
         MockProver::run(builder.config_params.k as u32, &builder, vec![])
             .expect("init tag binding prover")
             .assert_satisfied();
-
         let wrong = [scalar_limbs(Fp::from(63)), scalar_limbs(Fp::from(62))];
         let builder = transition_builder::<Fp>(&operation, 0, &parents, &result, Some(wrong));
         assert!(
@@ -3318,7 +3183,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn lineage_root_set_accepts_anchor_order_opposite_claim_order() {
         // Anchor references sort first by top-up operation id, whereas claims
@@ -3333,7 +3197,6 @@ mod tests {
         MockProver::run(builder.config_params.k as u32, &builder, vec![])
             .expect("opposite-order lineage-root set prover")
             .assert_satisfied();
-
         let unrelated_lineage_root = exact_limbs([0x33; 32]);
         let wrong = lineage_root_set_builder(
             [high_lineage_root, low_lineage_root],
@@ -3346,7 +3209,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn transition_rejects_root_note_and_parent_count_substitution() {
         let (operation, parents, result) = init_fixture();
@@ -3363,7 +3225,6 @@ mod tests {
             .verify()
             .is_err()
         );
-
         let mut wrong_note = result.clone();
         wrong_note[S_CURRENT_COMMITMENT] ^= 1;
         let wrong_note_builder =
@@ -3378,7 +3239,6 @@ mod tests {
             .verify()
             .is_err()
         );
-
         let wrong_parent_count = transition_builder::<Fp>(&operation, 1, &parents, &result, None);
         assert!(
             MockProver::run(

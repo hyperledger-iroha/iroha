@@ -12,12 +12,10 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
-
 use axum::http::{Request, Version, header, request::Parts};
 use ed25519_dalek::VerifyingKey as DalekVerifyingKey;
 use hex::ToHex;
@@ -54,7 +52,6 @@ use sorafs_manifest::{
     validate_governance_dag_head_against_rotatable_chain_v1,
 };
 use url::Url;
-
 use crate::{
     FencedPrivacyPublicationDispositionV1, FencedPrivacyPublicationReceiptV1,
     FencedPrivacyPublicationRequestV1, FencedTransparencyHeadAncestryProofV1,
@@ -16959,7 +16956,6 @@ fn appeal_finance_settlement_receipt_json(
         ))
     })
 }
-
 #[cfg(test)]
 mod tests {
     include!("governance/tests/support.rs");

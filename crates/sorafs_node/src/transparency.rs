@@ -1,17 +1,13 @@
 //! Local SFM-4c transparency aggregate worker helpers.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use crate::{GovernanceSubmissionProvenanceV1, moderation::ModerationEvidenceViewerAuditReport};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
-use iroha_crypto::sorafs::proof_token::{
-    ModerationAction as ProofTokenModerationAction, ProofToken,
-};
+use iroha_crypto::sorafs::proof_token::{ModerationAction as ProofTokenModerationAction, ProofToken};
 use iroha_data_model::{
     events::data::sorafs::SorafsReserveLedgerEventKind,
     sorafs::{
@@ -35,7 +31,6 @@ use sorafs_manifest::{
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsModerationBallotGovernanceEventV1,
 };
 use thiserror::Error;
-
 const SOURCE_ENTRY_SUBJECT_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.source_entry.subject.v1";
 const SOURCE_ENTRY_SUMMARY_DIGEST_DOMAIN_V1: &[u8] =

@@ -1,5 +1,4 @@
 //! Smoke tests for syscall docs generators (table and minimal list).
-
 #[test]
 fn render_syscalls_markdown_table_includes_headers_and_known_rows() {
     let md = ivm::syscalls::render_syscalls_markdown_table();
@@ -10,7 +9,6 @@ fn render_syscalls_markdown_table_includes_headers_and_known_rows() {
     assert!(md.contains("| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY"));
     assert!(md.contains("| 0xF0 | ALLOC"));
 }
-
 #[test]
 fn render_syscalls_min_list_contains_expected_items() {
     let md = ivm::syscalls::render_syscalls_min_list();

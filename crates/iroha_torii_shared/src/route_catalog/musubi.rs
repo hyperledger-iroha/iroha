@@ -1,10 +1,8 @@
 //! Canonical Musubi V1 typed-query and unsigned-instruction routes.
-
 use super::{
     AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
     RouteDescriptor, RouteEffect, RouteProjections,
 };
-
 const fn account_post(
     stable_route_id: &'static str,
     path: &'static str,
@@ -24,15 +22,12 @@ const fn account_post(
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true)
 }
-
 const fn query_post(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
     account_post(stable_route_id, path, RouteEffect::ReadOnly)
 }
-
 const fn instruction_post(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
     account_post(stable_route_id, path, RouteEffect::ExpensiveCompute)
 }
-
 /// Fetch one exact structural package record.
 pub const EXACT_PACKAGE: RouteDescriptor = query_post(
     "musubi.v1.query.exact_package",
@@ -181,7 +176,6 @@ pub const RELEASE_DIGEST_ASSERT: RouteDescriptor = instruction_post(
     "musubi.v1.instruction.release_digest_assert",
     "/v1/musubi/instructions/release-digest-assert",
 );
-
 /// Complete Musubi route family registered when `app_api` is compiled.
 pub const ROUTES: &[RouteDescriptor] = &[
     EXACT_PACKAGE,

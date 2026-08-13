@@ -1,16 +1,13 @@
 //! Allocation regressions for borrowed query predicates and erased-query framing.
-
 // This isolated integration test is the narrow exception that needs `GlobalAlloc`
 // to observe steady-state heap traffic in the production serialization paths.
 #![allow(unsafe_code)]
-
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
     hint::black_box,
     sync::atomic::{AtomicUsize, Ordering},
 };
-
 use iroha_data_model::{
     domain::Domain,
     query::{
@@ -21,14 +18,11 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use norito::core::NoritoSerialize;
-
 struct CountingAllocator;
-
 thread_local! {
     static TRACK_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
 }
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
-
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if TRACK_ALLOCATIONS.try_with(Cell::get).unwrap_or(false) {
@@ -37,22 +31,18 @@ unsafe impl GlobalAlloc for CountingAllocator {
         // SAFETY: the caller supplies the `GlobalAlloc` layout contract unchanged.
         unsafe { System.alloc(layout) }
     }
-
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // SAFETY: the pointer and layout are forwarded unchanged to the allocator that created it.
         unsafe { System.dealloc(ptr, layout) }
     }
 }
-
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
-
 fn serialize_into(value: &dyn NoritoSerialize, output: &mut Vec<u8>) {
     output.clear();
     let mut encoder = norito::core::Encoder::for_buffer(output);
     value.serialize(&mut encoder).expect("serialize value");
 }
-
 #[test]
 fn predicate_and_query_box_sizing_and_streaming_do_not_clone_large_payloads() {
     let filtered = CompoundPredicate::<RoleId>::build(|prototype| {
@@ -63,7 +53,6 @@ fn predicate_and_query_box_sizing_and_streaming_do_not_clone_large_payloads() {
         .encoded_len_exact()
         .expect("JSON predicate has an exact wire length");
     let mut filtered_output = Vec::with_capacity(filtered_len);
-
     let mut tree_nodes: Vec<_> = (0_u64..1_000).map(CommittedTxPredicate::TsGte).collect();
     tree_nodes.push(CommittedTxPredicate::MetadataEq {
         key: "large_metadata".parse().expect("metadata key"),
@@ -77,7 +66,6 @@ fn predicate_and_query_box_sizing_and_streaming_do_not_clone_large_payloads() {
         .encoded_len_exact()
         .expect("typed predicate has an exact streamed wire length");
     let mut tree_output = Vec::with_capacity(tree_len);
-
     let query: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Domain>::new(
         CompoundPredicate::PASS,
         SelectorTuple::default(),
@@ -87,7 +75,6 @@ fn predicate_and_query_box_sizing_and_streaming_do_not_clone_large_payloads() {
         .encoded_len_exact()
         .expect("erased iterable query has an exact streamed wire length");
     let mut query_output = Vec::with_capacity(query_len);
-
     // Warm all registry and thread-local codec state before measuring the steady-state paths.
     serialize_into(&filtered, &mut filtered_output);
     serialize_into(&tree, &mut tree_output);
@@ -97,21 +84,16 @@ fn predicate_and_query_box_sizing_and_streaming_do_not_clone_large_payloads() {
     query_output.clear();
     ALLOCATIONS.store(0, Ordering::Relaxed);
     TRACK_ALLOCATIONS.with(|tracking| tracking.set(true));
-
     let filtered_is_pass = black_box(filtered.is_pass());
     let filtered_equal = black_box(filtered == filtered_clone);
     let filtered_exact = black_box(filtered.encoded_len_exact());
     serialize_into(&filtered, &mut filtered_output);
-
     let tree_equal = black_box(tree == tree_clone);
     let tree_exact = black_box(tree.encoded_len_exact());
     serialize_into(&tree, &mut tree_output);
-
     let query_exact = black_box(query.encoded_len_exact());
     serialize_into(&query, &mut query_output);
-
     TRACK_ALLOCATIONS.with(|tracking| tracking.set(false));
-
     assert!(!filtered_is_pass);
     assert!(filtered_equal);
     assert_eq!(filtered_exact, Some(filtered_len));

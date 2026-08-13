@@ -9,7 +9,6 @@ impl PipelineStatusKind {
             Self::Expired => "Expired",
         }
     }
-
     fn rank(self) -> u8 {
         match self {
             Self::Queued => 0,
@@ -20,17 +19,14 @@ impl PipelineStatusKind {
             Self::Applied => 5,
         }
     }
-
     fn is_terminal(self) -> bool {
         matches!(self, Self::Applied | Self::Rejected | Self::Expired)
     }
 }
-
 fn pipeline_rejection_summary(
     reason: &iroha_data_model::transaction::error::TransactionRejectionReason,
 ) -> &'static str {
     use iroha_data_model::transaction::error::TransactionRejectionReason;
-
     match reason {
         TransactionRejectionReason::AccountDoesNotExist(_) => "Account does not exist.",
         TransactionRejectionReason::LimitCheck(_) => "Transaction limits were exceeded.",

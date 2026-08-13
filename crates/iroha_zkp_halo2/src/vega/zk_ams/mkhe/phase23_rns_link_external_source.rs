@@ -20,13 +20,9 @@
 //! remains closed.
 //! The adapter also inherits the leaf's explicit exclusions for secure
 //! deletion, swap/core/page-cache control, panic-abort erasure, and measured RSS.
-
 use std::path::Path;
-
 use iroha_confidential_spool::ConfidentialSpoolChunkV1;
-
 use crate::vega::sponge::Keccak256;
-
 use super::super::ZkAmsMkheErrorV1;
 use super::{
     RNS_LINK_FAMILY_ORDER_V1, RNS_LINK_RELEASE_COMMITMENTS_V1, RNS_LINK_VERSION_V1,
@@ -34,25 +30,21 @@ use super::{
     ZkAmsPhase23RnsLinkFamilyV1, ZkAmsPhase23RnsLinkReleaseGeometryV1,
     derive_zk_ams_phase23_rns_link_release_geometry_v1,
 };
-
 #[path = "phase23_rns_link_external_spool.rs"]
 mod confidential_spool;
 use confidential_spool::{RnsLinkSecretSpoolSnapshotsV1, RnsLinkSecretSpoolWriterV1};
-
 const SOURCE_VERSION_V1: u8 = 1;
 const SOURCE_RECORD_COUNT_V1: u16 = RNS_LINK_RELEASE_COMMITMENTS_V1 as u16;
 const SOURCE_EQUATIONS_PER_RECORD_V1: u16 = 2;
 const SOURCE_RELATION_COORDINATE_COUNT_V1: u32 = SOURCE_RECORD_COUNT_V1 as u32
     * SOURCE_EQUATIONS_PER_RECORD_V1 as u32
     * ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1 as u32;
-
 const SECRET_MAIN_PLAINTEXT_BYTES_V1: u64 = 8_192;
 const SECRET_NONCE_PLAINTEXT_BYTES_V1: u64 = 32;
 const SECRET_AEAD_TAG_BYTES_V1: u64 = 16;
 const SECRET_MAIN_RECORD_BYTES_V1: u64 = SECRET_MAIN_PLAINTEXT_BYTES_V1 + SECRET_AEAD_TAG_BYTES_V1;
 const SECRET_NONCE_RECORD_BYTES_V1: u64 =
     SECRET_NONCE_PLAINTEXT_BYTES_V1 + SECRET_AEAD_TAG_BYTES_V1;
-
 const CANONICAL_COEFFICIENT_BYTES_V1: u64 = 32;
 const SIGNED_COEFFICIENT_BYTES_V1: u64 = 8;
 const CANONICAL_BLOCK_ENCODING_TAG_V1: &[u8] = b"canonical-plaintext:coefficient:big-endian";
@@ -65,7 +57,6 @@ const SIGNED_COEFFICIENTS_PER_BLOCK_V1: u16 =
     (SECRET_MAIN_PLAINTEXT_BYTES_V1 / SIGNED_COEFFICIENT_BYTES_V1) as u16;
 const RING_DEGREE_V1: u32 = 131_072;
 const FULL_PACKED_USED_SLOTS_V1: u32 = 65_536;
-
 const CANONICAL_BLOCKS_PER_RECORD_V1: u16 =
     (RING_DEGREE_V1 / CANONICAL_COEFFICIENTS_PER_BLOCK_V1 as u32) as u16;
 const SIGNED_BLOCKS_PER_POLYNOMIAL_V1: u16 =
@@ -79,7 +70,6 @@ const SECRET_NONCE_SLOT_COUNT_V1: u64 = SOURCE_RECORD_COUNT_V1 as u64;
 const SECRET_MAIN_FILE_BYTES_V1: u64 = SECRET_MAIN_SLOT_COUNT_V1 * SECRET_MAIN_RECORD_BYTES_V1;
 const SECRET_NONCE_FILE_BYTES_V1: u64 = SECRET_NONCE_SLOT_COUNT_V1 * SECRET_NONCE_RECORD_BYTES_V1;
 const SECRET_TOTAL_FILE_BYTES_V1: u64 = SECRET_MAIN_FILE_BYTES_V1 + SECRET_NONCE_FILE_BYTES_V1;
-
 const SOURCE_MAPPING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.secret-source-mapping";
 const SOURCE_ABSOLUTE_MAIN_MAPPING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.secret-source-absolute-main-mapping";
@@ -101,7 +91,6 @@ const SOURCE_SNAPSHOT_RECEIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.secret-source-snapshot-receipt";
 const SOURCE_PUBLICATION_RECEIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.secret-source-publication-receipt";
-
 const CONFIDENTIAL_BACKEND_WIRED_V1: bool = true;
 const PUBLIC_ARTIFACT_MANIFEST_BOUND_V1: bool = false;
 const SOURCE_RELATION_POLYNOMIALS_CONSTRUCTED_V1: bool = false;
@@ -110,7 +99,6 @@ const ZERO_KNOWLEDGE_MASKING_COMPLETE_V1: bool = false;
 const Q_PCS_HANDOFF_COMPLETE_V1: bool = false;
 const OPERATIONAL_RECEIPT_ACCEPTED_V1: bool = false;
 const RELEASE_COMPLETE_V1: bool = false;
-
 const _: () = {
     assert!(SOURCE_VERSION_V1 == RNS_LINK_VERSION_V1);
     assert!(SOURCE_RECORD_COUNT_V1 == 43);
@@ -138,7 +126,6 @@ const _: () = {
     assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V1);
     assert!(!RELEASE_COMPLETE_V1);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CanonicalSourceRecordPositionV1 {
     ordinal: u16,
@@ -147,7 +134,6 @@ struct CanonicalSourceRecordPositionV1 {
     family_chunk_count: u16,
     used_slots: u32,
 }
-
 const fn canonical_source_record_position_v1(
     ordinal: u16,
 ) -> Option<CanonicalSourceRecordPositionV1> {
@@ -183,7 +169,6 @@ const fn canonical_source_record_position_v1(
         used_slots,
     })
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum SecretRecordComponentV1 {
@@ -192,7 +177,6 @@ enum SecretRecordComponentV1 {
     ErrorZero = 3,
     ErrorOne = 4,
 }
-
 impl SecretRecordComponentV1 {
     const fn first_block(self) -> u16 {
         match self {
@@ -202,14 +186,12 @@ impl SecretRecordComponentV1 {
             Self::ErrorOne => CANONICAL_BLOCKS_PER_RECORD_V1 + 2 * SIGNED_BLOCKS_PER_POLYNOMIAL_V1,
         }
     }
-
     const fn block_count(self) -> u16 {
         match self {
             Self::CanonicalPlaintext => CANONICAL_BLOCKS_PER_RECORD_V1,
             Self::Ephemeral | Self::ErrorZero | Self::ErrorOne => SIGNED_BLOCKS_PER_POLYNOMIAL_V1,
         }
     }
-
     const fn encoding_v1(self) -> (&'static [u8], u64, u16) {
         match self {
             Self::CanonicalPlaintext => (
@@ -225,14 +207,12 @@ impl SecretRecordComponentV1 {
         }
     }
 }
-
 const SECRET_RECORD_COMPONENT_ORDER_V1: [SecretRecordComponentV1; 4] = [
     SecretRecordComponentV1::CanonicalPlaintext,
     SecretRecordComponentV1::Ephemeral,
     SecretRecordComponentV1::ErrorZero,
     SecretRecordComponentV1::ErrorOne,
 ];
-
 const fn secret_main_slot_v1(
     record_ordinal: u16,
     component: SecretRecordComponentV1,
@@ -249,7 +229,6 @@ const fn secret_main_slot_v1(
             + component_block as u64,
     )
 }
-
 const fn secret_nonce_slot_v1(record_ordinal: u16) -> Option<u64> {
     if canonical_source_record_position_v1(record_ordinal).is_none() {
         None
@@ -257,35 +236,30 @@ const fn secret_nonce_slot_v1(record_ordinal: u16) -> Option<u64> {
         Some(record_ordinal as u64)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum SourceEquationV1 {
     Constant = 0,
     Linear = 1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum SourcePublicKeyComponentV1 {
     CollectivePublicB = 1,
     CollectivePublicA = 2,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum SourceCiphertextComponentV1 {
     ConstantC0 = 1,
     LinearC1 = 2,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SourceEquationPositionV1 {
     equation: SourceEquationV1,
     public_key_component: SourcePublicKeyComponentV1,
     ciphertext_component: SourceCiphertextComponentV1,
 }
-
 const SOURCE_EQUATION_ORDER_V1: [SourceEquationPositionV1; 2] = [
     SourceEquationPositionV1 {
         equation: SourceEquationV1::Constant,
@@ -298,7 +272,6 @@ const SOURCE_EQUATION_ORDER_V1: [SourceEquationPositionV1; 2] = [
         ciphertext_component: SourceCiphertextComponentV1::LinearC1,
     },
 ];
-
 const fn source_relation_coordinate_v1(
     record_ordinal: u16,
     equation: SourceEquationV1,
@@ -315,7 +288,6 @@ const fn source_relation_coordinate_v1(
             + limb as u32,
     )
 }
-
 fn validate_source_release_geometry_v1(
     geometry: &ZkAmsPhase23RnsLinkReleaseGeometryV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -348,14 +320,12 @@ fn validate_source_release_geometry_v1(
     }
     Ok(())
 }
-
 fn source_mapping_digest_v1(
     geometry: &ZkAmsPhase23RnsLinkReleaseGeometryV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     validate_source_release_geometry_v1(geometry)?;
     source_mapping_digest_from_geometry_digest_v1(geometry.digest)
 }
-
 fn source_mapping_digest_from_geometry_digest_v1(
     geometry_digest: [u8; 32],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -449,7 +419,6 @@ fn source_mapping_digest_from_geometry_digest_v1(
     }
     Ok(digest)
 }
-
 fn hash_source_encoding_v1(
     hash: &mut Keccak256,
     tag: &[u8],
@@ -461,7 +430,6 @@ fn hash_source_encoding_v1(
     hash.update(&element_width_bytes.to_be_bytes());
     hash.update(&element_count.to_be_bytes());
 }
-
 fn source_store_context_digest_v1(
     domain: &[u8],
     context_digest: [u8; 32],
@@ -481,7 +449,6 @@ fn source_store_context_digest_v1(
     }
     Ok(digest)
 }
-
 /// Move-only, zeroizing plaintext owner accepted by the source writer.
 ///
 /// The only constructors allocate one exact main or nonce slot.  The mutable
@@ -490,25 +457,21 @@ fn source_store_context_digest_v1(
 /// bytes.
 #[must_use = "dropping this chunk zeroizes it without storing a source block"]
 pub(in super::super) struct ZkAmsPhase23RnsLinkSecretChunkV1(ConfidentialSpoolChunkV1);
-
 impl ZkAmsPhase23RnsLinkSecretChunkV1 {
     pub(in super::super) fn new_main_block_zeroed_v1() -> Result<Self, ZkAmsMkheErrorV1> {
         ConfidentialSpoolChunkV1::new_zeroed_v1(SECRET_MAIN_PLAINTEXT_BYTES_V1)
             .map(Self)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
     }
-
     pub(in super::super) fn new_nonce_zeroed_v1() -> Result<Self, ZkAmsMkheErrorV1> {
         ConfidentialSpoolChunkV1::new_zeroed_v1(SECRET_NONCE_PLAINTEXT_BYTES_V1)
             .map(Self)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
     }
-
     pub(in super::super) fn as_mut_bytes_v1(&mut self) -> &mut [u8] {
         self.0.as_mut_slice_v1()
     }
 }
-
 fn stored_record_digest_v1(live: &LiveExternalSourceAssemblyV1, record_ordinal: u16) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(SOURCE_RECORD_STORE_SEAL_DOMAIN_V1);
@@ -521,7 +484,6 @@ fn stored_record_digest_v1(live: &LiveExternalSourceAssemblyV1, record_ordinal: 
     hash.update(&live.next_nonce_slot.to_be_bytes());
     hash.finalize()
 }
-
 /// Immutable, non-authorizing identity of the live confidential provider.
 pub(in super::super) struct ZkAmsPhase23RnsLinkSourceProviderReceiptV1 {
     provider_identity: [u8; 32],
@@ -530,7 +492,6 @@ pub(in super::super) struct ZkAmsPhase23RnsLinkSourceProviderReceiptV1 {
     mapping_digest: [u8; 32],
     receipt_digest: [u8; 32],
 }
-
 /// Immutable, non-authorizing identity of both sealed confidential snapshots.
 pub(in super::super) struct ZkAmsPhase23RnsLinkSourceSnapshotReceiptV1 {
     provider_receipt_digest: [u8; 32],
@@ -541,7 +502,6 @@ pub(in super::super) struct ZkAmsPhase23RnsLinkSourceSnapshotReceiptV1 {
     nonce_file_bytes: u64,
     receipt_digest: [u8; 32],
 }
-
 /// Immutable structural publication metadata.
 ///
 /// Only concrete confidential-backend wiring may be true.  Every stronger
@@ -564,13 +524,11 @@ pub(in super::super) struct ZkAmsPhase23RnsLinkSourcePublicationReceiptV1 {
     release_complete: bool,
     receipt_digest: [u8; 32],
 }
-
 impl ZkAmsPhase23RnsLinkSourcePublicationReceiptV1 {
     pub(in super::super) const fn receipt_digest_v1(&self) -> [u8; 32] {
         self.receipt_digest
     }
 }
-
 fn provider_receipt_digest_v1(receipt: &ZkAmsPhase23RnsLinkSourceProviderReceiptV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(SOURCE_PROVIDER_RECEIPT_DOMAIN_V1);
@@ -581,7 +539,6 @@ fn provider_receipt_digest_v1(receipt: &ZkAmsPhase23RnsLinkSourceProviderReceipt
     hash.update(&receipt.mapping_digest);
     hash.finalize()
 }
-
 fn snapshot_receipt_digest_v1(receipt: &ZkAmsPhase23RnsLinkSourceSnapshotReceiptV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(SOURCE_SNAPSHOT_RECEIPT_DOMAIN_V1);
@@ -594,7 +551,6 @@ fn snapshot_receipt_digest_v1(receipt: &ZkAmsPhase23RnsLinkSourceSnapshotReceipt
     hash.update(&receipt.nonce_file_bytes.to_be_bytes());
     hash.finalize()
 }
-
 fn publication_receipt_digest_v1(
     receipt: &ZkAmsPhase23RnsLinkSourcePublicationReceiptV1,
 ) -> [u8; 32] {
@@ -619,13 +575,11 @@ fn publication_receipt_digest_v1(
     ]);
     hash.finalize()
 }
-
 /// Move-only, poison-on-failure assembly of exactly 43 stored records.
 #[must_use = "dropping this assembly publishes no confidential source"]
 pub(in super::super) struct ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
     live: Option<LiveExternalSourceAssemblyV1>,
 }
-
 struct LiveExternalSourceAssemblyV1 {
     backend: RnsLinkSecretSpoolWriterV1,
     context_digest: [u8; 32],
@@ -637,7 +591,6 @@ struct LiveExternalSourceAssemblyV1 {
     next_nonce_slot: u64,
     ordered_record_topology_hash: Keccak256,
 }
-
 impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
     /// Create both exact unlinked confidential spools from a validated context.
     ///
@@ -669,7 +622,6 @@ impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
             main_context_digest,
             nonce_context_digest,
         )?;
-
         let mut ordered_record_topology_hash = Keccak256::new();
         ordered_record_topology_hash.update(SOURCE_ORDERED_RECORD_TOPOLOGY_DOMAIN_V1);
         ordered_record_topology_hash.update(&[SOURCE_VERSION_V1]);
@@ -677,7 +629,6 @@ impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
         ordered_record_topology_hash.update(&geometry.digest);
         ordered_record_topology_hash.update(&mapping_digest);
         ordered_record_topology_hash.update(&backend.writer_identity_v1());
-
         Ok(Self {
             live: Some(LiveExternalSourceAssemblyV1 {
                 backend,
@@ -692,7 +643,6 @@ impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
             }),
         })
     }
-
     fn write_next_main_block_v1(
         &mut self,
         record_ordinal: u16,
@@ -719,7 +669,6 @@ impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
         self.live = Some(live);
         Ok(())
     }
-
     pub(in super::super) fn write_next_canonical_plaintext_block_v1(
         &mut self,
         record_ordinal: u16,
@@ -733,7 +682,6 @@ impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
             chunk,
         )
     }
-
     pub(in super::super) fn write_next_ephemeral_block_v1(
         &mut self,
         record_ordinal: u16,
@@ -747,7 +695,6 @@ impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
             chunk,
         )
     }
-
     pub(in super::super) fn write_next_error_zero_block_v1(
         &mut self,
         record_ordinal: u16,
@@ -761,7 +708,6 @@ impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
             chunk,
         )
     }
-
     pub(in super::super) fn write_next_error_one_block_v1(
         &mut self,
         record_ordinal: u16,
@@ -775,7 +721,6 @@ impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
             chunk,
         )
     }
-
     /// Persist the nonce only after all 896 main blocks for this record.
     ///
     /// Every write method removes live state before coordinate validation or
@@ -823,7 +768,6 @@ impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
         self.live = Some(live);
         Ok(())
     }
-
     /// Seal both exact snapshots only after all 43 records are complete.
     pub(in super::super) fn finish_v1(
         self,
@@ -845,7 +789,6 @@ impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
         {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         let mut provider = ZkAmsPhase23RnsLinkSourceProviderReceiptV1 {
             provider_identity: backend.provider_identity_v1(),
             writer_identity: backend.writer_identity_v1(),
@@ -891,21 +834,18 @@ impl ZkAmsPhase23RnsLinkExternalSourceAssemblyV1 {
         Ok(ZkAmsPhase23RnsLinkExternalSourcePublicationV1 { backend, receipt })
     }
 }
-
 /// Move-only owner of both authenticated snapshots and immutable receipt.
 #[must_use = "dropping this publication produces no RNS-Link relation proof"]
 pub(in super::super) struct ZkAmsPhase23RnsLinkExternalSourcePublicationV1 {
     backend: RnsLinkSecretSpoolSnapshotsV1,
     receipt: ZkAmsPhase23RnsLinkSourcePublicationReceiptV1,
 }
-
 impl ZkAmsPhase23RnsLinkExternalSourcePublicationV1 {
     pub(in super::super) const fn receipt_v1(
         &self,
     ) -> &ZkAmsPhase23RnsLinkSourcePublicationReceiptV1 {
         &self.receipt
     }
-
     fn read_main_block_v1(
         &mut self,
         record_ordinal: u16,
@@ -918,7 +858,6 @@ impl ZkAmsPhase23RnsLinkExternalSourcePublicationV1 {
             .read_main_v1(slot)
             .map(ZkAmsPhase23RnsLinkSecretChunkV1)
     }
-
     pub(in super::super) fn read_canonical_plaintext_block_v1(
         &mut self,
         record_ordinal: u16,
@@ -930,7 +869,6 @@ impl ZkAmsPhase23RnsLinkExternalSourcePublicationV1 {
             component_block,
         )
     }
-
     pub(in super::super) fn read_ephemeral_block_v1(
         &mut self,
         record_ordinal: u16,
@@ -942,7 +880,6 @@ impl ZkAmsPhase23RnsLinkExternalSourcePublicationV1 {
             component_block,
         )
     }
-
     pub(in super::super) fn read_error_zero_block_v1(
         &mut self,
         record_ordinal: u16,
@@ -954,7 +891,6 @@ impl ZkAmsPhase23RnsLinkExternalSourcePublicationV1 {
             component_block,
         )
     }
-
     pub(in super::super) fn read_error_one_block_v1(
         &mut self,
         record_ordinal: u16,
@@ -966,7 +902,6 @@ impl ZkAmsPhase23RnsLinkExternalSourcePublicationV1 {
             component_block,
         )
     }
-
     pub(in super::super) fn read_nonce_v1(
         &mut self,
         record_ordinal: u16,
@@ -978,7 +913,6 @@ impl ZkAmsPhase23RnsLinkExternalSourcePublicationV1 {
             .map(ZkAmsPhase23RnsLinkSecretChunkV1)
     }
 }
-
 /// Static accounting facts, not runtime or release evidence.
 struct ExternalSourceLinkPlanV1 {
     release_family_count: usize,
@@ -1007,7 +941,6 @@ struct ExternalSourceLinkPlanV1 {
     operational_receipt_accepted: bool,
     release_complete: bool,
 }
-
 const EXTERNAL_SOURCE_LINK_PLAN_V1: ExternalSourceLinkPlanV1 = ExternalSourceLinkPlanV1 {
     release_family_count: 6,
     release_record_count: 43,
@@ -1035,7 +968,6 @@ const EXTERNAL_SOURCE_LINK_PLAN_V1: ExternalSourceLinkPlanV1 = ExternalSourceLin
     operational_receipt_accepted: OPERATIONAL_RECEIPT_ACCEPTED_V1,
     release_complete: RELEASE_COMPLETE_V1,
 };
-
 #[cfg(test)]
 #[path = "phase23_rns_link_external_source_tests.rs"]
 mod tests;

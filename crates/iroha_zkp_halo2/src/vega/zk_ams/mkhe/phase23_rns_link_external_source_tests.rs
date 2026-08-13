@@ -4,9 +4,7 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-
 use super::*;
-
 fn release_context_v1() -> ZkAmsPhase23RnsLinkContextV1 {
     ZkAmsPhase23RnsLinkContextV1::new(
         [0x11; 32],
@@ -19,11 +17,8 @@ fn release_context_v1() -> ZkAmsPhase23RnsLinkContextV1 {
     )
     .unwrap()
 }
-
 static NEXT_TEST_DIRECTORY_V1: AtomicU64 = AtomicU64::new(0);
-
 struct TestDirectoryV1(PathBuf);
-
 impl TestDirectoryV1 {
     fn new_v1(label: &str) -> Self {
         let ordinal = NEXT_TEST_DIRECTORY_V1.fetch_add(1, Ordering::Relaxed);
@@ -35,13 +30,11 @@ impl TestDirectoryV1 {
         Self(path)
     }
 }
-
 impl Drop for TestDirectoryV1 {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-
 #[test]
 fn secret_only_geometry_is_exact_and_smaller_than_the_full_mirror() {
     let plan = EXTERNAL_SOURCE_LINK_PLAN_V1;
@@ -64,7 +57,6 @@ fn secret_only_geometry_is_exact_and_smaller_than_the_full_mirror() {
     assert!(!plan.operational_receipt_accepted);
     assert!(!plan.release_complete);
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ManualMutationV1 {
     Clean,
@@ -74,14 +66,12 @@ enum ManualMutationV1 {
     Order,
     Encoding,
 }
-
 fn manual_encoding_frame_v1(hash: &mut Keccak256, tag: &[u8], width: u64, count: u16) {
     hash.update(&(tag.len() as u16).to_be_bytes());
     hash.update(tag);
     hash.update(&width.to_be_bytes());
     hash.update(&count.to_be_bytes());
 }
-
 fn manual_mapping_oracle_v1(geometry_digest: [u8; 32], mutation: ManualMutationV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.phase23.rns-link.secret-source-mapping");
@@ -96,7 +86,6 @@ fn manual_mapping_oracle_v1(geometry_digest: [u8; 32], mutation: ManualMutationV
     hash.update(&43_u64.to_be_bytes());
     hash.update(&32_u64.to_be_bytes());
     manual_encoding_frame_v1(&mut hash, b"fresh-encryption-nonce:raw-bytes", 32, 1);
-
     let components = [
         (1_u8, 0_u16, 512_u16),
         (2, 512, 128),
@@ -137,7 +126,6 @@ fn manual_mapping_oracle_v1(geometry_digest: [u8; 32], mutation: ManualMutationV
             manual_encoding_frame_v1(&mut hash, tag, width, count);
         }
     }
-
     let equations = if mutation == ManualMutationV1::Order {
         [(1_u8, 2_u8, 2_u8), (0, 1, 1)]
     } else {
@@ -193,7 +181,6 @@ fn manual_mapping_oracle_v1(geometry_digest: [u8; 32], mutation: ManualMutationV
     }
     hash.finalize()
 }
-
 #[test]
 fn absolute_mapping_frame_matches_independent_literal_kat_and_rejects_mutations() {
     const KAT: [u8; 32] = [
@@ -238,7 +225,6 @@ fn concrete_assembly_rejects_reorder_and_missing_data_and_poison_is_terminal() {
         assembly.write_next_canonical_plaintext_block_v1(0, 0, correct_but_after_poison),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
-
     let missing_directory = TestDirectoryV1::new_v1("missing");
     let missing = ZkAmsPhase23RnsLinkExternalSourceAssemblyV1::begin_v1(
         release_context_v1(),
@@ -250,7 +236,6 @@ fn concrete_assembly_rejects_reorder_and_missing_data_and_poison_is_terminal() {
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     ));
 }
-
 #[test]
 fn source_surface_is_move_only_bounded_concrete_and_non_authorizing() {
     let source = include_str!("phase23_rns_link_external_source.rs");
@@ -263,7 +248,6 @@ fn source_surface_is_move_only_bounded_concrete_and_non_authorizing() {
     let adapter = include_str!("phase23_rns_link_external_spool.rs");
     let spool_leaf = include_str!("../../../../../iroha_confidential_spool/src/lib.rs");
     let spool_facade = include_str!("../../../../../iroha_crypto/src/confidential_spool.rs");
-
     assert!(source.lines().count() <= 1_050);
     assert!(source.len() <= 50_000);
     assert!(test_source.lines().count() <= 400);

@@ -31,7 +31,6 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-
 use error_stack::{Report, ResultExt};
 use iroha_config_base::{
     ParameterId, ParameterOrigin, ReadConfig, WithOrigin,
@@ -53,9 +52,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use nonzero_ext::nonzero;
 use thiserror::Error;
-
 mod app_routed_read_config;
-
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
@@ -250,7 +247,6 @@ fn read_private_key_file(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let mode = metadata.permissions().mode();
         if mode & 0o077 != 0 {
             return Err(format!(
@@ -406,7 +402,6 @@ use norito::{
 };
 use soranet_pq::{MlKemSuite, SuiteParseError};
 use url::Url;
-
 use crate::{
     kura::{FsyncMode as KuraFsyncMode, InitMode as KuraInitMode},
     logger::{Directives, Format as LoggerFormat},
@@ -661,9 +656,7 @@ impl From<SmIntrinsicsPolicyConfig> for actual::SmIntrinsicsPolicy {
 #[cfg(test)]
 mod sm_intrinsics_policy_config_tests {
     use std::str::FromStr;
-
     use super::SmIntrinsicsPolicyConfig;
-
     #[test]
     fn parses_force_disable_and_enable() {
         assert!(matches!(
@@ -821,7 +814,6 @@ impl FromEnvStr for ChainIdInConfig {
 #[cfg(test)]
 mod chain_id_config_tests {
     use super::*;
-
     #[test]
     fn environment_chain_id_uses_the_canonical_data_model_parser() {
         let valid = ChainIdInConfig::from_env_str(Cow::Borrowed("iroha.mainnet:v1-alpha_2"))
@@ -2716,7 +2708,6 @@ impl Governance {
 #[cfg(test)]
 mod governance_tests {
     use super::*;
-
     #[test]
     fn debug_trace_pipeline_defaults_false() {
         let cfg = Governance::default();
@@ -3951,7 +3942,6 @@ impl json::JsonDeserialize for QueryCursorMode {
 mod pipeline_tests {
     use super::*;
     use crate::parameters::defaults;
-
     fn pipeline_with_debug(trace_scheduler_inputs: bool, trace_tx_eval: bool) -> Pipeline {
         Pipeline {
             dynamic_prepass: defaults::pipeline::DYNAMIC_PREPASS,
@@ -4389,9 +4379,7 @@ impl Sccp {
 #[cfg(test)]
 mod sccp_limit_tests {
     use iroha_config_base::{read::ConfigReader, toml::TomlSource};
-
     use super::*;
-
     #[test]
     fn canonical_pending_outbound_key_is_required() {
         let canonical: toml::Table =
@@ -4440,7 +4428,6 @@ mod sccp_limit_tests {
     #[test]
     fn rejects_byte_limits_outside_the_exact_json_integer_range() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
-
         let maximum = iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX;
         let exact = NonZeroU64::new(maximum).expect("JSON-safe maximum is nonzero");
         let over = NonZeroU64::new(maximum + 1).expect("one above maximum is nonzero");
@@ -5928,9 +5915,7 @@ pub struct TrustedPeerPop {
 #[cfg(test)]
 mod trusted_peers_pop_env_tests {
     use std::{borrow::Cow, str::FromStr};
-
     use super::*;
-
     const PUBLIC_KEY_HEX: &str = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2";
     #[test]
     fn trusted_peers_pop_from_env_parses_json() {
@@ -6228,7 +6213,6 @@ impl SoranetHandshake {
 #[cfg(test)]
 mod accel_tests {
     use super::*;
-
     #[test]
     fn accel_parse_respects_enable_simd_flag() {
         let user = Acceleration {
@@ -6386,7 +6370,6 @@ impl SoranetHandshakePuzzle {
 #[cfg(test)]
 mod soranet_handshake_puzzle_tests {
     use super::*;
-
     #[test]
     fn parse_bounds_argon2_resource_costs() {
         let upper = SoranetHandshakePuzzle {
@@ -6767,7 +6750,6 @@ impl SoranetVpn {
 #[cfg(test)]
 mod soranet_vpn_tests {
     use super::*;
-
     const TEST_RELAY_ID_HEX: &str =
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
     fn enabled_vpn_config() -> SoranetVpn {
@@ -7723,7 +7705,6 @@ impl Network {
 #[cfg(test)]
 mod network_scion_route_tests {
     use super::*;
-
     fn checked_scion_route_ed25519_peer_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked SCION route Ed25519 peer key fixture")
@@ -8835,7 +8816,6 @@ impl StreamingSoravpn {
 #[cfg(test)]
 mod streaming_soranet_tests {
     use super::*;
-
     #[test]
     fn streaming_soranet_rejects_zero_window_segments() {
         let mut emitter = Emitter::<ParseError>::new();
@@ -8904,7 +8884,6 @@ mod streaming_soranet_tests {
 #[cfg(test)]
 mod streaming_soravpn_tests {
     use super::*;
-
     #[test]
     fn streaming_soravpn_rejects_empty_spool_dir() {
         let mut emitter = Emitter::<ParseError>::new();
@@ -9924,7 +9903,6 @@ impl NexusRelayWorker {
 #[cfg(test)]
 mod nexus_asset_selector_tests {
     use super::*;
-
     fn checked_nexus_contract_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked Nexus contract Ed25519 account key fixture")
@@ -12170,7 +12148,6 @@ fn telemetry_signing_key_rejects_wrong_length() {
 #[test]
 fn telemetry_integrity_state_dir_resolves_relative_path() {
     use std::path::Path;
-
     let origin = ParameterOrigin::file(
         ParameterId::from(["telemetry_integrity", "state_dir"]),
         PathBuf::from("/config/root/config.toml"),
@@ -13919,7 +13896,6 @@ pub struct ToriiBootleLanternIssuer {
 impl Default for ToriiBootleLanternIssuer {
     fn default() -> Self {
         use defaults::torii::privacy_bootle_lantern_issuer as issuer;
-
         Self {
             enabled: issuer::ENABLED,
             state_dir: issuer::state_dir(),
@@ -13939,7 +13915,6 @@ impl Default for ToriiBootleLanternIssuer {
 impl ToriiBootleLanternIssuer {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiBootleLanternIssuer> {
         use defaults::torii::privacy_bootle_lantern_issuer as limits;
-
         fn parse_nonzero_fixed32(
             emitter: &mut Emitter<ParseError>,
             path: &str,
@@ -14105,7 +14080,6 @@ impl ToriiBootleLanternIssuer {
 #[cfg(test)]
 mod torii_bootle_lantern_issuer_tests {
     use super::*;
-
     fn valid_config() -> ToriiBootleLanternIssuer {
         ToriiBootleLanternIssuer {
             enabled: true,
@@ -14308,7 +14282,6 @@ impl ToriiPush {
 #[cfg(test)]
 mod torii_push_tests {
     use super::*;
-
     #[test]
     fn torii_push_parse_defaults_push_bridge_fields() {
         let parsed = ToriiPush::default().parse();
@@ -14863,7 +14836,6 @@ impl Torii {
 #[cfg(test)]
 mod torii_receipt_signer_tests {
     use super::*;
-
     #[test]
     fn torii_receipt_signer_accepts_checked_non_bls_key_pair() {
         let key_pair = KeyPair::try_from_seed(
@@ -14960,7 +14932,6 @@ impl ToriiRecipientLookupRoute {
 #[cfg(test)]
 mod torii_recipient_lookup_tests {
     use super::*;
-
     #[test]
     fn torii_recipient_lookup_parse_accepts_canonical_fi_routes() {
         let parsed = ToriiRecipientLookup {
@@ -15209,7 +15180,6 @@ impl ToriiOperatorWebAuthn {
 #[cfg(test)]
 mod torii_operator_webauthn_tests {
     use super::*;
-
     fn valid_config() -> ToriiOperatorWebAuthn {
         ToriiOperatorWebAuthn {
             enabled: true,
@@ -15641,7 +15611,6 @@ fn validate_replay_window(
 #[cfg(test)]
 mod replay_window_tests {
     use super::replay_window_is_covered;
-
     #[test]
     fn replay_window_requires_strictly_longer_nonce_retention() {
         assert!(replay_window_is_covered(60, 121));
@@ -15698,7 +15667,6 @@ fn is_explicit_trust_cidr(entry: &str, allow_ipv4_loopback_range: bool) -> bool 
 #[cfg(test)]
 mod torii_trust_cidr_tests {
     use super::*;
-
     #[test]
     fn explicit_trust_cidrs_reject_network_ranges() {
         for entry in ["0.0.0.0/0", "10.0.0.0/8", "2001:db8::/64", "bad"] {
@@ -15728,7 +15696,6 @@ mod torii_trust_cidr_tests {
 #[cfg(test)]
 mod torii_cors_tests {
     use super::*;
-
     #[test]
     fn torii_cors_parse_requires_explicit_lists_when_enabled() {
         let mut emitter = Emitter::<ParseError>::new();
@@ -16813,11 +16780,8 @@ impl ToriiKagemushaCommands {
 #[cfg(test)]
 mod torii_kagemusha_commands_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
-
     use iroha_crypto::ExposedPrivateKey;
-
     use super::*;
-
     static NEXT_KEY_FILE: AtomicU64 = AtomicU64::new(0);
     struct TestKeyFile(PathBuf);
     impl TestKeyFile {
@@ -16908,7 +16872,6 @@ mod torii_kagemusha_commands_tests {
 #[cfg(test)]
 #[path = "user/torii_faucet_tests.rs"]
 mod torii_faucet_tests;
-
 /// RAM-LFE runtime configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct ToriiRamLfe {
@@ -17812,7 +17775,6 @@ fn da_rent_policy_default() -> DaRentPolicy {
 #[cfg(test)]
 mod da_rent_policy_tests {
     use super::*;
-
     const XOR_OVERFLOW: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
     fn policy_json(base_rate: &str, egress_rate: &str) -> String {
         format!(
@@ -20149,7 +20111,6 @@ pub struct SorafsEvidenceViewerConfig {
 impl Default for SorafsEvidenceViewerConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::evidence_viewer as viewer;
-
         Self {
             enabled: viewer::ENABLED,
             checkpoint_path: viewer::checkpoint_path(),
@@ -20724,7 +20685,6 @@ pub struct SorafsProviderIngestOutboxConfig {
 impl Default for SorafsProviderIngestOutboxConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::provider_ingest_runtime::outbox;
-
         Self {
             max_active_entries: outbox::MAX_ACTIVE_ENTRIES,
             max_terminal_entries: outbox::MAX_TERMINAL_ENTRIES,
@@ -20807,7 +20767,6 @@ pub struct SorafsProviderIngestFinalizedArchiveConfig {
 impl Default for SorafsProviderIngestFinalizedArchiveConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::provider_ingest_runtime::finalized_archive as archive;
-
         Self {
             relative_root: PathBuf::from(archive::RELATIVE_ROOT),
             max_record_bytes: archive::MAX_RECORD_BYTES,
@@ -21142,7 +21101,6 @@ pub struct SorafsProviderAttestationJournalConfig {
 impl Default for SorafsProviderAttestationJournalConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
-
         Self {
             enabled: journal::ENABLED,
             clock_seal_handle: None,
@@ -21172,7 +21130,6 @@ impl SorafsProviderAttestationJournalConfig {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::SorafsProviderAttestationJournal> {
         use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
-
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
         }
@@ -21547,7 +21504,6 @@ pub struct SorafsProviderIngestRuntimeConfig {
 impl Default for SorafsProviderIngestRuntimeConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::provider_ingest_runtime as runtime;
-
         Self {
             enabled: runtime::ENABLED,
             authenticated_source_fetch_handle: None,
@@ -21591,7 +21547,6 @@ impl SorafsProviderIngestRuntimeConfig {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::SorafsProviderIngestRuntime> {
         use defaults::sorafs::storage::provider_ingest_runtime::outbox as outbox_defaults;
-
         const MILLISECONDS_PER_DAY: u64 = defaults::sorafs::storage::provider_ingest_runtime::
             SOURCE_OPERATION_TIMEOUT_MS_LIMIT_V1;
         const MIN_SCAN_INTERVAL_MS: u64 = 100;
@@ -22270,7 +22225,6 @@ pub struct SorafsHedgingBillingRuntimeConfig {
 impl Default for SorafsHedgingBillingRuntimeConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::hedging_billing_runtime as runtime;
-
         Self {
             enabled: runtime::ENABLED,
             state_dir: runtime::state_dir(),
@@ -22796,7 +22750,6 @@ pub struct SorafsReputationRuntimeConfig {
 impl Default for SorafsReputationRuntimeConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::reputation_runtime as runtime;
-
         Self {
             enabled: runtime::ENABLED,
             state_dir: runtime::state_dir(),
@@ -23481,7 +23434,6 @@ pub struct SorafsReserveTransparencyRuntimeConfig {
 impl Default for SorafsReserveTransparencyRuntimeConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::reserve_transparency_runtime as runtime;
-
         Self {
             enabled: runtime::ENABLED,
             state_dir: runtime::state_dir(),
@@ -23634,7 +23586,6 @@ impl SorafsReserveTransparencyRuntimeConfig {
 #[cfg(test)]
 mod sorafs_moderation_orchestrator_tests {
     use super::*;
-
     fn maintenance_authority() -> String {
         let keypair =
             KeyPair::try_from_seed(vec![0x6D; 32], Algorithm::Ed25519).expect("test keypair");
@@ -23901,15 +23852,12 @@ mod sorafs_moderation_orchestrator_tests {
 #[cfg(test)]
 #[path = "user/sorafs_provider_ingest_runtime_config_tests.rs"]
 mod sorafs_provider_ingest_runtime_config_tests;
-
 #[cfg(test)]
 #[path = "user/sorafs_evidence_viewer_config_tests.rs"]
 mod sorafs_evidence_viewer_config_tests;
-
 #[cfg(test)]
 mod sorafs_hedging_billing_runtime_config_tests {
     use super::*;
-
     fn absolute_state_dir() -> PathBuf {
         #[cfg(target_os = "windows")]
         {
@@ -24037,7 +23985,6 @@ mod sorafs_pop_credential_service_tests;
 #[cfg(test)]
 #[path = "user/sorafs_reputation_runtime_config_tests.rs"]
 mod sorafs_reputation_runtime_config_tests;
-
 /// User-facing public identity and qualification for one native transaction signer.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -24342,7 +24289,6 @@ pub struct SorafsPorReplayArchiveConfig {
 impl Default for SorafsPorReplayArchiveConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::por_replay_archive as archive;
-
         Self {
             enabled: archive::ENABLED,
             handle: None,
@@ -24365,7 +24311,6 @@ impl SorafsPorReplayArchiveConfig {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::SorafsPorReplayArchive> {
         use defaults::sorafs::storage::por_replay_archive as archive;
-
         let emit = |emitter: &mut Emitter<ParseError>, message: &'static str| {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message));
         };
@@ -25437,7 +25382,6 @@ pub struct SorafsGovernanceDagService {
 impl Default for SorafsGovernanceDagService {
     fn default() -> Self {
         use defaults::sorafs::storage::governance_dag_service as service;
-
         Self {
             enabled: service::ENABLED,
             state_dir: service::state_dir(),
@@ -26088,9 +26032,7 @@ impl SorafsGovernanceDagServiceRoot {
 #[cfg(test)]
 mod sorafs_governance_dag_service_tests {
     use iroha_config_base::toml::TomlSource;
-
     use super::*;
-
     const VALID_PUBLISHER_PUBLIC_KEY_HEX: &str =
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
     const ALTERNATE_PUBLISHER_PUBLIC_KEY_HEX: &str =
@@ -26666,7 +26608,6 @@ pub struct SorafsPdpProviderPolicy {
 impl Default for SorafsPdpProviderPolicy {
     fn default() -> Self {
         use defaults::sorafs::storage::pdp_provider as pdp;
-
         Self {
             max_pending_records: pdp::MAX_PENDING_RECORDS,
             max_terminal_records: pdp::MAX_TERMINAL_RECORDS,
@@ -26683,7 +26624,6 @@ impl Default for SorafsPdpProviderPolicy {
 impl SorafsPdpProviderPolicy {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsPdpProviderPolicy {
         use defaults::sorafs::storage::pdp_provider as pdp;
-
         if self.max_pending_records == 0 || self.max_terminal_records == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSorafsConfig)
@@ -26834,7 +26774,6 @@ pub struct SorafsOrderbookWorkerConfig {
 impl Default for SorafsOrderbookWorkerConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::orderbook_worker as worker;
-
         Self {
             enabled: worker::ENABLED,
             scan_interval_ms: worker::SCAN_INTERVAL_MS,
@@ -26851,7 +26790,6 @@ impl Default for SorafsOrderbookWorkerConfig {
 impl SorafsOrderbookWorkerConfig {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsOrderbookWorker {
         use defaults::sorafs::storage::orderbook_worker as worker;
-
         let scan_interval_ms = self.scan_interval_ms.get();
         if !(worker::SCAN_INTERVAL_MIN_MS..=worker::SCAN_INTERVAL_MAX_MS)
             .contains(&scan_interval_ms)
@@ -26959,7 +26897,6 @@ pub struct SorafsReserveWorkerConfig {
 impl Default for SorafsReserveWorkerConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::reserve_worker as worker;
-
         Self {
             enabled: worker::ENABLED,
             scan_interval_ms: worker::SCAN_INTERVAL_MS,
@@ -26975,7 +26912,6 @@ impl Default for SorafsReserveWorkerConfig {
 impl SorafsReserveWorkerConfig {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsReserveWorker {
         use defaults::sorafs::storage::reserve_worker as worker;
-
         let scan_interval_ms = self.scan_interval_ms.get();
         if !(worker::SCAN_INTERVAL_MIN_MS..=worker::SCAN_INTERVAL_MAX_MS)
             .contains(&scan_interval_ms)
@@ -27695,9 +27631,7 @@ impl SorafsGc {
 #[cfg(test)]
 mod sorafs_repair_gc_tests {
     use iroha_data_model::sorafs::moderation_ledger::REPAIR_LEDGER_MAX_LEASE_MS_V1;
-
     use super::*;
-
     #[test]
     fn sorafs_repair_parse_rejects_unsafe_values_without_clamping() {
         let invalid = SorafsRepair {
@@ -28145,7 +28079,6 @@ mod sorafs_repair_gc_tests {
     #[test]
     fn sorafs_appeal_finance_settlement_rejects_retired_private_key_field() {
         use iroha_config_base::toml::TomlSource;
-
         let outer: toml::Table =
             toml::from_str("submitter_private_keys = []").expect("parse retired outer field");
         let outer_error = ConfigReader::new()
@@ -28815,7 +28748,6 @@ fn sorafs_por_parses_file_configured_verified_feed_fields_without_env_fallbacks(
 #[test]
 fn sorafs_potr_runtime_binding_is_complete_and_tracks_service_enablement() {
     use iroha_config_base::toml::TomlSource;
-
     assert_sorafs_por_config_invalid(SorafsPor {
         enabled: true,
         ..SorafsPor::default()
@@ -28896,7 +28828,6 @@ fn sorafs_por_rejects_obsolete_competing_state_paths() {
 }
 #[path = "user/stream_token_admission.rs"]
 mod stream_token_admission;
-
 /// User-level configuration for stream-token issuance.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsStreamTokenConfig {
@@ -30392,7 +30323,6 @@ impl SorafsAdmissionConfig {
 #[cfg(test)]
 mod sorafs_admission_config_tests {
     use super::*;
-
     fn council_key() -> PublicKey {
         PublicKey::from_str(
             "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56",
@@ -30703,10 +30633,8 @@ impl IsoCurrencyAsset {
 #[cfg(test)]
 mod offline_cfg_tests {
     use core::str::FromStr;
-
     use super::*;
     use iroha_data_model::DomainId;
-
     fn bundled_tables_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../codec/rans/tables/rans_seed0.toml")
@@ -31375,7 +31303,6 @@ mod duration_clamp_tests {
         sync::atomic::{AtomicU64, Ordering},
         time::{Duration, Duration as StdDuration},
     };
-
     use iroha_config_base::{read::ConfigReader, toml::TomlSource, util::Bytes};
     use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -31388,7 +31315,6 @@ mod duration_clamp_tests {
     };
     use iroha_primitives::numeric::Quantity;
     use toml::{Table, Value};
-
     use crate::parameters::{
         actual, defaults,
         user::{SoracloudRuntime, SoracloudRuntimeHuggingFace},
@@ -32218,7 +32144,6 @@ policy_digest_hex = "{policy_digest_hex}"
     impl OnboardingKeyFile {
         fn new(key_pair: &KeyPair) -> Self {
             use std::sync::atomic::{AtomicU64, Ordering};
-
             static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
             let path = std::env::temp_dir().join(format!(
                 "iroha-config-onboarding-{}-{}.key",
@@ -32730,7 +32655,6 @@ price_tick = "0"
     #[test]
     fn sorafs_orderbook_worker_defaults_are_operational_only_and_bounded() {
         use defaults::sorafs::storage::orderbook_worker as worker_defaults;
-
         let worker = load_root(base_table())
             .torii
             .sorafs_storage
@@ -32755,7 +32679,6 @@ price_tick = "0"
     #[test]
     fn sorafs_orderbook_worker_accepts_exact_resource_boundaries_without_storage_provider() {
         use defaults::sorafs::storage::orderbook_worker as worker_defaults;
-
         let mut table = base_table();
         let mut source = format!(
             r"
@@ -32810,7 +32733,6 @@ checkpoint_max_bytes = {}
     #[test]
     fn sorafs_orderbook_worker_rejects_zero_and_excessive_resource_bounds() {
         use defaults::sorafs::storage::orderbook_worker as worker_defaults;
-
         let invalid_fields = [
             "scan_interval_ms = 0".to_owned(),
             format!(
@@ -32879,7 +32801,6 @@ checkpoint_max_bytes = {}
     #[test]
     fn sorafs_reserve_worker_defaults_are_operational_only_and_bounded() {
         use defaults::sorafs::storage::reserve_worker as worker_defaults;
-
         let worker = load_root(base_table()).torii.sorafs_storage.reserve_worker;
         assert_reserve_workers_eq(worker, actual::SorafsReserveWorker::default());
         assert!(!worker.enabled);
@@ -32900,7 +32821,6 @@ checkpoint_max_bytes = {}
     #[test]
     fn sorafs_reserve_worker_accepts_exact_resource_boundaries_without_storage_provider() {
         use defaults::sorafs::storage::reserve_worker as worker_defaults;
-
         let mut table = base_table();
         let mut source = format!(
             r"
@@ -32952,7 +32872,6 @@ checkpoint_max_bytes = {}
     #[test]
     fn sorafs_reserve_worker_rejects_zero_and_excessive_resource_bounds() {
         use defaults::sorafs::storage::reserve_worker as worker_defaults;
-
         let invalid_fields = [
             "scan_interval_ms = 0".to_owned(),
             format!(
@@ -35066,7 +34985,6 @@ publish_delay_seconds = 17
 #[cfg(test)]
 #[path = "user/settlement_offline_tests.rs"]
 mod settlement_offline_tests;
-
 #[cfg(test)]
 #[path = "user/settlement_router_tests.rs"]
 mod settlement_router_tests;

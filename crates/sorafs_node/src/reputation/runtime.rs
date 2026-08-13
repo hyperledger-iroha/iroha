@@ -25,7 +25,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-
 use iroha_config::parameters::validate_production_runtime_handle;
 use iroha_data_model::{
     NetworkId,
@@ -76,7 +75,6 @@ use sorafs_manifest::{
     validate_governance_dag_chain_v1,
 };
 use thiserror::Error;
-
 use super::{
     REPUTATION_INGEST_MAX_PAGES_PER_BATCH_V1, ReputationCommittedEventIdentityV1,
     ReputationCommittedFeedCursorV1, ReputationCommittedFeedV1, ReputationFinalizedBatchV1,
@@ -84,7 +82,6 @@ use super::{
     ReputationIngestPolicyV1, ReputationIngestService, ReputationUnsignedMaterialDeliveryStateV1,
     ReputationUnsignedMaterialDeliveryV1, ReputationUnsignedSigningMaterialV1,
 };
-
 use crate::durable_transaction_forwarder::{AtomicCheckpointStore, CheckpointStoreError};
 #[cfg(test)]
 use iroha_data_model::sorafs::reputation::{
@@ -8185,7 +8182,6 @@ fn valid_ed25519_verifying_key(bytes: [u8; 32]) -> bool {
 #[cfg(test)]
 mod tests {
     use std::{collections::VecDeque, fs, path::Path};
-
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::sorafs::reputation::{
@@ -8205,9 +8201,7 @@ mod tests {
     };
     use sorafs_manifest::{GOVERNANCE_DAG_HEAD_VERSION_V1, GovernanceSignatureAlgorithm};
     use tempfile::TempDir;
-
     use super::*;
-
     const FINALIZED_AT_MS: u64 = 1_800_000_010_000;
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(
@@ -13310,7 +13304,6 @@ mod tests {
         assert_eq!(original.completed, original_completed);
         assert_eq!(original.observed, original_observed);
     }
-
     mod publication_admission;
     #[test]
     fn publication_reconciler_retains_exact_successor_snapshots_across_restart() {

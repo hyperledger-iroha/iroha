@@ -1,11 +1,9 @@
 #![cfg(feature = "cli-orchestrator")]
 #![cfg_attr(feature = "cli-orchestrator", allow(unexpected_cfgs))]
-
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 use assert_cmd::{Command as AssertCommand, cargo::cargo_bin_cmd};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::hash as blake3_hash;
@@ -49,7 +47,6 @@ use sorafs_manifest::{
     governance_dag_submission_account_digest_v1, validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
-
 const TEST_NETWORK_ID_LITERAL: &str =
     "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
 fn sorafs_cli_cmd() -> AssertCommand {
@@ -2246,7 +2243,6 @@ fn reputation_auth_args(directory: &CanonicalTempDir) -> [String; 2] {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
             .expect("secure reputation read fixture key");
     }

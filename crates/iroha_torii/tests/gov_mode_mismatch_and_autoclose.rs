@@ -4,11 +4,9 @@
     feature = "halo2-dev-tests",
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
-
 #[path = "../../iroha_core/tests/zk_testkit.rs"]
 mod zk_testkit;
 use std::{env, num::NonZeroU64};
-
 use iroha_config::parameters::actual::VerifyingKeyRef;
 use iroha_core::{
     kura::Kura,
@@ -32,14 +30,11 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
-
 const BALLOT_SCOPE_ANY: &str = "any";
 const DEFAULT_ABI_VERSION: &str = "1";
-
 fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
-
 fn run_or_skip(tag: &str) -> bool {
     if env::var("IROHA_RUN_IGNORED").ok().as_deref() == Some("1") {
         true
@@ -48,7 +43,6 @@ fn run_or_skip(tag: &str) -> bool {
         false
     }
 }
-
 fn new_state_with_accounts(accounts: &[&iroha_data_model::account::AccountId]) -> State {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -65,7 +59,6 @@ fn new_state_with_accounts(accounts: &[&iroha_data_model::account::AccountId]) -
     );
     State::new_for_testing(world, kura, query_handle)
 }
-
 fn block_header(height: u64) -> BlockHeader {
     BlockHeader::new(
         NonZeroU64::new(height).expect("block height should be non-zero"),
@@ -76,13 +69,11 @@ fn block_header(height: u64) -> BlockHeader {
         0,
     )
 }
-
 fn contract_address() -> iroha_data_model::smart_contract::ContractAddress {
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         .parse()
         .expect("contract address")
 }
-
 fn grant_permission(
     stx: &mut StateTransaction<'_, '_>,
     authority: &iroha_data_model::account::AccountId,
@@ -94,7 +85,6 @@ fn grant_permission(
         .execute(authority, stx)
         .unwrap_or_else(|err| panic!("{label}: {err:?}"));
 }
-
 fn contract_proposal(mode: VotingMode) -> ProposeDeployContract {
     ProposeDeployContract {
         contract_address: contract_address(),
@@ -106,7 +96,6 @@ fn contract_proposal(mode: VotingMode) -> ProposeDeployContract {
         manifest_provenance: None,
     }
 }
-
 fn can_propose_contract_permission() -> Permission {
     let payload = norito::json::object([(
         "contract_address",
@@ -121,7 +110,6 @@ fn can_propose_contract_permission() -> Permission {
         Json::new(payload),
     )
 }
-
 fn can_submit_ballot_permission(scope: &str) -> Permission {
     Permission::new(
         "CanSubmitGovernanceBallot"
@@ -130,14 +118,12 @@ fn can_submit_ballot_permission(scope: &str) -> Permission {
         Json::from(scope),
     )
 }
-
 fn can_manage_vk_permission() -> Permission {
     Permission::new(
         "CanManageVerifyingKeys".parse().expect("valid permission"),
         Json::new(()),
     )
 }
-
 fn referendum_id(state: &State) -> String {
     state
         .view()
@@ -148,7 +134,6 @@ fn referendum_id(state: &State) -> String {
         .map(|(id, _)| id.clone())
         .expect("referendum id")
 }
-
 fn proposal_id(state: &State) -> [u8; 32] {
     state
         .view()
@@ -159,7 +144,6 @@ fn proposal_id(state: &State) -> [u8; 32] {
         .map(|(id, _)| *id)
         .expect("proposal id")
 }
-
 fn governance_events(block: &mut StateBlock<'_>) -> Vec<GovernanceEvent> {
     block
         .world
@@ -171,7 +155,6 @@ fn governance_events(block: &mut StateBlock<'_>) -> Vec<GovernanceEvent> {
         })
         .collect()
 }
-
 fn plain_ballot(
     referendum_id: &str,
     owner: &iroha_data_model::account::AccountId,
@@ -187,7 +170,6 @@ fn plain_ballot(
         direction,
     }
 }
-
 fn zk_ballot(referendum_id: &str, proof_b64: &str, public_inputs_json: &str) -> CastZkBallot {
     CastZkBallot {
         election_id: referendum_id.to_string(),
@@ -195,7 +177,6 @@ fn zk_ballot(referendum_id: &str, proof_b64: &str, public_inputs_json: &str) -> 
         public_inputs_json: public_inputs_json.to_string(),
     }
 }
-
 fn zk_public_inputs(owner: &iroha_data_model::account::AccountId) -> String {
     norito::json::to_json(
         &norito::json::object([
@@ -212,17 +193,14 @@ fn zk_public_inputs(owner: &iroha_data_model::account::AccountId) -> String {
     )
     .expect("serialize public inputs")
 }
-
 fn checked_governance_authority_key_fixture() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()
         .expect("generate checked governance mode authority fixture keypair")
 }
-
 fn random_authority() -> iroha_data_model::account::AccountId {
     let kp = checked_governance_authority_key_fixture();
     iroha_data_model::account::AccountId::of(kp.public_key().clone())
 }
-
 #[test]
 fn governance_mode_authority_fixture_uses_checked_ed25519_key_generation() {
     let key_pair = checked_governance_authority_key_fixture();
@@ -230,16 +208,13 @@ fn governance_mode_authority_fixture_uses_checked_ed25519_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture governance authority public key has a valid algorithm");
-
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
 }
-
 #[test]
 fn torii_plain_ballot_rejected_on_zk_referendum() {
     if !run_or_skip("torii mode mismatch (Plain on Zk) gated.") {
         return;
     }
-
     let alice = random_authority();
     let mut state = new_state_with_accounts(&[&alice]);
     let mut cfg = state.gov.clone();
@@ -247,7 +222,6 @@ fn torii_plain_ballot_rejected_on_zk_referendum() {
     cfg.min_bond_amount = 0_u64.into();
     cfg.conviction_step_blocks = 1;
     state.set_gov(cfg);
-
     let mut block = state.block(block_header(1));
     {
         let mut tx = block.transaction();
@@ -284,7 +258,6 @@ fn torii_plain_ballot_rejected_on_zk_referendum() {
         );
         tx.apply();
     }
-
     let events = governance_events(&mut block);
     assert!(
         events
@@ -292,13 +265,11 @@ fn torii_plain_ballot_rejected_on_zk_referendum() {
             .any(|event| matches!(event, GovernanceEvent::BallotRejected(_)))
     );
 }
-
 #[test]
 fn torii_zk_ballot_rejected_on_plain_referendum() {
     if !run_or_skip("torii mode mismatch (Zk on Plain) gated.") {
         return;
     }
-
     let alice = random_authority();
     let mut state = new_state_with_accounts(&[&alice]);
     let bundle = zk_testkit::vote_merkle8_bundle();
@@ -315,7 +286,6 @@ fn torii_zk_ballot_rejected_on_plain_referendum() {
         name: vk_name,
     });
     state.set_gov(cfg);
-
     let mut block = state.block(block_header(1));
     {
         let mut tx = block.transaction();
@@ -351,7 +321,6 @@ fn torii_zk_ballot_rejected_on_plain_referendum() {
             .expect("propose");
         tx.apply();
     }
-
     let rid = referendum_id(&state);
     let proof_b64 = bundle.proof_b64();
     let public_inputs = zk_public_inputs(&alice);
@@ -362,7 +331,6 @@ fn torii_zk_ballot_rejected_on_plain_referendum() {
         assert!(format!("{err}").contains("referendum mode mismatch"));
         tx.apply();
     }
-
     let events = governance_events(&mut block);
     assert!(
         events
@@ -370,13 +338,11 @@ fn torii_zk_ballot_rejected_on_plain_referendum() {
             .any(|event| matches!(event, GovernanceEvent::BallotRejected(_)))
     );
 }
-
 #[test]
 fn torii_referendum_auto_open_and_close_by_height() {
     if !run_or_skip("torii auto open/close test gated.") {
         return;
     }
-
     let alice = random_authority();
     let mut state = new_state_with_accounts(&[&alice]);
     // Make windows short so we can tick quickly
@@ -384,7 +350,6 @@ fn torii_referendum_auto_open_and_close_by_height() {
     cfg.min_enactment_delay = 1;
     cfg.window_span = 2; // open at H+1, close at H+2
     state.set_gov(cfg);
-
     {
         // H=1: propose a referendum (mode arbitrary)
         let mut block1 = state.block(block_header(1));
@@ -409,10 +374,8 @@ fn torii_referendum_auto_open_and_close_by_height() {
         tx.apply();
         // Drop block1 to release borrow before next block.
     }
-
     let pid = proposal_id(&state);
     let rid = referendum_id(&state);
-
     {
         // H=2: referendum auto-opens
         let mut block2 = state.block(block_header(2));
@@ -423,14 +386,12 @@ fn torii_referendum_auto_open_and_close_by_height() {
                 .any(|event| matches!(event, GovernanceEvent::ReferendumOpened(_))),
             "expected ReferendumOpened at H=2"
         );
-
         // Cast an approving plain ballot at H=2 so decision at H=3 is Approved
         let mut tx = block2.transaction();
         let ballot = plain_ballot(&rid, &alice, 1, 100, 0);
         ballot.execute(&alice, &mut tx).expect("cast ballot");
         tx.apply();
     }
-
     {
         // H=3: referendum closes and proposal approved
         let mut block3 = state.block(block_header(3));
@@ -451,22 +412,18 @@ fn torii_referendum_auto_open_and_close_by_height() {
         );
     }
 }
-
 #[test]
 fn torii_referendum_auto_close_reject_decision() {
     if !run_or_skip("torii auto-close reject test gated.") {
         return;
     }
-
     let alice = random_authority();
     let mut state = new_state_with_accounts(&[&alice]);
-
     // Configure a short window
     let mut cfg = state.gov.clone();
     cfg.min_enactment_delay = 1;
     cfg.window_span = 2;
     state.set_gov(cfg);
-
     {
         // H=1: propose Plain referendum
         let mut block1 = state.block(block_header(1));
@@ -490,10 +447,8 @@ fn torii_referendum_auto_close_reject_decision() {
             .expect("propose");
         tx.apply();
     }
-
     let pid = proposal_id(&state);
     let rid = referendum_id(&state);
-
     {
         // H=2: open and cast a rejecting ballot
         let mut block2 = state.block(block_header(2));
@@ -504,13 +459,11 @@ fn torii_referendum_auto_close_reject_decision() {
                 .any(|event| matches!(event, GovernanceEvent::ReferendumOpened(_))),
             "expected ReferendumOpened at H=2"
         );
-
         let mut tx = block2.transaction();
         let ballot = plain_ballot(&rid, &alice, 1, 100, 1);
         ballot.execute(&alice, &mut tx).expect("cast reject");
         tx.apply();
     }
-
     {
         // H=3: close and expect ProposalRejected(pid)
         let mut block3 = state.block(block_header(3));
@@ -531,17 +484,14 @@ fn torii_referendum_auto_close_reject_decision() {
         );
     }
 }
-
 #[test]
 fn torii_threshold_equal_approves_two_thirds() {
     if !run_or_skip("torii threshold equality test gated.") {
         return;
     }
-
     let alice = random_authority();
     let bob = random_authority();
     let mut state = new_state_with_accounts(&[&alice, &bob]);
-
     // Configure 2/3 threshold and a short window
     let mut cfg = state.gov.clone();
     cfg.min_enactment_delay = 1;
@@ -549,7 +499,6 @@ fn torii_threshold_equal_approves_two_thirds() {
     cfg.approval_threshold_q_num = 2;
     cfg.approval_threshold_q_den = 3;
     state.set_gov(cfg);
-
     {
         // H=1: propose Plain referendum and grant permissions to both voters
         let mut block1 = state.block(block_header(1));
@@ -580,16 +529,13 @@ fn torii_threshold_equal_approves_two_thirds() {
             .expect("propose");
         tx.apply();
     }
-
     let pid = proposal_id(&state);
     let rid = referendum_id(&state);
-
     {
         // H=2: open and cast mixed ballots with approve:reject weights = 2:1 at conviction=2
         let mut block2 = state.block(block_header(2));
         // Drain open events to keep state clean
         let _ = governance_events(&mut block2);
-
         let mut tx = block2.transaction();
         let aye = plain_ballot(&rid, &alice, 4, 100, 0);
         aye.execute(&alice, &mut tx).expect("aye");
@@ -597,7 +543,6 @@ fn torii_threshold_equal_approves_two_thirds() {
         nay.execute(&bob, &mut tx).expect("nay");
         tx.apply();
     }
-
     {
         // H=3: close; with 2/3 threshold and equality, expect approval
         let mut block3 = state.block(block_header(3));
@@ -618,17 +563,14 @@ fn torii_threshold_equal_approves_two_thirds() {
         );
     }
 }
-
 #[test]
 fn torii_threshold_below_rejects_two_thirds() {
     if !run_or_skip("torii threshold below test gated.") {
         return;
     }
-
     let alice = random_authority();
     let bob = random_authority();
     let mut state = new_state_with_accounts(&[&alice, &bob]);
-
     // Configure 2/3 threshold and short window
     let mut cfg = state.gov.clone();
     cfg.min_enactment_delay = 1;
@@ -636,7 +578,6 @@ fn torii_threshold_below_rejects_two_thirds() {
     cfg.approval_threshold_q_num = 2;
     cfg.approval_threshold_q_den = 3;
     state.set_gov(cfg);
-
     {
         // H=1: propose referendum and grant ballot perms
         let mut block1 = state.block(block_header(1));
@@ -667,10 +608,8 @@ fn torii_threshold_below_rejects_two_thirds() {
             .expect("propose");
         tx.apply();
     }
-
     let pid = proposal_id(&state);
     let rid = referendum_id(&state);
-
     {
         // H=2: open and cast below-threshold ballots with approve:reject = 1:2 (weights)
         let mut block2 = state.block(block_header(2));
@@ -682,7 +621,6 @@ fn torii_threshold_below_rejects_two_thirds() {
         nay.execute(&bob, &mut tx).expect("nay");
         tx.apply();
     }
-
     {
         // H=3: close; expect rejection at 2/3 threshold
         let mut block3 = state.block(block_header(3));
@@ -703,23 +641,19 @@ fn torii_threshold_below_rejects_two_thirds() {
         );
     }
 }
-
 #[test]
 fn torii_min_turnout_rejects_on_auto_close() {
     if !run_or_skip("torii min_turnout test gated.") {
         return;
     }
-
     let alice = random_authority();
     let mut state = new_state_with_accounts(&[&alice]);
-
     // Configure short window and min_turnout > 0 to force rejection when no ballots are cast
     let mut cfg = state.gov.clone();
     cfg.min_enactment_delay = 1;
     cfg.window_span = 2;
     cfg.min_turnout = 5; // require non-zero turnout
     state.set_gov(cfg);
-
     {
         // H=1: propose Plain referendum
         let mut block1 = state.block(block_header(1));
@@ -736,9 +670,7 @@ fn torii_min_turnout_rejects_on_auto_close() {
             .expect("propose");
         tx.apply();
     }
-
     let pid = proposal_id(&state);
-
     {
         // H=2: observe open (no ballots cast)
         let mut block2 = state.block(block_header(2));
@@ -750,7 +682,6 @@ fn torii_min_turnout_rejects_on_auto_close() {
             "expected ReferendumOpened at H=2"
         );
     }
-
     {
         // H=3: close; expect rejection due to turnout < min_turnout
         let mut block3 = state.block(block_header(3));

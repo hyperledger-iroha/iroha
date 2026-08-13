@@ -4,13 +4,10 @@ async fn creates_all_dirs_while_writing_snapshots() {
     let snapshot_store_dir = tmp_root.path().join("path/to/snapshot/dir");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
-
     assert!(Path::exists(snapshot_store_dir.as_path()));
     assert_canonical_snapshot_generation(&snapshot_store_dir);
 }
-
 #[tokio::test]
 async fn can_read_snapshot_after_writing() {
     let tmp_root = tempdir().unwrap();
@@ -18,7 +15,6 @@ async fn can_read_snapshot_after_writing() {
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
     let expected_chain_id = state.chain_id.clone();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let kura = Kura::blank_kura_for_testing();
     let snapshot_state = try_read_snapshot(
@@ -41,16 +37,13 @@ async fn can_read_snapshot_after_writing() {
         "snapshot roundtrip must preserve canonical WSV bytes"
     );
 }
-
 #[tokio::test]
 async fn generated_snapshot_passes_restart_validation_before_publication() {
     let state = state_factory();
     let snapshot_bytes = exact_snapshot_payload_bytes(&state);
-
     validate_generated_snapshot_for_restart(&state, &snapshot_bytes)
         .expect("writer-generated snapshot must survive restart initialization exactly");
 }
-
 #[tokio::test]
 async fn canonicalized_account_metadata_survives_the_snapshot_restart_boundary() {
     let state = state_factory();
@@ -66,14 +59,12 @@ async fn canonicalized_account_metadata_survives_the_snapshot_restart_boundary()
     let value = Json::from_raw_json("1 ".to_owned())
         .expect("valid alternate JSON spelling must canonicalize at construction");
     assert_eq!(value.get(), "1");
-
     let mut accounts = state.world.accounts.block();
     accounts
         .get_mut(&owner)
         .expect("snapshot fixture account remains registered")
         .insert(key, value);
     accounts.commit();
-
     let snapshot_bytes = exact_snapshot_payload_bytes(&state);
     validate_generated_snapshot_for_restart(&state, &snapshot_bytes)
         .expect("canonical ledger Json must round-trip through restart reconstruction");
@@ -83,7 +74,6 @@ async fn canonicalized_account_metadata_survives_the_snapshot_restart_boundary()
         "snapshot must contain only the canonical metadata spelling"
     );
 }
-
 #[tokio::test]
 async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
     let tmp_root = tempdir().expect("snapshot tempdir");
@@ -138,7 +128,6 @@ async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
     let journal_bytes_before = std::fs::read(kura.lane_geometry_journal_path())
         .expect("read exact geometry journal before rejected snapshot");
     assert_eq!(journal_before.1, vec!["catalog_published"]);
-
     let state = state_factory_with_kura(Arc::clone(&kura));
     let mut noncanonical = exact_snapshot_payload_bytes(&state);
     noncanonical.insert(1, b' ');
@@ -173,7 +162,6 @@ async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
         "rejected payload must preserve exact durable geometry journal bytes"
     );
 }
-
 #[tokio::test]
 async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
     let tmp_root = tempdir().expect("snapshot tempdir");
@@ -187,7 +175,6 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
             .map(|(account_id, _)| account_id.clone())
             .expect("fixture account")
     };
-
     let account_alias = AccountAlias::new(
         "restart_alias".parse().expect("account alias label"),
         Some(AccountAliasDomain::new(
@@ -214,7 +201,6 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         );
         records.commit();
     }
-
     let definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("asset domain"),
         "restart_asset".parse().expect("asset name"),
@@ -252,7 +238,6 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         );
         bindings.commit();
     }
-
     let contract_address = ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
@@ -279,7 +264,6 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         );
         bindings.commit();
     }
-
     let key_pair = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect("write signed snapshot with authoritative alias revert maps");
@@ -299,7 +283,6 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         StateTelemetry::new(<_>::default(), true),
     )
     .expect("read signed snapshot without canonical payload drift");
-
     let mut roundtrip = String::new();
     serialize_state_snapshot(&restored, &mut roundtrip, true);
     assert_eq!(
@@ -307,7 +290,6 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         payload,
         "restoring derived alias indexes must not alter authoritative snapshot bytes"
     );
-
     let aliases = restored.world.account_aliases.block_and_revert();
     assert!(aliases.get(&account_alias).is_none());
     aliases.commit();
@@ -327,12 +309,10 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
     assert!(contract_bindings.get(&contract_address).is_none());
     contract_bindings.commit();
 }
-
 #[tokio::test]
 async fn historical_finality_bundle_survives_validator_lifecycle_and_snapshot_restart() {
     let _history_guard = crate::sumeragi::status::commit_history_test_guard();
     crate::sumeragi::status::reset_commit_certs_for_tests();
-
     let tmp_root = tempdir().expect("snapshot tempdir");
     let store_dir = tmp_root.path().join("snapshot");
     let kura_store_dir = tmp_root.path().join("kura");
@@ -353,7 +333,6 @@ async fn historical_finality_bundle_survives_validator_lifecycle_and_snapshot_re
         Some(block2.as_ref()),
     );
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
-
     let historical_validator = checked_random_snapshot_bls_keypair();
     let expected_pop = model_rotated_disabled_removed_validator(&mut state, &historical_validator);
     let commit_qc =
@@ -364,7 +343,6 @@ async fn historical_finality_bundle_survives_validator_lifecycle_and_snapshot_re
         &kura,
         &[Arc::clone(&block1), Arc::clone(&block2), block3],
     );
-
     let snapshot_key = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &store_dir, &snapshot_key, TEST_CHUNK_SIZE)
         .expect("write snapshot with historical finality archive");
@@ -378,7 +356,6 @@ async fn historical_finality_bundle_survives_validator_lifecycle_and_snapshot_re
     let expected_network_id = state.network_id.clone();
     drop(state);
     drop(kura);
-
     let (kura, block_count) =
         Kura::new(&kura_config, &lane_config).expect("reopen Kura after body eviction");
     assert_eq!(
@@ -403,7 +380,6 @@ async fn historical_finality_bundle_survives_validator_lifecycle_and_snapshot_re
         StateTelemetry::new(<_>::default(), true),
     )
     .expect("restore historical finality archive from snapshot");
-
     assert_eq!(
         restored.commit_qc_for_block(2, block_hash),
         Some(commit_qc.clone()),
@@ -439,7 +415,6 @@ async fn historical_finality_bundle_survives_validator_lifecycle_and_snapshot_re
     drop(restored_world);
     crate::sumeragi::status::reset_commit_certs_for_tests();
 }
-
 #[tokio::test]
 async fn signed_snapshot_rejects_malformed_historical_commit_qc_archive_entries() {
     let tmp_root = tempdir().expect("snapshot tempdir");
@@ -476,7 +451,6 @@ async fn signed_snapshot_rejects_malformed_historical_commit_qc_archive_entries(
     ];
     let snapshot_key = checked_random_snapshot_keypair();
     store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, std::slice::from_ref(&block));
-
     for (label, malformed_qc) in malformed {
         state.insert_commit_qc_for_testing(block_hash, malformed_qc);
         let store_dir = tmp_root.path().join(label);
@@ -503,7 +477,6 @@ async fn signed_snapshot_rejects_malformed_historical_commit_qc_archive_entries(
         );
     }
 }
-
 #[tokio::test]
 async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
     let tmp_root = tempdir().unwrap();
@@ -528,7 +501,6 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
     }
     store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, std::slice::from_ref(&block));
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect("write exact SCCP registry snapshot");
     let snapshot_bytes = std::fs::read(current_generation_artifact(&store_dir, SNAPSHOT_FILE_NAME))
@@ -536,7 +508,6 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
     let snapshot_value: json::Value =
         json::from_slice(&snapshot_bytes).expect("snapshot JSON should parse");
     assert!(snapshot_world_has_field(&snapshot_value, "sccp_registry"));
-
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &kura,
@@ -561,7 +532,6 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
         expected_config
     );
 }
-
 #[tokio::test]
 async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
     for (scope, expected_field) in [
@@ -602,7 +572,6 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
         serialized = json::to_json(&snapshot).expect("mutated snapshot JSON encodes");
         let key_pair = checked_random_snapshot_keypair();
         write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
-
         let error = match try_read_snapshot(
             &store_dir,
             &kura,
@@ -627,7 +596,6 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
         }
     }
 }
-
 #[tokio::test]
 async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint() {
     let tmp_root = tempdir().expect("temporary snapshot root");
@@ -659,7 +627,6 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
     .expect("an exact signed snapshot must match its Kura WSV checkpoint");
     assert_eq!(canonical_state_snapshot_hash(&restored), expected);
     drop(restored);
-
     let injected_account = AccountId::new(
         checked_seeded_keypair(0xD1, Algorithm::Ed25519)
             .public_key()
@@ -682,7 +649,6 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
     serialized.clear();
     serialize_state_snapshot(&state, &mut serialized, true);
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
-
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
@@ -717,7 +683,6 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         "rejected snapshot must not replace the durable WSV checkpoint"
     );
 }
-
 #[tokio::test]
 async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance() {
     enum RegistryCellMutation {
@@ -728,7 +693,6 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         Remove(&'static str),
         AddUnknown,
     }
-
     let assert_rejected = |mutation: RegistryCellMutation, expected: &str| {
         let tmp_root = tempdir().expect("temporary snapshot root");
         let store_dir = tmp_root.path().join("snapshot");
@@ -770,7 +734,6 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         serialized = json::to_json(&snapshot).expect("mutated snapshot JSON encodes");
         let key_pair = checked_random_snapshot_keypair();
         write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
-
         let result = try_read_snapshot(
             &store_dir,
             &kura,
@@ -791,7 +754,6 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
             Ok(_) => panic!("signed hostile SCCP registry snapshot must be rejected"),
         }
     };
-
     assert_rejected(
         RegistryCellMutation::Replace {
             role: "blocks",
@@ -815,7 +777,6 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
     assert_rejected(RegistryCellMutation::Remove("blocks"), "missing `blocks`");
     assert_rejected(RegistryCellMutation::Remove("revert"), "missing `revert`");
     assert_rejected(RegistryCellMutation::AddUnknown, "unknown field");
-
     let mut valid = sccp_registry_for_snapshot_test();
     let lane = valid.lanes.remove(0);
     assert_rejected(
@@ -828,7 +789,6 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         },
         "duplicate",
     );
-
     let bsc_route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
         iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
         iroha_data_model::bridge::SccpRouteActivationV1::Staged,
@@ -854,7 +814,6 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         },
         "canonical lane/route order",
     );
-
     let mut off_curve = sccp_registry_for_snapshot_test();
     let deployment = match &mut off_curve.lanes[0].routes[0].destination {
         iroha_data_model::bridge::SccpDestinationDeploymentV1::Evm(deployment) => deployment,
@@ -910,7 +869,6 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         "non-curve",
     );
 }
-
 #[tokio::test]
 async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
     #[derive(Clone, Copy, Debug)]
@@ -923,14 +881,12 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
         InboundMessages,
         InboundHighWater,
     }
-
     fn envelope_mut<'a>(world: &'a mut json::Map, field: &str) -> &'a mut json::Map {
         let Some(json::Value::Object(envelope)) = world.get_mut(field) else {
             panic!("{field} must be one MV envelope");
         };
         envelope
     }
-
     fn storage_blocks<K, V>(entries: impl IntoIterator<Item = (K, V)>) -> json::Value
     where
         K: mv::Key + mv::json::JsonKeyCodec,
@@ -946,7 +902,6 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
             .remove("blocks")
             .expect("storage envelope contains blocks")
     }
-
     for mutation in [
         RevertMutation::PendingUsage,
         RevertMutation::PendingMessages,
@@ -971,7 +926,6 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
         let Some(json::Value::Object(world)) = snapshot_object.get_mut("world") else {
             panic!("snapshot world must be an object");
         };
-
         match mutation {
             RevertMutation::PendingUsage => {
                 let current = envelope_mut(world, "sccp_outbound_pending_usage")
@@ -1054,7 +1008,6 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
                 }
             }
         }
-
         serialized = json::to_json(&snapshot).expect("mutated snapshot JSON encodes");
         let key_pair = checked_random_snapshot_keypair();
         write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
@@ -1070,7 +1023,6 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
             .v2_finality_artifact_with_archive(1)
             .expect("read exact retained SCCP material")
             .expect("exact retained SCCP material exists");
-
         let error = match try_read_snapshot(
             &store_dir,
             &kura,
@@ -1116,7 +1068,6 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
         );
     }
 }
-
 #[tokio::test]
 async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
     let tmp_root = tempdir().unwrap();
@@ -1124,9 +1075,7 @@ async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
     let kura = Kura::blank_kura_for_testing();
     let (state, key, record) = state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
-
     let snapshot_bytes = std::fs::read(current_generation_artifact(&store_dir, SNAPSHOT_FILE_NAME))
         .expect("snapshot bytes");
     let snapshot_value: json::Value =
@@ -1139,7 +1088,6 @@ async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
         snapshot_world_has_field(&snapshot_value, "sccp_outbound_pending_usage"),
         "new snapshots must carry exact SCCP pending usage"
     );
-
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &kura,
@@ -1153,7 +1101,6 @@ async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
         StateTelemetry::new(<_>::default(), true),
     )
     .expect("snapshot read");
-
     let restored = snapshot_state
         .view()
         .world
@@ -1172,7 +1119,6 @@ async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
         1
     );
 }
-
 #[tokio::test]
 async fn incompatible_sccp_caps_reject_before_snapshot_can_prune_kura() {
     let tmp_root = tempdir().unwrap();
@@ -1182,7 +1128,6 @@ async fn incompatible_sccp_caps_reject_before_snapshot_can_prune_kura() {
     let key_pair = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect("write exact SCCP snapshot");
-
     // Keep every SCCP record/archive association exact so the configured-cap
     // rejection is the first failing boundary, ahead of hash reconciliation.
     let snapshot_bytes = std::fs::read(current_generation_artifact(&store_dir, SNAPSHOT_FILE_NAME))
@@ -1218,7 +1163,6 @@ async fn incompatible_sccp_caps_reject_before_snapshot_can_prune_kura() {
     let mut forged_snapshot_bytes = Vec::new();
     json::to_writer(&mut forged_snapshot_bytes, &snapshot_value).expect("encode forged snapshot");
     write_snapshot_bundle_from_bytes(&store_dir, &forged_snapshot_bytes, &key_pair);
-
     let canonical_hash = kura
         .block_hash_at_height(nonzero!(1_usize))
         .expect("canonical Kura hash");
@@ -1233,7 +1177,6 @@ async fn incompatible_sccp_caps_reject_before_snapshot_can_prune_kura() {
     let payload_bytes = u64::try_from(record.payload_bytes.len()).expect("small payload");
     incompatible.sccp.max_pending_outbound_payload_bytes =
         NonZeroU64::new(payload_bytes - 1).expect("fixture payload exceeds one byte");
-
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
@@ -1253,7 +1196,6 @@ async fn incompatible_sccp_caps_reject_before_snapshot_can_prune_kura() {
         error,
         TryReadError::ZkConfigInstall(ZkConfigInstallError::SccpPendingUsageLimitExceeded { .. })
     ));
-
     assert_eq!(kura.blocks_count(), 1, "rejected snapshot pruned Kura");
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
     assert_eq!(
@@ -1273,7 +1215,6 @@ async fn incompatible_sccp_caps_reject_before_snapshot_can_prune_kura() {
         "rejected snapshot changed retained header, finality, or archive material"
     );
 }
-
 #[tokio::test]
 async fn sccp_snapshot_revert_enforces_actual_pending_cap_after_terminal_compaction() {
     let kura = Kura::blank_kura_for_testing();
@@ -1298,7 +1239,6 @@ async fn sccp_snapshot_revert_enforces_actual_pending_cap_after_terminal_compact
     state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([0xB8; 32]),
     ));
-
     let payload_bytes = u64::try_from(pending.payload_bytes.len()).expect("small payload");
     let mut lowered = state.zk_snapshot();
     lowered.sccp.max_pending_outbound_messages = NonZeroU64::new(1).expect("one is nonzero");
@@ -1307,7 +1247,6 @@ async fn sccp_snapshot_revert_enforces_actual_pending_cap_after_terminal_compact
     state
         .set_zk(lowered)
         .expect("the compacted current state fits the lowered runtime cap");
-
     let error = crate::state::validate_sccp_snapshot_revert_candidate(&state)
         .expect_err("rollback must not expose pending state above the actual runtime cap");
     assert!(
@@ -1327,16 +1266,13 @@ async fn sccp_snapshot_revert_enforces_actual_pending_cap_after_terminal_compact
         "validation must preserve the current terminal descriptor"
     );
 }
-
 #[tokio::test]
 async fn snapshot_write_signature_file_uses_checked_signing_and_verifies_digest() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
-
     let digest_hex = std::fs::read_to_string(current_generation_artifact(
         &store_dir,
         SNAPSHOT_DIGEST_FILE_NAME,
@@ -1353,16 +1289,13 @@ async fn snapshot_write_signature_file_uses_checked_signing_and_verifies_digest(
         .verify(key_pair.public_key(), &digest)
         .expect("checked snapshot signature must verify");
 }
-
 #[tokio::test]
 async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
-
     let digest_hex = std::fs::read_to_string(current_generation_artifact(
         &store_dir,
         SNAPSHOT_DIGEST_FILE_NAME,
@@ -1377,7 +1310,6 @@ async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
         hex::encode(wrong_signature.payload()),
     )
     .expect("replace snapshot signature");
-
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -1392,23 +1324,19 @@ async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
     ) else {
         panic!("snapshot with wrong-key signature should be rejected")
     };
-
     assert!(matches!(error, TryReadError::SignatureInvalid(_)));
 }
-
 #[tokio::test]
 async fn snapshot_read_rejects_noncanonical_uppercase_signature_hex() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
     let signature_path = current_generation_artifact(&store_dir, SNAPSHOT_SIGNATURE_FILE_NAME);
     let signature_hex = std::fs::read_to_string(&signature_path).expect("signature hex");
     std::fs::write(&signature_path, signature_hex.to_ascii_uppercase())
         .expect("replace signature with equivalent noncanonical hex");
-
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -1423,24 +1351,20 @@ async fn snapshot_read_rejects_noncanonical_uppercase_signature_hex() {
     ) else {
         panic!("uppercase signature hex must not be accepted");
     };
-
     assert!(matches!(error, TryReadError::SignatureMalformed(_)));
 }
-
 #[tokio::test]
 async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
     std::fs::write(
         current_generation_artifact(&store_dir, SNAPSHOT_SIGNATURE_FILE_NAME),
         "00".repeat(64),
     )
     .expect("replace snapshot signature");
-
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -1455,17 +1379,14 @@ async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() 
     ) else {
         panic!("snapshot with all-zero signature should be rejected")
     };
-
     assert!(matches!(error, TryReadError::SignatureMalformed(_)));
 }
-
 #[tokio::test]
 async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
     let signature_hex = std::fs::read_to_string(current_generation_artifact(
         &store_dir,
@@ -1473,7 +1394,6 @@ async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification
     ))
     .expect("snapshot signature");
     let valid_signature_bytes = hex::decode(signature_hex.trim()).expect("signature hex");
-
     for (label, replacement_r) in [
         ("small-order", SMALL_ORDER_ED25519_R),
         ("noncanonical", NONCANONICAL_ED25519_R),
@@ -1485,7 +1405,6 @@ async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification
             hex::encode(signature_bytes),
         )
         .expect("replace snapshot signature");
-
         let Err(error) = try_read_snapshot(
             &store_dir,
             &Kura::blank_kura_for_testing(),
@@ -1500,14 +1419,12 @@ async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification
         ) else {
             panic!("snapshot with malformed Ed25519 signature R should be rejected")
         };
-
         assert!(
             matches!(error, TryReadError::SignatureMalformed(_)),
             "{label} snapshot signature R produced unexpected error: {error:?}"
         );
     }
 }
-
 #[tokio::test]
 async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verification() {
     let tmp_root = tempdir().unwrap();
@@ -1515,7 +1432,6 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
     let state = state_factory();
     let key_pair = KeyPair::try_from_seed(b"snapshot-mldsa-signature".to_vec(), Algorithm::MlDsa)
         .expect("snapshot ML-DSA fixture key generation should succeed");
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
     let signature_hex = std::fs::read_to_string(current_generation_artifact(
         &store_dir,
@@ -1523,7 +1439,6 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
     ))
     .expect("snapshot signature");
     let valid_signature_bytes = hex::decode(signature_hex.trim()).expect("signature hex");
-
     for label in ["short", "overlong"] {
         let mut signature_bytes = valid_signature_bytes.clone();
         match label {
@@ -1540,7 +1455,6 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
             hex::encode(signature_bytes),
         )
         .expect("replace snapshot signature");
-
         let Err(error) = try_read_snapshot(
             &store_dir,
             &Kura::blank_kura_for_testing(),
@@ -1555,14 +1469,12 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
         ) else {
             panic!("snapshot with malformed ML-DSA signature length should be rejected")
         };
-
         assert!(
             matches!(error, TryReadError::SignatureMalformed(_)),
             "{label} snapshot ML-DSA signature length produced unexpected error: {error:?}"
         );
     }
 }
-
 #[tokio::test]
 async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bindings() {
     let tmp_root = tempdir().unwrap();
@@ -1570,9 +1482,7 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
     let mut state = state_factory();
     let (uaid, dataspace, account_id) = install_active_space_directory_manifest(&mut state);
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
-
     let snapshot_bytes = std::fs::read(current_generation_artifact(&store_dir, SNAPSHOT_FILE_NAME))
         .expect("snapshot bytes");
     let snapshot_value: json::Value =
@@ -1585,7 +1495,6 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
         snapshot_world_has_field(&snapshot_value, "kagemusha_replay_keys"),
         "new snapshots must carry Kagemusha replay keys"
     );
-
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -1599,7 +1508,6 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
         StateTelemetry::new(<_>::default(), true),
     )
     .expect("snapshot read");
-
     let manifests = snapshot_state.world.space_directory_manifests.view();
     let manifest_set = manifests
         .get(&uaid)
@@ -1609,7 +1517,6 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
         "dataspace manifest should survive snapshot restore"
     );
     drop(manifests);
-
     let bindings = snapshot_state.world.uaid_dataspaces.view();
     let uaid_bindings = bindings
         .get(&uaid)
@@ -1619,7 +1526,6 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
         "restored active manifest should bind the account to the dataspace"
     );
 }
-
 #[tokio::test]
 async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history() {
     let tmp_root = tempdir().unwrap();
@@ -1632,9 +1538,7 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
     store_block_and_mark_state_height(&mut state, &kura, block);
     let key_pair = checked_random_snapshot_keypair();
     let legacy_bytes = legacy_snapshot_bytes_without_space_directory_section(&state);
-
     write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
-
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
@@ -1655,7 +1559,6 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
         TryReadError::MissingSpaceDirectoryManifestSection { snapshot_height: 1 }
     ));
 }
-
 #[tokio::test]
 async fn snapshot_missing_space_directory_section_rejects_without_manifest_history() {
     let tmp_root = tempdir().unwrap();
@@ -1666,9 +1569,7 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
     store_block_and_mark_state_height(&mut state, &kura, block);
     let key_pair = checked_random_snapshot_keypair();
     let legacy_bytes = legacy_snapshot_bytes_without_space_directory_section(&state);
-
     write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
-
     let error = match try_read_snapshot(
         &store_dir,
         &kura,

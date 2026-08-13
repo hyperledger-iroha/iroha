@@ -7,18 +7,15 @@
 //!
 //! The protocol source is Microsoft `vega-prover` commit
 //! `c0ee259053cd12eaf43ed71b5cde375452b3ee4d`, licensed under MIT.
-
 use core::{
     fmt,
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
 };
-
 use halo2curves::{
     ff::{Field, FromUniformBytes, PrimeField},
     t256::Fq,
 };
 use thiserror::Error;
-
 #[path = "vega/algebra.rs"]
 mod algebra;
 #[path = "vega/bulletproof_t256.rs"]
@@ -65,7 +62,6 @@ mod transcript;
 mod wire;
 #[path = "vega/zk_ams.rs"]
 mod zk_ams;
-
 pub(super) use curve::{
     VEGA_T256_BASE_MODULUS_BE_V1, VegaCurveError, VegaT256PointV1, derive_t256_generators_v1,
 };
@@ -236,7 +232,6 @@ pub use zk_ams::{
 pub use zk_ams::{
     automorphism_switch_zk_ams_mkhe_collective_v1, relinearize_zk_ams_mkhe_collective_v1,
 };
-
 /// Exact canonical COSE `Sig_structure` width in the released Figure 9 relation.
 pub const VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1: usize = 368;
 /// Exact tagged ISO 18013-5 MSO payload width embedded in the `Sig_structure`.
@@ -257,14 +252,12 @@ pub const VEGA_MDL_MAX_PRESENTATION_YEAR_V1: u16 = 9_998;
 pub const VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1: u8 = 1;
 /// Highest achievable public age threshold admitted by the released relation.
 pub const VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1: u8 = 150;
-
 /// Tight first-release cap for one canonical Norito Vega proof.
 ///
 /// A 512 KiB ceiling leaves room for the exact 368-byte Figure 9 relation and
 /// Norito framing while preventing this engine from inheriting the much
 /// broader per-action opaque-byte allowance.
 pub const MAX_VEGA_PROOF_BYTES_V1: usize = 512 * 1024;
-
 /// Big-endian modulus of the canonical T256 scalar field.
 ///
 /// This is also the base-field modulus of NIST P-256.
@@ -272,9 +265,7 @@ pub const VEGA_T256_SCALAR_MODULUS_BE_V1: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 ];
-
 struct ZeroizingVegaScalarBytesV1([u8; 32]);
-
 impl Drop for ZeroizingVegaScalarBytesV1 {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -283,7 +274,6 @@ impl Drop for ZeroizingVegaScalarBytesV1 {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
-
 /// Failure while translating canonical Vega field material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaFieldError {
@@ -295,7 +285,6 @@ pub enum VegaFieldError {
     #[error("cannot invert the zero T256 scalar")]
     InversionOfZero,
 }
-
 /// Canonical T256 scalar used by Vega public inputs and proof-system algebra.
 ///
 /// Construction is deliberately non-reducing: byte strings at or above the
@@ -312,20 +301,17 @@ pub enum VegaFieldError {
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct VegaT256ScalarV1(Fq);
-
 impl VegaT256ScalarV1 {
     /// Return the additive identity.
     #[must_use]
     pub const fn zero() -> Self {
         Self(Fq::ZERO)
     }
-
     /// Return the multiplicative identity.
     #[must_use]
     pub const fn one() -> Self {
         Self(Fq::ONE)
     }
-
     /// Parse one canonical 32-byte big-endian scalar without modular reduction.
     ///
     /// # Errors
@@ -335,7 +321,6 @@ impl VegaT256ScalarV1 {
     pub fn from_be_bytes_exact(bytes: [u8; 32]) -> Result<Self, VegaFieldError> {
         Self::from_be_bytes_exact_ref(&bytes)
     }
-
     /// Parse a borrowed canonical big-endian scalar while wiping the sole
     /// little-endian representation scratch on every exit.
     pub(crate) fn from_be_bytes_exact_ref(bytes: &[u8; 32]) -> Result<Self, VegaFieldError> {
@@ -351,7 +336,6 @@ impl VegaT256ScalarV1 {
             .ok_or(VegaFieldError::NonCanonicalScalar)?;
         Ok(Self(value))
     }
-
     /// Parse one canonical 32-byte little-endian proof scalar without modular
     /// reduction.
     ///
@@ -363,14 +347,12 @@ impl VegaT256ScalarV1 {
         bytes.reverse();
         Self::from_be_bytes_exact(bytes)
     }
-
     /// Reduce an exact 64-byte little-endian uniform string as specified by
     /// the pinned Vega Fiat--Shamir transcript.
     #[must_use]
     pub fn from_uniform_le_bytes(bytes: [u8; 64]) -> Self {
         Self::from_uniform_le_bytes_ref(&bytes)
     }
-
     /// Reduce a borrowed exact 64-byte little-endian uniform string.
     ///
     /// Secret-entropy owners should use this form so scalar reduction does not
@@ -379,13 +361,11 @@ impl VegaT256ScalarV1 {
     pub fn from_uniform_le_bytes_ref(bytes: &[u8; 64]) -> Self {
         Self(Fq::from_uniform_bytes(bytes))
     }
-
     /// Construct a scalar from an unsigned 64-bit integer.
     #[must_use]
     pub fn from_u64(value: u64) -> Self {
         Self(Fq::from(value))
     }
-
     /// Return the exact canonical 32-byte big-endian representation.
     #[must_use]
     pub fn to_be_bytes(self) -> [u8; 32] {
@@ -393,7 +373,6 @@ impl VegaT256ScalarV1 {
         bytes.reverse();
         bytes
     }
-
     /// Return the exact canonical 32-byte little-endian proof encoding.
     #[must_use]
     pub fn to_le_bytes(self) -> [u8; 32] {
@@ -401,13 +380,11 @@ impl VegaT256ScalarV1 {
         bytes.reverse();
         bytes
     }
-
     /// Return whether this field element is zero.
     #[must_use]
     pub fn is_zero(self) -> bool {
         bool::from(self.0.is_zero())
     }
-
     /// Return the multiplicative inverse.
     ///
     /// # Errors
@@ -418,13 +395,11 @@ impl VegaT256ScalarV1 {
             .map(Self)
             .ok_or(VegaFieldError::InversionOfZero)
     }
-
     /// Square this scalar.
     #[must_use]
     pub fn square(self) -> Self {
         Self(self.0.square())
     }
-
     /// Replace this scalar instance with exact zero using a safe best-effort wipe.
     ///
     /// This scalar is [`Copy`]; callers must separately clear every independent
@@ -436,75 +411,59 @@ impl VegaT256ScalarV1 {
         let _ = core::hint::black_box(&mut *self);
     }
 }
-
 impl Default for VegaT256ScalarV1 {
     fn default() -> Self {
         Self::zero()
     }
 }
-
 impl Add for VegaT256ScalarV1 {
     type Output = Self;
-
     fn add(self, rhs: Self) -> Self::Output {
         Self(self.0 + rhs.0)
     }
 }
-
 impl AddAssign for VegaT256ScalarV1 {
     fn add_assign(&mut self, rhs: Self) {
         self.0 += rhs.0;
     }
 }
-
 impl Sub for VegaT256ScalarV1 {
     type Output = Self;
-
     fn sub(self, rhs: Self) -> Self::Output {
         Self(self.0 - rhs.0)
     }
 }
-
 impl SubAssign for VegaT256ScalarV1 {
     fn sub_assign(&mut self, rhs: Self) {
         self.0 -= rhs.0;
     }
 }
-
 impl Mul for VegaT256ScalarV1 {
     type Output = Self;
-
     fn mul(self, rhs: Self) -> Self::Output {
         Self(self.0 * rhs.0)
     }
 }
-
 impl MulAssign for VegaT256ScalarV1 {
     fn mul_assign(&mut self, rhs: Self) {
         self.0 *= rhs.0;
     }
 }
-
 impl Neg for VegaT256ScalarV1 {
     type Output = Self;
-
     fn neg(self) -> Self::Output {
         Self(-self.0)
     }
 }
-
 impl fmt::Debug for VegaT256ScalarV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("VegaT256ScalarV1(REDACTED)")
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use halo2curves::ff::PrimeField;
-
     use super::*;
-
+    use halo2curves::ff::PrimeField;
     #[test]
     fn t256_scalar_modulus_is_exactly_the_p256_base_modulus() {
         assert_eq!(
@@ -524,7 +483,6 @@ mod tests {
             Err(VegaFieldError::NonCanonicalScalar)
         );
     }
-
     #[test]
     fn t256_scalar_big_endian_boundary_does_not_reduce() {
         for value in [0_u64, 1, 255, 256, u32::MAX.into(), u64::MAX] {
@@ -535,25 +493,20 @@ mod tests {
             assert_eq!(VegaT256ScalarV1::from_be_bytes_exact(expected), Ok(scalar));
         }
     }
-
     #[test]
     fn t256_scalar_clear_secret_replaces_nonzero_with_exact_zero() {
         let mut secret = VegaT256ScalarV1::from_be_bytes_exact([0x5a; 32])
             .expect("fixture is below the T256 scalar modulus");
         assert!(!secret.is_zero());
-
         secret.clear_secret();
-
         assert!(secret.is_zero());
         assert_eq!(secret, VegaT256ScalarV1::zero());
         assert_eq!(secret.to_be_bytes(), [0; 32]);
     }
-
     #[test]
     fn t256_scalar_debug_does_not_expose_secret_material() {
         let secret = VegaT256ScalarV1::from_u64(0x0123_4567_89ab_cdef);
         let rendered = format!("{secret:?}");
-
         assert_eq!(rendered, "VegaT256ScalarV1(REDACTED)");
         assert!(!rendered.contains("0123456789abcdef"));
     }

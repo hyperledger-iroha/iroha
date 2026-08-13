@@ -1,6 +1,5 @@
 // Management-token status for one Connect session. Node aggregate telemetry is
 // deliberately absent from MCP because it has no public projection.
-
 async fn dispatch_connect_session_status(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -33,7 +32,6 @@ async fn dispatch_connect_session_status(
     )
     .await
 }
-
 fn connect_session_status_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.session.status".to_owned(),
@@ -60,18 +58,15 @@ fn connect_session_status_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_connect_session_status_tool() -> ToolSpec {
     let mut tool = connect_session_status_tool();
     tool.name = "iroha.connect.session.status".to_owned();
     tool.description = "Alias for connect.session.status.".to_owned();
     tool
 }
-
 #[cfg(test)]
 mod connect_status_tests {
     use super::{ToolEffect, connect_session_status_tool};
-
     #[test]
     fn session_status_requires_exact_sid_and_management_token() {
         let tool = connect_session_status_tool();

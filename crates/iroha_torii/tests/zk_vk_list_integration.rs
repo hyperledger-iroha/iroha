@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for GET /v1/zk/vk (list with filters).
 #![cfg(feature = "app_api")]
-
 use std::sync::Arc;
-
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -17,12 +15,10 @@ use iroha_data_model::{
     zk::BackendTag,
 };
 use tower::ServiceExt as _;
-
 #[tokio::test]
 async fn vk_list_filters_by_backend_and_status() {
     // Build minimal state
     let mut world = World::new();
-
     // Insert 3 records: 2 active + 1 proposed
     // Insert via test helper
     let backend = "halo2/ipa";
@@ -52,7 +48,6 @@ async fn vk_list_filters_by_backend_and_status() {
         let id = VerifyingKeyId::new(backend, name);
         world.verifying_keys_mut_for_testing().insert(id, rec);
     }
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
@@ -66,7 +61,6 @@ async fn vk_list_filters_by_backend_and_status() {
             }
         }),
     );
-
     // List all
     let req_all = http::Request::builder()
         .method("GET")
@@ -80,7 +74,6 @@ async fn vk_list_filters_by_backend_and_status() {
             .unwrap();
     let arr_all = v_all.as_array().unwrap();
     assert_eq!(arr_all.len(), 3);
-
     // Filter Proposed
     let req_prop = http::Request::builder()
         .method("GET")

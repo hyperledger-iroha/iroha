@@ -11,9 +11,7 @@
 //! time.
 //!
 //! This is the first-release aggregate registration surface.
-
 use thiserror::Error;
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::main_assembly::ZkX509MainTraceAssemblyV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -5458,7 +5456,6 @@ fn p256_main_signed_witness_for_test_v1(
     seed: u8,
 ) -> Result<super::p256_ecdsa_air::P256EcdsaWitnessV1, P256AggregateAdapterErrorV1> {
     use p256::ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _};
-
     let mut secret = [0_u8; 32];
     secret[31] = seed.max(1);
     let key = SigningKey::from_slice(&secret).map_err(|_| P256AggregateAdapterErrorV1::Topology)?;
@@ -5544,7 +5541,6 @@ pub(crate) fn p256_main_base_source_fixture_for_test_v1()
 #[cfg(test)]
 mod tests {
     use sha2::{Digest as _, Sha256};
-
     use super::super::{
         credential_pre_aux::{
             ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPreAuxV1,
@@ -5564,7 +5560,6 @@ mod tests {
         },
     };
     use super::*;
-
     fn main_post_base_v1(seed: u8) -> ZkX509CredentialMainPostBaseChallengesV1 {
         let main = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [seed; 32],

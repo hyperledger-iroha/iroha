@@ -1,5 +1,4 @@
 //! This module contains [`LiveQueryStore`] actor.
-
 use std::{
     fmt,
     num::{NonZeroU64, NonZeroUsize},
@@ -9,7 +8,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::actual::LiveQueryStore as Config;
 use iroha_data_model::{
@@ -23,24 +21,20 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::{trace, warn};
 use tokio::task::JoinHandle;
-
 use super::cursor::ErasedQueryIterator;
 use crate::smartcontracts::isi::query::{
     OrdinaryQueryCursorBinding, OrdinaryQueryCursorMemory, OrdinaryQueryMemoryAdmission,
 };
-
 type DeferredMaterializer = Box<dyn FnOnce() -> ErasedQueryIterator + Send + Sync>;
 const QUERY_ID_BYTES: usize = 32;
 const QUERY_ID_ALLOCATION_ATTEMPTS: usize = 16;
 type PagedBatcher =
     Box<dyn Fn(u64, Option<u64>) -> Result<PagedQueryPage, QueryExecutionFail> + Send + Sync>;
-
 struct PagedQueryPage {
     batch: QueryOutputBatchBoxTuple,
     remaining_items: Option<u64>,
     next_cursor: Option<NonZeroU64>,
 }
-
 /// Prepared output for iterable query start.
 ///
 /// This lets the caller precompute the first response batch and defer iterator
@@ -53,7 +47,6 @@ pub(crate) struct PreparedQueryStart {
     /// Deferred continuation state. `None` means query is already drained.
     pub deferred_continuation: Option<DeferredQueryContinuation>,
 }
-
 /// Prepared output for a cursor that computes each continuation page on demand.
 pub(crate) struct PreparedPagedQueryStart {
     /// Precomputed first response batch.
@@ -61,14 +54,12 @@ pub(crate) struct PreparedPagedQueryStart {
     /// Deferred page continuation state. `None` means query is already drained.
     pub paged_continuation: Option<PagedQueryContinuation>,
 }
-
 /// Deferred continuation for stored iterable queries.
 pub(crate) struct DeferredQueryContinuation {
     expected_cursor: NonZeroU64,
     remaining_items: Option<u64>,
     materialize: Option<DeferredMaterializer>,
 }
-
 impl DeferredQueryContinuation {
     /// Construct deferred continuation state.
     pub(crate) fn new<F>(
@@ -85,18 +76,15 @@ impl DeferredQueryContinuation {
             materialize: Some(Box::new(materialize)),
         }
     }
-
     fn expected_cursor(&self) -> NonZeroU64 {
         self.expected_cursor
     }
-
     fn take_materializer(&mut self) -> DeferredMaterializer {
         self.materialize
             .take()
             .expect("deferred continuation must materialize at most once")
     }
 }
-
 impl fmt::Debug for DeferredQueryContinuation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DeferredQueryContinuation")
@@ -105,14 +93,12 @@ impl fmt::Debug for DeferredQueryContinuation {
             .finish()
     }
 }
-
 /// Continuation that materializes one page per `Continue` request.
 pub(crate) struct PagedQueryContinuation {
     expected_cursor: NonZeroU64,
     remaining_items: Option<u64>,
     next_page: PagedBatcher,
 }
-
 impl PagedQueryContinuation {
     /// Construct paged continuation state.
     #[cfg(test)]
@@ -136,7 +122,6 @@ impl PagedQueryContinuation {
             }),
         }
     }
-
     /// Construct a paged continuation whose page producer receives the gas
     /// budget supplied by the current `Continue` request.
     pub(crate) fn new_budgeted<F>(expected_cursor: NonZeroU64, next_page: F) -> Self
@@ -163,7 +148,6 @@ impl PagedQueryContinuation {
             }),
         }
     }
-
     /// Construct a paged continuation that reports exact remaining-item counts.
     #[cfg(test)]
     pub(crate) fn new_counted<F>(
@@ -193,7 +177,6 @@ impl PagedQueryContinuation {
             }),
         }
     }
-
     /// Construct an exact-count paged continuation whose page producer
     /// receives the gas budget supplied by the current `Continue` request.
     pub(crate) fn new_counted_budgeted<F>(
@@ -224,11 +207,9 @@ impl PagedQueryContinuation {
             }),
         }
     }
-
     fn expected_cursor(&self) -> NonZeroU64 {
         self.expected_cursor
     }
-
     fn next_batch(
         &mut self,
         cursor: u64,
@@ -269,12 +250,10 @@ impl PagedQueryContinuation {
         self.remaining_items = remaining_items;
         Ok((batch, next_cursor))
     }
-
     fn remaining(&self) -> Option<u64> {
         self.remaining_items
     }
 }
-
 impl fmt::Debug for PagedQueryContinuation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PagedQueryContinuation")
@@ -283,27 +262,22 @@ impl fmt::Debug for PagedQueryContinuation {
             .finish_non_exhaustive()
     }
 }
-
 #[derive(Debug)]
 enum LiveQuery {
     Ready(ErasedQueryIterator),
     Deferred(DeferredQueryContinuation),
     Paged(PagedQueryContinuation),
 }
-
 impl LiveQuery {
     fn ready(iter: ErasedQueryIterator) -> Self {
         Self::Ready(iter)
     }
-
     fn deferred(continuation: DeferredQueryContinuation) -> Self {
         Self::Deferred(continuation)
     }
-
     fn paged(continuation: PagedQueryContinuation) -> Self {
         Self::Paged(continuation)
     }
-
     fn next_batch(
         &mut self,
         cursor: u64,
@@ -323,7 +297,6 @@ impl LiveQuery {
             Self::Paged(continuation) => continuation.next_batch(cursor, gas_budget),
         }
     }
-
     fn remaining(&self) -> Option<u64> {
         match self {
             Self::Ready(live_query) => live_query.remaining(),
@@ -332,7 +305,6 @@ impl LiveQuery {
         }
     }
 }
-
 /// Service which stores queries which might be non fully consumed by a client.
 ///
 /// Clients can handle their queries using [`LiveQueryStoreHandle`]
@@ -352,7 +324,6 @@ pub struct LiveQueryStore {
     idle_time: Duration,
     shutdown_signal: ShutdownSignal,
 }
-
 #[derive(Debug)]
 struct QueryInfo {
     live_query: LiveQuery,
@@ -362,7 +333,6 @@ struct QueryInfo {
     revalidation_request: Option<Arc<[u8]>>,
     ordinary_cursor_memory: Option<OrdinaryQueryCursorMemory>,
 }
-
 impl LiveQueryStore {
     /// Construct [`LiveQueryStore`] from configuration.
     pub fn from_config(cfg: Config, shutdown_signal: ShutdownSignal) -> Self {
@@ -376,7 +346,6 @@ impl LiveQueryStore {
             shutdown_signal,
         }
     }
-
     /// Construct [`LiveQueryStore`] for tests.
     /// Default configuration will be used.
     ///
@@ -388,7 +357,6 @@ impl LiveQueryStore {
         let store = Arc::new(Self::from_config(Config::default(), ShutdownSignal::new()));
         LiveQueryStoreHandle::new(store)
     }
-
     /// Start [`LiveQueryStore`]. Requires a [`tokio::runtime::Runtime`] being run
     /// as it will create new [`tokio::task`] and detach it.
     ///
@@ -408,7 +376,6 @@ impl LiveQueryStore {
             ),
         )
     }
-
     fn spawn_pruning_task(self: Arc<Self>) -> JoinHandle<()> {
         let mut idle_interval = tokio::time::interval(self.idle_time);
         tokio::task::spawn(async move {
@@ -426,7 +393,6 @@ impl LiveQueryStore {
             }
         })
     }
-
     fn prune_expired_queries(&self) -> Vec<QueryId> {
         let mut expired = Vec::new();
         self.queries.retain(|key, query| {
@@ -443,14 +409,12 @@ impl LiveQueryStore {
         self.release_query_slots(expired.len());
         expired.into_iter().map(|(query_id, _)| query_id).collect()
     }
-
     fn remove(&self, query_id: &str) -> Option<QueryInfo> {
         let (_, query_info) = self.queries.remove(query_id)?;
         self.decrease_queries_per_user(query_info.authority.clone());
         self.release_query_slots(1);
         Some(query_info)
     }
-
     fn try_reserve_query_slot(&self) -> bool {
         self.query_slots
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
@@ -458,7 +422,6 @@ impl LiveQueryStore {
             })
             .is_ok()
     }
-
     fn release_query_slots(&self, count: usize) {
         if count == 0 {
             return;
@@ -469,19 +432,16 @@ impl LiveQueryStore {
             })
             .expect("live-query slot accounting must not underflow");
     }
-
     fn decrease_queries_per_user(&self, authority: AccountId) {
         let Entry::Occupied(mut entry) = self.queries_per_user.entry(authority) else {
             return;
         };
-
         let counter = entry.get_mut();
         *counter -= 1;
         if *counter == 0 {
             entry.remove_entry();
         }
     }
-
     fn random_query_id() -> QueryId {
         let mut bytes = [0_u8; QUERY_ID_BYTES];
         if rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut bytes).is_err() {
@@ -489,7 +449,6 @@ impl LiveQueryStore {
         }
         hex::encode(bytes)
     }
-
     fn insert_new_query(
         &self,
         live_query: LiveQuery,
@@ -505,7 +464,6 @@ impl LiveQueryStore {
             Self::random_query_id,
         )
     }
-
     fn insert_new_query_with_generator(
         &self,
         live_query: LiveQuery,
@@ -521,7 +479,6 @@ impl LiveQueryStore {
             );
             return Err(QueryExecutionFail::CapacityLimit);
         }
-
         let mut user_count = self.queries_per_user.entry(authority.clone()).or_insert(0);
         if *user_count >= self.capacity_per_user.get() {
             drop(user_count);
@@ -535,7 +492,6 @@ impl LiveQueryStore {
         }
         *user_count += 1;
         drop(user_count);
-
         let mut live_query = Some(live_query);
         let mut ordinary_cursor_memory = ordinary_cursor_memory;
         for _ in 0..QUERY_ID_ALLOCATION_ATTEMPTS {
@@ -562,7 +518,6 @@ impl LiveQueryStore {
             trace!(%query_id, "Inserted new query");
             return Ok(query_id);
         }
-
         self.decrease_queries_per_user(authority);
         self.release_query_slots(1);
         warn!(
@@ -571,7 +526,6 @@ impl LiveQueryStore {
         );
         Err(QueryExecutionFail::CapacityLimit)
     }
-
     // For the existing query, takes and returns the first batch.
     // If query becomes depleted, it will be removed from the store.
     fn get_query_next_batch(
@@ -626,7 +580,6 @@ impl LiveQueryStore {
         }
         Ok((next_batch, remaining, next_cursor))
     }
-
     fn bind_revalidation_request(
         &self,
         query_id: &QueryId,
@@ -650,7 +603,6 @@ impl LiveQueryStore {
         entry.revalidation_request = Some(archive);
         Ok(())
     }
-
     fn revalidation_request(
         &self,
         query_id: &QueryId,
@@ -668,7 +620,6 @@ impl LiveQueryStore {
             .clone()
             .ok_or(QueryExecutionFail::Expired)
     }
-
     fn ordinary_cursor_retained_bytes(
         &self,
         cursor: &ForwardCursor,
@@ -690,7 +641,6 @@ impl LiveQueryStore {
             .map(|memory| memory.binding().retained_bytes())
             .ok_or(QueryExecutionFail::Expired)
     }
-
     fn ordinary_cursor_binding(
         &self,
         cursor: &ForwardCursor,
@@ -713,14 +663,12 @@ impl LiveQueryStore {
             .ok_or(QueryExecutionFail::Expired)
     }
 }
-
 /// Handle to interact with [`LiveQueryStore`].
 #[derive(Clone)]
 pub struct LiveQueryStoreHandle {
     store: Arc<LiveQueryStore>,
     ordinary_memory_admission: Option<OrdinaryQueryMemoryAdmission>,
 }
-
 impl LiveQueryStoreHandle {
     /// Create a new handle for the store
     pub fn new(store: Arc<LiveQueryStore>) -> Self {
@@ -729,7 +677,6 @@ impl LiveQueryStoreHandle {
             ordinary_memory_admission: None,
         }
     }
-
     /// Return a request-local handle that splits any newly stored cursor's
     /// retained-memory token from `admission`.
     pub(crate) fn with_ordinary_memory_admission(
@@ -741,12 +688,10 @@ impl LiveQueryStoreHandle {
             ordinary_memory_admission: Some(admission),
         }
     }
-
     #[cfg(test)]
     pub(crate) fn shares_store_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.store, &other.store)
     }
-
     /// Construct a batched response from a post-processed query output.
     ///
     /// # Parameters
@@ -767,10 +712,8 @@ impl LiveQueryStoreHandle {
     ) -> Result<QueryOutput, QueryExecutionFail> {
         let curr_cursor = 0;
         let (batch, next_cursor) = live_query.next_batch(curr_cursor)?;
-
         // NOTE: we are checking remaining items _after_ the first batch is taken
         let remaining_items = live_query.remaining();
-
         // if the cursor is `None` - the query has ended, we can remove it from the store
         let query_id = if next_cursor.is_some() {
             let expected_cursor = next_cursor.expect("checked as present");
@@ -796,7 +739,6 @@ impl LiveQueryStoreHandle {
             gas_budget,
         ))
     }
-
     /// Construct and store a query response when the first batch and continuation
     /// state were precomputed by the caller.
     ///
@@ -815,7 +757,6 @@ impl LiveQueryStoreHandle {
         let next_cursor = deferred_continuation
             .as_ref()
             .map(DeferredQueryContinuation::expected_cursor);
-
         let query_id = if let Some(deferred_continuation) = deferred_continuation {
             let expected_cursor = deferred_continuation.expected_cursor();
             let ordinary_memory_lease = self
@@ -832,7 +773,6 @@ impl LiveQueryStoreHandle {
         } else {
             String::new()
         };
-
         Ok(Self::construct_query_response(
             first_batch,
             remaining_items,
@@ -841,7 +781,6 @@ impl LiveQueryStoreHandle {
             gas_budget,
         ))
     }
-
     /// Construct and store a bounded response whose continuation computes one
     /// page per request instead of storing a fully materialized tail.
     ///
@@ -862,7 +801,6 @@ impl LiveQueryStoreHandle {
         let remaining_items = paged_continuation
             .as_ref()
             .and_then(PagedQueryContinuation::remaining);
-
         let query_id = if let Some(paged_continuation) = paged_continuation {
             let expected_cursor = paged_continuation.expected_cursor();
             let ordinary_memory_lease = self
@@ -879,7 +817,6 @@ impl LiveQueryStoreHandle {
         } else {
             String::new()
         };
-
         Ok(Self::construct_query_response(
             first_batch,
             remaining_items,
@@ -888,7 +825,6 @@ impl LiveQueryStoreHandle {
             gas_budget,
         ))
     }
-
     /// Retrieve the next batch of query output using `cursor` as `authority`.
     ///
     /// # Errors
@@ -910,7 +846,6 @@ impl LiveQueryStoreHandle {
         let (batch, remaining, next_cursor) = self
             .store
             .get_query_next_batch(&query, cursor, gas_budget, authority)?;
-
         Ok(Self::construct_query_response(
             batch,
             remaining,
@@ -919,7 +854,6 @@ impl LiveQueryStoreHandle {
             gas_budget,
         ))
     }
-
     /// Bind the canonical original query to a newly allocated stored cursor.
     ///
     /// Binding does not refresh the idle timer. Rebinding the same bytes is
@@ -939,7 +873,6 @@ impl LiveQueryStoreHandle {
         self.store
             .bind_revalidation_request(&cursor.query, authority, Arc::<[u8]>::from(archive))
     }
-
     /// Decode the original query bound to a stored cursor without advancing it.
     ///
     /// # Errors
@@ -963,7 +896,6 @@ impl LiveQueryStoreHandle {
         }
         Ok(request)
     }
-
     /// Decode an ordinary cursor's archived Start under explicit schema limits
     /// and verify canonicality with one bounded re-encode buffer.
     ///
@@ -989,7 +921,6 @@ impl LiveQueryStoreHandle {
         if !matches!(request, QueryRequest::Start(_)) {
             return Err(QueryExecutionFail::Expired);
         }
-
         let _canonical_flags =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let canonical = norito::core::to_bytes_bounded(&request, max_archive_bytes)
@@ -999,7 +930,6 @@ impl LiveQueryStoreHandle {
         }
         Ok(request)
     }
-
     /// Return the weighted bytes retained by an ordinary stored cursor.
     ///
     /// The lookup validates the opaque query ID, authority, expected cursor,
@@ -1017,7 +947,6 @@ impl LiveQueryStoreHandle {
     ) -> Result<u64, QueryExecutionFail> {
         self.store.ordinary_cursor_retained_bytes(cursor, authority)
     }
-
     /// Return the retained-memory and archived-policy binding for a cursor.
     ///
     /// This validates the same opaque ID, authority, exact cursor position,
@@ -1031,12 +960,10 @@ impl LiveQueryStoreHandle {
     ) -> Result<OrdinaryQueryCursorBinding, QueryExecutionFail> {
         self.store.ordinary_cursor_binding(cursor, authority)
     }
-
     /// Remove query from the storage if there is any.
     pub fn drop_query(&self, query_id: &QueryId) {
         self.store.remove(query_id);
     }
-
     fn construct_query_response(
         batch: QueryOutputBatchBoxTuple,
         remaining_items: Option<u64>,
@@ -1055,7 +982,6 @@ impl LiveQueryStoreHandle {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1066,7 +992,6 @@ mod tests {
         },
         time::Duration,
     };
-
     use iroha_data_model::{
         permission::Permission,
         prelude::SelectorTuple,
@@ -1078,35 +1003,29 @@ mod tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::smartcontracts::isi::query::{
         ORDINARY_NAME_ID_SOURCE_BYTES, OrdinaryQueryExecutionLimits, OrdinaryQueryMemoryLease,
         OrdinaryQueryMemoryReservation, QueryCountMode, QueryExecutionBudget, QueryLimits,
     };
-
     #[derive(Debug)]
     struct TestMemoryReservation {
         bytes: u64,
         pool_generation: u64,
         released: Arc<AtomicU64>,
     }
-
     impl Drop for TestMemoryReservation {
         fn drop(&mut self) {
             self.released.fetch_add(self.bytes, Ordering::SeqCst);
         }
     }
-
     impl OrdinaryQueryMemoryReservation for TestMemoryReservation {
         fn reserved_bytes(&self) -> u64 {
             self.bytes
         }
-
         fn pool_generation(&self) -> u64 {
             self.pool_generation
         }
-
         fn split_off(&mut self, bytes: u64) -> Option<Box<dyn OrdinaryQueryMemoryReservation>> {
             if bytes == 0 || bytes > self.bytes {
                 return None;
@@ -1119,7 +1038,6 @@ mod tests {
             }))
         }
     }
-
     fn ordinary_test_limits() -> OrdinaryQueryExecutionLimits {
         OrdinaryQueryExecutionLimits::try_new(
             5,
@@ -1137,7 +1055,6 @@ mod tests {
         )
         .expect("test ordinary geometry")
     }
-
     fn ordinary_test_admission(
         released: &Arc<AtomicU64>,
     ) -> (OrdinaryQueryMemoryAdmission, u64, u64) {
@@ -1164,7 +1081,6 @@ mod tests {
         .expect("admit weighted memory");
         (admission, retained, total)
     }
-
     fn two_item_permission_iterator() -> ErasedQueryIterator {
         ErasedQueryIterator::new(
             (0..2).map(|index| Permission::new(format!("permission-{index}"), Json::from(false))),
@@ -1172,7 +1088,6 @@ mod tests {
             nonzero!(1_u64),
         )
     }
-
     #[test]
     fn ordinary_cursor_charge_is_authority_and_position_bound() {
         let released = Arc::new(AtomicU64::new(0));
@@ -1184,7 +1099,6 @@ mod tests {
             .expect("store cursor");
         let (_, _, cursor) = response.into_parts();
         let cursor = cursor.expect("continuation");
-
         assert_eq!(
             handle.ordinary_cursor_retained_bytes(&cursor, &ALICE_ID),
             Err(QueryExecutionFail::Expired),
@@ -1222,7 +1136,6 @@ mod tests {
             handle.ordinary_cursor_binding(&stale, &ALICE_ID),
             Err(QueryExecutionFail::Expired)
         );
-
         let response_lease = admission
             .take_response_lease(false)
             .expect("response headroom");
@@ -1235,7 +1148,6 @@ mod tests {
         drop(response_lease);
         assert_eq!(released.load(Ordering::SeqCst), total);
     }
-
     #[test]
     fn failed_cursor_insertion_releases_split_charge_once() {
         let config = Config {
@@ -1249,7 +1161,6 @@ mod tests {
             .handle_iter_start(two_item_permission_iterator(), &ALICE_ID, None)
             .expect("fill only cursor slot");
         assert!(first.continue_cursor.is_some());
-
         let released = Arc::new(AtomicU64::new(0));
         let (admission, retained, total) = ordinary_test_admission(&released);
         let scoped = handle.with_ordinary_memory_admission(admission.clone());
@@ -1258,7 +1169,6 @@ mod tests {
             .expect_err("full store must reject second cursor");
         assert_eq!(error, QueryExecutionFail::CapacityLimit);
         assert_eq!(released.load(Ordering::SeqCst), retained);
-
         let response_lease = admission
             .take_response_lease(false)
             .expect("unsplit response remainder");
@@ -1269,7 +1179,6 @@ mod tests {
         drop(response_lease);
         assert_eq!(released.load(Ordering::SeqCst), total);
     }
-
     #[cfg(feature = "fast_dsl")]
     #[test]
     fn bounded_revalidation_rejects_hostile_field_before_cursor_mutation() {
@@ -1279,7 +1188,6 @@ mod tests {
             .expect("store cursor");
         let (_, _, cursor) = response.into_parts();
         let cursor = cursor.expect("continuation");
-
         let hostile = QueryRequest::Start(iroha_data_model::query::QueryWithParams {
             query: (),
             query_payload: Vec::new(),
@@ -1292,7 +1200,6 @@ mod tests {
         handle
             .bind_revalidation_request(&cursor, &ALICE_ID, archive)
             .expect("bind hostile archive");
-
         let error = match handle.ordinary_revalidation_request_bounded(
             &cursor,
             &ALICE_ID,
@@ -1303,31 +1210,26 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(error, QueryExecutionFail::Expired);
-
         let next = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect("bounded revalidation failure must not mutate cursor");
         assert_eq!(next.batch.len(), 1);
     }
-
     #[test]
     fn query_message_order_preserved() {
         let threaded_rt = tokio::runtime::Runtime::new().unwrap();
         let query_handle = threaded_rt.block_on(async { LiveQueryStore::start_test() });
-
         for i in 0..10_000 {
             let pagination = Pagination::default();
             let fetch_size = FetchSize {
                 fetch_size: Some(nonzero!(1_u64)),
             };
             let sorting = Sorting::default();
-
             let query_params = QueryParams {
                 pagination,
                 sorting,
                 fetch_size,
             };
-
             // it's not important which type we use here, just to test the flow
             let query_output =
                 (0..100).map(|_| Permission::new(String::default(), Json::from(false)));
@@ -1338,29 +1240,23 @@ mod tests {
                 QueryLimits::default(),
             )
             .unwrap();
-
             let (batch, _remaining_items, mut current_cursor) = query_handle
                 .handle_iter_start(query_output, &ALICE_ID, None)
                 .unwrap()
                 .into_parts();
-
             let mut counter = 0;
             counter += batch.len();
-
             while let Some(cursor) = current_cursor {
                 let Ok(batched) = query_handle.handle_iter_continue(cursor, &ALICE_ID) else {
                     break;
                 };
                 let (batch, _remaining_items, cursor) = batched.into_parts();
                 counter += batch.len();
-
                 current_cursor = cursor;
             }
-
             assert_eq!(counter, 100, "failed on {i} iteration");
         }
     }
-
     #[test]
     fn cursor_ttl_eviction_returns_expired_error() {
         let config = Config {
@@ -1370,7 +1266,6 @@ mod tests {
         };
         let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
         let handle = LiveQueryStoreHandle::new(Arc::clone(&store));
-
         let query_output = (0..3).map(|i| Permission::new(format!("p{i}"), Json::from(false)));
         let query_params = QueryParams {
             fetch_size: FetchSize {
@@ -1385,13 +1280,11 @@ mod tests {
             QueryLimits::default(),
         )
         .unwrap();
-
         let response = handle
             .handle_iter_start(query_output, &ALICE_ID, Some(10))
             .unwrap();
         let (_batch, _remaining, cursor) = response.into_parts();
         let mut cursor = cursor.expect("cursor stored");
-
         // Age the query beyond idle_time to trigger eviction.
         if let Some(mut entry) = store.queries.get_mut(cursor.query()) {
             let now = Instant::now();
@@ -1402,14 +1295,12 @@ mod tests {
             entry.last_access_time = now.checked_sub(drift).unwrap_or(now);
         }
         store.prune_expired_queries();
-
         cursor.gas_budget = Some(10);
         let err = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("expired");
         assert_eq!(err, QueryExecutionFail::Expired);
     }
-
     #[test]
     fn revalidation_binding_is_authority_bound_immutable_and_non_consuming() {
         let handle = LiveQueryStore::start_test();
@@ -1429,7 +1320,6 @@ mod tests {
             .expect("store query")
             .into_parts();
         let cursor = cursor.expect("query has a continuation");
-
         assert_eq!(
             handle.bind_revalidation_request(&cursor, &BOB_ID, vec![0xaa]),
             Err(QueryExecutionFail::Expired)
@@ -1452,13 +1342,11 @@ mod tests {
             handle.revalidation_request(&cursor, &ALICE_ID),
             Err(QueryExecutionFail::Expired)
         ));
-
         let next = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect("failed revalidation lookup must not consume the cursor");
         assert_eq!(next.batch.len(), 1);
     }
-
     #[test]
     fn stored_cursor_rejects_foreign_authority_without_advancing_or_refreshing() {
         let store = Arc::new(LiveQueryStore::from_config(
@@ -1484,7 +1372,6 @@ mod tests {
             QueryLimits::default(),
         )
         .unwrap();
-
         let (_first_batch, _remaining, cursor) = handle
             .handle_iter_start(query_output, &ALICE_ID, Some(10))
             .expect("start cursor")
@@ -1495,7 +1382,6 @@ mod tests {
             .get(cursor.query())
             .expect("stored query")
             .last_access_time;
-
         let foreign = handle
             .handle_iter_continue(cursor.clone(), &BOB_ID)
             .expect_err("another authority must not continue Alice's cursor");
@@ -1509,7 +1395,6 @@ mod tests {
             last_access_after, last_access_before,
             "foreign attempts must not refresh cursor retention"
         );
-
         let mut unknown = cursor.clone();
         unknown.query = "18446744073709551615".to_owned();
         let unknown = handle
@@ -1519,7 +1404,6 @@ mod tests {
             unknown, foreign,
             "foreign and unknown cursor IDs must be indistinguishable"
         );
-
         let (batch, remaining, next) = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect("the owning authority can still continue")
@@ -1528,7 +1412,6 @@ mod tests {
         assert_eq!(remaining, 1);
         assert!(next.is_some());
     }
-
     #[test]
     fn per_authority_quota_is_enforced() {
         let config = Config {
@@ -1538,7 +1421,6 @@ mod tests {
         };
         let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
         let handle = LiveQueryStoreHandle::new(store);
-
         let build_iter = || {
             let query_output = (0..2).map(|_| Permission::new(String::default(), Json::from(true)));
             let query_params = QueryParams {
@@ -1555,7 +1437,6 @@ mod tests {
             )
             .unwrap()
         };
-
         handle
             .handle_iter_start(build_iter(), &ALICE_ID, Some(5))
             .unwrap();
@@ -1564,7 +1445,6 @@ mod tests {
             .expect_err("quota");
         assert_eq!(err, QueryExecutionFail::AuthorityQuotaExceeded);
     }
-
     #[test]
     fn stored_cursor_echoes_budget_hint() {
         let handle = LiveQueryStore::start_test();
@@ -1582,7 +1462,6 @@ mod tests {
             QueryLimits::default(),
         )
         .unwrap();
-
         let (_batch, _remaining, cursor) = handle
             .handle_iter_start(query_output, &ALICE_ID, Some(42))
             .unwrap()
@@ -1590,7 +1469,6 @@ mod tests {
         let cursor = cursor.expect("cursor present");
         assert_eq!(cursor.gas_budget, Some(42));
     }
-
     #[test]
     fn cursor_mismatch_does_not_evict_query() {
         let handle = LiveQueryStore::start_test();
@@ -1608,13 +1486,11 @@ mod tests {
             QueryLimits::default(),
         )
         .unwrap();
-
         let (_batch, _remaining, cursor) = handle
             .handle_iter_start(query_output, &ALICE_ID, Some(7))
             .unwrap()
             .into_parts();
         let cursor = cursor.expect("cursor present");
-
         let mut bad_cursor = cursor.clone();
         bad_cursor.cursor =
             NonZeroU64::new(cursor.cursor.get().saturating_add(1)).expect("non-zero");
@@ -1622,7 +1498,6 @@ mod tests {
             .handle_iter_continue(bad_cursor, &ALICE_ID)
             .expect_err("mismatch");
         assert_eq!(err, QueryExecutionFail::CursorMismatch);
-
         let (batch, remaining, next) = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect("cursor still valid")
@@ -1631,7 +1506,6 @@ mod tests {
         assert_eq!(remaining, 0);
         assert!(next.is_none(), "query should be drained");
     }
-
     #[test]
     fn capacity_limit_is_enforced_with_opaque_ids() {
         let config = Config {
@@ -1641,7 +1515,6 @@ mod tests {
         };
         let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
         let handle = LiveQueryStoreHandle::new(store);
-
         let build_iter = || {
             let query_output = (0..2).map(|i| Permission::new(format!("p{i}"), Json::from(false)));
             let query_params = QueryParams {
@@ -1658,24 +1531,20 @@ mod tests {
             )
             .unwrap()
         };
-
         let (_batch, _remaining, cursor) = handle
             .handle_iter_start(build_iter(), &ALICE_ID, Some(1))
             .expect("first query")
             .into_parts();
         assert!(cursor.is_some(), "first query should allocate a cursor");
-
         let err = handle
             .handle_iter_start(build_iter(), &ALICE_ID, Some(1))
             .expect_err("capacity");
         assert_eq!(err, QueryExecutionFail::CapacityLimit);
     }
-
     #[test]
     fn global_capacity_reservations_are_atomic_across_concurrent_callers() {
         const CALLERS: usize = 32;
         const CAPACITY: usize = 3;
-
         let store = Arc::new(LiveQueryStore::from_config(
             Config {
                 idle_time: Duration::from_secs(60),
@@ -1695,14 +1564,12 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-
         start.wait();
         let admitted = callers
             .into_iter()
             .map(|caller| caller.join().expect("capacity caller must not panic"))
             .filter(|admitted| *admitted)
             .count();
-
         assert_eq!(admitted, CAPACITY);
         assert_eq!(store.query_slots.load(Ordering::Acquire), CAPACITY);
         assert!(
@@ -1712,7 +1579,6 @@ mod tests {
         store.release_query_slots(admitted);
         assert_eq!(store.query_slots.load(Ordering::Acquire), 0);
     }
-
     #[test]
     fn query_ids_are_distinct_opaque_256_bit_values() {
         let handle = LiveQueryStore::start_test();
@@ -1732,13 +1598,11 @@ mod tests {
             )
             .unwrap()
         };
-
         let (_batch, _remaining, first_cursor) = handle
             .handle_iter_start(build_iter(), &ALICE_ID, None)
             .expect("first query")
             .into_parts();
         let first_cursor = first_cursor.expect("first cursor");
-
         let (_batch, _remaining, second_cursor) = handle
             .handle_iter_start(build_iter(), &ALICE_ID, None)
             .expect("second query")
@@ -1755,7 +1619,6 @@ mod tests {
         }
         assert_ne!(first_cursor.query, second_cursor.query);
     }
-
     #[test]
     fn opaque_query_id_allocation_retries_without_overwriting_on_collision() {
         let store = LiveQueryStore::from_config(Config::default(), ShutdownSignal::new());
@@ -1768,7 +1631,6 @@ mod tests {
         };
         let first_id = "11".repeat(QUERY_ID_BYTES);
         let second_id = "22".repeat(QUERY_ID_BYTES);
-
         let inserted = store
             .insert_new_query_with_generator(
                 make_query("first"),
@@ -1779,7 +1641,6 @@ mod tests {
             )
             .expect("insert first fixed test ID");
         assert_eq!(inserted, first_id);
-
         let mut candidates = [first_id.clone(), second_id.clone()].into_iter();
         let inserted = store
             .insert_new_query_with_generator(
@@ -1799,13 +1660,11 @@ mod tests {
         assert!(store.queries.contains_key(&first_id));
         assert!(store.queries.contains_key(&second_id));
     }
-
     #[test]
     fn dropping_prepared_query_does_not_materialize_deferred_state() {
         let handle = LiveQueryStore::start_test();
         let materialized = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&materialized);
-
         let prepared = PreparedQueryStart {
             first_batch: QueryOutputBatchBoxTuple::from_batch(
                 iroha_data_model::query::QueryOutputBatchBox::Permission(vec![Permission::new(
@@ -1828,26 +1687,22 @@ mod tests {
                 },
             )),
         };
-
         let (_batch, _remaining, cursor) = handle
             .handle_iter_start_prepared(prepared, &ALICE_ID, None)
             .expect("prepared start")
             .into_parts();
         let cursor = cursor.expect("stored cursor");
         handle.drop_query(cursor.query());
-
         assert!(
             !materialized.load(Ordering::SeqCst),
             "dropping a stored cursor should not force deferred materialization"
         );
     }
-
     #[test]
     fn paged_cursor_mismatch_does_not_call_batcher_or_evict_query() {
         let handle = LiveQueryStore::start_test();
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_batcher = Arc::clone(&calls);
-
         let prepared = PreparedPagedQueryStart {
             first_batch: permission_batch(["p0"]),
             paged_continuation: Some(PagedQueryContinuation::new(
@@ -1859,14 +1714,12 @@ mod tests {
                 },
             )),
         };
-
         let (_batch, remaining, cursor) = handle
             .handle_iter_start_paged_prepared(prepared, &ALICE_ID, Some(9))
             .expect("paged start")
             .into_parts();
         assert_eq!(remaining, 0);
         let cursor = cursor.expect("paged cursor");
-
         let mut bad_cursor = cursor.clone();
         bad_cursor.cursor =
             NonZeroU64::new(cursor.cursor.get().saturating_add(1)).expect("non-zero");
@@ -1879,7 +1732,6 @@ mod tests {
             0,
             "mismatched paged cursors must be rejected before replay work starts"
         );
-
         let (batch, remaining, next) = handle
             .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect("original cursor remains valid")
@@ -1888,13 +1740,11 @@ mod tests {
         assert_eq!(remaining, 0);
         assert!(next.is_none(), "query should be drained");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-
         let err = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("drained cursor expires");
         assert_eq!(err, QueryExecutionFail::Expired);
     }
-
     #[test]
     fn paged_prepared_start_enforces_capacity_limit() {
         let config = Config {
@@ -1904,7 +1754,6 @@ mod tests {
         };
         let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
         let handle = LiveQueryStoreHandle::new(store);
-
         handle
             .handle_iter_start_paged_prepared(
                 prepared_paged_permission_query("first"),
@@ -1921,7 +1770,6 @@ mod tests {
             .expect_err("capacity");
         assert_eq!(err, QueryExecutionFail::CapacityLimit);
     }
-
     #[test]
     fn exhausted_paged_start_does_not_consume_capacity_or_quota() {
         let config = Config {
@@ -1931,7 +1779,6 @@ mod tests {
         };
         let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
         let handle = LiveQueryStoreHandle::new(store);
-
         for label in ["first", "second"] {
             let (batch, remaining, cursor) = handle
                 .handle_iter_start_paged_prepared(
@@ -1948,7 +1795,6 @@ mod tests {
             assert_eq!(remaining, 0);
             assert!(cursor.is_none());
         }
-
         handle
             .handle_iter_start_paged_prepared(
                 prepared_paged_permission_query("third"),
@@ -1957,7 +1803,6 @@ mod tests {
             )
             .expect("exhausted starts should leave capacity available");
     }
-
     #[test]
     fn paged_expired_error_evicts_cursor_and_releases_capacity() {
         let config = Config {
@@ -1968,7 +1813,6 @@ mod tests {
         let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
         let handle = LiveQueryStoreHandle::new(store);
         let calls = Arc::new(AtomicUsize::new(0));
-
         let (_batch, _remaining, cursor) = handle
             .handle_iter_start_paged_prepared(
                 prepared_failing_paged_permission_query(
@@ -1982,13 +1826,11 @@ mod tests {
             .expect("first query fits")
             .into_parts();
         let cursor = cursor.expect("stored cursor");
-
         let err = handle
             .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect_err("expired continuation");
         assert_eq!(err, QueryExecutionFail::Expired);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-
         handle
             .handle_iter_start_paged_prepared(
                 prepared_paged_permission_query("replacement"),
@@ -1996,7 +1838,6 @@ mod tests {
                 None,
             )
             .expect("expired paged cursor should release capacity");
-
         let err = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("evicted cursor is expired");
@@ -2007,7 +1848,6 @@ mod tests {
             "evicted permanent failures must not call replay work again"
         );
     }
-
     #[test]
     fn paged_cursor_done_error_evicts_cursor_and_releases_capacity() {
         let config = Config {
@@ -2018,7 +1858,6 @@ mod tests {
         let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
         let handle = LiveQueryStoreHandle::new(store);
         let calls = Arc::new(AtomicUsize::new(0));
-
         let (_batch, _remaining, cursor) = handle
             .handle_iter_start_paged_prepared(
                 prepared_failing_paged_permission_query(
@@ -2032,13 +1871,11 @@ mod tests {
             .expect("first query fits")
             .into_parts();
         let cursor = cursor.expect("stored cursor");
-
         let err = handle
             .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect_err("done continuation");
         assert_eq!(err, QueryExecutionFail::CursorDone);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-
         handle
             .handle_iter_start_paged_prepared(
                 prepared_paged_permission_query("replacement"),
@@ -2046,7 +1883,6 @@ mod tests {
                 None,
             )
             .expect("cursor-done paged cursor should release capacity");
-
         let err = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("evicted cursor is expired");
@@ -2057,7 +1893,6 @@ mod tests {
             "evicted done cursors must not call replay work again"
         );
     }
-
     #[test]
     fn paged_non_advancing_next_cursor_is_rejected_and_releases_capacity() {
         let config = Config {
@@ -2069,7 +1904,6 @@ mod tests {
         let handle = LiveQueryStoreHandle::new(store);
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_batcher = Arc::clone(&calls);
-
         let (_batch, _remaining, cursor) = handle
             .handle_iter_start_paged_prepared(
                 PreparedPagedQueryStart {
@@ -2088,13 +1922,11 @@ mod tests {
             .expect("first query fits")
             .into_parts();
         let cursor = cursor.expect("stored cursor");
-
         let err = handle
             .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect_err("non-advancing cursor must be rejected");
         assert_eq!(err, QueryExecutionFail::CursorDone);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-
         handle
             .handle_iter_start_paged_prepared(
                 prepared_paged_permission_query("replacement"),
@@ -2102,14 +1934,12 @@ mod tests {
                 None,
             )
             .expect("non-advancing cursor should release capacity");
-
         let err = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("rejected cursor should be evicted");
         assert_eq!(err, QueryExecutionFail::Expired);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn counted_paged_cursor_reports_exact_remaining_items() {
         let handle = LiveQueryStore::start_test();
@@ -2125,26 +1955,22 @@ mod tests {
                 },
             )),
         };
-
         let first = handle
             .handle_iter_start_paged_prepared(prepared, &ALICE_ID, None)
             .expect("counted paged start");
         assert_eq!(first.remaining_items, Some(2));
         let first_cursor = first.continue_cursor.expect("first cursor");
-
         let second = handle
             .handle_iter_continue(first_cursor, &ALICE_ID)
             .expect("second counted page");
         assert_eq!(second.remaining_items, Some(1));
         let second_cursor = second.continue_cursor.expect("second cursor");
-
         let third = handle
             .handle_iter_continue(second_cursor, &ALICE_ID)
             .expect("terminal counted page");
         assert_eq!(third.remaining_items, Some(0));
         assert!(third.continue_cursor.is_none());
     }
-
     #[test]
     fn counted_paged_cursor_rejects_inconsistent_remaining_items() {
         let mut increasing = PagedQueryContinuation::new_counted(nonzero!(1_u64), 2, |_| {
@@ -2155,7 +1981,6 @@ mod tests {
             Err(QueryExecutionFail::Conversion(message))
                 if message.contains("remaining count increased")
         ));
-
         let mut premature_terminal =
             PagedQueryContinuation::new_counted(nonzero!(1_u64), 2, |_| {
                 Ok((permission_batch(["p1"]), 1, None))
@@ -2166,7 +1991,6 @@ mod tests {
                 if message.contains("cursor disagrees")
         ));
     }
-
     #[test]
     fn paged_permanent_error_releases_per_authority_quota() {
         let config = Config {
@@ -2177,7 +2001,6 @@ mod tests {
         let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
         let handle = LiveQueryStoreHandle::new(store);
         let calls = Arc::new(AtomicUsize::new(0));
-
         let (_batch, _remaining, cursor) = handle
             .handle_iter_start_paged_prepared(
                 prepared_failing_paged_permission_query(
@@ -2191,7 +2014,6 @@ mod tests {
             .expect("first query fits quota")
             .into_parts();
         let cursor = cursor.expect("stored cursor");
-
         let err = handle
             .handle_iter_start_paged_prepared(
                 prepared_paged_permission_query("blocked"),
@@ -2200,12 +2022,10 @@ mod tests {
             )
             .expect_err("authority quota should be occupied before terminal error");
         assert_eq!(err, QueryExecutionFail::AuthorityQuotaExceeded);
-
         let err = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("expired continuation");
         assert_eq!(err, QueryExecutionFail::Expired);
-
         handle
             .handle_iter_start_paged_prepared(
                 prepared_paged_permission_query("replacement"),
@@ -2214,7 +2034,6 @@ mod tests {
             )
             .expect("terminal paged error should release authority quota");
     }
-
     #[test]
     fn paged_transient_error_does_not_release_capacity_or_quota() {
         let config = Config {
@@ -2225,7 +2044,6 @@ mod tests {
         let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
         let handle = LiveQueryStoreHandle::new(store);
         let calls = Arc::new(AtomicUsize::new(0));
-
         let (_batch, _remaining, cursor) = handle
             .handle_iter_start_paged_prepared(
                 prepared_failing_paged_permission_query(
@@ -2239,13 +2057,11 @@ mod tests {
             .expect("first query fits")
             .into_parts();
         let cursor = cursor.expect("stored cursor");
-
         let err = handle
             .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect_err("transient continuation error");
         assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-
         let err = handle
             .handle_iter_start_paged_prepared(
                 prepared_paged_permission_query("blocked"),
@@ -2254,7 +2070,6 @@ mod tests {
             )
             .expect_err("transient error should keep the cursor resident");
         assert_eq!(err, QueryExecutionFail::CapacityLimit);
-
         let err = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("resident cursor can be retried");
@@ -2265,7 +2080,6 @@ mod tests {
             "non-terminal replay errors must not evict or disable the cursor"
         );
     }
-
     #[test]
     fn dropping_paged_cursor_releases_capacity_and_quota_without_replay() {
         let config = Config {
@@ -2277,7 +2091,6 @@ mod tests {
         let handle = LiveQueryStoreHandle::new(store);
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_batcher = Arc::clone(&calls);
-
         let (_batch, _remaining, cursor) = handle
             .handle_iter_start_paged_prepared(
                 PreparedPagedQueryStart {
@@ -2298,13 +2111,11 @@ mod tests {
         let cursor = cursor.expect("stored cursor");
         handle.drop_query(cursor.query());
         handle.drop_query(cursor.query());
-
         assert_eq!(
             calls.load(Ordering::SeqCst),
             0,
             "dropping a paged cursor must not run replay work"
         );
-
         handle
             .handle_iter_start_paged_prepared(
                 prepared_paged_permission_query("replacement"),
@@ -2312,14 +2123,12 @@ mod tests {
                 None,
             )
             .expect("dropping paged cursor should release capacity and quota");
-
         let err = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("dropped cursor should expire");
         assert_eq!(err, QueryExecutionFail::Expired);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn paged_transient_error_does_not_release_per_authority_quota() {
         let config = Config {
@@ -2330,7 +2139,6 @@ mod tests {
         let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
         let handle = LiveQueryStoreHandle::new(store);
         let calls = Arc::new(AtomicUsize::new(0));
-
         let (_batch, _remaining, cursor) = handle
             .handle_iter_start_paged_prepared(
                 prepared_failing_paged_permission_query(
@@ -2344,12 +2152,10 @@ mod tests {
             .expect("first query fits")
             .into_parts();
         let cursor = cursor.expect("stored cursor");
-
         let err = handle
             .handle_iter_continue(cursor.clone(), &ALICE_ID)
             .expect_err("transient continuation error");
         assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
-
         let err = handle
             .handle_iter_start_paged_prepared(
                 prepared_paged_permission_query("blocked"),
@@ -2358,14 +2164,12 @@ mod tests {
             )
             .expect_err("same-authority quota should remain occupied");
         assert_eq!(err, QueryExecutionFail::AuthorityQuotaExceeded);
-
         let err = handle
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect_err("resident cursor can still be retried");
         assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
-
     fn prepared_paged_permission_query(label: &'static str) -> PreparedPagedQueryStart {
         PreparedPagedQueryStart {
             first_batch: permission_batch([label]),
@@ -2374,7 +2178,6 @@ mod tests {
             })),
         }
     }
-
     fn prepared_failing_paged_permission_query(
         label: &'static str,
         err: QueryExecutionFail,
@@ -2388,7 +2191,6 @@ mod tests {
             })),
         }
     }
-
     fn permission_batch(names: impl IntoIterator<Item = &'static str>) -> QueryOutputBatchBoxTuple {
         QueryOutputBatchBoxTuple::from_batch(
             iroha_data_model::query::QueryOutputBatchBox::Permission(

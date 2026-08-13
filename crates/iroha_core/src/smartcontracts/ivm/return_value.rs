@@ -1,7 +1,5 @@
 //! Exact, privacy-safe decoding of public Kotodama return registers.
-
 use std::str;
-
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
@@ -32,9 +30,7 @@ use norito::{
     json::{self, Map, Value},
 };
 use thiserror::Error;
-
 const FIRST_RETURN_REGISTER: usize = 10;
-
 /// Failure to decode the exact public return value declared by an entrypoint.
 #[derive(Debug, Error)]
 pub enum EntrypointReturnDecodeError {
@@ -101,18 +97,15 @@ pub enum EntrypointReturnDecodeError {
         reason: String,
     },
 }
-
 struct ReturnRecordBudget {
     lower_bound_bytes: usize,
     max_bytes: usize,
 }
-
 impl Default for ReturnRecordBudget {
     fn default() -> Self {
         Self::new(MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
     }
 }
-
 impl ReturnRecordBudget {
     fn new(max_bytes: usize) -> Self {
         Self {
@@ -122,7 +115,6 @@ impl ReturnRecordBudget {
             max_bytes: max_bytes.min(MAX_ENTRYPOINT_RETURN_RECORD_BYTES),
         }
     }
-
     fn reserve(&mut self, bytes: usize) -> Result<(), EntrypointReturnDecodeError> {
         let next = self.lower_bound_bytes.checked_add(bytes).ok_or(
             EntrypointReturnDecodeError::RecordTooLarge {
@@ -139,18 +131,15 @@ impl ReturnRecordBudget {
         self.lower_bound_bytes = next;
         Ok(())
     }
-
     fn reserve_atom(&mut self) -> Result<(), EntrypointReturnDecodeError> {
         // Every encoded enum atom consumes at least one byte.
         self.reserve(1)
     }
-
     fn reserve_list_atom(&mut self) -> Result<(), EntrypointReturnDecodeError> {
         // The flat V1 list tape owns an enum discriminant and one encoded `u8`
         // item count before its schema-delimited items.
         self.reserve(2)
     }
-
     fn reserve_pointer(
         &mut self,
         payload_bytes: usize,
@@ -171,7 +160,6 @@ impl ReturnRecordBudget {
         Ok(envelope_bytes)
     }
 }
-
 fn push_atom(
     atoms: &mut Vec<EntrypointValueAtomV1>,
     budget: &mut ReturnRecordBudget,
@@ -181,7 +169,6 @@ fn push_atom(
     atoms.push(atom);
     Ok(())
 }
-
 fn push_list_header(
     atoms: &mut Vec<EntrypointValueAtomV1>,
     budget: &mut ReturnRecordBudget,
@@ -193,13 +180,11 @@ fn push_list_header(
     atoms.push(EntrypointValueAtomV1::List(item_count));
     Ok(())
 }
-
 struct RegisterCursor<'vm, 'budget> {
     vm: &'vm IVM,
     register: usize,
     budget: &'budget mut ReturnRecordBudget,
 }
-
 impl RegisterCursor<'_, '_> {
     fn public_scalar(&mut self) -> Result<(usize, u64), EntrypointReturnDecodeError> {
         let register = self.register;
@@ -210,7 +195,6 @@ impl RegisterCursor<'_, '_> {
         self.register = self.register.saturating_add(1);
         Ok((register, value))
     }
-
     fn public_tlv(
         &mut self,
         kind: EntrypointValueKindV1,
@@ -256,7 +240,6 @@ impl RegisterCursor<'_, '_> {
         Ok((register, envelope))
     }
 }
-
 fn decode_canonical<T>(
     payload: &[u8],
     register: usize,
@@ -271,7 +254,6 @@ where
         reason: error.to_string(),
     })
 }
-
 fn expected_pointer_type(kind: EntrypointValueKindV1) -> Option<PointerType> {
     Some(match kind {
         EntrypointValueKindV1::Int => PointerType::Int,
@@ -289,7 +271,6 @@ fn expected_pointer_type(kind: EntrypointValueKindV1) -> Option<PointerType> {
         EntrypointValueKindV1::DataSpaceId => PointerType::DataSpaceId,
     })
 }
-
 fn kind_name(kind: EntrypointValueKindV1) -> &'static str {
     match kind {
         EntrypointValueKindV1::Int => "int",
@@ -308,7 +289,6 @@ fn kind_name(kind: EntrypointValueKindV1) -> &'static str {
         EntrypointValueKindV1::Blob => "bytes",
     }
 }
-
 fn validate_pointer_payload(
     kind: EntrypointValueKindV1,
     payload: &[u8],
@@ -378,7 +358,6 @@ fn validate_pointer_payload(
     }
     Ok(())
 }
-
 fn collect_leaf(
     cursor: &mut RegisterCursor<'_, '_>,
     kind: EntrypointValueKindV1,
@@ -407,7 +386,6 @@ fn collect_leaf(
     }
     Ok(())
 }
-
 fn handle_decode_error(
     register: usize,
     kind: &'static str,
@@ -426,7 +404,6 @@ fn handle_decode_error(
         }
     }
 }
-
 fn list_shape_error(register: usize, reason: impl Into<String>) -> EntrypointReturnDecodeError {
     EntrypointReturnDecodeError::InvalidValue {
         register,
@@ -434,7 +411,6 @@ fn list_shape_error(register: usize, reason: impl Into<String>) -> EntrypointRet
         reason: reason.into(),
     }
 }
-
 fn return_node_child_count(node: &EntrypointValueTypeNodeV1) -> usize {
     match node {
         EntrypointValueTypeNodeV1::Struct(node) => node.fields.len(),
@@ -444,7 +420,6 @@ fn return_node_child_count(node: &EntrypointValueTypeNodeV1) -> usize {
         EntrypointValueTypeNodeV1::Leaf(_) => 0,
     }
 }
-
 /// Take exactly one checked preorder subtree and advance the shared cursor.
 ///
 /// The schema has a hard V1 node bound, but this iterative walk also avoids
@@ -464,7 +439,6 @@ fn take_return_subtree<'a>(
     *node_index = end;
     Ok(subtree)
 }
-
 fn skip_return_node(
     nodes: &[EntrypointValueTypeNodeV1],
     node_index: &mut usize,
@@ -472,7 +446,6 @@ fn skip_return_node(
     let _ = take_return_subtree(nodes, node_index)?;
     Ok(())
 }
-
 fn return_child_starts(
     nodes: &[EntrypointValueTypeNodeV1],
     node_start: usize,
@@ -495,7 +468,6 @@ fn return_child_starts(
     }
     Ok(starts)
 }
-
 fn return_node_word_count(
     nodes: &[EntrypointValueTypeNodeV1],
     node_index: &mut usize,
@@ -524,7 +496,6 @@ fn return_node_word_count(
         .then(|| rendered[0])
         .ok_or(EntrypointReturnDecodeError::InvalidSchema)
 }
-
 fn collect_leaf_from_words(
     vm: &IVM,
     words: &[u64],
@@ -594,7 +565,6 @@ fn collect_leaf_from_words(
     }
     Ok(())
 }
-
 fn collect_option_handle(
     vm: &IVM,
     nodes: &[EntrypointValueTypeNodeV1],
@@ -644,7 +614,6 @@ fn collect_option_handle(
     }
     Ok(())
 }
-
 fn collect_result_handle(
     vm: &IVM,
     nodes: &[EntrypointValueTypeNodeV1],
@@ -708,7 +677,6 @@ fn collect_result_handle(
     }
     Ok(())
 }
-
 fn collect_node_from_words(
     vm: &IVM,
     nodes: &[EntrypointValueTypeNodeV1],
@@ -723,7 +691,6 @@ fn collect_node_from_words(
         Borrowed { words: &'words [u64], index: usize },
         Owned { words: Vec<u64>, index: usize },
     }
-
     impl WordInput<'_> {
         fn next(&mut self) -> Option<u64> {
             let (words, index) = match self {
@@ -734,21 +701,18 @@ fn collect_node_from_words(
             *index = index.saturating_add(1);
             Some(value)
         }
-
         fn is_exhausted(&self) -> bool {
             match self {
                 Self::Borrowed { words, index } => *index == words.len(),
                 Self::Owned { words, index } => *index == words.len(),
             }
         }
-
         fn position(&self) -> usize {
             match self {
                 Self::Borrowed { index, .. } | Self::Owned { index, .. } => *index,
             }
         }
     }
-
     enum Task {
         Visit {
             node_start: usize,
@@ -768,7 +732,6 @@ fn collect_node_from_words(
             input: usize,
         },
     }
-
     fn next_word(
         inputs: &mut [WordInput<'_>],
         input: usize,
@@ -780,7 +743,6 @@ fn collect_node_from_words(
             .and_then(WordInput::next)
             .ok_or_else(|| list_shape_error(register, reason))
     }
-
     fn subtree_words(
         nodes: &[EntrypointValueTypeNodeV1],
         start: usize,
@@ -789,7 +751,6 @@ fn collect_node_from_words(
         let words = return_node_word_count(nodes, &mut end)?;
         Ok((words, end))
     }
-
     fn own_words(inputs: &mut Vec<WordInput<'_>>, free: &mut Vec<usize>, words: Vec<u64>) -> usize {
         let input = free.pop().unwrap_or(inputs.len());
         let value = WordInput::Owned { words, index: 0 };
@@ -800,7 +761,6 @@ fn collect_node_from_words(
         }
         input
     }
-
     let root_start = *node_index;
     let root_end = entrypoint_value_subtree_range_v1(nodes, root_start)
         .ok_or(EntrypointReturnDecodeError::InvalidSchema)?
@@ -817,7 +777,6 @@ fn collect_node_from_words(
         node_start: root_start,
         input: 0,
     }];
-
     while let Some(task) = tasks.pop() {
         match task {
             Task::Visit { node_start, input } => match nodes
@@ -1058,12 +1017,10 @@ fn collect_node_from_words(
             }
         }
     }
-
     *node_index = root_end;
     *word_index = inputs[0].position();
     Ok(())
 }
-
 fn collect_list_items(
     vm: &IVM,
     capacity: u8,
@@ -1111,7 +1068,6 @@ fn collect_list_items(
     }
     Ok(())
 }
-
 fn collect_node(
     nodes: &[EntrypointValueTypeNodeV1],
     node_index: &mut usize,
@@ -1206,13 +1162,11 @@ fn collect_node(
     *node_index = root_end;
     Ok(())
 }
-
 fn schema_hash(schema: &EntrypointValueTypeV1) -> Result<[u8; 32], EntrypointReturnDecodeError> {
     let schema =
         encode_canonical_norito(schema).map_err(|_| EntrypointReturnDecodeError::InvalidSchema)?;
     Ok(entrypoint_return_schema_hash_v1(&schema))
 }
-
 fn exact_record_bytes(
     record: &EntrypointReturnRecordV1,
     max_bytes: usize,
@@ -1244,7 +1198,6 @@ fn exact_record_bytes(
     }
     Ok(encoded)
 }
-
 fn collect_entrypoint_return_record(
     vm: &IVM,
     schema: &EntrypointValueTypeV1,
@@ -1279,7 +1232,6 @@ fn collect_entrypoint_return_record(
     };
     Ok(record)
 }
-
 /// Validate all public return registers and build the canonical typed record.
 ///
 /// The full framed Norito length is validated even though this API returns the
@@ -1297,7 +1249,6 @@ pub fn encode_entrypoint_return_record(
     let _ = exact_record_bytes(&record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)?;
     Ok(record)
 }
-
 /// Validate public return registers and encode one bounded canonical record.
 ///
 /// # Errors
@@ -1308,7 +1259,6 @@ pub fn encode_entrypoint_return_record_bytes(
 ) -> Result<Vec<u8>, EntrypointReturnDecodeError> {
     encode_entrypoint_return_record_bytes_bounded(vm, schema, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
 }
-
 /// Validate public return registers and encode a canonical record without
 /// cloning pointer payloads beyond `max_bytes`.
 ///
@@ -1322,7 +1272,6 @@ pub(crate) fn encode_entrypoint_return_record_bytes_bounded(
     let record = collect_entrypoint_return_record(vm, schema, max_bytes)?;
     exact_record_bytes(&record, max_bytes)
 }
-
 fn pointer_payload<'a>(
     atom: &'a EntrypointValueAtomV1,
     kind: EntrypointValueKindV1,
@@ -1353,11 +1302,9 @@ fn pointer_payload<'a>(
     validate_pointer_payload(kind, tlv.payload, register)?;
     Ok(tlv.payload)
 }
-
 fn int_json_value(value: &BigInt) -> Value {
     Value::from(value.to_string())
 }
-
 fn render_leaf(
     atoms: &[EntrypointValueAtomV1],
     atom_index: &mut usize,
@@ -1459,7 +1406,6 @@ fn render_leaf(
         }),
     }
 }
-
 fn render_node(
     nodes: &[EntrypointValueTypeNodeV1],
     atoms: &[EntrypointValueAtomV1],
@@ -1470,7 +1416,6 @@ fn render_node(
         Struct(&'a [String]),
         Tuple,
     }
-
     enum Continuation<'a> {
         Product {
             kind: ProductKind<'a>,
@@ -1488,13 +1433,11 @@ fn render_node(
             values: Vec<Value>,
         },
     }
-
     #[derive(Clone, Copy)]
     struct Visit {
         node_start: usize,
         atom_start: usize,
     }
-
     let root_start = *node_index;
     let root_end = entrypoint_value_subtree_range_v1(nodes, root_start)
         .ok_or(EntrypointReturnDecodeError::InvalidSchema)?
@@ -1505,7 +1448,6 @@ fn render_node(
     });
     let mut continuations = Vec::<Continuation<'_>>::new();
     let mut completed = None::<(Value, usize)>;
-
     loop {
         if let Some(visit) = current.take() {
             let node = nodes
@@ -1654,7 +1596,6 @@ fn render_node(
             }
             continue;
         }
-
         let (value, child_atom_end) = completed
             .take()
             .ok_or(EntrypointReturnDecodeError::InvalidSchema)?;
@@ -1736,7 +1677,6 @@ fn render_node(
         }
     }
 }
-
 fn render_entrypoint_return_record_validated(
     schema: &EntrypointValueTypeV1,
     record: &EntrypointReturnRecordV1,
@@ -1767,7 +1707,6 @@ fn render_entrypoint_return_record_validated(
     }
     Ok(value)
 }
-
 /// Render a canonical nested return record for a client-facing JSON boundary.
 ///
 /// # Errors
@@ -1780,7 +1719,6 @@ pub fn render_entrypoint_return_record(
     let _ = exact_record_bytes(record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)?;
     render_entrypoint_return_record_validated(schema, record)
 }
-
 /// Decode and validate one canonical schema-bound nested return record.
 ///
 /// The byte limit is enforced before Norito decoding. The decoded value is
@@ -1813,7 +1751,6 @@ pub fn decode_entrypoint_return_record(
     let _ = render_entrypoint_return_record_validated(schema, &record)?;
     Ok(record)
 }
-
 /// Decode a non-unit return value from `r10..r22` for Torii/CLI JSON output.
 ///
 /// Only the active `Option`/`Result` branch is read. Runtime-to-runtime calls should use
@@ -1830,7 +1767,6 @@ pub fn decode_entrypoint_return(
     let _ = exact_record_bytes(&record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)?;
     render_entrypoint_return_record_validated(schema, &record)
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::Hash;
@@ -1838,15 +1774,12 @@ mod tests {
         EntrypointListTypeNodeV1, EntrypointStructTypeNodeV1, MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH,
     };
     use iroha_primitives::numeric::Quantity;
-
     use super::*;
-
     fn leaf(kind: EntrypointValueKindV1) -> EntrypointValueTypeV1 {
         EntrypointValueTypeV1 {
             nodes: vec![EntrypointValueTypeNodeV1::Leaf(kind)],
         }
     }
-
     fn list(capacity: u8, element: EntrypointValueTypeV1) -> EntrypointValueTypeV1 {
         let mut nodes = Vec::with_capacity(1 + element.nodes.len());
         nodes.push(EntrypointValueTypeNodeV1::List(EntrypointListTypeNodeV1 {
@@ -1855,7 +1788,6 @@ mod tests {
         nodes.extend(element.nodes);
         EntrypointValueTypeV1 { nodes }
     }
-
     fn nested_list_schema(levels: usize) -> EntrypointValueTypeV1 {
         let mut nodes = Vec::with_capacity(levels.saturating_add(1));
         for _ in 0..levels {
@@ -1866,7 +1798,6 @@ mod tests {
         nodes.push(EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int));
         EntrypointValueTypeV1 { nodes }
     }
-
     fn nested_product_schema(levels: usize) -> EntrypointValueTypeV1 {
         let mut nodes = Vec::with_capacity(levels.saturating_add(1));
         nodes.extend((0..levels).map(|_| {
@@ -1878,14 +1809,12 @@ mod tests {
         nodes.push(EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int));
         EntrypointValueTypeV1 { nodes }
     }
-
     fn nested_option_schema(levels: usize) -> EntrypointValueTypeV1 {
         let mut nodes = Vec::with_capacity(levels.saturating_add(1));
         nodes.extend((0..levels).map(|_| EntrypointValueTypeNodeV1::Option));
         nodes.push(EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int));
         EntrypointValueTypeV1 { nodes }
     }
-
     fn test_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut envelope = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
         envelope.extend_from_slice(&(ty as u16).to_be_bytes());
@@ -1899,26 +1828,21 @@ mod tests {
         envelope.extend_from_slice(Hash::new(payload).as_ref());
         envelope
     }
-
     fn input_tlv(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
         let envelope = test_tlv(ty, payload);
         vm.alloc_input_tlv(&envelope).expect("allocate test TLV")
     }
-
     fn int_envelope(value: i64) -> Vec<u8> {
         ivm::numeric_tlv::encode_int(&BigInt::from_i128(i128::from(value)))
             .expect("encode V1 int envelope")
     }
-
     fn int_atom(value: i64) -> EntrypointValueAtomV1 {
         EntrypointValueAtomV1::Pointer(int_envelope(value))
     }
-
     fn input_int(vm: &mut IVM, value: i64) -> u64 {
         let envelope = int_envelope(value);
         vm.alloc_input_tlv(&envelope).expect("allocate V1 int TLV")
     }
-
     fn input_quantity(vm: &mut IVM, value: &str) -> u64 {
         let quantity: Quantity = value.parse().expect("canonical quantity");
         let envelope =
@@ -1926,7 +1850,6 @@ mod tests {
         vm.alloc_input_tlv(&envelope)
             .expect("allocate V1 quantity TLV")
     }
-
     fn nested_schema() -> EntrypointValueTypeV1 {
         EntrypointValueTypeV1 {
             nodes: vec![
@@ -1945,7 +1868,6 @@ mod tests {
             ],
         }
     }
-
     #[test]
     fn return_record_codec_is_ambient_independent_and_rejects_alternate_layout() {
         let schema = leaf(EntrypointValueKindV1::Blob);
@@ -1975,7 +1897,6 @@ mod tests {
         let canonical_length_probe =
             exact_record_bytes(&length_probe_record, MAX_ENTRYPOINT_RETURN_RECORD_BYTES)
                 .expect("encode canonical return-record length probe");
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -1983,7 +1904,6 @@ mod tests {
             norito::to_bytes(&record).expect("encode alternate-layout return record");
         assert_ne!(alternate_record, canonical_record);
         let ambient_before = norito::to_bytes(&schema).expect("encode schema under ambient layout");
-
         assert_eq!(
             schema_hash(&schema).expect("hash schema canonically"),
             canonical_schema_hash
@@ -2015,14 +1935,12 @@ mod tests {
             ambient_before,
             "canonical helpers must restore the caller's ambient layout"
         );
-
         drop(ambient);
         assert_eq!(
             norito::to_bytes(&record).expect("encode record after ambient guard"),
             canonical_record
         );
     }
-
     #[test]
     fn entrypoint_int_json_is_a_canonical_string_at_every_width() {
         for value in [
@@ -2036,7 +1954,6 @@ mod tests {
             assert_eq!(int_json_value(&value), Value::from(value.to_string()));
         }
     }
-
     #[test]
     fn flat_list_element_cursor_consumes_exactly_one_bounded_subtree() {
         let nodes = vec![
@@ -2054,14 +1971,12 @@ mod tests {
             .expect("one exact element subtree follows the List node");
         assert_eq!(subtree, &nodes[1..]);
         assert_eq!(list_element, nodes.len());
-
         let mut list_root = 0;
         assert_eq!(
             return_node_word_count(&nodes, &mut list_root).expect("valid flat List schema"),
             1
         );
         assert_eq!(list_root, nodes.len());
-
         let mut malformed = 1;
         assert!(matches!(
             take_return_subtree(&nodes[..4], &mut malformed),
@@ -2069,13 +1984,11 @@ mod tests {
         ));
         assert_eq!(malformed, 1, "a rejected cursor must not advance");
     }
-
     #[test]
     fn maximum_flat_list_depth_renders_without_native_stack_recursion() {
         let levels = MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH - 1;
         let schema = nested_list_schema(levels);
         assert!(schema.validate());
-
         let mut atoms = Vec::with_capacity(levels.saturating_add(1));
         atoms.extend((0..levels).map(|_| EntrypointValueAtomV1::List(1)));
         atoms.push(int_atom(7));
@@ -2092,7 +2005,6 @@ mod tests {
             cursor = &items[0];
         }
         assert_eq!(cursor, &Value::from("7"));
-
         let over_limit = nested_list_schema(MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH);
         assert!(!over_limit.validate());
         assert!(matches!(
@@ -2101,12 +2013,10 @@ mod tests {
                 | Err(EntrypointReturnDecodeError::SchemaBinding)
         ));
     }
-
     #[test]
     fn maximum_depth_return_collectors_use_bounded_work_stacks() {
         let levels = MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH - 1;
         let mut vm = IVM::new(10_000);
-
         let product_schema = nested_product_schema(levels);
         assert!(product_schema.validate());
         let seven = input_int(&mut vm, 7);
@@ -2118,7 +2028,6 @@ mod tests {
         )
         .expect("collect the maximum-depth product without native recursion");
         assert_eq!(product_record.atoms, vec![int_atom(7)]);
-
         let list_schema = nested_list_schema(levels);
         assert!(list_schema.validate());
         let list_layout = ListLayoutV1::try_new(1, 1).expect("one-word list layout");
@@ -2138,7 +2047,6 @@ mod tests {
                 .all(|atom| atom == &EntrypointValueAtomV1::List(1))
         );
         assert_eq!(list_record.atoms.last(), Some(&int_atom(9)));
-
         let option_schema = nested_option_schema(levels);
         assert!(option_schema.validate());
         let option_layout = SumLayoutV1::option(1).expect("one-word Option layout");
@@ -2162,7 +2070,6 @@ mod tests {
         );
         assert_eq!(option_record.atoms.last(), Some(&int_atom(11)));
     }
-
     #[test]
     fn maximum_depth_active_payload_rejects_a_null_nested_sum_handle() {
         let levels = MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH - 1;
@@ -2176,7 +2083,6 @@ mod tests {
                 .expect("wrap the malformed active child in a valid outer handle");
         }
         vm.set_register(FIRST_RETURN_REGISTER, pointer);
-
         assert!(matches!(
             collect_entrypoint_return_record(
                 &vm,
@@ -2190,7 +2096,6 @@ mod tests {
             }) if reason == "sum handle is null"
         ));
     }
-
     #[test]
     fn nested_struct_option_and_result_render_exact_json() {
         let schema = nested_schema();
@@ -2223,7 +2128,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn typed_return_record_roundtrips_and_binds_the_exact_schema() {
         let schema = nested_schema();
@@ -2255,11 +2159,9 @@ mod tests {
             decoded.schema_hash,
             schema_hash(&schema).expect("schema hash")
         );
-
         let mut mismatched = schema.clone();
         mismatched.nodes.pop();
         assert!(render_entrypoint_return_record(&mismatched, &decoded).is_err());
-
         let mut trailing = encoded;
         trailing.push(0);
         assert!(matches!(
@@ -2267,7 +2169,6 @@ mod tests {
             Err(EntrypointReturnDecodeError::RecordEncoding { .. })
         ));
     }
-
     #[test]
     fn retired_recursive_list_record_encoding_is_rejected() {
         // This test-only encoder preserves the retired field shape solely to
@@ -2281,13 +2182,11 @@ mod tests {
             Pointer(Vec<u8>),
             List(Vec<Vec<Self>>),
         }
-
         #[derive(Encode)]
         struct LegacyEntrypointReturnRecordV1 {
             schema_hash: [u8; 32],
             atoms: Vec<LegacyEntrypointValueAtomV1>,
         }
-
         let schema = list(1, leaf(EntrypointValueKindV1::Int));
         let schema_hash = schema_hash(&schema).expect("List schema hash");
         let legacy_items = vec![vec![LegacyEntrypointValueAtomV1::Int(7)]];
@@ -2311,7 +2210,6 @@ mod tests {
         assert_ne!(legacy_bytes, canonical_bytes);
         assert!(decode_entrypoint_return_record(&schema, &legacy_bytes).is_err());
     }
-
     #[test]
     fn exact_return_record_byte_cap_is_inclusive_and_checked_before_encoding() {
         let schema = leaf(EntrypointValueKindV1::Blob);
@@ -2363,7 +2261,6 @@ mod tests {
         );
         decode_entrypoint_return_record(&schema, &encoded)
             .expect("the exact canonical V1 cap must decode");
-
         let boundary_payload = vec![0x5A; payload_len];
         let boundary_envelope = test_tlv(PointerType::Blob, &boundary_payload);
         let mut vm = IVM::new(10_000);
@@ -2378,7 +2275,6 @@ mod tests {
                 .expect("the cumulative clone budget must admit the exact cap"),
             encoded
         );
-
         let mut oversized = record;
         let EntrypointValueAtomV1::Pointer(envelope) = &mut oversized.atoms[0] else {
             panic!("fixture pointer atom");
@@ -2403,7 +2299,6 @@ mod tests {
             }) if bytes == MAX_ENTRYPOINT_RETURN_RECORD_BYTES + 1
         ));
     }
-
     #[test]
     fn repeated_large_pointer_is_rejected_before_the_second_clone() {
         let schema = list(2, leaf(EntrypointValueKindV1::Blob));
@@ -2419,7 +2314,6 @@ mod tests {
         let list = ivm::list::allocate_words(&mut vm, layout, &[vec![pointer], vec![pointer]])
             .expect("list repeating one VM pointer");
         vm.set_register(FIRST_RETURN_REGISTER, list);
-
         assert!(matches!(
             encode_entrypoint_return_record(&vm, &schema),
             Err(EntrypointReturnDecodeError::RecordTooLarge {
@@ -2427,7 +2321,6 @@ mod tests {
                 ..
             })
         ));
-
         let mut budget = ReturnRecordBudget::default();
         budget
             .reserve_pointer(payload.len())
@@ -2439,7 +2332,6 @@ mod tests {
             "a rejected pointer must not advance the clone budget"
         );
     }
-
     #[test]
     fn caller_affordability_bound_rejects_pointer_before_payload_clone() {
         let schema = leaf(EntrypointValueKindV1::Blob);
@@ -2452,7 +2344,6 @@ mod tests {
         vm.store_bytes(pointer, &envelope)
             .expect("store child return TLV");
         vm.set_register(FIRST_RETURN_REGISTER, pointer);
-
         let affordable_record_bytes = 1024;
         assert!(matches!(
             encode_entrypoint_return_record_bytes_bounded(
@@ -2466,7 +2357,6 @@ mod tests {
             }) if max_bytes == affordable_record_bytes
         ));
     }
-
     #[test]
     fn inactive_return_record_branches_reject_hidden_atoms() {
         let option_schema = EntrypointValueTypeV1 {
@@ -2486,7 +2376,6 @@ mod tests {
             render_entrypoint_return_record(&option_schema, &option_record),
             Err(EntrypointReturnDecodeError::SchemaBinding)
         ));
-
         let result_schema = EntrypointValueTypeV1 {
             nodes: vec![
                 EntrypointValueTypeNodeV1::Result,
@@ -2507,7 +2396,6 @@ mod tests {
             Err(EntrypointReturnDecodeError::SchemaBinding)
         ));
     }
-
     #[test]
     fn flat_list_records_reject_malformed_truncated_trailing_and_count_mismatch_tapes() {
         let schema = list(2, leaf(EntrypointValueKindV1::Int));
@@ -2519,7 +2407,6 @@ mod tests {
             render_entrypoint_return_record(&schema, &valid).expect("canonical flat list tape"),
             norito::json!(["1", "2"])
         );
-
         for atoms in [
             vec![
                 EntrypointValueAtomV1::List(1),
@@ -2545,7 +2432,6 @@ mod tests {
             assert!(decode_entrypoint_return_record(&schema, &encoded).is_err());
         }
     }
-
     #[test]
     fn malformed_tags_and_booleans_fail_closed_without_reading_inactive_words() {
         let mut vm = IVM::new(10_000);
@@ -2554,7 +2440,6 @@ mod tests {
             decode_entrypoint_return(&vm, &leaf(EntrypointValueKindV1::Bool)),
             Err(EntrypointReturnDecodeError::NonCanonicalBit { role: "bool", .. })
         ));
-
         let option_int = EntrypointValueTypeV1 {
             nodes: vec![
                 EntrypointValueTypeNodeV1::Option,
@@ -2596,7 +2481,6 @@ mod tests {
             norito::json!({ "none": true })
         );
     }
-
     #[test]
     fn private_inactive_words_are_ignored_but_active_words_are_rejected() {
         let option_string = EntrypointValueTypeV1 {
@@ -2622,7 +2506,6 @@ mod tests {
                 .expect("inactive private register is not decoded"),
             norito::json!({ "none": true })
         );
-
         let pointer = input_tlv(&mut vm, PointerType::Blob, b"secret");
         let some = ivm::sum::allocate_words(
             &mut vm,
@@ -2638,7 +2521,6 @@ mod tests {
             Err(EntrypointReturnDecodeError::Privacy { .. })
         ));
     }
-
     #[test]
     fn nested_quantity_list_roundtrips_as_one_return_word() {
         let schema = list(2, list(2, leaf(EntrypointValueKindV1::Quantity)));
@@ -2657,7 +2539,6 @@ mod tests {
             decode_entrypoint_return(&vm, &schema).expect("decode nested quantity list"),
             norito::json!([["1.25"], ["1.25"]])
         );
-
         let overflow =
             ivm::list::allocate_words(&mut vm, outer_layout, &[vec![first], vec![second]])
                 .expect("outer list to forge");
@@ -2668,7 +2549,6 @@ mod tests {
             encode_entrypoint_return_record(&vm, &schema),
             Err(EntrypointReturnDecodeError::InvalidValue { kind: "List", .. })
         ));
-
         let wrong = input_tlv(&mut vm, PointerType::Blob, b"not a quantity frame");
         let wrong_inner = ivm::list::allocate_words(&mut vm, inner_layout, &[vec![wrong]])
             .expect("inner list with wrong pointer type");
@@ -2684,7 +2564,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn list_of_nested_option_results_decodes_active_only_sum_handles() {
         let element = EntrypointValueTypeV1 {
@@ -2724,7 +2603,6 @@ mod tests {
                 { "none": true },
             ])
         );
-
         let forged =
             ivm::sum::allocate_words(&mut vm, result_layout, 0, &[1]).expect("Result to forge");
         vm.store_u64(forged, 2).expect("forge Result tag");

@@ -28,9 +28,7 @@
 //! release-parameter KAT all exist.
 
 #![allow(dead_code)]
-
 use core::fmt;
-
 use crate::generalized_bulletproof::SecretMultiexpBuilder;
 use crate::vega::{
     VegaT256PointV1, VegaT256ScalarV1 as Scalar, VegaTranscriptV1,
@@ -44,7 +42,6 @@ use crate::vega::{
     sponge::{keccak256, shake256},
     sumcheck::{CompressedUnivariate, SumcheckProof},
 };
-
 #[cfg(test)]
 use super::collective::{
     ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveEncryptionOpeningV1,
@@ -66,7 +63,6 @@ use super::{
     },
     wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
 };
-
 const RNS_LINK_VERSION_V1: u8 = 1;
 const RNS_LINK_EVALUATIONS_PER_LIMB_V1: usize = 5;
 pub(super) const ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1: usize = 38;
@@ -104,7 +100,6 @@ const RNS_LINK_BITNESS_CODEC_MAX_BODY_BYTES_V1: usize = RNS_LINK_BITNESS_MAX_SUM
     + RNS_LINK_SCALAR_WIRE_BYTES_V1;
 const RNS_LINK_BITNESS_CODEC_MAX_BYTES_V1: usize =
     RNS_LINK_BITNESS_CODEC_HEADER_BYTES_V1 + RNS_LINK_BITNESS_CODEC_MAX_BODY_BYTES_V1;
-
 const BITNESS_CODEC_MANIFEST_OFFSET_V1: usize = 12;
 const BITNESS_CODEC_VALUE_COUNT_OFFSET_V1: usize = 44;
 const BITNESS_CODEC_SUMCHECK_ROUNDS_OFFSET_V1: usize = 46;
@@ -123,7 +118,6 @@ const BITNESS_CODEC_IPA_RIGHT_BYTES_OFFSET_V1: usize = 80;
 const BITNESS_CODEC_FINAL_WITNESS_BYTES_OFFSET_V1: usize = 88;
 const BITNESS_CODEC_BODY_BYTES_OFFSET_V1: usize = 96;
 const BITNESS_CODEC_TOTAL_BYTES_OFFSET_V1: usize = 104;
-
 const CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.context";
 const ALGORITHM_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.immutable-algorithm-manifest";
@@ -152,7 +146,6 @@ const NATIVE_GEOMETRY_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.native-release-geometry";
 const NATIVE_PACKED_PREFLIGHT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.native-packed-preflight";
-
 const RNS_LINK_MANIFEST_DOMAINS_V1: [&[u8]; 8] = [
     CONTEXT_DOMAIN_V1,
     COMMITMENT_DOMAIN_V1,
@@ -163,7 +156,6 @@ const RNS_LINK_MANIFEST_DOMAINS_V1: [&[u8]; 8] = [
     IPA_TRANSCRIPT_DOMAIN_V1,
     BITNESS_SUMCHECK_DOMAIN_V1,
 ];
-
 const RNS_LINK_MANIFEST_TRANSCRIPT_LABELS_V1: [&[u8]; 13] = [
     IPA_GENERATOR_LABEL_V1,
     BITNESS_ALGORITHM_LABEL_V1,
@@ -179,7 +171,6 @@ const RNS_LINK_MANIFEST_TRANSCRIPT_LABELS_V1: [&[u8]; 13] = [
     IPA_RIGHT_LABEL_V1,
     IPA_CHALLENGE_LABEL_V1,
 ];
-
 const BITNESS_RELATION_DESCRIPTOR_V1: &[u8] =
     b"sum_x:eq(tau,x)*b(x)*(b(x)-1)=0:cubic:compressed-constant-quadratic-cubic";
 const IPA_RELATION_DESCRIPTOR_V1: &[u8] =
@@ -190,7 +181,6 @@ const RNS_LINK_MANIFEST_FORMAT_DESCRIPTORS_V1: [&[u8]; 3] = [
     IPA_RELATION_DESCRIPTOR_V1,
     BITNESS_CODEC_SCHEMA_DESCRIPTOR_V1,
 ];
-
 const _: () = {
     assert!(RNS_LINK_EVALUATIONS_PER_LIMB_V1 == 5);
     assert!(RNS_LINK_REJECTION_ATTEMPTS_V1 == 128);
@@ -214,17 +204,14 @@ const _: () = {
     assert!(RNS_LINK_BITNESS_CODEC_MAX_BYTES_V1 == 1_862);
     assert!(RNS_LINK_BITNESS_CODEC_MAX_BYTES_V1 < ZK_AMS_MKHE_MAX_PROOF_BYTES_V1);
 };
-
 #[cfg(test)]
 std::thread_local! {
     static RNS_LINK_IPA_KEY_DERIVATIONS_V1: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static RNS_LINK_CODEC_BODY_ALLOCATIONS_V1: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
-
 fn is_nonzero_digest(digest: [u8; 32]) -> bool {
     digest != [0; 32]
 }
-
 /// The six logical witness families in their only accepted transcript order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -236,7 +223,6 @@ pub(super) enum ZkAmsPhase23RnsLinkFamilyV1 {
     W = 5,
     RW = 6,
 }
-
 const RNS_LINK_FAMILY_ORDER_V1: [ZkAmsPhase23RnsLinkFamilyV1; RNS_LINK_FAMILY_COUNT_V1] = [
     ZkAmsPhase23RnsLinkFamilyV1::X,
     ZkAmsPhase23RnsLinkFamilyV1::U,
@@ -245,7 +231,6 @@ const RNS_LINK_FAMILY_ORDER_V1: [ZkAmsPhase23RnsLinkFamilyV1; RNS_LINK_FAMILY_CO
     ZkAmsPhase23RnsLinkFamilyV1::W,
     ZkAmsPhase23RnsLinkFamilyV1::RW,
 ];
-
 /// Exact packed logical-value count for one canonical native family.
 pub(super) const fn expected_logical_values_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
     match family {
@@ -257,14 +242,12 @@ pub(super) const fn expected_logical_values_v1(family: ZkAmsPhase23RnsLinkFamily
         ZkAmsPhase23RnsLinkFamilyV1::RW => RNS_LINK_RW_LOGICAL_VALUES_V1,
     }
 }
-
 const fn expected_semantic_values_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
     match family {
         ZkAmsPhase23RnsLinkFamilyV1::U => RNS_LINK_U_SEMANTIC_VALUES_V1,
         _ => expected_logical_values_v1(family),
     }
 }
-
 const fn expected_hyrax_rows_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
     match family {
         ZkAmsPhase23RnsLinkFamilyV1::X | ZkAmsPhase23RnsLinkFamilyV1::U => 0,
@@ -276,7 +259,6 @@ const fn expected_hyrax_rows_v1(family: ZkAmsPhase23RnsLinkFamilyV1) -> usize {
         }
     }
 }
-
 /// One family row in the sole native release geometry.
 ///
 /// `semantic_value_count` records the padding-free accumulator shape. The
@@ -292,7 +274,6 @@ pub(super) struct ZkAmsPhase23RnsLinkFamilyGeometryV1 {
     hyrax_row_count: u32,
     packing_layout_digest: [u8; 32],
 }
-
 /// Geometry derived from the canonical native relation and packing map.
 ///
 /// This descriptor is public statement metadata only. It is deliberately not
@@ -309,7 +290,6 @@ pub(super) struct ZkAmsPhase23RnsLinkReleaseGeometryV1 {
     commitment_count: u16,
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase23RnsLinkReleaseGeometryV1 {
     fn family(
         &self,
@@ -322,7 +302,6 @@ impl ZkAmsPhase23RnsLinkReleaseGeometryV1 {
             .ok_or(ZkAmsMkheErrorV1::InvalidProfile)
     }
 }
-
 fn validate_ordered_native_family_chunk_counts_v1(
     geometry: &ZkAmsPhase23RnsLinkReleaseGeometryV1,
     families: &[(ZkAmsPhase23RnsLinkFamilyV1, usize)],
@@ -347,7 +326,6 @@ fn validate_ordered_native_family_chunk_counts_v1(
     }
     Ok(())
 }
-
 fn validate_replicated_u_chunk_coefficients_v1(
     chunks: &[ZkAmsT256PackedPlaintextV1],
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -360,7 +338,6 @@ fn validate_replicated_u_chunk_coefficients_v1(
     }
     Ok(())
 }
-
 fn validate_replicated_u_decoded_slots_v1(slots: &[[u8; 32]]) -> Result<(), ZkAmsMkheErrorV1> {
     let first = slots.first().ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
     if slots[1..].iter().any(|value| value != first) {
@@ -368,7 +345,6 @@ fn validate_replicated_u_decoded_slots_v1(slots: &[[u8; 32]]) -> Result<(), ZkAm
     }
     Ok(())
 }
-
 fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
 -> Result<ZkAmsPhase23RnsLinkReleaseGeometryV1, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
@@ -419,7 +395,6 @@ fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
     {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
     }
-
     let mut families = [ZkAmsPhase23RnsLinkFamilyGeometryV1 {
         family: ZkAmsPhase23RnsLinkFamilyV1::X,
         semantic_value_count: 0,
@@ -455,7 +430,6 @@ fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
     if commitment_count != RNS_LINK_RELEASE_COMMITMENTS_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
     }
-
     let profile_digest = profile.digest()?;
     let map_set_digest = manifest.digest();
     let commitment_count =
@@ -493,7 +467,6 @@ fn derive_zk_ams_phase23_rns_link_release_geometry_v1()
         digest,
     })
 }
-
 /// Allocation-bounded, parent-private result of checking the exact native
 /// packed accumulator family geometry and recomputing every packed/RNS chunk
 /// binding.
@@ -508,21 +481,18 @@ struct ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
     chunk_count: u16,
     digest: [u8; 32],
 }
-
 #[cfg(test)]
 std::thread_local! {
     static NATIVE_PACKED_PREFLIGHT_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 #[cfg(test)]
 fn native_packed_preflight_zeroized_drop_count_v1() -> usize {
     NATIVE_PACKED_PREFLIGHT_ZEROIZED_DROPS_V1
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
-
 impl Drop for ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
     fn drop(&mut self) {
         let preflight = core::hint::black_box(self);
@@ -543,29 +513,23 @@ impl Drop for ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
         let _ = core::hint::black_box(&mut *preflight);
     }
 }
-
 /// Zeroizing owner for the deterministic preflight hash frames. Deliberately
 /// neither `Clone` nor `Debug`.
 struct ZeroizingNativePackedPreflightFrameV1(Vec<u8>);
-
 impl ZeroizingNativePackedPreflightFrameV1 {
     fn with_capacity(capacity: usize) -> Self {
         Self(Vec::with_capacity(capacity))
     }
-
     fn push(&mut self, value: u8) {
         self.0.push(value);
     }
-
     fn extend_from_slice(&mut self, values: &[u8]) {
         self.0.extend_from_slice(values);
     }
-
     fn as_slice(&self) -> &[u8] {
         &self.0
     }
 }
-
 impl Drop for ZeroizingNativePackedPreflightFrameV1 {
     fn drop(&mut self) {
         let frame = core::hint::black_box(&mut self.0);
@@ -574,7 +538,6 @@ impl Drop for ZeroizingNativePackedPreflightFrameV1 {
         let _ = core::hint::black_box(&mut *frame);
     }
 }
-
 /// Check the packed state against geometry derived from the canonical native
 /// relation. All digests in the returned object are recomputed from the exact
 /// borrowed chunks; this boundary accepts no caller-nominated digest shell.
@@ -605,7 +568,6 @@ fn preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-
     let family_chunks = [
         (ZkAmsPhase23RnsLinkFamilyV1::X, packed.x.as_slice()),
         (ZkAmsPhase23RnsLinkFamilyV1::U, packed.u.as_slice()),
@@ -680,7 +642,6 @@ fn preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1(
     preflight.chunk_count = geometry.commitment_count;
     Ok(preflight)
 }
-
 #[derive(Clone)]
 struct RnsLinkImmutableAlgorithmManifestInputsV1 {
     version: u8,
@@ -695,11 +656,9 @@ struct RnsLinkImmutableAlgorithmManifestInputsV1 {
     format_descriptors: [&'static [u8]; RNS_LINK_MANIFEST_FORMAT_DESCRIPTORS_V1.len()],
     codec_magic: [u8; RNS_LINK_BITNESS_CODEC_MAGIC_V1.len()],
 }
-
 fn usize_as_manifest_u64_v1(value: usize) -> Result<u64, ZkAmsMkheErrorV1> {
     u64::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn canonical_algorithm_manifest_inputs_v1()
 -> Result<RnsLinkImmutableAlgorithmManifestInputsV1, ZkAmsMkheErrorV1> {
     let native_geometry = derive_zk_ams_phase23_rns_link_release_geometry_v1()?;
@@ -753,7 +712,6 @@ fn canonical_algorithm_manifest_inputs_v1()
         codec_magic: RNS_LINK_BITNESS_CODEC_MAGIC_V1,
     })
 }
-
 fn append_manifest_byte_strings_v1(
     frame: &mut Vec<u8>,
     values: &[&[u8]],
@@ -773,7 +731,6 @@ fn append_manifest_byte_strings_v1(
     }
     Ok(())
 }
-
 fn immutable_algorithm_manifest_digest_from_inputs_v1(
     inputs: &RnsLinkImmutableAlgorithmManifestInputsV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -818,14 +775,12 @@ fn immutable_algorithm_manifest_digest_from_inputs_v1(
     frame.extend_from_slice(&inputs.codec_magic);
     Ok(keccak256(&frame))
 }
-
 /// Digest only immutable proof-algorithm inputs. Mutable readiness flags,
 /// measured evidence, and release-KAT pins are deliberately absent: including
 /// any of them would make installing a KAT change the proof it is meant to pin.
 fn immutable_algorithm_manifest_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     immutable_algorithm_manifest_digest_from_inputs_v1(&canonical_algorithm_manifest_inputs_v1()?)
 }
-
 /// Every immutable context axis bound before any RNS-Link commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkContextV1 {
@@ -839,7 +794,6 @@ pub(super) struct ZkAmsPhase23RnsLinkContextV1 {
     direct_key_admission_digest: [u8; 32],
     canonical_map_set_digest: [u8; 32],
 }
-
 impl ZkAmsPhase23RnsLinkContextV1 {
     /// Construct the release-profile context. The immutable profile and
     /// algorithm manifest are derived internally. Readiness and release-KAT
@@ -883,7 +837,6 @@ impl ZkAmsPhase23RnsLinkContextV1 {
             canonical_map_set_digest,
         })
     }
-
     fn digest(self) -> [u8; 32] {
         let mut frame = Vec::with_capacity(CONTEXT_DOMAIN_V1.len() + 2 + 9 * 32);
         frame.extend_from_slice(CONTEXT_DOMAIN_V1);
@@ -900,7 +853,6 @@ impl ZkAmsPhase23RnsLinkContextV1 {
         keccak256(&frame)
     }
 }
-
 /// Producer-claimed roots of tables that must exist before Fiat--Shamir
 /// sampling.
 ///
@@ -919,7 +871,6 @@ pub(super) struct ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
     negacyclic_quotient_digest: [u8; 32],
     padding_digest: [u8; 32],
 }
-
 impl ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
@@ -946,7 +897,6 @@ impl ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
         value.validate()?;
         Ok(value)
     }
-
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         let digests = [
             self.layout_digest,
@@ -968,7 +918,6 @@ impl ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
         Ok(())
     }
 }
-
 /// One present ciphertext chunk and all tables cross-bound to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkChunkCommitmentV1 {
@@ -983,7 +932,6 @@ pub(super) struct ZkAmsPhase23RnsLinkChunkCommitmentV1 {
     hyrax_commitment: [u8; 33],
     digests: ZkAmsPhase23RnsLinkCommitmentDigestsV1,
 }
-
 impl ZkAmsPhase23RnsLinkChunkCommitmentV1 {
     /// Test-only constructor for structural and hostile-shell coverage.
     /// Production deliberately has no caller-digest construction corridor.
@@ -1012,7 +960,6 @@ impl ZkAmsPhase23RnsLinkChunkCommitmentV1 {
         commitment.validate()?;
         Ok(commitment)
     }
-
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         let chunk_count = usize::from(self.chunk_count);
         let chunk_index = usize::from(self.chunk_index);
@@ -1050,7 +997,6 @@ impl ZkAmsPhase23RnsLinkChunkCommitmentV1 {
             .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
         self.digests.validate()
     }
-
     fn digest(self) -> [u8; 32] {
         let mut frame = Vec::with_capacity(COMMITMENT_DOMAIN_V1.len() + 320);
         frame.extend_from_slice(COMMITMENT_DOMAIN_V1);
@@ -1073,7 +1019,6 @@ impl ZkAmsPhase23RnsLinkChunkCommitmentV1 {
         keccak256(&frame)
     }
 }
-
 fn canonical_absent_chunk_bitmap_v1(chunk_count: u16) -> Result<u16, ZkAmsMkheErrorV1> {
     let count = usize::from(chunk_count);
     if count == 0 || count > RNS_LINK_MAX_CHUNKS_PER_FAMILY_V1 {
@@ -1086,7 +1031,6 @@ fn canonical_absent_chunk_bitmap_v1(chunk_count: u16) -> Result<u16, ZkAmsMkheEr
     };
     Ok(!present)
 }
-
 /// A sealed, canonical commitment set. Challenge derivation accepts this type
 /// rather than raw statement fields, making commit-before-challenge structural.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1096,7 +1040,6 @@ pub(super) struct ZkAmsPhase23RnsLinkPrechallengeV1 {
     commitment_count: u16,
     transcript_digest: [u8; 32],
 }
-
 impl ZkAmsPhase23RnsLinkPrechallengeV1 {
     pub(super) fn from_ordered_commitments(
         context: ZkAmsPhase23RnsLinkContextV1,
@@ -1105,7 +1048,6 @@ impl ZkAmsPhase23RnsLinkPrechallengeV1 {
         if commitments.len() != RNS_LINK_RELEASE_COMMITMENTS_V1 {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         let mut cursor = 0_usize;
         for family in RNS_LINK_FAMILY_ORDER_V1 {
             let first = commitments
@@ -1140,7 +1082,6 @@ impl ZkAmsPhase23RnsLinkPrechallengeV1 {
         if cursor != commitments.len() {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         for (index, commitment) in commitments.iter().copied().enumerate() {
             let digest = commitment.digest();
             if commitments[..index]
@@ -1151,7 +1092,6 @@ impl ZkAmsPhase23RnsLinkPrechallengeV1 {
                 return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
             }
         }
-
         let context_digest = context.digest();
         let commitment_count = u16::try_from(commitments.len())
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
@@ -1165,7 +1105,6 @@ impl ZkAmsPhase23RnsLinkPrechallengeV1 {
             root_frame.extend_from_slice(&commitment.digest());
         }
         let ordered_commitment_root = keccak256(&root_frame);
-
         let mut transcript_frame = Vec::with_capacity(PRECHALLENGE_DOMAIN_V1.len() + 70);
         transcript_frame.extend_from_slice(PRECHALLENGE_DOMAIN_V1);
         transcript_frame.push(RNS_LINK_VERSION_V1);
@@ -1181,7 +1120,6 @@ impl ZkAmsPhase23RnsLinkPrechallengeV1 {
         })
     }
 }
-
 /// One canonical, nonzero evaluation point for one RNS prime and repetition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkEvaluationPointV1 {
@@ -1190,7 +1128,6 @@ pub(super) struct ZkAmsPhase23RnsLinkEvaluationPointV1 {
     modulus: u64,
     value: u64,
 }
-
 /// Complete challenge set derived only after sealing every commitment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsPhase23RnsLinkChallengeSetV1 {
@@ -1199,7 +1136,6 @@ pub(super) struct ZkAmsPhase23RnsLinkChallengeSetV1 {
     points: Vec<ZkAmsPhase23RnsLinkEvaluationPointV1>,
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase23RnsLinkChallengeSetV1 {
     fn validate_for_release(
         &self,
@@ -1212,13 +1148,11 @@ impl ZkAmsPhase23RnsLinkChallengeSetV1 {
         Ok(())
     }
 }
-
 fn derive_release_evaluation_points_v1(
     prechallenge: &ZkAmsPhase23RnsLinkPrechallengeV1,
 ) -> Result<ZkAmsPhase23RnsLinkChallengeSetV1, ZkAmsMkheErrorV1> {
     derive_evaluation_points_for_moduli_v1(prechallenge, release_profile_v1().moduli)
 }
-
 /// Verifier-owned binding between the canonical whole-proof transport and the
 /// real release relation inputs.
 ///
@@ -1236,7 +1170,6 @@ pub(super) struct ZkAmsPhase23RnsLinkWholeProofBindingV1 {
     pub(super) ordered_commitment_root: [u8; 32],
     pub(super) hyrax_commitments: [VegaT256PointV1; RNS_LINK_RELEASE_COMMITMENTS_V1],
 }
-
 impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
     /// Recompute every transport-binding field from verifier-owned native
     /// relation types. No digest supplied by a proof producer is an input.
@@ -1264,7 +1197,6 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
         {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         let mut hyrax_commitments = Vec::new();
         hyrax_commitments
             .try_reserve_exact(RNS_LINK_RELEASE_COMMITMENTS_V1)
@@ -1276,7 +1208,6 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
                     .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?,
             );
         }
-
         Ok(Self {
             profile_digest: context.profile_digest,
             algorithm_manifest_digest: context.algorithm_manifest_digest,
@@ -1289,7 +1220,6 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
         })
     }
 }
-
 // TODO: Bind the first operational consumer's statement and replay context in
 // its consuming API before this local check can authorize any state change.
 /// Safe-Rust seal for the unit-only native opening-consumer boundary.
@@ -1299,27 +1229,23 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
 /// decoding, nor serialization, and carries no evidence or authority.
 #[cfg(test)]
 pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(());
-
 #[allow(
     dead_code,
     reason = "the q-native PCS is a private Stage-A prototype and cannot authorize release until its hiding, FRI theorem, external-store residency, relation-adapter, and release KAT blockers are closed"
 )]
 #[path = "phase23_rns_link_q_pcs.rs"]
 mod q_pcs;
-
 #[allow(
     dead_code,
     reason = "cross-field prerequisite remains production-uninhabited until source/range/mask/qPCS seals and the global ZK lookup theorem are wired"
 )]
 #[path = "phase23_rns_link_cross_field_v2.rs"]
 mod cross_field_v2;
-
 #[cfg(test)]
 #[path = "phase23_rns_link_q_relation_adapter.rs"]
 mod q_relation_adapter;
 #[cfg(test)]
 pub(super) use q_relation_adapter::ZkAmsPhase23QNativeRelationAdapterSinkV1;
-
 #[path = "phase23_rns_link_external_source.rs"]
 mod external_source;
 #[allow(
@@ -1330,7 +1256,6 @@ pub(super) use external_source::{
     ZkAmsPhase23RnsLinkExternalSourceAssemblyV1, ZkAmsPhase23RnsLinkExternalSourcePublicationV1,
     ZkAmsPhase23RnsLinkSecretChunkV1, ZkAmsPhase23RnsLinkSourcePublicationReceiptV1,
 };
-
 #[cfg(test)]
 #[path = "phase23_rns_link_state_owned.rs"]
 mod state_owned;
@@ -1339,25 +1264,21 @@ pub(super) use state_owned::{
     StateOwnedRnsLinkAccumulatorOpeningsV1, ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1,
     ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1,
 };
-
 /// RAII owner for canonical decoded slots. Deliberately neither `Clone` nor
 /// `Debug`; all named bytes are erased on success, error, and unwind.
 struct ZeroizingNativeDecodedPlaintextV1(Vec<[u8; 32]>);
-
 #[cfg(test)]
 std::thread_local! {
     static NATIVE_DECODED_PLAINTEXT_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 #[cfg(test)]
 fn native_decoded_plaintext_zeroized_drop_count_v1() -> usize {
     NATIVE_DECODED_PLAINTEXT_ZEROIZED_DROPS_V1
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
-
 impl Drop for ZeroizingNativeDecodedPlaintextV1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.0);
@@ -1373,7 +1294,6 @@ impl Drop for ZeroizingNativeDecodedPlaintextV1 {
         let _ = core::hint::black_box(&mut *values);
     }
 }
-
 #[cfg(test)]
 fn validate_native_bgv_public_artifacts_v1(
     key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -1408,7 +1328,6 @@ fn validate_native_bgv_public_artifacts_v1(
     }
     Ok(rns_binding_digest)
 }
-
 /// Verify one real release-profile encryption opening and advance only the
 /// concrete, topology-only relation-prerequisite sink while the opening is
 /// live.
@@ -1425,7 +1344,6 @@ fn verify_zk_ams_phase23_native_bgv_opening_v1(
 ) -> Result<(), ZkAmsMkheErrorV1> {
     let rns_binding_digest =
         validate_native_bgv_public_artifacts_v1(key, layout, plaintext, ciphertext)?;
-
     // The owned opening and its derived secret scratch are single-use and
     // zeroize when this unit-only call returns or unwinds. The sink receives
     // only the unconstructible permit after both native equations have been
@@ -1440,7 +1358,6 @@ fn verify_zk_ams_phase23_native_bgv_opening_v1(
         rns_binding_digest,
     )
 }
-
 /// Unit-test bridge for the heavyweight release-size exercise. It exposes no
 /// checked value and is absent from production and sibling APIs.
 #[cfg(test)]
@@ -1462,7 +1379,6 @@ pub(super) fn test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1<'a>(
         &mut relation_sink,
     )
 }
-
 // Compile-time API guards: mutable readiness and KAT evidence have no place in
 // either production context construction or production challenge derivation.
 type RnsLinkContextConstructorV1 = fn(
@@ -1482,7 +1398,6 @@ const RNS_LINK_CONTEXT_SIGNATURE_GUARD_V1: RnsLinkContextConstructorV1 =
     ZkAmsPhase23RnsLinkContextV1::new;
 const RNS_LINK_CHALLENGE_SIGNATURE_GUARD_V1: RnsLinkChallengeConstructorV1 =
     derive_release_evaluation_points_v1;
-
 fn derive_evaluation_points_for_moduli_v1(
     prechallenge: &ZkAmsPhase23RnsLinkPrechallengeV1,
     moduli: &[u64],
@@ -1498,7 +1413,6 @@ fn derive_evaluation_points_for_moduli_v1(
     points
         .try_reserve_exact(point_count)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-
     let mut modulus_frame = Vec::with_capacity(8 + moduli.len() * 8);
     modulus_frame.extend_from_slice(CHALLENGE_SET_DOMAIN_V1);
     modulus_frame.push(RNS_LINK_VERSION_V1);
@@ -1514,7 +1428,6 @@ fn derive_evaluation_points_for_moduli_v1(
         modulus_frame.extend_from_slice(&modulus.to_be_bytes());
     }
     let modulus_set_digest = keccak256(&modulus_frame);
-
     for (limb_index, &modulus) in moduli.iter().enumerate() {
         let limb_start = points.len();
         for repetition in 0..RNS_LINK_EVALUATIONS_PER_LIMB_V1 {
@@ -1549,7 +1462,6 @@ fn derive_evaluation_points_for_moduli_v1(
             });
         }
     }
-
     let mut digest_frame =
         Vec::with_capacity(CHALLENGE_SET_DOMAIN_V1.len() + 70 + points.len() * 18);
     digest_frame.extend_from_slice(CHALLENGE_SET_DOMAIN_V1);
@@ -1570,7 +1482,6 @@ fn derive_evaluation_points_for_moduli_v1(
         digest,
     })
 }
-
 /// Unbiased reduction of a 64-bit Fiat--Shamir word. Zero and points already
 /// used for the same limb are rejected under an exact, governed retry ceiling.
 fn sample_canonical_nonzero_distinct_v1<F>(
@@ -1605,12 +1516,10 @@ where
     }
     Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 /// Source-level guard: every production RNS-Link secret vector is the same
 /// audited owner used by the native T256 Bulletproof backend. A raw `Vec` is
 /// intentionally not accepted anywhere in the production witness container.
 type AuditedRnsLinkSecretScalarsV1 = ZeroizingT256ScalarVecV1;
-
 /// Move-only owner for every secret table retained by an RNS-Link prover.
 /// The field types are the compile-time erasure guard; test-only integer oracle
 /// vectors below are not part of this production witness boundary.
@@ -1622,7 +1531,6 @@ struct ZkAmsPhase23RnsLinkWitnessSecretsV1 {
     negacyclic_quotients: AuditedRnsLinkSecretScalarsV1,
     hyrax_blindings: AuditedRnsLinkSecretScalarsV1,
 }
-
 impl fmt::Debug for ZkAmsPhase23RnsLinkWitnessSecretsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1636,7 +1544,6 @@ impl fmt::Debug for ZkAmsPhase23RnsLinkWitnessSecretsV1 {
             .finish()
     }
 }
-
 #[cfg(test)]
 impl ZkAmsPhase23RnsLinkWitnessSecretsV1 {
     fn test_fixture() -> Self {
@@ -1652,7 +1559,6 @@ impl ZkAmsPhase23RnsLinkWitnessSecretsV1 {
         }
     }
 }
-
 /// Generator basis for one logarithmic RNS-Link inner-product opening.
 #[derive(Clone, Debug)]
 struct ZkAmsPhase23RnsLinkIpaKeyV1 {
@@ -1660,7 +1566,6 @@ struct ZkAmsPhase23RnsLinkIpaKeyV1 {
     evaluation_generator: VegaT256PointV1,
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase23RnsLinkIpaKeyV1 {
     fn derive(vector_len: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         if vector_len < 2
@@ -1718,7 +1623,6 @@ impl ZkAmsPhase23RnsLinkIpaKeyV1 {
         })
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ZkAmsPhase23RnsLinkIpaStatementV1 {
     relation_context_digest: [u8; 32],
@@ -1727,7 +1631,6 @@ struct ZkAmsPhase23RnsLinkIpaStatementV1 {
     commitment: VegaT256PointV1,
     evaluation: Scalar,
 }
-
 impl ZkAmsPhase23RnsLinkIpaStatementV1 {
     fn validate(&self, key: &ZkAmsPhase23RnsLinkIpaKeyV1) -> Result<(), ZkAmsMkheErrorV1> {
         if !is_nonzero_digest(self.relation_context_digest)
@@ -1740,14 +1643,12 @@ impl ZkAmsPhase23RnsLinkIpaStatementV1 {
         Ok(())
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ZkAmsPhase23RnsLinkIpaProofV1 {
     left: Vec<VegaT256PointV1>,
     right: Vec<VegaT256PointV1>,
     final_witness: Scalar,
 }
-
 fn rns_link_secret_inner_product_v1(
     left: &[Scalar],
     right: &[Scalar],
@@ -1761,14 +1662,12 @@ fn rns_link_secret_inner_product_v1(
     }
     Ok(sum)
 }
-
 fn rns_link_secret_msm_v1(
     scalars: &[Scalar],
     points: &[VegaT256PointV1],
 ) -> Result<VegaT256PointV1, ZkAmsMkheErrorV1> {
     rns_link_secret_msm_with_extra_v1(scalars, points, None)
 }
-
 fn rns_link_secret_msm_with_extra_v1(
     scalars: &[Scalar],
     points: &[VegaT256PointV1],
@@ -1797,7 +1696,6 @@ fn rns_link_secret_msm_with_extra_v1(
         .evaluate()
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn rns_link_squeeze_nonzero_v1(
     transcript: &mut VegaTranscriptV1,
     label: &'static [u8],
@@ -1812,7 +1710,6 @@ fn rns_link_squeeze_nonzero_v1(
     }
     Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn absorb_rns_link_ipa_round_v1(
     transcript: &mut VegaTranscriptV1,
     left: VegaT256PointV1,
@@ -1838,7 +1735,6 @@ fn absorb_rns_link_ipa_round_v1(
         )
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn prove_rns_link_ipa_v1(
     key: &ZkAmsPhase23RnsLinkIpaKeyV1,
     statement: &ZkAmsPhase23RnsLinkIpaStatementV1,
@@ -1862,7 +1758,6 @@ fn prove_rns_link_ipa_v1(
     transcript
         .absorb_scalar(IPA_EVALUATION_LABEL_V1, statement.evaluation)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-
     let mut generators = key.generators.clone();
     let mut weights = public_weights.to_vec();
     let mut left_rounds = Vec::with_capacity(witness.len().ilog2() as usize);
@@ -1889,7 +1784,6 @@ fn prove_rns_link_ipa_v1(
         let inverse = challenge
             .inverse()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-
         let mut folded_witness = AuditedRnsLinkSecretScalarsV1::with_capacity(half);
         let mut folded_weights = Vec::with_capacity(half);
         let mut folded_generators = Vec::with_capacity(half);
@@ -1914,7 +1808,6 @@ fn prove_rns_link_ipa_v1(
         final_witness: witness.as_slice()[0],
     })
 }
-
 fn verify_rns_link_ipa_v1(
     key: &ZkAmsPhase23RnsLinkIpaKeyV1,
     statement: &ZkAmsPhase23RnsLinkIpaStatementV1,
@@ -1977,7 +1870,6 @@ fn verify_rns_link_ipa_v1(
     }
     Ok(())
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ZkAmsPhase23RnsLinkBitnessStatementV1 {
     relation_context_digest: [u8; 32],
@@ -1985,14 +1877,12 @@ struct ZkAmsPhase23RnsLinkBitnessStatementV1 {
     key_digest: [u8; 32],
     commitment: VegaT256PointV1,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ZkAmsPhase23RnsLinkBitnessProofV1 {
     sumcheck: SumcheckProof,
     evaluation: Scalar,
     ipa: ZkAmsPhase23RnsLinkIpaProofV1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RnsLinkBitnessCodecShapeV1 {
     vector_len: usize,
@@ -2007,7 +1897,6 @@ struct RnsLinkBitnessCodecShapeV1 {
     body_bytes: usize,
     total_bytes: usize,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RnsLinkBitnessCodecLayoutV1 {
     shape: RnsLinkBitnessCodecShapeV1,
@@ -2017,7 +1906,6 @@ struct RnsLinkBitnessCodecLayoutV1 {
     ipa_right_offset: usize,
     final_witness_offset: usize,
 }
-
 fn rns_link_bitness_codec_shape_v1(
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
 ) -> Result<RnsLinkBitnessCodecShapeV1, ZkAmsMkheErrorV1> {
@@ -2089,7 +1977,6 @@ fn rns_link_bitness_codec_shape_v1(
         total_bytes,
     })
 }
-
 fn rns_link_wire_array_v1<const N: usize>(
     bytes: &[u8],
     offset: usize,
@@ -2103,20 +1990,16 @@ fn rns_link_wire_array_v1<const N: usize>(
         .try_into()
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn rns_link_wire_u16_v1(bytes: &[u8], offset: usize) -> Result<u16, ZkAmsMkheErrorV1> {
     Ok(u16::from_be_bytes(rns_link_wire_array_v1(bytes, offset)?))
 }
-
 fn rns_link_wire_u64_v1(bytes: &[u8], offset: usize) -> Result<u64, ZkAmsMkheErrorV1> {
     Ok(u64::from_be_bytes(rns_link_wire_array_v1(bytes, offset)?))
 }
-
 fn rns_link_wire_length_v1(bytes: &[u8], offset: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     usize::try_from(rns_link_wire_u64_v1(bytes, offset)?)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 /// Allocation-light structural pass. It completes exact length arithmetic and
 /// canonical scalar/point validation before proof vectors or IPA generators
 /// can be allocated.
@@ -2157,7 +2040,6 @@ fn preflight_rns_link_bitness_wire_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-
     let encoded_lengths = [
         rns_link_wire_length_v1(bytes, BITNESS_CODEC_SUMCHECK_BYTES_OFFSET_V1)?,
         rns_link_wire_length_v1(bytes, BITNESS_CODEC_EVALUATION_BYTES_OFFSET_V1)?,
@@ -2190,7 +2072,6 @@ fn preflight_rns_link_bitness_wire_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-
     let sumcheck_offset = RNS_LINK_BITNESS_CODEC_HEADER_BYTES_V1;
     let evaluation_offset = sumcheck_offset
         .checked_add(shape.sumcheck_bytes)
@@ -2211,7 +2092,6 @@ fn preflight_rns_link_bitness_wire_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-
     for index in 0..shape.sumcheck_coefficients {
         let offset = sumcheck_offset
             .checked_add(
@@ -2255,7 +2135,6 @@ fn preflight_rns_link_bitness_wire_v1(
         final_witness_offset,
     })
 }
-
 fn write_rns_link_wire_u16_v1(
     bytes: &mut [u8],
     offset: usize,
@@ -2273,7 +2152,6 @@ fn write_rns_link_wire_u16_v1(
         .copy_from_slice(&encoded);
     Ok(())
 }
-
 fn write_rns_link_wire_u64_v1(
     bytes: &mut [u8],
     offset: usize,
@@ -2291,7 +2169,6 @@ fn write_rns_link_wire_u64_v1(
         .copy_from_slice(&encoded);
     Ok(())
 }
-
 fn encode_rns_link_bitness_proof_v1(
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
     proof: &ZkAmsPhase23RnsLinkBitnessProofV1,
@@ -2403,7 +2280,6 @@ fn encode_rns_link_bitness_proof_v1(
     preflight_rns_link_bitness_wire_v1(statement, &bytes)?;
     Ok(bytes)
 }
-
 fn decode_rns_link_bitness_proof_v1(
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
     bytes: &[u8],
@@ -2479,7 +2355,6 @@ fn decode_rns_link_bitness_proof_v1(
         },
     })
 }
-
 fn rns_link_bitness_transcript_v1(
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
 ) -> Result<VegaTranscriptV1, ZkAmsMkheErrorV1> {
@@ -2525,7 +2400,6 @@ fn rns_link_bitness_transcript_v1(
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
     Ok(transcript)
 }
-
 fn bind_rns_link_public_table_v1(
     table: &mut Vec<Scalar>,
     challenge: Scalar,
@@ -2541,7 +2415,6 @@ fn bind_rns_link_public_table_v1(
     table.truncate(half);
     Ok(())
 }
-
 fn bind_rns_link_secret_table_v1(
     table: &mut AuditedRnsLinkSecretScalarsV1,
     challenge: Scalar,
@@ -2558,7 +2431,6 @@ fn bind_rns_link_secret_table_v1(
     table.clear_and_truncate(half);
     Ok(())
 }
-
 fn interpolate_rns_link_cubic_v1(
     evaluations: [Scalar; 4],
 ) -> Result<[Scalar; 4], ZkAmsMkheErrorV1> {
@@ -2579,7 +2451,6 @@ fn interpolate_rns_link_cubic_v1(
     let linear = evaluations[1] - constant - quadratic - cubic;
     Ok([constant, linear, quadratic, cubic])
 }
-
 fn prove_rns_link_bitness_sumcheck_v1(
     mut bits: AuditedRnsLinkSecretScalarsV1,
     tau: &[Scalar],
@@ -2650,7 +2521,6 @@ fn prove_rns_link_bitness_sumcheck_v1(
     }
     Ok((SumcheckProof::new(rounds), challenges, bits.as_slice()[0]))
 }
-
 fn verify_rns_link_bitness_sumcheck_v1(
     proof: &SumcheckProof,
     round_count: usize,
@@ -2682,7 +2552,6 @@ fn verify_rns_link_bitness_sumcheck_v1(
     }
     Ok((claim, challenges))
 }
-
 fn prove_rns_link_bitness_v1(
     relation_context_digest: [u8; 32],
     bits: AuditedRnsLinkSecretScalarsV1,
@@ -2765,7 +2634,6 @@ fn prove_rns_link_bitness_v1(
         },
     ))
 }
-
 fn verify_rns_link_bitness_v1(
     expected_relation_context_digest: [u8; 32],
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
@@ -2829,7 +2697,6 @@ fn verify_rns_link_bitness_v1(
         &mut transcript,
     )
 }
-
 fn verify_rns_link_bitness_wire_v1(
     expected_relation_context_digest: [u8; 32],
     statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
@@ -2841,18 +2708,14 @@ fn verify_rns_link_bitness_wire_v1(
     let proof = decode_rns_link_bitness_proof_v1(statement, proof_bytes)?;
     verify_rns_link_bitness_v1(expected_relation_context_digest, statement, &proof)
 }
-
 #[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
-
     use crate::vega::{
         bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1, derive_t256_generators_v1,
         sponge::keccak256,
     };
-
     use super::*;
-
     const TINY_N: usize = 8;
     const TINY_Q: u64 = 97;
     const TINY_P: u64 = 17;
@@ -2860,7 +2723,6 @@ mod tests {
     const TINY_E_ABS_BOUND: i64 = 2;
     const TINY_H_ABS_BOUND: i64 = 8 * (TINY_Q as i64 - 1);
     const TINY_CARRY_ABS_BOUND: i64 = 32;
-
     struct TinyRnsLinkWitnessV1 {
         a: Vec<u64>,
         r: Vec<i64>,
@@ -2875,7 +2737,6 @@ mod tests {
         last_row_used: usize,
         absent_chunk_bitmap: u8,
     }
-
     impl fmt::Debug for TinyRnsLinkWitnessV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2892,11 +2753,9 @@ mod tests {
                 .finish()
         }
     }
-
     fn digest(label: &[u8]) -> [u8; 32] {
         keccak256(label)
     }
-
     fn test_context(network_label: &[u8]) -> ZkAmsPhase23RnsLinkContextV1 {
         ZkAmsPhase23RnsLinkContextV1::new(
             digest(network_label),
@@ -2909,7 +2768,6 @@ mod tests {
         )
         .unwrap()
     }
-
     fn commitment_digests(
         family: ZkAmsPhase23RnsLinkFamilyV1,
         chunk_index: u16,
@@ -2934,13 +2792,11 @@ mod tests {
             padding_digest: tagged(7),
         }
     }
-
     fn hyrax_point(index: usize) -> [u8; 33] {
         derive_t256_generators_v1(b"iroha.zk-ams.v1.rns-link-test-hyrax", 2).unwrap()[index]
             .to_non_identity_wire_bytes()
             .unwrap()
     }
-
     fn chunk_commitment(
         family: ZkAmsPhase23RnsLinkFamilyV1,
         chunk_index: u16,
@@ -2961,7 +2817,6 @@ mod tests {
         )
         .unwrap()
     }
-
     fn ordered_commitments() -> Vec<ZkAmsPhase23RnsLinkChunkCommitmentV1> {
         RNS_LINK_FAMILY_ORDER_V1
             .into_iter()
@@ -2973,7 +2828,6 @@ mod tests {
             })
             .collect()
     }
-
     fn test_prechallenge() -> ZkAmsPhase23RnsLinkPrechallengeV1 {
         ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(
             test_context(b"network"),
@@ -2981,7 +2835,6 @@ mod tests {
         )
         .unwrap()
     }
-
     fn ordinary_product(a: &[u64], r: &[i64]) -> Vec<i64> {
         let mut product = vec![0_i64; a.len() + r.len() - 1];
         for (left_index, &left) in a.iter().enumerate() {
@@ -2991,7 +2844,6 @@ mod tests {
         }
         product
     }
-
     fn tiny_witness_with(mut a: Vec<u64>, mut message: Vec<u64>) -> TinyRnsLinkWitnessV1 {
         assert_eq!(a.len(), TINY_N);
         assert_eq!(message.len(), TINY_N);
@@ -3032,14 +2884,12 @@ mod tests {
             absent_chunk_bitmap: 0b1110,
         }
     }
-
     fn honest_tiny_witness() -> TinyRnsLinkWitnessV1 {
         tiny_witness_with(
             vec![3, 5, 7, 11, 13, 17, 19, 23],
             vec![TINY_P - 1, 0, 1, 2, 3, 4, 5, 6],
         )
     }
-
     fn eval_i64(coefficients: &[i64], point: u64, modulus: u64) -> u64 {
         coefficients
             .iter()
@@ -3052,7 +2902,6 @@ mod tests {
                 u64::try_from((product + u128::from(coefficient)) % u128::from(modulus)).unwrap()
             })
     }
-
     fn eval_u64(coefficients: &[u64], point: u64, modulus: u64) -> u64 {
         coefficients
             .iter()
@@ -3065,15 +2914,12 @@ mod tests {
                 .unwrap()
             })
     }
-
     fn mod_add(left: u64, right: u64, modulus: u64) -> u64 {
         u64::try_from((u128::from(left) + u128::from(right)) % u128::from(modulus)).unwrap()
     }
-
     fn mod_mul(left: u64, right: u64, modulus: u64) -> u64 {
         u64::try_from((u128::from(left) * u128::from(right)) % u128::from(modulus)).unwrap()
     }
-
     fn mod_sub(left: u64, right: u64, modulus: u64) -> u64 {
         if left >= right {
             left - right
@@ -3081,7 +2927,6 @@ mod tests {
             modulus - (right - left)
         }
     }
-
     fn mod_pow(mut base: u64, mut exponent: usize, modulus: u64) -> u64 {
         let mut result = 1_u64;
         while exponent > 0 {
@@ -3093,7 +2938,6 @@ mod tests {
         }
         result
     }
-
     fn verify_tiny_relation(
         witness: &TinyRnsLinkWitnessV1,
         points: &[u64],
@@ -3158,7 +3002,6 @@ mod tests {
         {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         let product = ordinary_product(&witness.a, witness.r.as_slice());
         let q = i64::try_from(TINY_Q).unwrap();
         let p = i64::try_from(TINY_P).unwrap();
@@ -3177,7 +3020,6 @@ mod tests {
                 return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
             }
         }
-
         for &point in points {
             let a = eval_u64(&witness.a, point, TINY_Q);
             let r = eval_i64(witness.r.as_slice(), point, TINY_Q);
@@ -3202,7 +3044,6 @@ mod tests {
         }
         Ok(())
     }
-
     fn tiny_points() -> Vec<u64> {
         derive_evaluation_points_for_moduli_v1(&test_prechallenge(), &[TINY_Q])
             .unwrap()
@@ -3211,7 +3052,6 @@ mod tests {
             .map(|point| point.value)
             .collect()
     }
-
     #[test]
     fn release_points_are_deterministic_canonical_nonzero_and_distinct() {
         let prechallenge = test_prechallenge();
@@ -3228,7 +3068,6 @@ mod tests {
         }
         first.validate_for_release(&prechallenge).unwrap();
     }
-
     #[test]
     fn mutable_readiness_and_kat_evidence_are_outside_the_proof_transcript() {
         let prechallenge = test_prechallenge();
@@ -3238,7 +3077,6 @@ mod tests {
             context.algorithm_manifest_digest,
             immutable_algorithm_manifest_digest_v1().unwrap()
         );
-
         let mut readiness = super::super::manifest::zk_ams_mkhe_readiness_digest_v1().unwrap();
         let mut release_kat = super::super::manifest::zk_ams_mkhe_release_manifest_v1()
             .unwrap()
@@ -3249,7 +3087,6 @@ mod tests {
         release_kat[31] ^= 1;
         assert_ne!(readiness, original_readiness);
         assert_ne!(release_kat, original_kat);
-
         // Neither mutable value is accepted by the context or challenge API.
         // Installing measured evidence therefore cannot perturb a pinned proof.
         assert_eq!(
@@ -3259,7 +3096,6 @@ mod tests {
         assert_ne!(context.algorithm_manifest_digest, readiness);
         assert_ne!(context.algorithm_manifest_digest, release_kat);
     }
-
     #[test]
     fn production_challenge_source_has_no_readiness_or_kat_reference() {
         let source = include_str!("phase23_rns_link.rs");
@@ -3349,7 +3185,6 @@ mod tests {
         let _: RnsLinkContextConstructorV1 = RNS_LINK_CONTEXT_SIGNATURE_GUARD_V1;
         let _: RnsLinkChallengeConstructorV1 = RNS_LINK_CHALLENGE_SIGNATURE_GUARD_V1;
     }
-
     fn audited_scalars(values: &[u64]) -> AuditedRnsLinkSecretScalarsV1 {
         let mut scalars = AuditedRnsLinkSecretScalarsV1::with_capacity(values.len());
         for value in values {
@@ -3357,7 +3192,6 @@ mod tests {
         }
         scalars
     }
-
     #[test]
     fn native_bitness_sumcheck_and_ipa_roundtrip() {
         let context = test_prechallenge().transcript_digest;
@@ -3376,7 +3210,6 @@ mod tests {
             ZkAmsPhase23RnsLinkIpaKeyV1::derive(16).unwrap().digest
         );
     }
-
     #[test]
     fn native_bitness_sumcheck_and_ipa_reject_every_splice() {
         let context = test_prechallenge().transcript_digest;
@@ -3386,14 +3219,12 @@ mod tests {
             Scalar::from_u64(31),
         )
         .unwrap();
-
         let mut wrong_context = context;
         wrong_context[0] ^= 1;
         assert_eq!(
             verify_rns_link_bitness_v1(wrong_context, &statement, &proof),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut changed_statement = statement.clone();
         changed_statement.key_digest[0] ^= 1;
         assert_eq!(
@@ -3407,7 +3238,6 @@ mod tests {
             verify_rns_link_bitness_v1(context, &changed_statement, &proof),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut changed_sumcheck = proof.clone();
         changed_sumcheck.sumcheck.rounds[0].coefficients_except_linear[0] += Scalar::one();
         assert_eq!(
@@ -3438,7 +3268,6 @@ mod tests {
             verify_rns_link_bitness_v1(context, &statement, &identity_ipa),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         assert_eq!(
             prove_rns_link_bitness_v1(
                 context,
@@ -3452,13 +3281,11 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
     }
-
     fn rns_link_expensive_path_counts_v1() -> (usize, usize) {
         let derivations = RNS_LINK_IPA_KEY_DERIVATIONS_V1.with(std::cell::Cell::get);
         let allocations = RNS_LINK_CODEC_BODY_ALLOCATIONS_V1.with(std::cell::Cell::get);
         (derivations, allocations)
     }
-
     fn assert_bitness_wire_preflight_rejects_v1(
         context: [u8; 32],
         statement: &ZkAmsPhase23RnsLinkBitnessStatementV1,
@@ -3477,7 +3304,6 @@ mod tests {
             "malformed wire reached proof-vector allocation or IPA generator derivation: {axis}"
         );
     }
-
     #[test]
     fn native_bitness_codec_roundtrip_is_exact_and_bounded() {
         let context = test_prechallenge().transcript_digest;
@@ -3500,7 +3326,6 @@ mod tests {
             "canonical decode must re-encode byte-identically"
         );
         verify_rns_link_bitness_wire_v1(context, &statement, &bytes).unwrap();
-
         let mut maximum_shape = statement;
         maximum_shape.value_count =
             u16::try_from(RNS_LINK_BITNESS_MAX_VALUES_V1).expect("max value count fits");
@@ -3515,7 +3340,6 @@ mod tests {
         );
         assert_eq!(maximum_shape.total_bytes, 1_862);
     }
-
     #[test]
     fn malformed_bitness_object_statements_reject_before_key_derivation() {
         let context = test_prechallenge().transcript_digest;
@@ -3540,7 +3364,6 @@ mod tests {
         let mut changed = statement.clone();
         changed.key_digest = [0; 32];
         cases.push(("zero key digest", changed));
-
         for (axis, changed) in cases {
             let before = RNS_LINK_IPA_KEY_DERIVATIONS_V1.with(std::cell::Cell::get);
             assert_eq!(
@@ -3555,7 +3378,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn native_bitness_codec_rejects_every_count_and_length_before_expensive_work() {
         let context = test_prechallenge().transcript_digest;
@@ -3566,7 +3388,6 @@ mod tests {
         )
         .unwrap();
         let canonical = encode_rns_link_bitness_proof_v1(&statement, &proof).unwrap();
-
         let byte_axes = [
             (8, "version"),
             (9, "flags"),
@@ -3587,7 +3408,6 @@ mod tests {
             changed[offset] ^= 1;
             assert_bitness_wire_preflight_rejects_v1(context, &statement, &changed, axis);
         }
-
         let u16_axes = [
             (10, "header length"),
             (BITNESS_CODEC_VALUE_COUNT_OFFSET_V1, "value count"),
@@ -3601,7 +3421,6 @@ mod tests {
             changed[offset + 1] ^= 1;
             assert_bitness_wire_preflight_rejects_v1(context, &statement, &changed, axis);
         }
-
         let length_axes = [
             (
                 BITNESS_CODEC_SUMCHECK_BYTES_OFFSET_V1,
@@ -3630,7 +3449,6 @@ mod tests {
             let mut changed = canonical.clone();
             changed[offset + 7] ^= 1;
             assert_bitness_wire_preflight_rejects_v1(context, &statement, &changed, axis);
-
             let mut overflow = canonical.clone();
             overflow[offset..offset + 8].fill(0xff);
             assert_bitness_wire_preflight_rejects_v1(
@@ -3640,7 +3458,6 @@ mod tests {
                 &format!("arithmetic-overflow {axis}"),
             );
         }
-
         let mut magic = canonical.clone();
         magic[0] ^= 1;
         assert_bitness_wire_preflight_rejects_v1(context, &statement, &magic, "magic");
@@ -3652,7 +3469,6 @@ mod tests {
             &manifest,
             "algorithm manifest digest",
         );
-
         let mut trailing = canonical.clone();
         trailing.push(0);
         assert_bitness_wire_preflight_rejects_v1(context, &statement, &trailing, "trailing byte");
@@ -3671,7 +3487,6 @@ mod tests {
         let mut oversized = canonical.clone();
         oversized.resize(RNS_LINK_BITNESS_CODEC_MAX_BYTES_V1 + 1, 0);
         assert_bitness_wire_preflight_rejects_v1(context, &statement, &oversized, "codec ceiling");
-
         let mut noncanonical_scalar = canonical.clone();
         noncanonical_scalar[RNS_LINK_BITNESS_CODEC_HEADER_BYTES_V1
             ..RNS_LINK_BITNESS_CODEC_HEADER_BYTES_V1 + RNS_LINK_SCALAR_WIRE_BYTES_V1]
@@ -3695,7 +3510,6 @@ mod tests {
             "identity point",
         );
     }
-
     #[test]
     fn native_packed_preflight_is_heap_stable_and_zeroizes_on_success_error_and_unwind() {
         let before = native_packed_preflight_zeroized_drop_count_v1();
@@ -3710,7 +3524,6 @@ mod tests {
         assert_eq!(moved.as_ref() as *const _, stable_address);
         drop(moved);
         assert_eq!(native_packed_preflight_zeroized_drop_count_v1(), before + 1);
-
         let before_error = native_packed_preflight_zeroized_drop_count_v1();
         let error = (|| -> Result<(), ZkAmsMkheErrorV1> {
             let _preflight = Box::new(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
@@ -3726,7 +3539,6 @@ mod tests {
             native_packed_preflight_zeroized_drop_count_v1(),
             before_error + 1
         );
-
         let before_unwind = native_packed_preflight_zeroized_drop_count_v1();
         let unwind = catch_unwind(AssertUnwindSafe(|| {
             let _preflight = Box::new(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1 {
@@ -3742,7 +3554,6 @@ mod tests {
             native_packed_preflight_zeroized_drop_count_v1(),
             before_unwind + 1
         );
-
         let source = include_str!("phase23_rns_link.rs");
         let constructor = source
             .split("fn preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1")
@@ -3763,7 +3574,6 @@ mod tests {
         assert!(constructor.contains("Ok(preflight)"));
         assert!(!constructor.contains("Ok(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1"));
     }
-
     #[test]
     fn native_release_geometry_uses_public_x_and_replicated_u() {
         let geometry = derive_zk_ams_phase23_rns_link_release_geometry_v1().unwrap();
@@ -3810,12 +3620,10 @@ mod tests {
         assert_eq!(geometry.paper_column_count, 524_378);
         assert_eq!(geometry.commitment_count, 43);
         assert_ne!(geometry.digest, [0; 32]);
-
         let canonical_headers = geometry
             .families
             .map(|family| (family.family, usize::from(family.chunk_count)));
         validate_ordered_native_family_chunk_counts_v1(&geometry, &canonical_headers).unwrap();
-
         let legacy_headers = [
             (ZkAmsPhase23RnsLinkFamilyV1::X, 8),
             (ZkAmsPhase23RnsLinkFamilyV1::U, 1),
@@ -3856,7 +3664,6 @@ mod tests {
             validate_ordered_native_family_chunk_counts_v1(&geometry, &excess),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let legacy_shell = ZkAmsPhase23PackedAccumulatorSetV1 {
             shape: super::super::phase23_encrypted::ZkAmsPhase23AccumulatorShapeV1::new(
                 524_288, 1_048_576, 1_024, 524_288, 512,
@@ -3873,7 +3680,6 @@ mod tests {
             preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1(&legacy_shell),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         ));
-
         let missing_chunks = ZkAmsPhase23PackedAccumulatorSetV1 {
             shape: super::super::phase23_encrypted::ZkAmsPhase23AccumulatorShapeV1::new(
                 89, 1_048_576, 1_024, 524_288, 512,
@@ -3891,7 +3697,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         ));
     }
-
     #[test]
     fn native_replicated_u_preflight_rejects_cross_chunk_and_intra_chunk_changes() {
         fn packed(coefficients: Vec<[u8; 32]>) -> ZkAmsT256PackedPlaintextV1 {
@@ -3905,7 +3710,6 @@ mod tests {
                 digest: [3; 32],
             }
         }
-
         let identical = vec![
             packed(vec![[7; 32], [9; 32]]),
             packed(vec![[7; 32], [9; 32]]),
@@ -3923,7 +3727,6 @@ mod tests {
             validate_replicated_u_chunk_coefficients_v1(&[]),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         validate_replicated_u_decoded_slots_v1(&[[11; 32]; 4]).unwrap();
         assert_eq!(
             validate_replicated_u_decoded_slots_v1(&[[11; 32], [12; 32]]),
@@ -3934,13 +3737,11 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPolynomial)
         );
     }
-
     #[test]
     fn every_manifest_label_degree_dimension_and_count_axis_is_bound() {
         let canonical = canonical_algorithm_manifest_inputs_v1().unwrap();
         let baseline = immutable_algorithm_manifest_digest_from_inputs_v1(&canonical).unwrap();
         assert_eq!(baseline, immutable_algorithm_manifest_digest_v1().unwrap());
-
         let mut changed = canonical.clone();
         changed.version ^= 1;
         assert_ne!(
@@ -4049,33 +3850,28 @@ mod tests {
             baseline
         );
     }
-
     #[test]
     fn prechallenge_rejects_reorder_duplicate_omit_and_trailing_family() {
         let context = test_context(b"network");
         let baseline = ordered_commitments();
-
         let mut reordered = baseline.clone();
         reordered.swap(0, 1);
         assert_eq!(
             ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(context, &reordered),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut duplicate = baseline.clone();
         duplicate[1] = duplicate[0];
         assert_eq!(
             ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(context, &duplicate),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut omitted = baseline.clone();
         omitted.pop();
         assert_eq!(
             ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(context, &omitted),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut trailing = baseline;
         trailing.push(chunk_commitment(ZkAmsPhase23RnsLinkFamilyV1::RW, 0));
         assert_eq!(
@@ -4083,7 +3879,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
     }
-
     #[test]
     fn every_context_and_commitment_axis_precedes_and_changes_challenges() {
         let baseline_commitments = ordered_commitments();
@@ -4094,7 +3889,6 @@ mod tests {
         )
         .unwrap();
         let baseline = derive_evaluation_points_for_moduli_v1(&baseline_pre, &[TINY_Q]).unwrap();
-
         let mut context_variants = Vec::new();
         let mut changed = baseline_context;
         changed.profile_digest[0] ^= 1;
@@ -4140,7 +3934,6 @@ mod tests {
                 Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
             );
         }
-
         let mut commitment_variants = Vec::new();
         let mut changed = baseline_commitments.clone();
         // X is exactly one native chunk. Mutating a prefix of eight would now
@@ -4189,7 +3982,6 @@ mod tests {
                 derive_evaluation_points_for_moduli_v1(&changed_pre, &[TINY_Q]).unwrap()
             );
         }
-
         let mut axes = [
             digest(b"network"),
             digest(b"statement"),
@@ -4218,7 +4010,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
     }
-
     #[test]
     fn commitment_shape_identity_and_absent_chunk_metadata_fail_closed() {
         let family = ZkAmsPhase23RnsLinkFamilyV1::X;
@@ -4284,7 +4075,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
     }
-
     #[test]
     fn rejection_sampler_is_unbiased_and_has_exact_retry_ceiling() {
         let threshold = TINY_Q.wrapping_neg() % TINY_Q;
@@ -4297,7 +4087,6 @@ mod tests {
         .unwrap();
         assert_eq!(value, 5);
         assert_eq!(calls, 2);
-
         let mut zero_calls = 0_usize;
         assert_eq!(
             sample_canonical_nonzero_distinct_v1(TINY_Q, &[], |_| {
@@ -4307,7 +4096,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
         assert_eq!(zero_calls, RNS_LINK_REJECTION_ATTEMPTS_V1);
-
         let mut duplicate_calls = 0_usize;
         assert_eq!(
             sample_canonical_nonzero_distinct_v1(TINY_Q, &[5], |_| {
@@ -4318,59 +4106,50 @@ mod tests {
         );
         assert_eq!(duplicate_calls, RNS_LINK_REJECTION_ATTEMPTS_V1);
     }
-
     #[test]
     fn tiny_exact_integer_and_arbitrary_point_relation_accepts() {
         let points = tiny_points();
         assert_eq!(points.len(), 5);
         verify_tiny_relation(&honest_tiny_witness(), &points).unwrap();
-
         let boundary = tiny_witness_with(
             vec![TINY_Q - 1, 5, 7, 11, 13, 17, 19, 23],
             vec![TINY_P - 1, 0, 1, 2, 3, 4, 5, 6],
         );
         verify_tiny_relation(&boundary, &points).unwrap();
     }
-
     #[test]
     fn tiny_relation_rejects_boundaries_mutations_and_wrap_attempts() {
         let points = tiny_points();
-
         let mut q_boundary = honest_tiny_witness();
         q_boundary.a[0] = TINY_Q;
         assert_eq!(
             verify_tiny_relation(&q_boundary, &points),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut p_boundary = honest_tiny_witness();
         p_boundary.message[0] = TINY_P;
         assert_eq!(
             verify_tiny_relation(&p_boundary, &points),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut noncanonical_ciphertext = honest_tiny_witness();
         noncanonical_ciphertext.ciphertext[0] = TINY_Q;
         assert_eq!(
             verify_tiny_relation(&noncanonical_ciphertext, &points),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut bad_r = honest_tiny_witness();
         bad_r.r.as_mut_slice()[0] = TINY_R_ABS_BOUND + 1;
         assert_eq!(
             verify_tiny_relation(&bad_r, &points),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut bad_e = honest_tiny_witness();
         bad_e.e.as_mut_slice()[0] = TINY_E_ABS_BOUND + 1;
         assert_eq!(
             verify_tiny_relation(&bad_e, &points),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         for delta in [-1_i64, 1] {
             let mut bad_quotient = honest_tiny_witness();
             bad_quotient.quotient.as_mut_slice()[0] += delta;
@@ -4378,7 +4157,6 @@ mod tests {
                 verify_tiny_relation(&bad_quotient, &points),
                 Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
             );
-
             let mut bad_carry = honest_tiny_witness();
             bad_carry.carries.as_mut_slice()[0] += delta;
             assert_eq!(
@@ -4386,7 +4164,6 @@ mod tests {
                 Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
             );
         }
-
         let mut zero_point = points.clone();
         zero_point[0] = 0;
         assert_eq!(
@@ -4400,25 +4177,21 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
     }
-
     #[test]
     fn tiny_relation_rejects_every_padding_namespace() {
         let points = tiny_points();
-
         let mut logical_padding = honest_tiny_witness();
         logical_padding.logical_slots[3] = 1;
         assert_eq!(
             verify_tiny_relation(&logical_padding, &points),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut last_row_padding = honest_tiny_witness();
         last_row_padding.last_row[2] = 1;
         assert_eq!(
             verify_tiny_relation(&last_row_padding, &points),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut absent_chunk = honest_tiny_witness();
         absent_chunk.absent_chunk_bitmap ^= 1 << 2;
         assert_eq!(
@@ -4426,18 +4199,15 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
     }
-
     #[test]
     fn native_decoded_plaintext_owner_zeroizes_success_error_and_unwind() {
         let owner = || ZeroizingNativeDecodedPlaintextV1(vec![[0x5a; 32]; 2]);
-
         let before_success = native_decoded_plaintext_zeroized_drop_count_v1();
         drop(owner());
         assert_eq!(
             native_decoded_plaintext_zeroized_drop_count_v1(),
             before_success + 1
         );
-
         fn reject_owner(_owner: ZeroizingNativeDecodedPlaintextV1) -> Result<(), ZkAmsMkheErrorV1> {
             Err(ZkAmsMkheErrorV1::InvalidPolynomial)
         }
@@ -4450,7 +4220,6 @@ mod tests {
             native_decoded_plaintext_zeroized_drop_count_v1(),
             before_error + 1
         );
-
         let before_unwind = native_decoded_plaintext_zeroized_drop_count_v1();
         let unwind = catch_unwind(AssertUnwindSafe(|| {
             let _owner = owner();
@@ -4462,7 +4231,6 @@ mod tests {
             before_unwind + 1
         );
     }
-
     #[test]
     fn secret_owners_redact_and_zeroize_success_error_and_unwind() {
         let before_success = zeroizing_t256_scalar_vec_drop_count_v1();
@@ -4477,7 +4245,6 @@ mod tests {
             zeroizing_t256_scalar_vec_drop_count_v1(),
             before_success + 6
         );
-
         fn fail_after_taking_secrets(
             _secrets: ZkAmsPhase23RnsLinkWitnessSecretsV1,
         ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -4489,7 +4256,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
         assert_eq!(zeroizing_t256_scalar_vec_drop_count_v1(), before_error + 6);
-
         let before_unwind = zeroizing_t256_scalar_vec_drop_count_v1();
         let unwind_result = catch_unwind(AssertUnwindSafe(|| {
             let _secrets = ZkAmsPhase23RnsLinkWitnessSecretsV1::test_fixture();

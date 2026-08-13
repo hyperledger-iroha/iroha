@@ -1,17 +1,12 @@
 //! Structured diagnostics shared by the Kotodama compiler, CLI, and language tools.
-
 use std::{error::Error as StdError, fmt};
-
 use norito::json::{self, Value};
-
 use crate::source::{SourceFile, TextRange};
-
 /// Maximum number of diagnostics returned for one compilation request.
 ///
 /// The cap bounds memory and renderer work for adversarial source files while
 /// reserving the final slot for an explicit truncation diagnostic.
 pub const MAX_DIAGNOSTICS: usize = 64;
-
 /// Compiler phase that produced a diagnostic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiagnosticPhase {
@@ -28,7 +23,6 @@ pub enum DiagnosticPhase {
     /// Artifact construction or verification failed.
     Artifact,
 }
-
 impl DiagnosticPhase {
     /// Stable machine-readable phase name.
     pub const fn as_str(self) -> &'static str {
@@ -42,7 +36,6 @@ impl DiagnosticPhase {
         }
     }
 }
-
 /// Diagnostic severity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
@@ -51,7 +44,6 @@ pub enum Severity {
     /// Compilation can continue but the source should be changed.
     Warning,
 }
-
 impl Severity {
     /// Stable machine-readable severity name.
     pub const fn as_str(self) -> &'static str {
@@ -60,7 +52,6 @@ impl Severity {
             Self::Warning => "warning",
         }
     }
-
     const fn sarif_level(self) -> &'static str {
         match self {
             Self::Error => "error",
@@ -68,7 +59,6 @@ impl Severity {
         }
     }
 }
-
 /// Stable explanation and remediation for one compiler diagnostic code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DiagnosticExplanation {
@@ -81,7 +71,6 @@ pub struct DiagnosticExplanation {
     /// Concrete remediation guidance.
     pub help: &'static str,
 }
-
 macro_rules! explanation {
     ($code:literal, $phase:ident, $summary:literal, $help:literal) => {
         DiagnosticExplanation {
@@ -92,7 +81,6 @@ macro_rules! explanation {
         }
     };
 }
-
 /// Canonical diagnostic explanation registry used by `koto explain` and docs.
 pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     explanation!(
@@ -1506,7 +1494,6 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Point the trigger at a declared kotoage/言挙げ function instead."
     ),
 ];
-
 /// Preserve resolver ownership when a later typed-analysis adapter surfaces a
 /// diagnostic whose canonical registry entry belongs to resolution.
 ///
@@ -1522,7 +1509,6 @@ pub(crate) fn phase_for_semantic_failure(code: &str) -> DiagnosticPhase {
         _ => DiagnosticPhase::Semantic,
     }
 }
-
 /// Look up a canonical diagnostic explanation by case-insensitive code.
 #[must_use]
 pub fn diagnostic_explanation(code: &str) -> Option<&'static DiagnosticExplanation> {
@@ -1530,7 +1516,6 @@ pub fn diagnostic_explanation(code: &str) -> Option<&'static DiagnosticExplanati
         .iter()
         .find(|explanation| explanation.code.eq_ignore_ascii_case(code))
 }
-
 /// One source position using one-based line and column numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourcePosition {
@@ -1539,7 +1524,6 @@ pub struct SourcePosition {
     /// One-based UTF-8 display column.
     pub column: usize,
 }
-
 /// Half-open source range attached to a diagnostic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceSpan {
@@ -1559,7 +1543,6 @@ pub struct SourceSpan {
     /// multi-byte Unicode text.
     pub byte_range: Option<TextRange>,
 }
-
 impl SourceSpan {
     /// Convert an exact source-file byte range into the canonical diagnostic span.
     #[must_use]
@@ -1581,7 +1564,6 @@ impl SourceSpan {
         }
     }
 }
-
 /// Secondary source label.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiagnosticLabel {
@@ -1590,7 +1572,6 @@ pub struct DiagnosticLabel {
     /// Explanation for the range.
     pub message: String,
 }
-
 /// Machine-applicable source replacement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiagnosticFix {
@@ -1599,7 +1580,6 @@ pub struct DiagnosticFix {
     /// Replacement text.
     pub replacement: String,
 }
-
 /// One stable, structured compiler diagnostic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
@@ -1622,7 +1602,6 @@ pub struct Diagnostic {
     /// Optional machine-applicable replacement.
     pub fix: Option<DiagnosticFix>,
 }
-
 impl Diagnostic {
     /// Construct a native compiler error with an explicit stable code and span.
     pub fn error(
@@ -1645,7 +1624,6 @@ impl Diagnostic {
             fix: None,
         }
     }
-
     /// Construct a non-fatal warning with an explicit stable code and span.
     pub fn warning(
         code: impl Into<String>,
@@ -1667,7 +1645,6 @@ impl Diagnostic {
             fix: None,
         }
     }
-
     /// Return the canonical JSON representation used by every diagnostic renderer.
     pub fn to_json_value(&self) -> Value {
         json_object(vec![
@@ -1711,7 +1688,6 @@ impl Diagnostic {
             ),
         ])
     }
-
     fn to_sarif_result(&self) -> Value {
         let locations = self.primary_span.as_ref().map_or_else(Vec::new, |span| {
             vec![json_object(vec![json_entry(
@@ -1752,22 +1728,18 @@ impl Diagnostic {
         ])
     }
 }
-
 fn json_entry(key: impl Into<String>, value: Value) -> (String, Value) {
     (key.into(), value)
 }
-
 fn json_object(entries: Vec<(String, Value)>) -> Value {
     json::object(entries).unwrap_or(Value::Null)
 }
-
 fn source_position_to_json(position: SourcePosition) -> Value {
     json_object(vec![
         json_entry("line", Value::from(position.line as u64)),
         json_entry("column", Value::from(position.column as u64)),
     ])
 }
-
 fn display_source_span(span: &SourceSpan) -> String {
     let source = span.source.as_deref().unwrap_or("<source>");
     span.package_identity.as_ref().map_or_else(
@@ -1775,7 +1747,6 @@ fn display_source_span(span: &SourceSpan) -> String {
         |package| format!("{package}::{source}"),
     )
 }
-
 fn source_span_to_json(span: &SourceSpan) -> Value {
     json_object(vec![
         json_entry(
@@ -1801,7 +1772,6 @@ fn source_span_to_json(span: &SourceSpan) -> Value {
         ),
     ])
 }
-
 fn source_span_to_sarif(span: &SourceSpan) -> Value {
     let artifact_location = span.source.as_ref().map_or(Value::Null, |source| {
         json_object(vec![json_entry("uri", Value::from(source.clone()))])
@@ -1827,14 +1797,12 @@ fn source_span_to_sarif(span: &SourceSpan) -> Value {
         json_entry("region", json_object(region)),
     ])
 }
-
 /// Collection of diagnostics returned by a failed compiler operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiagnosticBundle {
     /// Diagnostics in deterministic source order.
     pub diagnostics: Vec<Diagnostic>,
 }
-
 impl DiagnosticBundle {
     /// Build a bundle and normalize it into deterministic source order.
     pub fn new(mut diagnostics: Vec<Diagnostic>) -> Self {
@@ -1863,7 +1831,6 @@ impl DiagnosticBundle {
                 .then_with(|| left.code.cmp(&right.code))
                 .then_with(|| left.message.cmp(&right.message))
         }
-
         if diagnostics.len() > MAX_DIAGNOSTICS {
             let omitted = diagnostics.len() - (MAX_DIAGNOSTICS - 1);
             let has_errors = diagnostics
@@ -1892,12 +1859,10 @@ impl DiagnosticBundle {
         diagnostics.sort_by(compare);
         Self { diagnostics }
     }
-
     /// Build a bundle containing one native compiler error.
     pub fn single(diagnostic: Diagnostic) -> Self {
         Self::new(vec![diagnostic])
     }
-
     /// Render deterministic human-readable diagnostics.
     pub fn render_human(&self) -> String {
         let mut output = String::new();
@@ -1964,7 +1929,6 @@ impl DiagnosticBundle {
         }
         output
     }
-
     /// Render the canonical diagnostic array as pretty JSON.
     pub fn render_json(&self) -> Result<String, json::Error> {
         json::to_string_pretty(&Value::Array(
@@ -1974,7 +1938,6 @@ impl DiagnosticBundle {
                 .collect(),
         ))
     }
-
     /// Render SARIF 2.1.0 while preserving the canonical diagnostic records.
     pub fn render_sarif(&self) -> Result<String, json::Error> {
         let rules = self
@@ -2024,19 +1987,15 @@ impl DiagnosticBundle {
         json::to_string_pretty(&sarif)
     }
 }
-
 impl fmt::Display for DiagnosticBundle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.render_human())
     }
 }
-
 impl StdError for DiagnosticBundle {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn explanation_registry_is_unique_and_case_insensitive() {
         let mut codes = std::collections::BTreeSet::new();
@@ -2055,7 +2014,6 @@ mod tests {
         );
         assert!(diagnostic_explanation("NOT_A_CODE").is_none());
     }
-
     #[test]
     fn every_frontend_code_literal_has_a_canonical_explanation() {
         fn is_diagnostic_code(candidate: &str) -> bool {
@@ -2068,7 +2026,6 @@ mod tests {
                 && candidate.starts_with('K')
                 && candidate[1..].bytes().all(|byte| byte.is_ascii_digit()))
         }
-
         let source_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut missing = std::collections::BTreeMap::<String, Vec<String>>::new();
         for entry in std::fs::read_dir(source_dir).expect("read Kotodama frontend sources") {
@@ -2104,17 +2061,14 @@ mod tests {
                 );
             }
         }
-
         assert!(
             missing.is_empty(),
             "frontend diagnostic codes missing from `koto explain`: {missing:?}"
         );
     }
-
     #[test]
     fn resolve_explanations_match_public_session_emitters() {
         use crate::session::{CompileRequest, CompilerSession};
-
         for (code, source) in [
             (
                 "K2002",
@@ -2150,7 +2104,6 @@ mod tests {
             assert_eq!(explanation.phase, emitted.phase, "{code}");
         }
     }
-
     #[test]
     fn fixed_source_graph_and_linker_codes_are_explainable() {
         for code in ["K1004", "E_PACKAGE_BUDGET"] {
@@ -2158,7 +2111,6 @@ mod tests {
                 .unwrap_or_else(|| panic!("{code} must work with `koto explain`"));
             assert_eq!(explanation.phase, DiagnosticPhase::Parse, "{code}");
         }
-
         for code in [
             "K2002",
             "K2099",
@@ -2198,14 +2150,12 @@ mod tests {
                 .unwrap_or_else(|| panic!("{code} must work with `koto explain`"));
             assert_eq!(explanation.phase, DiagnosticPhase::Resolve, "{code}");
         }
-
         assert_eq!(
             diagnostic_explanation("K2098").map(|entry| entry.phase),
             Some(DiagnosticPhase::Semantic),
             "the semantic ABI fallback must not reuse the resolver-owned K2099 code",
         );
     }
-
     #[test]
     fn v1_data_processing_diagnostics_are_explainable() {
         for code in [
@@ -2229,7 +2179,6 @@ mod tests {
             assert_eq!(explanation.phase, DiagnosticPhase::Semantic, "{code}");
         }
     }
-
     #[test]
     fn every_renderer_contains_the_same_canonical_fields() {
         let primary_span = SourceSpan {
@@ -2258,7 +2207,6 @@ mod tests {
         let bundle = DiagnosticBundle {
             diagnostics: vec![diagnostic.clone()],
         };
-
         let human = bundle.render_human();
         for expected in [
             "K2001",
@@ -2271,7 +2219,6 @@ mod tests {
         ] {
             assert!(human.contains(expected), "missing {expected:?}: {human}");
         }
-
         let rendered_json = bundle.render_json().expect("JSON diagnostics");
         let rendered_sarif = bundle.render_sarif().expect("SARIF diagnostics");
         for expected in [
@@ -2293,7 +2240,6 @@ mod tests {
             );
         }
         assert!(rendered_sarif.contains("2.1.0"));
-
         let json_value: Value =
             json::from_str(&rendered_json).expect("decode canonical JSON diagnostics");
         let sarif_value: Value = json::from_str(&rendered_sarif).expect("decode SARIF diagnostics");
@@ -2310,7 +2256,6 @@ mod tests {
             "human renderer must preserve the full primary and label range"
         );
     }
-
     #[test]
     fn bundle_order_and_fanout_are_deterministic_and_bounded() {
         let diagnostics = (0..80)
@@ -2349,7 +2294,6 @@ mod tests {
         assert!(limit.message.contains("17 additional diagnostic(s)"));
         assert_eq!(limit.severity, Severity::Error);
     }
-
     #[test]
     fn fanout_retains_errors_ahead_of_warnings_without_making_warning_only_checks_fail() {
         let warnings = (0..MAX_DIAGNOSTICS + 10).map(|index| {
@@ -2374,7 +2318,6 @@ mod tests {
                 .any(|diagnostic| diagnostic.code == "K2002"),
             "warning fanout must never hide a real compiler error",
         );
-
         let warning_only = DiagnosticBundle::new(warnings.collect());
         let limit = warning_only
             .diagnostics

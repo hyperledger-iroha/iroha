@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify that Connect routes are stable while runtime configuration controls availability.
-
 use std::{path::PathBuf, sync::Arc};
-
 use axum::http::{Request, StatusCode, Uri};
 use iroha_config::base::WithOrigin;
 use iroha_core::{
@@ -14,7 +12,6 @@ use iroha_data_model::{ChainId, block::BlockHeader};
 use iroha_primitives::addr::socket_addr;
 use nonzero_ext::nonzero;
 use tower::ServiceExt;
-
 fn request_with_loopback_connect_info(
     request: Request<axum::body::Body>,
 ) -> Request<axum::body::Body> {
@@ -27,7 +24,6 @@ fn request_with_loopback_connect_info(
         ))));
     request
 }
-
 async fn connect_aggregate_status(
     app: &axum::Router,
     cfg: &iroha_config::parameters::actual::Root,
@@ -56,10 +52,8 @@ async fn connect_aggregate_status(
         .await
         .expect("Connect aggregate status response")
 }
-
 fn connect_session_request_body(seed: u8) -> (String, String) {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-
     let network_id = iroha_torii::test_utils::signed_query_network_id();
     let app_pk = [seed; 32];
     let nonce = [seed.wrapping_add(1); 16];
@@ -75,7 +69,6 @@ fn connect_session_request_body(seed: u8) -> (String, String) {
     .expect("Connect session JSON serialization");
     (sid_b64, body)
 }
-
 #[cfg(feature = "ws_integration_tests")]
 fn spawn_test_server(listener: tokio::net::TcpListener, app: axum::Router) {
     tokio::spawn(async move {
@@ -87,11 +80,9 @@ fn spawn_test_server(listener: tokio::net::TcpListener, app: axum::Router) {
         .unwrap();
     });
 }
-
 fn checked_connect_key_fixture() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random().expect("generate checked connect fixture keypair")
 }
-
 fn checked_connect_transport_key_fixture() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_from_seed(
         b"iroha:torii:connect-gating:soranet-transport:v1".to_vec(),
@@ -99,7 +90,6 @@ fn checked_connect_transport_key_fixture() -> iroha_crypto::KeyPair {
     )
     .expect("generate dedicated connect SoraNet transport fixture keypair")
 }
-
 #[test]
 fn connect_config_fixture_uses_checked_key_generation() {
     let key_pair = checked_connect_key_fixture();
@@ -107,9 +97,7 @@ fn connect_config_fixture_uses_checked_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture connect public key has a valid algorithm");
-
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
-
     let transport_key_pair = checked_connect_transport_key_fixture();
     assert_eq!(
         transport_key_pair.algorithm(),
@@ -117,7 +105,6 @@ fn connect_config_fixture_uses_checked_key_generation() {
     );
     assert_ne!(transport_key_pair.public_key(), key_pair.public_key());
 }
-
 #[allow(clippy::too_many_lines)]
 fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::actual::Root {
     use iroha_config::parameters::actual as A;
@@ -130,7 +117,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
     };
     use iroha_data_model::peer::Peer;
     use iroha_logger::Level;
-
     let connect = A::Connect {
         enabled: connect_enabled,
         ws_max_sessions: iroha_config::parameters::defaults::connect::WS_MAX_SESSIONS,
@@ -149,7 +135,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         relay_strategy: iroha_config::parameters::defaults::connect::RELAY_STRATEGY,
         p2p_ttl_hops: iroha_config::parameters::defaults::connect::P2P_TTL_HOPS,
     };
-
     A::Root {
         common: A::Common {
             chain: ChainId::from("test-chain"),
@@ -1153,7 +1138,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         },
     }
 }
-
 fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Torii {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -1175,9 +1159,7 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = (peers_tx, time_source);
-
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
-
     iroha_torii::Torii::new_with_handle(
         cfg.common.chain.clone(),
         iroha_torii::test_utils::signed_query_network_id(),
@@ -1194,13 +1176,11 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
         telemetry,
     )
 }
-
 #[tokio::test]
 async fn connect_endpoints_report_typed_unavailability_when_disabled() {
     let cfg = minimal_actual_config(false);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
-
     // The WebSocket route remains mounted but rejects the upgrade while disabled.
     let resp = app
         .clone()
@@ -1213,7 +1193,6 @@ async fn connect_endpoints_report_typed_unavailability_when_disabled() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-
     // Ordinary REST routes return the shared typed error envelope.
     let resp = connect_aggregate_status(&app, &cfg).await;
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -1228,13 +1207,11 @@ async fn connect_endpoints_report_typed_unavailability_when_disabled() {
         Some("connect_disabled")
     );
 }
-
 #[tokio::test]
 async fn connect_status_present_when_enabled() {
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
-
     let unsigned = app
         .clone()
         .oneshot(
@@ -1246,10 +1223,8 @@ async fn connect_status_present_when_enabled() {
         .await
         .unwrap();
     assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
-
     let resp = connect_aggregate_status(&app, &cfg).await;
     assert_eq!(resp.status(), StatusCode::OK);
-
     let body = http_body_util::BodyExt::collect(resp.into_body())
         .await
         .expect("collect body")
@@ -1282,17 +1257,14 @@ async fn connect_status_present_when_enabled() {
     assert_eq!(relay_effective_strategy, "local_only");
     assert!(!relay_p2p_attached);
 }
-
 #[tokio::test]
 async fn connect_status_forces_unknown_relay_strategy_to_local_only() {
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = "bogus_strategy";
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
-
     let resp = connect_aggregate_status(&app, &cfg).await;
     assert_eq!(resp.status(), StatusCode::OK);
-
     let body = http_body_util::BodyExt::collect(resp.into_body())
         .await
         .expect("collect body")
@@ -1328,7 +1300,6 @@ async fn connect_status_forces_unknown_relay_strategy_to_local_only() {
     assert_eq!(relay_effective_strategy, "local_only");
     assert!(!relay_p2p_attached);
 }
-
 #[tokio::test]
 async fn connect_status_normalizes_relay_strategy_aliases() {
     for (raw_strategy, expected) in [
@@ -1341,10 +1312,8 @@ async fn connect_status_normalizes_relay_strategy_aliases() {
         cfg.torii.connect.relay_strategy = raw_strategy;
         let torii = build_torii(&cfg);
         let app = torii.api_router_for_tests();
-
         let resp = connect_aggregate_status(&app, &cfg).await;
         assert_eq!(resp.status(), StatusCode::OK);
-
         let body = http_body_util::BodyExt::collect(resp.into_body())
             .await
             .expect("collect body")
@@ -1390,19 +1359,16 @@ async fn connect_status_normalizes_relay_strategy_aliases() {
         assert!(!relay_p2p_attached);
     }
 }
-
 #[tokio::test]
 async fn connect_status_reports_broadcast_effective_when_p2p_attached() {
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = "broadcast";
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
-
     let mut payload_opt = None;
     for _ in 0..50 {
         let resp = connect_aggregate_status(&app, &cfg).await;
         assert_eq!(resp.status(), StatusCode::OK);
-
         let body = http_body_util::BodyExt::collect(resp.into_body())
             .await
             .expect("collect body")
@@ -1421,7 +1387,6 @@ async fn connect_status_reports_broadcast_effective_when_p2p_attached() {
         tokio::time::sleep(core::time::Duration::from_millis(20)).await;
     }
     let payload = payload_opt.expect("p2p should attach to connect bus");
-
     let relay_strategy = payload
         .get("policy")
         .and_then(|policy| policy.get("relay_strategy"))
@@ -1445,14 +1410,12 @@ async fn connect_status_reports_broadcast_effective_when_p2p_attached() {
         .get("p2p_rebroadcast_skipped_total")
         .and_then(norito::json::Value::as_u64)
         .expect("connect status should include p2p_rebroadcast_skipped_total");
-
     assert_eq!(relay_strategy, "broadcast");
     assert_eq!(relay_effective_strategy, "broadcast");
     assert!(relay_p2p_attached);
     assert_eq!(p2p_rebroadcasts_total, 0);
     assert_eq!(p2p_rebroadcast_skipped_total, 0);
 }
-
 #[tokio::test]
 async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached() {
     let mut cfg = minimal_actual_config(true);
@@ -1460,12 +1423,10 @@ async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached
     cfg.torii.connect.relay_strategy = "broadcast";
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
-
     let mut payload_opt = None;
     for _ in 0..50 {
         let resp = connect_aggregate_status(&app, &cfg).await;
         assert_eq!(resp.status(), StatusCode::OK);
-
         let body = http_body_util::BodyExt::collect(resp.into_body())
             .await
             .expect("collect body")
@@ -1484,7 +1445,6 @@ async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached
         tokio::time::sleep(core::time::Duration::from_millis(20)).await;
     }
     let payload = payload_opt.expect("p2p should attach to connect bus");
-
     let relay_strategy = payload
         .get("policy")
         .and_then(|policy| policy.get("relay_strategy"))
@@ -1508,26 +1468,22 @@ async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached
         .get("p2p_rebroadcast_skipped_total")
         .and_then(norito::json::Value::as_u64)
         .expect("connect status should include p2p_rebroadcast_skipped_total");
-
     assert_eq!(relay_strategy, "broadcast");
     assert_eq!(relay_effective_strategy, "local_only");
     assert!(relay_p2p_attached);
     assert_eq!(p2p_rebroadcasts_total, 0);
     assert_eq!(p2p_rebroadcast_skipped_total, 0);
 }
-
 #[tokio::test]
 async fn connect_status_reports_unknown_strategy_as_local_only_with_p2p_attached() {
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = "bogus_strategy";
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
-
     let mut payload_opt = None;
     for _ in 0..50 {
         let resp = connect_aggregate_status(&app, &cfg).await;
         assert_eq!(resp.status(), StatusCode::OK);
-
         let body = http_body_util::BodyExt::collect(resp.into_body())
             .await
             .expect("collect body")
@@ -1546,7 +1502,6 @@ async fn connect_status_reports_unknown_strategy_as_local_only_with_p2p_attached
         tokio::time::sleep(core::time::Duration::from_millis(20)).await;
     }
     let payload = payload_opt.expect("p2p should attach to connect bus");
-
     let relay_strategy = payload
         .get("policy")
         .and_then(|policy| policy.get("relay_strategy"))
@@ -1570,20 +1525,17 @@ async fn connect_status_reports_unknown_strategy_as_local_only_with_p2p_attached
         .get("p2p_rebroadcast_skipped_total")
         .and_then(norito::json::Value::as_u64)
         .expect("connect status should include p2p_rebroadcast_skipped_total");
-
     assert_eq!(relay_strategy, "local_only");
     assert_eq!(relay_effective_strategy, "local_only");
     assert!(relay_p2p_attached);
     assert_eq!(p2p_rebroadcasts_total, 0);
     assert_eq!(p2p_rebroadcast_skipped_total, 0);
 }
-
 #[tokio::test]
 async fn connect_session_delete_endpoint_removes_tokens() {
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
-
     let (_sid_fixed, req_body) = connect_session_request_body(0x24);
     let create_resp = app
         .clone()
@@ -1613,7 +1565,6 @@ async fn connect_session_delete_endpoint_removes_tokens() {
         .and_then(|x| x.as_str())
         .expect("token_management present")
         .to_owned();
-
     let delete_uri = format!("/v1/connect/session/{sid}");
     let missing_token_resp = app
         .clone()
@@ -1627,7 +1578,6 @@ async fn connect_session_delete_endpoint_removes_tokens() {
         .await
         .unwrap();
     assert_eq!(missing_token_resp.status(), StatusCode::UNAUTHORIZED);
-
     let delete_resp = app
         .clone()
         .oneshot(
@@ -1644,7 +1594,6 @@ async fn connect_session_delete_endpoint_removes_tokens() {
         .await
         .unwrap();
     assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
-
     let delete_again = app
         .oneshot(
             Request::builder()
@@ -1661,13 +1610,11 @@ async fn connect_session_delete_endpoint_removes_tokens() {
         .unwrap();
     assert_eq!(delete_again.status(), StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn connect_session_status_requires_management_token() {
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
-
     let (_sid_fixed, req_body) = connect_session_request_body(0x34);
     let create_resp = app
         .clone()
@@ -1695,7 +1642,6 @@ async fn connect_session_status_requires_management_token() {
         .get("token_management")
         .and_then(|x| x.as_str())
         .expect("token_management present");
-
     let status_uri = format!("/v1/connect/status?sid={sid}");
     let missing_sid_resp = app
         .clone()
@@ -1712,7 +1658,6 @@ async fn connect_session_status_requires_management_token() {
         .await
         .unwrap();
     assert_eq!(missing_sid_resp.status(), StatusCode::BAD_REQUEST);
-
     let missing_token_resp = app
         .clone()
         .oneshot(
@@ -1724,7 +1669,6 @@ async fn connect_session_status_requires_management_token() {
         .await
         .unwrap();
     assert_eq!(missing_token_resp.status(), StatusCode::UNAUTHORIZED);
-
     let status_resp = app
         .oneshot(
             Request::builder()
@@ -1751,18 +1695,15 @@ async fn connect_session_status_requires_management_token() {
         Some(false)
     );
 }
-
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_session_delete_rejects_ws_attach() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
-
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -1773,10 +1714,8 @@ async fn connect_session_delete_rejects_ws_attach() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-
     // Use a second router handle for in-process REST calls.
     let app2 = torii.api_router_for_tests();
-
     let (sid_fixed, req_body) = connect_session_request_body(0x44);
     let create_resp = app2
         .clone()
@@ -1809,7 +1748,6 @@ async fn connect_session_delete_rejects_ws_attach() {
         .get("token_management")
         .and_then(|x| x.as_str())
         .expect("token_management");
-
     // Delete the session through REST and ensure it reports success.
     let delete_uri = format!("/v1/connect/session/{sid}");
     let delete_resp = app2
@@ -1828,7 +1766,6 @@ async fn connect_session_delete_rejects_ws_attach() {
         .await
         .unwrap();
     assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
-
     // Attempt to attach over WS using the stale token; expect 401.
     let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut request = url.into_client_request().expect("ws request");
@@ -1846,7 +1783,6 @@ async fn connect_session_delete_rejects_ws_attach() {
         Err(err) => panic!("unexpected ws failure: {err:?}"),
     }
 }
-
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_handshake_succeeds_when_enabled() {
@@ -1868,10 +1804,8 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-
     // Create a session via in-process router call to obtain tokens and sid
     let app2 = torii.api_router_for_tests();
-
     let (sid_fixed, req_body) = connect_session_request_body(0x52);
     let res = app2
         .clone()
@@ -1897,7 +1831,6 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
         .get("token_app")
         .and_then(|x| x.as_str())
         .expect("token_app");
-
     // Attempt WS connect using the provided sid/token
     let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut request = url.into_client_request().expect("ws request");
@@ -1912,18 +1845,15 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
         .expect("ws handshake ok");
     assert_eq!(resp.status(), StatusCode::SWITCHING_PROTOCOLS);
 }
-
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_accepts_protocol_token() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::header};
-
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
-
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -1934,9 +1864,7 @@ async fn connect_ws_accepts_protocol_token() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-
     let app2 = torii.api_router_for_tests();
-
     let (sid_fixed, req_body) = connect_session_request_body(0x62);
     let res = app2
         .clone()
@@ -1962,7 +1890,6 @@ async fn connect_ws_accepts_protocol_token() {
         .get("token_app")
         .and_then(|x| x.as_str())
         .expect("token_app");
-
     let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut request = url.into_client_request().expect("ws request");
     let encoded = B64.encode(token_app.as_bytes());
@@ -1977,7 +1904,6 @@ async fn connect_ws_accepts_protocol_token() {
         .expect("ws handshake ok");
     assert_eq!(resp.status(), StatusCode::SWITCHING_PROTOCOLS);
 }
-
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_closes_on_role_direction_mismatch() {
@@ -1987,11 +1913,9 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     use tokio::net::TcpListener;
     use tokio::time::{Duration, sleep, timeout};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
-
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -2002,9 +1926,7 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-
     let app2 = torii.api_router_for_tests();
-
     let (sid_fixed, req_body) = connect_session_request_body(0x92);
     let res = app2
         .clone()
@@ -2030,11 +1952,9 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
         .get("token_app")
         .and_then(|x| x.as_str())
         .expect("token_app");
-
     let mut sid_bytes = [0u8; 32];
     let sid_vec = B64.decode(sid).expect("decode sid");
     sid_bytes.copy_from_slice(&sid_vec);
-
     // Attach as app, then send a mismatched direction (WalletToApp).
     let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut request = url.into_client_request().expect("ws request");
@@ -2048,7 +1968,6 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
         .await
         .expect("ws handshake ok");
     assert_eq!(resp.status(), StatusCode::SWITCHING_PROTOCOLS);
-
     let mismatch = proto::ConnectFrameV1 {
         sid: sid_bytes,
         dir: proto::Dir::WalletToApp,
@@ -2059,7 +1978,6 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     ws.send(Message::Binary(payload.into()))
         .await
         .expect("send mismatch frame");
-
     let mut saw_connect_close = false;
     let mut saw_ws_close = false;
     for _ in 0..5 {
@@ -2097,7 +2015,6 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
         saw_connect_close || saw_ws_close,
         "expected websocket termination after role/direction mismatch"
     );
-
     // Poll status until mismatch closure is reflected.
     let mut mismatch_total = 0u64;
     let mut sessions_total = u64::MAX;
@@ -2125,7 +2042,6 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     assert!(mismatch_total >= 1, "mismatch counter should increment");
     assert_eq!(sessions_total, 0, "session should be terminated");
 }
-
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_duplicate_frame_does_not_close_session() {
@@ -2135,11 +2051,9 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     use tokio::net::TcpListener;
     use tokio::time::{Duration, timeout};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
-
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -2150,9 +2064,7 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-
     let app2 = torii.api_router_for_tests();
-
     let (sid_fixed, req_body) = connect_session_request_body(0xA3);
     let res = app2
         .clone()
@@ -2182,11 +2094,9 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
         .get("token_wallet")
         .and_then(|x| x.as_str())
         .expect("token_wallet");
-
     let mut sid_bytes = [0u8; 32];
     let sid_vec = B64.decode(sid).expect("decode sid");
     sid_bytes.copy_from_slice(&sid_vec);
-
     // Connect app role.
     let app_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut app_req = app_url.into_client_request().expect("app ws request");
@@ -2200,7 +2110,6 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
         .await
         .expect("app ws handshake ok");
     assert_eq!(app_resp.status(), StatusCode::SWITCHING_PROTOCOLS);
-
     // Connect wallet role.
     let wallet_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=wallet");
     let mut wallet_req = wallet_url.into_client_request().expect("wallet ws request");
@@ -2214,7 +2123,6 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
         .await
         .expect("wallet ws handshake ok");
     assert_eq!(wallet_resp.status(), StatusCode::SWITCHING_PROTOCOLS);
-
     let seq1 = proto::ConnectFrameV1 {
         sid: sid_bytes,
         dir: proto::Dir::AppToWallet,
@@ -2229,7 +2137,6 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
         ))
         .await
         .expect("send seq1");
-
     // Wallet should receive first frame.
     let first = timeout(Duration::from_millis(500), wallet_ws.next())
         .await
@@ -2241,7 +2148,6 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
         other => panic!("expected binary frame, got {other:?}"),
     };
     assert_eq!(first_frame.seq, 1);
-
     // Send duplicate seq=1; dedupe should drop it and keep session alive.
     app_ws
         .send(Message::Binary(
@@ -2263,7 +2169,6 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
             .is_err(),
         "duplicate frame should not close app websocket"
     );
-
     let seq2 = proto::ConnectFrameV1 {
         sid: sid_bytes,
         dir: proto::Dir::AppToWallet,
@@ -2288,7 +2193,6 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
         other => panic!("expected binary frame, got {other:?}"),
     };
     assert_eq!(second_frame.seq, 2);
-
     let status = connect_aggregate_status(&app2, &cfg).await;
     assert_eq!(status.status(), StatusCode::OK);
     let status_body = http_body_util::BodyExt::collect(status.into_body())
@@ -2310,7 +2214,6 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
         "duplicate frame must not trigger sequence-violation close"
     );
 }
-
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
@@ -2320,13 +2223,11 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     use tokio::net::TcpListener;
     use tokio::time::{Duration, sleep};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = "broadcast";
     cfg.torii.connect.p2p_ttl_hops = 1;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
-
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -2337,7 +2238,6 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-
     let app2 = torii.api_router_for_tests();
     let (sid_fixed, req_body) = connect_session_request_body(0xB4);
     let res = app2
@@ -2364,11 +2264,9 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
         .get("token_app")
         .and_then(|x| x.as_str())
         .expect("token_app");
-
     let mut sid_bytes = [0u8; 32];
     let sid_vec = B64.decode(sid).expect("decode sid");
     sid_bytes.copy_from_slice(&sid_vec);
-
     // Wait until async bus attachment reports active P2P relay wiring.
     let mut relay_p2p_attached = false;
     for _ in 0..50 {
@@ -2390,7 +2288,6 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
         sleep(Duration::from_millis(20)).await;
     }
     assert!(relay_p2p_attached, "connect relay should attach P2P bus");
-
     let app_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut app_req = app_url.into_client_request().expect("app ws request");
     app_req.headers_mut().insert(
@@ -2403,7 +2300,6 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
         .await
         .expect("app ws handshake ok");
     assert_eq!(app_resp.status(), StatusCode::SWITCHING_PROTOCOLS);
-
     let seq1 = proto::ConnectFrameV1 {
         sid: sid_bytes,
         dir: proto::Dir::AppToWallet,
@@ -2418,7 +2314,6 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
         ))
         .await
         .expect("send seq1");
-
     let mut rebroadcasts = 0u64;
     let mut skipped = 0u64;
     let mut relay_effective_strategy = String::new();
@@ -2455,7 +2350,6 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
         }
         sleep(Duration::from_millis(20)).await;
     }
-
     assert!(rebroadcasts >= 1, "expected at least one p2p rebroadcast");
     assert_eq!(
         skipped, 0,
@@ -2464,7 +2358,6 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     assert_eq!(relay_effective_strategy, "broadcast");
     assert!(relay_p2p_attached);
 }
-
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter() {
@@ -2474,13 +2367,11 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     use tokio::net::TcpListener;
     use tokio::time::{Duration, sleep};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = "broadcast";
     cfg.torii.connect.p2p_ttl_hops = 1;
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
-
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -2493,7 +2384,6 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-
     let app2 = torii.api_router_for_tests();
     let (sid_fixed, req_body) = connect_session_request_body(0xC5);
     let res = app2
@@ -2520,11 +2410,9 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
         .get("token_app")
         .and_then(|x| x.as_str())
         .expect("token_app");
-
     let mut sid_bytes = [0u8; 32];
     let sid_vec = B64.decode(sid).expect("decode sid");
     sid_bytes.copy_from_slice(&sid_vec);
-
     let app_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut app_req = app_url.into_client_request().expect("app ws request");
     app_req.headers_mut().insert(
@@ -2537,7 +2425,6 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
         .await
         .expect("app ws handshake ok");
     assert_eq!(app_resp.status(), StatusCode::SWITCHING_PROTOCOLS);
-
     let seq1 = proto::ConnectFrameV1 {
         sid: sid_bytes,
         dir: proto::Dir::AppToWallet,
@@ -2552,7 +2439,6 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
         ))
         .await
         .expect("send seq1");
-
     let mut rebroadcasts = 0u64;
     let mut skipped = 0u64;
     let mut relay_effective_strategy = String::new();
@@ -2589,7 +2475,6 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
         }
         sleep(Duration::from_millis(20)).await;
     }
-
     assert_eq!(rebroadcasts, 0);
     assert!(
         skipped >= 1,
@@ -2598,7 +2483,6 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     assert_eq!(relay_effective_strategy, "local_only");
     assert!(!relay_p2p_attached);
 }
-
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
@@ -2608,12 +2492,10 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     use tokio::net::TcpListener;
     use tokio::time::{Duration, sleep};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = "local_only";
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
-
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -2624,7 +2506,6 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-
     let app2 = torii.api_router_for_tests();
     let (sid_fixed, req_body) = connect_session_request_body(0xD6);
     let res = app2
@@ -2651,11 +2532,9 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
         .get("token_app")
         .and_then(|x| x.as_str())
         .expect("token_app");
-
     let mut sid_bytes = [0u8; 32];
     let sid_vec = B64.decode(sid).expect("decode sid");
     sid_bytes.copy_from_slice(&sid_vec);
-
     // Wait for async P2P bus attachment before sending frames.
     let mut relay_p2p_attached = false;
     for _ in 0..50 {
@@ -2677,7 +2556,6 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
         sleep(Duration::from_millis(20)).await;
     }
     assert!(relay_p2p_attached, "connect relay should attach P2P bus");
-
     let app_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut app_req = app_url.into_client_request().expect("app ws request");
     app_req.headers_mut().insert(
@@ -2690,7 +2568,6 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
         .await
         .expect("app ws handshake ok");
     assert_eq!(app_resp.status(), StatusCode::SWITCHING_PROTOCOLS);
-
     let seq1 = proto::ConnectFrameV1 {
         sid: sid_bytes,
         dir: proto::Dir::AppToWallet,
@@ -2705,7 +2582,6 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
         ))
         .await
         .expect("send seq1");
-
     let mut rebroadcasts = 0u64;
     let mut skipped = 0u64;
     let mut relay_effective_strategy = String::new();
@@ -2742,13 +2618,11 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
         }
         sleep(Duration::from_millis(20)).await;
     }
-
     assert_eq!(rebroadcasts, 0);
     assert_eq!(skipped, 0);
     assert_eq!(relay_effective_strategy, "local_only");
     assert!(relay_p2p_attached);
 }
-
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
@@ -2758,13 +2632,11 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     use tokio::net::TcpListener;
     use tokio::time::{Duration, sleep};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_enabled = false;
     cfg.torii.connect.relay_strategy = "broadcast";
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
-
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -2775,7 +2647,6 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-
     let app2 = torii.api_router_for_tests();
     let (sid_fixed, req_body) = connect_session_request_body(0xE7);
     let res = app2
@@ -2802,11 +2673,9 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
         .get("token_app")
         .and_then(|x| x.as_str())
         .expect("token_app");
-
     let mut sid_bytes = [0u8; 32];
     let sid_vec = B64.decode(sid).expect("decode sid");
     sid_bytes.copy_from_slice(&sid_vec);
-
     // Wait for async P2P bus attachment before sending frames.
     let mut relay_p2p_attached = false;
     for _ in 0..50 {
@@ -2828,7 +2697,6 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
         sleep(Duration::from_millis(20)).await;
     }
     assert!(relay_p2p_attached, "connect relay should attach P2P bus");
-
     let app_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut app_req = app_url.into_client_request().expect("app ws request");
     app_req.headers_mut().insert(
@@ -2841,7 +2709,6 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
         .await
         .expect("app ws handshake ok");
     assert_eq!(app_resp.status(), StatusCode::SWITCHING_PROTOCOLS);
-
     let seq1 = proto::ConnectFrameV1 {
         sid: sid_bytes,
         dir: proto::Dir::AppToWallet,
@@ -2856,7 +2723,6 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
         ))
         .await
         .expect("send seq1");
-
     let mut rebroadcasts = 0u64;
     let mut skipped = 0u64;
     let mut relay_effective_strategy = String::new();
@@ -2893,23 +2759,19 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
         }
         sleep(Duration::from_millis(20)).await;
     }
-
     assert_eq!(rebroadcasts, 0);
     assert_eq!(skipped, 0);
     assert_eq!(relay_effective_strategy, "local_only");
     assert!(relay_p2p_attached);
 }
-
 #[cfg(feature = "ws_integration_tests")]
 #[tokio::test]
 async fn connect_ws_rejects_query_token() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
-
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
-
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -2920,7 +2782,6 @@ async fn connect_ws_rejects_query_token() {
     };
     let addr = listener.local_addr().unwrap();
     spawn_test_server(listener, app);
-
     let sid = B64.encode([0x72u8; 32]);
     let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app&token=deadbeef");
     let err = tokio_tungstenite::connect_async(&url)
@@ -2932,5 +2793,4 @@ async fn connect_ws_rejects_query_token() {
     };
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
-
 include!("connect_gating_disabled_ws_test.rs");

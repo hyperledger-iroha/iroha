@@ -1,5 +1,4 @@
 // Allocation-free syntax and allocation-profile scan for generic fanout JSON.
-
 fn preflight_torii_fanout_json(
     bytes: &[u8],
     limits: ToriiFanoutJsonLimits,
@@ -11,7 +10,6 @@ fn preflight_torii_fanout_json(
     )?;
     core::str::from_utf8(bytes)
         .map_err(|error| ToriiAppFanoutMemoryError::syntax(error.valid_up_to(), "invalid UTF-8"))?;
-
     let mut scanner = ToriiFanoutJsonScanner {
         bytes,
         offset: 0,
@@ -29,35 +27,29 @@ fn preflight_torii_fanout_json(
     }
     scanner.profile.finish(limits)
 }
-
 struct ToriiFanoutJsonScanner<'a> {
     bytes: &'a [u8],
     offset: usize,
     limits: ToriiFanoutJsonLimits,
     profile: ToriiFanoutJsonProfile,
 }
-
 impl ToriiFanoutJsonScanner<'_> {
     fn syntax(&self, detail: &'static str) -> ToriiAppFanoutMemoryError {
         ToriiAppFanoutMemoryError::syntax(self.offset, detail)
     }
-
     fn peek(&self) -> Option<u8> {
         self.bytes.get(self.offset).copied()
     }
-
     fn bump(&mut self) -> Option<u8> {
         let byte = self.peek()?;
         self.offset += 1;
         Some(byte)
     }
-
     fn skip_whitespace(&mut self) {
         while matches!(self.peek(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
             self.offset += 1;
         }
     }
-
     fn expect(
         &mut self,
         expected: u8,
@@ -68,7 +60,6 @@ impl ToriiFanoutJsonScanner<'_> {
         }
         Ok(())
     }
-
     fn add_counter(
         counter: &mut usize,
         resource: ToriiAppFanoutResource,
@@ -81,7 +72,6 @@ impl ToriiFanoutJsonScanner<'_> {
         *counter = next;
         Ok(())
     }
-
     fn add_bytes(
         counter: &mut usize,
         bytes: usize,
@@ -95,7 +85,6 @@ impl ToriiFanoutJsonScanner<'_> {
         *counter = next;
         Ok(())
     }
-
     fn parse_value(&mut self, depth: usize) -> Result<(), ToriiAppFanoutMemoryError> {
         let depth_limit = self
             .limits
@@ -121,7 +110,6 @@ impl ToriiFanoutJsonScanner<'_> {
             None => Err(self.syntax("unexpected end of JSON")),
         }
     }
-
     fn parse_literal(
         &mut self,
         literal: &[u8],
@@ -137,7 +125,6 @@ impl ToriiFanoutJsonScanner<'_> {
         self.offset = end;
         Ok(())
     }
-
     fn parse_array(&mut self, depth: usize) -> Result<(), ToriiAppFanoutMemoryError> {
         self.profile.arrays =
             self.profile.arrays.checked_add(1).ok_or_else(|| {
@@ -172,7 +159,6 @@ impl ToriiFanoutJsonScanner<'_> {
             }
         }
     }
-
     fn parse_object(&mut self, depth: usize) -> Result<(), ToriiAppFanoutMemoryError> {
         self.profile.objects =
             self.profile.objects.checked_add(1).ok_or_else(|| {
@@ -213,7 +199,6 @@ impl ToriiFanoutJsonScanner<'_> {
             }
         }
     }
-
     fn parse_string(&mut self) -> Result<(), ToriiAppFanoutMemoryError> {
         let token_start = self.offset;
         self.expect(b'"', "expected string")?;
@@ -256,7 +241,6 @@ impl ToriiFanoutJsonScanner<'_> {
                 self.limits.decoded_string_bytes,
             )?;
         }
-
         let token_bytes = self.offset.checked_sub(token_start).ok_or_else(|| {
             ToriiAppFanoutMemoryError::overflow("JSON string token length underflow")
         })?;
@@ -280,7 +264,6 @@ impl ToriiFanoutJsonScanner<'_> {
             ToriiAppFanoutResource::DecodedStringBytes,
             self.limits.decoded_string_bytes,
         )?;
-
         // The fast path owns exactly the source content. The escaped path's
         // capacity starts at 16 and grows geometrically; decoded UTF-8 never
         // exceeds its encoded source spelling.
@@ -302,7 +285,6 @@ impl ToriiFanoutJsonScanner<'_> {
         }
         Ok(())
     }
-
     fn parse_unicode_escape(&mut self) -> Result<usize, ToriiAppFanoutMemoryError> {
         let high = self.parse_hex_quad()?;
         if (0xd800..=0xdbff).contains(&high) {
@@ -321,7 +303,6 @@ impl ToriiFanoutJsonScanner<'_> {
             .map(char::len_utf8)
             .ok_or_else(|| self.syntax("invalid Unicode scalar"))
     }
-
     fn parse_hex_quad(&mut self) -> Result<u32, ToriiAppFanoutMemoryError> {
         let mut value = 0u32;
         for _ in 0..4 {
@@ -338,7 +319,6 @@ impl ToriiFanoutJsonScanner<'_> {
         }
         Ok(value)
     }
-
     fn parse_number(&mut self) -> Result<(), ToriiAppFanoutMemoryError> {
         if self.peek() == Some(b'-') {
             self.offset += 1;

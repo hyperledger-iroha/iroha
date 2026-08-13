@@ -3,7 +3,6 @@
 //! Ensures derive/proc-macro diagnostics remain stable using `trybuild`.
 #![cfg(all(feature = "trybuild-tests", not(coverage)))]
 use trybuild::TestCases;
-
 #[test]
 fn ui() {
     let test_cases = TestCases::new();

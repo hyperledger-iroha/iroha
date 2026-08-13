@@ -4,7 +4,6 @@
     clippy::doc_link_with_quotes,
     clippy::assertions_on_constants
 )]
-
 use std::{
     collections::BTreeMap,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
@@ -12,7 +11,6 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     account::{AccountId, curve::CurveId},
@@ -22,7 +20,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use nonzero_ext::nonzero;
-
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
     let domain_id =
         DomainId::parse_fully_qualified(domain).expect("default asset definition domain");
@@ -35,7 +32,6 @@ fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
 /// Cryptography configuration defaults.
 pub mod crypto {
     use super::*;
-
     /// Preview toggle for OpenSSL-backed SM helpers.
     pub const ENABLE_SM_OPENSSL_PREVIEW: bool = false;
     /// Default SM intrinsic dispatch policy.
@@ -118,7 +114,6 @@ pub mod ivm {
 /// Embedded Soracloud runtime-manager defaults.
 pub mod soracloud_runtime {
     use super::*;
-
     /// Enable Soracloud production posture checks.
     pub const PRODUCTION_MODE: bool = false;
     /// Default root directory for Soracloud runtime-manager state.
@@ -255,7 +250,6 @@ pub mod soracloud_runtime {
 /// Pending-transaction queue defaults used by consensus and Torii.
 pub mod queue {
     use super::*;
-
     /// Maximum number of transactions the global queue holds concurrently.
     pub const CAPACITY: NonZeroUsize = nonzero!(4_usize * 2_usize.pow(16));
     /// Maximum number of transactions accepted per authority (prevents one authority from
@@ -275,7 +269,6 @@ pub mod queue {
 /// Transaction admission defaults enforced at pipeline ingress.
 pub mod transaction {
     use super::*;
-
     /// Maximum signatures accepted on a transaction payload.
     pub const fn max_signatures() -> NonZeroU64 {
         nonzero!(16_u64)
@@ -295,7 +288,6 @@ pub mod transaction {
 /// Compute lane defaults.
 pub mod compute {
     use std::str::FromStr;
-
     use iroha_config_base::util::Bytes;
     use iroha_data_model::{
         compute::{
@@ -306,9 +298,7 @@ pub mod compute {
         },
         name::Name,
     };
-
     use super::*;
-
     /// Whether the compute lane is enabled by default.
     pub const ENABLED: bool = false;
     /// Default TTL (slots) applied to compute calls.
@@ -486,7 +476,6 @@ pub mod compute {
 /// Content lane defaults.
 pub mod content {
     use iroha_data_model::da::prelude::DaStripeLayout;
-
     /// Maximum tarball size accepted for a single content bundle (bytes).
     pub const MAX_BUNDLE_BYTES: u64 = 1_048_576;
     /// Maximum number of files in a bundle.
@@ -539,9 +528,7 @@ pub mod content {
 /// Oracle pipeline defaults.
 pub mod oracle {
     use iroha_data_model::prelude::Name;
-
     use super::*;
-
     /// Public-only custody identity for the oracle reward pool.
     ///
     /// The compressed point is the first canonical prime-order Ed25519 point
@@ -702,13 +689,9 @@ pub mod oracle {
 /// Kura block-store defaults.
 pub mod kura {
     use std::{num::NonZeroUsize, time::Duration};
-
     use nonzero_ext::nonzero;
-
     use iroha_config_base::util::Bytes;
-
     use crate::{kura::FsyncMode, parameters::actual::KuraReplicaAdvertPolicy};
-
     /// Directory for Kura storage relative to the node working directory.
     pub const STORE_DIR: &str = "./storage";
     /// Number of blocks cached in memory to accelerate lookups.
@@ -996,7 +979,6 @@ pub mod network {
 /// Snapshotting defaults for archival state dumps.
 pub mod snapshot {
     use super::*;
-
     /// Directory for snapshot files relative to node root.
     pub const STORE_DIR: &str = "./storage/snapshot";
     // 10 mins
@@ -1023,7 +1005,6 @@ pub mod snapshot {
 /// Norito streaming control-plane defaults.
 pub mod streaming {
     use norito::streaming::CapabilityFlags;
-
     /// Directory for persisted streaming session snapshots relative to the node root.
     pub const SESSION_STORE_DIR: &str = "./storage/streaming";
     /// Feature bitmask advertised during capability negotiation (baseline feedback + privacy provider + bundled entropy).
@@ -1031,7 +1012,6 @@ pub mod streaming {
     /// Defaults applied to SoraNet circuit integration for streaming routes.
     pub mod soranet {
         use iroha_config_base::util::Bytes;
-
         /// Enable automatic SoraNet provisioning for streaming routes by default.
         pub const ENABLED: bool = true;
         /// Default exit relay multiaddr used when none is provided in manifests.
@@ -1060,7 +1040,6 @@ pub mod streaming {
     /// Defaults applied to SoraVPN local provisioning spools.
     pub mod soravpn {
         use iroha_config_base::util::Bytes;
-
         /// Directory used to spool SoraVPN route updates before VPN nodes ingest them.
         pub const PROVISION_SPOOL_DIR: &str = "./storage/streaming/soravpn_routes";
         /// Maximum on-disk footprint for the SoraVPN provision spool (0 = unlimited).
@@ -1082,7 +1061,6 @@ pub mod streaming {
     /// Codec gating defaults.
     pub mod codec {
         use std::path::PathBuf;
-
         /// Default CABAC runtime mode (`disabled`).
         pub const CABAC_MODE: &str = "disabled";
         /// Bundled entropy mode advertised by all supported builds (requires `ENABLE_RANS_BUNDLES=1`).
@@ -1123,9 +1101,7 @@ pub mod sorafs {
     /// Defaults governing the embedded SoraFS storage worker.
     pub mod storage {
         use std::path::PathBuf;
-
         use iroha_config_base::util::Bytes;
-
         /// Feature toggle for the embedded SoraFS storage worker.
         pub const ENABLED: bool = false;
         /// Default root directory for pinned chunks and manifest metadata.
@@ -1153,7 +1129,6 @@ pub mod sorafs {
         /// policy plus runtime-injected signer/KMS/authentication dependencies.
         pub mod pop_credentials {
             use std::path::PathBuf;
-
             /// PoP service routes and workers are disabled by default.
             pub const ENABLED: bool = false;
             /// Required dual-control quorum when the service is enabled.
@@ -1184,9 +1159,7 @@ pub mod sorafs {
         /// Finalized-chain moderation orchestrator defaults.
         pub mod moderation_orchestrator {
             use std::path::PathBuf;
-
             use iroha_config_base::util::Bytes;
-
             /// Native moderation orchestration is disabled until every
             /// runtime-only signer, reader, and terminal sink is injected.
             pub const ENABLED: bool = false;
@@ -1248,9 +1221,7 @@ pub mod sorafs {
         /// Finalized-ledger reputation projector and external publication defaults.
         pub mod reputation_runtime {
             use std::path::PathBuf;
-
             use iroha_config_base::util::Bytes;
-
             /// The committed projector is opt-in until every runtime-only
             /// finalized-query, sealed journal-checkpoint, threshold-signer,
             /// Governance DAG, and native journal-transaction dependency is
@@ -1310,9 +1281,7 @@ pub mod sorafs {
         /// Finalized reserve-event transparency scanner defaults.
         pub mod reserve_transparency_runtime {
             use std::path::PathBuf;
-
             use iroha_config_base::util::Bytes;
-
             /// The scanner is opt-in with the committed reputation archive.
             pub const ENABLED: bool = false;
             /// Normal exact-anchor scan cadence.
@@ -1333,7 +1302,6 @@ pub mod sorafs {
         /// Finalized-ledger hedging/billing supervisor defaults.
         pub mod hedging_billing_runtime {
             use std::path::PathBuf;
-
             /// Disabled until all identity-pinned runtime-only adapters and
             /// reviewed public policy artifacts are supplied.
             pub const ENABLED: bool = false;
@@ -1387,7 +1355,6 @@ pub mod sorafs {
             /// an activation request.
             pub mod provider_attestation_journal {
                 use iroha_config_base::util::Bytes;
-
                 /// Request capture-child activation; stock `irohad` currently rejects
                 /// this request until a concrete child is qualified.
                 pub const ENABLED: bool = false;
@@ -1450,7 +1417,6 @@ pub mod sorafs {
             /// Daemon-owned immutable finalized-assignment archive defaults.
             pub mod finalized_archive {
                 use iroha_config_base::util::Bytes;
-
                 /// Relative archive namespace below the resolved Kura root.
                 pub const RELATIVE_ROOT: &str = "provider-ingest-finalized-archive-v1";
                 /// Maximum canonical bytes admitted for one immutable anchor record.
@@ -1476,7 +1442,6 @@ pub mod sorafs {
             /// Durable provider-ingest completion-outbox defaults.
             pub mod outbox {
                 use iroha_config_base::util::Bytes;
-
                 /// Maximum non-terminal ingest jobs.
                 pub const MAX_ACTIVE_ENTRIES: usize = 128;
                 /// Maximum retained terminal tombstones.
@@ -1592,7 +1557,6 @@ pub mod sorafs {
         /// Defaults for the durable admission-bound PDP provider protocol.
         pub mod pdp_provider {
             use iroha_config_base::util::Bytes;
-
             /// Maximum pending challenges retained by one provider runtime.
             pub const MAX_PENDING_RECORDS: u32 = 4_096;
             /// Maximum compact terminal replay records retained by one provider runtime.
@@ -1651,9 +1615,7 @@ pub mod sorafs {
         /// Always-on Governance DAG public publisher defaults.
         pub mod governance_dag_service {
             use std::path::PathBuf;
-
             use iroha_config_base::util::Bytes;
-
             /// The public publisher is opt-in until endpoints and secret paths are configured.
             pub const ENABLED: bool = false;
             /// Head publication mode (`signed_http` or `ipns`).
@@ -1702,10 +1664,8 @@ pub mod sorafs {
         /// Durable native orderbook transaction worker defaults.
         pub mod orderbook_worker {
             use std::num::{NonZeroU32, NonZeroU64};
-
             use iroha_config_base::util::Bytes;
             use nonzero_ext::nonzero;
-
             /// New work generation is opt-in; storage enablement still activates durable drain.
             pub const ENABLED: bool = false;
             /// Finalized-state scan cadence.
@@ -1744,10 +1704,8 @@ pub mod sorafs {
         /// Durable native reserve/rent transaction worker defaults.
         pub mod reserve_worker {
             use std::num::{NonZeroU32, NonZeroU64};
-
             use iroha_config_base::util::Bytes;
             use nonzero_ext::nonzero;
-
             /// New work generation is opt-in; storage enablement still activates durable drain.
             pub const ENABLED: bool = false;
             /// Finalized-state scan cadence.
@@ -1841,9 +1799,7 @@ pub mod sorafs {
         /// Production SFM-4b3 evidence-viewer defaults.
         pub mod evidence_viewer {
             use std::path::PathBuf;
-
             use iroha_config_base::util::Bytes;
-
             /// Evidence viewing is disabled until every runtime security
             /// boundary and governed identity is injected.
             pub const ENABLED: bool = false;
@@ -1929,7 +1885,6 @@ pub mod sorafs {
     /// Defaults for the SoraFS GC scheduler configuration.
     pub mod gc {
         use std::path::PathBuf;
-
         /// Enable the GC worker (disabled by default).
         pub const ENABLED: bool = false;
         /// Optional directory for durable GC state.
@@ -1946,7 +1901,6 @@ pub mod sorafs {
     /// Defaults for the Proof-of-Retrievability coordinator runtime.
     pub mod por {
         use std::path::PathBuf;
-
         /// Enable the PoR coordinator runtime.
         ///
         pub const ENABLED: bool = false;
@@ -2018,10 +1972,8 @@ pub mod sorafs {
         /// Static-site host binding file defaults.
         pub mod site_bindings {
             use std::{num::NonZeroUsize, path::PathBuf};
-
             use iroha_config_base::util::Bytes;
             use nonzero_ext::nonzero;
-
             /// Optional JSON binding document loaded and validated when Torii starts.
             #[must_use]
             pub fn path() -> Option<PathBuf> {
@@ -2035,7 +1987,6 @@ pub mod sorafs {
         /// Rate-limiting defaults applied to gateway clients.
         pub mod rate_limit {
             use std::time::Duration;
-
             /// Maximum requests permitted within the rolling window.
             pub const MAX_REQUESTS: Option<u32> = Some(300);
             /// Rolling window duration (seconds).
@@ -2078,7 +2029,6 @@ pub mod sorafs {
         /// ACME automation defaults.
         pub mod acme {
             use std::time::Duration;
-
             /// Enable ACME automation for TLS certificates.
             pub const ENABLED: bool = false;
             /// Default account email (unset by default).
@@ -2113,9 +2063,7 @@ pub mod sorafs {
         /// Governed compliance-controller defaults.
         pub mod compliance {
             use std::time::Duration;
-
             use iroha_config_base::util::Bytes;
-
             /// Keep the signed compliance controller disabled until governance
             /// identities, feeds, storage, and a runtime transport are provisioned.
             pub const ENABLED: bool = false;
@@ -2150,7 +2098,6 @@ pub mod torii {
         time::Duration,
         vec::Vec,
     };
-
     use iroha_config_base::util::Bytes;
     use iroha_data_model::{
         da::types::{BlobClass, GovernanceTag, RetentionPolicy},
@@ -2158,7 +2105,6 @@ pub mod torii {
     };
     use iroha_primitives::numeric::XorQuantity;
     use nonzero_ext::nonzero;
-
     /// Maximum inner body carried by the first-release Torii proxy protocol.
     pub const TORII_PROXY_MAX_INNER_BODY_BYTES_V1: u64 = 64_000_000;
     /// Maximum request payload size accepted by Torii (bytes).
@@ -2290,7 +2236,6 @@ pub mod torii {
     /// SoraNet privacy ingestion defaults (disabled until explicitly configured).
     pub mod soranet_privacy_ingest {
         use super::*;
-
         /// Require an explicit allow-list before accepting signed privacy telemetry.
         pub const ENABLED: bool = false;
         /// Requests per second budget for privacy ingest (None disables).
@@ -2305,9 +2250,7 @@ pub mod torii {
     /// Native Bootle/Lantern blind-issuance service defaults.
     pub mod privacy_bootle_lantern_issuer {
         use std::path::PathBuf;
-
         use iroha_config_base::util::Bytes;
-
         /// Issuance is opt-in and fails closed without its runtime provider registry.
         pub const ENABLED: bool = false;
         /// Default durable one-shot authorization store directory.
@@ -2341,7 +2284,6 @@ pub mod torii {
     /// Peer-telemetry geo lookup defaults (disabled unless explicitly enabled).
     pub mod peer_geo {
         use url::Url;
-
         /// Master enable switch for peer geo lookups.
         pub const ENABLED: bool = false;
         /// Optional geo endpoint (ip-api compatible). `None` uses the built-in default when enabled.
@@ -2544,7 +2486,6 @@ pub mod torii {
     pub mod faucet {
         use super::*;
         use std::num::NonZeroU64;
-
         /// Leading-zero-bit difficulty for faucet proof-of-work.
         ///
         /// Eighteen bits is the fail-safe default for an explicitly enabled
@@ -2571,7 +2512,6 @@ pub mod torii {
     /// Kagemusha command-submission defaults.
     pub mod kagemusha_commands {
         use iroha_primitives::numeric::Quantity;
-
         /// Maximum authorized value for one offline transaction.
         pub fn max_tx_value() -> Quantity {
             Quantity::from(100_000_u64)
@@ -2812,7 +2752,6 @@ pub mod torii {
         use iroha_config_base::util::Bytes;
         use nonzero_ext::nonzero;
         use std::num::NonZeroUsize;
-
         /// Explicit trusted proxy hosts whose appended `X-Forwarded-For` chain
         /// is used to derive the canonical remote IP.
         pub fn trusted_proxy_cidrs() -> Vec<String> {
@@ -2821,7 +2760,6 @@ pub mod torii {
         /// HTTP/1 server socket and parser limits.
         pub mod http {
             use super::*;
-
             /// Maximum accepted TCP connections retained by Torii.
             pub const MAX_CONNECTIONS: NonZeroUsize = nonzero!(1024usize);
             /// Maximum accepted TCP connections retained for one source IP.
@@ -2997,10 +2935,8 @@ pub mod torii {
     /// Canonical first-release appeal-finance asset and policy defaults.
     pub mod sorafs_appeal_finance {
         use std::str::FromStr;
-
         use iroha_data_model::asset::prelude::AssetDefinitionId;
         use iroha_primitives::numeric::{Numeric, XOR_QUANTITY_SCALE, XorQuantity};
-
         /// Canonical first-release asset scale for XOR-denominated appeal finance.
         pub const ASSET_SCALE: u32 = XOR_QUANTITY_SCALE;
         /// Version shared by the baseline pricing and settlement policies.
@@ -3149,7 +3085,6 @@ pub mod nexus {
     /// Enable multilane (Nexus/Iroha3) consensus by default.
     pub const ENABLED: bool = true;
     use super::*;
-
     /// AXT policy and runtime defaults.
     pub mod axt {
         /// Default slot length (in milliseconds) used when deriving AXT expiry slots from block timestamps.
@@ -3174,7 +3109,6 @@ pub mod nexus {
     /// Storage budget defaults for Nexus-enabled nodes.
     pub mod storage {
         use iroha_config_base::util::Bytes;
-
         /// Filesystem capacity reserved as runtime storage headroom (basis points).
         pub const AUTO_STORAGE_HEADROOM_BPS: u16 = 2_000;
         /// Block interval between disk budget enforcement scans (0 = every block).
@@ -3221,7 +3155,6 @@ pub mod nexus {
     /// Lane registry defaults.
     pub mod registry {
         use std::time::Duration;
-
         /// Poll interval for refreshing manifests and governance bundles.
         pub const POLL_INTERVAL: Duration = Duration::from_secs(60);
     }
@@ -3306,11 +3239,8 @@ pub mod nexus {
     /// Public-lane staking defaults.
     pub mod staking {
         use std::time::Duration;
-
         use nonzero_ext::nonzero;
-
         use super::super::{NonZeroU32, Quantity};
-
         /// Minimum bonded stake required to register a validator (asset base units).
         pub fn min_validator_stake() -> Quantity {
             Quantity::from(1_u64)
@@ -3348,7 +3278,6 @@ pub mod nexus {
     pub mod fees {
         use iroha_data_model::account::AccountId;
         use iroha_primitives::numeric::Quantity;
-
         /// Account that receives collected fees (string form).
         pub const FEE_SINK_ACCOUNT_ID: &str = super::pipeline::GAS_TECH_ACCOUNT_ID;
         /// Protocol account that physically custodies isolated sponsor-program vault assets.
@@ -3431,7 +3360,6 @@ pub mod nexus {
         /// Rolling audit defaults ensuring long-term coverage.
         pub mod audit {
             use std::time::Duration;
-
             /// Signatures verified per audit window.
             pub const SAMPLE_SIZE: u16 = 32;
             /// Number of audit windows tracked before slashing for insufficient coverage.
@@ -3442,7 +3370,6 @@ pub mod nexus {
         /// Recovery deadline defaults for missing DA proofs.
         pub mod recovery {
             use std::time::Duration;
-
             /// Deadline for supplying recovery proofs once requested.
             pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
         }
@@ -3462,7 +3389,6 @@ pub mod nexus {
 /// Iroha Connect defaults.
 pub mod connect {
     use std::time::Duration;
-
     /// Enable Iroha Connect WS + P2P relay.
     pub const ENABLED: bool = true;
     /// Max concurrent WS sessions across roles.
@@ -3497,7 +3423,6 @@ pub mod connect {
 /// External fraud-risk monitoring defaults.
 pub mod fraud_monitoring {
     use std::time::Duration;
-
     /// Enable outbound fraud-monitoring requests.
     pub const ENABLED: bool = false;
     /// HTTP connect timeout for fraud-monitoring requests.
@@ -3510,7 +3435,6 @@ pub mod fraud_monitoring {
 /// Telemetry export defaults.
 pub mod telemetry {
     use std::time::Duration;
-
     /// Default minimal retry period
     pub const MIN_RETRY_PERIOD: Duration = Duration::from_secs(1);
     /// Default maximum exponent for the retry delay
@@ -3535,7 +3459,6 @@ pub mod telemetry {
 /// Network Time Service (NTS) defaults.
 pub mod time {
     use std::time::Duration;
-
     /// Sampling interval for peer time probes.
     pub const NTS_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
     /// Maximum peers to sample per round.
@@ -3564,9 +3487,7 @@ pub mod time {
 /// Execution pipeline defaults (scheduler, overlay, batching).
 pub mod pipeline {
     use std::num::NonZeroU64;
-
     use nonzero_ext::nonzero;
-
     /// Enable dynamic prepass (IVM read-only run to derive access sets).
     pub const DYNAMIC_PREPASS: bool = true;
     /// Cache derived access sets by code hash/entrypoint for diagnostics.
@@ -3643,7 +3564,6 @@ pub mod pipeline {
 /// Tiered state backend defaults.
 pub mod tiered_state {
     use iroha_config_base::util::Bytes;
-
     /// Disable tiered snapshots by default.
     pub const ENABLED: bool = false;
     /// Keep all keys hot unless explicitly configured.
@@ -3717,9 +3637,7 @@ pub mod zk {
     /// SCCP proof-admission and deterministic verifier-work defaults.
     pub mod sccp {
         use std::num::{NonZeroU32, NonZeroU64};
-
         use nonzero_ext::nonzero;
-
         /// Maximum closed SCCP proofs in one transaction.
         pub const MAX_PROOFS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
         /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
@@ -3779,10 +3697,8 @@ pub mod zk {
     /// FASTPQ prover defaults.
     pub mod fastpq {
         use std::num::NonZeroUsize;
-
         use iroha_config_base::util::Bytes;
         use nonzero_ext::nonzero;
-
         /// Default execution mode for the FASTPQ prover (`cpu` or `gpu`).
         pub const EXECUTION_MODE: &str = "cpu";
         /// Default Poseidon pipeline mode (`cpu` or `gpu`).
@@ -3890,13 +3806,11 @@ pub mod sumeragi {
         num::{NonZeroU32, NonZeroU64, NonZeroUsize},
         time::Duration,
     };
-
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT, merge::MAX_MERGE_LEDGER_ENTRY_BYTES,
     };
     use nonzero_ext::nonzero;
-
     /// Consensus wire/state-machine protocol version required by this release.
     pub const PROTOCOL_VERSION: u32 = 4;
     /// Fresh-network target block cadence selected by genesis.
@@ -4159,7 +4073,6 @@ pub mod sumeragi {
 /// Governance defaults (voting & parliament).
 pub mod governance {
     use super::*;
-
     /// Default public key used for governance escrow account derivation.
     pub const BOND_ESCROW_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -4355,7 +4268,6 @@ pub mod governance {
     /// Default citizen service discipline parameters.
     pub mod citizen_service {
         use std::collections::BTreeMap;
-
         use crate::parameters::defaults::governance::{
             CITIZEN_DECLINE_SLASH_BPS, CITIZEN_FREE_DECLINES_PER_EPOCH,
             CITIZEN_MAX_SEATS_PER_EPOCH, CITIZEN_MISCONDUCT_SLASH_BPS, CITIZEN_NO_SHOW_SLASH_BPS,
@@ -4408,7 +4320,6 @@ pub mod governance {
     /// Default SoraFS public pin fee configuration.
     pub mod sorafs_pin_fee {
         use iroha_data_model::account::AccountId;
-
         /// XOR asset definition used to collect public pin fees.
         pub fn asset_id() -> String {
             super::super::nexus::fees::fee_asset_id()
@@ -4479,7 +4390,6 @@ pub mod governance {
 /// Confidential asset/verifier defaults.
 pub mod confidential {
     use super::*;
-
     /// Confidential features disabled by default.
     pub const ENABLED: bool = false;
     /// Observer-only assume-valid disabled by default.
@@ -4570,7 +4480,6 @@ pub mod soranet {
     /// Defaults for the SoraNet VPN control plane and scheduler.
     pub mod vpn {
         use std::time::Duration;
-
         /// Enable the VPN tunnel by default.
         pub const ENABLED: bool = false;
         /// Fixed cell size (bytes).
@@ -4665,7 +4574,6 @@ pub mod settlement {
     /// Offline settlement defaults.
     pub mod offline {
         use std::path::PathBuf;
-
         /// Maximum estimated decoded Kagemusha verifier bytes retained by one node.
         pub const KAGEMUSHA_MAX_DECODED_BYTES: u64 = 256 * 1024 * 1024;
         /// No Kagemusha release policy is trusted unless an operator configures one.

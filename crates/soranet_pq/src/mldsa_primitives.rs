@@ -3,7 +3,6 @@
 //! This module deliberately owns its Rust data structures. Nothing here is
 //! passed across an FFI boundary, so changing an upstream C implementation
 //! cannot invalidate Rust layout assumptions.
-
 // These conversions and index loops mirror FIPS 204's explicitly fixed-width
 // polynomial arithmetic and byte encodings.
 #![allow(
@@ -15,20 +14,16 @@
     clippy::similar_names,
     clippy::unreadable_literal
 )]
-
 use core::array;
-
 use sha3::{
     Shake128, Shake256,
     digest::{ExtendableOutput, Update, XofReader},
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
-
 const N: usize = 256;
 const Q: i32 = 8_380_417;
 const D: u32 = 13;
 const QINV: u64 = 58_728_449;
-
 const ZETAS: [i32; N] = [
     0, 25847, -2608894, -518909, 237124, -777960, -876248, 466468, 1826347, 2353451, -359251,
     -2091905, 3119733, -2884855, 3111497, 2680103, 2725464, 1024112, -1079900, 3585928, -549488,
@@ -57,23 +52,19 @@ const ZETAS: [i32; N] = [
     -2235985, -420899, -2286327, 183443, -976891, 1612842, -3545687, -554416, 3919660, -48306,
     -1362209, 3937738, 1400424, -846154, 1976782,
 ];
-
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub(super) struct Poly {
     pub(super) coeffs: [i32; N],
 }
-
 impl Default for Poly {
     fn default() -> Self {
         Self { coeffs: [0; N] }
     }
 }
-
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub(super) struct PolyVec<const M: usize> {
     pub(super) polys: [Poly; M],
 }
-
 impl<const M: usize> Default for PolyVec<M> {
     fn default() -> Self {
         Self {
@@ -81,24 +72,20 @@ impl<const M: usize> Default for PolyVec<M> {
         }
     }
 }
-
 #[inline]
 fn montgomery_reduce(a: i64) -> i32 {
     let t = (a as u64).wrapping_mul(QINV) as u32 as i32;
     ((a - i64::from(t) * i64::from(Q)) >> 32) as i32
 }
-
 #[inline]
 fn reduce32(a: i32) -> i32 {
     let t = (a + (1 << 22)) >> 23;
     a - t * Q
 }
-
 #[inline]
 fn caddq(a: i32) -> i32 {
     a + ((a >> 31) & Q)
 }
-
 fn ntt(poly: &mut Poly) {
     let mut k = 0;
     let mut len = 128;
@@ -117,10 +104,8 @@ fn ntt(poly: &mut Poly) {
         len >>= 1;
     }
 }
-
 fn invntt_tomont(poly: &mut Poly) {
     const F: i32 = 41_978;
-
     let mut k = N;
     let mut len = 1;
     while len < N {
@@ -139,12 +124,10 @@ fn invntt_tomont(poly: &mut Poly) {
         }
         len <<= 1;
     }
-
     for coeff in &mut poly.coeffs {
         *coeff = montgomery_reduce(i64::from(F) * i64::from(*coeff));
     }
 }
-
 fn poly_pointwise_montgomery(a: &Poly, b: &Poly) -> Poly {
     Poly {
         coeffs: array::from_fn(|i| {
@@ -152,33 +135,28 @@ fn poly_pointwise_montgomery(a: &Poly, b: &Poly) -> Poly {
         }),
     }
 }
-
 fn poly_add(a: &Poly, b: &Poly) -> Poly {
     Poly {
         coeffs: array::from_fn(|i| a.coeffs[i] + b.coeffs[i]),
     }
 }
-
 fn poly_sub(a: &Poly, b: &Poly) -> Poly {
     Poly {
         coeffs: array::from_fn(|i| a.coeffs[i] - b.coeffs[i]),
     }
 }
-
 fn shake128_reader(seed: &[u8; 32], nonce: u16) -> impl XofReader {
     let mut state = Shake128::default();
     state.update(seed);
     state.update(&nonce.to_le_bytes());
     state.finalize_xof()
 }
-
 fn shake256_reader(seed: &[u8], nonce: u16) -> impl XofReader {
     let mut state = Shake256::default();
     state.update(seed);
     state.update(&nonce.to_le_bytes());
     state.finalize_xof()
 }
-
 fn poly_uniform(seed: &[u8; 32], nonce: u16) -> Poly {
     let mut reader = shake128_reader(seed, nonce);
     let mut result = Poly::default();
@@ -196,10 +174,8 @@ fn poly_uniform(seed: &[u8; 32], nonce: u16) -> Poly {
     }
     result
 }
-
 fn poly_uniform_eta(eta: i32, seed: &[u8; 64], nonce: u16) -> Poly {
     debug_assert!(eta == 2 || eta == 4);
-
     let mut reader = shake256_reader(seed, nonce);
     let mut result = Poly::default();
     let mut count = 0;
@@ -228,26 +204,22 @@ fn poly_uniform_eta(eta: i32, seed: &[u8; 64], nonce: u16) -> Poly {
     }
     result
 }
-
 fn poly_uniform_gamma1(gamma1: i32, seed: &[u8; 64], nonce: u16) -> Poly {
     let bits = gamma1_bits(gamma1);
     let mut encoded = vec![0_u8; N * bits / 8];
     shake256_reader(seed, nonce).read(&mut encoded);
     unpack_poly(&encoded, bits, |value| gamma1 - value as i32).0
 }
-
 pub(super) fn matrix_expand<const K: usize, const L: usize>(rho: &[u8; 32]) -> [PolyVec<L>; K] {
     array::from_fn(|row| PolyVec {
         polys: array::from_fn(|column| poly_uniform(rho, ((row as u16) << 8) | column as u16)),
     })
 }
-
 pub(super) fn vec_uniform_eta<const M: usize>(eta: i32, seed: &[u8; 64], nonce: u16) -> PolyVec<M> {
     PolyVec {
         polys: array::from_fn(|i| poly_uniform_eta(eta, seed, nonce.wrapping_add(i as u16))),
     }
 }
-
 pub(super) fn vec_uniform_gamma1<const L: usize>(
     gamma1: i32,
     seed: &[u8; 64],
@@ -263,19 +235,16 @@ pub(super) fn vec_uniform_gamma1<const L: usize>(
         }),
     }
 }
-
 pub(super) fn vec_ntt<const M: usize>(value: &mut PolyVec<M>) {
     for poly in &mut value.polys {
         ntt(poly);
     }
 }
-
 pub(super) fn vec_invntt_tomont<const M: usize>(value: &mut PolyVec<M>) {
     for poly in &mut value.polys {
         invntt_tomont(poly);
     }
 }
-
 pub(super) fn vec_reduce<const M: usize>(value: &mut PolyVec<M>) {
     for poly in &mut value.polys {
         for coeff in &mut poly.coeffs {
@@ -283,7 +252,6 @@ pub(super) fn vec_reduce<const M: usize>(value: &mut PolyVec<M>) {
         }
     }
 }
-
 pub(super) fn vec_caddq<const M: usize>(value: &mut PolyVec<M>) {
     for poly in &mut value.polys {
         for coeff in &mut poly.coeffs {
@@ -291,25 +259,21 @@ pub(super) fn vec_caddq<const M: usize>(value: &mut PolyVec<M>) {
         }
     }
 }
-
 pub(super) fn vec_add<const M: usize>(a: &PolyVec<M>, b: &PolyVec<M>) -> PolyVec<M> {
     PolyVec {
         polys: array::from_fn(|i| poly_add(&a.polys[i], &b.polys[i])),
     }
 }
-
 pub(super) fn vec_sub<const M: usize>(a: &PolyVec<M>, b: &PolyVec<M>) -> PolyVec<M> {
     PolyVec {
         polys: array::from_fn(|i| poly_sub(&a.polys[i], &b.polys[i])),
     }
 }
-
 pub(super) fn vec_pointwise<const M: usize>(poly: &Poly, value: &PolyVec<M>) -> PolyVec<M> {
     PolyVec {
         polys: array::from_fn(|i| poly_pointwise_montgomery(poly, &value.polys[i])),
     }
 }
-
 pub(super) fn matrix_pointwise<const K: usize, const L: usize>(
     matrix: &[PolyVec<L>; K],
     value: &PolyVec<L>,
@@ -326,7 +290,6 @@ pub(super) fn matrix_pointwise<const K: usize, const L: usize>(
         }),
     }
 }
-
 pub(super) fn vec_chknorm<const M: usize>(value: &PolyVec<M>, bound: i32) -> bool {
     if bound > (Q - 1) / 8 || bound <= 0 {
         return true;
@@ -337,7 +300,6 @@ pub(super) fn vec_chknorm<const M: usize>(value: &PolyVec<M>, bound: i32) -> boo
             .any(|coeff| coeff.unsigned_abs() >= bound as u32)
     })
 }
-
 pub(super) fn vec_power2round<const M: usize>(value: &PolyVec<M>) -> (PolyVec<M>, PolyVec<M>) {
     let mut high = PolyVec::default();
     let mut low = PolyVec::default();
@@ -350,7 +312,6 @@ pub(super) fn vec_power2round<const M: usize>(value: &PolyVec<M>) -> (PolyVec<M>
     }
     (high, low)
 }
-
 fn decompose(gamma2: i32, value: i32) -> (i32, i32) {
     let mut high = (value + 127) >> 7;
     if gamma2 == (Q - 1) / 32 {
@@ -361,12 +322,10 @@ fn decompose(gamma2: i32, value: i32) -> (i32, i32) {
         high = (high * 11275 + (1 << 23)) >> 24;
         high ^= ((43 - high) >> 31) & high;
     }
-
     let mut low = value - high * 2 * gamma2;
     low -= (((Q - 1) / 2 - low) >> 31) & Q;
     (high, low)
 }
-
 pub(super) fn vec_decompose<const M: usize>(
     gamma2: i32,
     value: &PolyVec<M>,
@@ -381,7 +340,6 @@ pub(super) fn vec_decompose<const M: usize>(
     }
     (high, low)
 }
-
 pub(super) fn vec_make_hint<const M: usize>(
     gamma2: i32,
     low: &PolyVec<M>,
@@ -404,12 +362,10 @@ pub(super) fn vec_make_hint<const M: usize>(
     }
     (hint, count)
 }
-
 pub(super) fn poly_challenge(tau: usize, seed: &[u8]) -> Poly {
     let mut state = Shake256::default();
     state.update(seed);
     let mut reader = state.finalize_xof();
-
     let mut sign_bytes = [0_u8; 8];
     reader.read(&mut sign_bytes);
     let mut signs = u64::from_le_bytes(sign_bytes);
@@ -428,32 +384,25 @@ pub(super) fn poly_challenge(tau: usize, seed: &[u8]) -> Poly {
     }
     result
 }
-
 pub(super) fn poly_ntt(value: &mut Poly) {
     ntt(value);
 }
-
 fn eta_bits(eta: i32) -> usize {
     if eta == 2 { 3 } else { 4 }
 }
-
 fn gamma1_bits(gamma1: i32) -> usize {
     if gamma1 == 1 << 17 { 18 } else { 20 }
 }
-
 pub(super) fn eta_packed_bytes(eta: i32) -> usize {
     N * eta_bits(eta) / 8
 }
-
 pub(super) fn z_packed_bytes(gamma1: i32) -> usize {
     N * gamma1_bits(gamma1) / 8
 }
-
 pub(super) fn w1_packed_bytes(gamma2: i32) -> usize {
     let bits = if gamma2 == (Q - 1) / 88 { 6 } else { 4 };
     N * bits / 8
 }
-
 fn pack_poly(output: &mut [u8], poly: &Poly, bits: usize, encode: impl Fn(i32) -> u32) {
     debug_assert_eq!(output.len(), N * bits / 8);
     output.fill(0);
@@ -474,7 +423,6 @@ fn pack_poly(output: &mut [u8], poly: &Poly, bits: usize, encode: impl Fn(i32) -
     debug_assert_eq!(output_index, output.len());
     debug_assert_eq!(accumulator_bits, 0);
 }
-
 fn unpack_poly(input: &[u8], bits: usize, decode: impl Fn(u32) -> i32) -> (Poly, u32) {
     debug_assert_eq!(input.len(), N * bits / 8);
     let mask = (1_u64 << bits) - 1;
@@ -497,34 +445,27 @@ fn unpack_poly(input: &[u8], bits: usize, decode: impl Fn(u32) -> i32) -> (Poly,
     }
     (poly, maximum)
 }
-
 fn pack_t1(output: &mut [u8], value: &Poly) {
     pack_poly(output, value, 10, |coeff| coeff as u32);
 }
-
 fn pack_t0(output: &mut [u8], value: &Poly) {
     pack_poly(output, value, 13, |coeff| ((1 << (D - 1)) - coeff) as u32);
 }
-
 fn unpack_t0(input: &[u8]) -> Poly {
     unpack_poly(input, 13, |value| (1 << (D - 1)) - value as i32).0
 }
-
 fn pack_eta(output: &mut [u8], eta: i32, value: &Poly) {
     pack_poly(output, value, eta_bits(eta), |coeff| (eta - coeff) as u32);
 }
-
 fn unpack_eta(input: &[u8], eta: i32) -> (Poly, bool) {
     let (poly, maximum) = unpack_poly(input, eta_bits(eta), |value| eta - value as i32);
     (poly, maximum <= (2 * eta) as u32)
 }
-
 fn pack_z(output: &mut [u8], gamma1: i32, value: &Poly) {
     pack_poly(output, value, gamma1_bits(gamma1), |coeff| {
         (gamma1 - coeff) as u32
     });
 }
-
 pub(super) fn pack_w1<const K: usize>(output: &mut [u8], gamma2: i32, value: &PolyVec<K>) {
     let packed_bytes = w1_packed_bytes(gamma2);
     let bits = if gamma2 == (Q - 1) / 88 { 6 } else { 4 };
@@ -538,7 +479,6 @@ pub(super) fn pack_w1<const K: usize>(output: &mut [u8], gamma2: i32, value: &Po
         );
     }
 }
-
 pub(super) fn pack_pk<const K: usize>(output: &mut [u8], rho: &[u8; 32], t1: &PolyVec<K>) {
     const T1_PACKED_BYTES: usize = N * 10 / 8;
     debug_assert_eq!(output.len(), 32 + K * T1_PACKED_BYTES);
@@ -548,7 +488,6 @@ pub(super) fn pack_pk<const K: usize>(output: &mut [u8], rho: &[u8; 32], t1: &Po
         pack_t1(&mut output[offset..offset + T1_PACKED_BYTES], &t1.polys[i]);
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn pack_sk<const K: usize, const L: usize>(
     output: &mut [u8],
@@ -564,7 +503,6 @@ pub(super) fn pack_sk<const K: usize, const L: usize>(
     let eta_bytes = eta_packed_bytes(eta);
     let expected = 2 * 32 + 64 + (L + K) * eta_bytes + K * T0_PACKED_BYTES;
     debug_assert_eq!(output.len(), expected);
-
     output[..32].copy_from_slice(rho);
     output[32..64].copy_from_slice(key);
     output[64..128].copy_from_slice(tr);
@@ -583,7 +521,6 @@ pub(super) fn pack_sk<const K: usize, const L: usize>(
     }
     debug_assert_eq!(offset, output.len());
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn unpack_sk<const K: usize, const L: usize>(
     input: &[u8],
@@ -599,7 +536,6 @@ pub(super) fn unpack_sk<const K: usize, const L: usize>(
     let eta_bytes = eta_packed_bytes(eta);
     let expected = 2 * 32 + 64 + (L + K) * eta_bytes + K * T0_PACKED_BYTES;
     debug_assert_eq!(input.len(), expected);
-
     rho.copy_from_slice(&input[..32]);
     key.copy_from_slice(&input[32..64]);
     tr.copy_from_slice(&input[64..128]);
@@ -624,7 +560,6 @@ pub(super) fn unpack_sk<const K: usize, const L: usize>(
     debug_assert_eq!(offset, input.len());
     canonical
 }
-
 pub(super) fn pack_sig<const K: usize, const L: usize>(
     output: &mut [u8],
     c_tilde: &[u8],
@@ -641,7 +576,6 @@ pub(super) fn pack_sig<const K: usize, const L: usize>(
         pack_z(&mut output[offset..offset + z_bytes], gamma1, poly);
         offset += z_bytes;
     }
-
     output[offset..].fill(0);
     let mut hint_count = 0;
     for i in 0..K {
@@ -655,11 +589,9 @@ pub(super) fn pack_sig<const K: usize, const L: usize>(
         output[offset + omega + i] = hint_count as u8;
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn bit_packing_is_little_endian_and_roundtrips() {
         let poly = Poly {
@@ -672,14 +604,12 @@ mod tests {
         assert!(decoded == poly);
         assert_eq!(maximum, 255);
     }
-
     #[test]
     fn eta_decoding_rejects_unused_encodings() {
         let encoded = [0xff_u8; N * 3 / 8];
         let (_, canonical) = unpack_eta(&encoded, 2);
         assert!(!canonical);
     }
-
     #[test]
     fn samplers_obey_parameter_bounds() {
         let seed = [0x5a_u8; 64];

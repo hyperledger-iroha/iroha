@@ -19,7 +19,6 @@ fn direct_certified_body_busy_wait_observes_monotone_reducer_fence() {
         ] => (*tag, manifest.clone()),
         effects => panic!("unexpected proposal effects: {effects:?}"),
     };
-
     let timeout_tag = adapter.current_tag();
     let sign = adapter
         .timeout_elapsed(timeout_tag)
@@ -42,7 +41,6 @@ fn direct_certified_body_busy_wait_observes_monotone_reducer_fence() {
     assert_eq!(wait.context_id(), manifest.round.context_id);
     assert_eq!(wait.generation(), blocked_generation);
     drop(wait);
-
     adapter
         .signature_completed(timeout_tag, vec![0xA2; 96])
         .expect("complete exact timeout signature");
@@ -54,14 +52,12 @@ fn direct_certified_body_busy_wait_observes_monotone_reducer_fence() {
         DirectCertifiedBodyAvailablePreparation::Applied(_)
     ));
 }
-
 #[test]
 fn reducer_fence_generation_reserves_max_for_coordinator_overflow_detection() {
     let directory = TempDir::new().expect("temporary reducer-fence-overflow directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
     adapter.reducer_fence_generation = u64::MAX - 1;
-
     assert!(matches!(
         adapter.timeout_elapsed(adapter.current_tag()),
         Err(AdapterError::ReducerFenceGenerationExhausted)
@@ -69,14 +65,12 @@ fn reducer_fence_generation_reserves_max_for_coordinator_overflow_detection() {
     assert_eq!(adapter.reducer_fence_generation, u64::MAX - 1);
     assert!(adapter.fail_closed);
 }
-
 #[test]
 fn pacemaker_certificate_stays_queued_until_exact_wal_acknowledgement() {
     use super::super::v2_runtime::{
         RuntimeQueueConfig, RuntimeSelectedCandidateOwnership, RuntimeSelectedOwnerKind,
         RuntimeStep, SerializedV2Runtime,
     };
-
     let directory = TempDir::new().expect("temporary pending-WAL directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
@@ -92,7 +86,6 @@ fn pacemaker_certificate_stays_queued_until_exact_wal_acknowledgement() {
     ));
     assert!(adapter.pacemaker_escape_is_parked());
     assert!(!adapter.signature_fence_is_active());
-
     let wire_context = adapter.wire_context.clone();
     let mut keys = (1_u8..=4)
         .map(|seed| {
@@ -142,7 +135,6 @@ fn pacemaker_certificate_stays_queued_until_exact_wal_acknowledgement() {
             }],
         }),
     );
-
     let now = Instant::now();
     let (mut runtime, startup) = SerializedV2Runtime::new(
         adapter,
@@ -169,7 +161,6 @@ fn pacemaker_certificate_stays_queued_until_exact_wal_acknowledgement() {
     );
     assert_eq!(runtime.queued_commands(), 1);
     assert!(runtime.last_scheduler_ownership().is_none());
-
     let post_persist = runtime
         .driver_mut_for_test()
         .drive_effects(pending.into_effects())
@@ -186,7 +177,6 @@ fn pacemaker_certificate_stays_queued_until_exact_wal_acknowledgement() {
         .expect("retain the signer effect's runtime owner");
     assert!(!runtime.driver().pacemaker_escape_is_parked());
     assert!(runtime.driver().signature_fence_is_active());
-
     let escaped = runtime
         .try_step_pacemaker_escape(now)
         .expect("post-ack pacemaker selection remains exact")
@@ -216,7 +206,6 @@ fn pacemaker_certificate_stays_queued_until_exact_wal_acknowledgement() {
     assert_eq!(runtime.queued_commands(), 0);
     assert!(!runtime.driver().fail_closed);
 }
-
 #[test]
 fn tc_promoted_lock_requires_same_subject_reproposal_before_commit() {
     let directory = TempDir::new().expect("temporary directory");
@@ -244,7 +233,6 @@ fn tc_promoted_lock_requires_same_subject_reproposal_before_commit() {
         signers: vec![1, 2, 3],
         aggregate_signature: vec![0x97; 96],
     };
-
     let timeout_tag = adapter.current_tag();
     let timeout_sign = adapter
         .timeout_elapsed(timeout_tag)
@@ -261,7 +249,6 @@ fn tc_promoted_lock_requires_same_subject_reproposal_before_commit() {
     adapter
         .signature_completed(timeout_tag, vec![0xA7; 96])
         .expect("complete the timeout vote before installing the remote TC");
-
     let timeout = wire::TimeoutCertificate {
         round,
         groups: vec![wire::TimeoutVoteGroup {
@@ -309,7 +296,6 @@ fn tc_promoted_lock_requires_same_subject_reproposal_before_commit() {
             "TC acknowledgement must expose EnterView before its exact body fetch: {effects:?}"
         ),
     };
-
     assert!(matches!(
         adapter
             .body_available(fetch_tag, manifest)
@@ -377,7 +363,6 @@ fn tc_promoted_lock_requires_same_subject_reproposal_before_commit() {
         )
     }));
 }
-
 #[test]
 fn leader_without_owned_candidate_work_reports_missing_proposal_state() {
     let directory = TempDir::new().expect("temporary directory");
@@ -401,7 +386,6 @@ fn leader_without_owned_candidate_work_reports_missing_proposal_state() {
     );
     assert_eq!(status.phase, wire::SumeragiV2StatusPhase::AwaitingProposal);
 }
-
 #[test]
 fn one_round_and_subject_cannot_change_its_registered_manifest() {
     let directory = TempDir::new().expect("temporary directory");
@@ -439,13 +423,11 @@ fn one_round_and_subject_cannot_change_its_registered_manifest() {
         &alternate_chunks,
     )
     .expect("structurally valid conflicting manifest");
-
     assert!(matches!(
         adapter.body_available(tag, conflicting),
         Err(AdapterError::ConflictingManifest)
     ));
 }
-
 #[test]
 fn authenticated_proposal_cannot_conflict_with_registered_canonical_manifest() {
     let directory = TempDir::new().expect("temporary directory");
@@ -461,12 +443,10 @@ fn authenticated_proposal_cannot_conflict_with_registered_canonical_manifest() {
         .registry
         .manifest_to_core(&canonical_proposal.manifest, &context)
         .expect("register canonical body manifest before proposal arrival");
-
     let canonical = AuthenticatedConsensusMessage::for_test(canonical);
     adapter
         .ensure_authenticated_manifest_compatible(&canonical)
         .expect("the exact registered manifest remains admissible");
-
     let mut conflicting = proposal(&context, proposer, subject);
     let wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal) = &mut conflicting.payload
     else {
@@ -492,7 +472,6 @@ fn authenticated_proposal_cannot_conflict_with_registered_canonical_manifest() {
     ));
     assert!(!adapter.fail_closed);
 }
-
 include!("v2_adapter_01_replay_and_registry.rs");
 include!("v2_adapter_02_view_and_lock_progress.rs");
 include!("v2_adapter_03_tc_and_terminal_ingress.rs");
@@ -501,7 +480,6 @@ fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     // Leave the reducer waiting for a Prepare signature, then model a
     // saturated untrusted deferred lane. The absolute timeout is delivered
     // while that signature fence is active, exactly where it used to be
@@ -539,7 +517,6 @@ fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
         [AdapterEffect::Sign { tag, .. }] => *tag,
         effects => panic!("unexpected validation effects: {effects:?}"),
     };
-
     let normal_vote = wire::Vote {
         round,
         proposal_round: round,
@@ -576,7 +553,6 @@ fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
         saturated_inputs.push_back(distinct_filler);
     }
     adapter.deferred_inputs = saturated_inputs;
-
     let mut backpressured_vote = normal_vote;
     backpressured_vote.signer = 2;
     backpressured_vote.signature = vec![0xD4];
@@ -603,7 +579,6 @@ fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
         !adapter.ingress_deliveries.contains_key(&backpressured_key),
         "admission without queue ownership must remain retryable"
     );
-
     adapter.deferred_inputs.pop_back();
     let retried = adapter
         .receive_verified(wire::ConsensusMessageV2::new(
@@ -616,13 +591,11 @@ fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
     );
     assert!(adapter.ingress_deliveries.contains_key(&backpressured_key));
     assert_eq!(adapter.deferred_inputs.len(), MAX_DEFERRED_INPUTS);
-
     // Saturate the ordinary semantic table as well. TimeoutVote owns an
     // independent signer-bounded semantic slot, so it must still reach the
     // protected Busy-deferred partition instead of being rejected before
     // the reducer boundary.
     saturate_ordinary_semantic_history(&mut adapter, round);
-
     let timeout_vote = wire::TimeoutVote {
         round,
         highest_prepare_qc: None,
@@ -666,7 +639,6 @@ fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
         ),
         Some(DeferredProgressClass::TimeoutVote)
     );
-
     let timeout = adapter
         .timeout_elapsed(sign_tag)
         .expect("defer trusted absolute timeout");
@@ -683,7 +655,6 @@ fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
             ..
         })
     ));
-
     let completed = adapter
         .signature_completed(sign_tag, vec![0xD2; 96])
         .expect("complete outstanding Prepare signature")
@@ -714,7 +685,6 @@ fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
         1,
         "the remote TimeoutVote remains owned while the local TimeoutVote signature fences the reducer"
     );
-
     adapter
         .signature_completed(timeout_sign_tag, vec![0xD6; 96])
         .expect("complete the local TimeoutVote signature");
@@ -723,7 +693,6 @@ fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
         .expect("service protected progress in its own macro-step");
     assert!(adapter.deferred_progress_inputs.is_empty());
 }
-
 #[test]
 fn failed_ingress_conversion_rolls_back_registry_and_admission() {
     let directory = TempDir::new().expect("temporary directory");
@@ -743,7 +712,6 @@ fn failed_ingress_conversion_rolls_back_registry_and_admission() {
         },
         highest_prepare_qc: None,
     });
-
     let subject_count = adapter.registry.subjects.len();
     let manifest_count = adapter.registry.manifests.len();
     assert!(adapter.receive_verified(malformed).is_err());
@@ -752,7 +720,6 @@ fn failed_ingress_conversion_rolls_back_registry_and_admission() {
     assert!(adapter.ingress_equivocations.is_empty());
     assert!(adapter.ingress_deliveries.is_empty());
     assert!(adapter.active_subject.is_none());
-
     // The failed conversion did not poison the semantic key; the valid
     // proposal for the same leader and round is still admitted.
     assert!(matches!(
@@ -763,7 +730,6 @@ fn failed_ingress_conversion_rolls_back_registry_and_admission() {
         [AdapterEffect::FetchBody { .. }]
     ));
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() {
@@ -782,7 +748,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
     )
     .expect("open observing adapter");
     assert!(startup.is_empty());
-
     let round = wire::ConsensusRound {
         context_id: context.id(),
         height: context.height,
@@ -845,7 +810,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
     assert!(adapter.deferred_inputs.is_empty());
     assert!(adapter.ingress_ready());
     assert!(!adapter.fail_closed);
-
     adapter
         .recover_validated_body(&locally_validated_manifest, &locally_validated_receipt)
         .expect("local deterministic validation establishes canonical commitment authority");
@@ -862,7 +826,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
         .expect("the same signed canonical vote is admissible after local validation");
     assert!(adapter.ingress_ready());
     assert!(!adapter.fail_closed);
-
     let bound_subject = subject(0x83);
     let canonical_commitment = execution_commitment(0x83);
     let conflicting_commitment = execution_commitment(0x84);
@@ -886,7 +849,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
         adapter.deferred_progress_inputs.len(),
         adapter.deferred_inputs.len(),
     );
-
     let mut conflicting_vote = wire::Vote {
         round,
         proposal_round: round,
@@ -908,7 +870,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
         )),
         Err(AdapterError::ConflictingExecutionCommitment)
     ));
-
     let mut conflicting_qc = wire::QuorumCertificate {
         round,
         proposal_round: round,
@@ -925,7 +886,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
         )),
         Err(AdapterError::ConflictingExecutionCommitment)
     ));
-
     let later_round = wire::ConsensusRound { view: 1, ..round };
     let mut cross_round_conflicting_vote = wire::Vote {
         round: later_round,
@@ -953,7 +913,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
         )),
         Err(AdapterError::ConflictingExecutionCommitment)
     ));
-
     let mut cross_round_canonical_vote = wire::Vote {
         execution_commitment: canonical_commitment,
         signature: Vec::new(),
@@ -977,7 +936,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
         adapter.authenticate(wire::ConsensusMessageV2::new(cross_round_canonical_payload,)),
         Err(AdapterError::MissingExecutionCommitment)
     ));
-
     let mut cross_round_conflict = wire::QuorumCertificate {
         round: later_round,
         proposal_round: later_round,
@@ -1002,7 +960,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
             wire::ConsensusMessageV2Payload::QuorumCertificate(cross_round_canonical),
         ))
         .expect("an unchanged re-proposal authenticates the same deterministic execution");
-
     let timeout_round = wire::ConsensusRound { view: 1, ..round };
     let timeout_preimage = wire::TimeoutVote {
         round: timeout_round,
@@ -1055,7 +1012,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
         )),
         Err(AdapterError::ConflictingExecutionCommitment)
     ));
-
     let proposal_round = wire::ConsensusRound { view: 2, ..round };
     let proposal_subject = bound_subject;
     let proposal_body = vec![0x83, 2];
@@ -1101,7 +1057,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
         adapter.authenticate(conflicting_proposal_message),
         Err(AdapterError::ConflictingExecutionCommitment)
     ));
-
     let unbound_subject = subject(0x85);
     let mut unbound_qc_a = wire::QuorumCertificate {
         round,
@@ -1178,7 +1133,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
     );
     assert!(adapter.ingress_ready());
     assert!(!adapter.fail_closed);
-
     // Transport adapters authenticate their outer request/response
     // identities separately. The same read-only compatibility walk still
     // covers every embedded certificate before a transport payload is
@@ -1215,7 +1169,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
         adapter.ensure_authenticated_execution_commitments_compatible(&commit_response),
         Err(AdapterError::ConflictingExecutionCommitment)
     ));
-
     assert_registry_eq(&adapter.registry, &retained_registry);
     assert_eq!(adapter.ingress_equivocations, retained_equivocations);
     assert_eq!(adapter.ingress_deliveries, retained_deliveries);
@@ -1229,7 +1182,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
     );
     assert!(adapter.ingress_ready());
     assert!(!adapter.fail_closed);
-
     let mut canonical_vote = wire::Vote {
         round,
         proposal_round: round,
@@ -1252,7 +1204,6 @@ fn authentication_rejects_valid_commitment_conflicts_without_mutating_adapter() 
         .expect("the exact canonical commitment remains authentically admissible");
     assert!(adapter.ingress_ready());
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn authenticated_ingress_verifies_individual_and_aggregate_bls() {
@@ -1282,7 +1233,6 @@ fn authenticated_ingress_verifies_individual_and_aggregate_bls() {
         &pops,
     )
     .expect("verify individual vote");
-
     let preimage = wire::Vote {
         round,
         proposal_round: round,
@@ -1322,7 +1272,6 @@ fn authenticated_ingress_verifies_individual_and_aggregate_bls() {
     )
     .expect("verify aggregate QC");
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn timeout_vote_installs_embedded_qc_before_forming_tc() {
@@ -1342,7 +1291,6 @@ fn timeout_vote_installs_embedded_qc_before_forming_tc() {
     )
     .expect("open observing adapter");
     assert!(startup.is_empty());
-
     let round = wire::ConsensusRound {
         context_id: context.id(),
         height: context.height,
@@ -1390,7 +1338,6 @@ fn timeout_vote_installs_embedded_qc_before_forming_tc() {
     let core_round = reducer::Round::new(round.height, round.view);
     let core_subject = core_manifest.subject();
     let original_tag = adapter.current_tag();
-
     let mut all_effects = Vec::new();
     for signer in 0_u32..3 {
         if signer == 2 {
@@ -1439,7 +1386,6 @@ fn timeout_vote_installs_embedded_qc_before_forming_tc() {
         );
     }
     let final_effects = all_effects.pop().expect("three timeout outcomes");
-
     assert_eq!(adapter.reducer.durable_state().current_view(), 1);
     assert!(adapter.reducer.durable_state().highest_prepare().is_some());
     assert!(final_effects.iter().any(|effect| matches!(

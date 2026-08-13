@@ -1,7 +1,5 @@
 // Source-equivalence tests for application routed-read materialization.
-
 use iroha_data_model::Registrable as _;
-
 #[derive(
     Debug,
     PartialEq,
@@ -15,7 +13,6 @@ struct RoutedReadSourceFixture {
     metadata: Vec<String>,
     optional: Option<String>,
 }
-
 #[test]
 fn routed_read_borrowed_struct_is_wire_equivalent_to_owned_target() {
     let owned = RoutedReadSourceFixture {
@@ -33,11 +30,9 @@ fn routed_read_borrowed_struct_is_wire_equivalent_to_owned_target() {
         .expect("owned fixture has a canonical frame");
     let actual = norito::core::to_bytes_bounded(&source, expected.len())
         .expect("borrowed fixture fits its exact canonical boundary");
-
     assert_eq!(actual, expected);
     assert!(norito::core::to_bytes_bounded(&source, expected.len() - 1).is_err());
 }
-
 #[test]
 fn routed_read_source_payload_owns_only_after_bounded_decode() {
     let owned = RoutedReadSourceFixture {
@@ -54,13 +49,11 @@ fn routed_read_source_payload_owns_only_after_bounded_decode() {
     let mut budget =
         ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase)
             .expect("working set admits source materialization");
-
     let payload = torii_bounded_routed_read_source_payload::<RoutedReadSourceFixture, _>(
         &source,
         &mut budget,
     )
     .expect("small borrowed source materializes inside the ledger");
-
     assert_eq!(payload.value, owned);
     assert_eq!(
         budget.retained_canonical_bytes,
@@ -68,7 +61,6 @@ fn routed_read_source_payload_owns_only_after_bounded_decode() {
     );
     assert!(budget.retained_decoded_bytes > 0);
 }
-
 #[test]
 fn asset_definition_borrowed_json_matches_legacy_projection_at_exact_cap() {
     let authority = crate::tests_runtime_handlers::checked_torii_test_account_id(
@@ -101,7 +93,6 @@ fn asset_definition_borrowed_json_matches_legacy_projection_at_exact_cap() {
         alias_binding: Some(&binding),
         observation_time_ms,
     };
-
     let mut expected_value = norito::json::to_value(&definition).expect("legacy definition JSON");
     let binding_dto = routing::asset_alias_binding_dto(&binding, observation_time_ms);
     let norito::json::Value::Object(expected_object) = &mut expected_value else {
@@ -119,14 +110,12 @@ fn asset_definition_borrowed_json_matches_legacy_projection_at_exact_cap() {
         .expect("legacy projection has a compact encoding");
     let actual = norito::json::to_json_bounded_boxed(&source, expected.len())
         .expect("borrowed projection fits its exact boundary");
-
     assert_eq!(actual, expected);
     assert_eq!(
         norito::json::to_json_bounded_boxed(&source, expected.len() - 1),
         Err(norito::json::BoundedJsonError::BodyTooLarge)
     );
 }
-
 #[test]
 fn asset_definition_source_lookup_never_calls_cloning_world_accessor() {
     let source = include_str!("../../torii_app_routed_read_source.rs");
@@ -138,12 +127,10 @@ fn asset_definition_source_lookup_never_calls_cloning_world_accessor() {
         .map(|offset| start + offset)
         .expect("bounded local source helper remains present");
     let selector = &source[start..end];
-
     assert!(selector.contains(".asset_definitions()"));
     assert!(!selector.contains(".asset_definition("));
     assert!(source.contains("ToriiAssetDefinitionJsonSource"));
 }
-
 #[test]
 fn space_directory_bindings_borrowed_json_matches_legacy_shape() {
     let uaid: iroha_data_model::nexus::UniversalAccountId =
@@ -162,14 +149,12 @@ fn space_directory_bindings_borrowed_json_matches_legacy_shape() {
     .expect("legacy empty binding response");
     let actual = norito::json::to_json_bounded_boxed(&source, expected.len())
         .expect("borrowed empty response fits exact boundary");
-
     assert_eq!(actual, expected);
     assert_eq!(
         norito::json::to_json_bounded_boxed(&source, expected.len() - 1),
         Err(norito::json::BoundedJsonError::BodyTooLarge)
     );
 }
-
 #[test]
 fn space_directory_binding_source_does_not_clone_nexus_catalog() {
     let source = include_str!("../../torii_app_routed_read_source.rs");
@@ -181,12 +166,10 @@ fn space_directory_binding_source_does_not_clone_nexus_catalog() {
         .map(|offset| start + offset)
         .expect("next source helper remains present");
     let helper = &source[start..end];
-
     assert!(helper.contains("world.dataspace_catalog()"));
     assert!(!helper.contains("nexus_snapshot"));
     assert!(source.contains("account_id.json_serialize_to(output)"));
 }
-
 #[test]
 fn contract_alias_borrowed_json_matches_owned_dto_at_exact_cap() {
     let authority = crate::tests_runtime_handlers::checked_torii_test_account_id(
@@ -232,14 +215,12 @@ fn contract_alias_borrowed_json_matches_owned_dto_at_exact_cap() {
         .expect("owned DTO has a compact encoding");
     let actual = norito::json::to_json_bounded_boxed(&source, expected.len())
         .expect("borrowed contract alias fits exact boundary");
-
     assert_eq!(actual, expected);
     assert_eq!(
         norito::json::to_json_bounded_boxed(&source, expected.len() - 1),
         Err(norito::json::BoundedJsonError::BodyTooLarge)
     );
 }
-
 #[test]
 fn contract_alias_source_borrows_subject_and_dataspace_catalog() {
     let source = include_str!("../../torii_app_routed_read_source.rs");
@@ -251,13 +232,11 @@ fn contract_alias_source_borrows_subject_and_dataspace_catalog() {
         .map(|offset| start + offset)
         .expect("next source helper remains present");
     let helper = &source[start..end];
-
     assert!(helper.contains("borrow_bound_contract_subject_from_world"));
     assert!(helper.contains("world.dataspace_catalog()"));
     assert!(!helper.contains("nexus_snapshot"));
     assert!(!helper.contains(".cloned()"));
 }
-
 #[test]
 fn explorer_asset_definition_borrowed_json_matches_owned_dto_at_exact_cap() {
     let authority = crate::tests_runtime_handlers::checked_torii_test_account_id(
@@ -293,14 +272,12 @@ fn explorer_asset_definition_borrowed_json_matches_owned_dto_at_exact_cap() {
         .expect("owned explorer DTO has a compact encoding");
     let actual = norito::json::to_json_bounded_boxed(&source, expected.len())
         .expect("borrowed explorer DTO fits its exact boundary");
-
     assert_eq!(actual, expected);
     assert_eq!(
         norito::json::to_json_bounded_boxed(&source, expected.len() - 1),
         Err(norito::json::BoundedJsonError::BodyTooLarge)
     );
 }
-
 #[test]
 fn explorer_asset_definition_source_avoids_cloning_world_and_governance_snapshots() {
     let source = include_str!("../../torii_app_routed_read_source.rs");
@@ -312,20 +289,17 @@ fn explorer_asset_definition_source_avoids_cloning_world_and_governance_snapshot
         .map(|offset| start + offset)
         .expect("next source helper remains present");
     let helper = &source[start..end];
-
     assert!(helper.contains("world.asset_definitions().get(definition_id)"));
     assert!(helper.contains("world.assets_iter()"));
     assert!(!helper.contains(".asset_definition("));
     assert!(!helper.contains("governance_snapshot"));
     assert!(!helper.contains("AssetId::new"));
 }
-
 #[test]
 fn routed_read_json_drops_canonical_scratch_before_final_encoding() {
     let source = include_str!("../../torii_app_routed_read_source.rs");
     let execute = include_str!("../../torii_app_routed_read_execute.rs");
     let merge = include_str!("../../torii_app_routed_read_merge.rs");
-
     assert!(source.contains("drop(canonical_bytes);\n            let body ="));
     assert!(execute.contains("drop(canonical_bytes);\n                    budget.json_response"));
     assert!(
@@ -335,17 +309,14 @@ fn routed_read_json_drops_canonical_scratch_before_final_encoding() {
             >= 1
     );
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RoutedReadSourceStatus {
     Proven,
     Residual,
 }
-
 fn routed_read_source_status(endpoint: ToriiReadEndpointV1) -> RoutedReadSourceStatus {
     use RoutedReadSourceStatus::{Proven, Residual};
     use ToriiReadEndpointV1::*;
-
     match endpoint {
         AccountGet
         | ProofRecordGet
@@ -394,11 +365,9 @@ fn routed_read_source_status(endpoint: ToriiReadEndpointV1) -> RoutedReadSourceS
         | InternalAccountTransactionGet => Residual,
     }
 }
-
 #[test]
 fn routed_read_source_inventory_classifies_all_45_endpoints() {
     use ToriiReadEndpointV1::*;
-
     let endpoints = [
         AccountGet,
         ExplorerAccountDetail,
@@ -451,12 +420,10 @@ fn routed_read_source_inventory_classifies_all_45_endpoints() {
         .copied()
         .filter(|endpoint| routed_read_source_status(*endpoint) == RoutedReadSourceStatus::Proven)
         .count();
-
     assert_eq!(endpoints.len(), 45);
     assert_eq!(proven, 18);
     assert_eq!(endpoints.len() - proven, 27);
 }
-
 #[test]
 fn routed_read_blanket_rejection_is_absent_repo_wide() {
     let forbidden = [
@@ -476,7 +443,6 @@ fn routed_read_blanket_rejection_is_absent_repo_wide() {
         "local_read_fanout_coordinator_enabled",
     ];
     let mut pending = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
-
     while let Some(path) = pending.pop() {
         for entry in std::fs::read_dir(&path).expect("read Torii source directory") {
             let entry = entry.expect("read Torii source entry");

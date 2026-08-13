@@ -1,7 +1,5 @@
 //! Authoritative SoraFS moderation commit/reveal ledger handlers.
-
 use std::{str::FromStr, sync::OnceLock};
-
 use iroha_data_model::{
     account::AccountId,
     events::data::sorafs::{
@@ -65,7 +63,6 @@ use sorafs_manifest::pop_credentials::{
     POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopEligibilityClassV1, PopMembershipProofV1,
     verify_pop_membership_proof_v1,
 };
-
 use super::*;
 use crate::{
     smartcontracts::ValidSingularQuery,
@@ -74,7 +71,6 @@ use crate::{
     },
     state::{StateTransaction, WorldReadOnly},
 };
-
 const POLICY_STATE_KEY: &str = "sorafs_moderation_policy_v1";
 const STATUS_STATE_KEY: &str = "sorafs_moderation_status_v1";
 const APPEAL_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_v1_";
@@ -120,7 +116,6 @@ const PROOF_LIMITS: DecodeLimits = DecodeLimits::new(
 );
 const MANAGE_PERMISSION: &str = "CanManageSorafsModeration";
 const MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1: usize = 65_536;
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct AppealDepositBindingStateV1 {
     deposit_lock_digest: [u8; 32],
@@ -128,7 +123,6 @@ struct AppealDepositBindingStateV1 {
     round_id: String,
     intake_digest: [u8; 32],
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct AppealProofTokenBindingStateV1 {
     proof_token_digest: [u8; 32],
@@ -136,7 +130,6 @@ struct AppealProofTokenBindingStateV1 {
     round_id: String,
     intake_digest: [u8; 32],
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationPersistedEventV1 {
     sequence: u64,
@@ -144,31 +137,26 @@ struct ModerationPersistedEventV1 {
     event_index: u32,
     event: SorafsModerationLedgerEvent,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
     last_event_index: u32,
 }
-
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
     ))
 }
-
 fn corrupt_state(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvariantViolation(message.into().into())
 }
-
 fn corrupt_stored_payload(error: InstructionExecutionError) -> InstructionExecutionError {
     match error {
         error @ InstructionExecutionError::Query(_) => error,
         error => corrupt_state(error.to_string()),
     }
 }
-
 fn require_manage_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -202,7 +190,6 @@ fn require_manage_permission(
         )))
     }
 }
-
 fn block_time_ms(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<u64, InstructionExecutionError> {
@@ -214,14 +201,12 @@ fn block_time_ms(
     }
     Ok(now)
 }
-
 fn ceil_unix_ms_to_epoch(unix_ms: u64) -> Result<u64, InstructionExecutionError> {
     unix_ms
         .checked_add(999)
         .map(|value| value / 1_000)
         .ok_or_else(|| corrupt_state("moderation millisecond deadline overflows epoch rounding"))
 }
-
 fn active_pop_snapshot(
     state_transaction: &StateTransaction<'_, '_>,
     now: u64,
@@ -253,7 +238,6 @@ fn active_pop_snapshot(
     })?;
     Ok((snapshot, active))
 }
-
 fn require_pinned_pop_snapshot(
     state_transaction: &StateTransaction<'_, '_>,
     snapshot: &ModerationPoPRegistrySnapshotV1,
@@ -269,7 +253,6 @@ fn require_pinned_pop_snapshot(
         snapshot.registry_audit_head,
     )
 }
-
 fn latest_parent_randomness_anchor(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<[u8; 32], InstructionExecutionError> {
@@ -289,7 +272,6 @@ fn latest_parent_randomness_anchor(
     }
     Ok(anchor)
 }
-
 fn eligibility_class(class: PopEligibilityClassV1) -> ModerationJurorEligibilityClassV1 {
     match class {
         PopEligibilityClassV1::General => ModerationJurorEligibilityClassV1::General,
@@ -299,40 +281,33 @@ fn eligibility_class(class: PopEligibilityClassV1) -> ModerationJurorEligibility
         PopEligibilityClassV1::Observer => ModerationJurorEligibilityClassV1::Observer,
     }
 }
-
 fn policy_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| StatePath::from_str(POLICY_STATE_KEY).expect("static state key is valid"))
 }
-
 fn status_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| StatePath::from_str(STATUS_STATE_KEY).expect("static state key is valid"))
 }
-
 fn event_journal_head_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
         StatePath::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
     })
 }
-
 fn event_key(sequence: u64) -> StatePath {
     StatePath::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
         .expect("static prefix plus fixed-width lowercase hex is a valid state key")
 }
-
 fn digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
     StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static prefix plus lowercase hex is a valid state key")
 }
-
 fn update_string(hasher: &mut blake3::Hasher, value: &str) {
     let length = u64::try_from(value.len()).expect("state-key material length fits u64");
     hasher.update(&length.to_le_bytes());
     hasher.update(value.as_bytes());
 }
-
 fn validate_lookup_identifiers(
     case_id: &str,
     round_id: &str,
@@ -346,7 +321,6 @@ fn validate_lookup_identifiers(
     }
     Ok(())
 }
-
 fn validate_challenge_reason(reason: &str) -> Result<(), InstructionExecutionError> {
     if reason.trim().is_empty()
         || reason != reason.trim()
@@ -359,7 +333,6 @@ fn validate_challenge_reason(reason: &str) -> Result<(), InstructionExecutionErr
     }
     Ok(())
 }
-
 fn case_digest(case_id: &str, round_id: &str) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(CASE_KEY_DOMAIN_V1);
@@ -367,7 +340,6 @@ fn case_digest(case_id: &str, round_id: &str) -> [u8; 32] {
     update_string(&mut hasher, round_id);
     *hasher.finalize().as_bytes()
 }
-
 fn juror_digest(case_id: &str, round_id: &str, juror: &AccountId) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(JUROR_KEY_DOMAIN_V1);
@@ -376,7 +348,6 @@ fn juror_digest(case_id: &str, round_id: &str, juror: &AccountId) -> [u8; 32] {
     update_string(&mut hasher, &juror.to_string());
     *hasher.finalize().as_bytes()
 }
-
 fn challenge_digest(case_id: &str, round_id: &str, challenge_id: &str) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(CHALLENGE_KEY_DOMAIN_V1);
@@ -385,93 +356,78 @@ fn challenge_digest(case_id: &str, round_id: &str, challenge_id: &str) -> [u8; 3
     update_string(&mut hasher, challenge_id);
     *hasher.finalize().as_bytes()
 }
-
 fn nullifier_digest(nullifier: [u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NULLIFIER_KEY_DOMAIN_V1);
     hasher.update(&nullifier);
     *hasher.finalize().as_bytes()
 }
-
 fn appeal_deposit_digest(deposit_lock_digest: [u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(APPEAL_DEPOSIT_KEY_DOMAIN_V1);
     hasher.update(&deposit_lock_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn appeal_proof_token_digest(proof_token_digest: [u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(APPEAL_PROOF_TOKEN_KEY_DOMAIN_V1);
     hasher.update(&proof_token_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn appeal_key(case_id: &str, round_id: &str) -> StatePath {
     digest_key(APPEAL_STATE_KEY_PREFIX, case_digest(case_id, round_id))
 }
-
 fn eligibility_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         ELIGIBILITY_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
     )
 }
-
 fn nullifier_key(nullifier: [u8; 32]) -> StatePath {
     digest_key(NULLIFIER_STATE_KEY_PREFIX, nullifier_digest(nullifier))
 }
-
 fn appeal_deposit_key(deposit_lock_digest: [u8; 32]) -> StatePath {
     digest_key(
         APPEAL_DEPOSIT_STATE_KEY_PREFIX,
         appeal_deposit_digest(deposit_lock_digest),
     )
 }
-
 fn appeal_proof_token_key(proof_token_digest: [u8; 32]) -> StatePath {
     digest_key(
         APPEAL_PROOF_TOKEN_STATE_KEY_PREFIX,
         appeal_proof_token_digest(proof_token_digest),
     )
 }
-
 fn case_key(case_id: &str, round_id: &str) -> StatePath {
     digest_key(CASE_STATE_KEY_PREFIX, case_digest(case_id, round_id))
 }
-
 fn commit_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         COMMIT_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
     )
 }
-
 fn reveal_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         REVEAL_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
     )
 }
-
 fn challenge_key(case_id: &str, round_id: &str, challenge_id: &str) -> StatePath {
     digest_key(
         CHALLENGE_STATE_KEY_PREFIX,
         challenge_digest(case_id, round_id, challenge_id),
     )
 }
-
 fn outcome_key(case_id: &str, round_id: &str) -> StatePath {
     digest_key(OUTCOME_STATE_KEY_PREFIX, case_digest(case_id, round_id))
 }
-
 fn no_show_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         NO_SHOW_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
     )
 }
-
 fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
@@ -479,7 +435,6 @@ fn encode_state<T: norito::core::NoritoSerialize>(
     norito::to_bytes(value)
         .map_err(|error| corrupt_state(format!("failed to encode {label}: {error}")))
 }
-
 fn encode_payload<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
@@ -487,7 +442,6 @@ fn encode_payload<T: norito::core::NoritoSerialize>(
     norito::encode_canonical(value)
         .map_err(|error| invalid_parameter(format!("failed to canonicalize {label}: {error}")))
 }
-
 fn decode_state_for_current<T>(
     bytes: &[u8],
     label: &str,
@@ -498,7 +452,6 @@ where
 {
     decode_state_with_current(bytes, label, Some(current))
 }
-
 fn decode_state_with_current<T>(
     bytes: &[u8],
     label: &str,
@@ -551,14 +504,12 @@ where
     }
     Ok(value)
 }
-
 fn decode_payload<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
     decode_payload_with_current(bytes, label, None)
 }
-
 fn decode_payload_for_current<T>(
     bytes: &[u8],
     label: &str,
@@ -569,7 +520,6 @@ where
 {
     decode_payload_with_current(bytes, label, Some(current))
 }
-
 fn decode_payload_with_current<T>(
     bytes: &[u8],
     label: &str,
@@ -619,7 +569,6 @@ where
     }
     Ok(value)
 }
-
 fn validate_persisted_event(
     record: &ModerationPersistedEventV1,
     expected_sequence: u64,
@@ -654,14 +603,12 @@ fn validate_persisted_event(
     }
     Ok(())
 }
-
 fn read_persisted_event(
     world: &impl WorldReadOnly,
     sequence: u64,
 ) -> Result<Option<ModerationPersistedEventV1>, InstructionExecutionError> {
     read_persisted_event_with_current(world, sequence, None)
 }
-
 fn read_persisted_event_for_current(
     world: &impl WorldReadOnly,
     sequence: u64,
@@ -669,7 +616,6 @@ fn read_persisted_event_for_current(
 ) -> Result<Option<ModerationPersistedEventV1>, InstructionExecutionError> {
     read_persisted_event_with_current(world, sequence, Some(current))
 }
-
 fn read_persisted_event_with_current(
     world: &impl WorldReadOnly,
     sequence: u64,
@@ -689,20 +635,17 @@ fn read_persisted_event_with_current(
     validate_persisted_event(&record, sequence)?;
     Ok(Some(record))
 }
-
 fn read_event_journal_head(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ModerationEventJournalHeadV1>, InstructionExecutionError> {
     read_event_journal_head_with_current(world, None)
 }
-
 fn read_event_journal_head_for_current(
     world: &impl WorldReadOnly,
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
 ) -> Result<Option<ModerationEventJournalHeadV1>, InstructionExecutionError> {
     read_event_journal_head_with_current(world, Some(current))
 }
-
 fn read_event_journal_head_with_current(
     world: &impl WorldReadOnly,
     mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
@@ -733,7 +676,6 @@ fn read_event_journal_head_with_current(
     }
     Ok(Some(head))
 }
-
 fn ensure_no_event_after_head(
     world: &impl WorldReadOnly,
     head: Option<ModerationEventJournalHeadV1>,
@@ -781,7 +723,6 @@ fn ensure_no_event_after_head(
     }
     Ok(())
 }
-
 fn decode_membership_proof(
     bytes: &[u8],
 ) -> Result<PopMembershipProofV1, InstructionExecutionError> {
@@ -802,20 +743,17 @@ fn decode_membership_proof(
         }
     })
 }
-
 fn read_policy(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ModerationLedgerPolicyRecord>, InstructionExecutionError> {
     read_policy_with_current(world, None)
 }
-
 fn read_policy_for_current(
     world: &impl WorldReadOnly,
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
 ) -> Result<Option<ModerationLedgerPolicyRecord>, InstructionExecutionError> {
     read_policy_with_current(world, Some(current))
 }
-
 fn read_policy_with_current(
     world: &impl WorldReadOnly,
     mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
@@ -843,20 +781,17 @@ fn read_policy_with_current(
     }
     Ok(Some(record))
 }
-
 fn read_status(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ModerationLedgerStatusV1>, InstructionExecutionError> {
     read_status_with_current(world, None)
 }
-
 fn read_status_for_current(
     world: &impl WorldReadOnly,
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
 ) -> Result<Option<ModerationLedgerStatusV1>, InstructionExecutionError> {
     read_status_with_current(world, Some(current))
 }
-
 fn read_status_with_current(
     world: &impl WorldReadOnly,
     mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
@@ -881,7 +816,6 @@ fn read_status_with_current(
     }
     Ok(Some(status))
 }
-
 fn status_for_mutation(
     world: &impl WorldReadOnly,
     now: u64,
@@ -896,7 +830,6 @@ fn status_for_mutation(
     }
     Ok(status)
 }
-
 fn canonical_account_list(accounts: &[AccountId]) -> bool {
     let mut previous: Option<String> = None;
     accounts.iter().all(|account| {
@@ -906,14 +839,12 @@ fn canonical_account_list(accounts: &[AccountId]) -> bool {
         valid
     })
 }
-
 fn unique_account_list(accounts: &[AccountId]) -> bool {
     accounts
         .iter()
         .enumerate()
         .all(|(index, account)| accounts[..index].iter().all(|previous| previous != account))
 }
-
 fn canonical_identifier_list(values: &[String]) -> bool {
     let mut previous: Option<&str> = None;
     values.iter().all(|value| {
@@ -923,7 +854,6 @@ fn canonical_identifier_list(values: &[String]) -> bool {
         valid
     })
 }
-
 fn read_appeal(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -931,7 +861,6 @@ fn read_appeal(
 ) -> Result<Option<ModerationAppealRecordV1>, InstructionExecutionError> {
     read_appeal_with_current(world, case_id, round_id, None)
 }
-
 fn read_appeal_for_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -940,7 +869,6 @@ fn read_appeal_for_current(
 ) -> Result<Option<ModerationAppealRecordV1>, InstructionExecutionError> {
     read_appeal_with_current(world, case_id, round_id, Some(current))
 }
-
 fn read_appeal_with_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1149,7 +1077,6 @@ fn read_appeal_with_current(
     }
     Ok(Some(record))
 }
-
 fn required_appeal(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1161,14 +1088,12 @@ fn required_appeal(
         ))
     })
 }
-
 fn read_appeal_deposit_binding(
     world: &impl WorldReadOnly,
     deposit_lock_digest: [u8; 32],
 ) -> Result<Option<AppealDepositBindingStateV1>, InstructionExecutionError> {
     read_appeal_deposit_binding_with_current(world, deposit_lock_digest, None)
 }
-
 fn read_appeal_deposit_binding_for_current(
     world: &impl WorldReadOnly,
     deposit_lock_digest: [u8; 32],
@@ -1176,7 +1101,6 @@ fn read_appeal_deposit_binding_for_current(
 ) -> Result<Option<AppealDepositBindingStateV1>, InstructionExecutionError> {
     read_appeal_deposit_binding_with_current(world, deposit_lock_digest, Some(current))
 }
-
 fn read_appeal_deposit_binding_with_current(
     world: &impl WorldReadOnly,
     deposit_lock_digest: [u8; 32],
@@ -1218,14 +1142,12 @@ fn read_appeal_deposit_binding_with_current(
     }
     Ok(Some(binding))
 }
-
 fn read_appeal_proof_token_binding(
     world: &impl WorldReadOnly,
     proof_token_digest: [u8; 32],
 ) -> Result<Option<AppealProofTokenBindingStateV1>, InstructionExecutionError> {
     read_appeal_proof_token_binding_with_current(world, proof_token_digest, None)
 }
-
 fn read_appeal_proof_token_binding_for_current(
     world: &impl WorldReadOnly,
     proof_token_digest: [u8; 32],
@@ -1233,7 +1155,6 @@ fn read_appeal_proof_token_binding_for_current(
 ) -> Result<Option<AppealProofTokenBindingStateV1>, InstructionExecutionError> {
     read_appeal_proof_token_binding_with_current(world, proof_token_digest, Some(current))
 }
-
 fn read_appeal_proof_token_binding_with_current(
     world: &impl WorldReadOnly,
     proof_token_digest: [u8; 32],
@@ -1275,7 +1196,6 @@ fn read_appeal_proof_token_binding_with_current(
     }
     Ok(Some(binding))
 }
-
 fn read_eligibility(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1284,7 +1204,6 @@ fn read_eligibility(
 ) -> Result<Option<ModerationJurorEligibilityRecordV1>, InstructionExecutionError> {
     read_eligibility_with_current(world, case_id, round_id, juror, None)
 }
-
 fn read_eligibility_for_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1294,7 +1213,6 @@ fn read_eligibility_for_current(
 ) -> Result<Option<ModerationJurorEligibilityRecordV1>, InstructionExecutionError> {
     read_eligibility_with_current(world, case_id, round_id, juror, Some(current))
 }
-
 fn read_eligibility_with_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1343,14 +1261,12 @@ fn read_eligibility_with_current(
     }
     Ok(Some(record))
 }
-
 fn read_nullifier(
     world: &impl WorldReadOnly,
     nullifier: [u8; 32],
 ) -> Result<Option<ModerationJurorEligibilityRecordV1>, InstructionExecutionError> {
     read_nullifier_with_current(world, nullifier, None)
 }
-
 fn read_nullifier_for_current(
     world: &impl WorldReadOnly,
     nullifier: [u8; 32],
@@ -1358,7 +1274,6 @@ fn read_nullifier_for_current(
 ) -> Result<Option<ModerationJurorEligibilityRecordV1>, InstructionExecutionError> {
     read_nullifier_with_current(world, nullifier, Some(current))
 }
-
 fn read_nullifier_with_current(
     world: &impl WorldReadOnly,
     nullifier: [u8; 32],
@@ -1390,7 +1305,6 @@ fn read_nullifier_with_current(
     }
     Ok(Some(record))
 }
-
 fn read_case(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1398,7 +1312,6 @@ fn read_case(
 ) -> Result<Option<ModerationCaseRecordV1>, InstructionExecutionError> {
     read_case_with_current(world, case_id, round_id, None)
 }
-
 fn read_case_for_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1407,7 +1320,6 @@ fn read_case_for_current(
 ) -> Result<Option<ModerationCaseRecordV1>, InstructionExecutionError> {
     read_case_with_current(world, case_id, round_id, Some(current))
 }
-
 fn read_case_with_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1505,7 +1417,6 @@ fn read_case_with_current(
     }
     Ok(Some(record))
 }
-
 fn read_commit(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1514,7 +1425,6 @@ fn read_commit(
 ) -> Result<Option<ModerationCommitRecordV1>, InstructionExecutionError> {
     read_commit_with_current(world, case_id, round_id, juror, None)
 }
-
 fn read_commit_for_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1524,7 +1434,6 @@ fn read_commit_for_current(
 ) -> Result<Option<ModerationCommitRecordV1>, InstructionExecutionError> {
     read_commit_with_current(world, case_id, round_id, juror, Some(current))
 }
-
 fn read_commit_with_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1579,7 +1488,6 @@ fn read_commit_with_current(
     }
     Ok(Some(record))
 }
-
 fn read_reveal(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1588,7 +1496,6 @@ fn read_reveal(
 ) -> Result<Option<ModerationRevealRecordV1>, InstructionExecutionError> {
     read_reveal_with_current(world, case_id, round_id, juror, None)
 }
-
 fn read_reveal_for_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1598,7 +1505,6 @@ fn read_reveal_for_current(
 ) -> Result<Option<ModerationRevealRecordV1>, InstructionExecutionError> {
     read_reveal_with_current(world, case_id, round_id, juror, Some(current))
 }
-
 fn read_reveal_with_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1667,7 +1573,6 @@ fn read_reveal_with_current(
     }
     Ok(Some(record))
 }
-
 fn read_challenge(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1676,7 +1581,6 @@ fn read_challenge(
 ) -> Result<Option<ModerationChallengeRecordV1>, InstructionExecutionError> {
     read_challenge_with_current(world, case_id, round_id, challenge_id, None)
 }
-
 fn read_challenge_for_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1686,7 +1590,6 @@ fn read_challenge_for_current(
 ) -> Result<Option<ModerationChallengeRecordV1>, InstructionExecutionError> {
     read_challenge_with_current(world, case_id, round_id, challenge_id, Some(current))
 }
-
 fn read_challenge_with_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1763,7 +1666,6 @@ fn read_challenge_with_current(
     }
     Ok(Some(record))
 }
-
 fn read_outcome(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1771,7 +1673,6 @@ fn read_outcome(
 ) -> Result<Option<ModerationOutcomeRecordV1>, InstructionExecutionError> {
     read_outcome_with_current(world, case_id, round_id, None)
 }
-
 fn read_outcome_for_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1780,7 +1681,6 @@ fn read_outcome_for_current(
 ) -> Result<Option<ModerationOutcomeRecordV1>, InstructionExecutionError> {
     read_outcome_with_current(world, case_id, round_id, Some(current))
 }
-
 fn read_outcome_with_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1820,7 +1720,6 @@ fn read_outcome_with_current(
     }
     Ok(Some(record))
 }
-
 #[allow(clippy::too_many_lines)]
 fn read_no_show(
     world: &impl WorldReadOnly,
@@ -1830,7 +1729,6 @@ fn read_no_show(
 ) -> Result<Option<ModerationNoShowRecordV1>, InstructionExecutionError> {
     read_no_show_with_current(world, case_id, round_id, juror, None)
 }
-
 fn read_no_show_for_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1840,7 +1738,6 @@ fn read_no_show_for_current(
 ) -> Result<Option<ModerationNoShowRecordV1>, InstructionExecutionError> {
     read_no_show_with_current(world, case_id, round_id, juror, Some(current))
 }
-
 fn read_no_show_with_current(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1900,7 +1797,6 @@ fn read_no_show_with_current(
     }
     Ok(Some(record))
 }
-
 fn required_case(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1912,7 +1808,6 @@ fn required_case(
         ))
     })
 }
-
 fn ensure_case_open(case: &ModerationCaseRecordV1) -> Result<(), InstructionExecutionError> {
     if case.status == ModerationCaseStatusV1::Open {
         Ok(())
@@ -1923,7 +1818,6 @@ fn ensure_case_open(case: &ModerationCaseRecordV1) -> Result<(), InstructionExec
         )))
     }
 }
-
 fn ensure_juror(
     case: &ModerationCaseRecordV1,
     juror: &AccountId,
@@ -1937,23 +1831,19 @@ fn ensure_juror(
         )))
     }
 }
-
 fn checked_inc(value: u64, label: &str) -> Result<u64, InstructionExecutionError> {
     value
         .checked_add(1)
         .ok_or_else(|| corrupt_state(format!("moderation {label} counter overflow")))
 }
-
 fn checked_add(value: u64, addend: u64, label: &str) -> Result<u64, InstructionExecutionError> {
     value
         .checked_add(addend)
         .ok_or_else(|| corrupt_state(format!("moderation {label} counter overflow")))
 }
-
 fn encode_status(status: &ModerationLedgerStatusV1) -> Result<Vec<u8>, InstructionExecutionError> {
     encode_state(status, "moderation status")
 }
-
 fn emit_moderation_ledger_event(
     state_transaction: &mut StateTransaction<'_, '_>,
     kind: SorafsModerationLedgerEventKind,
@@ -1973,7 +1863,6 @@ fn emit_moderation_ledger_event(
             "moderation event target height {target_block_height} does not match executing block height {executing_block_height}"
         )));
     }
-
     let event = SorafsModerationLedgerEvent {
         kind,
         case_id: case_id.map(str::to_owned),
@@ -2072,7 +1961,6 @@ fn emit_moderation_ledger_event(
         .emit_events(Some(SorafsGatewayEvent::ModerationLedger(event)));
     Ok(())
 }
-
 impl Execute for SetSorafsModerationPolicy {
     fn execute(
         self,
@@ -2087,7 +1975,6 @@ impl Execute for SetSorafsModerationPolicy {
         let digest = self.policy.digest().map_err(|error| {
             invalid_parameter(format!("failed to digest moderation policy: {error}"))
         })?;
-
         let current = read_policy(state_transaction.world())?;
         let mut status = match current.as_ref() {
             None => {
@@ -2128,7 +2015,6 @@ impl Execute for SetSorafsModerationPolicy {
             }
         };
         status.updated_at_unix_ms = now;
-
         let record = ModerationLedgerPolicyRecord {
             policy: self.policy,
             policy_digest: digest,
@@ -2156,7 +2042,6 @@ impl Execute for SetSorafsModerationPolicy {
         Ok(())
     }
 }
-
 impl Execute for SubmitSorafsModerationAppeal {
     fn execute(
         self,
@@ -2329,7 +2214,6 @@ impl Execute for SubmitSorafsModerationAppeal {
         Ok(())
     }
 }
-
 impl Execute for RegisterSorafsModerationJurorEligibility {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -2472,7 +2356,6 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
         Ok(())
     }
 }
-
 impl Execute for FinalizeSorafsModerationSortition {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -2637,7 +2520,6 @@ impl Execute for FinalizeSorafsModerationSortition {
         Ok(())
     }
 }
-
 impl Execute for AcceptSorafsModerationJurorAssignment {
     fn execute(
         self,
@@ -2710,7 +2592,6 @@ impl Execute for AcceptSorafsModerationJurorAssignment {
         Ok(())
     }
 }
-
 impl Execute for ActivateSorafsModerationCase {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -2877,7 +2758,6 @@ impl Execute for ActivateSorafsModerationCase {
         Ok(())
     }
 }
-
 impl Execute for SubmitSorafsModerationCommit {
     fn execute(
         self,
@@ -2953,7 +2833,6 @@ impl Execute for SubmitSorafsModerationCommit {
         let mut status = status_for_mutation(state_transaction.world(), now)?;
         status.commitments = checked_inc(status.commitments, "commitment")?;
         status.updated_at_unix_ms = now;
-
         let record_key = commit_key(&record.case_id, &record.round_id, authority);
         let case_key = case_key(&record.case_id, &record.round_id);
         let encoded_record = encode_state(&record, "moderation commit")?;
@@ -2982,7 +2861,6 @@ impl Execute for SubmitSorafsModerationCommit {
         Ok(())
     }
 }
-
 impl Execute for RaiseSorafsModerationChallenge {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -3083,7 +2961,6 @@ impl Execute for RaiseSorafsModerationChallenge {
         let mut status = status_for_mutation(state_transaction.world(), now)?;
         status.challenges = checked_inc(status.challenges, "challenge")?;
         status.updated_at_unix_ms = now;
-
         let record_key = challenge_key(&record.case_id, &record.round_id, &record.challenge_id);
         let case_key = case_key(&record.case_id, &record.round_id);
         let encoded_record = encode_state(&record, "moderation challenge")?;
@@ -3112,7 +2989,6 @@ impl Execute for RaiseSorafsModerationChallenge {
         Ok(())
     }
 }
-
 impl Execute for ResolveSorafsModerationChallenge {
     fn execute(
         self,
@@ -3208,7 +3084,6 @@ impl Execute for ResolveSorafsModerationChallenge {
         Ok(())
     }
 }
-
 impl Execute for SubmitSorafsModerationReveal {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -3283,7 +3158,6 @@ impl Execute for SubmitSorafsModerationReveal {
                 "moderation reveal does not match commitment: {error}"
             ))
         })?;
-
         reveal.revealed_at_unix_ms = now;
         let canonical_reveal = encode_payload(&reveal, "moderation reveal")?;
         let record = ModerationRevealRecordV1 {
@@ -3305,7 +3179,6 @@ impl Execute for SubmitSorafsModerationReveal {
         let mut status = status_for_mutation(state_transaction.world(), now)?;
         status.reveals = checked_inc(status.reveals, "reveal")?;
         status.updated_at_unix_ms = now;
-
         let record_key = reveal_key(&record.case_id, &record.round_id, authority);
         let case_key = case_key(&record.case_id, &record.round_id);
         let encoded_record = encode_state(&record, "moderation reveal")?;
@@ -3334,7 +3207,6 @@ impl Execute for SubmitSorafsModerationReveal {
         Ok(())
     }
 }
-
 fn increment_choice(
     counts: &mut ModerationVoteCountsV1,
     choice: SoraFsModerationVoteChoice,
@@ -3350,7 +3222,6 @@ fn increment_choice(
         .ok_or_else(|| corrupt_state("moderation vote counter overflow"))?;
     Ok(())
 }
-
 impl Execute for FinalizeSorafsModerationCase {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -3416,7 +3287,6 @@ impl Execute for FinalizeSorafsModerationCase {
                 .ok_or_else(|| corrupt_state("moderation expired-challenge counter overflow"))?;
             case.pending_challenge_count = 0;
         }
-
         let challenged = case.accepted_challenge_count != 0 || case.expired_challenge_count != 0;
         let mut counts = ModerationVoteCountsV1::default();
         let mut no_shows = Vec::new();
@@ -3463,7 +3333,6 @@ impl Execute for FinalizeSorafsModerationCase {
                 });
             }
         }
-
         let votes_total = counts
             .checked_total()
             .ok_or_else(|| corrupt_state("moderation vote-total overflow"))?;
@@ -3512,7 +3381,6 @@ impl Execute for FinalizeSorafsModerationCase {
         status.outcomes = checked_inc(status.outcomes, "outcome")?;
         status.no_shows = checked_add(status.no_shows, u64::from(no_show_count), "no-show")?;
         status.updated_at_unix_ms = now;
-
         let encoded_outcome = encode_state(&outcome, "moderation outcome")?;
         let encoded_case = encode_state(&case, "moderation case")?;
         let encoded_appeal = encode_state(&appeal, "moderation appeal")?;
@@ -3536,7 +3404,6 @@ impl Execute for FinalizeSorafsModerationCase {
                 encode_state(no_show, "moderation no-show")?,
             ));
         }
-
         state_transaction
             .world
             .smart_contract_state
@@ -3576,13 +3443,11 @@ impl Execute for FinalizeSorafsModerationCase {
         Ok(())
     }
 }
-
 #[derive(Default)]
 struct ModerationSnapshotReadBudget {
     records: usize,
     encoded_bytes: usize,
 }
-
 impl ModerationSnapshotReadBudget {
     fn charge(&mut self, key: &StatePath, payload: &[u8]) -> Result<(), InstructionExecutionError> {
         self.records = self
@@ -3610,7 +3475,6 @@ impl ModerationSnapshotReadBudget {
         Ok(())
     }
 }
-
 fn charge_existing_snapshot_state(
     world: &impl WorldReadOnly,
     key: &StatePath,
@@ -3621,7 +3485,6 @@ fn charge_existing_snapshot_state(
     }
     Ok(())
 }
-
 fn moderation_transient_current(
     retained: Option<&crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<
@@ -3637,7 +3500,6 @@ fn moderation_transient_current(
         .transpose()
         .map_err(InstructionExecutionError::Query)
 }
-
 fn reset_moderation_current(
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
     resident_bytes: usize,
@@ -3647,7 +3509,6 @@ fn reset_moderation_current(
             .map_err(InstructionExecutionError::Query)?;
     Ok(())
 }
-
 fn scan_moderation_state_prefix<T>(
     world: &impl WorldReadOnly,
     prefix: &'static str,
@@ -3696,7 +3557,6 @@ where
     }
     Ok(records.into_retained_vec())
 }
-
 fn resolve_finalized_cursor(
     state_ro: &impl crate::state::StateReadOnly,
 ) -> Result<ModerationFinalizedCursorV1, QueryExecutionFail> {
@@ -3724,7 +3584,6 @@ fn resolve_finalized_cursor(
         block_hash: hash,
     })
 }
-
 fn resolve_committed_event(
     state_ro: &impl crate::state::StateReadOnly,
     record: ModerationPersistedEventV1,
@@ -3762,7 +3621,6 @@ fn resolve_committed_event(
         event: record.event,
     })
 }
-
 fn checked_snapshot_limits(
     query: &FindSorafsModerationSnapshot,
 ) -> Result<(usize, usize), QueryExecutionFail> {
@@ -3786,7 +3644,6 @@ fn checked_snapshot_limits(
     })?;
     Ok((max_cases, max_events))
 }
-
 fn checked_event_page_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
     if !(1..=MODERATION_QUERY_MAX_EVENTS_V1).contains(&limit) {
         return Err(QueryExecutionFail::Conversion(format!(
@@ -3797,14 +3654,12 @@ fn checked_event_page_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
         QueryExecutionFail::Conversion("SoraFS moderation event limit conversion failed".to_owned())
     })
 }
-
 #[derive(Clone, Copy)]
 struct ModerationQueryEventPosition {
     sequence: u64,
     target_block_height: u64,
     event_index: u32,
 }
-
 impl From<&ModerationPersistedEventV1> for ModerationQueryEventPosition {
     fn from(record: &ModerationPersistedEventV1) -> Self {
         Self {
@@ -3814,7 +3669,6 @@ impl From<&ModerationPersistedEventV1> for ModerationQueryEventPosition {
         }
     }
 }
-
 fn validate_query_event_successor(
     previous: Option<ModerationQueryEventPosition>,
     current: &ModerationPersistedEventV1,
@@ -3862,7 +3716,6 @@ fn validate_query_event_successor(
         )),
     }
 }
-
 fn read_event_sequence(
     state_ro: &impl crate::state::StateReadOnly,
     sequence: u64,
@@ -3884,7 +3737,6 @@ fn read_event_sequence(
     let resolved = resolve_committed_event(state_ro, record)?;
     Ok((position, resolved))
 }
-
 fn latest_committed_events(
     state_ro: &impl crate::state::StateReadOnly,
     head: Option<ModerationEventJournalHeadV1>,
@@ -3943,7 +3795,6 @@ fn latest_committed_events(
     }
     events.into_vec()
 }
-
 fn query_moderation_event_page(
     query: &FindSorafsModerationEvents,
     state_ro: &impl crate::state::StateReadOnly,
@@ -4057,7 +3908,6 @@ fn query_moderation_event_page(
     }
     Ok(page)
 }
-
 fn count_as_u64(count: usize, label: &str) -> Result<u64, QueryExecutionFail> {
     u64::try_from(count).map_err(|_| {
         QueryExecutionFail::Conversion(format!(
@@ -4065,7 +3915,6 @@ fn count_as_u64(count: usize, label: &str) -> Result<u64, QueryExecutionFail> {
         ))
     })
 }
-
 fn sum_lengths_as_u64(
     counts: impl IntoIterator<Item = usize>,
     label: &str,
@@ -4077,7 +3926,6 @@ fn sum_lengths_as_u64(
         })
     })
 }
-
 #[allow(clippy::too_many_lines)]
 fn query_moderation_snapshot(
     query: &FindSorafsModerationSnapshot,
@@ -4097,7 +3945,6 @@ fn query_moderation_snapshot(
     charge_existing_snapshot_state(world, status_key(), &mut budget).map_err(query_failure)?;
     charge_existing_snapshot_state(world, event_journal_head_key(), &mut budget)
         .map_err(query_failure)?;
-
     let mut retained_base =
         crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
     let policy = read_policy_for_current(world, &mut retained_base).map_err(query_failure)?;
@@ -4109,7 +3956,6 @@ fn query_moderation_snapshot(
     let head =
         read_event_journal_head_for_current(world, &mut head_current).map_err(query_failure)?;
     ensure_no_event_after_head(world, head).map_err(query_failure)?;
-
     let mut appeals: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
         ModerationAppealRecordV1,
     > = scan_moderation_state_prefix(
@@ -4498,7 +4344,6 @@ fn query_moderation_snapshot(
         },
     )
     .map_err(query_failure)?;
-
     if appeals.len() > max_cases || cases.len() > max_cases {
         return Err(QueryExecutionFail::Conversion(format!(
             "complete moderation projection contains {} appeals and {} cases, exceeding requested max_cases {max_cases}",
@@ -4506,7 +4351,6 @@ fn query_moderation_snapshot(
             cases.len()
         )));
     }
-
     let primary_records_present = !appeals.is_empty()
         || !eligibilities.is_empty()
         || !cases.is_empty()
@@ -4536,7 +4380,6 @@ fn query_moderation_snapshot(
     drop(deposit_bindings);
     drop(proof_token_bindings);
     drop(nullifier_bindings);
-
     appeals.sort_by(|left, right| {
         (left.intake.case_id.as_str(), left.intake.round_id.as_str()).cmp(&(
             right.intake.case_id.as_str(),
@@ -4569,7 +4412,6 @@ fn query_moderation_snapshot(
             "moderation snapshot contains duplicate case identities".to_owned(),
         ));
     }
-
     if cases.iter().any(|case| {
         let target = (
             case.spec.context.case_id.as_str(),
@@ -4608,7 +4450,6 @@ fn query_moderation_snapshot(
             "moderation appeal and activated-case projections disagree".to_owned(),
         ));
     }
-
     let eligibility_count = eligibilities.len();
     let commit_count = commits.len();
     let reveal_count = reveals.len();
@@ -4651,7 +4492,6 @@ fn query_moderation_snapshot(
         .iter()
         .filter(|case| case.status == ModerationCaseStatusV1::Finalized)
         .count();
-
     eligibilities.sort_by(|left, right| {
         (left.case_id.as_str(), left.round_id.as_str(), &left.juror).cmp(&(
             right.case_id.as_str(),
@@ -4706,7 +4546,6 @@ fn query_moderation_snapshot(
             "moderation snapshot contains orphan eligibility records".to_owned(),
         ));
     }
-
     let mut commits = commits;
     commits.sort_by(|left, right| {
         (left.case_id.as_str(), left.round_id.as_str(), &left.juror).cmp(&(
@@ -4756,13 +4595,11 @@ fn query_moderation_snapshot(
             &right.juror,
         ))
     });
-
     let mut commits = commits.into_iter();
     let mut reveals = reveals.into_iter();
     let mut challenges = challenges.into_iter();
     let mut outcomes = outcomes.into_iter();
     let mut no_shows = no_shows.into_iter();
-
     macro_rules! take_case_records {
         ($records:ident, $target:expr, $current:ident) => {{
             let target = $target;
@@ -4791,7 +4628,6 @@ fn query_moderation_snapshot(
             group.into_vec()
         }};
     }
-
     let case_count_for_capacity = cases.len();
     let mut case_views =
         crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(case_count_for_capacity)?;
@@ -4844,7 +4680,6 @@ fn query_moderation_snapshot(
             "moderation snapshot contains orphan case subrecords".to_owned(),
         ));
     }
-
     if let Some(status) = status {
         let expected = ModerationLedgerStatusV1 {
             appeal_intakes: count_as_u64(appeal_count, "appeal")?,
@@ -4885,7 +4720,6 @@ fn query_moderation_snapshot(
             ));
         }
     }
-
     let events =
         latest_committed_events(state_ro, head, max_events, &mut budget, retained_base_bytes)?;
     let snapshot = ModerationFinalizedLedgerSnapshotV1 {
@@ -4914,14 +4748,12 @@ fn query_moderation_snapshot(
     }
     Ok(snapshot)
 }
-
 fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
     match error {
         InstructionExecutionError::Query(error) => error,
         error => QueryExecutionFail::Conversion(error.to_string()),
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationPolicy {
     fn execute(
         &self,
@@ -4934,7 +4766,6 @@ impl ValidSingularQuery for FindSorafsModerationPolicy {
             .ok_or_else(|| QueryExecutionFail::Find(FindError::SorafsModerationPolicy))
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationAppeal {
     fn execute(
         &self,
@@ -4957,7 +4788,6 @@ impl ValidSingularQuery for FindSorafsModerationAppeal {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationJurorEligibility {
     fn execute(
         &self,
@@ -4981,7 +4811,6 @@ impl ValidSingularQuery for FindSorafsModerationJurorEligibility {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationCase {
     fn execute(
         &self,
@@ -5004,7 +4833,6 @@ impl ValidSingularQuery for FindSorafsModerationCase {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationCommit {
     fn execute(
         &self,
@@ -5028,7 +4856,6 @@ impl ValidSingularQuery for FindSorafsModerationCommit {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationReveal {
     fn execute(
         &self,
@@ -5052,7 +4879,6 @@ impl ValidSingularQuery for FindSorafsModerationReveal {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationChallenge {
     fn execute(
         &self,
@@ -5076,7 +4902,6 @@ impl ValidSingularQuery for FindSorafsModerationChallenge {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationOutcome {
     fn execute(
         &self,
@@ -5099,7 +4924,6 @@ impl ValidSingularQuery for FindSorafsModerationOutcome {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationNoShow {
     fn execute(
         &self,
@@ -5123,7 +4947,6 @@ impl ValidSingularQuery for FindSorafsModerationNoShow {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationStatus {
     fn execute(
         &self,
@@ -5144,7 +4967,6 @@ impl ValidSingularQuery for FindSorafsModerationStatus {
         }
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationSnapshot {
     fn execute(
         &self,
@@ -5153,7 +4975,6 @@ impl ValidSingularQuery for FindSorafsModerationSnapshot {
         query_moderation_snapshot(self, state_ro)
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationEvents {
     fn execute(
         &self,
@@ -5162,11 +4983,9 @@ impl ValidSingularQuery for FindSorafsModerationEvents {
         query_moderation_event_page(self, state_ro)
     }
 }
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::too_many_lines)]
-
     use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
@@ -5213,29 +5032,24 @@ mod tests {
         pop_revocation_root_v1, prove_pop_membership_v1, verify_pop_commitment_root_signature_v1,
         verify_pop_credential_signature_v1, verify_pop_revocation_list_signature_v1,
     };
-
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
     const OPENED_AT: u64 = 1_000;
     const COMMIT_DEADLINE: u64 = 2_000;
     const CHALLENGE_DEADLINE: u64 = 3_000;
     const REVEAL_DEADLINE: u64 = 4_000;
-
     fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
         KeyPair::from_private_key(private).expect("derive deterministic keypair")
     }
-
     fn account(keypair: &KeyPair) -> AccountId {
         AccountId::new(keypair.public_key().clone())
     }
-
     fn policy() -> ModerationLedgerPolicyV1 {
         ModerationLedgerPolicyV1 {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
@@ -5251,7 +5065,6 @@ mod tests {
             unrevealed_commit_penalty_points: 23,
         }
     }
-
     fn context(jurors: &[AccountId], quorum: u16) -> SoraFsModerationBallotContextV1 {
         SoraFsModerationBallotContextV1 {
             version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
@@ -5263,7 +5076,6 @@ mod tests {
             evidence_uri: Some("ipfs://evidence".to_owned()),
         }
     }
-
     fn spec(jurors: Vec<AccountId>, quorum: u16) -> ModerationCaseSpecV1 {
         ModerationCaseSpecV1 {
             version: MODERATION_LEDGER_CASE_VERSION_V1,
@@ -5277,7 +5089,6 @@ mod tests {
             policy_digest: policy().digest().expect("policy digest"),
         }
     }
-
     fn reveal(
         spec: &ModerationCaseSpecV1,
         juror: &AccountId,
@@ -5294,7 +5105,6 @@ mod tests {
             revealed_at_unix_ms: 0,
         }
     }
-
     fn commit(reveal: &SoraFsModerationBallotRevealV1) -> SoraFsModerationBallotCommitV1 {
         SoraFsModerationBallotCommitV1 {
             version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
@@ -5305,18 +5115,15 @@ mod tests {
             committed_at_unix_ms: 0,
         }
     }
-
     fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
         norito::encode_canonical(value).expect("encode canonical fixture")
     }
-
     fn encode_alternate_layout<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         norito::to_bytes(value).expect("encode alternate-layout fixture")
     }
-
     fn state(accounts: &[&KeyPair], manager: &AccountId) -> State {
         let mut world = World::new();
         for keypair in accounts {
@@ -5341,7 +5148,6 @@ mod tests {
             LiveQueryStore::start_test(),
         )
     }
-
     fn header(height: u64, now: u64) -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(height).expect("nonzero height"),
@@ -5352,7 +5158,6 @@ mod tests {
             0,
         )
     }
-
     fn transact(
         state: &mut State,
         height: u64,
@@ -5366,19 +5171,16 @@ mod tests {
         block.commit().expect("commit test block");
         Ok(())
     }
-
     fn scalar(value: u64) -> [u8; 32] {
         let mut bytes = [0; 32];
         bytes[..8].copy_from_slice(&value.to_le_bytes());
         bytes
     }
-
     fn pop_nonce(value: u128) -> [u8; 32] {
         let mut bytes = [0; 32];
         bytes[..16].copy_from_slice(&value.to_le_bytes());
         bytes
     }
-
     fn public_key_bytes(keypair: &KeyPair) -> [u8; 32] {
         let (_, bytes) = keypair
             .public_key()
@@ -5386,7 +5188,6 @@ mod tests {
             .expect("fixture public key bytes");
         bytes.try_into().expect("Ed25519 public key length")
     }
-
     fn empty_pop_signature(keypair: &KeyPair) -> PopSignatureV1 {
         PopSignatureV1 {
             algorithm: PopSignatureAlgorithmV1::Ed25519,
@@ -5394,14 +5195,12 @@ mod tests {
             signature: Vec::new(),
         }
     }
-
     fn sign_pop_digest(keypair: &KeyPair, digest: [u8; 32]) -> Vec<u8> {
         Signature::try_new(keypair.private_key(), &digest)
             .expect("sign PoP fixture digest")
             .payload()
             .to_vec()
     }
-
     fn sign_pop_credential(mut credential: PopCredentialV1, keypair: &KeyPair) -> PopCredentialV1 {
         credential.issuer_signature = empty_pop_signature(keypair);
         let digest =
@@ -5410,7 +5209,6 @@ mod tests {
         verify_pop_credential_signature_v1(&credential).expect("credential signature verifies");
         credential
     }
-
     fn sign_pop_root(mut root: PopCommitmentRootV1, keypair: &KeyPair) -> PopCommitmentRootV1 {
         root.publisher_signature = empty_pop_signature(keypair);
         let digest = pop_commitment_root_signature_digest_v1(&root).expect("root signature digest");
@@ -5418,7 +5216,6 @@ mod tests {
         verify_pop_commitment_root_signature_v1(&root).expect("root signature verifies");
         root
     }
-
     fn sign_pop_revocations(
         mut revocations: PopRevocationListV1,
         keypair: &KeyPair,
@@ -5431,7 +5228,6 @@ mod tests {
             .expect("revocation signature verifies");
         revocations
     }
-
     struct PopMaterial {
         credential: PopCredentialV1,
         root: PopCommitmentRootV1,
@@ -5440,7 +5236,6 @@ mod tests {
         credential_path: PopCredentialMerklePathV1,
         revocation_path: PopRevocationNonMembershipPathV1,
     }
-
     impl PopMaterial {
         fn proof(
             &self,
@@ -5465,7 +5260,6 @@ mod tests {
             .expect("create moderation PoP proof")
         }
     }
-
     fn pop_material(issuer: &KeyPair) -> PopMaterial {
         let holder_secret = scalar(0x1234_5678);
         let credential_id = scalar(0x8765_4321);
@@ -5548,12 +5342,10 @@ mod tests {
             revocation_path,
         }
     }
-
     fn shared_pop_material() -> &'static PopMaterial {
         static MATERIAL: std::sync::OnceLock<PopMaterial> = std::sync::OnceLock::new();
         MATERIAL.get_or_init(|| pop_material(&keypair(0x51)))
     }
-
     fn proof_for_appeal(appeal: &ModerationAppealRecordV1) -> PopMembershipProofV1 {
         static PROOF: std::sync::OnceLock<PopMembershipProofV1> = std::sync::OnceLock::new();
         let challenge =
@@ -5566,7 +5358,6 @@ mod tests {
         assert_eq!(proof.verifier_context, context);
         proof.clone()
     }
-
     fn pop_policy(issuer: &KeyPair) -> PopIssuerPolicyV1 {
         PopIssuerPolicyV1 {
             version: POP_ISSUER_POLICY_VERSION_V1,
@@ -5582,7 +5373,6 @@ mod tests {
             paused: false,
         }
     }
-
     fn pop_batch(issuer: &KeyPair, material: &PopMaterial) -> PopCredentialCommitmentBatchV1 {
         let canonical_credential = encode(&material.credential);
         PopCredentialCommitmentBatchV1 {
@@ -5603,7 +5393,6 @@ mod tests {
             }],
         }
     }
-
     fn setup_panel_foundations(state: &mut State, manager: &KeyPair, material: &PopMaterial) {
         let manager_id = account(manager);
         transact(state, 1, 1_000_000, |transaction| {
@@ -5615,7 +5404,6 @@ mod tests {
         .expect("activate PoP registry and moderation policy");
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(1, 1_000_000)));
     }
-
     fn panel_intake(
         appellant: &KeyPair,
         case_id: &str,
@@ -5649,7 +5437,6 @@ mod tests {
             policy_digest: policy().digest().expect("moderation policy digest"),
         }
     }
-
     struct PanelFixture {
         manager: KeyPair,
         appellant: KeyPair,
@@ -5658,7 +5445,6 @@ mod tests {
         state: State,
         next_height: u64,
     }
-
     impl PanelFixture {
         fn new() -> Self {
             let manager = keypair(0x51);
@@ -5685,23 +5471,18 @@ mod tests {
                 next_height: 2,
             }
         }
-
         fn manager_id(&self) -> AccountId {
             account(&self.manager)
         }
-
         fn appellant_id(&self) -> AccountId {
             account(&self.appellant)
         }
-
         fn juror_id(&self) -> AccountId {
             account(&self.juror)
         }
-
         fn outsider_id(&self) -> AccountId {
             account(&self.outsider)
         }
-
         fn run(
             &mut self,
             now: u64,
@@ -5718,7 +5499,6 @@ mod tests {
             }
             result
         }
-
         fn submit(&mut self, panel_size: u16, waitlist_size: u16, quorum: u16) {
             let intake = panel_intake(
                 &self.appellant,
@@ -5734,13 +5514,11 @@ mod tests {
             })
             .expect("submit panel appeal");
         }
-
         fn appeal(&self) -> ModerationAppealRecordV1 {
             FindSorafsModerationAppeal::new("panel-case".to_owned(), "round-1".to_owned())
                 .execute(&self.state.view())
                 .expect("panel appeal query")
         }
-
         fn register_juror(&mut self) {
             let proof = proof_for_appeal(&self.appeal());
             let juror = self.juror_id();
@@ -5754,7 +5532,6 @@ mod tests {
             })
             .expect("register panel juror eligibility");
         }
-
         fn finalize_single_juror_sortition(&mut self) -> [u8; 32] {
             let manager = self.manager_id();
             let juror = self.juror_id();
@@ -5778,7 +5555,6 @@ mod tests {
                 .sortition_digest
         }
     }
-
     #[test]
     fn moderation_payload_decoder_rejects_alternate_norito_layout() {
         let juror = account(&keypair(0xA1));
@@ -5794,7 +5570,6 @@ mod tests {
         );
         decode_from_bytes_with_limits::<SoraFsModerationBallotCommitV1>(&alternate, PAYLOAD_LIMITS)
             .expect("ordinary bounded Norito accepts the advertised alternate layout");
-
         let error =
             decode_payload::<SoraFsModerationBallotCommitV1>(&alternate, "moderation commit")
                 .err()
@@ -5806,7 +5581,6 @@ mod tests {
             "unexpected alternate-layout rejection: {error:?}"
         );
     }
-
     #[test]
     fn moderation_payload_identity_encoding_ignores_ambient_norito_flags() {
         let juror = account(&keypair(0xA3));
@@ -5817,7 +5591,6 @@ mod tests {
             encode_payload(&commit, "moderation commit").expect("encode canonical commit");
         let alternate = encode_alternate_layout(&commit);
         assert_ne!(alternate, canonical);
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let ambient_encoded = {
@@ -5836,7 +5609,6 @@ mod tests {
         };
         assert_eq!(ambient_encoded, canonical);
     }
-
     #[test]
     fn moderation_membership_proof_decoder_rejects_alternate_norito_layout() {
         let mut fixture = PanelFixture::new();
@@ -5850,7 +5622,6 @@ mod tests {
         );
         decode_from_bytes_with_limits::<PopMembershipProofV1>(&alternate, PROOF_LIMITS)
             .expect("ordinary bounded Norito accepts the advertised alternate layout");
-
         let error = decode_membership_proof(&alternate)
             .err()
             .expect("alternate-layout moderation membership proof must fail");
@@ -5861,7 +5632,6 @@ mod tests {
             "unexpected alternate-layout proof rejection: {error:?}"
         );
     }
-
     fn seed_activated_case(
         transaction: &mut StateTransaction<'_, '_>,
         manager: &AccountId,
@@ -5983,7 +5753,6 @@ mod tests {
             .insert(status_key().clone(), encode_status(&status)?);
         Ok(())
     }
-
     struct Fixture {
         manager: KeyPair,
         jurors: [KeyPair; 3],
@@ -5992,7 +5761,6 @@ mod tests {
         spec: ModerationCaseSpecV1,
         next_height: u64,
     }
-
     impl Fixture {
         fn new(quorum: u16) -> Self {
             let manager = keypair(0x11);
@@ -6020,15 +5788,12 @@ mod tests {
                 next_height: 2,
             }
         }
-
         fn manager_id(&self) -> AccountId {
             account(&self.manager)
         }
-
         fn juror_id(&self, index: usize) -> AccountId {
             account(&self.jurors[index])
         }
-
         fn run(
             &mut self,
             now: u64,
@@ -6046,7 +5811,6 @@ mod tests {
             result
         }
     }
-
     #[test]
     fn successful_commit_reveal_finalization_persists_queries_and_no_show() {
         let mut fixture = Fixture::new(2);
@@ -6088,7 +5852,6 @@ mod tests {
                     .execute(&manager, transaction)
             })
             .unwrap();
-
         let case = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
             .unwrap();
@@ -6125,7 +5888,6 @@ mod tests {
         assert_eq!(status.outcomes, 1);
         assert_eq!(status.no_shows, 1);
     }
-
     #[test]
     fn duplicate_wrong_authority_phase_and_mismatched_reveal_are_atomic() {
         let mut fixture = Fixture::new(1);
@@ -6214,7 +5976,6 @@ mod tests {
         assert_eq!(status.commitments, 1);
         assert_eq!(status.reveals, 1);
     }
-
     #[test]
     fn pending_and_accepted_challenges_block_reveal_and_close_without_penalties() {
         let mut fixture = Fixture::new(1);
@@ -6393,7 +6154,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn unresolved_challenge_expires_fail_safe_without_deadlock_or_no_show_penalties() {
         let mut fixture = Fixture::new(1);
@@ -6465,7 +6225,6 @@ mod tests {
                     .execute(&manager, transaction)
             })
             .unwrap();
-
         let case = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
             .unwrap();
@@ -6496,7 +6255,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn rejected_challenge_unblocks_reveals_and_tied_quorum_is_contested() {
         let mut fixture = Fixture::new(2);
@@ -6562,7 +6320,6 @@ mod tests {
                     .execute(&manager, transaction)
             })
             .unwrap();
-
         let challenge = FindSorafsModerationChallenge::new(
             "case-1".to_owned(),
             "round-1".to_owned(),
@@ -6580,7 +6337,6 @@ mod tests {
         assert_eq!(outcome.kind, ModerationOutcomeKindV1::Contested);
         assert_eq!(outcome.votes_total, 2);
     }
-
     #[test]
     fn missed_quorum_persists_distinct_no_show_penalties() {
         let mut fixture = Fixture::new(3);
@@ -6655,7 +6411,6 @@ mod tests {
         assert_eq!(missing.kind, ModerationNoShowKindV1::MissingCommit);
         assert_eq!(missing.penalty_points, 11);
     }
-
     #[test]
     fn bounds_permissions_and_counter_overflow_reject_without_partial_case() {
         let manager_pair = keypair(0x41);
@@ -6690,7 +6445,6 @@ mod tests {
                 .revision,
             1
         );
-
         let mut fixture = Fixture::new(1);
         let juror = fixture.juror_id(0);
         let rollback_reveal = reveal(&fixture.spec, &juror, SoraFsModerationVoteChoice::Uphold, 8);
@@ -6734,7 +6488,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn genesis_moderation_permission_bypass_matches_executor_policy() {
         let manager_pair = keypair(0x45);
@@ -6754,7 +6507,6 @@ mod tests {
             genesis_authority
         );
     }
-
     #[test]
     fn appeal_intake_is_authority_bound_replay_safe_and_transaction_atomic() {
         let mut fixture = PanelFixture::new();
@@ -6779,7 +6531,6 @@ mod tests {
                 })
                 .is_err()
         );
-
         assert!(
             fixture
                 .run(1_001_000, |transaction| {
@@ -6806,7 +6557,6 @@ mod tests {
                 .appeal_intakes,
             0
         );
-
         fixture.submit(1, 0, 1);
         assert!(
             fixture
@@ -6840,7 +6590,6 @@ mod tests {
             .unwrap();
         assert_eq!(status.appeal_intakes, 1);
         assert_eq!(status.eligibility_proofs, 0);
-
         let mut excluded = PanelFixture::new();
         let excluded_appellant = excluded.appellant_id();
         let excluded_juror = excluded.juror_id();
@@ -6867,6 +6616,5 @@ mod tests {
         );
         assert!(excluded.appeal().eligible_jurors.is_empty());
     }
-
     include!("sorafs/moderation_tail_tests.rs");
 }

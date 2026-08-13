@@ -1,12 +1,9 @@
 //! Canonical compressed sum-check verifier used by Vega Spartan.
-
-use thiserror::Error;
-
 use super::{
     VegaT256ScalarV1 as Scalar, VegaTranscriptError, VegaTranscriptV1,
     algebra::{AlgebraError, decompress_univariate, evaluate_univariate, evaluation_table_size},
 };
-
+use thiserror::Error;
 /// Failure while replaying a Vega sum-check proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum SumcheckError {
@@ -23,12 +20,10 @@ pub(super) enum SumcheckError {
     #[error(transparent)]
     Transcript(#[from] VegaTranscriptError),
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CompressedUnivariate {
     pub(super) coefficients_except_linear: Vec<Scalar>,
 }
-
 impl CompressedUnivariate {
     pub(super) fn new(
         coefficients_except_linear: Vec<Scalar>,
@@ -41,17 +36,14 @@ impl CompressedUnivariate {
             coefficients_except_linear,
         })
     }
-
     pub(super) fn coefficients(&self) -> &[Scalar] {
         &self.coefficients_except_linear
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SumcheckProof {
     pub(super) rounds: Vec<CompressedUnivariate>,
 }
-
 /// Move-only owner for one prover table containing witness-derived scalars.
 ///
 /// Binding erases the discarded half before shortening the vector, and drop
@@ -61,7 +53,6 @@ pub(super) struct SumcheckProof {
 pub(super) struct SecretScalarTable {
     values: Vec<Scalar>,
 }
-
 /// One full multilinear table stored as independently allocated lower and
 /// upper halves. Consuming the first sum-check round binds into `lower` and
 /// drops `upper`, so the allocator can release half of the resident table
@@ -70,13 +61,11 @@ pub(super) struct SplitSecretScalarTable {
     lower: SecretScalarTable,
     upper: SecretScalarTable,
 }
-
 impl SecretScalarTable {
     #[cfg(test)]
     pub(super) fn new(values: Vec<Scalar>) -> Self {
         Self { values }
     }
-
     pub(super) fn try_zeroed(len: usize) -> Result<Self, SumcheckError> {
         let mut values = Vec::new();
         values
@@ -85,7 +74,6 @@ impl SecretScalarTable {
         values.resize(len, Scalar::zero());
         Ok(Self { values })
     }
-
     pub(super) fn try_eq_evals(point: &[Scalar]) -> Result<Self, SumcheckError> {
         let size = table_size(point.len())?;
         let mut evaluations = Self::try_zeroed(size)?;
@@ -101,19 +89,15 @@ impl SecretScalarTable {
         }
         Ok(evaluations)
     }
-
     pub(super) fn len(&self) -> usize {
         self.values.len()
     }
-
     pub(super) fn as_slice(&self) -> &[Scalar] {
         &self.values
     }
-
     pub(super) fn as_mut_slice(&mut self) -> &mut [Scalar] {
         &mut self.values
     }
-
     fn bind_top(&mut self, challenge: Scalar) -> Result<(), SumcheckError> {
         if self.values.len() < 2 || !self.values.len().is_power_of_two() {
             return Err(SumcheckError::WrongRoundCount);
@@ -130,7 +114,6 @@ impl SecretScalarTable {
         Ok(())
     }
 }
-
 impl SplitSecretScalarTable {
     #[cfg(test)]
     pub(super) fn new(lower: Vec<Scalar>, upper: Vec<Scalar>) -> Self {
@@ -139,7 +122,6 @@ impl SplitSecretScalarTable {
             upper: SecretScalarTable::new(upper),
         }
     }
-
     pub(super) fn try_zeroed(len: usize) -> Result<Self, SumcheckError> {
         if len < 2 || !len.is_power_of_two() {
             return Err(SumcheckError::WrongRoundCount);
@@ -150,19 +132,15 @@ impl SplitSecretScalarTable {
             upper: SecretScalarTable::try_zeroed(half)?,
         })
     }
-
     pub(super) fn len(&self) -> usize {
         self.lower.len() + self.upper.len()
     }
-
     pub(super) fn as_slices(&self) -> (&[Scalar], &[Scalar]) {
         (self.lower.as_slice(), self.upper.as_slice())
     }
-
     pub(super) fn as_mut_slices(&mut self) -> (&mut [Scalar], &mut [Scalar]) {
         (self.lower.as_mut_slice(), self.upper.as_mut_slice())
     }
-
     fn bind_first(mut self, challenge: Scalar) -> Result<SecretScalarTable, SumcheckError> {
         if self.lower.len() == 0 || self.lower.len() != self.upper.len() {
             return Err(SumcheckError::WrongRoundCount);
@@ -180,7 +158,6 @@ impl SplitSecretScalarTable {
         Ok(self.lower)
     }
 }
-
 impl Drop for SecretScalarTable {
     fn drop(&mut self) {
         #[cfg(test)]
@@ -199,21 +176,18 @@ impl Drop for SecretScalarTable {
         let _ = core::hint::black_box(&mut *values);
     }
 }
-
 #[cfg(test)]
 std::thread_local! {
     static SECRET_SCALAR_TABLE_ZEROIZED_DROPS: core::cell::Cell<usize> = const {
         core::cell::Cell::new(0)
     };
 }
-
 #[cfg(test)]
 fn secret_scalar_table_zeroized_drop_count() -> usize {
     SECRET_SCALAR_TABLE_ZEROIZED_DROPS
         .try_with(core::cell::Cell::get)
         .unwrap_or(0)
 }
-
 /// Prove the cubic outer Spartan sum-check
 /// `sum_x eq(tau,x) * (A(x) * B(x) - D(x))`.
 ///
@@ -252,7 +226,6 @@ pub(super) fn prove_cubic_with_split_first_owned(
     {
         return Err(SumcheckError::WrongRoundCount);
     }
-
     let tau_zero = tau[0];
     let eq_zero_scale = Scalar::one() - tau_zero;
     let eq_one_scale = tau_zero;
@@ -289,7 +262,6 @@ pub(super) fn prove_cubic_with_split_first_owned(
     transcript.absorb_univariate(b"p", compressed.coefficients())?;
     let first_challenge = transcript.squeeze(b"c")?;
     let claim = evaluate_univariate(&coefficients, first_challenge)?;
-
     let mut a = a.bind_first(first_challenge)?;
     let mut b = b.bind_first(first_challenge)?;
     let mut d = d.bind_first(first_challenge)?;
@@ -299,7 +271,6 @@ pub(super) fn prove_cubic_with_split_first_owned(
     for evaluation in eq.as_mut_slice() {
         *evaluation *= equality_scale;
     }
-
     let mut rounds = Vec::with_capacity(round_count);
     rounds.push(compressed);
     let mut challenges = Vec::with_capacity(round_count);
@@ -324,7 +295,6 @@ pub(super) fn prove_cubic_with_split_first_owned(
         [a.as_slice()[0], b.as_slice()[0], d.as_slice()[0]],
     ))
 }
-
 fn visit_eq_evaluations(point: &[Scalar], weight: Scalar, visit: &mut impl FnMut(usize, Scalar)) {
     fn recurse(
         point: &[Scalar],
@@ -348,11 +318,9 @@ fn visit_eq_evaluations(point: &[Scalar], weight: Scalar, visit: &mut impl FnMut
         );
         recurse(point, depth + 1, weight * coordinate, index, visit);
     }
-
     let mut index = 0;
     recurse(point, 0, weight, &mut index, visit);
 }
-
 #[allow(clippy::too_many_arguments)]
 fn prove_cubic_remaining_rounds_owned(
     mut claim: Scalar,
@@ -383,7 +351,6 @@ fn prove_cubic_remaining_rounds_owned(
             let delta_a = a.as_slice()[half + index] - a_zero;
             let delta_b = b.as_slice()[half + index] - b_zero;
             let delta_d = d.as_slice()[half + index] - d_zero;
-
             evaluation_zero += eq_zero * (a_zero * b_zero - d_zero);
             evaluation_one +=
                 (eq_zero + delta_eq) * ((a_zero + delta_a) * (b_zero + delta_b) - d_zero - delta_d);
@@ -419,7 +386,6 @@ fn prove_cubic_remaining_rounds_owned(
     }
     Ok(())
 }
-
 /// Compatibility prover for callers that already own a full equality table.
 #[cfg(test)]
 pub(super) fn prove_cubic_with_three_inputs_owned(
@@ -441,7 +407,6 @@ pub(super) fn prove_cubic_with_three_inputs_owned(
     let mut claim = initial_claim;
     let mut rounds = Vec::with_capacity(round_count);
     let mut challenges = Vec::with_capacity(round_count);
-
     for _ in 0..round_count {
         let half = a.len() / 2;
         if half == 0 || b.len() != a.len() || d.len() != a.len() || eq.len() != a.len() {
@@ -460,7 +425,6 @@ pub(super) fn prove_cubic_with_three_inputs_owned(
             let delta_a = a.as_slice()[half + index] - a_zero;
             let delta_b = b.as_slice()[half + index] - b_zero;
             let delta_d = d.as_slice()[half + index] - d_zero;
-
             evaluation_zero += eq_zero * (a_zero * b_zero - d_zero);
             evaluation_one +=
                 (eq_zero + delta_eq) * ((a_zero + delta_a) * (b_zero + delta_b) - d_zero - delta_d);
@@ -503,7 +467,6 @@ pub(super) fn prove_cubic_with_three_inputs_owned(
         [a.as_slice()[0], b.as_slice()[0], d.as_slice()[0]],
     ))
 }
-
 /// Prove the quadratic inner Spartan sum-check `sum_x A(x) * B(x)`.
 pub(super) fn prove_quadratic_owned(
     initial_claim: Scalar,
@@ -519,7 +482,6 @@ pub(super) fn prove_quadratic_owned(
     let mut claim = initial_claim;
     let mut rounds = Vec::with_capacity(round_count);
     let mut challenges = Vec::with_capacity(round_count);
-
     for _ in 0..round_count {
         let half = a.len() / 2;
         if half == 0 || b.len() != a.len() {
@@ -561,11 +523,9 @@ pub(super) fn prove_quadratic_owned(
         [a.as_slice()[0], b.as_slice()[0]],
     ))
 }
-
 fn table_size(round_count: usize) -> Result<usize, SumcheckError> {
     Ok(evaluation_table_size(round_count)?)
 }
-
 fn interpolate_quadratic(evaluations: [Scalar; 3]) -> Result<[Scalar; 3], SumcheckError> {
     let two_inverse = Scalar::from_u64(2)
         .inverse()
@@ -576,7 +536,6 @@ fn interpolate_quadratic(evaluations: [Scalar; 3]) -> Result<[Scalar; 3], Sumche
     let linear = evaluations[1] - constant - quadratic;
     Ok([constant, linear, quadratic])
 }
-
 fn interpolate_cubic(evaluations: [Scalar; 4]) -> Result<[Scalar; 4], SumcheckError> {
     let two_inverse = Scalar::from_u64(2)
         .inverse()
@@ -595,12 +554,10 @@ fn interpolate_cubic(evaluations: [Scalar; 4]) -> Result<[Scalar; 4], SumcheckEr
     let linear = evaluations[1] - constant - quadratic - cubic;
     Ok([constant, linear, quadratic, cubic])
 }
-
 impl SumcheckProof {
     pub(super) fn new(rounds: Vec<CompressedUnivariate>) -> Self {
         Self { rounds }
     }
-
     pub(super) fn verify(
         &self,
         initial_claim: Scalar,
@@ -629,12 +586,10 @@ impl SumcheckProof {
         Ok((claim, challenges))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::algebra::{eq_evals, eq_evaluate};
-
     fn prove_cubic_with_three_inputs(
         initial_claim: Scalar,
         tau: &[Scalar],
@@ -653,7 +608,6 @@ mod tests {
             transcript,
         )
     }
-
     fn prove_quadratic(
         initial_claim: Scalar,
         round_count: usize,
@@ -669,25 +623,21 @@ mod tests {
             transcript,
         )
     }
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     fn multilinear_at(table: [Scalar; 4], x: Scalar, y: Scalar) -> Scalar {
         table[0] * (Scalar::one() - x) * (Scalar::one() - y)
             + table[1] * (Scalar::one() - x) * y
             + table[2] * x * (Scalar::one() - y)
             + table[3] * x * y
     }
-
     fn valid_two_round_proof() -> (SumcheckProof, Scalar) {
         let table = [s(2), s(3), s(5), s(7)];
         let claim = table
             .into_iter()
             .fold(Scalar::zero(), |sum, value| sum + value);
         let first_constant = table[0] + table[1];
-
         let mut prover_transcript = VegaTranscriptV1::new_neutron_nova();
         prover_transcript
             .absorb_univariate(b"p", &[first_constant])
@@ -702,7 +652,6 @@ mod tests {
             claim,
         )
     }
-
     fn bind_all(table: Vec<Scalar>, point: &[Scalar]) -> Scalar {
         let mut table = SecretScalarTable::new(table);
         for challenge in point {
@@ -711,7 +660,6 @@ mod tests {
         assert_eq!(table.len(), 1);
         table.as_slice()[0]
     }
-
     #[test]
     fn cubic_and_quadratic_provers_replay_against_the_verifier() {
         let tau = [s(13), s(17)];
@@ -749,7 +697,6 @@ mod tests {
             eq_evaluate(&tau, &verifier_challenges).expect("same dimension")
                 * (claims[0] * claims[1] - claims[2])
         );
-
         let quadratic_claim = a
             .iter()
             .copied()
@@ -773,7 +720,6 @@ mod tests {
         );
         assert_eq!(final_claim, claims[0] * claims[1]);
     }
-
     #[test]
     fn owned_provers_preserve_borrowed_results_and_transcript_schedule() {
         let tau = [s(13), s(17)];
@@ -824,7 +770,6 @@ mod tests {
             split_transcript.squeeze(b"after").expect("bounded"),
             borrowed_after
         );
-
         let quadratic_claim = a
             .iter()
             .copied()
@@ -848,7 +793,6 @@ mod tests {
             borrowed_transcript.squeeze(b"after").expect("bounded")
         );
     }
-
     #[test]
     fn secret_table_owner_zeroizes_success_error_and_unwind() {
         assert!(matches!(
@@ -875,7 +819,6 @@ mod tests {
             secret_scalar_table_zeroized_drop_count(),
             before_success + 2
         );
-
         let before_error = secret_scalar_table_zeroized_drop_count();
         assert_eq!(
             prove_quadratic_owned(
@@ -888,7 +831,6 @@ mod tests {
             Err(SumcheckError::InvalidClaim)
         );
         assert_eq!(secret_scalar_table_zeroized_drop_count(), before_error + 2);
-
         let before_unwind = secret_scalar_table_zeroized_drop_count();
         let unwind = std::panic::catch_unwind(|| {
             let _owned = SecretScalarTable::new(vec![s(9), s(10)]);
@@ -896,7 +838,6 @@ mod tests {
         });
         assert!(unwind.is_err());
         assert_eq!(secret_scalar_table_zeroized_drop_count(), before_unwind + 1);
-
         let tau = [s(13), s(17)];
         let d = [s(9), s(10), s(11), s(12)];
         let cubic_claim = eq_evals(&tau)
@@ -921,7 +862,6 @@ mod tests {
             secret_scalar_table_zeroized_drop_count(),
             before_split_success + 7
         );
-
         let before_split_error = secret_scalar_table_zeroized_drop_count();
         assert_eq!(
             prove_cubic_with_split_first_owned(
@@ -938,7 +878,6 @@ mod tests {
             secret_scalar_table_zeroized_drop_count(),
             before_split_error + 6
         );
-
         let before_split_unwind = secret_scalar_table_zeroized_drop_count();
         let split_unwind = std::panic::catch_unwind(|| {
             let _owned = SplitSecretScalarTable::new(vec![s(13)], vec![s(17)]);
@@ -950,7 +889,6 @@ mod tests {
             before_split_unwind + 2
         );
     }
-
     #[test]
     fn owned_sumcheck_corridor_has_no_borrowed_table_clone() {
         let source = include_str!("sumcheck.rs");
@@ -984,7 +922,6 @@ mod tests {
         assert!(source.contains("upper[index].clear_secret()"));
         assert!(source.contains("impl Drop for SecretScalarTable"));
     }
-
     #[test]
     fn sumcheck_provers_reject_false_claims_shapes_and_work_overflow() {
         let table = [s(1), s(2), s(3), s(4)];
@@ -1013,7 +950,6 @@ mod tests {
             Err(SumcheckError::WrongRoundCount)
         );
     }
-
     #[test]
     fn compressed_sumcheck_replays_a_real_multilinear_claim() {
         let (proof, claim) = valid_two_round_proof();
@@ -1027,7 +963,6 @@ mod tests {
             multilinear_at(table, challenges[0], challenges[1])
         );
     }
-
     #[test]
     fn sumcheck_rejects_wrong_round_degree_claim_and_transcript_mutations() {
         let (proof, claim) = valid_two_round_proof();
@@ -1039,7 +974,6 @@ mod tests {
             proof.verify(claim, 2, 2, &mut VegaTranscriptV1::new_neutron_nova()),
             Err(SumcheckError::WrongDegree)
         );
-
         let mut mutated = proof.clone();
         mutated.rounds[0].coefficients_except_linear[0] += Scalar::one();
         let mut transcript = VegaTranscriptV1::new_neutron_nova();

@@ -1,6 +1,5 @@
 use super::*;
 use crate::vega::sponge::Keccak256;
-
 const FRI1_MAPPING_KAT_V2: [u8; 32] = [
     0x24, 0x05, 0xd2, 0xa0, 0x00, 0x31, 0x8a, 0x0b, 0xaa, 0x74, 0xda, 0x72, 0xdc, 0x49, 0x53, 0x0a,
     0x7d, 0x35, 0xf4, 0xcb, 0x69, 0x06, 0xe2, 0xd5, 0x20, 0x62, 0xb7, 0xf5, 0xdd, 0x8e, 0x77, 0x86,
@@ -17,7 +16,6 @@ const FRI1_NODE_KAT_V2: [u8; 32] = [
     0x36, 0x12, 0x1d, 0x90, 0xcd, 0x71, 0x0f, 0xa3, 0xde, 0x7d, 0x05, 0x88, 0xd0, 0xe6, 0xf0, 0x65,
     0x39, 0x67, 0xaa, 0x23, 0xdd, 0x23, 0x10, 0x00, 0xb9, 0xa0, 0x50, 0x36, 0x21, 0x5d, 0x85, 0x5d,
 ];
-
 fn binding_v2() -> FriLayer0BindingV2 {
     FriLayer0BindingV2::new_v2(
         parameter_digest_v2(SpoolGeometryV2::release_v2()).unwrap(),
@@ -32,7 +30,6 @@ fn binding_v2() -> FriLayer0BindingV2 {
     )
     .unwrap()
 }
-
 fn layer1_binding_v2() -> FriLayer1BindingV2 {
     FriLayer1BindingV2::new_v2(
         binding_v2(),
@@ -44,7 +41,6 @@ fn layer1_binding_v2() -> FriLayer1BindingV2 {
     )
     .unwrap()
 }
-
 fn manual_leaf_v2(parameter: [u8; 32], values: &[u8]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-leaf\0");
@@ -56,7 +52,6 @@ fn manual_leaf_v2(parameter: [u8; 32], values: &[u8]) -> [u8; 32] {
     hash.update(values);
     hash.finalize()
 }
-
 fn manual_node_v2(parameter: [u8; 32], height: usize, left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-node\0");
@@ -67,7 +62,6 @@ fn manual_node_v2(parameter: [u8; 32], height: usize, left: [u8; 32], right: [u8
     hash.update(&right);
     hash.finalize()
 }
-
 fn manual_layer1_leaf_v2(parameter: [u8; 32], values: &[u8]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-leaf\0");
@@ -79,7 +73,6 @@ fn manual_layer1_leaf_v2(parameter: [u8; 32], values: &[u8]) -> [u8; 32] {
     hash.update(values);
     hash.finalize()
 }
-
 fn manual_layer1_node_v2(
     parameter: [u8; 32],
     height: usize,
@@ -95,7 +88,6 @@ fn manual_layer1_node_v2(
     hash.update(&right);
     hash.finalize()
 }
-
 #[test]
 fn layer0_context_binds_every_public_axis_and_exact_schedule_prefix() {
     let binding = binding_v2();
@@ -137,7 +129,6 @@ fn layer0_context_binds_every_public_axis_and_exact_schedule_prefix() {
         fri0_context_digest_v2(descriptor, changed).unwrap()
     );
 }
-
 #[test]
 fn layer0_leaf_and_node_frames_match_independent_verifier_literal_oracle() {
     let parameter = [0x11; 32];
@@ -151,7 +142,6 @@ fn layer0_leaf_and_node_frames_match_independent_verifier_literal_oracle() {
         manual_node_v2(parameter, 7, [0x31; 32], [0x52; 32])
     );
 }
-
 #[test]
 fn layer1_context_is_literal_and_binds_b0_root_transcript_and_schedules() {
     let layer0 = binding_v2();
@@ -188,7 +178,6 @@ fn layer1_context_is_literal_and_binds_b0_root_transcript_and_schedules() {
         );
     }
 }
-
 #[test]
 fn layer1_leaf_and_node_frames_match_independent_literal_kats() {
     let parameter = [0x11; 32];
@@ -210,7 +199,6 @@ fn layer1_leaf_and_node_frames_match_independent_literal_kats() {
         FRI1_NODE_KAT_V2
     );
 }
-
 #[test]
 fn source_guards_pin_the_bounded_nonauthorizing_layer1_prerequisite() {
     let source = include_str!("batch_fri_v2.rs");

@@ -1,14 +1,11 @@
 //! Compile-test exercising the `FromVariant` derive attributes.
-
 use impls::impls;
-
 struct Variant1;
 struct Variant2;
 struct Variant3;
 struct Variant4;
 struct Variant5;
 struct Variant6;
-
 #[allow(unused)]
 #[derive(iroha_derive::FromVariant)]
 enum Enum {
@@ -27,7 +24,6 @@ enum Enum {
         Box<Variant6>,
     ),
 }
-
 macro_rules! check_variant {
     ($container:ty, $no_container:ident, $skip_from:expr, $skip_container:expr, $skip_try_from:expr) => {
         if $skip_from {
@@ -47,7 +43,6 @@ macro_rules! check_variant {
         }
     };
 }
-
 fn main() {
     // actually check that the attributes do what they are supposed to do
     check_variant!(Box<Variant1>, Variant1, false, false, false);

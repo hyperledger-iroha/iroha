@@ -1,28 +1,23 @@
 // Exact NetworkId governance ballot and capability regressions.
-
 fn foreign_network_id() -> iroha_data_model::NetworkId {
     "hash:0000000000000000000000000000000000000000000000000000000000000003#E54C"
         .parse()
         .expect("canonical foreign network id")
 }
-
 #[tokio::test]
 async fn governance_ballots_require_exact_network_before_semantic_validation() {
     use iroha_data_model::isi::governance::BallotProof;
-
     let (state, _queue, _chain_id) = mk_basic_context();
     let authenticated = canonical_account(ACCOUNT_AUTHORITY);
     let canonical_authority = canonical_literal(ACCOUNT_AUTHORITY);
     let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
     let expected_network = *state.network_id_ref();
     let foreign_network = foreign_network_id();
-
     ensure_network_id_matches(state.as_ref(), &expected_network)
         .expect("exact network id must remain valid");
     let error = ensure_network_id_matches(state.as_ref(), &foreign_network)
         .expect_err("a distinct genesis-derived network must fail closed");
     assert!(format!("{error:?}").contains("different network"));
-
     let error = handle_gov_ballot_plain_with_policy(
         state.clone(),
         &authenticated,
@@ -40,7 +35,6 @@ async fn governance_ballots_require_exact_network_before_semantic_validation() {
     .await
     .expect_err("foreign PLAIN ballot must fail before selector validation");
     assert!(format!("{error:?}").contains("different network"));
-
     let error = handle_gov_parliament_ballot(
         state.clone(),
         &authenticated,
@@ -56,7 +50,6 @@ async fn governance_ballots_require_exact_network_before_semantic_validation() {
     .await
     .expect_err("foreign Parliament ballot must fail before proposal validation");
     assert!(format!("{error:?}").contains("different network"));
-
     let dto = ZkBallotV1Dto {
         authority: canonical_authority.clone(),
         network_id: foreign_network,
@@ -83,7 +76,6 @@ async fn governance_ballots_require_exact_network_before_semantic_validation() {
     .await
     .expect_err("foreign ZK envelope ballot must fail before selector validation");
     assert!(format!("{error:?}").contains("different network"));
-
     let dto = ZkBallotV1BallotProofDto {
         authority: canonical_authority,
         network_id: foreign_network,
@@ -113,7 +105,6 @@ async fn governance_ballots_require_exact_network_before_semantic_validation() {
     .expect_err("foreign ZK proof ballot must fail before selector validation");
     assert!(format!("{error:?}").contains("different network"));
 }
-
 #[tokio::test]
 async fn governance_ballots_bind_authenticated_account_before_semantic_validation() {
     let (state, _queue, _chain_id) = mk_basic_context();
@@ -136,15 +127,12 @@ async fn governance_ballots_bind_authenticated_account_before_semantic_validatio
     .expect_err("a ballot authority distinct from its authenticated account must fail closed");
     assert!(format!("{error:?}").contains("authenticated account"));
 }
-
 #[tokio::test]
 async fn governance_ballot_dtos_reject_retired_identity_keys() {
     use iroha_data_model::isi::governance::BallotProof;
-
     let (state, _queue, _chain_id) = mk_basic_context();
     let authority = canonical_literal(ACCOUNT_AUTHORITY);
     let network_id = *state.network_id_ref();
-
     let plain = norito::json::to_value(&PlainBallotDto {
         authority: authority.clone(),
         network_id,
@@ -163,7 +151,6 @@ async fn governance_ballot_dtos_reject_retired_identity_keys() {
             .insert(retired.into(), norito::json::Value::from("retired"));
         assert!(norito::json::from_value::<PlainBallotDto>(with_retired).is_err());
     }
-
     let parliament = norito::json::to_value(&ParliamentBallotDto {
         authority: authority.clone(),
         network_id,
@@ -180,7 +167,6 @@ async fn governance_ballot_dtos_reject_retired_identity_keys() {
             .insert(retired.into(), norito::json::Value::from("retired"));
         assert!(norito::json::from_value::<ParliamentBallotDto>(with_retired).is_err());
     }
-
     let envelope = norito::json::to_value(&ZkBallotV1Dto {
         authority: authority.clone(),
         network_id,
@@ -203,7 +189,6 @@ async fn governance_ballot_dtos_reject_retired_identity_keys() {
             .insert(retired.into(), norito::json::Value::from("retired"));
         assert!(norito::json::from_value::<ZkBallotV1Dto>(with_retired).is_err());
     }
-
     let proof = norito::json::to_value(&ZkBallotV1BallotProofDto {
         authority,
         network_id,
@@ -229,7 +214,6 @@ async fn governance_ballot_dtos_reject_retired_identity_keys() {
         assert!(norito::json::from_value::<ZkBallotV1BallotProofDto>(with_retired).is_err());
     }
 }
-
 #[tokio::test]
 async fn governance_capabilities_expose_one_exact_network_identity() {
     let harness = mk_governance_harness(true);
@@ -239,7 +223,6 @@ async fn governance_capabilities_expose_one_exact_network_identity() {
         .commit()
         .expect("commit genesis-like capabilities fixture");
     let expected_network = *harness.state.network_id_ref();
-
     let response = handle_gov_capabilities(harness.state)
         .await
         .expect("capabilities after committed genesis")

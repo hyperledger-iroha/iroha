@@ -15,7 +15,6 @@ fn billing_runtime_test_handle(slot: IrohaRuntimeProviderSlotV1) -> &'static str
         _ => panic!("slot is not a hedging/billing runtime provider"),
     }
 }
-
 fn billing_runtime_test_binding(slot: IrohaRuntimeProviderSlotV1) -> ProviderBindingWireV1 {
     let catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
         "server-test-chain",
@@ -27,7 +26,6 @@ fn billing_runtime_test_binding(slot: IrohaRuntimeProviderSlotV1) -> ProviderBin
     ProviderBindingWireV1::try_from_binding(catalog.iter().next().expect("one billing binding"))
         .expect("project billing test binding")
 }
-
 fn billing_operation_request(
     slot: IrohaRuntimeProviderSlotV1,
     request_id: u64,
@@ -44,7 +42,6 @@ fn billing_operation_request(
     )
     .expect("build billing broker operation")
 }
-
 #[test]
 fn billing_journal_commitment_rejects_same_label_different_genesis() {
     let display_label_a = "server-test-chain";
@@ -53,7 +50,6 @@ fn billing_journal_commitment_rejects_same_label_different_genesis() {
     let foreign_network = test_network_id(0x16);
     assert_eq!(display_label_a, display_label_b);
     assert_ne!(local_network, foreign_network);
-
     let commitment = sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1 {
         version:
             sorafs_node::hedging_billing_service::HEDGING_BILLING_JOURNAL_COMMITMENT_VERSION_V1,
@@ -72,7 +68,6 @@ fn billing_journal_commitment_rejects_same_label_different_genesis() {
         Err(BrokerError::Rejected)
     ));
 }
-
 #[test]
 fn billing_wire_retires_label_chain_identity() {
     let source = include_str!("../runtime_provider_broker.rs");

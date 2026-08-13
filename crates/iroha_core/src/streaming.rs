@@ -3,7 +3,6 @@
 //! The handle maintained here keeps per-peer `StreamingSession` records so that incoming
 //! control-plane frames (key updates, content-key rotations) can be validated and made
 //! available to higher-level components.
-
 use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     error::Error as StdError,
@@ -17,7 +16,6 @@ use std::{
     },
     thread,
 };
-
 use blake3::Hasher as Blake3Hasher;
 use data_events::{
     DomainEvent, StreamingPrivacyRelay, StreamingPrivacyRoute, StreamingRouteBinding,
@@ -70,11 +68,9 @@ use norito::{
 use soranet_pq::MlKemSuite;
 use thiserror::Error;
 use tokio::sync::broadcast;
-
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StreamingTelemetry;
 use crate::{IrohaNetwork, NetworkMessage};
-
 #[derive(Debug)]
 struct StreamingState {
     viewer_sessions: RwLock<BTreeMap<PeerId, StreamingSession>>,
@@ -3206,7 +3202,6 @@ fn decode_snapshot_bytes(
 #[cfg(unix)]
 fn snapshot_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.is_file()
         && right.is_file()
         && left.dev() == right.dev()
@@ -3220,7 +3215,6 @@ fn snapshot_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -
 #[cfg(windows)]
 fn snapshot_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     left.is_file()
         && right.is_file()
         && left.volume_serial_number().is_some()
@@ -3481,7 +3475,6 @@ mod tests {
         sync::{Arc, Mutex, mpsc},
         time::{Duration, Instant},
     };
-
     use iroha_config::parameters::defaults as config_defaults;
     use iroha_crypto::{
         Algorithm, Hash as CryptoHash, KeyPair, PublicKey,
@@ -3503,9 +3496,7 @@ mod tests {
         },
     };
     use tempfile::tempdir;
-
     use super::*;
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked streaming fixture keypair")
     }
@@ -3546,7 +3537,6 @@ mod tests {
     #[test]
     fn snapshot_reader_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("create temp dir");
         let target = dir.path().join("target.norito");
         let link = dir.path().join("snapshot.norito");
@@ -5791,9 +5781,7 @@ mod tests {
         publisher_peer: Peer,
     ) {
         use iroha_p2p::streaming::StreamingClient;
-        use norito::streaming::{
-            AudioCapability, CapabilityFlags, Resolution, TransportCapabilities,
-        };
+        use norito::streaming::{AudioCapability, CapabilityFlags, Resolution, TransportCapabilities};
         let mut client = StreamingClient::connect(
             &format!("/ip4/127.0.0.1/udp/{listen_port}/quic"),
             server_certificate_fingerprint,
@@ -5835,7 +5823,6 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn negotiate_transport_records_hashes() {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
         use iroha_p2p::streaming::{StreamingServer, quic::TransportConfigSettings};
         use norito::streaming::CapabilityFlags;
         let settings = TransportConfigSettings::default();
@@ -6380,7 +6367,6 @@ mod tests {
     #[test]
     fn non_viewer_capability_report_role_rejected() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
         let handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
         let report = CapabilityReport {
             stream_id: hash_with(0xDF),

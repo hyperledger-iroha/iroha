@@ -8,7 +8,6 @@ impl NodeHandle {
             })
         })
     }
-
     /// Retrieve stored manifest metadata by digest.
     pub fn manifest_metadata_by_digest(
         &self,
@@ -21,7 +20,6 @@ impl NodeHandle {
             })
         })
     }
-
     /// Retrieve the deterministic preferred local manifest for a content CID.
     ///
     /// The backend scans borrowed metadata and clones only the selected result, so a CID lookup
@@ -33,7 +31,6 @@ impl NodeHandle {
         let storage = self.storage_backend()?;
         Ok(storage.manifest_by_cid_prefer_site(cid))
     }
-
     /// Return stored manifest metadata ordered deterministically by manifest digest then identifier.
     pub fn stored_manifests(&self) -> Result<Vec<StoredManifest>, NodeStorageError> {
         let storage = self.storage_backend()?;

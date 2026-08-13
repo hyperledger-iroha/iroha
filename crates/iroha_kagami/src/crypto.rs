@@ -1,13 +1,10 @@
 use std::path::PathBuf;
-
 use clap::{ArgGroup, ValueEnum, builder::PossibleValue};
 use color_eyre::eyre::WrapErr as _;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
 use zeroize::Zeroizing;
-
 use super::*;
 use crate::tui;
-
 /// Use `Kagami` to generate cryptographic key-pairs.
 #[derive(ClapArgs, Debug, Clone)]
 #[command(group = ArgGroup::new("generate_from").required(false))]
@@ -48,10 +45,8 @@ pub struct Args {
     #[clap(long)]
     pop: bool,
 }
-
 #[derive(Clone, Debug, Default, derive_more::Display)]
 struct AlgorithmArg(Algorithm);
-
 impl ValueEnum for AlgorithmArg {
     fn value_variants<'a>() -> &'a [Self] {
         // Keep in sync with `Algorithm`; coverage is enforced by a unit test.
@@ -76,12 +71,10 @@ impl ValueEnum for AlgorithmArg {
         ];
         VARIANTS
     }
-
     fn to_possible_value(&self) -> Option<PossibleValue> {
         Some(self.0.as_static_str().into())
     }
 }
-
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let algorithm_name = self.algorithm.to_string();
@@ -108,7 +101,6 @@ impl<T: Write> RunArgs<T> for Args {
         } else {
             None
         };
-
         if let Some(out_dir) = out_dir {
             write_key_custody(
                 writer,
@@ -183,11 +175,9 @@ impl<T: Write> RunArgs<T> for Args {
         Ok(())
     }
 }
-
 const PUBLIC_KEY_FILE: &str = "public.key";
 const PRIVATE_KEY_FILE: &str = "private.key";
 const POP_FILE: &str = "pop.hex";
-
 fn write_key_custody<T: Write>(
     writer: &mut BufWriter<T>,
     out_dir: &std::path::Path,
@@ -197,13 +187,11 @@ fn write_key_custody<T: Write>(
 ) -> Outcome {
     crate::secure_fs::prepare_empty_private_directory(out_dir)
         .wrap_err("prepare key custody directory")?;
-
     let public_path = out_dir.join(PUBLIC_KEY_FILE);
     let mut public_record = public_key.to_string();
     public_record.push('\n');
     crate::secure_fs::write_private_file_atomic(&public_path, public_record.as_bytes())
         .wrap_err("write public-key custody file")?;
-
     let mut pop_path = None;
     if let Some(pop_hex) = pop_hex {
         let path = out_dir.join(POP_FILE);
@@ -213,7 +201,6 @@ fn write_key_custody<T: Write>(
             .wrap_err("write proof-of-possession custody file")?;
         pop_path = Some(path);
     }
-
     let private_path = out_dir.join(PRIVATE_KEY_FILE);
     let canonical_private = Zeroizing::new(
         private_key
@@ -225,16 +212,13 @@ fn write_key_custody<T: Write>(
     private_record.push(b'\n');
     crate::secure_fs::write_private_file_atomic(&private_path, private_record.as_slice())
         .wrap_err("write private-key custody file")?;
-
     writeln!(writer, "public_key_file: {}", public_path.display())?;
     writeln!(writer, "private_key_file: {}", private_path.display())?;
     if let Some(pop_path) = pop_path {
         writeln!(writer, "pop_file: {}", pop_path.display())?;
     }
-
     Ok(())
 }
-
 fn encode_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -244,11 +228,9 @@ fn encode_hex(bytes: &[u8]) -> String {
     }
     out
 }
-
 impl Args {
     fn key_pair(self) -> color_eyre::Result<KeyPair> {
         let algorithm = self.algorithm.0;
-
         let key_pair = match (self.seed, self.private_key) {
             (None, None) => KeyPair::try_random_with_algorithm(algorithm)
                 .wrap_err("Failed to generate random key pair")?,
@@ -265,11 +247,9 @@ impl Args {
             }
             _ => unreachable!("Clap group invariant"),
         };
-
         Ok(key_pair)
     }
 }
-
 pub(crate) fn parse_keygen_seed_hex(seed: &str) -> color_eyre::Result<Vec<u8>> {
     let seed = seed.strip_prefix("0x").unwrap_or(seed);
     if seed.len() != 64 {
@@ -282,18 +262,14 @@ pub(crate) fn parse_keygen_seed_hex(seed: &str) -> color_eyre::Result<Vec<u8>> {
         .wrap_err("key-generation seed must contain exactly 64 hexadecimal characters")?;
     Ok(decoded)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeSet, io::BufWriter};
-
     // Bring `ValueEnum` into scope so `AlgorithmArg::value_variants()` is callable in this module.
     use clap::ValueEnum;
-
     use super::{
         Algorithm, AlgorithmArg, Args, ExposedPrivateKey, KeyPair, RunArgs, parse_keygen_seed_hex,
     };
-
     #[test]
     fn algorithm_arg_displays_as_algorithm() {
         assert_eq!(
@@ -301,7 +277,6 @@ mod tests {
             format!("{}", Algorithm::Ed25519)
         )
     }
-
     #[test]
     fn value_variants_covers_all_algorithms() {
         // Names advertised by clap for AlgorithmArg
@@ -309,13 +284,11 @@ mod tests {
             .iter()
             .map(|a| a.0.as_static_str())
             .collect();
-
         // Expected algorithms derived from Algorithm::from_str availability.
         // Avoid direct references to feature-gated variants to keep the test robust across features.
         let mut expected = BTreeSet::new();
         expected.insert("ed25519");
         expected.insert("secp256k1");
-
         if "bls_normal".parse::<Algorithm>().is_ok() {
             expected.insert("bls_normal");
         }
@@ -336,13 +309,11 @@ mod tests {
                 expected.insert(*gost);
             }
         }
-
         assert_eq!(
             variants, expected,
             "AlgorithmArg::value_variants is out of sync with Algorithm"
         );
     }
-
     #[test]
     fn json_prefixed_output_uses_checked_formatters() {
         let args = Args {
@@ -356,7 +327,6 @@ mod tests {
             pop: false,
         };
         let mut writer = BufWriter::new(Vec::new());
-
         args.clone()
             .run(&mut writer)
             .expect("generate keypair JSON");
@@ -370,7 +340,6 @@ mod tests {
         let expected_private = ExposedPrivateKey(keypair.private_key().clone())
             .try_to_prefixed_string()
             .expect("checked private formatter");
-
         assert_eq!(
             value
                 .get("public_key")
@@ -384,12 +353,10 @@ mod tests {
             Some(expected_private.as_str())
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn out_dir_writes_consistent_owner_only_custody_and_refuses_reuse() {
         use std::{fs, os::unix::fs::PermissionsExt as _, str::FromStr as _};
-
         let sandbox = tempfile::tempdir().expect("create key custody sandbox");
         let out_dir = sandbox.path().join("custody");
         let args = Args {
@@ -403,7 +370,6 @@ mod tests {
             pop: false,
         };
         let mut writer = BufWriter::new(Vec::new());
-
         args.clone()
             .run(&mut writer)
             .expect("write key custody directory");
@@ -417,7 +383,6 @@ mod tests {
             ExposedPrivateKey::from_str(private_record.trim_end()).expect("parse private key");
         let reconstructed = KeyPair::from_private_key(exposed_private.0.clone())
             .expect("derive matching public key");
-
         assert_eq!(public_record, format!("{}\n", reconstructed.public_key()));
         assert_eq!(private_record, format!("{exposed_private}\n"));
         assert!(!output.contains(private_record.trim_end()));
@@ -441,13 +406,11 @@ mod tests {
                 0o600
             );
         }
-
         let error = args
             .run(&mut BufWriter::new(Vec::new()))
             .expect_err("existing custody directory must never be reused");
         assert!(error.to_string().contains("prepare key custody directory"));
     }
-
     #[test]
     fn key_pair_random_path_uses_checked_generation() {
         let args = Args {
@@ -460,11 +423,9 @@ mod tests {
             out_dir: None,
             pop: false,
         };
-
         let key_pair = args.key_pair().expect("checked random keypair");
         assert_eq!(key_pair.algorithm(), Algorithm::Ed25519);
     }
-
     #[test]
     fn seeded_key_generation_requires_exact_secret_hex() {
         let err = parse_keygen_seed_hex("human password")

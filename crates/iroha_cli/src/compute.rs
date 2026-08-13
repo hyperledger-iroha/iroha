@@ -1,11 +1,9 @@
 //! Compute lane helpers for SDK/CLI parity.
-
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
-
 use base64::Engine as _;
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::compute::{
@@ -17,14 +15,11 @@ use iroha_config::parameters::defaults::compute as compute_defaults;
 use iroha_crypto::Hash;
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use norito::json;
-
 use crate::{Run, RunContext};
-
 const DEFAULT_MANIFEST: &str = "fixtures/compute/manifest_compute_payments.json";
 const DEFAULT_CALL: &str = "fixtures/compute/call_compute_payments.json";
 const DEFAULT_PAYLOAD: &str = "fixtures/compute/payload_compute_payments.json";
 const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:8088";
-
 // Compute descriptors are control-plane JSON rather than bulk payloads. One MiB
 // admits the canonical fixtures and a large route/header catalogue while keeping
 // parser graph growth independent from an arbitrary local file.
@@ -35,7 +30,6 @@ const COMPUTE_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4 * COMPUTE_JSON_MAX_SEQUENCE_
 const COMPUTE_JSON_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 16 * 1024 * 1024;
 const COMPUTE_JSON_MAX_NESTING_DEPTH_V1: usize = 32;
 const COMPUTE_RESPONSE_FIXED_OVERHEAD_BYTES_V1: usize = COMPUTE_DESCRIPTOR_MAX_BYTES_V1;
-
 const COMPUTE_DESCRIPTOR_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
     COMPUTE_JSON_MAX_SEQUENCE_ELEMENTS_V1,
     COMPUTE_DESCRIPTOR_MAX_BYTES_V1,
@@ -43,7 +37,6 @@ const COMPUTE_DESCRIPTOR_DECODE_LIMITS_V1: norito::DecodeLimits = norito::Decode
     COMPUTE_JSON_MAX_DECODE_ALLOCATION_BYTES_V1,
     COMPUTE_JSON_MAX_NESTING_DEPTH_V1,
 );
-
 /// Compute CLI commands.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -52,7 +45,6 @@ pub enum Command {
     /// Invoke a running compute gateway using the shared fixtures.
     Invoke(InvokeArgs),
 }
-
 /// Arguments for compute simulation.
 #[derive(clap::Args, Debug)]
 pub struct SimulateArgs {
@@ -72,7 +64,6 @@ pub struct SimulateArgs {
     #[arg(long, value_name = "PATH")]
     json_out: Option<PathBuf>,
 }
-
 /// Arguments for invoking a running compute gateway.
 #[derive(clap::Args, Debug)]
 pub struct InvokeArgs {
@@ -89,7 +80,6 @@ pub struct InvokeArgs {
     #[arg(long, value_name = "PATH", default_value = DEFAULT_PAYLOAD)]
     payload: PathBuf,
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -118,7 +108,6 @@ impl Run for Command {
         }
     }
 }
-
 /// Output of the compute simulate/invoke commands.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SimulateOutput {
@@ -131,7 +120,6 @@ struct SimulateOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     response_b64: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct GatewayRequest {
     namespace: iroha::data_model::name::Name,
@@ -156,7 +144,6 @@ struct GatewayRequest {
     /// Base64-encoded payload bytes.
     payload_b64: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct GatewayResponse {
     receipt: iroha::data_model::compute::ComputeReceipt,
@@ -164,7 +151,6 @@ struct GatewayResponse {
     #[norito(skip_serializing_if = "Option::is_none")]
     response_b64: Option<String>,
 }
-
 fn simulate(args: &SimulateArgs) -> Result<SimulateOutput> {
     let manifest = load_manifest(&args.manifest)?;
     let call = load_call(&args.call)?;
@@ -172,7 +158,6 @@ fn simulate(args: &SimulateArgs) -> Result<SimulateOutput> {
     let payload = load_payload(&args.payload, args.payload_inline.as_ref(), payload_limit)?;
     simulate_with_call(&manifest, call, &payload)
 }
-
 fn invoke(args: &InvokeArgs) -> Result<SimulateOutput> {
     invoke_with_sender(args, |url, body, max_response_body_bytes| {
         let client = reqwest::blocking::Client::new();
@@ -190,7 +175,6 @@ fn invoke(args: &InvokeArgs) -> Result<SimulateOutput> {
         read_compute_response_body_bounded(&mut resp, declared_bytes, max_response_body_bytes)
     })
 }
-
 fn invoke_with_sender<F>(args: &InvokeArgs, sender: F) -> Result<SimulateOutput>
 where
     F: FnOnce(String, Vec<u8>, usize) -> Result<Vec<u8>>,
@@ -201,7 +185,6 @@ where
     let payload_limit = compute_payload_limit(&manifest, &call)?;
     let payload = load_payload(&args.payload, None, payload_limit)?;
     ensure_payload_hash(&call, payload.as_slice())?;
-
     let request = build_gateway_request(&call, &payload)?;
     let max_response_body_bytes = gateway_response_body_limit(call.max_response_bytes.get())?;
     let request_body = encode_gateway_request_bounded(&request, payload.len())?;
@@ -226,7 +209,6 @@ where
         response_b64: parsed.response_b64,
     })
 }
-
 fn simulate_with_call(
     manifest: &ComputeManifest,
     call: ComputeCall,
@@ -237,7 +219,6 @@ fn simulate_with_call(
     let route = manifest
         .route(&call.route)
         .ok_or_else(|| eyre!("route {:?} missing from manifest", call.route))?;
-
     if payload.len() as u64 > route.max_request_bytes.get() {
         return Err(eyre!(
             "payload size {} exceeds max_request_bytes {}",
@@ -246,7 +227,6 @@ fn simulate_with_call(
         ));
     }
     ensure_payload_hash(&call, payload)?;
-
     let (outcome, response) = execute_entrypoint(&route.entrypoint, payload, &call)?;
     let mut metering = meter(route, &call, payload, response.as_ref());
     let price_families = compute_defaults::price_families();
@@ -264,25 +244,21 @@ fn simulate_with_call(
         .as_ref()
         .map(|resp| encode_base64_bounded(resp))
         .transpose()?;
-
     Ok(SimulateOutput {
         call,
         receipt,
         response_b64,
     })
 }
-
 fn load_manifest(path: &Path) -> Result<ComputeManifest> {
     if !path.exists() {
         return Ok(default_manifest());
     }
     decode_compute_json_file(path, "compute manifest")
 }
-
 fn load_call(path: &Path) -> Result<ComputeCall> {
     decode_compute_json_file(path, "compute call")
 }
-
 fn load_payload(path: &Path, inline: Option<&String>, max_bytes: usize) -> Result<Vec<u8>> {
     if let Some(bytes) = inline {
         if bytes.len() > max_bytes {
@@ -298,7 +274,6 @@ fn load_payload(path: &Path, inline: Option<&String>, max_bytes: usize) -> Resul
         payload.extend_from_slice(bytes.as_bytes());
         return Ok(payload);
     }
-
     let selected = if path.exists() || path == Path::new(DEFAULT_PAYLOAD) {
         path
     } else {
@@ -307,7 +282,6 @@ fn load_payload(path: &Path, inline: Option<&String>, max_bytes: usize) -> Resul
     read_compute_file_bounded(selected, max_bytes, "compute payload")
         .wrap_err_with(|| format!("failed to read payload from {}", path.display()))
 }
-
 fn compute_payload_limit(manifest: &ComputeManifest, call: &ComputeCall) -> Result<usize> {
     manifest.validate()?;
     manifest.validate_call(call)?;
@@ -318,7 +292,6 @@ fn compute_payload_limit(manifest: &ComputeManifest, call: &ComputeCall) -> Resu
         .unwrap_or(usize::MAX)
         .min(COMPUTE_PAYLOAD_MAX_BYTES_V1))
 }
-
 fn read_compute_file_bounded(path: &Path, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
     let path_metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to inspect {label} {}", path.display()))?;
@@ -334,7 +307,6 @@ fn read_compute_file_bounded(path: &Path, max_bytes: usize, label: &str) -> Resu
             path.display()
         ));
     }
-
     let mut file = fs::File::open(path)
         .wrap_err_with(|| format!("failed to open {label} {}", path.display()))?;
     let before = file
@@ -356,7 +328,6 @@ fn read_compute_file_bounded(path: &Path, max_bytes: usize, label: &str) -> Resu
     }
     Ok(bytes)
 }
-
 fn decode_compute_json_file<T>(path: &Path, label: &str) -> Result<T>
 where
     T: norito::json::JsonDeserialize,
@@ -368,7 +339,6 @@ where
     })
     .wrap_err_with(|| format!("failed to decode {label} {}", path.display()))
 }
-
 fn preflight_compute_json(bytes: &[u8], limits: norito::DecodeLimits, label: &str) -> Result<()> {
     json::preflight_slice(
         bytes,
@@ -377,11 +347,9 @@ fn preflight_compute_json(bytes: &[u8], limits: norito::DecodeLimits, label: &st
     .map(|_| ())
     .map_err(|error| eyre!("{label} JSON exceeds its lexical resource bounds: {error}"))
 }
-
 fn base64_encoded_len(bytes: usize) -> Result<usize> {
     base64::encoded_len(bytes, true).ok_or_else(|| eyre!("base64 length overflow"))
 }
-
 fn encode_base64_bounded(bytes: &[u8]) -> Result<String> {
     let encoded_len = base64_encoded_len(bytes.len())?;
     let mut encoded = String::new();
@@ -394,7 +362,6 @@ fn encode_base64_bounded(bytes: &[u8]) -> Result<String> {
     }
     Ok(encoded)
 }
-
 fn gateway_response_body_limit(max_response_bytes: u64) -> Result<usize> {
     let payload_bytes = usize::try_from(max_response_bytes)
         .map_err(|_| eyre!("compute response limit cannot be represented on this host"))?;
@@ -408,13 +375,11 @@ fn gateway_response_body_limit(max_response_bytes: u64) -> Result<usize> {
         .checked_add(COMPUTE_RESPONSE_FIXED_OVERHEAD_BYTES_V1)
         .ok_or_else(|| eyre!("compute response envelope length overflow"))
 }
-
 fn gateway_request_body_limit(payload_bytes: usize) -> Result<usize> {
     base64_encoded_len(payload_bytes)?
         .checked_add(COMPUTE_DESCRIPTOR_MAX_BYTES_V1)
         .ok_or_else(|| eyre!("compute request envelope length overflow"))
 }
-
 fn encode_gateway_request_bounded(
     request: &GatewayRequest,
     payload_bytes: usize,
@@ -424,7 +389,6 @@ fn encode_gateway_request_bounded(
         .map(String::into_bytes)
         .map_err(|error| eyre!("failed to encode bounded compute gateway request: {error}"))
 }
-
 fn read_compute_response_body_bounded<R: std::io::Read>(
     reader: &mut R,
     declared_bytes: Option<u64>,
@@ -437,7 +401,6 @@ fn read_compute_response_body_bounded<R: std::io::Read>(
     }
     super::read_cli_input_bounded(reader, max_bytes, "compute response body")
 }
-
 fn decode_gateway_response_bounded(
     bytes: &[u8],
     max_payload_bytes: u64,
@@ -473,7 +436,6 @@ fn decode_gateway_response_bounded(
     }
     Ok(response)
 }
-
 fn ensure_payload_hash(call: &ComputeCall, payload: &[u8]) -> Result<()> {
     let expected = call.request.payload_hash;
     let actual = Hash::new(payload);
@@ -486,7 +448,6 @@ fn ensure_payload_hash(call: &ComputeCall, payload: &[u8]) -> Result<()> {
     }
     Ok(())
 }
-
 fn build_gateway_request(call: &ComputeCall, payload: &[u8]) -> Result<GatewayRequest> {
     Ok(GatewayRequest {
         namespace: call.namespace.clone(),
@@ -506,7 +467,6 @@ fn build_gateway_request(call: &ComputeCall, payload: &[u8]) -> Result<GatewayRe
         payload_b64: encode_base64_bounded(payload)?,
     })
 }
-
 fn default_manifest() -> ComputeManifest {
     ComputeManifest {
         namespace: compute_defaults::default_namespaces()
@@ -557,7 +517,6 @@ fn default_manifest() -> ComputeManifest {
         }],
     }
 }
-
 fn execute_entrypoint(
     entrypoint: &str,
     payload: &[u8],
@@ -573,20 +532,17 @@ fn execute_entrypoint(
             ));
         }
     };
-
     let cycles = (payload.len() as u64)
         .saturating_mul(10_000)
         .saturating_add(5_000);
     if cycles > call.gas_limit.get() {
         response = None;
     }
-
     if let Some(resp) = &response
         && resp.len() as u64 > call.max_response_bytes.get()
     {
         response = None;
     }
-
     let outcome = response.as_ref().map_or(
         ComputeOutcome {
             kind: ComputeOutcomeKind::BudgetExhausted,
@@ -603,7 +559,6 @@ fn execute_entrypoint(
     );
     Ok((outcome, response))
 }
-
 fn copy_compute_payload(payload: &[u8], uppercase: bool) -> Result<Vec<u8>> {
     let mut output = Vec::new();
     output
@@ -616,7 +571,6 @@ fn copy_compute_payload(payload: &[u8], uppercase: bool) -> Result<Vec<u8>> {
     }
     Ok(output)
 }
-
 fn meter(
     route: &ComputeRoute,
     call: &ComputeCall,
@@ -635,7 +589,6 @@ fn meter(
         .saturating_mul(10_000)
         .saturating_add(10_000);
     let duration_ms = 1 + (payload.len() as u64 / 256);
-
     let mut metering = ComputeMetering {
         cycles,
         ingress_bytes: ingress_bytes as u64,
@@ -644,7 +597,6 @@ fn meter(
         price_family: call.price_family.clone(),
         charged_units: 0,
     };
-
     if metering.cycles > route.gas_budget.get() {
         metering.cycles = route.gas_budget.get();
     }
@@ -653,7 +605,6 @@ fn meter(
     }
     metering
 }
-
 fn charge_units(
     price_families: &BTreeMap<iroha::data_model::name::Name, ComputePriceWeights>,
     default_price_family: &iroha::data_model::name::Name,
@@ -665,12 +616,10 @@ fn charge_units(
         .expect("compute price families must be configured");
     metering.charged_units = price_family.charge_units(metering);
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_i18n::{Bundle, Language, Localizer};
-
     #[test]
     fn simulate_outputs_receipt() {
         let mut ctx = TestContext::new();
@@ -688,7 +637,6 @@ mod tests {
             "expected compute output in JSON: {output}"
         );
     }
-
     #[test]
     fn simulate_rejects_oversized_payload() {
         let args = SimulateArgs {
@@ -701,7 +649,6 @@ mod tests {
         let err = simulate(&args).expect_err("expected payload rejection");
         assert!(err.to_string().contains("max_request_bytes"));
     }
-
     #[test]
     fn invoke_parses_stubbed_response() {
         let args = InvokeArgs {
@@ -732,7 +679,6 @@ mod tests {
         assert_eq!(output.receipt.call.route, call.route);
         assert!(output.response_b64.is_some());
     }
-
     #[test]
     fn bounded_file_reader_accepts_exact_and_rejects_max_plus_one() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -744,14 +690,12 @@ mod tests {
                 .len(),
             16
         );
-
         let oversized_path = directory.path().join("oversized.bin");
         fs::write(&oversized_path, [0_u8; 17]).expect("write oversized input");
         let error = read_compute_file_bounded(&oversized_path, 16, "test input")
             .expect_err("max plus one must fail");
         assert!(error.to_string().contains("first-release limit"));
     }
-
     #[test]
     fn response_reader_preflights_declared_length_and_probes_growth() {
         struct PanicReader;
@@ -760,11 +704,9 @@ mod tests {
                 panic!("declared oversize must fail before reading")
             }
         }
-
         let declared = read_compute_response_body_bounded(&mut PanicReader, Some(17), 16)
             .expect_err("declared max plus one must fail");
         assert!(declared.to_string().contains("Content-Length"));
-
         let mut exact = std::io::Cursor::new([0_u8; 16]);
         assert_eq!(
             read_compute_response_body_bounded(&mut exact, None, 16)
@@ -777,7 +719,6 @@ mod tests {
             .expect_err("chunked max plus one must fail");
         assert!(growth.to_string().contains("first-release limit"));
     }
-
     #[test]
     fn response_payload_text_cannot_exceed_declared_payload_cap() {
         let manifest = default_manifest();
@@ -802,19 +743,16 @@ mod tests {
             .expect_err("base64 text over the declared cap must fail");
         assert!(error.to_string().contains("max_response_bytes"));
     }
-
     fn workspace_fixture(path: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
             .join(path)
     }
-
     struct TestContext {
         output: Vec<u8>,
         i18n: Localizer,
     }
-
     impl TestContext {
         fn new() -> Self {
             Self {
@@ -822,19 +760,16 @@ mod tests {
                 i18n: Localizer::new(Bundle::Cli, Language::English),
             }
         }
-
         fn take_output(&mut self) -> String {
             let out = String::from_utf8(self.output.clone()).unwrap_or_default();
             self.output.clear();
             out
         }
     }
-
     impl RunContext for TestContext {
         fn config(&self) -> &iroha::config::Config {
             use iroha::config::LoadPath;
             use std::{fs, sync::OnceLock};
-
             static CONFIG: OnceLock<iroha::config::Config> = OnceLock::new();
             CONFIG.get_or_init(|| {
                 static CONFIG_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
@@ -865,23 +800,18 @@ nonce = false
                     .expect("load compute test config")
             })
         }
-
         fn transaction_metadata(&self) -> Option<&iroha::data_model::metadata::Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             false
         }
-
         fn i18n(&self) -> &Localizer {
             &self.i18n
         }
-
         fn print_data<T>(&mut self, data: &T) -> Result<()>
         where
             T: norito::json::JsonSerialize + ?Sized,
@@ -890,7 +820,6 @@ nonce = false
             self.output.extend_from_slice(&bytes);
             Ok(())
         }
-
         fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
             use std::io::Write as _;
             writeln!(&mut self.output, "{data}")?;

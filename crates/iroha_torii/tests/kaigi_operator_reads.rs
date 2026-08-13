@@ -1,9 +1,7 @@
 //! Operator-authentication regressions for Kaigi relay diagnostic reads.
 #![cfg(feature = "app_api")]
-
 #[path = "common/norito_rpc_harness.rs"]
 mod norito_rpc_harness;
-
 use axum::{
     body::Body,
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},
@@ -14,7 +12,6 @@ use iroha_torii_shared::route_catalog::{
 };
 use norito_rpc_harness::NoritoRpcHarness;
 use tower::ServiceExt as _;
-
 fn request(uri: Uri, headers: HeaderMap) -> Request<Body> {
     let mut request = Request::builder()
         .method(Method::GET)
@@ -27,7 +24,6 @@ fn request(uri: Uri, headers: HeaderMap) -> Request<Body> {
         .insert(norito_rpc_harness::loopback_connect_info());
     request
 }
-
 #[tokio::test]
 async fn kaigi_relay_diagnostics_reject_legacy_or_precomputed_auth_headers() {
     let harness = NoritoRpcHarness::new(|cfg| {
@@ -43,7 +39,6 @@ async fn kaigi_relay_diagnostics_reject_legacy_or_precomputed_auth_headers() {
         "x-iroha-operator-nonce",
         HeaderValue::from_static("precomputed"),
     );
-
     let response = harness
         .app
         .clone()
@@ -55,13 +50,11 @@ async fn kaigi_relay_diagnostics_reject_legacy_or_precomputed_auth_headers() {
         .expect("legacy-auth response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
-
 fn foreign_network_id() -> NetworkId {
     "hash:0000000000000000000000000000000000000000000000000000000000000003#E54C"
         .parse()
         .expect("canonical foreign NetworkId")
 }
-
 #[test]
 fn kaigi_relay_diagnostics_are_operator_only_and_classified_by_cost() {
     for route in [
@@ -101,11 +94,9 @@ fn kaigi_relay_diagnostics_are_operator_only_and_classified_by_cost() {
         RouteEffect::ExpensiveCompute
     );
 }
-
 #[tokio::test]
 async fn kaigi_relay_diagnostics_reject_missing_or_inexact_auth_before_handlers() {
     let harness = NoritoRpcHarness::new(|_| {});
-
     for path in [
         "/v1/kaigi/relays",
         "/v1/kaigi/relays/relay-id",
@@ -122,7 +113,6 @@ async fn kaigi_relay_diagnostics_reject_missing_or_inexact_auth_before_handlers(
             .expect("missing-signature response");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
     }
-
     let list_uri: Uri = "/v1/kaigi/relays".parse().expect("list URI");
     let foreign_headers = iroha_torii::operator_signed_request_headers(
         &harness.cfg.common.key_pair,
@@ -139,7 +129,6 @@ async fn kaigi_relay_diagnostics_reject_missing_or_inexact_auth_before_handlers(
         .await
         .expect("foreign-network response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
     let health_uri: Uri = "/v1/kaigi/relays/health".parse().expect("health URI");
     let wrong_path_headers = iroha_torii::operator_signed_request_headers(
         &harness.cfg.common.key_pair,
@@ -156,7 +145,6 @@ async fn kaigi_relay_diagnostics_reject_missing_or_inexact_auth_before_handlers(
         .await
         .expect("path-mismatch response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
     let exact_headers = iroha_torii::operator_signed_request_headers(
         &harness.cfg.common.key_pair,
         &harness.network_id,

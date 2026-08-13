@@ -34,7 +34,6 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
     kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("retirement promotes and marks the staged exact owner release-pending");
-
     let pending =
         Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).expect("pending claim");
     assert_eq!(
@@ -48,7 +47,6 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
             .is_err(),
         "ReleasePending must remain exclusive until the exact Queue barrier is durable",
     );
-
     // Model a crash immediately after the slot tombstone reached disk but
     // before this particular claim replacement did.
     let active = AutonomousLaneEntrypointClaimV3::new(&payload, payload.entrypoint_hashes[0]);
@@ -58,7 +56,6 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
     )
     .expect("restore interrupted active claim");
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     reopened
         .persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
@@ -71,7 +68,6 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
             retirement.digest().expect("retirement digest")
         ),
     );
-
     let barrier = retirement
         .queue_release_barrier()
         .expect("build exact queue barrier");
@@ -163,14 +159,12 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
             .is_err(),
         "the delayed retired payload must not reclaim its old slot",
     );
-
     drop(reopened);
     let (restarted, _) = Kura::new(&config, &lane_config).expect("restart after reproposal");
     restarted
         .persist_lane_executable_payload(&successor, network_id, epoch)
         .expect("successor ownership remains idempotent after restart");
 }
-
 #[test]
 fn autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -194,7 +188,6 @@ fn autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging(
         &payload.entrypoint_hashes[0],
     );
     let target_temp = Kura::autonomous_lane_entrypoint_claim_temp_path(&target_path);
-
     let _guard = kura.sidecar_lock.lock();
     let staged = kura
         .prepare_autonomous_lane_entrypoint_claims_with_limit_locked(0, &payload, 2)
@@ -209,7 +202,6 @@ fn autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging(
             .expect("inspect exact boundary"),
         2,
     );
-
     fs::remove_file(&target_temp).expect("remove first boundary-stage fixture");
     let second_filler = write_autonomous_claim_inventory_fixture(
         temp_dir.path(),
@@ -234,7 +226,6 @@ fn autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging(
         second_filler_bytes,
     );
 }
-
 #[test]
 fn autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -259,7 +250,6 @@ fn autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation() {
     );
     let main_bytes = fs::read(&main).expect("read main claim");
     let orphan_bytes = fs::read(&orphan_temp).expect("read orphan temp");
-
     let _guard = kura.sidecar_lock.lock();
     assert!(
         kura.reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_with_limit_locked(1)
@@ -288,7 +278,6 @@ fn autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation() {
         1,
     );
 }
-
 #[test]
 fn autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or_stage() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -317,7 +306,6 @@ fn autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or
         &payload.entrypoint_hashes[0],
     );
     let target_temp = Kura::autonomous_lane_entrypoint_claim_temp_path(&target_path);
-
     {
         let _guard = kura.sidecar_lock.lock();
         assert!(
@@ -343,7 +331,6 @@ fn autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or
         "a real restart must reject the unexpected claim artifact",
     );
 }
-
 #[test]
 fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
     #[derive(Encode)]
@@ -361,13 +348,11 @@ fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
         executable_payload_hash: Hash,
         released_by_retirement_hash: Option<Hash>,
     }
-
     #[derive(Encode)]
     enum UnknownClaimState {
         #[codec(index = 99)]
         Unknown,
     }
-
     #[derive(Encode)]
     struct UnknownClaimV3 {
         version: u16,
@@ -383,7 +368,6 @@ fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
         executable_payload_hash: Hash,
         state: UnknownClaimState,
     }
-
     let temp_dir = TempDir::new().expect("temp dir");
     let network_id = test_network_id(b"legacy-claim-genesis");
     let entrypoint_hash = Hash::new(b"legacy-claim-entrypoint");
@@ -422,7 +406,6 @@ fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
         Kura::decode_autonomous_lane_entrypoint_claim(&path).is_err(),
         "version-two claim layouts must fail closed"
     );
-
     let unknown = UnknownClaimV3 {
         version: AutonomousLaneEntrypointClaimV3::VERSION,
         network_id: common.0,
@@ -447,7 +430,6 @@ fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
         "unknown claim state tags must fail closed"
     );
 }
-
 #[test]
 fn autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -461,7 +443,6 @@ fn autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba() {
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
-
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
     let mut conflicting = retirement.clone();
     conflicting.origin_proposal_hash = Hash::new(b"conflicting-retirement-proposal");
@@ -477,7 +458,6 @@ fn autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba() {
     );
     kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("persist exact retirement");
-
     let recreated = rebind_autonomous_lane_payload_for_kura(
         &payload,
         lane_entry.lane_id,
@@ -507,7 +487,6 @@ fn autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba() {
         "the old tombstone must never validate under the recreated active marker",
     );
 }
-
 #[test]
 fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -525,7 +504,6 @@ fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
     kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("persist retirement");
-
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane_entry,
         temp_dir.path(),
@@ -543,7 +521,6 @@ fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
         Some(retirement.clone()),
     );
     assert!(!temp_path.exists(), "recovered retirement temp is removed");
-
     fs::write(&view_path, &valid_bytes[..valid_bytes.len() / 2])
         .expect("truncate retirement without recovery temp");
     assert!(
@@ -552,7 +529,6 @@ fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
         "truncated retirement must fail closed",
     );
     fs::write(&view_path, &valid_bytes).expect("restore retirement after truncation");
-
     fs::write(&view_path, [0xFF, 0x00, 0xAA]).expect("corrupt retirement");
     assert!(
         kura.read_autonomous_lane_slot_retirement(lane_id, 1, network_id, epoch)
@@ -560,7 +536,6 @@ fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
         "corrupt retirement must fail closed",
     );
     fs::write(&view_path, &valid_bytes).expect("restore retirement after corruption");
-
     fs::OpenOptions::new()
         .write(true)
         .truncate(true)
@@ -578,11 +553,9 @@ fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
         "oversized retirement must fail before allocation or decode",
     );
     fs::write(&view_path, &valid_bytes).expect("restore retirement after oversize");
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-
         let real_path = view_path.with_extension("norito.real");
         fs::rename(&view_path, &real_path).expect("move retirement behind symlink");
         symlink(&real_path, &view_path).expect("symlink retirement");
@@ -593,7 +566,6 @@ fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
         );
         fs::remove_file(&view_path).expect("remove retirement symlink");
         fs::rename(&real_path, &view_path).expect("restore regular retirement");
-
         symlink(&view_path, &temp_path).expect("symlink crash temp");
         assert!(
             kura.read_autonomous_lane_slot_retirement(lane_id, 1, network_id, epoch)
@@ -608,7 +580,6 @@ fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
         Some(retirement),
     );
 }
-
 #[test]
 fn autonomous_lane_slot_retirement_rejects_already_certified_slot() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -642,7 +613,6 @@ fn autonomous_lane_slot_retirement_rejects_already_certified_slot() {
             .is_none(),
     );
 }
-
 #[test]
 fn autonomous_merge_bundle_certifies_origin_while_new_view_advances_cursor() {
     let lane_config = two_lane_runtime_config();
@@ -693,7 +663,6 @@ fn autonomous_merge_bundle_certifies_origin_while_new_view_advances_cursor() {
     };
     Kura::validate_autonomous_lane_merge_bundle(&bundle, network_id, epoch)
         .expect("origin certification remains valid after the cursor advances");
-
     let cursor_availability =
         durable_lane_payload_availability_for_kura(&payload, &cursor, &signer);
     let cursor_commit_vote = signed_lane_block_vote_for_kura(&cursor, CertPhase::Commit, &signer);
@@ -720,7 +689,6 @@ fn autonomous_merge_bundle_certifies_origin_while_new_view_advances_cursor() {
         Err("autonomous lane merge bundle must certify the immutable origin proposal"),
         "a fully signed synthetic cursor must not become the merge certification subject",
     );
-
     let mut poisoned_availability = bundle;
     poisoned_availability.autonomous.availability_certificate = Some(cursor_availability);
     assert_eq!(
@@ -729,7 +697,6 @@ fn autonomous_merge_bundle_certifies_origin_while_new_view_advances_cursor() {
         "the durable artifact must reject a next-view READY QC before merge validation",
     );
 }
-
 #[test]
 fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -744,7 +711,6 @@ fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() 
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
-
     let new_view = next_durable_lane_view_certificate_for_kura(
         &payload.origin_proposal,
         &payload,
@@ -768,7 +734,6 @@ fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() 
         norito::encode_canonical(&advanced_state).expect("encode crash-temp view state");
     fs::write(&view_state_temp, &temp_bytes).expect("stage higher-view crash temp");
     let main_before = fs::read(&view_state_path).expect("read stable main view state");
-
     let record = {
         let _prune_guard = kura.prune_lock.lock();
         let _canonical_chain_guard = kura.canonical_chain_lock.lock();
@@ -795,7 +760,6 @@ fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() 
         "read-only winner selection must not delete or rewrite the crash temp",
     );
 }
-
 #[test]
 fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_restart() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -810,7 +774,6 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
-
     let availability =
         durable_lane_payload_availability_for_kura(&payload, &payload.origin_proposal, &signer);
     let (mut session, signer_pops) =
@@ -826,7 +789,6 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
             .is_none(),
         "failed autonomous prepublication must not leave a certified pair"
     );
-
     let recovered = kura
         .recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch)
         .expect("recover exact autonomous execution input");
@@ -861,9 +823,7 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
         "a certificate must not become merge eligible before the bundle's own barrier",
     );
     drop(kura);
-
     let (kura, _) = Kura::new(&config, &lane_config).expect("repair bundle on startup");
-
     let source = kura
         .durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch)
         .expect("read complete durable autonomous source");
@@ -940,7 +900,6 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
         source.bundle_hash,
         source.bundle.bundle_hash().expect("canonical bundle hash")
     );
-
     let delayed_new_view = next_durable_lane_view_certificate_for_kura(
         &payload.origin_proposal,
         &payload,
@@ -953,7 +912,6 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
             .is_err(),
         "a durable certificate must freeze the exact reconstructed bundle bytes"
     );
-
     let view_state_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane_entry,
         &kura.store_root,
@@ -967,7 +925,6 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
         Err("autonomous lane view state has unresolved recovery state"),
         "merge admission must not choose a view while startup recovery can still replace it",
     );
-
     drop(kura);
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     assert_eq!(
@@ -977,7 +934,6 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
         source
     );
 }
-
 #[test]
 fn durable_autonomous_merge_source_rejects_execution_input_drift() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -1014,7 +970,6 @@ fn durable_autonomous_merge_source_rejects_execution_input_drift() {
         .expect("persist certified autonomous source");
     kura.durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch)
         .expect("complete source is initially eligible");
-
     let mut drifted = LaneBlockExecutionInputArtifact::new(recovered);
     drifted.autonomous_payload_hash = Some(Hash::new(b"drifted autonomous input hash"));
     let drifted_bytes = drifted.encode_framed().expect("encode drifted input");
@@ -1036,7 +991,6 @@ fn durable_autonomous_merge_source_rejects_execution_input_drift() {
         "a self-consistent but payload-divergent input must lose merge eligibility"
     );
 }
-
 #[test]
 fn durable_autonomous_merge_source_rejects_persisted_bundle_drift() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -1074,7 +1028,6 @@ fn durable_autonomous_merge_source_rejects_persisted_bundle_drift() {
     let source = kura
         .durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch)
         .expect("complete source is initially eligible");
-
     let mut drifted = source.bundle;
     drifted
         .autonomous
@@ -1107,7 +1060,6 @@ fn durable_autonomous_merge_source_rejects_persisted_bundle_drift() {
         "an internally valid but separately divergent persisted bundle must lose eligibility",
     );
 }
-
 #[test]
 fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_and_linked_artifacts()
 {
@@ -1145,7 +1097,6 @@ fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_an
         .expect("persist certified autonomous source");
     kura.durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch)
         .expect("complete source is initially eligible");
-
     let (data_path, index_path) =
         Kura::autonomous_lane_merge_bundle_paths_for_entry(lane_entry, temp_dir.path());
     let backup_dir = TempDir::new().expect("bundle backup dir");
@@ -1172,25 +1123,21 @@ fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_an
             "{case} must fail closed before merge eligibility",
         );
     };
-
     let mut malformed_data = canonical_data.clone();
     let malformed_midpoint = malformed_data.len() / 2;
     malformed_data[malformed_midpoint] ^= 0x80;
     fs::write(&data_path, malformed_data).expect("write malformed bundle data");
     assert_rejected("malformed canonical bundle bytes");
     restore_pair();
-
     fs::write(&index_path, &canonical_index[..canonical_index.len() - 1])
         .expect("write truncated bundle index");
     assert_rejected("truncated bundle index");
     restore_pair();
-
     let mut trailing_index = canonical_index.clone();
     trailing_index.push(0);
     fs::write(&index_path, trailing_index).expect("write trailing bundle index byte");
     assert_rejected("partial trailing bundle index entry");
     restore_pair();
-
     let oversized_index_len = u64::try_from(
         kura.autonomous_lane_merge_bundle_pair_entry_limit()
             .saturating_add(1),
@@ -1206,7 +1153,6 @@ fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_an
         .expect("oversize bundle index sparsely");
     assert_rejected("oversized bundle index");
     restore_pair();
-
     std::fs::OpenOptions::new()
         .write(true)
         .open(&data_path)
@@ -1219,20 +1165,16 @@ fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_an
         .expect("oversize bundle data sparsely");
     assert_rejected("oversized bundle data");
     restore_pair();
-
     fs::remove_file(&index_path).expect("remove one bundle pair half");
     assert_rejected("partial bundle data/index pair");
     restore_pair();
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-
         fs::remove_file(&data_path).expect("remove bundle data before symlink");
         symlink(&data_backup, &data_path).expect("symlink bundle data");
         assert_rejected("symlinked bundle data");
         restore_pair();
-
         fs::remove_file(&data_path).expect("remove bundle data before hardlink");
         fs::hard_link(&data_backup, &data_path).expect("hardlink bundle data");
         assert_rejected("hardlinked bundle data");
@@ -1244,7 +1186,6 @@ fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_an
         fs::remove_file(&data_path).expect("remove hardlink fixture");
     }
 }
-
 #[test]
 fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -1262,7 +1203,6 @@ fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
     let recovered = kura
         .recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch)
         .expect("recover execution input before crash");
-
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane_entry,
         &kura.store_root,
@@ -1276,7 +1216,6 @@ fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
     fs::write(&view_path, &truncated_bytes).expect("truncate main view state");
     let main_before = fs::read(&view_path).expect("snapshot truncated main");
     let temp_before = fs::read(&temp_path).expect("snapshot valid crash temp");
-
     assert!(
         kura.persist_lane_block_execution_input(&recovered).is_err(),
         "execution-input validation must fail closed on the malformed main view sidecar",
@@ -1291,7 +1230,6 @@ fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
         temp_before,
         "non-repair validation must not delete the autonomous crash temp",
     );
-
     assert_eq!(
         kura.recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch,)
             .expect("ordinary recovery promotes the valid crash temp"),
@@ -1306,7 +1244,6 @@ fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
         "ordinary recovery must remove the promoted crash temp",
     );
 }
-
 #[test]
 fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -1321,7 +1258,6 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist payload");
-
     let mut current = payload.origin_proposal.clone();
     let mut certificate_prefix = Vec::with_capacity(256);
     for _ in 1..=256 {
@@ -1372,7 +1308,6 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
         .expect("view 256 artifact");
     assert!(artifact.view_checkpoint.is_none());
     assert_eq!(artifact.new_view_certificates.len(), 256);
-
     for target_view in 257..=258 {
         let durable = next_durable_lane_view_certificate_for_kura(
             &current, &payload, &signer, network_id, epoch,
@@ -1398,7 +1333,6 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
     }
     assert_eq!(current.descriptor.lane_block_view, 258);
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     let recovered = reopened
         .current_autonomous_lane_payload(lane_id, 1, network_id, epoch)
@@ -1416,7 +1350,6 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
             .is_empty(),
         "a zero global recovery limit must not enumerate durable history"
     );
-
     let temp_path = Kura::autonomous_lane_block_view_state_temp_path(&view_path);
     let valid_bytes = fs::read(&view_path).expect("read valid view state");
     fs::write(&temp_path, &valid_bytes).expect("stage crash temp");
@@ -1431,7 +1364,6 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
         258
     );
     assert!(!temp_path.exists(), "recovered temp should be promoted");
-
     fs::write(&view_path, [0xFF, 0x00, 0xAA]).expect("corrupt view state");
     assert!(
         reopened
@@ -1440,7 +1372,6 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
         "corrupt view state must not fall back to the origin proposal"
     );
 }
-
 #[test]
 fn autonomous_payload_promotes_hint_free_bytes_to_one_exact_carrier_hint() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -1478,7 +1409,6 @@ fn autonomous_payload_promotes_hint_free_bytes_to_one_exact_carrier_hint() {
             .is_err(),
         "carrier-hint promotion must never be reversed",
     );
-
     drop(kura);
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     assert_eq!(
@@ -1489,7 +1419,6 @@ fn autonomous_payload_promotes_hint_free_bytes_to_one_exact_carrier_hint() {
         hinted,
     );
 }
-
 #[test]
 fn autonomous_payload_rejects_a_conflicting_carrier_hint_after_promotion() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -1535,7 +1464,6 @@ fn autonomous_payload_rejects_a_conflicting_carrier_hint_after_promotion() {
         first,
     );
 }
-
 #[test]
 fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointers() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -1602,7 +1530,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist first versioned attempt");
-
     let reservation_group =
         lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
             .expect("bind exact lifecycle reservation group");
@@ -1636,7 +1563,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
             .is_err(),
         "every cursor read must revalidate the exact predecessor",
     );
-
     let binding_a = canonical_lane_queue_reservation_group_identity_projection(reservation_group);
     let initial = ProductionInFlightFirstReleaseStateProjection {
         validator_count: 1,
@@ -1687,7 +1613,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
             )
             .expect("finalize lifecycle cursor")
     };
-
     assert!(
         Kura::validate_autonomous_lifecycle_cursor_cas_budget(
             MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES,
@@ -1721,7 +1646,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .is_err(),
         "replacement must reject more than one maximum cursor of temporary exposure",
     );
-
     let absent = kura
         .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_one)
         .expect("read absent lifecycle cursor");
@@ -1757,7 +1681,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         Some(&live_activated),
         "successful lifecycle creation must return its exact durable cursor",
     );
-
     let foreign_temp_dir = TempDir::new().expect("foreign Kura root");
     let foreign_config = kura_config_for_dir(&foreign_temp_dir, BLOCKS_IN_MEMORY);
     let (foreign_kura, _) =
@@ -1780,7 +1703,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_one)
         .expect("mint root-bound cursor lease")
         .into_parts();
-
     let first_read = kura
         .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_one)
         .expect("read first lifecycle cursor");
@@ -1838,7 +1760,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let execution_input_read = kura
         .compare_and_swap_autonomous_lifecycle_cursor(prepared_lease, live_execution_input.clone())
         .expect("publish execution-input-durable live phase");
-
     assert_eq!(
         binding.route_identity(),
         (
@@ -1903,7 +1824,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     drop(execution_input_read);
     drop(kura);
-
     let (kura, _) = Kura::new(&config, &lane_config).expect("restart before Crash observation");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("rebind exact lifecycle key identity");
@@ -1960,7 +1880,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         2,
         "read-only observer inventory must not claim or increment process generation",
     );
-
     let mut crashed = execution_input_durable;
     crashed.session.crashed = 1;
     crashed.session.bodies = 0;
@@ -1992,7 +1911,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
             .is_err(),
         "Live -> Prepared must not bypass the generation-aware Crashed phase",
     );
-
     let (_, crash_lease) = kura
         .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_two)
         .expect("read prior live cursor after rejected direct Crash preparation")
@@ -2010,7 +1928,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         Some(&crashed_cursor),
         "successful Crash publication must return its exact durable cursor",
     );
-
     let mut recovered = crashed;
     recovered.session.crashed = 0;
     let recover_transition = ProductionInFlightFirstReleaseTransitionProjection {
@@ -2038,7 +1955,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         "successful Recover preparation must return its exact durable cursor",
     );
     drop(kura);
-
     let (kura, _) = Kura::new(&config, &lane_config).expect("restart over prepared Recover");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("rebind exact lifecycle key identity after prepared Recover");
@@ -2082,7 +1998,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         "successful generation-three takeover must return its exact durable cursor",
     );
     drop(kura);
-
     let (kura, _) = Kura::new(&config, &lane_config).expect("restart over crashed takeover");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("rebind exact lifecycle key identity after crashed takeover");
@@ -2143,7 +2058,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         Some(&live_recovered),
         "successful Live recovery must return its exact durable cursor",
     );
-
     let crashed_live_phase = AutonomousLifecycleCursorPhaseV2::live(4, crashed)
         .expect("the state kernel alone admits a crashed-member projection");
     assert!(
@@ -2188,7 +2102,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .is_err(),
         "cursor sequence exhaustion must fail closed instead of saturating",
     );
-
     let artifact_dir = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
     let attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
         lane,
@@ -2260,7 +2173,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .is_none(),
         "zero lane heights are noncanonical",
     );
-
     let canonical_cursor_bytes = fs::read(&lifecycle_path).expect("read canonical cursor");
     assert_eq!(
         Kura::decode_autonomous_lifecycle_cursor(&lifecycle_path, &canonical_cursor_bytes)
@@ -2318,7 +2230,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
                 .exists(),
         "the coordinated first release must never emit the deleted indexed layout",
     );
-
     fs::remove_file(&view_path).expect("model crash before initial view publication");
     fs::remove_file(&height_pointer).expect("model crash before height-pointer publication");
     fs::remove_file(&route_pointer).expect("model crash before route-pointer publication");
@@ -2344,7 +2255,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     fs::write(&named_cursor_temp, &canonical_cursor_bytes)
         .expect("stage forbidden named cursor temporary");
     drop(kura);
-
     assert!(
         Kura::new(&config, &lane_config).is_err(),
         "startup must reject a named lifecycle temporary rather than select it",
@@ -2353,7 +2263,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-
         fs::remove_file(&lifecycle_path).expect("remove cursor before symlink fixture");
         symlink(&attempt_path, &lifecycle_path).expect("install lifecycle cursor symlink");
         assert!(
@@ -2376,7 +2285,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::write(&lifecycle_path, &canonical_cursor_bytes)
         .expect("restore lifecycle cursor after startup size rejection");
-
     fs::remove_file(&process_generation_path)
         .expect("remove process generation for missing-record fixture");
     assert!(
@@ -2385,7 +2293,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after missing-record rejection");
-
     let mut rolled_back_generation = process_generation_record.clone();
     rolled_back_generation.body.generation = 3;
     rolled_back_generation.record_hash = rolled_back_generation
@@ -2403,7 +2310,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after active rollback rejection");
-
     let archived_cursor_dir = temp_dir
         .path()
         .join("retired")
@@ -2437,7 +2343,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     fs::remove_dir_all(&archived_cursor_dir).expect("remove retained-cursor audit fixture");
     fs::write(&lifecycle_path, &canonical_cursor_bytes)
         .expect("restore active cursor after retained-cursor audit");
-
     fs::write(&process_generation_temp_path, &process_generation_bytes)
         .expect("write forbidden deterministic process-generation temporary");
     assert!(
@@ -2446,7 +2351,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::remove_file(&process_generation_temp_path)
         .expect("remove deterministic process-generation temporary");
-
     let process_generation_atomic_temp = temp_dir.path().join(format!(
         "{AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ATOMIC_TEMP_PREFIX}crash-residue"
     ));
@@ -2467,7 +2371,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         "startup recovery must retain stable generation four instead of promoting generation five",
     );
     drop(recovered_generation_kura);
-
     fs::write(&process_generation_atomic_temp, &process_generation_bytes)
         .expect("write non-successor process-generation atomic temporary");
     assert!(
@@ -2480,7 +2383,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::remove_file(&process_generation_atomic_temp)
         .expect("remove rejected process-generation atomic temporary");
-
     fs::write(
         &process_generation_path,
         &process_generation_bytes[..process_generation_bytes.len() - 1],
@@ -2492,7 +2394,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after truncation rejection");
-
     let mut invalid_hash_generation = process_generation_record.clone();
     invalid_hash_generation.record_hash = Hash::new(b"invalid process-generation record hash");
     fs::write(
@@ -2508,7 +2409,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after self-hash rejection");
-
     let mut zero_generation = process_generation_record.clone();
     zero_generation.body.generation = 0;
     zero_generation.record_hash = zero_generation
@@ -2528,7 +2428,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after zero rejection");
-
     fs::File::options()
         .write(true)
         .open(&process_generation_path)
@@ -2541,7 +2440,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after size rejection");
-
     let process_generation_hardlink = temp_dir.path().join("process-generation-hardlink-alias");
     fs::hard_link(&process_generation_path, &process_generation_hardlink)
         .expect("create process-generation hardlink alias");
@@ -2551,11 +2449,9 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::remove_file(&process_generation_hardlink)
         .expect("remove process-generation hardlink alias");
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-
         let symlink_target = temp_dir.path().join("process-generation-symlink-target");
         fs::write(&symlink_target, &process_generation_bytes)
             .expect("write process-generation symlink target");
@@ -2572,7 +2468,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         fs::write(&process_generation_path, &process_generation_bytes)
             .expect("restore process generation after symlink rejection");
     }
-
     let mut drifted_chain_generation = process_generation_record.clone();
     drifted_chain_generation.body.network_id =
         test_network_id(b"drifted-process-generation-genesis");
@@ -2593,7 +2488,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after chain-drift rejection");
-
     let alternate_local_key = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let mut drifted_local_peer_generation = process_generation_record.clone();
     drifted_local_peer_generation.body.local_peer_id =
@@ -2615,7 +2509,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after local-peer drift rejection");
-
     let obsolete_cursor_path = artifact_dir
         .join("autonomous_lifecycle_v1_00000000000000000001_00000000000000000042.norito");
     fs::write(&obsolete_cursor_path, &canonical_cursor_bytes)
@@ -2625,7 +2518,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         "startup must fail closed on a legacy V1 cursor path instead of decoding it",
     );
     fs::remove_file(&obsolete_cursor_path).expect("remove obsolete V1 cursor path fixture");
-
     let mut exhausted_generation = process_generation_record.clone();
     exhausted_generation.body.generation = u64::MAX;
     exhausted_generation.record_hash = exhausted_generation
@@ -2653,7 +2545,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     drop(exhausted_kura);
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after exhaustion rejection");
-
     let (reopened, _) =
         Kura::new(&config, &lane_config).expect("startup reconstructs the exact immutable attempt");
     assert!(!atomic_temp.exists());
@@ -2671,7 +2562,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
             .0,
         payload,
     );
-
     let pending_temp_dir = TempDir::new().expect("pending cursor temp dir");
     let pending_config = kura_config_for_dir(&pending_temp_dir, BLOCKS_IN_MEMORY);
     let (pending_kura, _) = Kura::new(&pending_config, &lane_config).expect("pending cursor Kura");

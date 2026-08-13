@@ -3,7 +3,6 @@
 //! The client focuses on generating canonical endpoints and providing async
 //! helpers for common HTTP and WebSocket interactions. UI layers can build on
 //! top by wiring retries, auth, and payload codecs.
-
 use std::{
     convert::TryFrom,
     future::Future,
@@ -13,7 +12,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
@@ -77,13 +75,10 @@ use tokio_tungstenite::{
     tungstenite::{Error as WebSocketError, Message, client::IntoClientRequest},
 };
 use url::Url;
-
 use crate::compose::{InstructionPermission, SigningAuthority};
-
 mod operator_auth;
 pub use operator_auth::OperatorSigningContext;
 use operator_auth::build_operator_get_request;
-
 include!("torii/sumeragi_response_bounds.rs");
 /// Convenience result alias for Torii client operations.
 pub type ToriiResult<T> = std::result::Result<T, ToriiError>;

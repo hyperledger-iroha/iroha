@@ -1,8 +1,6 @@
 // Backpressure and exact-output scheduling worker regression tests.
 // Included lexically by v2_worker::tests to preserve canonical test names.
-
 include!("v2_worker_backpressure_retirement_cases.rs");
-
 #[test]
 fn unavailable_admission_racing_retirement_is_nonfatal() {
     let (service, _) = fixture();
@@ -22,7 +20,6 @@ fn unavailable_admission_racing_retirement_is_nonfatal() {
             .expect("one unavailable-race reply fanout"),
         )
         .expect("retain the unavailable-race reply");
-
     assert_eq!(
         pending.drive_with_budget_ack(usize::MAX, |_post, _ticket, attempted, _timeout_attempt| {
             let ExactTargetRoute::Reply(attempted) = attempted else {
@@ -41,7 +38,6 @@ fn unavailable_admission_racing_retirement_is_nonfatal() {
     assert!(target.parked);
     assert!(!pending.source_fifo_owners.is_empty());
 }
-
 #[test]
 fn ordinary_reply_late_old_flush_after_reconnect_advances_exactly_once() {
     let (service, _) = fixture();
@@ -68,7 +64,6 @@ fn ordinary_reply_late_old_flush_after_reconnect_advances_exactly_once() {
         ),
         Ok(ExactFanoutOwnership::Owned)
     );
-
     let mut old_control = None;
     let mut cloned_completion_identity = None;
     assert_eq!(
@@ -90,7 +85,6 @@ fn ordinary_reply_late_old_flush_after_reconnect_advances_exactly_once() {
     );
     assert_eq!(pending.fanouts[0].targets[0].message_index, 0);
     assert!(pending.fanouts[0].targets[0].pending_flush.is_some());
-
     assert!(routes.retire(&old_route));
     let replacement_route = routes.mint_via(peer.clone(), hub);
     assert_eq!(
@@ -112,7 +106,6 @@ fn ordinary_reply_late_old_flush_after_reconnect_advances_exactly_once() {
         &target.route,
         ExactTargetRoute::Reply(route) if route.same_delivery(&replacement_route)
     ));
-
     assert!(
         old_control
             .as_mut()
@@ -133,14 +126,12 @@ fn ordinary_reply_late_old_flush_after_reconnect_advances_exactly_once() {
             .claim_writer_flush_once(),
         "a clone of the consumed writer occurrence cannot advance another cursor"
     );
-
     pending
         .poll_reply_flushes()
         .expect("polling after terminal ownership consumption is idempotent");
     assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
     assert_eq!(pending.ownership_units, 1);
 }
-
 #[test]
 fn closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressures() {
     let (service, _) = fixture();
@@ -178,7 +169,6 @@ fn closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressu
     reply_routes
         .merge(&NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"))
         .expect("retain both authenticated response sources");
-
     let mut pending =
         PendingExactOutput::new(2, 1, 2, &[]).expect("two-source sidecar response corridor");
     assert_eq!(
@@ -273,7 +263,6 @@ fn closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressu
         pending.source_fifo_owners.get(&source_b),
         Some(&BTreeSet::from([fifo_id]))
     );
-
     let exact_duplicate = NetworkReplyRoutes::try_from_route(route_a.clone())
         .expect("exact pending-source duplicate");
     assert_eq!(
@@ -292,7 +281,6 @@ fn closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressu
         ExactFanoutOwnership::Owned
     );
     assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
-
     let later_a = routes
         .redeliver(&route_a)
         .expect("later delivery on the same source tenure");
@@ -319,7 +307,6 @@ fn closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressu
         ExactTargetRoute::Reply(route) if route.same_delivery(&later_a)
     ));
     assert_eq!(pending.ownership_units, 2);
-
     assert!(routes.retire(&later_a));
     let reconnected_a = routes.mint_via(peer.clone(), hub_a.clone());
     let reconnect = NetworkReplyRoutes::try_from_route(reconnected_a.clone())
@@ -373,7 +360,6 @@ fn closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressu
         pending.source_fifo_owners.get(&source_b),
         Some(&BTreeSet::from([fifo_id]))
     );
-
     assert!(routes.retire(&reconnected_a));
     assert_eq!(
         pending.drive_with(|post, ticket, route| {
@@ -412,7 +398,6 @@ fn closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressu
         pending.source_fifo_owners.get(&source_b),
         Some(&BTreeSet::from([fifo_id]))
     );
-
     let second_reconnect_a = routes.mint_via(peer.clone(), hub_a);
     let retry_routes = NetworkReplyRoutes::try_from_route(second_reconnect_a.clone())
         .expect("second source A reconnect route set");
@@ -451,7 +436,6 @@ fn closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressu
         Some(&BTreeSet::from([fifo_id]))
     );
 }
-
 #[test]
 fn completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge() {
     let (service, _) = fixture();
@@ -487,7 +471,6 @@ fn completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge
         .expect("valid certified sidecar claim")
         .expect("one exact sidecar response")
     };
-
     let mut initial_routes =
         NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
     initial_routes
@@ -508,7 +491,6 @@ fn completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge
                     matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_b))
                 })
                 .expect("source B target");
-
     let mut pending =
         PendingExactOutput::new(2, 1, 2, &[]).expect("two shared ownership units fit");
     assert_eq!(
@@ -521,7 +503,6 @@ fn completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge
         .fifo_id
         .expect("sidecar fanout owns stable FIFO age");
     assert_eq!(pending.ownership_units, 2);
-
     let mut source_a_flush_control = None;
     assert_eq!(
         pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
@@ -564,7 +545,6 @@ fn completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge
         .expect("the successful writer flush publishes one lane receipt");
     assert!(pending.admitted_sidecar_chunks.is_empty());
     assert_eq!(pending.ownership_units, 1);
-
     assert_eq!(
         pending
             .enqueue(
@@ -578,7 +558,6 @@ fn completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge
         ExactFanoutOwnership::Owned
     );
     assert_eq!(pending.shared_ownership_units, 2);
-
     assert!(routes.retire(&route_a));
     let reconnected_a = routes.mint_via(peer.clone(), hub_a);
     let reconnect = || {
@@ -614,7 +593,6 @@ fn completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge
         pending.source_fifo_owners.get(&source_b),
         Some(&BTreeSet::from([fifo_id]))
     );
-
     assert_eq!(
         pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
             assert!(ticket.is_none());
@@ -648,7 +626,6 @@ fn completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge
     assert_eq!(pending.pending_sidecar_flushes(), 0);
     assert!(pending.admitted_sidecar_chunks.is_empty());
 }
-
 #[test]
 fn later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_attempts_progress() {
     let (service, _) = fixture();
@@ -670,7 +647,6 @@ fn later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_at
         )
         .expect("one exact sidecar response")
     };
-
     let mut pending = PendingExactOutput::new(3, 1, 2, &[])
         .expect("one response attempt and two capacity blockers fit");
     assert_eq!(
@@ -698,7 +674,6 @@ fn later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_at
     assert_eq!(pending.fanouts.len(), 1);
     assert_eq!(pending.fanouts[0].targets[0].message_index, 0);
     assert_eq!(pending.pending_sidecar_flushes(), 1);
-
     for label in [
         b"pending flush capacity blocker a".as_slice(),
         b"pending flush capacity blocker b".as_slice(),
@@ -714,7 +689,6 @@ fn later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_at
         );
     }
     assert_eq!(pending.shared_ownership_units, 3);
-
     let pending_later = routes
         .redeliver(&first_route)
         .expect("later delivery on the pending writer tenure");
@@ -747,7 +721,6 @@ fn later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_at
     assert_eq!(pending.fanouts.len(), 1);
     assert_eq!(pending.pending_sidecar_flushes(), 1);
     assert_eq!(pending.shared_ownership_units, 1);
-
     assert!(
         flush_control
             .as_mut()
@@ -761,7 +734,6 @@ fn later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_at
     assert!(pending.fanouts.is_empty());
     assert_eq!(pending.shared_ownership_units, 0);
     assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
-
     let unapplied_later = routes
         .redeliver(&pending_later)
         .expect("later delivery while the exact receipt remains unapplied");
@@ -783,7 +755,6 @@ fn later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_at
         }),
         Ok(ExactOutputDriveOutcome::Drained)
     );
-
     let alternate = routes.mint_via(peer.clone(), hub_b);
     assert_eq!(
         pending
@@ -811,7 +782,6 @@ fn later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_at
     }));
     assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
 }
-
 #[test]
 fn mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblings() {
     let (service, _) = fixture();
@@ -829,7 +799,6 @@ fn mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblin
         PendingExactFanout::new_with_reply_routes(vec![message.clone()], peer.clone(), reply_routes)
             .expect("one exact sidecar response")
     };
-
     let mut pending =
         PendingExactOutput::new(3, 1, 3, &[]).expect("three authenticated response sources fit");
     assert_eq!(
@@ -858,7 +827,6 @@ fn mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblin
     );
     assert_eq!(pending.pending_sidecar_flushes(), 1);
     assert_eq!(pending.fanouts.len(), 1);
-
     assert_eq!(
         pending
             .enqueue_owned_reply_transfer(fanout(
@@ -883,7 +851,6 @@ fn mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblin
             .can_enqueue_owned_reply_transfer(mixed)
             .expect("mixed-source preflight preserves exact ownership")
     );
-
     let mut mixed_routes =
         NetworkReplyRoutes::try_from_route(later_a.clone()).expect("later source A route set");
     mixed_routes
@@ -897,7 +864,6 @@ fn mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblin
             .expect("merge pending A without losing live B or C"),
         ExactFanoutOwnership::Owned
     );
-
     assert_eq!(pending.fanouts.len(), 1);
     let retained = &pending.fanouts[0];
     assert_eq!(retained.targets.len(), 3);
@@ -928,7 +894,6 @@ fn mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblin
     assert_eq!(pending.ownership_units, 3);
     assert_eq!(pending.shared_ownership_units, 3);
     assert_eq!(retained.current_source_targets.len(), 3);
-
     assert_eq!(
         pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
             assert!(ticket.is_none());
@@ -947,7 +912,6 @@ fn mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblin
     assert_eq!(pending.pending_sidecar_flushes(), 1);
     assert!(flush_control.is_some());
 }
-
 #[test]
 fn sidecar_flush_ack_identity_mismatch_fails_closed() {
     let (service, _) = fixture();
@@ -974,7 +938,6 @@ fn sidecar_flush_ack_identity_mismatch_fails_closed() {
     let (mut substituted_control, substituted_ack, _substituted_admission) =
         certified_sidecar_flush_fixture(&chunk, &route);
     assert!(substituted_control.flush());
-
     let mut pending =
         PendingExactOutput::new(1, 1, 1, &[]).expect("one exact sidecar flush witness fits");
     assert_eq!(pending.enqueue(fanout()), Ok(ExactFanoutOwnership::Owned));
@@ -989,7 +952,6 @@ fn sidecar_flush_ack_identity_mismatch_fails_closed() {
     assert!(error.contains("different actor output"));
     assert_eq!(pending.pending_sidecar_flushes(), 1);
     assert!(pending.admitted_sidecar_chunks.is_empty());
-
     let (mut exact_control, exact_ack, exact_admission) =
         certified_sidecar_flush_fixture(&chunk, &route);
     assert!(exact_control.flush());
@@ -1011,7 +973,6 @@ fn sidecar_flush_ack_identity_mismatch_fails_closed() {
     assert!(exact_pending.fanouts.is_empty());
     assert_eq!(exact_pending.admitted_sidecar_chunks.len(), 1);
 }
-
 #[test]
 fn inactive_reply_target_tombstone_rejects_cross_source_equal_ordinal_collision() {
     let (service, _) = fixture();
@@ -1110,7 +1071,6 @@ fn inactive_reply_target_tombstone_rejects_cross_source_equal_ordinal_collision(
             .is_some_and(|history| history.iter().any(|route| route.same_delivery(&route_b)))
     );
 }
-
 #[test]
 fn owned_reply_history_merge_retries_candidate_retirement_after_prune() {
     let (service, _) = fixture();
@@ -1134,7 +1094,6 @@ fn owned_reply_history_merge_retries_candidate_retirement_after_prune() {
         NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route history"),
     )
     .expect("candidate source B fanout");
-
     let mut hook_calls = 0usize;
     let plan = retained
         .reply_target_merge_plan_after_candidate_prune(&candidate, |attempt| {
@@ -1155,7 +1114,6 @@ fn owned_reply_history_merge_retries_candidate_retirement_after_prune() {
             .iter()
             .any(|route| route.same_delivery(&route_a))
     );
-
     let collision = routes
         .forge_equal_ordinal_different_tenure(&route_b, peer, hub_c)
         .expect("forge reuse of the raced delivery ordinal");
@@ -1170,7 +1128,6 @@ fn owned_reply_history_merge_retries_candidate_retirement_after_prune() {
             .any(|route| route.same_delivery(&route_a))
     );
 }
-
 #[test]
 fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source() {
     let (service, _) = fixture();
@@ -1209,7 +1166,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
     predecessor
         .rebuild_current_source_targets()
         .expect("manual fallback cursor has a valid local FIFO index");
-
     let mut pending =
         PendingExactOutput::new(2, 2, 2, &[]).expect("two independent authenticated sources fit");
     assert_eq!(
@@ -1237,7 +1193,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
         pending.source_fifo_owners.get(&source_a),
         Some(&BTreeSet::from([fifo_id]))
     );
-
     let alternate = PendingExactFanout::new_with_routes(
         messages.clone(),
         vec![peer.clone()],
@@ -1265,7 +1220,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
         pending.source_fifo_owners.get(&source_b),
         Some(&BTreeSet::from([fifo_id]))
     );
-
     let mut admitted_b = Vec::new();
     assert_eq!(
         pending.drive_with(|post, ticket, route| {
@@ -1291,7 +1245,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
         Some(&BTreeSet::from([fifo_id]))
     );
     assert!(!pending.source_fifo_owners.contains_key(&source_b));
-
     let hub_c = PeerId::new(KeyPair::random().public_key().clone());
     let route_c = routes.mint_via(peer.clone(), hub_c);
     assert_eq!(
@@ -1309,7 +1262,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
     );
     assert_eq!(pending.fanouts[0].targets.len(), 2);
     assert_eq!(pending.ownership_units, 1);
-
     let reconnected_a = routes.mint_via(peer.clone(), hub_a);
     assert_eq!(
         pending
@@ -1342,7 +1294,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
     );
     assert_eq!(admitted_a, vec![second_digest]);
     assert!(pending.fanouts.is_empty());
-
     let retired_without_alternate_source = routes.mint(peer.clone());
     assert_eq!(
         pending
@@ -1374,7 +1325,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
     assert!(pending.fanouts[0].targets[0].parked);
     assert_eq!(pending.fanouts[0].targets[0].message_index, 0);
     assert!(!pending.source_fifo_owners.is_empty());
-
     let inactive_before_enqueue = routes.mint(peer.clone());
     assert!(routes.retire(&inactive_before_enqueue));
     let inactive_candidate = PendingExactFanout::new_with_routes(
@@ -1399,7 +1349,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
     );
     assert!(!pending.is_pending());
     assert_eq!(pending.ownership_units, 1);
-
     let retired_during_admission = routes.mint(peer.clone());
     let mut race_pending =
         PendingExactOutput::new(1, 1, 1, &[]).expect("one independent admission-race source fits");
@@ -1432,7 +1381,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
     assert_eq!(race_pending.fanouts.len(), 1);
     assert!(race_pending.fanouts[0].targets[0].parked);
     assert!(!race_pending.source_fifo_owners.is_empty());
-
     let older_same_source = routes.mint(peer.clone());
     let younger_same_source = routes.mint(peer.clone());
     assert_eq!(
@@ -1456,7 +1404,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
         .expect_err("one semantic request retains at most one attempt per source");
     assert!(error.contains("duplicated an authenticated source"));
     assert!(!blocked_pending.is_pending());
-
     let older_global_route = routes.mint(peer.clone());
     let younger_global_route = routes.mint(peer.clone());
     let global_class = exact_output_class(&merge_share_message(b"global FIFO class"))
@@ -1519,7 +1466,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
         global_pending.source_fifo_owners.get(&global_source),
         Some(&BTreeSet::from([older_fifo_id, younger_fifo_id]))
     );
-
     let hub_a = PeerId::new(KeyPair::random().public_key().clone());
     let hub_b = PeerId::new(KeyPair::random().public_key().clone());
     let mut mixed_routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
@@ -1555,7 +1501,6 @@ fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source()
     assert!(mixed_pending.source_fifo_owners.is_empty());
     assert!(!mixed_pending.is_pending());
 }
-
 #[test]
 fn owned_reply_transfer_retirement_after_validation_is_atomic() {
     let (service, _) = fixture();
@@ -1607,7 +1552,6 @@ fn owned_reply_transfer_retirement_after_validation_is_atomic() {
     assert_eq!(pending.ownership_units, units_before);
     assert_eq!(pending.fanouts[0].targets.len(), 1);
 }
-
 #[test]
 fn a_b_a_hub_reconnect_preserves_each_source_cursor() {
     let (service, _) = fixture();
@@ -1644,7 +1588,6 @@ fn a_b_a_hub_reconnect_preserves_each_source_cursor() {
     fanout
         .rebuild_current_source_targets()
         .expect("advanced source A cursor remains indexed");
-
     let mut pending = PendingExactOutput::new(2, 2, 2, &[])
         .expect("two authenticated response sources fit exactly");
     assert_eq!(
@@ -1749,7 +1692,6 @@ fn a_b_a_hub_reconnect_preserves_each_source_cursor() {
         &pending.fanouts[0].targets[1].route,
         ExactTargetRoute::Reply(route) if route.same_tenure(&route_b)
     ));
-
     let mut completed_a = Vec::new();
     assert_eq!(
                 pending.drive_with(|post, ticket, route| {
@@ -1780,7 +1722,6 @@ fn a_b_a_hub_reconnect_preserves_each_source_cursor() {
         pending.source_fifo_owners.get(&source_b),
         Some(&BTreeSet::from([fanout_fifo_id]))
     );
-
     assert!(routes.retire(&route_a_reconnected));
     let route_a_completed_reconnect = routes.mint_via(peer.clone(), hub_a);
     let completed_retry = PendingExactFanout::new_with_routes(
@@ -1807,7 +1748,6 @@ fn a_b_a_hub_reconnect_preserves_each_source_cursor() {
         &pending.fanouts[0].targets[0].route,
         ExactTargetRoute::Reply(route) if route.same_tenure(&route_a_completed_reconnect)
     ));
-
     let mut admitted_a = Vec::new();
     let mut admitted_b = Vec::new();
     assert_eq!(
@@ -1832,7 +1772,6 @@ fn a_b_a_hub_reconnect_preserves_each_source_cursor() {
     assert!(admitted_a.is_empty());
     assert_eq!(admitted_b, vec![first_digest, second_digest]);
 }
-
 #[test]
 fn bulk_backpressure_does_not_block_reserved_lane_or_safety_output() {
     let (service, keys) = fixture();
@@ -1863,7 +1802,6 @@ fn bulk_backpressure_does_not_block_reserved_lane_or_safety_output() {
         .is_err(),
         "a blocked lower-priority prefix must not own a later safety source"
     );
-
     let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&peer))
         .expect("shared slot plus three reserved classes");
     assert_eq!(
@@ -1882,7 +1820,6 @@ fn bulk_backpressure_does_not_block_reserved_lane_or_safety_output() {
         }),
         Ok(Some(9))
     );
-
     for message in [safety, lane] {
         assert_eq!(
             pending
@@ -1895,7 +1832,6 @@ fn bulk_backpressure_does_not_block_reserved_lane_or_safety_output() {
             "each unopened class for one semantic target has reserved ownership"
         );
     }
-
     let mut admitted = Vec::new();
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
@@ -1919,7 +1855,6 @@ fn bulk_backpressure_does_not_block_reserved_lane_or_safety_output() {
         vec![ExactOutputClass::Safety, ExactOutputClass::Lane]
     );
     assert_eq!(pending.fanouts.len(), 1);
-
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
             assert_eq!(exact_output_class(&post.data), Ok(ExactOutputClass::Bulk));
@@ -1930,7 +1865,6 @@ fn bulk_backpressure_does_not_block_reserved_lane_or_safety_output() {
     );
     assert!(!pending.is_pending());
 }
-
 #[test]
 fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_drift() {
     let (service, keys) = fixture();
@@ -1966,7 +1900,6 @@ fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_dri
         source_height: advert.height,
         advert_hash: HashOf::new(&advert),
     };
-
     assert_eq!(
         claim.validate_fanout(
             std::slice::from_ref(&exact_message),
@@ -1990,7 +1923,6 @@ fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_dri
             .expect("extract exact rollover wake-up height"),
         BTreeSet::from([advert.height])
     );
-
     let mut changed_hash = advert.clone();
     changed_hash.executed_block_wire_hash = Hash::new(b"changed-executed-wire");
     let changed_hash = sign_advert(changed_hash);
@@ -2002,7 +1934,6 @@ fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_dri
             )
             .is_err()
     );
-
     let mut changed_height = advert.clone();
     changed_height.height = advert.height + 1;
     let changed_height = sign_advert(changed_height);
@@ -2038,7 +1969,6 @@ fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_dri
             )
             .is_err()
     );
-
     // Exercise the production rollover wiring against a real Kura block,
     // finality artifact, deterministic keeper, and complete body. Binding
     // is process-lifetime, so use one fresh durable fixture per candidate
@@ -2089,7 +2019,6 @@ fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_dri
             rank: 1,
         })
     });
-
     let now = Instant::now();
     let initial_refresh = production_service
         .service_kura_replica_advert_refresh_turn(now)
@@ -2110,7 +2039,6 @@ fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_dri
             .expect("revalidate exact pending Kura advert"),
         BTreeSet::from([history.artifact.height])
     );
-
     let refresh_owner = Arc::clone(&production_service.kura_replica_advert_refresh);
     let receipt = KuraV2CommitReceipt::for_test(&history.artifact);
     let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
@@ -2143,7 +2071,6 @@ fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_dri
     );
     assert!(!production_service.output_guard.restart_required());
     drop(production_service);
-
     let mut successor = successor_service_for_history_as(
         Arc::clone(&history.kura),
         &history.artifact,
@@ -2189,7 +2116,6 @@ fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_dri
             .insert(post.peer_id);
         Ok(())
     });
-
     let successor_refresh = successor
         .service_kura_replica_advert_refresh_turn(now + Duration::from_millis(1))
         .expect("successor retries the shared owner's exact retired source");
@@ -2225,7 +2151,6 @@ fn durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_dri
     );
     assert!(!successor.output_guard.restart_required());
 }
-
 #[test]
 fn retained_replica_advert_source_survives_service_rollover_without_pending_ownership() {
     let (service, _) = fixture();
@@ -2240,7 +2165,6 @@ fn retained_replica_advert_source_survives_service_rollover_without_pending_owne
             .has_pending_exact_output()
             .expect("refresh source is not exact-output ownership")
     );
-
     let (mut successor, _) = fixture();
     successor.kura_replica_advert_refresh = Arc::clone(&refresh);
     drop(service);
@@ -2254,7 +2178,6 @@ fn retained_replica_advert_source_survives_service_rollover_without_pending_owne
         "the exact opaque Kura token must outlive one height service"
     );
 }
-
 #[test]
 fn retained_replica_advert_source_never_blocks_handoff_or_seal() {
     let (service, keys) = fixture();
@@ -2269,7 +2192,6 @@ fn retained_replica_advert_source_never_blocks_handoff_or_seal() {
         &artifact,
         Hash::new(b"refresh source rollover witness"),
     );
-
     assert_eq!(
         service
             .handoff_applied_height_output_to_durable_reconstruction(
@@ -2292,7 +2214,6 @@ fn retained_replica_advert_source_never_blocks_handoff_or_seal() {
         Some(source)
     );
 }
-
 #[test]
 fn non_roster_targets_cannot_consume_frozen_validator_reservations() {
     let (service, keys) = fixture();
@@ -2331,7 +2252,6 @@ fn non_roster_targets_cannot_consume_frozen_validator_reservations() {
     assert_eq!(pending.shared_ownership_unit_capacity, 1);
     assert_eq!(pending.reserved_target_classes.len(), 5);
     assert_eq!(pending.ownership_unit_capacity, 6);
-
     assert_eq!(
         pending
             .enqueue(
@@ -2355,7 +2275,6 @@ fn non_roster_targets_cannot_consume_frozen_validator_reservations() {
         }),
         Ok(Some(11))
     );
-
     assert_eq!(
         pending
             .enqueue(
@@ -2369,7 +2288,6 @@ fn non_roster_targets_cannot_consume_frozen_validator_reservations() {
         ExactFanoutOwnership::SourceRetained,
         "a novel non-roster identity must not claim a frozen validator slot"
     );
-
     let (_, artifact) = durable_finality_fixture(&service, &keys);
     let safety =
         ProductionV2Services::preencode_v2_network_message(global_commit_qc_message(&artifact))
@@ -2396,7 +2314,6 @@ fn non_roster_targets_cannot_consume_frozen_validator_reservations() {
             "each frozen validator class retains its own slot"
         );
     }
-
     let mut admitted = Vec::new();
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
@@ -2426,7 +2343,6 @@ fn non_roster_targets_cannot_consume_frozen_validator_reservations() {
     assert_eq!(pending.ownership_units, 1);
     assert_eq!(pending.shared_ownership_units, 1);
 }
-
 #[test]
 fn partial_fanout_progress_releases_only_the_completed_target_unit() {
     let (service, _) = fixture();
@@ -2449,7 +2365,6 @@ fn partial_fanout_progress_releases_only_the_completed_target_unit() {
     );
     assert_eq!(pending.ownership_units, 2);
     assert_eq!(pending.shared_ownership_units, 0);
-
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
             if post.peer_id == first {
@@ -2477,7 +2392,6 @@ fn partial_fanout_progress_releases_only_the_completed_target_unit() {
                 kind: ExactTargetReservationKind::Reliable,
             })
     );
-
     assert_eq!(
         pending
             .enqueue(
@@ -2504,7 +2418,6 @@ fn partial_fanout_progress_releases_only_the_completed_target_unit() {
     assert_eq!(pending.ownership_units, 2);
     assert_eq!(pending.shared_ownership_units, 0);
 }
-
 #[test]
 fn ownership_units_reject_reservation_spill_and_release_exact_target() {
     let (service, _) = fixture();
@@ -2514,7 +2427,6 @@ fn ownership_units_reject_reservation_spill_and_release_exact_target() {
     let frozen = vec![constrained.clone(), alternate.clone()];
     let mut pending =
         PendingExactOutput::new(1, 1, 2, &frozen).expect("frozen two-validator corridor");
-
     assert_eq!(
         pending
             .enqueue(
@@ -2583,7 +2495,6 @@ fn ownership_units_reject_reservation_spill_and_release_exact_target() {
         ExactFanoutOwnership::Owned
     );
 }
-
 #[test]
 fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() {
     let (service, _) = fixture();
@@ -2629,7 +2540,6 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
             .expect("fanout within bounds"),
         ExactFanoutOwnership::Owned
     );
-
     let mut blocked_attempts = 0usize;
     let mut admitted = Vec::new();
     assert_eq!(
@@ -2663,7 +2573,6 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
             (same_fanout_responsive.clone(), oldest_second_digest),
         ]
     );
-
     let responsive_fanout = PendingExactFanout::new(
         vec![merge_share_message(b"later responsive fanout")],
         vec![later_fanout_responsive.clone()],
@@ -2687,7 +2596,6 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
         ExactFanoutOwnership::SourceRetained,
         "a blocked source cannot consume the slot reserved for another source/class"
     );
-
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
             if post.peer_id == observer {
@@ -2724,7 +2632,6 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
     assert!(pending.fanouts[0].targets[0].current.is_some());
     assert!(pending.fanouts[1].targets[0].current.is_some());
     assert!(pending.fanouts[1].target_is_complete(1));
-
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
             assert!(ticket.is_none());
@@ -2738,7 +2645,6 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
         Ok(None)
     );
     assert!(!pending.is_pending());
-
     let responsive_fanout = PendingExactFanout::new(
         vec![merge_share_message(b"later responsive fanout")],
         vec![later_fanout_responsive.clone()],
@@ -2762,7 +2668,6 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
         ExactFanoutOwnership::SourceRetained,
         "a blocked source cannot consume the slot reserved for another source/class"
     );
-
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
             if post.peer_id == observer {
@@ -2799,7 +2704,6 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
     assert!(pending.fanouts[0].targets[0].current.is_some());
     assert!(pending.fanouts[1].targets[0].current.is_some());
     assert!(pending.fanouts[1].target_is_complete(1));
-
     assert_eq!(
         pending.drive_with(|post, ticket, _route| {
             assert!(ticket.is_none());
@@ -2813,7 +2717,6 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
         Ok(None)
     );
     assert!(!pending.is_pending());
-
     let later_blocked_fanout = PendingExactFanout::new(
         vec![merge_share_message(b"later blocked-peer fanout")],
         vec![blocked.clone()],
@@ -2853,7 +2756,6 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
     );
     assert!(!pending.is_pending());
 }
-
 #[test]
 fn delayed_gst_proposal_fence_and_phase_vote_fanout_survive_corridor_pressure() {
     let (mut pressured, keys) = fixture_with_block_payload();
@@ -2867,7 +2769,6 @@ fn delayed_gst_proposal_fence_and_phase_vote_fanout_survive_corridor_pressure() 
             rank: 41,
         })
     });
-
     let corridor_owner = routing_vote(&pressured, 0, wire::GlobalPhase::Prepare);
     assert_eq!(
         pressured
@@ -2882,7 +2783,6 @@ fn delayed_gst_proposal_fence_and_phase_vote_fanout_survive_corridor_pressure() 
             .has_pending_exact_output()
             .expect("inspect the actor-backpressured incumbent")
     );
-
     let (_, payload, proposal) = proposal_body_and_payload(&pressured.context, &keys);
     set_local_validator(&mut pressured, &keys, proposal.proposer);
     let manifest_hash = HashOf::new(payload.manifest());
@@ -2905,7 +2805,6 @@ fn delayed_gst_proposal_fence_and_phase_vote_fanout_survive_corridor_pressure() 
     assert_eq!(retained.round, proposal.round);
     assert_eq!(retained.subject, proposal.subject);
     assert!(!pressured.output_guard.restart_required());
-
     let recovered_routes = install_consensus_route_observer(&mut pressured);
     assert!(
         !pressured
@@ -2945,7 +2844,6 @@ fn delayed_gst_proposal_fence_and_phase_vote_fanout_survive_corridor_pressure() 
         "service acceptance retains the canonical payload for bounded retransmission"
     );
     assert!(!pressured.output_guard.restart_required());
-
     // Model staggered view availability without replacing the production
     // routing path: one responsive validator is first observed at view 0,
     // then all three responsive validators converge on view 1 while the

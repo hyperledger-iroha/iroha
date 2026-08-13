@@ -1,11 +1,8 @@
 //! Hidden-function-backed identifier policy and claim types.
-
 use std::{fmt, str::FromStr, string::String, vec::Vec};
-
 use iroha_crypto::{Hash, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{
     account::{AccountId, OpaqueAccountId},
     name::Name,
@@ -15,7 +12,6 @@ use crate::{
         RamLfeReceiptAttestation, signature_for_public_key_algorithm,
     },
 };
-
 /// Error returned while parsing [`IdentifierPolicyId`] literals.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum IdentifierPolicyIdParseError {
@@ -26,7 +22,6 @@ pub enum IdentifierPolicyIdParseError {
     #[error("{0}")]
     InvalidName(String),
 }
-
 /// Error returned while canonicalizing a raw identifier input.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum IdentifierNormalizationError {
@@ -37,7 +32,6 @@ pub enum IdentifierNormalizationError {
     #[error("{0}")]
     InvalidFormat(String),
 }
-
 /// Canonicalization strategy applied before an identifier enters policy derivation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -57,7 +51,6 @@ pub enum IdentifierNormalization {
     /// Remove spaces/`-`, uppercase ASCII letters, preserve digits.
     AccountNumber,
 }
-
 impl IdentifierNormalization {
     /// Canonicalize an external identifier string according to this mode.
     ///
@@ -79,7 +72,6 @@ impl IdentifierNormalization {
         }
     }
 }
-
 /// Canonical identifier policy namespace key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -92,7 +84,6 @@ pub struct IdentifierPolicyId {
     /// Business-rule namespace within the identifier kind.
     pub business_rule: Name,
 }
-
 impl IdentifierPolicyId {
     /// Construct a new policy identifier.
     #[must_use]
@@ -103,16 +94,13 @@ impl IdentifierPolicyId {
         }
     }
 }
-
 impl fmt::Display for IdentifierPolicyId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}#{}", self.kind, self.business_rule)
     }
 }
-
 impl FromStr for IdentifierPolicyId {
     type Err = IdentifierPolicyIdParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let trimmed = s.trim();
         let (kind, business_rule) = trimmed
@@ -125,7 +113,6 @@ impl FromStr for IdentifierPolicyId {
         Ok(Self::new(kind, business_rule))
     }
 }
-
 /// Public metadata for a globally unique hidden-function identifier namespace.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -148,7 +135,6 @@ pub struct IdentifierPolicy {
     #[norito(default)]
     pub note: Option<String>,
 }
-
 impl IdentifierPolicy {
     /// Construct a new inactive identifier policy.
     #[must_use]
@@ -167,7 +153,6 @@ impl IdentifierPolicy {
             note: None,
         }
     }
-
     /// Attach an optional note.
     #[must_use]
     pub fn with_note(mut self, note: impl Into<String>) -> Self {
@@ -175,7 +160,6 @@ impl IdentifierPolicy {
         self
     }
 }
-
 /// Persisted claim binding an opaque identifier to a UAID under one policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -200,7 +184,6 @@ pub struct IdentifierClaimRecord {
     #[norito(default)]
     pub expires_at_ms: Option<u64>,
 }
-
 /// Receipt emitted by identifier resolution services.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -213,7 +196,6 @@ pub struct IdentifierResolutionReceipt {
     /// Explicit receipt attestation.
     pub attestation: RamLfeReceiptAttestation,
 }
-
 /// Canonical payload covered by an identifier-resolution receipt signature.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -236,32 +218,27 @@ pub struct IdentifierResolutionReceiptPayload {
     /// Canonical account currently bound to the UAID.
     pub account_id: AccountId,
 }
-
 impl IdentifierResolutionReceipt {
     /// Return the canonical signed payload view of this receipt.
     #[must_use]
     pub fn payload(&self) -> IdentifierResolutionReceiptPayload {
         self.payload.clone()
     }
-
     /// Encode the canonical signed payload bytes used by resolver signatures.
     #[must_use]
     pub fn payload_bytes(&self) -> Vec<u8> {
         self.payload.encode()
     }
-
     /// Resolution timestamp in milliseconds since Unix epoch.
     #[must_use]
     pub const fn resolved_at_ms(&self) -> u64 {
         self.payload.execution.executed_at_ms
     }
-
     /// Optional expiry timestamp for the receipt.
     #[must_use]
     pub const fn expires_at_ms(&self) -> Option<u64> {
         self.payload.execution.expires_at_ms
     }
-
     /// Verify the receipt signature against the provided public key.
     ///
     /// # Errors
@@ -275,7 +252,6 @@ impl IdentifierResolutionReceipt {
             .verify(public_key, &self.payload)
     }
 }
-
 /// Prelude exports for identifier policy consumers.
 pub mod prelude {
     pub use super::{
@@ -284,7 +260,6 @@ pub mod prelude {
         IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
     };
 }
-
 fn normalize_phone_e164(raw: &str) -> Result<String, IdentifierNormalizationError> {
     let compact: String = raw
         .chars()
@@ -301,7 +276,6 @@ fn normalize_phone_e164(raw: &str) -> Result<String, IdentifierNormalizationErro
     }
     Ok(format!("+{without_prefix}"))
 }
-
 fn normalize_email_address(raw: &str) -> Result<String, IdentifierNormalizationError> {
     let lowered = raw.trim().to_ascii_lowercase();
     let mut parts = lowered.split('@');
@@ -315,7 +289,6 @@ fn normalize_email_address(raw: &str) -> Result<String, IdentifierNormalizationE
     }
     Ok(lowered)
 }
-
 fn normalize_account_number(raw: &str) -> Result<String, IdentifierNormalizationError> {
     let normalized: String = raw
         .chars()
@@ -333,20 +306,16 @@ fn normalize_account_number(raw: &str) -> Result<String, IdentifierNormalization
     }
     Ok(normalized)
 }
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
-
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::{
         Algorithm, KeyPair, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
         SignatureOf,
     };
     use sha2::{Digest as _, Sha256};
-
     use super::*;
-
     const NONCANONICAL_ED25519_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -356,16 +325,13 @@ mod tests {
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked identifier fixture keypair")
     }
-
     fn checked_seed_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked identifier fixture keypair")
     }
-
     fn checked_signature<T: norito::codec::Encode>(
         signer: &KeyPair,
         payload: &T,
@@ -373,19 +339,16 @@ mod tests {
         SignatureOf::try_new(signer.private_key(), payload)
             .expect("sign checked identifier fixture payload")
     }
-
     fn with_malformed_ed25519_r(signature: &Signature, replacement_r: &[u8; 32]) -> Signature {
         let mut bytes = signature.payload().to_vec();
         bytes[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&bytes)
     }
-
     #[test]
     fn identifier_policy_id_roundtrip() {
         let id: IdentifierPolicyId = "phone#retail".parse().expect("valid policy id");
         assert_eq!(id.to_string(), "phone#retail");
     }
-
     #[test]
     fn phone_normalization_strips_formatting() {
         let normalized = IdentifierNormalization::PhoneE164
@@ -393,7 +356,6 @@ mod tests {
             .expect("phone should normalize");
         assert_eq!(normalized, "+15551234567");
     }
-
     #[test]
     fn email_normalization_lowercases_and_trims() {
         let normalized = IdentifierNormalization::EmailAddress
@@ -401,7 +363,6 @@ mod tests {
             .expect("email should normalize");
         assert_eq!(normalized, "alice.example@example.com");
     }
-
     #[test]
     fn receipt_payload_bytes_match_signed_encode_bytes() {
         let account_signatory = checked_random_keypair().public_key().clone();
@@ -455,13 +416,11 @@ mod tests {
                     .expect("checked identifier receipt fixture signature passes admission"),
             ),
         };
-
         assert_eq!(receipt.payload_bytes(), payload.encode());
         signature
             .verify(signer.public_key(), &payload)
             .expect("signature should verify against bare encode bytes");
     }
-
     #[test]
     fn live_identifier_resolution_receipt_payload_fixture_matches_current_encoding() {
         let receipt = live_identifier_resolution_receipt_fixture();
@@ -469,11 +428,9 @@ mod tests {
             "ed01200376E59E9078B647F55003896B59758B7BE99908535EC24BAF80A6D52C8B3EB8",
         )
         .expect("valid resolver key");
-
         assert!(!hex::encode_upper(receipt.payload_bytes()).is_empty());
         assert!(receipt.verify(&resolver_key).is_err());
     }
-
     #[test]
     fn identifier_resolution_receipt_matches_shared_fixture_vectors() {
         let fixture = shared_identifier_receipt_fixture();
@@ -484,7 +441,6 @@ mod tests {
         let receipt_object = fixture_object(&fixture, "receipt");
         let receipt = receipt_from_fixture(receipt_object);
         let resolver_key = public_key_literal(fixture_str(&fixture, "resolver_public_key"));
-
         assert_eq!(
             fixture_str(&fixture, "canonical_payload_sha256"),
             sha256_hex(&receipt.payload_bytes())
@@ -492,7 +448,6 @@ mod tests {
         receipt
             .verify(&resolver_key)
             .expect("shared identifier receipt signature must verify");
-
         for vector in fixture_array(&fixture, "attestation_vectors") {
             let name = fixture_str(vector, "name");
             let attestation = attestation_from_fixture(fixture_object(vector, "attestation"));
@@ -517,7 +472,6 @@ mod tests {
                     .expect_err("proof-only attestations must not verify as signatures");
             }
         }
-
         for negative in fixture_array(&fixture, "negative_cases") {
             let name = fixture_str(negative, "name");
             let mutation = fixture_str(negative, "mutation");
@@ -566,7 +520,6 @@ mod tests {
             assert!(mutated.verify(&key).is_err(), "{name} must reject");
         }
     }
-
     #[test]
     fn identifier_resolution_receipt_rejects_tampered_payload_after_signing() {
         let mut payload = live_identifier_resolution_payload_fixture();
@@ -579,15 +532,12 @@ mod tests {
                     .expect("checked identifier receipt fixture signature passes admission"),
             ),
         };
-
         payload.opening.payload.opened_output_hash = Hash::new(b"tampered-opened-output");
         receipt.payload = payload;
-
         receipt
             .verify(signer.public_key())
             .expect_err("tampering nested output-opening payload must invalidate receipt");
     }
-
     #[test]
     fn identifier_resolution_receipt_rejects_mutation_of_security_bindings() {
         macro_rules! assert_rejected {
@@ -611,7 +561,6 @@ mod tests {
                 );
             }};
         }
-
         assert_rejected!("policy_id", |payload| {
             payload.policy_id = IdentifierPolicyId::from_str("phone#retail").expect("valid policy");
         });
@@ -656,7 +605,6 @@ mod tests {
             payload.account_id = AccountId::new(checked_random_keypair().public_key().clone());
         });
     }
-
     #[test]
     fn identifier_resolution_receipt_rejects_wrong_resolver_key() {
         let payload = live_identifier_resolution_payload_fixture();
@@ -669,12 +617,10 @@ mod tests {
                     .expect("checked identifier receipt fixture signature passes admission"),
             ),
         };
-
         receipt
             .verify(wrong_signer.public_key())
             .expect_err("identifier receipt signatures must reject unrelated resolver keys");
     }
-
     #[test]
     fn identifier_resolution_receipt_rejects_all_zero_signature_material() {
         let receipt = IdentifierResolutionReceipt {
@@ -682,13 +628,11 @@ mod tests {
             attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(&[0u8; 64])),
         };
         let signer = checked_seed_keypair(0x41);
-
         assert_eq!(
             receipt.verify(signer.public_key()).unwrap_err(),
             iroha_crypto::Error::BadSignature
         );
     }
-
     #[test]
     fn identifier_resolution_receipt_rejects_malformed_ed25519_signature_r() {
         let payload = live_identifier_resolution_payload_fixture();
@@ -706,7 +650,6 @@ mod tests {
                     &replacement_r,
                 )),
             };
-
             assert_eq!(
                 receipt.verify(signer.public_key()).unwrap_err(),
                 iroha_crypto::Error::BadSignature,
@@ -714,7 +657,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn identifier_resolution_receipt_rejects_proof_attestation_for_signature_verify() {
         let receipt = IdentifierResolutionReceipt {
@@ -725,12 +667,10 @@ mod tests {
             )),
         };
         let resolver_key = checked_random_keypair();
-
         receipt
             .verify(resolver_key.public_key())
             .expect_err("signature verification must reject proof-only attestations");
     }
-
     fn live_identifier_resolution_receipt_fixture() -> IdentifierResolutionReceipt {
         IdentifierResolutionReceipt {
             payload: live_identifier_resolution_payload_fixture(),
@@ -742,7 +682,6 @@ mod tests {
             ),
         }
     }
-
     fn live_identifier_resolution_payload_fixture() -> IdentifierResolutionReceiptPayload {
         IdentifierResolutionReceiptPayload {
             policy_id: IdentifierPolicyId::from_str("email#retail").expect("valid policy"),
@@ -767,7 +706,6 @@ mod tests {
             .clone(),
         }
     }
-
     fn live_identifier_execution_fixture() -> RamLfeExecutionReceiptPayload {
         RamLfeExecutionReceiptPayload {
             program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
@@ -790,7 +728,6 @@ mod tests {
             expires_at_ms: Some(1_776_812_500_694),
         }
     }
-
     fn live_identifier_output_opening_fixture() -> crate::ram_lfe::RamLfeOutputOpening {
         let payload = crate::ram_lfe::RamLfeOutputOpeningPayload {
             program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
@@ -814,27 +751,21 @@ mod tests {
             payload,
         }
     }
-
     fn fixture_input_ciphertext_hash() -> Hash {
         hash_hex("1111111111111111111111111111111111111111111111111111111111111111")
     }
-
     fn fixture_output_ciphertext_hash() -> Hash {
         hash_hex("2222222222222222222222222222222222222222222222222222222222222223")
     }
-
     fn fixture_parameter_digest() -> Hash {
         hash_hex("3333333333333333333333333333333333333333333333333333333333333333")
     }
-
     fn fixture_evaluation_key_digest() -> Hash {
         hash_hex("4444444444444444444444444444444444444444444444444444444444444445")
     }
-
     fn hash_hex(value: &str) -> Hash {
         Hash::from_str(value).expect("valid hash")
     }
-
     fn shared_identifier_receipt_fixture() -> norito::json::Value {
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/soracloud/identifier_receipt_vectors_v1.json");
@@ -843,49 +774,41 @@ mod tests {
         norito::json::from_str(&fixture)
             .unwrap_or_else(|err| panic!("failed to parse {}: {err}", fixture_path.display()))
     }
-
     fn fixture_get<'a>(value: &'a norito::json::Value, field: &str) -> &'a norito::json::Value {
         value
             .get(field)
             .unwrap_or_else(|| panic!("fixture field `{field}` is missing"))
     }
-
     fn fixture_object<'a>(value: &'a norito::json::Value, field: &str) -> &'a norito::json::Value {
         let item = fixture_get(value, field);
         item.as_object()
             .unwrap_or_else(|| panic!("fixture field `{field}` must be an object"));
         item
     }
-
     fn fixture_array<'a>(value: &'a norito::json::Value, field: &str) -> &'a [norito::json::Value] {
         fixture_get(value, field)
             .as_array()
             .unwrap_or_else(|| panic!("fixture field `{field}` must be an array"))
     }
-
     fn fixture_str<'a>(value: &'a norito::json::Value, field: &str) -> &'a str {
         fixture_get(value, field)
             .as_str()
             .unwrap_or_else(|| panic!("fixture field `{field}` must be a string"))
     }
-
     fn fixture_u64(value: &norito::json::Value, field: &str) -> u64 {
         fixture_get(value, field)
             .as_u64()
             .unwrap_or_else(|| panic!("fixture field `{field}` must be an unsigned integer"))
     }
-
     fn fixture_optional_u64(value: &norito::json::Value, field: &str) -> Option<u64> {
         fixture_get(value, field).as_u64()
     }
-
     fn receipt_from_fixture(receipt: &norito::json::Value) -> IdentifierResolutionReceipt {
         IdentifierResolutionReceipt {
             payload: payload_from_fixture(fixture_object(receipt, "payload")),
             attestation: attestation_from_fixture(fixture_object(receipt, "attestation")),
         }
     }
-
     fn payload_from_fixture(payload: &norito::json::Value) -> IdentifierResolutionReceiptPayload {
         let opening = fixture_object(payload, "opening");
         IdentifierResolutionReceiptPayload {
@@ -906,7 +829,6 @@ mod tests {
                 .into_account_id(),
         }
     }
-
     fn execution_from_fixture(execution: &norito::json::Value) -> RamLfeExecutionReceiptPayload {
         RamLfeExecutionReceiptPayload {
             program_id: RamLfeProgramId::from_str(fixture_str(execution, "program_id"))
@@ -924,7 +846,6 @@ mod tests {
             expires_at_ms: fixture_optional_u64(execution, "expires_at_ms"),
         }
     }
-
     fn opening_payload_from_fixture(
         payload: &norito::json::Value,
     ) -> crate::ram_lfe::RamLfeOutputOpeningPayload {
@@ -940,7 +861,6 @@ mod tests {
             expires_at_ms: fixture_optional_u64(payload, "expires_at_ms"),
         }
     }
-
     fn attestation_from_fixture(attestation: &norito::json::Value) -> RamLfeReceiptAttestation {
         match fixture_str(attestation, "kind") {
             "signed" => RamLfeReceiptAttestation::Signed(
@@ -956,7 +876,6 @@ mod tests {
             other => panic!("unsupported attestation kind `{other}`"),
         }
     }
-
     fn ram_lfe_backend(raw: &str) -> RamLfeBackend {
         match raw {
             "hkdf-sha3-512-prf-v1" => RamLfeBackend::HkdfSha3_512PrfV1,
@@ -965,7 +884,6 @@ mod tests {
             other => panic!("unsupported RAM-LFE backend `{other}`"),
         }
     }
-
     fn verification_mode(raw: &str) -> RamLfeVerificationMode {
         match raw {
             "signed" => RamLfeVerificationMode::Signed,
@@ -973,7 +891,6 @@ mod tests {
             other => panic!("unsupported verification mode `{other}`"),
         }
     }
-
     fn public_key_literal(raw: &str) -> PublicKey {
         assert_eq!(
             raw.trim(),
@@ -983,7 +900,6 @@ mod tests {
         let literal = raw.strip_prefix("ed25519:").unwrap_or(raw);
         PublicKey::from_str(literal).expect("valid public key literal")
     }
-
     fn sha256_hex(bytes: &[u8]) -> String {
         hex::encode_upper(Sha256::digest(bytes))
     }

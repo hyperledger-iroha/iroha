@@ -1,15 +1,12 @@
 // Canonical fanout admission tests live here to keep the snapshot module's
 // production implementation within its source-size ratchet.
-
 use iroha_data_model::QueryOutputBatchBox;
 #[cfg(not(feature = "fast_dsl"))]
 use iroha_data_model::query::dsl::CompoundPredicate;
-
 fn canonical_test_limits(max_items: u64) -> QueryLimits {
     use crate::smartcontracts::isi::query::{
         CANONICAL_QUERY_PREBOUNDED_SOURCE_BYTES, CanonicalQueryOutputLimits,
     };
-
     QueryLimits::new(16).with_canonical_output_limits(CanonicalQueryOutputLimits::new(
         max_items,
         CANONICAL_QUERY_PREBOUNDED_SOURCE_BYTES,
@@ -18,7 +15,6 @@ fn canonical_test_limits(max_items: u64) -> QueryLimits {
         8 * 1024 * 1024,
     ))
 }
-
 #[cfg(not(feature = "fast_dsl"))]
 fn find_role_ids_start(
     params: QueryParams,
@@ -30,7 +26,6 @@ fn find_role_ids_start(
         selector,
     )
 }
-
 #[cfg(not(feature = "fast_dsl"))]
 fn find_role_ids_start_with_predicate(
     params: QueryParams,
@@ -44,7 +39,6 @@ fn find_role_ids_start_with_predicate(
     let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
     QueryRequest::Start(iroha_data_model::query::QueryWithParams::new(&qbox, params))
 }
-
 #[cfg(not(feature = "fast_dsl"))]
 #[test]
 fn canonical_role_ids_rejects_large_filter_before_source_execution() {
@@ -69,7 +63,6 @@ fn canonical_role_ids_rejects_large_filter_before_source_execution() {
         store.clone(),
         ChainId::from("canonical-filter-rejection"),
     ));
-
     let error = run_on_snapshot_ephemeral_with_budget_arc(
         &state,
         &store,
@@ -87,7 +80,6 @@ fn canonical_role_ids_rejects_large_filter_before_source_execution() {
             iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
         ) if message.contains("filtered") && message.contains("before source execution")));
 }
-
 #[cfg(not(feature = "fast_dsl"))]
 #[test]
 fn budgeted_arc_snapshot_canonical_mode_is_ephemeral_and_offset_bounded() {
@@ -107,7 +99,6 @@ fn budgeted_arc_snapshot_canonical_mode_is_ephemeral_and_offset_bounded() {
         pagination: Pagination::new(Some(nonzero_ext::nonzero!(2_u64)), 1),
         ..QueryParams::default()
     };
-
     let response = run_on_snapshot_ephemeral_with_budget_arc(
         &state,
         &store,
@@ -129,7 +120,6 @@ fn budgeted_arc_snapshot_canonical_mode_is_ephemeral_and_offset_bounded() {
     };
     assert_eq!(role_ids.len(), 2);
 }
-
 #[cfg(not(feature = "fast_dsl"))]
 #[test]
 fn budgeted_arc_snapshot_canonical_mode_rejects_unbounded_domain_source() {
@@ -162,7 +152,6 @@ fn budgeted_arc_snapshot_canonical_mode_rejects_unbounded_domain_source() {
     assert!(message.contains("FindDomains"));
     assert!(message.contains("before source execution"));
 }
-
 #[cfg(all(not(feature = "fast_dsl"), feature = "ids_projection"))]
 #[test]
 fn budgeted_arc_snapshot_canonical_mode_rejects_selector_before_source_execution() {
@@ -197,12 +186,10 @@ fn budgeted_arc_snapshot_canonical_mode_rejects_selector_before_source_execution
             iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
         ) if message.contains("before source execution")));
 }
-
 #[cfg(not(feature = "fast_dsl"))]
 #[test]
 fn canonical_roles_by_large_multisig_rejects_before_concrete_payload_decode() {
     use iroha_data_model::account::{MultisigMember, MultisigPolicy};
-
     let members = (1_u8..=128)
         .map(|seed| {
             let keypair = iroha_crypto::KeyPair::try_from_seed(
@@ -237,7 +224,6 @@ fn canonical_roles_by_large_multisig_rejects_before_concrete_payload_decode() {
         store.clone(),
         ChainId::from("canonical-multisig-rejection"),
     ));
-
     let error = run_on_snapshot_ephemeral_with_budget_arc(
         &state,
         &store,
@@ -252,7 +238,6 @@ fn canonical_roles_by_large_multisig_rejects_before_concrete_payload_decode() {
         ) if message.contains("FindRolesByAccountId")
             && message.contains("before source execution")));
 }
-
 #[cfg(feature = "fast_dsl")]
 #[test]
 fn canonical_fast_dsl_start_rejects_before_nested_component_decode() {

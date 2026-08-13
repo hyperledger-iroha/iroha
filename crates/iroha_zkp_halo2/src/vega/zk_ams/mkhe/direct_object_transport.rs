@@ -22,10 +22,8 @@
 //! This module intentionally closes no proof, admission, or release gate.
 
 #![allow(dead_code)]
-
 use super::{MKHE_VERSION_V1, ZkAmsMkheErrorV1};
 use crate::vega::sponge::Keccak256;
-
 const DIRECT_OBJECT_POINTER_TAG_V1: [u8; 4] = *b"ZDOP";
 const DIRECT_OBJECT_POINTER_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-object-pointer";
 const DIRECT_OBJECT_SNAPSHOT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-object-snapshot";
@@ -38,7 +36,6 @@ const DIRECT_OBJECT_PUBLISHED_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-object-published-binding";
 const DIRECT_OBJECT_PUBLICATION_RECEIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-object-publication-receipt";
-
 /// Fixed width of one canonical direct-object pointer frame.
 pub const ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1: usize = 4 + 1 + 1 + 8 + 32 + 32;
 /// Sole maximum request passed to an untrusted direct-object provider.
@@ -47,12 +44,10 @@ pub const ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1: usize = 8 * 1024;
 const DIRECT_RNS_POLYNOMIAL_MAX_BYTES_V1: u64 = 64 * 1024 * 1024;
 /// Existing first-release ceiling for one standalone native proof object.
 const DIRECT_RELATION_PROOF_MAX_BYTES_V1: u64 = 32 * 1024 * 1024;
-
 /// Phase one is transport plumbing only; it is not direct-proof admission.
 pub(super) const ZK_AMS_MKHE_DIRECT_OBJECT_ADMISSION_GATE_V1: bool = false;
 /// No release gate may depend on this module until the relation verifier lands.
 pub(super) const ZK_AMS_MKHE_DIRECT_OBJECT_RELEASE_GATE_V1: bool = false;
-
 /// Canonical type of a separately addressed direct-relation object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -90,7 +85,6 @@ pub enum ZkAmsMkheDirectObjectKindV1 {
     /// One canonical limb of a collective ciphertext's linear component.
     CollectiveCiphertextC1 = 16,
 }
-
 impl ZkAmsMkheDirectObjectKindV1 {
     const fn payload_ceiling(self) -> u64 {
         match self {
@@ -113,10 +107,8 @@ impl ZkAmsMkheDirectObjectKindV1 {
         }
     }
 }
-
 impl TryFrom<u8> for ZkAmsMkheDirectObjectKindV1 {
     type Error = ZkAmsMkheErrorV1;
-
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::RkgH0),
@@ -139,7 +131,6 @@ impl TryFrom<u8> for ZkAmsMkheDirectObjectKindV1 {
         }
     }
 }
-
 /// Exact typed BLAKE3 content address of one direct-relation object.
 ///
 /// The trailing Keccak digest authenticates the canonical pointer frame and
@@ -153,7 +144,6 @@ pub struct ZkAmsMkheDirectObjectPointerV1 {
     payload_blake3: [u8; 32],
     pointer_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectObjectPointerV1 {
     /// Construct a canonical pointer from an independently computed content address.
     pub fn new(
@@ -177,7 +167,6 @@ impl ZkAmsMkheDirectObjectPointerV1 {
         value.validate_for_kind(kind)?;
         Ok(value)
     }
-
     /// Construct a pointer by hashing one already bounded in-memory payload.
     pub fn from_payload(
         kind: ZkAmsMkheDirectObjectKindV1,
@@ -190,7 +179,6 @@ impl ZkAmsMkheDirectObjectPointerV1 {
         }
         Self::new(kind, payload_bytes, norito::streaming::blake3_hash(payload))
     }
-
     fn validate_for_kind(
         self,
         expected_kind: ZkAmsMkheDirectObjectKindV1,
@@ -206,7 +194,6 @@ impl ZkAmsMkheDirectObjectPointerV1 {
         }
         Ok(())
     }
-
     /// Encode the sole fixed-width, big-endian pointer frame.
     #[must_use]
     pub fn encode(self) -> [u8; ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1] {
@@ -219,7 +206,6 @@ impl ZkAmsMkheDirectObjectPointerV1 {
         bytes[46..78].copy_from_slice(&self.pointer_digest);
         bytes
     }
-
     /// Decode exactly one pointer and reject truncation, trailing bytes, and kind confusion.
     pub fn decode_exact(
         expected_kind: ZkAmsMkheDirectObjectKindV1,
@@ -250,32 +236,27 @@ impl ZkAmsMkheDirectObjectPointerV1 {
         value.validate_for_kind(expected_kind)?;
         Ok(value)
     }
-
     /// Bound object kind.
     #[must_use]
     pub const fn kind(self) -> ZkAmsMkheDirectObjectKindV1 {
         self.kind
     }
-
     /// Exact complete object length.
     #[must_use]
     pub const fn payload_bytes(self) -> u64 {
         self.payload_bytes
     }
-
     /// BLAKE3 digest of every byte in the exact complete object.
     #[must_use]
     pub const fn payload_blake3(self) -> [u8; 32] {
         self.payload_blake3
     }
-
     /// Domain-separated digest of the complete canonical pointer frame.
     #[must_use]
     pub const fn pointer_digest(self) -> [u8; 32] {
         self.pointer_digest
     }
 }
-
 fn direct_object_pointer_digest(pointer: ZkAmsMkheDirectObjectPointerV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(DIRECT_OBJECT_POINTER_DOMAIN_V1);
@@ -285,7 +266,6 @@ fn direct_object_pointer_digest(pointer: ZkAmsMkheDirectObjectPointerV1) -> [u8;
     hash.update(&pointer.payload_blake3);
     hash.finalize()
 }
-
 /// Move-only authority for one unpublished direct-object staging allocation.
 ///
 /// The backend must issue a globally unique `staging_identity` for every
@@ -300,7 +280,6 @@ pub struct ZkAmsMkheDirectObjectStagingTokenV1 {
     payload_bytes: u64,
     token_digest: [u8; 32],
 }
-
 impl core::fmt::Debug for ZkAmsMkheDirectObjectStagingTokenV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -315,7 +294,6 @@ impl core::fmt::Debug for ZkAmsMkheDirectObjectStagingTokenV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheDirectObjectStagingTokenV1 {
     /// Construct one backend-issued staging token under exact publication axes.
     pub fn new(
@@ -335,7 +313,6 @@ impl ZkAmsMkheDirectObjectStagingTokenV1 {
         token.validate()?;
         Ok(token)
     }
-
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         if self.publication_identity == [0; 32]
             || self.staging_identity == [0; 32]
@@ -349,38 +326,32 @@ impl ZkAmsMkheDirectObjectStagingTokenV1 {
         }
         Ok(())
     }
-
     /// Exact publication session which allocated this stage.
     #[must_use]
     pub const fn publication_identity(&self) -> [u8; 32] {
         self.publication_identity
     }
-
     /// Backend-unique identity of this exact unpublished stage.
     #[must_use]
     pub const fn staging_identity(&self) -> [u8; 32] {
         self.staging_identity
     }
-
     /// Exact object kind accepted by this stage.
     #[must_use]
     pub const fn kind(&self) -> ZkAmsMkheDirectObjectKindV1 {
         self.kind
     }
-
     /// Exact complete payload length accepted by this stage.
     #[must_use]
     pub const fn payload_bytes(&self) -> u64 {
         self.payload_bytes
     }
-
     /// Digest binding every staging-token axis.
     #[must_use]
     pub const fn token_digest(&self) -> [u8; 32] {
         self.token_digest
     }
 }
-
 fn direct_object_staging_token_digest(token: &ZkAmsMkheDirectObjectStagingTokenV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(DIRECT_OBJECT_STAGING_TOKEN_DOMAIN_V1);
@@ -390,7 +361,6 @@ fn direct_object_staging_token_digest(token: &ZkAmsMkheDirectObjectStagingTokenV
     hash.update(&token.payload_bytes.to_be_bytes());
     hash.finalize()
 }
-
 /// Move-only authority for one immutable, completely written staging object.
 ///
 /// A backend constructs this token only by consuming the matching staging
@@ -407,7 +377,6 @@ pub struct ZkAmsMkheDirectObjectSealTokenV1 {
     payload_bytes: u64,
     token_digest: [u8; 32],
 }
-
 impl core::fmt::Debug for ZkAmsMkheDirectObjectSealTokenV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -423,7 +392,6 @@ impl core::fmt::Debug for ZkAmsMkheDirectObjectSealTokenV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheDirectObjectSealTokenV1 {
     /// Consume mutable staging authority and bind a backend seal identity.
     pub fn from_staging(
@@ -444,7 +412,6 @@ impl ZkAmsMkheDirectObjectSealTokenV1 {
         token.validate()?;
         Ok(token)
     }
-
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         if self.publication_identity == [0; 32]
             || self.staging_identity == [0; 32]
@@ -462,50 +429,42 @@ impl ZkAmsMkheDirectObjectSealTokenV1 {
         }
         Ok(())
     }
-
     /// Exact publication session which owns this seal.
     #[must_use]
     pub const fn publication_identity(&self) -> [u8; 32] {
         self.publication_identity
     }
-
     /// Identity of the exact consumed stage.
     #[must_use]
     pub const fn staging_identity(&self) -> [u8; 32] {
         self.staging_identity
     }
-
     /// Digest of the exact consumed staging token.
     #[must_use]
     pub const fn staging_token_digest(&self) -> [u8; 32] {
         self.staging_token_digest
     }
-
     /// Backend-unique identity of the immutable sealed object.
     #[must_use]
     pub const fn seal_identity(&self) -> [u8; 32] {
         self.seal_identity
     }
-
     /// Exact sealed object kind.
     #[must_use]
     pub const fn kind(&self) -> ZkAmsMkheDirectObjectKindV1 {
         self.kind
     }
-
     /// Exact sealed payload length.
     #[must_use]
     pub const fn payload_bytes(&self) -> u64 {
         self.payload_bytes
     }
-
     /// Digest binding the stage lineage and every seal axis.
     #[must_use]
     pub const fn token_digest(&self) -> [u8; 32] {
         self.token_digest
     }
 }
-
 fn direct_object_seal_token_digest(token: &ZkAmsMkheDirectObjectSealTokenV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(DIRECT_OBJECT_SEAL_TOKEN_DOMAIN_V1);
@@ -517,7 +476,6 @@ fn direct_object_seal_token_digest(token: &ZkAmsMkheDirectObjectSealTokenV1) -> 
     hash.update(&token.payload_bytes.to_be_bytes());
     hash.finalize()
 }
-
 /// Authoritative immutable binding observed by exact pointer lookup.
 ///
 /// The published-object identity is backend-local provenance, not a content
@@ -531,7 +489,6 @@ pub struct ZkAmsMkheDirectObjectPublishedBindingV1 {
     pointer: ZkAmsMkheDirectObjectPointerV1,
     binding_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectObjectPublishedBindingV1 {
     /// Construct one authoritative lookup result for an exact pointer.
     pub fn new(
@@ -550,7 +507,6 @@ impl ZkAmsMkheDirectObjectPublishedBindingV1 {
         binding.validate()?;
         Ok(binding)
     }
-
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         self.pointer.validate_for_kind(self.pointer.kind)?;
         if self.publication_identity == [0; 32]
@@ -562,32 +518,27 @@ impl ZkAmsMkheDirectObjectPublishedBindingV1 {
         }
         Ok(())
     }
-
     /// Current publication session which performed authoritative lookup.
     #[must_use]
     pub const fn publication_identity(self) -> [u8; 32] {
         self.publication_identity
     }
-
     /// Backend-local immutable-object identity.
     #[must_use]
     pub const fn published_object_identity(self) -> [u8; 32] {
         self.published_object_identity
     }
-
     /// Exact typed content address found by lookup.
     #[must_use]
     pub const fn pointer(self) -> ZkAmsMkheDirectObjectPointerV1 {
         self.pointer
     }
-
     /// Digest binding every authoritative lookup axis.
     #[must_use]
     pub const fn binding_digest(self) -> [u8; 32] {
         self.binding_digest
     }
 }
-
 fn direct_object_published_binding_digest(
     binding: ZkAmsMkheDirectObjectPublishedBindingV1,
 ) -> [u8; 32] {
@@ -599,7 +550,6 @@ fn direct_object_published_binding_digest(
     hash.update(&binding.pointer.pointer_digest);
     hash.finalize()
 }
-
 /// Absolute-offset CAS publication backend for immutable direct objects.
 ///
 /// Staging storage is never visible through
@@ -618,20 +568,17 @@ fn direct_object_published_binding_digest(
 pub trait ZkAmsMkheDirectObjectCasPublicationV1: ZkAmsMkheDirectObjectReadAtProviderV1 {
     /// Nonzero identity of this exact open publication session.
     fn publication_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1>;
-
     /// Allocate one empty, unpublished stage for exact kind and length.
     fn begin_staging(
         &mut self,
         kind: ZkAmsMkheDirectObjectKindV1,
         payload_bytes: u64,
     ) -> Result<ZkAmsMkheDirectObjectStagingTokenV1, ZkAmsMkheErrorV1>;
-
     /// Return bytes currently written to the exact stage.
     fn staged_len(
         &mut self,
         staging: &ZkAmsMkheDirectObjectStagingTokenV1,
     ) -> Result<u64, ZkAmsMkheErrorV1>;
-
     /// Perform one absolute, non-retrying write to unpublished staging.
     fn write_staged_at(
         &mut self,
@@ -639,19 +586,16 @@ pub trait ZkAmsMkheDirectObjectCasPublicationV1: ZkAmsMkheDirectObjectReadAtProv
         absolute_offset: u64,
         source: &[u8],
     ) -> Result<usize, ZkAmsMkheErrorV1>;
-
     /// Atomically consume mutable staging authority and freeze its exact bytes.
     fn seal_staged(
         &mut self,
         staging: ZkAmsMkheDirectObjectStagingTokenV1,
     ) -> Result<ZkAmsMkheDirectObjectSealTokenV1, ZkAmsMkheErrorV1>;
-
     /// Return the immutable sealed object's exact logical length.
     fn sealed_len(
         &mut self,
         seal: &ZkAmsMkheDirectObjectSealTokenV1,
     ) -> Result<u64, ZkAmsMkheErrorV1>;
-
     /// Perform one absolute, non-retrying read from immutable sealed storage.
     fn read_sealed_at(
         &mut self,
@@ -659,7 +603,6 @@ pub trait ZkAmsMkheDirectObjectCasPublicationV1: ZkAmsMkheDirectObjectReadAtProv
         absolute_offset: u64,
         destination: &mut [u8],
     ) -> Result<usize, ZkAmsMkheErrorV1>;
-
     /// Atomically and idempotently install the sealed bytes at the exact pointer.
     ///
     /// An error may be a lost acknowledgement after successful installation.
@@ -668,14 +611,12 @@ pub trait ZkAmsMkheDirectObjectCasPublicationV1: ZkAmsMkheDirectObjectReadAtProv
         seal: &ZkAmsMkheDirectObjectSealTokenV1,
         pointer: ZkAmsMkheDirectObjectPointerV1,
     ) -> Result<(), ZkAmsMkheErrorV1>;
-
     /// Authoritatively look up one exact immutable pointer after publication.
     fn lookup_published_pointer(
         &mut self,
         pointer: ZkAmsMkheDirectObjectPointerV1,
     ) -> Result<Option<ZkAmsMkheDirectObjectPublishedBindingV1>, ZkAmsMkheErrorV1>;
 }
-
 /// Stable random-access view of a set of content-addressed direct objects.
 ///
 /// `provider_identity` names this exact open provider session.
@@ -688,16 +629,13 @@ pub trait ZkAmsMkheDirectObjectCasPublicationV1: ZkAmsMkheDirectObjectReadAtProv
 pub trait ZkAmsMkheDirectObjectReadAtProviderV1 {
     /// Nonzero identity of this exact open provider session.
     fn provider_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1>;
-
     /// Nonzero immutable content revision visible through this session.
     fn snapshot_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1>;
-
     /// Exact complete logical length of the object at `pointer`.
     fn object_len(
         &mut self,
         pointer: ZkAmsMkheDirectObjectPointerV1,
     ) -> Result<u64, ZkAmsMkheErrorV1>;
-
     /// Read once at one checked absolute object offset.
     ///
     /// Implementations return the number of bytes initialized in
@@ -710,7 +648,6 @@ pub trait ZkAmsMkheDirectObjectReadAtProviderV1 {
         destination: &mut [u8],
     ) -> Result<usize, ZkAmsMkheErrorV1>;
 }
-
 /// Exact provider session and immutable snapshot captured for one object pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkheDirectObjectSnapshotV1 {
@@ -719,7 +656,6 @@ pub(super) struct ZkAmsMkheDirectObjectSnapshotV1 {
     snapshot_identity: [u8; 32],
     snapshot_binding_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectObjectSnapshotV1 {
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         self.pointer.validate_for_kind(self.pointer.kind)?;
@@ -732,32 +668,27 @@ impl ZkAmsMkheDirectObjectSnapshotV1 {
         }
         Ok(())
     }
-
     /// Exact typed content address bound to this pass.
     #[must_use]
     pub(super) const fn pointer(self) -> ZkAmsMkheDirectObjectPointerV1 {
         self.pointer
     }
-
     /// Exact open-provider session identity bound to this pass.
     #[must_use]
     pub(super) const fn provider_identity(self) -> [u8; 32] {
         self.provider_identity
     }
-
     /// Exact immutable revision identity bound to this pass.
     #[must_use]
     pub(super) const fn snapshot_identity(self) -> [u8; 32] {
         self.snapshot_identity
     }
-
     /// Digest binding the provider session, snapshot, and canonical pointer.
     #[must_use]
     pub(super) const fn snapshot_binding_digest(self) -> [u8; 32] {
         self.snapshot_binding_digest
     }
 }
-
 fn direct_object_snapshot_digest(snapshot: ZkAmsMkheDirectObjectSnapshotV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(DIRECT_OBJECT_SNAPSHOT_DOMAIN_V1);
@@ -766,7 +697,6 @@ fn direct_object_snapshot_digest(snapshot: ZkAmsMkheDirectObjectSnapshotV1) -> [
     hash.update(&snapshot.snapshot_identity);
     hash.finalize()
 }
-
 /// Bind one provider session to one exact object before any payload read.
 pub(super) fn bind_zk_ams_mkhe_direct_object_snapshot_v1<P>(
     expected_kind: ZkAmsMkheDirectObjectKindV1,
@@ -796,7 +726,6 @@ where
     snapshot.validate()?;
     Ok(snapshot)
 }
-
 /// Re-observe every provider axis and reject any drift from a bound snapshot.
 pub(super) fn ensure_zk_ams_mkhe_direct_object_snapshot_v1<P>(
     expected: ZkAmsMkheDirectObjectSnapshotV1,
@@ -816,7 +745,6 @@ where
     }
     Ok(())
 }
-
 /// Perform one allocation-bounded exact absolute read under a bound snapshot.
 ///
 /// This helper checks provider state but does not authenticate an isolated
@@ -854,7 +782,6 @@ where
     }
     ensure_zk_ams_mkhe_direct_object_snapshot_v1(snapshot, provider)
 }
-
 /// Receipt for the exact bytes consumed in one complete snapshot-bound pass.
 ///
 /// The receipt certifies only that completed pass.  It must never authorize a
@@ -866,7 +793,6 @@ pub struct ZkAmsMkheDirectObjectReadReceiptV1 {
     payload_blake3: [u8; 32],
     receipt_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectObjectReadReceiptV1 {
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         self.snapshot.validate()?;
@@ -880,32 +806,27 @@ impl ZkAmsMkheDirectObjectReadReceiptV1 {
         }
         Ok(())
     }
-
     /// Exact provider snapshot whose bytes were consumed.
     #[must_use]
     pub(super) const fn snapshot(&self) -> ZkAmsMkheDirectObjectSnapshotV1 {
         self.snapshot
     }
-
     /// Exact number of canonical bytes consumed.
     #[must_use]
     pub const fn canonical_bytes(&self) -> u64 {
         self.canonical_bytes
     }
-
     /// Independently recomputed BLAKE3 digest of the complete byte stream.
     #[must_use]
     pub const fn payload_blake3(&self) -> [u8; 32] {
         self.payload_blake3
     }
-
     /// Digest binding all receipt axes.
     #[must_use]
     pub(super) const fn receipt_digest(&self) -> [u8; 32] {
         self.receipt_digest
     }
 }
-
 fn direct_object_read_receipt_digest(receipt: &ZkAmsMkheDirectObjectReadReceiptV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(DIRECT_OBJECT_READ_RECEIPT_DOMAIN_V1);
@@ -915,7 +836,6 @@ fn direct_object_read_receipt_digest(receipt: &ZkAmsMkheDirectObjectReadReceiptV
     hash.update(&receipt.payload_blake3);
     hash.finalize()
 }
-
 /// Single-use sequential read transaction over one random-access provider.
 ///
 /// Any invalid request or provider failure permanently poisons the transaction;
@@ -926,7 +846,6 @@ pub(super) struct ZkAmsMkheDirectObjectReadTransactionV1 {
     payload_hasher: norito::streaming::Blake3Hasher,
     failed: bool,
 }
-
 impl core::fmt::Debug for ZkAmsMkheDirectObjectReadTransactionV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -937,7 +856,6 @@ impl core::fmt::Debug for ZkAmsMkheDirectObjectReadTransactionV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheDirectObjectReadTransactionV1 {
     /// Begin one snapshot-bound pass before touching object bytes.
     pub(super) fn begin<P>(
@@ -957,7 +875,6 @@ impl ZkAmsMkheDirectObjectReadTransactionV1 {
             failed: false,
         })
     }
-
     /// Read and hash the next canonical chunk.
     ///
     /// A zero return denotes clean logical EOF and performs no provider call.
@@ -983,7 +900,6 @@ impl ZkAmsMkheDirectObjectReadTransactionV1 {
         }
         result
     }
-
     fn read_next_inner<P>(
         &mut self,
         provider: &mut P,
@@ -1025,7 +941,6 @@ impl ZkAmsMkheDirectObjectReadTransactionV1 {
             .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)?;
         Ok(take)
     }
-
     /// Authenticate the exact complete stream and issue the sole read receipt.
     pub(super) fn finish<P>(
         self,
@@ -1052,14 +967,12 @@ impl ZkAmsMkheDirectObjectReadTransactionV1 {
         receipt.validate()?;
         Ok(receipt)
     }
-
     /// Bytes still required before `finish` can succeed.
     #[must_use]
     pub(super) const fn remaining_bytes(&self) -> u64 {
         self.snapshot.pointer.payload_bytes - self.next_offset
     }
 }
-
 /// Validate one complete object with fixed workspace and no payload allocation.
 pub fn validate_zk_ams_mkhe_direct_object_v1<P>(
     expected_kind: ZkAmsMkheDirectObjectKindV1,
@@ -1080,7 +993,6 @@ where
     }
     transaction.finish(provider)
 }
-
 /// Move-only proof that one sealed object was authoritatively published and reread.
 ///
 /// This receipt has no decoder and cannot be reconstructed from a pointer or
@@ -1099,7 +1011,6 @@ pub struct ZkAmsMkheDirectObjectPublicationReceiptV1 {
     reconciled_after_publish_error: bool,
     receipt_digest: [u8; 32],
 }
-
 impl core::fmt::Debug for ZkAmsMkheDirectObjectPublicationReceiptV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1113,7 +1024,6 @@ impl core::fmt::Debug for ZkAmsMkheDirectObjectPublicationReceiptV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheDirectObjectPublicationReceiptV1 {
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         self.pointer.validate_for_kind(self.pointer.kind)?;
@@ -1152,56 +1062,47 @@ impl ZkAmsMkheDirectObjectPublicationReceiptV1 {
         }
         Ok(())
     }
-
     /// Exact typed content address proven published and readable.
     #[must_use]
     pub const fn pointer(&self) -> ZkAmsMkheDirectObjectPointerV1 {
         self.pointer
     }
-
     /// Exact publication session which performed the operation and lookup.
     #[must_use]
     pub const fn publication_identity(&self) -> [u8; 32] {
         self.publication_identity
     }
-
     /// Backend-unique identity of the consumed mutable stage.
     #[must_use]
     pub const fn staging_identity(&self) -> [u8; 32] {
         self.staging_identity
     }
-
     /// Backend-unique identity of the immutable sealed stage.
     #[must_use]
     pub const fn seal_identity(&self) -> [u8; 32] {
         self.seal_identity
     }
-
     /// Authoritative pointer lookup retained by the publication receipt.
     #[must_use]
     pub const fn published_binding(&self) -> ZkAmsMkheDirectObjectPublishedBindingV1 {
         self.published_binding
     }
-
     /// Complete content-hash receipt from the published provider.
     #[must_use]
     pub const fn post_publish_read_receipt(&self) -> &ZkAmsMkheDirectObjectReadReceiptV1 {
         &self.post_publish_read_receipt
     }
-
     /// Whether an error acknowledgement was reconciled to an exact published pointer.
     #[must_use]
     pub const fn reconciled_after_publish_error(&self) -> bool {
         self.reconciled_after_publish_error
     }
-
     /// Digest binding every publication, lookup, and readback axis.
     #[must_use]
     pub const fn receipt_digest(&self) -> [u8; 32] {
         self.receipt_digest
     }
 }
-
 fn direct_object_publication_receipt_digest(
     receipt: &ZkAmsMkheDirectObjectPublicationReceiptV1,
 ) -> [u8; 32] {
@@ -1219,7 +1120,6 @@ fn direct_object_publication_receipt_digest(
     hash.update(&[u8::from(receipt.reconciled_after_publish_error)]);
     hash.finalize()
 }
-
 fn ensure_direct_object_publication_identity_v1<P>(
     publisher: &mut P,
     expected: [u8; 32],
@@ -1233,7 +1133,6 @@ where
     }
     Ok(())
 }
-
 fn observe_direct_object_staged_len_v1<P>(
     publisher: &mut P,
     expected_publication_identity: [u8; 32],
@@ -1251,7 +1150,6 @@ where
     stable?;
     Ok(length)
 }
-
 fn observe_direct_object_sealed_len_v1<P>(
     publisher: &mut P,
     expected_publication_identity: [u8; 32],
@@ -1269,7 +1167,6 @@ where
     stable?;
     Ok(length)
 }
-
 /// Single-use absolute-offset transaction for one immutable CAS publication.
 ///
 /// Every invalid or failed write permanently poisons the transaction. Finishing
@@ -1294,7 +1191,6 @@ pub struct ZkAmsMkheDirectObjectPublicationTransactionV1<
     expected_payload_hasher: norito::streaming::Blake3Hasher,
     failed: bool,
 }
-
 impl<P> core::fmt::Debug for ZkAmsMkheDirectObjectPublicationTransactionV1<'_, P>
 where
     P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
@@ -1313,7 +1209,6 @@ where
             .finish_non_exhaustive()
     }
 }
-
 impl<'a, P> ZkAmsMkheDirectObjectPublicationTransactionV1<'a, P>
 where
     P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
@@ -1355,7 +1250,6 @@ where
             failed: false,
         })
     }
-
     /// Append one exact bounded chunk at the sole next absolute offset.
     ///
     /// Empty, oversized, out-of-range, short, over-reported, failed, and
@@ -1373,7 +1267,6 @@ where
         }
         result
     }
-
     fn write_exact_inner(&mut self, source: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
         if source.is_empty() {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
@@ -1419,13 +1312,11 @@ where
         self.next_offset = after;
         Ok(())
     }
-
     /// Bytes still required before sealing can begin.
     #[must_use]
     pub const fn remaining_bytes(&self) -> u64 {
         self.payload_bytes - self.next_offset
     }
-
     /// Seal, authenticate, publish, reconcile, and fully reread this object.
     pub fn finish(mut self) -> Result<ZkAmsMkheDirectObjectPublicationReceiptV1, ZkAmsMkheErrorV1> {
         if self.failed || self.next_offset != self.payload_bytes {
@@ -1466,7 +1357,6 @@ where
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
-
         // Only this immutable sealed-stage reread determines the content
         // address. The separately accumulated source hash merely proves that
         // the backend sealed the exact bytes accepted from the caller.
@@ -1530,13 +1420,11 @@ where
             self.payload_bytes,
             sealed_payload_blake3,
         )?;
-
         ensure_direct_object_publication_identity_v1(self.publisher, self.publication_identity)?;
         let publish_failed = self
             .publisher
             .publish_sealed_by_pointer(&seal, pointer)
             .is_err();
-
         // Lookup is deliberately unconditional after a returned publish result.
         // It is the sole recovery path for a successful commit whose
         // acknowledgement was lost.
@@ -1551,11 +1439,9 @@ where
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
-
         let post_publish_read_receipt =
             validate_zk_ams_mkhe_direct_object_v1(self.kind, pointer, self.publisher)?;
         ensure_direct_object_publication_identity_v1(self.publisher, self.publication_identity)?;
-
         let mut receipt = ZkAmsMkheDirectObjectPublicationReceiptV1 {
             publication_identity: self.publication_identity,
             staging_identity,
@@ -1573,20 +1459,16 @@ where
         Ok(receipt)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-
     use super::*;
-
     const PROVIDER_ID: [u8; 32] = [0x51; 32];
     const DRIFTED_PROVIDER_ID: [u8; 32] = [0x52; 32];
     const SNAPSHOT_ID: [u8; 32] = [0x61; 32];
     const DRIFTED_SNAPSHOT_ID: [u8; 32] = [0x62; 32];
     const PUBLICATION_ID: [u8; 32] = [0x71; 32];
     const DRIFTED_PUBLICATION_ID: [u8; 32] = [0x72; 32];
-
     #[derive(Clone)]
     struct TestProvider {
         objects: Vec<(ZkAmsMkheDirectObjectPointerV1, Vec<u8>)>,
@@ -1608,7 +1490,6 @@ mod tests {
         len_pointers: Vec<ZkAmsMkheDirectObjectPointerV1>,
         read_pointers: Vec<ZkAmsMkheDirectObjectPointerV1>,
     }
-
     impl TestProvider {
         fn new(kind: ZkAmsMkheDirectObjectKindV1, bytes: Vec<u8>) -> Self {
             let pointer = ZkAmsMkheDirectObjectPointerV1::from_payload(kind, &bytes).unwrap();
@@ -1633,11 +1514,9 @@ mod tests {
                 read_pointers: Vec::new(),
             }
         }
-
         fn pointer(&self) -> ZkAmsMkheDirectObjectPointerV1 {
             self.objects[0].0
         }
-
         fn insert(
             &mut self,
             kind: ZkAmsMkheDirectObjectKindV1,
@@ -1647,7 +1526,6 @@ mod tests {
             self.objects.push((pointer, bytes));
             pointer
         }
-
         fn object_index(
             &self,
             pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -1658,7 +1536,6 @@ mod tests {
                 .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)
         }
     }
-
     impl ZkAmsMkheDirectObjectReadAtProviderV1 for TestProvider {
         fn provider_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
             self.identity_calls += 1;
@@ -1673,7 +1550,6 @@ mod tests {
                 },
             )
         }
-
         fn snapshot_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
             self.snapshot_calls += 1;
             Ok(
@@ -1687,7 +1563,6 @@ mod tests {
                 },
             )
         }
-
         fn object_len(
             &mut self,
             pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -1704,7 +1579,6 @@ mod tests {
             }
             Ok(length)
         }
-
         fn read_at(
             &mut self,
             pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -1776,31 +1650,26 @@ mod tests {
             }
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum TestPublishFailure {
         None,
         BeforeCommit,
         AfterCommit,
     }
-
     struct TestStagingObject {
         token_digest: [u8; 32],
         expected_bytes: u64,
         bytes: Vec<u8>,
     }
-
     struct TestSealedObject {
         token_digest: [u8; 32],
         bytes: Arc<[u8]>,
     }
-
     struct TestPublishedObject {
         pointer: ZkAmsMkheDirectObjectPointerV1,
         published_object_identity: [u8; 32],
         bytes: Arc<[u8]>,
     }
-
     struct TestCasStore {
         publication_identity: [u8; 32],
         reported_publication_identity: [u8; 32],
@@ -1853,7 +1722,6 @@ mod tests {
         provider_snapshot_drift_at: Option<usize>,
         provider_len_bias: bool,
     }
-
     impl TestCasStore {
         fn new() -> Self {
             Self {
@@ -1909,14 +1777,12 @@ mod tests {
                 provider_len_bias: false,
             }
         }
-
         fn fresh_identity(&mut self, tag: u8) -> [u8; 32] {
             let mut identity = [tag; 32];
             identity[24..].copy_from_slice(&self.next_identity.to_be_bytes());
             self.next_identity = self.next_identity.checked_add(1).expect("test identity");
             identity
         }
-
         fn published_index(
             &self,
             pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -1927,12 +1793,10 @@ mod tests {
                 .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)
         }
     }
-
     impl ZkAmsMkheDirectObjectCasPublicationV1 for TestCasStore {
         fn publication_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
             Ok(self.reported_publication_identity)
         }
-
         fn begin_staging(
             &mut self,
             kind: ZkAmsMkheDirectObjectKindV1,
@@ -1959,7 +1823,6 @@ mod tests {
             }
             Ok(token)
         }
-
         fn staged_len(
             &mut self,
             staging: &ZkAmsMkheDirectObjectStagingTokenV1,
@@ -1984,7 +1847,6 @@ mod tests {
                 Ok(length)
             }
         }
-
         fn write_staged_at(
             &mut self,
             staging: &ZkAmsMkheDirectObjectStagingTokenV1,
@@ -2035,7 +1897,6 @@ mod tests {
                 Ok(accepted)
             }
         }
-
         fn seal_staged(
             &mut self,
             staging: ZkAmsMkheDirectObjectStagingTokenV1,
@@ -2069,7 +1930,6 @@ mod tests {
             }
             Ok(seal)
         }
-
         fn sealed_len(
             &mut self,
             seal: &ZkAmsMkheDirectObjectSealTokenV1,
@@ -2092,7 +1952,6 @@ mod tests {
                 Ok(length)
             }
         }
-
         fn read_sealed_at(
             &mut self,
             seal: &ZkAmsMkheDirectObjectSealTokenV1,
@@ -2140,7 +1999,6 @@ mod tests {
                 Ok(copied)
             }
         }
-
         fn publish_sealed_by_pointer(
             &mut self,
             seal: &ZkAmsMkheDirectObjectSealTokenV1,
@@ -2188,7 +2046,6 @@ mod tests {
                 Ok(())
             }
         }
-
         fn lookup_published_pointer(
             &mut self,
             pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -2218,12 +2075,10 @@ mod tests {
             Ok(Some(binding))
         }
     }
-
     impl ZkAmsMkheDirectObjectReadAtProviderV1 for TestCasStore {
         fn provider_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
             Ok(self.provider_identity)
         }
-
         fn snapshot_identity(&mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
             if self
                 .provider_snapshot_drift_at
@@ -2234,7 +2089,6 @@ mod tests {
                 Ok(self.snapshot_identity)
             }
         }
-
         fn object_len(
             &mut self,
             pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -2250,7 +2104,6 @@ mod tests {
                 Ok(length)
             }
         }
-
         fn read_at(
             &mut self,
             pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -2292,7 +2145,6 @@ mod tests {
             }
         }
     }
-
     fn publish_test_payload(
         store: &mut TestCasStore,
         kind: ZkAmsMkheDirectObjectKindV1,
@@ -2308,13 +2160,11 @@ mod tests {
         }
         transaction.finish()
     }
-
     fn payload(bytes: usize) -> Vec<u8> {
         (0..bytes)
             .map(|index| (index as u8).wrapping_mul(29).wrapping_add(7))
             .collect()
     }
-
     #[test]
     fn canonical_pointer_roundtrips_and_rejects_every_framing_mutation() {
         for kind in [
@@ -2364,7 +2214,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn pointer_shape_rejects_wrong_kind_zeroes_and_resource_overflow() {
         let bytes = payload(31);
@@ -2421,7 +2270,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
         );
     }
-
     #[test]
     fn complete_chunked_validation_matches_the_content_address() {
         let mut provider = TestProvider::new(
@@ -2447,7 +2295,6 @@ mod tests {
         assert!(!ZK_AMS_MKHE_DIRECT_OBJECT_ADMISSION_GATE_V1);
         assert!(!ZK_AMS_MKHE_DIRECT_OBJECT_RELEASE_GATE_V1);
     }
-
     #[test]
     fn short_and_impossible_over_reads_are_hard_failures_and_poison_the_pass() {
         for over_read in [false, true] {
@@ -2484,7 +2331,6 @@ mod tests {
             assert_eq!(provider.read_calls, 1);
         }
     }
-
     #[test]
     fn caught_provider_unwind_permanently_poisons_the_pass() {
         let mut provider =
@@ -2498,12 +2344,10 @@ mod tests {
         )
         .unwrap();
         let mut buffer = [0_u8; 97];
-
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = transaction.read_next(&mut provider, &mut buffer);
         }));
         assert!(unwind.is_err());
-
         provider.panic_read_at = None;
         assert_eq!(
             transaction.read_next(&mut provider, &mut buffer),
@@ -2515,7 +2359,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
         );
     }
-
     #[test]
     fn length_provider_and_snapshot_drift_are_rejected_around_reads() {
         let cases = [0_u8, 1, 2];
@@ -2548,7 +2391,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn stable_snapshot_labels_cannot_hide_payload_mutation_or_wrong_hash() {
         let bytes = payload(2 * ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 + 5);
@@ -2566,7 +2408,6 @@ mod tests {
         assert!(mutating.identity_calls > 1);
         assert!(mutating.snapshot_calls > 1);
         assert_eq!(mutating.identity_calls, mutating.snapshot_calls);
-
         let wrong_length = u64::try_from(bytes.len()).unwrap();
         let mut wrong_hash = TestProvider::new(ZkAmsMkheDirectObjectKindV1::RkgK, bytes);
         let wrong_pointer = ZkAmsMkheDirectObjectPointerV1::new(
@@ -2586,7 +2427,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
         );
     }
-
     #[test]
     fn multi_object_provider_is_pointer_addressed_and_rejects_cross_object_substitution() {
         let first = payload(2 * ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 + 11);
@@ -2604,7 +2444,6 @@ mod tests {
         assert_eq!(receipt.snapshot().pointer(), h0);
         assert!(provider.len_pointers.iter().all(|pointer| *pointer == h0));
         assert!(provider.read_pointers.iter().all(|pointer| *pointer == h0));
-
         let mut substituted = provider.clone();
         substituted.identity_calls = 0;
         substituted.snapshot_calls = 0;
@@ -2634,7 +2473,6 @@ mod tests {
                 .iter()
                 .all(|pointer| *pointer == h0)
         );
-
         let provider_calls = provider.len_calls;
         assert_eq!(
             bind_zk_ams_mkhe_direct_object_snapshot_v1(
@@ -2646,7 +2484,6 @@ mod tests {
             "a valid H1 pointer must not decode as H0"
         );
         assert_eq!(provider.len_calls, provider_calls);
-
         let same_bytes = payload(211);
         let party_h0 = ZkAmsMkheDirectObjectPointerV1::from_payload(
             ZkAmsMkheDirectObjectKindV1::RkgH0,
@@ -2661,7 +2498,6 @@ mod tests {
         assert_eq!(party_h0.payload_blake3(), aggregate_h0.payload_blake3());
         assert_ne!(party_h0.pointer_digest(), aggregate_h0.pointer_digest());
         assert_ne!(party_h0, aggregate_h0);
-
         let mut trailing =
             TestProvider::new(ZkAmsMkheDirectObjectKindV1::RkgNormalization, same_bytes);
         let expected = trailing.pointer();
@@ -2675,7 +2511,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
     }
-
     #[test]
     fn zero_provider_axes_are_rejected() {
         for zero_provider in [true, false] {
@@ -2698,7 +2533,6 @@ mod tests {
             assert_eq!(provider.read_calls, 0);
         }
     }
-
     #[test]
     fn exact_read_bounds_reject_empty_oversized_out_of_range_and_overflow_pre_io() {
         let mut provider =
@@ -2736,14 +2570,12 @@ mod tests {
         );
         assert_eq!(provider.read_calls, 0);
     }
-
     #[test]
     fn cas_publication_seals_rereads_publishes_and_readbacks_exactly() {
         let kind = ZkAmsMkheDirectObjectKindV1::AggregateH1;
         let bytes = payload(2 * ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 + 19);
         let expected = ZkAmsMkheDirectObjectPointerV1::from_payload(kind, &bytes).unwrap();
         let mut store = TestCasStore::new();
-
         let mut receipt = publish_test_payload(&mut store, kind, &bytes).unwrap();
         receipt.validate().unwrap();
         assert_eq!(receipt.pointer(), expected);
@@ -2753,7 +2585,6 @@ mod tests {
         assert_ne!(receipt.staging_identity(), receipt.seal_identity());
         assert!(!receipt.reconciled_after_publish_error());
         assert_ne!(receipt.receipt_digest(), [0; 32]);
-
         let binding = receipt.published_binding();
         assert_eq!(binding.publication_identity(), PUBLICATION_ID);
         assert_eq!(binding.pointer(), expected);
@@ -2765,7 +2596,6 @@ mod tests {
         assert_eq!(readback.snapshot().snapshot_identity(), SNAPSHOT_ID);
         assert_eq!(readback.canonical_bytes(), expected.payload_bytes());
         assert_eq!(readback.payload_blake3(), expected.payload_blake3());
-
         assert_eq!(store.published.len(), 1);
         assert_eq!(store.published[0].pointer, expected);
         assert_eq!(store.published[0].bytes.as_ref(), bytes.as_slice());
@@ -2776,7 +2606,6 @@ mod tests {
         assert!(store.max_write <= ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1);
         assert!(store.max_sealed_read <= ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1);
         assert!(store.max_provider_read <= ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1);
-
         let mut expected_write_offsets = Vec::new();
         let mut next_offset = 0_u64;
         for chunk in bytes.chunks(997) {
@@ -2795,23 +2624,19 @@ mod tests {
         assert_eq!(store.provider_read_offsets, store.sealed_read_offsets);
         assert!(!ZK_AMS_MKHE_DIRECT_OBJECT_ADMISSION_GATE_V1);
         assert!(!ZK_AMS_MKHE_DIRECT_OBJECT_RELEASE_GATE_V1);
-
         receipt.staging_token_digest[0] ^= 1;
         receipt.receipt_digest = direct_object_publication_receipt_digest(&receipt);
         assert!(receipt.validate().is_err());
     }
-
     #[test]
     fn publication_begin_rejects_invalid_bounds_and_zero_session_before_allocation() {
         let kind = ZkAmsMkheDirectObjectKindV1::ProofEnvelope;
-
         let mut zero_length = TestCasStore::new();
         assert!(
             ZkAmsMkheDirectObjectPublicationTransactionV1::begin(kind, 0, &mut zero_length)
                 .is_err()
         );
         assert!(zero_length.staging.is_none());
-
         let mut oversized = TestCasStore::new();
         assert!(
             ZkAmsMkheDirectObjectPublicationTransactionV1::begin(
@@ -2822,7 +2647,6 @@ mod tests {
             .is_err()
         );
         assert!(oversized.staging.is_none());
-
         let mut zero_session = TestCasStore::new();
         zero_session.reported_publication_identity = [0; 32];
         assert!(
@@ -2831,7 +2655,6 @@ mod tests {
         );
         assert!(zero_session.staging.is_none());
     }
-
     #[test]
     fn publication_write_failures_and_caught_unwind_permanently_poison_transaction() {
         let bytes = payload(97);
@@ -2862,7 +2685,6 @@ mod tests {
             assert!(store.published.is_empty());
             assert_eq!(store.publish_calls, 0);
         }
-
         for (payload_bytes, invalid_write_bytes) in [
             (4_usize, 0_usize),
             (
@@ -2886,7 +2708,6 @@ mod tests {
             assert!(transaction.finish().is_err());
             assert!(store.published.is_empty());
         }
-
         let mut store = TestCasStore::new();
         store.panic_write_at = Some(1);
         let mut transaction = ZkAmsMkheDirectObjectPublicationTransactionV1::begin(
@@ -2907,7 +2728,6 @@ mod tests {
         assert!(store.published.is_empty());
         assert_eq!(store.publish_calls, 0);
     }
-
     #[test]
     fn sealed_stage_length_token_and_reread_attacks_never_publish() {
         let bytes = payload(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 + 37);
@@ -2939,7 +2759,6 @@ mod tests {
                 "published after sealed-stage attack {attack}"
             );
         }
-
         let mut panicking_store = TestCasStore::new();
         panicking_store.panic_sealed_read_at = Some(1);
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2955,13 +2774,11 @@ mod tests {
         assert!(panicking_store.published.is_empty());
         assert_eq!(panicking_store.publish_calls, 0);
     }
-
     #[test]
     fn ambiguous_publish_ack_reconciles_only_by_exact_authoritative_lookup() {
         let kind = ZkAmsMkheDirectObjectKindV1::CpkPartyB;
         let bytes = payload(4097);
         let expected = ZkAmsMkheDirectObjectPointerV1::from_payload(kind, &bytes).unwrap();
-
         let mut lost_ack = TestCasStore::new();
         lost_ack.publish_failure = TestPublishFailure::AfterCommit;
         let receipt = publish_test_payload(&mut lost_ack, kind, &bytes).unwrap();
@@ -2970,27 +2787,23 @@ mod tests {
         assert_eq!(lost_ack.published.len(), 1);
         assert_eq!(lost_ack.publish_calls, 1);
         assert_eq!(lost_ack.lookup_calls, 1);
-
         let mut rejected_before_commit = TestCasStore::new();
         rejected_before_commit.publish_failure = TestPublishFailure::BeforeCommit;
         assert!(publish_test_payload(&mut rejected_before_commit, kind, &bytes).is_err());
         assert!(rejected_before_commit.published.is_empty());
         assert_eq!(rejected_before_commit.publish_calls, 1);
         assert_eq!(rejected_before_commit.lookup_calls, 1);
-
         let mut absent_lookup = TestCasStore::new();
         absent_lookup.lookup_none = true;
         assert!(publish_test_payload(&mut absent_lookup, kind, &bytes).is_err());
         assert_eq!(absent_lookup.published.len(), 1);
         assert_eq!(absent_lookup.lookup_calls, 1);
-
         let mut failed_lookup = TestCasStore::new();
         failed_lookup.lookup_error = true;
         assert!(publish_test_payload(&mut failed_lookup, kind, &bytes).is_err());
         assert_eq!(failed_lookup.published.len(), 1);
         assert_eq!(failed_lookup.lookup_calls, 1);
     }
-
     #[test]
     fn caught_publish_unwind_cannot_erase_commit_and_retry_is_idempotent() {
         let kind = ZkAmsMkheDirectObjectKindV1::GaloisB;
@@ -2998,7 +2811,6 @@ mod tests {
         let expected = ZkAmsMkheDirectObjectPointerV1::from_payload(kind, &bytes).unwrap();
         let mut store = TestCasStore::new();
         store.panic_publish_after_commit = true;
-
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = publish_test_payload(&mut store, kind, &bytes);
         }));
@@ -3008,7 +2820,6 @@ mod tests {
         assert_eq!(store.published[0].bytes.as_ref(), bytes.as_slice());
         assert_eq!(store.lookup_calls, 0);
         let published_object_identity = store.published[0].published_object_identity;
-
         store.panic_publish_after_commit = false;
         let receipt = publish_test_payload(&mut store, kind, &bytes).unwrap();
         assert_eq!(receipt.pointer(), expected);
@@ -3020,13 +2831,11 @@ mod tests {
         assert_eq!(store.publish_calls, 2);
         assert_eq!(store.lookup_calls, 1);
     }
-
     #[test]
     fn caught_lookup_and_readback_unwinds_preserve_commit_for_idempotent_retry() {
         let kind = ZkAmsMkheDirectObjectKindV1::AggregateH0;
         let bytes = payload(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 + 41);
         let expected = ZkAmsMkheDirectObjectPointerV1::from_payload(kind, &bytes).unwrap();
-
         for panic_site in 0..2 {
             let mut store = TestCasStore::new();
             if panic_site == 0 {
@@ -3042,7 +2851,6 @@ mod tests {
             assert_eq!(store.published[0].pointer, expected);
             assert_eq!(store.published[0].bytes.as_ref(), bytes.as_slice());
             let published_object_identity = store.published[0].published_object_identity;
-
             store.panic_lookup = false;
             store.panic_provider_read_at = None;
             let receipt = publish_test_payload(&mut store, kind, &bytes).unwrap();
@@ -3055,7 +2863,6 @@ mod tests {
             assert_eq!(store.publish_calls, 2);
         }
     }
-
     #[test]
     fn occupied_pointer_with_different_bytes_is_never_overwritten_or_receipted() {
         let kind = ZkAmsMkheDirectObjectKindV1::ProofEnvelope;
@@ -3070,7 +2877,6 @@ mod tests {
             published_object_identity: [0xb1; 32],
             bytes: Arc::clone(&conflicting_bytes),
         });
-
         assert!(publish_test_payload(&mut store, kind, &bytes).is_err());
         assert_eq!(store.publish_calls, 1);
         assert_eq!(store.lookup_calls, 1);
@@ -3081,13 +2887,11 @@ mod tests {
         );
         assert_ne!(store.published[0].bytes.as_ref(), bytes.as_slice());
     }
-
     #[test]
     fn post_publish_readback_failure_leaves_immutable_object_and_retry_is_idempotent() {
         let kind = ZkAmsMkheDirectObjectKindV1::CpkRelationProof;
         let bytes = payload(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 + 73);
         let expected = ZkAmsMkheDirectObjectPointerV1::from_payload(kind, &bytes).unwrap();
-
         for fault in 0..4 {
             let mut store = TestCasStore::new();
             match fault {
@@ -3102,7 +2906,6 @@ mod tests {
             assert_eq!(store.published[0].pointer, expected);
             assert_eq!(store.published[0].bytes.as_ref(), bytes.as_slice());
             let published_object_identity = store.published[0].published_object_identity;
-
             store.provider_short_read_at = None;
             store.provider_over_read_at = None;
             store.provider_mutate_read_at = None;
@@ -3119,13 +2922,11 @@ mod tests {
             assert_eq!(store.lookup_calls, 2);
         }
     }
-
     #[test]
     fn lookup_substitution_identity_drift_and_provider_snapshot_drift_fail_closed() {
         let kind = ZkAmsMkheDirectObjectKindV1::RkgK;
         let bytes = payload(ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1 + 11);
         let substitute = ZkAmsMkheDirectObjectPointerV1::from_payload(kind, &payload(31)).unwrap();
-
         for lookup_attack in 0..2 {
             let mut store = TestCasStore::new();
             if lookup_attack == 0 {
@@ -3137,7 +2938,6 @@ mod tests {
             assert_eq!(store.published.len(), 1);
             assert_eq!(store.lookup_calls, 1);
         }
-
         for drift_phase in 0..2 {
             let mut store = TestCasStore::new();
             if drift_phase == 0 {
@@ -3150,7 +2950,6 @@ mod tests {
             assert_eq!(store.publish_calls, 0);
             assert_eq!(store.reported_publication_identity, DRIFTED_PUBLICATION_ID);
         }
-
         let mut identity_drift = TestCasStore::new();
         identity_drift.drift_publication_identity_after_publish = true;
         assert!(publish_test_payload(&mut identity_drift, kind, &bytes).is_err());
@@ -3160,14 +2959,12 @@ mod tests {
             identity_drift.reported_publication_identity,
             DRIFTED_PUBLICATION_ID
         );
-
         let mut snapshot_drift = TestCasStore::new();
         snapshot_drift.provider_snapshot_drift_at = Some(1);
         assert!(publish_test_payload(&mut snapshot_drift, kind, &bytes).is_err());
         assert_eq!(snapshot_drift.published.len(), 1);
         assert_eq!(snapshot_drift.provider_read_calls, 1);
     }
-
     #[test]
     fn dropping_incomplete_transaction_cannot_publish_or_unpublish() {
         let mut store = TestCasStore::new();
@@ -3187,7 +2984,6 @@ mod tests {
         assert!(store.sealed.is_none());
         assert_eq!(store.staging.as_ref().unwrap().bytes.len(), 31);
     }
-
     #[test]
     fn incomplete_and_tampered_receipts_never_validate() {
         let mut provider =
@@ -3203,7 +2999,6 @@ mod tests {
             transaction.finish(&mut provider),
             Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
         );
-
         let mut receipt = validate_zk_ams_mkhe_direct_object_v1(
             ZkAmsMkheDirectObjectKindV1::ProofEnvelope,
             pointer,

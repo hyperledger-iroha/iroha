@@ -1,23 +1,18 @@
 use std::{convert::TryInto, num::NonZeroU64, path::PathBuf};
-
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     block::consensus::ConsensusGenesisParams, isi::SetParameter, parameter::system::BlockParameter,
 };
 use iroha_version::codec::DecodeVersioned;
-
 use super::*;
-
 fn manifest_chain_discriminant_value() -> norito::json::Value {
     norito::json::value::to_value(&iroha_data_model::account::address::chain_discriminant())
         .expect("serialize chain discriminant")
 }
-
 fn manifest_v2_context_value() -> norito::json::Value {
     norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
         .expect("serialize v2 genesis context")
 }
-
 #[test]
 fn genesis_fixture_key_generation_preserves_algorithms() {
     assert_eq!(
@@ -33,7 +28,6 @@ fn genesis_fixture_key_generation_preserves_algorithms() {
         );
     }
 }
-
 #[test]
 fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
     let chain = ChainId::from("iroha:test:genesismeta");
@@ -69,7 +63,6 @@ fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
         fp1, differently_named_fp,
         "genesis-embedded parameters fingerprint must not depend on chain display identity"
     );
-
     // Validate that the injected handshake payload parses as JSON.
     let normalized = tx.normalize().expect("normalize empty manifest");
     let mut saw_handshake = false;
@@ -94,14 +87,12 @@ fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
     }
     assert!(saw_handshake, "expected handshake parameter");
 }
-
 #[test]
 fn with_consensus_meta_handles_npos_mode() {
     let chain = ChainId::from("iroha:test:nposmeta");
     let npos = SumeragiNposParameters::default();
     let mut params = Parameters::default();
     params.set_parameter(Parameter::Custom(npos.clone().into()));
-
     let manifest = RawGenesisTransaction {
         chain,
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
@@ -118,7 +109,6 @@ fn with_consensus_meta_handles_npos_mode() {
         crypto: ManifestCrypto::default(),
     }
     .with_consensus_meta();
-
     assert_eq!(manifest.consensus_mode, SumeragiConsensusMode::Npos);
     assert_eq!(manifest.wire_protocol_version, CONSENSUS_PROTOCOL_VERSION);
     let fp = manifest
@@ -128,7 +118,6 @@ fn with_consensus_meta_handles_npos_mode() {
         fp.to_string().starts_with("0x"),
         "fingerprint must be hex-prefixed, got {fp}"
     );
-
     // Confirm the handshake payload parses and advertises Npos mode.
     let normalized = manifest
         .clone()
@@ -159,7 +148,6 @@ fn with_consensus_meta_handles_npos_mode() {
     }
     assert!(saw_handshake, "expected handshake parameter");
 }
-
 #[test]
 fn with_consensus_meta_respects_block_max_transactions_override() {
     let chain = ChainId::from("iroha:test:blockmax");
@@ -170,7 +158,6 @@ fn with_consensus_meta_respects_block_max_transactions_override() {
         )))],
         ..RawGenesisTx::default()
     };
-
     let manifest = RawGenesisTransaction {
         chain: chain.clone(),
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
@@ -184,7 +171,6 @@ fn with_consensus_meta_respects_block_max_transactions_override() {
         crypto: ManifestCrypto::default(),
     }
     .with_consensus_meta();
-
     let params = manifest
         .effective_parameters()
         .expect("single structured parameter block");
@@ -193,7 +179,6 @@ fn with_consensus_meta_respects_block_max_transactions_override() {
         max_txs.get(),
         "effective parameters must reflect block max override"
     );
-
     let expected = compute_consensus_parameters_fingerprint_v2(&ConsensusGenesisParams {
         block_cadence_ms: params.sumeragi().block_cadence_ms(),
         block_max_transactions: params.block().max_transactions(),
@@ -208,11 +193,9 @@ fn with_consensus_meta_respects_block_max_transactions_override() {
         .into_bytes();
     assert_eq!(observed, expected);
 }
-
 #[test]
 fn build_and_sign_uses_stable_internal_creation_times() {
     init_instruction_registry();
-
     let chain = ChainId::from("iroha:test:deterministic");
     let manifest = RawGenesisTransaction {
         chain,
@@ -226,15 +209,11 @@ fn build_and_sign_uses_stable_internal_creation_times() {
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-
     let keypair = checked_genesis_fixture_keypair();
-
     let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
-
     let bytes_a = genesis.0.encode_wire().expect("encode canonical genesis");
     let bytes_b = genesis.0.encode_wire().expect("encode canonical genesis");
     assert_eq!(bytes_a, bytes_b, "Genesis encoding must be deterministic");
-
     let tx_times: Vec<u64> = genesis
         .0
         .external_transactions()
@@ -259,11 +238,9 @@ fn build_and_sign_uses_stable_internal_creation_times() {
         );
     }
 }
-
 #[test]
 fn explicit_creation_time_makes_signed_genesis_reproducible() {
     init_instruction_registry();
-
     let manifest = RawGenesisTransaction {
         chain: ChainId::from("iroha:test:fixed-genesis-time"),
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
@@ -302,7 +279,6 @@ fn explicit_creation_time_makes_signed_genesis_reproducible() {
             .encode_wire()
             .expect("encode fixed-time genesis")
     };
-
     assert_eq!(sign(manifest.clone()), sign(manifest.clone()));
     let last_representable_base = u64::MAX - batch_count;
     let boundary = manifest
@@ -332,11 +308,9 @@ fn explicit_creation_time_makes_signed_genesis_reproducible() {
         "unexpected overflow error: {error:#}"
     );
 }
-
 #[test]
 fn build_and_sign_checked_genesis_transaction_signatures_verify() {
     init_instruction_registry();
-
     let chain = ChainId::from("iroha:test:checked-genesis-sign");
     let manifest = RawGenesisTransaction {
         chain,
@@ -351,25 +325,21 @@ fn build_and_sign_checked_genesis_transaction_signatures_verify() {
         crypto: ManifestCrypto::default(),
     };
     let keypair = checked_genesis_fixture_keypair();
-
     let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
     let transactions: Vec<_> = genesis.0.external_transactions().collect();
     assert!(
         !transactions.is_empty(),
         "genesis builder should emit signed external transactions"
     );
-
     for transaction in transactions {
         transaction
             .verify_signature()
             .expect("checked genesis transaction signature should verify");
     }
 }
-
 #[test]
 fn collect_parameter_instructions_respects_manual_values() {
     use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
-
     let parameters = Parameters::default();
     let manual = vec![Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(250))];
     let generated =
@@ -390,15 +360,12 @@ fn collect_parameter_instructions_respects_manual_values() {
         "manual Sumeragi overrides must suppress default value reinsertion"
     );
 }
-
 #[test]
 fn collect_parameter_instructions_emits_max_clock_drift_update() {
     use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
-
     let current = Parameters::default();
     let mut target = current.clone();
     target.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)));
-
     let generated = collect_parameter_instructions(&target, &[], &[], &current);
     assert!(
         generated.iter().any(|instruction| {
@@ -415,11 +382,9 @@ fn collect_parameter_instructions_emits_max_clock_drift_update() {
         "generated instructions must contain the mutable Sumeragi update"
     );
 }
-
 #[test]
 fn has_set_parameter_detects_conflicting_sumeragi_slots() {
     use iroha_data_model::parameter::system::SumeragiParameter;
-
     let instruction = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
         SumeragiParameter::MaxClockDriftMs(100),
     )));
@@ -428,11 +393,9 @@ fn has_set_parameter_detects_conflicting_sumeragi_slots() {
         &Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(200))
     ));
 }
-
 #[test]
 fn build_and_sign_sets_confidential_digest() {
     init_instruction_registry();
-
     let chain = ChainId::from("iroha:test:confdigest");
     let manifest = RawGenesisTransaction {
         chain,
@@ -446,10 +409,8 @@ fn build_and_sign_sets_confidential_digest() {
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-
     let keypair = checked_genesis_fixture_keypair();
     let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
-
     assert_eq!(
         genesis.0.header().confidential_features(),
         Some(ConfidentialFeatureDigest::new(
@@ -461,11 +422,9 @@ fn build_and_sign_sets_confidential_digest() {
         ))
     );
 }
-
 #[test]
 fn build_and_sign_sets_explicit_confidential_policy_hash() {
     init_instruction_registry();
-
     let chain = ChainId::from("iroha:test:confpolicy");
     let manifest = RawGenesisTransaction {
         chain,
@@ -479,13 +438,11 @@ fn build_and_sign_sets_explicit_confidential_policy_hash() {
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-
     let keypair = checked_genesis_fixture_keypair();
     let policy_hash = [0x42; 32];
     let genesis = manifest
         .build_and_sign_with_confidential_policy_hash(&keypair, Some(policy_hash))
         .expect("sign genesis with policy hash");
-
     assert_eq!(
         genesis.0.header().confidential_features(),
         Some(ConfidentialFeatureDigest::new(
@@ -497,11 +454,9 @@ fn build_and_sign_sets_explicit_confidential_policy_hash() {
         ))
     );
 }
-
 #[test]
 fn genesis_canonical_wire_roundtrip_preserves_digest() {
     init_instruction_registry();
-
     let chain = ChainId::from("iroha:test:wire-digest");
     let manifest = RawGenesisTransaction {
         chain,
@@ -515,10 +470,8 @@ fn genesis_canonical_wire_roundtrip_preserves_digest() {
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-
     let keypair = checked_genesis_fixture_keypair();
     let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
-
     let wire = genesis.0.canonical_wire().expect("canonical wire encoding");
     let framed = wire.as_framed().to_vec();
     let versioned = wire.as_versioned().to_vec();
@@ -528,7 +481,6 @@ fn genesis_canonical_wire_roundtrip_preserves_digest() {
         decoded.header().confidential_features(),
         genesis.0.header().confidential_features()
     );
-
     // Ensure framed payload also decodes through the deframed helper for completeness.
     let deframed = iroha_data_model::block::deframe_versioned_signed_block_bytes(framed.as_slice())
         .expect("deframe canonical block");
@@ -539,11 +491,9 @@ fn genesis_canonical_wire_roundtrip_preserves_digest() {
         genesis.0.header().confidential_features()
     );
 }
-
 #[test]
 fn effective_parameters_prefers_set_parameter_instructions() {
     use iroha_data_model::{isi::InstructionBox, parameter::system::SumeragiParameter};
-
     let chain = ChainId::from("iroha:test:paramagg");
     let mut base = Parameters::default();
     base.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(
@@ -569,13 +519,11 @@ fn effective_parameters_prefers_set_parameter_instructions() {
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-
     let effective = manifest
         .effective_parameters()
         .expect("single structured parameter block");
     assert_eq!(effective.sumeragi().max_clock_drift_ms(), 1_500);
 }
-
 #[test]
 fn effective_parameters_respects_manual_overrides_across_transactions() {
     init_instruction_registry();
@@ -587,7 +535,6 @@ fn effective_parameters_respects_manual_overrides_across_transactions() {
             system::{SumeragiParameter, confidential_metadata},
         },
     };
-
     let chain = ChainId::from("iroha:test:paramagg-manual");
     let tx_manual = RawGenesisTx {
         instructions: vec![InstructionBox::from(SetParameter::new(
@@ -595,7 +542,6 @@ fn effective_parameters_respects_manual_overrides_across_transactions() {
         ))],
         ..RawGenesisTx::default()
     };
-
     // Parameters created from a single custom entry still include system defaults.
     // `effective_parameters()` must follow the same suppression rules as `parse()` so
     // that later structured sections don't overwrite globally-manual overrides.
@@ -607,7 +553,6 @@ fn effective_parameters_respects_manual_overrides_across_transactions() {
         parameters: Some(Parameters::from_iter([conf_param])),
         ..RawGenesisTx::default()
     };
-
     let manifest = RawGenesisTransaction {
         chain,
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
@@ -620,26 +565,20 @@ fn effective_parameters_respects_manual_overrides_across_transactions() {
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-
     let effective = manifest
         .effective_parameters()
         .expect("single structured parameter block");
     assert_eq!(effective.sumeragi().max_clock_drift_ms(), 333);
 }
-
 #[test]
 fn multiple_structured_parameter_blocks_are_rejected_as_ambiguous_snapshots() {
     init_instruction_registry();
     use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
-
     let chain = ChainId::from("iroha:test:paramparse-order");
-
     let mut base = Parameters::default();
     base.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)));
-
     let mut updated = base.clone();
     updated.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)));
-
     let manifest = RawGenesisTransaction {
         chain,
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
@@ -662,7 +601,6 @@ fn multiple_structured_parameter_blocks_are_rejected_as_ambiguous_snapshots() {
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-
     let error = manifest
         .effective_parameters()
         .expect_err("multiple complete parameter snapshots must be rejected");
@@ -671,7 +609,6 @@ fn multiple_structured_parameter_blocks_are_rejected_as_ambiguous_snapshots() {
             .to_string()
             .contains("multiple structured `parameters` blocks")
     );
-
     let error = manifest
         .clone()
         .parse()
@@ -681,7 +618,6 @@ fn multiple_structured_parameter_blocks_are_rejected_as_ambiguous_snapshots() {
             .to_string()
             .contains("multiple structured `parameters` blocks")
     );
-
     let value = norito::json::to_value(&manifest).expect("serialize adversarial manifest");
     let error = RawGenesisTransaction::from_json_value(value)
         .expect_err("JSON admission must reject ambiguous parameter snapshots");
@@ -691,19 +627,15 @@ fn multiple_structured_parameter_blocks_are_rejected_as_ambiguous_snapshots() {
             .contains("multiple structured `parameters` blocks")
     );
 }
-
 #[test]
 #[ignore = "debug helper for inspecting parsed genesis instruction order"]
 fn debug_dump_set_parameter_order_for_manifest_path() -> Result<()> {
     use std::env;
-
     init_instruction_registry();
-
     let path = env::var("IROHA_DEBUG_GENESIS_PATH")
         .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
     let manifest = RawGenesisTransaction::from_path(&path)?;
     let batches = manifest.parse()?;
-
     eprintln!("manifest={path}");
     for (batch_idx, batch) in batches.iter().enumerate() {
         eprintln!("BATCH {batch_idx}");
@@ -714,25 +646,19 @@ fn debug_dump_set_parameter_order_for_manifest_path() -> Result<()> {
             eprintln!("  {instr_idx}: {:?}", set_parameter.inner());
         }
     }
-
     Ok(())
 }
-
 #[test]
 #[ignore = "debug helper for inspecting signed genesis instruction order"]
 fn debug_dump_set_parameter_order_for_signed_genesis_path() -> Result<()> {
     use std::{env, fs};
-
     use iroha_data_model::{block::decode_framed_signed_block, transaction::Executable};
-
     init_instruction_registry();
-
     let path = env::var("IROHA_DEBUG_SIGNED_GENESIS_PATH")
         .wrap_err("IROHA_DEBUG_SIGNED_GENESIS_PATH must point to a signed genesis .nrt")?;
     let bytes = fs::read(&path).wrap_err_with(|| format!("read signed genesis {path}"))?;
     let block = decode_framed_signed_block(&bytes)
         .wrap_err_with(|| format!("decode signed genesis {path}"))?;
-
     eprintln!("signed_genesis={path}");
     for (batch_idx, tx) in block.external_transactions().enumerate() {
         let Executable::Instructions(batch) = tx.instructions() else {
@@ -746,24 +672,18 @@ fn debug_dump_set_parameter_order_for_signed_genesis_path() -> Result<()> {
             }
         }
     }
-
     Ok(())
 }
-
 #[test]
 #[ignore = "debug helper for inspecting build_and_sign instruction order before encoding"]
 fn debug_dump_set_parameter_order_for_built_manifest_path() -> Result<()> {
     use std::env;
-
     use iroha_data_model::transaction::Executable;
-
     init_instruction_registry();
-
     let path = env::var("IROHA_DEBUG_GENESIS_PATH")
         .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
     let manifest = RawGenesisTransaction::from_path(&path)?;
     let block = manifest.build_and_sign(&checked_genesis_fixture_keypair())?;
-
     eprintln!("built_manifest={path}");
     for (batch_idx, tx) in block.0.external_transactions().enumerate() {
         let Executable::Instructions(batch) = tx.instructions() else {
@@ -777,26 +697,20 @@ fn debug_dump_set_parameter_order_for_built_manifest_path() -> Result<()> {
             }
         }
     }
-
     Ok(())
 }
-
 #[test]
 #[ignore = "debug helper for inspecting build_and_sign instruction order after encode_wire roundtrip"]
 fn debug_dump_set_parameter_order_for_encoded_manifest_path() -> Result<()> {
     use std::env;
-
     use iroha_data_model::{block::decode_framed_signed_block, transaction::Executable};
-
     init_instruction_registry();
-
     let path = env::var("IROHA_DEBUG_GENESIS_PATH")
         .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
     let manifest = RawGenesisTransaction::from_path(&path)?;
     let block = manifest.build_and_sign(&checked_genesis_fixture_keypair())?;
     let encoded = block.0.encode_wire()?;
     let decoded = decode_framed_signed_block(&encoded)?;
-
     eprintln!("encoded_manifest={path}");
     for (batch_idx, tx) in decoded.external_transactions().enumerate() {
         let Executable::Instructions(batch) = tx.instructions() else {
@@ -810,23 +724,18 @@ fn debug_dump_set_parameter_order_for_encoded_manifest_path() -> Result<()> {
             }
         }
     }
-
     Ok(())
 }
-
 #[test]
 fn set_parameter_inside_instructions_is_rejected() {
     init_instruction_registry();
     use iroha_data_model::parameter::system::SumeragiParameter;
-
     let set_param = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
         SumeragiParameter::MaxClockDriftMs(1_000),
     )));
     let instructions = genesis_instructions_json::instructions_to_value(&[set_param]);
-
     let mut tx_map = norito::json::Map::new();
     tx_map.insert("instructions".to_string(), instructions);
-
     let mut manifest_fields = norito::json::Map::new();
     manifest_fields.insert(
         "chain".to_string(),
@@ -850,7 +759,6 @@ fn set_parameter_inside_instructions_is_rejected() {
         "transactions".to_string(),
         norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
     );
-
     let manifest = norito::json::Value::Object(manifest_fields);
     let err = RawGenesisTransaction::from_json_value(manifest)
         .expect_err("SetParameter inside instructions should be rejected");
@@ -859,11 +767,9 @@ fn set_parameter_inside_instructions_is_rejected() {
         "unexpected error message: {err}"
     );
 }
-
 #[test]
 fn raw_genesis_requires_consensus_mode() {
     init_instruction_registry();
-
     let mut manifest_fields = norito::json::Map::new();
     manifest_fields.insert(
         "chain".to_string(),
@@ -882,7 +788,6 @@ fn raw_genesis_requires_consensus_mode() {
         "transactions".to_string(),
         norito::json::Value::Array(vec![norito::json::Value::Object(norito::json::Map::new())]),
     );
-
     let manifest = norito::json::Value::Object(manifest_fields);
     let err = RawGenesisTransaction::from_json_value(manifest)
         .expect_err("missing consensus_mode should be rejected");
@@ -891,11 +796,9 @@ fn raw_genesis_requires_consensus_mode() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn raw_genesis_requires_chain_discriminant() {
     init_instruction_registry();
-
     let mut manifest_fields = norito::json::Map::new();
     manifest_fields.insert(
         "chain".to_string(),
@@ -915,7 +818,6 @@ fn raw_genesis_requires_chain_discriminant() {
         "transactions".to_string(),
         norito::json::Value::Array(vec![norito::json::Value::Object(norito::json::Map::new())]),
     );
-
     let manifest = norito::json::Value::Object(manifest_fields);
     let err = RawGenesisTransaction::from_json_value(manifest)
         .expect_err("missing chain_discriminant should be rejected");
@@ -924,7 +826,6 @@ fn raw_genesis_requires_chain_discriminant() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn raw_genesis_roundtrip_uses_manifest_chain_discriminant_for_account_literals() -> Result<()> {
     init_instruction_registry();
@@ -936,13 +837,11 @@ fn raw_genesis_roundtrip_uses_manifest_chain_discriminant_for_account_literals()
     .build_raw()
     .with_consensus_mode(SumeragiConsensusMode::Permissioned)
     .with_chain_discriminant(369);
-
     let json = norito::json::to_json(&manifest)?;
     let decoded: RawGenesisTransaction = norito::json::from_str(&json)?;
     assert_eq!(decoded.chain_discriminant(), 369);
     Ok(())
 }
-
 #[test]
 fn topology_entries_parse_with_pop_hex() {
     init_instruction_registry();
@@ -957,13 +856,11 @@ fn topology_entries_parse_with_pop_hex() {
         );
         norito::json::Value::Object(map)
     };
-
     let mut tx_map = norito::json::Map::new();
     tx_map.insert(
         "topology".to_string(),
         norito::json::Value::Array(vec![topo_entry]),
     );
-
     let mut manifest_fields = norito::json::Map::new();
     manifest_fields.insert(
         "chain".to_string(),
@@ -987,7 +884,6 @@ fn topology_entries_parse_with_pop_hex() {
         "transactions".to_string(),
         norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
     );
-
     let manifest = norito::json::Value::Object(manifest_fields);
     let parsed =
         RawGenesisTransaction::from_json_value(manifest).expect("topology entry should parse");
@@ -997,7 +893,6 @@ fn topology_entries_parse_with_pop_hex() {
     assert_eq!(tx.topology[0].peer, peer);
     assert_eq!(tx.topology[0].pop_hex.as_deref(), Some("00"));
 }
-
 #[test]
 fn serialize_topology_embeds_pop_hex() {
     let (peer_pk, _) = checked_genesis_fixture_keypair().into_parts();
@@ -1008,14 +903,12 @@ fn serialize_topology_embeds_pop_hex() {
         ivm_triggers: Vec::new(),
         topology: vec![GenesisTopologyEntry::new(peer, vec![0xAA, 0xBB])],
     };
-
     let json = norito::json::to_json(&tx).expect("serialize tx");
     assert!(
         json.contains("\"pop_hex\":\"aabb\""),
         "pop_hex should be embedded alongside topology peer: {json}"
     );
 }
-
 #[test]
 fn topology_entries_allow_missing_pop_hex() {
     init_instruction_registry();
@@ -1026,13 +919,11 @@ fn topology_entries_allow_missing_pop_hex() {
         map.insert("peer".to_string(), peer_value);
         norito::json::Value::Object(map)
     };
-
     let mut tx_map = norito::json::Map::new();
     tx_map.insert(
         "topology".to_string(),
         norito::json::Value::Array(vec![topo_entry]),
     );
-
     let mut manifest_fields = norito::json::Map::new();
     manifest_fields.insert(
         "chain".to_string(),
@@ -1056,7 +947,6 @@ fn topology_entries_allow_missing_pop_hex() {
         "transactions".to_string(),
         norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
     );
-
     let manifest = norito::json::Value::Object(manifest_fields);
     let parsed = RawGenesisTransaction::from_json_value(manifest)
         .expect("topology entry without pop_hex should parse");
@@ -1066,19 +956,16 @@ fn topology_entries_allow_missing_pop_hex() {
     assert_eq!(tx.topology[0].peer, peer);
     assert!(tx.topology[0].pop_hex.is_none());
 }
-
 #[test]
 fn topology_entries_reject_peer_value() {
     init_instruction_registry();
     let peer = PeerId::new(checked_genesis_fixture_keypair().public_key().clone());
     let peer_value = norito::json::value::to_value(&peer).expect("serialize peer");
-
     let mut tx_map = norito::json::Map::new();
     tx_map.insert(
         "topology".to_string(),
         norito::json::Value::Array(vec![peer_value]),
     );
-
     let mut manifest_fields = norito::json::Map::new();
     manifest_fields.insert(
         "chain".to_string(),
@@ -1102,7 +989,6 @@ fn topology_entries_reject_peer_value() {
         "transactions".to_string(),
         norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
     );
-
     let manifest = norito::json::Value::Object(manifest_fields);
     let err = RawGenesisTransaction::from_json_value(manifest)
         .expect_err("peer-only topology entries should be rejected");
@@ -1111,7 +997,6 @@ fn topology_entries_reject_peer_value() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn clear_topology_removes_all_entries() {
     let chain = ChainId::from("iroha:test:clear-topology");
@@ -1123,7 +1008,6 @@ fn clear_topology_removes_all_entries() {
         .set_topology(vec![peer_b])
         .build_raw()
         .with_consensus_mode(SumeragiConsensusMode::Permissioned);
-
     let cleared = manifest.clear_topology();
     assert!(
         cleared
@@ -1133,7 +1017,6 @@ fn clear_topology_removes_all_entries() {
         "expected all topology entries to be removed"
     );
 }
-
 #[test]
 fn builder_preserves_consensus_metadata() {
     let manifest = RawGenesisTransaction {
@@ -1148,14 +1031,12 @@ fn builder_preserves_consensus_metadata() {
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-
     let rebuilt = manifest
         .clone()
         .into_builder()
         .domain(DomainId::try_new("example", "universal").expect("domain id"))
         .finish_domain()
         .build_raw();
-
     assert_eq!(rebuilt.consensus_mode, manifest.consensus_mode);
     assert_eq!(
         rebuilt.wire_protocol_version,
@@ -1167,7 +1048,6 @@ fn builder_preserves_consensus_metadata() {
     );
     assert_eq!(rebuilt.sumeragi_v2, manifest.sumeragi_v2);
 }
-
 #[test]
 fn raw_v2_genesis_requires_signed_context_parameters() {
     let manifest = RawGenesisTransaction {
@@ -1194,7 +1074,6 @@ fn raw_v2_genesis_requires_signed_context_parameters() {
         "unexpected error: {error}"
     );
 }
-
 #[test]
 fn raw_genesis_rejects_retired_and_malformed_consensus_manifest_shapes() {
     let manifest = GenesisBuilder::new_without_executor(
@@ -1206,7 +1085,6 @@ fn raw_genesis_rejects_retired_and_malformed_consensus_manifest_shapes() {
     let base = norito::json::to_value(&manifest).expect("serialize strict manifest");
     let protocol_version_array = norito::json::value::to_value(&vec![CONSENSUS_PROTOCOL_VERSION])
         .expect("serialize invalid protocol-version array");
-
     let mut old_plural = base.clone();
     let map = old_plural.as_object_mut().expect("manifest object");
     map.remove("wire_protocol_version");
@@ -1215,14 +1093,12 @@ fn raw_genesis_rejects_retired_and_malformed_consensus_manifest_shapes() {
         protocol_version_array.clone(),
     );
     assert!(RawGenesisTransaction::from_json_value(old_plural).is_err());
-
     let mut array_version = base.clone();
     array_version
         .as_object_mut()
         .expect("manifest object")
         .insert("wire_protocol_version".to_owned(), protocol_version_array);
     assert!(RawGenesisTransaction::from_json_value(array_version).is_err());
-
     for malformed in [
         "0xAA00000000000000000000000000000000000000000000000000000000000000",
         "0x00",
@@ -1238,7 +1114,6 @@ fn raw_genesis_rejects_retired_and_malformed_consensus_manifest_shapes() {
             "malformed fingerprint `{malformed}` must fail closed"
         );
     }
-
     let mut unknown = base;
     unknown
         .as_object_mut()
@@ -1246,7 +1121,6 @@ fn raw_genesis_rejects_retired_and_malformed_consensus_manifest_shapes() {
         .insert("unknown".to_owned(), norito::json::Value::Bool(true));
     assert!(RawGenesisTransaction::from_json_value(unknown).is_err());
 }
-
 #[test]
 fn topology_entry_pop_bytes_none() {
     let peer = PeerId::new(checked_genesis_fixture_keypair().public_key().clone());
@@ -1254,11 +1128,9 @@ fn topology_entry_pop_bytes_none() {
     let pop = entry.pop_bytes().expect("pop_bytes");
     assert!(pop.is_none());
 }
-
 #[test]
 fn normalize_exposes_instruction_batches() {
     init_instruction_registry();
-
     let manifest = RawGenesisTransaction {
         chain: ChainId::from("iroha:test:normalize"),
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
@@ -1271,7 +1143,6 @@ fn normalize_exposes_instruction_batches() {
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-
     let normalized = manifest.normalize().expect("normalize");
     assert!(
         !normalized.transactions.is_empty(),
@@ -1283,7 +1154,6 @@ fn normalize_exposes_instruction_batches() {
         "normalize should expose the computed fingerprint"
     );
 }
-
 #[allow(clippy::too_many_lines)]
 #[test]
 fn with_consensus_meta_uses_npos_custom_parameter() {
@@ -1291,7 +1161,6 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
         Parameter as DataModelParameter,
         system::{SumeragiConsensusMode, SumeragiParameter},
     };
-
     fn fingerprint_for(tx: &RawGenesisTransaction) -> [u8; 32] {
         let params = tx
             .effective_parameters()
@@ -1303,7 +1172,6 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
             .and_then(SumeragiNposParameters::from_custom_parameter)
             .expect("NPoS fixture must carry signed election parameters");
         assert_eq!(tx.consensus_mode, SumeragiConsensusMode::Npos);
-
         let dm_params = ConsensusGenesisParams {
             block_cadence_ms: params.sumeragi().block_cadence_ms(),
             block_max_transactions: params.block().max_transactions(),
@@ -1326,11 +1194,9 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
             protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
             v2_context: tx.sumeragi_v2,
         };
-
         compute_consensus_parameters_fingerprint_v2(&dm_params)
             .expect("canonical NPoS fixture must fingerprint")
     }
-
     fn build_manifest(chain: ChainId, seed_byte: u8) -> RawGenesisTransaction {
         let mut parameters = Parameters::default();
         parameters.set_parameter(DataModelParameter::Sumeragi(
@@ -1338,7 +1204,6 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
         ));
         let npos = SumeragiNposParameters::default().with_epoch_seed([seed_byte; 32]);
         parameters.set_parameter(DataModelParameter::Custom(npos.into()));
-
         RawGenesisTransaction {
             chain,
             chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
@@ -1355,14 +1220,11 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
             crypto: ManifestCrypto::default(),
         }
     }
-
     let chain = ChainId::from("iroha:test:nposmeta");
-
     let manifest_base_a = build_manifest(chain.clone(), 0xA0);
     let manifest_base_b = build_manifest(chain, 0xA1);
     let expected_a = fingerprint_for(&manifest_base_a);
     let expected_b = fingerprint_for(&manifest_base_b);
-
     let manifest_a = manifest_base_a.with_consensus_meta();
     let manifest_b = manifest_base_b.with_consensus_meta();
     assert_eq!(
@@ -1376,18 +1238,13 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
     assert_eq!(manifest_a.consensus_mode, SumeragiConsensusMode::Npos);
     assert_eq!(manifest_a.wire_protocol_version, CONSENSUS_PROTOCOL_VERSION);
 }
-
 #[test]
 fn permissioned_genesis_rejects_npos_parameters() {
-    use iroha_data_model::parameter::{
-        Parameter as DataModelParameter, system::SumeragiConsensusMode,
-    };
-
+    use iroha_data_model::parameter::{Parameter as DataModelParameter, system::SumeragiConsensusMode};
     let chain = ChainId::from("iroha:test:permmeta");
     let mut parameters = Parameters::default();
     let npos_defaults = SumeragiNposParameters::default();
     parameters.set_parameter(DataModelParameter::Custom(npos_defaults.into()));
-
     let manifest = RawGenesisTransaction {
         chain,
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
@@ -1403,7 +1260,6 @@ fn permissioned_genesis_rejects_npos_parameters() {
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-
     let error = manifest
         .normalize()
         .expect_err("permissioned genesis must reject NPoS election parameters");
@@ -1414,23 +1270,19 @@ fn permissioned_genesis_rejects_npos_parameters() {
         "unexpected error: {error:?}"
     );
 }
-
 #[test]
 fn crypto_manifest_requires_ed25519() {
     init_instruction_registry();
-
     let crypto = ManifestCrypto {
         allowed_signing: vec![Algorithm::Secp256k1],
         ..ManifestCrypto::default()
     };
-
     let manifest = GenesisBuilder::new_without_executor(
         ChainId::from("iroha:test:crypto-ed25519"),
         PathBuf::from("."),
     )
     .with_crypto(crypto)
     .build_raw();
-
     let err = manifest
         .build_and_sign(&checked_genesis_fixture_keypair())
         .expect_err("manifest without ed25519 should be rejected");
@@ -1439,24 +1291,20 @@ fn crypto_manifest_requires_ed25519() {
         "unexpected error: {err:?}"
     );
 }
-
 #[cfg(feature = "sm")]
 #[test]
 fn crypto_manifest_requires_sm_defaults_when_sm2_allowed() {
     init_instruction_registry();
-
     let crypto = ManifestCrypto {
         allowed_signing: vec![Algorithm::Ed25519, Algorithm::Sm2],
         ..ManifestCrypto::default()
     };
-
     let manifest = GenesisBuilder::new_without_executor(
         ChainId::from("iroha:test:crypto-sm"),
         PathBuf::from("."),
     )
     .with_crypto(crypto)
     .build_raw();
-
     let err = manifest
         .build_and_sign(&checked_genesis_fixture_keypair())
         .expect_err("manifest missing SM defaults should be rejected");
@@ -1465,46 +1313,38 @@ fn crypto_manifest_requires_sm_defaults_when_sm2_allowed() {
         "unexpected error: {err:?}"
     );
 }
-
 #[cfg(feature = "sm")]
 #[test]
 fn crypto_manifest_accepts_valid_sm_configuration() {
     init_instruction_registry();
-
     let crypto = ManifestCrypto {
         default_hash: "sm3-256".to_owned(),
         allowed_signing: vec![Algorithm::Ed25519, Algorithm::Sm2],
         ..ManifestCrypto::default()
     };
-
     let manifest = GenesisBuilder::new_without_executor(
         ChainId::from("iroha:test:crypto-sm-valid"),
         PathBuf::from("."),
     )
     .with_crypto(crypto)
     .build_raw();
-
     manifest
         .build_and_sign(&checked_genesis_fixture_keypair())
         .expect("manifest with valid SM configuration should build");
 }
-
 #[test]
 fn crypto_manifest_rejects_sm3_hash_without_sm2() {
     init_instruction_registry();
-
     let crypto = ManifestCrypto {
         default_hash: "sm3-256".to_owned(),
         ..ManifestCrypto::default()
     };
-
     let manifest = GenesisBuilder::new_without_executor(
         ChainId::from("iroha:test:crypto-sm3-without-sm2"),
         PathBuf::from("."),
     )
     .with_crypto(crypto)
     .build_raw();
-
     let err = manifest
         .build_and_sign(&checked_genesis_fixture_keypair())
         .expect_err("manifest using sm3 default hash without sm2 should be rejected");

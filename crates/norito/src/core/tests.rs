@@ -1,9 +1,6 @@
 //! Focused tests for the Norito core codec.
-
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
 use crc64fast::Digest;
-
 use super::*;
 use crate::{
     NoritoDeserialize, NoritoSerialize, codec,
@@ -183,7 +180,6 @@ fn copy_from_payload_allows_zero_len() {
 #[test]
 fn payload_stream_reads_zstd_payload() {
     use std::io::{Cursor, Read};
-
     let payload = b"payload stream zstd check".to_vec();
     let compressed = zstd::encode_all(Cursor::new(payload.clone()), 0).expect("compress payload");
     let cursor = Cursor::new(compressed);
@@ -865,7 +861,6 @@ fn bounded_frame_matches_canonical_bytes_at_exact_limit() {
 #[test]
 fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
     use std::cell::Cell;
-
     struct CountCalls(Cell<usize>);
     impl NoritoSerialize for CountCalls {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
@@ -892,7 +887,6 @@ fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
 #[test]
 fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
     use std::cell::Cell;
-
     struct GrowingSecondPass(Cell<usize>);
     impl NoritoSerialize for GrowingSecondPass {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
@@ -913,7 +907,6 @@ fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
 #[test]
 fn bounded_frame_rejects_second_pass_shrinkage() {
     use std::cell::Cell;
-
     struct ShrinkingSecondPass(Cell<usize>);
     impl NoritoSerialize for ShrinkingSecondPass {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
@@ -1725,7 +1718,6 @@ fn packed_maps_keep_key_then_value_payload_layout() {
 #[test]
 fn collection_decoders_handle_u8_element_sequences_directly() {
     use std::collections::{BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque};
-
     reset_decode_state();
     let deque = VecDeque::from([1_u8, 2, 3]);
     let mut deque_bytes = Vec::new();
@@ -1770,9 +1762,7 @@ fn collection_decoders_handle_u8_element_sequences_directly() {
 }
 #[test]
 fn collection_and_map_encoded_lengths_match_payloads() {
-    use std::collections::{
-        BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque,
-    };
+    use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
     fn assert_lengths<T: NoritoSerialize>(value: &T) {
         let mut bytes = Vec::new();
         serialize_to_buffer(value, &mut bytes).expect("serialize value");
@@ -1817,7 +1807,6 @@ fn array_and_tuple_serialization_use_compact_element_lengths() {
 #[test]
 fn string_and_result_lengths_match_compact_payloads() {
     use std::{borrow::Cow, rc::Rc, sync::Arc};
-
     let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
     let value = String::from("ok");
     let mut string_bytes = Vec::new();
@@ -2021,7 +2010,6 @@ fn decode_from_slice_vec_u32() {
 #[test]
 fn vec_header_is_u64() {
     use crate::core::header_flags;
-
     let value = vec![42u8; 3];
     reset_decode_state();
     let flags = header_flags::PACKED_SEQ

@@ -1,7 +1,6 @@
 //! Hex goldens for select AoS/NCB bodies to lock on-wire stability.
 //! These tests assert exact bytes for small, deterministic datasets under
 //! the default sequential configuration (fixed 64-bit length headers, no packed variants).
-
 fn to_hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -9,7 +8,6 @@ fn to_hex(bytes: &[u8]) -> String {
     }
     s
 }
-
 #[test]
 fn golden_aos_u64_str_bool_single() {
     // Rows: [(1, "a", true)]
@@ -25,7 +23,6 @@ fn golden_aos_u64_str_bool_single() {
     };
     assert_eq!(to_hex(&body), expected);
 }
-
 #[test]
 fn golden_aos_u64_optstr_bool_two_rows() {
     // Rows: [(1, Some("a"), true), (2, None, false)]
@@ -44,7 +41,6 @@ fn golden_aos_u64_optstr_bool_two_rows() {
     };
     assert_eq!(to_hex(&body), expected);
 }
-
 #[test]
 fn golden_aos_u64_bytes_bool_two_rows() {
     // Rows: [(1, ["a","b","c"], true), (2, [0x00,0xff], false)]
@@ -65,7 +61,6 @@ fn golden_aos_u64_bytes_bool_two_rows() {
     };
     assert_eq!(to_hex(&body), expected);
 }
-
 #[test]
 fn golden_aos_u64_optu32_bool_two_rows() {
     // Rows: [(1, Some(7), true), (2, None, false)]
@@ -83,7 +78,6 @@ fn golden_aos_u64_optu32_bool_two_rows() {
     };
     assert_eq!(to_hex(&body), expected);
 }
-
 #[test]
 fn golden_aos_u64_str_u32_bool_two_rows() {
     // Rows: [(1, "a", 3, true), (2, "", 0, false)]
@@ -101,7 +95,6 @@ fn golden_aos_u64_str_u32_bool_two_rows() {
     };
     assert_eq!(to_hex(&body), expected);
 }
-
 #[test]
 fn golden_aos_u64_bytes_u32_bool_two_rows() {
     // Rows: [(1, [0xff], 7, true), (2, [], 0, false)]
@@ -122,7 +115,6 @@ fn golden_aos_u64_bytes_u32_bool_two_rows() {
     };
     assert_eq!(to_hex(&body), expected);
 }
-
 #[test]
 fn golden_aos_u64_enum_bool_simple() {
     use norito::columnar::EnumBorrow;
@@ -146,7 +138,6 @@ fn golden_aos_u64_enum_bool_simple() {
     };
     assert_eq!(to_hex(&body), expected);
 }
-
 #[test]
 fn golden_ncb_u64_str_bool_offsets_single() {
     // Rows: [(1, "a", true)] → descriptor 0x13 (no dict, no delta)
@@ -165,7 +156,6 @@ fn golden_ncb_u64_str_bool_offsets_single() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_bytes_u32_bool_single() {
     // Rows: [(1, [0xff], 7, true)] → choose base layout (no deltas)
@@ -187,7 +177,6 @@ fn golden_ncb_u64_bytes_u32_bool_single() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_str_u32_bool_offsets_two_rows() {
     // Rows: [(1, "a", 3, true), (2, "", 0, false)] → descriptor 0x33 (no dict, no deltas)
@@ -209,7 +198,6 @@ fn golden_ncb_u64_str_u32_bool_offsets_two_rows() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_bytes_u32_bool_offsets_two_rows() {
     // Rows: [(1, [0xff], 7, true), (2, [], 0, false)] → descriptor 0x34 (no deltas)
@@ -234,7 +222,6 @@ fn golden_ncb_u64_bytes_u32_bool_offsets_two_rows() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_enum_bool_simple() {
     use norito::columnar::{EnumBorrow, encode_ncb_u64_enum_bool};
@@ -271,7 +258,6 @@ fn golden_ncb_u64_enum_bool_simple() {
         "tags not found in expected order: {hex}"
     );
 }
-
 #[test]
 fn golden_ncb_u64_enum_bool_dict_name_only_single() {
     use norito::columnar::{EnumBorrow, encode_ncb_u64_enum_bool};
@@ -294,7 +280,6 @@ fn golden_ncb_u64_enum_bool_dict_name_only_single() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_enum_bool_code_delta_only() {
     use norito::columnar::{EnumBorrow, encode_ncb_u64_enum_bool};
@@ -317,7 +302,6 @@ fn golden_ncb_u64_enum_bool_code_delta_only() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_enum_bool_iddelta_dict_codedelta_three_rows() {
     use norito::columnar::{EnumBorrow, encode_ncb_u64_enum_bool};
@@ -351,7 +335,6 @@ fn golden_ncb_u64_enum_bool_iddelta_dict_codedelta_three_rows() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_enum_bool_dict_two_names_full() {
     use norito::columnar::{EnumBorrow, encode_ncb_u64_enum_bool};
@@ -379,7 +362,6 @@ fn golden_ncb_u64_enum_bool_dict_two_names_full() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_str_u32_bool_offsets_single() {
     // Rows: [(1, "a", 3, true)] → descriptor 0x33 (no dict, no deltas)
@@ -399,7 +381,6 @@ fn golden_ncb_u64_str_u32_bool_offsets_single() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_str_u32_bool_u32delta_two_rows() {
     // Rows crafted to disable id-delta and dict, enable u32-delta only
@@ -429,7 +410,6 @@ fn golden_ncb_u64_str_u32_bool_u32delta_two_rows() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_bytes_u32_bool_u32delta_two_rows() {
     // Rows crafted to disable id-delta, enable u32-delta
@@ -456,7 +436,6 @@ fn golden_ncb_u64_bytes_u32_bool_u32delta_two_rows() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_bytes_u32_bool_iddelta_u32delta_two_rows() {
     // Two rows; id-delta enabled (consecutive ids), dict not applicable for bytes, u32-delta enabled
@@ -483,7 +462,6 @@ fn golden_ncb_u64_bytes_u32_bool_iddelta_u32delta_two_rows() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_str_u32_bool_iddelta_only_two_rows() {
     // id-delta enabled, dict disabled, u32-delta disabled via large delta
@@ -510,7 +488,6 @@ fn golden_ncb_u64_str_u32_bool_iddelta_only_two_rows() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_str_u32_bool_iddelta_only_eight_rows() {
     // 8 rows to exercise larger id-delta-only offsets-based names; u32-delta disabled via large alternating deltas
@@ -555,7 +532,6 @@ fn golden_ncb_u64_str_u32_bool_iddelta_only_eight_rows() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_str_u32_bool_iddelta_only_sixteen_rows() {
     // 16 rows id-delta-only (descriptor 0x73). Use alternating large/small u32 to disable u32-delta.
@@ -589,7 +565,6 @@ fn golden_ncb_u64_str_u32_bool_iddelta_only_sixteen_rows() {
         assert_eq!(view.flag(i), i % 2 == 0);
     }
 }
-
 #[test]
 fn golden_ncb_u64_bytes_u32_bool_iddelta_only_sixteen_rows() {
     // 16 rows id-delta-only (descriptor 0x74). Alternate large/small u32 values to disable u32-delta.
@@ -624,7 +599,6 @@ fn golden_ncb_u64_bytes_u32_bool_iddelta_only_sixteen_rows() {
         assert_eq!(view.flag(i), i % 2 == 1);
     }
 }
-
 #[test]
 fn golden_ncb_u64_bytes_u32_bool_iddelta_only_two_rows() {
     // id-delta enabled, u32-delta disabled via large delta
@@ -651,7 +625,6 @@ fn golden_ncb_u64_bytes_u32_bool_iddelta_only_two_rows() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_str_u32_bool_delta_many_rows() {
     // Many rows; heuristics typically choose id+u32 delta for this shape.
@@ -669,7 +642,6 @@ fn golden_ncb_u64_str_u32_bool_delta_many_rows() {
     // Blob should contain 'repeat' in ASCII: 72 65 70 65 61 74 (at least once)
     assert!(hex.contains("726570656174"), "blob missing 'repeat': {hex}");
 }
-
 #[test]
 fn golden_ncb_u64_enum_bool_dict_code_delta() {
     use norito::columnar::{EnumBorrow, encode_ncb_u64_enum_bool};
@@ -692,7 +664,6 @@ fn golden_ncb_u64_enum_bool_dict_code_delta() {
     assert!(hex.contains("05000000"), "missing base code: {hex}");
     assert!(hex.contains("04"), "missing varint delta 0x04: {hex}");
 }
-
 #[test]
 fn golden_ncb_u64_str_u32_bool_dict_u32delta() {
     // Five rows; dict enabled (2/5 distinct, avg len 8), id-delta disabled via large jumps, u32-delta enabled
@@ -729,7 +700,6 @@ fn golden_ncb_u64_str_u32_bool_dict_u32delta() {
     .replace(['\n', ' '], "");
     assert_eq!(to_hex(&body), expected_hex);
 }
-
 #[test]
 fn golden_ncb_u64_str_u32_bool_iddelta_dict_u32delta() {
     // Five rows; id-delta enabled (consecutive ids), dict enabled (2/5 distinct, avg len 8), u32-delta enabled

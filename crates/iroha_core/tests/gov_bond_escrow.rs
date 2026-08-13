@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //!
 //! Ensures plain ballots move the configured bond amount into the escrow account.
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -22,7 +21,6 @@ use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 #[test]
 fn plain_ballot_locks_bond_into_escrow() {
     let alice_id = &*ALICE_ID;
@@ -53,7 +51,6 @@ fn plain_ballot_locks_bond_into_escrow() {
         AssetId::new(def_id.clone(), BOB_ID.clone()),
         Quantity::from(0_u64),
     );
-
     let world = World::with_assets(
         [domain],
         [alice_account, escrow_account],
@@ -61,11 +58,9 @@ fn plain_ballot_locks_bond_into_escrow() {
         [alice_asset, escrow_asset],
         [],
     );
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);
-
     // Configure governance to require a 10-unit bond into the escrow account (BOB).
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
@@ -74,11 +69,9 @@ fn plain_ballot_locks_bond_into_escrow() {
     gov_cfg.bond_escrow_account = BOB_ID.clone();
     gov_cfg.slash_receiver_account = BOB_ID.clone();
     state.set_gov(gov_cfg);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     // Grant ballot permission to ALICE for this referendum.
     let perm: Permission = CanSubmitGovernanceBallot {
         referendum_id: "rid-bond-lock".to_string(),
@@ -97,7 +90,6 @@ fn plain_ballot_locks_bond_into_escrow() {
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
-
     let instr = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: "rid-bond-lock".to_string(),
         owner: ALICE_ID.clone(),
@@ -109,7 +101,6 @@ fn plain_ballot_locks_bond_into_escrow() {
         .clone()
         .execute(&ALICE_ID, &mut stx)
         .expect("ballot should lock bond");
-
     let alice_asset_id = AssetId::new(def_id.clone(), ALICE_ID.clone());
     let escrow_asset_id = AssetId::new(def_id, BOB_ID.clone());
     let alice_balance = stx
@@ -122,10 +113,8 @@ fn plain_ballot_locks_bond_into_escrow() {
         .asset_mut(&escrow_asset_id)
         .expect("escrow asset")
         .clone();
-
     assert_eq!(alice_balance.into_inner(), Quantity::from(990_u64));
     assert_eq!(escrow_balance.into_inner(), Quantity::from(10_u64));
-
     let escrow_perm: Permission = CanSubmitGovernanceBallot {
         referendum_id: "rid-bond-lock".to_string(),
     }

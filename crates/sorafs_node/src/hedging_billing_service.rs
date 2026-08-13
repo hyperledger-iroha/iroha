@@ -13,14 +13,12 @@
 //! runtime-only sealed monotonic witness archive. The service hard-stops before
 //! dropping unsettled state and rejects silent history truncation, policy
 //! substitution, rollback, and skipped predecessors.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     path::Path,
     sync::{Arc, Mutex},
 };
-
 use ed25519_dalek::{Signature, VerifyingKey};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_data_model::{NetworkId, account::AccountId};
@@ -46,9 +44,7 @@ use sorafs_manifest::{
     },
 };
 use thiserror::Error;
-
 use crate::durable_transaction_forwarder::{AtomicCheckpointStore, CheckpointStoreError};
-
 /// Durable checkpoint schema version.
 pub const HEDGING_BILLING_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Finalized billing page schema version.
@@ -7373,7 +7369,6 @@ mod tests {
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     };
-
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, numeric::Quantity};
     use iroha_data_model::block::BlockHeader;
@@ -7386,9 +7381,7 @@ mod tests {
             derive_governed_reference_price_decision_v1,
         },
     };
-
     use super::*;
-
     const EPOCH: u64 = 1_900_000_000;
     const PERIOD_SECS: u64 = 3_600;
     const PERIOD_END: u64 = EPOCH + PERIOD_SECS;
@@ -9793,54 +9786,7 @@ mod tests {
             Err(HedgingBillingServiceError::InvalidCheckpoint)
         ));
     }
-    #[test]
-    fn cross_peer_old_page_replay_is_exact_and_equivocation_safe() {
-        let root = tempfile::tempdir().expect("state root");
-        let (service, _feed_policy, _reference, _verifier, _publisher, _ack_authority) =
-            ready_service(root.path());
-        let first = page(vec![event(1, "storage:event:1", "10")]);
-        let second = page(vec![event(2, "storage:event:2", "2")]);
-        service
-            .ingest_finalized_page(&first)
-            .expect("ingest first peer page");
-        service
-            .ingest_finalized_page(&second)
-            .expect("ingest second peer page");
-        assert_eq!(
-            service
-                .ingest_finalized_page(&first)
-                .expect("old exact cross-peer replay"),
-            HedgingBillingIngestOutcomeV1::Replay { next_sequence: 3 }
-        );
-        let forged = page(vec![event(1, "storage:event:1", "11")]);
-        assert!(matches!(
-            service.ingest_finalized_page(&forged),
-            Err(HedgingBillingServiceError::FinalizedEventEquivocation)
-        ));
-    }
-    #[test]
-    fn event_replay_digest_binds_network_and_exact_event() {
-        let first_network = test_network_id(b"billing-network-a");
-        let second_network = test_network_id(b"billing-network-b");
-        let first_event = event(1, "storage:event:1", "10");
-        let mut changed_event = first_event.clone();
-        changed_event.quantity_units = 2;
-
-        let first_digest = event_replay_digest(first_network, &first_event).expect("digest");
-        eprintln!(
-            "billing replay compatibility digest: {}",
-            hex::encode(first_digest)
-        );
-        assert_ne!(
-            first_digest,
-            event_replay_digest(second_network, &first_event).expect("network-bound digest")
-        );
-        assert_ne!(
-            first_digest,
-            event_replay_digest(first_network, &changed_event).expect("event-bound digest")
-        );
-    }
-
+    include!("hedging_billing_service/replay_digest_tests.rs");
     #[test]
     fn invalid_hsm_output_is_not_persisted_or_published() {
         let root = tempfile::tempdir().expect("state root");

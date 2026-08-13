@@ -3,7 +3,6 @@
 #![allow(clippy::all)]
 #![allow(clippy::disallowed_types)] // benches use HashSet internally for metrics
 use std::sync::{Arc, LazyLock};
-
 use criterion::{BatchSize, Criterion};
 use iroha_core::{
     block::*,
@@ -20,13 +19,11 @@ use iroha_data_model::{
     transaction::{IvmBytecode, TransactionBuilder},
 };
 use iroha_test_samples::gen_account_in;
-
 static STARTER_DOMAIN: LazyLock<DomainId> =
     LazyLock::new(|| DomainId::try_new("start", "universal").unwrap());
 static STARTER_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(KeyPair::random);
 static STARTER_ID: LazyLock<AccountId> =
     LazyLock::new(|| AccountId::new(STARTER_KEYPAIR.public_key().clone()));
-
 // Shared Tokio runtime for benches that need background tasks (e.g., LiveQueryStore)
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
@@ -34,7 +31,6 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
         .build()
         .expect("Failed building the Runtime")
 });
-
 fn benchmark_network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(
         iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -42,7 +38,6 @@ fn benchmark_network_id(label: &[u8]) -> NetworkId {
         ),
     )
 }
-
 fn build_test_transaction(network_id: NetworkId) -> TransactionBuilder {
     TransactionBuilder::new(
         network_id,
@@ -55,14 +50,12 @@ fn build_test_transaction(network_id: NetworkId) -> TransactionBuilder {
         Log::new(Level::INFO, "validation benchmark three".to_owned()).into(),
     ])
 }
-
 fn build_test_and_transient_state() -> State {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     // Ensure Tokio reactor is available for LiveQueryStore background task
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
     let (account_id, key_pair) = gen_account_in(&*STARTER_DOMAIN);
-
     let state = State::try_new(
         {
             let domain = Domain::new(STARTER_DOMAIN.clone()).build(&account_id);
@@ -79,7 +72,6 @@ fn build_test_and_transient_state() -> State {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-
     {
         let network_id = *state.network_id_ref();
         let transaction = TransactionBuilder::new(
@@ -147,10 +139,8 @@ fn build_test_and_transient_state() -> State {
         kura.store_block(signed_block)
             .expect("store block in bench setup");
     }
-
     state
 }
-
 fn accept_transaction(criterion: &mut Criterion) {
     iroha_data_model::isi::set_instruction_registry(
         iroha_data_model::instruction_registry::default(),
@@ -162,7 +152,6 @@ fn accept_transaction(criterion: &mut Criterion) {
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-
     let transaction = build_test_transaction(network_id).sign(STARTER_KEYPAIR.private_key());
     let crypto_cfg = state.crypto();
     let mut success_count = 0;
@@ -183,13 +172,11 @@ fn accept_transaction(criterion: &mut Criterion) {
     });
     println!("Success count: {success_count}, Failures count: {failures_count}");
 }
-
 fn sign_transaction(criterion: &mut Criterion) {
     iroha_data_model::isi::set_instruction_registry(
         iroha_data_model::instruction_registry::default(),
     );
     let network_id = benchmark_network_id(b"validation-sign-transaction");
-
     let transaction = build_test_transaction(network_id);
     let (_, private_key) = KeyPair::random().into_parts();
     let mut count = 0;
@@ -205,14 +192,12 @@ fn sign_transaction(criterion: &mut Criterion) {
     });
     println!("Count: {count}");
 }
-
 fn validate_transaction(criterion: &mut Criterion) {
     iroha_data_model::isi::set_instruction_registry(
         iroha_data_model::instruction_registry::default(),
     );
     let state = build_test_and_transient_state();
     let network_id = *state.network_id_ref();
-
     let (account_id, key_pair) = gen_account_in(&*STARTER_DOMAIN);
     let transaction = TransactionBuilder::new(
         network_id,
@@ -295,7 +280,6 @@ fn validate_transaction(criterion: &mut Criterion) {
     }
     println!("Success count: {success_count}, Failure count: {failure_count}");
 }
-
 fn sign_blocks(criterion: &mut Criterion) {
     iroha_data_model::isi::set_instruction_registry(
         iroha_data_model::instruction_registry::default(),
@@ -318,7 +302,6 @@ fn sign_blocks(criterion: &mut Criterion) {
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-
     let crypto_cfg = state.crypto();
     let transaction = AcceptedTransaction::accept(
         build_test_transaction(network_id).sign(STARTER_KEYPAIR.private_key()),
@@ -329,12 +312,9 @@ fn sign_blocks(criterion: &mut Criterion) {
     )
     .expect("Failed to accept transaction.");
     let (_, peer_private_key) = KeyPair::random().into_parts();
-
     let mut count = 0;
-
     let block =
         BlockBuilder::new(vec![transaction]).chain(0, state.view().latest_block().as_deref());
-
     let _ = criterion.bench_function("sign_block", |b| {
         b.iter_batched(
             || block.clone(),
@@ -347,7 +327,6 @@ fn sign_blocks(criterion: &mut Criterion) {
     });
     println!("Count: {count}");
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     // Silence IVM banner if executor/VM paths initialize it.

@@ -7,28 +7,23 @@ struct ToriiFanoutDiagnostics {
     unavailable_routes: usize,
     first_failure_class: Option<&'static str>,
 }
-
 impl ToriiFanoutDiagnostics {
     fn record_attempt(&mut self) {
         self.attempted_routes = self.attempted_routes.saturating_add(1);
     }
-
     fn record_success(&mut self) {
         self.succeeded_routes = self.succeeded_routes.saturating_add(1);
     }
-
     fn record_denied(&mut self) {
         self.attempted_routes = self.attempted_routes.saturating_add(1);
         self.denied_routes = self.denied_routes.saturating_add(1);
         self.record_failure_class("permission_denied");
     }
-
     fn record_failure_class(&mut self, class: &'static str) {
         if self.first_failure_class.is_none() {
             self.first_failure_class = Some(class);
         }
     }
-
     fn record_skipped_response(&mut self, response: &Response) {
         if torii_response_has_reject_code(response, "route_unavailable") {
             self.unavailable_routes = self.unavailable_routes.saturating_add(1);
@@ -40,16 +35,13 @@ impl ToriiFanoutDiagnostics {
             self.record_failure_class("error");
         }
     }
-
     fn failed_routes(self) -> usize {
         self.attempted_routes.saturating_sub(self.succeeded_routes)
     }
 }
-
 fn torii_alias_routes_denied_warning_header() -> HeaderValue {
     HeaderValue::from_static(r#"199 - "one or more alias routes were denied""#)
 }
-
 fn insert_torii_fanout_headers(response: &mut Response, diagnostics: ToriiFanoutDiagnostics) {
     insert_usize_header(
         response,
@@ -88,7 +80,6 @@ fn insert_torii_fanout_headers(response: &mut Response, diagnostics: ToriiFanout
         );
     }
 }
-
 fn with_torii_fanout_headers(
     mut response: Response,
     diagnostics: ToriiFanoutDiagnostics,

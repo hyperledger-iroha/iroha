@@ -6,9 +6,7 @@
 //! kernels mirror the exact permutation used by `fastpq_isi`, and hosts without
 //! GPU support automatically fall back to the CPU path while keeping the API
 //! stable.
-
 use std::sync::OnceLock;
-
 /// Goldilocks field modulus (2^64 - 2^32 + 1).
 pub use cpu::FIELD_MODULUS;
 #[cfg(feature = "fastpq-gpu")]
@@ -21,24 +19,19 @@ use {
     std::sync::atomic::{AtomicBool, Ordering},
     tracing::warn,
 };
-
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 use crate::metal;
-
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_GPU_DISABLED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "fastpq-gpu")]
 static POSEIDON_GPU_SELF_TEST: OnceLock<bool> = OnceLock::new();
-
 /// Trait describing a Poseidon backend.
 pub trait PoseidonBackend: Send + Sync {
     /// Hash the provided field elements with the Poseidon permutation.
     fn hash_field_elements(&self, elements: &[u64]) -> u64;
-
     /// Create a new sponge instance backed by this implementation.
     fn new_sponge(&self) -> Box<dyn PoseidonSpongeCore>;
 }
-
 /// Trait describing a Poseidon sponge instance.
 pub trait PoseidonSpongeCore: Send {
     /// Absorb a single field element into the sponge.
@@ -51,46 +44,36 @@ pub trait PoseidonSpongeCore: Send {
     /// Finalise the sponge and return the first output element.
     fn squeeze(self: Box<Self>) -> u64;
 }
-
 #[derive(Clone, Default)]
 struct CpuPoseidonBackend;
-
 impl PoseidonBackend for CpuPoseidonBackend {
     fn hash_field_elements(&self, elements: &[u64]) -> u64 {
         cpu::hash_field_elements(elements)
     }
-
     fn new_sponge(&self) -> Box<dyn PoseidonSpongeCore> {
         Box::new(CpuSponge(CpuPoseidonSponge::new()))
     }
 }
-
 struct CpuSponge(CpuPoseidonSponge);
-
 impl PoseidonSpongeCore for CpuSponge {
     fn absorb(&mut self, element: u64) {
         self.0.absorb(element);
     }
-
     fn absorb_slice(&mut self, elements: &[u64]) {
         self.0.absorb_slice(elements);
     }
-
     fn squeeze_element(&mut self) -> u64 {
         self.0.squeeze_element()
     }
-
     fn squeeze(self: Box<Self>) -> u64 {
         self.0.squeeze()
     }
 }
-
 #[cfg(feature = "fastpq-gpu")]
 #[derive(Clone)]
 struct GpuPoseidonBackend {
     fallback: CpuPoseidonBackend,
 }
-
 #[cfg(feature = "fastpq-gpu")]
 impl GpuPoseidonBackend {
     fn new(_accelerator: GpuBackend) -> Self {
@@ -99,18 +82,15 @@ impl GpuPoseidonBackend {
         }
     }
 }
-
 #[cfg(feature = "fastpq-gpu")]
 impl PoseidonBackend for GpuPoseidonBackend {
     fn hash_field_elements(&self, elements: &[u64]) -> u64 {
         self.fallback.hash_field_elements(elements)
     }
-
     fn new_sponge(&self) -> Box<dyn PoseidonSpongeCore> {
         self.fallback.new_sponge()
     }
 }
-
 fn backend() -> &'static dyn PoseidonBackend {
     static BACKEND: OnceLock<Box<dyn PoseidonBackend>> = OnceLock::new();
     BACKEND
@@ -125,7 +105,6 @@ fn backend() -> &'static dyn PoseidonBackend {
         })
         .as_ref()
 }
-
 /// Preflight the configured Poseidon GPU backend used by the prover path.
 ///
 /// The preflight performs backend discovery and a tiny deterministic
@@ -148,7 +127,6 @@ pub fn preflight_gpu_backend() -> bool {
         false
     }
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn run_poseidon_gpu_self_test(backend: GpuBackend) -> bool {
     let inputs = [
@@ -165,7 +143,6 @@ fn run_poseidon_gpu_self_test(backend: GpuBackend) -> bool {
     }
     let expected = expected.iter().flatten().copied().collect::<Vec<_>>();
     let mut actual = inputs.into_iter().flatten().collect::<Vec<_>>();
-
     let result = {
         let _guard = backend::acquire_gpu_lane();
         match backend {
@@ -180,7 +157,6 @@ fn run_poseidon_gpu_self_test(backend: GpuBackend) -> bool {
             )),
         }
     };
-
     match result {
         Ok(()) if actual == expected => true,
         Ok(()) => {
@@ -208,7 +184,6 @@ fn run_poseidon_gpu_self_test(backend: GpuBackend) -> bool {
         }
     }
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn first_poseidon_state_mismatch(
     expected: &[u64],
@@ -237,24 +212,20 @@ fn first_poseidon_state_mismatch(
         })
     })
 }
-
 /// Hash the provided field elements with the active Poseidon backend.
 #[must_use]
 pub fn hash_field_elements(elements: &[u64]) -> u64 {
     backend().hash_field_elements(elements)
 }
-
 /// Hash the provided field elements with the canonical scalar Poseidon backend.
 #[must_use]
 pub fn hash_field_elements_cpu(elements: &[u64]) -> u64 {
     cpu::hash_field_elements(elements)
 }
-
 /// Create a new Poseidon sponge backed by the active backend.
 pub struct PoseidonSponge {
     inner: Box<dyn PoseidonSpongeCore>,
 }
-
 impl PoseidonSponge {
     /// Construct a sponge using the active backend.
     #[must_use]
@@ -263,64 +234,53 @@ impl PoseidonSponge {
             inner: backend().new_sponge(),
         }
     }
-
     /// Absorb a single field element into the sponge.
     pub fn absorb(&mut self, element: u64) {
         self.inner.absorb(element);
     }
-
     /// Absorb a slice of field elements into the sponge.
     pub fn absorb_slice(&mut self, elements: &[u64]) {
         self.inner.absorb_slice(elements);
     }
-
     /// Squeeze a field element while keeping the sponge ready for the next output.
     #[allow(dead_code)]
     #[must_use]
     pub fn squeeze_element(&mut self) -> u64 {
         self.inner.squeeze_element()
     }
-
     /// Finalise the sponge and return the first output element.
     #[must_use]
     pub fn squeeze(self) -> u64 {
         self.inner.squeeze()
     }
 }
-
 impl Default for PoseidonSponge {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn hash_matches_cpu_reference() {
         let inputs = [1u64, 2, 3, 4];
         let cpu_digest = cpu::hash_field_elements(&inputs);
         assert_eq!(hash_field_elements(&inputs), cpu_digest);
     }
-
     #[test]
     fn sponge_roundtrip_matches_cpu_reference() {
         let mut cpu_sponge = cpu::PoseidonSponge::new();
         cpu_sponge.absorb_slice(&[10, 20, 30]);
         let mut backend_sponge = PoseidonSponge::new();
         backend_sponge.absorb_slice(&[10, 20, 30]);
-
         let cpu_first = cpu_sponge.squeeze_element();
         let backend_first = backend_sponge.squeeze_element();
         assert_eq!(cpu_first, backend_first);
-
         let cpu_second = cpu_sponge.squeeze_element();
         let backend_second = backend_sponge.squeeze_element();
         assert_eq!(cpu_second, backend_second);
     }
-
     #[cfg(all(test, feature = "fastpq-gpu"))]
     #[test]
     fn preflight_gpu_backend_returns_safely() {
@@ -332,7 +292,6 @@ mod tests {
             "Poseidon GPU preflight must pass when a GPU backend is available"
         );
     }
-
     #[cfg(all(test, feature = "fastpq-gpu"))]
     #[test]
     fn gpu_poseidon_preflight_passes_after_bn254_digest_preflight() {
@@ -348,7 +307,6 @@ mod tests {
             "Poseidon prover preflight must remain independent after BN254 digest preflight"
         );
     }
-
     #[cfg(all(test, feature = "fastpq-gpu"))]
     fn run_gpu_poseidon_permute(states: &mut [u64]) -> Result<(), String> {
         use crate::backend;
@@ -366,13 +324,11 @@ mod tests {
             _ => Err("GPU backend unavailable".into()),
         }
     }
-
     #[cfg(all(test, feature = "fastpq-gpu"))]
     #[test]
     fn gpu_poseidon_matches_cpu_for_single_state() {
         let mut cpu_state = [1u64, 2, 3];
         cpu::permute_state(&mut cpu_state);
-
         let mut gpu_state = [1u64, 2, 3];
         match run_gpu_poseidon_permute(gpu_state.as_mut_slice()) {
             Ok(()) => assert_eq!(
@@ -388,7 +344,6 @@ mod tests {
             }
         }
     }
-
     #[cfg(all(test, feature = "fastpq-gpu"))]
     #[test]
     fn gpu_poseidon_matches_cpu_for_batched_states() {
@@ -408,7 +363,6 @@ mod tests {
         }
         let expected: Vec<u64> = cpu_outputs.iter().flatten().copied().collect();
         let mut gpu_inputs: Vec<u64> = inputs.into_iter().flatten().collect();
-
         match run_gpu_poseidon_permute(gpu_inputs.as_mut_slice()) {
             Ok(()) => assert_eq!(
                 gpu_inputs, expected,

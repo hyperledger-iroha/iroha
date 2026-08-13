@@ -3,63 +3,52 @@
 //! T256's scalar field is exactly the P-256 coordinate field, so curve
 //! coordinates are native R1CS values. ECDSA scalars remain explicitly
 //! bit-constrained below the P-256 group order.
-
-use halo2curves::{
-    ff::{Field as _, PrimeField as _},
-    secp256r1::Fq as P256Scalar,
-};
-
 use super::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1 as Scalar,
     circuit::{Bit, CircuitBuilder, CircuitError, LinearCombination},
     sha256::{ByteVar, WordVar, allocate_bytes},
 };
-
+use halo2curves::{
+    ff::{Field as _, PrimeField as _},
+    secp256r1::Fq as P256Scalar,
+};
 /// Big-endian order of the prime P-256 scalar field.
 pub(super) const P256_ORDER_BE: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63, 0x25, 0x51,
 ];
-
 // floor(n / 2) + 1. Requiring `s <` this constant is exactly the closed
 // low-s condition `1 <= s <= floor(n / 2)`.
 const P256_HALF_ORDER_PLUS_ONE_BE: [u8; 32] = [
     0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xde, 0x73, 0x7d, 0x56, 0xd3, 0x8b, 0xcf, 0x42, 0x79, 0xdc, 0xe5, 0x61, 0x7e, 0x31, 0x92, 0xa9,
 ];
-
 const P256_B_BE: [u8; 32] = [
     0x5a, 0xc6, 0x35, 0xd8, 0xaa, 0x3a, 0x93, 0xe7, 0xb3, 0xeb, 0xbd, 0x55, 0x76, 0x98, 0x86, 0xbc,
     0x65, 0x1d, 0x06, 0xb0, 0xcc, 0x53, 0xb0, 0xf6, 0x3b, 0xce, 0x3c, 0x3e, 0x27, 0xd2, 0x60, 0x4b,
 ];
-
 const P256_GENERATOR_X_BE: [u8; 32] = [
     0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4, 0x40, 0xf2,
     0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45, 0xd8, 0x98, 0xc2, 0x96,
 ];
-
 const P256_GENERATOR_Y_BE: [u8; 32] = [
     0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16,
     0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
 ];
-
 #[derive(Clone)]
 pub(super) struct P256PointVar {
     pub(super) x: LinearCombination,
     pub(super) y: LinearCombination,
     pub(super) infinity: Bit,
 }
-
 pub(super) struct ScalarBits {
     pub(super) bits_le: [Bit; 256],
 }
-
 impl ScalarBits {
     pub(super) fn lc(&self) -> LinearCombination {
         bits_to_lc(&self.bits_le)
     }
 }
-
 pub(super) fn allocate_scalar_be(
     builder: &mut CircuitBuilder,
     bytes: [u8; 32],
@@ -67,7 +56,6 @@ pub(super) fn allocate_scalar_be(
     let bytes = allocate_bytes(builder, &bytes)?;
     scalar_bits_from_be_bytes(&bytes)
 }
-
 pub(super) fn scalar_bits_from_be_bytes(bytes: &[ByteVar]) -> Result<ScalarBits, CircuitError> {
     if bytes.len() != 32 {
         return Err(CircuitError::InvalidDimension);
@@ -80,7 +68,6 @@ pub(super) fn scalar_bits_from_be_bytes(bytes: &[ByteVar]) -> Result<ScalarBits,
         }),
     })
 }
-
 pub(super) fn digest_scalar_bits(words: [WordVar; 8]) -> ScalarBits {
     let bytes = words
         .into_iter()
@@ -88,7 +75,6 @@ pub(super) fn digest_scalar_bits(words: [WordVar; 8]) -> ScalarBits {
         .collect::<Vec<_>>();
     scalar_bits_from_be_bytes(&bytes).expect("eight SHA-256 words are 32 bytes")
 }
-
 pub(super) fn public_point(
     builder: &mut CircuitBuilder,
     x_index: usize,
@@ -102,7 +88,6 @@ pub(super) fn public_point(
     enforce_nonidentity_on_curve(builder, &point)?;
     Ok(point)
 }
-
 /// Allocate a public finite P-256 point and constrain the exact compressed
 /// SEC1 prefix (`0x02` for even y, `0x03` for odd y).
 pub(super) fn public_compressed_point(
@@ -119,7 +104,6 @@ pub(super) fn public_compressed_point(
     )?;
     Ok(point)
 }
-
 pub(super) fn private_point_from_be_bytes(
     builder: &mut CircuitBuilder,
     x: &[ByteVar],
@@ -143,7 +127,6 @@ pub(super) fn private_point_from_be_bytes(
     enforce_nonidentity_on_curve(builder, &point)?;
     Ok(point)
 }
-
 /// Verify one canonical low-s ES256 signature from its Figure 9
 /// `(r, s^-1 mod n)` witness.
 ///
@@ -165,7 +148,6 @@ pub(super) fn verify_es256_low_s_from_inverse(
     let s = allocate_low_s_scalar(builder, invert_p256_scalar_be_exact(s_inverse_be)?)?;
     enforce_nonzero_below_order(builder, &r)?;
     enforce_nonzero_below_order(builder, &s_inverse)?;
-
     let generator = constant_generator(builder)?;
     let digest_times_generator = scalar_mul(builder, &generator, &digest.bits_le)?;
     let r_times_key = scalar_mul(builder, public_key, &r.bits_le)?;
@@ -176,7 +158,6 @@ pub(super) fn verify_es256_low_s_from_inverse(
     let recomposed = scalar_mul(builder, &recovery, &s.bits_le)?;
     enforce_points_equal(builder, &recomposed, &right)
 }
-
 /// Verify one canonical low-s ES256 signature without trusting a host-side
 /// modular inverse.
 ///
@@ -197,12 +178,10 @@ pub(super) fn verify_es256_low_s(
     let r = allocate_scalar_be(builder, r_be)?;
     let s = allocate_low_s_scalar(builder, s_be)?;
     enforce_nonzero_below_order(builder, &r)?;
-
     let recovery_x = allocate_bytes(builder, &recovery_x_be)?;
     let recovery_y = allocate_bytes(builder, &recovery_y_be)?;
     let recovery = private_point_from_be_bytes(builder, &recovery_x, &recovery_y)?;
     enforce_x_mod_order_equals_r(builder, recovery.x.clone(), &r)?;
-
     let generator = constant_generator(builder)?;
     let digest_times_generator = scalar_mul(builder, &generator, &digest.bits_le)?;
     let r_times_key = scalar_mul(builder, public_key, &r.bits_le)?;
@@ -210,7 +189,6 @@ pub(super) fn verify_es256_low_s(
     let left = scalar_mul(builder, &recovery, &s.bits_le)?;
     enforce_points_equal(builder, &left, &right)
 }
-
 fn allocate_low_s_scalar(
     builder: &mut CircuitBuilder,
     s_be: [u8; 32],
@@ -221,7 +199,6 @@ fn allocate_low_s_scalar(
     builder.enforce_equal(is_low_s.lc(), LinearCombination::one())?;
     Ok(s)
 }
-
 fn invert_p256_scalar_be_exact(bytes: [u8; 32]) -> Result<[u8; 32], CircuitError> {
     let mut representation = bytes;
     representation.reverse();
@@ -233,7 +210,6 @@ fn invert_p256_scalar_be_exact(bytes: [u8; 32]) -> Result<[u8; 32], CircuitError
     inverse_bytes.reverse();
     Ok(inverse_bytes)
 }
-
 fn enforce_points_equal(
     builder: &mut CircuitBuilder,
     left: &P256PointVar,
@@ -243,7 +219,6 @@ fn enforce_points_equal(
     builder.enforce_equal(left.x.clone(), right.x.clone())?;
     builder.enforce_equal(left.y.clone(), right.y.clone())
 }
-
 fn enforce_nonidentity_on_curve(
     builder: &mut CircuitBuilder,
     point: &P256PointVar,
@@ -259,7 +234,6 @@ fn enforce_nonidentity_on_curve(
             .minus(&LinearCombination::constant(p256_b())),
     )
 }
-
 fn constant_generator(builder: &mut CircuitBuilder) -> Result<P256PointVar, CircuitError> {
     Ok(P256PointVar {
         x: LinearCombination::constant(
@@ -273,7 +247,6 @@ fn constant_generator(builder: &mut CircuitBuilder) -> Result<P256PointVar, Circ
         infinity: constant_bit(builder, false)?,
     })
 }
-
 fn identity(builder: &mut CircuitBuilder) -> Result<P256PointVar, CircuitError> {
     Ok(P256PointVar {
         x: LinearCombination::zero(),
@@ -281,7 +254,6 @@ fn identity(builder: &mut CircuitBuilder) -> Result<P256PointVar, CircuitError> 
         infinity: constant_bit(builder, true)?,
     })
 }
-
 fn double_complete(
     builder: &mut CircuitBuilder,
     point: &P256PointVar,
@@ -308,7 +280,6 @@ fn double_complete(
         infinity: point.infinity,
     })
 }
-
 fn add_complete(
     builder: &mut CircuitBuilder,
     left: &P256PointVar,
@@ -320,7 +291,6 @@ fn add_complete(
     let (x_equal, x_delta_inverse) = builder.inverse_or_zero(x_delta.clone())?;
     let y_equal = builder.is_zero(y_delta.clone())?;
     let y_opposite = builder.is_zero(y_sum)?;
-
     let slope = builder.multiply(y_delta, x_delta_inverse.into())?;
     let slope_squared = builder.multiply(slope.into(), slope.into())?;
     let general_x = LinearCombination::from(slope_squared)
@@ -334,7 +304,6 @@ fn add_complete(
         infinity: constant_bit(builder, false)?,
     };
     let doubled = double_complete(builder, left)?;
-
     let left_finite = builder.not(left.infinity)?;
     let right_finite = builder.not(right.infinity)?;
     let both_finite = builder.and(left_finite, right_finite)?;
@@ -348,7 +317,6 @@ fn add_complete(
     let right_only = builder.and(left.infinity, right_finite)?;
     let both_infinite = builder.and(left.infinity, right.infinity)?;
     let identity_case = builder.or(both_infinite, opposite_case)?;
-
     let cases = left_only
         .lc()
         .plus(&right_only.lc())
@@ -356,14 +324,12 @@ fn add_complete(
         .plus(&double_case.lc())
         .plus(&identity_case.lc());
     builder.enforce_equal(cases, LinearCombination::one())?;
-
     let mut output = identity(builder)?;
     output = select_point(builder, left_only, left, &output)?;
     output = select_point(builder, right_only, right, &output)?;
     output = select_point(builder, general_case, &general, &output)?;
     select_point(builder, double_case, &doubled, &output)
 }
-
 fn select_point(
     builder: &mut CircuitBuilder,
     condition: Bit,
@@ -379,7 +345,6 @@ fn select_point(
         infinity: Bit { variable: infinity },
     })
 }
-
 fn scalar_mul(
     builder: &mut CircuitBuilder,
     base: &P256PointVar,
@@ -396,7 +361,6 @@ fn scalar_mul(
     }
     Ok(accumulator)
 }
-
 fn enforce_nonzero_below_order(
     builder: &mut CircuitBuilder,
     value: &ScalarBits,
@@ -406,7 +370,6 @@ fn enforce_nonzero_below_order(
     let zero = builder.is_zero(value.lc())?;
     builder.enforce_zero(zero.lc())
 }
-
 fn enforce_x_mod_order_equals_r(
     builder: &mut CircuitBuilder,
     x: LinearCombination,
@@ -422,7 +385,6 @@ fn enforce_x_mod_order_equals_r(
     }
     Ok(())
 }
-
 fn decompose_field(
     builder: &mut CircuitBuilder,
     value: LinearCombination,
@@ -432,7 +394,6 @@ fn decompose_field(
     builder.enforce_equal(allocated.lc(), value)?;
     Ok(allocated.bits_le)
 }
-
 /// Subtract a fixed 256-bit integer in binary. The returned final borrow is one
 /// exactly when the input is strictly smaller than the constant.
 fn subtract_constant(
@@ -473,7 +434,6 @@ fn subtract_constant(
         borrow,
     ))
 }
-
 fn bits_to_lc(bits: &[Bit]) -> LinearCombination {
     let mut coefficient = Scalar::one();
     let mut result = LinearCombination::zero();
@@ -483,14 +443,12 @@ fn bits_to_lc(bits: &[Bit]) -> LinearCombination {
     }
     result
 }
-
 fn bytes_to_bits_le(bytes: &[u8; 32]) -> [bool; 256] {
     core::array::from_fn(|index| {
         let byte_from_right = index / 8;
         bytes[31 - byte_from_right] & (1 << (index % 8)) != 0
     })
 }
-
 fn constant_bit(builder: &mut CircuitBuilder, value: bool) -> Result<Bit, CircuitError> {
     let bit = builder.alloc_bit(value)?;
     builder.enforce_equal(
@@ -499,29 +457,24 @@ fn constant_bit(builder: &mut CircuitBuilder, value: bool) -> Result<Bit, Circui
     )?;
     Ok(bit)
 }
-
 fn p256_b() -> Scalar {
     Scalar::from_be_bytes_exact(P256_B_BE).expect("P-256 b is canonical")
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::sha256::sha256;
-
     fn scalar_bits_small(builder: &mut CircuitBuilder, value: u8, width: usize) -> Vec<Bit> {
         (0..width)
             .map(|bit| builder.alloc_bit(value & (1 << bit) != 0).expect("bit"))
             .collect()
     }
-
     fn hex32(value: &str) -> [u8; 32] {
         hex::decode(value)
             .expect("hex")
             .try_into()
             .expect("32 bytes")
     }
-
     #[test]
     fn complete_scalar_multiplication_matches_independent_p256_vector() {
         // 7 * G, independently generated with OpenSSL/P-256.
@@ -557,7 +510,6 @@ mod tests {
             .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .expect("satisfying trace");
     }
-
     #[test]
     fn order_comparator_rejects_zero_order_and_above_order() {
         for (bytes, accepted) in [
@@ -584,7 +536,6 @@ mod tests {
             assert_eq!(result.is_ok() && satisfied, accepted);
         }
     }
-
     #[test]
     fn es256_verifier_accepts_low_s_and_rejects_r_and_high_s_mutations() {
         let qx = hex32("34c30b0b65edb2cfa5f65b122d53b7e095799a0a3b61c1dda5bcce3bd49aa1a7");
@@ -604,7 +555,6 @@ mod tests {
                 .expect("nonzero canonical P-256 scalar");
         let mut changed_r = r;
         changed_r[31] ^= 1;
-
         for (candidate_r, candidate_s_inverse, accepted) in [
             (r, s_inverse, true),
             (changed_r, s_inverse, false),

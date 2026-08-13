@@ -1,5 +1,4 @@
 //! Interactive setup wizard for quickly preparing Iroha/Sora configs.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
@@ -7,7 +6,6 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
-
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Context as _, Result, eyre};
 use inquire::{Select, Text};
@@ -18,11 +16,8 @@ use iroha_data_model::peer::PeerId;
 use iroha_genesis::{read_genesis_manifest_bytes, validate_genesis_manifest_json};
 use norito::json::{self, Value as JsonValue};
 use toml::{Value as TomlValue, value::Table as TomlTable};
-
 use crate::{Outcome, RunArgs, tui};
-
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
-
 /// Supported network profiles for the wizard.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum Profile {
@@ -33,7 +28,6 @@ pub enum Profile {
     /// Sora Taira (testnet).
     Taira,
 }
-
 impl fmt::Display for Profile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -43,7 +37,6 @@ impl fmt::Display for Profile {
         }
     }
 }
-
 /// CLI entrypoint for the setup wizard.
 #[derive(Debug, ClapArgs, Clone)]
 pub struct Args {
@@ -84,7 +77,6 @@ pub struct Args {
     #[arg(long, value_name = "POPS")]
     pub trusted_peers_pop: Option<String>,
 }
-
 #[derive(Clone, Debug)]
 struct Answers {
     profile: Profile,
@@ -98,7 +90,6 @@ struct Answers {
     relay_hub_addresses: Vec<String>,
     output_dir: PathBuf,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum RelayMode {
     Disabled,
@@ -106,7 +97,6 @@ pub enum RelayMode {
     Spoke,
     Assist,
 }
-
 impl fmt::Display for RelayMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -117,7 +107,6 @@ impl fmt::Display for RelayMode {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 struct ProfileDefaults {
     chain: &'static str,
@@ -128,7 +117,6 @@ struct ProfileDefaults {
     config_template: Option<&'static str>,
     genesis_template: &'static str,
 }
-
 impl ProfileDefaults {
     fn for_profile(profile: Profile) -> Self {
         match profile {
@@ -167,7 +155,6 @@ impl ProfileDefaults {
         }
     }
 }
-
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         print_banner();
@@ -177,7 +164,6 @@ impl<T: Write> RunArgs<T> for Args {
         let soranet_transport_keypair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .wrap_err("failed to generate wizard SoraNet transport key pair")?;
         let trusted_pops = resolve_trusted_peers_pop(&self, &answers, &keypair)?;
-
         tui::status("Generating config and genesis files");
         let (mut config, genesis_template_path) = load_config_template(
             &answers,
@@ -193,18 +179,15 @@ impl<T: Write> RunArgs<T> for Args {
             &trusted_pops,
         )?;
         let genesis = load_and_patch_genesis(&genesis_template_path, &answers.chain)?;
-
         fs::create_dir_all(&answers.output_dir)
             .wrap_err("failed to create output directory for wizard artefacts")?;
         let config_path = answers.output_dir.join("config.toml");
         let genesis_path = answers.output_dir.join("genesis.json");
-
         let sorafs_dir = answers.output_dir.join("sorafs_admission");
         if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
             fs::create_dir_all(&sorafs_dir)
                 .wrap_err("failed to create sorafs admission directory")?;
         }
-
         let mut config_payload = toml::to_string_pretty(&config)
             .wrap_err("failed to serialise config after wizard updates")?;
         // Surface optional networking knobs in the generated config without changing defaults.
@@ -238,7 +221,6 @@ impl<T: Write> RunArgs<T> for Args {
         );
         fs::write(&config_path, config_payload)
             .wrap_err_with(|| format!("failed to write config to {}", config_path.display()))?;
-
         let genesis_payload = json::to_string_pretty(&genesis)
             .wrap_err("failed to serialise genesis after wizard updates")?;
         validate_genesis_manifest_json(genesis_payload.as_bytes())
@@ -266,7 +248,6 @@ impl<T: Write> RunArgs<T> for Args {
             &genesis_path,
             &next_command,
         )?;
-
         tui::success(format!(
             "Config and genesis ready under {}",
             answers.output_dir.display()
@@ -284,11 +265,9 @@ impl<T: Write> RunArgs<T> for Args {
         Ok(())
     }
 }
-
 fn gather_answers(args: &Args) -> Result<Answers> {
     let profile = resolve_profile(args)?;
     let defaults = ProfileDefaults::for_profile(profile);
-
     let chain = resolve_text(
         "Chain ID",
         args.chain_id.clone(),
@@ -319,7 +298,6 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         defaults.torii_port,
         args.non_interactive,
     )?;
-
     let relay_mode = resolve_relay_mode(args.relay_mode, args.non_interactive)?;
     let relay_hub_addresses = if matches!(relay_mode, RelayMode::Spoke | RelayMode::Assist) {
         if args.relay_hub_addresses.is_empty() {
@@ -340,7 +318,6 @@ fn gather_answers(args: &Args) -> Result<Answers> {
     } else {
         Vec::new()
     };
-
     let default_trusted = defaults.trusted_peers.join(", ");
     let trusted_default = args
         .trusted_peers
@@ -358,7 +335,6 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
-
     Ok(Answers {
         profile,
         chain,
@@ -372,7 +348,6 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         output_dir: args.output_dir.clone(),
     })
 }
-
 fn resolve_trusted_peers_pop(
     args: &Args,
     answers: &Answers,
@@ -387,7 +362,6 @@ fn resolve_trusted_peers_pop(
     if !peers.iter().any(|p| p == &self_peer) {
         peers.push(self_peer);
     }
-
     let peer_ids = parse_trusted_peer_ids(&peers)?;
     let roster_keys: BTreeSet<PublicKey> = peer_ids
         .iter()
@@ -398,14 +372,12 @@ fn resolve_trusted_peers_pop(
             return Err(eyre!("trusted peer {pk} must use a BLS-Normal key"));
         }
     }
-
     let mut pops = parse_trusted_peers_pop_arg(args.trusted_peers_pop.as_deref())?;
     if !pops.contains_key(keypair.public_key()) {
         let pop = bls_normal_pop_prove(keypair.private_key())
             .wrap_err("failed to build PoP for the local keypair")?;
         pops.insert(keypair.public_key().clone(), pop);
     }
-
     let extras: Vec<_> = pops
         .keys()
         .filter(|pk| !roster_keys.contains(*pk))
@@ -416,7 +388,6 @@ fn resolve_trusted_peers_pop(
             "trusted_peers_pop contains keys not in trusted_peers: {extras:?}"
         ));
     }
-
     let missing: Vec<PublicKey> = roster_keys
         .iter()
         .filter(|pk| !pops.contains_key(*pk))
@@ -428,10 +399,8 @@ fn resolve_trusted_peers_pop(
             pops.insert(pk, pop);
         }
     }
-
     Ok(pops)
 }
-
 fn parse_trusted_peer_ids(peers: &[String]) -> Result<Vec<PeerId>> {
     peers
         .iter()
@@ -442,7 +411,6 @@ fn parse_trusted_peer_ids(peers: &[String]) -> Result<Vec<PeerId>> {
         })
         .collect()
 }
-
 fn parse_trusted_peers_pop_arg(raw: Option<&str>) -> Result<BTreeMap<PublicKey, Vec<u8>>> {
     let mut pops = BTreeMap::new();
     let Some(raw) = raw else {
@@ -479,12 +447,10 @@ fn parse_trusted_peers_pop_arg(raw: Option<&str>) -> Result<BTreeMap<PublicKey, 
     }
     Ok(pops)
 }
-
 fn decode_pop_hex(raw: &str) -> Result<Vec<u8>> {
     let trimmed = raw.trim_start_matches("0x");
     hex::decode(trimmed).wrap_err("invalid PoP hex")
 }
-
 fn prompt_pop_for_peer(public_key: &PublicKey) -> Result<Vec<u8>> {
     loop {
         let prompt = format!("PoP for {public_key} (hex)");
@@ -510,7 +476,6 @@ fn prompt_pop_for_peer(public_key: &PublicKey) -> Result<Vec<u8>> {
         return Ok(pop);
     }
 }
-
 #[allow(clippy::needless_raw_string_hashes)]
 fn print_banner() {
     // Retro ASCII splash for a late-80s terminal vibe.
@@ -529,7 +494,6 @@ fn print_banner() {
 "#;
     eprintln!("{banner}");
 }
-
 fn resolve_profile(args: &Args) -> Result<Profile> {
     if let Some(profile) = args.profile {
         return Ok(profile);
@@ -537,7 +501,6 @@ fn resolve_profile(args: &Args) -> Result<Profile> {
     if args.non_interactive {
         return Ok(Profile::Iroha2);
     }
-
     Select::new(
         "Which profile do you want to set up?",
         vec![Profile::Iroha2, Profile::Nexus, Profile::Taira],
@@ -545,7 +508,6 @@ fn resolve_profile(args: &Args) -> Result<Profile> {
     .prompt()
     .wrap_err("failed to read profile selection")
 }
-
 fn resolve_relay_mode(cli_value: Option<RelayMode>, non_interactive: bool) -> Result<RelayMode> {
     if let Some(mode) = cli_value {
         return Ok(mode);
@@ -565,7 +527,6 @@ fn resolve_relay_mode(cli_value: Option<RelayMode>, non_interactive: bool) -> Re
     .prompt()
     .wrap_err("failed to read relay mode selection")
 }
-
 fn resolve_text(
     prompt: &str,
     cli_value: Option<String>,
@@ -583,7 +544,6 @@ fn resolve_text(
         .prompt()
         .wrap_err_with(|| format!("{prompt} prompt failed"))
 }
-
 fn resolve_number(
     prompt: &str,
     cli_value: Option<u16>,
@@ -603,7 +563,6 @@ fn resolve_number(
     text.parse::<u16>()
         .wrap_err_with(|| format!("{prompt} must be a u16 port"))
 }
-
 fn write_wizard_readme(
     path: &Path,
     profile: Profile,
@@ -636,7 +595,6 @@ fn write_wizard_readme(
     fs::write(path, rendered)
         .wrap_err_with(|| format!("failed to write wizard guide to {}", path.display()))
 }
-
 fn load_config_template(
     answers: &Answers,
     keypair: &KeyPair,
@@ -659,7 +617,6 @@ fn load_config_template(
         );
         return Ok((value, defaults.genesis_template.to_string()));
     }
-
     let config = build_vanilla_config(
         &answers.chain,
         keypair,
@@ -673,7 +630,6 @@ fn load_config_template(
     );
     Ok((config, defaults.genesis_template.to_string()))
 }
-
 #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 fn apply_overrides(
     config: &mut TomlValue,
@@ -699,7 +655,6 @@ fn apply_overrides(
         "soranet_transport_private_key",
         &ExposedPrivateKey(soranet_transport_keypair.private_key().clone()).to_string(),
     );
-
     // trusted peers + ensure self is present
     let mut peers = sanitize_trusted_peers(&answers.trusted_peers);
     let self_peer = format!(
@@ -712,7 +667,6 @@ fn apply_overrides(
     }
     set_array(config, "trusted_peers", peers);
     set_trusted_peers_pop(config, trusted_pops);
-
     let mut network = table(config, "network");
     let network_template = network
         .get("address")
@@ -781,7 +735,6 @@ fn apply_overrides(
         }
     }
     set_table(config, "network", network);
-
     let mut torii = table(config, "torii");
     let torii_template = torii
         .get("address")
@@ -795,7 +748,6 @@ fn apply_overrides(
             answers.torii_port,
         )),
     );
-
     if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
         let mut admission = table(config, "sorafs.discovery.admission");
         admission.insert(
@@ -805,7 +757,6 @@ fn apply_overrides(
         set_table(config, "sorafs.discovery.admission", admission);
     }
     set_table(config, "torii", torii);
-
     let mut genesis = table(config, "genesis");
     genesis.insert(
         "public_key".into(),
@@ -817,10 +768,8 @@ fn apply_overrides(
         TomlValue::String(GENESIS_EXPECTED_HASH_PLACEHOLDER.to_owned()),
     );
     set_table(config, "genesis", genesis);
-
     Ok(())
 }
-
 fn load_and_patch_genesis(template_path: &str, chain: &str) -> Result<JsonValue> {
     let raw = read_genesis_manifest_bytes(Path::new(template_path))
         .wrap_err_with(|| format!("failed to read bounded genesis template at {template_path}"))?;
@@ -834,13 +783,11 @@ fn load_and_patch_genesis(template_path: &str, chain: &str) -> Result<JsonValue>
     }
     Ok(genesis)
 }
-
 fn set_string(config: &mut TomlValue, key: &str, value: &str) {
     if let TomlValue::Table(root) = config {
         root.insert(key.to_owned(), TomlValue::String(value.to_owned()));
     }
 }
-
 fn set_array(config: &mut TomlValue, key: &str, values: Vec<String>) {
     if let TomlValue::Table(root) = config {
         root.insert(
@@ -849,13 +796,11 @@ fn set_array(config: &mut TomlValue, key: &str, values: Vec<String>) {
         );
     }
 }
-
 fn set_trusted_peers_pop(config: &mut TomlValue, pops: &BTreeMap<PublicKey, Vec<u8>>) {
     if let TomlValue::Table(root) = config {
         root.insert("trusted_peers_pop".into(), trusted_peers_pop_value(pops));
     }
 }
-
 fn trusted_peers_pop_value(pops: &BTreeMap<PublicKey, Vec<u8>>) -> TomlValue {
     let entries = pops
         .iter()
@@ -868,7 +813,6 @@ fn trusted_peers_pop_value(pops: &BTreeMap<PublicKey, Vec<u8>>) -> TomlValue {
         .collect();
     TomlValue::Array(entries)
 }
-
 fn table(config: &TomlValue, path: &str) -> TomlTable {
     let mut table = TomlTable::new();
     let mut current = config;
@@ -886,7 +830,6 @@ fn table(config: &TomlValue, path: &str) -> TomlTable {
     }
     table
 }
-
 fn set_table(config: &mut TomlValue, path: &str, table: TomlTable) {
     let mut segments = path.split('.').collect::<Vec<_>>();
     if segments.is_empty() {
@@ -905,7 +848,6 @@ fn set_table(config: &mut TomlValue, path: &str, table: TomlTable) {
         cursor.insert(last.to_owned(), TomlValue::Table(table));
     }
 }
-
 fn ensure_trusted_peer_list(
     config: &mut TomlValue,
     keypair: &KeyPair,
@@ -922,7 +864,6 @@ fn ensure_trusted_peer_list(
     set_array(config, "trusted_peers", list);
     set_trusted_peers_pop(config, trusted_pops);
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_vanilla_config(
     chain: &str,
@@ -963,7 +904,6 @@ fn build_vanilla_config(
         "trusted_peers_pop".into(),
         trusted_peers_pop_value(trusted_pops),
     );
-
     let mut network = TomlTable::new();
     network.insert(
         "address".into(),
@@ -974,14 +914,12 @@ fn build_vanilla_config(
         TomlValue::String(addr_literal(p2p_host, p2p_port)),
     );
     root.insert("network".into(), TomlValue::Table(network));
-
     let mut torii = TomlTable::new();
     torii.insert(
         "address".into(),
         TomlValue::String(addr_literal(torii_host, torii_port)),
     );
     root.insert("torii".into(), TomlValue::Table(torii));
-
     let mut genesis = TomlTable::new();
     genesis.insert(
         "public_key".into(),
@@ -993,15 +931,12 @@ fn build_vanilla_config(
         TomlValue::String(GENESIS_EXPECTED_HASH_PLACEHOLDER.to_owned()),
     );
     root.insert("genesis".into(), TomlValue::Table(genesis));
-
     let mut nexus = TomlTable::new();
     nexus.insert("enabled".into(), TomlValue::Boolean(false));
     nexus.insert("lane_count".into(), TomlValue::Integer(1));
     root.insert("nexus".into(), TomlValue::Table(nexus));
-
     TomlValue::Table(root)
 }
-
 /// Preserve optional address prefixes/suffixes while overriding host/port.
 fn rewrite_address(template: &str, host: &str, port: u16) -> String {
     let (prefix, rest) = template
@@ -1016,7 +951,6 @@ fn rewrite_address(template: &str, host: &str, port: u16) -> String {
         format!("{prefix}{host}:{port}#{suffix}")
     }
 }
-
 /// Ensure address uses `addr:` literal so DNS hosts parse cleanly.
 fn rewrite_address_with_literal(template: &str, host: &str, port: u16) -> String {
     let rendered = rewrite_address(template, host, port);
@@ -1026,7 +960,6 @@ fn rewrite_address_with_literal(template: &str, host: &str, port: u16) -> String
         format!("addr:{rendered}")
     }
 }
-
 /// Render a SocketAddr with the `addr:` literal to support DNS hosts.
 fn addr_literal(host: &str, port: u16) -> String {
     if host.starts_with("addr:") {
@@ -1035,7 +968,6 @@ fn addr_literal(host: &str, port: u16) -> String {
         format!("addr:{host}:{port}")
     }
 }
-
 /// Add `addr:` to DNS trusted peers so they parse as socket addresses.
 fn sanitize_trusted_peers(peers: &[String]) -> Vec<String> {
     peers
@@ -1059,16 +991,13 @@ fn sanitize_trusted_peers(peers: &[String]) -> Vec<String> {
         })
         .collect()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn checked_wizard_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("wizard BLS fixture key generation should succeed")
     }
-
     fn checked_wizard_transport_keypair() -> KeyPair {
         KeyPair::try_from_seed(
             b"iroha:kagami:wizard:test:soranet-transport:v1".to_vec(),
@@ -1076,7 +1005,6 @@ mod tests {
         )
         .expect("wizard SoraNet transport fixture key generation should succeed")
     }
-
     #[test]
     fn wizard_fixture_key_generation_preserves_bls_algorithm() {
         assert_eq!(
@@ -1088,7 +1016,6 @@ mod tests {
             Algorithm::Ed25519
         );
     }
-
     #[test]
     fn rewrite_address_preserves_fingerprint() {
         assert_eq!(
@@ -1096,7 +1023,6 @@ mod tests {
             "addr:1.2.3.4:9999#BF18"
         );
     }
-
     #[test]
     fn rewrite_address_plain() {
         assert_eq!(
@@ -1104,7 +1030,6 @@ mod tests {
             "10.0.0.5:18100"
         );
     }
-
     #[test]
     fn vanilla_config_has_minimal_sections() {
         let kp = checked_wizard_bls_keypair();
@@ -1161,7 +1086,6 @@ mod tests {
         );
         assert_ne!(transport_kp.public_key(), kp.public_key());
     }
-
     #[test]
     fn genesis_chain_is_patched() {
         let tmp = tempfile::NamedTempFile::new().expect("tmp file");
@@ -1176,7 +1100,6 @@ mod tests {
             "new-chain"
         );
     }
-
     #[test]
     fn trusted_peers_pop_missing_non_interactive_marks_peer_observer() {
         let keypair = checked_wizard_bls_keypair();
@@ -1219,14 +1142,11 @@ mod tests {
             "remote trusted peer without PoP should not be promoted into the validator roster"
         );
     }
-
     #[test]
     fn public_taira_bundle_uses_expected_network_identity() {
         const EXPECTED_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
         const EXPECTED_TAIRA_CHAIN_DISCRIMINANT: i64 = 369;
-
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-
         let config_path = repo_root.join("configs/soranexus/taira/config.toml");
         let config_text = fs::read_to_string(&config_path)
             .unwrap_or_else(|err| panic!("read {}: {err}", config_path.display()));
@@ -1244,7 +1164,6 @@ mod tests {
             Some(EXPECTED_TAIRA_CHAIN_DISCRIMINANT),
             "public Taira config.toml must keep the shipped address discriminant"
         );
-
         let genesis_path = repo_root.join("configs/soranexus/taira/genesis.json");
         let genesis_text = fs::read_to_string(&genesis_path)
             .unwrap_or_else(|err| panic!("read {}: {err}", genesis_path.display()));

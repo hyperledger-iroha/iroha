@@ -1,7 +1,5 @@
 use std::time::Duration as StdDuration;
-
 use super::*;
-
 #[test]
 fn router_parse_clamps_invalid_values() {
     let router = Router {

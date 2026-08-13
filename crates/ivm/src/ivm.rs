@@ -20,14 +20,12 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
-
 use likely_stable::{likely, unlikely};
 #[cfg(feature = "beep")]
 use rodio::{
     OutputStream, OutputStreamBuilder, Sink, Source, StreamError, mixer::Mixer, source::SineWave,
 };
 use sha2::{Digest, Sha256};
-
 use crate::{
     SyscallPolicy, decoder,
     error::{
@@ -6947,7 +6945,6 @@ impl IVM {
 #[cfg(test)]
 mod ivm_sched_tests {
     use super::*;
-
     #[test]
     fn respects_global_scheduler_limits() {
         // Set a small scheduler size and verify IVM::new picks it up.
@@ -7455,9 +7452,7 @@ fn compute_instruction(
             msg_len,
             result_reg,
         } => {
-            use pqcrypto_mldsa::{
-                mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5,
-            };
+            use pqcrypto_mldsa::{mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5};
             use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
             let msg = mem.load_region(msg_addr, msg_len)?;
             let valid = match level {
@@ -7765,10 +7760,8 @@ mod tests {
         collections::BTreeMap,
         sync::atomic::{AtomicU32, Ordering as AtomicOrdering},
     };
-
     use super::*;
     use crate::{instruction, ivm_cache, metadata::LITERAL_SECTION_MAGIC};
-
     #[cfg(feature = "beep")]
     #[test]
     fn unavailable_audio_output_is_safe() {

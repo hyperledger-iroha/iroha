@@ -1,12 +1,10 @@
 //! Type-mismatch validation for `CoreHost` pointer-ABI decoding.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use ivm::{IVM, Memory, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use norito::to_bytes;
-
 fn program_scall(sys: u32) -> Vec<u8> {
     let mut code = Vec::new();
     let scall = instruction::wide::system::SCALL;
@@ -25,7 +23,6 @@ fn program_scall(sys: u32) -> Vec<u8> {
     out.extend_from_slice(&code);
     out
 }
-
 fn tlv_envelope(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
     blob.extend_from_slice(&type_id.to_be_bytes());
@@ -36,7 +33,6 @@ fn tlv_envelope(type_id: u16, payload: &[u8]) -> Vec<u8> {
     blob.extend_from_slice(h.as_ref());
     blob
 }
-
 #[test]
 fn wrong_type_for_asset_def_rejected() {
     // Transfer asset expects (&AccountId, &AccountId, &AssetDefinitionId, amount)
@@ -44,7 +40,6 @@ fn wrong_type_for_asset_def_rejected() {
     let mut vm = IVM::new(u64::MAX);
     let authority = ALICE_ID.clone();
     vm.set_host(CoreHost::new(authority.clone()));
-
     let from = to_bytes(&authority).expect("encode account");
     let to = BOB_ID.clone();
     let to = to_bytes(&to).expect("encode account");
@@ -56,13 +51,11 @@ fn wrong_type_for_asset_def_rejected() {
     let tlv_wrong = tlv_envelope(PointerType::Name as u16, &wrong);
     let tlv_amount = ivm::numeric_tlv::encode_quantity(&Quantity::from(1_u64))
         .expect("encode quantity pointer envelope");
-
     let align8 = |n: u64| (n + 7) & !7;
     let off_from = 0u64;
     let off_to = align8(off_from + tlv_from.len() as u64);
     let off_wrong = align8(off_to + tlv_to.len() as u64);
     let off_amount = align8(off_wrong + tlv_wrong.len() as u64);
-
     vm.memory
         .preload_input(off_from, &tlv_from)
         .expect("preload input");
@@ -83,7 +76,6 @@ fn wrong_type_for_asset_def_rejected() {
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
-
 #[test]
 fn wrong_type_for_set_account_detail_value_rejected() {
     let program = program_scall(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL);

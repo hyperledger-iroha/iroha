@@ -5,9 +5,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
-
 static TEMP_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
 fn decode_i64_word(vm: &IVM, pointer: u64) -> i64 {
     let tlv = vm.validate_tlv(pointer).expect("validate returned int TLV");
     assert_eq!(tlv.type_id, PointerType::Int);
@@ -17,7 +15,6 @@ fn decode_i64_word(vm: &IVM, pointer: u64) -> i64 {
         .try_to_i64()
         .expect("test result fits i64")
 }
-
 fn decode_pointer_state_value(payload: &[u8], kind: StateValueKindV1) -> Vec<u8> {
     let schema = StateValueSchemaV1 {
         nodes: vec![StateValueNodeV1::Leaf(kind)],
@@ -35,7 +32,6 @@ fn decode_pointer_state_value(payload: &[u8], kind: StateValueKindV1) -> Vec<u8>
     };
     envelope.clone()
 }
-
 fn decode_int_state_value(payload: &[u8]) -> i64 {
     let envelope = decode_pointer_state_value(payload, StateValueKindV1::Int);
     crate::numeric_tlv::decode_int_bytes(&envelope)
@@ -43,11 +39,9 @@ fn decode_int_state_value(payload: &[u8]) -> i64 {
         .try_to_i64()
         .expect("test state int fits i64")
 }
-
 struct TestTempDir {
     path: PathBuf,
 }
-
 impl TestTempDir {
     fn new() -> Self {
         let nonce = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -64,7 +58,6 @@ impl TestTempDir {
         fs::create_dir_all(&path).expect("create temp dir");
         Self { path }
     }
-
     fn write(&self, relative: &str, contents: &str) -> PathBuf {
         let path = self.path.join(relative);
         if let Some(parent) = path.parent() {
@@ -74,13 +67,11 @@ impl TestTempDir {
         path
     }
 }
-
 impl Drop for TestTempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
 }
-
 fn test_function(name: &str, fixture: Option<&str>) -> Item {
     Item::Function(crate::kotodama::ast::Function {
         name: name.to_string(),
@@ -98,7 +89,6 @@ fn test_function(name: &str, fixture: Option<&str>) -> Item {
         location: crate::kotodama::ast::SourceLocation { line: 1, column: 1 },
     })
 }
-
 fn compiled_suite_with_fixtures(fixtures: Vec<FixtureDecl>) -> CompiledSuite {
     let target_source = "seiyaku FixtureDemo { fn helper() {} #[test] fn smoke() {} }";
     let target_program = parser::parse(target_source).expect("parse fixture test target");
@@ -116,13 +106,11 @@ fn compiled_suite_with_fixtures(fixtures: Vec<FixtureDecl>) -> CompiledSuite {
     };
     compile_suite(&suite, false).expect("compile fixture suite")
 }
-
 #[test]
 fn pure_unit_test_suite_executes_without_runtime_artifact() {
     let compiled = compiled_suite_with_fixtures(Vec::new());
     assert!(compiled.runtime.is_none());
     assert!(compiled.runtime_entrypoints.is_empty());
-
     let results = execute_suite(&compiled, TraceMode::Off, 1)
         .expect("execute a suite containing only private helpers and tests");
     assert_eq!(results.len(), 1);
@@ -133,7 +121,6 @@ fn pure_unit_test_suite_executes_without_runtime_artifact() {
         results[0].failure
     );
 }
-
 #[test]
 fn helper_preserves_u64_max_json_int_through_option_match() {
     let temp = TestTempDir::new();
@@ -168,7 +155,6 @@ fn helper_preserves_u64_max_json_int_through_option_match() {
     let compiled = compile_suite(&suite, false).expect("compile u64 max regression suite");
     let results =
         execute_suite(&compiled, TraceMode::Off, 1).expect("execute u64 max regression suite");
-
     assert_eq!(results.len(), 1);
     assert!(
         results[0].passed,
@@ -176,7 +162,6 @@ fn helper_preserves_u64_max_json_int_through_option_match() {
         results[0].failure
     );
 }
-
 #[test]
 fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
     let compiled = compiled_suite_with_fixtures(Vec::new());
@@ -196,7 +181,6 @@ fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
         u64::try_from(suite_program.len() - parsed.header_len - 4)
             .expect("suite return PC fits u64")
     );
-
     let mut vm = IVM::new(u64::MAX);
     vm.load_koto_test_prepared(&compiled.suite.program)
         .expect("unmodified compiler-produced test artifact must load");
@@ -208,7 +192,6 @@ fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
             .contains("expected IVM 1.1 contract artifact"),
         "unexpected production-admission failure: {production_error}"
     );
-
     let mut post_compile_mutation = suite_program.to_vec();
     post_compile_mutation.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
     let post_compile_mutation: Arc<[u8]> = Arc::from(post_compile_mutation);
@@ -221,7 +204,6 @@ fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
         error.to_string().contains("must select the terminal HALT"),
         "unexpected mutation failure: {error}"
     );
-
     let mut mutated_interface = compiled.suite.program.contract_interface().clone();
     let terminal_return = mutated_interface
         .entrypoints
@@ -245,7 +227,6 @@ fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
         "the compiler report hash must detect every post-compile executable mutation"
     );
 }
-
 #[test]
 fn parse_args_accepts_supported_subcommands() {
     let options = parse_args(vec![
@@ -267,7 +248,6 @@ fn parse_args_accepts_supported_subcommands() {
     assert_eq!(options.chain_discriminant, 369);
     assert!(options.zk_enabled);
 }
-
 #[test]
 fn parse_args_rejects_invalid_or_duplicate_chain_discriminants() {
     for invalid in ["", "0", "0369", "+369", "-1", "369x", "65536"] {
@@ -287,7 +267,6 @@ fn parse_args_rejects_invalid_or_duplicate_chain_discriminants() {
     .expect_err("duplicate discriminants must fail closed");
     assert!(duplicate.contains("only once"));
 }
-
 #[test]
 fn test_runner_uses_exact_taira_chain_discriminant() {
     const TAIRA_RECIPIENT: &str =
@@ -318,14 +297,12 @@ fn test_runner_uses_exact_taira_chain_discriminant() {
     let results = execute_suite_for_chain(&compiled, TraceMode::Off, 2, 369)
         .expect("execute exact Taira literal suite");
     assert!(results.iter().all(|result| result.passed));
-
     let mismatch = match compile_suite_for_chain(&suite, false, 753) {
         Ok(_) => panic!("Taira literal must fail under Sora discriminant 753"),
         Err(error) => error,
     };
     assert!(mismatch.contains("ERR_UNEXPECTED_NETWORK_PREFIX"));
 }
-
 #[test]
 fn zk_test_option_marks_both_test_and_runtime_artifacts() {
     let target_source = "seiyaku ZkTest { hajimari() {} #[test] fn smoke() {} }";
@@ -356,17 +333,14 @@ fn zk_test_option_marks_both_test_and_runtime_artifacts() {
         assert_ne!(metadata.metadata.mode & crate::metadata::mode::ZK, 0);
     }
 }
-
 #[test]
 fn parse_args_rejects_extra_argument_and_missing_path() {
     let err = parse_args(vec!["wat".to_string(), "demo.ko".to_string()])
         .expect_err("extra path should fail");
     assert!(err.contains("unexpected test argument"));
-
     let err = parse_args(vec!["run".to_string()]).expect_err("missing path should fail");
     assert!(err.contains("usage: koto test"));
 }
-
 #[test]
 fn filtering_exact_and_seeded_order_are_deterministic() {
     let mut tests = vec![
@@ -430,7 +404,6 @@ fn filtering_exact_and_seeded_order_are_deterministic() {
     );
     assert_eq!(first.len(), 2);
 }
-
 #[test]
 fn structured_request_validation_is_stage_tagged() {
     let mut request = KotoTestRunRequestV1::new("demo.ko", 753);
@@ -438,20 +411,17 @@ fn structured_request_validation_is_stage_tagged() {
     let error = validate_structured_request(&request).expect_err("zero workers must fail");
     assert_eq!(error.phase, KotoTestRunPhaseV1::Request);
     assert!(error.message.contains("worker count"));
-
     request.jobs = 1;
     request.exact = true;
     let error = validate_structured_request(&request).expect_err("exact needs a filter");
     assert_eq!(error.phase, KotoTestRunPhaseV1::Request);
     assert!(error.message.contains("requires a filter"));
-
     request.exact = false;
     request.chain_discriminant = 0;
     let error = validate_structured_request(&request).expect_err("zero chain must fail");
     assert_eq!(error.phase, KotoTestRunPhaseV1::Request);
     assert!(error.message.contains("1..=65535"));
 }
-
 #[test]
 fn structured_filter_order_is_independent_of_discovery_order() {
     let request = KotoTestRunRequestV1 {
@@ -484,7 +454,6 @@ fn structured_filter_order_is_independent_of_discovery_order() {
     );
     assert_eq!(forward.len(), 2);
 }
-
 #[test]
 fn structured_runner_returns_ordered_logical_outcomes_without_timing() {
     let temp = TestTempDir::new();
@@ -504,7 +473,6 @@ fn structured_runner_returns_ordered_logical_outcomes_without_timing() {
     request.jobs = 2;
     let first = run_tests_structured_v1(&request).expect("run structured suite");
     let repeated = run_tests_structured_v1(&request).expect("repeat structured suite");
-
     assert_eq!(first, repeated);
     assert_eq!(
         first.target,
@@ -524,7 +492,6 @@ fn structured_runner_returns_ordered_logical_outcomes_without_timing() {
     assert!(first.cases[0].failure.is_some());
     assert!(first.cases[1].failure.is_none());
 }
-
 #[test]
 fn structured_module_graph_executes_exact_dependency_and_ignores_ambient_tests() {
     let temp = TestTempDir::new();
@@ -567,7 +534,6 @@ fn structured_module_graph_executes_exact_dependency_and_ignores_ambient_tests()
             imports: Vec::new(),
         }],
     };
-
     assert_eq!(
         discover_declared_test_names_v1(&target).expect("declared names"),
         ["dependency_is_exact"]
@@ -578,7 +544,6 @@ fn structured_module_graph_executes_exact_dependency_and_ignores_ambient_tests()
     assert_eq!(report.cases.len(), 1);
     assert!(report.is_success());
 }
-
 #[test]
 fn structured_source_root_is_bound_and_never_reopened_from_the_target_path() {
     let source_name = "tests/in-memory-supplied.ko".to_owned();
@@ -601,7 +566,6 @@ fn structured_source_root_is_bound_and_never_reopened_from_the_target_path() {
     assert_eq!(report.cases.len(), 1);
     assert_eq!(report.cases[0].name, "supplied_only");
     assert!(report.is_success());
-
     let error = run_tests_structured_source_with_modules_v1(
         &KotoTestRunRequestV1::new("tests/other.ko", 753),
         &root,
@@ -610,7 +574,6 @@ fn structured_source_root_is_bound_and_never_reopened_from_the_target_path() {
     .expect_err("request/source substitution must fail");
     assert_eq!(error.phase, KotoTestRunPhaseV1::Request);
     assert!(error.message.contains("must equal"));
-
     let noncanonical = SourceModuleUnit {
         source_name: "tests/./in-memory-supplied.ko".to_owned(),
         source: root.source.clone(),
@@ -624,7 +587,6 @@ fn structured_source_root_is_bound_and_never_reopened_from_the_target_path() {
     assert_eq!(error.phase, KotoTestRunPhaseV1::Request);
     assert!(error.message.contains("canonical logical spelling"));
 }
-
 #[test]
 fn machine_reports_preserve_failure_details() {
     let results = vec![TestRunResult {
@@ -643,7 +605,6 @@ fn machine_reports_preserve_failure_details() {
         assert!(report.contains("expected rejection"));
     }
 }
-
 #[test]
 fn discover_suite_links_inline_and_matching_standalone_tests() {
     let temp = TestTempDir::new();
@@ -685,7 +646,6 @@ fn discover_suite_links_inline_and_matching_standalone_tests() {
             }
             "#,
     );
-
     let suite = discover_suite(&target).expect("discover suite");
     let mut names = suite
         .tests
@@ -694,12 +654,10 @@ fn discover_suite_links_inline_and_matching_standalone_tests() {
         .collect::<Vec<_>>();
     names.sort();
     assert_eq!(names, vec!["inline".to_string(), "standalone".to_string()]);
-
     let mut public_names = discover_test_names(&target).expect("discover public test names");
     public_names.sort();
     assert_eq!(public_names, names);
 }
-
 #[test]
 fn discover_suite_from_standalone_input_uses_target_program() {
     let temp = TestTempDir::new();
@@ -724,7 +682,6 @@ fn discover_suite_from_standalone_input_uses_target_program() {
             }
             "#,
     );
-
     let suite = discover_suite(&standalone).expect("discover suite from standalone input");
     assert_eq!(
         suite.target_path.file_name().and_then(|name| name.to_str()),
@@ -733,7 +690,6 @@ fn discover_suite_from_standalone_input_uses_target_program() {
     assert_eq!(suite.tests.len(), 1);
     assert_eq!(suite.tests[0].name, "smoke");
 }
-
 #[test]
 fn execute_suite_supports_native_contract_flow_helpers() {
     let temp = TestTempDir::new();
@@ -811,13 +767,11 @@ fn execute_suite_supports_native_contract_flow_helpers() {
                 seed_hex = hex::encode(actor_seed),
             ),
         );
-
     let suite = discover_suite(&test_path).expect("discover suite");
     let compiled = compile_suite(&suite, false).expect("compile suite");
     let mut host = build_host_for_fixture(&compiled, Some("actors")).expect("build host");
     let mut vm = IVM::new(u64::MAX);
     vm.set_trace_mode(TraceMode::PcOnly);
-
     let put_blob = |vm: &mut IVM, reg: usize, value: &str| {
         let ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::Blob, value.as_bytes()))
@@ -832,7 +786,6 @@ fn execute_suite_supports_native_contract_flow_helpers() {
             .expect("json tlv");
         vm.set_register(reg, ptr);
     };
-
     put_blob(&mut vm, 10, "issuer");
     host.syscall(TEST_SYSCALL_ACTOR_ACCOUNT, &mut vm)
         .expect("actor account syscall");
@@ -848,7 +801,6 @@ fn execute_suite_supports_native_contract_flow_helpers() {
             .expect("canonical decoded actor"),
         actor_account
     );
-
     put_blob(&mut vm, 10, "issuer");
     host.syscall(TEST_SYSCALL_ACTOR_PUBLIC_KEY, &mut vm)
         .expect("actor public key syscall");
@@ -860,7 +812,6 @@ fn execute_suite_supports_native_contract_flow_helpers() {
         public_key_tlv.payload,
         signing_key.verifying_key().as_bytes()
     );
-
     put_blob(&mut vm, 10, "issuer");
     let message_ptr = vm
         .alloc_input_tlv(&make_tlv(PointerType::Blob, b"native-flow"))
@@ -877,7 +828,6 @@ fn execute_suite_supports_native_contract_flow_helpers() {
         .verifying_key()
         .verify(b"native-flow", &signature)
         .expect("signature verifies");
-
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "hajimari");
     put_json(&mut vm, 12, "{}");
@@ -885,7 +835,6 @@ fn execute_suite_supports_native_contract_flow_helpers() {
     vm.set_register(14, 1);
     host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
         .expect("invoke hajimari");
-
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "increment");
     put_json(&mut vm, 12, "{}");
@@ -895,7 +844,6 @@ fn execute_suite_supports_native_contract_flow_helpers() {
         .expect("invoke increment");
     let counter_state = host.inner.wsv.sc_get("counter").expect("counter state");
     assert_eq!(decode_int_state_value(&counter_state), 5);
-
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "remember_caller");
     put_json(&mut vm, 12, "{}");
@@ -922,7 +870,6 @@ fn execute_suite_supports_native_contract_flow_helpers() {
             .expect("canonical remembered account"),
         actor_account
     );
-
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "pair");
     put_json(&mut vm, 12, "{}");
@@ -932,7 +879,6 @@ fn execute_suite_supports_native_contract_flow_helpers() {
         .expect("invoke pair");
     assert_eq!(decode_i64_word(&vm, vm.register(10)), 2);
     assert_eq!(decode_i64_word(&vm, vm.register(11)), 3);
-
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "reject_me");
     put_json(&mut vm, 12, "{}");
@@ -940,13 +886,11 @@ fn execute_suite_supports_native_contract_flow_helpers() {
     vm.set_register(14, 1);
     host.syscall(TEST_SYSCALL_EXPECT_REJECT_AS, &mut vm)
         .expect("expect reject");
-
     assert!(
         !host.supplemental_trace_pcs().is_empty(),
         "expected coverage trace from nested entrypoint execution"
     );
 }
-
 #[test]
 fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
     let temp = TestTempDir::new();
@@ -960,7 +904,6 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
     let actor_account = AccountId::new(actor_public_key)
         .canonical_i105()
         .expect("canonical actor account");
-
     temp.write(
         "contracts/contract_flow_demo.ko",
         r#"
@@ -1054,7 +997,6 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
                 seed_hex = hex::encode(actor_seed),
             ),
         );
-
     let suite = discover_suite(&test_path).expect("discover suite");
     let compiled = compile_suite(&suite, false).expect("compile suite");
     let runtime = compiled
@@ -1129,7 +1071,6 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
         "expected compiled helpers to emit execution traces"
     );
 }
-
 #[test]
 fn standalone_test_source_parser_rejects_public_functions() {
     let temp = TestTempDir::new();
@@ -1148,7 +1089,6 @@ fn standalone_test_source_parser_rejects_public_functions() {
         .expect_err("a module cannot contain a public seiyaku function");
     assert!(error.contains("module"), "unexpected error: {error}");
 }
-
 #[test]
 fn finalize_suite_rejects_program_without_tests() {
     let program = Program {
@@ -1180,7 +1120,6 @@ fn finalize_suite_rejects_program_without_tests() {
     .expect("program without tests should fail");
     assert!(err.contains("no #[test] Kotodama functions"));
 }
-
 #[test]
 fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
     let source = r#"
@@ -1210,7 +1149,6 @@ fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
         }],
         fixtures: HashMap::new(),
     };
-
     let compiled = compile_suite(&suite, false).expect("compile suite");
     assert_eq!(compiled.tests.len(), 1);
     let runtime = compiled
@@ -1233,7 +1171,6 @@ fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
         .collect::<Vec<_>>();
     assert_eq!(names, vec!["run"]);
 }
-
 #[test]
 fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
     let asset = AssetDefinitionId::derive_from_components(
@@ -1345,7 +1282,6 @@ fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
         );
     }
 }
-
 #[test]
 fn build_fixture_map_rejects_duplicate_names() {
     let fixtures = vec![
@@ -1361,7 +1297,6 @@ fn build_fixture_map_rejects_duplicate_names() {
     let err = build_fixture_map(&fixtures).expect_err("duplicate fixtures should fail");
     assert!(err.contains("duplicate fixture"));
 }
-
 #[test]
 fn apply_fixture_action_rejects_unknown_action() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
@@ -1382,7 +1317,6 @@ fn apply_fixture_action_rejects_unknown_action() {
     .expect_err("unknown fixture action should fail");
     assert!(err.contains("unknown fixture action"));
 }
-
 #[test]
 fn apply_fixture_action_populates_state_and_public_inputs() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
@@ -1392,7 +1326,6 @@ fn apply_fixture_action_populates_state_and_public_inputs() {
         HashMap::new(),
     );
     let mut public_inputs = BTreeMap::new();
-
     apply_fixture_action(
         &FixtureAction {
             name: "state_set".to_string(),
@@ -1427,7 +1360,6 @@ fn apply_fixture_action_populates_state_and_public_inputs() {
         &mut public_inputs,
     )
     .expect("apply public_input");
-
     let seeded_counter = host.inner.wsv.sc_get("demo/counter").expect("seeded state");
     assert_eq!(decode_int_state_value(&seeded_counter), 7);
     let trigger_name: Name = "trigger_event_json".parse().expect("name");
@@ -1437,7 +1369,6 @@ fn apply_fixture_action_populates_state_and_public_inputs() {
     let tlv = crate::pointer_abi::validate_tlv_bytes(trigger_payload).expect("valid tlv");
     assert_eq!(tlv.type_id, PointerType::Json);
 }
-
 #[test]
 fn build_host_for_fixture_rejects_unknown_fixture() {
     let compiled = compiled_suite_with_fixtures(Vec::new());
@@ -1446,7 +1377,6 @@ fn build_host_for_fixture_rejects_unknown_fixture() {
         .expect("unknown fixture should fail");
     assert!(err.contains("unknown fixture"));
 }
-
 #[test]
 fn build_host_for_fixture_uses_canonical_default_caller() {
     let compiled = compiled_suite_with_fixtures(Vec::new());
@@ -1456,7 +1386,6 @@ fn build_host_for_fixture_uses_canonical_default_caller() {
         parse_account_literal(DEFAULT_CALLER).expect("canonical default caller")
     );
 }
-
 #[test]
 fn build_host_for_fixture_applies_bound_caller() {
     let fixture = FixtureDecl {
@@ -1487,7 +1416,6 @@ fn build_host_for_fixture_applies_bound_caller() {
     assert_eq!(value.type_id, PointerType::Blob);
     assert_eq!(value.payload, b"hello");
 }
-
 #[test]
 fn apply_fixture_action_registers_actor_seed() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
@@ -1518,7 +1446,6 @@ fn apply_fixture_action_registers_actor_seed() {
         &mut public_inputs,
     )
     .expect("register actor");
-
     assert!(public_inputs.is_empty());
     assert_eq!(
         host.actor_account("seller").expect("actor account"),
@@ -1529,7 +1456,6 @@ fn apply_fixture_action_registers_actor_seed() {
         actor_seed
     );
 }
-
 #[test]
 fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
@@ -1554,7 +1480,6 @@ fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
         &mut public_inputs,
     )
     .expect("grant exact fixture permission");
-
     let exact = PermissionToken::ContractEntrypoint {
         contract: host.contract_address.clone(),
         entrypoint: "apply".to_owned(),
@@ -1565,7 +1490,6 @@ fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
     };
     assert!(host.inner.wsv.has_permission(&actor, &exact));
     assert!(!host.inner.wsv.has_permission(&actor, &wrong_selector));
-
     host.inner.wsv.grant_permission(
         &actor,
         PermissionToken::Custom("CanInvokeContractEntrypoint".to_owned()),
@@ -1575,7 +1499,6 @@ fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
         "name-only grants must never materialize a scoped entrypoint capability"
     );
 }
-
 #[test]
 fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
@@ -1585,7 +1508,6 @@ fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
         HashMap::new(),
     );
     let mut public_inputs = BTreeMap::new();
-
     for retired in [
         "grant_contract_entrypoint_permission",
         "grant_contract_effect_permission",
@@ -1602,7 +1524,6 @@ fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
         .expect_err("English feature action must not remain compatible");
         assert_eq!(error, format!("unknown fixture action `{retired}`"));
     }
-
     for (branded, arity) in [
         ("grant_seiyaku_kotoage_permission", 2),
         ("grant_seiyaku_effect_permission", 1),
@@ -1622,7 +1543,6 @@ fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
             format!("fixture action `{branded}` expects {arity} arguments, got 0")
         );
     }
-
     assert_eq!(
         eval_fixture_account_or_actor(&Expr::Ident("seiyaku_subject".to_owned()), &host)
             .expect("branded subject expression"),
@@ -1633,7 +1553,6 @@ fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
         "English feature expression must not remain compatible"
     );
 }
-
 #[test]
 fn fixture_contract_effect_grant_targets_only_the_immutable_contract_subject() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
@@ -1663,7 +1582,6 @@ fn fixture_contract_effect_grant_targets_only_the_immutable_contract_subject() {
         &mut public_inputs,
     )
     .expect("grant contract effect permission");
-
     assert!(
         host.inner
             .wsv
@@ -1674,7 +1592,6 @@ fn fixture_contract_effect_grant_targets_only_the_immutable_contract_subject() {
         "contract effect grants must never leak onto the invoking application authority"
     );
 }
-
 #[test]
 fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_scope() {
     let controller = parse_account_literal(DEFAULT_CALLER).expect("controller");
@@ -1729,7 +1646,6 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         &mut public_inputs,
     )
     .expect("register exact target alias scope");
-
     let availability_permission_expr = |account: &AccountId| Expr::Call {
         name: "Json::parse".to_owned(),
         args: vec![Expr::String(format!(
@@ -1775,7 +1691,6 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         &mut public_inputs,
     )
     .expect("grant wrong-account availability permission to subject");
-
     host.inner
         .bind_contract_runtime_context(
             controller.clone(),
@@ -1783,7 +1698,6 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
             "apply_availability".to_owned(),
         )
         .expect("bind contract runtime context");
-
     let call_availability = |host: &mut KotoTestHost| {
         let mut vm = IVM::new(u64::MAX);
         let account = norito::to_bytes(&target).expect("encode target account");
@@ -1817,7 +1731,6 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         host.inner.wsv.asset_transfer_availability(&target, &asset),
         None
     );
-
     apply_fixture_action(
         &FixtureAction {
             name: "grant_seiyaku_effect_permission".to_owned(),
@@ -1832,7 +1745,6 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         host.inner.wsv.asset_transfer_availability(&target, &asset),
         Some((1, false, false))
     );
-
     let mut authority_vm = IVM::new(u64::MAX);
     host.inner
         .syscall(crate::syscalls::SYSCALL_SYSVAR_AUTHORITY, &mut authority_vm)
@@ -1843,7 +1755,6 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
     let observed_authority: AccountId =
         norito::decode_from_bytes(authority_tlv.payload).expect("decode authority");
     assert_eq!(observed_authority, controller);
-
     apply_fixture_action(
         &FixtureAction {
             name: "grant_seiyaku_effect_permission".to_owned(),
@@ -1892,7 +1803,6 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         host.inner.wsv.asset_transfer_daily_limit(&target, &asset),
         Some(Some(cap.clone()))
     );
-
     apply_fixture_action(
         &FixtureAction {
             name: "grant_seiyaku_effect_permission".to_owned(),
@@ -1933,7 +1843,6 @@ fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_sco
         Some(Some(cap))
     );
 }
-
 #[test]
 fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
@@ -1965,7 +1874,6 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
     };
     apply_fixture_action(&registration, &mut host, &mut public_inputs)
         .expect("register canonical domain-scoped account alias");
-
     let mut vm = IVM::new(u64::MAX);
     let pointer = vm
         .alloc_input_tlv(&make_tlv(PointerType::Blob, b"merchant@hbl.sbp"))
@@ -1981,7 +1889,6 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
     let resolved: AccountId =
         norito::decode_from_bytes(resolved_tlv.payload).expect("decode resolved account");
     assert_eq!(resolved, caller);
-
     let duplicate = apply_fixture_action(&registration, &mut host, &mut public_inputs)
         .expect_err("duplicate alias registration must fail");
     assert!(duplicate.contains("duplicate account alias registration"));
@@ -1998,7 +1905,6 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
     )
     .expect_err("conflicting alias registration must fail");
     assert!(conflict.contains("conflicting account alias registration"));
-
     for alias in [
         "merchant",
         "merchant@@sbp",
@@ -2023,21 +1929,17 @@ fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
         assert!(!error.is_empty(), "missing rejection for `{alias}`");
     }
 }
-
 #[test]
 fn helper_parsers_reject_invalid_numeric_and_mintability() {
     let err = eval_numeric_expr(&Expr::IntLiteral((-1_i64).into()))
         .expect_err("negative quantity should fail");
     assert!(err.contains("negative balances are not allowed"));
-
     let err = eval_quantity_expr(&Expr::String("-1".to_owned()))
         .expect_err("negative decimal quantity should fail at the nominal boundary");
     assert!(err.contains("balance must be a non-negative quantity"));
-
     let err = eval_mintable_expr(&Expr::String("sometimes".to_string()))
         .expect_err("invalid mintability should fail");
     assert!(err.contains("unsupported mintability"));
-
     let err = expect_arg_count(
         &FixtureAction {
             name: "caller".to_string(),
@@ -2048,7 +1950,6 @@ fn helper_parsers_reject_invalid_numeric_and_mintability() {
     .expect_err("wrong arg count should fail");
     assert!(err.contains("expects 1 arguments"));
 }
-
 #[test]
 fn parse_permission_helpers_cover_targeted_and_json_forms() {
     let domain = DomainId::try_new("wonderland", "universal").expect("domain");
@@ -2056,15 +1957,12 @@ fn parse_permission_helpers_cover_targeted_and_json_forms() {
     let token = parse_permission_token_name(&format!("mint_asset:{asset}"))
         .expect("parse mint asset token");
     assert!(matches!(token, PermissionToken::MintAsset(id) if id == asset));
-
     let token = parse_permission_token_json(r#"{"type":"custom","name":"demo.permission"}"#)
         .expect("parse custom permission json");
     assert!(matches!(token, PermissionToken::Custom(name) if name == "demo.permission"));
-
     let err = parse_permission_token_json(r#"{"target":"missing-type"}"#)
         .expect_err("missing type should fail");
     assert!(err.contains("missing `type`"));
-
     let owner = parse_account_literal(DEFAULT_CALLER).expect("asset owner");
     let bucket = AssetId::with_scope(
         asset.clone(),
@@ -2095,7 +1993,6 @@ fn parse_permission_helpers_cover_targeted_and_json_forms() {
         parse_permission_token_json(&invalid)
             .expect_err("ambiguous or non-canonical transfer bucket must fail");
     }
-
     let availability_account = parse_account_literal(DEFAULT_CALLER).expect("account");
     let availability = parse_permission_token_json(&format!(
             r#"{{"type":"CanSetAssetTransferAvailability","account":"{availability_account}","asset_definition":"{}"}}"#,
@@ -2109,7 +2006,6 @@ fn parse_permission_helpers_cover_targeted_and_json_forms() {
             asset_definition,
         } if account == availability_account && asset_definition == asset
     ));
-
     let daily_limit = parse_permission_token_json(&format!(
             r#"{{"type":"CanSetAssetTransferDailyLimit","asset_definition":"{}","account_domain":"hbl","account_dataspace":10}}"#,
             asset.canonical_address(),
@@ -2125,7 +2021,6 @@ fn parse_permission_helpers_cover_targeted_and_json_forms() {
             && account_domain.as_ref() == "hbl"
             && account_dataspace == DataSpaceId::new(10)
     ));
-
     let holding_limit = parse_permission_token_json(&format!(
             r#"{{"type":"CanSetAssetHoldingLimit","account":"{availability_account}","asset_definition":"{}"}}"#,
             asset.canonical_address(),
@@ -2138,7 +2033,6 @@ fn parse_permission_helpers_cover_targeted_and_json_forms() {
             asset_definition,
         } if account == availability_account && asset_definition == asset
     ));
-
     for invalid in [
         format!(
             r#"{{"type":"CanSetAssetTransferAvailability","asset_definition":"{}"}}"#,
@@ -2157,18 +2051,15 @@ fn parse_permission_helpers_cover_targeted_and_json_forms() {
             .expect_err("legacy, ambiguous, or extra transfer-control scope must fail");
     }
 }
-
 #[test]
 fn permission_and_json_helpers_reject_invalid_inputs() {
     let err = parse_permission_token_name("mint_asset:not-an-asset")
         .expect_err("invalid targeted permission should fail");
     assert!(err.contains("invalid asset definition id"));
-
     let err = eval_json_payload(&[Expr::IntLiteral(7_i64.into())])
         .expect_err("non-string json should fail");
     assert!(err.contains("expects a string payload"));
 }
-
 #[test]
 fn eval_envelope_expr_encodes_pointer_variants() {
     let account_expr = Expr::Call {
@@ -2180,7 +2071,6 @@ fn eval_envelope_expr_encodes_pointer_variants() {
     let account_ptr = eval_envelope_expr(&account_expr).expect("account envelope");
     let account_tlv = crate::pointer_abi::validate_tlv_bytes(&account_ptr).expect("account tlv");
     assert_eq!(account_tlv.type_id, PointerType::AccountId);
-
     let name_expr = Expr::Call {
         name: "Name::parse".to_string(),
         args: vec![Expr::String("cursor".to_string())],
@@ -2190,7 +2080,6 @@ fn eval_envelope_expr_encodes_pointer_variants() {
     let name_ptr = eval_envelope_expr(&name_expr).expect("name envelope");
     let name_tlv = crate::pointer_abi::validate_tlv_bytes(&name_ptr).expect("name tlv");
     assert_eq!(name_tlv.type_id, PointerType::Name);
-
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -2203,7 +2092,6 @@ fn eval_envelope_expr_encodes_pointer_variants() {
         name_ptr
     );
 }
-
 #[test]
 fn fixture_evaluators_reject_retired_flat_constructor_aliases() {
     let call = |name: &str, value: &str| Expr::Call {
@@ -2212,7 +2100,6 @@ fn fixture_evaluators_reject_retired_flat_constructor_aliases() {
         argument_names: None,
         implicit_receiver: false,
     };
-
     assert!(eval_account_expr(&call("account_id", DEFAULT_CALLER)).is_err());
     assert!(eval_domain_expr(&call("domain_id", "wonderland")).is_err());
     assert!(eval_asset_definition_expr(&call("asset_definition", "rose#wonderland")).is_err());
@@ -2221,14 +2108,12 @@ fn fixture_evaluators_reject_retired_flat_constructor_aliases() {
     assert!(eval_actor_alias_expr(&call("name", "issuer")).is_err());
     assert!(eval_seed_expr(&call("blob", &format!("0x{}", "00".repeat(32)))).is_err());
 }
-
 #[test]
 fn render_failure_without_diagnostic_falls_back_to_debug_error() {
     let vm = IVM::new(u64::MAX);
     let rendered = render_failure(&vm, None, &crate::VMError::DecodeError);
     assert!(rendered.contains("DecodeError"));
 }
-
 #[test]
 fn coverage_helper_functions_handle_internal_and_boundary_cases() {
     assert_eq!(
@@ -2237,7 +2122,6 @@ fn coverage_helper_functions_handle_internal_and_boundary_cases() {
     );
     assert_eq!(normalize_user_function_name("__lowered_internal"), None);
     assert_eq!(normalize_user_function_name("run"), Some("run"));
-
     let function = CoverageFunction {
         display_name: "run".to_string(),
         line: 3,
@@ -2249,7 +2133,6 @@ fn coverage_helper_functions_handle_internal_and_boundary_cases() {
     assert_eq!(percentage(0, 0), 100.0);
     assert_eq!(percentage(1, 4), 25.0);
 }
-
 #[test]
 fn collect_tests_rejects_duplicate_test_names() {
     let program = Program {

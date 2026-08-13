@@ -33,7 +33,6 @@ fn public_wrapper_decodes_one_complete_norito_argument_record() {
         .iter()
         .find(|function| function.name == "run")
         .expect("wrapper function");
-
     let mut record_decodes = 0;
     let mut table_loads = 0;
     let mut json_field_getters = 0;
@@ -73,7 +72,6 @@ fn public_wrapper_decodes_one_complete_norito_argument_record() {
             }
         }
     }
-
     assert_eq!(record_decodes, 1, "wrapper must decode the payload once");
     assert_eq!(table_loads, 9, "one fixed table load per parameter");
     assert_eq!(
@@ -113,7 +111,6 @@ fn public_wrapper_decodes_one_complete_norito_argument_record() {
         ]
     );
 }
-
 #[test]
 fn public_aggregate_arguments_cross_internal_calls_as_flat_words() {
     let src = r#"
@@ -144,7 +141,6 @@ fn public_aggregate_arguments_cross_internal_calls_as_flat_words() {
         .iter()
         .find(|function| function.name == "__entrypoint_impl__run")
         .expect("implementation function");
-
     let call_args = wrapper
         .blocks
         .iter()

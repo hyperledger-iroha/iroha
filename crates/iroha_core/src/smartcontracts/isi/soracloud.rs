@@ -1,11 +1,9 @@
 //! Soracloud lifecycle instruction handlers.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::OnceLock,
     time::Duration,
 };
-
 #[cfg(all(test, feature = "zk-stark"))]
 use iroha_crypto::fhe_bfv::{
     BfvFullBootstrapExecutionProofInputMaterialV1,
@@ -209,7 +207,6 @@ use iroha_primitives::{
     numeric::{Numeric, Quantity, RoundingMode},
 };
 use mv::storage::StorageReadOnly;
-
 use super::{
     asset::isi::assert_numeric_spec_with,
     staking::{apply_slash_to_validator, max_slash_amount},
@@ -16650,7 +16647,6 @@ pub fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_relea
         verifier_key,
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -16659,7 +16655,6 @@ mod tests {
         sync::Arc,
         time::Duration,
     };
-
     #[cfg(feature = "zk-stark")]
     use iroha_crypto::fhe_bfv::BfvBootstrapKeyMode;
     use iroha_crypto::{
@@ -16758,11 +16753,8 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use iroha_primitives::numeric::Quantity;
-    use iroha_test_samples::{
-        ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID,
-    };
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID};
     use sha2::{Digest, Sha256};
-
     use crate::{
         block::ValidBlock,
         kura::Kura,
@@ -20064,7 +20056,6 @@ mod tests {
         vk_box: &iroha_data_model::proof::VerifyingKeyBox,
     ) {
         use sha2::{Digest as _, Sha256};
-
         let mut artifact: iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactPayloadV1 =
             norito::decode_from_bytes(&artifacts.verifier_key)
                 .expect("decode sample full-bootstrap verifier-key artifact envelope");
@@ -42892,6 +42883,5 @@ mod tests {
         Ok(())
     }
     include!("soracloud_uploaded_model_finalize_tail_tests.rs");
-
     mod agent_apartment;
 }

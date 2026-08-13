@@ -4,21 +4,17 @@
 //! forbids aggregate, optional, result, JSON, secret, and state-map keys. Runtime
 //! iteration orders the encoded key bytes, so peers do not depend on host locale,
 //! hash iteration order, or numeric representation.
-
 use std::collections::HashSet;
-
 use super::semantic::{
     self, ExprKind, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem, TypedProgram,
     TypedStatement,
 };
-
 /// Violation emitted when on-chain policy checks fail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyError {
     /// Human-readable description of the violation.
     pub message: String,
 }
-
 /// Run the on-chain profile enforcement against a typed Kotodama program.
 pub fn enforce_on_chain_profile(program: &TypedProgram) -> Result<(), Vec<PolicyError>> {
     let mut checker = Checker::default();
@@ -32,14 +28,12 @@ pub fn enforce_on_chain_profile(program: &TypedProgram) -> Result<(), Vec<Policy
         Err(checker.errors)
     }
 }
-
 #[derive(Default)]
 struct Checker {
     errors: Vec<PolicyError>,
     /// Avoid emitting duplicate messages for the same origin/type combination.
     seen: HashSet<(String, String)>,
 }
-
 impl Checker {
     fn check_states(&mut self, program: &TypedProgram) {
         for state in &program.states {
@@ -47,13 +41,11 @@ impl Checker {
             self.visit_type(&state.ty, &origin);
         }
     }
-
     fn visit_item(&mut self, item: &TypedItem) {
         match item {
             TypedItem::Function(func) => self.visit_function(func),
         }
     }
-
     fn visit_function(&mut self, func: &TypedFunction) {
         self.visit_block(&func.body, func.name.as_str());
         if let Some(ret_ty) = &func.ret_ty {
@@ -61,7 +53,6 @@ impl Checker {
             self.visit_type(ret_ty, &origin);
         }
     }
-
     fn visit_block(&mut self, block: &TypedBlock, func_name: &str) {
         for stmt in &block.statements {
             self.visit_statement(stmt, func_name);
@@ -71,7 +62,6 @@ impl Checker {
             self.visit_expr(tail, &origin);
         }
     }
-
     fn visit_statement(&mut self, stmt: &TypedStatement, func_name: &str) {
         match stmt.kind() {
             TypedStatement::Let { name, value } => {
@@ -149,7 +139,6 @@ impl Checker {
             }
         }
     }
-
     fn visit_expr(&mut self, expr: &TypedExpr, origin: &str) {
         self.visit_type(&expr.ty, origin);
         match expr.kind() {
@@ -247,7 +236,6 @@ impl Checker {
             | ExprKind::Ident(_) => {}
         }
     }
-
     fn visit_type(&mut self, ty: &Type, origin: &str) {
         let resolved = semantic::resolve_struct_type(ty);
         match &resolved {
@@ -269,7 +257,6 @@ impl Checker {
             _ => {}
         }
     }
-
     fn check_map_key(&mut self, origin: &str, key: &Type, value: &Type) {
         if is_allowed_map_key_type(key) {
             return;
@@ -285,11 +272,9 @@ impl Checker {
         }
     }
 }
-
 fn is_allowed_map_key_type(ty: &Type) -> bool {
     semantic::is_supported_durable_key_type(ty)
 }
-
 fn display_type(ty: &Type) -> String {
     match semantic::resolve_struct_type(ty) {
         Type::Int => "int".to_string(),
@@ -327,14 +312,12 @@ fn display_type(ty: &Type) -> String {
         Type::NamedStruct(name) => name,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::{
         semantic::{ExprKind, Type, TypedExpr, TypedStatement},
         *,
     };
-
     #[test]
     fn map_key_violation_reports_origin() {
         let mut checker = Checker::default();
@@ -342,9 +325,7 @@ mod tests {
             expr: ExprKind::Ident("bad_map".into()),
             ty: Type::StateMap(Box::new(Type::Json), Box::new(Type::Int)),
         });
-
         checker.visit_statement(&stmt, "foo");
-
         let errors = checker.errors;
         assert_eq!(errors.len(), 1);
         assert_eq!(
@@ -352,7 +333,6 @@ mod tests {
             "on-chain profile forbids map with key type `Json` in expression in `foo`. Supported key types are int, decimal, quantity, bool, string, bytes, and typed Iroha IDs."
         );
     }
-
     #[test]
     fn every_canonical_scalar_map_key_is_allowed() {
         for ty in [

@@ -16,12 +16,13 @@
 //! output commitments before the standard Figure-3 challenges.  Proofs cannot
 //! therefore be transplanted across pools, assets, roots, transactions, or
 //! output orderings.
-
-use std::{
-    ops::{Deref, DerefMut},
-    sync::OnceLock,
+use super::{
+    FCMP_MAX_OUTPUTS_NATIVE_V1, FcmpNativeErrorV1, FcmpOutputTupleV1,
+    field::{
+        Field25519, decode_edwards_point, encode_field25519, field25519_from_u64,
+        field25519_is_zero, invert_field25519, monero_varint, validate_edwards_scalar,
+    },
 };
-
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT,
     edwards::{CompressedEdwardsY, EdwardsPoint},
@@ -32,16 +33,11 @@ use p256::elliptic_curve::bigint::{Encoding as _, U256};
 use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest as _, Sha256};
 use sha3::Keccak256;
-use zeroize::{Zeroize, Zeroizing};
-
-use super::{
-    FCMP_MAX_OUTPUTS_NATIVE_V1, FcmpNativeErrorV1, FcmpOutputTupleV1,
-    field::{
-        Field25519, decode_edwards_point, encode_field25519, field25519_from_u64,
-        field25519_is_zero, invert_field25519, monero_varint, validate_edwards_scalar,
-    },
+use std::{
+    ops::{Deref, DerefMut},
+    sync::OnceLock,
 };
-
+use zeroize::{Zeroize, Zeroizing};
 /// Upstream revision used for the native Bulletproofs+ equation port.
 pub const FCMP_BP_PLUS_UPSTREAM_REVISION_V1: &str = "971951a1a66014fce5a943b4c78fc24c63187dbb";
 /// SHA-256 digest of the complete ordered Monero Bulletproofs+ generator
@@ -57,24 +53,19 @@ pub const FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1: usize = 2;
 /// Maximum public commitments in the strict-positive aggregate proof.
 pub const FCMP_MAX_RANGE_COMMITMENTS_V1: usize =
     FCMP_MAX_OUTPUTS_NATIVE_V1 * FCMP_RANGE_COMMITMENTS_PER_OUTPUT_V1;
-
 const BP_PLUS_GENERATOR_DOMAIN_V1: &[u8] = b"bulletproof_plus";
 const BP_PLUS_TRANSCRIPT_DOMAIN_V1: &[u8] = b"bulletproof_plus_transcript";
 const IROHA_RANGE_BINDING_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.bp-plus.strict-positive-u64.v1";
 const GENERATOR_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.bp-plus.generator-basis.v1";
 const MAX_SCALAR_SAMPLING_ATTEMPTS_V1: usize = 128;
 const MAX_PROVER_RESTARTS_V1: usize = 128;
-
 struct RangeSecretCopyValueV1<T: Copy + Zeroize>(T);
-
 struct BorrowedRangeCopySlotV1<'a, T: Copy + Zeroize>(&'a mut T);
-
 impl<T: Copy + Zeroize> BorrowedRangeCopySlotV1<'_, T> {
     fn expose_copy(&self) -> T {
         *self.0
     }
 }
-
 impl<T: Copy + Zeroize> Drop for BorrowedRangeCopySlotV1<'_, T> {
     fn drop(&mut self) {
         self.0.zeroize();
@@ -82,36 +73,29 @@ impl<T: Copy + Zeroize> Drop for BorrowedRangeCopySlotV1<'_, T> {
         let _ = core::hint::black_box(&mut *self.0);
     }
 }
-
 impl<T: Copy + Zeroize> RangeSecretCopyValueV1<T> {
     fn new(mut value: T) -> Self {
         Self::take(&mut value)
     }
-
     fn copy_from_ref(value: &T) -> Self {
         Self::from_copy(*value)
     }
-
     fn from_copy(mut value: T) -> Self {
         Self::take(&mut value)
     }
-
     fn take(value: &mut T) -> Self {
         let incoming = BorrowedRangeCopySlotV1(value);
         let owned = Self(incoming.expose_copy());
         drop(incoming);
         owned
     }
-
     fn expose_copy(&self) -> T {
         self.0
     }
-
     fn expose_ref(&self) -> &T {
         &self.0
     }
 }
-
 impl<T: Copy + Zeroize> Drop for RangeSecretCopyValueV1<T> {
     fn drop(&mut self) {
         self.0.zeroize();
@@ -123,34 +107,28 @@ impl<T: Copy + Zeroize> Drop for RangeSecretCopyValueV1<T> {
         });
     }
 }
-
 #[cfg(test)]
 std::thread_local! {
     static RANGE_SECRET_COPY_OWNER_DROPS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-
 // Monero's amount generator H.
 const MONERO_H_BYTES_V1: [u8; 32] = [
     0x8b, 0x65, 0x59, 0x70, 0x15, 0x37, 0x99, 0xaf, 0x2a, 0xea, 0xdc, 0x9f, 0xf1, 0xad, 0xd0, 0xea,
     0x6c, 0x72, 0x51, 0xd5, 0x41, 0x54, 0xcf, 0xa9, 0x2c, 0x17, 0x3a, 0x0d, 0xd3, 0x9c, 0x1f, 0x94,
 ];
-
 /// Pending insertion guard for one private value not yet owned by a vector.
 struct PendingZeroizingValue<T: Zeroize>(Option<T>);
-
 impl<T: Zeroize> PendingZeroizingValue<T> {
     fn new(value: T) -> Self {
         Self(Some(value))
     }
-
     fn take(&mut self) -> Result<T, FcmpNativeErrorV1> {
         self.0
             .take()
             .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)
     }
 }
-
 impl<T: Zeroize> Drop for PendingZeroizingValue<T> {
     fn drop(&mut self) {
         if let Some(value) = &mut self.0 {
@@ -158,7 +136,6 @@ impl<T: Zeroize> Drop for PendingZeroizingValue<T> {
         }
     }
 }
-
 /// Exact-capacity owner for prover-secret vectors.
 ///
 /// Storage is reserved before the first secret copy is accepted. The logical
@@ -170,7 +147,6 @@ struct ExactSizeZeroizingVec<T: Zeroize> {
     exact_capacity: usize,
     allocation_capacity: usize,
 }
-
 impl<T: Zeroize> ExactSizeZeroizingVec<T> {
     fn new(exact_capacity: usize) -> Result<Self, FcmpNativeErrorV1> {
         let mut values = Vec::new();
@@ -187,15 +163,12 @@ impl<T: Zeroize> ExactSizeZeroizingVec<T> {
             allocation_capacity,
         })
     }
-
     fn len(&self) -> usize {
         self.values.len()
     }
-
     fn is_full(&self) -> bool {
         self.len() == self.exact_capacity
     }
-
     fn push_owned(&mut self, value: T) -> Result<(), FcmpNativeErrorV1> {
         let mut value = PendingZeroizingValue::new(value);
         if self.len() >= self.exact_capacity {
@@ -206,7 +179,6 @@ impl<T: Zeroize> ExactSizeZeroizingVec<T> {
         debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
         Ok(())
     }
-
     fn extend_from_slice(&mut self, values: &[T]) -> Result<(), FcmpNativeErrorV1>
     where
         T: Copy,
@@ -224,7 +196,6 @@ impl<T: Zeroize> ExactSizeZeroizingVec<T> {
         Ok(())
     }
 }
-
 impl<T: Copy + Zeroize> ExactSizeZeroizingVec<T> {
     fn push_copy(&mut self, mut value: T) -> Result<(), FcmpNativeErrorV1> {
         let value = RangeSecretCopyValueV1::take(&mut value);
@@ -238,21 +209,17 @@ impl<T: Copy + Zeroize> ExactSizeZeroizingVec<T> {
         Ok(())
     }
 }
-
 impl<T: Zeroize> Deref for ExactSizeZeroizingVec<T> {
     type Target = [T];
-
     fn deref(&self) -> &Self::Target {
         &self.values
     }
 }
-
 impl<T: Zeroize> DerefMut for ExactSizeZeroizingVec<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.values
     }
 }
-
 impl<T: Zeroize> Drop for ExactSizeZeroizingVec<T> {
     fn drop(&mut self) {
         // `Vec::zeroize` clears every initialized element and the complete
@@ -261,24 +228,19 @@ impl<T: Zeroize> Drop for ExactSizeZeroizingVec<T> {
         self.values.zeroize();
     }
 }
-
 struct ScalarVector(ExactSizeZeroizingVec<Scalar>);
-
 impl ScalarVector {
     fn with_capacity(len: usize) -> Result<Self, FcmpNativeErrorV1> {
         ExactSizeZeroizingVec::new(len).map(Self)
     }
-
     fn from_slice(values: &[Scalar]) -> Result<Self, FcmpNativeErrorV1> {
         let mut result = Self::with_capacity(values.len())?;
         result.0.extend_from_slice(values)?;
         Ok(result)
     }
-
     fn try_clone(&self) -> Result<Self, FcmpNativeErrorV1> {
         Self::from_slice(&self.0)
     }
-
     fn zero(len: usize) -> Result<Self, FcmpNativeErrorV1> {
         let mut vector = Self::with_capacity(len)?;
         for _ in 0..len {
@@ -286,7 +248,6 @@ impl ScalarVector {
         }
         Ok(vector)
     }
-
     fn powers(mut value: Scalar, len: usize) -> Result<Self, FcmpNativeErrorV1> {
         let value = RangeSecretCopyValueV1::take(&mut value);
         if len == 0 {
@@ -301,11 +262,9 @@ impl ScalarVector {
         }
         Ok(powers)
     }
-
     fn len(&self) -> usize {
         self.0.len()
     }
-
     fn add_scalar(mut self, mut scalar: Scalar) -> Self {
         let scalar = RangeSecretCopyValueV1::take(&mut scalar);
         for value in self.0.iter_mut() {
@@ -313,7 +272,6 @@ impl ScalarVector {
         }
         self
     }
-
     fn sub_scalar(mut self, mut scalar: Scalar) -> Self {
         let scalar = RangeSecretCopyValueV1::take(&mut scalar);
         for value in self.0.iter_mut() {
@@ -321,7 +279,6 @@ impl ScalarVector {
         }
         self
     }
-
     fn mul_scalar(mut self, mut scalar: Scalar) -> Self {
         let scalar = RangeSecretCopyValueV1::take(&mut scalar);
         for value in self.0.iter_mut() {
@@ -329,7 +286,6 @@ impl ScalarVector {
         }
         self
     }
-
     fn add_vector(mut self, other: &Self) -> Result<Self, FcmpNativeErrorV1> {
         if self.len() != other.len() {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
@@ -339,7 +295,6 @@ impl ScalarVector {
         }
         Ok(self)
     }
-
     fn mul_vector(mut self, other: &Self) -> Result<Self, FcmpNativeErrorV1> {
         if self.len() != other.len() {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
@@ -349,7 +304,6 @@ impl ScalarVector {
         }
         Ok(self)
     }
-
     fn sum(&self) -> Zeroizing<Scalar> {
         let mut sum = Zeroizing::new(Scalar::ZERO);
         for value in self.0.iter() {
@@ -357,7 +311,6 @@ impl ScalarVector {
         }
         sum
     }
-
     fn weighted_inner_product(
         self,
         other: &Self,
@@ -365,7 +318,6 @@ impl ScalarVector {
     ) -> Result<Zeroizing<Scalar>, FcmpNativeErrorV1> {
         Ok(self.mul_vector(other)?.mul_vector(weights)?.sum())
     }
-
     fn truncate(&mut self, len: usize) -> Result<(), FcmpNativeErrorV1> {
         if len > self.len() {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
@@ -378,7 +330,6 @@ impl ScalarVector {
         }
         Ok(())
     }
-
     fn split(self) -> Result<(Self, Self), FcmpNativeErrorV1> {
         if self.len() <= 1 || self.len() % 2 != 0 {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
@@ -392,15 +343,12 @@ impl ScalarVector {
         Ok((left, right))
     }
 }
-
 #[derive(Clone)]
 struct PointVector(Vec<EdwardsPoint>);
-
 impl PointVector {
     fn len(&self) -> usize {
         self.0.len()
     }
-
     fn split(mut self) -> Result<(Self, Self), FcmpNativeErrorV1> {
         if self.len() <= 1 || self.len() % 2 != 0 {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
@@ -409,13 +357,11 @@ impl PointVector {
         Ok((self, Self(right)))
     }
 }
-
 #[derive(Clone)]
 struct BpPlusGenerators {
     g_bold: Vec<EdwardsPoint>,
     h_bold: Vec<EdwardsPoint>,
 }
-
 impl BpPlusGenerators {
     fn reduce(&self, count: usize) -> Result<Self, FcmpNativeErrorV1> {
         let count = count
@@ -433,26 +379,21 @@ impl BpPlusGenerators {
             h_bold: self.h_bold[..count].to_vec(),
         })
     }
-
     fn len(&self) -> usize {
         self.g_bold.len()
     }
 }
-
 static AMOUNT_GENERATOR: OnceLock<Result<EdwardsPoint, FcmpNativeErrorV1>> = OnceLock::new();
 static BP_PLUS_GENERATORS: OnceLock<Result<BpPlusGenerators, FcmpNativeErrorV1>> = OnceLock::new();
 static BP_PLUS_TRANSCRIPT_PREFIX: OnceLock<Result<[u8; 32], FcmpNativeErrorV1>> = OnceLock::new();
-
 pub(super) fn amount_generator() -> Result<EdwardsPoint, FcmpNativeErrorV1> {
     AMOUNT_GENERATOR
         .get_or_init(|| decode_edwards_point(MONERO_H_BYTES_V1, false))
         .clone()
 }
-
 fn keccak256(bytes: &[u8]) -> [u8; 32] {
     Keccak256::digest(bytes).into()
 }
-
 fn hash_to_scalar(parts: &[&[u8]]) -> Result<Scalar, FcmpNativeErrorV1> {
     let mut hasher = Keccak256::new();
     for part in parts {
@@ -464,7 +405,6 @@ fn hash_to_scalar(parts: &[&[u8]]) -> Result<Scalar, FcmpNativeErrorV1> {
     }
     Ok(scalar)
 }
-
 /// Monero's historical `hash_to_ec`, retained exactly for its BP+ basis.
 fn monero_hash_to_point(bytes: [u8; 32]) -> Result<EdwardsPoint, FcmpNativeErrorV1> {
     let mut hashed_bytes = keccak256(&bytes);
@@ -485,7 +425,6 @@ fn monero_hash_to_point(bytes: [u8; 32]) -> Result<EdwardsPoint, FcmpNativeError
     let w = v + Field25519::ONE;
     let a = field25519_from_u64(486_662);
     let x_polynomial = w.square() - (a.square() * v);
-
     // The upstream construction deliberately shadows `v` with the
     // denominator polynomial inside this block.  Using the hash-derived
     // `v` here instead maps to an invalid Edwards encoding.
@@ -499,7 +438,6 @@ fn monero_hash_to_point(bytes: [u8; 32]) -> Result<EdwardsPoint, FcmpNativeError
     let exponent = (-field25519_from_u64(5) * inverse_eight).retrieve();
     let x_candidate = uv3 * uv7.pow(&exponent);
     let x = x_candidate.square() * x_polynomial;
-
     let first_y = w - x;
     let alternate_y = w + x;
     let sign = !field25519_is_zero(first_y) && !field25519_is_zero(alternate_y);
@@ -518,7 +456,6 @@ fn monero_hash_to_point(bytes: [u8; 32]) -> Result<EdwardsPoint, FcmpNativeError
     }
     Ok(point)
 }
-
 fn derive_bp_plus_generators() -> Result<BpPlusGenerators, FcmpNativeErrorV1> {
     let amount = amount_generator()?;
     let mut preimage = amount.compress().to_bytes().to_vec();
@@ -536,7 +473,6 @@ fn derive_bp_plus_generators() -> Result<BpPlusGenerators, FcmpNativeErrorV1> {
         let mut even = preimage.clone();
         even.extend(monero_varint(doubled));
         h_bold.push(monero_hash_to_point(keccak256(&even))?);
-
         let mut odd = preimage.clone();
         odd.extend(monero_varint(
             doubled
@@ -547,14 +483,12 @@ fn derive_bp_plus_generators() -> Result<BpPlusGenerators, FcmpNativeErrorV1> {
     }
     Ok(BpPlusGenerators { g_bold, h_bold })
 }
-
 fn bp_plus_generators() -> Result<&'static BpPlusGenerators, FcmpNativeErrorV1> {
     BP_PLUS_GENERATORS
         .get_or_init(derive_bp_plus_generators)
         .as_ref()
         .map_err(Clone::clone)
 }
-
 fn transcript_prefix() -> Result<[u8; 32], FcmpNativeErrorV1> {
     BP_PLUS_TRANSCRIPT_PREFIX
         .get_or_init(|| {
@@ -563,7 +497,6 @@ fn transcript_prefix() -> Result<[u8; 32], FcmpNativeErrorV1> {
         })
         .clone()
 }
-
 /// Digest the complete Monero BP+ basis used by the FCMP profile.
 pub fn fcmp_bp_plus_generator_digest_v1() -> Result<[u8; 32], FcmpNativeErrorV1> {
     let generators = bp_plus_generators()?;
@@ -581,14 +514,12 @@ pub fn fcmp_bp_plus_generator_digest_v1() -> Result<[u8; 32], FcmpNativeErrorV1>
     }
     Ok(hasher.finalize().into())
 }
-
 /// Secret opening of one newly created FCMP amount commitment.
 pub struct FcmpOutputCommitmentOpeningV1 {
     output: FcmpOutputTupleV1,
     amount: u64,
     mask: Scalar,
 }
-
 impl core::fmt::Debug for FcmpOutputCommitmentOpeningV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -597,20 +528,17 @@ impl core::fmt::Debug for FcmpOutputCommitmentOpeningV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl Zeroize for FcmpOutputCommitmentOpeningV1 {
     fn zeroize(&mut self) {
         self.amount.zeroize();
         self.mask.zeroize();
     }
 }
-
 impl Drop for FcmpOutputCommitmentOpeningV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 impl FcmpOutputCommitmentOpeningV1 {
     /// Construct one strict-positive `u64` commitment opening.
     pub fn new(
@@ -622,7 +550,6 @@ impl FcmpOutputCommitmentOpeningV1 {
         let mask_bytes = RangeSecretCopyValueV1::take(&mut mask);
         Self::from_secret_owners_v1(output, amount, mask_bytes)
     }
-
     /// Construct an opening from borrowed secrets without creating raw
     /// by-value copies in the caller.
     pub fn new_borrowed(
@@ -634,7 +561,6 @@ impl FcmpOutputCommitmentOpeningV1 {
         let mask_bytes = RangeSecretCopyValueV1::copy_from_ref(mask);
         Self::from_secret_owners_v1(output, amount, mask_bytes)
     }
-
     fn from_secret_owners_v1(
         output: FcmpOutputTupleV1,
         amount: RangeSecretCopyValueV1<u64>,
@@ -665,19 +591,16 @@ impl FcmpOutputCommitmentOpeningV1 {
             mask: mask.expose_copy(),
         })
     }
-
     /// Public tuple opened by this witness.
     #[must_use]
     pub const fn output(&self) -> FcmpOutputTupleV1 {
         self.output
     }
-
     /// Hidden positive amount.
     #[must_use]
     pub const fn amount(&self) -> &u64 {
         &self.amount
     }
-
     /// Canonical hidden commitment mask in an owned zeroizing boundary.
     #[must_use]
     pub fn commitment_mask(&self) -> Zeroizing<[u8; 32]> {
@@ -688,7 +611,6 @@ impl FcmpOutputCommitmentOpeningV1 {
         owned
     }
 }
-
 /// Canonical aggregate FCMP Bulletproofs+ payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FcmpRangeProofV1 {
@@ -701,7 +623,6 @@ pub struct FcmpRangeProofV1 {
     l: Vec<[u8; 32]>,
     r: Vec<[u8; 32]>,
 }
-
 fn padded_range_commitment_count(outputs: usize) -> Result<usize, FcmpNativeErrorV1> {
     if outputs == 0 || outputs > FCMP_MAX_OUTPUTS_NATIVE_V1 {
         return Err(FcmpNativeErrorV1::RangeOutputCount {
@@ -714,7 +635,6 @@ fn padded_range_commitment_count(outputs: usize) -> Result<usize, FcmpNativeErro
         .and_then(usize::checked_next_power_of_two)
         .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)
 }
-
 fn range_lr_len(outputs: usize) -> Result<usize, FcmpNativeErrorV1> {
     let generators = padded_range_commitment_count(outputs)?
         .checked_mul(FCMP_AMOUNT_BITS_V1)
@@ -725,7 +645,6 @@ fn range_lr_len(outputs: usize) -> Result<usize, FcmpNativeErrorV1> {
     Ok(usize::try_from(generators.ilog2())
         .map_err(|_| FcmpNativeErrorV1::RangeArithmeticInvariant)?)
 }
-
 /// Exact aggregate range-proof byte width for `outputs`.
 pub fn fcmp_range_proof_size_v1(outputs: usize) -> Result<usize, FcmpNativeErrorV1> {
     let lr = range_lr_len(outputs)?;
@@ -738,7 +657,6 @@ pub fn fcmp_range_proof_size_v1(outputs: usize) -> Result<usize, FcmpNativeError
         .and_then(|fields| fields.checked_mul(32))
         .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)
 }
-
 impl FcmpRangeProofV1 {
     fn from_parts(
         a: EdwardsPoint,
@@ -768,7 +686,6 @@ impl FcmpRangeProofV1 {
             r: r.into_iter().map(encode_point).collect::<Result<_, _>>()?,
         })
     }
-
     /// Decode one exact fixed-shape range proof.
     pub fn decode(bytes: &[u8], outputs: usize) -> Result<Self, FcmpNativeErrorV1> {
         let expected = fcmp_range_proof_size_v1(outputs)?;
@@ -837,7 +754,6 @@ impl FcmpRangeProofV1 {
             r,
         })
     }
-
     /// Encode without attacker-selected vector lengths.
     pub fn encode(&self, outputs: usize) -> Result<Vec<u8>, FcmpNativeErrorV1> {
         if self.l.len() != range_lr_len(outputs)? || self.r.len() != self.l.len() {
@@ -866,25 +782,21 @@ impl FcmpRangeProofV1 {
         Ok(bytes)
     }
 }
-
 struct RangeWitnessCommitment {
     mask: Scalar,
     amount: u64,
 }
-
 impl Zeroize for RangeWitnessCommitment {
     fn zeroize(&mut self) {
         self.mask.zeroize();
         self.amount.zeroize();
     }
 }
-
 impl Drop for RangeWitnessCommitment {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 fn range_witness_matches_public_commitment_v1(
     amount_generator: &EdwardsPoint,
     point: &EdwardsPoint,
@@ -898,7 +810,6 @@ fn range_witness_matches_public_commitment_v1(
         RangeSecretCopyValueV1::new(amount_component.expose_ref() + mask_component.expose_ref());
     expected_owner.expose_ref() == point
 }
-
 fn strict_public_commitments(
     outputs: &[FcmpOutputTupleV1],
 ) -> Result<Vec<EdwardsPoint>, FcmpNativeErrorV1> {
@@ -927,7 +838,6 @@ fn strict_public_commitments(
     }
     Ok(commitments)
 }
-
 fn strict_witness_commitments(
     openings: &[FcmpOutputCommitmentOpeningV1],
     exact_capacity: usize,
@@ -971,26 +881,22 @@ fn strict_witness_commitments(
     }
     Ok(witnesses)
 }
-
 fn multiexp_vartime(terms: &[(Scalar, EdwardsPoint)]) -> EdwardsPoint {
     EdwardsPoint::vartime_multiscalar_mul(
         terms.iter().map(|(scalar, _)| *scalar),
         terms.iter().map(|(_, point)| *point),
     )
 }
-
 struct SecretMultiexpTerm {
     scalar: Scalar,
     point: EdwardsPoint,
 }
-
 impl Zeroize for SecretMultiexpTerm {
     fn zeroize(&mut self) {
         self.scalar.zeroize();
         self.point.zeroize();
     }
 }
-
 impl Drop for SecretMultiexpTerm {
     fn drop(&mut self) {
         self.scalar.zeroize();
@@ -1008,7 +914,6 @@ impl Drop for SecretMultiexpTerm {
         let _ = core::hint::black_box(&mut self.point);
     }
 }
-
 /// Unwind-safe eraser for the private by-value secret-MSM input slots.
 ///
 /// `Scalar` and `EdwardsPoint` are `Copy`, so retaining a term cannot consume
@@ -1018,21 +923,17 @@ struct BorrowedSecretMultiexpTermSlotsV1<'a> {
     scalar: &'a mut Scalar,
     point: &'a mut EdwardsPoint,
 }
-
 impl<'a> BorrowedSecretMultiexpTermSlotsV1<'a> {
     fn new(scalar: &'a mut Scalar, point: &'a mut EdwardsPoint) -> Self {
         Self { scalar, point }
     }
-
     fn scalar_copy(&self) -> Scalar {
         *self.scalar
     }
-
     fn point_copy(&self) -> EdwardsPoint {
         *self.point
     }
 }
-
 impl Drop for BorrowedSecretMultiexpTermSlotsV1<'_> {
     fn drop(&mut self) {
         self.scalar.zeroize();
@@ -1050,7 +951,6 @@ impl Drop for BorrowedSecretMultiexpTermSlotsV1<'_> {
         let _ = core::hint::black_box(&mut *self.point);
     }
 }
-
 #[cfg(test)]
 std::thread_local! {
     static RANGE_SECRET_MSM_CALLEE_SCALAR_CLEARS_V1: std::cell::Cell<usize> =
@@ -1062,23 +962,19 @@ std::thread_local! {
     static RANGE_SECRET_MSM_TERM_POINT_CLEARS_V1: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-
 /// Exact-capacity owner for prover-secret multiscalar-multiplication terms.
 struct SecretMultiexpBuilder {
     terms: ExactSizeZeroizingVec<SecretMultiexpTerm>,
 }
-
 impl SecretMultiexpBuilder {
     fn new(exact_capacity: usize) -> Result<Self, FcmpNativeErrorV1> {
         Ok(Self {
             terms: ExactSizeZeroizingVec::new(exact_capacity)?,
         })
     }
-
     fn push(&mut self, scalar: &Scalar, point: &EdwardsPoint) -> Result<(), FcmpNativeErrorV1> {
         self.push_copy(*scalar, *point)
     }
-
     fn push_copy(
         &mut self,
         mut scalar: Scalar,
@@ -1097,7 +993,6 @@ impl SecretMultiexpBuilder {
         drop(incoming);
         Ok(())
     }
-
     fn evaluate(self) -> Result<EdwardsPoint, FcmpNativeErrorV1> {
         if !self.terms.is_full() {
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
@@ -1108,7 +1003,6 @@ impl SecretMultiexpBuilder {
         ))
     }
 }
-
 fn random_nonzero_scalar(
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<Zeroizing<Scalar>, FcmpNativeErrorV1> {
@@ -1124,18 +1018,15 @@ fn random_nonzero_scalar(
     }
     Err(FcmpNativeErrorV1::ProverRandomnessExhausted)
 }
-
 #[derive(Clone, Copy)]
 enum TranscriptMode {
     Iroha([u8; 32]),
     #[cfg(test)]
     PinnedUpstream,
 }
-
 struct RangeTranscript {
     state: Scalar,
 }
-
 impl RangeTranscript {
     fn new(
         mode: TranscriptMode,
@@ -1176,7 +1067,6 @@ impl RangeTranscript {
         };
         Ok(Self { state })
     }
-
     fn append_a(&mut self, a: EdwardsPoint) -> Result<(Scalar, Scalar), FcmpNativeErrorV1> {
         let a = a.compress().to_bytes();
         let y = hash_to_scalar(&[&self.state.to_bytes(), &a])?;
@@ -1184,7 +1074,6 @@ impl RangeTranscript {
         self.state = z;
         Ok((y, z))
     }
-
     fn append_lr(
         &mut self,
         left: EdwardsPoint,
@@ -1198,7 +1087,6 @@ impl RangeTranscript {
         self.state = challenge;
         Ok(challenge)
     }
-
     fn append_ab(&mut self, a: EdwardsPoint, b: EdwardsPoint) -> Result<Scalar, FcmpNativeErrorV1> {
         let challenge = hash_to_scalar(&[
             &self.state.to_bytes(),
@@ -1209,7 +1097,6 @@ impl RangeTranscript {
         Ok(challenge)
     }
 }
-
 fn d_j(index: usize, commitments: usize) -> Result<ScalarVector, FcmpNativeErrorV1> {
     if index == 0 || index > commitments {
         return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
@@ -1229,7 +1116,6 @@ fn d_j(index: usize, commitments: usize) -> Result<ScalarVector, FcmpNativeError
         .copy_from_slice(&powers.0[..]);
     Ok(vector)
 }
-
 struct AHatComputation {
     y: Scalar,
     z: Scalar,
@@ -1238,7 +1124,6 @@ struct AHatComputation {
     z_pow: ScalarVector,
     a_hat: EdwardsPoint,
 }
-
 fn compute_a_hat(
     mut commitments: PointVector,
     generators: &BpPlusGenerators,
@@ -1260,7 +1145,6 @@ fn compute_a_hat(
     if mn != generators.len() {
         return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
     }
-
     let z_squared = z * z;
     let z_pow = ScalarVector::powers(z_squared, commitments.len())?.mul_scalar(z_squared);
     let mut d = ScalarVector::zero(mn)?;
@@ -1280,12 +1164,10 @@ fn compute_a_hat(
         .copied()
         .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?
         * y;
-
     let mut commitment_accumulator = EdwardsPoint::identity();
     for (commitment, power) in commitments.0.iter().zip(z_pow.0.iter()) {
         commitment_accumulator += commitment * power;
     }
-
     let mut terms = Vec::with_capacity(
         generators
             .len()
@@ -1313,19 +1195,16 @@ fn compute_a_hat(
         a_hat,
     })
 }
-
 struct WipWitness {
     a: ScalarVector,
     b: ScalarVector,
     alpha: Scalar,
 }
-
 impl Drop for WipWitness {
     fn drop(&mut self) {
         self.alpha.zeroize();
     }
 }
-
 struct WipProof {
     l: Vec<EdwardsPoint>,
     r: Vec<EdwardsPoint>,
@@ -1335,11 +1214,9 @@ struct WipProof {
     s_answer: RangeSecretCopyValueV1<Scalar>,
     delta_answer: RangeSecretCopyValueV1<Scalar>,
 }
-
 fn wip_y_vector(y: Scalar, len: usize) -> Result<ScalarVector, FcmpNativeErrorV1> {
     ScalarVector::powers(y, len).map(|powers| powers.mul_scalar(y))
 }
-
 fn next_wip_generators(
     transcript: &mut RangeTranscript,
     mut g_1: PointVector,
@@ -1375,7 +1252,6 @@ fn next_wip_generators(
         PointVector(h),
     ))
 }
-
 fn prove_wip(
     rng: &mut (impl RngCore + CryptoRng),
     generators: BpPlusGenerators,
@@ -1428,7 +1304,6 @@ fn prove_wip(
             .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
     }
     let amount_generator = amount_generator()?;
-
     #[cfg(debug_assertions)]
     {
         let term_count = witness
@@ -1454,7 +1329,6 @@ fn prove_wip(
             return Err(FcmpNativeErrorV1::RangeArithmeticInvariant);
         }
     }
-
     let mut a = witness.a.try_clone()?;
     let mut b = witness.b.try_clone()?;
     let mut alpha = Zeroizing::new(witness.alpha);
@@ -1491,7 +1365,6 @@ fn prove_wip(
         let y_inverse_n_hat = inverses
             .pop()
             .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
-
         let round_term_count = n_hat
             .checked_mul(2)
             .and_then(|count| count.checked_add(2))
@@ -1507,7 +1380,6 @@ fn prove_wip(
         left_terms.push(&c_l, &amount_generator)?;
         left_terms.push(&d_l, &ED25519_BASEPOINT_POINT)?;
         let left = left_terms.evaluate()? * inverse_eight;
-
         let right_a = a_2.try_clone()?.mul_scalar(y_n_hat);
         let mut right_terms = SecretMultiexpBuilder::new(round_term_count)?;
         for (scalar, point) in right_a.0.iter().zip(g_1.0.iter()) {
@@ -1528,7 +1400,6 @@ fn prove_wip(
         r_proof.push(right);
         debug_assert_eq!(l_proof.capacity(), l_proof_allocation_capacity);
         debug_assert_eq!(r_proof.capacity(), r_proof_allocation_capacity);
-
         let (challenge, inverse, challenge_squared, inverse_squared, next_g, next_h) =
             next_wip_generators(transcript, g_1, g_2, h_1, h_2, left, right, y_inverse_n_hat)?;
         g_bold = next_g;
@@ -1541,7 +1412,6 @@ fn prove_wip(
             .add_vector(&b_2.mul_scalar(challenge))?;
         *alpha += (*d_l * challenge_squared) + (*d_r * inverse_squared);
     }
-
     if g_bold.len() != 1
         || h_bold.len() != 1
         || a.len() != 1
@@ -1584,7 +1454,6 @@ fn prove_wip(
         ),
     })
 }
-
 fn challenge_products(challenges: &[(Scalar, Scalar)]) -> Result<Vec<Scalar>, FcmpNativeErrorV1> {
     let len = 1_usize
         .checked_shl(
@@ -1617,13 +1486,11 @@ fn challenge_products(challenges: &[(Scalar, Scalar)]) -> Result<Vec<Scalar>, Fc
     }
     Ok(products)
 }
-
 fn decode_scalar(bytes: [u8; 32]) -> Result<Scalar, FcmpNativeErrorV1> {
     validate_edwards_scalar(bytes)?;
     Option::<Scalar>::from(Scalar::from_canonical_bytes(bytes))
         .ok_or(FcmpNativeErrorV1::ScalarEncoding)
 }
-
 fn verify_wip(
     generators: BpPlusGenerators,
     p: EdwardsPoint,
@@ -1647,7 +1514,6 @@ fn verify_wip(
         inverse_y_powers.push(running);
         running *= inverse_y;
     }
-
     let mut l = Vec::with_capacity(proof.l.len());
     let mut r = Vec::with_capacity(proof.r.len());
     let mut challenges = Vec::with_capacity(proof.l.len());
@@ -1672,7 +1538,6 @@ fn verify_wip(
     let r_answer = decode_scalar(proof.r_answer)?;
     let s_answer = decode_scalar(proof.s_answer)?;
     let delta_answer = decode_scalar(proof.delta_answer)?;
-
     let mut terms = Vec::with_capacity(
         4_usize
             .checked_add(l.len().saturating_mul(2))
@@ -1707,7 +1572,6 @@ fn verify_wip(
     }
     Ok(())
 }
-
 fn prove_range_once(
     rng: &mut (impl RngCore + CryptoRng),
     mode: TranscriptMode,
@@ -1733,7 +1597,6 @@ fn prove_range_once(
             return Err(FcmpNativeErrorV1::RangeCommitmentOpeningMismatch);
         }
     }
-
     let inverse_eight = Scalar::from(8_u8).invert();
     let transcript_commitments = public_commitments
         .iter()
@@ -1749,7 +1612,6 @@ fn prove_range_once(
         .checked_mul(FCMP_AMOUNT_BITS_V1)
         .ok_or(FcmpNativeErrorV1::RangeArithmeticInvariant)?;
     let generators = bp_plus_generators()?.reduce(generator_count)?;
-
     let mut a_l = ScalarVector::with_capacity(generator_count)?;
     for witness in witnesses.iter() {
         for bit in 0..FCMP_AMOUNT_BITS_V1 {
@@ -1777,7 +1639,6 @@ fn prove_range_once(
     if proof_a.is_identity() {
         return Err(FcmpNativeErrorV1::RangeProofPoint);
     }
-
     let AHatComputation {
         y,
         z,
@@ -1829,7 +1690,6 @@ fn prove_range_once(
         r,
     )
 }
-
 fn preflight_fcmp_range_v1(
     openings: &[FcmpOutputCommitmentOpeningV1],
 ) -> Result<Vec<FcmpOutputTupleV1>, FcmpNativeErrorV1> {
@@ -1854,7 +1714,6 @@ fn preflight_fcmp_range_v1(
     }
     Ok(outputs)
 }
-
 /// Produce the sole aggregate strict-positive `u64` output range proof.
 pub fn prove_fcmp_range_v1(
     rng: &mut (impl RngCore + CryptoRng),
@@ -1868,7 +1727,6 @@ pub fn prove_fcmp_range_v1(
         .map_err(|_| FcmpNativeErrorV1::ProverSelfCheckFailed)?;
     Ok(proof)
 }
-
 pub(super) fn prove_fcmp_range_with_checked_rng_v1(
     rng: &mut (impl RngCore + CryptoRng),
     context_hash: [u8; 32],
@@ -1876,7 +1734,6 @@ pub(super) fn prove_fcmp_range_with_checked_rng_v1(
 ) -> Result<FcmpRangeProofV1, FcmpNativeErrorV1> {
     retry_range_prover_v1(|| prove_range_once(rng, TranscriptMode::Iroha(context_hash), openings))
 }
-
 fn retry_range_prover_v1<T>(
     mut prove_once: impl FnMut() -> Result<T, FcmpNativeErrorV1>,
 ) -> Result<T, FcmpNativeErrorV1> {
@@ -1891,7 +1748,6 @@ fn retry_range_prover_v1<T>(
     }
     Err(FcmpNativeErrorV1::RangeProverRestartExhausted)
 }
-
 fn verify_range_with_mode(
     mode: TranscriptMode,
     outputs: &[FcmpOutputTupleV1],
@@ -1924,7 +1780,6 @@ fn verify_range_with_mode(
     )?;
     verify_wip(generators, a_hat, y, &mut transcript, proof)
 }
-
 /// Verify the aggregate range proof against the ordered new commitments.
 pub fn verify_fcmp_range_v1(
     context_hash: [u8; 32],
@@ -1936,46 +1791,36 @@ pub fn verify_fcmp_range_v1(
     }
     verify_range_with_mode(TranscriptMode::Iroha(context_hash), outputs, proof)
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::privacy_engines::fcmp_plus_plus::FailingRngV1;
+    use rand_08::{SeedableRng as _, rngs::StdRng};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-
-    use rand_08::{SeedableRng as _, rngs::StdRng};
-
-    use super::*;
-    use crate::privacy_engines::fcmp_plus_plus::FailingRngV1;
-
     static RANGE_COPY_CLEARS: AtomicUsize = AtomicUsize::new(0);
-
     #[derive(Clone, Copy)]
     struct TrackingCopy(u64);
-
     impl Zeroize for TrackingCopy {
         fn zeroize(&mut self) {
             self.0 = 0;
             RANGE_COPY_CLEARS.fetch_add(1, Ordering::SeqCst);
         }
     }
-
     fn reset_range_secret_copy_owner_drops() {
         RANGE_SECRET_COPY_OWNER_DROPS_V1.with(|drops| drops.set(0));
     }
-
     fn range_secret_copy_owner_drops() -> usize {
         RANGE_SECRET_COPY_OWNER_DROPS_V1.with(std::cell::Cell::get)
     }
-
     fn reset_secret_multiexp_tracking() {
         RANGE_SECRET_MSM_CALLEE_SCALAR_CLEARS_V1.with(|clears| clears.set(0));
         RANGE_SECRET_MSM_CALLEE_POINT_CLEARS_V1.with(|clears| clears.set(0));
         RANGE_SECRET_MSM_TERM_SCALAR_CLEARS_V1.with(|clears| clears.set(0));
         RANGE_SECRET_MSM_TERM_POINT_CLEARS_V1.with(|clears| clears.set(0));
     }
-
     fn secret_multiexp_tracking() -> (usize, usize, usize, usize) {
         (
             RANGE_SECRET_MSM_CALLEE_SCALAR_CLEARS_V1.with(std::cell::Cell::get),
@@ -1984,17 +1829,14 @@ mod tests {
             RANGE_SECRET_MSM_TERM_POINT_CLEARS_V1.with(std::cell::Cell::get),
         )
     }
-
     struct PeriodicRng {
         period: usize,
         cursor: usize,
     }
-
     struct TrackingSecret {
         value: u64,
         clear_calls: Arc<AtomicUsize>,
     }
-
     impl TrackingSecret {
         fn new(value: u64, clear_calls: &Arc<AtomicUsize>) -> Self {
             Self {
@@ -2003,14 +1845,12 @@ mod tests {
             }
         }
     }
-
     impl Zeroize for TrackingSecret {
         fn zeroize(&mut self) {
             self.value = 0;
             self.clear_calls.fetch_add(1, Ordering::SeqCst);
         }
     }
-
     #[test]
     fn range_copy_owner_clears_transfer_success_and_unwind_slots() {
         RANGE_COPY_CLEARS.store(0, Ordering::SeqCst);
@@ -2021,7 +1861,6 @@ mod tests {
         assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 1);
         drop(owner);
         assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
-
         RANGE_COPY_CLEARS.store(0, Ordering::SeqCst);
         let borrowed = TrackingCopy(9);
         let owner = RangeSecretCopyValueV1::copy_from_ref(&borrowed);
@@ -2030,7 +1869,6 @@ mod tests {
         assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 0);
         drop(owner);
         assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 1);
-
         RANGE_COPY_CLEARS.store(0, Ordering::SeqCst);
         assert!(
             std::panic::catch_unwind(|| {
@@ -2041,7 +1879,6 @@ mod tests {
         );
         assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
     }
-
     #[test]
     fn exact_size_copy_insertion_clears_success_overflow_and_unwind_slots() {
         RANGE_COPY_CLEARS.store(0, Ordering::SeqCst);
@@ -2055,7 +1892,6 @@ mod tests {
         assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
         drop(values);
         assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 3);
-
         RANGE_COPY_CLEARS.store(0, Ordering::SeqCst);
         assert!(
             std::panic::catch_unwind(|| {
@@ -2068,7 +1904,6 @@ mod tests {
             .is_err()
         );
         assert_eq!(RANGE_COPY_CLEARS.load(Ordering::SeqCst), 2);
-
         let source = include_str!("range.rs");
         let exact_vector = source
             .split_once("impl<T: Zeroize> ExactSizeZeroizingVec<T> {")
@@ -2131,7 +1966,6 @@ mod tests {
         assert!(!scalar_vector.contains("Zeroizing::new(value)"));
         assert!(!scalar_vector.contains("Zeroizing::new(scalar)"));
     }
-
     #[test]
     fn scalar_vector_accumulators_keep_zeroizing_result_owners() {
         let summands = ScalarVector::from_slice(&[
@@ -2143,7 +1977,6 @@ mod tests {
         let sum = summands.sum();
         let _: &Zeroizing<Scalar> = &sum;
         assert_eq!(*sum, Scalar::from(10_u64));
-
         let left = ScalarVector::from_slice(&[
             Scalar::from(2_u64),
             Scalar::from(3_u64),
@@ -2167,7 +2000,6 @@ mod tests {
             .expect("matching fixed vectors");
         let _: &Zeroizing<Scalar> = &inner_product;
         assert_eq!(*inner_product, Scalar::from(2_360_u64));
-
         let source = include_str!("range.rs");
         let scalar_vector = source
             .split_once("impl ScalarVector {")
@@ -2196,7 +2028,6 @@ mod tests {
         assert!(
             weighted_inner_product.contains(") -> Result<Zeroizing<Scalar>, FcmpNativeErrorV1>")
         );
-
         let compute_a_hat = source
             .split_once("fn compute_a_hat(")
             .expect("A-hat computation")
@@ -2209,7 +2040,6 @@ mod tests {
         assert!(compute_a_hat.contains("&*y_pows"));
         assert!(compute_a_hat.contains("&*d_sum"));
         assert!(!compute_a_hat.contains("d.sum() *"));
-
         let prove_wip = source
             .split_once("fn prove_wip(")
             .expect("WIP prover")
@@ -2223,7 +2053,6 @@ mod tests {
         assert!(prove_wip.contains("left_terms.push(&c_l, &amount_generator)?"));
         assert!(prove_wip.contains("right_terms.push(&c_r, &amount_generator)?"));
     }
-
     #[test]
     fn wip_responses_remain_owned_until_borrowed_final_encoding() {
         let source = include_str!("range.rs");
@@ -2238,7 +2067,6 @@ mod tests {
         assert!(!wip.contains("r_answer: Scalar"));
         assert!(!wip.contains("s_answer: Scalar"));
         assert!(!wip.contains("delta_answer: Scalar"));
-
         let prove_wip = source
             .split_once("fn prove_wip(")
             .expect("WIP prover")
@@ -2252,7 +2080,6 @@ mod tests {
             .expect("first response owner");
         let return_end = prove_wip.rfind("})").expect("WIP publication");
         assert!(response_owner < return_end);
-
         let from_parts = source
             .split_once("    fn from_parts(")
             .expect("range proof encoder")
@@ -2265,7 +2092,6 @@ mod tests {
             assert!(!from_parts.contains(&format!("{response}: Scalar")));
             assert!(from_parts.contains(&format!("{response}: {response}.to_bytes()")));
         }
-
         let prove_range = source
             .split_once("fn prove_range_once(")
             .expect("range prover")
@@ -2281,7 +2107,6 @@ mod tests {
         assert!(!prove_range.contains("wip.s_answer"));
         assert!(!prove_range.contains("wip.delta_answer"));
     }
-
     #[test]
     fn range_opening_owns_inputs_and_products_before_fallible_checks() {
         let source = include_str!("range.rs");
@@ -2319,7 +2144,6 @@ mod tests {
         assert!(!constructor.contains("Zeroizing::new(amount)"));
         assert!(!constructor.contains("Zeroizing::new(mask)"));
         assert!(!constructor.contains("ED25519_BASEPOINT_POINT * *mask"));
-
         let borrowed_constructor = constructor
             .find("pub fn new_borrowed(")
             .expect("borrowed opening constructor");
@@ -2334,7 +2158,6 @@ mod tests {
             .expect("owned validation boundary");
         assert!(borrowed_constructor < borrowed_amount);
         assert!(borrowed_amount < borrowed_mask && borrowed_mask < owned_validation);
-
         let accessors = constructor
             .split_once("/// Public tuple opened by this witness.")
             .expect("opening accessors")
@@ -2360,7 +2183,6 @@ mod tests {
         assert!(mask_copy < mask_take && mask_take < output_owner && output_owner < output_copy);
         assert!(!mask_accessor.contains("Zeroizing::new(self.mask.to_bytes())"));
     }
-
     #[test]
     fn range_witness_check_keeps_secret_products_owned_and_borrowed_in_order() {
         let source = include_str!("range.rs");
@@ -2401,7 +2223,6 @@ mod tests {
         assert!(check.contains("amount_component.expose_ref() + mask_component.expose_ref()"));
         assert!(!check.contains("let expected ="));
         assert!(!check.contains("* witness.mask"));
-
         let prove_range = source
             .split_once("fn prove_range_once(")
             .expect("range prover")
@@ -2418,7 +2239,6 @@ mod tests {
         assert!(owned_check < mismatch);
         assert!(!prove_range.contains("amount_generator * Scalar::from(witness.amount)"));
     }
-
     #[test]
     fn range_witness_check_drops_every_owner_before_match_and_mismatch_return() {
         let opening = opening(0, 7, 29);
@@ -2427,7 +2247,6 @@ mod tests {
         let witnesses = strict_witness_commitments(std::slice::from_ref(&opening), 2)
             .expect("secret witness pair");
         let amount_generator = amount_generator().expect("amount generator");
-
         reset_range_secret_copy_owner_drops();
         assert!(range_witness_matches_public_commitment_v1(
             &amount_generator,
@@ -2435,7 +2254,6 @@ mod tests {
             &witnesses[0],
         ));
         assert_eq!(range_secret_copy_owner_drops(), 4);
-
         reset_range_secret_copy_owner_drops();
         assert!(!range_witness_matches_public_commitment_v1(
             &amount_generator,
@@ -2443,7 +2261,6 @@ mod tests {
             &witnesses[1],
         ));
         assert_eq!(range_secret_copy_owner_drops(), 4);
-
         let mut mismatched = opening(1, 7, 29);
         mismatched.mask = Scalar::from(31_u64);
         reset_range_secret_copy_owner_drops();
@@ -2457,7 +2274,6 @@ mod tests {
         );
         assert_eq!(range_secret_copy_owner_drops(), 4);
     }
-
     #[test]
     fn range_preflight_reuses_owned_witness_check_before_public_rng_health_check() {
         let source = include_str!("range.rs");
@@ -2478,7 +2294,6 @@ mod tests {
         assert!(!preflight.contains("amount_generator * Scalar::from(witness.amount)"));
         assert!(!preflight.contains("ED25519_BASEPOINT_POINT * witness.mask"));
         assert!(!preflight.contains("let expected ="));
-
         let public_entry = source
             .split_once("pub fn prove_fcmp_range_v1(")
             .expect("public range prover")
@@ -2497,19 +2312,16 @@ mod tests {
             .expect("checked range prover");
         assert!(preflight_call < rng_health_check && rng_health_check < proof);
     }
-
     #[test]
     fn range_preflight_mismatch_drops_owned_products_before_public_rng_use() {
         let mut mismatched = opening(2, 7, 29);
         mismatched.mask = Scalar::from(31_u64);
-
         reset_range_secret_copy_owner_drops();
         assert_eq!(
             preflight_fcmp_range_v1(std::slice::from_ref(&mismatched)),
             Err(FcmpNativeErrorV1::RangeCommitmentOpeningMismatch)
         );
         assert_eq!(range_secret_copy_owner_drops(), 4);
-
         reset_range_secret_copy_owner_drops();
         assert_eq!(
             prove_fcmp_range_v1(
@@ -2521,7 +2333,6 @@ mod tests {
         );
         assert_eq!(range_secret_copy_owner_drops(), 4);
     }
-
     #[test]
     fn range_opening_amount_borrows_storage_and_mask_bytes_stay_owned() {
         let opening = opening(0, 7, 29);
@@ -2530,7 +2341,6 @@ mod tests {
         assert_eq!(&*mask, &Scalar::from(29_u64).to_bytes());
         assert_eq!(opening.output(), opening.output);
     }
-
     const ZERO_REDUCTION_BLOCK_V1: [u8; 64] = [
         // l, the Ed25519 scalar order, in little-endian form.
         0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde,
@@ -2541,26 +2351,21 @@ mod tests {
         0x29, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x20,
     ];
-
     #[derive(Default)]
     struct ZeroReductionRng {
         try_fill_calls: usize,
         bytes_filled: usize,
     }
-
     impl RngCore for PeriodicRng {
         fn next_u32(&mut self) -> u32 {
             panic!("FCMP++ range prover must reject the periodic prefix")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("FCMP++ range prover must reject the periodic prefix")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("FCMP++ range prover must use fallible entropy")
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
             for byte in destination {
                 *byte = ((self.cursor % self.period) as u8)
@@ -2571,22 +2376,17 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for PeriodicRng {}
-
     impl RngCore for ZeroReductionRng {
         fn next_u32(&mut self) -> u32 {
             panic!("FCMP++ range prover must use fallible entropy")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("FCMP++ range prover must use fallible entropy")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("FCMP++ range prover must use fallible entropy")
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
             assert_eq!(
                 destination.len(),
@@ -2599,9 +2399,7 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for ZeroReductionRng {}
-
     fn hex32(value: &str) -> [u8; 32] {
         assert_eq!(value.len(), 64);
         let mut bytes = [0_u8; 32];
@@ -2611,7 +2409,6 @@ mod tests {
         }
         bytes
     }
-
     fn decode_hex(value: &str) -> Vec<u8> {
         assert_eq!(value.len() % 2, 0);
         (0..value.len())
@@ -2622,7 +2419,6 @@ mod tests {
             })
             .collect()
     }
-
     fn opening(ordinal: u64, amount: u64, mask: u64) -> FcmpOutputCommitmentOpeningV1 {
         let commitment = amount_generator().expect("amount generator") * Scalar::from(amount)
             + ED25519_BASEPOINT_POINT * Scalar::from(mask);
@@ -2639,7 +2435,6 @@ mod tests {
         FcmpOutputCommitmentOpeningV1::new(output, amount, Scalar::from(mask).to_bytes())
             .expect("valid opening")
     }
-
     #[test]
     fn exact_size_secret_vector_keeps_capacity_and_clears_success_and_error_paths() {
         let clear_calls = Arc::new(AtomicUsize::new(0));
@@ -2648,7 +2443,6 @@ mod tests {
         let allocation_capacity = secrets.values.capacity();
         assert_eq!(secrets.exact_capacity, 2);
         assert!(allocation_capacity >= secrets.exact_capacity);
-
         secrets
             .push_owned(TrackingSecret::new(11, &clear_calls))
             .expect("first secret fits");
@@ -2659,7 +2453,6 @@ mod tests {
             .expect("second secret fits");
         assert_eq!(secrets.values.as_ptr(), allocation);
         assert_eq!(secrets.values.capacity(), allocation_capacity);
-
         assert_eq!(
             secrets.push_owned(TrackingSecret::new(17, &clear_calls)),
             Err(FcmpNativeErrorV1::RangeArithmeticInvariant)
@@ -2670,7 +2463,6 @@ mod tests {
         drop(secrets);
         assert_eq!(clear_calls.load(Ordering::SeqCst), 3);
     }
-
     #[test]
     fn exact_size_secret_vector_clears_initialized_prefix_during_unwind() {
         let clear_calls = Arc::new(AtomicUsize::new(0));
@@ -2688,7 +2480,6 @@ mod tests {
         assert!(unwind.is_err());
         assert_eq!(clear_calls.load(Ordering::SeqCst), 2);
     }
-
     #[test]
     fn secret_multiexp_builder_clears_successful_push_and_drop_slots() {
         reset_secret_multiexp_tracking();
@@ -2700,7 +2491,6 @@ mod tests {
         drop(terms);
         assert_eq!(secret_multiexp_tracking(), (1, 1, 1, 1));
     }
-
     #[test]
     fn secret_multiexp_builder_clears_overflow_slots_without_reallocation() {
         reset_secret_multiexp_tracking();
@@ -2724,7 +2514,6 @@ mod tests {
         drop(terms);
         assert_eq!(secret_multiexp_tracking(), (2, 2, 1, 1));
     }
-
     #[test]
     fn secret_multiexp_builder_clears_incomplete_evaluation_terms() {
         reset_secret_multiexp_tracking();
@@ -2738,7 +2527,6 @@ mod tests {
         );
         assert_eq!(secret_multiexp_tracking(), (1, 1, 1, 1));
     }
-
     #[test]
     fn secret_multiexp_builder_clears_complete_evaluation_terms() {
         reset_secret_multiexp_tracking();
@@ -2759,7 +2547,6 @@ mod tests {
         );
         assert_eq!(secret_multiexp_tracking(), (2, 2, 2, 2));
     }
-
     #[test]
     fn secret_multiexp_guards_clear_during_unwind() {
         reset_secret_multiexp_tracking();
@@ -2772,7 +2559,6 @@ mod tests {
         }));
         assert!(guard_unwind.is_err());
         assert_eq!(secret_multiexp_tracking(), (1, 1, 0, 0));
-
         reset_secret_multiexp_tracking();
         let builder_unwind = std::panic::catch_unwind(|| {
             let scalar = Scalar::from(19_u8);
@@ -2784,7 +2570,6 @@ mod tests {
         assert!(builder_unwind.is_err());
         assert_eq!(secret_multiexp_tracking(), (1, 1, 1, 1));
     }
-
     #[test]
     fn secret_multiexp_source_boundary_stays_borrowed_guarded_and_owned() {
         let source = include_str!("range.rs");
@@ -2817,7 +2602,6 @@ mod tests {
             .expect("explicit guard drop");
         assert!(guard < capacity_check && capacity_check < insertion && insertion < guard_drop);
         assert!(!builder.contains("fn push(&mut self, scalar: Scalar, point: EdwardsPoint)"));
-
         let prove_wip = source
             .split_once("fn prove_wip(")
             .expect("WIP prover")
@@ -2835,7 +2619,6 @@ mod tests {
         assert!(prove_wip.contains("a_terms.push(&proof_a_amount, &amount_generator)"));
         assert!(prove_wip.contains("let proof_b_amount = Zeroizing::new("));
         assert!(prove_wip.contains("b_terms.push(&proof_b_amount, &amount_generator)"));
-
         let prove_range = source
             .split_once("fn prove_range_once(")
             .expect("range prover")
@@ -2847,7 +2630,6 @@ mod tests {
         assert!(!prove_range.contains("a_r.0.iter().copied()"));
         assert!(!prove_range.contains("a_terms.push(*alpha"));
     }
-
     #[test]
     fn padded_witness_vector_uses_public_final_capacity_before_secret_insertion() {
         let openings = [opening(1, 3, 5), opening(2, 7, 11), opening(3, 13, 17)];
@@ -2866,7 +2648,6 @@ mod tests {
             vec![(0, Scalar::ZERO); 2]
         );
     }
-
     #[test]
     fn range_rng_unavailability_fails_without_calling_infallible_rng_methods() {
         assert_eq!(
@@ -2885,7 +2666,6 @@ mod tests {
             Err(FcmpNativeErrorV1::RandomnessUnavailable)
         );
     }
-
     #[test]
     fn scalar_sampler_returns_a_zeroizing_owner_without_a_raw_round_trip() {
         let mut rng = PeriodicRng {
@@ -2897,7 +2677,6 @@ mod tests {
         assert!(core::mem::needs_drop::<Zeroizing<Scalar>>());
         assert_ne!(*scalar, Scalar::ZERO);
         assert_eq!(rng.cursor, 64, "one scalar draw consumes one exact block");
-
         let source = include_str!("range.rs");
         let sampler = source
             .split_once("fn random_nonzero_scalar(")
@@ -2909,7 +2688,6 @@ mod tests {
         assert!(sampler.contains(") -> Result<Zeroizing<Scalar>, FcmpNativeErrorV1>"));
         assert!(sampler.contains("return Ok(scalar);"));
         assert!(!sampler.contains("return Ok(*scalar);"));
-
         let prove_wip = source
             .split_once("fn prove_wip(")
             .expect("WIP prover")
@@ -2931,7 +2709,6 @@ mod tests {
         assert!(prove_range.contains("let alpha = random_nonzero_scalar(rng)?;"));
         assert!(!prove_range.contains("Zeroizing::new(random_nonzero_scalar(rng)?)"));
     }
-
     #[test]
     fn range_public_prover_rejects_every_prohibited_short_period_prefix() {
         let opening = opening(1, 5, 7);
@@ -2947,7 +2724,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn scalar_sampling_exhaustion_is_distinct_from_full_proof_restarts() {
         assert_eq!(
@@ -2969,7 +2745,6 @@ mod tests {
         );
         assert_eq!(MAX_SCALAR_SAMPLING_ATTEMPTS_V1, 128);
     }
-
     #[test]
     fn range_restarts_only_transcript_dependent_honest_aborts_at_a_fixed_bound() {
         let mut attempts = 0;
@@ -2984,7 +2759,6 @@ mod tests {
         .expect("third attempt succeeds");
         assert_eq!(recovered, 23);
         assert_eq!(attempts, 3);
-
         for retryable in [
             FcmpNativeErrorV1::RangeProofPoint,
             FcmpNativeErrorV1::RangeChallengeZero,
@@ -3000,7 +2774,6 @@ mod tests {
             assert_eq!(attempts, MAX_PROVER_RESTARTS_V1);
         }
         assert_eq!(MAX_PROVER_RESTARTS_V1, 128);
-
         attempts = 0;
         assert_eq!(
             retry_range_prover_v1::<()>(|| {
@@ -3011,7 +2784,6 @@ mod tests {
         );
         assert_eq!(attempts, 1);
     }
-
     #[test]
     fn monero_hash_to_point_and_generator_basis_match_pinned_vectors() {
         assert_eq!(
@@ -3038,7 +2810,6 @@ mod tests {
             FCMP_BP_PLUS_GENERATOR_DIGEST_V1
         );
     }
-
     #[test]
     fn pinned_serai_bulletproofs_plus_vector_verifies_natively() {
         // Generated by monero-bulletproofs at the pinned revision with
@@ -3077,7 +2848,6 @@ mod tests {
         verify_range_with_mode(TranscriptMode::PinnedUpstream, &[output], &proof)
             .expect("pinned upstream BP+ proof");
     }
-
     #[test]
     fn native_standard_transcript_proof_is_upstream_compatible() {
         let opening = opening(1, 9, 17);
@@ -3087,7 +2857,6 @@ mod tests {
             .expect("native standard-transcript proof");
         verify_range_with_mode(TranscriptMode::PinnedUpstream, &[output], &proof)
             .expect("native proof verifies");
-
         let encoded = proof.encode(1).expect("canonical encoding");
         let encoded_digest: [u8; 32] = Sha256::digest(&encoded).into();
         // The corresponding 640-byte proof was parsed by pinned Serai
@@ -3104,7 +2873,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn strict_positive_u64_range_round_trips_and_binds_every_public_dimension() {
         let openings = [opening(1, 1, 17), opening(2, u64::MAX, 19)];
@@ -3124,20 +2892,16 @@ mod tests {
             fcmp_range_proof_size_v1(outputs.len()).expect("fixed size")
         );
         verify_fcmp_range_v1(context, &outputs, &proof).expect("valid aggregate proof");
-
         let mut wrong_context = context;
         wrong_context[0] ^= 1;
         assert!(verify_fcmp_range_v1(wrong_context, &outputs, &proof).is_err());
-
         let mut reordered = outputs.clone();
         reordered.swap(0, 1);
         assert!(verify_fcmp_range_v1(context, &reordered, &proof).is_err());
-
         let substituted = opening(3, 2, 23).output();
         let mut changed = outputs.clone();
         changed[1] = substituted;
         assert!(verify_fcmp_range_v1(context, &changed, &proof).is_err());
-
         let encoded = proof.encode(outputs.len()).expect("canonical encoding");
         for offset in [0, 32, 64, 96, encoded.len() / 2, encoded.len() - 1] {
             let mut mutation = encoded.clone();
@@ -3154,7 +2918,6 @@ mod tests {
         trailing.push(0);
         assert!(FcmpRangeProofV1::decode(&trailing, outputs.len()).is_err());
     }
-
     #[test]
     fn zero_overflow_opening_substitution_and_balancing_points_fail_closed() {
         let valid = opening(1, 7, 29);
@@ -3169,7 +2932,6 @@ mod tests {
             FcmpNativeErrorV1::RangeCommitmentOpeningMismatch
         );
         assert!(u64::MAX.checked_add(1).is_none());
-
         let zero_mask_commitment =
             amount_generator().expect("amount generator") * Scalar::from(2_u64);
         let zero_mask_output = FcmpOutputTupleV1::new(
@@ -3184,12 +2946,10 @@ mod tests {
         .expect("canonical zero-mask commitment");
         FcmpOutputCommitmentOpeningV1::new(zero_mask_output, 2, Scalar::ZERO.to_bytes())
             .expect("zero masks are part of the verifier relation");
-
         let context = [0x53; 32];
         let mut rng = StdRng::seed_from_u64(0xfc_b0_002);
         let proof =
             prove_fcmp_range_v1(&mut rng, context, &[valid]).expect("valid strict-positive proof");
-
         // C = mask*G + 2^64*H is the first integer outside the u64 range.
         let two_pow_64 = (0..64).fold(Scalar::ONE, |value, _| value + value);
         let overflow_commitment = ED25519_BASEPOINT_POINT * Scalar::from(37_u64)
@@ -3205,7 +2965,6 @@ mod tests {
         )
         .expect("canonical arbitrary commitment");
         assert!(verify_fcmp_range_v1(context, &[overflow], &proof).is_err());
-
         // A transaction can always manufacture a public point that makes a
         // group-balance equation hold. It cannot manufacture its bounded
         // opening or transplant a proof for a different point.
@@ -3222,7 +2981,6 @@ mod tests {
         )
         .expect("canonical arbitrary group point");
         assert!(verify_fcmp_range_v1(context, &[arbitrary_balancing], &proof).is_err());
-
         let c_equals_h = FcmpOutputTupleV1::new(
             (ED25519_BASEPOINT_POINT * Scalar::from(501_u64))
                 .compress()

@@ -5,7 +5,6 @@ use std::{
     path::Path,
     time::{Duration, SystemTime},
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hex::FromHexError;
 use iroha_crypto::soranet::token::{self, AdmissionToken, MintError, compute_issuer_fingerprint};
@@ -17,7 +16,6 @@ use rand::{CryptoRng, RngCore};
 use soranet_pq::MlDsaSuite;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 /// First-release maximum number of revoked token identifiers retained in one list.
 ///
 /// This matches [`TokenConfig`](crate::config::TokenConfig)'s first-release
@@ -40,7 +38,6 @@ const REVOCATION_LIST_MAX_ALLOCATED_BYTES_V1: usize = 2 * 1024 * 1024;
 const REVOCATION_LIST_CANONICAL_ENTRY_BYTES: usize = 70;
 const REVOCATION_LIST_MAX_CANONICAL_BYTES_V1: usize =
     REVOCATION_LIST_MAX_ENTRIES_V1 * REVOCATION_LIST_CANONICAL_ENTRY_BYTES + 3;
-
 const REVOCATION_LIST_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     REVOCATION_LIST_MAX_ENTRIES_V1,
     REVOCATION_TOKEN_ID_HEX_BYTES,
@@ -48,7 +45,6 @@ const REVOCATION_LIST_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     REVOCATION_LIST_MAX_ALLOCATED_BYTES_V1,
     REVOCATION_LIST_MAX_NESTING_DEPTH_V1,
 );
-
 const fn revocation_list_preflight_limits_v1() -> json::JsonPreflightLimits {
     json::JsonPreflightLimits::new(
         REVOCATION_LIST_MAX_FILE_BYTES_V1,
@@ -63,7 +59,6 @@ const fn revocation_list_preflight_limits_v1() -> json::JsonPreflightLimits {
         REVOCATION_LIST_MAX_NESTING_DEPTH_V1,
     )
 }
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const REVOCATION_LIST_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -89,59 +84,46 @@ const REVOCATION_LIST_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
     ))
 ))]
 compile_error!("SoraNet revocation-list loading requires a defined no-follow flag");
-
 #[cfg(unix)]
 type RevocationFileIdentity = (u64, u64);
 #[cfg(windows)]
 type RevocationFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type RevocationFileIdentity = ();
-
 #[cfg(unix)]
 fn revocation_file_identity(metadata: &FsMetadata) -> RevocationFileIdentity {
     use std::os::unix::fs::MetadataExt as _;
-
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(windows)]
 fn revocation_file_identity(metadata: &FsMetadata) -> RevocationFileIdentity {
     use std::os::windows::fs::MetadataExt as _;
-
     (metadata.volume_serial_number(), metadata.file_index())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn revocation_file_identity(_metadata: &FsMetadata) -> RevocationFileIdentity {}
-
 #[cfg(unix)]
 const fn revocation_file_identity_available(_identity: RevocationFileIdentity) -> bool {
     true
 }
-
 #[cfg(windows)]
 const fn revocation_file_identity_available(identity: RevocationFileIdentity) -> bool {
     identity.0.is_some() && identity.1.is_some()
 }
-
 #[cfg(not(any(unix, windows)))]
 const fn revocation_file_identity_available(_identity: RevocationFileIdentity) -> bool {
     false
 }
-
 #[cfg(windows)]
 fn revocation_file_is_reparse_point(metadata: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
-
 #[cfg(not(windows))]
 fn revocation_file_is_reparse_point(_metadata: &FsMetadata) -> bool {
     false
 }
-
 fn validate_revocation_file_metadata(metadata: &FsMetadata) -> io::Result<()> {
     if metadata.file_type().is_symlink()
         || revocation_file_is_reparse_point(metadata)
@@ -155,22 +137,18 @@ fn validate_revocation_file_metadata(metadata: &FsMetadata) -> io::Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn open_revocation_file_direct(path: &Path) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt as _;
-
     let mut options = OpenOptions::new();
     options
         .read(true)
         .custom_flags(REVOCATION_LIST_O_NOFOLLOW_FLAG);
     options.open(path)
 }
-
 #[cfg(windows)]
 fn open_revocation_file_direct(path: &Path) -> io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     let mut options = OpenOptions::new();
     options
@@ -178,7 +156,6 @@ fn open_revocation_file_direct(path: &Path) -> io::Result<File> {
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options.open(path)
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_revocation_file_direct(_path: &Path) -> io::Result<File> {
     Err(io::Error::new(
@@ -186,11 +163,9 @@ fn open_revocation_file_direct(_path: &Path) -> io::Result<File> {
         "stable direct-file opens are unavailable on this platform",
     ))
 }
-
 #[cfg(unix)]
 fn revocation_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     revocation_file_identity(left) == revocation_file_identity(right)
         && left.len() == right.len()
         && left.mtime() == right.mtime()
@@ -199,11 +174,9 @@ fn revocation_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> 
         && left.ctime_nsec() == right.ctime_nsec()
         && left.mode() == right.mode()
 }
-
 #[cfg(windows)]
 fn revocation_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     revocation_file_identity_available(revocation_file_identity(left))
         && revocation_file_identity(left) == revocation_file_identity(right)
         && left.file_size() == right.file_size()
@@ -211,17 +184,14 @@ fn revocation_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> 
         && left.creation_time() == right.creation_time()
         && left.file_attributes() == right.file_attributes()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn revocation_file_metadata_unchanged(_left: &FsMetadata, _right: &FsMetadata) -> bool {
     false
 }
-
 #[cfg(test)]
 static REVOCATION_FILE_READ_REPLACEMENT: std::sync::Mutex<
     Option<(std::path::PathBuf, std::path::PathBuf)>,
 > = std::sync::Mutex::new(None);
-
 #[cfg(test)]
 fn replace_revocation_file_for_test(path: &Path) -> io::Result<()> {
     let replacement = {
@@ -239,7 +209,6 @@ fn replace_revocation_file_for_test(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 fn read_revocation_file_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
     let before = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -258,10 +227,8 @@ fn read_revocation_file_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
             ),
         ));
     }
-
     #[cfg(test)]
     replace_revocation_file_for_test(path)?;
-
     let mut file = open_revocation_file_direct(path)?;
     let opened = file.metadata()?;
     validate_revocation_file_metadata(&opened)?;
@@ -299,7 +266,6 @@ fn read_revocation_file_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
             "revocation list grew while being read or exceeds its first-release limit",
         ));
     }
-
     let after_file = file.metadata()?;
     let after_path = fs::symlink_metadata(path)?;
     validate_revocation_file_metadata(&after_file)?;
@@ -314,7 +280,6 @@ fn read_revocation_file_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
     Ok(Some(bytes))
 }
-
 /// Request parameters for minting an admission token.
 #[derive(Debug, Clone)]
 pub struct MintRequest<'a> {
@@ -335,7 +300,6 @@ pub struct MintRequest<'a> {
     /// Token flags (reserved for future use).
     pub flags: u8,
 }
-
 /// Metadata derived from a decoded admission token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenMetadata {
@@ -348,7 +312,6 @@ pub struct TokenMetadata {
     pub flags: u8,
     pub signature_len: usize,
 }
-
 impl TokenMetadata {
     /// Compute the configured TTL for this token.
     #[must_use]
@@ -358,20 +321,17 @@ impl TokenMetadata {
             Err(_) => Duration::ZERO,
         }
     }
-
     fn issued_at_iso(&self) -> String {
         OffsetDateTime::from(self.issued_at)
             .format(&Rfc3339)
             .expect("RFC3339 format")
     }
-
     fn expires_at_iso(&self) -> String {
         OffsetDateTime::from(self.expires_at)
             .format(&Rfc3339)
             .expect("RFC3339 format")
     }
 }
-
 /// Minted token bundle containing the raw token and derived metadata.
 /// Minted token bundle containing the raw token and derived metadata.
 #[derive(Debug, Clone)]
@@ -379,7 +339,6 @@ pub struct TokenBundle {
     pub token: AdmissionToken,
     pub metadata: TokenMetadata,
 }
-
 impl TokenBundle {
     /// Create a bundle from a freshly minted or decoded token.
     fn new(token: AdmissionToken) -> Result<Self, TokenToolError> {
@@ -407,7 +366,6 @@ impl TokenBundle {
         };
         Ok(Self { token, metadata })
     }
-
     /// Serialise bundle details into a JSON value using Norito helpers.
     #[must_use]
     pub fn to_json(&self) -> Value {
@@ -451,7 +409,6 @@ impl TokenBundle {
         Value::Object(object)
     }
 }
-
 /// Persistent revocation list backed by a JSON document.
 #[derive(Debug, Clone, Default)]
 pub struct RevocationList {
@@ -459,7 +416,6 @@ pub struct RevocationList {
     // allocator call per hostile input entry.
     entries: Vec<[u8; REVOCATION_TOKEN_ID_BYTES]>,
 }
-
 impl RevocationList {
     /// Load a revocation list from disk. Missing files return an empty set.
     pub fn load_or_default(path: &Path) -> Result<Self, TokenToolError> {
@@ -476,7 +432,6 @@ impl RevocationList {
             decode_revocation_list(&bytes, profile.root_container_entries())
         })
     }
-
     /// Persist the revocation list to disk, creating parent directories if needed.
     pub fn write(&self, path: &Path) -> Result<(), TokenToolError> {
         let bytes = self.to_canonical_json_bytes()?;
@@ -488,7 +443,6 @@ impl RevocationList {
         fs::write(path, bytes)?;
         Ok(())
     }
-
     /// Insert a token identifier into the revocation list.
     ///
     /// This compatibility helper returns `false` for duplicates or a bounded
@@ -496,7 +450,6 @@ impl RevocationList {
     pub fn insert(&mut self, token_id: [u8; 32]) -> bool {
         self.try_insert(token_id).unwrap_or(false)
     }
-
     /// Fallibly insert a token identifier under the first-release entry cap.
     pub fn try_insert(&mut self, token_id: [u8; 32]) -> Result<bool, TokenToolError> {
         let position = match self.entries.binary_search(&token_id) {
@@ -518,12 +471,10 @@ impl RevocationList {
         self.entries.insert(position, token_id);
         Ok(true)
     }
-
     /// Return the current entries sorted lexicographically.
     pub fn entries(&self) -> impl Iterator<Item = &[u8; 32]> {
         self.entries.iter()
     }
-
     fn to_canonical_json_bytes(&self) -> Result<Vec<u8>, TokenToolError> {
         if self.entries.len() > REVOCATION_LIST_MAX_ENTRIES_V1 {
             return Err(TokenToolError::RevocationCapacity {
@@ -560,7 +511,6 @@ impl RevocationList {
             output.extend_from_slice(b"[]\n");
             return Ok(output);
         }
-
         // Token IDs contain only lowercase hexadecimal bytes, so this bounded
         // renderer exactly matches Norito's pretty JSON array layout without
         // materialising a second `Vec<String>` or `Value` tree.
@@ -578,7 +528,6 @@ impl RevocationList {
         Ok(output)
     }
 }
-
 fn validate_revocation_profile(profile: json::JsonPreflightProfile) -> Result<(), TokenToolError> {
     if profile.arrays() != 1
         || profile.objects() != 0
@@ -604,7 +553,6 @@ fn validate_revocation_profile(profile: json::JsonPreflightProfile) -> Result<()
     }
     Ok(())
 }
-
 fn decode_revocation_list(
     bytes: &[u8],
     entry_count: usize,
@@ -613,7 +561,6 @@ fn decode_revocation_list(
         std::str::from_utf8(bytes).map_err(|_| TokenToolError::Json(json::Error::InvalidUtf8))?;
     let mut parser = json::Parser::new(input);
     parser.expect(b'[')?;
-
     let mut entries = Vec::new();
     entries.try_reserve_exact(entry_count).map_err(|source| {
         TokenToolError::RevocationAllocation {
@@ -627,7 +574,6 @@ fn decode_revocation_list(
             context: "duplicate detection",
             source,
         })?;
-
     for index in 0..entry_count {
         if index != 0 {
             parser.expect(b',')?;
@@ -652,7 +598,6 @@ fn decode_revocation_list(
     entries.sort_unstable();
     Ok(RevocationList { entries })
 }
-
 fn parse_revocation_token_id(
     value: &str,
 ) -> Result<[u8; REVOCATION_TOKEN_ID_BYTES], TokenToolError> {
@@ -688,7 +633,6 @@ fn parse_revocation_token_id(
     })?;
     Ok(id)
 }
-
 fn append_token_id_hex(output: &mut Vec<u8>, id: &[u8; REVOCATION_TOKEN_ID_BYTES]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     for byte in id {
@@ -697,7 +641,6 @@ fn append_token_id_hex(output: &mut Vec<u8>, id: &[u8; REVOCATION_TOKEN_ID_BYTES
         output.push(HEX[usize::from(byte & 0x0f)]);
     }
 }
-
 /// Errors surfaced by token tooling helpers.
 #[derive(Debug, Error)]
 pub enum TokenToolError {
@@ -748,14 +691,12 @@ pub enum TokenToolError {
     #[error("duplicate token id in revocation list at index {index}: {token_id_hex}")]
     DuplicateRevocation { index: usize, token_id_hex: String },
 }
-
 /// Mint a token bundle using the provided RNG.
 pub fn mint_token<R: RngCore + CryptoRng>(
     request: &MintRequest<'_>,
     rng: &mut R,
 ) -> Result<TokenBundle, TokenToolError> {
     ensure_temporal_bounds(request.issued_at, request.expires_at)?;
-
     let fingerprint = compute_issuer_fingerprint(request.issuer_public_key);
     let token = AdmissionToken::mint(
         request.suite,
@@ -770,13 +711,11 @@ pub fn mint_token<R: RngCore + CryptoRng>(
     )?;
     TokenBundle::new(token)
 }
-
 /// Decode a token frame and collect metadata.
 pub fn inspect_token(bytes: &[u8]) -> Result<TokenBundle, TokenToolError> {
     let token = AdmissionToken::decode(bytes)?;
     TokenBundle::new(token)
 }
-
 /// Decode a base64 or hexadecimal token string.
 pub fn decode_token_string(input: &str) -> Result<Vec<u8>, TokenToolError> {
     let trimmed = input.trim();
@@ -790,39 +729,33 @@ pub fn decode_token_string(input: &str) -> Result<Vec<u8>, TokenToolError> {
     let decoded = BASE64.decode(trimmed).map_err(TokenToolError::Base64)?;
     Ok(decoded)
 }
-
 /// Parse an RFC3339 timestamp into `SystemTime`.
 pub fn parse_rfc3339(value: &str, field: &'static str) -> Result<SystemTime, TokenToolError> {
     let dt = OffsetDateTime::parse(value, &Rfc3339)
         .map_err(|error| TokenToolError::TimeParse { field, error })?;
     Ok(SystemTime::from(dt))
 }
-
 /// Encode a token frame as base64.
 #[must_use]
 pub fn encode_token_base64(token: &AdmissionToken) -> String {
     BASE64.encode(token.encode())
 }
-
 /// Encode a token frame as hexadecimal.
 #[must_use]
 pub fn encode_token_hex(token: &AdmissionToken) -> String {
     hex::encode(token.encode())
 }
-
 /// Helper used by configuration parsing to load revocation IDs from disk.
 pub fn read_revocation_file(path: &Path) -> Result<Vec<[u8; 32]>, TokenToolError> {
     let list = RevocationList::load_or_default(path)?;
     Ok(list.entries)
 }
-
 fn ensure_temporal_bounds(start: SystemTime, end: SystemTime) -> Result<(), TokenToolError> {
     if end <= start {
         return Err(TokenToolError::InvalidTemporalBounds);
     }
     Ok(())
 }
-
 pub fn parse_hex_array<const N: usize>(
     value: &str,
     field: &'static str,
@@ -839,24 +772,18 @@ pub fn parse_hex_array<const N: usize>(
     array.copy_from_slice(&bytes);
     Ok(array)
 }
-
 pub fn parse_hex_bytes(value: &str, field: &'static str) -> Result<Vec<u8>, TokenToolError> {
     hex::decode(value).map_err(|error| TokenToolError::Hex { field, error })
 }
-
 #[cfg(test)]
 mod tests {
     use std::time::UNIX_EPOCH;
-
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
     use tempfile::tempdir;
-
     use super::*;
-
     const RELAY_ID: [u8; 32] = [0x45; 32];
     const TRANSCRIPT: [u8; 32] = [0xAB; 32];
-
     fn revocation_id(index: usize) -> [u8; REVOCATION_TOKEN_ID_BYTES] {
         let mut id = [0_u8; REVOCATION_TOKEN_ID_BYTES];
         id[REVOCATION_TOKEN_ID_BYTES - 8..].copy_from_slice(
@@ -866,7 +793,6 @@ mod tests {
         );
         id
     }
-
     fn encoded_token_with_times(issued_at: u64, expires_at: u64) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"SNTK");
@@ -882,7 +808,6 @@ mod tests {
         bytes.push(0xCC);
         bytes
     }
-
     #[test]
     fn mint_and_inspect_round_trip() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keypair");
@@ -904,12 +829,10 @@ mod tests {
         assert_eq!(bundle.metadata.transcript_hash, TRANSCRIPT);
         assert_eq!(bundle.metadata.flags, 0);
         assert_eq!(bundle.metadata.ttl(), Duration::from_secs(600));
-
         let encoded = bundle.token.encode();
         let decoded = inspect_token(&encoded).expect("inspect");
         assert_eq!(bundle.metadata, decoded.metadata);
     }
-
     #[test]
     fn inspect_rejects_unrepresentable_token_timestamps_without_panic() {
         let err = inspect_token(&encoded_token_with_times(10, u64::MAX))
@@ -922,7 +845,6 @@ mod tests {
             other => panic!("expected timestamp decode error, got {other:?}"),
         }
     }
-
     #[test]
     fn revocation_list_round_trip() {
         let dir = tempdir().expect("tmp");
@@ -931,7 +853,6 @@ mod tests {
         list.insert([0x11; 32]);
         list.insert([0x22; 32]);
         list.write(&path).expect("write");
-
         let loaded = RevocationList::load_or_default(&path).expect("load");
         assert_eq!(
             loaded.entries().map(hex::encode).collect::<Vec<_>>(),
@@ -947,7 +868,6 @@ mod tests {
             .into_bytes()
         );
     }
-
     #[test]
     fn revocation_file_limit_accepts_exact_and_rejects_plus_one() {
         let dir = tempdir().expect("tmp");
@@ -962,7 +882,6 @@ mod tests {
                 .count(),
             0
         );
-
         let plus_one = dir.path().join("plus-one.json");
         let file = File::create(&plus_one).expect("create oversized file");
         file.set_len(
@@ -977,25 +896,21 @@ mod tests {
             "unexpected error: {error:?}"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn revocation_list_rejects_symlink_input() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tmp");
         let target = dir.path().join("target.json");
         let link = dir.path().join("link.json");
         std::fs::write(&target, b"[]").expect("write target");
         symlink(&target, &link).expect("create symlink");
-
         let error = RevocationList::load_or_default(&link).expect_err("symlink must fail");
         assert!(
             matches!(error, TokenToolError::Io(ref source) if source.kind() == io::ErrorKind::InvalidData),
             "unexpected error: {error:?}"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn revocation_list_rejects_path_replacement_race() {
@@ -1007,7 +922,6 @@ mod tests {
         *REVOCATION_FILE_READ_REPLACEMENT
             .lock()
             .expect("race hook lock") = Some((configured.clone(), replacement));
-
         let error =
             RevocationList::load_or_default(&configured).expect_err("path replacement must fail");
         assert!(
@@ -1015,18 +929,15 @@ mod tests {
             "unexpected error: {error:?}"
         );
     }
-
     #[test]
     fn revocation_preflight_enforces_depth_count_and_string_limits() {
         let dir = tempdir().expect("tmp");
-
         let deep = dir.path().join("deep.json");
         std::fs::write(&deep, b"[[\"00\"]]").expect("write deep input");
         assert!(matches!(
             RevocationList::load_or_default(&deep),
             Err(TokenToolError::RevocationPreflight(_))
         ));
-
         let long_string = dir.path().join("long-string.json");
         std::fs::write(
             &long_string,
@@ -1037,7 +948,6 @@ mod tests {
             RevocationList::load_or_default(&long_string),
             Err(TokenToolError::RevocationPreflight(_))
         ));
-
         let too_many = dir.path().join("too-many.json");
         let token = format!("\"{}\"", "00".repeat(REVOCATION_TOKEN_ID_BYTES));
         let body = format!(
@@ -1053,7 +963,6 @@ mod tests {
             Err(TokenToolError::RevocationPreflight(_))
         ));
     }
-
     #[test]
     fn revocation_preflight_accepts_maximally_escaped_exact_string() {
         let dir = tempdir().expect("tmp");
@@ -1064,14 +973,12 @@ mod tests {
             REVOCATION_LIST_MAX_ENCODED_STRING_BYTES_V1
         );
         std::fs::write(&path, format!("[\"{encoded}\"]")).expect("write escaped id");
-
         let loaded = RevocationList::load_or_default(&path).expect("escaped exact string loads");
         assert_eq!(
             loaded.entries().copied().collect::<Vec<_>>(),
             vec![[0xaa; 32]]
         );
     }
-
     #[test]
     fn revocation_duplicate_error_preserves_input_index_and_spelling() {
         let dir = tempdir().expect("tmp");
@@ -1085,14 +992,12 @@ mod tests {
             ),
         )
         .expect("write duplicate list");
-
         let error = RevocationList::load_or_default(&path).expect_err("duplicate must fail");
         assert!(
             matches!(error, TokenToolError::DuplicateRevocation { index: 2, ref token_id_hex } if token_id_hex == &duplicate),
             "unexpected error: {error:?}"
         );
     }
-
     #[test]
     fn revocation_producer_accepts_exact_count_and_rejects_plus_one() {
         let mut list = RevocationList::default();
@@ -1116,7 +1021,6 @@ mod tests {
                 .count(),
             REVOCATION_LIST_MAX_ENTRIES_V1
         );
-
         let error = list
             .try_insert(revocation_id(REVOCATION_LIST_MAX_ENTRIES_V1))
             .expect_err("entry count + 1 must fail");
@@ -1128,7 +1032,6 @@ mod tests {
             } if actual == REVOCATION_LIST_MAX_ENTRIES_V1 + 1
         ));
     }
-
     #[test]
     fn decode_token_string_accepts_hex() {
         let bytes = vec![0xAA, 0xBB, 0xCC];
@@ -1136,7 +1039,6 @@ mod tests {
         let decoded = decode_token_string(&hex).expect("decode");
         assert_eq!(decoded, bytes);
     }
-
     #[test]
     fn decode_token_string_accepts_base64() {
         let bytes = vec![1u8, 2, 3, 4];

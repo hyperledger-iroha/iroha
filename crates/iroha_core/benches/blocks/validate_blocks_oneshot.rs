@@ -5,13 +5,10 @@
 //! ```bash
 //! CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph --root --release --example validate_blocks
 //! ```
-
 mod validate_blocks;
-
 use iroha_config::base::{env::std_env, read::ConfigReader};
 use iroha_logger::Config;
 use validate_blocks::StateValidateBlocks;
-
 fn main() {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

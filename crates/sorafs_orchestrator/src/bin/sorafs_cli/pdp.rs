@@ -1,5 +1,4 @@
 //! Authenticated operator commands for the SoraFS PDP provider protocol.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
@@ -8,7 +7,6 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 #[cfg(windows)]
@@ -28,7 +26,6 @@ use std::{
     },
     path::Component,
 };
-
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
@@ -54,49 +51,41 @@ use sorafs_manifest::{
     },
 };
 use url::Url;
-
 const ROUTE_ENQUEUE: &str = "/v1/sorafs/pdp/challenge";
 const ROUTE_NEXT: &str = "/v1/sorafs/pdp/next";
 const ROUTE_SUBMIT: &str = "/v1/sorafs/pdp/proof";
 const ROUTE_STATUS: &str = "/v1/sorafs/pdp/status";
 const ROUTE_EXPORT: &str = "/v1/sorafs/pdp/export";
-
 const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 const OPERATOR_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha.operator.http-request.network.v1\0";
-
 const RESPONSE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const STATUS_EXPORT_DEFAULT_RECORDS: u32 = 100;
 const STATUS_EXPORT_MAX_RECORDS: u32 = 1_000;
 const OPERATOR_KEY_CONTEXT: &str = "sorafs_cli pdp operator signing";
-
 struct CommonArgs {
     torii_url: String,
     network_id: NetworkId,
     operator_key_path: PathBuf,
 }
-
 struct OperatorAuth {
     network_id: NetworkId,
     key_pair: KeyPair,
 }
-
 struct ResponseBytes {
     status: StatusCode,
     content_type: Option<bool>,
     content_length: Option<u64>,
     body: Vec<u8>,
 }
-
 struct SubmittedProofBinding {
     digest: [u8; 32],
     manifest_digest: [u8; 32],
     provider_id: [u8; 32],
     epoch_id: u64,
 }
-
 struct ValidatedStatus {
     sequence: u64,
     challenge_id: [u8; 32],
@@ -104,7 +93,6 @@ struct ValidatedStatus {
     provider_id: [u8; 32],
     epoch_id: u64,
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -112,14 +100,12 @@ struct ValidatedStatus {
     target_os = "macos"
 ))]
 type OutputFileIdentity = (u64, u64);
-
 #[cfg(unix)]
 type InputFileIdentity = (u64, u64);
 #[cfg(windows)]
 type InputFileIdentity = (u32, u64);
 #[cfg(not(any(unix, windows)))]
 type InputFileIdentity = ();
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -127,7 +113,6 @@ type InputFileIdentity = ();
     target_os = "macos"
 ))]
 type OutputParentIdentity = (u64, u64, u32, u32, u32);
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -138,7 +123,6 @@ struct OutputParentSnapshot {
     path: PathBuf,
     identity: OutputParentIdentity,
 }
-
 pub(super) fn run(mut raw_args: Vec<String>) -> Result<(), String> {
     if raw_args.is_empty() {
         return Err(usage());
@@ -153,7 +137,6 @@ pub(super) fn run(mut raw_args: Vec<String>) -> Result<(), String> {
         _ => Err(usage()),
     }
 }
-
 fn usage() -> String {
     "Usage:
   sorafs_cli pdp enqueue --torii-url=HTTPS_ORIGIN --network-id=GENESIS_HASH --operator-private-key-file=PATH --commitment=PATH --challenge=PATH --expected-epoch-id=N
@@ -163,7 +146,6 @@ fn usage() -> String {
   sorafs_cli pdp export --torii-url=HTTPS_ORIGIN --network-id=GENESIS_HASH --operator-private-key-file=PATH --out=PATH [--after-sequence=N] [--limit=1..1000]"
         .to_owned()
 }
-
 fn enqueue(raw_args: Vec<String>) -> Result<(), String> {
     let mut options = parse_options(
         raw_args,
@@ -189,7 +171,6 @@ fn enqueue(raw_args: Vec<String>) -> Result<(), String> {
         return Err("`--expected-epoch-id` must be non-zero".to_owned());
     }
     ensure_consumed(options, "enqueue")?;
-
     let commitment = load_commitment(&commitment_path)?;
     let (challenge, challenge_bytes) = load_challenge(&challenge_path)?;
     validate_challenge_binding(&commitment, &challenge)?;
@@ -215,7 +196,6 @@ fn enqueue(raw_args: Vec<String>) -> Result<(), String> {
     validate_enqueue_response(&value, &challenge)?;
     emit_json(&value)
 }
-
 fn next(raw_args: Vec<String>) -> Result<(), String> {
     let mut options = parse_options(
         raw_args,
@@ -233,7 +213,6 @@ fn next(raw_args: Vec<String>) -> Result<(), String> {
     let challenge_out = PathBuf::from(take_required(&mut options, "challenge-out", "next")?);
     ensure_consumed(options, "next")?;
     validate_new_output_path(&challenge_out, "`--challenge-out`")?;
-
     let mut request = Map::new();
     request.insert(
         "provider_id_hex".into(),
@@ -254,7 +233,6 @@ fn next(raw_args: Vec<String>) -> Result<(), String> {
     let value = require_json_ok(response, "PDP next challenge")?;
     let challenge_bytes = validate_next_response(&value, &provider_id)?;
     write_create_new(&challenge_out, &challenge_bytes, "PDP challenge output")?;
-
     let object = value
         .as_object()
         .ok_or_else(|| "validated PDP next response stopped being an object".to_owned())?;
@@ -287,7 +265,6 @@ fn next(raw_args: Vec<String>) -> Result<(), String> {
     );
     emit_json(&Value::Object(summary))
 }
-
 fn submit(raw_args: Vec<String>) -> Result<(), String> {
     let mut options = parse_options(
         raw_args,
@@ -304,7 +281,6 @@ fn submit(raw_args: Vec<String>) -> Result<(), String> {
     let challenge_id = take_hex32(&mut options, "challenge-id-hex", "submit")?;
     let proof_path = PathBuf::from(take_required(&mut options, "proof", "submit")?);
     ensure_consumed(options, "submit")?;
-
     let (proof, proof_bytes) = load_proof(&proof_path)?;
     if proof.challenge_id != challenge_id {
         return Err("`--challenge-id-hex` does not match the canonical PDP proof".to_owned());
@@ -333,7 +309,6 @@ fn submit(raw_args: Vec<String>) -> Result<(), String> {
     validate_status_response(&value, Some(&challenge_id), Some(&proof_binding))?;
     emit_json(&value)
 }
-
 fn status(raw_args: Vec<String>) -> Result<(), String> {
     let mut options = parse_options(
         raw_args,
@@ -348,7 +323,6 @@ fn status(raw_args: Vec<String>) -> Result<(), String> {
     let common = take_common(&mut options, "status")?;
     let challenge_id = take_hex32(&mut options, "challenge-id-hex", "status")?;
     ensure_consumed(options, "status")?;
-
     let mut request = Map::new();
     request.insert(
         "challenge_id_hex".into(),
@@ -361,7 +335,6 @@ fn status(raw_args: Vec<String>) -> Result<(), String> {
     validate_status_response(&value, Some(&challenge_id), None)?;
     emit_json(&value)
 }
-
 fn export(raw_args: Vec<String>) -> Result<(), String> {
     let mut options = parse_options(
         raw_args,
@@ -394,7 +367,6 @@ fn export(raw_args: Vec<String>) -> Result<(), String> {
     let out = PathBuf::from(take_required(&mut options, "out", "export")?);
     ensure_consumed(options, "export")?;
     validate_new_output_path(&out, "`--out`")?;
-
     let mut request = Map::new();
     request.insert("after_sequence".into(), Value::from(after_sequence));
     request.insert("limit".into(), Value::from(limit));
@@ -412,14 +384,12 @@ fn export(raw_args: Vec<String>) -> Result<(), String> {
         .into_bytes();
     rendered.push(b'\n');
     write_create_new(&out, &rendered, "PDP status export")?;
-
     let mut summary = Map::new();
     summary.insert("item_count".into(), Value::from(item_count as u64));
     summary.insert("next_sequence".into(), Value::from(next_sequence));
     summary.insert("out".into(), Value::from(out.display().to_string()));
     emit_json(&Value::Object(summary))
 }
-
 fn parse_options(
     raw_args: Vec<String>,
     operation: &str,
@@ -450,7 +420,6 @@ fn parse_options(
     }
     Ok(options)
 }
-
 fn take_common(
     options: &mut BTreeMap<String, String>,
     operation: &str,
@@ -474,7 +443,6 @@ fn take_common(
         operator_key_path,
     })
 }
-
 fn take_required(
     options: &mut BTreeMap<String, String>,
     name: &str,
@@ -484,7 +452,6 @@ fn take_required(
         .remove(name)
         .ok_or_else(|| format!("missing `--{name}` for `sorafs_cli pdp {operation}`"))
 }
-
 fn take_hex32(
     options: &mut BTreeMap<String, String>,
     name: &str,
@@ -497,7 +464,6 @@ fn take_hex32(
     }
     Ok(bytes)
 }
-
 fn ensure_consumed(options: BTreeMap<String, String>, operation: &str) -> Result<(), String> {
     if options.is_empty() {
         Ok(())
@@ -507,7 +473,6 @@ fn ensure_consumed(options: BTreeMap<String, String>, operation: &str) -> Result
         ))
     }
 }
-
 fn pdp_decode_limits(maximum: usize) -> norito::DecodeLimits {
     norito::DecodeLimits::new(
         maximum.max(1),
@@ -517,7 +482,6 @@ fn pdp_decode_limits(maximum: usize) -> norito::DecodeLimits {
         64,
     )
 }
-
 fn load_commitment(path: &Path) -> Result<PdpCommitmentV1, String> {
     let maximum = u64::try_from(PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1)
         .map_err(|_| "PDP commitment byte cap does not fit u64".to_owned())?;
@@ -533,7 +497,6 @@ fn load_commitment(path: &Path) -> Result<PdpCommitmentV1, String> {
     require_canonical_norito(&bytes, &value, "PDP commitment")?;
     Ok(value)
 }
-
 fn load_challenge(path: &Path) -> Result<(PdpChallengeV1, Vec<u8>), String> {
     let maximum = u64::try_from(PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1)
         .map_err(|_| "PDP challenge byte cap does not fit u64".to_owned())?;
@@ -541,7 +504,6 @@ fn load_challenge(path: &Path) -> Result<(PdpChallengeV1, Vec<u8>), String> {
     let value = decode_challenge_bytes(&bytes)?;
     Ok((value, bytes))
 }
-
 fn decode_challenge_bytes(bytes: &[u8]) -> Result<PdpChallengeV1, String> {
     if bytes.is_empty() || bytes.len() > PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1 {
         return Err("PDP challenge exceeds its canonical byte bounds".to_owned());
@@ -557,7 +519,6 @@ fn decode_challenge_bytes(bytes: &[u8]) -> Result<PdpChallengeV1, String> {
     require_canonical_norito(bytes, &value, "PDP challenge")?;
     Ok(value)
 }
-
 fn load_proof(path: &Path) -> Result<(PdpProofV1, Vec<u8>), String> {
     let maximum = u64::try_from(PDP_PROOF_MAX_CANONICAL_BYTES_V1)
         .map_err(|_| "PDP proof byte cap does not fit u64".to_owned())?;
@@ -576,7 +537,6 @@ fn load_proof(path: &Path) -> Result<(PdpProofV1, Vec<u8>), String> {
     require_canonical_norito(&bytes, &value, "PDP proof")?;
     Ok((value, bytes))
 }
-
 fn read_input_file_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>, String> {
     let before = fs::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
@@ -626,7 +586,6 @@ fn read_input_file_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec
     }
     Ok(bytes)
 }
-
 fn validate_input_metadata(
     metadata: &fs::Metadata,
     maximum: u64,
@@ -663,52 +622,42 @@ fn validate_input_metadata(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn input_file_identity(metadata: &fs::Metadata) -> Option<InputFileIdentity> {
     Some((metadata.dev(), metadata.ino()))
 }
-
 #[cfg(windows)]
 fn input_file_identity(metadata: &fs::Metadata) -> Option<InputFileIdentity> {
     Some((metadata.volume_serial_number()?, metadata.file_index()?))
 }
-
 #[cfg(not(any(unix, windows)))]
 fn input_file_identity(_metadata: &fs::Metadata) -> Option<InputFileIdentity> {
     None
 }
-
 #[cfg(windows)]
 fn input_file_is_reparse_point(metadata: &fs::Metadata) -> bool {
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
-
 #[cfg(not(windows))]
 fn input_file_is_reparse_point(_metadata: &fs::Metadata) -> bool {
     false
 }
-
 fn input_file_is_indirect(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink() || input_file_is_reparse_point(metadata)
 }
-
 #[cfg(unix)]
 fn input_file_is_single_link(metadata: &fs::Metadata) -> bool {
     metadata.nlink() == 1
 }
-
 #[cfg(windows)]
 fn input_file_is_single_link(metadata: &fs::Metadata) -> bool {
     metadata.number_of_links() == Some(1)
 }
-
 #[cfg(not(any(unix, windows)))]
 fn input_file_is_single_link(_metadata: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     input_file_identity(left) == input_file_identity(right)
@@ -723,7 +672,6 @@ fn input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.uid() == right.uid()
         && left.gid() == right.gid()
 }
-
 #[cfg(windows)]
 fn input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     input_file_identity(left).is_some()
@@ -735,12 +683,10 @@ fn input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.creation_time() == right.creation_time()
         && left.file_attributes() == right.file_attributes()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn input_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn open_input_file(path: &Path, label: &str) -> Result<fs::File, String> {
     let mut options = OpenOptions::new();
@@ -750,7 +696,6 @@ fn open_input_file(path: &Path, label: &str) -> Result<fs::File, String> {
         .open(path)
         .map_err(|error| format!("failed to securely open {label}: {error}"))
 }
-
 #[cfg(windows)]
 fn open_input_file(path: &Path, label: &str) -> Result<fs::File, String> {
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
@@ -763,14 +708,12 @@ fn open_input_file(path: &Path, label: &str) -> Result<fs::File, String> {
         .open(path)
         .map_err(|error| format!("failed to securely open {label}: {error}"))
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_input_file(_path: &Path, label: &str) -> Result<fs::File, String> {
     Err(format!(
         "this platform does not expose the stable file identity required for {label}"
     ))
 }
-
 fn require_canonical_norito<T>(bytes: &[u8], value: &T, label: &str) -> Result<(), String>
 where
     T: norito::core::NoritoSerialize,
@@ -782,7 +725,6 @@ where
     }
     Ok(())
 }
-
 fn validate_challenge_binding(
     commitment: &PdpCommitmentV1,
     challenge: &PdpChallengeV1,
@@ -800,7 +742,6 @@ fn validate_challenge_binding(
     }
     Ok(())
 }
-
 fn endpoint(torii_url: &str, route: &str) -> Result<Url, String> {
     if torii_url.is_empty() || torii_url.trim() != torii_url {
         return Err("`--torii-url` must be an exact canonical URL without padding".to_owned());
@@ -841,7 +782,6 @@ fn endpoint(torii_url: &str, route: &str) -> Result<Url, String> {
         .join(route.trim_start_matches('/'))
         .map_err(|_| "failed to build the PDP endpoint URL".to_owned())
 }
-
 fn load_auth(common: &CommonArgs) -> Result<OperatorAuth, String> {
     let private_key =
         super::load_reputation_auth_private_key(&common.operator_key_path, OPERATOR_KEY_CONTEXT)
@@ -856,7 +796,6 @@ fn load_auth(common: &CommonArgs) -> Result<OperatorAuth, String> {
         key_pair,
     })
 }
-
 fn http_client() -> Result<Client, String> {
     Client::builder()
         .timeout(Duration::from_secs(30))
@@ -871,7 +810,6 @@ fn http_client() -> Result<Client, String> {
         .build()
         .map_err(|_| "failed to construct the hardened PDP HTTP client".to_owned())
 }
-
 fn send_request(common: &CommonArgs, route: &str, request: Value) -> Result<ResponseBytes, String> {
     let endpoint = endpoint(&common.torii_url, route)?;
     if endpoint.path() != route || endpoint.query().is_some() {
@@ -894,17 +832,14 @@ fn send_request(common: &CommonArgs, route: &str, request: Value) -> Result<Resp
         .map_err(|_| "authenticated PDP request failed".to_owned())?;
     read_response(response)
 }
-
 struct SignedHeaders {
     public_key: String,
     timestamp_ms: String,
     nonce: String,
     signature: String,
 }
-
 fn signed_headers(auth: &OperatorAuth, route: &str, body: &[u8]) -> Result<SignedHeaders, String> {
     use rand::rand_core::TryRngCore as _;
-
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "system clock is before the Unix epoch; cannot sign PDP request".to_owned())?;
@@ -939,7 +874,6 @@ fn signed_headers(auth: &OperatorAuth, route: &str, body: &[u8]) -> Result<Signe
         signature: BASE64_STANDARD.encode(signature.payload()),
     })
 }
-
 fn read_response(response: Response) -> Result<ResponseBytes, String> {
     let status = response.status();
     let content_type = {
@@ -997,7 +931,6 @@ fn read_response(response: Response) -> Result<ResponseBytes, String> {
         body,
     })
 }
-
 fn parse_content_length(raw: &[u8]) -> Result<u64, String> {
     if raw.is_empty()
         || !raw.iter().all(u8::is_ascii_digit)
@@ -1012,7 +945,6 @@ fn parse_content_length(raw: &[u8]) -> Result<u64, String> {
         .parse::<u64>()
         .map_err(|_| "Torii PDP response Content-Length does not fit u64".to_owned())
 }
-
 fn require_json_ok(response: ResponseBytes, context: &str) -> Result<Value, String> {
     if response.status != StatusCode::OK {
         return Err(format!(
@@ -1027,7 +959,6 @@ fn require_json_ok(response: ResponseBytes, context: &str) -> Result<Value, Stri
     }
     from_slice(&response.body).map_err(|_| format!("Torii {context} response is not valid JSON"))
 }
-
 fn validate_enqueue_response(value: &Value, challenge: &PdpChallengeV1) -> Result<(), String> {
     let object = exact_object(
         value,
@@ -1046,7 +977,6 @@ fn validate_enqueue_response(value: &Value, challenge: &PdpChallengeV1) -> Resul
     }
     Ok(())
 }
-
 fn validate_next_response(value: &Value, provider_id: &[u8; 32]) -> Result<Vec<u8>, String> {
     let object = exact_object(
         value,
@@ -1081,7 +1011,6 @@ fn validate_next_response(value: &Value, provider_id: &[u8; 32]) -> Result<Vec<u
     }
     Ok(bytes)
 }
-
 fn validate_status_response(
     value: &Value,
     expected_id: Option<&[u8; 32]>,
@@ -1201,7 +1130,6 @@ fn validate_status_response(
         epoch_id,
     })
 }
-
 fn validate_export_response(
     value: &Value,
     after_sequence: u64,
@@ -1249,7 +1177,6 @@ fn validate_export_response(
     }
     Ok(items.len())
 }
-
 fn exact_object<'a>(
     value: &'a Value,
     required: &[&str],
@@ -1272,14 +1199,12 @@ fn exact_object<'a>(
     }
     Ok(object)
 }
-
 fn required_string<'a>(object: &'a Map, field: &str, context: &str) -> Result<&'a str, String> {
     object
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{context} `{field}` must be a string"))
 }
-
 fn optional_string<'a>(
     object: &'a Map,
     field: &str,
@@ -1294,7 +1219,6 @@ fn optional_string<'a>(
         })
         .transpose()
 }
-
 fn required_nonzero_u64(object: &Map, field: &str, context: &str) -> Result<u64, String> {
     let value = object
         .get(field)
@@ -1305,7 +1229,6 @@ fn required_nonzero_u64(object: &Map, field: &str, context: &str) -> Result<u64,
     }
     Ok(value)
 }
-
 fn optional_nonzero_u64(object: &Map, field: &str, context: &str) -> Result<Option<u64>, String> {
     object
         .get(field)
@@ -1320,7 +1243,6 @@ fn optional_nonzero_u64(object: &Map, field: &str, context: &str) -> Result<Opti
         })
         .transpose()
 }
-
 fn required_hex32(object: &Map, field: &str, context: &str) -> Result<[u8; 32], String> {
     let literal = required_string(object, field, context)?;
     let bytes = super::parse_fixed_hex_bytes::<32>(literal, field)?;
@@ -1329,7 +1251,6 @@ fn required_hex32(object: &Map, field: &str, context: &str) -> Result<[u8; 32], 
     }
     Ok(bytes)
 }
-
 fn decode_canonical_base64(
     encoded: &str,
     maximum: usize,
@@ -1351,7 +1272,6 @@ fn decode_canonical_base64(
     }
     Ok(bytes)
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1385,7 +1305,6 @@ fn validate_new_output_path(path: &Path, field: &str) -> Result<(), String> {
     outcome?;
     validate_existing_output_parents(path, field)
 }
-
 #[cfg(not(any(
     target_os = "android",
     target_os = "ios",
@@ -1397,7 +1316,6 @@ fn validate_new_output_path(_path: &Path, field: &str) -> Result<(), String> {
         "{field} output is unavailable because this platform lacks private descriptor-relative creation"
     ))
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1442,7 +1360,6 @@ fn validate_existing_output_parents(path: &Path, label: &str) -> Result<(), Stri
     }
     Ok(())
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1458,21 +1375,18 @@ fn absolute_output_path(path: &Path, label: &str) -> Result<PathBuf, String> {
             .map_err(|error| format!("failed to resolve {label} path: {error}"))
     }
 }
-
 #[cfg(any(target_os = "android", target_os = "linux"))]
 const OUTPUT_PARENT_OPEN_FLAGS: i32 = 0o200000 | 0o400000 | 0o2000000;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 const OUTPUT_CREATE_FLAGS: i32 = 0x1 | 0o100 | 0o200 | 0o400000 | 0o2000000;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 const OUTPUT_REOPEN_FLAGS: i32 = 0o400000 | 0o2000000;
-
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 const OUTPUT_PARENT_OPEN_FLAGS: i32 = 0x100000 | 0x100 | 0x1000000;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 const OUTPUT_CREATE_FLAGS: i32 = 0x1 | 0x200 | 0x800 | 0x100 | 0x1000000;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 const OUTPUT_REOPEN_FLAGS: i32 = 0x100 | 0x1000000;
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1484,7 +1398,6 @@ unsafe extern "C" {
     fn openat(directory: i32, path: *const std::ffi::c_char, flags: i32, ...) -> i32;
     fn unlinkat(directory: i32, path: *const std::ffi::c_char, flags: i32) -> i32;
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1503,7 +1416,6 @@ fn open_output_parent(snapshot: &OutputParentSnapshot, label: &str) -> Result<fs
     validate_open_output_parent(&directory, snapshot, label)?;
     Ok(directory)
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1531,7 +1443,6 @@ fn validate_open_output_parent(
     }
     Ok(())
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1549,7 +1460,6 @@ fn cleanup_created_at_then_fail(
         Err(cleanup_error) => Err(format!("{error}; {cleanup_error}")),
     }
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1611,7 +1521,6 @@ fn remove_created_file_at(
         .sync_all()
         .map_err(|error| format!("failed to sync PDP output cleanup: {error}"))
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1733,7 +1642,6 @@ fn write_create_new(path: &Path, bytes: &[u8], label: &str) -> Result<(), String
     }
     Ok(())
 }
-
 #[cfg(not(any(
     target_os = "android",
     target_os = "ios",
@@ -1745,7 +1653,6 @@ fn write_create_new(_path: &Path, _bytes: &[u8], label: &str) -> Result<(), Stri
         "{label} output is unavailable because this platform lacks private descriptor-relative creation"
     ))
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1764,7 +1671,6 @@ fn prepare_output_path(
     let snapshots = snapshot_output_parents(&absolute, label)?;
     Ok((absolute, snapshots))
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1803,7 +1709,6 @@ fn snapshot_output_parents(path: &Path, label: &str) -> Result<Vec<OutputParentS
     }
     Ok(snapshots)
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1834,7 +1739,6 @@ fn validate_output_parent_snapshots(
     }
     Ok(())
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1860,7 +1764,6 @@ fn validate_output_parent_metadata(
     }
     Ok(())
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1884,7 +1787,6 @@ fn validate_private_output_parent_metadata(
     }
     Ok(())
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1894,7 +1796,6 @@ fn validate_private_output_parent_metadata(
 fn has_multiple_links(metadata: &fs::Metadata) -> bool {
     metadata.nlink() != 1
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1904,7 +1805,6 @@ fn has_multiple_links(metadata: &fs::Metadata) -> bool {
 fn output_file_identity(metadata: &fs::Metadata) -> Option<OutputFileIdentity> {
     Some((metadata.dev(), metadata.ino()))
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1920,7 +1820,6 @@ fn output_parent_identity(metadata: &fs::Metadata) -> Option<OutputParentIdentit
         metadata.gid(),
     ))
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1930,7 +1829,6 @@ fn output_parent_identity(metadata: &fs::Metadata) -> Option<OutputParentIdentit
 fn output_file_is_indirect(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
-
 #[cfg(any(
     target_os = "android",
     target_os = "ios",
@@ -1940,7 +1838,6 @@ fn output_file_is_indirect(metadata: &fs::Metadata) -> bool {
 fn output_file_permissions_are_unsafe(metadata: &fs::Metadata) -> bool {
     metadata.mode() & 0o077 != 0
 }
-
 fn emit_json(value: &Value) -> Result<(), String> {
     let rendered = to_string_pretty(value)
         .map_err(|_| "failed to render validated PDP response JSON".to_owned())?;

@@ -2,9 +2,7 @@
 mod kaigi_response_format_tests {
     use axum::http::header::CONTENT_TYPE;
     use http_body_util::BodyExt as _;
-
     use super::*;
-
     #[test]
     fn kaigi_relay_diagnostic_count_fails_closed_at_the_hard_cap() {
         let mut count = 0usize;
@@ -19,17 +17,14 @@ mod kaigi_response_format_tests {
         ));
         assert_eq!(count, KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS);
     }
-
     #[tokio::test]
     async fn kaigi_json_document_response_renders_json() {
         let payload = KaigiRelaySummaryListDto {
             total: 1,
             items: Vec::new(),
         };
-
         let response =
             respond_kaigi_json_document_with_format(&payload, crate::utils::ResponseFormat::Json);
-
         assert_eq!(
             response
                 .headers()
@@ -47,17 +42,14 @@ mod kaigi_response_format_tests {
             norito::json::from_slice(&bytes).expect("decode JSON body");
         assert_eq!(decoded["total"].as_u64(), Some(1));
     }
-
     #[tokio::test]
     async fn kaigi_json_document_response_wraps_json_string_as_norito() {
         let payload = KaigiRelaySummaryListDto {
             total: 1,
             items: Vec::new(),
         };
-
         let response =
             respond_kaigi_json_document_with_format(&payload, crate::utils::ResponseFormat::Norito);
-
         assert_eq!(
             response
                 .headers()

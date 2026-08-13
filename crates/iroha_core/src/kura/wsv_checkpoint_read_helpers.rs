@@ -39,7 +39,6 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         Ok(Some(checkpoint))
     }
-
     fn decode_wsv_checkpoint_at(path: &Path) -> Result<Option<WsvCheckpoint>> {
         let Some(bytes) = Self::read_bounded_replay_sidecar_at(path, MAX_WSV_CHECKPOINT_BYTES)?
         else {
@@ -50,7 +49,6 @@ impl Kura {
             .map(Some)
             .map_err(Error::NoritoFrame)
     }
-
     fn read_bounded_replay_sidecar_at(path: &Path, byte_limit: usize) -> Result<Option<Vec<u8>>> {
         let expected_directory = path.parent().ok_or_else(|| {
             Error::IO(
@@ -72,7 +70,6 @@ impl Kura {
         })?;
         Self::read_regular_sidecar_bytes_for(blocks_root, path, expected_directory, byte_limit)
     }
-
     fn ensure_sidecar_encoding_within_limit(
         path: &Path,
         kind: &str,

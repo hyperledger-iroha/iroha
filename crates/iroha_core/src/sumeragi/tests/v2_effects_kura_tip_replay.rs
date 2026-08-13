@@ -49,7 +49,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
     ));
     let mut certificate = fixture.qc(wire::GlobalPhase::Commit);
     certificate.execution_commitment = validated.execution_commitment();
-
     let (authenticated_genesis_context, evidence) = verify_pending_kura_apply_parts(
         &fixture.context,
         decision,
@@ -114,7 +113,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
     .expect("historical CommitQC remains replayable by the current owner");
     assert_eq!(delayed_evidence.replay_tag(), tag(3));
     assert_eq!(delayed_evidence.owner_tag(), tag(3));
-
     let mut later_certificate = certificate.clone();
     later_certificate.round.view = fixture
         .manifest
@@ -206,7 +204,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         later_certificate.round
     );
     assert!(later_finality_evidence.is_exact(&fixture.context));
-
     let mut conflicting_body = fixture.body.clone();
     let first_byte = conflicting_body
         .first_mut()
@@ -244,7 +241,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
             if reason.contains("aliases conflict")
     ));
-
     let later_sources = certified_sources(&fixture, &later_certificate);
     assert_eq!(
         later_finality_evidence
@@ -295,7 +291,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         altered_frame.durable_frame_hash()
     );
     assert!(!altered_frame.is_exact(&fixture.context));
-
     let apply_effect = AdapterEffect::Apply {
         tag: tag(0),
         subject: fixture.manifest.subject,
@@ -333,7 +328,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         staged.stage(),
         PendingKuraApplyRecoveryStage::ApplicationDispatched
     );
-
     let mut direct_apply_executor = fixture.executor(EffectQueueConfig::default());
     direct_apply_executor.validated_bodies = validations.clone();
     direct_apply_executor.pending_tip_recovery = Some(evidence.clone());
@@ -346,7 +340,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         Err(EffectExecutorError::Contract(reason))
             if reason.contains("does not match its exact authenticated stage")
     ));
-
     let mut apply_stage = evidence.clone();
     apply_stage.stage = PendingKuraApplyRecoveryStage::Apply;
     assert_eq!(
@@ -379,7 +372,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
             .is_err(),
         "recovery must compare the complete aggregate-signature evidence"
     );
-
     for effects in [Vec::new(), vec![apply_effect.clone(), apply_effect.clone()]] {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         executor.validated_bodies = validations.clone();
@@ -391,7 +383,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
                 if reason.contains("must emit exactly one effect")
         ));
     }
-
     let mut wrong_context = fixture.context.clone();
     wrong_context.nexus_amx_context_hash = Hash::new(b"different frozen Nexus/AMX context");
     assert_ne!(
@@ -429,7 +420,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
             if reason.contains("no complete durable Decision")
     ));
-
     let wrong_tip = PendingKuraApply::for_test(
         fixture.context.id(),
         fixture.context.height,
@@ -450,7 +440,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
             if reason.contains("does not identify the canonical")
     ));
-
     assert!(matches!(
         verify_pending_kura_apply_parts(
             &fixture.context,
@@ -466,7 +455,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
             if reason.contains("no matching durable validation marker")
     ));
-
     let mismatched_execution_commitment = fixture_execution_commitment();
     assert_ne!(
         mismatched_execution_commitment,
@@ -497,8 +485,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
     ));
     assert_eq!(validated.durable(), &durable);
 }
-
-
 #[test]
 fn mismatched_kura_completion_fails_closed_before_application_ack() {
     let fixture = Fixture::new();
@@ -544,11 +530,9 @@ fn mismatched_kura_completion_fails_closed_before_application_ack() {
     assert_eq!(executor.runtime.completions.len(), completions_before);
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn service_runtime_body_store_and_status_failures_close_executor() {
     let fixture = Fixture::new();
-
     let mut service_executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     services.fail_on = Some("broadcast");
@@ -560,8 +544,7 @@ fn service_runtime_body_store_and_status_failures_close_executor() {
         }),
     };
     assert!(matches!(
-        service_executor
-            .consume_effects(vec![AdapterEffect::Broadcast(message)], &mut services),
+        service_executor.consume_effects(vec![AdapterEffect::Broadcast(message)], &mut services),
         Err(EffectExecutorError::Service(_))
     ));
     assert!(service_executor.status().fail_closed);
@@ -569,7 +552,6 @@ fn service_runtime_body_store_and_status_failures_close_executor() {
         services.fail_on.is_none(),
         "failure injection was not consumed"
     );
-
     let mut runtime_executor = fixture.executor(EffectQueueConfig::default());
     let mut runtime_services = fixture.services();
     runtime_executor
@@ -580,7 +562,6 @@ fn service_runtime_body_store_and_status_failures_close_executor() {
         runtime_executor.step(Instant::now(), &mut runtime_services),
         Err(EffectExecutorError::Runtime(_))
     ));
-
     let mut body_executor = fixture.executor(EffectQueueConfig::default());
     let mut body_services = fixture.services();
     body_executor
@@ -596,7 +577,6 @@ fn service_runtime_body_store_and_status_failures_close_executor() {
         body_executor.body_service_failed(store_id, "fsync failed", &mut body_services,),
         Err(EffectExecutorError::BodyStore(_))
     ));
-
     let mut status_executor = fixture.executor(EffectQueueConfig::default());
     let mut status_services = fixture.services();
     status_services.fail_on = Some("status");
@@ -610,12 +590,10 @@ fn service_runtime_body_store_and_status_failures_close_executor() {
         "failure injection was not consumed"
     );
 }
-
 #[test]
 fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
     let fixture = Fixture::new();
     let message = proposal(&fixture);
-
     let mut failed = fixture.executor(EffectQueueConfig::default());
     failed.runtime.active_view_producer_retained = true;
     let mut failed_services = fixture.services();
@@ -633,7 +611,6 @@ fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
     );
     assert!(failed.runtime.completed_proposal_fanouts.is_empty());
     assert!(failed_services.broadcasts.is_empty());
-
     let mut retained = fixture.executor(EffectQueueConfig::default());
     retained.runtime.active_view_producer_retained = true;
     let mut retained_services = fixture.services();
@@ -655,7 +632,6 @@ fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
     assert!(retained_services.broadcasts.is_empty());
     assert!(retained.retained_effect_batch.is_none());
     assert!(!retained.status().fail_closed);
-
     retained
         .consume_effects(
             vec![AdapterEffect::Broadcast(message.clone())],
@@ -670,7 +646,6 @@ fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
     };
     assert_eq!(*round, fixture.manifest.round);
     assert_ne!(ownership.owner().lifecycle_ordinal(), 0);
-
     let mut accepted = fixture.executor(EffectQueueConfig::default());
     accepted.runtime.active_view_producer_retained = true;
     let mut accepted_services = fixture.services();
@@ -688,7 +663,6 @@ fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
     assert_eq!(*round, fixture.manifest.round);
     assert_ne!(ownership.owner().lifecycle_ordinal(), 0);
 }
-
 #[test]
 fn source_retained_non_proposal_control_remains_retransmittable() {
     let fixture = Fixture::new();
@@ -699,7 +673,6 @@ fn source_retained_non_proposal_control_remains_retransmittable() {
     services
         .broadcast_dispositions
         .push_back(ConsensusBroadcastDisposition::SourceRetained);
-
     executor
         .consume_effects(
             vec![AdapterEffect::Broadcast(control.clone())],
@@ -710,7 +683,6 @@ fn source_retained_non_proposal_control_remains_retransmittable() {
     assert!(services.broadcasts.is_empty());
     assert!(executor.runtime.completed_proposal_fanouts.is_empty());
     assert!(!executor.status().fail_closed);
-
     executor
         .consume_effects(
             vec![AdapterEffect::Broadcast(control.clone())],
@@ -725,7 +697,6 @@ fn source_retained_non_proposal_control_remains_retransmittable() {
     assert!(executor.runtime.completed_proposal_fanouts.is_empty());
     assert!(!executor.status().fail_closed);
 }
-
 fn leader_wire_runtime_terminal_fixture(
     fixture: &Fixture,
     scheduler_ordinal: u128,
@@ -753,8 +724,8 @@ fn leader_wire_runtime_terminal_fixture(
         scheduler_ordinal,
         source_class: super::super::FairV2IngressLeaderWireSourceClass::Control,
     };
-    let owner = [u8::try_from(scheduler_ordinal)
-        .expect("leader-wire fixture ordinal fits one byte"); 32];
+    let owner =
+        [u8::try_from(scheduler_ordinal).expect("leader-wire fixture ordinal fits one byte"); 32];
     let capacity =
         super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
             fixture.context.roster.len(),
@@ -801,7 +772,6 @@ fn leader_wire_runtime_terminal_fixture(
         .expect("transfer leader-wire effect owner to runtime");
     (directory, LeaderWireRuntimeTerminal::Volatile(receipt))
 }
-
 #[test]
 fn effect_dispatch_consumes_leader_wire_terminal_created_while_batch_drains() {
     let fixture = Fixture::new();
@@ -836,7 +806,6 @@ fn effect_dispatch_consumes_leader_wire_terminal_created_while_batch_drains() {
         EffectExecutorStep::Idle
     );
 }
-
 #[test]
 fn lock_reconciliation_consumes_retirement_terminal_before_the_next_turn() {
     let fixture = Fixture::new();
@@ -844,7 +813,6 @@ fn lock_reconciliation_consumes_retirement_terminal_before_the_next_turn() {
     let mut executor = fixture.executor(EffectQueueConfig::default());
     executor.runtime.leader_wire_terminal_after_lock = Some(terminal.clone());
     let mut services = fixture.services();
-
     executor
         .reconcile_locked_body_for_recovery(
             tag(fixture.manifest.round.view),
@@ -852,7 +820,6 @@ fn lock_reconciliation_consumes_retirement_terminal_before_the_next_turn() {
             &mut services,
         )
         .expect("lock retirement transfers its terminal in the same synchronous call");
-
     assert_eq!(services.leader_wire_terminals, vec![terminal]);
     assert!(executor.runtime.leader_wire_terminal_after_lock.is_none());
     assert!(executor.runtime.leader_wire_terminal_batches.is_empty());
@@ -863,7 +830,6 @@ fn lock_reconciliation_consumes_retirement_terminal_before_the_next_turn() {
         EffectExecutorStep::Idle
     );
 }
-
 #[test]
 fn leader_wire_terminal_batch_attempts_every_owner_after_one_transfer_fails() {
     let fixture = Fixture::new();
@@ -876,7 +842,6 @@ fn leader_wire_terminal_batch_attempts_every_owner_after_one_transfer_fails() {
         .push_back(vec![first, second.clone()]);
     let mut services = fixture.services();
     services.fail_on = Some("leader-wire-terminal");
-
     assert!(
         executor.consume_effects(Vec::new(), &mut services).is_err(),
         "the first injected terminal-transfer failure must fail closed"
@@ -889,7 +854,6 @@ fn leader_wire_terminal_batch_attempts_every_owner_after_one_transfer_fails() {
     assert!(executor.runtime.leader_wire_terminal_batches.is_empty());
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn retained_live_retry_consumes_decision_retirement_terminal_same_cycle() {
     let fixture = Fixture::new();
@@ -906,7 +870,6 @@ fn retained_live_retry_consumes_decision_retirement_terminal_same_cycle() {
         1
     );
     assert!(executor.retained_effect_batch.is_some());
-
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     executor.runtime.decided_body = Some((
         commit.round,
@@ -915,7 +878,6 @@ fn retained_live_retry_consumes_decision_retirement_terminal_same_cycle() {
         commit.execution_commitment,
     ));
     executor.runtime.leader_wire_terminal_after_decision = Some(terminal.clone());
-
     assert_eq!(
         executor
             .step(Instant::now(), &mut services)
@@ -934,7 +896,6 @@ fn retained_live_retry_consumes_decision_retirement_terminal_same_cycle() {
     assert!(executor.pending_signatures.is_empty());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn retained_drain_failure_transfers_decision_terminal_before_fail_close() {
     let fixture = Fixture::new();
@@ -951,7 +912,6 @@ fn retained_drain_failure_transfers_decision_terminal_before_fail_close() {
         1
     );
     assert!(executor.retained_effect_batch.is_some());
-
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     executor.runtime.decided_body = Some((
         commit.round,
@@ -961,7 +921,6 @@ fn retained_drain_failure_transfers_decision_terminal_before_fail_close() {
     ));
     executor.runtime.leader_wire_terminal_after_decision = Some(terminal.clone());
     services.fail_on = Some("cancel-sign");
-
     assert!(
         executor.step(Instant::now(), &mut services).is_err(),
         "the injected retained-suffix cancellation failure must fail closed"
@@ -980,7 +939,6 @@ fn retained_drain_failure_transfers_decision_terminal_before_fail_close() {
     assert!(executor.runtime.leader_wire_terminal_batches.is_empty());
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle() {
     let fixture = Fixture::new();
@@ -1002,7 +960,6 @@ fn retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle() {
         1
     );
     assert!(executor.retained_effect_batch.is_some());
-
     let durable = DurableBodyReceipt::for_test(
         fixture.context.id(),
         fixture.manifest.round,
@@ -1021,7 +978,6 @@ fn retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle() {
         commit.execution_commitment,
     ));
     executor.runtime.leader_wire_terminal_after_decision = Some(terminal.clone());
-
     assert_eq!(
         executor
             .step_pending_tip_recovery(Instant::now(), &mut services)
@@ -1044,7 +1000,6 @@ fn retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle() {
     );
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn ready_body_backpressure_retains_exact_ingress_until_capacity_retry() {
     let fixture = Fixture::new();
@@ -1085,7 +1040,6 @@ fn ready_body_backpressure_retains_exact_ingress_until_capacity_retry() {
         ),
         Err(EffectTransportError::BodyMismatch(_))
     ));
-
     let prepare = fixture.qc(wire::GlobalPhase::Prepare);
     let sources = certified_sources(&fixture, &prepare);
     executor
@@ -1119,7 +1073,6 @@ fn ready_body_backpressure_retains_exact_ingress_until_capacity_retry() {
     )
     .payload()
     .to_vec();
-
     let responder = fixture.context.roster[0].validator.clone();
     let (_leader_wire_directory, leader_wire_ingress, leader_wire_gate, ingress_ownership) =
         certified_response_runtime_ingress_ownership(&fixture, &response, responder.clone());
@@ -1185,9 +1138,7 @@ fn ready_body_backpressure_retains_exact_ingress_until_capacity_retry() {
         "an exact retransmission coalesces into the retained runtime owner"
     );
     assert!(!executor.status().fail_closed);
-
-    executor.config.max_ready_body_bytes =
-        u64::try_from(fixture.body.len()).expect("body length");
+    executor.config.max_ready_body_bytes = u64::try_from(fixture.body.len()).expect("body length");
     services.retry_certified_fetch_once = true;
     assert_eq!(
         executor.retry_retained_certified_body_response(&mut services),
@@ -1230,7 +1181,6 @@ fn ready_body_backpressure_retains_exact_ingress_until_capacity_retry() {
         "typed retry must preserve the exact runtime identity",
     );
     assert!(!executor.status().fail_closed);
-
     let mut timeout = timeout_at_view(&fixture, 0);
     timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
     executor.runtime.round_tag = Some(tag(1));
@@ -1272,7 +1222,6 @@ fn ready_body_backpressure_retains_exact_ingress_until_capacity_retry() {
         "EnterView cannot remint the retained leader-wire ticket",
     );
     assert!(!executor.status().fail_closed);
-
     assert_eq!(
         executor
             .retry_retained_certified_body_response(&mut services)
@@ -1327,7 +1276,6 @@ fn ready_body_backpressure_retains_exact_ingress_until_capacity_retry() {
     assert_eq!(services.completed_certified_fetches, vec![fetch_task.id()]);
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn tc_retires_unprotected_retryable_body_token_before_the_next_fetch() {
     let fixture = Fixture::new();
@@ -1378,7 +1326,6 @@ fn tc_retires_unprotected_retryable_body_token_before_the_next_fetch() {
             .map(BodyAvailableReservation::tag),
         Some(tag(0)),
     );
-
     let timeout = timeout_at_view(&fixture, 0);
     executor.runtime.round_tag = Some(tag(1));
     executor
@@ -1403,7 +1350,6 @@ fn tc_retires_unprotected_retryable_body_token_before_the_next_fetch() {
         "retiring the fetch must release its unpublished Completion owner",
     );
     assert!(executor.runtime.completions.is_empty());
-
     assert!(matches!(
         executor.retry_retained_certified_body_response(&mut services),
         Err(EffectTransportError::Authentication(
@@ -1411,7 +1357,6 @@ fn tc_retires_unprotected_retryable_body_token_before_the_next_fetch() {
         ))
     ));
     assert!(!executor.has_retained_certified_body_response());
-
     let (subject_b, body_b) = distinct_body(&fixture);
     let manifest_b = canonical_payload_manifest(
         &fixture.context,
@@ -1454,13 +1399,11 @@ fn tc_retires_unprotected_retryable_body_token_before_the_next_fetch() {
     ));
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn body_fetch_authority_upgrades_monotonically_in_both_orders() {
     let fixture = Fixture::new();
     let prepare = fixture.qc(wire::GlobalPhase::Prepare);
     let sources = certified_sources(&fixture, &prepare);
-
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     executor
@@ -1501,7 +1444,6 @@ fn body_fetch_authority_upgrades_monotonically_in_both_orders() {
     );
     assert_eq!(executor.pending_fetches.len(), 1);
     assert_eq!(executor.outstanding_requests.len(), 1);
-
     let first_request = upgraded
         .certified_request()
         .expect("first certified authority")
@@ -1528,7 +1470,6 @@ fn body_fetch_authority_upgrades_monotonically_in_both_orders() {
         Some(&first_request)
     );
     assert_eq!(executor.outstanding_requests.len(), 1);
-
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     executor
@@ -1570,7 +1511,6 @@ fn body_fetch_authority_upgrades_monotonically_in_both_orders() {
     assert_eq!(executor.pending_fetches.len(), 1);
     assert_eq!(executor.outstanding_requests.len(), 1);
 }
-
 #[test]
 fn hybrid_reconstruction_wins_and_retires_certified_request() {
     let fixture = Fixture::new();
@@ -1592,7 +1532,6 @@ fn hybrid_reconstruction_wins_and_retires_certified_request() {
         )
         .expect("start hybrid acquisition");
     let task = services.fetch_tasks[0].clone();
-
     assert_eq!(
         executor
             .complete_body_reconstruction(
@@ -1609,7 +1548,6 @@ fn hybrid_reconstruction_wins_and_retires_certified_request() {
     assert!(executor.outstanding_requests.is_empty());
     assert!(services.completed_certified_fetches.is_empty());
 }
-
 #[test]
 fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline() {
     let fixture = Fixture::new();
@@ -1618,7 +1556,6 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
     executor
         .install_authenticated_genesis_body(&fixture.block)
         .expect("retain authenticated staged genesis");
-
     let manifest = manifest_at_view(&fixture, 5);
     let round = manifest.round;
     let subject = manifest.subject;
@@ -1635,7 +1572,6 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
             &mut services,
         )
         .expect("derive the later-view manifest from authenticated genesis");
-
     assert!(services.fetch_tasks.is_empty());
     assert!(executor.pending_fetches.is_empty());
     assert_eq!(executor.ready_bodies.len(), 1);
@@ -1650,7 +1586,6 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
         executor.runtime.completions,
         vec![RuntimeCompletion::BodyAvailable(tag(5), manifest.clone())]
     );
-
     executor
         .consume_effects(
             vec![AdapterEffect::StoreBody {
@@ -1673,7 +1608,6 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
         .complete_body_store(store_completion, &mut services)
         .expect("complete the current-round durable store");
     assert_eq!(executor.durable_bodies[&(round, subject)].round(), round);
-
     executor
         .consume_effects(
             vec![AdapterEffect::ValidateBody {
@@ -1689,7 +1623,6 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
     assert_eq!(services.validation_tasks[0].subject(), subject);
     assert!(executor.validated_bodies.is_empty());
 }
-
 #[test]
 fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally() {
     let fixture = Fixture::new();
@@ -1698,7 +1631,6 @@ fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
     executor
         .install_authenticated_genesis_body(&fixture.block)
         .expect("retain authenticated staged genesis");
-
     let certificate = fixture.qc(wire::GlobalPhase::Commit);
     let sources = certified_sources(&fixture, &certificate);
     executor
@@ -1714,7 +1646,6 @@ fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
             &mut services,
         )
         .expect("consume certified Decision from authenticated local genesis");
-
     assert!(services.fetch_tasks.is_empty());
     assert!(executor.pending_fetches.is_empty());
     assert!(executor.certified_work.is_empty());
@@ -1731,7 +1662,6 @@ fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
         )]
     );
 }
-
 #[test]
 fn authenticated_genesis_cache_does_not_satisfy_a_different_subject() {
     let fixture = Fixture::new();
@@ -1740,7 +1670,6 @@ fn authenticated_genesis_cache_does_not_satisfy_a_different_subject() {
     executor
         .install_authenticated_genesis_body(&fixture.block)
         .expect("retain authenticated staged genesis");
-
     let proposal_round = round(&fixture.context, 4);
     let (subject, body) = distinct_body(&fixture);
     let manifest = canonical_payload_manifest(&fixture.context, proposal_round, subject, &body);
@@ -1757,14 +1686,12 @@ fn authenticated_genesis_cache_does_not_satisfy_a_different_subject() {
             &mut services,
         )
         .expect("unrelated proposal uses network acquisition");
-
     assert_eq!(services.fetch_tasks.len(), 1);
     assert_eq!(services.fetch_tasks[0].manifest(), Some(&manifest));
     assert_eq!(executor.pending_fetches.len(), 1);
     assert!(executor.ready_bodies.is_empty());
     assert!(executor.runtime.completions.is_empty());
 }
-
 #[test]
 fn retained_exact_body_pipeline_prevents_reacquisition_at_every_stage() {
     let fixture = Fixture::new();
@@ -1791,7 +1718,6 @@ fn retained_exact_body_pipeline_prevents_reacquisition_at_every_stage() {
         )
         .expect("retain reconstructed body");
     assert_eq!(executor.runtime.queued_commands(), 1);
-
     executor
         .consume_effects(vec![fetch.clone()], &mut services)
         .expect("ready body makes FetchBody idempotent");
@@ -1799,7 +1725,6 @@ fn retained_exact_body_pipeline_prevents_reacquisition_at_every_stage() {
     assert!(executor.pending_fetches.is_empty());
     assert_eq!(executor.ready_bodies.len(), 1);
     assert_eq!(executor.runtime.queued_commands(), 1);
-
     executor
         .consume_effects(
             vec![AdapterEffect::StoreBody {
@@ -1816,7 +1741,6 @@ fn retained_exact_body_pipeline_prevents_reacquisition_at_every_stage() {
     assert_eq!(services.fetch_tasks.len(), 1);
     assert_eq!(executor.pending_stores.len(), 1);
     assert_eq!(executor.runtime.queued_commands(), 1);
-
     let store_id = services.store_tasks[0].id();
     let completion = services.execute_store(store_id);
     executor
@@ -1830,7 +1754,6 @@ fn retained_exact_body_pipeline_prevents_reacquisition_at_every_stage() {
     assert!(executor.pending_fetches.is_empty());
     assert_eq!(executor.durable_bodies.len(), 1);
     assert_eq!(executor.runtime.queued_commands(), 2);
-
     let mut conflicting_manifest = fixture.manifest.clone();
     conflicting_manifest.payload_size_bytes = conflicting_manifest
         .payload_size_bytes
@@ -1854,13 +1777,11 @@ fn retained_exact_body_pipeline_prevents_reacquisition_at_every_stage() {
     assert_eq!(services.fetch_tasks.len(), 1);
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn uncertified_fetch_rejects_spurious_certified_sources() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
-
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -1878,7 +1799,6 @@ fn uncertified_fetch_rejects_spurious_certified_sources() {
     assert!(services.fetch_tasks.is_empty());
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn fetch_retransmissions_reuse_one_work_slot_and_one_signed_request() {
     let fixture = Fixture::new();
@@ -1943,7 +1863,6 @@ fn fetch_retransmissions_reuse_one_work_slot_and_one_signed_request() {
     assert_eq!(executor.status().effect_dispatch_queue.depth, 0);
     assert!(executor.retained_effect_batch.is_none());
 }
-
 #[test]
 fn conflicting_fetch_retransmission_fails_closed() {
     let fixture = Fixture::new();
@@ -1977,7 +1896,6 @@ fn conflicting_fetch_retransmission_fails_closed() {
     assert_eq!(services.fetch_tasks.len(), 1);
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn apply_retransmissions_reuse_one_work_slot() {
     let fixture = Fixture::new();
@@ -2021,7 +1939,6 @@ fn apply_retransmissions_reuse_one_work_slot() {
         lifecycle_ordinal_before + 1,
         "eight retries retain the first immutable Apply owner"
     );
-
     let mut alternate_evidence = fixture.qc(wire::GlobalPhase::Commit);
     alternate_evidence.aggregate_signature = vec![2];
     executor
@@ -2037,16 +1954,14 @@ fn apply_retransmissions_reuse_one_work_slot() {
     assert_eq!(services.apply_tasks.len(), 9);
     assert_eq!(services.apply_tasks[8].certificate(), &certificate);
     assert!(!executor.status().fail_closed);
-
     let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
-    conflicting.execution_commitment =
-        wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"conflicting terminal parent state"),
-            Hash::new(b"conflicting terminal post state"),
-            Hash::new(b"conflicting terminal ordinary writes"),
-            1,
-            Hash::new(b"conflicting terminal executed block"),
-        );
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"conflicting terminal parent state"),
+        Hash::new(b"conflicting terminal post state"),
+        Hash::new(b"conflicting terminal ordinary writes"),
+        1,
+        Hash::new(b"conflicting terminal executed block"),
+    );
     executor.runtime.effect_owners.clear();
     assert!(matches!(
         executor.consume_effects(
@@ -2063,7 +1978,6 @@ fn apply_retransmissions_reuse_one_work_slot() {
     assert_eq!(services.apply_tasks.len(), 9);
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write() {
     let fixture = Fixture::new();
@@ -2104,7 +2018,6 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
     assert!(executor.pending_applications.is_empty());
     assert_eq!(services.apply_tasks.len(), 1);
     let completions_before = executor.runtime.completions.clone();
-
     // Keep ApplicationCompleted queued in the fake runtime and reproduce
     // the production timer/CommitQC race which rediscovered Apply first.
     // The runtime retains its authoritative incarnation after finality;
@@ -2114,7 +2027,6 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
             .consume_effects(vec![effect.clone()], &mut services)
             .expect("coalesce post-finality Apply retransmission");
     }
-
     assert!(executor.pending_applications.is_empty());
     assert_eq!(services.apply_tasks.len(), 1);
     assert_eq!(executor.runtime.completions, completions_before);
@@ -2123,7 +2035,6 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
         &artifact
     );
     assert!(!executor.status().fail_closed);
-
     assert!(matches!(
         executor.begin_apply(
             tag(1),
@@ -2136,7 +2047,6 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
             if reason == "conflicting Apply retransmission after durable finality"
     ));
     assert!(!executor.status().fail_closed);
-
     let mut alternate_evidence = fixture.qc(wire::GlobalPhase::Commit);
     alternate_evidence.aggregate_signature = vec![2];
     executor
@@ -2151,16 +2061,14 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
         .expect("coalesce alternate evidence for the durable committed decision");
     assert_eq!(services.apply_tasks.len(), 1);
     assert!(!executor.status().fail_closed);
-
     let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
-    conflicting.execution_commitment =
-        wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"conflicting terminal parent state"),
-            Hash::new(b"conflicting terminal post state"),
-            Hash::new(b"conflicting terminal ordinary writes"),
-            1,
-            Hash::new(b"conflicting terminal executed block"),
-        );
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"conflicting terminal parent state"),
+        Hash::new(b"conflicting terminal post state"),
+        Hash::new(b"conflicting terminal ordinary writes"),
+        1,
+        Hash::new(b"conflicting terminal executed block"),
+    );
     executor.runtime.effect_owners.clear();
     assert!(matches!(
         executor.consume_effects(
@@ -2177,7 +2085,6 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
     assert_eq!(services.apply_tasks.len(), 1);
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn tc_body_rebind_preserves_the_exact_fetch_until_reconstruction_completes() {
     let fixture = Fixture::new();
@@ -2194,12 +2101,10 @@ fn tc_body_rebind_preserves_the_exact_fetch_until_reconstruction_completes() {
         certified_sources: sources.clone(),
         certificate: Some(high_prepare.clone()),
     };
-
     executor
         .consume_effects(vec![fetch(0)], &mut services)
         .expect("begin exact high-QC fetch");
     let work_id = services.fetch_tasks[0].id();
-
     for view in 0..3 {
         let mut timeout = timeout_at_view(&fixture, view);
         timeout.groups[0].highest_prepare_qc = Some(high_prepare.clone());
@@ -2230,7 +2135,6 @@ fn tc_body_rebind_preserves_the_exact_fetch_until_reconstruction_completes() {
         assert_eq!(executor.pending_fetches.len(), 1);
         assert_eq!(executor.pending_work(), 1);
     }
-
     let same_view_tag = EventTag::new(1, 3, Generation::new(11));
     let mut timeout_upgrade = timeout_at_view(&fixture, 2);
     timeout_upgrade.groups[0].highest_prepare_qc = Some(high_prepare.clone());
@@ -2244,7 +2148,6 @@ fn tc_body_rebind_preserves_the_exact_fetch_until_reconstruction_completes() {
             &mut services,
         )
         .expect("rebind the protected fetch across a same-view generation upgrade");
-
     let task = executor.pending_fetches[&work_id].task.clone();
     assert_eq!(task.tag, same_view_tag);
     assert_eq!(
@@ -2267,7 +2170,6 @@ fn tc_body_rebind_preserves_the_exact_fetch_until_reconstruction_completes() {
     ));
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn tc_body_rebind_preserves_certified_request_ownership_through_signed_response() {
     let fixture = Fixture::new();
@@ -2277,7 +2179,6 @@ fn tc_body_rebind_preserves_certified_request_ownership_through_signed_response(
     let original_tag = EventTag::new(1, 0, Generation::new(70));
     let rebound_tag = EventTag::new(1, 1, Generation::new(71));
     let sources = certified_sources(&fixture, &prepare);
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -2300,7 +2201,6 @@ fn tc_body_rebind_preserves_certified_request_ownership_through_signed_response(
     let request_hash = HashOf::new(&request);
     assert_eq!(executor.certified_work.get(&request_hash), Some(&work_id));
     assert_eq!(executor.outstanding_requests.len(), 1);
-
     let mut timeout = timeout_at_view(&fixture, 0);
     timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
     executor.runtime.round_tag = Some(rebound_tag);
@@ -2315,13 +2215,11 @@ fn tc_body_rebind_preserves_certified_request_ownership_through_signed_response(
             &mut services,
         )
         .expect("rebind the certified acquisition across TC installation");
-
     let rebound = executor.pending_fetches[&work_id].task.clone();
     assert!(rebound.rebinds_consumer_of(&original));
     assert_eq!(rebound.certified_request(), Some(&request));
     assert_eq!(executor.certified_work.get(&request_hash), Some(&work_id));
     assert_eq!(executor.outstanding_requests.len(), 1);
-
     let mut response = wire::CertifiedBodyResponse {
         request_hash,
         manifest: fixture.manifest.clone(),
@@ -2356,7 +2254,6 @@ fn tc_body_rebind_preserves_certified_request_ownership_through_signed_response(
     ));
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn tc_body_rebind_uses_the_effective_local_lock_when_the_tc_omits_or_lowers_it() {
     let fixture = Fixture::new();
@@ -2377,12 +2274,10 @@ fn tc_body_rebind_uses_the_effective_local_lock_when_the_tc_omits_or_lowers_it()
         certified_sources: sources.clone(),
         certificate: Some(local_lock.clone()),
     };
-
     executor
         .consume_effects(vec![fetch(1)], &mut services)
         .expect("begin local-lock fetch");
     let work_id = services.fetch_tasks[0].id();
-
     let omitted = timeout_at_view(&fixture, 1);
     executor
         .consume_effects(
@@ -2394,7 +2289,6 @@ fn tc_body_rebind_uses_the_effective_local_lock_when_the_tc_omits_or_lowers_it()
             &mut services,
         )
         .expect("an omitted TC high cannot lower the effective local lock");
-
     let mut lowered = timeout_at_view(&fixture, 2);
     lowered.groups[0].highest_prepare_qc = Some(fixture.qc(wire::GlobalPhase::Prepare));
     executor
@@ -2407,12 +2301,10 @@ fn tc_body_rebind_uses_the_effective_local_lock_when_the_tc_omits_or_lowers_it()
             &mut services,
         )
         .expect("a lower TC high cannot replace the effective local lock");
-
     assert_eq!(executor.pending_fetches.len(), 1);
     assert_eq!(executor.pending_fetches[&work_id].task.tag, consumer_tag(3));
     assert!(services.fetch_tasks.iter().all(|task| task.id() == work_id));
     assert!(services.cancelled_fetches.is_empty());
-
     let task = executor.pending_fetches[&work_id].task.clone();
     assert_eq!(
         executor
@@ -2426,7 +2318,6 @@ fn tc_body_rebind_uses_the_effective_local_lock_when_the_tc_omits_or_lowers_it()
             if *completion_tag == consumer_tag(3)
     ));
 }
-
 #[test]
 fn enter_view_rejects_a_tc_high_without_an_effective_protected_lock() {
     let fixture = Fixture::new();
@@ -2434,7 +2325,6 @@ fn enter_view_rejects_a_tc_high_without_an_effective_protected_lock() {
     let mut services = fixture.services();
     let mut timeout = timeout_at_view(&fixture, 0);
     timeout.groups[0].highest_prepare_qc = Some(fixture.qc(wire::GlobalPhase::Prepare));
-
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::EnterView {
@@ -2449,7 +2339,6 @@ fn enter_view_rejects_a_tc_high_without_an_effective_protected_lock() {
     ));
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn enter_view_rejects_a_protected_lock_with_a_conflicting_execution_commitment() {
     let fixture = Fixture::new();
@@ -2459,15 +2348,13 @@ fn enter_view_rejects_a_protected_lock_with_a_conflicting_execution_commitment()
     let mut timeout = timeout_at_view(&fixture, 0);
     timeout.groups[0].highest_prepare_qc = Some(highest.clone());
     let mut conflicting = highest;
-    conflicting.execution_commitment =
-        wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"conflicting EnterView parent state"),
-            Hash::new(b"conflicting EnterView post state"),
-            Hash::new(b"conflicting EnterView ordinary writes"),
-            1,
-            Hash::new(b"conflicting EnterView executed block"),
-        );
-
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"conflicting EnterView parent state"),
+        Hash::new(b"conflicting EnterView post state"),
+        Hash::new(b"conflicting EnterView ordinary writes"),
+        1,
+        Hash::new(b"conflicting EnterView executed block"),
+    );
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::EnterView {
@@ -2483,7 +2370,6 @@ fn enter_view_rejects_a_protected_lock_with_a_conflicting_execution_commitment()
     assert!(executor.status().fail_closed);
     assert!(services.entered_views.is_empty());
 }
-
 #[test]
 fn tc_body_rebind_retags_a_queued_body_available_completion() {
     let fixture = Fixture::new();
@@ -2500,7 +2386,6 @@ fn tc_body_rebind_retags_a_queued_body_available_completion() {
         certified_sources: sources.clone(),
         certificate: Some(high_prepare.clone()),
     };
-
     executor
         .consume_effects(vec![fetch(0)], &mut services)
         .expect("begin exact high-QC fetch");
@@ -2515,7 +2400,6 @@ fn tc_body_rebind_retags_a_queued_body_available_completion() {
         .expect("queue old-view body completion");
     assert!(executor.pending_fetches.is_empty());
     assert_eq!(executor.ready_bodies.len(), 1);
-
     for view in 0..3 {
         let mut timeout = timeout_at_view(&fixture, view);
         timeout.groups[0].highest_prepare_qc = Some(high_prepare.clone());
@@ -2546,7 +2430,6 @@ fn tc_body_rebind_retags_a_queued_body_available_completion() {
     assert_eq!(executor.pending_work(), 0);
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn tc_body_rebind_retires_a_superseded_completion_and_releases_capacity() {
     let fixture = Fixture::new();
@@ -2578,7 +2461,6 @@ fn tc_body_rebind_retires_a_superseded_completion_and_releases_capacity() {
         .expect("queue original BodyAvailable");
     assert_eq!(executor.runtime.completions.len(), 1);
     assert_eq!(executor.ready_bodies.len(), 1);
-
     let replacement_manifest = manifest_at_view(&fixture, 1);
     let mut replacement = original;
     replacement.round = replacement_manifest.round;
@@ -2596,12 +2478,10 @@ fn tc_body_rebind_retires_a_superseded_completion_and_releases_capacity() {
             &mut services,
         )
         .expect("supersede the old completion with a higher exact lock");
-
     assert!(executor.runtime.completions.is_empty());
     assert!(executor.ready_bodies.is_empty());
     assert_eq!(executor.ready_body_bytes, 0);
     assert!(executor.body_pipeline_owners.is_empty());
-
     let replacement_sources = certified_sources(&fixture, &replacement);
     executor
         .consume_effects(
@@ -2619,7 +2499,6 @@ fn tc_body_rebind_retires_a_superseded_completion_and_releases_capacity() {
     assert_eq!(executor.pending_fetches.len(), 1);
     assert_eq!(executor.pending_work(), 1);
 }
-
 #[test]
 fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
     let mut keys = (1_u8..=4)
@@ -2685,7 +2564,6 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
     )
     .expect("open observing adapter");
     assert!(startup.is_empty());
-
     let round = wire::ConsensusRound {
         context_id: context.id(),
         height: context.height,
@@ -2701,8 +2579,7 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
     );
     let block_signature = SignatureOf::try_from_hash(keys[0].private_key(), header.hash())
         .expect("canonical body signature");
-    let block =
-        SignedBlock::presigned(BlockSignature::new(0, block_signature), header, Vec::new());
+    let block = SignedBlock::presigned(BlockSignature::new(0, block_signature), header, Vec::new());
     let body = block.encode_wire().expect("canonical SignedBlockWire");
     let subject = wire::BlockSubject {
         parent_block_hash: None,
@@ -2755,7 +2632,6 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
         .to_vec();
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(vote))
     };
-
     for signer in 0_u32..2 {
         let authenticated = adapter
             .authenticate(signed_timeout(signer))
@@ -2786,7 +2662,6 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
             _ => None,
         })
         .expect("effective-lock EnterView effect");
-
     let started = Instant::now();
     let (runtime, startup_effects) = SerializedV2Runtime::new(
         adapter,
@@ -2830,7 +2705,6 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
         executor.body_pipeline_owners[&(round, subject)].tag,
         rebound_tag
     );
-
     executor
         .arm_live_clocks(started)
         .expect("arm clocks after startup effects");

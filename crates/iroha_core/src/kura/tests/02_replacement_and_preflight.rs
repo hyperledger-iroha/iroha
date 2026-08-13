@@ -48,7 +48,6 @@ fn partial_stage_discard_recovers_committed_replacement_before_returning() {
         );
         kura.replace_top_block(Arc::clone(&replacement))
             .expect("idempotent retry after recovered cleanup");
-
         let successor: Arc<SignedBlock> = Arc::new(
             ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
                 header.set_height(nonzero!(2_u64));
@@ -74,7 +73,6 @@ fn partial_stage_discard_recovers_committed_replacement_before_returning() {
         );
         replacement_hash
     };
-
     let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("restart resolves partially discarded rewrite stage");
     assert_eq!(
@@ -88,7 +86,6 @@ fn partial_stage_discard_recovers_committed_replacement_before_returning() {
             .exists()
     );
 }
-
 #[test]
 fn persistent_retained_cleanup_failure_poison_gates_committed_rewrite() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -113,7 +110,6 @@ fn persistent_retained_cleanup_failure_poison_gates_committed_rewrite() {
         let replacement_hash = replacement.hash();
         kura.fail_retained_rewrite_discard_after_for_tests(0);
         kura.fail_next_retained_rewrite_recovery_for_tests();
-
         let error = kura
             .replace_top_block(Arc::clone(&replacement))
             .expect_err("unresolved committed cleanup must never report success");
@@ -143,7 +139,6 @@ fn persistent_retained_cleanup_failure_poison_gates_committed_rewrite() {
         ));
         replacement
     };
-
     let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("restart must finish the marker-selected retained cleanup");
     assert_eq!(count.0, 1);
@@ -158,7 +153,6 @@ fn persistent_retained_cleanup_failure_poison_gates_committed_rewrite() {
     );
     assert!(!reopened.canonical_storage_poisoned.load(Ordering::Acquire));
 }
-
 #[test]
 fn partial_multi_height_stage_discard_keeps_public_prune_coherent_and_appendable() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -174,11 +168,9 @@ fn partial_multi_height_stage_discard_keeps_public_prune_coherent_and_appendable
         (2..=4).all(|height| kura.retained_block_record_path(height).is_file()),
         "fixture must stage multiple retained heights"
     );
-
     kura.fail_retained_rewrite_discard_after_for_tests(0);
     kura.prune_to_height(1)
         .expect("published prune must recover partial retained cleanup and report success");
-
     assert_eq!(kura.blocks_count(), 1);
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
     assert_eq!(
@@ -205,7 +197,6 @@ fn partial_multi_height_stage_discard_keeps_public_prune_coherent_and_appendable
         read_block(&mut store, 0).expect("decode durable retained prefix")
     };
     assert_eq!(durable_genesis, *blocks[0]);
-
     kura.store_block(Arc::clone(&blocks[1]))
         .expect("append canonical successor after recovered public prune");
     assert_eq!(kura.blocks_count(), 2);
@@ -234,7 +225,6 @@ fn partial_multi_height_stage_discard_keeps_public_prune_coherent_and_appendable
             .expect("scan exact total usage after recovered prune and append")
     );
 }
-
 #[test]
 fn v2_finality_durably_archives_sccp_before_body_eviction_and_restart() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -269,7 +259,6 @@ fn v2_finality_durably_archives_sccp_before_body_eviction_and_restart() {
             archived[0].commitment.message_id > archived[1].commitment.message_id,
             "fixture commitment order deliberately differs from replay-key ordering"
         );
-
         let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
         kura.evict_block_bodies(payload_len)
             .expect("evict the already archived SCCP body");
@@ -282,7 +271,6 @@ fn v2_finality_durably_archives_sccp_before_body_eviction_and_restart() {
         assert!(kura.get_block(nonzero!(2_usize)).is_none());
         (archived, artifact, expected_header)
     };
-
     let (reopened, _) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("restart bodyless Kura");
     assert!(reopened.get_block(nonzero!(2_usize)).is_none());
@@ -294,7 +282,6 @@ fn v2_finality_durably_archives_sccp_before_body_eviction_and_restart() {
     assert_eq!(archived, expected);
     assert_eq!(recovered_artifact, artifact);
 }
-
 #[test]
 fn v2_finality_store_rejects_header_matching_canonical_wire_substitution() {
     let kura = Kura::blank_kura_for_testing();
@@ -317,7 +304,6 @@ fn v2_finality_store_rejects_header_matching_canonical_wire_substitution() {
         Kura::canonical_block_wire_hash(&canonical).expect("canonical wire hash")
     );
     let substituted_artifact = v2_finality_artifact_for_block(&substituted);
-
     assert!(matches!(
         kura.store_v2_finality_artifact(&substituted_artifact),
         Err(Error::V2FinalityPayloadHashMismatch { height: 1 })
@@ -328,7 +314,6 @@ fn v2_finality_store_rejects_header_matching_canonical_wire_substitution() {
     );
     assert!(!kura.v2_finality_artifact_path(1).exists());
 }
-
 #[test]
 fn retained_wire_hash_tamper_rejects_live_body_bodyless_read_and_restart() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -350,14 +335,12 @@ fn retained_wire_hash_tamper_rejects_live_body_bodyless_read_and_restart() {
         let tampered_bytes = tampered.encode();
         std::fs::write(&retained_path, &tampered_bytes)
             .expect("tamper retained canonical-wire hash");
-
         assert!(matches!(
             kura.v2_finality_artifact_with_archive(2),
             Err(Error::ConflictingRetainedBlockRecord { height: 2 })
         ));
         std::fs::write(&retained_path, &canonical_bytes)
             .expect("restore exact retained record before eviction");
-
         let height = nonzero!(2_usize);
         let (_, payload_len) = advertise_required_replicas(&kura, height);
         assert!(
@@ -375,13 +358,11 @@ fn retained_wire_hash_tamper_rejects_live_body_bodyless_read_and_restart() {
             Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
         ));
     }
-
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
     ));
 }
-
 #[test]
 fn coordinated_retained_and_finality_payload_hash_tamper_fails_crypto_and_restart() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -402,7 +383,6 @@ fn coordinated_retained_and_finality_payload_hash_tamper_fails_crypto_and_restar
         );
         kura.remove_evicted_block_sidecar_for_testing(height)
             .expect("make exact historical body remote-only");
-
         let forged_wire_hash = Hash::new(b"coordinated attacker wire hash");
         let retained_path = kura.retained_block_record_path(2);
         let retained_bytes = std::fs::read(&retained_path).expect("read retained record");
@@ -412,7 +392,6 @@ fn coordinated_retained_and_finality_payload_hash_tamper_fails_crypto_and_restar
         retained.proposal_wire_hash = forged_wire_hash;
         std::fs::write(&retained_path, retained.encode())
             .expect("coordinate retained payload hash tamper");
-
         let finality_path = kura.v2_finality_artifact_path(2);
         let finality_bytes = std::fs::read(&finality_path).expect("read finality record");
         let mut finality_input = finality_bytes.as_slice();
@@ -422,19 +401,16 @@ fn coordinated_retained_and_finality_payload_hash_tamper_fails_crypto_and_restar
         finality.artifact.commit_qc.subject.payload_hash = forged_wire_hash;
         std::fs::write(&finality_path, finality.encode())
             .expect("coordinate finality payload hash tamper");
-
         assert!(matches!(
             kura.v2_finality_artifact_with_archive(2),
             Err(Error::V2FinalityCryptography(_))
         ));
     }
-
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::V2FinalityCryptography(_))
     ));
 }
-
 #[test]
 fn retained_sccp_inventory_is_bounded_nonempty_and_fails_closed_on_selected_tamper() {
     let kura = Kura::blank_kura_for_testing();
@@ -444,7 +420,6 @@ fn retained_sccp_inventory_is_bounded_nonempty_and_fails_closed_on_selected_tamp
         kura.persist_retained_block_record(&blocks_dir, block.hash(), block.as_ref())
             .expect("persist canonical retained inventory fixture");
     }
-
     assert!(
         kura.retained_nonempty_sccp_archive_inventory_at_or_below(0)
             .expect("zero boundary inventory")
@@ -472,7 +447,6 @@ fn retained_sccp_inventory_is_bounded_nonempty_and_fails_closed_on_selected_tamp
             .expect("rootless suffix remains omitted"),
         through_two
     );
-
     let suffix_path = kura.retained_block_record_path(4);
     std::fs::write(&suffix_path, b"tampered retained suffix")
         .expect("tamper retained record above WSV boundary");
@@ -487,7 +461,6 @@ fn retained_sccp_inventory_is_bounded_nonempty_and_fails_closed_on_selected_tamp
         "a tampered retained record inside the selected boundary must fail closed"
     );
 }
-
 #[test]
 fn failed_finality_publication_keeps_valid_archive_for_exact_retry() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -502,7 +475,6 @@ fn failed_finality_publication_keeps_valid_archive_for_exact_retry() {
         .refresh_total_disk_usage_bytes()
         .expect("refresh total usage before retained evidence");
     kura.fail_next_v2_finality_write_for_tests();
-
     assert!(matches!(
         kura.store_v2_finality_artifact(&artifact),
         Err(Error::IO(error, _)) if error.to_string().contains("injected failure")
@@ -528,7 +500,6 @@ fn failed_finality_publication_keeps_valid_archive_for_exact_retry() {
         .expect("validate retained archive after finality failure")
         .expect("retained archive exists");
     assert_eq!(archive.len(), 2);
-
     let _receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("retry finality with exact retained archive");
@@ -562,7 +533,6 @@ fn failed_finality_publication_keeps_valid_archive_for_exact_retry() {
         Some(artifact)
     );
 }
-
 #[test]
 fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra() {
     let kura = Kura::blank_kura_for_testing();
@@ -572,7 +542,6 @@ fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra()
         .expect("construct canonical retained archive");
     assert_eq!(archive.len(), 2);
     let path = kura.retained_block_record_path(2);
-
     let canonical = KuraRetainedBlockRecord::new(
         blocks[1].header(),
         Kura::canonical_proposal_wire_hash(&blocks[1]).expect("canonical proposal wire hash"),
@@ -585,14 +554,12 @@ fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra()
     );
     Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &canonical)
         .expect("canonical retained archive validates");
-
     let mut gap = canonical.clone();
     gap.sccp_archive[1].commitment_index = 2;
     assert!(matches!(
         Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &gap),
         Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("not dense")
     ));
-
     let mut context_tamper = canonical.clone();
     context_tamper.sccp_archive[0]
         .context
@@ -606,7 +573,6 @@ fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra()
         ),
         Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("message 0 is invalid")
     ));
-
     let mut noncanonical = canonical.clone();
     noncanonical.sccp_archive[0].payload_bytes.push(0);
     assert!(matches!(
@@ -618,7 +584,6 @@ fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra()
         ),
         Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("message 0 is invalid")
     ));
-
     let mut duplicate = canonical.clone();
     let duplicated_context = duplicate.sccp_archive[0].context;
     let duplicated_payload = duplicate.sccp_archive[0].payload_bytes.clone();
@@ -628,14 +593,12 @@ fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra()
         Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &duplicate),
         Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("repeats an outbound replay key")
     ));
-
     let mut omitted = canonical.clone();
     omitted.sccp_archive.pop();
     assert!(matches!(
         Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &omitted),
         Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("commitment root")
     ));
-
     let mut swapped = canonical.clone();
     let first_payload = swapped.sccp_archive[0].payload_bytes.clone();
     let second_payload = swapped.sccp_archive[1].payload_bytes.clone();
@@ -645,7 +608,6 @@ fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra()
         Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &swapped),
         Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("commitment root")
     ));
-
     let mut overflow = canonical.clone();
     overflow.sccp_archive =
         vec![
@@ -657,7 +619,6 @@ fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra()
         Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &overflow),
         Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("maximum")
     ));
-
     let rootless_header = blocks[0].header();
     let rootless_extra = KuraRetainedBlockRecord::new(
         rootless_header,
@@ -679,7 +640,6 @@ fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra()
         Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("commitment root")
     ));
 }
-
 #[test]
 fn retained_sccp_archive_tamper_fails_reader_and_restart_closed() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -703,14 +663,12 @@ fn retained_sccp_archive_tamper_fails_reader_and_restart_closed() {
             Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("commitment root")
         ));
     }
-
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::InvalidRetainedSccpArchive { height: 2, reason })
             if reason.contains("commitment root")
     ));
 }
-
 #[test]
 fn rooted_finality_reader_rejects_deleted_archive_even_while_body_is_inline() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -737,7 +695,6 @@ fn rooted_finality_reader_rejects_deleted_archive_even_while_body_is_inline() {
         "unexpected startup error: {error:?}"
     );
 }
-
 #[test]
 fn unfinalized_block_cannot_become_bodyless_before_finality() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -756,7 +713,6 @@ fn unfinalized_block_cannot_become_bodyless_before_finality() {
         assert!(kura.get_block(height).is_some());
         artifact
     };
-
     let (reopened, _) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("restart inline Kura");
     assert!(reopened.get_block(nonzero!(2_usize)).is_some());
@@ -770,7 +726,6 @@ fn unfinalized_block_cannot_become_bodyless_before_finality() {
         Some(artifact)
     );
 }
-
 #[test]
 fn retained_header_tamper_fails_finality_read_and_restart_closed() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -791,7 +746,6 @@ fn retained_header_tamper_fails_finality_read_and_restart_closed() {
             .remove_da_block_file(2)
             .expect("make the body remote-only");
     }
-
     let path = kura.retained_block_record_path(2);
     let substitute: SignedBlock =
         ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
@@ -811,7 +765,6 @@ fn retained_header_tamper_fails_finality_read_and_restart_closed() {
         Vec::new(),
     );
     std::fs::write(&path, forged.encode()).expect("replace retained header with a conflict");
-
     assert!(matches!(
         kura.store_v2_finality_artifact(&artifact),
         Err(Error::BlockHeightConflict {
@@ -830,7 +783,6 @@ fn retained_header_tamper_fails_finality_read_and_restart_closed() {
         }) if expected == blocks[1].hash() && actual == substitute.hash()
     ));
 }
-
 #[test]
 fn conflicting_preplanted_retained_header_aborts_eviction_before_index_mutation() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -867,7 +819,6 @@ fn conflicting_preplanted_retained_header_aborts_eviction_before_index_mutation(
         .encode(),
     )
     .expect("preplant conflicting retained header");
-
     assert!(matches!(
         kura.evict_block_bodies(payload_len),
         Err(Error::BlockHeightConflict {
@@ -886,7 +837,6 @@ fn conflicting_preplanted_retained_header_aborts_eviction_before_index_mutation(
         "a conflicting retention path must abort before the body is marked evicted"
     );
 }
-
 #[test]
 fn startup_rejects_evicted_body_with_deleted_retained_header() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -904,13 +854,11 @@ fn startup_rejects_evicted_body_with_deleted_retained_header() {
         std::fs::remove_file(kura.retained_block_record_path(2))
             .expect("delete required retained header");
     }
-
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::MissingRetainedBlockRecord { height: 2 })
     ));
 }
-
 #[test]
 fn startup_rejects_evicted_body_with_deleted_complete_wire_finality() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -927,7 +875,6 @@ fn startup_rejects_evicted_body_with_deleted_complete_wire_finality() {
         std::fs::remove_file(kura.v2_finality_artifact_path(2))
             .expect("delete required complete-wire finality");
     }
-
     let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
         Ok(_) => panic!("startup must reject deleted complete-wire finality"),
         Err(error) => error,
@@ -937,7 +884,6 @@ fn startup_rejects_evicted_body_with_deleted_complete_wire_finality() {
         "unexpected startup error: {error:?}"
     );
 }
-
 #[test]
 fn startup_rejects_noncanonical_retained_header_inventory_name() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -965,13 +911,11 @@ fn startup_rejects_noncanonical_retained_header_inventory_name() {
         )
         .expect("write noncanonical retained-header name");
     }
-
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
     ));
 }
-
 #[test]
 fn retained_sidecar_inventory_is_bounded_by_chain_height_plus_transient_slack() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -987,7 +931,6 @@ fn retained_sidecar_inventory_is_bounded_by_chain_height_plus_transient_slack() 
         )
         .expect("write bounded transient inventory entry");
     }
-
     assert!(matches!(
         Kura::canonical_height_sidecar_heights_for(
             root,
@@ -999,7 +942,6 @@ fn retained_sidecar_inventory_is_bounded_by_chain_height_plus_transient_slack() 
             if error.kind() == ErrorKind::InvalidData && path == directory
     ));
 }
-
 fn assert_restart_reconciles_retained_suffix_after_published_truncate(
     remove_one_before_restart: bool,
 ) {
@@ -1022,7 +964,6 @@ fn assert_restart_reconciles_retained_suffix_after_published_truncate(
                 .expect("simulate crash after one retained suffix removal");
         }
     }
-
     let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("first restart reconciles stale retained suffix");
     assert_eq!(count.0, 1);
@@ -1031,28 +972,23 @@ fn assert_restart_reconciles_retained_suffix_after_published_truncate(
         "startup reconciliation must remove every retained record above the durable tip"
     );
     drop(reopened);
-
     let (reopened_again, count) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("second restart remains converged after retained suffix reconciliation");
     assert_eq!(count.0, 1);
     assert!((2..=4).all(|height| !reopened_again.retained_block_record_path(height).exists()));
 }
-
 #[test]
 fn restart_reconciles_retained_suffix_when_crash_precedes_cleanup() {
     assert_restart_reconciles_retained_suffix_after_published_truncate(false);
 }
-
 #[test]
 fn restart_reconciles_retained_suffix_when_crash_interrupts_cleanup() {
     assert_restart_reconciles_retained_suffix_after_published_truncate(true);
 }
-
 #[cfg(unix)]
 #[test]
 fn retained_header_symlink_substitution_aborts_before_eviction() {
     use std::os::unix::fs::symlink;
-
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
@@ -1084,7 +1020,6 @@ fn retained_header_symlink_substitution_aborts_before_eviction() {
         .expect("remove exact retained record before symlink substitution");
     symlink(&external, kura.retained_block_record_path(2))
         .expect("substitute retained-header symlink");
-
     assert!(matches!(
         kura.evict_block_bodies(payload_len),
         Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
@@ -1099,7 +1034,6 @@ fn retained_header_symlink_substitution_aborts_before_eviction() {
         "symlink substitution must fail before index publication"
     );
 }
-
 #[test]
 fn retained_header_oversize_fails_before_body_eviction() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -1118,7 +1052,6 @@ fn retained_header_oversize_fails_before_body_eviction() {
         vec![0_u8; MAX_RETAINED_BLOCK_RECORD_BYTES.saturating_add(1)],
     )
     .expect("write oversized retained-header record");
-
     assert!(matches!(
         kura.evict_block_bodies(payload_len),
         Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
@@ -1132,7 +1065,6 @@ fn retained_header_oversize_fails_before_body_eviction() {
             .is_evicted()
     );
 }
-
 #[test]
 fn retained_block_decode_rejects_absurd_lengths_trailing_truncation_and_version() {
     let kura = Kura::blank_kura_for_testing();
@@ -1153,7 +1085,6 @@ fn retained_block_decode_rejects_absurd_lengths_trailing_truncation_and_version(
         Vec::new(),
     );
     let canonical_bytes = canonical.encode();
-
     let mut trailing = canonical_bytes.clone();
     trailing.push(0);
     let mut truncated = canonical_bytes.clone();
@@ -1174,7 +1105,6 @@ fn retained_block_decode_rejects_absurd_lengths_trailing_truncation_and_version(
     oversized_wire_len.executed_block_wire_len = STRICT_INIT_MAX_BLOCK_BYTES.saturating_add(1);
     let mut bad_version = canonical;
     bad_version.format_version = RETAINED_BLOCK_RECORD_VERSION.saturating_add(1);
-
     for hostile in [
         trailing,
         truncated,
@@ -1199,7 +1129,6 @@ fn retained_block_decode_rejects_absurd_lengths_trailing_truncation_and_version(
         );
     }
 }
-
 #[test]
 fn retained_block_v2_is_readable_and_upgrades_before_body_eviction() {
     let kura = Kura::blank_kura_for_testing();
@@ -1208,7 +1137,6 @@ fn retained_block_v2_is_readable_and_upgrades_before_body_eviction() {
     let mut entry = sample_merge_entry(1);
     let carrier = next_merge_carrier(&mut generator, &mut entry);
     let expected_reference = CertifiedMergeLedgerReference::new(&entry);
-
     kura.store_block(genesis)
         .expect("store legacy retained-record parent");
     kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
@@ -1218,7 +1146,6 @@ fn retained_block_v2_is_readable_and_upgrades_before_body_eviction() {
         Kura::prepare_retained_block_record(&blocks_dir, carrier.hash(), carrier.as_ref())
             .expect("prepare current retained record");
     assert_eq!(prepared.merge_reference.as_ref(), Some(&expected_reference));
-
     let mut legacy_projection = prepared.clone();
     legacy_projection.format_version = RETAINED_BLOCK_RECORD_VERSION_V2;
     legacy_projection.merge_reference = None;
@@ -1234,7 +1161,6 @@ fn retained_block_v2_is_readable_and_upgrades_before_body_eviction() {
     let total_before = kura
         .refresh_total_disk_usage_bytes()
         .expect("initialize total usage before legacy promotion");
-
     let decoded = kura
         .decode_retained_block_record_at(&path, &directory)
         .expect("decode legacy retained record")
@@ -1255,7 +1181,6 @@ fn retained_block_v2_is_readable_and_upgrades_before_body_eviction() {
         legacy.encode(),
         "a read must not claim to have durably upgraded the legacy record"
     );
-
     // Body eviction invokes this same persistence path before discarding
     // canonical bytes. The old record must be atomically upgraded rather
     // than treated as conflicting immutable evidence.
@@ -1292,7 +1217,6 @@ fn retained_block_v2_is_readable_and_upgrades_before_body_eviction() {
         "idempotent promotion retry must publish zero accounting delta"
     );
 }
-
 #[test]
 fn remote_only_retained_block_v2_remains_startup_readable() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -1315,7 +1239,6 @@ fn remote_only_retained_block_v2_remains_startup_readable() {
         );
         kura.remove_evicted_block_sidecar_for_testing(height)
             .expect("make legacy fixture body remote-only");
-
         let path = kura.retained_block_record_path(2);
         let bytes = std::fs::read(&path).expect("read current retained record");
         let mut input = bytes.as_slice();
@@ -1327,7 +1250,6 @@ fn remote_only_retained_block_v2_remains_startup_readable() {
             .expect("project exact version-two retained layout");
         std::fs::write(&path, legacy.encode()).expect("install legacy retained bytes");
     }
-
     let (reopened, _) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen legacy Kura");
     assert!(
@@ -1346,7 +1268,6 @@ fn remote_only_retained_block_v2_remains_startup_readable() {
         "version two must not synthesize a merge witness it never persisted"
     );
 }
-
 #[test]
 fn retained_record_bound_covers_joint_legacy_and_merge_reference_maxima() {
     assert_eq!(
@@ -1360,7 +1281,6 @@ fn retained_record_bound_covers_joint_legacy_and_merge_reference_maxima() {
         "the version-three envelope must cover the complete legacy archive plus a 4 MiB QC"
     );
 }
-
 #[test]
 fn retained_record_joint_envelope_fits_max_sccp_count_and_qc_geometry() {
     let genesis = retained_archive_empty_block(None);
@@ -1370,7 +1290,6 @@ fn retained_record_joint_envelope_fits_max_sccp_count_and_qc_geometry() {
             .collect::<Vec<_>>();
     let sccp_block = retained_archive_sccp_block(&genesis, &payloads);
     let mut entry = sample_merge_entry_for_block(1, &sccp_block);
-
     // This is a storage-envelope geometry fixture, not a cryptographically
     // valid QC: production BLS aggregate signatures are fixed-size. Grow
     // the variable test field until the complete QC encoding is within 64
@@ -1405,7 +1324,6 @@ fn retained_record_joint_envelope_fits_max_sccp_count_and_qc_geometry() {
         (qc_target.saturating_sub(64)..=qc_target).contains(&qc_len),
         "geometry QC encoding is {qc_len} bytes"
     );
-
     let carrier = attach_merge_reference(&sccp_block, &entry);
     let record =
         Kura::prepare_retained_block_record(Path::new("joint-envelope"), carrier.hash(), &carrier)
@@ -1441,7 +1359,6 @@ fn retained_record_joint_envelope_fits_max_sccp_count_and_qc_geometry() {
         "joint v3 fixture is {record_len} bytes; cap is {MAX_RETAINED_BLOCK_RECORD_BYTES}"
     );
 }
-
 #[test]
 fn concurrent_eviction_and_finality_serialize_without_losing_header() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -1454,7 +1371,6 @@ fn concurrent_eviction_and_finality_serialize_without_losing_header() {
         .expect("persist signed finality before eviction");
     let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
     kura.pause_next_eviction_after_snapshot_for_tests();
-
     let evict_kura = Arc::clone(&kura);
     let evict = thread::spawn(move || evict_kura.evict_block_bodies(payload_len));
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1465,7 +1381,6 @@ fn concurrent_eviction_and_finality_serialize_without_losing_header() {
         );
         thread::yield_now();
     }
-
     let finality_kura = Arc::clone(&kura);
     let finality_artifact = artifact.clone();
     let (finality_tx, finality_rx) = mpsc::channel();
@@ -1481,7 +1396,6 @@ fn concurrent_eviction_and_finality_serialize_without_losing_header() {
         ),
         "idempotent finality persistence must wait behind the canonical eviction snapshot"
     );
-
     kura.resume_eviction_after_snapshot_for_tests();
     assert_eq!(
         evict.join().expect("join eviction").expect("evict body"),
@@ -1504,7 +1418,6 @@ fn concurrent_eviction_and_finality_serialize_without_losing_header() {
     assert_eq!(retained, blocks[1].header());
     assert!(archive.is_empty());
 }
-
 #[test]
 fn finalized_top_block_rejects_replacement_without_mutation() {
     let kura = Kura::blank_kura_for_testing();
@@ -1516,7 +1429,6 @@ fn finalized_top_block_rejects_replacement_without_mutation() {
     let _receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("finalize canonical block");
-
     kura.replace_top_block(Arc::clone(&block))
         .expect("an exact idempotent replacement remains harmless");
     let replacement: SignedBlock =
@@ -1528,7 +1440,6 @@ fn finalized_top_block_rejects_replacement_without_mutation() {
         .into();
     let replacement_hash = replacement.hash();
     assert_ne!(replacement_hash, original_hash);
-
     assert!(matches!(
         kura.replace_top_block(replacement),
         Err(Error::FinalizedV2BlockMutation {
@@ -1547,7 +1458,6 @@ fn finalized_top_block_rejects_replacement_without_mutation() {
         Some(artifact)
     );
 }
-
 #[test]
 fn pruning_across_durable_v2_finality_is_atomic_and_rejected() {
     let kura = Kura::blank_kura_for_testing();
@@ -1559,7 +1469,6 @@ fn pruning_across_durable_v2_finality_is_atomic_and_rejected() {
     let _receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("finalize canonical block");
-
     assert!(matches!(
         kura.prune_to_height(0),
         Err(Error::FinalizedV2BlockMutation {
@@ -1578,7 +1487,6 @@ fn pruning_across_durable_v2_finality_is_atomic_and_rejected() {
         Some(artifact)
     );
 }
-
 #[test]
 fn startup_rejects_prune_intent_crossing_durable_v2_finality_before_mutation() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1609,7 +1517,6 @@ fn startup_rejects_prune_intent_crossing_durable_v2_finality_before_mutation() {
     ))
     .expect("plant otherwise valid prune intent");
     drop(kura);
-
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::FinalizedV2BlockMutation {
@@ -1627,7 +1534,6 @@ fn startup_rejects_prune_intent_crossing_durable_v2_finality_before_mutation() {
         "startup must reject before applying the prune intent"
     );
 }
-
 #[test]
 fn startup_rejects_finality_inventory_ahead_of_the_durable_chain() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1646,7 +1552,6 @@ fn startup_rejects_finality_inventory_ahead_of_the_durable_chain() {
     std::fs::copy(&canonical_path, &impossible_path)
         .expect("plant finality beyond the durable marker");
     drop(kura);
-
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::V2FinalityBeyondDurableChain {
@@ -1655,7 +1560,6 @@ fn startup_rejects_finality_inventory_ahead_of_the_durable_chain() {
         })
     ));
 }
-
 #[test]
 fn startup_verifies_every_v2_finality_artifact_below_the_highest() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1681,13 +1585,11 @@ fn startup_verifies_every_v2_finality_artifact_below_the_highest() {
         .expect("signature substitution remains structurally valid");
     drop(kura);
     replace_v2_finality_record_artifact(&lower_path, forged_lower);
-
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::V2FinalityCryptography(_))
     ));
 }
-
 #[test]
 fn startup_corruption_recovery_cannot_prune_finalized_block_bytes() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1705,7 +1607,6 @@ fn startup_corruption_recovery_cannot_prune_finalized_block_bytes() {
         .expect("finalize the canonical suffix block");
     let blocks_dir = kura.active_blocks_dir.lock().clone();
     drop(kura);
-
     let mut store = BlockStore::new(&blocks_dir);
     let final_index = store
         .read_block_index(1)
@@ -1733,7 +1634,6 @@ fn startup_corruption_recovery_cannot_prune_finalized_block_bytes() {
         .iter()
         .map(|path| std::fs::read(path).expect("snapshot corrupted canonical file"))
         .collect::<Vec<_>>();
-
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::FinalizedV2BlockMutation {
@@ -1750,7 +1650,6 @@ fn startup_corruption_recovery_cannot_prune_finalized_block_bytes() {
         );
     }
 }
-
 #[test]
 fn incomplete_v2_finality_temp_file_does_not_freeze_top_replacement() {
     let kura = Kura::blank_kura_for_testing();
@@ -1773,7 +1672,6 @@ fn incomplete_v2_finality_temp_file_does_not_freeze_top_replacement() {
         .into();
     let replacement_hash = replacement.hash();
     assert_ne!(replacement_hash, original_hash);
-
     kura.replace_top_block(replacement)
         .expect("noncanonical temporary bytes do not establish finality");
     assert_eq!(
@@ -1785,7 +1683,6 @@ fn incomplete_v2_finality_temp_file_does_not_freeze_top_replacement() {
         "canonical replacement should discard an incomplete finality temporary"
     );
 }
-
 #[test]
 fn v2_finality_store_and_read_reject_invalid_aggregate_cryptography() {
     let kura = Kura::blank_kura_for_testing();
@@ -1806,7 +1703,6 @@ fn v2_finality_store_and_read_reject_invalid_aggregate_cryptography() {
         .expect("measure total usage before forged finality");
     let retained_path = kura.retained_block_record_path(artifact.height);
     assert!(!retained_path.exists());
-
     assert!(matches!(
         kura.store_v2_finality_artifact(&forged),
         Err(Error::V2FinalityCryptography(_))
@@ -1836,7 +1732,6 @@ fn v2_finality_store_and_read_reject_invalid_aggregate_cryptography() {
         total_before,
         "forged finality must leave no cached disk-accounting delta"
     );
-
     let receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("persist valid finality artifact");
@@ -1851,7 +1746,6 @@ fn v2_finality_store_and_read_reject_invalid_aggregate_cryptography() {
         Err(Error::V2FinalityCryptography(_))
     ));
 }
-
 #[test]
 fn v2_finality_artifact_rejects_canonical_block_mismatch() {
     let kura = Kura::blank_kura_for_testing();
@@ -1866,11 +1760,9 @@ fn v2_finality_artifact_rejects_canonical_block_mismatch() {
     artifact
         .validate()
         .expect("mismatch is internally coherent");
-
     let error = kura
         .store_v2_finality_artifact(&artifact)
         .expect_err("Kura must reject a foreign block hash");
-
     assert!(matches!(
         error,
         Error::BlockHeightConflict {
@@ -1885,7 +1777,6 @@ fn v2_finality_artifact_rejects_canonical_block_mismatch() {
         None
     );
 }
-
 #[test]
 fn v2_finality_read_ignores_partial_temporary_file_but_fails_on_partial_final_file() {
     let kura = Kura::blank_kura_for_testing();
@@ -1897,26 +1788,22 @@ fn v2_finality_read_ignores_partial_temporary_file_but_fails_on_partial_final_fi
         .store_v2_finality_artifact(&artifact)
         .expect("persist finality artifact");
     assert_v2_commit_receipt_matches_artifact(&receipt, &artifact);
-
     let path = kura.v2_finality_artifact_path(artifact.height);
     let encoded = std::fs::read(&path).expect("read canonical finality record");
     let partial = &encoded[..encoded.len() / 2];
     std::fs::write(path.with_extension("norito.tmp"), partial)
         .expect("write interrupted temporary artifact");
-
     assert_eq!(
         kura.v2_finality_artifact(artifact.height)
             .expect("temporary file must not shadow durable artifact"),
         Some(artifact)
     );
-
     std::fs::write(&path, partial).expect("replace final artifact with truncated bytes");
     assert!(matches!(
         kura.v2_finality_artifact(1),
         Err(Error::NoritoFrame(_))
     ));
 }
-
 #[test]
 fn v2_finality_read_rejects_oversized_final_file_before_decode() {
     let kura = Kura::blank_kura_for_testing();
@@ -1931,19 +1818,16 @@ fn v2_finality_read_rejects_oversized_final_file_before_decode() {
     let path = kura.v2_finality_artifact_path(artifact.height);
     std::fs::write(&path, vec![0xA5; MAX_KURA_V2_FINALITY_RECORD_BYTES + 1])
         .expect("replace artifact with oversized hostile bytes");
-
     assert!(matches!(
         kura.v2_finality_artifact(artifact.height),
         Err(Error::IO(error, observed_path))
             if error.kind() == ErrorKind::InvalidData && observed_path == path
     ));
 }
-
 #[cfg(unix)]
 #[test]
 fn v2_finality_read_and_rewrite_reject_symlink_substitution() {
     use std::os::unix::fs::symlink;
-
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block))
@@ -1957,7 +1841,6 @@ fn v2_finality_read_and_rewrite_reject_symlink_substitution() {
     let target = path.with_extension("attacker.norito");
     std::fs::rename(&path, &target).expect("move valid bytes behind attacker path");
     symlink(&target, &path).expect("substitute finality path with symlink");
-
     assert!(matches!(
         kura.v2_finality_artifact(artifact.height),
         Err(Error::IO(error, observed_path))
@@ -1969,7 +1852,6 @@ fn v2_finality_read_and_rewrite_reject_symlink_substitution() {
             if error.kind() == ErrorKind::InvalidData && observed_path == path
     ));
 }
-
 #[cfg(unix)]
 #[test]
 fn v2_finality_read_and_rewrite_reject_hardlink_aliases() {
@@ -1985,7 +1867,6 @@ fn v2_finality_read_and_rewrite_reject_hardlink_aliases() {
     let path = kura.v2_finality_artifact_path(artifact.height);
     let alias = path.with_extension("hardlink.norito");
     std::fs::hard_link(&path, &alias).expect("create attacker-controlled hardlink alias");
-
     assert!(matches!(
         kura.v2_finality_artifact(artifact.height),
         Err(Error::IO(error, observed_path))
@@ -1997,12 +1878,10 @@ fn v2_finality_read_and_rewrite_reject_hardlink_aliases() {
             if error.kind() == ErrorKind::InvalidData && observed_path == path
     ));
 }
-
 #[cfg(unix)]
 #[test]
 fn v2_finality_write_rejects_symlinked_parent_directory_even_when_file_is_missing() {
     use std::os::unix::fs::symlink;
-
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block))
@@ -2015,7 +1894,6 @@ fn v2_finality_write_rejects_symlinked_parent_directory_even_when_file_is_missin
         .expect("finality artifact has a parent directory")
         .to_path_buf();
     symlink(attacker.path(), &finality_dir).expect("substitute finality directory symlink");
-
     assert!(matches!(
         kura.store_v2_finality_artifact(&artifact),
         Err(Error::IO(error, observed_path))
@@ -2029,12 +1907,10 @@ fn v2_finality_write_rejects_symlinked_parent_directory_even_when_file_is_missin
         "rejected parent substitution must not write outside Kura"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn v2_finality_write_ignores_preplanted_predictable_temp_symlink() {
     use std::os::unix::fs::symlink;
-
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block))
@@ -2048,7 +1924,6 @@ fn v2_finality_write_ignores_preplanted_predictable_temp_symlink() {
     std::fs::write(&victim, victim_bytes).expect("create attacker victim");
     let predictable = path.with_extension("norito.tmp");
     symlink(&victim, &predictable).expect("preplant retired predictable temp symlink");
-
     let receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("random create-new temp path avoids the preplanted symlink");
@@ -2064,13 +1939,11 @@ fn v2_finality_write_ignores_preplanted_predictable_temp_symlink() {
         Some(artifact)
     );
 }
-
 #[test]
 fn lane_segment_reconciliation_provisions_and_retires_storage() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let store_root = temp_dir.path().join("kura");
     let lane_count = NonZeroU32::new(4).expect("non-zero lane count");
-
     let lane0 = ModelLaneConfig::default();
     let lane1 = ModelLaneConfig {
         id: LaneId::from(1),
@@ -2080,7 +1953,6 @@ fn lane_segment_reconciliation_provisions_and_retires_storage() {
     let initial_catalog =
         LaneCatalog::new(lane_count, vec![lane0.clone(), lane1.clone()]).expect("catalog");
     let initial_lane_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
-
     let kura_cfg = KuraConfig {
         init_mode: InitMode::Strict,
         store_dir: WithOrigin::inline(store_root.clone()),
@@ -2091,16 +1963,13 @@ fn lane_segment_reconciliation_provisions_and_retires_storage() {
             iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-
         block_sync_roster_retention:
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
-
     let (kura, _) = Kura::new(&kura_cfg, &initial_lane_config).expect("init kura");
-
     let lane1_entry = initial_lane_config
         .entry(LaneId::from(1))
         .expect("lane 1 entry");
@@ -2109,7 +1978,6 @@ fn lane_segment_reconciliation_provisions_and_retires_storage() {
         lane1_blocks.exists(),
         "expected lane 1 blocks directory to be provisioned"
     );
-
     let lane2 = ModelLaneConfig {
         id: LaneId::from(2),
         alias: "gamma".to_string(),
@@ -2124,10 +1992,8 @@ fn lane_segment_reconciliation_provisions_and_retires_storage() {
     let lane2_entry = extended_lane_config
         .entry(LaneId::from(2))
         .expect("lane 2 entry");
-
     kura.reconcile_lane_segments_for_testing(&[lane2_entry], &[], &[])
         .expect("provision lane 2");
-
     let lane2_blocks = lane2_entry.blocks_dir(&store_root);
     assert!(
         lane2_blocks.join(INDEX_FILE_NAME).exists(),
@@ -2145,10 +2011,8 @@ fn lane_segment_reconciliation_provisions_and_retires_storage() {
         lane2_entry.merge_log_path(&store_root).exists(),
         "lane 2 merge ledger missing"
     );
-
     kura.reconcile_lane_segments_for_testing(&[], &[lane1_entry], &[])
         .expect("retire lane 1");
-
     assert!(
         !lane1_blocks.exists(),
         "lane 1 blocks directory should be retired"
@@ -2163,26 +2027,21 @@ fn lane_segment_reconciliation_provisions_and_retires_storage() {
         "expected retired lane directory to be archived"
     );
 }
-
 #[test]
 fn blank_kura_lane_segment_reconciliation_is_noop() {
     static CWD_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
         std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
-
     struct WorkingDirGuard(std::path::PathBuf);
-
     impl Drop for WorkingDirGuard {
         fn drop(&mut self) {
             let _ = std::env::set_current_dir(&self.0);
         }
     }
-
     let _guard = CWD_LOCK.lock().expect("lock cwd");
     let temp_dir = TempDir::new().expect("create temp dir");
     let original_dir = std::env::current_dir().expect("current dir");
     std::env::set_current_dir(temp_dir.path()).expect("set current dir");
     let _restore_dir = WorkingDirGuard(original_dir);
-
     let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
     let lane0 = ModelLaneConfig::default();
     let lane1 = ModelLaneConfig {
@@ -2193,11 +2052,9 @@ fn blank_kura_lane_segment_reconciliation_is_noop() {
     let catalog = LaneCatalog::new(lane_count, vec![lane0, lane1]).expect("catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let entry = lane_config.entry(LaneId::from(1)).expect("lane entry");
-
     let kura = Kura::blank_kura_for_testing();
     kura.reconcile_lane_segments_for_testing(&[entry], &[], &[])
         .expect("no-op reconcile");
-
     assert!(
         !temp_dir.path().join("blocks").exists(),
         "blank kura must not create lane block directories"
@@ -2207,7 +2064,6 @@ fn blank_kura_lane_segment_reconciliation_is_noop() {
         "blank kura must not create merge-ledger log directories"
     );
 }
-
 #[test]
 fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -2242,7 +2098,6 @@ fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
         .entry(stale_config_lane.id)
         .expect("stale configured lane")
         .blocks_dir(&store_root);
-
     let restored_lane = ModelLaneConfig {
         id: LaneId::new(1),
         alias: "restored-elastic-lane".to_owned(),
@@ -2266,7 +2121,6 @@ fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
     ]);
     let restored_activations = BTreeMap::from([(LaneId::SINGLE, 0), (restored_lane.id, 1)]);
     let restored_lineage_root = Hash::new(b"snapshot restore active lineage");
-
     kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
         &configured,
         &restored,
@@ -2288,7 +2142,6 @@ fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
         None,
     )
     .expect("publish authenticated post-snapshot geometry transition");
-
     kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
         &configured,
         &configured_incarnations,
@@ -2305,7 +2158,6 @@ fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
         stale_dir.exists(),
         "snapshot-authoritative lane must be restored"
     );
-
     kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
         &restored,
         &restored_incarnations,
@@ -2314,7 +2166,6 @@ fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
         restored_lineage_root,
     )
     .expect("restore exact post-transition snapshot geometry");
-
     let restored_entry = kura
         .lane_storage_entry(restored_lane.id)
         .expect("restored lane must be addressable");
@@ -2329,7 +2180,6 @@ fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
         "replaying the authenticated post-transition cursor must retire the stale lane again"
     );
 }
-
 #[test]
 fn authenticated_snapshot_lane_restore_rejects_primary_path_drift_atomically() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -2372,7 +2222,6 @@ fn authenticated_snapshot_lane_restore_rejects_primary_path_drift_atomically() {
     )
     .expect("drifted catalog");
     let drifted = RuntimeLaneConfig::from_catalog(&drifted_catalog);
-
     let drifted_incarnations =
         BTreeMap::from([(LaneId::SINGLE, Hash::new(b"drifted primary incarnation"))]);
     let drifted_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
@@ -2384,7 +2233,6 @@ fn authenticated_snapshot_lane_restore_rejects_primary_path_drift_atomically() {
         Hash::new(b"drifted primary lineage"),
     )
     .expect_err("primary storage path drift must fail closed");
-
     assert_eq!(
         kura.lane_storage_entry(LaneId::SINGLE)
             .expect("configured primary remains installed")
@@ -2392,16 +2240,13 @@ fn authenticated_snapshot_lane_restore_rejects_primary_path_drift_atomically() {
         configured.primary().alias
     );
 }
-
 #[test]
 fn lane_segment_reconciliation_propagates_failure() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let store_root = temp_dir.path().join("kura");
-
     let initial_catalog =
         LaneCatalog::new(nonzero!(1_u32), vec![ModelLaneConfig::default()]).expect("catalog");
     let initial_lane_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
-
     let kura_cfg = KuraConfig {
         init_mode: InitMode::Strict,
         store_dir: WithOrigin::inline(store_root.clone()),
@@ -2412,16 +2257,13 @@ fn lane_segment_reconciliation_propagates_failure() {
             iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-
         block_sync_roster_retention:
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
-
     let (kura, _) = Kura::new(&kura_cfg, &initial_lane_config).expect("init kura");
-
     let extended_catalog = LaneCatalog::new(
         nonzero!(2_u32),
         vec![
@@ -2438,7 +2280,6 @@ fn lane_segment_reconciliation_propagates_failure() {
     let conflicting_entry = extended_lane_config
         .entry(LaneId::from(1))
         .expect("lane entry");
-
     let conflict_dir = conflicting_entry.blocks_dir(&store_root);
     if let Some(parent) = conflict_dir.parent() {
         std::fs::create_dir_all(parent).expect("create parent dir");
@@ -2446,7 +2287,6 @@ fn lane_segment_reconciliation_propagates_failure() {
     std::fs::File::create(&conflict_dir).expect("seed conflicting file");
     let canonical_conflict_dir =
         std::fs::canonicalize(&conflict_dir).expect("canonicalize conflicting file");
-
     let err = kura
         .reconcile_lane_segments_for_testing(&[conflicting_entry], &[], &[])
         .expect_err("expected lane provisioning to surface error");
@@ -2455,12 +2295,10 @@ fn lane_segment_reconciliation_propagates_failure() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn lane_segment_relabel_updates_primary_directory() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let store_root = temp_dir.path().join("kura");
-
     let initial_catalog = LaneCatalog::new(
         nonzero!(1_u32),
         vec![ModelLaneConfig {
@@ -2473,7 +2311,6 @@ fn lane_segment_relabel_updates_primary_directory() {
     let initial_entry = initial_lane_config
         .entry(LaneId::SINGLE)
         .expect("lane entry");
-
     let kura_cfg = KuraConfig {
         init_mode: InitMode::Strict,
         store_dir: WithOrigin::inline(store_root.clone()),
@@ -2484,20 +2321,17 @@ fn lane_segment_relabel_updates_primary_directory() {
             iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-
         block_sync_roster_retention:
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
-
     let (kura, _) = Kura::new(&kura_cfg, &initial_lane_config).expect("init kura");
     let old_dir = initial_entry.blocks_dir(&kura.store_root);
     let old_merge = initial_entry.merge_log_path(&kura.store_root);
     assert!(old_dir.exists(), "expected initial lane directory to exist");
     assert!(old_merge.exists(), "expected initial merge log to exist");
-
     let updated_catalog = LaneCatalog::new(
         nonzero!(1_u32),
         vec![ModelLaneConfig {
@@ -2510,7 +2344,6 @@ fn lane_segment_relabel_updates_primary_directory() {
     let updated_entry = updated_lane_config
         .entry(LaneId::SINGLE)
         .expect("lane entry");
-
     let incarnation = Hash::new(b"authenticated primary relabel incarnation");
     let incarnations = BTreeMap::from([(LaneId::SINGLE, incarnation)]);
     let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
@@ -2536,7 +2369,6 @@ fn lane_segment_relabel_updates_primary_directory() {
         None,
     )
     .expect("publish authenticated lane-storage relabel");
-
     let new_dir = updated_entry.blocks_dir(&kura.store_root);
     let new_merge = updated_entry.merge_log_path(&kura.store_root);
     assert!(
@@ -2561,7 +2393,6 @@ fn lane_segment_relabel_updates_primary_directory() {
         new_merge,
         "active merge log path should be updated"
     );
-
     let rejected_catalog = LaneCatalog::new(
         nonzero!(1_u32),
         vec![ModelLaneConfig {
@@ -2597,7 +2428,6 @@ fn lane_segment_relabel_updates_primary_directory() {
     assert_eq!(*kura.active_merge_path.lock(), new_merge);
     assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
 }
-
 #[test]
 fn block_bytes_returns_memory_mapped_slice() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -2605,12 +2435,10 @@ fn block_bytes_returns_memory_mapped_slice() {
     store
         .create_files_if_they_do_not_exist()
         .expect("initialise store files");
-
     let payload = b"test block payload";
     store
         .write_block_data(0, payload.as_ref())
         .expect("write payload");
-
     let (slice_ptr, slice_len) = {
         let slice = store
             .block_bytes(0, payload.len() as u64)
@@ -2618,7 +2446,6 @@ fn block_bytes_returns_memory_mapped_slice() {
         assert_eq!(slice, payload);
         (slice.as_ptr(), slice.len())
     };
-
     let mirror = store
         .data_mmap
         .as_ref()
@@ -2631,7 +2458,6 @@ fn block_bytes_returns_memory_mapped_slice() {
     assert_eq!(slice_ptr, mirror_slice.as_ptr());
     assert_eq!(store.data_mmap_len, payload.len() as u64);
 }
-
 #[test]
 fn memory_mirror_updates_after_appending_data() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -2639,12 +2465,10 @@ fn memory_mirror_updates_after_appending_data() {
     store
         .create_files_if_they_do_not_exist()
         .expect("initialise store files");
-
     let initial = b"initial payload";
     store
         .write_block_data(0, initial.as_ref())
         .expect("write initial payload");
-
     {
         let slice = store
             .block_bytes(0, initial.len() as u64)
@@ -2658,12 +2482,10 @@ fn memory_mirror_updates_after_appending_data() {
         .expect("mirror initialised after first read");
     assert_eq!(mirror.len(), expected_initial_len);
     assert_eq!(mirror.kind(), MemoryMirrorKind::MemoryMapped);
-
     let appended = b" appended payload";
     store
         .write_block_data(initial.len() as u64, appended.as_ref())
         .expect("append payload");
-
     let total_len = (initial.len() + appended.len()) as u64;
     let combined = {
         let slice = store
@@ -2685,7 +2507,6 @@ fn memory_mirror_updates_after_appending_data() {
     assert_eq!(combined, expected);
     assert_eq!(store.data_mmap_len, total_len);
 }
-
 fn indices<const N: usize>(value: [(u64, u64); N]) -> [BlockIndex; N] {
     let mut ret = [BlockIndex {
         start: 0,
@@ -2696,13 +2517,11 @@ fn indices<const N: usize>(value: [(u64, u64); N]) -> [BlockIndex; N] {
     }
     ret
 }
-
 fn wait_for_block_hash(kura: &Arc<Kura>, height: usize, expected: HashOf<BlockHeader>) {
     let deadline = Instant::now() + Duration::from_secs(5);
     let target_index = height
         .checked_sub(1)
         .expect("block height should be non-zero");
-
     loop {
         {
             let mut store = kura.block_store.lock();
@@ -2716,24 +2535,20 @@ fn wait_for_block_hash(kura: &Arc<Kura>, height: usize, expected: HashOf<BlockHe
                 }
             }
         }
-
         let now = Instant::now();
         assert!(
             now < deadline,
             "Timed out waiting for block {height} to persist"
         );
-
         thread::sleep(Duration::from_millis(10));
     }
 }
-
 struct BackgroundBudgetEvictionCase {
     _temp_dir: TempDir,
     kura: Arc<Kura>,
     retry_block: Arc<SignedBlock>,
     evictable_body_len: u64,
 }
-
 fn background_budget_eviction_case() -> BackgroundBudgetEvictionCase {
     let temp_dir = TempDir::new().expect("create temp dir");
     let kura_cfg = KuraConfig {
@@ -2751,23 +2566,19 @@ fn background_budget_eviction_case() -> BackgroundBudgetEvictionCase {
     };
     let (mut kura, _) =
         Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
-
     let mut blocks = DummyBlocks::new();
     let block1 = blocks.next();
     let block2 = blocks.next();
     let block3 = blocks.next();
     let retry_block = blocks.next();
-
     kura.store_block(Arc::clone(&block1)).expect("store block1");
     kura.store_block(Arc::clone(&block2)).expect("store block2");
     kura.store_block(Arc::clone(&block3)).expect("store block3");
-
     let evictable_body_len = {
         let mut store = kura.block_store.lock();
         store.read_block_index(1).expect("block2 index").length
     };
     advertise_required_replicas(&kura, nonzero!(2_usize));
-
     let configured_base = canonical_storage_budget_base_for_test(&kura);
     let retry_required = Kura::block_required_bytes(&retry_block).expect("retry block bytes");
     let retry_association_stage_required = kura
@@ -2779,7 +2590,6 @@ fn background_budget_eviction_case() -> BackgroundBudgetEvictionCase {
         .saturating_sub(evictable_body_len)
         .saturating_add(retry_required)
         .saturating_add(retry_association_stage_required);
-
     BackgroundBudgetEvictionCase {
         _temp_dir: temp_dir,
         kura,
@@ -2787,19 +2597,16 @@ fn background_budget_eviction_case() -> BackgroundBudgetEvictionCase {
         evictable_body_len,
     }
 }
-
 impl PartialEq for BlockIndex {
     fn eq(&self, other: &Self) -> bool {
         self.start == other.start && self.length == other.length
     }
 }
-
 impl PartialEq<(u64, u64)> for BlockIndex {
     fn eq(&self, other: &(u64, u64)) -> bool {
         self.start == other.0 && self.length == other.1
     }
 }
-
 impl From<(u64, u64)> for BlockIndex {
     fn from(value: (u64, u64)) -> Self {
         Self {
@@ -2808,19 +2615,16 @@ impl From<(u64, u64)> for BlockIndex {
         }
     }
 }
-
 fn primary_blocks_dir(dir: &TempDir) -> PathBuf {
     let lane_cfg = RuntimeLaneConfig::default();
     let blocks_dir = lane_cfg.primary().blocks_dir(dir.path());
     std::fs::create_dir_all(&blocks_dir).unwrap();
     blocks_dir
 }
-
 fn new_block_store(dir: &TempDir) -> BlockStore {
     let blocks_dir = primary_blocks_dir(dir);
     BlockStore::new(&blocks_dir)
 }
-
 fn kura_config_for_path(path: &Path, blocks_in_memory: NonZeroUsize) -> KuraConfig {
     KuraConfig {
         init_mode: InitMode::Strict,
@@ -2836,11 +2640,9 @@ fn kura_config_for_path(path: &Path, blocks_in_memory: NonZeroUsize) -> KuraConf
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
-
 fn kura_config_for_dir(dir: &TempDir, blocks_in_memory: NonZeroUsize) -> KuraConfig {
     kura_config_for_path(dir.path(), blocks_in_memory)
 }
-
 fn open_configured_kura_with_pending_limits(
     config: &KuraConfig,
     limits: &SumeragiV2RuntimeLimits,
@@ -2855,7 +2657,6 @@ fn open_configured_kura_with_pending_limits(
         limits,
     )
 }
-
 #[test]
 fn configured_pending_control_limits_fail_before_store_creation() {
     let temp = TempDir::new().expect("temporary parent");
@@ -2865,7 +2666,6 @@ fn configured_pending_control_limits_fail_before_store_creation() {
     limits.pending_certified_merge_entry_capacity =
         NonZeroUsize::new(V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX.saturating_add(1))
             .expect("non-zero invalid limit");
-
     let error = open_configured_kura_with_pending_limits(&config, &limits)
         .expect_err("out-of-range pending control limit must fail closed");
     assert!(matches!(
@@ -2882,7 +2682,6 @@ fn configured_pending_control_limits_fail_before_store_creation() {
         "invalid Sumeragi limits must be rejected before Kura creates its root"
     );
 }
-
 #[test]
 fn configured_pending_control_count_limits_gate_live_admission() {
     let temp = TempDir::new().expect("temporary Kura root");
@@ -2894,7 +2693,6 @@ fn configured_pending_control_count_limits_gate_live_admission() {
         NonZeroUsize::new(1).expect("non-zero QueuePlan capacity");
     let (kura, _) =
         open_configured_kura_with_pending_limits(&config, &limits).expect("open configured Kura");
-
     assert_eq!(
         kura.pending_control_sidecar_limits,
         PendingControlSidecarLimits {
@@ -2918,7 +2716,6 @@ fn configured_pending_control_count_limits_gate_live_admission() {
         "configured QueuePlan capacity must reject the second identity"
     );
 }
-
 #[test]
 fn configured_historical_recovery_bytes_follow_runtime_limits() {
     for (label, byte_limit) in [
@@ -2939,7 +2736,6 @@ fn configured_historical_recovery_bytes_follow_runtime_limits() {
         );
     }
 }
-
 #[test]
 fn configured_pending_control_count_limit_rejects_oversized_startup_inventory() {
     let temp = TempDir::new().expect("temporary Kura root");
@@ -2954,7 +2750,6 @@ fn configured_pending_control_count_limit_rejects_oversized_startup_inventory() 
     kura.persist_pending_certified_merge_entry(&sample_merge_entry(2))
         .expect("persist second pending merge identity");
     drop(kura);
-
     let mut tightened_limits = initial_limits;
     tightened_limits.pending_certified_merge_entry_capacity =
         NonZeroUsize::new(1).expect("non-zero tightened merge capacity");
@@ -2963,7 +2758,6 @@ fn configured_pending_control_count_limit_rejects_oversized_startup_inventory() 
         "startup must reject durable pending inventory above the configured capacity"
     );
 }
-
 #[test]
 fn configured_pending_control_shared_bytes_reject_oversized_startup_inventory() {
     let temp = TempDir::new().expect("temporary Kura root");
@@ -2977,7 +2771,6 @@ fn configured_pending_control_shared_bytes_reject_oversized_startup_inventory() 
         open_configured_kura_with_pending_limits(&config, &limits).expect("open configured Kura");
     let directory = kura.pending_queue_plan_admission_dir();
     drop(kura);
-
     let file_bytes = u64::try_from(MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES)
         .expect("QueuePlan per-file cap fits u64");
     let file_count = V2_PENDING_CONTROL_SIDECAR_BYTES_MIN
@@ -2992,7 +2785,6 @@ fn configured_pending_control_shared_bytes_reject_oversized_startup_inventory() 
             .set_len(file_bytes)
             .expect("size sparse pending QueuePlan sidecar");
     }
-
     assert!(
         open_configured_kura_with_pending_limits(&config, &limits).is_err(),
         "startup must reject combined pending-control bytes above the configured shared limit"

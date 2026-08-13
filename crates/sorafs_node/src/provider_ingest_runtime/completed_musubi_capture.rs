@@ -13,7 +13,6 @@ pub struct ProviderIngestCompletedMusubiCaptureSourceRowV1 {
     completion_epoch: Option<u64>,
     committed_transaction_hash: Option<[u8; 32]>,
 }
-
 impl ProviderIngestCompletedMusubiCaptureSourceRowV1 {
     /// Package one untrusted archive projection for scanner-side validation.
     ///
@@ -40,7 +39,6 @@ impl ProviderIngestCompletedMusubiCaptureSourceRowV1 {
         }
     }
 }
-
 /// One unsealed, replayable page supplied to the capture scanner.
 ///
 /// The private fields and lack of a codec keep this projection distinct from
@@ -56,7 +54,6 @@ pub struct ProviderIngestCompletedMusubiCaptureSourcePageV1 {
     rows: Vec<ProviderIngestCompletedMusubiCaptureSourceRowV1>,
     next_after_order_id: Option<[u8; 32]>,
 }
-
 impl ProviderIngestCompletedMusubiCaptureSourcePageV1 {
     /// Package one untrusted archive page for scanner-side validation.
     ///
@@ -80,20 +77,17 @@ impl ProviderIngestCompletedMusubiCaptureSourcePageV1 {
             next_after_order_id,
         }
     }
-
     /// Return the projected finalized cursor without conferring authority.
     #[must_use]
     pub const fn finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
         self.finalized_cursor
     }
-
     /// Return the exclusive continuation boundary, when another page exists.
     #[must_use]
     pub const fn next_after_order_id(&self) -> Option<[u8; 32]> {
         self.next_after_order_id
     }
 }
-
 /// Immutable public verifier identity for one daemon-owned capture session.
 ///
 /// This private-field value is untrusted transport data, has no wire codec,
@@ -110,7 +104,6 @@ pub struct ProviderIngestCompletedMusubiCaptureVerifierBindingV1 {
     reader_generation: u64,
     public_key: [u8; 32],
 }
-
 impl ProviderIngestCompletedMusubiCaptureVerifierBindingV1 {
     /// Construct untrusted reader binding material for cross-crate transport.
     ///
@@ -146,7 +139,6 @@ impl ProviderIngestCompletedMusubiCaptureVerifierBindingV1 {
         binding.validate()?;
         Ok(binding)
     }
-
     fn validate(&self) -> Result<(), ProviderIngestFinalizedLedgerErrorV1> {
         if self.network_id.as_bytes()[31] & 1 == 0
             || self.provider_id == [0; 32]
@@ -165,38 +157,32 @@ impl ProviderIngestCompletedMusubiCaptureVerifierBindingV1 {
         }
         Ok(())
     }
-
     /// Exact genesis-derived network identity pinned by this session.
     #[must_use]
     pub const fn network_id(&self) -> NetworkId {
         self.network_id
     }
-
     /// Exact local provider identity pinned by this session.
     #[must_use]
     pub const fn provider_id(&self) -> [u8; 32] {
         self.provider_id
     }
-
     /// Immutable generation of this ephemeral reader session.
     #[must_use]
     pub const fn reader_generation(&self) -> u64 {
         self.reader_generation
     }
-
     /// Derived identity of this ephemeral reader session.
     #[must_use]
     pub const fn session_id(&self) -> [u8; 32] {
         self.session_id
     }
-
     /// Exact Ed25519 verification key for this reader session.
     #[must_use]
     pub const fn public_key(&self) -> [u8; 32] {
         self.public_key
     }
 }
-
 /// Exact bounded read request authenticated by one signed capture response.
 ///
 /// The scanner owns `generation`. It prepares the current non-zero value
@@ -212,7 +198,6 @@ pub struct ProviderIngestCompletedMusubiCaptureRequestV1 {
     limit: u16,
     generation: u64,
 }
-
 impl ProviderIngestCompletedMusubiCaptureRequestV1 {
     fn new(
         binding: ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
@@ -231,7 +216,6 @@ impl ProviderIngestCompletedMusubiCaptureRequestV1 {
         request.validate()?;
         Ok(request)
     }
-
     /// Construct structurally checked but otherwise untrusted request parts.
     ///
     /// This helper exists for the private cross-crate daemon reader and its
@@ -258,7 +242,6 @@ impl ProviderIngestCompletedMusubiCaptureRequestV1 {
             generation,
         )
     }
-
     fn validate(&self) -> Result<(), ProviderIngestFinalizedLedgerErrorV1> {
         self.binding.validate()?;
         if self.generation == 0
@@ -276,38 +259,32 @@ impl ProviderIngestCompletedMusubiCaptureRequestV1 {
         }
         Ok(())
     }
-
     /// Borrow the exact verifier binding repeated in this request.
     #[must_use]
     pub const fn binding(&self) -> &ProviderIngestCompletedMusubiCaptureVerifierBindingV1 {
         &self.binding
     }
-
     /// Exact immutable finalized cursor for a continuation, if any.
     #[must_use]
     pub const fn at_finalized_cursor(&self) -> Option<ProviderIngestFinalizedCursorV1> {
         self.at_finalized_cursor
     }
-
     /// Exact exclusive order boundary for a continuation, if any.
     #[must_use]
     pub const fn after_order_id(&self) -> Option<[u8; 32]> {
         self.after_order_id
     }
-
     /// Checked platform-independent row bound.
     #[must_use]
     pub const fn limit(&self) -> u16 {
         self.limit
     }
-
     /// Scanner-owned non-zero request generation.
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
     }
 }
-
 /// Untrusted signed response from one completed-Musubi capture reader.
 ///
 /// The envelope and contained projection have no wire codec and no public raw
@@ -320,7 +297,6 @@ pub struct ProviderIngestCompletedMusubiSignedCapturePageV1 {
     source_page: ProviderIngestCompletedMusubiCaptureSourcePageV1,
     signature: [u8; 64],
 }
-
 impl ProviderIngestCompletedMusubiSignedCapturePageV1 {
     /// Package untrusted cross-crate response parts without validating them.
     #[doc(hidden)]
@@ -337,7 +313,6 @@ impl ProviderIngestCompletedMusubiSignedCapturePageV1 {
         }
     }
 }
-
 /// Request-bound signed finalized-ledger boundary used only by the capture scanner.
 ///
 /// Implementations receive no claim factory and return no opaque claim. An
@@ -358,7 +333,6 @@ pub trait ProviderIngestCompletedMusubiSignedCaptureLedgerV1: Send + Sync + 'sta
         ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
         ProviderIngestFinalizedLedgerErrorV1,
     >;
-
     /// Reconstruct and sign one exact bounded unsealed page without consuming it.
     fn read_signed_completed_musubi_capture_page<'a>(
         &'a self,
@@ -371,7 +345,6 @@ pub trait ProviderIngestCompletedMusubiSignedCaptureLedgerV1: Send + Sync + 'sta
         >,
     >;
 }
-
 #[derive(NoritoSerialize)]
 struct ProviderIngestCompletedMusubiCaptureSessionMaterialV1 {
     version: u8,
@@ -380,7 +353,6 @@ struct ProviderIngestCompletedMusubiCaptureSessionMaterialV1 {
     reader_generation: u64,
     public_key: [u8; 32],
 }
-
 #[derive(NoritoSerialize)]
 struct ProviderIngestCompletedMusubiCaptureRequestMaterialV1 {
     version: u8,
@@ -395,7 +367,6 @@ struct ProviderIngestCompletedMusubiCaptureRequestMaterialV1 {
     limit: u16,
     generation: u64,
 }
-
 #[derive(NoritoSerialize)]
 struct ProviderIngestCompletedMusubiCapturePageHeaderMaterialV1 {
     network_id: NetworkId,
@@ -405,7 +376,6 @@ struct ProviderIngestCompletedMusubiCapturePageHeaderMaterialV1 {
     finalized_block_time_ms: u64,
     row_count: u16,
 }
-
 fn completed_musubi_capture_session_id(
     network_id: NetworkId,
     provider_id: [u8; 32],
@@ -441,7 +411,6 @@ fn completed_musubi_capture_session_id(
     hasher.update(&canonical);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn completed_musubi_capture_request_material(
     request: &ProviderIngestCompletedMusubiCaptureRequestV1,
 ) -> ProviderIngestCompletedMusubiCaptureRequestMaterialV1 {
@@ -473,7 +442,6 @@ fn completed_musubi_capture_request_material(
         generation: *generation,
     }
 }
-
 fn completed_musubi_capture_page_header_material(
     page: &ProviderIngestCompletedMusubiCaptureSourcePageV1,
 ) -> Result<
@@ -498,7 +466,6 @@ fn completed_musubi_capture_page_header_material(
             .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?,
     })
 }
-
 fn update_completed_musubi_capture_transcript_field<T: norito::core::NoritoSerialize>(
     hasher: &mut blake3::Hasher,
     total_bytes: &mut usize,
@@ -508,7 +475,6 @@ fn update_completed_musubi_capture_transcript_field<T: norito::core::NoritoSeria
 ) -> Result<(), ProviderIngestFinalizedLedgerErrorV1> {
     const FRAME_BYTES: usize =
         std::mem::size_of::<u16>() + std::mem::size_of::<u32>() + std::mem::size_of::<u64>();
-
     let predicted_len = {
         let _canonical_flags =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -552,7 +518,6 @@ fn update_completed_musubi_capture_transcript_field<T: norito::core::NoritoSeria
     hasher.update(&canonical);
     Ok(())
 }
-
 fn update_completed_musubi_capture_transcript_row(
     hasher: &mut blake3::Hasher,
     total_bytes: &mut usize,
@@ -607,7 +572,6 @@ fn update_completed_musubi_capture_transcript_row(
     )?;
     Ok(())
 }
-
 fn validate_completed_musubi_capture_transcript_bounds(
     request: &ProviderIngestCompletedMusubiCaptureRequestV1,
     page: &ProviderIngestCompletedMusubiCaptureSourcePageV1,
@@ -649,7 +613,6 @@ fn validate_completed_musubi_capture_transcript_bounds(
     }
     Ok(())
 }
-
 /// Compute the exact canonical domain-separated message signed by a capture reader.
 ///
 /// This cross-crate helper treats both inputs as untrusted and grants no
@@ -712,7 +675,6 @@ pub fn provider_ingest_completed_musubi_capture_transcript_digest_v1(
     )?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// One validated completed-Musubi candidate emitted by the capture scanner.
 ///
 /// The value has no public constructor or wire codec. Its authorization and
@@ -726,28 +688,23 @@ pub(crate) struct ProviderIngestCompletedMusubiCaptureCandidateV1 {
     completed_claim: ProviderIngestFinalizedMusubiCompletionClaimV1,
     completed_musubi_store_instance: CompletedMusubiStoreInstanceV1,
 }
-
 impl PartialEq for ProviderIngestCompletedMusubiCaptureCandidateV1 {
     fn eq(&self, other: &Self) -> bool {
         self.authorization == other.authorization && self.completed_claim == other.completed_claim
     }
 }
-
 impl Eq for ProviderIngestCompletedMusubiCaptureCandidateV1 {}
-
 impl ProviderIngestCompletedMusubiCaptureCandidateV1 {
     /// Borrow the exact finalized provider-ingest authorization.
     #[must_use]
     pub(crate) const fn authorization(&self) -> &FinalizedProviderIngestAuthorizationV1 {
         &self.authorization
     }
-
     /// Borrow the opaque local-provider completed-row claim.
     #[must_use]
     pub(crate) const fn completed_claim(&self) -> &ProviderIngestFinalizedMusubiCompletionClaimV1 {
         &self.completed_claim
     }
-
     pub(crate) fn matches_completed_musubi_store_instance(
         &self,
         expected: &CompletedMusubiStoreInstanceV1,
@@ -758,7 +715,6 @@ impl ProviderIngestCompletedMusubiCaptureCandidateV1 {
                 .matches_completed_musubi_store_instance(expected)
     }
 }
-
 /// One bounded page emitted by the completed-Musubi capture scanner.
 ///
 /// `scan_complete` means this page exhausted the exact finalized snapshot.
@@ -772,27 +728,23 @@ pub(crate) struct ProviderIngestCompletedMusubiCapturePageV1 {
     candidates: Vec<ProviderIngestCompletedMusubiCaptureCandidateV1>,
     scan_complete: bool,
 }
-
 impl ProviderIngestCompletedMusubiCapturePageV1 {
     /// Return the exact finalized cursor shared by every validated source row.
     #[must_use]
     pub(crate) const fn finalized_cursor(&self) -> ProviderIngestFinalizedCursorV1 {
         self.finalized_cursor
     }
-
     /// Borrow the completed-Musubi candidates selected from this page.
     #[must_use]
     pub(crate) fn candidates(&self) -> &[ProviderIngestCompletedMusubiCaptureCandidateV1] {
         &self.candidates
     }
-
     /// Return whether this page exhausted the pinned finalized snapshot.
     #[must_use]
     pub(crate) const fn scan_complete(&self) -> bool {
         self.scan_complete
     }
 }
-
 /// Result of verifying and durably enqueuing one bounded capture page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProviderIngestCompletedMusubiReconcileOutcomeV1 {
@@ -809,7 +761,6 @@ pub(crate) struct ProviderIngestCompletedMusubiReconcileOutcomeV1 {
     /// Whether this page exhausted its immutable finalized snapshot.
     pub scan_complete: bool,
 }
-
 /// Path-free failure while reconciling one completed-Musubi capture page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum ProviderIngestCompletedMusubiReconcileErrorV1 {
@@ -844,7 +795,6 @@ pub(crate) enum ProviderIngestCompletedMusubiReconcileErrorV1 {
     #[error("completed-Musubi approval journal capacity is exhausted")]
     CapacityExceeded,
 }
-
 /// Take-once daemon tenure for completed-Musubi finalized capture.
 ///
 /// [`crate::NodeHandle`] reserves this opaque value once for one exact
@@ -862,7 +812,6 @@ pub(crate) enum ProviderIngestCompletedMusubiReconcileErrorV1 {
 pub struct ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
     state: ProviderIngestCompletedMusubiCaptureCoordinatorStateV1,
 }
-
 enum ProviderIngestCompletedMusubiCaptureCoordinatorStateV1 {
     Pending(ProviderIngestCompletedMusubiCapturePendingV1),
     Active(
@@ -871,7 +820,6 @@ enum ProviderIngestCompletedMusubiCaptureCoordinatorStateV1 {
         >,
     ),
 }
-
 struct ProviderIngestCompletedMusubiCapturePendingV1 {
     completed_musubi_store_instance: CompletedMusubiStoreInstanceV1,
     provider_id: [u8; 32],
@@ -879,7 +827,6 @@ struct ProviderIngestCompletedMusubiCapturePendingV1 {
     max_page_rows: usize,
     ledger: Arc<dyn ProviderIngestCompletedMusubiSignedCaptureLedgerV1>,
 }
-
 impl fmt::Debug for ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = match &self.state {
@@ -892,7 +839,6 @@ impl fmt::Debug for ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
     pub(crate) fn new_pending(
         completed_musubi_store_instance: CompletedMusubiStoreInstanceV1,
@@ -914,16 +860,15 @@ impl ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
             ),
         })
     }
-
     /// Try to bind the retained reader without permitting reader substitution.
     ///
     /// Unavailability leaves the exact pending reader and all static identity
     /// material in place for a later retry. This method remains crate-private
     /// until the qualified journal/inventory coordinator can consume scanner
     /// output without exposing claims or requests.
-    // TODO: Invoke this only from the future qualified, supervised effect
-    // coordinator after it owns the sealed journal and authenticated inventory
-    // drivers; the current daemon intentionally retains the tenure inert.
+    // The opaque attestation driver is the sole production caller and invokes
+    // this after binding its journal, signer, and inventory. Stock daemon
+    // startup retains that driver inert until supervision is qualified.
     #[allow(
         dead_code,
         reason = "activation stays closed until the qualified effect coordinator is complete"
@@ -943,7 +888,6 @@ impl ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
         self.state = ProviderIngestCompletedMusubiCaptureCoordinatorStateV1::Active(scanner);
         Ok(())
     }
-
     pub(crate) fn active_scanner_mut(
         &mut self,
     ) -> Option<
@@ -958,7 +902,6 @@ impl ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
             }
         }
     }
-
     fn binding(&self) -> (NetworkId, [u8; 32], usize, &CompletedMusubiStoreInstanceV1) {
         match &self.state {
             ProviderIngestCompletedMusubiCaptureCoordinatorStateV1::Pending(pending) => (
@@ -976,7 +919,6 @@ impl ProviderIngestCompletedMusubiCaptureCoordinatorV1 {
         }
     }
 }
-
 fn validate_completed_musubi_capture_scanner_identity(
     provider_id: [u8; 32],
     network_id: NetworkId,
@@ -993,7 +935,6 @@ fn validate_completed_musubi_capture_scanner_identity(
     }
     Ok(())
 }
-
 /// Opaque bounded scanner for finalized local-provider Musubi completions.
 ///
 /// Only [`crate::NodeHandle`] can construct this scanner. The signed reader
@@ -1022,7 +963,6 @@ where
     last_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
     last_completed_cursor: Option<ProviderIngestFinalizedCursorV1>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProviderIngestCompletedMusubiCaptureProgressV1 {
     request_generation: u64,
@@ -1031,7 +971,6 @@ pub(crate) struct ProviderIngestCompletedMusubiCaptureProgressV1 {
     last_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
     last_completed_cursor: Option<ProviderIngestFinalizedCursorV1>,
 }
-
 /// Cancellation-safe rollback guard for one reconciled capture page.
 ///
 /// The scanner commits a fully authenticated page before inventory and journal
@@ -1047,7 +986,6 @@ where
     scanner: Option<&'a mut ProviderIngestCompletedMusubiCaptureScannerV1<Ledger>>,
     progress: ProviderIngestCompletedMusubiCaptureProgressV1,
 }
-
 impl<Ledger> ProviderIngestCompletedMusubiCaptureProgressRollbackV1<'_, Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
@@ -1057,7 +995,6 @@ where
         self.scanner = None;
     }
 }
-
 impl<Ledger> Drop for ProviderIngestCompletedMusubiCaptureProgressRollbackV1<'_, Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
@@ -1068,13 +1005,11 @@ where
         }
     }
 }
-
 struct ValidatedCompletedMusubiCaptureScanPageV1 {
     finalized_cursor: ProviderIngestFinalizedCursorV1,
     candidates: Option<Vec<ProviderIngestCompletedMusubiCaptureCandidateV1>>,
     next_after_order_id: Option<[u8; 32]>,
 }
-
 impl<Ledger> fmt::Debug for ProviderIngestCompletedMusubiCaptureScannerV1<Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
@@ -1094,7 +1029,6 @@ where
             .finish_non_exhaustive()
     }
 }
-
 impl<Ledger> ProviderIngestCompletedMusubiCaptureScannerV1<Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
@@ -1131,7 +1065,6 @@ where
             last_completed_cursor: None,
         })
     }
-
     pub(crate) const fn progress(&self) -> ProviderIngestCompletedMusubiCaptureProgressV1 {
         ProviderIngestCompletedMusubiCaptureProgressV1 {
             request_generation: self.request_generation,
@@ -1141,14 +1074,12 @@ where
             last_completed_cursor: self.last_completed_cursor,
         }
     }
-
     pub(crate) fn matches_completed_musubi_store_instance(
         &self,
         expected: &CompletedMusubiStoreInstanceV1,
     ) -> bool {
         self.completed_musubi_store_instance.matches(expected)
     }
-
     pub(crate) fn restore_progress(
         &mut self,
         progress: ProviderIngestCompletedMusubiCaptureProgressV1,
@@ -1159,7 +1090,6 @@ where
         self.last_finalized_cursor = progress.last_finalized_cursor;
         self.last_completed_cursor = progress.last_completed_cursor;
     }
-
     /// Restore `progress` unless the returned guard is explicitly committed.
     pub(crate) fn restore_progress_on_drop(
         &mut self,
@@ -1170,7 +1100,6 @@ where
             progress,
         }
     }
-
     fn validate_and_seal_source_page(
         &self,
         source_page: ProviderIngestCompletedMusubiCaptureSourcePageV1,
@@ -1205,7 +1134,6 @@ where
         validate_monotonic_finalized_cursor(self.last_finalized_cursor, finalized_cursor)?;
         let suppress_unchanged_head =
             expected_cursor.is_none() && self.last_completed_cursor == Some(finalized_cursor);
-
         let mut candidates = Vec::new();
         candidates
             .try_reserve(page.rows.len())
@@ -1238,7 +1166,6 @@ where
             next_after_order_id: page.next_after_order_id,
         })
     }
-
     /// Read and validate the next bounded page from the pinned finalized scan.
     ///
     /// A terminal page resets only the private continuation state. The
@@ -1302,7 +1229,6 @@ where
             }
             Err(validation_error) => return Err(validation_error),
         };
-
         let next_request_generation = self
             .request_generation
             .checked_add(1)
@@ -1325,7 +1251,6 @@ where
         })
     }
 }
-
 fn verify_completed_musubi_signed_capture_page(
     signed: ProviderIngestCompletedMusubiSignedCapturePageV1,
     expected_request: &ProviderIngestCompletedMusubiCaptureRequestV1,
@@ -1351,7 +1276,6 @@ fn verify_completed_musubi_signed_capture_page(
         .map_err(|_| ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)?;
     Ok(signed.source_page)
 }
-
 fn validate_completed_musubi_capture_source_page(
     page: &ProviderIngestCompletedMusubiCaptureSourcePageV1,
     after_order_id: Option<[u8; 32]>,
@@ -1445,7 +1369,6 @@ fn validate_completed_musubi_capture_source_page(
     }
     Ok(())
 }
-
 fn seal_completed_musubi_capture_source_page(
     source: ProviderIngestCompletedMusubiCaptureSourcePageV1,
     claim_factory: &ProviderIngestFinalizedClaimFactoryV1,
@@ -1514,7 +1437,6 @@ fn seal_completed_musubi_capture_source_page(
         next_after_order_id: source.next_after_order_id,
     })
 }
-
 fn map_capture_ledger_error(
     error: ProviderIngestFinalizedLedgerErrorV1,
 ) -> ProviderIngestRuntimeErrorV1 {
@@ -1527,24 +1449,20 @@ fn map_capture_ledger_error(
         }
     }
 }
-
 use crate::provider_attestation_journal::{
-    MUSUBI_PROVIDER_ATTESTATION_READY_PAGE_MAX_V1,
-    MusubiProviderAttestationApprovalIdV1, MusubiProviderAttestationClaimOwnerV1,
-    MusubiProviderAttestationDeliveryOutcomeV1, MusubiProviderAttestationEnqueueOutcomeV1,
-    MusubiProviderAttestationFailureClassV1, MusubiProviderAttestationInventoryRuntimeV1,
-    MusubiProviderAttestationJournalErrorV1, MusubiProviderAttestationJournalPolicyV1,
-    MusubiProviderAttestationJournalRuntimeV1, MusubiProviderAttestationJournalStageV1,
-    MusubiProviderAttestationJournalV1, MusubiProviderAttestationPreEnqueueProbeV1,
-    MusubiProviderAttestationRetryOutcomeV1, MusubiProviderAttestationSignerV1,
-    musubi_provider_attestation_approval_id_v1,
+    MUSUBI_PROVIDER_ATTESTATION_READY_PAGE_MAX_V1, MusubiProviderAttestationApprovalIdV1,
+    MusubiProviderAttestationClaimOwnerV1, MusubiProviderAttestationDeliveryOutcomeV1,
+    MusubiProviderAttestationEnqueueOutcomeV1, MusubiProviderAttestationFailureClassV1,
+    MusubiProviderAttestationInventoryRuntimeV1, MusubiProviderAttestationJournalErrorV1,
+    MusubiProviderAttestationJournalPolicyV1, MusubiProviderAttestationJournalRuntimeV1,
+    MusubiProviderAttestationJournalStageV1, MusubiProviderAttestationJournalV1,
+    MusubiProviderAttestationPreEnqueueProbeV1, MusubiProviderAttestationRetryOutcomeV1,
+    MusubiProviderAttestationSignerV1, musubi_provider_attestation_approval_id_v1,
 };
-
 struct ProviderIngestCompletedMusubiPreparedApprovalV1 {
     approval_id: MusubiProviderAttestationApprovalIdV1,
     request: ProviderIngestMusubiAttestationApprovalRequestV1,
 }
-
 /// One page transaction whose drop restores the fresh capture request.
 ///
 /// The guard remains live through approval signing and its durable CAS. It may
@@ -1558,7 +1476,6 @@ where
     approvals: Vec<ProviderIngestCompletedMusubiPreparedApprovalV1>,
     outcome: ProviderIngestCompletedMusubiReconcileOutcomeV1,
 }
-
 impl<Ledger> ProviderIngestCompletedMusubiPreparedPageV1<'_, Ledger>
 where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
@@ -1571,7 +1488,6 @@ where
         outcome
     }
 }
-
 impl crate::NodeHandle {
     async fn prepare_provider_ingest_completed_musubi_capture_page<'scanner, Ledger, Inventory>(
         &self,
@@ -1696,7 +1612,6 @@ impl crate::NodeHandle {
             outcome,
         })
     }
-
     #[cfg(test)]
     pub(crate) async fn reconcile_provider_ingest_completed_musubi_capture_page<Ledger, Inventory>(
         &self,
@@ -1717,7 +1632,6 @@ impl crate::NodeHandle {
             .commit())
     }
 }
-
 fn map_completed_musubi_admission_error(
     error: MusubiProviderAttestationJournalErrorV1,
 ) -> ProviderIngestCompletedMusubiReconcileErrorV1 {
@@ -1761,7 +1675,6 @@ fn map_completed_musubi_admission_error(
         }
     }
 }
-
 /// Count-only result of one bounded handoff-first effect-pump step.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1785,7 +1698,6 @@ pub struct ProviderIngestCompletedMusubiAttestationDriveOutcomeV1 {
     /// Whether the capture page exhausted its immutable finalized snapshot.
     pub scan_complete: bool,
 }
-
 /// Redacted driver failure with stable retry/operator classification.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -1812,7 +1724,6 @@ pub enum ProviderIngestCompletedMusubiAttestationDriveErrorV1 {
     #[error("completed-Musubi attestation integrity check was rejected")]
     IntegrityRejected,
 }
-
 impl ProviderIngestCompletedMusubiAttestationDriveErrorV1 {
     /// Return whether an unchanged deployment may safely retry this step.
     #[must_use]
@@ -1823,7 +1734,6 @@ impl ProviderIngestCompletedMusubiAttestationDriveErrorV1 {
         )
     }
 }
-
 /// Opaque take-once capture, signing, and inventory effect pump.
 ///
 /// This type exposes no requests, claims, journal entries, signers, or
@@ -1840,7 +1750,6 @@ pub struct ProviderIngestCompletedMusubiAttestationDriverV1 {
     inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1>,
     page_limit: usize,
 }
-
 impl fmt::Debug for ProviderIngestCompletedMusubiAttestationDriverV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1849,7 +1758,6 @@ impl fmt::Debug for ProviderIngestCompletedMusubiAttestationDriverV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl crate::NodeHandle {
     /// Bind the opaque effect pump to one exact node/capture/journal scope.
     ///
@@ -1895,7 +1803,6 @@ impl crate::NodeHandle {
         })
     }
 }
-
 impl ProviderIngestCompletedMusubiAttestationDriverV1 {
     /// Drain one bounded handoff page, then prepare/sign one capture page.
     ///
@@ -1938,24 +1845,22 @@ impl ProviderIngestCompletedMusubiAttestationDriverV1 {
                 | Ok(MusubiProviderAttestationDeliveryOutcomeV1::Existing) => {
                     outcome.handoffs_delivered = outcome.handoffs_delivered.saturating_add(1);
                 }
-                Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable) => {
-                    match journal
-                        .record_handoff_failure(
-                            &claim,
-                            MusubiProviderAttestationFailureClassV1::Retryable,
-                        )
-                        .await
-                        .map_err(map_completed_musubi_driver_journal_error)?
-                    {
-                        MusubiProviderAttestationRetryOutcomeV1::RetryScheduled => {
-                            outcome.handoffs_retried = outcome.handoffs_retried.saturating_add(1);
-                        }
-                        MusubiProviderAttestationRetryOutcomeV1::DeadLettered => {
-                            outcome.handoffs_dead_lettered =
-                                outcome.handoffs_dead_lettered.saturating_add(1);
-                        }
+                Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable) => match journal
+                    .record_handoff_failure(
+                        &claim,
+                        MusubiProviderAttestationFailureClassV1::Retryable,
+                    )
+                    .await
+                    .map_err(map_completed_musubi_driver_journal_error)?
+                {
+                    MusubiProviderAttestationRetryOutcomeV1::RetryScheduled => {
+                        outcome.handoffs_retried = outcome.handoffs_retried.saturating_add(1);
                     }
-                }
+                    MusubiProviderAttestationRetryOutcomeV1::DeadLettered => {
+                        outcome.handoffs_dead_lettered =
+                            outcome.handoffs_dead_lettered.saturating_add(1);
+                    }
+                },
                 Err(
                     MusubiProviderAttestationJournalErrorV1::InventoryRejected
                     | MusubiProviderAttestationJournalErrorV1::InvalidInventoryReceipt,
@@ -1977,13 +1882,12 @@ impl ProviderIngestCompletedMusubiAttestationDriverV1 {
                 Err(error) => return Err(map_completed_musubi_driver_journal_error(error)),
             }
         }
-
         coordinator
             .try_activate()
             .map_err(map_completed_musubi_driver_capture_error)?;
-        let scanner = coordinator.active_scanner_mut().ok_or(
-            ProviderIngestCompletedMusubiAttestationDriveErrorV1::IntegrityRejected,
-        )?;
+        let scanner = coordinator
+            .active_scanner_mut()
+            .ok_or(ProviderIngestCompletedMusubiAttestationDriveErrorV1::IntegrityRejected)?;
         let prepared = node
             .prepare_provider_ingest_completed_musubi_capture_page(
                 scanner,
@@ -2009,7 +1913,8 @@ impl ProviderIngestCompletedMusubiAttestationDriverV1 {
                             MusubiProviderAttestationJournalStageV1::ApprovedPendingHandoff
                                 | MusubiProviderAttestationJournalStageV1::HandoffClaimed
                                 | MusubiProviderAttestationJournalStageV1::Delivered
-                        ) || status.stage == MusubiProviderAttestationJournalStageV1::DeadLetter
+                        ) || status.stage
+                            == MusubiProviderAttestationJournalStageV1::DeadLetter
                             && status.dead_letter_has_approved_attestation =>
                     {
                         continue;
@@ -2092,7 +1997,6 @@ impl ProviderIngestCompletedMusubiAttestationDriverV1 {
         Ok(outcome)
     }
 }
-
 fn map_completed_musubi_driver_capture_error(
     error: ProviderIngestRuntimeErrorV1,
 ) -> ProviderIngestCompletedMusubiAttestationDriveErrorV1 {
@@ -2103,7 +2007,6 @@ fn map_completed_musubi_driver_capture_error(
         _ => ProviderIngestCompletedMusubiAttestationDriveErrorV1::IntegrityRejected,
     }
 }
-
 fn map_completed_musubi_driver_reconcile_error(
     error: ProviderIngestCompletedMusubiReconcileErrorV1,
 ) -> ProviderIngestCompletedMusubiAttestationDriveErrorV1 {
@@ -2130,7 +2033,6 @@ fn map_completed_musubi_driver_reconcile_error(
         }
     }
 }
-
 fn map_completed_musubi_driver_journal_error(
     error: MusubiProviderAttestationJournalErrorV1,
 ) -> ProviderIngestCompletedMusubiAttestationDriveErrorV1 {

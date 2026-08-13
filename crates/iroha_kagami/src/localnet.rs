@@ -1,5 +1,4 @@
 //! Generate a bare-metal local network configuration (genesis, peer configs, scripts).
-
 use std::{
     collections::BTreeSet,
     env,
@@ -9,7 +8,6 @@ use std::{
     num::{NonZeroU16, NonZeroU64},
     path::{Path, PathBuf},
 };
-
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
@@ -78,7 +76,6 @@ use iroha_test_samples::REAL_GENESIS_ACCOUNT_KEYPAIR;
 use iroha_version::BuildLine;
 use rand::{TryRngCore as _, rngs::OsRng};
 use zeroize::{Zeroize as _, Zeroizing};
-
 use crate::{
     Outcome, RunArgs,
     genesis::{
@@ -1672,7 +1669,6 @@ fn localnet_dataspace_catalog(
     fault_tolerance: u32,
 ) -> Vec<toml::Value> {
     use toml::{Table, Value};
-
     let fault_tolerance = i64::from(fault_tolerance);
     let governance_description = if matches!(
         sora_profile,
@@ -1817,7 +1813,6 @@ fn write_localnet_lane_manifests(
 }
 fn localnet_dataspace_manifest_hash(id: i64) -> String {
     use std::fmt::Write as _;
-
     let id = u64::try_from(id).expect("dataspace id must be non-negative");
     let mut hex = String::with_capacity(64);
     for byte in id.to_le_bytes() {
@@ -1832,7 +1827,6 @@ fn localnet_dataspace_manifest_hash(id: i64) -> String {
 )]
 fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<toml::Value>)> {
     use toml::{Table, Value};
-
     if !localnet_uses_alias_multilane_catalog(sora_profile) {
         return None;
     }
@@ -1948,7 +1942,6 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
 )]
 fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Table> {
     use toml::{Table, Value};
-
     if !localnet_uses_alias_multilane_catalog(sora_profile) {
         return None;
     }
@@ -2146,7 +2139,6 @@ fn render_peer_config(
 ) -> String {
     use iroha_config::parameters::defaults::streaming::codec as codec_defaults;
     use toml::{Table, Value};
-
     let (bind_host, public_host) = hosts;
     let RenderPeerFeatures {
         mcp_enabled,
@@ -4254,7 +4246,6 @@ fn write_scripts(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-
         fs::set_permissions(&start, PermissionsExt::from_mode(0o755))
             .wrap_err_with(|| format!("failed to mark {} executable", start.display()))?;
         fs::set_permissions(&stop, PermissionsExt::from_mode(0o755))
@@ -4719,7 +4710,6 @@ fn write_localnet_gitignore(out_dir: &Path) -> Result<()> {
 mod localnet_test_helpers;
 #[cfg(test)]
 use localnet_test_helpers::localnet_client_identity;
-
 fn localnet_client_account_id() -> AccountId {
     let public_key = CLIENT_ACCOUNT_PUBLIC
         .parse()
@@ -4730,7 +4720,6 @@ fn write_owner_only_localnet_file(path: &Path, contents: &[u8]) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true).mode(0o600);
         let mut file = options
@@ -4934,7 +4923,6 @@ mod tests {
         io::BufWriter,
         path::{Path, PathBuf},
     };
-
     use iroha_config::{
         base::toml::TomlSource, kura::FsyncMode, logger::Directives, parameters::actual,
     };
@@ -4951,9 +4939,7 @@ mod tests {
     };
     use iroha_executor_data_model::permission::account::CanDelegateAccountAliasResolution;
     use norito::{json, literal};
-
     use super::*;
-
     #[test]
     fn localnet_uses_a_durable_fsync_policy() {
         assert_eq!(
@@ -7119,7 +7105,6 @@ mod tests {
     #[test]
     fn localnet_npos_bootstraps_public_lane_stake() {
         use std::collections::BTreeSet;
-
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
@@ -7275,7 +7260,6 @@ mod tests {
     #[test]
     fn localnet_npos_validator_roster_and_quorum_match_peer_count() {
         use std::collections::BTreeSet;
-
         let temp = tempfile::tempdir().expect("tmp dir");
         let peer_count = NonZeroU16::new(7).expect("non-zero");
         let opts = LocalnetOptions {
@@ -7377,7 +7361,6 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
         use std::collections::{BTreeMap, BTreeSet};
-
         let temp = tempfile::tempdir().expect("tmp dir");
         let peer_count = NonZeroU16::new(4).expect("non-zero");
         let opts = LocalnetOptions {
@@ -7534,7 +7517,6 @@ mod tests {
     #[test]
     fn private_dataspace_cli_selector_is_typed_and_fail_closed() {
         use clap::Parser as _;
-
         #[derive(clap::Parser)]
         struct TestArgs {
             #[command(flatten)]
@@ -7793,7 +7775,6 @@ mod tests {
     #[test]
     fn private_dataspace_manifests_use_the_selected_lane_alias() {
         use std::collections::BTreeSet;
-
         let peers = build_peers(4, Some(b"private-dataspace-manifest"), 34_080, 34_337)
             .expect("build deterministic manifest validators");
         let expected_peer_ids = peers
@@ -7872,7 +7853,6 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn dataspace_localnet_binds_paynet_restricted_lane_before_genesis_signing() {
         use std::collections::{BTreeMap, BTreeSet};
-
         let temp = tempfile::tempdir().expect("tmp dir");
         let peer_count = NonZeroU16::new(4).expect("non-zero");
         let opts = LocalnetOptions {

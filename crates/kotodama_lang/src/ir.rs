@@ -5,11 +5,8 @@
 //! form. Before code generation, [`crate::ssa`] converts it to strict SSA MIR
 //! with explicit Phi nodes, verifies dominance and definition uniqueness, and
 //! deterministically lowers it back for register allocation.
-
 use std::collections::{BTreeSet, HashMap};
-
 use iroha_data_model::{smart_contract::manifest::DynamicAccessHint, state_path::StatePath};
-
 use super::{
     abi_schema::{json_construction_schema, state_value_kind_for_type, state_value_schema},
     ast::{BinaryOp, PatternBinding, STATE_MAP_GET_INTRINSIC, SumVariant, UnaryOp},
@@ -3690,7 +3687,6 @@ fn entrypoint_value_kind(
     ty: &Type,
 ) -> Result<ivm_abi::entrypoint::EntrypointValueKindV1, String> {
     use ivm_abi::entrypoint::EntrypointValueKindV1 as Kind;
-
     let resolved = semantic::resolve_struct_type(ty);
     Ok(match resolved {
         Type::Int => Kind::Int,
@@ -8651,7 +8647,6 @@ fn emit_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp) {
 mod tests {
     use super::*;
     use crate::{parser::parse_test_fragment as parse, semantic::analyze};
-
     #[test]
     fn malformed_typed_member_access_fails_closed_during_lowering() {
         let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());
@@ -9954,7 +9949,6 @@ mod tests {
     #[test]
     fn entrypoint_list_schema_is_recursive_and_capacity_bound() {
         use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
-
         let ty = Type::List(Box::new(Type::Option(Box::new(Type::Quantity))), 64);
         let schema = entrypoint_return_schema("items", Some(&ty))
             .expect("build List return schema")
@@ -9968,7 +9962,6 @@ mod tests {
     #[test]
     fn query_page_entrypoint_schemas_are_structural_and_roundtrip_for_all_views() {
         use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
-
         let source = include_str!("ir/fixtures/v1/i024.ko");
         let typed = analyze(&parse(source).expect("parse all typed query pages"))
             .expect("analyze all typed query pages");

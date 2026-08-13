@@ -1,7 +1,5 @@
 //! Pre-decode admission for SoraNet privacy telemetry collectors.
-
 use std::net::IpAddr;
-
 #[cfg(feature = "telemetry")]
 use axum::extract::Extension;
 use axum::{
@@ -12,7 +10,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use iroha_torii_shared::ErrorEnvelope;
-
 use crate::operator_signatures::AuthenticatedOperatorPublicKey;
 #[cfg(feature = "telemetry")]
 use crate::{
@@ -20,11 +17,9 @@ use crate::{
     routing::{self, RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto},
 };
 use crate::{SharedAppState, limits, utils};
-
 /// Maximum encoded body accepted by either SoraNet privacy ingest route.
 pub(crate) const SORANET_PRIVACY_INGEST_MAX_BODY_BYTES: usize = 128 * 1024;
 const RETIRED_SORANET_PRIVACY_TOKEN_HEADERS: [&str; 2] = ["x-soranet-privacy-token", "x-api-token"];
-
 #[derive(Clone)]
 /// Route-local state for the signed collector's secondary admission guard.
 pub(crate) struct SoranetPrivacyCollectorAuthState {
@@ -33,16 +28,13 @@ pub(crate) struct SoranetPrivacyCollectorAuthState {
     /// Stable endpoint label used by rejection telemetry.
     pub(crate) endpoint: &'static str,
 }
-
 #[derive(Clone, Copy, Debug)]
 /// Marker inserted only after a collector passes secondary privacy admission.
 pub(crate) struct VerifiedSoranetPrivacyCollector;
-
 fn privacy_reject(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
     let payload = ErrorEnvelope::new(code, message.into());
     (status, utils::NoritoBody(payload)).into_response()
 }
-
 async fn enforce_soranet_privacy_ingest(
     app: &SharedAppState,
     headers: &HeaderMap,
@@ -64,7 +56,6 @@ async fn enforce_soranet_privacy_ingest(
             "soranet privacy ingestion is disabled",
         ));
     }
-
     if app.soranet_privacy_allow_nets.is_empty()
         || !limits::is_allowed_by_cidr(headers, remote, &app.soranet_privacy_allow_nets)
     {
@@ -78,7 +69,6 @@ async fn enforce_soranet_privacy_ingest(
             "submitter not in allowed namespace",
         ));
     }
-
     if RETIRED_SORANET_PRIVACY_TOKEN_HEADERS
         .iter()
         .any(|name| headers.contains_key(*name))
@@ -93,7 +83,6 @@ async fn enforce_soranet_privacy_ingest(
             "bearer collector credentials are retired; use an exact operator request signature",
         ));
     }
-
     let rate_key = operator.0.to_string();
     let enforce_rate = ingest_cfg.rate_per_sec.is_some();
     if !limits::allow_conditionally(&app.soranet_privacy_rate_limiter, &rate_key, enforce_rate)
@@ -109,10 +98,8 @@ async fn enforce_soranet_privacy_ingest(
             "soranet privacy ingest is rate limited",
         ));
     }
-
     Ok(())
 }
-
 /// Authenticate one collector request before any request-body extractor runs.
 pub(crate) async fn enforce_soranet_privacy_collector_authentication(
     State(state): State<SoranetPrivacyCollectorAuthState>,
@@ -150,7 +137,6 @@ pub(crate) async fn enforce_soranet_privacy_collector_authentication(
         .insert(VerifiedSoranetPrivacyCollector);
     next.run(request).await
 }
-
 #[cfg(feature = "telemetry")]
 /// Record one authenticated SoraNet privacy event.
 pub(super) async fn handler_post_soranet_privacy_event(
@@ -162,7 +148,6 @@ pub(super) async fn handler_post_soranet_privacy_event(
         .await
         .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "telemetry")]
 /// Record one authenticated SoraNet privacy collector share.
 pub(super) async fn handler_post_soranet_privacy_share(
@@ -174,7 +159,6 @@ pub(super) async fn handler_post_soranet_privacy_share(
         .await
         .map(IntoResponse::into_response)
 }
-
 #[cfg(all(test, feature = "telemetry"))]
 /// Exercise event admission and the authenticated handler in direct unit tests.
 pub(crate) async fn test_handler_post_soranet_privacy_event_with_ingress(
@@ -196,7 +180,6 @@ pub(crate) async fn test_handler_post_soranet_privacy_event_with_ingress(
     )
     .await
 }
-
 #[cfg(all(test, feature = "telemetry"))]
 /// Exercise share admission and the authenticated handler in direct unit tests.
 pub(crate) async fn test_handler_post_soranet_privacy_share_with_ingress(

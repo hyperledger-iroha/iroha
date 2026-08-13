@@ -5,7 +5,6 @@
 //! instances that the orchestrator can schedule deterministically. Each run
 //! evaluates capability constraints, honouring range and stream budgets, and
 //! applies the weighting formula described in `specs/sorafs_orchestrator_plan.md`.
-
 use std::{
     collections::HashMap,
     fs,
@@ -14,24 +13,19 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use norito::json::{Map, Number, Value, to_string_pretty};
-
 use crate::{
     CarBuildPlan, ChunkFetchSpec,
     multi_fetch::{CapabilityMismatch, FetchProvider, ProviderMetadata, provider_can_serve_chunk},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-
 /// Default cap (in milliseconds) applied when normalising latency scores.
 const DEFAULT_LATENCY_CAP_MS: u32 = 5_000;
 /// Default integer scale used when converting normalised weights into scheduler credits.
 const DEFAULT_WEIGHT_SCALE: NonZeroU32 = NonZeroU32::MIN.saturating_add(9_999);
 /// Default grace window for telemetry freshness checks.
 const DEFAULT_TELEMETRY_GRACE: Duration = Duration::from_secs(900);
-
 /// Configuration for the scoreboard builder.
 #[derive(Debug, Clone)]
 pub struct ScoreboardConfig {
@@ -48,7 +42,6 @@ pub struct ScoreboardConfig {
     /// Unix timestamp (seconds) used when evaluating advert validity.
     pub now_unix_secs: u64,
 }
-
 impl Default for ScoreboardConfig {
     fn default() -> Self {
         let now_unix_secs = SystemTime::now()
@@ -65,7 +58,6 @@ impl Default for ScoreboardConfig {
         }
     }
 }
-
 /// Eligibility outcome for a provider.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Eligibility {
@@ -74,7 +66,6 @@ pub enum Eligibility {
     /// Provider failed capability or policy checks.
     Ineligible(IneligibilityReason),
 }
-
 /// Reasons a provider was excluded from the scoreboard.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IneligibilityReason {
@@ -91,13 +82,11 @@ pub enum IneligibilityReason {
     /// Telemetry snapshot is stale beyond the configured grace window.
     TelemetryStale { last_updated: u64 },
 }
-
 /// Snapshot of runtime telemetry for providers.
 #[derive(Debug, Clone, Default)]
 pub struct TelemetrySnapshot {
     providers: HashMap<String, ProviderTelemetry>,
 }
-
 impl TelemetrySnapshot {
     /// Construct a telemetry snapshot from an iterator of provider records.
     #[must_use]
@@ -111,18 +100,15 @@ impl TelemetrySnapshot {
         }
         Self { providers }
     }
-
     /// Fetch telemetry for the given provider identifier.
     #[must_use]
     pub fn get(&self, provider_id: &str) -> Option<&ProviderTelemetry> {
         self.providers.get(provider_id)
     }
-
     /// Iterate over all telemetry records.
     pub fn iter(&self) -> impl Iterator<Item = &ProviderTelemetry> {
         self.providers.values()
     }
-
     /// Build a telemetry snapshot from a published SoraFS reputation snapshot.
     #[cfg(feature = "manifest")]
     pub fn from_reputation_snapshot(
@@ -142,7 +128,6 @@ impl TelemetrySnapshot {
         Ok(Self::from_records(records))
     }
 }
-
 /// Per-provider telemetry inputs used by the scoreboard.
 #[derive(Debug, Clone)]
 pub struct ProviderTelemetry {
@@ -165,7 +150,6 @@ pub struct ProviderTelemetry {
     /// Unix timestamp of the telemetry snapshot (seconds).
     pub last_updated_unix: Option<u64>,
 }
-
 impl ProviderTelemetry {
     /// Create a telemetry record with the supplied identifier.
     #[must_use]
@@ -183,7 +167,6 @@ impl ProviderTelemetry {
         }
     }
 }
-
 /// Scoreboard entry describing a provider outcome.
 #[derive(Debug, Clone)]
 pub struct ScoreboardEntry {
@@ -196,7 +179,6 @@ pub struct ScoreboardEntry {
     /// Eligibility outcome for the provider.
     pub eligibility: Eligibility,
 }
-
 impl ScoreboardEntry {
     fn new(provider: FetchProvider, eligibility: Eligibility) -> Self {
         Self {
@@ -207,24 +189,20 @@ impl ScoreboardEntry {
         }
     }
 }
-
 /// Scoreboard artefact emitted by the builder.
 #[derive(Debug, Clone)]
 pub struct Scoreboard {
     entries: Vec<ScoreboardEntry>,
 }
-
 impl Scoreboard {
     fn new(entries: Vec<ScoreboardEntry>) -> Self {
         Self { entries }
     }
-
     /// Returns the scoreboard entries.
     #[must_use]
     pub fn entries(&self) -> &[ScoreboardEntry] {
         &self.entries
     }
-
     /// Consumes the scoreboard returning providers that are eligible.
     #[must_use]
     pub fn into_providers(self) -> Vec<FetchProvider> {
@@ -236,7 +214,6 @@ impl Scoreboard {
             })
             .collect()
     }
-
     /// Persist the scoreboard as a Norito JSON document at `path`.
     pub fn persist_to_path(
         &self,
@@ -249,7 +226,6 @@ impl Scoreboard {
         json.push('\n');
         write_output_bytes(path, "scoreboard", json.as_bytes())
     }
-
     fn to_json_value(&self, metadata: Option<Value>) -> io::Result<Value> {
         let mut entries = Vec::new();
         entries
@@ -291,7 +267,6 @@ impl Scoreboard {
         Ok(Value::Object(root))
     }
 }
-
 impl std::fmt::Display for IneligibilityReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -308,12 +283,10 @@ impl std::fmt::Display for IneligibilityReason {
         }
     }
 }
-
 fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> io::Result<()> {
     let mut file = open_output_file(path, label)?;
     file.write_all(bytes)
 }
-
 fn open_output_file(path: &Path, label: &str) -> io::Result<fs::File> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -344,7 +317,6 @@ fn open_output_file(path: &Path, label: &str) -> io::Result<fs::File> {
     }
     Ok(file)
 }
-
 fn ensure_parent_dir(path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -362,7 +334,6 @@ fn ensure_parent_dir(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 fn validate_output_path(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -387,7 +358,6 @@ fn validate_output_path(path: &Path) -> io::Result<()> {
             ));
         }
     }
-
     if let Some(parent) = path.parent() {
         for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
             if ancestor.as_os_str().is_empty() {
@@ -423,20 +393,16 @@ fn validate_output_path(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -452,7 +418,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -469,7 +434,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 /// Build a scoreboard for the supplied manifest and provider metadata.
 pub fn build_scoreboard(
     plan: &CarBuildPlan,
@@ -503,7 +467,6 @@ pub fn build_scoreboard(
             providers.len()
         ))
     })?;
-
     for metadata in providers {
         let mut provider = match derive_provider(metadata) {
             Ok(provider) => provider,
@@ -515,7 +478,6 @@ pub fn build_scoreboard(
                 continue;
             }
         };
-
         let eligibility = match evaluate_eligibility(
             &provider,
             metadata,
@@ -535,24 +497,20 @@ pub fn build_scoreboard(
             }
             Err(reason) => Eligibility::Ineligible(reason),
         };
-
         entries.push(ScoreboardEntry::new(provider, eligibility));
     }
-
     normalise_weights(
         &mut entries,
         &eligible_indices,
         &raw_scores,
         config.weight_scale,
     )?;
-
     let scoreboard = Scoreboard::new(entries);
     if let Some(path) = &config.persist_path {
         scoreboard.persist_to_path(path, config.persist_metadata.clone())?;
     }
     Ok(scoreboard)
 }
-
 fn derive_provider(metadata: &ProviderMetadata) -> Result<FetchProvider, IneligibilityReason> {
     let identifier = metadata
         .provider_id
@@ -560,10 +518,8 @@ fn derive_provider(metadata: &ProviderMetadata) -> Result<FetchProvider, Ineligi
         .or_else(|| metadata.profile_aliases.first())
         .cloned()
         .ok_or(IneligibilityReason::MissingProviderId)?;
-
     let mut provider = FetchProvider::new(identifier);
     provider = provider.with_metadata(metadata.clone());
-
     if let Some(non_zero) = metadata
         .stream_budget
         .as_ref()
@@ -576,16 +532,13 @@ fn derive_provider(metadata: &ProviderMetadata) -> Result<FetchProvider, Ineligi
     {
         provider = provider.with_max_concurrent_chunks(non_zero);
     }
-
     Ok(provider)
 }
-
 struct ScoreInputs<'a> {
     metadata: &'a ProviderMetadata,
     telemetry: Option<&'a ProviderTelemetry>,
     config: &'a ScoreboardConfig,
 }
-
 fn evaluate_eligibility<'a>(
     provider: &'a FetchProvider,
     metadata: &'a ProviderMetadata,
@@ -605,7 +558,6 @@ fn evaluate_eligibility<'a>(
     {
         return Err(IneligibilityReason::Expired { expires_at });
     }
-
     if let Some(record) = telemetry {
         if record.penalty {
             return Err(IneligibilityReason::TelemetryPenalty);
@@ -618,18 +570,15 @@ fn evaluate_eligibility<'a>(
             return Err(IneligibilityReason::TelemetryStale { last_updated: last });
         }
     }
-
     for spec in chunk_specs {
         provider_can_serve_chunk(provider, spec).map_err(IneligibilityReason::Capability)?;
     }
-
     Ok(ScoreInputs {
         metadata,
         telemetry,
         config,
     })
 }
-
 fn compute_raw_score(inputs: ScoreInputs<'_>) -> f64 {
     let ScoreInputs {
         metadata,
@@ -658,7 +607,6 @@ fn compute_raw_score(inputs: ScoreInputs<'_>) -> f64 {
         .map(|score| f64::from(score.min(10_000)) / 10_000.0)
         .unwrap_or(1.0)
         .clamp(0.05, 1.0);
-
     let qos_component = qos.clamp(0.1, 1.0);
     let latency_cap = f64::from(config.latency_cap_ms.max(1));
     let latency_component = (1.0 - (latency / latency_cap)).clamp(0.1, 1.0);
@@ -668,13 +616,11 @@ fn compute_raw_score(inputs: ScoreInputs<'_>) -> f64 {
     } else {
         token_health.clamp(0.0, 1.0)
     };
-
     let staking_weight = telemetry
         .and_then(|t| t.staking_weight)
         .or_else(|| parse_stake_amount(metadata))
         .unwrap_or(1.0)
         .clamp(0.5, 3.0);
-
     qos_component
         * latency_component
         * failure_component
@@ -682,7 +628,6 @@ fn compute_raw_score(inputs: ScoreInputs<'_>) -> f64 {
         * reputation_component
         * staking_weight
 }
-
 fn parse_stake_amount(metadata: &ProviderMetadata) -> Option<f64> {
     metadata
         .stake_amount
@@ -690,7 +635,6 @@ fn parse_stake_amount(metadata: &ProviderMetadata) -> Option<f64> {
         .and_then(|amount| amount.parse::<f64>().ok())
         .map(|value| value.max(0.0))
 }
-
 fn normalise_weights(
     entries: &mut [ScoreboardEntry],
     eligible_indices: &[usize],
@@ -709,7 +653,6 @@ fn normalise_weights(
             "provider raw scores must be finite and non-negative",
         ));
     }
-
     let total: f64 = raw_scores.iter().copied().sum();
     if !total.is_finite() {
         return Err(io::Error::new(
@@ -742,7 +685,6 @@ fn normalise_weights(
     }
     Ok(())
 }
-
 fn weight_from_normalised(value: f64, scale: NonZeroU32) -> io::Result<NonZeroU32> {
     if !value.is_finite() || !(0.0..=1.0).contains(&value) {
         return Err(io::Error::new(
@@ -760,7 +702,6 @@ fn weight_from_normalised(value: f64, scale: NonZeroU32) -> io::Result<NonZeroU3
         )
     })
 }
-
 fn number_from_f64(value: f64) -> io::Result<Number> {
     Number::from_f64(value).ok_or_else(|| {
         io::Error::new(
@@ -769,16 +710,13 @@ fn number_from_f64(value: f64) -> io::Result<Number> {
         )
     })
 }
-
 #[cfg(test)]
 mod tests {
     use blake3::Hash;
     use norito::json::Value;
     use sorafs_chunker::ChunkProfile;
     use tempfile::{TempDir, tempdir};
-
     use super::*;
-
     #[test]
     fn non_finite_scoreboard_numbers_are_rejected() {
         assert!(weight_from_normalised(f64::NAN, DEFAULT_WEIGHT_SCALE).is_err());
@@ -793,13 +731,11 @@ mod tests {
         );
     }
     use crate::multi_fetch::{RangeCapability, StreamBudget};
-
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
     }
-
     fn plan_with_chunk(length: u32) -> CarBuildPlan {
         CarBuildPlan {
             chunk_profile: ChunkProfile::DEFAULT,
@@ -819,7 +755,6 @@ mod tests {
             }],
         }
     }
-
     fn base_metadata(id: &str) -> ProviderMetadata {
         ProviderMetadata {
             provider_id: Some(id.to_string()),
@@ -838,7 +773,6 @@ mod tests {
             ..ProviderMetadata::default()
         }
     }
-
     #[test]
     fn provider_within_capabilities_is_eligible() {
         let plan = plan_with_chunk(1_024);
@@ -867,16 +801,13 @@ mod tests {
                 last_updated_unix: Some(1_000),
             },
         ]);
-
         let config = ScoreboardConfig {
             now_unix_secs: 1_100,
             ..ScoreboardConfig::default()
         };
-
         let scoreboard =
             build_scoreboard(&plan, &providers, &telemetry, &config).expect("build scoreboard");
         assert_eq!(scoreboard.entries().len(), 2);
-
         let eligible: Vec<_> = scoreboard
             .entries()
             .iter()
@@ -890,14 +821,12 @@ mod tests {
         let sum: f64 = weights.iter().sum();
         assert!((sum - 1.0).abs() < 1e-6);
     }
-
     #[test]
     fn provider_exceeding_chunk_span_is_ineligible() {
         let plan = plan_with_chunk(8_192);
         let providers = vec![base_metadata("provider-a")];
         let telemetry = TelemetrySnapshot::default();
         let config = ScoreboardConfig::default();
-
         let scoreboard =
             build_scoreboard(&plan, &providers, &telemetry, &config).expect("build scoreboard");
         let entry = &scoreboard.entries()[0];
@@ -906,7 +835,6 @@ mod tests {
             Eligibility::Ineligible(IneligibilityReason::Capability(_))
         ));
     }
-
     #[test]
     fn provider_with_penalty_is_ineligible() {
         let plan = plan_with_chunk(1_024);
@@ -920,7 +848,6 @@ mod tests {
             now_unix_secs: 10,
             ..ScoreboardConfig::default()
         };
-
         let scoreboard =
             build_scoreboard(&plan, &providers, &telemetry, &config).expect("build scoreboard");
         let entry = &scoreboard.entries()[0];
@@ -929,7 +856,6 @@ mod tests {
             Eligibility::Ineligible(IneligibilityReason::TelemetryPenalty)
         ));
     }
-
     #[test]
     fn scoreboard_persist_writes_json() {
         let plan = plan_with_chunk(1_024);
@@ -942,11 +868,9 @@ mod tests {
             now_unix_secs: 1_000,
             ..ScoreboardConfig::default()
         };
-
         let scoreboard =
             build_scoreboard(&plan, &providers, &telemetry, &config).expect("build scoreboard");
         assert_eq!(scoreboard.entries().len(), 1);
-
         let persisted = std::fs::read_to_string(scoreboard_path).expect("read scoreboard");
         let value: Value = norito::json::from_str(&persisted).expect("parse scoreboard json");
         assert!(
@@ -954,24 +878,20 @@ mod tests {
             "entries missing in persisted json"
         );
     }
-
     #[test]
     fn scoreboard_persist_creates_nested_parent() {
         let (_tmp, tmp_path) = canonical_tempdir();
         let scoreboard_path = tmp_path.join("nested").join("scoreboard.json");
         let scoreboard = Scoreboard::new(Vec::new());
-
         scoreboard
             .persist_to_path(&scoreboard_path, None)
             .expect("persist scoreboard");
-
         let persisted = fs::read_to_string(scoreboard_path).expect("read scoreboard");
         assert!(
             persisted.contains("\"entries\""),
             "scoreboard JSON missing entries: {persisted}"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn scoreboard_persist_rejects_symlink_output() {
@@ -981,19 +901,16 @@ mod tests {
         let scoreboard_path = tmp_path.join("scoreboard.json");
         std::os::unix::fs::symlink(&target_path, &scoreboard_path).expect("create symlink");
         let scoreboard = Scoreboard::new(Vec::new());
-
         let err = scoreboard
             .persist_to_path(&scoreboard_path, None)
             .expect_err("reject symlink output");
         let message = err.to_string();
-
         assert!(
             message.contains("must not be a symlink"),
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
     }
-
     #[cfg(unix)]
     #[test]
     fn scoreboard_persist_rejects_symlink_parent() {
@@ -1004,12 +921,10 @@ mod tests {
         std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
         let scoreboard_path = linked_dir.join("scoreboard.json");
         let scoreboard = Scoreboard::new(Vec::new());
-
         let err = scoreboard
             .persist_to_path(&scoreboard_path, None)
             .expect_err("reject symlink parent");
         let message = err.to_string();
-
         assert!(
             message.contains("parent") && message.contains("must not be a symlink"),
             "unexpected error: {message}"
@@ -1019,7 +934,6 @@ mod tests {
             "symlink parent should not receive output"
         );
     }
-
     #[test]
     fn reputation_score_reduces_provider_weight_without_exclusion() {
         let plan = plan_with_chunk(1_024);
@@ -1040,7 +954,6 @@ mod tests {
             now_unix_secs: 1_000,
             ..ScoreboardConfig::default()
         };
-
         let scoreboard =
             build_scoreboard(&plan, &providers, &telemetry, &config).expect("build scoreboard");
         let entries = scoreboard.entries();
@@ -1051,7 +964,6 @@ mod tests {
             "higher reputation should receive greater routing weight"
         );
     }
-
     #[cfg(feature = "manifest")]
     #[test]
     fn telemetry_snapshot_can_be_derived_from_reputation_snapshot() {
@@ -1060,7 +972,6 @@ mod tests {
             ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
             ReputationWeightsV1, build_reputation_snapshot,
         };
-
         let input = ReputationProviderInputV1 {
             version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
             provider_id: "provider-a".to_string(),
@@ -1087,7 +998,6 @@ mod tests {
             None,
         )
         .expect("reputation snapshot");
-
         let telemetry =
             TelemetrySnapshot::from_reputation_snapshot(&snapshot).expect("telemetry snapshot");
         assert_eq!(

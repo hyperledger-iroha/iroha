@@ -6,9 +6,6 @@
 //! Selene.  The frontier stores only the active leaf and the mixed-radix
 //! completed siblings, so persisted state is bounded independently of output
 //! set size.
-
-use std::collections::BTreeSet;
-
 use super::{
     FCMP_LAYER_ONE_LEN_V1, FCMP_LAYER_TWO_LEN_V1, FcmpNativeErrorV1, FcmpOutputTupleV1,
     FcmpTreeRootV1,
@@ -18,7 +15,7 @@ use super::{
         hash_selene,
     },
 };
-
+use std::collections::BTreeSet;
 /// Canonical bounded state needed to append to an FCMP++ output-set tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FcmpFrontierPartsV1 {
@@ -36,13 +33,11 @@ pub struct FcmpFrontierPartsV1 {
     /// Root recomputed from all compact parts.
     pub root: FcmpTreeRootV1,
 }
-
 #[derive(Clone, Copy)]
 enum ActiveSubtree {
     Selene(SelenePoint),
     Helios(HeliosPoint),
 }
-
 fn leaf_hash(outputs: &[FcmpOutputTupleV1]) -> Result<SelenePoint, FcmpNativeErrorV1> {
     if outputs.is_empty() || outputs.len() > FCMP_LAYER_ONE_LEN_V1 {
         return Err(FcmpNativeErrorV1::BranchWidth);
@@ -58,7 +53,6 @@ fn leaf_hash(outputs: &[FcmpOutputTupleV1]) -> Result<SelenePoint, FcmpNativeErr
     }
     hash_selene(&coordinates)
 }
-
 fn expected_shape(tree_size: u64) -> Result<(usize, Vec<usize>), FcmpNativeErrorV1> {
     if tree_size == 0 {
         return Err(FcmpNativeErrorV1::EmptyOutputSet);
@@ -85,7 +79,6 @@ fn expected_shape(tree_size: u64) -> Result<(usize, Vec<usize>), FcmpNativeError
     }
     Ok((active_len, digits))
 }
-
 fn validate_shape(parts: &FcmpFrontierPartsV1) -> Result<(), FcmpNativeErrorV1> {
     let (active_len, digits) = expected_shape(parts.tree_size)?;
     if parts.active_outputs.len() != active_len
@@ -112,7 +105,6 @@ fn validate_shape(parts: &FcmpFrontierPartsV1) -> Result<(), FcmpNativeErrorV1> 
     }
     Ok(())
 }
-
 fn reconstruct_root(
     active_outputs: &[FcmpOutputTupleV1],
     levels: &[Vec<[u8; 32]>],
@@ -155,7 +147,6 @@ fn reconstruct_root(
         ActiveSubtree::Helios(point) => FcmpTreeRootV1::from_helios(layers, point),
     }
 }
-
 fn completed_child_scalar(
     active: ActiveSubtree,
     level_index: usize,
@@ -170,7 +161,6 @@ fn completed_child_scalar(
         _ => Err(FcmpNativeErrorV1::FrontierShape),
     }
 }
-
 fn hash_full_parent(
     level_index: usize,
     children: &[[u8; 32]],
@@ -197,7 +187,6 @@ fn hash_full_parent(
         Ok(ActiveSubtree::Selene(hash_selene(&children)?))
     }
 }
-
 fn carry_completed_leaf(
     levels: &mut Vec<Vec<[u8; 32]>>,
     leaf: SelenePoint,
@@ -227,7 +216,6 @@ fn carry_completed_leaf(
     }
     Err(FcmpNativeErrorV1::TreeFull)
 }
-
 fn append_one(
     active_outputs: &mut Vec<FcmpOutputTupleV1>,
     levels: &mut Vec<Vec<[u8; 32]>>,
@@ -241,7 +229,6 @@ fn append_one(
     active_outputs.push(output);
     Ok(())
 }
-
 /// Build canonical compact frontier parts from a complete ordered genesis
 /// output set.
 pub fn build_fcmp_frontier_v1(
@@ -254,7 +241,6 @@ pub fn build_fcmp_frontier_v1(
     if outputs.iter().any(|output| !ids.insert(output.output_id())) {
         return Err(FcmpNativeErrorV1::DuplicateOutput);
     }
-
     let mut active_outputs = Vec::with_capacity(FCMP_LAYER_ONE_LEN_V1);
     let mut levels = Vec::new();
     for output in outputs {
@@ -271,7 +257,6 @@ pub fn build_fcmp_frontier_v1(
     validate_fcmp_frontier_v1(&parts)?;
     Ok(parts)
 }
-
 /// Reconstruct and authenticate persisted FCMP++ compact frontier parts.
 pub fn validate_fcmp_frontier_v1(parts: &FcmpFrontierPartsV1) -> Result<(), FcmpNativeErrorV1> {
     validate_shape(parts)?;
@@ -281,7 +266,6 @@ pub fn validate_fcmp_frontier_v1(parts: &FcmpFrontierPartsV1) -> Result<(), Fcmp
     }
     Ok(())
 }
-
 /// Append a non-empty ordered output batch and return the validator-derived
 /// successor frontier.
 ///
@@ -305,7 +289,6 @@ pub fn append_fcmp_outputs_v1(
     if outputs.iter().any(|output| !ids.insert(output.output_id())) {
         return Err(FcmpNativeErrorV1::DuplicateOutput);
     }
-
     let mut next = current.clone();
     for output in outputs {
         append_one(&mut next.active_outputs, &mut next.levels, *output)?;
@@ -318,12 +301,10 @@ pub fn append_fcmp_outputs_v1(
     validate_fcmp_frontier_v1(&next)?;
     Ok(next)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::privacy_engines::fcmp_plus_plus::output_from_multiples;
-
     fn vector(encoded: &str) -> [u8; 32] {
         assert_eq!(encoded.len(), 64);
         let mut bytes = [0; 32];
@@ -333,7 +314,6 @@ mod tests {
         }
         bytes
     }
-
     fn outputs(count: usize) -> Vec<FcmpOutputTupleV1> {
         (0..count)
             .map(|index| {
@@ -346,14 +326,12 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn frontier_uses_exact_mixed_radix_boundaries() {
         let at_leaf = build_fcmp_frontier_v1(&outputs(38)).expect("one full leaf");
         assert_eq!(at_leaf.active_outputs.len(), 38);
         assert!(at_leaf.levels.is_empty());
         assert_eq!(at_leaf.root.layers(), 1);
-
         let next_output = output_from_multiples(4_000, 4_001, 4_002);
         let second_leaf =
             append_fcmp_outputs_v1(&at_leaf, &[next_output]).expect("first output in second leaf");
@@ -362,13 +340,11 @@ mod tests {
         completed_leaf_x[31] &= 0x7f;
         assert_eq!(second_leaf.levels, vec![vec![completed_leaf_x]]);
         assert_eq!(second_leaf.root.layers(), 2);
-
         let full_second_layer =
             build_fcmp_frontier_v1(&outputs(38 * 18)).expect("one full Helios layer");
         assert_eq!(full_second_layer.root.layers(), 2);
         assert_eq!(full_second_layer.levels.len(), 1);
         assert_eq!(full_second_layer.levels[0].len(), 17);
-
         let third_layer = append_fcmp_outputs_v1(
             &full_second_layer,
             &[output_from_multiples(10_001, 10_002, 10_003)],
@@ -378,7 +354,6 @@ mod tests {
         assert_eq!(third_layer.levels.len(), 2);
         assert!(third_layer.levels[0].is_empty());
         assert_eq!(third_layer.levels[1].len(), 1);
-
         let mut reordered_layers = third_layer;
         reordered_layers.levels.swap(0, 1);
         assert_eq!(
@@ -386,7 +361,6 @@ mod tests {
             Err(FcmpNativeErrorV1::FrontierShape)
         );
     }
-
     #[test]
     fn root_is_order_sensitive_and_append_matches_complete_build() {
         let all = outputs(45);
@@ -394,7 +368,6 @@ mod tests {
         let first = build_fcmp_frontier_v1(&all[..41]).expect("prefix");
         let appended = append_fcmp_outputs_v1(&first, &all[41..]).expect("append");
         assert_eq!(appended, complete);
-
         let mut reordered = all;
         reordered.swap(0, 1);
         assert_ne!(
@@ -402,7 +375,6 @@ mod tests {
             complete.root
         );
     }
-
     #[test]
     fn ordered_tree_roots_match_upstream_vectors_across_curve_layers() {
         // Generated directly with monero-fcmp-plus-plus 0.1.0 at 15ef711.
@@ -429,32 +401,27 @@ mod tests {
             vector("6e10ad9d95a60598eba3978197231f0111b5364d60bac26b0264f53959e4296b")
         );
     }
-
     #[test]
     fn persisted_frontier_rejects_shape_scalar_and_root_malleation() {
         let valid = build_fcmp_frontier_v1(&outputs(45)).expect("valid frontier");
-
         let mut wrong_size = valid.clone();
         wrong_size.tree_size += 1;
         assert_eq!(
             validate_fcmp_frontier_v1(&wrong_size),
             Err(FcmpNativeErrorV1::FrontierShape)
         );
-
         let mut wrong_digit = valid.clone();
         wrong_digit.levels[0].push([1; 32]);
         assert_eq!(
             validate_fcmp_frontier_v1(&wrong_digit),
             Err(FcmpNativeErrorV1::FrontierShape)
         );
-
         let mut noncanonical_scalar = valid.clone();
         noncanonical_scalar.levels[0][0] = [u8::MAX; 32];
         assert_eq!(
             validate_fcmp_frontier_v1(&noncanonical_scalar),
             Err(FcmpNativeErrorV1::ScalarEncoding)
         );
-
         let mut wrong_root = valid.clone();
         wrong_root.root = build_fcmp_frontier_v1(&outputs(1))
             .expect("other root")
@@ -464,7 +431,6 @@ mod tests {
             Err(FcmpNativeErrorV1::RootMismatch)
         );
     }
-
     #[test]
     fn empty_and_duplicate_sets_fail_closed() {
         assert_eq!(

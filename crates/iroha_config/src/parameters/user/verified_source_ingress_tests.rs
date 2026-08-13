@@ -1,5 +1,4 @@
 // Focused tests for verified-source compiler/body admission configuration.
-
 #[test]
 fn verified_source_ingress_defaults_are_single_worker_and_bounded_time() {
     let root = load_root(base_table());
@@ -17,7 +16,6 @@ fn verified_source_ingress_defaults_are_single_worker_and_bounded_time() {
         defaults::torii::VERIFIED_SOURCE_BODY_READ_TIMEOUT
     );
 }
-
 #[test]
 fn verified_source_compile_concurrency_accepts_v1_max_and_rejects_next() {
     fn table_with_ingress(slots: usize, timeout_ms: i64) -> Table {
@@ -41,7 +39,6 @@ fn verified_source_compile_concurrency_accepts_v1_max_and_rejects_next() {
             );
         table
     }
-
     let exact = load_root(table_with_ingress(
         defaults::torii::VERIFIED_SOURCE_MAX_CONCURRENT_COMPILES_V1,
         1,
@@ -61,7 +58,6 @@ fn verified_source_compile_concurrency_accepts_v1_max_and_rejects_next() {
             .verified_source_body_read_timeout,
         std::time::Duration::from_millis(1)
     );
-
     let error = actual::Root::from_toml_source(TomlSource::inline(table_with_ingress(
         defaults::torii::VERIFIED_SOURCE_MAX_CONCURRENT_COMPILES_V1 + 1,
         1,
@@ -71,7 +67,6 @@ fn verified_source_compile_concurrency_accepts_v1_max_and_rejects_next() {
         format!("{error:?}")
             .contains("verified_source_max_concurrent_compiles must be within 1..=4")
     );
-
     let error = actual::Root::from_toml_source(TomlSource::inline(table_with_ingress(1, 0)))
         .expect_err("a zero absolute body-read deadline must fail closed at startup");
     assert!(

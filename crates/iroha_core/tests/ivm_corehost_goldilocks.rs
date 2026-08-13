@@ -1,22 +1,18 @@
 //! Core host Halo2 verification tests covering the Goldilocks backend.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[cfg(feature = "goldilocks_backend")]
 mod goldilocks {
     use std::{convert::TryFrom, sync::Arc};
-
     use iroha_config::parameters::defaults;
     use iroha_core::smartcontracts::ivm::host::CoreHost;
     use iroha_data_model::prelude::AccountId;
     use iroha_test_samples::ALICE_ID;
     use ivm::{IVMHost, syscalls as ivm_sys};
-
     fn make_goldilocks_envelope() -> iroha_zkp_halo2::OpenVerifyEnvelope {
         use iroha_zkp_halo2::{
             GoldilocksParams, GoldilocksPolynomial, GoldilocksScalar, Transcript,
             backend::goldilocks::GoldilocksBackend, norito_helpers as nh,
         };
-
         let params = GoldilocksParams::new(8).expect("params");
         let coeffs: Vec<GoldilocksScalar> =
             (0u64..8).map(|i| GoldilocksScalar::from(i + 1)).collect();
@@ -36,7 +32,6 @@ mod goldilocks {
             domain_tag: None,
         }
     }
-
     fn tlv_from_env(env: &iroha_zkp_halo2::OpenVerifyEnvelope) -> Vec<u8> {
         let payload = norito::to_bytes(env).expect("encode envelope");
         let mut tlv = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
@@ -49,7 +44,6 @@ mod goldilocks {
         tlv.extend_from_slice(&hash);
         tlv
     }
-
     fn base_config() -> iroha_config::parameters::actual::Halo2 {
         iroha_config::parameters::actual::Halo2 {
             enabled: true,
@@ -70,20 +64,17 @@ mod goldilocks {
             enforce_transcript_label_ascii: defaults::zk::halo2::ENFORCE_TRANSCRIPT_LABEL_ASCII,
         }
     }
-
     #[test]
     fn core_host_goldilocks_verification_succeeds() {
         let authority: AccountId = ALICE_ID.clone();
         let mut host =
             CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
         host.set_halo2_config(&base_config());
-
         let env = make_goldilocks_envelope();
         let tlv = tlv_from_env(&env);
         let mut vm = ivm::IVM::new(1_000_000);
         let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
         vm.set_register(10, ptr);
-
         let gas = host
             .syscall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
             .expect("syscall ok");
@@ -91,7 +82,6 @@ mod goldilocks {
         assert_eq!(vm.register(10), 1);
         assert_eq!(vm.register(11), 0);
     }
-
     #[test]
     fn core_host_goldilocks_rejected_when_curve_disabled() {
         let authority: AccountId = ALICE_ID.clone();
@@ -100,13 +90,11 @@ mod goldilocks {
         let mut cfg = base_config();
         cfg.curve = iroha_config::parameters::actual::ZkCurve::Pallas;
         host.set_halo2_config(&cfg);
-
         let env = make_goldilocks_envelope();
         let tlv = tlv_from_env(&env);
         let mut vm = ivm::IVM::new(1_000_000);
         let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
         vm.set_register(10, ptr);
-
         let gas = host
             .syscall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
             .expect("syscall ok");

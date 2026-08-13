@@ -5,7 +5,6 @@ fn transaction_result_json_roundtrip() {
     let json = norito::json::to_json(&ok_result).expect("serialize ok result");
     let decoded: TransactionResult = norito::json::from_str(&json).expect("deserialize ok result");
     assert_eq!(ok_result, decoded);
-
     let err_reason = error::TransactionRejectionReason::LimitCheck(error::TransactionLimitError {
         reason: "limit exceeded".into(),
     });
@@ -14,7 +13,6 @@ fn transaction_result_json_roundtrip() {
     let decoded: TransactionResult = norito::json::from_str(&json).expect("deserialize err result");
     assert_eq!(err_result, decoded);
 }
-
 #[cfg(feature = "json")]
 #[test]
 fn transaction_entrypoint_json_roundtrip() {
@@ -29,7 +27,6 @@ fn transaction_entrypoint_json_roundtrip() {
             .parse()
             .unwrap();
     let authority = AccountId::new(public_key);
-
     let tx = TransactionBuilder::new(
         network_id,
         authority.clone(),
@@ -42,7 +39,6 @@ fn transaction_entrypoint_json_roundtrip() {
     let decoded: TransactionEntrypoint =
         norito::json::from_str(&json).expect("deserialize external entrypoint");
     assert_eq!(entry, decoded);
-
     let time_entry = TimeTriggerEntrypoint {
         id: "trigger".parse().unwrap(),
         instructions: ExecutionStep(Vec::new().into()),

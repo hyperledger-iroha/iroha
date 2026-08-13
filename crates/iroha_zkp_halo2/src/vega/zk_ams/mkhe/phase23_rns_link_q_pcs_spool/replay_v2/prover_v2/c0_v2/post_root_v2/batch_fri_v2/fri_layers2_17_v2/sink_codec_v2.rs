@@ -1,28 +1,22 @@
 //! Exact canonical prefix codec and poisoned streaming sink wrapper.
-
 use super::*;
-
 const CANONICAL_HEADER_BYTES_V2: usize = 512;
 const CANONICAL_EVALUATION_BYTES_V2: usize = 3_040;
 const CANONICAL_TERMINAL_BYTES_V2: usize = 12_160;
 const CANONICAL_FIXED_PREFIX_BYTES_V2: usize = 16_320;
-
 pub(in super::super::super::super) trait BatchFriCanonicalProofSinkV2:
     Sized
 {
     type Output;
-
     fn begin_exact_v2(&mut self, exact_bytes: usize) -> Result<(), ProverPrerequisiteErrorV2>;
     fn write_next_v2(&mut self, bytes: &[u8]) -> Result<(), ProverPrerequisiteErrorV2>;
     fn finish_exact_v2(self) -> Result<Self::Output, ProverPrerequisiteErrorV2>;
 }
-
 pub(super) struct CanonicalProofSinkWriterV2<S: BatchFriCanonicalProofSinkV2> {
     sink: Option<S>,
     exact_bytes: usize,
     written: usize,
 }
-
 impl<S: BatchFriCanonicalProofSinkV2> CanonicalProofSinkWriterV2<S> {
     pub(super) fn begin_v2(sink: S, exact_bytes: usize) -> Result<Self, ProverPrerequisiteErrorV2> {
         if exact_bytes == 0 {
@@ -41,7 +35,6 @@ impl<S: BatchFriCanonicalProofSinkV2> CanonicalProofSinkWriterV2<S> {
         writer.sink = Some(sink);
         Ok(writer)
     }
-
     pub(super) fn write_v2(&mut self, bytes: &[u8]) -> Result<(), ProverPrerequisiteErrorV2> {
         let mut sink = self
             .sink
@@ -59,7 +52,6 @@ impl<S: BatchFriCanonicalProofSinkV2> CanonicalProofSinkWriterV2<S> {
         self.sink = Some(sink);
         Ok(())
     }
-
     pub(super) fn finish_v2(mut self) -> Result<S::Output, ProverPrerequisiteErrorV2> {
         let sink = self
             .sink
@@ -70,13 +62,11 @@ impl<S: BatchFriCanonicalProofSinkV2> CanonicalProofSinkWriterV2<S> {
         }
         sink.finish_exact_v2()
     }
-
     #[cfg(test)]
     const fn written_v2(&self) -> usize {
         self.written
     }
 }
-
 fn canonical_header_v2(
     parameter_digest: [u8; 32],
     context: PublicSpoolContextV2,
@@ -105,7 +95,6 @@ fn canonical_header_v2(
     header[160..192].copy_from_slice(&initial_root);
     Ok(header)
 }
-
 pub(super) fn write_canonical_prefix_v2<S: BatchFriCanonicalProofSinkV2>(
     writer: &mut CanonicalProofSinkWriterV2<S>,
     binding: &CanonicalProofReplayBindingV2,
@@ -129,7 +118,6 @@ pub(super) fn write_canonical_prefix_v2<S: BatchFriCanonicalProofSinkV2>(
     writer.write_v2(terminal)?;
     Ok(())
 }
-
 const _: () = {
     assert!(
         CANONICAL_FIXED_PREFIX_BYTES_V2
@@ -140,38 +128,30 @@ const _: () = {
                 + CANONICAL_TERMINAL_BYTES_V2
     );
 };
-
 #[cfg(test)]
 mod tests {
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         sync::atomic::{AtomicUsize, Ordering},
     };
-
     use super::*;
-
     static PANIC_SINK_DROPS_V2: AtomicUsize = AtomicUsize::new(0);
-
     struct HashSinkV2 {
         hash: Keccak256,
         expected: usize,
         written: usize,
     }
-
     impl BatchFriCanonicalProofSinkV2 for HashSinkV2 {
         type Output = [u8; 32];
-
         fn begin_exact_v2(&mut self, exact_bytes: usize) -> Result<(), ProverPrerequisiteErrorV2> {
             self.expected = exact_bytes;
             Ok(())
         }
-
         fn write_next_v2(&mut self, bytes: &[u8]) -> Result<(), ProverPrerequisiteErrorV2> {
             self.hash.update(bytes);
             self.written += bytes.len();
             Ok(())
         }
-
         fn finish_exact_v2(self) -> Result<Self::Output, ProverPrerequisiteErrorV2> {
             if self.written != self.expected {
                 return Err(ProverPrerequisiteErrorV2::CanonicalProofSink);
@@ -179,49 +159,37 @@ mod tests {
             Ok(self.hash.finalize())
         }
     }
-
     struct PanicSinkV2;
-
     struct ErrorSinkV2;
-
     impl BatchFriCanonicalProofSinkV2 for ErrorSinkV2 {
         type Output = ();
-
         fn begin_exact_v2(&mut self, _: usize) -> Result<(), ProverPrerequisiteErrorV2> {
             Ok(())
         }
-
         fn write_next_v2(&mut self, _: &[u8]) -> Result<(), ProverPrerequisiteErrorV2> {
             Err(ProverPrerequisiteErrorV2::CanonicalProofSink)
         }
-
         fn finish_exact_v2(self) -> Result<Self::Output, ProverPrerequisiteErrorV2> {
             Ok(())
         }
     }
-
     impl Drop for PanicSinkV2 {
         fn drop(&mut self) {
             PANIC_SINK_DROPS_V2.fetch_add(1, Ordering::SeqCst);
         }
     }
-
     impl BatchFriCanonicalProofSinkV2 for PanicSinkV2 {
         type Output = ();
-
         fn begin_exact_v2(&mut self, _: usize) -> Result<(), ProverPrerequisiteErrorV2> {
             Ok(())
         }
-
         fn write_next_v2(&mut self, _: &[u8]) -> Result<(), ProverPrerequisiteErrorV2> {
             panic!("intentional canonical sink unwind")
         }
-
         fn finish_exact_v2(self) -> Result<Self::Output, ProverPrerequisiteErrorV2> {
             Ok(())
         }
     }
-
     #[test]
     fn synthetic_header_and_prefix_kats_pin_the_actual_codec() {
         let context = PublicSpoolContextV2 {
@@ -262,7 +230,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn sink_error_or_panic_poisoning_never_restores_the_taken_sink() {
         let mut error_writer = CanonicalProofSinkWriterV2::begin_v2(ErrorSinkV2, 1).unwrap();

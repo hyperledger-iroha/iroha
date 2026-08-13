@@ -1,7 +1,5 @@
 //! Helpers for bridge finality proofs built from commit certificates.
-
 use std::{collections::BTreeSet, fmt};
-
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
     NetworkId,
@@ -27,7 +25,6 @@ use iroha_sccp::{
 };
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
-
 use crate::{
     state::{State as CoreState, StateReadOnly},
     tx::AcceptedTransaction,
@@ -307,7 +304,6 @@ pub(crate) fn test_sccp_outbound_context_for_payload_bytes(
     payload_bytes: &[u8],
 ) -> iroha_data_model::bridge::SccpOutboundMessageContextV1 {
     use iroha_data_model::bridge::{SccpLaneIdV1, SccpNetworkV1};
-
     let target_domain = decode_recorded_sccp_payload_bytes(payload_bytes)
         .map(|payload| iroha_sccp::sccp_message_target_domain(&payload))
         .filter(|domain| *domain != iroha_sccp::SCCP_DOMAIN_SORA)
@@ -1790,7 +1786,6 @@ fn verify_structural_sccp_finality_proof_against_local_state(
 #[cfg(test)]
 mod tests {
     use std::{borrow::Cow, num::NonZeroU64};
-
     use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
     use iroha_data_model::{
         account::AccountId,
@@ -1806,10 +1801,8 @@ mod tests {
         },
         trigger::{TimeTriggerEntrypoint, TriggerId},
     };
-
     use super::*;
     use crate::tx::AcceptedTransaction;
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("bridge fixture key generation should succeed")
     }
@@ -2221,7 +2214,6 @@ mod tests {
     #[test]
     fn outbound_commitment_index_allocation_is_dense_bounded_and_rollback_safe() {
         use mv::storage::{Storage, StorageReadOnly};
-
         let index_key = |index: u32, id: u32| {
             let mut message_id = [0_u8; 32];
             message_id[..4].copy_from_slice(&id.to_le_bytes());

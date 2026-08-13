@@ -42,7 +42,6 @@ impl Kura {
             );
     }
 }
-
 #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 impl Kura {
     /// Persist a benchmark block directly into the canonical block store.
@@ -64,14 +63,12 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     /// Append an in-memory pending block for storage-budget benchmark scenarios.
     pub fn append_pending_block_for_bench(&self, block: Arc<SignedBlock>) {
         let hash = block.hash();
         self.block_data.lock().push((hash, Some(block)));
         self.invalidate_pending_budget_cache();
     }
-
     /// Run storage-budget accounting without storing a block.
     pub fn check_storage_budget_for_bench(&self, block: &SignedBlock) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
@@ -80,7 +77,6 @@ impl Kura {
         self.resolve_canonical_storage_before_mutation()?;
         self.check_storage_budget(block, None)
     }
-
     /// Advertise enough matching remote replicas for the block at `height`.
     #[must_use]
     pub fn advertise_required_replicas_for_bench(&self, height: NonZeroUsize) -> Option<u64> {
@@ -126,7 +122,6 @@ impl Kura {
         }
         Some(payload_len)
     }
-
     /// Evict persisted block bodies for benchmark scenarios.
     ///
     /// # Errors
@@ -135,7 +130,6 @@ impl Kura {
         self.evict_block_bodies(bytes_needed)
     }
 }
-
 #[cfg(any(test, feature = "iroha-core-tests"))]
 impl Kura {
     /// Remove only the reverse carrier record while retaining its committed full entry.
@@ -154,7 +148,6 @@ impl Kura {
         let _carrier_guard = self.merge_carrier_lock.lock();
         self.remove_merge_carrier_record_unlocked(record)
     }
-
     /// Remove the local DA cache only after a canonical body was genuinely evicted.
     ///
     /// This test-only hook models a remote-only historical block so downstream
@@ -207,7 +200,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(())
     }
-
     /// Remove only the newest exact Native AMX application manifest record.
     ///
     /// This test-only hook creates the crash shape where a durable receipt and
@@ -234,7 +226,6 @@ impl Kura {
                 "cannot remove a zero-height Native AMX manifest",
             ));
         }
-
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
@@ -300,7 +291,6 @@ impl Kura {
                 "Native AMX manifest removal is restricted to the newest record",
             ));
         }
-
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
         Self::remove_bound_progress_temp_if_present(&namespace, &path)
@@ -315,7 +305,6 @@ impl Kura {
         Ok(())
     }
 }
-
 #[cfg(test)]
 impl Kura {
     /// Persist one canonical test block and its exact retained SCCP archive.
@@ -331,7 +320,6 @@ impl Kura {
         let blocks_dir = self.active_blocks_dir.lock().clone();
         self.persist_retained_block_record(&blocks_dir, canonical_hash, block.as_ref())
     }
-
     pub(crate) fn persist_block_immediate_for_tests(&self, block: &Arc<SignedBlock>) {
         let _write_guard = self.block_store_write_lock.lock();
         let mut store = self.block_store.lock();
@@ -350,129 +338,106 @@ impl Kura {
         }
         accounting_mutation.finish();
     }
-
     fn pause_next_store_after_pending_merge_stage_for_tests(&self) {
         self.store_paused_after_pending_merge_stage
             .store(false, Ordering::Release);
         self.pause_store_after_pending_merge_stage
             .store(true, Ordering::Release);
     }
-
     fn store_paused_after_pending_merge_stage_for_tests(&self) -> bool {
         self.store_paused_after_pending_merge_stage
             .load(Ordering::Acquire)
     }
-
     fn resume_store_after_pending_merge_stage_for_tests(&self) {
         self.store_paused_after_pending_merge_stage
             .store(false, Ordering::Release);
     }
-
     fn pause_next_eviction_after_snapshot_for_tests(&self) {
         self.eviction_paused_after_snapshot
             .store(false, Ordering::Release);
         self.pause_eviction_after_snapshot
             .store(true, Ordering::Release);
     }
-
     fn eviction_paused_after_snapshot_for_tests(&self) -> bool {
         self.eviction_paused_after_snapshot.load(Ordering::Acquire)
     }
-
     fn resume_eviction_after_snapshot_for_tests(&self) {
         self.eviction_paused_after_snapshot
             .store(false, Ordering::Release);
     }
-
     fn pause_next_eviction_before_stage_publication_for_tests(&self) {
         self.eviction_paused_before_stage_publication
             .store(false, Ordering::Release);
         self.pause_eviction_before_stage_publication
             .store(true, Ordering::Release);
     }
-
     fn eviction_paused_before_stage_publication_for_tests(&self) -> bool {
         self.eviction_paused_before_stage_publication
             .load(Ordering::Acquire)
     }
-
     fn resume_eviction_before_stage_publication_for_tests(&self) {
         self.eviction_paused_before_stage_publication
             .store(false, Ordering::Release);
     }
-
     fn pause_next_block_read_before_cache_recheck_for_tests(&self) {
         self.block_read_paused_before_cache_recheck
             .store(false, Ordering::Release);
         self.pause_block_read_before_cache_recheck
             .store(true, Ordering::Release);
     }
-
     fn block_read_paused_before_cache_recheck_for_tests(&self) -> bool {
         self.block_read_paused_before_cache_recheck
             .load(Ordering::Acquire)
     }
-
     fn resume_block_read_before_cache_recheck_for_tests(&self) {
         self.block_read_paused_before_cache_recheck
             .store(false, Ordering::Release);
     }
-
     fn force_next_durable_blocks_count_fallback_for_tests(&self) {
         self.durable_blocks_count_fallback_reached
             .store(false, Ordering::Release);
         self.force_durable_blocks_count_fallback
             .store(true, Ordering::Release);
     }
-
     fn durable_blocks_count_fallback_reached_for_tests(&self) -> bool {
         self.durable_blocks_count_fallback_reached
             .load(Ordering::Acquire)
     }
-
     fn pause_next_hash_only_extension_before_store_for_tests(&self) {
         self.hash_only_extension_paused_before_store
             .store(false, Ordering::Release);
         self.pause_hash_only_extension_before_store
             .store(true, Ordering::Release);
     }
-
     fn hash_only_extension_paused_before_store_for_tests(&self) -> bool {
         self.hash_only_extension_paused_before_store
             .load(Ordering::Acquire)
     }
-
     fn resume_hash_only_extension_before_store_for_tests(&self) {
         self.hash_only_extension_paused_before_store
             .store(false, Ordering::Release);
     }
-
     fn pause_next_total_disk_usage_scan_after_scan_for_tests(&self) {
         self.total_disk_usage_scan_paused
             .store(false, Ordering::Release);
         self.pause_total_disk_usage_scan_after_scan
             .store(true, Ordering::Release);
     }
-
     fn total_disk_usage_scan_paused_for_tests(&self) -> bool {
         self.total_disk_usage_scan_paused.load(Ordering::Acquire)
     }
-
     fn resume_total_disk_usage_scan_for_tests(&self) {
         self.total_disk_usage_scan_paused
             .store(false, Ordering::Release);
     }
-
     fn fail_retained_rewrite_discard_after_for_tests(&self, removed_index: usize) {
         self.fail_retained_rewrite_discard_after
             .store(removed_index, Ordering::Release);
     }
-
     fn fail_next_retained_rewrite_recovery_for_tests(&self) {
         self.fail_next_retained_rewrite_recovery
             .store(true, Ordering::Release);
     }
-
     /// Return raw cache state together with independent exact scans without refreshing caches.
     pub(crate) fn disk_usage_accounting_snapshot_for_tests(
         &self,
@@ -486,20 +451,16 @@ impl Kura {
             exact_total_bytes: self.kura_total_disk_usage_bytes()?,
         })
     }
-
     fn fail_next_retired_tree_purge_after_one_removal_for_tests(&self) {
         self.fail_next_retired_tree_purge_after_one_removal
             .store(true, Ordering::Release);
     }
-
     pub(crate) fn fail_next_store_for_tests(&self) {
         self.fail_next_block_write.store(true, Ordering::Relaxed);
     }
-
     pub(crate) fn fail_next_block_write_for_tests(&self) {
         self.fail_next_block_write.store(true, Ordering::Relaxed);
     }
-
     #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
     pub(crate) fn fail_next_block_write_with_unreadable_old_marker_for_tests(&self) {
         self.block_store
@@ -507,7 +468,6 @@ impl Kura {
             .fail_next_commit_marker_write_and_readback
             .store(true, Ordering::Release);
     }
-
     #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
     pub(crate) fn fail_next_block_write_with_unreadable_new_marker_for_tests(&self) {
         self.block_store
@@ -515,7 +475,6 @@ impl Kura {
             .fail_next_commit_marker_ack_and_readback
             .store(true, Ordering::Release);
     }
-
     #[cfg(test)]
     pub(crate) fn poison_canonical_storage_for_tests(&self) {
         self.poison_canonical_storage(
@@ -523,14 +482,12 @@ impl Kura {
             &Error::CanonicalStoragePoisoned,
         );
     }
-
     #[cfg(test)]
     pub(crate) fn overwrite_commit_marker_for_tests(&self, bytes: &[u8]) -> Result<()> {
         let store = self.block_store.lock();
         let path = store.commit_marker_path();
         std::fs::write(&path, bytes).map_err(|error| Error::IO(error, path))
     }
-
     #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
     pub(crate) fn canonical_commit_marker_count_for_tests(&self) -> Result<u64> {
         let mut block_store = self.block_store.lock();
@@ -545,7 +502,6 @@ impl Kura {
                 )
             })
     }
-
     #[cfg(test)]
     pub(crate) fn publish_exact_commit_marker_for_tests(&self) -> Result<()> {
         let mut store = self.block_store.lock();
@@ -579,36 +535,29 @@ impl Kura {
         store.commit_marker_count = index_count;
         Ok(())
     }
-
     pub(crate) fn fail_next_wsv_checkpoint_write_for_tests(&self) {
         self.fail_next_wsv_checkpoint_write
             .store(true, Ordering::Relaxed);
     }
-
     pub(crate) fn fail_next_commit_manifest_write_for_tests(&self) {
         self.fail_next_commit_manifest_write
             .store(true, Ordering::Relaxed);
     }
-
     pub(crate) fn fail_prune_after_stage_for_tests(&self, stage: usize) {
         self.fail_prune_after_stage.store(stage, Ordering::Relaxed);
     }
-
     pub(crate) fn fail_prune_sidecar_promotion_for_tests(&self, stage: usize) {
         self.fail_prune_sidecar_promotion_stage
             .store(stage, Ordering::Relaxed);
     }
-
     pub(crate) fn fail_next_v2_finality_write_for_tests(&self) {
         self.fail_next_v2_finality_write
             .store(true, Ordering::Relaxed);
     }
-
     pub(crate) fn fail_next_native_amx_prepublication_for_tests(&self) {
         self.fail_next_native_amx_prepublication
             .store(true, Ordering::Relaxed);
     }
-
     #[cfg(test)]
     pub(crate) fn fail_progress_sidecar_ancestor_sync_attempts_for_tests(
         &self,
@@ -617,7 +566,6 @@ impl Kura {
     ) {
         fail_progress_sidecar_ancestor_sync_for_tests(ancestor_index, failures);
     }
-
     /// Replace manifest bytes without updating the checkpoint digest, for corruption tests.
     #[cfg(test)]
     pub(crate) fn overwrite_commit_manifest_without_binding_for_tests(
@@ -635,7 +583,6 @@ impl Kura {
         std::fs::create_dir_all(dir).map_err(|err| Error::IO(err, dir.to_path_buf()))?;
         std::fs::write(&path, manifest.encode()).map_err(|err| Error::IO(err, path))
     }
-
     /// Remove manifest bytes without updating the checkpoint digest, for corruption tests.
     #[cfg(test)]
     pub(crate) fn remove_commit_manifest_without_binding_for_tests(
@@ -645,7 +592,6 @@ impl Kura {
         let path = self.commit_manifest_path(height);
         std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))
     }
-
     /// Remove checkpoint bytes without changing any companion sidecar, for corruption tests.
     #[cfg(test)]
     pub(crate) fn remove_wsv_checkpoint_without_binding_for_tests(
@@ -655,7 +601,6 @@ impl Kura {
         let path = self.wsv_checkpoint_path(height);
         std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))
     }
-
     /// Replace checkpoint state and optional manifest binding without validating either value.
     ///
     /// This deliberately bypasses the production publication protocol so replay tests can model
@@ -678,14 +623,12 @@ impl Kura {
         checkpoint.commit_manifest_hash = manifest.map(CommitManifest::encoded_hash);
         std::fs::write(&path, checkpoint.encode()).map_err(|err| Error::IO(err, path))
     }
-
     /// Remove v2 finality bytes without changing the durable block or manifest, for tests.
     #[cfg(test)]
     pub(crate) fn remove_v2_finality_without_binding_for_tests(&self, height: u64) -> Result<()> {
         let path = self.v2_finality_artifact_path(height);
         std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))
     }
-
     /// Replace durable v2-finality bytes without decoding them, for corruption tests.
     #[cfg(test)]
     pub(crate) fn overwrite_v2_finality_bytes_for_tests(
@@ -696,7 +639,6 @@ impl Kura {
         let path = self.v2_finality_artifact_path(height);
         std::fs::write(&path, bytes).map_err(|err| Error::IO(err, path))
     }
-
     /// Replace the artifact inside an existing finality envelope without validation, for tests.
     #[cfg(test)]
     pub(crate) fn overwrite_v2_finality_without_validation_for_tests(
@@ -720,18 +662,15 @@ impl Kura {
         record.artifact = artifact;
         std::fs::write(&path, record.encode()).map_err(|err| Error::IO(err, path))
     }
-
     #[allow(dead_code)] // Used by the feature-gated Sumeragi actor regression suite.
     pub(crate) fn fail_next_roster_sidecar_writes_for_tests(&self, count: usize) {
         self.fail_next_roster_sidecar_writes
             .store(count, Ordering::Relaxed);
     }
 }
-
 /// Loaded block count
 #[derive(Clone, Copy, Debug)]
 pub struct BlockCount(pub usize);
-
 /// An implementation of a block store for `Kura`
 /// that uses `std::fs`, the default IO file in Rust.
 pub struct BlockStore {
@@ -797,7 +736,6 @@ pub struct BlockStore {
     #[cfg(test)]
     fail_eviction_stage_syncs_remaining: AtomicUsize,
 }
-
 impl Debug for BlockStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BlockStore")
@@ -821,7 +759,6 @@ impl Debug for BlockStore {
             .finish()
     }
 }
-
 impl BlockStore {
     fn read_required_bounded_commit_marker_bytes(
         path: &Path,
@@ -834,7 +771,6 @@ impl BlockStore {
             )
         })
     }
-
     fn maybe_fail_commit_marker_after_temp_sync(&self, temporary_path: &Path) -> Result<()> {
         #[cfg(test)]
         if self

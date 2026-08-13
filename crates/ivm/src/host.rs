@@ -11,7 +11,6 @@ use std::{
     collections::{BTreeMap, HashSet},
     num::NonZeroU16,
 };
-
 use iroha_crypto::{
     Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key,
     blake2::{
@@ -51,7 +50,6 @@ use norito::{
 };
 use sha2::{Digest as Sha2Digest, Sha256};
 use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
-
 use crate::{
     SyscallPolicy,
     axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
@@ -363,7 +361,6 @@ pub(crate) fn validate_declared_state_map_key(
     key: &[u8],
 ) -> Result<(), VMError> {
     use crate::metadata::EmbeddedStateType;
-
     match declared_state_map_key_type(vm, base)? {
         EmbeddedStateType::Int => crate::numeric_tlv::decode_int_bytes(key).map(drop),
         EmbeddedStateType::Decimal => crate::numeric_tlv::decode_decimal_bytes(key).map(drop),
@@ -2369,7 +2366,6 @@ impl DefaultHost {
     }
     fn alloc_blob_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
         use iroha_crypto::Hash;
-
         let mut out = Vec::with_capacity(7 + payload.len() + 32);
         out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
         out.push(1);
@@ -2381,7 +2377,6 @@ impl DefaultHost {
     }
     fn alloc_norito_bytes_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
         use iroha_crypto::Hash;
-
         let mut out = Vec::with_capacity(7 + payload.len() + 32);
         out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
         out.push(1);
@@ -3584,7 +3579,6 @@ impl IVMHost for DefaultHost {
                 // Envelope-based syscall: r10 = &NoritoBytes(VrfVerifyRequest)
                 // Return: r10 = &Blob(32 bytes) on success; r11 = status code (0=ok, >0 = error)
                 use crate::vrf::VrfVerifyRequest;
-
                 // Status codes specific to VRF_VERIFY
                 const OK: u64 = 0;
                 const ERR_TYPE: u64 = 1; // wrong TLV type
@@ -3654,7 +3648,6 @@ impl IVMHost for DefaultHost {
                 use blstrs::{Bls12, G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
                 use group::{Curve, Group as _, prime::PrimeCurveAffine};
                 use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
-
                 fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
                     if bytes.len() != 48 {
                         return None;
@@ -4042,7 +4035,6 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM => {
                 use iroha_primitives::numeric_abi::MAX_QUANTITY_ENVELOPE_BYTES_V1;
-
                 // The two complete opaque inputs are snapshotted and validated
                 // before any public result allocation occurs.
                 let value =
@@ -4847,7 +4839,6 @@ mod tests {
     use iroha_data_model::name::MAX_NAME_BYTES;
     use iroha_data_model::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
     use iroha_data_model::zk::BackendTag;
-
     fn test_tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
         out.extend_from_slice(&(kind as u16).to_be_bytes());
@@ -4928,7 +4919,6 @@ mod tests {
     ) -> crate::vrf::VrfVerifyRequest {
         use blstrs::{G1Projective, G2Projective, Scalar};
         use group::{Curve as _, Group as _};
-
         let secret = Scalar::from(7_u64);
         let public_key = (G1Projective::generator() * secret)
             .to_affine()
@@ -7078,6 +7068,5 @@ mod tests {
             }
         }
     }
-
     mod quantity_pointer_tests;
 }

@@ -1,9 +1,6 @@
 //! Ensure citizen service discipline fields roundtrip from user to actual config.
-
 use std::collections::BTreeMap;
-
 use iroha_config::parameters::{defaults, user};
-
 #[test]
 fn citizen_service_defaults_and_overrides_parse() {
     let default_actual = user::Governance::default().parse();
@@ -19,7 +16,6 @@ fn citizen_service_defaults_and_overrides_parse() {
         default_actual.citizen_service.free_declines_per_epoch,
         defaults::governance::citizen_service::FREE_DECLINES_PER_EPOCH
     );
-
     let mut role_multipliers = BTreeMap::new();
     role_multipliers.insert("council".to_string(), 3);
     let user_cfg = user::Governance {

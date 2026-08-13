@@ -1,7 +1,5 @@
 //! Inspect a Norito-framed genesis block for validator and `PoP` registrations.
-
 use std::{env, path::Path};
-
 use eyre::{Result, eyre};
 use iroha_data_model::{
     isi::{
@@ -10,14 +8,12 @@ use iroha_data_model::{
     },
     transaction::Executable,
 };
-
 fn main() -> Result<()> {
     iroha_genesis::init_instruction_registry();
     let path = env::args()
         .nth(1)
         .ok_or_else(|| eyre!("usage: genesis_inspect <genesis.nrt>"))?;
     let block = iroha_genesis::read_signed_genesis(Path::new(&path))?;
-
     let count_matching = |matches: fn(&iroha_data_model::isi::InstructionBox) -> bool| {
         block
             .external_transactions()
@@ -47,7 +43,6 @@ fn main() -> Result<()> {
             .downcast_ref::<ActivatePublicLaneValidator>()
             .is_some()
     });
-
     println!(
         "event=genesis_inspect peers_with_pop={count}",
         count = peers
@@ -68,7 +63,6 @@ fn main() -> Result<()> {
             }
         }
     }
-
     println!(
         "event=genesis_inspect validators={count}",
         count = validators
@@ -92,7 +86,6 @@ fn main() -> Result<()> {
             }
         }
     }
-
     println!(
         "event=genesis_inspect activations={count}",
         count = activations
@@ -114,6 +107,5 @@ fn main() -> Result<()> {
             }
         }
     }
-
     Ok(())
 }

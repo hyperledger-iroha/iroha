@@ -16,7 +16,6 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
         let accepted_hash = Hash::new(b"accepted native upload bootstrap");
         let existing_replay_hash = Hash::new(b"existing authority bootstrap replay");
         let decorated_hash = Hash::new(b"decorated authority bootstrap");
-
         let make_bootstrap_transaction =
             |authority: &AccountId,
              keypair: &KeyPair,
@@ -89,7 +88,6 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             );
             state.install_lane_manifests(&registry);
         };
-
         let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -104,7 +102,6 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
         pipeline.parallel_apply = parallel_apply;
         pipeline.workers = 2;
         state.set_pipeline(pipeline.clone());
-
         let (_genesis_handle, genesis_time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let genesis = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
             .chain(0, None)
@@ -119,7 +116,6 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             .commit()
             .expect("commit empty genesis block");
         let committed_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
-
         let accepted = make_bootstrap_transaction(
             &authority,
             &authority_keypair,
@@ -174,7 +170,6 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             .commit()
             .expect("commit deployment bootstrap block");
         let committed_deployment = valid_deployment.commit_unchecked().unpack(|_| {});
-
         let existing_replay = make_bootstrap_transaction(
             &authority,
             &authority_keypair,
@@ -231,7 +226,6 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
             .commit()
             .expect("commit block containing rejected bootstraps");
         let committed_rejected = valid_rejected.commit_unchecked().unpack(|_| {});
-
         let mut replay_state = State::new_with_chain_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -251,7 +245,6 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
                 .commit()
                 .expect("committed bootstrap chain must replay");
         }
-
         let replay_view = replay_state.view();
         let replay_world = replay_view.world();
         replay_world
@@ -281,7 +274,6 @@ fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay
         );
     }
 }
-
 #[tokio::test]
 async fn genesis_public_key_is_checked() {
     // Predefined world state
@@ -297,13 +289,11 @@ async fn genesis_public_key_is_checked() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
     install_test_lane_manifests(&state);
-
     // Creating an instruction
     let isi = Log::new(
         iroha_data_model::Level::DEBUG,
         "instruction itself doesn't matter here".to_string(),
     );
-
     // Create genesis transaction
     // Sign with `genesis_wrong_key` as peer which has incorrect genesis key pair
     // Bypass `accept_genesis` check to allow signing with wrong key
@@ -314,7 +304,6 @@ async fn genesis_public_key_is_checked() {
     .with_instructions([isi])
     .sign(genesis_wrong_key.private_key());
     let tx = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-
     // Create genesis block
     let transactions = vec![tx];
     let topology =
@@ -324,13 +313,11 @@ async fn genesis_public_key_is_checked() {
         .with_confidential_features(test_confidential_features(&state, 1))
         .sign(genesis_correct_key.private_key())
         .unpack(|_| {});
-
     let mut state_block = state.block(unverified_block.header);
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
     state_block.commit().unwrap();
-
     // Validate genesis block
     // Use correct genesis key and check if transaction is rejected
     let block: SignedBlock = valid_block.into();
@@ -346,14 +333,12 @@ async fn genesis_public_key_is_checked() {
     .unpack(|_| {})
     .unwrap_err();
     state_block.commit().unwrap();
-
     // The first transaction should be rejected
     assert_eq!(
         error.as_ref(),
         &BlockValidationError::InvalidGenesis(InvalidGenesisError::UnexpectedAuthority)
     );
 }
-
 #[tokio::test]
 async fn genesis_asset_definition_registration_is_not_domain_gated() {
     let genesis_key_pair = crate::block::checked_keypair();
@@ -362,12 +347,10 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
     let wonderland_domain_id: DomainId =
         DomainId::try_new("wonderland", "universal").expect("Valid domain id");
     let alice_account_id = AccountId::new(alice_key_pair.public_key().clone());
-
     let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
     let wonderland_domain = Domain::new(wonderland_domain_id.clone()).build(&alice_account_id);
     let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
     let alice_account = Account::new(alice_account_id.clone()).build(&alice_account_id);
-
     let world = World::with(
         [genesis_domain, wonderland_domain],
         [genesis_account, alice_account],
@@ -377,7 +360,6 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
     install_test_lane_manifests(&state);
-
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("valid domain id"),
         "xor".parse().expect("valid asset name"),
@@ -388,7 +370,6 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
         iroha_data_model::asset::AssetBalancePolicy::Global,
         None,
     ));
-
     let tx = TransactionBuilder::new_genesis(
         genesis_account_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -401,7 +382,6 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
         test_confidential_features(&state, 1),
         None,
     );
-
     let topology = crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
     let mut state_block = state.block(block.header());
     let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
@@ -416,25 +396,20 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
     .expect("genesis asset-definition registration should not require domain-owner authorization");
     state_block.commit().unwrap();
 }
-
 #[tokio::test]
 async fn genesis_domain_registration_bootstraps_domain_name_lease() {
     let genesis_key_pair = crate::block::checked_keypair();
     let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
     let wonderland_domain_id: DomainId =
         DomainId::try_new("wonderland", "universal").expect("valid domain id");
-
     let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
     let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
-
     let world = World::with([genesis_domain], [genesis_account], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
     install_test_lane_manifests(&state);
-
     let instruction = Register::domain(Domain::new(wonderland_domain_id.clone()));
-
     let tx = TransactionBuilder::new_genesis(
         genesis_account_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -447,7 +422,6 @@ async fn genesis_domain_registration_bootstraps_domain_name_lease() {
         test_confidential_features(&state, 1),
         None,
     );
-
     let topology = crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
     let mut state_block = state.block(block.header());
     let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
@@ -461,7 +435,6 @@ async fn genesis_domain_registration_bootstraps_domain_name_lease() {
     .unpack(|_| {})
     .expect("genesis domain registration should bootstrap the SNS lease");
     state_block.commit().unwrap();
-
     let view = state.view();
     assert_eq!(
         crate::sns::active_domain_owner(view.world(), &wonderland_domain_id, 0),

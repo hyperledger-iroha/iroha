@@ -18,7 +18,6 @@ impl Queue {
             1,
         )
     }
-
     /// Reauthenticate multiple canonical carriers while preserving each carrier's
     /// independent execution-entrypoint bound and one global semantic preflight.
     ///
@@ -72,7 +71,6 @@ impl Queue {
         }
         self.commit_prepared_lane_reservation_carriers(prepared_carriers, anchored_carrier_bound)
     }
-
     fn validate_lane_queue_carrier_cleanup_batch_bounds(
         &self,
         carrier_reservation_counts: &[usize],
@@ -104,7 +102,6 @@ impl Queue {
         }
         Ok(aggregate)
     }
-
     #[cfg(test)]
     fn commit_prepared_lane_reservation_groups(
         &self,
@@ -112,7 +109,6 @@ impl Queue {
     ) -> Result<LaneQueueCarrierCleanupResult, LaneQueueReservationError> {
         self.commit_prepared_lane_reservation_carriers(vec![groups], 1)
     }
-
     fn commit_prepared_lane_reservation_carriers(
         &self,
         carriers: Vec<Vec<PreparedLaneQueueCarrierCleanupGroup>>,
@@ -143,11 +139,9 @@ impl Queue {
                     "canonical Queue cleanup group count overflowed".to_owned(),
                 )
             })?;
-
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
-
         let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
         let queue_guard = self.push_remove_lock.lock();
         if self.transaction_selection_durability_faulted() {
@@ -248,7 +242,6 @@ impl Queue {
         drop(store);
         drop(queue_guard);
         self.preflight_lane_reservation_plan_journal(&journal_preflight)?;
-
         let mut finalized = 0usize;
         let mut terminal_evidence = Vec::new();
         terminal_evidence

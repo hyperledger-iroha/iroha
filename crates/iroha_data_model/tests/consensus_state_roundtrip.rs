@@ -1,6 +1,5 @@
 //! Encode/decode roundtrip tests for consensus persistence records.
 use core::convert::TryFrom;
-
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     block::{
@@ -11,7 +10,6 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use norito::codec::{Decode, Encode};
-
 fn sample_hash(seed: u8) -> Hash {
     let mut bytes = [0u8; Hash::LENGTH];
     for (idx, byte) in bytes.iter_mut().enumerate() {
@@ -20,11 +18,9 @@ fn sample_hash(seed: u8) -> Hash {
     }
     Hash::prehashed(bytes)
 }
-
 fn sample_block_hash(seed: u8) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(sample_hash(seed))
 }
-
 fn assert_roundtrip<T>(value: &T)
 where
     T: Encode + Decode + PartialEq + core::fmt::Debug,
@@ -35,7 +31,6 @@ where
     assert!(cursor.is_empty(), "decode must consume all bytes");
     assert_eq!(decoded, *value, "roundtrip must preserve value");
 }
-
 fn checked_random_peer_id() -> PeerId {
     PeerId::from(
         KeyPair::try_random()
@@ -44,7 +39,6 @@ fn checked_random_peer_id() -> PeerId {
             .clone(),
     )
 }
-
 #[test]
 fn qc_roundtrip() {
     let validator_set = vec![checked_random_peer_id(), checked_random_peer_id()];
@@ -70,7 +64,6 @@ fn qc_roundtrip() {
     };
     assert_roundtrip(&qc);
 }
-
 #[test]
 fn vrf_participant_record_roundtrip_variants() {
     let variants = [
@@ -107,12 +100,10 @@ fn vrf_participant_record_roundtrip_variants() {
             last_updated_height: 40,
         },
     ];
-
     for record in &variants {
         assert_roundtrip(record);
     }
 }
-
 #[test]
 fn vrf_epoch_record_roundtrip() {
     let participants = vec![
@@ -157,7 +148,6 @@ fn vrf_epoch_record_roundtrip() {
     };
     assert_roundtrip(&record);
 }
-
 #[test]
 fn vrf_epoch_record_empty_sets_roundtrip() {
     let record = VrfEpochRecord {

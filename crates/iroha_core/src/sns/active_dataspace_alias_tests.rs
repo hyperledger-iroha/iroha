@@ -1,19 +1,15 @@
 // Focused reverse dataspace-alias resolution regressions.
-
 use super::*;
-
 #[test]
 fn accepts_static_mapping_without_active_sns_record() {
     let catalog = dataspace_catalog();
     let world = World::default();
-
     assert_eq!(
         resolve_active_dataspace_id_by_alias(&world.view(), &catalog, "banking", 50)
             .expect("static mapping"),
         DataSpaceId::new(7)
     );
 }
-
 #[test]
 fn rejects_multiple_dynamic_names_without_retaining_the_complete_alias_set() {
     let catalog = dataspace_catalog();
@@ -44,7 +40,6 @@ fn rejects_multiple_dynamic_names_without_retaining_the_complete_alias_set() {
             .smart_contract_state_mut_for_testing()
             .insert(record_storage_key(&selector), record.encode());
     }
-
     let error = resolve_active_dataspace_alias_by_id(&world.view(), &catalog, shared_id, 50)
         .expect_err("one id must not select between multiple active names");
     assert!(

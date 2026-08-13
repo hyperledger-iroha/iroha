@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Localnet cross-dataspace atomic swap regression test.
-
 use super::localnet_npos::npos_override_transactions;
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -12,7 +10,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::{StreamExt, future::try_join_all};
 use integration_tests::sandbox;
@@ -95,7 +92,6 @@ use tokio::{
     time::{sleep, timeout},
 };
 use toml::{Table, Value as TomlValue};
-
 const NEXUS_ALIAS: &str = "universal";
 const DS1_ALIAS: &str = "ds1";
 const DS2_ALIAS: &str = "ds2";
@@ -8184,7 +8180,6 @@ mod tests {
     #[test]
     fn bounded_kura_copy_rejects_source_and_destination_symlinks() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("temporary Kura copy root");
         let source = temp.path().join("source");
         let destination = temp.path().join("destination");

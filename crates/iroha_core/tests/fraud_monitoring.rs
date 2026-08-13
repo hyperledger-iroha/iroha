@@ -1,8 +1,6 @@
 //! Fraud monitoring admission tests ensure configuration knobs gate transaction acceptance.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use std::{borrow::Cow, str::FromStr, sync::Arc, time::Duration};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::parameters::actual::{FraudAttester, FraudMonitoring, FraudRiskBand};
 use iroha_core::{
@@ -28,21 +26,17 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 use norito::codec::Encode;
-
 fn checked_random_fraud_monitoring_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked fraud monitoring keypair")
 }
-
 #[test]
 fn fraud_monitoring_fixture_uses_checked_randomness() {
     let key_pair = checked_random_fraud_monitoring_keypair();
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
-
 fn build_state() -> (State, NetworkId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let key_pair = checked_random_fraud_monitoring_keypair();
     let (public_key, _) = key_pair.clone().into_parts();
     let domain_id: DomainId =
@@ -51,7 +45,6 @@ fn build_state() -> (State, NetworkId, AccountId, KeyPair) {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-
     let chain_id = ChainId::from("fraud-monitor-chain");
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id.clone());
     let network_id = *state.network_id_ref();
@@ -59,14 +52,11 @@ fn build_state() -> (State, NetworkId, AccountId, KeyPair) {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-
     (state, network_id, account_id, key_pair)
 }
-
 fn build_header() -> BlockHeader {
     BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
 }
-
 fn make_transaction(
     network_id: &NetworkId,
     authority: &AccountId,
@@ -83,15 +73,12 @@ fn make_transaction(
     .sign(key_pair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(tx))
 }
-
 fn metadata_key(key: &str) -> Name {
     Name::from_str(key).expect("static metadata key")
 }
-
 fn checked_signature_of<T: Encode>(private_key: &PrivateKey, payload: &T) -> SignatureOf<T> {
     SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
-
 fn insert_base_metadata(
     metadata: &mut Metadata,
     band: &str,
@@ -110,7 +97,6 @@ fn insert_base_metadata(
         Json::new(latency_ms),
     );
 }
-
 fn build_attested_metadata(
     band: &str,
     score_bps: u16,
@@ -127,7 +113,6 @@ fn build_attested_metadata(
         tenant,
         latency_ms,
     );
-
     let parts = FraudAssessmentParts {
         query_id: [0xAB; 32],
         engine_id: engine_id.to_string(),
@@ -143,14 +128,12 @@ fn build_attested_metadata(
     let signature_bytes = raw_signature.payload().to_vec();
     let mut signed_assessment = unsigned.clone();
     signed_assessment.signature = Some(signature_bytes);
-
     let envelope_bytes = signed_assessment.encode();
     let envelope_b64 = BASE64_STANDARD.encode(envelope_bytes);
     metadata.insert(
         metadata_key("fraud_assessment_envelope"),
         Json::new(envelope_b64),
     );
-
     let unsigned_bytes = unsigned.encode();
     let digest_bytes: [u8; 32] = Hash::new(&unsigned_bytes).into();
     let digest_hex = hex::encode_upper(digest_bytes);
@@ -158,37 +141,30 @@ fn build_attested_metadata(
         metadata_key("fraud_assessment_digest"),
         Json::new(digest_hex),
     );
-
     metadata
 }
-
 #[test]
 fn admission_allows_when_fraud_disabled() {
     let (mut state, chain_id, authority, key_pair) = build_state();
-
     let cfg = FraudMonitoring {
         enabled: false,
         required_minimum_band: Some(FraudRiskBand::Medium),
         ..Default::default()
     };
     state.set_fraud_monitoring(cfg);
-
     let tx = make_transaction(&chain_id, &authority, &key_pair, Metadata::default());
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-
     let (_, result) = block.validate_transaction(tx, &mut cache);
     assert!(
         result.is_ok(),
         "disabled fraud monitoring should permit tx: {result:?}"
     );
 }
-
 #[test]
 fn admission_rejects_missing_assessment_when_required() {
     let (mut state, chain_id, authority, key_pair) = build_state();
-
     let cfg = FraudMonitoring {
         enabled: true,
         required_minimum_band: Some(FraudRiskBand::High),
@@ -196,12 +172,10 @@ fn admission_rejects_missing_assessment_when_required() {
         ..Default::default()
     };
     state.set_fraud_monitoring(cfg);
-
     let tx = make_transaction(&chain_id, &authority, &key_pair, Metadata::default());
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-
     let (_, result) = block.validate_transaction(tx, &mut cache);
     let err = result.expect_err("missing assessment must reject");
     match err {
@@ -214,11 +188,9 @@ fn admission_rejects_missing_assessment_when_required() {
         other => panic!("unexpected rejection reason: {other:?}"),
     }
 }
-
 #[test]
 fn block_pipeline_rejects_missing_assessment() {
     let (mut state, chain_id, authority, key_pair) = build_state();
-
     let cfg = FraudMonitoring {
         enabled: true,
         required_minimum_band: Some(FraudRiskBand::High),
@@ -226,7 +198,6 @@ fn block_pipeline_rejects_missing_assessment() {
         ..Default::default()
     };
     state.set_fraud_monitoring(cfg);
-
     let tx = make_transaction(&chain_id, &authority, &key_pair, Metadata::default());
     let genesis_block = SignedBlock::genesis(
         vec![tx.as_ref().clone()],
@@ -257,11 +228,9 @@ fn block_pipeline_rejects_missing_assessment() {
         other => panic!("unexpected rejection reason: {other:?}"),
     }
 }
-
 #[test]
 fn admission_rejects_when_band_insufficient() {
     let (mut state, chain_id, authority, key_pair) = build_state();
-
     let cfg = FraudMonitoring {
         enabled: true,
         required_minimum_band: Some(FraudRiskBand::High),
@@ -269,15 +238,12 @@ fn admission_rejects_when_band_insufficient() {
         ..Default::default()
     };
     state.set_fraud_monitoring(cfg);
-
     let mut metadata = Metadata::default();
     insert_base_metadata(&mut metadata, "medium", 450, "tenant-eu", 85);
-
     let tx = make_transaction(&chain_id, &authority, &key_pair, metadata);
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-
     let (_, result) = block.validate_transaction(tx, &mut cache);
     let err = result.expect_err("insufficient band must reject");
     match err {
@@ -290,11 +256,9 @@ fn admission_rejects_when_band_insufficient() {
         other => panic!("unexpected rejection reason: {other:?}"),
     }
 }
-
 #[test]
 fn admission_allows_when_band_sufficient() {
     let (mut state, chain_id, authority, key_pair) = build_state();
-
     let cfg = FraudMonitoring {
         enabled: true,
         required_minimum_band: Some(FraudRiskBand::Medium),
@@ -302,26 +266,21 @@ fn admission_allows_when_band_sufficient() {
         ..Default::default()
     };
     state.set_fraud_monitoring(cfg);
-
     let mut metadata = Metadata::default();
     insert_base_metadata(&mut metadata, "high", 6_800, "tenant-eu", 92);
-
     let tx = make_transaction(&chain_id, &authority, &key_pair, metadata);
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-
     let (_, result) = block.validate_transaction(tx, &mut cache);
     assert!(
         result.is_ok(),
         "sufficient band should permit tx: {result:?}"
     );
 }
-
 #[test]
 fn admission_rejects_missing_attestation_when_required() {
     let (mut state, chain_id, authority, key_pair) = build_state();
-
     let attester = checked_random_fraud_monitoring_keypair();
     let (public_key, _) = attester.clone().into_parts();
     let cfg = FraudMonitoring {
@@ -335,15 +294,12 @@ fn admission_rejects_missing_attestation_when_required() {
         ..Default::default()
     };
     state.set_fraud_monitoring(cfg);
-
     let mut metadata = Metadata::default();
     insert_base_metadata(&mut metadata, "high", 6_800, "tenant-eu", 64);
-
     let tx = make_transaction(&chain_id, &authority, &key_pair, metadata);
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-
     let (_, result) = block.validate_transaction(tx, &mut cache);
     let err = result.expect_err("attestation metadata must be required");
     match err {
@@ -356,11 +312,9 @@ fn admission_rejects_missing_attestation_when_required() {
         other => panic!("unexpected rejection reason: {other:?}"),
     }
 }
-
 #[test]
 fn admission_rejects_attestation_signature_mismatch() {
     let (mut state, chain_id, authority, key_pair) = build_state();
-
     let attester = checked_random_fraud_monitoring_keypair();
     let (public_key, _) = attester.clone().into_parts();
     let cfg = FraudMonitoring {
@@ -374,7 +328,6 @@ fn admission_rejects_attestation_signature_mismatch() {
         ..Default::default()
     };
     state.set_fraud_monitoring(cfg);
-
     let mut metadata = build_attested_metadata(
         "high",
         6_600,
@@ -383,7 +336,6 @@ fn admission_rejects_attestation_signature_mismatch() {
         "risk-engine-eu1",
         &attester,
     );
-
     let envelope_key = metadata_key("fraud_assessment_envelope");
     let envelope_b64 = metadata
         .get(envelope_key.as_ref())
@@ -403,12 +355,10 @@ fn admission_rejects_attestation_signature_mismatch() {
     let tampered_bytes = decoded.encode();
     let tampered_b64 = BASE64_STANDARD.encode(tampered_bytes);
     metadata.insert(envelope_key, Json::new(tampered_b64));
-
     let tx = make_transaction(&chain_id, &authority, &key_pair, metadata);
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-
     let (_, result) = block.validate_transaction(tx, &mut cache);
     let err = result.expect_err("tampered signature must reject");
     match err {
@@ -418,11 +368,9 @@ fn admission_rejects_attestation_signature_mismatch() {
         other => panic!("unexpected rejection reason: {other:?}"),
     }
 }
-
 #[test]
 fn admission_allows_with_valid_attestation() {
     let (mut state, chain_id, authority, key_pair) = build_state();
-
     let attester = checked_random_fraud_monitoring_keypair();
     let (public_key, _) = attester.clone().into_parts();
     let cfg = FraudMonitoring {
@@ -436,7 +384,6 @@ fn admission_allows_with_valid_attestation() {
         ..Default::default()
     };
     state.set_fraud_monitoring(cfg);
-
     let metadata = build_attested_metadata(
         "critical",
         9_100,
@@ -445,12 +392,10 @@ fn admission_allows_with_valid_attestation() {
         "risk-engine-eu1",
         &attester,
     );
-
     let tx = make_transaction(&chain_id, &authority, &key_pair, metadata);
     let header = build_header();
     let mut block = state.block(header);
     let mut cache = IvmCache::new();
-
     let (_, result) = block.validate_transaction(tx, &mut cache);
     assert!(result.is_ok(), "valid attestation must be accepted");
 }

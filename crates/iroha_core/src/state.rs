@@ -14,7 +14,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::actual::{
     LaneConfig, LaneConfigEntry, LaneRoutingPolicy, NexusFeeSettlementMode,
@@ -225,7 +224,6 @@ pub use range_bounds::{
 use sha2::{Digest as Sha2Digest, Sha256};
 pub use storage_transactions::TransactionsReadOnly;
 use thiserror::Error as ThisError;
-
 const VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE_PREFIX: &str = "VerifiedLaneRelays/";
 const MERGE_EXECUTION_BATCH_MARKER_PREFIX: &str = "merge_execution_batch_applied_";
 const MERGE_EXECUTION_LANE_MARKER_PREFIX: &str = "merge_execution_lane_applied_";
@@ -337,7 +335,6 @@ use crate::{
     },
     sumeragi::stake_snapshot::CommitStakeSnapshot,
 };
-
 mod bounded_authority;
 mod committed_hash_journal;
 mod tiered;
@@ -345,7 +342,6 @@ use hex;
 use ivm::IVM;
 pub(crate) use tiered::TieredStateBackend;
 use tiered::{TieredKeyHandle, TieredSnapshotDiff, TieredSnapshotPayload};
-
 #[cfg(any(test, feature = "bench"))]
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("state fixture key generation should succeed")
@@ -425,9 +421,7 @@ use crate::{
         TransactionsBlock, TransactionsBlockError, TransactionsStorage, TransactionsView,
     },
 };
-
 pub(crate) mod storage_transactions;
-
 // Covers the inclusive 1 MiB canonical Kotodama argument-record boundary,
 // whose conservative decode/materialization escrow is a little over 2 Mi gas,
 // while retaining headroom for the entrypoint wrapper and contract body.
@@ -8255,7 +8249,6 @@ impl ConfidentialTreeProfile {
 include!("state/zk_asset_state.rs");
 #[cfg(test)]
 mod zk_asset_state_tests;
-
 impl json::JsonDeserialize for ZkAssetState {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut visitor = json::MapVisitor::new(parser)?;
@@ -9925,9 +9918,7 @@ fn build_validation_fee_plain_electorate_snapshot<'a>(
 #[cfg(test)]
 mod validation_fee_plain_electorate_snapshot_tests {
     use iroha_crypto::{Algorithm, KeyPair};
-
     use super::*;
-
     fn account(seed: u8) -> AccountId {
         let key_pair =
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair");
@@ -10103,12 +10094,9 @@ mod validation_fee_plain_electorate_snapshot_tests {
 #[cfg(feature = "json")]
 mod governance_locks_map_json {
     use std::collections::BTreeMap;
-
     use iroha_data_model::account::AccountId;
     use norito::json::{self, JsonSerialize as JsonSerializeTrait, MapVisitor, Parser};
-
     use super::GovernanceLockRecord;
-
     pub fn serialize(locks: &BTreeMap<AccountId, GovernanceLockRecord>, out: &mut String) {
         out.push('{');
         let mut first = true;
@@ -10174,12 +10162,9 @@ pub struct GovernanceSlashLedger {
 #[cfg(feature = "json")]
 mod governance_slash_map_json {
     use std::collections::BTreeMap;
-
     use iroha_data_model::account::AccountId;
     use norito::json::{self, JsonSerialize as JsonSerializeTrait, MapVisitor, Parser};
-
     use super::GovernanceSlashEntry;
-
     pub fn serialize(slashes: &BTreeMap<AccountId, GovernanceSlashEntry>, out: &mut String) {
         out.push('{');
         let mut first = true;
@@ -10279,7 +10264,6 @@ impl PipelineParallelism {
 }
 #[cfg(test)]
 mod pipeline_parallelism_tests;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StatelessValidationContext {
     network_id: iroha_data_model::NetworkId,
@@ -10769,7 +10753,6 @@ impl ViewLockContentionLog {
 mod view_lock_contention_log_tests {
     use super::ViewLockContentionLog;
     use std::time::{Duration, Instant};
-
     #[test]
     fn contention_log_suppresses_within_cooldown_and_reports_aggregate() {
         let mut log = ViewLockContentionLog::default();
@@ -13010,13 +12993,11 @@ pub(crate) fn trusted_world_commit_qc_for_block(
 #[cfg(test)]
 mod historical_commit_qc_tests {
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         block::{BlockHeader, builder::BlockBuilder},
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
     };
-
     use super::{State, World, trusted_world_commit_qc_for_block};
     use crate::{
         query::store::LiveQueryStore,
@@ -13765,7 +13746,6 @@ impl StakeSnapshot for StateView<'_> {
 #[cfg(test)]
 mod stake_snapshot_tests {
     use core::num::NonZeroU32;
-
     use iroha_config::parameters::actual::{LaneConfig as DerivedLaneConfig, LaneValidatorMode};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
@@ -13775,9 +13755,7 @@ mod stake_snapshot_tests {
         nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
     };
     use iroha_primitives::unique_vec::UniqueVec;
-
     use super::*;
-
     fn seed_consensus_key(
         world_block: &mut WorldBlock<'_>,
         peer: &PeerId,
@@ -15699,13 +15677,10 @@ mod stake_snapshot_tests {
 }
 #[cfg(test)]
 mod accounts_snapshot_tests;
-
 #[cfg(test)]
 mod sumeragi_timing_tests {
     use std::{sync::Arc, time::Duration};
-
     use super::*;
-
     #[test]
     fn v2_block_cadence_reads_the_signed_genesis_value() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -15720,14 +15695,12 @@ mod sumeragi_timing_tests {
 }
 #[cfg(test)]
 mod state_lock_order_tests;
-
 #[cfg(test)]
 mod storage_migration_tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         sync::Arc,
     };
-
     use iroha_crypto::Hash;
     use iroha_data_model::{
         account::{
@@ -15739,9 +15712,7 @@ mod storage_migration_tests {
         name::Name,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
     };
-
     use super::*;
-
     fn alias_in_domain(domain_id: &DomainId, label: Name) -> AccountAlias {
         AccountAlias::new(
             label,
@@ -16364,11 +16335,8 @@ mod storage_migration_tests {
 #[cfg(test)]
 mod custom_parameter_tests {
     use core::str::FromStr;
-
     use iroha_primitives::json::Json;
-
     use super::*;
-
     fn params_with_gas_limit(payload: Option<Json>) -> Parameters {
         let mut params = Parameters::default();
         if let Some(payload) = payload {
@@ -16858,7 +16826,6 @@ impl DetachedStateTransactionDelta {
         context: DetachedMergeContext,
     ) -> TransactionResultInner {
         use iroha_data_model::transaction::error::TransactionRejectionReason;
-
         let (source_id, destination, amount) = self.single_transfer_delta().ok_or_else(|| {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
                 "detached delta must contain exactly one transparent transfer".to_owned(),
@@ -18281,9 +18248,7 @@ mod confidential_policy_transition_index_tests {
         AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
     };
     use iroha_test_samples::ALICE_ID;
-
     use super::*;
-
     fn definition_with_policy(
         name: &str,
         policy: AssetConfidentialPolicy,
@@ -21244,10 +21209,8 @@ mod bootle_lantern_policy_world_read_tests {
         PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
         PrivacyParameterIdV1, PrivacyPolicyIdV1,
     };
-
     use super::*;
     use crate::privacy_state::{PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1};
-
     fn policy_fixture_v1() -> BootleLanternIssuerPolicyV1 {
         let first_column = core::array::from_fn(|block| BootleLanternPolynomialV1 {
             coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
@@ -22332,7 +22295,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         current_slot: u64,
     ) -> Option<AxtPolicySnapshot> {
         use std::collections::btree_map::Entry;
-
         self.axt_current_slot = current_slot;
         self.axt_lane_config = lane_config.clone();
         let existing_policies: BTreeMap<_, _> = self
@@ -35319,7 +35281,6 @@ impl State {
         queue: Option<&crate::queue::Queue>,
     ) -> Result<Vec<SumeragiAutonomousLaneExecution>> {
         use crate::kura::LaneBlockApplicationReceiptArtifactFormat;
-
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
         let mut routes = Self::lane_block_artifact_routes(&lifecycle.nexus)
             .into_iter()
@@ -45202,7 +45163,6 @@ fn lane_topology_diff<'a>(
 static DEFAULT_TEST_IDENTITIES: LazyLock<(iroha_data_model::ChainId, iroha_data_model::NetworkId)> =
     LazyLock::new(|| {
         use iroha_config::{base::read::ConfigReader, parameters::user};
-
         let config_path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
         let reader = ConfigReader::new()
@@ -45264,7 +45224,6 @@ fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<Sumer
 /// Read the per-block gas limit from on-chain parameters, falling back to defaults on errors.
 pub(crate) fn gas_limit_from_parameters(params: &Parameters) -> u64 {
     use core::str::FromStr;
-
     let name = match iroha_data_model::name::Name::from_str("ivm_gas_limit_per_block") {
         Ok(name) => name,
         Err(error) => {
@@ -45872,7 +45831,6 @@ fn collect_confidential_transitions(
     }
     transitions.sort_by(|a, b| {
         use ConfidentialRegistryItem::{Pedersen, Poseidon, VerifyingKey};
-
         let rank = |item: &ConfidentialRegistryItem| match item {
             VerifyingKey(_) => 0u8,
             Pedersen(_) => 1,
@@ -46026,7 +45984,6 @@ fn compute_vk_set_hash_from_statuses_at_height(
     height: Option<u64>,
 ) -> Option<[u8; 32]> {
     use iroha_data_model::confidential::ConfidentialStatus;
-
     let mut entries: Vec<_> = world
         .verifying_keys()
         .iter()
@@ -46079,7 +46036,6 @@ fn params_effective(
     height: u64,
 ) -> bool {
     use iroha_data_model::confidential::ConfidentialStatus;
-
     matches!(status, ConfidentialStatus::Active)
         && activation_height.is_none_or(|h| height >= h)
         && withdraw_height.is_none_or(|h| height < h)
@@ -46223,7 +46179,6 @@ pub(crate) fn is_retired_sccp_registry_parameter(
 pub use iroha_data_model::bridge::SccpGovernedLaneV1;
 /// Consensus-owned SCCP registry wire type from the data model.
 pub use iroha_data_model::bridge::SccpRegistryV1 as SccpOnChainRegistryV1;
-
 #[cfg(test)]
 static SCCP_REGISTRY_DECODE_COUNT: AtomicUsize = AtomicUsize::new(0);
 fn canonicalize_sccp_registry(registry: &mut SccpOnChainRegistryV1) {
@@ -46242,7 +46197,6 @@ pub(crate) fn sccp_local_sora_network_for_chain_id(
     chain_id: &iroha_data_model::ChainId,
 ) -> Option<iroha_data_model::bridge::SccpNetworkV1> {
     use iroha_data_model::bridge::SccpNetworkV1;
-
     match chain_id.as_str() {
         iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1 => Some(SccpNetworkV1::SoraTaira),
         _ => None,
@@ -53015,7 +52969,6 @@ impl StateTransaction<'_, '_> {
 }
 #[cfg(test)]
 mod fragment_counter_tests;
-
 #[cfg(test)]
 mod state_view_lock_tests {
     use std::{
@@ -53024,10 +52977,8 @@ mod state_view_lock_tests {
         thread,
         time::Duration,
     };
-
     use super::*;
     use crate::kura::Kura;
-
     #[test]
     fn state_view_waits_for_active_view_generation() {
         let kura = Kura::blank_kura_for_testing();
@@ -53111,11 +53062,9 @@ mod state_view_lock_tests {
 }
 #[cfg(all(test, feature = "zk-preverify"))]
 mod state_preverify_backend_admission_tests;
-
 #[cfg(test)]
 mod musubi_replication_shortfall_state_tests {
     use super::*;
-
     #[test]
     fn native_amx_write_set_binds_replication_shortfall_cell() {
         let world = World::default();
@@ -53132,14 +53081,11 @@ mod musubi_replication_shortfall_state_tests {
 #[cfg(all(test, feature = "telemetry"))]
 mod musubi_replication_shortfall_telemetry_tests {
     use std::sync::Arc;
-
     use iroha_data_model::block::BlockHeader;
     use mv::cell::Cell;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore};
-
     fn replication_shortfall_gauge(metrics: &crate::telemetry::Metrics) -> u64 {
         metrics
             .try_to_string()
@@ -53247,10 +53193,8 @@ mod committed_transaction_context_tests {
     use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
     use iroha_logger::Level;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore};
-
     #[test]
     fn committed_transaction_context_uses_canonical_entrypoint_metadata() {
         let state = State::new_for_testing(
@@ -53287,9 +53231,7 @@ mod tiered_snapshot_diff_tests {
         BridgeNativeProofBackendV1, SccpGovernedLaneV1, SccpGovernedRouteV1,
         SccpNativeTrustAnchorV1, SccpRegistryV1, SccpRouteActivationV1,
     };
-
     use crate::query::store::LiveQueryStore;
-
     const SCCP_SNAPSHOT_CHAIN_ID: &str = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1;
     fn authenticated_sccp_archive_kura() -> Arc<Kura> {
         let catalog = LaneCatalog::default();
@@ -53711,7 +53653,6 @@ mod tiered_snapshot_diff_tests {
     }
     fn sample_sccp_inbound() -> (SccpInboundMessageKeyV1, SccpInboundMessageRecordV1) {
         use iroha_data_model::bridge::sccp::{SccpLaneIdV1, SccpNetworkV1};
-
         let key = SccpInboundMessageKeyV1::new(
             SccpLaneIdV1 {
                 source: SccpNetworkV1::BscTestnet,
@@ -53892,7 +53833,6 @@ mod tiered_snapshot_diff_tests {
         SccpGovernedRouteV1,
     ) {
         use iroha_data_model::bridge::SccpNetworkV1;
-
         let (key, mut message, _, mut proof) = sample_sccp_outbound_proof();
         let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
             SccpNetworkV1::EthereumMainnet,
@@ -54011,7 +53951,6 @@ mod tiered_snapshot_diff_tests {
     #[test]
     fn contract_upload_json_keys_are_stable_text_and_reject_trailing_components() {
         use mv::json::JsonKeyCodec;
-
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let code_hash = iroha_crypto::Hash::new(b"stable contract upload json key");
         let upload_key = SmartContractCodeUploadKey::new(authority.clone(), code_hash);
@@ -54650,7 +54589,6 @@ mod tiered_snapshot_diff_tests {
     #[test]
     fn sccp_outbound_api_fixture_insert_is_atomic_and_globally_unique() {
         use iroha_data_model::bridge::sccp::{SccpLaneIdV1, SccpNetworkV1};
-
         let (key, record, index) = sample_sccp_outbound();
         let state = State::new_with_chain(
             World::default(),
@@ -55680,7 +55618,6 @@ mod tiered_snapshot_diff_tests {
     #[test]
     fn sccp_replay_snapshot_rejects_forged_outbound_entries() {
         use iroha_data_model::bridge::{SccpLaneIdV1, SccpNetworkV1};
-
         let (valid_key, valid_record, _) = sample_sccp_outbound();
         let mut malformed_payload = valid_record.clone();
         malformed_payload.payload_bytes[0] ^= 0x7f;
@@ -55837,7 +55774,6 @@ mod tiered_snapshot_diff_tests {
     #[test]
     fn sccp_replay_snapshot_rejects_malformed_inbound_keys() {
         use iroha_data_model::bridge::sccp::{SccpLaneIdV1, SccpNetworkV1};
-
         let (valid_key, record) = sample_sccp_inbound();
         for key in [
             SccpInboundMessageKeyV1 {
@@ -55875,7 +55811,6 @@ mod tiered_snapshot_diff_tests {
     #[test]
     fn sccp_inbound_replay_index_separates_exact_lanes() {
         use iroha_data_model::bridge::sccp::{SccpLaneIdV1, SccpNetworkV1};
-
         let (first, record) = sample_sccp_inbound();
         let second = SccpInboundMessageKeyV1::new(
             SccpLaneIdV1 {
@@ -56287,7 +56222,6 @@ mod tiered_snapshot_diff_tests {
     #[test]
     fn sccp_local_profile_accepts_only_the_exact_taira_chain_id() {
         use iroha_data_model::bridge::SccpNetworkV1;
-
         let taira = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
             .parse()
             .expect("canonical Taira chain id");
@@ -56321,7 +56255,6 @@ mod fastpq_tx_set_hash_tests {
         collections::{BTreeMap, BTreeSet},
         time::Duration,
     };
-
     use iroha_crypto::Hash;
     use iroha_data_model::{
         account::Account,
@@ -56338,7 +56271,6 @@ mod fastpq_tx_set_hash_tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         block::BlockBuilder, kura::Kura, query::store::LiveQueryStore, tx::AcceptedTransaction,
@@ -57883,13 +57815,10 @@ fn replay_blocks_from_kura_range_inner(
 }
 #[cfg(test)]
 mod strict_replay_tests;
-
 #[cfg(test)]
 mod replay_validation_tests;
-
 #[cfg(test)]
 mod permission_cache_tests;
-
 impl StateTransaction<'_, '_> {
     /// Expected confidential feature digest for the current transaction context.
     #[must_use]
@@ -59381,7 +59310,6 @@ impl StateTransaction<'_, '_> {
     }
     fn trigger_args_from_data_event(&self, event: &data_pre::DataEvent) -> Json {
         use data_pre::{AssetEvent, DataEvent, DomainEvent};
-
         let mut payload = norito::json!({
             "kind": "other",
             "op": "none",
@@ -60717,67 +60645,10 @@ pub(crate) struct SnapshotSpaceDirectoryManifestSet {
     pub uaid: UniversalAccountId,
     pub encoded_hex: String,
 }
-
 pub(crate) mod deserialize {
     include!("state/deserialize_core.rs");
     include!("state/deserialize_world.rs");
 }
 include!("state/default_oracle.rs");
-fn default_content_cfg() -> iroha_config::parameters::actual::Content {
-    iroha_config::parameters::actual::Content {
-        max_bundle_bytes: iroha_config::parameters::defaults::content::MAX_BUNDLE_BYTES,
-        max_files: iroha_config::parameters::defaults::content::MAX_FILES,
-        max_path_len: iroha_config::parameters::defaults::content::MAX_PATH_LEN,
-        max_retention_blocks: iroha_config::parameters::defaults::content::MAX_RETENTION_BLOCKS,
-        chunk_size_bytes: iroha_config::parameters::defaults::content::CHUNK_SIZE_BYTES,
-        publish_allow_accounts: Vec::new(),
-        limits: iroha_config::parameters::actual::ContentLimits {
-            max_requests_per_second: nonzero!(
-                iroha_config::parameters::defaults::content::MAX_REQUESTS_PER_SECOND
-            ),
-            request_burst: nonzero!(iroha_config::parameters::defaults::content::REQUEST_BURST),
-            max_egress_bytes_per_second: NonZeroU64::new(u64::from(
-                iroha_config::parameters::defaults::content::MAX_EGRESS_BYTES_PER_SECOND,
-            ))
-            .expect("default egress limit nonzero"),
-            egress_burst_bytes: NonZeroU64::new(
-                iroha_config::parameters::defaults::content::EGRESS_BURST_BYTES,
-            )
-            .expect("default egress burst nonzero"),
-        },
-        default_cache_max_age_secs:
-            iroha_config::parameters::defaults::content::DEFAULT_CACHE_MAX_AGE_SECS,
-        max_cache_max_age_secs: iroha_config::parameters::defaults::content::MAX_CACHE_MAX_AGE_SECS,
-        immutable_bundles: iroha_config::parameters::defaults::content::IMMUTABLE_BUNDLES,
-        default_auth_mode: iroha_data_model::content::ContentAuthMode::Public,
-        slo: iroha_config::parameters::actual::ContentSlo {
-            target_p50_latency_ms: nonzero!(
-                iroha_config::parameters::defaults::content::TARGET_P50_LATENCY_MS
-            ),
-            target_p99_latency_ms: nonzero!(
-                iroha_config::parameters::defaults::content::TARGET_P99_LATENCY_MS
-            ),
-            target_availability_bps: nonzero!(
-                iroha_config::parameters::defaults::content::TARGET_AVAILABILITY_BPS
-            ),
-        },
-        pow: iroha_config::parameters::actual::ContentPow {
-            difficulty_bits: iroha_config::parameters::defaults::content::POW_DIFFICULTY_BITS,
-            header_name: iroha_config::parameters::defaults::content::default_pow_header(),
-        },
-        stripe_layout: iroha_config::parameters::defaults::content::default_stripe_layout(),
-    }
-}
-fn default_fraud_monitoring_cfg() -> iroha_config::parameters::actual::FraudMonitoring {
-    iroha_config::parameters::actual::FraudMonitoring::new(
-        iroha_config::parameters::defaults::fraud_monitoring::ENABLED,
-        Vec::new(),
-        iroha_config::parameters::defaults::fraud_monitoring::CONNECT_TIMEOUT,
-        iroha_config::parameters::defaults::fraud_monitoring::REQUEST_TIMEOUT,
-        iroha_config::parameters::defaults::fraud_monitoring::MISSING_ASSESSMENT_GRACE_SECS,
-        None,
-        Vec::new(),
-    )
-}
 #[cfg(test)]
 mod tests;

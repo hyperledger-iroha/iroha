@@ -1,7 +1,5 @@
 //! One-shot local helper for refreshing execution-captured FASTPQ measurement fixtures.
-
 use std::env;
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use fastpq_prover::{PublicInputs, transition_batch_to_model};
 use iroha_core::{
@@ -14,14 +12,12 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::prelude::*;
 use nonzero_ext::nonzero;
-
 fn account(label: &str) -> AccountId {
     let seed: [u8; Hash::LENGTH] = Hash::new(label).into();
     let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::default())
         .expect("deterministic fixture account key");
     AccountId::new(keypair.public_key().clone())
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
     let dsid: u64 = args.next().ok_or("missing source dataspace id")?.parse()?;
@@ -35,7 +31,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let entry_hash = Hash::prehashed(entry_hash);
     let alice_id = account("pkdeploy-fastpq-fixture-alice");
     let bob_id = account("pkdeploy-fastpq-fixture-bob");
-
     let domain_id = DomainId::try_new("wonderland", "universal")?;
     let domain = Domain::new(domain_id.clone()).build(&alice_id);
     let alice_account = Account::new(alice_id.clone()).build(&alice_id);
@@ -71,7 +66,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Transfer::asset_quantity(alice_asset_id, 75_u32, bob_id)
         .execute(&alice_id, &mut transaction)?;
     transaction.apply();
-
     let mut captured = block.drain_transfer_transcripts();
     let transcripts = captured
         .remove(&entry_hash)

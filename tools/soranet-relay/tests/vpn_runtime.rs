@@ -2,7 +2,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-
 use iroha_data_model::soranet::vpn::{
     VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1,
 };
@@ -15,7 +14,6 @@ use soranet_relay::{
     },
 };
 use tokio::io::{AsyncWriteExt, duplex};
-
 #[tokio::test]
 async fn frame_io_roundtrip_validates_payload() {
     let overlay = VpnOverlay::from_config(VpnConfig::default());
@@ -36,16 +34,13 @@ async fn frame_io_roundtrip_validates_payload() {
     };
     let padded = overlay.pad_cell(cell).expect("padded frame");
     let (mut writer, mut reader) = duplex(2 * iroha_data_model::soranet::vpn::VPN_CELL_LEN);
-
     let write = write_frame(&mut writer, &padded);
     let read = read_frame(&overlay, &mut reader);
     let (_, parsed) = tokio::join!(write, read);
-
     let parsed = parsed.expect("parsed frame");
     assert_eq!(parsed.payload, vec![0x11; 8]);
     assert_eq!(parsed.header.flags.bits(), VpnCellFlagsV1::REQUIRE_ACK);
 }
-
 #[tokio::test]
 async fn frame_io_rejects_invalid_class() {
     let overlay = VpnOverlay::from_config(VpnConfig::default());
@@ -69,7 +64,6 @@ async fn frame_io_rejects_invalid_class() {
     bad_bytes[1] = 9;
     let (mut writer, mut reader) = duplex(2 * iroha_data_model::soranet::vpn::VPN_CELL_LEN);
     writer.write_all(&bad_bytes).await.expect("written");
-
     let err = read_frame(&overlay, &mut reader)
         .await
         .expect_err("invalid class should fail");
@@ -78,7 +72,6 @@ async fn frame_io_rejects_invalid_class() {
         other => panic!("unexpected error {other:?}"),
     }
 }
-
 #[tokio::test]
 async fn scheduler_applies_pacing_without_cover() {
     let mut cfg = VpnConfig::default();
@@ -120,7 +113,6 @@ async fn scheduler_applies_pacing_without_cover() {
             .windows(2)
             .all(|pair| pair[1].deadline >= pair[0].deadline)
     );
-
     let (mut writer, mut reader) = duplex(2 * iroha_data_model::soranet::vpn::VPN_CELL_LEN);
     let send_schedule = schedule.clone();
     let send_handle = tokio::spawn(async move {
@@ -137,7 +129,6 @@ async fn scheduler_applies_pacing_without_cover() {
         }
         arrivals
     });
-
     send_handle.await.expect("send joined");
     let arrivals = read_handle.await.expect("read joined");
     assert_eq!(arrivals.len(), 2);
@@ -149,7 +140,6 @@ async fn scheduler_applies_pacing_without_cover() {
         "pacing gap should respect configured minimum (delta: {delta:?})"
     );
 }
-
 #[tokio::test]
 async fn cover_frames_are_injected_when_enabled() {
     let cfg = VpnConfig {
@@ -185,7 +175,6 @@ async fn cover_frames_are_injected_when_enabled() {
         },
         payload: vec![0xBB; 2],
     };
-
     let schedule =
         schedule_frames(&overlay, vec![data_cell], cover_meta, [0x22; 32]).expect("schedule");
     assert!(
@@ -198,7 +187,6 @@ async fn cover_frames_are_injected_when_enabled() {
             .all(|pair| pair[1].deadline >= pair[0].deadline)
     );
 }
-
 #[tokio::test]
 async fn cover_and_data_metrics_accounted_separately() {
     let cfg = VpnConfig {
@@ -240,11 +228,9 @@ async fn cover_and_data_metrics_accounted_separately() {
     let cover_frames = schedule.iter().filter(|frame| frame.is_cover).count() as u64;
     let data_frames = schedule.len() as u64 - cover_frames;
     assert!(cover_frames > 0, "schedule should inject cover frames");
-
     let metrics = Arc::new(Metrics::new());
     metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
     let session = overlay.start_session(Arc::clone(&metrics));
-
     let (mut writer, mut reader) = duplex(2 * iroha_data_model::soranet::vpn::VPN_CELL_LEN);
     let send_schedule = schedule.clone();
     let send = tokio::spawn(async move {
@@ -263,7 +249,6 @@ async fn cover_and_data_metrics_accounted_separately() {
     let (_, frames) = tokio::join!(send, read);
     let frames = frames.expect("read frames");
     assert_eq!(frames.len() as u64, data_frames + cover_frames);
-
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.vpn_sessions, 1);
     assert_eq!(snapshot.vpn_egress_frames, data_frames + cover_frames);

@@ -10,16 +10,11 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 use std::marker::PhantomData;
-
 use ff::PrimeField;
 use halo2_proofs::plonk::Expression;
-
 use super::super::Gate;
-
 pub struct ScheduleGate<F: PrimeField>(PhantomData<F>);
-
 impl<F: PrimeField> ScheduleGate<F> {
     /// s_word for W_16 to W_63
     #[allow(clippy::too_many_arguments)]
@@ -38,18 +33,15 @@ impl<F: PrimeField> ScheduleGate<F> {
     ) -> impl Iterator<Item = (&'static str, Expression<F>)> {
         let lo = sigma_0_lo + sigma_1_lo + w_minus_9_lo + w_minus_16_lo;
         let hi = sigma_0_hi + sigma_1_hi + w_minus_9_hi + w_minus_16_hi;
-
         let word_check = lo
             + hi * F::from(1 << 16)
             + (carry.clone() * F::from(1 << 32) * (-F::ONE))
             + (word * (-F::ONE));
         let carry_check = Gate::range_check(carry, 0, 3);
-
         [("word_check", word_check), ("carry_check", carry_check)]
             .into_iter()
             .map(move |(name, poly)| (name, s_word.clone() * poly))
     }
-
     /// s_decompose_0 for all words
     pub fn s_decompose_0(
         s_decompose_0: Expression<F>,
@@ -60,7 +52,6 @@ impl<F: PrimeField> ScheduleGate<F> {
         let check = lo + hi * F::from(1 << 16) - word;
         Some(("s_decompose_0", s_decompose_0 * check))
     }
-
     /// s_decompose_1 for W_1 to W_13
     /// (3, 4, 11, 14)-bit chunks
     #[allow(clippy::too_many_arguments)]
@@ -78,7 +69,6 @@ impl<F: PrimeField> ScheduleGate<F> {
             a + b * F::from(1 << 3) + c * F::from(1 << 7) + d * F::from(1 << 18) + word * (-F::ONE);
         let range_check_tag_c = Gate::range_check(tag_c, 0, 3);
         let range_check_tag_d = Gate::range_check(tag_d, 0, 5);
-
         [
             ("decompose_check", decompose_check),
             ("range_check_tag_c", range_check_tag_c),
@@ -87,7 +77,6 @@ impl<F: PrimeField> ScheduleGate<F> {
         .into_iter()
         .map(move |(name, poly)| (name, s_decompose_1.clone() * poly))
     }
-
     /// s_decompose_2 for W_14 to W_48
     /// (3, 4, 3, 7, 1, 1, 13)-bit chunks
     #[allow(clippy::many_single_char_names)]
@@ -117,10 +106,8 @@ impl<F: PrimeField> ScheduleGate<F> {
         let range_check_tag_b = Gate::range_check(tag_b, 0, 0);
         let range_check_tag_d = Gate::range_check(tag_d, 0, 1);
         let range_check_tag_g = Gate::range_check(tag_g, 0, 4);
-
         let e_onebit_check = Gate::range_check(e, 0, 1);
         let f_onebit_check = Gate::range_check(f, 0, 1);
-
         [
             ("decompose_check", decompose_check),
             ("range_check_tag_b", range_check_tag_b),
@@ -132,7 +119,6 @@ impl<F: PrimeField> ScheduleGate<F> {
         .into_iter()
         .map(move |(name, poly)| (name, s_decompose_2.clone() * poly))
     }
-
     /// s_decompose_3 for W_49 to W_61
     /// (10, 7, 2, 13)-bit chunks
     #[allow(clippy::too_many_arguments)]
@@ -153,7 +139,6 @@ impl<F: PrimeField> ScheduleGate<F> {
             + word * (-F::ONE);
         let range_check_tag_a = Gate::range_check(tag_a, 0, 2);
         let range_check_tag_d = Gate::range_check(tag_d, 0, 4);
-
         [
             ("decompose_check", decompose_check),
             ("range_check_tag_a", range_check_tag_a),
@@ -162,13 +147,11 @@ impl<F: PrimeField> ScheduleGate<F> {
         .into_iter()
         .map(move |(name, poly)| (name, s_decompose_3.clone() * poly))
     }
-
     /// b_lo + 2^2 * b_mid = b, on W_[1..49]
     fn check_b(b: Expression<F>, b_lo: Expression<F>, b_hi: Expression<F>) -> Expression<F> {
         let expected_b = b_lo + b_hi * F::from(1 << 2);
         expected_b - b
     }
-
     /// sigma_0 v1 on W_1 to W_13
     /// (3, 4, 11, 14)-bit chunks
     #[allow(clippy::too_many_arguments)]
@@ -214,13 +197,11 @@ impl<F: PrimeField> ScheduleGate<F> {
             + spread_b_hi * F::from(1 << 38)
             + spread_c * F::from(1 << 42);
         let xor = xor_0 + xor_1 + xor_2;
-
         check_spread_and_range
             .chain(Some(("check_b", check_b)))
             .chain(Some(("lower_sigma_0", spread_witness - xor)))
             .map(move |(name, poly)| (name, s_lower_sigma_0.clone() * poly))
     }
-
     /// sigma_1 v1 on W_49 to W_61
     /// (10, 7, 2, 13)-bit chunks
     #[allow(clippy::too_many_arguments)]
@@ -279,13 +260,11 @@ impl<F: PrimeField> ScheduleGate<F> {
             + spread_b_hi * F::from(1 << 54)
             + spread_c * F::from(1 << 60);
         let xor = xor_0 + xor_1 + xor_2;
-
         check_spread_and_range
             .chain(Some(("check_b1", check_b1)))
             .chain(Some(("lower_sigma_1", spread_witness - xor)))
             .map(move |(name, poly)| (name, s_lower_sigma_1.clone() * poly))
     }
-
     /// sigma_0 v2 on W_14 to W_48
     /// (3, 4, 3, 7, 1, 1, 13)-bit chunks
     #[allow(clippy::too_many_arguments)]
@@ -345,13 +324,11 @@ impl<F: PrimeField> ScheduleGate<F> {
             + spread_d * F::from(1 << 48)
             + spread_e * F::from(1 << 62);
         let xor = xor_0 + xor_1 + xor_2;
-
         check_spread_and_range
             .chain(Some(("check_b", check_b)))
             .chain(Some(("lower_sigma_0_v2", spread_witness - xor)))
             .map(move |(name, poly)| (name, s_lower_sigma_0_v2.clone() * poly))
     }
-
     /// sigma_1 v2 on W_14 to W_48
     /// (3, 4, 3, 7, 1, 1, 13)-bit chunks
     #[allow(clippy::too_many_arguments)]
@@ -408,7 +385,6 @@ impl<F: PrimeField> ScheduleGate<F> {
             + spread_e * F::from(1 << 60)
             + spread_f * F::from(1 << 62);
         let xor = xor_0 + xor_1 + xor_2;
-
         check_spread_and_range
             .chain(Some(("check_b", check_b)))
             .chain(Some(("lower_sigma_1_v2", spread_witness - xor)))

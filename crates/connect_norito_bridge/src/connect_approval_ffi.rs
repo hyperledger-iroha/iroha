@@ -1,17 +1,13 @@
 //! Exact-network Connect identity and approval C ABI bindings.
-
 use std::ptr;
-
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{NetworkId, account::AccountId};
 use iroha_torii_shared::{connect as proto, connect_sdk};
 use libc::{c_char, c_int, c_uchar, c_ulong, malloc};
-
 use super::{
     ERR_CONNECT_APPROVAL, ERR_CONNECT_IDENTITY, network_id_from_raw_bytes, parse_permissions_bytes,
     parse_proof_bytes,
 };
-
 pub(super) fn parse_connect_wallet_signature_algorithm_label(
     alg_str: &str,
 ) -> Result<Algorithm, c_int> {
@@ -20,7 +16,6 @@ pub(super) fn parse_connect_wallet_signature_algorithm_label(
     }
     Ok(Algorithm::Ed25519)
 }
-
 pub(super) fn connect_wallet_signature_from_algorithm_bytes(
     algorithm: Algorithm,
     signature: &[u8],
@@ -28,7 +23,6 @@ pub(super) fn connect_wallet_signature_from_algorithm_bytes(
     connect_signature_from_algorithm_bytes(algorithm, signature)
         .map(|signature| proto::WalletSignatureV1::new(algorithm, signature))
 }
-
 pub(super) fn connect_signature_from_algorithm_bytes(
     algorithm: Algorithm,
     signature: &[u8],
@@ -39,7 +33,6 @@ pub(super) fn connect_signature_from_algorithm_bytes(
         _ => Signature::try_from_bytes(signature).ok(),
     }
 }
-
 pub(super) unsafe fn parse_algorithm_cstr(
     alg_ptr: *const c_char,
     alg_len: c_ulong,
@@ -51,7 +44,6 @@ pub(super) unsafe fn parse_algorithm_cstr(
     let alg_str = std::str::from_utf8(bytes).map_err(|_| -7)?;
     parse_connect_wallet_signature_algorithm_label(alg_str)
 }
-
 pub(super) fn validate_exact_connect_identity(
     network_id_bytes: &[u8],
     sid: &[u8],
@@ -73,7 +65,6 @@ pub(super) fn validate_exact_connect_identity(
     }
     Ok((network_id, sid, app_public_key, nonce))
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_connect_derive_session_id(
     network_id_ptr: *const c_uchar,
@@ -115,7 +106,6 @@ pub unsafe extern "C" fn connect_norito_connect_derive_session_id(
         0
     }
 }
-
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_connect_relay_auth_hash(
     sid_ptr: *const c_uchar,
@@ -147,7 +137,6 @@ pub unsafe extern "C" fn connect_norito_connect_relay_auth_hash(
         0
     }
 }
-
 struct ParsedConnectApprovalInputs {
     network_id: NetworkId,
     sid: [u8; 32],
@@ -159,7 +148,6 @@ struct ParsedConnectApprovalInputs {
     proof: Option<proto::SignInProofV1>,
     relay_auth: [u8; 32],
 }
-
 #[allow(clippy::too_many_arguments)]
 unsafe fn parse_connect_approval_inputs(
     network_id_ptr: *const c_uchar,
@@ -253,7 +241,6 @@ unsafe fn parse_connect_approval_inputs(
         relay_auth: connect_sdk::relay_auth_hash(&sid, relay_token),
     })
 }
-
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn connect_norito_connect_approval_preimage(
@@ -329,7 +316,6 @@ pub unsafe extern "C" fn connect_norito_connect_approval_preimage(
         0
     }
 }
-
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn connect_norito_connect_verify_approval(

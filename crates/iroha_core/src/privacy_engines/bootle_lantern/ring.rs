@@ -5,10 +5,8 @@
 //! externally supplied residues. Arithmetic methods always return canonical
 //! residues and use explicit modular operations, so debug and release builds
 //! have identical overflow behavior.
-
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-
 use super::params::{
     APPLICATION_MODULUS_V1, APPLICATION_RING_DEGREE_V1,
     INTERNAL_CRT_FIRST_TWO_PRODUCT_MOD_PROOF_MODULUS_V1, INTERNAL_CRT_GARNER_INVERSES_V1,
@@ -16,7 +14,6 @@ use super::params::{
     INTERNAL_CRT_PRIMES_V1, INTERNAL_CRT_PRODUCT_MOD_PROOF_MODULUS_V1,
     INTERNAL_CRT_RING_DEGREE_INVERSES_V1, PROOF_MODULUS_V1,
 };
-
 #[derive(Clone, Copy)]
 struct FixedModulusV1 {
     modulus: u64,
@@ -25,13 +22,11 @@ struct FixedModulusV1 {
     /// `2^128 mod modulus`, used to enter the Montgomery domain.
     montgomery_r_squared: u64,
 }
-
 const PROOF_FIXED_MODULUS_V1: FixedModulusV1 = FixedModulusV1 {
     modulus: PROOF_MODULUS_V1,
     montgomery_negative_inverse: 4_655_614_974_089_172_227,
     montgomery_r_squared: 95_672_812_437_504,
 };
-
 const INTERNAL_CRT_FIXED_MODULI_V1: [FixedModulusV1; 3] = [
     FixedModulusV1 {
         modulus: INTERNAL_CRT_PRIMES_V1[0],
@@ -49,19 +44,16 @@ const INTERNAL_CRT_FIXED_MODULI_V1: [FixedModulusV1; 3] = [
         montgomery_r_squared: 1_057_249_418_043_771,
     },
 ];
-
 /// One canonical polynomial in `Z_12289[X] / (X^64 + 1)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApplicationPolynomialV1 {
     coefficients: [u16; APPLICATION_RING_DEGREE_V1],
 }
-
 impl ApplicationPolynomialV1 {
     /// Additive identity.
     pub const ZERO: Self = Self {
         coefficients: [0; APPLICATION_RING_DEGREE_V1],
     };
-
     /// Construct from canonical application-ring residues.
     ///
     /// # Errors
@@ -81,7 +73,6 @@ impl ApplicationPolynomialV1 {
         }
         Ok(Self { coefficients })
     }
-
     /// Construct a constant polynomial from a canonical residue.
     ///
     /// # Errors
@@ -98,7 +89,6 @@ impl ApplicationPolynomialV1 {
         coefficients[0] = constant;
         Ok(Self { coefficients })
     }
-
     /// Construct from the unique centered integer lift of each coefficient.
     #[must_use]
     pub fn from_centered_coefficients(coefficients: [i64; APPLICATION_RING_DEGREE_V1]) -> Self {
@@ -112,7 +102,6 @@ impl ApplicationPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Encode one direct 64-bit attribute as little-endian binary
     /// coefficients.
     #[must_use]
@@ -123,7 +112,6 @@ impl ApplicationPolynomialV1 {
         }
         Self { coefficients }
     }
-
     /// Decode a binary polynomial back to its direct 64-bit attribute.
     ///
     /// # Errors
@@ -143,13 +131,11 @@ impl ApplicationPolynomialV1 {
         }
         Ok(attribute)
     }
-
     /// Borrow canonical residues.
     #[must_use]
     pub const fn coefficients(&self) -> &[u16; APPLICATION_RING_DEGREE_V1] {
         &self.coefficients
     }
-
     /// Return whether this polynomial is the additive identity.
     #[must_use]
     pub fn is_zero(&self) -> bool {
@@ -157,7 +143,6 @@ impl ApplicationPolynomialV1 {
             .iter()
             .all(|coefficient| *coefficient == 0)
     }
-
     /// Add in the application ring.
     #[must_use]
     pub fn add(self, rhs: Self) -> Self {
@@ -173,7 +158,6 @@ impl ApplicationPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Subtract in the application ring.
     #[must_use]
     pub fn sub(self, rhs: Self) -> Self {
@@ -189,13 +173,11 @@ impl ApplicationPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Negate in the application ring.
     #[must_use]
     pub fn negate(self) -> Self {
         Self::ZERO.sub(self)
     }
-
     /// Multiply modulo `X^64 + 1`.
     #[must_use]
     pub fn multiply(self, rhs: Self) -> Self {
@@ -222,7 +204,6 @@ impl ApplicationPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Multiply by a signed integer in the application ring.
     #[must_use]
     pub fn scale_centered(self, scalar: i64) -> Self {
@@ -239,7 +220,6 @@ impl ApplicationPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Apply the involution `X -> X^-1` in the negacyclic ring.
     #[must_use]
     pub fn automorphism(self) -> Self {
@@ -257,7 +237,6 @@ impl ApplicationPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Return a centered coefficient in `[-6144, 6144]`.
     #[must_use]
     pub fn centered_coefficient(&self, index: usize) -> i16 {
@@ -269,7 +248,6 @@ impl ApplicationPolynomialV1 {
                 - i16::try_from(APPLICATION_MODULUS_V1).expect("application modulus fits i16")
         }
     }
-
     /// Exact squared Euclidean norm of the centered lift.
     #[must_use]
     pub fn centered_squared_norm(&self) -> u64 {
@@ -283,26 +261,22 @@ impl ApplicationPolynomialV1 {
             .sum()
     }
 }
-
 impl Zeroize for ApplicationPolynomialV1 {
     fn zeroize(&mut self) {
         self.coefficients.zeroize();
     }
 }
-
 /// One canonical polynomial in `Z_q[X] / (X^64 + 1)` for the internal
 /// Lantern proof modulus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProofPolynomialV1 {
     coefficients: [u64; APPLICATION_RING_DEGREE_V1],
 }
-
 impl ProofPolynomialV1 {
     /// Additive identity.
     pub const ZERO: Self = Self {
         coefficients: [0; APPLICATION_RING_DEGREE_V1],
     };
-
     /// Construct from canonical internal proof-ring residues.
     ///
     /// # Errors
@@ -322,7 +296,6 @@ impl ProofPolynomialV1 {
         }
         Ok(Self { coefficients })
     }
-
     /// Construct a constant polynomial from a canonical residue.
     ///
     /// # Errors
@@ -339,7 +312,6 @@ impl ProofPolynomialV1 {
         coefficients[0] = constant;
         Ok(Self { coefficients })
     }
-
     /// Construct a constant polynomial from any centered integer.
     #[must_use]
     pub fn constant_centered(constant: i64) -> Self {
@@ -347,7 +319,6 @@ impl ProofPolynomialV1 {
         coefficients[0] = canonicalize_i64_v1(constant, PROOF_FIXED_MODULUS_V1);
         Self { coefficients }
     }
-
     /// Construct from arbitrary centered integer coefficients.
     #[must_use]
     pub fn from_centered_coefficients(coefficients: [i64; APPLICATION_RING_DEGREE_V1]) -> Self {
@@ -359,7 +330,6 @@ impl ProofPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Embed one application-ring polynomial through its centered lift.
     #[must_use]
     pub fn from_application_centered(polynomial: ApplicationPolynomialV1) -> Self {
@@ -369,13 +339,11 @@ impl ProofPolynomialV1 {
         }
         Self::from_centered_coefficients(coefficients)
     }
-
     /// Borrow canonical residues.
     #[must_use]
     pub const fn coefficients(&self) -> &[u64; APPLICATION_RING_DEGREE_V1] {
         &self.coefficients
     }
-
     /// Return whether this polynomial is the additive identity.
     #[must_use]
     pub fn is_zero(&self) -> bool {
@@ -383,7 +351,6 @@ impl ProofPolynomialV1 {
             .iter()
             .all(|coefficient| *coefficient == 0)
     }
-
     /// Add in the internal proof ring.
     #[must_use]
     pub fn add(self, rhs: Self) -> Self {
@@ -399,7 +366,6 @@ impl ProofPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Subtract in the internal proof ring.
     #[must_use]
     pub fn sub(self, rhs: Self) -> Self {
@@ -415,13 +381,11 @@ impl ProofPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Negate in the internal proof ring.
     #[must_use]
     pub fn negate(self) -> Self {
         Self::ZERO.sub(self)
     }
-
     /// Multiply modulo `X^64 + 1`.
     #[must_use]
     pub fn multiply(self, rhs: Self) -> Self {
@@ -431,7 +395,6 @@ impl ProofPolynomialV1 {
             coefficients: multiply_negacyclic_crt_ntt_v1(&lhs.coefficients, &rhs.coefficients),
         }
     }
-
     /// Quadratic-time reference multiplication retained only as a test oracle.
     #[cfg(test)]
     fn multiply_schoolbook(self, rhs: Self) -> Self {
@@ -456,14 +419,12 @@ impl ProofPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Multiply by a signed integer in the proof ring.
     #[must_use]
     pub fn scale_centered(self, scalar: i64) -> Self {
         let scalar = canonicalize_i64_v1(scalar, PROOF_FIXED_MODULUS_V1);
         self.scale_canonical_unchecked(scalar)
     }
-
     /// Multiply by one canonical proof-field scalar.
     ///
     /// # Errors
@@ -475,7 +436,6 @@ impl ProofPolynomialV1 {
         }
         Ok(self.scale_canonical_unchecked(scalar))
     }
-
     fn scale_canonical_unchecked(self, scalar: u64) -> Self {
         let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
         for (output, coefficient) in output.iter_mut().zip(self.coefficients) {
@@ -485,7 +445,6 @@ impl ProofPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Apply the involution `X -> X^-1` in the negacyclic ring.
     #[must_use]
     pub fn automorphism(self) -> Self {
@@ -499,7 +458,6 @@ impl ProofPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Multiply by `X^power` modulo `X^64 + 1`.
     #[must_use]
     pub fn multiply_by_monomial(self, power: usize) -> Self {
@@ -522,7 +480,6 @@ impl ProofPolynomialV1 {
             coefficients: output,
         }
     }
-
     /// Return a centered coefficient in `[-floor(q/2), floor(q/2)]`.
     #[must_use]
     pub fn centered_coefficient(&self, index: usize) -> i64 {
@@ -535,7 +492,6 @@ impl ProofPolynomialV1 {
             greater_than_bit_u64_v1(residue, PROOF_MODULUS_V1 / 2),
         )
     }
-
     /// Exact squared Euclidean norm of the centered lift.
     #[must_use]
     pub fn centered_squared_norm(&self) -> u128 {
@@ -549,30 +505,25 @@ impl ProofPolynomialV1 {
             .sum()
     }
 }
-
 impl Zeroize for ProofPolynomialV1 {
     fn zeroize(&mut self) {
         self.coefficients.zeroize();
     }
 }
-
 fn multiply_negacyclic_crt_ntt_v1(
     lhs: &[u64; APPLICATION_RING_DEGREE_V1],
     rhs: &[u64; APPLICATION_RING_DEGREE_V1],
 ) -> [u64; APPLICATION_RING_DEGREE_V1] {
     let mut crt_coefficients = Zeroizing::new([[0_u64; APPLICATION_RING_DEGREE_V1]; 3]);
-
     for prime_index in 0..INTERNAL_CRT_PRIMES_V1.len() {
         let fixed_modulus = INTERNAL_CRT_FIXED_MODULI_V1[prime_index];
         let mut lhs_ntt = Zeroizing::new(*lhs);
         let mut rhs_ntt = Zeroizing::new(*rhs);
-
         // Every canonical q-residue is less than twice every CRT prime, so
         // one fixed-time conditional subtraction is an exact reduction.
         for coefficient in lhs_ntt.iter_mut().chain(rhs_ntt.iter_mut()) {
             *coefficient = reduce_once_u64(*coefficient, fixed_modulus);
         }
-
         forward_negacyclic_ntt_v1(
             &mut lhs_ntt,
             fixed_modulus,
@@ -594,7 +545,6 @@ fn multiply_negacyclic_crt_ntt_v1(
         );
         crt_coefficients[prime_index].copy_from_slice(&*lhs_ntt);
     }
-
     core::array::from_fn(|coefficient_index| {
         centered_crt_reconstruct_mod_q_v1([
             crt_coefficients[0][coefficient_index],
@@ -603,7 +553,6 @@ fn multiply_negacyclic_crt_ntt_v1(
         ])
     })
 }
-
 fn forward_negacyclic_ntt_v1(
     values: &mut [u64; APPLICATION_RING_DEGREE_V1],
     fixed_modulus: FixedModulusV1,
@@ -617,7 +566,6 @@ fn forward_negacyclic_ntt_v1(
     let cyclic_root = multiply_mod_fixed_u64(negacyclic_root, negacyclic_root, fixed_modulus);
     cyclic_ntt_v1(values, fixed_modulus, cyclic_root);
 }
-
 fn inverse_negacyclic_ntt_v1(
     values: &mut [u64; APPLICATION_RING_DEGREE_V1],
     fixed_modulus: FixedModulusV1,
@@ -630,7 +578,6 @@ fn inverse_negacyclic_ntt_v1(
         fixed_modulus,
     );
     cyclic_ntt_v1(values, fixed_modulus, inverse_cyclic_root);
-
     let mut inverse_twist = 1_u64;
     for value in values.iter_mut() {
         *value = multiply_mod_fixed_u64(
@@ -642,7 +589,6 @@ fn inverse_negacyclic_ntt_v1(
             multiply_mod_fixed_u64(inverse_twist, inverse_negacyclic_root, fixed_modulus);
     }
 }
-
 fn cyclic_ntt_v1(
     values: &mut [u64; APPLICATION_RING_DEGREE_V1],
     fixed_modulus: FixedModulusV1,
@@ -660,7 +606,6 @@ fn cyclic_ntt_v1(
             values.swap(index, reversed);
         }
     }
-
     let mut length = 2;
     while length <= APPLICATION_RING_DEGREE_V1 {
         let stage_root = modular_power_fixed_u64(
@@ -682,7 +627,6 @@ fn cyclic_ntt_v1(
         length *= 2;
     }
 }
-
 fn centered_crt_reconstruct_mod_q_v1(residues: [u64; 3]) -> u64 {
     const DIGIT_ZERO_INDEX: usize = 0;
     const DIGIT_ONE_INDEX: usize = 1;
@@ -690,13 +634,11 @@ fn centered_crt_reconstruct_mod_q_v1(residues: [u64; 3]) -> u64 {
     const LOWER_TWO_DIGITS_INDEX: usize = 3;
     const RECONSTRUCTED_INDEX: usize = 4;
     const NEGATIVE_INDEX: usize = 5;
-
     let residues = Zeroizing::new(residues);
     let mut scratch = Zeroizing::new([0_u64; 6]);
     let [prime_zero, prime_one, prime_two] = INTERNAL_CRT_PRIMES_V1;
     let prime_one_modulus = INTERNAL_CRT_FIXED_MODULI_V1[1];
     let prime_two_modulus = INTERNAL_CRT_FIXED_MODULI_V1[2];
-
     // Garner mixed-radix digits:
     // x = digit0 + p0 * digit1 + p0 * p1 * digit2, 0 <= x < P.
     scratch[DIGIT_ZERO_INDEX] = residues[0];
@@ -727,7 +669,6 @@ fn centered_crt_reconstruct_mod_q_v1(residues: [u64; 3]) -> u64 {
         INTERNAL_CRT_GARNER_INVERSES_V1[1],
         prime_two_modulus,
     );
-
     scratch[RECONSTRUCTED_INDEX] = add_mod_canonical_u64(
         add_mod_canonical_u64(
             scratch[DIGIT_ZERO_INDEX],
@@ -741,7 +682,6 @@ fn centered_crt_reconstruct_mod_q_v1(residues: [u64; 3]) -> u64 {
         ),
         PROOF_FIXED_MODULUS_V1,
     );
-
     // P is odd. Its floor-half has the mixed-radix digits
     // ((p0-1)/2, (p1-1)/2, (p2-1)/2), so a lexicographic comparison from
     // the most significant digit chooses the unique centered representative
@@ -767,7 +707,6 @@ fn centered_crt_reconstruct_mod_q_v1(residues: [u64; 3]) -> u64 {
         is_negative,
     )
 }
-
 fn canonicalize_i64_v1(value: i64, fixed_modulus: FixedModulusV1) -> u64 {
     let bits = value as u64;
     let sign_bit = bits >> 63;
@@ -777,7 +716,6 @@ fn canonicalize_i64_v1(value: i64, fixed_modulus: FixedModulusV1) -> u64 {
     let negative = sub_mod_canonical_u64(0, non_negative, fixed_modulus);
     select_u64_v1(non_negative, negative, sign_bit)
 }
-
 fn reduce_u64_v1(value: u64, fixed_modulus: FixedModulusV1) -> u64 {
     let mut remainder = 0_u64;
     for bit_index in (0..u64::BITS).rev() {
@@ -786,12 +724,10 @@ fn reduce_u64_v1(value: u64, fixed_modulus: FixedModulusV1) -> u64 {
     }
     remainder
 }
-
 fn add_mod_u16(lhs: u16, rhs: u16, modulus: u16) -> u16 {
     let sum = u32::from(lhs) + u32::from(rhs);
     u16::try_from(sum % u32::from(modulus)).expect("reduced sum fits u16")
 }
-
 fn sub_mod_u16(lhs: u16, rhs: u16, modulus: u16) -> u16 {
     if lhs >= rhs {
         lhs - rhs
@@ -799,21 +735,17 @@ fn sub_mod_u16(lhs: u16, rhs: u16, modulus: u16) -> u16 {
         modulus - (rhs - lhs)
     }
 }
-
 fn select_u64_v1(lhs: u64, rhs: u64, select_rhs_bit: u64) -> u64 {
     let mask = 0_u64.wrapping_sub(select_rhs_bit);
     (lhs & !mask) | (rhs & mask)
 }
-
 fn select_i64_v1(lhs: i64, rhs: i64, select_rhs_bit: u64) -> i64 {
     select_u64_v1(lhs as u64, rhs as u64, select_rhs_bit) as i64
 }
-
 fn equal_bit_u64_v1(lhs: u64, rhs: u64) -> u64 {
     let difference = lhs ^ rhs;
     1 ^ ((difference | difference.wrapping_neg()) >> 63)
 }
-
 /// Return one exactly when `lhs > rhs`.
 ///
 /// Every caller supplies values below `2^63` whose absolute difference is
@@ -822,32 +754,27 @@ fn equal_bit_u64_v1(lhs: u64, rhs: u64) -> u64 {
 fn greater_than_bit_u64_v1(lhs: u64, rhs: u64) -> u64 {
     rhs.wrapping_sub(lhs) >> 63
 }
-
 fn reduce_once_u64(value: u64, fixed_modulus: FixedModulusV1) -> u64 {
     let reduced = value.wrapping_sub(fixed_modulus.modulus);
     let underflow_bit = reduced >> 63;
     select_u64_v1(reduced, value, underflow_bit)
 }
-
 fn add_mod_canonical_u64(lhs: u64, rhs: u64, fixed_modulus: FixedModulusV1) -> u64 {
     let sum = lhs + rhs;
     reduce_once_u64(sum, fixed_modulus)
 }
-
 fn sub_mod_canonical_u64(lhs: u64, rhs: u64, fixed_modulus: FixedModulusV1) -> u64 {
     let difference = lhs.wrapping_sub(rhs);
     let underflow_bit = difference >> 63;
     let corrected = difference.wrapping_add(fixed_modulus.modulus);
     select_u64_v1(difference, corrected, underflow_bit)
 }
-
 fn montgomery_reduce_u128_v1(product: u128, fixed_modulus: FixedModulusV1) -> u64 {
     let correction = (product as u64).wrapping_mul(fixed_modulus.montgomery_negative_inverse);
     let corrected_product = product + u128::from(correction) * u128::from(fixed_modulus.modulus);
     let quotient = (corrected_product >> 64) as u64;
     reduce_once_u64(quotient, fixed_modulus)
 }
-
 fn multiply_mod_fixed_u64(lhs: u64, rhs: u64, fixed_modulus: FixedModulusV1) -> u64 {
     let lhs_montgomery = montgomery_reduce_u128_v1(
         u128::from(lhs) * u128::from(fixed_modulus.montgomery_r_squared),
@@ -855,7 +782,6 @@ fn multiply_mod_fixed_u64(lhs: u64, rhs: u64, fixed_modulus: FixedModulusV1) -> 
     );
     montgomery_reduce_u128_v1(u128::from(lhs_montgomery) * u128::from(rhs), fixed_modulus)
 }
-
 fn modular_power_fixed_u64(mut base: u64, mut exponent: u64, fixed_modulus: FixedModulusV1) -> u64 {
     let mut output = 1_u64;
     // The exponent is derived solely from the public, fixed NTT degree.
@@ -868,19 +794,16 @@ fn modular_power_fixed_u64(mut base: u64, mut exponent: u64, fixed_modulus: Fixe
     }
     output
 }
-
 #[cfg(test)]
 fn multiply_mod_reference_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     u64::try_from(u128::from(lhs) * u128::from(rhs) % u128::from(modulus))
         .expect("reduced product fits u64")
 }
-
 #[cfg(test)]
 fn add_mod_reference_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     u64::try_from((u128::from(lhs) + u128::from(rhs)) % u128::from(modulus))
         .expect("reduced sum fits u64")
 }
-
 #[cfg(test)]
 fn sub_mod_reference_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     if lhs >= rhs {
@@ -889,7 +812,6 @@ fn sub_mod_reference_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
         modulus - (rhs - lhs)
     }
 }
-
 #[cfg(test)]
 fn modular_power_reference_u64(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     let mut output = 1_u64;
@@ -902,7 +824,6 @@ fn modular_power_reference_u64(mut base: u64, mut exponent: u64, modulus: u64) -
     }
     output
 }
-
 #[cfg(test)]
 fn canonicalize_i128_reference(value: i128, modulus: u64) -> u64 {
     let modulus = i128::from(modulus);
@@ -912,7 +833,6 @@ fn canonicalize_i128_reference(value: i128, modulus: u64) -> u64 {
     }
     u64::try_from(residue).expect("canonical residue fits u64")
 }
-
 /// Canonical ring failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum RingErrorV1 {
@@ -947,23 +867,19 @@ pub enum RingErrorV1 {
         coefficient: u64,
     },
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn application_monomial(index: usize, coefficient: u16) -> ApplicationPolynomialV1 {
         let mut coefficients = [0_u16; APPLICATION_RING_DEGREE_V1];
         coefficients[index] = coefficient;
         ApplicationPolynomialV1::new(coefficients).expect("canonical monomial")
     }
-
     fn proof_monomial(index: usize, coefficient: u64) -> ProofPolynomialV1 {
         let mut coefficients = [0_u64; APPLICATION_RING_DEGREE_V1];
         coefficients[index] = coefficient;
         ProofPolynomialV1::new(coefficients).expect("canonical monomial")
     }
-
     fn splitmix64(state: &mut u64) -> u64 {
         *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut value = *state;
@@ -971,18 +887,15 @@ mod tests {
         value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         value ^ (value >> 31)
     }
-
     fn random_proof_polynomial(state: &mut u64) -> ProofPolynomialV1 {
         ProofPolynomialV1::new(core::array::from_fn(|_| {
             splitmix64(state) % PROOF_MODULUS_V1
         }))
         .expect("random residues are canonical")
     }
-
     fn crt_residues_from_centered(value: i128) -> [u64; 3] {
         INTERNAL_CRT_PRIMES_V1.map(|prime| canonicalize_i128_reference(value, prime))
     }
-
     fn mixed_radix_residues(digits: [u64; 3]) -> [u64; 3] {
         INTERNAL_CRT_PRIMES_V1.map(|modulus| {
             add_mod_reference_u64(
@@ -1008,7 +921,6 @@ mod tests {
             )
         })
     }
-
     fn mixed_radix_mod_q(digits: [u64; 3]) -> u64 {
         add_mod_reference_u64(
             add_mod_reference_u64(
@@ -1024,7 +936,6 @@ mod tests {
             PROOF_MODULUS_V1,
         )
     }
-
     fn is_prime_u64(candidate: u64) -> bool {
         const BASES: [u64; 7] = [2, 325, 9_375, 28_178, 450_775, 9_780_504, 1_795_265_022];
         if candidate < 2 {
@@ -1038,7 +949,6 @@ mod tests {
                 return false;
             }
         }
-
         let shift = (candidate - 1).trailing_zeros();
         let odd_part = (candidate - 1) >> shift;
         'base: for base in BASES {
@@ -1060,7 +970,6 @@ mod tests {
         }
         true
     }
-
     #[test]
     fn fixed_modulus_arithmetic_matches_independent_reference_at_boundaries_and_randomly() {
         let fixed_moduli = [
@@ -1070,7 +979,6 @@ mod tests {
             INTERNAL_CRT_FIXED_MODULI_V1[2],
         ];
         let mut random_state = 0x4D4F_4E54_474F_4D45;
-
         for fixed_modulus in fixed_moduli {
             let modulus = fixed_modulus.modulus;
             assert_eq!(
@@ -1085,7 +993,6 @@ mod tests {
                 )
                 .expect("reference residue fits u64")
             );
-
             for value in [0, 1, modulus - 1, modulus, modulus + 1, 2 * modulus - 1] {
                 assert_eq!(
                     reduce_once_u64(value, fixed_modulus),
@@ -1109,7 +1016,6 @@ mod tests {
                     "full reduction failed for modulus {modulus} and value {value}"
                 );
             }
-
             let boundaries = [0, 1, modulus / 2, modulus / 2 + 1, modulus - 2, modulus - 1];
             for lhs in boundaries {
                 for rhs in boundaries {
@@ -1127,7 +1033,6 @@ mod tests {
                     );
                 }
             }
-
             for _ in 0..512 {
                 let lhs = splitmix64(&mut random_state) % modulus;
                 let rhs = splitmix64(&mut random_state) % modulus;
@@ -1146,7 +1051,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn fixed_time_centering_matches_reference_for_all_signed_boundaries() {
         for value in [
@@ -1171,7 +1075,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn crt_ntt_profile_constants_are_exact_and_support_unique_reconstruction() {
         for prime_index in 0..INTERNAL_CRT_PRIMES_V1.len() {
@@ -1199,7 +1102,6 @@ mod tests {
             );
             assert!(PROOF_MODULUS_V1 < 2 * prime);
         }
-
         let [prime_zero, prime_one, prime_two] = INTERNAL_CRT_PRIMES_V1;
         assert_eq!(
             multiply_mod_reference_u64(
@@ -1229,7 +1131,6 @@ mod tests {
             ),
             INTERNAL_CRT_PRODUCT_MOD_PROOF_MODULUS_V1
         );
-
         // Twice the largest possible absolute schoolbook coefficient is
         // strictly below P=p0*p1*p2. Division keeps this check inside u128.
         let maximum_residue = u128::from(PROOF_MODULUS_V1 - 1);
@@ -1240,7 +1141,6 @@ mod tests {
         let first_two_product = u128::from(prime_zero) * u128::from(prime_one);
         assert!(twice_coefficient_bound / first_two_product < u128::from(prime_two));
     }
-
     #[test]
     fn negacyclic_ntt_round_trips_boundary_and_random_inputs_under_every_prime() {
         let mut random_state = 0x4E54_542D_524F_554E;
@@ -1270,7 +1170,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn centered_crt_reconstruction_handles_sign_and_exact_boundaries() {
         let maximum_coefficient = i128::try_from(APPLICATION_RING_DEGREE_V1)
@@ -1298,7 +1197,6 @@ mod tests {
                 "failed to reconstruct centered value {value}"
             );
         }
-
         let [prime_zero, prime_one, prime_two] = INTERNAL_CRT_PRIMES_V1;
         let half_digits = [
             (prime_zero - 1) / 2,
@@ -1310,7 +1208,6 @@ mod tests {
             centered_crt_reconstruct_mod_q_v1(mixed_radix_residues(half_digits)),
             half_mod_q
         );
-
         let just_above_half = [half_digits[0] + 1, half_digits[1], half_digits[2]];
         assert_eq!(
             centered_crt_reconstruct_mod_q_v1(mixed_radix_residues(just_above_half)),
@@ -1329,7 +1226,6 @@ mod tests {
             PROOF_MODULUS_V1 - 1
         );
     }
-
     #[test]
     fn constructors_reject_modulus_and_larger_residues_at_exact_index() {
         for coefficient in [APPLICATION_MODULUS_V1, u16::MAX] {
@@ -1355,7 +1251,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn direct_attributes_use_little_endian_bits_and_reject_nonbinary_values() {
         for attribute in [
@@ -1378,7 +1273,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn application_negacyclic_wrap_is_subtractive_and_canonical() {
         let x = application_monomial(1, 1);
@@ -1392,7 +1286,6 @@ mod tests {
         assert_eq!(product.centered_coefficient(0), -1);
         assert_eq!(product.centered_squared_norm(), 1);
     }
-
     #[test]
     fn proof_negacyclic_wrap_is_subtractive_and_canonical() {
         let x = proof_monomial(1, 1);
@@ -1405,7 +1298,6 @@ mod tests {
         assert_eq!(product.centered_coefficient(0), -1);
         assert_eq!(product.centered_squared_norm(), 1);
     }
-
     #[test]
     fn proof_ntt_multiplication_is_exact_for_every_monomial_pair() {
         for lhs_index in 0..APPLICATION_RING_DEGREE_V1 {
@@ -1427,7 +1319,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn proof_ntt_matches_schoolbook_for_sign_and_residue_boundaries() {
         let positive_half = PROOF_MODULUS_V1 / 2;
@@ -1450,7 +1341,6 @@ mod tests {
             .expect("boundary residues are canonical"),
             proof_monomial(63, PROOF_MODULUS_V1 - 1),
         ];
-
         for lhs in boundary_polynomials {
             for rhs in boundary_polynomials {
                 let product = lhs.multiply(rhs);
@@ -1463,7 +1353,6 @@ mod tests {
                 );
             }
         }
-
         let boundary_coefficients = [1, positive_half, negative_half, PROOF_MODULUS_V1 - 1];
         let boundary_indices = [0, 1, 31, 32, 63];
         for lhs_index in boundary_indices {
@@ -1483,7 +1372,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn proof_ntt_matches_schoolbook_for_deterministic_random_polynomials() {
         let mut random_state = 0x4352_542D_4449_4646;
@@ -1507,7 +1395,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn proof_ntt_distributivity_holds_for_deterministic_random_polynomials() {
         let mut random_state = 0x4352_542D_4449_5354;
@@ -1522,7 +1409,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn ring_laws_hold_on_adversarial_boundary_polynomials() {
         let mut application_boundary = [0_u16; APPLICATION_RING_DEGREE_V1];
@@ -1543,7 +1429,6 @@ mod tests {
         let q = ProofPolynomialV1::new(proof_boundary).expect("canonical");
         let application_one = ApplicationPolynomialV1::constant(1).expect("one");
         let proof_one = ProofPolynomialV1::constant(1).expect("one");
-
         assert_eq!(a.add(a.negate()), ApplicationPolynomialV1::ZERO);
         assert_eq!(a.multiply(application_one), a);
         assert_eq!(a.sub(a), ApplicationPolynomialV1::ZERO);
@@ -1561,20 +1446,17 @@ mod tests {
                 .all(|coefficient| *coefficient < PROOF_MODULUS_V1)
         );
     }
-
     #[test]
     fn distributivity_holds_for_wrapping_terms_in_both_rings() {
         let a = application_monomial(63, APPLICATION_MODULUS_V1 - 1);
         let b = application_monomial(1, APPLICATION_MODULUS_V1 - 1);
         let c = application_monomial(32, 7);
         assert_eq!(a.multiply(b.add(c)), a.multiply(b).add(a.multiply(c)));
-
         let a = proof_monomial(63, PROOF_MODULUS_V1 - 1);
         let b = proof_monomial(1, PROOF_MODULUS_V1 - 1);
         let c = proof_monomial(32, 7);
         assert_eq!(a.multiply(b.add(c)), a.multiply(b).add(a.multiply(c)));
     }
-
     #[test]
     fn centered_lifts_scaling_automorphism_and_monomials_are_exact() {
         let application =
@@ -1596,7 +1478,6 @@ mod tests {
                 ApplicationPolynomialV1::constant(APPLICATION_MODULUS_V1 - 3).expect("canonical")
             )
         );
-
         let proof = ProofPolynomialV1::from_application_centered(application);
         assert_eq!(proof.centered_coefficient(0), -1);
         assert_eq!(proof.centered_coefficient(63), 7);
@@ -1612,7 +1493,6 @@ mod tests {
         );
         assert_eq!(x.multiply_by_monomial(128), x);
     }
-
     #[test]
     fn zeroize_erases_every_residue() {
         let mut application =

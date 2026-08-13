@@ -5,9 +5,7 @@
 //! Only compact admissions, commitment bindings, immutable object pointers,
 //! and receipts survive a transition.  The final aggregate is allocated only
 //! after every full share and relation proof has been released.
-
 use core::mem::size_of;
-
 use super::{
     Scalar, ZkAmsMkheErrorV1,
     active::{ZkAmsMkheGovernedActiveRosterV1, zk_ams_mkhe_active_rkg_linear_proof_security_v1},
@@ -49,15 +47,12 @@ use super::{
     wire::{ZkAmsMkheAuthenticationWireV1, ZkAmsMkheGovernedRosterWireV1},
 };
 use crate::vega::VegaT256PointV1;
-
 /// Exact canonical bytes in one persistent-secret membership frame.
 pub const ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_WIRE_BYTES_V1: usize =
     ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_BYTES_V1;
-
 /// Exact canonical bytes in one public-error membership frame.
 pub const ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1: usize =
     ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_BYTES_V1;
-
 /// Source-derived large-payload residency accounting for one CPK transition.
 ///
 /// This enumerates every simultaneous ring/proof/witness allocation owned by
@@ -110,7 +105,6 @@ pub struct ZkAmsMkheCpkCeremonyResidencyEvidenceV1 {
     /// False while CAS/page-cache residency and the peak run remain absent.
     pub release_certified: bool,
 }
-
 impl ZkAmsMkheCpkCeremonyResidencyEvidenceV1 {
     /// Recompute every source-owned payload axis without opening a release gate.
     pub fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
@@ -127,7 +121,6 @@ impl ZkAmsMkheCpkCeremonyResidencyEvidenceV1 {
         Ok(())
     }
 }
-
 /// Return exact source-owned CPK residency accounting without certifying an
 /// arbitrary caller-selected CAS implementation or its page cache.
 pub fn zk_ams_mkhe_cpk_ceremony_residency_evidence_v1()
@@ -136,7 +129,6 @@ pub fn zk_ams_mkhe_cpk_ceremony_residency_evidence_v1()
     evidence.validate()?;
     Ok(evidence)
 }
-
 fn derive_cpk_ceremony_residency_evidence_v1()
 -> Result<ZkAmsMkheCpkCeremonyResidencyEvidenceV1, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
@@ -166,7 +158,6 @@ fn derive_cpk_ceremony_residency_evidence_v1()
     let maximum_prior_admitted_state_bytes = live_party_state_witness_bytes
         .checked_mul((ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 - 1) as u64)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-
     let active_security = zk_ams_mkhe_active_rkg_linear_proof_security_v1()?;
     if u64::from(active_security.ring_degree) != degree
         || active_security.max_witness_polynomials < 2
@@ -275,7 +266,6 @@ fn derive_cpk_ceremony_residency_evidence_v1()
         release_certified: false,
     })
 }
-
 /// One owned party transition into the bounded CPK ceremony.
 ///
 /// Both membership frames have fixed-size boxed backing.  A caller therefore
@@ -291,7 +281,6 @@ pub struct ZkAmsMkheCpkPartyInputV1 {
     relation_proof_pointer: ZkAmsMkheDirectObjectPointerV1,
     authentication: ZkAmsMkheAuthenticationWireV1,
 }
-
 impl core::fmt::Debug for ZkAmsMkheCpkPartyInputV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -305,7 +294,6 @@ impl core::fmt::Debug for ZkAmsMkheCpkPartyInputV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheCpkPartyInputV1 {
     /// Bind one generated state/share pair to its exact immutable CPK evidence.
     #[allow(clippy::too_many_arguments)]
@@ -345,14 +333,12 @@ impl ZkAmsMkheCpkPartyInputV1 {
             authentication,
         })
     }
-
     /// Exact governed roster position consumed by this transition.
     #[must_use]
     pub const fn party_index(&self) -> u8 {
         self.state.party_index()
     }
 }
-
 /// Admitted small state returned after its full public share and proof die.
 ///
 /// The wrapper is move-only.  Its inner state carries the private verified CPK
@@ -361,7 +347,6 @@ impl ZkAmsMkheCpkPartyInputV1 {
 pub struct ZkAmsMkheAdmittedCpkPartyV1 {
     state: ZkAmsMkheCollectivePartyStateV1,
 }
-
 impl core::fmt::Debug for ZkAmsMkheAdmittedCpkPartyV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -371,21 +356,18 @@ impl core::fmt::Debug for ZkAmsMkheAdmittedCpkPartyV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheAdmittedCpkPartyV1 {
     /// Borrow the purpose-bound state for decryption-share proving.
     #[must_use]
     pub const fn state(&self) -> &ZkAmsMkheCollectivePartyStateV1 {
         &self.state
     }
-
     /// Consume the wrapper into the already admitted move-only party state.
     #[must_use]
     pub fn into_state(self) -> ZkAmsMkheCollectivePartyStateV1 {
         self.state
     }
 }
-
 /// Public move-only state machine for the exact ordered eight-party CPK.
 ///
 /// The only transition accepts one [`ZkAmsMkheCpkPartyInputV1`].  There is no
@@ -396,7 +378,6 @@ pub struct ZkAmsMkheCpkCeremonyV1 {
     inner: Option<ZkAmsMkheStreamingDecryptionAuthorityBuilderV1>,
     failed: bool,
 }
-
 impl core::fmt::Debug for ZkAmsMkheCpkCeremonyV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -406,7 +387,6 @@ impl core::fmt::Debug for ZkAmsMkheCpkCeremonyV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheCpkCeremonyV1 {
     /// Allocate the sole common-`a` backing and compact metadata before the
     /// first party secret, share, or evidence object is generated.
@@ -422,7 +402,6 @@ impl ZkAmsMkheCpkCeremonyV1 {
             failed: false,
         })
     }
-
     /// Borrow the sole prepared common-`a` owner for exactly the next public
     /// party-state generator.  Keeping a cloned backing makes `finish_v1` fail
     /// closed through the builder's unique-ownership check.
@@ -437,7 +416,6 @@ impl ZkAmsMkheCpkCeremonyV1 {
             .map(ZkAmsMkheStreamingDecryptionAuthorityBuilderV1::prepared_public_a_v1)
             .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
-
     /// Verify and consume exactly the next party, then return only its small
     /// admitted state successor.
     pub fn verify_and_absorb_next_party_v1<P>(
@@ -459,7 +437,6 @@ impl ZkAmsMkheCpkCeremonyV1 {
         }
         result
     }
-
     fn verify_and_absorb_next_party_inner_v1<P>(
         &mut self,
         input: ZkAmsMkheCpkPartyInputV1,
@@ -515,7 +492,6 @@ impl ZkAmsMkheCpkCeremonyV1 {
         builder.absorb_verified_party_v1(contribution, share, &mut state, backend)?;
         Ok(ZkAmsMkheAdmittedCpkPartyV1 { state })
     }
-
     /// Consume the exact complete ceremony and directly aggregate all staged
     /// party-`b` objects with one `P`-sized accumulator and one 8-KiB buffer.
     pub fn finish_v1<P>(
@@ -542,7 +518,6 @@ impl ZkAmsMkheCpkCeremonyV1 {
         )
     }
 }
-
 /// Sealed successful CPK products before evaluated-key runtime selection.
 ///
 /// The native `2P` key and both one-shot admissions have already been consumed.
@@ -556,7 +531,6 @@ pub struct ZkAmsMkheFinalizedCpkCeremonyV1 {
         ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
     streaming_decryption_authority: Option<ZkAmsMkheStreamingDecryptionAuthorityV1>,
 }
-
 impl core::fmt::Debug for ZkAmsMkheFinalizedCpkCeremonyV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -576,7 +550,6 @@ impl core::fmt::Debug for ZkAmsMkheFinalizedCpkCeremonyV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheFinalizedCpkCeremonyV1 {
     fn from_staged_v1<P>(
         value: ZkAmsMkheFinalizedStagedCpkV1,
@@ -630,25 +603,21 @@ impl ZkAmsMkheFinalizedCpkCeremonyV1 {
             streaming_decryption_authority: Some(streaming_decryption_authority),
         })
     }
-
     /// Compact authority for allocation-bounded collective-key switching.
     #[must_use]
     pub const fn trusted_cks_context(&self) -> &ZkAmsMkheTrustedCksContextV1 {
         &self.trusted_cks_context
     }
-
     /// Compact sealed authority for bounded evaluated-key source verification.
     #[must_use]
     pub const fn trusted_source_context(&self) -> &ZkAmsMkheTrustedSourceContextV1 {
         &self.trusted_source_context
     }
-
     /// Compact secret-free authority for decryption-share verification.
     #[must_use]
     pub const fn persistent_context(&self) -> &ZkAmsMkhePersistentDecryptionVerificationContextV1 {
         &self.persistent_context
     }
-
     /// Consume the finalized CPK, discard its compact evaluated-key successor,
     /// and return only the move-only streaming encryption authority.
     #[must_use]
@@ -657,7 +626,6 @@ impl ZkAmsMkheFinalizedCpkCeremonyV1 {
     ) -> ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1 {
         self.streaming_collective_encryption_key_authority
     }
-
     /// Consume the one-shot compact authority and bind a streaming decryption
     /// statement without recreating any public-key share. Release admission
     /// requires the provider to expose the CPK and ciphertext objects through
@@ -687,7 +655,6 @@ impl ZkAmsMkheFinalizedCpkCeremonyV1 {
             provider,
         )
     }
-
     /// Consume the compact evaluated-key binding into the reusable runtime
     /// while preserving only compact CKS/decryption successors.
     pub fn into_evaluated_key_runtime_v1(
@@ -724,7 +691,6 @@ impl ZkAmsMkheFinalizedCpkCeremonyV1 {
         })
     }
 }
-
 /// Purpose-bound runtime successors of one consumed staged CPK admission.
 pub struct ZkAmsMkheCpkRuntimeV1 {
     evaluated_key_runtime: ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1,
@@ -735,7 +701,6 @@ pub struct ZkAmsMkheCpkRuntimeV1 {
         Option<ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1>,
     streaming_decryption_authority: Option<ZkAmsMkheStreamingDecryptionAuthorityV1>,
 }
-
 impl core::fmt::Debug for ZkAmsMkheCpkRuntimeV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -755,32 +720,27 @@ impl core::fmt::Debug for ZkAmsMkheCpkRuntimeV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheCpkRuntimeV1 {
     /// Reusable evaluated-key runtime admitted by the consumed staged key.
     #[must_use]
     pub const fn evaluated_key_runtime(&self) -> &ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
         &self.evaluated_key_runtime
     }
-
     /// Compact authority for allocation-bounded collective-key switching.
     #[must_use]
     pub const fn trusted_cks_context(&self) -> &ZkAmsMkheTrustedCksContextV1 {
         &self.trusted_cks_context
     }
-
     /// Compact sealed authority for bounded evaluated-key source verification.
     #[must_use]
     pub const fn trusted_source_context(&self) -> &ZkAmsMkheTrustedSourceContextV1 {
         &self.trusted_source_context
     }
-
     /// Compact secret-free authority for decryption-share verification.
     #[must_use]
     pub const fn persistent_context(&self) -> &ZkAmsMkhePersistentDecryptionVerificationContextV1 {
         &self.persistent_context
     }
-
     /// Take the sole move-only streaming encryption authority. The evaluated
     /// runtime remains usable and retains no second encryption capability.
     pub fn take_streaming_collective_encryption_key_authority_v1(
@@ -790,7 +750,6 @@ impl ZkAmsMkheCpkRuntimeV1 {
             .take()
             .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
-
     /// Consume the remaining one-shot authority into a compact streaming
     /// decryption statement. Release admission requires the provider to expose
     /// the CPK and ciphertext objects through the same immutable snapshot. The
@@ -821,7 +780,6 @@ impl ZkAmsMkheCpkRuntimeV1 {
         )
     }
 }
-
 fn map_cpk_relation_error_v1(error: ZkAmsMkheCpkRelationErrorV1) -> ZkAmsMkheErrorV1 {
     match error {
         ZkAmsMkheCpkRelationErrorV1::ResourceCeiling => ZkAmsMkheErrorV1::ResourceCeilingExceeded,
@@ -835,18 +793,15 @@ fn map_cpk_relation_error_v1(error: ZkAmsMkheCpkRelationErrorV1) -> ZkAmsMkheErr
         _ => ZkAmsMkheErrorV1::InvalidKeyMaterial,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::ZkAmsMkheCollectivePublicKeyShareV1;
-
     fn production_source_v1() -> &'static str {
         include_str!("cpk_ceremony.rs")
             .split("\n#[cfg(test)]\nmod tests")
             .next()
             .expect("production CPK ceremony source")
     }
-
     #[test]
     fn move_only_ceremony_is_reachable_through_the_public_vega_facade() {
         type Begin =
@@ -856,7 +811,6 @@ mod tests {
             )
                 -> Result<crate::vega::ZkAmsMkheCpkCeremonyV1, crate::vega::ZkAmsMkheErrorV1>;
         let _: Begin = crate::vega::ZkAmsMkheCpkCeremonyV1::new;
-
         type PartyInput =
             fn(
                 crate::vega::ZkAmsMkheCollectivePartyStateV1,
@@ -869,7 +823,6 @@ mod tests {
             )
                 -> Result<crate::vega::ZkAmsMkheCpkPartyInputV1, crate::vega::ZkAmsMkheErrorV1>;
         let _: PartyInput = crate::vega::ZkAmsMkheCpkPartyInputV1::new;
-
         let source = production_source_v1();
         let transition = source
             .split("pub fn verify_and_absorb_next_party_v1")
@@ -887,7 +840,6 @@ mod tests {
                 "the public transition must not accept {retaining_shape}",
             );
         }
-
         let finish = source
             .split("pub fn finish_v1")
             .nth(1)
@@ -898,14 +850,12 @@ mod tests {
         assert!(finish.contains("mut self,"));
         assert!(!finish.contains("&mut self"));
     }
-
     #[test]
     fn party_input_binds_the_share_epoch_and_transcript() {
         let _: fn(&ZkAmsMkheCollectivePublicKeyShareV1) -> u64 =
             ZkAmsMkheCollectivePublicKeyShareV1::epoch;
         let _: fn(&ZkAmsMkheCollectivePublicKeyShareV1) -> [u8; 32] =
             ZkAmsMkheCollectivePublicKeyShareV1::transcript_digest;
-
         let collective_source = include_str!("collective.rs");
         let share_impl = collective_source
             .split("impl ZkAmsMkheCollectivePublicKeyShareV1")
@@ -930,7 +880,6 @@ mod tests {
             .expect("share transcript getter body");
         assert!(epoch_getter.contains("self.epoch"));
         assert!(transcript_getter.contains("self.transcript_digest"));
-
         let ceremony_source = production_source_v1();
         let constructor = ceremony_source
             .split("pub fn new(")
@@ -942,7 +891,6 @@ mod tests {
         assert!(constructor.contains("state.epoch() != share.epoch()"));
         assert!(constructor.contains("state.transcript_digest() != share.transcript_digest()"));
     }
-
     #[test]
     fn streaming_decryption_bind_failure_is_terminal_without_partial_capability_escape() {
         let source = production_source_v1();
@@ -951,7 +899,6 @@ mod tests {
             2,
             "both public CPK owners document terminal admission failure"
         );
-
         let mut remaining = source;
         for _ in 0..2 {
             let start = remaining

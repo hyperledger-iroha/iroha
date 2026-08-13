@@ -1,5 +1,4 @@
 // Allocation-bounded request decoding for application-API routed reads.
-
 /// Maximum number of non-empty form pairs accepted by the V1 routed-read
 /// control plane.
 ///
@@ -8,7 +7,6 @@
 /// headroom while bounding the allocation-free duplicate scan to 4,096 key
 /// comparisons.
 const TORII_ROUTED_READ_MAX_QUERY_PAIRS_V1: usize = 64;
-
 #[derive(Clone, Copy, Debug)]
 struct ToriiRoutedReadRequestDecodePlan {
     raw_input_limit_bytes: usize,
@@ -16,7 +14,6 @@ struct ToriiRoutedReadRequestDecodePlan {
     component_limit_bytes: usize,
     typed_limits: norito::DecodeLimits,
 }
-
 impl ToriiRoutedReadMemoryBudget {
     fn request_decode_plan(&self) -> Result<ToriiRoutedReadRequestDecodePlan, Response> {
         let phase_bytes = self.envelope.request_decode_allocated_bytes;
@@ -52,7 +49,6 @@ impl ToriiRoutedReadMemoryBudget {
         })
     }
 }
-
 fn torii_routed_read_request_decode_plan(
     app: &SharedAppState,
 ) -> Result<ToriiRoutedReadRequestDecodePlan, Response> {
@@ -62,7 +58,6 @@ fn torii_routed_read_request_decode_plan(
     )?
     .request_decode_plan()
 }
-
 impl ToriiRoutedReadRequestDecodePlan {
     fn admit_raw_input(self, bytes: usize) -> Result<(), Response> {
         if bytes > self.raw_input_limit_bytes {
@@ -74,7 +69,6 @@ impl ToriiRoutedReadRequestDecodePlan {
         }
         Ok(())
     }
-
     fn preflight_json(self, bytes: &[u8]) -> Result<norito::json::JsonPreflightProfile, Response> {
         self.admit_raw_input(bytes.len())?;
         norito::json::preflight_slice(
@@ -87,7 +81,6 @@ impl ToriiRoutedReadRequestDecodePlan {
         .map_err(torii_routed_read_request_preflight_response)
     }
 }
-
 fn decode_torii_proxy_json_body<T>(
     plan: ToriiRoutedReadRequestDecodePlan,
     body: &[u8],
@@ -99,7 +92,6 @@ where
     let _profile = plan.preflight_json(body)?;
     decode_torii_routed_read_typed_json(plan, body, label)
 }
-
 fn decode_torii_proxy_query<T>(
     plan: ToriiRoutedReadRequestDecodePlan,
     query_string: Option<&str>,
@@ -117,7 +109,6 @@ where
             TORII_ROUTED_READ_MAX_QUERY_PAIRS_V1,
         ));
     }
-
     // The checked serializer performs an allocation-free count, then writes
     // one exact intermediate JSON allocation. It owns at most one exact
     // decoded key or value component at a time; duplicate detection streams
@@ -137,7 +128,6 @@ where
         })?;
     decode_torii_routed_read_typed_json(plan, &json, "query parameters")
 }
-
 fn decode_current_app_routed_read_json<T>(body: &[u8]) -> Option<Result<T, Response>>
 where
     T: norito::json::JsonDeserializeOwned,
@@ -149,7 +139,6 @@ where
         decode_app_routed_read_typed_json(plan, body, "request JSON")
     })
 }
-
 macro_rules! decode_admitted_app_routed_read_json {
     ($body:expr, $fallback:expr) => {{
         match decode_current_app_routed_read_json($body) {
@@ -159,7 +148,6 @@ macro_rules! decode_admitted_app_routed_read_json {
         }
     }};
 }
-
 fn decode_current_app_routed_read_norito<T>(body: &[u8]) -> Option<Result<T, Response>>
 where
     T: crate::utils::extractors::SupportsNoritoDecode + 'static,
@@ -204,7 +192,6 @@ where
         }
     })
 }
-
 fn decode_current_app_routed_read_query<T>(
     query: &str,
     coerce_scalars: bool,
@@ -225,7 +212,6 @@ where
             ));
         }
         validate_app_routed_read_form(query.as_bytes(), plan)?;
-
         // Canonicalization owns its explicit two-unit destination and one
         // component at a time. It deliberately runs outside the typed P-sized
         // decode scope; the exact JSON allocation is dropped only after the
@@ -242,7 +228,6 @@ where
         decode_app_routed_read_typed_json(plan, &json, "query parameters")
     })
 }
-
 #[allow(unsafe_code)]
 fn validate_app_routed_read_form(
     raw: &[u8],
@@ -270,7 +255,6 @@ fn validate_app_routed_read_form(
     }
     Ok(())
 }
-
 fn validate_app_routed_read_percent_component(raw: &[u8]) -> Result<(), Response> {
     let mut index = 0;
     while index < raw.len() {
@@ -297,7 +281,6 @@ fn validate_app_routed_read_percent_component(raw: &[u8]) -> Result<(), Response
     }
     Ok(())
 }
-
 fn decode_app_routed_read_typed_json<T>(
     plan: ToriiRoutedReadRequestDecodePlan,
     bytes: &[u8],
@@ -341,7 +324,6 @@ where
         )),
     }
 }
-
 fn map_app_routed_read_request_response(mut response: Response) -> Response {
     if response.status() == StatusCode::BAD_REQUEST {
         response = torii_proxy_error_response(
@@ -352,7 +334,6 @@ fn map_app_routed_read_request_response(mut response: Response) -> Response {
     }
     response
 }
-
 fn app_routed_read_request_capacity_response(
     phase: &'static str,
     attempted: usize,
@@ -366,7 +347,6 @@ fn app_routed_read_request_capacity_response(
         ),
     )
 }
-
 fn app_routed_read_form_encode_response(
     error: norito::json::BoundedJsonError,
     limit: usize,
@@ -390,7 +370,6 @@ fn app_routed_read_form_encode_response(
         ),
     }
 }
-
 fn decode_torii_routed_read_typed_json<T>(
     plan: ToriiRoutedReadRequestDecodePlan,
     bytes: &[u8],
@@ -429,7 +408,6 @@ where
         )),
     }
 }
-
 fn torii_routed_read_request_preflight_response(
     error: norito::json::JsonPreflightError,
 ) -> Response {
@@ -446,7 +424,6 @@ fn torii_routed_read_request_preflight_response(
         "proxied application request failed bounded JSON lexical validation",
     )
 }
-
 fn torii_routed_read_request_capacity_response(
     phase: &'static str,
     attempted: usize,
@@ -460,7 +437,6 @@ fn torii_routed_read_request_capacity_response(
         ),
     )
 }
-
 fn torii_routed_read_form_encode_response(
     error: norito::json::BoundedJsonError,
     limit: usize,
@@ -486,13 +462,11 @@ fn torii_routed_read_form_encode_response(
         ),
     }
 }
-
 #[derive(Clone, Copy)]
 struct ToriiFormPair<'a> {
     key: &'a [u8],
     value: &'a [u8],
 }
-
 fn torii_form_pairs(raw: &[u8]) -> impl Iterator<Item = ToriiFormPair<'_>> {
     raw.split(|byte| *byte == b'&')
         .filter(|sequence| !sequence.is_empty())
@@ -510,22 +484,18 @@ fn torii_form_pairs(raw: &[u8]) -> impl Iterator<Item = ToriiFormPair<'_>> {
             ToriiFormPair { key, value }
         })
 }
-
 #[derive(Clone)]
 struct ToriiFormDecodedBytes<'a> {
     raw: &'a [u8],
     index: usize,
 }
-
 impl<'a> ToriiFormDecodedBytes<'a> {
     fn new(raw: &'a [u8]) -> Self {
         Self { raw, index: 0 }
     }
 }
-
 impl Iterator for ToriiFormDecodedBytes<'_> {
     type Item = u8;
-
     fn next(&mut self) -> Option<Self::Item> {
         let byte = *self.raw.get(self.index)?;
         if byte == b'+' {
@@ -549,7 +519,6 @@ impl Iterator for ToriiFormDecodedBytes<'_> {
         Some(byte)
     }
 }
-
 const fn torii_hex(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -558,29 +527,24 @@ const fn torii_hex(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-
 #[derive(Clone)]
 struct ToriiFormLossyChars<'a> {
     bytes: ToriiFormDecodedBytes<'a>,
 }
-
 impl<'a> ToriiFormLossyChars<'a> {
     fn new(raw: &'a [u8]) -> Self {
         Self {
             bytes: ToriiFormDecodedBytes::new(raw),
         }
     }
-
     fn advance(&mut self, bytes: usize) {
         for _ in 0..bytes {
             let _ = self.bytes.next();
         }
     }
 }
-
 impl Iterator for ToriiFormLossyChars<'_> {
     type Item = char;
-
     #[allow(unsafe_code)]
     fn next(&mut self) -> Option<Self::Item> {
         let mut probe = self.bytes.clone();
@@ -596,7 +560,6 @@ impl Iterator for ToriiFormLossyChars<'_> {
         if length == 0 {
             return None;
         }
-
         match std::str::from_utf8(&encoded[..length]) {
             Ok(valid) => {
                 let ch = valid.chars().next().expect("non-empty UTF-8 probe");
@@ -624,7 +587,6 @@ impl Iterator for ToriiFormLossyChars<'_> {
         }
     }
 }
-
 #[allow(unsafe_code)]
 fn torii_exact_form_component(
     raw: &[u8],
@@ -654,7 +616,6 @@ fn torii_exact_form_component(
     // from `char::encode_utf8`, so the complete byte string is valid UTF-8.
     Ok(unsafe { Box::from_raw(Box::into_raw(output) as *mut [u8]) })
 }
-
 #[allow(unsafe_code)]
 fn torii_allocate_exact_bytes(
     length: usize,
@@ -674,18 +635,15 @@ fn torii_allocate_exact_bytes(
     // SAFETY: the allocation owns exactly the layout of this boxed slice.
     Ok(unsafe { Box::from_raw(slice) })
 }
-
 struct ToriiRoutedReadFormJson<'a> {
     raw: &'a str,
     plan: ToriiRoutedReadRequestDecodePlan,
     coerce_scalars: bool,
 }
-
 impl norito::json::FastJsonWrite for ToriiRoutedReadFormJson<'_> {
     fn write_json(&self, output: &mut String) {
         norito::json::write_json_unbounded(self, output);
     }
-
     #[allow(unsafe_code)]
     fn write_json_to(
         &self,
@@ -695,7 +653,6 @@ impl norito::json::FastJsonWrite for ToriiRoutedReadFormJson<'_> {
         if pair_count > TORII_ROUTED_READ_MAX_QUERY_PAIRS_V1 {
             return Err(norito::json::BoundedJsonError::BodyTooLarge);
         }
-
         output.begin_container()?;
         output.push('{')?;
         let mut first = true;
@@ -717,7 +674,6 @@ impl norito::json::FastJsonWrite for ToriiRoutedReadFormJson<'_> {
             norito::json::write_json_string_to(key_text, output)?;
             drop(key);
             output.push(':')?;
-
             let value = torii_exact_form_component(pair.value, self.plan.component_limit_bytes)?;
             // SAFETY: `torii_exact_form_component` constructs valid UTF-8.
             let value = unsafe { std::str::from_utf8_unchecked(&value) }.trim();
@@ -732,13 +688,11 @@ impl norito::json::FastJsonWrite for ToriiRoutedReadFormJson<'_> {
         Ok(())
     }
 }
-
 fn torii_write_form_scalar(
     value: &str,
     output: &mut dyn norito::json::JsonWriteSink,
 ) -> Result<(), norito::json::BoundedJsonError> {
     use norito::json::JsonSerialize as _;
-
     if value.eq_ignore_ascii_case("null") {
         output.push_str("null")
     } else if value.eq_ignore_ascii_case("true") {
@@ -757,11 +711,9 @@ fn torii_write_form_scalar(
         norito::json::write_json_string_to(value, output)
     }
 }
-
 #[cfg(test)]
 mod torii_routed_read_request_tests {
     use super::*;
-
     #[test]
     fn lossy_form_decoder_matches_url_crate_corpus() {
         let corpus: &[&[u8]] = &[
@@ -786,7 +738,6 @@ mod torii_routed_read_request_tests {
             assert_eq!(std::str::from_utf8(&actual).expect("valid UTF-8"), expected);
         }
     }
-
     #[test]
     fn query_pair_limit_is_exact_and_duplicate_last_wins() {
         let phase = 64 * 1024;
@@ -801,19 +752,16 @@ mod torii_routed_read_request_tests {
         let decoded = decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some(&exact))
             .expect("exact pair count decodes");
         assert_eq!(decoded.limit, Some(7));
-
         let decoded_key_duplicate =
             decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some("%6cimit=7&limit=9"))
                 .expect("decoded duplicate keys retain the final value");
         assert_eq!(decoded_key_duplicate.limit, Some(9));
-
         let oversized = format!("{exact}&limit=8");
         let response =
             decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some(&oversized))
                 .expect_err("pair limit plus one is rejected");
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
-
     #[test]
     fn json_body_preflights_and_maps_resource_failures_to_413() {
         let phase = 4 * 1024;
@@ -827,7 +775,6 @@ mod torii_routed_read_request_tests {
             decode_torii_proxy_json_body::<routing::ListFilterParams>(plan, valid, "list filter")
                 .expect("small request decodes");
         assert_eq!(decoded.limit, Some(7));
-
         let oversized = vec![b' '; plan.raw_input_limit_bytes + 1];
         let response = decode_torii_proxy_json_body::<routing::ListFilterParams>(
             plan,
@@ -837,7 +784,6 @@ mod torii_routed_read_request_tests {
         .expect_err("raw limit plus one is rejected");
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
-
     #[test]
     fn production_form_decoder_does_not_reintroduce_allocating_url_parser() {
         let source = include_str!("torii_app_routed_read_request.rs");

@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke test that Webhooks endpoints are exposed via the merged sub-router.
 #![cfg(feature = "app_api")]
-
 use std::sync::Arc;
-
 use axum::http::Request;
 use http::StatusCode;
 use iroha_core::{
@@ -17,10 +15,8 @@ use iroha_data_model::peer::PeerId;
 use iroha_primitives::time::TimeSource;
 use iroha_torii::Torii;
 use tower::ServiceExt as _;
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 #[tokio::test]
 async fn webhooks_endpoints_exposed() {
     // Minimal Torii setup
@@ -44,7 +40,6 @@ async fn webhooks_endpoints_exposed() {
     ));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-
     #[cfg(feature = "telemetry")]
     let telemetry = {
         use iroha_core::telemetry as core_telemetry;
@@ -62,7 +57,6 @@ async fn webhooks_endpoints_exposed() {
         )
         .0
     };
-
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = {
         #[cfg(feature = "telemetry")]
@@ -100,9 +94,7 @@ async fn webhooks_endpoints_exposed() {
             )
         }
     };
-
     let app = torii.api_router_for_tests();
-
     // Webhook registry routes reject requests before dispatch unless operator
     // authentication succeeds.
     let resp = app
@@ -116,7 +108,6 @@ async fn webhooks_endpoints_exposed() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-
     // POST /v1/webhooks — create a webhook
     let body = r#"{"url":"https://example.com/webhook","active":true}"#;
     let resp = app
@@ -137,7 +128,6 @@ async fn webhooks_endpoints_exposed() {
         resp.status(),
         StatusCode::CREATED | StatusCode::TOO_MANY_REQUESTS
     ));
-
     // GET /v1/webhooks — list webhooks
     let resp = app
         .oneshot(fixtures::operator_signed_request(
@@ -155,7 +145,6 @@ async fn webhooks_endpoints_exposed() {
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
 }
-
 #[tokio::test]
 async fn webhooks_endpoints_disabled_by_default() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
@@ -177,7 +166,6 @@ async fn webhooks_endpoints_disabled_by_default() {
     ));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-
     #[cfg(feature = "telemetry")]
     let telemetry = {
         use iroha_core::telemetry as core_telemetry;
@@ -195,7 +183,6 @@ async fn webhooks_endpoints_disabled_by_default() {
         )
         .0
     };
-
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = {
         #[cfg(feature = "telemetry")]
@@ -233,7 +220,6 @@ async fn webhooks_endpoints_disabled_by_default() {
             )
         }
     };
-
     let app = torii.api_router_for_tests();
     let resp = app
         .clone()
@@ -246,7 +232,6 @@ async fn webhooks_endpoints_disabled_by_default() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-
     // Authentication precedes the feature-disabled handler, so an authorized
     // request reaches the stable not-found response.
     let resp = app

@@ -5,9 +5,7 @@
 //! system. The container carries a backend identifier (`Ident`) and raw bytes
 //! produced by that backend. Norito serialization preserves both fields
 //! byte-for-byte to ensure stable hashing and compatibility across nodes.
-
 use std::io::Write;
-
 #[cfg(feature = "json")]
 use base64::Engine as _;
 #[cfg(feature = "json")]
@@ -17,9 +15,7 @@ use norito::{
     codec::{Decode, Encode},
     core as ncore,
 };
-
 use crate::{confidential::ConfidentialStatus, zk::BackendTag};
-
 const MAX_BACKEND_FIELD_BYTES: usize = 4 * 1024;
 const MAX_REF_FIELD_BYTES: usize = 16 * 1024;
 /// Maximum canonical encoded size of a [`ProofBox`] nested in a proof attachment.
@@ -2346,7 +2342,6 @@ impl norito::json::JsonDeserialize for ProofId {
 #[cfg(test)]
 mod parse_tests {
     use super::*;
-
     #[test]
     fn proof_id_parse_roundtrip_upper_lower_and_0x() {
         let id = ProofId {
@@ -2474,9 +2469,7 @@ impl ProofedCommittedTransaction {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, HashOf, LaneCommitmentId, MerkleProof};
-
     use super::*;
-
     fn write_test_field<T: norito::NoritoSerialize>(encoded: &mut Vec<u8>, value: &T) {
         let mut field = Vec::new();
         ncore::serialize_to_buffer(value, &mut field).expect("serialize test field");
@@ -3427,7 +3420,6 @@ mod tests {
     #[test]
     fn proof_attachment_list_json_rejects_backend_mismatch_inside_wire_payload() {
         use base64::Engine as _;
-
         let list = bounded_attachment_list(vec![ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
@@ -3443,7 +3435,6 @@ mod tests {
     #[test]
     fn proof_attachment_list_json_rejects_single_attachment_wire_payload() {
         use base64::Engine as _;
-
         let attachment = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
@@ -3458,7 +3449,6 @@ mod tests {
     #[test]
     fn proof_attachment_list_json_is_canonical_and_ambient_independent() {
         use base64::Engine as _;
-
         let list = bounded_attachment_list(vec![ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
@@ -3565,7 +3555,6 @@ mod tests {
     #[test]
     fn proof_attachment_list_json_limit_helpers_use_closed_boundaries() {
         use base64::Engine as _;
-
         proof_attachment_list_validate_limits(8, 2, 8, 2)
             .expect("frame and count exactly at their limits must pass");
         assert!(proof_attachment_list_validate_limits(9, 2, 8, 2).is_err());
@@ -3633,7 +3622,6 @@ mod tests {
     #[test]
     fn proof_attachment_list_json_rejects_over_limit_attachment_count() {
         use base64::Engine as _;
-
         let attachment = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1]),
@@ -3659,7 +3647,6 @@ mod tests {
     #[test]
     fn proof_attachment_list_json_rejects_forged_empty_frame() {
         use base64::Engine as _;
-
         // The private field prevents this value outside the defining module;
         // forge it here solely to exercise hostile wire input.
         let frame = norito::encode_canonical(&ProofAttachmentList(Vec::new()))
@@ -4321,7 +4308,6 @@ mod tests {
     #[test]
     fn proofed_committed_tx_roundtrip() {
         use iroha_crypto::{Hash, HashOf};
-
         use crate::query::CommittedTransaction;
         // Minimal dummy CommittedTransaction with empty merkle items.
         let empty: [u8; 32] = [0; 32];

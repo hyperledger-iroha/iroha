@@ -6,25 +6,20 @@
 //! `a * b = c + q * modulus`; addition proves the analogous radix equation.
 //! The absolute value of every integer residue is below `2^43`, so equality in
 //! Goldilocks is equality over the integers rather than a field-wrap shortcut.
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use p256::elliptic_curve::bigint::{Encoding as _, NonZero, U256, U512};
 use thiserror::Error;
-
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
-
 /// P-256 coordinate-field modulus in canonical big-endian form.
 pub(crate) const P256_BASE_MODULUS_BE_V1: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 ];
-
 /// P-256 scalar-field order in canonical big-endian form.
 pub(crate) const P256_SCALAR_MODULUS_BE_V1: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63, 0x25, 0x51,
 ];
-
 const LIMBS: usize = 16;
 /// Fixed schoolbook coefficient rows per arithmetic operation.
 pub(crate) const P256_ARITHMETIC_ROWS_PER_OPERATION_V1: usize = 2 * LIMBS;
@@ -48,7 +43,6 @@ const CARRY_BIAS: i64 = 1 << 24;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const CARRY_ABSOLUTE_BOUND: i64 = 1 << 22;
 const RADIX: i64 = 1 << 16;
-
 const A_START: usize = 0;
 const B_START: usize = A_START + LIMBS;
 const C_START: usize = B_START + LIMBS;
@@ -71,7 +65,6 @@ const B_BORROW_AFTER: usize = A_BORROW_AFTER + 1;
 const C_BORROW_AFTER: usize = B_BORROW_AFTER + 1;
 const CARRY: usize = C_BORROW_AFTER + 1;
 const CARRY_BIT_START: usize = CARRY + 1;
-
 const STARK_KIND_MULTIPLY: usize = 0;
 const STARK_KIND_ADD: usize = STARK_KIND_MULTIPLY + 1;
 const STARK_KIND_SUBTRACT: usize = STARK_KIND_ADD + 1;
@@ -87,9 +80,7 @@ const STARK_SLOT_LAST: usize = STARK_SLOT_FIRST + 1;
 const STARK_OPERATION_FIRST: usize = STARK_SLOT_LAST + 1;
 const STARK_OPERATION_LAST: usize = STARK_OPERATION_FIRST + 1;
 const STARK_PADDING: usize = STARK_OPERATION_LAST + 1;
-
 const _: () = assert!(STARK_PADDING + 1 == P256_ARITHMETIC_STARK_FIXED_WIDTH_V1);
-
 /// Fixed P-256 modulus selected by one arithmetic instruction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ZkX509P256ModulusV1 {
@@ -98,7 +89,6 @@ pub(crate) enum ZkX509P256ModulusV1 {
     /// Scalar-field order.
     ScalarField,
 }
-
 impl ZkX509P256ModulusV1 {
     fn bytes_be(self) -> [u8; 32] {
         match self {
@@ -106,12 +96,10 @@ impl ZkX509P256ModulusV1 {
             Self::ScalarField => P256_SCALAR_MODULUS_BE_V1,
         }
     }
-
     fn limbs_le(self) -> [u16; LIMBS] {
         bytes_be_to_limbs_le_v1(self.bytes_be())
     }
 }
-
 /// Fixed arithmetic relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ZkX509P256ArithmeticKindV1 {
@@ -123,7 +111,6 @@ pub(crate) enum ZkX509P256ArithmeticKindV1 {
     /// with `q` exactly zero or one.
     Subtract,
 }
-
 /// Value-free verifier instruction used to compile arithmetic preprocessing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509P256ArithmeticTopologyV1 {
@@ -132,7 +119,6 @@ pub(crate) struct ZkX509P256ArithmeticTopologyV1 {
     /// Fixed arithmetic modulus.
     pub(crate) modulus: ZkX509P256ModulusV1,
 }
-
 /// One canonical arithmetic operation before row expansion.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,7 +134,6 @@ pub(crate) struct ZkX509P256ArithmeticOperationV1 {
     /// Canonical result, big-endian.
     pub(crate) c: [u8; 32],
 }
-
 /// Verifier-regenerated row location and selectors.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,26 +147,21 @@ pub(crate) struct ZkX509P256ArithmeticFixedRowV1 {
     /// Selected modulus.
     pub(crate) modulus: ZkX509P256ModulusV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509P256ArithmeticFixedRowV1 {
     const fn is_first(self) -> bool {
         self.coefficient == 0
     }
-
     const fn is_last(self) -> bool {
         self.coefficient as usize + 1 == P256_ARITHMETIC_ROWS_PER_OPERATION_V1
     }
-
     const fn has_canonicality_row(self) -> bool {
         (self.coefficient as usize) < LIMBS
     }
-
     const fn range_slot(self) -> usize {
         self.coefficient as usize % LIMBS
     }
 }
-
 /// Complete exact arithmetic trace.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,7 +171,6 @@ pub(crate) struct ZkX509P256ArithmeticTraceV1 {
     /// Committed base rows.
     pub(crate) base: Vec<[F; P256_ARITHMETIC_BASE_WIDTH_V1]>,
 }
-
 /// Project the selected `c`-limb bit decomposition from one opened arithmetic
 /// base row.
 ///
@@ -205,7 +184,6 @@ pub(crate) fn p256_arithmetic_opened_c_limb_bits_v1(
 ) -> [F; LIMB_BITS] {
     core::array::from_fn(|bit| base[C_BITS + bit])
 }
-
 /// Select the eight `c`-limb bit cells assigned to one scalar-source row.
 ///
 /// The first sixteen coefficients select bits 0 through 7 and the final
@@ -223,7 +201,6 @@ pub(crate) fn p256_arithmetic_opened_scalar_source_bits_v1(
         base[C_BITS + bit].add(high.mul(base[C_BITS + LIMBS / 2 + bit].sub(base[C_BITS + bit])))
     })
 }
-
 /// Select the `a`, `b`, and `c` limb cells addressed by this opened
 /// coefficient row.
 ///
@@ -241,14 +218,12 @@ pub(crate) fn p256_arithmetic_opened_operand_limbs_v1(
         })
     })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509P256ArithmeticTraceV1 {
     /// Number of logical rows.
     pub(crate) fn rows(&self) -> usize {
         self.base.len()
     }
-
     /// Validate fixed topology and every exact arithmetic identity.
     pub(crate) fn validate(&self) -> Result<(), ZkX509P256AirErrorV1> {
         if self.fixed.len() != self.base.len()
@@ -283,7 +258,6 @@ impl ZkX509P256ArithmeticTraceV1 {
         Ok(())
     }
 }
-
 /// Constant-memory verifier-owned arithmetic preprocessing provider.
 ///
 /// The complete logical topology is checked once at construction. Numeric
@@ -295,7 +269,6 @@ pub(crate) struct P256ArithmeticStarkFixedProviderV1 {
     active_rows: usize,
     trace_size: usize,
 }
-
 impl P256ArithmeticStarkFixedProviderV1 {
     /// Validate the deterministic topology and establish one padded native
     /// domain.
@@ -321,7 +294,6 @@ impl P256ArithmeticStarkFixedProviderV1 {
             trace_size,
         })
     }
-
     /// Regenerate one exact numeric row.
     pub(crate) fn row_v1(
         &self,
@@ -371,7 +343,6 @@ impl P256ArithmeticStarkFixedProviderV1 {
         Ok(row)
     }
 }
-
 /// Exact P-256 arithmetic trace failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509P256AirErrorV1 {
@@ -397,7 +368,6 @@ pub(crate) enum ZkX509P256AirErrorV1 {
     #[error("zk-X509 P-256 arithmetic allocation failed")]
     Allocation,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct ExpandedOperationV1 {
@@ -413,7 +383,6 @@ struct ExpandedOperationV1 {
     c_borrow: [u8; LIMBS + 1],
     carries: [i64; P256_ARITHMETIC_ROWS_PER_OPERATION_V1 + 1],
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ExpandedOperationV1 {
     fn base_row(
@@ -425,13 +394,11 @@ impl ExpandedOperationV1 {
         write_limbs_v1(&mut row[B_START..B_START + LIMBS], self.b);
         write_limbs_v1(&mut row[C_START..C_START + LIMBS], self.c);
         write_limbs_v1(&mut row[Q_START..Q_START + LIMBS], self.q);
-
         let slot = fixed.range_slot();
         write_bits_v1(&mut row[A_BITS..A_BITS + LIMB_BITS], self.a[slot]);
         write_bits_v1(&mut row[B_BITS..B_BITS + LIMB_BITS], self.b[slot]);
         write_bits_v1(&mut row[C_BITS..C_BITS + LIMB_BITS], self.c[slot]);
         write_bits_v1(&mut row[Q_BITS..Q_BITS + LIMB_BITS], self.q[slot]);
-
         if fixed.has_canonicality_row() {
             row[A_DIFFERENCE] = F(u64::from(self.a_difference[slot]));
             row[B_DIFFERENCE] = F(u64::from(self.b_difference[slot]));
@@ -455,7 +422,6 @@ impl ExpandedOperationV1 {
             row[B_BORROW_AFTER] = F(u64::from(self.b_borrow[slot + 1]));
             row[C_BORROW_AFTER] = F(u64::from(self.c_borrow[slot + 1]));
         }
-
         let carry = self.carries[usize::from(fixed.coefficient)];
         if carry.unsigned_abs() >= CARRY_ABSOLUTE_BOUND as u64 {
             return Err(ZkX509P256AirErrorV1::CarryRange);
@@ -473,7 +439,6 @@ impl ExpandedOperationV1 {
         Ok(row)
     }
 }
-
 /// Expand a non-empty fixed operation batch into exact coefficient rows.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_p256_arithmetic_trace_v1(
@@ -493,7 +458,6 @@ pub(crate) fn build_zk_x509_p256_arithmetic_trace_v1(
         .map_err(|_| ZkX509P256AirErrorV1::Allocation)?;
     base.try_reserve_exact(rows)
         .map_err(|_| ZkX509P256AirErrorV1::Allocation)?;
-
     for (operation_index, operation) in operations.iter().copied().enumerate() {
         let operation_number =
             u32::try_from(operation_index).map_err(|_| ZkX509P256AirErrorV1::Allocation)?;
@@ -516,7 +480,6 @@ pub(crate) fn build_zk_x509_p256_arithmetic_trace_v1(
     trace.validate()?;
     Ok(trace)
 }
-
 /// Read the `a`, `b`, and `c` limbs constrained on one operation's
 /// corresponding coefficient row.
 ///
@@ -546,7 +509,6 @@ pub(crate) fn p256_arithmetic_operand_limbs_v1(
         base[C_START + limb],
     ])
 }
-
 /// Read the committed little-endian Boolean decomposition of one `c` limb.
 ///
 /// This is the narrow source-binding surface used by the scalar-bit copy bus.
@@ -572,7 +534,6 @@ pub(crate) fn p256_arithmetic_c_limb_bits_v1(
     }
     Ok(core::array::from_fn(|bit| base[C_BITS + bit]))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expand_operation_v1(
     operation: ZkX509P256ArithmeticOperationV1,
@@ -617,7 +578,6 @@ fn expand_operation_v1(
         carries,
     })
 }
-
 /// Evaluate one exact coefficient row.
 ///
 /// Every returned expression is degree at most two.  `next_base` is required
@@ -634,7 +594,6 @@ pub(crate) fn evaluate_p256_arithmetic_row_constraints_v1(
     if !fixed.is_last() && next_base.is_none() {
         return Err(ZkX509P256AirErrorV1::Topology);
     }
-
     let mut residues = Vec::with_capacity(180);
     let slot = fixed.range_slot();
     for (value, bits) in [
@@ -645,7 +604,6 @@ pub(crate) fn evaluate_p256_arithmetic_row_constraints_v1(
     ] {
         append_range_residues_v1(&mut residues, value, &base[bits..bits + LIMB_BITS]);
     }
-
     if fixed.has_canonicality_row() {
         for (value, difference, difference_bits, borrow_before, borrow_after) in [
             (
@@ -705,7 +663,6 @@ pub(crate) fn evaluate_p256_arithmetic_row_constraints_v1(
             residues.push(*value);
         }
     }
-
     append_range_residues_v1(
         &mut residues,
         base[CARRY],
@@ -720,14 +677,12 @@ pub(crate) fn evaluate_p256_arithmetic_row_constraints_v1(
     } else {
         next_base.ok_or(ZkX509P256AirErrorV1::Topology)?[CARRY].sub(F(CARRY_BIAS as u64))
     };
-
     if !fixed.is_last() {
         let next = next_base.ok_or(ZkX509P256AirErrorV1::Topology)?;
         for column in A_START..Q_START + LIMBS {
             residues.push(next[column].sub(base[column]));
         }
     }
-
     if matches!(
         fixed.kind,
         ZkX509P256ArithmeticKindV1::Add | ZkX509P256ArithmeticKindV1::Subtract
@@ -737,7 +692,6 @@ pub(crate) fn evaluate_p256_arithmetic_row_constraints_v1(
             residues.push(*quotient_limb);
         }
     }
-
     let coefficient = usize::from(fixed.coefficient);
     let modulus = fixed.modulus.limbs_le();
     let relation = match fixed.kind {
@@ -783,7 +737,6 @@ pub(crate) fn evaluate_p256_arithmetic_row_constraints_v1(
     residues.push(relation);
     Ok(residues)
 }
-
 /// Compile the exact numeric preprocessing rows used by the aggregate STARK.
 ///
 /// `operations` must come from the deterministic ECDSA topology compiler, not
@@ -803,7 +756,6 @@ pub(crate) fn compile_p256_arithmetic_stark_fixed_rows_v1(
     }
     Ok(rows)
 }
-
 fn stark_selected_limb_v1(
     base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
     limb_start: usize,
@@ -814,7 +766,6 @@ fn stark_selected_limb_v1(
         sum.add(base[limb_start + limb].mul(fixed[selector_start + limb]))
     })
 }
-
 fn push_stark_range_residues_v1(
     residues: &mut Vec<F>,
     selected: F,
@@ -831,7 +782,6 @@ fn push_stark_range_residues_v1(
     residues.push(selected.sub(packed));
     Ok(())
 }
-
 /// Evaluate one P-256 arithmetic row as a fixed-width polynomial vector.
 ///
 /// Unlike the native `evaluate_p256_arithmetic_row_constraints_v1` reference
@@ -857,7 +807,6 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
     {
         return Err(ZkX509P256AirErrorV1::Constraint);
     }
-
     let mut residues = Vec::with_capacity(P256_ARITHMETIC_STARK_CONSTRAINT_COUNT_V1);
     for (limb_start, bits_start) in [
         (A_START, A_BITS),
@@ -872,7 +821,6 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
             &current[bits_start..bits_start + LIMB_BITS],
         )?;
     }
-
     let canonicality = fixed[STARK_CANONICALITY_ROW];
     let noncanonicality = F::ONE.sub(canonicality);
     let range_slot_first = fixed[STARK_SLOT_FIRST];
@@ -949,7 +897,6 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
     for value in &current[A_DIFFERENCE..=C_BORROW_AFTER] {
         residues.push(noncanonicality.mul(*value));
     }
-
     push_stark_range_residues_v1(
         &mut residues,
         current[CARRY],
@@ -957,7 +904,6 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
     )?;
     let carry = current[CARRY].sub(F(CARRY_BIAS as u64));
     residues.push(fixed[STARK_OPERATION_FIRST].mul(carry));
-
     let multiply = fixed[STARK_KIND_MULTIPLY];
     let add = fixed[STARK_KIND_ADD];
     let subtract = fixed[STARK_KIND_SUBTRACT];
@@ -967,13 +913,11 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
     for column in A_START..Q_START + LIMBS {
         residues.push(active_not_last.mul(next[column].sub(current[column])));
     }
-
     let add_or_subtract = add.add(subtract);
     residues.push(add_or_subtract.mul(current[Q_START].mul(current[Q_START].sub(F::ONE))));
     for quotient_limb in &current[Q_START + 1..Q_START + LIMBS] {
         residues.push(add_or_subtract.mul(*quotient_limb));
     }
-
     let next_carry = operation_not_last.mul(next[CARRY].sub(F(CARRY_BIAS as u64)));
     let mut multiplication_relation = carry.sub(F(RADIX as u64).mul(next_carry));
     for coefficient in 0..P256_ARITHMETIC_ROWS_PER_OPERATION_V1 {
@@ -994,7 +938,6 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
         }
         multiplication_relation = multiplication_relation.add(selector.mul(coefficient_relation));
     }
-
     let low_a = stark_selected_limb_v1(current, A_START, fixed, STARK_LOW_SLOT_START);
     let low_b = stark_selected_limb_v1(current, B_START, fixed, STARK_LOW_SLOT_START);
     let low_c = stark_selected_limb_v1(current, C_START, fixed, STARK_LOW_SLOT_START);
@@ -1017,20 +960,17 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
             .add(add.mul(addition_relation))
             .add(subtract.mul(subtraction_relation)),
     );
-
     let padding = fixed[STARK_PADDING];
     for value in &current[A_START..Q_START + LIMBS] {
         residues.push(padding.mul(*value));
     }
     residues.push(padding.mul(current[CARRY]));
     residues.push(current_aux[0]);
-
     if residues.len() != P256_ARITHMETIC_STARK_CONSTRAINT_COUNT_V1 {
         return Err(ZkX509P256AirErrorV1::Topology);
     }
     Ok(residues)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_range_residues_v1(residues: &mut Vec<F>, value: F, bits: &[F]) {
     let mut packed = F::ZERO;
@@ -1040,11 +980,9 @@ fn append_range_residues_v1(residues: &mut Vec<F>, value: F, bits: &[F]) {
     }
     residues.push(value.sub(packed));
 }
-
 fn boolean_residue_v1(value: F) -> F {
     value.mul(value.sub(F::ONE))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn arithmetic_carries_v1(
     kind: ZkX509P256ArithmeticKindV1,
@@ -1102,7 +1040,6 @@ fn arithmetic_carries_v1(
     }
     Ok(carries)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn less_than_witness_v1(
     value: [u16; LIMBS],
@@ -1124,7 +1061,6 @@ fn less_than_witness_v1(
     }
     Ok((difference, borrow))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn exact_multiplication_quotient_v1(
     a: [u8; 32],
@@ -1148,7 +1084,6 @@ fn exact_multiplication_quotient_v1(
     result.copy_from_slice(&quotient[32..]);
     Ok(result)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn exact_addition_quotient_v1(
     a: [u8; 32],
@@ -1169,7 +1104,6 @@ fn exact_addition_quotient_v1(
     result[31] = quotient;
     Ok(result)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn exact_subtraction_quotient_v1(
     a: [u8; 32],
@@ -1190,14 +1124,12 @@ fn exact_subtraction_quotient_v1(
     result[31] = quotient;
     Ok(result)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn widen_be_v1(value: [u8; 32]) -> [u8; 33] {
     let mut wide = [0_u8; 33];
     wide[1..].copy_from_slice(&value);
     wide
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn add_be_v1(left: [u8; 32], right: [u8; 32]) -> [u8; 33] {
     let mut result = [0_u8; 33];
@@ -1210,7 +1142,6 @@ fn add_be_v1(left: [u8; 32], right: [u8; 32]) -> [u8; 33] {
     result[0] = carry as u8;
     result
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn add_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX509P256AirErrorV1> {
     let mut result = [0_u8; 33];
@@ -1225,7 +1156,6 @@ fn add_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX509P25
     }
     Ok(result)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn subtract_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX509P256AirErrorV1> {
     if left < right {
@@ -1248,49 +1178,41 @@ fn subtract_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX5
     }
     Ok(result)
 }
-
 fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; LIMBS] {
     core::array::from_fn(|index| {
         let low = 31 - 2 * index;
         u16::from_le_bytes([bytes[low], bytes[low - 1]])
     })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_limbs_v1(target: &mut [F], limbs: [u16; LIMBS]) {
     for (target, limb) in target.iter_mut().zip(limbs) {
         *target = F(u64::from(limb));
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_bits_v1(target: &mut [F], value: u16) {
     for (bit, target) in target.iter_mut().enumerate() {
         *target = F(u64::from((value >> bit) & 1));
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use p256::{Scalar, elliptic_curve::PrimeField as _};
-
     fn zero() -> [u8; 32] {
         [0; 32]
     }
-
     fn one() -> [u8; 32] {
         let mut value = [0; 32];
         value[31] = 1;
         value
     }
-
     fn small(value: u64) -> [u8; 32] {
         let mut bytes = [0; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());
         bytes
     }
-
     fn minus_one(mut value: [u8; 32]) -> [u8; 32] {
         for byte in value.iter_mut().rev() {
             if *byte != 0 {
@@ -1301,7 +1223,6 @@ mod tests {
         }
         panic!("non-zero modulus")
     }
-
     fn subtract_small(mut value: [u8; 32], amount: u64) -> [u8; 32] {
         let mut borrow = amount;
         for byte in value.iter_mut().rev() {
@@ -1316,7 +1237,6 @@ mod tests {
         assert_eq!(borrow, 0);
         value
     }
-
     fn bigint_multiply_mod(left: [u8; 32], right: [u8; 32], modulus: [u8; 32]) -> [u8; 32] {
         let product: U512 = U256::from_be_slice(&left).mul(&U256::from_be_slice(&right));
         let divisor = NonZero::new(U256::ZERO.concat(&U256::from_be_slice(&modulus))).unwrap();
@@ -1326,7 +1246,6 @@ mod tests {
         result.copy_from_slice(&remainder[32..]);
         result
     }
-
     fn bigint_add_mod(left: [u8; 32], right: [u8; 32], modulus: [u8; 32]) -> [u8; 32] {
         let sum = add_be_v1(left, right);
         let modulus = widen_be_v1(modulus);
@@ -1353,7 +1272,6 @@ mod tests {
         result.copy_from_slice(&reduced[1..]);
         result
     }
-
     fn bigint_subtract_mod(left: [u8; 32], right: [u8; 32], modulus: [u8; 32]) -> [u8; 32] {
         let lifted = if left >= right {
             widen_be_v1(left)
@@ -1367,7 +1285,6 @@ mod tests {
         result.copy_from_slice(&difference[1..]);
         result
     }
-
     fn boundary_operations() -> Vec<ZkX509P256ArithmeticOperationV1> {
         [
             (ZkX509P256ModulusV1::BaseField, P256_BASE_MODULUS_BE_V1),
@@ -1408,7 +1325,6 @@ mod tests {
         })
         .collect()
     }
-
     fn arithmetic_topology(
         operations: &[ZkX509P256ArithmeticOperationV1],
     ) -> Vec<ZkX509P256ArithmeticTopologyV1> {
@@ -1420,7 +1336,6 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn exact_base_and_scalar_arithmetic_accepts_boundary_vectors() {
         assert_eq!(
@@ -1440,7 +1355,6 @@ mod tests {
         );
         trace.validate().expect("all exact coefficient identities");
     }
-
     #[test]
     fn operand_limb_accessor_is_exact_and_bounds_checked() {
         let operations = boundary_operations();
@@ -1483,7 +1397,6 @@ mod tests {
             Err(ZkX509P256AirErrorV1::Topology)
         );
     }
-
     #[test]
     fn c_limb_bit_accessor_reads_constrained_cells_and_checks_topology() {
         let operations = boundary_operations();
@@ -1506,14 +1419,12 @@ mod tests {
             p256_arithmetic_c_limb_bits_v1(&trace, 0, LIMBS),
             Err(ZkX509P256AirErrorV1::Topology)
         );
-
         let mut bad_fixed = trace.clone();
         bad_fixed.fixed[3 * P256_ARITHMETIC_ROWS_PER_OPERATION_V1].coefficient = 1;
         assert_eq!(
             p256_arithmetic_c_limb_bits_v1(&bad_fixed, 3, 0),
             Err(ZkX509P256AirErrorV1::Topology)
         );
-
         let mut missing_base = trace;
         missing_base
             .base
@@ -1523,7 +1434,6 @@ mod tests {
             Err(ZkX509P256AirErrorV1::Topology)
         );
     }
-
     #[test]
     fn arithmetic_is_differential_against_rustcrypto_p256() {
         let mut operations = Vec::new();
@@ -1570,7 +1480,6 @@ mod tests {
                     c: result,
                 });
             }
-
             let first_scalar_bytes = if index % 4 == 0 {
                 subtract_small(P256_SCALAR_MODULUS_BE_V1, index)
             } else {
@@ -1614,7 +1523,6 @@ mod tests {
         assert_eq!(operations.len(), 288);
         trace.validate().expect("differential trace");
     }
-
     #[test]
     fn modular_subtraction_covers_borrow_no_borrow_equal_and_false_claims() {
         for (modulus, modulus_bytes) in [
@@ -1655,7 +1563,6 @@ mod tests {
                 .expect("subtraction boundary trace")
                 .validate()
                 .expect("subtraction constraints");
-
             let mut false_claim = operations[0];
             false_claim.c = zero();
             assert_eq!(
@@ -1664,7 +1571,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn false_noncanonical_empty_and_overwide_operations_fail_closed() {
         assert_eq!(
@@ -1706,7 +1612,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn every_committed_base_cell_is_constraint_relevant() {
         let operations = boundary_operations();
@@ -1726,7 +1631,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn fixed_topology_kind_and_modulus_are_not_prover_selectable() {
         let trace = build_zk_x509_p256_arithmetic_trace_v1(&[boundary_operations()[0]])
@@ -1735,26 +1639,21 @@ mod tests {
             let mut changed = trace.clone();
             changed.fixed[row].coefficient ^= 1;
             assert!(changed.validate().is_err(), "coefficient row {row}");
-
             let mut changed = trace.clone();
             changed.fixed[row].operation ^= 1;
             assert!(changed.validate().is_err(), "operation row {row}");
-
             let mut changed = trace.clone();
             changed.fixed[row].kind = ZkX509P256ArithmeticKindV1::Add;
             assert!(changed.validate().is_err(), "kind row {row}");
-
             let mut changed = trace.clone();
             changed.fixed[row].modulus = ZkX509P256ModulusV1::ScalarField;
             assert!(changed.validate().is_err(), "modulus row {row}");
         }
     }
-
     #[test]
     fn coordinated_quotient_carry_and_comparison_attacks_fail() {
         let trace = build_zk_x509_p256_arithmetic_trace_v1(&[boundary_operations()[0]])
             .expect("canonical arithmetic");
-
         let mut quotient = trace.clone();
         for row in &mut quotient.base {
             row[Q_START] = row[Q_START].add(F::ONE);
@@ -1762,7 +1661,6 @@ mod tests {
             write_bits_v1(&mut row[Q_BITS..Q_BITS + LIMB_BITS], value);
         }
         assert!(quotient.validate().is_err());
-
         let mut carry = trace.clone();
         for row in &mut carry.base {
             let encoded = (CARRY_BIAS + 1) as u64;
@@ -1772,13 +1670,11 @@ mod tests {
             }
         }
         assert!(carry.validate().is_err());
-
         let mut comparison = trace;
         comparison.base[0][A_BORROW_AFTER] = comparison.base[0][A_BORROW_AFTER].sub(F::ONE);
         comparison.base[1][A_BORROW_BEFORE] = comparison.base[1][A_BORROW_BEFORE].sub(F::ONE);
         assert!(comparison.validate().is_err());
     }
-
     fn validate_numeric_stark_trace(
         trace: &ZkX509P256ArithmeticTraceV1,
         topology: &[ZkX509P256ArithmeticTopologyV1],
@@ -1805,7 +1701,6 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     fn numeric_fixed_evaluator_matches_every_arithmetic_row_and_padding() {
         let operations = boundary_operations();
@@ -1817,7 +1712,6 @@ mod tests {
         validate_numeric_stark_trace(&trace, &topology, trace_size)
             .expect("numeric fixed evaluator accepts the canonical trace");
     }
-
     #[test]
     fn numeric_fixed_compiler_rejects_topology_substitution_and_bad_padding_shape() {
         let operations = boundary_operations()[..3].to_vec();
@@ -1826,7 +1720,6 @@ mod tests {
         let topology = arithmetic_topology(&operations);
         let trace_size = trace.base.len().next_power_of_two();
         assert!(compile_p256_arithmetic_stark_fixed_rows_v1(&topology, trace_size).is_ok());
-
         let mut omitted = topology.clone();
         omitted.pop();
         assert_ne!(
@@ -1861,7 +1754,6 @@ mod tests {
             Err(ZkX509P256AirErrorV1::Topology)
         );
     }
-
     #[test]
     fn numeric_fixed_compiler_is_independent_of_private_operand_bytes() {
         let operations = boundary_operations();
@@ -1881,7 +1773,6 @@ mod tests {
             compile_p256_arithmetic_stark_fixed_rows_v1(&changed_topology, trace_size),
         );
     }
-
     #[test]
     fn numeric_evaluator_binds_every_active_and_padding_base_column() {
         let trace = build_zk_x509_p256_arithmetic_trace_v1(&boundary_operations()[..3])
@@ -1908,18 +1799,15 @@ mod tests {
                 }
             })
         };
-
         for column in 0..P256_ARITHMETIC_BASE_WIDTH_V1 {
             let mut changed = base.clone();
             changed[7][column] = changed[7][column].add(F::ONE);
             assert!(rejects(&changed), "unbound active column {column}");
-
             let mut changed = base.clone();
             changed[trace.base.len()][column] = changed[trace.base.len()][column].add(F::ONE);
             assert!(rejects(&changed), "unbound padding column {column}");
         }
     }
-
     #[test]
     fn numeric_evaluator_rejects_auxiliary_and_noncanonical_fields() {
         let trace = build_zk_x509_p256_arithmetic_trace_v1(&boundary_operations()[..1])
@@ -1938,7 +1826,6 @@ mod tests {
         )
         .expect("canonical nonzero auxiliary field");
         assert!(residues.iter().any(|residue| *residue != F::ZERO));
-
         let mut noncanonical = base[0];
         noncanonical[0] = F(u64::MAX);
         assert_eq!(

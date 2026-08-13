@@ -1,16 +1,13 @@
 //! Bounded local readers for genesis source artifacts.
-
 use std::{
     fs,
     io::{self, Read as _},
     path::Path,
 };
-
 use eyre::{Result, WrapErr as _, eyre};
 use iroha_data_model::block::SignedBlock;
 use iroha_version::Version as _;
 use norito::DecodeLimits;
-
 /// First-release encoded byte limit for a JSON genesis manifest.
 pub const GENESIS_MANIFEST_JSON_MAX_BYTES_V1: usize = 16 * 1024 * 1024;
 /// First-release byte limit for one compiled IVM program referenced by genesis.
@@ -26,12 +23,10 @@ pub const GENESIS_MANIFEST_JSON_MAX_DEPTH_V1: usize = 64;
 pub const SIGNED_GENESIS_MAX_BYTES_V1: usize = 64 * 1024 * 1024;
 /// Aggregate compiled IVM bytecode retained while expanding one genesis manifest.
 pub const GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1: usize = SIGNED_GENESIS_MAX_BYTES_V1;
-
 const SIGNED_GENESIS_MAX_SEQUENCE_ELEMENTS_V1: usize = 1_048_576;
 const SIGNED_GENESIS_MAX_TOTAL_ELEMENTS_V1: usize = 4_194_304;
 const SIGNED_GENESIS_MAX_ALLOCATED_BYTES_V1: usize = 2 * SIGNED_GENESIS_MAX_BYTES_V1;
 const SIGNED_GENESIS_MAX_NESTING_DEPTH_V1: usize = 64;
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const GENESIS_O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
 #[cfg(any(
@@ -57,7 +52,6 @@ const GENESIS_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
     ))
 ))]
 compile_error!("genesis artifact loading requires a defined no-follow open flag on this target");
-
 /// Read one stable direct genesis-manifest file under the V1 byte and lexical budgets.
 ///
 /// # Errors
@@ -73,7 +67,6 @@ pub fn read_genesis_manifest_bytes(path: &Path) -> io::Result<Vec<u8>> {
     validate_genesis_manifest_json(&bytes)?;
     Ok(bytes)
 }
-
 /// Validate the byte, token, string, and nesting budgets for in-memory genesis JSON.
 ///
 /// This preflight must run before constructing a generic JSON tree from an
@@ -103,7 +96,6 @@ pub fn validate_genesis_manifest_json(bytes: &[u8]) -> io::Result<&str> {
     )?;
     Ok(source)
 }
-
 /// Read one stable direct signed-genesis file under the V1 encoded-byte limit.
 ///
 /// # Errors
@@ -113,7 +105,6 @@ pub fn validate_genesis_manifest_json(bytes: &[u8]) -> io::Result<&str> {
 pub fn read_signed_genesis_bytes(path: &Path) -> io::Result<Vec<u8>> {
     read_bounded_regular_file(path, SIGNED_GENESIS_MAX_BYTES_V1, "signed genesis artifact")
 }
-
 /// Decode one in-memory signed-genesis body under fixed Norito resource limits.
 ///
 /// # Errors
@@ -128,7 +119,6 @@ pub fn decode_signed_genesis(bytes: &[u8]) -> Result<SignedBlock> {
     if !SignedBlock::supported_versions().contains(&version) {
         return Err(eyre!("unsupported signed genesis version {version}"));
     }
-
     crate::init_instruction_registry();
     let decoded = std::panic::catch_unwind(|| {
         norito::with_decode_limits(signed_genesis_decode_limits_v1(), || {
@@ -147,7 +137,6 @@ pub fn decode_signed_genesis(bytes: &[u8]) -> Result<SignedBlock> {
         Err(_) => Err(eyre!("decode canonical signed genesis body panicked")),
     }
 }
-
 fn validate_signed_genesis_size(length: usize) -> Result<()> {
     if length == 0 {
         return Err(eyre!("signed genesis body is empty"));
@@ -160,7 +149,6 @@ fn validate_signed_genesis_size(length: usize) -> Result<()> {
     }
     Ok(())
 }
-
 /// Read and decode one signed-genesis file under the fixed V1 resource budgets.
 ///
 /// # Errors
@@ -172,7 +160,6 @@ pub fn read_signed_genesis(path: &Path) -> Result<SignedBlock> {
     decode_signed_genesis(&bytes)
         .wrap_err_with(|| format!("decode signed genesis artifact at {}", path.display()))
 }
-
 /// Return the fixed Norito resource budget used for V1 signed-genesis decoding.
 #[must_use]
 pub const fn signed_genesis_decode_limits_v1() -> DecodeLimits {
@@ -184,7 +171,6 @@ pub const fn signed_genesis_decode_limits_v1() -> DecodeLimits {
         SIGNED_GENESIS_MAX_NESTING_DEPTH_V1,
     )
 }
-
 impl crate::RawGenesisTransaction {
     /// Decode one in-memory JSON manifest after enforcing the same byte,
     /// token, string, and nesting budgets as [`Self::from_path`].
@@ -209,7 +195,6 @@ impl crate::RawGenesisTransaction {
         Ok(value)
     }
 }
-
 pub(super) fn read_genesis_ivm_bytecode(
     path: &Path,
     remaining_total_bytes: usize,
@@ -226,7 +211,6 @@ pub(super) fn read_genesis_ivm_bytecode(
         "genesis IVM bytecode",
     )
 }
-
 fn read_bounded_regular_file(path: &Path, max_bytes: usize, label: &str) -> io::Result<Vec<u8>> {
     let max_bytes_u64 = u64::try_from(max_bytes).map_err(|_| {
         io::Error::new(
@@ -244,19 +228,16 @@ fn read_bounded_regular_file(path: &Path, max_bytes: usize, label: &str) -> io::
     if named_before.len() > max_bytes_u64 {
         return Err(genesis_artifact_too_large(label, max_bytes));
     }
-
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(GENESIS_O_NOFOLLOW_FLAG);
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
@@ -272,7 +253,6 @@ fn read_bounded_regular_file(path: &Path, max_bytes: usize, label: &str) -> io::
             format!("{label} changed identity or type while opening"),
         ));
     }
-
     let capacity = usize::try_from(opened_before.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -289,7 +269,6 @@ fn read_bounded_regular_file(path: &Path, max_bytes: usize, label: &str) -> io::
     if bytes.len() > max_bytes {
         return Err(genesis_artifact_too_large(label, max_bytes));
     }
-
     let opened_after = file.metadata()?;
     let named_after = fs::symlink_metadata(path)?;
     if genesis_metadata_is_link(&named_after)
@@ -305,14 +284,12 @@ fn read_bounded_regular_file(path: &Path, max_bytes: usize, label: &str) -> io::
     }
     Ok(bytes)
 }
-
 fn genesis_artifact_too_large(label: &str, max_bytes: usize) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         format!("{label} exceeds the {max_bytes}-byte first-release limit"),
     )
 }
-
 fn validate_json_lexical_budget(
     source: &str,
     max_tokens: usize,
@@ -324,7 +301,6 @@ fn validate_json_lexical_budget(
     let mut string_start = None;
     let mut escaped = false;
     let mut in_scalar = false;
-
     for (index, byte) in source.bytes().enumerate() {
         if let Some(start) = string_start {
             let closes_string = !escaped && byte == b'"';
@@ -348,7 +324,6 @@ fn validate_json_lexical_budget(
             }
             continue;
         }
-
         match byte {
             b'"' => {
                 count_json_token(&mut tokens, max_tokens)?;
@@ -384,7 +359,6 @@ fn validate_json_lexical_budget(
     }
     Ok(())
 }
-
 fn count_json_token(tokens: &mut usize, max_tokens: usize) -> io::Result<()> {
     *tokens = tokens.checked_add(1).ok_or_else(|| {
         io::Error::new(
@@ -400,7 +374,6 @@ fn count_json_token(tokens: &mut usize, max_tokens: usize) -> io::Result<()> {
     }
     Ok(())
 }
-
 fn genesis_metadata_is_link(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
@@ -408,18 +381,15 @@ fn genesis_metadata_is_link(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
-
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
         return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
     }
     #[cfg(not(windows))]
     false
 }
-
 #[cfg(unix)]
 fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.len() == right.len()
@@ -428,11 +398,9 @@ fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> 
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     left.volume_serial_number().is_some()
         && left.file_index().is_some()
         && left.volume_serial_number() == right.volume_serial_number()
@@ -440,16 +408,13 @@ fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> 
         && left.file_size() == right.file_size()
         && left.last_write_time() == right.last_write_time()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn bounded_reader_accepts_exact_limit_and_rejects_sparse_overflow() {
         let directory = tempfile::tempdir().expect("create genesis-artifact test directory");
@@ -460,7 +425,6 @@ mod tests {
                 .expect("read exact genesis artifact"),
             vec![0x5A; 32]
         );
-
         let oversized = directory.path().join("oversized.bin");
         let file = fs::File::create(&oversized).expect("create sparse genesis artifact");
         file.set_len(33).expect("extend sparse genesis artifact");
@@ -469,23 +433,19 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("32-byte"));
     }
-
     #[cfg(unix)]
     #[test]
     fn bounded_reader_rejects_final_component_symlink() {
         use std::os::unix::fs::symlink;
-
         let directory = tempfile::tempdir().expect("create genesis-artifact test directory");
         let target = directory.path().join("target.bin");
         let link = directory.path().join("link.bin");
         fs::write(&target, b"bounded").expect("write symlink target");
         symlink(&target, &link).expect("create genesis-artifact symlink");
-
         let error = read_bounded_regular_file(&link, 32, "test genesis artifact")
             .expect_err("genesis artifact symlink must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[test]
     fn ivm_limit_matches_transaction_admission_default() {
         assert_eq!(
@@ -493,26 +453,22 @@ mod tests {
             iroha_config::parameters::defaults::transaction::ivm_bytecode_size().get()
         );
     }
-
     #[test]
     fn ivm_reader_enforces_remaining_aggregate_budget() {
         let directory = tempfile::tempdir().expect("create IVM-bytecode test directory");
         let path = directory.path().join("trigger.to");
         fs::write(&path, [0x5A; 33]).expect("write IVM bytecode fixture");
-
         let error = read_genesis_ivm_bytecode(&path, 32)
             .expect_err("bytecode beyond the remaining aggregate budget must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("32-byte"));
     }
-
     #[test]
     fn signed_genesis_size_rejects_empty_and_first_overflow() {
         assert!(validate_signed_genesis_size(0).is_err());
         assert!(validate_signed_genesis_size(SIGNED_GENESIS_MAX_BYTES_V1).is_ok());
         assert!(validate_signed_genesis_size(SIGNED_GENESIS_MAX_BYTES_V1 + 1).is_err());
     }
-
     #[test]
     fn signed_genesis_rejects_unsupported_version_without_retaining_raw_error_bytes() {
         let error = decode_signed_genesis(&[u8::MAX, 0])
@@ -523,7 +479,6 @@ mod tests {
                 .contains("unsupported signed genesis version")
         );
     }
-
     #[test]
     fn signed_genesis_decoder_roundtrips_canonical_wire() {
         let manifest = crate::GenesisBuilder::new_without_executor(
@@ -541,11 +496,9 @@ mod tests {
         let wire = block
             .encode_wire()
             .expect("encode canonical signed genesis");
-
         let decoded = decode_signed_genesis(&wire).expect("decode canonical signed genesis");
         assert_eq!(decoded.hash(), block.hash());
     }
-
     #[test]
     fn signed_genesis_reader_rejects_sparse_overflow_before_reading() {
         let directory = tempfile::tempdir().expect("create signed-genesis test directory");
@@ -553,7 +506,6 @@ mod tests {
         let file = fs::File::create(&path).expect("create sparse signed genesis");
         file.set_len((SIGNED_GENESIS_MAX_BYTES_V1 + 1) as u64)
             .expect("extend sparse signed genesis");
-
         let error = read_signed_genesis_bytes(&path)
             .expect_err("oversized signed genesis must fail before reading");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
@@ -563,7 +515,6 @@ mod tests {
                 .contains(&SIGNED_GENESIS_MAX_BYTES_V1.to_string())
         );
     }
-
     #[test]
     fn signed_genesis_decode_limits_are_fixed() {
         let limits = signed_genesis_decode_limits_v1();
@@ -585,7 +536,6 @@ mod tests {
             SIGNED_GENESIS_MAX_NESTING_DEPTH_V1
         );
     }
-
     #[test]
     fn lexical_budget_rejects_first_token_string_and_depth_overflow() {
         assert!(validate_json_lexical_budget("[0,1]", 3, 8, 1).is_ok());

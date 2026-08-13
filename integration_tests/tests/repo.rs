@@ -1,12 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for repo and reverse-repo instructions.
-
 use std::{
     convert::TryFrom,
     sync::{Mutex, OnceLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -23,22 +21,18 @@ use iroha_data_model::isi::RepoMarginCallIsi;
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
-
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
 static START_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
 fn install_quiet_tracing() {
     static QUIET_TRACE: OnceLock<()> = OnceLock::new();
     QUIET_TRACE.get_or_init(|| {});
 }
-
 fn ivm_build_profile_exists() -> bool {
     use std::path::PathBuf;
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../crates/ivm/target/prebuilt/build_config.toml")
         .exists()
 }
-
 fn quiet_network_builder() -> NetworkBuilder {
     install_quiet_tracing();
     init_instruction_registry();
@@ -46,76 +40,61 @@ fn quiet_network_builder() -> NetworkBuilder {
         .with_auto_populated_trusted_peers()
         .with_peers(4)
 }
-
 fn loopback_bind_allowed() -> bool {
     static LOOPBACK_BIND_ALLOWED: OnceLock<bool> = OnceLock::new();
     *LOOPBACK_BIND_ALLOWED.get_or_init(|| std::net::TcpListener::bind(("127.0.0.1", 0)).is_ok())
 }
-
 fn start_test_network() -> Option<(sandbox::SerializedNetwork, tokio::runtime::Runtime)> {
     if !ivm_build_profile_exists() {
         eprintln!("Skipping test: missing IVM build profile");
         return None;
     }
-
     if !loopback_bind_allowed() {
         eprintln!("Skipping test: environment denies binding TCP sockets on 127.0.0.1");
         return None;
     }
-
     if matches!(GENESIS_STATUS.get(), Some(Err(()))) {
         eprintln!("Skipping test: failed to start network (cached)");
         return None;
     }
-
     let serial_guard = sandbox::serial_guard();
     let guard = START_MUTEX.get_or_init(|| Mutex::new(())).lock().unwrap();
-
     if matches!(GENESIS_STATUS.get(), Some(Err(()))) {
         eprintln!("Skipping test: failed to start network (cached)");
         drop(guard);
         return None;
     }
-
     let builder = quiet_network_builder();
     let (network, runtime) = builder.build_blocking();
-
     if let Err(err) = runtime.block_on(async { network.start_all().await }) {
         eprintln!("Skipping test: failed to start network: {err}");
         let _ = GENESIS_STATUS.set(Err(()));
         drop(guard);
         return None;
     }
-
     let _ = GENESIS_STATUS.set(Ok(()));
     drop(guard);
-
     Some((
         sandbox::SerializedNetwork::new(network, serial_guard),
         runtime,
     ))
 }
-
 fn repo_outsider_key_pair() -> KeyPair {
     KeyPair::try_from_seed(vec![42; 32], Algorithm::Ed25519).expect("fixture repo outsider key")
 }
-
 #[test]
 fn repo_outsider_fixture_uses_checked_seed_derivation() {
     let key_pair = repo_outsider_key_pair();
     let expected = KeyPair::try_from_seed(vec![42; 32], Algorithm::Ed25519)
         .expect("fixture repo outsider key");
-
     assert_eq!(key_pair.public_key(), expected.public_key());
 }
-
 fn repo_instr_box<T>(instruction: T) -> InstructionBox
 where
     RepoInstructionBox: From<T>,
 {
     InstructionBox::from(RepoInstructionBox::from(instruction))
 }
-
 fn grant_repo_consents(
     base_client: &Client,
     instruction: &RepoIsi,
@@ -138,13 +117,11 @@ fn grant_repo_consents(
         settlement_id,
         intent_hash: instruction.maturity_intent_hash(),
     });
-
     let bob_client = alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), base_client);
     bob_client.submit_blocking(
         Grant::account_permission(cash_consent, instruction.initiator().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-
     let holder_client = if collateral_holder.0 == &*BOB_ID {
         bob_client
     } else {
@@ -159,18 +136,15 @@ fn grant_repo_consents(
     )?;
     Ok(())
 }
-
 fn error_chain_contains(err: &eyre::Report, needle: &str) -> bool {
     err.chain().any(|cause| cause.to_string().contains(needle))
 }
-
 fn asset_value(assets: &[Asset], asset_id: &AssetId) -> Option<Quantity> {
     assets
         .iter()
         .find(|asset| asset.id() == asset_id)
         .map(|asset| asset.value().clone())
 }
-
 fn wait_for_assets(
     client: &Client,
     expected: &[(&AssetId, Option<Quantity>)],
@@ -178,10 +152,8 @@ fn wait_for_assets(
 ) -> Result<Vec<Asset>> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
-
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "assets were not queried".to_owned();
-
     while Instant::now() < deadline {
         match client.query(FindAssets::new()).execute_all() {
             Ok(assets) => {
@@ -205,15 +177,12 @@ fn wait_for_assets(
                 last_observed = format!("query failed: {err}");
             }
         }
-
         std::thread::sleep(POLL_INTERVAL);
     }
-
     Err(eyre!(
         "timed out waiting for assets after {context}; last_observed={last_observed}"
     ))
 }
-
 fn wait_for_repo_agreement(
     client: &Client,
     agreement_id: &RepoAgreementId,
@@ -221,10 +190,8 @@ fn wait_for_repo_agreement(
 ) -> Result<RepoAgreement> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
-
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "repo agreements were not queried".to_owned();
-
     while Instant::now() < deadline {
         match client.query(FindRepoAgreements::new()).execute_all() {
             Ok(agreements) => {
@@ -244,15 +211,12 @@ fn wait_for_repo_agreement(
                 last_observed = format!("query failed: {err}");
             }
         }
-
         std::thread::sleep(POLL_INTERVAL);
     }
-
     Err(eyre!(
         "timed out waiting for repo agreement after {context}; id={agreement_id}; last_observed={last_observed}"
     ))
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
@@ -260,7 +224,6 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     let metadata = Metadata::default();
     let cash_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
@@ -270,7 +233,6 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         DomainId::try_new("wonderland", "universal")?,
         "bond".parse()?,
     );
-
     // Prepare cash/collateral assets and balances.
     let setup_instructions: Vec<InstructionBox> = vec![
         Register::asset_definition({
@@ -310,7 +272,6 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         metadata.clone(),
     );
     client.submit_transaction_blocking(&setup_tx)?;
-
     // Initiate the repo: Alice borrows cash, pledging collateral.
     let agreement_id: RepoAgreementId = "daily_repo".parse()?;
     let repo_instruction_template = || -> Result<RepoIsi> {
@@ -346,7 +307,6 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         metadata.clone(),
     );
     client.submit_transaction_blocking(&repo_tx)?;
-
     // Ensure duplicate agreement IDs are rejected while active.
     let duplicate_repo = repo_instruction_template()?;
     let duplicate_instruction_box = repo_instr_box(duplicate_repo);
@@ -366,7 +326,6 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
     let bob_cash_id = AssetId::new(cash_def_id.clone(), BOB_ID.clone());
     let alice_collateral_id = AssetId::new(collateral_def_id.clone(), ALICE_ID.clone());
     let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
-
     let assets_after_repo = wait_for_assets(
         &client,
         &[
@@ -377,31 +336,26 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         ],
         "repo initiation",
     )?;
-
     let alice_cash = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &alice_cash_id)
         .expect("alice cash after repo");
     assert_eq!(*alice_cash.value(), Quantity::from(1000_u64));
-
     let bob_cash = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &bob_cash_id)
         .expect("bob cash after repo");
     assert_eq!(*bob_cash.value(), Quantity::from(1000_u64));
-
     let alice_collateral = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &alice_collateral_id)
         .expect("alice collateral after repo");
     assert_eq!(*alice_collateral.value(), Quantity::from(400_u64));
-
     let bob_collateral = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &bob_collateral_id)
         .expect("bob collateral after repo");
     assert_eq!(*bob_collateral.value(), Quantity::from(1100_u64));
-
     let repo_snapshot = wait_for_repo_agreement(&client, &agreement_id, "repo maturity lookup")?;
     let future_reverse = ReverseRepoIsi::new(agreement_id.clone());
     let future_tx = client.build_transaction(
@@ -414,7 +368,6 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         error_chain_contains(&future_err, "before its recorded maturity"),
         "expected pre-maturity repo settlement to be rejected, got {future_err:?}"
     );
-
     let now_ms = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())
         .expect("current timestamp fits in u64");
     if *repo_snapshot.maturity_timestamp_ms() >= now_ms {
@@ -426,7 +379,6 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         ));
     }
     let reverse_repo_instruction = ReverseRepoIsi::new(agreement_id.clone());
-
     let counterparty_client = alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &client);
     let reverse_tx = counterparty_client.build_transaction(
         vec![repo_instr_box(reverse_repo_instruction)],
@@ -434,7 +386,6 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         metadata.clone(),
     );
     counterparty_client.submit_transaction_blocking(&reverse_tx)?;
-
     let assets_after_reverse = wait_for_assets(
         &client,
         &[
@@ -445,7 +396,6 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         ],
         "reverse repo",
     )?;
-
     let alice_cash_post = assets_after_reverse
         .iter()
         .find(|asset| asset.id() == &alice_cash_id);
@@ -453,19 +403,16 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         alice_cash_post.is_none(),
         "alice cash asset should be pruned when returning to zero balance"
     );
-
     let bob_cash_post = assets_after_reverse
         .iter()
         .find(|asset| asset.id() == &bob_cash_id)
         .expect("bob cash after reverse repo");
     assert_eq!(*bob_cash_post.value(), Quantity::from(2000_u64));
-
     let alice_collateral_post = assets_after_reverse
         .iter()
         .find(|asset| asset.id() == &alice_collateral_id)
         .expect("alice collateral after reverse repo");
     assert_eq!(*alice_collateral_post.value(), Quantity::from(1500_u64));
-
     let bob_collateral_post = assets_after_reverse
         .iter()
         .find(|asset| asset.id() == &bob_collateral_id);
@@ -473,7 +420,6 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         bob_collateral_post.is_none(),
         "bob collateral asset should be pruned on unwind"
     );
-
     // A settled identifier remains on-chain and cannot be reused.
     let reopened_repo = RepoIsi::new(
         agreement_id.clone(),
@@ -514,10 +460,8 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         settled.settlement_timestamp_ms(),
         &Some(*settled.maturity_timestamp_ms())
     );
-
     Ok(())
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
@@ -525,7 +469,6 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     let metadata = Metadata::default();
     let cash_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
@@ -535,10 +478,8 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         DomainId::try_new("wonderland", "universal")?,
         "bond".parse()?,
     );
-
     let outsider_keypair = repo_outsider_key_pair();
     let outsider_id = AccountId::new(outsider_keypair.public_key().clone());
-
     let setup_instructions: Vec<InstructionBox> = vec![
         Register::account(Account::new(outsider_id.clone())).into(),
         Register::asset_definition({
@@ -578,7 +519,6 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         metadata.clone(),
     );
     client.submit_transaction_blocking(&setup_tx)?;
-
     let agreement_id: RepoAgreementId = "margin_repo".parse()?;
     let maturity_ms = u64::try_from(
         SystemTime::now()
@@ -611,7 +551,6 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         metadata.clone(),
     );
     client.submit_transaction_blocking(&repo_tx)?;
-
     let repo_snapshot = wait_for_repo_agreement(&client, &agreement_id, "margin repo initiation")?;
     let initial_last_margin_ms = *repo_snapshot.last_margin_check_timestamp_ms();
     let expected_first_due = repo_snapshot
@@ -621,7 +560,6 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         expected_first_due > initial_last_margin_ms,
         "margin cadence should advance beyond the initiation timestamp"
     );
-
     let premature_err = client
         .submit_transaction_blocking(&client.build_transaction(
             vec![repo_instr_box(RepoMarginCallIsi::new(agreement_id.clone()))],
@@ -633,14 +571,12 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         error_chain_contains(&premature_err, "margin check is not yet due"),
         "expected cadence enforcement error, got {premature_err:?}"
     );
-
     let after_reject = wait_for_repo_agreement(&client, &agreement_id, "rejected margin call")?;
     assert_eq!(
         *after_reject.last_margin_check_timestamp_ms(),
         initial_last_margin_ms,
         "rejected margin call should not advance the schedule"
     );
-
     let unauthorized_client = alt_client((outsider_id.clone(), outsider_keypair), &client);
     let unauthorized_err = unauthorized_client
         .submit_transaction_blocking(&unauthorized_client.build_transaction(
@@ -656,10 +592,8 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         ),
         "expected participant check failure, got {unauthorized_err:?}"
     );
-
     Ok(())
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
@@ -667,7 +601,6 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     let metadata = Metadata::default();
     let custodian_keypair = KeyPair::random();
     let custodian_id = AccountId::new(custodian_keypair.public_key().clone());
@@ -679,7 +612,6 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         DomainId::try_new("wonderland", "universal")?,
         "bond".parse()?,
     );
-
     let setup_instructions: Vec<InstructionBox> = vec![
         Register::account(Account::new(custodian_id.clone())).into(),
         Register::asset_definition({
@@ -719,7 +651,6 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         metadata.clone(),
     );
     client.submit_transaction_blocking(&setup_tx)?;
-
     let agreement_id: RepoAgreementId = "tri_party_repo".parse()?;
     let maturity_timestamp_ms = u64::try_from(
         SystemTime::now()
@@ -754,13 +685,11 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         metadata.clone(),
     );
     client.submit_transaction_blocking(&repo_tx)?;
-
     let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
     let bob_cash_id = AssetId::new(cash_def_id.clone(), BOB_ID.clone());
     let alice_collateral_id = AssetId::new(collateral_def_id.clone(), ALICE_ID.clone());
     let custodian_collateral_id = AssetId::new(collateral_def_id.clone(), custodian_id.clone());
     let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
-
     let assets_after_repo = wait_for_assets(
         &client,
         &[
@@ -772,38 +701,32 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         ],
         "tri-party repo initiation",
     )?;
-
     let alice_cash = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &alice_cash_id)
         .expect("alice cash after repo");
     assert_eq!(*alice_cash.value(), Quantity::from(1000_u64));
-
     let bob_cash = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &bob_cash_id)
         .expect("bob cash after repo");
     assert_eq!(*bob_cash.value(), Quantity::from(1000_u64));
-
     let alice_collateral = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &alice_collateral_id)
         .expect("alice collateral after repo");
     assert_eq!(*alice_collateral.value(), Quantity::from(400_u64));
-
     assert!(
         !assets_after_repo
             .iter()
             .any(|asset| asset.id() == &bob_collateral_id),
         "counterparty should not hold collateral when custodian participates"
     );
-
     let custodian_collateral = assets_after_repo
         .iter()
         .find(|asset| asset.id() == &custodian_collateral_id)
         .expect("custodian collateral after repo");
     assert_eq!(*custodian_collateral.value(), Quantity::from(1100_u64));
-
     let stored_agreement =
         wait_for_repo_agreement(&client, &agreement_id, "tri-party repo initiation")?;
     assert_eq!(
@@ -811,7 +734,6 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         &Some(custodian_id.clone()),
         "custodian id should be persisted in repo agreement"
     );
-
     let now_ms = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())
         .expect("current timestamp fits in u64");
     if *stored_agreement.maturity_timestamp_ms() >= now_ms {
@@ -830,7 +752,6 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         metadata.clone(),
     );
     custodian_client.submit_transaction_blocking(&reverse_tx)?;
-
     let assets_after_reverse = wait_for_assets(
         &client,
         &[
@@ -841,7 +762,6 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         ],
         "tri-party reverse repo",
     )?;
-
     let alice_cash_after_reverse = assets_after_reverse
         .iter()
         .find(|asset| asset.id() == &alice_cash_id);
@@ -849,13 +769,11 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         alice_cash_after_reverse.is_none(),
         "alice cash should be pruned after returning to zero"
     );
-
     let bob_cash_after_reverse = assets_after_reverse
         .iter()
         .find(|asset| asset.id() == &bob_cash_id)
         .expect("bob cash after reverse");
     assert_eq!(*bob_cash_after_reverse.value(), Quantity::from(2000_u64));
-
     let alice_collateral_after_reverse = assets_after_reverse
         .iter()
         .find(|asset| asset.id() == &alice_collateral_id)
@@ -864,23 +782,19 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         *alice_collateral_after_reverse.value(),
         Quantity::from(1500_u64)
     );
-
     assert!(
         !assets_after_reverse
             .iter()
             .any(|asset| asset.id() == &custodian_collateral_id),
         "custodian collateral asset should be pruned after unwind"
     );
-
     let settled = wait_for_repo_agreement(&client, &agreement_id, "tri-party reverse repo")?;
     assert_eq!(
         settled.settlement_timestamp_ms(),
         &Some(*settled.maturity_timestamp_ms())
     );
-
     Ok(())
 }
-
 fn alt_client(signatory: (AccountId, KeyPair), base_client: &Client) -> Client {
     Client {
         account: signatory.0,

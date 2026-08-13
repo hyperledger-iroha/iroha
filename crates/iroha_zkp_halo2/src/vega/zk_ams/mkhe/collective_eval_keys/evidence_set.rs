@@ -6,9 +6,7 @@
 //! digits before minting a validated handle. It deliberately does not claim the
 //! stronger cross-set algebraic equality between accumulated source outputs and
 //! the CKS source/compact-output relation.
-
 use super::*;
-
 const VERIFIED_EVIDENCE_SET_CAPABILITY_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.verified-evaluated-key-evidence-set";
 const EVIDENCE_DESCRIPTOR_SET_DOMAIN_V1: &[u8] =
@@ -20,7 +18,6 @@ pub(super) const RELEASE_RELIN_PAIR_COUNT_V1: usize = 36;
 const RELEASE_RELIN_SOURCE_RECORDS_V1: usize = 21_888;
 const RELEASE_GALOIS_SOURCE_RECORDS_V1: usize = 304;
 const RELEASE_CKS_RECORDS_V1: usize = 38;
-
 const _: () = assert!(
     ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 * (ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 + 1) / 2
         == RELEASE_RELIN_PAIR_COUNT_V1
@@ -34,11 +31,9 @@ const _: () = assert!(
         == RELEASE_GALOIS_SOURCE_RECORDS_V1
 );
 const _: () = assert!(RELEASE_GADGET_DIGITS_V1 == RELEASE_CKS_RECORDS_V1);
-
 mod private {
     pub(super) struct CapabilitySealV1;
 }
-
 /// Compact axes recovered only from a privately sealed trusted context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct EvidenceContextAxesV1 {
@@ -49,20 +44,17 @@ pub(super) struct EvidenceContextAxesV1 {
     pub(super) transcript_digest: [u8; 32],
     pub(super) collective_key_digest: [u8; 32],
 }
-
 #[derive(Clone, Copy)]
 pub(super) struct SourceEvidenceContextSummaryV1 {
     pub(super) axes: EvidenceContextAxesV1,
     pub(super) context_seal: [u8; 32],
     pub(super) linked_cks_context_seal: [u8; 32],
 }
-
 #[derive(Clone, Copy)]
 pub(super) struct CksEvidenceContextSummaryV1 {
     pub(super) axes: EvidenceContextAxesV1,
     pub(super) context_seal: [u8; 32],
 }
-
 pub(super) struct SourceEvidenceReceiptSummaryV1 {
     pub(super) kind: ZkAmsMkheCollectiveEvidenceRecordKindV1,
     pub(super) ordinal: u8,
@@ -71,7 +63,6 @@ pub(super) struct SourceEvidenceReceiptSummaryV1 {
     pub(super) canonical_bytes: u64,
     pub(super) canonical_digest: [u8; 32],
 }
-
 pub(super) struct CksEvidenceReceiptSummaryV1 {
     pub(super) ordinal: u8,
     pub(super) digit_index: u8,
@@ -79,14 +70,12 @@ pub(super) struct CksEvidenceReceiptSummaryV1 {
     pub(super) canonical_digest: [u8; 32],
     pub(super) compact_constant_digest: [u8; 32],
 }
-
 /// Shared generator/verifier recurrence for one ordered evidence set.
 pub(super) struct EvidenceSetDigestV1 {
     hash: Keccak256,
     header: ZkAmsMkheCollectiveEvidenceSetHeaderV1,
     records: u32,
 }
-
 impl EvidenceSetDigestV1 {
     pub(super) fn new(
         header: ZkAmsMkheCollectiveEvidenceSetHeaderV1,
@@ -110,7 +99,6 @@ impl EvidenceSetDigestV1 {
             records: 0,
         })
     }
-
     pub(super) fn absorb_record(
         &mut self,
         record_index: u32,
@@ -142,7 +130,6 @@ impl EvidenceSetDigestV1 {
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         Ok(())
     }
-
     pub(super) fn finish(mut self, expected_records: u32) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         if expected_records == 0 || self.records != expected_records {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -151,13 +138,11 @@ impl EvidenceSetDigestV1 {
         Ok(self.hash.finalize())
     }
 }
-
 /// Ordered digest of the CKS compact constants carried by the ZARK digits.
 pub(super) struct CksCompactOutputSetDigestV1 {
     hash: Keccak256,
     records: u32,
 }
-
 impl CksCompactOutputSetDigestV1 {
     pub(super) fn new(
         purpose: ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
@@ -175,7 +160,6 @@ impl CksCompactOutputSetDigestV1 {
         hash.update(&collective_key_digest);
         Ok(Self { hash, records: 0 })
     }
-
     pub(super) fn absorb(
         &mut self,
         digit_index: u32,
@@ -192,7 +176,6 @@ impl CksCompactOutputSetDigestV1 {
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         Ok(())
     }
-
     pub(super) fn finish(mut self, expected_records: u32) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         if expected_records == 0 || self.records != expected_records {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -201,7 +184,6 @@ impl CksCompactOutputSetDigestV1 {
         Ok(self.hash.finalize())
     }
 }
-
 /// Sealed proof that both evidence streams for one exact manifest entry were
 /// consumed completely and in canonical order.
 ///
@@ -234,7 +216,6 @@ pub struct ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1 {
     cks_context_seal: [u8; 32],
     capability_seal: [u8; 32],
 }
-
 impl core::fmt::Debug for ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -250,7 +231,6 @@ impl core::fmt::Debug for ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1 {
             .finish_non_exhaustive()
     }
 }
-
 #[derive(Clone, Copy)]
 pub(super) struct EvidenceSetRuntimeBindingV1 {
     pub(super) entry: ZkAmsMkheCollectiveEvaluatedKeyEntryV1,
@@ -261,12 +241,10 @@ pub(super) struct EvidenceSetRuntimeBindingV1 {
     pub(super) transcript_digest: [u8; 32],
     pub(super) collective_key_digest: [u8; 32],
 }
-
 pub(super) struct VerifiedEvidenceSetRuntimeAdmissionV1 {
     pub(super) capability_seal: [u8; 32],
     pub(super) cks_compact_output_set_digest: [u8; 32],
 }
-
 impl ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1 {
     pub(super) fn consume_for_runtime_v1(
         self,
@@ -304,13 +282,11 @@ impl ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1 {
         })
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct EvidenceRecordCountsV1 {
     pub(super) source: u32,
     pub(super) cks: u32,
 }
-
 pub(super) fn checked_evidence_record_counts_v1(
     purpose: ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
     gadget_digits: usize,
@@ -338,7 +314,6 @@ pub(super) fn checked_evidence_record_counts_v1(
     }
     Ok(EvidenceRecordCountsV1 { source, cks })
 }
-
 fn release_evidence_record_counts_v1(
     purpose: ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
 ) -> Result<EvidenceRecordCountsV1, ZkAmsMkheErrorV1> {
@@ -364,7 +339,6 @@ fn release_evidence_record_counts_v1(
     }
     Ok(counts)
 }
-
 fn validate_entry_coordinate_v1(
     entry: ZkAmsMkheCollectiveEvaluatedKeyEntryV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -390,7 +364,6 @@ fn validate_entry_coordinate_v1(
     }
     Ok(())
 }
-
 pub(super) fn expected_source_descriptor_v1(
     purpose: ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
     record_index: u32,
@@ -431,7 +404,6 @@ pub(super) fn expected_source_descriptor_v1(
         u8::try_from(party).map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)?,
     ))
 }
-
 /// Consume and aggregate both exact receipt streams for one manifest entry.
 ///
 /// Each iterator is lazy and is advanced exactly once per expected record plus
@@ -499,7 +471,6 @@ where
         Some(Err(error)) => return Err(error),
     }
     let source_proof_set_digest = source_digest.finish(counts.source)?;
-
     let mut cks_digest = EvidenceSetDigestV1::new(cks_header)?;
     let mut compact_output_digest = CksCompactOutputSetDigestV1::new(
         entry.purpose(),
@@ -567,7 +538,6 @@ where
     }
     Ok(capability)
 }
-
 fn evidence_set_capability_seal_v1(
     capability: &ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1,
 ) -> [u8; 32] {
@@ -597,7 +567,6 @@ fn evidence_set_capability_seal_v1(
     hash.update(&capability.cks_context_seal);
     hash.finalize()
 }
-
 #[cfg(test)]
 pub(super) fn test_tamper_capability_seal_v1(
     capability: &mut ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1,

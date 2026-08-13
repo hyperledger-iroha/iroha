@@ -1,11 +1,8 @@
 use ivm::{IVM, ProgramMetadata, cost_of as cost_of_opt, encoding, instruction};
-
 const HALT_WORD: u32 = encoding::wide::encode_halt();
-
 fn cost_of(word: u32) -> u64 {
     cost_of_opt(word).expect("valid opcode must have gas cost")
 }
-
 fn assemble_words(words: &[u32]) -> Vec<u8> {
     let mut bytes = header();
     for &word in words {
@@ -13,11 +10,9 @@ fn assemble_words(words: &[u32]) -> Vec<u8> {
     }
     bytes
 }
-
 fn header() -> Vec<u8> {
     ProgramMetadata::default().encode()
 }
-
 #[test]
 fn nested_branches_executed_set_gas() {
     // Program:
@@ -42,7 +37,6 @@ fn nested_branches_executed_set_gas() {
     let expected: u64 = executed.iter().map(|w| cost_of(*w)).sum();
     assert_eq!(10_000 - vm.remaining_gas(), expected);
 }
-
 #[test]
 fn sha3_error_path_consumes_base_gas() {
     // Craft a SHA3BLOCK with out-of-bounds pointers to trigger error after gas deduction.
@@ -62,7 +56,6 @@ fn sha3_error_path_consumes_base_gas() {
     let used = 1000 - vm.remaining_gas();
     assert!(used >= cost_of(sha3));
 }
-
 #[test]
 fn aesenc_mode_disabled_consumes_base_gas() {
     // AESENC with VECTOR bit disabled should trap with VectorExtensionDisabled after base gas is consumed.

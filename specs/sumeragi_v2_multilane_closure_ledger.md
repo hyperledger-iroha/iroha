@@ -45,11 +45,12 @@ No user-visible release gate in this ledger is currently **Evidenced**.
 Existing unit tests and historical status reports are useful leads, not
 multilane release evidence.
 
-All counts and static pass statements in this document describe the mutable
-development checkout. They are inventories and source-consistency observations,
-not immutable-candidate execution or release receipts.
+Unless explicitly labelled as a private-index audit, all counts and static pass
+statements in this document describe the mutable development checkout. They are
+inventories and source-consistency observations, not immutable-candidate
+execution or release receipts.
 
-## 2026-08-11 mutable-development closure snapshot
+## 2026-08-13 mutable-development closure snapshot
 
 - The bound inventory contains exactly 854 production tests across 40 modules,
   including 436 source-sealed ownership/regression names, plus 525 G-UNIT
@@ -71,18 +72,21 @@ not immutable-candidate execution or release receipts.
   mutation, or cross-tool certificate is claimed.
 - Mutable source-budget checks do not currently report within their configured
   bounds, so source-budget closure remains a release blocker. The
-  reviewed Rust include topology contains 37 parents and 229 direct entries;
+  reviewed Rust include topology contains 41 parents and 238 direct entries;
   its canonical payload SHA-256 is
-  `82cbfd14b681b83e6d10ec5dfa8267e501812ce05415eb3401c935136f7d4647`.
+  `46aaff06ea487b2db81116883c9f1b616b62c8c33d0f1c98fb7e94a9f6e43cd3`.
   The SDK closure resolver and complete transitive manifests are mutable
   development inputs, not release evidence.
 - Typed status/diagnostics SDK surfaces, including the browser JavaScript
   distribution source and Kotlin/Java Native model dependencies, are present in
-  the development tree. Every reviewed SDK closure input is tracked, both
-  mutable source-closure checks pass, and the browser JavaScript source and
-  distribution trees match. The five checked-in OpenAPI artifacts and
-  immutable-candidate execution evidence remain Open, so SDK and wire closure
-  is not claimed.
+  the development tree. A temporary private-index audit that represented the
+  intended `javascript/iroha_js/src/sorafsOrderbookSubmission.d.ts` input as
+  tracked produced the exact 1,351-record grouped and 1,350-record diagnostics
+  closures, and the browser JavaScript source and distribution trees match. The
+  real index still leaves that declaration file untracked, so both live resolver
+  checks correctly fail closed. The five checked-in OpenAPI artifacts and
+  immutable-candidate execution evidence remain Open, so SDK and wire closure is
+  not claimed.
 
 Every Evidence field and every `G-*` execution or release gate therefore
 remains Open. These source-consistency documentation updates do not promote the
@@ -1613,12 +1617,18 @@ name-pattern filter, and the inventory includes an explicit swapped
 status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
-and Kotlin/Java Native model dependencies. Every declared candidate is tracked,
-the two specialized static Python modules are canonically runner-bound, and the
-browser distribution matches its source. Both mutable resolver checks pass.
-These are development-tree consistency observations only; stale OpenAPI
-manifests and missing immutable-candidate source-seal and execution evidence
-keep the suite digest and `G-SDK` release claim ineligible.
+and Kotlin/Java Native model dependencies. A temporary private-index audit that
+represented `javascript/iroha_js/src/sorafsOrderbookSubmission.d.ts` as tracked
+produced grouped digest
+`92a87e705eccad8a63d32c1d4e0c8ce3c6167671905e4e7b76672cc60575606a`
+and diagnostics digest
+`c141cd7d6d379417af63b9712a2b9a5521327f5d88b33e6d55e71205655ee1e3`.
+The two specialized static Python modules are canonically runner-bound and the
+browser distribution matches its source, but the real index still leaves that
+declaration file untracked, so both live resolver checks fail closed. These are
+private-index consistency observations only; stale OpenAPI manifests and
+missing immutable-candidate source-seal and execution evidence keep the suite
+digest and `G-SDK` release claim ineligible.
 
 **Differential release invariant and negative control.**
 `MLApiAuthoritySeparation` states that no diagnostics-only field can satisfy an
@@ -1692,13 +1702,13 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The current mutable source closure enumerates
-1,382 grouped and 1,382 diagnostics records. The checked-in grouped fixture has
+1,383 grouped and 1,383 diagnostics records. The checked-in grouped fixture has
 SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 the grouped and diagnostics suite-source SHA-256 values are
-`c530b869d54d4311ac515e3898e0bd50665b96bf6e231369f240b36128846073`
+`2bc7845189fad1b66d33f3f2c87842a7c282e0b1d55344185d2d27f1c0d3c63f`
 and
-`018b67cf9e461160eaf845006ea945c46be01b5b935ea7ae29a2fcba29a9585f`.
+`d865504a77bc35d48b4d52cb36deab51e55b02f250af36c37db06881769a91f5`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
@@ -1974,21 +1984,21 @@ controls. The diagnostics inventory is Rust `14`, Python `121`, JavaScript
 source/distribution `88`, Swift `17`, Kotlin `26`, and Java `24`. The recursive
 source-closure design covers every transitive production input, including the
 browser JavaScript distribution, Kotlin/Java Native models, grouped JSON, and
-wire TSV; the mutable closure enumerates 1,382 grouped and 1,382 diagnostics
+wire TSV; the mutable closure enumerates 1,383 grouped and 1,383 diagnostics
 records. The current grouped JSON and wire TSV SHA-256 values are
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The grouped and diagnostics suite-source SHA-256 values are
-`c530b869d54d4311ac515e3898e0bd50665b96bf6e231369f240b36128846073`
+`2bc7845189fad1b66d33f3f2c87842a7c282e0b1d55344185d2d27f1c0d3c63f`
 and
-`018b67cf9e461160eaf845006ea945c46be01b5b935ea7ae29a2fcba29a9585f`.
+`d865504a77bc35d48b4d52cb36deab51e55b02f250af36c37db06881769a91f5`.
 
-Those are development-source inventories, not SDK results. The JavaScript
-source and distribution trees match in this mutable checkout. The five OpenAPI
-artifacts require fresh deterministic regeneration from a clean exact
-candidate. No complete immutable-candidate grouped or diagnostics harness
-execution, parity hash, or archived result is claimed, so `G-SDK` remains Open.
+Those are development-source inventories, not SDK results. The changed
+JavaScript production roots require fresh deterministic source/distribution
+regeneration from a clean exact candidate, as do the five OpenAPI artifacts.
+No complete immutable-candidate grouped or diagnostics harness execution,
+parity hash, or archived result is claimed, so `G-SDK` remains Open.
 
 ### G-FINAL — clean release validation
 

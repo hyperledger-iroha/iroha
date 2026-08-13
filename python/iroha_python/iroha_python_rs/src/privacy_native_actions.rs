@@ -5,9 +5,7 @@
 //! serialization nor `Debug`: an adapter must parse bounded wallet-local
 //! material directly into the typed constructors below, and the only returned
 //! wire is a complete signed transaction.
-
 use core::{fmt, num::NonZeroU32, time::Duration};
-
 use iroha_core::{
     privacy_engines::{
         ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1,
@@ -112,7 +110,6 @@ use zk_ace_prover::{
     ZkAcePrivacyActionTransactionContextV1, ZkAcePrivacyTransferV1, ZkAcePrivacyWitnessV1,
     build_signed_zk_ace_privacy_transfer_v1,
 };
-
 /// Maximum wallet-local secret bundle accepted by the shared worker boundary.
 pub const PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1: usize = 8 * 1024 * 1024;
 /// Maximum public dispatcher request accepted before typed construction.
@@ -127,7 +124,6 @@ pub const PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1: usize = 10 * 10
 pub const PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1: usize = 256 * 1024;
 /// Exact maximum X5S1 proof returned by the profile-owned worker.
 pub const PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1: usize = ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1;
-
 /// Parse the sole canonical public spelling of a transparent balance scope.
 ///
 /// `dataspace:0` is intentionally unrepresentable because dataspace zero is
@@ -151,7 +147,6 @@ pub(crate) fn parse_canonical_public_balance_scope_v1(value: &str) -> Option<Ass
     }
     Some(AssetBalanceScope::Dataspace(DataSpaceId::new(dataspace)))
 }
-
 /// Return the sole canonical public spelling of a valid balance scope.
 #[must_use]
 pub(crate) fn canonical_public_balance_scope_v1(scope: AssetBalanceScope) -> Option<String> {
@@ -163,7 +158,6 @@ pub(crate) fn canonical_public_balance_scope_v1(scope: AssetBalanceScope) -> Opt
         AssetBalanceScope::Dataspace(_) => None,
     }
 }
-
 /// Capability bit for hidden amounts.
 pub const PRIVACY_NATIVE_FEATURE_HIDE_AMOUNT_V1: u8 = 1;
 /// Capability bit for hidden senders.
@@ -174,7 +168,6 @@ pub const PRIVACY_NATIVE_FEATURE_HIDE_RECEIVER_V1: u8 = 1 << 2;
 pub const PRIVACY_NATIVE_FEATURE_HIDE_ASSET_TYPE_V1: u8 = 1 << 3;
 /// Capability bit for post-quantum operation.
 pub const PRIVACY_NATIVE_FEATURE_POST_QUANTUM_V1: u8 = 1 << 4;
-
 /// One exact retained first-release wallet-adapter capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrivacyNativeActionCapabilityV1 {
@@ -187,7 +180,6 @@ pub struct PrivacyNativeActionCapabilityV1 {
     /// Exact feature bits: amount=1, sender=2, receiver=4, asset=8, PQ=16.
     pub privacy_feature_mask: u8,
 }
-
 /// Complete retained native-adapter registry.
 ///
 /// Every exact-v1 protocol appears exactly once. ZK-X509 uses its dedicated
@@ -267,7 +259,6 @@ pub const PRIVACY_NATIVE_ACTION_CAPABILITIES_V1: [PrivacyNativeActionCapabilityV
         privacy_feature_mask: 31,
     },
 ];
-
 /// Resolve one retained adapter by its sole canonical public-operation schema.
 #[must_use]
 pub fn privacy_native_action_capability_for_schema_v1(
@@ -277,7 +268,6 @@ pub fn privacy_native_action_capability_for_schema_v1(
         .iter()
         .find(|capability| capability.operation_schema == operation_schema)
 }
-
 /// Resolve one retained adapter by exact consensus protocol.
 #[must_use]
 pub fn privacy_native_action_capability_for_protocol_v1(
@@ -287,7 +277,6 @@ pub fn privacy_native_action_capability_for_protocol_v1(
         .iter()
         .find(|capability| capability.protocol_id == protocol_id)
 }
-
 /// Exact signature-bound transaction fields for one direct native action.
 #[derive(Clone)]
 pub struct PrivacyActionTransactionContextV1 {
@@ -306,7 +295,6 @@ pub struct PrivacyActionTransactionContextV1 {
     /// Exact signed metadata.
     pub metadata: Metadata,
 }
-
 impl fmt::Debug for PrivacyActionTransactionContextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -319,7 +307,6 @@ impl fmt::Debug for PrivacyActionTransactionContextV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// One canonical governed ZK-ACE authorization transfer.
 pub struct ZkAceAuthorizationActionRequestV1 {
     /// Complete public transfer effect and governed policy.
@@ -327,7 +314,6 @@ pub struct ZkAceAuthorizationActionRequestV1 {
     /// Complete wallet-local identity and replay witness.
     pub witness: ZkAcePrivacyWitnessV1,
 }
-
 /// One canonical VeRange batch.
 pub struct VeRangeActionRequestV1 {
     /// Transparent asset whose hidden values are constrained.
@@ -341,7 +327,6 @@ pub struct VeRangeActionRequestV1 {
     /// Canonical nonzero openings aligned with `values`.
     pub blindings: Vec<SecretScalarV1>,
 }
-
 /// Secret material for one canonical ZK-AMS admission anchor.
 pub struct ZkAmsAdmissionCredentialRequestV1 {
     /// Exact canonical personhood credential.
@@ -351,7 +336,6 @@ pub struct ZkAmsAdmissionCredentialRequestV1 {
     /// Secret opening of the credential seed public key.
     pub seed_secret: ZkAmsSeedSecretV1,
 }
-
 /// One canonical ordered ZK-AMS admission batch.
 pub struct ZkAmsBatchAdmissionActionRequestV1 {
     /// Exact authoritative issuer, registry, and policy records.
@@ -363,7 +347,6 @@ pub struct ZkAmsBatchAdmissionActionRequestV1 {
     /// One to eight ordered credentials and their private openings.
     pub credentials: Vec<ZkAmsAdmissionCredentialRequestV1>,
 }
-
 /// One canonical anonymous ZK-AMS account-provisioning request.
 pub struct ZkAmsProvisionAccountActionRequestV1 {
     /// Exact authoritative issuer, registry, and policy records.
@@ -379,7 +362,6 @@ pub struct ZkAmsProvisionAccountActionRequestV1 {
     /// Wallet-local opening whose public member determines the signer index.
     pub seed_secret: ZkAmsSeedSecretV1,
 }
-
 /// Closed first-release ZK-AMS action.
 pub enum ZkAmsActionRequestV1 {
     /// Ordered credential admission and root transition.
@@ -387,7 +369,6 @@ pub enum ZkAmsActionRequestV1 {
     /// Anonymous account provisioning.
     ProvisionAccount(ZkAmsProvisionAccountActionRequestV1),
 }
-
 /// One canonical Vega mDL predicate presentation.
 pub struct VegaCredentialPresentationActionRequestV1 {
     /// Public governed issuer record, predicate, challenge, and session.
@@ -399,14 +380,12 @@ pub struct VegaCredentialPresentationActionRequestV1 {
     /// Trusted block time used by the closed presentation-validity policy.
     pub trusted_block_timestamp_ms: u64,
 }
-
 /// One fixed-capacity ZK-X509 proof returned by the isolated worker.
 ///
 /// The private certificate, CRL, and accumulator witness never cross this
 /// boundary. This wrapper makes the nonempty exact first-release byte ceiling
 /// a type invariant before any action can be dispatched.
 pub struct ZkX509CredentialProofBytesV1(Vec<u8>);
-
 impl ZkX509CredentialProofBytesV1 {
     /// Accept one nonempty proof no larger than the exact first-release ceiling.
     pub fn try_new(encoded: Vec<u8>) -> Result<Self, PrivacyNativeActionErrorV1> {
@@ -415,20 +394,17 @@ impl ZkX509CredentialProofBytesV1 {
         }
         Ok(Self(encoded))
     }
-
     /// Borrow the exact worker response without copying it.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
-
     /// Consume the bounded wrapper into the exact proof bytes.
     #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
     }
 }
-
 /// One intent-bound ZK-X509 identity presentation returned by the isolated worker.
 pub struct ZkX509IdentityPresentationActionRequestV1 {
     /// Exact intent-bound public statement.
@@ -436,13 +412,11 @@ pub struct ZkX509IdentityPresentationActionRequestV1 {
     /// Sole canonical two-record `X5S1` proof container.
     pub proof: ZkX509CredentialProofBytesV1,
 }
-
 /// One canonical Jindo polynomial-evaluation action.
 pub struct JindoPolynomialEvaluationActionRequestV1 {
     /// Complete canonical private polynomial batch and evaluation point.
     pub witness: JindoPrivacyActionWitnessV1,
 }
-
 /// One canonical Bootle/Lantern credential presentation.
 pub struct BootleLanternPresentationActionRequestV1 {
     /// Exact active authoritative issuer-policy archive.
@@ -452,7 +426,6 @@ pub struct BootleLanternPresentationActionRequestV1 {
     /// Complete wallet-local credential witness.
     pub witness: BootleLanternPresentationWitnessV1,
 }
-
 /// One complete governed Anonymous-PGC payment request.
 pub struct AnonymousPgcPaymentActionRequestV1 {
     /// Public asset represented by the encrypted account table.
@@ -478,7 +451,6 @@ pub struct AnonymousPgcPaymentActionRequestV1 {
     /// Secret key controlling the hidden sender account.
     pub sender_secret: SecretScalarV1,
 }
-
 /// One wallet-owned FCMP++ output and its recipient encryption key.
 pub struct FcmpWalletOutputRequestV1 {
     /// Complete spendable wallet note/opening for the newly created tuple.
@@ -486,7 +458,6 @@ pub struct FcmpWalletOutputRequestV1 {
     /// Exact X25519 public key of its recipient.
     pub recipient_public_key: [u8; 32],
 }
-
 /// One complete FCMP++ payment request.
 pub struct FcmpMembershipPaymentActionRequestV1 {
     /// Public asset represented by the output set.
@@ -502,7 +473,6 @@ pub struct FcmpMembershipPaymentActionRequestV1 {
     /// One to four complete wallet-owned outputs.
     pub outputs: Vec<FcmpWalletOutputRequestV1>,
 }
-
 /// One complete Orchard V3 bundle request.
 pub struct OrchardNoteActionRequestV1 {
     /// Public asset represented by the Orchard pool.
@@ -524,7 +494,6 @@ pub struct OrchardNoteActionRequestV1 {
     /// One-or-two action padding floor.
     pub minimum_action_count: u8,
 }
-
 /// One private-IVM created note and its recipient encryption key.
 pub struct IvmPrivateNoteOutputRequestV1 {
     /// Complete output-note opening.
@@ -532,7 +501,6 @@ pub struct IvmPrivateNoteOutputRequestV1 {
     /// Exact X25519 recipient public key.
     pub recipient_public_key: [u8; 32],
 }
-
 /// One complete private-IVM note action request.
 pub struct IvmPrivateNoteActionRequestV1 {
     /// Public asset manipulated by the program.
@@ -552,7 +520,6 @@ pub struct IvmPrivateNoteActionRequestV1 {
     /// One or two complete created notes and recipients.
     pub outputs: Vec<IvmPrivateNoteOutputRequestV1>,
 }
-
 /// One PQ-MASP created note and its recipient encryption key.
 pub struct PqMaspOutputRequestV1 {
     /// Complete output-note opening.
@@ -560,7 +527,6 @@ pub struct PqMaspOutputRequestV1 {
     /// Exact ML-KEM-768 recipient public key.
     pub recipient_public_key: Vec<u8>,
 }
-
 /// One complete PQ-MASP action request.
 pub struct PqMaspNoteActionRequestV1 {
     /// Public asset represented by the PQ note pool.
@@ -578,7 +544,6 @@ pub struct PqMaspNoteActionRequestV1 {
     /// Exact ML-DSA-65 authorization secret key.
     pub authorization_secret_key: Zeroizing<Vec<u8>>,
 }
-
 /// Closed dispatcher request shared by wallet adapters.
 pub enum PrivacyNativeActionRequestV1 {
     /// Governed ZK-ACE authorization transfer.
@@ -606,7 +571,6 @@ pub enum PrivacyNativeActionRequestV1 {
     /// Post-quantum MASP action.
     PqMasp(PqMaspNoteActionRequestV1),
 }
-
 impl PrivacyNativeActionRequestV1 {
     /// Exact consensus protocol selected by this closed typed variant.
     #[must_use]
@@ -627,33 +591,27 @@ impl PrivacyNativeActionRequestV1 {
         }
     }
 }
-
 /// Closed, non-secret failure returned by native action construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrivacyNativeActionErrorV1 {
     stage: &'static str,
 }
-
 impl PrivacyNativeActionErrorV1 {
     const fn at(stage: &'static str) -> Self {
         Self { stage }
     }
-
     /// Stable, non-secret failure stage.
     #[must_use]
     pub const fn stage(self) -> &'static str {
         self.stage
     }
 }
-
 impl fmt::Display for PrivacyNativeActionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "native privacy action failed at {}", self.stage)
     }
 }
-
 impl std::error::Error for PrivacyNativeActionErrorV1 {}
-
 /// Complete signed result returned by every native builder.
 pub struct SignedPrivacyActionV1 {
     signed_transaction: SignedTransaction,
@@ -668,7 +626,6 @@ pub struct SignedPrivacyActionV1 {
     adaptive_signed_transaction_bytes: u32,
     versioned_signed_transaction_bytes: u32,
 }
-
 impl fmt::Debug for SignedPrivacyActionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -695,20 +652,17 @@ impl fmt::Debug for SignedPrivacyActionV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SignedPrivacyActionV1 {
     /// Borrow the exact signed transaction.
     #[must_use]
     pub const fn signed_transaction(&self) -> &SignedTransaction {
         &self.signed_transaction
     }
-
     /// Consume the result into the exact signed transaction.
     #[must_use]
     pub fn into_signed_transaction(self) -> SignedTransaction {
         self.signed_transaction
     }
-
     /// Encode the sole canonical versioned signed-transaction response.
     pub fn encode_versioned(&self) -> Result<Vec<u8>, PrivacyNativeActionErrorV1> {
         let bytes = self.signed_transaction.encode_versioned();
@@ -719,68 +673,57 @@ impl SignedPrivacyActionV1 {
         }
         Ok(bytes)
     }
-
     /// Exact first-release protocol.
     #[must_use]
     pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
         self.protocol_id
     }
-
     /// Canonical transaction hash.
     #[must_use]
     pub const fn transaction_hash(&self) -> [u8; 32] {
         self.transaction_hash
     }
-
     /// Canonical transaction-intent digest.
     #[must_use]
     pub const fn transaction_intent_digest(&self) -> [u8; 32] {
         self.transaction_intent_digest
     }
-
     /// Canonical typed-statement digest.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Hash of the exact encoded proof envelope.
     #[must_use]
     pub const fn proof_envelope_hash(&self) -> [u8; 32] {
         self.proof_envelope_hash
     }
-
     /// Canonical statement byte count.
     #[must_use]
     pub const fn statement_bytes(&self) -> u32 {
         self.statement_bytes
     }
-
     /// Native proof byte count.
     #[must_use]
     pub const fn proof_bytes(&self) -> u32 {
         self.proof_bytes
     }
-
     /// Canonical proof-envelope byte count.
     #[must_use]
     pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
         self.encoded_proof_envelope_bytes
     }
-
     /// Adaptive signed-transaction byte count.
     #[must_use]
     pub const fn adaptive_signed_transaction_bytes(&self) -> u32 {
         self.adaptive_signed_transaction_bytes
     }
-
     /// Versioned signed-transaction response byte count.
     #[must_use]
     pub const fn versioned_signed_transaction_bytes(&self) -> u32 {
         self.versioned_signed_transaction_bytes
     }
 }
-
 /// Authenticated public inspection of one signed native action.
 pub struct InspectedPrivacyActionV1 {
     protocol_id: PrivacyProtocolIdV1,
@@ -794,7 +737,6 @@ pub struct InspectedPrivacyActionV1 {
     adaptive_signed_transaction_bytes: u32,
     statement: PrivacyStatementV1,
 }
-
 impl fmt::Debug for InspectedPrivacyActionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -817,69 +759,58 @@ impl fmt::Debug for InspectedPrivacyActionV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl InspectedPrivacyActionV1 {
     /// Exact protocol authenticated by signature, intent, statement, and proof shape.
     #[must_use]
     pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
         self.protocol_id
     }
-
     /// Borrow the authenticated typed public statement.
     #[must_use]
     pub const fn statement(&self) -> &PrivacyStatementV1 {
         &self.statement
     }
-
     /// Canonical transaction hash.
     #[must_use]
     pub const fn transaction_hash(&self) -> [u8; 32] {
         self.transaction_hash
     }
-
     /// Canonical transaction-intent digest.
     #[must_use]
     pub const fn transaction_intent_digest(&self) -> [u8; 32] {
         self.transaction_intent_digest
     }
-
     /// Canonical typed-statement digest.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Hash of the canonical proof envelope.
     #[must_use]
     pub const fn proof_envelope_hash(&self) -> [u8; 32] {
         self.proof_envelope_hash
     }
-
     /// Canonical statement byte count.
     #[must_use]
     pub const fn statement_bytes(&self) -> u32 {
         self.statement_bytes
     }
-
     /// Native proof byte count.
     #[must_use]
     pub const fn proof_bytes(&self) -> u32 {
         self.proof_bytes
     }
-
     /// Canonical envelope byte count.
     #[must_use]
     pub const fn encoded_proof_envelope_bytes(&self) -> u32 {
         self.encoded_proof_envelope_bytes
     }
-
     /// Adaptive signed-transaction byte count.
     #[must_use]
     pub const fn adaptive_signed_transaction_bytes(&self) -> u32 {
         self.adaptive_signed_transaction_bytes
     }
 }
-
 fn validate_context(
     context: &PrivacyActionTransactionContextV1,
 ) -> Result<(), PrivacyNativeActionErrorV1> {
@@ -894,7 +825,6 @@ fn validate_context(
     }
     transaction_payload(context, None).map(|_| ())
 }
-
 fn validate_signing_authority(
     authority: &AccountId,
     private_key: &PrivateKey,
@@ -908,7 +838,6 @@ fn validate_signing_authority(
     }
     Ok(())
 }
-
 fn transaction_payload(
     context: &PrivacyActionTransactionContextV1,
     envelope: Option<PrivacyProofEnvelopeV1>,
@@ -933,7 +862,6 @@ fn transaction_payload(
         .into_payload()
         .map_err(|_| PrivacyNativeActionErrorV1::at("transaction-context"))
 }
-
 fn statement_context(
     context: &PrivacyActionTransactionContextV1,
     profile: CompiledPrivacyProfileV1,
@@ -949,7 +877,6 @@ fn statement_context(
         engine_manifest_digest: profile.engine_manifest_digest,
     }
 }
-
 /// Construct the canonical pre-proof envelope used only for transaction-intent
 /// projection.
 ///
@@ -976,7 +903,6 @@ fn intent_projection_envelope(
         proof,
     }
 }
-
 fn derive_intent(
     context: &PrivacyActionTransactionContextV1,
     profile: CompiledPrivacyProfileV1,
@@ -990,7 +916,6 @@ fn derive_intent(
     .privacy_transaction_intent_digest_v1()
     .map_err(|_| PrivacyNativeActionErrorV1::at("transaction-intent"))
 }
-
 fn finalize(
     context: &PrivacyActionTransactionContextV1,
     profile: CompiledPrivacyProfileV1,
@@ -1070,21 +995,18 @@ fn finalize(
         versioned_signed_transaction_bytes,
     })
 }
-
 fn compiled_profile(
     protocol_id: PrivacyProtocolIdV1,
 ) -> Result<CompiledPrivacyProfileV1, PrivacyNativeActionErrorV1> {
     compiled_privacy_profile_v1(protocol_id)
         .map_err(|_| PrivacyNativeActionErrorV1::at("compiled-profile"))
 }
-
 fn require_genesis(canonical_genesis_hash: [u8; 32]) -> Result<(), PrivacyNativeActionErrorV1> {
     if canonical_genesis_hash == [0; 32] {
         return Err(PrivacyNativeActionErrorV1::at("canonical-genesis-hash"));
     }
     Ok(())
 }
-
 pub(crate) fn network_id_from_genesis_hash_bytes(canonical_genesis_hash: [u8; 32]) -> NetworkId {
     NetworkId::from_genesis_hash(
         HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -1092,7 +1014,6 @@ pub(crate) fn network_id_from_genesis_hash_bytes(canonical_genesis_hash: [u8; 32
         )),
     )
 }
-
 fn validate_action_preflight(
     context: &PrivacyActionTransactionContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -1105,7 +1026,6 @@ fn validate_action_preflight(
     }
     validate_signing_authority(&context.authority, private_key)
 }
-
 fn wrap_canonical_signed_transaction_v1(
     signed_transaction: SignedTransaction,
     expected_protocol: PrivacyProtocolIdV1,
@@ -1132,7 +1052,6 @@ fn wrap_canonical_signed_transaction_v1(
         signed_transaction,
     })
 }
-
 /// Build and sign one canonical governed ZK-ACE authorization transfer.
 pub fn build_signed_zk_ace_authorization_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -1163,7 +1082,6 @@ pub fn build_signed_zk_ace_authorization_action_v1(
         PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
     )
 }
-
 /// Build and sign one canonical Jindo polynomial-evaluation action.
 pub fn build_signed_jindo_polynomial_evaluation_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -1193,7 +1111,6 @@ pub fn build_signed_jindo_polynomial_evaluation_action_v1(
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
     )
 }
-
 /// Build and sign one canonical Vega mDL predicate presentation.
 pub fn build_signed_vega_credential_presentation_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -1226,7 +1143,6 @@ pub fn build_signed_vega_credential_presentation_action_v1(
         PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
     )
 }
-
 fn validate_zk_x509_action_statement_v1(
     context: &PrivacyActionTransactionContextV1,
     profile: CompiledPrivacyProfileV1,
@@ -1250,7 +1166,6 @@ fn validate_zk_x509_action_statement_v1(
     if intent_is_zero == require_bound_intent {
         return Err(PrivacyNativeActionErrorV1::at("zk-x509-intent-state"));
     }
-
     // Structural statement validation requires a nonzero intent. During the
     // prepare pass, substitute only that erased derived field; every public
     // governance, window, usage, disclosure, and account field remains exact.
@@ -1263,7 +1178,6 @@ fn validate_zk_x509_action_statement_v1(
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| PrivacyNativeActionErrorV1::at("zk-x509-statement"))
 }
-
 /// Derive the sole transaction intent that a profile-owned ZK-X509 worker must bind.
 ///
 /// The supplied draft statement must carry the exact transaction/profile
@@ -1293,7 +1207,6 @@ pub fn prepare_zk_x509_identity_presentation_action_intent_v1(
         PrivacyProofV1::IrohaZkX509StarkP256V0(PrivacyProofBytesV1::new(Vec::new())),
     )
 }
-
 /// Validate and sign one profile-owned ZK-X509 identity presentation.
 ///
 /// Unlike unsigned preparation, this path accepts only the production profile
@@ -1316,7 +1229,6 @@ pub fn build_signed_zk_x509_identity_presentation_action_v1(
         profile,
     )
 }
-
 fn build_signed_zk_x509_identity_presentation_action_after_preflight_v1(
     context: PrivacyActionTransactionContextV1,
     request: ZkX509IdentityPresentationActionRequestV1,
@@ -1350,7 +1262,6 @@ fn build_signed_zk_x509_identity_presentation_action_after_preflight_v1(
         private_key,
     )
 }
-
 /// Build and sign one canonical VeRange transparent-setup range action.
 pub fn build_signed_verange_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -1434,7 +1345,6 @@ pub fn build_signed_verange_action_v1(
         private_key,
     )
 }
-
 /// Build and sign one canonical Bootle/Lantern credential presentation.
 pub fn build_signed_bootle_lantern_presentation_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -1504,7 +1414,6 @@ pub fn build_signed_bootle_lantern_presentation_action_v1(
         private_key,
     )
 }
-
 fn zk_ams_transaction_context(
     context: &PrivacyActionTransactionContextV1,
 ) -> ZkAmsPrivacyActionTransactionContextV1 {
@@ -1518,7 +1427,6 @@ fn zk_ams_transaction_context(
         metadata: context.metadata.clone(),
     }
 }
-
 fn zk_ams_transcript_binding<'a>(
     context: &'a PrivacyActionTransactionContextV1,
     profile: CompiledPrivacyProfileV1,
@@ -1538,7 +1446,6 @@ fn zk_ams_transcript_binding<'a>(
         generator_digest: zk_ams_generator_digest_v1(),
     }
 }
-
 /// Build and sign one canonical ordered ZK-AMS credential-admission batch.
 pub fn build_signed_zk_ams_batch_admission_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -1627,7 +1534,6 @@ pub fn build_signed_zk_ams_batch_admission_action_v1(
         private_key,
     )
 }
-
 /// Build and sign one canonical anonymous ZK-AMS account provisioning.
 pub fn build_signed_zk_ams_provision_account_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -1694,7 +1600,6 @@ pub fn build_signed_zk_ams_provision_account_action_v1(
         private_key,
     )
 }
-
 /// Build and sign one of the two canonical ZK-AMS action kinds.
 pub fn build_signed_zk_ams_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -1721,14 +1626,12 @@ pub fn build_signed_zk_ams_action_v1(
         }
     }
 }
-
 fn pgc_ciphertext(ciphertext: TwistedElGamalCiphertextV1) -> PrivacyP256CiphertextV1 {
     PrivacyP256CiphertextV1 {
         left: PrivacyP256PointV1::new(*ciphertext.left().as_bytes()),
         right: PrivacyP256PointV1::new(*ciphertext.right().as_bytes()),
     }
 }
-
 fn pgc_native_account_table(
     accounts: &[PrivacyPgcAccountV1],
 ) -> Result<
@@ -1757,7 +1660,6 @@ fn pgc_native_account_table(
         .collect::<Result<Vec<_>, _>>()?;
     Ok((public_keys, balances))
 }
-
 /// Build and sign one canonical Anonymous-PGC payment.
 pub fn build_signed_anonymous_pgc_payment_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -1908,7 +1810,6 @@ pub fn build_signed_anonymous_pgc_payment_action_v1(
         private_key,
     )
 }
-
 fn orchard_value_balance(value: i64) -> PrivacyValueBalanceV1 {
     match value.cmp(&0) {
         core::cmp::Ordering::Equal => PrivacyValueBalanceV1::balanced(),
@@ -1922,7 +1823,6 @@ fn orchard_value_balance(value: i64) -> PrivacyValueBalanceV1 {
         },
     }
 }
-
 fn orchard_action(action: &OrchardActionPublicV1) -> PrivacyOrchardActionV1 {
     PrivacyOrchardActionV1 {
         nullifier: action.nullifier,
@@ -1934,7 +1834,6 @@ fn orchard_action(action: &OrchardActionPublicV1) -> PrivacyOrchardActionV1 {
         value_commitment: action.value_commitment,
     }
 }
-
 /// Build and sign one canonical Orchard V3 note action.
 pub fn build_signed_orchard_note_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -2005,7 +1904,6 @@ pub fn build_signed_orchard_note_action_v1(
         private_key,
     )
 }
-
 fn model_fcmp_output(note: &FcmpWalletNoteV1) -> PrivacyFcmpOutputTupleV1 {
     let (output_key, linking_tag_generator, amount_commitment) = note.output().components();
     PrivacyFcmpOutputTupleV1 {
@@ -2014,7 +1912,6 @@ fn model_fcmp_output(note: &FcmpWalletNoteV1) -> PrivacyFcmpOutputTupleV1 {
         amount_commitment,
     }
 }
-
 fn model_fcmp_input(input: FcmpProofInputPublicV1) -> PrivacyFcmpInputPublicV1 {
     PrivacyFcmpInputPublicV1 {
         output_key_tilde: input.output_key_tilde,
@@ -2024,7 +1921,6 @@ fn model_fcmp_input(input: FcmpProofInputPublicV1) -> PrivacyFcmpInputPublicV1 {
         key_image: PrivacyFcmpKeyImageV1::new(input.key_image),
     }
 }
-
 fn fcmp_runtime_context_hash(
     context: &PrivacyActionTransactionContextV1,
     statement_digest: PrivacyStatementDigestV1,
@@ -2041,7 +1937,6 @@ fn fcmp_runtime_context_hash(
         engine_manifest_digest: profile.engine_manifest_digest,
     })
 }
-
 /// Build and sign one canonical FCMP++ membership payment.
 pub fn build_signed_fcmp_membership_payment_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -2136,7 +2031,6 @@ pub fn build_signed_fcmp_membership_payment_action_v1(
         private_key,
     )
 }
-
 fn checked_private_note_sums(
     inputs: &[IvmPrivateNoteInputWitnessV1],
     outputs: &[IvmPrivateNoteOutputRequestV1],
@@ -2151,7 +2045,6 @@ fn checked_private_note_sums(
     })?;
     Ok((input_sum, output_sum))
 }
-
 fn private_note_value_balance(input_sum: u128, output_sum: u128) -> PrivacyValueBalanceV1 {
     match input_sum.cmp(&output_sum) {
         core::cmp::Ordering::Equal => PrivacyValueBalanceV1::balanced(),
@@ -2165,7 +2058,6 @@ fn private_note_value_balance(input_sum: u128, output_sum: u128) -> PrivacyValue
         },
     }
 }
-
 /// Build and sign one canonical native private-IVM note action.
 pub fn build_signed_ivm_private_note_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -2281,7 +2173,6 @@ pub fn build_signed_ivm_private_note_action_v1(
         private_key,
     )
 }
-
 /// Build and sign one canonical PQ-MASP note action.
 pub fn build_signed_pq_masp_note_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -2369,7 +2260,6 @@ pub fn build_signed_pq_masp_note_action_v1(
         private_key,
     )
 }
-
 /// Consume and dispatch any retained first-release native action request.
 pub fn build_signed_privacy_native_action_v1(
     context: PrivacyActionTransactionContextV1,
@@ -2462,7 +2352,6 @@ pub fn build_signed_privacy_native_action_v1(
         ),
     }
 }
-
 fn inspect_signed(
     signed: &SignedTransaction,
     expected_protocol: PrivacyProtocolIdV1,
@@ -2509,7 +2398,6 @@ fn inspect_signed(
         statement: envelope.statement.clone(),
     })
 }
-
 /// Authenticate and inspect any retained first-release native action.
 pub fn inspect_signed_privacy_native_action_v1(
     signed: &SignedTransaction,
@@ -2526,7 +2414,6 @@ pub fn inspect_signed_privacy_native_action_v1(
         .ok_or_else(|| PrivacyNativeActionErrorV1::at("inspect-unsupported-protocol"))?;
     inspect_signed(signed, protocol_id)
 }
-
 /// Authenticate and inspect one exact governed ZK-ACE authorization action.
 pub fn inspect_signed_privacy_zk_ace_authorization_action_v1(
     signed: &SignedTransaction,
@@ -2540,7 +2427,6 @@ pub fn inspect_signed_privacy_zk_ace_authorization_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact Anonymous-PGC payment action.
 pub fn inspect_signed_privacy_anonymous_pgc_payment_action_v1(
     signed: &SignedTransaction,
@@ -2554,7 +2440,6 @@ pub fn inspect_signed_privacy_anonymous_pgc_payment_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact VeRange action.
 pub fn inspect_signed_privacy_verange_action_v1(
     signed: &SignedTransaction,
@@ -2568,7 +2453,6 @@ pub fn inspect_signed_privacy_verange_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect either exact ZK-AMS action kind.
 pub fn inspect_signed_privacy_zk_ams_action_v1(
     signed: &SignedTransaction,
@@ -2579,7 +2463,6 @@ pub fn inspect_signed_privacy_zk_ams_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact ZK-AMS admission batch.
 pub fn inspect_signed_privacy_zk_ams_batch_admission_action_v1(
     signed: &SignedTransaction,
@@ -2598,7 +2481,6 @@ pub fn inspect_signed_privacy_zk_ams_batch_admission_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact ZK-AMS account provisioning.
 pub fn inspect_signed_privacy_zk_ams_provision_account_action_v1(
     signed: &SignedTransaction,
@@ -2617,7 +2499,6 @@ pub fn inspect_signed_privacy_zk_ams_provision_account_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact Vega credential presentation.
 pub fn inspect_signed_privacy_vega_credential_presentation_action_v1(
     signed: &SignedTransaction,
@@ -2631,7 +2512,6 @@ pub fn inspect_signed_privacy_vega_credential_presentation_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact ZK-X509 identity presentation.
 pub fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
     signed: &SignedTransaction,
@@ -2654,7 +2534,6 @@ pub fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
     .map_err(|_| PrivacyNativeActionErrorV1::at("inspect-zk-x509-proof-container"))?;
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact Jindo polynomial-evaluation action.
 pub fn inspect_signed_privacy_jindo_polynomial_evaluation_action_v1(
     signed: &SignedTransaction,
@@ -2671,7 +2550,6 @@ pub fn inspect_signed_privacy_jindo_polynomial_evaluation_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact Bootle/Lantern presentation.
 pub fn inspect_signed_privacy_bootle_lantern_presentation_action_v1(
     signed: &SignedTransaction,
@@ -2685,7 +2563,6 @@ pub fn inspect_signed_privacy_bootle_lantern_presentation_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact Orchard V3 note action.
 pub fn inspect_signed_privacy_orchard_note_action_v1(
     signed: &SignedTransaction,
@@ -2699,7 +2576,6 @@ pub fn inspect_signed_privacy_orchard_note_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact FCMP++ membership payment action.
 pub fn inspect_signed_privacy_fcmp_membership_payment_action_v1(
     signed: &SignedTransaction,
@@ -2713,7 +2589,6 @@ pub fn inspect_signed_privacy_fcmp_membership_payment_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact native private-IVM note action.
 pub fn inspect_signed_privacy_ivm_private_note_action_v1(
     signed: &SignedTransaction,
@@ -2727,7 +2602,6 @@ pub fn inspect_signed_privacy_ivm_private_note_action_v1(
     }
     Ok(inspected)
 }
-
 /// Authenticate and inspect one exact PQ-MASP note action.
 pub fn inspect_signed_privacy_pq_masp_note_action_v1(
     signed: &SignedTransaction,
@@ -2738,11 +2612,9 @@ pub fn inspect_signed_privacy_pq_masp_note_action_v1(
     }
     Ok(inspected)
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-
     use iroha_data_model::privacy::{
         PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1, PrivacyChallengeV1,
         PrivacyIssuerIdV1, PrivacyNullifierV1, PrivacyX509ExtendedKeyUsageV1,
@@ -2752,21 +2624,17 @@ mod tests {
         ZK_X509_HASH_FRAME_DOMAIN_V1,
     };
     use sha2::{Digest, Sha256};
-
     use super::*;
-
     fn signing_key() -> PrivateKey {
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
             .parse()
             .expect("fixed Ed25519 private key")
     }
-
     fn foreign_signing_key() -> PrivateKey {
         "802620AF3F96DEEF44348FEB516C057558972CEC4C75C4DB9C5B3AAC843668854BF828"
             .parse()
             .expect("fixed foreign Ed25519 private key")
     }
-
     fn action_context() -> PrivacyActionTransactionContextV1 {
         let private_key = signing_key();
         PrivacyActionTransactionContextV1 {
@@ -2779,7 +2647,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn x509_draft_statement(
         context: &PrivacyActionTransactionContextV1,
     ) -> IrohaZkX509StarkP256StatementV1 {
@@ -2821,7 +2688,6 @@ mod tests {
             certificate_nullifier: PrivacyNullifierV1::new([0x1A; 32]),
         }
     }
-
     fn x509_test_proof(
         statement: &IrohaZkX509StarkP256StatementV1,
         canonical_genesis_hash: [u8; 32],
@@ -2850,7 +2716,6 @@ mod tests {
             frame.extend_from_slice(field);
         }
         let context_digest: [u8; 32] = Sha256::digest(frame).into();
-
         let mut proof = Vec::new();
         proof.extend_from_slice(b"X5S1");
         proof.extend_from_slice(&1_u16.to_be_bytes());
@@ -2868,11 +2733,9 @@ mod tests {
         }
         proof
     }
-
     fn bounded_x509_test_proof(encoded: Vec<u8>) -> ZkX509CredentialProofBytesV1 {
         ZkX509CredentialProofBytesV1::try_new(encoded).expect("bounded X509 test proof")
     }
-
     #[test]
     fn public_balance_scope_literals_are_exact_and_never_alias_universal() {
         for (literal, expected) in [
@@ -2894,7 +2757,6 @@ mod tests {
                 Some(literal)
             );
         }
-
         for hostile in [
             "",
             "Global",
@@ -2930,7 +2792,6 @@ mod tests {
         let oversized = format!("dataspace:{}", "9".repeat(4_096));
         assert_eq!(parse_canonical_public_balance_scope_v1(&oversized), None);
     }
-
     #[test]
     fn retained_capability_table_is_the_exact_reviewed_twelve() {
         let expected = [
@@ -3023,7 +2884,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn retained_capability_keys_are_unique_and_x509_is_profile_owned_but_first_class() {
         let protocols = PRIVACY_NATIVE_ACTION_CAPABILITIES_V1
@@ -3046,7 +2906,6 @@ mod tests {
             Some(x509)
         );
     }
-
     #[test]
     fn capability_schema_lookup_rejects_every_alias_form() {
         for alias in [
@@ -3067,7 +2926,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn transport_caps_are_nonzero_and_strictly_nested() {
         assert!(PRIVACY_NATIVE_ACTION_MAX_DISPATCH_REQUEST_BYTES_V1 > 0);
@@ -3095,7 +2953,6 @@ mod tests {
             "native action output must equal Taira's canonical transaction admission cap"
         );
     }
-
     #[test]
     fn canonical_genesis_binding_rejects_only_the_reserved_zero_digest() {
         assert_eq!(
@@ -3108,7 +2965,6 @@ mod tests {
             require_genesis(digest).expect("nonzero genesis is accepted");
         }
     }
-
     #[test]
     fn signing_authority_must_be_the_exact_direct_account_key() {
         let context = action_context();
@@ -3121,7 +2977,6 @@ mod tests {
             "authority-key-mismatch"
         );
     }
-
     #[test]
     fn shared_preflight_rejects_before_any_protocol_specific_work() {
         let context = action_context();
@@ -3131,7 +2986,6 @@ mod tests {
                 .stage(),
             "canonical-genesis-hash"
         );
-
         let mut invalid_context = action_context();
         invalid_context.time_to_live = Some(Duration::ZERO);
         assert_eq!(
@@ -3140,14 +2994,12 @@ mod tests {
                 .stage(),
             "transaction-context"
         );
-
         assert_eq!(
             validate_action_preflight(&context, [2; 32], &foreign_signing_key())
                 .expect_err("foreign transaction network must fail before authority inspection")
                 .stage(),
             "transaction-network-id"
         );
-
         assert_eq!(
             validate_action_preflight(&context, [1; 32], &foreign_signing_key())
                 .expect_err("foreign authority key must fail before proving")
@@ -3157,12 +3009,10 @@ mod tests {
         validate_action_preflight(&context, [1; 32], &signing_key())
             .expect("complete preflight must accept the exact direct key");
     }
-
     #[test]
     fn transaction_context_rejects_invalid_values_before_proving() {
         let mut context = action_context();
         validate_context(&context).expect("baseline context");
-
         context = action_context();
         context.creation_time = Duration::from_secs(u64::MAX);
         assert_eq!(
@@ -3171,7 +3021,6 @@ mod tests {
                 .stage(),
             "transaction-creation-time"
         );
-
         context = action_context();
         context.time_to_live = Some(Duration::from_secs(u64::MAX));
         assert_eq!(
@@ -3180,7 +3029,6 @@ mod tests {
                 .stage(),
             "transaction-ttl"
         );
-
         context = action_context();
         context.time_to_live = Some(Duration::ZERO);
         assert_eq!(
@@ -3190,7 +3038,6 @@ mod tests {
             "transaction-context"
         );
     }
-
     #[test]
     fn x509_two_stage_candidate_action_is_exact_and_production_signing_fails_closed() {
         let genesis = [0xA5; 32];
@@ -3277,7 +3124,6 @@ mod tests {
             .stage(),
             "inspect-zk-x509-proof-container"
         );
-
         let mut already_bound = statement.clone();
         assert_eq!(
             prepare_zk_x509_identity_presentation_action_intent_v1(
@@ -3306,7 +3152,6 @@ mod tests {
             .stage(),
             "zk-x509-intent-binding"
         );
-
         let mut wrong_wallet = statement.clone();
         wrong_wallet.wallet_account = AccountId::new(PublicKey::from(foreign_signing_key()));
         assert_eq!(
@@ -3338,7 +3183,6 @@ mod tests {
             .stage(),
             "authority-key-mismatch"
         );
-
         let mut truncated = proof.clone();
         truncated.pop();
         let mut trailing = proof.clone();
@@ -3382,7 +3226,6 @@ mod tests {
         ZkX509CredentialProofBytesV1::try_new(vec![0xA5; PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1])
             .expect("the exact proof ceiling is representable");
     }
-
     #[test]
     fn every_exact_inspector_rejects_a_validly_signed_transaction_without_an_action() {
         let context = action_context();
@@ -3392,14 +3235,12 @@ mod tests {
         .expect("payload round-trip")
         .try_sign(&signing_key())
         .expect("canonical direct signature");
-
         assert_eq!(
             inspect_signed_privacy_native_action_v1(&signed)
                 .expect_err("generic inspector must require one native action")
                 .stage(),
             "inspect-missing-action"
         );
-
         type Inspector =
             fn(&SignedTransaction) -> Result<InspectedPrivacyActionV1, PrivacyNativeActionErrorV1>;
         let inspectors: [Inspector; 13] = [

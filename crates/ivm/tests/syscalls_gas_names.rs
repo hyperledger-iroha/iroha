@@ -1,5 +1,4 @@
 // Check that gas assets referenced in the generated syscalls table resolve to generated GAS_ASSETS.
-
 #[test]
 fn gas_assets_in_syscalls_table_are_known() {
     // If gas assets weren't generated for this build, skip the test gracefully.
@@ -18,7 +17,6 @@ fn gas_assets_in_syscalls_table_are_known() {
         .iter()
         .map(|a| a.asset_id)
         .collect();
-
     for line in section.lines() {
         // Expect rows like: | 0xNN | NAME | Args | Return | Gas |
         if !line.starts_with('|') || line.contains("---") || line.contains("Number") {
@@ -40,7 +38,6 @@ fn gas_assets_in_syscalls_table_are_known() {
             }
         }
     }
-
     assert!(
         unknown.is_empty(),
         "Unknown gas assets: {}",

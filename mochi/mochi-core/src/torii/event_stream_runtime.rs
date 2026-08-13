@@ -4,7 +4,6 @@ impl EventStream {
         let (sender, _) = broadcast::channel(128);
         let initial_receiver = sender.subscribe();
         let forwarder = sender.clone();
-
         let decode_handle = tokio::spawn(async move {
             loop {
                 match receiver.recv().await {
@@ -66,7 +65,6 @@ impl EventStream {
                 }
             }
         });
-
         Self {
             subscription,
             sender,
@@ -74,7 +72,6 @@ impl EventStream {
             decode_handle,
         }
     }
-
     /// Acquire a receiver for decoded events.
     pub fn subscribe(&self) -> broadcast::Receiver<EventStreamEvent> {
         self.initial_receiver
@@ -83,7 +80,6 @@ impl EventStream {
             .take()
             .unwrap_or_else(|| self.sender.subscribe())
     }
-
     /// Abort both the raw WebSocket subscription and decoder task.
     pub fn abort(&self) {
         self.subscription.abort();
@@ -91,13 +87,11 @@ impl EventStream {
             self.decode_handle.abort();
         }
     }
-
     /// Check whether the underlying tasks finished.
     pub fn is_finished(&self) -> bool {
         self.subscription.is_finished() && self.decode_handle.is_finished()
     }
 }
-
 impl Drop for EventStream {
     fn drop(&mut self) {
         self.abort();

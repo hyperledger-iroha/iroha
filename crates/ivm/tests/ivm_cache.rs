@@ -1,6 +1,5 @@
 use ivm::{IvmCache, encoding, instruction};
 use std::sync::Arc;
-
 #[test]
 fn cache_decodes_mixed_stream() {
     let mut cache = IvmCache::new(4);
@@ -12,7 +11,6 @@ fn cache_decodes_mixed_stream() {
     code.extend_from_slice(&add.to_le_bytes());
     code.extend_from_slice(&xor.to_le_bytes());
     code.extend_from_slice(&halt.to_le_bytes());
-
     let ops = cache.get_or_predecode(&code, 1, 0).expect("decode");
     assert_eq!(ops.len(), 3);
     // All instructions are 32-bit words
@@ -24,7 +22,6 @@ fn cache_decodes_mixed_stream() {
     assert_eq!(ops[2].len, 4);
     assert_eq!(ops[2].inst, encoding::wide::encode_halt());
 }
-
 #[test]
 fn cache_hit_and_eviction_lru() {
     let mut cache = IvmCache::new(2);
@@ -38,7 +35,6 @@ fn cache_hit_and_eviction_lru() {
     let s3 = encoding::wide::encode_rr(instruction::wide::arithmetic::XOR, 3, 2, 1)
         .to_le_bytes()
         .to_vec();
-
     let a1 = cache.get_or_predecode(&s1, 1, 0).unwrap();
     let a2 = cache.get_or_predecode(&s2, 1, 0).unwrap();
     // Access s1 again to make it most-recently used

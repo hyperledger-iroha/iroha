@@ -8,7 +8,6 @@ fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch() 
     let (startup, proposal, manifest, validated) =
         reopen_with_persisted_prepare_intent(&safety, &storage.path().join("body"), 0xC7);
     let commitment = validated.execution_commitment();
-
     {
         let mut holder =
             super::super::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder::empty();
@@ -27,7 +26,6 @@ fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch() 
         drop(durable);
     }
     crate::sumeragi::status::clear_v2_status();
-
     let authenticated = open_recovered_startup_test(&safety)
         .expect("reopen the exact recovered-vote adapter startup")
         .authenticate_final_wal_startup_authority()
@@ -65,7 +63,6 @@ fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch() 
     );
     crate::sumeragi::status::clear_v2_status();
 }
-
 #[test]
 fn production_lifecycle_owner_factory_rejects_residual_effects_before_storage_open() {
     let safety = TempDir::new().expect("temporary residual-effect safety store");
@@ -109,7 +106,6 @@ fn production_lifecycle_owner_factory_rejects_residual_effects_before_storage_op
     assert!(!ledger_root.exists());
     assert!(!serve_root.exists());
 }
-
 #[test]
 fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
@@ -163,7 +159,6 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         .join(hex::encode(context.id().0.as_ref()));
     assert!(lifecycle_root.join("lifecycle-ledger-v1.norito").exists());
     drop(owner);
-
     let mismatched_kura = Kura::blank_kura_for_testing();
     let mismatched_root = mismatched_kura.sumeragi_v2_storage_root();
     let mismatched_safety = TempDir::new().expect("temporary mismatched-owner WAL");
@@ -205,7 +200,6 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         "recovered adapter safety WAL changed its Kura-derived storage path"
     );
     assert!(!mismatched_root.join("lifecycle-v1").exists());
-
     let foreign_kura = Kura::blank_kura_for_testing();
     let foreign_storage_root = foreign_kura.sumeragi_v2_storage_root();
     let foreign = open_recovered_startup_at_test_path(
@@ -252,7 +246,6 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         "recovered body-store handoff failed: Sumeragi v2 body-store publication target mismatch"
     );
     assert!(!foreign_lifecycle_parent.exists());
-
     let wrong_kura = Kura::blank_kura_for_testing();
     let wrong_storage_root = wrong_kura.sumeragi_v2_storage_root();
     let wrong_policy = open_recovered_startup_at_test_path(
@@ -299,7 +292,6 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     assert!(!wrong_storage_root.join("lifecycle-v1").exists());
     crate::sumeragi::status::clear_v2_status();
 }
-
 #[test]
 fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
     let kura = Kura::blank_kura_for_testing();
@@ -340,7 +332,6 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         .is_ok(),
         "the exact State/Kura/network tuple must mint the move-only factory input"
     );
-
     let foreign_kura = Kura::blank_kura_for_testing();
     let foreign_state =
         lifecycle_factory_state_for_test(Arc::clone(&foreign_kura), recovered_context.network_id);
@@ -393,7 +384,6 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         "input binding must not open lifecycle storage"
     );
 }
-
 #[test]
 fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup() {
     let kura = Kura::blank_kura_for_testing();
@@ -448,7 +438,6 @@ fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup() {
         "exact-startup rejection must precede lifecycle store creation"
     );
 }
-
 #[cfg(feature = "bls")]
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -566,7 +555,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             !storage_root.join("lifecycle-v1").exists(),
             "pre-promoted marker rejection must precede lifecycle-store creation"
         );
-
         let mut decision = wire::QuorumCertificate {
             round,
             proposal_round: round,
@@ -656,7 +644,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
         }
     }
 }
-
 fn expect_recovered_open_error<'registry>(
     result: Result<
         PublishedRecoveredWalLifecycleStartup<'registry>,
@@ -669,7 +656,6 @@ fn expect_recovered_open_error<'registry>(
         Err(error) => error,
     }
 }
-
 #[test]
 fn recovered_prepare_wal_vote_fsyncs_repair_and_installs_exact_sign() {
     let directory = TempDir::new().expect("temporary Prepare recovery directory");
@@ -746,7 +732,6 @@ fn recovered_prepare_wal_vote_fsyncs_repair_and_installs_exact_sign() {
         joined.repair.rejects_foreign_replay_authorities_for_test(),
         "structurally valid foreign replay origins must fail for both repaired rows"
     );
-
     let ledger_directory = TempDir::new().expect("temporary recovered Prepare ledger");
     let (summary, durable_startup) = joined
         .persist_repair_for_test(ledger_directory.path())
@@ -789,7 +774,6 @@ fn recovered_prepare_wal_vote_fsyncs_repair_and_installs_exact_sign() {
         "dropping the exclusive installed cut releases only its borrow"
     );
 }
-
 #[test]
 fn recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot() {
     let directory = TempDir::new().expect("temporary stale Prepare recovery directory");
@@ -829,7 +813,6 @@ fn recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot() {
     );
     drop(error);
 }
-
 #[test]
 fn recovered_prepare_sign_install_rejects_wrong_store_before_registry_mutation() {
     let directory = TempDir::new().expect("temporary wrong-store Prepare recovery directory");
@@ -862,7 +845,6 @@ fn recovered_prepare_sign_install_rejects_wrong_store_before_registry_mutation()
         "preflight failure must not insert a recovered Sign row"
     );
 }
-
 #[test]
 fn recovered_prepare_restart_reenters_repaired_frame_and_installs_sign() {
     let directory = TempDir::new().expect("temporary re-entry Prepare recovery directory");
@@ -872,7 +854,6 @@ fn recovered_prepare_restart_reenters_repaired_frame_and_installs_sign() {
     let replay_manifest = manifest.clone();
     let replay_validated = validated.clone();
     let ledger_directory = TempDir::new().expect("re-entry recovered Prepare ledger");
-
     let mut first_holder =
         super::super::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder::empty();
     let first_joined =
@@ -883,7 +864,6 @@ fn recovered_prepare_restart_reenters_repaired_frame_and_installs_sign() {
     assert!(first_summary.first_changed());
     drop(durable_before_crash);
     assert_eq!(first_holder.recovered_wal_sign_entry_count_for_test(), 0);
-
     let restarted = open_recovered_startup_test(&directory)
         .expect("fresh startup replays the unchanged Prepare WAL frame");
     let mut restarted_holder =
@@ -923,7 +903,6 @@ fn recovered_prepare_restart_reenters_repaired_frame_and_installs_sign() {
         "fresh startup leaves one exact closed Sign child after releasing the borrow"
     );
 }
-
 #[test]
 fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store() {
     let safety = TempDir::new().expect("temporary owner-seal safety store");
@@ -1000,7 +979,6 @@ fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store() {
         "authenticated lifecycle storage instances changed before startup"
     );
 }
-
 #[test]
 fn recovered_prepare_opens_exact_coordinator_before_status_publication() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
@@ -1025,7 +1003,6 @@ fn recovered_prepare_opens_exact_coordinator_before_status_publication() {
     );
     crate::sumeragi::status::clear_v2_status();
     assert!(crate::sumeragi::status::v2_status().is_none());
-
     let published = installed
         .open_coordinator_and_publish_for_test(ledger.path(), &mut payload_store, recovery)
         .unwrap_or_else(|error| {
@@ -1044,11 +1021,9 @@ fn recovered_prepare_opens_exact_coordinator_before_status_publication() {
     drop(published);
     crate::sumeragi::status::clear_v2_status();
 }
-
 #[test]
 fn recovered_prepare_open_failures_retain_authority_and_publish_no_status() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-
     // A same-context cut with no exact parent or child is rejected before
     // coordinator preparation.
     crate::sumeragi::status::clear_v2_status();
@@ -1084,7 +1059,6 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status() {
         assert!(error.retains_exact_installed_for_test(ledger.path()));
         assert!(crate::sumeragi::status::v2_status().is_none());
     }
-
     // A cut from another authenticated height context cannot be spliced.
     crate::sumeragi::status::clear_v2_status();
     {
@@ -1122,7 +1096,6 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status() {
         assert!(error.retains_exact_installed_for_test(ledger.path()));
         assert!(crate::sumeragi::status::v2_status().is_none());
     }
-
     // Both exact sides are an ambiguous recovery shape and must be
     // preserved rather than normalized by overwriting either key.
     crate::sumeragi::status::clear_v2_status();
@@ -1163,7 +1136,6 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status() {
         assert!(error.retains_exact_installed_for_test(ledger.path()));
         assert!(crate::sumeragi::status::v2_status().is_none());
     }
-
     // A foreign ledger root fails during non-publishing preparation while
     // the exact receipt-bound installed row remains sealed.
     crate::sumeragi::status::clear_v2_status();
@@ -1205,7 +1177,6 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status() {
         assert!(error.retains_exact_installed_for_test(ledger.path()));
         assert!(crate::sumeragi::status::v2_status().is_none());
     }
-
     // A corrupt opaque registry seal cannot mint the logical projection;
     // its closed row remains owned by the fail-stop error.
     crate::sumeragi::status::clear_v2_status();
@@ -1247,7 +1218,6 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status() {
         assert!(error.retains_closed_registry_row_for_test());
         assert!(crate::sumeragi::status::v2_status().is_none());
     }
-
     // Even after the exact coordinator and both stores are committed, a
     // status construction error retains that whole opened authority.
     crate::sumeragi::status::clear_v2_status();
@@ -1291,7 +1261,6 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status() {
     }
     crate::sumeragi::status::clear_v2_status();
 }
-
 #[test]
 fn recovered_prepare_already_repaired_child_reopens_and_publishes() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
@@ -1304,7 +1273,6 @@ fn recovered_prepare_already_repaired_child_reopens_and_publishes() {
     let replay_proposal = proposal.clone();
     let replay_manifest = manifest.clone();
     let replay_validated = validated.clone();
-
     let mut first_holder =
         super::super::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder::empty();
     let first =
@@ -1313,7 +1281,6 @@ fn recovered_prepare_already_repaired_child_reopens_and_publishes() {
         .persist_repair_for_test(ledger.path())
         .unwrap_or_else(|error| panic!("fsync the first repaired frame: {}", error.reason()));
     drop(durable_before_crash);
-
     let restarted = open_recovered_startup_test(&safety)
         .expect("fresh startup replays the unchanged repaired WAL frame");
     let mut restarted_holder =
@@ -1365,7 +1332,6 @@ fn recovered_prepare_already_repaired_child_reopens_and_publishes() {
     drop(published);
     crate::sumeragi::status::clear_v2_status();
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn recovered_commit_vote_sign_retains_the_exact_authenticated_prepare_qc() {
@@ -1427,7 +1393,6 @@ fn recovered_commit_vote_sign_retains_the_exact_authenticated_prepare_qc() {
         0
     );
     drop(adapter);
-
     let startup = open_recovered_startup_test(&directory)
         .expect("replay authenticated LockAndCommit behind the sealed startup cut");
     let authenticated = match startup.authenticate_final_wal_startup_authority() {
@@ -1466,7 +1431,6 @@ fn recovered_commit_vote_sign_retains_the_exact_authenticated_prepare_qc() {
     );
     drop(authenticated);
 }
-
 #[test]
 fn recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert() {
     let directory = TempDir::new().expect("temporary recovery seal directory");
@@ -1498,7 +1462,6 @@ fn recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert() {
         durable_before,
         "dropping the sealed startup cannot rewrite its WAL"
     );
-
     let repeated = open_recovered_startup_test(&directory)
         .expect("the unchanged WAL can be authenticated by a new sealed startup instance");
     let repeated = repeated
@@ -1508,7 +1471,6 @@ fn recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert() {
     assert!(repeated.effects.is_empty());
     drop(repeated);
 }
-
 #[test]
 fn recovered_startup_seals_authenticated_control_wal_records() {
     let directory = TempDir::new().expect("temporary non-vote recovery directory");
@@ -1526,7 +1488,6 @@ fn recovered_startup_seals_authenticated_control_wal_records() {
         }]
     ));
     drop(adapter);
-
     let startup = open_recovered_startup_test(&directory)
         .expect("replay the durable TimeoutIntent behind the sealed startup cut");
     let authenticated = startup

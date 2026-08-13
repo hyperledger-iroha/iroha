@@ -9,7 +9,6 @@ impl StorageBackend {
             .get(manifest_id)
             .cloned()
     }
-
     /// Returns a clone of the stored manifest metadata, looked up by digest.
     #[must_use]
     pub fn manifest_by_digest(&self, digest: &[u8; 32]) -> Option<StoredManifest> {
@@ -22,7 +21,6 @@ impl StorageBackend {
             .filter(|manifest| manifest.manifest_digest == *digest)
             .cloned()
     }
-
     /// Return the deterministic preferred manifest for a content CID without cloning the store.
     ///
     /// Site manifests (those with a root `index.html`) rank ahead of blob-only variants, followed

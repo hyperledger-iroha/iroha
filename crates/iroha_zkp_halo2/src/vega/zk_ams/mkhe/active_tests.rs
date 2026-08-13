@@ -2,10 +2,8 @@
 use super::super::authentication_challenge;
 use super::*;
 use crate::vega::MaskedRelaxedRandomErrorV1;
-
 const LINEAR_TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
 const LINEAR_TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
-
 fn linear_test_profile() -> super::super::BgvProfile {
     super::super::BgvProfile {
         profile_id: [0x71; 32],
@@ -25,12 +23,10 @@ fn linear_test_profile() -> super::super::BgvProfile {
         max_work_units: 1 << 20,
     }
 }
-
 struct KatRandom {
     seed: Vec<u8>,
     counter: u64,
 }
-
 impl KatRandom {
     fn new(label: &[u8]) -> Self {
         Self {
@@ -39,7 +35,6 @@ impl KatRandom {
         }
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for KatRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         let mut written = 0;
@@ -55,12 +50,10 @@ impl MaskedRelaxedRandomSourceV1 for KatRandom {
         Ok(())
     }
 }
-
 struct Fixture {
     roster: ZkAmsMkheGovernedActiveRosterV1,
     secrets: Vec<AuthenticationSecret>,
 }
-
 fn fixture(label: &[u8], epoch: u64) -> Fixture {
     let mut random = KatRandom::new(label);
     let mut secrets = (0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1)
@@ -76,7 +69,6 @@ fn fixture(label: &[u8], epoch: u64) -> Fixture {
         assemble_governed_active_roster(epoch, references, &mut random).expect("governed roster");
     Fixture { roster, secrets }
 }
-
 fn contributions(
     fixture: &Fixture,
     round: ZkAmsMkheActiveRoundV1,
@@ -105,7 +97,6 @@ fn contributions(
         })
         .collect()
 }
-
 #[test]
 fn governed_roster_is_exactly_eight_ordered_key_bound_parties() {
     let fixture = fixture(b"active-roster-positive", 41);
@@ -121,7 +112,6 @@ fn governed_roster_is_exactly_eight_ordered_key_bound_parties() {
         );
     }
 }
-
 #[test]
 fn prepared_common_a_rejects_a_valid_roster_under_a_different_profile() {
     let fixture = fixture(b"prepared-common-a-profile-mismatch", 401);
@@ -135,7 +125,6 @@ fn prepared_common_a_rejects_a_valid_roster_under_a_different_profile() {
         Err(super::super::cpk_relation::ZkAmsMkheCpkRelationErrorV1::GovernedContext)
     ));
 }
-
 #[test]
 #[ignore = "release-size native/prepared common-a parity exercise; isolated resource job only"]
 fn prepared_common_a_is_byte_identical_to_the_native_whole_polynomial() {
@@ -163,7 +152,6 @@ fn prepared_common_a_is_byte_identical_to_the_native_whole_polynomial() {
         .expect("prepared whole common-a");
     assert_eq!(staged, native);
 }
-
 #[test]
 fn every_public_witness_debug_representation_is_redacted() {
     let secret = [1_i64, -1, 0];
@@ -193,7 +181,6 @@ fn every_public_witness_debug_representation_is_redacted() {
         assert!(!rendered.contains("-2"));
     }
 }
-
 #[test]
 fn active_and_wire_rosters_share_one_identity_but_not_the_key_certificate() {
     let fixture = fixture(b"active-wire-roster-identity", 410);
@@ -209,7 +196,6 @@ fn active_and_wire_rosters_share_one_identity_but_not_the_key_certificate() {
         .collect::<Vec<_>>();
     assert_eq!(wire.parties().as_slice(), active_parties.as_slice());
     assert_ne!(fixture.roster.key_material_digest(), wire.roster_digest());
-
     let encoded = wire.encode().unwrap();
     let decoded = super::super::ZkAmsMkheGovernedRosterWireV1::decode_exact(
         &encoded,
@@ -220,7 +206,6 @@ fn active_and_wire_rosters_share_one_identity_but_not_the_key_certificate() {
     assert_eq!(decoded, wire);
     assert_eq!(decoded.roster_digest(), fixture.roster.roster_digest());
 }
-
 #[test]
 fn roster_and_key_material_digests_cannot_be_cross_spliced() {
     let primary = fixture(b"active-roster-digest-primary", 411);
@@ -230,14 +215,12 @@ fn roster_and_key_material_digests_cannot_be_cross_spliced() {
         primary.roster.key_material_digest(),
         other.roster.key_material_digest()
     );
-
     let mut roster_splice = primary.roster;
     roster_splice.roster_digest = other.roster.roster_digest;
     assert_eq!(
         roster_splice.validate(),
         Err(ZkAmsMkheErrorV1::InvalidPartySet)
     );
-
     let mut key_splice = primary.roster;
     key_splice.key_material_digest = other.roster.key_material_digest;
     assert_eq!(
@@ -245,36 +228,30 @@ fn roster_and_key_material_digests_cannot_be_cross_spliced() {
         Err(ZkAmsMkheErrorV1::InvalidPartySet)
     );
 }
-
 #[test]
 fn roster_rejects_reorder_duplicate_wrong_epoch_profile_and_key_splice() {
     let primary = fixture(b"active-roster-negative", 42);
     let mut reordered = primary.roster.clone();
     reordered.participants.swap(0, 1);
     assert_eq!(reordered.validate(), Err(ZkAmsMkheErrorV1::InvalidPartySet));
-
     let mut duplicate = primary.roster.clone();
     duplicate.participants[1] = duplicate.participants[0];
     assert_eq!(duplicate.validate(), Err(ZkAmsMkheErrorV1::InvalidPartySet));
-
     let mut zero_epoch = primary.roster.clone();
     zero_epoch.epoch = 0;
     assert_eq!(
         zero_epoch.validate(),
         Err(ZkAmsMkheErrorV1::InvalidPartySet)
     );
-
     let mut profile = primary.roster.clone();
     profile.profile_digest[0] ^= 1;
     assert_eq!(profile.validate(), Err(ZkAmsMkheErrorV1::InvalidPartySet));
-
     let other = fixture(b"active-roster-other", 42);
     let mut key_splice = primary.roster.clone();
     key_splice.participants[3].authentication_public_key =
         other.roster.participants[3].authentication_public_key;
     assert!(key_splice.validate().is_err());
 }
-
 #[test]
 fn roster_pop_binds_full_roster_epoch_index_party_key_and_commitment() {
     let fixture = fixture(b"active-roster-pop-binding", 43);
@@ -296,7 +273,6 @@ fn roster_pop_binds_full_roster_epoch_index_party_key_and_commitment() {
         assert!(changed.validate().is_err(), "mutation {mutation} must fail");
     }
 }
-
 #[test]
 fn rogue_inverse_key_cannot_reuse_an_honest_key_proof() {
     let fixture = fixture(b"active-roster-rogue-inverse", 44);
@@ -312,7 +288,6 @@ fn rogue_inverse_key_cannot_reuse_an_honest_key_proof() {
     rogue.participants[0].party = ZkAmsMkhePartyIdV1::from_authentication_key(&inverse).unwrap();
     assert!(rogue.validate().is_err());
 }
-
 #[test]
 fn complete_ordered_round_returns_exact_receipt() {
     let fixture = fixture(b"active-round-positive", 45);
@@ -340,7 +315,6 @@ fn complete_ordered_round_returns_exact_receipt() {
         .unwrap();
     assert_eq!(receipt.contribution_digests(), &expected);
 }
-
 #[test]
 fn missing_duplicate_reordered_and_excess_rounds_identify_first_offender() {
     let fixture = fixture(b"active-round-cardinality", 46);
@@ -351,7 +325,6 @@ fn missing_duplicate_reordered_and_excess_rounds_identify_first_offender() {
         transcript,
         b"active-cardinality-contributions",
     );
-
     let missing = zk_ams_mkhe_collect_active_round_v1(
         &fixture.roster,
         transcript,
@@ -362,7 +335,6 @@ fn missing_duplicate_reordered_and_excess_rounds_identify_first_offender() {
     assert_eq!(missing.reason(), ZkAmsMkheAbortReasonV1::MissingContributor);
     assert_eq!(missing.expected_index(), 7);
     assert_eq!(missing.observed_party(), None);
-
     let mut duplicate = baseline.clone();
     duplicate[4] = duplicate[3].clone();
     let duplicate = zk_ams_mkhe_collect_active_round_v1(
@@ -377,7 +349,6 @@ fn missing_duplicate_reordered_and_excess_rounds_identify_first_offender() {
         ZkAmsMkheAbortReasonV1::DuplicateContributor
     );
     assert_eq!(duplicate.expected_index(), 4);
-
     let mut reordered = baseline.clone();
     reordered.swap(2, 3);
     let reordered = zk_ams_mkhe_collect_active_round_v1(
@@ -392,7 +363,6 @@ fn missing_duplicate_reordered_and_excess_rounds_identify_first_offender() {
         ZkAmsMkheAbortReasonV1::ReorderedContributor
     );
     assert_eq!(reordered.expected_index(), 2);
-
     let mut excess = baseline.clone();
     excess.push(baseline[0].clone());
     let excess = zk_ams_mkhe_collect_active_round_v1(
@@ -404,7 +374,6 @@ fn missing_duplicate_reordered_and_excess_rounds_identify_first_offender() {
     .unwrap_err();
     assert_eq!(excess.reason(), ZkAmsMkheAbortReasonV1::ExcessContributor);
 }
-
 #[test]
 fn every_context_field_and_authentication_mutation_aborts() {
     let fixture = fixture(b"active-round-context", 47);
@@ -454,7 +423,6 @@ fn every_context_field_and_authentication_mutation_aborts() {
         assert_ne!(abort.evidence_digest(), [0; 32]);
     }
 }
-
 #[test]
 fn cross_roster_epoch_transcript_round_and_index_replay_all_fail() {
     let primary = fixture(b"active-round-replay", 48);
@@ -466,7 +434,6 @@ fn cross_roster_epoch_transcript_round_and_index_replay_all_fail() {
         transcript,
         b"active-replay-contributions",
     );
-
     assert!(
         zk_ams_mkhe_collect_active_round_v1(
             &other.roster,
@@ -506,7 +473,6 @@ fn cross_roster_epoch_transcript_round_and_index_replay_all_fail() {
         .is_err()
     );
 }
-
 #[test]
 fn abort_evidence_is_deterministic_and_reason_separated() {
     let fixture = fixture(b"active-abort-determinism", 50);
@@ -532,7 +498,6 @@ fn abort_evidence_is_deterministic_and_reason_separated() {
     )
     .unwrap_err();
     assert_eq!(first, second);
-
     let mut invalid = baseline.clone();
     invalid[6].authentication.signature[40] ^= 1;
     let invalid = zk_ams_mkhe_collect_active_round_v1(
@@ -544,7 +509,6 @@ fn abort_evidence_is_deterministic_and_reason_separated() {
     .unwrap_err();
     assert_ne!(first.evidence_digest(), invalid.evidence_digest());
 }
-
 #[test]
 fn material_identity_requires_four_complete_same_roster_rounds() {
     let fixture = fixture(b"active-material", 51);
@@ -576,7 +540,6 @@ fn material_identity_requires_four_complete_same_roster_rounds() {
     )
     .expect("material");
     assert_ne!(material.material_digest(), [0; 32]);
-
     assert!(
         ZkAmsMkheGovernedCollectiveKeyMaterialIdentityV1::from_receipts(
             &fixture.roster,
@@ -600,7 +563,6 @@ fn material_identity_requires_four_complete_same_roster_rounds() {
         .is_err()
     );
 }
-
 #[test]
 fn contribution_authentication_rejects_wrong_roster_secret() {
     let fixture = fixture(b"active-wrong-secret", 52);
@@ -618,7 +580,6 @@ fn contribution_authentication_rejects_wrong_roster_secret() {
         Err(ZkAmsMkheErrorV1::InvalidAuthentication)
     );
 }
-
 #[test]
 fn roster_proofs_and_contributions_reject_degenerate_randomness() {
     struct ZeroRandom;
@@ -628,7 +589,6 @@ fn roster_proofs_and_contributions_reject_degenerate_randomness() {
             Ok(())
         }
     }
-
     let fixture = fixture(b"active-zero-random", 53);
     let references: [&AuthenticationSecret; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] = fixture
         .secrets
@@ -641,7 +601,6 @@ fn roster_proofs_and_contributions_reject_degenerate_randomness() {
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     );
 }
-
 #[test]
 fn legacy_authentication_challenge_cannot_validate_roster_pop() {
     let fixture = fixture(b"active-domain-separation", 54);
@@ -668,7 +627,6 @@ fn legacy_authentication_challenge_cannot_validate_roster_pop() {
     assert_ne!(legacy, exact);
     assert_ne!(participant.key_proof.signature_bytes(), [0; 65]);
 }
-
 fn linear_context(
     profile: &super::super::BgvProfile,
     round: ZkAmsMkheActiveRoundV1,
@@ -685,7 +643,6 @@ fn linear_context(
         relation_index: 9,
     }
 }
-
 fn linear_statement_fixture(
     profile: &super::super::BgvProfile,
 ) -> (
@@ -740,7 +697,6 @@ fn linear_statement_fixture(
         error,
     )
 }
-
 #[test]
 fn narrow_lattice_proof_is_explicitly_limited_to_governed_relation_rounds() {
     let profile = linear_test_profile();
@@ -775,7 +731,6 @@ fn narrow_lattice_proof_is_explicitly_limited_to_governed_relation_rounds() {
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     );
 }
-
 #[test]
 fn linear_proof_reconstructs_commitment_instead_of_accepting_a_digest_claim() {
     let profile = linear_test_profile();
@@ -815,7 +770,6 @@ fn linear_proof_reconstructs_commitment_instead_of_accepting_a_digest_claim() {
         proof.challenge_seed
     );
 }
-
 #[test]
 fn active_secret_table_owners_zeroize_on_drop_and_unwind() {
     reset_active_secret_table_zeroized_drop_count_v1();
@@ -828,7 +782,6 @@ fn active_secret_table_owners_zeroize_on_drop_and_unwind() {
         let _signed = ZeroizingActiveI64V1(vec![1, -2, 3, -4]);
     }
     assert_eq!(active_secret_table_zeroized_drop_count_v1(), 2);
-
     let unwind = std::panic::catch_unwind(|| {
         let _rns = ZeroizingActiveRnsV1(
             super::super::RnsPolynomial::from_unsigned(&profile, &[8, 7, 6, 5, 4, 3, 2, 1])
@@ -839,7 +792,6 @@ fn active_secret_table_owners_zeroize_on_drop_and_unwind() {
     });
     assert!(unwind.is_err());
     assert_eq!(active_secret_table_zeroized_drop_count_v1(), 4);
-
     let source = include_str!("active.rs");
     let owners = source
         .split("struct ZeroizingActiveRnsV1")
@@ -852,7 +804,6 @@ fn active_secret_table_owners_zeroize_on_drop_and_unwind() {
     assert!(!owners.contains("impl core::fmt::Debug"));
     assert!(owners.matches("impl Drop for ZeroizingActive").count() == 2);
 }
-
 #[test]
 fn in_place_linear_application_matches_the_owned_reference_algebra() {
     let profile = linear_test_profile();
@@ -882,7 +833,6 @@ fn in_place_linear_application_matches_the_owned_reference_algebra() {
         expected
     );
 }
-
 #[test]
 fn streaming_collective_relation_matches_owned_algebra_digest_and_transcript() {
     let profile = linear_test_profile();
@@ -950,7 +900,6 @@ fn streaming_collective_relation_matches_owned_algebra_digest_and_transcript() {
         apply_linear_relation_from_signed_v1(&profile, &streaming, &witness_slices).unwrap(),
         vec![target]
     );
-
     let context = linear_context(&profile, ZkAmsMkheActiveRoundV1::CollectivePublicKey);
     let owned_proof = prove_linear_relation_v1(
         &profile,
@@ -970,7 +919,6 @@ fn streaming_collective_relation_matches_owned_algebra_digest_and_transcript() {
     .unwrap();
     assert_eq!(streaming_proof, owned_proof);
 }
-
 #[test]
 fn active_linear_source_drops_owned_tables_between_phases() {
     let source = include_str!("active.rs");
@@ -993,7 +941,6 @@ fn active_linear_source_drops_owned_tables_between_phases() {
     assert!(!prove.contains("output.target.clone()"));
     assert!(prove.contains("try_reserve_exact(profile.ring_degree)"));
     assert!(source.contains("zeroizing_active_rns_from_signed_v1"));
-
     let apply = source
         .split("fn apply_linear_relation")
         .nth(1)
@@ -1005,7 +952,6 @@ fn active_linear_source_drops_owned_tables_between_phases() {
     assert!(apply.contains("combine_rns_in_place"));
     assert!(apply.contains("try_zero_active_rns_v1"));
     assert!(!apply.contains("value = value.add"));
-
     let collective = source
         .split("fn collective_public_key_relation")
         .nth(1)
@@ -1018,7 +964,6 @@ fn active_linear_source_drops_owned_tables_between_phases() {
     assert!(!collective.contains("release_wire_polynomial"));
     assert!(!collective.contains("scaled_identity"));
     assert!(!collective.contains("RnsPolynomial::zero"));
-
     let identity = source
         .split("fn scaled_identity")
         .nth(1)
@@ -1029,7 +974,6 @@ fn active_linear_source_drops_owned_tables_between_phases() {
     assert!(identity.contains("try_zero_active_rns_v1(profile)?"));
     assert!(!identity.contains("vec!["));
 }
-
 #[test]
 fn legacy_dense_rkg_and_galois_relations_are_test_only() {
     let source = include_str!("active.rs");
@@ -1058,7 +1002,6 @@ fn legacy_dense_rkg_and_galois_relations_are_test_only() {
         );
     }
 }
-
 #[test]
 fn rkg_proof_wire_has_one_exact_roundtrip_and_rejects_header_splices() {
     let profile = linear_test_profile();
@@ -1082,7 +1025,6 @@ fn rkg_proof_wire_has_one_exact_roundtrip_and_rejects_header_splices() {
     assert_eq!(decoded, proof);
     verify_linear_relation_proof(&profile, context, &statement, &decoded).unwrap();
     assert_eq!(decoded.encode_wire().unwrap(), encoded);
-
     for offset in [0, 4, 37, 38, 41] {
         let mut changed = encoded.clone();
         changed[offset] ^= 1;
@@ -1114,7 +1056,6 @@ fn rkg_proof_wire_has_one_exact_roundtrip_and_rejects_header_splices() {
         LinearRelationProofV1::decode_wire_exact(&encoded, 2, profile.ring_degree * 2).is_err()
     );
 }
-
 #[test]
 fn active_rkg_evidence_codec_is_exact_and_rejects_every_authenticated_splice_class() {
     let profile = release_profile_v1();
@@ -1168,7 +1109,6 @@ fn active_rkg_evidence_codec_is_exact_and_rejects_every_authenticated_splice_cla
             .unwrap();
     assert_eq!(decoded_from_reader, evidence);
     assert!(reader.is_empty());
-
     let proof_start = ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1;
     let contribution_start = proof_start + evidence.proof_bytes.len();
     let authenticated_mutations = [
@@ -1192,7 +1132,6 @@ fn active_rkg_evidence_codec_is_exact_and_rejects_every_authenticated_splice_cla
             "authenticated {label} splice must fail"
         );
     }
-
     for (label, offset) in [
         ("outer tag", 0),
         ("outer version", 4),
@@ -1212,7 +1151,6 @@ fn active_rkg_evidence_codec_is_exact_and_rejects_every_authenticated_splice_cla
             "structural {label} splice must fail"
         );
     }
-
     let mut zero_statement = encoded.clone();
     zero_statement[5..37].fill(0);
     assert!(ZkAmsMkheActiveRkgProofV1::decode_evidence_exact(&zero_statement).is_err());
@@ -1222,7 +1160,6 @@ fn active_rkg_evidence_codec_is_exact_and_rejects_every_authenticated_splice_cla
     let mut trailing = encoded.clone();
     trailing.push(0);
     assert!(ZkAmsMkheActiveRkgProofV1::decode_evidence_exact(&trailing).is_err());
-
     // The enclosing source-evidence verifier owns algebraic statement replay.
     // This codec must preserve those bytes exactly so that replay sees any
     // statement, challenge, or response mutation rather than normalizing it.
@@ -1234,7 +1171,6 @@ fn active_rkg_evidence_codec_is_exact_and_rejects_every_authenticated_splice_cla
         assert_ne!(changed, encoded);
     }
 }
-
 #[test]
 fn rkg_wire_decodes_all_i64_patterns_but_verification_enforces_exact_bounds() {
     let profile = linear_test_profile();
@@ -1258,7 +1194,6 @@ fn rkg_wire_decodes_all_i64_patterns_but_verification_enforces_exact_bounds() {
         assert!(verify_linear_relation_proof(&profile, context, &statement, &decoded).is_err());
     }
 }
-
 #[test]
 fn linear_proof_rejects_challenge_response_shape_bound_and_order_mutations() {
     let profile = linear_test_profile();
@@ -1273,27 +1208,21 @@ fn linear_proof_rejects_challenge_response_shape_bound_and_order_mutations() {
         &mut random,
     )
     .unwrap();
-
     let mut challenge = baseline.clone();
     challenge.challenge_seed[0] ^= 1;
     assert!(verify_linear_relation_proof(&profile, context, &statement, &challenge).is_err());
-
     let mut response = baseline.clone();
     response.responses[0][3] += 1;
     assert!(verify_linear_relation_proof(&profile, context, &statement, &response).is_err());
-
     let mut truncated = baseline.clone();
     truncated.responses[0].pop();
     assert!(verify_linear_relation_proof(&profile, context, &statement, &truncated).is_err());
-
     let mut missing = baseline.clone();
     missing.responses.pop();
     assert!(verify_linear_relation_proof(&profile, context, &statement, &missing).is_err());
-
     let mut reordered = baseline.clone();
     reordered.responses.swap(0, 1);
     assert!(verify_linear_relation_proof(&profile, context, &statement, &reordered).is_err());
-
     let mut out_of_bound = baseline;
     let (_, response_limit) = linear_response_parameters(
         statement.witness_bounds[0],
@@ -1303,7 +1232,6 @@ fn linear_proof_rejects_challenge_response_shape_bound_and_order_mutations() {
     out_of_bound.responses[0][0] = response_limit + 1;
     assert!(verify_linear_relation_proof(&profile, context, &statement, &out_of_bound).is_err());
 }
-
 #[test]
 fn linear_proof_binds_every_context_field() {
     let profile = linear_test_profile();
@@ -1338,7 +1266,6 @@ fn linear_proof_binds_every_context_field() {
         );
     }
 }
-
 #[test]
 fn linear_proof_binds_target_multiplier_bounds_and_term_order() {
     let profile = linear_test_profile();
@@ -1353,26 +1280,21 @@ fn linear_proof_binds_target_multiplier_bounds_and_term_order() {
         &mut random,
     )
     .unwrap();
-
     let mut target = statement.clone();
     target.outputs[0].target.coefficients[0] =
         (target.outputs[0].target.coefficients[0] + 1) % profile.moduli[0];
     assert!(verify_linear_relation_proof(&profile, context, &target, &proof).is_err());
-
     let mut multiplier = statement.clone();
     multiplier.outputs[0].terms[0].multiplier.coefficients[0] =
         (multiplier.outputs[0].terms[0].multiplier.coefficients[0] + 1) % profile.moduli[0];
     assert!(verify_linear_relation_proof(&profile, context, &multiplier, &proof).is_err());
-
     let mut bound = statement.clone();
     bound.witness_bounds[0] += 1;
     assert!(verify_linear_relation_proof(&profile, context, &bound, &proof).is_err());
-
     let mut reordered = statement;
     reordered.outputs[0].terms.swap(0, 1);
     assert!(verify_linear_relation_proof(&profile, context, &reordered, &proof).is_err());
 }
-
 #[test]
 fn invalid_linear_witness_fails_before_randomness() {
     struct NeverRandom;
@@ -1384,7 +1306,6 @@ fn invalid_linear_witness_fails_before_randomness() {
             panic!("invalid witness must fail before prover randomness")
         }
     }
-
     let profile = linear_test_profile();
     let (statement, mut secret, error) = linear_statement_fixture(&profile);
     secret.coefficients[0] = 2;
@@ -1398,7 +1319,6 @@ fn invalid_linear_witness_fails_before_randomness() {
         ),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     );
-
     let (mut inconsistent, secret, error) = linear_statement_fixture(&profile);
     inconsistent.outputs[0].target.coefficients[0] =
         (inconsistent.outputs[0].target.coefficients[0] + 1) % profile.moduli[0];
@@ -1413,7 +1333,6 @@ fn invalid_linear_witness_fails_before_randomness() {
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     );
 }
-
 #[test]
 fn linear_proof_rejects_zero_and_repeating_entropy() {
     struct ConstantRandom(u8);
@@ -1423,7 +1342,6 @@ fn linear_proof_rejects_zero_and_repeating_entropy() {
             Ok(())
         }
     }
-
     let profile = linear_test_profile();
     let (statement, secret, error) = linear_statement_fixture(&profile);
     for byte in [0, 1, 0xff] {
@@ -1439,7 +1357,6 @@ fn linear_proof_rejects_zero_and_repeating_entropy() {
         );
     }
 }
-
 #[test]
 fn sparse_challenge_is_canonical_and_negacyclic_multiplication_matches_rns() {
     let profile = linear_test_profile();
@@ -1457,7 +1374,6 @@ fn sparse_challenge_is_canonical_and_negacyclic_multiplication_matches_rns() {
             .iter()
             .all(|coefficient| [-1, 0, 1].contains(coefficient))
     );
-
     let dense = [-1, 0, 1, 2, -2, 1, 0, -1];
     let signed = sparse_negacyclic_mul_signed(&challenge, &dense).unwrap();
     let expected = super::super::RnsPolynomial::from_signed(&profile, &challenge)
@@ -1472,7 +1388,6 @@ fn sparse_challenge_is_canonical_and_negacyclic_multiplication_matches_rns() {
         expected
     );
 }
-
 #[test]
 fn release_rkg_linear_proof_security_parameters_are_exact_and_no_wrap() {
     let certificate = zk_ams_mkhe_active_rkg_linear_proof_security_v1().unwrap();
@@ -1500,7 +1415,6 @@ fn release_rkg_linear_proof_security_parameters_are_exact_and_no_wrap() {
             < (certificate.minimum_rns_modulus - 1) / 2
     );
     assert_ne!(certificate.parameter_digest, [0; 32]);
-
     let mut changed = certificate;
     changed.challenge_weight -= 1;
     assert_eq!(changed.validate(), Err(ZkAmsMkheErrorV1::InvalidProfile));
@@ -1508,7 +1422,6 @@ fn release_rkg_linear_proof_security_parameters_are_exact_and_no_wrap() {
     changed.parameter_digest[0] ^= 1;
     assert_eq!(changed.validate(), Err(ZkAmsMkheErrorV1::InvalidProfile));
 }
-
 #[test]
 fn sparse_challenge_rejects_zero_seed_duplicate_reorder_bad_sign_and_bounds() {
     let profile = linear_test_profile();
@@ -1535,28 +1448,22 @@ fn sparse_challenge_rejects_zero_seed_duplicate_reorder_bad_sign_and_bounds() {
         },
     ];
     SparseChallengeV1::new(profile.ring_degree, valid.clone()).unwrap();
-
     let mut duplicate = valid.clone();
     duplicate[2].position = duplicate[1].position;
     assert!(SparseChallengeV1::new(profile.ring_degree, duplicate).is_err());
-
     let mut reordered = valid.clone();
     reordered.swap(1, 2);
     assert!(SparseChallengeV1::new(profile.ring_degree, reordered).is_err());
-
     for sign in [0, -2, 2, i8::MIN, i8::MAX] {
         let mut bad_sign = valid.clone();
         bad_sign[0].sign = sign;
         assert!(SparseChallengeV1::new(profile.ring_degree, bad_sign).is_err());
     }
-
     let mut out_of_range = valid.clone();
     out_of_range[3].position = profile.ring_degree as u32;
     assert!(SparseChallengeV1::new(profile.ring_degree, out_of_range).is_err());
-
     assert!(SparseChallengeV1::new(profile.ring_degree, valid[..3].to_vec()).is_err());
 }
-
 #[test]
 fn response_bounds_accept_both_exact_edges_and_reject_one_past_each_edge() {
     let profile = linear_test_profile();
@@ -1587,13 +1494,11 @@ fn response_bounds_accept_both_exact_edges_and_reject_one_past_each_edge() {
         }
     }
 }
-
 #[test]
 fn fiat_shamir_with_aborts_hits_the_exact_retry_ceiling() {
     struct BoundaryRandom {
         calls: usize,
     }
-
     impl MaskedRelaxedRandomSourceV1 for BoundaryRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             self.calls += 1;
@@ -1605,7 +1510,6 @@ fn fiat_shamir_with_aborts_hits_the_exact_retry_ceiling() {
             Ok(())
         }
     }
-
     let profile = linear_test_profile();
     let (statement, secret, error) = linear_statement_fixture(&profile);
     let mut random = BoundaryRandom { calls: 0 };
@@ -1621,7 +1525,6 @@ fn fiat_shamir_with_aborts_hits_the_exact_retry_ceiling() {
     );
     assert!(random.calls >= 2 + RANDOM_REJECTION_ATTEMPTS_V1);
 }
-
 #[test]
 fn proof_replay_fails_across_every_round_digit_party_epoch_profile_and_roster_class() {
     let profile = linear_test_profile();
@@ -1636,7 +1539,6 @@ fn proof_replay_fails_across_every_round_digit_party_epoch_profile_and_roster_cl
         &mut random,
     )
     .unwrap();
-
     for round in [
         ZkAmsMkheActiveRoundV1::CollectivePublicKey,
         ZkAmsMkheActiveRoundV1::Cks,
@@ -1661,33 +1563,26 @@ fn proof_replay_fails_across_every_round_digit_party_epoch_profile_and_roster_cl
         assert!(verify_linear_relation_proof(&profile, changed, &statement, &proof).is_err());
     }
 }
-
 #[test]
 fn statement_rejects_target_multiplier_and_witness_dimension_mismatches() {
     let profile = linear_test_profile();
     let (statement, secret, error) = linear_statement_fixture(&profile);
     let context = linear_context(&profile, ZkAmsMkheActiveRoundV1::RkgRoundOne);
-
     let mut target = statement.clone();
     target.outputs[0].target.coefficients.pop();
     assert!(target.validate(&profile).is_err());
-
     let mut multiplier = statement.clone();
     multiplier.outputs[0].terms[0].multiplier.coefficients.pop();
     assert!(multiplier.validate(&profile).is_err());
-
     let mut missing_witness = statement.clone();
     missing_witness.witness_bounds.push(1);
     assert!(missing_witness.validate(&profile).is_err());
-
     let mut duplicate_term = statement.clone();
     duplicate_term.outputs[0].terms[1].witness_index = 0;
     assert!(duplicate_term.validate(&profile).is_err());
-
     let mut zero_multiplier = statement;
     zero_multiplier.outputs[0].terms[0].multiplier = super::super::RnsPolynomial::zero(&profile);
     assert!(zero_multiplier.validate(&profile).is_err());
-
     assert_eq!(
         prove_linear_relation_v1(
             &profile,
@@ -1704,7 +1599,6 @@ fn statement_rejects_target_multiplier_and_witness_dimension_mismatches() {
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     );
 }
-
 fn tiny_galois_relation_fixture(
     profile: &super::super::BgvProfile,
     exponent: usize,
@@ -1835,7 +1729,6 @@ fn tiny_galois_relation_fixture(
         vec![secret, public_error, ephemeral, error_zero, error_one],
     )
 }
-
 #[test]
 fn galois_source_proof_links_the_transformed_secret_and_rejects_every_splice_class() {
     let profile = linear_test_profile();
@@ -1853,7 +1746,6 @@ fn galois_source_proof_links_the_transformed_secret_and_rejects_every_splice_cla
     )
     .unwrap();
     verify_linear_relation_proof(&profile, context, &statement, &proof).unwrap();
-
     let mut wrong_exponent = statement.clone();
     wrong_exponent.witness_challenge_automorphism_exponents[2..].fill(5);
     wrong_exponent.outputs[1].challenge_automorphism_exponent = 5;
@@ -1861,7 +1753,6 @@ fn galois_source_proof_links_the_transformed_secret_and_rejects_every_splice_cla
     wrong_exponent.outputs[2].challenge_automorphism_exponent = 5;
     wrong_exponent.validate(&profile).unwrap();
     assert!(verify_linear_relation_proof(&profile, context, &wrong_exponent, &proof).is_err());
-
     for mutation in 0..5 {
         let mut changed = statement.clone();
         match mutation {
@@ -1883,7 +1774,6 @@ fn galois_source_proof_links_the_transformed_secret_and_rejects_every_splice_cla
             "statement splice {mutation} must fail"
         );
     }
-
     for mutation in 0..4 {
         let mut changed = context;
         match mutation {
@@ -1895,14 +1785,12 @@ fn galois_source_proof_links_the_transformed_secret_and_rejects_every_splice_cla
         }
         assert!(verify_linear_relation_proof(&profile, changed, &statement, &proof).is_err());
     }
-
     let mut changed_proof = proof.clone();
     changed_proof.responses[0][0] += 1;
     assert!(verify_linear_relation_proof(&profile, context, &statement, &changed_proof).is_err());
     let mut changed_proof = proof.clone();
     changed_proof.challenge_seed[0] ^= 1;
     assert!(verify_linear_relation_proof(&profile, context, &statement, &changed_proof).is_err());
-
     let encoded = proof.encode_wire().unwrap();
     assert!(
         LinearRelationProofV1::decode_wire_exact(
@@ -1916,7 +1804,6 @@ fn galois_source_proof_links_the_transformed_secret_and_rejects_every_splice_cla
     trailing.push(0);
     assert!(LinearRelationProofV1::decode_wire_exact(&trailing, 5, profile.ring_degree).is_err());
 }
-
 #[test]
 fn galois_source_coordinate_is_exactly_the_frozen_schedule_and_38_digits() {
     let schedule = zk_ams_t256_galois_key_schedule_v1().unwrap();
@@ -1936,7 +1823,6 @@ fn galois_source_coordinate_is_exactly_the_frozen_schedule_and_38_digits() {
     );
     assert!(validate_galois_source_coordinate(0, schedule.entries[0].exponent, 38).is_err());
 }
-
 #[test]
 fn galois_source_authentication_rejects_party_transcript_round_proof_and_key_mutations() {
     let fixture = fixture(b"galois-source-auth", 97);

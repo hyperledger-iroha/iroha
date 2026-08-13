@@ -1,14 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensures that minting an asset on one peer propagates to other peers with the correct quantity.
-
 use std::time::Duration;
-
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
-
 #[test]
 #[allow(clippy::too_many_lines)]
 // This test is also covered at the UI level in the iroha_cli tests
@@ -17,7 +14,6 @@ fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
     // Force Norito to use fixed-length sequences in genesis to avoid relying on packed
     // offsets, which are currently unstable in debug builds.
     init_instruction_registry();
-
     let domain_id: DomainId = DomainId::try_new("domain", "universal")?;
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _account_keypair) = gen_account_in("domain");
@@ -35,13 +31,11 @@ fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
             None,
         )
     });
-
     let quantity = Quantity::from(200_u32);
     let mint_asset = Mint::asset_quantity(
         quantity.clone(),
         AssetId::new(asset_definition_id.clone(), account_id.clone()),
     );
-
     // Given
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -50,7 +44,6 @@ fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
         .with_genesis_instruction(create_account)
         .with_genesis_instruction(create_asset)
         .with_genesis_instruction(mint_asset);
-
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         builder,
         stringify!(client_mint_asset_should_increase_amount_on_another_peer),
@@ -61,19 +54,15 @@ fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
     let mut peers = network.peers().iter();
     let peer_a = peers.next().unwrap();
     let peer_b = peers.next().unwrap();
-
     // Wait until the genesis block is committed everywhere.
     rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 1).await })?;
-
     // Then
     for (idx, peer) in [peer_a, peer_b].into_iter().enumerate() {
         assert_asset_amount(peer, &account_id, &asset_definition_id, &quantity)
             .map_err(|err| eyre::eyre!("failed on peer #{idx} ({}): {err}", peer.torii_url()))?;
     }
-
     Ok(())
 }
-
 fn find_asset(
     peer: &NetworkPeer,
     account_id: &AccountId,
@@ -89,25 +78,19 @@ fn find_asset(
         },
         query::QueryError,
     };
-
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let query = FindAssetById::new(asset_id);
-
     match peer.client().query_single(query) {
         Ok(asset) => Ok(Some(asset)),
-
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
             FindError::Asset(_),
         )))) => Ok(None),
-
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
             Ok(None)
         }
-
         Err(err) => Err(eyre!("FindAsset query failed: {:?}", err)),
     }
 }
-
 fn assert_asset_amount(
     peer: &NetworkPeer,
     account_id: &AccountId,
@@ -118,7 +101,6 @@ fn assert_asset_amount(
     // 240 attempts * 250ms = 60 seconds total wait time.
     const MAX_ATTEMPTS: usize = 240;
     const RETRY_DELAY: Duration = Duration::from_millis(250);
-
     for attempt in 0..=MAX_ATTEMPTS {
         match find_asset(peer, account_id, asset_definition_id) {
             Ok(Some(asset)) => {
@@ -136,13 +118,11 @@ fn assert_asset_amount(
                 }
             }
         }
-
         if attempt == MAX_ATTEMPTS {
             break;
         }
         std::thread::sleep(RETRY_DELAY);
     }
-
     // One final check to produce a good error message
     match find_asset(peer, account_id, asset_definition_id) {
         Ok(Some(asset)) => {

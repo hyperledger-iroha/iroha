@@ -2,7 +2,6 @@
 #[test]
 fn publisher_rejects_missing_bundle_acceleration_support() {
     use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
     let mut handle = StreamingHandle::new();
     let mut codec = actual::StreamingCodec::from_defaults();
     codec.entropy_mode = EntropyMode::RansBundled;
@@ -12,7 +11,6 @@ fn publisher_rejects_missing_bundle_acceleration_support() {
     handle
         .apply_codec_config(&codec)
         .expect("bundle tables should load");
-
     let report = CapabilityReport {
         stream_id: hash_with(0xDE),
         endpoint_role: CapabilityRole::Viewer,
@@ -39,7 +37,6 @@ fn publisher_rejects_missing_bundle_acceleration_support() {
         StreamingProcessError::BundledAccelerationUnsupported { .. }
     ));
 }
-
 #[test]
 fn snapshot_decode_tolerates_misaligned_plaintext() {
     let key_pair = checked_random_keypair();
@@ -78,7 +75,6 @@ fn snapshot_decode_tolerates_misaligned_plaintext() {
     let plaintext = norito_core::to_bytes(&file).expect("canonical snapshot encode");
     let decoded = super::decode_snapshot_plaintext(&plaintext).expect("aligned decode succeeds");
     assert_eq!(decoded, file);
-
     let align = norito_core::archived_payload_align::<StreamingSnapshotFile>();
     assert!(align > 1, "expected archived snapshot alignment > 1");
     let mut envelope = vec![0u8; align - 1 + plaintext.len()];
@@ -94,7 +90,6 @@ fn snapshot_decode_tolerates_misaligned_plaintext() {
         super::decode_snapshot_plaintext(misaligned_slice).expect("misaligned decode succeeds");
     assert_eq!(decoded, file);
 }
-
 #[test]
 fn snapshot_file_bounds_reject_entry_count_and_variable_blobs() {
     let entry = sample_snapshot_entry(16_101);
@@ -113,7 +108,6 @@ fn snapshot_file_bounds_reject_entry_count_and_variable_blobs() {
         } if observed == (SNAPSHOT_MAX_ENTRIES_V1 + 1) as u64
             && limit == SNAPSHOT_MAX_ENTRIES_V1 as u64
     ));
-
     let mut oversized_key = entry;
     oversized_key.snapshot.kyber_remote_public =
         Some(vec![0x44; SNAPSHOT_MAX_KEM_PUBLIC_KEY_BYTES_V1 + 1]);
@@ -132,7 +126,6 @@ fn snapshot_file_bounds_reject_entry_count_and_variable_blobs() {
             && limit == SNAPSHOT_MAX_KEM_PUBLIC_KEY_BYTES_V1 as u64
     ));
 }
-
 #[test]
 fn snapshot_load_falls_back_from_corrupt_temp_without_buffering_both_candidates() {
     let dir = tempdir().expect("create temp dir");
@@ -153,23 +146,19 @@ fn snapshot_load_falls_back_from_corrupt_temp_without_buffering_both_candidates(
         .expect("encrypt main snapshot");
     fs::write(&path, &main_bytes).expect("write main snapshot");
     fs::write(&tmp_path, [0xFF; 8]).expect("write corrupt temp snapshot");
-
     let handle = StreamingHandle::new()
         .with_snapshot_encryption_key(&key)
         .expect("configure snapshot encryption key");
     handle
         .load_snapshots_from_path(&path)
         .expect("valid main snapshot must survive a corrupt temp candidate");
-
     assert_eq!(fs::read(&path).expect("read main snapshot"), main_bytes);
     assert!(tmp_path.exists(), "corrupt temp candidate is not promoted");
 }
-
 #[test]
 fn snapshot_persist_roundtrip() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("sessions.norito");
-
     let publisher_keys = checked_random_ed25519_keypair();
     let viewer_keys = checked_random_keypair();
     let publisher_peer = make_peer(&publisher_keys, 17001);
@@ -177,7 +166,6 @@ fn snapshot_persist_roundtrip() {
     let session_id = hash_with(0x55);
     let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x66));
     let resolution = sample_resolution();
-
     let material = StreamingKeyMaterial::new(publisher_keys.clone())
         .expect("publisher material requires ed25519");
     let publisher_key = snapshot_session_key(&material);
@@ -189,7 +177,6 @@ fn snapshot_persist_roundtrip() {
     let viewer_handle = StreamingHandle::new()
         .with_snapshot_encryption_key(&viewer_key)
         .expect("configure viewer snapshot encryption key");
-
     let publisher_update = publisher_handle
         .build_key_update(
             &viewer_peer,
@@ -203,12 +190,10 @@ fn snapshot_persist_roundtrip() {
             publisher_keys.private_key(),
         )
         .expect("publisher key update");
-
     let publisher_frame = ControlFrame::KeyUpdate(publisher_update.clone());
     viewer_handle
         .process_control_frame(&publisher_peer, &publisher_frame)
         .expect("viewer processes key update");
-
     let viewer_update = viewer_handle
         .build_key_update(
             &publisher_peer,
@@ -222,12 +207,10 @@ fn snapshot_persist_roundtrip() {
             viewer_keys.private_key(),
         )
         .expect("viewer key update");
-
     let viewer_frame = ControlFrame::KeyUpdate(viewer_update);
     publisher_handle
         .process_control_frame(&viewer_peer, &viewer_frame)
         .expect("publisher processes viewer key update");
-
     publisher_handle
         .record_transport_capabilities(&viewer_peer, CapabilityRole::Publisher, resolution)
         .expect("publisher records capabilities");
@@ -241,12 +224,10 @@ fn snapshot_persist_roundtrip() {
     viewer_handle
         .record_negotiated_capabilities(&publisher_peer, CapabilityRole::Viewer, negotiated)
         .expect("viewer records features");
-
     publisher_handle
         .persist_snapshots()
         .expect("persist streaming snapshots");
     assert!(snapshot_path.exists(), "snapshot file should exist");
-
     let restored_key = snapshot_session_key(&material);
     let restored_handle = StreamingHandle::with_key_material(material)
         .with_snapshot_path(snapshot_path.clone())
@@ -265,12 +246,10 @@ fn snapshot_persist_roundtrip() {
         "restored handle retains transport capability hash"
     );
 }
-
 #[test]
 fn snapshot_load_promotes_temp_file() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let snapshot_path = dir.path().join("sessions.norito");
-
     let publisher_keys = checked_random_ed25519_keypair();
     let viewer_keys = checked_random_keypair();
     let publisher_peer = make_peer(&publisher_keys, 18001);
@@ -278,7 +257,6 @@ fn snapshot_load_promotes_temp_file() {
     let session_id = hash_with(0x5A);
     let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x6B));
     let resolution = sample_resolution();
-
     let material = StreamingKeyMaterial::new(publisher_keys.clone())
         .expect("publisher material requires ed25519");
     let publisher_key = snapshot_session_key(&material);
@@ -290,7 +268,6 @@ fn snapshot_load_promotes_temp_file() {
     let viewer_handle = StreamingHandle::new()
         .with_snapshot_encryption_key(&viewer_key)
         .expect("configure viewer snapshot encryption key");
-
     let publisher_update = publisher_handle
         .build_key_update(
             &viewer_peer,
@@ -308,7 +285,6 @@ fn snapshot_load_promotes_temp_file() {
     viewer_handle
         .process_control_frame(&publisher_peer, &publisher_frame)
         .expect("viewer processes key update");
-
     let viewer_update = viewer_handle
         .build_key_update(
             &publisher_peer,
@@ -326,7 +302,6 @@ fn snapshot_load_promotes_temp_file() {
     publisher_handle
         .process_control_frame(&viewer_peer, &viewer_frame)
         .expect("publisher processes viewer key update");
-
     publisher_handle
         .record_transport_capabilities(&viewer_peer, CapabilityRole::Publisher, resolution)
         .expect("publisher records capabilities");
@@ -340,13 +315,11 @@ fn snapshot_load_promotes_temp_file() {
     viewer_handle
         .record_negotiated_capabilities(&publisher_peer, CapabilityRole::Viewer, negotiated)
         .expect("viewer records features");
-
     publisher_handle
         .persist_snapshots()
         .expect("persist streaming snapshots");
     let tmp_path = snapshot_temp_path(&snapshot_path);
     fs::rename(&snapshot_path, &tmp_path).expect("move snapshot to temp");
-
     let restored_key = snapshot_session_key(&material);
     let restored_handle = StreamingHandle::with_key_material(material)
         .with_snapshot_path(snapshot_path.clone())
@@ -362,7 +335,6 @@ fn snapshot_load_promotes_temp_file() {
         "restored handle should retain transport keys"
     );
 }
-
 #[test]
 fn snapshot_session_key_derivation_is_deterministic() {
     let key_pair = checked_random_ed25519_keypair();
@@ -370,13 +342,11 @@ fn snapshot_session_key_derivation_is_deterministic() {
     let first = snapshot_session_key(&material);
     let second = snapshot_session_key(&material);
     assert_eq!(first.payload(), second.payload());
-
     let other_pair = checked_random_ed25519_keypair();
     let other_material = StreamingKeyMaterial::new(other_pair).expect("material created");
     let other = snapshot_session_key(&other_material);
     assert_ne!(first.payload(), other.payload());
 }
-
 #[test]
 fn apply_crypto_config_sets_sm_feature_bit_from_build() {
     let mut handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b1));
@@ -396,7 +366,6 @@ fn apply_crypto_config_sets_sm_feature_bit_from_build() {
             .contains(CapabilityFlags::FEATURE_SM_TRANSACTIONS),
         "SM feature bit should be absent when the build lacks SM support"
     );
-
     #[cfg(feature = "sm")]
     {
         let mut cfg_enabled = actual::Crypto::default();

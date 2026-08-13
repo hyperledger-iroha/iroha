@@ -10,11 +10,9 @@
     clippy::too_many_lines,
     clippy::unnecessary_wraps
 )]
-
 mod authenticated_block_proofs;
 mod secure_private_fs;
 mod sorafs_orderbook_submission;
-
 macro_rules! norito_json {
     ({ $($key:literal : $value:expr),+ $(,)? }) => {{
         let mut object = norito::json::Map::new();
@@ -28,7 +26,6 @@ macro_rules! norito_json {
         norito::json::Value::Object(object)
     }};
 }
-
 use std::{
     collections::{BTreeMap, HashSet},
     convert::{TryFrom, TryInto},
@@ -40,7 +37,6 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake3::hash as blake3_hash;
 use halo2_proofs::{
@@ -163,7 +159,15 @@ use iroha_data_model::{
         encode_bundle_with_materials_provenance_payload,
         encode_hf_shared_lease_join_provenance_payload,
     },
-    sorafs::pin_registry::StorageClass,
+    sorafs::{
+        orderbook_submission::{
+            parse_sorafs_orderbook_cancel_reason_v1, parse_sorafs_orderbook_decimal_u64_v1,
+            parse_sorafs_orderbook_fee_bps_v1, parse_sorafs_orderbook_payload_kind_v1,
+            parse_sorafs_orderbook_side_v1, parse_sorafs_orderbook_tier_v1,
+            parse_sorafs_orderbook_xor_quantity_v1, validate_sorafs_orderbook_owner_account_v1,
+        },
+        pin_registry::StorageClass,
+    },
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionPayload,
         executable::{ContractArgumentRecord, ContractInvocation},
@@ -227,10 +231,9 @@ use sorafs_car::{
     },
 };
 use sorafs_manifest::{
-    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
-    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
-    OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
-    OrderbookValidationPayloadKindV1, XorQuantity,
+    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, OrderCancelReasonV1, OrderSideV1,
+    OrderTierV1, OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1,
+    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, XorQuantity,
     alias_cache::{
         AliasCachePolicy, AliasProofEvaluation, AliasProofState,
         decode_alias_proof_untrusted_signers, unix_now_secs,
@@ -270,7 +273,6 @@ use sorafs_orchestrator::{
     },
 };
 use tokio::runtime::Runtime;
-
 const SM2_PRIVATE_KEY_LENGTH: usize = 32;
 const SM2_PUBLIC_KEY_LENGTH: usize = 65;
 const SM2_SIGNATURE_LENGTH: usize = Sm2Signature::LENGTH;
@@ -5447,7 +5449,6 @@ fn map_gateway_error(err: GatewayOrchestratorError) -> napi::Error {
 }
 fn multi_source_js_error(error: MultiSourceError) -> napi::Error {
     use multi_fetch::MultiSourceError::*;
-
     let message = format!("{error}");
     let payload = match error {
         InvalidPlan(reason) => norito_json!({
@@ -5855,87 +5856,48 @@ fn validate_sorafs_reference_governance_cid<'a>(
 fn parse_sorafs_orderbook_payload_kind(
     kind: &str,
 ) -> napi::Result<OrderbookValidationPayloadKindV1> {
-    match kind {
-        "order-request" => Ok(OrderbookValidationPayloadKindV1::OrderRequest),
-        "order-cancel" => Ok(OrderbookValidationPayloadKindV1::OrderCancel),
-        "trade-event" => Ok(OrderbookValidationPayloadKindV1::TradeEvent),
-        "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
-        "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
-        _ => Err(napi::Error::new(
+    parse_sorafs_orderbook_payload_kind_v1(kind).ok_or_else(|| {
+        napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS orderbook payload kind `{kind}`"),
-        )),
-    }
+        )
+    })
 }
 fn parse_sorafs_orderbook_side(side: &str) -> napi::Result<OrderSideV1> {
-    match side {
-        "bid" => Ok(OrderSideV1::Bid),
-        "ask" => Ok(OrderSideV1::Ask),
-        _ => Err(napi::Error::new(
+    parse_sorafs_orderbook_side_v1(side).ok_or_else(|| {
+        napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS orderbook side `{side}`"),
-        )),
-    }
+        )
+    })
 }
 fn parse_sorafs_orderbook_tier(tier: &str) -> napi::Result<OrderTierV1> {
-    match tier {
-        "hot" => Ok(OrderTierV1::Hot),
-        "warm" => Ok(OrderTierV1::Warm),
-        "archive" => Ok(OrderTierV1::Archive),
-        _ => Err(napi::Error::new(
+    parse_sorafs_orderbook_tier_v1(tier).ok_or_else(|| {
+        napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS orderbook tier `{tier}`"),
-        )),
-    }
+        )
+    })
 }
 fn parse_sorafs_orderbook_cancel_reason(reason: &str) -> napi::Result<OrderCancelReasonV1> {
-    match reason {
-        "owner-requested" => Ok(OrderCancelReasonV1::OwnerRequested),
-        "expired" => Ok(OrderCancelReasonV1::Expired),
-        "governance" => Ok(OrderCancelReasonV1::Governance),
-        "replaced" => Ok(OrderCancelReasonV1::Replaced),
-        _ => Err(napi::Error::new(
+    parse_sorafs_orderbook_cancel_reason_v1(reason, "owner-requested").ok_or_else(|| {
+        napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS orderbook cancel reason `{reason}`"),
-        )),
-    }
+        )
+    })
 }
 fn parse_sorafs_decimal_u64(value: &str, context: &str) -> napi::Result<u64> {
-    value.trim().parse::<u64>().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must be an unsigned 64-bit decimal integer: {err}"),
-        )
-    })
+    parse_sorafs_orderbook_decimal_u64_v1(value, context)
+        .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error))
 }
 fn parse_sorafs_xor_quantity(value: &str, context: &str) -> napi::Result<XorQuantity> {
-    if value.len() > 155 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} exceeds the canonical XOR quantity text bound"),
-        ));
-    }
-    let quantity = value.parse::<XorQuantity>().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must be a canonical non-negative XOR quantity: {err}"),
-        )
-    })?;
-    if quantity.to_string() != value {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must use canonical XOR quantity spelling"),
-        ));
-    }
-    Ok(quantity)
+    parse_sorafs_orderbook_xor_quantity_v1(value, context)
+        .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error))
 }
 fn parse_sorafs_fee_bps(value: u32, context: &str) -> napi::Result<u16> {
-    u16::try_from(value).map_err(|_| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must fit in u16 basis points"),
-        )
-    })
+    parse_sorafs_orderbook_fee_bps_v1(value, context)
+        .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error))
 }
 fn parse_sorafs_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
     parse_fixed32(value, context)
@@ -6094,19 +6056,8 @@ pub fn sorafs_build_signed_orderbook_order_cancel(
         .map_err(norito_to_napi)
 }
 fn validate_sorafs_orderbook_owner_account(owner_account: &[u8]) -> napi::Result<()> {
-    if owner_account.is_empty() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "owner_account must not be empty",
-        ));
-    }
-    if owner_account.len() > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("owner_account must be at most {ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1} bytes"),
-        ));
-    }
-    Ok(())
+    validate_sorafs_orderbook_owner_account_v1(owner_account)
+        .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error))
 }
 /// Build and sign a canonical `SoraFS` settlement receipt from fields.
 #[napi]
@@ -6432,7 +6383,6 @@ pub fn sorafs_validate_governance_dag_head_chain_json(
 #[cfg(test)]
 mod sorafs_orderbook_validation_tests {
     use super::*;
-
     #[test]
     fn parse_sorafs_orderbook_payload_kind_requires_exact_v1_name() {
         assert_eq!(
@@ -11113,7 +11063,6 @@ fn try_decode_signed_transaction_adaptive_with_flags(
 }
 fn try_decode_signed_transaction_versioned(bytes: &[u8]) -> Result<SignedTransaction, String> {
     use norito_core::DecodeFromSlice as _;
-
     if let Ok(tx) =
         <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(bytes)
     {
@@ -11134,7 +11083,6 @@ fn try_decode_signed_transaction_versioned(bytes: &[u8]) -> Result<SignedTransac
 }
 fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
     use norito_core::DecodeFromSlice as _;
-
     let mut attempts = Vec::new();
     match try_decode_signed_transaction_versioned(bytes) {
         Ok(decoded) => return Ok(decoded),
@@ -13299,9 +13247,7 @@ mod tests {
             "equal display labels must not collapse distinct genesis identities"
         );
     }
-
     use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
-
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
@@ -13385,9 +13331,7 @@ mod tests {
         proxy::ProxyMode, taikai_cache::PromotionStats,
     };
     use tempfile::tempdir;
-
     use super::*;
-
     #[test]
     fn retired_generic_zk_instruction_variants_are_not_parseable() {
         for variant in [
@@ -15301,7 +15245,6 @@ seiyaku Privacy {
     #[allow(clippy::too_many_lines)]
     fn sorafs_gateway_fetch_returns_manifest_and_car_verification() {
         use sorafs_car::multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderReport};
-
         ensure_packed_struct_disabled();
         let payload_len = 32 * 1024;
         let payload: Vec<u8> = (0..payload_len)

@@ -3,7 +3,6 @@ use ivm::{
     Memory,
     halo2::{LoadCircuit, StoreCircuit, VectorLoadCircuit, VectorStoreCircuit},
 };
-
 #[test]
 fn test_load_circuit_ok() {
     let mut mem = Memory::new(0);
@@ -26,7 +25,6 @@ fn test_load_circuit_ok() {
     };
     assert!(c.verify().is_ok());
 }
-
 #[test]
 fn test_store_circuit_updates_root() {
     let mut mem = Memory::new(0);
@@ -50,7 +48,6 @@ fn test_store_circuit_updates_root() {
     };
     assert!(c.verify().is_ok());
 }
-
 #[test]
 fn test_store_circuit_permission_violation() {
     let mut mem = Memory::new(8);
@@ -72,7 +69,6 @@ fn test_store_circuit_permission_violation() {
     };
     assert!(c.verify().is_err());
 }
-
 #[test]
 fn test_vector_load_store_circuit() {
     let mut mem = Memory::new(0);
@@ -98,7 +94,6 @@ fn test_vector_load_store_circuit() {
     };
     assert!(load.verify().is_ok());
 }
-
 #[test]
 fn test_vector_store_circuit_ok() {
     let mut mem = Memory::new(0);
@@ -125,7 +120,6 @@ fn test_vector_store_circuit_ok() {
     };
     assert!(store.verify().is_ok());
 }
-
 #[test]
 fn test_vector_store_circuit_invalid_size() {
     let bad = VectorStoreCircuit {

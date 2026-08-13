@@ -1,7 +1,5 @@
 //! Exact runtime-registry qualification for stream-token gateway admission.
-
 use super::*;
-
 /// Revalidate the deployment-owned quota, sequence, lease, and outbox provider.
 pub(super) fn qualify_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
@@ -48,12 +46,10 @@ pub(super) fn qualify_dependency(
     }
     Ok(())
 }
-
 const fn map_provider_error(
     error: iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1,
 ) -> IrohaRuntimeProviderRegistryErrorV1 {
     use iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1 as Error;
-
     match error {
         Error::Unavailable | Error::ReputationCallback => {
             IrohaRuntimeProviderRegistryErrorV1::Unavailable
@@ -66,22 +62,17 @@ const fn map_provider_error(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-
     use iroha_torii::sorafs::{
         StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1,
         StreamTokenGatewayAdmissionProviderV1, StreamTokenGatewayAdmissionQualificationV1,
         StreamTokenGatewayAdmissionReadbackV1, StreamTokenGatewayAdmissionRecordV1,
         StreamTokenGatewayAdmissionRequestV1, StreamTokenGatewayAdmissionResultV1,
     };
-
     use super::*;
-
     const HANDLE: &str = "sealed://sorafs/stream-admission/eu-1";
-
     fn qualification(revision: u64) -> StreamTokenGatewayAdmissionQualificationV1 {
         StreamTokenGatewayAdmissionQualificationV1 {
             gateway_id: [0x41; 32],
@@ -92,7 +83,6 @@ mod tests {
             lease_ttl_ms: 120_000,
         }
     }
-
     fn bindings() -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "iroha3-taira".to_owned(),
@@ -109,25 +99,21 @@ mod tests {
             ],
         }
     }
-
     #[derive(Debug)]
     struct ProviderProbe {
         handle: &'static str,
         qualification: StreamTokenGatewayAdmissionQualificationV1,
     }
-
     impl StreamTokenGatewayAdmissionProviderV1 for ProviderProbe {
         fn handle(&self) -> &str {
             self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<StreamTokenGatewayAdmissionQualificationV1, StreamTokenGatewayAdmissionErrorV1>
         {
             Ok(self.qualification)
         }
-
         fn admit(
             &self,
             _request: &StreamTokenGatewayAdmissionRequestV1,
@@ -135,7 +121,6 @@ mod tests {
         {
             Err(StreamTokenGatewayAdmissionErrorV1::Rejected)
         }
-
         fn pending(
             &self,
             _max_items: u32,
@@ -143,14 +128,12 @@ mod tests {
         {
             Err(StreamTokenGatewayAdmissionErrorV1::Rejected)
         }
-
         fn acknowledge(
             &self,
             _record: StreamTokenGatewayAdmissionRecordV1,
         ) -> Result<StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1> {
             Err(StreamTokenGatewayAdmissionErrorV1::Rejected)
         }
-
         fn release_lease(
             &self,
             _record: StreamTokenGatewayAdmissionRecordV1,
@@ -158,7 +141,6 @@ mod tests {
             Err(StreamTokenGatewayAdmissionErrorV1::Rejected)
         }
     }
-
     fn dependencies(
         handle: &'static str,
         qualification: StreamTokenGatewayAdmissionQualificationV1,
@@ -170,13 +152,11 @@ mod tests {
             },
         ))
     }
-
     #[test]
     fn exact_provider_is_observed_twice() {
         qualify_dependency(&bindings(), &dependencies(HANDLE, qualification(7)))
             .expect("exact provider");
     }
-
     #[test]
     fn substituted_revision_is_rejected() {
         assert_eq!(
@@ -184,7 +164,6 @@ mod tests {
             Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
         );
     }
-
     #[test]
     fn test_marked_provider_is_rejected() {
         assert_eq!(

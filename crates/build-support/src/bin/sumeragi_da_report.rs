@@ -4,7 +4,6 @@
 //! (either passed as the first CLI argument or via `SUMERAGI_DA_ARTIFACT_DIR`),
 //! groups runs per scenario, and renders a Markdown report containing aggregated
 //! latency and throughput measurements alongside per-run details.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
@@ -13,11 +12,8 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
-
 use norito::json::{self, Map, Value};
-
 type Result<T> = std::result::Result<T, ReportError>;
-
 fn main() -> ExitCode {
     match emit_report(io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -27,7 +23,6 @@ fn main() -> ExitCode {
         }
     }
 }
-
 fn emit_report(mut writer: impl Write) -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if matches!(args.first().map(String::as_str), Some("--help" | "-h")) {
@@ -36,7 +31,6 @@ fn emit_report(mut writer: impl Write) -> Result<()> {
     }
     run_with_args(&mut writer, &args)
 }
-
 fn run_with_args(writer: &mut impl Write, args: &[String]) -> Result<()> {
     let root = match args {
         [] => {
@@ -54,12 +48,10 @@ fn run_with_args(writer: &mut impl Write, args: &[String]) -> Result<()> {
             ));
         }
     };
-
     let report = generate_report(&root)?;
     writer.write_all(report.as_bytes())?;
     Ok(())
 }
-
 fn generate_report(root: &Path) -> Result<String> {
     if !root.exists() {
         return Err(ReportError::Input(format!(
@@ -73,7 +65,6 @@ fn generate_report(root: &Path) -> Result<String> {
             root.display()
         )));
     }
-
     let mut summary_paths = Vec::new();
     for entry in root.read_dir()? {
         let entry = entry?;
@@ -88,17 +79,14 @@ fn generate_report(root: &Path) -> Result<String> {
             }
         }
     }
-
     summary_paths.sort();
     if summary_paths.is_empty() {
         return Err(ReportError::EmptyDataset(root.to_path_buf()));
     }
-
     let mut samples = Vec::with_capacity(summary_paths.len());
     for path in summary_paths {
         samples.push(ScenarioSample::from_path(path)?);
     }
-
     let mut grouped: BTreeMap<String, Vec<ScenarioSample>> = BTreeMap::new();
     for sample in samples {
         grouped
@@ -106,7 +94,6 @@ fn generate_report(root: &Path) -> Result<String> {
             .or_default()
             .push(sample);
     }
-
     let mut output = String::new();
     writeln!(output, "# Sumeragi Data-Availability Report")?;
     writeln!(
@@ -115,7 +102,6 @@ fn generate_report(root: &Path) -> Result<String> {
         grouped.values().map(Vec::len).sum::<usize>(),
         root.display()
     )?;
-
     writeln!(output, "\n## Summary\n")?;
     writeln!(
         output,
@@ -125,7 +111,6 @@ fn generate_report(root: &Path) -> Result<String> {
         output,
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     )?;
-
     for (scenario, runs) in &grouped {
         let summary = ScenarioSummary::from_runs(scenario, runs)?;
         writeln!(
@@ -155,15 +140,12 @@ fn generate_report(root: &Path) -> Result<String> {
                 .map_or_else(|| "n/a".to_owned(), |stats| format!("{:.0}", stats.max)),
         )?;
     }
-
     for (scenario, runs) in grouped {
         let summary = ScenarioSummary::from_runs(&scenario, &runs)?;
         summary.render_detail(&mut output)?;
     }
-
     Ok(output)
 }
-
 #[derive(Debug, Clone)]
 struct ScenarioSample {
     scenario: String,
@@ -182,7 +164,6 @@ struct ScenarioSample {
     queue: Option<QueueSample>,
     peer_metrics: Option<PeerMetricsSummary>,
 }
-
 impl ScenarioSample {
     fn from_path(path: PathBuf) -> Result<Self> {
         let contents = std::fs::read_to_string(&path)?;
@@ -190,23 +171,19 @@ impl ScenarioSample {
             path: path.clone(),
             message: err.to_string(),
         })?;
-
         let root = value.as_object().ok_or_else(|| ReportError::InvalidType {
             path: path.clone(),
             field: "<root>".into(),
             expected: "object",
             actual: value_type(&value),
         })?;
-
         let scenario = require_string(root, "scenario", &path)?;
         let peers = require_u64(root, "peers", &path)?;
         let payload_bytes = require_u64(root, "payload_bytes", &path)?;
-
         let timings = require_object(root, "timings", &path)?;
         let rbc_deliver_ms = require_f64(timings, "rbc_deliver_ms", &path)?;
         let commit_ms = require_f64(timings, "commit_ms", &path)?;
         let throughput_mib_s = require_f64(timings, "throughput_mib_s", &path)?;
-
         let rbc = require_object(root, "rbc", &path)?;
         let total_chunks = require_u64(rbc, "total_chunks", &path)?;
         let received_chunks = require_u64(rbc, "received_chunks", &path)?;
@@ -214,7 +191,6 @@ impl ScenarioSample {
         let view = require_u64(rbc, "view", &path)?;
         let height = require_u64(rbc, "height", &path)?;
         let block_hash = require_string(rbc, "block_hash", &path)?;
-
         let peer_metrics = match root.get("per_peer_metrics") {
             Some(Value::Array(list)) => Some(PeerMetricsSummary::from_array(list, &path)?),
             Some(other) => {
@@ -227,7 +203,6 @@ impl ScenarioSample {
             }
             None => None,
         };
-
         if let Some(summary) = &peer_metrics
             && summary.peers as u64 != peers
         {
@@ -239,7 +214,6 @@ impl ScenarioSample {
                 ),
             });
         }
-
         let queue = match root.get("queue") {
             Some(Value::Object(map)) => Some(QueueSample::from_map(map, &path)?),
             Some(other) => {
@@ -252,7 +226,6 @@ impl ScenarioSample {
             }
             None => None,
         };
-
         Ok(Self {
             scenario,
             peers,
@@ -272,13 +245,11 @@ impl ScenarioSample {
         })
     }
 }
-
 #[derive(Debug, Clone)]
 struct QueueSample {
     bg_post_queue_depth_max: f64,
     p2p_queue_dropped_total_max: f64,
 }
-
 impl QueueSample {
     fn from_map(map: &Map, path: &Path) -> Result<Self> {
         let bg_post_queue_depth_max = require_f64(map, "bg_post_queue_depth_max", path)?;
@@ -289,7 +260,6 @@ impl QueueSample {
         })
     }
 }
-
 #[derive(Debug, Clone)]
 struct PeerMetricsSummary {
     peers: usize,
@@ -300,7 +270,6 @@ struct PeerMetricsSummary {
     ready_total_min: f64,
     ready_total_max: f64,
 }
-
 impl PeerMetricsSummary {
     fn from_array(list: &[Value], path: &Path) -> Result<Self> {
         if list.is_empty() {
@@ -309,14 +278,12 @@ impl PeerMetricsSummary {
                 path.display()
             )));
         }
-
         let mut payload_bytes_min = f64::INFINITY;
         let mut payload_bytes_max = f64::NEG_INFINITY;
         let mut deliver_total_min = f64::INFINITY;
         let mut deliver_total_max = f64::NEG_INFINITY;
         let mut ready_total_min = f64::INFINITY;
         let mut ready_total_max = f64::NEG_INFINITY;
-
         for value in list {
             let obj = value.as_object().ok_or_else(|| ReportError::InvalidType {
                 path: path.to_path_buf(),
@@ -324,11 +291,9 @@ impl PeerMetricsSummary {
                 expected: "object",
                 actual: value_type(value),
             })?;
-
             let payload = require_f64(obj, "payload_bytes", path)?;
             let deliver = require_f64(obj, "deliver_total", path)?;
             let ready = require_f64(obj, "ready_total", path)?;
-
             payload_bytes_min = payload_bytes_min.min(payload);
             payload_bytes_max = payload_bytes_max.max(payload);
             deliver_total_min = deliver_total_min.min(deliver);
@@ -336,7 +301,6 @@ impl PeerMetricsSummary {
             ready_total_min = ready_total_min.min(ready);
             ready_total_max = ready_total_max.max(ready);
         }
-
         Ok(Self {
             peers: list.len(),
             payload_bytes_min,
@@ -348,7 +312,6 @@ impl PeerMetricsSummary {
         })
     }
 }
-
 #[derive(Debug, Clone)]
 struct ScenarioSummary {
     runs: usize,
@@ -367,7 +330,6 @@ struct ScenarioSummary {
     runs_detail: Vec<ScenarioSample>,
     scenario: String,
 }
-
 impl ScenarioSummary {
     fn from_runs(scenario: &str, runs: &[ScenarioSample]) -> Result<Self> {
         if runs.is_empty() {
@@ -375,13 +337,10 @@ impl ScenarioSummary {
                 "no runs recorded for scenario {scenario}"
             )));
         }
-
         let mut runs_detail = runs.to_vec();
         runs_detail.sort_by(|a, b| a.source.cmp(&b.source));
-
         let peers = runs_detail[0].peers;
         let payload_bytes = runs_detail[0].payload_bytes;
-
         let mut rbc_times = Vec::with_capacity(runs.len());
         let mut commit_times = Vec::with_capacity(runs.len());
         let mut throughputs = Vec::with_capacity(runs.len());
@@ -391,7 +350,6 @@ impl ScenarioSummary {
         let mut peer_metrics: Option<AggregatePeerMetrics> = None;
         let mut queue_bg_values = Vec::new();
         let mut queue_p2p_values = Vec::new();
-
         for run in &runs_detail {
             if run.peers != peers {
                 return Err(ReportError::Inconsistent {
@@ -415,7 +373,6 @@ impl ScenarioSummary {
                     ),
                 });
             }
-
             if let Some(peer_summary) = &run.peer_metrics
                 && peer_summary.peers as u64 != peers
             {
@@ -429,25 +386,21 @@ impl ScenarioSummary {
                     ),
                 });
             }
-
             rbc_times.push(run.rbc_deliver_ms);
             commit_times.push(run.commit_ms);
             throughputs.push(run.throughput_mib_s);
             all_deliver_within_commit &= run.rbc_deliver_ms <= run.commit_ms;
             total_chunks.insert(run.total_chunks);
             ready_counts.insert(run.ready_count);
-
             if let Some(sample_peer_metrics) = &run.peer_metrics {
                 let aggregate = peer_metrics.get_or_insert_with(AggregatePeerMetrics::default);
                 aggregate.ingest(sample_peer_metrics);
             }
-
             if let Some(queue) = &run.queue {
                 queue_bg_values.push(queue.bg_post_queue_depth_max);
                 queue_p2p_values.push(queue.p2p_queue_dropped_total_max);
             }
         }
-
         let queue_bg_depth = if queue_bg_values.is_empty() {
             None
         } else {
@@ -458,7 +411,6 @@ impl ScenarioSummary {
         } else {
             Some(Stats::from_values(&queue_p2p_values))
         };
-
         Ok(Self {
             runs: runs_detail.len(),
             peers,
@@ -477,7 +429,6 @@ impl ScenarioSummary {
             scenario: scenario.to_owned(),
         })
     }
-
     fn render_detail(&self, output: &mut String) -> Result<()> {
         self.render_overview(output)?;
         self.render_queue_stats(output)?;
@@ -485,7 +436,6 @@ impl ScenarioSummary {
         self.render_runs_table(output)?;
         Ok(())
     }
-
     fn render_overview(&self, output: &mut String) -> Result<()> {
         writeln!(output, "\n### {}\n", self.scenario)?;
         writeln!(output, "- runs: {}", self.runs)?;
@@ -527,7 +477,6 @@ impl ScenarioSummary {
         )?;
         Ok(())
     }
-
     fn render_queue_stats(&self, output: &mut String) -> Result<()> {
         if let Some(stats) = &self.queue_bg_depth {
             writeln!(
@@ -545,7 +494,6 @@ impl ScenarioSummary {
         }
         Ok(())
     }
-
     fn render_peer_metrics(&self, output: &mut String) -> Result<()> {
         if let Some(peer) = &self.peer_metrics {
             writeln!(
@@ -566,7 +514,6 @@ impl ScenarioSummary {
         }
         Ok(())
     }
-
     fn render_runs_table(&self, output: &mut String) -> Result<()> {
         writeln!(
             output,
@@ -576,7 +523,6 @@ impl ScenarioSummary {
             output,
             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
         )?;
-
         for (index, run) in self.runs_detail.iter().enumerate() {
             let (queue_bg_display, queue_p2p_display) = run.queue.as_ref().map_or_else(
                 || ("-".to_owned(), "-".to_owned()),
@@ -610,11 +556,9 @@ impl ScenarioSummary {
                 queue_p2p_display,
             )?;
         }
-
         Ok(())
     }
 }
-
 #[derive(Debug, Clone)]
 struct AggregatePeerMetrics {
     payload_bytes_min: f64,
@@ -625,7 +569,6 @@ struct AggregatePeerMetrics {
     ready_total_max: f64,
     first: bool,
 }
-
 impl AggregatePeerMetrics {
     fn ingest(&mut self, metrics: &PeerMetricsSummary) {
         if self.first {
@@ -646,7 +589,6 @@ impl AggregatePeerMetrics {
         }
     }
 }
-
 impl Default for AggregatePeerMetrics {
     fn default() -> Self {
         Self {
@@ -660,7 +602,6 @@ impl Default for AggregatePeerMetrics {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct Stats {
     min: f64,
@@ -668,7 +609,6 @@ struct Stats {
     mean: f64,
     median: f64,
 }
-
 impl Stats {
     fn from_values(values: &[f64]) -> Self {
         assert!(
@@ -697,7 +637,6 @@ impl Stats {
         }
     }
 }
-
 #[derive(Debug)]
 enum ReportError {
     Io(io::Error),
@@ -723,7 +662,6 @@ enum ReportError {
         detail: String,
     },
 }
-
 impl std::fmt::Display for ReportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -757,26 +695,21 @@ impl std::fmt::Display for ReportError {
         }
     }
 }
-
 impl std::error::Error for ReportError {}
-
 impl From<io::Error> for ReportError {
     fn from(err: io::Error) -> Self {
         Self::Io(err)
     }
 }
-
 impl From<std::fmt::Error> for ReportError {
     fn from(err: std::fmt::Error) -> Self {
         Self::Fmt(err)
     }
 }
-
 const USAGE: &str = "Usage: sumeragi_da_report [ARTIFACT_DIR]\n\n\
 Generate a Markdown report from Sumeragi DA integration test summaries.\n\
 Pass the directory containing *.summary.json artifacts as the first argument,\n\
 or set SUMERAGI_DA_ARTIFACT_DIR. Use --help to display this message.\n";
-
 fn require_object<'a>(map: &'a Map, key: &str, path: &Path) -> Result<&'a Map> {
     map.get(key).map_or_else(
         || {
@@ -796,7 +729,6 @@ fn require_object<'a>(map: &'a Map, key: &str, path: &Path) -> Result<&'a Map> {
         },
     )
 }
-
 fn require_u64(map: &Map, key: &str, path: &Path) -> Result<u64> {
     map.get(key).map_or_else(
         || {
@@ -815,7 +747,6 @@ fn require_u64(map: &Map, key: &str, path: &Path) -> Result<u64> {
         },
     )
 }
-
 fn require_f64(map: &Map, key: &str, path: &Path) -> Result<f64> {
     map.get(key).map_or_else(
         || {
@@ -834,7 +765,6 @@ fn require_f64(map: &Map, key: &str, path: &Path) -> Result<f64> {
         },
     )
 }
-
 fn require_string(map: &Map, key: &str, path: &Path) -> Result<String> {
     map.get(key).map_or_else(
         || {
@@ -854,7 +784,6 @@ fn require_string(map: &Map, key: &str, path: &Path) -> Result<String> {
         },
     )
 }
-
 fn value_type(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
@@ -865,14 +794,12 @@ fn value_type(value: &Value) -> &'static str {
         Value::Object(_) => "object",
     }
 }
-
 fn u64_to_f64(value: u64) -> f64 {
     const TWO_POW_32: f64 = 4_294_967_296.0;
     let high = u32::try_from(value >> 32).expect("upper 32 bits fit in u32");
     let low = u32::try_from(value & 0xFFFF_FFFF).expect("lower 32 bits fit in u32");
     f64::from(high).mul_add(TWO_POW_32, f64::from(low))
 }
-
 fn format_u64_set(values: &BTreeSet<u64>) -> String {
     if values.is_empty() {
         return "n/a".into();
@@ -885,26 +812,21 @@ fn format_u64_set(values: &BTreeSet<u64>) -> String {
     }
     result
 }
-
 fn file_stem(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())
         .map_or_else(|| path.display().to_string(), str::to_owned)
 }
-
 fn shorten_hash(hash: &str) -> String {
     if hash.len() <= 12 {
         return hash.to_owned();
     }
     format!("{}...", &hash[..12])
 }
-
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File};
-
     use super::*;
-
     fn assert_close(actual: f64, expected: f64) {
         let diff = (actual - expected).abs();
         assert!(
@@ -920,7 +842,6 @@ mod tests {
         assert_close(stats.mean, 25.0);
         assert_close(stats.median, 25.0);
     }
-
     #[test]
     fn scenario_sample_parses_queue_metrics() {
         let dir = test_directory("queue_metrics");
@@ -955,7 +876,6 @@ mod tests {
         assert_close(queue.p2p_queue_dropped_total_max, 1.0);
         let _ = fs::remove_dir_all(&dir);
     }
-
     #[test]
     fn scenario_summary_computes_queue_stats() {
         let base = ScenarioSample {
@@ -986,7 +906,6 @@ mod tests {
         second.rbc_deliver_ms = 900.0;
         second.commit_ms = 1_100.0;
         second.source = PathBuf::from("sample2");
-
         let summary = ScenarioSummary::from_runs("test", &[base, second]).unwrap();
         let queue_bg = summary.queue_bg_depth.expect("queue bg stats");
         assert_close(queue_bg.max, 5.0);
@@ -994,7 +913,6 @@ mod tests {
         let queue_p2p = summary.queue_p2p_drops.expect("queue drop stats");
         assert_close(queue_p2p.max, 1.0);
     }
-
     #[test]
     fn scenario_sample_parses_valid_summary() {
         let dir = test_directory("sample_parses");
@@ -1030,16 +948,13 @@ mod tests {
             .unwrap()
             .write_all(json.as_bytes())
             .unwrap();
-
         let sample = ScenarioSample::from_path(path.clone()).unwrap();
         assert_eq!(sample.scenario, "sumeragi_rbc_da_large_payload_four_peers");
         assert_eq!(sample.peers, 4);
         assert_eq!(sample.payload_bytes, 11_010_048);
         assert!(sample.peer_metrics.is_some());
-
         let _ = fs::remove_dir_all(&dir);
     }
-
     #[test]
     fn generate_report_emits_markdown() {
         let dir = test_directory("render_report");
@@ -1062,16 +977,13 @@ mod tests {
             3_200,
             3.3,
         );
-
         let report = generate_report(&dir).unwrap();
         assert!(report.contains("# Sumeragi Data-Availability Report"));
         assert!(report.contains("sumeragi_rbc_da_large_payload_four_peers"));
         assert!(report.contains("Throughput (MiB/s)"));
         assert!(report.contains("RBC deliver (ms)"));
-
         let _ = fs::remove_dir_all(&dir);
     }
-
     #[test]
     fn run_with_args_requires_data() {
         let dir = test_directory("empty_dataset");
@@ -1080,10 +992,8 @@ mod tests {
         let args = vec![dir.display().to_string()];
         let err = run_with_args(&mut sink, &args).expect_err("empty dataset should error");
         assert!(matches!(err, ReportError::EmptyDataset(_)));
-
         let _ = fs::remove_dir_all(&dir);
     }
-
     fn test_directory(suffix: &str) -> PathBuf {
         let base = std::env::temp_dir().join(format!(
             "sumeragi_da_report_test_{}_{}",
@@ -1094,7 +1004,6 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         base
     }
-
     fn write_summary(
         path: &Path,
         scenario: &str,
@@ -1115,7 +1024,6 @@ mod tests {
             rbc_s = u64_to_f64(rbc_ms) / 1000.0,
             commit_s = u64_to_f64(commit_ms) / 1000.0,
         );
-
         fs::write(path, json).unwrap();
     }
 }

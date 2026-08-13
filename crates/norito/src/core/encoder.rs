@@ -1,9 +1,6 @@
 //! Serialization destinations used by the Norito core codec.
-
 use std::io::{self, Write};
-
 use super::ByteSink;
-
 /// Non-generic destination used by [`super::NoritoSerialize`] implementations.
 ///
 /// Erasing the concrete [`Write`] type at the outer serialization boundary
@@ -13,13 +10,11 @@ use super::ByteSink;
 pub struct Encoder<'a> {
     sink: EncoderSink<'a>,
 }
-
 enum EncoderSink<'a> {
     Buffer(&'a mut Vec<u8>),
     ByteSink(&'a mut ByteSink),
     Writer(&'a mut dyn Write),
 }
-
 impl<'a> Encoder<'a> {
     /// Create an encoder over an arbitrary byte writer.
     pub fn new(writer: &'a mut dyn Write) -> Self {
@@ -27,7 +22,6 @@ impl<'a> Encoder<'a> {
             sink: EncoderSink::Writer(writer),
         }
     }
-
     /// Create an encoder that appends directly to `buffer`.
     ///
     /// This constructor is primarily used by generated serializers when they
@@ -39,13 +33,11 @@ impl<'a> Encoder<'a> {
             sink: EncoderSink::Buffer(buffer),
         }
     }
-
     pub(super) fn for_byte_sink(sink: &'a mut ByteSink) -> Self {
         Self {
             sink: EncoderSink::ByteSink(sink),
         }
     }
-
     /// Write an entire byte slice to the serialization destination.
     ///
     /// This inherent operation keeps generated implementations independent of
@@ -64,7 +56,6 @@ impl<'a> Encoder<'a> {
         }
     }
 }
-
 impl Write for Encoder<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         match &mut self.sink {
@@ -79,11 +70,9 @@ impl Write for Encoder<'_> {
             EncoderSink::Writer(writer) => writer.write(bytes),
         }
     }
-
     fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
         Encoder::write_all(self, bytes)
     }
-
     fn flush(&mut self) -> io::Result<()> {
         match &mut self.sink {
             EncoderSink::Buffer(_) | EncoderSink::ByteSink(_) => Ok(()),

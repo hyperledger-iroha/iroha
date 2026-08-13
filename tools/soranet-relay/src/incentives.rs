@@ -4,7 +4,6 @@
 //! SNNet-7 so the relay runtime can surface Norito-friendly `RelayEpochMetricsV1` payloads for the
 //! treasury pipeline. It deduplicates measurement flows, tracks the minimum confidence across
 //! samples, and packages the results into the canonical data-model structures.
-
 use iroha_data_model::{
     metadata::Metadata,
     soranet::{
@@ -13,7 +12,6 @@ use iroha_data_model::{
     },
 };
 use thiserror::Error;
-
 /// Default number of simultaneously retained incentive epochs.
 pub const INCENTIVE_DEFAULT_ACTIVE_EPOCHS: usize = 16;
 /// First-release hard ceiling for simultaneously retained incentive epochs.
@@ -22,7 +20,6 @@ pub const INCENTIVE_MAX_ACTIVE_EPOCHS_V1: usize = 256;
 pub const INCENTIVE_DEFAULT_MEASUREMENTS_PER_EPOCH: usize = 4_096;
 /// First-release aggregate ceiling for retained measurement IDs.
 pub const INCENTIVE_MAX_RETAINED_MEASUREMENTS_V1: usize = 65_536;
-
 /// Capacity failures surfaced by the bounded incentive accumulator.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum IncentiveCapacityError {
@@ -39,7 +36,6 @@ pub enum IncentiveCapacityError {
     #[error("incentive accumulator memory capacity is unavailable")]
     Allocation,
 }
-
 /// Result of admitting one blinded bandwidth proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BandwidthProofIngest {
@@ -50,7 +46,6 @@ pub enum BandwidthProofIngest {
     /// The proof targets another relay.
     ForeignRelay,
 }
-
 /// Per-epoch accumulation of relay performance signals.
 #[derive(Debug, Default)]
 struct RelayEpochAccumulator {
@@ -62,7 +57,6 @@ struct RelayEpochAccumulator {
     measurement_ids: Vec<MeasurementId>,
     confidence_floor_per_mille: u16,
 }
-
 impl RelayEpochAccumulator {
     fn update_uptime(&mut self, uptime_seconds: u64, scheduled_uptime_seconds: u64) {
         self.uptime_seconds = self.uptime_seconds.saturating_add(uptime_seconds);
@@ -70,7 +64,6 @@ impl RelayEpochAccumulator {
             .scheduled_uptime_seconds
             .saturating_add(scheduled_uptime_seconds);
     }
-
     fn ingest_prepared(&mut self, proof: &RelayBandwidthProofV1, position: usize) {
         self.measurement_ids.insert(position, proof.measurement_id);
         self.verified_bandwidth_bytes = self
@@ -83,7 +76,6 @@ impl RelayEpochAccumulator {
                 .min(proof.confidence.confidence_per_mille)
         };
     }
-
     fn into_metrics(
         self,
         relay_id: RelayId,
@@ -111,7 +103,6 @@ impl RelayEpochAccumulator {
         }
     }
 }
-
 /// Aggregates blinded measurement proofs and uptime counters for a specific relay.
 #[derive(Debug)]
 pub struct RelayPerformanceAccumulator {
@@ -123,7 +114,6 @@ pub struct RelayPerformanceAccumulator {
     max_measurements_per_epoch: usize,
     max_total_measurements: usize,
 }
-
 /// Snapshot of the relay performance accumulator for telemetry export.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EpochSummary {
@@ -140,7 +130,6 @@ pub struct EpochSummary {
     /// Measurement identifiers contributing to the epoch summary.
     pub measurement_ids: Vec<MeasurementId>,
 }
-
 impl RelayPerformanceAccumulator {
     /// Creates a new accumulator bound to the supplied relay identifier.
     #[must_use]
@@ -151,7 +140,6 @@ impl RelayPerformanceAccumulator {
             INCENTIVE_DEFAULT_MEASUREMENTS_PER_EPOCH,
         )
     }
-
     /// Creates an accumulator with explicit, hard-clamped memory corridors.
     #[must_use]
     pub fn with_limits(
@@ -173,13 +161,11 @@ impl RelayPerformanceAccumulator {
             max_total_measurements: max_active_epochs * max_measurements_per_epoch,
         }
     }
-
     /// Returns the relay identifier tracked by this accumulator.
     #[must_use]
     pub const fn relay_id(&self) -> RelayId {
         self.relay_id
     }
-
     /// Records uptime counters for a given epoch.
     pub fn record_uptime(
         &mut self,
@@ -189,7 +175,6 @@ impl RelayPerformanceAccumulator {
     ) {
         let _ = self.try_record_uptime(epoch, uptime_seconds, scheduled_uptime_seconds);
     }
-
     /// Records uptime while surfacing bounded-allocation/capacity failures.
     pub fn try_record_uptime(
         &mut self,
@@ -221,7 +206,6 @@ impl RelayPerformanceAccumulator {
             .update_uptime(uptime_seconds, scheduled_uptime_seconds);
         Ok(())
     }
-
     /// Adds a blinded bandwidth proof to the accumulator.
     ///
     /// Returns `true` when the proof was accepted (i.e., not a duplicate and targeting this relay).
@@ -231,7 +215,6 @@ impl RelayPerformanceAccumulator {
             Ok(BandwidthProofIngest::Accepted)
         )
     }
-
     /// Adds a proof while distinguishing duplicate, foreign, and capacity
     /// outcomes without mutating counters on rejection.
     pub fn try_ingest_bandwidth_proof(
@@ -297,7 +280,6 @@ impl RelayPerformanceAccumulator {
         self.total_measurements += 1;
         Ok(BandwidthProofIngest::Accepted)
     }
-
     /// Finalises metrics for the supplied epoch, producing a `RelayEpochMetricsV1` payload.
     ///
     /// The epoch entry is removed from the accumulator to avoid double-accounting.
@@ -323,7 +305,6 @@ impl RelayPerformanceAccumulator {
         };
         accumulator.into_metrics(self.relay_id, epoch, compliance, reward_score, metadata)
     }
-
     fn try_summary(
         epoch: u32,
         accumulator: &RelayEpochAccumulator,
@@ -342,7 +323,6 @@ impl RelayPerformanceAccumulator {
             measurement_ids,
         })
     }
-
     /// Returns one epoch snapshot without cloning unrelated epochs.
     pub fn summary(&self, epoch: u32) -> Result<Option<EpochSummary>, IncentiveCapacityError> {
         let Ok(index) = self
@@ -353,7 +333,6 @@ impl RelayPerformanceAccumulator {
         };
         Self::try_summary(epoch, &self.epochs[index].1).map(Some)
     }
-
     /// Returns all bounded epoch snapshots with fallible reservations.
     pub fn try_summaries(&self) -> Result<Vec<EpochSummary>, IncentiveCapacityError> {
         let mut summaries = Vec::new();
@@ -365,39 +344,31 @@ impl RelayPerformanceAccumulator {
         }
         Ok(summaries)
     }
-
     /// Returns a snapshot of the currently accumulated epoch data.
     #[must_use]
     pub fn summaries(&self) -> Vec<EpochSummary> {
         self.try_summaries().unwrap_or_default()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{account::AccountId, metadata::Metadata};
-
     use super::*;
-
     const RELAY: RelayId = [7_u8; 32];
-
     fn sample_account(seed: u8) -> AccountId {
         let (public_key, _) = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive incentive fixture account key")
             .into_parts();
         AccountId::new(public_key)
     }
-
     #[test]
     fn sample_account_uses_checked_seed_derivation() {
         let (public_key, _) = KeyPair::try_from_seed(vec![9; 32], Algorithm::Ed25519)
             .expect("derive incentive fixture account key")
             .into_parts();
-
         assert_eq!(sample_account(9), AccountId::new(public_key));
     }
-
     fn proof(
         measurement: MeasurementId,
         epoch: u32,
@@ -421,33 +392,27 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     #[test]
     fn accepts_unique_measurements() {
         let mut accumulator = RelayPerformanceAccumulator::new(RELAY);
         assert!(accumulator.ingest_bandwidth_proof(&proof([1; 32], 5, 512, 900)));
         assert!(accumulator.ingest_bandwidth_proof(&proof([2; 32], 5, 1_024, 850)));
-
         let metrics =
             accumulator.finalize_epoch(5, RelayComplianceStatusV1::Clean, 10, Metadata::default());
-
         assert_eq!(metrics.verified_bandwidth_bytes, 1_536);
         assert_eq!(metrics.measurement_ids.len(), 2);
         assert_eq!(metrics.confidence_floor_per_mille, 850);
     }
-
     #[test]
     fn rejects_duplicate_measurements() {
         let mut accumulator = RelayPerformanceAccumulator::new(RELAY);
         assert!(accumulator.ingest_bandwidth_proof(&proof([3; 32], 5, 512, 900)));
         assert!(!accumulator.ingest_bandwidth_proof(&proof([3; 32], 5, 256, 800)));
-
         let metrics =
             accumulator.finalize_epoch(5, RelayComplianceStatusV1::Clean, 10, Metadata::default());
         assert_eq!(metrics.verified_bandwidth_bytes, 512);
         assert_eq!(metrics.confidence_floor_per_mille, 900);
     }
-
     #[test]
     fn rejects_foreign_relay_proofs() {
         let mut accumulator = RelayPerformanceAccumulator::new(RELAY);
@@ -459,7 +424,6 @@ mod tests {
         assert_eq!(metrics.verified_bandwidth_bytes, 0);
         assert_eq!(metrics.measurement_ids.len(), 0);
     }
-
     #[test]
     fn uptime_updates_accumulate() {
         let mut accumulator = RelayPerformanceAccumulator::new(RELAY);
@@ -470,31 +434,26 @@ mod tests {
         assert_eq!(metrics.uptime_seconds, 180);
         assert_eq!(metrics.scheduled_uptime_seconds, 270);
     }
-
     #[test]
     fn uptime_overflow_saturates() {
         let mut accumulator = RelayPerformanceAccumulator::new(RELAY);
         accumulator.record_uptime(7, u64::MAX, u64::MAX - 1);
         accumulator.record_uptime(7, 1, 2);
-
         let metrics =
             accumulator.finalize_epoch(7, RelayComplianceStatusV1::Clean, 0, Metadata::default());
         assert_eq!(metrics.uptime_seconds, u64::MAX);
         assert_eq!(metrics.scheduled_uptime_seconds, u64::MAX);
     }
-
     #[test]
     fn bandwidth_overflow_saturates() {
         let mut accumulator = RelayPerformanceAccumulator::new(RELAY);
         assert!(accumulator.ingest_bandwidth_proof(&proof([1; 32], 9, u128::MAX, 900,)));
         assert!(accumulator.ingest_bandwidth_proof(&proof([2; 32], 9, 1, 850)));
-
         let metrics =
             accumulator.finalize_epoch(9, RelayComplianceStatusV1::Clean, 0, Metadata::default());
         assert_eq!(metrics.verified_bandwidth_bytes, u128::MAX);
         assert_eq!(metrics.confidence_floor_per_mille, 850);
     }
-
     #[test]
     fn exact_measurement_and_epoch_corridors_fail_before_mutation() {
         let mut accumulator = RelayPerformanceAccumulator::with_limits(RELAY, 2, 2);
@@ -518,7 +477,6 @@ mod tests {
             accumulator.try_ingest_bandwidth_proof(&proof([5; 32], 7, 50, 700)),
             Err(IncentiveCapacityError::ActiveEpochs { limit: 2 })
         );
-
         let summary = accumulator
             .summary(5)
             .expect("bounded summary allocation")
@@ -528,7 +486,6 @@ mod tests {
         assert_eq!(accumulator.epochs.len(), 2);
         assert_eq!(accumulator.total_measurements, 3);
     }
-
     #[test]
     fn finalization_releases_aggregate_and_epoch_capacity() {
         let mut accumulator = RelayPerformanceAccumulator::with_limits(RELAY, 1, 1);

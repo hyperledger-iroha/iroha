@@ -1,5 +1,4 @@
 // Included from `runtime.rs` to preserve these handshake diagnostics in their original scope.
-
 fn downgrade_detail_from_warnings(warnings: &[CapabilityWarning]) -> Option<String> {
     let slug_source = warnings
         .iter()
@@ -14,13 +13,11 @@ fn downgrade_detail_from_warnings(warnings: &[CapabilityWarning]) -> Option<Stri
         .unwrap_or("downgrade");
     Some(normalize_downgrade_reason(slug_source))
 }
-
 fn record_handshake_suite_downgrade(metrics: &Metrics, suite: HandshakeSuite) {
     if matches!(suite, HandshakeSuite::Nk3PqForwardSecure) {
         metrics.record_downgrade("handshake_suite_nk3");
     }
 }
-
 fn pow_failure_reason(error: &pow::Error) -> SoranetPowFailureReasonV1 {
     match error {
         pow::Error::UnsupportedVersion(_) => SoranetPowFailureReasonV1::UnsupportedVersion,

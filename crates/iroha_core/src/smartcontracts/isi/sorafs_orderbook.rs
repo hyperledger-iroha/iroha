@@ -1,11 +1,9 @@
 //! Authoritative SoraFS orderbook policy and signed-payload ledger handlers.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     str::FromStr,
     sync::OnceLock,
 };
-
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     account::AccountId,
@@ -70,13 +68,10 @@ use sorafs_manifest::{
     },
     provider_advert::SignatureAlgorithm,
 };
-
 use super::*;
 use crate::smartcontracts::ValidSingularQuery;
 use crate::state::{StateTransaction, WorldReadOnly};
-
 mod orderbook_current_memory;
-
 const POLICY_STATE_KEY: &str = "sorafs_orderbook_policy_v1";
 const STATUS_STATE_KEY: &str = "sorafs_orderbook_status_v1";
 const ORDER_STATE_KEY_PREFIX: &str = "sorafs_orderbook_order_v1_";
@@ -97,7 +92,6 @@ const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
     64,
 );
 type OrderbookQueryCurrent = crate::smartcontracts::isi::query::SingularQueryCurrentAllocation;
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct OrderbookPersistedEventV1 {
     sequence: u64,
@@ -105,24 +99,20 @@ struct OrderbookPersistedEventV1 {
     event_index: u32,
     event: SorafsOrderbookLedgerEvent,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct OrderbookEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
     last_event_index: u32,
 }
-
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
     ))
 }
-
 fn corrupt_state(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvariantViolation(message.into().into())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn emit_orderbook_event(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -256,7 +246,6 @@ fn emit_orderbook_event(
         .emit_events(Some(SorafsGatewayEvent::OrderbookLedger(event)));
     Ok(())
 }
-
 fn has_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -271,14 +260,12 @@ fn has_permission(
     {
         return true;
     }
-
     state_transaction
         .world
         .account_roles_iter(authority)
         .filter_map(|role_id| state_transaction.world.roles.get(role_id))
         .any(|role| role.permissions().any(|candidate| candidate == &required))
 }
-
 fn require_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -292,42 +279,33 @@ fn require_permission(
         )))
     }
 }
-
 fn policy_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| StatePath::from_str(POLICY_STATE_KEY).expect("static state key is valid"))
 }
-
 fn status_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| StatePath::from_str(STATUS_STATE_KEY).expect("static state key is valid"))
 }
-
 fn digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
     StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static prefix plus lowercase hex is a valid state key")
 }
-
 fn order_key(order_id: [u8; 32]) -> StatePath {
     digest_key(ORDER_STATE_KEY_PREFIX, order_id)
 }
-
 fn receipt_key(receipt_id: [u8; 32]) -> StatePath {
     digest_key(RECEIPT_STATE_KEY_PREFIX, receipt_id)
 }
-
 fn receipt_index_key(channel_id: [u8; 32]) -> StatePath {
     digest_key(RECEIPT_INDEX_KEY_PREFIX, channel_id)
 }
-
 fn trade_key(trade_id: [u8; 32]) -> StatePath {
     digest_key(TRADE_STATE_KEY_PREFIX, trade_id)
 }
-
 fn channel_key(channel_id: [u8; 32]) -> StatePath {
     digest_key(CHANNEL_STATE_KEY_PREFIX, channel_id)
 }
-
 fn parse_query_digest_key(
     key: &StatePath,
     prefix: &str,
@@ -350,26 +328,22 @@ fn parse_query_digest_key(
     })?;
     Ok(digest)
 }
-
 fn event_key(sequence: u64) -> StatePath {
     StatePath::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
         .expect("static prefix plus fixed-width lowercase hex is a valid state key")
 }
-
 fn event_journal_head_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
         StatePath::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
     })
 }
-
 fn nonce_key(owner: &AccountId) -> StatePath {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NONCE_KEY_DOMAIN_V1);
     hasher.update(owner.to_string().as_bytes());
     digest_key(NONCE_STATE_KEY_PREFIX, *hasher.finalize().as_bytes())
 }
-
 fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
@@ -377,14 +351,12 @@ fn encode_state<T: norito::core::NoritoSerialize>(
     norito::to_bytes(value)
         .map_err(|error| corrupt_state(format!("failed to encode {label}: {error}")))
 }
-
 fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
     decode_state_measured(bytes, label).map(|(value, _)| value)
 }
-
 fn decode_orderbook_payload<T>(
     bytes: &[u8],
     decode: impl FnOnce(&[u8], DecodeLimits) -> Result<T, OrderbookPayloadDecodeError>,
@@ -393,7 +365,6 @@ fn decode_orderbook_payload<T>(
     let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
     decode_orderbook_payload_for_current(bytes, &mut current, decode, legacy_error)
 }
-
 fn decode_orderbook_payload_for_current<T>(
     bytes: &[u8],
     current: &mut OrderbookQueryCurrent,
@@ -419,7 +390,6 @@ fn decode_orderbook_payload_for_current<T>(
         .map_err(InstructionExecutionError::Query)?;
     Ok(value)
 }
-
 fn decode_state_measured<T>(
     bytes: &[u8],
     label: &str,
@@ -433,7 +403,6 @@ where
             .map_err(InstructionExecutionError::Query)?;
     decode_state_with_limits(bytes, label, limits)
 }
-
 fn decode_state_for_current<T>(
     bytes: &[u8],
     label: &str,
@@ -452,7 +421,6 @@ where
         .map_err(InstructionExecutionError::Query)?;
     Ok(value)
 }
-
 fn decode_state_with_limits<T>(
     bytes: &[u8],
     label: &str,
@@ -482,7 +450,6 @@ where
     })?;
     Ok((value, usage.total_allocated_bytes()))
 }
-
 fn ensure_state_size(bytes: &[u8], label: &str) -> Result<(), InstructionExecutionError> {
     if bytes.len() > STATE_MAX_BYTES {
         return Err(corrupt_state(format!(
@@ -491,7 +458,6 @@ fn ensure_state_size(bytes: &[u8], label: &str) -> Result<(), InstructionExecuti
     }
     Ok(())
 }
-
 fn validate_persisted_event(
     record: &OrderbookPersistedEventV1,
     expected_sequence: u64,
@@ -584,7 +550,6 @@ fn validate_persisted_event(
     }
     Ok(())
 }
-
 fn validate_event_successor(
     previous: Option<&OrderbookPersistedEventV1>,
     current: &OrderbookPersistedEventV1,
@@ -624,7 +589,6 @@ fn validate_event_successor(
         )),
     }
 }
-
 fn read_persisted_event(
     world: &impl WorldReadOnly,
     sequence: u64,
@@ -632,7 +596,6 @@ fn read_persisted_event(
     let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
     read_persisted_event_with_current(world, sequence, &mut current)
 }
-
 fn read_persisted_event_with_current(
     world: &impl WorldReadOnly,
     sequence: u64,
@@ -651,7 +614,6 @@ fn read_persisted_event_with_current(
     validate_persisted_event(&record, sequence)?;
     Ok(Some(record))
 }
-
 fn read_event_journal_head(
     world: &impl WorldReadOnly,
 ) -> Result<Option<OrderbookEventJournalHeadV1>, InstructionExecutionError> {
@@ -691,7 +653,6 @@ fn read_event_journal_head(
     validate_event_successor(predecessor.as_ref(), &record)?;
     Ok(Some(head))
 }
-
 fn ensure_no_event_after_head(
     world: &impl WorldReadOnly,
     head: Option<OrderbookEventJournalHeadV1>,
@@ -738,7 +699,6 @@ fn ensure_no_event_after_head(
     }
     Ok(())
 }
-
 fn block_time_unix(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<u64, InstructionExecutionError> {
@@ -750,7 +710,6 @@ fn block_time_unix(
     }
     Ok(now)
 }
-
 fn read_policy(
     world: &impl WorldReadOnly,
 ) -> Result<Option<OrderbookAdmissionPolicyRecord>, InstructionExecutionError> {
@@ -773,7 +732,6 @@ fn read_policy(
     }
     Ok(Some(record))
 }
-
 fn read_status(
     world: &impl WorldReadOnly,
 ) -> Result<Option<OrderbookLedgerStatusV1>, InstructionExecutionError> {
@@ -802,7 +760,6 @@ fn read_status(
     }
     Ok(Some(status))
 }
-
 fn active_status(
     state_transaction: &StateTransaction<'_, '_>,
     now: u64,
@@ -816,18 +773,15 @@ fn active_status(
     }
     Ok(status)
 }
-
 fn encode_status(status: &OrderbookLedgerStatusV1) -> Result<Vec<u8>, InstructionExecutionError> {
     encode_state(status, "orderbook ledger status")
 }
-
 fn active_order_count(status: &OrderbookLedgerStatusV1) -> Result<u64, InstructionExecutionError> {
     status
         .open_orders
         .checked_add(status.partially_filled_orders)
         .ok_or_else(|| corrupt_state("orderbook active-order counter overflow"))
 }
-
 fn advance_book_revision(
     status: &mut OrderbookLedgerStatusV1,
 ) -> Result<u64, InstructionExecutionError> {
@@ -837,7 +791,6 @@ fn advance_book_revision(
         .ok_or_else(|| corrupt_state("orderbook book revision overflow"))?;
     Ok(status.book_revision)
 }
-
 fn active_policy(
     state_transaction: &StateTransaction<'_, '_>,
     supplied_digest: [u8; 32],
@@ -859,7 +812,6 @@ fn active_policy(
     }
     Ok((record, now))
 }
-
 fn require_governed_orderbook_authority(
     authority: &AccountId,
     governed_authority: &AccountId,
@@ -872,7 +824,6 @@ fn require_governed_orderbook_authority(
     }
     Ok(())
 }
-
 fn canonical_owner(
     owner_bytes: &[u8],
     authority: &AccountId,
@@ -898,7 +849,6 @@ fn canonical_owner(
     }
     Ok(owner)
 }
-
 fn ensure_payload_signer(
     authority: &AccountId,
     signature: &OrderbookSignatureV1,
@@ -923,7 +873,6 @@ fn ensure_payload_signer(
     }
     Ok(())
 }
-
 fn read_nonce(
     world: &impl WorldReadOnly,
     owner: &AccountId,
@@ -940,7 +889,6 @@ fn read_nonce(
     }
     Ok(Some(record))
 }
-
 fn ensure_nonce_advances(
     world: &impl WorldReadOnly,
     owner: &AccountId,
@@ -956,7 +904,6 @@ fn ensure_nonce_advances(
     }
     Ok(())
 }
-
 fn write_nonce(
     state_transaction: &mut StateTransaction<'_, '_>,
     owner: &AccountId,
@@ -973,7 +920,6 @@ fn write_nonce(
         .insert(nonce_key(owner), encoded);
     Ok(())
 }
-
 fn read_order(
     world: &impl WorldReadOnly,
     order_id: [u8; 32],
@@ -1116,7 +1062,6 @@ fn read_order(
     }
     Ok(Some(record))
 }
-
 fn validate_order_policy(
     order: &OrderRequestV1,
     policy: &OrderbookAdmissionPolicyRecord,
@@ -1175,7 +1120,6 @@ fn validate_order_policy(
     }
     Ok(())
 }
-
 fn provider_binding_is_current(
     world: &impl WorldReadOnly,
     provider_id: ProviderId,
@@ -1186,7 +1130,6 @@ fn provider_binding_is_current(
         .get(&provider_id)
         .is_some_and(|registered| registered.subject_id() == owner.subject_id())
 }
-
 fn provider_advert_is_eligible(
     world: &impl WorldReadOnly,
     provider_id: ProviderId,
@@ -1200,7 +1143,6 @@ fn provider_advert_is_eligible(
                     && account.lifecycle_stage != ReserveLifecycleStage::Default
         )
 }
-
 fn read_trade(
     world: &impl WorldReadOnly,
     trade_id: [u8; 32],
@@ -1208,7 +1150,6 @@ fn read_trade(
     let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
     read_trade_with_current(world, trade_id, &mut current)
 }
-
 fn read_trade_with_current(
     world: &impl WorldReadOnly,
     trade_id: [u8; 32],
@@ -1259,7 +1200,6 @@ fn read_trade_with_current(
         .map_err(InstructionExecutionError::Query)?;
     Ok(Some(record))
 }
-
 fn read_channel(
     world: &impl WorldReadOnly,
     channel_id: [u8; 32],
@@ -1348,7 +1288,6 @@ fn read_channel(
     drop(trade);
     Ok(Some(record))
 }
-
 fn read_receipt(
     world: &impl WorldReadOnly,
     receipt_id: [u8; 32],
@@ -1411,7 +1350,6 @@ fn read_receipt(
     drop(receipt);
     drop(record);
     current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
-
     let channel = read_channel(world, channel_id)?
         .ok_or_else(|| corrupt_state("stored settlement receipt references a missing channel"))?;
     let provider_key = channel.provider.try_signatory().ok_or_else(|| {
@@ -1428,7 +1366,6 @@ fn read_receipt(
         ));
     }
     drop(channel);
-
     let index = read_receipt_index(world, channel_id)?.ok_or_else(|| {
         corrupt_state("stored settlement receipt has no authoritative channel index")
     })?;
@@ -1450,13 +1387,11 @@ fn read_receipt(
         ));
     }
     drop(index);
-
     let record = decode_record(&mut current)?.ok_or_else(|| {
         corrupt_state("stored settlement receipt disappeared during its immutable read")
     })?;
     Ok(Some(record))
 }
-
 fn validate_receipt_index(
     index: &OrderbookSettlementIndexRecord,
     channel_id: [u8; 32],
@@ -1464,7 +1399,6 @@ fn validate_receipt_index(
     let mut current = OrderbookQueryCurrent::new(0).map_err(InstructionExecutionError::Query)?;
     validate_receipt_index_with_current(index, channel_id, &mut current)
 }
-
 fn validate_receipt_index_with_current(
     index: &OrderbookSettlementIndexRecord,
     channel_id: [u8; 32],
@@ -1512,7 +1446,6 @@ fn validate_receipt_index_with_current(
     }
     Ok(())
 }
-
 fn read_receipt_index(
     world: &impl WorldReadOnly,
     channel_id: [u8; 32],
@@ -1527,13 +1460,11 @@ fn read_receipt_index(
     validate_receipt_index_with_current(&index, channel_id, &mut current)?;
     Ok(Some(index))
 }
-
 #[derive(Clone)]
 struct WorkingLedgerOrder {
     record: OrderbookOrderRecord,
     order: OrderRequestV1,
 }
-
 struct PlannedFill {
     trade: TradeEventV1,
     trade_record: OrderbookTradeRecord,
@@ -1541,7 +1472,6 @@ struct PlannedFill {
     bid_order_id: [u8; 32],
     escrow_amount: Quantity,
 }
-
 fn load_active_orders(
     world: &impl WorldReadOnly,
 ) -> Result<Vec<WorkingLedgerOrder>, InstructionExecutionError> {
@@ -1587,7 +1517,6 @@ fn load_active_orders(
     }
     Ok(active)
 }
-
 fn best_crossing_pair(
     orders: &[WorkingLedgerOrder],
     excluded_order_ids: &BTreeSet<[u8; 32]>,
@@ -1600,7 +1529,6 @@ fn best_crossing_pair(
         &mut MatchCandidateWorkV1::default(),
     )
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct MatchCandidateWorkV1 {
     order_filter_visits: usize,
@@ -1609,7 +1537,6 @@ struct MatchCandidateWorkV1 {
     alternative_ask_visits: usize,
     bid_candidate_visits: usize,
 }
-
 fn best_crossing_pair_with_work(
     orders: &[WorkingLedgerOrder],
     excluded_order_ids: &BTreeSet<[u8; 32]>,
@@ -1671,7 +1598,6 @@ fn best_crossing_pair_with_work(
                         .cmp(&orders[*rhs].record.order_id)
                 })
         });
-
         let Some(first_ask) = asks.first().copied() else {
             continue;
         };
@@ -1680,7 +1606,6 @@ fn best_crossing_pair_with_work(
             work.alternative_ask_visits = work.alternative_ask_visits.saturating_add(1);
             orders[*ask].record.owner.subject_id() != first_ask_owner
         });
-
         for bid in bids {
             work.bid_candidate_visits = work.bid_candidate_visits.saturating_add(1);
             if orders[bid].order.price_per_gib < orders[first_ask].order.price_per_gib {
@@ -1703,7 +1628,6 @@ fn best_crossing_pair_with_work(
     }
     None
 }
-
 fn transition_filled_order(
     entry: &mut WorkingLedgerOrder,
     remaining_gib: u64,
@@ -1747,7 +1671,6 @@ fn transition_filled_order(
     }
     Ok(())
 }
-
 fn validate_fill_custody(
     state_transaction: &StateTransaction<'_, '_>,
     orders: &[WorkingLedgerOrder],
@@ -1824,7 +1747,6 @@ fn validate_fill_custody(
     }
     Ok(())
 }
-
 fn validate_active_order_bindings(
     state_transaction: &StateTransaction<'_, '_>,
     orders: &[WorkingLedgerOrder],
@@ -1877,7 +1799,6 @@ fn validate_active_order_bindings(
     }
     Ok(())
 }
-
 impl Execute for SetSorafsOrderbookPolicy {
     fn execute(
         self,
@@ -1892,7 +1813,6 @@ impl Execute for SetSorafsOrderbookPolicy {
         let digest = self.policy.digest().map_err(|error| {
             invalid_parameter(format!("failed to digest orderbook policy: {error}"))
         })?;
-
         let current_policy = read_policy(state_transaction.world())?;
         let initial_status = match current_policy.as_ref() {
             None => {
@@ -1949,7 +1869,6 @@ impl Execute for SetSorafsOrderbookPolicy {
                 None
             }
         };
-
         let record = OrderbookAdmissionPolicyRecord {
             policy: self.policy,
             policy_digest: digest,
@@ -1987,7 +1906,6 @@ impl Execute for SetSorafsOrderbookPolicy {
         Ok(())
     }
 }
-
 impl Execute for SubmitSorafsOrderbookOrder {
     fn execute(
         self,
@@ -2089,7 +2007,6 @@ impl Execute for SubmitSorafsOrderbookOrder {
             .checked_add(1)
             .ok_or_else(|| corrupt_state("orderbook open-order counter overflow"))?;
         status.updated_at_unix = now;
-
         let record = OrderbookOrderRecord {
             order_id: order.order_id,
             owner: owner.clone(),
@@ -2149,7 +2066,6 @@ impl Execute for SubmitSorafsOrderbookOrder {
         Ok(())
     }
 }
-
 impl Execute for CancelSorafsOrderbookOrder {
     fn execute(
         self,
@@ -2187,7 +2103,6 @@ impl Execute for CancelSorafsOrderbookOrder {
             return Err(invalid_parameter("order is not cancellable"));
         }
         ensure_nonce_advances(state_transaction.world(), &owner, cancel.nonce)?;
-
         match cancel.reason {
             OrderCancelReasonV1::Expired => {
                 return Err(invalid_parameter(
@@ -2203,7 +2118,6 @@ impl Execute for CancelSorafsOrderbookOrder {
             }
             _ => {}
         }
-
         let mut status = active_status(state_transaction, now)?;
         match record.status {
             OrderbookOrderStatusV1::Open => {
@@ -2226,7 +2140,6 @@ impl Execute for CancelSorafsOrderbookOrder {
             .ok_or_else(|| corrupt_state("orderbook cancelled-order counter overflow"))?;
         advance_book_revision(&mut status)?;
         status.updated_at_unix = now;
-
         record.status = OrderbookOrderStatusV1::Cancelled;
         record.updated_at_unix = now;
         record.canonical_cancel = Some(self.cancel_payload);
@@ -2280,7 +2193,6 @@ impl Execute for CancelSorafsOrderbookOrder {
         Ok(())
     }
 }
-
 impl Execute for MatchSorafsOrderbook {
     fn execute(
         self,
@@ -2323,7 +2235,6 @@ impl Execute for MatchSorafsOrderbook {
             ));
         }
         validate_active_order_bindings(state_transaction, &orders)?;
-
         let mut fills = Vec::new();
         let mut changed_orders = BTreeSet::new();
         let excluded_order_ids = BTreeSet::new();
@@ -2425,7 +2336,6 @@ impl Execute for MatchSorafsOrderbook {
                 ));
             }
             reserved_custody.insert(parent_id, next_reserved);
-
             let (bid_remaining, ask_remaining) = if maker_is_bid {
                 (outcome.maker_remaining_gib, outcome.taker_remaining_gib)
             } else {
@@ -2442,7 +2352,6 @@ impl Execute for MatchSorafsOrderbook {
             }
             changed_orders.insert(bid_before.record.order_id);
             changed_orders.insert(ask_before.record.order_id);
-
             status.next_trade_sequence = status
                 .next_trade_sequence
                 .checked_add(1)
@@ -2466,7 +2375,6 @@ impl Execute for MatchSorafsOrderbook {
                     "orderbook open settlement-channel ceiling reached",
                 ));
             }
-
             let canonical_trade = encode_state(&outcome.trade, "orderbook trade payload")?;
             let trade_record = OrderbookTradeRecord {
                 trade_id: outcome.trade.trade_id,
@@ -2504,7 +2412,6 @@ impl Execute for MatchSorafsOrderbook {
                 escrow_amount,
             });
         }
-
         if fills.is_empty() {
             if !scan_exhausted {
                 return Err(corrupt_state(
@@ -2541,7 +2448,6 @@ impl Execute for MatchSorafsOrderbook {
             ));
         }
         validate_fill_custody(state_transaction, &orders, &fills)?;
-
         let mut encoded_records = Vec::new();
         for order_id in &changed_orders {
             let record = orders
@@ -2564,7 +2470,6 @@ impl Execute for MatchSorafsOrderbook {
             ));
         }
         let encoded_status = encode_status(&status)?;
-
         for fill in &fills {
             super::escrow::partition_orderbook_asset_lock(
                 state_transaction,
@@ -2639,7 +2544,6 @@ impl Execute for MatchSorafsOrderbook {
         Ok(())
     }
 }
-
 impl Execute for MaintainSorafsOrderbook {
     fn execute(
         self,
@@ -2665,7 +2569,6 @@ impl Execute for MaintainSorafsOrderbook {
                 self.expected_book_revision, status.book_revision
             )));
         }
-
         let mut remaining_budget = self.max_items as usize;
         let mut expired_orders = Vec::new();
         let mut provider_revoked_orders = Vec::new();
@@ -2720,7 +2623,6 @@ impl Execute for MaintainSorafsOrderbook {
             }
             remaining_budget -= 1;
         }
-
         let channel_start =
             StatePath::from_str(CHANNEL_STATE_KEY_PREFIX).expect("static state prefix is valid");
         let mut expired_channels = Vec::new();
@@ -2804,7 +2706,6 @@ impl Execute for MaintainSorafsOrderbook {
                 }
             }
         }
-
         if expired_orders.is_empty()
             && provider_revoked_orders.is_empty()
             && expired_channels.is_empty()
@@ -2813,7 +2714,6 @@ impl Execute for MaintainSorafsOrderbook {
         }
         advance_book_revision(&mut status)?;
         status.updated_at_unix = now;
-
         let mut encoded_records = Vec::with_capacity(
             expired_orders.len() + provider_revoked_orders.len() + expired_channels.len(),
         );
@@ -2830,7 +2730,6 @@ impl Execute for MaintainSorafsOrderbook {
             ));
         }
         let encoded_status = encode_status(&status)?;
-
         for record in &expired_orders {
             if let Some(binding) = record.bid_escrow.as_ref() {
                 let signed_order = decode_orderbook_payload(
@@ -2921,7 +2820,6 @@ impl Execute for MaintainSorafsOrderbook {
         Ok(())
     }
 }
-
 impl Execute for RecordSorafsOrderbookSettlementReceipt {
     fn execute(
         self,
@@ -3016,7 +2914,6 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
                 expected_split.fee_amount,
             )));
         }
-
         let existing_index = read_receipt_index(state_transaction.world(), receipt.channel_id)?;
         let mut index = existing_index.unwrap_or_else(|| OrderbookSettlementIndexRecord {
             channel_id: receipt.channel_id,
@@ -3051,7 +2948,6 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
             .ranges
             .sort_by_key(|range| (range.start, range.end, range.receipt_id));
         validate_receipt_index(&index, receipt.channel_id)?;
-
         let record = OrderbookSettlementReceiptRecord {
             receipt_id: receipt.receipt_id,
             channel_id: receipt.channel_id,
@@ -3102,7 +2998,6 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
         status.updated_at_unix = now;
         let encoded_status = encode_status(&status)?;
         let encoded_channel = encode_state(&channel, "orderbook settlement channel")?;
-
         let escrow_id = orderbook_settlement_escrow_id(receipt.channel_id);
         let escrow = state_transaction
             .world
@@ -3202,14 +3097,12 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
         Ok(())
     }
 }
-
 fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
     match error {
         InstructionExecutionError::Query(error) => error,
         error => QueryExecutionFail::Conversion(error.to_string()),
     }
 }
-
 fn ensure_orderbook_query_state(world: &impl WorldReadOnly) -> Result<(), QueryExecutionFail> {
     let policy = read_policy(world).map_err(query_failure)?;
     let status = read_status(world).map_err(query_failure)?;
@@ -3221,7 +3114,6 @@ fn ensure_orderbook_query_state(world: &impl WorldReadOnly) -> Result<(), QueryE
         )),
     }
 }
-
 fn checked_query_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
     if !(1..=ORDERBOOK_QUERY_MAX_ITEMS_V1).contains(&limit) {
         return Err(QueryExecutionFail::Conversion(format!(
@@ -3232,25 +3124,21 @@ fn checked_query_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
         QueryExecutionFail::Conversion("SoraFS orderbook query limit conversion failed".to_owned())
     })
 }
-
 #[derive(Clone, Copy, Debug)]
 struct OrderbookQueryScanLimitsV1 {
     max_inspected_records: u32,
     max_read_bytes: usize,
 }
-
 const ORDERBOOK_QUERY_SCAN_LIMITS_V1: OrderbookQueryScanLimitsV1 = OrderbookQueryScanLimitsV1 {
     max_inspected_records: ORDERBOOK_QUERY_MAX_INSPECTED_RECORDS_V1,
     max_read_bytes: ORDERBOOK_QUERY_MAX_READ_BYTES_V1,
 };
-
 #[derive(Debug)]
 struct OrderbookQueryScanBudgetV1 {
     limits: OrderbookQueryScanLimitsV1,
     inspected_records: u32,
     read_bytes: usize,
 }
-
 impl OrderbookQueryScanBudgetV1 {
     const fn new(limits: OrderbookQueryScanLimitsV1) -> Self {
         Self {
@@ -3259,7 +3147,6 @@ impl OrderbookQueryScanBudgetV1 {
             read_bytes: 0,
         }
     }
-
     fn inspect(&mut self, payload_len: usize, page_label: &str) -> Result<(), QueryExecutionFail> {
         let inspected_records = self
             .inspected_records
@@ -3286,7 +3173,6 @@ impl OrderbookQueryScanBudgetV1 {
         Ok(())
     }
 }
-
 fn resolve_finalized_cursor(
     state_ro: &impl crate::state::StateReadOnly,
 ) -> Result<OrderbookFinalizedCursorV1, QueryExecutionFail> {
@@ -3311,7 +3197,6 @@ fn resolve_finalized_cursor(
     }
     Ok(OrderbookFinalizedCursorV1 { height, block_hash })
 }
-
 fn resolve_query_finalized_cursor(
     expected: Option<OrderbookFinalizedCursorV1>,
     state_ro: &impl crate::state::StateReadOnly,
@@ -3322,7 +3207,6 @@ fn resolve_query_finalized_cursor(
     }
     Ok(actual)
 }
-
 fn resolve_committed_event(
     state_ro: &impl crate::state::StateReadOnly,
     record: OrderbookPersistedEventV1,
@@ -3360,14 +3244,12 @@ fn resolve_committed_event(
         event: record.event,
     })
 }
-
 #[derive(Clone, Copy)]
 struct OrderbookQueryEventPosition {
     sequence: u64,
     target_block_height: u64,
     event_index: u32,
 }
-
 impl From<&OrderbookPersistedEventV1> for OrderbookQueryEventPosition {
     fn from(record: &OrderbookPersistedEventV1) -> Self {
         Self {
@@ -3377,7 +3259,6 @@ impl From<&OrderbookPersistedEventV1> for OrderbookQueryEventPosition {
         }
     }
 }
-
 fn validate_query_event_successor(
     previous: Option<OrderbookQueryEventPosition>,
     current: &OrderbookPersistedEventV1,
@@ -3419,7 +3300,6 @@ fn validate_query_event_successor(
         )),
     }
 }
-
 fn read_event_sequence(
     state_ro: &impl crate::state::StateReadOnly,
     sequence: u64,
@@ -3437,7 +3317,6 @@ fn read_event_sequence(
     let resolved = resolve_committed_event(state_ro, record)?;
     Ok((position, resolved))
 }
-
 fn query_order_page(
     query: &FindSorafsOrderbookOrders,
     state_ro: &impl crate::state::StateReadOnly,
@@ -3446,7 +3325,6 @@ fn query_order_page(
     let mut scan_budget = OrderbookQueryScanBudgetV1::new(ORDERBOOK_QUERY_SCAN_LIMITS_V1);
     query_order_page_with_budget(query, state_ro, finalized_cursor, &mut scan_budget)
 }
-
 fn query_order_page_with_budget(
     query: &FindSorafsOrderbookOrders,
     state_ro: &impl crate::state::StateReadOnly,
@@ -3495,7 +3373,6 @@ fn query_order_page_with_budget(
         selected_count += 1;
         drop(record);
     }
-
     let mut orders =
         crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(selected_count)?;
     if selected_count != 0 {
@@ -3554,7 +3431,6 @@ fn query_order_page_with_budget(
         next_after_order_id,
     })
 }
-
 fn query_receipt_page(
     query: &FindSorafsOrderbookReceipts,
     state_ro: &impl crate::state::StateReadOnly,
@@ -3563,7 +3439,6 @@ fn query_receipt_page(
     let mut scan_budget = OrderbookQueryScanBudgetV1::new(ORDERBOOK_QUERY_SCAN_LIMITS_V1);
     query_receipt_page_with_budget(query, state_ro, finalized_cursor, &mut scan_budget)
 }
-
 fn query_receipt_page_with_budget(
     query: &FindSorafsOrderbookReceipts,
     state_ro: &impl crate::state::StateReadOnly,
@@ -3611,7 +3486,6 @@ fn query_receipt_page_with_budget(
         selected_count += 1;
         drop(record);
     }
-
     let mut receipts =
         crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(selected_count)?;
     if selected_count != 0 {
@@ -3670,7 +3544,6 @@ fn query_receipt_page_with_budget(
         next_after_receipt_id,
     })
 }
-
 fn query_trade_page(
     query: &FindSorafsOrderbookTrades,
     state_ro: &impl crate::state::StateReadOnly,
@@ -3710,7 +3583,6 @@ fn query_trade_page(
         selected_count += 1;
         drop(record);
     }
-
     let mut trades =
         crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(selected_count)?;
     if selected_count != 0 {
@@ -3763,7 +3635,6 @@ fn query_trade_page(
         next_after_trade_id,
     })
 }
-
 fn query_channel_page(
     query: &FindSorafsOrderbookChannels,
     state_ro: &impl crate::state::StateReadOnly,
@@ -3772,7 +3643,6 @@ fn query_channel_page(
     let mut scan_budget = OrderbookQueryScanBudgetV1::new(ORDERBOOK_QUERY_SCAN_LIMITS_V1);
     query_channel_page_with_budget(query, state_ro, finalized_cursor, &mut scan_budget)
 }
-
 fn query_channel_page_with_budget(
     query: &FindSorafsOrderbookChannels,
     state_ro: &impl crate::state::StateReadOnly,
@@ -3817,7 +3687,6 @@ fn query_channel_page_with_budget(
         selected_count += 1;
         drop(record);
     }
-
     let mut channels =
         crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(selected_count)?;
     if selected_count != 0 {
@@ -3873,7 +3742,6 @@ fn query_channel_page_with_budget(
         next_after_channel_id,
     })
 }
-
 fn query_event_page(
     query: &FindSorafsOrderbookEvents,
     state_ro: &impl crate::state::StateReadOnly,
@@ -4007,7 +3875,6 @@ fn query_event_page(
     }
     Ok(page)
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookPolicy {
     fn execute(
         &self,
@@ -4018,7 +3885,6 @@ impl ValidSingularQuery for FindSorafsOrderbookPolicy {
             .ok_or_else(|| QueryExecutionFail::Find(FindError::SorafsOrderbookPolicy))
     }
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookOrderById {
     fn execute(
         &self,
@@ -4029,7 +3895,6 @@ impl ValidSingularQuery for FindSorafsOrderbookOrderById {
             .ok_or_else(|| QueryExecutionFail::Find(FindError::SorafsOrderbookOrder(self.order_id)))
     }
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookCancellationByOrderId {
     fn execute(
         &self,
@@ -4064,7 +3929,6 @@ impl ValidSingularQuery for FindSorafsOrderbookCancellationByOrderId {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookReceiptById {
     fn execute(
         &self,
@@ -4077,7 +3941,6 @@ impl ValidSingularQuery for FindSorafsOrderbookReceiptById {
             })
     }
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookTradeById {
     fn execute(
         &self,
@@ -4088,7 +3951,6 @@ impl ValidSingularQuery for FindSorafsOrderbookTradeById {
             .ok_or_else(|| QueryExecutionFail::Find(FindError::SorafsOrderbookTrade(self.trade_id)))
     }
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookChannelById {
     fn execute(
         &self,
@@ -4101,7 +3963,6 @@ impl ValidSingularQuery for FindSorafsOrderbookChannelById {
             })
     }
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookStatus {
     fn execute(
         &self,
@@ -4118,7 +3979,6 @@ impl ValidSingularQuery for FindSorafsOrderbookStatus {
         }
     }
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookOrders {
     fn execute(
         &self,
@@ -4130,7 +3990,6 @@ impl ValidSingularQuery for FindSorafsOrderbookOrders {
         query_order_page(self, state_ro, finalized_cursor)
     }
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookReceipts {
     fn execute(
         &self,
@@ -4142,7 +4001,6 @@ impl ValidSingularQuery for FindSorafsOrderbookReceipts {
         query_receipt_page(self, state_ro, finalized_cursor)
     }
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookTrades {
     fn execute(
         &self,
@@ -4154,7 +4012,6 @@ impl ValidSingularQuery for FindSorafsOrderbookTrades {
         query_trade_page(self, state_ro, finalized_cursor)
     }
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookChannels {
     fn execute(
         &self,
@@ -4166,7 +4023,6 @@ impl ValidSingularQuery for FindSorafsOrderbookChannels {
         query_channel_page(self, state_ro, finalized_cursor)
     }
 }
-
 impl ValidSingularQuery for FindSorafsOrderbookEvents {
     fn execute(
         &self,
@@ -4178,7 +4034,6 @@ impl ValidSingularQuery for FindSorafsOrderbookEvents {
         query_event_page(self, state_ro, finalized_cursor)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, KeyPair, PrivateKey, Signature};
@@ -4222,26 +4077,21 @@ mod tests {
         },
         provider_advert::SignatureAlgorithm,
     };
-
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
     pub(super) const NOW: u64 = 10_000;
-
     pub(super) fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
         KeyPair::from_private_key(private).expect("derive deterministic keypair")
     }
-
     pub(super) fn account(keypair: &KeyPair) -> AccountId {
         AccountId::new(keypair.public_key().clone())
     }
-
     fn empty_signature(keypair: &KeyPair) -> OrderbookSignatureV1 {
         let (_, public_key) = keypair
             .public_key()
@@ -4253,18 +4103,15 @@ mod tests {
             signature: Vec::new(),
         }
     }
-
     fn sign_digest(keypair: &KeyPair, digest: [u8; 32]) -> Vec<u8> {
         Signature::try_new(keypair.private_key(), &digest)
             .expect("sign fixture digest")
             .payload()
             .to_vec()
     }
-
     fn xor_micro(value: u128) -> XorQuantity {
         XorQuantity::try_from_micro(value).expect("micro-XOR fixture fits exact XOR quantity")
     }
-
     fn sign_order(mut order: OrderRequestV1, keypair: &KeyPair) -> OrderRequestV1 {
         order.signature = empty_signature(keypair);
         let digest = order_request_signature_digest_v1(&order).expect("digest order");
@@ -4272,7 +4119,6 @@ mod tests {
         verify_order_request_signature_v1(&order).expect("signed order verifies");
         order
     }
-
     fn sign_cancel(mut cancel: OrderCancelV1, keypair: &KeyPair) -> OrderCancelV1 {
         cancel.signature = empty_signature(keypair);
         let digest = order_cancel_signature_digest_v1(&cancel).expect("digest cancellation");
@@ -4280,7 +4126,6 @@ mod tests {
         verify_order_cancel_signature_v1(&cancel).expect("signed cancellation verifies");
         cancel
     }
-
     fn sign_receipt(mut receipt: SettlementReceiptV1, keypair: &KeyPair) -> SettlementReceiptV1 {
         receipt.settlement_signature = empty_signature(keypair);
         let digest = settlement_receipt_signature_digest_v1(&receipt).expect("digest receipt");
@@ -4288,7 +4133,6 @@ mod tests {
         verify_settlement_receipt_signature_v1(&receipt).expect("signed receipt verifies");
         receipt
     }
-
     fn policy() -> OrderbookAdmissionPolicyV1 {
         OrderbookAdmissionPolicyV1 {
             version: ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
@@ -4310,7 +4154,6 @@ mod tests {
             max_receipts_per_channel: 2,
         }
     }
-
     fn order(keypair: &KeyPair, nonce: u64) -> OrderRequestV1 {
         let owner_account = account(keypair).to_string().into_bytes();
         sign_order(
@@ -4333,7 +4176,6 @@ mod tests {
             keypair,
         )
     }
-
     fn ask_order(
         keypair: &KeyPair,
         nonce: u64,
@@ -4348,7 +4190,6 @@ mod tests {
         ask.provider_id = Some([0x72; 32]);
         sign_order(ask, keypair)
     }
-
     fn working_order(
         order: OrderRequestV1,
         owner: &AccountId,
@@ -4374,7 +4215,6 @@ mod tests {
             order,
         }
     }
-
     fn cancel(keypair: &KeyPair, order_id: [u8; 32], nonce: u64) -> OrderCancelV1 {
         sign_cancel(
             OrderCancelV1 {
@@ -4388,7 +4228,6 @@ mod tests {
             keypair,
         )
     }
-
     fn test_trade(trade_id: [u8; 32]) -> TradeEventV1 {
         TradeEventV1 {
             version: ORDERBOOK_TRADE_EVENT_VERSION_V1,
@@ -4403,7 +4242,6 @@ mod tests {
             timestamp_unix: NOW - 2,
         }
     }
-
     pub(super) fn receipt(
         keypair: &KeyPair,
         receipt_id: u8,
@@ -4462,7 +4300,6 @@ mod tests {
             keypair,
         )
     }
-
     fn block_header_at(height: u64, now_unix: u64) -> BlockHeader {
         BlockHeader::new(
             height.try_into().expect("nonzero fixture block height"),
@@ -4473,11 +4310,9 @@ mod tests {
             0,
         )
     }
-
     pub(super) fn block_header() -> BlockHeader {
         block_header_at(1, NOW)
     }
-
     pub(super) fn transact(
         state: &mut State,
         height: u64,
@@ -4493,7 +4328,6 @@ mod tests {
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
         Ok(())
     }
-
     pub(super) fn state_with_accounts(keypairs: &[&KeyPair]) -> State {
         let authority = account(keypairs[0]);
         let asset_definition = settlement_asset_definition();
@@ -4538,20 +4372,17 @@ mod tests {
         state.gov.sorafs_pin_fee_asset_id = asset_definition;
         state
     }
-
     fn settlement_asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("sorafs", "universal").expect("settlement domain"),
             "xor".parse().expect("settlement asset name"),
         )
     }
-
     fn micro_quantity(micro: u128) -> Quantity {
         XorQuantity::try_from_micro(micro)
             .expect("micro-XOR fixture is a valid quantity")
             .into_quantity()
     }
-
     pub(super) fn state_with_settlement_accounts(
         settlement: &KeyPair,
         buyer: &KeyPair,
@@ -4605,7 +4436,6 @@ mod tests {
         state.gov.sorafs_pin_fee_treasury_account = treasury_id;
         state
     }
-
     fn open_settlement_lock(
         state_transaction: &mut StateTransaction<'_, '_>,
         buyer: &AccountId,
@@ -4655,7 +4485,6 @@ mod tests {
             amount_micro,
         );
     }
-
     pub(super) fn seed_settlement_channel(
         state_transaction: &mut StateTransaction<'_, '_>,
         buyer: &AccountId,
@@ -4668,7 +4497,6 @@ mod tests {
             .world
             .provider_owners
             .insert(ProviderId::new([0x71; 32]), provider.clone());
-
         let trade = test_trade(receipt.trade_id);
         assert_eq!(
             derive_orderbook_settlement_channel_id_v1(&trade).expect("derive fixture channel"),
@@ -4725,11 +4553,9 @@ mod tests {
             .smart_contract_state
             .insert(status_key().clone(), encode(&status));
     }
-
     fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
         state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
     }
-
     fn asset_balance(
         state_transaction: &StateTransaction<'_, '_>,
         account: &AccountId,
@@ -4741,7 +4567,6 @@ mod tests {
             .map(|value| value.as_ref().clone())
             .unwrap_or_else(Quantity::zero)
     }
-
     fn assert_no_receipt_status_mutation(state_transaction: &StateTransaction<'_, '_>) {
         let status = read_status(state_transaction.world())
             .expect("read orderbook status")
@@ -4750,7 +4575,6 @@ mod tests {
         assert_eq!(status.settlement_channels, 1);
         assert_eq!(status.open_settlement_channels, 1);
     }
-
     fn assert_order_status(
         state_transaction: &StateTransaction<'_, '_>,
         open_orders: u64,
@@ -4762,7 +4586,6 @@ mod tests {
         assert_eq!(status.open_orders, open_orders);
         assert_eq!(status.cancelled_orders, cancelled_orders);
     }
-
     pub(super) fn activate_policy(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -4776,7 +4599,6 @@ mod tests {
             .expect("activate policy");
         digest
     }
-
     fn orderbook_reserve_policy(
         authority: &AccountId,
         custody: AccountId,
@@ -4799,7 +4621,6 @@ mod tests {
             max_open_appeals_per_provider: 2,
         }
     }
-
     fn activate_reserve_account(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -4842,7 +4663,6 @@ mod tests {
         .expect("register authoritative reserve account");
         policy_digest
     }
-
     struct TwoFillMatchFixture {
         policy_digest: [u8; 32],
         order_ids: [[u8; 32]; 4],
@@ -4850,14 +4670,12 @@ mod tests {
         trade_ids: [[u8; 32]; 2],
         channel_ids: [[u8; 32]; 2],
     }
-
     struct TwoFillMatchSnapshot {
         status: OrderbookLedgerStatusV1,
         orders: [OrderbookOrderRecord; 4],
         parents: [iroha_data_model::escrow::AssetEscrowRecord; 2],
         custody_balances: [Quantity; 2],
     }
-
     fn seed_two_fill_match(
         state_transaction: &mut StateTransaction<'_, '_>,
         settlement_id: &AccountId,
@@ -4877,7 +4695,6 @@ mod tests {
             ProviderId::new([0x72; 32]),
             provider_id,
         );
-
         let mut bid_one = order(buyer, 1);
         bid_one.quantity_gib = 5;
         bid_one.remaining_gib = 5;
@@ -4888,7 +4705,6 @@ mod tests {
         let bid_two = sign_order(bid_two, buyer);
         let ask_one = ask_order(provider, 1, 90, 5);
         let ask_two = ask_order(provider, 2, 90, 5);
-
         SubmitSorafsOrderbookOrder::new(encode(&bid_one), policy_digest)
             .execute(buyer_id, state_transaction)
             .expect("admit first bid");
@@ -4901,10 +4717,8 @@ mod tests {
         SubmitSorafsOrderbookOrder::new(encode(&ask_two), policy_digest)
             .execute(provider_id, state_transaction)
             .expect("admit second ask");
-
         let parent_one = orderbook_order_escrow_id(bid_one.order_id);
         let parent_two = orderbook_order_escrow_id(bid_two.order_id);
-
         let trade_one_id = derive_orderbook_trade_id_v1(1, &bid_one, &ask_one, NOW);
         let trade_one = match_orders_v1(&bid_one, &ask_one, trade_one_id, NOW)
             .expect("derive first deterministic fill")
@@ -4917,7 +4731,6 @@ mod tests {
             .expect("derive first deterministic channel");
         let channel_two = derive_orderbook_settlement_channel_id_v1(&trade_two)
             .expect("derive second deterministic channel");
-
         TwoFillMatchFixture {
             policy_digest,
             order_ids: [
@@ -4931,7 +4744,6 @@ mod tests {
             channel_ids: [channel_one, channel_two],
         }
     }
-
     fn snapshot_two_fill_match(
         state_transaction: &StateTransaction<'_, '_>,
         fixture: &TwoFillMatchFixture,
@@ -4964,7 +4776,6 @@ mod tests {
             }),
         }
     }
-
     fn assert_two_fill_match_unchanged(
         state_transaction: &StateTransaction<'_, '_>,
         fixture: &TwoFillMatchFixture,
@@ -5026,13 +4837,10 @@ mod tests {
             );
         }
     }
-
     fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
         norito::to_bytes(value).expect("encode canonical fixture")
     }
-
     include!("sorafs/orderbook_policy_tests.rs");
-
     #[test]
     fn policy_activation_rejects_missing_permission_without_state_mutation() {
         let operator = keypair(0x12);
@@ -5045,7 +4853,6 @@ mod tests {
             .get_mut(&authority)
             .expect("permissions")
             .retain(|permission| permission.name() != "CanSetSorafsPricing");
-
         assert!(
             SetSorafsOrderbookPolicy::new(policy())
                 .execute(&authority, &mut stx)
@@ -5053,7 +4860,6 @@ mod tests {
         );
         assert!(read_policy(stx.world()).expect("read policy").is_none());
     }
-
     #[test]
     fn signed_order_submission_persists_authoritative_record_and_nonce() {
         let buyer = keypair(0x21);
@@ -5070,11 +4876,9 @@ mod tests {
             policy().max_taker_fee_bps,
         )
         .expect("derive full-order bid custody");
-
         SubmitSorafsOrderbookOrder::new(encode(&order), policy_digest)
             .execute(&authority, &mut stx)
             .expect("submit order");
-
         let stored = read_order(stx.world(), order.order_id)
             .expect("read order")
             .expect("stored order");
@@ -5117,7 +4921,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn underfunded_bid_admission_is_atomic() {
         let settlement = keypair(0x1B);
@@ -5134,11 +4937,9 @@ mod tests {
         let bid = order(&buyer, 1);
         let escrow_id = orderbook_order_escrow_id(bid.order_id);
         let initial_balance = asset_balance(&stx, &buyer_id);
-
         SubmitSorafsOrderbookOrder::new(encode(&bid), policy_digest)
             .execute(&buyer_id, &mut stx)
             .expect_err("full gross plus conservative fees exceed the buyer balance");
-
         assert_eq!(asset_balance(&stx, &buyer_id), initial_balance);
         assert!(stx.world.asset_escrows.get(&escrow_id).is_none());
         assert!(
@@ -5157,7 +4958,6 @@ mod tests {
         );
         assert_order_status(&stx, 0, 0);
     }
-
     #[test]
     fn order_rejects_malformed_noncanonical_and_oversized_payloads_atomically() {
         let buyer = keypair(0x22);
@@ -5169,7 +4969,6 @@ mod tests {
         let order = order(&buyer, 1);
         let mut noncanonical = encode(&order);
         noncanonical.push(0);
-
         for payload in [vec![0xFF; 32], noncanonical, vec![0; 64 * 1024 + 1]] {
             assert!(
                 SubmitSorafsOrderbookOrder::new(payload, policy_digest)
@@ -5188,7 +4987,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn order_policy_failures_do_not_advance_nonce() {
         let buyer = keypair(0x23);
@@ -5198,7 +4996,6 @@ mod tests {
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
         let base = order(&buyer, 1);
-
         let mut candidates = Vec::new();
         let mut candidate = base.clone();
         candidate.remaining_gib = 9;
@@ -5224,7 +5021,6 @@ mod tests {
         let mut candidate = base.clone();
         candidate.expiry_unix = NOW + policy().max_order_lifetime_secs + 1;
         candidates.push(candidate);
-
         for candidate in candidates {
             let candidate = sign_order(candidate, &buyer);
             assert!(
@@ -5243,7 +5039,6 @@ mod tests {
                     .is_none()
             );
         }
-
         assert!(
             SubmitSorafsOrderbookOrder::new(encode(&base), [0x99; 32])
                 .execute(&authority, &mut stx)
@@ -5256,7 +5051,6 @@ mod tests {
         );
         assert_order_status(&stx, 0, 0);
     }
-
     #[test]
     fn order_rejects_wrong_owner_signer_and_tampering_atomically() {
         let buyer = keypair(0x24);
@@ -5267,21 +5061,18 @@ mod tests {
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
         let base = order(&buyer, 1);
-
         let wrong_signer = sign_order(base.clone(), &attacker);
         assert!(
             SubmitSorafsOrderbookOrder::new(encode(&wrong_signer), policy_digest)
                 .execute(&authority, &mut stx)
                 .is_err()
         );
-
         let wrong_owner = order(&attacker, 1);
         assert!(
             SubmitSorafsOrderbookOrder::new(encode(&wrong_owner), policy_digest)
                 .execute(&authority, &mut stx)
                 .is_err()
         );
-
         let mut tampered = base.clone();
         tampered.quantity_gib += 1;
         tampered.remaining_gib += 1;
@@ -5301,7 +5092,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn ask_admission_requires_non_default_reserve_while_bids_remain_unaffected() {
         let settlement = keypair(0x26);
@@ -5316,7 +5106,6 @@ mod tests {
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
         let mut orderbook_policy_digest = [0; 32];
         let mut reserve_policy_digest = [0; 32];
-
         transact(&mut state, 1, NOW, |transaction| {
             orderbook_policy_digest = activate_policy(transaction, &settlement_id);
             transaction
@@ -5342,7 +5131,6 @@ mod tests {
             Ok(())
         })
         .expect("configure authoritative orderbook and reserve state");
-
         let default_at = NOW + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1 + 31 * 86_400;
         transact(&mut state, 2, default_at, |transaction| {
             AdvanceSorafsReserveLifecycle::new(provider_id, 1, 31, reserve_policy_digest)
@@ -5356,14 +5144,12 @@ mod tests {
                     .is_err(),
                 "reserve Default disables new asks"
             );
-
             let mut bid = order(&buyer, 1);
             bid.expiry_unix = default_at + 100;
             let bid = sign_order(bid, &buyer);
             SubmitSorafsOrderbookOrder::new(encode(&bid), orderbook_policy_digest)
                 .execute(&buyer_id, transaction)
                 .expect("bid admission is independent of provider reserve state");
-
             SubmitSorafsReserveAppeal::new(
                 [0x81; 32],
                 provider_id,
@@ -5395,7 +5181,6 @@ mod tests {
         })
         .expect("default, bid, and accepted-appeal admission transitions");
     }
-
     #[test]
     fn order_replay_and_nonce_rollback_are_rejected() {
         let buyer = keypair(0x27);
@@ -5413,7 +5198,6 @@ mod tests {
                 .execute(&authority, &mut stx)
                 .is_err()
         );
-
         let third = order(&buyer, 3);
         SubmitSorafsOrderbookOrder::new(encode(&third), policy_digest)
             .execute(&authority, &mut stx)
@@ -5437,7 +5221,6 @@ mod tests {
             3
         );
     }
-
     #[test]
     fn typed_order_queries_return_policy_cancellation_status_and_cursor_pages() {
         let buyer = keypair(0x28);
@@ -5458,7 +5241,6 @@ mod tests {
         CancelSorafsOrderbookOrder::new(encode(&cancellation), policy_digest)
             .execute(&authority, &mut stx)
             .expect("cancel query fixture order");
-
         let found_policy = FindSorafsOrderbookPolicy
             .execute(&stx)
             .expect("query active policy");
@@ -5478,7 +5260,6 @@ mod tests {
                 .is_err(),
             "an open order must not be exposed as a cancellation"
         );
-
         let status = FindSorafsOrderbookStatus
             .execute(&stx)
             .expect("query orderbook status");
@@ -5486,7 +5267,6 @@ mod tests {
         assert_eq!(status.cancelled_orders, 1);
         assert_eq!(status.settlement_receipts, 0);
         assert_eq!(status.settlement_channels, 0);
-
         stx.apply();
         block.commit().expect("commit order query fixture");
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&block_header()));
@@ -5507,7 +5287,6 @@ mod tests {
         assert_eq!(second_page.orders.len(), 1);
         assert!(!second_page.has_more);
         assert!(second_page.next_after_order_id.is_none());
-
         let mut returned_ids = first_page
             .orders
             .iter()
@@ -5519,7 +5298,6 @@ mod tests {
         let mut expected_ids = vec![first.order_id, second.order_id, third.order_id];
         expected_ids.sort_unstable();
         assert_eq!(returned_ids, expected_ids);
-
         let cancelled_page = FindSorafsOrderbookOrders::new(
             Some(finalized_cursor),
             Some(OrderbookOrderStatusV1::Cancelled),
@@ -5530,14 +5308,12 @@ mod tests {
         .expect("query cancelled order page");
         assert_eq!(cancelled_page.orders.len(), 1);
         assert_eq!(cancelled_page.orders[0].order_id, second.order_id);
-
         let mut stale_cursor = finalized_cursor;
         stale_cursor.block_hash[0] ^= 0xFF;
         assert_eq!(
             FindSorafsOrderbookOrders::new(Some(stale_cursor), None, None, 1).execute(&view),
             Err(QueryExecutionFail::Expired)
         );
-
         let first_events = FindSorafsOrderbookEvents::new(Some(finalized_cursor), None, 2)
             .execute(&view)
             .expect("query first committed-event page");
@@ -5591,7 +5367,6 @@ mod tests {
             Err(QueryExecutionFail::Expired)
         );
     }
-
     #[test]
     fn committed_event_journal_resolves_immutable_hashes_and_block_indexes() {
         let buyer = keypair(0x2A);
@@ -5612,7 +5387,6 @@ mod tests {
                 .execute(&authority, transaction)
         })
         .expect("commit two-order block");
-
         let view = state.view();
         let page = FindSorafsOrderbookEvents::new(None, None, 10)
             .execute(&view)
@@ -5632,7 +5406,6 @@ mod tests {
         assert_eq!(page.events[1].block_hash, second_hash);
         assert_eq!(page.events[2].block_hash, second_hash);
         assert_eq!(page.finalized_cursor.block_hash, second_hash);
-
         for (sequence, expected_height, expected_index) in [(1, 1, 0), (2, 2, 0), (3, 2, 1)] {
             let persisted = read_persisted_event(view.world(), sequence)
                 .expect("read persisted event")
@@ -5641,7 +5414,6 @@ mod tests {
             assert_eq!(persisted.target_block_height, expected_height);
             assert_eq!(persisted.event_index, expected_index);
         }
-
         let stale_anchor = OrderbookFinalizedCursorV1 {
             height: 1,
             block_hash: first_hash,
@@ -5651,12 +5423,10 @@ mod tests {
             Err(QueryExecutionFail::Expired)
         );
     }
-
     #[test]
     fn committed_event_queries_fail_closed_on_corrupt_journals() {
         let operator = keypair(0x2B);
         let authority = account(&operator);
-
         let mut missing_head = state_with_accounts(&[&operator]);
         transact(&mut missing_head, 1, NOW, |transaction| {
             activate_policy(transaction, &authority);
@@ -5671,7 +5441,6 @@ mod tests {
             FindSorafsOrderbookEvents::new(None, None, 10).execute(&missing_head.view()),
             Err(QueryExecutionFail::Conversion(_))
         ));
-
         let mut malformed_event = state_with_accounts(&[&operator]);
         transact(&mut malformed_event, 1, NOW, |transaction| {
             activate_policy(transaction, &authority);
@@ -5686,7 +5455,6 @@ mod tests {
             FindSorafsOrderbookEvents::new(None, None, 10).execute(&malformed_event.view()),
             Err(QueryExecutionFail::Conversion(_))
         ));
-
         let mut orphan_event = state_with_accounts(&[&operator]);
         transact(&mut orphan_event, 1, NOW, |transaction| {
             activate_policy(transaction, &authority);
@@ -5706,7 +5474,6 @@ mod tests {
             FindSorafsOrderbookEvents::new(None, None, 10).execute(&orphan_event.view()),
             Err(QueryExecutionFail::Conversion(_))
         ));
-
         let mut missing_middle = state_with_accounts(&[&operator]);
         let mut policy_digest = [0; 32];
         transact(&mut missing_middle, 1, NOW, |transaction| {
@@ -5730,7 +5497,6 @@ mod tests {
             Err(QueryExecutionFail::Conversion(_))
         ));
     }
-
     #[test]
     fn signed_cancellation_updates_order_and_shared_nonce() {
         let buyer = keypair(0x31);
@@ -5750,7 +5516,6 @@ mod tests {
         CancelSorafsOrderbookOrder::new(encode(&cancel), policy_digest)
             .execute(&authority, &mut stx)
             .expect("cancel");
-
         let stored = read_order(stx.world(), order.order_id)
             .expect("read order")
             .expect("order");
@@ -5786,7 +5551,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn cancellation_rejects_unknown_wrong_owner_wrong_policy_and_stale_nonce() {
         let buyer = keypair(0x32);
@@ -5800,7 +5564,6 @@ mod tests {
         SubmitSorafsOrderbookOrder::new(encode(&order), policy_digest)
             .execute(&authority, &mut stx)
             .expect("order");
-
         let unknown = cancel(&buyer, [0xFE; 32], 3);
         assert!(
             CancelSorafsOrderbookOrder::new(encode(&unknown), policy_digest)
@@ -5841,7 +5604,6 @@ mod tests {
         );
         assert_order_status(&stx, 1, 0);
     }
-
     #[test]
     fn candidate_scan_is_linear_and_sorting_is_n_log_n_for_adversarial_same_owner_books() {
         let owner = keypair(0x31);
@@ -5851,7 +5613,6 @@ mod tests {
         let mut orders = Vec::with_capacity(ORDERBOOK_MAX_OPEN_ORDERS_V1 as usize);
         let ask_count = 2_048_u64;
         let self_bid_count = 2_047_u64;
-
         for offset in 0..ask_count {
             orders.push(working_order(
                 ask_order(&owner, offset + 1, 100, 1),
@@ -5865,7 +5626,6 @@ mod tests {
             let bid = sign_order(bid, &owner);
             orders.push(working_order(bid, &owner_id, ask_count + offset + 1));
         }
-
         let excluded = BTreeSet::new();
         let mut no_match_work = MatchCandidateWorkV1::default();
         assert_eq!(
@@ -5892,7 +5652,6 @@ mod tests {
                 <= orders.len() * 32,
             "sorting comparisons stay within an O(N log N) ceiling at the admitted V1 book bound"
         );
-
         let mut external_bid = order(&other, 1);
         external_bid.price_per_gib = xor_micro(200);
         let external_bid = sign_order(external_bid, &other);
@@ -5902,7 +5661,6 @@ mod tests {
             ask_count + self_bid_count + 1,
         ));
         assert_eq!(orders.len(), ORDERBOOK_MAX_OPEN_ORDERS_V1 as usize);
-
         let mut match_work = MatchCandidateWorkV1::default();
         let (bid, ask) = best_crossing_pair_with_work(&orders, &excluded, NOW, &mut match_work)
             .expect("the unrelated final bid crosses the first ask");
@@ -5923,7 +5681,6 @@ mod tests {
             "sorting comparisons stay within an O(N log N) ceiling at the admitted V1 book bound"
         );
     }
-
     #[test]
     fn zero_fill_match_seals_the_unchanged_revision_and_rejects_replay() {
         let settlement = keypair(0x27);
@@ -5948,7 +5705,6 @@ mod tests {
             ProviderId::new([0x72; 32]),
             &provider_id,
         );
-
         let bid = order(&buyer, 1);
         let ask = ask_order(&provider, 1, 110, 5);
         SubmitSorafsOrderbookOrder::new(encode(&bid), policy_digest)
@@ -5957,7 +5713,6 @@ mod tests {
         SubmitSorafsOrderbookOrder::new(encode(&ask), policy_digest)
             .execute(&provider_id, &mut stx)
             .expect("admit non-crossing ask");
-
         MatchSorafsOrderbook::new(policy_digest, 2, 1)
             .execute(&settlement_id, &mut stx)
             .expect("complete exhaustive no-fill scan");
@@ -5974,7 +5729,6 @@ mod tests {
             "the exact unchanged revision may be exhaustively scanned only once"
         );
     }
-
     #[test]
     fn matching_seals_only_when_exhausted_below_the_fill_cap() {
         let settlement = keypair(0x2C);
@@ -5984,7 +5738,6 @@ mod tests {
         let settlement_id = account(&settlement);
         let buyer_id = account(&buyer);
         let provider_id = account(&provider);
-
         let capped_state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
         let mut capped_block = capped_state.block(block_header());
@@ -6007,7 +5760,6 @@ mod tests {
         assert_eq!(capped_status.book_revision, 5);
         assert_eq!(capped_status.last_match_scan_book_revision, 0);
         assert_eq!(capped_status.trades, 1);
-
         let exhausted_state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
         let mut exhausted_block = exhausted_state.block(block_header());
@@ -6048,7 +5800,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn matching_is_price_time_deterministic_revisioned_and_custody_backed() {
         let settlement = keypair(0x34);
@@ -6093,7 +5844,6 @@ mod tests {
             !provider_binding_is_current(stx.world(), ProviderId::new([0x73; 32]), &provider_id,),
             "provider identity is selected by exact id, never an owner-wide lookup"
         );
-
         let bid = order(&buyer, 1);
         let revoked_ask = ask_order(&provider, 1, 90, 5);
         SubmitSorafsOrderbookOrder::new(encode(&bid), policy_digest)
@@ -6102,7 +5852,6 @@ mod tests {
         SubmitSorafsOrderbookOrder::new(encode(&revoked_ask), policy_digest)
             .execute(&provider_id, &mut stx)
             .expect("admit ask");
-
         let before_match = read_status(stx.world())
             .expect("read status")
             .expect("status");
@@ -6169,7 +5918,6 @@ mod tests {
             OrderbookOrderStatusV1::ProviderRevoked,
             "provider re-registration must not resurrect an admitted stale ask"
         );
-
         let ask = ask_order(&provider, 2, 90, 5);
         SubmitSorafsOrderbookOrder::new(encode(&ask), policy_digest)
             .execute(&provider_id, &mut stx)
@@ -6178,7 +5926,6 @@ mod tests {
         MatchSorafsOrderbook::new(policy_digest, 4, 1)
             .execute(&settlement_id, &mut stx)
             .expect("match crossing orders");
-
         let stored_bid = read_order(stx.world(), bid.order_id)
             .expect("read bid")
             .expect("stored bid");
@@ -6189,7 +5936,6 @@ mod tests {
         assert_eq!(stored_bid.remaining_gib, 5);
         assert_eq!(stored_ask.status, OrderbookOrderStatusV1::Filled);
         assert_eq!(stored_ask.remaining_gib, 0);
-
         let trade_id = derive_orderbook_trade_id_v1(1, &bid, &ask, NOW);
         let trade = FindSorafsOrderbookTradeById::new(trade_id)
             .execute(&stx)
@@ -6211,7 +5957,6 @@ mod tests {
                 .expect("channel remains authoritative after provider unregister"),
             channel
         );
-
         let child_id = orderbook_settlement_escrow_id(channel.channel_id);
         let child = stx
             .world
@@ -6278,7 +6023,6 @@ mod tests {
                 .is_err(),
             "an arbitrary caller cannot bypass order maintenance with generic expiry"
         );
-
         let status = read_status(stx.world())
             .expect("read status")
             .expect("status");
@@ -6331,7 +6075,6 @@ mod tests {
             "existing channels retain their immutable custody authority"
         );
     }
-
     #[test]
     fn reserve_default_terminalizes_open_ask_once_and_appeal_requires_a_new_ask() {
         let settlement = keypair(0xB2);
@@ -6353,7 +6096,6 @@ mod tests {
             .insert(provider_id, provider_account.clone());
         let reserve_digest =
             activate_reserve_account(&mut stx, &settlement_id, provider_id, &provider_account);
-
         let stale_ask = ask_order(&provider, 1, 90, 5);
         SubmitSorafsOrderbookOrder::new(encode(&stale_ask), policy_digest)
             .execute(&provider_account, &mut stx)
@@ -6378,7 +6120,6 @@ mod tests {
         )
         .execute(&settlement_id, &mut stx)
         .expect("accept default transition");
-
         let bid = order(&buyer, 1);
         SubmitSorafsOrderbookOrder::new(encode(&bid), policy_digest)
             .execute(&buyer_id, &mut stx)
@@ -6391,7 +6132,6 @@ mod tests {
             .expect("bid custody")
             .clone();
         let custody_balance_before = asset_balance(&stx, &locked_before.custody);
-
         assert!(
             MatchSorafsOrderbook::new(policy_digest, 2, 1)
                 .execute(&settlement_id, &mut stx)
@@ -6425,7 +6165,6 @@ mod tests {
                 .kind,
             SorafsOrderbookLedgerEventKind::OrderProviderRevoked
         );
-
         MaintainSorafsOrderbook::new(policy_digest, 3, 1)
             .execute(&settlement_id, &mut stx)
             .expect("idempotent retry has no additional eligible work");
@@ -6453,7 +6192,6 @@ mod tests {
             custody_balance_before,
             "failed matching and maintenance retry must not refund or duplicate bid custody"
         );
-
         SubmitSorafsReserveAppeal::new(
             [0xB9; 32],
             provider_id,
@@ -6482,7 +6220,6 @@ mod tests {
             OrderbookOrderStatusV1::ProviderRevoked,
             "reserve recovery never resurrects a terminal order"
         );
-
         let fresh_ask = ask_order(&provider, 2, 90, 5);
         SubmitSorafsOrderbookOrder::new(encode(&fresh_ask), policy_digest)
             .execute(&provider_account, &mut stx)
@@ -6498,7 +6235,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn matching_rejects_divergent_parent_custody_before_any_multi_fill_mutation() {
         let settlement = keypair(0xA8);
@@ -6521,7 +6257,6 @@ mod tests {
             &buyer,
             &provider,
         );
-
         let second_parent = stx
             .world
             .asset_escrows
@@ -6540,7 +6275,6 @@ mod tests {
             .assets
             .insert(poisoned_asset_id, poisoned_asset_value);
         let before = snapshot_two_fill_match(&stx, &fixture);
-
         let error = MatchSorafsOrderbook::new(fixture.policy_digest, 4, 2)
             .execute(&settlement_id, &mut stx)
             .expect_err("divergent second custody must reject the entire two-fill batch");
@@ -6552,7 +6286,6 @@ mod tests {
         );
         assert_two_fill_match_unchanged(&stx, &fixture, &before, [false, false]);
     }
-
     #[test]
     fn matching_rejects_late_channel_marker_before_any_multi_fill_mutation() {
         let settlement = keypair(0xAD);
@@ -6575,12 +6308,10 @@ mod tests {
             &buyer,
             &provider,
         );
-
         let second_child = orderbook_settlement_escrow_id(fixture.channel_ids[1]);
         crate::smartcontracts::isi::escrow::mark_orderbook_channel_lock(&mut stx, &second_child)
             .expect("seed a late conflicting channel marker");
         let before = snapshot_two_fill_match(&stx, &fixture);
-
         let error = MatchSorafsOrderbook::new(fixture.policy_digest, 4, 2)
             .execute(&settlement_id, &mut stx)
             .expect_err("late second marker must reject the entire two-fill batch");
@@ -6592,7 +6323,6 @@ mod tests {
         );
         assert_two_fill_match_unchanged(&stx, &fixture, &before, [false, true]);
     }
-
     #[test]
     fn maintenance_expires_signed_orders_with_bounded_revision_cas() {
         let operator = keypair(0x38);
@@ -6605,7 +6335,6 @@ mod tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &operator_id);
-
         let mut expired = order(&buyer, 1);
         expired.expiry_unix = NOW;
         let expired = sign_order(expired, &buyer);
@@ -6657,7 +6386,6 @@ mod tests {
         stx.world
             .smart_contract_state
             .insert(status_key().clone(), encode(&status));
-
         assert!(
             MaintainSorafsOrderbook::new(policy_digest, 1, 1)
                 .execute(&attacker_id, &mut stx)
@@ -6702,7 +6430,6 @@ mod tests {
             "a stale maintenance revision must be rejected"
         );
     }
-
     #[test]
     fn receipt_recording_is_bounded_non_overlapping_and_replay_safe() {
         let settlement = keypair(0x41);
@@ -6737,7 +6464,6 @@ mod tests {
             asset_balance(&stx, &treasury_id),
             first.fee_amount.clone().into_quantity()
         );
-
         assert!(
             RecordSorafsOrderbookSettlementReceipt::new(encode(&first), policy_digest)
                 .execute(&authority, &mut stx)
@@ -6791,7 +6517,6 @@ mod tests {
                 .execute(&authority, &mut stx)
                 .is_err()
         );
-
         let index = read_receipt_index(stx.world(), first.channel_id)
             .expect("read index")
             .expect("index");
@@ -6816,7 +6541,6 @@ mod tests {
             .expect("fixture channel debits fit");
         assert_eq!(escrow.remaining_amount, expected_remaining);
         assert_eq!(asset_balance(&stx, &escrow.custody), expected_remaining);
-
         let queried = FindSorafsOrderbookReceiptById::new(first.receipt_id)
             .execute(&stx)
             .expect("query receipt by id");
@@ -6858,7 +6582,6 @@ mod tests {
         assert_eq!(status.settlement_receipts, 2);
         assert_eq!(status.settlement_channels, 1);
     }
-
     #[test]
     fn trade_and_channel_queries_are_bounded_filtered_and_cursor_stable() {
         let settlement = keypair(0x4A);
@@ -6903,7 +6626,6 @@ mod tests {
             Ok(())
         })
         .expect("commit trade/channel query fixture");
-
         let view = state.view();
         let first_trades = FindSorafsOrderbookTrades::new(None, None, 1)
             .execute(&view)
@@ -6925,7 +6647,6 @@ mod tests {
             .collect::<Vec<_>>();
         trade_ids.sort_unstable();
         assert_eq!(trade_ids, vec![first.trade_id, second.trade_id]);
-
         let first_channels = FindSorafsOrderbookChannels::new(
             Some(anchor),
             Some(OrderbookSettlementChannelStatusV1::Open),
@@ -6959,7 +6680,6 @@ mod tests {
             .is_empty()
         );
     }
-
     #[test]
     fn receipt_rejects_policy_signer_time_and_canonical_abuse_but_accepts_untrusted_relayer() {
         let settlement = keypair(0x45);
@@ -6990,7 +6710,6 @@ mod tests {
         let policy_digest = activate_policy(&mut stx, &authority);
         let base = receipt(&provider, 1, 6, 7, 0, 10);
         open_settlement_lock(&mut stx, &buyer_id, &provider_id, &authority, &base, 1_000);
-
         let mut noncanonical = encode(&base);
         noncanonical.push(0);
         assert!(
@@ -7009,7 +6728,6 @@ mod tests {
                 .execute(&authority, &mut stx)
                 .is_err()
         );
-
         let mut stale = base.clone();
         stale.issued_at_unix = NOW - policy().max_receipt_age_secs - 1;
         let stale = sign_receipt(stale, &provider);
@@ -7026,7 +6744,6 @@ mod tests {
                 .execute(&authority, &mut stx)
                 .is_err()
         );
-
         assert!(
             read_receipt(stx.world(), base.receipt_id)
                 .expect("read receipt")
@@ -7047,7 +6764,6 @@ mod tests {
         assert_eq!(escrow.remaining_amount, micro_quantity(1_000));
         assert_eq!(asset_balance(&stx, &escrow.custody), micro_quantity(1_000));
         assert_no_receipt_status_mutation(&stx);
-
         let active_policy = read_policy(stx.world())
             .expect("read active policy")
             .expect("active policy");
@@ -7059,7 +6775,6 @@ mod tests {
         SetSorafsOrderbookPolicy::new(rotated)
             .execute(&authority, &mut stx)
             .expect("rotate authority while the immutable channel remains open");
-
         RecordSorafsOrderbookSettlementReceipt::new(encode(&base), rotated_digest)
             .execute(&relayer_id, &mut stx)
             .expect("an unrelated outer relayer may submit the provider-signed receipt");
@@ -7079,6 +6794,5 @@ mod tests {
             base.fee_amount.clone().into_quantity()
         );
     }
-
     include!("sorafs/orderbook_tail_tests.rs");
 }

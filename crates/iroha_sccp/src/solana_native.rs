@@ -16,14 +16,11 @@
 //! stake, vote-state, and replay-transcript commitments make the private
 //! finality witness independently identifiable without putting its unbounded
 //! contents in consensus state.
-
 use alloc::vec::Vec;
 use core::fmt;
-
 use iroha_data_model::bridge::{
     SccpGroth16Bn254VerifyingKeyV1, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
 };
-
 use super::{
     H256, SCCP_CODEC_CANONICAL_TEXT, SCCP_CODEC_SOLANA_PUBKEY32, SCCP_DOMAIN_SOLANA,
     SCCP_DOMAIN_SORA, SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1, SCCP_TAIRA_XOR_ASSET_KEY_V1, SccpPayloadV1,
@@ -33,19 +30,16 @@ use super::{
     sccp_lane_source_event_digest_v1, sccp_message_id, sccp_source_identity_hash_v1,
     verify_sccp_groth16_bn254_pairing_equation_v1, verify_sccp_payload_structure,
 };
-
 /// Canonical raw 32-byte genesis hash of Solana testnet
 /// (`4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY`).
 pub const SCCP_SOLANA_TESTNET_GENESIS_HASH_V1: H256 = [
     0x3a, 0x13, 0x2e, 0xce, 0x10, 0x30, 0x5e, 0xc1, 0x83, 0x07, 0x25, 0x50, 0x2f, 0xa2, 0xb7, 0xe7,
     0xeb, 0x81, 0x57, 0xe9, 0x12, 0x3d, 0x4c, 0x1f, 0x65, 0x4a, 0x71, 0x78, 0x71, 0x61, 0xdc, 0x21,
 ];
-
 /// Exact byte length of a canonical BN254 Groth16 proof envelope.
 pub const SCCP_SOLANA_AGAVE_GROTH16_PROOF_BYTES_V1: usize = 12 * 32;
 /// Maximum recipient bytes in one proved Solana route instruction.
 pub const SCCP_SOLANA_AGAVE_MAX_RECIPIENT_BYTES_V1: usize = 256;
-
 const SOLANA_TESTNET_NETWORK_TAG_V1: u8 = 13;
 const SOLANA_AGAVE_ANCHOR_PREFIX_V1: &[u8] = b"sccp:solana:agave-anchor:v1";
 const SOLANA_AGAVE_SEMANTIC_PROFILE_PREFIX_V1: &[u8] = b"sccp:solana:agave-semantic-profile:v1";
@@ -53,7 +47,6 @@ const SOLANA_AGAVE_SIGNAL_SCHEMA_PREFIX_V1: &[u8] = b"sccp:solana:agave-public-s
 const SOLANA_AGAVE_TRANSFER_INSTRUCTION_PREFIX_V1: &[u8] =
     b"sccp:solana:agave-transfer-instruction:v1";
 const SOLANA_AGAVE_TRANSACTION_SIGNATURE_PREFIX_V1: &[u8] = b"sccp:solana:transaction-signature:v1";
-
 const SIGNAL_ANCHOR_HASH_V1: &[u8] = b"sccp:solana:signal:anchor-hash:v1";
 const SIGNAL_LANE_HASH_V1: &[u8] = b"sccp:solana:signal:lane-hash:v1";
 const SIGNAL_SOURCE_IDENTITY_HASH_V1: &[u8] = b"sccp:solana:signal:source-identity-hash:v1";
@@ -67,7 +60,6 @@ const SIGNAL_TRANSFER_INSTRUCTION_HASH_V1: &[u8] =
 const SIGNAL_TRANSACTION_SIGNATURE_HASH_V1: &[u8] =
     b"sccp:solana:signal:transaction-signature-hash:v1";
 const SIGNAL_ROUTE_CONFIGURATION_HASH_V1: &[u8] = b"sccp:solana:signal:route-configuration-hash:v1";
-
 const SOLANA_AGAVE_PUBLIC_SIGNAL_LABELS_V1: [&[u8]; 11] = [
     SIGNAL_ANCHOR_HASH_V1,
     SIGNAL_LANE_HASH_V1,
@@ -81,7 +73,6 @@ const SOLANA_AGAVE_PUBLIC_SIGNAL_LABELS_V1: [&[u8]; 11] = [
     SIGNAL_TRANSACTION_SIGNATURE_HASH_V1,
     SIGNAL_ROUTE_CONFIGURATION_HASH_V1,
 ];
-
 /// Immutable commitments identifying the audited recursive Agave circuit.
 #[derive(
     Clone,
@@ -114,7 +105,6 @@ pub struct SccpSolanaAgaveSemanticProfileV1 {
     #[norito(with = "crate::json_utils::hex32")]
     pub public_signal_schema_hash: H256,
 }
-
 impl SccpSolanaAgaveSemanticProfileV1 {
     /// Return whether every semantic role is exact, nonzero, and separated.
     #[must_use]
@@ -130,7 +120,6 @@ impl SccpSolanaAgaveSemanticProfileV1 {
             ])
     }
 }
-
 /// Governed Solana testnet checkpoint and recursive-verifier material.
 #[derive(
     Clone,
@@ -163,7 +152,6 @@ pub struct SccpSolanaAgaveTrustAnchorV1 {
     /// Complete BN254 key for exactly the eleven public signals.
     pub verifying_key: SccpGroth16Bn254VerifyingKeyV1,
 }
-
 /// Public statement proved by the governed recursive Agave circuit.
 #[derive(
     Clone,
@@ -253,7 +241,6 @@ pub struct SccpSolanaAgaveTransferStatementV1 {
     #[norito(with = "crate::json_utils::hex32")]
     pub source_event_digest: H256,
 }
-
 /// Complete typed Solana testnet source proof.
 #[derive(
     Clone,
@@ -277,7 +264,6 @@ pub struct SccpSolanaAgaveSourceProofV1 {
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub proof_bytes: Vec<u8>,
 }
-
 /// Normalized result of successful Solana native verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValidatedSccpSolanaAgaveSourceV1 {
@@ -296,7 +282,6 @@ pub struct ValidatedSccpSolanaAgaveSourceV1 {
     /// Hash of the authenticated Solana transaction signature.
     pub transaction_signature_hash: H256,
 }
-
 /// Fail-closed Solana native source-proof error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SolanaNativeSourceErrorV1 {
@@ -315,7 +300,6 @@ pub enum SolanaNativeSourceErrorV1 {
     /// The governed BN254 pairing equation did not verify.
     InvalidProof,
 }
-
 impl fmt::Display for SolanaNativeSourceErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -335,40 +319,32 @@ impl fmt::Display for SolanaNativeSourceErrorV1 {
         }
     }
 }
-
 impl std::error::Error for SolanaNativeSourceErrorV1 {}
-
 fn hashes_are_nonzero_and_distinct(hashes: &[H256]) -> bool {
     hashes
         .iter()
         .enumerate()
         .all(|(index, hash)| hash.iter().any(|byte| *byte != 0) && !hashes[..index].contains(hash))
 }
-
 fn push_u16(out: &mut Vec<u8>, value: u16) {
     out.extend_from_slice(&value.to_le_bytes());
 }
-
 fn push_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
-
 fn push_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
-
 fn push_len_prefixed(out: &mut Vec<u8>, value: &[u8]) -> Option<()> {
     push_u32(out, u32::try_from(value.len()).ok()?);
     out.extend_from_slice(value);
     Some(())
 }
-
 fn abi_word_u64(value: u64) -> H256 {
     let mut word = [0; 32];
     word[24..].copy_from_slice(&value.to_be_bytes());
     word
 }
-
 /// Encode the exact ordered public-signal schema.
 #[must_use]
 pub fn canonical_sccp_solana_agave_public_signal_schema_bytes_v1() -> Vec<u8> {
@@ -384,7 +360,6 @@ pub fn canonical_sccp_solana_agave_public_signal_schema_bytes_v1() -> Vec<u8> {
     }
     out
 }
-
 /// Hash the exact ordered public-signal schema.
 #[must_use]
 pub fn sccp_solana_agave_public_signal_schema_hash_v1() -> H256 {
@@ -393,7 +368,6 @@ pub fn sccp_solana_agave_public_signal_schema_hash_v1() -> H256 {
         &canonical_sccp_solana_agave_public_signal_schema_bytes_v1(),
     )
 }
-
 /// Encode a valid semantic-profile commitment in its canonical layout.
 #[must_use]
 pub fn canonical_sccp_solana_agave_semantic_profile_bytes_v1(
@@ -411,7 +385,6 @@ pub fn canonical_sccp_solana_agave_semantic_profile_bytes_v1(
     out.extend_from_slice(&profile.public_signal_schema_hash);
     Some(out)
 }
-
 /// Hash a valid recursive Agave semantic profile.
 #[must_use]
 pub fn sccp_solana_agave_semantic_profile_hash_v1(
@@ -422,7 +395,6 @@ pub fn sccp_solana_agave_semantic_profile_hash_v1(
         &canonical_sccp_solana_agave_semantic_profile_bytes_v1(profile)?,
     ))
 }
-
 /// Encode the complete governed Solana Agave anchor preimage.
 #[must_use]
 pub fn canonical_sccp_solana_agave_anchor_bytes_v1(
@@ -467,7 +439,6 @@ pub fn canonical_sccp_solana_agave_anchor_bytes_v1(
     push_len_prefixed(&mut out, &verifying_key_bytes)?;
     Some(out)
 }
-
 /// Hash the complete governed Solana Agave anchor preimage.
 #[must_use]
 pub fn sccp_solana_agave_anchor_hash_v1(anchor: &SccpSolanaAgaveTrustAnchorV1) -> Option<H256> {
@@ -476,7 +447,6 @@ pub fn sccp_solana_agave_anchor_hash_v1(anchor: &SccpSolanaAgaveTrustAnchorV1) -
         &canonical_sccp_solana_agave_anchor_bytes_v1(anchor)?,
     ))
 }
-
 fn statement_shape_is_valid(statement: &SccpSolanaAgaveTransferStatementV1) -> bool {
     statement.version == 1
         && statement.rooted_slot != 0
@@ -509,7 +479,6 @@ fn statement_shape_is_valid(statement: &SccpSolanaAgaveTransferStatementV1) -> b
             statement.source_event_digest,
         ])
 }
-
 /// Encode the exact economic Solana route-instruction statement.
 #[must_use]
 pub fn canonical_sccp_solana_agave_transfer_statement_bytes_v1(
@@ -547,7 +516,6 @@ pub fn canonical_sccp_solana_agave_transfer_statement_bytes_v1(
     out.extend_from_slice(&statement.source_event_digest);
     Some(out)
 }
-
 /// Hash the exact economic Solana route-instruction statement.
 #[must_use]
 pub fn sccp_solana_agave_transfer_statement_hash_v1(
@@ -558,12 +526,10 @@ pub fn sccp_solana_agave_transfer_statement_hash_v1(
         &canonical_sccp_solana_agave_transfer_statement_bytes_v1(statement)?,
     ))
 }
-
 fn transaction_signature_hash(signature: &[u8]) -> Option<H256> {
     (signature.len() == 64 && signature.iter().any(|byte| *byte != 0))
         .then(|| prefixed_blake2b(SOLANA_AGAVE_TRANSACTION_SIGNATURE_PREFIX_V1, signature))
 }
-
 /// Derive the exact eleven BN254 public signals for a Solana source proof.
 #[must_use]
 pub fn sccp_solana_agave_public_signal_words_v1(
@@ -598,7 +564,6 @@ pub fn sccp_solana_agave_public_signal_words_v1(
         ),
     ])
 }
-
 /// Verify one governed recursive Solana testnet source proof.
 ///
 /// The governed anchor hash authenticates the exact testnet genesis,
@@ -663,7 +628,6 @@ pub fn verify_sccp_solana_agave_source_v1(
     {
         return Err(SolanaNativeSourceErrorV1::InvalidSourceIdentity);
     }
-
     let SccpPayloadV1::Transfer(transfer) = payload;
     let canonical_payload = canonical_sccp_payload_bytes(payload)
         .map_err(|_| SolanaNativeSourceErrorV1::InvalidStatement)?;
@@ -697,7 +661,6 @@ pub fn verify_sccp_solana_agave_source_v1(
     {
         return Err(SolanaNativeSourceErrorV1::InvalidStatement);
     }
-
     if proof.proof_bytes.len() != SCCP_SOLANA_AGAVE_GROTH16_PROOF_BYTES_V1 {
         return Err(SolanaNativeSourceErrorV1::InvalidProofEncoding);
     }
@@ -720,7 +683,6 @@ pub fn verify_sccp_solana_agave_source_v1(
     ) {
         return Err(SolanaNativeSourceErrorV1::InvalidProof);
     }
-
     Ok(ValidatedSccpSolanaAgaveSourceV1 {
         source_identity_hash: identity_hash,
         lane_hash,
@@ -734,7 +696,6 @@ pub fn verify_sccp_solana_agave_source_v1(
         .expect("validated fixed nonzero Solana transaction signature"),
     })
 }
-
 #[cfg(test)]
 mod tests {
     use halo2curves::{
@@ -749,12 +710,10 @@ mod tests {
         SccpBn254G1PointV1, SccpBn254G2PointV1, SccpGroth16Bn254IcV1, SccpLaneIdV1,
         SccpNativeTrustAnchorV1, SccpSolanaSourceEmitterV1,
     };
-
     use super::*;
     use crate::{
         SccpEvmGroth16Bn254ProofV1, TransferPayloadV1, encode_sccp_evm_groth16_bn254_proof_bytes,
     };
-
     #[derive(Clone)]
     struct Fixture {
         proof: SccpSolanaAgaveSourceProofV1,
@@ -765,17 +724,14 @@ mod tests {
         payload_hash: H256,
         payload: SccpPayloadV1,
     }
-
     fn word_u64(value: u64) -> H256 {
         let mut word = [0; 32];
         word[24..].copy_from_slice(&value.to_be_bytes());
         word
     }
-
     fn hex32(value: &str) -> H256 {
         crate::decode_fixed_hex_bytes(value).expect("lowercase 32-byte test vector")
     }
-
     fn fq_word(value: Fq) -> H256 {
         let repr = value.to_repr();
         let mut word = [0; 32];
@@ -784,7 +740,6 @@ mod tests {
         }
         word
     }
-
     fn g1_model(point: G1Affine) -> SccpBn254G1PointV1 {
         let coordinates: Coordinates<G1Affine> =
             Option::from(point.coordinates()).expect("non-infinity G1 point");
@@ -793,7 +748,6 @@ mod tests {
             y: fq_word(*coordinates.y()),
         }
     }
-
     fn g2_generator_model() -> SccpBn254G2PointV1 {
         SccpBn254G2PointV1 {
             x_c0: hex32("1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed"),
@@ -802,7 +756,6 @@ mod tests {
             y_c1: hex32("090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b"),
         }
     }
-
     fn verifying_key() -> SccpGroth16Bn254VerifyingKeyV1 {
         let g1 = SccpBn254G1PointV1 {
             x: word_u64(1),
@@ -831,7 +784,6 @@ mod tests {
             },
         }
     }
-
     fn semantic_profile() -> SccpSolanaAgaveSemanticProfileV1 {
         SccpSolanaAgaveSemanticProfileV1 {
             version: 1,
@@ -842,7 +794,6 @@ mod tests {
             public_signal_schema_hash: sccp_solana_agave_public_signal_schema_hash_v1(),
         }
     }
-
     fn source_identity() -> SccpSourceIdentityV1 {
         SccpSourceIdentityV1 {
             lane: SccpLaneIdV1 {
@@ -859,7 +810,6 @@ mod tests {
             }),
         }
     }
-
     fn payload(sender: H256) -> SccpPayloadV1 {
         SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
@@ -879,7 +829,6 @@ mod tests {
             route_id: SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.as_bytes().to_vec(),
         })
     }
-
     fn valid_proof_bytes(
         verifying_key: &SccpGroth16Bn254VerifyingKeyV1,
         anchor_hash: H256,
@@ -907,7 +856,6 @@ mod tests {
             c: [verifying_key.alpha1.x, verifying_key.alpha1.y],
         })
     }
-
     fn fixture() -> Fixture {
         let source_identity = source_identity();
         let source_identity_hash =
@@ -974,7 +922,6 @@ mod tests {
             payload,
         }
     }
-
     fn fixture_with_nonce(nonce: u64) -> Fixture {
         let mut fixture = fixture();
         let SccpPayloadV1::Transfer(transfer) = &mut fixture.payload;
@@ -1001,7 +948,6 @@ mod tests {
         );
         fixture
     }
-
     fn verify(fixture: &Fixture, proof: &SccpSolanaAgaveSourceProofV1) -> bool {
         verify_sccp_solana_agave_source_v1(
             proof,
@@ -1014,7 +960,6 @@ mod tests {
         )
         .is_ok()
     }
-
     fn assert_statement_mutation_rejected(
         fixture: &Fixture,
         name: &str,
@@ -1024,7 +969,6 @@ mod tests {
         mutate(&mut proof);
         assert!(!verify(fixture, &proof), "accepted mutated {name}");
     }
-
     fn assert_finality_statement_roles_are_proof_bound(fixture: &Fixture) {
         assert_statement_mutation_rejected(fixture, "rooted slot", |proof| {
             proof.statement.rooted_slot += 1;
@@ -1051,7 +995,6 @@ mod tests {
             proof.statement.instruction_index += 1;
         });
     }
-
     fn assert_economic_statement_roles_are_proof_bound(fixture: &Fixture) {
         assert_statement_mutation_rejected(fixture, "sender", |proof| {
             proof.statement.sender[0] ^= 1;
@@ -1099,7 +1042,6 @@ mod tests {
             proof.statement.source_event_digest[0] ^= 1;
         });
     }
-
     #[test]
     fn exact_source_proof_verifies_and_roundtrips() {
         let fixture = fixture();
@@ -1119,13 +1061,11 @@ mod tests {
             fixture.proof.statement.rooted_bank_hash
         );
         assert_eq!(validated.anchor_hash, fixture.anchor_hash);
-
         let norito = norito::to_bytes(&fixture.proof).expect("encode source proof");
         let decoded: SccpSolanaAgaveSourceProofV1 =
             norito::decode_from_bytes(&norito).expect("decode source proof");
         assert_eq!(decoded, fixture.proof);
         assert_eq!(norito::to_bytes(&decoded).expect("re-encode"), norito);
-
         let json = norito::json::to_json(&fixture.proof).expect("encode source proof JSON");
         let decoded_json = norito::json::from_str::<SccpSolanaAgaveSourceProofV1>(&json)
             .expect("decode source proof JSON");
@@ -1135,18 +1075,15 @@ mod tests {
             json
         );
     }
-
     #[test]
     fn maximum_u64_nonce_is_valid_and_proof_bound() {
         let fixture = fixture_with_nonce(u64::MAX);
         assert!(verify(&fixture, &fixture.proof));
         assert_eq!(fixture.proof.statement.nonce, u64::MAX);
-
         let mut changed = fixture.proof.clone();
         changed.statement.nonce = u64::MAX - 1;
         assert!(!verify(&fixture, &changed));
     }
-
     #[test]
     fn canonical_anchor_binds_exact_testnet_and_every_governed_role() {
         let fixture = fixture();
@@ -1159,7 +1096,6 @@ mod tests {
         assert_eq!(bytes[0], 1);
         assert_eq!(bytes[1], SOLANA_TESTNET_NETWORK_TAG_V1);
         assert_eq!(&bytes[2..34], &SCCP_SOLANA_TESTNET_GENESIS_HASH_V1);
-
         let mut changed = fixture.proof.anchor;
         changed.checkpoint_slot += 1;
         assert_ne!(
@@ -1196,7 +1132,6 @@ mod tests {
             sccp_solana_agave_anchor_hash_v1(&changed),
             Some(fixture.anchor_hash)
         );
-
         for invalid in [
             {
                 let mut value = fixture.proof.anchor;
@@ -1244,14 +1179,12 @@ mod tests {
             assert!(sccp_solana_agave_anchor_hash_v1(&invalid).is_none());
         }
     }
-
     #[test]
     fn every_public_and_economic_statement_role_is_proof_bound() {
         let fixture = fixture();
         assert_finality_statement_roles_are_proof_bound(&fixture);
         assert_economic_statement_roles_are_proof_bound(&fixture);
     }
-
     #[test]
     fn ambiguous_or_oversized_instruction_statements_fail_closed() {
         let fixture = fixture();
@@ -1278,7 +1211,6 @@ mod tests {
             canonical_sccp_solana_agave_transfer_statement_bytes_v1(&proof.statement).is_none()
         );
     }
-
     #[test]
     fn proof_framing_and_curve_mutations_fail_closed() {
         let fixture = fixture();
@@ -1322,11 +1254,9 @@ mod tests {
             assert!(!verify(&fixture, &proof));
         }
     }
-
     #[test]
     fn governed_anchor_key_and_source_deployment_substitution_fail_closed() {
         let fixture = fixture();
-
         let mut changed_anchor = fixture.proof.clone();
         changed_anchor.anchor.checkpoint_slot += 1;
         let changed_anchor_hash =
@@ -1344,7 +1274,6 @@ mod tests {
             .is_err(),
             "an old proof must not authenticate a different governed checkpoint"
         );
-
         let mut changed_key = fixture.proof.clone();
         changed_key.anchor.verifying_key.alpha1 =
             g1_model((G1Affine::generator() * Fr::from(2)).to_affine());
@@ -1363,7 +1292,6 @@ mod tests {
             .is_err(),
             "an old proof must not authenticate under a substituted governed key"
         );
-
         let mut changed_identity = fixture.source_identity;
         let SccpSourceEmitterV1::Solana(ref mut emitter) = changed_identity.emitter else {
             unreachable!("fixture uses Solana emitter")
@@ -1382,7 +1310,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn native_admission_roundtrips_and_rejects_backend_substitution() {
         let fixture = fixture();
@@ -1423,7 +1350,6 @@ mod tests {
             validated.source_finality.height,
             fixture.proof.statement.rooted_slot
         );
-
         let bytes = crate::encode_sccp_native_inbound_message_proof_v1(&inbound)
             .expect("canonical native proof");
         assert_eq!(
@@ -1435,7 +1361,6 @@ mod tests {
             crate::decode_sccp_native_inbound_message_proof_json_v1(&json),
             Ok(inbound.clone())
         );
-
         let route_configuration_hash = [0xd1; 32];
         let bridge = crate::bridge_native_protocol_proof_v1(&inbound, route_configuration_hash)
             .expect("closed bridge proof");
@@ -1450,7 +1375,6 @@ mod tests {
             crate::decode_bridge_native_protocol_proof_v1(&substituted),
             Err(crate::SccpNativeAdmissionErrorV1::BackendMismatch)
         );
-
         let mut substituted_anchor = inbound.clone();
         substituted_anchor.source.trust_anchor.backend = BridgeNativeProofBackendV1::TronDpos;
         assert!(crate::encode_sccp_native_inbound_message_proof_v1(&substituted_anchor).is_err());

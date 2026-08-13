@@ -4,14 +4,12 @@ struct PageEntry<K, T> {
     seq: usize,
     item: T,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 enum SortKeyValue {
     Text(String),
     Numeric(iroha_primitives::numeric::Numeric),
 }
-
 #[cfg(feature = "app_api")]
 impl SortKeyValue {
     fn variant_ord(&self) -> usize {
@@ -21,42 +19,36 @@ impl SortKeyValue {
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 impl From<String> for SortKeyValue {
     fn from(value: String) -> Self {
         SortKeyValue::Text(value)
     }
 }
-
 #[cfg(feature = "app_api")]
 impl From<&String> for SortKeyValue {
     fn from(value: &String) -> Self {
         SortKeyValue::Text(value.clone())
     }
 }
-
 #[cfg(feature = "app_api")]
 impl From<&str> for SortKeyValue {
     fn from(value: &str) -> Self {
         SortKeyValue::Text(value.to_owned())
     }
 }
-
 #[cfg(feature = "app_api")]
 impl From<iroha_primitives::numeric::Numeric> for SortKeyValue {
     fn from(value: iroha_primitives::numeric::Numeric) -> Self {
         SortKeyValue::Numeric(value)
     }
 }
-
 #[cfg(feature = "app_api")]
 impl From<&iroha_primitives::numeric::Numeric> for SortKeyValue {
     fn from(value: &iroha_primitives::numeric::Numeric) -> Self {
         SortKeyValue::Numeric(value.clone())
     }
 }
-
 #[cfg(feature = "app_api")]
 impl PartialEq for SortKeyValue {
     fn eq(&self, other: &Self) -> bool {
@@ -67,10 +59,8 @@ impl PartialEq for SortKeyValue {
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 impl Eq for SortKeyValue {}
-
 #[cfg(feature = "app_api")]
 impl Ord for SortKeyValue {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -81,21 +71,18 @@ impl Ord for SortKeyValue {
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 impl PartialOrd for SortKeyValue {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone, Eq, PartialEq)]
 struct SortKeyComponent {
     value: SortKeyValue,
     ascending: bool,
 }
-
 #[cfg(feature = "app_api")]
 impl SortKeyComponent {
     fn asc<V: Into<SortKeyValue>>(value: V) -> Self {
@@ -104,7 +91,6 @@ impl SortKeyComponent {
             ascending: true,
         }
     }
-
     fn desc<V: Into<SortKeyValue>>(value: V) -> Self {
         Self {
             value: value.into(),
@@ -112,28 +98,23 @@ impl SortKeyComponent {
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone, Eq, PartialEq)]
 struct MultiSortKey {
     components: Vec<SortKeyComponent>,
 }
-
 #[cfg(feature = "app_api")]
 impl MultiSortKey {
     fn new(components: Vec<SortKeyComponent>) -> Self {
         Self { components }
     }
-
     fn push(&mut self, component: SortKeyComponent) {
         self.components.push(component);
     }
-
     fn is_empty(&self) -> bool {
         self.components.is_empty()
     }
 }
-
 #[cfg(feature = "app_api")]
 impl Ord for MultiSortKey {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -150,28 +131,23 @@ impl Ord for MultiSortKey {
         self.components.len().cmp(&other.components.len())
     }
 }
-
 #[cfg(feature = "app_api")]
 impl PartialOrd for MultiSortKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl<K: Ord, T> PartialEq for PageEntry<K, T> {
     fn eq(&self, other: &Self) -> bool {
         self.seq == other.seq && self.key == other.key
     }
 }
-
 impl<K: Ord, T> Eq for PageEntry<K, T> {}
-
 impl<K: Ord, T> PartialOrd for PageEntry<K, T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl<K: Ord, T> Ord for PageEntry<K, T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.key.cmp(&other.key) {
@@ -180,7 +156,6 @@ impl<K: Ord, T> Ord for PageEntry<K, T> {
         }
     }
 }
-
 fn collect_bounded_ranked_page<K, T, I>(
     iter: I,
     offset: usize,

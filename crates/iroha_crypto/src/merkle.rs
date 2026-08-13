@@ -1,8 +1,6 @@
 //! Merkle tree implementation for light clients to efficiently verify transaction inclusion proofs.
 //! This is the canonical Merkle type used across the workspace (node and IVM).
-
 use std::{collections::VecDeque, format, num::NonZeroU64, string::String, vec, vec::Vec};
-
 use iroha_schema::{IntoSchema, TypeId};
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -11,9 +9,7 @@ use norito::json::{self, JsonDeserialize, JsonSerialize};
 use rayon::prelude::*;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-
 use crate::{Hash, HashOf};
-
 const COMPACT_MERKLE_PROOF_MAX_DEPTH: u8 = 32;
 /// Maximum number of leaves addressable by the canonical `u32` proof index.
 const MERKLE_PROOF_MAX_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
@@ -1532,7 +1528,6 @@ impl MerkleTree<[u8; 32]> {
     #[cfg(feature = "rayon")]
     pub fn from_hashed_leaves_sha256_parallel(leaves: Vec<[u8; 32]>) -> Self {
         use crate::Hash;
-
         let n = leaves.len();
         let height = Self::height_from_n_leaves(n);
         let pow2 = 1usize << height;
@@ -1809,7 +1804,6 @@ impl<'a, T> LeafHashIterator<'a, T> {
 mod tests {
     use super::*;
     use crate::Hash;
-
     fn find_deeper_even_step<T>(leaf_index: u32, audit_len: usize) -> Option<usize> {
         let mut index = MerkleTree::<T>::index_in_tree_unchecked(leaf_index as usize, audit_len);
         let mut chosen: Option<usize> = None;
@@ -1837,7 +1831,6 @@ mod tests {
     #[test]
     fn merkle_proof_lengths_and_wire_match_owned_tuple_for_all_supported_layouts() {
         use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-
         let proof: MerkleProof<()> = MerkleProof::from_audit_path(
             1,
             vec![

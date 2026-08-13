@@ -1,5 +1,4 @@
 // Authoritative SoraCloud execution-result regression.
-
 #[test]
 fn execute_apartment_returns_authoritative_status_and_commitment() -> Result<()> {
     let mut state = test_state()?;
@@ -18,7 +17,6 @@ fn execute_apartment_returns_authoritative_status_and_commitment() -> Result<()>
     );
     manager.reconcile_once()?;
     let handle = test_runtime_handle(&manager, Arc::clone(&state));
-
     let result = handle
         .execute_apartment(SoracloudApartmentExecutionRequest {
             observed_height: 0,
@@ -29,7 +27,6 @@ fn execute_apartment_returns_authoritative_status_and_commitment() -> Result<()>
             request_commitment: Hash::new(b"checkpoint-request"),
         })
         .map_err(|error| eyre::eyre!("{error:?}"))?;
-
     assert_eq!(result.status, apartment.status);
     assert!(result.checkpoint_artifact_hash.is_none());
     assert!(result.journal_artifact_hash.is_none());

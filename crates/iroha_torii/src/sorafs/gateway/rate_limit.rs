@@ -1,28 +1,22 @@
 //! Lightweight rolling-window rate limiter for the SoraFS gateway.
-
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
 };
-
 use blake3::Hasher;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use thiserror::Error;
-
 const MAX_CLIENT_BUCKETS: usize = 4_096;
-
 /// Fingerprint derived from client connection metadata (e.g., IP address).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ClientFingerprint([u8; 32]);
-
 impl ClientFingerprint {
     /// Construct a fingerprint directly from raw bytes.
     #[must_use]
     pub const fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Derive a fingerprint from an arbitrary identifier (remote IP, TLS session ID, etc.).
     #[must_use]
     pub fn from_identifier(identifier: &str) -> Self {
@@ -32,14 +26,12 @@ impl ClientFingerprint {
         out.copy_from_slice(hasher.finalize().as_bytes());
         Self(out)
     }
-
     /// Returns the canonical bytes representing the fingerprint.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 /// Configuration for the gateway rate limiter.
 #[derive(Clone, Copy, Debug)]
 pub struct GatewayRateLimitConfig {
@@ -50,7 +42,6 @@ pub struct GatewayRateLimitConfig {
     /// Duration for which a client is temporarily banned after exceeding the limit.
     pub ban_duration: Option<Duration>,
 }
-
 impl GatewayRateLimitConfig {
     /// Returns a configuration with rate limits disabled.
     #[must_use]
@@ -62,7 +53,6 @@ impl GatewayRateLimitConfig {
         }
     }
 }
-
 impl Default for GatewayRateLimitConfig {
     fn default() -> Self {
         Self {
@@ -72,7 +62,6 @@ impl Default for GatewayRateLimitConfig {
         }
     }
 }
-
 /// Error returned when a client exceeds the configured limits.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum RateLimitError {
@@ -89,14 +78,12 @@ pub enum RateLimitError {
         retry_after: Option<Duration>,
     },
 }
-
 #[derive(Debug, Default)]
 struct ClientWindow {
     events: VecDeque<Instant>,
     ban_until: Option<Instant>,
     last_seen: Option<Instant>,
 }
-
 /// Rolling-window rate limiter keyed by [`ClientFingerprint`].
 #[derive(Debug)]
 pub struct GatewayRateLimiter {
@@ -104,7 +91,6 @@ pub struct GatewayRateLimiter {
     buckets: DashMap<ClientFingerprint, ClientWindow>,
     bucket_admission: Mutex<()>,
 }
-
 impl GatewayRateLimiter {
     /// Construct a rate limiter using the provided configuration.
     #[must_use]
@@ -115,13 +101,11 @@ impl GatewayRateLimiter {
             bucket_admission: Mutex::new(()),
         }
     }
-
     /// Construct a rate limiter with the default configuration.
     #[must_use]
     pub fn new_default() -> Self {
         Self::new(GatewayRateLimitConfig::default())
     }
-
     /// Validates whether the client is permitted to perform another request.
     ///
     /// # Errors
@@ -131,11 +115,9 @@ impl GatewayRateLimiter {
         let Some(max_requests) = self.config.max_requests else {
             return Ok(());
         };
-
         if let Some(mut window) = self.buckets.get_mut(client) {
             return self.check_window(&mut window, now, max_requests);
         }
-
         // Only first-seen fingerprints enter this critical section. It makes the hard bucket
         // bound race-free without serializing normal requests from known clients.
         let _admission = self.bucket_admission.lock();
@@ -157,14 +139,12 @@ impl GatewayRateLimiter {
                 self.buckets.remove(&oldest);
             }
         }
-
         let mut window = ClientWindow::default();
         window.events.push_back(now);
         window.last_seen = Some(now);
         self.buckets.insert(*client, window);
         Ok(())
     }
-
     fn check_window(
         &self,
         window: &mut ClientWindow,
@@ -181,7 +161,6 @@ impl GatewayRateLimiter {
             }
             window.ban_until = None;
         }
-
         while let Some(&front) = window.events.front() {
             if now.saturating_duration_since(front) > self.config.window {
                 window.events.pop_front();
@@ -189,7 +168,6 @@ impl GatewayRateLimiter {
                 break;
             }
         }
-
         if window.events.len() as u32 >= max_requests {
             let retry_after = window
                 .events
@@ -200,21 +178,17 @@ impl GatewayRateLimiter {
                         .saturating_sub(now.saturating_duration_since(*oldest))
                 })
                 .unwrap_or_else(|| self.config.window);
-
             if let Some(ban_duration) = self.config.ban_duration {
                 window.ban_until = Some(now + ban_duration);
                 return Err(RateLimitError::Banned {
                     retry_after: Some(ban_duration),
                 });
             }
-
             return Err(RateLimitError::Limited { retry_after });
         }
-
         window.events.push_back(now);
         Ok(())
     }
-
     fn prune_inactive(&self, now: Instant) {
         let inactive = self
             .buckets
@@ -232,11 +206,9 @@ impl GatewayRateLimiter {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn rate_limiter_permits_within_budget() {
         let limiter = GatewayRateLimiter::new(GatewayRateLimitConfig {
@@ -263,7 +235,6 @@ mod tests {
             .expect_err("expected limit to trigger");
         assert!(matches!(err, RateLimitError::Limited { .. }));
     }
-
     #[test]
     fn rate_limiter_bans_when_configured() {
         let limiter = GatewayRateLimiter::new(GatewayRateLimitConfig {
@@ -279,7 +250,6 @@ mod tests {
             .expect_err("expected ban");
         assert!(matches!(err, RateLimitError::Banned { .. }));
     }
-
     #[test]
     fn rate_limiter_bounds_first_seen_client_state() {
         let limiter = GatewayRateLimiter::new(GatewayRateLimitConfig {

@@ -1,6 +1,5 @@
 //! Minimal bridge helpers for emitting typed bridge receipts.
 //! Feature-gated behind `bridge`.
-
 use crate::{
     Execute,
     data_model::{
@@ -9,7 +8,6 @@ use crate::{
     },
     prelude::Visit,
 };
-
 /// Emit a bridge receipt as a typed data event.
 pub fn emit_bridge_receipt_log<V: Execute + Visit + ?Sized>(
     executor: &mut V,
@@ -19,11 +17,9 @@ pub fn emit_bridge_receipt_log<V: Execute + Visit + ?Sized>(
     let boxed = InstructionBox::from(isi);
     executor.visit_instruction(&boxed);
 }
-
 #[cfg(test)]
 mod tests {
     use core::num::NonZeroU64;
-
     use super::*;
     use crate::{
         Execute, Iroha,
@@ -33,12 +29,10 @@ mod tests {
         prelude::{Context, Visit},
     };
     use iroha_crypto::{Algorithm, KeyPair};
-
     fn checked_bridge_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked executor bridge Ed25519 fixture keypair")
     }
-
     #[test]
     fn bridge_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_bridge_ed25519_key_fixture();
@@ -46,17 +40,14 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("fixture executor bridge public key has a valid algorithm");
-
         assert_eq!(algorithm, Algorithm::Ed25519);
     }
-
     struct StubExecutor {
         host: Iroha,
         context: Context,
         verdict: ExecResult,
         captured: Option<BridgeReceipt>,
     }
-
     impl StubExecutor {
         fn new() -> Self {
             let key_pair = checked_bridge_ed25519_key_fixture();
@@ -80,29 +71,23 @@ mod tests {
             }
         }
     }
-
     impl Execute for StubExecutor {
         fn host(&self) -> &Iroha {
             &self.host
         }
-
         fn context(&self) -> &Context {
             &self.context
         }
-
         fn context_mut(&mut self) -> &mut Context {
             &mut self.context
         }
-
         fn verdict(&self) -> &ExecResult {
             &self.verdict
         }
-
         fn deny(&mut self, reason: ValidationFail) {
             self.verdict = Err(reason);
         }
     }
-
     impl Visit for StubExecutor {
         fn visit_instruction(&mut self, isi: &InstructionBox) {
             let record = isi
@@ -112,7 +97,6 @@ mod tests {
             self.captured = Some(record.receipt().clone());
         }
     }
-
     #[test]
     fn emit_bridge_receipt_log_emits_record_instruction() {
         let mut executor = StubExecutor::new();
@@ -126,9 +110,7 @@ mod tests {
             asset_id: b"wBTC#btc".to_vec(),
             recipient: b"alice@main".to_vec(),
         };
-
         emit_bridge_receipt_log(&mut executor, &receipt);
-
         let captured = executor.captured.expect("captured receipt");
         assert_eq!(captured, receipt);
     }

@@ -3,18 +3,13 @@
 //!   cargo run -p ivm --features dev-tools --bin gen_pointer_types_doc -- --write
 //!   cargo run -p ivm --features dev-tools --bin gen_pointer_types_doc -- --check
 //!   cargo run -p ivm --features dev-tools --bin gen_pointer_types_doc -- --write --root /tmp/ivm-doc-stage
-
 use std::path::PathBuf;
-
 mod support;
-
 use support::{GeneratedOutput, parse_generation_options, sync_generated_outputs};
-
 const BEGIN: &str = "<!-- BEGIN GENERATED POINTER TYPES -->";
 const END: &str = "<!-- END GENERATED POINTER TYPES -->";
 const POINTER_TYPE_GOLDEN_BEGIN: &str = "    // BEGIN GENERATED ABI V1 POINTER TYPE IDS";
 const POINTER_TYPE_GOLDEN_END: &str = "    // END GENERATED ABI V1 POINTER TYPE IDS";
-
 fn render_generated_block(
     text: &str,
     begin_marker: &str,
@@ -27,7 +22,6 @@ fn render_generated_block(
     if text[begin + begin_marker.len()..].contains(begin_marker) {
         return Err(format!("multiple begin markers `{begin_marker}` found"));
     }
-
     let end_start = begin
         + text[begin..]
             .find(end_marker)
@@ -38,12 +32,10 @@ fn render_generated_block(
             "multiple or misplaced end markers `{end_marker}` found"
         ));
     }
-
     let mut rendered = text.to_owned();
     rendered.replace_range(begin..end, expected_block);
     Ok(rendered)
 }
-
 fn render_pointer_type_golden_block(types: &[ivm::PointerType]) -> Result<String, String> {
     let mut previous_id = None;
     let mut entries = Vec::with_capacity(types.len());
@@ -67,7 +59,6 @@ fn render_pointer_type_golden_block(types: &[ivm::PointerType]) -> Result<String
         }
         entries.push((name, id));
     }
-
     let mut rendered = String::new();
     rendered.push_str(POINTER_TYPE_GOLDEN_BEGIN);
     rendered.push_str("\n    let expected: &[(P, u16)] = &[\n");
@@ -80,7 +71,6 @@ fn render_pointer_type_golden_block(types: &[ivm::PointerType]) -> Result<String
     rendered.push_str(POINTER_TYPE_GOLDEN_END);
     Ok(rendered)
 }
-
 fn prepare_generated_block_outputs(
     paths: &[PathBuf],
     begin_marker: &str,
@@ -96,7 +86,6 @@ fn prepare_generated_block_outputs(
         })
         .collect()
 }
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -104,7 +93,6 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
         .to_path_buf()
 }
-
 fn main() {
     let options = match parse_generation_options(std::env::args().skip(1), workspace_root()) {
         Ok(options) => options,
@@ -117,13 +105,11 @@ fn main() {
     let path_pointer = manifest_dir.join("docs/pointer_abi.md");
     let path_ivm_md = options.root.join("ivm.md");
     let path_pointer_type_golden = manifest_dir.join("tests/pointer_type_ids_golden.rs");
-
     // Render expected table
     let table = ivm::render_pointer_types_markdown_table();
     let expected_block = format!("{BEGIN}\n{table}{END}");
     let expected_pointer_type_golden = render_pointer_type_golden_block(ivm::PointerType::all())
         .unwrap_or_else(|error| panic!("render pointer type golden: {error}"));
-
     let document_paths = vec![path_pointer, path_ivm_md];
     let mut outputs = prepare_generated_block_outputs(&document_paths, BEGIN, END, &expected_block)
         .unwrap_or_else(|error| panic!("render pointer documents: {error}"));
@@ -144,21 +130,17 @@ fn main() {
         eprintln!("updated: {}", path.display());
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
     };
-
     use super::{
         BEGIN, END, POINTER_TYPE_GOLDEN_BEGIN, POINTER_TYPE_GOLDEN_END,
         prepare_generated_block_outputs, render_generated_block, render_pointer_type_golden_block,
     };
-
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
     #[test]
     fn generated_block_replacement_preserves_surrounding_prose() {
         let prefix = "# Pointer ABI\n\nIntroduction.\n\n";
@@ -166,7 +148,6 @@ mod tests {
         let current = format!("{prefix}{BEGIN}\nstale\n{END}{suffix}");
         let expected_block = format!("{BEGIN}\ncanonical\n{END}");
         let expected = format!("{prefix}{expected_block}{suffix}");
-
         let rendered = render_generated_block(&current, BEGIN, END, &expected_block)
             .expect("replace generated block");
         assert_eq!(rendered, expected);
@@ -190,7 +171,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn pointer_type_golden_rendering_is_owned_and_idempotent() {
         let expected_block = render_pointer_type_golden_block(&[
@@ -200,7 +180,6 @@ mod tests {
         .expect("render pointer type golden");
         assert!(expected_block.contains("P::AccountId"));
         assert!(expected_block.contains("0x0002"));
-
         let prefix = "fn test() {\n";
         let suffix = "\n}\n";
         let current = format!(
@@ -224,7 +203,6 @@ mod tests {
             rendered
         );
     }
-
     #[test]
     fn late_marker_failure_does_not_publish_earlier_document() {
         let unique = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
@@ -239,7 +217,6 @@ mod tests {
         fs::write(&second, "missing markers\n").expect("write malformed later document");
         let before = fs::read(&first).expect("snapshot first document");
         let expected = format!("{BEGIN}\ncurrent\n{END}");
-
         assert!(
             prepare_generated_block_outputs(&[first.clone(), second], BEGIN, END, &expected)
                 .is_err()
@@ -248,7 +225,6 @@ mod tests {
             fs::read(&first).expect("read first after late failure"),
             before
         );
-
         fs::remove_dir_all(root).expect("remove temporary directory");
     }
 }

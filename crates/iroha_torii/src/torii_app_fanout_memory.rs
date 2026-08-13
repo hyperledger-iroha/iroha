@@ -1,5 +1,4 @@
 // Deterministic memory accounting for generic application-API fanout.
-
 /// Logical bytes charged for one `BTreeMap` entry in an owned JSON object.
 ///
 /// Norito's native `Value` uses `BTreeMap<String, Value>`. The standard
@@ -32,7 +31,6 @@ const TORII_APP_FANOUT_NORITO_UNTRACKED_ELEMENT_BYTES: usize = 4 * 1024;
 /// Physical-to-logical allowance for allocator/container capacity slack in
 /// allocations that Norito does charge.
 const TORII_APP_FANOUT_NORITO_TRACKED_ALLOCATION_FACTOR: usize = 2;
-
 /// Resource names reported by bounded generic fanout accounting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ToriiAppFanoutResource {
@@ -47,7 +45,6 @@ enum ToriiAppFanoutResource {
     WorkingSetBytes,
     Arithmetic,
 }
-
 /// Fail-closed error from generic fanout preflight or logical admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ToriiAppFanoutMemoryError {
@@ -57,7 +54,6 @@ struct ToriiAppFanoutMemoryError {
     offset: Option<usize>,
     detail: &'static str,
 }
-
 impl ToriiAppFanoutMemoryError {
     const fn resource(resource: ToriiAppFanoutResource, attempted: usize, limit: usize) -> Self {
         Self {
@@ -68,7 +64,6 @@ impl ToriiAppFanoutMemoryError {
             detail: "resource limit exceeded",
         }
     }
-
     const fn syntax(offset: usize, detail: &'static str) -> Self {
         Self {
             resource: ToriiAppFanoutResource::RawBytes,
@@ -78,7 +73,6 @@ impl ToriiAppFanoutMemoryError {
             detail,
         }
     }
-
     const fn overflow(detail: &'static str) -> Self {
         Self {
             resource: ToriiAppFanoutResource::Arithmetic,
@@ -89,7 +83,6 @@ impl ToriiAppFanoutMemoryError {
         }
     }
 }
-
 impl core::fmt::Display for ToriiAppFanoutMemoryError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if let Some(offset) = self.offset {
@@ -106,16 +99,13 @@ impl core::fmt::Display for ToriiAppFanoutMemoryError {
         )
     }
 }
-
 impl std::error::Error for ToriiAppFanoutMemoryError {}
-
 /// Fixed, non-reflective diagnostic for a hostile upstream decoder failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ToriiAppFanoutDecodeFailure {
     Json,
     Norito,
 }
-
 impl core::fmt::Display for ToriiAppFanoutDecodeFailure {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
@@ -124,21 +114,17 @@ impl core::fmt::Display for ToriiAppFanoutDecodeFailure {
         })
     }
 }
-
 impl std::error::Error for ToriiAppFanoutDecodeFailure {}
-
 /// Consume a potentially hostile JSON parser error without retaining or
 /// formatting its attacker-controlled duplicate key or message payload.
 fn sanitize_torii_app_fanout_json_error(_: norito::json::Error) -> ToriiAppFanoutDecodeFailure {
     ToriiAppFanoutDecodeFailure::Json
 }
-
 /// Consume a potentially hostile Norito decoder error without reflecting any
 /// payload-derived detail into diagnostics.
 fn sanitize_torii_app_fanout_norito_error(_: norito::Error) -> ToriiAppFanoutDecodeFailure {
     ToriiAppFanoutDecodeFailure::Norito
 }
-
 /// Independent syntax/resource ceilings applied before constructing a JSON
 /// `Value` graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,7 +138,6 @@ struct ToriiFanoutJsonLimits {
     nesting_depth: usize,
     decoded_graph_bytes: usize,
 }
-
 impl ToriiFanoutJsonLimits {
     /// Derive finite lexical ceilings from the allocation phase that remains.
     fn from_decode_allocation_bytes(bytes: usize) -> Self {
@@ -170,7 +155,6 @@ impl ToriiFanoutJsonLimits {
         }
     }
 }
-
 /// Allocation-relevant facts obtained without allocating an owned JSON value.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ToriiFanoutJsonProfile {
@@ -188,7 +172,6 @@ struct ToriiFanoutJsonProfile {
     decoded_graph_bytes: usize,
     parser_scratch_bytes: usize,
 }
-
 impl ToriiFanoutJsonProfile {
     /// Raw body plus the complete parser/owned-graph overlap.
     fn decode_peak_bytes(self) -> Result<usize, ToriiAppFanoutMemoryError> {
@@ -198,7 +181,6 @@ impl ToriiFanoutJsonProfile {
             self.parser_scratch_bytes,
         ])
     }
-
     fn finish(mut self, limits: ToriiFanoutJsonLimits) -> Result<Self, ToriiAppFanoutMemoryError> {
         let value_bytes = core::mem::size_of::<norito::json::Value>();
         let value_nodes = checked_fanout_mul(self.values, value_bytes)?;
@@ -221,7 +203,6 @@ impl ToriiFanoutJsonProfile {
             object_nodes,
             self.string_capacity_bytes,
         ])?;
-
         // The frame Vec grows geometrically. Error cleanup can additionally
         // move every parsed Value through one pending Vec while the source
         // containers are being dismantled. The scanner validates lexical JSON
@@ -250,7 +231,6 @@ impl ToriiFanoutJsonProfile {
         Ok(self)
     }
 }
-
 fn checked_fanout_sum<const N: usize>(
     terms: [usize; N],
 ) -> Result<usize, ToriiAppFanoutMemoryError> {
@@ -260,12 +240,10 @@ fn checked_fanout_sum<const N: usize>(
             .ok_or_else(|| ToriiAppFanoutMemoryError::overflow("logical byte sum overflow"))
     })
 }
-
 fn checked_fanout_mul(lhs: usize, rhs: usize) -> Result<usize, ToriiAppFanoutMemoryError> {
     lhs.checked_mul(rhs)
         .ok_or_else(|| ToriiAppFanoutMemoryError::overflow("logical byte product overflow"))
 }
-
 fn ensure_fanout_limit(
     resource: ToriiAppFanoutResource,
     attempted: usize,
@@ -278,9 +256,7 @@ fn ensure_fanout_limit(
     }
     Ok(())
 }
-
 include!("torii_app_fanout_json_preflight.rs");
-
 /// Explicit decode plan for one route's Norito response.
 #[derive(Clone, Copy, Debug)]
 struct ToriiFanoutNoritoDecodePlan {
@@ -288,11 +264,9 @@ struct ToriiFanoutNoritoDecodePlan {
     retained_charge_bytes: usize,
     temporary_charge_bytes: usize,
 }
-
 mod torii_app_fanout_norito_dto_sealed {
     pub(super) trait Sealed {}
 }
-
 /// Closed set of Torii response DTOs whose complete decode and source graphs
 /// have been audited against [`ToriiFanoutNoritoDecodePlan`].
 ///
@@ -309,7 +283,6 @@ trait ToriiAppFanoutNoritoDto:
     torii_app_fanout_norito_dto_sealed::Sealed + for<'de> norito::NoritoDeserialize<'de>
 {
 }
-
 /// Decode one admitted, canonical-layout route response sequentially.
 ///
 /// `SequentialOverrideGuard` currently resolves layout flags to the default
@@ -330,19 +303,16 @@ where
     {
         return Err(ToriiAppFanoutDecodeFailure::Norito);
     }
-
     let _sequential = norito::core::SequentialOverrideGuard::enter();
     norito::decode_from_bytes_with_limits(bytes, plan.limits)
         .map_err(sanitize_torii_app_fanout_norito_error)
 }
-
 /// Logical high-water ledger for one sequential generic app-API fanout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ToriiAppFanoutMemoryBudget {
     capacity_bytes: usize,
     retained_bytes: usize,
 }
-
 impl ToriiAppFanoutMemoryBudget {
     /// Start a request ledger only while owning the process-wide shared fanout
     /// reservation used by signed and generic fanout paths.
@@ -356,12 +326,10 @@ impl ToriiAppFanoutMemoryBudget {
     ) -> Result<Self, ToriiAppFanoutMemoryError> {
         Self::new_inner(capacity_bytes)
     }
-
     #[cfg(test)]
     fn new(capacity_bytes: usize) -> Result<Self, ToriiAppFanoutMemoryError> {
         Self::new_inner(capacity_bytes)
     }
-
     fn new_inner(capacity_bytes: usize) -> Result<Self, ToriiAppFanoutMemoryError> {
         if capacity_bytes == 0 {
             return Err(ToriiAppFanoutMemoryError::resource(
@@ -375,11 +343,9 @@ impl ToriiAppFanoutMemoryBudget {
             retained_bytes: 0,
         })
     }
-
     fn retained_bytes(self) -> usize {
         self.retained_bytes
     }
-
     fn remaining_bytes(self) -> Result<usize, ToriiAppFanoutMemoryError> {
         self.capacity_bytes
             .checked_sub(self.retained_bytes)
@@ -389,7 +355,6 @@ impl ToriiAppFanoutMemoryBudget {
                 )
             })
     }
-
     /// Limit used by `axum::body::to_bytes` before a format-specific preflight.
     fn route_body_limit(self) -> Result<usize, ToriiAppFanoutMemoryError> {
         let remaining = self.remaining_bytes()?;
@@ -405,13 +370,11 @@ impl ToriiAppFanoutMemoryBudget {
         }
         Ok(remaining)
     }
-
     fn json_limits(self) -> Result<ToriiFanoutJsonLimits, ToriiAppFanoutMemoryError> {
         Ok(ToriiFanoutJsonLimits::from_decode_allocation_bytes(
             self.remaining_bytes()?,
         ))
     }
-
     /// Admit raw bytes, the complete owned graph, parser frames, string
     /// capacity, and error-cleanup scratch before calling `from_slice<Value>`.
     fn admit_json_decode(
@@ -420,7 +383,6 @@ impl ToriiAppFanoutMemoryBudget {
     ) -> Result<(), ToriiAppFanoutMemoryError> {
         self.admit_temporary(profile.decode_peak_bytes()?)
     }
-
     /// Keep the decoded graph after the raw body and parser scratch are gone.
     fn retain_json_graph(
         &mut self,
@@ -428,7 +390,6 @@ impl ToriiAppFanoutMemoryBudget {
     ) -> Result<(), ToriiAppFanoutMemoryError> {
         self.retain(profile.decoded_graph_bytes)
     }
-
     /// Split remaining Norito capacity across the routes that may still
     /// succeed. Only the closed, source-audited DTO set can obtain this plan.
     fn norito_decode_plan<T>(
@@ -488,14 +449,12 @@ impl ToriiAppFanoutMemoryBudget {
             temporary_charge_bytes: route_slice_bytes,
         })
     }
-
     fn retain_norito_decode(
         &mut self,
         plan: ToriiFanoutNoritoDecodePlan,
     ) -> Result<(), ToriiAppFanoutMemoryError> {
         self.retain(plan.retained_charge_bytes)
     }
-
     /// Pre-admit merge graphs, canonical keys, candidate frames, or a final
     /// response while all currently charged values remain live.
     fn admit_temporary(self, bytes: usize) -> Result<(), ToriiAppFanoutMemoryError> {
@@ -509,7 +468,6 @@ impl ToriiAppFanoutMemoryBudget {
             self.capacity_bytes,
         )
     }
-
     fn retain(&mut self, bytes: usize) -> Result<(), ToriiAppFanoutMemoryError> {
         self.admit_temporary(bytes)?;
         self.retained_bytes = self.retained_bytes.checked_add(bytes).ok_or_else(|| {
@@ -517,7 +475,6 @@ impl ToriiAppFanoutMemoryBudget {
         })?;
         Ok(())
     }
-
     fn release(&mut self, bytes: usize) -> Result<(), ToriiAppFanoutMemoryError> {
         self.retained_bytes = self.retained_bytes.checked_sub(bytes).ok_or_else(|| {
             ToriiAppFanoutMemoryError::overflow(
@@ -527,6 +484,5 @@ impl ToriiAppFanoutMemoryBudget {
         Ok(())
     }
 }
-
 #[cfg(test)]
 include!("tests/lib_routed_reads/app_fanout_memory_bounds.rs");

@@ -23,32 +23,27 @@
 //! - `VrfProof` and `VrfOutput` derive Norito codecs for on-wire stability.
 //! - Consumers should always pass/return raw bytes (`Blob`) over the pointer‑ABI
 //!   and Norito‑encode higher-level envelopes as needed.
-
 #![allow(clippy::size_of_ref)]
 use core::convert::TryInto;
 #[cfg(test)]
 use std::vec::Vec;
-
 use blake2::Digest;
 use group::{Curve, prime::PrimeCurveAffine};
 #[allow(unused_imports)]
 use w3f_bls::SerializableToBytes as _;
 use zeroize::Zeroizing;
-
 use crate::{
     Blake2b256,
     signature::bls::{
         BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmallPrivateKey, BlsSmallPublicKey,
     },
 };
-
 // Domain separation tags (DST) for VRF hash_to_curve operations
 const DST_G2: &[u8] = b"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
 const DST_G1: &[u8] = b"BLS12381G1_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
 const VRF_INPUT_HASH_DOMAIN: &[u8] = b"iroha:vrf:v1:input|";
 const VRF_INPUT_HASH_SEPARATOR: &[u8] = b"|";
 const VRF_OUTPUT_HASH_DOMAIN: &[u8] = b"iroha:vrf:v1:output";
-
 /// VRF proof: variant-tagged, fixed-size BLS signature bytes.
 #[derive(
     Clone,
@@ -70,7 +65,6 @@ pub enum VrfProof {
     #[norito(rename = "bls_normal_g2")]
     SigInG2([u8; 96]),
 }
-
 /// VRF output: 32-byte Blake2b digest.
 #[derive(
     Clone,
@@ -84,14 +78,12 @@ pub enum VrfProof {
     norito::derive::JsonDeserialize,
 )]
 pub struct VrfOutput(pub [u8; 32]);
-
 /// VRF proof construction error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VrfProofError {
     /// Stored BLS secret-key bytes are not a valid non-zero scalar.
     InvalidSecretKey,
 }
-
 impl core::fmt::Display for VrfProofError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -99,9 +91,7 @@ impl core::fmt::Display for VrfProofError {
         }
     }
 }
-
 impl std::error::Error for VrfProofError {}
-
 /// VRF algorithm variant over BLS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VrfBlsVariant {
@@ -110,7 +100,6 @@ pub enum VrfBlsVariant {
     /// Public key in G2, signature in G1 (small signature BLS).
     Small,
 }
-
 fn prehash_input_with_network_id(network_id: &[u8; 32], input: &[u8]) -> [u8; 32] {
     blake2b_256_chunks(&[
         VRF_INPUT_HASH_DOMAIN,
@@ -119,16 +108,13 @@ fn prehash_input_with_network_id(network_id: &[u8; 32], input: &[u8]) -> [u8; 32
         input,
     ])
 }
-
 fn output_from_sigma(sigma: &[u8]) -> VrfOutput {
     VrfOutput(blake2b_256_chunks(&[VRF_OUTPUT_HASH_DOMAIN, sigma]))
 }
-
 #[cfg(test)]
 fn blake2b_256(bytes: &[u8]) -> [u8; 32] {
     blake2b_256_chunks(&[bytes])
 }
-
 fn blake2b_256_chunks(chunks: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Blake2b256::new();
     for chunk in chunks {
@@ -139,7 +125,6 @@ fn blake2b_256_chunks(chunks: &[&[u8]]) -> [u8; 32] {
     out.copy_from_slice(&vec_hash);
     out
 }
-
 /// Produce a VRF proof and output using the BLS Normal variant.
 ///
 /// # Errors
@@ -162,7 +147,6 @@ pub fn prove_normal_with_network_id(
     arr.copy_from_slice(&sig);
     Ok((y, VrfProof::SigInG2(arr)))
 }
-
 /// Produce a VRF proof and output using the BLS Small variant.
 ///
 /// # Errors
@@ -185,7 +169,6 @@ pub fn prove_small_with_network_id(
     arr.copy_from_slice(&sig);
     Ok((y, VrfProof::SigInG1(arr)))
 }
-
 /// Verify a VRF proof under the BLS Normal public key and recompute the output.
 pub fn verify_normal_with_network_id(
     pk: &BlsNormalPublicKey,
@@ -201,7 +184,6 @@ pub fn verify_normal_with_network_id(
         _ => None,
     }
 }
-
 /// Verify a Normal-variant VRF proof using canonical compressed public-key bytes.
 ///
 /// This is the wire-boundary counterpart to [`verify_normal_with_network_id`]. It
@@ -221,7 +203,6 @@ pub fn verify_normal_bytes_with_network_id(
     verify_vrf_normal_pairing_bytes(public_key, &msg, signature)
         .then(|| output_from_sigma(signature))
 }
-
 /// Verify a VRF proof under the BLS Small public key and recompute the output.
 pub fn verify_small_with_network_id(
     pk: &BlsSmallPublicKey,
@@ -237,7 +218,6 @@ pub fn verify_small_with_network_id(
         _ => None,
     }
 }
-
 /// Verify a Small-variant VRF proof using canonical compressed public-key bytes.
 ///
 /// This is the wire-boundary counterpart to [`verify_small_with_network_id`]. It
@@ -257,19 +237,16 @@ pub fn verify_small_bytes_with_network_id(
     verify_vrf_small_pairing_bytes(public_key, &msg, signature)
         .then(|| output_from_sigma(signature))
 }
-
 /// Return whether bytes encode a canonical, non-identity Normal VRF public key.
 #[must_use]
 pub fn is_valid_normal_public_key_bytes(public_key: &[u8]) -> bool {
     canonical_g1(public_key).is_some()
 }
-
 /// Return whether bytes encode a canonical, non-identity Small VRF public key.
 #[must_use]
 pub fn is_valid_small_public_key_bytes(public_key: &[u8]) -> bool {
     canonical_g2(public_key).is_some()
 }
-
 /// Derive VRF output from a canonical proof encoding without re-verification.
 pub fn output_from_proof(proof: &VrfProof) -> VrfOutput {
     match proof {
@@ -277,12 +254,10 @@ pub fn output_from_proof(proof: &VrfProof) -> VrfOutput {
         VrfProof::SigInG2(sig) => output_from_sigma(sig),
     }
 }
-
 fn verify_vrf_normal_pairing(pk: &BlsNormalPublicKey, msg: &[u8], sig: &[u8; 96]) -> bool {
     use blstrs::{G1Affine, G1Projective, G2Prepared};
     use group::{Curve, Group as _, prime::PrimeCurveAffine};
     use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
-
     // pk in G1, signature in G2
     let pk_bytes = pk.to_bytes();
     let Some(pk) = to_g1(&pk_bytes) else {
@@ -299,12 +274,10 @@ fn verify_vrf_normal_pairing(pk: &BlsNormalPublicKey, msg: &[u8], sig: &[u8; 96]
     let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
     gt.is_identity().into()
 }
-
 fn verify_vrf_normal_pairing_bytes(pk: &[u8], msg: &[u8], sig: &[u8; 96]) -> bool {
     use blstrs::{G1Affine, G1Projective, G2Prepared};
     use group::{Curve, Group as _, prime::PrimeCurveAffine};
     use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
-
     let Some(pk) = canonical_g1(pk) else {
         return false;
     };
@@ -321,12 +294,10 @@ fn verify_vrf_normal_pairing_bytes(pk: &[u8], msg: &[u8], sig: &[u8; 96]) -> boo
         .is_identity()
         .into()
 }
-
 fn verify_vrf_small_pairing(pk: &BlsSmallPublicKey, msg: &[u8], sig: &[u8; 48]) -> bool {
     use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared};
     use group::{Curve, Group as _, prime::PrimeCurveAffine};
     use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
-
     // pk in G2, signature in G1
     let pk_bytes = pk.to_bytes();
     let Some(pk) = to_g2(&pk_bytes) else {
@@ -343,12 +314,10 @@ fn verify_vrf_small_pairing(pk: &BlsSmallPublicKey, msg: &[u8], sig: &[u8; 48]) 
     let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
     gt.is_identity().into()
 }
-
 fn verify_vrf_small_pairing_bytes(pk: &[u8], msg: &[u8], sig: &[u8; 48]) -> bool {
     use blstrs::{G1Projective, G2Affine, G2Prepared};
     use group::{Curve, Group as _, prime::PrimeCurveAffine};
     use pairing::{MillerLoopResult as _, MultiMillerLoop as _};
-
     let Some(pk) = canonical_g2(pk) else {
         return false;
     };
@@ -366,21 +335,18 @@ fn verify_vrf_small_pairing_bytes(pk: &[u8], msg: &[u8], sig: &[u8; 48]) -> bool
         .is_identity()
         .into()
 }
-
 fn canonical_g1(bytes: &[u8]) -> Option<blstrs::G1Affine> {
     use group::prime::PrimeCurveAffine as _;
     let encoded: [u8; 48] = bytes.try_into().ok()?;
     let point = blstrs::G1Affine::from_compressed(&encoded).into_option()?;
     (!bool::from(point.is_identity()) && point.to_compressed() == encoded).then_some(point)
 }
-
 fn canonical_g2(bytes: &[u8]) -> Option<blstrs::G2Affine> {
     use group::prime::PrimeCurveAffine as _;
     let encoded: [u8; 96] = bytes.try_into().ok()?;
     let point = blstrs::G2Affine::from_compressed(&encoded).into_option()?;
     (!bool::from(point.is_identity()) && point.to_compressed() == encoded).then_some(point)
 }
-
 fn to_g1(bytes: &[u8]) -> Option<blstrs::G1Affine> {
     if bytes.len() != 48 {
         return None;
@@ -399,7 +365,6 @@ fn to_g1(bytes: &[u8]) -> Option<blstrs::G1Affine> {
     }
     Some(point)
 }
-
 fn to_g2(bytes: &[u8]) -> Option<blstrs::G2Affine> {
     if bytes.len() != 96 {
         return None;
@@ -418,7 +383,6 @@ fn to_g2(bytes: &[u8]) -> Option<blstrs::G2Affine> {
     }
     Some(point)
 }
-
 fn scalar_from_secret_key_bytes(bytes: &[u8]) -> Result<blstrs::Scalar, VrfProofError> {
     let sk_slice: &[u8; 32] = bytes
         .try_into()
@@ -430,26 +394,22 @@ fn scalar_from_secret_key_bytes(bytes: &[u8]) -> Result<blstrs::Scalar, VrfProof
         .into_option()
         .ok_or(VrfProofError::InvalidSecretKey)
 }
-
 fn hash_msg_to_g2(msg: &[u8]) -> blstrs::G2Affine {
     use blstrs::G2Projective;
     use group::Curve;
     G2Projective::hash_to_curve(msg, DST_G2, &[]).to_affine()
 }
-
 fn hash_msg_to_g1(msg: &[u8]) -> blstrs::G1Affine {
     use blstrs::G1Projective;
     use group::Curve;
     G1Projective::hash_to_curve(msg, DST_G1, &[]).to_affine()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::signature::bls;
     use blstrs::{G1Affine, G2Affine};
     use group::prime::PrimeCurveAffine;
-
     #[test]
     fn vrf_normal_roundtrip() {
         let (_pk, sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]))
@@ -472,7 +432,6 @@ mod tests {
         assert!(is_valid_normal_public_key_bytes(&pk2.to_bytes()));
         assert!(!is_valid_normal_public_key_bytes(&[0; 48]));
     }
-
     #[test]
     fn vrf_small_roundtrip() {
         let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]))
@@ -493,7 +452,6 @@ mod tests {
         assert!(is_valid_small_public_key_bytes(&pk2.to_bytes()));
         assert!(!is_valid_small_public_key_bytes(&[0; 96]));
     }
-
     #[test]
     fn raw_key_verifiers_reject_wrong_variant_key_and_binding() {
         let (normal_public_key, normal_private_key) =
@@ -507,7 +465,6 @@ mod tests {
         let (output, proof) =
             prove_normal_with_network_id(&normal_private_key, &network_a, b"bound-input")
                 .expect("normal proof");
-
         assert_eq!(
             verify_normal_bytes_with_network_id(
                 &normal_public_key.to_bytes(),
@@ -549,7 +506,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn cross_protocol_vrf_not_regular_bls() {
         // Normal variant
@@ -573,7 +529,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cross_protocol_regular_bls_not_vrf() {
         // Normal variant
@@ -594,7 +549,6 @@ mod tests {
             "regular BLS signature must not pass VRF verify"
         );
     }
-
     #[test]
     fn cross_protocol_vrf_not_regular_bls_small() {
         // Small variant (SigInG1)
@@ -616,7 +570,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cross_protocol_regular_bls_not_vrf_small() {
         let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![4, 4, 4]))
@@ -636,7 +589,6 @@ mod tests {
             "regular BLS Small signature must not pass VRF verify"
         );
     }
-
     #[test]
     fn vrf_rejects_identity_signature_normal() {
         let (pk, _sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]))
@@ -648,7 +600,6 @@ mod tests {
         let out = verify_normal_with_network_id(&pk, &[0x49; 32], b"input", &proof);
         assert!(out.is_none(), "identity signature must be rejected");
     }
-
     #[test]
     fn vrf_rejects_identity_signature_small() {
         let (pk, _sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]))
@@ -660,39 +611,32 @@ mod tests {
         let out = verify_small_with_network_id(&pk, &[0x4A; 32], b"input", &proof);
         assert!(out.is_none(), "identity signature must be rejected");
     }
-
     #[test]
     fn vrf_rejects_all_zero_signature_material_normal() {
         let (pk, _sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]))
             .expect("BLS keypair");
         let proof = VrfProof::SigInG2([0u8; 96]);
-
         assert!(to_g2(&[0u8; 96]).is_none());
         assert!(verify_normal_with_network_id(&pk, &[0x4B; 32], b"input", &proof).is_none());
     }
-
     #[test]
     fn vrf_rejects_all_zero_signature_material_small() {
         let (pk, _sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]))
             .expect("BLS keypair");
         let proof = VrfProof::SigInG1([0u8; 48]);
-
         assert!(to_g1(&[0u8; 48]).is_none());
         assert!(verify_small_with_network_id(&pk, &[0x4C; 32], b"input", &proof).is_none());
     }
-
     #[test]
     fn vrf_to_g1_rejects_invalid_length() {
         assert!(to_g1(&[0u8; 47]).is_none());
         assert!(to_g1(&[0u8; 49]).is_none());
     }
-
     #[test]
     fn vrf_to_g2_rejects_invalid_length() {
         assert!(to_g2(&[0u8; 95]).is_none());
         assert!(to_g2(&[0u8; 97]).is_none());
     }
-
     #[test]
     fn vrf_rejects_malformed_compressed_signatures() {
         let (normal_pk, _normal_sk) =
@@ -703,7 +647,6 @@ mod tests {
             verify_normal_with_network_id(&normal_pk, &[0x4D; 32], b"input", &normal_proof)
                 .is_none()
         );
-
         let (small_pk, _small_sk) =
             bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]))
                 .expect("BLS keypair");
@@ -712,7 +655,6 @@ mod tests {
             verify_small_with_network_id(&small_pk, &[0x4E; 32], b"input", &small_proof).is_none()
         );
     }
-
     #[cfg(not(feature = "bls-backend-blstrs"))]
     #[test]
     fn vrf_prove_rejects_invalid_secret_without_panic() {
@@ -722,14 +664,12 @@ mod tests {
             prove_normal_with_network_id(&invalid_normal, &[0x4F; 32], b"input"),
             Err(VrfProofError::InvalidSecretKey)
         );
-
         let invalid_small = bls::BlsSmallPrivateKey::from_unchecked_bytes_for_test(vec![0xFF; 32]);
         assert_eq!(
             prove_small_with_network_id(&invalid_small, &[0x50; 32], b"input"),
             Err(VrfProofError::InvalidSecretKey)
         );
     }
-
     #[test]
     fn vrf_hash_helpers_match_exact_network_contiguous_layout() {
         let network_id = [0x51; 32];
@@ -744,7 +684,6 @@ mod tests {
             prehash_input_with_network_id(&network_id, input),
             blake2b_256(&exact_input)
         );
-
         let mut sigma = [0u8; 96];
         for (index, byte) in sigma.iter_mut().enumerate() {
             *byte = u8::try_from(index).expect("sigma fixture index fits in u8");
@@ -754,7 +693,6 @@ mod tests {
         legacy_output.extend_from_slice(&sigma);
         assert_eq!(output_from_sigma(&sigma).0, blake2b_256(&legacy_output));
     }
-
     #[test]
     fn vrf_prehash_uses_raw_blake2b() {
         let network_id = [0x52; 32];
@@ -780,7 +718,6 @@ mod tests {
         assert_eq!(prehashed, expected);
         assert_eq!(prehashed[31] & 1, 0);
     }
-
     #[test]
     fn vrf_output_uses_raw_blake2b() {
         let mut sigma = [0u8; 96];

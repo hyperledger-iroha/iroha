@@ -5,14 +5,11 @@
 //! sortition manifests plus sealed commit / reveal ballots so governance
 //! clients can prove juror selection and ballot integrity before admitting
 //! policy votes to the ledger.
-
 use std::collections::BTreeSet;
-
 use blake2::digest::Digest;
 use iroha_crypto::Blake2b256;
 use iroha_schema::IntoSchema;
 use thiserror::Error;
-
 use crate::{Decode, Encode};
 /// Schema version tag for [`PolicyJuryBallotCommitV1`].
 pub const POLICY_JURY_BALLOT_COMMIT_VERSION_V1: u16 = 1;
@@ -22,7 +19,6 @@ pub const POLICY_JURY_BALLOT_REVEAL_VERSION_V1: u16 = 1;
 pub const POLICY_JURY_SORTITION_VERSION_V1: u16 = 1;
 const POLICY_JURY_BALLOT_COMMITMENT_DOMAIN_V1: &[u8] =
     b"iroha.ministry.policy-jury.ballot.commitment.v1";
-
 /// Vote options available to policy juries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -38,7 +34,6 @@ pub enum PolicyJuryVoteChoice {
     /// Abstain or return the proposal for more work.
     Abstain,
 }
-
 impl PolicyJuryVoteChoice {
     fn discriminant(self) -> u8 {
         match self {
@@ -48,7 +43,6 @@ impl PolicyJuryVoteChoice {
         }
     }
 }
-
 /// ZK proof references attached to a policy-jury ballot commitment.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -62,7 +56,6 @@ pub struct PolicyJuryZkEnvelope {
     #[norito(default)]
     pub attachments: Vec<String>,
 }
-
 /// Ballot channel used for a juror's vote.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -76,7 +69,6 @@ pub enum PolicyJuryBallotMode {
     /// Commitments reference a ZK proof artifact.
     ZkEnvelope(PolicyJuryZkEnvelope),
 }
-
 /// Juror ballot commitment produced during the sealed phase.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -100,7 +92,6 @@ pub struct PolicyJuryBallotCommitV1 {
     /// Delivery mode (plaintext vs zk-envelope).
     pub mode: PolicyJuryBallotMode,
 }
-
 impl PolicyJuryBallotCommitV1 {
     /// Validate structural invariants and ensure the reveal matches this commitment.
     ///
@@ -145,7 +136,6 @@ impl PolicyJuryBallotCommitV1 {
         }
         Ok(())
     }
-
     fn validate(&self) -> Result<(), PolicyJuryBallotError> {
         if self.version != POLICY_JURY_BALLOT_COMMIT_VERSION_V1 {
             return Err(PolicyJuryBallotError::UnsupportedCommitVersion {
@@ -165,7 +155,6 @@ impl PolicyJuryBallotCommitV1 {
         Ok(())
     }
 }
-
 /// Public reveal payload proving the juror's choice and salt.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -192,7 +181,6 @@ pub struct PolicyJuryBallotRevealV1 {
     #[norito(default)]
     pub zk_proof_uris: Vec<String>,
 }
-
 impl PolicyJuryBallotRevealV1 {
     /// Compute the canonical commitment digest tied to this reveal.
     #[must_use]
@@ -205,7 +193,6 @@ impl PolicyJuryBallotRevealV1 {
             &self.nonce,
         )
     }
-
     fn validate(&self) -> Result<(), PolicyJuryBallotError> {
         if self.version != POLICY_JURY_BALLOT_REVEAL_VERSION_V1 {
             return Err(PolicyJuryBallotError::UnsupportedRevealVersion {
@@ -230,7 +217,6 @@ impl PolicyJuryBallotRevealV1 {
         Ok(())
     }
 }
-
 /// Errors surfaced while validating policy jury ballots.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PolicyJuryBallotError {
@@ -299,7 +285,6 @@ pub enum PolicyJuryBallotError {
     #[error("plain ballots must not reference zk proofs")]
     UnexpectedZkEvidence,
 }
-
 /// Deterministic sortition manifest for a policy jury round.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -330,7 +315,6 @@ pub struct PolicyJurySortitionV1 {
     #[norito(default)]
     pub waitlist: Vec<PolicyJuryWaitlistEntry>,
 }
-
 impl PolicyJurySortitionV1 {
     /// Validate structural invariants for the sortition manifest.
     ///
@@ -422,7 +406,6 @@ impl PolicyJurySortitionV1 {
         Ok(())
     }
 }
-
 /// Sortition validation errors.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PolicyJurySortitionError {
@@ -477,7 +460,6 @@ pub enum PolicyJurySortitionError {
         rank: u32,
     },
 }
-
 /// Primary juror assignment emitted by the sortition workflow.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -497,7 +479,6 @@ pub struct PolicyJuryAssignment {
     #[norito(default)]
     pub failover: Option<PolicyJuryFailoverPlan>,
 }
-
 /// Automatic failover plan mapping a slot to the waitlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -510,7 +491,6 @@ pub struct PolicyJuryFailoverPlan {
     /// Additional grace period before escalation is triggered.
     pub escalate_after_secs: u32,
 }
-
 /// Waitlisted juror entry.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -527,7 +507,6 @@ pub struct PolicyJuryWaitlistEntry {
     /// UTC timestamp (milliseconds) when the waitlist entry expires.
     pub expires_at_unix_ms: u64,
 }
-
 fn canonical_commitment(
     round_id: &str,
     proposal_id: &str,
@@ -545,16 +524,13 @@ fn canonical_commitment(
     let digest = hasher.finalize();
     digest.into()
 }
-
 fn update_hash_bytes(hasher: &mut Blake2b256, bytes: &[u8]) {
     hasher.update((bytes.len() as u64).to_le_bytes());
     hasher.update(bytes);
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn sample_reveal(choice: PolicyJuryVoteChoice) -> PolicyJuryBallotRevealV1 {
         PolicyJuryBallotRevealV1 {
             version: POLICY_JURY_BALLOT_REVEAL_VERSION_V1,
@@ -567,7 +543,6 @@ mod tests {
             zk_proof_uris: Vec::new(),
         }
     }
-
     fn sample_commit(mode: PolicyJuryBallotMode) -> PolicyJuryBallotCommitV1 {
         let reveal = sample_reveal(PolicyJuryVoteChoice::Approve);
         PolicyJuryBallotCommitV1 {
@@ -580,14 +555,12 @@ mod tests {
             mode,
         }
     }
-
     #[test]
     fn ballot_commit_reveal_roundtrip() {
         let commit = sample_commit(PolicyJuryBallotMode::Plaintext);
         let reveal = sample_reveal(PolicyJuryVoteChoice::Approve);
         commit.verify_reveal(&reveal).expect("roundtrip succeeds");
     }
-
     #[test]
     fn ballot_commitment_length_prefixes_defeat_nul_delimiter_collision() {
         fn legacy_commitment(reveal: &PolicyJuryBallotRevealV1) -> [u8; 32] {
@@ -603,18 +576,15 @@ mod tests {
             hasher.update(&reveal.nonce);
             hasher.finalize().into()
         }
-
         let mut first = sample_reveal(PolicyJuryVoteChoice::Approve);
         first.round_id = "R\0P".into();
         first.proposal_id = "Q".into();
         let mut second = first.clone();
         second.round_id = "R".into();
         second.proposal_id = "P\0Q".into();
-
         assert_eq!(legacy_commitment(&first), legacy_commitment(&second));
         assert_ne!(first.compute_commitment(), second.compute_commitment());
     }
-
     #[test]
     fn ballot_commit_rejects_mismatched_choice() {
         let commit = sample_commit(PolicyJuryBallotMode::Plaintext);
@@ -623,7 +593,6 @@ mod tests {
         let err = commit.verify_reveal(&reveal).expect_err("mismatch");
         assert!(matches!(err, PolicyJuryBallotError::CommitmentMismatch));
     }
-
     #[test]
     fn sortition_validation_enforces_uniqueness() {
         let manifest = PolicyJurySortitionV1 {
@@ -662,7 +631,6 @@ mod tests {
         };
         manifest.validate().expect("valid manifest");
     }
-
     #[test]
     fn sortition_validation_rejects_duplicate_jurors() {
         let manifest = PolicyJurySortitionV1 {
@@ -693,7 +661,6 @@ mod tests {
             PolicyJurySortitionError::DuplicateJuror { .. }
         ));
     }
-
     #[test]
     fn ballot_reveal_requires_minimum_nonce_length() {
         let commit = sample_commit(PolicyJuryBallotMode::Plaintext);
@@ -705,7 +672,6 @@ mod tests {
             PolicyJuryBallotError::NonceTooShort { length: 4 }
         ));
     }
-
     #[test]
     fn ballot_commit_rejects_round_mismatch() {
         let commit = sample_commit(PolicyJuryBallotMode::Plaintext);
@@ -717,7 +683,6 @@ mod tests {
             PolicyJuryBallotError::RoundMismatch { ref reveal, .. } if reveal == "PJ-2026-03"
         ));
     }
-
     #[test]
     fn sortition_validation_rejects_zero_rank_failover() {
         let manifest = PolicyJurySortitionV1 {
@@ -748,7 +713,6 @@ mod tests {
             PolicyJurySortitionError::InvalidFailoverRank { rank: 0, .. }
         ));
     }
-
     #[test]
     fn sortition_validation_rejects_waitlist_rank_gaps() {
         let manifest = PolicyJurySortitionV1 {
@@ -792,7 +756,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn zk_ballot_commit_requires_proof_references() {
         let commit = sample_commit(PolicyJuryBallotMode::ZkEnvelope(PolicyJuryZkEnvelope {
@@ -805,7 +768,6 @@ mod tests {
             .expect_err("missing ZK evidence");
         assert!(matches!(err, PolicyJuryBallotError::MissingZkEvidence));
     }
-
     #[test]
     fn plain_ballot_rejects_unexpected_proof_references() {
         let commit = sample_commit(PolicyJuryBallotMode::Plaintext);

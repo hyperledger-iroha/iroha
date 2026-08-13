@@ -10,7 +10,6 @@ where
 {
     submit.await?;
     let tx_hash_str = tx_hash.to_string();
-
     let wait = async {
         loop {
             tokio::select! {
@@ -78,7 +77,6 @@ where
             }
         }
     };
-
     tokio::time::timeout(options.timeout, wait)
         .await
         .map_err(|_| ToriiError::Timeout {

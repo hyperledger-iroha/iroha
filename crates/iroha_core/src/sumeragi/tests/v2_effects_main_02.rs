@@ -7,7 +7,6 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
     let speculative_new = manifest_for_payload(&fixture, b"newer speculative fetch");
     let certified = manifest_for_payload(&fixture, b"certified non-lock fetch");
     let locked = manifest_for_payload(&fixture, b"durable locked fetch");
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -69,7 +68,6 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
         .map(BodyFetchTask::id)
         .collect::<Vec<_>>();
     assert_eq!(executor.pending_work(), 4);
-
     for view in 0_u64..4 {
         executor
             .consume_effects(vec![timeout_sign(&fixture, view)], &mut services)
@@ -80,7 +78,6 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
     assert_eq!(executor.pending_signatures.len(), 4);
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
-
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 2));
     let mut services = fixture.services();
     let decided_qc = fixture.qc(wire::GlobalPhase::Prepare);
@@ -131,7 +128,6 @@ fn durable_sign_preemption_orders_speculative_certified_and_locked_fetches() {
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn durable_sign_preemption_retires_a_retryable_body_token() {
     let fixture = Fixture::new();
@@ -175,7 +171,6 @@ fn durable_sign_preemption_retires_a_retryable_body_token() {
             .is_some(),
         "typed Retryable owns the unpublished Completion token",
     );
-
     executor
         .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
         .expect("durable signing preempts the retryable fetch and its token");
@@ -188,7 +183,6 @@ fn durable_sign_preemption_retires_a_retryable_body_token() {
     assert_eq!(executor.pending_signatures.len(), 1);
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity() {
     let fixture = Fixture::new();
@@ -218,7 +212,6 @@ fn retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity
         .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
         .expect("retain the producer behind decided-body fetch capacity");
     assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
-
     let chunk = signed_payload_chunk(&fixture);
     assert!(executor.retained_dispatch_allows_network_ingress(
         &wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone())
@@ -245,7 +238,6 @@ fn retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity
         .expect("exact chunk reconstruction releases pending-work capacity");
     assert!(executor.pending_fetches.is_empty());
     assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
-
     assert_eq!(
         executor
             .step(Instant::now(), &mut services)
@@ -256,7 +248,6 @@ fn retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn retained_producer_suffix_allows_exact_certified_response_to_release_fetch_capacity() {
     let fixture = Fixture::new();
@@ -287,7 +278,6 @@ fn retained_producer_suffix_allows_exact_certified_response_to_release_fetch_cap
         .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
         .expect("retain the producer behind decided-body fetch capacity");
     assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
-
     let response = signed_certified_response(
         &fixture,
         &task,
@@ -325,7 +315,6 @@ fn retained_producer_suffix_allows_exact_certified_response_to_release_fetch_cap
     assert!(executor.pending_fetches.is_empty());
     assert!(executor.outstanding_requests.is_empty());
     assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
-
     assert_eq!(
         executor
             .step(Instant::now(), &mut services)
@@ -336,7 +325,6 @@ fn retained_producer_suffix_allows_exact_certified_response_to_release_fetch_cap
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn retained_effect_batch_rejects_overtaking_and_oversize_before_partial_dispatch() {
     let fixture = Fixture::new();
@@ -358,7 +346,6 @@ fn retained_effect_batch_rejects_overtaking_and_oversize_before_partial_dispatch
             if reason.contains("overtook retained causal dispatch debt")
     ));
     assert!(services.broadcasts.is_empty());
-
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     let oversized = (0..=MAX_EFFECTS_PER_STEP)
@@ -371,7 +358,6 @@ fn retained_effect_batch_rejects_overtaking_and_oversize_before_partial_dispatch
     assert!(services.broadcasts.is_empty());
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
     let fixture = Fixture::new();
@@ -383,7 +369,6 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
         .expect("dispatch the first exact candidate owner");
     assert_eq!(executor.pending_signatures.len(), 1);
     assert_eq!(services.sign_tasks.len(), 1);
-
     executor
         .consume_effects(vec![effect.clone()], &mut services)
         .expect("equal-owner retransmission coalesces into the live task");
@@ -397,7 +382,6 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
         .expect("one exact Sign owner remains pending")
         .ownership
         .clone();
-
     let conflicting = bind_adapter_effect_batch_ownership(
         std::slice::from_ref(&effect),
         vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 999)],
@@ -420,7 +404,6 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
             .ownership,
         incumbent_sign_owner
     );
-
     let reincarnated = bind_adapter_effect_batch_ownership(
         std::slice::from_ref(&effect),
         vec![RuntimeEffectOwnership::fresh_for_test(
@@ -446,7 +429,6 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
             .ownership,
         incumbent_sign_owner
     );
-
     let mut fetch_executor = fixture.executor(EffectQueueConfig::default());
     let mut fetch_services = fixture.services();
     let fetch_effect = AdapterEffect::FetchBody {
@@ -513,7 +495,6 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
         "passive network Fetch ownership is deliberately not runnable clock work"
     );
     assert!(external.iter().all(|owner| owner != &foreign_owner));
-
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     let four_candidates = (0..4)
@@ -529,7 +510,6 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
     ));
     assert!(services.sign_tasks.is_empty());
     assert!(executor.retained_effect_batch.is_none());
-
     let mut executor = fixture.executor(EffectQueueConfig::default());
     assert!(matches!(
         executor.consume_effects(four_candidates, &mut services),
@@ -541,7 +521,6 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
     assert!(executor.output_guard.restart_required());
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn runtime_terminal_body_candidate_stutters_before_cached_redispatch() {
     let fixture = Fixture::new();
@@ -557,7 +536,6 @@ fn runtime_terminal_body_candidate_stutters_before_cached_redispatch() {
             subject: fixture.manifest.subject,
         },
     ];
-
     for effect in cases {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -573,7 +551,6 @@ fn runtime_terminal_body_candidate_stutters_before_cached_redispatch() {
             .runtime
             .terminal_body_candidate_owners
             .insert(identity, bound.clone());
-
         executor
             .consume_effects(vec![effect.clone()], &mut services)
             .expect("the runtime terminal turns the retry into a 1-to-1 stutter");
@@ -584,7 +561,6 @@ fn runtime_terminal_body_candidate_stutters_before_cached_redispatch() {
         assert!(executor.runtime.completions.is_empty());
         assert!(executor.retained_effect_batch.is_none());
         assert!(!executor.status().fail_closed);
-
         let foreign = bind_adapter_effect_batch_ownership(
             std::slice::from_ref(&effect),
             vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 90_001)],
@@ -601,7 +577,6 @@ fn runtime_terminal_body_candidate_stutters_before_cached_redispatch() {
         assert!(executor.retained_effect_batch.is_none());
     }
 }
-
 #[test]
 fn runtime_terminal_authority_commits_only_after_full_positional_gate() {
     let fixture = Fixture::new();
@@ -627,7 +602,6 @@ fn runtime_terminal_authority_commits_only_after_full_positional_gate() {
         .runtime
         .terminal_body_candidate_owners
         .insert(identity, incumbent.clone());
-
     assert!(matches!(
         executor.retain_effect_batch(vec![effect.clone()], vec![incumbent.clone()]),
         Err(EffectExecutorError::Contract(reason))
@@ -638,7 +612,6 @@ fn runtime_terminal_authority_commits_only_after_full_positional_gate() {
         "a malformed positional binding cannot refine the runtime terminal"
     );
     assert!(executor.retained_effect_batch.is_none());
-
     let roots = vec![
         executor.runtime.test_effect_ownership(&effect),
         executor.runtime.test_effect_ownership(&sibling),
@@ -667,7 +640,6 @@ fn runtime_terminal_authority_commits_only_after_full_positional_gate() {
         "a valid first terminal cannot commit before a later batch position fails"
     );
     assert!(executor.retained_effect_batch.is_none());
-
     let exact = incumbent
         .rebind_same_adapter_effect(&effect)
         .expect("rebind the same terminal owner to a one-effect batch");
@@ -677,7 +649,6 @@ fn runtime_terminal_authority_commits_only_after_full_positional_gate() {
     assert_eq!(executor.runtime.terminal_body_candidate_commits, 1);
     assert!(executor.retained_effect_batch.is_none());
 }
-
 #[test]
 fn authority_transition_reuses_one_physical_store_and_validation_task() {
     let fixture = Fixture::new();
@@ -733,7 +704,6 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
         decision_store.candidate_semantic_identity(),
         "Decision authority is deliberately distinct from the proposal lineage"
     );
-
     let mut store_executor = fixture.executor(EffectQueueConfig::default());
     store_executor.runtime.round_tag = Some(stage_tag);
     store_executor.reconciled_tag = Some(stage_tag);
@@ -771,7 +741,6 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
             .all(|task| { task.id() == store_id && task.ownership() == &ordinary_store }),
         "authority upgrade must reuse the exact Store work ID and owner"
     );
-
     let durable = DurableBodyReceipt::for_test(
         fixture.context.id(),
         fixture.manifest.round,
@@ -828,7 +797,6 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
         "authority upgrade must reuse the exact validation work ID and owner"
     );
     assert!(!validation_executor.status().fail_closed);
-
     let mut parked_executor = fixture.executor(EffectQueueConfig::default());
     parked_executor.runtime.round_tag = Some(stage_tag);
     parked_executor.reconciled_tag = Some(stage_tag);
@@ -859,7 +827,6 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
                 decision.execution_commitment,
             )
     );
-
     let mut conflicting_decision = decision;
     conflicting_decision.execution_commitment =
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
@@ -891,7 +858,6 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
         "Store and Validate remain separate physical stages"
     );
 }
-
 #[test]
 fn authority_transition_after_enter_view_rebinds_body_consumers_not_physical_tasks() {
     let fixture = Fixture::new();
@@ -968,7 +934,6 @@ fn authority_transition_after_enter_view_rebinds_body_consumers_not_physical_tas
         7_102,
     );
     let body_key = (fixture.manifest.round, fixture.manifest.subject);
-
     let mut store_executor = fixture.executor(EffectQueueConfig::default());
     let mut store_services = fixture.services();
     store_executor
@@ -1035,7 +1000,6 @@ fn authority_transition_after_enter_view_rebinds_body_consumers_not_physical_tas
                 && *round == fixture.manifest.round
                 && *subject == fixture.manifest.subject
     ));
-
     let mut validation_executor = fixture.executor(EffectQueueConfig::default());
     let mut validation_services = store_services;
     validation_executor
@@ -1112,7 +1076,6 @@ fn authority_transition_after_enter_view_rebinds_body_consumers_not_physical_tas
     ));
     assert!(!validation_executor.status().fail_closed);
 }
-
 #[test]
 fn enter_view_and_fetch_authority_upgrade_retain_the_protected_fetch_owner() {
     let fixture = Fixture::new();
@@ -1131,7 +1094,6 @@ fn enter_view_and_fetch_authority_upgrade_retain_the_protected_fetch_owner() {
         .expect("start the ordinary protected-body acquisition");
     let original = services.fetch_tasks[0].clone();
     let work_id = original.id();
-
     // Model a later reducer macro-step whose stronger QC was admitted by
     // an independent runtime lifecycle. Retention must join that authority
     // to the already-live physical fetch before EnterView rebinds it.
@@ -1142,7 +1104,6 @@ fn enter_view_and_fetch_authority_upgrade_retain_the_protected_fetch_owner() {
     let sources = certified_sources(&fixture, &prepare);
     let mut timeout = timeout_at_view(&fixture, 0);
     timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
-
     executor
         .consume_effects(
             vec![
@@ -1163,7 +1124,6 @@ fn enter_view_and_fetch_authority_upgrade_retain_the_protected_fetch_owner() {
             &mut services,
         )
         .expect("EnterView and its authority upgrade retain one physical fetch owner");
-
     assert_eq!(executor.pending_fetches.len(), 1);
     let pending = &executor.pending_fetches[&work_id].task;
     assert_eq!(pending.tag, tag(1));
@@ -1182,7 +1142,6 @@ fn enter_view_and_fetch_authority_upgrade_retain_the_protected_fetch_owner() {
     );
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work() {
     let fixture = Fixture::new();
@@ -1199,7 +1158,6 @@ fn fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work
     executor
         .consume_effects(vec![ordinary], &mut services)
         .expect("admit the incumbent ordinary Fetch owner");
-
     let certificate = fixture.qc(wire::GlobalPhase::Prepare);
     let sources = certified_sources(&fixture, &certificate);
     let upgrade = AdapterEffect::FetchBody {
@@ -1220,7 +1178,6 @@ fn fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work
     let before = executor.body_ownership_projection();
     let fetch_tasks_before = services.fetch_tasks.clone();
     let operation_calls_before = services.operation_calls.clone();
-
     assert!(matches!(
         executor.begin_fetch(
             tag(0),
@@ -1239,7 +1196,6 @@ fn fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work
     assert_eq!(services.fetch_tasks, fetch_tasks_before);
     assert_eq!(services.operation_calls, operation_calls_before);
 }
-
 #[test]
 fn adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes() {
     let fixture = Fixture::new();
@@ -1334,7 +1290,6 @@ fn adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes() {
         );
     }
 }
-
 #[test]
 fn retained_effect_tail_is_fifo_and_refilters_after_durable_decision() {
     let fixture = Fixture::new();
@@ -1379,7 +1334,6 @@ fn retained_effect_tail_is_fifo_and_refilters_after_durable_decision() {
         services.effect_service_order,
         vec!["broadcast", "sign", "equivocation"]
     );
-
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
     let mut services = fixture.services();
     executor
@@ -1417,7 +1371,6 @@ fn retained_effect_tail_is_fifo_and_refilters_after_durable_decision() {
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn retained_effect_tail_stops_at_next_blocked_producer_without_reordering() {
     let fixture = Fixture::new();
@@ -1427,7 +1380,6 @@ fn retained_effect_tail_stops_at_next_blocked_producer_without_reordering() {
         .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
         .expect("fill signing capacity");
     services.effect_service_order.clear();
-
     executor
         .consume_effects(
             vec![
@@ -1442,7 +1394,6 @@ fn retained_effect_tail_stops_at_next_blocked_producer_without_reordering() {
         .expect("retain two producer occurrences and their ordered diagnostic");
     assert_eq!(executor.status().effect_dispatch_queue.depth, 3);
     assert!(services.effect_service_order.is_empty());
-
     let first = services.sign_tasks[0].clone();
     let signature = Signature::new(
         fixture.validator_keys[0].private_key(),
@@ -1462,7 +1413,6 @@ fn retained_effect_tail_stops_at_next_blocked_producer_without_reordering() {
     assert_eq!(services.effect_service_order, vec!["sign", "equivocation"]);
     assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
     assert_eq!(executor.pending_signatures.len(), 1);
-
     let second = services.sign_tasks[1].clone();
     let signature = Signature::new(
         fixture.validator_keys[0].private_key(),
@@ -1487,7 +1437,6 @@ fn retained_effect_tail_stops_at_next_blocked_producer_without_reordering() {
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn pending_work_producer_inventory_is_exhaustive_and_source_linked() {
     let fixture = Fixture::new();
@@ -1578,7 +1527,6 @@ fn pending_work_producer_inventory_is_exhaustive_and_source_linked() {
         );
     }
 }
-
 #[test]
 fn retained_locked_body_reenters_its_exact_origin_store_and_validation_pipeline() {
     let fixture = Fixture::new();
@@ -1587,7 +1535,6 @@ fn retained_locked_body_reenters_its_exact_origin_store_and_validation_pipeline(
     let manifest = manifest_at_view(&fixture, 3);
     let current_tag = tag(3);
     let key = (manifest.round, manifest.subject);
-
     executor
         .reconcile_locked_body_for_recovery(
             current_tag,
@@ -1606,7 +1553,6 @@ fn retained_locked_body_reenters_its_exact_origin_store_and_validation_pipeline(
         .expect("stage exact locked bytes under their proposal origin");
     assert_eq!(executor.ready_bodies[&key].manifest, manifest);
     assert!(services.fetch_tasks.is_empty());
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -1626,7 +1572,6 @@ fn retained_locked_body_reenters_its_exact_origin_store_and_validation_pipeline(
         Some(RuntimeCompletion::BodyAvailable(tag, completion_manifest))
             if *tag == current_tag && completion_manifest == &manifest
     ));
-
     executor
         .consume_effects(
             vec![AdapterEffect::StoreBody {
@@ -1657,7 +1602,6 @@ fn retained_locked_body_reenters_its_exact_origin_store_and_validation_pipeline(
     executor
         .complete_body_validation(validated, &mut services)
         .expect("current-round validation completion is rebound to the follower");
-
     assert!(matches!(
         executor.runtime.completions.last(),
         Some(RuntimeCompletion::ValidationSucceeded(
@@ -1672,7 +1616,6 @@ fn retained_locked_body_reenters_its_exact_origin_store_and_validation_pipeline(
     ));
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn retained_locked_body_finishes_an_already_started_exact_origin_fetch() {
     let fixture = Fixture::new();
@@ -1680,7 +1623,6 @@ fn retained_locked_body_finishes_an_already_started_exact_origin_fetch() {
     let mut services = fixture.services();
     let manifest = manifest_at_view(&fixture, 4);
     let current_tag = tag(4);
-
     executor
         .reconcile_locked_body_for_recovery(
             current_tag,
@@ -1703,7 +1645,6 @@ fn retained_locked_body_finishes_an_already_started_exact_origin_fetch() {
         .expect("start exact-origin reconstruction");
     let fetch_id = services.fetch_tasks[0].id();
     assert_eq!(executor.pending_fetches.len(), 1);
-
     executor
         .retain_locked_body_for_recovery(
             current_tag,
@@ -1713,7 +1654,6 @@ fn retained_locked_body_finishes_an_already_started_exact_origin_fetch() {
             &mut services,
         )
         .expect("trusted locked bytes win the exact-origin acquisition race");
-
     assert!(services.cancelled_fetches.is_empty());
     assert_eq!(services.completed_reconstruction_fetches, vec![fetch_id]);
     assert!(executor.pending_fetches.is_empty());
@@ -1725,7 +1665,6 @@ fn retained_locked_body_finishes_an_already_started_exact_origin_fetch() {
     ));
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn retained_locked_body_cannot_rebind_to_a_later_proposal_origin() {
     let fixture = Fixture::new();
@@ -1734,7 +1673,6 @@ fn retained_locked_body_cannot_rebind_to_a_later_proposal_origin() {
     let original_manifest = manifest_at_view(&fixture, 3);
     let later_manifest = manifest_at_view(&fixture, 4);
     let later_tag = tag(4);
-
     executor
         .reconcile_locked_body_for_recovery(
             tag(3),
@@ -1764,7 +1702,6 @@ fn retained_locked_body_cannot_rebind_to_a_later_proposal_origin() {
             &mut services,
         )
         .expect("later proposal cannot adopt protected origin bytes");
-
     assert_eq!(services.fetch_tasks.len(), 1);
     assert!(
         !executor
@@ -1774,7 +1711,6 @@ fn retained_locked_body_cannot_rebind_to_a_later_proposal_origin() {
     assert!(executor.runtime.completions.is_empty());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn same_tag_higher_lock_retires_exact_origin_ownership_before_staging() {
     let fixture = Fixture::new();
@@ -1812,7 +1748,6 @@ fn same_tag_higher_lock_retires_exact_origin_ownership_before_staging() {
     assert_eq!(executor.ready_bodies.len(), 1);
     assert_eq!(executor.body_pipeline_owners.len(), 1);
     assert_eq!(executor.runtime.completions.len(), 1);
-
     let (replacement_subject, replacement_body) = distinct_body(&fixture);
     let replacement = (round(&fixture.context, 1), replacement_subject);
     executor
@@ -1824,7 +1759,6 @@ fn same_tag_higher_lock_retires_exact_origin_ownership_before_staging() {
     assert!(executor.body_pipeline_owners.is_empty());
     assert!(executor.runtime.completions.is_empty());
     assert_eq!(executor.ready_body_bytes, 0);
-
     executor
         .retain_locked_body_for_recovery(
             consumer,
@@ -1845,7 +1779,6 @@ fn same_tag_higher_lock_retires_exact_origin_ownership_before_staging() {
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
-
 #[test]
 fn same_tag_higher_lock_retires_fetch_store_and_validation_owners() {
     let fixture = Fixture::new();
@@ -1854,7 +1787,6 @@ fn same_tag_higher_lock_retires_fetch_store_and_validation_owners() {
     let (replacement_subject, _) = distinct_body(&fixture);
     let higher = (round(&fixture.context, 1), replacement_subject);
     let staged = manifest_at_view(&fixture, first.0.view);
-
     {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -1882,7 +1814,6 @@ fn same_tag_higher_lock_retires_fetch_store_and_validation_owners() {
         assert!(executor.body_pipeline_owners.is_empty());
         assert_eq!(services.cancelled_fetches, vec![fetch_id]);
     }
-
     {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -1932,7 +1863,6 @@ fn same_tag_higher_lock_retires_fetch_store_and_validation_owners() {
         assert_eq!(executor.pending_store_bytes, 0);
         assert_eq!(services.cancelled_stores, vec![store_id]);
     }
-
     {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -1997,7 +1927,6 @@ fn same_tag_higher_lock_retires_fetch_store_and_validation_owners() {
         assert_eq!(services.cancelled_validations, vec![validation_id]);
     }
 }
-
 #[test]
 fn same_tag_higher_lock_retires_parked_old_body_before_empty_progress_batch() {
     let fixture = Fixture::new();
@@ -2012,7 +1941,6 @@ fn same_tag_higher_lock_retires_parked_old_body_before_empty_progress_batch() {
     executor
         .reconcile_locked_body_for_recovery(consumer, first, &mut services)
         .expect("publish the initial lock");
-
     let parked = AdapterEffect::StoreBody {
         tag: consumer,
         round: first.0,
@@ -2028,7 +1956,6 @@ fn same_tag_higher_lock_retires_parked_old_body_before_empty_progress_batch() {
     executor
         .park_retained_effect_batch()
         .expect("park ordinary suffix behind certified progress");
-
     executor.runtime.locked_body = Some(higher);
     assert_eq!(
         executor
@@ -2042,7 +1969,6 @@ fn same_tag_higher_lock_retires_parked_old_body_before_empty_progress_batch() {
     assert!(services.store_tasks.is_empty());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
     let fixture = Fixture::new();
@@ -2056,7 +1982,6 @@ fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
     executor
         .reconcile_locked_body_for_recovery(old_tag, first, &mut services)
         .expect("publish the old lock");
-
     let mut old_vote = vote(&fixture);
     old_vote.round = first.0;
     old_vote.proposal_round = first.0;
@@ -2070,7 +1995,6 @@ fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
         )
         .expect("start the old-lock signature");
     let old_sign_id = services.sign_tasks[0].id();
-
     let parked = AdapterEffect::StoreBody {
         tag: old_tag,
         round: first.0,
@@ -2086,7 +2010,6 @@ fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
     executor
         .park_retained_effect_batch()
         .expect("park old-view suffix");
-
     let (higher_subject, _) = distinct_body(&fixture);
     let higher_round = round(&fixture.context, 1);
     let higher = (higher_round, higher_subject);
@@ -2103,7 +2026,6 @@ fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
     fresh_vote.subject = higher_subject;
     executor.runtime.round_tag = Some(next_tag);
     executor.runtime.locked_body = Some(higher);
-
     executor
         .consume_effects(
             vec![
@@ -2120,7 +2042,6 @@ fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
             &mut services,
         )
         .expect("certified view transition retires old work before fresh Sign");
-
     assert!(services.cancelled_signatures.contains(&old_sign_id));
     assert_eq!(executor.pending_signatures.len(), 1);
     assert_eq!(services.sign_tasks.len(), 2);
@@ -2133,14 +2054,12 @@ fn next_view_higher_lock_cancels_old_signer_before_fresh_dispatch() {
     assert!(services.store_tasks.is_empty());
     assert!(!executor.status().fail_closed);
 }
-
 #[test]
 fn advancing_frontier_without_enter_view_fails_before_dispatch() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     executor.runtime.round_tag = Some(tag(1));
-
     assert!(matches!(
         executor.consume_effects(Vec::new(), &mut services),
         Err(EffectExecutorError::Contract(reason))
@@ -2152,14 +2071,12 @@ fn advancing_frontier_without_enter_view_fails_before_dispatch() {
     assert!(services.entered_views.is_empty());
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn advancing_pacemaker_frontier_without_enter_view_preserves_effect_sidecar() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     executor.runtime.round_tag = Some(tag(1));
-
     assert!(matches!(
         executor.consume_pacemaker_effects(Vec::new(), &mut services),
         Err(EffectExecutorError::Contract(reason))
@@ -2170,14 +2087,12 @@ fn advancing_pacemaker_frontier_without_enter_view_preserves_effect_sidecar() {
     assert!(services.entered_views.is_empty());
     assert!(executor.status().fail_closed);
 }
-
 #[test]
 fn advancing_recovery_frontier_without_enter_view_preserves_effect_sidecar() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
     executor.runtime.round_tag = Some(tag(1));
-
     assert!(matches!(
         executor.consume_pending_tip_recovery_effects(Vec::new(), &mut services),
         Err(EffectExecutorError::Contract(reason))

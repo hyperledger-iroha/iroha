@@ -1,5 +1,4 @@
 //! Built-in parameter definitions and validation logic.
-
 use core::{
     convert::TryFrom,
     num::{NonZeroU16, NonZeroU64},
@@ -8,24 +7,20 @@ use core::{
 #[cfg(feature = "json")]
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
-
 use iroha_crypto::Algorithm;
 use iroha_data_model_derive::model;
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-
 pub use self::model::*;
 #[cfg(feature = "json")]
 use super::custom::json_helpers;
 use super::custom::{CustomParameter, CustomParameterId, CustomParameters};
-
 /// Maximum governed IVM heap size in bytes for ABI V1.
 ///
 /// The ABI V1 address map reserves the half-open range
 /// `0x0010_0000..0x0020_0000` for the heap.
 pub const IVM_HEAP_MAX_BYTES: u64 = 0x0010_0000;
-
 /// Raw 32-byte consensus fingerprint with one canonical JSON representation.
 #[derive(
     Debug,
@@ -40,33 +35,28 @@ pub const IVM_HEAP_MAX_BYTES: u64 = 0x0010_0000;
     iroha_schema::IntoSchema,
 )]
 pub struct ConsensusFingerprint(pub [u8; 32]);
-
 impl ConsensusFingerprint {
     /// Construct from the canonical raw digest bytes.
     #[must_use]
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Return the raw digest bytes.
     #[must_use]
     pub const fn into_bytes(self) -> [u8; 32] {
         self.0
     }
 }
-
 impl core::fmt::Display for ConsensusFingerprint {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(formatter, "0x{}", hex::encode(self.0))
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for ConsensusFingerprint {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(&format!("0x{}", hex::encode(self.0)), out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -74,7 +64,6 @@ impl JsonSerialize for ConsensusFingerprint {
         json::write_json_string_to(&format!("0x{}", hex::encode(self.0)), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for ConsensusFingerprint {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -103,7 +92,6 @@ impl JsonDeserialize for ConsensusFingerprint {
         Ok(Self(bytes))
     }
 }
-
 /// Canonical signed Sumeragi v2 handshake metadata stored in genesis.
 #[derive(
     Debug,
@@ -130,7 +118,6 @@ pub struct ConsensusHandshakeMetadata {
     /// Signed inputs for the first Sumeragi v2 height context.
     pub sumeragi_v2: crate::block::consensus_v2::SumeragiV2GenesisContextParameters,
 }
-
 impl ConsensusHandshakeMetadata {
     /// Validate the first-release signed handshake envelope.
     ///
@@ -151,15 +138,11 @@ impl ConsensusHandshakeMetadata {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 mod json_support {
     use std::string::String;
-
     use super::*;
-
     pub(super) type Map = BTreeMap<String, json::Value>;
-
     pub(super) fn write_field<T: JsonSerialize>(
         out: &mut String,
         first: &mut bool,
@@ -175,7 +158,6 @@ mod json_support {
         out.push(':');
         value.json_serialize(out);
     }
-
     pub(super) fn write_field_to<T: JsonSerialize>(
         out: &mut dyn json::JsonWriteSink,
         first: &mut bool,
@@ -191,7 +173,6 @@ mod json_support {
         out.push(':')?;
         value.json_serialize_to(out)
     }
-
     pub(super) fn expect_object(value: json::Value, context: &str) -> Result<Map, json::Error> {
         match value {
             json::Value::Object(map) => Ok(map),
@@ -201,14 +182,12 @@ mod json_support {
             }),
         }
     }
-
     pub(super) fn ensure_no_extra(map: Map) -> Result<(), json::Error> {
         if let Some((field, _)) = map.into_iter().next() {
             return Err(json::Error::UnknownField { field });
         }
         Ok(())
     }
-
     pub(super) fn expect_u64(value: &json::Value, field: &str) -> Result<u64, json::Error> {
         match value {
             json::Value::Number(num) => num.as_u64().ok_or_else(|| json::Error::InvalidField {
@@ -221,7 +200,6 @@ mod json_support {
             }),
         }
     }
-
     pub(super) fn expect_nonzero_u64(
         value: &json::Value,
         field: &str,
@@ -232,7 +210,6 @@ mod json_support {
             message: String::from("expected non-zero integer"),
         })
     }
-
     pub(super) fn expect_bool(value: &json::Value, field: &str) -> Result<bool, json::Error> {
         match value {
             json::Value::Bool(b) => Ok(*b),
@@ -242,7 +219,6 @@ mod json_support {
             }),
         }
     }
-
     pub(super) fn expect_u8(value: &json::Value, field: &str) -> Result<u8, json::Error> {
         let raw = expect_u64(value, field)?;
         u8::try_from(raw).map_err(|_| json::Error::InvalidField {
@@ -250,7 +226,6 @@ mod json_support {
             message: String::from("value out of range for u8"),
         })
     }
-
     pub(super) fn parse_value_as<T>(value: &json::Value) -> Result<T, json::Error>
     where
         T: JsonDeserialize,
@@ -261,7 +236,6 @@ mod json_support {
         T::json_deserialize(&mut parser)
     }
 }
-
 #[cfg(feature = "json")]
 fn parse_custom_parameters_value(value: json::Value) -> Result<CustomParameters, json::Error> {
     let map = json_support::expect_object(value, "Parameters.custom")?;
@@ -274,9 +248,7 @@ mod model {
     use getset::{CopyGetters, Getters};
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-
     use super::*;
-
     /// Consensus runtime mode
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
@@ -287,7 +259,6 @@ mod model {
         /// Nominated Proof‑of‑Stake mode
         Npos,
     }
-
     // Bridge Norito codec to core slice decoding for strict-safe consumers.
     impl<'a> norito::core::DecodeFromSlice<'a> for SumeragiConsensusMode {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -298,7 +269,6 @@ mod model {
             Ok((value, used))
         }
     }
-
     /// Limits that govern consensus operation
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[display("{block_cadence_ms},{max_clock_drift_ms}_SL")]
@@ -337,7 +307,6 @@ mod model {
         #[norito(default = "defaults::sumeragi::key_allowed_hsm_providers")]
         pub key_allowed_hsm_providers: Vec<String>,
     }
-
     /// NPoS-specific consensus parameters persisted as a custom parameter payload.
     #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
@@ -372,11 +341,9 @@ mod model {
         /// Epoch length in blocks.
         pub epoch_length_blocks: NonZeroU64,
     }
-
     impl SumeragiNposParameters {
         /// Identifier used for the custom parameter storing `NPoS` tunables.
         pub const PARAMETER_ID_STR: &'static str = "sumeragi_npos_parameters";
-
         /// Construct the [`CustomParameterId`] associated with this payload.
         #[must_use]
         pub fn parameter_id() -> CustomParameterId {
@@ -384,13 +351,11 @@ mod model {
                 .parse()
                 .expect("valid sumeragi_npos custom parameter identifier")
         }
-
         /// Convert the payload into a [`CustomParameter`].
         #[must_use]
         pub fn into_custom_parameter(self) -> CustomParameter {
             CustomParameter::new(Self::parameter_id(), Json::new(self))
         }
-
         /// Attempt to decode this payload from a [`CustomParameter`].
         #[must_use]
         pub fn from_custom_parameter(custom: &CustomParameter) -> Option<Self> {
@@ -401,98 +366,82 @@ mod model {
             value.validate().ok()?;
             Some(value)
         }
-
         /// VRF commit window measured in blocks.
         #[must_use]
         pub fn vrf_commit_window_blocks(&self) -> u64 {
             self.vrf_commit_window_blocks
         }
-
         /// VRF reveal window measured in blocks.
         #[must_use]
         pub fn vrf_reveal_window_blocks(&self) -> u64 {
             self.vrf_reveal_window_blocks
         }
-
         /// Exact bounded `3f + 1` ceiling for the next epoch committee.
         #[must_use]
         pub fn max_validators(&self) -> u32 {
             self.max_validators
         }
-
         /// Minimum self-bonded stake required for validators.
         #[must_use]
         pub fn min_self_bond(&self) -> &Quantity {
             &self.min_self_bond
         }
-
         /// Minimum nomination bond required for delegators.
         #[must_use]
         pub fn min_nomination_bond(&self) -> &Quantity {
             &self.min_nomination_bond
         }
-
         /// Maximum percentage of stake concentrated under a single nominator.
         #[must_use]
         pub fn max_nominator_concentration_pct(&self) -> u8 {
             self.max_nominator_concentration_pct
         }
-
         /// Seat band percentage used when selecting validators.
         #[must_use]
         pub fn seat_band_pct(&self) -> u8 {
             self.seat_band_pct
         }
-
         /// Maximum correlation percentage allowed across validator entities.
         #[must_use]
         pub fn max_entity_correlation_pct(&self) -> u8 {
             self.max_entity_correlation_pct
         }
-
         /// Finality margin in blocks before activating a newly elected set.
         #[must_use]
         pub fn finality_margin_blocks(&self) -> u64 {
             self.finality_margin_blocks
         }
-
         /// Number of blocks for which slashing evidence remains valid.
         #[must_use]
         pub fn evidence_horizon_blocks(&self) -> u64 {
             self.evidence_horizon_blocks
         }
-
         /// Number of blocks to wait before activating newly elected validators.
         #[must_use]
         pub fn activation_lag_blocks(&self) -> u64 {
             self.activation_lag_blocks
         }
-
         /// Slashing delay (blocks) before evidence penalties apply.
         #[must_use]
         pub fn slashing_delay_blocks(&self) -> u64 {
             self.slashing_delay_blocks
         }
-
         /// Epoch length measured in blocks.
         #[must_use]
         pub fn epoch_length_blocks(&self) -> NonZeroU64 {
             self.epoch_length_blocks
         }
-
         /// Epoch seed used for randomness-dependent protocols.
         #[must_use]
         pub fn epoch_seed(&self) -> [u8; 32] {
             self.epoch_seed
         }
-
         /// Override the epoch seed and return the updated payload.
         #[must_use]
         pub fn with_epoch_seed(mut self, value: [u8; 32]) -> Self {
             self.epoch_seed = value;
             self
         }
-
         /// Validate all signed `NPoS` election and reconfiguration invariants.
         ///
         /// # Errors
@@ -537,7 +486,6 @@ mod model {
             Ok(())
         }
     }
-
     impl Default for SumeragiNposParameters {
         fn default() -> Self {
             use defaults::sumeragi::npos::*;
@@ -559,13 +507,11 @@ mod model {
             }
         }
     }
-
     impl From<SumeragiNposParameters> for CustomParameter {
         fn from(value: SumeragiNposParameters) -> Self {
             value.into_custom_parameter()
         }
     }
-
     /// Single Sumeragi parameter
     ///
     /// Check [`SumeragiParameters`] for more details
@@ -577,7 +523,6 @@ mod model {
         /// therefore deliberately has no mutable parameter variant.
         MaxClockDriftMs(u64),
     }
-
     /// Limits that a block must obey to be accepted.
     #[derive(
         Debug,
@@ -603,7 +548,6 @@ mod model {
         /// The same value caps scheduled time-trigger entrypoints materialised in one block.
         pub max_transactions: NonZeroU64,
     }
-
     /// Single block parameter
     ///
     /// Check [`BlockParameters`] for more details
@@ -613,7 +557,6 @@ mod model {
     pub enum BlockParameter {
         MaxTransactions(NonZeroU64),
     }
-
     /// Limits that a transaction must obey to be accepted.
     #[derive(
         Debug,
@@ -655,7 +598,6 @@ mod model {
         #[norito(default)]
         pub require_sequence: bool,
     }
-
     /// Single transaction parameter
     ///
     /// Check [`TransactionParameters`] for more details
@@ -673,7 +615,6 @@ mod model {
         RequireHeightTtl(bool),
         RequireSequence(bool),
     }
-
     /// Limits that a smart contract must obey at runtime to considered valid.
     #[derive(
         Debug,
@@ -703,7 +644,6 @@ mod model {
         /// Maximum aggregate encoded size of effect artifacts retained by one IVM execution
         pub max_output_bytes: NonZeroU64,
     }
-
     /// Single smart contract parameter
     ///
     /// Check [`SmartContractParameters`] for more details
@@ -717,7 +657,6 @@ mod model {
         MaxOutputItems(NonZeroU64),
         MaxOutputBytes(NonZeroU64),
     }
-
     /// Set of all current blockchain parameter values
     #[derive(
         Debug,
@@ -760,7 +699,6 @@ mod model {
         #[norito(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
         pub custom: CustomParameters,
     }
-
     /// Single blockchain parameter.
     ///
     /// Check [`Parameters`] for more details
@@ -775,7 +713,6 @@ mod model {
         Custom(CustomParameter),
     }
 }
-
 impl core::fmt::Display for Parameter {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -787,7 +724,6 @@ impl core::fmt::Display for Parameter {
         }
     }
 }
-
 #[cfg(feature = "json")]
 #[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -807,7 +743,6 @@ struct SumeragiNposParametersJson {
     slashing_delay_blocks: u64,
     epoch_length_blocks: NonZeroU64,
 }
-
 #[cfg(feature = "json")]
 impl From<SumeragiNposParameters> for SumeragiNposParametersJson {
     fn from(value: SumeragiNposParameters) -> Self {
@@ -829,7 +764,6 @@ impl From<SumeragiNposParameters> for SumeragiNposParametersJson {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl From<SumeragiNposParametersJson> for SumeragiNposParameters {
     fn from(value: SumeragiNposParametersJson) -> Self {
@@ -851,13 +785,11 @@ impl From<SumeragiNposParametersJson> for SumeragiNposParameters {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for SumeragiNposParameters {
     fn json_serialize(&self, out: &mut String) {
         SumeragiNposParametersJson::from(self.clone()).json_serialize(out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -934,7 +866,6 @@ impl JsonSerialize for SumeragiNposParameters {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for SumeragiNposParameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -948,7 +879,6 @@ impl JsonDeserialize for SumeragiNposParameters {
         Ok(value)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for Parameter {
     fn json_serialize(&self, out: &mut String) {
@@ -987,7 +917,6 @@ impl JsonSerialize for Parameter {
         }
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -1025,7 +954,6 @@ impl JsonSerialize for Parameter {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for Parameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1064,7 +992,6 @@ impl JsonDeserialize for Parameter {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for SumeragiConsensusMode {
     fn json_serialize(&self, out: &mut String) {
@@ -1074,7 +1001,6 @@ impl JsonSerialize for SumeragiConsensusMode {
         };
         json::write_json_string(label, out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -1086,7 +1012,6 @@ impl JsonSerialize for SumeragiConsensusMode {
         json::write_json_string_to(label, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for SumeragiConsensusMode {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1100,22 +1025,18 @@ impl JsonDeserialize for SumeragiConsensusMode {
         }
     }
 }
-
 // (Codecs are provided by derives and candidate decoders. Tests use wrappers where needed.)
-
 impl SumeragiParameters {
     /// Signed, immutable block cadence in milliseconds.
     #[must_use]
     pub fn block_cadence_ms(&self) -> NonZeroU64 {
         self.block_cadence_ms
     }
-
     /// Raw clock drift bound in milliseconds.
     #[must_use]
     pub fn max_clock_drift_ms(&self) -> u64 {
         self.max_clock_drift_ms
     }
-
     /// Maximal allowed random deviation from the nominal rate
     ///
     /// # Warning
@@ -1124,7 +1045,6 @@ impl SumeragiParameters {
     pub fn max_clock_drift(&self) -> Duration {
         Duration::from_millis(self.max_clock_drift_ms)
     }
-
     /// Signed interval between block-production opportunities.
     ///
     /// A block is created if this limit or [`BlockParameters::max_transactions`] limit is reached,
@@ -1134,7 +1054,6 @@ impl SumeragiParameters {
         Duration::from_millis(self.block_cadence_ms.get())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for SumeragiParameter {
     fn json_serialize(&self, out: &mut String) {
@@ -1148,7 +1067,6 @@ impl JsonSerialize for SumeragiParameter {
         }
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -1165,7 +1083,6 @@ impl JsonSerialize for SumeragiParameter {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for SumeragiParameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1190,7 +1107,6 @@ impl JsonDeserialize for SumeragiParameter {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for SumeragiParameters {
     fn json_serialize(&self, out: &mut String) {
@@ -1236,7 +1152,6 @@ impl JsonSerialize for SumeragiParameters {
         );
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -1287,13 +1202,11 @@ impl JsonSerialize for SumeragiParameters {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for SumeragiParameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
         let mut map = json_support::expect_object(value, "SumeragiParameters")?;
-
         let block_cadence_ms = map
             .remove("block_cadence_ms")
             .map(|value| json_support::expect_nonzero_u64(&value, "block_cadence_ms"))
@@ -1334,9 +1247,7 @@ impl JsonDeserialize for SumeragiParameters {
             .map(|value| json_support::parse_value_as::<Vec<String>>(&value))
             .transpose()?
             .unwrap_or_else(defaults::sumeragi::key_allowed_hsm_providers);
-
         json_support::ensure_no_extra(map)?;
-
         let params = Self {
             block_cadence_ms,
             max_clock_drift_ms,
@@ -1347,17 +1258,13 @@ impl JsonDeserialize for SumeragiParameters {
             key_allowed_algorithms,
             key_allowed_hsm_providers,
         };
-
         Ok(params)
     }
 }
-
 mod defaults {
     pub mod sumeragi {
         use core::num::NonZeroU64;
-
         use iroha_crypto::Algorithm;
-
         pub const fn block_cadence_ms() -> NonZeroU64 {
             nonzero_ext::nonzero!(100_u64)
         }
@@ -1382,11 +1289,9 @@ mod defaults {
         pub fn key_allowed_hsm_providers() -> Vec<String> {
             vec!["pkcs11".into(), "softkey".into(), "yubihsm".into()]
         }
-
         pub mod npos {
             use core::num::NonZeroU64;
             use iroha_primitives::numeric::Quantity;
-
             pub const fn vrf_commit_window_blocks() -> u64 {
                 100
             }
@@ -1428,23 +1333,17 @@ mod defaults {
             }
         }
     }
-
     pub mod block {
         use core::num::NonZeroU64;
-
         use nonzero_ext::nonzero;
-
         /// Default value for [`Parameters::MaxTransactionsInBlock`]
         pub const fn max_transactions() -> NonZeroU64 {
             nonzero!(2_u64.pow(9))
         }
     }
-
     pub mod transaction {
         use core::num::{NonZeroU16, NonZeroU64};
-
         use nonzero_ext::nonzero;
-
         pub const fn max_signatures() -> NonZeroU64 {
             nonzero!(16_u64)
         }
@@ -1473,12 +1372,9 @@ mod defaults {
             nonzero!(86_400_000_u64)
         }
     }
-
     pub mod smart_contract {
         use core::num::NonZeroU64;
-
         use nonzero_ext::nonzero;
-
         pub const fn fuel() -> NonZeroU64 {
             nonzero!(55_000_000_u64)
         }
@@ -1496,7 +1392,6 @@ mod defaults {
         }
     }
 }
-
 impl Default for SumeragiParameters {
     fn default() -> Self {
         use defaults::sumeragi::*;
@@ -1517,7 +1412,6 @@ impl Default for BlockParameters {
         Self::new(defaults::block::max_transactions())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for BlockParameters {
     fn json_serialize(&self, out: &mut String) {
@@ -1526,7 +1420,6 @@ impl JsonSerialize for BlockParameters {
         json_support::write_field(out, &mut first, "max_transactions", &self.max_transactions);
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -1540,7 +1433,6 @@ impl JsonSerialize for BlockParameters {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for BlockParameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1555,7 +1447,6 @@ impl JsonDeserialize for BlockParameters {
         Ok(Self::new(max_transactions))
     }
 }
-
 impl Default for TransactionParameters {
     fn default() -> Self {
         use defaults::transaction::*;
@@ -1569,7 +1460,6 @@ impl Default for TransactionParameters {
         )
     }
 }
-
 impl Default for SmartContractParameters {
     fn default() -> Self {
         use defaults::smart_contract::*;
@@ -1582,7 +1472,6 @@ impl Default for SmartContractParameters {
         }
     }
 }
-
 impl FromIterator<Parameter> for Parameters {
     fn from_iter<T: IntoIterator<Item = Parameter>>(iter: T) -> Self {
         iter.into_iter().fold(Parameters::default(), |mut acc, x| {
@@ -1591,7 +1480,6 @@ impl FromIterator<Parameter> for Parameters {
         })
     }
 }
-
 impl Parameters {
     /// Convert [`Self`] into iterator of individual parameters
     pub fn parameters(&self) -> impl Iterator<Item = Parameter> + '_ {
@@ -1608,7 +1496,6 @@ impl Parameters {
             )
             .chain(self.custom.values().cloned().map(Parameter::Custom))
     }
-
     /// Set `parameter` value to corresponding parameter in `self`
     pub fn set_parameter(&mut self, parameter: Parameter) {
         macro_rules! apply_parameter {
@@ -1625,12 +1512,9 @@ impl Parameters {
                 }
             };
         }
-
         apply_parameter!(
             Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
-
             Block(block.max_transactions) => BlockParameter::MaxTransactions,
-
             Transaction(transaction.max_signatures) => TransactionParameter::MaxSignatures,
             Transaction(transaction.max_instructions) => TransactionParameter::MaxInstructions,
             Transaction(transaction.ivm_bytecode_size) => TransactionParameter::IvmBytecodeSize,
@@ -1640,13 +1524,11 @@ impl Parameters {
             Transaction(transaction.max_time_to_live_ms) => TransactionParameter::MaxTimeToLiveMs,
             Transaction(transaction.require_height_ttl) => TransactionParameter::RequireHeightTtl,
             Transaction(transaction.require_sequence) => TransactionParameter::RequireSequence,
-
             SmartContract(smart_contract.fuel) => SmartContractParameter::Fuel,
             SmartContract(smart_contract.memory) => SmartContractParameter::Memory,
             SmartContract(smart_contract.execution_depth) => SmartContractParameter::ExecutionDepth,
             SmartContract(smart_contract.max_output_items) => SmartContractParameter::MaxOutputItems,
             SmartContract(smart_contract.max_output_bytes) => SmartContractParameter::MaxOutputBytes,
-
             Executor(executor.fuel) => SmartContractParameter::Fuel,
             Executor(executor.memory) => SmartContractParameter::Memory,
             Executor(executor.execution_depth) => SmartContractParameter::ExecutionDepth,
@@ -1655,85 +1537,68 @@ impl Parameters {
         );
     }
 }
-
 /// Consensus handshake metadata helpers used during genesis provisioning.
 pub mod consensus_metadata {
     use core::str::FromStr as _;
-
     use super::*;
     use crate::Name;
-
     static HANDSHAKE_META_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("consensus_handshake_meta")
                 .expect("consensus_handshake_meta is a valid Name"),
         )
     });
-
     /// Identifier of the custom parameter embedding consensus handshake metadata.
     pub fn handshake_meta_id() -> CustomParameterId {
         HANDSHAKE_META_ID.clone()
     }
 }
-
 /// Cryptography snapshot metadata helpers used during genesis provisioning.
 pub mod crypto_metadata {
     use core::str::FromStr as _;
-
     use super::*;
     use crate::Name;
-
     static MANIFEST_META_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("crypto_manifest_meta").expect("crypto_manifest_meta is a valid Name"),
         )
     });
-
     /// Identifier of the custom parameter anchoring the genesis crypto snapshot.
     pub fn manifest_meta_id() -> CustomParameterId {
         MANIFEST_META_ID.clone()
     }
 }
-
 /// Confidential registry metadata helpers used during genesis provisioning.
 pub mod confidential_metadata {
     use core::str::FromStr as _;
-
     use super::*;
     use crate::Name;
-
     static REGISTRY_ROOT_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("confidential_registry_root")
                 .expect("confidential_registry_root is a valid Name"),
         )
     });
-
     /// Identifier of the custom parameter anchoring the confidential registry fingerprint.
     pub fn registry_root_id() -> CustomParameterId {
         REGISTRY_ROOT_ID.clone()
     }
 }
-
 /// IVM metadata helpers stored in the custom parameter registry.
 pub mod ivm_metadata {
     use core::str::FromStr as _;
-
     use super::*;
     use crate::Name;
-
     static PUBLIC_INPUTS_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("ivm_public_inputs").expect("ivm_public_inputs is a valid Name"),
         )
     });
-
     /// Identifier of the custom parameter embedding the IVM public input registry.
     pub fn public_inputs_id() -> CustomParameterId {
         PUBLIC_INPUTS_ID.clone()
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for Parameters {
     fn json_serialize(&self, out: &mut String) {
@@ -1749,7 +1614,6 @@ impl JsonSerialize for Parameters {
         }
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -1770,7 +1634,6 @@ impl JsonSerialize for Parameters {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for Parameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1817,7 +1680,6 @@ impl JsonDeserialize for Parameters {
         })
     }
 }
-
 impl SumeragiParameters {
     /// Construct [`Self`]
     pub fn new(block_cadence: Duration, max_clock_drift: Duration) -> Self {
@@ -1840,25 +1702,21 @@ impl SumeragiParameters {
             key_allowed_hsm_providers: defaults::sumeragi::key_allowed_hsm_providers(),
         }
     }
-
     /// Convert [`Self`] into iterator of individual parameters
     pub fn parameters(&self) -> impl Iterator<Item = SumeragiParameter> {
         [SumeragiParameter::MaxClockDriftMs(self.max_clock_drift_ms)].into_iter()
     }
 }
-
 impl BlockParameters {
     /// Construct [`Self`]
     pub const fn new(max_transactions: NonZeroU64) -> Self {
         Self { max_transactions }
     }
-
     /// Convert [`Self`] into iterator of individual parameters
     pub fn parameters(&self) -> impl Iterator<Item = BlockParameter> {
         [BlockParameter::MaxTransactions(self.max_transactions)].into_iter()
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for BlockParameter {
     fn json_serialize(&self, out: &mut String) {
@@ -1872,7 +1730,6 @@ impl JsonSerialize for BlockParameter {
         }
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -1889,7 +1746,6 @@ impl JsonSerialize for BlockParameter {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for BlockParameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1914,7 +1770,6 @@ impl JsonDeserialize for BlockParameter {
         }
     }
 }
-
 impl TransactionParameters {
     /// Construct [`Self`] with an explicit maximum signature count.
     pub const fn with_max_signatures(
@@ -1937,14 +1792,12 @@ impl TransactionParameters {
             require_sequence: false,
         }
     }
-
     /// Configure the deterministic maximum signature-bound wall-clock lifetime.
     #[must_use]
     pub const fn with_max_time_to_live_ms(mut self, max_time_to_live_ms: NonZeroU64) -> Self {
         self.max_time_to_live_ms = max_time_to_live_ms;
         self
     }
-
     /// Configure ingress metadata enforcement (height-based TTL and per-sender sequence checks).
     #[must_use]
     pub const fn with_ingress_enforcement(
@@ -1956,7 +1809,6 @@ impl TransactionParameters {
         self.require_sequence = require_sequence;
         self
     }
-
     /// Construct [`Self`] using the default signature limit.
     pub const fn new(
         max_instructions: NonZeroU64,
@@ -1974,7 +1826,6 @@ impl TransactionParameters {
             max_metadata_depth,
         )
     }
-
     /// Convert [`Self`] into iterator of individual parameters
     pub fn parameters(&self) -> impl Iterator<Item = TransactionParameter> {
         [
@@ -1991,7 +1842,6 @@ impl TransactionParameters {
         .into_iter()
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for TransactionParameters {
     fn json_serialize(&self, out: &mut String) {
@@ -2033,7 +1883,6 @@ impl JsonSerialize for TransactionParameters {
         json_support::write_field(out, &mut first, "require_sequence", &self.require_sequence);
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -2080,7 +1929,6 @@ impl JsonSerialize for TransactionParameters {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for TransactionParameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -2155,7 +2003,6 @@ impl JsonDeserialize for TransactionParameters {
         .with_ingress_enforcement(require_height_ttl, require_sequence))
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for TransactionParameter {
     fn json_serialize(&self, out: &mut String) {
@@ -2209,7 +2056,6 @@ impl JsonSerialize for TransactionParameter {
         }
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -2259,7 +2105,6 @@ impl JsonSerialize for TransactionParameter {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for TransactionParameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -2322,7 +2167,6 @@ impl JsonDeserialize for TransactionParameter {
         }
     }
 }
-
 impl SmartContractParameters {
     /// Convert [`Self`] into iterator of individual parameters
     pub fn parameters(&self) -> impl Iterator<Item = SmartContractParameter> {
@@ -2336,7 +2180,6 @@ impl SmartContractParameters {
         .into_iter()
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for SmartContractParameters {
     fn json_serialize(&self, out: &mut String) {
@@ -2349,7 +2192,6 @@ impl JsonSerialize for SmartContractParameters {
         json_support::write_field(out, &mut first, "max_output_bytes", &self.max_output_bytes);
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -2367,7 +2209,6 @@ impl JsonSerialize for SmartContractParameters {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for SmartContractParameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -2408,7 +2249,6 @@ impl JsonDeserialize for SmartContractParameters {
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for SmartContractParameter {
     fn json_serialize(&self, out: &mut String) {
@@ -2442,7 +2282,6 @@ impl JsonSerialize for SmartContractParameter {
         }
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -2476,7 +2315,6 @@ impl JsonSerialize for SmartContractParameter {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for SmartContractParameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -2515,23 +2353,18 @@ impl JsonDeserialize for SmartContractParameter {
         }
     }
 }
-
 // Norito decoding now relies on derived implementations for parameter types.
-
 #[cfg(test)]
 mod tests {
     use core::str::FromStr as _;
-
     use iroha_primitives::json::Json;
     use norito::codec::{DecodeAll as _, Encode as _};
     use norito::json::{Number, Value};
-
     use super::*;
     use crate::{
         name::Name,
         parameter::custom::{CustomParameter, CustomParameterId},
     };
-
     #[test]
     fn set_custom_parameter() {
         let mut params = Parameters::default();
@@ -2541,7 +2374,6 @@ mod tests {
         params.set_parameter(Parameter::Custom(custom.clone()));
         assert_eq!(params.custom().get(&id), Some(&custom));
     }
-
     #[test]
     fn set_block_parameter() {
         let mut params = Parameters::default();
@@ -2551,7 +2383,6 @@ mod tests {
         )));
         assert_eq!(params.block().max_transactions(), max_transactions);
     }
-
     #[test]
     fn smart_contract_output_limits_are_governed_and_roundtrip() {
         let mut params = Parameters::default();
@@ -2569,7 +2400,6 @@ mod tests {
         params.set_parameter(Parameter::Executor(SmartContractParameter::MaxOutputBytes(
             max_bytes,
         )));
-
         assert_eq!(params.smart_contract().max_output_items(), max_items);
         assert_eq!(params.smart_contract().max_output_bytes(), max_bytes);
         assert_eq!(params.executor().max_output_items(), max_items);
@@ -2578,7 +2408,6 @@ mod tests {
         let decoded =
             Parameters::decode_all(&mut bytes.as_slice()).expect("decode governed parameters");
         assert_eq!(decoded, params);
-
         #[cfg(feature = "json")]
         {
             let json = norito::json::to_json(&params.smart_contract())
@@ -2589,7 +2418,6 @@ mod tests {
             assert_eq!(decoded.max_output_bytes(), max_bytes);
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn smart_contract_output_limits_reject_zero() {
@@ -2600,7 +2428,6 @@ mod tests {
         norito::json::from_str::<SmartContractParameters>(json)
             .expect_err("zero output byte limit must fail");
     }
-
     #[test]
     fn sumeragi_parameter_norito_roundtrip() {
         let value = SumeragiParameter::MaxClockDriftMs(1_000);
@@ -2609,7 +2436,6 @@ mod tests {
             .expect("decode Sumeragi parameter");
         assert_eq!(value, decoded);
     }
-
     #[test]
     fn sumeragi_parameters_norito_roundtrip() {
         let params = SumeragiParameters::default();
@@ -2618,9 +2444,7 @@ mod tests {
         let mut cursor = bytes.as_slice();
         let dec = SumeragiParameters::decode_all(&mut cursor).expect("decode sumeragi parameters");
         assert_eq!(params, dec);
-
         // Skip bare codec path; headerful Norito is the canonical test path
-
         // JSON path: ensure defaults parse and roundtrip
         #[cfg(feature = "json")]
         {
@@ -2629,14 +2453,12 @@ mod tests {
             assert_eq!(params, parsed);
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn sumeragi_parameters_json_rejects_zero_cadence() {
         let json = r#"{"block_cadence_ms":0}"#;
         norito::json::from_str::<SumeragiParameters>(json).expect_err("zero cadence must fail");
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn sumeragi_parameters_json_rejects_every_retired_field() {
@@ -2658,19 +2480,16 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_string_wrapped_payload() {
         let expected = SumeragiNposParameters::default();
         let wrapped = Json::new(norito::json::to_json(&expected).expect("serialize npos payload"));
         let custom = CustomParameter::new(SumeragiNposParameters::parameter_id(), wrapped);
-
         assert!(
             SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
             "string-wrapped compatibility payload must be rejected"
         );
     }
-
     #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_numeric_string_payload() {
         let expected = SumeragiNposParameters::default();
@@ -2712,13 +2531,11 @@ mod tests {
             SumeragiNposParameters::parameter_id(),
             Json::from_norito_value_ref(&payload).expect("serialize compatibility payload"),
         );
-
         assert!(
             SumeragiNposParameters::from_custom_parameter(&custom).is_none(),
             "numeric-string compatibility payload must be rejected"
         );
     }
-
     #[test]
     fn sumeragi_npos_from_custom_parameter_accepts_epoch_seed_hex_string_payload() {
         let expected = SumeragiNposParameters::default();
@@ -2745,7 +2562,6 @@ mod tests {
             .expect("decode hex epoch seed payload");
         assert_eq!(decoded, expected);
     }
-
     #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_epoch_seed_with_nested_quotes() {
         let expected = SumeragiNposParameters::default();
@@ -2764,7 +2580,6 @@ mod tests {
             "epoch_seed".to_owned(),
             norito::json::Value::String(format!("\"{hex_seed}\"")),
         );
-
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             Json::from_norito_value_ref(&payload).expect("serialize compatibility payload"),
@@ -2774,7 +2589,6 @@ mod tests {
             "nested-quoted compatibility payload must be rejected"
         );
     }
-
     #[test]
     fn sumeragi_npos_from_custom_parameter_accepts_valid_payload() {
         let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":31,"min_self_bond":"1000","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
@@ -2789,7 +2603,6 @@ mod tests {
             "real chain payload should decode"
         );
     }
-
     #[test]
     fn sumeragi_npos_json_rejects_missing_and_zero_epoch_seed() {
         let valid = norito::json::to_value(&SumeragiNposParameters::default())
@@ -2814,7 +2627,6 @@ mod tests {
             norito::json::value::from_value::<SumeragiNposParameters>(missing).is_err(),
             "missing signed epoch seed must fail"
         );
-
         let mut zero = valid;
         zero.as_object_mut().expect("NPoS payload object").insert(
             "epoch_seed".to_owned(),
@@ -2825,7 +2637,6 @@ mod tests {
             "all-zero signed epoch seed must fail"
         );
     }
-
     #[cfg(feature = "json")]
     fn handshake_metadata_fixture() -> ConsensusHandshakeMetadata {
         ConsensusHandshakeMetadata {
@@ -2837,7 +2648,6 @@ mod tests {
                 crate::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn handshake_metadata_rejects_arbitrary_bls_domain() {
@@ -2850,22 +2660,18 @@ mod tests {
         norito::json::value::from_value::<ConsensusHandshakeMetadata>(value)
             .expect_err("BLS domain is mode-derived and must not be accepted from genesis");
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn handshake_metadata_validation_is_strict() {
         let baseline = handshake_metadata_fixture();
         baseline.validate().expect("canonical metadata");
-
         let mut bad_version = baseline;
         bad_version.wire_protocol_version = 99;
         assert!(bad_version.validate().is_err());
-
         let mut bad_context = baseline;
         bad_context.sumeragi_v2.da_layout.parity_shards = 0;
         assert!(bad_context.validate().is_err());
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn handshake_metadata_rejects_legacy_and_noncanonical_fingerprint_shapes() {
@@ -2883,7 +2689,6 @@ mod tests {
             norito::json::value::from_value::<ConsensusHandshakeMetadata>(value)
                 .expect_err("noncanonical fingerprint must fail");
         }
-
         let mut legacy = norito::json::to_value(&baseline).expect("serialize metadata");
         let fields = legacy.as_object_mut().expect("metadata object");
         fields.insert(
@@ -2895,7 +2700,6 @@ mod tests {
         norito::json::value::from_value::<ConsensusHandshakeMetadata>(legacy)
             .expect_err("legacy plural protocol list must fail");
     }
-
     #[test]
     fn default_ivm_heap_limits_fill_the_abi_v1_window() {
         let parameters = Parameters::default();
@@ -2905,7 +2709,6 @@ mod tests {
         );
         assert_eq!(parameters.executor().memory().get(), IVM_HEAP_MAX_BYTES);
     }
-
     #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_trailing_comma_payload() {
         let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
@@ -2914,7 +2717,6 @@ mod tests {
             "invalid JSON must be rejected before it can enter a custom parameter"
         );
     }
-
     #[test]
     fn sumeragi_npos_reveal_window_must_close_before_boundary() {
         let mut parameters = SumeragiNposParameters::default();
@@ -2925,7 +2727,6 @@ mod tests {
             parameters.validate(),
             Err("VRF reveal window must close before the epoch boundary")
         );
-
         parameters.epoch_length_blocks = NonZeroU64::new(5).expect("non-zero epoch");
         parameters
             .validate()

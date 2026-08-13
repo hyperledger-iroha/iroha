@@ -9,10 +9,8 @@
 //! proof, receipt, authority, or release capability.
 
 #![allow(dead_code, reason = "production entry seals are uninhabited")]
-
 use core::{convert::Infallible, fmt, marker::PhantomData};
 use std::sync::OnceLock;
-
 use crate::{
     generalized_bulletproof::{
         ArithmeticCircuitStatement, GeneralizedBulletproofErrorV1, LinComb, ProofSuite,
@@ -24,9 +22,7 @@ use crate::{
         sponge::{Keccak256, keccak256},
     },
 };
-
 use super::manifest::RELEASE_MODULI_V1;
-
 const CROSS_FIELD_VERSION_V2: u8 = 2;
 const LIMBS_V2: usize = 38;
 const REPETITIONS_V2: usize = 5;
@@ -44,7 +40,6 @@ const MULTIPLICATION_GATES_V2: usize = 2 * QUOTIENT_BITS_V2;
 const LINEAR_CONSTRAINTS_V2: usize = 2 * MULTIPLICATION_GATES_V2 + 1;
 const GENERATOR_PREFIX_V2: usize = BLOCK_COEFFICIENTS_V2;
 const RELATION_COUNT_V2: usize = LIMBS_V2 * REPETITIONS_V2;
-
 const COMPARATOR_GROUPS_V2: usize = RECORDS_V2 * BLOCKS_PER_RECORD_V2;
 const COMPARATOR_POINTS_PER_GROUP_V2: usize = 17 + 1 + 18 + 17;
 const COMPARATOR_POINTS_V2: usize = COMPARATOR_GROUPS_V2 * COMPARATOR_POINTS_PER_GROUP_V2;
@@ -55,7 +50,6 @@ const Q_MASK_BLOCKS_V2: usize = RELATION_COUNT_V2 * BLOCKS_PER_RECORD_V2;
 const Q_MASK_POINTS_PER_BLOCK_V2: usize = 4 * MASK_DIGITS_V2;
 const Q_MASK_POINTS_V2: usize = Q_MASK_BLOCKS_V2 * Q_MASK_POINTS_PER_BLOCK_V2;
 const ADDED_RAW_POINTS_V2: usize = COMPARATOR_POINTS_V2 + SMALL_SOURCE_POINTS_V2 + Q_MASK_POINTS_V2;
-
 const POINT_BYTES_V2: usize = 33;
 const SCALAR_BYTES_V2: usize = 32;
 const BP_PROOF_POINTS_V2: usize = 41;
@@ -83,7 +77,6 @@ const EXPANDED_LOOKUP_VALUES_V2: usize = 520_486_912;
 const EXISTING_LOOKUP_ROUNDS_V2: usize = 28;
 const EXPANDED_LOOKUP_ROUNDS_V2: usize = 29;
 const CONDITIONAL_MINIMUM_LOOKUP_DELTA_BYTES_V2: usize = 96;
-
 const POSITIVE_TERMS_PER_COORDINATE_V2: usize = 7_256;
 const NEGATIVE_TERMS_PER_COORDINATE_V2: usize = 1_376;
 const POSITIVE_TERMS_TOTAL_V2: usize = POSITIVE_TERMS_PER_COORDINATE_V2 * BLOCK_COEFFICIENTS_V2;
@@ -97,7 +90,6 @@ const V_MINUS_BITS_V2: u16 = 86;
 const U_PLUS_BITS_V2: u16 = 162;
 const U_MINUS_BITS_V2: u16 = 160;
 const INTEGER_EXPRESSION_BITS_V2: u16 = 165;
-
 const INVENTORY_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.phase23.cross-field.inventory\0";
 const EXISTING_D_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.phase23.cross-field.existing-d\0";
 const BINDING_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.phase23.cross-field.binding\0";
@@ -108,7 +100,6 @@ const DERIVATION_FORMULA_V2: &[u8] = b"C+=[gamma^j*B^h*r^(bL)]q*CD+[gamma^j*K(r)
 const INTEGER_RELATION_V2: &[u8] = b"U+-U--y=q(z+-z-);0<=z+,z-<2^103;absolute-expression<2^165<pT";
 const NO_WRAP_FORMULA_V2: &[u8] = b"V+<7256*(B-1)*(qmax-1)<2^88;V-<1376*(B-1)*(qmax-1)<2^86;U+<118882304*(B-1)*(qmax-1)^2<2^162;U-<22544384*(B-1)*(qmax-1)^2<2^160";
 const SOUNDNESS_FORMULA_V2: &[u8] = b"degree=(2N-2)+42+1=262185;38*(262185/qmin)^5<2^-204.75";
-
 const SOURCE_SET_BOUND_V2: bool = false;
 const RANGE_SET_BOUND_V2: bool = false;
 const CANONICAL_Q_MASK_SET_BOUND_V2: bool = false;
@@ -122,7 +113,6 @@ const AUTHORITY_MINTED_V2: bool = false;
 const OPERATIONAL_RECEIPT_ACCEPTED_V2: bool = false;
 const MEASURED_RSS_QUALIFIED_V2: bool = false;
 const RELEASE_READY_V2: bool = false;
-
 const _: () = {
     assert!(RELEASE_MODULI_V1.len() == LIMBS_V2);
     assert!(RING_DEGREE_V2 == BLOCKS_PER_RECORD_V2 * BLOCK_COEFFICIENTS_V2);
@@ -170,7 +160,6 @@ const _: () = {
     assert!(!MEASURED_RSS_QUALIFIED_V2);
     assert!(!RELEASE_READY_V2);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CrossFieldErrorV2 {
     Shape,
@@ -181,19 +170,16 @@ enum CrossFieldErrorV2 {
     BindingUnavailable,
     Backend(GeneralizedBulletproofErrorV1),
 }
-
 impl fmt::Display for CrossFieldErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
-
 impl From<GeneralizedBulletproofErrorV1> for CrossFieldErrorV2 {
     fn from(error: GeneralizedBulletproofErrorV1) -> Self {
         Self::Backend(error)
     }
 }
-
 enum SourceCommitmentSealV2 {
     Production {
         authenticated_source_owner: Infallible,
@@ -202,7 +188,6 @@ enum SourceCommitmentSealV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 enum RadixRangeSealV2 {
     Production {
         canonical_radix: Infallible,
@@ -211,7 +196,6 @@ enum RadixRangeSealV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 enum CanonicalQMaskSealV2 {
     Production {
         one_owner_uniform_q_mask: Infallible,
@@ -220,7 +204,6 @@ enum CanonicalQMaskSealV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 enum AuthenticatedQpcsSealV2 {
     Production {
         complete_entry_verified: Infallible,
@@ -229,13 +212,11 @@ enum AuthenticatedQpcsSealV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 #[derive(Clone, Copy)]
 struct RadixGroupCommitmentsV2 {
     d_low: [Point; RADIX_LOW_DIGITS_V2],
     d_top: Point,
 }
-
 #[derive(Clone, Copy)]
 struct ComparatorGroupCommitmentsV2 {
     difference_digits: [Point; RADIX_LOW_DIGITS_V2],
@@ -243,7 +224,6 @@ struct ComparatorGroupCommitmentsV2 {
     borrows: [Point; RADIX_DIGITS_V2],
     difference_inverses: [Point; RADIX_LOW_DIGITS_V2],
 }
-
 #[derive(Clone, Copy)]
 struct SmallSourceBlockCommitmentsV2 {
     signed: Point,
@@ -251,7 +231,6 @@ struct SmallSourceBlockCommitmentsV2 {
     positive_lookup_inverse: Point,
     negative_lookup_inverse: Point,
 }
-
 impl SmallSourceBlockCommitmentsV2 {
     fn positive_v2(&self) -> Result<Point, CrossFieldErrorV2> {
         let point = self.signed + self.negative_magnitude;
@@ -260,7 +239,6 @@ impl SmallSourceBlockCommitmentsV2 {
             .ok_or(CrossFieldErrorV2::Point)
     }
 }
-
 #[derive(Clone, Copy)]
 struct QMaskBlockCommitmentsV2 {
     digits: [Point; MASK_DIGITS_V2],
@@ -268,7 +246,6 @@ struct QMaskBlockCommitmentsV2 {
     complement_digits: [Point; MASK_DIGITS_V2],
     complement_inverses: [Point; MASK_DIGITS_V2],
 }
-
 #[derive(Clone, Copy)]
 struct CrossFieldAxesV2 {
     fixed_axes_digest: [u8; 32],
@@ -280,7 +257,6 @@ struct CrossFieldAxesV2 {
     radix_range_binding_digest: [u8; 32],
     qpcs_parameter_digest: [u8; 32],
 }
-
 impl CrossFieldAxesV2 {
     fn validate_v2(&self) -> Result<(), CrossFieldErrorV2> {
         let values = [
@@ -299,7 +275,6 @@ impl CrossFieldAxesV2 {
         Ok(())
     }
 }
-
 /// Typed, sealed view of every commitment used by deterministic C+/C- derivation.
 ///
 /// There is deliberately no constructor.  It contains no raw `Vec<Point>` and
@@ -315,7 +290,6 @@ struct BoundCommitmentViewV2<'a> {
     small_source: &'a [SmallSourceBlockCommitmentsV2],
     q_masks: &'a [QMaskBlockCommitmentsV2],
 }
-
 #[repr(u8)]
 #[derive(Clone, Copy)]
 enum AddedPointRoleV2 {
@@ -332,7 +306,6 @@ enum AddedPointRoleV2 {
     QMaskComplementDigit = 11,
     QMaskComplementInverse = 12,
 }
-
 fn absorb_u32_v2(hash: &mut Keccak256, value: usize) -> Result<(), CrossFieldErrorV2> {
     hash.update(
         &u32::try_from(value)
@@ -341,7 +314,6 @@ fn absorb_u32_v2(hash: &mut Keccak256, value: usize) -> Result<(), CrossFieldErr
     );
     Ok(())
 }
-
 fn absorb_point_v2(
     hash: &mut Keccak256,
     ordinal: &mut usize,
@@ -364,7 +336,6 @@ fn absorb_point_v2(
         .ok_or(CrossFieldErrorV2::Arithmetic)?;
     Ok(())
 }
-
 impl BoundCommitmentViewV2<'_> {
     fn validate_shape_v2(&self) -> Result<(), CrossFieldErrorV2> {
         self.axes.validate_v2()?;
@@ -377,7 +348,6 @@ impl BoundCommitmentViewV2<'_> {
         }
         Ok(())
     }
-
     fn added_inventory_root_v2(&self) -> Result<[u8; 32], CrossFieldErrorV2> {
         self.validate_shape_v2()?;
         let mut hash = Keccak256::new();
@@ -470,7 +440,6 @@ impl BoundCommitmentViewV2<'_> {
         }
         Ok(hash.finalize())
     }
-
     fn existing_d_root_v2(&self) -> Result<[u8; 32], CrossFieldErrorV2> {
         self.validate_shape_v2()?;
         let mut hash = Keccak256::new();
@@ -494,7 +463,6 @@ impl BoundCommitmentViewV2<'_> {
         }
         Ok(hash.finalize())
     }
-
     fn source_binding_digest_v2(&self) -> Result<[u8; 32], CrossFieldErrorV2> {
         let mut hash = Keccak256::new();
         hash.update(BINDING_DOMAIN_V2);
@@ -518,7 +486,6 @@ impl BoundCommitmentViewV2<'_> {
         Ok(hash.finalize())
     }
 }
-
 #[derive(Clone, Copy)]
 struct AuthenticatedQpcsEvaluationV2 {
     seal: PhantomData<AuthenticatedQpcsSealV2>,
@@ -535,7 +502,6 @@ struct AuthenticatedQpcsEvaluationV2 {
     masked_p_evaluation: u64,
     masked_h_evaluation: u64,
 }
-
 impl AuthenticatedQpcsEvaluationV2 {
     fn validate_v2(&self) -> Result<(), CrossFieldErrorV2> {
         let limb = usize::from(self.limb);
@@ -576,7 +542,6 @@ impl AuthenticatedQpcsEvaluationV2 {
         }
         Ok(())
     }
-
     fn public_y_v2(&self) -> u64 {
         mod_add_v2(
             self.masked_p_evaluation,
@@ -585,21 +550,17 @@ impl AuthenticatedQpcsEvaluationV2 {
         )
     }
 }
-
 struct DerivedCommitmentsV2 {
     positive: Point,
     negative: Point,
     source_binding_digest: [u8; 32],
 }
-
 fn mod_add_v2(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) + u128::from(right)) % u128::from(modulus)) as u64
 }
-
 fn mod_mul_v2(left: u64, right: u64, modulus: u64) -> u64 {
     ((u128::from(left) * u128::from(right)) % u128::from(modulus)) as u64
 }
-
 fn mod_pow_v2(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     let mut result = 1;
     while exponent != 0 {
@@ -611,7 +572,6 @@ fn mod_pow_v2(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     }
     result
 }
-
 fn t256_mod_q_v2(modulus: u64) -> u64 {
     VEGA_T256_SCALAR_MODULUS_BE_V1
         .iter()
@@ -619,14 +579,12 @@ fn t256_mod_q_v2(modulus: u64) -> u64 {
             ((u128::from(value) << 8) + u128::from(*byte)).rem_euclid(u128::from(modulus)) as u64
         })
 }
-
 fn public_scalar_v2(value: u64, modulus: u64) -> Result<Scalar, CrossFieldErrorV2> {
     if value >= modulus {
         return Err(CrossFieldErrorV2::Arithmetic);
     }
     Ok(Scalar::from_u64(value))
 }
-
 fn one_vector_commitment_v2() -> Point {
     static COMMITMENT: OnceLock<Point> = OnceLock::new();
     *COMMITMENT.get_or_init(|| {
@@ -639,19 +597,15 @@ fn one_vector_commitment_v2() -> Point {
         multiexp::<ZkAmsT256BulletproofSuiteV1>(&terms)
     })
 }
-
 fn group_index_v2(record: usize, block: usize) -> usize {
     record * BLOCKS_PER_RECORD_V2 + block
 }
-
 fn small_source_index_v2(record: usize, role: usize, block: usize) -> usize {
     (record * SMALL_SOURCE_ROLES_V2 + role) * BLOCKS_PER_RECORD_V2 + block
 }
-
 fn mask_index_v2(limb: usize, repetition: usize, block: usize) -> usize {
     (limb * REPETITIONS_V2 + repetition) * BLOCKS_PER_RECORD_V2 + block
 }
-
 fn push_public_term_v2(
     terms: &mut Vec<(Scalar, Point)>,
     weight: u64,
@@ -664,7 +618,6 @@ fn push_public_term_v2(
     terms.push((public_scalar_v2(weight, modulus)?, point));
     Ok(())
 }
-
 impl BoundCommitmentViewV2<'_> {
     fn derive_v2(
         &self,
@@ -756,7 +709,6 @@ impl BoundCommitmentViewV2<'_> {
         })
     }
 }
-
 fn boolean_constraints_v2(gate: usize) -> [LinComb<Scalar>; 2] {
     [
         LinComb::empty()
@@ -767,7 +719,6 @@ fn boolean_constraints_v2(gate: usize) -> [LinComb<Scalar>; 2] {
             .term(-Scalar::one(), Variable::aL(gate)),
     ]
 }
-
 fn cross_field_constraints_v2(
     evaluation: &AuthenticatedQpcsEvaluationV2,
 ) -> Result<Vec<LinComb<Scalar>>, CrossFieldErrorV2> {
@@ -813,7 +764,6 @@ fn cross_field_constraints_v2(
     }
     Ok(constraints)
 }
-
 fn build_cross_field_statement_v2(
     derived: &DerivedCommitmentsV2,
     evaluation: &AuthenticatedQpcsEvaluationV2,
@@ -831,11 +781,9 @@ fn build_cross_field_statement_v2(
         Vec::new(),
     )?)
 }
-
 struct ExactProofViewV2<'a> {
     bytes: &'a [u8],
 }
-
 impl<'a> ExactProofViewV2<'a> {
     fn parse_v2(bytes: &'a [u8]) -> Result<Self, CrossFieldErrorV2> {
         if bytes.len() != BP_PROOF_BYTES_V2 {
@@ -860,7 +808,6 @@ impl<'a> ExactProofViewV2<'a> {
         Ok(Self { bytes })
     }
 }
-
 fn take_at_v2<'a>(
     bytes: &'a [u8],
     cursor: &mut usize,
@@ -873,19 +820,16 @@ fn take_at_v2<'a>(
     *cursor = end;
     Ok(value)
 }
-
 fn parse_point_at_v2(bytes: &[u8], cursor: &mut usize) -> Result<Point, CrossFieldErrorV2> {
     Point::from_non_identity_wire_bytes_exact(take_at_v2(bytes, cursor, POINT_BYTES_V2)?)
         .map_err(|_| CrossFieldErrorV2::Wire)
 }
-
 fn parse_scalar_at_v2(bytes: &[u8], cursor: &mut usize) -> Result<Scalar, CrossFieldErrorV2> {
     let encoded: [u8; SCALAR_BYTES_V2] = take_at_v2(bytes, cursor, SCALAR_BYTES_V2)?
         .try_into()
         .map_err(|_| CrossFieldErrorV2::Wire)?;
     Scalar::from_le_bytes_exact(encoded).map_err(|_| CrossFieldErrorV2::Wire)
 }
-
 fn append_frame_v2(state: &mut Vec<u8>, value: &[u8]) -> Result<(), CrossFieldErrorV2> {
     state.extend_from_slice(
         &u32::try_from(value.len())
@@ -895,7 +839,6 @@ fn append_frame_v2(state: &mut Vec<u8>, value: &[u8]) -> Result<(), CrossFieldEr
     state.extend_from_slice(value);
     Ok(())
 }
-
 fn initial_transcript_state_v2(
     derived: &DerivedCommitmentsV2,
     evaluation: &AuthenticatedQpcsEvaluationV2,
@@ -934,7 +877,6 @@ fn initial_transcript_state_v2(
     }
     Ok(state)
 }
-
 fn derive_challenge_v2(
     state: &mut Vec<u8>,
     ordinal: &mut u32,
@@ -966,14 +908,12 @@ fn derive_challenge_v2(
     }
     Err(GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)
 }
-
 struct CrossFieldProverTranscriptV2 {
     state: Vec<u8>,
     proof: [u8; BP_PROOF_BYTES_V2],
     cursor: usize,
     challenge_ordinal: u32,
 }
-
 impl CrossFieldProverTranscriptV2 {
     fn new_v2(
         derived: &DerivedCommitmentsV2,
@@ -986,7 +926,6 @@ impl CrossFieldProverTranscriptV2 {
             challenge_ordinal: 0,
         })
     }
-
     fn push_bytes_v2(&mut self, value: &[u8]) -> Result<(), GeneralizedBulletproofErrorV1> {
         let end = self
             .cursor
@@ -1002,7 +941,6 @@ impl CrossFieldProverTranscriptV2 {
         self.cursor = end;
         Ok(())
     }
-
     fn finish_v2(self) -> Result<([u8; BP_PROOF_BYTES_V2], [u8; 32]), CrossFieldErrorV2> {
         if self.cursor != BP_PROOF_BYTES_V2 {
             return Err(CrossFieldErrorV2::Wire);
@@ -1010,14 +948,12 @@ impl CrossFieldProverTranscriptV2 {
         Ok((self.proof, keccak256(&self.state)))
     }
 }
-
 impl ProverTranscript<ZkAmsT256BulletproofSuiteV1> for CrossFieldProverTranscriptV2 {
     fn push_scalar(&mut self, scalar: Scalar) -> Result<(), GeneralizedBulletproofErrorV1> {
         self.state.push(0);
         self.state.extend_from_slice(&scalar.to_le_bytes());
         self.push_bytes_v2(&scalar.to_le_bytes())
     }
-
     fn push_point(&mut self, point: Point) -> Result<(), GeneralizedBulletproofErrorV1> {
         let encoded = point
             .to_non_identity_wire_bytes()
@@ -1026,19 +962,16 @@ impl ProverTranscript<ZkAmsT256BulletproofSuiteV1> for CrossFieldProverTranscrip
         self.state.extend_from_slice(&encoded);
         self.push_bytes_v2(&encoded)
     }
-
     fn challenge(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
         derive_challenge_v2(&mut self.state, &mut self.challenge_ordinal)
     }
 }
-
 struct CrossFieldVerifierTranscriptV2<'a> {
     state: Vec<u8>,
     proof: ExactProofViewV2<'a>,
     cursor: usize,
     challenge_ordinal: u32,
 }
-
 impl<'a> CrossFieldVerifierTranscriptV2<'a> {
     fn new_v2(
         derived: &DerivedCommitmentsV2,
@@ -1052,7 +985,6 @@ impl<'a> CrossFieldVerifierTranscriptV2<'a> {
             challenge_ordinal: 0,
         })
     }
-
     fn take_v2(&mut self, count: usize) -> Result<&'a [u8], GeneralizedBulletproofErrorV1> {
         let end = self
             .cursor
@@ -1067,7 +999,6 @@ impl<'a> CrossFieldVerifierTranscriptV2<'a> {
         self.cursor = end;
         Ok(value)
     }
-
     fn finish_v2(self) -> Result<[u8; 32], CrossFieldErrorV2> {
         if self.cursor != BP_PROOF_BYTES_V2 {
             return Err(CrossFieldErrorV2::Wire);
@@ -1075,7 +1006,6 @@ impl<'a> CrossFieldVerifierTranscriptV2<'a> {
         Ok(keccak256(&self.state))
     }
 }
-
 impl VerifierTranscript<ZkAmsT256BulletproofSuiteV1> for CrossFieldVerifierTranscriptV2<'_> {
     fn read_scalar(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
         let encoded: [u8; SCALAR_BYTES_V2] = self
@@ -1088,7 +1018,6 @@ impl VerifierTranscript<ZkAmsT256BulletproofSuiteV1> for CrossFieldVerifierTrans
         self.state.extend_from_slice(&encoded);
         Ok(scalar)
     }
-
     fn read_point(&mut self) -> Result<Point, GeneralizedBulletproofErrorV1> {
         let encoded: [u8; POINT_BYTES_V2] = self
             .take_v2(POINT_BYTES_V2)?
@@ -1100,12 +1029,10 @@ impl VerifierTranscript<ZkAmsT256BulletproofSuiteV1> for CrossFieldVerifierTrans
         self.state.extend_from_slice(&encoded);
         Ok(point)
     }
-
     fn challenge(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
         derive_challenge_v2(&mut self.state, &mut self.challenge_ordinal)
     }
 }
-
 fn verify_cross_field_proof_v2(
     view: BoundCommitmentViewV2<'_>,
     qpcs_seal: AuthenticatedQpcsSealV2,
@@ -1119,7 +1046,6 @@ fn verify_cross_field_proof_v2(
     build_cross_field_statement_v2(&derived, &evaluation)?.verify(&mut transcript)?;
     transcript.finish_v2()
 }
-
 /// Checks only the enumerated raw-point/BP/framing subtotal.  It is not a
 /// complete-proof size certificate because the expanded global lookup
 /// statement, endpoint openings, and their final framing are not instantiated.
@@ -1132,7 +1058,6 @@ struct CrossFieldConditionalSubtotalPreflightV2 {
     outer_auth_bytes: usize,
     conditional_subtotal_bytes: usize,
 }
-
 impl CrossFieldConditionalSubtotalPreflightV2 {
     fn validate_v2(&self) -> Result<(), CrossFieldErrorV2> {
         if self.comparator_points != COMPARATOR_POINTS_V2
@@ -1149,7 +1074,6 @@ impl CrossFieldConditionalSubtotalPreflightV2 {
         Ok(())
     }
 }
-
 #[cfg(test)]
 #[path = "phase23_rns_link_cross_field_v2_tests.rs"]
 mod tests;

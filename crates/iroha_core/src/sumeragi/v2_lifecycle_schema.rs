@@ -1,85 +1,69 @@
 //! Pure lifecycle schema and value types for the Sumeragi v2 coordinator.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use super::{
     replay_authority::LifecycleReplayAuthorityV1,
     scheduler_inputs::AuthenticatedSchedulerInputsFactory, work_registry::ReadyValidateCarrierSeal,
 };
-
 pub(super) const MAX_PHYSICAL_SLOTS_PER_RECORD: usize = 64;
 pub(super) const MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize + 1;
-
 pub(super) fn has_lifecycle_record_capacity(current: usize, additional: usize) -> bool {
     current
         .checked_add(additional)
         .is_some_and(|records| records <= MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
 }
-
 /// Digest of an authenticated semantic projection; never a physical work ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct LifecycleDigest(pub(super) [u8; 32]);
-
 impl LifecycleDigest {
     /// Construct a digest from an already authenticated projection.
     pub(in crate::sumeragi) const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Borrow the canonical digest bytes.
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 /// Context identity paired with its exact consensus height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LifecycleContext {
     pub(super) id: LifecycleDigest,
     pub(super) height: u64,
 }
-
 impl LifecycleContext {
     /// Construct a typed lifecycle context.
     pub(in crate::sumeragi) const fn new(id: LifecycleDigest, height: u64) -> Self {
         Self { id, height }
     }
-
     /// Return the authenticated context identity.
     pub(crate) const fn id(self) -> LifecycleDigest {
         self.id
     }
-
     /// Return the exact context height.
     pub(crate) const fn height(self) -> u64 {
         self.height
     }
 }
-
 /// Height/view coordinates retained in a semantic lifecycle key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct LifecycleRound {
     pub(super) height: u64,
     pub(super) view: u64,
 }
-
 impl LifecycleRound {
     /// Construct deterministic height/view coordinates.
     pub(super) const fn new(height: u64, view: u64) -> Self {
         Self { height, view }
     }
-
     /// Return the consensus height.
     pub(crate) const fn height(self) -> u64 {
         self.height
     }
-
     /// Return the consensus view.
     pub(crate) const fn view(self) -> u64 {
         self.view
     }
 }
-
 /// Closed semantic phase inventory for lifecycle keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum LifecyclePhase {
@@ -106,7 +90,6 @@ pub(crate) enum LifecyclePhase {
     Serve,
     ProducerTurn,
 }
-
 impl LifecyclePhase {
     pub(super) const ALL: [Self; 22] = [
         Self::Proposal,
@@ -133,7 +116,6 @@ impl LifecyclePhase {
         Self::ProducerTurn,
     ];
 }
-
 /// Route- and carrier-independent identity of one logical lifecycle stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct LifecycleKey {
@@ -144,7 +126,6 @@ pub(crate) struct LifecycleKey {
     pub(super) phase: LifecyclePhase,
     pub(super) execution_commitment: Option<LifecycleDigest>,
 }
-
 impl LifecycleKey {
     /// Construct a complete semantic lifecycle key.
     pub(super) const fn new(
@@ -164,37 +145,30 @@ impl LifecycleKey {
             execution_commitment,
         }
     }
-
     /// Return the authenticated lifecycle context.
     pub(crate) const fn context(self) -> LifecycleDigest {
         self.context
     }
-
     /// Return the execution round.
     pub(crate) const fn round(self) -> LifecycleRound {
         self.round
     }
-
     /// Return the optional proposal round.
     pub(crate) const fn proposal_round(self) -> Option<LifecycleRound> {
         self.proposal_round
     }
-
     /// Return the domain-separated semantic subject.
     pub(crate) const fn subject(self) -> Option<LifecycleDigest> {
         self.subject
     }
-
     /// Return the exact logical phase.
     pub(crate) const fn phase(self) -> LifecyclePhase {
         self.phase
     }
-
     /// Return the optional deterministic execution commitment.
     pub(crate) const fn execution_commitment(self) -> Option<LifecycleDigest> {
         self.execution_commitment
     }
-
     /// Return the canonical scheduler target derivable from durable key data.
     ///
     /// Statement-bearing work targets its authenticated subject. Work without
@@ -207,7 +181,6 @@ impl LifecycleKey {
         }
     }
 }
-
 /// Derive the only valid adjacent producer key from a Certified-Serve key.
 pub(super) const fn producer_turn_key_for_serve(serve: LifecycleKey) -> Option<LifecycleKey> {
     if !matches!(serve.phase, LifecyclePhase::Serve) {
@@ -222,35 +195,29 @@ pub(super) const fn producer_turn_key_for_serve(serve: LifecycleKey) -> Option<L
         serve.execution_commitment,
     ))
 }
-
 /// Check that a Serve and ProducerTurn differ only by their closed phase tag.
 pub(super) fn serve_and_producer_keys_match(serve: LifecycleKey, producer: LifecycleKey) -> bool {
     producer_turn_key_for_serve(serve) == Some(producer)
 }
-
 /// Immutable causal root supplied before physical refinement evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct CausalRoot(pub(super) LifecycleDigest);
-
 impl CausalRoot {
     /// Construct a causal root from its authenticated semantic digest.
     pub(super) const fn new(digest: LifecycleDigest) -> Self {
         Self(digest)
     }
-
     /// Return the authenticated causal-root digest.
     pub(crate) const fn digest(self) -> LifecycleDigest {
         self.0
     }
 }
-
 /// Immutable owner shared by every successor of one causal admission root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct OwnerId {
     pub(super) causal_root: CausalRoot,
     pub(super) first_admission_ordinal: u128,
 }
-
 impl OwnerId {
     /// Construct an owner reconstructed from durable lifecycle state.
     pub(super) const fn new(causal_root: CausalRoot, first_admission_ordinal: u128) -> Self {
@@ -259,18 +226,15 @@ impl OwnerId {
             first_admission_ordinal,
         }
     }
-
     /// Return the immutable causal root.
     pub(crate) const fn causal_root(self) -> CausalRoot {
         self.causal_root
     }
-
     /// Return the first ordinal allocated to this owner.
     pub(crate) const fn first_admission_ordinal(self) -> u128 {
         self.first_admission_ordinal
     }
 }
-
 /// Exhaustive adapter-effect and scheduler-only work classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum LifecycleWorkClass {
@@ -288,7 +252,6 @@ pub(crate) enum LifecycleWorkClass {
     CertifiedServe,
     ProducerTurn,
 }
-
 impl LifecycleWorkClass {
     pub(super) const ALL: [Self; 13] = [
         Self::SignProposal,
@@ -306,7 +269,6 @@ impl LifecycleWorkClass {
         Self::ProducerTurn,
     ];
 }
-
 /// Deterministic action taken for an exact same-owner retry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RetryAction {
@@ -318,7 +280,6 @@ pub(crate) enum RetryAction {
     StutterDiagnostic,
     StutterProducerTurn,
 }
-
 /// Bounded logical capacity classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum CapacityClass {
@@ -327,11 +288,9 @@ pub(crate) enum CapacityClass {
     Serve,
     Producer,
 }
-
 impl CapacityClass {
     pub(super) const ALL: [Self; 4] = [Self::Consensus, Self::Effect, Self::Serve, Self::Producer];
 }
-
 impl LifecycleWorkClass {
     pub(super) const fn retry_action(self) -> RetryAction {
         match self {
@@ -348,7 +307,6 @@ impl LifecycleWorkClass {
             Self::ProducerTurn => RetryAction::StutterProducerTurn,
         }
     }
-
     pub(super) const fn capacity_class(self) -> CapacityClass {
         match self {
             Self::SignProposal
@@ -366,7 +324,6 @@ impl LifecycleWorkClass {
             Self::ProducerTurn => CapacityClass::Producer,
         }
     }
-
     /// Return whether this class, statement kind, and lifecycle stage form one
     /// of the closed production transitions.
     pub(crate) const fn accepts_phase_and_stage(
@@ -445,7 +402,6 @@ impl LifecycleWorkClass {
         }
     }
 }
-
 /// Exact execution stage attached to a scheduler record.
 ///
 /// This inventory names the operation that a lease executes and therefore
@@ -477,7 +433,6 @@ pub(crate) enum LifecycleStageKind {
     CertifiedServe,
     ProducerTurn,
 }
-
 impl LifecycleStageKind {
     pub(super) const ALL: [Self; 22] = [
         Self::SignProposal,
@@ -503,7 +458,6 @@ impl LifecycleStageKind {
         Self::CertifiedServe,
         Self::ProducerTurn,
     ];
-
     /// Return the closed residual operation topology for this execution unit.
     ///
     /// Successors in the body, signing, and Serve pipelines have strictly
@@ -536,7 +490,6 @@ impl LifecycleStageKind {
         }
     }
 }
-
 /// The exact formal ingress rank in lexicographic field order.
 ///
 /// Every component is a natural-number debt. In particular, `source` is the
@@ -554,7 +507,6 @@ pub(crate) struct SchedulerRank {
     source: u64,
     runner: u64,
 }
-
 impl SchedulerRank {
     /// Construct the exact eight-component scheduler rank.
     pub(super) const fn new(
@@ -578,7 +530,6 @@ impl SchedulerRank {
             runner,
         }
     }
-
     /// Return the exact eight rank components.
     pub(crate) const fn components(self) -> [u64; 8] {
         [
@@ -593,7 +544,6 @@ impl SchedulerRank {
         ]
     }
 }
-
 /// Generic predecessor relation enforced before rank selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PredecessorScope {
@@ -604,14 +554,12 @@ pub(crate) enum PredecessorScope {
     /// A ready producer handoff also prevents later ordinals from overtaking it.
     ProducerHandoffBarrier,
 }
-
 /// Exact immutable execution stage and predecessor policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LifecycleStage {
     pub(super) kind: LifecycleStageKind,
     pub(super) predecessor_scope: PredecessorScope,
 }
-
 impl LifecycleStage {
     /// Construct exact immutable stage metadata.
     pub(super) const fn new(kind: LifecycleStageKind, predecessor_scope: PredecessorScope) -> Self {
@@ -620,18 +568,15 @@ impl LifecycleStage {
             predecessor_scope,
         }
     }
-
     /// Return the exact lifecycle stage kind.
     pub(crate) const fn kind(self) -> LifecycleStageKind {
         self.kind
     }
-
     /// Return the predecessor relation enforced by selection.
     pub(crate) const fn predecessor_scope(self) -> PredecessorScope {
         self.predecessor_scope
     }
 }
-
 impl LifecycleWorkClass {
     /// Return whether the statement, operation, and predecessor policy form
     /// one exact production work shape.
@@ -652,17 +597,14 @@ impl LifecycleWorkClass {
             }
     }
 }
-
 /// Address of one finite physical replenishment slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PhysicalSlotId(pub(super) u16, pub(super) u16);
-
 impl PhysicalSlotId {
     /// Construct a slot address within the frozen capacity geometry.
     pub(super) const fn new(class: u16, index: u16) -> Self {
         Self(class, index)
     }
-
     /// Construct a slot address for a typed lifecycle capacity class.
     pub(super) const fn for_capacity(class: CapacityClass, index: u16) -> Self {
         let class = match class {
@@ -673,7 +615,6 @@ impl PhysicalSlotId {
         };
         Self(class, index)
     }
-
     /// Return the typed capacity class encoded by this address.
     pub(crate) const fn capacity_class(self) -> Option<CapacityClass> {
         match self.0 {
@@ -684,37 +625,31 @@ impl PhysicalSlotId {
             _ => None,
         }
     }
-
     /// Return the finite slot index within its capacity class.
     pub(crate) const fn index(self) -> u16 {
         self.1
     }
 }
-
 /// Authenticated physical slot projection retained by the coordinator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PhysicalSlot {
     pub(super) id: PhysicalSlotId,
     pub(super) digest: LifecycleDigest,
 }
-
 impl PhysicalSlot {
     /// Construct an authenticated slot projection.
     pub(super) const fn new(id: PhysicalSlotId, digest: LifecycleDigest) -> Self {
         Self { id, digest }
     }
-
     /// Return the finite slot address.
     pub(crate) const fn id(self) -> PhysicalSlotId {
         self.id
     }
-
     /// Return the authenticated physical-work digest.
     pub(crate) const fn digest(self) -> LifecycleDigest {
         self.digest
     }
 }
-
 /// Owner universe frozen for one finite rank-preserving scheduler episode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SchedulerEpisodeUniverse {
@@ -727,14 +662,12 @@ pub(crate) struct SchedulerEpisodeUniverse {
     pub(super) authenticated_roster_slots: BTreeSet<u16>,
     pub(super) capacity_geometry: BTreeMap<CapacityClass, usize>,
 }
-
 /// Initial and finite replenishment geometry for a lifecycle record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PhysicalGeometry {
     pub(super) initial: Vec<PhysicalSlot>,
     pub(super) replenishment_slots: BTreeSet<PhysicalSlotId>,
 }
-
 impl PhysicalGeometry {
     /// Construct geometry validated only after semantic ownership.
     pub(super) fn new(
@@ -746,7 +679,6 @@ impl PhysicalGeometry {
             replenishment_slots: replenishment_slots.into_iter().collect(),
         }
     }
-
     pub(super) fn canonicalized(&self) -> Result<Self, AdmissionRejection> {
         let mut carriers = BTreeMap::new();
         for slot in &self.initial {
@@ -764,7 +696,6 @@ impl PhysicalGeometry {
             self.replenishment_slots.iter().copied(),
         ))
     }
-
     pub(super) fn normalized(
         &self,
     ) -> Result<
@@ -800,7 +731,6 @@ impl PhysicalGeometry {
         Ok((physical, universe, consumed))
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SchedulerEpisode {
     pub(super) universe: SchedulerEpisodeUniverse,
@@ -808,7 +738,6 @@ pub(super) struct SchedulerEpisode {
     pub(super) consumed_slots: BTreeSet<PhysicalSlotId>,
     pub(super) frozen_predecessors: BTreeSet<u128>,
 }
-
 /// Explicit source and generation on which a record is waiting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum WaitSource {
@@ -817,14 +746,12 @@ pub(crate) enum WaitSource {
     Recovery(LifecycleDigest),
     ProducerTurn(u128),
 }
-
 /// Exact observed generation for a blocked lifecycle record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct WaitToken {
     pub(super) source: WaitSource,
     pub(super) observed_generation: u64,
 }
-
 impl WaitToken {
     /// Construct a generation-fenced wait token.
     pub(super) const fn new(source: WaitSource, observed_generation: u64) -> Self {
@@ -833,18 +760,15 @@ impl WaitToken {
             observed_generation,
         }
     }
-
     /// Return the exact wait source.
     pub(crate) const fn source(self) -> WaitSource {
         self.source
     }
-
     /// Return the observed generation fence.
     pub(crate) const fn observed_generation(self) -> u64 {
         self.observed_generation
     }
 }
-
 /// Stable terminal result retained as a tombstone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
@@ -859,11 +783,9 @@ pub(crate) enum TerminalOutcome {
     Rejected(u16),
     Failed(u16),
 }
-
 /// Immutable identifier of the coordinator's one active turn lease.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct LeaseId(pub(super) u128);
-
 /// The complete logical state machine for a lifecycle record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LifecycleState {
@@ -872,7 +794,6 @@ pub(crate) enum LifecycleState {
     Claimed(LeaseId),
     Terminal(TerminalOutcome),
 }
-
 /// One canonical logical scheduler record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LifecycleRecord {
@@ -885,7 +806,6 @@ pub(crate) struct LifecycleRecord {
     pub(super) physical_slots: BTreeMap<PhysicalSlotId, LifecycleDigest>,
     pub(super) episode: SchedulerEpisode,
 }
-
 /// Restart-stable payload material owned by one durable lifecycle record.
 ///
 /// Certified Serve uses a domain-separated six-field-key subject over the
@@ -902,7 +822,6 @@ pub(super) struct DurableBodyFrameReference {
     pub(super) manifest: LifecycleDigest,
     pub(super) frame: LifecycleDigest,
 }
-
 impl DurableBodyFrameReference {
     /// Construct the complete body-store identity retained by a ledger row.
     pub(super) const fn new(
@@ -920,7 +839,6 @@ impl DurableBodyFrameReference {
             frame,
         }
     }
-
     /// Check that the reference names the body coordinates frozen in a key.
     pub(super) fn matches_key(self, key: LifecycleKey) -> bool {
         self.context == key.context
@@ -935,7 +853,6 @@ impl DurableBodyFrameReference {
             )
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DurablePayloadReference {
     None,
@@ -956,14 +873,12 @@ pub(super) enum DurablePayloadReference {
         outcome: DurableServeNegativeOutcome,
     },
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DurableServeNegativeOutcome {
     Cancelled,
     Rejected(u16),
     Failed(u16),
 }
-
 impl DurableServeNegativeOutcome {
     pub(super) const fn from_terminal(outcome: TerminalOutcome) -> Option<Self> {
         match outcome {
@@ -973,7 +888,6 @@ impl DurableServeNegativeOutcome {
             TerminalOutcome::Advanced | TerminalOutcome::Completed(_) => None,
         }
     }
-
     pub(super) const fn terminal(self) -> TerminalOutcome {
         match self {
             Self::Cancelled => TerminalOutcome::Cancelled,
@@ -982,7 +896,6 @@ impl DurableServeNegativeOutcome {
         }
     }
 }
-
 impl DurablePayloadReference {
     pub(super) const fn certified_serve_pending(
         request: LifecycleDigest,
@@ -993,7 +906,6 @@ impl DurablePayloadReference {
             certificate,
         }
     }
-
     pub(super) const fn is_certified_serve(self) -> bool {
         matches!(
             self,
@@ -1002,7 +914,6 @@ impl DurablePayloadReference {
                 | Self::CertifiedServeNegative { .. }
         )
     }
-
     pub(super) const fn certificate(self) -> Option<LifecycleDigest> {
         match self {
             Self::None | Self::BodyFrame(_) => None,
@@ -1011,7 +922,6 @@ impl DurablePayloadReference {
             | Self::CertifiedServeNegative { certificate, .. } => Some(certificate),
         }
     }
-
     pub(super) const fn request(self) -> Option<LifecycleDigest> {
         match self {
             Self::None | Self::BodyFrame(_) => None,
@@ -1020,7 +930,6 @@ impl DurablePayloadReference {
             | Self::CertifiedServeNegative { request, .. } => Some(request),
         }
     }
-
     pub(super) fn same_admission_material(self, other: Self) -> bool {
         match (self, other) {
             (Self::None, Self::None) => true,
@@ -1041,7 +950,6 @@ impl DurablePayloadReference {
             },
         }
     }
-
     pub(super) const fn terminalized(self, outcome: TerminalOutcome) -> Option<Self> {
         let Self::CertifiedServePending {
             request,
@@ -1074,7 +982,6 @@ impl DurablePayloadReference {
             TerminalOutcome::Advanced | TerminalOutcome::Completed(None) => None,
         }
     }
-
     pub(super) fn matches_terminal(
         self,
         work_class: LifecycleWorkClass,
@@ -1132,7 +1039,6 @@ impl DurablePayloadReference {
         }
     }
 }
-
 /// Exact restart-stable parent-to-child edge created by one atomic lifecycle cut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DurableContinuationEdge {
@@ -1157,7 +1063,6 @@ pub(super) enum DurableContinuationEdge {
     /// A signed timeout vote publishes its exact signed Broadcast successor.
     SignTimeoutToBroadcast,
 }
-
 /// Typed durable continuation retained beside one lifecycle tombstone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DurableContinuation {
@@ -1173,13 +1078,11 @@ pub(super) enum DurableContinuation {
         ordinal: u128,
     },
 }
-
 impl DurableContinuation {
     /// Construct one typed forward successor edge.
     pub(super) const fn successor(edge: DurableContinuationEdge, ordinal: u128) -> Self {
         Self::AdvancedSuccessor { edge, ordinal }
     }
-
     /// Return the exact edge and child ordinal, if this continuation has one.
     pub(super) const fn successor_parts(self) -> Option<(DurableContinuationEdge, u128)> {
         match self {
@@ -1187,7 +1090,6 @@ impl DurableContinuation {
             Self::None | Self::AdvancedNoSuccessor => None,
         }
     }
-
     /// Return whether this continuation is canonical for one durable record.
     pub(super) const fn matches_record(
         self,
@@ -1271,7 +1173,6 @@ impl DurableContinuation {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DurableRecordMetadata {
     pub(super) reconstruction_source: LifecycleDigest,
@@ -1281,7 +1182,6 @@ pub(super) struct DurableRecordMetadata {
     /// Exact typed continuation created by an atomic terminal transition.
     pub(super) continuation: DurableContinuation,
 }
-
 impl DurableRecordMetadata {
     pub(super) fn from_candidate(candidate: &CandidateAdmission) -> Self {
         Self {
@@ -1291,7 +1191,6 @@ impl DurableRecordMetadata {
             continuation: DurableContinuation::None,
         }
     }
-
     pub(super) fn from_producer(producer: &ProducerTurnAdmission) -> Self {
         Self {
             reconstruction_source: producer.reconstruction_source,
@@ -1300,7 +1199,6 @@ impl DurableRecordMetadata {
             continuation: DurableContinuation::None,
         }
     }
-
     pub(super) fn from_recovered(recovered: &RecoveredLifecycleRecord) -> Self {
         Self {
             reconstruction_source: recovered.reconstruction_source,
@@ -1309,7 +1207,6 @@ impl DurableRecordMetadata {
             continuation: recovered.continuation,
         }
     }
-
     pub(super) fn matches_admission(&self, candidate: &CandidateAdmission) -> bool {
         self.reconstruction_source == candidate.reconstruction_source
             && self.payload.same_admission_material(candidate.payload)
@@ -1320,7 +1217,6 @@ impl DurableRecordMetadata {
                 self.replay_authority == candidate.replay_authority
             }
     }
-
     pub(super) fn terminalized_replay_authority(
         &self,
         context: LifecycleContext,
@@ -1339,7 +1235,6 @@ impl DurableRecordMetadata {
             .then_some(self.replay_authority.clone())
     }
 }
-
 /// Initial readiness of a newly admitted record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InitialLifecycleState {
@@ -1348,7 +1243,6 @@ pub(crate) enum InitialLifecycleState {
     /// The record waits on an exact generation.
     Waiting(WaitToken),
 }
-
 /// Reserved producer-turn record admitted atomically with Certified Serve.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProducerTurnAdmission {
@@ -1358,7 +1252,6 @@ pub(crate) struct ProducerTurnAdmission {
     pub(super) replay_authority: LifecycleReplayAuthorityV1,
     pub(super) physical_geometry: PhysicalGeometry,
 }
-
 impl ProducerTurnAdmission {
     /// Construct dormant producer-turn admission data.
     pub(super) fn new(
@@ -1377,7 +1270,6 @@ impl ProducerTurnAdmission {
         }
     }
 }
-
 /// Candidate data inspected only after semantic ownership checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CandidateAdmission {
@@ -1392,7 +1284,6 @@ pub(crate) struct CandidateAdmission {
     pub(super) physical_geometry: PhysicalGeometry,
     pub(super) producer_turn: Option<ProducerTurnAdmission>,
 }
-
 impl CandidateAdmission {
     /// Construct a logical candidate admission.
     pub(super) fn new(
@@ -1420,7 +1311,6 @@ impl CandidateAdmission {
             producer_turn,
         }
     }
-
     pub(super) fn canonicalize_geometry(&mut self) -> Result<(), AdmissionRejection> {
         self.physical_geometry = self.physical_geometry.canonicalized()?;
         if let Some(producer) = self.producer_turn.as_mut() {
@@ -1428,7 +1318,6 @@ impl CandidateAdmission {
         }
         Ok(())
     }
-
     pub(super) fn replay_authority_is_exact(&self, context: LifecycleContext) -> bool {
         let primary_is_exact = self.replay_authority.structurally_matches_record(
             context,
@@ -1472,7 +1361,6 @@ impl CandidateAdmission {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CapacityAdmissionWait {
     pub(super) candidate: CandidateAdmission,
@@ -1481,7 +1369,6 @@ pub(super) struct CapacityAdmissionWait {
         crate::sumeragi::v2_certified_serve_payload_store::DurableCertifiedServeAdmissionReceipt,
     >,
 }
-
 /// Admission input distinguishing liveness candidates from ordinary effects.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
@@ -1491,11 +1378,9 @@ pub(crate) enum AdmissionRequest {
     /// A sealed zero-owner effect minted only by the exhaustive classifier.
     NonCandidate(NonCandidateEffect),
 }
-
 /// Sealed proof that an input has no adapter-effect lifecycle class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NonCandidateEffect(pub(super) ());
-
 /// Typed reason why an admission failed before exposure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AdmissionRejection {
@@ -1514,7 +1399,6 @@ pub(crate) enum AdmissionRejection {
     ForeignContext,
     OrdinalExhausted,
 }
-
 /// Complete deterministic result of one admission attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AdmissionDecision {
@@ -1540,14 +1424,12 @@ pub(crate) enum AdmissionDecision {
     Rejected(AdmissionRejection),
     FailClosed(CoordinatorFault),
 }
-
 /// Optional equal-count physical replacement accompanying readiness.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PhysicalReplacement {
     pub(super) existing_slot: PhysicalSlotId,
     pub(super) replacement: PhysicalSlot,
 }
-
 impl PhysicalReplacement {
     /// Construct an equal-address physical replacement.
     pub(super) const fn new(existing_slot: PhysicalSlotId, replacement: PhysicalSlot) -> Self {
@@ -1557,7 +1439,6 @@ impl PhysicalReplacement {
         }
     }
 }
-
 /// Authenticated event publishing a late completion as ready.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ReadyEvent {
@@ -1566,7 +1447,6 @@ pub(crate) struct ReadyEvent {
     pub(super) wait_token: WaitToken,
     pub(super) replacement: Option<PhysicalReplacement>,
 }
-
 impl ReadyEvent {
     /// Construct an exact readiness publication.
     pub(super) const fn new(
@@ -1583,7 +1463,6 @@ impl ReadyEvent {
         }
     }
 }
-
 /// Exact Validate carrier identity embedded in one complete Ready-row census.
 ///
 /// This transient seal is absent from LifecycleLedgerV1. Its private fields
@@ -1600,7 +1479,6 @@ pub(super) struct AttestedReadyValidateDemand {
     capacity_class: Option<CapacityClass>,
     requires_io_dispatch: bool,
 }
-
 impl AttestedReadyValidateDemand {
     /// Bind one opaque registry carrier seal to its exact Validate row.
     pub(super) fn from_registry_seal(
@@ -1632,7 +1510,6 @@ impl AttestedReadyValidateDemand {
             requires_io_dispatch: seal.requires_io_dispatch(),
         })
     }
-
     /// Mint a raw carrier classification only for focused scheduler tests.
     ///
     /// This deliberately permits a non-Validate row so the planner's
@@ -1655,7 +1532,6 @@ impl AttestedReadyValidateDemand {
             requires_io_dispatch: false,
         })
     }
-
     fn matches_record(self, record: &LifecycleRecord) -> bool {
         record.work_class == LifecycleWorkClass::Validate
             && record.key.phase() == LifecyclePhase::Validate
@@ -1668,18 +1544,15 @@ impl AttestedReadyValidateDemand {
             && record.physical_slots.len() == 1
             && record.physical_slots.get(&self.slot) == Some(&self.digest)
     }
-
     /// Return the sole extra output class demanded by this carrier, if any.
     pub(super) const fn capacity_class(self) -> Option<CapacityClass> {
         self.capacity_class
     }
-
     /// Return whether this carrier must first enter the bounded I/O service.
     pub(super) const fn requires_io_dispatch(self) -> bool {
         self.requires_io_dispatch
     }
 }
-
 /// One identity-bound row of live runtime rank debts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SchedulerReadyInputs {
@@ -1694,7 +1567,6 @@ pub(crate) struct SchedulerReadyInputs {
     source: u64,
     runner: u64,
 }
-
 impl SchedulerReadyInputs {
     /// Join one exact coordinator row, optional sealed Validate carrier, and
     /// the six authenticated runtime debts into a production scheduler row.
@@ -1780,7 +1652,6 @@ impl SchedulerReadyInputs {
         };
         (carrier_matches && row.identity_matches(record.ordinal, record)).then_some(row)
     }
-
     /// Construct one test row without exposing a production rank mint.
     #[cfg(test)]
     pub(super) fn new(
@@ -1805,7 +1676,6 @@ impl SchedulerReadyInputs {
             runner,
         }
     }
-
     /// Construct one deliberately foreign test identity around an otherwise
     /// exact capacity attestation.
     #[cfg(test)]
@@ -1821,7 +1691,6 @@ impl SchedulerReadyInputs {
         row.key = key;
         row
     }
-
     /// Return whether this row names the coordinator's exact ready identity.
     pub(super) fn identity_matches(&self, ordinal: u128, record: &LifecycleRecord) -> bool {
         ordinal == record.ordinal
@@ -1836,12 +1705,10 @@ impl SchedulerReadyInputs {
                 (_, Some(_)) => false,
             }
     }
-
     /// Return the sealed extra capacity class needed before this row is claimed.
     pub(super) const fn output_capacity_class(&self) -> Option<CapacityClass> {
         self.output_capacity_class
     }
-
     /// Return the six live debts in their mandated rank order.
     pub(super) const fn live_debts(&self) -> [u64; 6] {
         [
@@ -1854,7 +1721,6 @@ impl SchedulerReadyInputs {
         ]
     }
 }
-
 /// Authenticated generation and ready-row snapshot supplied to one planning turn.
 // The sealed production factory constructs this value without accepting raw
 // rows. It covers direct completion rows and the exact reserved certified-Fetch
@@ -1865,7 +1731,6 @@ pub(crate) struct SchedulerInputs {
     generations: BTreeMap<WaitSource, u64>,
     ready: BTreeMap<u128, SchedulerReadyInputs>,
 }
-
 impl SchedulerInputs {
     /// Construct a production snapshot only for the sealed factory capability.
     pub(super) fn from_authenticated(
@@ -1875,7 +1740,6 @@ impl SchedulerInputs {
     ) -> Self {
         Self { generations, ready }
     }
-
     /// Construct one unique test snapshot without exposing a production mint.
     #[cfg(test)]
     pub(super) fn new(
@@ -1902,7 +1766,6 @@ impl SchedulerInputs {
             ready: unique_ready,
         })
     }
-
     /// Consume the move-only snapshot into its two validated maps.
     pub(super) fn into_parts(
         self,
@@ -1913,7 +1776,6 @@ impl SchedulerInputs {
         (self.generations, self.ready)
     }
 }
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Failure while minting a raw test-only scheduler snapshot.
@@ -1925,7 +1787,6 @@ pub(super) enum SchedulerInputError {
     /// The test input tried to advance a coordinator-local generation.
     UnsupportedGenerationSource,
 }
-
 /// One claimed lifecycle turn, executed without the coordinator lock.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TurnLease {
@@ -1939,7 +1800,6 @@ pub(crate) struct TurnLease {
     pub(super) physical_slots: BTreeMap<PhysicalSlotId, LifecycleDigest>,
     pub(super) output_reservation: Option<LeaseCapacityReservation>,
 }
-
 /// Transient output capacity held exclusively by one active lease.
 ///
 /// This reservation is absent from durable lifecycle state. It prevents a
@@ -1950,7 +1810,6 @@ pub(super) struct LeaseCapacityReservation {
     class: CapacityClass,
     observed_generation: u64,
 }
-
 impl LeaseCapacityReservation {
     /// Bind one capacity generation to the active lease which observed it.
     pub(super) const fn new(class: CapacityClass, observed_generation: u64) -> Self {
@@ -1959,66 +1818,54 @@ impl LeaseCapacityReservation {
             observed_generation,
         }
     }
-
     /// Return the capacity class protected by this lease.
     pub(super) const fn class(self) -> CapacityClass {
         self.class
     }
-
     /// Project this reservation back to its exact generation fence.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) const fn wait_token(self) -> WaitToken {
         WaitToken::new(WaitSource::Capacity(self.class), self.observed_generation)
     }
 }
-
 impl TurnLease {
     /// Return the unique lease identifier.
     pub(crate) const fn id(&self) -> LeaseId {
         self.id
     }
-
     /// Return the immutable lifecycle ordinal.
     pub(crate) const fn ordinal(&self) -> u128 {
         self.ordinal
     }
-
     /// Return the immutable lifecycle owner.
     pub(crate) const fn owner(&self) -> OwnerId {
         self.owner
     }
-
     /// Return the semantic lifecycle key.
     pub(crate) const fn key(&self) -> LifecycleKey {
         self.key
     }
-
     /// Return the exhaustive work class.
     pub(crate) const fn work_class(&self) -> LifecycleWorkClass {
         self.work_class
     }
-
     /// Return the exact immutable execution stage.
     pub(crate) const fn stage(&self) -> LifecycleStage {
         self.stage
     }
-
     /// Return the exact rank snapshot used to select this lease.
     pub(crate) const fn rank(&self) -> SchedulerRank {
         self.rank
     }
-
     /// Borrow the coalesced physical work projections.
     pub(crate) const fn physical_slots(&self) -> &BTreeMap<PhysicalSlotId, LifecycleDigest> {
         &self.physical_slots
     }
-
     /// Return the exact extra output reservation bound to this lease, if any.
     pub(super) const fn output_reservation(&self) -> Option<LeaseCapacityReservation> {
         self.output_reservation
     }
 }
-
 /// Exactly one result reported for an executed turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TurnOutcome {
@@ -2027,7 +1874,6 @@ pub(crate) enum TurnOutcome {
     Blocked(WaitToken),
     Replenished(PhysicalSlot),
 }
-
 /// Deterministic result of one scheduler planning call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TurnPlan {
@@ -2036,7 +1882,6 @@ pub(crate) enum TurnPlan {
     Idle,
     FailClosed(CoordinatorFault),
 }
-
 /// Typed fail-closed coordinator condition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CoordinatorFault {
@@ -2052,13 +1897,11 @@ pub(crate) enum CoordinatorFault {
     RecoveryRejected,
     InvalidRollover,
 }
-
 /// Fixed capacity limits owned by one coordinator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CapacityGeometry {
     pub(super) limits: BTreeMap<CapacityClass, usize>,
 }
-
 impl CapacityGeometry {
     /// Construct complete capacity geometry; omitted classes have zero slots.
     pub(super) fn new(limits: impl IntoIterator<Item = (CapacityClass, usize)>) -> Self {
@@ -2069,13 +1912,11 @@ impl CapacityGeometry {
             .collect();
         Self { limits }
     }
-
     /// Return the limit for one typed capacity class.
     pub(super) fn limit(&self, class: CapacityClass) -> usize {
         self.limits.get(&class).copied().unwrap_or(0)
     }
 }
-
 /// Restart-stable record material without transient scheduling state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RecoveredLifecycleRecord {
@@ -2091,7 +1932,6 @@ pub(crate) struct RecoveredLifecycleRecord {
     pub(super) continuation: DurableContinuation,
     pub(super) physical_slot_universe: BTreeSet<PhysicalSlotId>,
 }
-
 impl RecoveredLifecycleRecord {
     /// Construct one authenticated record after storage reconciliation.
     #[allow(clippy::too_many_arguments)]
@@ -2122,7 +1962,6 @@ impl RecoveredLifecycleRecord {
             physical_slot_universe,
         }
     }
-
     pub(super) fn replay_authority_is_exact(&self, context: LifecycleContext) -> bool {
         self.replay_authority.structurally_matches_record(
             context,
@@ -2133,7 +1972,6 @@ impl RecoveredLifecycleRecord {
         )
     }
 }
-
 /// Internal recovery snapshot used to rebuild volatile coordinator state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RecoverySnapshot {
@@ -2142,7 +1980,6 @@ pub(crate) struct RecoverySnapshot {
     pub(super) records: Vec<RecoveredLifecycleRecord>,
     pub(super) producer_debts: BTreeMap<u128, u128>,
 }
-
 impl RecoverySnapshot {
     /// Construct a post-storage-reconciliation restart snapshot.
     pub(super) fn new(
@@ -2159,7 +1996,6 @@ impl RecoverySnapshot {
         }
     }
 }
-
 pub(super) fn first_capacity_wait(
     capacity_used: &BTreeMap<CapacityClass, usize>,
     capacity_geometry: &CapacityGeometry,
@@ -2177,7 +2013,6 @@ pub(super) fn first_capacity_wait(
         })
     })
 }
-
 pub(super) fn frozen_predecessors(
     records: &BTreeMap<u128, LifecycleRecord>,
     scope: PredecessorScope,
@@ -2193,7 +2028,6 @@ pub(super) fn frozen_predecessors(
         })
         .collect()
 }
-
 pub(super) fn lower_enter_view_ordinals(
     records: &BTreeMap<u128, LifecycleRecord>,
     installed: LifecycleKey,
@@ -2210,18 +2044,15 @@ pub(super) fn lower_enter_view_ordinals(
         .map(|record| record.ordinal)
         .collect()
 }
-
 #[cfg(test)]
 mod tests {
     use super::{
         DurableBodyFrameReference, DurablePayloadReference, LifecycleDigest, LifecycleKey,
         LifecyclePhase, LifecycleRound, LifecycleWorkClass, TerminalOutcome,
     };
-
     fn digest(byte: u8) -> LifecycleDigest {
         LifecycleDigest::new([byte; 32])
     }
-
     #[test]
     fn durable_body_frame_is_not_misclassified_as_serve_material() {
         let round = LifecycleRound::new(7, 3);
@@ -2274,7 +2105,6 @@ mod tests {
         assert!(!DurablePayloadReference::None.matches_terminal(LifecycleWorkClass::Store, None));
         assert!(!DurablePayloadReference::None.matches_terminal(LifecycleWorkClass::Apply, None));
     }
-
     #[test]
     fn durable_validate_requires_a_body_frame_and_only_live_advanced_or_cancelled_state() {
         let round = LifecycleRound::new(7, 3);
@@ -2301,11 +2131,9 @@ mod tests {
         ] {
             assert!(!payload.matches_terminal(LifecycleWorkClass::Validate, Some(terminal)));
         }
-
         assert!(
             !DurablePayloadReference::None.matches_terminal(LifecycleWorkClass::Validate, None)
         );
-
         let payload = DurablePayloadReference::None;
         assert!(payload.matches_terminal(
             LifecycleWorkClass::InvalidBodyReport,

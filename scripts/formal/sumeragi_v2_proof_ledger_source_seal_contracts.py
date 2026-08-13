@@ -340,15 +340,10 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
 )
 
 _REVIEWED_RUST_INCLUDE_MANIFESTS = {
-    "crates/iroha_core/src/commit_roster_journal.rs": (
-        "commit_roster_journal/tests.rs",
-    ),
+    "crates/iroha_core/src/commit_roster_journal.rs": ("commit_roster_journal/tests.rs",),
     "crates/iroha_config/src/parameters/actual.rs": (
-        "actual/torii_tx_history.rs",
-        "actual/torii_http_transport.rs",
-        "actual/torii_mcp_profile.rs",
-        "actual/tests.rs",
-    ),
+        "actual/torii_tx_history.rs", "actual/torii_http_transport.rs",
+        "actual/torii_mcp_profile.rs", "actual/tests.rs",),
     "crates/iroha_config/src/parameters/user.rs": (
         "user/kura.rs",
         "user/torii_peer_geo.rs",
@@ -365,9 +360,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "user/kura_and_snapshot_tests.rs",
         "user/runtime_tail_tests.rs",
     ),
-    "crates/iroha_data_model/src/block/consensus_v2.rs": (
-        "consensus_v2_tests.rs",
-    ),
+    "crates/iroha_data_model/src/block/consensus_v2.rs": ("consensus_v2_tests.rs",),
     "crates/iroha_core/src/kura.rs": (
         *_KURA_PRODUCTION_COMPONENT_FILES,
         "kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs",
@@ -410,8 +403,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "kura/tests/13_manifests_and_fsync.rs",
     ),
     "crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs": (
-        "10c_native_amx_latest_index_support_and_bounds.rs",
-    ),
+        "10c_native_amx_latest_index_support_and_bounds.rs",),
     "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs": (
         "autonomous_merge_bundle_support.rs",
         "autonomous_reservation_types.rs",
@@ -432,9 +424,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "lane_geometry_tests/02_geometry_moves_and_journal.rs",
         "lane_geometry_tests/03_gc_and_startup.rs",
     ),
-    "crates/iroha_core/src/merge_sidecar.rs": (
-        "merge_sidecar_signing_guard_tests.rs",
-    ),
+    "crates/iroha_core/src/merge_sidecar.rs": ("merge_sidecar_signing_guard_tests.rs",),
     "crates/iroha_core/src/queue.rs": (
         "queue/canonical_terminal_cleanup.rs",
         "queue/nexus_reconfigure_manifest_reload_tests.rs",
@@ -474,25 +464,15 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "state/default_oracle.rs",
     ),
     "crates/iroha_core/src/snapshot.rs": (
-        "snapshot/support_policy_tests.rs",
-        "snapshot/write_roundtrip_tests.rs",
-        "snapshot/reconciliation_generation_tests.rs",
-    ),
+        "snapshot/support_policy_tests.rs", "snapshot/write_roundtrip_tests.rs",
+        "snapshot/reconciliation_generation_tests.rs",),
     "crates/iroha_core/src/sumeragi/evidence.rs": (
-        "evidence/missing_signer_pop_test.rs",
-        "evidence/signature_missing_test.rs",
-        "evidence/roundtrip_matrix_test.rs",
-    ),
-    "crates/iroha_p2p/src/network.rs": (
-        "network/handle_update_tests.rs",
-        "network/queue_depth_tests.rs",
-    ),
+        "evidence/missing_signer_pop_test.rs", "evidence/signature_missing_test.rs",
+        "evidence/roundtrip_matrix_test.rs",),
+    "crates/iroha_p2p/src/network.rs": ("network/handle_update_tests.rs", "network/queue_depth_tests.rs",),
     "crates/iroha_p2p/src/peer.rs": (
-        "peer_handshake_config_tests.rs",
-        "peer_state_tests.rs",
-        "peer_consensus_mode_test.rs",
-        "peer_tests.rs",
-    ),
+        "peer_handshake_config_tests.rs", "peer_state_tests.rs",
+        "peer_consensus_mode_test.rs", "peer_tests.rs",),
     "crates/irohad/src/main.rs": (
         "main/shared_sorafs_provider_cache_tests.rs",
         "main/runtime_deps.rs",
@@ -503,8 +483,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "main/startup_tail_tests.rs",
     ),
     "integration_tests/tests/taira_public_localnet.rs": (
-        "taira_public_localnet_config_digest_test.rs",
-    ),
+        "taira_public_localnet_config_digest_test.rs",),
     "crates/iroha_core/src/sumeragi/mod.rs": (
         "fair_v2_ingress_selector.rs",
         "tests/mod_authoritative_runtime_gate_01_support.rs",
@@ -533,15 +512,27 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "v2_adapter_01_replay_and_registry.rs", "v2_adapter_02_view_and_lock_progress.rs",
         "v2_adapter_03_tc_and_terminal_ingress.rs",),
     "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs": (
-        "tests/v2_lifecycle_coordinator_explorer_cases.rs",
-    ),
+        "tests/v2_lifecycle_coordinator_explorer_cases.rs",),
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs": (
+        "v2_lifecycle_ledger_operations.rs", "v2_lifecycle_ledger_store.rs",
+        "v2_lifecycle_ledger_tests.rs",),
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs": (
+        "v2_lifecycle_ledger_tests_durable_recovery_01.rs", "v2_lifecycle_ledger_tests_durable_recovery_02.rs",
+        "v2_lifecycle_ledger_tests_frame_and_store.rs",),
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs": ("tests/v2_lifecycle_projection_cases.rs",),
     "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs": (
+        "v2_lifecycle_replay_authority_certified_serve.rs",
+        "v2_lifecycle_replay_authority_certified_body.rs",
         "v2_lifecycle_replay_authority_payload_projection.rs",
         "tests/v2_lifecycle_replay_authority_fixtures.rs",
         "tests/v2_lifecycle_replay_authority_cases.rs",
     ),
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs": (
+        "v2_lifecycle_work_registry_validate_recovery_registry_impl.rs", "v2_lifecycle_work_registry_validate_recovery_parent.rs",),
     "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs": (
+        "v2_lifecycle_work_registry_recovered_wal.rs",
         "v2_lifecycle_work_registry_validate_recovery.rs",
+        "v2_lifecycle_work_registry_validate_execution.rs",
         "tests/v2_lifecycle_work_registry_00.rs",
         "tests/v2_lifecycle_work_registry_01.rs",
         "tests/v2_lifecycle_work_registry_02.rs",
@@ -643,11 +634,10 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "tests/v2_lane_work_native_body_recovery.rs",
         "tests/v2_lane_work_effect_queue.rs",
         "v2_lane_work/historical_recovery_and_carrier_tests.rs",
+        "v2_lane_work_autonomous_ready_durability_tests.rs",
     ),
     "integration_tests/tests/sumeragi_v2_runner.rs": (
-        "sumeragi_v2_runner/restart_timing_test.rs",
-        "sumeragi_v2_runner/status_validation_helpers.rs",
-    ),
+        "sumeragi_v2_runner/restart_timing_test.rs", "sumeragi_v2_runner/status_validation_helpers.rs",),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "verus_proofs/production_transition_contracts.rs",
         "verus_proofs/in_flight_first_release_proofs.rs",
@@ -660,9 +650,15 @@ def _read_reviewed_rust_source_fixture(
     errors: list[str],
     description: str,
     expanded_components: tuple[str, ...] | None = None,
+    _expansion_stack: tuple[str, ...] = (),
 ) -> tuple[Path, str]:
-    """Expand a non-Git mutation fixture using the reviewed direct manifest."""
+    """Expand a non-Git mutation fixture using the reviewed recursive manifest."""
+
     path = repo_root / relative
+    if relative in _expansion_stack:
+        cycle = _expansion_stack + (relative,)
+        errors.append(f"{path}: reviewed Rust include fixture cycle through {cycle!r}")
+        return path, ""
     if not path.is_file() or path.is_symlink():
         errors.append(f"{path}: {description} must be a regular non-symlink file")
         return path, ""
@@ -718,6 +714,14 @@ def _read_reviewed_rust_source_fixture(
                     f"component for {path}: {error}"
                 )
                 component_source = ""
+        if expanded_components is None or component_relative in expanded_components:
+            component_repo_relative = Path(relative).parent / component_relative
+            component_repo_relative = component_repo_relative.as_posix()
+            if component_repo_relative in _REVIEWED_RUST_INCLUDE_MANIFESTS:
+                _, component_source = _read_reviewed_rust_source_fixture(
+                    repo_root, component_repo_relative, errors, description,
+                    _expansion_stack=_expansion_stack + (relative,),
+                )
         component_sources[component_relative] = component_source
     expanded: list[str] = []
     cursor = 0
@@ -731,12 +735,6 @@ def _read_reviewed_rust_source_fixture(
         ):
             cursor = invocation.end
             continue
-        nested_relative = (Path(relative).parent / component_relative).as_posix()
-        if nested_relative in _REVIEWED_RUST_INCLUDE_MANIFESTS:
-            _, component_source = _read_reviewed_rust_source_fixture(
-                repo_root, nested_relative, errors,
-                f"nested reviewed Rust include component for {path}",
-            )
         if expanded[-1] and not expanded[-1].endswith("\n"):
             expanded.append("\n")
         expanded.append(component_source)
@@ -745,6 +743,8 @@ def _read_reviewed_rust_source_fixture(
         cursor = invocation.end
     expanded.append(source[cursor:])
     return path, "".join(expanded)
+
+
 def _read_reviewed_rust_source(
     repo_root: Path,
     relative: str,
@@ -2034,7 +2034,7 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
     "07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "4f91147622f605e1724fdab9a6c9bb674797b319d5225a0951a9ebe2894a2e45"
+    "52013220063971a7c26e12c9342958f855555b5183f3cf10e4bdae384277943a"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"

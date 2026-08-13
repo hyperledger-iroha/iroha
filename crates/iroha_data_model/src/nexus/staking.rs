@@ -1,14 +1,10 @@
 //! Public lane staking records and reward metadata.
-
 use std::{collections::BTreeMap, string::String};
-
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{account::AccountId, asset::AssetId, metadata::Metadata, nexus::LaneId, peer::PeerId};
-
 /// Snapshot of a validator registered for a public Nexus lane.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct PublicLaneValidatorRecord {
@@ -35,7 +31,6 @@ pub struct PublicLaneValidatorRecord {
     /// Epoch identifier that last produced a reward payout.
     pub last_reward_epoch: Option<u64>,
 }
-
 /// Lifecycle state for a validator entry.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub enum PublicLaneValidatorStatus {
@@ -52,7 +47,6 @@ pub enum PublicLaneValidatorStatus {
     /// Validator was slashed; slash ids help correlate telemetry/audits.
     Slashed(Hash),
 }
-
 /// Per-staker bonded stake record.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct PublicLaneStakeShare {
@@ -69,7 +63,6 @@ pub struct PublicLaneStakeShare {
     /// Optional metadata for dashboards or wallet hints.
     pub metadata: Metadata,
 }
-
 /// Pending unbond request tracked on-ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct PublicLaneUnbonding {
@@ -80,7 +73,6 @@ pub struct PublicLaneUnbonding {
     /// Unix timestamp (ms) when the withdrawal can be finalised.
     pub release_at_ms: u64,
 }
-
 /// Aggregated reward share emitted for a validator or delegator.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 pub struct PublicLaneRewardShare {
@@ -91,7 +83,6 @@ pub struct PublicLaneRewardShare {
     /// Amount of rewards allocated to the account.
     pub amount: Quantity,
 }
-
 /// Role marker for a reward share.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 pub enum PublicLaneRewardRole {
@@ -100,7 +91,6 @@ pub enum PublicLaneRewardRole {
     /// Nominator/delegator portion of the reward.
     Nominator,
 }
-
 /// Ledger entry capturing the outcome of a reward distribution for auditing.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct PublicLaneRewardRecord {
@@ -117,7 +107,6 @@ pub struct PublicLaneRewardRecord {
     /// Optional metadata for auditors (tx hashes, ceremony notes, etc.).
     pub metadata: Metadata,
 }
-
 /// Pending reward summary for an account and lane.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct PublicLanePendingReward {
@@ -134,14 +123,11 @@ pub struct PublicLanePendingReward {
     /// Total amount available to claim up to `pending_through_epoch`.
     pub amount: Quantity,
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
-
     use super::*;
-
     #[derive(Encode)]
     struct ForgedPublicLaneStakeShare {
         lane_id: LaneId,
@@ -151,20 +137,17 @@ mod tests {
         pending_unbonds: BTreeMap<Hash, PublicLaneUnbonding>,
         metadata: Metadata,
     }
-
     #[derive(Encode)]
     struct ForgedPublicLaneRewardShare {
         account: AccountId,
         role: PublicLaneRewardRole,
         amount: Numeric,
     }
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked durable staking fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_durable_staking_quantities() {
         let stake = ForgedPublicLaneStakeShare {
@@ -180,7 +163,6 @@ mod tests {
             PublicLaneStakeShare::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as durable bonded stake"
         );
-
         let reward = ForgedPublicLaneRewardShare {
             account: account(0x43),
             role: PublicLaneRewardRole::Validator,

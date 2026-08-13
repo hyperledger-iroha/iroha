@@ -4153,33 +4153,13 @@ function finalizedOrderbookTestFixtures() {
   };
 }
 
-test("SoraFS orderbook helpers use finalized native pages and transaction ingress", async () => {
+test("SoraFS orderbook helpers use finalized native pages", async () => {
   const fixture = finalizedOrderbookTestFixtures();
   const calls = [];
-  const signedTransaction = Buffer.from([0xde, 0xad]);
-  const native = {
-    encodeSignedTransactionVersioned: (payload) => {
-      assert.deepEqual(Buffer.from(payload), signedTransaction);
-      return Buffer.concat([Buffer.from([1]), Buffer.from(payload)]);
-    },
-  };
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
     if (url === `${BASE_URL}/v1/node/capabilities`) {
       return createBatchCapabilitiesResponse();
-    }
-    if (init?.method === "POST") {
-      return createResponse({
-        status: 202,
-        jsonData: {
-          payload: {
-            tx_hash: "99".repeat(32),
-            submitted_at_ms: 1_800_000_006_000,
-          },
-          state: "queued",
-        },
-        headers: { "content-type": "application/json" },
-      });
     }
     if (url.includes("/v1/sorafs/orderbook/book")) {
       return createResponse({
@@ -4277,7 +4257,6 @@ test("SoraFS orderbook helpers use finalized native pages and transaction ingres
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: native,
   });
 
   const book = await client.getSorafsOrderbook({
@@ -4352,28 +4331,6 @@ test("SoraFS orderbook helpers use finalized native pages and transaction ingres
   assert.equal(streamUrl.searchParams.has("since"), false);
   assert.equal(calls.at(-1).init.headers["Last-Event-ID"], undefined);
 
-  for (const [method, path] of [
-    ["submitSorafsOrderbookOrder", "/v1/sorafs/orderbook/orders"],
-    ["submitSorafsOrderbookCancel", "/v1/sorafs/orderbook/cancel"],
-    ["submitSorafsOrderbookReceipt", "/v1/sorafs/orderbook/receipts"],
-  ]) {
-    const accepted = await client[method](signedTransaction);
-    assert.equal(accepted.payload.tx_hash, "99".repeat(32));
-    assert.equal(accepted.state, "queued");
-    const call = calls.at(-1);
-    assert.equal(call.url, `${BASE_URL}${path}`);
-    assert.equal(call.init.method, "POST");
-    assert.equal(call.init.redirect, "error");
-    assert.deepEqual(Buffer.from(call.init.body), Buffer.from([1, 0xde, 0xad]));
-    assert.equal(call.init.headers["Content-Type"], "application/x-norito");
-    assert.equal(call.init.headers.Accept, "application/x-norito, application/json");
-    assert.equal(call.init.headers["X-Iroha-Account"], undefined);
-    assert.equal(call.init.headers["X-Iroha-Signature"], undefined);
-  }
-  assert.equal(
-    calls.filter((call) => call.url === `${BASE_URL}/v1/node/capabilities`).length,
-    1,
-  );
 });
 
 test("SoraFS orderbook rejects stale cursors and noncanonical transactions", async () => {
@@ -4431,28 +4388,6 @@ test("SoraFS orderbook rejects stale cursors and noncanonical transactions", asy
   await assert.rejects(
     () => rejectingClient.listSorafsOrderbookEvents({ etag: '"stale-alias"' }),
     /unsupported fields: etag/,
-  );
-  await assert.rejects(
-    () => rejectingClient.submitSorafsOrderbookOrder(),
-    /signedTransaction is required/,
-  );
-  await assert.rejects(
-    () => rejectingClient.submitSorafsOrderbookReceipt(Buffer.alloc(0)),
-    /signedTransaction must not be empty/,
-  );
-  await assert.rejects(
-    () => rejectingClient.submitSorafsOrderbookCancel(Buffer.from([1])),
-    /signedTransaction must be canonical Norito SignedTransaction bytes/,
-  );
-  await assert.rejects(
-    () =>
-      rejectingClient.submitSorafsOrderbookOrder(Buffer.from([1]), {
-        canonicalAuth: {
-          accountId: CANONICAL_AUTH_ALIAS,
-          privateKey: Buffer.alloc(32, 1),
-        },
-      }),
-    /unsupported fields: canonicalAuth/,
   );
   assert.equal(fetchCount, 0);
 

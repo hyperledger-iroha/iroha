@@ -1,5 +1,4 @@
 use super::*;
-
 fn checkpoint_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -10,22 +9,18 @@ fn checkpoint_path() -> PathBuf {
         PathBuf::from("/var/lib/iroha/sorafs/evidence-viewer.to")
     }
 }
-
 fn receipt_public_key_hex() -> String {
     let key = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("test keypair");
     hex::encode(key.public_key().to_bytes().1)
 }
-
 fn archive_public_key_hex() -> String {
     let key = KeyPair::try_from_seed(vec![0x62; 32], Algorithm::Ed25519).expect("test keypair");
     hex::encode(key.public_key().to_bytes().1)
 }
-
 fn transparency_publisher_public_key_hex() -> String {
     let key = KeyPair::try_from_seed(vec![0x63; 32], Algorithm::Ed25519).expect("test keypair");
     hex::encode(key.public_key().to_bytes().1)
 }
-
 fn valid_config() -> SorafsEvidenceViewerConfig {
     SorafsEvidenceViewerConfig {
         enabled: true,
@@ -60,7 +55,6 @@ fn valid_config() -> SorafsEvidenceViewerConfig {
         ..SorafsEvidenceViewerConfig::default()
     }
 }
-
 #[test]
 fn enabled_policy_binds_exact_runtime_qualifications() {
     let mut emitter = Emitter::new();
@@ -102,7 +96,6 @@ fn enabled_policy_binds_exact_runtime_qualifications() {
         transparency_publisher_public_key_hex()
     );
 }
-
 #[test]
 fn enabled_policy_rejects_noncanonical_webauthn_rp_ids_and_origins() {
     for rp_id in ["Review.example", "localhost", "127.0.0.1"] {
@@ -115,7 +108,6 @@ fn enabled_policy_rejects_noncanonical_webauthn_rp_ids_and_origins() {
         );
         assert!(emitter.into_result().is_err());
     }
-
     for origin in [
         "http://review.example",
         "https://operator:secret@review.example",
@@ -134,14 +126,12 @@ fn enabled_policy_rejects_noncanonical_webauthn_rp_ids_and_origins() {
             "{origin:?} must fail closed"
         );
     }
-
     let mut canonical = valid_config();
     canonical.webauthn_allowed_origins = vec!["https://login.review.example:8443".to_owned()];
     let mut emitter = Emitter::new();
     assert!(canonical.parse(true, &mut emitter).is_some());
     assert!(emitter.into_result().is_ok());
 }
-
 #[test]
 fn enabled_policy_rejects_missing_stale_or_noncanonical_qualifications() {
     let mut missing = valid_config();
@@ -149,7 +139,6 @@ fn enabled_policy_rejects_missing_stale_or_noncanonical_qualifications() {
     let mut emitter = Emitter::new();
     assert!(missing.parse(true, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
-
     let mut config = valid_config();
     config.webauthn_revision = Some(0);
     config.grant_policy_digest_hex = Some("A2".repeat(32));
@@ -163,12 +152,10 @@ fn enabled_policy_rejects_missing_stale_or_noncanonical_qualifications() {
     config.checkpoint_store_handle = Some("sealed.evidence-viewer.test".to_owned());
     config.checkpoint_store_revision = Some(0);
     config.checkpoint_store_policy_digest_hex = Some("A5".repeat(32));
-
     let mut emitter = Emitter::new();
     assert!(config.parse(true, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn transparency_publisher_binding_is_required_and_canonical() {
     let mutations: [fn(&mut SorafsEvidenceViewerConfig); 11] = [
@@ -195,7 +182,6 @@ fn transparency_publisher_binding_is_required_and_canonical() {
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn disabled_policy_requires_no_checkpoint_store_and_rejects_stray_binding() {
     let mut emitter = Emitter::new();
@@ -205,19 +191,16 @@ fn disabled_policy_requires_no_checkpoint_store_and_rejects_stray_binding() {
             .is_none()
     );
     assert!(emitter.into_result().is_ok());
-
     let mut config = SorafsEvidenceViewerConfig::default();
     config.checkpoint_store_handle = Some("sealed.evidence-viewer.checkpoints.primary".to_owned());
     let mut emitter = Emitter::new();
     assert!(config.parse(true, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
-
     let mut config = SorafsEvidenceViewerConfig::default();
     config.compaction_archive_handle = Some("object-lock.evidence.compaction.primary".to_owned());
     let mut emitter = Emitter::new();
     assert!(config.parse(true, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
-
     let mut config = SorafsEvidenceViewerConfig::default();
     config.transparency_publisher_handle =
         Some("transparency.evidence.publisher.primary".to_owned());

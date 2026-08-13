@@ -5,7 +5,6 @@
 //! This lets future DA upload code publish cold query snapshots without
 //! inventing per-call conventions for compression, digests, or checkpoint
 //! references.
-
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::BlockHeader,
@@ -15,12 +14,10 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::query::{
     index_status::QueryIndexStatus,
     projection_checkpoint::{QueryProjectionCheckpointShard, QueryProjectionResourceKind},
 };
-
 /// Version of the immutable query projection shard archive payload.
 pub const QUERY_PROJECTION_SHARD_ARCHIVE_VERSION: u16 = 1;
 /// Codec label describing the rowset bytes carried inside a shard archive.
@@ -49,7 +46,6 @@ pub const QUERY_PROJECTION_METADATA_ROWSET_HASH_KEY: &str = "query_projection.ro
 pub const QUERY_PROJECTION_METADATA_EMITTED_AT_KEY: &str = "query_projection.emitted_at_unix";
 /// Default zstd compression level used for archived query projection payloads.
 pub const QUERY_PROJECTION_DA_ZSTD_LEVEL: i32 = 3;
-
 /// Errors returned when encoding or compressing query projection shard archives.
 #[derive(Debug, Error)]
 pub enum QueryProjectionShardArchiveError {
@@ -60,7 +56,6 @@ pub enum QueryProjectionShardArchiveError {
     #[error("failed to compress query projection shard archive with zstd: {0}")]
     Compress(#[source] std::io::Error),
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 struct QueryProjectionShardLocator {
     version: u16,
@@ -71,7 +66,6 @@ struct QueryProjectionShardLocator {
     indexed_height: u64,
     indexed_block_hash: Option<HashOf<BlockHeader>>,
 }
-
 /// Immutable archive describing one query projection shard snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionShardArchive {
@@ -100,7 +94,6 @@ pub struct QueryProjectionShardArchive {
     /// Opaque rowset/cube payload bytes for this shard.
     pub payload: Vec<u8>,
 }
-
 /// Prepared DA payload derived from a shard archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryProjectionShardDaPayload {
@@ -113,7 +106,6 @@ pub struct QueryProjectionShardDaPayload {
     /// Canonical metadata describing the shard for downstream pin/introspection tooling.
     pub metadata: ExtraMetadata,
 }
-
 impl QueryProjectionResourceKind {
     /// Stable lowercase identifier for this resource family.
     #[must_use]
@@ -127,7 +119,6 @@ impl QueryProjectionResourceKind {
         }
     }
 }
-
 impl QueryProjectionShardArchive {
     /// Construct a shard archive from the latest durable query index snapshot.
     #[must_use]
@@ -155,7 +146,6 @@ impl QueryProjectionShardArchive {
             payload,
         }
     }
-
     fn locator(&self) -> QueryProjectionShardLocator {
         QueryProjectionShardLocator {
             version: self.version,
@@ -167,7 +157,6 @@ impl QueryProjectionShardArchive {
             indexed_block_hash: self.indexed_block_hash,
         }
     }
-
     /// Human-readable canonical locator for this shard snapshot.
     #[must_use]
     pub fn locator_label(&self) -> String {
@@ -187,7 +176,6 @@ impl QueryProjectionShardArchive {
         }
         label
     }
-
     /// Deterministic client blob identifier derived from the shard locator.
     ///
     /// The identifier is stable for a given resource/partition/indexed snapshot, even if
@@ -201,7 +189,6 @@ impl QueryProjectionShardArchive {
             .map_err(QueryProjectionShardArchiveError::Encode)?;
         Ok(BlobDigest::from_hash(blake3::hash(&bytes)))
     }
-
     /// Encode the archive itself as canonical Norito bytes.
     ///
     /// # Errors
@@ -210,7 +197,6 @@ impl QueryProjectionShardArchive {
     pub fn encode_archive(&self) -> Result<Vec<u8>, QueryProjectionShardArchiveError> {
         norito::encode_canonical(self).map_err(QueryProjectionShardArchiveError::Encode)
     }
-
     /// Encode the archive as zstd-compressed DA payload bytes.
     ///
     /// # Errors
@@ -221,7 +207,6 @@ impl QueryProjectionShardArchive {
         zstd::bulk::compress(&encoded, QUERY_PROJECTION_DA_ZSTD_LEVEL)
             .map_err(QueryProjectionShardArchiveError::Compress)
     }
-
     /// Build canonical DA metadata entries describing this shard archive.
     #[must_use]
     pub fn da_metadata(&self) -> ExtraMetadata {
@@ -273,7 +258,6 @@ impl QueryProjectionShardArchive {
         }
         ExtraMetadata { items }
     }
-
     /// Build the compressed payload and metadata bundle that a DA worker can ingest.
     ///
     /// # Errors
@@ -290,7 +274,6 @@ impl QueryProjectionShardArchive {
             metadata: self.da_metadata(),
         })
     }
-
     /// Convert an uploaded archive into the checkpoint shard reference persisted in state.
     ///
     /// # Errors
@@ -312,28 +295,22 @@ impl QueryProjectionShardArchive {
         })
     }
 }
-
 fn metadata_entry(key: impl Into<String>, value: Vec<u8>) -> MetadataEntry {
     MetadataEntry::new(key, value, MetadataVisibility::Public)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::Hash;
-
     fn sample_hash(byte: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::new([byte; Hash::LENGTH]))
     }
-
     fn sample_digest(byte: u8) -> BlobDigest {
         BlobDigest::new([byte; 32])
     }
-
     fn sample_ticket(byte: u8) -> StorageTicketId {
         StorageTicketId::new([byte; 32])
     }
-
     #[test]
     fn shard_archive_uses_status_snapshot_and_payload_digest() {
         let archive = QueryProjectionShardArchive::from_index_status(
@@ -348,7 +325,6 @@ mod tests {
             3,
             b"rows".to_vec(),
         );
-
         assert_eq!(archive.version, QUERY_PROJECTION_SHARD_ARCHIVE_VERSION);
         assert_eq!(
             archive.payload_codec,
@@ -368,7 +344,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn shard_archive_round_trips_through_norito() {
         let archive = QueryProjectionShardArchive::from_index_status(
@@ -383,13 +358,11 @@ mod tests {
             2,
             b"payload".to_vec(),
         );
-
         let bytes = archive.encode_archive().expect("encode archive");
         let blob_id = archive.client_blob_id().expect("derive client blob id");
         let decoded: QueryProjectionShardArchive =
             norito::decode_canonical(&bytes).expect("decode archive");
         assert_eq!(decoded, archive);
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate = {
@@ -417,7 +390,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn shard_archive_builds_stable_da_payload_and_checkpoint_reference() {
         let archive = QueryProjectionShardArchive::from_index_status(
@@ -432,7 +404,6 @@ mod tests {
             1,
             b"rowset".to_vec(),
         );
-
         let first_payload = archive.build_da_payload().expect("build payload");
         let second_payload = archive.build_da_payload().expect("build payload again");
         assert_eq!(
@@ -444,14 +415,12 @@ mod tests {
             archive.client_blob_id().expect("blob id")
         );
         assert!(!first_payload.payload.is_empty());
-
         let expected_archive = archive.encode_archive().expect("encode archive");
         let decompressed = zstd::bulk::decompress(&first_payload.payload, expected_archive.len())
             .expect("decompress payload");
         let decoded: QueryProjectionShardArchive =
             norito::decode_canonical(&decompressed).expect("decode compressed archive");
         assert_eq!(decoded, archive);
-
         let metadata_keys: Vec<&str> = first_payload
             .metadata
             .items
@@ -462,7 +431,6 @@ mod tests {
         assert!(metadata_keys.contains(&QUERY_PROJECTION_METADATA_RESOURCE_KEY));
         assert!(metadata_keys.contains(&QUERY_PROJECTION_METADATA_ROWSET_HASH_KEY));
         assert!(metadata_keys.contains(&QUERY_PROJECTION_METADATA_ASSET_KEY));
-
         let checkpoint = archive
             .into_checkpoint_shard(sample_digest(0x22), sample_ticket(0x33))
             .expect("checkpoint shard");

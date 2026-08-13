@@ -17,19 +17,16 @@ fn duplicate_cross_replica_submission_reuses_one_transaction() {
     .expect("second orchestrator");
     let authority = account(1);
     let action = policy_action(policy(1));
-
     let first_outcome = first
         .submit(authority.clone(), action.clone(), [0x11; 32])
         .expect("first submit");
     let second_outcome = second
         .submit(authority, action, [0x22; 32])
         .expect("second submit");
-
     assert_eq!(submitter.calls(), 1);
     assert_eq!(first_outcome.operation_id, second_outcome.operation_id);
     assert_eq!(first_outcome.transaction_id, second_outcome.transaction_id);
 }
-
 #[test]
 fn finalize_sortition_rejects_non_policy_authority_without_mutation() {
     let governance = account(90);
@@ -50,7 +47,6 @@ fn finalize_sortition_rejects_non_policy_authority_without_mutation() {
         action,
     );
 }
-
 #[test]
 fn selection_governed_actions_reject_non_selected_authority_without_mutation() {
     let governance = account(90);
@@ -66,7 +62,6 @@ fn selection_governed_actions_reject_non_selected_authority_without_mutation() {
             sortition_digest,
         )),
     );
-
     for action in [
         ModerationNativeActionV1::ResolveChallenge(ResolveSorafsModerationChallenge::new(
             "case-failover".to_owned(),
@@ -87,7 +82,6 @@ fn selection_governed_actions_reject_non_selected_authority_without_mutation() {
         );
     }
 }
-
 #[test]
 fn historical_operation_replay_precedes_rotated_finalized_authority() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -121,7 +115,6 @@ fn historical_operation_replay_precedes_rotated_finalized_authority() {
         .expect("initial submission");
     assert!(!first.replay);
     assert_eq!(submitter.calls(), 1);
-
     let mut rotated_snapshot = snapshot_with_policy(2, [2; 32], policy(2), rotated_governance);
     rotated_snapshot.events[0].sequence = 2;
     reader.replace(rotated_snapshot);
@@ -132,7 +125,6 @@ fn historical_operation_replay_precedes_rotated_finalized_authority() {
     assert_eq!(replay.operation_id, first.operation_id);
     assert_eq!(submitter.calls(), 1);
 }
-
 #[test]
 fn same_semantic_identity_with_different_action_is_rejected() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -149,7 +141,6 @@ fn same_semantic_identity_with_different_action_is_rejected() {
         .expect("first submit");
     let mut conflicting = policy(1);
     conflicting.missing_commit_penalty_points = 11;
-
     let error = orchestrator
         .submit(authority, policy_action(conflicting), [0x22; 32])
         .expect_err("conflicting replay must fail");
@@ -158,7 +149,6 @@ fn same_semantic_identity_with_different_action_is_rejected() {
         ModerationOrchestratorError::IdempotencyConflict { .. }
     ));
 }
-
 #[test]
 fn stale_and_equivocating_finalized_cursors_fail_closed() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -172,20 +162,17 @@ fn stale_and_equivocating_finalized_cursors_fail_closed() {
     )
     .expect("orchestrator");
     orchestrator.reconcile().expect("initial reconcile");
-
     reader.replace(empty_snapshot(1, [1; 32]));
     assert!(matches!(
         orchestrator.reconcile(),
         Err(ModerationOrchestratorError::StaleFinalizedCursor { .. })
     ));
-
     reader.replace(empty_snapshot(2, [9; 32]));
     assert!(matches!(
         orchestrator.reconcile(),
         Err(ModerationOrchestratorError::FinalizedEquivocation { .. })
     ));
 }
-
 #[test]
 fn every_external_collaborator_is_reentrant_without_holding_the_state_mutex() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -224,24 +211,20 @@ fn every_external_collaborator_is_reentrant_without_holding_the_state_mutex() {
         .expect("orchestrator"),
     );
     probe.attach(&orchestrator);
-
     orchestrator
         .submit(account(1), policy_action(policy(1)), [0x45; 32])
         .expect("sign and submit outside the mutex");
     orchestrator.reconcile().expect("lookup outside the mutex");
-
     let governance = account(99);
     let open = activated_case_snapshot(2, [2; 32], governance.clone());
     reader.replace(finalized_case_snapshot(open, 3, [3; 32], governance));
     orchestrator
         .reconcile()
         .expect("terminal sinks outside the mutex");
-
     assert!(probe.checks() >= 6);
     assert_eq!(settlement.delivered().len(), 1);
     assert_eq!(publication.delivered().len(), 1);
 }
-
 #[test]
 fn blocking_signer_claim_allows_concurrent_duplicate_worker_to_exit() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -272,7 +255,6 @@ fn blocking_signer_claim_allows_concurrent_duplicate_worker_to_exit() {
         policy_action(policy(1)),
         [0x46; 32],
     );
-
     let first = {
         let orchestrator = Arc::clone(&orchestrator);
         thread::spawn(move || orchestrator.drive_external_work())
@@ -296,7 +278,6 @@ fn blocking_signer_claim_allows_concurrent_duplicate_worker_to_exit() {
         .expect("first worker thread")
         .expect("first worker finishes");
     duplicate.join().expect("duplicate worker thread");
-
     assert!(lock_was_free);
     duplicate_result
         .expect("duplicate worker exits while signer is blocked")
@@ -304,7 +285,6 @@ fn blocking_signer_claim_allows_concurrent_duplicate_worker_to_exit() {
     assert_eq!(inner.sign_calls(), 1);
     assert_eq!(inner.calls(), 1);
 }
-
 #[test]
 fn generic_signed_envelope_contract_rejects_network_ttl_nonce_metadata_and_action_substitution() {
     let network_id = test_network_id();
@@ -352,7 +332,6 @@ fn generic_signed_envelope_contract_rejects_network_ttl_nonce_metadata_and_actio
             if message.contains("generation")
     ));
     let signer = key_for_authority(&authority);
-
     let exact_builder = || {
         TransactionBuilder::new(
             request.network_id,
@@ -368,11 +347,9 @@ fn generic_signed_envelope_contract_rejects_network_ttl_nonce_metadata_and_actio
             .with_instructions([instruction])
             .sign(signer.private_key())
     };
-
     let exact = sign_exact(exact_builder(), action.instruction());
     ModerationSignedTransactionV1::from_signed_transaction(&request, &exact)
         .expect("exact generic signed envelope");
-
     let wrong_network = sign_exact(
         TransactionBuilder::new(
             iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -389,7 +366,6 @@ fn generic_signed_envelope_contract_rejects_network_ttl_nonce_metadata_and_actio
         ModerationSignedTransactionV1::from_signed_transaction(&request, &wrong_network),
         Err(ModerationSubmissionFailureV1::PermanentRejection),
     );
-
     let mut wrong_ttl_builder = exact_builder();
     wrong_ttl_builder.set_ttl(core::time::Duration::from_millis(
         MODERATION_TRANSACTION_TTL_MS_V1 + 1,
@@ -401,7 +377,6 @@ fn generic_signed_envelope_contract_rejects_network_ttl_nonce_metadata_and_actio
         ModerationSignedTransactionV1::from_signed_transaction(&request, &wrong_ttl),
         Err(ModerationSubmissionFailureV1::PermanentRejection),
     );
-
     let mut nonce_builder = exact_builder();
     nonce_builder.set_ttl(core::time::Duration::from_millis(
         MODERATION_TRANSACTION_TTL_MS_V1,
@@ -414,7 +389,6 @@ fn generic_signed_envelope_contract_rejects_network_ttl_nonce_metadata_and_actio
         ModerationSignedTransactionV1::from_signed_transaction(&request, &with_nonce),
         Err(ModerationSubmissionFailureV1::PermanentRejection),
     );
-
     let mut metadata = Metadata::default();
     metadata.insert(
         "moderation_action_hint"
@@ -430,7 +404,6 @@ fn generic_signed_envelope_contract_rejects_network_ttl_nonce_metadata_and_actio
         ModerationSignedTransactionV1::from_signed_transaction(&request, &with_metadata),
         Err(ModerationSubmissionFailureV1::PermanentRejection),
     );
-
     let substituted_action = ModerationNativeActionV1::FinalizeCase(
         FinalizeSorafsModerationCase::new("case-substitute".to_owned(), "round-1".to_owned()),
     );
@@ -440,7 +413,6 @@ fn generic_signed_envelope_contract_rejects_network_ttl_nonce_metadata_and_actio
         Err(ModerationSubmissionFailureV1::PermanentRejection),
     );
 }
-
 #[test]
 fn expired_finalized_not_found_renews_one_generation_and_preserves_history() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -460,7 +432,6 @@ fn expired_finalized_not_found_renews_one_generation_and_preserves_history() {
         retained_envelope(&orchestrator);
     assert_eq!(generation, 1);
     assert_eq!(state, StoredOutboxStateV1::Submitted);
-
     submitter.set_lookup(
         operation_id,
         first_signed.transaction_id,
@@ -476,7 +447,6 @@ fn expired_finalized_not_found_renews_one_generation_and_preserves_history() {
     orchestrator
         .reconcile()
         .expect("renew after exact finalized absence");
-
     let (_, generation, second_signed, _, state) = retained_envelope(&orchestrator);
     assert_eq!(generation, 2);
     assert_eq!(state, StoredOutboxStateV1::Submitted);
@@ -509,7 +479,6 @@ fn expired_finalized_not_found_renews_one_generation_and_preserves_history() {
         retired_envelope_record_digest(operation_id, retired)
     );
 }
-
 #[test]
 fn expired_envelope_does_not_renew_for_positive_unknown_rejected_or_stale_absence() {
     let scenarios = [
@@ -603,7 +572,6 @@ fn expired_envelope_does_not_renew_for_positive_unknown_rejected_or_stale_absenc
         }
     }
 }
-
 #[test]
 fn ambiguous_submission_never_renews_without_exact_finalized_absence() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -633,7 +601,6 @@ fn ambiguous_submission_never_renews_without_exact_finalized_absence() {
     assert_eq!(state, StoredOutboxStateV1::Ambiguous);
     assert_eq!(submitter.sign_calls(), 1);
 }
-
 #[test]
 fn late_applied_retired_envelope_fences_new_generation_until_semantic_finality() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -667,7 +634,6 @@ fn late_applied_retired_envelope_fences_new_generation_until_semantic_finality()
     orchestrator.reconcile().expect("renew envelope");
     let (_, generation, second_signed, second_timing, _) = retained_envelope(&orchestrator);
     assert_eq!(generation, 2);
-
     submitter.set_lookup(
         operation_id,
         first_signed.transaction_id,
@@ -707,7 +673,6 @@ fn late_applied_retired_envelope_fences_new_generation_until_semantic_finality()
     }
     assert_eq!(submitter.sign_calls(), 2);
     assert_eq!(submitter.calls(), 2);
-
     submitter.set_lookup(
         operation_id,
         first_signed.transaction_id,
@@ -732,7 +697,6 @@ fn late_applied_retired_envelope_fences_new_generation_until_semantic_finality()
             StoredRetiredEnvelopeDispositionV1::Applied
         );
     }
-
     submitter.set_lookup(
         operation_id,
         first_signed.transaction_id,
@@ -752,7 +716,6 @@ fn late_applied_retired_envelope_fences_new_generation_until_semantic_finality()
         .expect("applied history fence is sticky");
     assert_eq!(retained_envelope(&orchestrator).1, 2);
     assert_eq!(submitter.sign_calls(), 2);
-
     let mut finalized = snapshot_with_policy(6, [6; 32], active_policy, authority);
     finalized.finalized_at_unix_ms = second_timing
         .expires_at_unix_ms
@@ -772,7 +735,6 @@ fn late_applied_retired_envelope_fences_new_generation_until_semantic_finality()
         Some(first_signed.transaction_id)
     );
 }
-
 #[test]
 fn restart_recovers_retired_generation_after_signer_outage() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -817,7 +779,6 @@ fn restart_recovers_retired_generation_after_signer_outage() {
         assert!(entry.transaction_id.is_none());
     }
     drop(orchestrator);
-
     submitter.set_sign_failure(None);
     let restarted =
         ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
@@ -831,7 +792,6 @@ fn restart_recovers_retired_generation_after_signer_outage() {
     assert_ne!(second_signed.transaction_id, first_signed.transaction_id);
     assert_eq!(submitter.sign_calls(), 3);
 }
-
 #[test]
 fn renewed_envelope_restart_replays_byte_identical_bytes_without_resigning() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -870,7 +830,6 @@ fn renewed_envelope_restart_replays_byte_identical_bytes_without_resigning() {
     assert_eq!(state, StoredOutboxStateV1::Signed);
     assert_eq!(submitter.sign_calls(), 2);
     drop(orchestrator);
-
     submitter.set_failure(None);
     let restarted =
         ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
@@ -884,7 +843,6 @@ fn renewed_envelope_restart_replays_byte_identical_bytes_without_resigning() {
     assert_eq!(replayed, retained);
     assert_eq!(submitter.sign_calls(), 2);
 }
-
 #[test]
 fn tampered_retired_envelope_history_fails_closed_on_restart() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -916,7 +874,6 @@ fn tampered_retired_envelope_history_fails_closed_on_restart() {
     ));
     orchestrator.reconcile().expect("renew envelope");
     drop(orchestrator);
-
     let original = fs::read(&checkpoint.checkpoint_path).expect("read checkpoint");
     for tamper in 0_u8..3 {
         let mut state: ModerationOrchestratorCheckpointV1 =
@@ -946,7 +903,6 @@ fn tampered_retired_envelope_history_fails_closed_on_restart() {
         write_atomic(&checkpoint.checkpoint_path, &original).expect("restore checkpoint");
     }
 }
-
 #[test]
 fn envelope_generation_increment_fails_closed_on_overflow() {
     assert_eq!(
@@ -954,7 +910,6 @@ fn envelope_generation_increment_fails_closed_on_overflow() {
         Err(ModerationOrchestratorError::GenerationOverflow)
     );
 }
-
 #[test]
 fn restart_reconciles_crash_before_ingress_without_replacing_signed_bytes() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -982,7 +937,6 @@ fn restart_reconciles_crash_before_ingress_without_replacing_signed_bytes() {
     };
     drop(interrupted);
     drop(orchestrator);
-
     let mut after_lease = empty_snapshot(2, [2; 32]);
     after_lease.finalized_at_unix_ms = MODERATION_EXTERNAL_WORK_LEASE_MS_V1 + 2;
     reader.replace(after_lease);
@@ -992,7 +946,6 @@ fn restart_reconciles_crash_before_ingress_without_replacing_signed_bytes() {
     restarted
         .reconcile()
         .expect("lookup proves no ingress before exact retry");
-
     let state = restarted.state.lock().expect("restarted state");
     let entry = state
         .outbox
@@ -1007,7 +960,6 @@ fn restart_reconciles_crash_before_ingress_without_replacing_signed_bytes() {
     assert_eq!(submitter.sign_calls(), 1);
     assert_eq!(submitter.calls(), 1);
 }
-
 #[test]
 fn restart_reconciles_crash_after_ingress_effect_without_duplicate_submit() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1042,7 +994,6 @@ fn restart_reconciles_crash_after_ingress_effect_without_duplicate_submit() {
     };
     drop(interrupted);
     drop(orchestrator);
-
     let mut after_lease = empty_snapshot(2, [2; 32]);
     after_lease.finalized_at_unix_ms = MODERATION_EXTERNAL_WORK_LEASE_MS_V1 + 2;
     reader.replace(after_lease);
@@ -1052,7 +1003,6 @@ fn restart_reconciles_crash_after_ingress_effect_without_duplicate_submit() {
     restarted
         .reconcile()
         .expect("lookup finds the pre-crash ingress effect");
-
     let state = restarted.state.lock().expect("restarted state");
     let entry = state
         .outbox
@@ -1067,7 +1017,6 @@ fn restart_reconciles_crash_after_ingress_effect_without_duplicate_submit() {
     assert_eq!(submitter.sign_calls(), 1);
     assert_eq!(submitter.calls(), 1);
 }
-
 #[test]
 fn expired_work_lease_rejects_stale_signer_completion() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1098,7 +1047,6 @@ fn expired_work_lease_rejects_stale_signer_completion() {
         PreparedExternalWorkV1::Sign { identity, claim, .. }
             if identity.identity == operation_id && claim.generation == 1
     ));
-
     reader.replace(empty_snapshot_at(
         2,
         [2; 32],
@@ -1114,7 +1062,6 @@ fn expired_work_lease_rejects_stale_signer_completion() {
         .expect("stale completion is ignored");
     let after_stale_completion =
         fs::read(&orchestrator.config.checkpoint_path).expect("checkpoint after stale result");
-
     assert_eq!(before_stale_completion, after_stale_completion);
     assert_eq!(submitter.sign_calls(), 2);
     assert_eq!(submitter.calls(), 1);
@@ -1128,7 +1075,6 @@ fn expired_work_lease_rejects_stale_signer_completion() {
     assert!(entry.work_generation >= 3);
     assert!(entry.work_claim.is_none());
 }
-
 #[test]
 fn expired_ingress_lease_fences_stale_receipt_and_duplicate_effect() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1154,7 +1100,6 @@ fn expired_ingress_lease_fences_stale_receipt_and_duplicate_effect() {
         PreparedExternalWorkV1::Submit { claim, .. }
             if claim.generation == 2
     ));
-
     reader.replace(empty_snapshot_at(
         2,
         [2; 32],
@@ -1170,7 +1115,6 @@ fn expired_ingress_lease_fences_stale_receipt_and_duplicate_effect() {
         .expect("stale ingress receipt is ignored");
     let after_stale_completion =
         fs::read(&orchestrator.config.checkpoint_path).expect("checkpoint after stale receipt");
-
     assert_eq!(before_stale_completion, after_stale_completion);
     assert_eq!(submitter.sign_calls(), 1);
     assert_eq!(submitter.calls(), 1);
@@ -1184,7 +1128,6 @@ fn expired_ingress_lease_fences_stale_receipt_and_duplicate_effect() {
     assert_eq!(entry.attempts, 2);
     assert!(entry.work_claim.is_none());
 }
-
 #[test]
 fn tampered_external_work_claim_fails_closed_on_restart() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1215,7 +1158,6 @@ fn tampered_external_work_claim_fails_closed_on_restart() {
             if identity.identity == operation_id
     ));
     drop(orchestrator);
-
     let bytes = fs::read(&checkpoint.checkpoint_path).expect("read claimed checkpoint");
     let mut state: ModerationOrchestratorCheckpointV1 =
         norito::decode_from_bytes(&bytes).expect("decode claimed checkpoint");
@@ -1229,14 +1171,12 @@ fn tampered_external_work_claim_fails_closed_on_restart() {
         &norito::to_bytes(&state).expect("encode tampered claim"),
     )
     .expect("write tampered claim");
-
     assert!(matches!(
         ModerationOrchestratorV1::open(checkpoint, deps(reader, submitter)),
         Err(ModerationOrchestratorError::CheckpointCorrupt(message))
             if message.contains("external-work claim")
     ));
 }
-
 #[test]
 fn restart_submits_the_exact_envelope_persisted_before_ingress() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1277,7 +1217,6 @@ fn restart_submits_the_exact_envelope_persisted_before_ingress() {
     assert_eq!(submitter.sign_calls(), 1);
     assert_eq!(submitter.calls(), 0);
     drop(orchestrator);
-
     let restarted =
         ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
             .expect("restart from signed checkpoint");
@@ -1300,7 +1239,6 @@ fn restart_submits_the_exact_envelope_persisted_before_ingress() {
     assert_eq!(submitter.sign_calls(), 1);
     assert_eq!(submitter.calls(), 1);
 }
-
 #[test]
 fn restart_preserves_unexpired_signing_claim_without_overlap() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1331,7 +1269,6 @@ fn restart_preserves_unexpired_signing_claim_without_overlap() {
             if identity.identity == operation_id
     ));
     drop(orchestrator);
-
     let restarted = ModerationOrchestratorV1::open(checkpoint, deps(reader, submitter))
         .expect("retain signer-only crash state");
     let state = restarted.state.lock().expect("restarted state");
@@ -1352,7 +1289,6 @@ fn restart_preserves_unexpired_signing_claim_without_overlap() {
             && claim.lease_expires_at_unix_ms == 1 + MODERATION_EXTERNAL_WORK_LEASE_MS_V1
     }));
 }
-
 #[test]
 fn tampered_retained_transaction_bytes_digest_and_hash_fail_closed() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1372,7 +1308,6 @@ fn tampered_retained_transaction_bytes_digest_and_hash_fail_closed() {
     );
     execute_one_prepared_sign(&orchestrator, operation_id);
     drop(orchestrator);
-
     let original = fs::read(&checkpoint.checkpoint_path).expect("read canonical signed checkpoint");
     for tamper in 0_u8..3 {
         let mut state: ModerationOrchestratorCheckpointV1 =
@@ -1419,7 +1354,6 @@ fn tampered_retained_transaction_bytes_digest_and_hash_fail_closed() {
         write_atomic(&checkpoint.checkpoint_path, &original).expect("restore checkpoint");
     }
 }
-
 #[test]
 fn definitely_not_submitted_reuses_retained_envelope_without_resigning() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1446,7 +1380,6 @@ fn definitely_not_submitted_reuses_retained_envelope_without_resigning() {
     };
     assert_eq!(submitter.sign_calls(), 1);
     assert_eq!(submitter.calls(), 1);
-
     submitter.set_failure(None);
     orchestrator
         .reconcile()
@@ -1463,7 +1396,6 @@ fn definitely_not_submitted_reuses_retained_envelope_without_resigning() {
     assert_eq!(submitter.sign_calls(), 1);
     assert_eq!(submitter.calls(), 2);
 }
-
 #[test]
 fn ambiguous_submission_is_reconciled_after_restart_without_resubmit() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1505,7 +1437,6 @@ fn ambiguous_submission_is_reconciled_after_restart_without_resubmit() {
             retained_transaction_digest
         );
     }
-
     reader.replace(empty_snapshot(2, [2; 32]));
     let restarted = ModerationOrchestratorV1::open(
         checkpoint.clone(),
@@ -1529,7 +1460,6 @@ fn ambiguous_submission_is_reconciled_after_restart_without_resubmit() {
     }
     assert_eq!(submitter.calls(), 1);
     assert_eq!(submitter.sign_calls(), 1);
-
     reader.replace(snapshot_with_policy(
         3,
         [3; 32],
@@ -1540,13 +1470,11 @@ fn ambiguous_submission_is_reconciled_after_restart_without_resubmit() {
     let replay = restarted
         .submit(authority, policy_action(active_policy), [0x11; 32])
         .expect("finalized replay");
-
     assert_eq!(submitter.calls(), 1);
     assert_eq!(submitter.sign_calls(), 1);
     assert_eq!(replay.status, ModerationOperationStatusV1::Finalized);
     assert!(replay.replay);
 }
-
 #[test]
 fn terminal_handoff_crash_after_effect_retries_same_id_after_restart() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1608,7 +1536,6 @@ fn terminal_handoff_crash_after_effect_retries_same_id_after_restart() {
         .expect("sink effect before checkpoint finalization");
     drop(interrupted);
     drop(orchestrator);
-
     let restarted = ModerationOrchestratorV1::open(checkpoint, runtime_deps()).expect("restart");
     restarted
         .reconcile()
@@ -1624,7 +1551,6 @@ fn terminal_handoff_crash_after_effect_retries_same_id_after_restart() {
         assert_eq!(state.pending_handoffs.len(), 1);
         assert_eq!(state.completed_handoffs.len(), 1);
     }
-
     reader.replace(lease_expired);
     restarted
         .reconcile()
@@ -1637,7 +1563,6 @@ fn terminal_handoff_crash_after_effect_retries_same_id_after_restart() {
     assert!(state.pending_handoffs.is_empty());
     assert_eq!(state.completed_handoffs.len(), 2);
 }
-
 #[test]
 fn terminal_finalization_converges_after_restart_and_split_peer_replay() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1666,7 +1591,6 @@ fn terminal_finalization_converges_after_restart_and_split_peer_replay() {
         "case-failover".to_owned(),
         "round-1".to_owned(),
     ));
-
     let first = ModerationOrchestratorV1::open(first_checkpoint.clone(), runtime_deps())
         .expect("first orchestrator");
     let second = ModerationOrchestratorV1::open(second_checkpoint, runtime_deps())
@@ -1688,7 +1612,6 @@ fn terminal_finalization_converges_after_restart_and_split_peer_replay() {
         split_peer_submit.transaction_id
     );
     assert_eq!(submitter.calls(), 1);
-
     drop(first);
     reader.replace(finalized_snapshot);
     let restarted = ModerationOrchestratorV1::open(first_checkpoint, runtime_deps())
@@ -1716,7 +1639,6 @@ fn terminal_finalization_converges_after_restart_and_split_peer_replay() {
     assert!(restarted_replay.replay);
     assert!(split_peer_replay.replay);
     assert_eq!(submitter.calls(), 1);
-
     let restarted_case = restarted
         .case("case-failover", "round-1")
         .expect("restarted case projection");
@@ -1730,13 +1652,11 @@ fn terminal_finalization_converges_after_restart_and_split_peer_replay() {
     );
     assert_eq!(settlement_sink.delivered().len(), 1);
     assert_eq!(publication_sink.delivered().len(), 1);
-
     restarted.reconcile().expect("idempotent restart reconcile");
     second.reconcile().expect("idempotent split-peer reconcile");
     assert_eq!(settlement_sink.delivered().len(), 1);
     assert_eq!(publication_sink.delivered().len(), 1);
 }
-
 #[test]
 fn outbox_capacity_exhaustion_is_fail_closed() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1750,7 +1670,6 @@ fn outbox_capacity_exhaustion_is_fail_closed() {
     orchestrator
         .submit(authority.clone(), policy_action(policy(1)), [0x11; 32])
         .expect("first pending operation");
-
     let error = orchestrator
         .submit(authority, policy_action(policy(2)), [0x22; 32])
         .expect_err("second pending operation must exceed the bound");
@@ -1762,7 +1681,6 @@ fn outbox_capacity_exhaustion_is_fail_closed() {
         }
     ));
 }
-
 #[test]
 fn no_show_failover_uses_one_stable_native_activation() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1778,14 +1696,12 @@ fn no_show_failover_uses_one_stable_native_activation() {
         deps(reader, Arc::clone(&submitter)),
     )
     .expect("orchestrator");
-
     let first = orchestrator
         .run_maintenance(governance.clone(), 1)
         .expect("first failover scan");
     let replay = orchestrator
         .run_maintenance(governance, 1)
         .expect("replayed failover scan");
-
     assert_eq!(first.len(), 1);
     assert_eq!(replay.len(), 1);
     assert_eq!(first[0].operation_id, replay[0].operation_id);
@@ -1799,7 +1715,6 @@ fn no_show_failover_uses_one_stable_native_activation() {
     assert_eq!(activation.round_id(), "round-1");
     assert_eq!(*activation.sortition_digest(), expected_sortition_digest);
 }
-
 #[test]
 fn same_finalized_tip_produces_byte_identical_maintenance_actions_across_replicas() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1827,7 +1742,6 @@ fn same_finalized_tip_produces_byte_identical_maintenance_actions_across_replica
         ),
     )
     .expect("second replica");
-
     let first_outcomes = first
         .run_maintenance(governance.clone(), 1)
         .expect("first replica maintenance");
@@ -1836,7 +1750,6 @@ fn same_finalized_tip_produces_byte_identical_maintenance_actions_across_replica
         .expect("second replica maintenance");
     let first_actions = first_submitter.actions();
     let second_actions = second_submitter.actions();
-
     assert_eq!(first_outcomes.len(), 1);
     assert_eq!(second_outcomes.len(), 1);
     assert_eq!(
@@ -1849,7 +1762,6 @@ fn same_finalized_tip_produces_byte_identical_maintenance_actions_across_replica
         norito::to_bytes(&second_actions).expect("encode second actions")
     );
 }
-
 #[test]
 fn finalized_panel_notifications_are_operation_bound_payload_free_and_byte_identical() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1890,7 +1802,6 @@ fn finalized_panel_notifications_are_operation_bound_payload_free_and_byte_ident
     .expect("second orchestrator");
     first.reconcile().expect("first reconciliation");
     second.reconcile().expect("second reconciliation");
-
     let first_entries = first
         .state
         .lock()
@@ -1952,7 +1863,6 @@ fn finalized_panel_notifications_are_operation_bound_payload_free_and_byte_ident
         );
     }
 }
-
 #[test]
 fn qualified_notification_sink_delivers_and_checkpoints_the_due_batch() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1973,7 +1883,6 @@ fn qualified_notification_sink_delivers_and_checkpoints_the_due_batch() {
     )
     .expect("orchestrator");
     orchestrator.reconcile().expect("queue notifications");
-
     assert_eq!(
         orchestrator
             .deliver_due_panel_notifications(1_000, 3)
@@ -1998,7 +1907,6 @@ fn qualified_notification_sink_delivers_and_checkpoints_the_due_batch() {
             .all(|entry| entry.state == StoredPanelNotificationStateV1::Delivered)
     );
 }
-
 #[test]
 fn finalized_activation_notifies_only_the_authoritative_ballot_roster() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -2047,7 +1955,6 @@ fn finalized_activation_notifies_only_the_authoritative_ballot_roster() {
             && entry.notification.finalized_event_cursor.sequence == 6
     }));
 }
-
 #[test]
 fn signed_native_redrive_preserves_incident_and_splits_a_new_unresolved_failure() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -2076,7 +1983,6 @@ fn signed_native_redrive_preserves_incident_and_splits_a_new_unresolved_failure(
             )
             .expect("first native incident");
     }
-
     let redrive = orchestrator
         .prepare_dead_letter_resolution(
             operation_id,
@@ -2106,7 +2012,6 @@ fn signed_native_redrive_preserves_incident_and_splits_a_new_unresolved_failure(
         before_foreign,
         "a foreign genesis must be rejected before durable mutation"
     );
-
     let redrive_signature = sign_dead_letter_resolution(&redrive);
     orchestrator
         .apply_dead_letter_resolution(redrive.clone(), redrive_signature)
@@ -2139,7 +2044,6 @@ fn signed_native_redrive_preserves_incident_and_splits_a_new_unresolved_failure(
             )
             .expect("second native incident");
     }
-
     {
         let state = orchestrator.state.lock().expect("orchestrator state");
         assert_eq!(state.dead_letters.len(), 2);
@@ -2174,7 +2078,6 @@ fn signed_native_redrive_preserves_incident_and_splits_a_new_unresolved_failure(
             .durable_dead_letters,
         1
     );
-
     let acknowledge = orchestrator
         .prepare_dead_letter_resolution(
             operation_id,
@@ -2210,7 +2113,6 @@ fn signed_native_redrive_preserves_incident_and_splits_a_new_unresolved_failure(
         }
     }
 }
-
 #[test]
 fn signed_panel_and_terminal_resolutions_apply_exact_dispositions() {
     let panel_temp = tempfile::tempdir().expect("panel tempdir");
@@ -2271,7 +2173,6 @@ fn signed_panel_and_terminal_resolutions_apply_exact_dispositions() {
         }] if resolution.action == ModerationDeadLetterResolutionActionV1::Acknowledge
     ));
     drop(panel_state);
-
     let terminal_temp = tempfile::tempdir().expect("terminal tempdir");
     let finalized = finalized_case_snapshot(
         activated_case_snapshot(2, [2; 32], governance.clone()),
@@ -2352,7 +2253,6 @@ fn signed_panel_and_terminal_resolutions_apply_exact_dispositions() {
             ))
     );
 }
-
 struct SaturatedPanelNotificationFixture {
     bounds: ModerationOrchestratorConfigV1,
     governance: AccountId,

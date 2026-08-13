@@ -1,12 +1,10 @@
 //! Generate canned Kagami profile bundles (genesis + PoPs + snippets) for Iroha 3 profiles.
-
 use std::{
     error::Error,
     fs,
     path::{Path, PathBuf},
     process::Command,
 };
-
 use blake2::{Blake2b512, digest::Digest};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{
@@ -25,9 +23,7 @@ use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction, decode_signed_g
 use iroha_primitives::addr::{SocketAddr, SocketAddrV4};
 use norito::json;
 use sha2::Sha256;
-
 use crate::workspace_root;
-
 #[derive(Debug, Clone)]
 pub(crate) struct KagamiProfileOptions {
     pub output: PathBuf,
@@ -35,7 +31,6 @@ pub(crate) struct KagamiProfileOptions {
     pub kagami_override: Option<PathBuf>,
     pub nexus_xor_asset_definition_id: Option<String>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProfileSpec {
     slug: &'static str,
@@ -45,13 +40,11 @@ struct ProfileSpec {
     min_peers: usize,
     requires_seed: bool,
 }
-
 impl ProfileSpec {
     fn vrf_seed_hex(&self) -> String {
         hex::encode_upper(Hash::new(self.chain_id).as_ref())
     }
 }
-
 #[derive(Debug, Clone)]
 struct PeerMaterial {
     peer_id: PeerId,
@@ -65,13 +58,11 @@ struct PeerMaterial {
     pop: Vec<u8>,
     pop_hex: String,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PrivateKeyRendering {
     InlineStaging,
     RuntimeFiles,
 }
-
 fn published_private_key_rendering(spec: &ProfileSpec) -> PrivateKeyRendering {
     if spec.slug == "iroha3-dev" {
         PrivateKeyRendering::InlineStaging
@@ -79,13 +70,11 @@ fn published_private_key_rendering(spec: &ProfileSpec) -> PrivateKeyRendering {
         PrivateKeyRendering::RuntimeFiles
     }
 }
-
 struct StagedGenesis {
     manifest: RawGenesisTransaction,
     signed_wire: Vec<u8>,
     expected_hash: String,
 }
-
 type AnyResult<T> = Result<T, Box<dyn Error>>;
 const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
@@ -96,7 +85,6 @@ const TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC: usize = 23_068_672;
 const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 11_534_336;
 const NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED: &str =
     "iroha3-nexus profile generation requires --nexus-xor-asset-definition-id <BASE58>";
-
 fn format_toml_integer_u64(value: u64) -> String {
     let digits = value.to_string();
     let mut reversed = String::with_capacity(digits.len() + digits.len() / 3);
@@ -108,7 +96,6 @@ fn format_toml_integer_u64(value: u64) -> String {
     }
     reversed.chars().rev().collect()
 }
-
 fn account_literal_for_chain_discriminant(
     account_id: &iroha_data_model::account::AccountId,
     chain_discriminant: u16,
@@ -117,7 +104,6 @@ fn account_literal_for_chain_discriminant(
         .to_i105_for_discriminant(chain_discriminant)
         .expect("known governance account id must render for the requested chain discriminant")
 }
-
 fn account_literal_string_for_chain_discriminant(raw: &str, chain_discriminant: u16) -> String {
     let _default_chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
         iroha_config::parameters::defaults::common::chain_discriminant(),
@@ -127,13 +113,11 @@ fn account_literal_string_for_chain_discriminant(raw: &str, chain_discriminant: 
         .expect("known account literal must parse");
     account_literal_for_chain_discriminant(&account_id, chain_discriminant)
 }
-
 pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
     let specs = resolve_requested_profiles(&options.profiles)?;
     preflight_required_profile_inputs(&specs, options.nexus_xor_asset_definition_id.as_deref())?;
     let kagami_bin = resolve_kagami_path(options.kagami_override.as_deref())?;
     fs::create_dir_all(&options.output)?;
-
     for spec in specs {
         write_profile_bundle(
             &spec,
@@ -142,10 +126,8 @@ pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
             options.nexus_xor_asset_definition_id.as_deref(),
         )?;
     }
-
     Ok(())
 }
-
 fn preflight_required_profile_inputs(
     specs: &[ProfileSpec],
     nexus_xor_asset_definition_id: Option<&str>,
@@ -163,7 +145,6 @@ fn preflight_required_profile_inputs(
     }
     Ok(())
 }
-
 fn resolve_requested_profiles(names: &[String]) -> AnyResult<Vec<ProfileSpec>> {
     if names.is_empty() {
         return Ok(PROFILES.to_vec());
@@ -184,7 +165,6 @@ fn resolve_requested_profiles(names: &[String]) -> AnyResult<Vec<ProfileSpec>> {
     }
     Ok(out)
 }
-
 fn write_profile_bundle(
     spec: &ProfileSpec,
     kagami_bin: &Path,
@@ -196,7 +176,6 @@ fn write_profile_bundle(
         .prefix(&format!(".{}-staging-", spec.slug))
         .tempdir_in(output_root)?;
     let bundle_root = staging.path().to_path_buf();
-
     let genesis_key =
         deterministic_keypair(&format!("{}-genesis-key", spec.slug), Algorithm::Ed25519)?;
     let genesis_json = generate_genesis(
@@ -210,7 +189,6 @@ fn write_profile_bundle(
     let patched_genesis = inject_topology(genesis_json, &peers)?;
     let genesis_path = bundle_root.join("genesis.json");
     write_json(&genesis_path, &patched_genesis)?;
-
     write_peer_configs(
         spec,
         &peers,
@@ -243,7 +221,6 @@ fn write_profile_bundle(
         &staged_genesis.expected_hash,
         published_private_key_rendering(spec),
     )?;
-
     let vrf_seed_hex = if spec.requires_seed {
         Some(spec.vrf_seed_hex())
     } else {
@@ -251,17 +228,14 @@ fn write_profile_bundle(
     };
     let verify_out = run_verify(spec, kagami_bin, &genesis_path, vrf_seed_hex.as_deref())?;
     fs::write(bundle_root.join("verify.txt"), verify_out)?;
-
     if spec.slug == "iroha3-taira" {
         fs::write(
             bundle_root.join("sorafs_sites.json"),
             b"{\n  \"version\": 1,\n  \"sites\": []\n}\n",
         )?;
     }
-
     let compose = render_docker_compose(spec, &peers);
     fs::write(bundle_root.join("docker-compose.yml"), compose)?;
-
     let readme = render_readme(
         spec,
         &peers,
@@ -270,11 +244,9 @@ fn write_profile_bundle(
         nexus_xor_asset_definition_id,
     );
     fs::write(bundle_root.join("README.md"), readme)?;
-
     publish_profile_bundle(staging, &output_root.join(spec.slug))?;
     Ok(())
 }
-
 fn publish_profile_bundle(staging: tempfile::TempDir, destination: &Path) -> AnyResult<()> {
     if !destination.exists() {
         let staged_path = staging.keep();
@@ -322,7 +294,6 @@ fn publish_profile_bundle(staging: tempfile::TempDir, destination: &Path) -> Any
         .into()
     })
 }
-
 fn generate_genesis(
     spec: &ProfileSpec,
     kagami_bin: &Path,
@@ -343,7 +314,6 @@ fn generate_genesis(
         "--consensus-mode",
         "npos",
     ]);
-
     if spec.requires_seed {
         command.args(["--vrf-seed-hex", &spec.vrf_seed_hex()]);
     }
@@ -353,7 +323,6 @@ fn generate_genesis(
         };
         command.args(["--xor-asset-definition-id", asset_definition_id]);
     }
-
     let output = command
         .current_dir(workdir)
         .output()
@@ -369,11 +338,9 @@ fn generate_genesis(
         )
         .into());
     }
-
     json::from_slice(&output.stdout)
         .map_err(|err| format!("failed to parse genesis JSON: {err}").into())
 }
-
 fn inject_topology(
     manifest: RawGenesisTransaction,
     peers: &[PeerMaterial],
@@ -393,7 +360,6 @@ fn inject_topology(
         .with_chain_discriminant(chain_discriminant);
     Ok(manifest)
 }
-
 fn write_json(path: &Path, value: &RawGenesisTransaction) -> AnyResult<()> {
     let _chain_discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
         value.chain_discriminant(),
@@ -403,7 +369,6 @@ fn write_json(path: &Path, value: &RawGenesisTransaction) -> AnyResult<()> {
     fs::write(path, rendered)?;
     Ok(())
 }
-
 fn bind_staged_context(
     spec: &ProfileSpec,
     kagami_bin: &Path,
@@ -463,7 +428,6 @@ fn bind_staged_context(
         )
         .into());
     }
-
     let signed_wire = output.stdout;
     let block = decode_signed_genesis(&signed_wire)
         .map_err(|err| format!("failed to decode staged {} genesis: {err}", spec.slug))?;
@@ -556,7 +520,6 @@ fn bind_staged_context(
         )
         .into());
     }
-
     let bound_manifest = RawGenesisTransaction::from_path(genesis_path)
         .map_err(|err| format!("failed to parse bound {} genesis: {err}", spec.slug))?;
     if bound_manifest.consensus_fingerprint() != Some(metadata.consensus_fingerprint) {
@@ -626,7 +589,6 @@ fn bind_staged_context(
         expected_hash: block.hash().to_string(),
     })
 }
-
 fn run_verify(
     spec: &ProfileSpec,
     kagami_bin: &Path,
@@ -668,7 +630,6 @@ fn run_verify(
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
-
 fn render_config(
     spec: &ProfileSpec,
     peers: &[PeerMaterial],
@@ -684,7 +645,6 @@ fn render_config(
         published_private_key_rendering(spec),
     )
 }
-
 fn render_peer_config(
     spec: &ProfileSpec,
     peers: &[PeerMaterial],
@@ -701,7 +661,6 @@ fn render_peer_config(
         published_private_key_rendering(spec),
     )
 }
-
 fn render_peer_config_with_private_keys(
     spec: &ProfileSpec,
     peers: &[PeerMaterial],
@@ -998,7 +957,6 @@ file = "genesis.signed.nrt"
         streaming_private_key = streaming_private_key,
     )
 }
-
 fn write_peer_configs(
     spec: &ProfileSpec,
     peers: &[PeerMaterial],
@@ -1024,7 +982,6 @@ fn write_peer_configs(
     }
     Ok(())
 }
-
 fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
     let runtime_secrets_volume =
         if published_private_key_rendering(spec) == PrivateKeyRendering::RuntimeFiles {
@@ -1090,7 +1047,6 @@ networks:
 "#,
     )
 }
-
 fn peer_config_file_name(peer_index: usize) -> String {
     if peer_index == 0 {
         "config.toml".to_owned()
@@ -1098,7 +1054,6 @@ fn peer_config_file_name(peer_index: usize) -> String {
         format!("config-peer-{peer_index}.toml")
     }
 }
-
 fn render_readme(
     spec: &ProfileSpec,
     peers: &[PeerMaterial],
@@ -1120,7 +1075,6 @@ fn render_readme(
         })
         .collect::<Vec<_>>()
         .join("\n");
-
     let vrf_line = if let Some(seed) = vrf_seed_hex {
         format!("VRF seed (hex): {seed}")
     } else {
@@ -1152,7 +1106,6 @@ fn render_readme(
     } else {
         ""
     };
-
     format!(
         r#"# {slug} sample bundle
 
@@ -1192,7 +1145,6 @@ Regenerate:
         runtime_key_note = runtime_key_note,
     )
 }
-
 fn build_peers(spec: &ProfileSpec) -> AnyResult<Vec<PeerMaterial>> {
     if !is_valid_committee_size(spec.min_peers) {
         return Err(format!(
@@ -1242,7 +1194,6 @@ fn build_peers(spec: &ProfileSpec) -> AnyResult<Vec<PeerMaterial>> {
         })
         .collect()
 }
-
 fn deterministic_soranet_transport_keypair(
     spec: &ProfileSpec,
     peer_index: usize,
@@ -1263,7 +1214,6 @@ fn deterministic_soranet_transport_keypair(
         .into()
     })
 }
-
 fn deterministic_keypair(seed_label: &str, algorithm: Algorithm) -> AnyResult<KeyPair> {
     let mut hasher = Blake2b512::new();
     hasher.update(seed_label.as_bytes());
@@ -1278,7 +1228,6 @@ fn deterministic_keypair(seed_label: &str, algorithm: Algorithm) -> AnyResult<Ke
         .into()
     })
 }
-
 fn resolve_kagami_path(override_path: Option<&Path>) -> AnyResult<PathBuf> {
     if let Some(path) = override_path {
         if !path.exists() {
@@ -1291,7 +1240,6 @@ fn resolve_kagami_path(override_path: Option<&Path>) -> AnyResult<PathBuf> {
             format!("canonicalize kagami override {}: {err}", path.display()).into()
         });
     }
-
     let target_dir = cargo_target_dir();
     let release_candidate = target_dir
         .join("release")
@@ -1305,7 +1253,6 @@ fn resolve_kagami_path(override_path: Option<&Path>) -> AnyResult<PathBuf> {
             .into()
         });
     }
-
     let debug_candidate = target_dir
         .join("debug")
         .join(format!("kagami{}", std::env::consts::EXE_SUFFIX));
@@ -1318,14 +1265,12 @@ fn resolve_kagami_path(override_path: Option<&Path>) -> AnyResult<PathBuf> {
             .into()
         });
     }
-
     let status = Command::new("cargo")
         .args(["build", "-p", "iroha_kagami", "--release"])
         .status()?;
     if !status.success() {
         return Err(format!("cargo build -p iroha_kagami --release failed with {status:?}").into());
     }
-
     let release_candidate = target_dir
         .join("release")
         .join(format!("kagami{}", std::env::consts::EXE_SUFFIX));
@@ -1345,7 +1290,6 @@ fn resolve_kagami_path(override_path: Option<&Path>) -> AnyResult<PathBuf> {
         .into())
     }
 }
-
 fn cargo_target_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
         let path = PathBuf::from(dir);
@@ -1358,7 +1302,6 @@ fn cargo_target_dir() -> PathBuf {
         workspace_root().join("target")
     }
 }
-
 const PROFILES: &[ProfileSpec] = &[
     ProfileSpec {
         slug: "iroha3-dev",
@@ -1385,7 +1328,6 @@ const PROFILES: &[ProfileSpec] = &[
         requires_seed: true,
     },
 ];
-
 fn profile_slug_list() -> String {
     PROFILES
         .iter()
@@ -1393,16 +1335,13 @@ fn profile_slug_list() -> String {
         .collect::<Vec<_>>()
         .join(",")
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_config::{base::toml::TomlSource, parameters::actual};
     use iroha_crypto::Signature;
     use iroha_data_model::account::address::ChainDiscriminantGuard;
     use tempfile::tempdir;
-
     use super::*;
-
     fn stub_genesis() -> RawGenesisTransaction {
         iroha_genesis::GenesisBuilder::new_without_executor(
             iroha_data_model::ChainId::from("stub"),
@@ -1410,7 +1349,6 @@ mod tests {
         )
         .build_raw()
     }
-
     #[test]
     fn peers_are_deterministic_and_populated() {
         let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
@@ -1423,7 +1361,6 @@ mod tests {
                 .public_key()
         );
     }
-
     #[test]
     fn profile_peer_builder_rejects_non_committee_sizes() {
         for count in [1_usize, 2, 3, 5, 32] {
@@ -1438,7 +1375,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn topology_is_injected_into_genesis() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
@@ -1476,7 +1412,6 @@ mod tests {
         let first = topo[0].as_object().expect("topology entry object");
         assert!(first.get("pop_hex").is_some(), "pop_hex embedded");
     }
-
     #[test]
     fn write_json_uses_manifest_chain_discriminant_for_account_literals() {
         let account_key =
@@ -1497,15 +1432,12 @@ mod tests {
         let bundle = tempdir().expect("manifest serialization directory");
         let path = bundle.path().join("genesis.json");
         let _wrong_discriminant = ChainDiscriminantGuard::enter(753);
-
         write_json(&path, &manifest).expect("serialize manifest with its own discriminant");
         let reloaded = RawGenesisTransaction::from_path(&path)
             .expect("account literals must decode under the manifest discriminant");
-
         assert_eq!(reloaded.chain_discriminant(), 369);
         assert_eq!(reloaded.instructions().count(), 2);
     }
-
     #[test]
     fn config_contains_expected_keys() {
         let peers = build_peers(&PROFILES[2]).expect("build deterministic peers");
@@ -1552,11 +1484,9 @@ mod tests {
             "mandatory DA policy is derived from the signed consensus metadata"
         );
     }
-
     #[test]
     fn rendered_profile_configs_pass_actual_config_admission() {
         let expected_hash = Hash::new(b"xtask profile config admission").to_string();
-
         for profile in PROFILES {
             let peers = build_peers(profile).expect("build deterministic peers");
             let genesis_key = deterministic_keypair(
@@ -1580,7 +1510,6 @@ mod tests {
             let _chain_discriminant = profile
                 .chain_discriminant
                 .map(ChainDiscriminantGuard::enter);
-
             actual::Root::from_toml_source(TomlSource::new(path, table)).unwrap_or_else(|error| {
                 panic!(
                     "rendered profile {} must pass exact runtime config admission: {error:?}",
@@ -1589,7 +1518,6 @@ mod tests {
             });
         }
     }
-
     #[test]
     fn published_profiles_keep_runtime_keys_outside_production_configs() {
         for profile in [&PROFILES[1], &PROFILES[2]] {
@@ -1605,7 +1533,6 @@ mod tests {
                 genesis_key.public_key(),
                 GENESIS_EXPECTED_HASH_PLACEHOLDER,
             );
-
             for peer in &peers {
                 assert!(!rendered.contains(&peer.private_key));
                 assert!(!rendered.contains(&peer.soranet_transport_private_key));
@@ -1619,7 +1546,6 @@ mod tests {
             assert!(rendered.contains("expected_hash_file = \"/run/iroha/genesis.expected_hash\""));
             assert!(!rendered.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
         }
-
         let profile = &PROFILES[0];
         let peers = build_peers(profile).expect("build deterministic dev peers");
         let genesis_key = deterministic_keypair("config-dev-inline-genesis", Algorithm::Ed25519)
@@ -1635,7 +1561,6 @@ mod tests {
         assert!(rendered.contains(&peers[0].streaming_private_key));
         assert!(!rendered.contains("private_key_file"));
     }
-
     #[test]
     fn final_peer_configs_pin_the_exact_genesis_hash_and_prepared_names() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
@@ -1645,7 +1570,6 @@ mod tests {
         let expected_hash = Hash::new(b"prepared profile genesis").to_string();
         let expected_hash_literal =
             norito::literal::format("hash", &expected_hash.to_ascii_uppercase());
-
         write_peer_configs(
             &PROFILES[0],
             &peers,
@@ -1655,7 +1579,6 @@ mod tests {
             PrivateKeyRendering::InlineStaging,
         )
         .expect("write prepared validator configs");
-
         for peer_index in 0..peers.len() {
             let compatibility =
                 fs::read_to_string(bundle.path().join(peer_config_file_name(peer_index)))
@@ -1667,7 +1590,6 @@ mod tests {
             assert!(!prepared.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
         }
     }
-
     #[test]
     fn readme_carries_profile_metadata() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
@@ -1682,7 +1604,6 @@ mod tests {
         assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-dev\n"));
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
     }
-
     #[test]
     fn taira_readme_mentions_chain_discriminant() {
         let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
@@ -1703,7 +1624,6 @@ mod tests {
         assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-taira\n"));
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
     }
-
     #[test]
     fn nexus_readme_regeneration_includes_asset_definition_id() {
         let peers = build_peers(&PROFILES[2]).expect("build deterministic peers");
@@ -1721,20 +1641,17 @@ mod tests {
              --nexus-xor-asset-definition-id xor-definition-id\n"
         ));
     }
-
     #[test]
     fn nexus_requirement_is_preflighted_before_all_profile_mutation() {
         let temp = tempdir().expect("temp dir");
         let output = temp.path().join("profiles");
         let kagami = temp.path().join("kagami");
         fs::write(&kagami, b"unused test executable").expect("write dummy kagami file");
-
         for profile in PROFILES {
             let bundle = output.join(profile.slug);
             fs::create_dir_all(&bundle).expect("create existing profile bundle");
             fs::write(bundle.join("sentinel"), profile.slug).expect("write profile sentinel");
         }
-
         let error = generate(KagamiProfileOptions {
             output: output.clone(),
             profiles: vec!["all".to_owned()],
@@ -1751,7 +1668,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn validated_profile_publication_replaces_the_directory_without_mixing_files() {
         let temp = tempdir().expect("profile publication root");
@@ -1763,9 +1679,7 @@ mod tests {
             .tempdir_in(temp.path())
             .expect("create staged bundle");
         fs::write(staging.path().join("new-only"), b"new").expect("write staged bundle");
-
         publish_profile_bundle(staging, &destination).expect("publish validated bundle");
-
         assert_eq!(
             fs::read(destination.join("new-only")).expect("read published file"),
             b"new"
@@ -1784,7 +1698,6 @@ mod tests {
             "successful publication must remove its recovery backup"
         );
     }
-
     #[test]
     fn invalid_nexus_identity_is_preflighted_before_profile_mutation() {
         let temp = tempdir().expect("temp dir");
@@ -1792,7 +1705,6 @@ mod tests {
         let bundle = output.join(PROFILES[2].slug);
         fs::create_dir_all(&bundle).expect("create existing Nexus bundle");
         fs::write(bundle.join("sentinel"), b"preserve").expect("write Nexus sentinel");
-
         let error = generate(KagamiProfileOptions {
             output: output.clone(),
             profiles: vec![PROFILES[2].slug.to_owned()],
@@ -1811,19 +1723,16 @@ mod tests {
             b"preserve"
         );
     }
-
     #[test]
     fn deterministic_keypair_uses_checked_seed_expansion() {
         let keypair = deterministic_keypair("checked-seed-expansion", Algorithm::Ed25519)
             .expect("derive deterministic keypair");
         let signature = Signature::try_new(keypair.private_key(), b"kagami profile fixture")
             .expect("checked deterministic key signs fixture message");
-
         signature
             .verify(keypair.public_key(), b"kagami profile fixture")
             .expect("checked deterministic signature verifies");
     }
-
     #[test]
     fn relative_kagami_override_is_canonicalized_before_staged_chdir() {
         let current_dir = std::env::current_dir().expect("current directory");
@@ -1833,16 +1742,13 @@ mod tests {
         let relative = kagami
             .strip_prefix(&current_dir)
             .expect("temporary kagami is below current directory");
-
         let resolved = resolve_kagami_path(Some(relative)).expect("resolve relative override");
-
         assert!(resolved.is_absolute());
         assert_eq!(
             resolved,
             kagami.canonicalize().expect("canonical temporary kagami")
         );
     }
-
     #[test]
     fn all_profile_configs_pin_default_torii_max_content_len() {
         let expected = format!(
@@ -1867,7 +1773,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn all_profile_configs_use_canonical_socket_literals() {
         let expected_listen =
@@ -1904,7 +1809,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn taira_peer_configs_pin_reviewed_network_frame_corridor() {
         let frame_caps = [
@@ -1929,7 +1833,6 @@ mod tests {
             GENESIS_EXPECTED_HASH_PLACEHOLDER,
         )
         .expect("write every Taira peer config alias");
-
         let mut checked_aliases = 0_usize;
         for peer_index in 0..peers.len() {
             for file_name in [
@@ -1960,7 +1863,6 @@ mod tests {
             checked_aliases, 14,
             "Taira must emit exactly 14 peer aliases"
         );
-
         for profile in [&PROFILES[0], &PROFILES[2]] {
             let peers = build_peers(profile).expect("build non-Taira deterministic peers");
             let genesis_key = deterministic_keypair(
@@ -1993,7 +1895,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn taira_peer_configs_bind_raw_protocol_accounts_to_profile_discriminant() {
         fn nested_string<'a>(
@@ -2011,7 +1912,6 @@ mod tests {
                 .and_then(toml::Value::as_str)
                 .unwrap_or_else(|| panic!("missing {parent}.{child}.{key}"))
         }
-
         let taira = &PROFILES[1];
         let discriminant = taira
             .chain_discriminant
@@ -2068,7 +1968,6 @@ mod tests {
         )
         .expect("write every Taira peer config alias");
         let _taira_chain = ChainDiscriminantGuard::enter(discriminant);
-
         let mut checked_aliases = 0_usize;
         for peer_index in 0..peers.len() {
             for file_name in [
@@ -2094,7 +1993,6 @@ mod tests {
         }
         assert_eq!(checked_aliases, 14, "Taira must emit exactly 14 aliases");
     }
-
     #[test]
     fn all_profile_configs_scale_body_ingress_for_the_complete_committee() {
         let authenticated_non_validator_sources =
@@ -2104,7 +2002,6 @@ mod tests {
             iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
         let default_body_bytes =
             iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get();
-
         for profile in PROFILES {
             let peers = build_peers(profile).expect("build deterministic peers");
             let genesis_key = deterministic_keypair(
@@ -2125,7 +2022,6 @@ mod tests {
                 .and_then(|count| count.checked_mul(body_source_bytes))
                 .expect("test profile ingress geometry fits usize")
                 .max(default_body_bytes);
-
             assert!(
                 rendered.contains(&format!(
                     "[sumeragi.queues]\n\
@@ -2138,7 +2034,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn taira_config_pins_site_nexus_and_mcp_policy() {
         let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
@@ -2160,7 +2055,6 @@ mod tests {
         ));
         assert!(rendered.contains("[nexus.fees]\nfee_asset_id = \"xor#universal\"\n"));
         assert!(rendered.contains("[nexus.staking]\nstake_asset_id = \"xor#universal\"\n"));
-
         let dev_peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
         let dev_genesis_key =
             deterministic_keypair("config-dev-policy-genesis", Algorithm::Ed25519)
@@ -2175,7 +2069,6 @@ mod tests {
         assert!(!dev.contains("[nexus.fees]"));
         assert!(!dev.contains("[nexus.staking]"));
     }
-
     #[test]
     fn profiles_do_not_emit_backend_offline_capability_switches() {
         for profile in PROFILES {
@@ -2191,7 +2084,6 @@ mod tests {
             );
             let config: toml::Value =
                 toml::from_str(&rendered).expect("parse rendered generic config");
-
             assert!(
                 config
                     .get("settlement")
@@ -2210,7 +2102,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn taira_compose_mounts_config_backed_site_bindings_without_runtime_env() {
         let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
@@ -2234,7 +2125,6 @@ mod tests {
             "profiles without a configured binding document must not mount one"
         );
         assert!(!dev_compose.contains("/run/secrets/iroha"));
-
         let genesis_key = deterministic_keypair("readme-taira-sites", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
         let readme = render_readme(
@@ -2246,12 +2136,10 @@ mod tests {
         );
         assert!(readme.contains("sorafs_sites.json"));
     }
-
     #[test]
     fn compose_launches_every_signed_topology_member_with_unique_config() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
         let rendered = render_docker_compose(&PROFILES[0], &peers);
-
         assert_eq!(
             rendered
                 .matches("    image: hyperledger/iroha:latest")
@@ -2276,14 +2164,12 @@ mod tests {
             )));
         }
     }
-
     #[test]
     fn peer_configs_use_distinct_consensus_streaming_and_port_material() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
         let genesis_key = deterministic_keypair("distinct-peer-configs", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
         let mut transport_public_keys = std::collections::BTreeSet::new();
-
         for (peer_index, peer) in peers.iter().enumerate() {
             let rendered = render_peer_config(
                 &PROFILES[0],
@@ -2340,7 +2226,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn checked_in_profile_transport_identities_are_reproducible() {
         let expected = [
@@ -2357,14 +2242,12 @@ mod tests {
                 "802620720B9507E31A382E02FF4523D0E22071E19D39974C9AE907492EEAE616F23E15",
             ),
         ];
-
         for (spec, (public_key, private_key)) in PROFILES.iter().zip(expected) {
             let peers = build_peers(spec).expect("build deterministic profile peers");
             assert_eq!(peers[0].soranet_transport_public_key, public_key);
             assert_eq!(peers[0].soranet_transport_private_key, private_key);
         }
     }
-
     #[test]
     fn verify_output_captured_on_success() {
         if std::env::var("XTASK_TEST_KAGAMI_BIN").is_err() {

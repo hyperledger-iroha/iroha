@@ -1,10 +1,7 @@
 //! Validate exact non-secret runtime-provider bindings for `SoraFS` gateways.
-
 use std::path::PathBuf;
-
 use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
-
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()
@@ -12,7 +9,6 @@ fn base_reader() -> ConfigReader {
         .read_toml_with_extends(base_path)
         .expect("base config should load")
 }
-
 fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
     let table = source
         .parse()
@@ -24,7 +20,6 @@ fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
         .parse()
         .map_err(|error| format!("{error:?}"))
 }
-
 fn acme_overlay(handle: &str, revision: u64, policy_digest_hex: &str) -> String {
     format!(
         r#"
@@ -36,7 +31,6 @@ provider_policy_digest_hex = "{policy_digest_hex}"
 "#
     )
 }
-
 #[test]
 fn enabled_acme_reads_one_exact_provider_binding_from_toml() {
     let actual = parse_overlay(&acme_overlay(
@@ -51,7 +45,6 @@ fn enabled_acme_reads_one_exact_provider_binding_from_toml() {
         .acme
         .provider
         .expect("enabled ACME provider");
-
     assert_eq!(
         provider.provider_handle,
         "runtime://sorafs/gateway-acme/primary"
@@ -59,7 +52,6 @@ fn enabled_acme_reads_one_exact_provider_binding_from_toml() {
     assert_eq!(provider.revision, 17);
     assert_eq!(provider.policy_digest, [0x51; 32]);
 }
-
 #[test]
 fn gateway_provider_toml_rejects_partial_zero_test_marked_and_noncanonical_forms() {
     for (label, source, expected) in [

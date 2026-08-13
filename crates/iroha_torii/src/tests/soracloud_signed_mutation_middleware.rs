@@ -1,10 +1,8 @@
 //! Tests for SoraCloud signed-mutation request admission.
-
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-
 use axum::{
     Router,
     body::Body,
@@ -12,9 +10,7 @@ use axum::{
     routing::post,
 };
 use tower::ServiceExt as _;
-
 use super::*;
-
 #[tokio::test]
 async fn soracloud_mutation_still_enforces_typed_accept() {
     let handler_calls = Arc::new(AtomicUsize::new(0));
@@ -34,7 +30,6 @@ async fn soracloud_mutation_still_enforces_typed_accept() {
             crate::mk_app_state_for_tests(),
             enforce_soracloud_signed_mutation_request,
         ));
-
     let response = router
         .oneshot(
             Request::builder()
@@ -46,7 +41,6 @@ async fn soracloud_mutation_still_enforces_typed_accept() {
         )
         .await
         .expect("SoraCloud response");
-
     assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
     assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
 }

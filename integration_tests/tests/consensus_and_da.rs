@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Grouped integration harness for consensus, DA/RBC, and localnet scenarios.
-
 #[path = "da.rs"]
 mod da;
 #[path = "sumeragi_adversarial.rs"]

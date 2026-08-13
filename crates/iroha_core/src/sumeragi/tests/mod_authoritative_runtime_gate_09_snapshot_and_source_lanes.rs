@@ -7,7 +7,6 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
         .configure_roster(validators.clone())
         .expect("two validators, their progress and TimeoutVote slots, and anonymous fit");
     ingress.open().expect("open configured roster");
-
     let captured_at = Instant::now();
     ingress
         .try_push_at(
@@ -27,7 +26,6 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
             captured_at - Duration::from_secs(7),
         )
         .expect("enqueue timestamp-inverted message behind the source head");
-
     assert_eq!(
         ingress.snapshot_at(captured_at),
         super::FairV2IngressSnapshot {
@@ -74,7 +72,6 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
         }
     );
 }
-
 #[test]
 fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
@@ -84,7 +81,6 @@ fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {
         .configure_roster([validator.clone()])
         .expect("validator plus anonymous lane fit");
     ingress.open().expect("open configured roster");
-
     let captured_at = Instant::now();
     ingress
         .try_push_at(
@@ -98,7 +94,6 @@ fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {
             captured_at - Duration::from_secs(1),
         )
         .expect("enqueue later admissible entry");
-
     assert!(
         ingress.try_recv_if_at(captured_at, |_| false).is_none(),
         "a rejected scan must retain both entries"
@@ -112,7 +107,6 @@ fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {
             service_idle_age: Some(Duration::from_secs(2)),
         }
     );
-
     let selected = ingress
         .try_recv_if_at(captured_at + Duration::from_secs(2), |inbound| {
             vote_height(inbound) == Some(2)
@@ -130,7 +124,6 @@ fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {
         "successful fair service refreshes the scan clock without hiding old ownership"
     );
 }
-
 #[test]
 fn fair_v2_ingress_empty_to_nonempty_resets_service_idle_baseline() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(2);
@@ -139,7 +132,6 @@ fn fair_v2_ingress_empty_to_nonempty_resets_service_idle_baseline() {
         .configure_roster(std::iter::empty())
         .expect("anonymous ingress lane fits");
     ingress.open().expect("open configured roster");
-
     let captured_at = Instant::now();
     assert!(ingress.try_recv_if_at(captured_at, |_| true).is_none());
     ingress
@@ -155,7 +147,6 @@ fn fair_v2_ingress_empty_to_nonempty_resets_service_idle_baseline() {
         Some(Duration::from_secs(1)),
         "an empty-queue scan must not make later ownership look serviced"
     );
-
     let _ = ingress
         .try_recv_if_at(captured_at + Duration::from_secs(7), |_| true)
         .expect("drain the first ownership interval");
@@ -165,7 +156,6 @@ fn fair_v2_ingress_empty_to_nonempty_resets_service_idle_baseline() {
             .service_idle_age,
         None
     );
-
     ingress
         .try_push_at(
             InboundBlockMessage::new(v2_auxiliary_prepare(1), None),
@@ -180,7 +170,6 @@ fn fair_v2_ingress_empty_to_nonempty_resets_service_idle_baseline() {
         "the prior ownership interval's service time must not mask a fresh stall"
     );
 }
-
 #[test]
 fn anonymous_and_authenticated_non_validator_sources_use_distinct_bounded_lanes() {
     const SOURCE_BYTES: usize = 1024 * 1024;
@@ -203,7 +192,6 @@ fn anonymous_and_authenticated_non_validator_sources_use_distinct_bounded_lanes(
         .configure_roster(validators.clone())
         .expect("four validators, two authenticated non-validator sources, and anonymous fit");
     ingress.open().expect("open configured roster");
-
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(v2_auxiliary_prepare(0), None)),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
@@ -245,7 +233,6 @@ fn anonymous_and_authenticated_non_validator_sources_use_distinct_bounded_lanes(
                 ))
         );
     }
-
     let anonymous = ingress
         .try_recv_if(|inbound| inbound.sender().is_none())
         .expect("the anonymous owner remains independently serviceable");

@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii account faucet tests.
 #![cfg(feature = "app_api")]
-
 use std::{borrow::Cow, num::NonZeroU8, sync::Arc};
-
 use axum::{body::to_bytes, http::Request, response::Response};
 use http::StatusCode;
 use iroha_core::{
@@ -30,10 +28,8 @@ use mv::storage::StorageReadOnly;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest as _, Sha256};
 use tower::ServiceExt as _;
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 struct FaucetTestContext {
     app: axum::Router,
     state: Arc<State>,
@@ -49,17 +45,14 @@ struct FaucetTestContext {
     pow_scrypt_p: u32,
     pow_max_anchor_age_blocks: u64,
 }
-
 fn checked_faucet_account_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked faucet account fixture keypair")
 }
-
 fn checked_faucet_block_leader_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("generate checked faucet block leader fixture keypair")
 }
-
 #[test]
 fn faucet_account_fixture_uses_checked_ed25519_key_generation() {
     let key_pair = checked_faucet_account_key_fixture();
@@ -67,10 +60,8 @@ fn faucet_account_fixture_uses_checked_ed25519_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture faucet account public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
-
 #[test]
 fn faucet_block_leader_fixture_uses_checked_bls_key_generation() {
     let key_pair = checked_faucet_block_leader_fixture();
@@ -78,21 +69,17 @@ fn faucet_block_leader_fixture_uses_checked_bls_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture faucet block leader public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::BlsNormal);
 }
-
 fn build_faucet_test_context(prefund_user: bool) -> FaucetTestContext {
     build_faucet_test_context_with_registration(prefund_user, None, true)
 }
-
 fn build_faucet_test_context_with_selector(
     prefund_user: bool,
     faucet_selector: Option<&str>,
 ) -> FaucetTestContext {
     build_faucet_test_context_with_registration(prefund_user, faucet_selector, true)
 }
-
 fn build_faucet_test_context_with_registration(
     prefund_user: bool,
     faucet_selector: Option<&str>,
@@ -103,7 +90,6 @@ fn build_faucet_test_context_with_registration(
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-
     let domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain id");
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
@@ -116,7 +102,6 @@ fn build_faucet_test_context_with_registration(
     let user_id = AccountId::new(user_kp.public_key().clone());
     let other_user_kp = checked_faucet_account_key_fixture();
     let other_user_id = AccountId::new(other_user_kp.public_key().clone());
-
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
     let other_user_account = Account::new(other_user_id.clone()).build(&authority_id);
@@ -131,7 +116,6 @@ fn build_faucet_test_context_with_registration(
     if register_user {
         accounts.push(Account::new(user_id.clone()).build(&authority_id));
     }
-
     let mut world = World::with([domain], accounts, [asset_definition]);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     {
@@ -181,7 +165,6 @@ fn build_faucet_test_context_with_registration(
         chain_id.clone(),
         network_id,
     ));
-
     {
         let mut seed_instructions: Vec<InstructionBox> = vec![
             Mint::asset_quantity(
@@ -199,7 +182,6 @@ fn build_faucet_test_context_with_registration(
                 .into(),
             );
         }
-
         let seed_tx = TransactionBuilder::new(
             network_id,
             authority_id.clone(),
@@ -222,7 +204,6 @@ fn build_faucet_test_context_with_registration(
         let committed = valid.commit_unchecked().unpack(|_| {});
         iroha_torii::test_utils::finalize_committed_block(&state, state_block, committed);
     }
-
     let pow_difficulty_bits = 5;
     let pow_scrypt_log_n = 4;
     let pow_scrypt_r = 1;
@@ -248,13 +229,11 @@ fn build_faucet_test_context_with_registration(
         pow_adaptive_max_extra_bits: 2,
         pow_vrf_seed_enabled: true,
     });
-
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-
     #[cfg(feature = "telemetry")]
     let telemetry = {
         use iroha_core::telemetry as core_telemetry;
@@ -273,7 +252,6 @@ fn build_faucet_test_context_with_registration(
         )
         .0
     };
-
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = {
         #[cfg(feature = "telemetry")]
@@ -311,7 +289,6 @@ fn build_faucet_test_context_with_registration(
             )
         }
     };
-
     FaucetTestContext {
         app: torii.api_router_for_tests(),
         state,
@@ -328,9 +305,7 @@ fn build_faucet_test_context_with_registration(
         pow_max_anchor_age_blocks,
     }
 }
-
 const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v3";
-
 fn leading_zero_bits(bytes: &[u8]) -> u32 {
     let mut total = 0u32;
     for byte in bytes {
@@ -343,7 +318,6 @@ fn leading_zero_bits(bytes: &[u8]) -> u32 {
     }
     total
 }
-
 fn faucet_vrf_seed_for_anchor(state: &State, anchor_height: u64) -> Option<[u8; 32]> {
     state
         .view()
@@ -355,17 +329,14 @@ fn faucet_vrf_seed_for_anchor(state: &State, anchor_height: u64) -> Option<[u8; 
         })
         .last()
 }
-
 fn faucet_pow_scrypt_params(log_n: u8, r: u32, p: u32) -> ScryptParams {
     ScryptParams::new(log_n, r, p, 32).expect("valid test scrypt params")
 }
-
 async fn expect_status(resp: Response, expected: StatusCode) -> Response {
     let status = resp.status();
     if status == expected {
         return resp;
     }
-
     let body = to_bytes(resp.into_body(), usize::MAX)
         .await
         .expect("response body bytes");
@@ -376,7 +347,6 @@ async fn expect_status(resp: Response, expected: StatusCode) -> Response {
         String::from_utf8_lossy(&body)
     );
 }
-
 fn faucet_post_request(body: String) -> Request<axum::body::Body> {
     Request::builder()
         .method("POST")
@@ -388,7 +358,6 @@ fn faucet_post_request(body: String) -> Request<axum::body::Body> {
         .body(axum::body::Body::from(body))
         .expect("faucet request")
 }
-
 fn faucet_pow_challenge(state: &State, account_id: &AccountId, anchor_height: u64) -> [u8; 32] {
     let anchor_block = state
         .block_by_height(
@@ -400,7 +369,6 @@ fn faucet_pow_challenge(state: &State, account_id: &AccountId, anchor_height: u6
         .expect("anchor block");
     let anchor_hash = anchor_block.hash();
     let challenge_salt = faucet_vrf_seed_for_anchor(state, anchor_height);
-
     let mut hasher = Sha256::new();
     hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
     hasher.update(state.network_id_ref().as_bytes());
@@ -412,7 +380,6 @@ fn faucet_pow_challenge(state: &State, account_id: &AccountId, anchor_height: u6
     }
     hasher.finalize().into()
 }
-
 fn solve_faucet_pow(
     state: &State,
     account_id: &AccountId,
@@ -421,7 +388,6 @@ fn solve_faucet_pow(
 ) -> (u64, String) {
     let anchor_height = u64::try_from(state.committed_height()).expect("height fits");
     let challenge = faucet_pow_challenge(state, account_id, anchor_height);
-
     for nonce in 0u64.. {
         let nonce_bytes = nonce.to_be_bytes();
         let mut digest = [0u8; 32];
@@ -431,10 +397,8 @@ fn solve_faucet_pow(
             return (anchor_height, hex::encode(nonce_bytes));
         }
     }
-
     unreachable!("u64 nonce space exhausted");
 }
-
 #[tokio::test]
 async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
     let FaucetTestContext {
@@ -451,7 +415,6 @@ async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
         pow_scrypt_p,
         ..
     } = build_faucet_test_context(false);
-
     let scrypt_params = faucet_pow_scrypt_params(pow_scrypt_log_n, pow_scrypt_r, pow_scrypt_p);
     let (pow_anchor_height, pow_nonce_hex) =
         solve_faucet_pow(&state, &user_id, pow_difficulty_bits, &scrypt_params);
@@ -467,7 +430,6 @@ async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
         .await
         .expect("faucet response");
     let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
-
     let expected_height = u64::try_from(state.view().height())
         .unwrap_or(0)
         .saturating_add(1);
@@ -478,7 +440,6 @@ async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
         expected_height,
     );
     assert!(applied > 0);
-
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
     let user_asset = view
@@ -493,7 +454,6 @@ async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
         .expect("authority faucet asset");
     assert_eq!(authority_asset.value().as_ref().to_string(), "25000");
 }
-
 #[tokio::test]
 async fn accounts_faucet_registers_missing_account_before_transfer() {
     let FaucetTestContext {
@@ -509,7 +469,6 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
         pow_scrypt_p,
         ..
     } = build_faucet_test_context_with_registration(false, None, false);
-
     let scrypt_params = faucet_pow_scrypt_params(pow_scrypt_log_n, pow_scrypt_r, pow_scrypt_p);
     let (pow_anchor_height, pow_nonce_hex) =
         solve_faucet_pow(&state, &user_id, pow_difficulty_bits, &scrypt_params);
@@ -525,7 +484,6 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
         .await
         .expect("faucet response");
     let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
-
     let expected_height = u64::try_from(state.view().height())
         .unwrap_or(0)
         .saturating_add(1);
@@ -536,7 +494,6 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
         expected_height,
     );
     assert!(applied > 0);
-
     let view = state.view();
     assert!(
         view.world().account(&user_id).is_ok(),
@@ -549,7 +506,6 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
         .expect("user faucet asset");
     assert_eq!(user_asset.value().as_ref().to_string(), "25000");
 }
-
 #[tokio::test]
 async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
     let FaucetTestContext {
@@ -566,7 +522,6 @@ async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
         pow_scrypt_p,
         ..
     } = build_faucet_test_context(true);
-
     let scrypt_params = faucet_pow_scrypt_params(pow_scrypt_log_n, pow_scrypt_r, pow_scrypt_p);
     let (pow_anchor_height, pow_nonce_hex) =
         solve_faucet_pow(&state, &user_id, pow_difficulty_bits, &scrypt_params);
@@ -582,7 +537,6 @@ async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
         .await
         .expect("faucet response");
     let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
-
     let expected_height = u64::try_from(state.view().height())
         .unwrap_or(0)
         .saturating_add(1);
@@ -593,7 +547,6 @@ async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
         expected_height,
     );
     assert!(applied > 0);
-
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
     let user_asset = view
@@ -608,7 +561,6 @@ async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
         .expect("authority faucet asset");
     assert_eq!(authority_asset.value().as_ref().to_string(), "25000");
 }
-
 #[tokio::test]
 async fn accounts_faucet_allows_repeated_claims_for_same_account() {
     let FaucetTestContext {
@@ -625,7 +577,6 @@ async fn accounts_faucet_allows_repeated_claims_for_same_account() {
         pow_scrypt_p,
         ..
     } = build_faucet_test_context(false);
-
     let scrypt_params = faucet_pow_scrypt_params(pow_scrypt_log_n, pow_scrypt_r, pow_scrypt_p);
     for expected_extra_bits in [0_u8, 1] {
         let difficulty_bits = pow_difficulty_bits.saturating_add(expected_extra_bits);
@@ -643,7 +594,6 @@ async fn accounts_faucet_allows_repeated_claims_for_same_account() {
             .await
             .expect("faucet response");
         let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
-
         let expected_height = u64::try_from(state.view().height())
             .unwrap_or(0)
             .saturating_add(1);
@@ -655,7 +605,6 @@ async fn accounts_faucet_allows_repeated_claims_for_same_account() {
         );
         assert!(applied > 0);
     }
-
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
     let user_asset = view
@@ -671,7 +620,6 @@ async fn accounts_faucet_allows_repeated_claims_for_same_account() {
         .unwrap_or_else(|_| "0".to_owned());
     assert_eq!(authority_balance, "0");
 }
-
 #[tokio::test]
 async fn accounts_faucet_accepts_alias_selector_config() {
     let FaucetTestContext {
@@ -688,7 +636,6 @@ async fn accounts_faucet_accepts_alias_selector_config() {
         pow_scrypt_p,
         ..
     } = build_faucet_test_context_with_selector(false, Some("xor#universal"));
-
     let scrypt_params = faucet_pow_scrypt_params(pow_scrypt_log_n, pow_scrypt_r, pow_scrypt_p);
     let (pow_anchor_height, pow_nonce_hex) =
         solve_faucet_pow(&state, &user_id, pow_difficulty_bits, &scrypt_params);
@@ -704,7 +651,6 @@ async fn accounts_faucet_accepts_alias_selector_config() {
         .await
         .expect("faucet response");
     let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
-
     let expected_height = u64::try_from(state.view().height())
         .unwrap_or(0)
         .saturating_add(1);
@@ -715,7 +661,6 @@ async fn accounts_faucet_accepts_alias_selector_config() {
         expected_height,
     );
     assert!(applied > 0);
-
     let view = state.view();
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
     let user_asset = view
@@ -730,7 +675,6 @@ async fn accounts_faucet_accepts_alias_selector_config() {
         .expect("authority faucet asset");
     assert_eq!(authority_asset.value().as_ref().to_string(), "25000");
 }
-
 #[tokio::test]
 async fn accounts_faucet_puzzle_exposes_current_anchor() {
     let FaucetTestContext {
@@ -743,7 +687,6 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
         pow_max_anchor_age_blocks,
         ..
     } = build_faucet_test_context(false);
-
     let resp = app
         .clone()
         .oneshot(
@@ -756,7 +699,6 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
         .await
         .expect("faucet puzzle response");
     let resp = expect_status(resp, StatusCode::OK).await;
-
     let body = to_bytes(resp.into_body(), usize::MAX)
         .await
         .expect("puzzle body bytes");
@@ -816,11 +758,9 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
     );
     assert!(!object.contains_key("chain_id"));
 }
-
 #[tokio::test]
 async fn accounts_faucet_rejects_missing_pow_when_required() {
     let FaucetTestContext { app, user_id, .. } = build_faucet_test_context(false);
-
     let body = json_object(vec![json_entry("account_id", user_id.to_string())]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
     let resp = app
@@ -830,7 +770,6 @@ async fn accounts_faucet_rejects_missing_pow_when_required() {
         .expect("faucet response");
     let _resp = expect_status(resp, StatusCode::BAD_REQUEST).await;
 }
-
 #[tokio::test]
 async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
     let FaucetTestContext {
@@ -844,7 +783,6 @@ async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
         pow_scrypt_p,
         ..
     } = build_faucet_test_context(false);
-
     let scrypt_params = faucet_pow_scrypt_params(pow_scrypt_log_n, pow_scrypt_r, pow_scrypt_p);
     let (pow_anchor_height, pow_nonce_hex) =
         solve_faucet_pow(&state, &other_user_id, pow_difficulty_bits, &scrypt_params);
@@ -861,7 +799,6 @@ async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
         .await
         .expect("initial faucet response");
     let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
-
     let resp = app
         .clone()
         .oneshot(
@@ -874,7 +811,6 @@ async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
         .await
         .expect("faucet puzzle response");
     let resp = expect_status(resp, StatusCode::OK).await;
-
     let body = to_bytes(resp.into_body(), usize::MAX)
         .await
         .expect("puzzle body bytes");

@@ -3,7 +3,6 @@
 //!
 //! This stays `#[ignore]` until a deterministic rejection trigger is wired into the
 //! harness. Run with `IROHA_RUN_IGNORED=1 cargo test -p integration_tests pipeline_block_rejected -- --ignored`.
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::events::{
@@ -11,7 +10,6 @@ use iroha::data_model::events::{
     pipeline::{BlockEventFilter, BlockStatus, PipelineEventBox, PipelineEventFilterBox},
 };
 use iroha_test_network::NetworkBuilder;
-
 #[tokio::test]
 #[ignore = "awaiting deterministic rejection trigger; set IROHA_RUN_IGNORED=1 to exercise"]
 async fn emits_block_rejected_event() -> Result<()> {
@@ -30,10 +28,8 @@ async fn emits_block_rejected_event() -> Result<()> {
     else {
         return Ok(());
     };
-
     // Build a client against the primary peer
     let client = network.client();
-
     // Subscribe to pipeline Block events with status == Rejected
     let filter =
         PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Rejected(
@@ -43,7 +39,6 @@ async fn emits_block_rejected_event() -> Result<()> {
         .listen_for_events([filter])
         .expect("events subscription")
         .take(1);
-
     // Future work: induce a deterministic rejection.
     // Option A: Kill peer[1] and attempt to force a block creation on peer[0]
     // (e.g., by submitting enough transactions to fill the block and waiting
@@ -59,7 +54,6 @@ async fn emits_block_rejected_event() -> Result<()> {
     // a concrete trigger once available:
     // network.peers()[1].kill().await.expect("kill peer");
     // submit_transactions_to_fill_block(&client).await;
-
     // Expect one rejected block event
     if let Some(Ok(ev)) = events.next() {
         match ev {
@@ -71,6 +65,5 @@ async fn emits_block_rejected_event() -> Result<()> {
     } else {
         panic!("no rejected block event received");
     }
-
     Ok(())
 }

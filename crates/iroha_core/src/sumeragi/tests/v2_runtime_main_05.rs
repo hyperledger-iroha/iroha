@@ -38,7 +38,6 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
         .take_effect_ownership(proposal_effects.len())
         .expect("FetchBody retains the proposal lifecycle owner");
     assert_eq!(proposal_effect_ownership.len(), 1);
-
     let body_reservation = runtime
         .reserve_body_available_with_owner(
             source_tag,
@@ -109,7 +108,6 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
             &retry_store,
         )
         .expect("a late exact Store retry keeps the queued incumbent completion");
-
     let mut prepare = signed_runtime_quorum_certificate(&context, &keys, 0x8D);
     prepare.phase = wire::GlobalPhase::Prepare;
     prepare.round = manifest.round;
@@ -208,7 +206,6 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
     runtime
         .set_external_lifecycle_owners(vec![sign_effect_ownership[0].owner().clone()])
         .expect("publish the pending Prepare signer owner");
-
     let rebound = EventTag::new(
         source_tag.height(),
         source_tag.view() + 1,
@@ -264,7 +261,6 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
         },
     );
     assert_eq!(runtime.queued_commands(), 1);
-
     assert!(
         runtime
             .rebind_body_available(source_tag, rebound, &rebound_manifest)
@@ -343,7 +339,6 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
         RuntimeStep::Advanced(ref effects)
             if matches!(effects.as_slice(), [AdapterEffect::Broadcast(_)])
     ));
-
     // Exercise the opposite coalescing direction: a Busy source loses to
     // an already-installed FIFO destination. The adapter occurrence and
     // its sealed runtime wrapper must retire in the same transition.
@@ -415,7 +410,6 @@ fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
     );
     assert_eq!(retirement_runtime.queued_commands(), 0);
 }
-
 #[test]
 fn queued_body_terminal_adopts_only_authority_upgrades_and_rejects_same_authority_owners() {
     let directory = TempDir::new().expect("temporary body-terminal visibility directory");
@@ -456,7 +450,6 @@ fn queued_body_terminal_adopts_only_authority_upgrades_and_rejects_same_authorit
     runtime
         .commit_body_available(reservation)
         .expect("publish body reconstruction");
-
     let RuntimeStep::Advanced(store_effects) =
         runtime.step(now).expect("dispatch body reconstruction")
     else {
@@ -533,7 +526,6 @@ fn queued_body_terminal_adopts_only_authority_upgrades_and_rejects_same_authorit
     );
     assert_eq!(runtime.queued_commands(), 1);
     assert!(!runtime.fail_closed);
-
     let RuntimeStep::Advanced(validate_effects) =
         runtime.step(now).expect("dispatch durable-store terminal")
     else {
@@ -587,7 +579,6 @@ fn queued_body_terminal_adopts_only_authority_upgrades_and_rejects_same_authorit
     );
     assert!(runtime.fail_closed);
 }
-
 #[test]
 fn queued_store_terminal_query_refines_prepare_to_commit_under_incumbent() {
     let directory = TempDir::new().expect("temporary terminal-refinement directory");
@@ -606,7 +597,6 @@ fn queued_store_terminal_query_refines_prepare_to_commit_under_incumbent() {
         round: manifest.round,
         subject: manifest.subject,
     };
-
     let mut commit = signed_runtime_quorum_certificate(&context, &keys, 0x8F);
     commit.round = manifest.round;
     commit.proposal_round = manifest.round;
@@ -632,7 +622,6 @@ fn queued_store_terminal_query_refines_prepare_to_commit_under_incumbent() {
         .rebind_as_inherited_adapter_effect(&store_effect)
         .expect("carry certified authority into StoreBody")
     };
-
     let prepare_ordinal = runtime
         .ingress
         .mint_non_fifo_lifecycle_ordinal()
@@ -664,7 +653,6 @@ fn queued_store_terminal_query_refines_prepare_to_commit_under_incumbent() {
     let incumbent = runtime.ingress.commands[0]
         .lifecycle_owner()
         .expect("queued terminal retains its incumbent owner");
-
     let commit_ordinal = runtime
         .ingress
         .mint_non_fifo_lifecycle_ordinal()
@@ -704,7 +692,6 @@ fn queued_store_terminal_query_refines_prepare_to_commit_under_incumbent() {
     );
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn local_proposal_ready_is_owned_by_its_validate_predecessor() {
     let (context, _) = authenticated_runtime_context();
@@ -741,13 +728,11 @@ fn local_proposal_ready_is_owned_by_its_validate_predecessor() {
     let validate = store
         .rebind_as_inherited_adapter_effect(&validate_effect)
         .expect("carry the body owner into ValidateBody");
-
     assert!(!store.binds_body_pipeline_completion_predecessor(&evidence));
     assert!(validate.binds_body_pipeline_completion_predecessor(&evidence));
     assert!(!store.exactly_authorizes_body_pipeline_successor(&store_effect, tag, &evidence,));
     assert!(validate.exactly_authorizes_body_pipeline_successor(&validate_effect, tag, &evidence,));
 }
-
 #[test]
 fn body_available_rebind_rejects_two_persistent_roots_before_mutation() {
     let directory = TempDir::new().expect("temporary persistent-root conflict directory");
@@ -786,7 +771,6 @@ fn body_available_rebind_rejects_two_persistent_roots_before_mutation() {
     runtime
         .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
         .expect("publish the pending TimeoutVote signer owner");
-
     let source_tag = runtime.round_tag();
     let manifest = runtime_manifest(&context, 0x90);
     let (source_ordinal, source_owner) = defer_persistent_body_available_for_test(
@@ -810,7 +794,6 @@ fn body_available_rebind_rejects_two_persistent_roots_before_mutation() {
         );
     assert_ne!(source_ordinal, destination_ordinal);
     assert_eq!(source_owner, destination_owner);
-
     let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
         manifest: manifest.clone(),
     };
@@ -832,7 +815,6 @@ fn body_available_rebind_rejects_two_persistent_roots_before_mutation() {
         .keys()
         .copied()
         .collect::<BTreeSet<_>>();
-
     assert_eq!(
         runtime
             .rebind_body_available(source_tag, rebound, &manifest)
@@ -879,7 +861,6 @@ fn body_available_rebind_rejects_two_persistent_roots_before_mutation() {
             .expect("destination persistent root remains exact")
     );
 }
-
 #[test]
 fn body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before_mutation() {
     {
@@ -904,7 +885,6 @@ fn body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before
             .ingress
             .enqueue_canonical_body_available(rebound, conflicting.clone())
             .expect("test seam stages conflicting destination evidence");
-
         assert_eq!(
             runtime
                 .rebind_body_available(source_tag, rebound, &manifest)
@@ -938,7 +918,6 @@ fn body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before
             Err(RuntimeError::FailClosed)
         ));
     }
-
     {
         let directory = TempDir::new().expect("temporary destination-duplicate directory");
         let (mut runtime, context, _keys) =
@@ -960,7 +939,6 @@ fn body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before
                 .enqueue_canonical_body_available(rebound, manifest.clone())
                 .expect("test seam creates duplicate destination ownership");
         }
-
         assert_eq!(
             runtime
                 .rebind_body_available(source_tag, rebound, &manifest)
@@ -1005,7 +983,6 @@ fn body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before
         ));
     }
 }
-
 #[test]
 fn duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation() {
     {
@@ -1026,7 +1003,6 @@ fn duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation() 
             Generation::new(owner_tag.generation().get() + 1),
         );
         observe_enter_view_for_test(&mut runtime, owner_tag, rebound, &manifest);
-
         assert_eq!(
             runtime
                 .rebind_body_available(owner_tag, rebound, &manifest)
@@ -1058,7 +1034,6 @@ fn duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation() 
             Err(RuntimeError::FailClosed)
         ));
     }
-
     {
         let directory = TempDir::new().expect("temporary duplicate-retirement directory");
         let (mut runtime, context, _keys) =
@@ -1071,7 +1046,6 @@ fn duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation() 
                 .enqueue_canonical_body_available(owner_tag, manifest.clone())
                 .expect("test seam creates duplicate ingress ownership");
         }
-
         assert_eq!(
             runtime
                 .retire_body_available(owner_tag, &manifest)
@@ -1100,7 +1074,6 @@ fn duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation() 
         ));
     }
 }
-
 #[test]
 fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning() {
     let body_directory = TempDir::new().expect("temporary body evidence directory");
@@ -1119,7 +1092,6 @@ fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
         .enqueue_body_available(owner_tag, manifest.clone())
         .expect("enqueue the first canonical body completion");
     assert_eq!(body_runtime.queued_commands(), 2);
-
     let mut conflicting_manifest = manifest.clone();
     conflicting_manifest.chunk_hashes[0] = Hash::new(b"conflicting completion chunk");
     conflicting_manifest.chunk_root = Hash::new(b"conflicting completion root");
@@ -1146,7 +1118,6 @@ fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
         body_runtime.enqueue_body_available(owner_tag, manifest),
         Err(EnqueueError::FailClosed)
     );
-
     let stored_directory = TempDir::new().expect("temporary durable evidence directory");
     let (mut stored_runtime, context, _keys) =
         authenticated_network_runtime(&stored_directory, RuntimeQueueConfig::new(8, 1, 1));
@@ -1186,7 +1157,6 @@ fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
         Err(EnqueueError::DuplicateCompletionOwnership)
     );
     assert!(stored_runtime.fail_closed);
-
     let validation_directory = TempDir::new().expect("temporary validation polarity directory");
     let (mut validation_runtime, context, _keys) =
         authenticated_network_runtime(&validation_directory, RuntimeQueueConfig::new(8, 1, 1));
@@ -1213,7 +1183,6 @@ fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
         "opposite validation polarity is conflicting evidence"
     );
     assert!(validation_runtime.fail_closed);
-
     let deferred_failure_directory =
         TempDir::new().expect("temporary deferred validation-failure directory");
     let (mut deferred_failure_runtime, context, _keys) = authenticated_network_runtime(
@@ -1247,7 +1216,6 @@ fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
         "Busy-deferred failure cannot coalesce an incoming success"
     );
     assert!(deferred_failure_runtime.fail_closed);
-
     let deferred_success_directory =
         TempDir::new().expect("temporary deferred validation-success directory");
     let (mut deferred_success_runtime, context, _keys) = authenticated_network_runtime(
@@ -1274,7 +1242,6 @@ fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
         "Busy-deferred success cannot coalesce an incoming failure"
     );
     assert!(deferred_success_runtime.fail_closed);
-
     let atomic_directory = TempDir::new().expect("temporary atomic validation directory");
     let (mut atomic_runtime, context, _keys) =
         authenticated_network_runtime(&atomic_directory, RuntimeQueueConfig::new(4, 1, 1));
@@ -1338,7 +1305,6 @@ fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
         .enqueue_validation_failures_atomically(&failures[..3])
         .expect("exact pre-owned rows coalesce without spending capacity");
     assert_eq!(atomic_runtime.queued_commands(), 3);
-
     let conflict_directory =
         TempDir::new().expect("temporary conflicting atomic validation directory");
     let (mut conflict_runtime, conflict_context, _keys) =
@@ -1375,7 +1341,6 @@ fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
     );
     assert!(conflict_runtime.fail_closed);
 }
-
 #[test]
 fn conflicting_local_and_validated_receipts_do_not_coalesce() {
     let validation_directory = TempDir::new().expect("temporary execution commitment directory");
@@ -1419,7 +1384,6 @@ fn conflicting_local_and_validated_receipts_do_not_coalesce() {
         Err(EnqueueError::DuplicateCompletionOwnership)
     );
     assert!(validation_runtime.fail_closed);
-
     let proposal_directory = TempDir::new().expect("temporary local proposal directory");
     let (mut proposal_runtime, context, _keys) =
         authenticated_network_runtime(&proposal_directory, RuntimeQueueConfig::new(8, 1, 1));
@@ -1441,7 +1405,6 @@ fn conflicting_local_and_validated_receipts_do_not_coalesce() {
             validated_receipt: validated,
         },
     );
-
     let mut conflicting_manifest = manifest.clone();
     conflicting_manifest.chunk_hashes[0] = Hash::new(b"conflicting local proposal chunk");
     conflicting_manifest.chunk_root = Hash::new(b"conflicting local proposal root");
@@ -1463,7 +1426,6 @@ fn conflicting_local_and_validated_receipts_do_not_coalesce() {
     );
     assert!(proposal_runtime.fail_closed);
 }
-
 #[test]
 fn applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation() {
     const PHASE_INVENTORY: [&str; 4] = [
@@ -1472,7 +1434,6 @@ fn applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation() {
         "validation_succeeded",
         "signature_completed",
     ];
-
     let directory = TempDir::new().expect("temporary production phase-inventory directory");
     let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
         &directory,
@@ -1504,7 +1465,6 @@ fn applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation() {
         effects => panic!("unexpected proposal effects: {effects:?}"),
     };
     let mut suppressed_phases = Vec::new();
-
     runtime
         .enqueue_body_available(tag, manifest.clone())
         .expect("enqueue body reconstruction completion");
@@ -1522,7 +1482,6 @@ fn applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation() {
     assert_eq!(runtime.queued_commands(), 0);
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     suppressed_phases.push("body_available");
-
     let durable = DurableBodyReceipt::for_test(
         context.id(),
         manifest.round,
@@ -1546,7 +1505,6 @@ fn applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation() {
     assert_eq!(runtime.queued_commands(), 0);
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     suppressed_phases.push("body_stored");
-
     let validated = ValidatedBodyReceipt::for_test(durable);
     runtime
         .enqueue_validation_succeeded(tag, manifest.round, manifest.subject, validated.clone())
@@ -1573,7 +1531,6 @@ fn applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation() {
     assert_eq!(runtime.queued_commands(), 0);
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     suppressed_phases.push("validation_succeeded");
-
     let signature = Signature::new(keys[0].private_key(), &signature_preimage)
         .payload()
         .to_vec();
@@ -1594,7 +1551,6 @@ fn applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation() {
     assert_eq!(runtime.queued_commands(), 0);
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     suppressed_phases.push("signature_completed");
-
     assert_eq!(
         runtime
             .retire_body_pipeline_completions(tag, manifest.round, manifest.subject)
@@ -1603,11 +1559,9 @@ fn applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation() {
     );
     assert_eq!(suppressed_phases, PHASE_INVENTORY);
 }
-
 #[test]
 fn applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome() {
     const PHASE_INVENTORY: [&str; 1] = ["validation_failed"];
-
     let directory = TempDir::new().expect("temporary failed-validation phase directory");
     let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
         &directory,
@@ -1663,7 +1617,6 @@ fn applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome() {
         RuntimeStep::Advanced(ref effects)
             if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
     ));
-
     runtime
         .enqueue_validation_failed(tag, manifest.round, manifest.subject)
         .expect("enqueue deterministic validation failure");
@@ -1679,7 +1632,6 @@ fn applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome() {
         .expect("an applied failed-validation retry is a monotone stutter");
     assert_eq!(runtime.queued_commands(), 0);
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
-
     // A ValidateBody effect can have been authorized while the reducer was
     // still Durable but reach the executor only after another exact task
     // records the same deterministic terminal. Its bound owner is
@@ -1720,7 +1672,6 @@ fn applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome() {
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     assert!(!runtime.fail_closed);
     assert_eq!(["validation_failed"], PHASE_INVENTORY);
-
     assert_eq!(
         runtime.enqueue_validation_succeeded(
             tag,
@@ -1734,11 +1685,9 @@ fn applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome() {
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     assert!(runtime.fail_closed);
 }
-
 #[test]
 fn applied_local_proposal_handoff_suppresses_retry_before_ordinal_allocation() {
     const PHASE_INVENTORY: [&str; 1] = ["local_proposal_ready"];
-
     let directory = TempDir::new().expect("temporary local-proposal phase directory");
     let (fixture_context, _) = authenticated_runtime_context();
     let leader = fixture_context.leader(0);
@@ -1770,7 +1719,6 @@ fn applied_local_proposal_handoff_suppresses_retry_before_ordinal_allocation() {
         RuntimeStep::Advanced(ref effects)
             if matches!(effects.as_slice(), [AdapterEffect::Sign { .. }])
     ));
-
     let next_ordinal = runtime.ingress.next_admission_ordinal;
     runtime
         .enqueue_local_proposal(tag, manifest, durable, validated)
@@ -1779,7 +1727,6 @@ fn applied_local_proposal_handoff_suppresses_retry_before_ordinal_allocation() {
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     assert_eq!(["local_proposal_ready"], PHASE_INVENTORY);
 }
-
 #[test]
 fn durable_timeout_coalesces_late_local_proposal_validate_owner() {
     let directory = TempDir::new().expect("temporary timeout-race directory");
@@ -1815,7 +1762,6 @@ fn durable_timeout_coalesces_late_local_proposal_validate_owner() {
     .expect("bind the late ValidateBody capability")
     .pop()
     .expect("one ValidateBody effect retains one owner");
-
     let deadline = now + runtime.round_timeout();
     let RuntimeStep::Advanced(timeout_effects) = runtime
         .step(deadline)
@@ -1853,7 +1799,6 @@ fn durable_timeout_coalesces_late_local_proposal_validate_owner() {
         signed_timeout.disposition(),
         crate::sumeragi::v2_core::StepDisposition::Applied,
     );
-
     let next_ordinal = runtime.ingress.next_admission_ordinal;
     assert_eq!(
         runtime.driver.preflight_runtime_command_admission(
@@ -1866,7 +1811,6 @@ fn durable_timeout_coalesces_late_local_proposal_validate_owner() {
         ),
         RuntimeCommandAdmissionPreflight::Coalesce,
     );
-
     runtime
         .enqueue_local_proposal_with_owner(tag, manifest, durable, validated, &exact_validate_owner)
         .expect("the exact late ValidateBody owner terminates at the closed view");

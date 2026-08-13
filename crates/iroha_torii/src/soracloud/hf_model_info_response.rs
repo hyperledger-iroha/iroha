@@ -1,16 +1,11 @@
 //! Bounded acquisition and decode boundary for remote Hugging Face model metadata.
-
 use std::{collections::BTreeSet, fmt};
-
 use futures_util::{Stream, StreamExt as _};
 use iroha_config::parameters::{actual::SoracloudRuntimeHuggingFace, defaults};
 use iroha_data_model::soracloud::{SoraHfBackendFamilyV1, SoraHfModelFormatV1};
-
 use super::SoracloudError;
-
 const INITIAL_ALLOCATION_BYTES: usize = 16 * 1024;
 type WeightFileSelection = (SoraHfBackendFamilyV1, SoraHfModelFormatV1, Vec<String>);
-
 /// Read provider-controlled model metadata under its source configuration cap.
 ///
 /// The same `soracloud_runtime.hf.model_info_max_response_bytes` value bounds
@@ -32,7 +27,6 @@ pub(super) async fn read(
             "Hugging Face model info for `{repo_id}@{resolved_revision}` declares {length} bytes, exceeding the configured {maximum_bytes}-byte limit"
         )));
     }
-
     collect_stream_bounded(
         response.bytes_stream(),
         declared_length,
@@ -42,7 +36,6 @@ pub(super) async fn read(
     )
     .await
 }
-
 /// Decode model metadata only after reapplying the acquisition byte limit.
 ///
 /// Keeping this check adjacent to the parser prevents a future alternate fetch
@@ -66,7 +59,6 @@ pub(super) fn decode(
         ))
     })
 }
-
 /// Select the canonical weight format without cloning the full path list.
 ///
 /// Format precedence matches the first-release profile contract: GGUF, then
@@ -84,7 +76,6 @@ pub(super) fn select_weight_files(
     const GGUF: &[&str] = &[".gguf"];
     const SAFETENSORS: &[&str] = &[".safetensors"];
     const PYTORCH: &[&str] = &[".bin", ".pt", ".pth"];
-
     let maximum_files = configured_maximum_weight_files(config)?;
     let (backend_family, model_format, extensions) =
         if sibling_paths(model_info).any(|path| has_extension(path, GGUF)) {
@@ -126,7 +117,6 @@ pub(super) fn select_weight_files(
     }
     Ok(Some((backend_family, model_format, weight_files)))
 }
-
 fn sibling_paths(model_info: &norito::json::Value) -> impl Iterator<Item = &str> {
     model_info
         .get("siblings")
@@ -135,14 +125,12 @@ fn sibling_paths(model_info: &norito::json::Value) -> impl Iterator<Item = &str>
         .flatten()
         .filter_map(|entry| entry.get("rfilename").and_then(norito::json::Value::as_str))
 }
-
 fn has_extension(path: &str, extensions: &[&str]) -> bool {
     extensions.iter().any(|extension| {
         path.get(path.len().saturating_sub(extension.len())..)
             .is_some_and(|suffix| suffix.eq_ignore_ascii_case(extension))
     })
 }
-
 fn configured_maximum_bytes(config: &SoracloudRuntimeHuggingFace) -> Result<u64, SoracloudError> {
     let maximum_bytes = config.model_info_max_response_bytes;
     let hard_maximum = defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT;
@@ -153,7 +141,6 @@ fn configured_maximum_bytes(config: &SoracloudRuntimeHuggingFace) -> Result<u64,
     }
     Ok(maximum_bytes)
 }
-
 fn configured_maximum_weight_files(
     config: &SoracloudRuntimeHuggingFace,
 ) -> Result<usize, SoracloudError> {
@@ -170,7 +157,6 @@ fn configured_maximum_weight_files(
         ))
     })
 }
-
 fn declared_content_length(
     response: &reqwest::Response,
     repo_id: &str,
@@ -199,7 +185,6 @@ fn declared_content_length(
         ))
     })
 }
-
 async fn collect_stream_bounded<S, C, E>(
     chunks: S,
     declared_length: Option<u64>,
@@ -221,7 +206,6 @@ where
         SoracloudError::internal("configured Hugging Face model-info response limit overflow")
     })?;
     let mut body = Vec::new();
-
     futures_util::pin_mut!(chunks);
     while let Some(chunk) = chunks.next().await {
         let chunk = chunk.map_err(|err| {
@@ -246,7 +230,6 @@ where
             )));
         }
     }
-
     let actual_length = u64::try_from(body.len()).unwrap_or(u64::MAX);
     if let Some(length) = declared_length
         && length != actual_length
@@ -257,7 +240,6 @@ where
     }
     Ok(body)
 }
-
 fn reserve_to(
     body: &mut Vec<u8>,
     required_length: usize,
@@ -280,26 +262,20 @@ fn reserve_to(
             ))
         })
 }
-
 #[cfg(test)]
 mod tests {
     use std::{io, task::Poll};
-
     use futures_util::stream;
     use http::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
-
     use super::*;
-
     const REPO_ID: &str = "org/model";
     const REVISION: &str = "revision";
-
     fn config_with_limit(maximum_bytes: u64) -> SoracloudRuntimeHuggingFace {
         SoracloudRuntimeHuggingFace {
             model_info_max_response_bytes: maximum_bytes,
             ..SoracloudRuntimeHuggingFace::default()
         }
     }
-
     fn streaming_response(chunks: &[&[u8]], declared_length: Option<u64>) -> reqwest::Response {
         let chunks = chunks
             .iter()
@@ -314,7 +290,6 @@ mod tests {
         };
         response.body(body).expect("build response fixture").into()
     }
-
     #[tokio::test]
     async fn accepts_exact_content_length_boundary() {
         let response = streaming_response(&[b"1234", b"5678"], Some(8));
@@ -323,7 +298,6 @@ mod tests {
             .expect("exact declared limit must be accepted");
         assert_eq!(body, b"12345678");
     }
-
     #[tokio::test]
     async fn chunked_response_is_bounded_at_max_plus_one() {
         let exact = streaming_response(&[b"12", b"345", b"678"], None);
@@ -333,14 +307,12 @@ mod tests {
                 .expect("exact chunked limit must be accepted"),
             b"12345678"
         );
-
         let oversized = streaming_response(&[b"12", b"345", b"6789"], None);
         let error = read(oversized, &config_with_limit(8), REPO_ID, REVISION)
             .await
             .expect_err("chunked max-plus-one body must fail");
         assert!(error.message.contains("while streaming"));
     }
-
     #[tokio::test]
     async fn content_length_preflight_does_not_poll_an_oversized_body() {
         let body = reqwest::Body::wrap_stream(stream::poll_fn(
@@ -359,7 +331,6 @@ mod tests {
             .expect_err("oversized declaration must fail");
         assert!(error.message.contains("declares 9 bytes"));
     }
-
     #[tokio::test]
     async fn rejects_content_length_lies_in_both_directions() {
         for declared_length in [7, 9] {
@@ -370,7 +341,6 @@ mod tests {
             assert!(error.message.contains("does not match Content-Length"));
         }
     }
-
     #[test]
     fn decode_reapplies_the_configured_body_limit() {
         let config = config_with_limit(2);
@@ -382,7 +352,6 @@ mod tests {
             .expect_err("max-plus-one input must fail before JSON decode");
         assert!(error.message.contains("before JSON decode"));
     }
-
     #[test]
     fn weight_selection_preserves_precedence_case_and_order_without_full_clone() {
         let model_info = norito::json!({
@@ -411,7 +380,6 @@ mod tests {
             .is_none()
         );
     }
-
     #[test]
     fn weight_selection_deduplicates_then_enforces_the_import_file_cap() {
         let model_info = norito::json!({

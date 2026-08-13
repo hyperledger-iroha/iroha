@@ -10,9 +10,7 @@
 //! particular, membership of a committed vector does not establish that the
 //! same vector was used in a CPK share relation.  That separate relation proof
 //! remains fail closed at its state-owned minting boundary.
-
 use thiserror::Error;
-
 use crate::{
     generalized_bulletproof::ProofRandomSource,
     vega::{
@@ -23,7 +21,6 @@ use crate::{
         },
     },
 };
-
 #[cfg(test)]
 use crate::vega::{
     bulletproof_t256::{
@@ -31,7 +28,6 @@ use crate::vega::{
     },
     sponge::Keccak256,
 };
-
 use super::{
     ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
@@ -41,18 +37,15 @@ use super::{
         VerifiedExactEightChunkMembershipV1,
     },
 };
-
 #[cfg(test)]
 use super::exact_eight_chunk_membership::{
     commitment_set_digest as exact_commitment_set_digest,
     proof_set_digest as exact_proof_set_digest,
     verifier_transcript_set_digest as exact_verifier_transcript_set_digest,
 };
-
 const PERSISTENT_MEMBERSHIP_MAGIC_V1: [u8; 4] = *b"ZPME";
 const PERSISTENT_MEMBERSHIP_VERSION_V1: u8 = 1;
 const PERSISTENT_MEMBERSHIP_BOUND_V1: ZkAmsT256MembershipBoundV1 = ZkAmsT256MembershipBoundV1::One;
-
 /// Exact number of ordered proofs for one release-ring persistent secret.
 pub(super) const ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1: usize = 8;
 /// Exact coefficient count covered by the complete persistent proof set.
@@ -60,12 +53,10 @@ pub(super) const ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_COEFFICIENTS_V1: usize =
     ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1 * ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1;
 /// Membership evidence alone never certifies linkage to the CPK share relation.
 pub(super) const ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CPK_RELATION_LINKED_V1: bool = false;
-
 const BOUND_ONE_PROOF_BYTES_V1: usize = 1_447;
 const MEMBERSHIP_CHUNK_WIRE_HEADER_BYTES_V1: usize = 47;
 const MEMBERSHIP_CHUNK_WIRE_BYTES_V1: usize =
     MEMBERSHIP_CHUNK_WIRE_HEADER_BYTES_V1 + BOUND_ONE_PROOF_BYTES_V1;
-
 const OFFSET_BOUND_V1: usize = 5;
 const OFFSET_CHUNK_COUNT_V1: usize = OFFSET_BOUND_V1 + 1;
 const OFFSET_COEFFICIENT_COUNT_V1: usize = OFFSET_CHUNK_COUNT_V1 + 1;
@@ -81,12 +72,10 @@ const OFFSET_COMMITMENT_SET_DIGEST_V1: usize = OFFSET_SHARE_STATEMENT_DIGEST_V1 
 const OFFSET_PROOF_SET_DIGEST_V1: usize = OFFSET_COMMITMENT_SET_DIGEST_V1 + 32;
 const OFFSET_VERIFIER_TRANSCRIPT_DIGEST_V1: usize = OFFSET_PROOF_SET_DIGEST_V1 + 32;
 const PERSISTENT_MEMBERSHIP_HEADER_BYTES_V1: usize = OFFSET_VERIFIER_TRANSCRIPT_DIGEST_V1 + 32;
-
 /// Exact canonical wire length of one persistent membership evidence set.
 pub(super) const ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_WIRE_BYTES_V1: usize =
     PERSISTENT_MEMBERSHIP_HEADER_BYTES_V1
         + ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1 * MEMBERSHIP_CHUNK_WIRE_BYTES_V1;
-
 const _: () = {
     assert!(ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1 == 8);
     assert!(ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_COEFFICIENTS_V1 == 131_072);
@@ -96,7 +85,6 @@ const _: () = {
     assert!(ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_WIRE_BYTES_V1 == 12_291);
     assert!(!ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CPK_RELATION_LINKED_V1);
 };
-
 /// Stable failures for persistent T256 membership evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum ZkAmsMkhePersistentMembershipErrorV1 {
@@ -119,7 +107,6 @@ pub(super) enum ZkAmsMkhePersistentMembershipErrorV1 {
     #[error(transparent)]
     Membership(#[from] ZkAmsT256MembershipErrorV1),
 }
-
 impl From<ExactEightChunkMembershipErrorV1> for ZkAmsMkhePersistentMembershipErrorV1 {
     fn from(error: ExactEightChunkMembershipErrorV1) -> Self {
         match error {
@@ -132,7 +119,6 @@ impl From<ExactEightChunkMembershipErrorV1> for ZkAmsMkhePersistentMembershipErr
         }
     }
 }
-
 /// Complete public context bound into all eight persistent-membership proofs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkhePersistentMembershipContextV1 {
@@ -144,7 +130,6 @@ pub(super) struct ZkAmsMkhePersistentMembershipContextV1 {
     party: ZkAmsMkhePartyIdV1,
     share_statement_digest: [u8; 32],
 }
-
 impl ZkAmsMkhePersistentMembershipContextV1 {
     /// Construct the exact context for one governed roster participant.
     pub(super) fn from_governed_roster(
@@ -170,7 +155,6 @@ impl ZkAmsMkhePersistentMembershipContextV1 {
             share_statement_digest,
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn new(
         profile_digest: [u8; 32],
@@ -193,7 +177,6 @@ impl ZkAmsMkhePersistentMembershipContextV1 {
         context.validate()?;
         Ok(context)
     }
-
     /// Construct the role-specific context expected by the CPK relation adapter.
     ///
     /// The complete statement digest binds the statement-only security,
@@ -219,11 +202,9 @@ impl ZkAmsMkhePersistentMembershipContextV1 {
             share_statement_digest,
         )
     }
-
     fn validate(self) -> Result<(), ZkAmsMkhePersistentMembershipErrorV1> {
         self.to_exact().map(|_| ())
     }
-
     fn to_exact(
         self,
     ) -> Result<
@@ -241,7 +222,6 @@ impl ZkAmsMkhePersistentMembershipContextV1 {
         )
         .map_err(Into::into)
     }
-
     fn from_exact(
         context: ExactEightChunkMembershipContextV1<PersistentSecretMembershipRoleV1>,
     ) -> Self {
@@ -255,42 +235,34 @@ impl ZkAmsMkhePersistentMembershipContextV1 {
             share_statement_digest: context.share_statement_digest(),
         }
     }
-
     /// Frozen release-profile digest.
     pub(super) const fn profile_digest(self) -> [u8; 32] {
         self.profile_digest
     }
-
     /// Exact governed-roster digest.
     pub(super) const fn roster_digest(self) -> [u8; 32] {
         self.roster_digest
     }
-
     /// Ordered roster-key-material digest.
     pub(super) const fn key_material_digest(self) -> [u8; 32] {
         self.key_material_digest
     }
-
     /// Nonzero governed key epoch.
     pub(super) const fn epoch(self) -> u64 {
         self.epoch
     }
-
     /// Collective-public-key transcript digest used as source context.
     pub(super) const fn cpk_transcript_digest(self) -> [u8; 32] {
         self.cpk_transcript_digest
     }
-
     /// Participant whose persistent secret is committed.
     pub(super) const fn party(self) -> ZkAmsMkhePartyIdV1 {
         self.party
     }
-
     /// Digest of the exact CPK-share statement associated with this evidence.
     pub(super) const fn share_statement_digest(self) -> [u8; 32] {
         self.share_statement_digest
     }
-
     /// Digest absorbed by every chunk proof and every ordered-set root.
     pub(super) fn context_digest(self) -> [u8; 32] {
         self.to_exact()
@@ -298,7 +270,6 @@ impl ZkAmsMkhePersistentMembershipContextV1 {
             .context_digest()
     }
 }
-
 /// Canonical public evidence for one persistent bound-one secret polynomial.
 ///
 /// This type deliberately has no conversion to
@@ -314,7 +285,6 @@ pub(super) struct ZkAmsMkhePersistentMembershipEvidenceV1 {
     proof_set_digest: [u8; 32],
     verifier_transcript_digest: [u8; 32],
 }
-
 impl ZkAmsMkhePersistentMembershipEvidenceV1 {
     fn from_exact(
         evidence: ExactEightChunkMembershipEvidenceV1<PersistentSecretMembershipRoleV1>,
@@ -328,7 +298,6 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
             verifier_transcript_digest: evidence.verifier_transcript_digest(),
         }
     }
-
     fn to_exact(
         &self,
     ) -> Result<
@@ -345,7 +314,6 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
         )
         .map_err(Into::into)
     }
-
     /// Prove and locally verify all eight production-shape bound-one chunks.
     ///
     /// Blindings are borrowed from state and each local per-call copy is
@@ -367,7 +335,6 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
         .map(Self::from_exact)
         .map_err(Into::into)
     }
-
     /// Verify and assemble an exact ordered set of externally supplied chunks.
     pub(super) fn from_proof_chunks_verified(
         context: ZkAmsMkhePersistentMembershipContextV1,
@@ -377,7 +344,6 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
             .map(Self::from_exact)
             .map_err(Into::into)
     }
-
     #[cfg(test)]
     fn assemble(
         context: ZkAmsMkhePersistentMembershipContextV1,
@@ -392,7 +358,6 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
         .map(Self::from_exact)
         .map_err(Into::into)
     }
-
     /// Strictly decode the exact 12,291-byte canonical evidence layout.
     ///
     /// Decoding validates shape plus the public commitment/proof roots.  The
@@ -405,17 +370,14 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
             .map(Self::from_exact)
             .map_err(Into::into)
     }
-
     /// Encode the fixed-layout canonical representation after rechecking roots.
     pub(super) fn to_wire_bytes(&self) -> Result<Vec<u8>, ZkAmsMkhePersistentMembershipErrorV1> {
         self.to_exact()?.to_wire_bytes().map_err(Into::into)
     }
-
     /// Replay every production proof and self-recompute all three ordered roots.
     pub(super) fn verify(&self) -> Result<(), ZkAmsMkhePersistentMembershipErrorV1> {
         self.to_exact()?.verify().map_err(Into::into)
     }
-
     /// Consume this evidence and return a move-only membership-only receipt.
     ///
     /// The receipt has no conversion into active persistent-witness lineage;
@@ -428,7 +390,6 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
             .map(|inner| ZkAmsMkheVerifiedPersistentMembershipV1 { inner })
             .map_err(Into::into)
     }
-
     #[cfg(test)]
     fn verify_with<F>(
         &self,
@@ -466,33 +427,27 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
             })
             .map_err(Into::into)
     }
-
     fn validate_structural_digests(&self) -> Result<(), ZkAmsMkhePersistentMembershipErrorV1> {
         self.to_exact().map(|_| ())
     }
-
     /// Complete source context carried by this evidence.
     pub(super) const fn context(&self) -> ZkAmsMkhePersistentMembershipContextV1 {
         self.context
     }
-
     /// Ordered production membership chunks.
     pub(super) const fn chunks(
         &self,
     ) -> &[ZkAmsT256MembershipProofV1; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] {
         &self.chunks
     }
-
     /// Ordered commitment points certified by the eight membership proofs.
     pub(super) fn commitments(&self) -> [Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] {
         core::array::from_fn(|index| self.chunks[index].commitment())
     }
-
     /// Pinned full T256 generator-basis digest.
     pub(super) const fn generator_basis_digest(&self) -> [u8; 32] {
         self.generator_basis_digest
     }
-
     /// Stable digest of the eight ordered commitment points.
     ///
     /// This intentionally mirrors the context-independent commitment identity
@@ -501,18 +456,15 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
     pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
         self.commitment_set_digest
     }
-
     /// Context-bound digest of the eight exact canonical chunk wires.
     pub(super) const fn proof_set_digest(&self) -> [u8; 32] {
         self.proof_set_digest
     }
-
     /// Context-bound root of the eight verifier transcript digests.
     pub(super) const fn verifier_transcript_digest(&self) -> [u8; 32] {
         self.verifier_transcript_digest
     }
 }
-
 /// Move-only verification receipt for bound-one persistent membership.
 ///
 /// This receipt proves only coefficient membership and context integrity.  It
@@ -521,35 +473,28 @@ impl ZkAmsMkhePersistentMembershipEvidenceV1 {
 pub(super) struct ZkAmsMkheVerifiedPersistentMembershipV1 {
     inner: VerifiedExactEightChunkMembershipV1<PersistentSecretMembershipRoleV1>,
 }
-
 impl ZkAmsMkheVerifiedPersistentMembershipV1 {
     pub(super) fn context(&self) -> ZkAmsMkhePersistentMembershipContextV1 {
         ZkAmsMkhePersistentMembershipContextV1::from_exact(self.inner.context())
     }
-
     pub(super) const fn commitments(
         &self,
     ) -> &[Point; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] {
         self.inner.commitments()
     }
-
     pub(super) const fn generator_basis_digest(&self) -> [u8; 32] {
         self.inner.generator_basis_digest()
     }
-
     pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
         self.inner.commitment_set_digest()
     }
-
     pub(super) const fn proof_set_digest(&self) -> [u8; 32] {
         self.inner.proof_set_digest()
     }
-
     pub(super) const fn verifier_transcript_digest(&self) -> [u8; 32] {
         self.inner.verifier_transcript_digest()
     }
 }
-
 impl core::fmt::Debug for ZkAmsMkheVerifiedPersistentMembershipV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -565,7 +510,6 @@ impl core::fmt::Debug for ZkAmsMkheVerifiedPersistentMembershipV1 {
             .finish_non_exhaustive()
     }
 }
-
 #[cfg(test)]
 fn commitment_set_digest(
     generator_basis_digest: [u8; 32],
@@ -574,7 +518,6 @@ fn commitment_set_digest(
     exact_commitment_set_digest::<PersistentSecretMembershipRoleV1>(generator_basis_digest, chunks)
         .map_err(Into::into)
 }
-
 #[cfg(test)]
 fn proof_set_digest(
     context_digest: [u8; 32],
@@ -588,7 +531,6 @@ fn proof_set_digest(
     )
     .map_err(Into::into)
 }
-
 #[cfg(test)]
 fn verifier_transcript_set_digest(
     context_digest: [u8; 32],
@@ -601,11 +543,9 @@ fn verifier_transcript_set_digest(
         transcript_digests,
     )
 }
-
 // TODO: Keep the CPK-relation linkage and `VerifiedPersistentWitnessBindingV1`
 // mint closed until the state-owned relation proof consumes these exact
 // commitment points together with their retained, zeroized blindings.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,7 +553,6 @@ mod tests {
         generalized_bulletproof::GeneralizedBulletproofErrorV1,
         vega::{derive_t256_generators_v1, sponge::keccak256},
     };
-
     const INNER_COMMITMENT_OFFSET_V1: usize = 12;
     const INNER_PROOF_OFFSET_V1: usize = 47;
     const RELEASE_EVIDENCE_KAT_DOMAIN_V1: &[u8] =
@@ -638,13 +577,11 @@ mod tests {
         0x78, 0xec, 0x38, 0x4e, 0x7b, 0x15, 0x18, 0xba, 0x43, 0xb0, 0xdd, 0xe5, 0x89, 0xc1, 0x3a,
         0xfd, 0x07,
     ];
-
     struct ReleaseKatRandom {
         seed: [u8; 32],
         next_block: u64,
         max_blocks: u64,
     }
-
     impl ReleaseKatRandom {
         fn new(label: &[u8], max_blocks: u64) -> Self {
             Self {
@@ -654,7 +591,6 @@ mod tests {
             }
         }
     }
-
     impl ProofRandomSource for ReleaseKatRandom {
         fn fill_bytes(
             &mut self,
@@ -680,7 +616,6 @@ mod tests {
             Ok(())
         }
     }
-
     fn release_kat_coefficients() -> Vec<i8> {
         (0..ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_COEFFICIENTS_V1)
             .map(|index| {
@@ -694,7 +629,6 @@ mod tests {
             })
             .collect()
     }
-
     fn release_kat_blindings() -> [Scalar; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] {
         [
             Scalar::from_u64(0x101),
@@ -707,7 +641,6 @@ mod tests {
             Scalar::from_u64(0x809),
         ]
     }
-
     fn release_evidence_kat_digest(
         context: ZkAmsMkhePersistentMembershipContextV1,
         coefficients: &[i8],
@@ -727,7 +660,6 @@ mod tests {
         for coefficient in coefficients {
             coefficient_hash.update(&coefficient.to_be_bytes());
         }
-
         let mut blinding_hash = Keccak256::new();
         blinding_hash.update(RELEASE_EVIDENCE_KAT_DOMAIN_V1);
         blinding_hash.update(b".blindings");
@@ -740,7 +672,6 @@ mod tests {
             );
             blinding_hash.update(&blinding.to_be_bytes());
         }
-
         let mut hash = Keccak256::new();
         hash.update(RELEASE_EVIDENCE_KAT_DOMAIN_V1);
         hash.update(&PERSISTENT_MEMBERSHIP_MAGIC_V1);
@@ -781,7 +712,6 @@ mod tests {
         hash.update(wire);
         hash.finalize()
     }
-
     fn context(seed: &[u8]) -> ZkAmsMkhePersistentMembershipContextV1 {
         let digest = |label: &[u8]| {
             let mut frame = Vec::new();
@@ -800,7 +730,6 @@ mod tests {
         )
         .expect("canonical test context")
     }
-
     fn fake_chunks(
         context: ZkAmsMkhePersistentMembershipContextV1,
         seed: u8,
@@ -839,7 +768,6 @@ mod tests {
             ZkAmsT256MembershipProofV1::from_wire_bytes_exact(&wire).expect("synthetic chunk")
         })
     }
-
     fn fake_verify(
         context_digest: [u8; 32],
         ordinal: u16,
@@ -857,7 +785,6 @@ mod tests {
         hash.update(&chunk.to_wire_bytes());
         Ok(hash.finalize())
     }
-
     fn fake_evidence(seed: &[u8], proof_seed: u8) -> ZkAmsMkhePersistentMembershipEvidenceV1 {
         let context = context(seed);
         let chunks = fake_chunks(context, proof_seed);
@@ -868,12 +795,10 @@ mod tests {
         ZkAmsMkhePersistentMembershipEvidenceV1::assemble(context, chunks, transcripts)
             .expect("synthetic evidence")
     }
-
     fn chunk_wire_range(index: usize) -> core::ops::Range<usize> {
         let start = PERSISTENT_MEMBERSHIP_HEADER_BYTES_V1 + index * MEMBERSHIP_CHUNK_WIRE_BYTES_V1;
         start..start + MEMBERSHIP_CHUNK_WIRE_BYTES_V1
     }
-
     #[test]
     fn canonical_wire_has_exact_release_shape_and_roundtrips() {
         let evidence = fake_evidence(b"canonical-evidence", 0);
@@ -893,7 +818,6 @@ mod tests {
         assert!(decoded.verify_with(fake_verify).is_ok());
         assert!(!ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CPK_RELATION_LINKED_V1);
     }
-
     #[test]
     fn every_truncation_and_trailing_bytes_are_rejected_before_parsing() {
         let wire = fake_evidence(b"length-adversary", 0)
@@ -915,14 +839,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reordered_duplicated_and_spliced_chunks_are_rejected() {
         let first = fake_evidence(b"set-first", 0);
         let second = fake_evidence(b"set-second", 8);
         let wire = first.to_wire_bytes().expect("first wire");
         let second_wire = second.to_wire_bytes().expect("second wire");
-
         let mut reordered = wire.clone();
         let first_chunk = reordered[chunk_wire_range(0)].to_vec();
         let second_chunk = reordered[chunk_wire_range(1)].to_vec();
@@ -931,20 +853,17 @@ mod tests {
         assert!(
             ZkAmsMkhePersistentMembershipEvidenceV1::from_wire_bytes_exact(&reordered).is_err()
         );
-
         let mut duplicated = wire.clone();
         duplicated[chunk_wire_range(1)].copy_from_slice(&first_chunk);
         assert!(
             ZkAmsMkhePersistentMembershipEvidenceV1::from_wire_bytes_exact(&duplicated).is_err()
         );
-
         let mut spliced = wire.clone();
         spliced[chunk_wire_range(3)].copy_from_slice(&second_wire[chunk_wire_range(3)]);
         assert_eq!(
             ZkAmsMkhePersistentMembershipEvidenceV1::from_wire_bytes_exact(&spliced),
             Err(ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch)
         );
-
         let mut context_splice = first.clone();
         context_splice.context = second.context;
         context_splice.commitment_set_digest = commitment_set_digest(
@@ -960,7 +879,6 @@ mod tests {
         .expect("proof root");
         assert!(context_splice.verify_with(fake_verify).is_err());
     }
-
     #[test]
     fn every_context_axis_is_bound_into_structural_and_transcript_roots() {
         let evidence = fake_evidence(b"axis-binding", 0);
@@ -985,7 +903,6 @@ mod tests {
                 Err(ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch),
                 "axis {axis} was not structurally bound"
             );
-
             changed.commitment_set_digest =
                 commitment_set_digest(changed.generator_basis_digest, &changed.chunks)
                     .expect("commitment root");
@@ -1001,12 +918,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn commitment_proof_and_digest_mutations_are_rejected() {
         let evidence = fake_evidence(b"byte-mutations", 0);
         let wire = evidence.to_wire_bytes().expect("wire");
-
         let mut commitment = wire.clone();
         let source = PERSISTENT_MEMBERSHIP_HEADER_BYTES_V1
             + MEMBERSHIP_CHUNK_WIRE_BYTES_V1
@@ -1018,7 +933,6 @@ mod tests {
             ZkAmsMkhePersistentMembershipEvidenceV1::from_wire_bytes_exact(&commitment),
             Err(ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch)
         );
-
         for index in [0, 31, BOUND_ONE_PROOF_BYTES_V1 - 1] {
             let mut proof = wire.clone();
             proof[PERSISTENT_MEMBERSHIP_HEADER_BYTES_V1 + INNER_PROOF_OFFSET_V1 + index] ^= 1;
@@ -1027,7 +941,6 @@ mod tests {
                 Err(ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch)
             );
         }
-
         // Even after an attacker recomputes both public structural roots, the
         // retained verifier-transcript root detects a changed commitment or
         // proof before this evidence can pass verification.
@@ -1060,7 +973,6 @@ mod tests {
                 Err(ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch)
             );
         }
-
         for offset in [
             OFFSET_COMMITMENT_SET_DIGEST_V1,
             OFFSET_PROOF_SET_DIGEST_V1,
@@ -1083,7 +995,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn noncanonical_outer_and_inner_shape_fields_are_rejected() {
         let wire = fake_evidence(b"shape-mutations", 0)
@@ -1096,7 +1007,6 @@ mod tests {
                 ZkAmsMkhePersistentMembershipEvidenceV1::from_wire_bytes_exact(&changed).is_err()
             );
         }
-
         let mut coefficient_count = wire.clone();
         coefficient_count[OFFSET_COEFFICIENT_COUNT_V1..OFFSET_COEFFICIENT_COUNT_V1 + 4]
             .copy_from_slice(&16_383_u32.to_be_bytes());
@@ -1104,14 +1014,12 @@ mod tests {
             ZkAmsMkhePersistentMembershipEvidenceV1::from_wire_bytes_exact(&coefficient_count)
                 .is_err()
         );
-
         let mut basis = wire.clone();
         basis[OFFSET_GENERATOR_BASIS_DIGEST_V1] ^= 1;
         assert_eq!(
             ZkAmsMkhePersistentMembershipEvidenceV1::from_wire_bytes_exact(&basis),
             Err(ZkAmsMkhePersistentMembershipErrorV1::GeneratorBasis)
         );
-
         let first_chunk = PERSISTENT_MEMBERSHIP_HEADER_BYTES_V1;
         for offset in [5, 6, 7, 8, 9, 10, 11, 45, 46] {
             let mut changed = wire.clone();
@@ -1122,7 +1030,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn zero_context_axes_are_rejected() {
         let valid = context(b"zero-axis");
@@ -1167,7 +1074,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     #[ignore = "resource smoke: proves one real 16384-coefficient production T256 chunk"]
     fn release_parameter_single_chunk_membership_resource_smoke() {
@@ -1176,7 +1082,6 @@ mod tests {
         assert!(first_chunk.contains(&-1));
         assert!(first_chunk.contains(&0));
         assert!(first_chunk.contains(&1));
-
         let context = context(b"real-release-parameter-membership-evidence-kat");
         let context_digest = context.context_digest();
         let mut blindings = release_kat_blindings();
@@ -1190,7 +1095,6 @@ mod tests {
             &mut random,
         )
         .expect("one real release-shape membership chunk proves");
-
         assert_eq!(proof.proof_bytes().len(), BOUND_ONE_PROOF_BYTES_V1);
         assert_eq!(proof.to_wire_bytes().len(), MEMBERSHIP_CHUNK_WIRE_BYTES_V1);
         assert!(!proof.commitment().is_identity());
@@ -1202,13 +1106,11 @@ mod tests {
         )
         .expect("one real release-shape membership chunk verifies");
         assert_eq!(prover_transcript_digest, verifier_transcript_digest);
-
         for blinding in &mut blindings {
             blinding.clear_secret();
         }
         assert!(blindings.iter().all(|blinding| blinding.is_zero()));
     }
-
     #[test]
     #[ignore = "real 131072-coefficient production T256 membership KAT; run explicitly"]
     fn release_parameter_eight_chunk_membership_evidence_kat() {
@@ -1221,7 +1123,6 @@ mod tests {
         assert_eq!(RELEASE_EVIDENCE_KAT_CHUNK_WIRE_BYTES_V1, 11_952);
         assert_eq!(PERSISTENT_MEMBERSHIP_HEADER_BYTES_V1, 339);
         assert_eq!(ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_WIRE_BYTES_V1, 12_291);
-
         let coefficients = release_kat_coefficients();
         assert_eq!(coefficients.len(), 131_072);
         assert!(
@@ -1235,11 +1136,9 @@ mod tests {
             assert!(chunk.contains(&0));
             assert!(chunk.contains(&1));
         }
-
         let mut blindings = release_kat_blindings();
         assert_eq!(blindings.len(), 8);
         assert!(blindings.iter().all(|blinding| !blinding.is_zero()));
-
         let mut unavailable = ReleaseKatRandom::new(
             b"iroha.zk-ams.v1.mkhe.persistent-membership.release-kat.unavailable",
             0,
@@ -1249,7 +1148,6 @@ mod tests {
             unavailable.fill_bytes(&mut unavailable_byte),
             Err(GeneralizedBulletproofErrorV1::RandomnessUnavailable)
         );
-
         let context = context(b"real-release-parameter-membership-evidence-kat");
         let random_seed = keccak256(RELEASE_EVIDENCE_KAT_RANDOM_DOMAIN_V1);
         let mut random = ReleaseKatRandom::new(RELEASE_EVIDENCE_KAT_RANDOM_DOMAIN_V1, 1_u64 << 20);
@@ -1271,7 +1169,6 @@ mod tests {
                 .iter()
                 .all(|point| !point.is_identity())
         );
-
         let proof_lengths: [usize; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1] =
             core::array::from_fn(|index| evidence.chunks()[index].proof_bytes().len());
         assert_eq!(proof_lengths, [1_447; 8]);
@@ -1280,7 +1177,6 @@ mod tests {
             core::array::from_fn(|index| evidence.chunks()[index].to_wire_bytes().len());
         assert_eq!(chunk_wire_lengths, [1_494; 8]);
         assert_eq!(chunk_wire_lengths.iter().sum::<usize>(), 11_952);
-
         let wire = evidence
             .to_wire_bytes()
             .expect("canonical release evidence wire");
@@ -1295,14 +1191,12 @@ mod tests {
         decoded
             .verify()
             .expect("round-tripped release evidence verifies");
-
         let mut wrong_context = wire.clone();
         wrong_context[OFFSET_CPK_TRANSCRIPT_DIGEST_V1] ^= 1;
         assert_eq!(
             ZkAmsMkhePersistentMembershipEvidenceV1::from_wire_bytes_exact(&wrong_context),
             Err(ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch)
         );
-
         let mut wrong_proof = wire.clone();
         wrong_proof[PERSISTENT_MEMBERSHIP_HEADER_BYTES_V1
             + INNER_PROOF_OFFSET_V1
@@ -1311,7 +1205,6 @@ mod tests {
             ZkAmsMkhePersistentMembershipEvidenceV1::from_wire_bytes_exact(&wrong_proof),
             Err(ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch)
         );
-
         let mut wrong_commitment = wire.clone();
         let first_commitment = PERSISTENT_MEMBERSHIP_HEADER_BYTES_V1 + INNER_COMMITMENT_OFFSET_V1;
         let second_commitment = PERSISTENT_MEMBERSHIP_HEADER_BYTES_V1
@@ -1323,7 +1216,6 @@ mod tests {
             ZkAmsMkhePersistentMembershipEvidenceV1::from_wire_bytes_exact(&wrong_commitment),
             Err(ZkAmsMkhePersistentMembershipErrorV1::DigestMismatch)
         );
-
         let kat_digest = release_evidence_kat_digest(
             context,
             &coefficients,
@@ -1337,7 +1229,6 @@ mod tests {
         }
         assert!(blindings.iter().all(|blinding| blinding.is_zero()));
         assert!(!ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CPK_RELATION_LINKED_V1);
-
         assert_ne!(
             kat_digest, PRE_ZERO_TAIL_RELEASE_EVIDENCE_KAT_DIGEST_V1,
             "hardened membership evidence reproduced the pre-zero-tail digest"

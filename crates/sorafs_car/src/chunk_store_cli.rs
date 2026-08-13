@@ -1,17 +1,13 @@
 //! Shared implementation for the SoraFS chunk-store developer CLIs.
-
 use std::{
     env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_chunker::ChunkProfile;
-
 use crate::{
     CarBuildPlan, CarChunk, ChunkStore, DirectoryChunkSinkOutput, DirectoryPublicationStatus,
     FileEntry, FilePlan, InMemoryPayload, ProfileId, chunker_registry,
@@ -20,17 +16,14 @@ use crate::{
     },
     por_json::{parse_proof_spec, proof_from_value, proof_to_value, sample_to_map, tree_to_value},
 };
-
 #[cfg(feature = "cli")]
 use crate::FilePayload;
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Flavor {
     ChunkStore,
     #[cfg(feature = "cli")]
     ManifestChunkStore,
 }
-
 impl Flavor {
     fn is_manifest(self) -> bool {
         #[cfg(feature = "cli")]
@@ -43,7 +36,6 @@ impl Flavor {
         }
     }
 }
-
 #[derive(Default)]
 struct Options {
     profile_id: Option<u32>,
@@ -62,7 +54,6 @@ struct Options {
     sample_seed: Option<u64>,
     sample_out: Option<PathBuf>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Descriptor {
     id: u32,
@@ -73,7 +64,6 @@ struct Descriptor {
     multihash_code: u64,
     aliases: &'static [&'static str],
 }
-
 impl From<&chunker_registry::ChunkerProfileDescriptor> for Descriptor {
     fn from(descriptor: &chunker_registry::ChunkerProfileDescriptor) -> Self {
         Self {
@@ -87,7 +77,6 @@ impl From<&chunker_registry::ChunkerProfileDescriptor> for Descriptor {
         }
     }
 }
-
 #[cfg(feature = "cli")]
 impl From<&sorafs_manifest::chunker_registry::ChunkerProfileDescriptor> for Descriptor {
     fn from(descriptor: &sorafs_manifest::chunker_registry::ChunkerProfileDescriptor) -> Self {
@@ -102,28 +91,23 @@ impl From<&sorafs_manifest::chunker_registry::ChunkerProfileDescriptor> for Desc
         }
     }
 }
-
 /// Run the `sorafs_chunk_store` developer command.
 pub fn run_chunk_store() -> Result<(), String> {
     run(Flavor::ChunkStore)
 }
-
 /// Run the `sorafs_manifest_chunk_store` developer command.
 #[cfg(feature = "cli")]
 pub fn run_manifest_chunk_store() -> Result<(), String> {
     run(Flavor::ManifestChunkStore)
 }
-
 fn run(flavor: Flavor) -> Result<(), String> {
     let mut options = parse_options(flavor)?;
-
     if options.list_profiles {
         return list_profiles(flavor, &options);
     }
     if let Some(candidate) = options.promote_profile.take() {
         return promote_profile(flavor, &options, &candidate);
     }
-
     let path = options.payload_path.take().ok_or_else(|| usage(flavor))?;
     if options.profile_id.is_some() && options.profile_handle.is_some() {
         return Err("use either --profile-id or --profile, not both".to_string());
@@ -131,7 +115,6 @@ fn run(flavor: Flavor) -> Result<(), String> {
     let descriptor = select_descriptor(flavor, &options)?;
     let bytes =
         fs::read(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-
     let mut store = ChunkStore::with_profile(descriptor.profile);
     let persisted_chunks = if let Some(directory) = options.chunk_dir_out.as_deref() {
         preflight_chunk_dir_out(directory)?;
@@ -154,7 +137,6 @@ fn run(flavor: Flavor) -> Result<(), String> {
             .map_err(|err| format!("failed to ingest payload: {err}"))?;
         None
     };
-
     let chunks = store
         .chunks()
         .iter()
@@ -166,7 +148,6 @@ fn run(flavor: Flavor) -> Result<(), String> {
             Value::Object(object)
         })
         .collect::<Vec<_>>();
-
     let mut report = Map::new();
     if flavor == Flavor::ChunkStore {
         report.insert("schema".into(), Value::from(CHUNK_STORE_REPORT_SCHEMA_V1));
@@ -193,7 +174,6 @@ fn run(flavor: Flavor) -> Result<(), String> {
     if let Some(persisted) = persisted_chunks {
         report.insert("persisted_chunks".into(), persisted);
     }
-
     let plan = if flavor == Flavor::ChunkStore {
         let plan = plan_from_store(&store);
         let specs = try_chunk_fetch_specs_to_json(&plan).map_err(|err| err.to_string())?;
@@ -202,14 +182,12 @@ fn run(flavor: Flavor) -> Result<(), String> {
     } else {
         None
     };
-
     #[cfg(feature = "cli")]
     let mut file_payload = if flavor.is_manifest() {
         FilePayload::open(&path).ok()
     } else {
         None
     };
-
     let mut proof_json = None;
     if let Some((chunk_idx, segment_idx, leaf_idx)) = options.proof_spec {
         let proof = match flavor {
@@ -243,7 +221,6 @@ fn run(flavor: Flavor) -> Result<(), String> {
         }
         proof_json = Some(value);
     }
-
     if let Some(path) = options.proof_verify.take() {
         let proof_bytes =
             fs::read(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
@@ -261,7 +238,6 @@ fn run(flavor: Flavor) -> Result<(), String> {
     if let Some(value) = proof_json {
         report.insert("por_proof".into(), value);
     }
-
     if let Some(count) = options.sample_count {
         let total_leaves = store.por_tree().leaf_count();
         if total_leaves == 0 {
@@ -305,7 +281,6 @@ fn run(flavor: Flavor) -> Result<(), String> {
         }
         report.insert("por_samples".into(), Value::Array(proofs));
     }
-
     let json = to_string_pretty(&Value::Object(report))
         .map_err(|err| format!("failed to serialise JSON: {err}"))?
         + "\n";
@@ -335,7 +310,6 @@ fn run(flavor: Flavor) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn parse_options(flavor: Flavor) -> Result<Options, String> {
     let mut options = Options::default();
     for arg in env::args().skip(1) {
@@ -383,7 +357,6 @@ fn parse_options(flavor: Flavor) -> Result<Options, String> {
     }
     Ok(options)
 }
-
 fn list_profiles(flavor: Flavor, options: &Options) -> Result<(), String> {
     if options.payload_path.is_some() {
         return Err("cannot supply a payload path when using --list-profiles".to_string());
@@ -422,7 +395,6 @@ fn list_profiles(flavor: Flavor, options: &Options) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn promote_profile(flavor: Flavor, options: &Options, candidate: &str) -> Result<(), String> {
     if !flavor.is_manifest() {
         return Err(format!("unknown option: --promote-profile={candidate}"));
@@ -442,7 +414,6 @@ fn promote_profile(flavor: Flavor, options: &Options, candidate: &str) -> Result
             "--promote-profile cannot be combined with payload processing or PoR options".into(),
         );
     }
-
     #[cfg(feature = "cli")]
     sorafs_manifest::chunker_registry::ensure_charter_compliance()
         .map_err(|err| format!("registry charter violation: {err}"))?;
@@ -490,7 +461,6 @@ fn promote_profile(flavor: Flavor, options: &Options, candidate: &str) -> Result
     }
     Ok(())
 }
-
 fn usage(flavor: Flavor) -> String {
     match flavor {
         Flavor::ChunkStore => "usage: sorafs-chunk-store [--profile-id=<id>] [--profile=<namespace.name@semver>] [--json-out=path] [--chunk-fetch-plan-out=path] [--chunk-dir-out=dir] [--por-json-out=path] [--por-proof=chunk:segment:leaf] [--por-proof-out=path] [--por-proof-verify=path] [--por-sample=count] [--por-sample-seed=value] [--por-sample-out=path] <payload>".to_string(),
@@ -498,7 +468,6 @@ fn usage(flavor: Flavor) -> String {
         Flavor::ManifestChunkStore => "usage: sorafs_manifest_chunk_store [--profile-id=<id>] [--profile=<namespace.name@semver>] [--json-out=path] [--chunk-dir-out=dir] [--por-json-out=path] [--promote-profile=<handle>] [--por-proof=chunk:segment:leaf] [--por-proof-out=path] [--por-proof-verify=path] [--por-sample=count] [--por-sample-seed=value] [--por-sample-out=path] <payload>".to_string(),
     }
 }
-
 fn descriptors(flavor: Flavor) -> Vec<Descriptor> {
     match flavor {
         Flavor::ChunkStore => chunker_registry::registry()
@@ -512,7 +481,6 @@ fn descriptors(flavor: Flavor) -> Vec<Descriptor> {
             .collect(),
     }
 }
-
 fn lookup_by_handle(flavor: Flavor, handle: &str) -> Option<Descriptor> {
     match flavor {
         Flavor::ChunkStore => chunker_registry::lookup_by_handle(handle).map(Descriptor::from),
@@ -522,7 +490,6 @@ fn lookup_by_handle(flavor: Flavor, handle: &str) -> Option<Descriptor> {
         }
     }
 }
-
 fn lookup_by_id(flavor: Flavor, id: u32) -> Option<Descriptor> {
     match flavor {
         Flavor::ChunkStore => chunker_registry::lookup(ProfileId(id)).map(Descriptor::from),
@@ -533,7 +500,6 @@ fn lookup_by_id(flavor: Flavor, id: u32) -> Option<Descriptor> {
         }
     }
 }
-
 fn default_descriptor(flavor: Flavor) -> Descriptor {
     match flavor {
         Flavor::ChunkStore => Descriptor::from(chunker_registry::default_descriptor()),
@@ -543,7 +509,6 @@ fn default_descriptor(flavor: Flavor) -> Descriptor {
         }
     }
 }
-
 fn select_descriptor(flavor: Flavor, options: &Options) -> Result<Descriptor, String> {
     if let Some(handle) = options.profile_handle.as_deref() {
         lookup_by_handle(flavor, handle).ok_or_else(|| {
@@ -559,7 +524,6 @@ fn select_descriptor(flavor: Flavor, options: &Options) -> Result<Descriptor, St
         Ok(default_descriptor(flavor))
     }
 }
-
 fn resolve_profile_handle(flavor: Flavor, input: &str) -> Result<String, String> {
     if input.is_empty() {
         return Err("chunker profile cannot be empty".into());
@@ -593,14 +557,12 @@ fn resolve_profile_handle(flavor: Flavor, input: &str) -> Result<String, String>
             format!("unknown chunker profile handle '{input}'. expected namespace.name@semver")
         })
 }
-
 fn canonical_handle(descriptor: Descriptor) -> String {
     format!(
         "{}.{}@{}",
         descriptor.namespace, descriptor.name, descriptor.semver
     )
 }
-
 fn descriptor_to_json(descriptor: Descriptor) -> Map {
     let mut map = Map::new();
     map.insert("namespace".into(), Value::from(descriptor.namespace));
@@ -630,7 +592,6 @@ fn descriptor_to_json(descriptor: Descriptor) -> Map {
     );
     map
 }
-
 fn preflight_chunk_dir_out(path: &Path) -> Result<(), String> {
     if path.as_os_str().is_empty() {
         return Err("--chunk-dir-out must not be empty".to_string());
@@ -661,7 +622,6 @@ fn preflight_chunk_dir_out(path: &Path) -> Result<(), String> {
         Err(err) => Err(format!("failed to inspect {}: {err}", path.display())),
     }
 }
-
 fn persisted_chunks_to_value(directory: &Path, output: DirectoryChunkSinkOutput) -> Value {
     let mut root = Map::new();
     root.insert(
@@ -697,7 +657,6 @@ fn persisted_chunks_to_value(directory: &Path, output: DirectoryChunkSinkOutput)
     );
     Value::Object(root)
 }
-
 fn persist_empty_payload_chunk_dir(
     directory: &Path,
     store: &mut ChunkStore,
@@ -720,7 +679,6 @@ fn persist_empty_payload_chunk_dir(
             )
         })
 }
-
 fn plan_from_store(store: &ChunkStore) -> CarBuildPlan {
     let chunk_count = store.chunks().len();
     CarBuildPlan {
@@ -745,13 +703,11 @@ fn plan_from_store(store: &ChunkStore) -> CarBuildPlan {
         }],
     }
 }
-
 fn write_pretty_json(flavor: Flavor, path: &Path, value: &Value) -> Result<(), String> {
     let mut text = to_string_pretty(value).map_err(|err| err.to_string())?;
     text.push('\n');
     write_text(flavor, path, &text).map(|_| ())
 }
-
 fn write_text(flavor: Flavor, path: &Path, text: &str) -> Result<bool, String> {
     if path == Path::new("-") {
         return io::stdout()
@@ -770,7 +726,6 @@ fn write_text(flavor: Flavor, path: &Path, text: &str) -> Result<bool, String> {
         .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
     Ok(false)
 }
-
 fn open_output_file(path: &Path, label: &str) -> Result<fs::File, String> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -795,7 +750,6 @@ fn open_output_file(path: &Path, label: &str) -> Result<fs::File, String> {
     }
     Ok(file)
 }
-
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -806,7 +760,6 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_output_path(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -857,20 +810,16 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -886,7 +835,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -903,7 +851,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 fn to_hex(bytes: &[u8]) -> String {
     const TABLE: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
@@ -913,7 +860,6 @@ fn to_hex(bytes: &[u8]) -> String {
     }
     output
 }
-
 fn parse_profile_handle_arg(value: &str, label: &str) -> Result<String, String> {
     if value.is_empty() {
         return Err(format!("{label} must not be empty"));
@@ -925,14 +871,12 @@ fn parse_profile_handle_arg(value: &str, label: &str) -> Result<String, String> 
     }
     Ok(value.to_string())
 }
-
 fn parse_u32_decimal(value: &str, label: &str) -> Result<u32, String> {
     require_canonical_unsigned_decimal(value, label)?;
     value
         .parse::<u32>()
         .map_err(|err| format!("{label} value out of range: {err}"))
 }
-
 fn parse_nonzero_usize_decimal(value: &str, label: &str) -> Result<usize, String> {
     let parsed = parse_usize_decimal(value, label)?;
     if parsed == 0 {
@@ -940,14 +884,12 @@ fn parse_nonzero_usize_decimal(value: &str, label: &str) -> Result<usize, String
     }
     Ok(parsed)
 }
-
 fn parse_usize_decimal(value: &str, label: &str) -> Result<usize, String> {
     require_canonical_unsigned_decimal(value, label)?;
     value
         .parse::<usize>()
         .map_err(|err| format!("{label} value out of range: {err}"))
 }
-
 fn parse_u64(value: &str, label: &str) -> Result<u64, String> {
     if let Some(hex) = value.strip_prefix("0x") {
         require_canonical_hex_unsigned(hex, label)?;
@@ -959,7 +901,6 @@ fn parse_u64(value: &str, label: &str) -> Result<u64, String> {
             .map_err(|err| format!("{label} value out of range: {err}"))
     }
 }
-
 fn require_canonical_unsigned_decimal(value: &str, label: &str) -> Result<(), String> {
     let bytes = value.as_bytes();
     if !bytes.is_empty()
@@ -973,7 +914,6 @@ fn require_canonical_unsigned_decimal(value: &str, label: &str) -> Result<(), St
         ))
     }
 }
-
 fn require_canonical_hex_unsigned(value: &str, label: &str) -> Result<(), String> {
     let bytes = value.as_bytes();
     if !bytes.is_empty()
@@ -989,15 +929,12 @@ fn require_canonical_hex_unsigned(value: &str, label: &str) -> Result<(), String
         ))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use norito::json::Value;
     use tempfile::tempdir;
-
     use super::*;
     use crate::PersistedChunkRecord;
-
     fn assert_write_text_creates_parent(flavor: Flavor) {
         let temp = tempdir().expect("tempdir");
         let output = temp
@@ -1008,7 +945,6 @@ mod tests {
         assert!(!write_text(flavor, &output, "{\"ok\":true}\n").expect("write text"));
         assert_eq!(fs::read(output).expect("read output"), b"{\"ok\":true}\n");
     }
-
     #[cfg(unix)]
     fn assert_write_text_rejects_symlink_output(flavor: Flavor) {
         let temp = tempdir().expect("tempdir");
@@ -1024,7 +960,6 @@ mod tests {
         );
         assert_eq!(fs::read(target).expect("read target"), b"unchanged\n");
     }
-
     #[cfg(unix)]
     fn assert_write_text_rejects_symlink_parent(flavor: Flavor) {
         let temp = tempdir().expect("tempdir");
@@ -1041,7 +976,6 @@ mod tests {
         );
         assert!(!real.join("report.json").exists());
     }
-
     fn assert_parse_profile_handle_arg() {
         assert_eq!(
             parse_profile_handle_arg("sorafs.sf1@1.0.0", "--profile").expect("canonical profile"),
@@ -1055,7 +989,6 @@ mod tests {
             );
         }
     }
-
     fn assert_parse_decimal_flags() {
         assert_eq!(parse_u32_decimal("1", "--profile-id").expect("id"), 1);
         assert_eq!(
@@ -1072,7 +1005,6 @@ mod tests {
         let error = parse_nonzero_usize_decimal("0", "--por-sample").expect_err("zero must fail");
         assert!(error.contains("greater than zero"));
     }
-
     fn assert_parse_u64_seed() {
         assert_eq!(parse_u64("0", "--por-sample-seed").expect("zero"), 0);
         assert_eq!(parse_u64("42", "--por-sample-seed").expect("decimal"), 42);
@@ -1100,7 +1032,6 @@ mod tests {
             );
         }
     }
-
     fn assert_descriptor_json(flavor: Flavor) {
         let descriptor = default_descriptor(flavor);
         let map = descriptor_to_json(descriptor);
@@ -1125,12 +1056,10 @@ mod tests {
             Some("sorafs.sf1@1.0.0")
         );
     }
-
     fn assert_preflight_rejects_empty_path() {
         let error = preflight_chunk_dir_out(Path::new("")).expect_err("empty path rejected");
         assert!(error.contains("must not be empty"));
     }
-
     fn assert_persisted_chunks_value() {
         let value = persisted_chunks_to_value(
             Path::new("chunks"),
@@ -1169,34 +1098,28 @@ mod tests {
             Some("chunk_00000.bin")
         );
     }
-
     fn assert_lookup_by_handle(flavor: Flavor) {
         let descriptor = default_descriptor(flavor);
         let resolved = lookup_by_handle(flavor, &canonical_handle(descriptor)).expect("resolve");
         assert_eq!(resolved.id, descriptor.id);
         assert_eq!(resolved.profile, descriptor.profile);
     }
-
     mod chunk_store {
         use super::*;
-
         #[test]
         fn write_text_creates_parent_and_writes_all_bytes() {
             assert_write_text_creates_parent(Flavor::ChunkStore);
         }
-
         #[cfg(unix)]
         #[test]
         fn write_text_rejects_symlink_output() {
             assert_write_text_rejects_symlink_output(Flavor::ChunkStore);
         }
-
         #[cfg(unix)]
         #[test]
         fn write_text_rejects_symlink_parent() {
             assert_write_text_rejects_symlink_parent(Flavor::ChunkStore);
         }
-
         #[test]
         fn default_descriptor_matches_known_values() {
             let descriptor = default_descriptor(Flavor::ChunkStore);
@@ -1207,7 +1130,6 @@ mod tests {
             assert_eq!(descriptor.profile, ChunkProfile::DEFAULT);
             assert_eq!(descriptor.multihash_code, 0x1f);
         }
-
         #[test]
         fn lookup_descriptor_resolves_registry_entries() {
             let descriptor = chunker_registry::default_descriptor();
@@ -1215,66 +1137,53 @@ mod tests {
             assert_eq!(Descriptor::from(descriptor), Descriptor::from(looked_up));
             assert!(chunker_registry::lookup(ProfileId(9999)).is_none());
         }
-
         #[test]
         fn parse_profile_handle_arg_rejects_empty_and_padded_handles() {
             assert_parse_profile_handle_arg();
         }
-
         #[test]
         fn parse_decimal_flags_reject_noncanonical_tokens() {
             assert_parse_decimal_flags();
         }
-
         #[test]
         fn parse_u64_seed_rejects_noncanonical_tokens() {
             assert_parse_u64_seed();
         }
-
         #[test]
         fn descriptor_to_json_includes_core_fields() {
             assert_descriptor_json(Flavor::ChunkStore);
         }
-
         #[test]
         fn preflight_chunk_dir_out_rejects_empty_path() {
             assert_preflight_rejects_empty_path();
         }
-
         #[test]
         fn persisted_chunks_to_value_includes_records() {
             assert_persisted_chunks_value();
         }
-
         #[test]
         fn lookup_by_handle_matches_registry_descriptor() {
             assert_lookup_by_handle(Flavor::ChunkStore);
         }
     }
-
     #[cfg(feature = "cli")]
     mod manifest_chunk_store {
         use super::*;
-
         const FLAVOR: Flavor = Flavor::ManifestChunkStore;
-
         #[test]
         fn write_text_creates_parent_and_writes_all_bytes() {
             assert_write_text_creates_parent(FLAVOR);
         }
-
         #[cfg(unix)]
         #[test]
         fn write_text_rejects_symlink_output() {
             assert_write_text_rejects_symlink_output(FLAVOR);
         }
-
         #[cfg(unix)]
         #[test]
         fn write_text_rejects_symlink_parent() {
             assert_write_text_rejects_symlink_parent(FLAVOR);
         }
-
         #[test]
         fn registry_lookup_round_trips_profile_id() {
             let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
@@ -1282,22 +1191,18 @@ mod tests {
                 .expect("descriptor present");
             assert!(std::ptr::eq(descriptor, looked_up));
         }
-
         #[test]
         fn parse_profile_handle_arg_rejects_empty_and_padded_handles() {
             assert_parse_profile_handle_arg();
         }
-
         #[test]
         fn parse_decimal_flags_reject_noncanonical_tokens() {
             assert_parse_decimal_flags();
         }
-
         #[test]
         fn parse_u64_seed_rejects_noncanonical_tokens() {
             assert_parse_u64_seed();
         }
-
         #[test]
         fn resolve_profile_handle_requires_canonical_numeric_ids() {
             assert_eq!(
@@ -1323,22 +1228,18 @@ mod tests {
                     .contains("whitespace")
             );
         }
-
         #[test]
         fn descriptor_to_json_exposes_core_metadata() {
             assert_descriptor_json(FLAVOR);
         }
-
         #[test]
         fn preflight_chunk_dir_out_rejects_empty_path() {
             assert_preflight_rejects_empty_path();
         }
-
         #[test]
         fn persisted_chunks_to_value_includes_records() {
             assert_persisted_chunks_value();
         }
-
         #[test]
         fn lookup_by_handle_resolves_registered_descriptor() {
             assert_lookup_by_handle(FLAVOR);

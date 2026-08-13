@@ -23,7 +23,6 @@ impl MusubiRegistryPolicyV1 {
         }
         Ok(())
     }
-
     /// Validate a strict first-release transition from `current`.
     ///
     /// # Errors
@@ -33,7 +32,6 @@ impl MusubiRegistryPolicyV1 {
     pub fn validate_successor(&self, current: &Self) -> Result<(), ParseError> {
         current.validate()?;
         self.validate()?;
-
         let expected_revision = current
             .revision
             .checked_add(1)
@@ -43,7 +41,6 @@ impl MusubiRegistryPolicyV1 {
                 "Musubi replacement policy revision must be the exact successor",
             ));
         }
-
         let prices_changed = self.alias_pricing.length_1_xor != current.alias_pricing.length_1_xor
             || self.alias_pricing.length_2_xor != current.alias_pricing.length_2_xor
             || self.alias_pricing.length_3_xor != current.alias_pricing.length_3_xor
@@ -65,7 +62,6 @@ impl MusubiRegistryPolicyV1 {
                 "unchanged Musubi alias prices must retain the current pricing policy",
             ));
         }
-
         Ok(())
     }
 }

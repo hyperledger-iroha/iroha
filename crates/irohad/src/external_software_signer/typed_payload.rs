@@ -1,14 +1,10 @@
 //! Purpose-separated signing payloads for non-transaction runtime roles.
-
 use norito::codec::{Decode, Encode};
-
 use super::protocol::{
     SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1, SIGNER_PROTOCOL_VERSION_V1, SoftwareSignerPublicBindingV1,
     SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1,
 };
-
 const TYPED_PAYLOAD_MAGIC_V1: [u8; 8] = *b"IRSGTP01";
-
 /// Exact purpose carried by one non-transaction external-signer request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
@@ -46,12 +42,10 @@ pub enum SoftwareSignerPurposeV1 {
     /// Domain-separated PoP revocation-list digest.
     PopRevocationList = 14,
 }
-
 impl SoftwareSignerPurposeV1 {
     pub(super) const fn wire_id(self) -> u8 {
         self as u8
     }
-
     pub(super) const fn role(self) -> SoftwareSignerRoleV1 {
         match self {
             Self::GovernanceLogNode
@@ -73,7 +67,6 @@ impl SoftwareSignerPurposeV1 {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct SoftwareSignerTypedPayloadV1 {
     magic: [u8; 8],
@@ -81,14 +74,12 @@ struct SoftwareSignerTypedPayloadV1 {
     purpose: SoftwareSignerPurposeV1,
     message: Vec<u8>,
 }
-
 impl Drop for SoftwareSignerTypedPayloadV1 {
     fn drop(&mut self) {
         self.message.fill(0);
         let _ = std::hint::black_box(&self.message);
     }
 }
-
 pub(super) fn encode_typed_signing_payload(
     role: SoftwareSignerRoleV1,
     purpose: SoftwareSignerPurposeV1,
@@ -108,7 +99,6 @@ pub(super) fn encode_typed_signing_payload(
     })
     .map_err(|_| ())
 }
-
 pub(super) fn validated_typed_signing_message(
     binding: &SoftwareSignerPublicBindingV1,
     payload: &[u8],
@@ -128,7 +118,6 @@ pub(super) fn validated_typed_signing_message(
     }
     Ok(typed.message.clone())
 }
-
 fn validate_message(
     binding: &SoftwareSignerPublicBindingV1,
     purpose: SoftwareSignerPurposeV1,
@@ -230,11 +219,9 @@ fn validate_message(
         SoftwareSignerPurposeV1::StreamToken => validate_stream_token_payload(message),
     }
 }
-
 fn exact_nonzero_digest(bytes: &[u8]) -> bool {
     bytes.len() == 32 && bytes.iter().any(|byte| *byte != 0)
 }
-
 fn validate_stream_token_payload(payload: &[u8]) -> bool {
     let Some(body_bytes) = payload
         .strip_prefix(sorafs_manifest::token::STREAM_TOKEN_SIGNATURE_DOMAIN_V1)
@@ -251,7 +238,6 @@ fn validate_stream_token_payload(payload: &[u8]) -> bool {
             .signing_payload_bytes()
             .is_ok_and(|bytes| bytes == payload)
 }
-
 fn governance_publisher(binding: &SoftwareSignerPublicBindingV1) -> Option<&[u8]> {
     match &binding.purpose_binding {
         SoftwareSignerPurposeBindingV1::GovernanceDag { publisher_peer_id } => {
@@ -260,7 +246,6 @@ fn governance_publisher(binding: &SoftwareSignerPublicBindingV1) -> Option<&[u8]
         _ => None,
     }
 }
-
 fn validate_potr_payload(payload: &[u8], expected_provider_id: Option<[u8; 32]>) -> bool {
     let Some(receipt_bytes) = payload
         .strip_prefix(sorafs_manifest::POTR_RECEIPT_SIGNATURE_DOMAIN_V1)

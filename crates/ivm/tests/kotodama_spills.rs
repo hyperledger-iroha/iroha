@@ -1,11 +1,9 @@
 //! Tests that exercise spilled temporaries and nested calls with spills.
-
 use ivm::{
     IVM, LiteralKindV1, ProgramMetadata, decode_literal_descriptor, encoding, host::DefaultHost,
     instruction, kotodama::compiler::Compiler as KotodamaCompiler,
 };
 mod common;
-
 #[test]
 fn many_locals_force_spills_and_compute() {
     // Create a chain of additions to overflow the allocatable register pool.
@@ -26,7 +24,6 @@ fn many_locals_force_spills_and_compute() {
     vm.run().expect("execute spills");
     assert_eq!(common::decode_i64_register(&vm, 10), 39);
 }
-
 #[test]
 fn literal_heavy_set_account_detail_compiles_under_spill_pressure() {
     const COUNT: usize = 256;
@@ -37,12 +34,10 @@ fn literal_heavy_set_account_detail_compiles_under_spill_pressure() {
         ));
     }
     src.push_str("}\n}\n");
-
     KotodamaCompiler::new()
         .compile_source(&src)
         .expect("literal-heavy set_account_detail under spills");
 }
-
 #[test]
 fn odd_eight_byte_nested_call_frame_is_padded_and_restored() {
     let source = r#"
@@ -70,7 +65,6 @@ fn odd_eight_byte_nested_call_frame_is_padded_and_restored() {
             .iter()
             .all(|function| function.frame_bytes % 16 == 0)
     );
-
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&artifact)
         .expect("load nested-call alignment fixture");
@@ -79,12 +73,10 @@ fn odd_eight_byte_nested_call_frame_is_padded_and_restored() {
     vm.run().expect("execute nested-call alignment fixture");
     assert_eq!(vm.register(31), initial_stack_pointer);
 }
-
 #[test]
 fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
     const LIVE_VALUES: usize = 700;
     const BLOCK_HEIGHT: u64 = 3;
-
     let mut body = String::from("let int seed = context::block_height();\n");
     for index in 0..LIVE_VALUES {
         body.push_str(&format!("let int value{index} = seed + {index};\n"));
@@ -95,7 +87,6 @@ fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
     }
     body.push_str("return total;\n");
     let source = format!("seiyaku WideFrame {{ view fn main() -> int {{\n{body}}}\n}}");
-
     let compiler = KotodamaCompiler::new();
     let (artifact, _manifest, report) = compiler
         .compile_source_with_manifest_and_report(&source)
@@ -107,7 +98,6 @@ fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
             .expect("repeat >4KiB frame compilation"),
         "wide frame lowering must be deterministic"
     );
-
     let metadata = ProgramMetadata::parse(&artifact).expect("parse wide-frame artifact");
     let implementation = report
         .budget_report
@@ -150,7 +140,6 @@ fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
         instruction::wide::opcode(words[words.len() - 1]),
         instruction::wide::control::JALR
     );
-
     let section = metadata.literal_section.expect("wide-frame scalar table");
     let descriptors = (0..section.count)
         .map(|index| {
@@ -188,7 +177,6 @@ fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
         scalar_values.iter().any(|offset| *offset > 4096),
         "large positive spill/address offsets must use indexed scalars"
     );
-
     let mut host = DefaultHost::new();
     host.set_current_block_height(BLOCK_HEIGHT);
     let mut vm = IVM::new(u64::MAX);
@@ -203,7 +191,6 @@ fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
         common::decode_i64_register(&vm, 10),
         i64::try_from(expected).expect("bounded fixture result")
     );
-
     assert!(
         words.windows(3).any(|window| {
             instruction::wide::opcode(window[0]) == instruction::wide::memory::LDI64

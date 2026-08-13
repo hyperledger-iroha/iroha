@@ -1,15 +1,12 @@
 //! Ensure `CoreHost` enforces syscall policy by `abi_version` header.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::cast_possible_truncation)]
-
 use std::{num::NonZeroU64, sync::Arc};
-
 use iroha_core::{governance::manifest::LaneManifestRegistry, smartcontracts::ivm::host::CoreHost};
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
-
 fn program_with_scall(sys: u8) -> Vec<u8> {
     let mut code = Vec::new();
     code.extend_from_slice(
@@ -28,7 +25,6 @@ fn program_with_scall(sys: u8) -> Vec<u8> {
     out.extend_from_slice(&code);
     out
 }
-
 fn unlisted_syscall_number() -> u8 {
     (0u8..=u8::MAX)
         .find(|number| {
@@ -36,27 +32,22 @@ fn unlisted_syscall_number() -> u8 {
         })
         .expect("ABI v1 should leave at least one u8 syscall number unmapped")
 }
-
 fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
-
 fn checked_random_ivm_admission_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked IVM admission transaction keypair")
 }
-
 fn install_current_lane_manifest_registry(state: &iroha_core::state::State) {
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
 }
-
 #[test]
 fn ivm_admission_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_ivm_admission_keypair();
 }
-
 #[test]
 fn deny_unlisted_syscall_in_current() {
     // Choose a syscall number that is not in the ABI v1 allowlist.
@@ -73,7 +64,6 @@ fn deny_unlisted_syscall_in_current() {
         ivm::VMError::UnknownSyscall(u32::from(unlisted_syscall_number()))
     );
 }
-
 #[test]
 fn allow_forwarded_alloc_in_current() {
     // ALLOC is forwarded by CoreHost and should be permitted.
@@ -86,11 +76,9 @@ fn allow_forwarded_alloc_in_current() {
     vm.set_register(10, 16);
     vm.run().expect("alloc should be allowed under policy");
 }
-
 #[test]
 fn unknown_syscall_is_rejected_at_admission() {
     use std::borrow::Cow;
-
     use iroha_core::{
         kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
         state::State, tx::AcceptedTransaction,
@@ -102,11 +90,9 @@ fn unknown_syscall_is_rejected_at_admission() {
         transaction::error::TransactionRejectionReason,
     };
     use nonzero_ext::nonzero;
-
     // Build a minimal world with a single authority account.
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_random_ivm_admission_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -119,7 +105,6 @@ fn unknown_syscall_is_rejected_at_admission() {
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
     let network_id = *state.network_id_ref();
-
     // Program calls an unknown syscall number before halting.
     let prog = program_with_scall(unlisted_syscall_number());
     let tx = TransactionBuilder::new(
@@ -129,7 +114,6 @@ fn unknown_syscall_is_rejected_at_admission() {
     )
     .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
     .sign(kp.private_key());
-
     // Validate the transaction in a block; ABI policy admission rejects it before execution.
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);

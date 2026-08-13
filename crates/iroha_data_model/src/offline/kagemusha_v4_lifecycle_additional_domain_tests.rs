@@ -1,5 +1,4 @@
 use super::*;
-
 #[test]
 fn abi21_bundle_request_and_redemption_domains_are_unique() {
     let v4 = [
@@ -22,7 +21,6 @@ fn abi21_bundle_request_and_redemption_domains_are_unique() {
         KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V2
     );
 }
-
 #[test]
 fn abi21_chain_request_size_caps_are_inclusive_and_fail_one_byte_over() {
     for maximum in [

@@ -1,12 +1,9 @@
 //! Docker Compose schema.
-
 use norito::json::{self, Map, Value};
-
 use crate::{
     GenesisArtifactSettings, ImageSettings, PeerSettings, PreparedRuntimeConfig,
     PreparedRuntimeSource, base64_standard, path, peer,
 };
-
 fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
     let mut map = Map::new();
     map.insert(
@@ -69,10 +66,8 @@ fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
         let trusted = json::to_json(&pops).expect("serialize trusted peers PoP list");
         map.insert("TRUSTED_PEERS_POP".into(), Value::String(trusted));
     }
-
     Value::Object(map)
 }
-
 fn encode_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(bytes.len().saturating_mul(2));
@@ -81,7 +76,6 @@ fn encode_hex(bytes: &[u8]) -> String {
     }
     out
 }
-
 fn trusted_peers_pop_map(
     network: &std::collections::BTreeMap<u16, peer::PeerInfo>,
 ) -> std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>> {
@@ -91,14 +85,11 @@ fn trusted_peers_pop_map(
     }
     pops
 }
-
 #[cfg(test)]
 mod json_value_tests {
     use norito::json::{self, Map, Value};
-
     use super::*;
     use crate::peer;
-
     type SampleTopology = (
         peer::ExposedKeyPair,
         peer::ExposedKeyPair,
@@ -107,7 +98,6 @@ mod json_value_tests {
         std::collections::BTreeSet<iroha_data_model::prelude::Peer>,
         std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
     );
-
     fn sample_topology() -> SampleTopology {
         let chain = peer::chain();
         let (primary_pair, primary_pop) =
@@ -140,7 +130,6 @@ mod json_value_tests {
             trusted_pops,
         )
     }
-
     #[test]
     fn peer_env_to_value_matches_expected_fields() {
         let (primary_pair, transport_pair, ports, chain, topology, trusted_pops) =
@@ -154,7 +143,6 @@ mod json_value_tests {
             trusted_pops.clone(),
         );
         let actual = peer_env_to_value(&env);
-
         let mut expected = Map::new();
         expected.insert("CHAIN".into(), json::to_value(env.chain).unwrap());
         expected.insert("PUBLIC_KEY".into(), json::to_value(env.public_key).unwrap());
@@ -211,15 +199,12 @@ mod json_value_tests {
             let parsed = json::parse_value(&trusted).expect("parse trusted peers pop JSON");
             assert!(matches!(parsed, Value::Array(_)));
         }
-
         assert_eq!(actual, Value::Object(expected));
     }
 }
-
 trait ComposeImageFields {
     fn into_fields(self) -> norito::json::Map;
 }
-
 /// Schema serialization error.
 #[derive(displaydoc::Display, Debug)]
 pub enum Error {
@@ -228,19 +213,15 @@ pub enum Error {
     /// Could not serialize the schema: {0}
     Yaml(norito::yaml::Error),
 }
-
 impl std::error::Error for Error {}
-
 /// Image identifier.
 #[derive(Copy, Clone, Debug)]
 struct ImageId<'a>(&'a str);
-
 impl ImageId<'_> {
     fn as_value(self) -> norito::json::Value {
         norito::json::Value::String(self.0.to_owned())
     }
 }
-
 /// Dictates how the image provider will build the image from a Dockerfile.
 #[derive(Copy, Clone, Debug)]
 enum Build {
@@ -249,7 +230,6 @@ enum Build {
     /// Only build the image when it is missing from the local cache.
     OnCacheMiss,
 }
-
 impl Build {
     fn as_str(self) -> &'static str {
         match self {
@@ -258,27 +238,23 @@ impl Build {
         }
     }
 }
-
 /// Dictates that a service must use the built image.
 #[derive(Copy, Clone, Debug)]
 enum UseBuilt {
     UseCached,
 }
-
 impl UseBuilt {
     fn is_on_cache_miss(self) -> bool {
         match self {
             Self::UseCached => false,
         }
     }
-
     fn as_str(self) -> &'static str {
         match self {
             Self::UseCached => "never",
         }
     }
 }
-
 /// Dictates how a service will pull the image from Docker Hub.
 #[derive(Copy, Clone, Debug)]
 enum Pull {
@@ -287,7 +263,6 @@ enum Pull {
     /// Only pull the image when it is missing from the local cache.
     OnCacheMiss,
 }
-
 impl Pull {
     fn as_str(self) -> &'static str {
         match self {
@@ -296,11 +271,9 @@ impl Pull {
         }
     }
 }
-
 /// Path on the host.
 #[derive(Copy, Clone, Debug)]
 struct HostPath<'a>(&'a path::RelativePath);
-
 /// Image build settings.
 #[derive(Copy, Clone, Debug)]
 struct BuildImage<'a> {
@@ -308,7 +281,6 @@ struct BuildImage<'a> {
     build: HostPath<'a>,
     pull_policy: Build,
 }
-
 impl<'a> BuildImage<'a> {
     fn new(image: ImageId<'a>, build: HostPath<'a>, ignore_cache: bool) -> Self {
         Self {
@@ -322,7 +294,6 @@ impl<'a> BuildImage<'a> {
         }
     }
 }
-
 impl ComposeImageFields for BuildImage<'_> {
     fn into_fields(self) -> norito::json::Map {
         let mut map = norito::json::Map::new();
@@ -340,21 +311,18 @@ impl ComposeImageFields for BuildImage<'_> {
         map
     }
 }
-
 /// Image that has been built.
 #[derive(Copy, Clone, Debug)]
 struct BuiltImage<'a> {
     image: ImageId<'a>,
     pull_policy: UseBuilt,
 }
-
 /// Image that has been pulled.
 #[derive(Copy, Clone, Debug)]
 struct PulledImage<'a> {
     image: ImageId<'a>,
     pull_policy: Pull,
 }
-
 impl<'a> BuiltImage<'a> {
     fn new(image: ImageId<'a>) -> Self {
         Self {
@@ -363,7 +331,6 @@ impl<'a> BuiltImage<'a> {
         }
     }
 }
-
 impl ComposeImageFields for BuiltImage<'_> {
     fn into_fields(self) -> norito::json::Map {
         let mut map = norito::json::Map::new();
@@ -377,7 +344,6 @@ impl ComposeImageFields for BuiltImage<'_> {
         map
     }
 }
-
 impl<'a> PulledImage<'a> {
     fn new(image: ImageId<'a>, ignore_cache: bool) -> Self {
         Self {
@@ -390,7 +356,6 @@ impl<'a> PulledImage<'a> {
         }
     }
 }
-
 impl ComposeImageFields for PulledImage<'_> {
     fn into_fields(self) -> norito::json::Map {
         let mut map = norito::json::Map::new();
@@ -402,7 +367,6 @@ impl ComposeImageFields for PulledImage<'_> {
         map
     }
 }
-
 /// Peer environment variables.
 #[derive(Debug)]
 struct PeerEnv<'a> {
@@ -417,7 +381,6 @@ struct PeerEnv<'a> {
     trusted_peers: std::collections::BTreeSet<&'a iroha_data_model::peer::Peer>,
     trusted_peers_pop: std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
 }
-
 impl<'a> PeerEnv<'a> {
     fn new(
         (public_key, private_key): &'a peer::ExposedKeyPair,
@@ -450,11 +413,9 @@ impl<'a> PeerEnv<'a> {
         }
     }
 }
-
 /// Mapping between `host:container` ports.
 #[derive(Debug)]
 struct PortMapping(u16, u16);
-
 const GENESIS_PUBLIC_KEY_SECRET: &str = "iroha_genesis_public_key";
 const GENESIS_EXPECTED_HASH_SECRET: &str = "iroha_genesis_expected_hash";
 const CONTAINER_SIGNED_GENESIS: &str = "/genesis/genesis.signed.nrt";
@@ -463,7 +424,6 @@ const CONTAINER_STORAGE: &str = "/storage";
 const GENESIS_PUBLIC_KEY_FILE_SOURCE: &str = "${IROHA_GENESIS_PUBLIC_KEY_FILE:?set IROHA_GENESIS_PUBLIC_KEY_FILE to an owner-controlled genesis public-key file}";
 const GENESIS_EXPECTED_HASH_FILE_SOURCE: &str = "${IROHA_GENESIS_EXPECTED_HASH_FILE:?set IROHA_GENESIS_EXPECTED_HASH_FILE to an owner-controlled exact genesis hash file}";
 const GENESIS_SIGNED_FILE_SOURCE: &str = "${IROHA_GENESIS_SIGNED_FILE:?set IROHA_GENESIS_SIGNED_FILE to an owner-prepared signed genesis block}";
-
 fn artifact_source<'a>(
     settings: &'a GenesisArtifactSettings,
     prepared: impl FnOnce(
@@ -490,7 +450,6 @@ fn artifact_source<'a>(
         source
     }
 }
-
 fn signed_block_source(settings: &GenesisArtifactSettings) -> String {
     artifact_source(
         settings,
@@ -498,7 +457,6 @@ fn signed_block_source(settings: &GenesisArtifactSettings) -> String {
         GENESIS_SIGNED_FILE_SOURCE,
     )
 }
-
 fn public_key_source(settings: &GenesisArtifactSettings) -> String {
     artifact_source(
         settings,
@@ -506,7 +464,6 @@ fn public_key_source(settings: &GenesisArtifactSettings) -> String {
         GENESIS_PUBLIC_KEY_FILE_SOURCE,
     )
 }
-
 fn expected_hash_source(settings: &GenesisArtifactSettings) -> String {
     artifact_source(
         settings,
@@ -514,13 +471,11 @@ fn expected_hash_source(settings: &GenesisArtifactSettings) -> String {
         GENESIS_EXPECTED_HASH_FILE_SOURCE,
     )
 }
-
 /// Healthcheck parameters.
 #[derive(Debug)]
 struct Healthcheck {
     port: u16,
 }
-
 // half of default pipeline time
 const HEALTH_CHECK_INTERVAL: &str = "2s";
 // status request usually resolves immediately
@@ -529,7 +484,6 @@ const HEALTH_CHECK_TIMEOUT: &str = "1s";
 const HEALTH_CHECK_RETRIES: u8 = 30u8;
 // default pipeline time
 const HEALTH_CHECK_START_PERIOD: &str = "4s";
-
 impl Healthcheck {
     fn into_value(self) -> Value {
         let mut map = norito::json::Map::new();
@@ -556,7 +510,6 @@ impl Healthcheck {
         Value::Object(map)
     }
 }
-
 fn secret_names(runtime: Option<&PreparedRuntimeConfig>) -> Value {
     let mut secrets = vec![
         Value::String(GENESIS_PUBLIC_KEY_SECRET.into()),
@@ -582,7 +535,6 @@ fn secret_names(runtime: Option<&PreparedRuntimeConfig>) -> Value {
     }
     Value::Array(secrets)
 }
-
 fn compose_secrets(
     settings: &GenesisArtifactSettings,
     prepared_runtime: Option<&std::collections::BTreeMap<u16, PreparedRuntimeConfig>>,
@@ -627,7 +579,6 @@ fn compose_secrets(
     }
     Value::Object(secrets)
 }
-
 fn signed_genesis_mount(settings: &GenesisArtifactSettings) -> Value {
     let mut mount = Map::new();
     mount.insert("type".into(), Value::String("bind".into()));
@@ -642,11 +593,9 @@ fn signed_genesis_mount(settings: &GenesisArtifactSettings) -> Value {
     mount.insert("read_only".into(), Value::Bool(true));
     Value::Object(mount)
 }
-
 fn prepared_storage_name(runtime: &PreparedRuntimeConfig) -> String {
     format!("{}_data", runtime.compose_name_prefix)
 }
-
 fn prepared_storage_mount(runtime: &PreparedRuntimeConfig) -> Value {
     let mut mount = Map::new();
     mount.insert("type".into(), Value::String("volume".into()));
@@ -657,7 +606,6 @@ fn prepared_storage_mount(runtime: &PreparedRuntimeConfig) -> Value {
     mount.insert("target".into(), Value::String(CONTAINER_STORAGE.into()));
     Value::Object(mount)
 }
-
 fn compose_volumes(
     prepared_runtime: &std::collections::BTreeMap<u16, PreparedRuntimeConfig>,
 ) -> Value {
@@ -667,33 +615,27 @@ fn compose_volumes(
     }
     Value::Object(volumes)
 }
-
 fn prepared_peer_config_name(runtime: &PreparedRuntimeConfig) -> String {
     format!("{}_peer_config", runtime.compose_name_prefix)
 }
-
 fn prepared_runtime_secret_name(runtime: &PreparedRuntimeConfig, index: usize) -> String {
     format!("{}_runtime_secret_{index}", runtime.compose_name_prefix)
 }
-
 fn prepared_runtime_file_name(file: &PreparedRuntimeSource) -> String {
     format!("runtime_file_{}", iroha_crypto::Hash::new(&file.content))
 }
-
 fn prepared_runtime_encoded_target(file: &PreparedRuntimeSource) -> String {
     format!(
         "/run/secrets/iroha_runtime_{}.b64",
         iroha_crypto::Hash::new(&file.content)
     )
 }
-
 fn prepared_config_reference(source: String, target: &str) -> Value {
     let mut reference = Map::new();
     reference.insert("source".into(), Value::String(source));
     reference.insert("target".into(), Value::String(target.to_owned()));
     Value::Object(reference)
 }
-
 fn prepared_service_configs(runtime: &PreparedRuntimeConfig) -> Vec<Value> {
     let mut names = std::collections::BTreeSet::new();
     runtime
@@ -707,13 +649,11 @@ fn prepared_service_configs(runtime: &PreparedRuntimeConfig) -> Vec<Value> {
         })
         .collect()
 }
-
 fn compose_path_literal(content: &str) -> String {
     // Compose interpolates every scalar, including file and bind source paths.
     // Doubling the sigil preserves a literal path component.
     content.replace('$', "$$")
 }
-
 fn prepared_compose_configs(
     prepared_runtime: &std::collections::BTreeMap<u16, PreparedRuntimeConfig>,
 ) -> Value {
@@ -736,7 +676,6 @@ fn prepared_compose_configs(
     }
     Value::Object(configs)
 }
-
 fn lowercase_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = Vec::with_capacity(bytes.len() * 2);
@@ -746,7 +685,6 @@ fn lowercase_hex(bytes: &[u8]) -> String {
     }
     String::from_utf8(encoded).expect("hex alphabet is valid UTF-8")
 }
-
 fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> String {
     let launch = match runtime {
         Some(runtime) => {
@@ -806,7 +744,6 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
 ""#
     )
 }
-
 /// Iroha peer service.
 #[derive(Debug)]
 struct Irohad<'a, Image>
@@ -820,7 +757,6 @@ where
     genesis: &'a GenesisArtifactSettings,
     runtime: Option<&'a PreparedRuntimeConfig>,
 }
-
 impl<'a, Image> Irohad<'a, Image>
 where
     Image: ComposeImageFields,
@@ -845,7 +781,6 @@ where
             runtime,
         }
     }
-
     fn into_map(self) -> norito::json::Map {
         let mut map = self.image.into_fields();
         if self.runtime.is_none() {
@@ -885,17 +820,14 @@ where
         map
     }
 }
-
 /// Reference to an `irohad` service.
 #[derive(Debug, PartialOrd, PartialEq, Ord, Eq)]
 struct IrohadRef(String);
-
 impl IrohadRef {
     fn service_name(&self) -> String {
         self.0.clone()
     }
 }
-
 #[derive(Debug)]
 enum BuildOrPull<'a> {
     Build {
@@ -906,7 +838,6 @@ enum BuildOrPull<'a> {
         irohads: std::collections::BTreeMap<IrohadRef, Irohad<'a, PulledImage<'a>>>,
     },
 }
-
 impl<'a> BuildOrPull<'a> {
     fn pull(
         image: PulledImage<'a>,
@@ -931,7 +862,6 @@ impl<'a> BuildOrPull<'a> {
             ),
         }
     }
-
     fn build(
         image: BuildImage<'a>,
         healthcheck: bool,
@@ -979,7 +909,6 @@ impl<'a> BuildOrPull<'a> {
                 .collect(),
         }
     }
-
     fn irohad<Image: ComposeImageFields>(
         image: Image,
         healthcheck: bool,
@@ -1006,7 +935,6 @@ impl<'a> BuildOrPull<'a> {
             runtime,
         )
     }
-
     fn irohads<Image: ComposeImageFields + Copy>(
         image: Image,
         healthcheck: bool,
@@ -1036,7 +964,6 @@ impl<'a> BuildOrPull<'a> {
             })
             .collect()
     }
-
     fn into_services_map(self) -> norito::json::Map {
         let mut services = norito::json::Map::new();
         match self {
@@ -1065,7 +992,6 @@ impl<'a> BuildOrPull<'a> {
         services
     }
 }
-
 /// Docker Compose configuration.
 #[derive(Debug)]
 pub struct DockerCompose<'a> {
@@ -1073,7 +999,6 @@ pub struct DockerCompose<'a> {
     genesis: &'a GenesisArtifactSettings,
     prepared_runtime: Option<&'a std::collections::BTreeMap<u16, PreparedRuntimeConfig>>,
 }
-
 impl<'a> DockerCompose<'a> {
     /// Constructs a Compose configuration.
     pub(super) fn new(
@@ -1121,7 +1046,6 @@ impl<'a> DockerCompose<'a> {
             prepared_runtime: prepared_runtime.as_ref(),
         }
     }
-
     fn into_value(self) -> norito::json::Value {
         let mut root = norito::json::Map::new();
         root.insert(
@@ -1143,7 +1067,6 @@ impl<'a> DockerCompose<'a> {
         );
         norito::json::Value::Object(root)
     }
-
     /// Serializes the schema into a writer as YAML, with optional `banner` comment lines.
     pub fn write<W>(self, mut writer: W, banner: Option<&[&str]>) -> Result<(), Error>
     where
@@ -1159,20 +1082,16 @@ impl<'a> DockerCompose<'a> {
         norito::yaml::to_writer_from_value(&mut writer, &value).map_err(Error::Yaml)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashMap};
-
     use super::*;
     use crate::{BASE_PORT_API, BASE_PORT_P2P};
-
     impl<'a> From<PeerEnv<'a>> for iroha_config::base::env::MockEnv {
         fn from(env: PeerEnv<'a>) -> Self {
             mock_env_from_value(peer_env_to_value(&env))
         }
     }
-
     fn mock_env_from_value(value: Value) -> iroha_config::base::env::MockEnv {
         let Value::Object(map) = value else {
             panic!("environment payload must be an object");
@@ -1187,7 +1106,6 @@ mod tests {
         }
         iroha_config::base::env::MockEnv::with_map(vars)
     }
-
     #[test]
     fn peer_env_produces_exhaustive_config() {
         let (key_pair, pop) = peer::generate_bls_key_pair(None, &[])
@@ -1236,8 +1154,7 @@ mod tests {
         map.insert(
             "GENESIS_EXPECTED_HASH".into(),
             Value::String(
-                "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                    .to_owned(),
+                "0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
             ),
         );
         let mock_env = mock_env_from_value(value);

@@ -1,5 +1,4 @@
 //! Argon2 puzzle issuance microservice backing the SoraNet relay handshake.
-
 use std::{
     collections::HashSet,
     net::SocketAddr,
@@ -7,7 +6,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -46,7 +44,6 @@ use thiserror::Error;
 use tokio::{net::TcpListener, signal};
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt::SubscriberBuilder};
-
 const FALLBACK_IDENTITY_SEED: [u8; 32] = [0x42; 32];
 const REVOCATION_FILE_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
 const SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1: usize = 256;
@@ -63,7 +60,6 @@ const DESCRIPTOR_MANIFEST_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     DESCRIPTOR_MANIFEST_MAX_ALLOCATED_BYTES_V1,
     DESCRIPTOR_MANIFEST_MAX_DEPTH_V1,
 );
-
 const fn descriptor_manifest_preflight_limits_v1() -> json::JsonPreflightLimits {
     json::JsonPreflightLimits::new(
         SRC_V2_MAX_BUNDLE_BYTES,
@@ -78,7 +74,6 @@ const fn descriptor_manifest_preflight_limits_v1() -> json::JsonPreflightLimits 
         DESCRIPTOR_MANIFEST_MAX_DEPTH_V1,
     )
 }
-
 fn read_bounded_utf8_file(path: &Path, maximum: usize, artifact: &str) -> std::io::Result<String> {
     let bytes = read_bounded_direct_regular_file(path, maximum, artifact)?;
     String::from_utf8(bytes).map_err(|error| {
@@ -88,7 +83,6 @@ fn read_bounded_utf8_file(path: &Path, maximum: usize, artifact: &str) -> std::i
         )
     })
 }
-
 fn decode_exact_hex_bytes(
     value: &str,
     expected_bytes: usize,
@@ -112,7 +106,6 @@ fn decode_exact_hex_bytes(
         .map_err(|error| format!("failed to decode {artifact} as hexadecimal: {error}"))?;
     Ok(decoded)
 }
-
 fn secret_file_max_bytes(expected_secret_bytes: usize) -> Result<usize, String> {
     expected_secret_bytes
         .checked_mul(2)
@@ -121,7 +114,6 @@ fn secret_file_max_bytes(expected_secret_bytes: usize) -> Result<usize, String> 
         })
         .ok_or_else(|| "secret-key file limit overflows the platform address space".to_owned())
 }
-
 fn validate_secret_file_whitespace(raw: &str, trimmed: &str) -> Result<(), String> {
     let surrounding = raw
         .len()
@@ -134,7 +126,6 @@ fn validate_secret_file_whitespace(raw: &str, trimmed: &str) -> Result<(), Strin
     }
     Ok(())
 }
-
 #[derive(Parser, Debug)]
 #[command(
     name = "soranet-puzzle-service",
@@ -169,16 +160,13 @@ struct Args {
     #[arg(long)]
     signed_ticket_secret_path: Option<PathBuf>,
 }
-
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
     let args = Args::parse();
     init_tracing(&args.log_level)?;
-
     let service = PuzzleService::new(&args)?;
     let state = Arc::new(service);
-
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/puzzle/config", get(get_config))
@@ -186,21 +174,17 @@ async fn main() -> Result<()> {
         .route("/v1/token/config", get(get_token_config))
         .route("/v1/token/mint", post(mint_token))
         .with_state(state);
-
     let listener = TcpListener::bind(args.listen)
         .await
         .wrap_err_with(|| format!("failed to bind {addr}", addr = args.listen))?;
-
     info!(listen = %args.listen, "starting puzzle service");
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(shutdown_signal())
         .await
         .wrap_err("server error")?;
-
     info!("puzzle service shutdown complete");
     Ok(())
 }
-
 fn init_tracing(level: &str) -> Result<()> {
     SubscriberBuilder::default()
         .with_env_filter(
@@ -210,13 +194,11 @@ fn init_tracing(level: &str) -> Result<()> {
         .init();
     Ok(())
 }
-
 async fn shutdown_signal() {
     if let Err(error) = signal::ctrl_c().await {
         warn!(%error, "failed waiting for ctrl-c");
     }
 }
-
 struct PuzzleService {
     descriptor_commit: [u8; 32],
     relay_id: [u8; 32],
@@ -231,19 +213,16 @@ struct PuzzleService {
     signed_ticket_secret: Option<Vec<u8>>,
     token: Option<Mutex<TokenIssuer>>,
 }
-
 impl PuzzleService {
     fn new(args: &Args) -> Result<Self> {
         let config = RelayConfig::load(&args.config).wrap_err("failed to load relay config")?;
         let policy = config.handshake_policy();
         let relay_id =
             derive_relay_id(policy).wrap_err("failed to derive relay identity for bindings")?;
-
         let descriptor_commit = policy
             .descriptor_commit_bytes()
             .wrap_err("failed to parse descriptor_commit")?
             .ok_or_else(|| eyre!("handshake.descriptor_commit_hex must be configured"))?;
-
         let pow_cfg = config.pow_config().clone();
         let base_params = PowParameters::new(
             pow_cfg.difficulty.min(u8::MAX as u32) as u8,
@@ -274,7 +253,6 @@ impl PuzzleService {
         // delivery and clock-skew headroom. Each geometric search candidate is
         // independently expiry-bound by the crypto implementation.
         let ticket_ttl = min_ticket_ttl + target_headroom;
-
         let token_opts = TokenCliOptions {
             secret_hex: args.token_secret_hex.clone(),
             secret_path: args.token_secret_path.clone(),
@@ -285,7 +263,6 @@ impl PuzzleService {
             secret_hex: args.signed_ticket_secret_hex.clone(),
             secret_path: args.signed_ticket_secret_path.clone(),
         };
-
         let token = token_issuer_from_config(
             relay_id,
             &pow_cfg,
@@ -296,9 +273,7 @@ impl PuzzleService {
         )
         .wrap_err("failed to initialise admission token policy")?
         .map(Mutex::new);
-
         let signed_ticket_secret = load_signed_ticket_secret(&signed_secret_opts)?;
-
         let signed_ticket_public_key = pow_cfg
             .signed_ticket_public_key_hex
             .as_ref()
@@ -308,7 +283,6 @@ impl PuzzleService {
                     .map_err(|error| eyre!(error))
             })
             .transpose()?;
-
         if signed_ticket_secret.is_some() && signed_ticket_public_key.is_none() {
             return Err(eyre!(
                 "signed_ticket_secret_* supplied but pow.signed_ticket_public_key_hex missing from relay config"
@@ -320,7 +294,6 @@ impl PuzzleService {
         ) {
             validate_signed_ticket_keypair(public, secret)?;
         }
-
         Ok(Self {
             descriptor_commit,
             relay_id,
@@ -336,7 +309,6 @@ impl PuzzleService {
             token,
         })
     }
-
     fn clamp_ttl(&self, override_ttl: Option<Duration>) -> Duration {
         let target = override_ttl.unwrap_or(self.ticket_ttl);
         let clamped = if target < self.min_ticket_ttl {
@@ -350,18 +322,15 @@ impl PuzzleService {
             clamped
         }
     }
-
     fn signed_ticket_public_key_hex(&self) -> Option<String> {
         self.signed_ticket_public_key.as_ref().map(encode)
     }
-
     fn signed_ticket_public_key_fingerprint_hex(&self) -> Option<String> {
         self.signed_ticket_public_key.as_ref().map(|key| {
             let fingerprint = blake3_hash(key);
             encode(fingerprint.as_bytes())
         })
     }
-
     fn mint_ticket<R: RngCore + CryptoRng>(
         &self,
         ttl: Duration,
@@ -381,7 +350,6 @@ impl PuzzleService {
             pow::mint_ticket(&self.pow_params, &binding, ttl, rng).map_err(ChallengeMintError::Pow)
         }
     }
-
     fn token_summary(&self) -> Result<TokenConfigResponse, TokenIssuerError> {
         if let Some(issuer_mutex) = &self.token {
             let mut issuer = issuer_mutex.lock().expect("token issuer mutex poisoned");
@@ -391,7 +359,6 @@ impl PuzzleService {
             Ok(TokenConfigResponse::disabled())
         }
     }
-
     fn mint_token<R: RngCore + CryptoRng>(
         &self,
         ttl_override: Option<Duration>,
@@ -411,7 +378,6 @@ impl PuzzleService {
             .map(Some)
     }
 }
-
 #[derive(Debug, Error)]
 enum ChallengeMintError {
     #[error("pow ticket mint failed: {0}")]
@@ -419,7 +385,6 @@ enum ChallengeMintError {
     #[error("puzzle ticket mint failed: {0}")]
     Puzzle(puzzle::MintError),
 }
-
 #[derive(Debug, Error)]
 enum TokenInitError {
     #[error("token issuer public key missing while pow.token.enabled = true")]
@@ -448,13 +413,11 @@ enum TokenInitError {
     #[error("token issuer capacity error: {0}")]
     Capacity(String),
 }
-
 impl From<RelayConfigError> for TokenInitError {
     fn from(err: RelayConfigError) -> Self {
         TokenInitError::Handshake(err.to_string())
     }
 }
-
 #[derive(Debug, Error)]
 enum TokenIssuerError {
     #[error("token TTL {requested:?} shorter than required minimum {minimum:?}")]
@@ -478,14 +441,12 @@ enum TokenIssuerError {
     #[error("token issuer capacity error: {0}")]
     Capacity(String),
 }
-
 struct RevocationFile {
     path: PathBuf,
     refresh_interval: Duration,
     last_loaded: Instant,
     entries: HashSet<[u8; 32]>,
 }
-
 impl RevocationFile {
     fn new(path: PathBuf, refresh_interval: Duration) -> Result<Self, TokenInitError> {
         let contents = read_bounded_utf8_file(
@@ -510,7 +471,6 @@ impl RevocationFile {
             entries,
         })
     }
-
     fn refresh_if_due(&mut self) -> Result<(), TokenIssuerError> {
         if self.refresh_interval.is_zero() {
             return Ok(());
@@ -537,7 +497,6 @@ impl RevocationFile {
         Ok(())
     }
 }
-
 struct TokenIssuer {
     suite: MlDsaSuite,
     secret_key: Vec<u8>,
@@ -550,26 +509,22 @@ struct TokenIssuer {
     static_revocations: HashSet<[u8; 32]>,
     revocation_file: Option<RevocationFile>,
 }
-
 struct TokenCliOptions {
     secret_hex: Option<String>,
     secret_path: Option<PathBuf>,
     revocation_file: Option<PathBuf>,
     revocation_refresh_secs: u64,
 }
-
 struct SignedTicketSecretOptions {
     secret_hex: Option<String>,
     secret_path: Option<PathBuf>,
 }
-
 struct TokenTiming {
     min_ttl: Duration,
     max_ttl: Duration,
     default_ttl: Duration,
     clock_skew: Duration,
 }
-
 impl TokenIssuer {
     fn new(
         suite: MlDsaSuite,
@@ -593,14 +548,12 @@ impl TokenIssuer {
             revocation_file,
         }
     }
-
     fn refresh_revocations(&mut self) -> Result<(), TokenIssuerError> {
         if let Some(file) = &mut self.revocation_file {
             file.refresh_if_due()?;
         }
         Ok(())
     }
-
     fn clamp_ttl(&self, override_ttl: Option<Duration>) -> Result<Duration, TokenIssuerError> {
         let desired = override_ttl.unwrap_or(self.default_ttl);
         if desired < self.min_ttl {
@@ -617,7 +570,6 @@ impl TokenIssuer {
         }
         Ok(desired)
     }
-
     fn mint<R: RngCore + CryptoRng>(
         &mut self,
         transcript_hash: [u8; 32],
@@ -646,7 +598,6 @@ impl TokenIssuer {
         }
         Ok(token)
     }
-
     fn is_revoked(&self, token_id: &[u8; 32]) -> bool {
         self.static_revocations.contains(token_id)
             || self
@@ -654,31 +605,24 @@ impl TokenIssuer {
                 .as_ref()
                 .is_some_and(|file| file.entries.contains(token_id))
     }
-
     fn max_ttl(&self) -> Duration {
         self.max_ttl
     }
-
     fn min_ttl(&self) -> Duration {
         self.min_ttl
     }
-
     fn default_ttl(&self) -> Duration {
         self.default_ttl
     }
-
     fn clock_skew(&self) -> Duration {
         self.clock_skew
     }
-
     fn issuer_fingerprint(&self) -> &[u8; 32] {
         &self.issuer_fingerprint
     }
-
     fn relay_id(&self) -> &[u8; 32] {
         &self.relay_id
     }
-
     fn suite_label(&self) -> &'static str {
         match self.suite {
             MlDsaSuite::MlDsa44 => "ml-dsa-44",
@@ -686,7 +630,6 @@ impl TokenIssuer {
             MlDsaSuite::MlDsa87 => "ml-dsa-87",
         }
     }
-
     fn revocation_ids_hex(&self) -> Result<Vec<String>, TokenIssuerError> {
         let maximum = self
             .static_revocations
@@ -744,7 +687,6 @@ impl TokenIssuer {
         Ok(encoded)
     }
 }
-
 #[derive(Debug, Error)]
 enum ApiError {
     #[error("{0}")]
@@ -752,7 +694,6 @@ enum ApiError {
     #[error("{0}")]
     Internal(String),
 }
-
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
@@ -767,10 +708,8 @@ impl IntoResponse for ApiError {
         }
     }
 }
-
 #[derive(Debug)]
 struct JsonBytes(Vec<u8>);
-
 impl JsonBytes {
     fn from_serializable<T>(value: &T) -> Result<Self, ApiError>
     where
@@ -780,13 +719,11 @@ impl JsonBytes {
             .map(JsonBytes)
             .map_err(|err| ApiError::Internal(format!("failed to encode response: {err}")))
     }
-
     fn from_value(value: json::Value) -> Self {
         let bytes = json::to_vec(&value).expect("Value serialization must succeed");
         JsonBytes(bytes)
     }
 }
-
 impl IntoResponse for JsonBytes {
     fn into_response(self) -> Response {
         let mut response = Response::new(Body::from(self.0));
@@ -797,7 +734,6 @@ impl IntoResponse for JsonBytes {
         response
     }
 }
-
 #[derive(Debug, JsonSerialize)]
 struct ConfigResponse {
     required: bool,
@@ -818,14 +754,12 @@ struct ConfigResponse {
     #[norito(default)]
     signed_ticket_signing_enabled: bool,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct PuzzleParamsResponse {
     memory_kib: u32,
     time_cost: u32,
     lanes: u32,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct TokenConfigResponse {
     enabled: bool,
@@ -846,7 +780,6 @@ struct TokenConfigResponse {
     #[norito(default)]
     revocation_ids_hex: Vec<String>,
 }
-
 impl TokenConfigResponse {
     fn disabled() -> Self {
         Self {
@@ -861,7 +794,6 @@ impl TokenConfigResponse {
             revocation_ids_hex: Vec::new(),
         }
     }
-
     fn enabled(issuer: &TokenIssuer) -> Result<Self, TokenIssuerError> {
         Ok(Self {
             enabled: true,
@@ -876,7 +808,6 @@ impl TokenConfigResponse {
         })
     }
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct MintRequest {
     #[norito(default)]
@@ -885,7 +816,6 @@ struct MintRequest {
     #[norito(default)]
     signed: bool,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct MintResponse {
     ticket_b64: String,
@@ -897,7 +827,6 @@ struct MintResponse {
     ttl_secs: u64,
     expires_at: u64,
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct MintTokenRequest {
     transcript_hash_hex: String,
@@ -908,7 +837,6 @@ struct MintTokenRequest {
     #[norito(default)]
     issued_at_unix: Option<u64>,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct MintTokenResponse {
     token_b64: String,
@@ -920,7 +848,6 @@ struct MintTokenResponse {
     issuer_fingerprint_hex: String,
     relay_id_hex: String,
 }
-
 async fn get_config(State(state): State<Arc<PuzzleService>>) -> Result<JsonBytes, ApiError> {
     let token = state
         .token_summary()
@@ -945,14 +872,12 @@ async fn get_config(State(state): State<Arc<PuzzleService>>) -> Result<JsonBytes
     };
     JsonBytes::from_serializable(&response)
 }
-
 async fn get_token_config(State(state): State<Arc<PuzzleService>>) -> Result<JsonBytes, ApiError> {
     let summary = state
         .token_summary()
         .map_err(|err| ApiError::Internal(format!("token summary error: {err}")))?;
     JsonBytes::from_serializable(&summary)
 }
-
 async fn mint_ticket(
     State(state): State<Arc<PuzzleService>>,
     body: Bytes,
@@ -964,7 +889,6 @@ async fn mint_ticket(
     }
     let payload = json::from_slice::<MintRequest>(&body)
         .map_err(|err| ApiError::BadRequest(format!("invalid JSON body: {err}")))?;
-
     let ttl_override = payload.ttl_secs.map(Duration::from_secs);
     let ttl = state.clamp_ttl(ttl_override);
     if state.puzzle_params.is_some() && ttl <= state.min_ticket_ttl {
@@ -981,12 +905,10 @@ async fn mint_ticket(
         ));
     }
     let signed = payload.signed;
-
     let mut rng = StdRng::from_os_rng();
     let ticket = state
         .mint_ticket(ttl, transcript_hash, &mut rng)
         .map_err(|err| ApiError::Internal(err.to_string()))?;
-
     let ticket_bytes = ticket.to_vec();
     let ticket_b64 = STANDARD.encode(&ticket_bytes);
     let mut signed_ticket_b64 = None;
@@ -1003,14 +925,12 @@ async fn mint_ticket(
         signed_ticket_b64 = Some(STANDARD.encode(signed_ticket.encode()));
         signed_ticket_fingerprint_hex = Some(encode(signed_ticket.revocation_fingerprint()));
     }
-
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|err| ApiError::Internal(format!("system clock error: {err}")))?
         .as_secs();
     let expires_at = ticket.expires_at;
     let ttl_secs = expires_at.saturating_sub(now);
-
     let response = MintResponse {
         ticket_b64,
         signed_ticket_b64,
@@ -1019,10 +939,8 @@ async fn mint_ticket(
         ttl_secs,
         expires_at,
     };
-
     JsonBytes::from_serializable(&response)
 }
-
 async fn mint_token(
     State(state): State<Arc<PuzzleService>>,
     body: Bytes,
@@ -1032,7 +950,6 @@ async fn mint_token(
             "admission token policy disabled on this relay".to_string(),
         ));
     }
-
     let payload = if body.is_empty() {
         return Err(ApiError::BadRequest(
             "transcript_hash_hex is required".to_string(),
@@ -1041,7 +958,6 @@ async fn mint_token(
         json::from_slice::<MintTokenRequest>(&body)
             .map_err(|err| ApiError::BadRequest(format!("invalid JSON body: {err}")))?
     };
-
     let transcript_hex = payload.transcript_hash_hex.trim();
     if transcript_hex.is_empty() {
         return Err(ApiError::BadRequest(
@@ -1063,14 +979,12 @@ async fn mint_token(
             "transcript_hash_hex must not be all zeros".to_owned(),
         ));
     }
-
     let ttl_override = payload.ttl_secs.map(Duration::from_secs);
     let issued_at = payload
         .issued_at_unix
         .map(|secs| UNIX_EPOCH + Duration::from_secs(secs))
         .unwrap_or_else(SystemTime::now);
     let flags = payload.flags.unwrap_or(0);
-
     let mut rng = StdRng::from_os_rng();
     let token = match state
         .mint_token(ttl_override, transcript_hash, issued_at, flags, &mut rng)
@@ -1099,7 +1013,6 @@ async fn mint_token(
             ));
         }
     };
-
     let token_bytes = token.encode();
     let token_b64 = STANDARD.encode(&token_bytes);
     let issued_at_secs = token.issued_at();
@@ -1117,11 +1030,9 @@ async fn mint_token(
     };
     JsonBytes::from_serializable(&response)
 }
-
 async fn healthz() -> StatusCode {
     StatusCode::OK
 }
-
 fn derive_relay_id(policy: &HandshakePolicy) -> Result<[u8; 32], TokenInitError> {
     let identity_seed = relay_identity_seed(policy)?;
     let private_key =
@@ -1149,7 +1060,6 @@ fn derive_relay_id(policy: &HandshakePolicy) -> Result<[u8; 32], TokenInitError>
     relay_id.copy_from_slice(payload);
     Ok(relay_id)
 }
-
 fn relay_identity_seed(policy: &HandshakePolicy) -> Result<[u8; 32], TokenInitError> {
     if let Some(seed) = policy
         .identity_private_key_bytes()
@@ -1165,7 +1075,6 @@ fn relay_identity_seed(policy: &HandshakePolicy) -> Result<[u8; 32], TokenInitEr
     warn!("relay identity key missing; using fallback test key");
     Ok(FALLBACK_IDENTITY_SEED)
 }
-
 fn identity_seed_from_manifest(path: &Path) -> Result<Option<[u8; 32]>, TokenInitError> {
     let bytes = read_bounded_direct_regular_file(
         path,
@@ -1200,10 +1109,8 @@ fn identity_seed_from_manifest(path: &Path) -> Result<Option<[u8; 32]>, TokenIni
     })?;
     Ok(Some(seed))
 }
-
 fn extract_manifest_identity_private_key(value: &norito::json::Value) -> Option<&str> {
     use norito::json::Value;
-
     match value {
         Value::Object(map) => {
             if let Some(hex) = map.get("identity_private_key_hex").and_then(Value::as_str) {
@@ -1246,7 +1153,6 @@ fn extract_manifest_identity_private_key(value: &norito::json::Value) -> Option<
         _ => None,
     }
 }
-
 fn decode_manifest_identity_seed(hex_value: &str) -> Result<[u8; 32], String> {
     if hex_value.len() != 64 {
         return Err(format!(
@@ -1259,7 +1165,6 @@ fn decode_manifest_identity_seed(hex_value: &str) -> Result<[u8; 32], String> {
         .map_err(|error| format!("identity private key hex invalid: {error}"))?;
     Ok(seed)
 }
-
 fn token_issuer_from_config(
     relay_id: [u8; 32],
     pow_cfg: &PowConfig,
@@ -1274,7 +1179,6 @@ fn token_issuer_from_config(
     if !token_cfg.enabled {
         return Ok(None);
     }
-
     let public_hex = token_cfg
         .issuer_public_key_hex
         .as_ref()
@@ -1287,7 +1191,6 @@ fn token_issuer_from_config(
     )
     .map_err(TokenInitError::InvalidPublicKey)?;
     let issuer_fingerprint = compute_issuer_fingerprint(&public_key);
-
     let secret_path = cli
         .secret_path
         .as_ref()
@@ -1296,7 +1199,6 @@ fn token_issuer_from_config(
         .secret_hex
         .as_ref()
         .or(token_cfg.issuer_secret_key_hex.as_ref());
-
     let expected_secret_bytes = suite.secret_key_len();
     let secret_key_bytes = if let Some(path) = secret_path {
         let maximum = secret_file_max_bytes(expected_secret_bytes)
@@ -1331,7 +1233,6 @@ fn token_issuer_from_config(
     } else {
         return Err(TokenInitError::MissingSecretKey);
     };
-
     let mut static_revocations = HashSet::new();
     static_revocations
         .try_reserve(token_cfg.revocation_list_hex.len())
@@ -1345,7 +1246,6 @@ fn token_issuer_from_config(
             .map_err(|reason| TokenInitError::InvalidRevocationHex { index: idx, reason })?;
         static_revocations.insert(entry);
     }
-
     let refresh_secs = if cli.revocation_file.is_some() {
         cli.revocation_refresh_secs
     } else {
@@ -1367,7 +1267,6 @@ fn token_issuer_from_config(
     } else {
         None
     };
-
     let max_ttl = Duration::from_secs(token_cfg.max_ttl_secs.max(1))
         .min(max_future_skew.max(Duration::from_secs(1)));
     let min_ttl = min_ticket_ttl.max(Duration::from_secs(1));
@@ -1375,7 +1274,6 @@ fn token_issuer_from_config(
     if default_ttl > max_ttl {
         default_ttl = max_ttl;
     }
-
     let clock_skew = Duration::from_secs(token_cfg.clock_skew_secs.max(1));
     let timing = TokenTiming {
         min_ttl,
@@ -1383,7 +1281,6 @@ fn token_issuer_from_config(
         default_ttl,
         clock_skew,
     };
-
     Ok(Some(TokenIssuer::new(
         suite,
         secret_key_bytes,
@@ -1394,7 +1291,6 @@ fn token_issuer_from_config(
         revocation_file,
     )))
 }
-
 fn load_signed_ticket_secret(opts: &SignedTicketSecretOptions) -> Result<Option<Vec<u8>>> {
     if opts.secret_hex.is_none() && opts.secret_path.is_none() {
         return Ok(None);
@@ -1430,7 +1326,6 @@ fn load_signed_ticket_secret(opts: &SignedTicketSecretOptions) -> Result<Option<
         .map_err(|error| eyre!(error))?;
     Ok(Some(decoded))
 }
-
 fn validate_signed_ticket_keypair(public_key: &[u8], secret_key: &[u8]) -> Result<()> {
     let probe = b"soranet.pow.signed_ticket.key_check";
     let signature = sign_mldsa_from_os(MlDsaSuite::MlDsa44, secret_key, &[], probe)
@@ -1446,7 +1341,6 @@ fn validate_signed_ticket_keypair(public_key: &[u8], secret_key: &[u8]) -> Resul
         "pow.signed_ticket_public_key_hex does not match the provided signed ticket secret key",
     )
 }
-
 fn hex_to_fixed<const N: usize>(value: &str) -> Result<[u8; N], String> {
     let expected = N
         .checked_mul(2)
@@ -1461,7 +1355,6 @@ fn hex_to_fixed<const N: usize>(value: &str) -> Result<[u8; N], String> {
     hex::decode_to_slice(value, &mut out).map_err(|error| error.to_string())?;
     Ok(out)
 }
-
 fn parse_revocation_contents(contents: &str) -> Result<HashSet<[u8; 32]>, String> {
     let mut set = HashSet::new();
     for (idx, line) in contents.lines().enumerate() {
@@ -1484,16 +1377,12 @@ fn parse_revocation_contents(contents: &str) -> Result<HashSet<[u8; 32]>, String
     }
     Ok(set)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fmt::Write as _, fs, num::NonZeroU32};
-
     use iroha_crypto::soranet::{pow::ChallengeBinding, token::AdmissionTokenVerifier};
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
-
     use super::*;
-
     fn temporary_file_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "soranet_puzzle_{label}_{}_{}",
@@ -1504,7 +1393,6 @@ mod tests {
                 .as_nanos()
         ))
     }
-
     #[test]
     fn bounded_utf8_reader_accepts_exact_limit_and_rejects_plus_one() {
         let path = temporary_file_path("bounded_utf8");
@@ -1517,7 +1405,6 @@ mod tests {
         assert!(read_bounded_utf8_file(&path, 8, "fixture").is_err());
         let _ = fs::remove_file(path);
     }
-
     #[test]
     fn exact_secret_hex_and_whitespace_boundaries_are_enforced() {
         let encoded = "ab".repeat(32);
@@ -1528,7 +1415,6 @@ mod tests {
         assert!(
             decode_exact_hex_bytes(&encoded[..encoded.len() - 2], 32, "fixture secret").is_err()
         );
-
         let exact_raw = format!(
             "{}{encoded}",
             " ".repeat(SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1)
@@ -1541,7 +1427,6 @@ mod tests {
         );
         assert!(validate_secret_file_whitespace(&oversized_raw, oversized_raw.trim()).is_err());
     }
-
     #[test]
     fn revocation_parser_caps_unique_retained_entries() {
         let mut exact = String::new();
@@ -1550,12 +1435,10 @@ mod tests {
         }
         let entries = parse_revocation_contents(&exact).expect("exact revocation set");
         assert_eq!(entries.len(), REVOCATION_LIST_MAX_ENTRIES_V1);
-
         writeln!(&mut exact, "{:064x}", REVOCATION_LIST_MAX_ENTRIES_V1)
             .expect("write overflow entry");
         assert!(parse_revocation_contents(&exact).is_err());
     }
-
     #[test]
     fn descriptor_manifest_reader_rejects_raw_limit_plus_one() {
         let path = temporary_file_path("descriptor_manifest_max_plus_one");
@@ -1567,7 +1450,6 @@ mod tests {
         assert!(identity_seed_from_manifest(&path).is_err());
         let _ = fs::remove_file(path);
     }
-
     #[test]
     fn signed_ticket_secret_file_uses_source_derived_limit() {
         let expected = MlDsaSuite::MlDsa44.secret_key_len();
@@ -1592,7 +1474,6 @@ mod tests {
         assert!(load_signed_ticket_secret(&options).is_err());
         let _ = fs::remove_file(path);
     }
-
     fn base_service() -> PuzzleService {
         let pow_params = PowParameters::new(5, Duration::from_secs(120), Duration::from_secs(30));
         let min_ticket_ttl = pow_params.min_ticket_ttl();
@@ -1612,7 +1493,6 @@ mod tests {
             token: None,
         }
     }
-
     fn first_rejected_puzzle_relay_id(
         ticket: &PowTicket,
         params: &PuzzleParameters,
@@ -1635,7 +1515,6 @@ mod tests {
         }
         panic!("failed to find a relay binding rejected by the puzzle predicate")
     }
-
     fn first_rejected_puzzle_transcript_hash(
         ticket: &PowTicket,
         params: &PuzzleParameters,
@@ -1658,18 +1537,15 @@ mod tests {
         }
         panic!("failed to find a transcript binding rejected by the puzzle predicate")
     }
-
     fn token_service() -> (PuzzleService, AdmissionTokenVerifier) {
         let pow_params = PowParameters::new(5, Duration::from_secs(180), Duration::from_secs(30));
         let min_ticket_ttl = pow_params.min_ticket_ttl();
         let max_future_skew = pow_params.max_future_skew();
-
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
         let secret_key = keypair.secret_key().to_vec();
         let public_key = keypair.public_key().to_vec();
         let issuer_fingerprint = compute_issuer_fingerprint(keypair.public_key());
-
         let relay_keypair = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
             .expect("derive admission-token relay fixture key");
         let (algorithm, relay_public) = relay_keypair
@@ -1680,19 +1556,16 @@ mod tests {
         assert_eq!(relay_public.len(), 32);
         let mut relay_id = [0u8; 32];
         relay_id.copy_from_slice(relay_public);
-
         let min_ttl = min_ticket_ttl;
         let max_ttl = Duration::from_secs(240);
         let default_ttl = Duration::from_secs(90);
         let clock_skew = Duration::from_secs(5);
-
         let timing = TokenTiming {
             min_ttl,
             max_ttl,
             default_ttl,
             clock_skew,
         };
-
         let issuer = TokenIssuer::new(
             MlDsaSuite::MlDsa44,
             secret_key,
@@ -1702,10 +1575,8 @@ mod tests {
             HashSet::new(),
             None,
         );
-
         let verifier =
             AdmissionTokenVerifier::new(MlDsaSuite::MlDsa44, public_key, max_ttl, clock_skew);
-
         let service = PuzzleService {
             descriptor_commit: [0u8; 32],
             relay_id,
@@ -1720,10 +1591,8 @@ mod tests {
             signed_ticket_secret: None,
             token: Some(Mutex::new(issuer)),
         };
-
         (service, verifier)
     }
-
     #[test]
     fn token_service_relay_id_uses_checked_fixture_seed() {
         let (service, _) = token_service();
@@ -1733,11 +1602,9 @@ mod tests {
             .public_key()
             .try_to_bytes()
             .expect("fixture public key must be valid");
-
         assert_eq!(algorithm, Algorithm::Ed25519);
         assert_eq!(service.relay_id.as_slice(), relay_public);
     }
-
     fn signed_ticket_service() -> (PuzzleService, Vec<u8>, Vec<u8>) {
         let pow_params = PowParameters::new(4, Duration::from_secs(180), Duration::from_secs(60));
         let min_ticket_ttl = pow_params.min_ticket_ttl();
@@ -1749,7 +1616,6 @@ mod tests {
         relay_id.copy_from_slice(&[0xCD; 32]);
         let mut descriptor_commit = [0u8; 32];
         descriptor_commit.copy_from_slice(&[0xAB; 32]);
-
         let service = PuzzleService {
             descriptor_commit,
             relay_id,
@@ -1764,21 +1630,17 @@ mod tests {
             signed_ticket_secret: Some(secret.clone()),
             token: None,
         };
-
         (service, secret, public)
     }
-
     #[test]
     fn clamp_ttl_respects_bounds() {
         let service = base_service();
         let min = service.pow_params.min_ticket_ttl();
         let max = service.pow_params.max_future_skew();
-
         assert_eq!(service.clamp_ttl(Some(Duration::from_secs(5))), min);
         assert_eq!(service.clamp_ttl(Some(Duration::from_secs(500))), max);
         assert_eq!(service.clamp_ttl(None), Duration::from_secs(45));
     }
-
     #[test]
     fn mint_ticket_uses_pow_when_puzzle_disabled() {
         let service = base_service();
@@ -1787,11 +1649,9 @@ mod tests {
         let ticket = service
             .mint_ticket(ttl, [0x10; 32], &mut rng)
             .expect("pow mint should succeed");
-
         assert_eq!(ticket.difficulty, service.pow_params.difficulty());
         assert!(ticket.expires_at > 0);
     }
-
     #[test]
     fn mint_ticket_uses_puzzle_when_configured() {
         let mut service = base_service();
@@ -1803,20 +1663,17 @@ mod tests {
             Duration::from_secs(90),
             Duration::from_secs(30),
         ));
-
         let mut rng = StdRng::from_seed([9u8; 32]);
         let ttl = service.clamp_ttl(Some(Duration::from_secs(60)));
         let ticket = service
             .mint_ticket(ttl, [0x20; 32], &mut rng)
             .expect("puzzle mint should succeed");
-
         assert_eq!(
             ticket.difficulty,
             service.puzzle_params.as_ref().unwrap().difficulty()
         );
         assert!(ticket.expires_at > 0);
     }
-
     #[test]
     fn puzzle_tickets_bind_relay_identity() {
         let mut service = base_service();
@@ -1830,14 +1687,12 @@ mod tests {
             Duration::from_secs(90),
             Duration::from_secs(30),
         ));
-
         let mut rng = StdRng::seed_from_u64(42);
         let transcript = [0xAA; 32];
         let ttl = service.clamp_ttl(Some(Duration::from_secs(40)));
         let ticket = service
             .mint_ticket(ttl, transcript, &mut rng)
             .expect("puzzle mint should succeed");
-
         let params = service.puzzle_params.as_ref().expect("params");
         let binding =
             PuzzleBinding::new(&service.descriptor_commit, &service.relay_id, &transcript);
@@ -1848,7 +1703,6 @@ mod tests {
             .expect("fixture expiry must exceed the minimum ticket ttl");
         puzzle::verify_at(&ticket, &binding, params, verify_time)
             .expect("verification should succeed");
-
         // A difficulty-one work predicate admits half of all independent
         // challenges by construction. Select deterministic alternate bindings
         // that do not also satisfy the predicate instead of assuming a fixed
@@ -1866,7 +1720,6 @@ mod tests {
         let err = puzzle::verify_at(&ticket, &wrong_binding, params, verify_time)
             .expect_err("alternate relay that misses the work predicate must fail");
         assert!(matches!(err, puzzle::Error::InvalidSolution));
-
         let wrong_transcript_hash = first_rejected_puzzle_transcript_hash(
             &ticket,
             params,
@@ -1884,11 +1737,9 @@ mod tests {
             .expect_err("alternate transcript that misses the work predicate must fail");
         assert!(matches!(err, puzzle::Error::InvalidSolution));
     }
-
     #[tokio::test]
     async fn http_puzzle_mint_binds_transcript() {
         use axum::{body::Bytes, extract::State};
-
         let mut service = base_service();
         service.descriptor_commit = [0x01; 32];
         service.relay_id = [0x02; 32];
@@ -1906,7 +1757,6 @@ mod tests {
             "{{\"ttl_secs\":60,\"transcript_hash_hex\":\"{}\"}}",
             hex::encode(transcript)
         );
-
         let response = mint_ticket(State(state.clone()), Bytes::from(payload.into_bytes()))
             .await
             .expect("mint response")
@@ -1916,16 +1766,13 @@ mod tests {
             .decode(minted.ticket_b64.as_bytes())
             .expect("base64 decode");
         let ticket = PowTicket::parse(&ticket_bytes).expect("ticket parse");
-
         let params = state.puzzle_params.as_ref().expect("params");
         let binding = PuzzleBinding::new(&state.descriptor_commit, &state.relay_id, &transcript);
         puzzle::verify(&ticket, &binding, params).expect("verification succeeds");
     }
-
     #[tokio::test]
     async fn http_puzzle_mint_returns_signed_ticket() {
         use axum::{body::Bytes, extract::State};
-
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
         let mut service = base_service();
         service.relay_id = [0x12; 32];
@@ -1937,7 +1784,6 @@ mod tests {
             "{{\"ttl_secs\":30,\"transcript_hash_hex\":\"{}\",\"signed\":true}}",
             hex::encode(transcript)
         );
-
         let response = mint_ticket(State(state.clone()), Bytes::from(payload.into_bytes()))
             .await
             .expect("mint response")
@@ -1951,16 +1797,13 @@ mod tests {
             .decode(signed_b64.as_bytes())
             .expect("decode signed ticket");
         let signed = SignedTicket::decode(&signed_bytes).expect("decode signed ticket payload");
-
         assert_eq!(signed.relay_id, state.relay_id);
         assert_eq!(signed.transcript_hash, transcript);
-
         let ticket_bytes = STANDARD
             .decode(minted.ticket_b64.as_bytes())
             .expect("decode ticket");
         let ticket = PowTicket::parse(&ticket_bytes).expect("parse minted ticket");
         assert_eq!(signed.ticket, ticket);
-
         signed
             .verify(state.signed_ticket_public_key.as_ref().expect("public key"))
             .expect("signature should verify");
@@ -1972,7 +1815,6 @@ mod tests {
             hex::encode(signed.revocation_fingerprint())
         );
     }
-
     #[test]
     fn token_summary_disabled_defaults() {
         let service = base_service();
@@ -1981,7 +1823,6 @@ mod tests {
         assert!(summary.suite.is_none());
         assert!(summary.revocation_ids_hex.is_empty());
     }
-
     #[test]
     fn token_summary_enabled_reports_details() {
         let (service, _) = token_service();
@@ -1991,7 +1832,6 @@ mod tests {
         assert_eq!(summary.min_ttl_secs, Some(service.min_ticket_ttl.as_secs()));
         assert_eq!(summary.max_ttl_secs, Some(240));
     }
-
     #[test]
     fn mint_signed_ticket_when_configured() {
         let (service, secret, public) = signed_ticket_service();
@@ -2002,7 +1842,6 @@ mod tests {
             .expect("mint ticket");
         let signed = SignedTicket::sign(pow_ticket, &service.relay_id, &transcript_hash, &secret)
             .expect("sign ticket");
-
         let binding = ChallengeBinding::new(
             &service.descriptor_commit,
             &service.relay_id,
@@ -2011,11 +1850,9 @@ mod tests {
         pow::verify_signed_ticket(&signed, &public, &binding, &service.pow_params, None)
             .expect("signed ticket should verify");
     }
-
     #[tokio::test]
     async fn http_mint_signed_ticket_returns_signed_payload() {
         use axum::{body::Bytes, extract::State};
-
         let (service, _secret, public) = signed_ticket_service();
         let state = Arc::new(service);
         let request = MintRequest {
@@ -2050,11 +1887,9 @@ mod tests {
             "fingerprint must track the signed ticket signature"
         );
     }
-
     #[tokio::test]
     async fn http_mint_signed_ticket_without_secret_rejected() {
         use axum::{body::Bytes, extract::State};
-
         let service = base_service();
         let state = Arc::new(service);
         let request = MintRequest {
@@ -2068,11 +1903,9 @@ mod tests {
             .expect_err("should fail");
         assert!(matches!(err, ApiError::BadRequest(_)));
     }
-
     #[tokio::test]
     async fn http_mint_puzzle_rejects_ttl_without_solution_window() {
         use axum::{body::Bytes, extract::State};
-
         let mut service = base_service();
         service.puzzle_params = Some(PuzzleParameters::new(
             NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
@@ -2089,7 +1922,6 @@ mod tests {
             signed: false,
         };
         let body = Bytes::from(json::to_vec(&request).expect("serialize request"));
-
         let err = mint_ticket(State(state), body)
             .await
             .expect_err("puzzle ttl equal to minimum remainder must fail before Argon2 work");
@@ -2099,11 +1931,9 @@ mod tests {
                 if message.contains("must exceed") && message.contains("minimum remaining ttl")
         ));
     }
-
     #[tokio::test]
     async fn http_mint_without_transcript_binding_is_rejected() {
         use axum::{body::Bytes, extract::State};
-
         let state = Arc::new(base_service());
         let err = mint_ticket(State(Arc::clone(&state)), Bytes::new())
             .await
@@ -2112,7 +1942,6 @@ mod tests {
             err,
             ApiError::BadRequest(message) if message == "transcript_hash_hex is required"
         ));
-
         let err = mint_ticket(State(state), Bytes::from_static(b"{}"))
             .await
             .expect_err("JSON without a transcript binding must fail");
@@ -2121,11 +1950,9 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[tokio::test]
     async fn http_mint_rejects_zero_transcript_binding() {
         use axum::{body::Bytes, extract::State};
-
         let state = Arc::new(base_service());
         let request = MintRequest {
             ttl_secs: Some(30),
@@ -2142,7 +1969,6 @@ mod tests {
                 if message == "transcript_hash_hex must not be all zeros"
         ));
     }
-
     #[test]
     fn mint_token_rejects_out_of_range_ttl() {
         let (service, _) = token_service();
@@ -2156,7 +1982,6 @@ mod tests {
         );
         assert!(matches!(result, Err(TokenIssuerError::TtlTooShort { .. })));
     }
-
     #[test]
     fn mint_token_roundtrip_verifies() {
         let (service, verifier) = token_service();
@@ -2165,7 +1990,6 @@ mod tests {
             .mint_token(None, [0x22; 32], SystemTime::now(), 0, &mut rng)
             .expect("mint result")
             .expect("token enabled");
-
         verifier
             .verify(
                 &token,
@@ -2175,16 +1999,12 @@ mod tests {
             )
             .expect("verification succeeds");
     }
-
     #[tokio::test]
     async fn http_token_endpoints_issue_tokens() {
         use std::time::SystemTime;
-
         use axum::{body::Bytes, extract::State};
-
         let (service, verifier) = token_service();
         let state = Arc::new(service);
-
         let config_bytes = get_token_config(State(state.clone()))
             .await
             .expect("token config")
@@ -2193,7 +2013,6 @@ mod tests {
             norito::json::from_slice(&config_bytes).expect("config decode");
         assert!(summary.enabled);
         assert_eq!(summary.suite.as_deref(), Some("ml-dsa-44"));
-
         let mint_payload = format!(
             "{{\"transcript_hash_hex\":\"{}\",\"ttl_secs\":120,\"flags\":0}}",
             hex::encode([0xAB; 32])
@@ -2218,7 +2037,6 @@ mod tests {
         assert_eq!(minted.flags, token.flags());
         assert_eq!(minted.token_id_hex, hex::encode(token.token_id()));
     }
-
     #[test]
     fn derive_relay_id_reads_manifest_identity() {
         let identity_seed = [0x24; 32];
@@ -2234,12 +2052,10 @@ mod tests {
             hex::encode(identity_seed)
         );
         fs::write(&manifest_path, manifest_body).expect("write manifest");
-
         let policy = HandshakePolicy {
             descriptor_manifest_path: Some(manifest_path.clone()),
             ..HandshakePolicy::default()
         };
-
         let relay_id = derive_relay_id(&policy).expect("relay id");
         let expected = {
             let private_key =
@@ -2255,7 +2071,6 @@ mod tests {
             id
         };
         assert_eq!(relay_id, expected);
-
         let _ = fs::remove_file(manifest_path);
     }
 }

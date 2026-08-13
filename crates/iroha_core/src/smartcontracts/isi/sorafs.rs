@@ -1,6 +1,5 @@
 use core::convert::TryFrom;
 use std::{collections::BTreeSet, str::FromStr, sync::OnceLock};
-
 use blake3::hash as blake3_hash;
 use iroha_crypto::{Algorithm, PublicKey, ed25519_parse_signature};
 use iroha_data_model::{
@@ -86,7 +85,6 @@ use sorafs_manifest::{
     repair::{RepairReportV1, RepairSlashProposalV1, RepairTicketId},
     validate_chunker_handle, validate_manifest, validate_manifest_root_cid, validate_pin_policy,
 };
-
 use super::*;
 use crate::{
     smartcontracts::ValidSingularQuery,
@@ -1006,7 +1004,6 @@ pub(super) fn apply_governed_provider_owner_action(
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<bool, Error> {
     use iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1;
-
     action.validate().map_err(|error| {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             error.to_string(),
@@ -2430,12 +2427,10 @@ fn drop_alias_binding_if_matches(
 #[cfg(test)]
 mod pin_policy_tests {
     use super::*;
-
     #[test]
     fn manifest_constraints_reflect_config() {
         use iroha_config::parameters::actual::SorafsPinPolicyConstraints as ConfigConstraints;
         use iroha_data_model::sorafs::pin_registry::StorageClass as DmStorageClass;
-
         let mut allowed = BTreeSet::new();
         allowed.insert(DmStorageClass::Hot);
         allowed.insert(DmStorageClass::Cold);
@@ -5736,7 +5731,6 @@ impl Execute for iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
         use iroha_data_model::isi::sorafs::SorafsRepairTaskActionV1;
-
         if !RepairTicketId::is_valid_str(&self.ticket_id) {
             return Err(invalid_parameter("invalid repair ticket id"));
         }
@@ -16286,7 +16280,6 @@ mod sorafs_tests {
     #[test]
     fn pin_manifest_page_enforces_byte_ceiling_and_authenticated_status_index() {
         use crate::smartcontracts::ValidSingularQuery;
-
         const RECORD_COUNT: u64 = 24;
         let mut state = make_state();
         let mut first_digest = None;

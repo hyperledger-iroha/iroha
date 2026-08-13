@@ -1,13 +1,10 @@
 use std::num::NonZeroUsize;
-
 use super::*;
-
 #[test]
 fn committed_block_hashes_snapshot_reads_block_hash_journal() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
-
     let first =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x41; Hash::LENGTH]));
     let second =
@@ -18,7 +15,6 @@ fn committed_block_hashes_snapshot_reads_block_hash_journal() {
         block_hashes.push_for_tests(second);
         block_hashes.commit_for_tests();
     }
-
     assert_eq!(state.committed_block_hashes_snapshot(), vec![first, second]);
     assert!(state.committed_block_hashes_match(&[first, second]));
     assert!(!state.committed_block_hashes_match(&[first]));

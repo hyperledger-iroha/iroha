@@ -1,11 +1,9 @@
 //! SoraFS moderation screening, quarantine, and evidence-viewer runtimes.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     path::{Component, Path},
 };
-
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::{
     PublicKey,
@@ -18,7 +16,6 @@ use iroha_data_model::sorafs::moderation::{
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use rand::{TryRngCore, rngs::OsRng};
 use thiserror::Error;
-
 const MODERATION_SCREENING_RECORD_DOMAIN_V1: &[u8] = b"sorafs.moderation.local.screening-record.v1";
 const MODERATION_QUARANTINE_RECORD_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.local.quarantine-record.v1";
@@ -66,7 +63,6 @@ const MODERATION_QUARANTINE_OBJECT_MAX_CONTENT_TYPE_BYTES_V1: usize = 256;
 const MODERATION_QUARANTINE_OBJECT_MAX_KEY_HANDLE_BYTES_V1: usize = 512;
 const MODERATION_QUARANTINE_OBJECT_MAX_WRAPPED_DEK_BYTES_V1: usize = 64 * 1024;
 const MODERATION_QUARANTINE_OBJECT_AEAD_TAG_BYTES_V1: usize = 16;
-
 /// Local registry record for an admitted moderation reproducibility manifest.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationReproRegistryRecord {
@@ -85,7 +81,6 @@ pub struct ModerationReproRegistryRecord {
     /// Number of validated signer entries on the manifest.
     pub signer_count: u32,
 }
-
 /// Local registry record for an admitted adversarial corpus manifest.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationCorpusRegistryRecord {
@@ -100,7 +95,6 @@ pub struct ModerationCorpusRegistryRecord {
     /// Number of variants across all corpus families.
     pub variant_count: u32,
 }
-
 /// Snapshot of the local SoraFS moderation model registry.
 #[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationModelRegistrySnapshot {
@@ -109,7 +103,6 @@ pub struct ModerationModelRegistrySnapshot {
     /// Admitted adversarial corpus manifests sorted by corpus digest.
     pub adversarial_corpora: Vec<ModerationCorpusRegistryRecord>,
 }
-
 /// Bounded read view of the local moderation model registry.
 ///
 /// Total counts describe authoritative retained state while the record vectors
@@ -127,7 +120,6 @@ pub struct ModerationModelRegistryReadView {
     /// First adversarial corpus records in canonical map order.
     pub adversarial_corpora: Vec<ModerationCorpusRegistryRecord>,
 }
-
 /// Local SFM-4a screening verdict.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -145,7 +137,6 @@ pub enum ModerationScreeningVerdict {
     /// Content must be blocked outright.
     Block = 5,
 }
-
 impl ModerationScreeningVerdict {
     /// Stable lower-case label used in JSON and digest material.
     #[must_use]
@@ -158,12 +149,10 @@ impl ModerationScreeningVerdict {
             Self::Block => "block",
         }
     }
-
     fn requires_quarantine_record(self) -> bool {
         matches!(self, Self::Quarantine | Self::Escalate)
     }
 }
-
 /// Candidate local screening result to record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationScreeningInput {
@@ -188,7 +177,6 @@ pub struct ModerationScreeningInput {
     /// Optional operator note.
     pub notes: Option<String>,
 }
-
 /// Canonical authenticated authority accepted by the V1 screening admission gate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModerationAuthenticatedScreeningEvidenceV1 {
@@ -204,7 +192,6 @@ pub enum ModerationAuthenticatedScreeningEvidenceV1 {
         signed_results: Vec<ModerationSignedScreeningResultV1>,
     },
 }
-
 /// One replay-scoped request to admit authenticated screening evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationAuthenticatedScreeningRequestV1 {
@@ -213,7 +200,6 @@ pub struct ModerationAuthenticatedScreeningRequestV1 {
     /// Signed result or fully reconstructable committee aggregate.
     pub evidence: ModerationAuthenticatedScreeningEvidenceV1,
 }
-
 /// Authenticated, canonical local screening material ready for durable admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationVerifiedScreeningAdmissionV1 {
@@ -226,7 +212,6 @@ pub struct ModerationVerifiedScreeningAdmissionV1 {
     /// Canonical local projection input derived only after authentication.
     pub screening: ModerationScreeningInput,
 }
-
 /// Durable replay receipt for one authenticated screening admission.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationScreeningAdmissionReceiptV1 {
@@ -243,7 +228,6 @@ pub struct ModerationScreeningAdmissionReceiptV1 {
     /// Domain-separated digest of every preceding receipt field.
     pub receipt_digest: [u8; 32],
 }
-
 /// Outcome of durably admitting authenticated screening evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationAuthenticatedScreeningOutcomeV1 {
@@ -252,7 +236,6 @@ pub struct ModerationAuthenticatedScreeningOutcomeV1 {
     /// Canonical screening/quarantine projection.
     pub screening: ModerationScreeningOutcome,
 }
-
 /// Authentication failure at the V1 screening admission boundary.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationScreeningAuthenticationError {
@@ -322,7 +305,6 @@ pub enum ModerationScreeningAuthenticationError {
         issued_at_unix: u64,
     },
 }
-
 /// Failure while authenticating or durably admitting screening evidence.
 #[derive(Debug, Error)]
 pub enum ModerationAuthenticatedScreeningAdmissionError {
@@ -334,7 +316,6 @@ pub enum ModerationAuthenticatedScreeningAdmissionError {
     #[error(transparent)]
     Runtime(#[from] ModerationScreeningError),
 }
-
 /// Canonical, non-secret authority bundle loaded from an `iroha_config` path.
 ///
 /// The deployment configuration separately pins the BLAKE3 digest of the
@@ -353,7 +334,6 @@ pub struct ModerationScreeningAuthorityBundleV1 {
     /// Minimum distinct governance anchors required by the deployment.
     pub minimum_governance_quorum: u16,
 }
-
 impl ModerationScreeningAuthorityBundleV1 {
     /// Validate and convert the configured bundle into an active authority.
     ///
@@ -412,7 +392,6 @@ impl ModerationScreeningAuthorityBundleV1 {
         )
     }
 }
-
 /// Active, externally anchored authority used by the production screening API.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationScreeningAuthorityV1 {
@@ -421,7 +400,6 @@ pub struct ModerationScreeningAuthorityV1 {
     governance_trust_anchors: BTreeSet<PublicKey>,
     minimum_governance_quorum: u16,
 }
-
 impl ModerationScreeningAuthorityV1 {
     /// Validate and construct an active screening authority.
     ///
@@ -455,25 +433,21 @@ impl ModerationScreeningAuthorityV1 {
             minimum_governance_quorum,
         })
     }
-
     /// Exact active trust-policy digest.
     #[must_use]
     pub fn policy_digest(&self) -> [u8; 32] {
         self.policy.body.policy_digest
     }
-
     /// Active trust-policy issue timestamp.
     #[must_use]
     pub fn policy_issued_at_unix(&self) -> u64 {
         self.policy.body.issued_at_unix
     }
-
     /// Exact active reproducibility manifest identifier.
     #[must_use]
     pub fn manifest_id(&self) -> [u8; 16] {
         self.manifest.body.manifest_id
     }
-
     pub(crate) fn verify(
         &self,
         request: ModerationAuthenticatedScreeningRequestV1,
@@ -490,7 +464,6 @@ impl ModerationScreeningAuthorityV1 {
         )
     }
 }
-
 /// Authenticate one canonical screening result or committee aggregate against
 /// externally trusted governance anchors.
 ///
@@ -528,7 +501,6 @@ pub fn verify_authenticated_moderation_screening_v1(
                 message: error.to_string(),
             },
         )?;
-
     let (
         authority_digest,
         authority_kind,
@@ -621,7 +593,6 @@ pub fn verify_authenticated_moderation_screening_v1(
         },
     })
 }
-
 /// Persisted local SFM-4a screening result.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationScreeningRecord {
@@ -650,7 +621,6 @@ pub struct ModerationScreeningRecord {
     /// Optional operator note.
     pub notes: Option<String>,
 }
-
 /// Local state of a quarantined screening record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[repr(u8)]
@@ -662,7 +632,6 @@ pub enum ModerationQuarantineState {
     /// Released by an authorized operator after review.
     Released = 3,
 }
-
 impl ModerationQuarantineState {
     /// Stable lower-case label used in JSON.
     #[must_use]
@@ -674,7 +643,6 @@ impl ModerationQuarantineState {
         }
     }
 }
-
 /// Local review action for a quarantined screening record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationQuarantineReviewInput {
@@ -687,7 +655,6 @@ pub struct ModerationQuarantineReviewInput {
     /// Optional review note.
     pub notes: Option<String>,
 }
-
 /// Local release action for a reviewed quarantine record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationQuarantineReleaseInput {
@@ -700,7 +667,6 @@ pub struct ModerationQuarantineReleaseInput {
     /// Optional release note.
     pub notes: Option<String>,
 }
-
 /// Persisted local quarantine queue record derived from a screening result.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationQuarantineRecord {
@@ -731,7 +697,6 @@ pub struct ModerationQuarantineRecord {
     /// Optional local release note.
     pub release_notes: Option<String>,
 }
-
 /// Candidate quarantined payload bytes to store in the local encrypted object store.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ModerationQuarantineObjectInput {
@@ -750,7 +715,6 @@ pub struct ModerationQuarantineObjectInput {
     /// the encrypted payload, never in plaintext envelope metadata.
     pub notes: Option<String>,
 }
-
 impl std::fmt::Debug for ModerationQuarantineObjectInput {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -767,7 +731,6 @@ impl std::fmt::Debug for ModerationQuarantineObjectInput {
             .finish()
     }
 }
-
 impl Drop for ModerationQuarantineObjectInput {
     fn drop(&mut self) {
         self.payload.fill(0);
@@ -776,19 +739,16 @@ impl Drop for ModerationQuarantineObjectInput {
         scrub_optional_quarantine_text(&mut self.notes);
     }
 }
-
 fn scrub_optional_quarantine_text(value: &mut Option<String>) {
     if let Some(value) = value.take() {
         scrub_owned_quarantine_text(value);
     }
 }
-
 fn scrub_owned_quarantine_text(value: String) {
     let mut bytes = value.into_bytes();
     bytes.fill(0);
     let _ = std::hint::black_box(&bytes);
 }
-
 /// Persisted index record for one encrypted local quarantine payload object.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationQuarantineObjectRecord {
@@ -823,7 +783,6 @@ pub struct ModerationQuarantineObjectRecord {
     /// Relative path of the Norito object envelope under the object-store root.
     pub envelope_path: String,
 }
-
 /// Decrypted local quarantine object payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationQuarantineObjectPayload {
@@ -832,7 +791,6 @@ pub struct ModerationQuarantineObjectPayload {
     /// Decrypted payload bytes.
     pub payload: Vec<u8>,
 }
-
 /// Authenticated byte range from a local quarantine object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationQuarantineObjectRangePayload {
@@ -845,14 +803,12 @@ pub struct ModerationQuarantineObjectRangePayload {
     /// Decrypted bytes in `start..end`.
     pub payload: Vec<u8>,
 }
-
 /// Snapshot of local encrypted quarantine object index records.
 #[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationQuarantineObjectSnapshot {
     /// Object records sorted by quarantine id.
     pub objects: Vec<ModerationQuarantineObjectRecord>,
 }
-
 /// Payload-free local evidence viewer session admission request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationEvidenceViewerSessionInput {
@@ -889,7 +845,6 @@ pub struct ModerationEvidenceViewerSessionInput {
     /// Whether watermark secret material was included in the request.
     pub watermark_secret_included: bool,
 }
-
 /// Append-only local evidence viewer access event kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ModerationEvidenceViewerAccessKind {
@@ -910,7 +865,6 @@ pub enum ModerationEvidenceViewerAccessKind {
     /// The viewer service rejected access because attestation failed.
     AttestationFailed,
 }
-
 impl ModerationEvidenceViewerAccessKind {
     /// Stable lower-case JSON label.
     #[must_use]
@@ -926,12 +880,10 @@ impl ModerationEvidenceViewerAccessKind {
             Self::AttestationFailed => "attestation_failed",
         }
     }
-
     fn is_expiry_event(self) -> bool {
         matches!(self, Self::SessionExpired)
     }
 }
-
 /// Payload-free local evidence viewer access-log append request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationEvidenceViewerAccessInput {
@@ -958,7 +910,6 @@ pub struct ModerationEvidenceViewerAccessInput {
     /// Whether a response body or raw access-log payload was included in the event.
     pub response_body_included: bool,
 }
-
 /// Persisted payload-free local evidence viewer session record.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationEvidenceViewerSessionRecord {
@@ -995,7 +946,6 @@ pub struct ModerationEvidenceViewerSessionRecord {
     /// Digest of the payload-free session manifest.
     pub session_manifest_digest: [u8; 32],
 }
-
 /// Persisted payload-free local evidence viewer access-log event.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationEvidenceViewerAccessEventRecord {
@@ -1026,7 +976,6 @@ pub struct ModerationEvidenceViewerAccessEventRecord {
     /// Digest of the payload-free access event.
     pub event_digest: [u8; 32],
 }
-
 /// Snapshot of local payload-free evidence viewer session and access-log state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationEvidenceViewerSnapshot {
@@ -1035,7 +984,6 @@ pub struct ModerationEvidenceViewerSnapshot {
     /// Append-only access events sorted by sequence.
     pub access_events: Vec<ModerationEvidenceViewerAccessEventRecord>,
 }
-
 /// Request for a payload-free local evidence-viewer audit report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationEvidenceViewerAuditReportInput {
@@ -1062,7 +1010,6 @@ pub struct ModerationEvidenceViewerAuditReportInput {
     /// Whether response bodies were included in the report request.
     pub response_bodies_included: bool,
 }
-
 /// One access-kind count in a payload-free evidence-viewer audit report.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationEvidenceViewerAuditKindCount {
@@ -1071,7 +1018,6 @@ pub struct ModerationEvidenceViewerAuditKindCount {
     /// Number of matching access events in the report window.
     pub count: u64,
 }
-
 /// Payload-free local evidence-viewer access report for transparency export.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationEvidenceViewerAuditReport {
@@ -1124,7 +1070,6 @@ pub struct ModerationEvidenceViewerAuditReport {
     /// Digest of the full payload-free report body.
     pub report_digest: [u8; 32],
 }
-
 impl ModerationEvidenceViewerAuditReport {
     /// Validate the report's payload-free invariants and derived digests.
     ///
@@ -1136,7 +1081,6 @@ impl ModerationEvidenceViewerAuditReport {
         validate_evidence_viewer_audit_report(self)
     }
 }
-
 /// Outcome of recording one local screening result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationScreeningOutcome {
@@ -1145,7 +1089,6 @@ pub struct ModerationScreeningOutcome {
     /// Quarantine queue record when the verdict requires review.
     pub quarantine: Option<ModerationQuarantineRecord>,
 }
-
 /// Snapshot of local SFM-4a screening and quarantine state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationScreeningSnapshot {
@@ -1156,7 +1099,6 @@ pub struct ModerationScreeningSnapshot {
     /// Authenticated admission receipts sorted by idempotency key.
     pub authenticated_admissions: Vec<ModerationScreeningAdmissionReceiptV1>,
 }
-
 /// Bounded read view of local screening and quarantine state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModerationScreeningReadView {
@@ -1171,7 +1113,6 @@ pub struct ModerationScreeningReadView {
     /// First quarantine records in canonical map order.
     pub quarantine_records: Vec<ModerationQuarantineRecord>,
 }
-
 /// Bounded read view of the local quarantine queue.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModerationQuarantineReadView {
@@ -1180,7 +1121,6 @@ pub struct ModerationQuarantineReadView {
     /// First quarantine records in canonical map order.
     pub quarantine_records: Vec<ModerationQuarantineRecord>,
 }
-
 /// Error raised by the local screening/quarantine runtime.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationScreeningError {
@@ -1252,7 +1192,6 @@ pub enum ModerationScreeningError {
     #[error("moderation screening state lock poisoned")]
     StateLockPoisoned,
 }
-
 /// Error raised by the local encrypted quarantine object store.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationQuarantineObjectError {
@@ -1359,7 +1298,6 @@ pub enum ModerationQuarantineObjectError {
     #[error("moderation quarantine object state lock poisoned")]
     StateLockPoisoned,
 }
-
 impl ModerationQuarantineObjectError {
     /// Construct a stable payload-free key-operation failure.
     #[must_use]
@@ -1370,7 +1308,6 @@ impl ModerationQuarantineObjectError {
         Self::KeyWrapping { key_id, failure }
     }
 }
-
 /// Error raised by the payload-free local evidence viewer audit runtime.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationEvidenceViewerError {
@@ -1454,7 +1391,6 @@ pub enum ModerationEvidenceViewerError {
     #[error("moderation evidence viewer state lock poisoned")]
     StateLockPoisoned,
 }
-
 /// Error raised while admitting moderation model registry material.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationModelRegistryError {
@@ -1506,7 +1442,6 @@ pub enum ModerationModelRegistryError {
     #[error("moderation model registry state lock poisoned")]
     StateLockPoisoned,
 }
-
 /// Local in-memory registry for moderation model release artifacts.
 #[derive(Debug)]
 pub(crate) struct ModerationModelRegistry {
@@ -1514,13 +1449,11 @@ pub(crate) struct ModerationModelRegistry {
     corpora: BTreeMap<[u8; 32], ModerationCorpusRegistryRecord>,
     entry_limit: usize,
 }
-
 impl Default for ModerationModelRegistry {
     fn default() -> Self {
         Self::with_entry_limit(65_536)
     }
 }
-
 impl ModerationModelRegistry {
     pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
         Self {
@@ -1529,7 +1462,6 @@ impl ModerationModelRegistry {
             entry_limit: entry_limit.max(1),
         }
     }
-
     pub(crate) fn admit_repro_manifest(
         &mut self,
         manifest: ModerationReproManifestV1,
@@ -1568,7 +1500,6 @@ impl ModerationModelRegistry {
             }
         }
     }
-
     pub(crate) fn admit_corpus_manifest(
         &mut self,
         manifest: AdversarialCorpusManifestV1,
@@ -1620,14 +1551,12 @@ impl ModerationModelRegistry {
             .or_insert_with(|| record.clone())
             .clone())
     }
-
     pub(crate) fn snapshot(&self) -> ModerationModelRegistrySnapshot {
         ModerationModelRegistrySnapshot {
             reproducibility_manifests: self.repro_manifests.values().cloned().collect(),
             adversarial_corpora: self.corpora.values().cloned().collect(),
         }
     }
-
     pub(crate) fn read_view(&self, limit: usize) -> ModerationModelRegistryReadView {
         let limit = limit.min(MODERATION_READ_VIEW_MAX_RECORDS_V1);
         ModerationModelRegistryReadView {
@@ -1637,7 +1566,6 @@ impl ModerationModelRegistry {
             adversarial_corpora: self.corpora.values().take(limit).cloned().collect(),
         }
     }
-
     pub(crate) fn restore_snapshot(
         &mut self,
         snapshot: ModerationModelRegistrySnapshot,
@@ -1688,7 +1616,6 @@ impl ModerationModelRegistry {
                 });
             }
         }
-
         let mut corpora = BTreeMap::new();
         for record in snapshot.adversarial_corpora {
             if record.family_count == 0 {
@@ -1713,26 +1640,22 @@ impl ModerationModelRegistry {
                 });
             }
         }
-
         self.repro_manifests = repro_manifests;
         self.corpora = corpora;
         Ok(())
     }
 }
-
 /// Local in-memory index for encrypted moderation quarantine payload objects.
 #[derive(Debug)]
 pub(crate) struct ModerationQuarantineObjectRuntime {
     objects: BTreeMap<[u8; 16], ModerationQuarantineObjectRecord>,
     entry_limit: usize,
 }
-
 impl Default for ModerationQuarantineObjectRuntime {
     fn default() -> Self {
         Self::with_entry_limit(65_536)
     }
 }
-
 impl ModerationQuarantineObjectRuntime {
     pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
         Self {
@@ -1740,7 +1663,6 @@ impl ModerationQuarantineObjectRuntime {
             entry_limit: entry_limit.max(1),
         }
     }
-
     pub(crate) fn ensure_insert_capacity(
         &self,
         quarantine_id: &[u8; 16],
@@ -1753,7 +1675,6 @@ impl ModerationQuarantineObjectRuntime {
         }
         Ok(())
     }
-
     pub(crate) fn ensure_snapshot_capacity(
         &self,
         snapshot: &ModerationQuarantineObjectSnapshot,
@@ -1766,11 +1687,9 @@ impl ModerationQuarantineObjectRuntime {
         }
         Ok(())
     }
-
     pub(crate) fn get(&self, quarantine_id: &[u8; 16]) -> Option<ModerationQuarantineObjectRecord> {
         self.objects.get(quarantine_id).cloned()
     }
-
     pub(crate) fn insert(
         &mut self,
         record: ModerationQuarantineObjectRecord,
@@ -1791,13 +1710,11 @@ impl ModerationQuarantineObjectRuntime {
             }
         }
     }
-
     pub(crate) fn snapshot(&self) -> ModerationQuarantineObjectSnapshot {
         ModerationQuarantineObjectSnapshot {
             objects: self.objects.values().cloned().collect(),
         }
     }
-
     pub(crate) fn restore_snapshot(
         &mut self,
         snapshot: ModerationQuarantineObjectSnapshot,
@@ -1817,7 +1734,6 @@ impl ModerationQuarantineObjectRuntime {
         Ok(())
     }
 }
-
 /// Local in-memory payload-free evidence viewer session and access-log runtime.
 #[derive(Debug)]
 pub(crate) struct ModerationEvidenceViewerRuntime {
@@ -1825,13 +1741,11 @@ pub(crate) struct ModerationEvidenceViewerRuntime {
     access_events: Vec<ModerationEvidenceViewerAccessEventRecord>,
     entry_limit: usize,
 }
-
 impl Default for ModerationEvidenceViewerRuntime {
     fn default() -> Self {
         Self::with_entry_limit(65_536)
     }
 }
-
 impl ModerationEvidenceViewerRuntime {
     pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
         Self {
@@ -1840,7 +1754,6 @@ impl ModerationEvidenceViewerRuntime {
             entry_limit: entry_limit.max(1),
         }
     }
-
     pub(crate) fn create_session(
         &mut self,
         input: ModerationEvidenceViewerSessionInput,
@@ -1866,7 +1779,6 @@ impl ModerationEvidenceViewerRuntime {
             }
         }
     }
-
     pub(crate) fn record_access(
         &mut self,
         input: ModerationEvidenceViewerAccessInput,
@@ -1895,14 +1807,12 @@ impl ModerationEvidenceViewerRuntime {
         self.access_events.push(record.clone());
         Ok(record)
     }
-
     pub(crate) fn snapshot(&self) -> ModerationEvidenceViewerSnapshot {
         ModerationEvidenceViewerSnapshot {
             sessions: self.sessions.values().cloned().collect(),
             access_events: self.access_events.clone(),
         }
     }
-
     pub(crate) fn restore_snapshot(
         &mut self,
         snapshot: ModerationEvidenceViewerSnapshot,
@@ -1931,7 +1841,6 @@ impl ModerationEvidenceViewerRuntime {
                 });
             }
         }
-
         let mut expected_sequence = 1_u64;
         let mut events = Vec::with_capacity(snapshot.access_events.len());
         let mut event_ids = BTreeSet::new();
@@ -1967,13 +1876,11 @@ impl ModerationEvidenceViewerRuntime {
                 }
             })?;
         }
-
         self.sessions = sessions;
         self.access_events = events;
         Ok(())
     }
 }
-
 pub(crate) fn moderation_evidence_viewer_audit_report_from_snapshot(
     input: ModerationEvidenceViewerAuditReportInput,
     snapshot: &ModerationEvidenceViewerSnapshot,
@@ -2018,7 +1925,6 @@ pub(crate) fn moderation_evidence_viewer_audit_report_from_snapshot(
             message: "policy_digest must not be all zeroes when present".to_string(),
         });
     }
-
     let report_scope = clean_evidence_viewer_text(input.report_scope, "report_scope")?;
     let window_start_ms = u128::from(input.window_start_unix) * 1_000;
     let window_end_ms = u128::from(input.window_end_unix) * 1_000;
@@ -2043,7 +1949,6 @@ pub(crate) fn moderation_evidence_viewer_audit_report_from_snapshot(
                 && u128::from(event.event_at_unix_ms) < window_end_ms
         })
         .collect::<Vec<_>>();
-
     let mut logged_sessions = BTreeSet::new();
     let mut viewer_roles = BTreeSet::new();
     let mut evidence_digests = BTreeSet::new();
@@ -2061,7 +1966,6 @@ pub(crate) fn moderation_evidence_viewer_audit_report_from_snapshot(
             legal_hold_bound_session_count = legal_hold_bound_session_count.saturating_add(1);
         }
     }
-
     let mut access_kind_counts = BTreeMap::new();
     let mut access_event_digests = BTreeSet::new();
     let mut request_digests = BTreeSet::new();
@@ -2089,7 +1993,6 @@ pub(crate) fn moderation_evidence_viewer_audit_report_from_snapshot(
         .into_iter()
         .map(|(kind, count)| ModerationEvidenceViewerAuditKindCount { kind, count })
         .collect::<Vec<_>>();
-
     let mut report = ModerationEvidenceViewerAuditReport {
         version: MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_VERSION_V1,
         report_id: [0; 16],
@@ -2141,7 +2044,6 @@ pub(crate) fn moderation_evidence_viewer_audit_report_from_snapshot(
         .map_err(|message| ModerationEvidenceViewerError::InvalidInput { message })?;
     Ok(report)
 }
-
 /// Local in-memory runtime for SFM-4a screening and quarantine evidence.
 #[derive(Debug)]
 pub(crate) struct ModerationScreeningRuntime {
@@ -2151,13 +2053,11 @@ pub(crate) struct ModerationScreeningRuntime {
     admitted_authorities: BTreeMap<[u8; 32], [u8; 32]>,
     entry_limit: usize,
 }
-
 impl Default for ModerationScreeningRuntime {
     fn default() -> Self {
         Self::with_entry_limit(65_536)
     }
 }
-
 impl ModerationScreeningRuntime {
     pub(crate) fn with_entry_limit(entry_limit: usize) -> Self {
         Self {
@@ -2168,7 +2068,6 @@ impl ModerationScreeningRuntime {
             entry_limit: entry_limit.max(1),
         }
     }
-
     pub(crate) fn record_authenticated_screening(
         &mut self,
         verified: ModerationVerifiedScreeningAdmissionV1,
@@ -2236,7 +2135,6 @@ impl ModerationScreeningRuntime {
             screening,
         })
     }
-
     pub(crate) fn record_screening(
         &mut self,
         input: ModerationScreeningInput,
@@ -2246,7 +2144,6 @@ impl ModerationScreeningRuntime {
             .verdict
             .requires_quarantine_record()
             .then(|| quarantine_record_from_screening(&record));
-
         match self.screening_records.get(&record.record_id) {
             Some(existing) if existing != &record => {
                 return Err(ModerationScreeningError::ConflictingRecord {
@@ -2272,7 +2169,6 @@ impl ModerationScreeningRuntime {
                 }
             }
         }
-
         if let Some(quarantine) = quarantine.as_ref() {
             match self.quarantine_records.get(&quarantine.quarantine_id) {
                 Some(existing) if existing != quarantine => {
@@ -2290,7 +2186,6 @@ impl ModerationScreeningRuntime {
                 None => {}
             }
         }
-
         self.screening_records
             .insert(record.record_id, record.clone());
         if let Some(quarantine) = quarantine.clone() {
@@ -2298,10 +2193,8 @@ impl ModerationScreeningRuntime {
                 .entry(quarantine.quarantine_id)
                 .or_insert(quarantine);
         }
-
         Ok(ModerationScreeningOutcome { record, quarantine })
     }
-
     pub(crate) fn snapshot(&self) -> ModerationScreeningSnapshot {
         ModerationScreeningSnapshot {
             screening_records: self.screening_records.values().cloned().collect(),
@@ -2309,7 +2202,6 @@ impl ModerationScreeningRuntime {
             authenticated_admissions: self.authenticated_admissions.values().cloned().collect(),
         }
     }
-
     pub(crate) fn read_view(&self, limit: usize) -> ModerationScreeningReadView {
         let limit = limit.min(MODERATION_READ_VIEW_MAX_RECORDS_V1);
         ModerationScreeningReadView {
@@ -2330,7 +2222,6 @@ impl ModerationScreeningRuntime {
                 .collect(),
         }
     }
-
     pub(crate) fn quarantine_read_view(&self, limit: usize) -> ModerationQuarantineReadView {
         let limit = limit.min(MODERATION_READ_VIEW_MAX_RECORDS_V1);
         ModerationQuarantineReadView {
@@ -2343,14 +2234,12 @@ impl ModerationScreeningRuntime {
                 .collect(),
         }
     }
-
     pub(crate) fn quarantine_record(
         &self,
         quarantine_id: &[u8; 16],
     ) -> Option<ModerationQuarantineRecord> {
         self.quarantine_records.get(quarantine_id).cloned()
     }
-
     fn screening_outcome(
         &self,
         screening_record_id: [u8; 16],
@@ -2376,7 +2265,6 @@ impl ModerationScreeningRuntime {
             });
         Ok(ModerationScreeningOutcome { record, quarantine })
     }
-
     pub(crate) fn review_quarantine(
         &mut self,
         input: ModerationQuarantineReviewInput,
@@ -2396,7 +2284,6 @@ impl ModerationScreeningRuntime {
             .ok_or(ModerationScreeningError::UnknownQuarantine {
                 quarantine_id_hex: hex::encode(input.quarantine_id),
             })?;
-
         match record.state {
             ModerationQuarantineState::PendingReview => {
                 record.state = ModerationQuarantineState::Reviewed;
@@ -2426,7 +2313,6 @@ impl ModerationScreeningRuntime {
             }
         }
     }
-
     pub(crate) fn release_quarantine(
         &mut self,
         input: ModerationQuarantineReleaseInput,
@@ -2450,7 +2336,6 @@ impl ModerationScreeningRuntime {
             .ok_or(ModerationScreeningError::UnknownQuarantine {
                 quarantine_id_hex: hex::encode(input.quarantine_id),
             })?;
-
         match record.state {
             ModerationQuarantineState::PendingReview => {
                 Err(ModerationScreeningError::InvalidTransition {
@@ -2489,7 +2374,6 @@ impl ModerationScreeningRuntime {
             }
         }
     }
-
     pub(crate) fn restore_snapshot(
         &mut self,
         snapshot: ModerationScreeningSnapshot,
@@ -2518,7 +2402,6 @@ impl ModerationScreeningRuntime {
                 });
             }
         }
-
         let mut quarantine_records = BTreeMap::new();
         for quarantine in snapshot.quarantine_records {
             validate_quarantine_record(&quarantine)?;
@@ -2542,7 +2425,6 @@ impl ModerationScreeningRuntime {
                 });
             }
         }
-
         let mut authenticated_admissions = BTreeMap::new();
         let mut admitted_authorities = BTreeMap::new();
         for admission in snapshot.authenticated_admissions {
@@ -2573,7 +2455,6 @@ impl ModerationScreeningRuntime {
                 });
             }
         }
-
         self.screening_records = screening_records;
         self.quarantine_records = quarantine_records;
         self.authenticated_admissions = authenticated_admissions;
@@ -2581,7 +2462,6 @@ impl ModerationScreeningRuntime {
         Ok(())
     }
 }
-
 fn screening_admission_receipt(
     idempotency_key: [u8; 32],
     authority_digest: [u8; 32],
@@ -2604,7 +2484,6 @@ fn screening_admission_receipt(
         receipt_digest,
     }
 }
-
 fn screening_admission_receipt_digest(
     version: u16,
     idempotency_key: [u8; 32],
@@ -2622,7 +2501,6 @@ fn screening_admission_receipt_digest(
     hasher.update(&screening_record_id);
     *hasher.finalize().as_bytes()
 }
-
 fn validate_screening_authority_kind(authority_kind: &str) -> Result<(), String> {
     if matches!(authority_kind, "signed_result" | "committee_aggregate") {
         Ok(())
@@ -2632,7 +2510,6 @@ fn validate_screening_authority_kind(authority_kind: &str) -> Result<(), String>
         ))
     }
 }
-
 fn validate_screening_admission_receipt(
     admission: &ModerationScreeningAdmissionReceiptV1,
     screening_record: &ModerationScreeningRecord,
@@ -2679,7 +2556,6 @@ fn validate_screening_admission_receipt(
     }
     Ok(())
 }
-
 fn screening_record_from_input(
     input: ModerationScreeningInput,
 ) -> Result<ModerationScreeningRecord, ModerationScreeningError> {
@@ -2698,7 +2574,6 @@ fn screening_record_from_input(
             message: "screened_at_unix must be non-zero".to_string(),
         });
     }
-
     let record_digest = screening_record_digest(
         &input.subject,
         input.subject_digest,
@@ -2728,7 +2603,6 @@ fn screening_record_from_input(
         notes: input.notes,
     })
 }
-
 fn validate_screening_record(
     record: &ModerationScreeningRecord,
 ) -> Result<(), ModerationScreeningError> {
@@ -2777,7 +2651,6 @@ fn validate_screening_record(
     }
     Ok(())
 }
-
 fn quarantine_record_from_screening(
     record: &ModerationScreeningRecord,
 ) -> ModerationQuarantineRecord {
@@ -2805,7 +2678,6 @@ fn quarantine_record_from_screening(
         release_notes: None,
     }
 }
-
 fn validate_quarantine_record(
     record: &ModerationQuarantineRecord,
 ) -> Result<(), ModerationScreeningError> {
@@ -2837,7 +2709,6 @@ fn validate_quarantine_record(
     validate_quarantine_state_fields(record)?;
     Ok(())
 }
-
 fn validate_quarantine_record_matches_screening(
     record: &ModerationQuarantineRecord,
     screening_record: &ModerationScreeningRecord,
@@ -2859,7 +2730,6 @@ fn validate_quarantine_record_matches_screening(
     }
     Ok(())
 }
-
 fn validate_quarantine_state_fields(
     record: &ModerationQuarantineRecord,
 ) -> Result<(), ModerationScreeningError> {
@@ -2941,7 +2811,6 @@ fn validate_quarantine_state_fields(
     validate_optional_note(record.quarantine_id, "review_notes", &record.review_notes)?;
     validate_optional_note(record.quarantine_id, "release_notes", &record.release_notes)
 }
-
 fn validate_nonzero_optional_timestamp(
     quarantine_id: [u8; 16],
     field: &str,
@@ -2957,7 +2826,6 @@ fn validate_nonzero_optional_timestamp(
         Some(_) => Ok(()),
     }
 }
-
 fn validate_nonblank_optional_text(
     quarantine_id: [u8; 16],
     field: &str,
@@ -2973,7 +2841,6 @@ fn validate_nonblank_optional_text(
         }),
     }
 }
-
 fn validate_optional_note(
     quarantine_id: [u8; 16],
     field: &str,
@@ -2992,7 +2859,6 @@ fn validate_optional_note(
     }
     Ok(())
 }
-
 fn clean_required_text(
     value: String,
     field: &str,
@@ -3012,14 +2878,12 @@ fn clean_required_text(
     }
     Ok(value)
 }
-
 fn clean_optional_text(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let value = value.trim().to_string();
         (!value.is_empty()).then_some(value)
     })
 }
-
 /// Public, non-secret qualification for one quarantine-key provider.
 ///
 /// The revision identifies the deployment-owned adapter and its public policy
@@ -3030,7 +2894,6 @@ pub struct ModerationQuarantineKeyProviderQualificationV1 {
     revision: u64,
     policy_digest: [u8; 32],
 }
-
 impl ModerationQuarantineKeyProviderQualificationV1 {
     /// Construct one provider qualification observation.
     #[must_use]
@@ -3040,24 +2903,20 @@ impl ModerationQuarantineKeyProviderQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return the non-zero deployment adapter and public-policy revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the non-zero digest of the provider's public policy.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     fn is_valid(self) -> bool {
         self.revision != 0 && self.policy_digest != [0; 32]
     }
 }
-
 /// Fixed, payload-free readiness failures returned by a quarantine-key provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ModerationQuarantineKeyProviderReadinessErrorV1 {
@@ -3068,7 +2927,6 @@ pub enum ModerationQuarantineKeyProviderReadinessErrorV1 {
     #[error("moderation quarantine key provider rejected qualification")]
     Rejected,
 }
-
 /// Stable, payload-free failure classes for quarantine-key operations.
 ///
 /// An adapter must classify protected provider diagnostics at its own boundary,
@@ -3093,7 +2951,6 @@ pub enum ModerationQuarantineKeyOperationErrorV1 {
     #[error("moderation quarantine key wrap outcome is ambiguous")]
     Ambiguous,
 }
-
 impl ModerationQuarantineKeyOperationErrorV1 {
     /// Scrub one protected provider diagnostic and return this fixed class.
     ///
@@ -3106,7 +2963,6 @@ impl ModerationQuarantineKeyOperationErrorV1 {
         self
     }
 }
-
 /// Stable, payload-free quarantine-key provider qualification failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ModerationQuarantineKeyProviderQualificationErrorV1 {
@@ -3141,7 +2997,6 @@ pub enum ModerationQuarantineKeyProviderQualificationErrorV1 {
     #[error("moderation quarantine key provider identity or policy changed during operation")]
     IdentityOrPolicyChanged,
 }
-
 /// Independently configured exact binding for one quarantine-key provider.
 ///
 /// Keep this value next to the injected runtime provider and construct it only
@@ -3152,7 +3007,6 @@ pub struct ModerationQuarantineKeyProviderBindingV1 {
     provider_handle: String,
     expected_qualification: ModerationQuarantineKeyProviderQualificationV1,
 }
-
 impl ModerationQuarantineKeyProviderBindingV1 {
     /// Construct and validate an independently governed provider binding.
     ///
@@ -3175,19 +3029,16 @@ impl ModerationQuarantineKeyProviderBindingV1 {
             expected_qualification,
         })
     }
-
     /// Return the configured stable opaque provider handle.
     #[must_use]
     pub fn provider_handle(&self) -> &str {
         &self.provider_handle
     }
-
     /// Return the configured public provider qualification.
     #[must_use]
     pub const fn expected_qualification(&self) -> ModerationQuarantineKeyProviderQualificationV1 {
         self.expected_qualification
     }
-
     /// Qualify an injected provider against this exact configured binding.
     ///
     /// # Errors
@@ -3219,7 +3070,6 @@ impl ModerationQuarantineKeyProviderBindingV1 {
         }
         Ok(())
     }
-
     fn revalidate(
         &self,
         provider: &dyn ModerationQuarantineKeyWrapper,
@@ -3245,7 +3095,6 @@ impl ModerationQuarantineKeyProviderBindingV1 {
         Ok(())
     }
 }
-
 /// Runtime-only adapter for wrapping per-object data-encryption keys.
 ///
 /// Production implementations are expected to call PKCS#11 or a KMS and keep
@@ -3273,7 +3122,6 @@ impl ModerationQuarantineKeyProviderBindingV1 {
 pub trait ModerationQuarantineKeyWrapper: Send + Sync + std::fmt::Debug {
     /// Return the stable, non-secret deployment handle for this provider.
     fn provider_handle(&self) -> &str;
-
     /// Qualify the active adapter and its public policy revision.
     fn qualification(
         &self,
@@ -3281,17 +3129,14 @@ pub trait ModerationQuarantineKeyWrapper: Send + Sync + std::fmt::Debug {
         ModerationQuarantineKeyProviderQualificationV1,
         ModerationQuarantineKeyProviderReadinessErrorV1,
     >;
-
     /// Return the active non-secret PKCS#11/KMS wrapping-key handle.
     fn active_key_id(&self) -> &str;
-
     /// Wrap one freshly generated 256-bit DEK for durable storage.
     fn wrap_dek(
         &self,
         context_digest: [u8; 32],
         dek: &[u8; 32],
     ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1>;
-
     /// Unwrap one DEK using the exact key handle persisted in its envelope.
     fn unwrap_dek(
         &self,
@@ -3300,7 +3145,6 @@ pub trait ModerationQuarantineKeyWrapper: Send + Sync + std::fmt::Debug {
         wrapped_dek: &[u8],
     ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1>;
 }
-
 fn validate_moderation_quarantine_key_provider_handle(
     handle: &str,
     configured: bool,
@@ -3320,13 +3164,11 @@ fn validate_moderation_quarantine_key_provider_handle(
         }
     })
 }
-
 fn map_moderation_quarantine_key_provider_qualification_error(
     _error: ModerationQuarantineKeyProviderQualificationErrorV1,
 ) -> ModerationQuarantineObjectError {
     ModerationQuarantineObjectError::KeyWrapperUnqualified
 }
-
 pub(crate) fn validate_moderation_quarantine_key_wrapper(
     binding: &ModerationQuarantineKeyProviderBindingV1,
     key_wrapper: &dyn ModerationQuarantineKeyWrapper,
@@ -3345,7 +3187,6 @@ pub(crate) fn validate_moderation_quarantine_key_wrapper(
     }
     Ok(())
 }
-
 /// One independently authenticated ciphertext chunk.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct ModerationQuarantineCiphertextChunkV1 {
@@ -3358,7 +3199,6 @@ pub(crate) struct ModerationQuarantineCiphertextChunkV1 {
     /// ChaCha20-Poly1305 ciphertext followed by its 16-byte tag.
     pub ciphertext: Vec<u8>,
 }
-
 /// Canonical V1 chunked ChaCha20-Poly1305 quarantine object envelope.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct ModerationQuarantineObjectEnvelopeV1 {
@@ -3382,7 +3222,6 @@ pub(crate) struct ModerationQuarantineObjectEnvelopeV1 {
     pub chunk_plaintext_bytes: u32,
     pub chunks: Vec<ModerationQuarantineCiphertextChunkV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationQuarantineImmutableMetadataV1 {
     version: u16,
@@ -3398,13 +3237,11 @@ struct ModerationQuarantineImmutableMetadataV1 {
     chunk_plaintext_bytes: u32,
     chunk_count: u32,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationQuarantineAadHeaderV1 {
     metadata: ModerationQuarantineImmutableMetadataV1,
     object_id: [u8; 16],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationQuarantineChunkAadV1 {
     header_digest: [u8; 32],
@@ -3412,46 +3249,37 @@ struct ModerationQuarantineChunkAadV1 {
     plaintext_offset: u64,
     plaintext_len: u32,
 }
-
 struct ModerationQuarantineDek([u8; 32]);
-
 impl Drop for ModerationQuarantineDek {
     fn drop(&mut self) {
         self.0.fill(0);
         let _ = std::hint::black_box(&self.0);
     }
 }
-
 struct ModerationQuarantineWrappedDek(Vec<u8>);
-
 impl ModerationQuarantineWrappedDek {
     fn into_vec(mut self) -> Vec<u8> {
         std::mem::take(&mut self.0)
     }
 }
-
 impl Drop for ModerationQuarantineWrappedDek {
     fn drop(&mut self) {
         self.0.fill(0);
         let _ = std::hint::black_box(&self.0);
     }
 }
-
 struct ModerationQuarantinePlaintext(Vec<u8>);
-
 impl ModerationQuarantinePlaintext {
     fn into_vec(mut self) -> Vec<u8> {
         std::mem::take(&mut self.0)
     }
 }
-
 impl Drop for ModerationQuarantinePlaintext {
     fn drop(&mut self) {
         self.0.fill(0);
         let _ = std::hint::black_box(&self.0);
     }
 }
-
 pub(crate) fn seal_moderation_quarantine_object(
     input: ModerationQuarantineObjectInput,
     key_provider_binding: &ModerationQuarantineKeyProviderBindingV1,
@@ -3482,7 +3310,6 @@ pub(crate) fn seal_moderation_quarantine_object(
     fill_nonzero_random(&mut dek.0, "data-encryption key")?;
     let mut nonce_prefix = [0_u8; 8];
     fill_nonzero_random(&mut nonce_prefix, "nonce prefix")?;
-
     let metadata = ModerationQuarantineImmutableMetadataV1 {
         version: MODERATION_QUARANTINE_OBJECT_ENVELOPE_VERSION_V1,
         algorithm: MODERATION_QUARANTINE_OBJECT_ALGORITHM_V1.to_owned(),
@@ -3594,7 +3421,6 @@ pub(crate) fn seal_moderation_quarantine_object(
         })?;
     Ok((record, bytes))
 }
-
 pub(crate) fn open_moderation_quarantine_object(
     envelope: &ModerationQuarantineObjectEnvelopeV1,
     record: &ModerationQuarantineObjectRecord,
@@ -3613,7 +3439,6 @@ pub(crate) fn open_moderation_quarantine_object(
     }
     Ok(payload.into_vec())
 }
-
 /// Authenticate and decrypt only chunks intersecting `range`.
 ///
 /// Every returned byte is covered by ChaCha20-Poly1305 with immutable object
@@ -3729,7 +3554,6 @@ pub(crate) fn open_moderation_quarantine_object_range(
     }
     Ok(output.into_vec())
 }
-
 /// Rewrap a per-object DEK without decrypting or rewriting ciphertext chunks.
 pub(crate) fn rewrap_moderation_quarantine_object(
     envelope: &ModerationQuarantineObjectEnvelopeV1,
@@ -3807,7 +3631,6 @@ pub(crate) fn rewrap_moderation_quarantine_object(
         })?;
     Ok((replacement_record, bytes))
 }
-
 fn authenticate_moderation_quarantine_ciphertext(
     envelope: &ModerationQuarantineObjectEnvelopeV1,
     dek: &[u8; 32],
@@ -3850,7 +3673,6 @@ fn authenticate_moderation_quarantine_ciphertext(
     }
     Ok(())
 }
-
 pub(crate) fn normalize_moderation_quarantine_object_input(
     mut input: ModerationQuarantineObjectInput,
 ) -> Result<ModerationQuarantineObjectInput, ModerationQuarantineObjectError> {
@@ -3891,7 +3713,6 @@ pub(crate) fn normalize_moderation_quarantine_object_input(
         notes: None,
     })
 }
-
 fn clean_optional_quarantine_content_type(
     value: Option<String>,
     max_bytes: usize,
@@ -3909,7 +3730,6 @@ fn clean_optional_quarantine_content_type(
     }
     Ok(Some(value))
 }
-
 fn is_canonical_quarantine_content_type(value: &str, max_bytes: usize) -> bool {
     value.len() <= max_bytes
         && matches!(
@@ -3929,7 +3749,6 @@ fn is_canonical_quarantine_content_type(value: &str, max_bytes: usize) -> bool {
                 | "video/webm"
         )
 }
-
 pub(crate) fn validate_quarantine_object_envelope(
     envelope: &ModerationQuarantineObjectEnvelopeV1,
 ) -> Result<(), ModerationQuarantineObjectError> {
@@ -4091,7 +3910,6 @@ pub(crate) fn validate_quarantine_object_envelope(
     }
     Ok(())
 }
-
 pub(crate) fn moderation_quarantine_object_record_from_envelope(
     envelope: &ModerationQuarantineObjectEnvelopeV1,
     envelope_path: String,
@@ -4119,7 +3937,6 @@ pub(crate) fn moderation_quarantine_object_record_from_envelope(
         .map_err(|message| ModerationQuarantineObjectError::InvalidSnapshot { message })?;
     Ok(record)
 }
-
 fn validate_quarantine_object_record(
     record: &ModerationQuarantineObjectRecord,
 ) -> Result<(), String> {
@@ -4225,7 +4042,6 @@ fn validate_quarantine_object_record(
     validate_relative_object_path(&record.envelope_path)?;
     Ok(())
 }
-
 pub(crate) fn validate_relative_object_path(path: &str) -> Result<(), String> {
     let path = Path::new(path);
     if path.is_absolute() {
@@ -4239,7 +4055,6 @@ pub(crate) fn validate_relative_object_path(path: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 pub(crate) fn moderation_quarantine_object_relative_path(
     quarantine_id: [u8; 16],
     object_id: [u8; 16],
@@ -4252,7 +4067,6 @@ pub(crate) fn moderation_quarantine_object_relative_path(
         MODERATION_QUARANTINE_OBJECT_EXT
     )
 }
-
 fn fill_nonzero_random(
     output: &mut [u8],
     label: &str,
@@ -4272,13 +4086,11 @@ fn fill_nonzero_random(
         message: format!("failed to generate non-zero quarantine object {label}"),
     })
 }
-
 fn clean_wrapping_key_id(key_id: &str) -> Result<String, ModerationQuarantineObjectError> {
     validate_wrapping_key_id_text(key_id)
         .map_err(|message| ModerationQuarantineObjectError::InvalidInput { message })?;
     Ok(key_id.to_owned())
 }
-
 fn validate_wrapping_key_id_text(key_id: &str) -> Result<(), String> {
     if key_id.is_empty()
         || key_id.len() > MODERATION_QUARANTINE_OBJECT_MAX_KEY_HANDLE_BYTES_V1
@@ -4293,7 +4105,6 @@ fn validate_wrapping_key_id_text(key_id: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_wrapped_dek(wrapped_dek: &[u8]) -> Result<(), ModerationQuarantineObjectError> {
     if wrapped_dek.is_empty()
         || wrapped_dek.len() > MODERATION_QUARANTINE_OBJECT_MAX_WRAPPED_DEK_BYTES_V1
@@ -4307,7 +4118,6 @@ fn validate_wrapped_dek(wrapped_dek: &[u8]) -> Result<(), ModerationQuarantineOb
     }
     Ok(())
 }
-
 fn quarantine_immutable_metadata_from_envelope(
     envelope: &ModerationQuarantineObjectEnvelopeV1,
 ) -> Result<ModerationQuarantineImmutableMetadataV1, ModerationQuarantineObjectError> {
@@ -4329,7 +4139,6 @@ fn quarantine_immutable_metadata_from_envelope(
         })?,
     })
 }
-
 fn quarantine_aad_header_from_envelope(
     envelope: &ModerationQuarantineObjectEnvelopeV1,
 ) -> Result<ModerationQuarantineAadHeaderV1, ModerationQuarantineObjectError> {
@@ -4338,7 +4147,6 @@ fn quarantine_aad_header_from_envelope(
         object_id: envelope.object_id,
     })
 }
-
 fn moderation_quarantine_object_id(
     metadata: &ModerationQuarantineImmutableMetadataV1,
 ) -> Result<[u8; 16], ModerationQuarantineObjectError> {
@@ -4354,7 +4162,6 @@ fn moderation_quarantine_object_id(
     object_id.copy_from_slice(&digest.as_bytes()[..16]);
     Ok(object_id)
 }
-
 fn moderation_quarantine_aad_header_digest(
     header: &ModerationQuarantineAadHeaderV1,
 ) -> Result<[u8; 32], ModerationQuarantineObjectError> {
@@ -4367,7 +4174,6 @@ fn moderation_quarantine_aad_header_digest(
     hasher.update(&encoded);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn moderation_quarantine_wrap_context_digest(
     header: &ModerationQuarantineAadHeaderV1,
 ) -> Result<[u8; 32], ModerationQuarantineObjectError> {
@@ -4377,7 +4183,6 @@ fn moderation_quarantine_wrap_context_digest(
     hasher.update(&header_digest);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn moderation_quarantine_chunk_aad(
     header_digest: [u8; 32],
     index: u32,
@@ -4394,14 +4199,12 @@ fn moderation_quarantine_chunk_aad(
         message: error.to_string(),
     })
 }
-
 fn moderation_quarantine_chunk_nonce(nonce_prefix: [u8; 8], index: u32) -> [u8; 12] {
     let mut nonce = [0_u8; 12];
     nonce[..8].copy_from_slice(&nonce_prefix);
     nonce[8..].copy_from_slice(&index.to_be_bytes());
     nonce
 }
-
 fn moderation_quarantine_ciphertext_digest(
     chunks: &[ModerationQuarantineCiphertextChunkV1],
 ) -> [u8; 32] {
@@ -4417,13 +4220,11 @@ fn moderation_quarantine_ciphertext_digest(
     }
     *hasher.finalize().as_bytes()
 }
-
 fn authentication_failed(quarantine_id: [u8; 16]) -> ModerationQuarantineObjectError {
     ModerationQuarantineObjectError::AuthenticationFailed {
         quarantine_id_hex: hex::encode(quarantine_id),
     }
 }
-
 pub(crate) fn evidence_viewer_session_record_from_input(
     input: ModerationEvidenceViewerSessionInput,
     object: &ModerationQuarantineObjectRecord,
@@ -4473,7 +4274,6 @@ pub(crate) fn evidence_viewer_session_record_from_input(
             });
         }
     }
-
     let mut record = ModerationEvidenceViewerSessionRecord {
         quarantine_id: input.quarantine_id,
         object_id: object.object_id,
@@ -4499,7 +4299,6 @@ pub(crate) fn evidence_viewer_session_record_from_input(
         .map_err(|message| ModerationEvidenceViewerError::InvalidInput { message })?;
     Ok(record)
 }
-
 fn evidence_viewer_access_event_record_from_input(
     sequence: u64,
     input: ModerationEvidenceViewerAccessInput,
@@ -4580,7 +4379,6 @@ fn evidence_viewer_access_event_record_from_input(
         .map_err(|message| ModerationEvidenceViewerError::InvalidInput { message })?;
     Ok(record)
 }
-
 pub(crate) fn validate_evidence_viewer_session_record(
     record: &ModerationEvidenceViewerSessionRecord,
 ) -> Result<(), String> {
@@ -4647,7 +4445,6 @@ pub(crate) fn validate_evidence_viewer_session_record(
     }
     Ok(())
 }
-
 fn validate_evidence_viewer_access_event_record(
     record: &ModerationEvidenceViewerAccessEventRecord,
     session: &ModerationEvidenceViewerSessionRecord,
@@ -4728,7 +4525,6 @@ fn validate_evidence_viewer_access_event_record(
     }
     Ok(())
 }
-
 fn validate_evidence_viewer_audit_report(
     report: &ModerationEvidenceViewerAuditReport,
 ) -> Result<(), String> {
@@ -4880,7 +4676,6 @@ fn validate_evidence_viewer_audit_report(
     }
     Ok(())
 }
-
 fn clean_evidence_viewer_text(
     value: String,
     field: &str,
@@ -4898,7 +4693,6 @@ fn clean_evidence_viewer_text(
     }
     Ok(trimmed)
 }
-
 fn clean_optional_evidence_viewer_text(
     value: Option<String>,
     field: &str,
@@ -4920,7 +4714,6 @@ fn clean_optional_evidence_viewer_text(
         })
         .transpose()
 }
-
 fn validate_evidence_viewer_record_text(field: &str, value: &str) -> Result<(), String> {
     if value.trim().is_empty() {
         return Err(format!("{field} must not be blank"));
@@ -4935,7 +4728,6 @@ fn validate_evidence_viewer_record_text(field: &str, value: &str) -> Result<(), 
     }
     Ok(())
 }
-
 fn validate_optional_evidence_viewer_record_text(
     field: &str,
     value: &Option<String>,
@@ -4955,7 +4747,6 @@ fn validate_optional_evidence_viewer_record_text(
     }
     Ok(())
 }
-
 fn evidence_viewer_session_digest(record: &ModerationEvidenceViewerSessionRecord) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(MODERATION_EVIDENCE_VIEWER_SESSION_DOMAIN_V1);
@@ -4975,7 +4766,6 @@ fn evidence_viewer_session_digest(record: &ModerationEvidenceViewerSessionRecord
     update_optional_string(&mut hasher, record.notes.as_deref());
     *hasher.finalize().as_bytes()
 }
-
 fn evidence_viewer_access_event_digest(
     record: &ModerationEvidenceViewerAccessEventRecord,
 ) -> [u8; 32] {
@@ -4994,7 +4784,6 @@ fn evidence_viewer_access_event_digest(
     update_optional_string(&mut hasher, record.notes.as_deref());
     *hasher.finalize().as_bytes()
 }
-
 fn evidence_viewer_audit_report_digest(report: &ModerationEvidenceViewerAuditReport) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_DOMAIN_V1);
@@ -5026,7 +4815,6 @@ fn evidence_viewer_audit_report_digest(report: &ModerationEvidenceViewerAuditRep
     update_optional_digest(&mut hasher, report.policy_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn evidence_viewer_audit_digest_set_digest(label: &str, values: BTreeSet<[u8; 32]>) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(MODERATION_EVIDENCE_VIEWER_AUDIT_DIGEST_SET_DOMAIN_V1);
@@ -5037,21 +4825,17 @@ fn evidence_viewer_audit_digest_set_digest(label: &str, values: BTreeSet<[u8; 32
     }
     *hasher.finalize().as_bytes()
 }
-
 fn digest_id16(digest: [u8; 32]) -> [u8; 16] {
     let mut id = [0; 16];
     id.copy_from_slice(&digest[..16]);
     id
 }
-
 fn digest_is_zero(digest: [u8; 32]) -> bool {
     digest.iter().all(|byte| *byte == 0)
 }
-
 fn len_to_u64(len: usize) -> u64 {
     u64::try_from(len).unwrap_or(u64::MAX)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn screening_record_digest(
     subject: &str,
@@ -5079,7 +4863,6 @@ fn screening_record_digest(
     update_optional_string(&mut hasher, notes);
     *hasher.finalize().as_bytes()
 }
-
 fn quarantine_record_digest(
     screening_record_id: [u8; 16],
     subject_digest: [u8; 32],
@@ -5094,12 +4877,10 @@ fn quarantine_record_digest(
     hasher.update(&queued_at_unix.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn update_string(hasher: &mut blake3::Hasher, value: &str) {
     hasher.update(&(value.len() as u64).to_le_bytes());
     hasher.update(value.as_bytes());
 }
-
 fn update_optional_digest(hasher: &mut blake3::Hasher, value: Option<[u8; 32]>) {
     match value {
         Some(value) => {
@@ -5111,7 +4892,6 @@ fn update_optional_digest(hasher: &mut blake3::Hasher, value: Option<[u8; 32]>) 
         }
     };
 }
-
 fn update_optional_u64(hasher: &mut blake3::Hasher, value: Option<u64>) {
     match value {
         Some(value) => {
@@ -5123,7 +4903,6 @@ fn update_optional_u64(hasher: &mut blake3::Hasher, value: Option<u64>) {
         }
     };
 }
-
 fn update_optional_string(hasher: &mut blake3::Hasher, value: Option<&str>) {
     match value {
         Some(value) => {
@@ -5135,7 +4914,6 @@ fn update_optional_string(hasher: &mut blake3::Hasher, value: Option<&str>) {
         }
     };
 }
-
 #[cfg(test)]
 #[path = "moderation_model_tests.rs"]
 mod tests;

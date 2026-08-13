@@ -3,9 +3,7 @@
 //! The full async projection worker is not wired yet, but Torii already needs a
 //! stable contract for the reserved DA blob class/codec so clients can discover
 //! how cold query shards will be published once the worker is enabled.
-
 use std::collections::HashSet;
-
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::BlockHeader,
@@ -13,7 +11,6 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::query::{
     index_status::QueryIndexStatus,
     projection_shard::{
@@ -21,7 +18,6 @@ use crate::query::{
         QueryProjectionShardArchive, QueryProjectionShardArchiveError,
     },
 };
-
 /// Version of the checkpoint descriptor payload itself.
 pub const QUERY_PROJECTION_CHECKPOINT_VERSION: u16 = 1;
 /// Schema version for DA-backed query projection shard descriptors.
@@ -40,7 +36,6 @@ pub const QUERY_PROJECTION_CHECKPOINT_MAX_SHARDS: usize = 65_536;
 pub const QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES: usize = 4 * 1024;
 /// First-release aggregate ceiling for asset-definition discriminators in one checkpoint.
 pub const QUERY_PROJECTION_CHECKPOINT_MAX_TOTAL_ASSET_DEFINITION_ID_BYTES: usize = 4 * 1024 * 1024;
-
 /// Resource family described by a query projection checkpoint shard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub enum QueryProjectionResourceKind {
@@ -55,7 +50,6 @@ pub enum QueryProjectionResourceKind {
     /// Domain inventory rows and related aggregate cubes.
     Domains,
 }
-
 /// Reference to one immutable DA shard that belongs to a query projection checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionCheckpointShard {
@@ -72,7 +66,6 @@ pub struct QueryProjectionCheckpointShard {
     /// Digest of the archived shard payload itself.
     pub blob_hash: BlobDigest,
 }
-
 /// Top-level checkpoint descriptor tying a set of projection shards to one indexed height.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionCheckpoint {
@@ -95,7 +88,6 @@ pub struct QueryProjectionCheckpoint {
     /// Immutable shard references that make up the checkpoint.
     pub shards: Vec<QueryProjectionCheckpointShard>,
 }
-
 /// Uploaded immutable shard archive ready to be referenced from a checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryProjectionUploadedShardArchive {
@@ -106,7 +98,6 @@ pub struct QueryProjectionUploadedShardArchive {
     /// Storage ticket resolving the shard archive in SoraFS.
     pub storage_ticket: StorageTicketId,
 }
-
 /// Errors returned when building a checkpoint publish plan from uploaded archives.
 #[derive(Debug, Error)]
 pub enum QueryProjectionCheckpointPlanError {
@@ -252,13 +243,11 @@ pub enum QueryProjectionCheckpointPlanError {
     #[error(transparent)]
     Archive(#[from] QueryProjectionShardArchiveError),
 }
-
 /// Validated checkpoint publication plan derived from uploaded shard archives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryProjectionCheckpointPublishPlan {
     checkpoint: QueryProjectionCheckpoint,
 }
-
 impl QueryProjectionCheckpoint {
     /// Build a checkpoint descriptor from the latest durable query index snapshot.
     #[must_use]
@@ -276,7 +265,6 @@ impl QueryProjectionCheckpoint {
         }
     }
 }
-
 impl QueryProjectionUploadedShardArchive {
     /// Construct a typed uploaded-shard descriptor.
     #[must_use]
@@ -292,7 +280,6 @@ impl QueryProjectionUploadedShardArchive {
         }
     }
 }
-
 impl From<(QueryProjectionShardArchive, BlobDigest, StorageTicketId)>
     for QueryProjectionUploadedShardArchive
 {
@@ -306,7 +293,6 @@ impl From<(QueryProjectionShardArchive, BlobDigest, StorageTicketId)>
         Self::new(archive, manifest_digest, storage_ticket)
     }
 }
-
 impl QueryProjectionCheckpointPublishPlan {
     /// Build a validated checkpoint publication plan from uploaded shard archives.
     ///
@@ -329,7 +315,6 @@ impl QueryProjectionCheckpointPublishPlan {
         let mut seen = HashSet::new();
         let mut shards = Vec::new();
         let mut asset_definition_id_bytes = 0_usize;
-
         for upload in uploads {
             let archive = upload.archive;
             asset_definition_id_bytes = admit_checkpoint_shard_reference(
@@ -351,7 +336,6 @@ impl QueryProjectionCheckpointPublishPlan {
                     asset_definition_id: key.2,
                 });
             }
-
             if archive.version != QUERY_PROJECTION_SHARD_ARCHIVE_VERSION {
                 return Err(
                     QueryProjectionCheckpointPlanError::UnsupportedArchiveVersion {
@@ -363,7 +347,6 @@ impl QueryProjectionCheckpointPublishPlan {
                     },
                 );
             }
-
             if archive.schema_version != QUERY_PROJECTION_SCHEMA_VERSION {
                 return Err(
                     QueryProjectionCheckpointPlanError::UnexpectedSchemaVersion {
@@ -375,7 +358,6 @@ impl QueryProjectionCheckpointPublishPlan {
                     },
                 );
             }
-
             if archive.payload_codec != expected_payload_codec {
                 return Err(QueryProjectionCheckpointPlanError::UnexpectedPayloadCodec {
                     expected: expected_payload_codec.0.clone(),
@@ -385,7 +367,6 @@ impl QueryProjectionCheckpointPublishPlan {
                     asset_definition_id: archive.asset_definition_id.clone(),
                 });
             }
-
             let computed_payload_hash = BlobDigest::from_hash(blake3::hash(&archive.payload));
             if archive.payload_hash != computed_payload_hash {
                 return Err(QueryProjectionCheckpointPlanError::PayloadHashMismatch {
@@ -396,7 +377,6 @@ impl QueryProjectionCheckpointPublishPlan {
                     asset_definition_id: archive.asset_definition_id.clone(),
                 });
             }
-
             if archive.indexed_height != status.indexed_height {
                 return Err(QueryProjectionCheckpointPlanError::IndexedHeightMismatch {
                     expected: status.indexed_height,
@@ -406,7 +386,6 @@ impl QueryProjectionCheckpointPublishPlan {
                     asset_definition_id: archive.asset_definition_id.clone(),
                 });
             }
-
             if archive.indexed_block_hash != status.indexed_block_hash {
                 return Err(
                     QueryProjectionCheckpointPlanError::IndexedBlockHashMismatch {
@@ -420,12 +399,10 @@ impl QueryProjectionCheckpointPublishPlan {
                     },
                 );
             }
-
             shards.push(
                 archive.into_checkpoint_shard(upload.manifest_digest, upload.storage_ticket)?,
             );
         }
-
         Ok(Self {
             checkpoint: QueryProjectionCheckpoint::from_index_status(
                 status,
@@ -434,20 +411,17 @@ impl QueryProjectionCheckpointPublishPlan {
             ),
         })
     }
-
     /// Borrow the validated checkpoint descriptor.
     #[must_use]
     pub fn checkpoint(&self) -> &QueryProjectionCheckpoint {
         &self.checkpoint
     }
-
     /// Consume the plan and return the validated checkpoint descriptor.
     #[must_use]
     pub fn into_checkpoint(self) -> QueryProjectionCheckpoint {
         self.checkpoint
     }
 }
-
 fn admit_checkpoint_shard_reference(
     retained_shards: usize,
     retained_asset_definition_id_bytes: usize,
@@ -489,7 +463,6 @@ fn admit_checkpoint_shard_reference(
     }
     Ok(total)
 }
-
 impl Default for QueryProjectionCheckpoint {
     fn default() -> Self {
         Self {
@@ -505,19 +478,16 @@ impl Default for QueryProjectionCheckpoint {
         }
     }
 }
-
 /// Reserved DA blob class used by query projection shards.
 #[must_use]
 pub const fn query_projection_da_blob_class() -> BlobClass {
     BlobClass::Custom(QUERY_PROJECTION_DA_BLOB_CLASS_CUSTOM_ID)
 }
-
 /// Reserved codec label used by query projection shards.
 #[must_use]
 pub fn query_projection_da_codec() -> BlobCodec {
     BlobCodec::new(QUERY_PROJECTION_DA_CODEC)
 }
-
 /// Deterministically map a canonical key into one of the configured projection partitions.
 #[must_use]
 pub fn query_projection_partition_for_key(key: &[u8], partition_count: u32) -> u32 {
@@ -526,7 +496,6 @@ pub fn query_projection_partition_for_key(key: &[u8], partition_count: u32) -> u
     let lane = u32::from_le_bytes(digest.as_bytes()[0..4].try_into().expect("four bytes"));
     lane % partition_count
 }
-
 /// Deterministically map a canonical account key into the default projection partition set.
 #[must_use]
 pub fn query_projection_default_partition_for_account(account_key: &str) -> u32 {
@@ -535,26 +504,21 @@ pub fn query_projection_default_partition_for_account(account_key: &str) -> u32 
         QUERY_PROJECTION_DEFAULT_PARTITION_COUNT,
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::query::projection_shard::QueryProjectionShardArchive;
     use iroha_crypto::Hash;
     use norito::{decode_from_bytes, to_bytes};
-
     fn sample_hash(byte: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::new([byte; Hash::LENGTH]))
     }
-
     fn sample_digest(byte: u8) -> BlobDigest {
         BlobDigest::new([byte; 32])
     }
-
     fn sample_ticket(byte: u8) -> StorageTicketId {
         StorageTicketId::new([byte; 32])
     }
-
     fn sample_upload(
         status: QueryIndexStatus,
         resource: QueryProjectionResourceKind,
@@ -575,18 +539,15 @@ mod tests {
             sample_ticket(0x44),
         )
     }
-
     #[test]
     fn partition_helper_is_stable_and_bounded() {
         let first = query_projection_default_partition_for_account("alice@hbl.paynet");
         let second = query_projection_default_partition_for_account("alice@hbl.paynet");
         let other = query_projection_default_partition_for_account("bob@ubl.paynet");
-
         assert_eq!(first, second, "partition mapping must be stable");
         assert!(first < QUERY_PROJECTION_DEFAULT_PARTITION_COUNT);
         assert!(other < QUERY_PROJECTION_DEFAULT_PARTITION_COUNT);
     }
-
     #[test]
     fn checkpoint_builds_from_query_index_status() {
         let status = QueryIndexStatus {
@@ -605,7 +566,6 @@ mod tests {
                 blob_hash: sample_digest(0x33),
             }],
         );
-
         assert_eq!(checkpoint.indexed_height, 9);
         assert_eq!(checkpoint.indexed_block_hash, status.indexed_block_hash);
         assert_eq!(checkpoint.emitted_at_unix, 1_714_000_321);
@@ -613,7 +573,6 @@ mod tests {
         assert_eq!(checkpoint.version, QUERY_PROJECTION_CHECKPOINT_VERSION);
         assert_eq!(checkpoint.schema_version, QUERY_PROJECTION_SCHEMA_VERSION);
     }
-
     #[test]
     fn checkpoint_defaults_match_reserved_da_contract() {
         let checkpoint = QueryProjectionCheckpoint::default();
@@ -627,7 +586,6 @@ mod tests {
         assert_eq!(checkpoint.schema_version, QUERY_PROJECTION_SCHEMA_VERSION);
         assert!(checkpoint.shards.is_empty());
     }
-
     #[test]
     fn checkpoint_round_trips_through_norito() {
         let checkpoint = QueryProjectionCheckpoint {
@@ -644,13 +602,11 @@ mod tests {
             }],
             ..QueryProjectionCheckpoint::default()
         };
-
         let bytes = to_bytes(&checkpoint).expect("encode checkpoint");
         let decoded: QueryProjectionCheckpoint =
             decode_from_bytes(&bytes).expect("decode checkpoint");
         assert_eq!(decoded, checkpoint);
     }
-
     #[test]
     fn checkpoint_publish_plan_builds_checkpoint_from_uploaded_archives() {
         let status = QueryIndexStatus {
@@ -671,7 +627,6 @@ mod tests {
             ],
         )
         .expect("build publish plan");
-
         assert_eq!(plan.checkpoint().indexed_height, 77);
         assert_eq!(
             plan.checkpoint().indexed_block_hash,
@@ -684,7 +639,6 @@ mod tests {
             Some("pkr#paynet")
         );
     }
-
     #[test]
     fn checkpoint_publish_plan_rejects_duplicate_shards() {
         let status = QueryIndexStatus {
@@ -700,7 +654,6 @@ mod tests {
             ],
         )
         .expect_err("duplicate shard must fail");
-
         assert!(matches!(
             err,
             QueryProjectionCheckpointPlanError::DuplicateShard {
@@ -710,7 +663,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn checkpoint_shard_budget_rejects_first_overflow_without_allocating_it() {
         assert!(matches!(
@@ -724,7 +676,6 @@ mod tests {
             Err(QueryProjectionCheckpointPlanError::TooManyShards { maximum })
                 if maximum == QUERY_PROJECTION_CHECKPOINT_MAX_SHARDS
         ));
-
         let oversized = "x".repeat(QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES + 1);
         assert!(matches!(
             admit_checkpoint_shard_reference(
@@ -737,7 +688,6 @@ mod tests {
             Err(QueryProjectionCheckpointPlanError::AssetDefinitionIdTooLong { found, maximum, .. })
                 if found == maximum + 1
         ));
-
         assert!(matches!(
             admit_checkpoint_shard_reference(
                 0,
@@ -752,7 +702,6 @@ mod tests {
             }) if found == maximum + 1
         ));
     }
-
     #[test]
     fn checkpoint_publish_plan_rejects_mismatched_index_snapshot() {
         let status = QueryIndexStatus {
@@ -774,7 +723,6 @@ mod tests {
             )],
         )
         .expect_err("mismatched snapshot must fail");
-
         assert!(matches!(
             err,
             QueryProjectionCheckpointPlanError::IndexedHeightMismatch {
@@ -786,7 +734,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn checkpoint_publish_plan_rejects_tampered_payload_hash() {
         let status = QueryIndexStatus {
@@ -795,14 +742,12 @@ mod tests {
         };
         let mut upload = sample_upload(status, QueryProjectionResourceKind::Accounts, 7, None);
         upload.archive.payload_hash = sample_digest(0x99);
-
         let err = QueryProjectionCheckpointPublishPlan::from_uploaded_archives(
             status,
             1_714_000_444,
             vec![upload],
         )
         .expect_err("tampered payload hash must fail");
-
         assert!(matches!(
             err,
             QueryProjectionCheckpointPlanError::PayloadHashMismatch {

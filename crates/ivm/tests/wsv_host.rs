@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::str::FromStr;
-
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::nexus::DataSpaceId;
 use iroha_primitives::json::Json;
@@ -12,10 +11,8 @@ use ivm::{
     },
     syscalls,
 };
-
 mod common;
 use common::assemble_syscalls;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -26,7 +23,6 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn unwrap_some_word(vm: &IVM) -> u64 {
     let layout = ivm::sum::SumLayoutV1::option(1).expect("Option layout");
     let (is_some, words) =
@@ -35,20 +31,16 @@ fn unwrap_some_word(vm: &IVM) -> u64 {
     assert_eq!(words.len(), 1);
     words[0]
 }
-
 fn make_quantity_tlv(amount: impl Into<Quantity>) -> Vec<u8> {
     ivm::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
 }
-
 fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {
     let buf = norito::to_bytes(&dataspace).expect("encode DataSpaceId into Norito");
     make_tlv(PointerType::DataSpaceId as u16, &buf)
 }
-
 fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
     AccountId::new(public_key)
 }
-
 #[test]
 fn test_balance_syscall_permission() {
     let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
@@ -65,7 +57,6 @@ fn test_balance_syscall_permission() {
             iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
-
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),
         Quantity::from(50_u64),
@@ -94,7 +85,6 @@ fn test_balance_syscall_permission() {
     vm.load_program(&prog).unwrap();
     let result = vm.run();
     assert!(matches!(result, Err(VMError::PermissionDenied)));
-
     // Grant permission and retry using a fresh WSV instance
     let mut wsv2 = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),
@@ -117,7 +107,6 @@ fn test_balance_syscall_permission() {
         .into_quantity();
     assert_eq!(value, Quantity::from(50_u64));
 }
-
 #[test]
 fn test_transfer_syscall_permission() {
     let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
@@ -134,7 +123,6 @@ fn test_transfer_syscall_permission() {
             iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
-
     let wsv = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), Quantity::from(50_u64)),
         ((bob.clone(), asset.clone()), Quantity::zero()),
@@ -144,7 +132,6 @@ fn test_transfer_syscall_permission() {
     acc_map.insert(2, bob.clone());
     let mut asset_map = HashMap::new();
     asset_map.insert(1, asset.clone());
-
     let host = WsvHost::new_with_subject_map(wsv, bob.clone(), acc_map.clone(), asset_map.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -163,7 +150,6 @@ fn test_transfer_syscall_permission() {
     vm.load_program(&prog).unwrap();
     let result = vm.run();
     assert!(matches!(result, Err(VMError::PermissionDenied)));
-
     let mut wsv2 = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), Quantity::from(50_u64)),
         ((bob.clone(), asset.clone()), Quantity::zero()),
@@ -174,7 +160,6 @@ fn test_transfer_syscall_permission() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer syscall failed");
 }
-
 #[test]
 fn test_mint_syscall_permission() {
     let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
@@ -191,14 +176,12 @@ fn test_mint_syscall_permission() {
             iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
-
     let wsv =
         MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Quantity::zero())]);
     let mut acc_map = HashMap::new();
     acc_map.insert(1, bob.clone());
     let mut asset_map = HashMap::new();
     asset_map.insert(1, asset.clone());
-
     let host = WsvHost::new_with_subject_map(wsv, bob.clone(), acc_map.clone(), asset_map.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -211,7 +194,6 @@ fn test_mint_syscall_permission() {
     vm.load_program(&prog).unwrap();
     let result = vm.run();
     assert!(matches!(result, Err(VMError::PermissionDenied)));
-
     let mut wsv2 =
         MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Quantity::zero())]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));
@@ -220,7 +202,6 @@ fn test_mint_syscall_permission() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("mint syscall failed");
 }
-
 #[test]
 fn test_json_get_quantity_reads_canonical_decimal_strings() {
     let domain: DomainId =
@@ -237,7 +218,6 @@ fn test_json_get_quantity_reads_canonical_decimal_strings() {
     );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     let json = Json::from_str_norito(r#"{"amount":"0.00001"}"#).expect("json");
     let json_payload = norito::to_bytes(&json).expect("encode json");
     let key_payload =
@@ -248,13 +228,11 @@ fn test_json_get_quantity_reads_canonical_decimal_strings() {
     let key_ptr = vm
         .alloc_input_tlv(&make_tlv(PointerType::Name as u16, &key_payload))
         .expect("alloc key");
-
     vm.set_register(10, json_ptr);
     vm.set_register(11, key_ptr);
     let prog = assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_QUANTITY]);
     vm.load_program(&prog).unwrap();
     vm.run().expect("json_get_quantity syscall failed");
-
     let tlv = vm
         .memory
         .validate_tlv(unwrap_some_word(&vm))

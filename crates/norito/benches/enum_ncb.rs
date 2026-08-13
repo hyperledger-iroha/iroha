@@ -1,12 +1,10 @@
 //! Enum-heavy dataset benches: AoS vs Norito NCB enum layout, plus projections.
-
 #[cfg(feature = "bench-internal")]
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 #[cfg(feature = "bench-internal")]
 use norito::codec::{Decode as _, Encode as _};
 #[cfg(feature = "bench-internal")]
 use norito::columnar as ncb;
-
 #[cfg(feature = "bench-internal")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -16,7 +14,6 @@ enum BenchEnum {
     Name(String),
     Code(u32),
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -27,7 +24,6 @@ struct BenchRow {
     payload: BenchEnum,
     flag: bool,
 }
-
 #[cfg(feature = "bench-internal")]
 fn make_data(n: usize) -> Vec<BenchRow> {
     let mut out = Vec::with_capacity(n);
@@ -52,7 +48,6 @@ fn make_data(n: usize) -> Vec<BenchRow> {
     }
     out
 }
-
 #[cfg(feature = "bench-internal")]
 fn bench_enum_encode(c: &mut Criterion) {
     let mut group = c.benchmark_group("enum_encode");
@@ -66,7 +61,6 @@ fn bench_enum_encode(c: &mut Criterion) {
                 BenchEnum::Code(v) => (r.id, ncb::EnumBorrow::Code(*v), r.flag),
             })
             .collect();
-
         group.bench_with_input(BenchmarkId::new("AoS_Norito", n), &n, |b, _| {
             b.iter(|| std::hint::black_box(aos.encode()))
         });
@@ -106,7 +100,6 @@ fn bench_enum_encode(c: &mut Criterion) {
     }
     group.finish();
 }
-
 #[cfg(feature = "bench-internal")]
 fn bench_enum_decode(c: &mut Criterion) {
     let mut group = c.benchmark_group("enum_decode");
@@ -125,7 +118,6 @@ fn bench_enum_decode(c: &mut Criterion) {
         let ncb_code_delta_bytes = ncb::encode_ncb_u64_enum_bool(&borrowed, false, false, true);
         let ncb_dict_bytes = ncb::encode_ncb_u64_enum_bool(&borrowed, false, true, false);
         let ncb_dict_code_delta_bytes = ncb::encode_ncb_u64_enum_bool(&borrowed, false, true, true);
-
         group.bench_with_input(BenchmarkId::new("AoS_decode_materialize", n), &n, |b, _| {
             b.iter(|| {
                 let mut cur = std::io::Cursor::new(&aos_bytes);
@@ -133,7 +125,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 std::hint::black_box(decoded.len())
             })
         });
-
         group.bench_with_input(BenchmarkId::new("NCB_enum_view_iter", n), &n, |b, _| {
             b.iter(|| {
                 let view = ncb::view_ncb_u64_enum_bool(&ncb_bytes).unwrap();
@@ -148,7 +139,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 std::hint::black_box(acc)
             })
         });
-
         group.bench_with_input(
             BenchmarkId::new("NCB_enum_delta_view_iter", n),
             &n,
@@ -166,7 +156,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("NCB_enum_codes_delta_view_iter", n),
             &n,
@@ -183,7 +172,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 })
             },
         );
-
         // Projection-only scans: tags and ids
         group.bench_with_input(BenchmarkId::new("NCB_project_tags_ids", n), &n, |b, _| {
             b.iter(|| {
@@ -197,7 +185,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 std::hint::black_box(tags.len() ^ (ids_sum as usize))
             })
         });
-
         // Column-only scans: skip irrelevant variants entirely
         group.bench_with_input(BenchmarkId::new("NCB_names_column_only", n), &n, |b, _| {
             b.iter(|| {
@@ -219,7 +206,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 std::hint::black_box(sum)
             })
         });
-
         group.bench_with_input(
             BenchmarkId::new("NCB_names_column_only_dict", n),
             &n,
@@ -234,7 +220,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("NCB_enum_dict_codes_delta_view_iter", n),
             &n,
@@ -251,7 +236,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("NCB_codes_column_only_dict_codes_delta", n),
             &n,
@@ -266,7 +250,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 })
             },
         );
-
         // Dense iterators over subcolumns
         group.bench_with_input(BenchmarkId::new("NCB_iter_names_dense", n), &n, |b, _| {
             b.iter(|| {
@@ -278,7 +261,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 std::hint::black_box(acc)
             })
         });
-
         group.bench_with_input(BenchmarkId::new("NCB_iter_codes_dense", n), &n, |b, _| {
             b.iter(|| {
                 let view = ncb::view_ncb_u64_enum_bool(&ncb_bytes).unwrap();
@@ -289,7 +271,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 std::hint::black_box(acc)
             })
         });
-
         group.bench_with_input(
             BenchmarkId::new("NCB_iter_names_dense_dict", n),
             &n,
@@ -304,7 +285,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("NCB_iter_codes_dense_dict_codes_delta", n),
             &n,
@@ -319,7 +299,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 })
             },
         );
-
         // Filtered scans on flag: names and ids using fast vs row-wise
         group.bench_with_input(
             BenchmarkId::new("NCB_enum_names_flagtrue_fast", n),
@@ -386,13 +365,10 @@ fn bench_enum_decode(c: &mut Criterion) {
     }
     group.finish();
 }
-
 #[cfg(feature = "bench-internal")]
 criterion_group!(benches, bench_enum_encode, bench_enum_decode);
-
 #[cfg(feature = "bench-internal")]
 criterion_main!(benches);
-
 #[cfg(not(feature = "bench-internal"))]
 fn main() {
     eprintln!("Enable the `bench-internal` feature to run this benchmark.");

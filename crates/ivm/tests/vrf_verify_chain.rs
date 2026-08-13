@@ -1,10 +1,7 @@
 //! VRF exact-network binding and display-chain separation tests.
-
 #![cfg(feature = "ivm_vrf_tests")]
 use ivm::{self, IVM, IVMHost, Memory, PointerType};
-
 mod common;
-
 fn build_vrf_req(
     variant: u8,
     pk_len: usize,
@@ -30,7 +27,6 @@ fn build_vrf_req(
     tlv.extend_from_slice(&h);
     tlv
 }
-
 #[test]
 fn vrf_verify_network_mismatch_sets_err_network() {
     let expected_network_id = common::test_network_id(0x31);
@@ -54,7 +50,6 @@ fn vrf_verify_network_mismatch_sets_err_network() {
     assert_eq!(vm.register(10), 0);
     assert_eq!(vm.register(11), 8, "ERR_NETWORK");
 }
-
 #[test]
 fn display_chain_label_cannot_supply_vrf_network_context() {
     let claimed_network_id = common::test_network_id(0x31);

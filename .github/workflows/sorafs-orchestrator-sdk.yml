@@ -45,6 +45,7 @@ on:
       - "crates/sorafs_manifest/**"
       - "crates/sorafs_orchestrator/**"
       - "python/iroha_python/**"
+      - "python/iroha_torii_client/**"
       - "javascript/iroha_js/**"
       - "IrohaSwift/**"
       - "kotlin/**"
@@ -192,7 +193,17 @@ jobs:
       - name: Bind the canonical mobile Python
         shell: bash
         run: |
-          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          mobile_python="$(python3 -I -S -B -c '
+          import sys
+          sys.path.insert(0, "scripts")
+          from pathlib import Path
+          from sorafs_path_identity import resolve_path_identity
+          errors = []
+          identity = resolve_path_identity(Path(sys.executable), errors, label="mobile SDK Python")
+          if identity is None or errors:
+              raise SystemExit("mobile SDK Python path identity could not be resolved")
+          print(identity)
+          ')"
           [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
           echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9

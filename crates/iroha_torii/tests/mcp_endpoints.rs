@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for Torii MCP endpoints.
-
 use std::{collections::BTreeSet, net::SocketAddr, num::NonZeroU32, sync::Arc};
-
 use axum::{
     body::{Body, Bytes},
     http::{Request, StatusCode, header},
@@ -24,7 +22,6 @@ use iroha_data_model::{
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use norito::json::Value;
 use tower::ServiceExt as _;
-
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 const TOOL_LIST_PAGE_LIMIT: usize = 128;
 fn build_router(cfg: iroha_config::parameters::actual::Root) -> axum::Router {

@@ -1,7 +1,5 @@
 //! Validator-side enforcement for chain-level validation-fee policy.
-
 use core::fmt;
-
 use hex;
 use iroha_crypto::{Hash, blake2::Blake2b512};
 #[cfg(test)]
@@ -48,7 +46,6 @@ use ivm::state_value::{
 };
 use mv::storage::StorageReadOnly;
 use sha2::{Digest as _, Sha256};
-
 use crate::{
     smartcontracts::isi::triggers::{
         set::{ExecutableRef, SetReadOnly as _},
@@ -1664,7 +1661,6 @@ fn validate_parliament_authorization(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), ValidationFeeAdmissionError> {
     use iroha_data_model::governance::types::ParliamentBody;
-
     if let Some(reason) = authorization.invariant_error() {
         return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
             reason.to_owned(),
@@ -3493,7 +3489,6 @@ fn format_entry_index(entry_index: Option<usize>) -> String {
 #[cfg(test)]
 mod tests {
     use std::str::FromStr as _;
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId, NetworkId,
@@ -3552,9 +3547,7 @@ mod tests {
     };
     use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
     use iroha_primitives::json::Json;
-
     use super::*;
-
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 =
         iroha_data_model::validation_fee::VALIDATION_FEE_DS_SCALE;
     const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
@@ -3660,9 +3653,7 @@ mod tests {
         policy
     }
     fn test_parliament_bodies() -> iroha_data_model::governance::types::ParliamentBodies {
-        use iroha_data_model::governance::types::{
-            ParliamentBodies, ParliamentBody, ParliamentRoster,
-        };
+        use iroha_data_model::governance::types::{ParliamentBodies, ParliamentBody, ParliamentRoster};
         let member = account(250);
         let rosters = [
             ParliamentBody::RulesCommittee,
@@ -4047,7 +4038,6 @@ mod tests {
     }
     fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
         use iroha_data_model::prelude::{Account, AssetDefinition, Domain};
-
         let contract_domain =
             Domain::new(DomainId::try_new("contracts", "universal").expect("contract domain id"))
                 .build(deployer);
@@ -4083,9 +4073,7 @@ mod tests {
         deployer: &AccountId,
         deployer_key: &KeyPair,
     ) -> ValidationFeePolicyV1 {
-        use iroha_data_model::{
-            nexus::DataSpaceId, prelude::Account, smart_contract::ContractAddress,
-        };
+        use iroha_data_model::{nexus::DataSpaceId, prelude::Account, smart_contract::ContractAddress};
         let deployment_permission: iroha_data_model::permission::Permission =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
                 .into();
@@ -5060,7 +5048,6 @@ mod tests {
     #[test]
     fn active_policy_lookup_rejects_the_exact_expiry_height() {
         use iroha_data_model::block::BlockHeader;
-
         let deployer_key = key_pair(55);
         let deployer = AccountId::new(deployer_key.public_key().clone());
         let state = crate::state::State::new_with_chain_and_network_id_for_testing(

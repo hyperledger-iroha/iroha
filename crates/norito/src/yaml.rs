@@ -1,9 +1,6 @@
 use std::io::{self, Write};
-
 use crate::json::{self, JsonSerialize, Value};
-
 const INDENT: usize = 2;
-
 /// Errors that can occur during YAML serialization.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -12,7 +9,6 @@ pub enum Error {
     #[error("YAML JSON conversion error: {0}")]
     Json(#[from] crate::Error),
 }
-
 /// Serialize a value implementing [`JsonSerialize`] into YAML and write it to `writer`.
 pub fn to_writer<T, W>(writer: W, value: &T) -> Result<(), Error>
 where
@@ -22,7 +18,6 @@ where
     let json_value = json::to_value(value).map_err(|err| Error::Json(err.into()))?;
     to_writer_from_value(writer, &json_value)
 }
-
 /// Serialize a [`Value`] into YAML and write it to `writer`.
 pub fn to_writer_from_value<W>(mut writer: W, value: &Value) -> Result<(), Error>
 where
@@ -35,7 +30,6 @@ where
     }
     Ok(())
 }
-
 /// Serialize a value implementing [`JsonSerialize`] into a YAML string.
 pub fn to_string<T>(value: &T) -> Result<String, Error>
 where
@@ -44,7 +38,6 @@ where
     let json_value = json::to_value(value).map_err(|err| Error::Json(err.into()))?;
     to_string_from_value(&json_value)
 }
-
 /// Serialize a [`Value`] into a YAML string.
 pub fn to_string_from_value(value: &Value) -> Result<String, Error> {
     let mut buf = Vec::new();
@@ -53,7 +46,6 @@ pub fn to_string_from_value(value: &Value) -> Result<String, Error> {
     // JSON strings, which are guaranteed to be UTF-8.
     Ok(String::from_utf8(buf).expect("norito::yaml emitted invalid UTF-8"))
 }
-
 fn write_value<W: Write>(writer: &mut W, value: &Value, indent: usize) -> Result<(), Error> {
     match value {
         Value::Object(map) => write_object(writer, map, indent),
@@ -66,7 +58,6 @@ fn write_value<W: Write>(writer: &mut W, value: &Value, indent: usize) -> Result
         }
     }
 }
-
 fn write_object<W: Write>(writer: &mut W, map: &json::Map, indent: usize) -> Result<(), Error> {
     for (key, value) in map.iter() {
         write_indent(writer, indent)?;
@@ -99,14 +90,12 @@ fn write_object<W: Write>(writer: &mut W, map: &json::Map, indent: usize) -> Res
     }
     Ok(())
 }
-
 fn write_array<W: Write>(writer: &mut W, seq: &[Value], indent: usize) -> Result<(), Error> {
     if seq.is_empty() {
         write_indent(writer, indent)?;
         writer.write_all(b"[]\n")?;
         return Ok(());
     }
-
     for value in seq {
         write_indent(writer, indent)?;
         match value {
@@ -137,7 +126,6 @@ fn write_array<W: Write>(writer: &mut W, seq: &[Value], indent: usize) -> Result
     }
     Ok(())
 }
-
 fn write_scalar<W: Write>(writer: &mut W, value: &Value) -> Result<(), Error> {
     match value {
         Value::Null => writer.write_all(b"null")?,
@@ -159,7 +147,6 @@ fn write_scalar<W: Write>(writer: &mut W, value: &Value) -> Result<(), Error> {
     }
     Ok(())
 }
-
 fn write_inline_sequence<W: Write>(writer: &mut W, value: &Value) -> Result<(), Error> {
     if let Value::Array(seq) = value {
         let mut first = true;
@@ -173,7 +160,6 @@ fn write_inline_sequence<W: Write>(writer: &mut W, value: &Value) -> Result<(), 
     }
     Ok(())
 }
-
 fn write_inline_map<W: Write>(writer: &mut W, value: &Value) -> Result<(), Error> {
     if let Value::Object(map) = value {
         let mut first = true;
@@ -189,14 +175,12 @@ fn write_inline_map<W: Write>(writer: &mut W, value: &Value) -> Result<(), Error
     }
     Ok(())
 }
-
 fn write_block_string<W: Write>(writer: &mut W, input: &str, indent: usize) -> Result<(), Error> {
     let trimmed = input.trim_end_matches('\n');
     if trimmed.is_empty() {
         writer.write_all(b"\n")?;
         return Ok(());
     }
-
     for line in trimmed.split('\n') {
         write_indent(writer, indent)?;
         writer.write_all(line.as_bytes())?;
@@ -204,7 +188,6 @@ fn write_block_string<W: Write>(writer: &mut W, input: &str, indent: usize) -> R
     }
     Ok(())
 }
-
 fn write_string_scalar<W: Write>(writer: &mut W, input: &str) -> Result<(), Error> {
     if input.is_empty() {
         writer.write_all(b"''")?;
@@ -227,22 +210,18 @@ fn write_string_scalar<W: Write>(writer: &mut W, input: &str) -> Result<(), Erro
     writer.write_all(b"'")?;
     Ok(())
 }
-
 fn write_key<W: Write>(writer: &mut W, key: &str) -> Result<(), Error> {
     write_string_scalar(writer, key)
 }
-
 fn write_indent<W: Write>(writer: &mut W, depth: usize) -> Result<(), Error> {
     for _ in 0..depth {
         writer.write_all(b" ")?;
     }
     Ok(())
 }
-
 fn ends_with_newline(value: &Value) -> bool {
     matches!(value, Value::Object(_) | Value::Array(_))
 }
-
 fn is_plain_string(input: &str) -> bool {
     if input.is_empty() {
         return false;
@@ -265,7 +244,6 @@ fn is_plain_string(input: &str) -> bool {
         )
     })
 }
-
 fn number_to_string(number: &json::Number) -> String {
     match number {
         json::Number::I64(v) => v.to_string(),
@@ -280,11 +258,9 @@ fn number_to_string(number: &json::Number) -> String {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn nested_sequence_items_have_no_trailing_whitespace() {
         let value = crate::json!({
@@ -294,9 +270,7 @@ mod tests {
                 "scalar",
             ],
         });
-
         let rendered = to_string_from_value(&value).expect("serialize nested YAML sequence");
-
         assert_eq!(
             rendered,
             "items:\n  -\n    key: value\n  -\n    - nested\n  - scalar\n"

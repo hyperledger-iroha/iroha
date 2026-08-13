@@ -64,6 +64,7 @@ PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_timeout_cases.py",
     "sumeragi_v2_proof_ledger_chain_liveness_cases.py",
     "sumeragi_v2_proof_ledger_successor_production_cases.py",
+    "sumeragi_v2_proof_ledger_async_contract_tail_cases.py",
     "sumeragi_v2_proof_ledger_reply_writer_deadline_cases.py",
     "sumeragi_v2_proof_ledger_target_neutral_cases.py",
     "sumeragi_v2_proof_ledger_async_source_cases.py",
@@ -102,6 +103,15 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
             "sumeragi_v2_proof_ledger_async_fairness_cases.py",
         "test_exact_output_production_source_mutations_fail_closed":
             "sumeragi_v2_proof_ledger_exact_output_cases.py",
+        "complete_ledger": "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "write_tlaps_fixture_logs":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "build_test_evidence":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "complete_cross_tool_ledger":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
+        "build_cross_tool_fixture":
+            "sumeragi_v2_proof_ledger_release_inventory_cases.py",
     }
 
     def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
@@ -111,7 +121,10 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
             for node in tree.body:
                 if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
-                if not node.name.startswith("test_"):
+                if (
+                    not node.name.startswith("test_")
+                    and node.name not in expected_component_providers
+                ):
                     continue
                 providers.setdefault(node.name, []).append(path.name)
 
@@ -159,61 +172,61 @@ def checker_source_paths() -> tuple[Path, ...]:
 
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 30
+    assert len(filenames) == len(set(filenames)) == 31
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 
 def test_release_inventory_checker_has_one_component_owned_provider() -> None:
-    """Reject a monolithic shadow of the release-inventory component."""
+    """Reject monolithic shadows of component-owned checker providers."""
 
-    component_name = "sumeragi_v2_proof_ledger_release_inventory_contracts.py"
-    expected_provider_name = component_name
+    expected_providers = {
+        "_production_liveness_release_inventory_errors": (
+            "sumeragi_v2_proof_ledger_release_inventory_contracts.py"
+        ),
+        "_cross_tool_kernel_views": (
+            "sumeragi_v2_proof_ledger_cross_tool_contracts.py"
+        ),
+    }
 
     def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
-        providers = [
-            (path.name, node.lineno)
-            for path, source in sources
-            for node in ast.parse(source, filename=str(path)).body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "_production_liveness_release_inventory_errors"
-        ]
-        if len(providers) == 1 and providers[0][0] == expected_provider_name:
-            return []
+        providers: dict[str, list[str]] = {}
+        for path, source in sources:
+            for node in ast.parse(source, filename=str(path)).body:
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if node.name in expected_providers:
+                    providers.setdefault(node.name, []).append(path.name)
         return [
-            "release-inventory checker provider must be unique and component-owned; "
-            f"found {providers!r}"
+            f"checker provider {name} must be uniquely component-owned; "
+            f"found {providers.get(name)!r}"
+            for name, expected_provider in expected_providers.items()
+            if providers.get(name) != [expected_provider]
         ]
 
     canonical_sources = tuple(
-        (path, path.read_text(encoding="utf-8")) for path in checker_source_paths()
+        (path, path.read_text(encoding="utf-8"))
+        for path in checker_source_paths()
     )
     assert provider_errors(canonical_sources) == []
 
-    shadow = (
-        "\n\ndef _production_liveness_release_inventory_errors(repo_root=ROOT_DIR):\n"
-        "    return []\n"
-    )
-    mutated_sources = tuple(
-        (path, source + shadow if path == SCRIPT else source)
-        for path, source in canonical_sources
-    )
-    errors = provider_errors(mutated_sources)
-    component_provider = next(
-        provider
-        for provider in [
-            (path.name, node.lineno)
+    shadows = {
+        "_production_liveness_release_inventory_errors": (
+            "\n\ndef _production_liveness_release_inventory_errors(repo_root=ROOT_DIR):\n"
+            "    return []\n"
+        ),
+        "_cross_tool_kernel_views": (
+            "\n\ndef _cross_tool_kernel_views(claim):\n"
+            "    return ()\n"
+        ),
+    }
+    for name, shadow in shadows.items():
+        mutated_sources = tuple(
+            (path, source + shadow if path == SCRIPT else source)
             for path, source in canonical_sources
-            for node in ast.parse(source, filename=str(path)).body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "_production_liveness_release_inventory_errors"
-        ]
-        if provider[0] == expected_provider_name
-    )
-    assert errors == [
-        "release-inventory checker provider must be unique and component-owned; "
-        f"found [({SCRIPT.name!r}, "
-        f"{len(canonical_sources[0][1].splitlines()) + 3}), {component_provider!r}]"
-    ]
+        )
+        errors = provider_errors(mutated_sources)
+        assert len(errors) == 1
+        assert name in errors[0] and SCRIPT.name in errors[0], errors
 
 
 def test_checker_remains_python39_compatible() -> None:
@@ -1470,402 +1483,6 @@ def test_completion_claim_rejects_unproved_debt_without_release_mode() -> None:
 
 
 
-def complete_ledger(module):
-    ledger = copy.deepcopy(module.load_ledger())
-    ledger["machine_checked_completion"] = True
-    for obligation in ledger["obligations"]:
-        expected_status = (
-            module.MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_BY_ID.get(
-                obligation["id"]
-            )
-        )
-        if expected_status is not None:
-            obligation["status"] = expected_status
-    return ledger
-
-
-def write_tlaps_fixture_logs(
-    module, formal_dir: Path, root_dir: Path, log_dir: Path
-):
-    """Write canonical positive module and exact-target logs for unit fixtures."""
-
-    log_dir.mkdir(parents=True, exist_ok=True)
-    (log_dir / "targets").mkdir(parents=True, exist_ok=True)
-    source_manifest_sha256 = module._formal_source_manifest(
-        formal_dir, root_dir
-    )["sha256"]
-    ledger_sha256 = module._proof_ledger_sha256(formal_dir)
-    for name in module.RELEASE_PROOF_MODULES:
-        (log_dir / f"{name}.preflight.log").write_text(
-            "frontend summary passed\n"
-            f"{module._tlapm_preflight_marker(name, source_manifest_sha256, ledger_sha256)}\n",
-            encoding="utf-8",
-        )
-        (log_dir / f"{name}.log").write_text(
-            "[INFO]: All 1 obligation proved.\n"
-            f"{module._tlapm_runner_marker(name, source_manifest_sha256, ledger_sha256)}\n",
-            encoding="utf-8",
-        )
-    for target in module._promotion_target_entries(formal_dir, root_dir):
-        (log_dir / "targets" / f"{target['obligation_id']}.log").write_text(
-            "[INFO]: All 1 obligation proved.\n"
-            + module._tlapm_target_marker(
-                target,
-                obligations_proved=1,
-                source_manifest_sha256=source_manifest_sha256,
-                ledger_sha256=ledger_sha256,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-    return source_manifest_sha256, ledger_sha256
-
-
-def build_test_evidence(module, tmp_path: Path):
-    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
-    shutil.copytree(module.FORMAL_DIR, formal_dir)
-    (formal_dir / "proof_coverage.json").write_text(
-        json.dumps(complete_ledger(module), indent=2) + "\n",
-        encoding="utf-8",
-    )
-    log_dir = tmp_path / module.FORMAL_EVIDENCE_LOGICAL_ROOT / "tlaps"
-    write_tlaps_fixture_logs(module, formal_dir, tmp_path, log_dir)
-    evidence = module.build_release_evidence(
-        tlapm_version=module.TLAPM_COMMIT[:7],
-        log_dir=log_dir,
-        formal_dir=formal_dir,
-        root_dir=tmp_path,
-    )
-    return formal_dir, log_dir, evidence
-
-
-def complete_cross_tool_ledger(module):
-    """Return a synthetic complete ledger using the reviewed cross-tool status."""
-
-    return complete_ledger(module)
-
-
-def build_cross_tool_fixture(module, tmp_path: Path):
-    """Build canonical synthetic component logs for checker-only negative tests."""
-
-    # Materialize compact exact non-vacuous synthetic contracts so the
-    # promotion validator and every mutation below run through the full
-    # signature/kernel/call-site path without duplicating production sources.
-    hardened_contracts = []
-    shared_kernel_source = "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
-    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS:
-        claims = []
-        for claim in contract.claims:
-            if claim.proof_mode == "total_checked_gate":
-                claims.append(claim)
-                continue
-            kernel = f"synthetic_{claim.verus_theorem}_kernel"
-            projection_builder = f"synthetic_{claim.verus_theorem}_projection"
-            projection_builder_source = (
-                f"pub closed spec fn {projection_builder}(projection: u64) "
-                "-> u64 { projection }"
-            )
-            projection_builder_sha256 = hashlib.sha256(
-                "\0".join(
-                    module.rust_code_tokens(projection_builder_source)
-                ).encode("utf-8")
-            ).hexdigest()
-            call_source = claim.production_sources[0]
-            call_item = f"enforce_{claim.verus_theorem}"
-            call_expression = f"assert!({kernel}(projection));"
-            synthetic_call_source = (
-                f"fn {call_item}(projection: u64) {{\n"
-                f"    {call_expression}\n"
-                "}\n"
-            )
-            extracted_call_items = module.rust_items(
-                synthetic_call_source, call_item
-            )
-            assert len(extracted_call_items) == 1
-            call_item_sha256 = module._rust_sealed_item_token_sha256(
-                extracted_call_items[0]
-            )
-            claims.append(
-                module.CrossToolClaimContract(
-                    constant=claim.constant,
-                    verus_theorem=claim.verus_theorem,
-                    verus_source=claim.verus_source,
-                    production_sources=claim.production_sources,
-                    verus_parameters="projection: u64",
-                    verus_requires="projection > 0",
-                    verus_ensures=(
-                        f"{kernel}({projection_builder}(projection)), "
-                        f"{projection_builder}(projection) >= 1"
-                    ),
-                    verified_kernel=kernel,
-                    verified_kernel_source=shared_kernel_source,
-                    verified_kernel_parameters="projection: u64",
-                    verified_kernel_body="projection > 0",
-                    theorem_kernel_projection=(
-                        f"{projection_builder}(projection)"
-                    ),
-                    theorem_projection_builder=projection_builder,
-                    theorem_projection_builder_parameters="projection: u64",
-                    theorem_projection_builder_return="u64",
-                    theorem_projection_builder_item_sha256=(
-                        projection_builder_sha256
-                    ),
-                    production_call_sites=(
-                        module.CrossToolProductionCallContract(
-                            source=call_source,
-                            item=call_item,
-                            projection="projection",
-                            required_expression=call_expression,
-                            item_token_sha256=call_item_sha256,
-                        ),
-                    ),
-                )
-            )
-        hardened_contracts.append(
-            module.CrossToolObligationContract(
-                obligation_id=contract.obligation_id,
-                module=contract.module,
-                ledger_symbol=contract.ledger_symbol,
-                tla_theorem=contract.tla_theorem,
-                tla_statement=contract.tla_statement,
-                claims=tuple(claims),
-                ledger_declaration_kind=contract.ledger_declaration_kind,
-                ledger_statement=contract.ledger_statement,
-                tla_proof=contract.tla_proof,
-            )
-        )
-    module.CROSS_TOOL_REFINEMENT_CONTRACTS = tuple(hardened_contracts)
-    module.CROSS_TOOL_REFINEMENT_BY_ID = {
-        contract.obligation_id: contract
-        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
-    }
-
-    ledger = complete_cross_tool_ledger(module)
-    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
-    shutil.copytree(
-        module.FORMAL_DIR,
-        formal_dir,
-        ignore=shutil.ignore_patterns(".tlacache"),
-    )
-
-    contracts_by_module = {}
-    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS:
-        contracts_by_module.setdefault(contract.module, []).append(contract)
-    for module_name, contracts in contracts_by_module.items():
-        path = formal_dir / f"{module_name}.tla"
-        source = path.read_text(encoding="utf-8")
-        original_source = source
-        inherited_source = "\n".join(
-            provider_source
-            for _, _, provider_source in module._cross_tool_tla_module_closure(
-                formal_dir, module_name
-            )
-        )
-        model_side_declarations = ""
-        for contract in contracts:
-            premise = contract.tla_statement.split(" => ", maxsplit=1)[0]
-            if module._expanded_tla_alias(
-                inherited_source, premise
-            ) == module._expanded_tla_alias(
-                inherited_source, contract.ledger_symbol
-            ):
-                synthetic = f"{contract.tla_theorem}SyntheticModelSide"
-                old = f"THEOREM {contract.ledger_symbol} ==\n  {premise}"
-                assert source.count(old) == 1
-                source = source.replace(
-                    old,
-                    f"THEOREM {contract.ledger_symbol} ==\n"
-                    f"  /\\ {premise}\n"
-                    f"  /\\ {synthetic}",
-                    1,
-                )
-                model_side_declarations += f"\n{synthetic} == FALSE\n"
-        end = source.rfind("====")
-        assert end >= 0
-        declarations = model_side_declarations + "".join(
-            "\nTHEOREM "
-            f"{contract.tla_theorem} ==\n"
-            f"  {contract.tla_statement}\n"
-            "PROOF\n"
-            "  OBVIOUS\n"
-            for contract in contracts
-            if module._top_level_theorem_body(
-                inherited_source, contract.tla_theorem
-            )
-            is None
-        )
-        if source != original_source or declarations:
-            path.write_text(
-                source[:end] + declarations + "\n====\n",
-                encoding="utf-8",
-            )
-
-    verus_contract = module._verus_evidence_contract_module()
-    production_sources = {
-        relative
-        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
-        for claim in contract.claims
-        for relative in claim.production_sources
-    }
-    copied_sources = (
-        set(verus_contract.REQUIRED_SOURCE_PATHS)
-        | production_sources
-        | {"crates/iroha_core/src/sumeragi/v2_core.rs"}
-    )
-    for relative in sorted(copied_sources):
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        source = ROOT_DIR / relative
-        if source.is_file():
-            shutil.copyfile(source, destination)
-        else:
-            # The fixture exercises the evidence schema independently of
-            # unrelated source-inventory migrations in the shared worktree.
-            destination.write_text("// synthetic fixture source\n", encoding="utf-8")
-
-    theorem_claims_by_source = {}
-    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS:
-        for claim in contract.claims:
-            theorem_claims_by_source.setdefault(claim.verus_source, []).append(
-                claim
-            )
-    for relative, claims in theorem_claims_by_source.items():
-        path = tmp_path / relative
-        legacy_claims = [
-            claim
-            for claim in claims
-            if claim.proof_mode == "legacy_requires_builder"
-        ]
-        if not legacy_claims:
-            continue
-        assert len(legacy_claims) == len(claims)
-        source = ""
-        synthetic_proofs = "\nverus! {\n"
-        for claim in legacy_claims:
-            expected_call = (
-                f"{claim.verified_kernel}({claim.theorem_kernel_projection})"
-            )
-            synthetic_proofs += (
-                f"pub closed spec fn {claim.theorem_projection_builder}("
-                f"{claim.theorem_projection_builder_parameters}) -> "
-                f"{claim.theorem_projection_builder_return} {{\n"
-                "    projection\n"
-                "}\n"
-                f"pub closed spec fn {claim.verified_kernel}("
-                f"{claim.verified_kernel_parameters}) -> bool {{\n"
-                f"    {claim.verified_kernel_body}\n"
-                "}\n"
-                f"pub proof fn {claim.verus_theorem}({claim.verus_parameters})\n"
-                f"    requires {claim.verus_requires},\n"
-                f"    ensures {claim.verus_ensures},\n"
-                "{\n"
-                f"    assert({expected_call});\n"
-                "}\n"
-            )
-        synthetic_proofs += "}\n"
-        path.write_text(source + synthetic_proofs, encoding="utf-8")
-
-    kernel_path = tmp_path / shared_kernel_source
-    kernel_source = kernel_path.read_text(encoding="utf-8")
-    kernel_source += "\n" + "".join(
-        f"pub(crate) const fn {claim.verified_kernel}"
-        f"({claim.verified_kernel_parameters}) -> bool {{\n"
-        f"    {claim.verified_kernel_body}\n"
-        "}\n"
-        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
-        for claim in contract.claims
-        if claim.proof_mode == "legacy_requires_builder"
-    )
-    kernel_path.write_text(kernel_source, encoding="utf-8")
-
-    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS:
-        for claim in contract.claims:
-            if claim.proof_mode != "legacy_requires_builder":
-                continue
-            for call_site in claim.production_call_sites:
-                path = tmp_path / call_site.source
-                source = path.read_text(encoding="utf-8")
-                source += (
-                    "\n"
-                    f"fn {call_site.item}(projection: u64) {{\n"
-                    f"    {call_site.required_expression}\n"
-                    "}\n"
-                )
-                path.write_text(source, encoding="utf-8")
-
-    # Cross-tool release evidence must describe the exact ledger that is part
-    # of the source-bound checkout, not a separately supplied archive mutant.
-    (formal_dir / "proof_coverage.json").write_text(
-        json.dumps(ledger, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-    log_dir = tmp_path / module.FORMAL_EVIDENCE_LOGICAL_ROOT / "tlaps"
-    write_tlaps_fixture_logs(module, formal_dir, tmp_path, log_dir)
-    tlaps_evidence = module.build_release_evidence(
-        tlapm_version=module.TLAPM_COMMIT[:7],
-        log_dir=log_dir,
-        formal_dir=formal_dir,
-        root_dir=tmp_path,
-    )
-
-    host = verus_contract._host_key()
-    if host not in verus_contract.EXPECTED_TOOL_SHA256:
-        pytest.skip(f"cross-tool evidence fixture has no pinned Verus host {host}")
-    pinned_tool = verus_contract.EXPECTED_TOOL_SHA256[host]
-    workspace_manifest_sha256 = "a" * 64
-    nonce = "b" * 64
-    verus_log = tmp_path / verus_contract.EXPECTED_LOG_PATH
-    verus_log.parent.mkdir(parents=True, exist_ok=True)
-    verus_log.write_text(
-        verus_contract.begin_marker(nonce, workspace_manifest_sha256)
-        + "\n"
-        + "verification results:: "
-        + f"{verus_contract.EXPECTED_DEPENDENCY_VERIFIED} verified, 0 errors\n"
-        + "verification results:: "
-        + f"{verus_contract.EXPECTED_ROOT_VERIFIED} verified, 0 errors\n"
-        + verus_contract.success_marker(nonce, workspace_manifest_sha256)
-        + "\n",
-        encoding="utf-8",
-    )
-    verus_evidence = {
-        "schema_version": verus_contract.SCHEMA_VERSION,
-        "verification_contract_sha256": verus_contract.verification_contract_sha256(),
-        "source_manifest_sha256": workspace_manifest_sha256,
-        "sources": verus_contract._source_entries(tmp_path),
-        "tool": {
-            "version": verus_contract.EXPECTED_VERUS_VERSION,
-            "platform": pinned_tool["platform"],
-            "verus_sha256": pinned_tool["verus"],
-            "cargo_verus_sha256": pinned_tool["cargo_verus"],
-        },
-        "invocation": list(verus_contract.EXPECTED_INVOCATION),
-        "log": verus_contract.EXPECTED_LOG_PATH,
-        "log_sha256": module._sha256_file(verus_log),
-        "nonce": nonce,
-        "results": {
-            "dependency_verified": verus_contract.EXPECTED_DEPENDENCY_VERIFIED,
-            "root_verified": verus_contract.EXPECTED_ROOT_VERIFIED,
-            "errors": 0,
-        },
-        "backend_verification": True,
-    }
-    cross_tool_evidence = module.build_cross_tool_evidence(
-        ledger,
-        tlaps_evidence=tlaps_evidence,
-        verus_evidence=verus_evidence,
-        formal_dir=formal_dir,
-        root_dir=tmp_path,
-        expected_verus_source_manifest_sha256=workspace_manifest_sha256,
-    )
-    return (
-        ledger,
-        formal_dir,
-        tlaps_evidence,
-        verus_evidence,
-        cross_tool_evidence,
-        workspace_manifest_sha256,
-    )
 
 
 def test_release_gate_requires_every_deductive_module_and_positive_counts(
@@ -15020,6 +14637,1152 @@ def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None
 def test_successor_production_source_is_bound() -> None:
     module = load_checker()
     assert module._successor_production_source_fidelity_errors(ROOT_DIR) == []
+
+
+
+
+SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn dispatch_recovered_lifecycle_sign_with_runner_debt(",
+            "services.matches_lifecycle_body_store(body_store_identity)",
+            "true",
+            "lifecycle-owned recovered Sign dispatch must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn dispatch_recovered_lifecycle_sign_with_runner_debt(",
+            "reservation.class() == CapacityClass::Consensus",
+            "true",
+            "lifecycle-owned recovered Sign dispatch must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "impl PreparedRecoveredLifecycleSignCompletionV1",
+            "result.is_exact()",
+            "true",
+            "adapter-private recovered Sign completion projection omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(",
+            "verify_individual_signature(",
+            "trust_individual_signature(",
+            "drop-inert recovered Sign adapter preview must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(",
+            "vote.phase == wire::GlobalPhase::Prepare",
+            "true",
+            "closed recovered Sign adapter successor shapes omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn settle_recovered_lifecycle_sign_broadcast(",
+            "output_guard.begin_fail_stop_operation()",
+            "output_guard.is_open()",
+            "restart-closed recovered Sign-to-Broadcast settlement must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn settle_recovered_lifecycle_sign_broadcast(",
+            "transition.persist_exact_successor().is_err()",
+            "transition.skip_durable_publication().is_err()",
+            "restart-closed recovered Sign-to-Broadcast settlement must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
+            "services.matches_lifecycle_body_store(body_store_identity)",
+            "true",
+            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
+            "settle_turn(lease, super::TurnOutcome::Blocked(wait))",
+            "settle_turn(lease, super::TurnOutcome::Terminal(TerminalOutcome::Completed(None)))",
+            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
+            "recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal",
+            "recovered_lifecycle_signed_broadcast_unchecked_adjacent_ordinal",
+            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
+            "for ready_ordinal in &exact_ready",
+            "for ready_ordinal in core::iter::once(&ordinal)",
+            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_signed_broadcast_refanout(",
+            "authority.consume_for_service(RecoveredLifecycleSignBroadcastOutputPermitV1::new())",
+            "authority.into_parts()",
+            "durable recovered signed-Broadcast service capture omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_cold_proposal_message(",
+            "pending.prepare_atomic_fanout_batch(fanouts)",
+            "Ok(None)",
+            "durable recovered signed-Broadcast service capture omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
+            "fn recover_durable_signed_broadcast(",
+            "verified.verify_consensus_message(message)",
+            "Ok(())",
+            "cold recovered signed-Broadcast WAL and roster join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn advance_recovered_lifecycle_signed_broadcast(",
+            "let [reducer::Effect::Broadcast(message)] = core_effects.as_slice()",
+            "let [message, ..] = core_effects.as_slice()",
+            "cold recovered signed-Broadcast reducer fast-forward omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
+            "fn assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup(",
+            "RecoveredWalStartupProjectionV1::PhaseBroadcast(projection, broadcast)",
+            "RecoveredWalStartupProjectionV1::PhaseVote(projection)",
+            "cold recovered phase-Broadcast storage assembly omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn authenticate_recovered_phase_signed_broadcast_and_sign(",
+            "combined.broadcast_exactly_matches(&broadcast)",
+            "true",
+            "cold recovered phase Broadcast-and-Sign ledger join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+            "fn prepare_cold_adapter_startup(",
+            "authenticate_recovered_lifecycle_next_vote_body(&mut preview)",
+            "authenticate_recovered_lifecycle_next_vote_body_unchecked(&mut preview)",
+            "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+            "fn install_recovered_broadcast_and_next_vote(",
+            "paired_next_sign: Some((next_sign_address, next_sign_digest))",
+            "paired_next_sign: None",
+            "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
+            "fn assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_durable_fetch_startup(",
+            "RecoveredWalStartupProjectionV1::PhaseBroadcastAndNextSign(",
+            "RecoveredWalStartupProjectionV1::PhaseBroadcast(",
+            "cold recovered signed-Broadcast storage census omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn install_recovered_sign(",
+            "prepare_cold_adapter_startup(&verified, adapter_startup, body_store)",
+            "prepare_cold_adapter_startup_unchecked(&verified, adapter_startup, body_store)",
+            "cold recovered phase owner handoff omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(",
+            ".prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)",
+            ".prepare_recovered_lifecycle_sign_completion(completion)",
+            "single-preview recovered next-Vote body service join must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn production_recovered_proposal_sign_joins_exact_next_vote_body_store()",
+            "fn production_recovered_proposal_sign_joins_exact_next_vote_body_store()",
+            "fn production_recovered_proposal_sign_skips_next_vote_body_store()",
+            "recovered Sign adapter preview behavior regression omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn project_proposal_exact_output_authority(",
+            "!matches!(",
+            "matches!(",
+            "affine recovered Proposal exact-output projection must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_proposal_exact_output(",
+            "if self.proposal_work_retired",
+            "if false",
+            "recovered Proposal output must remain terminal after Decision",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_proposal_exact_output(",
+            "identity.same_instance(&body_store_identity)",
+            "true",
+            "recovered Proposal exact-output capture must retain its body-store owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_proposal_exact_output(",
+            "Arc::ptr_eq(&self.output_guard, &authority_output_guard)",
+            "true",
+            "recovered Proposal exact-output capture must retain its output guard",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_proposal_exact_output(",
+            "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(\n                retry_authority,\n            )",
+            "RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(unreachable!())",
+            "recovered Proposal capacity retry must remain source-token guarded",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn prepare_atomic_fanout_batch(",
+            "if !self.ownership_capacity_available(&additions)?",
+            "if false",
+            "atomic Proposal fanout preflight must preserve aggregate capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn prepare_atomic_fanout_batch(",
+            "aggregate.checked_add(count)",
+            "aggregate.saturating_add(count)",
+            "atomic Proposal fanout preflight must preserve aggregate capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capture_recovered_lifecycle_proposal_exact_output(",
+            "proposal\n            .validate(&self.context)",
+            "Ok::<(), String>(())\n            .map_err(|error| error.to_string())",
+            "retry-safe recovered Proposal exact-output capture omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn broadcast_consensus(",
+            "self.enqueue_atomic_fanout_batch_while_guarded(",
+            "self.enqueue_exact_fanout_while_guarded(",
+            "live Proposal output must not split control from chunk ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound()",
+            "fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound()",
+            "fn recovered_proposal_exact_output_allows_partial_control()",
+            "atomic Proposal output behavior regression omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit()",
+            "fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit()",
+            "fn atomic_fanout_batch_allows_one_child_prefix()",
+            "atomic Proposal aggregate-capacity regression omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "fn authenticate_recovered_lifecycle_next_vote_body_catalogs(",
+            "durable_bodies.get(&key) != Some(durable)",
+            "false",
+            "exact recovered next-Vote body catalog join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn consume_for_adapter(",
+            "body_store_identity.same_instance(expected_body_store_identity)",
+            "true",
+            "opaque recovered next-Vote body authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn project_broadcast_and_sign_authority(",
+            "self.adapter.authenticate_recovered_lifecycle_next_vote(",
+            "self.adapter.trust_recovered_lifecycle_next_vote(",
+            "affine recovered Broadcast-and-next-Sign adapter projection must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
+            "fn into_candidate_projection(",
+            "self.wal_identity.is_exact()",
+            "true",
+            "full executable recovered next-WAL-Vote candidate must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
+            "fn project_cold_adapter_replay_authority(",
+            "self.cold_adapter_authority_minted = true",
+            "self.cold_adapter_authority_minted = false",
+            "affine recovered Broadcast-and-next-Sign cold adapter projection must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
+            "fn owns_spliced_candidates(",
+            "candidates.get(&self.broadcast.candidate.key) == Some(&self.broadcast.candidate)",
+            "true",
+            "combined cold census must retain the exact Broadcast without claiming unrelated carriers",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
+            "fn project_cold_adapter_next_sign(",
+            "self.is_exact(verified)",
+            "true",
+            "sealed recovered next-WAL-Vote cold adapter projection must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn advance_recovered_lifecycle_signed_broadcast_and_sign(",
+            "verified.verify_consensus_message(message)",
+            "Ok::<(), AdapterError>(())",
+            "recovered Broadcast-and-next-Sign cold adapter replay must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1",
+            "wire::GlobalPhase::Commit => tag.view() >= next_vote.round.view",
+            "wire::GlobalPhase::Commit => tag.view() == next_vote.round.view",
+            "opaque recovered Broadcast-and-next-Sign cold adapter authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn advance_recovered_lifecycle_signed_broadcast_and_sign(",
+            "replayed_next_sign != next_sign",
+            "false",
+            "recovered Broadcast-and-next-Sign cold adapter replay must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn project_validated_recovered_lifecycle_signed_broadcast_and_sign_at(",
+            "let next_sign_ordinal = broadcast_ordinal.checked_add(1)?",
+            "let next_sign_ordinal = broadcast_ordinal.checked_add(2)?",
+            "frame-bound recovered Broadcast-and-next-Sign ledger classifier omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn recovered_lifecycle_signed_broadcast_and_sign_pairs(",
+            "&index,",
+            "&RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1::new(&self.records),",
+            "combined Broadcast-and-next-Sign enumeration must reuse one bounded frame index",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn exactly_matches_ledger(&self, ledger: &LifecycleLedgerV1) -> bool {",
+            "project_recovered_lifecycle_signed_broadcast_and_sign_at(self.broadcast_ordinal)",
+            "project_recovered_lifecycle_signed_broadcast_and_sign_at(0)",
+            "combined Broadcast-and-next-Sign reauthentication must retain the exact ordinal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn project_validated_recovered_lifecycle_signed_broadcast_and_sign_at(",
+            ".filter(|record| record.owner() == next_sign_owner)\n                .count()\n                != 1",
+            ".filter(|record| record.owner() == next_sign_owner)\n                .count()\n                != 0",
+            "frame-bound recovered Broadcast-and-next-Sign ledger classifier omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+            "fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor<",
+            "adapter.project_broadcast_and_sign_authority(body)",
+            "adapter.project_broadcast_and_sign_without_body()",
+            "opaque recovered Broadcast-and-next-Sign registry preparation must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+            "fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(",
+            ".checked_add(1)",
+            ".checked_add(0)",
+            "inert recovered Broadcast-and-next-Sign coordinator staging must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+            "impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {",
+            "ready_index.remove(&broadcast_ordinal)",
+            "ready_index.remove(&next_sign_ordinal)",
+            "durable recovered Proposal Broadcast-and-next-Sign publication must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+            "impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {",
+            "adapter.commit_after_durable_broadcast_and_sign()",
+            "drop(adapter)",
+            "durable recovered Proposal Broadcast-and-next-Sign publication must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+            "impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {",
+            "adapter.commit_after_durable_vote_broadcast_and_sign()",
+            "drop(adapter)",
+            "durable recovered Broadcast-and-next-Sign publication must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn commit_after_durable_broadcast_and_sign(self)",
+            "proposal_output_authority_minted: true",
+            "proposal_output_authority_minted: _",
+            "durable recovered Proposal adapter two-child commit must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
+            "transition.persist_exact_successor().is_err()",
+            "false",
+            "restart-closed recovered Proposal Broadcast-and-next-Sign settlement must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
+            "output.abort_before_publication()",
+            "drop(output)",
+            "typed recovered Proposal pre-fsync output release must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn settle_recovered_lifecycle_vote_broadcast_and_sign(",
+            "preview.is_vote_broadcast_and_sign_shape()",
+            "preview.is_vote_broadcast_and_sign()",
+            "restart-closed recovered Vote Broadcast-and-next-Sign settlement must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn settle_recovered_lifecycle_vote_broadcast_and_sign(",
+            "transition.persist_exact_successor().is_err()",
+            "false",
+            "restart-closed recovered Vote Broadcast-and-next-Sign settlement must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn dispatch_recovered_decision_fetch_with_runner_debt(",
+            "capture_recovered_decision_fetch_exact_output(&owner)",
+            "capture_recovered_decision_fetch_output_without_reservation(&owner)",
+            "lifecycle-owned recovered Decision Fetch dispatch must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+            "fn persist_recovered_decision_fetch_response_after_runner(",
+            "executor.prepare_recovered_decision_fetch_response_claim(&task)",
+            "executor.prepare_unowned_decision_fetch_response_claim(&task)",
+            "recovered Decision Fetch response persistence Phase A must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_request_registration(",
+            "self.validated_certified_request_presence().is_err()",
+            "false",
+            "dedicated recovered Decision Fetch request owner census omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "fn begin_fetch<S: V2EffectServices>(",
+            "owner.matches_body_coordinates(round, subject)",
+            "false",
+            "ordinary and recovered Decision Fetch coordinate fence omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+            "pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_body_persistence(",
+            "self.revalidate_recovered_decision_fetch_response_candidate(",
+            "self.trust_recovered_decision_fetch_response_candidate(",
+            "typed recovered Decision Fetch selector consumption must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn commit_with_queue(",
+            "owner.commit_exact_response_claim(response_hash)",
+            "true",
+            "recovered Decision Fetch response claim publication must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn take_io_completion(&mut self, runtime_capacity_available: bool)",
+            "owned.recovered_decision_fetch.is_some()",
+            "false",
+            "recovered Decision Fetch mixed completion head fence must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
+            "recovered_decision_fetch_body_completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,",
+            "recovered_decision_fetch_body_completion: (),",
+            "launched recovered Decision Fetch Drop order must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn settle_recovered_decision_fetch_store(",
+            "transition.persist_exact_successor().is_err()",
+            "false",
+            "restart-closed recovered Decision Fetch-to-Store settlement must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn settle_recovered_decision_fetch_store(",
+            "locked_dequeue.commit()",
+            "drop(locked_dequeue)",
+            "restart-closed recovered Decision Fetch-to-Store settlement must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn open_recovered_decision_store_startup(",
+            ".authenticate_recovered_decision_fetch_store(&projection, &store_projection)",
+            ".trust_recovered_decision_fetch_store(&projection, &store_projection)",
+            "recovered Decision Store cold restart and marker-prefix closure omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn advance_recovered_decision_fetch_store(",
+            ".project_store_adapter_authority(body)",
+            ".trust_store_adapter_authority(body)",
+            "recovered Decision Store cold adapter reconstruction omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs",
+            "pub(super) fn install_recovered_wal_decision_store<'registry>(",
+            "pub(super) fn install_recovered_wal_decision_store<'registry>(",
+            "pub(super) fn install_unchecked_recovered_wal_decision_store<'registry>(",
+            "dedicated recovered Decision Store registry install omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_transport.rs",
+            "pub(in crate::sumeragi) fn authenticate_response(",
+            "authenticate_certified_body_response_for_request(",
+            "authenticate_certified_body_response_without_request(",
+            "request-scoped certified response authentication omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn exactly_matches_successor_owner(",
+            ".validate_authenticated_cut(&owner.serve_payloads)",
+            ".validate_authenticated_cut_for_mutation(&owner.serve_payloads)",
+            "CompleteTip canonical predecessor store join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
+            "pub(super) fn into_serve_payloads(self)",
+            "pub(super) fn into_serve_payloads(self)",
+            "pub(super) fn into_unsealed_payloads(self)",
+            "CompleteTip bodyless completion promotion guard omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+            "pub(super) fn validate_authenticated_cut(",
+            "let observed = self.reload_payload_census_strict()?;",
+            "let observed = BTreeMap::new();",
+            "CompleteTip body-independent Completed metadata authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+            "fn reload_payload_census_strict(",
+            "fs::read_dir(&self.directory)",
+            "fs::read_dir(temporary_path_for_mutation)",
+            "CompleteTip Serve payload directory census must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+            "fn reload_payload_census_strict(",
+            "fs::symlink_metadata(&self.directory)",
+            "fs::metadata(&self.directory)",
+            "CompleteTip Serve payload directory census must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+            "fn reload_payload_census_strict(",
+            "self.load_path(&path, metadata.len())?",
+            "return Ok(payloads);",
+            "CompleteTip Serve payload directory census must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
+            "pub(crate) struct ProductionLifecycleOwnerV1",
+            "serve_payloads: crate::sumeragi::v2_certified_serve_payload_store::AuthenticatedCertifiedServePayloadRecoveryCut,",
+            "serve_payloads: (),",
+            "production lifecycle owner retained Serve census omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
+            "fn run_complete_tip_retirement_release_regressions()",
+            "ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner();",
+            "let _ = ();",
+            "production lifecycle owner retained Serve census omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn authorizes_successor_status(",
+            "self.complete_tip.successor_context_id() == successor.height_context_id",
+            "true",
+            "CompleteTip restart publication authority must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "pub(in crate::sumeragi) struct BoundRecoveredCompleteTipSuccessorOwnerV1 {",
+            "#[cfg(test)]\nimpl BoundRecoveredCompleteTipSuccessorOwnerV1 {",
+            "impl BoundRecoveredCompleteTipSuccessorOwnerV1 {\n"
+            "    pub(in crate::sumeragi) fn into_owner(self) -> ProductionLifecycleOwnerV1 { self.owner }\n"
+            "}\n\n"
+            "#[cfg(test)]\nimpl BoundRecoveredCompleteTipSuccessorOwnerV1 {",
+            "CompleteTip exact H+1 owner bind must use the opaque checked-transition gate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+            "pub(in crate::sumeragi) fn authorizes(\n        self,",
+            "self.kura_identity.matches(kura)",
+            "true",
+            "recovered lifecycle storage authority handoff omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn mint_from_recovered_height(",
+            "assert!(permit.authorizes(kura, verified, signature_policy, genesis_account));",
+            "assert!(true);",
+            "recovery-minted lifecycle storage authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) struct ProductionLifecycleLaunchInputsV1 {",
+            "authenticated_genesis: Option<AuthenticatedGenesisBodyV1>,",
+            "authenticated_genesis: Option<AuthenticatedGenesisBodyV1>,\n    genesis_account: AccountId,",
+            "move-only authenticated genesis launch input must use the opaque checked-transition gate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn launch(\n        mut self,",
+            "binding.matches_launch_identity(inputs.kura.as_ref(), &inputs.key_pair)",
+            "true",
+            "Kura-bound production lifecycle launch must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn launch_local_identity_matches(",
+            "local_peer.public_key() != key_pair.public_key()",
+            "false",
+            "local launch identity preflight omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn launch_local_identity_matches(",
+            "local_validator.is_none_or(|observed| roster_position == Some(observed))",
+            "local_validator.is_none_or(|_| true)",
+            "local launch identity preflight omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn mint_for_recovered_runner(local_signer: KeyPair) -> Self",
+            "fn mint_for_recovered_runner(local_signer: KeyPair) -> Self",
+            "pub(in crate::sumeragi) fn mint_for_recovered_runner(local_signer: KeyPair) -> Self",
+            "runner-sealed recovered lifecycle factory dependencies must use the opaque checked-transition gate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn bind_production_lifecycle_owner_factory_inputs_v1(",
+            "let local_signer = permit.into_local_signer();",
+            "let local_signer = KeyPair::random();",
+            "recovery-minted lifecycle storage authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
+            "self.adapter.wal.matches_path(&storage.wal_path)",
+            "true",
+            "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
+            "Arc::ptr_eq(&adapter_owner, &self.factory_owner)",
+            "true",
+            "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
+            "body_store: super::v2_body_store::QuarantinedV2BodyStore",
+            "body_store: super::v2_body_store::V2BodyStore",
+            "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
+            ".into_revalidated_lifecycle_startup(",
+            ".into_revalidated_startup(",
+            "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+            "pub(in crate::sumeragi) fn into_quarantined_recovered_startup(",
+            "!self.validated.is_empty()",
+            "false",
+            "fresh quarantined recovered body-store cut omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+            "pub(in crate::sumeragi) fn into_revalidated_lifecycle_startup(",
+            "apply_service.recovered_finality_subject(context)",
+            "None::<VerifiedRecoveredFinalitySubject>.ok_or(())?",
+            "fixed quarantined recovered marker replay must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+            "pub(in crate::sumeragi) fn into_revalidated_lifecycle_startup(",
+            ".retain_recovered_markers_for_authority(validation_authority)",
+            ".retain_recovered_markers_for_mutation(validation_authority)",
+            "fixed quarantined recovered marker replay must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+            "pub(in crate::sumeragi) fn into_revalidated_lifecycle_startup(",
+            ".revalidate_recovered_markers(|body|",
+            ".retain_recovered_markers_for_mutation(|body|",
+            "fixed quarantined recovered marker replay must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn bind_production_lifecycle_owner_factory_inputs_v1(",
+            "state.matches_kura_instance(&kura)",
+            "true",
+            "recovery-minted lifecycle storage authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn launch(\n        mut self,",
+            "ProductionV2Services::start_with_apply_service(",
+            "ProductionV2Services::start(",
+            "Kura-bound production lifecycle launch must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn launch(\n        mut self,",
+            "ProductionLifecycleApplyServiceLaunchPermitV1 {",
+            "ForgedProductionLifecycleApplyServiceLaunchPermitV1 {",
+            "sealed replay-service permit mint must contain",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
+            "pub(in crate::sumeragi) fn with_recovered_kura_binding_and_apply_service(",
+            "self.apply_service = Some(apply_service);",
+            "drop(apply_service);",
+            "production lifecycle owner Kura seal omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(in crate::sumeragi) fn start_with_apply_service(",
+            "apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)",
+            "true",
+            "sealed replay-service worker transfer omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/state.rs",
+            "pub(crate) fn matches_kura_instance(",
+            "Arc::ptr_eq(&self.kura, kura)",
+            "true",
+            "fixed State/Kura identity oracle omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_apply.rs",
+            "pub(in crate::sumeragi) fn matches_lifecycle_launch(",
+            "Arc::ptr_eq(&self.state, state)",
+            "true",
+            "fixed recovered Apply-service identity oracle omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn prepare_leader_wire_launch(",
+            "adapter.wal.matches_path(expected_wal_path)",
+            "true",
+            "sealed adapter leader-wire launch projection omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/safety_wal.rs",
+            "fn publish_atomic(&self, frame: &[u8], maximum: u64, label: &str)",
+            "let durable = rustix::fs::statat(",
+            "let durable = promoted;",
+            "opened safety-WAL directory authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+            "pub(crate) fn open_with_safety_wal_authority(\n"
+            "        storage: SafetyWalServicedCandidateStoreAuthority,",
+            "storage: SafetyWalServicedCandidateStoreAuthority",
+            "storage: SafetyWalLeaderWireStoreAuthority",
+            "typed WAL-adjacent production stores omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn prepare_leader_wire_launch(",
+            "*leader_wire_launch_prepared = true;",
+            "let _ = leader_wire_launch_prepared;",
+            "sealed adapter leader-wire launch projection omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn open_gate(",
+            "body_store\n            .recovery_catalog()",
+            "BTreeMap::new()",
+            "sealed adapter leader-wire launch projection omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn launch(\n        mut self,",
+            "leader_wire_launch.restored_producer_ordinal_high_watermark()",
+            "None",
+            "Kura-bound production lifecycle launch must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn launch(\n        mut self,",
+            "leader_wire_restore.scheduler_ordinal_high_watermark()",
+            "0",
+            "Kura-bound production lifecycle launch must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn retire(&mut self) -> Result<(), String>",
+            "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
+            "self.gate = None;",
+            "sealed leader-wire launch binding omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_context.rs",
+            "pub fn freeze_staged_genesis_v2(",
+            "let authenticated_genesis = AuthenticatedGenesisBodyV1::authenticate(genesis)?;",
+            "let authenticated_genesis = forged_authenticated_genesis;",
+            "signed genesis bootstrap seal mint omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_context.rs",
+            "pub struct GenesisV2Bootstrap {",
+            "pub struct GenesisV2Bootstrap {",
+            "#[derive(Debug, Clone)]\npub struct GenesisV2Bootstrap {",
+            "move-only authenticated genesis bootstrap must use the opaque checked-transition gate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "pub struct GenesisWithPubKey {",
+            "pub struct GenesisWithPubKey {",
+            "#[derive(Debug, Clone)]\npub struct GenesisWithPubKey {",
+            "move-only genesis runner bundle must use the opaque checked-transition gate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+            "pub(crate) fn recover_active_height_with_plan(",
+            "if !authenticated_genesis.authorizes(&genesis_public_key) {",
+            "if false {",
+            "recovery-sealed fresh genesis handoff omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+            "pub(crate) fn recover_active_height_with_plan(",
+            "authenticated_genesis: Some(authenticated_genesis),",
+            "authenticated_genesis: None,",
+            "recovery-sealed fresh genesis handoff omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn launch(\n        mut self,",
+            "authenticated_genesis.signed_block()",
+            "forged_genesis_body_for_mutation",
+            "move-only authenticated genesis launch input omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn authorizes_retained_successor(",
+            "self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)",
+            "true",
+            "CompleteTip restart publication authority must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
+            "fn open_ingress_for_active_height(",
+            "output_guard.begin_fail_stop_operation()",
+            "output_guard.acquire()",
+            "open_ingress_for_active_height must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(",
+            "SumeragiV2Adapter::open_deferred_status(",
+            "run_inner live successor startup must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "V2EffectExecutor::open_with_body_store(",
+            "V2EffectExecutor::open(",
+            "run_inner live successor startup must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            ".serve_historical_body(kura, request, &sender, local_key)",
+            ".serve_historical_body(kura, context_store, request, &sender, local_key)",
+            "historical ingress routing omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            "executor.accept_certified_body_response_with_ingress_ownership(\n"
+            "                    response,\n"
+            "                    &sender,\n"
+            "                    &ingress_ownership,\n"
+            "                    services,\n"
+            "                )",
+            "executor.accept_certified_body_response_with_ingress_ownership(\n"
+            "                    response,\n"
+            "                    &sender,\n"
+            "                    ingress_ownership,\n"
+            "                    services,\n"
+            "                )",
+            "historical ingress routing omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
+            "fn initial_block_sync_deadline(",
+            "if eager_recovery {\n        height_started_at\n    } else {",
+            "if eager_recovery {\n"
+            "        deadline_after(height_started_at, round_timeout)\n"
+            "    } else {",
+            "recovery-scoped eager block-sync initial_block_sync_deadline "
+            "declaration and complete control flow",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "admitted_discovered_commit_qc = true;",
+            "admitted_discovered_commit_qc = false;",
+            "only authenticated discovered CommitQC admission/coalescing with "
+            "serialized reducer ownership may turn an outstanding request from "
+            "Some to None and retain eager block-sync",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "let (receipt, artifact, lane_work, mut finalized_services) = finality;",
+            "let (receipt, artifact, _lane_work, mut finalized_services) = finality;",
+            "successor startup must carry interrupted-tip or admitted discovered "
+            "CommitQC recovery and clear ordinary live finality",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
+            "const fn retain_eager_block_sync(",
+            "recovering_interrupted_tip || admitted_discovered_commit_qc",
+            "{ let _ = admitted_discovered_commit_qc; recovering_interrupted_tip }",
+            "recovery-scoped eager block-sync retain_eager_block_sync "
+            "declaration and complete control flow",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "fn publish_recovered_v2_successor_height_at(",
+            "set_v2_status_at(successor, now);",
+            "update_v2_successor_work_stage_at(finalized_height, SumeragiV2LocalWorkStage::Running, SumeragiV2LocalWorkStage::Complete, now)?; set_v2_status_at(successor, now);",
+            "may not fabricate physical predecessor completion",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "fn activate_v2_successor_height_at(",
+            "validate_v2_predecessor_status(\n"
+            "        &predecessor_status,\n"
+            "        finalized_height,\n"
+            "        SumeragiV2LocalWorkStage::Running,\n"
+            "    )?;",
+            "let _ = &predecessor_status;",
+            "activate_v2_successor_height_at omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "fn activate_v2_successor_height_at(",
+            "predecessor_status_height: predecessor_status.height,",
+            "predecessor_status_height: finalized_height,",
+            "activate_v2_successor_height_at omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "fn activate_v2_successor_height_at(",
+            "update_v2_successor_work_stage_at(\n"
+            "        finalized_height,\n"
+            "        SumeragiV2LocalWorkStage::Running,\n"
+            "        SumeragiV2LocalWorkStage::Complete,\n"
+            "        now,\n"
+            "    )?;",
+            "update_v2_successor_work_stage_at(finalized_height, SumeragiV2LocalWorkStage::Running, SumeragiV2LocalWorkStage::Running, now)?;",
+            "activate_v2_successor_height_at omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "fn activate_v2_successor_height_at(",
+            "let _authorized_trace = checked_trace.into_projection();",
+            "drop(checked_trace);",
+            "activate_v2_successor_height_at omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "pub(crate) fn begin_v2_successor_activation(",
+            "let _authorized_lifecycle = checked_lifecycle.into_projection();\n"
+            "    update_v2_successor_work_stage_at(\n"
+            "        height,\n"
+            "        SumeragiV2LocalWorkStage::Queued,\n"
+            "        SumeragiV2LocalWorkStage::Running,\n"
+            "        Instant::now(),\n"
+            "    )",
+            "let mutation_result = update_v2_successor_work_stage_at(\n"
+            "        height,\n"
+            "        SumeragiV2LocalWorkStage::Queued,\n"
+            "        SumeragiV2LocalWorkStage::Running,\n"
+            "        Instant::now(),\n"
+            "    );\n"
+            "    let _authorized_lifecycle = checked_lifecycle.into_projection();\n"
+            "    mutation_result",
+            "begin_v2_successor_activation must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "fn publish_recovered_v2_successor_height_at(",
+            "published_status_height_before: published.as_ref().map_or(0, |status| status.height),",
+            "published_status_height_before: 0,",
+            "publish_recovered_v2_successor_height_at omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "fn publish_recovered_v2_successor_height_at(",
+            "if let Some(published) = published {\n"
+            "        return Err(V2SuccessorActivationError::RecoveredStatusAlreadyPublished(\n"
+            "            published.height,\n"
+            "        ));\n"
+            "    }\n"
+            "    set_v2_status_at(successor, now);",
+            "set_v2_status_at(successor, now);",
+            "publish_recovered_v2_successor_height_at must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "pub(crate) fn begin_v2_successor_activation(",
+            "stage_before: successor_stage_projection(status.liveness.work.successor_height),",
+            "stage_before: SUCCESSOR_STAGE_QUEUED,",
+            "begin_v2_successor_activation omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "pub(crate) fn mark_v2_restart_required()",
+            '"Sumeragi v2 Running successor failure projection was rejected; preserving the unchecked status"\n'
+            "                );\n"
+            "                return;",
+            '"Sumeragi v2 Running successor failure projection was rejected; preserving the unchecked status"\n'
+            "                );",
+            "mark_v2_restart_required must contain 'return;' exactly 2 time(s)",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "pub(crate) fn mark_v2_restart_required()",
+            "check_production_successor_startup_lifecycle_transition(lifecycle)",
+            "Some(lifecycle)",
+            "mark_v2_restart_required omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn recovered(\n        authority: RecoveredSuccessorActivationAuthority,",
+            "let published_height = super::status::v2_status().map_or(0, |status| status.height);",
+            "let published_height = 0;",
+            "PendingSuccessorActivation omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn recovered(\n        authority: RecoveredSuccessorActivationAuthority,",
+            "let Some(checked_lifecycle) =\n"
+            "            check_production_successor_startup_lifecycle_transition(lifecycle)\n"
+            "        else {\n"
+            "            return Err(V2RunnerError::SuccessorRefinementRejected);\n"
+            "        };\n"
+            "        let _authorized_lifecycle = checked_lifecycle.into_projection();",
+            "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(\n"
+            "            lifecycle,\n"
+            "        ) {\n"
+            "            return Err(V2RunnerError::SuccessorRefinementRejected);\n"
+            "        }",
+            "must use the opaque checked-transition gate; found obsolete direct-kernel forms",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn bind(\n        self,",
+            "authority_predecessor: authority.predecessor().refinement_projection(),",
+            "authority_predecessor: self.predecessor.refinement_projection(),",
+            "PendingSuccessorConstruction omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+            "pub(crate) fn authenticate(\n        artifact: &wire::finality::V2FinalityArtifact,",
+            "|| receipt.certificate() != artifact.commit_qc.as_ref()",
+            "|| false",
+            "DurableV2PredecessorIdentity::authenticate omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+            "pub(crate) fn authenticate(\n        artifact: &wire::finality::V2FinalityArtifact,",
+            "if !production_durable_predecessor_identity_kernel(identity.refinement_projection()) {",
+            "if false {",
+            "DurableV2PredecessorIdentity::authenticate omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+            "fn new(record: &wire::SnapshotV2BootstrapRecord) -> Self",
+            "record_hash: HashOf::new(record),",
+            "record_hash: HashOf::new(&wire::SnapshotV2BootstrapRecord::default()),",
+            "SnapshotSuccessorActivationAuthority::new omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+            "pub(crate) fn recover_active_height_with_plan(",
+            "if record.context() != &bootstrap.context\n"
+            "            || record.proofs_of_possession() != bootstrap.validator_set_pops",
+            "if false",
+            "recover_active_height_with_plan snapshot authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+            "pub(crate) fn recover_active_height_with_plan(",
+            "v2_finality_artifact_with_receipt(durable_height)",
+            "v2_finality_artifact(durable_height)",
+            "recover_active_height_with_plan complete-tip authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "    fn register_parent_qc(",
+            "if !reference.same_commit_decision(frozen) {",
+            "if false {",
+            "WireRegistry::register_parent_qc omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "    fn justification_to_core(",
+            ".map(|certificate| self.register_parent_qc(certificate))",
+            ".map(|certificate| self.qc_reference_to_core(&certificate.as_ref()))",
+            "WireRegistry::justification_to_core omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn verify_proposal_justification_authority(",
+            "(Some(certificate), Some(parent_verification)) => verify_quorum_certificate(",
+            "(Some(_), Some(_)) => Ok(",
+            "verify_proposal_justification_authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
+            "fn build_historical_body_response(",
+            ".position(|entry| entry.validator == responder_peer)",
+            ".any(|entry| entry.validator == responder_peer)",
+            "build_historical_body_response must preserve exact production order",
+        ),
+        (
+            "scripts/run_sumeragi_v2_release_gates.sh",
+            "required_production_liveness_tests=(",
+            "sumeragi::v2_block_sync::tests::catch_up_is_strictly_sequential_across_contexts",
+            "sumeragi::v2_block_sync::tests::catch_up_is_not_release_bound",
+            "production refinement test must be pinned exactly once",
+        ),
+)
+
+SUCCESSOR_PRODUCTION_SOURCE_MAPPING_COMPANIONS = (
+    SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS[:30]
+)
+SUCCESSOR_PRODUCTION_SOURCE_MAPPING_PRIMARY = SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS[30:]
+assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
+    set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
+) == 153
 
 
 
@@ -28873,9 +29636,7 @@ def test_serviced_candidate_production_contract_is_complete(
     safety_path.write_text(canonical_safety, encoding="utf-8")
 
 
-@pytest.mark.parametrize(
-    ("relative", "old", "new", "expected_error"),
-    (
+SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS = (
         (
             Path("crates/iroha_core/src/sumeragi/safety_wal.rs"),
             "let linked = fs::symlink_metadata(self.expected_path.join(name))?;",
@@ -29237,7 +29998,20 @@ def test_serviced_candidate_production_contract_is_complete(
                 "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity"
             ),
         ),
-    ),
+)
+
+SERVICED_CANDIDATE_PRODUCTION_CONTRACT_COMPANIONS = (
+    SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS[:3]
+)
+SERVICED_CANDIDATE_PRODUCTION_CONTRACT_PRIMARY = SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS[3:]
+assert len(SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS) == len(
+    set(SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS)
+) == 31
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new", "expected_error"),
+    SERVICED_CANDIDATE_PRODUCTION_CONTRACT_PRIMARY,
 )
 def test_serviced_candidate_production_contract_rejects_mutations(
     tmp_path: Path,
@@ -29261,6 +30035,22 @@ def test_serviced_candidate_production_contract_rejects_mutations(
     )
 
     assert any(expected_error in error for error in errors), errors
+    mutation = (relative, old, new, expected_error)
+    if mutation == SERVICED_CANDIDATE_PRODUCTION_CONTRACT_PRIMARY[0]:
+        for index, companion in enumerate(
+            SERVICED_CANDIDATE_PRODUCTION_CONTRACT_COMPANIONS
+        ):
+            try:
+                test_serviced_candidate_production_contract_rejects_mutations(
+                    tmp_path / f"companion-{index:02d}", *companion
+                )
+            except Exception as error:
+                path, _old, _new, expected = companion
+                raise AssertionError(
+                    "serviced-candidate production mutation companion failed: "
+                    f"index={index}; path={path.as_posix()!r}; "
+                    f"expected_error={expected!r}"
+                ) from error
 
 
 @pytest.mark.parametrize(
@@ -36210,827 +37000,8 @@ BY PTL
     )
 
 
-def test_arbitrary_context_safety_property_bodies_are_pinned(tmp_path: Path) -> None:
-    module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    path = formal_dir / "SumeragiV2Proofs.tla"
-    source = r"""---- MODULE SumeragiV2Proofs ----
-DurableVoteUniquenessProperty(specification) ==
-  specification => [](/\ HonestPrepareUniqueness
-                       /\ HonestCommitUniqueness
-                       /\ HonestTimeoutUniqueness)
-LockMonotonicityProperty(specification) ==
-  specification => [][LockMonotonicityAction]_vars
-ExternalValidityProperty(specification) ==
-  specification => [](/\ \A qc \in prepareQCs: qc.subject \in ValidSubjects
-                       /\ \A qc \in commitQCs: qc.subject \in ValidSubjects
-                       /\ \A decision \in decisions:
-                            decision.qc.subject \in ValidSubjects)
-CertifiedBodyAvailabilityProperty(specification) ==
-  specification => [](/\ PrepareCertificateAvailability
-                       /\ CommitCertificateAvailability)
-CertificateUniquenessProperty(specification) ==
-  specification => []CertificateUniquenessInvariant
-PotentialCommitVotes(certificateContext, roundView, subject) ==
-  {vote \in commitIntents:
-    /\ vote.context = certificateContext
-    /\ vote.view = roundView
-    /\ vote.phase = "Commit"
-    /\ vote.subject = subject}
-PotentialCommitSigners(certificateContext, roundView, subject) ==
-  {vote.signer:
-    vote \in PotentialCommitVotes(
-      certificateContext, roundView, subject)}
-InstalledTcAuthorizedPotentialCommitIntersection(tc, protectedView, subject) ==
-  \E timeoutVote \in tc.votes,
-      commitVote \in PotentialCommitVotes(
-        tc.context, protectedView, subject):
-    /\ timeoutVote.signer \in Honest
-    /\ commitVote.signer = timeoutVote.signer
-    /\ timeoutVote.context = tc.context
-    /\ timeoutVote.view = tc.view
-    /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
-    /\ InstalledTcAuthorizesCommitVote(commitVote)
-TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc) ==
-  \A protectedView \in 0..tc.view, subject \in Subjects:
-    DualQuorum(tc.context.epoch,
-      PotentialCommitSigners(tc.context, protectedView, subject))
-      => \/ TCProtectsViewSubject(tc, protectedView, subject)
-         \/ InstalledTcAuthorizedPotentialCommitIntersection(
-              tc, protectedView, subject)
-TimeoutProtectionProperty(specification) ==
-  specification
-    => [](\A tc \in formedTCs:
-          TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc))
-AgreementProperty(specification) ==
-  specification => []DecisionAgreement
-NoConflictingCommitCertificatesProperty(specification) ==
-  specification => [](\A left, right \in commitQCs:
-    left.context = right.context => left.subject = right.subject)
-CrashRecoveryProperty(specification) ==
-  /\ (specification => []CrashRecoveryStateInvariant)
-  /\ (specification => [][CrashPreservesDurableProjection]_vars)
-  /\ (specification => [][RestartPreservesDurableProjection]_vars)
-  /\ (specification => [][PendingWritesAreUnacknowledged]_vars)
-  /\ (specification =>
-        [][TypeInvariant => StaleGenerationRejected]_vars)
-=============================================================================
-"""
-    path.write_text(source, encoding="utf-8")
 
-    assert module._safety_property_source_fidelity_errors(formal_dir) == []
 
-    path.write_text(
-        source.replace("/\\ HonestTimeoutUniqueness", "/\\ TRUE")
-        .replace(
-            "/\\ (specification => [][RestartPreservesDurableProjection]_vars)",
-            "/\\ TRUE",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._safety_property_source_fidelity_errors(formal_dir)
-    assert any("DurableVoteUniquenessProperty must equal only" in error for error in errors)
-    assert any("CrashRecoveryProperty must equal only" in error for error in errors)
-
-    path.write_text(
-        source.replace(
-            "/\\ InstalledTcAuthorizesCommitVote(commitVote)",
-            "/\\ TRUE",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._safety_property_source_fidelity_errors(formal_dir)
-    assert any(
-        "InstalledTcAuthorizedPotentialCommitIntersection must equal only" in error
-        for error in errors
-    )
-
-    path.write_text(
-        source.replace(
-            "\\/ InstalledTcAuthorizedPotentialCommitIntersection(\n"
-            "              tc, protectedView, subject)",
-            "\\/ TCProtectsViewSubject(tc, protectedView, subject)",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._safety_property_source_fidelity_errors(formal_dir)
-    assert any(
-        "TCProtectsOrInstalledTcAuthorizesPotentialCommit must equal only" in error
-        for error in errors
-    )
-
-
-@pytest.mark.parametrize(
-    ("relative", "old", "new", "expected"),
-    (
-        (
-            "SumeragiV2CrashRecovery.tla",
-            "    Restart(node) => generation'[node] > generation[node]\n",
-            "    Restart(node) => generation'[node] = generation[node]\n",
-            "StaleGenerationRejected must equal only",
-        ),
-        (
-            "SumeragiV2Proofs.tla",
-            "      => generation'[node] = generation[node] + 1\n",
-            "      => generation'[node] = generation[node]\n",
-            "RestartIncrementsSelectedGeneration must state only",
-        ),
-        (
-            "SumeragiV2Proofs.tla",
-            "BY Isa DEF TypeInvariant, Restart\n",
-            "BY SMT DEF TypeInvariant, Restart\n",
-            "RestartIncrementsSelectedGeneration must retain its exact reviewed",
-        ),
-    ),
-)
-def test_restart_generation_safety_contract_is_pinned(
-    tmp_path: Path,
-    relative: str,
-    old: str,
-    new: str,
-    expected: str,
-) -> None:
-    module = load_checker()
-    formal_dir = tmp_path / "formal"
-    shutil.copytree(module.FORMAL_DIR, formal_dir)
-    path = formal_dir / relative
-    source = path.read_text(encoding="utf-8")
-    assert old in source
-    path.write_text(source.replace(old, new, 1), encoding="utf-8")
-
-    errors = module._safety_property_source_fidelity_errors(formal_dir)
-
-    assert any(expected in error for error in errors), errors
-
-
-def test_liveness_property_contracts_are_semantically_pinned(tmp_path: Path) -> None:
-    module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    (formal_dir / "SumeragiV2AsyncLivenessProofs.tla").write_text(
-        r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
-THEOREM AsyncStepRefinementObligation ==
-  AsyncNext => [Next]_vars
-BY DEF AsyncNext
-THEOREM AsyncTypeInvariantObligation ==
-  \A initialContext: AsyncSpecAt(initialContext) => []AsyncTypeInvariant
-BY PTL
-THEOREM AsyncNextPreservesNormalProposalPrepareCandidate ==
-  \A candidate:
-    /\ NormalProposalPrepareCandidate(candidate)
-    /\ AsyncNext
-    => NormalProposalPrepareCandidate(candidate)'
-BY PTL
-=============================================================================
-""",
-        encoding="utf-8",
-    )
-    vocabulary = formal_dir / "SumeragiV2LivenessProofs.tla"
-    valid = r"""---- MODULE SumeragiV2LivenessProofs ----
-ResponsiveNodesDecide ==
-  \A node \in AsyncCurrentResponsiveVoters: NodeHasDecision(node)
-ResponsiveNodesApply ==
-  \A node \in AsyncCurrentResponsiveVoters: NodeHasApplication(node)
-ResponsiveHonestLeaderViewReached ==
-  \E leader \in (AsyncCurrentResponsiveVoters \cap Honest):
-    /\ ~NodeHasDecision(leader)
-    /\ Leader(context, nodeView[leader]) = leader
-TimeoutViewProgressProperty(specification) ==
-  specification => \A node \in AsyncCurrentResponsiveVoters,
-    roundView \in Views:
-      (gst /\ nodeView[node] = roundView /\ ~NodeHasDecision(node))
-        ~> (nodeView[node] > roundView \/ NodeHasDecision(node))
-RotatingLeaderProgressProperty(specification) ==
-  specification
-    => /\ (gst /\ ~ResponsiveNodesDecide)
-             ~> (ResponsiveHonestLeaderViewReached
-                   \/ ResponsiveNodesDecide)
-       /\ (gst /\ ResponsiveHonestLeaderViewReached
-                 /\ ~ResponsiveNodesDecide)
-             ~> ResponsiveNodesDecide
-ApplicationCompletionProgressProperty(specification) ==
-  specification
-    => \A node \in AsyncCurrentResponsiveVoters:
-         (gst /\ NodeHasDecision(node))
-           ~> NodeHasApplication(node)
-ApplicationLivenessProperty(specification) ==
-  specification
-    => /\ \A node \in AsyncCurrentResponsiveVoters:
-             (gst /\ NodeHasDecision(node))
-               ~> NodeHasApplication(node)
-       /\ (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply
-PostGstProgressActionEnabled ==
-  \E node \in AsyncCurrentResponsiveVoters:
-    PostGstCommitCertificateDiscovery(node)
-=============================================================================
-"""
-    vocabulary.write_text(valid, encoding="utf-8")
-    (formal_dir / "SumeragiV2Proofs.tla").write_text(
-        "---- MODULE SumeragiV2Proofs ----\n=============================================================================\n",
-        encoding="utf-8",
-    )
-
-    assert module._async_proof_architecture_errors(formal_dir) == []
-
-    vocabulary.write_text(
-        valid.replace(
-            "(gst /\\ NodeHasDecision(node))",
-            "(FALSE /\\ gst /\\ NodeHasDecision(node))",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any("ApplicationLivenessProperty must equal only" in error for error in errors)
-
-    vocabulary.write_text(
-        valid.replace(
-            "ApplicationCompletionProgressProperty(specification) ==\n"
-            "  specification\n"
-            "    => \\A node \\in AsyncCurrentResponsiveVoters:\n",
-            "ApplicationCompletionProgressProperty(specification) ==\n"
-            "  specification\n"
-            "    => \\A node \\in ValidatorIds:\n",
-            1,
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any(
-        "ApplicationCompletionProgressProperty must equal only" in error
-        for error in errors
-    )
-
-    vocabulary.write_text(
-        valid.replace(
-            "Leader(context, nodeView[leader]) = leader",
-            "Leader(context, nodeView[leader]) \\in AsyncCurrentResponsiveVoters",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any(
-        "ResponsiveHonestLeaderViewReached must equal only" in error
-        for error in errors
-    )
-
-    vocabulary.write_text(
-        valid.replace(
-            "(gst /\\ ResponsiveHonestLeaderViewReached\n"
-            "                 /\\ ~ResponsiveNodesDecide)",
-            "(gst /\\ ~ResponsiveNodesDecide)",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any(
-        "RotatingLeaderProgressProperty must equal only" in error
-        for error in errors
-    )
-
-    vocabulary.write_text(valid, encoding="utf-8")
-    (formal_dir / "SumeragiV2Proofs.tla").write_text(
-        "---- MODULE SumeragiV2Proofs ----\n"
-        "NodeHasDecision(node) == TRUE\n"
-        "HeightLivenessProperty(specification) == specification\n"
-        "=============================================================================\n",
-        encoding="utf-8",
-    )
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any("asynchronous liveness symbol NodeHasDecision" in error for error in errors)
-    assert any(
-        "asynchronous liveness symbol HeightLivenessProperty" in error
-        for error in errors
-    )
-
-    fidelity_dir = tmp_path / "application-fidelity"
-    fidelity_dir.mkdir()
-    for filename in (
-        "SumeragiV2AsyncLivenessProofs.tla",
-        "SumeragiV2LivenessProofs.tla",
-    ):
-        shutil.copyfile(module.FORMAL_DIR / filename, fidelity_dir / filename)
-    assert module._application_completion_source_fidelity_errors(fidelity_dir) == []
-
-    proof_path = fidelity_dir / "SumeragiV2AsyncLivenessProofs.tla"
-    proof_source = proof_path.read_text(encoding="utf-8")
-    proof_path.write_text(
-        proof_source.replace(
-            "         ApplicationCompletionReachesEveryResponsivePrefix\n",
-            "         ApplicationCompletionProgressAppliesFixedResponsiveNode\n",
-            1,
-        ),
-        encoding="utf-8",
-    )
-    errors = module._application_completion_source_fidelity_errors(fidelity_dir)
-    assert any(
-        "proof must compose the reviewed application dependencies in order"
-        in error
-        for error in errors
-    )
-
-    proof_path.write_text(
-        mutate_tla_theorem(
-            proof_source,
-            "ApplicationLivenessObligation",
-            "PROOF\n",
-            "OBVIOUS\n",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._application_completion_source_fidelity_errors(fidelity_dir)
-    assert any(
-        "must have the reviewed deductive application-completion proof" in error
-        for error in errors
-    )
-
-    proof_path.write_text(
-        mutate_tla_theorem(
-            proof_source,
-            "ApplicationCompletionProgressObligation",
-            "StarvationFreedomObligation",
-            "ApplicationCompletionProgressObligation",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._application_completion_source_fidelity_errors(fidelity_dir)
-    assert any(
-        "must compose the reviewed exact-corridor dependencies in order" in error
-        for error in errors
-    )
-
-    proof_path.write_text(
-        mutate_tla_theorem(
-            proof_source,
-            "DecisionPipelineStagePersistsUntilExactHandoff",
-            "ExecuteApply",
-            "ExecuteSignVote",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._application_completion_source_fidelity_errors(fidelity_dir)
-    assert any(
-        "DecisionPipelineStagePersistsUntilExactHandoff proof must retain exact"
-        in error
-        and "ExecuteApply" in error
-        for error in errors
-    )
-
-    proof_path.write_text(
-        mutate_tla_theorem(
-            proof_source,
-            "ActiveDecisionCertifiedRequestReachesCertifiedFetch",
-            "PostGstAdmitHiddenPacket",
-            "PostGstAdmitHistoricalRecoveryPacket",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._application_completion_source_fidelity_errors(fidelity_dir)
-    assert any(
-        "ActiveDecisionCertifiedRequestReachesCertifiedFetch proof must retain exact"
-        in error
-        and "PostGstAdmitHiddenPacket" in error
-        for error in errors
-    )
-
-    proof_path.write_text(
-        mutate_tla_theorem(
-            proof_source,
-            "ResponsiveDecisionReachesApplicationFromExactCorridor",
-            "RecoveryAwareDecisionWitnessProjectsApplicationFrontier",
-            "HistoricalDecisionConcreteLeafProperties",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._application_completion_source_fidelity_errors(fidelity_dir)
-    assert any(
-        "may not rely on the application result itself" in error
-        and "HistoricalDecisionConcreteLeafProperties" in error
-        for error in errors
-    )
-
-    proof_path.write_text(
-        mutate_tla_operator(
-            proof_source,
-            "DecisionPipelineKinds",
-            '"Apply"',
-            '"SignVote"',
-        ),
-        encoding="utf-8",
-    )
-    errors = module._application_completion_source_fidelity_errors(fidelity_dir)
-    assert any(
-        "DecisionPipelineKinds must equal only" in error for error in errors
-    )
-
-
-def test_scheduler_rank_derivation_cannot_widen_the_owned_carrier(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    formal_dir = copy_async_liveness_shard_fixture(tmp_path, module)
-    (formal_dir / "proof_coverage.json").write_text("{}\n", encoding="utf-8")
-    path = async_liveness_symbol_path(
-        formal_dir,
-        module,
-        "ScheduledCandidateServiceRankInCarrier",
-    )
-    source = path.read_text(encoding="utf-8")
-
-    assert module._async_proof_architecture_errors(formal_dir) == []
-
-    path.write_text(
-        source.replace(
-            "OwnedServiceRankCarrier",
-            "ServiceRankCarrier",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any(
-        "ScheduledCandidateServiceRankInCarrier must use "
-        "OwnedServiceRankCarrier" in error
-        for error in errors
-    )
-    assert any(
-        "may not widen scheduler-owned rank proofs" in error for error in errors
-    )
-
-
-def test_liveness_service_ownership_stays_on_the_fair_node_domain(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    formal_dir = copy_flat_async_architecture_fixture(tmp_path, module)
-
-    assert module._async_proof_architecture_errors(formal_dir) == []
-
-    vocabulary = formal_dir / "SumeragiV2LivenessProofs.tla"
-    source = vocabulary.read_text(encoding="utf-8")
-    guarded_owner = (
-        "ResponsiveProtectedCandidateOwned(candidate) ==\n"
-        "  /\\ candidate.node \\in AsyncCurrentResponsiveVoters\n"
-        "  /\\ ProtectedCandidateOwned(candidate)"
-    )
-    assert guarded_owner in source
-    vocabulary.write_text(
-        source.replace(
-            guarded_owner,
-            "ResponsiveProtectedCandidateOwned(candidate) ==\n"
-            "  ProtectedCandidateOwned(candidate)",
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any(
-        "ResponsiveProtectedCandidateOwned must equal only" in error
-        for error in errors
-    )
-
-
-def test_protected_service_rank_excludes_transport_and_ingress_stages(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    formal_dir = copy_flat_async_architecture_fixture(tmp_path, module)
-
-    assert module._async_proof_architecture_errors(formal_dir) == []
-
-    vocabulary = formal_dir / "SumeragiV2LivenessProofs.tla"
-    source = vocabulary.read_text(encoding="utf-8")
-    assert "stage \\in 2..6, position \\in Nat:" in source
-    property_offset = source.index(
-        "ProtectedServiceRankProgressProperty(specification) =="
-    )
-    stage_offset = source.index(
-        "stage \\in 2..6, position \\in Nat:", property_offset
-    )
-    vocabulary.write_text(
-        source[:stage_offset]
-        + source[stage_offset:].replace(
-            "stage \\in 2..6, position \\in Nat:",
-            "stage \\in 0..8, position \\in Nat:",
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any(
-        "ProtectedServiceRankProgressProperty must equal only" in error
-        for error in errors
-    )
-
-    vocabulary.write_text(
-        source.replace(
-            "                           ELSE <<0, 0>>",
-            "                           ELSE IF CandidateInIngress(candidate)\n"
-            "                                THEN <<7, 1>>\n"
-            "                                ELSE <<0, 0>>",
-            1,
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any(
-        "CandidateServiceRank must be scheduler-owned stages 2..6" in error
-        for error in errors
-    )
-
-
-def test_liveness_configuration_typing_premises_are_pinned(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    formal_dir = copy_flat_async_architecture_fixture(tmp_path, module)
-
-    assert module._async_proof_architecture_errors(formal_dir) == []
-
-    vocabulary = formal_dir / "SumeragiV2LivenessProofs.tla"
-    source = vocabulary.read_text(encoding="utf-8")
-    typed_budget_premise = (
-        "THEOREM RetransmissionBudgetCoversEveryClass ==\n"
-        "  ModelConfiguration /\\ AsyncConfiguration"
-    )
-    assert typed_budget_premise in source
-    vocabulary.write_text(
-        source.replace(
-            typed_budget_premise,
-            "THEOREM RetransmissionBudgetCoversEveryClass ==\n"
-            "  AsyncConfiguration",
-            1,
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any(
-        "RetransmissionBudgetCoversEveryClass must state only" in error
-        for error in errors
-    )
-
-    typed_successor_premise = (
-        "THEOREM CanonicalSuccessorPreservesAdmissibility ==\n"
-        "  ModelConfiguration\n"
-        "    => \\A initialContext"
-    )
-    assert typed_successor_premise in source
-    vocabulary.write_text(
-        source.replace(
-            typed_successor_premise,
-            "THEOREM CanonicalSuccessorPreservesAdmissibility ==\n"
-            "  \\A initialContext",
-            1,
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_proof_architecture_errors(formal_dir)
-    assert any(
-        "CanonicalSuccessorPreservesAdmissibility must state only" in error
-        for error in errors
-    )
-
-
-def test_verus_runner_records_output_without_masking_failures() -> None:
-    source = (ROOT_DIR / "scripts" / "verify_sumeragi_v2.sh").read_text(
-        encoding="utf-8"
-    )
-
-    assert "set -euo pipefail" in source
-    assert "target/formal/sumeragi_v2/verus.log" in source
-    assert '2>&1 | tee -a "$verus_log_tmp"' in source
-    assert 'verus_pipeline_status=("${PIPESTATUS[@]}")' in source
-    assert "sumeragi_v2_verus_evidence.py" in source
-
-
-def test_tla_shortcut_scan_rejects_unchecked_constructs_but_allows_proof_assume(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    path = tmp_path / "Example.tla"
-    source = r"""---- MODULE Example ----
-ASSUME Unsafe
-AXIOM Hidden
-THEOREM Broken == TRUE BY OMITTED
-THEOREM StructuredStatement ==
-  ASSUME NEW value \in BOOLEAN
-  PROVE value \/ ~value
-BY PTL
-THEOREM Structured == TRUE
-PROOF
-  <1>1. ASSUME TRUE
-         PROVE TRUE
-    OBVIOUS
-  <1> QED BY <1>1
-=============================================================================
-"""
-
-    errors = module.tla_shortcut_errors(path, source)
-    assert len(errors) == 3
-    assert any("top-level ASSUME" in error for error in errors)
-    assert any("top-level AXIOM" in error for error in errors)
-    assert any("OMITTED proof" in error for error in errors)
-
-
-def test_tla_shortcut_scan_does_not_let_unproved_or_misplaced_assumptions_hide(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    path = tmp_path / "Adversarial.tla"
-    source = r"""---- MODULE Adversarial ----
-THEOREM UnprovedStructured ==
-  ASSUME NEW value \in BOOLEAN
-  PROVE value \/ ~value
-
-THEOREM StatementEnded == TRUE
-ASSUME SmuggledBetweenStatementAndProof
-BY DEF StatementEnded
-
-ASSUMPTION ModuleLevel
-=============================================================================
-"""
-
-    errors = module.tla_shortcut_errors(path, source)
-    assert len(errors) == 3
-    assert any("UnprovedStructured" not in error and ":3:" in error for error in errors)
-    assert any(":7:" in error and "ASSUME" in error for error in errors)
-    assert any(":10:" in error and "ASSUMPTION" in error for error in errors)
-
-
-def test_tla_shortcut_scan_ignores_comments_and_nested_comments(tmp_path: Path) -> None:
-    module = load_checker()
-    path = tmp_path / "Example.tla"
-    source = """---- MODULE Example ----
-(* ASSUME CommentOnly (* AXIOM Nested *) OMITTED *)
-\\* AXIOM line comment
-Safe == "OMITTED"
-=============================================================================
-"""
-
-    assert module.tla_shortcut_errors(path, source) == []
-
-
-def test_tla_shortcut_scan_rejects_obsolete_unsound_tlaps_rules(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    path = tmp_path / "ObsoleteRules.tla"
-    source = r"""---- MODULE ObsoleteRules ----
-THEOREM BareFairness == TRUE BY WF1
-THEOREM UndefinedFairness == TRUE BY RuleWF1
-THEOREM UndefinedInvariant == TRUE BY RuleINV1
-\* WF1 RuleWF1 RuleINV1 in comments must not trigger the scanner.
-IgnoredStrings == "WF1 RuleWF1 RuleINV1"
-=============================================================================
-"""
-
-    errors = module.tla_shortcut_errors(path, source)
-    assert len(errors) == 3
-    assert all("obsolete or undefined TLAPS rule" in error for error in errors)
-    for token in ("WF1", "RuleWF1", "RuleINV1"):
-        assert any(f"rule {token} is prohibited" in error for error in errors)
-
-
-def test_retired_favourable_network_liveness_corridor_is_rejected(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    (formal_dir / "Example.tla").write_text(
-        "---- MODULE Example ----\n"
-        "ReliableNext == TRUE\n"
-        "StableProgressContracts == TRUE\n"
-        "\\* ReliableBeginTimeout in a comment is harmless\n"
-        "=============================================================================\n",
-        encoding="utf-8",
-    )
-
-    errors = module._retired_liveness_errors(formal_dir)
-    assert len(errors) == 2
-    assert any("ReliableNext" in error for error in errors)
-    assert any("StableProgressContracts" in error for error in errors)
-
-
-def test_deductive_max_view_dependency_is_rejected(tmp_path: Path) -> None:
-    module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    (formal_dir / "SumeragiV2Core.tla").write_text(
-        "---- MODULE SumeragiV2Core ----\n"
-        "CONSTANTS\n"
-        "  MaxView,\n"
-        "  ViewDomain\n"
-        "FiniteViews == 0..MaxView\n"
-        "=============================================================================\n",
-        encoding="utf-8",
-    )
-    (formal_dir / "Proof.tla").write_text(
-        "---- MODULE Proof ----\n"
-        "THEOREM BadBound == tc.view < MaxView\n"
-        "=============================================================================\n",
-        encoding="utf-8",
-    )
-
-    errors = module._bounded_view_dependency_errors(formal_dir)
-    assert len(errors) == 1
-    assert "Proof.tla:2" in errors[0]
-    assert "reserved for FiniteViews/TLC scaffolding" in errors[0]
-
-
-def test_reachable_core_actions_cannot_assume_proof_history_oracles(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    (formal_dir / "SumeragiV2Core.tla").write_text(
-        "---- MODULE SumeragiV2Core ----\n"
-        "FormPrepareQC(node, view, subject) ==\n"
-        "  /\\ CertificateHonestIntentBacked(qc, prepareIntents)\n"
-        "  /\\ TRUE\n"
-        "FormCommitQC(node, view, subject) == TRUE\n"
-        "DeliverQC(envelope) == QcValid(envelope.qc)\n"
-        "BeginTimeout(node) == HighRefValid(highRank[node], highSubject[node])\n"
-        "=============================================================================\n",
-        encoding="utf-8",
-    )
-
-    errors = module._reachable_oracle_guard_errors(formal_dir)
-    assert len(errors) == 3
-    assert any(
-        "FormPrepareQC" in error and "CertificateHonestIntentBacked" in error
-        for error in errors
-    )
-    assert any("DeliverQC" in error and "QcValid" in error for error in errors)
-    assert any(
-        "BeginTimeout" in error and "HighRefValid" in error for error in errors
-    )
-
-
-def test_reachable_core_actions_allow_wire_and_local_durable_guards(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    (formal_dir / "SumeragiV2Core.tla").write_text(
-        "---- MODULE SumeragiV2Core ----\n"
-        "FormPrepareQC(node, view, subject) == QcWireValid(qc)\n"
-        "FormCommitQC(node, view, subject) == QcWireValid(qc)\n"
-        "DeliverQC(envelope) == QcWireValid(envelope.qc)\n"
-        "BeginTimeout(node) == LocalTimeoutVoteFor(node).highRank = highestRank[node]\n"
-        "=============================================================================\n",
-        encoding="utf-8",
-    )
-
-    assert module._reachable_oracle_guard_errors(formal_dir) == []
-
-
-def test_async_deductive_and_finite_specs_cannot_be_conflated(tmp_path: Path) -> None:
-    module = load_checker()
-    formal_dir = tmp_path / "formal"
-    formal_dir.mkdir()
-    (formal_dir / "SumeragiV2Core.tla").write_text(
-        "---- MODULE SumeragiV2Core ----\n"
-        "vars == <<coreState>>\n"
-        "=============================================================================\n",
-        encoding="utf-8",
-    )
-    canonical = """---- MODULE SumeragiV2AsyncNetwork ----
-AsyncSchedulerVars == <<schedulerState>>
-AsyncRecoveryVars == <<recoveryPhase, recoveryQueue>>
-AsyncProducerVars == <<producerKnown, producerConsumed, producerHistory>>
-AsyncAllVars == <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>
-AsyncFairnessAt(initialContext) == WF_AsyncAllVars(AsyncNext)
-AsyncFairness == AsyncFairnessAt(ContextRecord(0, <<>>))
-AsyncBaseInitAt(initialContext) == TRUE
-AsyncBaseInit == AsyncBaseInitAt(ContextRecord(0, <<>>))
-AsyncInitAt(initialContext) == AsyncBaseInitAt(initialContext) /\\ ViewDomain = Nat
-AsyncInit == AsyncInitAt(ContextRecord(0, <<>>))
-AsyncFiniteInitAt(initialContext) == AsyncBaseInitAt(initialContext) /\\ ViewDomain = FiniteViews
-AsyncFiniteInit == AsyncFiniteInitAt(ContextRecord(0, <<>>))
-AsyncSpec == AsyncInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness
-AsyncSpecAt(initialContext) == AsyncInitAt(initialContext) /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairnessAt(initialContext)
-AsyncFiniteSpec == AsyncFiniteInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness
-AsyncFiniteSpecAt(initialContext) == AsyncFiniteInitAt(initialContext) /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairnessAt(initialContext)
-=============================================================================
-"""
-    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
-    path.write_text(canonical, encoding="utf-8")
-
-    assert module._async_spec_shape_errors(formal_dir) == []
-
-    path.write_text(
-        canonical.replace(
-            "AsyncSpec == AsyncInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
-            "AsyncSpec == AsyncFiniteInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_spec_shape_errors(formal_dir)
-    assert any("AsyncSpec must equal only" in error for error in errors)
 
 
 for _proof_ledger_test_component in PROOF_LEDGER_TEST_COMPONENT_FILES:

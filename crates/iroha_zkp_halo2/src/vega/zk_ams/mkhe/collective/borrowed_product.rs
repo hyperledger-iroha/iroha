@@ -1,9 +1,6 @@
 //! Limb-wise multiplication from an immutable canonical residue source.
-
 use super::{BgvProfile, RnsPolynomial, ZeroizingRns, ZkAmsMkheErrorV1};
-
 struct ZeroizingU64VectorV1(Option<Vec<u64>>);
-
 impl ZeroizingU64VectorV1 {
     fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
@@ -12,19 +9,15 @@ impl ZeroizingU64VectorV1 {
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         Ok(Self(Some(values)))
     }
-
     fn values(&self) -> &[u64] {
         self.0.as_deref().unwrap_or_default()
     }
-
     fn values_mut(&mut self) -> &mut Vec<u64> {
         self.0.as_mut().expect("zeroizing owner is still armed")
     }
-
     fn push(&mut self, value: u64) {
         self.values_mut().push(value);
     }
-
     fn extend_from_slice(&mut self, values: &[u64]) -> Result<(), ZkAmsMkheErrorV1> {
         let output = self.values_mut();
         let required = output
@@ -37,12 +30,10 @@ impl ZeroizingU64VectorV1 {
         output.extend_from_slice(values);
         Ok(())
     }
-
     fn into_vec(mut self) -> Vec<u64> {
         self.0.take().unwrap_or_default()
     }
 }
-
 impl Drop for ZeroizingU64VectorV1 {
     fn drop(&mut self) {
         if let Some(values) = self.0.as_mut() {
@@ -53,14 +44,12 @@ impl Drop for ZeroizingU64VectorV1 {
         }
     }
 }
-
 pub(super) fn multiply_public_residues_by_secret_signed_v1(
     left: &[u64],
     right: &[i64],
     profile: &BgvProfile,
 ) -> Result<ZeroizingRns, ZkAmsMkheErrorV1> {
     let coefficient_count = validate_inputs_v1(left, right, profile)?;
-
     let mut coefficients = ZeroizingU64VectorV1::with_capacity(coefficient_count)?;
     for limb in 0..profile.moduli.len() {
         let start = limb * profile.ring_degree;
@@ -77,7 +66,6 @@ pub(super) fn multiply_public_residues_by_secret_signed_v1(
         coefficients: coefficients.into_vec(),
     }))
 }
-
 pub(in super::super) fn accumulate_public_residues_times_signed_v1(
     left: &[u64],
     right: &[i64],
@@ -111,7 +99,6 @@ pub(in super::super) fn accumulate_public_residues_times_signed_v1(
     }
     Ok(())
 }
-
 fn validate_inputs_v1(
     left: &[u64],
     right: &[i64],
@@ -136,7 +123,6 @@ fn validate_inputs_v1(
     }
     Ok(coefficient_count)
 }
-
 fn negacyclic_multiply_signed_zeroizing_v1(
     left: &[u64],
     right: &[i64],
@@ -178,15 +164,12 @@ fn negacyclic_multiply_signed_zeroizing_v1(
     }
     Ok(left_twisted)
 }
-
 #[cfg(test)]
 mod tests {
     use super::super::super::PlaintextModulus;
     use super::*;
-
     const MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
     const ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
-
     fn profile() -> BgvProfile {
         BgvProfile {
             profile_id: [0x6d; 32],
@@ -206,7 +189,6 @@ mod tests {
             max_work_units: 1 << 20,
         }
     }
-
     #[test]
     fn borrowed_product_matches_owned_rns_multiplication() {
         let profile = profile();
@@ -222,7 +204,6 @@ mod tests {
         .unwrap();
         assert_eq!(&actual.0, &expected);
     }
-
     #[test]
     fn borrowed_product_source_keeps_secret_tables_zeroizing_and_fallible() {
         let source = include_str!("borrowed_product.rs");

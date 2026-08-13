@@ -1,11 +1,8 @@
 //! Social incentive helpers and escrow records for viral reward flows.
-
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{account::AccountId, oracle::KeyedHash};
-
 /// Rolling reward budget tracked per Unix day (milliseconds / `86_400_000`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -18,7 +15,6 @@ pub struct ViralRewardBudget {
     /// Amount already spent for the day.
     pub spent: Quantity,
 }
-
 impl Default for ViralRewardBudget {
     fn default() -> Self {
         Self {
@@ -27,7 +23,6 @@ impl Default for ViralRewardBudget {
         }
     }
 }
-
 /// Daily reward counter for a UAID.
 #[derive(
     Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
@@ -42,7 +37,6 @@ pub struct ViralDailyCounter {
     /// Number of rewards claimed within the day.
     pub claims: u32,
 }
-
 /// Rolling promotion budget tracked across the entire campaign (not reset daily).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -53,7 +47,6 @@ pub struct ViralCampaignBudget {
     /// Total amount spent since the campaign began.
     pub spent: Quantity,
 }
-
 impl Default for ViralCampaignBudget {
     fn default() -> Self {
         Self {
@@ -61,7 +54,6 @@ impl Default for ViralCampaignBudget {
         }
     }
 }
-
 /// Pending escrow created by `SendToTwitter`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -78,7 +70,6 @@ pub struct ViralEscrowRecord {
     /// Unix timestamp (milliseconds) when the escrow was created.
     pub created_at_ms: u64,
 }
-
 /// Prelude exports for social incentive helpers.
 pub mod prelude {
     pub use super::{ViralCampaignBudget, ViralDailyCounter, ViralEscrowRecord, ViralRewardBudget};

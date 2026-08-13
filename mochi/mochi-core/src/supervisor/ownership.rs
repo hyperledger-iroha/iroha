@@ -1,14 +1,11 @@
 use super::*;
-
 const SUPERVISOR_LOCK_FILE: &str = ".supervisor.lock";
-
 /// Persistent, process-lifetime ownership of one supervised network root.
 #[derive(Debug)]
 pub(super) struct SupervisorOwnershipLock {
     root: PathBuf,
     file: fs::File,
 }
-
 impl SupervisorOwnershipLock {
     pub(super) fn acquire(root: &Path) -> Result<Arc<Self>> {
         reject_symlink(root, "supervisor network root")?;
@@ -17,7 +14,6 @@ impl SupervisorOwnershipLock {
         let root = fs::canonicalize(root)?;
         let path = root.join(SUPERVISOR_LOCK_FILE);
         reject_symlink(&path, "supervisor ownership lock")?;
-
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         #[cfg(unix)]
@@ -33,7 +29,6 @@ impl SupervisorOwnershipLock {
         validate_lock_file(&path, &file)?;
         Ok(Arc::new(Self { root, file }))
     }
-
     pub(super) fn ensure_root(&self, root: &Path) -> Result<()> {
         if !self.matches_root(root)? {
             return Err(SupervisorError::Config(format!(
@@ -44,7 +39,6 @@ impl SupervisorOwnershipLock {
         }
         Ok(())
     }
-
     pub(super) fn matches_root(&self, root: &Path) -> Result<bool> {
         reject_symlink(root, "supervisor network root")?;
         match fs::canonicalize(root) {
@@ -53,7 +47,6 @@ impl SupervisorOwnershipLock {
             Err(error) => Err(error.into()),
         }
     }
-
     /// Clone the ownership descriptor into a child process's standard input.
     ///
     /// `File::try_clone` preserves the same underlying lock ownership. The
@@ -63,7 +56,6 @@ impl SupervisorOwnershipLock {
         Ok(Stdio::from(self.file.try_clone()?))
     }
 }
-
 fn reject_symlink(path: &Path, label: &str) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -77,7 +69,6 @@ fn reject_symlink(path: &Path, label: &str) -> Result<()> {
         Err(error) => Err(error.into()),
     }
 }
-
 fn validate_lock_file(path: &Path, file: &fs::File) -> Result<()> {
     let opened = file.metadata()?;
     let named = fs::symlink_metadata(path)?;
@@ -104,12 +95,10 @@ fn validate_lock_file(path: &Path, file: &fs::File) -> Result<()> {
     }
     Ok(())
 }
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
-
     #[test]
     fn inherited_child_stdin_keeps_ownership_lock_until_child_exit() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -120,18 +109,15 @@ mod tests {
             .stdin(owner.child_stdin().expect("clone owner into child stdin"))
             .spawn()
             .expect("spawn lock-retaining child");
-
         drop(owner);
         let error = SupervisorOwnershipLock::acquire(&root)
             .expect_err("orphan child must retain ownership");
         assert!(matches!(error, SupervisorError::SupervisorLocked { .. }));
-
         child.kill().expect("terminate child");
         child.wait().expect("reap child");
         SupervisorOwnershipLock::acquire(&root)
             .expect("child exit must release inherited ownership");
     }
-
     #[test]
     fn ownership_acquisition_creates_only_the_lock_root() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -148,7 +134,6 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o077, 0, "ownership lock must be owner-only");
     }
-
     #[test]
     fn ownership_lock_symlink_is_rejected() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -161,7 +146,6 @@ mod tests {
             SupervisorOwnershipLock::acquire(&root).expect_err("symlink lock must be rejected");
         assert!(matches!(error, SupervisorError::GenerationValidation(_)));
     }
-
     #[test]
     fn existing_insecure_ownership_lock_mode_is_rejected() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -172,13 +156,11 @@ mod tests {
         let mut permissions = fs::metadata(&lock).expect("lock metadata").permissions();
         permissions.set_mode(0o644);
         fs::set_permissions(&lock, permissions).expect("set insecure lock mode");
-
         let error = SupervisorOwnershipLock::acquire(&root)
             .expect_err("group/world-accessible lock must be rejected");
         assert!(matches!(error, SupervisorError::GenerationValidation(_)));
         assert!(error.to_string().contains("owner-only"));
     }
-
     #[test]
     fn hard_linked_ownership_lock_inode_is_rejected() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -190,7 +172,6 @@ mod tests {
         permissions.set_mode(0o600);
         fs::set_permissions(&lock, permissions).expect("secure lock mode");
         fs::hard_link(&lock, temp.path().join("lock-hard-link")).expect("hard-link lock inode");
-
         let error = SupervisorOwnershipLock::acquire(&root)
             .expect_err("multiply-linked lock inode must be rejected");
         assert!(matches!(error, SupervisorError::GenerationValidation(_)));

@@ -1,11 +1,9 @@
 use super::*;
-
 const VALID_POINT_V1: [u8; POINT_BYTES_V1] = [
     0x80, 0x25, 0xa4, 0xe3, 0x12, 0x8f, 0x04, 0x2d, 0x72, 0x8e, 0x58, 0xb7, 0xe0, 0x9a, 0x51, 0xb7,
     0x25, 0x85, 0xbe, 0x44, 0x35, 0xf4, 0xe9, 0x4a, 0xac, 0x85, 0x17, 0xf2, 0xe1, 0x58, 0xb3, 0xea,
     0xe6,
 ];
-
 fn canonical_core_v1<const N: usize>(log_width: u8) -> [u8; N] {
     assert_eq!(
         N,
@@ -26,7 +24,6 @@ fn canonical_core_v1<const N: usize>(log_width: u8) -> [u8; N] {
     assert_eq!(cursor, N);
     bytes
 }
-
 fn endpoint_commitments_v1() -> [u8; ENDPOINT_COMMITMENTS_BYTES_V1] {
     let mut bytes = [0_u8; ENDPOINT_COMMITMENTS_BYTES_V1];
     for point in bytes.chunks_exact_mut(POINT_BYTES_V1) {
@@ -34,7 +31,6 @@ fn endpoint_commitments_v1() -> [u8; ENDPOINT_COMMITMENTS_BYTES_V1] {
     }
     bytes
 }
-
 #[test]
 fn profile_pins_parent_kats_basis_layout_and_purpose_manifest() {
     let profile = global_lookup_committed_mle_profile_v1().expect("frozen profile");
@@ -93,7 +89,6 @@ fn profile_pins_parent_kats_basis_layout_and_purpose_manifest() {
         );
     }
 }
-
 #[test]
 fn exact_role_order_shapes_and_generalized_bp_lengths_are_frozen() {
     for ordinal in 0..COEFFICIENT_IPAS_V1 {
@@ -155,7 +150,6 @@ fn exact_role_order_shapes_and_generalized_bp_lengths_are_frozen() {
     );
     assert_eq!(endpoint.wire_bytes_v1(), Ok(2_550));
     assert_eq!(proof_shape_v1(19), Err(CommittedMleErrorV1::Shape));
-
     for (log_width, vector_commitments, bytes) in
         [(10, 1, 1_117), (14, 1, 1_381), (15, 1, 1_447), (5, 0, 787)]
     {
@@ -169,7 +163,6 @@ fn exact_role_order_shapes_and_generalized_bp_lengths_are_frozen() {
         Err(CommittedMleErrorV1::Shape)
     );
 }
-
 #[test]
 fn commitment_and_proof_accounting_includes_every_33_byte_point_once() {
     assert_eq!(COEFFICIENT_PROOF_SET_BYTES_V1, 16 * 1_381);
@@ -184,7 +177,6 @@ fn commitment_and_proof_accounting_includes_every_33_byte_point_once() {
         16 * 1_381 + (33 + 1_447) + (33 + 1_117) + (52 * 33 + 47 + 787)
     );
 }
-
 #[test]
 fn strict_borrowed_core_codecs_accept_only_exact_canonical_shapes() {
     let n1024 = canonical_core_v1::<MASK_CORE_BYTES_V1>(10);
@@ -227,7 +219,6 @@ fn strict_borrowed_core_codecs_accept_only_exact_canonical_shapes() {
         borrow_bp_core_exact_v1(13, &n16384),
         Err(CommittedMleErrorV1::WireEncoding)
     ));
-
     let mut bad_point = n16384;
     bad_point[..POINT_BYTES_V1].fill(0);
     assert!(matches!(
@@ -246,7 +237,6 @@ fn strict_borrowed_core_codecs_accept_only_exact_canonical_shapes() {
         Err(CommittedMleErrorV1::Order)
     ));
 }
-
 #[test]
 fn endpoint_envelope_is_purpose_specific_exact_and_mutation_closed() {
     let mut envelope = [0_u8; ENDPOINT_ENVELOPE_BYTES_V1];
@@ -283,7 +273,6 @@ fn endpoint_envelope_is_purpose_specific_exact_and_mutation_closed() {
             .any(|window| window == b"ZMBP")
     );
 }
-
 #[test]
 fn aggregate_borrowed_codecs_validate_commitments_order_and_all_parts() {
     let table_core = canonical_core_v1::<TABLE_M_CORE_BYTES_V1>(15);
@@ -292,7 +281,6 @@ fn aggregate_borrowed_codecs_validate_commitments_order_and_all_parts() {
     let mut envelope = [0_u8; ENDPOINT_ENVELOPE_BYTES_V1];
     write_endpoint_envelope_v1(&mut envelope).unwrap();
     let endpoints = endpoint_commitments_v1();
-
     let table = borrow_table_m_opening_exact_v1(&VALID_POINT_V1, &table_core).unwrap();
     assert_eq!(table.commitment.0, &VALID_POINT_V1);
     assert_eq!(table.core.bytes_v1().len(), TABLE_M_CORE_BYTES_V1);
@@ -304,7 +292,6 @@ fn aggregate_borrowed_codecs_validate_commitments_order_and_all_parts() {
     assert_eq!(gate.endpoint_commitments, &endpoints);
     assert_eq!(gate.envelope.0, &envelope);
     assert_eq!(gate.core.bytes_v1().len(), ENDPOINT_GATE_CORE_BYTES_V1);
-
     let mut bad_commitment = VALID_POINT_V1;
     bad_commitment.fill(0);
     assert!(matches!(
@@ -330,7 +317,6 @@ fn aggregate_borrowed_codecs_validate_commitments_order_and_all_parts() {
         Err(CommittedMleErrorV1::WireEncoding)
     ));
 }
-
 #[test]
 fn production_authority_is_uninhabited_and_every_acceptance_gate_is_false() {
     for gate in [
@@ -360,7 +346,6 @@ fn production_authority_is_uninhabited_and_every_acceptance_gate_is_false() {
         CommittedMleProofSessionSealV1::TestOnly
     ));
 }
-
 #[test]
 fn source_guards_keep_the_prerequisite_private_borrowed_and_nonauthorizing() {
     let source = include_str!("global_lookup_committed_mle_v1.rs");

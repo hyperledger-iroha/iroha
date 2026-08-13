@@ -3,7 +3,6 @@
 //! The fixture lives beside the reference relation so its DER construction
 //! uses the exact closed grammar rather than a platform certificate builder.
 //! It is compiled only for tests and the isolated privacy-release runner.
-
 use iroha_crypto::{Algorithm, KeyPair};
 #[cfg(test)]
 use iroha_crypto::{Hash, HashOf};
@@ -31,7 +30,6 @@ use p256::ecdsa::{
     signature::{Signer as _, hazmat::PrehashSigner as _},
 };
 use time::OffsetDateTime;
-
 use super::*;
 use crate::{
     privacy_engines::zk_x509::{
@@ -52,14 +50,12 @@ use crate::{
         load_privacy_zk_x509_authoritative_state_v1, privacy_zk_x509_ca_namespace_v1,
     },
 };
-
 const CRL_THIS_UPDATE: u64 = 1_672_531_200; // 2023-01-01T00:00:00Z
 const CRL_NEXT_UPDATE: u64 = CRL_THIS_UPDATE + 300;
 const VALIDATION_TIME: u64 = CRL_THIS_UPDATE + 60;
 const CANONICAL_LEAF_SERIAL_V1: [u8; 1] = [2];
 const MAXIMUM_LEAF_SERIAL_V1: [u8; ZK_X509_MAX_SERIAL_BYTES_V1] =
     [0x40; ZK_X509_MAX_SERIAL_BYTES_V1];
-
 #[derive(Clone, Copy)]
 struct ZkX509ReleaseTimesV1 {
     crl_this_update_unix_seconds: u64,
@@ -68,7 +64,6 @@ struct ZkX509ReleaseTimesV1 {
     presentation_not_after_unix_seconds: u64,
     revoked_at_unix_seconds: u64,
 }
-
 impl ZkX509ReleaseTimesV1 {
     const FIXED_V1: Self = Self {
         crl_this_update_unix_seconds: CRL_THIS_UPDATE,
@@ -77,7 +72,6 @@ impl ZkX509ReleaseTimesV1 {
         presentation_not_after_unix_seconds: VALIDATION_TIME + 60,
         revoked_at_unix_seconds: CRL_THIS_UPDATE - 86_400,
     };
-
     fn from_trusted_block_timestamp_ms_v1(
         trusted_block_timestamp_ms: u64,
     ) -> Result<Self, &'static str> {
@@ -100,13 +94,11 @@ impl ZkX509ReleaseTimesV1 {
         })
     }
 }
-
 #[derive(Clone)]
 enum ZkX509ReleaseCrlLineageV1 {
     Origin,
     Successor(PrivacyZkX509CrlRecordV1),
 }
-
 /// Non-secret dimensions of one deterministic release fixture.
 ///
 /// These values are deliberately copyable so the isolated release runner can
@@ -131,7 +123,6 @@ pub(crate) struct ZkX509ReleaseResourceShapeV1 {
     /// Whether at least one compact-tree sibling is nonzero.
     pub(crate) ca_membership_path_has_nonzero_sibling: bool,
 }
-
 impl ZkX509ReleaseResourceShapeV1 {
     /// Validate every recorded dimension against the closed first-release
     /// profile.
@@ -180,7 +171,6 @@ impl ZkX509ReleaseResourceShapeV1 {
         Ok(())
     }
 }
-
 /// Fully joined deterministic relation and ledger-state fixture.
 pub(crate) struct ZkX509ReleaseFixtureV1 {
     pub(crate) statement: IrohaZkX509StarkP256StatementV1,
@@ -189,7 +179,6 @@ pub(crate) struct ZkX509ReleaseFixtureV1 {
     pub(crate) crl_entry_count: usize,
     pub(crate) resource_shape: ZkX509ReleaseResourceShapeV1,
 }
-
 /// Reference-test context retained independently of the compiled release
 /// manifest. Release evidence supplies the actual compiled profile context.
 #[cfg(test)]
@@ -207,7 +196,6 @@ pub(crate) fn reference_statement_context_v1() -> PrivacyStatementContextV1 {
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new([0x67; 32]),
     }
 }
-
 /// Build the canonical two-certificate, one-disclosure fixture.
 #[cfg(test)]
 pub(crate) fn build_zk_x509_reference_fixture_v1() -> Result<ZkX509ReleaseFixtureV1, &'static str> {
@@ -220,7 +208,6 @@ pub(crate) fn build_zk_x509_reference_fixture_v1() -> Result<ZkX509ReleaseFixtur
         &ZkX509ReleaseCrlLineageV1::Origin,
     )
 }
-
 /// Build either the canonical or closed maximum-shape release fixture.
 ///
 /// The maximum shape has three certificates, all four disclosure slots, and
@@ -246,7 +233,6 @@ pub(crate) fn build_zk_x509_release_fixture_v1(
         &ZkX509ReleaseCrlLineageV1::Origin,
     )
 }
-
 /// Build the canonical network fixture around one actual trusted block time.
 ///
 /// This keeps the fixed release KAT byte-for-byte stable while giving the
@@ -267,7 +253,6 @@ pub(crate) fn build_zk_x509_network_release_fixture_v1(
         &ZkX509ReleaseCrlLineageV1::Origin,
     )
 }
-
 /// Build a fresh network fixture whose complete signed CRL is the exact
 /// active successor of `current_crl`.
 pub(crate) fn build_zk_x509_network_release_successor_fixture_v1(
@@ -292,13 +277,11 @@ pub(crate) fn build_zk_x509_network_release_successor_fixture_v1(
         .map_err(|_| "network release successor CRL failed rotation validation")?;
     Ok(fixture)
 }
-
 fn fixed_release_wallet_account_v1() -> Result<AccountId, &'static str> {
     let wallet_key_pair = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
         .map_err(|_| "deterministic release wallet key failed")?;
     Ok(AccountId::new(wallet_key_pair.public_key().clone()))
 }
-
 fn build_zk_x509_fixture_v1(
     context: PrivacyStatementContextV1,
     maximum_shape: bool,
@@ -403,7 +386,6 @@ fn build_zk_x509_fixture_v1(
         revoked_serials,
         times,
     )?;
-
     let mut certificate_chain_der = vec![leaf_der];
     if let Some(intermediate_der) = intermediate_der {
         certificate_chain_der.push(intermediate_der);
@@ -419,7 +401,6 @@ fn build_zk_x509_fixture_v1(
     if parsed_crl.revoked_serials.len() != revoked_serials.len() {
         return Err("deterministic release CRL lost an entry");
     }
-
     let root = parsed_chain
         .last()
         .ok_or("deterministic release chain is empty")?;
@@ -488,7 +469,6 @@ fn build_zk_x509_fixture_v1(
         PrivacyZkX509RecordLifecycleV1::Active,
     )
     .map_err(|_| "deterministic release CRL record failed")?;
-
     let mut statement = IrohaZkX509StarkP256StatementV1 {
         context,
         trust_anchor_id,
@@ -596,7 +576,6 @@ fn build_zk_x509_fixture_v1(
     {
         return Err("deterministic maximum release shape missed a closed-profile ceiling");
     }
-
     let witness = ZkX509WitnessV1 {
         certificate_chain_der,
         crl_der,
@@ -615,7 +594,6 @@ fn build_zk_x509_fixture_v1(
         &witness,
     )
     .map_err(|_| "deterministic release relation failed")?;
-
     Ok(ZkX509ReleaseFixtureV1 {
         statement,
         witness,
@@ -624,7 +602,6 @@ fn build_zk_x509_fixture_v1(
         resource_shape,
     })
 }
-
 fn maximum_crl_serial_v1(index: usize) -> Result<Vec<u8>, &'static str> {
     let suffix = u8::try_from(index)
         .ok()
@@ -636,7 +613,6 @@ fn maximum_crl_serial_v1(index: usize) -> Result<Vec<u8>, &'static str> {
         .ok_or("deterministic maximum CRL serial is empty")? = suffix;
     Ok(serial)
 }
-
 fn release_resource_shape_v1(
     parsed_chain: &[ParsedCertificateV1<'_>],
     parsed_crl: &ParsedCrlV1<'_>,
@@ -696,7 +672,6 @@ fn release_resource_shape_v1(
             .any(|sibling| *sibling != [0; 32]),
     })
 }
-
 fn authoritative_state_v1(
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
     certificate_policy: PrivacyZkX509CertificatePolicyRecordV1,
@@ -731,7 +706,6 @@ fn authoritative_state_v1(
         PrivacyStateItemRecordV1::zk_x509_crl_governance(crl, 1)
             .map_err(|_| "release CRL state record failed")?,
     );
-
     let ca_namespace = privacy_zk_x509_ca_namespace_v1(trust_anchor.trust_anchor_id)
         .map_err(|_| "release CA namespace failed")?;
     let root_key = PrivacyRootKeyV1::new(
@@ -781,13 +755,11 @@ fn authoritative_state_v1(
     )
     .map_err(|_| "release authoritative state join failed")
 }
-
 fn p256_key(seed: u8) -> Result<P256SigningKey, &'static str> {
     let mut bytes = [0_u8; 32];
     bytes[31] = seed;
     P256SigningKey::from_slice(&bytes).map_err(|_| "invalid deterministic P-256 key")
 }
-
 #[allow(clippy::too_many_arguments)]
 fn certificate(
     serial: &[u8],
@@ -847,7 +819,6 @@ fn certificate(
         bit_string(signature.to_der().as_bytes(), 0),
     ])
 }
-
 fn crl(
     issuer: &[u8],
     issuer_key: &P256SigningKey,
@@ -895,7 +866,6 @@ fn crl(
         bit_string(signature.to_der().as_bytes(), 0),
     ]))
 }
-
 fn utc_time_contents_v1(unix_seconds: u64) -> Result<[u8; 13], &'static str> {
     let unix_seconds = i64::try_from(unix_seconds)
         .map_err(|_| "release fixture UTCTime exceeds signed timestamp range")?;
@@ -919,7 +889,6 @@ fn utc_time_contents_v1(unix_seconds: u64) -> Result<[u8; 13], &'static str> {
         .try_into()
         .map_err(|_| "release fixture UTCTime encoded to a noncanonical width")
 }
-
 fn spki(key: &P256SigningKey) -> Vec<u8> {
     let point = key.verifying_key().to_encoded_point(false);
     sequence(&[
@@ -927,7 +896,6 @@ fn spki(key: &P256SigningKey) -> Vec<u8> {
         bit_string(point.as_bytes(), 0),
     ])
 }
-
 fn name(attributes: &[(&[u8], u8, &[u8])]) -> Vec<u8> {
     sequence(
         &attributes
@@ -938,7 +906,6 @@ fn name(attributes: &[(&[u8], u8, &[u8])]) -> Vec<u8> {
             .collect::<Vec<_>>(),
     )
 }
-
 fn extension(oid: &[u8], critical: bool, inner: &[u8]) -> Vec<u8> {
     let mut fields = vec![object_identifier(oid)];
     if critical {
@@ -947,26 +914,21 @@ fn extension(oid: &[u8], critical: bool, inner: &[u8]) -> Vec<u8> {
     fields.push(octet_string(inner));
     sequence(&fields)
 }
-
 fn aki_inner(identifier: &[u8]) -> Vec<u8> {
     sequence(&[tlv(0x80, identifier)])
 }
-
 fn object_identifier(contents: &[u8]) -> Vec<u8> {
     tlv(0x06, contents)
 }
-
 fn octet_string(contents: &[u8]) -> Vec<u8> {
     tlv(0x04, contents)
 }
-
 fn bit_string(bytes: &[u8], unused_bits: u8) -> Vec<u8> {
     let mut contents = Vec::with_capacity(bytes.len() + 1);
     contents.push(unused_bits);
     contents.extend_from_slice(bytes);
     tlv(0x03, &contents)
 }
-
 fn integer(value: u64) -> Vec<u8> {
     if value == 0 {
         return tlv(0x02, &[0]);
@@ -982,7 +944,6 @@ fn integer(value: u64) -> Vec<u8> {
     }
     tlv(0x02, &magnitude)
 }
-
 fn positive_integer(magnitude: &[u8]) -> Vec<u8> {
     let mut contents = magnitude.to_vec();
     if contents.first().is_some_and(|byte| byte & 0x80 != 0) {
@@ -990,11 +951,9 @@ fn positive_integer(magnitude: &[u8]) -> Vec<u8> {
     }
     tlv(0x02, &contents)
 }
-
 fn sequence(values: &[Vec<u8>]) -> Vec<u8> {
     tlv(0x30, &values.concat())
 }
-
 fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
     let mut encoded = vec![tag];
     if contents.len() < 128 {
@@ -1012,7 +971,6 @@ fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
     encoded.extend_from_slice(contents);
     encoded
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1022,7 +980,6 @@ mod tests {
         merkle::ZkX509MerkleErrorV1,
         profile::ZK_X509_ATTRIBUTE_SALT_BYTES_V1,
     };
-
     #[test]
     fn canonical_release_fixture_is_exact_round_trippable_and_state_joined() {
         let fixture = build_zk_x509_reference_fixture_v1().expect("canonical release fixture");
@@ -1057,12 +1014,10 @@ mod tests {
             fixture.witness
         );
     }
-
     #[test]
     fn network_release_fixture_binds_live_time_without_changing_the_fixed_kat_path() {
         const TRUSTED_BLOCK_TIMESTAMP_MS: u64 = 1_785_024_000_123;
         const TRUSTED_BLOCK_UNIX_SECONDS: u64 = TRUSTED_BLOCK_TIMESTAMP_MS / 1_000;
-
         let network_wallet = AccountId::new(
             KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
                 .expect("network wallet key")
@@ -1108,7 +1063,6 @@ mod tests {
                 .expect("network release witness encoding"),
         )
         .expect("network release production prover preflight");
-
         let successor = build_zk_x509_network_release_successor_fixture_v1(
             reference_statement_context_v1(),
             TRUSTED_BLOCK_TIMESTAMP_MS + 1_000,
@@ -1136,13 +1090,11 @@ mod tests {
         );
         iroha_data_model::privacy::validate_zk_x509_crl_rotation_v1(&crl, &successor_crl)
             .expect("canonical release CRL rotation");
-
         let fixed = build_zk_x509_reference_fixture_v1().expect("fixed KAT fixture");
         let fixed_crl = parse_crl_v1(&fixed.witness.crl_der).expect("fixed KAT CRL");
         assert_eq!(fixed_crl.this_update, CRL_THIS_UPDATE);
         assert_eq!(fixed_crl.next_update, CRL_NEXT_UPDATE);
     }
-
     #[test]
     fn maximum_release_fixture_hits_every_closed_structural_ceiling() {
         let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
@@ -1257,7 +1209,6 @@ mod tests {
         )
         .expect("maximum relation");
     }
-
     #[test]
     fn production_preflight_rejects_matching_authoritative_malicious_crls_without_proving() {
         let revoked = preflight_with_matching_authoritative_crl_v1(&[vec![2]]);
@@ -1265,7 +1216,6 @@ mod tests {
             revoked,
             ZkX509EngineErrorV1::ReferenceRelation(ZkX509RelationErrorV1::CertificateRevoked)
         );
-
         let serial_100 = maximum_crl_serial_v1(0).expect("serial 100");
         let serial_101 = maximum_crl_serial_v1(1).expect("serial 101");
         for (label, revoked_serials) in [
@@ -1292,7 +1242,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn production_preflight_rejects_wrong_ca_index_and_sibling_without_proving() {
         let fixture = build_zk_x509_reference_fixture_v1().expect("canonical release fixture");
@@ -1310,7 +1259,6 @@ mod tests {
                 ZkX509MerkleErrorV1::RootMismatch
             ))
         );
-
         let mut wrong_sibling = fixture.witness.clone();
         wrong_sibling.ca_membership_path.siblings[0][0] ^= 1;
         assert_eq!(
@@ -1326,7 +1274,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn production_preflight_rejects_noncanonical_and_suffix_witness_bytes_without_proving() {
         let fixture = build_zk_x509_release_fixture_v1(reference_statement_context_v1(), true)
@@ -1355,7 +1302,6 @@ mod tests {
             ),
             ZkX509EngineErrorV1::WitnessCodec(ZkX509WitnessCodecErrorV1::InvalidAttributeOpenings)
         );
-
         let mut suffix = fixture
             .witness
             .encode_v1()
@@ -1370,7 +1316,6 @@ mod tests {
             ZkX509EngineErrorV1::WitnessCodec(ZkX509WitnessCodecErrorV1::TrailingBytes)
         );
     }
-
     fn preflight_with_matching_authoritative_crl_v1(
         revoked_serials: &[Vec<u8>],
     ) -> ZkX509EngineErrorV1 {
@@ -1416,7 +1361,6 @@ mod tests {
             &witness.encode_v1().expect("malicious witness encoding"),
         )
     }
-
     fn production_preflight_error_v1(
         statement: &IrohaZkX509StarkP256StatementV1,
         authoritative_state: &PrivacyZkX509AuthoritativeStateV1,

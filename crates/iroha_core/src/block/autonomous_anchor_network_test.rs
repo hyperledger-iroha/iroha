@@ -6,7 +6,6 @@ fn autonomous_anchor_admission_rejects_same_label_different_network() {
     fixture.state.network_id = deterministic_test_network_id(0x7A);
     assert_eq!(fixture.state.chain_id, display_name);
     assert_ne!(fixture.state.network_id, original_network_id);
-
     let view = fixture.state.query_view();
     let error = ValidBlock::validate_execution_context_autonomous_lane_payloads(
         &fixture.block,

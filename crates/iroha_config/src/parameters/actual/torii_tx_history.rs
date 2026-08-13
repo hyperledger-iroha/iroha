@@ -1,5 +1,4 @@
 // Runtime transaction-history visibility and authentication configuration.
-
 /// Transaction-history visibility/auth configuration for Torii app API.
 #[derive(Debug, Clone)]
 pub struct ToriiTxHistory {
@@ -15,7 +14,6 @@ pub struct ToriiTxHistory {
     /// Optional JWT bearer verification configuration for wallet history reads.
     pub jwt: Option<ToriiTxHistoryJwt>,
 }
-
 /// JWT bearer verification inputs for transaction-history endpoints.
 #[derive(Debug, Clone)]
 pub struct ToriiTxHistoryJwt {

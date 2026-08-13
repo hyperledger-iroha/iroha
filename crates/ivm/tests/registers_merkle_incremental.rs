@@ -1,14 +1,12 @@
 //! Conformance tests for the Registers Merkle incremental path vs canonical rebuild.
 //! These tests run under the `merkle_incremental` feature and ensure equivalence
 //! of roots and paths with a fresh canonical rebuild from cached leaves.
-
 #[cfg(feature = "merkle_incremental")]
 use iroha_crypto::MerkleTree;
 #[cfg(feature = "merkle_incremental")]
 use ivm::Registers;
 #[cfg(feature = "merkle_incremental")]
 use sha2::Digest;
-
 #[cfg(feature = "merkle_incremental")]
 fn register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
     let mut bytes = [0u8; 9];
@@ -16,14 +14,12 @@ fn register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
     bytes[1..].copy_from_slice(&value.to_le_bytes());
     sha2::Sha256::digest(&bytes).into()
 }
-
 #[cfg(feature = "merkle_incremental")]
 #[test]
 fn registers_incremental_matches_canonical_rebuild() {
     let mut regs = Registers::new();
     let mut gpr = [0u64; 256];
     let mut tags = [false; 256];
-
     // Perform a sequence of mixed writes and tag updates
     for i in 1..=2000u32 {
         let idx = (i as usize) % 256;
@@ -38,7 +34,6 @@ fn registers_incremental_matches_canonical_rebuild() {
             regs.set(idx, gpr[idx]);
         }
     }
-
     // Build canonical tree from cached leaf digests
     let leaves: Vec<[u8; 32]> = gpr
         .iter()
@@ -47,10 +42,8 @@ fn registers_incremental_matches_canonical_rebuild() {
         .collect();
     let canonical = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaves.clone());
     let root = canonical.root().expect("root");
-
     // Root equality
     assert_eq!(root, regs.merkle_root());
-
     // Path equality at a few indices
     for &idx in &[0usize, 3, 17, 127, 255] {
         let proof = canonical.get_proof(idx as u32).expect("proof");

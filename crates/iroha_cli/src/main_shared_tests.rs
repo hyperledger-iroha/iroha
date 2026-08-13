@@ -21,61 +21,48 @@ use std::{
 use tempfile::NamedTempFile;
 use tokio::runtime::Runtime;
 use url::Url;
-
 fn fixture_key_pair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("fixture seed must derive a valid keypair")
 }
-
 fn sample_canonical_i105_literal(seed: u8) -> String {
     AccountId::new(fixture_key_pair(seed).public_key().clone())
         .canonical_i105()
         .expect("canonical I105")
 }
-
 fn sample_noncanonical_i105_literal(seed: u8) -> String {
     sample_canonical_i105_literal(seed).replacen("sora", "ｓｏｒａ", 1)
 }
-
 #[test]
 fn bounded_cli_input_accepts_exact_limit() {
     let input = [0xA5; 32];
     let mut reader = input.as_slice();
-
     let bytes = read_cli_input_bounded(&mut reader, input.len(), "test stdin")
         .expect("an exact-boundary stdin document is accepted");
-
     assert_eq!(bytes, input);
 }
-
 #[test]
 fn bounded_cli_input_rejects_limit_plus_one() {
     let input = [0xA5; 33];
     let mut reader = input.as_slice();
-
     let error = read_cli_input_bounded(&mut reader, input.len() - 1, "test stdin")
         .expect_err("stdin growth beyond the boundary must be rejected");
-
     assert!(
         error
             .to_string()
             .contains("first-release limit of 32 bytes")
     );
 }
-
 #[test]
 fn bounded_cli_file_rejects_sparse_limit_plus_one_before_reading() {
     let file = NamedTempFile::new().expect("create sparse CLI input");
     file.as_file()
         .set_len((MAX_CLI_STDIN_BYTES_V1 + 1) as u64)
         .expect("set sparse CLI input length");
-
     let error = read_cli_file_bounded(file.path(), "test file")
         .expect_err("limit plus one must be rejected from metadata");
-
     assert!(error.to_string().contains("first-release limit"));
 }
-
 #[test]
 fn cli_json_preflight_rejects_sequence_limit_plus_one() {
     let mut input = String::with_capacity(2 * MAX_CLI_JSON_SEQUENCE_ELEMENTS_V1 + 3);
@@ -87,27 +74,22 @@ fn cli_json_preflight_rejects_sequence_limit_plus_one() {
         input.push('0');
     }
     input.push(']');
-
     let error = parse_json::<Vec<u8>>(&input)
         .expect_err("the typed decoder must not receive an oversized sequence");
-
     assert!(error.to_string().contains("admit JSON input"));
 }
-
 #[test]
 fn parse_register_account_id_accepts_canonical_i105_literal() {
     let literal = sample_canonical_i105_literal(23);
     let parsed = parse_register_account_id(&literal).expect("register account id");
     assert_eq!(parsed.to_string(), literal);
 }
-
 #[test]
 fn data_verifying_key_filter_parser_rejects_unsafe_backend_and_name() {
     let id = trigger::parse_data_verifying_key_id("halo2/ipa: vk_main ")
         .expect("valid verifying-key event filter id");
     assert_eq!(id.backend.as_str(), "halo2/ipa");
     assert_eq!(id.name, "vk_main");
-
     for spec in [
         "mock/dev:vk_main",
         "halo2/ipa/orchard:vk_main",
@@ -128,14 +110,12 @@ fn data_verifying_key_filter_parser_rejects_unsafe_backend_and_name() {
         );
     }
 }
-
 #[test]
 fn data_proof_filter_parser_rejects_unsafe_backend_and_hash() {
     let id = trigger::parse_data_proof_id(&format!("halo2/ipa:0x{}", "A5".repeat(32)))
         .expect("valid proof event filter id");
     assert_eq!(id.backend.as_str(), "halo2/ipa");
     assert_eq!(id.proof_hash, [0xA5; 32]);
-
     for spec in [
         format!("mock/dev:{}", "a".repeat(64)),
         format!("groth16/bls12-377:{}", "a".repeat(64)),
@@ -157,16 +137,13 @@ fn data_proof_filter_parser_rejects_unsafe_backend_and_hash() {
         );
     }
 }
-
 #[derive(Clone, Copy, JsonSerialize)]
 struct DummyEvent;
-
 #[derive(clap::Parser, Debug)]
 struct QuantityParserHarness {
     #[arg(long)]
     quantity: iroha_primitives::numeric::Quantity,
 }
-
 #[derive(clap::Parser, Debug)]
 struct FxCorridorDomainParserHarness {
     #[arg(
@@ -176,7 +153,6 @@ struct FxCorridorDomainParserHarness {
         )]
     domains: Vec<DomainId>,
 }
-
 #[test]
 fn fx_corridor_domain_arguments_use_the_canonical_domain_parser() {
     let domain = DomainId::try_new("hbl", "sbp").expect("canonical domain");
@@ -188,7 +164,6 @@ fn fx_corridor_domain_arguments_use_the_canonical_domain_parser() {
     ])
     .expect("canonical fully-qualified domain must parse");
     assert_eq!(parsed.domains, vec![domain]);
-
     let error = FxCorridorDomainParserHarness::try_parse_from([
         "fx-corridor-domain-parser",
         "--allowed-destination-alias-domain",
@@ -197,7 +172,6 @@ fn fx_corridor_domain_arguments_use_the_canonical_domain_parser() {
     .expect_err("a domain without its dataspace must fail during argument parsing");
     assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
 }
-
 #[test]
 fn cli_quantities_accept_canonical_boundaries_and_reject_signed_or_oversized_values() {
     for value in [
@@ -213,7 +187,6 @@ fn cli_quantities_accept_canonical_boundaries_and_reject_signed_or_oversized_val
         .unwrap_or_else(|error| panic!("canonical quantity `{value}` was rejected: {error}"));
         assert_eq!(parsed.quantity.to_string(), value);
     }
-
     let oversized_mantissa = format!("1{}", "0".repeat(200));
     for value in ["-0.01", "0.12345678901234567890123456789"]
         .into_iter()
@@ -227,7 +200,6 @@ fn cli_quantities_accept_canonical_boundaries_and_reject_signed_or_oversized_val
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
     }
 }
-
 fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec<u8>> {
     PrintJsonContext {
         write: Vec::new(),
@@ -242,7 +214,6 @@ fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec
         i18n: Localizer::new(Bundle::Cli, Language::English),
     }
 }
-
 #[test]
 fn operator_private_key_file_is_an_explicit_global_runtime_option() {
     let args = Args::try_parse_from([
@@ -258,17 +229,14 @@ fn operator_private_key_file_is_an_explicit_global_runtime_option() {
         args.operator_private_key_file.as_deref(),
         Some(Path::new("/run/secrets/iroha/operator.key"))
     );
-
     let args = Args::try_parse_from(["iroha", "ops", "sumeragi", "status"])
         .expect("operator credential remains optional for non-operator commands");
     assert!(args.operator_private_key_file.is_none());
 }
-
 #[test]
 fn run_context_installs_only_the_explicit_operator_key() {
     let mut context = test_context(CliOutputFormat::Json);
     assert!(context.client_from_config().operator_key_pair.is_none());
-
     let operator_key_pair = fixture_key_pair(0x71);
     context.operator_key_pair = Some(operator_key_pair.clone());
     let client = context.client_from_config();
@@ -279,14 +247,12 @@ fn run_context_installs_only_the_explicit_operator_key() {
     assert_eq!(client.network_id, context.config.network_id);
     assert_ne!(client.key_pair.public_key(), operator_key_pair.public_key());
 }
-
 fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
     let _domain =
         iroha::data_model::domain::DomainId::try_new(domain_literal, "universal").expect("domain");
     let key_pair = fixture_key_pair(seed);
     AccountId::new(key_pair.public_key().clone())
 }
-
 #[test]
 fn fixture_key_pair_uses_checked_seed_derivation() {
     assert_eq!(fixture_key_pair(7).algorithm(), Algorithm::Ed25519);
@@ -295,7 +261,6 @@ fn fixture_key_pair_uses_checked_seed_derivation() {
         "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
     );
 }
-
 #[test]
 fn output_format_override_from_args_parses_flags() {
     let args = ["--output-format", "text"];
@@ -309,7 +274,6 @@ fn output_format_override_from_args_parses_flags() {
         Some(CliOutputFormat::Json)
     );
 }
-
 #[test]
 fn effective_output_format_for_address_tools_uses_cli_flag() {
     let args = Args::try_parse_from([
@@ -324,14 +288,12 @@ fn effective_output_format_for_address_tools_uses_cli_flag() {
     .expect("parse args");
     assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
 }
-
 #[test]
 fn effective_output_format_uses_args_for_other_tools() {
     let args = Args::try_parse_from(["iroha", "--output-format", "json", "tools", "version"])
         .expect("parse args");
     assert_eq!(effective_output_format(&args), CliOutputFormat::Json);
 }
-
 #[test]
 fn contract_developer_workflow_has_one_canonical_command_path() {
     Args::try_parse_from(["iroha", "contract", "dev", "doctor"])
@@ -345,7 +307,6 @@ fn contract_developer_workflow_has_one_canonical_command_path() {
         "the retired plural alias must not remain as a compatibility surface"
     );
 }
-
 #[test]
 fn raw_domain_registration_command_is_not_parseable() {
     assert!(
@@ -361,7 +322,6 @@ fn raw_domain_registration_command_is_not_parseable() {
         "ordinary domain creation must use `app alias setup`"
     );
 }
-
 #[test]
 fn retired_sumeragi_debug_commands_are_not_parseable() {
     for command in [
@@ -375,19 +335,16 @@ fn retired_sumeragi_debug_commands_are_not_parseable() {
         );
     }
 }
-
 #[test]
 fn fallback_config_derives_checked_signing_key() {
     let config = fallback_config();
     let payload = b"offline fallback config signing smoke";
     let signature = iroha_crypto::Signature::try_new(config.key_pair.private_key(), payload)
         .expect("fallback signing key should sign");
-
     signature
         .verify(config.key_pair.public_key(), payload)
         .expect("fallback signature should verify");
 }
-
 #[test]
 fn fallback_config_is_limited_to_offline_commands() {
     let args = Args::try_parse_from([
@@ -402,7 +359,6 @@ fn fallback_config_is_limited_to_offline_commands() {
     ])
     .expect("parse offline rent quote");
     assert!(args.command.allows_fallback_config());
-
     for command in [
         vec![
             "iroha",
@@ -447,7 +403,6 @@ fn fallback_config_is_limited_to_offline_commands() {
         let args = Args::try_parse_from(command).expect("parse offline SoraFS reserve command");
         assert!(args.command.allows_fallback_config());
     }
-
     let args = Args::try_parse_from([
         "iroha",
         "app",
@@ -468,7 +423,6 @@ fn fallback_config_is_limited_to_offline_commands() {
     ])
     .expect("parse offline taikai cek rotation");
     assert!(args.command.allows_fallback_config());
-
     let args = Args::try_parse_from([
         "iroha",
         "app",
@@ -486,7 +440,6 @@ fn fallback_config_is_limited_to_offline_commands() {
     ])
     .expect("parse offline taikai watcher");
     assert!(args.command.allows_fallback_config());
-
     let args = Args::try_parse_from([
         "iroha",
         "app",
@@ -505,15 +458,12 @@ fn fallback_config_is_limited_to_offline_commands() {
     ])
     .expect("parse publishing taikai watcher");
     assert!(!args.command.allows_fallback_config());
-
     let args = Args::try_parse_from(["iroha", "tools", "address", "convert", "sora1"])
         .expect("parse address conversion");
     assert!(args.command.allows_fallback_config());
-
     let args = Args::try_parse_from(["iroha", "app", "zk", "roots", "--asset-id", "asset#domain"])
         .expect("parse runtime ZK roots command");
     assert!(!args.command.allows_fallback_config());
-
     let args = Args::try_parse_from([
         "iroha",
         "tx",
@@ -523,7 +473,6 @@ fn fallback_config_is_limited_to_offline_commands() {
     ])
     .expect("parse runtime tx status");
     assert!(!args.command.allows_fallback_config());
-
     let args = Args::try_parse_from([
         "iroha",
         "--machine",
@@ -538,7 +487,6 @@ fn fallback_config_is_limited_to_offline_commands() {
     .expect("parse local contract manifest build");
     assert!(args.command.allows_fallback_config());
     assert!(args.command.allows_fallback_config_in_machine_mode());
-
     for command in [
         vec!["iroha", "--machine", "contract", "app", "build"],
         vec!["iroha", "--machine", "contract", "dev", "check"],
@@ -596,11 +544,9 @@ fn fallback_config_is_limited_to_offline_commands() {
         assert!(args.command.allows_fallback_config());
         assert!(args.command.allows_fallback_config_in_machine_mode());
     }
-
     let args = Args::try_parse_from(["iroha", "contract", "dev", "doctor"])
         .expect("parse network-aware contract doctor");
     assert!(!args.command.allows_fallback_config());
-
     let args = Args::try_parse_from([
         "iroha",
         "contract",
@@ -612,7 +558,6 @@ fn fallback_config_is_limited_to_offline_commands() {
     .expect("parse on-chain contract manifest query");
     assert!(!args.command.allows_fallback_config());
 }
-
 #[test]
 fn vk_register_and_update_help_documents_namespace() {
     for action in ["register", "update"] {
@@ -626,7 +571,6 @@ fn vk_register_and_update_help_documents_namespace() {
         );
     }
 }
-
 #[test]
 fn tx_status_wait_is_explicit() {
     let args = Args::try_parse_from([
@@ -640,12 +584,10 @@ fn tx_status_wait_is_explicit() {
     let Command::Tx(transaction::Command::Status(status)) = args.command else {
         panic!("expected tx status command");
     };
-
     assert!(!status.wait.wait);
     assert!(status.wait.is_enabled());
     assert_eq!(status.scope, None);
 }
-
 #[test]
 fn tx_status_scope_is_explicit_and_cannot_override_wait_routing() {
     let args = Args::try_parse_from([
@@ -662,7 +604,6 @@ fn tx_status_scope_is_explicit_and_cannot_override_wait_routing() {
         panic!("expected tx status command");
     };
     assert_eq!(status.scope, Some(transaction::StatusScope::Local));
-
     let error = Args::try_parse_from([
         "iroha",
         "tx",
@@ -676,7 +617,6 @@ fn tx_status_scope_is_explicit_and_cannot_override_wait_routing() {
     .expect_err("explicit scope must not override transaction wait routing");
     assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
 }
-
 #[test]
 fn trigger_enable_disable_parse_positional_id() {
     let args = Args::try_parse_from(["iroha", "trigger", "enable", "soraswap_tick"])
@@ -685,7 +625,6 @@ fn trigger_enable_disable_parse_positional_id() {
         panic!("expected trigger enable command");
     };
     assert_eq!(enable.id.to_string(), "soraswap_tick");
-
     let args = Args::try_parse_from(["iroha", "trigger", "disable", "soraswap_tick"])
         .expect("parse trigger disable");
     let Command::Trigger(trigger::Command::Disable(disable)) = args.command else {
@@ -693,7 +632,6 @@ fn trigger_enable_disable_parse_positional_id() {
     };
     assert_eq!(disable.id.to_string(), "soraswap_tick");
 }
-
 #[test]
 fn trigger_list_all_active_parse() {
     let args =
@@ -703,7 +641,6 @@ fn trigger_list_all_active_parse() {
         panic!("expected trigger list all command");
     };
     assert!(!active);
-
     let args = Args::try_parse_from(["iroha", "trigger", "list", "all", "--active"])
         .expect("parse active trigger list");
     let Command::Trigger(trigger::Command::List(trigger::List::All { active, .. })) = args.command
@@ -712,7 +649,6 @@ fn trigger_list_all_active_parse() {
     };
     assert!(active);
 }
-
 #[test]
 fn render_cli_error_includes_kind_and_exit_code() {
     let report = Report::new(MainError::Config);
@@ -731,7 +667,6 @@ fn render_cli_error_includes_kind_and_exit_code() {
         Some(3)
     );
 }
-
 #[test]
 fn render_cli_error_includes_command_message() {
     let report = Report::new(MainError::Command("missing budget".to_string()));
@@ -749,7 +684,6 @@ fn render_cli_error_includes_command_message() {
         "message should include context: {err}"
     );
 }
-
 #[test]
 fn render_cli_error_marks_cli_argument_failures_as_input() {
     let report = Report::new(MainError::CliArgs("unknown flag".to_string()));
@@ -768,7 +702,6 @@ fn render_cli_error_marks_cli_argument_failures_as_input() {
         "message should include parse context: {err}"
     );
 }
-
 #[test]
 fn signed_transaction_size_cli_parses_canonical_and_short_paths() {
     let canonical = Args::try_parse_from(["iroha", "ledger", "transaction", "signed-size"])
@@ -779,7 +712,6 @@ fn signed_transaction_size_cli_parses_canonical_and_short_paths() {
             transaction::Command::SignedSize(_)
         ))
     ));
-
     let short = Args::try_parse_from(["iroha", "tx", "signed-size"])
         .expect("short signed-size command should parse");
     assert!(matches!(
@@ -787,7 +719,6 @@ fn signed_transaction_size_cli_parses_canonical_and_short_paths() {
         Command::Tx(transaction::Command::SignedSize(_))
     ));
 }
-
 #[test]
 fn printjsoncontext_routes_text_to_stderr_in_json_mode() {
     let mut ctx = test_context(CliOutputFormat::Json);
@@ -796,7 +727,6 @@ fn printjsoncontext_routes_text_to_stderr_in_json_mode() {
     let stderr = String::from_utf8(ctx.err_write).expect("stderr utf8");
     assert_eq!(stderr, "hello\n");
 }
-
 #[test]
 fn printjsoncontext_writes_text_to_stdout_in_text_mode() {
     let mut ctx = test_context(CliOutputFormat::Text);
@@ -805,7 +735,6 @@ fn printjsoncontext_writes_text_to_stdout_in_text_mode() {
     let stdout = String::from_utf8(ctx.write).expect("stdout utf8");
     assert_eq!(stdout, "hello\n");
 }
-
 #[test]
 fn printjsoncontext_writes_data_lines_to_stdout_in_json_mode() {
     let mut ctx = test_context(CliOutputFormat::Json);
@@ -814,7 +743,6 @@ fn printjsoncontext_writes_data_lines_to_stdout_in_json_mode() {
     let stdout = String::from_utf8(ctx.write).expect("stdout utf8");
     assert_eq!(stdout, "input,status\n");
 }
-
 #[test]
 fn taira_doctor_cli_parses_public_root_and_json() {
     let args = Args::try_parse_from([
@@ -832,7 +760,6 @@ fn taira_doctor_cli_parses_public_root_and_json() {
     assert_eq!(cmd.public_root, "https://taira.sora.org");
     assert!(cmd.json);
 }
-
 #[test]
 fn taira_write_canary_cli_parses_defaults_and_overrides() {
     let args = Args::try_parse_from([
@@ -866,7 +793,6 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
     );
     assert!(cmd.json);
 }
-
 #[test]
 fn soracloud_top_level_app_parser_replaces_nested_app_path() {
     Args::try_parse_from([
@@ -878,7 +804,6 @@ fn soracloud_top_level_app_parser_replaces_nested_app_path() {
         "app_manifest.json",
     ])
     .expect("top-level soracloud app doctor should parse");
-
     let err = Args::try_parse_from([
         "iroha",
         "app",
@@ -891,13 +816,11 @@ fn soracloud_top_level_app_parser_replaces_nested_app_path() {
     .expect_err("old nested Soracloud path must be removed");
     assert_eq!(err.kind(), ErrorKind::InvalidSubcommand);
 }
-
 #[test]
 fn soracloud_offline_app_commands_allow_fallback_config() {
     let init =
         Args::try_parse_from(["iroha", "soracloud", "app", "init"]).expect("app init should parse");
     assert!(init.command.allows_fallback_config());
-
     let simulate = Args::try_parse_from([
         "iroha",
         "soracloud",
@@ -908,12 +831,10 @@ fn soracloud_offline_app_commands_allow_fallback_config() {
     ])
     .expect("app simulate should parse");
     assert!(simulate.command.allows_fallback_config());
-
     let release = Args::try_parse_from(["iroha", "soracloud", "app", "release"])
         .expect("app release should parse");
     assert!(!release.command.allows_fallback_config());
 }
-
 #[test]
 fn soracloud_service_model_hf_and_agent_parsers_are_namespaced() {
     Args::try_parse_from([
@@ -959,34 +880,27 @@ fn soracloud_service_model_hf_and_agent_parsers_are_namespaced() {
     ])
     .expect("top-level soracloud agent status should parse");
 }
-
 #[test]
 fn resolve_account_id_with_rejects_public_key_domain() {
     let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let key_pair = fixture_key_pair(7);
     let literal = format!("{}@{}", key_pair.public_key(), domain);
-
     let err = resolve_account_id_with(&literal).expect_err("public_key@domain should be rejected");
-
     assert!(
         err.to_string().contains("must not include '@domain'"),
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn resolve_account_id_with_rejects_non_canonical_i105_literal() {
     let literal = sample_noncanonical_i105_literal(25);
-
     let err =
         resolve_account_id_with(&literal).expect_err("non-canonical I105 literal should fail");
-
     assert!(
         err.to_string().contains("must be canonical I105"),
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn parse_register_account_id_rejects_alias_like_literal() {
     let err = parse_register_account_id("inori@invalid-domain").expect_err("alias should fail");
@@ -996,7 +910,6 @@ fn parse_register_account_id_rejects_alias_like_literal() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn parse_register_account_id_rejects_non_canonical_i105_literal() {
     let literal = sample_noncanonical_i105_literal(26);
@@ -1008,7 +921,6 @@ fn parse_register_account_id_rejects_non_canonical_i105_literal() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn parse_register_account_id_rejects_canonical_hex() {
     let key_pair = fixture_key_pair(14);
@@ -1021,13 +933,11 @@ fn parse_register_account_id_rejects_canonical_hex() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn parse_asset_balance_scope_literal_accepts_global() {
     let parsed = parse_asset_balance_scope_literal("global").expect("global scope should parse");
     assert_eq!(parsed, iroha::data_model::asset::AssetBalanceScope::Global);
 }
-
 #[test]
 fn parse_asset_balance_scope_literal_accepts_dataspace() {
     let parsed =
@@ -1039,7 +949,6 @@ fn parse_asset_balance_scope_literal_accepts_dataspace() {
         )
     );
 }
-
 #[test]
 fn parse_asset_balance_scope_literal_rejects_invalid_literal() {
     let err = parse_asset_balance_scope_literal("scope:not-supported")
@@ -1050,7 +959,6 @@ fn parse_asset_balance_scope_literal_rejects_invalid_literal() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn ledger_asset_mint_parser_rejects_missing_account_for_definition() {
     let err = Args::try_parse_from([
@@ -1069,7 +977,6 @@ fn ledger_asset_mint_parser_rejects_missing_account_for_definition() {
         "unexpected clap error: {err}"
     );
 }
-
 #[test]
 fn parse_asset_definition_literal_accepts_base58() {
     let expected = AssetDefinitionId::derive_from_components(
@@ -1080,7 +987,6 @@ fn parse_asset_definition_literal_accepts_base58() {
         parse_asset_definition_literal(&expected.to_string()).expect("base58 literal should parse");
     assert_eq!(parsed, expected);
 }
-
 #[test]
 fn parse_asset_definition_literal_rejects_prefixed_literal() {
     let err = parse_asset_definition_literal("prefix:2f17c72466f84a4bb8a8e24884fdcd2f")
@@ -1090,17 +996,14 @@ fn parse_asset_definition_literal_rejects_prefixed_literal() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn resolve_account_id_with_resolves_encoded_literal() {
     let key_pair = fixture_key_pair(9);
     let account = AccountId::new(key_pair.public_key().clone());
     let canonical = account.canonical_i105().expect("canonical I105");
     let resolved = resolve_account_id_with(&canonical).expect("local resolve");
-
     assert_eq!(resolved.to_string(), account.to_string());
 }
-
 #[test]
 fn stream_timeout_driver_propagates_errors() {
     let mut stream = stream::iter(vec![Result::<DummyEvent, eyre::Report>::Err(eyre!(
@@ -1124,18 +1027,15 @@ fn stream_timeout_driver_propagates_errors() {
     assert!(err.to_string().contains("connection failed"));
     assert_eq!(processed, 0);
 }
-
 fn authority_fee_payment_with_gas(limit: u64) -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
-
 #[test]
 fn validate_executable_fee_payment_accepts_positive_ivm_gas_limit() {
     let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
     let fee_payment = authority_fee_payment_with_gas(42);
     validate_executable_fee_payment(&executable, &fee_payment).expect("gas limit should validate");
 }
-
 #[test]
 fn validate_executable_fee_payment_rejects_missing_ivm_gas_limit() {
     let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
@@ -1147,21 +1047,18 @@ fn validate_executable_fee_payment_rejects_missing_ivm_gas_limit() {
     assert!(err.to_string().contains("IVM transactions require"));
     assert!(err.to_string().contains("--gas-limit <u64>"));
 }
-
 #[test]
 fn apply_cli_gas_limit_override_rejects_zero() {
     let err = apply_cli_gas_limit_override(FeePaymentIntent::authority(Vec::new(), None), Some(0))
         .expect_err("zero gas limit must fail");
     assert!(err.to_string().contains("greater than zero"));
 }
-
 #[test]
 fn validate_executable_fee_payment_skips_instruction_transactions() {
     let executable = Executable::Instructions(Vec::<InstructionBox>::new().into());
     validate_executable_fee_payment(&executable, &FeePaymentIntent::authority(Vec::new(), None))
         .expect("plain instructions should not require gas_limit");
 }
-
 #[test]
 fn validate_executable_fee_payment_accepts_positive_ivm_proved_gas_limit() {
     let executable = Executable::IvmProved(iroha::data_model::transaction::IvmProved {
@@ -1173,7 +1070,6 @@ fn validate_executable_fee_payment_accepts_positive_ivm_proved_gas_limit() {
     let fee_payment = authority_fee_payment_with_gas(42);
     validate_executable_fee_payment(&executable, &fee_payment).expect("gas limit should validate");
 }
-
 #[test]
 fn validate_executable_fee_payment_rejects_missing_contract_call_gas_limit() {
     let executable = Executable::ContractCall(
@@ -1197,7 +1093,6 @@ fn validate_executable_fee_payment_rejects_missing_contract_call_gas_limit() {
     );
     assert!(!err.to_string().contains("--gas-limit <u64>"));
 }
-
 #[test]
 fn apply_cli_gas_limit_override_sets_and_replaces_signed_value() {
     let fee_payment = authority_fee_payment_with_gas(10);
@@ -1206,7 +1101,6 @@ fn apply_cli_gas_limit_override_sets_and_replaces_signed_value() {
         .expect("gas limit should be present");
     assert_eq!(gas_limit, 42);
 }
-
 #[test]
 fn fee_payment_args_require_explicit_payer_and_exact_sponsor_revision() {
     assert!(FeePaymentArgs::default().selection().is_err());
@@ -1217,14 +1111,12 @@ fn fee_payment_args_require_explicit_payer_and_exact_sponsor_revision() {
     .selection()
     .expect("authority selection");
     assert!(matches!(authority, FeePaymentIntent::Authority(_)));
-
     let missing = FeePaymentArgs {
         fee_payer: Some(FeePayerArg::Sponsor),
         ..FeePaymentArgs::default()
     };
     assert!(missing.selection().is_err());
 }
-
 #[test]
 fn fee_quote_may_replace_limits_but_not_payer_or_gas_bound() {
     use iroha::data_model::{
@@ -1233,7 +1125,6 @@ fn fee_quote_may_replace_limits_but_not_payer_or_gas_bound() {
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
     use iroha_primitives::numeric::Quantity;
-
     let requested = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(42));
     let quoted = FeePaymentIntent::authority(
         vec![FeeChargeLimit::new(
@@ -1247,7 +1138,6 @@ fn fee_quote_may_replace_limits_but_not_payer_or_gas_bound() {
         NonZeroU64::new(42),
     );
     assert!(requested.has_same_payer_and_gas_bound(&quoted));
-
     let sponsor = FeeSponsorProgramId::new(
         AccountId::new(fixture_key_pair(7).public_key().clone()),
         "default".parse().expect("program name"),
@@ -1257,7 +1147,6 @@ fn fee_quote_may_replace_limits_but_not_payer_or_gas_bound() {
     let wrong_gas = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(41));
     assert!(!requested.has_same_payer_and_gas_bound(&wrong_gas));
 }
-
 #[test]
 fn fee_quote_rejection_surfaces_capacity_and_remediation() {
     let body = br#"{
@@ -1277,7 +1166,6 @@ fn fee_quote_rejection_surfaces_capacity_and_remediation() {
     assert!(message.contains("available=7"));
     assert!(message.contains("retry in the next block"));
 }
-
 #[test]
 fn account_admission_rejected_message_includes_hint() {
     let i18n = Localizer::new(Bundle::Cli, Language::English);
@@ -1285,7 +1173,6 @@ fn account_admission_rejected_message_includes_hint() {
     assert!(message.contains("Account admission rejected"));
     assert!(message.contains("hint text"));
 }
-
 struct VersionContext {
     config: Config,
     i18n: Localizer,
@@ -1293,7 +1180,6 @@ struct VersionContext {
     lines: Vec<String>,
     server_version: String,
 }
-
 impl VersionContext {
     fn new(output_format: CliOutputFormat, server_version: &str) -> Self {
         Self {
@@ -1305,54 +1191,43 @@ impl VersionContext {
         }
     }
 }
-
 impl RunContext for VersionContext {
     fn config(&self) -> &Config {
         &self.config
     }
-
     fn transaction_metadata(&self) -> Option<&Metadata> {
         None
     }
-
     fn input_instructions(&self) -> bool {
         false
     }
-
     fn output_instructions(&self) -> bool {
         false
     }
-
     fn i18n(&self) -> &Localizer {
         &self.i18n
     }
-
     fn output_format(&self) -> CliOutputFormat {
         self.output_format
     }
-
     fn print_data<T>(&mut self, _data: &T) -> Result<()>
     where
         T: JsonSerialize + ?Sized,
     {
         Ok(())
     }
-
     fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
         self.lines.push(data.to_string());
         Ok(())
     }
-
     fn server_version(&self) -> Result<String> {
         Ok(self.server_version.clone())
     }
 }
-
 #[test]
 fn version_run_prints_localized_lines_in_text_mode() {
     let mut ctx = VersionContext::new(CliOutputFormat::Text, "1.2.3");
     Version.run(&mut ctx).expect("version run");
-
     let i18n = Localizer::new(Bundle::Cli, Language::English);
     let expected = vec![
         i18n.t_with("info.client_git_sha", &[("sha", VERGEN_GIT_SHA)]),
@@ -1362,10 +1237,8 @@ fn version_run_prints_localized_lines_in_text_mode() {
         ),
         i18n.t_with("info.server_version", &[("version", "1.2.3")]),
     ];
-
     assert_eq!(ctx.lines, expected);
 }
-
 #[test]
 fn listen_events_message_formats_context() {
     let i18n = Localizer::new(Bundle::Cli, Language::English);
@@ -1374,12 +1247,10 @@ fn listen_events_message_formats_context() {
     let message = listen_events_message(&filter, Some(timeout), &i18n);
     let expected = format!("Listening to events with filter: {filter:?} and timeout: {timeout:?}");
     assert_eq!(message, expected);
-
     let message = listen_events_message(&filter, None, &i18n);
     let expected = format!("Listening to events with filter: {filter:?}");
     assert_eq!(message, expected);
 }
-
 #[test]
 fn listen_blocks_message_formats_context() {
     let i18n = Localizer::new(Bundle::Cli, Language::English);
@@ -1388,12 +1259,10 @@ fn listen_blocks_message_formats_context() {
     let message = listen_blocks_message(height, Some(timeout), &i18n);
     let expected = format!("Listening to blocks from height: {height} and timeout: {timeout:?}");
     assert_eq!(message, expected);
-
     let message = listen_blocks_message(height, None, &i18n);
     let expected = format!("Listening to blocks from height: {height}");
     assert_eq!(message, expected);
 }
-
 #[test]
 fn help_text_localization_preserves_headings_when_translation_matches() {
     let i18n = Localizer::new(Bundle::Cli, Language::English);
@@ -1402,16 +1271,13 @@ fn help_text_localization_preserves_headings_when_translation_matches() {
     assert_eq!(localized, raw);
     assert!(!localized.contains("help.heading.usage"));
 }
-
 #[test]
 fn language_override_from_args_parses_flags() {
     let args = vec!["--language".to_string(), "ja".to_string()];
     assert_eq!(language_override_from_args(args), Some("ja".to_string()));
-
     let args = vec!["--language=fr".to_string()];
     assert_eq!(language_override_from_args(args), Some("fr".to_string()));
 }
-
 #[test]
 fn apply_transaction_overrides_uses_transaction_block_only() {
     let mut config = fallback_config();
@@ -1432,7 +1298,6 @@ status_timeout_ms = 3400
         Duration::from_millis(3400)
     );
 }
-
 #[test]
 fn apply_transaction_overrides_ignores_legacy_top_level_keys() {
     let mut config = fallback_config();
@@ -1449,13 +1314,11 @@ transaction_status_timeout = "77s"
     assert_eq!(config.transaction_ttl, original_ttl);
     assert_eq!(config.transaction_status_timeout, original_status);
 }
-
 struct CaptureContext {
     cfg: iroha::config::Config,
     captured: Option<Executable>,
     i18n: Localizer,
 }
-
 impl CaptureContext {
     fn new(account: AccountId) -> Self {
         let key_pair = fixture_key_pair(0xA5);
@@ -1488,39 +1351,31 @@ impl CaptureContext {
         }
     }
 }
-
 impl RunContext for CaptureContext {
     fn config(&self) -> &iroha::config::Config {
         &self.cfg
     }
-
     fn transaction_metadata(&self) -> Option<&Metadata> {
         None
     }
-
     fn input_instructions(&self) -> bool {
         false
     }
-
     fn output_instructions(&self) -> bool {
         false
     }
-
     fn i18n(&self) -> &Localizer {
         &self.i18n
     }
-
     fn print_data<T>(&mut self, _data: &T) -> Result<()>
     where
         T: JsonSerialize + ?Sized,
     {
         Ok(())
     }
-
     fn println(&mut self, _data: impl std::fmt::Display) -> Result<()> {
         Ok(())
     }
-
     fn submit_with_metadata(
         &mut self,
         instructions: impl Into<Executable>,
@@ -1530,13 +1385,11 @@ impl RunContext for CaptureContext {
         self.captured = Some(instructions.into());
         Ok(())
     }
-
     fn submit(&mut self, instructions: impl Into<Executable>) -> Result<()> {
         self.captured = Some(instructions.into());
         Ok(())
     }
 }
-
 #[test]
 fn ping_rejects_zero_count() {
     let account = account_with_seed("wonderland", 0x42);
@@ -1556,7 +1409,6 @@ fn ping_rejects_zero_count() {
             .contains("`--count` must be greater than zero")
     );
 }
-
 #[test]
 fn ping_submits_single_log_instruction() {
     let account = account_with_seed("wonderland", 0x42);
@@ -1587,7 +1439,6 @@ fn ping_submits_single_log_instruction() {
     assert_eq!(log.level, Level::WARN);
     assert_eq!(log.msg, "hello");
 }
-
 #[test]
 fn multisig_register_run_defaults_to_domainless_home_domain() {
     let account = AccountId::new(fixture_key_pair(0xD6).public_key().clone());
@@ -1602,9 +1453,7 @@ fn multisig_register_run_defaults_to_domainless_home_domain() {
         )
         .into(),
     };
-
     register.run(&mut ctx).expect("register should build");
-
     let exec = ctx.captured.expect("captured executable");
     let Executable::Instructions(instructions) = exec else {
         panic!("expected instructions executable");
@@ -1629,11 +1478,9 @@ fn multisig_register_run_defaults_to_domainless_home_domain() {
         "CLI default multisig registration should not invent a home domain"
     );
 }
-
 #[test]
 fn admission_hint_reports_disabled_domain() {
     use iroha::data_model::isi::error::AccountAdmissionError;
-
     let err = eyre::Report::from(AccountAdmissionError::ImplicitAccountCreationDisabled);
     let hint = account_admission_hint(err.as_ref()).expect("hint should be present");
     assert!(
@@ -1645,13 +1492,11 @@ fn admission_hint_reports_disabled_domain() {
         "hint should instruct explicit registration: {hint}"
     );
 }
-
 #[test]
 fn admission_hint_reports_quota_scope() {
     use iroha::data_model::isi::error::{
         AccountAdmissionError, AccountAdmissionQuotaExceeded, AccountAdmissionQuotaScope,
     };
-
     let err = eyre::Report::from(AccountAdmissionError::QuotaExceeded(
         AccountAdmissionQuotaExceeded {
             scope: AccountAdmissionQuotaScope::Transaction,
@@ -1666,7 +1511,6 @@ fn admission_hint_reports_quota_scope() {
         "quota scope should be surfaced: {hint}"
     );
 }
-
 #[test]
 fn admission_rejected_message_includes_hint() {
     let i18n = Localizer::new(Bundle::Cli, Language::English);
@@ -1680,7 +1524,6 @@ fn admission_rejected_message_includes_hint() {
         "unexpected message: {message}"
     );
 }
-
 #[test]
 fn listen_messages_include_timeout_context() {
     let i18n = Localizer::new(Bundle::Cli, Language::English);
@@ -1691,7 +1534,6 @@ fn listen_messages_include_timeout_context() {
         "unexpected message: {message}"
     );
     assert!(message.contains("timeout"), "unexpected message: {message}");
-
     let height = NonZeroU64::new(7).expect("height");
     let message = listen_blocks_message(height, Some(Duration::from_secs(2)), &i18n);
     assert!(
@@ -1700,7 +1542,6 @@ fn listen_messages_include_timeout_context() {
     );
     assert!(message.contains("timeout"), "unexpected message: {message}");
 }
-
 #[test]
 fn trigger_register_builds_expected_instruction() {
     // Prepare a tiny bytecode blob file
@@ -1712,11 +1553,9 @@ fn trigger_register_builds_expected_instruction() {
     let path = dir.join(format!("iroha_cli_trigger_test_{ts}.to"));
     let mut f = fs::File::create(&path).unwrap();
     f.write_all(&[1, 2, 3, 4]).unwrap();
-
     // Use a deterministic account for authority
     let account = account_with_seed("wonderland", 0x42);
     let mut ctx = CaptureContext::new(account.clone());
-
     let args = trigger::Register {
         id: "my_trigger".parse().unwrap(),
         path: Some(path),
@@ -1743,22 +1582,18 @@ fn trigger_register_builds_expected_instruction() {
         time_start: None,
         time_start_rfc3339: None,
     };
-
     args.run(&mut ctx).expect("run ok");
-
     let exec = ctx.captured.expect("captured");
     let Executable::Instructions(instructions) = exec else {
         panic!("expected instructions executable");
     };
     assert_eq!(instructions.len(), 1);
-
     let ib = &instructions[0];
     let any: &dyn iroha::data_model::isi::Instruction = &**ib;
     let reg = any
         .as_any()
         .downcast_ref::<iroha::data_model::isi::RegisterBox>()
         .expect("register instruction");
-
     let iroha::data_model::isi::RegisterBox::Trigger(reg_tr) = reg else {
         panic!("expected trigger register")
     };
@@ -1769,7 +1604,6 @@ fn trigger_register_builds_expected_instruction() {
         iroha::data_model::trigger::action::Repeats::Exactly(2)
     );
     assert_eq!(trig.action().authority(), &account);
-
     match trig.action().filter() {
         iroha::data_model::events::EventFilterBox::ExecuteTrigger(f) => {
             let expected = ExecuteTriggerEventFilter::new()
@@ -1780,7 +1614,6 @@ fn trigger_register_builds_expected_instruction() {
         _ => panic!("expected ExecuteTrigger filter"),
     }
 }
-
 #[test]
 fn trigger_register_time_filter_defaults_to_exactly_one() {
     // Prepare tiny bytecode file
@@ -1792,11 +1625,9 @@ fn trigger_register_time_filter_defaults_to_exactly_one() {
     let path = dir.join(format!("iroha_cli_trigger_test_time_{ts}.to"));
     let mut f = fs::File::create(&path).unwrap();
     f.write_all(&[0xAA, 0xBB]).unwrap();
-
     // Deterministic account
     let account = account_with_seed("wonderland", 0x42);
     let mut ctx = CaptureContext::new(account.clone());
-
     let start_ms = 1_700_000_000_000u64;
     // No repeats provided; non-periodic schedule should imply Exactly(1)
     let args = trigger::Register {
@@ -1825,9 +1656,7 @@ fn trigger_register_time_filter_defaults_to_exactly_one() {
         time_start: None,
         time_start_rfc3339: None,
     };
-
     args.run(&mut ctx).expect("run ok");
-
     let exec = ctx.captured.expect("captured");
     let Executable::Instructions(instructions) = exec else {
         panic!("expected instructions executable");
@@ -1851,7 +1680,6 @@ fn trigger_register_time_filter_defaults_to_exactly_one() {
         _ => panic!("expected time filter"),
     }
 }
-
 #[test]
 fn trigger_register_data_domain_filter_builds() {
     // Prepare tiny bytecode file
@@ -1863,10 +1691,8 @@ fn trigger_register_data_domain_filter_builds() {
     let path = dir.join(format!("iroha_cli_trigger_test_data_{ts}.to"));
     let mut f = fs::File::create(&path).unwrap();
     f.write_all(&[0x01]).unwrap();
-
     let account = account_with_seed("wonderland", 0x42);
     let mut ctx = CaptureContext::new(account);
-
     let args = trigger::Register {
         id: "data_trig".parse().unwrap(),
         path: Some(path),
@@ -1893,7 +1719,6 @@ fn trigger_register_data_domain_filter_builds() {
         time_start: None,
         time_start_rfc3339: None,
     };
-
     args.run(&mut ctx).expect("run ok");
     let exec = ctx.captured.expect("captured");
     let Executable::Instructions(instructions) = exec else {

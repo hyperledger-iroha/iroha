@@ -17,16 +17,13 @@ pub(crate) struct NativeAmxParticipantApplicationManifestArtifactV1 {
     /// Hash of the independently persisted and verified v2 finality artifact.
     pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
 }
-
 impl NativeAmxParticipantApplicationManifestArtifactV1 {
     const VERSION: u16 = 1;
     const FORMAT_LABEL: &'static str = "lane.native_amx_participant_application_manifest.v1";
-
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         norito::encode_canonical(self)
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct NativeAmxEvidencePruneEntryV2 {
@@ -34,7 +31,6 @@ struct NativeAmxEvidencePruneEntryV2 {
     participant_height: u64,
     artifact_hash: Hash,
 }
-
 /// Exact durable evidence that a Native AMX prune operation may never replace.
 ///
 /// `identity` is the same independently versioned projection used by the
@@ -47,7 +43,6 @@ struct NativeAmxEvidencePruneProtectedLatestV2 {
     identity: NativeAmxParticipantReceiptLatestIndexV2,
     receipt_artifact_hash: HashOf<NativeAmxParticipantApplicationReceiptArtifact>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct NativeAmxEvidencePruneIntentV2 {
@@ -58,13 +53,11 @@ struct NativeAmxEvidencePruneIntentV2 {
     protected_latest: NativeAmxEvidencePruneProtectedLatestV2,
     entries: Vec<NativeAmxEvidencePruneEntryV2>,
 }
-
 impl NativeAmxEvidencePruneIntentV2 {
     const VERSION: u8 = 2;
     const MANIFEST_KIND: u8 = 1;
     const RECEIPT_KIND: u8 = 2;
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
@@ -99,12 +92,10 @@ pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
     /// Exact canonical transaction results.
     pub results: Vec<TransactionResult>,
 }
-
 type NativeAmxParticipantApplicationArtifactPair = (
     NativeAmxParticipantApplicationManifestArtifactV1,
     NativeAmxParticipantApplicationReceiptArtifact,
 );
-
 /// Side-effect-free failure while projecting the exact durable Native AMX
 /// artifact bytes which a candidate would require.
 #[derive(Debug, thiserror::Error)]
@@ -119,7 +110,6 @@ pub(crate) enum NativeAmxParticipantApplicationEvidenceByteBudgetError {
     #[error("{0}")]
     Budget(String),
 }
-
 /// Bounded route/incarnation pointer to the latest Native AMX application receipt.
 ///
 /// The immutable per-height manifest and receipt files remain authoritative.
@@ -142,7 +132,6 @@ struct NativeAmxParticipantReceiptLatestIndexV2 {
     finality_artifact_hash: HashOf<V2FinalityArtifact>,
     manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,
 }
-
 /// Exact in-memory attestation that every separate-participant frontier in one
 /// canonical carrier has crossed the pre-WSV durable publication boundary.
 ///
@@ -159,7 +148,6 @@ pub(crate) struct NativeAmxParticipantApplicationPrepublicationToken {
     manifest_leaf_count: u32,
     identities: Vec<NativeAmxParticipantApplicationPrepublicationIdentity>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NativeAmxParticipantApplicationPrepublicationIdentity {
     lane_id: LaneId,
@@ -171,7 +159,6 @@ struct NativeAmxParticipantApplicationPrepublicationIdentity {
     receipt_artifact_hash: HashOf<NativeAmxParticipantApplicationReceiptArtifact>,
     latest_index_artifact_hash: HashOf<NativeAmxParticipantReceiptLatestIndexV2>,
 }
-
 struct NativeAmxParticipantApplicationEvidencePlan {
     application_block_height: u64,
     application_block_hash: HashOf<BlockHeader>,
@@ -181,20 +168,17 @@ struct NativeAmxParticipantApplicationEvidencePlan {
     manifest_leaf_count: u32,
     artifacts: Vec<NativeAmxParticipantApplicationArtifactPair>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NativeAmxParticipantApplicationRoutePreflight {
     incoming: NativeAmxParticipantReceiptLatestIndexV2,
     current: Option<NativeAmxParticipantReceiptLatestIndexV2>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NativeAmxParticipantApplicationManifestReadback {
     manifest_root: Hash,
     manifest_leaf_count: u32,
     artifact_hashes: Vec<HashOf<NativeAmxParticipantApplicationManifestArtifactV1>>,
 }
-
 impl NativeAmxParticipantApplicationManifestReadback {
     fn authenticates(
         &self,
@@ -210,23 +194,19 @@ impl NativeAmxParticipantApplicationManifestReadback {
                 == Some(&HashOf::new(manifest))
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeAmxParticipantApplicationPublicationMode {
     PreWsv,
     PostWsvRepair,
 }
-
 impl NativeAmxParticipantApplicationPublicationMode {
     const fn requires_post_apply_metadata(self) -> bool {
         matches!(self, Self::PostWsvRepair)
     }
-
     const fn permits_retention_cleanup(self) -> bool {
         matches!(self, Self::PostWsvRepair)
     }
 }
-
 /// Startup-only classification for a retained Native AMX participant receipt.
 ///
 /// Runtime readers never accept either pending state: they continue to require
@@ -243,14 +223,12 @@ enum NativeAmxParticipantReceiptStartupEvidence {
     PendingTipMetadata,
     PendingManifestRepair,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeAmxLatestIndexTempReconciliation {
     Absent,
     RemovedIdentical,
     Promoted,
 }
-
 fn native_amx_startup_retention_cleanup_authorized(
     newest_evidence: Option<NativeAmxParticipantReceiptStartupEvidence>,
     has_partial_pair: bool,
@@ -260,10 +238,8 @@ fn native_amx_startup_retention_cleanup_authorized(
             evidence == NativeAmxParticipantReceiptStartupEvidence::DurablyApplied
         })
 }
-
 impl NativeAmxParticipantReceiptLatestIndexV2 {
     const VERSION: u8 = 2;
-
     fn from_receipt(receipt: &NativeAmxParticipantApplicationReceiptArtifact) -> Self {
         let descriptor = &receipt.participant_proposal.descriptor;
         Self {
@@ -281,11 +257,9 @@ impl NativeAmxParticipantReceiptLatestIndexV2 {
             manifest_artifact_hash: receipt.manifest_artifact_hash,
         }
     }
-
     fn matches_receipt(&self, receipt: &NativeAmxParticipantApplicationReceiptArtifact) -> bool {
         *self == Self::from_receipt(receipt)
     }
-
     fn matches_manifest(
         &self,
         manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
@@ -304,7 +278,6 @@ impl NativeAmxParticipantReceiptLatestIndexV2 {
             && self.manifest_artifact_hash == HashOf::new(manifest)
     }
 }
-
 impl NativeAmxEvidencePruneProtectedLatestV2 {
     fn from_artifacts(
         manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
@@ -319,11 +292,9 @@ impl NativeAmxEvidencePruneProtectedLatestV2 {
         })
     }
 }
-
 impl NativeAmxParticipantApplicationReceiptArtifact {
     const VERSION: u16 = 2;
     const FORMAT_LABEL: &'static str = "lane.native_amx_participant_application_receipt.v2";
-
     fn new(
         entry: &crate::sumeragi::exec::NativeAmxApplicationManifestEntryV1,
         manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,
@@ -359,18 +330,15 @@ impl NativeAmxParticipantApplicationReceiptArtifact {
             results: entry.results.clone(),
         }
     }
-
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         norito::encode_canonical(self)
     }
 }
-
 fn native_amx_participant_application_finality_placeholder_hash() -> HashOf<V2FinalityArtifact> {
     HashOf::from_untyped_unchecked(Hash::new(
         b"Native AMX participant evidence finality placeholder",
     ))
 }
-
 /// Build the exact ordered per-route artifact pairs without consulting Kura
 /// state or performing I/O. The finality identity is fixed-width, so callers
 /// may use the typed placeholder during candidate validation and the actual
@@ -400,14 +368,12 @@ fn native_amx_participant_application_artifacts(
     }
     Some(artifacts)
 }
-
 fn native_amx_participant_application_pair_framed_bytes(
     manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
     receipt: &NativeAmxParticipantApplicationReceiptArtifact,
 ) -> Result<(Vec<u8>, Vec<u8>), norito::Error> {
     Ok((manifest.encode_framed()?, receipt.encode_framed()?))
 }
-
 fn checked_native_amx_participant_application_pair_bytes(
     manifest_bytes: u64,
     receipt_bytes: u64,
@@ -418,7 +384,6 @@ fn checked_native_amx_participant_application_pair_bytes(
         )
     })
 }
-
 impl NativeAmxParticipantApplicationPrepublicationIdentity {
     fn from_artifacts(
         manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
@@ -444,7 +409,6 @@ impl NativeAmxParticipantApplicationPrepublicationIdentity {
         })
     }
 }
-
 impl NativeAmxParticipantApplicationPrepublicationToken {
     fn from_plan(
         plan: &NativeAmxParticipantApplicationEvidencePlan,
@@ -463,7 +427,6 @@ impl NativeAmxParticipantApplicationPrepublicationToken {
             identities,
         })
     }
-
     /// Verify that this read-back token covers exactly the canonical manifest
     /// which will stage Native participant frontiers in State.
     #[must_use]
@@ -498,7 +461,6 @@ impl NativeAmxParticipantApplicationPrepublicationToken {
         {
             return false;
         }
-
         let Some(artifacts) =
             native_amx_participant_application_artifacts(manifest, self.finality_artifact_hash)
         else {
@@ -518,7 +480,6 @@ impl NativeAmxParticipantApplicationPrepublicationToken {
         }
         self.identities == expected
     }
-
     /// Verify the exact ordered State frontier projection authenticated by
     /// this durable prepublication token.
     #[must_use]

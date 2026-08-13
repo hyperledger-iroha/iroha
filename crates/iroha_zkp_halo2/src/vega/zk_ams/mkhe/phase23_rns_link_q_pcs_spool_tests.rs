@@ -3,14 +3,10 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-
 use super::*;
-
 static TEST_DIRECTORY_SEQUENCE_V2: AtomicU64 = AtomicU64::new(0);
 static TEST_MODULI_V2: [u64; 2] = [97, 113];
-
 struct TestDirectoryV2(PathBuf);
-
 impl TestDirectoryV2 {
     fn new_v2() -> Self {
         let sequence = TEST_DIRECTORY_SEQUENCE_V2.fetch_add(1, Ordering::SeqCst);
@@ -22,13 +18,11 @@ impl TestDirectoryV2 {
         Self(path)
     }
 }
-
 impl Drop for TestDirectoryV2 {
     fn drop(&mut self) {
         fs::remove_dir(&self.0).expect("remove empty qPCS spool test directory");
     }
 }
-
 fn tiny_geometry_v2() -> SpoolGeometryV2 {
     SpoolGeometryV2 {
         ring_degree: 4,
@@ -39,14 +33,12 @@ fn tiny_geometry_v2() -> SpoolGeometryV2 {
         moduli: &TEST_MODULI_V2,
     }
 }
-
 fn test_context_v2() -> PublicSpoolContextV2 {
     PublicSpoolContextV2 {
         sealed_source_transcript_digest: [0x11; 32],
         source_algebra_binding_digest: [0x22; 32],
     }
 }
-
 #[cfg(unix)]
 fn test_writer_v2(directory: &TestDirectoryV2) -> QPcsSpoolWriterV2 {
     QPcsSpoolWriterV2::create_with_geometry_v2(
@@ -57,7 +49,6 @@ fn test_writer_v2(directory: &TestDirectoryV2) -> QPcsSpoolWriterV2 {
     )
     .expect("create tiny concrete qPCS spools")
 }
-
 fn coefficient_chunk_v2(geometry: SpoolGeometryV2, values: &[u64]) -> ConfidentialSpoolChunkV1 {
     assert_eq!(
         values.len(),
@@ -74,7 +65,6 @@ fn coefficient_chunk_v2(geometry: SpoolGeometryV2, values: &[u64]) -> Confidenti
     }
     chunk
 }
-
 fn zero_coefficient_chunk_v2(geometry: SpoolGeometryV2) -> ConfidentialSpoolChunkV1 {
     ConfidentialSpoolChunkV1::new_zeroed_v1(
         geometry
@@ -83,12 +73,10 @@ fn zero_coefficient_chunk_v2(geometry: SpoolGeometryV2) -> ConfidentialSpoolChun
     )
     .expect("allocate zero coefficient chunk")
 }
-
 fn zero_lde_chunk_v2(geometry: SpoolGeometryV2) -> ConfidentialSpoolChunkV1 {
     ConfidentialSpoolChunkV1::new_zeroed_v1(geometry.lde_block_bytes_v2().expect("LDE block bytes"))
         .expect("allocate zero LDE chunk")
 }
-
 #[cfg(unix)]
 fn fill_zero_coefficients_v2(writer: &mut QPcsSpoolWriterV2, geometry: SpoolGeometryV2) {
     for _ in 0..geometry
@@ -100,7 +88,6 @@ fn fill_zero_coefficients_v2(writer: &mut QPcsSpoolWriterV2, geometry: SpoolGeom
             .expect("write zero coefficient block");
     }
 }
-
 #[cfg(unix)]
 fn replay_all_coefficients_v2(
     mut stage: replay_v2::QPcsCoefficientReplayStageV2,
@@ -118,7 +105,6 @@ fn replay_all_coefficients_v2(
     }
     stage
 }
-
 #[cfg(unix)]
 fn fill_zero_spools_v2(
     mut writer: QPcsSpoolWriterV2,
@@ -136,7 +122,6 @@ fn fill_zero_spools_v2(
     }
     stage.seal_lde_v2().expect("seal complete tiny spools")
 }
-
 fn to_hex_v2(bytes: [u8; 32]) -> String {
     let mut encoded = String::with_capacity(64);
     for byte in bytes {
@@ -145,7 +130,6 @@ fn to_hex_v2(bytes: [u8; 32]) -> String {
     }
     encoded
 }
-
 const RELEASE_PARAMETER_KAT_V2: [u8; 32] = [
     0xcc, 0x56, 0x91, 0x18, 0x77, 0xef, 0x83, 0xb0, 0x4c, 0x3c, 0xe8, 0x79, 0x64, 0x0f, 0x29, 0x43,
     0xce, 0xab, 0xe1, 0x3c, 0x38, 0xa7, 0x37, 0x2d, 0x5c, 0x4f, 0x69, 0x63, 0x7f, 0xe7, 0x75, 0x66,
@@ -166,7 +150,6 @@ const RELEASE_LDE_CONTEXT_KAT_V2: [u8; 32] = [
     0x74, 0x33, 0x3e, 0x58, 0x86, 0x86, 0xba, 0x31, 0x27, 0x61, 0x85, 0x55, 0xdc, 0xbf, 0x1b, 0x96,
     0x04, 0x4d, 0xfa, 0x2d, 0x14, 0xd1, 0x7b, 0x1c, 0x10, 0x1d, 0x42, 0xa5, 0xd7, 0xfb, 0xbe, 0x11,
 ];
-
 fn manual_parameter_oracle_v2() -> [u8; 32] {
     let mut frame = b"iroha.zk-ams.v2.q-pcs.soundness.parameters\0".to_vec();
     frame.extend_from_slice(&[2, 17, 19]);
@@ -183,7 +166,6 @@ fn manual_parameter_oracle_v2() -> [u8; 32] {
     }
     crate::vega::sponge::keccak256(&frame)
 }
-
 fn manual_context_oracle_v2(role: u8, parameter: [u8; 32], mapping: [u8; 32]) -> [u8; 32] {
     let context = test_context_v2();
     let mut frame = b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.confidential-spool.context\0".to_vec();
@@ -194,7 +176,6 @@ fn manual_context_oracle_v2(role: u8, parameter: [u8; 32], mapping: [u8; 32]) ->
     frame.extend_from_slice(&context.source_algebra_binding_digest);
     crate::vega::sponge::keccak256(&frame)
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ManualMappingMutationV2 {
     Clean,
@@ -203,7 +184,6 @@ enum ManualMappingMutationV2 {
     Order,
     Count,
 }
-
 fn manual_mapping_oracle_v2(
     parameter_digest: [u8; 32],
     coefficient: bool,
@@ -221,7 +201,6 @@ fn manual_mapping_oracle_v2(
     hash.update(&parameter_digest);
     hash.update(&131_072_u32.to_be_bytes());
     hash.update(&[38, 5, 10]);
-
     if coefficient {
         hash.update(&[3]);
         hash.update(&1_024_u16.to_be_bytes());
@@ -313,12 +292,10 @@ fn manual_mapping_oracle_v2(
     }
     hash.finalize()
 }
-
 #[test]
 fn release_slot_maps_are_bijective_and_have_exact_endpoints() {
     let geometry = SpoolGeometryV2::release_v2();
     geometry.validate_v2().expect("release geometry");
-
     let coefficient_slots = geometry
         .coefficient_slot_count_v2()
         .expect("coefficient slots");
@@ -356,7 +333,6 @@ fn release_slot_maps_are_bijective_and_have_exact_endpoints() {
             component: CoefficientComponentV2::QuotientWithTopZero,
         }
     );
-
     let lde_slots = geometry.lde_slot_count_v2().expect("LDE slots");
     assert_eq!(lde_slots, RELEASE_LDE_SLOTS_V2);
     let mut lde_seen = vec![false; lde_slots as usize];
@@ -410,7 +386,6 @@ fn release_slot_maps_are_bijective_and_have_exact_endpoints() {
         }
     );
 }
-
 #[test]
 fn release_parameter_mapping_and_accounting_kats_are_exact() {
     let geometry = SpoolGeometryV2::release_v2();
@@ -424,7 +399,6 @@ fn release_parameter_mapping_and_accounting_kats_are_exact() {
     assert_eq!(descriptor.query_count, 160);
     assert_eq!(descriptor.fri_rounds, 18);
     assert_eq!(descriptor.extension_degree, 2);
-
     let parameter = parameter_digest_v2(geometry).expect("V2 parameter digest");
     let coefficient = mapping_digest_v2(geometry, parameter, true).expect("coefficient mapping");
     let lde = mapping_digest_v2(geometry, parameter, false).expect("LDE mapping");
@@ -445,7 +419,6 @@ fn release_parameter_mapping_and_accounting_kats_are_exact() {
         parameter,
         super::super::v2_soundness::parameter_digest_for_spool_parity_v2()
     );
-
     let context = test_context_v2();
     let coefficient_context =
         context_digest_v2(SpoolRoleV2::Coefficients, parameter, coefficient, context)
@@ -459,7 +432,6 @@ fn release_parameter_mapping_and_accounting_kats_are_exact() {
         manual_context_oracle_v2(1, parameter, coefficient)
     );
     assert_eq!(lde_context, manual_context_oracle_v2(2, parameter, lde));
-
     let current_v1 = super::super::zk_ams_phase23_rns_link_q_pcs_release_parameter_digest_v1()
         .expect("current V1 parameter digest");
     assert_ne!(parameter, current_v1);
@@ -486,7 +458,6 @@ fn release_parameter_mapping_and_accounting_kats_are_exact() {
     assert_eq!(RELEASE_LDE_FILE_BYTES_V2, 3_190_784_000);
     assert_eq!(RELEASE_TOTAL_FILE_BYTES_V2, 3_789_639_680);
 }
-
 #[test]
 fn protocol_parameter_identity_excludes_storage_block_geometry() {
     let geometry = tiny_geometry_v2();
@@ -508,13 +479,11 @@ fn protocol_parameter_identity_excludes_storage_block_geometry() {
         mapping_digest_v2(alternate, parameter, false).expect("alternate LDE mapping")
     );
 }
-
 #[test]
 fn exhaustive_mapping_frames_match_independent_oracles_and_reject_mutations() {
     let geometry = SpoolGeometryV2::release_v2();
     let parameter = parameter_digest_v2(geometry).expect("V2 parameter digest");
     assert_eq!(parameter, RELEASE_PARAMETER_KAT_V2);
-
     for (coefficient, expected) in [
         (true, RELEASE_COEFFICIENT_MAPPING_KAT_V2),
         (false, RELEASE_LDE_MAPPING_KAT_V2),
@@ -541,7 +510,6 @@ fn exhaustive_mapping_frames_match_independent_oracles_and_reject_mutations() {
         }
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn canonical_top_zeros_round_trip_and_nonzero_or_noncanonical_values_poison() {
@@ -563,7 +531,6 @@ fn canonical_top_zeros_round_trip_and_nonzero_or_noncanonical_values_poison() {
         );
     }
     let _completed = c0.complete_v2().expect("complete exact C0 replay");
-
     let mut nonzero_pad = test_writer_v2(&directory);
     for _ in 0..4 {
         nonzero_pad
@@ -583,7 +550,6 @@ fn canonical_top_zeros_round_trip_and_nonzero_or_noncanonical_values_poison() {
         nonzero_pad.push_coefficient_block_v2(zero_coefficient_chunk_v2(geometry)),
         Err(QPcsSpoolErrorV2::Poisoned)
     );
-
     let mut noncanonical = test_writer_v2(&directory);
     assert_eq!(
         noncanonical.push_coefficient_block_v2(coefficient_chunk_v2(geometry, &[97, 0])),
@@ -593,7 +559,6 @@ fn canonical_top_zeros_round_trip_and_nonzero_or_noncanonical_values_poison() {
         noncanonical.seal_coefficients_for_replay_v2(),
         Err(QPcsSpoolErrorV2::Poisoned)
     ));
-
     let mut noncanonical_lde = test_writer_v2(&directory);
     fill_zero_coefficients_v2(&mut noncanonical_lde, geometry);
     let noncanonical_lde = noncanonical_lde.seal_coefficients_for_replay_v2().unwrap();
@@ -609,25 +574,21 @@ fn canonical_top_zeros_round_trip_and_nonzero_or_noncanonical_values_poison() {
         Err(QPcsSpoolErrorV2::Poisoned)
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn missing_extra_wrong_length_constructor_io_and_unwind_fail_closed() {
     let geometry = tiny_geometry_v2();
     let directory = TestDirectoryV2::new_v2();
-
     let missing = test_writer_v2(&directory);
     assert!(matches!(
         missing.seal_coefficients_for_replay_v2(),
         Err(QPcsSpoolErrorV2::MissingCoefficientBlocks)
     ));
-
     let reordered = test_writer_v2(&directory);
     assert!(matches!(
         reordered.seal_coefficients_for_replay_v2(),
         Err(QPcsSpoolErrorV2::MissingCoefficientBlocks)
     ));
-
     let mut missing_lde = test_writer_v2(&directory);
     fill_zero_coefficients_v2(&mut missing_lde, geometry);
     let missing_lde = missing_lde.seal_coefficients_for_replay_v2().unwrap();
@@ -636,7 +597,6 @@ fn missing_extra_wrong_length_constructor_io_and_unwind_fail_closed() {
         missing_lde.seal_lde_v2(),
         Err(QPcsSpoolErrorV2::MissingLdeBlocks)
     ));
-
     let mut extra = test_writer_v2(&directory);
     fill_zero_coefficients_v2(&mut extra, geometry);
     assert_eq!(
@@ -647,7 +607,6 @@ fn missing_extra_wrong_length_constructor_io_and_unwind_fail_closed() {
         extra.seal_coefficients_for_replay_v2(),
         Err(QPcsSpoolErrorV2::Poisoned)
     ));
-
     let mut wrong_length = test_writer_v2(&directory);
     let short =
         ConfidentialSpoolChunkV1::new_zeroed_v1(geometry.coefficient_block_bytes_v2().unwrap() - 1)
@@ -660,7 +619,6 @@ fn missing_extra_wrong_length_constructor_io_and_unwind_fail_closed() {
         wrong_length.push_coefficient_block_v2(zero_coefficient_chunk_v2(geometry)),
         Err(QPcsSpoolErrorV2::Poisoned)
     );
-
     let absent = directory.0.join("absent");
     assert!(matches!(
         QPcsSpoolWriterV2::create_with_geometry_v2(
@@ -673,7 +631,6 @@ fn missing_extra_wrong_length_constructor_io_and_unwind_fail_closed() {
             ConfidentialSpoolErrorV1::FileOperation { .. }
         ))
     ));
-
     let mut unwound = test_writer_v2(&directory);
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unwound.panic_after_take_for_test_v2();
@@ -684,7 +641,6 @@ fn missing_extra_wrong_length_constructor_io_and_unwind_fail_closed() {
         Err(QPcsSpoolErrorV2::Poisoned)
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn tiny_mask_identity_survives_fixed_width_streaming() {
@@ -703,7 +659,6 @@ fn tiny_mask_identity_survives_fixed_width_streaming() {
     }
     assert_eq!(expected_product[7], 0);
     assert_eq!(expected_quotient[3], 0);
-
     let directory = TestDirectoryV2::new_v2();
     let mut writer = test_writer_v2(&directory);
     for slot in 0..geometry.coefficient_slot_count_v2().unwrap() {
@@ -773,7 +728,6 @@ fn tiny_mask_identity_survives_fixed_width_streaming() {
     assert_eq!(streamed_product, expected_product);
     assert_eq!(streamed_quotient, expected_quotient);
 }
-
 #[test]
 fn source_guards_keep_v2_private_owned_uninhabited_and_non_authorizing() {
     let source = include_str!("phase23_rns_link_q_pcs_spool.rs");

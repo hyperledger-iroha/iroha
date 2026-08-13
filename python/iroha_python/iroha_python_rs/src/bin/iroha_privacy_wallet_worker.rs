@@ -1,10 +1,7 @@
 #![deny(unsafe_code)]
-
 use std::io::{self, BufReader, BufWriter, Read};
-
 use iroha_python_rs::privacy_wallet_worker::run_pipe_session;
 use zeroize::Zeroizing;
-
 #[cfg(all(unix, not(target_os = "haiku")))]
 fn harden_process() -> Result<(), ()> {
     rustix::process::setrlimit(
@@ -20,12 +17,10 @@ fn harden_process() -> Result<(), ()> {
         .map_err(|_| ())?;
     Ok(())
 }
-
 #[cfg(any(not(unix), target_os = "haiku"))]
 fn harden_process() -> Result<(), ()> {
     Err(())
 }
-
 fn main() {
     if harden_process().is_err() {
         eprintln!("privacy wallet worker startup hardening failed");

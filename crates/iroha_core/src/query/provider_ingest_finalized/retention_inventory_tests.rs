@@ -10,7 +10,6 @@ fn retention_checkpoint_inventory_accepts_only_exact_crash_boundary_sets() {
     archive.insert(first).expect("insert first");
     archive.insert(second.clone()).expect("insert second");
     archive.insert(third.clone()).expect("insert third");
-
     let (_prior_fence, _prior_prepared, prior_proposal) =
         prepared_compaction_for_test(&archive, second.key.clone());
     let authority = TestRetentionAuthority::new();
@@ -25,7 +24,6 @@ fn retention_checkpoint_inventory_accepts_only_exact_crash_boundary_sets() {
     .expect("construct predecessor approval");
     let prior_outcome = compact_for_test(&archive, second.key);
     archive.insert(fourth.clone()).expect("insert fourth");
-
     let (_approved_fence, approved_prepared, approved_proposal) =
         prepared_compaction_for_test(&archive, third.key.clone());
     let (_alternate_fence, alternate_prepared, _alternate_proposal) =
@@ -47,7 +45,6 @@ fn retention_checkpoint_inventory_accepts_only_exact_crash_boundary_sets() {
         .clone();
     let approved = candidate_for_prepared_compaction(&archive, &approved_prepared);
     let alternate = candidate_for_prepared_compaction(&archive, &alternate_prepared);
-
     validate_retention_checkpoint_candidate_inventory(
         std::slice::from_ref(&approved),
         &approval,
@@ -66,7 +63,6 @@ fn retention_checkpoint_inventory_accepts_only_exact_crash_boundary_sets() {
         &third.key.network_id,
     )
     .expect("pre-publication crash retains only the predecessor checkpoint");
-
     assert!(matches!(
         validate_retention_checkpoint_candidate_inventory(
             &[approved.clone(), approved.clone()],

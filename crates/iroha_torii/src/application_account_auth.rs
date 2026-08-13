@@ -1,12 +1,10 @@
 // Exact principal binding for account-authenticated application drafts and receipts.
-
 #[cfg(feature = "app_api")]
 macro_rules! authenticated_application_query {
     ($handler:expr, $app_state:expr, $max_body_bytes:expr) => {
         catalog_post($handler).authenticated_canonical_account_body($app_state, $max_body_bytes)
     };
 }
-
 macro_rules! define_authenticated_application_query_mount {
     ($name:ident, $route:ident, $handler:ident) => {
         #[cfg(feature = "app_api")]
@@ -18,7 +16,6 @@ macro_rules! define_authenticated_application_query_mount {
         }
     };
 }
-
 define_authenticated_application_query_mount!(
     mount_account_transactions_query,
     ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
@@ -69,7 +66,6 @@ define_authenticated_application_query_mount!(
     RWAS_QUERY_POST,
     handler_rwas_query
 );
-
 #[cfg(feature = "app_api")]
 fn mount_signed_proof_query(builder: &mut RouterBuilder) {
     builder.route(
@@ -78,7 +74,6 @@ fn mount_signed_proof_query(builder: &mut RouterBuilder) {
             .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
     );
 }
-
 #[cfg(feature = "app_api")]
 macro_rules! mount_authenticated_asset_holder_routes {
     ($torii:expr, $builder:expr) => {{
@@ -98,7 +93,6 @@ macro_rules! mount_authenticated_asset_holder_routes {
         );
     }};
 }
-
 #[cfg(feature = "app_api")]
 fn add_authenticated_application_compute_routes(
     builder: &mut RouterBuilder,
@@ -136,7 +130,6 @@ fn add_authenticated_application_compute_routes(
             .authenticated_canonical_account_body(app_state, max_body_bytes),
     );
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_authenticated_space_directory_manifest_publish(
     State(app): State<SharedAppState>,
@@ -154,7 +147,6 @@ async fn handler_authenticated_space_directory_manifest_publish(
     )?;
     handler_space_directory_manifest_publish(State(app), headers, remote, request).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_authenticated_space_directory_manifest_revoke(
     State(app): State<SharedAppState>,
@@ -172,7 +164,6 @@ async fn handler_authenticated_space_directory_manifest_revoke(
     )?;
     handler_space_directory_manifest_revoke(State(app), headers, remote, request).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_authenticated_identifier_claim_receipt(
     State(app): State<SharedAppState>,
@@ -199,14 +190,11 @@ async fn handler_authenticated_identifier_claim_receipt(
     )
     .await
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod application_account_auth_tests {
     use iroha_data_model::ValidationFail;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-
     use super::{Error, require_runtime_governance_account};
-
     #[test]
     fn application_authority_binding_rejects_substitution() {
         require_runtime_governance_account(
@@ -215,7 +203,6 @@ mod application_account_auth_tests {
             "space-directory manifest publication draft",
         )
         .expect("the exact authenticated authority must be accepted");
-
         let error =
             require_runtime_governance_account(&BOB_ID, &ALICE_ID, "identifier claim receipt")
                 .expect_err("another authority must be rejected");

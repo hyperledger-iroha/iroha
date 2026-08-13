@@ -3,22 +3,18 @@ use std::{
     any::Any,
     sync::{Arc, Mutex},
 };
-
 use ivm::{IVM, Memory, VMError, encoding, host::IVMHost, instruction, syscalls};
 mod common;
 use common::assemble;
-
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
 const SCALL_COMMIT_OUTPUT: [u8; 4] = encoding::wide::encode_sys(
     instruction::wide::system::SCALL,
     syscalls::SYSCALL_COMMIT_OUTPUT as u8,
 )
 .to_le_bytes();
-
 struct CaptureHost {
     out: Arc<Mutex<Vec<u8>>>,
 }
-
 impl IVMHost for CaptureHost {
     fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
         match number {
@@ -26,7 +22,6 @@ impl IVMHost for CaptureHost {
             _ => Err(VMError::UnknownSyscall(number)),
         }
     }
-
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_COMMIT_OUTPUT => {
@@ -36,13 +31,11 @@ impl IVMHost for CaptureHost {
             _ => Err(VMError::UnknownSyscall(number)),
         }
     }
-
     /// Downcast support for hosts with extra methods/state.
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
 }
-
 #[test]
 fn test_commit_output_syscall() {
     let captured = Arc::new(Mutex::new(Vec::new()));
@@ -65,7 +58,6 @@ fn test_commit_output_syscall() {
     let val = u32::from_le_bytes([out[0], out[1], out[2], out[3]]);
     assert_eq!(val, 0xdeadbeef);
 }
-
 #[test]
 fn load_program_clears_output_region() {
     let mut vm = IVM::new(u64::MAX);
@@ -73,9 +65,7 @@ fn load_program_clears_output_region() {
     vm.load_program(&prog).expect("load program");
     vm.store_u32(Memory::OUTPUT_START, 0xDEAD_BEEF)
         .expect("write output");
-
     vm.load_program(&prog).expect("reload program");
-
     let mut bytes = [0u8; 4];
     vm.memory
         .load_bytes(Memory::OUTPUT_START, &mut bytes)
@@ -84,16 +74,13 @@ fn load_program_clears_output_region() {
     vm.store_u32(Memory::OUTPUT_START, 0x1234_5678)
         .expect("output cursor reset");
 }
-
 #[test]
 fn load_code_clears_output_region() {
     let mut vm = IVM::new(u64::MAX);
     vm.load_code(&HALT).expect("load code");
     vm.store_u32(Memory::OUTPUT_START, 0xCAFE_BABE)
         .expect("write output");
-
     vm.load_code(&HALT).expect("reload code");
-
     let mut bytes = [0u8; 4];
     vm.memory
         .load_bytes(Memory::OUTPUT_START, &mut bytes)

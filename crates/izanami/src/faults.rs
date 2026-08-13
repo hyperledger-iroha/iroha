@@ -1,5 +1,4 @@
 //! Fault-injection utilities used by Izanami to emulate Byzantine peers.
-
 use std::{
     io::{self, Write},
     ops::RangeInclusive,
@@ -8,7 +7,6 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
-
 use color_eyre::{
     Result,
     eyre::{WrapErr, eyre},
@@ -22,7 +20,6 @@ use rand::{Rng, RngCore, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 use tokio::{sync::Notify, task, time::sleep};
 use toml::{Table, Value};
 use tracing::{debug, error, info, warn};
-
 /// Configuration for periodic fault injection.
 #[derive(Clone, Debug)]
 pub struct FaultConfig {
@@ -45,7 +42,6 @@ pub struct FaultConfig {
     /// Optional disk-pressure settings.
     pub disk_saturation: Option<DiskSaturationConfig>,
 }
-
 /// A single fault action that can be applied directly to a peer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum FaultScenarioKind {
@@ -66,7 +62,6 @@ pub enum FaultScenarioKind {
     /// Fill a small local file to emulate storage pressure.
     DiskSaturation,
 }
-
 /// Settings for a temporary gossip-delay spike.
 #[derive(Clone, Debug)]
 pub struct NetworkLatencyConfig {
@@ -75,7 +70,6 @@ pub struct NetworkLatencyConfig {
     /// Artificial gossip delay applied while the fault is active.
     pub gossip_delay: RangeInclusive<Duration>,
 }
-
 impl Default for NetworkLatencyConfig {
     fn default() -> Self {
         Self {
@@ -84,14 +78,12 @@ impl Default for NetworkLatencyConfig {
         }
     }
 }
-
 /// Settings for a temporary trusted-peer partition.
 #[derive(Clone, Debug)]
 pub struct NetworkPartitionConfig {
     /// How long the partition should remain active.
     pub duration: RangeInclusive<Duration>,
 }
-
 impl Default for NetworkPartitionConfig {
     fn default() -> Self {
         Self {
@@ -99,10 +91,8 @@ impl Default for NetworkPartitionConfig {
         }
     }
 }
-
 /// Default inbound/outbound P2P packet-loss percentage.
 pub const DEFAULT_NETWORK_PACKET_LOSS_PERCENT: u8 = 75;
-
 /// Settings for temporary P2P application-frame packet loss.
 #[derive(Clone, Debug)]
 pub struct NetworkPacketLossConfig {
@@ -111,7 +101,6 @@ pub struct NetworkPacketLossConfig {
     /// Inbound and outbound P2P application-frame loss percentage.
     pub percent: RangeInclusive<u8>,
 }
-
 impl Default for NetworkPacketLossConfig {
     fn default() -> Self {
         Self {
@@ -120,7 +109,6 @@ impl Default for NetworkPacketLossConfig {
         }
     }
 }
-
 /// Settings for a local CPU pressure burst.
 #[derive(Clone, Debug)]
 pub struct CpuStressConfig {
@@ -129,7 +117,6 @@ pub struct CpuStressConfig {
     /// Range of worker-thread counts to start.
     pub workers: RangeInclusive<usize>,
 }
-
 impl Default for CpuStressConfig {
     fn default() -> Self {
         Self {
@@ -138,7 +125,6 @@ impl Default for CpuStressConfig {
         }
     }
 }
-
 /// Settings for a local disk saturation burst.
 #[derive(Clone, Debug)]
 pub struct DiskSaturationConfig {
@@ -147,7 +133,6 @@ pub struct DiskSaturationConfig {
     /// Range of bytes to write during the fault.
     pub bytes: RangeInclusive<u64>,
 }
-
 impl Default for DiskSaturationConfig {
     fn default() -> Self {
         const MI: u64 = 1_048_576;
@@ -157,15 +142,12 @@ impl Default for DiskSaturationConfig {
         }
     }
 }
-
 struct TableRef<'a>(&'a Table);
-
 impl AsRef<Table> for TableRef<'_> {
     fn as_ref(&self) -> &Table {
         self.0
     }
 }
-
 impl FaultConfig {
     /// Sample a deterministic delay between fault actions from the configured interval.
     pub fn sample_interval<R: Rng>(&self, rng: &mut R) -> Duration {
@@ -179,7 +161,6 @@ impl FaultConfig {
         start + Duration::from_millis(rng.random_range(0..=upper))
     }
 }
-
 /// Run repeated randomized fault scenarios against a peer until the deadline or stop signal.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_fault_loop<P: FaultPeer>(
@@ -223,7 +204,6 @@ pub async fn run_fault_loop<P: FaultPeer>(
         }
     }
 }
-
 fn bounded_delay(now: Instant, deadline: Instant, delay: Duration) -> Option<Duration> {
     let remaining = deadline.checked_duration_since(now)?;
     if remaining.is_zero() {
@@ -232,7 +212,6 @@ fn bounded_delay(now: Instant, deadline: Instant, delay: Duration) -> Option<Dur
         Some(delay.min(remaining))
     }
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum FaultScenario {
     CrashRestart,
@@ -244,7 +223,6 @@ enum FaultScenario {
     CpuStress,
     DiskSaturation,
 }
-
 impl From<FaultScenarioKind> for FaultScenario {
     fn from(value: FaultScenarioKind) -> Self {
         match value {
@@ -259,7 +237,6 @@ impl From<FaultScenarioKind> for FaultScenario {
         }
     }
 }
-
 struct FaultApplyCtx<'a, P: FaultPeer> {
     peer: &'a P,
     config: &'a FaultConfig,
@@ -269,7 +246,6 @@ struct FaultApplyCtx<'a, P: FaultPeer> {
     rng: &'a mut StdRng,
     deadline: Instant,
 }
-
 impl FaultScenario {
     fn kind(self) -> FaultScenarioKind {
         match self {
@@ -283,7 +259,6 @@ impl FaultScenario {
             Self::DiskSaturation => FaultScenarioKind::DiskSaturation,
         }
     }
-
     fn random<R: Rng>(rng: &mut R, config: &FaultConfig) -> Self {
         let mut scenarios = Vec::with_capacity(8);
         if config.crash_restart {
@@ -314,7 +289,6 @@ impl FaultScenario {
             .choose(rng)
             .expect("at least one fault scenario must be available")
     }
-
     async fn apply<P: FaultPeer>(self, ctx: FaultApplyCtx<'_, P>) -> Result<()> {
         match self {
             FaultScenario::CrashRestart => {
@@ -388,7 +362,6 @@ impl FaultScenario {
         }
     }
 }
-
 /// Apply one randomly selected enabled fault scenario to a peer.
 ///
 /// # Errors
@@ -418,7 +391,6 @@ pub async fn apply_random_fault_once<P: FaultPeer>(
         .await?;
     Ok(scenario.kind())
 }
-
 /// Apply a single fault scenario to a peer using the supplied deterministic seed.
 ///
 /// # Errors
@@ -449,7 +421,6 @@ pub async fn apply_fault_scenario<P: FaultPeer>(
         })
         .await
 }
-
 async fn crash_and_restart<P: FaultPeer>(
     peer: &P,
     config_layers: &Arc<Vec<Table>>,
@@ -463,7 +434,6 @@ async fn crash_and_restart<P: FaultPeer>(
     info!(target: "izanami::faults", peer = peer.mnemonic(), "restarting peer");
     peer.restart_with_layers(config_layers, &[], genesis).await
 }
-
 async fn wipe_and_restart<P: FaultPeer>(
     peer: &P,
     config_layers: &Arc<Vec<Table>>,
@@ -488,7 +458,6 @@ async fn wipe_and_restart<P: FaultPeer>(
     info!(target: "izanami::faults", peer = peer.mnemonic(), "restarting peer after wipe");
     peer.restart_with_layers(config_layers, &[], genesis).await
 }
-
 fn spam_invalid_transactions<P: FaultPeer>(
     peer: &P,
     base_domain: &DomainId,
@@ -510,7 +479,6 @@ fn spam_invalid_transactions<P: FaultPeer>(
     }
     Ok(())
 }
-
 async fn network_latency_spike<P: FaultPeer>(
     peer: &P,
     config_layers: &Arc<Vec<Table>>,
@@ -526,10 +494,8 @@ async fn network_latency_spike<P: FaultPeer>(
     if duration.is_zero() {
         return Ok(());
     }
-
     let gossip_delay = sample_duration(rng, &cfg.gossip_delay);
     let millis = gossip_delay.as_millis().try_into().unwrap_or(i64::MAX);
-
     info!(
         target: "izanami::faults",
         peer = peer.mnemonic(),
@@ -537,7 +503,6 @@ async fn network_latency_spike<P: FaultPeer>(
         ?gossip_delay,
         "injecting network latency spike"
     );
-
     peer.shutdown().await;
     let mut overrides = Table::new();
     overrides = overrides.write(["network", "block_gossip_period_ms"], millis);
@@ -556,7 +521,6 @@ async fn network_latency_spike<P: FaultPeer>(
         let _ = peer.restart_with_layers(config_layers, &[], genesis).await;
         return Err(err);
     }
-
     sleep(duration).await;
     info!(
         target: "izanami::faults",
@@ -566,7 +530,6 @@ async fn network_latency_spike<P: FaultPeer>(
     peer.shutdown().await;
     peer.restart_with_layers(config_layers, &[], genesis).await
 }
-
 async fn network_partition<P: FaultPeer>(
     peer: &P,
     config_layers: &Arc<Vec<Table>>,
@@ -582,14 +545,12 @@ async fn network_partition<P: FaultPeer>(
     if duration.is_zero() {
         return Ok(());
     }
-
     info!(
         target: "izanami::faults",
         peer = peer.mnemonic(),
         ?duration,
         "isolating peer from trusted network"
     );
-
     let trusted_peer = peer
         .isolated_trusted_peer_entry()
         .wrap_err("peer missing self trusted-peer entry required for partition restart")?;
@@ -614,7 +575,6 @@ async fn network_partition<P: FaultPeer>(
         let _ = peer.restart_with_layers(config_layers, &[], genesis).await;
         return Err(err);
     }
-
     sleep(duration).await;
     info!(
         target: "izanami::faults",
@@ -624,7 +584,6 @@ async fn network_partition<P: FaultPeer>(
     peer.shutdown().await;
     peer.restart_with_layers(config_layers, &[], genesis).await
 }
-
 async fn network_packet_loss<P: FaultPeer>(
     peer: &P,
     config_layers: &Arc<Vec<Table>>,
@@ -640,7 +599,6 @@ async fn network_packet_loss<P: FaultPeer>(
     if duration.is_zero() {
         return Ok(());
     }
-
     let percent = sample_u8(rng, &cfg.percent).min(100);
     info!(
         target: "izanami::faults",
@@ -649,7 +607,6 @@ async fn network_packet_loss<P: FaultPeer>(
         percent,
         "injecting P2P packet loss"
     );
-
     peer.shutdown().await;
     let overrides = Table::new()
         .write(["network", "debug_packet_loss_inbound_percent"], percent)
@@ -668,7 +625,6 @@ async fn network_packet_loss<P: FaultPeer>(
         let _ = peer.restart_with_layers(config_layers, &[], genesis).await;
         return Err(err);
     }
-
     sleep(duration).await;
     info!(
         target: "izanami::faults",
@@ -678,7 +634,6 @@ async fn network_packet_loss<P: FaultPeer>(
     peer.shutdown().await;
     peer.restart_with_layers(config_layers, &[], genesis).await
 }
-
 async fn cpu_stress(deadline: Instant, rng: &mut StdRng, cfg: &CpuStressConfig) -> Result<()> {
     let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
         return Ok(());
@@ -687,7 +642,6 @@ async fn cpu_stress(deadline: Instant, rng: &mut StdRng, cfg: &CpuStressConfig) 
     if duration.is_zero() {
         return Ok(());
     }
-
     let workers = sample_usize(rng, &cfg.workers).max(1);
     info!(
         target: "izanami::faults",
@@ -710,7 +664,6 @@ async fn cpu_stress(deadline: Instant, rng: &mut StdRng, cfg: &CpuStressConfig) 
     }
     Ok(())
 }
-
 async fn disk_saturation<P: FaultPeer>(
     peer: &P,
     rng: &mut StdRng,
@@ -725,7 +678,6 @@ async fn disk_saturation<P: FaultPeer>(
     if duration.is_zero() || bytes == 0 {
         return Ok(());
     }
-
     let path = peer
         .kura_store_dir()
         .join(format!("fault-fill-{}.bin", rng.next_u64()));
@@ -737,13 +689,11 @@ async fn disk_saturation<P: FaultPeer>(
         path = ?path,
         "saturating disk"
     );
-
     write_fill_file(path.clone(), bytes).await?;
     sleep(duration).await;
     remove_fill_file(path).await?;
     Ok(())
 }
-
 async fn write_fill_file(path: PathBuf, bytes: u64) -> Result<()> {
     task::spawn_blocking(move || -> Result<()> {
         if let Some(parent) = path.parent() {
@@ -772,7 +722,6 @@ async fn write_fill_file(path: PathBuf, bytes: u64) -> Result<()> {
     .map_err(|err| eyre!("failed to join disk saturation task: {err}"))??;
     Ok(())
 }
-
 async fn remove_fill_file(path: PathBuf) -> Result<()> {
     task::spawn_blocking(move || -> Result<()> {
         match std::fs::remove_file(&path) {
@@ -785,7 +734,6 @@ async fn remove_fill_file(path: PathBuf) -> Result<()> {
     .map_err(|err| eyre!("failed to join cleanup task: {err}"))??;
     Ok(())
 }
-
 fn sample_duration<R: Rng>(rng: &mut R, range: &RangeInclusive<Duration>) -> Duration {
     let start = *range.start();
     let end = *range.end();
@@ -796,7 +744,6 @@ fn sample_duration<R: Rng>(rng: &mut R, range: &RangeInclusive<Duration>) -> Dur
     let upper = u64::try_from(delta.as_millis()).unwrap_or(u64::MAX);
     start + Duration::from_millis(rng.random_range(0..=upper))
 }
-
 fn sample_usize<R: Rng>(rng: &mut R, range: &RangeInclusive<usize>) -> usize {
     let start = *range.start();
     let end = *range.end();
@@ -805,7 +752,6 @@ fn sample_usize<R: Rng>(rng: &mut R, range: &RangeInclusive<usize>) -> usize {
     }
     rng.random_range(start..=end)
 }
-
 fn sample_u8<R: Rng>(rng: &mut R, range: &RangeInclusive<u8>) -> u8 {
     let start = *range.start();
     let end = *range.end();
@@ -814,7 +760,6 @@ fn sample_u8<R: Rng>(rng: &mut R, range: &RangeInclusive<u8>) -> u8 {
     }
     rng.random_range(start..=end)
 }
-
 fn sample_u64<R: Rng>(rng: &mut R, range: &RangeInclusive<u64>) -> u64 {
     let start = *range.start();
     let end = *range.end();
@@ -823,7 +768,6 @@ fn sample_u64<R: Rng>(rng: &mut R, range: &RangeInclusive<u64>) -> u64 {
     }
     rng.random_range(start..=end)
 }
-
 fn hex_lower(bytes: &[u8]) -> String {
     const TABLE: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -833,7 +777,6 @@ fn hex_lower(bytes: &[u8]) -> String {
     }
     out
 }
-
 /// Minimal client surface used by fault helpers that need to submit invalid traffic.
 pub trait FaultClient: Clone + Send + Sync + 'static {
     /// Submit one instruction and surface any failure to the fault harness.
@@ -845,7 +788,6 @@ pub trait FaultClient: Clone + Send + Sync + 'static {
     where
         I: Into<InstructionBox>;
 }
-
 impl FaultClient for iroha::client::Client {
     fn submit_instruction<I>(&self, instruction: I) -> Result<()>
     where
@@ -858,12 +800,10 @@ impl FaultClient for iroha::client::Client {
         .map(|_| ())
     }
 }
-
 /// Abstraction over a peer that fault helpers can stop, restart, and inspect.
 pub trait FaultPeer: Clone + Send + Sync + 'static {
     /// Client type used for instruction submission faults.
     type Client: FaultClient;
-
     /// Stable human-readable identifier for logs and status output.
     fn mnemonic(&self) -> &str;
     /// Filesystem directory that stores the peer's local block/state data.
@@ -892,22 +832,17 @@ pub trait FaultPeer: Clone + Send + Sync + 'static {
         genesis: &'a Arc<GenesisBlock>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
 }
-
 impl FaultPeer for NetworkPeer {
     type Client = iroha::client::Client;
-
     fn mnemonic(&self) -> &str {
         self.mnemonic()
     }
-
     fn kura_store_dir(&self) -> PathBuf {
         NetworkPeer::kura_store_dir(self)
     }
-
     fn client(&self) -> Self::Client {
         NetworkPeer::client(self)
     }
-
     fn isolated_trusted_peer_entry(&self) -> Result<String> {
         Ok(format!(
             "{}@{}",
@@ -915,7 +850,6 @@ impl FaultPeer for NetworkPeer {
             self.p2p_address().to_literal()
         ))
     }
-
     fn isolated_trusted_peers_pop_entries(&self) -> Result<Vec<Value>> {
         let public_key = self
             .bls_public_key()
@@ -929,13 +863,11 @@ impl FaultPeer for NetworkPeer {
                 .write("pop_hex", format!("0x{}", hex_lower(pop))),
         )])
     }
-
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             let _ = NetworkPeer::shutdown_if_started(self).await;
         })
     }
-
     fn restart_with_layers<'a>(
         &'a self,
         config_layers: &'a Arc<Vec<Table>>,
@@ -956,7 +888,6 @@ impl FaultPeer for NetworkPeer {
         })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -966,21 +897,17 @@ mod tests {
             atomic::{AtomicBool, AtomicUsize, Ordering},
         },
     };
-
     use iroha_primitives::unique_vec::UniqueVec;
     use iroha_test_network::genesis_factory;
     use tokio::{
         sync::{Mutex as AsyncMutex, Notify},
         time::{sleep, timeout},
     };
-
     use super::*;
-
     #[derive(Debug, Clone, Default)]
     struct MockClient {
         submissions: Arc<StdMutex<usize>>,
     }
-
     impl FaultClient for MockClient {
         fn submit_instruction<I>(&self, _instruction: I) -> Result<()>
         where
@@ -992,7 +919,6 @@ mod tests {
             Err(eyre!("mock rejection"))
         }
     }
-
     #[derive(Debug, Clone)]
     struct MockPeer {
         name: String,
@@ -1001,13 +927,11 @@ mod tests {
         client: MockClient,
         restart_failures_remaining: Arc<AtomicUsize>,
     }
-
     #[derive(Debug, Clone)]
     enum MockEvent {
         Shutdown,
         Restart { extra_layers: Vec<Table> },
     }
-
     impl MockPeer {
         fn new(name: impl Into<String>) -> Self {
             let name = name.into();
@@ -1022,37 +946,29 @@ mod tests {
                 restart_failures_remaining: Arc::new(AtomicUsize::new(0)),
             }
         }
-
         fn with_restart_failures(self, failures: usize) -> Self {
             self.restart_failures_remaining
                 .store(failures, Ordering::Relaxed);
             self
         }
-
         async fn events(&self) -> Vec<MockEvent> {
             self.events.lock().await.clone()
         }
     }
-
     impl FaultPeer for MockPeer {
         type Client = MockClient;
-
         fn mnemonic(&self) -> &str {
             &self.name
         }
-
         fn kura_store_dir(&self) -> PathBuf {
             self.dir.join("storage")
         }
-
         fn client(&self) -> Self::Client {
             self.client.clone()
         }
-
         fn isolated_trusted_peer_entry(&self) -> Result<String> {
             Ok("mock-partition-public-key@127.0.0.1:1337".to_string())
         }
-
         fn isolated_trusted_peers_pop_entries(&self) -> Result<Vec<Value>> {
             Ok(vec![Value::Table(
                 Table::new()
@@ -1060,14 +976,12 @@ mod tests {
                     .write("pop_hex", "mock-partition-pop-hex"),
             )])
         }
-
         fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
             let events = Arc::clone(&self.events);
             Box::pin(async move {
                 events.lock().await.push(MockEvent::Shutdown);
             })
         }
-
         fn restart_with_layers(
             &self,
             _: &Arc<Vec<Table>>,
@@ -1093,7 +1007,6 @@ mod tests {
             })
         }
     }
-
     #[test]
     fn interval_sampling_within_bounds() {
         let cfg = FaultConfig {
@@ -1114,7 +1027,6 @@ mod tests {
             assert!(sampled <= Duration::from_secs(3));
         }
     }
-
     #[test]
     fn random_includes_enabled_scenarios() {
         let config = FaultConfig {
@@ -1144,7 +1056,6 @@ mod tests {
         ]);
         assert_eq!(observed, expected);
     }
-
     #[test]
     fn random_excludes_disabled_scenarios() {
         let config = FaultConfig {
@@ -1167,7 +1078,6 @@ mod tests {
             );
         }
     }
-
     #[tokio::test]
     async fn apply_random_fault_once_applies_single_enabled_scenario() {
         let peer = MockPeer::new("single-random");
@@ -1187,7 +1097,6 @@ mod tests {
         let domain: DomainId =
             DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let mut rng = StdRng::seed_from_u64(42);
-
         let scenario = apply_random_fault_once(
             &peer,
             &config,
@@ -1199,11 +1108,9 @@ mod tests {
         )
         .await
         .expect("single enabled scenario should apply");
-
         assert_eq!(scenario, FaultScenarioKind::SpamInvalidTransactions);
         assert_eq!(*peer.client.submissions.lock().expect("submission lock"), 3);
     }
-
     #[test]
     fn bounded_delay_clamps_to_deadline() {
         let now = Instant::now();
@@ -1213,7 +1120,6 @@ mod tests {
         assert!(clamped <= Duration::from_millis(50));
         assert!(clamped > Duration::from_millis(0));
     }
-
     #[test]
     fn bounded_delay_returns_none_when_expired() {
         let now = Instant::now();
@@ -1222,11 +1128,9 @@ mod tests {
             .expect("deadline should be in the past");
         assert!(bounded_delay(now, deadline, Duration::from_secs(1)).is_none());
     }
-
     fn dummy_genesis() -> Arc<GenesisBlock> {
         Arc::new(genesis_factory(Vec::new(), UniqueVec::new(), Vec::new()))
     }
-
     #[tokio::test]
     async fn run_fault_loop_respects_stop_flag() {
         let peer = MockPeer::new("stop");
@@ -1265,7 +1169,6 @@ mod tests {
             "stop flag should prevent fault loop work"
         );
     }
-
     #[tokio::test]
     async fn run_fault_loop_wakes_on_stop_notify() {
         let peer = MockPeer::new("stop-notify");
@@ -1287,7 +1190,6 @@ mod tests {
         let domain: DomainId =
             DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let deadline = Instant::now() + Duration::from_secs(30);
-
         let handle = tokio::spawn(run_fault_loop(
             peer.clone(),
             config,
@@ -1299,17 +1201,14 @@ mod tests {
             deadline,
             99,
         ));
-
         sleep(Duration::from_millis(10)).await;
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         stop_notify.notify_waiters();
-
         timeout(Duration::from_secs(1), handle)
             .await
             .expect("fault loop should stop promptly")
             .expect("fault loop task should complete");
     }
-
     #[tokio::test]
     async fn network_latency_fault_reconfigures_peer() {
         let peer = MockPeer::new("latency");
@@ -1376,7 +1275,6 @@ mod tests {
             other => panic!("unexpected event: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn network_latency_recovery_shuts_down_before_restarting_without_overrides() {
         let peer = MockPeer::new("latency-recovery").with_restart_failures(1);
@@ -1408,12 +1306,10 @@ mod tests {
             rng: &mut rng,
             deadline: Instant::now() + Duration::from_secs(1),
         };
-
         let _ = FaultScenario::NetworkLatencySpike
             .apply(ctx)
             .await
             .expect_err("fault should report initial override restart failure");
-
         let events = peer.events().await;
         assert_eq!(events.len(), 4);
         assert!(matches!(events[0], MockEvent::Shutdown));
@@ -1427,7 +1323,6 @@ mod tests {
             other => panic!("unexpected final recovery event: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn disk_saturation_creates_and_removes_file() {
         let peer = MockPeer::new("disk");
@@ -1474,7 +1369,6 @@ mod tests {
             .unwrap();
         assert!(entries.is_empty());
     }
-
     #[tokio::test]
     async fn cpu_stress_respects_deadline() {
         let mut rng = StdRng::seed_from_u64(21);
@@ -1488,7 +1382,6 @@ mod tests {
             .expect("cpu stress should respect timeout")
             .expect("cpu stress must finish without error");
     }
-
     #[tokio::test]
     async fn network_partition_isolates_and_rejoins_peer() {
         let peer = MockPeer::new("partition");
@@ -1519,12 +1412,10 @@ mod tests {
             rng: &mut rng,
             deadline: Instant::now() + Duration::from_secs(1),
         };
-
         FaultScenario::NetworkPartition
             .apply(ctx)
             .await
             .expect("network partition fault should succeed");
-
         let events = peer.events().await;
         assert_eq!(events.len(), 4);
         assert!(matches!(events[0], MockEvent::Shutdown));
@@ -1578,7 +1469,6 @@ mod tests {
             other => panic!("unexpected final event: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn network_partition_recovery_shuts_down_before_restarting_without_overrides() {
         let peer = MockPeer::new("partition-recovery").with_restart_failures(1);
@@ -1609,12 +1499,10 @@ mod tests {
             rng: &mut rng,
             deadline: Instant::now() + Duration::from_secs(1),
         };
-
         let _ = FaultScenario::NetworkPartition
             .apply(ctx)
             .await
             .expect_err("fault should report initial override restart failure");
-
         let events = peer.events().await;
         assert_eq!(events.len(), 4);
         assert!(matches!(events[0], MockEvent::Shutdown));
@@ -1628,7 +1516,6 @@ mod tests {
             other => panic!("unexpected final recovery event: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn network_packet_loss_restarts_with_percent_and_restores() {
         let peer = MockPeer::new("packet-loss");
@@ -1660,12 +1547,10 @@ mod tests {
             rng: &mut rng,
             deadline: Instant::now() + Duration::from_secs(1),
         };
-
         FaultScenario::NetworkPacketLoss
             .apply(ctx)
             .await
             .expect("network packet-loss fault should succeed");
-
         let events = peer.events().await;
         assert_eq!(events.len(), 4);
         assert!(matches!(events[0], MockEvent::Shutdown));

@@ -3,15 +3,12 @@
 //!
 //! Run:
 //!   cargo run -p `iroha_torii_shared` --example `permissions_preimage`
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{NetworkId, account::AccountId, block::BlockHeader, domain::DomainId};
 use iroha_torii_shared::{connect as proto, connect_sdk as sdk};
-
 fn deterministic_wallet_keypair() -> Result<KeyPair, iroha_crypto::Error> {
     KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
 }
-
 fn hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -21,7 +18,6 @@ fn hex(bytes: &[u8]) -> String {
     }
     out
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sample session parameters
     let sid = [0x11u8; 32];
@@ -36,21 +32,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )),
     };
     let relay_auth = sdk::relay_auth_hash(&sid, "example-relay-token");
-
     // Request permissions in Open (app → wallet)
     let req_perms = proto::PermissionsV1 {
         methods: vec!["SIGN_REQUEST_RAW".into(), "SIGN_REQUEST_TX".into()],
         events: vec!["DISPLAY_REQUEST".into()],
         resources: None,
     };
-
     // Wallet narrows/accepts permissions in Approve (wallet → app)
     let acc_perms = proto::PermissionsV1 {
         methods: vec!["SIGN_REQUEST_TX".into()],
         events: vec![],
         resources: None,
     };
-
     // Optional sign-in proof (akin to SIWE)
     let proof = proto::SignInProofV1 {
         domain: "example.org".into(),
@@ -59,7 +52,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         issued_at: "2025-01-01T00:00:00Z".into(),
         nonce: "abc123".into(),
     };
-
     // Build Open control
     let _open = proto::ConnectControlV1::Open {
         app_pk,
@@ -71,7 +63,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         constraints: constraints.clone(),
         permissions: Some(req_perms.clone()),
     };
-
     // Build Approve control
     let _approve = proto::ConnectControlV1::Approve {
         wallet_pk,
@@ -83,7 +74,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Signature::try_from_bytes(&[0xA6u8; 64])?,
         ),
     };
-
     // Compute deterministic hashes and signature preimage
     let perms_hash = sdk::hash_permissions_current(&acc_perms);
     let proof_hash = sdk::hash_signin_proof_current(&proof);
@@ -97,7 +87,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(&proof),
         &relay_auth,
     );
-
     println!(
         "Permissions (accepted): methods={:?} events={:?}",
         acc_perms.methods, acc_perms.events
@@ -112,16 +101,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("approve_preimage_hex = {}", hex(&preimage));
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn deterministic_wallet_keypair_uses_checked_ed25519_derivation() {
         let keypair =
             deterministic_wallet_keypair().expect("checked deterministic wallet key derivation");
-
         assert_eq!(
             keypair
                 .public_key()

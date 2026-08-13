@@ -1,26 +1,22 @@
 use std::{cmp::min, collections::HashSet, fmt::Write as _};
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use fastpq_isi::{
     params::{CANONICAL_PARAMETER_SETS, GOLDILOCKS_FP2, POSEIDON2_SHA3, StarkParameterSet},
     poseidon::{FIELD_MODULUS, PoseidonSponge},
 };
-
 const DOMAIN_TAG: &str = "fastpq:v1:domain_roots";
 const PACKED_LIMB_BYTES: usize = 7;
 const GOLDILOCKS_TWO_ADICITY: u32 = 32;
 const FIELD_MODULUS_U128: u128 = FIELD_MODULUS as u128;
 const TWO_ADIC_COMPONENT: u128 = 1u128 << GOLDILOCKS_TWO_ADICITY;
 const CANONICAL_CONST_NAMES: [&str; 2] = ["FASTPQ_CANONICAL_BALANCED", "FASTPQ_CANONICAL_LATENCY"];
-
 #[derive(Parser)]
 #[command(author, version, about = "FASTPQ Poseidon-derived constant generator")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(Subcommand)]
 enum Command {
     /// Regenerate trace/LDE domain roots and coset generators.
@@ -36,13 +32,11 @@ enum Command {
         filter: Vec<String>,
     },
 }
-
 #[derive(Clone, Copy, ValueEnum)]
 enum OutputFormat {
     Rust,
     Table,
 }
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -54,7 +48,6 @@ fn main() -> Result<()> {
     }
     Ok(())
 }
-
 fn run_domain_roots(seed: &str, format: OutputFormat, filters: &[String]) -> Result<()> {
     let derived = derive_all_constants(seed)?;
     if derived.len() != CANONICAL_CONST_NAMES.len() {
@@ -65,15 +58,12 @@ fn run_domain_roots(seed: &str, format: OutputFormat, filters: &[String]) -> Res
         );
     }
     let filter_set = build_filter(filters);
-
     match format {
         OutputFormat::Rust => render_rust(&derived, seed, filter_set.as_ref())?,
         OutputFormat::Table => render_table(&derived, seed, filter_set.as_ref())?,
     }
-
     Ok(())
 }
-
 fn build_filter(filters: &[String]) -> Option<HashSet<String>> {
     if filters.is_empty() {
         None
@@ -86,20 +76,17 @@ fn build_filter(filters: &[String]) -> Option<HashSet<String>> {
         )
     }
 }
-
 fn render_rust(
     derived: &[(StarkParameterSet, DerivedConstants)],
     seed: &str,
     filter: Option<&HashSet<String>>,
 ) -> Result<()> {
     println!("// Derived FASTPQ domain constants (seed: {seed}, mode: domain-roots)\n");
-
     for (const_name, entry) in CANONICAL_CONST_NAMES.iter().copied().zip(derived.iter()) {
         let (set, constants) = entry;
         if !should_emit(filter, set, const_name) {
             continue;
         }
-
         let mut buffer = String::new();
         writeln!(
             buffer,
@@ -149,13 +136,10 @@ fn render_rust(
         writeln!(buffer, "        queries: {},", set.fri.queries)?;
         writeln!(buffer, "    }},")?;
         writeln!(buffer, "}};\n")?;
-
         print!("{buffer}");
     }
-
     Ok(())
 }
-
 fn render_table(
     derived: &[(StarkParameterSet, DerivedConstants)],
     seed: &str,
@@ -166,7 +150,6 @@ fn render_table(
          | constant | parameter | trace_root | lde_root | omega_coset |\n\
          |----------|-----------|------------|----------|-------------|"
     );
-
     for (const_name, entry) in CANONICAL_CONST_NAMES.iter().copied().zip(derived.iter()) {
         let (set, constants) = entry;
         if !should_emit(filter, set, const_name) {
@@ -180,10 +163,8 @@ fn render_table(
             format_hex(constants.omega_coset)
         );
     }
-
     Ok(())
 }
-
 fn should_emit(
     filter: Option<&HashSet<String>>,
     set: &StarkParameterSet,
@@ -198,7 +179,6 @@ fn should_emit(
         }
     }
 }
-
 fn render_field_descriptor(set: &StarkParameterSet) -> String {
     if set.field == GOLDILOCKS_FP2 {
         "GOLDILOCKS_FP2".to_string()
@@ -209,7 +189,6 @@ fn render_field_descriptor(set: &StarkParameterSet) -> String {
         )
     }
 }
-
 fn render_hash_descriptor(set: &StarkParameterSet) -> String {
     if set.hash == POSEIDON2_SHA3 {
         "POSEIDON2_SHA3".to_string()
@@ -220,7 +199,6 @@ fn render_hash_descriptor(set: &StarkParameterSet) -> String {
         )
     }
 }
-
 fn derive_all_constants(seed: &str) -> Result<Vec<(StarkParameterSet, DerivedConstants)>> {
     let mut rng = DomainRng::new(seed);
     CANONICAL_PARAMETER_SETS
@@ -231,19 +209,16 @@ fn derive_all_constants(seed: &str) -> Result<Vec<(StarkParameterSet, DerivedCon
         })
         .collect()
 }
-
 #[derive(Debug, Clone)]
 struct DerivedConstants {
     trace_root: u64,
     lde_root: u64,
     omega_coset: u64,
 }
-
 struct DomainRng {
     base: PoseidonSponge,
     counter: u64,
 }
-
 impl DomainRng {
     fn new(domain: &str) -> Self {
         let mut sponge = PoseidonSponge::new();
@@ -253,37 +228,31 @@ impl DomainRng {
             counter: 0,
         }
     }
-
     fn next_counter(&mut self) -> u64 {
         let value = self.counter;
         self.counter = self.counter.wrapping_add(1);
         value
     }
-
     fn constants_for(&mut self, set: &StarkParameterSet) -> Result<DerivedConstants> {
         let mut seeded = self.base.clone();
         absorb_tag(&mut seeded, set.name.as_bytes());
         seeded.absorb(u64::from(set.trace_log_size));
         seeded.absorb(u64::from(set.lde_log_size));
-
         let mut trace_sponge = seeded.clone();
         absorb_tag(&mut trace_sponge, b"trace_root");
         trace_sponge.absorb(self.next_counter());
         let trace_root = derive_primitive_root(&mut trace_sponge, set.trace_log_size)
             .with_context(|| format!("failed to derive trace root for {}", set.name))?;
-
         let mut lde_sponge = seeded.clone();
         absorb_tag(&mut lde_sponge, b"lde_root");
         lde_sponge.absorb(self.next_counter());
         let lde_root = derive_primitive_root(&mut lde_sponge, set.lde_log_size)
             .with_context(|| format!("failed to derive lde root for {}", set.name))?;
-
         let mut coset_sponge = seeded;
         absorb_tag(&mut coset_sponge, b"omega_coset");
         coset_sponge.absorb(self.next_counter());
         let omega_coset = derive_coset_generator(&mut coset_sponge, set.trace_log_size)
             .with_context(|| format!("failed to derive coset generator for {}", set.name))?;
-
         Ok(DerivedConstants {
             trace_root,
             lde_root,
@@ -291,19 +260,16 @@ impl DomainRng {
         })
     }
 }
-
 fn absorb_tag(sponge: &mut PoseidonSponge, tag: &[u8]) {
     sponge.absorb(tag.len() as u64 % FIELD_MODULUS);
     for limb in pack_bytes(tag) {
         sponge.absorb(limb);
     }
 }
-
 fn pack_bytes(bytes: &[u8]) -> Vec<u64> {
     if bytes.is_empty() {
         return Vec::new();
     }
-
     let mut limbs = Vec::with_capacity(bytes.len().div_ceil(PACKED_LIMB_BYTES));
     let mut offset = 0usize;
     while offset < bytes.len() {
@@ -319,15 +285,12 @@ fn pack_bytes(bytes: &[u8]) -> Vec<u64> {
         limbs.push(limb);
         offset += take;
     }
-
     limbs
 }
-
 fn derive_primitive_root(sponge: &mut PoseidonSponge, log_size: u32) -> Result<u64> {
     if log_size == 0 {
         return Ok(1);
     }
-
     let exponent = (FIELD_MODULUS_U128 - 1) >> log_size;
     loop {
         let candidate = sponge.squeeze_element();
@@ -344,7 +307,6 @@ fn derive_primitive_root(sponge: &mut PoseidonSponge, log_size: u32) -> Result<u
         }
     }
 }
-
 fn derive_coset_generator(sponge: &mut PoseidonSponge, trace_log_size: u32) -> Result<u64> {
     let trace_order = 1u128 << trace_log_size;
     loop {
@@ -361,7 +323,6 @@ fn derive_coset_generator(sponge: &mut PoseidonSponge, trace_log_size: u32) -> R
         }
     }
 }
-
 fn pow_mod(mut base: u64, mut exponent: u128) -> u64 {
     let mut result = 1u64;
     while exponent > 0 {
@@ -373,12 +334,10 @@ fn pow_mod(mut base: u64, mut exponent: u128) -> u64 {
     }
     result
 }
-
 fn mul_mod(a: u64, b: u64) -> u64 {
     let product = u128::from(a) * u128::from(b);
     u64::try_from(product % FIELD_MODULUS_U128).expect("multiplication result fits modulus")
 }
-
 fn format_hex(value: u64) -> String {
     let digits = format!("{value:016x}");
     let mut formatted = String::with_capacity(2 + digits.len() + digits.len() / 4);
@@ -391,7 +350,6 @@ fn format_hex(value: u64) -> String {
     }
     formatted
 }
-
 fn format_usize(value: usize) -> String {
     let digits: Vec<char> = value.to_string().chars().collect();
     let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);

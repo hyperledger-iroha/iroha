@@ -51,7 +51,6 @@ fn bind_fake_local_deferred_target_for_test(
     );
     deferred_ordinal
 }
-
 fn enqueue_fake(
     runtime: &mut SerializedV2Runtime<FakeDriver>,
     tag: EventTag,
@@ -60,7 +59,6 @@ fn enqueue_fake(
 ) -> Result<(), EnqueueError> {
     runtime.enqueue(tag, class, command)
 }
-
 fn restored_fake_command(
     tag: EventTag,
     class: CommandClass,
@@ -90,18 +88,15 @@ fn restored_fake_command(
     tagged.restored_producer_stage = Some(producer_stage);
     tagged
 }
-
 #[test]
 fn successor_activation_snapshot_requires_armed_live_clocks() {
     let directory = TempDir::new().expect("temporary successor-clock directory");
     let (mut runtime, context, _keys) =
         authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 2, 2));
-
     assert!(matches!(
         runtime.successor_activation_status_snapshot(),
         Err(AdapterError::SuccessorClocksNotArmed)
     ));
-
     runtime
         .arm_live_clocks(Instant::now())
         .expect("arm clocks after all startup work");
@@ -118,7 +113,6 @@ fn successor_activation_snapshot_requires_armed_live_clocks() {
         })
     ));
 }
-
 #[test]
 fn active_view_producer_cannot_fence_absolute_timeout() {
     let (context, keys) = authenticated_runtime_context();
@@ -154,7 +148,6 @@ fn active_view_producer_cannot_fence_absolute_timeout() {
             .local_proposal_admission_available(initial)
             .expect("armed reservation is eligible")
     );
-
     let ownership = runtime
         .mint_local_proposal_effect_ownership(initial, &proposal.manifest)
         .expect("local Store aliases the active producer");
@@ -168,7 +161,6 @@ fn active_view_producer_cannot_fence_absolute_timeout() {
         .expect("local proposal composite retains its exact Store owner");
     assert_eq!(store_ownership.owner(), reserved.owner());
     assert!(runtime.active_view_producer.is_some());
-
     let deadline = start + Duration::from_secs(10);
     assert!(matches!(
         runtime.step_and_take_scheduler_ownership_for_test(deadline),
@@ -179,7 +171,6 @@ fn active_view_producer_cannot_fence_absolute_timeout() {
         runtime.active_view_producer.is_some(),
         "timeout emission must not forge proposal-fanout retirement"
     );
-
     runtime
         .complete_active_view_producer_after_proposal_fanout(proposal.round, &store_ownership)
         .expect("guarded fanout retires the inherited producer");
@@ -195,7 +186,6 @@ fn active_view_producer_cannot_fence_absolute_timeout() {
     );
     assert!(runtime.timeout_emitted, "the view timeout remains one-shot");
 }
-
 #[test]
 fn armed_proposal_admission_cannot_bypass_the_active_view_reservation() {
     let (context, keys) = authenticated_runtime_context();
@@ -219,7 +209,6 @@ fn armed_proposal_admission_cannot_bypass_the_active_view_reservation() {
     runtime
         .arm_live_clocks(start)
         .expect("arm runtime without a producer reservation");
-
     assert!(
         !runtime
             .local_proposal_admission_available(initial)
@@ -233,7 +222,6 @@ fn armed_proposal_admission_cannot_bypass_the_active_view_reservation() {
     );
     assert!(runtime.fail_closed);
 }
-
 #[test]
 fn replayed_proposal_fanout_consumes_the_live_producer_reservation() {
     let (context, keys) = authenticated_runtime_context();
@@ -267,14 +255,12 @@ fn replayed_proposal_fanout_consumes_the_live_producer_reservation() {
     runtime
         .arm_live_clocks(start)
         .expect("arm clocks after replay restoration");
-
     runtime
         .complete_active_view_producer_after_proposal_fanout(proposal.round, &replay_ownership)
         .expect("replayed original Proposal fanout consumes the live reservation");
     assert!(runtime.active_view_producer.is_none());
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn retransmitted_proposal_fanout_preserves_the_live_producer_reservation() {
     let (context, keys) = authenticated_runtime_context();
@@ -308,14 +294,12 @@ fn retransmitted_proposal_fanout_preserves_the_live_producer_reservation() {
     runtime
         .arm_live_clocks(start)
         .expect("arm clocks after producer reservation");
-
     runtime
         .complete_active_view_producer_after_proposal_fanout(proposal.round, &retransmit_ownership)
         .expect("periodic Proposal fanout is not the live producer terminal");
     assert!(runtime.active_view_producer.is_some());
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn proposal_fanout_cannot_replace_active_view_producer_owner() {
     let (context, keys) = authenticated_runtime_context();
@@ -340,7 +324,6 @@ fn proposal_fanout_cannot_replace_active_view_producer_owner() {
         .arm_live_clocks(start)
         .expect("arm after producer reservation");
     let foreign = RuntimeEffectOwnership::fresh_for_test(initial, 999);
-
     assert!(
         runtime
             .complete_active_view_producer_after_proposal_fanout(proposal.round, &foreign)
@@ -349,7 +332,6 @@ fn proposal_fanout_cannot_replace_active_view_producer_owner() {
     assert!(runtime.fail_closed);
     assert!(runtime.active_view_producer.is_some());
 }
-
 #[test]
 fn absolute_timeout_fires_once_and_messages_never_reset_it() {
     let start = Instant::now();
@@ -363,7 +345,6 @@ fn absolute_timeout_fires_once_and_messages_never_reset_it() {
     assert_eq!(runtime.round_timeout(), Duration::from_secs(10));
     assert_eq!(runtime.retransmit_interval(), Duration::from_secs(2));
     assert_eq!(runtime.watchdog_threshold(), Duration::from_secs(12));
-
     enqueue_fake(
         &mut runtime,
         initial,
@@ -375,13 +356,11 @@ fn absolute_timeout_fires_once_and_messages_never_reset_it() {
         runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(1)),
         Ok(RuntimeStep::Advanced(_))
     ));
-
     assert!(matches!(
         runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(2)),
         Ok(RuntimeStep::Advanced(_))
     ));
     assert_eq!(runtime.driver.retransmits, vec![initial]);
-
     enqueue_fake(
         &mut runtime,
         initial,
@@ -407,19 +386,16 @@ fn absolute_timeout_fires_once_and_messages_never_reset_it() {
             .is_some_and(|owner| owner.lifecycle_ordinal() > second_lifecycle_ordinal),
         "the later runner freeze must mint a fresh periodic position after admitted work"
     );
-
     runtime
         .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10))
         .expect("absolute timeout preempts the retained periodic episode");
     assert_eq!(runtime.driver.retransmits, vec![initial]);
     assert_eq!(runtime.driver.timeouts, vec![initial]);
-
     runtime
         .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10))
         .expect("the retained periodic episode runs immediately after timeout");
     assert_eq!(runtime.driver.timeouts, vec![initial]);
     assert_eq!(runtime.driver.retransmits, vec![initial, initial]);
-
     runtime
         .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(20))
         .expect("post-timeout scheduling succeeds");
@@ -429,7 +405,6 @@ fn absolute_timeout_fires_once_and_messages_never_reset_it() {
         "ordinary ingress never resets either clock"
     );
 }
-
 #[test]
 fn absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains() {
     let start = Instant::now();
@@ -447,7 +422,6 @@ fn absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains() {
         FakeCommand::record(9),
     )
     .expect("enqueue newer runtime work");
-
     let due = start + Duration::from_secs(10);
     assert!(matches!(
         runtime.step_and_take_scheduler_ownership_for_test(due),
@@ -456,21 +430,18 @@ fn absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains() {
     assert_eq!(runtime.driver.timeouts, vec![initial]);
     assert_eq!(runtime.driver.deferred_dispatches, 0);
     assert_eq!(runtime.queued_commands(), 1);
-
     assert!(matches!(
         runtime.step_and_take_scheduler_ownership_for_test(due),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 2
     ));
     assert_eq!(runtime.driver.deferred_dispatches, 1);
     assert_eq!(runtime.queued_commands(), 1);
-
     assert!(matches!(
         runtime.step_and_take_scheduler_ownership_for_test(due),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
     ));
     assert_eq!(runtime.driver.deferred_dispatches, 2);
     assert_eq!(runtime.queued_commands(), 1);
-
     // Timeout preserves FIFO debt, so admitted work runs before the
     // still-due periodic retransmission once adapter debt is empty.
     assert!(matches!(
@@ -479,7 +450,6 @@ fn absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains() {
     ));
     assert_eq!(runtime.driver.delivered, vec![(initial, 9)]);
     assert_eq!(runtime.queued_commands(), 0);
-
     assert!(matches!(
         runtime.step_and_take_scheduler_ownership_for_test(due),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
@@ -487,7 +457,6 @@ fn absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains() {
     assert_eq!(runtime.driver.timeouts, vec![initial]);
     assert_eq!(runtime.driver.retransmits, vec![initial]);
 }
-
 #[test]
 fn serviceable_adapter_debt_runs_without_runtime_ingress() {
     let start = Instant::now();
@@ -495,7 +464,6 @@ fn serviceable_adapter_debt_runs_without_runtime_ingress() {
     let mut driver = FakeDriver::new(initial);
     driver.deferred_effects.push_back(vec![FakeEffect::other()]);
     let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(8, 2, 2));
-
     assert_eq!(runtime.queued_commands(), 0);
     assert!(matches!(
         runtime.step_and_take_scheduler_ownership_for_test(start),
@@ -507,7 +475,6 @@ fn serviceable_adapter_debt_runs_without_runtime_ingress() {
         Ok(RuntimeStep::Idle)
     ));
 }
-
 #[test]
 fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_busy_producer() {
     let directory = TempDir::new().expect("temporary producer-alias runtime directory");
@@ -544,7 +511,6 @@ fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_bus
         .expect("second route owns its runtime receipt")
         .clone();
     assert_ne!(first_receipt.token(), second_receipt.token());
-
     let now = Instant::now();
     runtime
         .arm_live_clocks(now)
@@ -560,7 +526,6 @@ fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_bus
             ..
         }]
     ));
-
     runtime
         .enqueue_network_with_ingress_ownership(message.clone(), first_ownership)
         .expect("enqueue the first origin-specific PrepareQC");
@@ -568,7 +533,6 @@ fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_bus
         .enqueue_network_with_ingress_ownership(message, second_ownership)
         .expect("enqueue the second origin before the first reaches Busy storage");
     assert_eq!(runtime.queued_commands(), 2);
-
     let first = runtime
         .try_step_pacemaker_escape(now)
         .expect("first pacemaker selection remains valid")
@@ -590,7 +554,6 @@ fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_bus
         "the Busy occurrence owns one process, durable, and deferred producer alias"
     );
     assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
-
     let second = runtime
         .try_step_pacemaker_escape(now)
         .expect("duplicate pacemaker selection must not fail closed")
@@ -628,7 +591,6 @@ fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_bus
         .mark_leader_wire_volatile_terminal(retired_second)
         .expect("publish the alternate route's process-local terminal");
     assert!(!runtime.fail_closed);
-
     let timeout_certificate =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
             signed_runtime_timeout_certificate(&context, &keys),
@@ -650,7 +612,6 @@ fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_bus
         .take_effect_ownership(certified_effects.len())
         .expect("consume the TC effect ownership");
     assert!(runtime.driver().deferred_work_is_serviceable());
-
     let retired = runtime
         .try_step_pacemaker_escape(now)
         .expect("canonical Busy owner remains schedulable")
@@ -689,7 +650,6 @@ fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_bus
     assert_eq!(runtime.queued_commands(), 0);
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
     let directory = TempDir::new().expect("temporary preowned-fence runtime directory");
@@ -744,7 +704,6 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
             .physical_admission_ordinal()
             .expect("second aggregate owns its physical occurrence")
     );
-
     let start = Instant::now();
     runtime
         .arm_live_clocks(start)
@@ -857,7 +816,6 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
         "the Busy occurrence owns only the selected origin-specific lifecycle"
     );
     assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
-
     let queue_before_fenced_idle = runtime.ingress.ownership_snapshot();
     assert!(matches!(
         runtime
@@ -886,7 +844,6 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
     );
     assert_eq!(runtime.leader_wire_runtime_receipts.len(), 2);
     assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
-
     let signature = Signature::new(keys[0].private_key(), &signature_preimage)
         .payload()
         .to_vec();
@@ -896,7 +853,6 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
     runtime
         .set_external_lifecycle_owners(Vec::new())
         .expect("retire pending signer after completion enqueue");
-
     let completion_step = runtime
         .step(deadline)
         .expect("exact completion crosses preowned fenced FIFO debt");
@@ -1014,7 +970,6 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
     runtime
         .take_effect_ownership(effects.len())
         .expect("consume TimeoutVote broadcast ownership");
-
     let deferred_step = runtime
         .step(deadline)
         .expect("the physically frozen Busy target owns the next turn");
@@ -1132,7 +1087,6 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
         BTreeMap::from([(second_token.scheduler_ordinal(), second_receipt.clone(),)]),
         "the first terminal cannot consume the later origin-specific receipt"
     );
-
     let second_step = runtime
         .step(deadline)
         .expect("the later duplicate runs only after the Busy owner terminalizes");
@@ -1171,7 +1125,6 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
     assert_eq!(runtime.queued_commands(), 0);
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
     let directory = TempDir::new().expect("temporary mixed-fence runtime directory");
@@ -1244,7 +1197,6 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
             "every mixed-fence owner must physically precede the target cut"
         );
     }
-
     let start = Instant::now();
     runtime
         .arm_live_clocks(start)
@@ -1290,7 +1242,6 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
         .enqueue_network_with_ingress_ownership(safe, safe_ownership)
         .expect("admit far-future TimeoutVote which terminates before the reducer");
     assert_eq!(runtime.queued_commands(), 3);
-
     assert!(matches!(
         runtime
             .step_and_take_scheduler_ownership_for_test(deadline)
@@ -1306,7 +1257,6 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
         .next()
         .expect("target retains one exact Busy occurrence");
     let deferred_target = deferred_target.clone();
-
     let predecessor_step = runtime
         .step(deadline)
         .expect("oldest safe pre-cut owner runs before the fence completion");
@@ -1370,7 +1320,6 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
         } => receipt,
     };
     assert_eq!(safe_terminal_receipt, &safe_receipt);
-
     let signature = Signature::new(keys[0].private_key(), &signature_preimage)
         .payload()
         .to_vec();
@@ -1397,7 +1346,6 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
     runtime
         .take_effect_ownership(completion_effects.len())
         .expect("consume completion effects");
-
     let deferred_step = runtime
         .step(deadline)
         .expect("opened Busy target drains after its completion");
@@ -1416,7 +1364,6 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
         .expect("consume deferred target effects");
     let target_terminals = runtime.take_leader_wire_runtime_terminals();
     assert_eq!(target_terminals.len(), 1);
-
     let blocked_step = runtime
         .step(deadline)
         .expect("blocked peer input runs normally after target retirement");
@@ -1447,7 +1394,6 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
     assert_eq!(runtime.queued_commands(), 0);
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
     let directory = TempDir::new().expect("temporary post-cut replay runtime directory");
@@ -1498,7 +1444,6 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
     let target_physical_cut = target_ownership
         .runtime_physical_cut()
         .expect("target owns a checked physical cut");
-
     // Model a reconnect which retained the replay's immutable logical
     // identity but acquired a fresh physical position after the target's
     // checked-dequeue cut.
@@ -1508,7 +1453,6 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
     replay_ownership.latest.physical_admission_ordinal = replay_source_physical_ordinal;
     replay_ownership.runtime_physical_cut = target_physical_cut.checked_add(1);
     assert!(replay_ownership.validate_exact());
-
     let start = Instant::now();
     runtime
         .arm_live_clocks(start)
@@ -1541,7 +1485,6 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
     runtime
         .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
         .expect("publish pending TimeoutVote signer owner");
-
     runtime
         .enqueue_network_with_ingress_ownership(target.clone(), target_ownership)
         .expect("admit the target before the physical replay");
@@ -1570,7 +1513,6 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
         Some(target_source_physical_ordinal)
     );
     assert_eq!(target_deferred.physical_cut, target_physical_cut);
-
     runtime
         .enqueue_network_with_ingress_ownership(replay.clone(), replay_ownership)
         .expect("admit the old-logical replay at its fresh physical position");
@@ -1592,7 +1534,6 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
         BTreeSet::from([target_deferred_ordinal]),
         "the post-cut replay cannot reclaim its old logical priority"
     );
-
     let signature = Signature::new(keys[0].private_key(), &signature_preimage)
         .payload()
         .to_vec();
@@ -1623,7 +1564,6 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
     runtime
         .take_effect_ownership(completion_effects.len())
         .expect("consume completion effect ownership");
-
     let target_step = runtime
         .step(deadline)
         .expect("the pre-cut target owns service before the replay");
@@ -1661,7 +1601,6 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
         .expect("consume target effect ownership");
     let _ = runtime.take_leader_wire_runtime_terminals();
 }
-
 #[test]
 fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress() {
     let directory = TempDir::new().expect("temporary real-adapter ordering directory");
@@ -1674,7 +1613,6 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
     runtime
         .arm_live_clocks(start)
         .expect("arm runtime after adapter startup");
-
     // Refresh the derived clock before the signer becomes busy. This keeps
     // the absolute deadline and retransmission deadline independent in the
     // ordering trace below.
@@ -1685,7 +1623,6 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
             .expect("service pre-fence retransmission"),
         RuntimeStep::Advanced(_)
     ));
-
     let proposal = signed_runtime_proposal(&context, &keys, 0xE1);
     runtime
         .enqueue_network(proposal.clone())
@@ -1707,7 +1644,6 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
         ] => (*tag, manifest.clone()),
         effects => panic!("unexpected proposal effects: {effects:?}"),
     };
-
     runtime
         .enqueue_body_available(tag, manifest.clone())
         .expect("enqueue reconstructed body");
@@ -1772,7 +1708,6 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
     runtime
         .set_external_lifecycle_owners(vec![prepare_effect_ownership[0].owner().clone()])
         .expect("publish pending Prepare signer owner");
-
     // The exact authenticated retransmission is physically admitted after
     // the pending Prepare signer. It retains that later position while the
     // signer is external; neither its class nor its duplicate semantics
@@ -1787,7 +1722,6 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
         RuntimeStep::Idle
     ));
     assert_eq!(runtime.ingress.next_class, CommandClass::Completion);
-
     let deadline = start + runtime.round_timeout();
     assert!(matches!(
         runtime
@@ -1799,7 +1733,6 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
         !runtime.driver().deferred_work_is_serviceable(),
         "the exact Prepare signature still fences the Busy-deferred timeout"
     );
-
     let prepare_signature = Signature::new(keys[0].private_key(), &prepare_signature_preimage)
         .payload()
         .to_vec();
@@ -1817,7 +1750,6 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
         .enqueue_network(signed_runtime_proposal(&context, &keys, 0xE2))
         .expect("enqueue newer authenticated ingress");
     assert_eq!(runtime.queued_commands(), 3);
-
     let prepare_broadcast = runtime
         .step_and_take_scheduler_ownership_for_test(deadline)
         .expect("signature completion owns the first serialized turn");
@@ -1841,7 +1773,6 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
         2,
         "the exact retransmission and newer ingress remain owned after signature completion"
     );
-
     assert!(matches!(
         runtime
             .step_and_take_scheduler_ownership_for_test(deadline)
@@ -1853,7 +1784,6 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
         1,
         "the newer ingress remains after the exact retransmission stutters"
     );
-
     let timeout_macro_step = runtime
         .step_and_take_scheduler_ownership_for_test(deadline)
         .expect("service exactly one older Busy-deferred timeout transition");
@@ -1873,7 +1803,6 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
         1,
         "one deferred macro-step cannot concatenate newer ingress"
     );
-
     assert!(matches!(
         runtime
             .step_and_take_scheduler_ownership_for_test(deadline)
@@ -1882,7 +1811,6 @@ fn real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
             if matches!(effects.as_slice(), [AdapterEffect::ReportEquivocation { .. }])
     ));
     assert_eq!(runtime.queued_commands(), 0);
-
     let next_retransmission = before_timeout + runtime.retransmit_interval();
     assert!(matches!(
         runtime

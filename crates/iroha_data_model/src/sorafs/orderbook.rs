@@ -3,18 +3,14 @@
 //! Signed order, cancellation, and settlement payload schemas remain in
 //! `sorafs_manifest::orderbook`. These records bind those canonical payloads to
 //! a governance-controlled policy and to deterministic ledger admission state.
-
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use sorafs_manifest::deal::XorQuantity;
-
 use crate::{
     account::AccountId, asset::AssetDefinitionId, escrow::EscrowId,
     events::data::sorafs::SorafsOrderbookLedgerEvent, sorafs::capacity::ProviderId,
 };
-
 /// First-release schema version for [`OrderbookAdmissionPolicyV1`].
 pub const ORDERBOOK_ADMISSION_POLICY_VERSION_V1: u16 = 1;
 /// Maximum order lifetime governance may configure for the first release.
@@ -56,7 +52,6 @@ pub const ORDERBOOK_ORDER_ESCROW_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-
 pub const ORDERBOOK_ORDER_ESCROW_ID_PREFIX_V1: [u8; 4] = *b"SFO1";
 /// Reserved four-byte namespace tag for settlement-channel custody locks.
 pub const ORDERBOOK_SETTLEMENT_ESCROW_ID_PREFIX_V1: [u8; 4] = *b"SFC1";
-
 fn namespaced_orderbook_escrow_id(domain: &[u8], namespace: [u8; 4], id: [u8; 32]) -> EscrowId {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
@@ -65,7 +60,6 @@ fn namespaced_orderbook_escrow_id(domain: &[u8], namespace: [u8; 4], id: [u8; 32
     digest[..namespace.len()].copy_from_slice(&namespace);
     EscrowId::new(iroha_crypto::Hash::prehashed(digest))
 }
-
 /// Derive the native asset-lock identifier that funds an admitted bid.
 ///
 /// Four reserved namespace bytes prevent public escrow creators from
@@ -79,7 +73,6 @@ pub fn orderbook_order_escrow_id(order_id: [u8; 32]) -> EscrowId {
         order_id,
     )
 }
-
 /// Derive the native asset-lock identifier required for a settlement channel.
 ///
 /// A receipt can move funds only from the generic native asset lock at this
@@ -93,7 +86,6 @@ pub fn orderbook_settlement_escrow_id(channel_id: [u8; 32]) -> EscrowId {
         channel_id,
     )
 }
-
 /// Return whether `escrow_id` belongs to the reserved bid-order namespace.
 #[must_use]
 pub fn is_orderbook_order_escrow_id_v1(escrow_id: &EscrowId) -> bool {
@@ -102,7 +94,6 @@ pub fn is_orderbook_order_escrow_id_v1(escrow_id: &EscrowId) -> bool {
         .as_ref()
         .starts_with(&ORDERBOOK_ORDER_ESCROW_ID_PREFIX_V1)
 }
-
 /// Return whether `escrow_id` belongs to the reserved settlement-channel namespace.
 #[must_use]
 pub fn is_orderbook_settlement_escrow_id_v1(escrow_id: &EscrowId) -> bool {
@@ -111,13 +102,11 @@ pub fn is_orderbook_settlement_escrow_id_v1(escrow_id: &EscrowId) -> bool {
         .as_ref()
         .starts_with(&ORDERBOOK_SETTLEMENT_ESCROW_ID_PREFIX_V1)
 }
-
 /// Return whether public escrow creation must reject `escrow_id`.
 #[must_use]
 pub fn is_reserved_orderbook_escrow_id_v1(escrow_id: &EscrowId) -> bool {
     is_orderbook_order_escrow_id_v1(escrow_id) || is_orderbook_settlement_escrow_id_v1(escrow_id)
 }
-
 /// Governance-controlled order admission and receipt-retention policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -171,7 +160,6 @@ pub struct OrderbookAdmissionPolicyV1 {
     /// Maximum non-overlapping receipt ranges retained for one channel.
     pub max_receipts_per_channel: u32,
 }
-
 impl OrderbookAdmissionPolicyV1 {
     /// Validate all first-release policy bounds.
     ///
@@ -239,7 +227,6 @@ impl OrderbookAdmissionPolicyV1 {
         }
         Ok(())
     }
-
     /// Compute the canonical domain-separated digest of this policy.
     ///
     /// # Errors
@@ -252,20 +239,16 @@ impl OrderbookAdmissionPolicyV1 {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-
 struct Blake3Writer<'a>(&'a mut blake3::Hasher);
-
 impl std::io::Write for Blake3Writer<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.0.update(bytes);
         Ok(bytes.len())
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
-
 /// Validation errors for the governed orderbook policy.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum OrderbookPolicyValidationError {
@@ -337,7 +320,6 @@ pub enum OrderbookPolicyValidationError {
         found: u32,
     },
 }
-
 /// Activated governance policy together with ledger admission provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -355,7 +337,6 @@ pub struct OrderbookAdmissionPolicyRecord {
     /// Governance authority that activated the policy.
     pub activated_by: AccountId,
 }
-
 /// Authoritative lifecycle of an admitted order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -380,7 +361,6 @@ pub enum OrderbookOrderStatusV1 {
     /// Ledger maintenance retired an ask after its admitted provider binding was revoked.
     ProviderRevoked,
 }
-
 /// Native custody created atomically with one admitted bid.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -395,7 +375,6 @@ pub struct OrderbookBidEscrowBindingV1 {
     /// Conservative full-order amount initially moved into custody.
     pub initial_xor_locked: XorQuantity,
 }
-
 /// Canonical signed order and its authoritative ledger status.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -443,7 +422,6 @@ pub struct OrderbookOrderRecord {
     )]
     pub cancelled_policy_digest: Option<[u8; 32]>,
 }
-
 /// Typed cancellation view returned by authoritative read queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -465,7 +443,6 @@ pub struct OrderbookCancellationRecord {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub cancelled_policy_digest: [u8; 32],
 }
-
 /// Highest committed orderbook operation nonce for one ledger account.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -478,7 +455,6 @@ pub struct OrderbookOwnerNonceRecord {
     /// Highest committed order or cancellation nonce.
     pub highest_nonce: u64,
 }
-
 /// Immutable accepted settlement receipt and ledger provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -509,7 +485,6 @@ pub struct OrderbookSettlementReceiptRecord {
     /// or native custody release authorities.
     pub recorded_by: AccountId,
 }
-
 /// Immutable authoritative trade produced by deterministic matching.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -539,7 +514,6 @@ pub struct OrderbookTradeRecord {
     /// Block timestamp assigned to the fill.
     pub recorded_at_unix: u64,
 }
-
 /// Authoritative settlement-channel lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -558,7 +532,6 @@ pub enum OrderbookSettlementChannelStatusV1 {
     /// The delivery deadline elapsed and remaining custody was refunded.
     Expired,
 }
-
 /// Authoritative settlement-channel state bound to native custody.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -601,7 +574,6 @@ pub struct OrderbookSettlementChannelRecord {
     /// Block timestamp of the latest channel mutation.
     pub updated_at_unix: u64,
 }
-
 /// One receipt range retained in a channel replay index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -619,7 +591,6 @@ pub struct OrderbookSettlementRangeRecord {
     /// Signed receipt issuance time.
     pub issued_at_unix: u64,
 }
-
 /// Bounded, strictly range-ordered receipt replay index for one channel.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -636,7 +607,6 @@ pub struct OrderbookSettlementIndexRecord {
     /// Non-overlapping ranges sorted by `(start, end, receipt_id)`.
     pub ranges: Vec<OrderbookSettlementRangeRecord>,
 }
-
 /// Constant-time authoritative orderbook ledger counters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -680,7 +650,6 @@ pub struct OrderbookLedgerStatusV1 {
     /// Block timestamp of the most recent counter mutation.
     pub updated_at_unix: u64,
 }
-
 /// Finalized block anchor for one coherent orderbook query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -694,7 +663,6 @@ pub struct OrderbookFinalizedCursorV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
-
 /// Cursor-bounded authoritative order page.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -715,7 +683,6 @@ pub struct OrderbookOrderPageV1 {
     )]
     pub next_after_order_id: Option<[u8; 32]>,
 }
-
 /// Cursor-bounded authoritative settlement-receipt page.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -736,7 +703,6 @@ pub struct OrderbookSettlementReceiptPageV1 {
     )]
     pub next_after_receipt_id: Option<[u8; 32]>,
 }
-
 /// Cursor-bounded authoritative trade page.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -757,7 +723,6 @@ pub struct OrderbookTradePageV1 {
     )]
     pub next_after_trade_id: Option<[u8; 32]>,
 }
-
 /// Cursor-bounded authoritative settlement-channel page.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -778,7 +743,6 @@ pub struct OrderbookSettlementChannelPageV1 {
     )]
     pub next_after_channel_id: Option<[u8; 32]>,
 }
-
 /// Exclusive cursor for one committed orderbook event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -796,7 +760,6 @@ pub struct OrderbookFinalizedEventCursorV1 {
     /// Orderbook-event index within the committing block.
     pub event_index: u32,
 }
-
 /// Typed orderbook event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -816,7 +779,6 @@ pub struct OrderbookFinalizedEventV1 {
     /// Existing typed, payload-free native orderbook event.
     pub event: SorafsOrderbookLedgerEvent,
 }
-
 impl OrderbookFinalizedEventV1 {
     /// Return the exclusive cursor identifying this event.
     #[must_use]
@@ -829,7 +791,6 @@ impl OrderbookFinalizedEventV1 {
         }
     }
 }
-
 /// Cursor-bounded page of typed committed orderbook events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -846,27 +807,22 @@ pub struct OrderbookFinalizedEventPageV1 {
     /// Exclusive continuation cursor, present only when `has_more` is true.
     pub next_after: Option<OrderbookFinalizedEventCursorV1>,
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
-
     use super::*;
     use crate::events::data::sorafs::SorafsOrderbookLedgerEventKind;
-
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         norito::to_bytes(value).expect("encode alternate-layout orderbook value")
     }
-
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("nonzero deterministic Ed25519 seed");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn assert_canonical_norito_round_trip<T>(value: &T)
     where
         T: core::fmt::Debug + PartialEq + norito::core::NoritoSerialize,
@@ -880,7 +836,6 @@ mod tests {
             norito::encode_canonical(&decoded).expect("re-encode canonical orderbook value"),
             encoded
         );
-
         let alternate = encode_with_alternate_norito_layout(value);
         assert_ne!(alternate, encoded);
         let alternate_decoded: T = norito::decode_from_bytes(&alternate)
@@ -891,7 +846,6 @@ mod tests {
             Err(norito::Error::NonCanonicalEncoding)
         ));
     }
-
     fn policy() -> OrderbookAdmissionPolicyV1 {
         OrderbookAdmissionPolicyV1 {
             version: ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
@@ -913,7 +867,6 @@ mod tests {
             max_receipts_per_channel: 1_024,
         }
     }
-
     #[test]
     fn policy_validation_and_digest_are_deterministic() {
         let policy = policy();
@@ -926,7 +879,6 @@ mod tests {
         assert_eq!(first, *historical.finalize().as_bytes());
         assert_eq!(first, policy.digest().expect("repeat digest"));
         assert_canonical_norito_round_trip(&policy);
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -938,11 +890,9 @@ mod tests {
             ambient_digest, first,
             "policy identity must ignore ambient Norito layout"
         );
-
         let mut changed = policy.clone();
         changed.price_tick_micro_xor += 1;
         assert_ne!(first, changed.digest().expect("changed digest"));
-
         let mut rotated = policy;
         rotated.matcher_authority = account(0xB3);
         assert_ne!(
@@ -950,7 +900,6 @@ mod tests {
             rotated.digest().expect("rotated-authority policy digest")
         );
     }
-
     #[test]
     fn settlement_escrow_id_is_deterministic_and_channel_bound() {
         let channel = [0x42; 32];
@@ -962,13 +911,11 @@ mod tests {
         assert!(!is_orderbook_order_escrow_id_v1(&first));
         assert_ne!(first.as_hash().as_ref(), &[0; 32]);
     }
-
     #[test]
     fn order_and_channel_escrow_namespaces_are_reserved_and_disjoint() {
         let subject = [0x42; 32];
         let order = orderbook_order_escrow_id(subject);
         let channel = orderbook_settlement_escrow_id(subject);
-
         assert_eq!(order, orderbook_order_escrow_id(subject));
         assert_ne!(order, orderbook_order_escrow_id([0x43; 32]));
         assert_ne!(order, channel);
@@ -977,7 +924,6 @@ mod tests {
         assert!(!is_orderbook_settlement_escrow_id_v1(&order));
         assert_ne!(order.as_hash().as_ref(), &[0; 32]);
     }
-
     #[test]
     fn policy_rejects_revision_and_predecessor_abuse() {
         let mut candidate = policy();
@@ -986,14 +932,12 @@ mod tests {
             candidate.validate(),
             Err(OrderbookPolicyValidationError::ZeroRevision)
         );
-
         let mut candidate = policy();
         candidate.predecessor_policy_digest = Some([1; 32]);
         assert_eq!(
             candidate.validate(),
             Err(OrderbookPolicyValidationError::UnexpectedPredecessor)
         );
-
         let mut candidate = policy();
         candidate.revision = 2;
         assert_eq!(
@@ -1006,7 +950,6 @@ mod tests {
             Err(OrderbookPolicyValidationError::MissingPredecessor)
         );
     }
-
     #[test]
     fn policy_rejects_zero_and_inverted_bounds() {
         let mut candidate = policy();
@@ -1015,7 +958,6 @@ mod tests {
             candidate.validate(),
             Err(OrderbookPolicyValidationError::ZeroMarketId)
         );
-
         for (minimum, maximum) in [(0, 1), (2, 1)] {
             let mut candidate = policy();
             candidate.min_order_gib = minimum;
@@ -1025,7 +967,6 @@ mod tests {
                 Err(OrderbookPolicyValidationError::InvalidQuantityBounds { minimum, maximum })
             );
         }
-
         let mut candidate = policy();
         candidate.price_tick_micro_xor = 0;
         assert_eq!(
@@ -1033,7 +974,6 @@ mod tests {
             Err(OrderbookPolicyValidationError::ZeroPriceTick)
         );
     }
-
     #[test]
     fn policy_rejects_resource_limit_extremes() {
         let mut candidate = policy();
@@ -1042,35 +982,30 @@ mod tests {
             candidate.validate(),
             Err(OrderbookPolicyValidationError::InvalidFeeBounds { .. })
         ));
-
         let mut candidate = policy();
         candidate.max_order_lifetime_secs = ORDERBOOK_MAX_ORDER_LIFETIME_SECS_V1 + 1;
         assert!(matches!(
             candidate.validate(),
             Err(OrderbookPolicyValidationError::InvalidOrderLifetime { .. })
         ));
-
         let mut candidate = policy();
         candidate.max_receipt_age_secs = 0;
         assert!(matches!(
             candidate.validate(),
             Err(OrderbookPolicyValidationError::InvalidReceiptAge { .. })
         ));
-
         let mut candidate = policy();
         candidate.max_clock_skew_secs = ORDERBOOK_MAX_CLOCK_SKEW_SECS_V1 + 1;
         assert!(matches!(
             candidate.validate(),
             Err(OrderbookPolicyValidationError::InvalidClockSkew { .. })
         ));
-
         let mut candidate = policy();
         candidate.max_receipt_bytes = ORDERBOOK_MAX_RECEIPT_BYTES_V1 + 1;
         assert!(matches!(
             candidate.validate(),
             Err(OrderbookPolicyValidationError::InvalidReceiptBytes { .. })
         ));
-
         let mut candidate = policy();
         candidate.max_receipts_per_channel = ORDERBOOK_MAX_RECEIPTS_PER_CHANNEL_V1 + 1;
         assert!(matches!(
@@ -1078,7 +1013,6 @@ mod tests {
             Err(OrderbookPolicyValidationError::InvalidReceiptCount { .. })
         ));
     }
-
     #[test]
     fn finalized_query_pages_round_trip_as_exact_canonical_norito() {
         let finalized_cursor = OrderbookFinalizedCursorV1 {
@@ -1133,7 +1067,6 @@ mod tests {
             has_more: false,
             next_after_channel_id: None,
         };
-
         assert_canonical_norito_round_trip(&finalized_cursor);
         assert_canonical_norito_round_trip(&event_cursor);
         assert_canonical_norito_round_trip(&event_page);
@@ -1141,7 +1074,6 @@ mod tests {
         assert_canonical_norito_round_trip(&receipt_page);
         assert_canonical_norito_round_trip(&trade_page);
         assert_canonical_norito_round_trip(&channel_page);
-
         #[cfg(feature = "json")]
         {
             let encoded =

@@ -16,7 +16,6 @@ fn native_amx_prepublication_transition_preflight_is_read_only_and_exact() {
             })
             .collect()
     }
-
     let temp_dir = TempDir::new().expect("Native transition-preflight Kura directory");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
@@ -63,7 +62,6 @@ fn native_amx_prepublication_transition_preflight_is_read_only_and_exact() {
     fs::remove_file(manifest_path(2)).expect("remove incoming manifest before preflight");
     fs::remove_file(receipt_path(2)).expect("remove incoming receipt before preflight");
     let directory = Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root));
-
     let _prune_guard = kura.prune_lock.lock();
     let exact_before = snapshot(&directory);
     let exact = kura
@@ -79,7 +77,6 @@ fn native_amx_prepublication_transition_preflight_is_read_only_and_exact() {
         ))
     );
     assert_eq!(snapshot(&directory), exact_before);
-
     let mut wrong_predecessor_manifest = manifest_two.clone();
     let mut wrong_predecessor_receipt = receipts[1].clone();
     wrong_predecessor_receipt.application_block_height = 2;
@@ -126,7 +123,6 @@ fn native_amx_prepublication_transition_preflight_is_read_only_and_exact() {
         "unexpected wrong-predecessor error: {error}"
     );
     assert_eq!(snapshot(&directory), before);
-
     let mut gap_manifest = wrong_predecessor_manifest.clone();
     let mut gap_receipt = wrong_predecessor_receipt.clone();
     gap_receipt
@@ -160,7 +156,6 @@ fn native_amx_prepublication_transition_preflight_is_read_only_and_exact() {
         "unexpected participant-gap error: {error}"
     );
     assert_eq!(snapshot(&directory), before);
-
     let mut regressed_manifest = manifest_one.clone();
     let mut regressed_receipt = receipts[0].clone();
     regressed_receipt
@@ -196,7 +191,6 @@ fn native_amx_prepublication_transition_preflight_is_read_only_and_exact() {
         "unexpected regressed-height error: {error}"
     );
     assert_eq!(snapshot(&directory), before);
-
     let mut conflict_receipt = receipts[0].clone();
     conflict_receipt.participant_proposal.proposal_hash =
         Hash::new(b"same-height Native proposal conflict");
@@ -216,7 +210,6 @@ fn native_amx_prepublication_transition_preflight_is_read_only_and_exact() {
     );
     assert_eq!(snapshot(&directory), before);
 }
-
 #[test]
 fn native_amx_retained_history_requires_one_exact_contiguous_descriptor_chain() {
     let temp_dir = TempDir::new().expect("Native retained-chain Kura directory");
@@ -259,7 +252,6 @@ fn native_amx_retained_history_requires_one_exact_contiguous_descriptor_chain() 
         .collect::<BTreeMap<_, _>>();
     Kura::validate_native_amx_retained_history_continuity(&manifests, &receipts, false)
         .expect("complete adjacent Native retained chain");
-
     let mut punctured_manifests = manifests.clone();
     let mut punctured_receipts = receipts.clone();
     punctured_manifests.remove(&2);
@@ -274,7 +266,6 @@ fn native_amx_retained_history_requires_one_exact_contiguous_descriptor_chain() 
         error.contains("contiguous"),
         "unexpected Native retained puncture error: {error}"
     );
-
     let mut drifted_manifests = manifests;
     let mut highest_partial_receipts = receipts;
     highest_partial_receipts.remove(&3);
@@ -294,7 +285,6 @@ fn native_amx_retained_history_requires_one_exact_contiguous_descriptor_chain() 
         "unexpected Native retained predecessor error: {error}"
     );
 }
-
 #[test]
 fn native_amx_startup_rejects_symmetric_middle_pair_deletion() {
     let temp_dir = TempDir::new().expect("Native punctured-startup Kura directory");
@@ -317,7 +307,6 @@ fn native_amx_startup_rejects_symmetric_middle_pair_deletion() {
     )
     .expect("sync punctured Native evidence directory");
     drop(kura);
-
     let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
         Ok(_) => panic!("startup must reject a symmetric middle Native pair deletion"),
         Err(error) => error,
@@ -331,7 +320,6 @@ fn native_amx_startup_rejects_symmetric_middle_pair_deletion() {
         "fail-closed startup must not fabricate the deleted middle pair"
     );
 }
-
 #[test]
 fn native_amx_startup_rejects_authenticated_retained_predecessor_drift() {
     let temp_dir = TempDir::new().expect("Native drifted-startup Kura directory");
@@ -348,7 +336,6 @@ fn native_amx_startup_rejects_authenticated_retained_predecessor_drift() {
         Some(3),
     );
     drop(kura);
-
     let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
         Ok(_) => panic!("startup must reject authenticated retained predecessor drift"),
         Err(error) => error,
@@ -358,7 +345,6 @@ fn native_amx_startup_rejects_authenticated_retained_predecessor_drift() {
         "unexpected drifted Native startup error: {error}"
     );
 }
-
 #[test]
 fn native_amx_prune_intent_rejects_middle_pair_puncture() {
     let temp_dir = TempDir::new().expect("Native punctured-prune Kura directory");
@@ -414,7 +400,6 @@ fn native_amx_prune_intent_rejects_middle_pair_puncture() {
         "failed prune-intent validation must leave the middle pair untouched"
     );
 }
-
 fn native_amx_prune_special_paths(kura: &Kura, entry: &LaneConfigEntry) -> (PathBuf, PathBuf) {
     let directory = Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root));
     (
@@ -422,7 +407,6 @@ fn native_amx_prune_special_paths(kura: &Kura, entry: &LaneConfigEntry) -> (Path
         directory.join(NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE),
     )
 }
-
 fn native_amx_prune_evidence_snapshot(
     kura: &Kura,
     entry: &LaneConfigEntry,
@@ -450,7 +434,6 @@ fn native_amx_prune_evidence_snapshot(
         })
         .collect()
 }
-
 fn assert_native_amx_prune_evidence_snapshot(expected: &BTreeMap<PathBuf, Vec<u8>>, context: &str) {
     for (path, bytes) in expected {
         let actual = fs::read(path).unwrap_or_else(|error| {
@@ -467,7 +450,6 @@ fn assert_native_amx_prune_evidence_snapshot(expected: &BTreeMap<PathBuf, Vec<u8
         );
     }
 }
-
 #[test]
 fn native_amx_prune_special_files_reject_bounded_payload_damage_without_unlinking() {
     for special in ["stable", "temporary"] {
@@ -490,7 +472,6 @@ fn native_amx_prune_special_files_reject_bounded_payload_damage_without_unlinkin
                 temp_path
             };
             let evidence = native_amx_prune_evidence_snapshot(&kura, &entry, &[1, 2]);
-
             match damage {
                 "empty" => write_synced_native_amx_test_file(&path, &[]),
                 "truncated" => write_synced_native_amx_test_file(
@@ -528,7 +509,6 @@ fn native_amx_prune_special_files_reject_bounded_payload_damage_without_unlinkin
             #[cfg(unix)]
             let forensic_object = {
                 use std::os::unix::fs::MetadataExt as _;
-
                 (
                     forensic_metadata.dev(),
                     forensic_metadata.ino(),
@@ -536,7 +516,6 @@ fn native_amx_prune_special_files_reject_bounded_payload_damage_without_unlinkin
                 )
             };
             drop(kura);
-
             let error = match Kura::new(&config, &lane_config) {
                 Ok(_) => panic!("{special} {damage} Native prune file must fail startup"),
                 Err(error) => error,
@@ -560,7 +539,6 @@ fn native_amx_prune_special_files_reject_bounded_payload_damage_without_unlinkin
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt as _;
-
                 assert_eq!(
                     (
                         retained_metadata.dev(),
@@ -575,7 +553,6 @@ fn native_amx_prune_special_files_reject_bounded_payload_damage_without_unlinkin
         }
     }
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn native_amx_prune_intent_v2_rejects_every_route_and_entry_geometry_mutation() {
@@ -592,71 +569,55 @@ fn native_amx_prune_intent_v2_rejects_every_route_and_entry_geometry_mutation() 
     let base = native_amx_prune_intent_for_test(&kura, &entry, &receipts[2], &[1]);
     let evidence = native_amx_prune_evidence_snapshot(&kura, &entry, &[1, 2, 3]);
     let mut mutations = Vec::new();
-
     let mut mutation = base.clone();
     mutation.version = NativeAmxEvidencePruneIntentV2::VERSION.saturating_sub(1);
     mutations.push(("version", mutation));
-
     let mut mutation = base.clone();
     mutation.lane_id = LaneId::new(entry.lane_id.as_u32().saturating_add(1));
     mutations.push(("lane", mutation));
-
     let mut mutation = base.clone();
     mutation.dataspace_id = DataSpaceId::new(entry.dataspace_id.as_u64().saturating_add(1));
     mutations.push(("dataspace", mutation));
-
     let mut mutation = base.clone();
     mutation.lane_incarnation = Hash::new(b"stale Native prune incarnation");
     mutations.push(("incarnation", mutation));
-
     let mut mutation = base.clone();
     mutation.protected_latest.identity.lane_id =
         LaneId::new(entry.lane_id.as_u32().saturating_add(1));
     mutations.push(("protected route", mutation));
-
     let mut mutation = base.clone();
     mutation.protected_latest.identity.lane_incarnation =
         Hash::new(b"stale protected Native prune incarnation");
     mutations.push(("protected incarnation", mutation));
-
     let mut mutation = base.clone();
     mutation.protected_latest.receipt_artifact_hash =
         HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]));
     mutations.push(("protected receipt hash", mutation));
-
     let mut mutation = base.clone();
     mutation.entries.clear();
     mutations.push(("empty entries", mutation));
-
     let mut mutation = base.clone();
     mutation.entries[0].kind = u8::MAX;
     mutations.push(("unknown kind", mutation));
-
     let mut mutation = base.clone();
     mutation.entries[0].participant_height = 0;
     mutations.push(("zero height", mutation));
-
     let mut mutation = base.clone();
     mutation.entries[0].artifact_hash = Hash::prehashed([0; Hash::LENGTH]);
     mutations.push(("zero artifact hash", mutation));
-
     let mut mutation = base.clone();
     mutation.entries.reverse();
     mutations.push(("entry order", mutation));
-
     let mut mutation = base.clone();
     let duplicate = mutation.entries[0];
     mutation.entries.insert(1, duplicate);
     mutations.push(("duplicate entry", mutation));
-
     let mut mutation = base.clone();
     mutation.entries.pop();
     mutations.push(("incomplete pair", mutation));
-
     let mut mutation = base.clone();
     mutation.entries[0].artifact_hash = Hash::new(b"wrong Native prune artifact hash");
     mutations.push(("artifact hash", mutation));
-
     mutations.push((
         "protected target",
         native_amx_prune_intent_for_test(&kura, &entry, &receipts[2], &[3]),
@@ -665,7 +626,6 @@ fn native_amx_prune_intent_v2_rejects_every_route_and_entry_geometry_mutation() 
         "non-prefix target",
         native_amx_prune_intent_for_test(&kura, &entry, &receipts[2], &[2]),
     ));
-
     let mut mutation = base.clone();
     let max_entries =
         Kura::native_amx_evidence_prune_intent_max_entries(config.roster_sidecar_retention)
@@ -678,7 +638,6 @@ fn native_amx_prune_intent_v2_rejects_every_route_and_entry_geometry_mutation() 
         repeated,
     );
     mutations.push(("entry bound", mutation));
-
     let _prune_guard = kura.prune_lock.lock();
     let _canonical_guard = kura.canonical_chain_lock.lock();
     let _geometry_guard = kura.lane_geometry_lock.lock();
@@ -696,7 +655,6 @@ fn native_amx_prune_intent_v2_rejects_every_route_and_entry_geometry_mutation() 
         assert_native_amx_prune_evidence_snapshot(&evidence, label);
     }
 }
-
 #[test]
 fn native_amx_prune_stable_and_temporary_conflict_preserves_both_and_all_evidence() {
     let temp_dir = TempDir::new().expect("Native prune stable/temp conflict directory");
@@ -722,7 +680,6 @@ fn native_amx_prune_stable_and_temporary_conflict_preserves_both_and_all_evidenc
     write_synced_native_amx_test_file(&temp_path, &temporary_bytes);
     let evidence = native_amx_prune_evidence_snapshot(&kura, &entry, &[1, 2, 3]);
     drop(kura);
-
     let error = match Kura::new(&config, &lane_config) {
         Ok(_) => panic!("conflicting stable/temp Native prune intents must fail startup"),
         Err(error) => error,
@@ -741,7 +698,6 @@ fn native_amx_prune_stable_and_temporary_conflict_preserves_both_and_all_evidenc
     );
     assert_native_amx_prune_evidence_snapshot(&evidence, "stable/temp conflict");
 }
-
 #[test]
 fn native_amx_prune_identical_stable_and_temporary_converge_idempotently() {
     let temp_dir = TempDir::new().expect("Native prune identical stable/temp directory");
@@ -765,7 +721,6 @@ fn native_amx_prune_identical_stable_and_temporary_converge_idempotently() {
         .into_keys()
         .collect::<Vec<_>>();
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config)
         .expect("recover identical stable/temp Native prune intents");
     assert!(!stable_path.exists() && !temp_path.exists());
@@ -781,7 +736,6 @@ fn native_amx_prune_identical_stable_and_temporary_converge_idempotently() {
         exact_usage
     );
     drop(reopened);
-
     let (reopened, _) = Kura::new(&config, &lane_config)
         .expect("idempotently reopen identical Native prune recovery");
     assert_eq!(
@@ -798,7 +752,6 @@ fn native_amx_prune_identical_stable_and_temporary_converge_idempotently() {
     );
     assert_native_amx_prune_evidence_snapshot(&protected, "idempotent prune recovery");
 }
-
 #[cfg(unix)]
 #[test]
 fn native_amx_prune_special_files_reject_symlinks_and_hardlinks_on_both_paths() {
@@ -838,7 +791,6 @@ fn native_amx_prune_special_files_reject_symlinks_and_hardlinks_on_both_paths() 
                 .expect("sync Native prune unsafe-file directory");
             let evidence = native_amx_prune_evidence_snapshot(&kura, &entry, &[1, 2]);
             drop(kura);
-
             let error = match Kura::new(&config, &lane_config) {
                 Ok(_) => panic!("{special} Native prune {unsafe_kind} must fail startup"),
                 Err(error) => error,
@@ -858,7 +810,6 @@ fn native_amx_prune_special_files_reject_symlinks_and_hardlinks_on_both_paths() 
                 "symlink" => assert!(retained_metadata.file_type().is_symlink()),
                 "hardlink" => {
                     use std::os::unix::fs::MetadataExt as _;
-
                     assert_eq!(retained_metadata.nlink(), 2);
                 }
                 _ => unreachable!("fixed Native prune unsafe-file matrix"),
@@ -870,7 +821,6 @@ fn native_amx_prune_special_files_reject_symlinks_and_hardlinks_on_both_paths() 
         }
     }
 }
-
 #[test]
 fn native_amx_prune_rejects_legacy_and_unexpected_special_names_without_downgrade() {
     for hostile_name in [
@@ -895,7 +845,6 @@ fn native_amx_prune_rejects_legacy_and_unexpected_special_names_without_downgrad
         write_synced_native_amx_test_file(&hostile_path, &bytes);
         let evidence = native_amx_prune_evidence_snapshot(&kura, &entry, &[1, 2]);
         drop(kura);
-
         let error = match Kura::new(&config, &lane_config) {
             Ok(_) => panic!("legacy or unexpected Native prune name must fail startup"),
             Err(error) => error,
@@ -911,7 +860,6 @@ fn native_amx_prune_rejects_legacy_and_unexpected_special_names_without_downgrad
         assert_native_amx_prune_evidence_snapshot(&evidence, hostile_name);
     }
 }
-
 #[test]
 fn native_amx_prune_rejects_legacy_name_before_consuming_valid_v2_intent() {
     let temp_dir = TempDir::new().expect("Native prune mixed legacy/V2 directory");
@@ -932,7 +880,6 @@ fn native_amx_prune_rejects_legacy_name_before_consuming_valid_v2_intent() {
     write_synced_native_amx_test_file(&legacy_path, &bytes);
     let evidence = native_amx_prune_evidence_snapshot(&kura, &entry, &[1, 2]);
     drop(kura);
-
     let error = match Kura::new(&config, &lane_config) {
         Ok(_) => panic!("mixed legacy/V2 Native prune files must fail startup"),
         Err(error) => error,
@@ -948,7 +895,6 @@ fn native_amx_prune_rejects_legacy_name_before_consuming_valid_v2_intent() {
     );
     assert_native_amx_prune_evidence_snapshot(&evidence, "mixed legacy/V2");
 }
-
 #[test]
 fn native_amx_prune_two_pair_partial_unlinks_recover_every_prefix_idempotently() {
     for deleted_prefix in 0..=4 {
@@ -985,7 +931,6 @@ fn native_amx_prune_two_pair_partial_unlinks_recover_every_prefix_idempotently()
         .expect("sync Native prune partial-prefix crash shape");
         let protected = native_amx_prune_evidence_snapshot(&kura, &entry, &[3]);
         drop(kura);
-
         let (reopened, _) = Kura::new(&config, &lane_config).unwrap_or_else(|error| {
             panic!("recover Native prune prefix {deleted_prefix}: {error}")
         });
@@ -1005,7 +950,6 @@ fn native_amx_prune_two_pair_partial_unlinks_recover_every_prefix_idempotently()
             exact_usage
         );
         drop(reopened);
-
         let (reopened, _) = Kura::new(&config, &lane_config)
             .expect("idempotently reopen Native prune partial-prefix recovery");
         assert_eq!(
@@ -1022,7 +966,6 @@ fn native_amx_prune_two_pair_partial_unlinks_recover_every_prefix_idempotently()
         );
     }
 }
-
 #[test]
 fn native_amx_prune_exact_object_removal_rejects_same_length_in_place_rewrites() {
     for rewritten in ["first-target", "stable-intent"] {
@@ -1055,7 +998,6 @@ fn native_amx_prune_exact_object_removal_rejects_same_length_in_place_rewrites()
                     Some((path.to_path_buf(), original, replacement));
             },
         );
-
         let error = {
             let _prune_guard = kura.prune_lock.lock();
             let _canonical_guard = kura.canonical_chain_lock.lock();
@@ -1085,7 +1027,6 @@ fn native_amx_prune_exact_object_removal_rejects_same_length_in_place_rewrites()
         assert_native_amx_prune_evidence_snapshot(&protected, rewritten);
     }
 }
-
 #[test]
 fn native_amx_prune_protected_checkpoint_or_commit_semantic_drift_fails_before_unlink() {
     for damage in ["checkpoint-state", "commit-checkpoint"] {
@@ -1139,7 +1080,6 @@ fn native_amx_prune_protected_checkpoint_or_commit_semantic_drift_fails_before_u
             _ => unreachable!("fixed Native prune metadata drift matrix"),
         }
         drop(kura);
-
         let error = match Kura::new(&config, &lane_config) {
             Ok(_) => panic!("{damage} must fail Native prune startup authentication"),
             Err(error) => error,
@@ -1155,7 +1095,6 @@ fn native_amx_prune_protected_checkpoint_or_commit_semantic_drift_fails_before_u
         assert_native_amx_prune_evidence_snapshot(&evidence, damage);
     }
 }
-
 #[test]
 fn native_amx_configured_shared_two_family_budget_accepts_exact_boundaries_only() {
     let temp_dir = TempDir::new().expect("configured Native evidence budget directory");
@@ -1239,7 +1178,6 @@ fn native_amx_configured_shared_two_family_budget_accepts_exact_boundaries_only(
         .expect("restore boundary Native receipt")
         .set_len(receipt_bytes)
         .expect("restore exact stable Native boundary");
-
     let transient_manifest =
         Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 2)
             .with_extension("norito.tmp");
@@ -1270,7 +1208,6 @@ fn native_amx_configured_shared_two_family_budget_accepts_exact_boundaries_only(
         "unexpected configured Native transient boundary error: {error}"
     );
 }
-
 #[test]
 fn native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable() {
     let block = crate::sumeragi::exec::result_bearing_native_manifest_block_for_tests();
@@ -1312,7 +1249,6 @@ fn native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable()
                 .expect("fixture pair length fits usize"),
         );
     }
-
     let largest_pair = pair_lengths
         .iter()
         .copied()
@@ -1341,7 +1277,6 @@ fn native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable()
         Some(actual_finality_hash),
     )
     .expect("actual finality identity must preserve the pre-vote byte decision");
-
     Arc::get_mut(&mut kura)
         .expect("byte-budget fixture still has one Kura owner")
         .pending_control_sidecar_limits
@@ -1361,7 +1296,6 @@ fn native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable()
         "unexpected exact route-pair budget error: {error}"
     );
 }
-
 #[test]
 fn native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow() {
     let kura = Kura::blank_kura_for_testing();
@@ -1373,7 +1307,6 @@ fn native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow() {
         )
         .expect_err("empty Native manifest framing must fail closed");
     assert!(empty.to_string().contains("manifest framing is empty"));
-
     let standalone = kura
         .validate_native_amx_participant_application_pair_byte_lengths(2, 1, 1)
         .expect_err("an individually oversized Native manifest must fail closed");
@@ -1382,12 +1315,10 @@ fn native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow() {
             .to_string()
             .contains("manifest is 2 bytes, exceeding the standalone payload budget")
     );
-
     let overflow = checked_native_amx_participant_application_pair_bytes(u64::MAX, 1)
         .expect_err("Native pair length overflow must fail closed");
     assert!(overflow.to_string().contains("byte length overflowed"));
 }
-
 #[test]
 fn native_amx_manifest_temp_requires_qc_authenticated_finality_before_promotion() {
     let temp_dir = TempDir::new().expect("forged Native manifest temporary directory");
@@ -1423,7 +1354,6 @@ fn native_amx_manifest_temp_requires_qc_authenticated_finality_before_promotion(
             .expect("forged Native manifest evidence directory"),
     )
     .expect("sync forged Native manifest evidence directory");
-
     let _prune_guard = kura.prune_lock.lock();
     let _canonical_chain_guard = kura.canonical_chain_lock.lock();
     let _geometry_guard = kura.lane_geometry_lock.lock();
@@ -1454,7 +1384,6 @@ fn native_amx_manifest_temp_requires_qc_authenticated_finality_before_promotion(
         "unauthenticated Native manifest temporary must not be promoted"
     );
 }
-
 #[test]
 fn native_amx_receipt_temp_requires_manifest_finality_before_promotion() {
     let temp_dir = TempDir::new().expect("unbacked Native receipt temporary directory");
@@ -1483,7 +1412,6 @@ fn native_amx_receipt_temp_requires_manifest_finality_before_promotion() {
             .expect("unbacked Native receipt evidence directory"),
     )
     .expect("sync unbacked Native receipt evidence directory");
-
     let _prune_guard = kura.prune_lock.lock();
     let _canonical_chain_guard = kura.canonical_chain_lock.lock();
     let _geometry_guard = kura.lane_geometry_lock.lock();
@@ -1514,7 +1442,6 @@ fn native_amx_receipt_temp_requires_manifest_finality_before_promotion() {
         "unbacked Native receipt temporary must not be promoted"
     );
 }
-
 #[test]
 fn native_amx_redundant_temp_is_not_deleted_before_finality_authentication() {
     let temp_dir = TempDir::new().expect("redundant Native temporary directory");
@@ -1542,7 +1469,6 @@ fn native_amx_redundant_temp_is_not_deleted_before_finality_authentication() {
             .expect("redundant Native manifest evidence directory"),
     )
     .expect("sync redundant Native manifest evidence directory");
-
     let _prune_guard = kura.prune_lock.lock();
     let _canonical_chain_guard = kura.canonical_chain_lock.lock();
     let _geometry_guard = kura.lane_geometry_lock.lock();
@@ -1573,13 +1499,11 @@ fn native_amx_redundant_temp_is_not_deleted_before_finality_authentication() {
         "unauthenticated redundant temporary must remain untouched"
     );
 }
-
 #[test]
 fn native_amx_startup_retention_waits_for_complete_post_wsv_evidence() {
     use NativeAmxParticipantReceiptStartupEvidence::{
         DurablyApplied, PendingManifestRepair, PendingTipMetadata,
     };
-
     assert!(native_amx_startup_retention_cleanup_authorized(
         Some(DurablyApplied),
         false,
@@ -1598,7 +1522,6 @@ fn native_amx_startup_retention_waits_for_complete_post_wsv_evidence() {
         true,
     ));
 }
-
 #[test]
 fn native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup() {
     let temp_dir = TempDir::new().expect("prepublication retention Kura directory");
@@ -1637,7 +1560,6 @@ fn native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup() {
         )
         .expect("read newest prepublication manifest");
     drop(namespace);
-
     std::fs::remove_file(&newest_manifest_path)
         .expect("remove newest manifest before replaying prepublication");
     std::fs::remove_file(&newest_receipt_path)
@@ -1655,7 +1577,6 @@ fn native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup() {
         .expect("remove post-apply commit manifest");
     kura.remove_wsv_checkpoint_without_binding_for_tests(1)
         .expect("remove post-apply WSV checkpoint");
-
     {
         let _publication_guard = kura.prune_lock.lock();
         kura.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(
@@ -1686,7 +1607,6 @@ fn native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup() {
         old_manifest_path.exists() && old_receipt_path.exists(),
         "retention=1 must preserve the previous complete pair before WSV commit"
     );
-
     kura.store_wsv_checkpoint(
         1,
         newest_receipt.application_block_hash,

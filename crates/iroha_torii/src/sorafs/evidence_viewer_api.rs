@@ -3,9 +3,7 @@
 //! Canonical account signatures identify callers. WebAuthn assertions and
 //! rotating grants remain runtime-only; response bodies and durable receipts
 //! contain payload-free metadata or canonical Norito envelopes only.
-
 use std::{collections::BTreeMap, sync::LazyLock, time::UNIX_EPOCH};
-
 use axum::{
     body::{Body, Bytes},
     extract::{Path, State},
@@ -33,9 +31,7 @@ use sorafs_node::{
         EvidenceViewerTransparencyProjectionV1, OpaqueEvidenceViewerSecretV1,
     },
 };
-
 use crate::{JsonBody, SharedAppState};
-
 const MAX_JSON_BODY_BYTES: usize = 128 * 1024;
 const MAX_AUDIT_PAGE: usize = 256;
 const MAX_AUDIT_QUERY_BYTES: usize = 512;
@@ -49,7 +45,6 @@ const EXPOSED_EVIDENCE_HEADERS: &str = "X-SoraFS-Evidence-Grant, X-SoraFS-Eviden
 const REQUEST_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.torii.evidence-viewer.request.v1";
 const EVIDENCE_AUDITOR_ROLE_V1: &str = "sorafs_evidence_auditor";
 const LEGAL_REVIEWER_ROLE_V1: &str = "sorafs_legal_reviewer";
-
 static EVIDENCE_AUDITOR_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
     EVIDENCE_AUDITOR_ROLE_V1
         .parse()
@@ -60,7 +55,6 @@ static LEGAL_REVIEWER_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
         .parse()
         .expect("SoraFS legal reviewer role id is valid")
 });
-
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct EvidenceChallengeRequestDto {
@@ -71,7 +65,6 @@ pub(crate) struct EvidenceChallengeRequestDto {
     purpose: String,
     idempotency_key_hex: String,
 }
-
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct EvidenceSessionRequestDto {
@@ -83,7 +76,6 @@ pub(crate) struct EvidenceSessionRequestDto {
     webauthn_assertion_b64: String,
     idempotency_key_hex: String,
 }
-
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct EvidenceInteractionRequestDto {
@@ -91,7 +83,6 @@ pub(crate) struct EvidenceInteractionRequestDto {
     event_metadata_digest_hex: Option<String>,
     idempotency_key_hex: String,
 }
-
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct EvidenceLegalHoldRequestDto {
@@ -101,7 +92,6 @@ pub(crate) struct EvidenceLegalHoldRequestDto {
     authority_digest_hex: String,
     idempotency_key_hex: String,
 }
-
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct EvidenceLegalHoldReleaseRequestDto {
@@ -109,7 +99,6 @@ pub(crate) struct EvidenceLegalHoldReleaseRequestDto {
     round_id: String,
     idempotency_key_hex: String,
 }
-
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct EvidenceRetentionRequestDto {
@@ -119,7 +108,6 @@ pub(crate) struct EvidenceRetentionRequestDto {
     retain_until_unix_ms: u64,
     idempotency_key_hex: String,
 }
-
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct EvidenceErasureRequestDto {
@@ -128,7 +116,6 @@ pub(crate) struct EvidenceErasureRequestDto {
     quarantine_id_hex: String,
     idempotency_key_hex: String,
 }
-
 /// Issue an exact case/round/object/account/role-bound WebAuthn challenge.
 pub(crate) async fn handle_post_evidence_session_challenge(
     State(state): State<SharedAppState>,
@@ -193,7 +180,6 @@ pub(crate) async fn handle_post_evidence_session_challenge(
     }
     response
 }
-
 /// Consume a WebAuthn assertion and return one case-bound rotating-grant
 /// session.
 pub(crate) async fn handle_post_evidence_session(
@@ -290,7 +276,6 @@ pub(crate) async fn handle_post_evidence_session(
     }
     response
 }
-
 /// Return the case-bound payload-free manifest and rotate the grant.
 pub(crate) async fn handle_get_evidence_manifest(
     State(state): State<SharedAppState>,
@@ -361,7 +346,6 @@ pub(crate) async fn handle_get_evidence_manifest(
     }
     response
 }
-
 /// Authenticate, decrypt, durably receipt, and return one bounded byte range.
 pub(crate) async fn handle_get_evidence_segment(
     State(state): State<SharedAppState>,
@@ -462,7 +446,6 @@ pub(crate) async fn handle_get_evidence_segment(
     );
     response
 }
-
 /// Append one signed payload-free browser interaction and rotate the grant.
 pub(crate) async fn handle_post_evidence_log(
     State(state): State<SharedAppState>,
@@ -539,7 +522,6 @@ pub(crate) async fn handle_post_evidence_log(
     }
     response
 }
-
 /// Place one legal hold with a signed payload-free receipt.
 pub(crate) async fn handle_post_evidence_legal_hold(
     State(state): State<SharedAppState>,
@@ -591,7 +573,6 @@ pub(crate) async fn handle_post_evidence_legal_hold(
     };
     legal_hold_response(StatusCode::CREATED, &hold, &receipt)
 }
-
 /// Release one legal hold with a signed payload-free receipt.
 pub(crate) async fn handle_post_evidence_legal_hold_release(
     State(state): State<SharedAppState>,
@@ -639,7 +620,6 @@ pub(crate) async fn handle_post_evidence_legal_hold_release(
     };
     legal_hold_response(StatusCode::OK, &hold, &receipt)
 }
-
 /// Record one signed retention decision.
 pub(crate) async fn handle_post_evidence_retention(
     State(state): State<SharedAppState>,
@@ -688,7 +668,6 @@ pub(crate) async fn handle_post_evidence_retention(
     };
     retention_response(&record, &receipt)
 }
-
 /// Return the bounded due-erasure projection to explicit legal reviewers.
 pub(crate) async fn handle_get_evidence_retention(
     State(state): State<SharedAppState>,
@@ -737,7 +716,6 @@ pub(crate) async fn handle_get_evidence_retention(
         ]),
     )
 }
-
 /// Execute irreversible erasure unless an active legal hold has precedence.
 pub(crate) async fn handle_post_evidence_erasure(
     State(state): State<SharedAppState>,
@@ -808,14 +786,12 @@ pub(crate) async fn handle_post_evidence_erasure(
         ]),
     )
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EvidenceAuditQueryV1 {
     expected_checkpoint_digest: [u8; 32],
     predecessor: Option<EvidenceViewerReceiptCursorV1>,
     limit: usize,
 }
-
 fn parse_evidence_audit_query(uri: &Uri) -> Result<EvidenceAuditQueryV1, Response> {
     let raw = uri
         .query()
@@ -864,7 +840,6 @@ fn parse_evidence_audit_query(uri: &Uri) -> Result<EvidenceAuditQueryV1, Respons
         limit: parse_usize_bounded(limit, "limit", MAX_AUDIT_PAGE)?,
     })
 }
-
 fn canonical_query_segment<'a>(segment: &'a str, expected_key: &str) -> Result<&'a str, Response> {
     let (key, value) = segment
         .split_once('=')
@@ -875,7 +850,6 @@ fn canonical_query_segment<'a>(segment: &'a str, expected_key: &str) -> Result<&
         Ok(value)
     }
 }
-
 /// Return a bounded exact-cursor projection of signed, hash-chained,
 /// payload-free receipts.
 pub(crate) async fn handle_get_evidence_audit(
@@ -908,7 +882,6 @@ pub(crate) async fn handle_get_evidence_audit(
     };
     audit_projection_response(&projection)
 }
-
 /// Return the payload-free durable audit status to explicit auditors or legal
 /// reviewers.
 pub(crate) async fn handle_get_evidence_status(
@@ -936,22 +909,18 @@ pub(crate) async fn handle_get_evidence_status(
     };
     audit_status_response(&status)
 }
-
 /// Serve the no-cache embedded same-origin viewer shell.
 pub(crate) async fn handle_get_evidence_viewer() -> Response {
     static_asset_response("text/html; charset=utf-8", EVIDENCE_VIEWER_HTML)
 }
-
 /// Serve the immutable-in-binary, no-cache viewer stylesheet.
 pub(crate) async fn handle_get_evidence_viewer_css() -> Response {
     static_asset_response("text/css; charset=utf-8", EVIDENCE_VIEWER_CSS)
 }
-
 /// Serve the immutable-in-binary, no-cache viewer controller.
 pub(crate) async fn handle_get_evidence_viewer_js() -> Response {
     static_asset_response("text/javascript; charset=utf-8", EVIDENCE_VIEWER_JS)
 }
-
 fn require_canonical_auth(
     state: &SharedAppState,
     headers: &HeaderMap,
@@ -975,7 +944,6 @@ fn require_canonical_auth(
         )),
     }
 }
-
 fn require_explicit_audit_or_legal_role(
     state: &SharedAppState,
     account: &iroha_data_model::account::AccountId,
@@ -993,7 +961,6 @@ fn require_explicit_audit_or_legal_role(
         ))
     }
 }
-
 fn require_explicit_legal_role(
     state: &SharedAppState,
     account: &iroha_data_model::account::AccountId,
@@ -1011,7 +978,6 @@ fn require_explicit_legal_role(
         ))
     }
 }
-
 fn decode_json<T: norito::json::JsonDeserializeOwned>(body: &[u8]) -> Result<T, Response> {
     if body.is_empty() || body.len() > MAX_JSON_BODY_BYTES {
         return Err(fixed_error(
@@ -1022,7 +988,6 @@ fn decode_json<T: norito::json::JsonDeserializeOwned>(body: &[u8]) -> Result<T, 
     json::from_slice(body)
         .map_err(|_| fixed_error(StatusCode::BAD_REQUEST, "invalid_canonical_json"))
 }
-
 fn parse_role(value: &str) -> Result<EvidenceViewerRoleV1, Response> {
     match value {
         "juror" => Ok(EvidenceViewerRoleV1::Juror),
@@ -1031,7 +996,6 @@ fn parse_role(value: &str) -> Result<EvidenceViewerRoleV1, Response> {
         _ => Err(fixed_error(StatusCode::BAD_REQUEST, "invalid_viewer_role")),
     }
 }
-
 fn parse_interaction_kind(value: &str) -> Result<ModerationEvidenceViewerAccessKind, Response> {
     match value {
         "viewed" => Ok(ModerationEvidenceViewerAccessKind::Viewed),
@@ -1047,7 +1011,6 @@ fn parse_interaction_kind(value: &str) -> Result<ModerationEvidenceViewerAccessK
         )),
     }
 }
-
 fn parse_hex_fixed<const N: usize>(value: &str, code: &'static str) -> Result<[u8; N], Response> {
     if value.len() != N.saturating_mul(2)
         || value
@@ -1061,7 +1024,6 @@ fn parse_hex_fixed<const N: usize>(value: &str, code: &'static str) -> Result<[u
         .try_into()
         .map_err(|_| fixed_error(StatusCode::BAD_REQUEST, code))
 }
-
 fn parse_nonzero_digest(value: &str, code: &'static str) -> Result<[u8; 32], Response> {
     let digest = parse_hex_fixed::<32>(value, code)?;
     if digest == [0; 32] {
@@ -1070,7 +1032,6 @@ fn parse_nonzero_digest(value: &str, code: &'static str) -> Result<[u8; 32], Res
         Ok(digest)
     }
 }
-
 fn parse_u64(value: &str, code: &'static str) -> Result<u64, Response> {
     if value.is_empty()
         || (value.len() > 1 && value.starts_with('0'))
@@ -1082,7 +1043,6 @@ fn parse_u64(value: &str, code: &'static str) -> Result<u64, Response> {
         .parse()
         .map_err(|_| fixed_error(StatusCode::BAD_REQUEST, code))
 }
-
 fn parse_usize_bounded(value: &str, code: &'static str, maximum: usize) -> Result<usize, Response> {
     let parsed = parse_u64(value, code)?;
     let parsed = usize::try_from(parsed).map_err(|_| fixed_error(StatusCode::BAD_REQUEST, code))?;
@@ -1092,7 +1052,6 @@ fn parse_usize_bounded(value: &str, code: &'static str, maximum: usize) -> Resul
         Ok(parsed)
     }
 }
-
 fn exact_query(uri: &Uri, required: &[&'static str]) -> Result<BTreeMap<String, String>, Response> {
     let values = optional_query(uri, required)?;
     if required.iter().all(|key| values.contains_key(*key)) && values.len() == required.len() {
@@ -1101,7 +1060,6 @@ fn exact_query(uri: &Uri, required: &[&'static str]) -> Result<BTreeMap<String, 
         Err(fixed_error(StatusCode::BAD_REQUEST, "invalid_query"))
     }
 }
-
 fn optional_query(
     uri: &Uri,
     allowed: &[&'static str],
@@ -1121,7 +1079,6 @@ fn optional_query(
     }
     Ok(values)
 }
-
 fn grant_from_headers(headers: &HeaderMap) -> Result<OpaqueEvidenceViewerSecretV1, Response> {
     secret_from_headers(
         headers,
@@ -1130,7 +1087,6 @@ fn grant_from_headers(headers: &HeaderMap) -> Result<OpaqueEvidenceViewerSecretV
         "invalid_evidence_grant",
     )
 }
-
 fn challenge_from_headers(headers: &HeaderMap) -> Result<OpaqueEvidenceViewerSecretV1, Response> {
     secret_from_headers(
         headers,
@@ -1139,7 +1095,6 @@ fn challenge_from_headers(headers: &HeaderMap) -> Result<OpaqueEvidenceViewerSec
         "invalid_evidence_challenge",
     )
 }
-
 fn secret_from_headers(
     headers: &HeaderMap,
     name: &'static str,
@@ -1157,7 +1112,6 @@ fn secret_from_headers(
     OpaqueEvidenceViewerSecretV1::new(value.to_owned())
         .map_err(|_| fixed_error(StatusCode::UNAUTHORIZED, invalid_code))
 }
-
 fn request_digest(method: &Method, uri: &Uri, body: &[u8], account: &str) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(REQUEST_DIGEST_DOMAIN_V1);
@@ -1168,12 +1122,10 @@ fn request_digest(method: &Method, uri: &Uri, body: &[u8], account: &str) -> [u8
     hasher.update(blake3::hash(body).as_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn hash_component(hasher: &mut blake3::Hasher, value: &[u8]) {
     hasher.update(&u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
     hasher.update(value);
 }
-
 fn canonical_norito_b64<T: norito::core::NoritoSerialize>(value: &T) -> Result<String, Response> {
     norito::to_bytes(value)
         .map(|bytes| BASE64_STANDARD.encode(bytes))
@@ -1184,7 +1136,6 @@ fn canonical_norito_b64<T: norito::core::NoritoSerialize>(value: &T) -> Result<S
             )
         })
 }
-
 fn manifest_value(manifest: &EvidenceViewerManifestV1) -> Result<Value, Response> {
     Ok(object([
         (
@@ -1233,7 +1184,6 @@ fn manifest_value(manifest: &EvidenceViewerManifestV1) -> Result<Value, Response
         ),
     ]))
 }
-
 fn receipt_value(receipt: &EvidenceViewerSignedReceiptV1) -> Result<Value, Response> {
     Ok(object([
         ("schema", "sorafs.evidence.signed_receipt.v1".into()),
@@ -1257,7 +1207,6 @@ fn receipt_value(receipt: &EvidenceViewerSignedReceiptV1) -> Result<Value, Respo
         ("signature_hex", hex::encode(receipt.signature).into()),
     ]))
 }
-
 fn receipt_cursor_value(cursor: EvidenceViewerReceiptCursorV1) -> Value {
     object([
         ("sequence", cursor.sequence.into()),
@@ -1267,7 +1216,6 @@ fn receipt_cursor_value(cursor: EvidenceViewerReceiptCursorV1) -> Value {
         ),
     ])
 }
-
 fn checkpoint_anchor_value(anchor: &EvidenceViewerSignedCheckpointAnchorV1) -> Value {
     object([
         ("version", u64::from(anchor.version).into()),
@@ -1319,7 +1267,6 @@ fn checkpoint_anchor_value(anchor: &EvidenceViewerSignedCheckpointAnchorV1) -> V
         ("signature_hex", hex::encode(anchor.signature).into()),
     ])
 }
-
 fn compaction_archive_head_value(head: &EvidenceViewerSignedCompactionArchiveHeadV1) -> Value {
     object([
         ("version", u64::from(head.version).into()),
@@ -1382,7 +1329,6 @@ fn compaction_archive_head_value(head: &EvidenceViewerSignedCompactionArchiveHea
         ),
     ])
 }
-
 fn audit_projection_response(projection: &EvidenceViewerTransparencyProjectionV1) -> Response {
     let receipts = match projection
         .receipts
@@ -1439,7 +1385,6 @@ fn audit_projection_response(projection: &EvidenceViewerTransparencyProjectionV1
         ]),
     )
 }
-
 fn receipt_kind_label(kind: EvidenceViewerReceiptKindV1) -> &'static str {
     match kind {
         EvidenceViewerReceiptKindV1::ChallengeIssued => "challenge_issued",
@@ -1454,7 +1399,6 @@ fn receipt_kind_label(kind: EvidenceViewerReceiptKindV1) -> &'static str {
         EvidenceViewerReceiptKindV1::ErasureDeniedLegalHold => "erasure_denied_legal_hold",
     }
 }
-
 fn legal_hold_response(
     status: StatusCode,
     hold: &EvidenceViewerLegalHoldV1,
@@ -1479,7 +1423,6 @@ fn legal_hold_response(
         ]),
     )
 }
-
 fn retention_response(
     record: &EvidenceViewerRetentionRecordV1,
     receipt: &EvidenceViewerSignedReceiptV1,
@@ -1507,7 +1450,6 @@ fn retention_response(
         ]),
     )
 }
-
 fn audit_status_response(status: &EvidenceViewerAuditStatusV1) -> Response {
     let encoded = match canonical_norito_b64(status) {
         Ok(encoded) => encoded,
@@ -1534,7 +1476,6 @@ fn audit_status_response(status: &EvidenceViewerAuditStatusV1) -> Response {
         ]),
     )
 }
-
 fn object<const N: usize>(entries: [(&str, Value); N]) -> Value {
     let mut map = Map::new();
     for (key, value) in entries {
@@ -1542,13 +1483,11 @@ fn object<const N: usize>(entries: [(&str, Value); N]) -> Value {
     }
     Value::Object(map)
 }
-
 fn secure_json_response(status: StatusCode, body: Value) -> Response {
     let mut response = (status, JsonBody(body)).into_response();
     secure_private_headers(&mut response);
     response
 }
-
 fn fixed_error(status: StatusCode, code: &'static str) -> Response {
     secure_json_response(
         status,
@@ -1558,14 +1497,12 @@ fn fixed_error(status: StatusCode, code: &'static str) -> Response {
         ]),
     )
 }
-
 fn service_disabled() -> Response {
     fixed_error(
         StatusCode::SERVICE_UNAVAILABLE,
         "evidence_viewer_unavailable",
     )
 }
-
 fn service_error(error: EvidenceViewerErrorV1) -> Response {
     let (status, code) = match error {
         EvidenceViewerErrorV1::InvalidConfig
@@ -1604,7 +1541,6 @@ fn service_error(error: EvidenceViewerErrorV1) -> Response {
     };
     fixed_error(status, code)
 }
-
 fn secure_private_headers(response: &mut Response) {
     let headers = response.headers_mut();
     headers.insert(
@@ -1641,7 +1577,6 @@ fn secure_private_headers(response: &mut Response) {
         HeaderValue::from_static(EXPOSED_EVIDENCE_HEADERS),
     );
 }
-
 fn insert_secret_header(
     response: &mut Response,
     name: &'static str,
@@ -1657,13 +1592,11 @@ fn insert_secret_header(
     response.headers_mut().insert(name, value);
     Ok(())
 }
-
 fn insert_hex_header(response: &mut Response, name: &'static str, value: [u8; 32]) {
     if let Ok(value) = HeaderValue::from_str(&hex::encode(value)) {
         response.headers_mut().insert(name, value);
     }
 }
-
 fn static_asset_response(content_type: &'static str, body: &'static str) -> Response {
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = StatusCode::OK;
@@ -1692,7 +1625,6 @@ fn static_asset_response(content_type: &'static str, body: &'static str) -> Resp
         .insert("x-frame-options", HeaderValue::from_static("SAMEORIGIN"));
     response
 }
-
 fn network_time_now_ms() -> u64 {
     iroha_core::time::now()
         .now
@@ -1700,17 +1632,12 @@ fn network_time_now_ms() -> u64 {
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or_default()
 }
-
 const EVIDENCE_VIEWER_HTML: &str = include_str!("assets/evidence_viewer_v1/index.html");
-
 const EVIDENCE_VIEWER_CSS: &str = include_str!("assets/evidence_viewer_v1/app.css");
-
 const EVIDENCE_VIEWER_JS: &str = include_str!("assets/evidence_viewer_v1/app.js");
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn evidence_auth_rejects_foreign_exact_network() {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
@@ -1724,12 +1651,10 @@ mod tests {
         let (state, headers) = crate::tests_runtime_handlers::foreign_network_signed_app_fixture(
             &method, &uri, body, 0xD1, 0xE1,
         );
-
         let response = require_canonical_auth(&state, &headers, &method, &uri, body)
             .expect_err("foreign-network evidence authorization must fail closed");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
-
     #[test]
     fn embedded_viewer_is_no_store_and_disables_offline_execution() {
         let response = static_asset_response("text/html; charset=utf-8", EVIDENCE_VIEWER_HTML);
@@ -1753,7 +1678,6 @@ mod tests {
         assert!(!EVIDENCE_VIEWER_JS.contains("serviceWorker"));
         assert!(!EVIDENCE_VIEWER_JS.contains("caches."));
     }
-
     #[test]
     fn evidence_hex_and_event_inputs_are_canonical_and_bounded() {
         assert_eq!(
@@ -1766,7 +1690,6 @@ mod tests {
         assert!(parse_interaction_kind("viewed").is_ok());
         assert!(parse_interaction_kind("session_expired").is_err());
     }
-
     #[test]
     fn evidence_audit_query_has_one_canonical_checkpoint_bound_wire() {
         let checkpoint_digest = [0xCE; 32];
@@ -1787,7 +1710,6 @@ mod tests {
                 limit: 256,
             }
         );
-
         let receipt_digest = [0xAB; 32];
         let exact_uri = format!(
             "/v1/evidence/audit?expected_checkpoint_digest_hex={checkpoint_digest_hex}&after_sequence=7&after_receipt_digest_hex={}&limit=1",
@@ -1806,7 +1728,6 @@ mod tests {
                 limit: 1,
             }
         );
-
         let valid_digest = hex::encode([0xCD; 32]);
         let invalid_queries = [
             String::new(),
@@ -1890,7 +1811,6 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
     }
-
     #[tokio::test]
     async fn evidence_audit_response_exposes_only_exact_cursors() {
         let cursor = EvidenceViewerReceiptCursorV1 {
@@ -1923,7 +1843,6 @@ mod tests {
             has_more: false,
             projection_digest: [0xD7; 32],
         };
-
         let response = audit_projection_response(&projection);
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
@@ -1989,7 +1908,6 @@ mod tests {
         assert!(value.get("next_sequence").is_none());
         assert!(value.get("limit").is_none());
     }
-
     #[tokio::test]
     async fn evidence_status_exposes_one_exact_signed_checkpoint_anchor() {
         let cursor = EvidenceViewerReceiptCursorV1 {
@@ -2021,7 +1939,6 @@ mod tests {
                 signature: [0x94; 64],
             },
         };
-
         let response = audit_status_response(&status);
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
@@ -2060,13 +1977,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn changed_checkpoint_is_an_explicit_restart_conflict() {
         let response = service_error(EvidenceViewerErrorV1::CheckpointChanged);
         assert_eq!(response.status(), StatusCode::CONFLICT);
     }
-
     #[test]
     fn opaque_response_headers_are_marked_sensitive() {
         let mut response = Response::new(Body::empty());
@@ -2080,7 +1995,6 @@ mod tests {
                 .is_sensitive()
         );
     }
-
     #[tokio::test]
     async fn active_retention_is_a_payload_free_conflict() {
         let response = service_error(EvidenceViewerErrorV1::RetentionActive);

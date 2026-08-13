@@ -7,14 +7,11 @@
 //! Norito frames and persist a monotonic wall-clock high-water mark. Loading
 //! admits only a stable direct regular file under capacity-derived byte and
 //! decoder-allocation limits.
-
 use std::{collections::HashMap, fs, io, path::PathBuf};
-
 #[cfg(test)]
 use norito::encode_canonical;
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_canonical_with_limits};
 use thiserror::Error;
-
 use super::{
     replay_lock::ExclusiveLedgerLock,
     snapshot_file::{
@@ -22,16 +19,13 @@ use super::{
         read_optional_bounded_regular_file,
     },
 };
-
 const SNAPSHOT_VERSION_V1: u8 = 1;
 const NAMESPACE_DOMAIN_V1: &[u8] = b"iroha.soranet.replay-ledger.namespace.v1";
 const SNAPSHOT_BASE_LIMIT_BYTES: usize = 4 * 1024;
 const SNAPSHOT_ENTRY_LIMIT_BYTES: usize = 128;
 const SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1: usize = 8;
-
 /// First-release hard ceiling for every persistent replay ledger.
 pub const REPLAY_LEDGER_MAX_ENTRIES_V1: usize = 65_536;
-
 /// Resource bounds for a durable replay ledger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReplayLedgerLimits {
@@ -40,7 +34,6 @@ pub struct ReplayLedgerLimits {
     /// Maximum accepted credential lifetime in milliseconds.
     pub max_ttl_ms: u64,
 }
-
 impl ReplayLedgerLimits {
     /// Construct validated replay-ledger limits.
     ///
@@ -70,14 +63,12 @@ impl ReplayLedgerLimits {
             max_ttl_ms,
         })
     }
-
     fn max_snapshot_bytes(self) -> usize {
         self.max_entries
             .checked_mul(SNAPSHOT_ENTRY_LIMIT_BYTES)
             .and_then(|bytes| bytes.checked_add(SNAPSHOT_BASE_LIMIT_BYTES))
             .expect("validated replay-ledger capacity")
     }
-
     fn decode_limits(self) -> DecodeLimits {
         let max_snapshot_bytes = self.max_snapshot_bytes();
         DecodeLimits::new(
@@ -89,7 +80,6 @@ impl ReplayLedgerLimits {
         )
     }
 }
-
 /// Result of attempting to consume a replay-protected identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplayInsertStatus {
@@ -104,7 +94,6 @@ pub enum ReplayInsertStatus {
     /// Every configured slot contains an active record.
     Capacity,
 }
-
 /// Errors surfaced by durable replay-ledger operations.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ReplayLedgerError {
@@ -150,7 +139,6 @@ pub enum ReplayLedgerError {
     #[error("replay ledger encode error: {0}")]
     Encode(String),
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
 struct ReplayLedgerSnapshotV1 {
@@ -159,13 +147,11 @@ struct ReplayLedgerSnapshotV1 {
     high_watermark_ms: u64,
     entries: Vec<ReplayLedgerSnapshotEntryV1>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct ReplayLedgerSnapshotEntryV1 {
     id: [u8; 32],
     expires_at_ms: u64,
 }
-
 /// Persistent set of consumed credential identifiers with exact millisecond expiry.
 #[derive(Debug)]
 pub struct PersistentReplayLedger {
@@ -176,7 +162,6 @@ pub struct PersistentReplayLedger {
     path: Option<PathBuf>,
     _ledger_lock: Option<ExclusiveLedgerLock>,
 }
-
 impl PersistentReplayLedger {
     /// Create an in-memory ledger for tests or non-persistent tooling.
     ///
@@ -194,7 +179,6 @@ impl PersistentReplayLedger {
             _ledger_lock: None,
         })
     }
-
     /// Load or create a durable replay ledger at `path`.
     ///
     /// Missing ledgers are materialized immediately, proving that replay state
@@ -231,7 +215,6 @@ impl PersistentReplayLedger {
         ledger.load_from_disk(now_ms)?;
         Ok(ledger)
     }
-
     /// Atomically consume `id` until `expires_at_ms`.
     ///
     /// Accepted records are flushed before this method returns. Active records
@@ -270,14 +253,12 @@ impl PersistentReplayLedger {
         self.persist()?;
         Ok(ReplayInsertStatus::Accepted)
     }
-
     fn contains_active(&self, id: &[u8; 32], now_ms: u64) -> bool {
         let effective_now_ms = self.effective_now(now_ms);
         self.records
             .get(id)
             .is_some_and(|expires_at_ms| *expires_at_ms > effective_now_ms)
     }
-
     fn active_len(&self, now_ms: u64) -> usize {
         let effective_now_ms = self.effective_now(now_ms);
         self.records
@@ -285,7 +266,6 @@ impl PersistentReplayLedger {
             .filter(|expires_at_ms| **expires_at_ms > effective_now_ms)
             .count()
     }
-
     /// Remove expired records and persist the compacted snapshot.
     ///
     /// # Errors
@@ -302,7 +282,6 @@ impl PersistentReplayLedger {
         }
         Ok(removed)
     }
-
     fn load_from_disk(&mut self, now_ms: u64) -> Result<(), ReplayLedgerError> {
         let path = self.path.as_ref().expect("persistent ledger has a path");
         if let Some(parent) = path
@@ -376,21 +355,17 @@ impl PersistentReplayLedger {
         self.prune_expired_in_memory(effective_now_ms);
         self.persist()
     }
-
     fn prune_expired_in_memory(&mut self, now_ms: u64) {
         self.records
             .retain(|_, expires_at_ms| *expires_at_ms > now_ms);
     }
-
     fn effective_now(&self, now_ms: u64) -> u64 {
         self.high_watermark_ms.max(now_ms)
     }
-
     fn observe_now(&mut self, now_ms: u64) -> u64 {
         self.high_watermark_ms = self.high_watermark_ms.max(now_ms);
         self.high_watermark_ms
     }
-
     fn persist(&self) -> Result<(), ReplayLedgerError> {
         let Some(path) = self.path.as_ref() else {
             return Ok(());
@@ -448,7 +423,6 @@ impl PersistentReplayLedger {
         Ok(())
     }
 }
-
 fn namespace_digest(namespace: &[u8]) -> Result<[u8; 32], ReplayLedgerError> {
     if namespace.is_empty() {
         return Err(ReplayLedgerError::NamespaceEmpty);
@@ -461,7 +435,6 @@ fn namespace_digest(namespace: &[u8]) -> Result<[u8; 32], ReplayLedgerError> {
     hasher.update(namespace);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn replay_entry_order(
     left: &ReplayLedgerSnapshotEntryV1,
     right: &ReplayLedgerSnapshotEntryV1,
@@ -470,23 +443,17 @@ fn replay_entry_order(
         .cmp(&right.expires_at_ms)
         .then_with(|| left.id.cmp(&right.id))
 }
-
 fn io_error(error: &io::Error) -> ReplayLedgerError {
     ReplayLedgerError::Io(error.to_string())
 }
-
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
-
     use super::*;
-
     const NAMESPACE: &[u8] = b"test.soranet.replay-ledger.v1";
-
     fn limits(capacity: usize) -> ReplayLedgerLimits {
         ReplayLedgerLimits::new(capacity, 1_000).expect("valid limits")
     }
-
     #[test]
     fn limits_and_namespace_reject_zero_or_excessive_bounds() {
         assert_eq!(
@@ -523,13 +490,11 @@ mod tests {
             ReplayLedgerError::PathEmpty
         );
     }
-
     #[test]
     fn insert_enforces_exact_expiry_ttl_duplicates_and_capacity() {
         let mut ledger = PersistentReplayLedger::in_memory(NAMESPACE, limits(1)).expect("ledger");
         let first = [0x11; 32];
         let second = [0x22; 32];
-
         assert_eq!(
             ledger.insert(first, 100, 100).expect("expired status"),
             ReplayInsertStatus::Expired
@@ -560,7 +525,6 @@ mod tests {
             ReplayInsertStatus::Accepted
         );
     }
-
     #[test]
     fn durable_ledger_rejects_replay_after_restart() {
         let directory = tempdir().expect("temporary directory");
@@ -574,7 +538,6 @@ mod tests {
                 ReplayInsertStatus::Accepted
             );
         }
-
         let mut reloaded =
             PersistentReplayLedger::load(&path, NAMESPACE, limits(4), 20).expect("reload");
         assert_eq!(
@@ -582,7 +545,6 @@ mod tests {
             ReplayInsertStatus::Duplicate
         );
     }
-
     #[test]
     fn durable_high_watermark_prevents_clock_rollback_replay() {
         let directory = tempdir().expect("temporary directory");
@@ -602,7 +564,6 @@ mod tests {
                 "a regressed wall clock must not reopen the consumed ticket"
             );
         }
-
         let mut reloaded =
             PersistentReplayLedger::load(&path, NAMESPACE, limits(4), 400).expect("reload");
         assert_eq!(
@@ -613,7 +574,6 @@ mod tests {
             "the persisted high-water mark must survive restart"
         );
     }
-
     #[test]
     fn durable_ledger_fails_closed_on_corruption_or_namespace_substitution() {
         let directory = tempdir().expect("temporary directory");
@@ -623,7 +583,6 @@ mod tests {
             PersistentReplayLedger::load(&corrupt_path, NAMESPACE, limits(4), 10),
             Err(ReplayLedgerError::Snapshot(_))
         ));
-
         let noncanonical_order_path = directory.path().join("noncanonical-order.norito");
         let noncanonical_order_snapshot = ReplayLedgerSnapshotV1 {
             version: SNAPSHOT_VERSION_V1,
@@ -649,7 +608,6 @@ mod tests {
             PersistentReplayLedger::load(&noncanonical_order_path, NAMESPACE, limits(4), 10),
             Err(ReplayLedgerError::Snapshot(message)) if message.contains("canonical order")
         ));
-
         let substituted_path = directory.path().join("substituted.norito");
         drop(
             PersistentReplayLedger::load(&substituted_path, NAMESPACE, limits(4), 10)
@@ -665,12 +623,10 @@ mod tests {
             Err(ReplayLedgerError::Snapshot(message)) if message.contains("namespace")
         ));
     }
-
     #[test]
     fn durable_ledger_rejects_over_ttl_or_over_capacity_snapshots() {
         let directory = tempdir().expect("temporary directory");
         let namespace_digest = namespace_digest(NAMESPACE).expect("namespace digest");
-
         let over_ttl_path = directory.path().join("over-ttl.norito");
         let over_ttl = ReplayLedgerSnapshotV1 {
             version: SNAPSHOT_VERSION_V1,
@@ -690,7 +646,6 @@ mod tests {
             PersistentReplayLedger::load(&over_ttl_path, NAMESPACE, limits(4), 10),
             Err(ReplayLedgerError::Snapshot(message)) if message.contains("max_ttl_ms")
         ));
-
         let over_capacity_path = directory.path().join("over-capacity.norito");
         let over_capacity = ReplayLedgerSnapshotV1 {
             version: SNAPSHOT_VERSION_V1,
@@ -717,7 +672,6 @@ mod tests {
             Err(ReplayLedgerError::Snapshot(message)) if message.contains("capacity")
         ));
     }
-
     #[test]
     fn durable_ledger_excludes_concurrent_owners() {
         let directory = tempdir().expect("temporary directory");

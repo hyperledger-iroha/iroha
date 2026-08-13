@@ -1,5 +1,4 @@
 //! Merkle proof construction and verification for DA commitment bundles.
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::BlockHeader,
@@ -14,9 +13,7 @@ use iroha_data_model::{
     },
 };
 use thiserror::Error;
-
 use super::{DaProofPolicyError, enforce_committed_proof_policy};
-
 /// Errors surfaced while validating a DA commitment proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DaProofVerificationError {
@@ -79,7 +76,6 @@ pub enum DaProofVerificationError {
         observed: HashOf<DaProofPolicyBundle>,
     },
 }
-
 /// Errors surfaced while validating a DA pin-intent membership proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DaPinIntentProofVerificationError {
@@ -125,7 +121,6 @@ pub enum DaPinIntentProofVerificationError {
         len: usize,
     },
 }
-
 /// Build a Merkle membership proof for a commitment.
 ///
 /// Returns `None` when the bundle is empty, the requested index lies outside
@@ -143,7 +138,6 @@ pub fn build_da_commitment_proof(
     {
         return None;
     }
-
     let bundle_len = bundle_len_u32(bundle.commitments.len()).ok()?;
     let mut layer: Vec<Hash> = bundle
         .commitments
@@ -152,7 +146,6 @@ pub fn build_da_commitment_proof(
         .collect();
     let mut path = Vec::new();
     let mut idx = index;
-
     while layer.len() > 1 {
         let mut next = Vec::with_capacity(layer.len().div_ceil(2));
         let mut i = 0;
@@ -160,7 +153,6 @@ pub fn build_da_commitment_proof(
             if i + 1 < layer.len() {
                 let left = &layer[i];
                 let right = &layer[i + 1];
-
                 if idx == i {
                     path.push(MerklePathItem {
                         sibling: *right,
@@ -174,7 +166,6 @@ pub fn build_da_commitment_proof(
                     });
                     idx = next.len();
                 }
-
                 next.push(commitment_internal_hash(left, right));
                 i += 2;
             } else {
@@ -187,10 +178,8 @@ pub fn build_da_commitment_proof(
         }
         layer = next;
     }
-
     let root = layer.pop()?;
     let index_in_bundle = u32::try_from(index).ok()?;
-
     Some(DaCommitmentProof {
         commitment: bundle.commitments[index].clone(),
         location: DaCommitmentLocation {
@@ -203,7 +192,6 @@ pub fn build_da_commitment_proof(
         path,
     })
 }
-
 /// Verify a DA commitment proof against a caller-authenticated block header and
 /// its policy sidecar.
 ///
@@ -222,14 +210,12 @@ pub fn verify_da_commitment_proof(
     let Some(commitments_hash) = header.da_commitments_hash() else {
         return Err(DaProofVerificationError::MissingCommitmentsHash);
     };
-
     if proof.bundle_hash != commitments_hash {
         return Err(DaProofVerificationError::BundleHashMismatch {
             expected: commitments_hash,
             observed: proof.bundle_hash,
         });
     }
-
     let header_height = header.height().get();
     if proof.location.block_height != header_height {
         return Err(DaProofVerificationError::BlockHeightMismatch {
@@ -237,7 +223,6 @@ pub fn verify_da_commitment_proof(
             observed: header_height,
         });
     }
-
     let bundle_len = usize::try_from(proof.bundle_len).unwrap_or(usize::MAX);
     let idx = usize::try_from(proof.location.index_in_bundle).map_err(|_| {
         DaProofVerificationError::IndexOutOfBounds {
@@ -251,7 +236,6 @@ pub fn verify_da_commitment_proof(
             len: bundle_len,
         });
     }
-
     let Some(policy_hash) = header.da_proof_policies_hash() else {
         return Err(DaProofVerificationError::MissingProofPoliciesHash);
     };
@@ -269,7 +253,6 @@ pub fn verify_da_commitment_proof(
             len: bundle_len,
         });
     }
-
     let mut acc = commitment_leaf_hash(&proof.commitment);
     for hop in &proof.path {
         acc = match hop.direction {
@@ -277,11 +260,9 @@ pub fn verify_da_commitment_proof(
             MerkleDirection::Right => commitment_internal_hash(&acc, &hop.sibling),
         };
     }
-
     if acc != proof.root {
         return Err(DaProofVerificationError::PathMismatch);
     }
-
     let reconstructed = commitment_merkle_commitment(
         DaCommitmentBundle::VERSION_V1,
         proof.bundle_len,
@@ -293,10 +274,8 @@ pub fn verify_da_commitment_proof(
             observed: reconstructed,
         });
     }
-
     Ok(())
 }
-
 /// Build a Merkle membership proof for a pin intent.
 ///
 /// Returns `None` when the bundle is empty, the index is outside the bundle,
@@ -313,12 +292,10 @@ pub fn build_da_pin_intent_proof(
     {
         return None;
     }
-
     let bundle_len = u32::try_from(bundle.intents.len()).ok()?;
     let mut layer: Vec<Hash> = bundle.intents.iter().map(pin_intent_leaf_hash).collect();
     let mut path = Vec::new();
     let mut idx = index;
-
     while layer.len() > 1 {
         let mut next = Vec::with_capacity(layer.len().div_ceil(2));
         let mut i = 0;
@@ -351,7 +328,6 @@ pub fn build_da_pin_intent_proof(
         }
         layer = next;
     }
-
     let root = layer.pop()?;
     Some(DaPinIntentProof {
         intent: bundle.intents[index].clone(),
@@ -365,7 +341,6 @@ pub fn build_da_pin_intent_proof(
         path,
     })
 }
-
 /// Verify a pin-intent membership proof against a caller-authenticated block
 /// header.
 ///
@@ -395,7 +370,6 @@ pub fn verify_da_pin_intent_proof(
             observed: header.height().get(),
         });
     }
-
     let bundle_len = usize::try_from(proof.bundle_len).unwrap_or(usize::MAX);
     if bundle_len == 0 {
         return Err(DaPinIntentProofVerificationError::EmptyBundle);
@@ -418,7 +392,6 @@ pub fn verify_da_pin_intent_proof(
             len: bundle_len,
         });
     }
-
     let mut acc = pin_intent_leaf_hash(&proof.intent);
     for hop in &proof.path {
         acc = match hop.direction {
@@ -429,7 +402,6 @@ pub fn verify_da_pin_intent_proof(
     if acc != proof.root {
         return Err(DaPinIntentProofVerificationError::PathMismatch);
     }
-
     let reconstructed =
         pin_intent_merkle_commitment(DaPinIntentBundle::VERSION_V1, proof.bundle_len, &proof.root);
     if reconstructed != header_bundle_hash {
@@ -440,7 +412,6 @@ pub fn verify_da_pin_intent_proof(
     }
     Ok(())
 }
-
 fn merkle_path_matches_location(
     path: &[MerklePathItem],
     mut index: usize,
@@ -449,7 +420,6 @@ fn merkle_path_matches_location(
     if width == 0 || index >= width {
         return false;
     }
-
     let mut path_index = 0;
     while width > 1 {
         let expected_direction = if index % 2 == 1 {
@@ -473,15 +443,12 @@ fn merkle_path_matches_location(
     }
     path_index == path.len()
 }
-
 fn bundle_len_u32(len: usize) -> Result<u32, DaProofVerificationError> {
     u32::try_from(len).map_err(|_| DaProofVerificationError::BundleLengthUnsupported { len })
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
-
     use super::*;
     use iroha_crypto::HashOf;
     use iroha_data_model::{
@@ -496,7 +463,6 @@ mod tests {
         },
         nexus::{DataSpaceId, LaneId},
     };
-
     fn sample_record(lane: u32, manifest_tag: u8) -> DaCommitmentRecord {
         let lane_byte = u8::try_from(lane).expect("lane fits in u8 for test record");
         DaCommitmentRecord::new(
@@ -514,7 +480,6 @@ mod tests {
                 .expect("checked core DA proof acknowledgement signature fixture"),
         )
     }
-
     fn policy_bundle() -> DaProofPolicyBundle {
         DaProofPolicyBundle::new(vec![DaProofPolicy {
             lane_id: LaneId::new(1),
@@ -523,7 +488,6 @@ mod tests {
             proof_scheme: DaProofScheme::MerkleSha256,
         }])
     }
-
     fn header_with_hash(height: u64, da_hash: HashOf<DaCommitmentBundle>) -> BlockHeader {
         let height = NonZeroU64::new(height).expect("non-zero height");
         let mut header = BlockHeader::new(height, None, None, None, 0, 0);
@@ -531,12 +495,10 @@ mod tests {
         header.set_da_proof_policies_hash(Some(HashOf::new(&policy_bundle())));
         header
     }
-
     fn header_without_da_hash(height: u64) -> BlockHeader {
         let height = NonZeroU64::new(height).expect("non-zero height");
         BlockHeader::new(height, None, None, None, 0, 0)
     }
-
     fn sample_pin_intent(lane: u32, sequence: u64) -> DaPinIntent {
         let tag = u8::try_from(sequence).expect("test sequence fits u8");
         let lane_id = LaneId::new(lane);
@@ -559,7 +521,6 @@ mod tests {
             ),
         )
     }
-
     fn header_with_pin_intent_hash(height: u64, hash: HashOf<DaPinIntentBundle>) -> BlockHeader {
         let mut header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),
@@ -572,7 +533,6 @@ mod tests {
         header.set_da_pin_intents_hash(Some(hash));
         header
     }
-
     #[test]
     fn pin_intent_proof_binds_payload_index_path_and_block_bundle() {
         let bundle = DaPinIntentBundle::new(vec![
@@ -585,7 +545,6 @@ mod tests {
             header_with_pin_intent_hash(4, bundle.merkle_commitment().expect("non-empty bundle"));
         verify_da_pin_intent_proof(&proof, &header)
             .expect("canonical pin-intent proof must verify");
-
         let mut tampered = proof;
         tampered.location.index_in_bundle = 0;
         assert!(matches!(
@@ -593,7 +552,6 @@ mod tests {
             Err(DaPinIntentProofVerificationError::PathLocationMismatch { .. })
         ));
     }
-
     #[test]
     fn pin_intent_proof_rejects_path_and_header_binding_drift() {
         let bundle = DaPinIntentBundle::new(vec![sample_pin_intent(1, 1), sample_pin_intent(1, 2)]);
@@ -608,7 +566,6 @@ mod tests {
             verify_da_pin_intent_proof(&proof, &wrong_header),
             Err(DaPinIntentProofVerificationError::BundleHashMismatch { .. })
         ));
-
         let header =
             header_with_pin_intent_hash(4, bundle.merkle_commitment().expect("non-empty bundle"));
         let mut tampered = proof;
@@ -618,7 +575,6 @@ mod tests {
             Err(DaPinIntentProofVerificationError::PathMismatch)
         ));
     }
-
     #[test]
     fn pin_intent_proof_binds_index_when_payloads_are_identical() {
         let intent = sample_pin_intent(1, 1);
@@ -627,13 +583,11 @@ mod tests {
         proof.location.index_in_bundle = 1;
         let header =
             header_with_pin_intent_hash(4, bundle.merkle_commitment().expect("non-empty bundle"));
-
         assert!(matches!(
             verify_da_pin_intent_proof(&proof, &header),
             Err(DaPinIntentProofVerificationError::PathLocationMismatch { index: 1, len: 2 })
         ));
     }
-
     #[test]
     fn pin_intent_proofs_verify_at_every_position_in_odd_width_trees() {
         for width in [3_u64, 5] {
@@ -644,7 +598,6 @@ mod tests {
             );
             let header =
                 header_with_pin_intent_hash(4, bundle.merkle_commitment().expect("commitment"));
-
             for index in 0..bundle.intents.len() {
                 let proof = build_da_pin_intent_proof(&bundle, 4, index).expect("membership proof");
                 verify_da_pin_intent_proof(&proof, &header)
@@ -652,7 +605,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn pin_intent_proof_rejects_shape_compatible_leaf_count_tampering() {
         let bundle = DaPinIntentBundle::new(vec![
@@ -663,7 +615,6 @@ mod tests {
         let mut proof = build_da_pin_intent_proof(&bundle, 4, 0).expect("membership proof");
         let header =
             header_with_pin_intent_hash(4, bundle.merkle_commitment().expect("commitment"));
-
         // Widths three and four have the same path shape for index zero. The
         // signed leaf count must still make this substitution fail.
         proof.bundle_len = 4;
@@ -672,23 +623,19 @@ mod tests {
             Err(DaPinIntentProofVerificationError::BundleHashMismatch { .. })
         ));
     }
-
     #[test]
     fn build_and_verify_proof_succeeds() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
         let proof = build_da_commitment_proof(&bundle, 3, 1).expect("proof");
         let header = header_with_hash(3, bundle.merkle_commitment().expect("non-empty bundle"));
-
         assert!(verify_da_commitment_proof(&proof, &header, &policy_bundle()).is_ok());
     }
-
     #[test]
     fn commitment_proofs_verify_at_every_position_in_odd_width_trees() {
         for width in [3_u8, 5] {
             let bundle =
                 DaCommitmentBundle::new((1..=width).map(|tag| sample_record(1, tag)).collect());
             let header = header_with_hash(3, bundle.merkle_commitment().expect("commitment"));
-
             for index in 0..bundle.commitments.len() {
                 let proof = build_da_commitment_proof(&bundle, 3, index).expect("membership proof");
                 verify_da_commitment_proof(&proof, &header, &policy_bundle())
@@ -696,7 +643,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn commitment_proof_rejects_shape_compatible_leaf_count_tampering() {
         let bundle = DaCommitmentBundle::new(vec![
@@ -706,7 +652,6 @@ mod tests {
         ]);
         let mut proof = build_da_commitment_proof(&bundle, 3, 0).expect("membership proof");
         let header = header_with_hash(3, bundle.merkle_commitment().expect("commitment"));
-
         // Widths three and four have the same path shape for index zero. The
         // signed leaf count must still make this substitution fail.
         proof.bundle_len = 4;
@@ -715,7 +660,6 @@ mod tests {
             Err(DaProofVerificationError::BundleHashMismatch { .. })
         ));
     }
-
     #[test]
     fn verify_rejects_root_mismatch() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
@@ -726,14 +670,12 @@ mod tests {
             verify_da_commitment_proof(&proof, &header, &policy_bundle()).expect_err("should fail");
         assert!(matches!(err, DaProofVerificationError::PathMismatch));
     }
-
     #[test]
     fn verify_rejects_bundle_len_mismatch() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
         let mut proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
         proof.bundle_len = proof.bundle_len.saturating_add(1);
         let header = header_with_hash(3, bundle.merkle_commitment().expect("non-empty bundle"));
-
         let err = verify_da_commitment_proof(&proof, &header, &policy_bundle())
             .expect_err("tampered bundle length must fail");
         assert!(matches!(
@@ -741,14 +683,12 @@ mod tests {
             DaProofVerificationError::PathLocationMismatch { index: 0, len: 3 }
         ));
     }
-
     #[test]
     fn bundle_len_metadata_rejects_overflow_without_saturating() {
         assert_eq!(
             bundle_len_u32(u32::MAX as usize).expect("u32::MAX is representable"),
             u32::MAX
         );
-
         if let Some(unsupported_len) = (u32::MAX as usize).checked_add(1) {
             let err = bundle_len_u32(unsupported_len)
                 .expect_err("oversized bundle length must be rejected");
@@ -758,13 +698,11 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn verify_rejects_missing_header_commitment_hash() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
         let proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
         let header = header_without_da_hash(3);
-
         let err = verify_da_commitment_proof(&proof, &header, &policy_bundle())
             .expect_err("proof must fail without header commitment hash");
         assert!(matches!(
@@ -772,13 +710,11 @@ mod tests {
             DaProofVerificationError::MissingCommitmentsHash
         ));
     }
-
     #[test]
     fn verify_rejects_block_height_mismatch() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
         let proof = build_da_commitment_proof(&bundle, 4, 0).expect("proof");
         let header = header_with_hash(3, bundle.merkle_commitment().expect("non-empty bundle"));
-
         let err = verify_da_commitment_proof(&proof, &header, &policy_bundle())
             .expect_err("proof must fail when location height drifts from header height");
         assert!(matches!(
@@ -789,14 +725,12 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn verify_rejects_commitment_index_tampering() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
         let mut proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
         proof.location.index_in_bundle = u32::MAX;
         let header = header_with_hash(3, bundle.merkle_commitment().expect("non-empty bundle"));
-
         let err = verify_da_commitment_proof(&proof, &header, &policy_bundle())
             .expect_err("proof must fail when index leaves bundle bounds");
         assert!(matches!(
@@ -807,7 +741,6 @@ mod tests {
             } if index == usize::try_from(u32::MAX).expect("u32 fits usize")
         ));
     }
-
     #[test]
     fn verify_binds_commitment_index_when_payloads_are_identical() {
         let commitment = sample_record(1, 1);
@@ -815,7 +748,6 @@ mod tests {
         let mut proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
         proof.location.index_in_bundle = 1;
         let header = header_with_hash(3, bundle.merkle_commitment().expect("non-empty bundle"));
-
         let err = verify_da_commitment_proof(&proof, &header, &policy_bundle())
             .expect_err("proof path must bind an identical payload to its claimed index");
         assert!(matches!(
@@ -823,19 +755,16 @@ mod tests {
             DaProofVerificationError::PathLocationMismatch { index: 1, len: 2 }
         ));
     }
-
     #[test]
     fn verify_rejects_commitment_payload_tampering() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
         let mut proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
         proof.commitment = sample_record(1, 9);
         let header = header_with_hash(3, bundle.merkle_commitment().expect("non-empty bundle"));
-
         let err = verify_da_commitment_proof(&proof, &header, &policy_bundle())
             .expect_err("proof must fail when commitment payload is replaced");
         assert!(matches!(err, DaProofVerificationError::PathMismatch));
     }
-
     #[test]
     fn verify_rejects_merkle_path_tampering() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1), sample_record(1, 2)]);
@@ -846,18 +775,15 @@ mod tests {
             .expect("two-leaf proof should have a sibling")
             .sibling = Hash::prehashed([0xAB; 32]);
         let header = header_with_hash(3, bundle.merkle_commitment().expect("non-empty bundle"));
-
         let err = verify_da_commitment_proof(&proof, &header, &policy_bundle())
             .expect_err("proof must fail when a Merkle sibling is replaced");
         assert!(matches!(err, DaProofVerificationError::PathMismatch));
     }
-
     #[test]
     fn verify_rejects_lane_policy_violation() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(9, 1)]);
         let proof = build_da_commitment_proof(&bundle, 3, 0).expect("proof");
         let header = header_with_hash(3, bundle.merkle_commitment().expect("non-empty bundle"));
-
         let err = verify_da_commitment_proof(&proof, &header, &policy_bundle())
             .expect_err("proof must fail when its lane is not configured");
         assert!(matches!(
@@ -866,7 +792,6 @@ mod tests {
                 if lane == LaneId::new(9)
         ));
     }
-
     #[test]
     fn verify_rejects_uncommitted_policy_sidecar() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1)]);
@@ -878,13 +803,11 @@ mod tests {
             alias: "substituted".to_owned(),
             proof_scheme: DaProofScheme::MerkleSha256,
         }]);
-
         assert!(matches!(
             verify_da_commitment_proof(&proof, &header, &supplied),
             Err(DaProofVerificationError::ProofPoliciesHashMismatch { .. })
         ));
     }
-
     #[test]
     fn verify_rejects_malformed_committed_policy_sidecar() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1)]);
@@ -893,7 +816,6 @@ mod tests {
         malformed.policy_hash = Hash::new(b"invalid-internal-policy-hash");
         let mut header = header_with_hash(3, bundle.merkle_commitment().expect("commitment"));
         header.set_da_proof_policies_hash(Some(HashOf::new(&malformed)));
-
         assert!(matches!(
             verify_da_commitment_proof(&proof, &header, &malformed),
             Err(DaProofVerificationError::Policy(
@@ -901,7 +823,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn verify_rejects_duplicate_committed_lane_policy() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1)]);
@@ -910,7 +831,6 @@ mod tests {
         let duplicate = DaProofPolicyBundle::new(vec![policy.clone(), policy]);
         let mut header = header_with_hash(3, bundle.merkle_commitment().expect("commitment"));
         header.set_da_proof_policies_hash(Some(HashOf::new(&duplicate)));
-
         assert!(matches!(
             verify_da_commitment_proof(&proof, &header, &duplicate),
             Err(DaProofVerificationError::Policy(
@@ -918,18 +838,15 @@ mod tests {
             )) if lane == LaneId::new(1)
         ));
     }
-
     #[test]
     fn proof_builders_reject_unsupported_bundle_versions() {
         let mut commitments = DaCommitmentBundle::new(vec![sample_record(1, 1)]);
         commitments.version = DaCommitmentBundle::VERSION_V1 + 1;
         assert!(build_da_commitment_proof(&commitments, 3, 0).is_none());
-
         let mut intents = DaPinIntentBundle::new(vec![sample_pin_intent(1, 1)]);
         intents.version = DaPinIntentBundle::VERSION_V1 + 1;
         assert!(build_da_pin_intent_proof(&intents, 3, 0).is_none());
     }
-
     #[test]
     fn build_returns_none_for_out_of_bounds() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 1)]);

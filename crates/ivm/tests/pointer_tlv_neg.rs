@@ -1,9 +1,7 @@
 //! Negative tests for Pointer‑ABI TLV validation.
 use iroha_crypto::PublicKey;
 use ivm::{IVM, PointerType, ProgramMetadata};
-
 mod common;
-
 fn valid_account_id_literal() -> Vec<u8> {
     let public_key: PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -13,7 +11,6 @@ fn valid_account_id_literal() -> Vec<u8> {
         .to_string()
         .into_bytes()
 }
-
 fn build_tlv(type_id: u16, version: u8, payload: &[u8], corrupt_hash: bool) -> Vec<u8> {
     use iroha_crypto::Hash;
     let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
@@ -29,7 +26,6 @@ fn build_tlv(type_id: u16, version: u8, payload: &[u8], corrupt_hash: bool) -> V
     v.extend_from_slice(&hb);
     v
 }
-
 #[test]
 fn tlv_wrong_hash_is_rejected() {
     let mut vm = IVM::new(0);
@@ -45,7 +41,6 @@ fn tlv_wrong_hash_is_rejected() {
     let err = vm.memory.validate_tlv(addr).unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
-
 #[test]
 fn tlv_unknown_type_is_rejected() {
     let mut vm = IVM::new(0);
@@ -58,7 +53,6 @@ fn tlv_unknown_type_is_rejected() {
     let err = vm.memory.validate_tlv(addr).unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
-
 #[test]
 fn tlv_wrong_version_is_rejected() {
     let mut vm = IVM::new(0);
@@ -71,7 +65,6 @@ fn tlv_wrong_version_is_rejected() {
     let err = vm.memory.validate_tlv(addr).unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
-
 #[test]
 fn tlv_out_of_bounds_is_rejected() {
     let mut vm = IVM::new(0);
@@ -90,7 +83,6 @@ fn tlv_out_of_bounds_is_rejected() {
     let err = vm.memory.validate_tlv(addr).unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
-
 #[test]
 fn tlv_pointer_overflow_is_rejected() {
     let mut vm = IVM::new(0);

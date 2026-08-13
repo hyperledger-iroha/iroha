@@ -1,7 +1,6 @@
 const CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES: usize = MAX_CERTIFIED_MERGE_CHUNK_BYTES;
 const CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS: usize =
     (STRICT_INIT_MAX_BLOCK_BYTES as usize).div_ceil(CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES);
-
 fn canonical_executed_block_request_fits_frame(
     limits: V2LaneWorkLimits,
     request: &LaneHistoricalRecoveryRequestV1,
@@ -14,7 +13,6 @@ fn canonical_executed_block_request_fits_frame(
             .get()
             .min(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
 }
-
 fn canonical_executed_block_response_fits_frame(
     limits: V2LaneWorkLimits,
     response: &LaneHistoricalRecoveryResponseV1,
@@ -25,7 +23,6 @@ fn canonical_executed_block_response_fits_frame(
     super::fair_v2_ingress_required_lane_p2p_frame_bytes(bytes)
         <= limits.historical_recovery_response_frame_capacity.get()
 }
-
 fn peer_is_global_finality_signer(
     finality: &wire::finality::V2FinalityArtifact,
     peer: &PeerId,
@@ -37,7 +34,6 @@ fn peer_is_global_finality_signer(
             .is_some_and(|entry| &entry.validator == peer)
     })
 }
-
 /// Build one exact chunk-recovery dependency from locally verified durable
 /// State, Kura finality, and the consensus-signed canonical wire length.
 pub(crate) fn canonical_executed_block_need_for_height(
@@ -76,7 +72,6 @@ pub(crate) fn canonical_executed_block_need_for_height(
         .map_err(V2LaneWorkError::Persistence)?;
     Ok(need)
 }
-
 fn validate_canonical_executed_block_need(
     context: &wire::HeightContext,
     state: &State,
@@ -126,7 +121,6 @@ fn validate_canonical_executed_block_need(
     }
     Ok(finality)
 }
-
 fn validate_canonical_executed_block_request(
     context: &wire::HeightContext,
     state: &State,
@@ -180,7 +174,6 @@ fn validate_canonical_executed_block_request(
     }
     Ok((**need, finality, *chunk_index))
 }
-
 fn canonical_executed_block_matches_need(
     block: &SignedBlock,
     finality: &wire::finality::V2FinalityArtifact,
@@ -199,7 +192,6 @@ fn canonical_executed_block_matches_need(
         && u64::try_from(wire.len()).ok() == Some(need.executed_block_wire_len)
         && Hash::new(&wire) == need.executed_block_wire_hash
 }
-
 fn build_canonical_executed_block_response(
     context: &wire::HeightContext,
     state: &State,
@@ -265,14 +257,12 @@ fn build_canonical_executed_block_response(
     }
     Ok(response)
 }
-
 #[derive(Clone, Debug)]
 struct CanonicalExecutedBlockResponder {
     peer: PeerId,
     index: usize,
     count: usize,
 }
-
 #[derive(Clone, Debug)]
 struct OutstandingCanonicalExecutedBlockRequest {
     request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
@@ -283,7 +273,6 @@ struct OutstandingCanonicalExecutedBlockRequest {
     /// signer and necessarily restarts the wire at chunk zero.
     retry_sent: bool,
 }
-
 /// Recovery-only, bounded owner for exact canonical executed bodies required
 /// by any durable-evidence repair owner.
 ///
@@ -309,13 +298,11 @@ pub(crate) struct CanonicalExecutedBlockRecovery {
     outstanding: Option<OutstandingCanonicalExecutedBlockRequest>,
     effects: VecDeque<V2LaneWorkEffect>,
 }
-
 impl CanonicalExecutedBlockRecovery {
     /// Maximum number of ordered needs owned by one recovery-only corridor.
     pub(crate) const fn need_capacity(limits: V2LaneWorkLimits) -> usize {
         limits.session_capacity.get()
     }
-
     /// Validate and install one canonical, duplicate-free recovery set.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -379,23 +366,19 @@ impl CanonicalExecutedBlockRecovery {
             effects: VecDeque::new(),
         })
     }
-
     /// Return whether at least one exact canonical body is still missing.
     pub(crate) fn has_pending(&self) -> bool {
         !self.needs.is_empty()
     }
-
     /// Number of bounded outbound recovery effects awaiting transport.
     pub(crate) fn effect_count(&self) -> usize {
         self.effects.len()
     }
-
     /// Drain at most `limit` recovery-only transport effects.
     pub(crate) fn drain_effects(&mut self, limit: usize) -> Vec<V2LaneWorkEffect> {
         let count = limit.min(self.effects.len());
         self.effects.drain(..count).collect()
     }
-
     /// Restore one source-owned effect after downstream backpressure.
     pub(crate) fn requeue_effect(&mut self, effect: V2LaneWorkEffect) -> bool {
         if self.effects.len() >= self.limits.effect_capacity.get() {
@@ -404,7 +387,6 @@ impl CanonicalExecutedBlockRecovery {
         self.effects.push_front(effect);
         true
     }
-
     fn reset_front_assembly(&mut self) {
         self.assembly_responder = None;
         self.next_chunk_index = 0;
@@ -415,7 +397,6 @@ impl CanonicalExecutedBlockRecovery {
         self.assembly = Vec::new();
         self.outstanding = None;
     }
-
     fn record_front_attempt(&mut self) -> Result<(), V2LaneWorkError> {
         let limit = self
             .limits
@@ -430,7 +411,6 @@ impl CanonicalExecutedBlockRecovery {
         self.front_attempts = self.front_attempts.saturating_add(1);
         Ok(())
     }
-
     fn advance_past_front_responder(&mut self) {
         let responder = self
             .assembly_responder
@@ -446,7 +426,6 @@ impl CanonicalExecutedBlockRecovery {
         }
         self.reset_front_assembly();
     }
-
     fn reconcile_cached_front(&mut self) -> Result<(), V2LaneWorkError> {
         loop {
             let Some(need) = self.needs.front().copied() else {
@@ -485,7 +464,6 @@ impl CanonicalExecutedBlockRecovery {
             self.reset_front_assembly();
         }
     }
-
     /// Queue one bounded retry for the current chunk.
     ///
     /// A body assembly is pinned to one exact remote CommitQC signer. Its
@@ -529,7 +507,6 @@ impl CanonicalExecutedBlockRecovery {
                 "canonical executed-block recovery has no remote CommitQC signer".to_owned(),
             ));
         }
-
         if let Some(outstanding) = self.outstanding.as_ref() {
             let responder_is_still_exact = outstanding.responder.count == eligible_peers.len()
                 && eligible_peers.get(outstanding.responder.index)
@@ -558,7 +535,6 @@ impl CanonicalExecutedBlockRecovery {
                 self.advance_past_front_responder();
             }
         }
-
         let responder = match self.assembly_responder.as_ref() {
             Some(responder)
                 if responder.count == eligible_peers.len()
@@ -615,7 +591,6 @@ impl CanonicalExecutedBlockRecovery {
         });
         Ok(())
     }
-
     /// Return whether recovery-only ingress owns this exact message.
     pub(crate) fn admits_message(&self, message: &BlockMessage) -> bool {
         match message {
@@ -630,7 +605,6 @@ impl CanonicalExecutedBlockRecovery {
             _ => false,
         }
     }
-
     /// Consume one exact fair-ingress carrier in the recovery-only corridor.
     pub(crate) fn accept_with_ingress_ownership(
         &mut self,
@@ -685,7 +659,6 @@ impl CanonicalExecutedBlockRecovery {
             _ => Ok(V2LaneIngressOutcome::Rejected),
         }
     }
-
     fn accept_response(
         &mut self,
         response: LaneHistoricalRecoveryResponseV1,
@@ -826,7 +799,6 @@ impl CanonicalExecutedBlockRecovery {
         Ok(V2LaneIngressOutcome::Inserted)
     }
 }
-
 /// Read-only startup classification for ordinary and Native application
 /// evidence. Missing canonical bodies are recovered by the shared chunked
 /// corridor before the complete immutable publication plan is rebuilt.
@@ -834,7 +806,6 @@ pub(crate) enum LaneApplicationEvidenceRepairPlanning {
     RecoverCanonicalBodies(Vec<CanonicalExecutedBlockNeedV1>),
     Ready(LaneApplicationEvidenceRepairPlan),
 }
-
 pub(crate) struct LaneApplicationEvidenceRepairPlan {
     state_tip_height: usize,
     state_tip_hash: Option<HashOf<BlockHeader>>,
@@ -845,19 +816,16 @@ pub(crate) struct LaneApplicationEvidenceRepairPlan {
     merge_carrier_repair_authorizations: Vec<Vec<PostCarrierEvidenceRepairAuthorization>>,
     repair_capacity: usize,
 }
-
 struct OrdinaryLaneApplicationReceiptRepair {
     session: CommittedLaneBlockSession,
     receipt: LaneBlockApplicationReceiptArtifact,
 }
-
 struct NativeParticipantCarrierRepair {
     application_block_height: u64,
     application_block_hash: HashOf<BlockHeader>,
     markers: Vec<crate::state::AppliedNativeAmxParticipantFrontierMarker>,
     block: Arc<SignedBlock>,
 }
-
 fn planned_merge_entries_by_carrier(
     repairs: &[FinalizedMergeCarrierRepair],
 ) -> Result<BTreeMap<(u64, HashOf<BlockHeader>), &MergeLedgerEntry>, V2LaneWorkError> {
@@ -875,7 +843,6 @@ fn planned_merge_entries_by_carrier(
     }
     Ok(entries)
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LaneApplicationEvidenceRepairSummary {
     pub(crate) ordinary_pairs: usize,
@@ -884,7 +851,6 @@ pub(crate) struct LaneApplicationEvidenceRepairSummary {
     pub(crate) native_routes: usize,
     pub(crate) merge_carriers: usize,
 }
-
 impl LaneApplicationEvidenceRepairSummary {
     pub(crate) fn publication_count(self) -> usize {
         self.ordinary_pairs
@@ -893,7 +859,6 @@ impl LaneApplicationEvidenceRepairSummary {
             .saturating_add(self.merge_carriers)
     }
 }
-
 impl LaneApplicationEvidenceRepairPlan {
     pub(crate) fn is_empty(&self) -> bool {
         self.ordinary_pairs.is_empty()
@@ -901,7 +866,6 @@ impl LaneApplicationEvidenceRepairPlan {
             && self.native_carriers.is_empty()
             && self.merge_carriers.is_empty()
     }
-
     pub(crate) fn item_count(&self) -> usize {
         self.ordinary_pairs
             .len()
@@ -910,7 +874,6 @@ impl LaneApplicationEvidenceRepairPlan {
             .saturating_add(self.merge_carriers.len())
     }
 }
-
 fn collect_lane_application_repair_need(
     needs: &mut BTreeMap<u64, CanonicalExecutedBlockNeedV1>,
     need: CanonicalExecutedBlockNeedV1,
@@ -929,7 +892,6 @@ fn collect_lane_application_repair_need(
         }
     }
 }
-
 /// Preflight every ordinary and Native startup repair owner without publishing
 /// any lane evidence. The result is deterministic and predecessor ordered.
 pub(crate) fn plan_lane_application_evidence_repair(
@@ -959,7 +921,6 @@ pub(crate) fn plan_lane_application_evidence_repair(
             "Native AMX application evidence repair exceeds startup capacity".to_owned(),
         ));
     }
-
     let mut needs = BTreeMap::new();
     let (merge_carriers, missing_merge_carrier_bodies) = kura
         .preflight_finalized_merge_carrier_repairs(
@@ -1022,7 +983,6 @@ pub(crate) fn plan_lane_application_evidence_repair(
             }
         }
     }
-
     let mut grouped_native = BTreeMap::<
         (u64, HashOf<BlockHeader>),
         Vec<crate::state::AppliedNativeAmxParticipantFrontierMarker>,
@@ -1046,7 +1006,6 @@ pub(crate) fn plan_lane_application_evidence_repair(
             .or_default()
             .push(marker);
     }
-
     let mut native_carriers = Vec::new();
     native_carriers
         .try_reserve_exact(grouped_native.len())
@@ -1101,7 +1060,6 @@ pub(crate) fn plan_lane_application_evidence_repair(
         });
     }
     drop(planned_merge_entries);
-
     if !needs.is_empty() {
         return Ok(
             LaneApplicationEvidenceRepairPlanning::RecoverCanonicalBodies(
@@ -1171,7 +1129,6 @@ pub(crate) fn plan_lane_application_evidence_repair(
         },
     ))
 }
-
 /// Publish one plan only after every item has passed a second read-only
 /// preflight. Calls are idempotent; any post-plan drift fails before the first
 /// write and every write is followed by exact authoritative readback.
@@ -1270,7 +1227,6 @@ pub(crate) fn apply_lane_application_evidence_repair(
                 .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         }
     }
-
     let mut summary = LaneApplicationEvidenceRepairSummary::default();
     for artifact in &plan.ordinary_pairs {
         let session = CommittedLaneBlockSession {

@@ -5,7 +5,6 @@
 //! exact reporting-node identity, ordered validator keys, and count threshold,
 //! and delegates the complete header/context/PoP/BLS verification to
 //! `iroha_core::bridge`.
-
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::{
@@ -16,7 +15,6 @@ use std::{
     path::{Path, PathBuf},
     process,
 };
-
 use iroha_core::{
     bridge::{FinalityProofVerificationConfig, verify_finality_proof},
     validate_genesis_block,
@@ -37,7 +35,6 @@ use iroha_data_model::{
 };
 use norito::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest, Sha256};
-
 const LEGACY_EXPECTATIONS_SCHEMA_VERSION: u8 = 2;
 const LEGACY_RECEIPT_SCHEMA_VERSION: u8 = 3;
 const ATTESTED_EXPECTATIONS_SCHEMA_VERSION: u8 = 3;
@@ -54,7 +51,6 @@ const CHALLENGE_BYTES: u64 = 32;
 /// The explicit `black_box` use in `main` keeps this marker reachable in both
 /// host and Linux release binaries without inventing source metadata locally.
 const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
-
 const HELP: &str = "\
 Verify one exact current-source PK2 bridge-finality proof.
 
@@ -100,7 +96,6 @@ decision ID binds context, height, Commit phase, full block subject, and full
 execution commitment while excluding the decision/re-proposal round, signers,
 and aggregate representation.
 ";
-
 #[derive(Debug)]
 enum Cli {
     Attested {
@@ -115,20 +110,17 @@ enum Cli {
         expected_roster: InputSource,
     },
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InputSource {
     Path(PathBuf),
     InheritedFd(i32),
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(variant_size_differences)]
 enum ChallengeSource {
     Inline([u8; 32]),
     InheritedFd(i32),
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct ExpectedRosterDocument {
@@ -141,7 +133,6 @@ struct ExpectedRosterDocument {
     validator_keys: Vec<String>,
     min_signers: u32,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct AttestedExpectedRosterDocument {
@@ -156,7 +147,6 @@ struct AttestedExpectedRosterDocument {
     genesis_public_key: String,
     signed_genesis_sha256: String,
 }
-
 /// Stable projection of the fields which define one semantic `CommitQC` decision.
 ///
 /// This deliberately mirrors `QuorumCertificateRef::same_commit_decision`: the
@@ -171,7 +161,6 @@ struct SemanticCommitDecisionIdentity {
     subject: BlockSubject,
     execution_commitment: ExecutionCommitment,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct VerificationReceipt {
     schema_version: u8,
@@ -194,7 +183,6 @@ struct VerificationReceipt {
     proof_sha256: String,
     status_sha256: String,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct AttestedVerificationReceipt {
     schema_version: u8,
@@ -227,7 +215,6 @@ struct AttestedVerificationReceipt {
     attestation_sha256: String,
     signed_genesis_sha256: String,
 }
-
 #[derive(Debug, Clone, Copy)]
 #[expect(
     clippy::struct_field_names,
@@ -239,7 +226,6 @@ struct ValidatedSignedGenesis {
     executed_block_wire_len: u64,
     executed_block_wire_hash: Hash,
 }
-
 fn main() {
     let _ = std::hint::black_box(BUILD_SOURCE_ID);
     match run() {
@@ -250,14 +236,12 @@ fn main() {
         }
     }
 }
-
 fn run() -> Result<(), String> {
     let cli = parse_args(env::args().skip(1))?;
     let json = run_cli(cli)?;
     println!("{json}");
     Ok(())
 }
-
 fn run_cli(cli: Cli) -> Result<String, String> {
     let json = match cli {
         Cli::Attested {
@@ -301,7 +285,6 @@ fn run_cli(cli: Cli) -> Result<String, String> {
     .map_err(|error| format!("failed to encode verification receipt: {error}"))?;
     Ok(json)
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the mutually exclusive path/fd grammar and final descriptor-uniqueness audit form one ordered fail-closed parse"
@@ -314,7 +297,6 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
     let mut expected_roster = None;
     let mut challenge = None;
     let mut args = args.into_iter();
-
     while let Some(argument) = args.next() {
         if argument == "--help" || argument == "-h" {
             println!("{HELP}");
@@ -390,7 +372,6 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
             _ => return Err(format!("unknown argument {argument}")),
         }
     }
-
     let expected_roster =
         expected_roster.ok_or_else(|| "missing required expected-roster input".to_owned())?;
     let attested_mode = attestation.is_some() || signed_genesis.is_some() || challenge.is_some();
@@ -418,7 +399,6 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
     validate_distinct_inherited_fds(&cli)?;
     Ok(cli)
 }
-
 fn set_input_source(
     slot: &mut Option<InputSource>,
     source: InputSource,
@@ -431,7 +411,6 @@ fn set_input_source(
     }
     Ok(())
 }
-
 fn parse_inherited_fd(value: &str, label: &str) -> Result<i32, String> {
     let fd = value
         .parse::<i32>()
@@ -443,7 +422,6 @@ fn parse_inherited_fd(value: &str, label: &str) -> Result<i32, String> {
     }
     Ok(fd)
 }
-
 fn parse_challenge(value: &str) -> Result<[u8; 32], String> {
     if value.len() != Hash::LENGTH * 2
         || !value
@@ -462,7 +440,6 @@ fn parse_challenge(value: &str) -> Result<[u8; 32], String> {
     }
     Ok(challenge)
 }
-
 fn read_challenge_source(source: &ChallengeSource) -> Result<[u8; 32], String> {
     match source {
         ChallengeSource::Inline(challenge) => Ok(*challenge),
@@ -481,7 +458,6 @@ fn read_challenge_source(source: &ChallengeSource) -> Result<[u8; 32], String> {
         }
     }
 }
-
 fn validate_distinct_inherited_fds(cli: &Cli) -> Result<(), String> {
     let mut seen = BTreeSet::new();
     let sources: Vec<&InputSource> = match cli {
@@ -518,7 +494,6 @@ fn validate_distinct_inherited_fds(cli: &Cli) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn read_bounded_source(
     source: &InputSource,
     max_bytes: u64,
@@ -529,7 +504,6 @@ fn read_bounded_source(
         InputSource::InheritedFd(fd) => read_bounded_fd(*fd, max_bytes, label),
     }
 }
-
 #[cfg(unix)]
 fn read_bounded_fd(fd: i32, max_bytes: u64, label: &str) -> Result<Vec<u8>, String> {
     if fd < 3 {
@@ -606,14 +580,12 @@ fn read_bounded_fd(fd: i32, max_bytes: u64, label: &str) -> Result<Vec<u8>, Stri
     }
     Ok(bytes)
 }
-
 #[cfg(not(unix))]
 fn read_bounded_fd(fd: i32, _max_bytes: u64, label: &str) -> Result<Vec<u8>, String> {
     Err(format!(
         "{label} inherited fd {fd} is unsupported on this platform"
     ))
 }
-
 fn read_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>, String> {
     let lexical_before = fs::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect {label} {}: {error}", path.display()))?;
@@ -675,7 +647,6 @@ fn read_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>, Str
     }
     Ok(bytes)
 }
-
 fn verify_json_inputs(
     status_json: &[u8],
     proof_json: &[u8],
@@ -687,14 +658,12 @@ fn verify_json_inputs(
         .map_err(|error| format!("proof is not UTF-8 JSON: {error}"))?;
     let expectations_text = std::str::from_utf8(expectations_json)
         .map_err(|error| format!("expected roster is not UTF-8 JSON: {error}"))?;
-
     let status = norito::json::from_json::<SumeragiV2Status>(status_text)
         .map_err(|error| format!("invalid current SumeragiV2Status JSON: {error}"))?;
     let proof = norito::json::from_json::<BridgeFinalityProof>(proof_text)
         .map_err(|error| format!("invalid current BridgeFinalityProof JSON: {error}"))?;
     let expectations = norito::json::from_json::<ExpectedRosterDocument>(expectations_text)
         .map_err(|error| format!("invalid expected-roster JSON: {error}"))?;
-
     verify_decoded(
         &status,
         &proof,
@@ -703,7 +672,6 @@ fn verify_json_inputs(
         sha256_hex(proof_json),
     )
 }
-
 fn verify_attested_json_inputs(
     attestation_json: &[u8],
     signed_genesis: &[u8],
@@ -718,7 +686,6 @@ fn verify_attested_json_inputs(
         .map_err(|error| format!("invalid current BridgeFinalityAttestationV1 JSON: {error}"))?;
     let expectations = norito::json::from_json::<AttestedExpectedRosterDocument>(expectations_text)
         .map_err(|error| format!("invalid attested expected-roster JSON: {error}"))?;
-
     let legacy_expectations = validate_attested_expectations(&expectations)?;
     attestation
         .verify()
@@ -734,7 +701,6 @@ fn verify_attested_json_inputs(
     if attestation.body.node_id != expected_node {
         return Err("attestation node_id does not match expected_node_key".to_owned());
     }
-
     let actual_signed_genesis_sha256 = sha256_hex(signed_genesis);
     if actual_signed_genesis_sha256 != expectations.signed_genesis_sha256 {
         return Err(format!(
@@ -758,7 +724,6 @@ fn verify_attested_json_inputs(
             hex::encode(genesis.block_hash.as_ref())
         ));
     }
-
     let (genesis_height_context_id, genesis_commit_decision_id) = verify_genesis_finality_proof(
         &attestation.body.genesis_finality_proof,
         &legacy_expectations,
@@ -777,7 +742,6 @@ fn verify_attested_json_inputs(
         .finality_artifact
         .commit_qc
         .execution_commitment;
-
     Ok(AttestedVerificationReceipt {
         schema_version: ATTESTED_RECEIPT_SCHEMA_VERSION,
         status: "validated".to_owned(),
@@ -810,7 +774,6 @@ fn verify_attested_json_inputs(
         signed_genesis_sha256: actual_signed_genesis_sha256,
     })
 }
-
 fn validate_attested_expectations(
     expectations: &AttestedExpectedRosterDocument,
 ) -> Result<ExpectedRosterDocument, String> {
@@ -835,7 +798,6 @@ fn validate_attested_expectations(
     validate_expectations(&legacy)?;
     Ok(legacy)
 }
-
 fn validate_sha256_literal(value: &str, label: &str) -> Result<(), String> {
     if value.len() != 64
         || !value
@@ -849,7 +811,6 @@ fn validate_sha256_literal(value: &str, label: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn parse_expected_genesis_public_key(value: &str) -> Result<PublicKey, String> {
     let public_key = value
         .parse::<PublicKey>()
@@ -859,7 +820,6 @@ fn parse_expected_genesis_public_key(value: &str) -> Result<PublicKey, String> {
     }
     Ok(public_key)
 }
-
 fn decode_validate_signed_genesis(
     signed_genesis: &[u8],
     genesis_public_key: &PublicKey,
@@ -888,7 +848,6 @@ fn decode_validate_signed_genesis(
         executed_block_wire_hash,
     })
 }
-
 fn verify_genesis_finality_proof(
     proof: &BridgeFinalityProof,
     expectations: &ExpectedRosterDocument,
@@ -966,7 +925,6 @@ fn verify_genesis_finality_proof(
         semantic_commit_decision_id(&artifact.commit_qc.as_ref())?,
     ))
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "status binding, proof audit, quorum accounting, and cryptographic verification form one ordered fail-closed flow"
@@ -1021,7 +979,6 @@ fn verify_decoded(
             hex::encode(expected_node_fingerprint.as_ref()),
         ));
     }
-
     let artifact = &proof.finality_artifact;
     if artifact.height_context.network_id != expectations.network_id {
         return Err(format!(
@@ -1039,7 +996,6 @@ fn verify_decoded(
     if artifact.height_context.mode != ConsensusMode::Npos {
         return Err("proof consensus mode is not current NPoS".to_owned());
     }
-
     if status.last_committed_height != artifact.height {
         return Err(format!(
             "status last_committed_height {} does not match proof height {}",
@@ -1060,7 +1016,6 @@ fn verify_decoded(
     if status_commit.certificate != artifact.commit_qc.as_ref() {
         return Err("status last_commit_qc certificate does not match proof CommitQC".to_owned());
     }
-
     let expected_peers = parse_expected_validator_keys(&expectations.validator_keys)?;
     let actual_peers = artifact
         .height_context
@@ -1074,7 +1029,6 @@ fn verify_decoded(
                 .to_owned(),
         );
     }
-
     let validator_count = u32::try_from(artifact.height_context.roster.len())
         .map_err(|_| "proof validator roster is too large".to_owned())?;
     if artifact.height_context.quorum.min_signers != expectations.min_signers {
@@ -1083,7 +1037,6 @@ fn verify_decoded(
             artifact.height_context.quorum.min_signers, expectations.min_signers
         ));
     }
-
     let mut total_power = 0_u64;
     let mut validator_keys = Vec::with_capacity(artifact.height_context.roster.len());
     let mut validator_powers = Vec::with_capacity(artifact.height_context.roster.len());
@@ -1106,7 +1059,6 @@ fn verify_decoded(
             artifact.height_context.quorum.total_power
         ));
     }
-
     let signer_count = u32::try_from(artifact.commit_qc.signers.len())
         .map_err(|_| "proof signer list is too large".to_owned())?;
     let mut signed_power = 0_u64;
@@ -1133,7 +1085,6 @@ fn verify_decoded(
             "proof signed power {signed_power} is not a strict two-thirds supermajority of {total_power}"
         ));
     }
-
     if status_commit.validator_count != validator_count
         || status_commit.signer_count != signer_count
         || status_commit.min_signers != expectations.min_signers
@@ -1152,7 +1103,6 @@ fn verify_decoded(
             expectations.min_signers,
         ));
     }
-
     let trusted_context_id = status_commit.certificate.round.context_id;
     if artifact.context_id() != trusted_context_id {
         return Err(
@@ -1168,7 +1118,6 @@ fn verify_decoded(
     verify_finality_proof(proof, &verification)
         .map_err(|error| format!("cryptographic bridge finality verification failed: {error}"))?;
     let commit_decision_id = semantic_commit_decision_id(&artifact.commit_qc.as_ref())?;
-
     Ok(VerificationReceipt {
         schema_version: LEGACY_RECEIPT_SCHEMA_VERSION,
         status: "validated".to_owned(),
@@ -1191,7 +1140,6 @@ fn verify_decoded(
         status_sha256,
     })
 }
-
 fn validate_expectations(expectations: &ExpectedRosterDocument) -> Result<(), String> {
     if expectations.schema_version != LEGACY_EXPECTATIONS_SCHEMA_VERSION {
         return Err(format!(
@@ -1231,7 +1179,6 @@ fn validate_expectations(expectations: &ExpectedRosterDocument) -> Result<(), St
     }
     Ok(())
 }
-
 fn parse_expected_validator_keys(keys: &[String]) -> Result<Vec<PeerId>, String> {
     let mut peers = Vec::with_capacity(keys.len());
     let mut unique = BTreeSet::new();
@@ -1244,7 +1191,6 @@ fn parse_expected_validator_keys(keys: &[String]) -> Result<Vec<PeerId>, String>
     }
     Ok(peers)
 }
-
 fn parse_expected_peer_key(key: &str, label: &str) -> Result<PeerId, String> {
     let peer = key
         .parse::<PeerId>()
@@ -1263,7 +1209,6 @@ fn parse_expected_peer_key(key: &str, label: &str) -> Result<PeerId, String> {
     }
     Ok(peer)
 }
-
 fn semantic_commit_decision_id(certificate: &QuorumCertificateRef) -> Result<String, String> {
     if certificate.phase != GlobalPhase::Commit {
         return Err("semantic commit decision identity requires a CommitQC".to_owned());
@@ -1278,11 +1223,9 @@ fn semantic_commit_decision_id(certificate: &QuorumCertificateRef) -> Result<Str
     };
     Ok(hex::encode(Hash::new(identity.encode()).as_ref()))
 }
-
 fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
-
 fn compiled_build_fingerprint() -> Hash {
     let mut preimage = env!("CARGO_PKG_VERSION").as_bytes().to_vec();
     preimage.extend_from_slice(
@@ -1292,12 +1235,10 @@ fn compiled_build_fingerprint() -> Hash {
     );
     Hash::new(preimage)
 }
-
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
     use std::{io::Write as _, os::fd::AsRawFd as _};
-
     use iroha_crypto::{Hash, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         account::AccountId,
@@ -1317,9 +1258,7 @@ mod tests {
         },
         transaction::signed::TransactionBuilder,
     };
-
     use super::*;
-
     struct Fixture {
         status: SumeragiV2Status,
         proof: BridgeFinalityProof,
@@ -1330,7 +1269,6 @@ mod tests {
         signed_genesis: Vec<u8>,
         challenge: [u8; 32],
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "the fixture constructs one cryptographically linked genesis, context, quorum certificate, status, proof, and attestation"
@@ -1544,7 +1482,6 @@ mod tests {
             challenge,
         }
     }
-
     fn verify_fixture(fixture: &Fixture) -> Result<VerificationReceipt, String> {
         let status = norito::json::to_json(&fixture.status).expect("encode status");
         let proof = norito::json::to_json(&fixture.proof).expect("encode proof");
@@ -1552,7 +1489,6 @@ mod tests {
             norito::json::to_json(&fixture.expectations).expect("encode expectations");
         verify_json_inputs(status.as_bytes(), proof.as_bytes(), expectations.as_bytes())
     }
-
     fn attested_expectations(fixture: &Fixture) -> AttestedExpectedRosterDocument {
         AttestedExpectedRosterDocument {
             schema_version: ATTESTED_EXPECTATIONS_SCHEMA_VERSION,
@@ -1567,7 +1503,6 @@ mod tests {
             signed_genesis_sha256: sha256_hex(&fixture.signed_genesis),
         }
     }
-
     fn verify_attested_fixture(
         fixture: &Fixture,
         expectations: &AttestedExpectedRosterDocument,
@@ -1583,7 +1518,6 @@ mod tests {
             challenge,
         )
     }
-
     fn resign_attestation(fixture: &mut Fixture) {
         fixture.attestation.signature = SignatureOf::try_from_hash(
             fixture.node_signer.private_key(),
@@ -1591,7 +1525,6 @@ mod tests {
         )
         .expect("re-sign adversarial attestation");
     }
-
     fn mirror_height_one_genesis_proof_into_tip(fixture: &mut Fixture) {
         fixture.attestation.body.finality_proof =
             fixture.attestation.body.genesis_finality_proof.clone();
@@ -1606,14 +1539,12 @@ mod tests {
             .expect("height-one commit status")
             .certificate = artifact.commit_qc.as_ref();
     }
-
     #[test]
     fn valid_attested_mode_binds_signed_genesis_and_both_commit_decisions() {
         let fixture = fixture();
         let expectations = attested_expectations(&fixture);
         let receipt = verify_attested_fixture(&fixture, &expectations, fixture.challenge)
             .expect("verify attested proof");
-
         assert_eq!(receipt.schema_version, ATTESTED_RECEIPT_SCHEMA_VERSION);
         assert_eq!(receipt.status, "validated");
         assert_eq!(receipt.challenge, hex::encode(fixture.challenge));
@@ -1676,7 +1607,6 @@ mod tests {
         );
         assert_eq!(receipt.attestation_sha256.len(), 64);
     }
-
     #[test]
     fn attested_mode_rejects_wrong_challenge_signature_node_and_build() {
         let fixture = fixture();
@@ -1686,7 +1616,6 @@ mod tests {
                 .expect_err("reject wrong challenge")
                 .contains("exact caller challenge")
         );
-
         let mut forged_body = self::fixture();
         forged_body.attestation.body.challenge = [0xC3; 32];
         assert!(
@@ -1698,7 +1627,6 @@ mod tests {
             .expect_err("reject unsigned body change")
             .contains("node signature is invalid")
         );
-
         let mut wrong_node = attested_expectations(&fixture);
         wrong_node.expected_node_key = wrong_node.validator_keys[1].clone();
         assert!(
@@ -1706,7 +1634,6 @@ mod tests {
                 .expect_err("reject another expected node")
                 .contains("node_id does not match")
         );
-
         let mut wrong_network = attested_expectations(&fixture);
         wrong_network.network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -1717,7 +1644,6 @@ mod tests {
                 .expect_err("reject another expected network")
                 .contains("attestation network id does not match")
         );
-
         let mut wrong_genesis_binding = self::fixture();
         wrong_genesis_binding.attestation.body.network_id = wrong_network.network_id;
         resign_attestation(&mut wrong_genesis_binding);
@@ -1732,7 +1658,6 @@ mod tests {
             .expect_err("reject a network identity not derived from the signed genesis")
             .contains("does not match decoded signed genesis")
         );
-
         let mut wrong_build = self::fixture();
         wrong_build.attestation.body.status.build_fingerprint = Hash::new(b"other build");
         resign_attestation(&mut wrong_build);
@@ -1746,7 +1671,6 @@ mod tests {
             .contains("does not match this current-source verifier build")
         );
     }
-
     #[test]
     fn attested_mode_rejects_wrong_genesis_key_sha_and_execution_root() {
         let fixture = fixture();
@@ -1760,7 +1684,6 @@ mod tests {
                 .expect_err("reject wrong genesis signer")
                 .contains("signed genesis validation failed")
         );
-
         let mut wrong_sha = attested_expectations(&fixture);
         wrong_sha.signed_genesis_sha256 = "11".repeat(32);
         assert!(
@@ -1768,7 +1691,6 @@ mod tests {
                 .expect_err("reject wrong signed genesis sha")
                 .contains("signed genesis SHA-256")
         );
-
         let mut substituted_execution = self::fixture();
         substituted_execution
             .attestation
@@ -1790,7 +1712,6 @@ mod tests {
             .contains("execution commitment does not match signed genesis executed wire")
         );
     }
-
     #[test]
     fn attested_mode_rejects_forged_genesis_and_tip_qcs() {
         let mut forged_genesis_qc = fixture();
@@ -1812,7 +1733,6 @@ mod tests {
             .expect_err("reject forged genesis QC")
             .contains("cryptographic genesis finality verification failed")
         );
-
         let mut forged_tip_qc = fixture();
         forged_tip_qc
             .attestation
@@ -1832,7 +1752,6 @@ mod tests {
             .contains("height-one genesis and tip proofs do not match exactly")
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn inherited_fd_mode_executes_full_attested_verification_over_four_distinct_handles() {
@@ -1844,7 +1763,6 @@ mod tests {
             read_bounded_fd(file.as_raw_fd(), 1024, "test input").expect("read inherited fd"),
             payload
         );
-
         let challenge = [0x5C; 32];
         let mut challenge_file = tempfile::tempfile().expect("anonymous challenge input");
         challenge_file
@@ -1856,7 +1774,6 @@ mod tests {
                 .expect("read exact raw challenge"),
             challenge
         );
-
         let cli = parse_args([
             "--attestation-fd".to_owned(),
             "7".to_owned(),
@@ -1877,7 +1794,6 @@ mod tests {
                 challenge: ChallengeSource::InheritedFd(10),
             }
         ));
-
         let fixture = fixture();
         let attestation_json =
             norito::json::to_json(&fixture.attestation).expect("encode attestation");
@@ -1916,7 +1832,6 @@ mod tests {
         assert!(receipt_json.contains("\"schema_version\":4"));
         assert!(receipt_json.contains("\"status\":\"validated\""));
         assert!(receipt_json.contains(&hex::encode(fixture.challenge)));
-
         assert!(
             parse_args([
                 "--attestation-fd".to_owned(),
@@ -1932,12 +1847,10 @@ mod tests {
             .contains("reused")
         );
     }
-
     #[test]
     fn valid_current_height_one_produces_bound_receipt() {
         let fixture = fixture();
         let receipt = verify_fixture(&fixture).expect("verify current proof");
-
         assert_eq!(receipt.schema_version, LEGACY_RECEIPT_SCHEMA_VERSION);
         assert_eq!(receipt.status, "validated");
         assert_eq!(receipt.chain_id, PK2_CHAIN_ID);
@@ -1966,7 +1879,6 @@ mod tests {
         assert_eq!(receipt.status_sha256.len(), 64);
         assert_eq!(receipt.proof_sha256.len(), 64);
     }
-
     #[test]
     fn rejects_proof_chosen_roster_and_threshold() {
         let mut wrong_key = fixture();
@@ -1976,7 +1888,6 @@ mod tests {
                 .expect_err("reject wrong roster")
                 .contains("expected validator key order/set")
         );
-
         let mut wrong_threshold = fixture();
         wrong_threshold.expectations.min_signers = 4;
         assert!(
@@ -1985,7 +1896,6 @@ mod tests {
                 .contains("canonical strict two-thirds")
         );
     }
-
     #[test]
     fn rejects_status_from_another_node_or_nonmember_expectation() {
         let mut wrong_status_node = fixture();
@@ -2002,7 +1912,6 @@ mod tests {
                 .expect_err("reject status from another node")
                 .contains("does not match expected_node_key")
         );
-
         let mut nonmember = fixture();
         nonmember.expectations.expected_node_key = PeerId::new(
             KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -2017,12 +1926,10 @@ mod tests {
                 .contains("expected_node_key is not present in validator_keys")
         );
     }
-
     #[test]
     fn semantic_commit_decision_id_ignores_reproposal_round_and_qc_representation() {
         let fixture = fixture();
         let baseline = fixture.proof.finality_artifact.commit_qc.as_ref();
-
         let mut alternate_qc = fixture.proof.finality_artifact.commit_qc.clone();
         alternate_qc.round.view = alternate_qc.round.view.saturating_add(1);
         alternate_qc.proposal_round = alternate_qc.round;
@@ -2034,7 +1941,6 @@ mod tests {
             semantic_commit_decision_id(&baseline).expect("baseline decision id"),
             semantic_commit_decision_id(&alternate).expect("alternate decision id"),
         );
-
         let mut different_execution = baseline;
         different_execution.execution_commitment.post_state_root =
             Hash::new(b"different deterministic post state");
@@ -2044,7 +1950,6 @@ mod tests {
             semantic_commit_decision_id(&different_execution)
                 .expect("different execution decision id"),
         );
-
         let mut different_subject = baseline;
         different_subject.subject.payload_hash = Hash::new(b"different payload");
         assert!(!baseline.same_commit_decision(different_subject));
@@ -2052,7 +1957,6 @@ mod tests {
             semantic_commit_decision_id(&baseline).expect("baseline decision id"),
             semantic_commit_decision_id(&different_subject).expect("different subject decision id"),
         );
-
         let mut reproposed = baseline;
         reproposed.round.view = reproposed.round.view.saturating_add(1);
         reproposed.proposal_round.view = reproposed.proposal_round.view.saturating_add(1);
@@ -2061,7 +1965,6 @@ mod tests {
             semantic_commit_decision_id(&baseline).expect("baseline decision id"),
             semantic_commit_decision_id(&reproposed).expect("re-proposed decision id"),
         );
-
         let mut prepare = baseline;
         prepare.phase = GlobalPhase::Prepare;
         assert!(
@@ -2070,7 +1973,6 @@ mod tests {
                 .contains("requires a CommitQC")
         );
     }
-
     #[test]
     fn rejects_status_summary_or_missing_commit_at_height_one() {
         let mut wrong_power = fixture();
@@ -2085,7 +1987,6 @@ mod tests {
                 .expect_err("reject mismatched status power")
                 .contains("quorum summary does not exactly match")
         );
-
         let mut missing_commit = fixture();
         missing_commit.status.phase = SumeragiV2StatusPhase::AwaitingProposal;
         missing_commit.status.body_state = SumeragiV2BodyState::Missing;
@@ -2099,7 +2000,6 @@ mod tests {
                 .contains("last_committed_height")
         );
     }
-
     #[test]
     fn rejects_invalid_aggregate_signature_and_restart_required() {
         let mut forged = fixture();
@@ -2109,7 +2009,6 @@ mod tests {
                 .expect_err("reject forged aggregate")
                 .contains("cryptographic bridge finality verification failed")
         );
-
         let mut stopped = fixture();
         stopped.status.restart_required = true;
         assert!(
@@ -2118,7 +2017,6 @@ mod tests {
                 .contains("restart_required=true")
         );
     }
-
     #[test]
     fn strict_expectations_json_rejects_unknown_fields() {
         let fixture = fixture();
@@ -2128,14 +2026,12 @@ mod tests {
             norito::json::to_json(&fixture.expectations).expect("encode expectations");
         let hostile = expectations.strip_suffix('}').expect("object").to_owned()
             + ",\"legacy_fallback\":true}";
-
         assert!(
             verify_json_inputs(status.as_bytes(), proof.as_bytes(), hostile.as_bytes())
                 .expect_err("reject unknown expectation")
                 .contains("invalid expected-roster JSON")
         );
     }
-
     #[test]
     fn release_binary_references_exact_source_marker() {
         let embedded = std::hint::black_box(BUILD_SOURCE_ID);

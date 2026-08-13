@@ -1,20 +1,15 @@
 //! Exclusive broker-instance locking and identity-pinned endpoint removal.
-
 use std::{ffi::OsStr, fmt::Write as _, fs};
-
 use super::{RuntimeProviderBrokerServerErrorV1, SocketIdentity, socket_identity_from_stat};
-
 const INSTANCE_LOCK_NAME: &str = ".runtime-provider-broker-v1.lock";
 const INSTANCE_LOCK_MODE: u32 = 0o600;
 const QUARANTINE_NAME_ATTEMPTS: usize = 4;
-
 #[derive(Clone, Copy)]
 struct ExactSocketEntry {
     identity: SocketIdentity,
     expected_service_uid: u32,
     socket_mode: u32,
 }
-
 /// Full-lifetime exclusive lock proving that no conforming broker is active.
 pub(super) struct InstanceLockGuard {
     file: fs::File,
@@ -22,7 +17,6 @@ pub(super) struct InstanceLockGuard {
     expected_service_uid: u32,
     marker_preexisted: bool,
 }
-
 impl InstanceLockGuard {
     /// Open or exclusively create, validate, and lock the fixed instance file.
     pub(super) fn acquire(
@@ -48,7 +42,6 @@ impl InstanceLockGuard {
         guard.verify(parent_directory)?;
         Ok(guard)
     }
-
     /// Revalidate both the held descriptor and its fixed directory entry.
     pub(super) fn verify(
         &self,
@@ -63,7 +56,6 @@ impl InstanceLockGuard {
         }
         verify_lock_entry(parent_directory, self.identity, self.expected_service_uid)
     }
-
     fn discard_new_marker(
         self,
         parent_directory: &fs::File,
@@ -116,14 +108,12 @@ impl InstanceLockGuard {
             Ok(_) | Err(_) => Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed),
         }
     }
-
     #[cfg(test)]
     /// Report whether acquisition opened a marker left by an earlier instance.
     pub(super) const fn marker_preexisted(&self) -> bool {
         self.marker_preexisted
     }
 }
-
 /// Acquire the instance lock and recover only a socket backed by an old marker.
 pub(super) fn prepare_endpoint(
     parent_directory: &fs::File,
@@ -170,7 +160,6 @@ pub(super) fn prepare_endpoint(
     guard.verify(parent_directory)?;
     Ok(guard)
 }
-
 /// Remove one exact bound endpoint through an unpredictable quarantine name.
 pub(super) fn cleanup_socket_entry(
     parent_directory: &fs::File,
@@ -193,13 +182,11 @@ pub(super) fn cleanup_socket_entry(
         || {},
     )
 }
-
 /// Return an unpredictable, fixed-width staging socket basename.
 pub(super) fn staging_socket_name() -> Result<std::ffi::OsString, RuntimeProviderBrokerServerErrorV1>
 {
     random_private_name(".b-")
 }
-
 #[cfg(test)]
 /// Exercise stale recovery with a substitution before the quarantine rename.
 pub(super) fn recover_stale_endpoint_with_probe<F>(
@@ -234,7 +221,6 @@ where
         before_quarantine_rename,
     )
 }
-
 #[cfg(test)]
 /// Exercise orderly cleanup with a substitution before the quarantine rename.
 pub(super) fn cleanup_socket_entry_with_probe<F>(
@@ -262,7 +248,6 @@ where
         before_quarantine_rename,
     )
 }
-
 fn open_lock_file(
     parent_directory: &fs::File,
 ) -> Result<(fs::File, bool), RuntimeProviderBrokerServerErrorV1> {
@@ -278,7 +263,6 @@ fn open_lock_file(
         Err(_) => Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable),
     }
 }
-
 fn open_existing_lock(parent_directory: &fs::File) -> rustix::io::Result<fs::File> {
     rustix::fs::openat(
         parent_directory,
@@ -288,7 +272,6 @@ fn open_existing_lock(parent_directory: &fs::File) -> rustix::io::Result<fs::Fil
     )
     .map(fs::File::from)
 }
-
 fn create_lock_exclusively(parent_directory: &fs::File) -> rustix::io::Result<fs::File> {
     rustix::fs::openat(
         parent_directory,
@@ -302,7 +285,6 @@ fn create_lock_exclusively(parent_directory: &fs::File) -> rustix::io::Result<fs
     )
     .map(fs::File::from)
 }
-
 fn remove_exact_socket_entry_inner<F>(
     parent_directory: &fs::File,
     socket_name: &OsStr,
@@ -327,7 +309,6 @@ where
     }
     before_quarantine_rename();
     guard.verify(parent_directory)?;
-
     let quarantine_name = rename_to_quarantine(parent_directory, socket_name, ".q-")?;
     let quarantined = match socket_metadata(parent_directory, quarantine_name.as_os_str()) {
         Ok(Some(metadata)) => metadata,
@@ -366,7 +347,6 @@ where
         Ok(Some(_)) | Err(_) => Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed),
     }
 }
-
 fn rename_to_quarantine(
     parent_directory: &fs::File,
     entry_name: &OsStr,
@@ -389,7 +369,6 @@ fn rename_to_quarantine(
     }
     Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed)
 }
-
 fn restore_quarantined_entry(
     parent_directory: &fs::File,
     quarantine_name: &OsStr,
@@ -404,7 +383,6 @@ fn restore_quarantined_entry(
     )
     .is_ok()
 }
-
 fn random_private_name(
     prefix: &str,
 ) -> Result<std::ffi::OsString, RuntimeProviderBrokerServerErrorV1> {
@@ -422,7 +400,6 @@ fn random_private_name(
     }
     Ok(name.into())
 }
-
 fn socket_metadata(
     parent_directory: &fs::File,
     socket_name: &OsStr,
@@ -437,7 +414,6 @@ fn socket_metadata(
         Err(_) => Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable),
     }
 }
-
 fn verify_lock_entry(
     parent_directory: &fs::File,
     identity: SocketIdentity,
@@ -456,14 +432,12 @@ fn verify_lock_entry(
     }
     Ok(())
 }
-
 fn lock_metadata_is_exact(metadata: &rustix::fs::Stat, expected_service_uid: u32) -> bool {
     rustix::fs::FileType::from_raw_mode(metadata.st_mode) == rustix::fs::FileType::RegularFile
         && metadata.st_uid == expected_service_uid
         && u32::from(metadata.st_mode & 0o7777) == INSTANCE_LOCK_MODE
         && metadata.st_nlink == 1
 }
-
 pub(super) fn socket_metadata_is_exact(
     metadata: &rustix::fs::Stat,
     expected_service_uid: u32,

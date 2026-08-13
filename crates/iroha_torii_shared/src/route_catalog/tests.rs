@@ -1,9 +1,7 @@
 // Route-catalog validation and hard-cut surface regressions.
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn mcp_json_rpc_is_a_sealed_nested_route_gateway() {
         let route = mcp_transport::JSON_RPC;
@@ -15,7 +13,6 @@ mod tests {
         );
         assert_eq!(RouteCatalog::new(mcp_transport::ROUTES).validate(), Ok(()));
     }
-
     #[test]
     fn nested_route_authentication_rejects_mismatched_admission_or_surface() {
         let missing_auth = RouteDescriptor::new(
@@ -47,7 +44,6 @@ mod tests {
                 == CatalogValidationErrorKind::NestedAuthenticationRequiresProtocolTargetRoute
         }));
     }
-
     const FEATURED_ROUTES: &[RouteDescriptor] = &[
         RouteDescriptor::new(
             "test.always",
@@ -80,12 +76,10 @@ mod tests {
             AdmissionPolicy::Public,
         ),
     ];
-
     #[test]
     fn final_offline_catalog_is_valid_and_unique() {
         let catalog = RouteCatalog::new(offline::ROUTES);
         assert_eq!(catalog.validate(), Ok(()));
-
         let ids: BTreeSet<_> = catalog
             .routes()
             .iter()
@@ -99,12 +93,10 @@ mod tests {
         assert_eq!(ids.len(), offline::ROUTES.len());
         assert_eq!(method_paths.len(), offline::ROUTES.len());
     }
-
     #[test]
     fn canonical_catalog_satisfies_closed_security_axes() {
         assert_eq!(RouteCatalog::new(CATALOGED_ROUTES).validate(), Ok(()));
     }
-
     #[test]
     fn offline_routes_are_universal_for_app_api_and_project_to_mcp() {
         let catalog = RouteCatalog::new(offline::ROUTES);
@@ -126,7 +118,6 @@ mod tests {
             "the offline route family must be available to MCP clients"
         );
     }
-
     #[test]
     fn canonical_catalog_retires_global_sumeragi_rbc_and_collectors() {
         assert!(
@@ -147,12 +138,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn canonical_catalog_retires_direct_sumeragi_mutation_routes() {
         assert_eq!(sumeragi::EVIDENCE_LIST.method(), HttpMethod::Get);
         assert_eq!(sumeragi::EVIDENCE_LIST.path(), "/v1/sumeragi/evidence");
-
         for (stable_route_id, path) in [
             ("operator.sumeragi.evidence.submit", "/v1/sumeragi/evidence"),
             ("operator.sumeragi.vrf.commit", "/v1/sumeragi/vrf/commit"),
@@ -171,7 +160,6 @@ mod tests {
                 "retired Sumeragi mutation route remains cataloged: POST {path}"
             );
         }
-
         for path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
             assert!(
                 CATALOGED_ROUTES.iter().all(|route| route.path() != path),
@@ -179,7 +167,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn canonical_catalog_exposes_only_the_authoritative_privacy_routes() {
         let privacy_routes = CATALOGED_ROUTES
@@ -206,7 +193,6 @@ mod tests {
             runtime_governance::PRIVACY_CAPABILITIES.stable_route_id(),
             "privacy.capabilities"
         );
-
         for (route, stable_route_id, path) in [
             (
                 runtime_governance::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
@@ -243,7 +229,6 @@ mod tests {
             assert!(!route.implicit_head());
         }
     }
-
     #[test]
     fn canonical_catalog_exposes_the_complete_regulated_account_recovery_family() {
         let expected = [
@@ -275,7 +260,6 @@ mod tests {
             assert!(CATALOGED_ROUTES.contains(&route));
         }
     }
-
     #[test]
     fn canonical_catalog_has_no_direct_storage_ingest_route() {
         assert!(
@@ -291,7 +275,6 @@ mod tests {
             "the retired direct storage-ingest route id must not be reusable"
         );
     }
-
     #[test]
     fn internal_torii_proxy_is_the_only_identity_bound_operator_route() {
         assert_eq!(core::INTERNAL_PROXY.surface(), ApiSurface::Operator);
@@ -300,7 +283,6 @@ mod tests {
             AuthenticationPolicy::IdentityBoundSignature
         );
         assert_eq!(validate_catalog(&[core::INTERNAL_PROXY]), Ok(()));
-
         let generic_identity_bound_operator = RouteDescriptor::new(
             "test.identity_bound_operator",
             HttpMethod::Post,
@@ -317,7 +299,6 @@ mod tests {
             error.kind == CatalogValidationErrorKind::OperatorSurfaceRequiresAuthentication
         }));
     }
-
     #[test]
     fn sccp_governance_descriptor_uses_the_canonical_uri() {
         assert_eq!(
@@ -325,7 +306,6 @@ mod tests {
             crate::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
         );
     }
-
     #[test]
     fn protected_namespace_update_is_an_explicit_operator_mcp_route() {
         let route = runtime_governance::GOV_PROTECTED_POST;
@@ -337,13 +317,11 @@ mod tests {
         assert!(route.projections().openapi());
         assert!(!route.projections().sdk());
         assert!(route.projections().mcp());
-
         let routes = [route];
         let projected = RouteCatalog::new(&routes)
             .project(CatalogProjection::Mcp, EnabledFeatures::new(&["app_api"]));
         assert_eq!(projected, vec![&routes[0]]);
     }
-
     #[test]
     fn bridge_finality_routes_are_not_telemetry_gated() {
         for route in [
@@ -354,13 +332,11 @@ mod tests {
             assert_eq!(route.feature_gate(), FeatureGate::Always);
         }
     }
-
     #[test]
     fn canonical_websocket_streams_are_openapi_projected() {
         let enabled = EnabledFeatures::new(&["app_api"]);
         let projected =
             RouteCatalog::new(streaming::APP_ROUTES).project(CatalogProjection::OpenApi, enabled);
-
         for route in [streaming::SUBSCRIPTION_WS, streaming::BLOCKS_WS] {
             assert!(route.projections().openapi());
             assert!(!route.projections().sdk());
@@ -368,13 +344,11 @@ mod tests {
             assert!(projected.iter().any(|projected| **projected == route));
         }
     }
-
     #[test]
     fn documented_system_and_telemetry_routes_are_openapi_projected() {
         let enabled = EnabledFeatures::new(&["app_api", "telemetry", "profiling"]);
         let projected =
             RouteCatalog::new(CATALOGED_ROUTES).project(CatalogProjection::OpenApi, enabled);
-
         for route in [
             diagnostic::STATUS,
             diagnostic::STATUS_TAIL,
@@ -392,7 +366,6 @@ mod tests {
             assert!(!route.projections().mcp());
             assert!(projected.iter().any(|projected| **projected == route));
         }
-
         assert!(
             !application_api::TELEMETRY_PROPAGATION_GET
                 .projections()
@@ -404,7 +377,6 @@ mod tests {
                 .any(|route| **route == application_api::TELEMETRY_PROPAGATION_GET)
         );
     }
-
     #[test]
     fn first_release_catalog_excludes_unsupported_method_paths() {
         for (method, path) in [
@@ -424,7 +396,6 @@ mod tests {
                 "unsupported route leaked into the first-release catalog: {method:?} {path}"
             );
         }
-
         assert!(CATALOGED_ROUTES.contains(&core::NEXUS_LIFECYCLE_GET));
         assert!(
             CATALOGED_ROUTES
@@ -435,12 +406,10 @@ mod tests {
                 .contains(&contracts_and_verification_keys::SORAFS_CAPACITY_POR_VERDICT_POST)
         );
     }
-
     #[test]
     fn canonical_catalog_includes_exact_gateway_and_directory_routes() {
         let catalog = RouteCatalog::new(CATALOGED_ROUTES);
         assert_eq!(catalog.validate(), Ok(()));
-
         for expected in soracloud_gateway::ROUTES
             .iter()
             .chain(content_directory::ROUTES)
@@ -459,7 +428,6 @@ mod tests {
             "the first-release gateway must not expose a trailing-slash alias"
         );
     }
-
     #[test]
     fn public_runtime_gateway_authentication_is_exactly_scoped() {
         let catalog_routes = CATALOGED_ROUTES
@@ -468,7 +436,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(catalog_routes.len(), soracloud_gateway::ROUTES.len());
         assert_eq!(soracloud_gateway::ROUTES.len(), 4);
-
         for route in soracloud_gateway::ROUTES {
             assert!(catalog_routes.iter().any(|catalog| **catalog == *route));
             assert_eq!(route.surface(), ApiSurface::Protocol);
@@ -479,7 +446,6 @@ mod tests {
             assert_eq!(route.projections(), RouteProjections::NONE);
         }
     }
-
     #[test]
     fn dedicated_onboarding_authentication_is_exactly_scoped() {
         for route in [
@@ -503,7 +469,6 @@ mod tests {
             "no unrelated route may inherit the onboarding credential policy"
         );
     }
-
     #[test]
     fn formerly_bearer_only_routes_require_exact_signatures() {
         assert_eq!(
@@ -523,7 +488,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn iso20022_routes_require_fresh_operator_signatures() {
         for route in iso20022::ROUTES {
@@ -534,7 +498,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn vpn_and_push_device_routes_declare_canonical_account_authentication() {
         for route in [
@@ -555,7 +518,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn trusted_internal_account_reads_are_not_projected_to_public_tooling() {
         let routes = [
@@ -578,7 +540,6 @@ mod tests {
         assert!(catalog.project(CatalogProjection::Sdk, enabled).is_empty());
         assert!(catalog.project(CatalogProjection::Mcp, enabled).is_empty());
     }
-
     #[test]
     fn account_alias_visibility_and_signed_operator_routes_declare_exact_authentication() {
         for route in [
@@ -593,7 +554,6 @@ mod tests {
                 route.stable_route_id()
             );
         }
-
         for route in [
             aliases::SETUP_PLAN,
             aliases::LEASE_RENEW_PLAN,
@@ -610,13 +570,11 @@ mod tests {
                 route.stable_route_id()
             );
         }
-
         assert_eq!(
             aliases::ASSET_RESOLVE.authentication(),
             AuthenticationPolicy::ToriiDefault,
             "public asset aliases do not expose an account binding"
         );
-
         for route in [
             contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
             contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST,
@@ -630,12 +588,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn sorafs_catalog_has_one_strict_first_release_path_per_operation() {
         let catalog = RouteCatalog::new(sorafs::ROUTES);
         assert_eq!(catalog.validate(), Ok(()));
-
         for expected in sorafs::ROUTES {
             assert!(
                 CATALOGED_ROUTES.iter().any(|route| route == expected),
@@ -649,7 +605,6 @@ mod tests {
                 expected.stable_route_id()
             );
         }
-
         for unsupported_path in [
             "/ws/reputation",
             "/sorafs/cid/{cid}/",
@@ -704,7 +659,6 @@ mod tests {
                 "normalization alias must be rejected: {invalid_path}"
             );
         }
-
         let trailing_root = RouteDescriptor::new(
             "protocol.sorafs_invalid_root",
             HttpMethod::Get,
@@ -720,7 +674,6 @@ mod tests {
         .with_implicit_head(true);
         assert!(validate_catalog(&[trailing_root]).is_err());
     }
-
     #[test]
     fn sorafs_hedging_billing_routes_require_canonical_auth_and_tooling_projection() {
         for route in [
@@ -751,7 +704,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn sorafs_pop_routes_declare_their_authenticated_protocol_effects() {
         let routes = [
@@ -786,7 +738,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn provider_advert_is_an_authenticated_protocol_mutation() {
         let route = sorafs::PROVIDER_ADVERT;
@@ -800,7 +751,6 @@ mod tests {
             AuthenticationPolicy::ProtocolHandshake
         );
     }
-
     #[test]
     fn account_faucet_claim_is_an_authenticated_protocol_mutation() {
         let route = application_api::ACCOUNTS_FAUCET_POST;
@@ -814,7 +764,6 @@ mod tests {
             AuthenticationPolicy::ProtocolHandshake
         );
     }
-
     #[test]
     fn converted_route_families_are_valid_and_exclude_retired_spellings() {
         let routes = aliases::ROUTES
@@ -827,7 +776,6 @@ mod tests {
             .copied()
             .collect::<Vec<_>>();
         assert_eq!(validate_catalog(&routes), Ok(()));
-
         for unsupported_path in [
             "/v1/aliases/resolve_index",
             "/v1/aliases/by_account",
@@ -849,7 +797,6 @@ mod tests {
                 && !route.projections().mcp()
         }));
     }
-
     fn contract_and_application_routes() -> Vec<RouteDescriptor> {
         contracts_and_verification_keys::ROUTES
             .iter()
@@ -857,12 +804,10 @@ mod tests {
             .copied()
             .collect()
     }
-
     #[test]
     fn contract_and_application_routes_are_canonical() {
         let routes = contract_and_application_routes();
         assert_eq!(validate_catalog(&routes), Ok(()));
-
         for expected in &routes {
             assert!(
                 CATALOGED_ROUTES.iter().any(|route| route == expected),
@@ -872,7 +817,6 @@ mod tests {
             assert_eq!(expected.path_normalization(), PathNormalization::Strict);
         }
     }
-
     #[test]
     fn contract_and_application_routes_exclude_retired_spellings() {
         let routes = contract_and_application_routes();
@@ -910,7 +854,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn contract_and_application_routes_include_first_release_spellings() {
         let routes = contract_and_application_routes();
@@ -927,7 +870,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn contract_and_application_route_policies_are_projection_safe() {
         for route in [
@@ -943,7 +885,6 @@ mod tests {
                 route.stable_route_id()
             );
         }
-
         for route in [
             contracts_and_verification_keys::EVIDENCE_VIEWER_GET,
             contracts_and_verification_keys::EVIDENCE_VIEWER_CSS_GET,
@@ -957,7 +898,6 @@ mod tests {
             assert_eq!(route.projections(), RouteProjections::NONE);
             assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
         }
-
         for route in [
             contracts_and_verification_keys::SORAFS_CAPACITY_POR_PROOF_POST,
             contracts_and_verification_keys::SORAFS_CAPACITY_POR_VERDICT_POST,
@@ -971,7 +911,6 @@ mod tests {
             assert!(!route.projections().sdk());
             assert!(!route.projections().mcp());
         }
-
         assert_eq!(
             application_api::NOTIFY_DEVICES_POST.feature_gate(),
             FeatureGate::All(&["app_api", "push"])
@@ -985,7 +924,6 @@ mod tests {
             RouteMatch::Wildcard
         );
     }
-
     #[test]
     fn contract_post_routes_close_effect_admission_and_authentication_axes() {
         for route in contracts_and_verification_keys::ROUTES {
@@ -1009,7 +947,6 @@ mod tests {
                 );
             }
         }
-
         for route in [
             contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
             contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
@@ -1021,7 +958,6 @@ mod tests {
                 AuthenticationPolicy::CanonicalAccountSignature
             );
         }
-
         for route in [
             contracts_and_verification_keys::SORAFS_CAPACITY_DECLARE_POST,
             contracts_and_verification_keys::SORAFS_ORDERBOOK_ORDERS_POST,
@@ -1033,7 +969,6 @@ mod tests {
                 AuthenticationPolicy::CanonicalSignedBody
             );
         }
-
         for route in [
             contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,
             contracts_and_verification_keys::ZK_VK_REGISTER_POST,
@@ -1045,7 +980,6 @@ mod tests {
                 AuthenticationPolicy::CanonicalAccountSignature
             );
         }
-
         let public_posts = contracts_and_verification_keys::ROUTES
             .iter()
             .filter(|route| {
@@ -1070,7 +1004,6 @@ mod tests {
             assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
         }
     }
-
     #[test]
     fn pin_registration_is_a_closed_signed_body_mutation() {
         assert_eq!(sorafs::PIN_REGISTER.effect(), RouteEffect::Mutation);
@@ -1083,7 +1016,6 @@ mod tests {
             AuthenticationPolicy::CanonicalSignedBody
         );
     }
-
     #[test]
     fn app_api_post_dispatch_is_an_authenticated_compute_boundary() {
         for route in [
@@ -1100,7 +1032,6 @@ mod tests {
             assert_eq!(route.route_match(), RouteMatch::Wildcard);
         }
     }
-
     #[test]
     fn contract_and_application_route_projections_are_explicit() {
         for route in [
@@ -1134,7 +1065,6 @@ mod tests {
                 .openapi()
         );
     }
-
     #[test]
     fn telemetry_and_sumeragi_routes_are_valid_sharp_first_release_surfaces() {
         let routes = telemetry::ROUTES
@@ -1143,7 +1073,6 @@ mod tests {
             .copied()
             .collect::<Vec<_>>();
         assert_eq!(validate_catalog(&routes), Ok(()));
-
         for unsupported_path in [
             "/v1/sumeragi/new_view/json",
             "/v1/sumeragi/new_view/sse",
@@ -1165,7 +1094,6 @@ mod tests {
                 "missing canonical first-release route: {canonical_path}"
             );
         }
-
         assert!(
             telemetry::ROUTES
                 .iter()
@@ -1232,7 +1160,6 @@ mod tests {
                 AuthenticationPolicy::OperatorSignature
             );
         }
-
         let catalog = RouteCatalog::new(&routes);
         let without_features = catalog.project(CatalogProjection::Mounted, EnabledFeatures::none());
         assert!(
@@ -1250,13 +1177,11 @@ mod tests {
         );
         assert_eq!(all_features.len(), routes.len());
     }
-
     #[test]
     fn projections_are_explicit_and_sdk_is_a_canonical_superset() {
         let catalog = RouteCatalog::new(FEATURED_ROUTES);
         let no_features = EnabledFeatures::none();
         let app_api = EnabledFeatures::new(&["app_api"]);
-
         assert_eq!(
             catalog
                 .project(CatalogProjection::Mounted, no_features)
@@ -1286,7 +1211,6 @@ mod tests {
             1
         );
         assert_eq!(catalog.project(CatalogProjection::Mcp, app_api).len(), 1);
-
         let route_ids = |projection| {
             catalog
                 .project(projection, app_api)
@@ -1303,7 +1227,6 @@ mod tests {
         assert_ne!(mounted, mcp);
         assert_ne!(openapi, mcp);
     }
-
     #[test]
     fn feature_expressions_have_deterministic_semantics() {
         let enabled = EnabledFeatures::new(&["app_api", "telemetry"]);
@@ -1314,7 +1237,6 @@ mod tests {
         assert!(FeatureGate::Any(&["profiling", "telemetry"]).is_enabled(enabled));
         assert!(!FeatureGate::Any(&["profiling", "schema"]).is_enabled(enabled));
     }
-
     #[test]
     fn descriptor_builders_and_accessors_preserve_metadata() {
         let projections = RouteProjections::OPENAPI;
@@ -1336,7 +1258,6 @@ mod tests {
         })
         .with_implicit_head(true)
         .with_cors_options(true);
-
         assert_eq!(descriptor.stable_route_id(), "protocol.content");
         assert_eq!(descriptor.method(), HttpMethod::Get);
         assert_eq!(descriptor.method().as_str(), "GET");
@@ -1362,7 +1283,6 @@ mod tests {
         assert!(descriptor.cors_options());
         assert_eq!(validate_catalog(&[descriptor]), Ok(()));
     }
-
     #[test]
     fn content_wildcard_declares_manifest_conditional_authentication() {
         let descriptor = content_directory::CONTENT;
@@ -1373,7 +1293,6 @@ mod tests {
         assert_eq!(descriptor.route_match(), RouteMatch::Wildcard);
         assert!(descriptor.projections().openapi());
     }
-
     #[test]
     fn validation_reports_duplicate_ids_and_method_paths() {
         let routes = [
@@ -1423,7 +1342,6 @@ mod tests {
                 AdmissionPolicy::Public,
             ),
         ];
-
         let errors = validate_catalog(&routes).expect_err("duplicates must fail validation");
         assert!(
             errors
@@ -1447,7 +1365,6 @@ mod tests {
             )
         }));
     }
-
     #[test]
     fn canonical_path_grammar_rejects_ambiguous_shapes() {
         let invalid_paths = [
@@ -1459,7 +1376,6 @@ mod tests {
             "/v1/tests/readiness/",
             "/v1/tests/%72eadiness",
         ];
-
         for path in invalid_paths {
             let descriptor = RouteDescriptor::new(
                 "test.invalid_path",
@@ -1476,7 +1392,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn canonical_path_grammar_rejects_crud_read_operation_segments() {
         for descriptor in [
@@ -1531,7 +1446,6 @@ mod tests {
                 Err("static path segment uses a forbidden transport or CRUD word")
             );
         }
-
         for descriptor in [
             RouteDescriptor::new(
                 "test.resources_json_post",
@@ -1558,7 +1472,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn wildcard_and_protocol_exceptions_must_be_explicit() {
         let wildcard = RouteDescriptor::new(
@@ -1586,7 +1499,6 @@ mod tests {
         })
         .with_implicit_head(true);
         assert_eq!(validate_catalog(&[wildcard, health]), Ok(()));
-
         let implicit_wildcard = RouteDescriptor::new(
             "test.implicit_wildcard",
             HttpMethod::Get,
@@ -1598,7 +1510,6 @@ mod tests {
         );
         assert!(validate_catalog(&[implicit_wildcard]).is_err());
     }
-
     #[test]
     fn validation_enforces_projection_and_implicit_method_boundaries() {
         let routes = [
@@ -1654,7 +1565,6 @@ mod tests {
             )
             .with_authentication(AuthenticationPolicy::OperatorCredentialExchange),
         ];
-
         let errors = validate_catalog(&routes).expect_err("invalid boundaries must be rejected");
         assert!(errors.iter().any(|error| {
             error.kind == CatalogValidationErrorKind::DiagnosticToolingProjection
@@ -1675,7 +1585,6 @@ mod tests {
                 .any(|error| { error.kind == CatalogValidationErrorKind::ImplicitHeadRequiresGet })
         );
     }
-
     #[test]
     fn validation_rejects_unsafe_effect_and_principal_combinations() {
         let routes = [
@@ -1738,7 +1647,6 @@ mod tests {
             )
             .with_authentication(AuthenticationPolicy::ProtocolHandshake),
         ];
-
         let errors = validate_catalog(&routes).expect_err("unsafe admission metadata must fail");
         for expected in [
             CatalogValidationErrorKind::PublicMutation,
@@ -1754,7 +1662,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn critical_routes_expose_closed_effect_and_admission_axes() {
         for route in [
@@ -1795,7 +1702,6 @@ mod tests {
             pipeline::TRANSACTION_DETAILS.authentication(),
             AuthenticationPolicy::CanonicalSignedBody
         );
-
         assert_eq!(core::HEALTH.effect(), RouteEffect::ReadOnly);
         assert_eq!(core::HEALTH.admission(), AdmissionPolicy::Public);
         assert_eq!(
@@ -1815,7 +1721,6 @@ mod tests {
             AdmissionPolicy::ValidatorRosterMember
         );
     }
-
     #[test]
     fn implicit_head_and_cors_routes_are_separate_from_explicit_operations() {
         let routes = [
@@ -1843,7 +1748,6 @@ mod tests {
         ];
         let catalog = RouteCatalog::new(&routes);
         let implicit = catalog.implicit_routes(EnabledFeatures::none());
-
         assert_eq!(implicit.len(), 2, "OPTIONS is emitted once per path");
         assert!(implicit.iter().any(|route| {
             route.kind() == ImplicitRouteKind::Head
@@ -1861,7 +1765,6 @@ mod tests {
             "framework routes do not enter the application projection"
         );
     }
-
     #[test]
     fn any_method_is_protocol_only_and_never_generated() {
         let valid = RouteDescriptor::new(
@@ -1878,7 +1781,6 @@ mod tests {
             reason: "protocol-native HTTP gateway",
         });
         assert_eq!(validate_catalog(&[valid]), Ok(()));
-
         let invalid = RouteDescriptor::new(
             "test.gateway",
             HttpMethod::Any,
@@ -1900,7 +1802,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn musubi_v1_catalog_is_post_only_and_has_no_legacy_routes() {
         assert_eq!(musubi::ROUTES.len(), 31);
@@ -1937,7 +1838,6 @@ mod tests {
         assert!(musubi::ARCHIVE_RETENTION.projections().openapi());
         assert!(musubi::ARCHIVE_RETENTION.projections().sdk());
         assert!(musubi::ARCHIVE_RETENTION.projections().mcp());
-
         for expected in musubi::ROUTES {
             assert!(
                 CATALOGED_ROUTES.iter().any(|route| route == expected),
@@ -1945,7 +1845,6 @@ mod tests {
                 expected.stable_route_id()
             );
         }
-
         for legacy_path in [
             "/v1/musubi/packages",
             "/v1/musubi/release",
@@ -1965,7 +1864,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reputation_surface_is_committed_projection_read_only() {
         let routes = [

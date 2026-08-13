@@ -1,8 +1,6 @@
 //! Kagemusha V4 recursive-readiness projection and release-selection tests.
-
 use super::*;
 use crate::state::World;
-
 fn release_bound_record(
     parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
     manifest_sha256: [u8; 32],
@@ -33,7 +31,6 @@ fn release_bound_record(
     record.status = ConfidentialStatus::Active;
     record
 }
-
 fn world_with_active_release_pairs(manifest_digests: &[[u8; 32]]) -> World {
     let mut world = World::default();
     for (index, manifest_sha256) in manifest_digests.iter().copied().enumerate() {
@@ -56,7 +53,6 @@ fn world_with_active_release_pairs(manifest_digests: &[[u8; 32]]) -> World {
     }
     world
 }
-
 #[test]
 fn release_qualified_verifier_id_rejects_generic_arbitrary_and_suffixed_substitutions() {
     let manifest_sha256 = [0xab; 32];
@@ -66,14 +62,12 @@ fn release_qualified_verifier_id_rejects_generic_arbitrary_and_suffixed_substitu
         parity,
         manifest_sha256,
     );
-
     ensure_release_qualified_kagemusha_v4_verifier_id(&exact, &record, parity, "Eq")
         .expect("the owner-derived release-qualified id must be accepted");
     assert_eq!(
         exact.backend.as_str(),
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
     );
-
     let arbitrary =
         iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(parity, [0x43; 32]);
     let suffixed = iroha_data_model::proof::VerifyingKeyId::new(
@@ -91,7 +85,6 @@ fn release_qualified_verifier_id_rejects_generic_arbitrary_and_suffixed_substitu
             "a substituted registry identity must fail closed: {substituted:?}"
         );
     }
-
     let mut noncanonical_owner = record.clone();
     noncanonical_owner.owner_manifest_id = Some(format!(
         "kagemusha-v4-{}",
@@ -107,7 +100,6 @@ fn release_qualified_verifier_id_rejects_generic_arbitrary_and_suffixed_substitu
         .is_err(),
         "the owner digest must use its canonical lowercase form"
     );
-
     let wrong_parity_record = release_bound_record(
         iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
         manifest_sha256,
@@ -123,7 +115,6 @@ fn release_qualified_verifier_id_rejects_generic_arbitrary_and_suffixed_substitu
         "the owner-derived id cannot substitute the opposite parity circuit"
     );
 }
-
 #[test]
 fn readiness_projects_logical_roles_and_release_issuance_window() {
     let artifact_set = KagemushaAuthenticatedArtifactSetReadinessV4 {
@@ -136,7 +127,6 @@ fn readiness_projects_logical_roles_and_release_issuance_window() {
         max_proof_bytes: 65_536,
         asset_scale: 9,
     };
-
     for (parity, role, circuit) in [
         (
             iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
@@ -165,13 +155,11 @@ fn readiness_projects_logical_roles_and_release_issuance_window() {
             Some(artifact_set.withdrawal_height)
         );
     }
-
     assert!(!kagemusha_v4_issuance_active_at(40, 80, 39));
     assert!(kagemusha_v4_issuance_active_at(40, 80, 40));
     assert!(kagemusha_v4_issuance_active_at(40, 80, 79));
     assert!(!kagemusha_v4_issuance_active_at(40, 80, 80));
 }
-
 #[test]
 fn startup_coverage_visits_historic_and_future_terminal_active_releases() {
     let world = world_with_active_release_pairs(&[[0x41; 32], [0x42; 32]]);
@@ -189,7 +177,6 @@ fn startup_coverage_visits_historic_and_future_terminal_active_releases() {
     assert_eq!(count, 2);
     assert_eq!(visited, [1, 2]);
 }
-
 #[test]
 fn startup_coverage_fails_when_older_terminal_release_is_missing_locally() {
     let world = world_with_active_release_pairs(&[[0x41; 32], [0x42; 32]]);
@@ -202,7 +189,6 @@ fn startup_coverage_fails_when_older_terminal_release_is_missing_locally() {
     .expect_err("missing historic redemption material must fail startup");
     assert!(error.contains("older terminal release"));
 }
-
 #[test]
 fn startup_coverage_fails_before_future_release_activation_when_material_is_missing() {
     let world = world_with_active_release_pairs(&[[0x41; 32], [0x42; 32]]);
@@ -215,7 +201,6 @@ fn startup_coverage_fails_before_future_release_activation_when_material_is_miss
     .expect_err("snapshot startup must preload future Active release material");
     assert!(error.contains("future terminal release"));
 }
-
 #[test]
 fn issuance_window_overlap_is_half_open() {
     assert!(kagemusha_v4_issuance_windows_overlap(10, 20, 19, 30));
@@ -223,7 +208,6 @@ fn issuance_window_overlap_is_half_open() {
     assert!(!kagemusha_v4_issuance_windows_overlap(10, 20, 20, 30));
     assert!(!kagemusha_v4_issuance_windows_overlap(20, 30, 10, 20));
 }
-
 #[test]
 fn transaction_release_height_rejects_zero_future_and_pre_activation_snapshots() {
     let manifest_sha256 = [0x41; 32];
@@ -244,7 +228,6 @@ fn transaction_release_height_rejects_zero_future_and_pre_activation_snapshots()
     exact_kagemusha_v4_transaction_verifier_record(&view, &binding, parity, 5, 5)
         .expect("the exact activation-height snapshot is valid");
 }
-
 #[test]
 fn transaction_release_height_rejects_release_withdrawn_by_execution() {
     let manifest_sha256 = [0x41; 32];

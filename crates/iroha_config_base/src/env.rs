@@ -1,5 +1,4 @@
 //! Environment variables
-
 use std::{
     borrow::Cow,
     cell::RefCell,
@@ -9,14 +8,12 @@ use std::{
     rc::Rc,
     str::FromStr,
 };
-
 /// Convertation from a string read from an environment variable to a specific value.
 ///
 /// Has an implementation for any type that implements [`FromStr`] (with an error that implements [`StdError`]).
 pub trait FromEnvStr {
     /// Error that might occur during conversion
     type Error: StdError + Send + Sync + 'static;
-
     /// The conversion itself.
     ///
     /// # Errors
@@ -25,14 +22,12 @@ pub trait FromEnvStr {
     where
         Self: Sized;
 }
-
 impl<T> FromEnvStr for T
 where
     T: FromStr,
     <T as FromStr>::Err: StdError + Send + Sync + 'static,
 {
     type Error = <T as FromStr>::Err;
-
     fn from_env_str(value: Cow<'_, str>) -> Result<Self, Self::Error>
     where
         Self: Sized,
@@ -40,7 +35,6 @@ where
         value.parse()
     }
 }
-
 /// Enables polymorphism for environment readers.
 /// Has default implementations for plain functions,
 /// thus it should work for closures as well.
@@ -48,7 +42,6 @@ pub trait ReadEnv {
     /// Read a value from an environment variable.
     fn read_env(&self, key: &str) -> Option<Cow<'_, str>>;
 }
-
 impl<F> ReadEnv for F
 where
     F: Fn(&str) -> Option<Cow<'static, str>>,
@@ -57,7 +50,6 @@ where
         self(key)
     }
 }
-
 /// An adapter of [`std::env::var`] for [`ReadEnv`] trait.
 /// Does not fail in case of [`std::env::VarError::NotUnicode`], but prints it as an error via
 /// [log].
@@ -73,50 +65,42 @@ pub fn std_env(key: &str) -> Option<Cow<'static, str>> {
         }
     }
 }
-
 /// An implementation of [`ReadEnv`] for testing convenience.
 #[derive(Default, Clone)]
 pub struct MockEnv {
     map: HashMap<String, String>,
     visited: Rc<RefCell<HashSet<String>>>,
 }
-
 impl MockEnv {
     /// Create new empty environment
     pub fn new() -> Self {
         Self::default()
     }
-
     /// Create an environment with a given map
     pub fn with_map(map: HashMap<String, String>) -> Self {
         Self { map, ..Self::new() }
     }
-
     /// Set a variable
     #[must_use]
     pub fn set(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.map.insert(key.into(), value.into());
         self
     }
-
     /// Get a set of keys not visited yet by [`ReadEnv::read_env`]
     ///
     /// Since [`Rc`] is used under the hood, should work on clones as well.
     pub fn unvisited(&self) -> HashSet<String> {
         self.known_keys().sub(&*self.visited.borrow())
     }
-
     /// Similar to [`Self::unvisited`], but gives requested entries
     /// that don't exist within the set of variables
     pub fn unknown(&self) -> HashSet<String> {
         self.visited.borrow().sub(&self.known_keys())
     }
-
     fn known_keys(&self) -> HashSet<String> {
         self.map.keys().map(ToOwned::to_owned).collect()
     }
 }
-
 impl<T, K, V> From<T> for MockEnv
 where
     T: IntoIterator<Item = (K, V)>,
@@ -132,7 +116,6 @@ where
         )
     }
 }
-
 impl ReadEnv for MockEnv {
     fn read_env(&self, key: &str) -> Option<Cow<'_, str>> {
         self.visited.borrow_mut().insert(key.to_string());

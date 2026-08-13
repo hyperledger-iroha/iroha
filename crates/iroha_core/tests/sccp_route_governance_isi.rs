@@ -1,9 +1,6 @@
 //! Exact SCCP route-governance ISI execution tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use std::num::NonZeroU64;
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -37,10 +34,8 @@ use iroha_executor_data_model::permission::{
 use iroha_primitives::numeric::NumericSpec;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
-
 #[path = "common/world_fixture.rs"]
 mod test_world;
-
 fn test_state() -> State {
     State::new_for_testing(
         test_world::world_with_test_accounts(),
@@ -48,18 +43,15 @@ fn test_state() -> State {
         LiveQueryStore::start_test(),
     )
 }
-
 fn test_header() -> BlockHeader {
     BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0)
 }
-
 fn staged_route() -> SccpGovernedRouteV1 {
     iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
         SccpNetworkV1::EthereumMainnet,
         SccpRouteActivationV1::Staged,
     )
 }
-
 fn staged_solana_route() -> SccpGovernedRouteV1 {
     let mut route = staged_route();
     let iroha_data_model::bridge::SccpDestinationDeploymentV1::Evm(evm_deployment) =
@@ -132,7 +124,6 @@ fn staged_solana_route() -> SccpGovernedRouteV1 {
         .expect("Solana fixture must remain an exact staged governed route");
     route
 }
-
 fn native_anchor() -> SccpNativeTrustAnchorV1 {
     SccpNativeTrustAnchorV1 {
         backend: BridgeNativeProofBackendV1::EthereumBeacon,
@@ -140,7 +131,6 @@ fn native_anchor() -> SccpNativeTrustAnchorV1 {
         checkpoint_height: 1,
     }
 }
-
 fn grant_governance_permission(stx: &mut StateTransaction<'_, '_>) {
     for permission in [
         Permission::from(CanProposeSccpRouteGovernance),
@@ -151,11 +141,9 @@ fn grant_governance_permission(stx: &mut StateTransaction<'_, '_>) {
             .expect("grant exact SCCP referendum permission");
     }
 }
-
 fn configure_taira(stx: &mut StateTransaction<'_, '_>) {
     stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
 }
-
 fn register_settlement_definition(stx: &mut StateTransaction<'_, '_>, route: &SccpGovernedRouteV1) {
     Register::asset_definition(AssetDefinition::numeric(
         route.settlement.asset_definition_id.clone(),
@@ -166,13 +154,11 @@ fn register_settlement_definition(stx: &mut StateTransaction<'_, '_>, route: &Sc
     .execute(&ALICE_ID, stx)
     .expect("register exact SCCP settlement definition");
 }
-
 fn register_custody_account(stx: &mut StateTransaction<'_, '_>, route: &SccpGovernedRouteV1) {
     Register::account(Account::new(route.settlement.custody_owner.clone()))
         .execute(&ALICE_ID, stx)
         .expect("register exact SCCP custody account");
 }
-
 fn materialize_custody_asset(stx: &mut StateTransaction<'_, '_>, route: &SccpGovernedRouteV1) {
     Mint::asset_quantity(
         1_u64,
@@ -184,13 +170,11 @@ fn materialize_custody_asset(stx: &mut StateTransaction<'_, '_>, route: &SccpGov
     .execute(&ALICE_ID, stx)
     .expect("materialize exact SCCP custody asset");
 }
-
 fn register_route_resources(stx: &mut StateTransaction<'_, '_>, route: &SccpGovernedRouteV1) {
     register_settlement_definition(stx, route);
     register_custody_account(stx, route);
     materialize_custody_asset(stx, route);
 }
-
 fn execute_governance(
     stx: &mut StateTransaction<'_, '_>,
     action: SccpRouteGovernanceActionV1,
@@ -264,7 +248,6 @@ fn execute_governance(
     enactment.clone().execute(&ALICE_ID, stx)?;
     Ok(enactment)
 }
-
 fn register_action(
     route: SccpGovernedRouteV1,
     native_trust_anchor: Option<SccpNativeTrustAnchorV1>,
@@ -274,7 +257,6 @@ fn register_action(
         native_trust_anchor,
     })
 }
-
 fn successor_route(mut route: SccpGovernedRouteV1) -> SccpGovernedRouteV1 {
     route.revision = route
         .revision
@@ -315,7 +297,6 @@ fn successor_route(mut route: SccpGovernedRouteV1) -> SccpGovernedRouteV1 {
         .expect("successor fixture must remain an exact governed route");
     route
 }
-
 #[test]
 fn direct_sccp_route_governance_is_always_rejected() {
     let state = test_state();
@@ -327,7 +308,6 @@ fn direct_sccp_route_governance_is_always_rejected() {
             .expect_err("direct SCCP route mutation must remain closed");
     assert!(format!("{error:?}").contains("finalized threshold referendum"));
 }
-
 #[test]
 fn typed_sccp_enactment_rejects_wrong_preimage_network_and_replay() {
     let state = test_state();
@@ -338,23 +318,19 @@ fn typed_sccp_enactment_rejects_wrong_preimage_network_and_replay() {
     let route = staged_route();
     let key = route.key();
     register_route_resources(&mut stx, &route);
-
     let enactment = execute_governance(&mut stx, register_action(route, Some(native_anchor())))
         .expect("exact typed SCCP enactment must apply once");
-
     let replay = enactment
         .clone()
         .execute(&ALICE_ID, &mut stx)
         .expect_err("SCCP enactment must be one-shot");
     assert!(format!("{replay:?}").contains("cannot be replayed"));
-
     let mut wrong_action = enactment.clone();
     wrong_action.anchor.action = SccpRouteGovernanceActionV1::Remove(key);
     let wrong_action = wrong_action
         .execute(&ALICE_ID, &mut stx)
         .expect_err("an approved referendum id must not authorize another action preimage");
     assert!(format!("{wrong_action:?}").contains("does not derive"));
-
     let mut wrong_network = enactment;
     wrong_network.anchor.network_id = iroha_data_model::NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
@@ -365,7 +341,6 @@ fn typed_sccp_enactment_rejects_wrong_preimage_network_and_replay() {
         .expect_err("an SCCP approval must not replay on another exact network");
     assert!(format!("{wrong_network:?}").contains("different exact NetworkId"));
 }
-
 #[test]
 fn route_registration_requires_permission_and_complete_resources() {
     let state = test_state();
@@ -373,7 +348,6 @@ fn route_registration_requires_permission_and_complete_resources() {
     let route = staged_route();
     let key = route.key();
     let action = register_action(route.clone(), Some(native_anchor()));
-
     {
         let mut denied = block.transaction();
         configure_taira(&mut denied);
@@ -384,7 +358,6 @@ fn route_registration_requires_permission_and_complete_resources() {
         assert_eq!(denied.sccp_registry.revision(), before);
         assert!(denied.sccp_registry.route(&key).is_none());
     }
-
     let mut stx = block.transaction();
     configure_taira(&mut stx);
     grant_governance_permission(&mut stx);
@@ -394,14 +367,12 @@ fn route_registration_requires_permission_and_complete_resources() {
     assert!(format!("{error:?}").contains("asset definition is not registered"));
     assert_eq!(stx.sccp_registry.revision(), before);
     assert!(stx.sccp_registry.route(&key).is_none());
-
     register_settlement_definition(&mut stx, &route);
     let error = execute_governance(&mut stx, action.clone())
         .expect_err("a route must not register before its custody owner exists");
     assert!(format!("{error:?}").contains("custody owner is not registered"));
     assert_eq!(stx.sccp_registry.revision(), before);
     assert!(stx.sccp_registry.route(&key).is_none());
-
     register_custody_account(&mut stx, &route);
     execute_governance(&mut stx, action).expect("complete exact route registration");
     assert_ne!(stx.sccp_registry.revision(), before);
@@ -413,7 +384,6 @@ fn route_registration_requires_permission_and_complete_resources() {
         SccpRouteActivationV1::Staged
     );
 }
-
 #[test]
 fn solana_route_registration_validates_destination_key_and_commits() {
     let state = test_state();
@@ -424,10 +394,8 @@ fn solana_route_registration_validates_destination_key_and_commits() {
     let route = staged_solana_route();
     let key = route.key();
     register_route_resources(&mut stx, &route);
-
     execute_governance(&mut stx, register_action(route, None))
         .expect("complete Solana route registration must validate its governed key");
-
     assert!(matches!(
         stx.sccp_registry
             .route(&key)
@@ -436,7 +404,6 @@ fn solana_route_registration_validates_destination_key_and_commits() {
         iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(_)
     ));
 }
-
 #[test]
 fn route_registration_is_bound_to_the_exact_local_taira_profile() {
     let state = test_state();
@@ -447,7 +414,6 @@ fn route_registration_is_bound_to_the_exact_local_taira_profile() {
     let key = route.key();
     let action = register_action(route.clone(), Some(native_anchor()));
     register_route_resources(&mut stx, &route);
-
     stx.chain_id = iroha_data_model::ChainId::from("sora-taira");
     let before = stx.sccp_registry.revision();
     let error = execute_governance(&mut stx, action.clone())
@@ -458,13 +424,11 @@ fn route_registration_is_bound_to_the_exact_local_taira_profile() {
     );
     assert_eq!(stx.sccp_registry.revision(), before);
     assert!(stx.sccp_registry.route(&key).is_none());
-
     configure_taira(&mut stx);
     execute_governance(&mut stx, action)
         .expect("the canonical Taira chain id must authorize its exact route");
     assert!(stx.sccp_registry.route(&key).is_some());
 }
-
 #[test]
 fn route_registration_rejects_insufficient_asset_precision_without_mutation() {
     let state = test_state();
@@ -474,7 +438,6 @@ fn route_registration_rejects_insufficient_asset_precision_without_mutation() {
     grant_governance_permission(&mut stx);
     let route = staged_route();
     let key = route.key();
-
     Register::asset_definition(AssetDefinition::new(
         route.settlement.asset_definition_id.clone(),
         "xor".to_owned(),
@@ -486,7 +449,6 @@ fn route_registration_rejects_insufficient_asset_precision_without_mutation() {
     .expect("register insufficient-precision settlement definition");
     register_custody_account(&mut stx, &route);
     materialize_custody_asset(&mut stx, &route);
-
     let before = stx.sccp_registry.revision();
     let error = execute_governance(&mut stx, register_action(route, Some(native_anchor())))
         .expect_err("settlement precision below the SCCP payload scale must reject");
@@ -497,7 +459,6 @@ fn route_registration_rejects_insufficient_asset_precision_without_mutation() {
     assert_eq!(stx.sccp_registry.revision(), before);
     assert!(stx.sccp_registry.route(&key).is_none());
 }
-
 #[test]
 fn activation_updates_are_strict_compare_and_swap() {
     let state = test_state();
@@ -510,7 +471,6 @@ fn activation_updates_are_strict_compare_and_swap() {
     register_route_resources(&mut stx, &route);
     execute_governance(&mut stx, register_action(route, Some(native_anchor())))
         .expect("register staged route");
-
     let before = stx.sccp_registry.revision();
     let stale = SccpRouteGovernanceActionV1::SetActivation(SccpSetRouteActivationV1 {
         key: key.clone(),
@@ -522,7 +482,6 @@ fn activation_updates_are_strict_compare_and_swap() {
         .expect_err("a stale activation compare-and-swap must reject");
     assert!(format!("{error:?}").contains("compare-and-swap"));
     assert_eq!(stx.sccp_registry.revision(), before);
-
     let illegal = SccpRouteGovernanceActionV1::SetActivation(SccpSetRouteActivationV1 {
         key: key.clone(),
         expected_current: SccpRouteActivationV1::Staged,
@@ -531,7 +490,6 @@ fn activation_updates_are_strict_compare_and_swap() {
     });
     assert!(execute_governance(&mut stx, illegal).is_err());
     assert_eq!(stx.sccp_registry.revision(), before);
-
     execute_governance(
         &mut stx,
         SccpRouteGovernanceActionV1::SetActivation(SccpSetRouteActivationV1 {
@@ -551,7 +509,6 @@ fn activation_updates_are_strict_compare_and_swap() {
         SccpRouteActivationV1::Bidirectional
     );
 }
-
 #[test]
 fn revision_switch_is_atomic_and_rejects_stale_state() {
     let state = test_state();
@@ -579,7 +536,6 @@ fn revision_switch_is_atomic_and_rejects_stale_state() {
     .expect("activate first revision");
     execute_governance(&mut stx, register_action(successor, Some(anchor)))
         .expect("register immutable successor");
-
     let before = stx.sccp_registry.revision();
     let stale = SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
         previous_key: first_key.clone(),
@@ -607,7 +563,6 @@ fn revision_switch_is_atomic_and_rejects_stale_state() {
             .activation,
         SccpRouteActivationV1::Staged
     );
-
     execute_governance(
         &mut stx,
         SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
@@ -636,7 +591,6 @@ fn revision_switch_is_atomic_and_rejects_stale_state() {
         SccpRouteActivationV1::Bidirectional
     );
 }
-
 #[test]
 fn sequential_revision_lifecycles_reach_retained_cap_then_reject_without_mutation() {
     let state = test_state();
@@ -663,7 +617,6 @@ fn sequential_revision_lifecycles_reach_retained_cap_then_reject_without_mutatio
     )
     .expect("activate first revision");
     current.activation = SccpRouteActivationV1::Bidirectional;
-
     for expected_revision in 2..=u32::try_from(SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE)
         .expect("retained route bound fits u32")
     {
@@ -714,7 +667,6 @@ fn sequential_revision_lifecycles_reach_retained_cap_then_reject_without_mutatio
         current = successor;
         current_anchor = next_anchor;
     }
-
     let lane = stx
         .sccp_registry
         .lane(current.lane_id)
@@ -756,7 +708,6 @@ fn sequential_revision_lifecycles_reach_retained_cap_then_reject_without_mutatio
             .activation,
         SccpRouteActivationV1::Bidirectional
     );
-
     let overflow = successor_route(current);
     let before = stx.sccp_registry.revision();
     let error = execute_governance(
@@ -768,7 +719,6 @@ fn sequential_revision_lifecycles_reach_retained_cap_then_reject_without_mutatio
     assert_eq!(stx.sccp_registry.revision(), before);
     assert!(stx.sccp_registry.route(&overflow.key()).is_none());
 }
-
 #[test]
 fn live_route_capacity_rejects_staged_accumulation_without_mutation() {
     let state = test_state();
@@ -781,7 +731,6 @@ fn live_route_capacity_rejects_staged_accumulation_without_mutation() {
     register_route_resources(&mut stx, &previous);
     execute_governance(&mut stx, register_action(previous.clone(), Some(anchor)))
         .expect("register first staged revision");
-
     for _ in 1..SCCP_V1_MAX_LIVE_ROUTES_PER_LANE {
         let successor = successor_route(previous);
         execute_governance(&mut stx, register_action(successor.clone(), Some(anchor)))
@@ -799,7 +748,6 @@ fn live_route_capacity_rejects_staged_accumulation_without_mutation() {
     assert_eq!(stx.sccp_registry.revision(), before);
     assert!(stx.sccp_registry.route(&overflow.key()).is_none());
 }
-
 #[test]
 fn trust_anchor_initialization_and_advance_are_strict_cas() {
     let state = test_state();
@@ -812,7 +760,6 @@ fn trust_anchor_initialization_and_advance_are_strict_cas() {
     register_route_resources(&mut stx, &route);
     execute_governance(&mut stx, register_action(route, None))
         .expect("register an anchorless staged route");
-
     let initial = native_anchor();
     let initialize =
         SccpRouteGovernanceActionV1::InitializeTrustAnchor(SccpInitializeLaneTrustAnchorV1 {
@@ -828,13 +775,11 @@ fn trust_anchor_initialization_and_advance_are_strict_cas() {
             .current_native_trust_anchor(),
         Some(initial)
     );
-
     let before = stx.sccp_registry.revision();
     let error = execute_governance(&mut stx, initialize)
         .expect_err("replaying a None-to-Some initialization must reject");
     assert!(format!("{error:?}").contains("compare-and-swap"));
     assert_eq!(stx.sccp_registry.revision(), before);
-
     let stale_expected = SccpNativeTrustAnchorV1 {
         anchor_hash: [0xD1; 32],
         checkpoint_height: initial.checkpoint_height + 1,
@@ -852,7 +797,6 @@ fn trust_anchor_initialization_and_advance_are_strict_cas() {
     });
     assert!(execute_governance(&mut stx, stale).is_err());
     assert_eq!(stx.sccp_registry.revision(), before);
-
     let next = SccpNativeTrustAnchorV1 {
         anchor_hash: [0xD3; 32],
         checkpoint_height: initial.checkpoint_height + 1,
@@ -877,7 +821,6 @@ fn trust_anchor_initialization_and_advance_are_strict_cas() {
     );
     let lane = stx.sccp_registry.lane(lane_id).expect("governed lane");
     assert_eq!(lane.native_trust_anchors, vec![initial, next]);
-
     let before_rollback = stx.sccp_registry.revision();
     let rollback = SccpRouteGovernanceActionV1::AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1 {
         lane_id,
@@ -887,7 +830,6 @@ fn trust_anchor_initialization_and_advance_are_strict_cas() {
     assert!(execute_governance(&mut stx, rollback).is_err());
     assert_eq!(stx.sccp_registry.revision(), before_rollback);
 }
-
 #[test]
 fn remove_accepts_only_never_used_staged_routes() {
     let state = test_state();
@@ -906,7 +848,6 @@ fn remove_accepts_only_never_used_staged_routes() {
         .expect("remove a never-used staged route");
     assert_ne!(stx.sccp_registry.revision(), before_remove);
     assert!(stx.sccp_registry.route(&key).is_none());
-
     execute_governance(&mut stx, register_action(route, Some(anchor)))
         .expect("re-register clean route");
     execute_governance(

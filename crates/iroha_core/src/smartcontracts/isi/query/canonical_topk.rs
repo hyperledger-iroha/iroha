@@ -1,7 +1,5 @@
 //! Bounded canonical top-K materialization for server-owned query fanout.
-
 use std::{any::TypeId, collections::BTreeSet, io::Cursor};
-
 use iroha_data_model::{
     prelude::{Pagination, SelectorTuple},
     query::{
@@ -12,10 +10,8 @@ use iroha_data_model::{
     },
 };
 use norito::core::NoritoSerialize;
-
 use super::{QueryExecutionBudget, QueryExecutionStats, QueryLimits};
 use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
-
 /// Conservative deterministic charge for the retained `Vec` handle, one
 /// `BTreeSet` slot, allocator bookkeeping, and tree-node slack of one item.
 ///
@@ -41,7 +37,6 @@ pub const CANONICAL_QUERY_PREBOUNDED_SOURCE_BYTES: u64 = 1024;
 /// fixed Rust wrappers. Variable frame, identifier, and name buffers are
 /// charged separately from their exact lengths.
 const CANONICAL_QUERY_ID_DECODE_FIXED_OVERHEAD_BYTES: u64 = 512;
-
 /// Resource ceilings for canonical query output produced by a server-owned
 /// ephemeral fanout lane.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -52,7 +47,6 @@ pub struct CanonicalQueryOutputLimits {
     max_retained_bytes: u64,
     max_decode_allocated_bytes: u64,
 }
-
 impl CanonicalQueryOutputLimits {
     /// Construct exact canonical-output ceilings.
     #[must_use]
@@ -71,38 +65,32 @@ impl CanonicalQueryOutputLimits {
             max_decode_allocated_bytes,
         }
     }
-
     /// Maximum number of unique canonical candidates retained.
     #[must_use]
     pub const fn max_items(self) -> u64 {
         self.max_items
     }
-
     /// Maximum resident bytes admitted for one prebounded local source row.
     #[must_use]
     pub const fn max_source_item_bytes(self) -> u64 {
         self.max_source_item_bytes
     }
-
     /// Maximum canonical frame size of one projected item.
     #[must_use]
     pub const fn max_encoded_item_bytes(self) -> u64 {
         self.max_encoded_item_bytes
     }
-
     /// Maximum total bytes retained by the canonical top-K set.
     #[must_use]
     pub const fn max_retained_bytes(self) -> u64 {
         self.max_retained_bytes
     }
-
     /// Maximum cumulative allocation reserved while reconstructing the final page.
     #[must_use]
     pub const fn max_decode_allocated_bytes(self) -> u64 {
         self.max_decode_allocated_bytes
     }
 }
-
 /// A deterministic, byte-bounded accumulator for projected query rows.
 ///
 /// Each row is retained as the canonical framed encoding of a one-row
@@ -118,7 +106,6 @@ pub struct CanonicalQueryOutputAccumulator {
     prototype: Option<QueryOutputBatchBox>,
     items: BTreeSet<Vec<u8>>,
 }
-
 impl CanonicalQueryOutputAccumulator {
     /// Construct an empty accumulator with exact item, transient-frame,
     /// retained-byte, and reconstruction-allocation ceilings.
@@ -139,7 +126,6 @@ impl CanonicalQueryOutputAccumulator {
             items: BTreeSet::new(),
         }
     }
-
     /// Admit every row in one projected output column.
     ///
     /// The first canonical-fanout release admits only `RoleId` and `TriggerId`
@@ -167,7 +153,6 @@ impl CanonicalQueryOutputAccumulator {
         }
         self.push_batch_admitted(batch)
     }
-
     fn push_batch_admitted(&mut self, batch: QueryOutputBatchBox) -> Result<(), Error> {
         self.pin_variant(&batch)?;
         macro_rules! push_rows {
@@ -261,7 +246,6 @@ impl CanonicalQueryOutputAccumulator {
         }
         Ok(())
     }
-
     /// Reconstruct the retained canonical page in byte order.
     ///
     /// Pagination is applied only after all routes or source rows have been
@@ -287,7 +271,6 @@ impl CanonicalQueryOutputAccumulator {
         if required > self.keep {
             return Err(Error::CapacityLimit);
         }
-
         let Some(prototype) = self.prototype else {
             return Err(Error::Conversion(
                 "canonical query output has no pinned batch variant".to_owned(),
@@ -331,7 +314,6 @@ impl CanonicalQueryOutputAccumulator {
         }
         Ok(output)
     }
-
     fn pin_variant(&mut self, batch: &QueryOutputBatchBox) -> Result<(), Error> {
         if let Some(prototype) = &self.prototype {
             if core::mem::discriminant(prototype) != core::mem::discriminant(batch) {
@@ -344,13 +326,11 @@ impl CanonicalQueryOutputAccumulator {
         self.prototype = Some(empty_batch_like(batch));
         Ok(())
     }
-
     fn push_one(&mut self, candidate: QueryOutputBatchBox) -> Result<(), Error> {
         let encoded_len = exact_canonical_frame_len(&candidate, self.max_encoded_item_bytes)?;
         if self.keep == 0 {
             return Ok(());
         }
-
         // Prove the temporary candidate allocation cannot overflow and is
         // bounded independently of the retained set before allocating it.
         let candidate_charge =
@@ -369,7 +349,6 @@ impl CanonicalQueryOutputAccumulator {
         {
             return Err(Error::CapacityLimit);
         }
-
         let bytes = encode_canonical_preflighted(&candidate, encoded_len)?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != encoded_len {
             return Err(Error::Conversion(
@@ -379,7 +358,6 @@ impl CanonicalQueryOutputAccumulator {
         if self.items.contains(&bytes) {
             return Ok(());
         }
-
         let full = u64::try_from(self.items.len()).unwrap_or(u64::MAX) >= self.keep;
         if full
             && self
@@ -414,7 +392,6 @@ impl CanonicalQueryOutputAccumulator {
         Ok(())
     }
 }
-
 fn exact_canonical_frame_len<T: NoritoSerialize>(value: &T, limit: u64) -> Result<u64, Error> {
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -451,10 +428,8 @@ fn exact_canonical_frame_len<T: NoritoSerialize>(value: &T, limit: u64) -> Resul
     }
     Ok(encoded_len)
 }
-
 fn canonical_frame_buffer_bytes(encoded_len: u64) -> Result<u64, Error> {
     const MIN_DIRECT_PAYLOAD_CAPACITY: u64 = 1024;
-
     let header = u64::try_from(norito::core::Header::SIZE).map_err(|_| Error::CapacityLimit)?;
     let align = norito::core::archived_payload_align::<QueryOutputBatchBox>();
     let padding = if align <= 1 {
@@ -472,7 +447,6 @@ fn canonical_frame_buffer_bytes(encoded_len: u64) -> Result<u64, Error> {
             .ok_or(Error::CapacityLimit)?,
     ))
 }
-
 /// Return the complete resident allocation charge for one canonical candidate.
 ///
 /// The charge includes the canonical frame buffer's real reserved capacity as
@@ -485,7 +459,6 @@ pub fn canonical_query_candidate_allocation_bytes(encoded_frame_bytes: u64) -> O
         .ok()?
         .checked_add(CANONICAL_QUERY_RETAINED_ITEM_OVERHEAD_BYTES)
 }
-
 fn encode_canonical_preflighted(
     value: &QueryOutputBatchBox,
     encoded_len: u64,
@@ -508,7 +481,6 @@ fn encode_canonical_preflighted(
     }
     Ok(bytes)
 }
-
 fn empty_batch_like(batch: &QueryOutputBatchBox) -> QueryOutputBatchBox {
     macro_rules! empty_arms {
         ($($variant:ident),+ $(,)?) => {
@@ -566,7 +538,6 @@ fn empty_batch_like(batch: &QueryOutputBatchBox) -> QueryOutputBatchBox {
         FeeSponsorProgramId,
     )
 }
-
 fn empty_batch_with_capacity_like(
     batch: &QueryOutputBatchBox,
     capacity: usize,
@@ -578,7 +549,6 @@ fn empty_batch_with_capacity_like(
             .map_err(|_| Error::CapacityLimit)?;
         Ok(values)
     }
-
     let charge = output_container_allocation_charge(batch, capacity)?;
     macro_rules! capacity_arms {
         ($($variant:ident),+ $(,)?) => {
@@ -641,7 +611,6 @@ fn empty_batch_with_capacity_like(
         FeeSponsorProgramId,
     )
 }
-
 fn output_container_allocation_charge(
     batch: &QueryOutputBatchBox,
     capacity: usize,
@@ -659,7 +628,6 @@ fn output_container_allocation_charge(
                 .ok_or(Error::CapacityLimit)
         }
     }
-
     macro_rules! charge_arms {
         ($($variant:ident),+ $(,)?) => {
             match batch {
@@ -716,7 +684,6 @@ fn output_container_allocation_charge(
         FeeSponsorProgramId,
     )
 }
-
 fn decode_candidate(
     bytes: &[u8],
     limits: norito::DecodeLimits,
@@ -730,13 +697,11 @@ fn decode_candidate(
         ))
     })
 }
-
 #[derive(Debug, Clone, Copy)]
 struct CandidateDecodeProfile {
     limits: norito::DecodeLimits,
     allocation_charge: u64,
 }
-
 fn candidate_decode_profile(
     prototype: &QueryOutputBatchBox,
     bytes: &[u8],
@@ -761,15 +726,12 @@ fn candidate_decode_profile(
             ));
         }
     }
-
     canonical_id_decode_profile(bytes)
 }
-
 fn canonical_id_decode_profile(bytes: &[u8]) -> Result<CandidateDecodeProfile, Error> {
     fn malformed() -> Error {
         Error::Conversion("malformed internally retained canonical identifier frame".to_owned())
     }
-
     fn exact_length_prefixed_payload(bytes: &[u8]) -> Result<&[u8], Error> {
         let (length, prefix) =
             norito::core::inspect_len_from_slice(bytes).map_err(|_| malformed())?;
@@ -779,7 +741,6 @@ fn canonical_id_decode_profile(bytes: &[u8]) -> Result<CandidateDecodeProfile, E
         }
         bytes.get(prefix..end).ok_or_else(malformed)
     }
-
     let header = norito::core::Header::read(Cursor::new(bytes)).map_err(|_| malformed())?;
     if header.compression != norito::core::Compression::None
         || header.schema != <QueryOutputBatchBox as NoritoSerialize>::schema_hash()
@@ -812,7 +773,6 @@ fn canonical_id_decode_profile(bytes: &[u8]) -> Result<CandidateDecodeProfile, E
         .get(payload_start..payload_end)
         .ok_or_else(malformed)?;
     let enum_fields = payload.get(4..).ok_or_else(malformed)?;
-
     let _flags = norito::core::DecodeFlagsGuard::enter(header.flags);
     let sequence = exact_length_prefixed_payload(enum_fields)?;
     let count_bytes: [u8; 8] = sequence
@@ -832,7 +792,6 @@ fn canonical_id_decode_profile(bytes: &[u8]) -> Result<CandidateDecodeProfile, E
     {
         return Err(malformed());
     }
-
     // The current unpacked decoder has a fixed, schema-audited allocation
     // graph: one possible root realignment, two sequence-field buffers, three
     // identifier-field passes (length, canonical decode, possible realignment),
@@ -867,13 +826,11 @@ fn canonical_id_decode_profile(bytes: &[u8]) -> Result<CandidateDecodeProfile, E
         usize::try_from(allocation_charge).map_err(|_| Error::CapacityLimit)?,
         8,
     );
-
     Ok(CandidateDecodeProfile {
         limits,
         allocation_charge,
     })
 }
-
 fn projected_column<T>(
     values: Vec<T>,
     selector: &SelectorTuple<T>,
@@ -894,10 +851,8 @@ where
     }
     projection.project(values.into_iter())
 }
-
 fn canonical_query_source_bound<Q: 'static>() -> Option<u64> {
     use iroha_data_model::query::{role, trigger};
-
     let query = TypeId::of::<Q>();
     if query == TypeId::of::<role::prelude::FindRoleIds>()
         || query == TypeId::of::<trigger::prelude::FindActiveTriggerIds>()
@@ -906,7 +861,6 @@ fn canonical_query_source_bound<Q: 'static>() -> Option<u64> {
     }
     None
 }
-
 pub(super) fn ensure_canonical_query_source_admitted<T, Q>(
     predicate: &CompoundPredicate<T>,
     selector: &SelectorTuple<T>,
@@ -946,7 +900,6 @@ where
     }
     Ok(())
 }
-
 pub(super) fn execute_canonical_query<T, Q>(
     query: Q,
     predicate: CompoundPredicate<T>,
@@ -967,7 +920,6 @@ where
     let iter = ValidQuery::execute(query, predicate, state)?;
     apply_canonical_query_postprocessing(iter, selector, params, limits, output_limits, budget)
 }
-
 pub(super) fn apply_canonical_query_postprocessing<I>(
     iter: I,
     selector: SelectorTuple<I::Item>,
@@ -983,7 +935,6 @@ where
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
     let keep = canonical_keep(params, limits, output_limits)?;
-
     let mut accumulator = CanonicalQueryOutputAccumulator::new(
         keep,
         output_limits.max_encoded_item_bytes,
@@ -991,7 +942,6 @@ where
         output_limits.max_decode_allocated_bytes,
     );
     accumulator.push_batch(projected_column(Vec::new(), &selector)?)?;
-
     let mut stats = QueryExecutionStats::default();
     for value in iter {
         // Charge the source row before projection, then charge the canonical
@@ -1020,11 +970,9 @@ where
         }
         accumulator.push_batch(candidate)?;
     }
-
     let batch = accumulator.finish(params.pagination)?;
     Ok((QueryOutput::new(batch.into(), 0, None), stats))
 }
-
 fn canonical_keep(
     params: &QueryParams,
     limits: QueryLimits,
@@ -1042,30 +990,24 @@ fn canonical_keep(
         .then_some(keep)
         .ok_or(Error::CapacityLimit)
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-
     use iroha_data_model::{
         domain::Domain,
         query::{QueryOutputBatchBox, parameters::Pagination},
         role::RoleId,
     };
     use nonzero_ext::nonzero;
-
     use super::*;
-
     const GENEROUS_ITEM_BYTES: u64 = 1024 * 1024;
     const GENEROUS_SOURCE_BYTES: u64 = 1024 * 1024;
     const GENEROUS_RETAINED_BYTES: u64 = 8 * 1024 * 1024;
     const GENEROUS_DECODE_BYTES: u64 = 8 * 1024 * 1024;
-
     fn string_frame(value: &str) -> Vec<u8> {
         norito::encode_canonical(&QueryOutputBatchBox::String(vec![value.to_owned()]))
             .expect("encode string candidate")
     }
-
     fn generous_output_limits(max_items: u64) -> CanonicalQueryOutputLimits {
         CanonicalQueryOutputLimits::new(
             max_items,
@@ -1075,7 +1017,6 @@ mod tests {
             GENEROUS_DECODE_BYTES,
         )
     }
-
     fn reference_strings(values: &[&str], pagination: Pagination, keep: usize) -> Vec<String> {
         let frames: BTreeSet<_> = values.iter().map(|value| string_frame(value)).collect();
         let skip = usize::try_from(pagination.offset_value()).unwrap_or(usize::MAX);
@@ -1097,7 +1038,6 @@ mod tests {
             })
             .collect()
     }
-
     fn collect_strings(values: &[&str], keep: u64, pagination: Pagination) -> Vec<String> {
         let mut accumulator = CanonicalQueryOutputAccumulator::new(
             keep,
@@ -1117,7 +1057,6 @@ mod tests {
         };
         values
     }
-
     #[test]
     fn canonical_top_k_finds_a_late_small_item_that_native_first_k_misses() {
         let all = ["route-z", "route-y", "route-x", "route-a"];
@@ -1133,7 +1072,6 @@ mod tests {
             .filter(|value| *value != late_small)
             .collect();
         insertion.push(late_small);
-
         let actual = collect_strings(&insertion, 2, Pagination::default());
         assert!(actual.iter().any(|value| value == late_small));
         assert!(!insertion[..2].contains(&late_small));
@@ -1142,7 +1080,6 @@ mod tests {
             reference_strings(&insertion, Pagination::default(), 2)
         );
     }
-
     #[test]
     fn canonical_encoder_uses_the_exact_preflighted_frame_buffer() {
         let candidate = QueryOutputBatchBox::String(vec!["x".repeat(4 * 1024)]);
@@ -1155,12 +1092,10 @@ mod tests {
         let actual = encode_canonical_preflighted(&candidate, encoded_len)
             .expect("encode into preflighted frame buffer");
         let reference = norito::encode_canonical(&candidate).expect("encode reference frame");
-
         assert_eq!(actual, reference);
         assert_eq!(actual.len(), usize::try_from(encoded_len).unwrap());
         assert!(actual.capacity() >= charged_capacity);
     }
-
     #[test]
     fn canonical_source_admission_is_query_specific_and_fails_closed() {
         let params = QueryParams::default();
@@ -1174,7 +1109,6 @@ mod tests {
             generous_output_limits(1),
         )
         .expect("lazy bounded role IDs remain available");
-
         macro_rules! assert_unbounded_query_rejected {
             ($item:ty, $query:ty) => {{
                 let error = ensure_canonical_query_source_admitted::<$item, $query>(
@@ -1210,7 +1144,6 @@ mod tests {
             iroha_data_model::role::RoleId,
             iroha_data_model::query::role::prelude::FindRolesByAccountId
         );
-
         let sorted_params = QueryParams {
             sorting: iroha_data_model::query::parameters::Sorting::by_metadata_key(
                 "rank".parse().expect("metadata key"),
@@ -1229,7 +1162,6 @@ mod tests {
         .expect_err("metadata sorting is incompatible with canonical byte ordering");
         assert!(matches!(error, Error::Conversion(_)));
     }
-
     #[cfg(feature = "ids_projection")]
     #[test]
     fn canonical_source_admission_rejects_a_selector_before_execution() {
@@ -1248,7 +1180,6 @@ mod tests {
             "unexpected selector-admission error: {error:?}",
         );
     }
-
     #[test]
     fn canonical_accumulator_matches_reference_set_dedupes_and_is_permutation_invariant() {
         let first = ["gamma", "alpha", "beta", "alpha", "delta"];
@@ -1257,7 +1188,6 @@ mod tests {
         assert_eq!(collect_strings(&first, 4, Pagination::default()), expected);
         assert_eq!(collect_strings(&second, 4, Pagination::default()), expected);
     }
-
     #[test]
     fn canonical_accumulator_applies_offset_and_limit_only_at_finish() {
         let values = ["five", "four", "three", "two", "one"];
@@ -1267,7 +1197,6 @@ mod tests {
             reference_strings(&values, pagination, 3),
         );
     }
-
     #[test]
     fn canonical_accumulator_rejects_variant_mismatch_even_for_empty_batches() {
         let mut accumulator = CanonicalQueryOutputAccumulator::new(
@@ -1284,19 +1213,16 @@ mod tests {
             .expect_err("a different empty variant must fail");
         assert!(matches!(error, Error::Conversion(_)));
     }
-
     #[test]
     fn public_accumulator_rejects_unproven_variants_before_exact_sizing() {
         let mut accumulator = CanonicalQueryOutputAccumulator::new(1, 0, 0, 0);
         let error = accumulator
             .push_batch(QueryOutputBatchBox::String(vec!["x".repeat(1024 * 1024)]))
             .expect_err("an unproven output variant must fail before its exact sizing path");
-
         assert!(matches!(error, Error::Conversion(_)));
         assert!(accumulator.prototype.is_none());
         assert!(accumulator.items.is_empty());
     }
-
     #[test]
     fn canonical_accumulator_has_an_exhaustive_empty_variant_path() {
         macro_rules! assert_empty_variants {
@@ -1368,14 +1294,12 @@ mod tests {
             FeeSponsorProgramId,
         );
     }
-
     #[test]
     fn canonical_accumulator_enforces_exact_candidate_and_retained_byte_bounds() {
         let candidate = QueryOutputBatchBox::String(vec!["bounded".to_owned()]);
         let encoded = exact_canonical_frame_len(&candidate, u64::MAX).expect("measure candidate");
         let retained_charge = canonical_query_candidate_allocation_bytes(encoded)
             .expect("measure complete candidate allocation");
-
         let mut exact = CanonicalQueryOutputAccumulator::new(
             1,
             encoded,
@@ -1385,7 +1309,6 @@ mod tests {
         exact
             .push_batch_admitted(candidate.clone())
             .expect("exact bounds fit");
-
         let mut transient = CanonicalQueryOutputAccumulator::new(
             1,
             encoded.saturating_sub(1),
@@ -1397,7 +1320,6 @@ mod tests {
             .expect_err("oversized transient candidate must fail before retention");
         assert!(matches!(error, Error::GasBudgetExceeded));
         assert!(transient.items.is_empty());
-
         let mut retained = CanonicalQueryOutputAccumulator::new(
             1,
             encoded,
@@ -1410,7 +1332,6 @@ mod tests {
         assert!(matches!(error, Error::CapacityLimit));
         assert!(retained.items.is_empty());
     }
-
     #[test]
     fn canonical_accumulator_charges_fixed_overhead_for_many_tiny_items() {
         let values: Vec<_> = (0_u8..64).map(|value| format!("{value:02x}")).collect();
@@ -1431,7 +1352,6 @@ mod tests {
             .max()
             .expect("non-empty frames");
         let batch = QueryOutputBatchBox::String(values);
-
         let mut exact = CanonicalQueryOutputAccumulator::new(
             64,
             max_item,
@@ -1442,7 +1362,6 @@ mod tests {
             .push_batch_admitted(batch.clone())
             .expect("exact many-item retained budget fits");
         assert_eq!(exact.retained_bytes, exact_retained);
-
         let mut short = CanonicalQueryOutputAccumulator::new(
             64,
             max_item,
@@ -1454,11 +1373,9 @@ mod tests {
             .expect_err("one missing overhead byte must fail closed");
         assert!(matches!(error, Error::CapacityLimit));
     }
-
     #[test]
     fn canonical_accumulator_enforces_aggregate_decode_allocation_bound() {
         const PAGE_ITEMS: u16 = 512;
-
         let values: Vec<RoleId> = (0_u16..PAGE_ITEMS)
             .map(|index| {
                 let prefix = format!("decode{index:04x}");
@@ -1509,7 +1426,6 @@ mod tests {
             .max()
             .expect("non-empty frames");
         let batch = QueryOutputBatchBox::RoleId(values);
-
         let mut exact = CanonicalQueryOutputAccumulator::new(
             u64::from(PAGE_ITEMS),
             max_item,
@@ -1524,7 +1440,6 @@ mod tests {
             panic!("role-ID reconstruction changed variant")
         };
         assert_eq!(output.len(), usize::from(PAGE_ITEMS));
-
         let mut short = CanonicalQueryOutputAccumulator::new(
             u64::from(PAGE_ITEMS),
             max_item,
@@ -1537,7 +1452,6 @@ mod tests {
             .expect_err("aggregate decode allowance must not reset per item");
         assert!(matches!(error, Error::CapacityLimit));
     }
-
     #[test]
     fn canonical_identifier_decode_limits_match_both_real_decoders() {
         let maximum_name = format!(
@@ -1550,7 +1464,6 @@ mod tests {
                 maximum_name.parse().expect("maximum-width trigger ID"),
             ]),
         ];
-
         for batch in batches {
             let prototype = empty_batch_like(&batch);
             let frame = norito::encode_canonical(&batch).expect("encode identifier candidate");
@@ -1564,7 +1477,6 @@ mod tests {
             let encoded = u64::try_from(frame.len()).expect("identifier frame length fits");
             let retained = canonical_query_candidate_allocation_bytes(encoded)
                 .expect("identifier candidate charge fits");
-
             let mut exact =
                 CanonicalQueryOutputAccumulator::new(1, encoded, retained, exact_decode);
             exact.push_batch(batch.clone()).expect("admit identifier");
@@ -1576,7 +1488,6 @@ mod tests {
                 core::mem::discriminant(&output),
                 core::mem::discriminant(&prototype)
             );
-
             let mut short = CanonicalQueryOutputAccumulator::new(
                 1,
                 encoded,
@@ -1590,7 +1501,6 @@ mod tests {
             assert!(matches!(error, Error::CapacityLimit));
         }
     }
-
     #[test]
     fn canonical_reconstruction_presizes_the_large_block_arm_and_charges_inline_bytes() {
         let capacity = 17;
@@ -1608,7 +1518,6 @@ mod tests {
         assert!(blocks.capacity() >= capacity);
         assert!(blocks.is_empty());
     }
-
     #[test]
     fn canonical_query_mode_scans_all_rows_before_canonical_pagination() {
         let roles: Vec<RoleId> = ["late-z", "early-a", "middle-m", "duplicate-a"]
@@ -1636,7 +1545,6 @@ mod tests {
             Some(budget),
         )
         .expect("canonical query postprocessing");
-
         assert_eq!(stats.processed_items(), roles.len() as u64);
         assert_eq!(output.batch.column_count(), 1);
         assert!(output.continue_cursor.is_none());
@@ -1645,7 +1553,6 @@ mod tests {
         else {
             panic!("role projection changed variant")
         };
-
         let mut reference = CanonicalQueryOutputAccumulator::new(
             3,
             GENEROUS_ITEM_BYTES,
@@ -1663,7 +1570,6 @@ mod tests {
         };
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn canonical_query_mode_enforces_the_exact_source_and_projected_work_bound() {
         let roles: Vec<RoleId> = ["work-a", "work-b"]
@@ -1693,7 +1599,6 @@ mod tests {
             GENEROUS_RETAINED_BYTES,
             GENEROUS_DECODE_BYTES,
         );
-
         let (_, stats) = apply_canonical_query_postprocessing(
             roles.clone().into_iter(),
             SelectorTuple::default(),
@@ -1705,7 +1610,6 @@ mod tests {
         .expect("exact work allowance fits");
         assert_eq!(stats.processed_items(), roles.len() as u64);
         assert_eq!(stats.processed_bytes(), expected_bytes);
-
         let error = apply_canonical_query_postprocessing(
             roles.into_iter(),
             SelectorTuple::default(),
@@ -1721,7 +1625,6 @@ mod tests {
         .expect_err("one missing work unit must fail");
         assert!(matches!(error, Error::GasBudgetExceeded));
     }
-
     #[cfg(feature = "ids_projection")]
     #[test]
     fn canonical_query_mode_rejects_unproven_projection_before_scanning() {

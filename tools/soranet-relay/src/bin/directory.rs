@@ -1,11 +1,9 @@
 //! Build, rotate, inspect, and verify SoraNet guard-directory artifacts.
-
 use std::{
     fs,
     io::{Error as IoError, ErrorKind},
     path::{Path, PathBuf},
 };
-
 use clap::{Parser, Subcommand};
 use iroha_crypto::soranet::directory::{
     GuardDirectorySnapshotV2, compute_snapshot_digest, read_guard_directory_snapshot_file,
@@ -20,7 +18,6 @@ use soranet_relay::{
     },
     guard::verify_guard_pinning_proof,
 };
-
 #[derive(Parser, Debug)]
 #[command(
     name = "soranet-directory",
@@ -31,7 +28,6 @@ struct Args {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Build a guard directory snapshot from the supplied JSON configuration.
@@ -81,14 +77,12 @@ enum Command {
         overwrite: bool,
     },
 }
-
 fn main() {
     if let Err(error) = run() {
         eprintln!("soranet-directory error: {error}");
         std::process::exit(1);
     }
 }
-
 fn run() -> Result<(), String> {
     let args = Args::parse();
     match args.command {
@@ -116,7 +110,6 @@ fn run() -> Result<(), String> {
         } => command_collect_proofs(&snapshot, &proofs_dir, out.as_deref(), overwrite),
     }
 }
-
 fn command_build(
     config: &Path,
     out: &Path,
@@ -136,7 +129,6 @@ fn command_build(
         .map_err(|err| format!("failed to encode snapshot: {err}"))?;
     write_output(out, &bytes, overwrite)
         .map_err(|err| format!("failed to write snapshot to `{}`: {err}", out.display()))?;
-
     println!("Snapshot written to {}", out.display());
     println!(
         " snapshot_digest: {}",
@@ -145,7 +137,6 @@ fn command_build(
     print_metadata(&bundle.metadata);
     Ok(())
 }
-
 fn command_rotate(
     snapshot_path: &Path,
     out: &Path,
@@ -160,7 +151,6 @@ fn command_rotate(
     })?;
     let rotation =
         rotate_snapshot_with_os_rng(&bytes).map_err(|err| rotate_error(snapshot_path, err))?;
-
     let encoded = rotation
         .bundle
         .snapshot
@@ -178,7 +168,6 @@ fn command_rotate(
         hex::encode(compute_snapshot_digest(&encoded))
     );
     print_metadata(&rotation.bundle.metadata);
-
     if let Some(dir) = keys_out {
         store_rotation_keys(dir, &rotation).map_err(|err| {
             format!(
@@ -188,10 +177,8 @@ fn command_rotate(
         })?;
         println!("Issuer key material written to {}", dir.display());
     }
-
     Ok(())
 }
-
 fn command_inspect(snapshot_path: &Path) -> Result<(), String> {
     let bytes = read_guard_directory_snapshot_file(snapshot_path).map_err(|err| {
         format!(
@@ -211,7 +198,6 @@ fn command_inspect(snapshot_path: &Path) -> Result<(), String> {
     print_metadata(&bundle.metadata);
     Ok(())
 }
-
 fn command_verify_proof(proof_path: &Path, snapshot_override: Option<&Path>) -> Result<(), String> {
     // Keep CLI verification on the same stable-file and JSON admission policy
     // used by build/collection paths in the relay library.
@@ -238,7 +224,6 @@ fn command_verify_proof(proof_path: &Path, snapshot_override: Option<&Path>) -> 
     })?;
     verify_guard_pinning_proof(&snapshot, &proof)
         .map_err(|err| format!("guard pinning proof verification failed: {err}"))?;
-
     println!(
         "Guard pinning proof `{}` is structurally consistent with unauthenticated snapshot `{}`",
         proof_path.display(),
@@ -249,7 +234,6 @@ fn command_verify_proof(proof_path: &Path, snapshot_override: Option<&Path>) -> 
     println!(" recorded_at_unix: {}", proof.recorded_at_unix());
     Ok(())
 }
-
 fn guard_pinning_proof_error(path: &Path, err: DirectoryBuildError) -> String {
     match err {
         DirectoryBuildError::GuardPinningProofIo { source, .. } => format!(
@@ -263,7 +247,6 @@ fn guard_pinning_proof_error(path: &Path, err: DirectoryBuildError) -> String {
         other => other.to_string(),
     }
 }
-
 fn command_collect_proofs(
     snapshot_path: &Path,
     proofs_dir: &Path,
@@ -284,7 +267,6 @@ fn command_collect_proofs(
     })?;
     let summaries = collect_guard_pinning_proofs_from_directory(proofs_dir, &snapshot)
         .map_err(|err| format!("failed to collect guard pinning proofs: {err}"))?;
-
     println!(
         "Structurally checked {} guard pinning proofs against an unauthenticated snapshot under {}",
         summaries.len(),
@@ -301,7 +283,6 @@ fn command_collect_proofs(
             summary.valid_until_unix,
         );
     }
-
     if let Some(path) = out_path {
         let bytes = json::to_vec_pretty(&summaries)
             .map_err(|err| format!("failed to encode proof summaries: {err}"))?;
@@ -313,10 +294,8 @@ fn command_collect_proofs(
         })?;
         println!("Proof summaries written to {}", path.display());
     }
-
     Ok(())
 }
-
 fn build_error(err: DirectoryBuildError) -> String {
     match err {
         DirectoryBuildError::Io { path, source } => {
@@ -328,7 +307,6 @@ fn build_error(err: DirectoryBuildError) -> String {
         other => other.to_string(),
     }
 }
-
 fn rotate_error(path: &Path, err: DirectoryRotateError) -> String {
     match err {
         DirectoryRotateError::Decode { source } => format!(
@@ -338,7 +316,6 @@ fn rotate_error(path: &Path, err: DirectoryRotateError) -> String {
         other => other.to_string(),
     }
 }
-
 fn write_output(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), IoError> {
     if !overwrite && path.exists() {
         return Err(IoError::new(
@@ -351,7 +328,6 @@ fn write_output(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), IoErro
     }
     fs::write(path, bytes)
 }
-
 fn store_rotation_keys(dir: &Path, rotation: &RotationOutput) -> Result<(), IoError> {
     if dir.exists() && !dir.is_dir() {
         return Err(IoError::new(
@@ -360,13 +336,11 @@ fn store_rotation_keys(dir: &Path, rotation: &RotationOutput) -> Result<(), IoEr
         ));
     }
     fs::create_dir_all(dir)?;
-
     let ed25519_secret_hex = hex::encode(rotation.keys.ed25519_secret);
     let ed25519_public_hex = hex::encode(rotation.keys.ed25519_public);
     let mldsa_public_hex = hex::encode(&rotation.keys.mldsa_public);
     let mldsa_secret_hex = hex::encode(&rotation.keys.mldsa_secret);
     let fingerprint_hex = hex::encode(rotation.keys.fingerprint);
-
     write_text(dir.join("issuer_ed25519_secret.hex"), &ed25519_secret_hex)?;
     write_text(dir.join("issuer_ed25519_public.hex"), &ed25519_public_hex)?;
     write_text(dir.join("issuer_mldsa_public.hex"), &mldsa_public_hex)?;
@@ -376,14 +350,11 @@ fn store_rotation_keys(dir: &Path, rotation: &RotationOutput) -> Result<(), IoEr
         &rotation.keys.mldsa_secret,
     )?;
     write_text(dir.join("issuer_fingerprint.hex"), &fingerprint_hex)?;
-
     Ok(())
 }
-
 fn write_text(path: PathBuf, contents: &str) -> Result<(), IoError> {
     fs::write(path, format!("{contents}\n"))
 }
-
 fn print_metadata(metadata: &DirectoryMetadata) {
     println!("directory_hash: {}", metadata.directory_hash_hex);
     println!(

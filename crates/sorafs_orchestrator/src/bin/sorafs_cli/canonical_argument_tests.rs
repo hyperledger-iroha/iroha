@@ -1,5 +1,4 @@
 // Canonical CLI arguments, signing, gateway, and telemetry regressions.
-
 #[test]
 fn report_markdown_preserves_exact_sub_micro_slashing_amount() {
     let report = PorWeeklyReportV1 {
@@ -30,13 +29,10 @@ fn report_markdown_preserves_exact_sub_micro_slashing_amount() {
         top_offenders: Vec::new(),
         notes: None,
     };
-
     let rendered = render_report_markdown(&report);
-
     assert!(rendered.contains("penalty 0.000000001 XOR"));
     assert!(!rendered.contains("penalty 0.000000 XOR"));
 }
-
 #[test]
 fn numeric_arg_parsers_reject_noncanonical_unsigned_tokens() {
     for value in ["", " 1", "1 ", "+1", "01", "1_000", "-1"] {
@@ -47,7 +43,6 @@ fn numeric_arg_parsers_reject_noncanonical_unsigned_tokens() {
             "unexpected u64 error for {value:?}: {err}"
         );
     }
-
     assert_eq!(
         parse_u64_arg("--timeout-ms", "0", "sorafs_cli moderation runner-canary")
             .expect("zero is a canonical unsigned token"),
@@ -67,7 +62,6 @@ fn numeric_arg_parsers_reject_noncanonical_unsigned_tokens() {
         369
     );
 }
-
 #[test]
 fn signed_numeric_arg_parser_rejects_noncanonical_tokens() {
     assert_eq!(
@@ -80,7 +74,6 @@ fn signed_numeric_arg_parser_rejects_noncanonical_tokens() {
             .expect("canonical zero drift"),
         0
     );
-
     for value in ["", " 1", "1 ", "+1", "01", "-01", "-0", "1_000"] {
         let err = parse_i32_arg("--live-edge-drift-ms", value, "sorafs_cli taikai bundle")
             .expect_err("noncanonical i32 token must fail");
@@ -90,7 +83,6 @@ fn signed_numeric_arg_parser_rejects_noncanonical_tokens() {
         );
     }
 }
-
 #[test]
 fn bounded_numeric_arg_parsers_still_reject_overflow() {
     let err = parse_u16_arg(
@@ -99,13 +91,11 @@ fn bounded_numeric_arg_parsers_still_reject_overflow() {
         "sorafs_cli manifest submit",
     )
     .expect_err("overflowing u16 must fail");
-
     assert!(
         err.contains("number too large"),
         "unexpected overflow error: {err}"
     );
 }
-
 #[test]
 fn taikai_digest_fields_reject_noncanonical_hex() {
     let canonical = "33".repeat(32);
@@ -113,7 +103,6 @@ fn taikai_digest_fields_reject_noncanonical_hex() {
         parse_taikai_digest_hex(&canonical, "--manifest-hash").expect("canonical taikai digest"),
         [0x33; 32]
     );
-
     for (value, expected) in [
         ("", "must not be empty"),
         (
@@ -142,14 +131,12 @@ fn taikai_digest_fields_reject_noncanonical_hex() {
         );
     }
 }
-
 #[test]
 fn taikai_track_kind_requires_canonical_lowercase() {
     assert!(matches!(
         parse_taikai_track_kind("video").expect("video kind"),
         TaikaiCliTrackKind::Video
     ));
-
     for (value, expected) in [
         ("Video", "canonical lowercase"),
         (" video", "canonical lowercase"),
@@ -162,14 +149,12 @@ fn taikai_track_kind_requires_canonical_lowercase() {
         );
     }
 }
-
 #[test]
 fn usage_omits_retired_manifest_authentication_commands() {
     let help = usage();
     assert!(!help.contains("sorafs_cli manifest sign --"));
     assert!(!help.contains("sorafs_cli manifest verify-signature --"));
 }
-
 #[test]
 fn decimal_arg_parser_rejects_noncanonical_tokens() {
     for value in [
@@ -182,7 +167,6 @@ fn decimal_arg_parser_rejects_noncanonical_tokens() {
             "unexpected decimal error for {value:?}: {err}"
         );
     }
-
     assert_eq!(
         parse_decimal_arg("deposit", "1.25", CONTEXT_APPEAL_SETTLE).expect("canonical decimal"),
         Decimal::new(125, 2)
@@ -202,15 +186,12 @@ fn decimal_arg_parser_rejects_noncanonical_tokens() {
         Decimal::new(-125, 2)
     );
 }
-
 #[test]
 fn fixture_account_uses_checked_seed_derivation() {
     let account = fixture_account(0x5A);
     let expected = AccountId::new(fixture_keypair(0x5A).public_key().clone());
-
     assert_eq!(account, expected);
 }
-
 #[test]
 fn load_storage_pin_payload_uses_canonical_directory_ordering() {
     let tempdir = tempdir().expect("tempdir");
@@ -222,19 +203,15 @@ fn load_storage_pin_payload_uses_canonical_directory_ordering() {
         "console.log('hayahi');",
     )
     .expect("write script");
-
     let manifest = sample_manifest();
     let profile = chunk_profile_from_manifest(&manifest).expect("chunk profile");
     let (expected_plan, expected_payload) =
         CarBuildPlan::from_directory_with_profile(&payload_dir, profile)
             .expect("build canonical directory payload");
-
     let (payload, files, payload_kind) =
         load_storage_pin_payload(&payload_dir, &manifest).expect("load storage payload");
-
     assert_eq!(payload_kind, "directory");
     assert_eq!(payload, expected_payload);
-
     let files = files.expect("directory payload should include file entries");
     let expected_files = expected_plan
         .files
@@ -246,7 +223,6 @@ fn load_storage_pin_payload_uses_canonical_directory_ordering() {
         .collect::<Vec<_>>();
     assert_eq!(files, expected_files);
 }
-
 #[test]
 fn storage_manifest_helpers_reject_noncanonical_commitments() {
     let manifest = sample_manifest();
@@ -258,23 +234,19 @@ fn storage_manifest_helpers_reject_noncanonical_commitments() {
         chunk_profile_from_manifest(&manifest).expect("registered chunk profile"),
         sorafs_manifest::chunker_registry::default_descriptor().profile
     );
-
     let mut invalid_cid = manifest.clone();
     invalid_cid.root_cid[0] = 0;
     assert!(manifest_root_cid_hex(&invalid_cid).is_err());
-
     let mut substituted_profile = manifest;
     substituted_profile.chunking.max_size -= 1;
     assert!(chunk_profile_from_manifest(&substituted_profile).is_err());
 }
-
 #[test]
 fn parse_account_id_arg_with_prefix_accepts_matching_i105_discriminant() {
     let account = fixture_account(0x5A);
     let encoded = account
         .to_i105_for_discriminant(369)
         .expect("encode i105 with taira discriminant");
-
     let parsed = parse_account_id_arg_with_prefix(
         "--authority",
         &encoded,
@@ -282,30 +254,24 @@ fn parse_account_id_arg_with_prefix_accepts_matching_i105_discriminant() {
         Some(369),
     )
     .expect("parse authority with explicit discriminant");
-
     assert_eq!(parsed, account);
 }
-
 #[test]
 fn parse_account_id_arg_accepts_taira_i105_without_explicit_prefix() {
     let account = fixture_account(0x59);
     let encoded = account
         .to_i105_for_discriminant(369)
         .expect("encode i105 with taira discriminant");
-
     let parsed = parse_account_id_arg("--authority", &encoded, "sorafs_cli manifest submit")
         .expect("parse taira authority without explicit discriminant");
-
     assert_eq!(parsed, account);
 }
-
 #[test]
 fn parse_account_id_arg_with_prefix_rejects_mismatched_i105_discriminant() {
     let account = fixture_account(0x6B);
     let encoded = account
         .to_i105_for_discriminant(369)
         .expect("encode i105 with taira discriminant");
-
     let err = parse_account_id_arg_with_prefix(
         "--authority",
         &encoded,
@@ -313,13 +279,11 @@ fn parse_account_id_arg_with_prefix_rejects_mismatched_i105_discriminant() {
         Some(753),
     )
     .expect_err("mismatched discriminant should fail");
-
     assert!(
         err.contains("ERR_UNEXPECTED_NETWORK_PREFIX"),
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn authority_payload_literal_preserves_explicit_i105_discriminant() {
     let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(753);
@@ -327,12 +291,9 @@ fn authority_payload_literal_preserves_explicit_i105_discriminant() {
     let expected = account
         .to_i105_for_discriminant(369)
         .expect("encode taira authority");
-
     let literal = authority_payload_literal(&account, Some(369)).expect("render authority payload");
-
     assert_eq!(literal, expected);
 }
-
 #[test]
 fn build_pin_register_transaction_signs_exact_native_instruction_locally() {
     let manifest = sample_manifest();
@@ -343,7 +304,6 @@ fn build_pin_register_transaction_signs_exact_native_instruction_locally() {
     >::from_untyped_unchecked(
         iroha_crypto::Hash::prehashed([0x9A; iroha_crypto::Hash::LENGTH]),
     ));
-
     let transaction = build_pin_register_transaction(
         &network_id,
         &authority,
@@ -353,7 +313,6 @@ fn build_pin_register_transaction_signs_exact_native_instruction_locally() {
         None,
     )
     .expect("build signed transaction");
-
     transaction.verify_signature().expect("signature verifies");
     assert_eq!(transaction.network_id(), Some(&network_id));
     assert_eq!(transaction.authority(), &authority);
@@ -374,7 +333,6 @@ fn build_pin_register_transaction_signs_exact_native_instruction_locally() {
         manifest.encode().expect("canonical manifest payload")
     );
 }
-
 #[test]
 fn proposal_summary_contains_register_instruction() {
     let manifest = sample_manifest();
@@ -389,7 +347,6 @@ fn proposal_summary_contains_register_instruction() {
         successor_bytes: None,
     })
     .expect("proposal summary");
-
     assert_eq!(summary["proposal_version"], Value::from(1_u64));
     assert_eq!(
         summary["manifest_digest_hex"].as_str().expect("digest hex"),
@@ -417,11 +374,9 @@ fn proposal_summary_contains_register_instruction() {
             .is_none()
     );
 }
-
 #[test]
 fn governance_payload_kind_cli_labels_external_payload() {
     use sorafs_manifest::GovernanceExternalPayloadV1;
-
     let encoded_payload = b"external moderation evidence".to_vec();
     let payload = GovernanceLogPayloadV1::ExternalPayload(GovernanceExternalPayloadV1 {
         version: 1,
@@ -432,10 +387,8 @@ fn governance_payload_kind_cli_labels_external_payload() {
         encoded_payload,
         metadata: Vec::new(),
     });
-
     assert_eq!(governance_payload_kind_cli(&payload), "external_payload");
 }
-
 #[test]
 fn storage_class_conversion_matches_variants() {
     assert!(matches!(
@@ -451,7 +404,6 @@ fn storage_class_conversion_matches_variants() {
         RegistryStorageClass::Cold
     ));
 }
-
 #[test]
 fn proof_stream_evidence_helper_writes_bundle() {
     let temp = tempdir().expect("tempdir");
@@ -460,7 +412,6 @@ fn proof_stream_evidence_helper_writes_bundle() {
     fs::write(&manifest_path, b"norito-data").expect("write manifest");
     let evidence_dir = root.join("evidence");
     let summary_json = r#"{"proof_kind":"por"}"#;
-
     write_proof_stream_evidence(
         &evidence_dir,
         &manifest_path,
@@ -470,7 +421,6 @@ fn proof_stream_evidence_helper_writes_bundle() {
         "https://torii.sora",
     )
     .expect("evidence bundle");
-
     let summary_path = evidence_dir.join("proof_stream_summary.json");
     assert!(summary_path.exists(), "summary file created");
     let written_summary = fs::read_to_string(&summary_path).expect("read summary");
@@ -478,7 +428,6 @@ fn proof_stream_evidence_helper_writes_bundle() {
         written_summary.contains("\"proof_kind\""),
         "summary data preserved"
     );
-
     let metadata_path = evidence_dir.join("metadata.json");
     let metadata_bytes = fs::read(&metadata_path).expect("read metadata");
     let metadata_value: Value = norito::json::from_slice(&metadata_bytes).expect("metadata json");
@@ -496,7 +445,6 @@ fn proof_stream_evidence_helper_writes_bundle() {
         b"norito-data"
     );
 }
-
 #[test]
 fn gateway_scoreboard_metadata_records_telemetry_source() {
     let metadata = build_gateway_scoreboard_metadata(&GatewayScoreboardMetadataInput {
@@ -532,7 +480,6 @@ fn gateway_scoreboard_metadata_records_telemetry_source() {
         Some(false)
     );
 }
-
 #[test]
 fn gateway_provider_spec_requires_and_normalizes_public_key() {
     let provider_id = "AB".repeat(32);
@@ -541,26 +488,22 @@ fn gateway_provider_spec_requires_and_normalizes_public_key() {
         "name=alpha,provider-id={provider_id},gateway-key={gateway_key},base-url=https://alpha.example/,stream-token=dG9rZW4="
     ))
     .expect("valid gateway provider specification");
-
     assert_eq!(spec.provider_id_hex, provider_id.to_ascii_lowercase());
     assert_eq!(
         spec.gateway_public_key_hex,
         gateway_key.to_ascii_lowercase()
     );
-
     let missing_key = parse_gateway_provider_spec(&format!(
         "name=alpha,provider-id={provider_id},base-url=https://alpha.example/,stream-token=dG9rZW4="
     ))
     .expect_err("gateway public key is required");
     assert!(missing_key.contains("requires a `gateway-key=` entry"));
-
     let invalid_key = parse_gateway_provider_spec(&format!(
         "name=alpha,provider-id={provider_id},gateway-key=not-hex,base-url=https://alpha.example/,stream-token=dG9rZW4="
     ))
     .expect_err("gateway public key must be canonical hex");
     assert!(invalid_key.contains("gateway-key must be 32-byte hex"));
 }
-
 #[test]
 fn fetch_summary_records_write_mode_hint() {
     let outcome = sorafs_car::multi_fetch::FetchOutcome {
@@ -615,7 +558,6 @@ fn fetch_summary_records_write_mode_hint() {
         Some(true)
     );
 }
-
 #[test]
 fn insert_telemetry_source_injects_label() {
     let mut summary = Value::Object(Map::new());
@@ -625,7 +567,6 @@ fn insert_telemetry_source_injects_label() {
         object.get("telemetry_source").and_then(Value::as_str),
         Some("otel::staging")
     );
-
     insert_telemetry_source(&mut summary, None);
     let object = summary.as_object().expect("summary object");
     assert_eq!(

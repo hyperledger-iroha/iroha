@@ -19,7 +19,6 @@ fn abi_syscall_list_is_sorted_and_unique() {
         "ABI syscall list should be in ascending order"
     );
 }
-
 #[test]
 fn markdown_render_is_in_ascending_order() {
     // Render the markdown table and parse syscall numbers from the first column.
@@ -59,7 +58,6 @@ fn markdown_render_is_in_ascending_order() {
         "markdown must reflect canonical list"
     );
 }
-
 #[test]
 fn min_list_length_matches_abi_list() {
     let list = ivm::syscalls::abi_syscall_list();
@@ -75,7 +73,6 @@ fn min_list_length_matches_abi_list() {
         "min list length should match abi_syscall_list length"
     );
 }
-
 #[test]
 fn min_list_count_matches_markdown_table_row_count() {
     let min_md = ivm::syscalls::render_syscalls_min_list();
@@ -83,7 +80,6 @@ fn min_list_count_matches_markdown_table_row_count() {
         .lines()
         .filter(|l| l.trim_start().starts_with("- 0x"))
         .count();
-
     let table_md = ivm::syscalls::render_syscalls_markdown_table();
     let table_count = table_md
         .lines()
@@ -91,13 +87,11 @@ fn min_list_count_matches_markdown_table_row_count() {
         .filter(|l| !l.starts_with("|---"))
         .filter(|l| !l.starts_with("| Number "))
         .count();
-
     assert_eq!(
         min_count, table_count,
         "min list count should match markdown table row count"
     );
 }
-
 #[test]
 fn min_list_numbers_match_markdown_numbers() {
     // Parse numbers from the minimal list
@@ -119,7 +113,6 @@ fn min_list_numbers_match_markdown_numbers() {
         }
     }
     assert!(!from_min.is_empty());
-
     // Parse numbers from the markdown table (first column)
     let table_md = ivm::syscalls::render_syscalls_markdown_table();
     let mut from_table: Vec<u32> = Vec::new();
@@ -143,7 +136,6 @@ fn min_list_numbers_match_markdown_numbers() {
         "numbers in min list and markdown table must match pairwise"
     );
 }
-
 #[test]
 fn syscalls_markdown_header_and_row_count_ok() {
     let md = ivm::syscalls::render_syscalls_markdown_table();
@@ -154,7 +146,6 @@ fn syscalls_markdown_header_and_row_count_ok() {
     assert!(header.contains("| Args |"));
     assert!(header.contains("| Return |"));
     assert!(header.contains("| Gas |"));
-
     let row_count = md
         .lines()
         .filter(|l| l.starts_with('|'))
@@ -163,7 +154,6 @@ fn syscalls_markdown_header_and_row_count_ok() {
         .count();
     assert_eq!(row_count, ivm::syscalls::abi_syscall_list().len());
 }
-
 #[test]
 fn min_list_names_match_syscall_name_lookup() {
     let md = ivm::syscalls::render_syscalls_min_list();

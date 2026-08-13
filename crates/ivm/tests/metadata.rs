@@ -1,12 +1,9 @@
 //! Tests for IVM bytecode header (ProgramMetadata) validation.
-
 use ivm::{ProgramMetadata, VMError, ivm_mode};
-
 fn encode_with(mut meta: ProgramMetadata, f: impl FnOnce(&mut ProgramMetadata)) -> Vec<u8> {
     f(&mut meta);
     meta.encode()
 }
-
 fn minimal_contract_artifact() -> Vec<u8> {
     let meta = ProgramMetadata {
         version_major: 1,
@@ -46,7 +43,6 @@ fn minimal_contract_artifact() -> Vec<u8> {
     bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     bytes
 }
-
 fn minimal_contract_artifact_with_debug() -> Vec<u8> {
     let meta = ProgramMetadata {
         version_major: 1,
@@ -120,7 +116,6 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
     bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     bytes
 }
-
 #[test]
 fn parse_accepts_valid_default_header() {
     let meta = ProgramMetadata::default();
@@ -138,7 +133,6 @@ fn parse_accepts_valid_default_header() {
         ProgramMetadata::default().abi_version
     );
 }
-
 #[test]
 fn parse_rejects_unknown_mode_bits() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
@@ -147,7 +141,6 @@ fn parse_rejects_unknown_mode_bits() {
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
     assert_eq!(err, VMError::UnsupportedProgramFeatureBits { bits: 0x80 });
 }
-
 #[test]
 fn parse_accepts_generic_minor_zero_without_cntr() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
@@ -159,14 +152,12 @@ fn parse_accepts_generic_minor_zero_without_cntr() {
     assert!(parsed.contract_interface.is_none());
     assert_eq!(parsed.code_offset, parsed.header_len);
 }
-
 #[test]
 fn parse_rejects_stale_authenticated_header_abi_hash() {
     let mut bytes = ProgramMetadata::default().encode();
     let expected = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     bytes[17] ^= 0x80;
     let actual: [u8; 32] = bytes[17..49].try_into().expect("fixed ABI hash field");
-
     assert!(matches!(
         ProgramMetadata::parse(&bytes),
         Err(VMError::ArtifactAbiHashMismatch {
@@ -175,7 +166,6 @@ fn parse_rejects_stale_authenticated_header_abi_hash() {
         }) if observed_expected == expected && observed_actual == actual
     ));
 }
-
 #[test]
 fn parse_accepts_vector_len_without_vector_flag() {
     // Vector length may be present even if VECTOR bit is off.
@@ -187,7 +177,6 @@ fn parse_accepts_vector_len_without_vector_flag() {
     assert_eq!(parsed.metadata.mode & ivm_mode::VECTOR, 0);
     assert_eq!(parsed.metadata.vector_length, 8);
 }
-
 #[test]
 fn parse_accepts_vector_len_with_flag() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
@@ -198,7 +187,6 @@ fn parse_accepts_vector_len_with_flag() {
     assert_eq!(parsed.metadata.mode & ivm_mode::VECTOR, ivm_mode::VECTOR);
     assert_eq!(parsed.metadata.vector_length, 8);
 }
-
 #[test]
 fn parse_rejects_vector_len_above_abi_max() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
@@ -214,7 +202,6 @@ fn parse_rejects_vector_len_above_abi_max() {
         }
     );
 }
-
 #[test]
 fn parse_rejects_wrong_major_version() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
@@ -225,7 +212,6 @@ fn parse_rejects_wrong_major_version() {
         err,
         VMError::UnsupportedProgramVersion { major: 0, minor: 1 }
     );
-
     let bytes = encode_with(ProgramMetadata::default(), |m| {
         m.version_major = 2;
     });
@@ -235,7 +221,6 @@ fn parse_rejects_wrong_major_version() {
         VMError::UnsupportedProgramVersion { major: 2, minor: 1 }
     );
 }
-
 #[test]
 fn parse_accepts_contract_minor_one_with_cntr() {
     let bytes = minimal_contract_artifact();
@@ -250,7 +235,6 @@ fn parse_accepts_contract_minor_one_with_cntr() {
         "CNTR prefix must advance code offset"
     );
 }
-
 #[test]
 fn parse_accepts_contract_debug_section() {
     let bytes = minimal_contract_artifact_with_debug();
@@ -273,7 +257,6 @@ fn parse_accepts_contract_debug_section() {
         Some("contracts/demo.ko")
     );
 }
-
 #[test]
 fn parse_accepts_generic_minor_one_without_cntr() {
     let mut bytes = ProgramMetadata::default().encode();
@@ -282,7 +265,6 @@ fn parse_accepts_generic_minor_one_without_cntr() {
     assert!(parsed.contract_interface.is_none());
     assert_eq!(parsed.code_offset, parsed.header_len);
 }
-
 #[test]
 fn parse_rejects_unknown_minor_version() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
@@ -294,7 +276,6 @@ fn parse_rejects_unknown_minor_version() {
         VMError::UnsupportedProgramVersion { major: 1, minor: 2 }
     );
 }
-
 #[test]
 fn load_program_honors_zk_mode_bit() {
     let mut bytes = ProgramMetadata {

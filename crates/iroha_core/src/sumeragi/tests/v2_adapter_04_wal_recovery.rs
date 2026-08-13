@@ -1,3 +1,6 @@
+use crate::sumeragi::v2_lifecycle_coordinator::{
+    reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
+};
 #[test]
 fn exact_live_wal_cut_rejects_pre_persist_effect_without_appending() {
     let directory = TempDir::new().expect("temporary missing-cause WAL directory");
@@ -18,7 +21,6 @@ fn exact_live_wal_cut_rejects_pre_persist_effect_without_appending() {
     assert!(adapter.fail_closed);
     assert!(adapter.wal.recovered_records().is_empty());
 }
-
 #[test]
 fn quorum_forming_local_timeout_flattens_to_certificate_only() {
     let directory = TempDir::new().expect("temporary directory");
@@ -27,7 +29,6 @@ fn quorum_forming_local_timeout_flattens_to_certificate_only() {
     let tag = adapter.current_tag();
     let round = reducer::Round::new(tag.height(), tag.view());
     let context_id = adapter.reducer.context().id();
-
     for signer_index in [1_u32, 2] {
         let signer = adapter
             .registry
@@ -49,7 +50,6 @@ fn quorum_forming_local_timeout_flattens_to_certificate_only() {
             .expect("retain the remote timeout share before local signing");
         assert!(retained.effects().is_empty());
     }
-
     let sign = adapter
         .timeout_elapsed(tag)
         .expect("persist the local timeout intent");
@@ -84,7 +84,6 @@ fn quorum_forming_local_timeout_flattens_to_certificate_only() {
     assert_eq!(adapter.current_tag().view(), tag.view() + 1);
     assert!(!adapter.fail_closed);
 }
-
 #[test]
 fn drive_effects_rejects_oversized_non_persisting_batch() {
     let directory = TempDir::new().expect("temporary directory");
@@ -100,7 +99,6 @@ fn drive_effects_rejects_oversized_non_persisting_batch() {
         certificate: None,
     };
     let oversized = vec![effect; MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 1];
-
     assert!(matches!(
         adapter.drive_effects(oversized),
         Err(AdapterError::AdapterMacroStepBoundExceeded {
@@ -116,7 +114,6 @@ fn drive_effects_rejects_oversized_non_persisting_batch() {
     assert!(adapter.fail_closed);
     assert!(adapter.wal.recovered_records().is_empty());
 }
-
 #[test]
 fn drive_effects_rejects_record_specific_overbudget_before_wal_append() {
     let directory = TempDir::new().expect("temporary directory");
@@ -142,7 +139,6 @@ fn drive_effects_rejects_record_specific_overbudget_before_wal_append() {
     };
     let mut overbudget = vec![unrelated];
     overbudget.extend(timeout);
-
     assert!(matches!(
         adapter.drive_effects(overbudget),
         Err(AdapterError::AdapterMacroStepBoundExceeded {
@@ -158,7 +154,6 @@ fn drive_effects_rejects_record_specific_overbudget_before_wal_append() {
     assert!(adapter.fail_closed);
     assert!(adapter.wal.recovered_records().is_empty());
 }
-
 #[test]
 fn drive_effects_rejects_multiple_persist_owners_before_wal_append() {
     let directory = TempDir::new().expect("temporary directory");
@@ -172,7 +167,6 @@ fn drive_effects_rejects_multiple_persist_owners_before_wal_append() {
         .into_effects();
     let persist = timeout.pop().expect("one Persist effect");
     assert!(matches!(&persist, reducer::Effect::Persist { .. }));
-
     assert!(matches!(
         adapter.drive_effects(vec![persist.clone(), persist]),
         Err(AdapterError::AdapterMacroStepBoundExceeded {
@@ -185,7 +179,6 @@ fn drive_effects_rejects_multiple_persist_owners_before_wal_append() {
     assert!(adapter.fail_closed);
     assert!(adapter.wal.recovered_records().is_empty());
 }
-
 #[test]
 fn post_wal_oversized_continuation_fails_closed_and_replays_exact_record() {
     let directory = TempDir::new().expect("temporary directory");
@@ -235,7 +228,6 @@ fn post_wal_oversized_continuation_fails_closed_and_replays_exact_record() {
         panic!("InstallTimeout must stage persistence");
     };
     assert!(pending_effects.is_empty());
-
     // Keep the reducer's real lock-promoting continuation, but classify
     // and encode this adversarial boundary call as the smaller
     // TimeoutIntent class. The substitute is itself a valid first WAL
@@ -274,7 +266,6 @@ fn post_wal_oversized_continuation_fails_closed_and_replays_exact_record() {
     assert_eq!(adapter.wal.recovered_records().len(), 1);
     assert_eq!(adapter.wal.recovered_records()[0].sequence(), 0);
     drop(adapter);
-
     let (recovered, first_startup) =
         open_test(&directory).expect("replay the one valid timeout intent");
     assert!(recovered.ingress_ready());
@@ -300,7 +291,6 @@ fn post_wal_oversized_continuation_fails_closed_and_replays_exact_record() {
             && vote.signature.is_empty()
     ));
     drop(recovered);
-
     let (recovered_again, second_startup) =
         open_test(&directory).expect("repeat deterministic timeout-intent replay");
     assert_eq!(second_startup, first_startup);
@@ -309,13 +299,11 @@ fn post_wal_oversized_continuation_fails_closed_and_replays_exact_record() {
     assert!(recovered_again.ingress_ready());
     assert!(!recovered_again.fail_closed);
 }
-
 #[test]
 fn open_records_exactly_one_recovery_progress_transition() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     assert!(matches!(
         adapter.last_progress,
         Some((
@@ -358,14 +346,12 @@ fn open_records_exactly_one_recovery_progress_transition() {
         })
     ));
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn first_recovery_snapshot_tracks_the_durable_locked_body() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
     assert!(startup.is_empty());
-
     let locked_subject = subject(0xCE);
     let wire_round = wire::ConsensusRound {
         context_id: adapter.wire_context.id(),
@@ -419,7 +405,6 @@ fn first_recovery_snapshot_tracks_the_durable_locked_body() {
         0
     );
     drop(adapter);
-
     let (mut recovered, startup) = open_test(&directory).expect("recover durable lock");
     assert!(matches!(
         startup.as_slice(),
@@ -447,7 +432,6 @@ fn first_recovery_snapshot_tracks_the_durable_locked_body() {
         })
     ));
 }
-
 #[test]
 fn persistence_is_fsynced_before_sign_is_exposed() {
     let directory = TempDir::new().expect("temporary directory");
@@ -498,7 +482,6 @@ fn persistence_is_fsynced_before_sign_is_exposed() {
     assert_eq!(adapter.wal.recovered_records().len(), 1);
     assert_eq!(adapter.reducer.durable_state().last_id().get(), 1);
 }
-
 fn advance_direct_validation_fixture_to_durable(
     adapter: &mut SumeragiV2Adapter,
     marker: u8,
@@ -512,7 +495,6 @@ fn advance_direct_validation_fixture_to_durable(
         advance_direct_validation_fixture_to_durable_with_proposal(adapter, marker);
     (tag, manifest, durable, validated)
 }
-
 fn ordinary_validate_predecessor_for_test(
     tag: reducer::EventTag,
     round: wire::ConsensusRound,
@@ -538,7 +520,6 @@ fn ordinary_validate_predecessor_for_test(
         .expect("project ordinary Validate predecessor");
     (validate, validate_pending)
 }
-
 fn advance_direct_validation_fixture_to_durable_with_proposal(
     adapter: &mut SumeragiV2Adapter,
     marker: u8,
@@ -604,7 +585,6 @@ fn advance_direct_validation_fixture_to_durable_with_proposal(
     assert_eq!(exact_proposal.manifest, manifest);
     (tag, exact_proposal, manifest, durable, validated)
 }
-
 fn reopen_with_prepare_intent(
     directory: &TempDir,
     marker: u8,
@@ -635,12 +615,10 @@ fn reopen_with_prepare_intent(
     assert_eq!(expected_vote.phase, wire::GlobalPhase::Prepare);
     let expected_vote = expected_vote.clone();
     drop(adapter);
-
     let recovered = open_recovered_startup_test(directory)
         .expect("replay the durable PrepareIntent behind the sealed startup cut");
     (recovered, expected_vote, proposal, manifest, validated)
 }
-
 #[allow(clippy::too_many_lines)]
 fn reopen_with_persisted_prepare_intent(
     safety_directory: &TempDir,
@@ -745,7 +723,6 @@ fn reopen_with_persisted_prepare_intent(
         available.commit(),
         AdapterEffect::StoreBody { .. }
     ));
-
     let mut body_store = super::super::v2_body_store::V2BodyStore::open(body_root, context)
         .expect("open persisted Prepare body store");
     let durable = body_store
@@ -783,12 +760,10 @@ fn reopen_with_persisted_prepare_intent(
     ));
     drop(adapter);
     drop(body_store);
-
     let recovered = open_recovered_startup_test(safety_directory)
         .expect("replay persisted PrepareIntent behind the startup cut");
     (recovered, proposal, manifest, validated)
 }
-
 fn join_recovered_prepare_startup<'registry>(
     startup: RecoveredAdapterStartup,
     proposal: wire::Proposal,
@@ -816,7 +791,6 @@ fn join_recovered_prepare_startup<'registry>(
         .authenticate_recovered_validate(validate)
         .unwrap_or_else(|error| panic!("join recovered Prepare WAL vote: {}", error.reason()))
 }
-
 fn install_recovered_prepare_startup<'registry>(
     safety_directory: &TempDir,
     ledger_root: &std::path::Path,
@@ -833,7 +807,6 @@ fn install_recovered_prepare_startup<'registry>(
         .install_recovered_sign_for_test(ledger_root)
         .unwrap_or_else(|error| panic!("install recovered Prepare Sign: {}", error.reason()))
 }
-
 fn verified_from_installed_startup(
     startup: &InstalledRecoveredWalLifecycleStartup<'_>,
 ) -> VerifiedHeightContext {
@@ -843,7 +816,6 @@ fn verified_from_installed_startup(
         parent_verification: startup.adapter.parent_verification.clone(),
     }
 }
-
 fn empty_authenticated_lifecycle_recovery(
     verified: &VerifiedHeightContext,
     ledger_root: &std::path::Path,
@@ -875,7 +847,6 @@ fn empty_authenticated_lifecycle_recovery(
     .expect("open exact ledger and assemble empty same-context lifecycle recovery cut");
     (payload_store, recovery)
 }
-
 #[test]
 fn production_lifecycle_owner_factory_opens_the_private_no_vote_branch() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
@@ -922,7 +893,6 @@ fn production_lifecycle_owner_factory_opens_the_private_no_vote_branch() {
     );
     crate::sumeragi::status::clear_v2_status();
 }
-
 fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
     let safety = TempDir::new().expect("temporary control safety store");
     let storage = TempDir::new().expect("temporary control lifecycle stores");
@@ -933,7 +903,6 @@ fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
     }
     crate::sumeragi::status::clear_v2_status();
     assert!(crate::sumeragi::status::v2_status().is_none());
-
     let mut first = open_control_owner_for_test(&safety, &storage, proposal_intent);
     let first_summary = first
         .recovered_control_row_summary_for_test()
@@ -950,13 +919,11 @@ fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
     #[cfg(unix)]
     let first_inode = {
         use std::os::unix::fs::MetadataExt as _;
-
         std::fs::metadata(&ledger_path)
             .expect("inspect repaired control LedgerV1")
             .ino()
     };
     drop(first);
-
     crate::sumeragi::status::clear_v2_status();
     let mut reopened = open_control_owner_for_test(&safety, &storage, proposal_intent);
     let reopened_summary = reopened
@@ -971,7 +938,6 @@ fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         assert_eq!(
             std::fs::metadata(&ledger_path)
                 .expect("inspect coalesced control LedgerV1")
@@ -988,19 +954,16 @@ fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
     );
     crate::sumeragi::status::clear_v2_status();
 }
-
 #[test]
 fn bls_proposal_intent_control_sign_repairs_and_coalesces_exactly() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     assert_control_repair_and_coalesce(true, 0xC1);
 }
-
 #[test]
 fn bls_timeout_intent_control_sign_repairs_and_coalesces_exactly() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     assert_control_repair_and_coalesce(false, 0xC2);
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
@@ -1065,13 +1028,11 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
     #[cfg(unix)]
     let first_inode = {
         use std::os::unix::fs::MetadataExt as _;
-
         std::fs::metadata(&ledger_path)
             .expect("inspect Decision Fetch LedgerV1")
             .ino()
     };
     drop(first);
-
     crate::sumeragi::status::clear_v2_status();
     let verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs)
         .expect("reverify Decision Fetch context");
@@ -1113,7 +1074,6 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         assert_eq!(
             std::fs::metadata(&ledger_path)
                 .expect("inspect coalesced Decision Fetch LedgerV1")
@@ -1130,7 +1090,6 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
     );
     crate::sumeragi::status::clear_v2_status();
 }
-
 #[cfg(feature = "bls")]
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -1215,7 +1174,6 @@ fn bls_decision_fetch_body_markers_fail_before_ledger_mutation() {
             !promoted_ledger_root.exists(),
             "promoted body conflicts must stop before LedgerV1 opens"
         );
-
         let quarantined_safety = TempDir::new().expect("temporary quarantined Decision marker WAL");
         let quarantined_storage =
             TempDir::new().expect("temporary quarantined Decision marker stores");
@@ -1247,7 +1205,6 @@ fn bls_decision_fetch_body_markers_fail_before_ledger_mutation() {
         assert!(!quarantined_storage.path().join("serve").exists());
     }
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn bls_revalidated_decision_body_cut_is_same_store_and_drop_restores_exactly() {
@@ -1382,7 +1339,6 @@ fn bls_revalidated_decision_body_cut_is_same_store_and_drop_restores_exactly() {
         .collect::<BTreeMap<_, _>>();
     assert_eq!(frames_after, frames_before);
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
@@ -1444,13 +1400,11 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
         "durable owner recovery must not publish status before live launch and ingress activation"
     );
     drop(owner);
-
     let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
     let first_frame = std::fs::read(&ledger_path).expect("read Decision Apply ledger");
     #[cfg(unix)]
     let first_inode = {
         use std::os::unix::fs::MetadataExt as _;
-
         std::fs::metadata(&ledger_path)
             .expect("inspect Decision Apply ledger")
             .ino()
@@ -1492,7 +1446,6 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         assert_eq!(
             std::fs::metadata(&ledger_path)
                 .expect("inspect coalesced Decision Apply ledger")
@@ -1502,7 +1455,6 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
         );
     }
     drop(owner);
-
     crate::sumeragi::status::clear_v2_status();
     let safety = TempDir::new().expect("temporary rejected Decision WAL");
     let storage = TempDir::new().expect("temporary rejected Decision stores");
@@ -1539,7 +1491,6 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
     assert!(!serve_root.exists());
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn bls_decision_fetch_same_key_drift_fails_without_rewrite() {
@@ -1589,7 +1540,6 @@ fn bls_decision_fetch_same_key_drift_fails_without_rewrite() {
         );
         let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
         let drifted = std::fs::read(&ledger_path).expect("read drifted Decision ledger");
-
         crate::sumeragi::status::clear_v2_status();
         let reopened = reopen_authenticated_decision_startup(&safety, &context, proofs, marker)
             .authenticate_final_wal_startup_authority()
@@ -1618,7 +1568,6 @@ fn bls_decision_fetch_same_key_drift_fails_without_rewrite() {
     }
     crate::sumeragi::status::clear_v2_status();
 }
-
 #[cfg(feature = "bls")]
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -1737,7 +1686,6 @@ fn recovered_signature_fifo_uses_latest_exact_owner_before_terminal_wal_frame() 
         }] if observed == &proposal
     ));
     assert_eq!(startup.adapter.reducer.queued_signatures().count(), 2);
-
     let authenticated = startup
         .authenticate_final_wal_startup_authority()
         .unwrap_or_else(|(error, _)| panic!("authenticate FIFO Proposal owner: {error}"));
@@ -1760,7 +1708,6 @@ fn recovered_signature_fifo_uses_latest_exact_owner_before_terminal_wal_frame() 
     } = authenticated;
     assert!(effects.is_empty());
     drop(authority);
-
     let tag = adapter.current_tag();
     let mut after_proposal = adapter
         .signature_completed(tag, vec![0xA1; 96])
@@ -1783,7 +1730,6 @@ fn recovered_signature_fifo_uses_latest_exact_owner_before_terminal_wal_frame() 
     assert!(prepare_owner.exactly_matches_wal_record(&adapter.wal.recovered_records()[5]));
     let prepare_tag = prepare_owner.tag();
     drop(prepare_owner);
-
     let mut after_prepare = adapter
         .signature_completed(prepare_tag, vec![0xA2; 96])
         .expect("complete recovered Prepare")
@@ -1805,7 +1751,6 @@ fn recovered_signature_fifo_uses_latest_exact_owner_before_terminal_wal_frame() 
     assert!(commit_owner.exactly_matches_wal_record(&adapter.wal.recovered_records()[7]));
     assert_eq!(commit_owner.prepare_certificate(), Some(&current_prepare));
 }
-
 #[cfg(feature = "bls")]
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -1899,7 +1844,6 @@ fn recovered_current_timeout_then_historical_commit_keeps_intrinsic_vote_round()
     } = authenticated;
     assert!(effects.is_empty());
     drop(authority);
-
     let tag = adapter.current_tag();
     let mut after_timeout = adapter
         .signature_completed(tag, vec![0xB1; 96])
@@ -1926,7 +1870,6 @@ fn recovered_current_timeout_then_historical_commit_keeps_intrinsic_vote_round()
     assert_eq!(commit_owner.vote().round, locked_round);
     assert_eq!(commit_owner.prepare_certificate(), Some(&locked_prepare));
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources() {
@@ -1969,7 +1912,6 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
         authenticated.authority,
         RecoveredWalStartupAuthorityV1::DecisionFetch(_)
     ));
-
     let manifest_directory = TempDir::new().expect("temporary mutated-manifest WAL");
     let mut retained = write_and_reopen_authenticated_wal_startup(
         &manifest_directory,
@@ -1982,7 +1924,6 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
     let AdapterEffect::FetchBody { manifest, .. } = &mut retained.effects[0] else {
         panic!("Decision replay effect must remain FetchBody")
     };
-
     let chunks = wire::encode_payload_chunks(context.da_layout, b"forbidden guessed manifest")
         .expect("encode mutation payload");
     let guessed = wire::PayloadManifest::derive(
@@ -2001,7 +1942,6 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
         error,
         AdapterError::RecoveredDecisionFetchMismatch
     ));
-
     let certificate_directory = TempDir::new().expect("temporary foreign-certificate WAL");
     let mut retained = write_and_reopen_authenticated_wal_startup(
         &certificate_directory,
@@ -2034,7 +1974,6 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
         error,
         AdapterError::RecoveredDecisionFetchMismatch
     ));
-
     let sources_directory = TempDir::new().expect("temporary mutated-sources WAL");
     let mut retained = write_and_reopen_authenticated_wal_startup(
         &sources_directory,
@@ -2059,7 +1998,6 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
         error,
         AdapterError::RecoveredDecisionFetchMismatch
     ));
-
     let locator_directory = TempDir::new().expect("temporary foreign-locator WAL");
     let authenticated = write_and_reopen_authenticated_wal_startup(
         &locator_directory,
@@ -2094,14 +2032,12 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
         "a substituted exact-shaped WAL locator must not project Decision Fetch authority"
     );
 }
-
 #[test]
 fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store() {
     let proposal_safety = TempDir::new().expect("temporary ProposalIntent classifier WAL");
     let timeout_safety = TempDir::new().expect("temporary TimeoutIntent classifier WAL");
     persist_proposal_intent_for_control_recovery(&proposal_safety, 0xC3);
     persist_timeout_intent_for_control_recovery(&timeout_safety);
-
     let mut proposal =
         open_recovered_leader_startup_test(&proposal_safety).expect("open ProposalIntent startup");
     let mut timeout =
@@ -2117,7 +2053,6 @@ fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store(
         assert!(matches!(error, AdapterError::RecoveredControlSignMismatch));
         assert_eq!(retained.effects.len(), 1);
     }
-
     let mut wrong_tag = open_recovered_leader_startup_test(&proposal_safety)
         .expect("reopen ProposalIntent for tag mutation");
     let AdapterEffect::Sign { tag, .. } = &mut wrong_tag.effects[0] else {
@@ -2133,7 +2068,6 @@ fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store(
     };
     assert!(matches!(error, AdapterError::RecoveredControlSignMismatch));
     assert_eq!(retained.effects.len(), 1);
-
     let mut extra = open_recovered_leader_startup_test(&proposal_safety)
         .expect("reopen ProposalIntent for residual mutation");
     let duplicate = extra.effects[0].clone();
@@ -2143,7 +2077,6 @@ fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store(
     };
     assert!(matches!(error, AdapterError::RecoveredControlSignMismatch));
     assert_eq!(retained.effects.len(), 2);
-
     let phase_safety = TempDir::new().expect("temporary phase/control exclusivity WAL");
     let (mut phase, _vote, _proposal, _manifest, _validated) =
         reopen_with_prepare_intent(&phase_safety, 0xC4);
@@ -2159,12 +2092,10 @@ fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store(
     };
     assert!(matches!(error, AdapterError::RecoveredVoteSignAmbiguous));
     assert_eq!(retained.effects.len(), 2);
-
     let unopened = TempDir::new().expect("unopened classification store root");
     assert!(!unopened.path().join("ledger").exists());
     assert!(!unopened.path().join("serve").exists());
 }
-
 #[test]
 fn bls_foreign_control_replay_row_is_never_repaired_or_published() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
@@ -2174,7 +2105,6 @@ fn bls_foreign_control_replay_row_is_never_repaired_or_published() {
     crate::sumeragi::status::clear_v2_status();
     drop(open_control_owner_for_test(&safety, &storage, false));
     crate::sumeragi::status::clear_v2_status();
-
     let wire_context = context();
     let mut context_id = [0_u8; 32];
     context_id.copy_from_slice(wire_context.id().0.as_ref());
@@ -2184,7 +2114,6 @@ fn bls_foreign_control_replay_row_is_never_repaired_or_published() {
     ));
     let ledger_path = storage.path().join("ledger/lifecycle-ledger-v1.norito");
     let foreign_frame = std::fs::read(&ledger_path).expect("read foreign replay frame");
-
     let authenticated = open_recovered_startup_test(&safety)
         .expect("reopen foreign replay control startup")
         .authenticate_final_wal_startup_authority()
@@ -2212,7 +2141,6 @@ fn bls_foreign_control_replay_row_is_never_repaired_or_published() {
     );
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
-
 #[test]
 fn bls_same_owner_foreign_terminal_control_row_is_rejected_without_rewrite() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
@@ -2222,7 +2150,6 @@ fn bls_same_owner_foreign_terminal_control_row_is_rejected_without_rewrite() {
     crate::sumeragi::status::clear_v2_status();
     drop(open_control_owner_for_test(&safety, &storage, false));
     crate::sumeragi::status::clear_v2_status();
-
     let wire_context = context();
     let mut context_id = [0_u8; 32];
     context_id.copy_from_slice(wire_context.id().0.as_ref());
@@ -2232,7 +2159,6 @@ fn bls_same_owner_foreign_terminal_control_row_is_rejected_without_rewrite() {
     ));
     let ledger_path = storage.path().join("ledger/lifecycle-ledger-v1.norito");
     let foreign_frame = std::fs::read(&ledger_path).expect("read same-owner foreign frame");
-
     let authenticated = open_recovered_startup_test(&safety)
         .expect("reopen same-owner control startup")
         .authenticate_final_wal_startup_authority()
@@ -2260,7 +2186,6 @@ fn bls_same_owner_foreign_terminal_control_row_is_rejected_without_rewrite() {
     );
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
-
 #[test]
 fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
@@ -2329,7 +2254,6 @@ fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
     assert!(!storage.path().join("serve").exists());
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
-
 #[test]
 fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     let adapter = include_str!("../v2.rs");
@@ -2337,9 +2261,8 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     let runtime = include_str!("../v2_runtime.rs");
     let replay = include_str!("../v2_lifecycle_replay_authority.rs");
     let wal_recovery = include_str!("../v2_lifecycle_wal_recovery.rs");
-    let ledger = include_str!("../v2_lifecycle_ledger.rs");
-    let registry = include_str!("../v2_lifecycle_work_registry.rs");
-
+    let ledger = reviewed_lifecycle_ledger_source_for_test();
+    let registry = reviewed_lifecycle_work_registry_source_for_test();
     let factory_start = adapter
         .find("pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(")
         .expect("locate unified lifecycle owner factory");
@@ -2355,15 +2278,11 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     let factory_inputs = canonical_factory
         .find("factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1")
         .expect("consume the adapter-bound execution/storage seal");
-    assert!(canonical_factory.contains(
-        "body_store: super::v2_body_store::QuarantinedV2BodyStore"
-    ));
-    assert!(!canonical_factory.contains(
-        "body_store: super::v2_body_store::V2BodyStore"
-    ));
-    assert!(!canonical_factory.contains(
-        "body_store: super::v2_body_store::RevalidatedV2BodyStore"
-    ));
+    assert!(canonical_factory.contains("body_store: super::v2_body_store::QuarantinedV2BodyStore"));
+    assert!(!canonical_factory.contains("body_store: super::v2_body_store::V2BodyStore"));
+    assert!(
+        !canonical_factory.contains("body_store: super::v2_body_store::RevalidatedV2BodyStore")
+    );
     let residual = canonical_factory
         .find("if !self.effects.is_empty()")
         .expect("reject residual effects before marker replay");
@@ -2488,7 +2407,6 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
             "production owner factory retained a second root-open surface {forbidden}"
         );
     }
-
     let control_token = adapter
         .split_once("pub(crate) struct RecoveredWalControlSign")
         .expect("locate opaque control token")
@@ -2513,7 +2431,6 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
             "forbidden control surface: {forbidden}"
         );
     }
-
     let control_classifier = adapter
         .split_once("fn authenticate_recovered_wal_control_sign(")
         .expect("locate exact control classifier")
@@ -2598,7 +2515,6 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
             "missing exclusive startup-authority branch: {required}"
         );
     }
-
     let runtime_control = runtime
         .split_once("pub(crate) fn project_recovered_wal_control_sign(")
         .expect("locate runtime control projection")
@@ -2608,7 +2524,6 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
         .0;
     assert!(!runtime_control.contains("RuntimeLifecycleOrdinalSource"));
     assert!(!runtime_control.contains("CandidateAdmission::new"));
-
     let authority = replay
         .split_once("fn exact_recovered_wal_control_authority(")
         .expect("locate exact control replay authority")
@@ -2629,7 +2544,6 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
             "missing exact control mapping: {required}"
         );
     }
-
     let durable = ledger
         .split_once("pub(in crate::sumeragi) fn open_recovered_control_startup(")
         .expect("locate recovered control storage transaction")
@@ -2680,7 +2594,6 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     assert!(decision_ledger_open < decision_stage && decision_stage < decision_registry);
     assert!(decision_durable.contains("if changed"));
     assert!(decision_durable.contains("persist_exact_successor"));
-
     for required in [
         "enum RecoveredWalRegistrySlotV1",
         "PhaseVote(ConcreteWorkAddress)",

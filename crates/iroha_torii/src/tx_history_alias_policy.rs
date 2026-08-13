@@ -1,5 +1,4 @@
 //! Bounded startup loader for transaction-history mandatory-alias policy files.
-
 use std::{
     alloc::{Layout, alloc},
     fmt,
@@ -9,21 +8,15 @@ use std::{
     str::FromStr as _,
     sync::Arc,
 };
-
 #[cfg(test)]
 use std::{path::PathBuf, sync::Mutex};
-
-use iroha_data_model::{
-    alias_setup::AccountAliasName, name::MAX_NAME_BYTES, nexus::DataSpaceCatalog,
-};
+use iroha_data_model::{alias_setup::AccountAliasName, name::MAX_NAME_BYTES, nexus::DataSpaceCatalog};
 use norito::{
     DecodeLimits,
     json::{JsonPreflightLimits, JsonPreflightProfile, Parser, preflight_slice},
 };
-
 const MAX_ACCOUNT_ALIAS_LITERAL_BYTES: usize = 3 * MAX_NAME_BYTES + 2;
 const JSON_VALUE_DEPTH: usize = 3;
-
 /// Canonical mandatory aliases retained in one exact, sorted allocation.
 ///
 /// A canonical alias embeds its dataspace, so retaining a second map/set graph
@@ -31,7 +24,6 @@ const JSON_VALUE_DEPTH: usize = 3;
 /// startup policy shares this immutable allocation.
 #[derive(Clone, Default)]
 pub(crate) struct MandatoryAliasPolicy(Arc<Box<[Box<str>]>>);
-
 impl MandatoryAliasPolicy {
     pub(crate) fn contains(&self, dataspace: &str, alias: &str) -> bool {
         let Some((_, scope)) = alias.rsplit_once('@') else {
@@ -44,19 +36,16 @@ impl MandatoryAliasPolicy {
                 .binary_search_by(|candidate| candidate.as_ref().cmp(alias))
                 .is_ok()
     }
-
     #[cfg(test)]
     fn len(&self) -> usize {
         self.0.len()
     }
 }
-
 #[derive(Debug)]
 enum PolicyLoadError {
     Io(io::Error),
     Invalid(&'static str),
 }
-
 impl fmt::Display for PolicyLoadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -65,13 +54,11 @@ impl fmt::Display for PolicyLoadError {
         }
     }
 }
-
 impl From<io::Error> for PolicyLoadError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
     }
 }
-
 /// Load the configured mandatory-alias policy under its complete startup envelope.
 ///
 /// The file is opened without following its final path component and must keep
@@ -91,7 +78,6 @@ pub(crate) fn load_mandatory_alias_policy(
         )
     })
 }
-
 fn try_load_mandatory_alias_policy(
     path: &Path,
     catalog: &DataSpaceCatalog,
@@ -100,7 +86,6 @@ fn try_load_mandatory_alias_policy(
     let bytes = read_exact_stable_policy_file(path, maximum_file_bytes)?;
     parse_mandatory_alias_policy(&bytes, catalog, maximum_file_bytes)
 }
-
 fn policy_decode_limits(maximum_file_bytes: usize) -> Result<DecodeLimits, PolicyLoadError> {
     if !(1..=iroha_config::parameters::defaults::torii::tx_history::
         MANDATORY_ALIASES_MAX_FILE_BYTES_V1)
@@ -129,7 +114,6 @@ fn policy_decode_limits(maximum_file_bytes: usize) -> Result<DecodeLimits, Polic
         JSON_VALUE_DEPTH,
     ))
 }
-
 fn parse_mandatory_alias_policy(
     bytes: &[u8],
     catalog: &DataSpaceCatalog,
@@ -148,13 +132,11 @@ fn parse_mandatory_alias_policy(
         JsonPreflightLimits::from_decode_limits(maximum_file_bytes, limits),
     )
     .map_err(|_| PolicyLoadError::Invalid("alias-policy JSON failed lexical admission"))?;
-
     let (result, _usage) = norito::core::with_decode_limits_measured(limits, || {
         parse_mandatory_alias_policy_inner(source, catalog, profile)
     });
     result
 }
-
 fn parse_mandatory_alias_policy_inner(
     source: &str,
     catalog: &DataSpaceCatalog,
@@ -171,7 +153,6 @@ fn parse_mandatory_alias_policy_inner(
     }
     let mut dataspaces = ExactBoxBuilder::<Box<str>>::new(entry_count)?;
     let mut aliases = ExactBoxBuilder::<Box<str>>::new(profile.array_entries())?;
-
     parser
         .expect(b'{')
         .map_err(|_| PolicyLoadError::Invalid("alias-policy root must be a JSON object"))?;
@@ -210,7 +191,6 @@ fn parse_mandatory_alias_policy_inner(
             "alias-policy contains a duplicate dataspace key",
         ));
     }
-
     let mut aliases = aliases.finish()?;
     aliases.sort_unstable();
     if aliases
@@ -223,7 +203,6 @@ fn parse_mandatory_alias_policy_inner(
     }
     Ok(MandatoryAliasPolicy(Arc::new(aliases)))
 }
-
 fn validate_dataspace_key(
     dataspace: &str,
     catalog: &DataSpaceCatalog,
@@ -243,14 +222,12 @@ fn validate_dataspace_key(
     }
     Ok(())
 }
-
 fn parse_alias_array(
     parser: &mut Parser<'_>,
     dataspace: &str,
     aliases: &mut ExactBoxBuilder<Box<str>>,
 ) -> Result<(), norito::json::Error> {
     let entry_count = parser.preflight_array_entries()?;
-
     parser.expect(b'[')?;
     for index in 0..entry_count {
         if index != 0 {
@@ -266,12 +243,10 @@ fn parse_alias_array(
     parser.expect(b']')?;
     Ok(())
 }
-
 struct ExactBoxBuilder<T> {
     storage: Box<[std::mem::MaybeUninit<T>]>,
     initialized: usize,
 }
-
 impl<T> ExactBoxBuilder<T> {
     fn new(length: usize) -> Result<Self, PolicyLoadError> {
         let allocation_bytes =
@@ -287,7 +262,6 @@ impl<T> ExactBoxBuilder<T> {
             initialized: 0,
         })
     }
-
     fn push(&mut self, value: T) -> Result<(), PolicyLoadError> {
         let slot = self
             .storage
@@ -299,7 +273,6 @@ impl<T> ExactBoxBuilder<T> {
         self.initialized += 1;
         Ok(())
     }
-
     #[allow(unsafe_code)]
     fn finish(mut self) -> Result<Box<[T]>, PolicyLoadError> {
         if self.initialized != self.storage.len() {
@@ -314,7 +287,6 @@ impl<T> ExactBoxBuilder<T> {
         Ok(unsafe { Box::from_raw(raw) })
     }
 }
-
 impl<T> Drop for ExactBoxBuilder<T> {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
@@ -325,7 +297,6 @@ impl<T> Drop for ExactBoxBuilder<T> {
         }
     }
 }
-
 #[allow(unsafe_code)]
 fn parse_exact_json_string(
     parser: &mut Parser<'_>,
@@ -354,7 +325,6 @@ fn parse_exact_json_string(
     // without a spare-capacity allocation.
     Ok(unsafe { Box::from_raw(Box::into_raw(bytes) as *mut str) })
 }
-
 fn decode_json_string_into(
     raw: &str,
     output: &mut [std::mem::MaybeUninit<u8>],
@@ -439,7 +409,6 @@ fn decode_json_string_into(
     }
     Ok(())
 }
-
 fn write_exact_bytes(
     output: &mut [std::mem::MaybeUninit<u8>],
     written: &mut usize,
@@ -457,7 +426,6 @@ fn write_exact_bytes(
     *written = end;
     Ok(())
 }
-
 fn decode_json_hex_quad(source: &[u8], input: &mut usize) -> Result<u32, norito::json::Error> {
     let mut value = 0_u32;
     for _ in 0..4 {
@@ -479,7 +447,6 @@ fn decode_json_hex_quad(source: &[u8], input: &mut usize) -> Result<u32, norito:
     }
     Ok(value)
 }
-
 fn validate_alias_literal(alias: &str, dataspace: &str) -> Result<(), &'static str> {
     if alias.len() > MAX_ACCOUNT_ALIAS_LITERAL_BYTES {
         return Err("alias-policy alias exceeds the canonical literal limit");
@@ -502,7 +469,6 @@ fn validate_alias_literal(alias: &str, dataspace: &str) -> Result<(), &'static s
     }
     Ok(())
 }
-
 #[allow(unsafe_code)]
 fn read_exact_stable_policy_file(
     path: &Path,
@@ -520,10 +486,8 @@ fn read_exact_stable_policy_file(
             "alias-policy file exceeds its configured byte limit",
         ));
     }
-
     #[cfg(test)]
     replace_policy_file_for_test(path)?;
-
     let mut file = open_direct_regular_file(path)?;
     let opened_before = file.metadata()?;
     validate_direct_regular_file(&opened_before)?;
@@ -539,7 +503,6 @@ fn read_exact_stable_policy_file(
             "alias-policy file exceeds its configured byte limit",
         ));
     }
-
     let mut storage = allocate_exact_uninit(length)?;
     for byte in &mut storage {
         byte.write(0);
@@ -559,7 +522,6 @@ fn read_exact_stable_policy_file(
             "alias-policy file grew while reading or exceeds its configured byte limit",
         ));
     }
-
     let opened_after = file.metadata()?;
     let named_after = fs::symlink_metadata(path)?;
     validate_direct_regular_file(&opened_after)?;
@@ -573,7 +535,6 @@ fn read_exact_stable_policy_file(
     }
     Ok(bytes)
 }
-
 #[allow(unsafe_code)]
 fn allocate_exact_uninit<T>(
     length: usize,
@@ -598,7 +559,6 @@ fn allocate_exact_uninit<T>(
     // alignment match this boxed `MaybeUninit<T>` slice.
     Ok(unsafe { Box::from_raw(slice) })
 }
-
 fn validate_direct_regular_file(metadata: &Metadata) -> Result<(), PolicyLoadError> {
     if metadata.file_type().is_symlink()
         || metadata_is_reparse_point(metadata)
@@ -610,11 +570,9 @@ fn validate_direct_regular_file(metadata: &Metadata) -> Result<(), PolicyLoadErr
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn open_direct_regular_file(path: &Path) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt as _;
-
     let mut options = OpenOptions::new();
     options.read(true).custom_flags(
         (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY)
@@ -622,11 +580,9 @@ fn open_direct_regular_file(path: &Path) -> io::Result<File> {
     );
     options.open(path)
 }
-
 #[cfg(windows)]
 fn open_direct_regular_file(path: &Path) -> io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     let mut options = OpenOptions::new();
     options
@@ -634,7 +590,6 @@ fn open_direct_regular_file(path: &Path) -> io::Result<File> {
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options.open(path)
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_direct_regular_file(_path: &Path) -> io::Result<File> {
     Err(io::Error::new(
@@ -642,24 +597,19 @@ fn open_direct_regular_file(_path: &Path) -> io::Result<File> {
         "stable direct-file opens are unavailable on this platform",
     ))
 }
-
 #[cfg(windows)]
 fn metadata_is_reparse_point(metadata: &Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
-
 #[cfg(not(windows))]
 fn metadata_is_reparse_point(_metadata: &Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn metadata_unchanged(left: &Metadata, right: &Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.len() == right.len()
@@ -669,11 +619,9 @@ fn metadata_unchanged(left: &Metadata, right: &Metadata) -> bool {
         && left.ctime_nsec() == right.ctime_nsec()
         && left.mode() == right.mode()
 }
-
 #[cfg(windows)]
 fn metadata_unchanged(left: &Metadata, right: &Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     left.volume_serial_number().is_some()
         && left.file_index().is_some()
         && left.volume_serial_number() == right.volume_serial_number()
@@ -683,15 +631,12 @@ fn metadata_unchanged(left: &Metadata, right: &Metadata) -> bool {
         && left.creation_time() == right.creation_time()
         && left.file_attributes() == right.file_attributes()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn metadata_unchanged(_left: &Metadata, _right: &Metadata) -> bool {
     false
 }
-
 #[cfg(test)]
 static POLICY_FILE_REPLACEMENT: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
-
 #[cfg(test)]
 fn replace_policy_file_for_test(path: &Path) -> io::Result<()> {
     let replacement = {
@@ -709,13 +654,10 @@ fn replace_policy_file_for_test(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::nexus::{DataSpaceId, DataSpaceMetadata};
-
     use super::*;
-
     fn catalog() -> DataSpaceCatalog {
         DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
@@ -728,7 +670,6 @@ mod tests {
         ])
         .expect("test dataspace catalog")
     }
-
     #[test]
     fn streaming_policy_parser_preserves_canonical_aliases() {
         let document =
@@ -740,23 +681,19 @@ mod tests {
         assert!(parsed.contains("retail", "treasury@banking.retail"));
         assert!(!parsed.contains("universal", "merchant@retail"));
     }
-
     #[test]
     fn streaming_policy_parser_decodes_json_escapes_into_exact_strings() {
         let document = br#"{"retail":["merch\u0061nt@retail","treas\u0075ry@retail"]}"#;
         let parsed = parse_mandatory_alias_policy(document, &catalog(), document.len())
             .expect("escaped canonical policy");
-
         assert!(parsed.contains("retail", "merchant@retail"));
         assert!(parsed.contains("retail", "treasury@retail"));
-
         let mut parser = Parser::new(r#""\ud83d\ude00""#);
         assert_eq!(
             &*parse_exact_json_string(&mut parser, 4).expect("surrogate pair"),
             "😀"
         );
     }
-
     #[test]
     fn streaming_policy_parser_rejects_noncanonical_duplicate_and_cross_dataspace_aliases() {
         for document in [
@@ -773,7 +710,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn policy_file_reader_accepts_exact_limit_and_rejects_plus_one() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -785,7 +721,6 @@ mod tests {
         );
         assert!(read_exact_stable_policy_file(&path, 1).is_err());
     }
-
     #[test]
     fn policy_file_reader_rejects_path_replacement() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -798,12 +733,10 @@ mod tests {
             .expect("alias-policy replacement hook lock") = Some((path.clone(), replacement));
         assert!(read_exact_stable_policy_file(&path, 2).is_err());
     }
-
     #[cfg(unix)]
     #[test]
     fn policy_file_reader_rejects_symbolic_links() {
         use std::os::unix::fs::symlink;
-
         let directory = tempfile::tempdir().expect("temporary directory");
         let target = directory.path().join("target.json");
         let link = directory.path().join("aliases.json");
@@ -811,7 +744,6 @@ mod tests {
         symlink(&target, &link).expect("create policy symlink");
         assert!(read_exact_stable_policy_file(&link, 2).is_err());
     }
-
     #[test]
     fn policy_memory_geometry_has_exact_boundaries() {
         let maximum = 1024;
@@ -828,7 +760,6 @@ mod tests {
         assert!(policy_decode_limits(hard_max).is_ok());
         assert!(policy_decode_limits(hard_max + 1).is_err());
     }
-
     #[test]
     fn exact_array_geometry_fits_the_retained_decode_units() {
         let raw_bytes = 1024usize;
@@ -847,7 +778,6 @@ mod tests {
             iroha_config::parameters::defaults::torii::tx_history::
                 MANDATORY_ALIASES_MEMORY_PHASE_UNITS
                 - 1;
-
         assert!(exact_arrays <= raw_bytes * decode_units);
     }
 }

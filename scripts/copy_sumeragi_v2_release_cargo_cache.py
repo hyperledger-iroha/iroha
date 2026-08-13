@@ -94,6 +94,8 @@ VALIDATOR_OPTION_ORDER = (
     "--sdk-dependency-archive",
     "--sdk-dependency-input-inventory",
     "--sdk-dependency-final-work-inventory",
+    "--runtime-tool-probe-manifest",
+    "--runtime-tool-probe-result",
     "--expected-scaling-trial-harness-sha256",
     "--expected-scaling-configuration-sha256",
     "--expected-scaling-irohad-sha256",
@@ -136,6 +138,8 @@ VALIDATOR_PATH_OPTIONS = frozenset(
         "--sdk-dependency-archive",
         "--sdk-dependency-input-inventory",
         "--sdk-dependency-final-work-inventory",
+        "--runtime-tool-probe-manifest",
+        "--runtime-tool-probe-result",
         "--repository-root",
         "--output",
         "--validation-ack",
@@ -152,6 +156,13 @@ IDENTITY_FIELDS = (
     "st_mtime_ns",
     "st_ctime_ns",
 )
+VALIDATION_ACK_COMPONENT_FILES = (
+    "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
+)
+VALIDATION_ACK_COMPONENT_SHA256 = (
+    "5b7a6542b314052af6cbbbb03b3bc0d5ec42a32dfe7c2ab222123de770d56b7e"
+)
+VALIDATION_ACK_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 
 
 class CacheCopyError(RuntimeError):
@@ -1419,7 +1430,16 @@ def _quiescent_remove_tree(root: Path, label: str) -> None:
     if root.resolve(strict=True) != root or stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid():
         raise CacheCopyError(f"quiescent {label} is unsafe")
     for directory, _, _ in os.walk(root, topdown=True, followlinks=False):
-        Path(directory).chmod(0o700)
+        current = Path(directory)
+        observed = current.lstat()
+        if (
+            stat.S_ISLNK(observed.st_mode)
+            or not stat.S_ISDIR(observed.st_mode)
+            or observed.st_uid != os.geteuid()
+        ):
+            raise CacheCopyError(f"quiescent {label} directory is unsafe")
+        if stat.S_IMODE(observed.st_mode) & 0o700 != 0o700:
+            current.chmod(stat.S_IMODE(observed.st_mode) | 0o700)
     for directory, directories, files in os.walk(root, topdown=False, followlinks=False):
         current = Path(directory)
         for name in files:
@@ -1437,8 +1457,8 @@ def _quiescent_remove_tree(root: Path, label: str) -> None:
                 entry.unlink(); continue
             if not stat.S_ISDIR(observed.st_mode):
                 raise CacheCopyError(f"quiescent {label} directory is unsafe")
-            entry.chmod(0o700); entry.rmdir()
-    root.chmod(0o700); root.rmdir()
+            entry.rmdir()
+    root.rmdir()
 
 
 def _quiescent_remove_named(
@@ -1753,274 +1773,35 @@ def publish_validation_failure(
         raise
 
 
-def _validation_ack(
-    ack_held: dict[str, object],
-    receipt_held: dict[str, object],
-    source: Path,
-    bootstrap_evidence: Path,
-    source_manifest_sha256: str,
-    candidate_root: Path,
-    scaling_evidence_manifest: Path,
-    expected_signer_fingerprint: str,
-    expected_scaling_trial_harness_sha256: str,
-    expected_scaling_configuration_sha256: str,
-    expected_scaling_irohad_sha256: str,
-    expected_scaling_iroha_cli_sha256: str,
-) -> tuple[str, int]:
-    path, payload, metadata = ack_held["path"], ack_held["data"], ack_held["metadata"]
-    receipt, receipt_payload, receipt_metadata = (
-        receipt_held["path"],
-        receipt_held["data"],
-        receipt_held["metadata"],
-    )
-    assert (
-        isinstance(path, Path)
-        and isinstance(payload, bytes)
-        and isinstance(metadata, os.stat_result)
-        and isinstance(receipt, Path)
-        and isinstance(receipt_payload, bytes)
-        and isinstance(receipt_metadata, os.stat_result)
-    )
-    digest, size = hashlib.sha256(payload).hexdigest(), len(payload)
-    if stat.S_IMODE(metadata.st_mode) != 0o400 or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1:
-        raise CacheCopyError("receipt validation acknowledgment metadata is not exact")
-    try:
-        value = json.loads(payload)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise CacheCopyError("receipt validation acknowledgment is malformed") from error
-    validator = bootstrap_evidence / "validate-receipt.py"
-    completion = bootstrap_evidence / "BOOTSTRAP_COMPLETED.json"
-    validator_digest, _, _ = _digest_regular(validator, "archived receipt validator")
-    completion_digest, _, _ = _digest_regular(completion, "bootstrap completion")
-    receipt_digest, receipt_size = hashlib.sha256(receipt_payload).hexdigest(), len(receipt_payload)
-    stdout = f"Sumeragi v2 aggregate release receipt verified: {receipt}\n".encode()
-    expected_streams = {
-        "stdout": {
-            "sha256": hashlib.sha256(stdout).hexdigest(),
-            "size_bytes": len(stdout),
-        },
-        "stderr": {
-            "sha256": hashlib.sha256(b"").hexdigest(),
-            "size_bytes": 0,
-        },
-    }
-    if not isinstance(value, dict):
-        raise CacheCopyError("receipt validation acknowledgment is malformed")
-    try:
-        receipt_document = json.loads(receipt_payload)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise CacheCopyError("aggregate receipt is malformed") from error
-    if not isinstance(receipt_document, dict):
-        raise CacheCopyError("aggregate receipt is malformed")
 
-    def receipt_path(*names: str) -> str:
-        item: object = receipt_document
-        try:
-            for name in names:
-                if not isinstance(item, dict):
-                    raise KeyError(name)
-                item = item[name]
-        except KeyError as error:
-            raise CacheCopyError(
-                "aggregate receipt lacks a validator invocation path"
-            ) from error
-        if isinstance(item, dict):
-            item = item.get("path")
-        if not isinstance(item, str):
-            raise CacheCopyError(
-                "aggregate receipt validator invocation path is malformed"
-            )
-        return item
 
-    try:
-        authentication = receipt_document["authentication"]
-        authentication["bootstrap"]
-        receipt_document["evidence"]
-    except (KeyError, TypeError) as error:
-        raise CacheCopyError(
-            "aggregate receipt lacks validator invocation authentication"
-        ) from error
-
-    completion_payload, _ = _read_regular(completion, "bootstrap completion")
-    try:
-        completion_document = json.loads(completion_payload)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise CacheCopyError("bootstrap completion is malformed") from error
-    if not isinstance(completion_document, dict):
-        raise CacheCopyError("bootstrap completion is malformed")
-    trusted_inputs = completion_document.get("trusted_inputs")
-    if not isinstance(trusted_inputs, dict):
-        raise CacheCopyError("bootstrap completion lacks trusted inputs")
-
-    def trusted_digest(name: str) -> str:
-        record = trusted_inputs.get(name)
-        if not isinstance(record, dict):
-            raise CacheCopyError(
-                f"bootstrap completion lacks trusted {name} input"
-            )
-        value = record.get("sha256")
-        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
-            raise CacheCopyError(
-                f"bootstrap completion trusted {name} digest is malformed"
-            )
-        return value
-
-    for name, expected_value in (
-        ("expected signer fingerprint", expected_signer_fingerprint),
-        (
-            "expected scaling trial-harness digest",
-            expected_scaling_trial_harness_sha256,
-        ),
-        (
-            "expected scaling configuration digest",
-            expected_scaling_configuration_sha256,
-        ),
-        ("expected scaling irohad digest", expected_scaling_irohad_sha256),
-        (
-            "expected scaling iroha CLI digest",
-            expected_scaling_iroha_cli_sha256,
-        ),
-    ):
-        pattern = r"SHA256:[A-Za-z0-9+/]{43}" if name == "expected signer fingerprint" else r"[0-9a-f]{64}"
-        if (
-            not isinstance(expected_value, str)
-            or re.fullmatch(pattern, expected_value) is None
-        ):
-            raise CacheCopyError(f"{name} is malformed")
-
-    identity_path = bootstrap_evidence / "candidate-identity.json"
-    protected_archives = {
-        "attestation": bootstrap_evidence / "identity-attestation.json",
-        "transcript": bootstrap_evidence / "identity-transcript.json",
-        "raw_commit": bootstrap_evidence / "identity-raw-commit",
-        "cargo_lock": bootstrap_evidence / "identity-Cargo.lock",
-        "allowed_signers": bootstrap_evidence / "identity-allowed-signers",
-        "revocation": bootstrap_evidence / "identity-revocation",
-        "git": bootstrap_evidence / "identity-git",
-        "ssh_keygen": bootstrap_evidence / "identity-ssh-keygen",
-    }
-    expected_invocation_values = {
-        "--candidate-identity": ("path", str(identity_path)),
-        "--sealed-identity": ("path", str(source.parent / "sealed-identity.json")),
-        "--release-root": ("path", str(source)),
-        "--bootstrap-completion": ("path", str(completion)),
-        "--bootstrap-evidence-dir": ("path", str(bootstrap_evidence)),
-        "--bootstrap-identity": ("path", str(identity_path)),
-        "--bootstrap-attestation": ("path", str(protected_archives["attestation"])),
-        "--bootstrap-transcript": ("path", str(protected_archives["transcript"])),
-        "--expected-bootstrap-completion-sha256": ("text", completion_digest),
-        "--bootstrap-candidate-root": ("path", str(candidate_root)),
-        "--bootstrap-runner": (
-            "path", str(candidate_root / "scripts" / "run_sumeragi_v2_release_gates.sh")
-        ),
-        "--signature-attestation": ("path", str(protected_archives["attestation"])),
-        "--signature-transcript": ("path", str(protected_archives["transcript"])),
-        "--signature-raw-commit": ("path", str(protected_archives["raw_commit"])),
-        "--signature-cargo-lock": ("path", str(protected_archives["cargo_lock"])),
-        "--signature-allowed-signers": ("path", str(protected_archives["allowed_signers"])),
-        "--signature-revocation": ("path", str(protected_archives["revocation"])),
-        "--signature-git": ("path", str(protected_archives["git"])),
-        "--signature-ssh-keygen": ("path", str(protected_archives["ssh_keygen"])),
-        "--expected-git-sha256": ("text", trusted_digest("git")),
-        "--expected-ssh-keygen-sha256": ("text", trusted_digest("ssh_keygen")),
-        "--expected-allowed-signers-sha256": ("text", trusted_digest("allowed_signers")),
-        "--expected-revocation-sha256": ("text", trusted_digest("revocation")),
-        "--expected-signer-fingerprint": ("text", expected_signer_fingerprint),
-        "--corridor-completion": (
-            "path", receipt_path("evidence", "corridor_completion")
-        ),
-        "--formal-completion": (
-            "path", receipt_path("evidence", "formal_completion")
-        ),
-        "--seed-completion": (
-            "path", receipt_path("evidence", "seed_matrix_completion")
-        ),
-        "--chaos-completion": (
-            "path", receipt_path("evidence", "chaos_completion")
-        ),
-        "--taira-completion": (
-            "path", receipt_path("evidence", "taira_completion")
-        ),
-        "--g4p-completion": (
-            "path", receipt_path("evidence", "g4p_multilane", "completion")
-        ),
-        "--g12-seed-completion": (
-            "path",
-            receipt_path("evidence", "g12_cross_dataspace", "seed_completion"),
-        ),
-        "--g12-fault-soak-completion": (
-            "path",
-            receipt_path(
-                "evidence", "g12_cross_dataspace", "fault_soak_completion"
-            ),
-        ),
-        "--scaling-evidence-manifest": ("path", str(scaling_evidence_manifest)),
-        "--sdk-dependency-archive": (
-            "path", str(source.parent / "sdk-dependency-bundle.tar")
-        ),
-        "--sdk-dependency-input-inventory": (
-            "path", str(source.parent / "sdk-dependency-input.json")
-        ),
-        "--sdk-dependency-final-work-inventory": (
-            "path", str(source.parent / "sdk-dependency-work-final.json")
-        ),
-        "--expected-scaling-trial-harness-sha256": (
-            "text", expected_scaling_trial_harness_sha256
-        ),
-        "--expected-scaling-configuration-sha256": (
-            "text", expected_scaling_configuration_sha256
-        ),
-        "--expected-scaling-irohad-sha256": (
-            "text", expected_scaling_irohad_sha256
-        ),
-        "--expected-scaling-iroha-cli-sha256": (
-            "text", expected_scaling_iroha_cli_sha256
-        ),
-        "--repository-root": ("path", str(source)),
-        "--output": ("path", str(receipt)),
-        "--verify-existing": ("flag", True),
-        "--validation-ack": ("path", str(path)),
-        "--source-manifest-sha256": ("text", source_manifest_sha256),
-    }
-    _validate_validator_invocation(
-        value.get("invocation"),
-        expected_values=expected_invocation_values,
+def _validation_ack(ack_held: dict[str, object], receipt_held: dict[str, object], source: Path, bootstrap_evidence: Path, source_manifest_sha256: str, candidate_root: Path, scaling_evidence_manifest: Path, expected_signer_fingerprint: str, expected_scaling_trial_harness_sha256: str, expected_scaling_configuration_sha256: str, expected_scaling_irohad_sha256: str, expected_scaling_iroha_cli_sha256: str) -> tuple[str, int]:
+    component_name = VALIDATION_ACK_COMPONENT_FILES[0]
+    sealed_component = source / "scripts" / component_name
+    if sealed_component.exists() or sealed_component.is_symlink():
+        component = sealed_component
+    elif Path(__file__).name == "copy_sumeragi_v2_release_cargo_cache.py":
+        component = Path(__file__).with_name(component_name)
+    else:
+        raise CacheCopyError("sealed validation acknowledgment component is missing")
+    payload, metadata = _read_regular(
+        component, "validation acknowledgment component"
     )
     if (
-        set(value) != {"format", "schema_version", "profile", "sealed_source", "receipt", "validator", "invocation", "exit_status", "stdout", "stderr"}
-        or value["format"] != "iroha-sumeragi-v2-receipt-validation-ack"
-        or type(value["schema_version"]) is not int or value["schema_version"] != 3
-        or value["profile"] != "release"
-        or value["sealed_source"] != {
-            "archive_id": "release-retained.source.v1",
-            "manifest_sha256": source_manifest_sha256,
-        }
-        or not isinstance(value["receipt"], dict)
-        or type(value["receipt"].get("size_bytes")) is not int
-        or value["receipt"] != {
-            "archive_id": "release-terminal.receipt.v1",
-            "mode": f"{stat.S_IMODE(receipt_metadata.st_mode):04o}",
-            "sha256": receipt_digest,
-            "size_bytes": receipt_size,
-        }
-        or not isinstance(value["validator"], dict)
-        or set(value["validator"]) != {"archive_id", "sha256", "bootstrap_completion_sha256"}
-        or value["validator"] != {
-            "archive_id": "release-bootstrap.receipt-validator.v1",
-            "sha256": validator_digest,
-            "bootstrap_completion_sha256": completion_digest,
-        }
-        or type(value["exit_status"]) is not int or value["exit_status"] != 0
-        or not all(
-            isinstance(value[name], dict)
-            and type(value[name].get("size_bytes")) is int
-            for name in ("stdout", "stderr")
-        )
-        or value["stdout"] != expected_streams["stdout"] or value["stderr"] != expected_streams["stderr"]
-        or payload != _canonical_payload(value)
+        len(payload) > VALIDATION_ACK_COMPONENT_MAXIMUM_BYTES
+        or metadata.st_size != len(payload)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
     ):
-        raise CacheCopyError("receipt validation acknowledgment contract is not exact")
-    return digest, size
+        raise CacheCopyError("validation acknowledgment component metadata is not exact")
+    if hashlib.sha256(payload).hexdigest() != VALIDATION_ACK_COMPONENT_SHA256:
+        raise CacheCopyError("validation acknowledgment component digest mismatch")
+    namespace = dict(globals())
+    exec(compile(payload, str(component), "exec"), namespace)
+    implementation = namespace.get("_validation_ack")
+    if not callable(implementation) or implementation is _validation_ack:
+        raise CacheCopyError("validation acknowledgment component entry point is invalid")
+    return implementation(ack_held, receipt_held, source, bootstrap_evidence, source_manifest_sha256, candidate_root, scaling_evidence_manifest, expected_signer_fingerprint, expected_scaling_trial_harness_sha256, expected_scaling_configuration_sha256, expected_scaling_irohad_sha256, expected_scaling_iroha_cli_sha256)
 
 
 def seal_release_result(
@@ -2122,6 +1903,7 @@ def seal_release_result(
             )),
             (invocation_root, "receipt-validator.stdout"),
             (invocation_root, "receipt-validator.stderr"),
+            (invocation_root, "runtime-tool-probe-manifest.json"),
             (invocation_root, "cancel-request.json"),
         ):
             _quiescent_remove_named(parent, name, f"retained control {name}")
@@ -2384,7 +2166,8 @@ _RELEASE_SHELL_UTILITY_NAMES = (
     "shasum" if sys.platform == "darwin" else "sha256sum",
 )
 _RELEASE_RUNTIME_NAMES = (
-    "python3", "git", "ssh-keygen", "bash", "cargo", "rustc", "node",
+    "python3", "git", "ssh-keygen", "bash", "copy-release-runtime.py",
+    "cargo", "rustc", "node",
     "swift", "tlapm", "java", "verus", "cargo-verus", "tla2tools.jar",
     "tlapm-stdlib", "git-upload-pack", "git-index-pack",
     *_RELEASE_SHELL_UTILITY_NAMES,
@@ -2847,9 +2630,9 @@ def _runtime_source_roots(resolved: list[Path]) -> dict[str, Path]:
     roots = {"rust-toolchain": resolved[cargo_index].parent.parent}
     if names == _RELEASE_RUNTIME_NAMES:
         roots.update({
-            "swift-toolchain": resolved[7].parent.parent,
-            "java-runtime": resolved[9].parent.parent,
-            "verus-distribution": resolved[10].parent,
+            "swift-toolchain": resolved[names.index("swift")].parent.parent,
+            "java-runtime": resolved[names.index("java")].parent.parent,
+            "verus-distribution": resolved[names.index("verus")].parent,
         })
     for name, source in zip(names, resolved):
         if name not in {
@@ -2921,6 +2704,8 @@ def verify_runtime_sources(
         raise CacheCopyError("runtime inventory names the wrong private root")
     if runtime_root.parent != inventory_path.parent:
         raise CacheCopyError("private runtime and inventory are not siblings")
+    if framework_python is not None:
+        _probe_framework_python_runtime(runtime_root, stdlib_name)
     runtime_fd, runtime_identity = _open_directory(runtime_root, "private runtime")
     records: list[dict[str, object]] = []
     budget = {"records": 0, "bytes": 0}
@@ -2937,8 +2722,6 @@ def verify_runtime_sources(
         or inventory.get("records") != sorted(records, key=lambda record: str(record["path"]))
     ):
         raise CacheCopyError("private runtime changed after publication")
-    if framework_python is not None:
-        _probe_framework_python_runtime(runtime_root, stdlib_name)
 
 
 def _seal_copied_tree(
@@ -4482,10 +4265,11 @@ def _populate_runtime(
         java_root = source_roots["java-runtime"]
         verus_root = source_roots["verus-distribution"]
         if (
-            resolved[7] != swift_root / "bin" / "swift"
-            or resolved[9] != java_root / "bin" / "java"
-            or resolved[10] != verus_root / "verus"
-            or resolved[11] != verus_root / "cargo-verus"
+            resolved[names.index("swift")] != swift_root / "bin" / "swift"
+            or resolved[names.index("java")] != java_root / "bin" / "java"
+            or resolved[names.index("verus")] != verus_root / "verus"
+            or resolved[names.index("cargo-verus")]
+            != verus_root / "cargo-verus"
         ):
             raise CacheCopyError("release runtime executables do not match their copied closures")
         copy_stable_tree(swift_root, runtime_root / "swift-toolchain", "Swift toolchain")
@@ -4501,7 +4285,13 @@ def _populate_runtime(
         elif name in {"verus", "cargo-verus"}:
             destination = runtime_root / "verus-distribution" / name
         else:
-            destination = runtime_root / name if name in {"tla2tools.jar", "tlapm-stdlib"} else bin_root / name
+            destination = (
+                runtime_root / name
+                if name in {
+                    "copy-release-runtime.py", "tla2tools.jar", "tlapm-stdlib",
+                }
+                else bin_root / name
+            )
             if source.is_dir():
                 copy_stable_tree(source, destination, f"runtime source {name}")
             else:
@@ -4708,6 +4498,7 @@ def verify_framework_python_runtime(
     _verify_runtime_sources(source_roots, input_records)
     _bind_runtime_destinations(input_records, records, update=False)
     _validate_framework_python_runtime_records(records, framework, stdlib_name)
+    _probe_framework_python_runtime(runtime_root, stdlib_name)
     runtime_fd, runtime_identity = _open_directory(
         runtime_root, "protected framework Python runtime",
     )
@@ -4733,7 +4524,6 @@ def verify_framework_python_runtime(
         raise CacheCopyError(
             "protected framework Python runtime changed after publication"
         )
-    _probe_framework_python_runtime(runtime_root, stdlib_name)
     return inventory
 
 

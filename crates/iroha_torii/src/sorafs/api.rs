@@ -1,11 +1,8 @@
 #![cfg(feature = "app_api")]
 #![allow(clippy::result_large_err)]
 //! HTTP handlers for SoraFS discovery endpoints.
-
 mod stream_token_enforcement;
-
 use stream_token_enforcement::{RangeFetchConcurrencyGuard, enforce_stream_token_for_request};
-
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -22,7 +19,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use axum::{
     Json,
     body::{Body, Bytes},
@@ -47,9 +43,7 @@ use blake3::hash as blake3_hash;
 use ed25519_dalek::VerifyingKey as Ed25519VerifyingKey;
 use futures::{SinkExt, StreamExt, stream};
 use hex::{ToHex, encode};
-use http::header::{
-    AGE, CACHE_CONTROL, ETAG, HeaderName, IF_NONE_MATCH, RETRY_AFTER, VARY, WARNING,
-};
+use http::header::{AGE, CACHE_CONTROL, ETAG, HeaderName, IF_NONE_MATCH, RETRY_AFTER, VARY, WARNING};
 use hyper::body::Body as HyperBody;
 use iroha_core::{
     smartcontracts::{
@@ -81,13 +75,13 @@ use iroha_data_model::{
         escrow::{CancelAssetLock, DrawdownAssetLock, OpenAssetLock},
         sorafs::{
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
-            ApplySorafsRepairTaskAction, CancelSorafsOrderbookOrder, FinalizeSorafsModerationCase,
+            ApplySorafsRepairTaskAction, FinalizeSorafsModerationCase,
             FinalizeSorafsModerationSortition, RaiseSorafsModerationChallenge,
-            RecordSorafsOrderbookSettlementReceipt, RegisterSorafsModerationJurorEligibility,
-            ResolveSorafsModerationChallenge, SorafsRepairClaimV1, SorafsRepairRenewV1,
-            SorafsRepairTaskActionV1, SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
-            SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsProofOutcome,
-            SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
+            RegisterSorafsModerationJurorEligibility, ResolveSorafsModerationChallenge,
+            SorafsRepairClaimV1, SorafsRepairRenewV1, SorafsRepairTaskActionV1,
+            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+            SubmitSorafsModerationReveal, SubmitSorafsProofOutcome, SubmitSorafsRepairAppeal,
+            SubmitSorafsRepairTask,
         },
     },
     permission::Permission,
@@ -122,8 +116,11 @@ use iroha_data_model::{
             ORDERBOOK_QUERY_MAX_ITEMS_V1, OrderbookFinalizedCursorV1,
             OrderbookFinalizedEventCursorV1, OrderbookFinalizedEventPageV1,
             OrderbookFinalizedEventV1, OrderbookLedgerStatusV1, OrderbookOrderPageV1,
-            OrderbookSettlementChannelPageV1, OrderbookSettlementReceiptPageV1,
-            OrderbookTradePageV1,
+        },
+        orderbook_submission::{
+            SorafsOrderbookSubmissionRouteV1, SorafsOrderbookSubmissionValidationError,
+            ValidatedSorafsOrderbookSubmissionCommandV1,
+            validate_sorafs_orderbook_submission_transaction_v1,
         },
         pin_registry::{
             ManifestDigest, PIN_MANIFEST_QUERY_MAX_ITEMS_V1, PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1,
@@ -185,19 +182,16 @@ use sorafs_manifest::{
     GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1,
     GOVERNANCE_PUBLICATION_LABEL_TOTAL_MAX_BYTES_V1, GovernanceDagBlockV1, GovernanceDagHeadV1,
     GovernanceLogPayloadV1, MAX_PROOF_STREAM_SAMPLE_COUNT, MAX_REPUTATION_TRUST_EDGES, ManifestV1,
-    OrderFillOutcomeV1, OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookSignatureV1,
-    PathDiversityPolicy, ProofStreamHttpRequestV1, ProofStreamKind, ProofStreamTier,
-    ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderReputationV1,
-    QosHints, RendezvousTopic, ReputationMerkleProofV1, ReputationSnapshotEventV1,
-    ReputationSnapshotV1, SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
-    SORAFS_GATEWAY_PROFILE_VERSION, SettlementChannelStatusV1, SettlementChannelV1,
+    OrderbookSignatureV1, PathDiversityPolicy, ProofStreamHttpRequestV1, ProofStreamKind,
+    ProofStreamTier, ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
+    ProviderReputationV1, QosHints, RendezvousTopic, ReputationMerkleProofV1,
+    ReputationSnapshotEventV1, ReputationSnapshotV1,
+    SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1, SORAFS_GATEWAY_PROFILE_VERSION,
     SettlementReceiptV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer,
-    StreamBudgetV1, StreamTokenBodyV1, TradeEventV1, TransportHintV1, TransportProtocol,
-    chunker_registry,
+    StreamBudgetV1, StreamTokenBodyV1, TransportHintV1, TransportProtocol, chunker_registry,
     deal::XorQuantity,
-    decode_manifest_v1_canonical, decode_order_cancel_v1, decode_order_request_v1,
-    decode_provider_advert_v1, decode_settlement_receipt_v1,
+    decode_manifest_v1_canonical, decode_provider_advert_v1,
     governance_publication_source_pair_id_v1,
     pdp::{
         PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1, PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
@@ -207,8 +201,6 @@ use sorafs_manifest::{
     potr::{PotrReceiptV1, PotrStatus, potr_request_scope_digest_v1},
     repair::RepairReportV1,
     validate_governance_dag_head_against_rotatable_chain_v1, validate_manifest,
-    verify_order_cancel_signature_v1, verify_order_request_signature_v1,
-    verify_settlement_receipt_signature_v1,
 };
 use sorafs_node::moderation_orchestrator::{
     ModerationDeadLetterKindV1, ModerationDeadLetterResolutionActionV1,
@@ -249,11 +241,8 @@ use sorafs_orchestrator::appeals::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{RwLock, broadcast};
 use urlencoding::decode;
-
 #[cfg(test)]
-use crate::sorafs::registry::{
-    PinRegistryMetricsSummary, PinRegistrySnapshot, collect_pin_registry,
-};
+use crate::sorafs::registry::{PinRegistryMetricsSummary, PinRegistrySnapshot, collect_pin_registry};
 use crate::{
     JsonBody, SharedAppState, json_entry, json_object,
     routing::MaybeTelemetry,
@@ -2441,10 +2430,6 @@ struct ModerationScreeningReadbackQuery {
     limit: Option<u32>,
 }
 #[derive(Debug, Default)]
-struct OrderbookReadbackQuery {
-    limit: Option<u32>,
-}
-#[derive(Debug, Default)]
 struct FinalizedOrderbookReadQuery {
     limit: Option<u32>,
     expected_finalized_height: Option<u64>,
@@ -3075,16 +3060,6 @@ impl ModerationScreeningReadbackQuery {
         Ok(query)
     }
 }
-impl OrderbookReadbackQuery {
-    fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
-    }
-}
 impl FinalizedOrderbookReadQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
@@ -3404,47 +3379,49 @@ impl FinalizedRepairEventQuery {
         }))
     }
 }
-fn parse_repair_query_u64(target: &mut Option<u64>, name: &str, raw: &str) -> ApiResult<()> {
+fn parse_finalized_query_integer<T: FromStr>(
+    target: &mut Option<T>,
+    name: &str,
+    raw: &str,
+    domain: &str,
+) -> ApiResult<()> {
     if target.is_some() || raw.is_empty() {
         return Err(ResponseError::from(json_error(
             StatusCode::BAD_REQUEST,
-            format!("duplicate or empty finalized SoraFS repair query parameter `{name}`"),
+            format!("duplicate or empty finalized SoraFS {domain} query parameter `{name}`"),
         )));
     }
-    let value = raw.parse::<u64>().map_err(|_| {
+    *target = Some(raw.parse().map_err(|_| {
         ResponseError::from(json_error(
             StatusCode::BAD_REQUEST,
-            format!("invalid finalized SoraFS repair {name} value `{raw}`"),
+            format!("invalid finalized SoraFS {domain} {name} value `{raw}`"),
         ))
-    })?;
-    *target = Some(value);
+    })?);
     Ok(())
+}
+fn parse_repair_query_u64(target: &mut Option<u64>, name: &str, raw: &str) -> ApiResult<()> {
+    parse_finalized_query_integer(target, name, raw, "repair")
 }
 fn parse_repair_query_u32(target: &mut Option<u32>, name: &str, raw: &str) -> ApiResult<()> {
-    if target.is_some() || raw.is_empty() {
-        return Err(ResponseError::from(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("duplicate or empty finalized SoraFS repair query parameter `{name}`"),
-        )));
-    }
-    let value = raw.parse::<u32>().map_err(|_| {
-        ResponseError::from(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("invalid finalized SoraFS repair {name} value `{raw}`"),
-        ))
-    })?;
-    *target = Some(value);
-    Ok(())
+    parse_finalized_query_integer(target, name, raw, "repair")
 }
-fn parse_repair_query_string(target: &mut Option<String>, name: &str, raw: &str) -> ApiResult<()> {
+fn parse_finalized_query_string(
+    target: &mut Option<String>,
+    name: &str,
+    raw: &str,
+    domain: &str,
+) -> ApiResult<()> {
     if target.is_some() || raw.is_empty() {
         return Err(ResponseError::from(json_error(
             StatusCode::BAD_REQUEST,
-            format!("duplicate or empty finalized SoraFS repair query parameter `{name}`"),
+            format!("duplicate or empty finalized SoraFS {domain} query parameter `{name}`"),
         )));
     }
     *target = Some(raw.to_owned());
     Ok(())
+}
+fn parse_repair_query_string(target: &mut Option<String>, name: &str, raw: &str) -> ApiResult<()> {
+    parse_finalized_query_string(target, name, raw, "repair")
 }
 fn validate_repair_query_limit(limit: Option<u32>, kind: &str) -> ApiResult<()> {
     if limit.is_some_and(|limit| !(1..=REPAIR_QUERY_MAX_ITEMS_V1).contains(&limit)) {
@@ -3504,15 +3481,21 @@ fn validate_repair_event_cursor_parts(query: &FinalizedRepairEventQuery) -> Resu
     Ok(())
 }
 fn parse_nonzero_repair_hex(value: &str, field: &str) -> Result<[u8; 32], Response> {
+    parse_nonzero_finalized_hex(value, field, field)
+}
+fn parse_nonzero_finalized_hex(
+    value: &str,
+    field: &str,
+    zero_label: &str,
+) -> Result<[u8; 32], Response> {
     let bytes = parse_canonical_hex_fixed::<32>(value, field)
         .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))?;
-    if bytes == [0; 32] {
-        return Err(json_error(
+    (bytes != [0; 32]).then_some(bytes).ok_or_else(|| {
+        json_error(
             StatusCode::BAD_REQUEST,
-            format!("{field} must be non-zero"),
-        ));
-    }
-    Ok(bytes)
+            format!("{zero_label} must be non-zero"),
+        )
+    })
 }
 fn repair_finalized_cursor_from_query(
     height: Option<u64>,
@@ -3530,50 +3513,17 @@ fn repair_finalized_cursor_from_query(
     Ok(Some(RepairFinalizedCursorV1 { height, block_hash }))
 }
 fn parse_orderbook_query_u64(target: &mut Option<u64>, name: &str, raw: &str) -> ApiResult<()> {
-    if target.is_some() || raw.is_empty() {
-        return Err(ResponseError::from(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("duplicate or empty finalized SoraFS orderbook query parameter `{name}`"),
-        )));
-    }
-    let value = raw.parse::<u64>().map_err(|_| {
-        ResponseError::from(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("invalid finalized SoraFS orderbook {name} value `{raw}`"),
-        ))
-    })?;
-    *target = Some(value);
-    Ok(())
+    parse_finalized_query_integer(target, name, raw, "orderbook")
 }
 fn parse_orderbook_query_u32(target: &mut Option<u32>, name: &str, raw: &str) -> ApiResult<()> {
-    if target.is_some() || raw.is_empty() {
-        return Err(ResponseError::from(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("duplicate or empty finalized SoraFS orderbook query parameter `{name}`"),
-        )));
-    }
-    let value = raw.parse::<u32>().map_err(|_| {
-        ResponseError::from(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("invalid finalized SoraFS orderbook {name} value `{raw}`"),
-        ))
-    })?;
-    *target = Some(value);
-    Ok(())
+    parse_finalized_query_integer(target, name, raw, "orderbook")
 }
 fn parse_orderbook_query_string(
     target: &mut Option<String>,
     name: &str,
     raw: &str,
 ) -> ApiResult<()> {
-    if target.is_some() || raw.is_empty() {
-        return Err(ResponseError::from(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("duplicate or empty finalized SoraFS orderbook query parameter `{name}`"),
-        )));
-    }
-    *target = Some(raw.to_owned());
-    Ok(())
+    parse_finalized_query_string(target, name, raw, "orderbook")
 }
 fn validate_orderbook_cursor_pair(
     height: Option<u64>,
@@ -3593,15 +3543,11 @@ fn validate_orderbook_cursor_pair(
         ));
     }
     if let Some(block_hash_hex) = block_hash_hex {
-        let block_hash =
-            parse_canonical_hex_fixed::<32>(block_hash_hex, "expected_finalized_block_hash_hex")
-                .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))?;
-        if block_hash == [0; 32] {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("{label} block hash must be non-zero"),
-            ));
-        }
+        parse_nonzero_finalized_hex(
+            block_hash_hex,
+            "expected_finalized_block_hash_hex",
+            &format!("{label} block hash"),
+        )?;
     }
     Ok(())
 }
@@ -3627,14 +3573,11 @@ fn validate_orderbook_event_cursor_parts(
         ));
     }
     if let Some(block_hash_hex) = query.after_block_hash_hex.as_deref() {
-        let block_hash = parse_canonical_hex_fixed::<32>(block_hash_hex, "after_block_hash_hex")
-            .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))?;
-        if block_hash == [0; 32] {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                "finalized orderbook event cursor block hash must be non-zero",
-            ));
-        }
+        parse_nonzero_finalized_hex(
+            block_hash_hex,
+            "after_block_hash_hex",
+            "finalized orderbook event cursor block hash",
+        )?;
     }
     Ok(())
 }
@@ -3647,11 +3590,11 @@ fn orderbook_finalized_cursor_from_query(
     let Some(height) = height else {
         return Ok(None);
     };
-    let block_hash = parse_canonical_hex_fixed::<32>(
+    let block_hash = parse_nonzero_finalized_hex(
         block_hash_hex.expect("validated cursor pair has a block hash"),
         "expected_finalized_block_hash_hex",
-    )
-    .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))?;
+        &format!("{label} block hash"),
+    )?;
     Ok(Some(OrderbookFinalizedCursorV1 { height, block_hash }))
 }
 impl GovernancePublishReadbackQuery {
@@ -13025,54 +12968,41 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine_object(
         Err(err) => moderation_quarantine_object_error_response(err),
     }
 }
-pub(crate) async fn handle_post_sorafs_orderbook_order(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    accept: Option<ExtractAccept>,
-    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
-) -> Response {
-    let response = submit_orderbook_signed_transaction(
-        state.clone(),
-        headers,
-        accept,
-        transaction,
-        OrderbookCommandRouteV1::SubmitOrder,
-    )
-    .await;
-    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_ORDERS, response)
+macro_rules! orderbook_post_handler {
+    ($name:ident, $route:expr, $endpoint:expr) => {
+        pub(crate) async fn $name(
+            State(state): State<SharedAppState>,
+            headers: HeaderMap,
+            accept: Option<ExtractAccept>,
+            JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+        ) -> Response {
+            let response = submit_orderbook_signed_transaction(
+                state.clone(),
+                headers,
+                accept,
+                transaction,
+                $route,
+            )
+            .await;
+            orderbook_api_response(&state.telemetry, $endpoint, response)
+        }
+    };
 }
-pub(crate) async fn handle_post_sorafs_orderbook_cancel(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    accept: Option<ExtractAccept>,
-    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
-) -> Response {
-    let response = submit_orderbook_signed_transaction(
-        state.clone(),
-        headers,
-        accept,
-        transaction,
-        OrderbookCommandRouteV1::CancelOrder,
-    )
-    .await;
-    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_CANCEL, response)
-}
-pub(crate) async fn handle_post_sorafs_orderbook_receipt(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    accept: Option<ExtractAccept>,
-    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
-) -> Response {
-    let response = submit_orderbook_signed_transaction(
-        state.clone(),
-        headers,
-        accept,
-        transaction,
-        OrderbookCommandRouteV1::RecordReceipt,
-    )
-    .await;
-    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_RECEIPTS, response)
-}
+orderbook_post_handler!(
+    handle_post_sorafs_orderbook_order,
+    OrderbookCommandRouteV1::SubmitOrder,
+    ORDERBOOK_ROUTE_ORDERS
+);
+orderbook_post_handler!(
+    handle_post_sorafs_orderbook_cancel,
+    OrderbookCommandRouteV1::CancelOrder,
+    ORDERBOOK_ROUTE_CANCEL
+);
+orderbook_post_handler!(
+    handle_post_sorafs_orderbook_receipt,
+    OrderbookCommandRouteV1::RecordReceipt,
+    ORDERBOOK_ROUTE_RECEIPTS
+);
 pub(crate) async fn handle_post_sorafs_repair_report(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -13309,12 +13239,7 @@ fn repair_route_instruction_label(route: RepairCommandRouteV1) -> &'static str {
         RepairCommandRouteV1::Fail => "ApplySorafsRepairTaskAction::Fail",
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OrderbookCommandRouteV1 {
-    SubmitOrder,
-    CancelOrder,
-    RecordReceipt,
-}
+type OrderbookCommandRouteV1 = SorafsOrderbookSubmissionRouteV1;
 async fn submit_orderbook_signed_transaction(
     state: SharedAppState,
     headers: HeaderMap,
@@ -13345,148 +13270,27 @@ fn validate_orderbook_signed_transaction(
     transaction: &SignedTransaction,
     route: OrderbookCommandRouteV1,
 ) -> Result<(), Response> {
-    if transaction.network_id() != Some(state.state.network_id_ref()) {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS orderbook transaction network does not match this peer",
-        ));
-    }
-    transaction.verify_signature().map_err(|_| {
-        json_error(
-            StatusCode::FORBIDDEN,
-            "SoraFS orderbook transaction signature or authority binding is invalid",
-        )
-    })?;
-    let canonical_transaction = norito::to_bytes(transaction).map_err(|_| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            "failed to encode canonical SoraFS orderbook transaction",
-        )
-    })?;
-    if canonical_transaction.len()
-        > sorafs_node::orderbook_transaction_forwarder::ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1
-    {
-        return Err(json_error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "SoraFS orderbook transaction exceeds the canonical V1 byte bound",
-        ));
-    }
-    let Executable::Instructions(instructions) = transaction.instructions() else {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS orderbook command transaction must contain one native instruction",
-        ));
-    };
-    if instructions.len() != 1 {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS orderbook command transaction must contain exactly one native instruction",
-        ));
-    }
-    let instruction = &instructions[0];
-    let (matches_route, expected_instruction) = match route {
-        OrderbookCommandRouteV1::SubmitOrder => (
-            instruction
-                .as_any()
-                .downcast_ref::<SubmitSorafsOrderbookOrder>()
-                .is_some(),
-            "SubmitSorafsOrderbookOrder",
-        ),
-        OrderbookCommandRouteV1::CancelOrder => (
-            instruction
-                .as_any()
-                .downcast_ref::<CancelSorafsOrderbookOrder>()
-                .is_some(),
-            "CancelSorafsOrderbookOrder",
-        ),
-        OrderbookCommandRouteV1::RecordReceipt => (
-            instruction
-                .as_any()
-                .downcast_ref::<RecordSorafsOrderbookSettlementReceipt>()
-                .is_some(),
-            "RecordSorafsOrderbookSettlementReceipt",
-        ),
-    };
-    if !matches_route {
-        return Err(orderbook_route_instruction_mismatch_response(
-            expected_instruction,
-        ));
-    }
+    let validated = validate_sorafs_orderbook_submission_transaction_v1(
+        transaction,
+        route,
+        state.state.network_id_ref(),
+        iroha_data_model::account::address::chain_discriminant(),
+    )
+    .map_err(orderbook_submission_validation_error_response)?;
     let state_view = state.state.query_view();
     let policy = FindSorafsOrderbookPolicy
         .execute(&state_view)
         .map_err(orderbook_finalized_query_error_response)?;
-    match route {
-        OrderbookCommandRouteV1::SubmitOrder => {
-            let submit = instruction
-                .as_any()
-                .downcast_ref::<SubmitSorafsOrderbookOrder>()
-                .expect("route instruction type was validated above");
-            ensure_orderbook_policy_digest(submit.policy_digest, policy.policy_digest)?;
-            let order = decode_order_request_v1(&submit.order_payload).map_err(|error| {
-                json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid canonical SoraFS orderbook order payload: {error}"),
-                )
-            })?;
-            verify_order_request_signature_v1(&order).map_err(|_| {
-                json_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid SoraFS orderbook order payload signature",
-                )
-            })?;
-            ensure_orderbook_owner_authority(
-                transaction.authority(),
-                &order.owner_account,
-                &order.signature,
-            )
+    match validated.command {
+        ValidatedSorafsOrderbookSubmissionCommandV1::SubmitOrder { policy_digest, .. }
+        | ValidatedSorafsOrderbookSubmissionCommandV1::CancelOrder { policy_digest, .. } => {
+            ensure_orderbook_policy_digest(policy_digest, policy.policy_digest)
         }
-        OrderbookCommandRouteV1::CancelOrder => {
-            let cancel_instruction = instruction
-                .as_any()
-                .downcast_ref::<CancelSorafsOrderbookOrder>()
-                .expect("route instruction type was validated above");
-            ensure_orderbook_policy_digest(cancel_instruction.policy_digest, policy.policy_digest)?;
-            let cancellation =
-                decode_order_cancel_v1(&cancel_instruction.cancel_payload).map_err(|error| {
-                    json_error(
-                        StatusCode::BAD_REQUEST,
-                        format!("invalid canonical SoraFS orderbook cancellation payload: {error}"),
-                    )
-                })?;
-            verify_order_cancel_signature_v1(&cancellation).map_err(|_| {
-                json_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid SoraFS orderbook cancellation payload signature",
-                )
-            })?;
-            ensure_orderbook_owner_authority(
-                transaction.authority(),
-                &cancellation.owner_account,
-                &cancellation.signature,
-            )
-        }
-        OrderbookCommandRouteV1::RecordReceipt => {
-            let record = instruction
-                .as_any()
-                .downcast_ref::<RecordSorafsOrderbookSettlementReceipt>()
-                .expect("route instruction type was validated above");
-            ensure_orderbook_policy_digest(record.policy_digest, policy.policy_digest)?;
-            let receipt =
-                decode_settlement_receipt_v1(&record.receipt_payload).map_err(|error| {
-                    json_error(
-                        StatusCode::BAD_REQUEST,
-                        format!(
-                            "invalid canonical SoraFS orderbook settlement receipt payload: {error}"
-                        ),
-                    )
-                })?;
-            verify_settlement_receipt_signature_v1(&receipt).map_err(|_| {
-                json_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid SoraFS orderbook settlement receipt payload signature",
-                )
-            })?;
+        ValidatedSorafsOrderbookSubmissionCommandV1::RecordReceipt {
+            policy_digest,
+            receipt,
+        } => {
+            ensure_orderbook_policy_digest(policy_digest, policy.policy_digest)?;
             let channel = FindSorafsOrderbookChannelById::new(receipt.channel_id)
                 .execute(&state_view)
                 .map_err(orderbook_finalized_query_error_response)?;
@@ -13503,6 +13307,21 @@ fn validate_orderbook_signed_transaction(
         }
     }
 }
+fn orderbook_submission_validation_error_response(
+    error: SorafsOrderbookSubmissionValidationError,
+) -> Response {
+    let status = match error {
+        SorafsOrderbookSubmissionValidationError::TransactionTooLarge => {
+            StatusCode::PAYLOAD_TOO_LARGE
+        }
+        SorafsOrderbookSubmissionValidationError::InvalidTransactionSignature
+        | SorafsOrderbookSubmissionValidationError::EmbeddedPayloadAuthorityMismatch => {
+            StatusCode::FORBIDDEN
+        }
+        _ => StatusCode::BAD_REQUEST,
+    };
+    json_error(status, error.to_string())
+}
 fn ensure_orderbook_policy_digest(supplied: [u8; 32], finalized: [u8; 32]) -> Result<(), Response> {
     if supplied == finalized {
         Ok(())
@@ -13512,38 +13331,6 @@ fn ensure_orderbook_policy_digest(supplied: [u8; 32], finalized: [u8; 32]) -> Re
             "SoraFS orderbook command policy digest is stale",
         ))
     }
-}
-fn ensure_orderbook_owner_authority(
-    authority: &AccountId,
-    owner_account: &[u8],
-    signature: &OrderbookSignatureV1,
-) -> Result<(), Response> {
-    let owner_literal = std::str::from_utf8(owner_account).map_err(|_| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS orderbook owner account must be canonical UTF-8 I105",
-        )
-    })?;
-    let parsed = AccountId::parse_encoded(owner_literal).map_err(|error| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            format!("invalid SoraFS orderbook owner account: {}", error.reason()),
-        )
-    })?;
-    if parsed.canonical().as_bytes() != owner_account {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS orderbook owner account must use exact canonical I105 bytes",
-        ));
-    }
-    let owner = parsed.account_id();
-    if owner.subject_id() != authority.subject_id() {
-        return Err(json_error(
-            StatusCode::FORBIDDEN,
-            "SoraFS orderbook payload owner does not match transaction authority",
-        ));
-    }
-    ensure_orderbook_signature_matches_authority(authority, signature)
 }
 fn ensure_orderbook_signature_matches_authority(
     authority: &AccountId,
@@ -13575,12 +13362,6 @@ fn ensure_orderbook_signature_matches_authority(
             "SoraFS orderbook payload signer does not match transaction authority",
         ))
     }
-}
-fn orderbook_route_instruction_mismatch_response(expected: &str) -> Response {
-    json_error(
-        StatusCode::BAD_REQUEST,
-        format!("SoraFS orderbook route requires exactly one `{expected}` instruction"),
-    )
 }
 fn orderbook_finalized_query_error_response(error: QueryExecutionFail) -> Response {
     if matches!(error, QueryExecutionFail::Expired) {
@@ -13785,16 +13566,8 @@ pub(crate) async fn handle_get_sorafs_orderbook_book(
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
-        let query = match FinalizedOrderbookReadQuery::parse(raw_query.as_deref()) {
-            Ok(query) => query,
-            Err(err) => return err.into_response(),
-        };
-        let expected = match query.expected_finalized_cursor() {
-            Ok(expected) => expected,
-            Err(response) => return response,
-        };
-        let after = match query.after_id() {
-            Ok(after) => after,
+        let (expected, after, limit) = match orderbook_finalized_read_args(raw_query.as_deref()) {
+            Ok(args) => args,
             Err(response) => return response,
         };
         let state_view = state.state.query_view();
@@ -13802,120 +13575,70 @@ pub(crate) async fn handle_get_sorafs_orderbook_book(
             Ok(status) => status,
             Err(error) => return orderbook_finalized_query_error_response(error),
         };
-        let page = match FindSorafsOrderbookOrders::new(expected, None, after, query.limit())
+        let page = match FindSorafsOrderbookOrders::new(expected, None, after, limit)
             .execute(&state_view)
         {
             Ok(page) => page,
             Err(error) => return orderbook_finalized_query_error_response(error),
         };
-        match orderbook_finalized_book_json(&status, &page) {
-            Ok(value) => JsonBody(value).into_response(),
-            Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
-        }
+        orderbook_finalized_book_json(&status, &page)
+            .map(JsonBody)
+            .map(IntoResponse::into_response)
+            .unwrap_or_else(orderbook_json_error)
     })();
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_BOOK, response)
 }
-pub(crate) async fn handle_get_sorafs_orderbook_trades(
-    State(state): State<SharedAppState>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-) -> Response {
-    let response = (|| {
-        if !state.sorafs_node.is_enabled() {
-            return feature_disabled("sorafs orderbook API is not enabled on this node");
+macro_rules! orderbook_page_handler {
+    ($name:ident, $query:expr, $key:literal, $endpoint:expr) => {
+        pub(crate) async fn $name(
+            State(state): State<SharedAppState>,
+            axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+        ) -> Response {
+            let response = (|| {
+                if !state.sorafs_node.is_enabled() {
+                    return Err(feature_disabled(
+                        "sorafs orderbook API is not enabled on this node",
+                    ));
+                }
+                let (expected, after, limit) = orderbook_finalized_read_args(raw_query.as_deref())?;
+                let page = ($query)(expected, after, limit)
+                    .execute(&state.state.query_view())
+                    .map_err(orderbook_finalized_query_error_response)?;
+                Ok::<_, Response>(orderbook_finalized_page_response($key, &page))
+            })()
+            .unwrap_or_else(|response| response);
+            orderbook_api_response(&state.telemetry, $endpoint, response)
         }
-        let query = match FinalizedOrderbookReadQuery::parse(raw_query.as_deref()) {
-            Ok(query) => query,
-            Err(err) => return err.into_response(),
-        };
-        let expected = match query.expected_finalized_cursor() {
-            Ok(expected) => expected,
-            Err(response) => return response,
-        };
-        let after = match query.after_id() {
-            Ok(after) => after,
-            Err(response) => return response,
-        };
-        let state_view = state.state.query_view();
-        let page = match FindSorafsOrderbookTrades::new(expected, after, query.limit())
-            .execute(&state_view)
-        {
-            Ok(page) => page,
-            Err(error) => return orderbook_finalized_query_error_response(error),
-        };
-        match orderbook_finalized_trade_page_json(&page) {
-            Ok(value) => JsonBody(value).into_response(),
-            Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
-        }
-    })();
-    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_TRADES, response)
+    };
 }
-pub(crate) async fn handle_get_sorafs_orderbook_channels(
-    State(state): State<SharedAppState>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-) -> Response {
-    let response = (|| {
-        if !state.sorafs_node.is_enabled() {
-            return feature_disabled("sorafs orderbook API is not enabled on this node");
-        }
-        let query = match FinalizedOrderbookReadQuery::parse(raw_query.as_deref()) {
-            Ok(query) => query,
-            Err(err) => return err.into_response(),
-        };
-        let expected = match query.expected_finalized_cursor() {
-            Ok(expected) => expected,
-            Err(response) => return response,
-        };
-        let after = match query.after_id() {
-            Ok(after) => after,
-            Err(response) => return response,
-        };
-        let state_view = state.state.query_view();
-        let page = match FindSorafsOrderbookChannels::new(expected, None, after, query.limit())
-            .execute(&state_view)
-        {
-            Ok(page) => page,
-            Err(error) => return orderbook_finalized_query_error_response(error),
-        };
-        match orderbook_finalized_channel_page_json(&page) {
-            Ok(value) => JsonBody(value).into_response(),
-            Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
-        }
-    })();
-    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_CHANNELS, response)
-}
-pub(crate) async fn handle_get_sorafs_orderbook_receipts(
-    State(state): State<SharedAppState>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-) -> Response {
-    let response = (|| {
-        if !state.sorafs_node.is_enabled() {
-            return feature_disabled("sorafs orderbook API is not enabled on this node");
-        }
-        let query = match FinalizedOrderbookReadQuery::parse(raw_query.as_deref()) {
-            Ok(query) => query,
-            Err(err) => return err.into_response(),
-        };
-        let expected = match query.expected_finalized_cursor() {
-            Ok(expected) => expected,
-            Err(response) => return response,
-        };
-        let after = match query.after_id() {
-            Ok(after) => after,
-            Err(response) => return response,
-        };
-        let state_view = state.state.query_view();
-        let page = match FindSorafsOrderbookReceipts::new(expected, None, after, query.limit())
-            .execute(&state_view)
-        {
-            Ok(page) => page,
-            Err(error) => return orderbook_finalized_query_error_response(error),
-        };
-        match orderbook_finalized_receipt_page_json(&page) {
-            Ok(value) => JsonBody(value).into_response(),
-            Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
-        }
-    })();
-    orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_RECEIPTS, response)
+orderbook_page_handler!(
+    handle_get_sorafs_orderbook_trades,
+    FindSorafsOrderbookTrades::new,
+    "trades",
+    ORDERBOOK_ROUTE_TRADES
+);
+orderbook_page_handler!(
+    handle_get_sorafs_orderbook_channels,
+    |expected, after, limit| FindSorafsOrderbookChannels::new(expected, None, after, limit),
+    "channels",
+    ORDERBOOK_ROUTE_CHANNELS
+);
+orderbook_page_handler!(
+    handle_get_sorafs_orderbook_receipts,
+    |expected, after, limit| FindSorafsOrderbookReceipts::new(expected, None, after, limit),
+    "receipts",
+    ORDERBOOK_ROUTE_RECEIPTS
+);
+fn orderbook_finalized_read_args(
+    raw_query: Option<&str>,
+) -> Result<(Option<OrderbookFinalizedCursorV1>, Option<[u8; 32]>, u32), Response> {
+    let query =
+        FinalizedOrderbookReadQuery::parse(raw_query).map_err(IntoResponse::into_response)?;
+    Ok((
+        query.expected_finalized_cursor()?,
+        query.after_id()?,
+        query.limit(),
+    ))
 }
 fn orderbook_finalized_book_json(
     status: &OrderbookLedgerStatusV1,
@@ -13935,39 +13658,23 @@ fn orderbook_finalized_book_json(
         ),
     ]))
 }
-fn orderbook_finalized_trade_page_json(page: &OrderbookTradePageV1) -> Result<Value, String> {
-    Ok(json_object(vec![
-        json_entry("source", "finalized_chain"),
-        json_entry(
-            "trades",
-            json::to_value(page)
-                .map_err(|error| format!("failed to encode orderbook trade page: {error}"))?,
-        ),
-    ]))
+fn orderbook_finalized_page_response<T: norito::json::JsonSerialize>(
+    key: &str,
+    page: &T,
+) -> Response {
+    let page = json::to_value(page)
+        .map_err(|error| format!("failed to encode orderbook {key} page: {error}"));
+    page.map(|page| {
+        JsonBody(json_object(vec![
+            json_entry("source", "finalized_chain"),
+            json_entry(key, page),
+        ]))
+        .into_response()
+    })
+    .unwrap_or_else(orderbook_json_error)
 }
-fn orderbook_finalized_channel_page_json(
-    page: &OrderbookSettlementChannelPageV1,
-) -> Result<Value, String> {
-    Ok(json_object(vec![
-        json_entry("source", "finalized_chain"),
-        json_entry(
-            "channels",
-            json::to_value(page)
-                .map_err(|error| format!("failed to encode orderbook channel page: {error}"))?,
-        ),
-    ]))
-}
-fn orderbook_finalized_receipt_page_json(
-    page: &OrderbookSettlementReceiptPageV1,
-) -> Result<Value, String> {
-    Ok(json_object(vec![
-        json_entry("source", "finalized_chain"),
-        json_entry(
-            "receipts",
-            json::to_value(page)
-                .map_err(|error| format!("failed to encode orderbook receipt page: {error}"))?,
-        ),
-    ]))
+fn orderbook_json_error(error: String) -> Response {
+    json_error(StatusCode::INTERNAL_SERVER_ERROR, error)
 }
 pub(crate) async fn handle_get_sorafs_orderbook_events(
     State(state): State<SharedAppState>,
@@ -14595,7 +14302,6 @@ async fn submit_appeal_finance_deposit_settlement_step(
             ),
         ));
     }
-
     use sorafs_node::appeal_finance_transaction_forwarder::{
         AppealFinanceOperationV1, AppealFinanceTransactionContextV1,
         AppealFinanceTransactionEnqueueResultV1,
@@ -14901,7 +14607,6 @@ fn observe_appeal_finance_finalized_state(
 #[cfg(test)]
 mod appeal_finance_authoritative_outcome_tests {
     use super::*;
-
     fn transaction_hash(byte: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32]))
     }
@@ -15588,7 +15293,6 @@ fn appeal_finance_operation_is_terminal(
     operation_id: [u8; 32],
 ) -> Option<bool> {
     use sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionForwarderError;
-
     match submitter
         .forwarder
         .operation_for_reconciliation(operation_id)
@@ -15654,7 +15358,6 @@ fn appeal_finance_exact_applied_post_record(
     applied_block_timestamp_ms: u64,
 ) -> Option<AssetEscrowRecord> {
     use sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceOperationV1;
-
     let mut record = request.expected_record.clone()?;
     match &request.operation {
         AppealFinanceOperationV1::Open(_) => return None,
@@ -15969,7 +15672,6 @@ fn appeal_finance_outbox_policy_status(
     policy: &AppealFinanceRuntimePolicy,
 ) -> AppealFinanceOutboxPolicyStatusV1 {
     use sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceOperationV1;
-
     let (policy_digest, expected, grandfathered_continuation) = match &request.operation {
         AppealFinanceOperationV1::Open(instruction) => {
             let Some(context) =
@@ -16279,7 +15981,6 @@ fn classify_local_proof_outcome_submission(
 #[cfg(test)]
 mod proof_outcome_submission_disposition_tests {
     use super::*;
-
     #[test]
     fn local_queue_dispositions_preserve_definite_and_ambiguous_boundaries() {
         assert_eq!(
@@ -16598,9 +16299,7 @@ fn native_signer_returned_exact_transaction(
 #[cfg(test)]
 mod native_signer_returned_transaction_tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
-
     use super::*;
-
     fn fixture_payload(authority: AccountId) -> TransactionPayload {
         TransactionBuilder::new(
             crate::signed_query_test_network_id(),
@@ -17045,7 +16744,6 @@ fn classify_repair_semantic_reconciliation(
     finalized: Option<&RepairFinalizedTaskV1>,
 ) -> Option<RepairSemanticReconciliationV1> {
     use sorafs_node::repair_transaction_forwarder::RepairOperationV1;
-
     match &request.operation {
         RepairOperationV1::Submit(instruction) => {
             let report = decode_canonical_repair_report(instruction.report_payload())?;
@@ -17769,9 +17467,7 @@ async fn enqueue_sorafs_finalized_native_repair_work(
     cursor: &mut SorafsRepairTransactionForwarderCursorV1,
     scan: &mut SorafsRepairTransactionForwarderScanV1,
 ) {
-    use sorafs_node::repair_transaction_forwarder::{
-        RepairOperationV1, RepairTransactionContextV1,
-    };
+    use sorafs_node::repair_transaction_forwarder::{RepairOperationV1, RepairTransactionContextV1};
     let repair_generation_enabled = state.sorafs_node.repair_config().enabled();
     if !repair_generation_enabled {
         return;
@@ -18056,7 +17752,6 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
     cursor: &mut SorafsRepairTransactionForwarderCursorV1,
 ) -> SorafsRepairTransactionForwarderScanV1 {
     use sorafs_node::repair_transaction_forwarder::RepairTransactionDeliveryStateV1;
-
     let mut scan = SorafsRepairTransactionForwarderScanV1::default();
     resume_sorafs_protocol_repair_handoffs(state, &mut scan);
     enqueue_sorafs_finalized_native_repair_work(state, cursor, &mut scan).await;
@@ -22950,201 +22645,6 @@ fn moderation_quarantine_object_record_json(record: &ModerationQuarantineObjectR
         json_entry("envelope_path", Value::from(record.envelope_path.clone())),
     ])
 }
-#[cfg(test)]
-fn orderbook_order_json(order: &OrderRequestV1) -> Value {
-    let mut root = Map::new();
-    root.insert("version".into(), Value::from(order.version as u64));
-    root.insert(
-        "order_id_hex".into(),
-        Value::from(hex::encode(order.order_id)),
-    );
-    root.insert("side".into(), Value::from(orderbook_side_label(order.side)));
-    root.insert("tier".into(), Value::from(orderbook_tier_label(order.tier)));
-    root.insert(
-        "price_per_gib".into(),
-        xor_quantity_json(&order.price_per_gib),
-    );
-    root.insert("quantity_gib".into(), Value::from(order.quantity_gib));
-    root.insert("remaining_gib".into(), Value::from(order.remaining_gib));
-    root.insert(
-        "owner_account_hex".into(),
-        Value::from(hex::encode(&order.owner_account)),
-    );
-    root.insert("expiry_unix".into(), Value::from(order.expiry_unix));
-    root.insert("nonce".into(), Value::from(order.nonce));
-    root.insert(
-        "maker_fee_bps".into(),
-        Value::from(order.maker_fee_bps as u64),
-    );
-    root.insert(
-        "taker_fee_bps".into(),
-        Value::from(order.taker_fee_bps as u64),
-    );
-    root.insert(
-        "signature".into(),
-        orderbook_signature_json(&order.signature),
-    );
-    Value::Object(root)
-}
-#[cfg(test)]
-fn orderbook_signature_json(signature: &OrderbookSignatureV1) -> Value {
-    let mut root = Map::new();
-    root.insert(
-        "algorithm".into(),
-        Value::from(format!("{:?}", signature.algorithm)),
-    );
-    root.insert(
-        "public_key_hex".into(),
-        Value::from(hex::encode(&signature.public_key)),
-    );
-    root.insert(
-        "signature_hex".into(),
-        Value::from(hex::encode(&signature.signature)),
-    );
-    Value::Object(root)
-}
-#[cfg(test)]
-fn orderbook_fill_json(fill: &OrderFillOutcomeV1) -> Result<Value, String> {
-    let mut root = Map::new();
-    root.insert("trade".into(), orderbook_trade_json(&fill.trade)?);
-    root.insert(
-        "maker_remaining_gib".into(),
-        Value::from(fill.maker_remaining_gib),
-    );
-    root.insert(
-        "taker_remaining_gib".into(),
-        Value::from(fill.taker_remaining_gib),
-    );
-    root.insert("gross_value".into(), xor_quantity_json(&fill.gross_value));
-    Ok(Value::Object(root))
-}
-#[cfg(test)]
-fn orderbook_trade_json(trade: &TradeEventV1) -> Result<Value, String> {
-    let mut root = Map::new();
-    root.insert("version".into(), Value::from(trade.version as u64));
-    root.insert(
-        "trade_id_hex".into(),
-        Value::from(hex::encode(trade.trade_id)),
-    );
-    root.insert(
-        "maker_order_id_hex".into(),
-        Value::from(hex::encode(trade.maker_order_id)),
-    );
-    root.insert(
-        "taker_order_id_hex".into(),
-        Value::from(hex::encode(trade.taker_order_id)),
-    );
-    root.insert("tier".into(), Value::from(orderbook_tier_label(trade.tier)));
-    root.insert(
-        "price_per_gib".into(),
-        xor_quantity_json(&trade.price_per_gib),
-    );
-    root.insert("filled_gib".into(), Value::from(trade.filled_gib));
-    root.insert("maker_fee".into(), xor_quantity_json(&trade.maker_fee));
-    root.insert("taker_fee".into(), xor_quantity_json(&trade.taker_fee));
-    root.insert("timestamp_unix".into(), Value::from(trade.timestamp_unix));
-    Ok(Value::Object(root))
-}
-#[cfg(test)]
-fn orderbook_channel_json(channel: &SettlementChannelV1) -> Result<Value, String> {
-    let mut root = Map::new();
-    root.insert("version".into(), Value::from(channel.version as u64));
-    root.insert(
-        "channel_id_hex".into(),
-        Value::from(hex::encode(channel.channel_id)),
-    );
-    root.insert(
-        "trade_id_hex".into(),
-        Value::from(hex::encode(channel.trade_id)),
-    );
-    root.insert(
-        "buyer_account_hex".into(),
-        Value::from(hex::encode(&channel.buyer_account)),
-    );
-    root.insert(
-        "provider_id_hex".into(),
-        Value::from(hex::encode(channel.provider_id)),
-    );
-    root.insert("total_bytes".into(), Value::from(channel.total_bytes));
-    root.insert(
-        "remaining_bytes".into(),
-        Value::from(channel.remaining_bytes),
-    );
-    root.insert("xor_locked".into(), xor_quantity_json(&channel.xor_locked));
-    root.insert(
-        "initial_xor_locked".into(),
-        xor_quantity_json(&channel.initial_xor_locked),
-    );
-    root.insert(
-        "initial_fee_xor_locked".into(),
-        xor_quantity_json(&channel.initial_fee_xor_locked),
-    );
-    root.insert(
-        "remaining_fee_xor_locked".into(),
-        xor_quantity_json(&channel.remaining_fee_xor_locked),
-    );
-    root.insert(
-        "status".into(),
-        Value::from(orderbook_channel_status_label(channel.status)),
-    );
-    root.insert("opened_at_unix".into(), Value::from(channel.opened_at_unix));
-    root.insert(
-        "updated_at_unix".into(),
-        Value::from(channel.updated_at_unix),
-    );
-    Ok(Value::Object(root))
-}
-#[cfg(test)]
-fn orderbook_receipt_json(receipt: &SettlementReceiptV1) -> Result<Value, String> {
-    let mut root = Map::new();
-    root.insert("version".into(), Value::from(receipt.version as u64));
-    root.insert(
-        "receipt_id_hex".into(),
-        Value::from(hex::encode(receipt.receipt_id)),
-    );
-    root.insert(
-        "channel_id_hex".into(),
-        Value::from(hex::encode(receipt.channel_id)),
-    );
-    root.insert(
-        "trade_id_hex".into(),
-        Value::from(hex::encode(receipt.trade_id)),
-    );
-    root.insert("range".into(), orderbook_byte_range_json(receipt));
-    root.insert(
-        "chunk_hash_hex".into(),
-        Value::from(hex::encode(receipt.chunk_hash)),
-    );
-    root.insert(
-        "bytes_delivered".into(),
-        Value::from(receipt.bytes_delivered),
-    );
-    root.insert(
-        "xor_debited".into(),
-        xor_quantity_json(&receipt.xor_debited),
-    );
-    root.insert(
-        "provider_credit".into(),
-        xor_quantity_json(&receipt.provider_credit),
-    );
-    root.insert("fee_amount".into(), xor_quantity_json(&receipt.fee_amount));
-    root.insert("issued_at_unix".into(), Value::from(receipt.issued_at_unix));
-    root.insert(
-        "settlement_signature".into(),
-        orderbook_signature_json(&receipt.settlement_signature),
-    );
-    Ok(Value::Object(root))
-}
-#[cfg(test)]
-fn orderbook_byte_range_json(receipt: &SettlementReceiptV1) -> Value {
-    json_object(vec![
-        json_entry("start", receipt.range.start),
-        json_entry("end", receipt.range.end),
-    ])
-}
-fn xor_quantity_json(amount: &XorQuantity) -> Value {
-    Value::from(amount.to_string())
-}
 fn orderbook_finalized_events_etag(page: &OrderbookFinalizedEventPageV1) -> Result<String, String> {
     let canonical = norito::to_bytes(page)
         .map_err(|error| format!("failed to encode finalized orderbook event page: {error}"))?;
@@ -23364,31 +22864,6 @@ fn repair_finalized_query_error_response(error: QueryExecutionFail) -> Response 
         StatusCode::SERVICE_UNAVAILABLE,
         "authoritative finalized SoraFS repair state is unavailable",
     )
-}
-#[cfg(test)]
-fn orderbook_side_label(side: OrderSideV1) -> &'static str {
-    match side {
-        OrderSideV1::Bid => "bid",
-        OrderSideV1::Ask => "ask",
-    }
-}
-#[cfg(test)]
-fn orderbook_tier_label(tier: OrderTierV1) -> &'static str {
-    match tier {
-        OrderTierV1::Hot => "hot",
-        OrderTierV1::Warm => "warm",
-        OrderTierV1::Archive => "archive",
-    }
-}
-#[cfg(test)]
-fn orderbook_channel_status_label(status: SettlementChannelStatusV1) -> &'static str {
-    match status {
-        SettlementChannelStatusV1::Open => "open",
-        SettlementChannelStatusV1::Closing => "closing",
-        SettlementChannelStatusV1::Closed => "closed",
-        SettlementChannelStatusV1::Breached => "breached",
-        SettlementChannelStatusV1::Refunded => "refunded",
-    }
 }
 fn reputation_json_response(value: Value, etag: &str) -> Response {
     let mut response = JsonBody(value).into_response();
@@ -27041,12 +26516,9 @@ fn gateway_policy_violation_response(violation: PolicyViolation) -> Response {
 #[cfg(test)]
 mod gateway_policy_violation_tests {
     use std::{collections::HashMap, fs, path::PathBuf};
-
     use axum::body::to_bytes;
     use tokio::runtime::Runtime;
-
     use super::*;
-
     fn response_json(response: Response) -> Value {
         let runtime = Runtime::new().expect("tokio runtime");
         runtime.block_on(async {
@@ -28683,7 +28155,6 @@ fn decode_pdp_challenge(encoded: &str) -> Result<PdpChallengeV1, Response> {
 #[cfg(feature = "app_api")]
 fn pdp_protocol_error_response(error: sorafs_node::PdpProviderProtocolError) -> Response {
     use sorafs_node::PdpProviderProtocolError;
-
     let (status, message) = match error {
         PdpProviderProtocolError::UntrustedAdmission
         | PdpProviderProtocolError::AdmissionProviderMismatch
@@ -29990,7 +29461,6 @@ mod app_api_tests {
         },
         time::Duration,
     };
-
     use axum::{body, http::Uri};
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_config::parameters::actual::{
@@ -30017,7 +29487,6 @@ mod app_api_tests {
     };
     use sorafs_node::{config::StorageConfig, store::StorageBackend};
     use tempfile::{TempDir, tempdir};
-
     use super::*;
     use crate::{
         mk_app_state_for_tests,
@@ -30766,7 +30235,6 @@ fn scheduler_admission_error_response(
     err: sorafs_node::scheduler::SchedulerAdmissionError,
 ) -> Response {
     use sorafs_node::scheduler::SchedulerAdmissionError;
-
     if matches!(err, SchedulerAdmissionError::StateUnavailable { .. }) {
         error!(?err, "SoraFS storage scheduler state unavailable");
         let mut response = json_error(
@@ -30962,10 +30430,8 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
 #[cfg(test)]
 mod storage_backend_error_tests {
     use std::time::Duration;
-
     use sorafs_manifest::retention::RetentionMetadataError;
     use sorafs_node::scheduler::{FetchRateScope, SchedulerAdmissionError};
-
     use super::{
         NodeStorageError, RETRY_AFTER, StorageBackendError, node_storage_error_response,
         storage_backend_error,
@@ -31706,7 +31172,6 @@ mod advert_tests {
         },
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
-
     use axum::{
         Router,
         body::{self, Bytes},
@@ -31741,7 +31206,7 @@ mod advert_tests {
         isi::sorafs::{
             SetSorafsProofOutcomeSignerPolicy, SorafsPdpProofOutcomeSubmissionV1,
             SorafsPotrProofOutcomeSubmissionV1, SorafsProofOutcomeSubmissionV1,
-            SubmitSorafsProofOutcome,
+            SubmitSorafsOrderbookOrder, SubmitSorafsProofOutcome,
         },
         metadata::Metadata,
         permission::{Permission, Permissions},
@@ -31862,7 +31327,6 @@ mod advert_tests {
     use tempfile::TempDir;
     use tokio::net::TcpListener;
     use tower::ServiceExt as _;
-
     use super::*;
     use crate::{
         build_sorafs_gateway_security, mk_app_state_for_tests, sorafs,
@@ -34600,7 +34064,6 @@ mod advert_tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600))
                 .expect("secure reputation trust policy permissions");
         }
@@ -35880,24 +35343,22 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
     #[test]
-    fn orderbook_command_contract_rejects_more_than_one_native_instruction() {
-        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let instruction: InstructionBox =
-            SubmitSorafsOrderbookOrder::new(Vec::new(), [0; 32]).into();
-        let transaction = TransactionBuilder::new(
-            *app.state.network_id_ref(),
-            auth.provider.account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([instruction.clone(), instruction])
-        .sign(auth.provider.keypair.private_key());
-        let response = validate_orderbook_signed_transaction(
-            &app,
-            &transaction,
-            OrderbookCommandRouteV1::SubmitOrder,
-        )
-        .expect_err("multiple instructions must fail before ledger admission");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    fn orderbook_submission_validation_preserves_http_error_classes() {
+        use SorafsOrderbookSubmissionValidationError as Error;
+        for (error, expected) in [
+            (Error::RouteMismatch, StatusCode::BAD_REQUEST),
+            (Error::InvalidTransactionSignature, StatusCode::FORBIDDEN),
+            (
+                Error::EmbeddedPayloadAuthorityMismatch,
+                StatusCode::FORBIDDEN,
+            ),
+            (Error::TransactionTooLarge, StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            assert_eq!(
+                orderbook_submission_validation_error_response(error).status(),
+                expected
+            );
+        }
     }
     #[test]
     fn orderbook_signed_transaction_transports_full_inner_payload_ceiling_in_json() {
@@ -35923,26 +35384,6 @@ mod advert_tests {
             json.len() <= wire_limit,
             "advertised JSON transport must carry the full inner-payload ceiling"
         );
-    }
-    #[test]
-    fn orderbook_command_contract_rejects_route_mismatch_before_ledger_query() {
-        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let instruction: InstructionBox =
-            SubmitSorafsOrderbookOrder::new(Vec::new(), [0; 32]).into();
-        let transaction = TransactionBuilder::new(
-            *app.state.network_id_ref(),
-            auth.provider.account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([instruction])
-        .sign(auth.provider.keypair.private_key());
-        let response = validate_orderbook_signed_transaction(
-            &app,
-            &transaction,
-            OrderbookCommandRouteV1::CancelOrder,
-        )
-        .expect_err("route mismatch must fail before authoritative policy lookup");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     #[tokio::test]
     async fn moderation_model_registry_endpoint_requires_canonical_request_auth() {
@@ -39818,7 +39259,6 @@ mod advert_tests {
         );
     }
     use tokio::sync::RwLock;
-
     const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
     const TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION:
         ModerationQuarantineKeyProviderQualificationV1 =
@@ -39868,7 +39308,6 @@ mod advert_tests {
             dek: &[u8; 32],
         ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
-
             SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.key)
                 .map_err(|error| {
                     ModerationQuarantineKeyOperationErrorV1::Rejected
@@ -39891,7 +39330,6 @@ mod advert_tests {
             wrapped_dek: &[u8],
         ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
-
             if key_id != self.key_id {
                 return Err(ModerationQuarantineKeyOperationErrorV1::StaleOrRevoked);
             }
@@ -39966,7 +39404,6 @@ mod advert_tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(&authority_bundle_path, fs::Permissions::from_mode(0o600))
                 .expect("secure screening authority bundle permissions");
         }
@@ -42866,7 +42303,6 @@ mod advert_tests {
     #[tokio::test]
     async fn storage_restart_recovers_manifest_metadata() {
         use sorafs_node::config::StorageConfig;
-
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let storage_root = temp_dir.path().join("storage");
         let cfg = StorageConfig::builder()

@@ -1,22 +1,17 @@
 //! Crash-safe publication of immutable Mochi configuration generations.
-
 use std::{
     ffi::OsStr,
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-
 use iroha_crypto::{HashOf, PublicKey};
 use iroha_data_model::block::BlockHeader;
 use norito::json::{self, Map, Value};
 use rand::{TryRngCore as _, rngs::OsRng};
-
 use crate::supervisor::{Result, SupervisorError};
-
 pub(crate) const GENERATIONS_DIRECTORY: &str = "generations";
 pub(crate) const CURRENT_GENERATION_FILE: &str = "current-generation";
 const GENERATION_LOCK_FILE: &str = ".generation.lock";
@@ -38,7 +33,6 @@ const GENERATION_INVENTORY_MAX_BYTES_V1: usize = 8 * 1024 * 1024;
 const GENERATION_SMALL_RECORD_MAX_BYTES_V1: usize = 4 * 1024;
 const GENERATION_MAX_PEER_DIRECTORIES_V1: usize = 7;
 const GENERATION_ID_RECORD_BYTES: usize = 32 + 1;
-
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PublicationFaultPoint {
@@ -51,7 +45,6 @@ pub(crate) enum PublicationFaultPoint {
     AfterPointerSync,
     AfterPointerRename,
 }
-
 /// Metadata bound into an immutable generation inventory.
 #[derive(Clone, Copy)]
 pub(crate) struct GenerationInventoryContext<'a> {
@@ -60,7 +53,6 @@ pub(crate) struct GenerationInventoryContext<'a> {
     pub(crate) genesis_public_key: &'a PublicKey,
     pub(crate) expected_hash: HashOf<BlockHeader>,
 }
-
 /// Exact metadata recovered from a strictly verified generation inventory.
 #[derive(Debug)]
 pub(crate) struct VerifiedGeneration {
@@ -71,7 +63,6 @@ pub(crate) struct VerifiedGeneration {
     pub(crate) genesis_public_key: PublicKey,
     pub(crate) expected_hash: HashOf<BlockHeader>,
 }
-
 /// Exclusive, unpublished generation transaction.
 #[derive(Debug)]
 pub(crate) struct GenerationTransaction {
@@ -85,7 +76,6 @@ pub(crate) struct GenerationTransaction {
     _lock: File,
     committed: bool,
 }
-
 /// A committed publication that retains the exclusive generation lock.
 ///
 /// Callers must keep this guard alive until their in-memory state, selected
@@ -95,14 +85,12 @@ pub(crate) struct PublishedGeneration {
     transaction: GenerationTransaction,
     durability_error: Option<std::io::Error>,
 }
-
 /// Failed pre-commit publication that retains the exclusive generation lock.
 #[derive(Debug)]
 pub(crate) struct FailedGenerationPublication {
     _transaction: GenerationTransaction,
     error: Option<SupervisorError>,
 }
-
 impl FailedGenerationPublication {
     pub(crate) fn take_error(&mut self) -> SupervisorError {
         self.error
@@ -110,12 +98,10 @@ impl FailedGenerationPublication {
             .expect("failed publication error can only be taken once")
     }
 }
-
 impl PublishedGeneration {
     pub(crate) fn id(&self) -> &str {
         self.transaction.id()
     }
-
     pub(crate) fn take_uncertainty(&mut self) -> Option<SupervisorError> {
         self.durability_error
             .take()
@@ -125,14 +111,12 @@ impl PublishedGeneration {
             })
     }
 }
-
 impl GenerationTransaction {
     #[cfg(test)]
     pub(crate) fn begin(root: &Path) -> Result<Self> {
         let expected_base_generation = current_generation_id(root)?;
         Self::begin_replacing(root, expected_base_generation)
     }
-
     /// Acquire the network generation lock and allocate an invisible candidate
     /// bound to the caller's expected base selection.
     pub(crate) fn begin_replacing(
@@ -144,7 +128,6 @@ impl GenerationTransaction {
         let root = fs::canonicalize(root)?;
         let lock_path = root.join(GENERATION_LOCK_FILE);
         reject_symlink(&lock_path, "generation lock")?;
-
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         #[cfg(unix)]
@@ -158,7 +141,6 @@ impl GenerationTransaction {
             fs::TryLockError::Error(error) => SupervisorError::Io(error),
         })?;
         validate_lock_file(&lock_path, &lock)?;
-
         let generations = root.join(GENERATIONS_DIRECTORY);
         reject_symlink(&generations, "generations directory")?;
         fs::create_dir_all(&generations)?;
@@ -166,7 +148,6 @@ impl GenerationTransaction {
         #[cfg(unix)]
         fs::set_permissions(&generations, fs::Permissions::from_mode(0o700))?;
         recover_abandoned_generation_transactions(&root, &generations)?;
-
         for _ in 0..32 {
             let mut entropy = [0_u8; 16];
             OsRng.try_fill_bytes(&mut entropy).map_err(|error| {
@@ -181,7 +162,6 @@ impl GenerationTransaction {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
-
             // The private pointer temporary doubles as the durable ownership
             // marker for every path created by this transaction. Persist it
             // before allocating the candidate directory, so a later writer can
@@ -198,7 +178,6 @@ impl GenerationTransaction {
             };
             pointer_temporary_file.sync_all()?;
             sync_directory(&root)?;
-
             match fs::create_dir(&generation_root) {
                 Ok(()) => {
                     #[cfg(unix)]
@@ -230,17 +209,14 @@ impl GenerationTransaction {
             "failed to allocate a unique Mochi generation id".to_owned(),
         ))
     }
-
     /// Return the immutable identifier allocated for this candidate.
     pub(crate) fn id(&self) -> &str {
         &self.id
     }
-
     /// Return the candidate's final absolute filesystem root.
     pub(crate) fn root(&self) -> &Path {
         &self.generation_root
     }
-
     /// Allocate and track one mutable runtime-storage root owned by this candidate.
     pub(crate) fn create_runtime_storage(&mut self, alias: &str) -> Result<PathBuf> {
         let alias_path = Path::new(alias);
@@ -252,7 +228,6 @@ impl GenerationTransaction {
                 "peer alias `{alias}` is not one safe path component"
             )));
         }
-
         let peers = self.root.join("peers");
         ensure_direct_child_directory(&self.root, &peers, "runtime peers directory")?;
         let peer = peers.join(alias);
@@ -271,7 +246,6 @@ impl GenerationTransaction {
         fs::set_permissions(&storage, fs::Permissions::from_mode(0o700))?;
         Ok(storage)
     }
-
     /// Seal the inventory, sync the candidate, and atomically publish it.
     pub(crate) fn publish(
         self,
@@ -282,7 +256,6 @@ impl GenerationTransaction {
             Err(mut failure) => Err(failure.take_error()),
         }
     }
-
     #[cfg(test)]
     pub(crate) fn publish_with_fault(
         self,
@@ -294,14 +267,12 @@ impl GenerationTransaction {
             Err(mut failure) => Err(failure.take_error()),
         }
     }
-
     pub(crate) fn publish_retaining_failure(
         self,
         context: GenerationInventoryContext<'_>,
     ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
         self.publish_inner(context, None)
     }
-
     pub(crate) fn publish_with_fault_retaining_failure(
         self,
         context: GenerationInventoryContext<'_>,
@@ -309,7 +280,6 @@ impl GenerationTransaction {
     ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
         self.publish_inner(context, Some(fault))
     }
-
     fn publish_inner(
         mut self,
         context: GenerationInventoryContext<'_>,
@@ -326,7 +296,6 @@ impl GenerationTransaction {
             }),
         }
     }
-
     fn try_publish_inner(
         &mut self,
         context: GenerationInventoryContext<'_>,
@@ -354,7 +323,6 @@ impl GenerationTransaction {
         sync_directory(&self.root)?;
         #[cfg(test)]
         inject_fault(fault, PublicationFaultPoint::AfterRuntimeStorageSync)?;
-
         // The transaction has held the exclusive generation lock since its
         // candidate was allocated. Compare the selected base immediately
         // before creating the replacement pointer so a stale Supervisor can
@@ -366,7 +334,6 @@ impl GenerationTransaction {
                 actual: actual_base_generation,
             });
         }
-
         let pointer = self.root.join(CURRENT_GENERATION_FILE);
         reject_symlink(&pointer, "current generation pointer")?;
         let mut file = self.pointer_temporary_file.take().ok_or_else(|| {
@@ -403,7 +370,6 @@ impl GenerationTransaction {
         }
         let verified = verify_selected_generation(&self.root, &self.id)?;
         ensure_inventory_context(&verified, context)?;
-
         if let Err(error) = fs::rename(&self.pointer_temporary, &pointer) {
             return Err(error.into());
         }
@@ -419,7 +385,6 @@ impl GenerationTransaction {
         };
         Ok(durability_error)
     }
-
     fn sync_runtime_storage_roots(&self) -> Result<()> {
         for storage in &self.runtime_storage_roots {
             if !candidate_runtime_storage_is_safe(&self.root, &self.id, storage) {
@@ -443,11 +408,9 @@ impl GenerationTransaction {
         }
         Ok(())
     }
-
     fn write_inventory(&self, context: &GenerationInventoryContext<'_>) -> Result<()> {
         let inventory_path = self.generation_root.join(GENERATION_INVENTORY_FILE);
         let files = generation_file_hashes(&self.generation_root, Some(&inventory_path))?;
-
         let mut file_values = Vec::new();
         file_values.try_reserve_exact(files.len()).map_err(|_| {
             SupervisorError::GenerationValidation(
@@ -460,7 +423,6 @@ impl GenerationTransaction {
             entry.insert("blake3".to_owned(), Value::String(hash.clone()));
             file_values.push(Value::Object(entry));
         }
-
         let mut inventory = Map::new();
         inventory.insert("schema".to_owned(), Value::Number(GENERATION_SCHEMA.into()));
         inventory.insert("generation_id".to_owned(), Value::String(self.id.clone()));
@@ -481,7 +443,6 @@ impl GenerationTransaction {
             Value::String(context.expected_hash.to_string()),
         );
         inventory.insert("files".to_owned(), Value::Array(file_values));
-
         let mut bytes = json::to_json_bounded(
             &Value::Object(inventory),
             GENERATION_INVENTORY_MAX_BYTES_V1 - 1,
@@ -500,7 +461,6 @@ impl GenerationTransaction {
         let mut file = options.open(&inventory_path)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
-
         // Re-hash after the inventory write. A concurrent mutation of any
         // candidate artifact therefore invalidates publication.
         let after = generation_file_hashes(&self.generation_root, Some(&inventory_path))?;
@@ -512,7 +472,6 @@ impl GenerationTransaction {
         Ok(())
     }
 }
-
 #[cfg(test)]
 fn inject_fault(
     selected: Option<PublicationFaultPoint>,
@@ -523,14 +482,12 @@ fn inject_fault(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn injected_fault(point: PublicationFaultPoint) -> SupervisorError {
     SupervisorError::GenerationValidation(format!(
         "injected generation publication fault at {point:?}"
     ))
 }
-
 impl Drop for GenerationTransaction {
     fn drop(&mut self) {
         if self.committed || !is_generation_id(&self.id) {
@@ -546,13 +503,11 @@ impl Drop for GenerationTransaction {
         );
     }
 }
-
 fn generation_pointer_temporary_path(root: &Path, id: &str) -> PathBuf {
     root.join(format!(
         "{GENERATION_POINTER_TEMP_PREFIX}{id}{GENERATION_POINTER_TEMP_SUFFIX}"
     ))
 }
-
 fn generation_pointer_temporary_id(name: &OsStr) -> Result<Option<String>> {
     let Some(name) = name.to_str() else {
         return Ok(None);
@@ -572,7 +527,6 @@ fn generation_pointer_temporary_id(name: &OsStr) -> Result<Option<String>> {
     }
     Ok(Some(id.to_owned()))
 }
-
 /// Reclaim only transactions carrying Mochi's durable ownership marker.
 ///
 /// The caller holds the exclusive generation lock. Unmarked generation and
@@ -591,7 +545,6 @@ fn recover_abandoned_generation_transactions(root: &Path, generations: &Path) ->
     }
     Ok(())
 }
-
 fn reclaim_abandoned_generation_transaction(
     root: &Path,
     generations: &Path,
@@ -605,7 +558,6 @@ fn reclaim_abandoned_generation_transaction(
         )));
     }
     validate_generation_pointer_temporary(marker, id)?;
-
     // A recovered selected pointer is authoritative even if its generation is
     // damaged. It may represent a rename that committed immediately before a
     // crash; remove only the redundant marker in that case.
@@ -614,10 +566,8 @@ fn reclaim_abandoned_generation_transaction(
         sync_directory(root)?;
         return Ok(());
     }
-
     let runtime_storage = abandoned_runtime_storage_paths(root, id)?;
     let generation_root = abandoned_generation_path(generations, id)?;
-
     // Keep the marker until every associated deletion is durable. If a sync
     // fails, the next exclusive writer can safely resume from the same id.
     for storage in runtime_storage {
@@ -635,7 +585,6 @@ fn reclaim_abandoned_generation_transaction(
     sync_directory(root)?;
     Ok(())
 }
-
 fn validate_generation_pointer_temporary(path: &Path, id: &str) -> Result<()> {
     let named = fs::symlink_metadata(path)?;
     if named.file_type().is_symlink() || !named.is_file() {
@@ -678,7 +627,6 @@ fn validate_generation_pointer_temporary(path: &Path, id: &str) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_generation_pointer_temporary_file(path: &Path, file: &File) -> Result<()> {
     let opened = file.metadata()?;
     let named = fs::symlink_metadata(path)?;
@@ -705,7 +653,6 @@ fn validate_generation_pointer_temporary_file(path: &Path, file: &File) -> Resul
     }
     Ok(())
 }
-
 fn abandoned_generation_path(generations: &Path, id: &str) -> Result<Option<PathBuf>> {
     let path = generations.join(id);
     match fs::symlink_metadata(&path) {
@@ -723,7 +670,6 @@ fn abandoned_generation_path(generations: &Path, id: &str) -> Result<Option<Path
         Err(error) => Err(error.into()),
     }
 }
-
 fn abandoned_runtime_storage_paths(root: &Path, id: &str) -> Result<Vec<PathBuf>> {
     let peers = root.join("peers");
     match fs::symlink_metadata(&peers) {
@@ -737,7 +683,6 @@ fn abandoned_runtime_storage_paths(root: &Path, id: &str) -> Result<Vec<PathBuf>
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error.into()),
     }
-
     let mut storage_roots = Vec::new();
     storage_roots
         .try_reserve_exact(GENERATION_MAX_PEER_DIRECTORIES_V1)
@@ -769,7 +714,6 @@ fn abandoned_runtime_storage_paths(root: &Path, id: &str) -> Result<Vec<PathBuf>
             )));
         }
         validate_contained_directory(&peers, &peer, "runtime peer directory")?;
-
         let storage_generations = peer.join("storage-generations");
         match fs::symlink_metadata(&storage_generations) {
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
@@ -786,7 +730,6 @@ fn abandoned_runtime_storage_paths(root: &Path, id: &str) -> Result<Vec<PathBuf>
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
         }
-
         let storage = storage_generations.join(id);
         match fs::symlink_metadata(&storage) {
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
@@ -810,7 +753,6 @@ fn abandoned_runtime_storage_paths(root: &Path, id: &str) -> Result<Vec<PathBuf>
     }
     Ok(storage_roots)
 }
-
 /// Acquire a nonblocking shared lease on the selected-generation pointer.
 ///
 /// Exclusive generation publishers use the same lock, so retaining the
@@ -821,7 +763,6 @@ pub(crate) fn try_lock_generation_selection(root: &Path) -> Result<File> {
     let root = fs::canonicalize(root)?;
     let lock_path = root.join(GENERATION_LOCK_FILE);
     reject_symlink(&lock_path, "generation lock")?;
-
     let mut options = OpenOptions::new();
     options.read(true).write(true);
     let lock = options.open(&lock_path)?;
@@ -835,7 +776,6 @@ pub(crate) fn try_lock_generation_selection(root: &Path) -> Result<File> {
     validate_lock_file(&lock_path, &lock)?;
     Ok(lock)
 }
-
 /// Read the exact currently published generation identifier.
 pub(crate) fn current_generation_id(root: &Path) -> Result<Option<String>> {
     let path = root.join(CURRENT_GENERATION_FILE);
@@ -878,7 +818,6 @@ pub(crate) fn current_generation_id(root: &Path) -> Result<Option<String>> {
     }
     Ok(Some(id.to_owned()))
 }
-
 /// Verify that the selected generation is complete and exactly matches its inventory.
 pub(crate) fn verify_selected_generation(root: &Path, id: &str) -> Result<VerifiedGeneration> {
     if !is_generation_id(id) {
@@ -1144,7 +1083,6 @@ pub(crate) fn verify_selected_generation(root: &Path, id: &str) -> Result<Verifi
             "selected generation `{id}` inventory contains no peer config"
         )));
     }
-
     let public_key_path = generation_root.join("genesis/genesis.public_key");
     let public_key_bytes = read_generation_file_bounded(
         &public_key_path,
@@ -1177,7 +1115,6 @@ pub(crate) fn verify_selected_generation(root: &Path, id: &str) -> Result<Verifi
             "selected generation `{id}` manifest differs from inventory chain metadata"
         )));
     }
-
     Ok(VerifiedGeneration {
         root: generation_root,
         generation_id: id.to_owned(),
@@ -1187,7 +1124,6 @@ pub(crate) fn verify_selected_generation(root: &Path, id: &str) -> Result<Verifi
         expected_hash,
     })
 }
-
 fn ensure_inventory_context(
     verified: &VerifiedGeneration,
     expected: GenerationInventoryContext<'_>,
@@ -1203,7 +1139,6 @@ fn ensure_inventory_context(
     }
     Ok(())
 }
-
 fn validate_contained_directory(root: &Path, path: &Path, label: &str) -> Result<()> {
     reject_symlink(path, label)?;
     let metadata = fs::symlink_metadata(path)?;
@@ -1222,7 +1157,6 @@ fn validate_contained_directory(root: &Path, path: &Path, label: &str) -> Result
     }
     Ok(())
 }
-
 fn ensure_direct_child_directory(parent: &Path, path: &Path, label: &str) -> Result<()> {
     reject_symlink(path, label)?;
     match fs::create_dir(path) {
@@ -1247,7 +1181,6 @@ fn ensure_direct_child_directory(parent: &Path, path: &Path, label: &str) -> Res
     }
     Ok(())
 }
-
 fn candidate_runtime_storage_is_safe(root: &Path, id: &str, path: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
@@ -1272,7 +1205,6 @@ fn candidate_runtime_storage_is_safe(root: &Path, id: &str, path: &Path) -> bool
     {
         return false;
     }
-
     let peers = root.join("peers");
     let peer = peers.join(alias);
     let storage_parent = peer.join("storage-generations");
@@ -1289,7 +1221,6 @@ fn candidate_runtime_storage_is_safe(root: &Path, id: &str, path: &Path) -> bool
             .zip(fs::canonicalize(path).ok())
             .is_some_and(|(parent, candidate)| candidate.parent() == Some(parent.as_path()))
 }
-
 fn generation_file_metadata_unchanged(expected: &fs::Metadata, observed: &fs::Metadata) -> bool {
     if !expected.is_file() || !observed.is_file() || expected.len() != observed.len() {
         return false;
@@ -1308,7 +1239,6 @@ fn generation_file_metadata_unchanged(expected: &fs::Metadata, observed: &fs::Me
         expected.modified().ok() == observed.modified().ok()
     }
 }
-
 fn admit_generation_tree_entry(entries: &mut usize) -> Result<()> {
     *entries = (*entries).checked_add(1).ok_or_else(|| {
         SupervisorError::GenerationValidation(
@@ -1323,7 +1253,6 @@ fn admit_generation_tree_entry(entries: &mut usize) -> Result<()> {
     }
     Ok(())
 }
-
 fn admit_generation_inventory_file(
     files: &mut usize,
     aggregate_path_bytes: &mut usize,
@@ -1361,7 +1290,6 @@ fn admit_generation_inventory_file(
     }
     Ok(())
 }
-
 fn copy_generation_text(value: &str, label: &'static str) -> Result<String> {
     let mut output = String::new();
     output.try_reserve_exact(value.len()).map_err(|_| {
@@ -1372,7 +1300,6 @@ fn copy_generation_text(value: &str, label: &'static str) -> Result<String> {
     output.push_str(value);
     Ok(output)
 }
-
 fn read_generation_file_bounded(
     path: &Path,
     label: &'static str,
@@ -1405,7 +1332,6 @@ fn read_generation_file_bounded(
             path.display()
         )));
     }
-
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(expected_len).map_err(|_| {
         SupervisorError::GenerationValidation(format!(
@@ -1435,7 +1361,6 @@ fn read_generation_file_bounded(
     }
     Ok(bytes)
 }
-
 fn hash_generation_file(path: &Path, expected: &fs::Metadata) -> Result<String> {
     let mut file = File::open(path)?;
     let opened = file.metadata()?;
@@ -1445,7 +1370,6 @@ fn hash_generation_file(path: &Path, expected: &fs::Metadata) -> Result<String> 
             path.display()
         )));
     }
-
     let mut hasher = blake3::Hasher::new();
     let mut buffer = [0_u8; GENERATION_FILE_HASH_BUFFER_BYTES];
     let mut observed_bytes = 0_u64;
@@ -1473,7 +1397,6 @@ fn hash_generation_file(path: &Path, expected: &fs::Metadata) -> Result<String> 
         }
         hasher.update(&buffer[..read]);
     }
-
     let opened_after = file.metadata()?;
     let named_after = fs::symlink_metadata(path)?;
     if named_after.file_type().is_symlink()
@@ -1500,7 +1423,6 @@ fn hash_generation_file(path: &Path, expected: &fs::Metadata) -> Result<String> 
     }
     Ok(encoded)
 }
-
 fn generation_file_hashes(root: &Path, excluded: Option<&Path>) -> Result<Vec<(String, String)>> {
     let mut output = Vec::new();
     let mut pending = Vec::new();
@@ -1513,7 +1435,6 @@ fn generation_file_hashes(root: &Path, excluded: Option<&Path>) -> Result<Vec<(S
     let mut tree_entries = 0_usize;
     let mut file_count = 0_usize;
     let mut aggregate_path_bytes = 0_usize;
-
     while let Some((directory, depth)) = pending.pop() {
         for entry in fs::read_dir(&directory)? {
             let entry = entry?;
@@ -1579,7 +1500,6 @@ fn generation_file_hashes(root: &Path, excluded: Option<&Path>) -> Result<Vec<(S
     output.sort_unstable();
     Ok(output)
 }
-
 fn sync_tree(path: &Path) -> Result<()> {
     let mut pending = Vec::new();
     let mut directories = Vec::new();
@@ -1596,7 +1516,6 @@ fn sync_tree(path: &Path) -> Result<()> {
     pending.push((path.to_path_buf(), 0_usize));
     directories.push(path.to_path_buf());
     let mut tree_entries = 0_usize;
-
     while let Some((directory, depth)) = pending.pop() {
         for entry in fs::read_dir(&directory)? {
             let entry = entry?;
@@ -1648,11 +1567,9 @@ fn sync_tree(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn sync_directory(path: &Path) -> std::io::Result<()> {
     File::open(path)?.sync_all()
 }
-
 fn reject_symlink(path: &Path, label: &str) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -1666,7 +1583,6 @@ fn reject_symlink(path: &Path, label: &str) -> Result<()> {
         Err(error) => Err(error.into()),
     }
 }
-
 fn validate_lock_file(path: &Path, file: &File) -> Result<()> {
     let opened = file.metadata()?;
     let named = fs::symlink_metadata(path)?;
@@ -1693,14 +1609,12 @@ fn validate_lock_file(path: &Path, file: &File) -> Result<()> {
     }
     Ok(())
 }
-
 fn is_generation_id(value: &str) -> bool {
     value.len() == 32
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
-
 fn encode_lower_hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
@@ -1710,12 +1624,10 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
     }
     output
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::KeyPair;
-
     #[test]
     fn generation_file_hash_streams_across_multiple_chunks() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -1725,18 +1637,14 @@ mod tests {
             .collect::<Vec<_>>();
         fs::write(&path, &bytes).expect("write multi-chunk artifact");
         let metadata = fs::symlink_metadata(&path).expect("inspect multi-chunk artifact");
-
         let observed = hash_generation_file(&path, &metadata).expect("stream artifact hash");
-
         assert_eq!(observed, blake3::hash(&bytes).to_hex().to_string());
     }
-
     #[test]
     fn generation_tree_and_inventory_budgets_accept_exact_and_reject_next() {
         let mut entries = GENERATION_TREE_MAX_ENTRIES_V1 - 1;
         admit_generation_tree_entry(&mut entries).expect("exact tree-entry limit");
         assert!(admit_generation_tree_entry(&mut entries).is_err());
-
         let mut files = GENERATION_INVENTORY_MAX_FILES_V1 - 1;
         let mut path_bytes = GENERATION_INVENTORY_MAX_PATH_BYTES_V1
             - GENERATION_INVENTORY_MAX_PATH_BYTES_PER_FILE_V1;
@@ -1750,7 +1658,6 @@ mod tests {
             admit_generation_inventory_file(&mut files, &mut path_bytes, 0).is_err(),
             "the first file beyond the V1 limit must fail closed"
         );
-
         let mut path_only_files = 0;
         let mut path_only_bytes = GENERATION_INVENTORY_MAX_PATH_BYTES_V1;
         assert!(
@@ -1758,7 +1665,6 @@ mod tests {
             "the first aggregate path byte beyond the V1 limit must fail closed"
         );
     }
-
     #[test]
     fn bounded_generation_reader_accepts_exact_and_rejects_max_plus_one() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -1769,13 +1675,11 @@ mod tests {
                 .expect("read exact generation record"),
             [0x5A_u8; 32]
         );
-
         fs::write(&path, [0x5A_u8; 33]).expect("write oversized generation record");
         let error = read_generation_file_bounded(&path, "test generation record", 32)
             .expect_err("max plus one must reject before allocation");
         assert!(error.to_string().contains("exceeds its 32-byte limit"));
     }
-
     #[test]
     fn generation_file_inventory_is_sorted_after_streaming_walk() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -1783,7 +1687,6 @@ mod tests {
         fs::create_dir(&nested).expect("create nested generation directory");
         fs::write(temp.path().join("z.bin"), b"zeta").expect("write root artifact");
         fs::write(nested.join("a.bin"), b"alpha").expect("write nested artifact");
-
         let observed =
             generation_file_hashes(temp.path(), None).expect("stream generation inventory files");
         assert_eq!(
@@ -1794,7 +1697,6 @@ mod tests {
             vec!["nested/a.bin", "z.bin"]
         );
     }
-
     fn write_complete_candidate(
         root: &Path,
         chain_id: &str,
@@ -1841,7 +1743,6 @@ mod tests {
         fs::write(peer_dir.join("config.toml"), b"fixture config\n").expect("write fixture config");
         (key_pair, expected_hash)
     }
-
     fn publish_complete_generation(root: &Path, chain_id: &str) -> String {
         let transaction = GenerationTransaction::begin(root).expect("begin fixture generation");
         let (key_pair, expected_hash) = write_complete_candidate(transaction.root(), chain_id, 7);
@@ -1855,7 +1756,6 @@ mod tests {
             .expect("publish fixture generation");
         durable_generation_id(publication)
     }
-
     fn durable_generation_id(mut publication: PublishedGeneration) -> String {
         let id = publication.id().to_owned();
         assert!(
@@ -1865,7 +1765,6 @@ mod tests {
         drop(publication);
         id
     }
-
     fn write_crash_marker(root: &Path, id: &str, bytes: &[u8]) -> PathBuf {
         let marker = generation_pointer_temporary_path(root, id);
         let mut options = OpenOptions::new();
@@ -1878,7 +1777,6 @@ mod tests {
         sync_directory(root).expect("sync crash marker parent");
         marker
     }
-
     fn create_runtime_storage_fixture(root: &Path, alias: &str, id: &str) -> PathBuf {
         let storage = root
             .join("peers")
@@ -1888,7 +1786,6 @@ mod tests {
         fs::create_dir_all(&storage).expect("create runtime storage fixture");
         storage
     }
-
     #[test]
     fn lock_contention_fails_fast_and_releases_on_drop() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -1900,7 +1797,6 @@ mod tests {
         drop(first);
         GenerationTransaction::begin(temp.path()).expect("lock released after drop");
     }
-
     #[test]
     fn exclusive_begin_reclaims_marked_crash_residue_and_preserves_history() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -1911,7 +1807,6 @@ mod tests {
         let historical_storage = create_runtime_storage_fixture(&root, "peer0", &historical);
         fs::write(historical_storage.join("sentinel"), b"retained history")
             .expect("write historical storage sentinel");
-
         let mut abandoned = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
             .expect("begin candidate that will simulate a crash");
         let abandoned_root = abandoned.root().to_path_buf();
@@ -1946,7 +1841,6 @@ mod tests {
         // allowing this test process to release the advisory lock.
         abandoned.committed = true;
         drop(abandoned);
-
         let next = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
             .expect("recover residue and begin next generation");
         assert!(!marker.exists());
@@ -1964,7 +1858,6 @@ mod tests {
         );
         drop(next);
     }
-
     #[test]
     fn recovery_never_infers_abandonment_from_an_unmarked_directory_name() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -1977,7 +1870,6 @@ mod tests {
             .expect("write unmarked history");
         let unmarked_storage = create_runtime_storage_fixture(&root, "peer0", unmarked_id);
         fs::write(unmarked_storage.join("sentinel"), b"retain").expect("write unmarked storage");
-
         let next = GenerationTransaction::begin_replacing(&root, Some(selected))
             .expect("begin without collecting unmarked history");
         assert!(unmarked_root.is_dir());
@@ -1987,7 +1879,6 @@ mod tests {
         );
         drop(next);
     }
-
     #[test]
     fn selected_generation_wins_over_a_recovered_marker() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -1998,7 +1889,6 @@ mod tests {
         fs::write(selected_storage.join("sentinel"), b"selected")
             .expect("write selected storage sentinel");
         let marker = write_crash_marker(&root, &selected, format!("{selected}\n").as_bytes());
-
         let next = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
             .expect("discard redundant selected marker");
         assert!(!marker.exists());
@@ -2013,7 +1903,6 @@ mod tests {
         );
         drop(next);
     }
-
     #[test]
     fn recovery_runs_only_after_the_exclusive_lock_is_acquired() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -2024,13 +1913,11 @@ mod tests {
         fs::create_dir(&abandoned_root).expect("create abandoned generation");
         let marker = write_crash_marker(&root, abandoned_id, b"");
         let lease = try_lock_generation_selection(&root).expect("acquire shared selection lease");
-
         let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
             .expect_err("shared lease must prevent recovery writer");
         assert!(matches!(error, SupervisorError::GenerationLocked { .. }));
         assert!(marker.is_file());
         assert!(abandoned_root.is_dir());
-
         drop(lease);
         let next = GenerationTransaction::begin_replacing(&root, Some(selected))
             .expect("exclusive writer recovers after lease release");
@@ -2038,7 +1925,6 @@ mod tests {
         assert!(!abandoned_root.exists());
         drop(next);
     }
-
     #[test]
     fn recovery_fails_closed_on_a_malformed_reserved_marker_name() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -2046,7 +1932,6 @@ mod tests {
         let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
         let malformed = root.join(".current-generation.not-a-generation.tmp");
         fs::write(&malformed, b"").expect("write malformed reserved marker");
-
         let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
             .expect_err("malformed reserved marker must fail closed");
         assert!(error.to_string().contains("invalid generation id"));
@@ -2056,7 +1941,6 @@ mod tests {
             Some(selected)
         );
     }
-
     #[test]
     fn failed_candidate_drop_preserves_current_pointer() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -2079,7 +1963,6 @@ mod tests {
             Some(old)
         );
     }
-
     #[test]
     fn every_precommit_fault_preserves_prior_selection() {
         for point in [
@@ -2152,7 +2035,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn post_rename_fault_reports_uncertain_committed_generation() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -2198,7 +2080,6 @@ mod tests {
         GenerationTransaction::begin(temp.path())
             .expect("dropping the committed guard releases the generation lock");
     }
-
     #[test]
     fn committed_publication_guard_serializes_reconciliation() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -2223,12 +2104,10 @@ mod tests {
             contention,
             SupervisorError::GenerationLocked { .. }
         ));
-
         drop(publication);
         GenerationTransaction::begin(temp.path())
             .expect("dropping the committed guard releases the generation lock");
     }
-
     #[test]
     fn stale_expected_base_cannot_replace_newer_selection() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -2238,7 +2117,6 @@ mod tests {
             verify_selected_generation(temp.path(), &next).expect("newer selection validates");
         let selected_config =
             fs::read(selected.root.join("peers/peer0/config.toml")).expect("read selected config");
-
         let stale = GenerationTransaction::begin_replacing(temp.path(), Some(old.clone()))
             .expect("begin stale candidate");
         let stale_root = stale.root().to_path_buf();
@@ -2271,7 +2149,6 @@ mod tests {
         );
         assert!(!stale_root.exists());
     }
-
     #[test]
     fn publication_keeps_synced_runtime_storage_outside_immutable_generation() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -2285,7 +2162,6 @@ mod tests {
             .expect("write candidate state");
         let (key_pair, expected_hash) =
             write_complete_candidate(&generation_root, "runtime-storage-sync", 11);
-
         let published = durable_generation_id(
             transaction
                 .publish(GenerationInventoryContext {
@@ -2296,7 +2172,6 @@ mod tests {
                 })
                 .expect("publish generation with runtime storage"),
         );
-
         assert_eq!(published, generation_id);
         assert_eq!(
             storage,
@@ -2316,12 +2191,10 @@ mod tests {
             Some(generation_id)
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn publication_rejects_replaced_runtime_storage_before_pointer_commit() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("temporary root");
         let outside = tempfile::tempdir().expect("outside storage root");
         let mut transaction = GenerationTransaction::begin(temp.path()).expect("begin candidate");
@@ -2333,7 +2206,6 @@ mod tests {
         symlink(outside.path(), &storage).expect("replace storage with symlink");
         let (key_pair, expected_hash) =
             write_complete_candidate(&generation_root, "runtime-storage-symlink", 12);
-
         let error = transaction
             .publish(GenerationInventoryContext {
                 chain_id: "runtime-storage-symlink",
@@ -2355,12 +2227,10 @@ mod tests {
             "publication must not traverse a replaced runtime-storage symlink"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn publication_rejects_interior_runtime_storage_symlink_before_pointer_commit() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("temporary root");
         let old = publish_complete_generation(temp.path(), "interior-symlink-old");
         let outside = tempfile::tempdir().expect("outside snapshot root");
@@ -2375,7 +2245,6 @@ mod tests {
             .expect("create interior storage symlink");
         let (key_pair, expected_hash) =
             write_complete_candidate(&generation_root, "interior-symlink-new", 13);
-
         let error = transaction
             .publish(GenerationInventoryContext {
                 chain_id: "interior-symlink-new",
@@ -2405,12 +2274,10 @@ mod tests {
         assert!(!generation_root.exists());
         assert!(!candidate_storage.exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn publication_rejects_special_runtime_storage_entry_before_pointer_commit() {
         use std::os::unix::net::UnixListener;
-
         let temp = tempfile::tempdir_in("/tmp").expect("short temporary root");
         let old = publish_complete_generation(temp.path(), "special-entry-old");
         let mut transaction = GenerationTransaction::begin(temp.path()).expect("begin candidate");
@@ -2422,7 +2289,6 @@ mod tests {
             .expect("create special runtime-storage entry");
         let (key_pair, expected_hash) =
             write_complete_candidate(&generation_root, "special-entry-new", 14);
-
         let error = transaction
             .publish(GenerationInventoryContext {
                 chain_id: "special-entry-new",
@@ -2441,7 +2307,6 @@ mod tests {
         assert!(!generation_root.exists());
         assert!(!candidate_storage.exists());
     }
-
     #[test]
     fn selected_generation_verification_rejects_tampering() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -2460,7 +2325,6 @@ mod tests {
                 .expect("publish generation"),
         );
         verify_selected_generation(temp.path(), &id).expect("sealed generation verifies");
-
         fs::write(
             candidate_root.join("genesis/genesis.signed.nrt"),
             b"tampered",
@@ -2470,7 +2334,6 @@ mod tests {
             .expect_err("tampered selected generation must fail");
         assert!(error.to_string().contains("does not match its inventory"));
     }
-
     #[test]
     fn selected_generation_rejects_inventory_metadata_substitution() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -2499,7 +2362,6 @@ mod tests {
                 .contains("manifest differs from inventory")
         );
     }
-
     #[test]
     fn selected_generation_rejects_open_or_noncanonical_file_entries() {
         for extra_field in [true, false] {
@@ -2539,12 +2401,10 @@ mod tests {
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn recovery_rejects_symlinked_pointer_marker_without_following_it() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("temporary root");
         let selected = publish_complete_generation(temp.path(), "symlink-marker");
         let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
@@ -2555,7 +2415,6 @@ mod tests {
         fs::write(outside.path(), b"outside sentinel").expect("write outside sentinel");
         let marker = generation_pointer_temporary_path(&root, abandoned_id);
         symlink(outside.path(), &marker).expect("symlink pointer marker");
-
         let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
             .expect_err("symlinked marker must fail closed");
         assert!(error.to_string().contains("must be a regular file"));
@@ -2575,12 +2434,10 @@ mod tests {
             Some(selected)
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn recovery_rejects_special_pointer_marker_without_opening_it() {
         use std::os::unix::net::UnixListener;
-
         let temp = tempfile::tempdir_in("/tmp").expect("short temporary root");
         let selected = publish_complete_generation(temp.path(), "special-marker");
         let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
@@ -2589,7 +2446,6 @@ mod tests {
         fs::create_dir(&abandoned_root).expect("create abandoned generation");
         let marker = generation_pointer_temporary_path(&root, abandoned_id);
         let listener = UnixListener::bind(&marker).expect("bind special marker entry");
-
         let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
             .expect_err("special marker must fail closed");
         assert!(error.to_string().contains("must be a regular file"));
@@ -2601,7 +2457,6 @@ mod tests {
         );
         drop(listener);
     }
-
     #[cfg(unix)]
     #[test]
     fn recovery_rejects_insecure_or_hardlinked_pointer_markers() {
@@ -2626,7 +2481,6 @@ mod tests {
                     .expect("make pointer marker insecure");
                 "must be owner-only"
             };
-
             let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
                 .expect_err("unsafe marker identity must fail closed");
             assert!(
@@ -2641,7 +2495,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn recovery_rejects_malformed_pointer_marker_contents() {
@@ -2652,7 +2505,6 @@ mod tests {
         let abandoned_root = root.join(GENERATIONS_DIRECTORY).join(abandoned_id);
         fs::create_dir(&abandoned_root).expect("create abandoned generation");
         let marker = write_crash_marker(&root, abandoned_id, b"not-a-prefix");
-
         let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
             .expect_err("malformed marker contents must fail closed");
         assert!(error.to_string().contains("malformed contents"));
@@ -2663,12 +2515,10 @@ mod tests {
             Some(selected)
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn recovery_rejects_symlinked_runtime_root_before_deleting_any_candidate_state() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("temporary root");
         let selected = publish_complete_generation(temp.path(), "symlinked-runtime-recovery");
         let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
@@ -2682,7 +2532,6 @@ mod tests {
         let storage = storage_parent.join(abandoned_id);
         symlink(outside.path(), &storage).expect("symlink runtime storage");
         let marker = write_crash_marker(&root, abandoned_id, b"");
-
         let error = GenerationTransaction::begin_replacing(&root, Some(selected.clone()))
             .expect_err("symlinked runtime storage must fail closed");
         assert!(error.to_string().contains("non-symlink directory"));
@@ -2697,12 +2546,10 @@ mod tests {
             Some(selected)
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn recovery_unlinks_interior_symlinks_without_touching_their_targets() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("temporary root");
         let selected = publish_complete_generation(temp.path(), "interior-recovery-symlink");
         let root = fs::canonicalize(temp.path()).expect("canonical temporary root");
@@ -2717,7 +2564,6 @@ mod tests {
         symlink(outside.path(), abandoned_storage.join("state-link"))
             .expect("symlink abandoned runtime state");
         let marker = write_crash_marker(&root, abandoned_id, b"");
-
         let next = GenerationTransaction::begin_replacing(&root, Some(selected))
             .expect("remove managed trees without following interior symlinks");
         assert!(!marker.exists());
@@ -2729,12 +2575,10 @@ mod tests {
         );
         drop(next);
     }
-
     #[cfg(unix)]
     #[test]
     fn dangling_pointer_and_symlinked_generation_parent_fail_closed() {
         use std::os::unix::fs::symlink;
-
         let dangling = tempfile::tempdir().expect("dangling-pointer root");
         symlink(
             dangling.path().join("missing-target"),
@@ -2744,7 +2588,6 @@ mod tests {
         let error = current_generation_id(dangling.path())
             .expect_err("dangling current-generation symlink must fail closed");
         assert!(error.to_string().contains("symbolic link"));
-
         let root = tempfile::tempdir().expect("symlinked-parent root");
         let outside = tempfile::tempdir().expect("outside generations target");
         symlink(outside.path(), root.path().join(GENERATIONS_DIRECTORY))

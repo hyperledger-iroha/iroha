@@ -1,6 +1,5 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::{VectorCircuit, VectorOp};
-
 #[test]
 fn test_vadd32_circuit() {
     let c = VectorCircuit {
@@ -12,7 +11,6 @@ fn test_vadd32_circuit() {
     };
     assert!(c.verify().is_ok());
 }
-
 #[test]
 fn test_vadd64_circuit() {
     let c = VectorCircuit {
@@ -24,7 +22,6 @@ fn test_vadd64_circuit() {
     };
     assert!(c.verify().is_ok());
 }
-
 #[test]
 fn test_vbit_circuit() {
     let c_and = VectorCircuit {
@@ -52,7 +49,6 @@ fn test_vbit_circuit() {
     };
     assert!(c_or.verify().is_ok());
 }
-
 #[test]
 fn test_vrot32_circuit() {
     let c = VectorCircuit {

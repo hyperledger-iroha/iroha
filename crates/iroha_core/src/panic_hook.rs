@@ -1,18 +1,13 @@
 //! Panic hook suppression helpers.
-
 use std::{cell::Cell, future::Future};
-
 thread_local! {
     static SUPPRESSION_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
-
 tokio::task_local! {
     static ASYNC_SUPPRESSION_DEPTH: u32;
 }
-
 /// RAII guard that suppresses panic hook side-effects on the current thread.
 pub struct ScopedSuppressor;
-
 impl ScopedSuppressor {
     /// Create a new scoped suppressor.
     #[must_use]
@@ -21,13 +16,11 @@ impl ScopedSuppressor {
         Self
     }
 }
-
 impl Default for ScopedSuppressor {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl Drop for ScopedSuppressor {
     fn drop(&mut self) {
         SUPPRESSION_DEPTH.with(|depth| {
@@ -37,7 +30,6 @@ impl Drop for ScopedSuppressor {
         });
     }
 }
-
 /// Returns true if the panic hook should suspend shutdown signalling in this scope.
 #[must_use]
 pub fn is_suppressed() -> bool {
@@ -46,13 +38,11 @@ pub fn is_suppressed() -> bool {
             .try_with(|depth| *depth > 0)
             .unwrap_or(false)
 }
-
 /// Run a closure while suppressing panic hook shutdown signalling on the current thread.
 pub fn with_hook_suppressed<R>(f: impl FnOnce() -> R) -> R {
     let _guard = ScopedSuppressor::new();
     f()
 }
-
 /// Poll a future with panic-hook shutdown signalling suppressed for this task.
 ///
 /// A thread-local guard cannot safely be held across an `.await`, because the
@@ -67,11 +57,9 @@ where
         .unwrap_or(1);
     ASYNC_SUPPRESSION_DEPTH.scope(depth, future).await
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn suppression_is_scoped() {
         assert!(!is_suppressed());
@@ -86,7 +74,6 @@ mod tests {
         }
         assert!(!is_suppressed());
     }
-
     #[test]
     fn with_hook_suppressed_runs_closure() {
         assert!(!is_suppressed());
@@ -97,7 +84,6 @@ mod tests {
         assert_eq!(value, 42);
         assert!(!is_suppressed());
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn async_suppression_follows_only_the_scoped_task() {
         assert!(!is_suppressed());
@@ -110,7 +96,6 @@ mod tests {
             })
             .await;
             assert!(is_suppressed());
-
             let sibling = tokio::spawn(async { is_suppressed() })
                 .await
                 .expect("sibling task should complete");

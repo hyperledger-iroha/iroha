@@ -62,6 +62,9 @@ REQUIRED_PACKAGE_CONTRACTS: dict[str, tuple[str, str, str | None]] = {
         None,
     ),
 }
+RELEASE_PACKAGE_IDS = frozenset(
+    {"sorafs-car", "sorafs-manifest", "sorafs-orchestrator"}
+)
 SEMVER_RE = re.compile(
     r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
@@ -191,6 +194,7 @@ def validate_version_map(
     required_package_contracts: (
         dict[str, tuple[str, str, str | None]] | None
     ) = REQUIRED_PACKAGE_CONTRACTS,
+    release_package_ids: frozenset[str] | None = RELEASE_PACKAGE_IDS,
 ) -> dict[str, Any]:
     """Validate the version map and return its schema-closed summary."""
 
@@ -259,6 +263,24 @@ def validate_version_map(
 
     if [row["id"] for row in normalized] != sorted(identifiers):
         raise ValueError("package rows must be sorted by id")
+    if release_package_ids is not None:
+        missing_release_packages = sorted(release_package_ids - identifiers)
+        if missing_release_packages:
+            raise ValueError(
+                "version map omits required CLI release packages "
+                f"{missing_release_packages}"
+            )
+        versions_by_id = {row["id"]: row["version"] for row in normalized}
+        mismatched_release_packages = sorted(
+            identifier
+            for identifier in release_package_ids
+            if versions_by_id[identifier] != release_version
+        )
+        if mismatched_release_packages:
+            raise ValueError(
+                "release_version must match every CLI release package version "
+                f"(mismatched={mismatched_release_packages})"
+            )
     if required_package_contracts is not None:
         required_ids = set(required_package_contracts)
         if identifiers != required_ids:

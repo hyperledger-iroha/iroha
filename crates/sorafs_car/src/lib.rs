@@ -8,7 +8,6 @@
 //! CARv1 payload + MultihashIndexSorted index), or to `CarStreamingWriter`
 //! when the source payload cannot be buffered in memory.
 #![allow(unexpected_cfgs)]
-
 #[cfg(feature = "manifest")]
 use std::str::FromStr;
 use std::{
@@ -18,7 +17,6 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
-
 #[cfg(any(unix, test))]
 use std::fs;
 #[cfg(unix)]
@@ -28,12 +26,10 @@ use std::{
     io::{Seek as _, SeekFrom},
     path::Component,
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
-
 use blake3::{Hash, Hasher};
 #[cfg(feature = "manifest")]
 use iroha_data_model::{
@@ -132,9 +128,7 @@ impl From<sorafs_manifest::ProfileId> for ProfileId {
         Self(id.0)
     }
 }
-
 pub mod por_json;
-
 /// Errors that can occur while building a CAR plan.
 #[derive(Debug, Error)]
 pub enum CarPlanError {
@@ -930,7 +924,7 @@ fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
 }
 #[cfg(not(unix))]
 fn unsupported_secure_filesystem_error() -> io::Error {
-    // TODO: Add stable handle-relative identity and no-follow support for non-Unix hosts.
+    // Non-Unix hosts fail closed: stable handle identity and no-follow are required.
     io::Error::new(
         io::ErrorKind::Unsupported,
         "secure SoraFS file-backed payloads require Unix file identities and no-follow opens",
@@ -6637,16 +6631,12 @@ pub struct FileEntry {
     pub path: Vec<String>,
     pub data: Vec<u8>,
 }
-
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, collections::HashSet, fs, io::Cursor, rc::Rc};
-
     use sorafs_chunker::fixtures::FixtureProfile;
     use tempfile::tempdir;
-
     use super::*;
-
     include!("lib/decode_test_helpers.rs");
     #[derive(Debug)]
     struct StoreSnapshot {
@@ -6894,7 +6884,6 @@ mod tests {
     #[test]
     fn build_plan_from_da_manifest_matches_manifest() {
         use blake3::Hash as BlakeHash;
-
         let manifest = sample_manifest();
         let plan = build_plan_from_da_manifest(&manifest).expect("plan from manifest");
         assert_eq!(plan.content_length, manifest.total_size);
@@ -6925,7 +6914,6 @@ mod tests {
     #[test]
     fn build_plan_from_da_manifest_uses_cache_hint_metadata() {
         use iroha_data_model::da::types::MetadataVisibility;
-
         let mut manifest = sample_manifest();
         let payload_digest = [0xAB; 32];
         let cache_hint = format!(
@@ -6966,7 +6954,6 @@ mod tests {
     #[test]
     fn build_plan_from_da_manifest_errors_on_encrypted_taikai_metadata() {
         use iroha_data_model::da::types::MetadataEncryption;
-
         let mut manifest = sample_manifest();
         if let Some(entry) = manifest
             .metadata
@@ -7113,7 +7100,6 @@ mod tests {
     #[test]
     fn build_plan_from_da_manifest_errors_on_invalid_chunks() {
         use iroha_data_model::da::types::{BlobDigest, RetentionPolicy};
-
         let mut manifest = sample_manifest();
         manifest.chunks.clear();
         assert_eq!(
@@ -7241,7 +7227,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             assert_eq!(
                 fs::metadata(&dir)
                     .expect("sink directory metadata")
@@ -7260,7 +7245,6 @@ mod tests {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt as _;
-
                 assert_eq!(
                     fs::metadata(&chunk_path)
                         .expect("chunk metadata")
@@ -7701,7 +7685,6 @@ mod tests {
     #[test]
     fn atomic_chunk_write_rejects_symlink_and_hardlink_destinations() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("dir");
         let victim = dir.path().join("victim");
         fs::write(&victim, b"victim").expect("victim");
@@ -7724,7 +7707,6 @@ mod tests {
     #[test]
     fn directory_sink_rejects_symlink_root_without_touching_target() {
         use std::os::unix::fs::symlink;
-
         let base = tempdir().expect("base");
         let canonical_base = fs::canonicalize(base.path()).expect("canonical base");
         let victim = canonical_base.join("victim");
@@ -7754,7 +7736,6 @@ mod tests {
     #[test]
     fn directory_sink_detects_staging_symlink_replacement_without_following_it() {
         use std::os::unix::fs::symlink;
-
         let base = tempdir().expect("base");
         let canonical_base = fs::canonicalize(base.path()).expect("canonical base");
         let root = canonical_base.join("chunks");
@@ -7789,7 +7770,6 @@ mod tests {
     #[test]
     fn directory_sink_rejects_symlinked_intermediate_parent() {
         use std::os::unix::fs::symlink;
-
         let base = tempdir().expect("base");
         let canonical_base = fs::canonicalize(base.path()).expect("canonical base");
         let outside = tempdir().expect("outside");
@@ -8578,9 +8558,7 @@ mod tests {
     #[test]
     fn plan_from_directory_matches_from_files() {
         use std::fs;
-
         use tempfile::tempdir;
-
         let tempdir = tempdir().expect("tempdir");
         let root = tempdir.path();
         fs::create_dir(root.join("docs")).expect("create docs dir");
@@ -8608,7 +8586,6 @@ mod tests {
     #[test]
     fn from_directory_rejects_symlink_files_directories_roots_and_hardlinks() {
         use std::os::unix::fs::symlink;
-
         let base = tempdir().expect("base");
         let root = base.path().join("root");
         let outside = base.path().join("outside");
@@ -8885,7 +8862,6 @@ mod tests {
     #[test]
     fn writer_emits_spec_compliant_carv2() {
         use std::io::Cursor;
-
         let input = sample_input();
         let plan = CarBuildPlan::single_file(&input).expect("plan");
         let writer = CarWriter::new(&plan, &input).expect("writer");
@@ -9104,7 +9080,6 @@ mod tests {
     #[test]
     fn streaming_writer_matches_buffered_output() {
         use std::io::Cursor;
-
         let mut payload = Vec::new();
         for i in 0..(512 * 3 + 123) {
             payload.push((i % 251) as u8);
@@ -9127,7 +9102,6 @@ mod tests {
     #[test]
     fn streaming_writer_detects_digest_mismatch() {
         use std::io::Cursor;
-
         let payload = vec![0u8; 600_000];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
         let mut corrupted = payload.clone();
@@ -9163,7 +9137,6 @@ mod tests {
     #[test]
     fn writer_respects_expected_roots() {
         use std::io::Cursor;
-
         let input = sample_input();
         let plan = CarBuildPlan::single_file(&input).expect("plan");
         let mut baseline = Cursor::new(Vec::new());
@@ -9277,7 +9250,6 @@ mod tests {
     #[test]
     fn file_payload_rejects_symlink_nonregular_swap_and_resize() {
         use std::os::unix::fs::symlink;
-
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("payload");
         fs::write(&path, b"payload").expect("payload");
@@ -9355,7 +9327,6 @@ mod tests {
     #[test]
     fn directory_payload_rejects_symlink_and_hardlink_sources() {
         use std::os::unix::fs::symlink;
-
         let temp = tempdir().expect("tempdir");
         let victim = temp.path().join("victim");
         fs::write(&victim, b"payload").expect("victim");

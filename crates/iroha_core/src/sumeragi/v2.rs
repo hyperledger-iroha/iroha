@@ -8,7 +8,6 @@
 //! acknowledged to the reducer.  Consequently a caller can never observe a
 //! signing, broadcast, view-change, or apply effect which was causally ordered
 //! after an unacknowledged safety write.
-
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::PathBuf,
@@ -18,13 +17,11 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use super::v2_core as reducer;
 use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey, Signature};
 use iroha_data_model::{account::AccountId, block::consensus_v2 as wire, peer::PeerId};
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use super::{
     safety_wal::{
         RecoveredRecord, SafetyWal, SafetyWalAppendReceipt, SafetyWalError,
@@ -72,7 +69,6 @@ use super::{
         RecoveredWalControlPendingMintPermit, RecoveredWalDecisionFetchPendingMintPermit,
     },
 };
-
 #[cfg(test)]
 use super::v2_lifecycle_coordinator::{
     AuthenticatedLifecycleRecoveryCut, DurableAuthenticatedRecoveredWalValidateLifecycleRepair,
@@ -84,13 +80,9 @@ use super::v2_lifecycle_coordinator::{
     substitute_recovered_decision_fetch_owner_for_test,
     substitute_recovered_decision_fetch_replay_authority_for_test,
 };
-
 // Keep wire admission and reducer capacity identical; mismatches fail at compile time.
 const _: [(); wire::MAX_VALIDATORS_PER_HEIGHT] = [(); reducer::MAX_VOTING_ROSTER_LEN];
-use crate::kura::{
-    Kura, KuraInstanceIdentity, KuraSafetyWalDirectoryAuthority, KuraV2CommitReceipt,
-};
-
+use crate::kura::{Kura, KuraInstanceIdentity, KuraSafetyWalDirectoryAuthority, KuraV2CommitReceipt};
 const AGGREGATE_TOKEN_PREFIX: &[u8] = b"sumeragi-v2:verified-aggregate\0";
 const MAX_DEFERRED_INPUTS: usize = 1024;
 const MAX_DEFERRED_PROGRESS_INPUTS: usize = wire::MAX_VALIDATORS_PER_HEIGHT * 2 + 3;
@@ -99,7 +91,6 @@ const MAX_INGRESS_SEMANTIC_KEYS: usize = 1024;
 // reducer occurrence. One canonical key makes Normal/Progress rerouting
 // coalesce to the same service identity.
 const ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS: u8 = u8::MAX;
-
 /// Maximum adapter effects returned by one serialized runtime invocation.
 ///
 /// A reducer transition without persistence already has this exact source
@@ -109,7 +100,6 @@ const ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS: u8 = u8::MAX;
 /// adapter bound equal to the reducer bound therefore matches the executor's
 /// retained-batch contract without inflating either queue.
 const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize = reducer::MAX_EFFECTS_PER_STEP;
-
 /// Maximum validation-marker identities which can be authoritative at restart.
 ///
 /// The replayed adapter contributes at most one durable lock and one durable
@@ -117,7 +107,6 @@ const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize = reducer::MAX_EFFECTS_PER_STEP;
 /// view-local markers outside this frontier remain body-availability evidence,
 /// but cannot force synchronous execution or restore vote authority.
 const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 2;
-
 /// Largest record-specific `Persist -> Persisted` flattened batch.
 ///
 /// The witness is locally formed `InstallTimeout`: its individual TimeoutVote
@@ -126,13 +115,11 @@ const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACR
 /// broadcast, and one reconstructed locked Commit signature. Thus the exact
 /// maximum is four.
 const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 4;
-
 // Every persistence-flattened batch must fit the executor's already verified
 // source-transition capacity. A future record shape which breaks this
 // relation fails at compile time as well as at the runtime checks below.
 const _: () =
     assert!(MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP <= MAX_ADAPTER_EFFECTS_PER_MACRO_STEP);
-
 /// WAL-record class used to select the exact adapter macro-step budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PersistenceMacroStepClass {
@@ -151,7 +138,6 @@ enum PersistenceMacroStepClass {
     /// Durable Commit certificate decision.
     Decision,
 }
-
 impl PersistenceMacroStepClass {
     /// Classify every safety-WAL record; a new record cannot silently inherit a
     /// budget because the exhaustive match must be deliberately extended.
@@ -166,7 +152,6 @@ impl PersistenceMacroStepClass {
             reducer::WalRecord::Decision(_) => Self::Decision,
         }
     }
-
     /// Return the exact reviewed upper bounds for the source transition and
     /// its persistence acknowledgement continuation.
     fn budget(self) -> PersistenceMacroStepBudget {
@@ -195,7 +180,6 @@ impl PersistenceMacroStepClass {
             Self::Decision => PersistenceMacroStepBudget::new(2, 2),
         }
     }
-
     /// Canonical class inventory for exhaustive bound tests.
     #[cfg(test)]
     const ALL: [Self; 7] = [
@@ -208,7 +192,6 @@ impl PersistenceMacroStepClass {
         Self::Decision,
     ];
 }
-
 /// Reviewed source/continuation lengths for one WAL-record class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PersistenceMacroStepBudget {
@@ -217,7 +200,6 @@ struct PersistenceMacroStepBudget {
     /// Maximum effects emitted by the matching `Persisted` transition.
     continuation_effects: usize,
 }
-
 impl PersistenceMacroStepBudget {
     /// Construct one compile-time record-specific budget.
     const fn new(initial_effects: usize, continuation_effects: usize) -> Self {
@@ -226,14 +208,12 @@ impl PersistenceMacroStepBudget {
             continuation_effects,
         }
     }
-
     /// Maximum returned effects after replacing the sole `Persist` effect with
     /// the acknowledgement continuation.
     const fn flattened_effects(self) -> usize {
         self.initial_effects - 1 + self.continuation_effects
     }
 }
-
 /// Node-local fingerprints exported through the compact v2 status record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AdapterFingerprints {
@@ -244,7 +224,6 @@ pub(crate) struct AdapterFingerprints {
     /// Hash of all consensus-relevant configuration.
     pub config: Hash,
 }
-
 /// Read-only reducer facts needed by the bounded local proposal assembler.
 ///
 /// The reducer remains the sole owner of lock and view state. Candidate code
@@ -258,7 +237,6 @@ pub(crate) struct LocalProposalDirective {
     locked_subject: Option<wire::BlockSubject>,
     decided_subject: Option<wire::BlockSubject>,
 }
-
 impl LocalProposalDirective {
     /// Build an exact directive fixture without exposing reducer-owned fields
     /// in production builds.
@@ -278,33 +256,27 @@ impl LocalProposalDirective {
             decided_subject,
         }
     }
-
     /// Exact height/view/generation which owns candidate work.
     pub(crate) const fn tag(self) -> reducer::EventTag {
         self.tag
     }
-
     /// Frozen-roster validator expected to propose in this view.
     pub(crate) const fn leader(self) -> wire::ValidatorIndex {
         self.leader
     }
-
     /// Subject whose exact immutable body must remain recoverable while locked.
     pub(crate) const fn locked_subject(self) -> Option<wire::BlockSubject> {
         self.locked_subject
     }
-
     /// Exact round/subject pair protected by the active durable lock.
     pub(crate) fn locked_body(self) -> Option<(wire::ConsensusRound, wire::BlockSubject)> {
         self.locked_round.zip(self.locked_subject)
     }
-
     /// Subject already decided at this height, if application is pending.
     pub(crate) const fn decided_subject(self) -> Option<wire::BlockSubject> {
         self.decided_subject
     }
 }
-
 /// Opaque authenticated frontier for restoring validation-marker authority.
 ///
 /// Construction is restricted to a fully replayed adapter, so a checksummed
@@ -317,13 +289,11 @@ pub(crate) struct RecoveredValidationAuthority {
     height: wire::Height,
     keys: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
 }
-
 impl RecoveredValidationAuthority {
     /// Whether this capability belongs to the exact immutable height context.
     pub(crate) fn authorizes_context(&self, context: &wire::HeightContext) -> bool {
         self.context_id == context.id() && self.height == context.height
     }
-
     /// Whether one exact proposal origin belongs to the authenticated frontier.
     pub(crate) fn authorizes(
         &self,
@@ -332,13 +302,11 @@ impl RecoveredValidationAuthority {
     ) -> bool {
         self.keys.contains(&(round, subject))
     }
-
     /// Number of exact identities in the bounded replay frontier.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.keys.len()
     }
-
     /// Construct a bounded exact frontier for body-store seam tests.
     #[cfg(test)]
     pub(crate) fn for_test(
@@ -357,7 +325,6 @@ impl RecoveredValidationAuthority {
         }
     }
 }
-
 // RECOVERED_WAL_VOTE_SIGN_SEAL_BEGIN
 /// Opaque identity of one exact verified and fsynced safety-WAL frame.
 ///
@@ -370,7 +337,6 @@ pub(crate) struct RecoveredWalFrameIdentity {
     persistence_id: u64,
     frame_hash: [u8; 32],
 }
-
 /// Opaque identity minted only from one successful live WAL append.
 ///
 /// Unlike recovered startup authority, this move-only seal requires the exact
@@ -384,14 +350,11 @@ pub(super) struct LiveWalFrameIdentity {
     frame_hash: [u8; 32],
     _linearity: LiveWalFrameLinearity,
 }
-
 #[derive(PartialEq, Eq)]
 struct LiveWalFrameLinearity;
-
 impl Drop for LiveWalFrameLinearity {
     fn drop(&mut self) {}
 }
-
 impl LiveWalFrameIdentity {
     fn from_append_receipt(
         record: &RecoveredRecord,
@@ -409,7 +372,6 @@ impl LiveWalFrameIdentity {
         };
         identity.is_exact().then_some(identity)
     }
-
     /// Return whether the live append has the canonical reducer relation.
     pub(super) const fn is_exact(&self) -> bool {
         match self.frame_sequence.checked_add(1) {
@@ -417,7 +379,6 @@ impl LiveWalFrameIdentity {
             None => false,
         }
     }
-
     /// Project inert codec evidence without exposing locator scalar parts.
     pub(super) const fn persisted_locator(&self) -> PersistedWalFrameLocatorV1 {
         PersistedWalFrameLocatorV1 {
@@ -426,7 +387,6 @@ impl LiveWalFrameIdentity {
             frame_hash: self.frame_hash,
         }
     }
-
     /// Construct a move-only live identity for focused authority tests.
     #[cfg(test)]
     pub(super) fn for_test(frame_sequence: u64, persistence_id: u64, frame_hash: [u8; 32]) -> Self {
@@ -438,7 +398,6 @@ impl LiveWalFrameIdentity {
         }
     }
 }
-
 impl RecoveredWalFrameIdentity {
     fn from_recovered_record(record: &RecoveredRecord, persistence_id: u64) -> Option<Self> {
         let identity = Self {
@@ -448,7 +407,6 @@ impl RecoveredWalFrameIdentity {
         };
         identity.is_exact().then_some(identity)
     }
-
     /// Return whether this sealed frame has the canonical reducer persistence relation.
     pub(crate) const fn is_exact(self) -> bool {
         match self.frame_sequence.checked_add(1) {
@@ -456,14 +414,12 @@ impl RecoveredWalFrameIdentity {
             None => false,
         }
     }
-
     /// Match another sealed WAL-frame identity without exposing its parts.
     pub(crate) fn exactly_matches(self, other: Self) -> bool {
         self.frame_sequence == other.frame_sequence
             && self.persistence_id == other.persistence_id
             && self.frame_hash == other.frame_hash
     }
-
     /// Project inert codec evidence without making the runtime seal decodable.
     pub(crate) const fn persisted_locator(self) -> PersistedWalFrameLocatorV1 {
         PersistedWalFrameLocatorV1 {
@@ -472,14 +428,12 @@ impl RecoveredWalFrameIdentity {
             frame_hash: self.frame_hash,
         }
     }
-
     #[cfg(test)]
     fn exactly_matches_record(self, record: &RecoveredRecord) -> bool {
         self.frame_sequence == record.sequence()
             && self.frame_hash == record.frame_hash()
             && self.is_exact()
     }
-
     /// Construct an exact scalar fixture without widening the production mint.
     #[cfg(test)]
     pub(crate) const fn for_test(
@@ -494,7 +448,6 @@ impl RecoveredWalFrameIdentity {
         }
     }
 }
-
 /// Codec-only V1 projection of a verified WAL-frame identity.
 ///
 /// Decoding this value establishes only a structural locator. It is never
@@ -507,7 +460,6 @@ pub(crate) struct PersistedWalFrameLocatorV1 {
     persistence_id: u64,
     frame_hash: [u8; 32],
 }
-
 impl PersistedWalFrameLocatorV1 {
     /// Check the canonical reducer persistence relation without authenticating provenance.
     pub(crate) const fn is_exact(self) -> bool {
@@ -516,7 +468,6 @@ impl PersistedWalFrameLocatorV1 {
             None => false,
         }
     }
-
     /// Compare inert persisted evidence with one sealed runtime identity.
     pub(crate) fn exactly_matches_runtime(self, runtime: RecoveredWalFrameIdentity) -> bool {
         self.frame_sequence == runtime.frame_sequence
@@ -524,7 +475,6 @@ impl PersistedWalFrameLocatorV1 {
             && self.frame_hash == runtime.frame_hash
     }
 }
-
 /// Opaque authority for one startup vote whose local safety intent is already durable.
 ///
 /// The adapter is the sole constructor. Minting consumes a private, non-clone
@@ -543,7 +493,6 @@ pub(crate) struct RecoveredWalVoteSign {
     vote: wire::Vote,
     prepare_certificate: Option<wire::QuorumCertificate>,
 }
-
 /// Opaque authority for one payload-free control signature owned by an exact WAL frame.
 ///
 /// The adapter consumes the sole matching startup effect into this move-only
@@ -556,7 +505,6 @@ pub(crate) struct RecoveredWalControlSign {
     replay_evidence: RecoveredWalControlReplayEvidenceV1,
     effect: AdapterEffect,
 }
-
 /// Opaque authority for the exact certified Fetch emitted by a durable Decision.
 ///
 /// This token retains the authenticated Decision frame, complete CommitQC,
@@ -569,7 +517,6 @@ pub(crate) struct RecoveredWalDecisionFetch {
     replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1,
     effect: AdapterEffect,
 }
-
 impl RecoveredWalControlSign {
     /// Consume both runtime one-shot permits into the sealed lifecycle projection.
     #[allow(clippy::result_large_err)]
@@ -612,7 +559,6 @@ impl RecoveredWalControlSign {
         )
     }
 }
-
 impl RecoveredWalDecisionFetch {
     /// Consume both private permits into one sealed lifecycle projection.
     #[allow(clippy::result_large_err)]
@@ -659,41 +605,34 @@ impl RecoveredWalDecisionFetch {
         )
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredWalVoteSign {
     /// Return the complete opaque WAL-frame identity for sealed recovery joins.
     pub(crate) const fn wal_identity(&self) -> RecoveredWalFrameIdentity {
         self.wal_identity
     }
-
     /// Borrow the inert canonical replay evidence attached by the WAL mint.
     pub(crate) const fn replay_evidence(&self) -> &RecoveredWalVoteReplayEvidenceV1 {
         &self.replay_evidence
     }
-
     /// Revalidate the attached evidence against this complete recovered vote.
     pub(crate) fn replay_evidence_is_exact(&self) -> bool {
         self.replay_evidence
             .exactly_matches_recovered_vote(self.wal_identity, self.tag, &self.vote)
     }
-
     /// Revalidate this authority against the same verified recovered record.
     #[cfg(test)]
     fn exactly_matches_wal_record(&self, record: &RecoveredRecord) -> bool {
         self.wal_identity.exactly_matches_record(record)
     }
-
     /// Return the exact replay incarnation which owns the startup signature.
     pub(crate) const fn tag(&self) -> reducer::EventTag {
         self.tag
     }
-
     /// Borrow the exact canonical unsigned Prepare or Commit vote.
     pub(crate) const fn vote(&self) -> &wire::Vote {
         &self.vote
     }
-
     /// Borrow the exact authenticated PrepareQC carried by `LockAndCommit`.
     ///
     /// A `PrepareIntent` authority returns `None`.
@@ -701,7 +640,6 @@ impl RecoveredWalVoteSign {
         self.prepare_certificate.as_ref()
     }
 }
-
 /// Unpublished startup effects retained beside the adapter which produced them.
 ///
 /// Fields are private and the value is not cloneable. Its only consuming
@@ -719,7 +657,6 @@ pub(crate) struct RecoveredAdapterStartup {
     adapter: SumeragiV2Adapter,
     effects: Vec<AdapterEffect>,
 }
-
 /// Startup cut after the WAL frontier and current WAL work are authenticated.
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "authenticated adapter startup must enter the unified durable recovery owner"]
@@ -730,9 +667,7 @@ pub(crate) struct AuthenticatedRecoveredAdapterStartup {
     validation_authority: RecoveredValidationAuthority,
     factory_owner: Arc<AuthenticatedRecoveredAdapterFactoryOwnerV1>,
 }
-
 struct AuthenticatedRecoveredAdapterFactoryOwnerV1;
-
 /// Exhaustive and mutually exclusive current recovered-WAL work authority.
 #[allow(variant_size_differences)]
 enum RecoveredWalStartupAuthorityV1 {
@@ -741,7 +676,6 @@ enum RecoveredWalStartupAuthorityV1 {
     ControlSign(RecoveredWalControlSign),
     DecisionFetch(RecoveredWalDecisionFetch),
 }
-
 #[allow(variant_size_differences)]
 enum PreparedRecoveredWalStartupAuthorityV1 {
     None,
@@ -749,7 +683,6 @@ enum PreparedRecoveredWalStartupAuthorityV1 {
     ControlSign(AuthenticatedRecoveredWalControlProjection),
     DecisionFetch(AuthenticatedRecoveredWalDecisionFetchProjection),
 }
-
 /// Adapter and residual replay effects retained by the sole lifecycle owner.
 ///
 /// The fields have no extraction surface. A consuming launch moves this state
@@ -759,7 +692,6 @@ enum PreparedRecoveredWalStartupAuthorityV1 {
 pub(crate) struct ProductionLifecycleAdapterStartupV1 {
     state: ProductionLifecycleAdapterStartupStateV1,
 }
-
 /// Move-only Kura- and recovery-bound lifecycle storage authority.
 ///
 /// Recovery is the sole production mint. It freezes the exact Kura instance,
@@ -778,7 +710,6 @@ pub(crate) struct RecoveredLifecycleStorageAuthorityV1 {
     body_store_root: PathBuf,
     signature_policy: super::v2_body_store::BlockSignaturePolicy,
 }
-
 /// Move-only execution and storage inputs for the recovered lifecycle owner.
 ///
 /// The authenticated adapter and runner-private dependency permit jointly mint
@@ -800,7 +731,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryInputsV1 {
     events_sender: crate::EventsSender,
     local_signer: KeyPair,
 }
-
 /// Opaque live-Kura binding retained after the storage authority is consumed.
 ///
 /// Only the production storage factory can construct this seal. It exposes
@@ -812,37 +742,31 @@ pub(crate) struct RecoveredLifecycleOwnerKuraBindingV1 {
     chunk_root: PathBuf,
     local_signer: Option<PublicKey>,
 }
-
 /// Canonical launch paths projected only after the live Kura rejoins recovery.
 #[must_use = "recovered launch storage paths must enter the sealed launch"]
 pub(in crate::sumeragi) struct RecoveredLifecycleLaunchStoragePathsV1 {
     wal_path: PathBuf,
     chunk_root: PathBuf,
 }
-
 impl RecoveredLifecycleLaunchStoragePathsV1 {
     /// Borrow the exact recovery-derived safety-WAL path for adapter binding.
     pub(in crate::sumeragi) fn wal_path(&self) -> &std::path::Path {
         &self.wal_path
     }
-
     /// Borrow the exact recovery-derived chunk root for durable Serve restore.
     pub(in crate::sumeragi) fn chunk_root(&self) -> &std::path::Path {
         &self.chunk_root
     }
-
     /// Consume the path seal into the exact worker-owned chunk root.
     pub(in crate::sumeragi) fn into_chunk_root(self) -> PathBuf {
         self.chunk_root
     }
 }
-
 impl RecoveredLifecycleOwnerKuraBindingV1 {
     /// Compare the retained recovery owner with one live Kura instance.
     pub(in crate::sumeragi) fn matches_kura(&self, kura: &Kura) -> bool {
         self.kura_identity.matches(kura)
     }
-
     /// Compare the recovery-bound Kura and local signer with one launch input.
     pub(in crate::sumeragi) fn matches_launch_identity(
         &self,
@@ -855,12 +779,10 @@ impl RecoveredLifecycleOwnerKuraBindingV1 {
                 .as_ref()
                 .is_some_and(|public_key| public_key == key_pair.public_key())
     }
-
     /// Compare the retained recovery owner with another sealed Kura identity.
     pub(in crate::sumeragi) fn matches_identity(&self, identity: &KuraInstanceIdentity) -> bool {
         self.kura_identity.same_instance(identity)
     }
-
     /// Project canonical height-local paths only for the exact live Kura.
     pub(in crate::sumeragi) fn storage_paths_for_launch(
         &self,
@@ -872,7 +794,6 @@ impl RecoveredLifecycleOwnerKuraBindingV1 {
                 chunk_root: self.chunk_root.clone(),
             })
     }
-
     #[cfg(test)]
     /// Build a Kura binding for unlaunchable raw-root fixtures or exact-signer tests.
     pub(in crate::sumeragi) fn for_test(kura: &Kura, local_signer: Option<&KeyPair>) -> Self {
@@ -887,7 +808,6 @@ impl RecoveredLifecycleOwnerKuraBindingV1 {
         }
     }
 }
-
 impl RecoveredLifecycleStorageAuthorityV1 {
     /// Mint the sole production storage seal from authenticated height recovery.
     pub(in crate::sumeragi) fn mint_from_recovered_height(
@@ -916,7 +836,6 @@ impl RecoveredLifecycleStorageAuthorityV1 {
             signature_policy: signature_policy.clone(),
         }
     }
-
     /// Build the exact sealed storage input for a production-factory fixture.
     #[cfg(test)]
     fn for_test(
@@ -944,7 +863,6 @@ impl RecoveredLifecycleStorageAuthorityV1 {
         }
     }
 }
-
 #[allow(variant_size_differences)]
 enum ProductionLifecycleAdapterStartupStateV1 {
     Recovered {
@@ -955,7 +873,6 @@ enum ProductionLifecycleAdapterStartupStateV1 {
     #[cfg(test)]
     Fixture,
 }
-
 /// Move-only adapter projection for opening the adjacent leader-wire gate.
 ///
 /// The wrapper retains the descriptor-bound WAL sibling authority together
@@ -970,7 +887,6 @@ pub(in crate::sumeragi) struct ProductionLeaderWireLaunchAuthorityV1 {
     producer_terminals: Vec<ProducerContinuationTerminalToken>,
     restored_producer_ordinal_high_watermark: Option<u128>,
 }
-
 impl ProductionLeaderWireLaunchAuthorityV1 {
     /// Largest producer ordinal authenticated by the adapter's adjacent store.
     pub(in crate::sumeragi) const fn restored_producer_ordinal_high_watermark(
@@ -978,7 +894,6 @@ impl ProductionLeaderWireLaunchAuthorityV1 {
     ) -> Option<u128> {
         self.restored_producer_ordinal_high_watermark
     }
-
     /// Consume the complete adapter projection into one canonical gate open.
     pub(in crate::sumeragi) fn open_gate(
         self,
@@ -1024,7 +939,6 @@ impl ProductionLeaderWireLaunchAuthorityV1 {
         Ok((gate, restore, self.recovery_authority))
     }
 }
-
 impl ProductionLifecycleAdapterStartupV1 {
     fn recovered(adapter: SumeragiV2Adapter, effects: Vec<AdapterEffect>) -> Self {
         Self {
@@ -1035,7 +949,6 @@ impl ProductionLifecycleAdapterStartupV1 {
             },
         }
     }
-
     /// Compare the sealed adapter startup with one exact verified owner.
     pub(in crate::sumeragi) fn authorizes_verified_context(
         &self,
@@ -1054,7 +967,6 @@ impl ProductionLifecycleAdapterStartupV1 {
             ProductionLifecycleAdapterStartupStateV1::Fixture => true,
         }
     }
-
     /// Preview one already-fsynced Broadcast-plus-next-Sign crash cut.
     ///
     /// WAL recovery has authenticated the historical unsigned request and its
@@ -1105,7 +1017,6 @@ impl ProductionLifecycleAdapterStartupV1 {
         verified
             .verify_consensus_message(message)
             .map_err(|_| "recovered Broadcast-and-Sign preview signature is not authorized")?;
-
         let mut next_registry = adapter.registry.clone();
         let awaiting = adapter.reducer.awaiting_signature().ok_or(
             "recovered Broadcast-and-Sign preview is not awaiting its historical signature",
@@ -1132,7 +1043,6 @@ impl ProductionLifecycleAdapterStartupV1 {
         if awaiting_request != request {
             return Err("recovered Broadcast-and-Sign preview request changed across restart");
         }
-
         let event = reducer::Event::Signed {
             tag,
             signature: reducer::OpaqueSignature::new(signature),
@@ -1204,7 +1114,6 @@ impl ProductionLifecycleAdapterStartupV1 {
             },
         )
     }
-
     /// Rebuild the reducer's already-fsynced recovered Fetch-to-Store crash cut.
     ///
     /// The adapter transition is installed only after the opaque body and WAL
@@ -1244,7 +1153,6 @@ impl ProductionLifecycleAdapterStartupV1 {
         preview.commit_after_durable_settlement();
         Ok((Self::recovered(adapter, effects), store))
     }
-
     /// Rebuild one already-fsynced Vote/Timeout `Signed` transition.
     ///
     /// The cold authority has already joined the WAL Sign, its exact
@@ -1313,7 +1221,6 @@ impl ProductionLifecycleAdapterStartupV1 {
         {
             return Err("recovered signed Broadcast signature is not locally authorized");
         }
-
         let mut next_registry = adapter.registry.clone();
         let awaiting = adapter
             .reducer
@@ -1337,7 +1244,6 @@ impl ProductionLifecycleAdapterStartupV1 {
         if awaiting_request != request {
             return Err("recovered signed Broadcast request changed across restart");
         }
-
         let event = reducer::Event::Signed {
             tag,
             signature: reducer::OpaqueSignature::new(signature),
@@ -1389,7 +1295,6 @@ impl ProductionLifecycleAdapterStartupV1 {
         );
         Ok(Self::recovered(adapter, effects))
     }
-
     /// Rejoin an already-fsynced Broadcast-plus-next-Sign pair to the cold adapter.
     ///
     /// WAL recovery has already authenticated both durable children and retained
@@ -1483,7 +1388,6 @@ impl ProductionLifecycleAdapterStartupV1 {
         if awaiting_request != request {
             return Err("recovered Broadcast-and-Sign historical request changed across restart");
         }
-
         let event = reducer::Event::Signed {
             tag: adapter.current_tag(),
             signature: reducer::OpaqueSignature::new(signature),
@@ -1553,7 +1457,6 @@ impl ProductionLifecycleAdapterStartupV1 {
         );
         Ok(Self::recovered(adapter, effects))
     }
-
     /// Seal every adapter-owned input required by the adjacent gate open.
     ///
     /// The comparison occurs before the owner opens any lifecycle store. It is
@@ -1607,7 +1510,6 @@ impl ProductionLifecycleAdapterStartupV1 {
             }
         }
     }
-
     /// Consume the sealed adapter startup directly into the serialized runtime.
     pub(in crate::sumeragi) fn into_serialized_runtime(
         self,
@@ -1646,14 +1548,12 @@ impl ProductionLifecycleAdapterStartupV1 {
             }
         }
     }
-
     #[cfg(test)]
     pub(in crate::sumeragi) const fn fixture_for_test() -> Self {
         Self {
             state: ProductionLifecycleAdapterStartupStateV1::Fixture,
         }
     }
-
     #[cfg(test)]
     pub(in crate::sumeragi) fn is_exact_for_test(&self) -> bool {
         match &self.state {
@@ -1666,18 +1566,14 @@ impl ProductionLifecycleAdapterStartupV1 {
         }
     }
 }
-
 // TODO: The lifecycle completion transaction must consume the current recovered
 // Sign, execute its reducer acknowledgement through this retained adapter, and
 // authenticate only the next `awaiting_signature` emitted by that step. Queued
 // signatures deliberately have no eager lifecycle token or pre-bound event tag.
-
 struct ProductionRecoveredLifecycleOwnerAssemblyLinearity;
-
 impl Drop for ProductionRecoveredLifecycleOwnerAssemblyLinearity {
     fn drop(&mut self) {}
 }
-
 /// One-shot proof that adapter startup and recovered lifecycle open remained paired.
 ///
 /// Only the private combined startup wrapper in this module can mint this
@@ -1686,7 +1582,6 @@ impl Drop for ProductionRecoveredLifecycleOwnerAssemblyLinearity {
 pub(in crate::sumeragi) struct ProductionRecoveredLifecycleOwnerAssemblyPermitV1 {
     _linearity: ProductionRecoveredLifecycleOwnerAssemblyLinearity,
 }
-
 impl ProductionRecoveredLifecycleOwnerAssemblyPermitV1 {
     fn mint_paired() -> Self {
         Self {
@@ -1694,13 +1589,11 @@ impl ProductionRecoveredLifecycleOwnerAssemblyPermitV1 {
         }
     }
 }
-
 #[must_use = "the paired recovered startup must enter its lifecycle owner"]
 struct ProductionRecoveredLifecycleOwnerStartupV1 {
     adapter_startup: ProductionLifecycleAdapterStartupV1,
     opened: RecoveredWalProductionOwnerOpenV1,
 }
-
 impl ProductionRecoveredLifecycleOwnerStartupV1 {
     fn into_owner(
         self,
@@ -1725,7 +1618,6 @@ impl ProductionRecoveredLifecycleOwnerStartupV1 {
         )
     }
 }
-
 /// Owned startup failure from the sole first-release lifecycle-owner factory.
 #[derive(Debug, Error)]
 #[error("{kind}")]
@@ -1733,7 +1625,6 @@ impl ProductionRecoveredLifecycleOwnerStartupV1 {
 pub(crate) struct ProductionLifecycleOwnerStartupErrorV1 {
     kind: ProductionLifecycleOwnerStartupErrorKindV1,
 }
-
 #[derive(Debug, Error)]
 #[allow(variant_size_differences)]
 enum ProductionLifecycleOwnerStartupErrorKindV1 {
@@ -1774,13 +1665,11 @@ enum ProductionLifecycleOwnerStartupErrorKindV1 {
     #[error("recovered WAL Decision Apply startup is unavailable: {0}")]
     RecoveredDecisionApply(&'static str),
 }
-
 impl ProductionLifecycleOwnerStartupErrorV1 {
     fn new(kind: ProductionLifecycleOwnerStartupErrorKindV1) -> Self {
         Self { kind }
     }
 }
-
 /// Startup cut whose recovered vote has joined one exact lifecycle repair.
 ///
 /// The adapter and every remaining startup effect stay sealed beside the
@@ -1797,7 +1686,6 @@ struct AuthenticatedRecoveredWalLifecycleStartup<'registry> {
     effects: Vec<AdapterEffect>,
     repair: AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
 }
-
 /// Storage-authenticated recovered-parent startup assembled without scheduler authority.
 ///
 /// The exact opened LedgerV1 store/frame, adapter, unpublished effects, and
@@ -1812,14 +1700,12 @@ struct StorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
     ledger: OpenedRecoveredWalValidateLedger,
     repair: AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
 }
-
 /// Opaque recovered-parent factory failure retaining the whole startup seal.
 #[allow(dead_code)]
 #[must_use = "failed recovered-parent startup still owns all recovery authority"]
 struct StorageAuthenticatedRecoveredWalLifecycleStartupError<'body> {
     failure: StorageAuthenticatedRecoveredWalLifecycleStartupFailure<'body>,
 }
-
 #[allow(clippy::large_enum_variant, variant_size_differences)]
 enum StorageAuthenticatedRecoveredWalLifecycleStartupFailure<'body> {
     MissingVote {
@@ -1831,7 +1717,6 @@ enum StorageAuthenticatedRecoveredWalLifecycleStartupFailure<'body> {
         _error: RecoveredWalParentFactoryError<'body>,
     },
 }
-
 #[allow(dead_code)]
 impl StorageAuthenticatedRecoveredWalLifecycleStartupError<'_> {
     /// Return one stable classification without exposing retained authority.
@@ -1846,7 +1731,6 @@ impl StorageAuthenticatedRecoveredWalLifecycleStartupError<'_> {
         }
     }
 }
-
 /// Exact-store startup after the recovered LedgerV1 repair is durable.
 #[must_use = "the durable recovered startup must install its exact Sign"]
 struct PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
@@ -1854,7 +1738,6 @@ struct PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
     effects: Vec<AdapterEffect>,
     persisted: PersistedRecoveredWalValidateLedger<'registry>,
 }
-
 /// Exact-store startup after Sign installation and before final recovery open.
 #[must_use = "the installed recovered startup must enter its production owner"]
 struct InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
@@ -1862,19 +1745,16 @@ struct InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
     verified: VerifiedHeightContext,
     installed: InstalledRecoveredWalSignStorage<'registry>,
 }
-
 #[must_use = "failed exact-store persistence requires process restart"]
 struct StorageRecoveredWalPersistError<'registry> {
     _adapter: SumeragiV2Adapter,
     _effects: Vec<AdapterEffect>,
     error: ExactStoreRecoveredWalPersistError<'registry>,
 }
-
 #[must_use = "failed exact-store Sign installation requires process restart"]
 struct StorageRecoveredWalSignInstallError<'registry> {
     failure: StorageRecoveredWalSignInstallFailure<'registry>,
 }
-
 #[allow(variant_size_differences)]
 enum StorageRecoveredWalSignInstallFailure<'registry> {
     Adapter {
@@ -1885,12 +1765,10 @@ enum StorageRecoveredWalSignInstallFailure<'registry> {
         error: ExactStoreRecoveredWalSignInstallError<'registry>,
     },
 }
-
 #[must_use = "failed exact-store lifecycle open requires process restart"]
 struct StorageRecoveredWalOpenError<'registry> {
     failure: StorageRecoveredWalOpenFailure<'registry>,
 }
-
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum StorageRecoveredWalOpenFailure<'registry> {
     Storage {
@@ -1902,13 +1780,11 @@ enum StorageRecoveredWalOpenFailure<'registry> {
         _opened: ProductionOpenedRecoveredWalSignLifecycleCut<'registry>,
     },
 }
-
 impl StorageRecoveredWalPersistError<'_> {
     fn reason(&self) -> &'static str {
         self.error.reason()
     }
 }
-
 impl StorageRecoveredWalSignInstallError<'_> {
     fn reason(&self) -> &'static str {
         match &self.failure {
@@ -1917,7 +1793,6 @@ impl StorageRecoveredWalSignInstallError<'_> {
         }
     }
 }
-
 impl StorageRecoveredWalOpenError<'_> {
     fn reason(&self) -> &'static str {
         match &self.failure {
@@ -1928,7 +1803,6 @@ impl StorageRecoveredWalOpenError<'_> {
         }
     }
 }
-
 /// Sealed startup cut after the complete recovered LedgerV1 frame was fsynced.
 ///
 /// The adapter and unpublished effects remain inseparable from the durable
@@ -1941,7 +1815,6 @@ struct DurableAuthenticatedRecoveredWalLifecycleStartup<'registry> {
     effects: Vec<AdapterEffect>,
     repair: DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
 }
-
 /// Sealed startup cut after its exact recovered Sign child was installed.
 ///
 /// The adapter and unpublished startup batch remain inseparable from the
@@ -1955,7 +1828,6 @@ struct InstalledRecoveredWalLifecycleStartup<'registry> {
     effects: Vec<AdapterEffect>,
     installed: InstalledRecoveredWalSignRegistryCut<'registry>,
 }
-
 #[cfg(test)]
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum RecoveredWalLifecycleStartupFailure<'registry> {
@@ -1969,7 +1841,6 @@ enum RecoveredWalLifecycleStartupFailure<'registry> {
         error: RecoveredWalValidateRegistryJoinError<'registry>,
     },
 }
-
 /// Drop-safe failure which retains the complete sealed startup cut.
 ///
 /// No adapter, startup effect, recovered vote, or lifecycle binding is exposed
@@ -1981,7 +1852,6 @@ enum RecoveredWalLifecycleStartupFailure<'registry> {
 struct RecoveredWalLifecycleStartupError<'registry> {
     failure: RecoveredWalLifecycleStartupFailure<'registry>,
 }
-
 /// Fail-stop recovered-startup persistence error retaining every sealed input.
 ///
 /// The error exposes only a stable diagnostic. It cannot release the adapter,
@@ -1995,7 +1865,6 @@ struct RecoveredWalLifecycleLedgerPersistError<'registry> {
     _effects: Vec<AdapterEffect>,
     error: RecoveredWalValidateLedgerPersistError<'registry>,
 }
-
 /// Fail-stop Sign-install error retaining the adapter, unpublished batch, and
 /// complete uninstalled post-fsync authority.
 #[cfg(test)]
@@ -2006,7 +1875,6 @@ struct RecoveredWalLifecycleSignInstallError<'registry> {
     effects: Vec<AdapterEffect>,
     error: RecoveredWalSignInstallError<'registry>,
 }
-
 #[cfg(test)]
 impl RecoveredWalLifecycleLedgerPersistError<'_> {
     /// Return a stable classification without exposing retained authority.
@@ -2014,7 +1882,6 @@ impl RecoveredWalLifecycleLedgerPersistError<'_> {
         self.error.reason()
     }
 }
-
 #[cfg(test)]
 impl RecoveredWalLifecycleSignInstallError<'_> {
     /// Return a stable classification without exposing retained authority.
@@ -2022,7 +1889,6 @@ impl RecoveredWalLifecycleSignInstallError<'_> {
         self.error.reason()
     }
 }
-
 #[cfg(test)]
 impl RecoveredWalLifecycleStartupError<'_> {
     /// Return a stable failure classification without exposing retained authority.
@@ -2035,7 +1901,6 @@ impl RecoveredWalLifecycleStartupError<'_> {
         }
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredAdapterStartup {
     /// Exhaustively authenticate the WAL frontier and current startup authority.
@@ -2119,7 +1984,6 @@ impl RecoveredAdapterStartup {
         })
     }
 }
-
 impl AuthenticatedRecoveredAdapterStartup {
     /// Borrow the exact marker frontier derived before the startup effect was sealed.
     ///
@@ -2129,26 +1993,22 @@ impl AuthenticatedRecoveredAdapterStartup {
     const fn recovered_validation_authority(&self) -> &RecoveredValidationAuthority {
         &self.validation_authority
     }
-
     /// Largest producer ordinal authenticated by the replayed adjacent store.
     #[cfg(test)]
     const fn restored_producer_continuation_ordinal_high_watermark(&self) -> Option<u128> {
         self.adapter
             .restored_producer_continuation_ordinal_high_watermark()
     }
-
     /// Reconstruct the exact generic leader-wire recovery boundary.
     #[cfg(test)]
     fn leader_wire_recovery_authority(&self) -> Result<LeaderWireRecoveryAuthority, AdapterError> {
         self.adapter.leader_wire_recovery_authority()
     }
-
     /// Clone only typed durable producer terminals needed by the adjacent gate.
     #[cfg(test)]
     fn durable_producer_terminal_tokens(&self) -> Vec<ProducerContinuationTerminalToken> {
         self.adapter.durable_producer_terminal_tokens()
     }
-
     /// Consume recovered storage into one exact lifecycle execution-input seal.
     ///
     /// The State must own the supplied Kura Arc and the recovered adapter's
@@ -2195,7 +2055,6 @@ impl AuthenticatedRecoveredAdapterStartup {
             local_signer,
         })
     }
-
     /// Consume all recovered adapter and storage authority into one V1 owner.
     ///
     /// The no-authority, phase-vote, control-Sign, and Decision-Fetch cases are
@@ -2311,7 +2170,6 @@ impl AuthenticatedRecoveredAdapterStartup {
         };
         Ok(owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service))
     }
-
     /// Shared implementation after production or a test-only fixture has
     /// authenticated the complete lifecycle storage target.
     #[allow(
@@ -2524,7 +2382,6 @@ impl AuthenticatedRecoveredAdapterStartup {
                     ProductionLifecycleOwnerStartupErrorKindV1::ServeRecovery(error),
                 )
             })?;
-
         let vote = match authority {
             PreparedRecoveredWalStartupAuthorityV1::None => {
                 let owner = ProductionLifecycleOwnerV1::open_storage_only_recovered_startup(
@@ -2637,7 +2494,6 @@ impl AuthenticatedRecoveredAdapterStartup {
             })?;
         Ok(owner)
     }
-
     /// Open an empty-marker test body store and enter the exact production handoff.
     ///
     /// Production has no root-reopen counterpart. Fixtures which persist a
@@ -2700,7 +2556,6 @@ impl AuthenticatedRecoveredAdapterStartup {
             local_signer,
         )
     }
-
     /// Enter the shared owner implementation with an already-revalidated test store.
     #[cfg(test)]
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
@@ -2722,7 +2577,6 @@ impl AuthenticatedRecoveredAdapterStartup {
             local_signer,
         )
     }
-
     #[cfg(test)]
     fn recovered_phase_vote_for_test(&self) -> Option<&RecoveredWalVoteSign> {
         match &self.authority {
@@ -2732,12 +2586,10 @@ impl AuthenticatedRecoveredAdapterStartup {
             | RecoveredWalStartupAuthorityV1::DecisionFetch(_) => None,
         }
     }
-
     #[cfg(test)]
     fn has_no_recovered_wal_authority_for_test(&self) -> bool {
         matches!(self.authority, RecoveredWalStartupAuthorityV1::None)
     }
-
     #[cfg(test)]
     fn has_recovered_control_sign_for_test(&self) -> bool {
         matches!(
@@ -2745,7 +2597,6 @@ impl AuthenticatedRecoveredAdapterStartup {
             RecoveredWalStartupAuthorityV1::ControlSign(_)
         )
     }
-
     /// Finish a startup whose current reducer state owns no WAL continuation.
     ///
     /// This extraction is retained only for focused adapter tests. Production
@@ -2764,7 +2615,6 @@ impl AuthenticatedRecoveredAdapterStartup {
         }
         Ok((self.adapter, self.effects))
     }
-
     /// Reconstruct the recovered Validate parent from exact durable storage.
     ///
     /// This production factory consumes no scheduler lease, runtime ordinal
@@ -2822,7 +2672,6 @@ impl AuthenticatedRecoveredAdapterStartup {
             }),
         }
     }
-
     /// Join the recovered phase vote to one opaque exact-Validate registry cut.
     ///
     /// The cut owns the closed validated completion; no raw effect or pending
@@ -2872,7 +2721,6 @@ impl AuthenticatedRecoveredAdapterStartup {
         }
     }
 }
-
 impl<'registry> StorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
     /// Fsync the repaired frame against the store retained since reconstruction.
     #[allow(clippy::result_large_err)]
@@ -2907,7 +2755,6 @@ impl<'registry> StorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
         }
     }
 }
-
 impl<'registry> PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
     /// Install the repaired Sign while retaining the exact post-fsync store.
     #[allow(clippy::result_large_err)]
@@ -2949,7 +2796,6 @@ impl<'registry> PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'regis
         }
     }
 }
-
 impl<'registry> InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
     /// Complete final-frame recovery and release only no-lifetime owner seals.
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
@@ -3002,7 +2848,6 @@ impl<'registry> InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'regis
         })
     }
 }
-
 #[cfg(test)]
 impl<'registry> AuthenticatedRecoveredWalLifecycleStartup<'registry> {
     /// Consume the entire sealed startup through the focused LedgerV1 fsync
@@ -3043,7 +2888,6 @@ impl<'registry> AuthenticatedRecoveredWalLifecycleStartup<'registry> {
             }),
         }
     }
-
     /// Exercise the stale-opened-snapshot path while preserving the same
     /// whole-startup ownership on both unexpected success and expected error.
     #[allow(clippy::result_large_err)]
@@ -3072,7 +2916,6 @@ impl<'registry> AuthenticatedRecoveredWalLifecycleStartup<'registry> {
             }),
         }
     }
-
     /// Re-enter the fsync seam from a fresh startup over an already-repaired
     /// ledger frame, retaining the whole startup seal.
     #[allow(clippy::result_large_err)]
@@ -3108,7 +2951,6 @@ impl<'registry> AuthenticatedRecoveredWalLifecycleStartup<'registry> {
         }
     }
 }
-
 #[cfg(test)]
 impl<'registry> DurableAuthenticatedRecoveredWalLifecycleStartup<'registry> {
     /// Verify that the focused post-fsync startup still owns its adapter, has
@@ -3118,7 +2960,6 @@ impl<'registry> DurableAuthenticatedRecoveredWalLifecycleStartup<'registry> {
             && self.adapter.current_tag().height() == self.adapter.wire_context.height
             && self.repair.remains_exact_for_test(root)
     }
-
     /// Consume this whole post-fsync startup seal into the exact closed Sign
     /// registry row without publishing adapter status or mutating a
     /// coordinator.
@@ -3149,7 +2990,6 @@ impl<'registry> DurableAuthenticatedRecoveredWalLifecycleStartup<'registry> {
         }
     }
 }
-
 #[cfg(test)]
 impl InstalledRecoveredWalLifecycleStartup<'_> {
     /// Verify that startup remains sealed around one exact recovered Sign row.
@@ -3159,7 +2999,6 @@ impl InstalledRecoveredWalLifecycleStartup<'_> {
             && self.installed.exact_installed_shape_for_test(root)
     }
 }
-
 #[cfg(test)]
 impl RecoveredWalLifecycleSignInstallError<'_> {
     /// Verify that a failed install retains the whole startup and both vacant
@@ -3170,9 +3009,7 @@ impl RecoveredWalLifecycleSignInstallError<'_> {
             && self.error.retains_exact_vacancies_for_test(root)
     }
 }
-
 // RECOVERED_WAL_VOTE_SIGN_SEAL_END
-
 // RECOVERED_WAL_SIGN_STATUS_PUBLICATION_BEGIN
 /// Fully opened recovered-WAL startup after adapter status publication.
 ///
@@ -3187,14 +3024,12 @@ struct PublishedRecoveredWalLifecycleStartup<'registry> {
     effects: Vec<AdapterEffect>,
     opened: OpenedRecoveredWalSignLifecycleCut<'registry>,
 }
-
 /// Fail-stop open/publication error retaining the complete sealed startup.
 #[cfg(test)]
 #[must_use = "failed recovered WAL startup publication still owns all authority"]
 struct RecoveredWalLifecycleOpenPublicationError<'registry> {
     failure: RecoveredWalLifecycleOpenPublicationFailure<'registry>,
 }
-
 #[cfg(test)]
 #[allow(dead_code, clippy::large_enum_variant, variant_size_differences)]
 enum RecoveredWalLifecycleOpenPublicationFailure<'registry> {
@@ -3210,7 +3045,6 @@ enum RecoveredWalLifecycleOpenPublicationFailure<'registry> {
         error: AdapterError,
     },
 }
-
 #[cfg(test)]
 impl RecoveredWalLifecycleOpenPublicationError<'_> {
     /// Return one stable classification without exposing retained authority.
@@ -3224,7 +3058,6 @@ impl RecoveredWalLifecycleOpenPublicationError<'_> {
         }
     }
 }
-
 #[cfg(test)]
 impl<'registry> InstalledRecoveredWalLifecycleStartup<'registry> {
     #[allow(clippy::result_large_err)]
@@ -3270,7 +3103,6 @@ impl<'registry> InstalledRecoveredWalLifecycleStartup<'registry> {
             opened,
         })
     }
-
     /// Open and publish one recovered coordinator using only the adapter's
     /// immutable verified context and production configuration.
     #[allow(dead_code)]
@@ -3306,7 +3138,6 @@ impl<'registry> InstalledRecoveredWalLifecycleStartup<'registry> {
         );
         Self::publish_open_result(adapter, effects, opened)
     }
-
     #[cfg(test)]
     #[allow(clippy::result_large_err)]
     fn open_coordinator_and_publish_for_test(
@@ -3333,7 +3164,6 @@ impl<'registry> InstalledRecoveredWalLifecycleStartup<'registry> {
         Self::publish_open_result(adapter, effects, opened)
     }
 }
-
 #[cfg(test)]
 impl PublishedRecoveredWalLifecycleStartup<'_> {
     fn exact_published_join_for_test(&self) -> bool {
@@ -3342,7 +3172,6 @@ impl PublishedRecoveredWalLifecycleStartup<'_> {
             && self.opened.exact_join_for_test()
     }
 }
-
 #[cfg(test)]
 impl RecoveredWalLifecycleOpenPublicationError<'_> {
     fn retains_closed_registry_row_for_test(&self) -> bool {
@@ -3355,7 +3184,6 @@ impl RecoveredWalLifecycleOpenPublicationError<'_> {
             } => effects.is_empty() && opened.exact_join_for_test(),
         }
     }
-
     fn retains_exact_installed_for_test(&self, ledger_root: &std::path::Path) -> bool {
         match &self.failure {
             RecoveredWalLifecycleOpenPublicationFailure::Open { effects, error, .. } => {
@@ -3368,11 +3196,9 @@ impl RecoveredWalLifecycleOpenPublicationError<'_> {
     }
 }
 // RECOVERED_WAL_SIGN_STATUS_PUBLICATION_END
-
 // TODO: Make the serialized runner consume the owner factory above and delete
 // its independent adapter/store startup in the same cut; no dual launch may
 // coexist with this owner.
-
 /// Structurally and cryptographically verified immutable context for one
 /// height.
 ///
@@ -3386,7 +3212,6 @@ pub(crate) struct VerifiedHeightContext {
     proofs_of_possession: Vec<Vec<u8>>,
     parent_verification: Option<ParentVerificationContext>,
 }
-
 /// Frozen parent-roster material retained solely to authenticate the
 /// parent CommitQC carried by a view-zero proposal.
 #[derive(Clone)]
@@ -3394,7 +3219,6 @@ struct ParentVerificationContext {
     context: wire::HeightContext,
     proofs_of_possession: Vec<Vec<u8>>,
 }
-
 impl VerifiedHeightContext {
     /// Verify a genesis height context against its configured BLS roster.
     pub(crate) fn genesis(
@@ -3416,7 +3240,6 @@ impl VerifiedHeightContext {
             parent_verification: None,
         })
     }
-
     /// Verify the complete first context authenticated by an audited snapshot payload.
     pub(crate) fn snapshot_bootstrap(
         record: &wire::SnapshotV2BootstrapRecord,
@@ -3436,7 +3259,6 @@ impl VerifiedHeightContext {
             parent_verification: None,
         })
     }
-
     /// Verify a successor context from a durable parent artifact.
     pub(crate) fn successor(
         context: wire::HeightContext,
@@ -3460,7 +3282,6 @@ impl VerifiedHeightContext {
             &parent_artifact.commit_qc,
             parent_proofs_of_possession,
         )?;
-
         let parent_qc = context
             .parent_commit_qc
             .as_ref()
@@ -3519,7 +3340,6 @@ impl VerifiedHeightContext {
             }),
         })
     }
-
     /// Build a structurally exact successor owner for closed lifecycle fixtures.
     ///
     /// Production must use [`Self::successor`]. Some ledger fixtures retain
@@ -3542,12 +3362,10 @@ impl VerifiedHeightContext {
             }),
         }
     }
-
     /// Borrow the exact frozen wire context.
     pub(crate) const fn context(&self) -> &wire::HeightContext {
         &self.context
     }
-
     /// Borrow the exact durable predecessor context which authenticated this
     /// successor. Genesis and audited snapshot-bootstrap contexts have no such
     /// predecessor and therefore return `None`.
@@ -3556,12 +3374,10 @@ impl VerifiedHeightContext {
             .as_ref()
             .map(|parent| &parent.context)
     }
-
     /// Borrow proofs of possession in the exact frozen-roster order.
     pub(crate) fn proofs_of_possession(&self) -> &[Vec<u8>] {
         &self.proofs_of_possession
     }
-
     /// Verify one quorum certificate against this exact frozen roster and its
     /// already-authenticated proofs of possession.
     pub(crate) fn verify_quorum_certificate(
@@ -3570,7 +3386,6 @@ impl VerifiedHeightContext {
     ) -> Result<(), AdapterError> {
         verify_quorum_certificate(&self.context, certificate, &self.proofs_of_possession)
     }
-
     /// Verify one complete consensus envelope against this frozen height.
     ///
     /// Lifecycle cold recovery uses this fixed oracle after LedgerV1 has
@@ -3590,7 +3405,6 @@ impl VerifiedHeightContext {
         )
     }
 }
-
 /// A canonical message whose safety intent is already durable and may be signed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SignRequest {
@@ -3601,7 +3415,6 @@ pub(crate) enum SignRequest {
     /// Timeout vote with an empty signature field.
     TimeoutVote(wire::TimeoutVote),
 }
-
 impl SignRequest {
     /// Return the canonical bytes authorized by this durable signing request.
     pub(crate) fn signature_preimage(&self) -> Vec<u8> {
@@ -3611,7 +3424,6 @@ impl SignRequest {
             Self::TimeoutVote(vote) => vote.signature_preimage(),
         }
     }
-
     /// Return the exact block subject owned by proposal or phase-vote work.
     ///
     /// Timeout votes carry only an optional high-QC report and do not own that
@@ -3623,7 +3435,6 @@ impl SignRequest {
             Self::TimeoutVote(_) => None,
         }
     }
-
     /// Return the exact proposal/body origin owned by proposal or phase-vote work.
     ///
     /// As with [`Self::subject`], a timeout vote is view-progress work rather
@@ -3636,7 +3447,6 @@ impl SignRequest {
         }
     }
 }
-
 /// Return whether a proposal still satisfies the safe-value rule for one lock.
 ///
 /// The exact locked subject remains safe in a later justified view. A different
@@ -3671,7 +3481,6 @@ pub(crate) fn proposal_is_safe_for_lock(
                 .is_some_and(|selected| selected == highest)
     })
 }
-
 /// Effects delivered by the production adapter to asynchronous services.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3752,7 +3561,6 @@ pub(crate) enum AdapterEffect {
         certificate: wire::QuorumCertificate,
     },
 }
-
 /// Closed output of one exact live `Persist -> Persisted` adapter cut.
 ///
 /// WAL-owned effects remain inseparable from their non-decodable replay seal;
@@ -3764,13 +3572,11 @@ pub(crate) enum AdapterEffect {
 struct SealedLiveWalPersistedContinuationBatch {
     items: Vec<SealedLiveWalPersistedContinuationItem>,
 }
-
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum SealedLiveWalPersistedContinuationItem {
     Ordinary { _effect: AdapterEffect },
     WalOwned(SealedLiveWalPersistedEffectV1),
 }
-
 #[cfg(test)]
 impl SealedLiveWalPersistedContinuationBatch {
     /// Compare the sole WAL-owned item without releasing any batch member.
@@ -3785,7 +3591,6 @@ impl SealedLiveWalPersistedContinuationBatch {
             && owned.next().is_none()
     }
 }
-
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 /// Record-checked linear cause for one exact post-fsync WAL continuation.
 pub(super) enum ExactLiveWalPersistedContinuationCause {
@@ -3806,7 +3611,6 @@ pub(super) enum ExactLiveWalPersistedContinuationCause {
         effect: AdapterEffect,
     },
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LiveWalOwnedStage {
     SignProposal,
@@ -3816,7 +3620,6 @@ enum LiveWalOwnedStage {
     Apply,
     EnterView,
 }
-
 fn live_wal_owned_adapter_effect(effect: &AdapterEffect) -> Option<LiveWalOwnedStage> {
     match effect {
         AdapterEffect::Sign {
@@ -3844,7 +3647,6 @@ fn live_wal_owned_adapter_effect(effect: &AdapterEffect) -> Option<LiveWalOwnedS
         | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
     }
 }
-
 /// Exact process-local pair of authenticated artifacts proving equivocation.
 ///
 /// The variants are deliberately closed over the three signed consensus
@@ -3860,7 +3662,6 @@ pub(crate) enum AdapterEquivocationEvidence {
     /// Two different high-QC claims signed for one timeout round.
     TimeoutVote(SealedEquivocationPair<wire::TimeoutVote>),
 }
-
 /// An authenticated same-class conflict whose constructor is sealed inside
 /// the adapter module.
 ///
@@ -3872,26 +3673,21 @@ pub(crate) struct SealedEquivocationPair<T> {
     first: T,
     second: T,
 }
-
 impl<T> SealedEquivocationPair<T> {
     fn new(first: T, second: T) -> Self {
         Self { first, second }
     }
 }
-
 impl AdapterEquivocationEvidence {
     fn proposal(first: wire::Proposal, second: wire::Proposal) -> Self {
         Self::Proposal(SealedEquivocationPair::new(first, second))
     }
-
     fn vote(first: wire::Vote, second: wire::Vote) -> Self {
         Self::Vote(SealedEquivocationPair::new(first, second))
     }
-
     fn timeout_vote(first: wire::TimeoutVote, second: wire::TimeoutVote) -> Self {
         Self::TimeoutVote(SealedEquivocationPair::new(first, second))
     }
-
     /// Return the conflicting message class derived from the pair variant.
     pub(crate) const fn kind(&self) -> reducer::EquivocationKind {
         match self {
@@ -3900,7 +3696,6 @@ impl AdapterEquivocationEvidence {
             Self::TimeoutVote(_) => reducer::EquivocationKind::Timeout,
         }
     }
-
     /// Return the offending validator index derived from the first artifact.
     pub(crate) const fn offender_index(&self) -> wire::ValidatorIndex {
         match self {
@@ -3909,7 +3704,6 @@ impl AdapterEquivocationEvidence {
             Self::TimeoutVote(pair) => pair.first.signer,
         }
     }
-
     /// Return the common conflict round derived from the first artifact.
     pub(crate) const fn round(&self) -> wire::ConsensusRound {
         match self {
@@ -3918,7 +3712,6 @@ impl AdapterEquivocationEvidence {
             Self::TimeoutVote(pair) => pair.first.round,
         }
     }
-
     /// Return the complete signed artifacts in observation order.
     pub(crate) fn signed_artifact_pair(&self) -> (Vec<u8>, Vec<u8>) {
         match self {
@@ -3927,7 +3720,6 @@ impl AdapterEquivocationEvidence {
             Self::TimeoutVote(pair) => (pair.first.encode(), pair.second.encode()),
         }
     }
-
     /// Return the unsigned conflicting statements in canonical pair order.
     pub(crate) fn canonical_unsigned_statement_pair(&self) -> (Vec<u8>, Vec<u8>) {
         let (mut first, mut second) = match self {
@@ -3949,7 +3741,6 @@ impl AdapterEquivocationEvidence {
         }
         (first, second)
     }
-
     /// Project the sealed authenticated pair into the canonical persisted wire form.
     pub(crate) fn to_wire(&self) -> wire::SumeragiV2Equivocation {
         let conflict = match self {
@@ -3968,7 +3759,6 @@ impl AdapterEquivocationEvidence {
         };
         super::evidence::canonicalize_v2_conflict(&conflict)
     }
-
     /// Recheck the sealed pair's structural contract against one frozen height
     /// context.
     ///
@@ -4022,19 +3812,16 @@ impl AdapterEquivocationEvidence {
             .then_some(())
             .ok_or_else(|| "authenticated equivocation artifacts do not form one conflict".into())
     }
-
     #[cfg(all(test, feature = "bls"))]
     /// Construct a proposal pair for sibling-module tests only.
     pub(crate) fn proposal_for_test(first: wire::Proposal, second: wire::Proposal) -> Self {
         Self::proposal(first, second)
     }
-
     #[cfg(test)]
     /// Construct a vote pair for sibling-module tests only.
     pub(crate) fn vote_for_test(first: wire::Vote, second: wire::Vote) -> Self {
         Self::vote(first, second)
     }
-
     #[cfg(all(test, feature = "bls"))]
     /// Construct a timeout-vote pair for sibling-module tests only.
     pub(crate) fn timeout_vote_for_test(
@@ -4043,7 +3830,6 @@ impl AdapterEquivocationEvidence {
     ) -> Self {
         Self::timeout_vote(first, second)
     }
-
     #[cfg(test)]
     /// Consume a vote pair in sibling-module tests only.
     pub(crate) fn into_vote_pair_for_test(self) -> Option<(wire::Vote, wire::Vote)> {
@@ -4052,7 +3838,6 @@ impl AdapterEquivocationEvidence {
         };
         Some((pair.first, pair.second))
     }
-
     #[cfg(test)]
     fn proposal_pair(&self) -> Option<(&wire::Proposal, &wire::Proposal)> {
         let Self::Proposal(pair) = self else {
@@ -4060,7 +3845,6 @@ impl AdapterEquivocationEvidence {
         };
         Some((&pair.first, &pair.second))
     }
-
     #[cfg(test)]
     fn vote_pair(&self) -> Option<(&wire::Vote, &wire::Vote)> {
         let Self::Vote(pair) = self else {
@@ -4069,7 +3853,6 @@ impl AdapterEquivocationEvidence {
         Some((&pair.first, &pair.second))
     }
 }
-
 /// Result of one serialized reducer input after all synchronous WAL work.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AdapterOutcome {
@@ -4078,7 +3861,6 @@ pub(crate) struct AdapterOutcome {
     deferred_admission_ordinal: Option<u128>,
     producer_handoff: Option<ProducerContinuationHandoffToken>,
 }
-
 /// Exact reducer fences which can make a lifecycle-owned completion return
 /// `Busy` without consuming that completion.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4087,7 +3869,6 @@ struct ReducerFenceProjection {
     awaiting_signature: Option<reducer::SignableMessage>,
     replay_complete: bool,
 }
-
 /// Borrow-bound generation snapshot for one direct completion blocked by the
 /// reducer's persistence or signature fence.
 ///
@@ -4101,7 +3882,6 @@ struct PreparedReducerFenceWait<'a> {
     context_id: wire::HeightContextId,
     generation: u64,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedReducerFenceWait<'_> {
     /// Return the authenticated height-context identity used to derive the
@@ -4109,14 +3889,12 @@ impl PreparedReducerFenceWait<'_> {
     const fn context_id(&self) -> wire::HeightContextId {
         self.context_id
     }
-
     /// Return the exact monotone reducer-fence generation observed by this
     /// blocked attempt.
     const fn generation(&self) -> u64 {
         self.generation
     }
 }
-
 /// Exact idempotent disposition of a direct certified-body completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DirectCertifiedBodyAvailableStutter {
@@ -4125,7 +3903,6 @@ enum DirectCertifiedBodyAvailableStutter {
     /// The exact body already advanced beyond the missing state.
     Duplicate,
 }
-
 /// Closed non-applied result of one direct body-completion preview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DirectCertifiedBodyAvailableInactive {
@@ -4136,7 +3913,6 @@ enum DirectCertifiedBodyAvailableInactive {
     /// A conflicting Busy-deferred proposal still owns registry state.
     DeferredConflict,
 }
-
 /// Borrow-bound non-applied direct-completion classification.
 ///
 /// The future lifecycle transaction must settle the corresponding logical
@@ -4148,7 +3924,6 @@ struct PreparedDirectCertifiedBodyAvailableInactive<'a> {
     _adapter: &'a mut SumeragiV2Adapter,
     disposition: DirectCertifiedBodyAvailableInactive,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectCertifiedBodyAvailableInactive<'_> {
     /// Return the exact closed non-applied disposition.
@@ -4156,7 +3931,6 @@ impl PreparedDirectCertifiedBodyAvailableInactive<'_> {
         self.disposition
     }
 }
-
 /// Fully checked direct `BodyAvailable -> StoreBody` transition.
 ///
 /// Preparation executes the reducer transition only on cloned state and holds
@@ -4174,7 +3948,6 @@ struct PreparedDirectCertifiedBodyAvailable<'a> {
     store_effect: AdapterEffect,
     next_fence_generation: u64,
 }
-
 /// Borrow-bound direct adapter preview for recovered Decision Fetch settlement.
 ///
 /// The body authority remains opaque beside the cloned reducer transition.
@@ -4185,20 +3958,17 @@ pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchStoreAdapterV1<'a> 
     preview: PreparedDirectCertifiedBodyAvailable<'a>,
     body: super::v2_body_store::RecoveredDecisionFetchStoreBodyAuthorityV1,
 }
-
 impl PreparedRecoveredDecisionFetchStoreAdapterV1<'_> {
     /// Borrow the reducer-derived Store effect only for fixed registry projection.
     pub(in crate::sumeragi) const fn store_effect(&self) -> &AdapterEffect {
         self.preview.store_effect()
     }
-
     /// Clone only the opaque body authority for the sealed successor projection.
     pub(in crate::sumeragi) fn body_authority(
         &self,
     ) -> super::v2_body_store::RecoveredDecisionFetchStoreBodyAuthorityV1 {
         self.body.clone()
     }
-
     /// Install the already-checked reducer transition after durable publication.
     pub(in crate::sumeragi) fn commit_after_durable_settlement(self) {
         let expected = self.preview.store_effect().clone();
@@ -4207,14 +3977,12 @@ impl PreparedRecoveredDecisionFetchStoreAdapterV1<'_> {
         drop(self.body);
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectCertifiedBodyAvailable<'_> {
     /// Borrow the single exact Store effect derived by the staged reducer.
     const fn store_effect(&self) -> &AdapterEffect {
         &self.store_effect
     }
-
     /// Install the already-checked reducer and registry state.
     ///
     /// This method performs only infallible in-memory moves and accounting. The
@@ -4247,7 +4015,6 @@ impl PreparedDirectCertifiedBodyAvailable<'_> {
         store_effect
     }
 }
-
 /// Read-only classification of one direct certified-body completion attempt.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -4265,7 +4032,6 @@ enum DirectCertifiedBodyAvailablePreparation<'a> {
     /// direct completion executable.
     Inactive(PreparedDirectCertifiedBodyAvailableInactive<'a>),
 }
-
 /// Exact idempotent disposition of one direct durable-body completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DirectBodyStoredStutter {
@@ -4274,7 +4040,6 @@ enum DirectBodyStoredStutter {
     /// The exact body already advanced beyond the available state.
     Duplicate,
 }
-
 /// Closed non-applied result of one direct durable-body completion preview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DirectBodyStoredInactive {
@@ -4283,7 +4048,6 @@ enum DirectBodyStoredInactive {
     /// The effect belongs to a stale reducer incarnation or view.
     Superseded(reducer::IgnoreReason),
 }
-
 /// Borrow-bound non-applied durable-body completion classification.
 ///
 /// Retaining the adapter borrow prevents a check-then-use race while the
@@ -4295,7 +4059,6 @@ struct PreparedDirectBodyStoredInactive<'a> {
     _adapter: &'a mut SumeragiV2Adapter,
     disposition: DirectBodyStoredInactive,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectBodyStoredInactive<'_> {
     /// Return the exact closed non-applied disposition.
@@ -4303,7 +4066,6 @@ impl PreparedDirectBodyStoredInactive<'_> {
         self.disposition
     }
 }
-
 /// Fully checked direct `BodyStored -> ValidateBody` transition.
 ///
 /// Preparation executes the reducer transition only on cloned state and holds
@@ -4321,14 +4083,12 @@ struct PreparedDirectBodyStored<'a> {
     validate_effect: AdapterEffect,
     next_fence_generation: u64,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectBodyStored<'_> {
     /// Borrow the single exact Validate effect derived by the staged reducer.
     const fn validate_effect(&self) -> &AdapterEffect {
         &self.validate_effect
     }
-
     /// Install the already-checked reducer and registry state.
     ///
     /// This method performs only infallible in-memory moves and accounting. It
@@ -4359,7 +4119,6 @@ impl PreparedDirectBodyStored<'_> {
         validate_effect
     }
 }
-
 /// Read-only classification of one direct durable-body completion attempt.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -4372,7 +4131,6 @@ enum DirectBodyStoredPreparation<'a> {
     /// The exact attempt was an idempotent stutter or superseded incarnation.
     Inactive(PreparedDirectBodyStoredInactive<'a>),
 }
-
 /// Exact idempotent disposition of one direct failed-validation preview.
 #[derive(Debug, PartialEq, Eq)]
 enum DirectValidationFailedStutter {
@@ -4381,7 +4139,6 @@ enum DirectValidationFailedStutter {
     /// The exact body was already rejected or otherwise left the durable state.
     Duplicate,
 }
-
 /// Closed non-Busy ignored result of one direct failed-validation preview.
 #[derive(Debug, PartialEq, Eq)]
 enum DirectValidationFailedInactive {
@@ -4394,7 +4151,6 @@ enum DirectValidationFailedInactive {
     /// state change.
     Superseded(reducer::IgnoreReason),
 }
-
 /// Borrow-bound failed-validation preview blocked by a reducer fence.
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "a blocked direct rejection still owns staged validation authority"]
@@ -4404,20 +4160,17 @@ struct PreparedDirectValidationFailedBusy<'a> {
     context_id: wire::HeightContextId,
     generation: u64,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectValidationFailedBusy<'_> {
     /// Return the authenticated context owning the sampled reducer fence.
     const fn context_id(&self) -> wire::HeightContextId {
         self.context_id
     }
-
     /// Return the exact non-reserved reducer-fence generation observed.
     const fn generation(&self) -> u64 {
         self.generation
     }
 }
-
 /// Borrow-bound non-Busy ignored failed-validation preview.
 ///
 /// Both staged authorities remain sealed even for a reducer stutter so an
@@ -4430,7 +4183,6 @@ struct PreparedDirectValidationFailedInactive<'a> {
     next_registry: WireRegistry,
     disposition: DirectValidationFailedInactive,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectValidationFailedInactive<'_> {
     /// Borrow the exact closed ignored disposition.
@@ -4438,7 +4190,6 @@ impl PreparedDirectValidationFailedInactive<'_> {
         &self.disposition
     }
 }
-
 /// Borrow-bound applied rejection which emits no child effect.
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "an effect-free direct rejection still owns staged reducer authority"]
@@ -4449,7 +4200,6 @@ struct PreparedDirectValidationFailedNoEffect<'a> {
     event: reducer::Event,
     next_fence_generation: u64,
 }
-
 /// Borrow-bound applied rejection which emits one exact PrepareQC report.
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "a direct rejection report still owns staged reducer authority"]
@@ -4462,7 +4212,6 @@ struct PreparedDirectValidationFailedReport<'a> {
     report_effect: AdapterEffect,
     next_fence_generation: u64,
 }
-
 /// Unforgeable move-only proof that an exact invalid-body report names the PrepareQC
 /// retained by the adapter's post-rejection registry clone.
 ///
@@ -4476,14 +4225,12 @@ struct PreparedDirectValidationFailedReport<'a> {
 pub(in crate::sumeragi) struct RegisteredPrepareInvalidBodyReportCapability {
     report_effect: AdapterEffect,
 }
-
 impl RegisteredPrepareInvalidBodyReportCapability {
     /// Return whether this move-only proof names the exact retained report.
     pub(in crate::sumeragi) fn exactly_matches_report(&self, effect: &AdapterEffect) -> bool {
         &self.report_effect == effect
     }
 }
-
 /// Opaque proof that one staged `LockAndCommit` record retained the exact
 /// registered Prepare certificate promoted by its unsigned Commit vote.
 ///
@@ -4496,7 +4243,6 @@ pub(in crate::sumeragi) struct RegisteredPrepareValidateSignCapability {
     prepare: wire::QuorumCertificate,
     commit_effect: AdapterEffect,
 }
-
 impl RegisteredPrepareValidateSignCapability {
     fn from_staged_lock_and_commit(
         record: &reducer::WalRecord,
@@ -4538,7 +4284,6 @@ impl RegisteredPrepareValidateSignCapability {
             commit_effect: commit_effect.clone(),
         })
     }
-
     /// Return whether this unforgeable registered carrier authorizes the exact
     /// ordinary Validate predecessor and unsigned Commit successor.
     pub(in crate::sumeragi) fn authorizes_ordinary_validate_commit(
@@ -4573,14 +4318,12 @@ impl RegisteredPrepareValidateSignCapability {
             && self.prepare.execution_commitment == vote.execution_commitment
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectValidationFailedReport<'_> {
     /// Borrow the exact certified-body rejection report.
     const fn report_effect(&self) -> &AdapterEffect {
         &self.report_effect
     }
-
     fn registered_prepare_report_capability(
         &self,
     ) -> Option<RegisteredPrepareInvalidBodyReportCapability> {
@@ -4615,7 +4358,6 @@ impl PreparedDirectValidationFailedReport<'_> {
         })
     }
 }
-
 /// Closed classification of one direct deterministic validation rejection.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -4630,7 +4372,6 @@ enum DirectValidationFailedPreparation<'a> {
     /// Rejection applied and emitted one exact invalid-certified-body report.
     Report(PreparedDirectValidationFailedReport<'a>),
 }
-
 /// Exact idempotent disposition of one direct successful-validation preview.
 #[derive(Debug, PartialEq, Eq)]
 enum DirectValidationSucceededStutter {
@@ -4639,7 +4380,6 @@ enum DirectValidationSucceededStutter {
     /// The exact body was already validated or otherwise left the durable state.
     Duplicate,
 }
-
 /// Closed non-Busy ignored result of one direct successful-validation preview.
 #[derive(Debug, PartialEq, Eq)]
 enum DirectValidationSucceededInactive {
@@ -4653,7 +4393,6 @@ enum DirectValidationSucceededInactive {
     /// stutter.
     Superseded(reducer::IgnoreReason),
 }
-
 /// Borrow-bound successful-validation preview blocked by a reducer fence.
 ///
 /// The staged registry retains the independently durable execution commitment
@@ -4667,20 +4406,17 @@ struct PreparedDirectValidationSucceededBusy<'a> {
     context_id: wire::HeightContextId,
     generation: u64,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectValidationSucceededBusy<'_> {
     /// Return the authenticated context owning the sampled reducer fence.
     const fn context_id(&self) -> wire::HeightContextId {
         self.context_id
     }
-
     /// Return the exact non-reserved reducer-fence generation observed.
     const fn generation(&self) -> u64 {
         self.generation
     }
 }
-
 /// Borrow-bound non-Busy ignored successful-validation preview.
 ///
 /// Both staged authorities are retained because an ignored reducer outcome can
@@ -4694,7 +4430,6 @@ struct PreparedDirectValidationSucceededInactive<'a> {
     next_registry: WireRegistry,
     disposition: DirectValidationSucceededInactive,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectValidationSucceededInactive<'_> {
     /// Borrow the exact closed ignored disposition.
@@ -4702,7 +4437,6 @@ impl PreparedDirectValidationSucceededInactive<'_> {
         &self.disposition
     }
 }
-
 /// Borrow-bound applied validation which emits no child effect.
 #[allow(dead_code)]
 #[must_use = "an effect-free direct validation still owns staged reducer authority"]
@@ -4713,7 +4447,6 @@ struct PreparedDirectValidationSucceededNoEffect<'a> {
     event: reducer::Event,
     next_fence_generation: u64,
 }
-
 /// Borrow-bound applied validation which emits one exact decision application.
 #[allow(dead_code)]
 #[must_use = "a direct validation Apply result still owns staged reducer authority"]
@@ -4726,7 +4459,6 @@ struct PreparedDirectValidationSucceededApply<'a> {
     apply_effect: AdapterEffect,
     next_fence_generation: u64,
 }
-
 /// Opaque staged adapter state for the fixed recovered Decision body fast-forward.
 ///
 /// The adapter already contains the staged BodyAvailable, BodyStored, and
@@ -4742,7 +4474,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyStagedAdapterV1 {
     apply_effect: AdapterEffect,
     pending: RecoveredDecisionApplyPendingLineageV1,
 }
-
 /// Closed staged adapter plus exact recovered-Decision logical lineage.
 ///
 /// The authenticated Fetch projection remains attached to the derived body
@@ -4758,7 +4489,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyStagedStorageV1 {
     apply_pending: PendingRuntimeEffectBinding,
     validated_receipt: ValidatedBodyReceipt,
 }
-
 /// Dedicated closed registry carrier for one recovered Decision Apply.
 ///
 /// The original WAL Fetch and the complete body-backed logical lineage remain
@@ -4773,7 +4503,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyRegistryCarrierV1 {
     apply_pending: PendingRuntimeEffectBinding,
     validated_receipt: ValidatedBodyReceipt,
 }
-
 /// Exact recovered Apply completion projected by the installed registry carrier.
 ///
 /// The worker's finality material remains bound to the original Apply tag and
@@ -4787,7 +4516,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterCompletionAuthorityV
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
 }
-
 /// Adapter-private one-shot permit for unpacking a guarded recovered Sign result.
 ///
 /// The worker owns the only constructor for the guarded material and this
@@ -4796,13 +4524,10 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterCompletionAuthorityV
 pub(in crate::sumeragi) struct RecoveredLifecycleSignAdapterCompletionPermitV1 {
     _linearity: RecoveredLifecycleSignAdapterCompletionPermitLinearityV1,
 }
-
 struct RecoveredLifecycleSignAdapterCompletionPermitLinearityV1;
-
 impl Drop for RecoveredLifecycleSignAdapterCompletionPermitLinearityV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleSignAdapterCompletionPermitV1 {
     fn new() -> Self {
         Self {
@@ -4810,7 +4535,6 @@ impl RecoveredLifecycleSignAdapterCompletionPermitV1 {
         }
     }
 }
-
 /// Adapter-private one-shot permit for sealing a follow-on recovered Vote Sign.
 ///
 /// Replay evidence is structurally comparable, but only the adapter can mint
@@ -4819,13 +4543,10 @@ impl RecoveredLifecycleSignAdapterCompletionPermitV1 {
 pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteSealPermitV1 {
     _linearity: RecoveredLifecycleNextWalVoteSealPermitLinearityV1,
 }
-
 struct RecoveredLifecycleNextWalVoteSealPermitLinearityV1;
-
 impl Drop for RecoveredLifecycleNextWalVoteSealPermitLinearityV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleNextWalVoteSealPermitV1 {
     fn new() -> Self {
         Self {
@@ -4833,7 +4554,6 @@ impl RecoveredLifecycleNextWalVoteSealPermitV1 {
         }
     }
 }
-
 /// Opaque body lookup derived from the reducer's exact follow-on Vote Sign.
 ///
 /// The lookup carries only the immutable Vote/body coordinates and the signed
@@ -4849,7 +4569,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyLookupV1 {
     execution_commitment: wire::ExecutionCommitment,
     expected_proposal_manifest_hash: Option<HashOf<wire::PayloadManifest>>,
 }
-
 impl RecoveredLifecycleNextVoteBodyLookupV1 {
     fn from_adapter_preview(
         next_sign: &AdapterEffect,
@@ -4877,7 +4596,6 @@ impl RecoveredLifecycleNextVoteBodyLookupV1 {
             expected_proposal_manifest_hash,
         })
     }
-
     /// Compare the lookup with one immutable height/service owner.
     pub(in crate::sumeragi) fn matches_height_context(
         &self,
@@ -4888,7 +4606,6 @@ impl RecoveredLifecycleNextVoteBodyLookupV1 {
             && self.proposal_round.context_id == context.id()
             && self.proposal_round.height == context.height
     }
-
     /// Compare one executor-retained validated receipt without exposing its key.
     pub(in crate::sumeragi) fn matches_validated_body(
         &self,
@@ -4903,7 +4620,6 @@ impl RecoveredLifecycleNextVoteBodyLookupV1 {
                 .expected_proposal_manifest_hash
                 .is_none_or(|expected| durable.manifest_hash() == expected)
     }
-
     /// Compare the recovered manifest and durable catalog entry as one owner.
     pub(in crate::sumeragi) fn matches_recovered_body(
         &self,
@@ -4920,7 +4636,6 @@ impl RecoveredLifecycleNextVoteBodyLookupV1 {
                 .expected_proposal_manifest_hash
                 .is_none_or(|expected| HashOf::new(manifest) == expected)
     }
-
     fn matches_adapter_successor(
         &self,
         next_sign: &AdapterEffect,
@@ -4940,7 +4655,6 @@ impl RecoveredLifecycleNextVoteBodyLookupV1 {
             && vote.execution_commitment == self.execution_commitment
             && expected_proposal_manifest_hash == self.expected_proposal_manifest_hash
     }
-
     #[cfg(test)]
     /// Build one inert lookup from a test-only unsigned Vote projection.
     pub(in crate::sumeragi) fn for_test(
@@ -4960,18 +4674,14 @@ impl RecoveredLifecycleNextVoteBodyLookupV1 {
         )
     }
 }
-
 /// Adapter-private permit for consuming one executor-authenticated body owner.
 pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyConsumePermitV1 {
     _linearity: RecoveredLifecycleNextVoteBodyConsumePermitLinearityV1,
 }
-
 struct RecoveredLifecycleNextVoteBodyConsumePermitLinearityV1;
-
 impl Drop for RecoveredLifecycleNextVoteBodyConsumePermitLinearityV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleNextVoteBodyConsumePermitV1 {
     fn new() -> Self {
         Self {
@@ -4979,7 +4689,6 @@ impl RecoveredLifecycleNextVoteBodyConsumePermitV1 {
         }
     }
 }
-
 /// Move-only exact validated-body owner authenticated by a production owner.
 ///
 /// Construction requires either the executor-private live permit or the body
@@ -4993,7 +4702,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyAuthorityV1 {
     validated: ValidatedBodyReceipt,
     body_store_identity: V2BodyStoreInstanceIdentity,
 }
-
 impl RecoveredLifecycleNextVoteBodyAuthorityV1 {
     /// Mint only after the exact production executor catalog join succeeds.
     pub(in crate::sumeragi) fn from_exact_executor(
@@ -5008,7 +4716,6 @@ impl RecoveredLifecycleNextVoteBodyAuthorityV1 {
             body_store_identity,
         })
     }
-
     /// Mint only after the cold body store rejoined its exact recovered catalogs.
     ///
     /// The non-clone permit is constructible only inside the body-store module;
@@ -5025,7 +4732,6 @@ impl RecoveredLifecycleNextVoteBodyAuthorityV1 {
             body_store_identity,
         })
     }
-
     fn consume_for_adapter(
         self,
         _permit: RecoveredLifecycleNextVoteBodyConsumePermitV1,
@@ -5045,7 +4751,6 @@ impl RecoveredLifecycleNextVoteBodyAuthorityV1 {
         }
         Ok(validated)
     }
-
     #[cfg(test)]
     fn for_test(
         lookup: RecoveredLifecycleNextVoteBodyLookupV1,
@@ -5058,7 +4763,6 @@ impl RecoveredLifecycleNextVoteBodyAuthorityV1 {
             body_store_identity,
         })
     }
-
     /// Compare the retained receipt/store owner without exposing either part.
     #[cfg(test)]
     pub(in crate::sumeragi) fn exactly_matches_for_test(
@@ -5069,7 +4773,6 @@ impl RecoveredLifecycleNextVoteBodyAuthorityV1 {
         self.validated == *validated && self.body_store_identity.same_instance(body_store_identity)
     }
 }
-
 /// Closed reducer successor shape produced by one exact recovered signature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -5081,7 +4784,6 @@ pub(in crate::sumeragi) enum RecoveredLifecycleSignAdapterSuccessorShapeV1 {
     /// A signed local Proposal emitted Broadcast plus a new Prepare-intent WAL write.
     ProposalPrepareWal,
 }
-
 /// Adapter-authenticated authority for projecting one recovered Broadcast child.
 ///
 /// Unlike the output projection, this value retains the adapter effect in its
@@ -5094,7 +4796,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastProjectionAuthorit
     dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
     broadcast: AdapterEffect,
 }
-
 /// Adapter-authenticated signed Proposal plus its exact canonical payload.
 ///
 /// The worker-restored payload cannot be exposed independently from the
@@ -5111,7 +4812,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleProposalExactOutputAuthorityV1 
     body_store_identity: V2BodyStoreInstanceIdentity,
     output_guard: Arc<super::output_guard::ConsensusOutputGuard>,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleProposalExactOutputAuthorityV1 {
     fn validated(
@@ -5142,7 +4842,6 @@ impl RecoveredLifecycleProposalExactOutputAuthorityV1 {
                 output_guard,
             })
     }
-
     /// Consume only through the production service's private permit.
     pub(in crate::sumeragi) fn consume_for_service(
         self,
@@ -5164,7 +4863,6 @@ impl RecoveredLifecycleProposalExactOutputAuthorityV1 {
             self.output_guard,
         )
     }
-
     /// Reconstitute the same opaque authority after a capacity-only retry cut.
     ///
     /// Only the service-private permit can invoke this path. The immutable
@@ -5191,7 +4889,6 @@ impl RecoveredLifecycleProposalExactOutputAuthorityV1 {
             output_guard,
         )
     }
-
     /// Build one exact authority for focused output-corridor behavior tests.
     #[cfg(test)]
     pub(in crate::sumeragi) fn for_test(
@@ -5214,7 +4911,6 @@ impl RecoveredLifecycleProposalExactOutputAuthorityV1 {
         )
     }
 }
-
 /// Adapter-authenticated combined successor of one recovered signature.
 ///
 /// The mandatory signed Broadcast remains paired with the reducer's exact
@@ -5228,7 +4924,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastAndSignAuthorityV1
     broadcast: AdapterEffect,
     next_sign: RecoveredLifecycleNextWalVoteSealV1,
 }
-
 /// WAL- and Ledger-authenticated input for replaying one fsynced `Signed` event.
 ///
 /// This authority is intentionally narrower than a worker completion: it has
@@ -5243,7 +4938,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignColdAdapterAuthorityV1 {
     signature: Vec<u8>,
     broadcast: AdapterEffect,
 }
-
 /// Comparison-only authority for advancing a cold adapter to the next Sign.
 ///
 /// The complete executable Broadcast-and-Sign projection remains owned by WAL
@@ -5254,7 +4948,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastAndSignColdAdapter
     broadcast: AdapterEffect,
     next_sign: AdapterEffect,
 }
-
 /// WAL-authenticated historical signature input for a cold two-child preview.
 ///
 /// This authority has no dispatch key or worker completion. WAL recovery is
@@ -5270,7 +4963,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastColdPreviewAutho
     signature: Vec<u8>,
     broadcast: AdapterEffect,
 }
-
 /// Unpublished cold replay of one historical signature's two exact children.
 ///
 /// The original adapter startup remains unmodified and owned by this value.
@@ -5289,7 +4981,6 @@ pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignedBroadcastAndSignC
     cold_proposal_output: Option<RecoveredLifecycleColdProposalOutputV1>,
     body_lookup_minted: bool,
 }
-
 /// Canonical Proposal payload retained for cold exact-output reconstruction.
 ///
 /// The value is minted only while the next Vote rejoins the same revalidated
@@ -5302,7 +4993,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleColdProposalOutputV1 {
     payload: super::v2_chunks::EncodedV2Payload,
     body_store_identity: V2BodyStoreInstanceIdentity,
 }
-
 /// Cold adapter/body seal awaiting the frame-bound WAL/Ledger join.
 ///
 /// The adapter startup is still at the historical pre-signature state. The
@@ -5317,7 +5007,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleSignedBroadcastAndSignColdSealV
     next_sign: RecoveredLifecycleNextWalVoteSealV1,
     cold_proposal_output: Option<RecoveredLifecycleColdProposalOutputV1>,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1 {
     /// Seal one exact historical Proposal or Prepare-vote signature.
@@ -5374,7 +5063,6 @@ impl RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1 {
         })
     }
 }
-
 impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
     /// Seal the exact two-child relation under WAL recovery's private permit.
     pub(in crate::sumeragi) fn from_recovered_wal(
@@ -5424,7 +5112,7 @@ impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
             wire::ConsensusMessageV2Payload::TimeoutVote(_)
             | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::ProposalManifest(_)
+            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -5439,7 +5127,6 @@ impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
         })
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleColdProposalOutputV1 {
     /// Build canonical output for focused service routing tests.
@@ -5453,7 +5140,6 @@ impl RecoveredLifecycleColdProposalOutputV1 {
             body_store_identity,
         }
     }
-
     /// Compare two sealed payload owners without exposing either constituent.
     pub(in crate::sumeragi) fn exactly_matches(&self, other: &Self) -> bool {
         self.payload == other.payload
@@ -5461,7 +5147,6 @@ impl RecoveredLifecycleColdProposalOutputV1 {
                 .body_store_identity
                 .same_instance(&other.body_store_identity)
     }
-
     /// Compare the retained payload with one exact signed Proposal Broadcast.
     pub(in crate::sumeragi) fn matches_broadcast(&self, broadcast: &AdapterEffect) -> bool {
         let AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
@@ -5473,7 +5158,6 @@ impl RecoveredLifecycleColdProposalOutputV1 {
         };
         self.payload.manifest() == &proposal.manifest
     }
-
     /// Release canonical output only to the production service's private permit.
     pub(in crate::sumeragi) fn consume_for_service(
         self,
@@ -5485,7 +5169,6 @@ impl RecoveredLifecycleColdProposalOutputV1 {
         (self.payload, self.body_store_identity)
     }
 }
-
 impl RecoveredLifecycleSignColdAdapterAuthorityV1 {
     /// Seal one exact Vote/Timeout signature under the WAL module's permit.
     pub(in crate::sumeragi) fn from_recovered_wal(
@@ -5528,7 +5211,6 @@ impl RecoveredLifecycleSignColdAdapterAuthorityV1 {
         })
     }
 }
-
 impl RecoveredLifecycleSignBroadcastProjectionAuthorityV1 {
     /// Consume the sealed effect only through the WAL carrier's private permit.
     pub(in crate::sumeragi) fn consume_for_recovered_wal(
@@ -5541,7 +5223,6 @@ impl RecoveredLifecycleSignBroadcastProjectionAuthorityV1 {
         (self.dispatch_key, self.broadcast)
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1 {
     /// Project the reducer-derived next-body lookup only to the exact body store.
@@ -5567,7 +5248,6 @@ impl PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1 {
         self.body_lookup_minted = true;
         Ok(lookup)
     }
-
     /// Retain canonical Proposal output only from the exact body-store join.
     ///
     /// Prepare-vote parents have no payload fanout and therefore deliberately
@@ -5599,7 +5279,6 @@ impl PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1 {
         });
         Ok(())
     }
-
     /// Bind the previewed next Vote to its exact WAL frame and validated body.
     ///
     /// Success retains the still-unmodified adapter startup beside the sealed
@@ -5666,7 +5345,6 @@ impl PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1 {
         })
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleSignedBroadcastAndSignColdSealV1 {
     /// Release the sealed startup and pair only to WAL recovery's private permit.
@@ -5687,7 +5365,6 @@ impl RecoveredLifecycleSignedBroadcastAndSignColdSealV1 {
         )
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleSignBroadcastAndSignAuthorityV1 {
     /// Consume the combined authority only through WAL recovery's one-shot permit.
@@ -5701,7 +5378,6 @@ impl RecoveredLifecycleSignBroadcastAndSignAuthorityV1 {
     ) {
         (self.dispatch_key, self.broadcast, self.next_sign)
     }
-
     /// Compare the complete combined projection in focused substitution tests.
     #[cfg(test)]
     fn exactly_matches_for_test(
@@ -5719,7 +5395,6 @@ impl RecoveredLifecycleSignBroadcastAndSignAuthorityV1 {
                 .exactly_matches(next_wal_identity, next_sign, validated)
     }
 }
-
 /// Borrow-bound preview of the recovered reducer's exact `Signed` transition.
 ///
 /// The reducer and wire registry are cloned. No WAL append, output fanout,
@@ -5750,7 +5425,6 @@ pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignAdapterCompletionV1
     next_fence_generation: u64,
     dispatch_key: super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1,
 }
-
 /// Preflighted continuation of the initial local Proposal `PrepareIntent`.
 ///
 /// This value is still pre-WAL: it owns only cloned reducer/registry-derived
@@ -5766,7 +5440,6 @@ struct PreparedRecoveredLifecycleProposalPrepareWalV1 {
     encoded_wal_payload: Vec<u8>,
     next_fence_generation: u64,
 }
-
 /// Exact post-append acknowledgement retained until LedgerV1 publication.
 ///
 /// The adapter keeps its persistence identifier armed while this value exists.
@@ -5777,7 +5450,6 @@ struct RecoveredLifecycleProposalPrepareWalContinuationV1 {
     sign_core_effect: reducer::Effect,
     persistence_id: u64,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
     /// Return the closed reducer successor class for fixed lifecycle projection.
@@ -5790,18 +5462,15 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             RecoveredLifecycleSignAdapterSuccessorShapeV1::Broadcast
         }
     }
-
     /// Borrow only the exact signed Broadcast for focused adapter tests.
     #[cfg(test)]
     pub(in crate::sumeragi) const fn broadcast_effect(&self) -> &AdapterEffect {
         &self.broadcast
     }
-
     /// Borrow the optional already-WAL-authorized follow-on Sign.
     pub(in crate::sumeragi) const fn next_sign_effect(&self) -> Option<&AdapterEffect> {
         self.next_sign.as_ref()
     }
-
     /// Return whether the unsealed successor is Prepare Broadcast then Commit Sign.
     ///
     /// This structural preflight deliberately does not require the affine
@@ -5842,12 +5511,10 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             && tag.height() == next.round.height
             && tag.view() >= next.round.view
     }
-
     /// Return whether the exact Prepare-Broadcast/Commit-Sign authority is sealed.
     pub(in crate::sumeragi) fn is_vote_broadcast_and_sign(&self) -> bool {
         self.combined_authority_minted && self.is_vote_broadcast_and_sign_shape()
     }
-
     /// Return whether Proposal output and both child projections are sealed.
     pub(in crate::sumeragi) fn is_authorized_proposal_broadcast_and_sign(&self) -> bool {
         if self.shape() != RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
@@ -5871,14 +5538,12 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         };
         !proposal.signature.is_empty() && payload.manifest() == &proposal.manifest
     }
-
     /// Return the dedicated worker/registry identity retained by the preview.
     pub(in crate::sumeragi) const fn dispatch_key(
         &self,
     ) -> super::v2_lifecycle_coordinator::RecoveredLifecycleSignDispatchKeyV1 {
         self.dispatch_key
     }
-
     /// Mint the sole adapter-authenticated WAL/registry projection authority.
     pub(in crate::sumeragi) fn project_registry_broadcast_authority(
         &self,
@@ -5888,7 +5553,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             broadcast: self.broadcast.clone(),
         }
     }
-
     /// Seal the signed Proposal and worker-restored payload for atomic output.
     ///
     /// This projection is affine but does not consume the adapter preview: the
@@ -5945,7 +5609,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             output_guard: Arc::clone(output_guard),
         })
     }
-
     fn broadcast_proposal_manifest_hash(
         &self,
     ) -> Result<Option<HashOf<wire::PayloadManifest>>, AdapterError> {
@@ -5958,7 +5621,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             _ => Err(AdapterError::RecoveredLifecycleSignCompletionMismatch),
         }
     }
-
     /// Preflight the initial Proposal's exact `PrepareIntent -> Sign(Prepare)` cut.
     ///
     /// The WAL payload and acknowledgement continuation are derived entirely
@@ -6081,7 +5743,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         });
         Ok(lookup)
     }
-
     /// Append and fsync the preflighted initial Proposal `PrepareIntent`.
     ///
     /// Success advances only this borrow-bound preview to its exact
@@ -6125,7 +5786,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }
-
         let PreparedRecoveredLifecycleProposalPrepareWalV1 {
             next_reducer,
             persisted_event,
@@ -6196,7 +5856,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             }
         };
         drop(persisted_sign);
-
         self.next_reducer = next_reducer;
         self.next_sign = Some(sign_effect);
         self.pending_prepare = None;
@@ -6212,7 +5871,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         ));
         Ok(())
     }
-
     /// Project an inert exact-body lookup for the reducer-produced next Vote.
     ///
     /// The production service must consume this lookup while exclusively
@@ -6244,7 +5902,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         self.next_vote_output_guard = Some(output_guard);
         Ok(lookup)
     }
-
     #[cfg(test)]
     fn project_broadcast_and_sign_body_lookup_for_test(
         &mut self,
@@ -6270,7 +5927,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         self.next_vote_output_guard = Some(output_guard);
         Ok(lookup)
     }
-
     /// Seal the exact Broadcast-and-Sign successor against WAL and body authority.
     ///
     /// Live settlement consumes this authority as one opaque two-child input;
@@ -6326,7 +5982,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             next_sign,
         })
     }
-
     /// Exercise fail-closed next-Sign substitution without exposing production parts.
     #[cfg(test)]
     fn project_broadcast_and_substituted_sign_for_test(
@@ -6363,7 +6018,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
             next_sign,
         })
     }
-
     /// Install an exact Broadcast-only reducer successor after LedgerV1 fsync.
     ///
     /// Follow-on Sign and Proposal-persistence shapes deliberately remain
@@ -6404,7 +6058,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         adapter.record_reducer_outcome(&event, reducer::StepDisposition::Applied, &core_effects);
         adapter.log_body_progress(&event, reducer::StepDisposition::Applied, effect_count);
     }
-
     /// Install an exact Proposal Broadcast-and-next-Sign reducer successor.
     ///
     /// Both affine projections must already have crossed their respective
@@ -6485,7 +6138,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         adapter.record_reducer_outcome(&event, reducer::StepDisposition::Applied, &core_effects);
         adapter.log_body_progress(&event, reducer::StepDisposition::Applied, effect_count);
     }
-
     /// Install an exact Prepare Broadcast-and-Commit-Sign reducer successor.
     ///
     /// Vote output remains owned by the durable Broadcast row and is refanned
@@ -6531,7 +6183,6 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         adapter.log_body_progress(&event, reducer::StepDisposition::Applied, effect_count);
     }
 }
-
 /// Borrow-bound adapter successor for one registry-owned recovered Apply.
 ///
 /// Preparation executes `ApplicationCompleted` only on cloned reducer and
@@ -6549,7 +6200,6 @@ pub(in crate::sumeragi) struct PreparedRecoveredDecisionApplyAdapterCompletionV1
     artifact: wire::finality::V2FinalityArtifact,
     committed_status: wire::SumeragiV2Status,
 }
-
 /// Post-Ledger finality values emitted only by the fixed adapter commit.
 #[must_use = "recovered Apply finality must be installed in the exact executor"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterFinalityV1 {
@@ -6559,7 +6209,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterFinalityV1 {
     artifact: wire::finality::V2FinalityArtifact,
     committed_status: wire::SumeragiV2Status,
 }
-
 impl RecoveredDecisionApplyAdapterFinalityV1 {
     /// Consume this terminal only for the exact executor-owned finality install.
     pub(in crate::sumeragi) fn consume_for_executor(
@@ -6581,7 +6230,6 @@ impl RecoveredDecisionApplyAdapterFinalityV1 {
         )
     }
 }
-
 /// Opaque projection failure retaining every staged input.
 #[must_use = "failed recovered Decision storage projection requires restart"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyStorageProjectionErrorV1 {
@@ -6589,7 +6237,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyStorageProjectionErrorV1 {
     _fetch: AuthenticatedRecoveredWalDecisionFetchProjection,
     _replay: super::v2_lifecycle_coordinator::RecoveredDecisionApplyReplayLineageV1,
 }
-
 /// One-shot proof that the fixed staged adapter still owns all body successors.
 ///
 /// Replay projection consumes this permit while effects and predecessor-derived
@@ -6597,13 +6244,10 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyStorageProjectionErrorV1 {
 pub(in crate::sumeragi) struct RecoveredDecisionApplyCandidateProjectionPermit {
     _linearity: RecoveredDecisionApplyCandidateProjectionLinearity,
 }
-
 struct RecoveredDecisionApplyCandidateProjectionLinearity;
-
 impl Drop for RecoveredDecisionApplyCandidateProjectionLinearity {
     fn drop(&mut self) {}
 }
-
 /// Opaque failure retaining the original, unstaged cold adapter.
 ///
 /// The caller receives only a stable diagnostic. A failed preview has no
@@ -6613,7 +6257,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterStagingError {
     error: AdapterError,
     _adapter: SumeragiV2Adapter,
 }
-
 struct RecoveredDecisionApplyAdapterRollback {
     reducer: reducer::Reducer,
     registry: WireRegistry,
@@ -6624,7 +6267,6 @@ struct RecoveredDecisionApplyAdapterRollback {
         wire::SumeragiV2ProgressTransition,
     )>,
 }
-
 impl RecoveredDecisionApplyAdapterRollback {
     fn restore(self, adapter: &mut SumeragiV2Adapter) {
         adapter.reducer = self.reducer;
@@ -6633,7 +6275,6 @@ impl RecoveredDecisionApplyAdapterRollback {
         adapter.last_progress = self.last_progress;
     }
 }
-
 impl RecoveredDecisionApplyAdapterStagingError {
     /// Retain the restored cold adapter without releasing a fallback surface.
     pub(in crate::sumeragi) fn retain(error: AdapterError, adapter: SumeragiV2Adapter) -> Self {
@@ -6642,13 +6283,11 @@ impl RecoveredDecisionApplyAdapterStagingError {
             _adapter: adapter,
         }
     }
-
     /// Borrow the non-authorizing adapter diagnostic.
     pub(in crate::sumeragi) const fn error(&self) -> &AdapterError {
         &self.error
     }
 }
-
 impl RecoveredDecisionApplyStagedAdapterV1 {
     /// Recheck the fixed effect shapes, derived pending lineage, and final state.
     pub(in crate::sumeragi) fn validates(&self) -> bool {
@@ -6698,7 +6337,6 @@ impl RecoveredDecisionApplyStagedAdapterV1 {
                 },
             )
     }
-
     /// Consume the fixed preview into one closed durable lineage.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn into_storage_projection(
@@ -6766,7 +6404,6 @@ impl RecoveredDecisionApplyStagedAdapterV1 {
         })
     }
 }
-
 impl RecoveredDecisionApplyStagedStorageV1 {
     /// Recheck the complete Fetch-to-Apply projection without releasing parts.
     pub(in crate::sumeragi) fn validates(&self, verified: &VerifiedHeightContext) -> bool {
@@ -6788,19 +6425,16 @@ impl RecoveredDecisionApplyStagedStorageV1 {
                         == self.validated_receipt.execution_commitment()
             )
     }
-
     /// Borrow the opaque logical lineage for fixed ledger and registry oracles.
     pub(in crate::sumeragi) const fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
         &self.lineage
     }
-
     /// Borrow the original exact Fetch only for its fixed ledger-row oracle.
     pub(in crate::sumeragi) const fn fetch(
         &self,
     ) -> &AuthenticatedRecoveredWalDecisionFetchProjection {
         &self.fetch
     }
-
     /// Consume the staged adapter into the sole dedicated registry carrier.
     ///
     /// Only the concrete work registry can mint the projection permit. Failure
@@ -6847,7 +6481,6 @@ impl RecoveredDecisionApplyStagedStorageV1 {
         ))
     }
 }
-
 impl RecoveredDecisionApplyRegistryCarrierV1 {
     fn exact_body_binding(&self) -> bool {
         self.lineage
@@ -6862,7 +6495,6 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
                         == self.validated_receipt.execution_commitment()
             )
     }
-
     /// Recheck the immutable WAL/body lineage and final effect binding.
     pub(in crate::sumeragi) fn validates(&self, verified: &VerifiedHeightContext) -> bool {
         let mut context = [0_u8; 32];
@@ -6872,22 +6504,18 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
             && self.fetch.owns_apply_lineage(verified, &self.lineage)
             && self.exact_body_binding()
     }
-
     /// Return the exact physical digest while it remains attached to the carrier.
     pub(in crate::sumeragi) fn installed_digest(&self) -> LifecycleDigest {
         LifecycleDigest::new(*self.apply_pending.exact_effect_identity().as_ref())
     }
-
     /// Return the immutable lifecycle context fixed by the verified projection.
     pub(in crate::sumeragi) const fn context(&self) -> LifecycleContext {
         self.context
     }
-
     /// Borrow the closed body lineage only for fixed recovery/record oracles.
     pub(in crate::sumeragi) const fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
         &self.lineage
     }
-
     /// Compare a reconstructed candidate with the sole retained live Apply.
     pub(in crate::sumeragi) fn exactly_matches_candidate(
         &self,
@@ -6895,7 +6523,6 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
     ) -> bool {
         self.exact_body_binding() && self.lineage.exactly_matches_apply_candidate(candidate)
     }
-
     /// Project one registry-minted dispatch identity into the dedicated worker task.
     ///
     /// The fixed projection revalidates every retained body/effect/pending
@@ -6927,7 +6554,6 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
             ),
         )
     }
-
     /// Bind one applied worker result back to this exact installed carrier.
     ///
     /// The registry-minted permit proves the active lease and in-flight key.
@@ -6976,7 +6602,6 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
         })
     }
 }
-
 impl PreparedRecoveredDecisionApplyAdapterCompletionV1<'_> {
     /// Install the already-checked reducer successor after durable settlement.
     ///
@@ -7015,7 +6640,6 @@ impl PreparedRecoveredDecisionApplyAdapterCompletionV1<'_> {
         }
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectValidationSucceededApply<'_> {
     /// Borrow the exact canonical application effect derived from the Decision.
@@ -7023,7 +6647,6 @@ impl PreparedDirectValidationSucceededApply<'_> {
         &self.apply_effect
     }
 }
-
 /// Borrow-bound applied validation which emits one exact safety-WAL request.
 ///
 /// The complete core `Persist` effect stays sealed here. In particular this
@@ -7039,7 +6662,6 @@ struct PreparedDirectValidationSucceededPersist<'a> {
     persist_effect: reducer::Effect,
     next_fence_generation: u64,
 }
-
 /// Closed classification of one direct successful deterministic validation.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -7057,7 +6679,6 @@ enum DirectValidationSucceededPreparation<'a> {
     /// Validation applied and emitted one exact safety-WAL effect.
     Persist(PreparedDirectValidationSucceededPersist<'a>),
 }
-
 // READY_DURABLE_VALIDATE_ADAPTER_PREVIEW_BEGIN
 /// Opaque adapter-owned half of one fixed Ready Validate preview join.
 ///
@@ -7069,7 +6690,6 @@ enum DirectValidationSucceededPreparation<'a> {
 pub(crate) struct SealedReadyDurableValidateAdapterPreview<'a>(
     ReadyDurableValidateAdapterPreviewKind<'a>,
 );
-
 /// Closed adapter classifications accepted by the fixed registry join.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[allow(dead_code)]
@@ -7093,7 +6713,6 @@ enum ReadyDurableValidateAdapterPreviewKind<'a> {
     /// Deterministic rejection prepared one exact invalid-body report.
     RejectedReport(PreparedDirectValidationFailedReport<'a>),
 }
-
 /// Closed publication shape retained after the adapter finishes every
 /// fallible, non-durable Ready Validate refinement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7118,7 +6737,6 @@ pub(crate) enum ReadyDurableValidateAdapterPublicationKind {
     /// Deterministic rejection prepared one exact invalid-body report.
     RejectedReport,
 }
-
 /// Opaque, drop-inert adapter publication preflight for one Ready Validate row.
 ///
 /// Every variant retains the exclusive adapter borrow and all staged state.
@@ -7129,7 +6747,6 @@ pub(crate) enum ReadyDurableValidateAdapterPublicationKind {
 pub(crate) struct PreparedReadyDurableValidateAdapterPublication<'a>(
     ReadyDurableValidateAdapterPublicationState<'a>,
 );
-
 /// Adapter-owned half of one closed invalid-body replay pre-admission cut.
 ///
 /// The rejected preview, report effect, derived child binding, and canonical
@@ -7143,7 +6760,6 @@ pub(in crate::sumeragi) struct PreparedInvalidBodyReportAdapterReplay<'a> {
     child_pending: PendingRuntimeEffectBinding,
     replay_evidence: InvalidBodyReportReplayEvidenceV1,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
     /// Return only the exact closed publication discriminator.
@@ -7178,7 +6794,6 @@ impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
             }
         }
     }
-
     /// Return whether this preflight retains the supplied exact emitted child.
     ///
     /// No effect bytes or staged adapter state escape this equality oracle.
@@ -7203,7 +6818,6 @@ impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
         }
     }
 }
-
 impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
     /// Consume only the exact rejected-report branch into canonical replay evidence.
     ///
@@ -7274,7 +6888,6 @@ impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
         Ok(sealed)
     }
 }
-
 impl PreparedInvalidBodyReportAdapterReplay<'_> {
     /// Compare the complete adapter report and canonical replay envelope with
     /// one already-retained Validate origin without exposing either side.
@@ -7311,7 +6924,6 @@ impl PreparedInvalidBodyReportAdapterReplay<'_> {
                 &self.child_pending,
             )
     }
-
     /// Project the exact report candidate while this adapter half remains
     /// nested under its registry-owned replay token.
     ///
@@ -7340,7 +6952,6 @@ impl PreparedInvalidBodyReportAdapterReplay<'_> {
             )
     }
 }
-
 /// Private retained authority for every prepared publication branch.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[allow(dead_code)]
@@ -7355,7 +6966,6 @@ enum ReadyDurableValidateAdapterPublicationState<'a> {
     RejectedNoEffect(PreparedDirectValidationFailedNoEffect<'a>),
     RejectedReport(PreparedDirectValidationFailedReport<'a>),
 }
-
 /// Purely preflighted `Persist -> Persisted -> Sign` branch.
 ///
 /// The encoded payload is retained but unappended. The reducer and registry are
@@ -7376,7 +6986,6 @@ struct PreparedReadyDurableValidatePersistPublication<'a> {
     registered_prepare: Option<RegisteredPrepareValidateSignCapability>,
     next_fence_generation: u64,
 }
-
 // READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN
 /// Pre-WAL Ready-Validate vote publication bound to the exact installed
 /// Validate predecessor without exposing either pending binding.
@@ -7386,7 +6995,6 @@ pub(in crate::sumeragi) struct PreparedReadyDurableValidateBoundSignPublication<
     prepared: PreparedReadyDurableValidatePersistPublication<'a>,
     child_pending: PendingRuntimeEffectBinding,
 }
-
 /// Post-fsync Ready-Validate vote authority.
 ///
 /// The reducer, registry, and fence remain staged until the lifecycle-ledger
@@ -7410,7 +7018,6 @@ pub(in crate::sumeragi) struct PreparedReadyDurableValidatePersistedSign<'a> {
     next_fence_generation: u64,
     armed: bool,
 }
-
 /// Opaque ownership-retaining failure from the real live-WAL Sign append.
 ///
 /// A pre-WAL contract mismatch retains the complete bound token. Any append
@@ -7421,7 +7028,6 @@ pub(in crate::sumeragi) struct PreparedReadyDurableValidatePersistedSign<'a> {
 pub(in crate::sumeragi) struct ReadyDurableValidateSignWalError<'a> {
     failure: ReadyDurableValidateSignWalFailure<'a>,
 }
-
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[allow(dead_code)]
 enum ReadyDurableValidateSignWalFailure<'a> {
@@ -7433,7 +7039,6 @@ enum ReadyDurableValidateSignWalFailure<'a> {
         _error: AdapterError,
     },
 }
-
 impl Drop for PreparedReadyDurableValidatePersistedSign<'_> {
     fn drop(&mut self) {
         if self.armed {
@@ -7441,7 +7046,6 @@ impl Drop for PreparedReadyDurableValidatePersistedSign<'_> {
         }
     }
 }
-
 impl PreparedReadyDurableValidatePersistedSign<'_> {
     fn post_wal_publication_is_exact(&self) -> bool {
         let (
@@ -7511,7 +7115,6 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
             && next_reducer.pending_persistence_record().is_none()
             && next_reducer.awaiting_signature() == Some(message)
     }
-
     /// Project the already-authorized post-WAL child without repeating pending
     /// refinement or exposing effect/replay parts.
     pub(in crate::sumeragi) fn project_validate_sign_candidate(
@@ -7527,7 +7130,6 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
             .expect("exact post-WAL publication retains its Sign seal")
             .project_sealed_validate_sign_candidate(permit, verified)
     }
-
     /// Consume the nested Sign seal into one closed ordinary registry carrier.
     ///
     /// Failure returns the complete armed token. Success still publishes
@@ -7556,7 +7158,6 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
             }
         }
     }
-
     /// Match the closed prepared work against the staged coordinator digest.
     pub(in crate::sumeragi) fn registry_work_matches(
         &self,
@@ -7572,7 +7173,6 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
                 .as_ref()
                 .is_some_and(|work| work.validates_publication(owner, ordinal, slot, digest))
     }
-
     /// Publish the prechecked registry child and staged adapter state after
     /// exact LedgerV1 fsync.
     ///
@@ -7615,7 +7215,6 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
             .sign_core_effect
             .take()
             .expect("pre-fsync publication retains its Sign effect");
-
         work.install_into(reservation);
         self.adapter.reducer = next_reducer;
         self.adapter.registry = next_registry;
@@ -7637,7 +7236,6 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
         super::status::set_v2_status(committed_status);
     }
 }
-
 impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
     /// Bind only a `ValidatedPersist` branch to the registry-minted exact
     /// Validate predecessor. A wrong branch or failed refinement returns this
@@ -7660,7 +7258,6 @@ impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
         }
     }
 }
-
 impl<'a> PreparedReadyDurableValidatePersistPublication<'a> {
     fn bind_validate_sign_predecessor(
         self,
@@ -7680,7 +7277,6 @@ impl<'a> PreparedReadyDurableValidatePersistPublication<'a> {
         })
     }
 }
-
 #[allow(dead_code)]
 impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
     fn pre_wal_is_exact(&self) -> bool {
@@ -7709,7 +7305,6 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
                 })
             && prepared.expected_wal_sequence.checked_add(1) == Some(entry.id().get())
     }
-
     /// Append and fsync the exact pre-encoded WAL payload, then mint the live
     /// frame identity solely from the returned receipt and retained frame.
     #[allow(clippy::result_large_err, clippy::too_many_lines)]
@@ -7817,7 +7412,6 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
             }
         };
         debug_assert!(persisted_sign.exactly_binds_validate_sign_pending());
-
         // Build the exact post-commit status before LifecycleLedgerV1 can
         // advance. Temporarily installing the already-preflighted reducer and
         // registry is publication-inert: the old adapter state and armed WAL
@@ -7870,14 +7464,12 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
         })
     }
 }
-
 impl PreparedReadyDurableValidatePersistPublication<'_> {
     fn child_pending_is_exact(&self, pending: &PendingRuntimeEffectBinding) -> bool {
         pending.exactly_binds_adapter_effect(&self.sign_effect)
     }
 }
 // READY_DURABLE_VALIDATE_LIVE_SIGN_END
-
 impl<'a> SealedReadyDurableValidateAdapterPreview<'a> {
     /// Consume the sealed preview into a fully checked, still-inert publication.
     ///
@@ -7921,7 +7513,6 @@ impl<'a> SealedReadyDurableValidateAdapterPreview<'a> {
         Ok(PreparedReadyDurableValidateAdapterPublication(state))
     }
 }
-
 impl<'a> PreparedDirectValidationSucceededPersist<'a> {
     fn preflight_publication(
         self,
@@ -7955,7 +7546,6 @@ impl<'a> PreparedDirectValidationSucceededPersist<'a> {
         if next_reducer.pending_persistence_record() != Some(entry.record()) {
             return Err(AdapterError::ReadyDurableValidatePublicationContractViolation);
         }
-
         let expected_wal_sequence = match adapter.wal.recovered_records().last() {
             Some(record) => record
                 .sequence()
@@ -7968,7 +7558,6 @@ impl<'a> PreparedDirectValidationSucceededPersist<'a> {
         }
         let encoded_wal_payload =
             next_registry.encode_wal_entry(&entry, adapter.aggregator.as_ref())?;
-
         let pre_ack_fence = ReducerFenceProjection {
             pending_persistence: next_reducer.pending_persistence_record().cloned(),
             awaiting_signature: next_reducer.awaiting_signature().cloned(),
@@ -8030,7 +7619,6 @@ impl<'a> PreparedDirectValidationSucceededPersist<'a> {
                 .filter(|next| *next != u64::MAX)
                 .ok_or(AdapterError::ReducerFenceGenerationExhausted)?
         };
-
         Ok(PreparedReadyDurableValidatePersistPublication {
             _adapter: adapter,
             next_reducer,
@@ -8048,13 +7636,11 @@ impl<'a> PreparedDirectValidationSucceededPersist<'a> {
     }
 }
 // READY_DURABLE_VALIDATE_ADAPTER_PREVIEW_END
-
 /// Post-finality cleanup result for a reducer height already durable in Kura.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FinalizedV2Height {
     wal_retirement_warning: Option<String>,
 }
-
 impl FinalizedV2Height {
     /// Cleanup diagnostic after Kura already made the decision durable.
     ///
@@ -8065,27 +7651,23 @@ impl FinalizedV2Height {
         self.wal_retirement_warning.as_deref()
     }
 }
-
 /// Canonical consensus input whose structure and cryptography were verified.
 ///
 /// The tuple field is private so networking code cannot manufacture the token
 /// without passing [`SumeragiV2Adapter::authenticate`].
 #[derive(Clone)]
 pub(crate) struct AuthenticatedConsensusMessage(wire::ConsensusMessageV2);
-
 impl AuthenticatedConsensusMessage {
     /// Borrow the cryptographically authenticated consensus payload.
     pub(crate) const fn payload(&self) -> &wire::ConsensusMessageV2Payload {
         &self.0.payload
     }
-
     /// Borrow the complete authenticated envelope for exact process-local
     /// ownership association. The private constructor remains the only way to
     /// mint this token.
     pub(crate) const fn wire_envelope(&self) -> &wire::ConsensusMessageV2 {
         &self.0
     }
-
     /// Return whether two authenticated tokens contain the exact same
     /// deterministic wire envelope.
     ///
@@ -8095,7 +7677,6 @@ impl AuthenticatedConsensusMessage {
     pub(crate) fn same_wire_envelope(&self, other: &Self) -> bool {
         self.0 == other.0
     }
-
     /// Return whether this authenticated token contains the supplied exact
     /// deterministic wire envelope.
     ///
@@ -8106,26 +7687,22 @@ impl AuthenticatedConsensusMessage {
     pub(crate) fn matches_wire_envelope(&self, message: &wire::ConsensusMessageV2) -> bool {
         self.0 == *message
     }
-
     /// Canonical bytes of the exact authenticated envelope retained by this
     /// process-local token.
     pub(crate) fn canonical_wire_bytes(&self) -> Vec<u8> {
         self.0.encode()
     }
-
     /// Clone the exact authenticated envelope for fair-ingress unit fixtures.
     #[cfg(test)]
     pub(crate) fn wire_envelope_for_test(&self) -> wire::ConsensusMessageV2 {
         self.0.clone()
     }
-
     /// Construct an authenticated token for scheduling-boundary unit tests.
     #[cfg(test)]
     pub(crate) fn for_test(message: wire::ConsensusMessageV2) -> Self {
         Self(message)
     }
 }
-
 /// Full trusted evidence retained while a body-pipeline completion waits in
 /// the adapter's Busy-deferred lane.
 ///
@@ -8161,7 +7738,6 @@ pub(crate) enum BodyPipelineCompletionEvidence {
         subject: wire::BlockSubject,
     },
 }
-
 /// Decision-time disposition for one exact local-proposal completion owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DecisionLocalProposalDisposition {
@@ -8172,7 +7748,6 @@ pub(crate) enum DecisionLocalProposalDisposition {
     /// The queued trusted evidence conflicts with the installed Decision.
     Conflict,
 }
-
 /// Classify one queued local-proposal completion against a durable Decision.
 ///
 /// `None` means the completion does not belong to the selected durable body.
@@ -8214,7 +7789,6 @@ pub(crate) fn classify_decided_local_proposal(
         },
     )
 }
-
 #[derive(Clone, Debug)]
 struct DeferredInput {
     admission_ordinal: u128,
@@ -8229,11 +7803,9 @@ struct DeferredInput {
     admitted_at: Instant,
     eligible_skips: u64,
 }
-
 struct DeferPolicyOutcome {
     outcome: AdapterOutcome,
 }
-
 impl PartialEq for DeferredInput {
     fn eq(&self, other: &Self) -> bool {
         self.event == other.event
@@ -8244,9 +7816,7 @@ impl PartialEq for DeferredInput {
             && self.authenticated_wire_identity == other.authenticated_wire_identity
     }
 }
-
 impl Eq for DeferredInput {}
-
 /// Actor-owned source of process-local deferred admission ordinals.
 ///
 /// The source is deliberately shared across height adapters. Replacing an
@@ -8258,12 +7828,10 @@ pub(crate) struct DeferredAdmissionOrdinalSource {
     state: Arc<Mutex<DeferredAdmissionOrdinalState>>,
     identity: Arc<()>,
 }
-
 #[derive(Debug)]
 struct DeferredAdmissionOrdinalState {
     next: u128,
 }
-
 impl DeferredAdmissionOrdinalSource {
     /// Construct an actor-global source whose first successful admission uses
     /// `first`.
@@ -8277,7 +7845,6 @@ impl DeferredAdmissionOrdinalSource {
             identity: Arc::new(()),
         }
     }
-
     fn mint(
         &self,
         origin: DeferredAdmissionOrigin,
@@ -8306,7 +7873,6 @@ impl DeferredAdmissionOrdinalSource {
             unbound_fixture: false,
         })
     }
-
     #[cfg(test)]
     fn next_for_test(&self) -> u128 {
         self.state
@@ -8315,13 +7881,11 @@ impl DeferredAdmissionOrdinalSource {
             .next
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeferredAdmissionOrigin {
     LocalOrCausal,
     DirectAuthenticated,
 }
-
 impl DeferredAdmissionOrigin {
     const fn code(self) -> u8 {
         match self {
@@ -8329,12 +7893,10 @@ impl DeferredAdmissionOrigin {
             Self::DirectAuthenticated => 1,
         }
     }
-
     const fn is_authenticated(self) -> bool {
         matches!(self, Self::DirectAuthenticated)
     }
 }
-
 /// Runtime-owned fields frozen when one Busy occurrence crosses the adapter
 /// boundary.
 ///
@@ -8350,7 +7912,6 @@ struct DeferredRuntimeOwnershipBinding {
     source_physical_ordinal: Option<u64>,
     physical_cut: u128,
 }
-
 impl DeferredRuntimeOwnershipBinding {
     fn validate_exact(&self) -> bool {
         self.initial_lifecycle_ordinal != 0
@@ -8360,7 +7921,6 @@ impl DeferredRuntimeOwnershipBinding {
                 .is_none_or(|source| u128::from(source) < self.physical_cut)
     }
 }
-
 #[derive(Clone, Debug)]
 struct DeferredAdmissionCapability {
     ordinal: u128,
@@ -8372,7 +7932,6 @@ struct DeferredAdmissionCapability {
     #[cfg(test)]
     unbound_fixture: bool,
 }
-
 impl PartialEq for DeferredAdmissionCapability {
     fn eq(&self, other: &Self) -> bool {
         self.ordinal == other.ordinal
@@ -8399,9 +7958,7 @@ impl PartialEq for DeferredAdmissionCapability {
             }
     }
 }
-
 impl Eq for DeferredAdmissionCapability {}
-
 impl DeferredAdmissionCapability {
     fn pending() -> Self {
         Self {
@@ -8415,7 +7972,6 @@ impl DeferredAdmissionCapability {
             unbound_fixture: false,
         }
     }
-
     #[cfg(test)]
     fn for_test(ordinal: u128) -> Self {
         Self {
@@ -8428,39 +7984,32 @@ impl DeferredAdmissionCapability {
             unbound_fixture: true,
         }
     }
-
     #[cfg(test)]
     fn for_authenticated_test(ordinal: u128) -> Self {
         let mut capability = Self::for_test(ordinal);
         capability.origin = DeferredAdmissionOrigin::DirectAuthenticated;
         capability
     }
-
     fn claim_adapter_service_once(&self) -> bool {
         self.adapter_service_claimed
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
-
     fn adapter_service_is_claimed(&self) -> bool {
         self.adapter_service_claimed.load(Ordering::Acquire)
     }
-
     fn claim_runtime_handoff_once(&self) -> bool {
         self.runtime_handoff_claimed
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
-
     fn runtime_handoff_is_claimed(&self) -> bool {
         self.runtime_handoff_claimed.load(Ordering::Acquire)
     }
-
     fn runtime_ownership_seal(&self) -> Option<DeferredRuntimeOwnershipSeal> {
         DeferredRuntimeOwnershipSeal::from_capability(self)
     }
 }
-
 /// Opaque adapter-issued seal for the runtime owner attached to one Busy
 /// occurrence.
 ///
@@ -8480,7 +8029,6 @@ pub(crate) struct DeferredRuntimeOwnershipSeal {
     #[cfg(test)]
     unbound_fixture: bool,
 }
-
 impl PartialEq for DeferredRuntimeOwnershipSeal {
     fn eq(&self, other: &Self) -> bool {
         self.admission_ordinal == other.admission_ordinal
@@ -8508,9 +8056,7 @@ impl PartialEq for DeferredRuntimeOwnershipSeal {
             }
     }
 }
-
 impl Eq for DeferredRuntimeOwnershipSeal {}
-
 impl DeferredRuntimeOwnershipSeal {
     fn from_capability(capability: &DeferredAdmissionCapability) -> Option<Self> {
         let binding = capability.runtime_ownership.clone()?;
@@ -8528,7 +8074,6 @@ impl DeferredRuntimeOwnershipSeal {
         seal.projection_hash = deferred_runtime_ownership_seal_projection_hash(&seal);
         seal.validate_identity().then_some(seal)
     }
-
     fn matches_capability(&self, capability: &DeferredAdmissionCapability) -> bool {
         self.validate_identity()
             && self.admission_ordinal == capability.ordinal
@@ -8554,7 +8099,6 @@ impl DeferredRuntimeOwnershipSeal {
                 }
             }
     }
-
     /// Validate immutable capability identity independently of mutable claim
     /// state.
     pub(crate) fn validate_identity(&self) -> bool {
@@ -8562,14 +8106,12 @@ impl DeferredRuntimeOwnershipSeal {
             && self.origin.is_authenticated() == self.binding.authenticated_ingress
             && self.projection_hash == deferred_runtime_ownership_seal_projection_hash(self)
     }
-
     /// Whether the exact Busy occurrence remains retained and unclaimed.
     pub(crate) fn still_retained(&self) -> bool {
         self.validate_identity()
             && !self.adapter_service_claimed.load(Ordering::Acquire)
             && !self.runtime_handoff_claimed.load(Ordering::Acquire)
     }
-
     /// Whether this seal came from the runtime actor's exact deferred ordinal
     /// source rather than a same-number foreign capability.
     pub(crate) fn belongs_to(&self, source: &DeferredAdmissionOrdinalSource) -> bool {
@@ -8583,7 +8125,6 @@ impl DeferredRuntimeOwnershipSeal {
             exact
         }
     }
-
     /// Match the immutable runtime fields carried by a deferred wrapper.
     pub(crate) fn matches_runtime_owner(
         &self,
@@ -8604,22 +8145,18 @@ impl DeferredRuntimeOwnershipSeal {
                 lifecycle_ordinal == self.binding.initial_lifecycle_ordinal
             }
     }
-
     /// Actor-global adapter ordinal sealed into this exact capability.
     pub(crate) const fn admission_ordinal(&self) -> u128 {
         self.admission_ordinal
     }
-
     /// Logical owner at the instant the adapter admitted this Busy occurrence.
     pub(crate) const fn initial_lifecycle_ordinal(&self) -> u128 {
         self.binding.initial_lifecycle_ordinal
     }
-
     /// Process-local integrity projection used by enclosing scheduler evidence.
     pub(crate) const fn projection_hash(&self) -> &Hash {
         &self.projection_hash
     }
-
     /// Construct a capability-consistent seal for scheduler-shell tests which
     /// do not instantiate the production adapter.
     #[cfg(test)]
@@ -8647,7 +8184,6 @@ impl DeferredRuntimeOwnershipSeal {
             .runtime_ownership_seal()
             .expect("test runtime ownership binding is exact")
     }
-
     /// Construct a seal from a real, independently owned ordinal source so
     /// runtime tests can distinguish same-number foreign capabilities from the
     /// deliberate unbound fake-driver fixture above.
@@ -8680,7 +8216,6 @@ impl DeferredRuntimeOwnershipSeal {
             .expect("foreign test runtime ownership binding is exact")
     }
 }
-
 fn deferred_runtime_ownership_seal_projection_hash(seal: &DeferredRuntimeOwnershipSeal) -> Hash {
     let mut projection = Vec::new();
     projection.extend_from_slice(b"iroha:sumeragi:v2:deferred-runtime-owner:v1");
@@ -8706,7 +8241,6 @@ fn deferred_runtime_ownership_seal_projection_hash(seal: &DeferredRuntimeOwnersh
     projection.push(u8::from(seal.unbound_fixture));
     Hash::new(projection)
 }
-
 /// Immutable adapter-issued identity of one still-retained Busy occurrence.
 ///
 /// Unlike a service token, this snapshot does not claim or remove the owner.
@@ -8721,7 +8255,6 @@ pub(crate) struct DeferredOccurrenceOwnershipEvidence {
     admission_capability: DeferredAdmissionCapability,
     projection_hash: Hash,
 }
-
 impl DeferredOccurrenceOwnershipEvidence {
     fn from_input(input: &DeferredInput, source: &DeferredAdmissionOrdinalSource) -> Option<Self> {
         let source_is_exact = Arc::ptr_eq(
@@ -8757,7 +8290,6 @@ impl DeferredOccurrenceOwnershipEvidence {
         evidence.projection_hash = deferred_occurrence_ownership_projection_hash(&evidence);
         evidence.validate_exact().then_some(evidence)
     }
-
     /// Mint one exact local/causal Busy capability and its matching runtime
     /// seal for serialized-runtime boundary tests.
     #[cfg(test)]
@@ -8791,7 +8323,6 @@ impl DeferredOccurrenceOwnershipEvidence {
         assert!(evidence.validate_exact());
         (evidence, runtime_seal)
     }
-
     /// Validate the private actor capability and immutable provenance bit.
     pub(crate) fn validate_exact(&self) -> bool {
         self.admission_capability.ordinal == self.admission_ordinal
@@ -8807,7 +8338,6 @@ impl DeferredOccurrenceOwnershipEvidence {
             )
             && self.projection_hash == deferred_occurrence_ownership_projection_hash(self)
     }
-
     /// Whether the underlying occurrence remains retained and neither service
     /// seam has claimed it yet.
     pub(crate) fn still_retained(&self) -> bool {
@@ -8815,22 +8345,18 @@ impl DeferredOccurrenceOwnershipEvidence {
             && !self.admission_capability.adapter_service_is_claimed()
             && !self.admission_capability.runtime_handoff_is_claimed()
     }
-
     /// Adapter-global Busy admission ordinal owned by this snapshot.
     pub(crate) const fn admission_ordinal(&self) -> u128 {
         self.admission_ordinal
     }
-
     /// Whether the occurrence itself directly carried authenticated ingress.
     pub(crate) const fn is_authenticated_ingress(&self) -> bool {
         self.authenticated_ingress
     }
-
     /// Process-local integrity projection consumed by runtime evidence.
     pub(crate) const fn projection_hash(&self) -> &Hash {
         &self.projection_hash
     }
-
     /// Bind a live occurrence snapshot to a previously retained runtime seal.
     pub(crate) fn matches_runtime_ownership_seal(
         &self,
@@ -8838,7 +8364,6 @@ impl DeferredOccurrenceOwnershipEvidence {
     ) -> bool {
         self.validate_exact() && seal.matches_capability(&self.admission_capability)
     }
-
     /// Live-map form of [`Self::matches_runtime_ownership_seal`].
     pub(crate) fn matches_retained_runtime_ownership_seal(
         &self,
@@ -8846,14 +8371,12 @@ impl DeferredOccurrenceOwnershipEvidence {
     ) -> bool {
         self.still_retained() && seal.still_retained() && self.matches_runtime_ownership_seal(seal)
     }
-
     /// Whether this occurrence was minted by the supplied actor-owned source.
     pub(crate) fn belongs_to(&self, source: &DeferredAdmissionOrdinalSource) -> bool {
         self.validate_exact()
             && Arc::ptr_eq(&self.admission_capability.source_identity, &source.identity)
     }
 }
-
 fn deferred_occurrence_ownership_projection_hash(
     evidence: &DeferredOccurrenceOwnershipEvidence,
 ) -> Hash {
@@ -8880,7 +8403,6 @@ fn deferred_occurrence_ownership_projection_hash(
     }
     Hash::new(projection)
 }
-
 /// Three bounded classes in the adapter-owned Busy-deferred lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeferredPriority {
@@ -8893,7 +8415,6 @@ pub(crate) enum DeferredPriority {
     /// Proposals and individual control votes.
     Normal,
 }
-
 impl DeferredPriority {
     const fn code(self) -> u8 {
         match self {
@@ -8903,7 +8424,6 @@ impl DeferredPriority {
         }
     }
 }
-
 /// Typed reducer-event discriminant retained by a deferred service token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeferredEventKind {
@@ -8940,7 +8460,6 @@ pub(crate) enum DeferredEventKind {
     /// Local application completion.
     ApplicationCompleted,
 }
-
 impl DeferredEventKind {
     const fn code(self) -> u8 {
         match self {
@@ -8963,7 +8482,6 @@ impl DeferredEventKind {
         }
     }
 }
-
 /// Exact local retagging relation for one selected deferred occurrence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeferredRetagRelation {
@@ -8977,7 +8495,6 @@ pub(crate) enum DeferredRetagRelation {
         to: reducer::EventTag,
     },
 }
-
 /// Per-class deferred queue lengths around one exact service selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DeferredQueueLengths {
@@ -8988,19 +8505,16 @@ pub(crate) struct DeferredQueueLengths {
     /// Normal-lane owners.
     pub(crate) normal: u64,
 }
-
 impl DeferredQueueLengths {
     fn total(self) -> u64 {
         self.checked_total()
             .expect("bounded deferred queue totals fit u64")
     }
-
     fn checked_total(self) -> Option<u64> {
         self.completion
             .checked_add(self.progress)?
             .checked_add(self.normal)
     }
-
     const fn for_priority(self, priority: DeferredPriority) -> u64 {
         match priority {
             DeferredPriority::Completion => self.completion,
@@ -9009,7 +8523,6 @@ impl DeferredQueueLengths {
         }
     }
 }
-
 /// Adapter-private authority for one exact Busy-deferred queue removal.
 ///
 /// Public length/cursor projections are useful for rank checking, but a
@@ -9034,7 +8547,6 @@ struct DeferredQueueSelectionSeal {
     selected_evidence_hash: Hash,
     projection_hash: Hash,
 }
-
 impl PartialEq for DeferredQueueSelectionSeal {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.source_identity, &other.source_identity)
@@ -9056,9 +8568,7 @@ impl PartialEq for DeferredQueueSelectionSeal {
             && self.projection_hash == other.projection_hash
     }
 }
-
 impl Eq for DeferredQueueSelectionSeal {}
-
 fn deferred_queue_selection_projection_hash(seal: &DeferredQueueSelectionSeal) -> Hash {
     let mut projection = Vec::new();
     projection.extend_from_slice(b"iroha:sumeragi:v2:deferred-queue-selection:v1");
@@ -9094,7 +8604,6 @@ fn deferred_queue_selection_projection_hash(seal: &DeferredQueueSelectionSeal) -
     append_deferred_projection_field(&mut projection, seal.selected_evidence_hash.as_ref());
     Hash::new(projection)
 }
-
 impl DeferredQueueSelectionSeal {
     #[allow(clippy::too_many_arguments)]
     fn mint(
@@ -9130,7 +8639,6 @@ impl DeferredQueueSelectionSeal {
         seal.projection_hash = deferred_queue_selection_projection_hash(&seal);
         seal.validate_identity().then_some(seal)
     }
-
     fn validate_identity(&self) -> bool {
         let eligible_count = self
             .eligible_queue_lengths_before
@@ -9167,7 +8675,6 @@ impl DeferredQueueSelectionSeal {
                     == self.queue_lengths_after.for_priority(priority)
             })
     }
-
     fn matches_evidence(&self, evidence: &DeferredServiceEvidence) -> bool {
         let source_is_exact = Arc::ptr_eq(
             &self.source_identity,
@@ -9195,7 +8702,6 @@ impl DeferredQueueSelectionSeal {
             && self.selected_evidence_hash == evidence.projection_hash
             && self.selected_evidence_hash == deferred_service_projection_hash(evidence)
     }
-
     fn matches_eligible_admission_ordinals(&self, eligible: &BTreeSet<u128>) -> bool {
         self.validate_identity()
             && self.eligible_admission_ordinals.len() == eligible.len()
@@ -9205,7 +8711,6 @@ impl DeferredQueueSelectionSeal {
                 .copied()
                 .eq(eligible.iter().copied())
     }
-
     fn claim_adapter_selection_once(&self) -> bool {
         self.validate_identity()
             && self
@@ -9213,12 +8718,10 @@ impl DeferredQueueSelectionSeal {
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
     }
-
     fn adapter_selection_is_claimed(&self) -> bool {
         self.adapter_selection_claimed.load(Ordering::Acquire)
     }
 }
-
 /// Exact process-local owner discharged by one Busy-deferred service turn.
 ///
 /// The full typed events remain process-local and make semantic identity
@@ -9272,7 +8775,6 @@ pub(crate) struct DeferredServiceEvidence {
     admission_capability: DeferredAdmissionCapability,
     selection_seal: Option<DeferredQueueSelectionSeal>,
 }
-
 impl DeferredServiceEvidence {
     /// Construct one internally consistent Completion-lane token for scheduler
     /// shell tests which use a fake driver rather than a real adapter.
@@ -9357,7 +8859,6 @@ impl DeferredServiceEvidence {
         assert!(evidence.validate_exact());
         evidence
     }
-
     /// Return whether every redundant field and rank transition still matches
     /// the exact selected occurrence.
     pub(crate) fn validate_exact(&self) -> bool {
@@ -9492,12 +8993,10 @@ impl DeferredServiceEvidence {
         };
         retag_is_exact && self.projection_hash == deferred_service_projection_hash(self)
     }
-
     /// Return whether this token owns the supplied exact reducer event.
     pub(crate) fn matches_effective_event(&self, event: &reducer::Event) -> bool {
         self.validate_exact() && self.effective_event == *event
     }
-
     /// Return whether the adapter claimed this owner before reducer dispatch.
     pub(crate) fn adapter_service_is_claimed(&self) -> bool {
         self.admission_capability.adapter_service_is_claimed()
@@ -9506,7 +9005,6 @@ impl DeferredServiceEvidence {
                 .as_ref()
                 .is_some_and(DeferredQueueSelectionSeal::adapter_selection_is_claimed)
     }
-
     /// Match the complete target-relative ordinal set supplied by the
     /// serialized runtime before accepting this adapter selection.
     pub(crate) fn matches_eligible_admission_ordinals(&self, eligible: &BTreeSet<u128>) -> bool {
@@ -9516,7 +9014,6 @@ impl DeferredServiceEvidence {
                 .as_ref()
                 .is_some_and(|seal| seal.matches_eligible_admission_ordinals(eligible))
     }
-
     fn claim_adapter_service_once(&self) -> bool {
         self.validate_exact()
             && self
@@ -9525,7 +9022,6 @@ impl DeferredServiceEvidence {
                 .is_some_and(DeferredQueueSelectionSeal::claim_adapter_selection_once)
             && self.admission_capability.claim_adapter_service_once()
     }
-
     /// Atomically consume the adapter-to-runtime handoff once. Cloned or
     /// replayed tokens retain the same process-local capability and fail after
     /// the first successful claim.
@@ -9534,12 +9030,10 @@ impl DeferredServiceEvidence {
             && self.adapter_service_is_claimed()
             && self.admission_capability.claim_runtime_handoff_once()
     }
-
     /// Return whether both production seams consumed this exact occurrence.
     pub(crate) fn service_handoff_is_complete(&self) -> bool {
         self.adapter_service_is_claimed() && self.admission_capability.runtime_handoff_is_claimed()
     }
-
     /// Whether this deferred occurrence originated at authenticated network
     /// ingress and therefore requires the runtime's matching fair-ingress
     /// carrier until service completes.
@@ -9549,7 +9043,6 @@ impl DeferredServiceEvidence {
             DeferredRetagRelation::AuthenticatedIngress { .. }
         )
     }
-
     /// Whether this token retains the exact canonical authenticated envelope
     /// carried by the serialized runtime owner.
     pub(crate) fn matches_authenticated_runtime_bytes(&self, canonical_bytes: &[u8]) -> bool {
@@ -9559,12 +9052,10 @@ impl DeferredServiceEvidence {
                 .as_deref()
                 .is_some_and(|identity| identity == canonical_bytes)
     }
-
     #[cfg(test)]
     pub(crate) fn claim_adapter_service_for_test(&self) -> bool {
         self.claim_adapter_service_once()
     }
-
     /// Attach the fake runtime's exact wrapper fields to this test capability.
     #[cfg(test)]
     pub(crate) fn bind_runtime_ownership_for_test(
@@ -9596,7 +9087,6 @@ impl DeferredServiceEvidence {
             .then(|| self.admission_capability.runtime_ownership_seal())
             .flatten()
     }
-
     /// Return whether this occurrence was minted by the supplied actor-owned
     /// source rather than another runtime actor with an overlapping ordinal.
     pub(crate) fn belongs_to(&self, source: &DeferredAdmissionOrdinalSource) -> bool {
@@ -9610,7 +9100,6 @@ impl DeferredServiceEvidence {
             exact
         }
     }
-
     /// Verify that post-service evidence came from the same adapter capability
     /// whose immutable runtime seal was retained before selection.
     pub(crate) fn matches_runtime_ownership_seal(
@@ -9623,12 +9112,10 @@ impl DeferredServiceEvidence {
             && seal.matches_capability(&self.admission_capability)
     }
 }
-
 struct DeferredServiceSelection {
     input: DeferredInput,
     evidence: DeferredServiceEvidence,
 }
-
 fn deferred_event_kind(event: &reducer::Event) -> DeferredEventKind {
     match event {
         reducer::Event::ResumeAfterReplay { .. } => DeferredEventKind::ResumeAfterReplay,
@@ -9653,7 +9140,6 @@ fn deferred_event_kind(event: &reducer::Event) -> DeferredEventKind {
         reducer::Event::ApplicationCompleted { .. } => DeferredEventKind::ApplicationCompleted,
     }
 }
-
 fn deferred_event_tag(event: &reducer::Event) -> reducer::EventTag {
     match event {
         reducer::Event::ResumeAfterReplay { tag }
@@ -9674,42 +9160,35 @@ fn deferred_event_tag(event: &reducer::Event) -> reducer::EventTag {
         | reducer::Event::ApplicationCompleted { tag, .. } => *tag,
     }
 }
-
 fn append_deferred_projection_field(projection: &mut Vec<u8>, field: &[u8]) {
     let len = u64::try_from(field.len()).expect("bounded deferred projection field fits u64");
     projection.extend_from_slice(&len.to_le_bytes());
     projection.extend_from_slice(field);
 }
-
 fn append_deferred_projection_u64(projection: &mut Vec<u8>, value: u64) {
     append_deferred_projection_field(projection, &value.to_le_bytes());
 }
-
 fn append_deferred_projection_tag(projection: &mut Vec<u8>, tag: reducer::EventTag) {
     append_deferred_projection_u64(projection, tag.height());
     append_deferred_projection_u64(projection, tag.view());
     append_deferred_projection_u64(projection, tag.generation().get());
 }
-
 fn append_deferred_projection_round(projection: &mut Vec<u8>, round: reducer::Round) {
     append_deferred_projection_u64(projection, round.height());
     append_deferred_projection_u64(projection, round.view());
 }
-
 fn append_deferred_projection_phase(projection: &mut Vec<u8>, phase: reducer::Phase) {
     projection.push(match phase {
         reducer::Phase::Prepare => 1,
         reducer::Phase::Commit => 2,
     });
 }
-
 fn append_deferred_projection_signature(
     projection: &mut Vec<u8>,
     signature: &reducer::OpaqueSignature,
 ) {
     append_deferred_projection_field(projection, signature.as_bytes());
 }
-
 fn append_deferred_projection_certificate(
     projection: &mut Vec<u8>,
     certificate: &reducer::QuorumCertificate,
@@ -9730,7 +9209,6 @@ fn append_deferred_projection_certificate(
         append_deferred_projection_signature(projection, share.signature());
     }
 }
-
 fn append_deferred_projection_manifest(
     projection: &mut Vec<u8>,
     manifest: &reducer::PayloadManifest,
@@ -9741,7 +9219,6 @@ fn append_deferred_projection_manifest(
     append_deferred_projection_u64(projection, manifest.byte_len());
     append_deferred_projection_field(projection, &manifest.chunk_count().to_le_bytes());
 }
-
 fn append_deferred_projection_timeout_certificate(
     projection: &mut Vec<u8>,
     certificate: &reducer::TimeoutCertificate,
@@ -9770,7 +9247,6 @@ fn append_deferred_projection_timeout_certificate(
         }
     }
 }
-
 /// Append the semantic identity of a certified occurrence without projecting
 /// the replaceable quorum subset or aggregate-signature carrier.
 fn append_serviced_candidate_certificate(
@@ -9784,7 +9260,6 @@ fn append_serviced_candidate_certificate(
     append_deferred_projection_phase(projection, reference.phase());
     append_deferred_projection_field(projection, reference.subject().as_bytes());
 }
-
 /// Append the semantic timeout occurrence selected by the certified round and
 /// highest Prepare reference. Signer grouping and aggregate bytes are
 /// authenticated carriers, not additional logical owners.
@@ -9802,7 +9277,6 @@ fn append_serviced_candidate_timeout_certificate(
         None => projection.push(0),
     }
 }
-
 fn append_deferred_projection_event(projection: &mut Vec<u8>, event: &reducer::Event) {
     projection.push(deferred_event_kind(event).code());
     append_deferred_projection_tag(projection, deferred_event_tag(event));
@@ -9906,13 +9380,11 @@ fn append_deferred_projection_event(projection: &mut Vec<u8>, event: &reducer::E
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ServicedCandidatePolicy {
     /// An already durable occurrence is consumed without re-entering the reducer.
     Suppress,
 }
-
 /// Closed adapter-event projection used by the serviced-identity bound.
 ///
 /// These are exactly the reducer input classes which may retain a transient
@@ -9933,7 +9405,6 @@ enum ServicedCandidateStage {
     ValidationCompleted,
     ApplicationCompleted,
 }
-
 impl ServicedCandidateStage {
     const ALL: [Self; 11] = [
         Self::LocalProposalReady,
@@ -9949,7 +9420,6 @@ impl ServicedCandidateStage {
         Self::ApplicationCompleted,
     ];
     const COUNT: usize = Self::ALL.len();
-
     const fn from_code(code: u8) -> Option<Self> {
         match code {
             0 => Some(Self::LocalProposalReady),
@@ -9967,7 +9437,6 @@ impl ServicedCandidateStage {
         }
     }
 }
-
 /// Physical source which makes a volatile producer parent replayable after a
 /// same-height crash.
 ///
@@ -9995,7 +9464,6 @@ enum ProducerParentReplaySource {
     /// Durable Decision recreates Apply until the matching completion arrives.
     DurableDecision,
 }
-
 const fn producer_parent_replay_source_for_stage(
     stage: ServicedCandidateStage,
 ) -> ProducerParentReplaySource {
@@ -10019,7 +9487,6 @@ const fn producer_parent_replay_source_for_stage(
         ServicedCandidateStage::ApplicationCompleted => ProducerParentReplaySource::DurableDecision,
     }
 }
-
 const fn producer_parent_is_locally_reconstructible(stage: ServicedCandidateStage) -> bool {
     matches!(
         producer_parent_replay_source_for_stage(stage),
@@ -10028,7 +9495,6 @@ const fn producer_parent_is_locally_reconstructible(stage: ServicedCandidateStag
             | ProducerParentReplaySource::DurableDecision
     )
 }
-
 fn producer_parent_has_exact_local_replay_binding(
     event: &reducer::Event,
     completion_evidence: Option<&BodyPipelineCompletionEvidence>,
@@ -10064,16 +9530,13 @@ fn producer_parent_has_exact_local_replay_binding(
         }
     }
 }
-
 fn serviced_candidate_stage(event: &reducer::Event) -> Option<ServicedCandidateStage> {
     let stage = serviced_candidate_stage_for_kind_code(deferred_event_kind(event).code())?;
     ServicedCandidateStage::from_code(stage)
 }
-
 fn serviced_candidate_policy(event: &reducer::Event) -> Option<ServicedCandidatePolicy> {
     serviced_candidate_stage(event).map(|_| ServicedCandidatePolicy::Suppress)
 }
-
 fn is_authenticated_ingress_event(event: &reducer::Event) -> bool {
     matches!(
         event,
@@ -10084,7 +9547,6 @@ fn is_authenticated_ingress_event(event: &reducer::Event) -> bool {
             | reducer::Event::TimeoutCertificateReceived { .. }
     )
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ServicedCandidateRecordKind {
     /// Same-process memory which prevents an applied identity from re-entering
@@ -10094,7 +9556,6 @@ enum ServicedCandidateRecordKind {
     /// after its asynchronous owner disappeared.
     DurableTerminal,
 }
-
 /// Exact process-local lifecycle owner supplied by the serialized runtime.
 ///
 /// This carrier is deliberately not serialized. The causal key and immutable
@@ -10105,7 +9566,6 @@ struct SelectedProducerLifecycle {
     causal_lifecycle_key: Hash,
     admission_ordinal: u128,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ProducerReservationChange {
     Unchanged,
@@ -10116,13 +9576,11 @@ enum ProducerReservationChange {
         durable_previous: Option<ProducerContinuationRecord>,
     },
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProducerReservationToken {
     address: ProducerContinuationAddress,
     change: ProducerReservationChange,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingProducerHandoff {
     token: ProducerContinuationHandoffToken,
@@ -10131,7 +9589,6 @@ struct PendingProducerHandoff {
     durable_terminal_evidence: bool,
     durable_previous: Option<ProducerContinuationRecord>,
 }
-
 /// Exact evidence consumed when a runtime-owned producer reservation retires.
 ///
 /// A concrete successor is acknowledged only after the runtime has installed
@@ -10148,7 +9605,6 @@ pub(crate) enum ProducerContinuationHandoffEvidence {
     /// Exact durable terminal evidence replaces the drained producer.
     DurableTerminal,
 }
-
 /// Classify the only dispositions which consume a serviced-identity slot.
 ///
 /// Authenticated junk, stale/policy rejection, and ordinary duplicates remain
@@ -10170,7 +9626,6 @@ fn serviced_candidate_record_kind(
         None
     }
 }
-
 /// Append a route-neutral event projection which deliberately excludes the
 /// process-local reducer generation and consumer-episode tag. The immutable
 /// height context and semantic source view are projected by the caller.
@@ -10273,7 +9728,6 @@ fn append_serviced_candidate_event(projection: &mut Vec<u8>, event: &reducer::Ev
         }
     }
 }
-
 fn serviced_candidate_event_fields(event: &reducer::Event) -> (wire::View, Option<[u8; 32]>, u8) {
     let tag_view = deferred_event_tag(event).view();
     match event {
@@ -10339,7 +9793,6 @@ fn serviced_candidate_event_fields(event: &reducer::Event) -> (wire::View, Optio
         | reducer::Event::Signed { .. } => (tag_view, None, 0),
     }
 }
-
 fn append_deferred_projection_receipt(projection: &mut Vec<u8>, receipt: &DurableBodyReceipt) {
     append_deferred_projection_field(projection, &receipt.context_id().encode());
     append_deferred_projection_field(projection, &receipt.round().encode());
@@ -10347,7 +9800,6 @@ fn append_deferred_projection_receipt(projection: &mut Vec<u8>, receipt: &Durabl
     append_deferred_projection_field(projection, receipt.manifest_hash().as_ref());
     append_deferred_projection_field(projection, receipt.frame_hash().as_ref());
 }
-
 fn append_deferred_projection_completion_evidence(
     projection: &mut Vec<u8>,
     evidence: Option<&BodyPipelineCompletionEvidence>,
@@ -10402,7 +9854,6 @@ fn append_deferred_projection_completion_evidence(
         }
     }
 }
-
 fn append_deferred_projection_admission(
     projection: &mut Vec<u8>,
     admission: Option<IngressAdmission>,
@@ -10454,7 +9905,6 @@ fn append_deferred_projection_admission(
     projection.push(u8::from(admission.inserted_equivocation));
     projection.push(u8::from(admission.locked_commit_progress));
 }
-
 fn deferred_service_projection_hash(evidence: &DeferredServiceEvidence) -> Hash {
     let mut projection = Vec::new();
     append_deferred_projection_field(&mut projection, &evidence.admission_ordinal.to_le_bytes());
@@ -10511,7 +9961,6 @@ fn deferred_service_projection_hash(evidence: &DeferredServiceEvidence) -> Hash 
     }
     Hash::new(projection)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeferredProgressClass {
     LockedCommitVote,
@@ -10520,7 +9969,6 @@ enum DeferredProgressClass {
     CommitCertificate,
     TimeoutCertificate,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeferredProgressOwner {
     LockedCommitVote(reducer::ValidatorId),
@@ -10529,7 +9977,6 @@ enum DeferredProgressOwner {
     CommitCertificate,
     TimeoutCertificate,
 }
-
 impl DeferredProgressOwner {
     const fn class(self) -> DeferredProgressClass {
         match self {
@@ -10541,7 +9988,6 @@ impl DeferredProgressOwner {
         }
     }
 }
-
 fn deferred_progress_owner(input: &DeferredInput) -> Option<DeferredProgressOwner> {
     if input.protected_progress {
         return match &input.event {
@@ -10571,11 +10017,9 @@ fn deferred_progress_owner(input: &DeferredInput) -> Option<DeferredProgressOwne
         _ => None,
     }
 }
-
 fn deferred_progress_class(input: &DeferredInput) -> Option<DeferredProgressClass> {
     deferred_progress_owner(input).map(DeferredProgressOwner::class)
 }
-
 const fn deferred_progress_capacity(roster_len: usize) -> usize {
     let required = roster_len.saturating_mul(2).saturating_add(3);
     if required < MAX_DEFERRED_PROGRESS_INPUTS {
@@ -10584,13 +10028,11 @@ const fn deferred_progress_capacity(roster_len: usize) -> usize {
         MAX_DEFERRED_PROGRESS_INPUTS
     }
 }
-
 const fn semantic_ingress_capacity(roster_len: usize) -> usize {
     // One exact locked Commit set plus current and adjacent-future TimeoutVote
     // sets bypass the ordinary semantic table.
     MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(3))
 }
-
 /// Maximum distinct service stages which one immutable lifecycle can cross.
 ///
 /// This is mechanically derived from the closed reducer-event projection
@@ -10598,12 +10040,10 @@ const fn semantic_ingress_capacity(roster_len: usize) -> usize {
 /// number. It is neither a wire field nor a deployment knob.
 const _: () = assert!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE == ServicedCandidateStage::COUNT);
 const _: () = assert!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE == 11);
-
 /// Dormant restart/historical roots in the reviewed lifecycle geometry.
 ///
 /// The formal model uses the same fixed `AsyncDormantDurableLifecycleCapacity`.
 const CANDIDATE_LIFECYCLE_DURABLE_REPLAY_CAPACITY: usize = 8;
-
 /// Existing runtime/effect capacities which bound active candidate roots.
 ///
 /// Production passes the already validated Sumeragi v2 queue configuration
@@ -10614,7 +10054,6 @@ pub(crate) struct ServicedCandidateCapacityGeometry {
     runtime_command_capacity: usize,
     effect_work_capacity: usize,
 }
-
 impl ServicedCandidateCapacityGeometry {
     /// Bind the existing runtime command and effect-work capacities.
     pub(crate) const fn new(runtime_command_capacity: usize, effect_work_capacity: usize) -> Self {
@@ -10624,14 +10063,12 @@ impl ServicedCandidateCapacityGeometry {
         }
     }
 }
-
 // Standalone adapter fixtures are paired with the existing 1024-command and
 // 1024-effect test defaults. Production construction always supplies the
 // validated height configuration explicitly through the runner.
 #[cfg(test)]
 const DEFAULT_SERVICED_CANDIDATE_CAPACITY_GEOMETRY: ServicedCandidateCapacityGeometry =
     ServicedCandidateCapacityGeometry::new(MAX_DEFERRED_INPUTS, MAX_DEFERRED_INPUTS);
-
 const fn candidate_lifecycle_capacity(
     roster_len: usize,
     geometry: ServicedCandidateCapacityGeometry,
@@ -10651,7 +10088,6 @@ const fn candidate_lifecycle_capacity(
         // The due timeout clock owns one disjoint lifecycle reservation.
         .saturating_add(1)
 }
-
 /// Maximum same-view serviced identities retained by one adapter generation.
 ///
 /// This is the complete reviewed lifecycle geometry: service queues, active
@@ -10667,7 +10103,6 @@ const fn serviced_candidate_capacity_with_geometry(
     candidate_lifecycle_capacity(roster_len, geometry)
         .saturating_mul(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE)
 }
-
 #[cfg(test)]
 const fn serviced_candidate_capacity(roster_len: usize) -> usize {
     serviced_candidate_capacity_with_geometry(
@@ -10675,7 +10110,6 @@ const fn serviced_candidate_capacity(roster_len: usize) -> usize {
         DEFAULT_SERVICED_CANDIDATE_CAPACITY_GEOMETRY,
     )
 }
-
 /// Completion variant staged directly in the Busy-deferred lane by seam tests.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -10691,7 +10125,6 @@ pub(crate) enum DeferredBodyPipelineStageForTest {
     /// Local proposal construction completed.
     LocalProposalReady,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeferredBodyPipelineCompletionStage {
     LocalProposalReady,
@@ -10699,7 +10132,6 @@ enum DeferredBodyPipelineCompletionStage {
     BodyStored,
     Validation,
 }
-
 fn deferred_body_pipeline_completion_stage(
     input: &DeferredInput,
     tag: reducer::EventTag,
@@ -10757,7 +10189,6 @@ fn deferred_body_pipeline_completion_stage(
         | reducer::Event::ApplicationCompleted { .. } => None,
     }
 }
-
 fn classify_deferred_decided_local_proposal(
     input: &DeferredInput,
     decision_tag: reducer::EventTag,
@@ -10806,7 +10237,6 @@ fn classify_deferred_decided_local_proposal(
     }
     disposition
 }
-
 impl DeferredPriority {
     const fn next(self) -> Self {
         match self {
@@ -10816,7 +10246,6 @@ impl DeferredPriority {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum IngressSemanticKey {
     Proposal {
@@ -10833,7 +10262,6 @@ enum IngressSemanticKey {
         signer: wire::ValidatorIndex,
     },
 }
-
 impl IngressSemanticKey {
     fn round(self) -> wire::ConsensusRound {
         match self {
@@ -10843,7 +10271,6 @@ impl IngressSemanticKey {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IngressFingerprint {
     Proposal(Hash),
@@ -10854,7 +10281,6 @@ enum IngressFingerprint {
     ),
     TimeoutVote(Option<wire::QuorumCertificateRef>),
 }
-
 fn ingress_equivocation_identity(
     payload: &wire::ConsensusMessageV2Payload,
 ) -> Option<(IngressSemanticKey, IngressFingerprint)> {
@@ -10897,14 +10323,12 @@ fn ingress_equivocation_identity(
         | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum IngressEquivocationArtifact {
     Proposal(Arc<wire::Proposal>),
     Vote(Arc<wire::Vote>),
     TimeoutVote(Arc<wire::TimeoutVote>),
 }
-
 impl IngressEquivocationArtifact {
     fn from_payload(payload: &wire::ConsensusMessageV2Payload) -> Option<Self> {
         match payload {
@@ -10927,7 +10351,6 @@ impl IngressEquivocationArtifact {
             | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
         }
     }
-
     fn conflict_with(
         &self,
         payload: &wire::ConsensusMessageV2Payload,
@@ -10946,7 +10369,6 @@ impl IngressEquivocationArtifact {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct IngressEquivocationRecord {
     fingerprint: IngressFingerprint,
@@ -10955,14 +10377,12 @@ struct IngressEquivocationRecord {
     capacity_bypass: bool,
     admitted_at: Instant,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IngressDeliveryRecord {
     fingerprint: IngressFingerprint,
     generation: reducer::Generation,
     locked_commit_progress: bool,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IngressAdmission {
     key: IngressSemanticKey,
@@ -10971,36 +10391,30 @@ struct IngressAdmission {
     inserted_equivocation: bool,
     locked_commit_progress: bool,
 }
-
 impl AdapterOutcome {
     /// Return whether the reducer applied or deliberately ignored the input.
     pub(crate) const fn disposition(&self) -> reducer::StepDisposition {
         self.disposition
     }
-
     /// Borrow the effects now safe for asynchronous execution.
     #[cfg(test)]
     pub(crate) fn effects(&self) -> &[AdapterEffect] {
         &self.effects
     }
-
     /// Consume the outcome and return its asynchronous effects.
     pub(crate) fn into_effects(self) -> Vec<AdapterEffect> {
         self.effects
     }
-
     /// Exact producer reservation which the serialized runtime must
     /// acknowledge only after installing its replacement owner.
     pub(crate) const fn producer_handoff(&self) -> Option<ProducerContinuationHandoffToken> {
         self.producer_handoff
     }
-
     /// Actor-global owner retained when this exact input crossed into the
     /// adapter's Busy-deferred queue.
     pub(crate) const fn deferred_admission_ordinal(&self) -> Option<u128> {
         self.deferred_admission_ordinal
     }
-
     /// Whether Busy backpressure retained no adapter-owned occurrence and the
     /// serialized runtime must keep the exact physical command in its FIFO.
     pub(crate) const fn requires_runtime_retry(&self) -> bool {
@@ -11010,16 +10424,13 @@ impl AdapterOutcome {
         ) && self.deferred_admission_ordinal.is_none()
     }
 }
-
 /// Signature aggregation boundary used when the reducer forms a local QC or TC.
 pub(crate) trait SignatureAggregator: Send + Sync {
     /// Aggregate the canonical signer-ordered BLS signature shares.
     fn aggregate(&self, signatures: &[&[u8]]) -> Result<Vec<u8>, String>;
 }
-
 #[derive(Debug, Default)]
 struct BlsNormalSignatureAggregator;
-
 impl SignatureAggregator for BlsNormalSignatureAggregator {
     fn aggregate(&self, signatures: &[&[u8]]) -> Result<Vec<u8>, String> {
         #[cfg(feature = "bls")]
@@ -11034,7 +10445,6 @@ impl SignatureAggregator for BlsNormalSignatureAggregator {
         }
     }
 }
-
 /// Fatal or structurally invalid adapter input.
 #[derive(Debug, Error)]
 pub(crate) enum AdapterError {
@@ -11266,7 +10676,6 @@ pub(crate) enum AdapterError {
     #[error("Sumeragi v2 network ingress is closed until WAL replay completes")]
     ReplayNotComplete,
 }
-
 /// Production wrapper around the sole executable Sumeragi v2 reducer.
 pub(crate) struct SumeragiV2Adapter {
     wire_context: wire::HeightContext,
@@ -11341,7 +10750,6 @@ pub(crate) struct SumeragiV2Adapter {
     replay_complete: bool,
     fail_closed: bool,
 }
-
 enum SafetyWalOpenTarget<'kura> {
     Kura {
         kura: &'kura Kura,
@@ -11350,7 +10758,6 @@ enum SafetyWalOpenTarget<'kura> {
     #[cfg(test)]
     FixturePath(PathBuf),
 }
-
 fn commit_qc_status(
     certificate: &wire::QuorumCertificate,
     context: &wire::HeightContext,
@@ -11376,7 +10783,6 @@ fn commit_qc_status(
         total_power: context.quorum.total_power,
     })
 }
-
 impl SumeragiV2Adapter {
     /// Open the safety WAL, replay every complete frame, and resume durable work.
     ///
@@ -11405,7 +10811,6 @@ impl SumeragiV2Adapter {
             deferred_admission_ordinals,
         )
     }
-
     /// Open using the already validated runtime/effect ownership geometry.
     ///
     /// The production runner uses this constructor so a configured command
@@ -11439,7 +10844,6 @@ impl SumeragiV2Adapter {
             deferred_admission_ordinals,
         )
     }
-
     /// Open one adapter while keeping its startup batch behind the WAL-recovery seal.
     ///
     /// Unlike [`Self::open_with_capacity_geometry`], this constructor neither
@@ -11475,7 +10879,6 @@ impl SumeragiV2Adapter {
         )?;
         Ok(RecoveredAdapterStartup { adapter, effects })
     }
-
     /// Open and replay the adapter without publishing its initial reducer
     /// status.
     ///
@@ -11506,7 +10909,6 @@ impl SumeragiV2Adapter {
             deferred_admission_ordinals,
         )
     }
-
     /// Open with deferred status publication and the validated queue geometry.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_deferred_status_with_capacity_geometry(
@@ -11536,7 +10938,6 @@ impl SumeragiV2Adapter {
             deferred_admission_ordinals,
         )
     }
-
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator(
@@ -11561,7 +10962,6 @@ impl SumeragiV2Adapter {
             deferred_admission_ordinals,
         )
     }
-
     /// Test constructor for the same sealed recovery startup cut with a custom aggregator.
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
@@ -11588,7 +10988,6 @@ impl SumeragiV2Adapter {
         )?;
         Ok(RecoveredAdapterStartup { adapter, effects })
     }
-
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator_and_publication(
@@ -11615,7 +11014,6 @@ impl SumeragiV2Adapter {
             deferred_admission_ordinals,
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator_and_publication_with_capacity(
         wal_target: SafetyWalOpenTarget<'_>,
@@ -11691,7 +11089,6 @@ impl SumeragiV2Adapter {
                 candidate_lifecycle_capacity,
             )
             .map_err(AdapterError::ServicedCandidateStore)?;
-
         let entries = wal
             .recovered_records()
             .iter()
@@ -11792,18 +11189,15 @@ impl SumeragiV2Adapter {
         }
         Ok((adapter, startup))
     }
-
     /// Return the tag which must accompany a new asynchronous operation.
     pub(crate) const fn current_tag(&self) -> reducer::EventTag {
         self.reducer.current_tag()
     }
-
     /// Borrow the immutable wire context authenticated by this height's
     /// reducer adapter.
     pub(crate) const fn wire_context(&self) -> &wire::HeightContext {
         &self.wire_context
     }
-
     /// Return the reducer body state for one wire identity in seam tests.
     #[cfg(test)]
     pub(crate) fn body_state_for_test(
@@ -11815,7 +11209,6 @@ impl SumeragiV2Adapter {
         let subject = reducer::Subject::new(Hash::new(subject.encode()).into());
         self.reducer.body_state(round, subject)
     }
-
     /// Actor-global ordinal source shared with every replacement height
     /// adapter owned by this runtime actor.
     pub(crate) const fn deferred_admission_ordinal_source(
@@ -11823,7 +11216,6 @@ impl SumeragiV2Adapter {
     ) -> &DeferredAdmissionOrdinalSource {
         &self.deferred_admission_ordinals
     }
-
     /// Largest producer lifecycle ordinal validated while opening this height.
     ///
     /// This remains the opening value even if strict-view or Decision
@@ -11834,7 +11226,6 @@ impl SumeragiV2Adapter {
     ) -> Option<u128> {
         self.restored_producer_continuation_ordinal_high_watermark
     }
-
     /// Resolve one restart-dormant deterministic runtime root by its exact
     /// persisted causal key. Every stage in one lifecycle must agree on the
     /// immutable first-admission ordinal.
@@ -11843,7 +11234,6 @@ impl SumeragiV2Adapter {
         causal_lifecycle_key: &Hash,
     ) -> super::v2_runtime::RuntimeDormantProducerLifecycle {
         use super::v2_runtime::RuntimeDormantProducerLifecycle as Dormant;
-
         let mut admission_ordinal = None;
         for address in &self.restored_dormant_producer_continuations {
             let Some(record) = self.producer_continuations.get(address) else {
@@ -11868,7 +11258,6 @@ impl SumeragiV2Adapter {
             admission_ordinal,
         })
     }
-
     /// Retire one exact restart-dormant producer before its volatile runtime
     /// replacement is released without reducer service.
     ///
@@ -11894,7 +11283,6 @@ impl SumeragiV2Adapter {
                     .to_owned(),
             ));
         }
-
         let matches = self
             .producer_continuations
             .iter()
@@ -11917,7 +11305,6 @@ impl SumeragiV2Adapter {
         self.persist_restored_body_producer_retirement(*address, record)?;
         Ok(true)
     }
-
     /// Retire the exact restart-dormant stage-7 parent named by a terminal
     /// reconstructed-body fetch.
     ///
@@ -11967,7 +11354,6 @@ impl SumeragiV2Adapter {
                     })
             })
             .transpose()?;
-
         let coordinate_matches = self
             .producer_continuations
             .iter()
@@ -12002,7 +11388,6 @@ impl SumeragiV2Adapter {
         self.persist_restored_body_producer_retirement(*address, record)?;
         Ok(true)
     }
-
     /// Persist the removal of one preflighted restart-dormant body producer.
     fn persist_restored_body_producer_retirement(
         &mut self,
@@ -12028,7 +11413,6 @@ impl SumeragiV2Adapter {
                     .to_owned(),
             ));
         }
-
         let process_previous = self
             .producer_continuations
             .remove(&address)
@@ -12060,7 +11444,6 @@ impl SumeragiV2Adapter {
         }
         Ok(())
     }
-
     /// Return the restart-dormant Local stages which already reserve a
     /// completion-FIFO position.
     ///
@@ -12082,7 +11465,6 @@ impl SumeragiV2Adapter {
                 "restart-dormant producer index disagreed with active snapshot records".to_owned(),
             );
         }
-
         let mut lifecycle_ordinals = BTreeMap::<Hash, u128>::new();
         let mut reservations = BTreeSet::new();
         for address in &self.restored_dormant_producer_continuations {
@@ -12153,7 +11535,6 @@ impl SumeragiV2Adapter {
         }
         Ok(reservations.into_iter().collect())
     }
-
     /// Snapshot the exact reducer-owned facts which constrain local proposal
     /// construction. Proposal justification remains internal to the reducer.
     pub(crate) fn local_proposal_directive(&self) -> Result<LocalProposalDirective, AdapterError> {
@@ -12180,7 +11561,6 @@ impl SumeragiV2Adapter {
             decided_subject,
         })
     }
-
     /// Mint the bounded validation-marker frontier authorized by WAL replay.
     ///
     /// Marker files from superseded views remain checksummed local data, not
@@ -12207,7 +11587,6 @@ impl SumeragiV2Adapter {
             keys.insert((round, subject));
             Ok(())
         };
-
         if let Some(certificate) = self.reducer.durable_state().locked() {
             retain(
                 self.registry.round_to_wire(certificate.proposal_round()),
@@ -12260,7 +11639,6 @@ impl SumeragiV2Adapter {
             keys,
         })
     }
-
     /// Reauthenticate one complete recovered WAL frame and seal its exact identity.
     fn authenticate_recovered_wal_frame(
         &self,
@@ -12297,7 +11675,6 @@ impl SumeragiV2Adapter {
         )?;
         Ok((identity, envelope))
     }
-
     /// Authenticate terminal WAL continuity independently of the current Sign owner.
     fn authenticate_recovered_wal_frontier(&self) -> Result<(), AdapterError> {
         let durable_last_id = self.reducer.durable_state().last_id().get();
@@ -12312,7 +11689,6 @@ impl SumeragiV2Adapter {
         }
         Ok(())
     }
-
     // RECOVERED_WAL_VOTE_SIGN_MINT_BEGIN
     /// Extract the current startup phase vote from its latest exact WAL owner.
     ///
@@ -12350,7 +11726,6 @@ impl SumeragiV2Adapter {
         if startup_effects.len() != 1 {
             return Err(AdapterError::RecoveredVoteSignAmbiguous);
         }
-
         let signer_in_roster =
             usize::try_from(vote.signer).is_ok_and(|index| index < self.wire_context.roster.len());
         let Some(local_validator) = self.reducer.local_validator() else {
@@ -12378,7 +11753,6 @@ impl SumeragiV2Adapter {
         if !tag_is_exact {
             return Err(AdapterError::RecoveredVoteSignMismatch);
         }
-
         let active_commit_lock = match vote.phase {
             wire::GlobalPhase::Prepare => None,
             wire::GlobalPhase::Commit => {
@@ -12393,7 +11767,6 @@ impl SumeragiV2Adapter {
                 Some(locked)
             }
         };
-
         let mut owner = None;
         for frame in self.wal.recovered_records().iter().rev() {
             let (wal_identity, envelope) = self.authenticate_recovered_wal_frame(frame)?;
@@ -12437,7 +11810,6 @@ impl SumeragiV2Adapter {
         let Some((wal_identity, prepare_certificate)) = owner else {
             return Err(AdapterError::RecoveredVoteSignMismatch);
         };
-
         let mut vote_effects = startup_effects
             .iter()
             .enumerate()
@@ -12462,7 +11834,6 @@ impl SumeragiV2Adapter {
         else {
             return Err(AdapterError::RecoveredVoteSignMismatch);
         };
-
         let removed = startup_effects.remove(effect_index);
         debug_assert!(matches!(
             removed,
@@ -12480,7 +11851,6 @@ impl SumeragiV2Adapter {
         }))
     }
     // RECOVERED_WAL_VOTE_SIGN_MINT_END
-
     /// Bind one reducer-produced follow-on Vote Sign to its durable WAL and body.
     ///
     /// The reverse scan deliberately selects the latest exact matching owner.
@@ -12534,7 +11904,6 @@ impl SumeragiV2Adapter {
         {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }
-
         let active_commit_lock = match vote.phase {
             wire::GlobalPhase::Prepare => None,
             wire::GlobalPhase::Commit => self.reducer.durable_state().locked(),
@@ -12542,7 +11911,6 @@ impl SumeragiV2Adapter {
         if vote.phase == wire::GlobalPhase::Commit && active_commit_lock.is_none() {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }
-
         let mut owner = None;
         for frame in self.wal.recovered_records().iter().rev() {
             let (wal_identity, envelope) = self.authenticate_recovered_wal_frame(frame)?;
@@ -12593,7 +11961,6 @@ impl SumeragiV2Adapter {
         )
         .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)
     }
-
     /// Consume the current ProposalIntent/TimeoutIntent control Sign from replay.
     ///
     /// The reducer awaiting-signature state, tag, local role, unsigned action,
@@ -12715,7 +12082,6 @@ impl SumeragiV2Adapter {
             effect,
         }))
     }
-
     /// Consume the exact certificate-backed Fetch owned by a durable Decision.
     ///
     /// The reducer Decision, current tag, complete one-effect inventory,
@@ -12763,7 +12129,6 @@ impl SumeragiV2Adapter {
                 Ok(None)
             };
         }
-
         let mut owner = None;
         for frame in self.wal.recovered_records().iter().rev() {
             let (identity, envelope) = self.authenticate_recovered_wal_frame(frame)?;
@@ -12799,7 +12164,6 @@ impl SumeragiV2Adapter {
             effect,
         }))
     }
-
     /// Return the exact Decision key reconstructed from complete WAL frames.
     ///
     /// Startup uses this before ingress opens to bind an interrupted canonical
@@ -12832,12 +12196,10 @@ impl SumeragiV2Adapter {
             })
             .transpose()
     }
-
     /// Return whether WAL replay completed and authenticated ingress may open.
     pub(crate) const fn ingress_ready(&self) -> bool {
         self.replay_complete && !self.fail_closed
     }
-
     /// Return whether application completed and no unfinished safety write,
     /// signature, or adapter-owned deferred input remains before height
     /// rollover.
@@ -12848,7 +12210,6 @@ impl SumeragiV2Adapter {
             && self.deferred_inputs.is_empty()
             && self.reducer.ready_to_finish()
     }
-
     /// Verify a canonical consensus message against this adapter's frozen
     /// roster and prevalidated proofs of possession.
     pub(crate) fn authenticate(
@@ -12874,7 +12235,6 @@ impl SumeragiV2Adapter {
         }
         Ok(authenticated)
     }
-
     fn retained_authenticated_equivocation(
         &self,
         payload: &wire::ConsensusMessageV2Payload,
@@ -12886,7 +12246,6 @@ impl SumeragiV2Adapter {
             .get(&key)
             .is_some_and(|record| record.fingerprint != fingerprint)
     }
-
     /// Return whether authenticated ingress belongs to the active lock's
     /// reserved progress path.
     ///
@@ -12900,7 +12259,6 @@ impl SumeragiV2Adapter {
     ) -> bool {
         self.wire_ingress_may_use_progress(message.payload())
     }
-
     /// Return the tag of an exact Commit/Prepare QC already owned by the
     /// adapter's Busy-deferred progress lane.
     ///
@@ -12915,7 +12273,6 @@ impl SumeragiV2Adapter {
         self.deferred_quorum_certificate_owner(candidate)
             .map(|(tag, _)| tag)
     }
-
     /// Return the tag and actor-global admission ordinal of an exact
     /// Commit/Prepare QC already owned by the Busy-deferred progress lane.
     ///
@@ -12937,7 +12294,6 @@ impl SumeragiV2Adapter {
                 .then_some((*tag, input.admission_ordinal))
         })
     }
-
     /// Return the tag and actor-global admission ordinal of an exact canonical
     /// authenticated envelope already owned by a Busy-deferred lane.
     ///
@@ -12967,7 +12323,6 @@ impl SumeragiV2Adapter {
                     .then_some((deferred_event_tag(&input.event), input.admission_ordinal))
             })
     }
-
     /// Exact actor-global ordinals currently retained by authenticated
     /// Busy-deferred inputs across all service classes.
     ///
@@ -12983,7 +12338,6 @@ impl SumeragiV2Adapter {
             .map(|input| input.admission_ordinal)
             .collect()
     }
-
     /// Exact actor-global ordinals retained by every Busy-deferred input.
     /// Runtime lifecycle ownership uses this complete set; the authenticated
     /// subset above remains the separate fair-ingress carrier authority.
@@ -12995,7 +12349,6 @@ impl SumeragiV2Adapter {
             .map(|input| input.admission_ordinal)
             .collect()
     }
-
     /// Snapshot the private actor capability of one exact retained Busy owner
     /// without claiming its service turn.
     pub(crate) fn deferred_occurrence_ownership(
@@ -13014,7 +12367,6 @@ impl SumeragiV2Adapter {
         }
         DeferredOccurrenceOwnershipEvidence::from_input(input, &self.deferred_admission_ordinals)
     }
-
     /// Atomically attach the runtime's immutable lifecycle/cut owner to one
     /// newly admitted Busy occurrence and return its opaque adapter seal.
     ///
@@ -13086,7 +12438,6 @@ impl SumeragiV2Adapter {
         }
         Ok(seal)
     }
-
     /// Return whether a wire payload may use the active lock's progress lane.
     ///
     /// This is only a pre-authentication capacity hint. Callers must still
@@ -13102,7 +12453,6 @@ impl SumeragiV2Adapter {
                 if self.is_exact_locked_commit_vote(vote)
         )
     }
-
     /// Return the body identity whose direct vote lacks a locally validated
     /// execution commitment.
     ///
@@ -13131,7 +12481,6 @@ impl SumeragiV2Adapter {
         )
         .then_some((vote.proposal_round, vote.subject))
     }
-
     fn ensure_authenticated_manifest_compatible(
         &self,
         authenticated: &AuthenticatedConsensusMessage,
@@ -13144,7 +12493,6 @@ impl SumeragiV2Adapter {
         }
         Ok(())
     }
-
     fn ensure_authenticated_execution_commitments_compatible(
         &self,
         authenticated: &AuthenticatedConsensusMessage,
@@ -13206,7 +12554,6 @@ impl SumeragiV2Adapter {
         }
         Ok(())
     }
-
     fn ensure_vote_execution_commitment_bound(
         &self,
         round: wire::ConsensusRound,
@@ -13241,7 +12588,6 @@ impl SumeragiV2Adapter {
             None => Err(AdapterError::MissingExecutionCommitment),
         }
     }
-
     fn ensure_tc_execution_commitments_compatible(
         &self,
         certificate: &wire::TimeoutCertificate,
@@ -13258,7 +12604,6 @@ impl SumeragiV2Adapter {
         }
         Ok(())
     }
-
     fn ensure_qc_execution_commitment_compatible(
         &self,
         certificate: &wire::QuorumCertificate,
@@ -13275,7 +12620,6 @@ impl SumeragiV2Adapter {
             observed,
         )
     }
-
     fn ensure_execution_commitment_compatible(
         &self,
         round: wire::ConsensusRound,
@@ -13309,7 +12653,6 @@ impl SumeragiV2Adapter {
         observed.push((round, subject, commitment));
         Ok(())
     }
-
     fn is_exact_locked_commit_vote(&self, vote: &wire::Vote) -> bool {
         if vote.phase != wire::GlobalPhase::Commit {
             return false;
@@ -13337,7 +12680,6 @@ impl SumeragiV2Adapter {
                 .execution_commitment(locked.round(), locked.subject())
                 .is_ok_and(|commitment| commitment == vote.execution_commitment)
     }
-
     fn deferred_owns_ingress(
         &self,
         key: IngressSemanticKey,
@@ -13357,7 +12699,6 @@ impl SumeragiV2Adapter {
                 })
             })
     }
-
     #[allow(clippy::too_many_lines)]
     fn admit_authenticated_payload(
         &mut self,
@@ -13434,7 +12775,6 @@ impl SumeragiV2Adapter {
         let artifact = IngressEquivocationArtifact::from_payload(payload)
             .ok_or(AdapterError::EquivocationArtifactMismatch)?;
         let deferred_owner = self.deferred_owns_ingress(key, fingerprint);
-
         if let Some(record) = self.ingress_equivocations.get_mut(&key) {
             if record.fingerprint == fingerprint {
                 if deferred_owner
@@ -13484,7 +12824,6 @@ impl SumeragiV2Adapter {
                 None,
             ));
         }
-
         let capacity_bypass = self.ingress_equivocations.len() >= MAX_INGRESS_SEMANTIC_KEYS;
         let protected_capacity_bypass =
             locked_commit_progress || matches!(key, IngressSemanticKey::TimeoutVote { .. });
@@ -13524,7 +12863,6 @@ impl SumeragiV2Adapter {
         }
         Ok((None, Some(admission)))
     }
-
     fn prune_ingress_records(&mut self) {
         let current_view = self.reducer.current_tag().view();
         let current_height = self.wire_context.height;
@@ -13583,7 +12921,6 @@ impl SumeragiV2Adapter {
                 .is_some_and(|record| record.fingerprint == delivery.fingerprint)
         });
     }
-
     fn ignored_outcome(reason: reducer::IgnoreReason) -> AdapterOutcome {
         AdapterOutcome {
             disposition: reducer::StepDisposition::Ignored(reason),
@@ -13592,7 +12929,6 @@ impl SumeragiV2Adapter {
             producer_handoff: None,
         }
     }
-
     /// Feed a signature-checked and structurally verified canonical message.
     fn receive_verified(
         &mut self,
@@ -13621,7 +12957,6 @@ impl SumeragiV2Adapter {
         }
         result
     }
-
     fn receive_admitted_payload(
         &mut self,
         payload: wire::ConsensusMessageV2Payload,
@@ -13699,7 +13034,6 @@ impl SumeragiV2Adapter {
             }
         }
     }
-
     fn dispatch_staged_authenticated_ingress(
         &mut self,
         registry: WireRegistry,
@@ -13738,7 +13072,6 @@ impl SumeragiV2Adapter {
         }
         result.map(|result| result.outcome)
     }
-
     /// Pass an authenticated canonical envelope to the reducer.
     pub(crate) fn receive_authenticated(
         &mut self,
@@ -13746,7 +13079,6 @@ impl SumeragiV2Adapter {
     ) -> Result<AdapterOutcome, AdapterError> {
         self.receive_verified(message.0)
     }
-
     /// Notify the reducer that its one constant round timer expired.
     pub(crate) fn timeout_elapsed(
         &mut self,
@@ -13755,7 +13087,6 @@ impl SumeragiV2Adapter {
         self.ensure_ingress()?;
         self.step(reducer::Event::TimeoutElapsed { tag })
     }
-
     /// Retry any missing proposal or certified body after the derived
     /// retransmission interval.
     pub(crate) fn retransmit_elapsed(
@@ -13765,7 +13096,6 @@ impl SumeragiV2Adapter {
         self.ensure_ingress()?;
         self.step(reducer::Event::RetransmitElapsed { tag })
     }
-
     /// Submit a locally assembled, durably stored, deterministically validated body.
     ///
     /// While the height is undecided, only the expected leader can take this
@@ -13818,7 +13148,6 @@ impl SumeragiV2Adapter {
             Some(completion_evidence),
         )
     }
-
     /// Bind an exact body-store validation marker into the wire registry.
     ///
     /// This monotone authority update is independent of the reducer consumer
@@ -13841,7 +13170,6 @@ impl SumeragiV2Adapter {
             return Err(AdapterError::DurableBodyMismatch);
         }
         validated_receipt.execution_commitment().validate()?;
-
         // Stage registry expansion so any mismatch leaves canonical authority
         // unchanged. Registration is idempotent for the exact receipt and
         // rejects a conflicting commitment before mutation.
@@ -13856,7 +13184,6 @@ impl SumeragiV2Adapter {
         self.registry = registry;
         Ok(())
     }
-
     /// Restore a body-store validation marker into the replayed wire registry.
     ///
     /// Proposal intent persistence deliberately precedes signing. On restart,
@@ -13871,7 +13198,6 @@ impl SumeragiV2Adapter {
     ) -> Result<(), AdapterError> {
         self.bind_validated_body(manifest, validated_receipt)
     }
-
     /// Stage the fixed recovered Decision body fast-forward on this owned cold adapter.
     ///
     /// The non-forgeable body-cut permit and opaque Decision-Fetch projection
@@ -13972,7 +13298,6 @@ impl SumeragiV2Adapter {
             ),
             last_progress: self.last_progress.clone(),
         };
-
         let validate_prepared =
             match self.prepare_direct_body_stored(tag, manifest.round, manifest.subject, durable) {
                 Ok(DirectBodyStoredPreparation::Applied(prepared)) => prepared,
@@ -13997,7 +13322,6 @@ impl SumeragiV2Adapter {
         self.reducer = validate_reducer;
         self.registry = validate_registry;
         self.reducer_fence_generation = validate_fence_generation;
-
         let apply_prepared = match self.prepare_direct_validation_succeeded(
             tag,
             manifest.round,
@@ -14051,7 +13375,6 @@ impl SumeragiV2Adapter {
                 AdapterError::RecoveredDecisionApplyFastForwardMismatch
             );
         };
-
         self.reducer = apply_reducer;
         self.registry = apply_registry;
         self.reducer_fence_generation = apply_fence_generation;
@@ -14093,7 +13416,6 @@ impl SumeragiV2Adapter {
         }
         Ok(preview)
     }
-
     /// Preview the exact recovered Decision `BodyAvailable -> StoreBody` transition.
     ///
     /// The dedicated authority preserves the recovered WAL identity and opaque
@@ -14117,7 +13439,6 @@ impl SumeragiV2Adapter {
             body: authority.into_body(),
         })
     }
-
     /// Preview a certified Fetch completion directly against the sole reducer.
     ///
     /// No adapter-owned deferred queue, serviced-candidate marker, producer
@@ -14141,7 +13462,6 @@ impl SumeragiV2Adapter {
     ) -> Result<DirectCertifiedBodyAvailablePreparation<'_>, AdapterError> {
         self.ensure_ingress()?;
         manifest.validate(&self.wire_context)?;
-
         let mut next_registry = self.registry.clone();
         let round = next_registry.round_to_core(manifest.round, &self.wire_context)?;
         let subject = next_registry.register_subject(manifest.subject)?;
@@ -14160,7 +13480,6 @@ impl SumeragiV2Adapter {
         if core_manifest.subject() != subject {
             return Err(AdapterError::DurableBodyMismatch);
         }
-
         let event = reducer::Event::BodyAvailable {
             tag,
             round,
@@ -14207,7 +13526,6 @@ impl SumeragiV2Adapter {
                 },
             ));
         }
-
         let store_effect = match core_effects.as_slice() {
             [
                 reducer::Effect::StoreBody {
@@ -14241,7 +13559,6 @@ impl SumeragiV2Adapter {
                 .filter(|next| *next != u64::MAX)
                 .ok_or(AdapterError::ReducerFenceGenerationExhausted)?
         };
-
         Ok(DirectCertifiedBodyAvailablePreparation::Applied(
             PreparedDirectCertifiedBodyAvailable {
                 adapter: self,
@@ -14254,7 +13571,6 @@ impl SumeragiV2Adapter {
             },
         ))
     }
-
     /// Preview one durable Store completion directly against the sole reducer.
     ///
     /// The receipt is rebound to the exact registered manifest before any
@@ -14284,7 +13600,6 @@ impl SumeragiV2Adapter {
         {
             return Err(AdapterError::DurableBodyMismatch);
         }
-
         let mut next_registry = self.registry.clone();
         let core_round = next_registry.round_to_core(round, &self.wire_context)?;
         let core_subject = next_registry.register_subject(subject)?;
@@ -14295,7 +13610,6 @@ impl SumeragiV2Adapter {
         if receipt.manifest_hash() != HashOf::new(manifest) {
             return Err(AdapterError::DurableBodyMismatch);
         }
-
         let event = reducer::Event::BodyStored {
             tag,
             round: core_round,
@@ -14340,7 +13654,6 @@ impl SumeragiV2Adapter {
                 },
             ));
         }
-
         let validate_effect = match core_effects.as_slice() {
             [
                 reducer::Effect::ValidateBody {
@@ -14377,7 +13690,6 @@ impl SumeragiV2Adapter {
                 .filter(|next| *next != u64::MAX)
                 .ok_or(AdapterError::ReducerFenceGenerationExhausted)?
         };
-
         Ok(DirectBodyStoredPreparation::Applied(
             PreparedDirectBodyStored {
                 adapter: self,
@@ -14390,7 +13702,6 @@ impl SumeragiV2Adapter {
             },
         ))
     }
-
     /// Preview one exact successful deterministic validation directly against
     /// cloned reducer and wire-registry state.
     ///
@@ -14421,7 +13732,6 @@ impl SumeragiV2Adapter {
         {
             return Err(AdapterError::DurableBodyMismatch);
         }
-
         let mut next_registry = self.registry.clone();
         let core_round = next_registry.round_to_core(round, &self.wire_context)?;
         let core_subject = next_registry.register_subject(subject)?;
@@ -14442,7 +13752,6 @@ impl SumeragiV2Adapter {
         if reducer_fence_generation == u64::MAX {
             return Err(AdapterError::ReducerFenceGenerationExhausted);
         }
-
         let event = reducer::Event::ValidationCompleted {
             tag,
             round: core_round,
@@ -14453,7 +13762,6 @@ impl SumeragiV2Adapter {
         let outcome = next_reducer.step(event.clone())?;
         let disposition = outcome.disposition();
         let mut core_effects = outcome.into_effects();
-
         if disposition == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy) {
             if !core_effects.is_empty() {
                 return Err(AdapterError::DirectValidationSucceededContractViolation);
@@ -14494,7 +13802,6 @@ impl SumeragiV2Adapter {
         if disposition != reducer::StepDisposition::Applied {
             return Err(AdapterError::DirectValidationSucceededContractViolation);
         }
-
         let next_fence = ReducerFenceProjection {
             pending_persistence: next_reducer.pending_persistence_record().cloned(),
             awaiting_signature: next_reducer.awaiting_signature().cloned(),
@@ -14508,7 +13815,6 @@ impl SumeragiV2Adapter {
                 .filter(|next| *next != u64::MAX)
                 .ok_or(AdapterError::ReducerFenceGenerationExhausted)?
         };
-
         match core_effects.as_slice() {
             [] => Ok(DirectValidationSucceededPreparation::NoEffect(
                 PreparedDirectValidationSucceededNoEffect {
@@ -14581,7 +13887,6 @@ impl SumeragiV2Adapter {
             _ => Err(AdapterError::DirectValidationSucceededContractViolation),
         }
     }
-
     /// Preview one exact deterministic rejection directly against cloned
     /// reducer and wire-registry state.
     ///
@@ -14610,7 +13915,6 @@ impl SumeragiV2Adapter {
         {
             return Err(AdapterError::DurableBodyMismatch);
         }
-
         let mut next_registry = self.registry.clone();
         let core_round = next_registry.round_to_core(round, &self.wire_context)?;
         let core_subject = next_registry.register_subject(subject)?;
@@ -14625,7 +13929,6 @@ impl SumeragiV2Adapter {
         if reducer_fence_generation == u64::MAX {
             return Err(AdapterError::ReducerFenceGenerationExhausted);
         }
-
         let event = reducer::Event::ValidationCompleted {
             tag,
             round: core_round,
@@ -14636,7 +13939,6 @@ impl SumeragiV2Adapter {
         let outcome = next_reducer.step(event.clone())?;
         let disposition = outcome.disposition();
         let mut core_effects = outcome.into_effects();
-
         if disposition == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy) {
             if !core_effects.is_empty() {
                 return Err(AdapterError::DirectValidationFailedContractViolation);
@@ -14675,7 +13977,6 @@ impl SumeragiV2Adapter {
         if disposition != reducer::StepDisposition::Applied {
             return Err(AdapterError::DirectValidationFailedContractViolation);
         }
-
         let next_fence = ReducerFenceProjection {
             pending_persistence: next_reducer.pending_persistence_record().cloned(),
             awaiting_signature: next_reducer.awaiting_signature().cloned(),
@@ -14689,7 +13990,6 @@ impl SumeragiV2Adapter {
                 .filter(|next| *next != u64::MAX)
                 .ok_or(AdapterError::ReducerFenceGenerationExhausted)?
         };
-
         match core_effects.as_slice() {
             [] => Ok(DirectValidationFailedPreparation::NoEffect(
                 PreparedDirectValidationFailedNoEffect {
@@ -14751,7 +14051,6 @@ impl SumeragiV2Adapter {
             _ => Err(AdapterError::DirectValidationFailedContractViolation),
         }
     }
-
     // READY_DURABLE_VALIDATE_ADAPTER_BRIDGE_BEGIN
     /// Preview one successful Ready Validate completion from sealed registry authority.
     ///
@@ -14784,7 +14083,6 @@ impl SumeragiV2Adapter {
                 })
             })
     }
-
     /// Preview one rejected Ready Validate completion from sealed registry authority.
     ///
     /// Diagnostic rejection text never crosses this boundary. The registry
@@ -14814,7 +14112,6 @@ impl SumeragiV2Adapter {
             })
     }
     // READY_DURABLE_VALIDATE_ADAPTER_BRIDGE_END
-
     /// Complete a body reconstruction requested by [`AdapterEffect::FetchBody`].
     pub(crate) fn body_available(
         &mut self,
@@ -14845,7 +14142,6 @@ impl SumeragiV2Adapter {
             Some(completion_evidence),
         )
     }
-
     /// Retag one Busy-deferred body completion for the reducer incarnation installed by a TC.
     ///
     /// Only lifecycle ownership changes; the manifest proposal round and
@@ -14875,7 +14171,6 @@ impl SumeragiV2Adapter {
         }
         rebound_count
     }
-
     /// Retire one Busy-deferred body completion whose exact pipeline was superseded.
     pub(crate) fn retire_deferred_body_available(
         &mut self,
@@ -14907,7 +14202,6 @@ impl SumeragiV2Adapter {
         debug_assert_eq!(retired, retiring.len());
         Ok(retired)
     }
-
     /// Count every Busy-deferred completion stage for one exact body pipeline.
     pub(crate) fn deferred_body_pipeline_completion_counts(
         &self,
@@ -14941,7 +14235,6 @@ impl SumeragiV2Adapter {
         }
         counts
     }
-
     /// Retire every Busy-deferred completion stage for one exact body pipeline.
     pub(crate) fn retire_deferred_body_pipeline_completions(
         &mut self,
@@ -14998,7 +14291,6 @@ impl SumeragiV2Adapter {
         retire(&mut self.deferred_inputs);
         Ok(retired)
     }
-
     /// Count logical and exact completion owners in the Busy-deferred lane.
     ///
     /// A logical owner occupies the same tag/stage/round/subject slot. An
@@ -15077,7 +14369,6 @@ impl SumeragiV2Adapter {
                 )
             })
     }
-
     /// Return the adapter admission ordinals of exact Busy-deferred owners.
     ///
     /// The serialized runtime joins these ordinals to its retained lifecycle
@@ -15123,7 +14414,6 @@ impl SumeragiV2Adapter {
             .map(|input| input.admission_ordinal)
             .collect()
     }
-
     /// Return exact body-stage terminal evidence retained behind the Busy
     /// reducer boundary. `BodyAvailable` is intentionally excluded because
     /// its persistent producer and restart aliases have stricter ownership
@@ -15191,7 +14481,6 @@ impl SumeragiV2Adapter {
             })
             .collect()
     }
-
     /// Report whether the exact Busy-deferred `BodyAvailable` owner carries
     /// the adapter's sole persistent producer reservation.
     ///
@@ -15244,7 +14533,6 @@ impl SumeragiV2Adapter {
         }
         Ok(true)
     }
-
     /// Classify exact decided `LocalProposalReady` owners without mutating any
     /// Busy-deferred lane.
     pub(crate) fn deferred_decided_local_proposal_counts(
@@ -15272,7 +14560,6 @@ impl SumeragiV2Adapter {
         }
         counts
     }
-
     /// Retire Busy-deferred proposal work after one exact decision is installed.
     ///
     /// All authenticated proposals and nonmatching local completions for the
@@ -15359,7 +14646,6 @@ impl SumeragiV2Adapter {
         }
         Ok(())
     }
-
     /// Retire deferred proposals made unsafe by an installed durable lock.
     ///
     /// The locked subject may remain queued in a later justified view. A
@@ -15413,7 +14699,6 @@ impl SumeragiV2Adapter {
         debug_assert_eq!(retired, retiring.len());
         Ok(retired)
     }
-
     /// Stage one exact completion at the adapter boundary for runtime/executor seam tests.
     #[cfg(test)]
     pub(crate) fn defer_body_available_for_test(
@@ -15447,7 +14732,6 @@ impl SumeragiV2Adapter {
         });
         Ok(())
     }
-
     /// Stage one authenticated proposal and its exact semantic admission
     /// records in the Busy-deferred lane for runtime seam tests.
     #[cfg(test)]
@@ -15520,7 +14804,6 @@ impl SumeragiV2Adapter {
         );
         Ok(())
     }
-
     /// Stage one non-fetch body completion in the Busy-deferred lane for seam tests.
     #[cfg(test)]
     pub(crate) fn defer_body_pipeline_stage_for_test(
@@ -15626,7 +14909,6 @@ impl SumeragiV2Adapter {
         });
         Ok(())
     }
-
     fn deferred_conflicting_proposal_owner(
         &self,
         round: reducer::Round,
@@ -15690,7 +14972,6 @@ impl SumeragiV2Adapter {
             registered_equivocation,
         ))
     }
-
     fn rollback_deferred_conflicting_proposal(
         &mut self,
         round: reducer::Round,
@@ -15715,7 +14996,6 @@ impl SumeragiV2Adapter {
                 &registered_proposal,
             )
         };
-
         let retiring = self
             .deferred_inputs
             .iter()
@@ -15733,7 +15013,6 @@ impl SumeragiV2Adapter {
         debug_assert_eq!(removed_equivocation, Some(registered_equivocation));
         Ok(true)
     }
-
     fn deferred_input_owns_registered_proposal(
         input: &DeferredInput,
         round: reducer::Round,
@@ -15761,7 +15040,6 @@ impl SumeragiV2Adapter {
                 == Some(core_manifest.chunk_count())
             && proposal.signature().as_bytes() == registered.signature
     }
-
     /// Acknowledge durable storage requested by [`AdapterEffect::StoreBody`].
     pub(crate) fn body_stored(
         &mut self,
@@ -15800,7 +15078,6 @@ impl SumeragiV2Adapter {
             Some(completion_evidence),
         )
     }
-
     /// Return successful deterministic validation requested by
     /// [`AdapterEffect::ValidateBody`].
     pub(crate) fn validation_succeeded(
@@ -15846,7 +15123,6 @@ impl SumeragiV2Adapter {
             Some(completion_evidence),
         )
     }
-
     /// Report deterministic rejection of a durable body. A rejection cannot
     /// authorize a vote, so it requires no success receipt.
     pub(crate) fn validation_failed(
@@ -15869,7 +15145,6 @@ impl SumeragiV2Adapter {
             Some(completion_evidence),
         )
     }
-
     /// Return the opaque signature requested by [`AdapterEffect::Sign`].
     pub(crate) fn signature_completed(
         &mut self,
@@ -15881,7 +15156,6 @@ impl SumeragiV2Adapter {
             signature: reducer::OpaqueSignature::new(signature),
         })
     }
-
     /// Preview one lifecycle-owned recovered signature without appending WAL
     /// or publishing output.
     ///
@@ -15910,7 +15184,6 @@ impl SumeragiV2Adapter {
         {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }
-
         let signer = match &request {
             SignRequest::Proposal(proposal) => proposal.proposer,
             SignRequest::Vote(vote) => vote.signer,
@@ -15941,7 +15214,6 @@ impl SumeragiV2Adapter {
         {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }
-
         let mut next_registry = self.registry.clone();
         let awaiting = self
             .reducer
@@ -15961,7 +15233,6 @@ impl SumeragiV2Adapter {
         if awaiting_request != request {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }
-
         let event = reducer::Event::Signed {
             tag,
             signature: reducer::OpaqueSignature::new(signature.clone()),
@@ -16005,7 +15276,6 @@ impl SumeragiV2Adapter {
             };
             converted.push(converted_effect);
         }
-
         let mut expected_signed_request = request.clone();
         match &mut expected_signed_request {
             SignRequest::Proposal(proposal) => proposal.signature.clone_from(&signature),
@@ -16027,7 +15297,6 @@ impl SumeragiV2Adapter {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }
         let broadcast = converted.remove(0);
-
         let mut pending_prepare = None;
         let mut persist_count = 0_usize;
         for effect in &core_effects {
@@ -16096,7 +15365,6 @@ impl SumeragiV2Adapter {
         if !expected_shape_is_exact {
             return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
         }
-
         let next_fence = ReducerFenceProjection {
             pending_persistence: next_reducer.pending_persistence_record().cloned(),
             awaiting_signature: next_reducer.awaiting_signature().cloned(),
@@ -16110,7 +15378,6 @@ impl SumeragiV2Adapter {
                 .filter(|next| *next != u64::MAX)
                 .ok_or(AdapterError::ReducerFenceGenerationExhausted)?
         };
-
         Ok(PreparedRecoveredLifecycleSignAdapterCompletionV1 {
             adapter: self,
             next_reducer,
@@ -16131,7 +15398,6 @@ impl SumeragiV2Adapter {
             dispatch_key,
         })
     }
-
     /// Acknowledge successful application of the exact tagged decision.
     ///
     /// The reducer validates the current `(height, view, generation)` tag and
@@ -16145,7 +15411,6 @@ impl SumeragiV2Adapter {
         let subject = self.registry.register_subject(subject)?;
         self.step(reducer::Event::ApplicationCompleted { tag, subject })
     }
-
     /// Preview the sole registry-owned recovered Apply completion.
     ///
     /// The adapter transition runs on cloned reducer and registry state. The
@@ -16176,7 +15441,6 @@ impl SumeragiV2Adapter {
         {
             return Err(AdapterError::RecoveredDecisionApplyCompletionMismatch);
         }
-
         let mut next_registry = self.registry.clone();
         let core_subject = next_registry.register_subject(subject)?;
         let event = reducer::Event::ApplicationCompleted {
@@ -16211,7 +15475,6 @@ impl SumeragiV2Adapter {
                 .filter(|next| *next != u64::MAX)
                 .ok_or(AdapterError::ReducerFenceGenerationExhausted)?
         };
-
         // Precompute the exact status before LedgerV1 can advance. The old
         // adapter state and progress marker are restored before returning.
         core::mem::swap(&mut self.reducer, &mut next_reducer);
@@ -16223,7 +15486,6 @@ impl SumeragiV2Adapter {
         core::mem::swap(&mut self.registry, &mut next_registry);
         core::mem::swap(&mut self.reducer, &mut next_reducer);
         let committed_status = committed_status?;
-
         Ok(PreparedRecoveredDecisionApplyAdapterCompletionV1 {
             adapter: self,
             next_reducer,
@@ -16236,7 +15498,6 @@ impl SumeragiV2Adapter {
             committed_status,
         })
     }
-
     /// Decide whether an exact internal callback still needs a serialized
     /// runtime admission.
     ///
@@ -16251,14 +15512,12 @@ impl SumeragiV2Adapter {
         command: &super::v2_runtime::AdapterCommand,
     ) -> super::v2_runtime::RuntimeCommandAdmissionPreflight {
         use super::v2_runtime::{AdapterCommand, RuntimeCommandAdmissionPreflight as Preflight};
-
         if matches!(command, AdapterCommand::Authenticated(_)) {
             return Preflight::Admit;
         }
         if self.fail_closed || !self.replay_complete {
             return Preflight::Reject;
         }
-
         let projected = (|| -> Result<_, AdapterError> {
             let mut registry = self.registry.clone();
             let (event, completion_evidence) = match command {
@@ -16432,7 +15691,6 @@ impl SumeragiV2Adapter {
         let Ok((event, completion_evidence)) = projected else {
             return Preflight::Reject;
         };
-
         // Internal completions retain their originating reducer incarnation.
         // A delayed completion from an obsolete incarnation is a harmless
         // stutter, but it must be discarded before allocating a new runtime
@@ -16441,7 +15699,6 @@ impl SumeragiV2Adapter {
         if tag != self.reducer.current_tag() {
             return Preflight::Coalesce;
         }
-
         let serviced_candidate = self.serviced_candidate(
             &event,
             DeferredPriority::Completion,
@@ -16489,7 +15746,6 @@ impl SumeragiV2Adapter {
                 _ => return Preflight::Reject,
             }
         }
-
         // The reducer's persistence/signing fences intentionally report Busy
         // before dispatching an event to its phase handler. Consult the
         // phase-specific monotone facts first so an exact callback which has
@@ -16599,7 +15855,6 @@ impl SumeragiV2Adapter {
         if let Some(preflight) = phase_fact {
             return preflight;
         }
-
         let mut projected_reducer = self.reducer.clone();
         match projected_reducer.step(event) {
             Ok(outcome) => match outcome.disposition() {
@@ -16613,7 +15868,6 @@ impl SumeragiV2Adapter {
             Err(_) => Preflight::Reject,
         }
     }
-
     /// Consume an applied height after Kura has durably associated the exact
     /// canonical block and CommitQC artifact.
     ///
@@ -16642,7 +15896,6 @@ impl SumeragiV2Adapter {
             .registry
             .qc_to_wire(&core_decision, self.aggregator.as_ref())?;
         let wire_subject = self.registry.subject(core_decision.subject())?;
-
         if artifact.height_context != self.wire_context
             || artifact.validator_set_pops != self.proofs_of_possession
             || artifact.subject != wire_subject
@@ -16656,7 +15909,6 @@ impl SumeragiV2Adapter {
         {
             return Err(AdapterError::DurableCommitMismatch);
         }
-
         let reducer_receipt = reducer::DurableCommitReceipt::from_trusted_storage(
             context_id(self.wire_context.id()),
             self.wire_context.height,
@@ -16686,7 +15938,6 @@ impl SumeragiV2Adapter {
             wal_retirement_warning,
         })
     }
-
     /// Build the compact canonical status payload from durable reducer state.
     pub(crate) fn status(&mut self) -> Result<wire::SumeragiV2Status, AdapterError> {
         let durable = self.reducer.durable_state();
@@ -16751,7 +16002,6 @@ impl SumeragiV2Adapter {
             validator_count,
             quorum: self.wire_context.quorum,
         };
-
         let (phase, body_state) = if let Some(decision) = &decision {
             if self.reducer.applied_subject() == Some(decision.subject()) {
                 (
@@ -16802,15 +16052,12 @@ impl SumeragiV2Adapter {
                 wire::SumeragiV2BodyState::Missing,
             )
         };
-
         #[cfg(not(test))]
         let output_guard_restart_required =
             super::output_guard::process_consensus_output_guard().restart_required();
         #[cfg(test)]
         let output_guard_restart_required = false;
-
         let liveness = self.liveness_status()?;
-
         Ok(wire::SumeragiV2Status {
             protocol_version: wire::PROTOCOL_VERSION,
             node_fingerprint: self.fingerprints.node,
@@ -16834,7 +16081,6 @@ impl SumeragiV2Adapter {
             liveness,
         })
     }
-
     /// Record and snapshot the runner-owned live-successor boundary.
     ///
     /// The marker lives in the adapter rather than only in the global status
@@ -16854,7 +16100,6 @@ impl SumeragiV2Adapter {
         ));
         self.status()
     }
-
     fn liveness_status(&mut self) -> Result<wire::SumeragiV2LivenessStatus, AdapterError> {
         let min_signers = u32::try_from(self.reducer.context().minimum_signer_count())
             .map_err(|_| wire::ValidationError::RosterTooLarge)?;
@@ -16896,7 +16141,6 @@ impl SumeragiV2Adapter {
                 })
             })
             .collect::<Result<Vec<_>, AdapterError>>()?;
-
         let outbound_intents = self.outbound_intent_statuses()?;
         let work = self.local_work_status();
         let queues = self.adapter_queue_statuses();
@@ -16915,7 +16159,6 @@ impl SumeragiV2Adapter {
                 count: self.ignore_counts.get(&core).copied().unwrap_or_default(),
             })
             .collect();
-
         Ok(wire::SumeragiV2LivenessStatus {
             generation: self.reducer.generation().get(),
             prepare_quorums,
@@ -16930,7 +16173,6 @@ impl SumeragiV2Adapter {
             ignore_counts,
         })
     }
-
     fn outbound_intent_statuses(
         &self,
     ) -> Result<Vec<wire::SumeragiV2OutboundIntentStatus>, AdapterError> {
@@ -16966,7 +16208,6 @@ impl SumeragiV2Adapter {
         }
         Ok(intents.into_values().collect())
     }
-
     fn retain_intent(
         intents: &mut BTreeMap<
             wire::SumeragiV2OutboundIntentKind,
@@ -16989,7 +16230,6 @@ impl SumeragiV2Adapter {
             }
         }
     }
-
     fn intent_from_wal_record(
         &self,
         record: &reducer::WalRecord,
@@ -17015,7 +16255,6 @@ impl SumeragiV2Adapter {
             }
         }
     }
-
     fn intent_from_signable(
         &self,
         signable: &reducer::SignableMessage,
@@ -17031,7 +16270,6 @@ impl SumeragiV2Adapter {
             }
         }
     }
-
     fn intent_from_message(
         &self,
         message: &reducer::ConsensusMessageV2,
@@ -17056,7 +16294,6 @@ impl SumeragiV2Adapter {
         };
         Ok(Some(intent))
     }
-
     fn intent_for_proposal(
         &self,
         proposal: &reducer::Proposal,
@@ -17071,7 +16308,6 @@ impl SumeragiV2Adapter {
             stage,
         })
     }
-
     fn intent_for_vote(
         &self,
         vote: &reducer::Vote,
@@ -17092,7 +16328,6 @@ impl SumeragiV2Adapter {
             stage,
         })
     }
-
     fn intent_for_certificate(
         &self,
         certificate: &reducer::QuorumCertificate,
@@ -17113,7 +16348,6 @@ impl SumeragiV2Adapter {
             stage,
         })
     }
-
     fn intent_for_timeout_vote(
         &self,
         vote: &reducer::TimeoutVote,
@@ -17128,7 +16362,6 @@ impl SumeragiV2Adapter {
             stage,
         }
     }
-
     fn intent_for_timeout_certificate(
         &self,
         certificate: &reducer::TimeoutCertificate,
@@ -17143,10 +16376,8 @@ impl SumeragiV2Adapter {
             stage,
         }
     }
-
     fn local_work_status(&self) -> wire::SumeragiV2WorkStatus {
         use wire::SumeragiV2LocalWorkStage::{Complete, Idle, Queued};
-
         let durable = self.reducer.durable_state();
         let decision = durable.decision();
         let applied = decision.is_some_and(|certificate| {
@@ -17187,7 +16418,6 @@ impl SumeragiV2Adapter {
         }
         work
     }
-
     fn adapter_queue_statuses(&self) -> Vec<wire::SumeragiV2QueueStatus> {
         let now = Instant::now();
         let ingress_oldest = self
@@ -17224,7 +16454,6 @@ impl SumeragiV2Adapter {
             ),
         ]
     }
-
     fn serviced_candidate(
         &self,
         event: &reducer::Event,
@@ -17296,12 +16525,10 @@ impl SumeragiV2Adapter {
             policy,
         ))
     }
-
     fn fail_serviced_candidate_store(&mut self, reason: String) -> AdapterError {
         self.fail_closed = true;
         AdapterError::ServicedCandidateStore(reason)
     }
-
     /// Verify the sole producer-owner state permitted after a durable Decision.
     ///
     /// The Decision WAL acknowledgement reclaims every candidate and producer
@@ -17330,7 +16557,6 @@ impl SumeragiV2Adapter {
         }
         Ok(true)
     }
-
     /// Bind the immutable lifecycle selected by the serialized runtime to the
     /// next adapter transition.
     ///
@@ -17353,12 +16579,10 @@ impl SumeragiV2Adapter {
         });
         Ok(())
     }
-
     /// Clear the one-transition runtime binding.
     pub(crate) fn clear_selected_producer_lifecycle(&mut self) {
         self.selected_producer_lifecycle = None;
     }
-
     fn producer_lifecycle_slot(
         &self,
         candidate: ServicedCandidateKey,
@@ -17381,7 +16605,6 @@ impl SumeragiV2Adapter {
         if let Some(slot) = existing_slot {
             return Ok(slot);
         }
-
         (1..=self.producer_continuation_lifecycle_capacity)
             .find(|slot| {
                 self.producer_continuations
@@ -17396,7 +16619,6 @@ impl SumeragiV2Adapter {
             })
             .ok_or_else(|| "bounded producer lifecycle slots are exhausted".to_owned())
     }
-
     /// Return whether an independently authenticated route selected a
     /// semantic producer which is already owned by one live Busy-deferred
     /// occurrence.
@@ -17448,7 +16670,6 @@ impl SumeragiV2Adapter {
                 "live producer alias partially changed its immutable key or ordinal".to_owned(),
             ));
         }
-
         let owners = self
             .deferred_producer_continuations
             .iter()
@@ -17525,7 +16746,6 @@ impl SumeragiV2Adapter {
         }
         Ok(true)
     }
-
     /// Reserve the exact selected lifecycle-stage address before reducer
     /// service can retire its source.
     fn reserve_selected_producer_continuation(
@@ -17683,7 +16903,6 @@ impl SumeragiV2Adapter {
         }
         Ok(Some(ProducerReservationToken { address, change }))
     }
-
     fn persist_producer_lifecycles(&mut self) -> Result<(), AdapterError> {
         self.serviced_candidate_store
             .persist_with_producer_continuations(
@@ -17693,7 +16912,6 @@ impl SumeragiV2Adapter {
             )
             .map_err(|reason| self.fail_serviced_candidate_store(reason))
     }
-
     fn rollback_producer_reservation(
         &mut self,
         token: Option<ProducerReservationToken>,
@@ -17731,7 +16949,6 @@ impl SumeragiV2Adapter {
         }
         self.persist_producer_lifecycles()
     }
-
     fn release_unrecorded_producer(
         &mut self,
         token: Option<ProducerReservationToken>,
@@ -17741,7 +16958,6 @@ impl SumeragiV2Adapter {
         };
         self.persist_unrecorded_producer_releases(std::slice::from_ref(&token))
     }
-
     /// Publish one or more producer releases as a single durable transition.
     ///
     /// Every caller still owns the source occurrence while this method runs.
@@ -17793,7 +17009,6 @@ impl SumeragiV2Adapter {
                 ));
             }
         }
-
         let process_previous = self.producer_continuations.clone();
         let durable_previous = self.durable_producer_continuations.clone();
         let dormant_previous = self.restored_dormant_producer_continuations.clone();
@@ -17843,7 +17058,6 @@ impl SumeragiV2Adapter {
         }
         Ok(())
     }
-
     fn terminalize_producer_continuation(
         &mut self,
         address: Option<ProducerContinuationAddress>,
@@ -17868,7 +17082,6 @@ impl SumeragiV2Adapter {
         self.producer_continuations.insert(address, terminal);
         Ok(Some(previous))
     }
-
     /// Persistently release producer reservations before their exact
     /// adapter-owned Busy occurrences are removed.
     fn release_deferred_producer_continuations_before_owner_removal(
@@ -17898,7 +17111,6 @@ impl SumeragiV2Adapter {
         }
         Ok(())
     }
-
     /// Release a speculative active record when the same macro-step reached a
     /// durable goal (Decision or strict view advance) before a producer
     /// continuation was needed. A strict view advance restores an exact older
@@ -17911,7 +17123,6 @@ impl SumeragiV2Adapter {
     ) -> Result<(), AdapterError> {
         self.release_unrecorded_producer(reservation)
     }
-
     /// Reserve bounded serviced-identity capacity before mutating the reducer.
     ///
     /// The fast path needs no speculative reducer step. Only a theoretically
@@ -17933,7 +17144,6 @@ impl SumeragiV2Adapter {
         if self.serviced_candidates.len() < capacity {
             return Ok(());
         }
-
         let mut projected = self.reducer.clone();
         let disposition = projected.step(event.clone())?.disposition();
         if serviced_candidate_record_kind(event, disposition).is_none() {
@@ -17943,7 +17153,6 @@ impl SumeragiV2Adapter {
             "derived serviced-candidate capacity {capacity} is exhausted before semantic service"
         )))
     }
-
     /// Mark one non-Busy reducer occurrence before its final owner is returned
     /// to the caller or serialized runtime.
     ///
@@ -18066,7 +17275,6 @@ impl SumeragiV2Adapter {
         }
         Ok(Some(token))
     }
-
     /// Classify the exact replacement evidence retained for one pending handoff.
     ///
     /// A non-empty effect batch is a concrete causal successor. An empty batch
@@ -18093,7 +17301,6 @@ impl SumeragiV2Adapter {
             ProducerContinuationHandoffEvidence::VolatileTerminal
         })
     }
-
     /// Consume one exact runtime handoff after its replacement owner exists.
     ///
     /// The opaque token is checked against both the live continuation record
@@ -18218,7 +17425,6 @@ impl SumeragiV2Adapter {
             )
         })
     }
-
     /// Return the safety-WAL replay cut used to reconcile generic ingress.
     ///
     /// The adapter is opened before the adjacent leader-wire store. Its
@@ -18239,7 +17445,6 @@ impl SumeragiV2Adapter {
             self.reducer.durable_state().decision().is_some(),
         ))
     }
-
     /// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
     pub(crate) fn mint_leader_wire_store_authority(
         &self,
@@ -18250,7 +17455,6 @@ impl SumeragiV2Adapter {
             .mint_leader_wire_store_authority(expected_wal_path)
             .map_err(AdapterError::from)
     }
-
     /// Read-only restart-stable producer terminals restored from the adjacent
     /// serviced-candidate snapshot.
     pub(crate) fn durable_producer_terminal_tokens(
@@ -18261,7 +17465,6 @@ impl SumeragiV2Adapter {
             .filter_map(ProducerContinuationRecord::terminal_token)
             .collect()
     }
-
     /// Reconcile restart-only Reserved producers against the replayed durable
     /// frontier before the runtime can install dormant capacity.
     ///
@@ -18337,7 +17540,6 @@ impl SumeragiV2Adapter {
         if retiring.is_empty() {
             return Ok(());
         }
-
         let process_previous = self.producer_continuations.clone();
         let durable_previous = self.durable_producer_continuations.clone();
         let dormant_previous = self.restored_dormant_producer_continuations.clone();
@@ -18362,7 +17564,6 @@ impl SumeragiV2Adapter {
         }
         Ok(())
     }
-
     /// Reclaim only epochs made obsolete by a strict certified view advance
     /// or by the first durable Decision in this height.
     fn reclaim_serviced_candidates(&mut self) -> Result<(), AdapterError> {
@@ -18458,12 +17659,10 @@ impl SumeragiV2Adapter {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn serviced_candidate_count_for_test(&self) -> usize {
         self.serviced_candidates.len()
     }
-
     #[cfg(test)]
     pub(crate) fn producer_continuation_counts_for_test(&self) -> (usize, usize, usize) {
         (
@@ -18472,17 +17671,14 @@ impl SumeragiV2Adapter {
             self.deferred_producer_continuations.len(),
         )
     }
-
     #[cfg(test)]
     fn serviced_candidate_store_path_for_test(&self) -> &std::path::Path {
         self.serviced_candidate_store.path_for_test()
     }
-
     #[cfg(test)]
     fn serviced_candidate_views_for_test(&self) -> BTreeSet<wire::View> {
         self.serviced_candidates.values().copied().collect()
     }
-
     fn reducer_fence_projection(&self) -> ReducerFenceProjection {
         ReducerFenceProjection {
             pending_persistence: self.reducer.pending_persistence_record().cloned(),
@@ -18490,7 +17686,6 @@ impl SumeragiV2Adapter {
             replay_complete: self.replay_complete,
         }
     }
-
     fn advance_reducer_fence_generation(&mut self) -> Result<(), AdapterError> {
         let Some(next) = self
             .reducer_fence_generation
@@ -18503,7 +17698,6 @@ impl SumeragiV2Adapter {
         self.reducer_fence_generation = next;
         Ok(())
     }
-
     fn step_reducer(
         &mut self,
         event: reducer::Event,
@@ -18515,7 +17709,6 @@ impl SumeragiV2Adapter {
         }
         Ok(outcome)
     }
-
     /// Return the current process-local reducer-fence generation.
     ///
     /// The lifecycle scheduler must pair this value with a domain-separated
@@ -18525,7 +17718,6 @@ impl SumeragiV2Adapter {
     pub(crate) const fn reducer_fence_generation(&self) -> u64 {
         self.reducer_fence_generation
     }
-
     fn ensure_ingress(&self) -> Result<(), AdapterError> {
         if self.fail_closed {
             Err(AdapterError::FailClosed)
@@ -18535,11 +17727,9 @@ impl SumeragiV2Adapter {
             Ok(())
         }
     }
-
     fn step(&mut self, event: reducer::Event) -> Result<AdapterOutcome, AdapterError> {
         self.step_with_completion_evidence(event, None)
     }
-
     fn step_with_completion_evidence(
         &mut self,
         event: reducer::Event,
@@ -18566,7 +17756,6 @@ impl SumeragiV2Adapter {
         self.step_with_defer_policy(event, false, priority, None, completion_evidence, None)
             .map(|result| result.outcome)
     }
-
     #[cfg(test)]
     fn step_authenticated_ingress(
         &mut self,
@@ -18576,7 +17765,6 @@ impl SumeragiV2Adapter {
         self.step_authenticated_ingress_with_ownership(event, admission, None)
             .map(|result| result.outcome)
     }
-
     fn step_authenticated_ingress_with_ownership(
         &mut self,
         event: reducer::Event,
@@ -18603,7 +17791,6 @@ impl SumeragiV2Adapter {
             authenticated_wire_identity,
         )
     }
-
     fn step_with_defer_policy(
         &mut self,
         event: reducer::Event,
@@ -18808,7 +17995,6 @@ impl SumeragiV2Adapter {
             },
         })
     }
-
     fn record_ingress_delivery(&mut self, admission: IngressAdmission) {
         self.ingress_deliveries.insert(
             admission.key,
@@ -18819,14 +18005,12 @@ impl SumeragiV2Adapter {
             },
         );
     }
-
     fn record_disposition(&mut self, disposition: reducer::StepDisposition) {
         if let reducer::StepDisposition::Ignored(reason) = disposition {
             let count = self.ignore_counts.entry(reason).or_default();
             *count = count.saturating_add(1);
         }
     }
-
     fn record_reducer_outcome(
         &mut self,
         event: &reducer::Event,
@@ -18973,7 +18157,6 @@ impl SumeragiV2Adapter {
             self.last_progress = Some((self.reducer.generation(), round, transition));
         }
     }
-
     fn log_body_progress(
         &self,
         event: &reducer::Event,
@@ -19021,7 +18204,6 @@ impl SumeragiV2Adapter {
             "processed Sumeragi v2 body-progress reducer input"
         );
     }
-
     fn enqueue_deferred(
         &mut self,
         event: reducer::Event,
@@ -19131,7 +18313,6 @@ impl SumeragiV2Adapter {
         }
         Ok(Some(admission_ordinal))
     }
-
     fn mint_deferred_admission_ordinal(
         &mut self,
         authenticated_ingress: bool,
@@ -19149,7 +18330,6 @@ impl SumeragiV2Adapter {
             }
         }
     }
-
     /// Return whether one adapter-owned Busy-deferred input can cross the
     /// reducer boundary now.
     ///
@@ -19166,7 +18346,6 @@ impl SumeragiV2Adapter {
                 || !self.deferred_progress_inputs.is_empty()
                 || !self.deferred_inputs.is_empty())
     }
-
     /// Return whether replay or a pending safety-WAL acknowledgement owns the
     /// only legal next reducer transition. Pacemaker ingress must remain
     /// queued until that exact asynchronous completion is delivered.
@@ -19174,7 +18353,6 @@ impl SumeragiV2Adapter {
         !self.fail_closed
             && (!self.replay_complete || self.reducer.pending_persistence_record().is_some())
     }
-
     /// Return whether an active signature request is the sole reducer fence.
     /// Certified TC/CommitQC ingress may bypass only this state; persistence
     /// and replay fences always precede every network transition.
@@ -19184,7 +18362,6 @@ impl SumeragiV2Adapter {
             && self.reducer.pending_persistence_record().is_none()
             && self.reducer.awaiting_signature().is_some()
     }
-
     /// Return the exact active signer owner used to scope runtime retry
     /// exclusions. A duplicate certified message leaves this identity
     /// unchanged, while consuming the signer or installing a successor
@@ -19200,7 +18377,6 @@ impl SumeragiV2Adapter {
             .cloned()
             .map(|message| (self.reducer.current_tag(), message))
     }
-
     /// Return whether one exact runtime completion opens the active signing
     /// fence which currently makes older adapter-owned debt unserviceable.
     ///
@@ -19223,7 +18399,6 @@ impl SumeragiV2Adapter {
         use super::v2_runtime::{
             AdapterCommand, RuntimeCommandAdmissionPreflight as AdmissionPreflight,
         };
-
         !self.fail_closed
             && self.replay_complete
             && tag == self.reducer.current_tag()
@@ -19232,7 +18407,6 @@ impl SumeragiV2Adapter {
             && matches!(command, AdapterCommand::SignatureCompleted(_))
             && self.preflight_runtime_command_admission(tag, command) == AdmissionPreflight::Admit
     }
-
     /// Return whether this exact queued command is forced to report `Busy` by
     /// the same active signing fence opened by
     /// [`Self::completion_unblocks_deferred_fence`].
@@ -19254,7 +18428,6 @@ impl SumeragiV2Adapter {
         use super::v2_runtime::{
             AdapterCommand, RuntimeCommandAdmissionPreflight as AdmissionPreflight,
         };
-
         if self.fail_closed
             || !self.replay_complete
             || self.reducer.pending_persistence_record().is_some()
@@ -19279,7 +18452,6 @@ impl SumeragiV2Adapter {
             }
         }
     }
-
     /// Conservatively prove that authenticated ingress reaches the reducer's
     /// active signing fence in the current adapter state.
     ///
@@ -19320,7 +18492,6 @@ impl SumeragiV2Adapter {
         if unsafe_proposal {
             return false;
         }
-
         let semantic_key = match payload {
             wire::ConsensusMessageV2Payload::Proposal(proposal) => {
                 if proposal.round.view != current_view {
@@ -19377,7 +18548,6 @@ impl SumeragiV2Adapter {
                 return false;
             }
         }
-
         // Authentication has already verified the envelope signature. Repeat
         // the registry conversion on a clone so conflicting identities or
         // commitments cannot be mislabeled as reducer-fenced work.
@@ -19422,7 +18592,6 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
         }
     }
-
     /// Service at most one adapter-owned Busy-deferred reducer transition.
     ///
     /// Returning one macro-step preserves the executor's fixed retained-batch
@@ -19433,7 +18602,6 @@ impl SumeragiV2Adapter {
         self.drain_deferred_with_evidence()
             .map(|selection| selection.map_or_else(Vec::new, |(effects, _)| effects))
     }
-
     /// Service one deferred transition and return its exact process-local
     /// ownership token with the resulting effects.
     ///
@@ -19447,7 +18615,6 @@ impl SumeragiV2Adapter {
         let eligible = self.all_deferred_admission_ordinals();
         self.drain_deferred_with_evidence_for_ordinals(&eligible)
     }
-
     /// Service one deferred transition from the exact target-relative set
     /// selected by the serialized runtime.
     ///
@@ -19472,7 +18639,6 @@ impl SumeragiV2Adapter {
         }
         Ok(Some((effects, evidence)))
     }
-
     /// Production deferred-service seam retaining an exact producer token
     /// until the serialized runtime installs the returned successor owner.
     pub(crate) fn drain_deferred_with_handoff_for_ordinals(
@@ -19594,7 +18760,6 @@ impl SumeragiV2Adapter {
         self.log_body_progress(&observed_event, disposition, effects.len());
         Ok(Some((effects, selection.evidence, producer_handoff)))
     }
-
     fn retain_failed_serviced_deferred_owner(&mut self, input: DeferredInput) {
         match input.priority {
             DeferredPriority::Completion => self.deferred_completions.push_front(input),
@@ -19602,7 +18767,6 @@ impl SumeragiV2Adapter {
             DeferredPriority::Normal => self.deferred_inputs.push_front(input),
         }
     }
-
     fn deferred_authenticated_event_matches_wire(
         &self,
         evidence: &DeferredServiceEvidence,
@@ -19633,14 +18797,12 @@ impl SumeragiV2Adapter {
             .message_to_wire(message, self.aggregator.as_ref())
             .is_ok_and(|message| message.encode().as_slice() == identity)
     }
-
     /// Fail closed when the deferred-service predicate and reducer Busy
     /// contract disagree.
     fn fail_deferred_service_contract(&mut self) -> AdapterError {
         self.fail_closed = true;
         AdapterError::DeferredServiceContractViolation
     }
-
     /// Snapshot every physically retained deferred owner by queue class.
     fn deferred_queue_lengths(&self) -> DeferredQueueLengths {
         DeferredQueueLengths {
@@ -19652,7 +18814,6 @@ impl SumeragiV2Adapter {
                 .expect("bounded normal queue length fits u64"),
         }
     }
-
     /// Snapshot only the lifecycle-minimal candidates the runtime authorized
     /// for this service turn.
     ///
@@ -19677,13 +18838,11 @@ impl SumeragiV2Adapter {
             normal: count(&self.deferred_inputs),
         }
     }
-
     #[cfg(test)]
     fn pop_deferred_next(&mut self) -> Result<Option<DeferredServiceSelection>, AdapterError> {
         let eligible = self.all_deferred_admission_ordinals();
         self.pop_deferred_next_eligible(&eligible)
     }
-
     fn pop_deferred_next_eligible(
         &mut self,
         eligible: &BTreeSet<u128>,
@@ -19825,13 +18984,11 @@ impl SumeragiV2Adapter {
         }
         Ok(None)
     }
-
     fn publish_status(&mut self) -> Result<(), AdapterError> {
         let status = self.status()?;
         super::status::set_v2_status(status);
         Ok(())
     }
-
     /// Permanently close the adapter after an internal macro-step shape
     /// violates the reviewed reducer/continuation contract.
     fn fail_macro_step(&mut self, error: AdapterError) -> AdapterError {
@@ -19842,7 +18999,6 @@ impl SumeragiV2Adapter {
         self.fail_closed = true;
         error
     }
-
     /// Execute one exact live WAL persistence cut into a closed linear batch.
     ///
     /// This future pre-admission entry point has no production caller yet. It
@@ -19881,7 +19037,6 @@ impl SumeragiV2Adapter {
             self.fail_closed = true;
             return Err(AdapterError::LiveWalReplayCauseMismatch);
         }
-
         let id = entry.id();
         self.pending_persistence_id = Some(id.get());
         if self.replay_complete
@@ -19910,7 +19065,6 @@ impl SumeragiV2Adapter {
                 return Err(error.into());
             }
         };
-
         let sealed = (|| {
             let Some(frame) = self.wal.recovered_records().last() else {
                 return Err(AdapterError::WalFrameIdentityMismatch {
@@ -19937,7 +19091,6 @@ impl SumeragiV2Adapter {
                     frame_hash: receipt.frame_hash(),
                 });
             };
-
             self.pending_persistence_id = None;
             let persisted = reducer::Event::Persisted { tag, id };
             let continuation = self.step_reducer(persisted.clone())?;
@@ -19970,7 +19123,6 @@ impl SumeragiV2Adapter {
                     }),
                 );
             }
-
             let mut converted = Vec::with_capacity(continuation.len());
             for effect in continuation {
                 converted.push(self.convert_effect(effect)?);
@@ -20028,7 +19180,6 @@ impl SumeragiV2Adapter {
         }
         sealed
     }
-
     fn live_wal_record_exactly_owns_effect(
         &mut self,
         persist_tag: reducer::EventTag,
@@ -20166,7 +19317,6 @@ impl SumeragiV2Adapter {
             ) => Ok(false),
         }
     }
-
     fn drive_effects(
         &mut self,
         effects: Vec<reducer::Effect>,
@@ -20203,7 +19353,6 @@ impl SumeragiV2Adapter {
             };
             return Err(self.fail_macro_step(error));
         }
-
         let mut pending = VecDeque::from(effects);
         let mut ready = Vec::new();
         let mut observed_continuation_effects = 0usize;
@@ -20321,7 +19470,6 @@ impl SumeragiV2Adapter {
         }
         Ok(ready)
     }
-
     fn convert_effect(&mut self, effect: reducer::Effect) -> Result<AdapterEffect, AdapterError> {
         match effect {
             reducer::Effect::Persist { .. } => {
@@ -20465,7 +19613,6 @@ impl SumeragiV2Adapter {
         }
     }
 }
-
 const ALL_IGNORE_REASONS: [(reducer::IgnoreReason, wire::SumeragiV2IgnoreReason); 12] = [
     (
         reducer::IgnoreReason::WrongHeight,
@@ -20516,7 +19663,6 @@ const ALL_IGNORE_REASONS: [(reducer::IgnoreReason, wire::SumeragiV2IgnoreReason)
         wire::SumeragiV2IgnoreReason::UnsafeProposal,
     ),
 ];
-
 const fn outbound_stage_rank(stage: wire::SumeragiV2OutboundIntentStage) -> u8 {
     match stage {
         wire::SumeragiV2OutboundIntentStage::PendingPersistence => 0,
@@ -20525,15 +19671,12 @@ const fn outbound_stage_rank(stage: wire::SumeragiV2OutboundIntentStage) -> u8 {
         wire::SumeragiV2OutboundIntentStage::Sent => 3,
     }
 }
-
 fn bounded_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
-
 fn duration_ms(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
-
 fn queue_status(
     queue: wire::SumeragiV2QueueKind,
     depth: usize,
@@ -20549,7 +19692,6 @@ fn queue_status(
         service_debt,
     }
 }
-
 fn deferred_queue_status(
     queue: wire::SumeragiV2QueueKind,
     inputs: &VecDeque<DeferredInput>,
@@ -20568,7 +19710,6 @@ fn deferred_queue_status(
         .unwrap_or_default();
     queue_status(queue, inputs.len(), capacity, oldest_age, service_debt)
 }
-
 #[cfg(test)]
 fn progress_rank(event: &reducer::Event) -> u8 {
     match event {
@@ -20595,14 +19736,12 @@ fn progress_rank(event: &reducer::Event) -> u8 {
         | reducer::Event::ApplicationCompleted { .. } => 0,
     }
 }
-
 #[derive(Clone, Debug, Decode, Encode)]
 struct WalEnvelopeV2 {
     protocol_version: u16,
     persistence_id: u64,
     record: WalRecordV2,
 }
-
 #[derive(Clone, Debug, Decode, Encode)]
 enum WalRecordV2 {
     ProposalIntent(wire::Proposal),
@@ -20616,7 +19755,6 @@ enum WalRecordV2 {
     InstallTimeout(wire::TimeoutCertificate),
     Decision(wire::QuorumCertificate),
 }
-
 #[derive(Clone, Default)]
 struct WireRegistry {
     wire_context: Option<wire::HeightContext>,
@@ -20629,7 +19767,6 @@ struct WireRegistry {
     certificates: BTreeMap<reducer::CertificateRef, wire::QuorumCertificate>,
     proposals: BTreeMap<(reducer::Round, reducer::Subject), wire::Proposal>,
 }
-
 impl WireRegistry {
     fn new(context: &wire::HeightContext) -> Result<Self, AdapterError> {
         let mut registry = Self {
@@ -20648,7 +19785,6 @@ impl WireRegistry {
         }
         Ok(registry)
     }
-
     fn core_context(
         &mut self,
         context: &wire::HeightContext,
@@ -20718,7 +19854,6 @@ impl WireRegistry {
         }
         .map_err(Into::into)
     }
-
     fn validator_id(
         &self,
         index: wire::ValidatorIndex,
@@ -20732,7 +19867,6 @@ impl WireRegistry {
             Err(AdapterError::ValidatorIndexOutOfRange(index))
         }
     }
-
     fn validator_index(
         &self,
         validator: reducer::ValidatorId,
@@ -20742,7 +19876,6 @@ impl WireRegistry {
             .copied()
             .ok_or(AdapterError::UnknownValidator(validator))
     }
-
     fn peer(&self, validator: reducer::ValidatorId) -> Result<PeerId, AdapterError> {
         let index = self.validator_index(validator)?;
         self.peers
@@ -20750,7 +19883,6 @@ impl WireRegistry {
             .cloned()
             .ok_or(AdapterError::ValidatorIndexOutOfRange(index))
     }
-
     fn register_subject(
         &mut self,
         subject: wire::BlockSubject,
@@ -20765,7 +19897,6 @@ impl WireRegistry {
             }
         }
     }
-
     fn manifest_conflicts(&self, incoming: &wire::PayloadManifest) -> bool {
         let round = reducer::Round::new(incoming.round.height, incoming.round.view);
         let subject = reducer::Subject::new(Hash::new(incoming.subject.encode()).into());
@@ -20773,14 +19904,12 @@ impl WireRegistry {
             .get(&(round, subject))
             .is_some_and(|registered| registered != incoming)
     }
-
     fn subject(&self, subject: reducer::Subject) -> Result<wire::BlockSubject, AdapterError> {
         self.subjects
             .get(&subject)
             .copied()
             .ok_or(AdapterError::UnknownSubject(subject))
     }
-
     fn register_execution_commitment(
         &mut self,
         round: reducer::Round,
@@ -20806,7 +19935,6 @@ impl WireRegistry {
             }
         }
     }
-
     fn execution_commitment(
         &self,
         round: reducer::Round,
@@ -20817,7 +19945,6 @@ impl WireRegistry {
             .copied()
             .ok_or(AdapterError::MissingExecutionCommitment)
     }
-
     fn round_to_core(
         &self,
         round: wire::ConsensusRound,
@@ -20828,7 +19955,6 @@ impl WireRegistry {
         }
         Ok(reducer::Round::new(round.height, round.view))
     }
-
     fn round_to_wire(&self, round: reducer::Round) -> wire::ConsensusRound {
         wire::ConsensusRound {
             context_id: self
@@ -20838,21 +19964,18 @@ impl WireRegistry {
             view: round.view(),
         }
     }
-
     fn phase_to_core(phase: wire::GlobalPhase) -> reducer::Phase {
         match phase {
             wire::GlobalPhase::Prepare => reducer::Phase::Prepare,
             wire::GlobalPhase::Commit => reducer::Phase::Commit,
         }
     }
-
     fn phase_to_wire(phase: reducer::Phase) -> wire::GlobalPhase {
         match phase {
             reducer::Phase::Prepare => wire::GlobalPhase::Prepare,
             reducer::Phase::Commit => wire::GlobalPhase::Commit,
         }
     }
-
     fn vote_to_core(
         &mut self,
         vote: &wire::Vote,
@@ -20880,7 +20003,6 @@ impl WireRegistry {
             reducer::OpaqueSignature::new(vote.signature.clone()),
         ))
     }
-
     fn unsigned_vote_to_wire(&self, vote: reducer::Vote) -> Result<wire::Vote, AdapterError> {
         Ok(wire::Vote {
             round: self.round_to_wire(vote.round()),
@@ -20893,13 +20015,11 @@ impl WireRegistry {
             signature: Vec::new(),
         })
     }
-
     fn signed_vote_to_wire(&self, vote: &reducer::SignedVote) -> Result<wire::Vote, AdapterError> {
         let mut wire = self.unsigned_vote_to_wire(vote.vote())?;
         wire.signature = vote.signature().as_bytes().to_vec();
         Ok(wire)
     }
-
     fn qc_reference_to_core(
         &mut self,
         reference: &wire::QuorumCertificateRef,
@@ -20911,7 +20031,6 @@ impl WireRegistry {
         };
         self.qc_reference_to_core_for_context(reference, wire_context_id)
     }
-
     fn qc_reference_to_core_for_context(
         &mut self,
         reference: &wire::QuorumCertificateRef,
@@ -20949,7 +20068,6 @@ impl WireRegistry {
             subject,
         ))
     }
-
     /// Register the predecessor CommitQC frozen into a successor context.
     ///
     /// This is the sole certificate conversion that does not target the active
@@ -20974,7 +20092,6 @@ impl WireRegistry {
         self.certificates.insert(core, certificate.clone());
         Ok(core)
     }
-
     fn qc_to_core(
         &mut self,
         certificate: &wire::QuorumCertificate,
@@ -20997,7 +20114,6 @@ impl WireRegistry {
         self.certificates.insert(reference, certificate.clone());
         Ok(core)
     }
-
     fn qc_to_wire(
         &mut self,
         certificate: &reducer::QuorumCertificate,
@@ -21023,7 +20139,6 @@ impl WireRegistry {
             .insert(certificate.reference(), wire.clone());
         Ok(wire)
     }
-
     /// Return whether a reducer QC retains this exact authenticated wire QC.
     ///
     /// Network QCs store the aggregate signature as the same opaque token on
@@ -21059,7 +20174,6 @@ impl WireRegistry {
                     && share.signature() == &aggregate
             })
     }
-
     fn timeout_vote_to_core(
         &mut self,
         vote: &wire::TimeoutVote,
@@ -21082,7 +20196,6 @@ impl WireRegistry {
             reducer::OpaqueSignature::new(vote.signature.clone()),
         ))
     }
-
     fn unsigned_timeout_vote_to_wire(
         &mut self,
         vote: &reducer::TimeoutVote,
@@ -21099,7 +20212,6 @@ impl WireRegistry {
             signature: Vec::new(),
         })
     }
-
     fn signed_timeout_vote_to_wire(
         &mut self,
         vote: &reducer::SignedTimeoutVote,
@@ -21109,7 +20221,6 @@ impl WireRegistry {
         wire.signature = vote.signature().as_bytes().to_vec();
         Ok(wire)
     }
-
     fn tc_to_core(
         &mut self,
         certificate: &wire::TimeoutCertificate,
@@ -21147,7 +20258,6 @@ impl WireRegistry {
         );
         Ok(core)
     }
-
     fn tc_to_wire(
         &mut self,
         certificate: &reducer::TimeoutCertificate,
@@ -21180,7 +20290,6 @@ impl WireRegistry {
         };
         Ok(wire)
     }
-
     fn manifest_to_core(
         &mut self,
         manifest: &wire::PayloadManifest,
@@ -21207,7 +20316,6 @@ impl WireRegistry {
             chunk_count,
         ))
     }
-
     fn manifest_to_wire(
         &self,
         round: reducer::Round,
@@ -21218,7 +20326,6 @@ impl WireRegistry {
             .cloned()
             .ok_or(AdapterError::MissingManifest)
     }
-
     fn proposal_to_core(
         &mut self,
         proposal: &wire::Proposal,
@@ -21230,7 +20337,6 @@ impl WireRegistry {
             reducer::OpaqueSignature::new(proposal.signature.clone()),
         ))
     }
-
     fn proposal_body_to_core(
         &mut self,
         proposal: &wire::Proposal,
@@ -21262,7 +20368,6 @@ impl WireRegistry {
             .or_insert_with(|| proposal.clone());
         Ok(core_proposal)
     }
-
     fn justification_to_core(
         &mut self,
         justification: &wire::ProposalJustification,
@@ -21287,7 +20392,6 @@ impl WireRegistry {
             }
         }
     }
-
     fn justification_to_wire(
         &mut self,
         justification: &reducer::ProposalJustification,
@@ -21322,7 +20426,6 @@ impl WireRegistry {
             }
         }
     }
-
     fn unsigned_proposal_to_wire(
         &mut self,
         proposal: &reducer::Proposal,
@@ -21346,7 +20449,6 @@ impl WireRegistry {
         self.proposals.insert(key, wire.clone());
         Ok(wire)
     }
-
     fn signed_proposal_to_wire(
         &mut self,
         proposal: &reducer::SignedProposal,
@@ -21363,7 +20465,6 @@ impl WireRegistry {
         );
         Ok(wire)
     }
-
     fn message_to_wire(
         &mut self,
         message: reducer::ConsensusMessageV2,
@@ -21400,7 +20501,6 @@ impl WireRegistry {
         };
         Ok(wire::ConsensusMessageV2::new(payload))
     }
-
     fn encode_wal_entry(
         &mut self,
         entry: &reducer::WalEntry,
@@ -21437,7 +20537,6 @@ impl WireRegistry {
         }
         .encode())
     }
-
     fn decode_wal_entry(
         &mut self,
         frame: &RecoveredRecord,
@@ -21581,7 +20680,6 @@ impl WireRegistry {
             record,
         ))
     }
-
     fn qc_to_core_unchecked(
         &mut self,
         certificate: &wire::QuorumCertificate,
@@ -21602,7 +20700,6 @@ impl WireRegistry {
         self.certificates.insert(reference, certificate.clone());
         Ok(core)
     }
-
     fn tc_to_core_unchecked(
         &mut self,
         certificate: &wire::TimeoutCertificate,
@@ -21638,7 +20735,6 @@ impl WireRegistry {
         ))
     }
 }
-
 fn verify_proposal_justification_authority(
     context: &wire::HeightContext,
     parent_verification: Option<&ParentVerificationContext>,
@@ -21674,7 +20770,6 @@ fn verify_proposal_justification_authority(
         }
     }
 }
-
 /// Reauthenticate every external authority proof embedded in one durable WAL
 /// record before reducer replay may consume it.
 ///
@@ -21732,7 +20827,6 @@ fn verify_wal_record_authority(
         }
     }
 }
-
 fn verify_authenticated_message(
     context: &wire::HeightContext,
     parent_verification: Option<&ParentVerificationContext>,
@@ -21744,7 +20838,6 @@ fn verify_authenticated_message(
     // which has already validated the immutable context, every BLS key, and
     // the complete aligned PoP vector. Do not rescan the boundary snapshot for
     // every hostile ingress message.
-
     match &message.payload {
         wire::ConsensusMessageV2Payload::Proposal(proposal) => {
             proposal.validate(context)?;
@@ -21798,7 +20891,6 @@ fn verify_authenticated_message(
         | wire::ConsensusMessageV2Payload::VrfReveal(_) => Err(AdapterError::TransportPayload),
     }
 }
-
 fn verify_roster_proofs(
     context: &wire::HeightContext,
     proofs_of_possession: &[Vec<u8>],
@@ -21813,7 +20905,6 @@ fn verify_roster_proofs(
         }
     })
 }
-
 fn verify_next_epoch_snapshot_proofs(context: &wire::HeightContext) -> Result<(), AdapterError> {
     let Some(snapshot) = &context.next_epoch_snapshot else {
         return Ok(());
@@ -21824,7 +20915,6 @@ fn verify_next_epoch_snapshot_proofs(context: &wire::HeightContext) -> Result<()
     )
     .map_err(|error| AdapterError::Cryptography(error.to_string()))
 }
-
 fn verify_individual_signature(
     context: &wire::HeightContext,
     signer: wire::ValidatorIndex,
@@ -21841,7 +20931,6 @@ fn verify_individual_signature(
         .verify(context.roster[index].validator.public_key(), preimage)
         .map_err(|error| AdapterError::Cryptography(error.to_string()))
 }
-
 fn verify_quorum_certificate(
     context: &wire::HeightContext,
     certificate: &wire::QuorumCertificate,
@@ -21863,7 +20952,6 @@ fn verify_quorum_certificate(
         other => AdapterError::Cryptography(other.to_string()),
     })
 }
-
 /// Verify one certificate against immutable historical context authority.
 ///
 /// This deliberately reuses the exact production roster-PoP and aggregate
@@ -21878,7 +20966,6 @@ pub(crate) fn verify_historical_quorum_certificate(
     verify_roster_proofs(context, proofs_of_possession)?;
     verify_quorum_certificate(context, certificate, proofs_of_possession)
 }
-
 fn verify_timeout_certificate(
     context: &wire::HeightContext,
     certificate: &wire::TimeoutCertificate,
@@ -21911,7 +20998,6 @@ fn verify_timeout_certificate(
     }
     Ok(())
 }
-
 fn verify_aggregate_signature(
     context: &wire::HeightContext,
     signers: &[wire::ValidatorIndex],
@@ -21947,24 +21033,20 @@ fn verify_aggregate_signature(
         ))
     }
 }
-
 fn validator_token(index: wire::ValidatorIndex) -> reducer::ValidatorId {
     let mut bytes = [0_u8; 32];
     bytes[28..].copy_from_slice(&index.to_be_bytes());
     reducer::ValidatorId::new(bytes)
 }
-
 fn context_id(id: wire::HeightContextId) -> reducer::ContextId {
     reducer::ContextId::new(*id.0.as_ref())
 }
-
 fn aggregate_token(signature: &[u8]) -> reducer::OpaqueSignature {
     let mut token = Vec::with_capacity(AGGREGATE_TOKEN_PREFIX.len() + signature.len());
     token.extend_from_slice(AGGREGATE_TOKEN_PREFIX);
     token.extend_from_slice(signature);
     reducer::OpaqueSignature::new(token)
 }
-
 fn aggregate_core_shares(
     shares: &[reducer::SignatureShare],
     aggregator: &dyn SignatureAggregator,
@@ -21998,7 +21080,6 @@ fn aggregate_core_shares(
         .aggregate(&signatures)
         .map_err(AdapterError::SignatureAggregation)
 }
-
 #[cfg(test)]
 mod tests {
     include!("tests/v2_adapter_main_00.rs");

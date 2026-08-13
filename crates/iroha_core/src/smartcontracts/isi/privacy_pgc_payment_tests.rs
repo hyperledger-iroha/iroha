@@ -12,7 +12,6 @@ fn payment_rejects_missing_stale_substituted_and_consumed_intent_before_effects(
             .expect("complete native bootstrap");
         transaction.apply();
     }
-
     let assert_unchanged = |transaction: &StateTransaction<'_, '_>,
                             expected_maps: (usize, usize, usize, usize),
                             expected_budget: (u32, u64, u32, u64)| {
@@ -23,7 +22,6 @@ fn payment_rejects_missing_stale_substituted_and_consumed_intent_before_effects(
             "intent rejection must not reserve privacy budget"
         );
     };
-
     {
         let mut transaction = block.transaction();
         let before = privacy_map_counts(&transaction);
@@ -38,7 +36,6 @@ fn payment_rejects_missing_stale_substituted_and_consumed_intent_before_effects(
         );
         assert_unchanged(&transaction, before, budget_before);
     }
-
     {
         let mut transaction = block.transaction();
         let before = privacy_map_counts(&transaction);
@@ -59,7 +56,6 @@ fn payment_rejects_missing_stale_substituted_and_consumed_intent_before_effects(
         );
         assert_unchanged(&transaction, before, budget_before);
     }
-
     {
         let mut substituted = payment.clone();
         substituted.envelope.proof.bytes_mut().bytes[0] ^= 1;
@@ -76,7 +72,6 @@ fn payment_rejects_missing_stale_substituted_and_consumed_intent_before_effects(
         );
         assert_unchanged(&transaction, before, budget_before);
     }
-
     {
         let mut transaction = block.transaction();
         let before = privacy_map_counts(&transaction);
@@ -102,7 +97,6 @@ fn payment_rejects_missing_stale_substituted_and_consumed_intent_before_effects(
         assert_unchanged(&transaction, before, budget_before);
     }
 }
-
 #[test]
 fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
     let bootstrap = valid_bootstrap_instruction();
@@ -112,7 +106,6 @@ fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
     };
     let middle = proof.bytes.len() / 2;
     proof.bytes[middle] ^= 1;
-
     let state = state_with_activation(active_lifecycle());
     let mut block = state.block(test_header());
     {
@@ -123,7 +116,6 @@ fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
             .expect("complete native bootstrap");
         transaction.apply();
     }
-
     let mut transaction = block.transaction();
     let invariants_before = transaction
         .world
@@ -150,7 +142,6 @@ fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
         .map(|(key, value)| (*key, *value))
         .collect::<Vec<_>>();
     let budget_before = transaction.privacy_budget_for_testing();
-
     bind_payment_instruction(&mut transaction, &payment);
     let error = payment
         .execute(&ALICE_ID, &mut transaction)
@@ -203,7 +194,6 @@ fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
         "failed native verification cannot reserve transaction or block budget"
     );
 }
-
 #[test]
 fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() {
     let bootstrap = valid_bootstrap_instruction();
@@ -218,7 +208,6 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
     let header = test_header();
     let header_hash = header.hash();
     let mut block = state.block(header);
-
     {
         let mut transaction = block.transaction();
         grant_governance(&mut transaction);
@@ -228,7 +217,6 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
             .expect("complete native bootstrap");
         transaction.apply();
     }
-
     {
         let mut transaction = block.transaction();
         let invariant_key = PrivacyPgcPoolInvariantKeyV1::new(bootstrap.bootstrap.namespace)
@@ -249,7 +237,6 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
             .get(&first_key)
             .expect("first account")
             .encrypted_balance();
-
         bind_payment_instruction(&mut transaction, &payment);
         payment
             .clone()
@@ -294,7 +281,6 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
         assert_eq!(budget.2, 2);
         transaction.apply();
     }
-
     {
         let mut transaction = block.transaction();
         let mut next_limits = PrivacyConsensusLimitsV1::taira_default();
@@ -305,7 +291,6 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
         transaction.apply();
     }
     block.commit().expect("commit bootstrap and payment block");
-
     let next_header = BlockHeader::new(
         NonZeroU64::new(TEST_BLOCK_HEIGHT + 300).expect("effective height"),
         Some(header_hash),

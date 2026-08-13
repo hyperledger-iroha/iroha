@@ -1,12 +1,10 @@
 //! Verify `JoinKaigi` instructions roundtrip through Norito encoding.
-
 use iroha_crypto::Hash;
 use iroha_data_model::{
     isi::{InstructionBox, kaigi::JoinKaigi},
     kaigi::{KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier},
     prelude::{AccountId, DomainId, Name},
 };
-
 #[test]
 fn join_kaigi_roundtrip_preserves_optional_fields() {
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -26,7 +24,6 @@ fn join_kaigi_roundtrip_preserves_optional_fields() {
         digest: Hash::new([0xBB; Hash::LENGTH]),
         issued_at_ms: 1_704_000_000_000,
     };
-
     let join = JoinKaigi {
         call_id: call_id.clone(),
         participant: participant.clone(),
@@ -35,17 +32,14 @@ fn join_kaigi_roundtrip_preserves_optional_fields() {
         roster_root: Some(Hash::new([0xCC; Hash::LENGTH])),
         proof: Some(vec![0x10, 0x20, 0x30]),
     };
-
     let boxed = iroha_data_model::isi::Instruction::into_instruction_box(Box::new(join.clone()));
     let encoded = norito::to_bytes(&boxed).expect("JoinKaigi should be serializable with norito");
     let decoded: InstructionBox =
         norito::decode_from_bytes(&encoded).expect("JoinKaigi should decode via norito");
-
     assert_eq!(
         decoded, boxed,
         "roundtrip should preserve instruction bytes"
     );
-
     let decoded_join = iroha_data_model::isi::Instruction::as_any(&decoded)
         .downcast_ref::<JoinKaigi>()
         .expect("decoded JoinKaigi instruction");

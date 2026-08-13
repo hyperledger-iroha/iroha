@@ -1,7 +1,5 @@
 //! Native SoraNet VPN lease escrow instruction handlers.
-
 use std::str::FromStr;
-
 use eyre::Result;
 use iroha_crypto::{Algorithm, derive_non_signing_ed25519_public_key};
 #[cfg(test)]
@@ -26,13 +24,11 @@ use iroha_executor_data_model::permission::soranet::CanIssueSoranetVpnQuote;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
-
 use super::{Error, Execute, asset::isi::assert_numeric_spec_with};
 use crate::{
     smartcontracts::isi::domain::isi::ensure_controller_capabilities,
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
 };
-
 /// Exact VPN purpose carried by a one-shot numeric movement capability.
 pub(in crate::smartcontracts::isi) enum VerifiedVpnNumericPurpose {
     Funding {
@@ -48,25 +44,21 @@ pub(in crate::smartcontracts::isi) enum VerifiedVpnNumericPurpose {
         authority: AccountId,
     },
 }
-
 /// Non-reusable proof that VPN admission selected an exact atomic movement batch.
 pub(in crate::smartcontracts::isi) struct VerifiedVpnNumericBatch {
     purpose: VerifiedVpnNumericPurpose,
     legs: Vec<(AssetId, AssetId, Quantity)>,
 }
-
 impl VerifiedVpnNumericBatch {
     fn new(purpose: VerifiedVpnNumericPurpose, legs: Vec<(AssetId, AssetId, Quantity)>) -> Self {
         Self { purpose, legs }
     }
-
     pub(in crate::smartcontracts::isi) fn into_parts(
         self,
     ) -> (VerifiedVpnNumericPurpose, Vec<(AssetId, AssetId, Quantity)>) {
         (self.purpose, self.legs)
     }
 }
-
 const VPN_LEASE_CUSTODY_ACCOUNT_DOMAIN: &str = "iroha-soranet-vpn-lease-v1";
 const VPN_MAX_SIGNED_QUOTE_BYTES_V1: usize = 32 * 1024;
 const VPN_MAX_RELAY_ENDPOINT_BYTES_V1: usize = 1_024;
@@ -76,34 +68,29 @@ const VPN_MAX_ROUTE_ENTRIES_V1: usize = 64;
 const VPN_MAX_ROUTE_BYTES_V1: usize = 128;
 const VPN_MAX_DNS_ENTRIES_V1: usize = 8;
 const VPN_MAX_DNS_BYTES_V1: usize = 64;
-
 fn validation_err(message: impl Into<String>) -> Error {
     iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
         message.into().into(),
     )
 }
-
 fn ensure_non_zero_32(label: &str, value: &[u8; 32]) -> Result<(), Error> {
     if *value == [0u8; 32] {
         return Err(validation_err(format!("{label} must not be zero")));
     }
     Ok(())
 }
-
 fn ensure_non_zero_16(label: &str, value: &[u8; 16]) -> Result<(), Error> {
     if *value == [0u8; 16] {
         return Err(validation_err(format!("{label} must not be zero")));
     }
     Ok(())
 }
-
 fn ensure_positive(value: &Quantity) -> Result<(), Error> {
     if value.is_zero() {
         return Err(validation_err("vpn lease fee must be positive"));
     }
     Ok(())
 }
-
 fn ensure_relay_trust_covers_lease(
     relay_id: &[u8; 32],
     quote_policy: &VpnQuotePolicyV1,
@@ -121,14 +108,12 @@ fn ensure_relay_trust_covers_lease(
     }
     Ok(())
 }
-
 fn ensure_non_zero_policy_commitment(label: &str, value: &[u8; 32]) -> Result<(), Error> {
     if *value == [0_u8; 32] {
         return Err(validation_err(format!("{label} must not be zero")));
     }
     Ok(())
 }
-
 fn ensure_bounded_canonical_text(label: &str, value: &str, max_bytes: usize) -> Result<(), Error> {
     if value.is_empty()
         || value != value.trim()
@@ -141,7 +126,6 @@ fn ensure_bounded_canonical_text(label: &str, value: &str, max_bytes: usize) -> 
     }
     Ok(())
 }
-
 fn ensure_bounded_canonical_text_list(
     label: &str,
     values: &[String],
@@ -164,7 +148,6 @@ fn ensure_bounded_canonical_text_list(
     }
     Ok(())
 }
-
 fn ensure_canonical_quote_policy(
     body: &VpnQuoteBodyV1,
     custody_account_id: &AccountId,
@@ -279,7 +262,6 @@ fn ensure_canonical_quote_policy(
     }
     ensure_relay_trust_covers_lease(&policy.relay_id, policy, body.expires_at_ms)
 }
-
 fn vpn_quote_operator_is_authorized<W: WorldReadOnly>(
     operator_account_id: &AccountId,
     world: &W,
@@ -298,7 +280,6 @@ fn vpn_quote_operator_is_authorized<W: WorldReadOnly>(
                 })
             }))
 }
-
 fn verify_operator_quote(
     quote: &VpnSignedQuoteV1,
     authority: &AccountId,
@@ -379,24 +360,20 @@ fn verify_operator_quote(
     ensure_canonical_quote_policy(body, &custody)?;
     Ok(custody)
 }
-
 fn hash_to_bytes(hash: &iroha_crypto::HashOf<SignedTransaction>) -> [u8; 32] {
     let mut bytes = [0u8; 32];
     bytes.copy_from_slice(hash.as_ref());
     bytes
 }
-
 fn account_hash(account_id: &AccountId) -> [u8; 32] {
     *blake3::hash(account_id.to_string().as_bytes()).as_bytes()
 }
-
 fn xor_asset_definition_id() -> AssetDefinitionId {
     let domain =
         DomainId::parse_fully_qualified("universal.universal").expect("static XOR domain id");
     let name = Name::from_str("xor").expect("static XOR asset name");
     AssetDefinitionId::derive_from_components(domain, name)
 }
-
 fn ensure_xor_asset(asset_definition: &AssetDefinitionId) -> Result<(), Error> {
     let expected = xor_asset_definition_id();
     if asset_definition != &expected {
@@ -406,7 +383,6 @@ fn ensure_xor_asset(asset_definition: &AssetDefinitionId) -> Result<(), Error> {
     }
     Ok(())
 }
-
 /// Derive the deterministic protocol custody account for a VPN lease.
 pub fn vpn_lease_custody_account_id(
     network_id: &iroha_data_model::NetworkId,
@@ -420,7 +396,6 @@ pub fn vpn_lease_custody_account_id(
     );
     Ok(AccountId::new(public_key))
 }
-
 fn ensure_custody_account(
     custody: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -444,7 +419,6 @@ fn ensure_custody_account(
     state_transaction.world.accounts.insert(id, value);
     Ok(true)
 }
-
 fn transfer_numeric_asset_for_vpn(
     state_transaction: &mut StateTransaction<'_, '_>,
     authorization: VerifiedVpnNumericBatch,
@@ -454,21 +428,18 @@ fn transfer_numeric_asset_for_vpn(
         authorization,
     )
 }
-
 fn custody_asset(record: &VpnLeaseRecordV1) -> AssetId {
     AssetId::new(
         record.asset_definition.clone(),
         record.custody_account_id.clone(),
     )
 }
-
 fn client_asset(record: &VpnLeaseRecordV1) -> AssetId {
     AssetId::new(
         record.asset_definition.clone(),
         record.client_account_id.clone(),
     )
 }
-
 /// Return whether an account is still bound by a funded active VPN lease.
 ///
 /// Rekeying or unregistering such an account would invalidate the signed
@@ -479,14 +450,12 @@ pub(crate) fn is_active_vpn_client<W: WorldReadOnly>(world: &W, account_id: &Acc
         .get(account_id)
         .is_some()
 }
-
 fn operator_asset(record: &VpnLeaseRecordV1) -> AssetId {
     AssetId::new(
         record.asset_definition.clone(),
         record.operator_account_id.clone(),
     )
 }
-
 fn verify_receipt_ids(
     record: &VpnLeaseRecordV1,
     receipt: &VpnSessionReceiptV1,
@@ -511,7 +480,6 @@ fn verify_receipt_ids(
     }
     Ok(())
 }
-
 fn verify_vpn_settlement(
     record: &VpnLeaseRecordV1,
     receipt: &VpnSessionReceiptV1,
@@ -558,7 +526,6 @@ fn verify_vpn_settlement(
             "vpn voucher issuance timestamp falls outside the signed lease",
         ));
     }
-
     let earned_fee = record
         .tariff
         .earned_fee(&voucher.body)
@@ -570,7 +537,6 @@ fn verify_vpn_settlement(
     }
     Ok(earned_fee)
 }
-
 fn refund_active_vpn_lease(
     mut record: VpnLeaseRecordV1,
     authority: &AccountId,
@@ -604,7 +570,6 @@ fn refund_active_vpn_lease(
         .map_err(validation_err)?;
     Ok(())
 }
-
 fn release_expired_vpn_claims_for_quote(
     body: &VpnQuoteBodyV1,
     authority: &AccountId,
@@ -625,7 +590,6 @@ fn release_expired_vpn_claims_for_quote(
             .ok_or_else(|| validation_err("vpn active-account index is stale"))?;
         refund_active_vpn_lease(record, authority, now_ms, state_transaction)?;
     }
-
     if let Some(existing_lease_id) = state_transaction
         .world
         .vpn_active_lease_by_address_slot
@@ -642,7 +606,6 @@ fn release_expired_vpn_claims_for_quote(
     }
     Ok(())
 }
-
 impl Execute for OpenVpnLeaseEscrow {
     fn execute(
         self,
@@ -689,7 +652,6 @@ impl Execute for OpenVpnLeaseEscrow {
         {
             return Err(validation_err("vpn address slot is already claimed"));
         }
-
         let open_tx_hash = state_transaction
             .current_tx_hash
             .as_ref()
@@ -712,7 +674,6 @@ impl Execute for OpenVpnLeaseEscrow {
             state_transaction.world.accounts.remove(custody.clone());
         }
         transfer_result?;
-
         let record = VpnLeaseRecordV1 {
             lease_id: body.lease_id,
             session_id: body.session_id,
@@ -749,7 +710,6 @@ impl Execute for OpenVpnLeaseEscrow {
         Ok(())
     }
 }
-
 impl Execute for SettleVpnLease {
     fn execute(
         self,
@@ -780,7 +740,6 @@ impl Execute for SettleVpnLease {
                 "vpn settlement receipt and voucher must not be dated in the future",
             ));
         }
-
         let earned_fee = verify_vpn_settlement(&record, &self.relay_receipt, &self.client_voucher)?;
         let refund_fee = record
             .lease_fee
@@ -806,7 +765,6 @@ impl Execute for SettleVpnLease {
                 legs,
             ),
         )?;
-
         record.status = VpnLeaseStatusV1::Settled;
         record.settled_at_ms = Some(now_ms);
         record.highest_voucher_sequence = self.client_voucher.body.sequence;
@@ -822,7 +780,6 @@ impl Execute for SettleVpnLease {
         Ok(())
     }
 }
-
 impl Execute for RefundExpiredVpnLease {
     fn execute(
         self,
@@ -841,23 +798,18 @@ impl Execute for RefundExpiredVpnLease {
         refund_active_vpn_lease(record, authority, now_ms, state_transaction)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_config::parameters::actual::LaneConfig;
     use iroha_primitives::numeric::Numeric;
-
     use super::*;
-
     fn nano_quantity(nanos: u64) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(u128::from(nanos), 9))
             .expect("test nano-XOR value is a valid quantity")
     }
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("VPN fixture key generation should succeed")
     }
-
     fn vpn_test_state() -> crate::state::State {
         crate::state::State::new_for_testing(
             crate::state::World::new(),
@@ -865,7 +817,6 @@ mod tests {
             crate::query::store::LiveQueryStore::start_test(),
         )
     }
-
     fn vpn_test_block_header() -> iroha_data_model::block::BlockHeader {
         iroha_data_model::block::BlockHeader::new(
             std::num::NonZeroU64::new(1).expect("VPN test block height is non-zero"),
@@ -876,7 +827,6 @@ mod tests {
             0,
         )
     }
-
     fn vpn_test_network_id(seed: u8) -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -884,41 +834,34 @@ mod tests {
             ),
         )
     }
-
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     #[test]
     fn xor_asset_check_accepts_canonical_xor_id() {
         ensure_xor_asset(&xor_asset_definition_id()).expect("canonical XOR asset id");
     }
-
     #[test]
     fn vpn_lease_custody_account_id_is_stable_without_a_public_signing_seed() {
         let network_id = vpn_test_network_id(0x21);
         let asset_definition = xor_asset_definition_id();
         let lease_id = [0x11; 32];
-
         let first = vpn_lease_custody_account_id(&network_id, &lease_id, &asset_definition)
             .expect("custody account derivation succeeds");
         let second = vpn_lease_custody_account_id(&network_id, &lease_id, &asset_definition)
             .expect("custody account derivation is repeatable");
         assert_eq!(first, second);
-
         let mut different_lease_id = lease_id;
         different_lease_id[0] ^= 0x01;
         let different =
             vpn_lease_custody_account_id(&network_id, &different_lease_id, &asset_definition)
                 .expect("different custody account derivation succeeds");
         assert_ne!(first, different);
-
         let different_network =
             vpn_lease_custody_account_id(&vpn_test_network_id(0x22), &lease_id, &asset_definition)
                 .expect("different exact-network custody derivation succeeds");
         assert_ne!(first, different_network);
-
         let mut public_seed_material = Vec::new();
         public_seed_material.extend_from_slice(VPN_LEASE_CUSTODY_ACCOUNT_DOMAIN.as_bytes());
         public_seed_material.extend_from_slice(network_id.as_bytes());
@@ -933,7 +876,6 @@ mod tests {
             "VPN custody must not expose a signing key through public seed derivation"
         );
     }
-
     fn settlement_record_and_voucher(
         mut voucher_body: VpnUsageVoucherBodyV1,
     ) -> (VpnLeaseRecordV1, VpnSessionReceiptV1, VpnUsageVoucherV1) {
@@ -1062,7 +1004,6 @@ mod tests {
         };
         (record, receipt, voucher)
     }
-
     #[test]
     fn settlement_verifies_voucher_and_recomputes_tariff() {
         let body = VpnUsageVoucherBodyV1 {
@@ -1076,13 +1017,11 @@ mod tests {
             issued_at_ms: 2_000,
         };
         let (record, receipt, voucher) = settlement_record_and_voucher(body);
-
         assert_eq!(
             verify_vpn_settlement(&record, &receipt, &voucher).expect("settlement valid"),
             receipt.earned_fee
         );
     }
-
     #[test]
     fn settlement_rejects_relay_overclaim() {
         let body = VpnUsageVoucherBodyV1 {
@@ -1100,10 +1039,8 @@ mod tests {
             .earned_fee
             .checked_add(&nano_quantity(1))
             .expect("test overclaim remains representable");
-
         assert!(verify_vpn_settlement(&record, &receipt, &voucher).is_err());
     }
-
     #[test]
     fn relay_trust_must_cover_complete_lease() {
         let body = VpnUsageVoucherBodyV1 {
@@ -1117,7 +1054,6 @@ mod tests {
             issued_at_ms: 2_000,
         };
         let (record, _, _) = settlement_record_and_voucher(body);
-
         ensure_relay_trust_covers_lease(
             &record.relay_id,
             &record.quote_policy,
@@ -1132,7 +1068,6 @@ mod tests {
         .expect_err("trust expiring before the lease must be rejected");
         assert!(error.to_string().contains("complete lease"));
     }
-
     #[test]
     fn canonical_quote_policy_rejects_unsigned_address_and_economic_projections() {
         let body = VpnUsageVoucherBodyV1 {
@@ -1148,27 +1083,22 @@ mod tests {
         let (record, _, _) = settlement_record_and_voucher(body);
         ensure_canonical_quote_policy(&record.signed_quote.body, &record.custody_account_id)
             .expect("exact signed quote policy is canonical");
-
         let mut wrong_address = record.signed_quote.body.clone();
         wrong_address.policy.tunnel_addresses = vec!["10.0.0.2/30".to_owned()];
         assert!(ensure_canonical_quote_policy(&wrong_address, &record.custody_account_id).is_err());
-
         let mut wrong_fee_asset = record.signed_quote.body.clone();
         wrong_fee_asset.policy.fee_asset_id = "other#universal.universal".to_owned();
         assert!(
             ensure_canonical_quote_policy(&wrong_fee_asset, &record.custody_account_id).is_err()
         );
-
         let mut missing_trust = record.signed_quote.body.clone();
         missing_trust.policy.directory_snapshot_digest = [0_u8; 32];
         assert!(ensure_canonical_quote_policy(&missing_trust, &record.custody_account_id).is_err());
-
         let mut oversized_endpoint = record.signed_quote.body.clone();
         oversized_endpoint.policy.relay_endpoint = "x".repeat(VPN_MAX_RELAY_ENDPOINT_BYTES_V1 + 1);
         assert!(
             ensure_canonical_quote_policy(&oversized_endpoint, &record.custody_account_id).is_err()
         );
-
         let mut too_many_routes = record.signed_quote.body.clone();
         too_many_routes.policy.route_pushes = (0..=VPN_MAX_ROUTE_ENTRIES_V1)
             .map(|index| format!("10.0.{index}.0/24"))
@@ -1176,18 +1106,15 @@ mod tests {
         assert!(
             ensure_canonical_quote_policy(&too_many_routes, &record.custody_account_id).is_err()
         );
-
         let mut duplicate_route = record.signed_quote.body.clone();
         duplicate_route.policy.route_pushes = vec!["0.0.0.0/0".to_owned(); 2];
         assert!(
             ensure_canonical_quote_policy(&duplicate_route, &record.custody_account_id).is_err()
         );
-
         let mut zero_padding = record.signed_quote.body.clone();
         zero_padding.policy.padding_budget_ms = 0;
         assert!(ensure_canonical_quote_policy(&zero_padding, &record.custody_account_id).is_err());
     }
-
     #[test]
     fn vpn_quote_operator_authority_accepts_only_leaf_permission_directly_or_via_role() {
         let body = VpnUsageVoucherBodyV1 {
@@ -1208,12 +1135,10 @@ mod tests {
         let account = Account::new(operator.clone()).build(&operator);
         let (id, value) = account.into_key_value();
         transaction.world.accounts.insert(id, value);
-
         assert!(
             !vpn_quote_operator_is_authorized(&operator, &transaction.world)
                 .expect("registered operator lookup")
         );
-
         let required: Permission = CanIssueSoranetVpnQuote.into();
         transaction.world.account_permissions.insert(
             operator.clone(),
@@ -1223,7 +1148,6 @@ mod tests {
             vpn_quote_operator_is_authorized(&operator, &transaction.world)
                 .expect("direct issuer lookup")
         );
-
         transaction
             .world
             .account_permissions
@@ -1242,7 +1166,6 @@ mod tests {
                 .expect("role issuer lookup")
         );
     }
-
     #[test]
     fn active_address_slot_index_rejects_exact_historical_quote_collision_pair() {
         let mut quote_0009 = [0_u8; 32];
@@ -1263,7 +1186,6 @@ mod tests {
         let (second, _, _) = settlement_record_and_voucher(voucher_body(quote_0198));
         assert_ne!(first.client_account_id, second.client_account_id);
         assert_eq!(first.address_slot, second.address_slot);
-
         let world = crate::state::World::new();
         let mut block = world.block();
         let mut transaction =
@@ -1276,7 +1198,6 @@ mod tests {
             .expect_err("second active lease must not alias the same address slot");
         assert!(error.contains("address slot"), "unexpected error: {error}");
     }
-
     #[test]
     fn active_account_index_releases_only_on_terminal_transition() {
         let body = VpnUsageVoucherBodyV1 {
@@ -1294,7 +1215,6 @@ mod tests {
         terminal.status = VpnLeaseStatusV1::Refunded;
         terminal.refunded_at_ms = Some(11_000);
         terminal.refunded_fee = terminal.lease_fee.clone();
-
         let state = vpn_test_state();
         let mut block = state.block(vpn_test_block_header());
         let mut transaction = block.transaction();
@@ -1341,7 +1261,6 @@ mod tests {
             .expect_err("terminal VPN lease must not be resurrected");
         assert!(error.contains("terminal status back to active"));
     }
-
     #[test]
     fn vpn_state_rejects_a_retained_quote_field_substitution() {
         let body = VpnUsageVoucherBodyV1 {
@@ -1358,7 +1277,6 @@ mod tests {
         let mut impossible_open = forged.clone();
         impossible_open.opened_at_ms = impossible_open.expires_at_ms;
         forged.signed_quote.body.policy.descriptor_commit[0] ^= 1;
-
         let world = crate::state::World::new();
         let mut block = world.block();
         let mut transaction =
@@ -1378,7 +1296,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-
     #[test]
     fn vpn_state_revalidates_terminal_receipt_and_timeout_boundaries() {
         let body = VpnUsageVoucherBodyV1 {
@@ -1409,7 +1326,6 @@ mod tests {
             .lease_fee
             .checked_sub(&settled.earned_fee)
             .expect("fixture fee conservation");
-
         let insert_fresh = |record| {
             let world = crate::state::World::new();
             let mut block = world.block();
@@ -1418,7 +1334,6 @@ mod tests {
             transaction.put_vpn_lease(record).map(|_| ())
         };
         insert_fresh(settled.clone()).expect("canonical settled lease must rebuild");
-
         let mut wrong_account = settled.clone();
         let wrong_account_receipt_hash = {
             let wrong_account_receipt = wrong_account
@@ -1434,7 +1349,6 @@ mod tests {
                 .expect_err("receipt account substitution must fail")
                 .contains("retained receipt")
         );
-
         let mut wrong_class = settled.clone();
         let wrong_class_receipt_hash = {
             let wrong_class_receipt = wrong_class
@@ -1451,7 +1365,6 @@ mod tests {
                 .expect_err("receipt class substitution must fail")
                 .contains("retained receipt")
         );
-
         let mut late_settlement = settled;
         late_settlement.settled_at_ms = Some(late_settlement.refund_available_at_ms());
         assert!(
@@ -1459,7 +1372,6 @@ mod tests {
                 .expect_err("settlement at the refund boundary must fail")
                 .contains("retained receipt")
         );
-
         let mut early_refund = active;
         early_refund.status = VpnLeaseStatusV1::Refunded;
         early_refund.refunded_at_ms = Some(early_refund.refund_available_at_ms() - 1);

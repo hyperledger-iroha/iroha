@@ -1,12 +1,9 @@
 // Version and status visibility helpers and regressions.
-
 #[cfg(test)]
 mod version_tests {
     use http_body_util::BodyExt as _;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-
     use super::*;
-
     #[tokio::test]
     async fn handle_version_reports_unavailable_without_genesis() {
         let state = Arc::new(CoreState::new_for_testing(
@@ -31,7 +28,6 @@ mod version_tests {
         );
     }
 }
-
 #[cfg(feature = "telemetry")]
 fn ensure_status_metrics_match_authoritative_height(
     status: &Status,
@@ -51,7 +47,6 @@ fn ensure_status_metrics_match_authoritative_height(
     }
     Ok(())
 }
-
 #[cfg(feature = "telemetry")]
 /// Anchor the public chain-height field to applied state.
 ///
@@ -70,16 +65,13 @@ fn normalize_status_block_visibility(status: &mut Status, authoritative_block_he
     status.blocks =
         authoritative_block_height.unwrap_or_else(|| status.blocks.max(telemetry_commit_height));
 }
-
 #[cfg(all(test, feature = "telemetry"))]
 mod status_block_visibility_tests {
     use iroha_telemetry::metrics::SumeragiConsensusStatus;
-
     use super::{
         Error, Status, ensure_status_metrics_match_authoritative_height,
         normalize_status_block_visibility,
     };
-
     #[test]
     fn stale_classified_height_is_retriable_instead_of_publishing_a_false_empty_gap() {
         let status = Status {
@@ -87,7 +79,6 @@ mod status_block_visibility_tests {
             blocks_non_empty: 2,
             ..Status::default()
         };
-
         let error = ensure_status_metrics_match_authoritative_height(&status, Some(3))
             .expect_err("an authoritative height ahead of classification must be retriable");
         assert!(matches!(
@@ -98,7 +89,6 @@ mod status_block_visibility_tests {
             }
         ));
     }
-
     #[test]
     fn matching_classified_and_authoritative_heights_are_publishable() {
         let status = Status {
@@ -106,11 +96,9 @@ mod status_block_visibility_tests {
             blocks_non_empty: 3,
             ..Status::default()
         };
-
         ensure_status_metrics_match_authoritative_height(&status, Some(3))
             .expect("a single classified frontier is publishable");
     }
-
     #[test]
     fn authoritative_state_height_replaces_lagging_and_leading_counters() {
         for telemetry_height in [3, 19] {
@@ -121,13 +109,10 @@ mod status_block_visibility_tests {
                 sumeragi: Some(sumeragi),
                 ..Status::default()
             };
-
             normalize_status_block_visibility(&mut status, Some(11));
-
             assert_eq!(status.blocks, 11);
         }
     }
-
     #[test]
     fn missing_state_anchor_keeps_monotonic_commit_qc_fallback() {
         let mut sumeragi = SumeragiConsensusStatus::default();
@@ -137,9 +122,7 @@ mod status_block_visibility_tests {
             sumeragi: Some(sumeragi),
             ..Status::default()
         };
-
         normalize_status_block_visibility(&mut status, None);
-
         assert_eq!(status.blocks, 8);
     }
 }

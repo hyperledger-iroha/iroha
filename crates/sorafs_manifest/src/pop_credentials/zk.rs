@@ -6,7 +6,6 @@
 //! holder secret, credential identifier, holder commitment, nonce, and both
 //! authentication paths remain advice values and never enter the public-input
 //! or proof-envelope schemas.
-
 use std::{
     collections::BTreeMap,
     io::{self, Read},
@@ -15,7 +14,6 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
-
 use blake3::Hasher;
 use halo2_proofs::{
     SerdeFormat,
@@ -44,7 +42,6 @@ use halo2_proofs::{
 };
 use poseidon_primitives::poseidon::primitives::Spec;
 use rand_core_06::OsRng;
-
 use super::{
     POP_CREDENTIAL_TREE_DEPTH_V1, POP_MEMBERSHIP_PROOF_MAX_BYTES_V1,
     POP_MEMBERSHIP_PROOF_VERSION_V1, POP_REVOCATION_TREE_DEPTH_V1, PopCredentialV1,
@@ -52,16 +49,13 @@ use super::{
     PopMembershipProofV1, PopMembershipVerifierMaterialV1, PopMembershipWitnessV1,
     PopRevocationEntryV1, PopRevocationNonMembershipPathV1,
 };
-
 pub(super) const POP_MEMBERSHIP_CIRCUIT_ID_V1: &str = "sorafs-pop-membership-halo2-ipa-pasta-v1";
 pub(super) const POP_MEMBERSHIP_CIRCUIT_K_V1: u32 = 14;
-
 const WIDTH: usize = 3;
 const RATE: usize = 2;
 const FULL_ROUNDS: usize = 8;
 const PARTIAL_ROUNDS: usize = 56;
 const ROUND_COUNT: usize = FULL_ROUNDS + PARTIAL_ROUNDS;
-
 const DOMAIN_HOLDER_COMMITMENT: u64 = 1;
 const DOMAIN_CREDENTIAL_LEAF_ID: u64 = 2;
 const DOMAIN_CREDENTIAL_LEAF_CLASS: u64 = 3;
@@ -77,7 +71,6 @@ const DOMAIN_REVOCATION_LEAF: u64 = 2_000;
 const DOMAIN_REVOCATION_NODE_BASE: u64 = 3_000;
 const DOMAIN_NULLIFIER_CHALLENGE: u64 = 4_000;
 const DOMAIN_NULLIFIER_CONTEXT: u64 = 4_001;
-
 const PI_COMMITMENT_ROOT: usize = 0;
 const PI_TREE_VERSION: usize = 1;
 const PI_ELIGIBILITY_CLASS: usize = 2;
@@ -88,33 +81,26 @@ const PI_REVOCATION_ROOT: usize = 6;
 const PI_REVOCATION_LIST_VERSION: usize = 7;
 const PI_NULLIFIER: usize = 8;
 const PUBLIC_INPUT_COUNT: usize = 9;
-
 #[derive(Debug)]
 struct PopPoseidonSpec;
-
 impl Spec<Fp, WIDTH, RATE> for PopPoseidonSpec {
     fn full_rounds() -> usize {
         FULL_ROUNDS
     }
-
     fn partial_rounds() -> usize {
         PARTIAL_ROUNDS
     }
-
     fn sbox(value: Fp) -> Fp {
         value.pow_vartime([5])
     }
-
     fn secure_mds() -> usize {
         0
     }
 }
-
 struct PoseidonConstants {
     round_constants: Vec<[Fp; WIDTH]>,
     mds: [[Fp; WIDTH]; WIDTH],
 }
-
 fn poseidon_constants() -> &'static PoseidonConstants {
     static CONSTANTS: OnceLock<PoseidonConstants> = OnceLock::new();
     CONSTANTS.get_or_init(|| {
@@ -126,12 +112,10 @@ fn poseidon_constants() -> &'static PoseidonConstants {
         }
     })
 }
-
 fn pow5(value: Fp) -> Fp {
     let square = value.square();
     square.square() * value
 }
-
 fn poseidon_round(mut state: [Fp; WIDTH], round: usize) -> [Fp; WIDTH] {
     let constants = poseidon_constants();
     for (word, round_constant) in state
@@ -154,7 +138,6 @@ fn poseidon_round(mut state: [Fp; WIDTH], round: usize) -> [Fp; WIDTH] {
         })
     })
 }
-
 fn poseidon_compress(domain: u64, left: Fp, right: Fp) -> Fp {
     let mut state = [left, right, Fp::from(domain)];
     for round in 0..ROUND_COUNT {
@@ -162,7 +145,6 @@ fn poseidon_compress(domain: u64, left: Fp, right: Fp) -> Fp {
     }
     state[0]
 }
-
 pub(super) fn canonical_scalar(bytes: [u8; 32]) -> Result<Fp, PopCredentialValidationError> {
     let mut representation = <Fp as PrimeField>::Repr::default();
     representation.as_mut().copy_from_slice(&bytes);
@@ -172,13 +154,11 @@ pub(super) fn canonical_scalar(bytes: [u8; 32]) -> Result<Fp, PopCredentialValid
         },
     )
 }
-
 fn scalar_to_bytes(value: Fp) -> [u8; 32] {
     let mut bytes = [0u8; 32];
     bytes.copy_from_slice(value.to_repr().as_ref());
     bytes
 }
-
 fn hash_to_scalar(domain: &[u8], parts: &[&[u8]]) -> Fp {
     let mut counter = 0u64;
     loop {
@@ -198,14 +178,12 @@ fn hash_to_scalar(domain: &[u8], parts: &[&[u8]]) -> Fp {
         counter = counter.wrapping_add(1);
     }
 }
-
 fn u128_scalar(value: u128) -> Fp {
     let lower = value as u64;
     let upper = (value >> 64) as u64;
     let two_to_64 = Fp::from(u64::MAX) + Fp::ONE;
     Fp::from(lower) + Fp::from(upper) * two_to_64
 }
-
 pub(super) fn revocation_nonce_u128(nonce: [u8; 32]) -> Result<u128, PopCredentialValidationError> {
     if nonce[16..].iter().any(|byte| *byte != 0) {
         return Err(PopCredentialValidationError::InvalidRevocationNonceEncoding);
@@ -220,7 +198,6 @@ pub(super) fn revocation_nonce_u128(nonce: [u8; 32]) -> Result<u128, PopCredenti
     }
     Ok(value)
 }
-
 fn eligibility_class_scalar(class: PopEligibilityClassV1) -> Fp {
     let code = match class {
         PopEligibilityClassV1::General => 1,
@@ -231,7 +208,6 @@ fn eligibility_class_scalar(class: PopEligibilityClassV1) -> Fp {
     };
     Fp::from(code)
 }
-
 fn credential_private_binding(
     credential: &PopCredentialV1,
 ) -> Result<Fp, PopCredentialValidationError> {
@@ -249,7 +225,6 @@ fn credential_private_binding(
         ],
     ))
 }
-
 pub(super) fn holder_commitment_v1(
     holder_secret: [u8; 32],
     credential_id: [u8; 32],
@@ -267,7 +242,6 @@ pub(super) fn holder_commitment_v1(
         credential_id,
     )))
 }
-
 fn credential_leaf_scalar(
     credential: &PopCredentialV1,
 ) -> Result<Fp, PopCredentialValidationError> {
@@ -312,13 +286,11 @@ fn credential_leaf_scalar(
         credential_private_binding(credential)?,
     ))
 }
-
 pub(super) fn credential_leaf_v1(
     credential: &PopCredentialV1,
 ) -> Result<[u8; 32], PopCredentialValidationError> {
     Ok(scalar_to_bytes(credential_leaf_scalar(credential)?))
 }
-
 pub(super) fn credential_root_from_path_v1(
     leaf: [u8; 32],
     siblings: &[[u8; 32]],
@@ -345,7 +317,6 @@ pub(super) fn credential_root_from_path_v1(
     }
     Ok(scalar_to_bytes(current))
 }
-
 fn revocation_reason_code(entry: &PopRevocationEntryV1) -> u64 {
     match entry.reason {
         super::PopRevocationReasonV1::Rotated => 1,
@@ -355,7 +326,6 @@ fn revocation_reason_code(entry: &PopRevocationEntryV1) -> u64 {
         super::PopRevocationReasonV1::Expired => 5,
     }
 }
-
 fn revocation_leaf(
     entry: &PopRevocationEntryV1,
 ) -> Result<(u128, Fp), PopCredentialValidationError> {
@@ -372,9 +342,7 @@ fn revocation_leaf(
         poseidon_compress(DOMAIN_REVOCATION_LEAF, u128_scalar(key), binding),
     ))
 }
-
 type SparseRevocationLevels = (Vec<BTreeMap<u128, Fp>>, Vec<Fp>);
-
 fn sparse_revocation_levels(
     entries: &[PopRevocationEntryV1],
 ) -> Result<SparseRevocationLevels, PopCredentialValidationError> {
@@ -388,7 +356,6 @@ fn sparse_revocation_levels(
         }
     }
     levels.push(leaves);
-
     let mut empty_nodes = Vec::with_capacity(depth + 1);
     empty_nodes.push(Fp::ZERO);
     for level in 0..depth {
@@ -398,7 +365,6 @@ fn sparse_revocation_levels(
             empty,
             empty,
         ));
-
         let mut parents = BTreeMap::new();
         let current = &levels[level];
         for key in current.keys() {
@@ -419,7 +385,6 @@ fn sparse_revocation_levels(
     }
     Ok((levels, empty_nodes))
 }
-
 pub(super) fn revocation_root_from_entries_v1(
     entries: &[PopRevocationEntryV1],
 ) -> Result<[u8; 32], PopCredentialValidationError> {
@@ -428,7 +393,6 @@ pub(super) fn revocation_root_from_entries_v1(
     let root = levels[depth].get(&0).copied().unwrap_or(empty_nodes[depth]);
     Ok(scalar_to_bytes(root))
 }
-
 pub(super) fn build_revocation_non_membership_path_v1(
     entries: &[PopRevocationEntryV1],
     nonce: [u8; 32],
@@ -450,7 +414,6 @@ pub(super) fn build_revocation_non_membership_path_v1(
     }
     Ok(PopRevocationNonMembershipPathV1 { siblings })
 }
-
 fn revocation_root_from_path(
     nonce: u128,
     siblings: &[[u8; 32]],
@@ -477,26 +440,21 @@ fn revocation_root_from_path(
     }
     Ok(current)
 }
-
 fn challenge_scalar(challenge: [u8; 32]) -> Fp {
     hash_to_scalar(b"sorafs.pop.challenge.scalar.v1", &[&challenge])
 }
-
 fn context_scalar(context: &str) -> Fp {
     hash_to_scalar(b"sorafs.pop.context.scalar.v1", &[context.as_bytes()])
 }
-
 fn nullifier_scalar(secret: Fp, challenge: Fp, context: Fp) -> Fp {
     let challenge_bound = poseidon_compress(DOMAIN_NULLIFIER_CHALLENGE, secret, challenge);
     poseidon_compress(DOMAIN_NULLIFIER_CONTEXT, challenge_bound, context)
 }
-
 #[derive(Clone)]
 struct ScalarCell {
     cell: Cell,
     value: Value<Fp>,
 }
-
 #[derive(Clone, Debug)]
 struct PopMembershipConfig {
     state: [Column<Advice>; WIDTH],
@@ -520,7 +478,6 @@ struct PopMembershipConfig {
     input: Column<Advice>,
     instance: Column<Instance>,
 }
-
 #[derive(Clone)]
 struct PopMembershipCircuit {
     holder_secret: Option<Fp>,
@@ -541,7 +498,6 @@ struct PopMembershipCircuit {
     credential_directions: [Option<bool>; POP_CREDENTIAL_TREE_DEPTH_V1 as usize],
     revocation_siblings: [Option<Fp>; POP_REVOCATION_TREE_DEPTH_V1 as usize],
 }
-
 impl Default for PopMembershipCircuit {
     fn default() -> Self {
         Self {
@@ -565,16 +521,13 @@ impl Default for PopMembershipCircuit {
         }
     }
 }
-
 fn optional_value(value: Option<Fp>) -> Value<Fp> {
     value.map(Value::known).unwrap_or_else(Value::unknown)
 }
-
 fn value_pow5(value: Value<Fp>) -> Value<Fp> {
     let square = value * value;
     square * square * value
 }
-
 impl PopMembershipCircuit {
     fn from_witness(
         credential: &PopCredentialV1,
@@ -629,7 +582,6 @@ impl PopMembershipCircuit {
                     directions: usize::from(POP_REVOCATION_TREE_DEPTH_V1),
                 },
             )?;
-
         Ok(Self {
             holder_secret: Some(canonical_scalar(witness.holder_secret)?),
             credential_id: Some(canonical_scalar(credential.credential_id)?),
@@ -652,7 +604,6 @@ impl PopMembershipCircuit {
             revocation_siblings,
         })
     }
-
     fn assign_scalar(
         &self,
         config: &PopMembershipConfig,
@@ -673,7 +624,6 @@ impl PopMembershipCircuit {
             },
         )
     }
-
     fn hash_pair(
         &self,
         config: &PopMembershipConfig,
@@ -691,14 +641,12 @@ impl PopMembershipCircuit {
             |mut region| {
                 config.q_hash_init.enable(&mut region, base_row)?;
                 region.assign_fixed(config.hash_domain, base_row, Fp::from(domain));
-
                 let mut values = [left.value, right.value, Value::known(Fp::from(domain))];
                 let mut cells: [_; WIDTH] = std::array::from_fn(|column| {
                     region.assign_advice(config.state[column], base_row, values[column])
                 });
                 region.constrain_equal(cells[0].cell(), left.cell);
                 region.constrain_equal(cells[1].cell(), right.cell);
-
                 for round in 0..ROUND_COUNT {
                     for column in 0..WIDTH {
                         region.assign_fixed(
@@ -715,7 +663,6 @@ impl PopMembershipCircuit {
                             .q_partial_round
                             .enable(&mut region, base_row + round)?;
                     }
-
                     let mut sboxed: [Value<Fp>; WIDTH] = std::array::from_fn(|column| {
                         values[column] + Value::known(constants.round_constants[round][column])
                     });
@@ -739,7 +686,6 @@ impl PopMembershipCircuit {
                         )
                     });
                 }
-
                 Ok(ScalarCell {
                     cell: cells[0].cell(),
                     value: values[0],
@@ -747,7 +693,6 @@ impl PopMembershipCircuit {
             },
         )
     }
-
     fn select_children(
         &self,
         config: &PopMembershipConfig,
@@ -787,7 +732,6 @@ impl PopMembershipCircuit {
             },
         )
     }
-
     fn decompose_revocation_nonce(
         &self,
         config: &PopMembershipConfig,
@@ -840,7 +784,6 @@ impl PopMembershipCircuit {
             },
         )
     }
-
     fn constrain_nonzero(
         &self,
         config: &PopMembershipConfig,
@@ -865,16 +808,13 @@ impl PopMembershipCircuit {
         )
     }
 }
-
 impl Circuit<Fp> for PopMembershipCircuit {
     type Config = PopMembershipConfig;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();
-
     fn without_witnesses(&self) -> Self {
         Self::default()
     }
-
     fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
         let state = std::array::from_fn(|_| meta.advice_column());
         for column in state {
@@ -885,14 +825,12 @@ impl Circuit<Fp> for PopMembershipCircuit {
         let q_hash_init = meta.selector();
         let q_full_round = meta.selector();
         let q_partial_round = meta.selector();
-
         meta.create_gate("PoP hash domain", |meta| {
             let enabled = meta.query_selector(q_hash_init);
             let capacity = meta.query_advice(state[2], halo2_proofs::poly::Rotation::cur());
             let domain = meta.query_fixed(hash_domain, halo2_proofs::poly::Rotation::cur());
             vec![enabled * (capacity - domain)]
         });
-
         let constants = poseidon_constants();
         meta.create_gate("PoP Poseidon full round", |meta| {
             let enabled = meta.query_selector(q_full_round);
@@ -918,7 +856,6 @@ impl Circuit<Fp> for PopMembershipCircuit {
                 })
                 .collect::<Vec<_>>()
         });
-
         meta.create_gate("PoP Poseidon partial round", |meta| {
             let enabled = meta.query_selector(q_partial_round);
             let shifted: [halo2_proofs::plonk::Expression<Fp>; WIDTH] =
@@ -941,7 +878,6 @@ impl Circuit<Fp> for PopMembershipCircuit {
                 })
                 .collect::<Vec<_>>()
         });
-
         let select_current = meta.advice_column();
         let select_sibling = meta.advice_column();
         let select_direction = meta.advice_column();
@@ -975,7 +911,6 @@ impl Circuit<Fp> for PopMembershipCircuit {
                 enabled * (right - (sibling.clone() + direction * (current - sibling))),
             ]
         });
-
         let bit = meta.advice_column();
         let accumulator = meta.advice_column();
         meta.enable_equality(bit);
@@ -995,7 +930,6 @@ impl Circuit<Fp> for PopMembershipCircuit {
                 enabled * (accumulator_next - (accumulator_current * two + bit_value)),
             ]
         });
-
         let nonzero_value = meta.advice_column();
         let nonzero_inverse = meta.advice_column();
         meta.enable_equality(nonzero_value);
@@ -1006,12 +940,10 @@ impl Circuit<Fp> for PopMembershipCircuit {
             let inverse = meta.query_advice(nonzero_inverse, halo2_proofs::poly::Rotation::cur());
             vec![enabled * (value * inverse - halo2_proofs::plonk::Expression::Constant(Fp::ONE))]
         });
-
         let input = meta.advice_column();
         meta.enable_equality(input);
         let instance = meta.instance_column();
         meta.enable_equality(instance);
-
         PopMembershipConfig {
             state,
             round_constants,
@@ -1035,7 +967,6 @@ impl Circuit<Fp> for PopMembershipCircuit {
             instance,
         }
     }
-
     fn synthesize(
         &self,
         config: Self::Config,
@@ -1122,7 +1053,6 @@ impl Circuit<Fp> for PopMembershipCircuit {
             &mut row_cursor,
             optional_value(self.current_list_version),
         )?;
-
         layouter.constrain_instance(tree_version.cell, config.instance, PI_TREE_VERSION);
         layouter.constrain_instance(
             eligibility_class.cell,
@@ -1137,7 +1067,6 @@ impl Circuit<Fp> for PopMembershipCircuit {
             config.instance,
             PI_REVOCATION_LIST_VERSION,
         );
-
         let holder_commitment = self.hash_pair(
             &config,
             &mut layouter,
@@ -1176,7 +1105,6 @@ impl Circuit<Fp> for PopMembershipCircuit {
                 field,
             )?;
         }
-
         let mut credential_node = credential_leaf;
         for level in 0..usize::from(POP_CREDENTIAL_TREE_DEPTH_V1) {
             let sibling = self.assign_scalar(
@@ -1211,7 +1139,6 @@ impl Circuit<Fp> for PopMembershipCircuit {
             )?;
         }
         layouter.constrain_instance(credential_node.cell, config.instance, PI_COMMITMENT_ROOT);
-
         let nonce_bits = self.decompose_revocation_nonce(
             &config,
             &mut layouter,
@@ -1249,7 +1176,6 @@ impl Circuit<Fp> for PopMembershipCircuit {
             )?;
         }
         layouter.constrain_instance(revocation_node.cell, config.instance, PI_REVOCATION_ROOT);
-
         let challenge_bound = self.hash_pair(
             &config,
             &mut layouter,
@@ -1270,20 +1196,17 @@ impl Circuit<Fp> for PopMembershipCircuit {
         Ok(())
     }
 }
-
 struct CachedVerifierMaterial {
     params: ParamsIPA<EqAffine>,
     verifying_key: VerifyingKey<EqAffine>,
     public: PopMembershipVerifierMaterialV1,
 }
-
 fn digest_with_domain(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(domain);
     hasher.update(bytes);
     *hasher.finalize().as_bytes()
 }
-
 fn initialize_verifier_material() -> Result<CachedVerifierMaterial, PopCredentialValidationError> {
     let params = ParamsIPA::<EqAffine>::new(POP_MEMBERSHIP_CIRCUIT_K_V1);
     let verifying_key = keygen_vk(&params, &PopMembershipCircuit::default()).map_err(|error| {
@@ -1291,7 +1214,6 @@ fn initialize_verifier_material() -> Result<CachedVerifierMaterial, PopCredentia
             reason: format!("failed to generate PoP verifying key: {error}"),
         }
     })?;
-
     let mut parameter_bytes = Vec::new();
     params.write(&mut parameter_bytes).map_err(|error| {
         PopCredentialValidationError::ProofBackend {
@@ -1320,7 +1242,6 @@ fn initialize_verifier_material() -> Result<CachedVerifierMaterial, PopCredentia
         public,
     })
 }
-
 fn cached_verifier_material()
 -> Result<&'static CachedVerifierMaterial, PopCredentialValidationError> {
     static MATERIAL: OnceLock<Result<CachedVerifierMaterial, String>> = OnceLock::new();
@@ -1332,7 +1253,6 @@ fn cached_verifier_material()
         }),
     }
 }
-
 fn cached_proving_key() -> Result<&'static ProvingKey<EqAffine>, PopCredentialValidationError> {
     static PROVING_KEY: OnceLock<Result<ProvingKey<EqAffine>, String>> = OnceLock::new();
     let verifier = cached_verifier_material()?;
@@ -1350,12 +1270,10 @@ fn cached_proving_key() -> Result<&'static ProvingKey<EqAffine>, PopCredentialVa
         }),
     }
 }
-
 pub(super) fn verifier_material_v1()
 -> Result<PopMembershipVerifierMaterialV1, PopCredentialValidationError> {
     Ok(cached_verifier_material()?.public.clone())
 }
-
 fn proof_public_inputs(
     proof: &PopMembershipProofV1,
 ) -> Result<[Fp; PUBLIC_INPUT_COUNT], PopCredentialValidationError> {
@@ -1371,12 +1289,10 @@ fn proof_public_inputs(
         canonical_scalar(proof.nullifier)?,
     ])
 }
-
 struct ExactProofReader<'proof> {
     bytes: &'proof [u8],
     position: Arc<AtomicUsize>,
 }
-
 impl Read for ExactProofReader<'_> {
     fn read(&mut self, destination: &mut [u8]) -> io::Result<usize> {
         let start = self.position.load(Ordering::Relaxed);
@@ -1389,7 +1305,6 @@ impl Read for ExactProofReader<'_> {
         Ok(count)
     }
 }
-
 fn verify_proof_bytes(
     material: &CachedVerifierMaterial,
     proof_bytes: &[u8],
@@ -1433,7 +1348,6 @@ fn verify_proof_bytes(
     }
     Ok(())
 }
-
 pub(super) fn prove_v1(
     credential: &PopCredentialV1,
     witness: &PopMembershipWitnessV1,
@@ -1521,7 +1435,6 @@ pub(super) fn prove_v1(
     verify_v1(&proof)?;
     Ok(proof)
 }
-
 pub(super) fn verify_v1(proof: &PopMembershipProofV1) -> Result<(), PopCredentialValidationError> {
     proof.validate()?;
     let material = cached_verifier_material()?;
@@ -1534,7 +1447,6 @@ pub(super) fn verify_v1(proof: &PopMembershipProofV1) -> Result<(), PopCredentia
     let public_inputs = proof_public_inputs(proof)?;
     verify_proof_bytes(material, &proof.proof_bytes, &public_inputs)
 }
-
 pub(super) fn validate_prover_paths(
     credential: &PopCredentialV1,
     witness: &PopMembershipWitnessV1,
@@ -1564,7 +1476,6 @@ pub(super) fn validate_prover_paths(
     }
     Ok(())
 }
-
 #[cfg(test)]
 pub(super) fn verify_with_reordered_public_inputs_for_test(
     proof: &PopMembershipProofV1,
@@ -1574,7 +1485,6 @@ pub(super) fn verify_with_reordered_public_inputs_for_test(
     public_inputs.swap(PI_COMMITMENT_ROOT, PI_REVOCATION_ROOT);
     verify_proof_bytes(material, &proof.proof_bytes, &public_inputs)
 }
-
 #[allow(dead_code)]
 fn _assert_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}

@@ -5,6 +5,8 @@
 # Load them from the reviewed release record before use; the evidence
 # directory must contain exactly one signed foundational-prerequisite envelope.
 --foundational-prerequisite-signer-public-key-hex d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
+--foundational-prerequisite-signer-verifier /opt/iroha/bin/sorafs_external_software_signer
+--foundational-prerequisite-signer-verifier-sha256 <REVIEWED-FOUNDATIONAL-SIGNER-VERIFIER-SHA256>
 --foundational-prerequisite-release-sequence 7
 --foundational-prerequisite-previous-envelope-sha256 1111111111111111111111111111111111111111111111111111111111111111
 --now-unix 1800400000
@@ -16,8 +18,8 @@
 --topology-qualification-verification-public-key-hex <TRUSTED-TOPOLOGY-ED25519-PUBLIC-KEY-HEX>
 --topology-qualification-signer-service-id <TOPOLOGY-SOFTWARE-SIGNER-SERVICE-ID>
 --topology-qualification-signer-administrator-id <TOPOLOGY-SIGNER-ADMINISTRATOR-ID>
---topology-qualification-signer-key-revision <POSITIVE-TOPOLOGY-KEY-REVISION>
---topology-qualification-signer-policy-revision <POSITIVE-TOPOLOGY-POLICY-REVISION>
+--topology-qualification-signer-key-revision 1
+--topology-qualification-signer-policy-revision 1
 --topology-qualification-signer-policy-digest-hex <NONZERO-TOPOLOGY-POLICY-SHA256>
 --max-topology-qualification-review-age-secs 1209600
 --resilience-qualification-summary artifacts/sorafs/production-readiness/l1-resilience-qualification.json
@@ -26,8 +28,8 @@
 --l1-lane-evidence-inventory-verification-public-key-hex <TRUSTED-L1-INVENTORY-ED25519-PUBLIC-KEY-HEX>
 --l1-lane-evidence-inventory-signer-service-id <L1-INVENTORY-SOFTWARE-SIGNER-SERVICE-ID>
 --l1-lane-evidence-inventory-signer-administrator-id <L1-INVENTORY-SIGNER-ADMINISTRATOR-ID>
---l1-lane-evidence-inventory-signer-key-revision <POSITIVE-L1-INVENTORY-KEY-REVISION>
---l1-lane-evidence-inventory-signer-policy-revision <POSITIVE-L1-INVENTORY-POLICY-REVISION>
+--l1-lane-evidence-inventory-signer-key-revision 1
+--l1-lane-evidence-inventory-signer-policy-revision 1
 --l1-lane-evidence-inventory-signer-policy-digest-sha256 <NONZERO-L1-INVENTORY-POLICY-SHA256>
 --l1-lane-summary ai_prescreen=artifacts/sorafs/production-readiness/summaries/ai_prescreen.json
 --l1-lane-summary appeal_finance=artifacts/sorafs/production-readiness/summaries/appeal_finance.json

@@ -5,14 +5,11 @@
 //! relay payloads deterministically. Pending in-memory envelopes omit authority;
 //! authoritative use resolves the compact reference against Kura's verified
 //! Sumeragi-v2 finality artifact and checks the statement inclusion proof.
-
 use core::cmp::Ordering;
-
 use iroha_crypto::{Hash, HashOf, MerkleProof};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::{
     asset::AssetDefinitionId,
     block::{
@@ -24,7 +21,6 @@ use crate::{
     prelude::Metadata,
 };
 use iroha_primitives::numeric::Quantity;
-
 /// Prefix for contract-visible verified relay state keys.
 pub const VERIFIED_LANE_RELAY_STATE_KEY_PREFIX: &str = "pkdeploy_verified_lane_relay";
 /// Prefix for contract-visible verified fee sponsor vault-allocation keys.
@@ -46,14 +42,12 @@ const FEE_SPONSOR_VAULT_SOURCE_STATE_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.nexus.fee-sponsor-vault.source-state.v1";
 const FEE_SPONSOR_VAULT_ALLOCATION_CLAIM_DOMAIN_V1: &[u8] =
     b"iroha.nexus.fee-sponsor-vault.allocation-claim.v1";
-
 fn domain_separated_hash(domain: &[u8], payload: &[u8]) -> Hash {
     let domain_len = u64::try_from(domain.len())
         .expect("protocol-defined digest domains fit in u64")
         .to_le_bytes();
     Hash::new_from_chunks(&[&domain_len, domain, payload])
 }
-
 /// Relay envelope broadcast by Nexus lanes for merge validation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -105,7 +99,6 @@ pub struct LaneRelayEnvelope {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
 }
-
 /// Canonical post-execution effect authenticated by the global CommitQC.
 ///
 /// This statement deliberately excludes the QC and `FastPQ` proof material.
@@ -142,7 +135,6 @@ pub struct LaneFinalityStatement {
     /// Total RBC bytes attributed to this lane block.
     pub rbc_bytes_total: u64,
 }
-
 /// Bounded reference from one relay effect to immutable Sumeragi-v2 finality.
 ///
 /// The full finality artifact remains in Kura. Persisted relay state carries
@@ -163,7 +155,6 @@ pub struct LaneFinalityAuthorityV1 {
     /// Inclusion proof for the envelope-derived statement.
     pub statement_proof: MerkleProof<LaneFinalityStatement>,
 }
-
 impl LaneFinalityStatement {
     /// Compute the domain-separated hash signed by the lane-finality committee.
     ///
@@ -178,13 +169,11 @@ impl LaneFinalityStatement {
         ))
     }
 }
-
 impl PartialOrd for LaneFinalityStatement {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for LaneFinalityStatement {
     fn cmp(&self, other: &Self) -> Ordering {
         let lhs = norito::encode_canonical(self).expect("lane finality statement should encode");
@@ -192,7 +181,6 @@ impl Ord for LaneFinalityStatement {
         lhs.cmp(&rhs)
     }
 }
-
 /// Presence state for structurally valid relay `FastPQ` metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -206,13 +194,11 @@ pub enum LaneRelayFastpqMaterialStatus {
     /// The relay carries structurally valid but unauthenticated `FastPQ` metadata.
     Present,
 }
-
 impl PartialOrd for LaneRelayEnvelope {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for LaneRelayEnvelope {
     fn cmp(&self, other: &Self) -> Ordering {
         let lhs = norito::encode_canonical(self).expect("lane relay envelope should encode");
@@ -220,7 +206,6 @@ impl Ord for LaneRelayEnvelope {
         lhs.cmp(&rhs)
     }
 }
-
 /// Stable business-facing reference for a previously verified lane relay envelope.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -237,7 +222,6 @@ pub struct LaneRelayEnvelopeRef {
     /// Lane-local block height associated with the finalized effect.
     pub block_height: u64,
 }
-
 impl LaneRelayEnvelopeRef {
     /// Return the canonical contract-state key for this verified lane relay.
     #[must_use]
@@ -251,7 +235,6 @@ impl LaneRelayEnvelopeRef {
         )
     }
 }
-
 /// Verified relay record persisted for restricted-source business effects.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -285,7 +268,6 @@ pub struct VerifiedLaneRelayRecord {
     /// FASTPQ binding that contracts consume on-ledger.
     pub fastpq_binding: AxtFastpqBinding,
 }
-
 /// Proof-backed cross-lane spend allocation for one sponsor-program vault asset.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -325,7 +307,6 @@ pub struct VerifiedFeeSponsorVaultAllocation {
     /// FASTPQ binding that admission consumes on-ledger.
     pub fastpq_binding: AxtFastpqBinding,
 }
-
 /// `FastPQ` proof metadata attached to a lane relay envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -338,13 +319,11 @@ pub struct LaneFastpqProofMaterial {
     /// Block height where the proof was verified.
     pub verified_at_height: u64,
 }
-
 #[derive(Clone, Debug, Encode)]
 struct LaneRelayFastpqClaim {
     version: u8,
     lane_finality_statement_hash: Hash,
 }
-
 #[derive(Clone, Debug, Encode)]
 struct LaneRelayMergeHint {
     version: u8,
@@ -361,7 +340,6 @@ struct LaneRelayMergeHint {
     rbc_bytes_total: u64,
     lane_finality_statement_hash: Hash,
 }
-
 /// Compute the canonical claim digest that a FASTPQ lane-relay proof must bind.
 ///
 /// The encoded claim binds the canonical lane-finality statement. Because the
@@ -385,7 +363,6 @@ pub fn lane_relay_fastpq_claim_digest(
         &bytes,
     ))
 }
-
 /// Canonical source-ledger claim authorized by a sponsor-vault spend lease.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -413,7 +390,6 @@ pub struct FeeSponsorVaultAllocationClaim {
     /// Globally unique proof-bound spend lease identifier.
     pub lease_id: Hash,
 }
-
 #[derive(Clone, Debug, Encode)]
 struct FeeSponsorVaultSourceStateCommitment {
     version: u8,
@@ -424,7 +400,6 @@ struct FeeSponsorVaultSourceStateCommitment {
     source_dataspace_id: DataSpaceId,
     source_height: u64,
 }
-
 /// Commit the exact source-vault snapshot from which a relay allocation was derived.
 ///
 /// Registration recomputes this commitment from authoritative world state. This
@@ -453,7 +428,6 @@ pub fn fee_sponsor_vault_source_state_root(
         &commitment.encode(),
     )
 }
-
 /// Compute the canonical claim digest for a verified sponsor-vault allocation proof.
 #[must_use]
 pub fn fee_sponsor_vault_allocation_claim_digest(
@@ -464,7 +438,6 @@ pub fn fee_sponsor_vault_allocation_claim_digest(
         &allocation.encode(),
     )
 }
-
 /// Operator evidence bundle captured when ingesting a lane relay envelope fails.
 ///
 /// This payload is intended for local persistence and troubleshooting workflows. It is not
@@ -484,7 +457,6 @@ pub struct LaneRelayEvidenceBundle {
     #[norito(default)]
     pub error_message: String,
 }
-
 /// Emergency validator-peer override for a lane when lane relay quorum is at risk.
 ///
 /// Application of this override is gated by `nexus.lane_relay_emergency.enabled`.
@@ -502,7 +474,6 @@ pub struct LaneRelayEmergencyValidatorSet {
     #[norito(default)]
     pub metadata: Metadata,
 }
-
 /// Quorum parameters used to validate [`LaneRelayEnvelope`] proofs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LaneRelayQuorumContext {
@@ -511,7 +482,6 @@ pub struct LaneRelayQuorumContext {
     /// Minimum signatures required for quorum.
     pub min_quorum: u32,
 }
-
 impl LaneRelayQuorumContext {
     /// Construct a new quorum context.
     ///
@@ -526,7 +496,6 @@ impl LaneRelayQuorumContext {
         ctx.ensure_valid()?;
         Ok(ctx)
     }
-
     fn ensure_valid(self) -> Result<(), LaneRelayError> {
         if self.validator_count == 0 || self.min_quorum == 0 {
             return Err(LaneRelayError::InvalidValidatorSet {
@@ -543,7 +512,6 @@ impl LaneRelayQuorumContext {
         Ok(())
     }
 }
-
 impl LaneRelayEnvelope {
     /// Domain-separated context tag used by standalone lane-block votes.
     ///
@@ -562,7 +530,6 @@ impl LaneRelayEnvelope {
             lane_id.as_u32()
         )
     }
-
     /// Derive the canonical post-execution lane-finality statement.
     ///
     /// The statement excludes both proof carriers, so callers may derive it on
@@ -605,7 +572,6 @@ impl LaneRelayEnvelope {
             rbc_bytes_total: self.rbc_bytes_total,
         })
     }
-
     /// Compute the canonical post-execution lane-finality statement hash.
     ///
     /// # Errors
@@ -614,7 +580,6 @@ impl LaneRelayEnvelope {
     pub fn lane_finality_statement_hash(&self) -> Result<Hash, LaneRelayError> {
         self.lane_finality_statement()?.hash()
     }
-
     /// Return whether two envelopes describe the exact same finality effect.
     ///
     /// QC aggregation and proof carriers are deliberately ignored: they can be
@@ -634,7 +599,6 @@ impl LaneRelayEnvelope {
             && self.rbc_bytes_total == other.rbc_bytes_total
             && self.manifest_root == other.manifest_root
     }
-
     /// Create an envelope and derive the settlement hash from the payload.
     ///
     /// # Errors
@@ -661,11 +625,9 @@ impl LaneRelayEnvelope {
         {
             return Err(LaneRelayError::ZeroLaneIncarnation);
         }
-
         if block_header.da_commitments_hash() != da_commitment_hash {
             return Err(LaneRelayError::DaCommitmentHashMismatch);
         }
-
         Ok(Self {
             lane_id: settlement_commitment.lane_id,
             lane_incarnation: settlement_commitment.lane_incarnation,
@@ -682,7 +644,6 @@ impl LaneRelayEnvelope {
             fastpq_proof: None,
         })
     }
-
     /// Stable business-facing reference for this relay envelope.
     #[must_use]
     pub fn relay_ref(&self) -> LaneRelayEnvelopeRef {
@@ -693,7 +654,6 @@ impl LaneRelayEnvelope {
             block_height: self.block_height,
         }
     }
-
     /// Validate the DA commitment and settlement shape.
     ///
     /// # Errors
@@ -727,7 +687,6 @@ impl LaneRelayEnvelope {
         self.verify_settlement_integrity()?;
         self.verify_settlement_hash()
     }
-
     /// Return whether this envelope carries structurally valid `FastPQ` metadata.
     #[must_use]
     pub fn fastpq_metadata_status(&self) -> LaneRelayFastpqMaterialStatus {
@@ -737,7 +696,6 @@ impl LaneRelayEnvelope {
             LaneRelayFastpqMaterialStatus::Missing
         }
     }
-
     /// Whether this relay carries the structural material required for merge admission.
     ///
     /// This check does not resolve the finality reference or authenticate the
@@ -753,7 +711,6 @@ impl LaneRelayEnvelope {
             && self.lane_finality_statement().is_ok()
             && self.has_fastpq_proof_material()
     }
-
     /// Compute the canonical lane merge-hint root.
     ///
     /// # Errors
@@ -787,14 +744,12 @@ impl LaneRelayEnvelope {
             &bytes,
         ))
     }
-
     /// Attach the dataspace manifest root to the envelope for gossip/telemetry.
     #[must_use]
     pub fn with_manifest_root(mut self, manifest_root: Option<[u8; 32]>) -> Self {
         self.manifest_root = manifest_root;
         self
     }
-
     /// Attach the standalone lane block descriptor hash to the envelope.
     #[must_use]
     pub fn with_lane_block_descriptor_hash(
@@ -804,7 +759,6 @@ impl LaneRelayEnvelope {
         self.lane_block_descriptor_hash = lane_block_descriptor_hash;
         self
     }
-
     /// Attach compact Kura-backed global finality authority.
     #[must_use]
     pub fn with_finality_authority(
@@ -814,7 +768,6 @@ impl LaneRelayEnvelope {
         self.finality_authority = finality_authority;
         self
     }
-
     /// Validate the bounded finality-reference shape without consulting Kura.
     ///
     /// Cryptographic verification and statement inclusion are performed by
@@ -839,7 +792,6 @@ impl LaneRelayEnvelope {
         }
         Ok(())
     }
-
     /// Attach `FastPQ` proof material to the envelope.
     #[must_use]
     pub fn with_fastpq_proof_material(
@@ -849,13 +801,11 @@ impl LaneRelayEnvelope {
         self.fastpq_proof = fastpq_proof;
         self
     }
-
     /// Whether the envelope includes structurally valid `FastPQ` proof material.
     #[must_use]
     pub fn has_fastpq_proof_material(&self) -> bool {
         self.validate_fastpq_proof_metadata().is_ok()
     }
-
     /// Validate the shape of untrusted `FastPQ` proof metadata.
     ///
     /// This does not verify a proof. Consensus callers must additionally
@@ -880,7 +830,6 @@ impl LaneRelayEnvelope {
         }
         Ok(())
     }
-
     /// Re-compute the settlement hash and ensure it matches the envelope.
     ///
     /// # Errors
@@ -895,7 +844,6 @@ impl LaneRelayEnvelope {
             Err(LaneRelayError::SettlementHashMismatch)
         }
     }
-
     fn verify_settlement_integrity(&self) -> Result<(), LaneRelayError> {
         let settlement = &self.settlement_commitment;
         let mut total_local_amount = Quantity::zero();
@@ -930,7 +878,6 @@ impl LaneRelayEnvelope {
         {
             return Err(LaneRelayError::SettlementTotalsMismatch);
         }
-
         let mut nexus_fee_sources = std::collections::BTreeSet::new();
         for receipt in &settlement.nexus_fee_receipts {
             if receipt.lane_id != settlement.lane_id
@@ -944,7 +891,6 @@ impl LaneRelayEnvelope {
             }
             all_sources.insert(receipt.source_id);
         }
-
         let mut native_amx_sources = std::collections::BTreeSet::new();
         for receipt in &settlement.native_amx_receipts {
             if receipt.lane_id != settlement.lane_id
@@ -960,14 +906,12 @@ impl LaneRelayEnvelope {
             }
             all_sources.insert(receipt.source_id);
         }
-
         if settlement.tx_count < u64::try_from(all_sources.len()).unwrap_or(u64::MAX) {
             return Err(LaneRelayError::SettlementTxCountMismatch);
         }
         Ok(())
     }
 }
-
 impl VerifiedLaneRelayRecord {
     /// Construct a verified relay record from the canonical verified inputs.
     #[must_use]
@@ -1004,7 +948,6 @@ impl VerifiedLaneRelayRecord {
         }
     }
 }
-
 impl VerifiedFeeSponsorVaultAllocation {
     /// Construct a verified vault allocation from canonical verified inputs.
     #[must_use]
@@ -1047,7 +990,6 @@ impl VerifiedFeeSponsorVaultAllocation {
             fastpq_binding,
         }
     }
-
     /// Return the canonical contract-state key for this exact spend lease.
     #[must_use]
     pub fn state_key_for(
@@ -1062,7 +1004,6 @@ impl VerifiedFeeSponsorVaultAllocation {
             hex::encode(suffix.as_ref())
         )
     }
-
     /// Return the canonical state key for cumulative spend against one proof-bound lease.
     #[must_use]
     pub fn usage_state_key_for(lease_id: &Hash) -> String {
@@ -1071,7 +1012,6 @@ impl VerifiedFeeSponsorVaultAllocation {
             hex::encode(lease_id.as_ref())
         )
     }
-
     /// Return the canonical state key for cumulative merge-settled spend on one lease.
     #[must_use]
     pub fn settled_usage_state_key_for(lease_id: &Hash) -> String {
@@ -1081,7 +1021,6 @@ impl VerifiedFeeSponsorVaultAllocation {
         )
     }
 }
-
 /// Compute the Norito hash of a settlement commitment for relay envelopes.
 ///
 /// # Errors
@@ -1096,7 +1035,6 @@ pub fn compute_settlement_hash(
         &bytes,
     )))
 }
-
 /// Errors encountered while validating or deriving relay envelopes.
 #[derive(Debug, Error)]
 pub enum LaneRelayError {
@@ -1277,7 +1215,6 @@ pub enum LaneRelayError {
     #[error("FastPQ proof metadata is invalid for lane relay envelope")]
     InvalidFastpqProof,
 }
-
 impl PartialEq for LaneRelayError {
     #[expect(
         clippy::too_many_lines,
@@ -1422,9 +1359,7 @@ impl PartialEq for LaneRelayError {
         }
     }
 }
-
 impl Eq for LaneRelayError {}
-
 impl LaneRelayError {
     /// Stable label for telemetry/logging.
     #[must_use]
@@ -1480,15 +1415,12 @@ impl LaneRelayError {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof};
     use iroha_primitives::numeric::Quantity;
-
     use super::*;
     use crate::{
         AccountId, NetworkId,
@@ -1500,11 +1432,9 @@ mod tests {
         },
         nexus::FeeDebitSource,
     };
-
     fn test_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(label)))
     }
-
     fn sample_commitment(height: u64, lane_id: u32, dataspace_id: u64) -> LaneBlockCommitment {
         LaneBlockCommitment {
             block_height: height,
@@ -1529,7 +1459,6 @@ mod tests {
             native_amx_receipts: Vec::new(),
         }
     }
-
     fn sample_header(height: u64, da_hash: Option<HashOf<DaCommitmentBundle>>) -> BlockHeader {
         let mut header = BlockHeader::new(
             NonZeroU64::new(height).expect("nonzero height"),
@@ -1542,7 +1471,6 @@ mod tests {
         header.set_da_commitments_hash(da_hash);
         header
     }
-
     fn sample_lane_finality_statement() -> LaneFinalityStatement {
         let settlement_commitment = sample_commitment(6, 3, 2);
         let settlement_hash =
@@ -1562,7 +1490,6 @@ mod tests {
             rbc_bytes_total: 128,
         }
     }
-
     fn build_envelope(height: u64) -> LaneRelayEnvelope {
         let settlement = sample_commitment(height, 3, 2);
         let header = sample_header(height, None);
@@ -1571,7 +1498,6 @@ mod tests {
             .with_lane_block_descriptor_hash(Some(Hash::new(b"test-lane-block-descriptor")))
             .with_manifest_root(Some([0x42; 32]))
     }
-
     fn with_test_authority(
         envelope: LaneRelayEnvelope,
         artifact_tag: &'static [u8],
@@ -1584,7 +1510,6 @@ mod tests {
             statement_proof: MerkleProof::from_audit_path(0, Vec::new()),
         }))
     }
-
     fn checked_account_id() -> AccountId {
         AccountId::new(
             KeyPair::try_random()
@@ -1593,7 +1518,6 @@ mod tests {
                 .clone(),
         )
     }
-
     #[test]
     fn fastpq_metadata_status_distinguishes_missing_and_present_metadata() {
         let pending = build_envelope(6);
@@ -1602,7 +1526,6 @@ mod tests {
             LaneRelayFastpqMaterialStatus::Missing
         );
         assert!(!pending.has_merge_admission_material());
-
         let verified = with_test_authority(pending, b"test-finality-artifact")
             .with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
                 proof_digest: Hash::new(b"verified-relay-proof"),
@@ -1614,7 +1537,6 @@ mod tests {
         );
         assert!(verified.has_merge_admission_material());
     }
-
     #[test]
     fn relay_digest_domains_are_unique_and_bind_identical_payloads() {
         let domains = [
@@ -1629,7 +1551,6 @@ mod tests {
             domains.into_iter().collect::<BTreeSet<_>>().len(),
             domains.len()
         );
-
         let payload = b"identical canonical payload";
         assert_ne!(
             domain_separated_hash(LANE_RELAY_FASTPQ_CLAIM_DIGEST_DOMAIN_V1, payload),
@@ -1641,7 +1562,6 @@ mod tests {
             "the framed domain cannot be shifted into the payload"
         );
     }
-
     #[test]
     fn lane_finality_statement_order_uses_the_complete_canonical_effect() {
         let original = sample_lane_finality_statement();
@@ -1652,7 +1572,6 @@ mod tests {
                 .saturating_add(1);
         conflicting.settlement_hash = compute_settlement_hash(&conflicting.settlement_commitment)
             .expect("conflicting settlement hashes");
-
         assert_eq!(
             (
                 original.lane_id,
@@ -1670,7 +1589,6 @@ mod tests {
         );
         assert_ne!(original, conflicting);
         assert_ne!(original.cmp(&conflicting), Ordering::Equal);
-
         let original_wire =
             norito::encode_canonical(&original).expect("canonical original statement");
         let conflicting_wire =
@@ -1686,18 +1604,14 @@ mod tests {
         );
         assert_eq!(original.cmp(&original.clone()), Ordering::Equal);
     }
-
     #[test]
     fn merge_hint_root_binds_finality_artifact() {
         let envelope = with_test_authority(build_envelope(6), b"finality-artifact-a");
         let first = envelope.merge_hint_root().expect("merge hint root");
-
         let changed = with_test_authority(build_envelope(6), b"finality-artifact-b");
         let second = changed.merge_hint_root().expect("changed merge hint root");
-
         assert_ne!(first, second);
     }
-
     #[test]
     fn merge_hint_root_binds_lane_block_descriptor_hash() {
         let first = with_test_authority(build_envelope(6), b"finality-artifact")
@@ -1708,10 +1622,8 @@ mod tests {
             .with_lane_block_descriptor_hash(Some(Hash::new(b"descriptor-b")))
             .merge_hint_root()
             .expect("changed merge hint root");
-
         assert_ne!(first, second);
     }
-
     #[test]
     fn relay_consensus_identities_ignore_ambient_layout_flags() {
         let envelope = with_test_authority(build_envelope(8), b"canonical-finality-artifact")
@@ -1730,7 +1642,6 @@ mod tests {
         );
         let canonical_wire =
             norito::encode_canonical(&envelope).expect("encode canonical relay envelope");
-
         let alternate_flags =
             norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
         let (alternate_wire, alternate) = {
@@ -1749,14 +1660,12 @@ mod tests {
                 ),
             )
         };
-
         assert_ne!(alternate_wire, canonical_wire);
         assert_eq!(
             alternate, baseline,
             "relay ordering and consensus identity hashes must use canonical framing"
         );
     }
-
     #[test]
     fn verify_rejects_settlement_total_mismatch_when_receipts_are_present() {
         let mut envelope = build_envelope(6);
@@ -1769,13 +1678,11 @@ mod tests {
             .checked_add(&one_micro)
             .expect("bounded settlement mismatch fixture");
         envelope.settlement_commitment.total_local_amount = mismatched_total;
-
         let err = envelope
             .verify()
             .expect_err("mismatched receipt totals must fail verification");
         assert_eq!(err, LaneRelayError::SettlementTotalsMismatch);
     }
-
     #[test]
     fn settlement_tx_count_covers_union_of_receipt_sources() {
         let mut envelope = build_envelope(6);
@@ -1824,12 +1731,10 @@ mod tests {
             });
         envelope.settlement_hash =
             compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
-
         assert_eq!(
             envelope.verify(),
             Err(LaneRelayError::SettlementTxCountMismatch)
         );
-
         envelope.settlement_commitment.nexus_fee_receipts[0].source_id = [0xA5; 32];
         envelope.settlement_commitment.native_amx_receipts[0].source_id = [0xA5; 32];
         envelope.settlement_hash =
@@ -1838,7 +1743,6 @@ mod tests {
             .verify()
             .expect("one transaction may produce evidence in every receipt category");
     }
-
     #[test]
     fn verify_accepts_native_amx_receipt_with_lane_local_height() {
         let mut envelope = build_envelope(6);
@@ -1862,18 +1766,15 @@ mod tests {
         envelope.settlement_commitment.tx_count = 2;
         envelope.settlement_hash =
             compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
-
         envelope
             .verify()
             .expect("lane-local height must not be compared with global block height");
     }
-
     #[test]
     fn relay_envelope_ref_state_key_is_canonical_and_deterministic() {
         let relay_ref = build_envelope(7).relay_ref();
         let first = relay_ref.relay_state_key();
         let second = relay_ref.relay_state_key();
-
         assert_eq!(first, second);
         assert_eq!(
             first,
@@ -1887,7 +1788,6 @@ mod tests {
         assert_eq!(incarnation.len(), 64);
         assert!(incarnation.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
-
     #[test]
     fn relay_rejects_zero_and_accepts_independent_lane_local_height() {
         let header = sample_header(8, None);
@@ -1900,7 +1800,6 @@ mod tests {
         envelope
             .verify()
             .expect("independent lane-local and global height domains verify");
-
         let boundary = LaneRelayEnvelope::new(
             sample_header(1, None),
             None,
@@ -1912,7 +1811,6 @@ mod tests {
             .verify()
             .expect("independent height boundary verifies");
     }
-
     #[test]
     fn fastpq_proof_material_accepts_external_digest() {
         let envelope =
@@ -1920,12 +1818,10 @@ mod tests {
                 proof_digest: Hash::new(b"external-fastpq-proof-payload"),
                 verified_at_height: 8,
             }));
-
         envelope
             .validate_fastpq_proof_metadata()
             .expect("external proof digest should be accepted");
     }
-
     #[test]
     fn fastpq_proof_material_rejects_stale_verified_height() {
         let envelope =
@@ -1933,18 +1829,15 @@ mod tests {
                 proof_digest: Hash::new(b"external-fastpq-proof-payload"),
                 verified_at_height: 7,
             }));
-
         let err = envelope
             .validate_fastpq_proof_metadata()
             .expect_err("stale verification height must be rejected");
         assert_eq!(err, LaneRelayError::InvalidFastpqProof);
     }
-
     #[test]
     fn lane_relay_fastpq_claim_digest_binds_fee_receipts() {
         let mut envelope = build_envelope(8).with_manifest_root(Some([0x42; 32]));
         let original = lane_relay_fastpq_claim_digest(&envelope).expect("lane relay claim digest");
-
         envelope
             .settlement_commitment
             .nexus_fee_receipts
@@ -1974,10 +1867,8 @@ mod tests {
         envelope.settlement_hash =
             compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
         let changed = lane_relay_fastpq_claim_digest(&envelope).expect("changed claim digest");
-
         assert_ne!(original, changed);
     }
-
     #[test]
     fn native_amx_relay_coordinate_uses_global_authority_height() {
         let proposal_height = 8;
@@ -2017,7 +1908,6 @@ mod tests {
         envelope
             .verify()
             .expect("lane-local height need not equal the global relay height");
-
         envelope.settlement_commitment.native_amx_receipts[0].authority_context_height += 1;
         envelope.settlement_hash =
             compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
@@ -2026,7 +1916,6 @@ mod tests {
             Err(LaneRelayError::SettlementReceiptCoordinateMismatch)
         );
     }
-
     #[test]
     fn lane_relay_fastpq_claim_digest_binds_lane_block_descriptor_hash() {
         let first = build_envelope(8)
@@ -2035,13 +1924,11 @@ mod tests {
         let second = build_envelope(8)
             .with_manifest_root(Some([0x42; 32]))
             .with_lane_block_descriptor_hash(Some(Hash::new(b"descriptor-b")));
-
         assert_ne!(
             lane_relay_fastpq_claim_digest(&first).expect("first lane relay claim digest"),
             lane_relay_fastpq_claim_digest(&second).expect("second lane relay claim digest")
         );
     }
-
     #[test]
     fn fee_sponsor_vault_claim_digest_binds_program_asset_amount_and_lease() {
         let claim = FeeSponsorVaultAllocationClaim {
@@ -2071,7 +1958,6 @@ mod tests {
             ambient, original,
             "the sponsor allocation proof preimage must ignore ambient Norito layout"
         );
-
         let mut changed = claim.clone();
         changed.verified_allocation = Quantity::from(11_u32);
         assert_ne!(
@@ -2091,7 +1977,6 @@ mod tests {
             fee_sponsor_vault_allocation_claim_digest(&changed)
         );
     }
-
     #[test]
     fn fee_sponsor_vault_source_root_binds_authoritative_snapshot() {
         let program_id = FeeSponsorProgramId::new(
@@ -2126,7 +2011,6 @@ mod tests {
             ambient, original,
             "the sponsor source-state commitment must ignore ambient Norito layout"
         );
-
         assert_ne!(
             original,
             fee_sponsor_vault_source_state_root(
@@ -2150,14 +2034,12 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn fee_sponsor_vault_allocation_usage_keys_are_lease_bound_and_disjoint() {
         let first = Hash::new(b"fee-sponsor-lease-a");
         let second = Hash::new(b"fee-sponsor-lease-b");
         let executed = VerifiedFeeSponsorVaultAllocation::usage_state_key_for(&first);
         let settled = VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(&first);
-
         assert!(executed.starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_USAGE_STATE_KEY_PREFIX));
         assert!(
             settled
@@ -2171,7 +2053,6 @@ mod tests {
         assert!(!executed.starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX));
         assert!(!settled.starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX));
     }
-
     #[test]
     fn quorum_context_rejects_invalid_roster() {
         let err = LaneRelayQuorumContext::new(0, 1).expect_err("invalid roster");
@@ -2182,7 +2063,6 @@ mod tests {
                 min_quorum: 1
             }
         );
-
         let err = LaneRelayQuorumContext::new(2, 3).expect_err("quorum > roster");
         assert_eq!(
             err,
@@ -2192,7 +2072,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn evidence_bundle_roundtrip() {
         let envelope = build_envelope(1);
@@ -2201,7 +2080,6 @@ mod tests {
             error_label: "example_error".to_string(),
             error_message: "example".to_string(),
         };
-
         let encoded = Encode::encode(&bundle);
         let decoded = LaneRelayEvidenceBundle::decode(&mut &encoded[..])
             .expect("evidence bundle round-trips");

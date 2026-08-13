@@ -1,5 +1,4 @@
 //! Roundtrip coverage for streaming capability ticket events.
-
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
     metadata::Metadata,
@@ -16,22 +15,18 @@ use norito::{
     codec::encode_with_header_flags,
     core::{decode_from_bytes, frame_bare_with_header_flags},
 };
-
 fn sample_hash(seed: u8) -> Hash {
     Hash::prehashed([seed; 32])
 }
-
 fn fixture_key_pair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("fixture seed must derive a valid keypair")
 }
-
 fn seeded_account(domain: &str, seed: u8) -> AccountId {
     let _domain_id = DomainId::try_new(domain, "universal").expect("domain id");
     let key_pair = fixture_key_pair(seed);
     AccountId::new(key_pair.public_key().clone())
 }
-
 #[test]
 fn fixture_key_pair_uses_checked_seed_derivation() {
     assert_eq!(fixture_key_pair(0x01).algorithm(), Algorithm::Ed25519);
@@ -40,7 +35,6 @@ fn fixture_key_pair_uses_checked_seed_derivation() {
         "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
     );
 }
-
 fn sample_route(seed: u8) -> StreamingPrivacyRoute {
     StreamingPrivacyRoute::new(
         sample_hash(seed).into(),
@@ -68,7 +62,6 @@ fn sample_route(seed: u8) -> StreamingPrivacyRoute {
         StreamingSoranetStreamTag::NoritoStream,
     ))
 }
-
 fn sample_ticket_envelope() -> TicketEnvelopeV1 {
     let body = TicketBodyV1 {
         blinded_cid: [0xAA; 32],
@@ -91,7 +84,6 @@ fn sample_ticket_envelope() -> TicketEnvelopeV1 {
         nullifier: [0xBB; 32],
     }
 }
-
 fn sample_ticket_record() -> StreamingTicketRecord {
     StreamingTicketRecord::new(
         sample_hash(0x02),
@@ -122,7 +114,6 @@ fn sample_ticket_record() -> StreamingTicketRecord {
         ),
     )
 }
-
 #[test]
 fn ticket_record_roundtrip() {
     let record = sample_ticket_record();
@@ -133,7 +124,6 @@ fn ticket_record_roundtrip() {
         decode_from_bytes::<StreamingTicketRecord>(&framed).expect("decode framed ticket record");
     assert_eq!(record, decoded);
 }
-
 #[test]
 fn privacy_route_with_ticket_roundtrip() {
     let envelope = sample_ticket_envelope();
@@ -144,7 +134,6 @@ fn privacy_route_with_ticket_roundtrip() {
     let decoded_ticket = decoded.ticket_envelope().expect("ticket envelope present");
     assert_eq!(decoded_ticket, &envelope);
 }
-
 #[test]
 fn ticket_ready_roundtrip() {
     let ticket_envelope = sample_ticket_envelope();
@@ -159,7 +148,6 @@ fn ticket_ready_roundtrip() {
         ticket,
         vec![binding],
     ));
-
     let bytes = event.encode();
     let result = std::panic::catch_unwind(|| DomainEvent::decode(&mut bytes.as_slice()));
     if let Err(panic) = result {
@@ -169,7 +157,6 @@ fn ticket_ready_roundtrip() {
     let decoded = result.unwrap().expect("decode ticket ready");
     assert_eq!(event, decoded);
 }
-
 #[test]
 fn ticket_revoked_roundtrip() {
     let event = DomainEvent::StreamingTicketRevoked(StreamingTicketRevoked::new(
@@ -180,12 +167,10 @@ fn ticket_revoked_roundtrip() {
         17,
         [0xCC; 64],
     ));
-
     let bytes = event.encode();
     let decoded = DomainEvent::decode(&mut bytes.as_slice()).expect("decode ticket revoked");
     assert_eq!(event, decoded);
 }
-
 #[test]
 fn soranet_route_mutators() {
     let mut route = StreamingSoranetRoute::new(
@@ -198,10 +183,8 @@ fn soranet_route_mutators() {
     assert_eq!(route.padding_budget_ms(), Some(30));
     route.set_padding_budget_ms(None);
     assert_eq!(route.padding_budget_ms(), None);
-
     route.set_exit_multiaddr("/dns/exit.updated/quic".to_owned());
     assert_eq!(route.exit_multiaddr(), "/dns/exit.updated/quic");
-
     assert_eq!(*route.access_kind(), StreamingSoranetAccessKind::ReadOnly);
     route.set_access_kind(StreamingSoranetAccessKind::Authenticated);
     assert_eq!(
@@ -209,7 +192,6 @@ fn soranet_route_mutators() {
         StreamingSoranetAccessKind::Authenticated
     );
 }
-
 #[test]
 fn privacy_route_soranet_and_ticket_setters() {
     let mut route = StreamingPrivacyRoute::new(
@@ -230,7 +212,6 @@ fn privacy_route_soranet_and_ticket_setters() {
         vec![0xD1, 0xD2],
         512,
     );
-
     assert!(route.soranet().is_none());
     let soranet = StreamingSoranetRoute::new(
         sample_hash(0x46).into(),
@@ -241,12 +222,10 @@ fn privacy_route_soranet_and_ticket_setters() {
     );
     route.set_soranet(Some(soranet.clone()));
     assert_eq!(route.soranet(), Some(&soranet));
-
     assert!(route.ticket_envelope().is_none());
     let envelope = sample_ticket_envelope();
     route.set_ticket(Some(envelope.clone()));
     assert_eq!(route.ticket_envelope(), Some(&envelope));
-
     route.set_soranet(None);
     assert!(route.soranet().is_none());
     route.set_ticket(None);

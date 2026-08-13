@@ -2,7 +2,6 @@
 #![allow(clippy::doc_markdown)]
 /// Low-cardinality metrics for the Musubi V1 package ecosystem.
 pub mod musubi;
-
 use core::{
     convert::{TryFrom, TryInto},
     ops::Deref,
@@ -18,7 +17,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
     vec::Vec,
 };
-
 use iroha_config::{
     kura::FsyncMode,
     parameters::actual::{
@@ -52,9 +50,7 @@ use prometheus::{
     core::{AtomicU64, GenericGauge, GenericGaugeVec},
 };
 pub use prometheus::{GaugeVec, core::Collector};
-
 use crate::privacy::PrivacyDrainSnapshot;
-
 /// Type for reporting amount of dropped messages for sumeragi
 pub type DroppedMessagesCounter = IntCounter;
 /// Type for reporting view change index of current round
@@ -2288,9 +2284,7 @@ pub fn global_sorafs_node_otel() -> Arc<SorafsNodeOtel> {
 #[cfg(test)]
 mod tests {
     use norito::{NoritoDeserialize, from_bytes, to_bytes};
-
     use super::*;
-
     fn find_metric_line<'a>(dump: &'a str, prefix: &str) -> &'a str {
         dump.lines()
             .find(|line| line.starts_with(prefix))
@@ -3091,7 +3085,6 @@ impl JsonDeserialize for Uptime {
 mod serde_tests {
     use super::*;
     use norito::{from_bytes, to_bytes};
-
     #[test]
     fn uptime_json_roundtrip() {
         let uptime = Uptime(Duration::new(5, 123));
@@ -8090,9 +8083,7 @@ impl MetricSpecCursor {
 #[cfg(test)]
 mod metric_catalog_tests {
     use std::collections::BTreeSet;
-
     use super::{METRIC_CATALOG_V1, METRIC_CATALOG_V1_HEADER, METRIC_CATALOG_V1_ROWS, Metrics};
-
     #[test]
     fn v1_catalog_is_complete_and_unique() {
         let mut lines = METRIC_CATALOG_V1.lines();

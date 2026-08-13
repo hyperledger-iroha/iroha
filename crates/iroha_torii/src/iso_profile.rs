@@ -1,11 +1,7 @@
 //! ISO 20022 profile selection from authenticated requests.
-
 use std::collections::HashMap;
-
 use axum::http::HeaderMap;
-
 use super::{Error, Iso20022BridgeRuntime};
-
 pub(super) fn from_request<'a>(
     runtime: &'a Iso20022BridgeRuntime,
     headers: &HeaderMap,

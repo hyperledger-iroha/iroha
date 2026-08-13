@@ -1,12 +1,9 @@
 //! Validate the V1 public configuration boundary for native `SoraFS` transaction signers.
-
 use std::{fmt::Write as _, path::PathBuf};
-
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::account::AccountId;
-
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()
@@ -14,7 +11,6 @@ fn base_reader() -> ConfigReader {
         .read_toml_with_extends(base_path)
         .expect("base config should load")
 }
-
 fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
     let table = source
         .parse()
@@ -26,7 +22,6 @@ fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
         .parse()
         .map_err(|error| format!("{error:?}"))
 }
-
 #[derive(Clone)]
 struct BindingFixture {
     handle: String,
@@ -37,7 +32,6 @@ struct BindingFixture {
     revision: u64,
     policy_digest_hex: String,
 }
-
 fn binding_fixture(
     seed: u8,
     algorithm: Algorithm,
@@ -70,11 +64,9 @@ fn binding_fixture(
         policy_digest_hex: hex::encode([digest_byte; 32]),
     }
 }
-
 fn render_binding(role: &str, binding: &BindingFixture) -> String {
     render_binding_omitting(role, binding, None)
 }
-
 fn render_binding_omitting(role: &str, binding: &BindingFixture, omitted: Option<&str>) -> String {
     let mut source = format!("\n[sorafs.storage.native_transaction_signers.{role}]\n");
     for (field, value) in [
@@ -96,7 +88,6 @@ fn render_binding_omitting(role: &str, binding: &BindingFixture, omitted: Option
     }
     source
 }
-
 fn all_roles_enabled() -> &'static str {
     r"
 [sorafs.storage]
@@ -112,7 +103,6 @@ enabled = true
 enabled = true
 "
 }
-
 fn complete_role_fixtures() -> [BindingFixture; 4] {
     [
         binding_fixture(
@@ -145,7 +135,6 @@ fn complete_role_fixtures() -> [BindingFixture; 4] {
         ),
     ]
 }
-
 fn complete_source(fixtures: &[BindingFixture; 4]) -> String {
     let mut source = all_roles_enabled().to_owned();
     for (role, binding) in ["proof_outcome", "repair", "reserve", "orderbook"]
@@ -156,25 +145,21 @@ fn complete_source(fixtures: &[BindingFixture; 4]) -> String {
     }
     source
 }
-
 #[test]
 fn native_transaction_signer_bindings_default_to_absent() {
     let actual = parse_overlay("").expect("default-disabled native workers need no signer binding");
     let bindings = &actual.torii.sorafs_storage.native_transaction_signers;
-
     assert!(bindings.proof_outcome.is_none());
     assert!(bindings.repair.is_none());
     assert!(bindings.reserve.is_none());
     assert!(bindings.orderbook.is_none());
 }
-
 #[test]
 fn complete_bindings_accept_exact_ed25519_and_ml_dsa_public_identities() {
     let fixtures = complete_role_fixtures();
     let actual = parse_overlay(&complete_source(&fixtures))
         .expect("four complete, distinct signer bindings must parse");
     let bindings = &actual.torii.sorafs_storage.native_transaction_signers;
-
     for (actual, expected, algorithm) in [
         (
             bindings
@@ -216,7 +201,6 @@ fn complete_bindings_accept_exact_ed25519_and_ml_dsa_public_identities() {
         );
     }
 }
-
 #[test]
 fn every_binding_field_is_required_and_unknown_aliases_or_credentials_are_rejected() {
     let fixtures = complete_role_fixtures();
@@ -257,7 +241,6 @@ fn every_binding_field_is_required_and_unknown_aliases_or_credentials_are_reject
             );
         }
     }
-
     let binding = &fixtures[0];
     for alias in [
         "provider_handle",
@@ -282,7 +265,6 @@ fn every_binding_field_is_required_and_unknown_aliases_or_credentials_are_reject
             "{alias} produced unexpected diagnostic: {error}"
         );
     }
-
     let role_alias = format!(
         "[sorafs.storage]\nenabled = true\n{}",
         render_binding("proof", binding)
@@ -290,7 +272,6 @@ fn every_binding_field_is_required_and_unknown_aliases_or_credentials_are_reject
     let error = parse_overlay(&role_alias).expect_err("role aliases must be rejected");
     assert!(error.contains("proof"), "unexpected diagnostic: {error}");
 }
-
 #[test]
 fn production_handles_reject_empty_whitespace_and_every_test_marker() {
     let valid = binding_fixture(
@@ -330,7 +311,6 @@ fn production_handles_reject_empty_whitespace_and_every_test_marker() {
         );
     }
 }
-
 #[test]
 fn algorithm_and_public_key_are_exact_and_canonical() {
     let valid = binding_fixture(
@@ -353,7 +333,6 @@ fn algorithm_and_public_key_are_exact_and_canonical() {
             "unexpected algorithm diagnostic: {error}"
         );
     }
-
     let ml_dsa = binding_fixture(
         0x44,
         Algorithm::MlDsa,
@@ -381,7 +360,6 @@ fn algorithm_and_public_key_are_exact_and_canonical() {
         );
     }
 }
-
 #[test]
 fn authority_must_be_canonical_i105_derived_from_the_public_key() {
     let valid = binding_fixture(
@@ -416,7 +394,6 @@ fn authority_must_be_canonical_i105_derived_from_the_public_key() {
         );
     }
 }
-
 #[test]
 fn qualification_revision_and_digest_are_nonzero_and_canonical() {
     let valid = binding_fixture(
@@ -463,7 +440,6 @@ fn qualification_revision_and_digest_are_nonzero_and_canonical() {
         );
     }
 }
-
 #[test]
 fn all_role_handles_authorities_and_public_keys_must_be_distinct() {
     let mut duplicate_handle = complete_role_fixtures();
@@ -474,7 +450,6 @@ fn all_role_handles_authorities_and_public_keys_must_be_distinct() {
         error.contains("roles must use distinct handles"),
         "unexpected duplicate-handle diagnostic: {error}"
     );
-
     let mut duplicate_identity = complete_role_fixtures();
     duplicate_identity[1].authority = duplicate_identity[0].authority.clone();
     duplicate_identity[1].algorithm = duplicate_identity[0].algorithm.clone();
@@ -491,7 +466,6 @@ fn all_role_handles_authorities_and_public_keys_must_be_distinct() {
         "unexpected duplicate-key diagnostic: {error}"
     );
 }
-
 #[test]
 fn every_role_binding_is_required_iff_drain_or_generation_is_active() {
     let fixtures = complete_role_fixtures();
@@ -521,7 +495,6 @@ fn every_role_binding_is_required_iff_drain_or_generation_is_active() {
             )),
             "{role} missing-binding diagnostic was unexpected: {error}"
         );
-
         let error = parse_overlay(&render_binding(role, binding))
             .expect_err("inactive signer role with dormant binding must fail");
         assert!(
@@ -532,7 +505,6 @@ fn every_role_binding_is_required_iff_drain_or_generation_is_active() {
         );
     }
 }
-
 #[test]
 fn storage_enabled_requires_all_four_signers_with_generation_workers_disabled() {
     let fixtures = complete_role_fixtures();
@@ -545,7 +517,6 @@ fn storage_enabled_requires_all_four_signers_with_generation_workers_disabled() 
     }
     parse_overlay(&complete)
         .expect("storage-enabled durable drain must accept all four explicit bindings");
-
     for (missing_index, missing_role) in ["proof_outcome", "repair", "reserve", "orderbook"]
         .into_iter()
         .enumerate()
@@ -570,7 +541,6 @@ fn storage_enabled_requires_all_four_signers_with_generation_workers_disabled() 
         );
     }
 }
-
 #[test]
 fn bundle_level_unknown_roles_and_secret_material_are_rejected() {
     for field in [

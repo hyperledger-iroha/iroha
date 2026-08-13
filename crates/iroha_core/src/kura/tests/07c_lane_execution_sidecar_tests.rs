@@ -30,7 +30,6 @@ fn lane_execution_evidence_overrides_batched_fsync_and_reissues_failed_barriers(
     let recovered = kura
         .recover_lane_block_payload(&proposal)
         .expect("recover exact execution input");
-
     for (label, inject_failure) in strict_indexed_sidecar_failure_modes() {
         inject_failure();
         assert!(
@@ -43,7 +42,6 @@ fn lane_execution_evidence_overrides_batched_fsync_and_reissues_failed_barriers(
     let input = kura
         .read_lane_block_execution_input(lane_id, lane_block_height)
         .expect("strict execution input");
-
     let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         b"strict lane execution preflight state",
     )));
@@ -70,7 +68,6 @@ fn lane_execution_evidence_overrides_batched_fsync_and_reissues_failed_barriers(
         .expect("strict execution preflight");
     assert_eq!(preflight.results, results);
 }
-
 #[test]
 fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -92,7 +89,6 @@ fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -103,7 +99,6 @@ fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
         .expect("persist lane execution input");
     kura.persist_lane_block_execution_input(&recovered)
         .expect("duplicate lane execution input persistence is idempotent");
-
     let input = kura
         .read_lane_block_execution_input(lane_id, lane_block_height)
         .expect("lane execution input");
@@ -116,7 +111,6 @@ fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
     );
     assert_eq!(input.entrypoints, recovered.entrypoints);
     assert!(kura.lane_block_execution_input_available(&proposal));
-
     let (data_path, index_path) =
         Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
     assert!(
@@ -127,7 +121,6 @@ fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
         index_path.is_file(),
         "lane execution input index file missing"
     );
-
     drop(kura);
     let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
     assert_eq!(
@@ -136,7 +129,6 @@ fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
     );
     assert!(reloaded.lane_block_execution_input_available(&proposal));
 }
-
 #[test]
 fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -158,7 +150,6 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -174,7 +165,6 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
             .is_none(),
         "test setup must remove the repairable lane artifact sidecar",
     );
-
     let worker_kura = Arc::clone(&kura);
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
     let worker = thread::spawn(move || {
@@ -216,7 +206,6 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
         .expect("lane sidecar validation must not recursively lock prune_lock")
         .unwrap_or_else(|error| panic!("lane sidecar validation failed: {error}"));
     worker.join().expect("lane sidecar validation worker");
-
     assert!(
         kura.read_lane_block_artifact(lane_id, lane_block_height)
             .is_none(),
@@ -237,9 +226,7 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
             )
             .is_some_and(|input| input.proposal == proposal),
         );
-        assert!(
-            kura.lane_block_execution_input_available_without_sidecar_repair(&proposal),
-        );
+        assert!(kura.lane_block_execution_input_available_without_sidecar_repair(&proposal),);
         assert!(
             kura.read_lane_block_execution_preflight_without_sidecar_repair(
                 lane_id,
@@ -249,9 +236,7 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
         );
         assert_eq!(
             kura.lane_block_execution_preflight_has_rejections_without_sidecar_repair(
-                &proposal,
-                7,
-                state_hash,
+                &proposal, 7, state_hash,
             ),
             Some(false),
         );
@@ -271,14 +256,11 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
             ),
             Some(receipt.clone()),
         );
+        assert!(kura.lane_block_application_receipt_available_without_sidecar_repair(&proposal),);
         assert!(
-            kura.lane_block_application_receipt_available_without_sidecar_repair(&proposal),
-        );
-        assert!(
-            !kura
-                .lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
-                    &proposal,
-                ),
+            !kura.lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
+                &proposal,
+            ),
         );
         assert!(kura.lane_block_payload_is_recoverable(&proposal));
         assert!(
@@ -310,7 +292,6 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
             .is_some(),
         "the public repair-enabled reader must recover the missing lane artifact",
     );
-
     let mut merge_log = MergeLedgerLog::in_memory(1);
     merge_log.append_recovery_offset = Some(0);
     let missing_entry = HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(

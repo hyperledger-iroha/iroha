@@ -1,5 +1,4 @@
 //! Frozen ZK-AMS MKHE release parameters and fail-closed readiness gates.
-
 use super::{
     BgvProfile, PlaintextModulus, ZkAmsMkheErrorV1,
     active_exact_binding::exact_binding_release_state_v1,
@@ -18,7 +17,6 @@ use super::{
     },
 };
 use crate::vega::sponge::keccak256;
-
 /// Frozen power-of-two cyclotomic degree of the collective-ingress candidate.
 pub const ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1: usize = 131_072;
 /// Exact number of T256 base-field values packed through conjugate `Fp2` slots.
@@ -37,12 +35,10 @@ pub const ZK_AMS_MKHE_FINAL_DECRYPTION_BOUND_BITS_V1: u16 = 2_115;
 pub const ZK_AMS_MKHE_CORRECTNESS_MARGIN_BITS_V1: u16 = 164;
 /// Maximum possible nonzero count of one compiled sparse R1CS row.
 pub const ZK_AMS_MKHE_SPARSE_MAP_FAN_IN_CEILING_V1: usize = 524_378;
-
 const RELEASE_PROFILE_ID_V1: [u8; 32] = [
     0x26, 0x07, 0xf2, 0x03, 0x92, 0x5d, 0x98, 0xf4, 0xfb, 0xed, 0x1d, 0x27, 0xbb, 0xef, 0x1b, 0x09,
     0x56, 0xb2, 0x01, 0x67, 0xf3, 0x02, 0x16, 0x3b, 0x2b, 0x14, 0x31, 0x3f, 0x7d, 0x48, 0x9f, 0xd5,
 ];
-
 pub(super) const RELEASE_MODULI_V1: [u64; 38] = [
     1_152_921_504_606_584_833,
     1_152_921_504_598_720_513,
@@ -83,7 +79,6 @@ pub(super) const RELEASE_MODULI_V1: [u64; 38] = [
     1_152_921_504_419_414_017,
     1_152_921_504_409_190_401,
 ];
-
 pub(super) const RELEASE_NEGACYCLIC_ROOTS_V1: [u64; 38] = [
     720_645_352_895_426_071,
     282_755_386_997_791_573,
@@ -124,7 +119,6 @@ pub(super) const RELEASE_NEGACYCLIC_ROOTS_V1: [u64; 38] = [
     1_049_010_867_608_938_030,
     533_899_346_966_036_544,
 ];
-
 /// Frozen, consensus-digestible MKHE release manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheReleaseManifestV1 {
@@ -217,7 +211,6 @@ pub struct ZkAmsMkheReleaseManifestV1 {
     /// Release-size execution KAT digest; zero means absent.
     pub release_kat_digest: [u8; 32],
 }
-
 /// Native readiness result. Every field is bound by the readiness digest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheReadinessV1 {
@@ -246,7 +239,6 @@ pub struct ZkAmsMkheReadinessV1 {
     /// A full release-parameter KAT completed and matches its governed digest.
     pub release_kat_gate: bool,
 }
-
 impl ZkAmsMkheReadinessV1 {
     /// Return true only when every release obligation is closed.
     #[must_use]
@@ -265,7 +257,6 @@ impl ZkAmsMkheReadinessV1 {
             && self.release_kat_gate
     }
 }
-
 pub(super) fn release_profile_v1() -> BgvProfile {
     BgvProfile {
         profile_id: RELEASE_PROFILE_ID_V1,
@@ -285,9 +276,7 @@ pub(super) fn release_profile_v1() -> BgvProfile {
         max_work_units: 100_000_000_000,
     }
 }
-
 const COLLECTIVE_INGRESS_CONSTRUCTION_V1: &[u8] = b"iroha.zk-ams.v1.collective-ingress-hybrid:not-cdks19:on-entry-independent-owner-key:fixed-roster-sum-secret:proof-bound-cks:collective-s2-rkg:all-roster-decryption:transparent-seeded-a:sampled-cbd-error:canonical-natural-lift-effective-error";
-
 fn collective_ingress_construction_digest_v1(noise: ZkAmsMkheNoiseCertificateV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(COLLECTIVE_INGRESS_CONSTRUCTION_V1.len() + 32);
     frame.extend_from_slice(COLLECTIVE_INGRESS_CONSTRUCTION_V1);
@@ -303,7 +292,6 @@ fn collective_ingress_construction_digest_v1(noise: ZkAmsMkheNoiseCertificateV1)
     frame.push(noise.natural_lift_upper_half_correction_max);
     keccak256(&frame)
 }
-
 /// Return the machine-checked conservative Phase-II/III noise certificate.
 pub fn zk_ams_mkhe_noise_certificate_v1() -> Result<ZkAmsMkheNoiseCertificateV1, ZkAmsMkheErrorV1> {
     derive_noise_certificate_v1(
@@ -317,13 +305,11 @@ pub fn zk_ams_mkhe_noise_certificate_v1() -> Result<ZkAmsMkheNoiseCertificateV1,
         release_profile_v1().error_eta,
     )
 }
-
 /// Return exact static byte/work accounting and explicit open evidence bits.
 pub fn zk_ams_mkhe_resource_certificate_v1()
 -> Result<ZkAmsMkheResourceCertificateV1, ZkAmsMkheErrorV1> {
     derive_resource_certificate_v1(&release_profile_v1(), ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1)
 }
-
 /// Return the consensus digest of exact resource accounting and evidence state.
 pub fn zk_ams_mkhe_resource_certificate_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
@@ -370,13 +356,11 @@ pub fn zk_ams_mkhe_resource_certificate_digest_v1() -> Result<[u8; 32], ZkAmsMkh
     ]);
     Ok(keccak256(&frame))
 }
-
 /// Return the exact frozen RLWE estimator inputs.
 pub fn zk_ams_mkhe_security_candidate_v1() -> Result<ZkAmsMkheSecurityCandidateV1, ZkAmsMkheErrorV1>
 {
     derive_security_candidate_v1(&release_profile_v1(), ZK_AMS_MKHE_TARGET_SECURITY_BITS_V1)
 }
-
 /// Return the consensus digest of the exact estimator inputs.
 ///
 /// The accepted estimator output is deliberately excluded. It belongs in
@@ -386,7 +370,6 @@ pub fn zk_ams_mkhe_security_candidate_input_digest_v1() -> Result<[u8; 32], ZkAm
     let candidate = zk_ams_mkhe_security_candidate_v1()?;
     Ok(security_candidate_input_digest_v1(candidate))
 }
-
 /// Return the immutable estimator result for the exact release profile.
 ///
 /// The returned value has no public constructor or mutable result fields. Its
@@ -396,7 +379,6 @@ pub fn zk_ams_mkhe_security_certificate_v1()
 -> Result<ZkAmsMkheSecurityCertificateV1, ZkAmsMkheErrorV1> {
     frozen_security_certificate_v1(zk_ams_mkhe_security_candidate_v1()?)
 }
-
 /// Return and natively validate the frozen candidate release manifest.
 pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
@@ -481,13 +463,11 @@ pub fn zk_ams_mkhe_release_manifest_v1() -> Result<ZkAmsMkheReleaseManifestV1, Z
         release_kat_digest: [0; 32],
     })
 }
-
 /// Return the consensus digest of the exact release manifest and prime/root chain.
 pub fn zk_ams_mkhe_manifest_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let manifest = zk_ams_mkhe_release_manifest_v1()?;
     Ok(release_manifest_digest_v1(manifest))
 }
-
 fn release_manifest_digest_v1(manifest: ZkAmsMkheReleaseManifestV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(512);
     frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.release-manifest");
@@ -545,7 +525,6 @@ fn release_manifest_digest_v1(manifest: ZkAmsMkheReleaseManifestV1) -> [u8; 32] 
     frame.extend_from_slice(&manifest.release_kat_digest);
     keccak256(&frame)
 }
-
 /// Evaluate every release-readiness gate without silently downgrading.
 pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheErrorV1> {
     let manifest = zk_ams_mkhe_release_manifest_v1()?;
@@ -626,7 +605,6 @@ pub fn zk_ams_mkhe_readiness_v1() -> Result<ZkAmsMkheReadinessV1, ZkAmsMkheError
         release_kat_gate: manifest.release_kat_digest != [0; 32],
     })
 }
-
 /// Return a consensus digest binding the manifest and every readiness bit.
 pub fn zk_ams_mkhe_readiness_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let readiness = zk_ams_mkhe_readiness_v1()?;
@@ -649,18 +627,15 @@ pub fn zk_ams_mkhe_readiness_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     frame.push(readiness.release_kat_gate.into());
     Ok(keccak256(&frame))
 }
-
 pub(in crate::vega::zk_ams) fn require_release_ready_v1() -> Result<(), ZkAmsMkheErrorV1> {
     if !zk_ams_mkhe_readiness_v1()?.is_ready() {
         return Err(ZkAmsMkheErrorV1::ReleaseUnavailable);
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn manifest_distinguishes_sampled_eta_two_from_natural_lift_effective_error() {
         let noise = zk_ams_mkhe_noise_certificate_v1().unwrap();
@@ -686,7 +661,6 @@ mod tests {
         assert!(readiness.noise_gate);
         assert!(readiness.packing_gate);
     }
-
     #[test]
     fn construction_and_manifest_digests_bind_every_error_bound_axis() {
         let noise = zk_ams_mkhe_noise_certificate_v1().unwrap();
@@ -742,7 +716,6 @@ mod tests {
                 construction_digest
             );
         }
-
         let manifest = zk_ams_mkhe_release_manifest_v1().unwrap();
         let manifest_digest = release_manifest_digest_v1(manifest);
         for changed in [
@@ -826,12 +799,10 @@ mod tests {
             assert_ne!(release_manifest_digest_v1(changed), manifest_digest);
         }
     }
-
     #[test]
     fn estimator_input_identity_binds_every_input_class() {
         let candidate = zk_ams_mkhe_security_candidate_v1().expect("security candidate");
         let expected = security_candidate_input_digest_v1(candidate);
-
         for changed in [
             ZkAmsMkheSecurityCandidateV1 {
                 security_parameters_digest: [7; 32],
@@ -853,13 +824,11 @@ mod tests {
             assert_ne!(security_candidate_input_digest_v1(changed), expected);
         }
     }
-
     #[test]
     fn exact_estimator_evidence_closes_only_the_security_gate() {
         let certificate = zk_ams_mkhe_security_certificate_v1().expect("security certificate");
         let manifest = zk_ams_mkhe_release_manifest_v1().expect("manifest");
         let readiness = zk_ams_mkhe_readiness_v1().expect("readiness");
-
         assert_eq!(manifest.certified_security_bits, 172);
         assert_eq!(manifest.target_security_bits, 128);
         assert_eq!(
@@ -877,7 +846,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
         );
     }
-
     #[test]
     fn readiness_derives_active_and_decryption_gates_from_exact_audits() {
         let profile = release_profile_v1();
@@ -885,7 +853,6 @@ mod tests {
         let decryption =
             zk_ams_mkhe_decryption_resource_evidence_v1().expect("decryption resource evidence");
         let readiness = zk_ams_mkhe_readiness_v1().expect("readiness");
-
         assert_eq!(active.blocker_mask, 0b1111_1100);
         assert_ne!(active.audit_digest, [0; 32]);
         assert!(!active.split_decryption_wide_relation_certified);
@@ -894,7 +861,6 @@ mod tests {
         assert!(!readiness.malicious_party_gate);
         assert!(!readiness.decryption_share_gate);
     }
-
     #[test]
     fn receipt_capability_blockers_are_manifest_bound_and_fail_readiness_closed() {
         let audit = zk_ams_mkhe_receipt_capability_audit_v1();
@@ -903,7 +869,6 @@ mod tests {
             .expect("receipt capability audit validates");
         let manifest = zk_ams_mkhe_release_manifest_v1().expect("release manifest");
         let readiness = zk_ams_mkhe_readiness_v1().expect("readiness");
-
         assert_eq!(audit.blocker_mask, 0xf0);
         assert!(!audit.release_available);
         assert_eq!(manifest.receipt_capability_audit_digest, audit.digest);

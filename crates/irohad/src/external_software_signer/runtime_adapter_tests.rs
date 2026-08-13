@@ -3,7 +3,6 @@ use std::{
     os::unix::fs::PermissionsExt as _,
     sync::{Arc, Mutex},
 };
-
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_torii::sorafs::{PotrProviderSignerV1 as _, StreamTokenRuntimeSigner as _};
 use sorafs_manifest::StreamTokenBodyV1;
@@ -12,7 +11,6 @@ use sorafs_node::{
     hedging_billing_service::BillingStatementRuntimeSigner as _,
     pop_credentials::PopIssuerSigner as _,
 };
-
 use super::{
     ExternalSoftwareSignerAdapterErrorV1, ExternalSoftwareSignerBackendsV1,
     ExternalSoftwareSignerBillingStatementAdapterV1, ExternalSoftwareSignerEvidenceViewerAdapterV1,
@@ -22,9 +20,7 @@ use super::{
     SoftwareSignerPurposeBindingV1, SoftwareSignerRoleV1, SoftwareSignerServiceV1,
     SoftwareSignerWrappingKeyV1,
 };
-
 const TEST_WRAP_KEY: [u8; 32] = [0xD1; 32];
-
 fn direct_signer(
     role: SoftwareSignerRoleV1,
     purpose_binding: SoftwareSignerPurposeBindingV1,
@@ -71,11 +67,9 @@ fn direct_signer(
     .expect("provision direct signer");
     (parent, Arc::new(service))
 }
-
 fn direct_client(service: &Arc<SoftwareSignerServiceV1>) -> SoftwareSignerClientV1 {
     SoftwareSignerClientV1::new_direct(Arc::clone(service)).expect("direct test client")
 }
-
 fn unsigned_potr_payload(provider_id: [u8; 32]) -> Vec<u8> {
     sorafs_manifest::PotrReceiptV1 {
         version: sorafs_manifest::POTR_RECEIPT_VERSION_V1,
@@ -99,7 +93,6 @@ fn unsigned_potr_payload(provider_id: [u8; 32]) -> Vec<u8> {
     .signing_payload_bytes()
     .expect("PoTR signing payload")
 }
-
 fn evidence_checkpoint_anchor_message(binding: &super::SoftwareSignerPublicBindingV1) -> Vec<u8> {
     let checkpoint_handle = "runtime://sorafs/evidence-viewer/checkpoint-store/primary";
     let (_, public_key) = binding
@@ -132,7 +125,6 @@ fn evidence_checkpoint_anchor_message(binding: &super::SoftwareSignerPublicBindi
     message.extend_from_slice(public_key);
     message
 }
-
 #[test]
 fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
     let peer = b"12D3KooWPhaseOneGovernancePublisher".to_vec();
@@ -183,7 +175,6 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
             .is_err(),
         "key-transition bytes must not substitute for a qualification archive"
     );
-
     let signer_id = [0x41; 32];
     let provider_id = [0x42; 32];
     let (_parent, potr_service) = direct_signer(
@@ -216,7 +207,6 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
             .is_empty()
     );
     assert!(potr.sign(&unsigned_potr_payload([0x44; 32])).is_err());
-
     let billing_id = "billing-signer-primary".to_owned();
     let (_parent, billing_service) = direct_signer(
         SoftwareSignerRoleV1::BillingStatement,
@@ -240,7 +230,6 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
     .expect("exact billing adapter")
     .sign_digest([0x51; 32])
     .expect("sign governed billing digest");
-
     let (_parent, evidence_service) = direct_signer(
         SoftwareSignerRoleV1::EvidenceViewer,
         SoftwareSignerPurposeBindingV1::EvidenceViewer,
@@ -283,7 +272,6 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
             .is_err(),
         "digest-only evidence bytes must not substitute for a checkpoint anchor"
     );
-
     let (_parent, stream_service) = direct_signer(
         SoftwareSignerRoleV1::StreamToken,
         SoftwareSignerPurposeBindingV1::StreamToken,
@@ -312,7 +300,6 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
     let mut malformed_stream_payload = stream_payload;
     malformed_stream_payload.push(0);
     assert!(stream.sign(&malformed_stream_payload).is_err());
-
     let issuer_id = "pop-issuer-primary".to_owned();
     let (_parent, pop_service) = direct_signer(
         SoftwareSignerRoleV1::PopCredentials,
@@ -349,29 +336,23 @@ fn typed_adapters_bind_identity_algorithm_and_exact_purpose() {
         "cross-role adapter construction must fail"
     );
 }
-
 #[derive(Debug)]
 struct OverlapGovernanceSigner;
-
 impl sorafs_node::GovernanceDagRuntimeSigner for OverlapGovernanceSigner {
     fn handle(&self) -> &str {
         "software://sorafs/governance-dag/overlap"
     }
-
     fn qualification(
         &self,
     ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
         Ok(sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(1, [0x71; 32]))
     }
-
     fn publisher_peer_id(&self) -> &[u8] {
         b"12D3KooWOverlapPublisher"
     }
-
     fn public_key(&self) -> [u8; 32] {
         [0x72; 32]
     }
-
     fn sign(
         &self,
         _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
@@ -380,12 +361,10 @@ impl sorafs_node::GovernanceDagRuntimeSigner for OverlapGovernanceSigner {
         Ok([0x73; 64])
     }
 }
-
 struct RecordingBaseRegistry {
     overlap: bool,
     observed: Mutex<Vec<crate::IrohaRuntimeProviderSlotV1>>,
 }
-
 impl fmt::Debug for RecordingBaseRegistry {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -394,7 +373,6 @@ impl fmt::Debug for RecordingBaseRegistry {
             .finish_non_exhaustive()
     }
 }
-
 impl crate::RuntimeProviderBrokerBackendRegistryV1 for RecordingBaseRegistry {
     fn resolve(
         &self,
@@ -411,7 +389,6 @@ impl crate::RuntimeProviderBrokerBackendRegistryV1 for RecordingBaseRegistry {
         })
     }
 }
-
 #[test]
 fn composite_registry_partitions_exactly_and_rejects_overlap_or_missing_base() {
     let base_catalog = crate::IrohaRuntimeProviderBindingsV1::qualified_for_test(
@@ -428,7 +405,6 @@ fn composite_registry_partitions_exactly_and_rejects_overlap_or_missing_base() {
         ),
         Err(crate::IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
     ));
-
     let base = Arc::new(RecordingBaseRegistry {
         overlap: false,
         observed: Mutex::new(Vec::new()),
@@ -440,7 +416,6 @@ fn composite_registry_partitions_exactly_and_rejects_overlap_or_missing_base() {
         *base.observed.lock().expect("observed catalog lock"),
         vec![crate::IrohaRuntimeProviderSlotV1::BillingFinalizedQuery]
     );
-
     let overlapping = ExternalSoftwareSignerBackendsV1::new().with_base_registry(Arc::new(
         RecordingBaseRegistry {
             overlap: true,
@@ -451,7 +426,6 @@ fn composite_registry_partitions_exactly_and_rejects_overlap_or_missing_base() {
         crate::RuntimeProviderBrokerBackendRegistryV1::resolve(&overlapping, &base_catalog),
         Err(crate::IrohaRuntimeProviderRegistryErrorV1::UnexpectedProviders)
     ));
-
     let keypair = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
         .expect("Governance fixture keypair");
     let public_key: [u8; 32] = keypair

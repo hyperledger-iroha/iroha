@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensure Torii account endpoints accept canonical I105 account path segments.
 #![cfg(all(feature = "app_api", feature = "telemetry"))]
-
 use std::sync::Arc;
-
 use axum::{
     Router,
     body::Body,
@@ -34,10 +32,8 @@ use norito::json;
 use prometheus::core::Collector;
 use tower::ServiceExt as _;
 use urlencoding::encode;
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 const ACCOUNT_SIGNATORY: &str =
     "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 const I105_PREFIX: u16 = 0x002A;
@@ -56,7 +52,6 @@ const ACCOUNTS_ASSETS_QUERY_CTX: &str = "/v1/accounts/{account_id}/assets/query"
 const KAIGI_RELAY_DETAIL_CTX: &str = "/v1/kaigi/relays/{relay_id}";
 const NEXUS_PUBLIC_LANE_STAKE_CTX: &str = "/v1/nexus/public-lanes/{lane_id}/stake";
 const REPO_AGREEMENTS_ENDPOINT: &str = "/v1/repo/agreements";
-
 fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
     let filter = FilterExpr::Eq(FieldPath(field.to_string()), json::Value::from(literal));
     let envelope = QueryEnvelope {
@@ -69,11 +64,9 @@ fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
     };
     norito::json::to_vec(&envelope).expect("serialize envelope")
 }
-
 fn encode_query_value(value: &str) -> String {
     encode(value).into_owned()
 }
-
 #[tokio::test]
 async fn transactions_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
@@ -98,7 +91,6 @@ async fn transactions_endpoint_accepts_encoded_account_segments() {
         );
     }
 }
-
 #[tokio::test]
 async fn transactions_endpoint_rejects_invalid_account_segment() {
     let app = test_router();
@@ -115,7 +107,6 @@ async fn transactions_endpoint_rejects_invalid_account_segment() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn transactions_endpoint_accepts_default_domain_without_suffix() {
     let app = test_router();
@@ -140,7 +131,6 @@ async fn transactions_endpoint_accepts_default_domain_without_suffix() {
         );
     }
 }
-
 #[tokio::test]
 async fn transactions_query_accepts_default_domain_without_suffix() {
     let app = test_router();
@@ -167,7 +157,6 @@ async fn transactions_query_accepts_default_domain_without_suffix() {
         );
     }
 }
-
 #[tokio::test]
 async fn transactions_endpoint_rejects_public_key_segments() {
     let (app, metrics) = test_router_with_metrics();
@@ -179,7 +168,6 @@ async fn transactions_endpoint_rejects_public_key_segments() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_CTX, reason]);
     let before = counter.get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -197,7 +185,6 @@ async fn transactions_endpoint_rejects_public_key_segments() {
         "public-key segments must increment invalid counter"
     );
 }
-
 #[tokio::test]
 async fn invalid_account_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
@@ -209,7 +196,6 @@ async fn invalid_account_segments_increment_metric() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_CTX, reason])
         .get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -221,7 +207,6 @@ async fn invalid_account_segments_increment_metric() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let after = metrics
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_CTX, reason])
@@ -232,7 +217,6 @@ async fn invalid_account_segments_increment_metric() {
         "torii_address_invalid_total delta mismatch"
     );
 }
-
 #[tokio::test]
 async fn local8_segments_increment_invalid_metric() {
     let (app, metrics) = test_router_with_metrics();
@@ -244,7 +228,6 @@ async fn local8_segments_increment_invalid_metric() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_CTX, reason])
         .get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -256,7 +239,6 @@ async fn local8_segments_increment_invalid_metric() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let after_invalid = metrics
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_CTX, reason])
@@ -267,7 +249,6 @@ async fn local8_segments_increment_invalid_metric() {
         "torii_address_invalid_total delta mismatch for Local-8"
     );
 }
-
 #[tokio::test]
 async fn transactions_query_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
@@ -294,7 +275,6 @@ async fn transactions_query_endpoint_accepts_encoded_account_segments() {
         );
     }
 }
-
 #[tokio::test]
 async fn transactions_query_endpoint_rejects_invalid_account_segment() {
     let app = test_router();
@@ -313,7 +293,6 @@ async fn transactions_query_endpoint_rejects_invalid_account_segment() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn transactions_query_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
@@ -325,7 +304,6 @@ async fn transactions_query_invalid_segments_increment_metric() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_QUERY_CTX, reason])
         .get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -339,7 +317,6 @@ async fn transactions_query_invalid_segments_increment_metric() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let after = metrics
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_QUERY_CTX, reason])
@@ -350,7 +327,6 @@ async fn transactions_query_invalid_segments_increment_metric() {
         "torii_address_invalid_total delta mismatch for transactions/query"
     );
 }
-
 #[tokio::test]
 async fn transactions_query_rejects_checksum_mismatch() {
     let (app, metrics) = test_router_with_metrics();
@@ -360,7 +336,6 @@ async fn transactions_query_rejects_checksum_mismatch() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_QUERY_CTX, reason]);
     let before = counter.get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -380,7 +355,6 @@ async fn transactions_query_rejects_checksum_mismatch() {
         "checksum mismatches should increment invalid counter"
     );
 }
-
 #[tokio::test]
 async fn transactions_query_placeholder_literal_rejected_without_shim() {
     let (app, metrics) = test_router_with_metrics();
@@ -392,7 +366,6 @@ async fn transactions_query_placeholder_literal_rejected_without_shim() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_QUERY_CTX, reason]);
     let before = counter.get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -412,14 +385,12 @@ async fn transactions_query_placeholder_literal_rejected_without_shim() {
         "placeholder literal should be treated as invalid"
     );
 }
-
 #[tokio::test]
 async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
     let (app, metrics) = test_router_with_metrics();
     let envelope =
         query_envelope_with_account_filter("authority", &fixtures::TX_QUERY_ACCOUNT.canonical);
     let before = counter_total(&metrics.torii_address_invalid_total);
-
     for segment in [fixtures::TX_QUERY_ACCOUNT.canonical.clone()] {
         let resp = app
             .clone()
@@ -442,14 +413,12 @@ async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
             resp.status()
         );
     }
-
     let after = counter_total(&metrics.torii_address_invalid_total);
     assert_eq!(
         after, before,
         "valid tx query literals must not increment invalid counter"
     );
 }
-
 #[tokio::test]
 async fn transactions_query_endpoint_rejects_public_key_segment() {
     let (app, metrics) = test_router_with_metrics();
@@ -461,7 +430,6 @@ async fn transactions_query_endpoint_rejects_public_key_segment() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_QUERY_CTX, reason]);
     let before = counter.get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -481,7 +449,6 @@ async fn transactions_query_endpoint_rejects_public_key_segment() {
         "public-key transactions/query segment must increment invalid counter"
     );
 }
-
 #[tokio::test]
 async fn assets_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
@@ -506,7 +473,6 @@ async fn assets_endpoint_accepts_encoded_account_segments() {
         );
     }
 }
-
 #[tokio::test]
 async fn assets_endpoint_accepts_default_domain_without_suffix() {
     let app = test_router();
@@ -531,7 +497,6 @@ async fn assets_endpoint_accepts_default_domain_without_suffix() {
         );
     }
 }
-
 #[tokio::test]
 async fn assets_endpoint_rejects_invalid_segment() {
     let app = test_router();
@@ -548,7 +513,6 @@ async fn assets_endpoint_rejects_invalid_segment() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn assets_endpoint_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
@@ -560,7 +524,6 @@ async fn assets_endpoint_invalid_segments_increment_metric() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_ASSETS_CTX, reason])
         .get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -572,7 +535,6 @@ async fn assets_endpoint_invalid_segments_increment_metric() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let after = metrics
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_ASSETS_CTX, reason])
@@ -583,7 +545,6 @@ async fn assets_endpoint_invalid_segments_increment_metric() {
         "torii_address_invalid_total delta mismatch for assets endpoint"
     );
 }
-
 #[tokio::test]
 async fn assets_endpoint_rejects_public_key_segments() {
     let (app, metrics) = test_router_with_metrics();
@@ -595,7 +556,6 @@ async fn assets_endpoint_rejects_public_key_segments() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_ASSETS_CTX, reason]);
     let before = counter.get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -613,7 +573,6 @@ async fn assets_endpoint_rejects_public_key_segments() {
         "public-key asset segments must increment invalid counter"
     );
 }
-
 #[tokio::test]
 async fn assets_query_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
@@ -640,7 +599,6 @@ async fn assets_query_endpoint_accepts_encoded_account_segments() {
         );
     }
 }
-
 #[tokio::test]
 async fn assets_query_endpoint_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
@@ -652,7 +610,6 @@ async fn assets_query_endpoint_invalid_segments_increment_metric() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_ASSETS_QUERY_CTX, reason])
         .get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -666,7 +623,6 @@ async fn assets_query_endpoint_invalid_segments_increment_metric() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let after = metrics
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_ASSETS_QUERY_CTX, reason])
@@ -677,7 +633,6 @@ async fn assets_query_endpoint_invalid_segments_increment_metric() {
         "torii_address_invalid_total delta mismatch for assets/query"
     );
 }
-
 #[tokio::test]
 async fn assets_query_endpoint_rejects_public_key_segments() {
     let (app, metrics) = test_router_with_metrics();
@@ -689,7 +644,6 @@ async fn assets_query_endpoint_rejects_public_key_segments() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_ASSETS_QUERY_CTX, reason]);
     let before = counter.get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -709,7 +663,6 @@ async fn assets_query_endpoint_rejects_public_key_segments() {
         "public-key assets/query segments must increment invalid counter"
     );
 }
-
 #[tokio::test]
 async fn permissions_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
@@ -734,7 +687,6 @@ async fn permissions_endpoint_accepts_encoded_account_segments() {
         );
     }
 }
-
 #[tokio::test]
 async fn permissions_endpoint_accepts_default_domain_without_suffix() {
     let app = test_router();
@@ -759,7 +711,6 @@ async fn permissions_endpoint_accepts_default_domain_without_suffix() {
         );
     }
 }
-
 #[tokio::test]
 async fn permissions_endpoint_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
@@ -771,7 +722,6 @@ async fn permissions_endpoint_invalid_segments_increment_metric() {
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_PERMISSIONS_CTX, reason])
         .get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -783,7 +733,6 @@ async fn permissions_endpoint_invalid_segments_increment_metric() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let after = metrics
         .torii_address_invalid_total
         .with_label_values(&[ACCOUNTS_PERMISSIONS_CTX, reason])
@@ -794,7 +743,6 @@ async fn permissions_endpoint_invalid_segments_increment_metric() {
         "torii_address_invalid_total delta mismatch for permissions endpoint"
     );
 }
-
 #[tokio::test]
 async fn explorer_domains_query_accepts_encoded_account_params() {
     let app = test_router();
@@ -819,7 +767,6 @@ async fn explorer_domains_query_accepts_encoded_account_params() {
         );
     }
 }
-
 #[tokio::test]
 async fn explorer_domains_query_invalid_account_param_records_metric() {
     let (app, metrics) = test_router_with_metrics();
@@ -832,7 +779,6 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
         .torii_address_invalid_total
         .with_label_values(&[context, reason])
         .get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -844,7 +790,6 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let after = metrics
         .torii_address_invalid_total
         .with_label_values(&[context, reason])
@@ -855,7 +800,6 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
         "torii_address_invalid_total delta mismatch for explorer domains query"
     );
 }
-
 #[tokio::test]
 async fn explorer_account_detail_accepts_encoded_account_segments() {
     let app = test_router();
@@ -880,7 +824,6 @@ async fn explorer_account_detail_accepts_encoded_account_segments() {
         );
     }
 }
-
 #[tokio::test]
 async fn explorer_account_detail_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
@@ -893,7 +836,6 @@ async fn explorer_account_detail_invalid_segments_increment_metric() {
         .torii_address_invalid_total
         .with_label_values(&[context, reason])
         .get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -905,7 +847,6 @@ async fn explorer_account_detail_invalid_segments_increment_metric() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     let after = metrics
         .torii_address_invalid_total
         .with_label_values(&[context, reason])
@@ -916,7 +857,6 @@ async fn explorer_account_detail_invalid_segments_increment_metric() {
         "torii_address_invalid_total delta mismatch for explorer account detail"
     );
 }
-
 #[tokio::test]
 async fn explorer_account_qr_returns_svg_literal() {
     let app = test_router();
@@ -956,7 +896,6 @@ async fn explorer_account_qr_returns_svg_literal() {
         "qr response should include svg payload"
     );
 }
-
 #[tokio::test]
 async fn repo_agreements_query_filter_accepts_encoded_literals() {
     let app = test_router();
@@ -984,7 +923,6 @@ async fn repo_agreements_query_filter_accepts_encoded_literals() {
         );
     }
 }
-
 #[tokio::test]
 async fn repo_agreements_query_filter_accepts_default_domain_literals() {
     let app = test_router();
@@ -1012,7 +950,6 @@ async fn repo_agreements_query_filter_accepts_default_domain_literals() {
         );
     }
 }
-
 #[tokio::test]
 async fn repo_agreements_query_filter_rejects_invalid_literal() {
     let (app, metrics) = test_router_with_metrics();
@@ -1025,7 +962,6 @@ async fn repo_agreements_query_filter_rejects_invalid_literal() {
         .with_label_values(&[REPO_AGREEMENTS_ENDPOINT, reason]);
     let before = counter.get();
     let body = query_envelope_with_account_filter("initiator", literal);
-
     let resp = app
         .clone()
         .oneshot(
@@ -1045,7 +981,6 @@ async fn repo_agreements_query_filter_rejects_invalid_literal() {
         "invalid repo filter literal should increment torii_address_invalid_total"
     );
 }
-
 #[tokio::test]
 async fn repo_agreements_query_filter_rejects_local8_literal() {
     let (app, metrics) = test_router_with_metrics();
@@ -1058,7 +993,6 @@ async fn repo_agreements_query_filter_rejects_local8_literal() {
         .with_label_values(&[REPO_AGREEMENTS_ENDPOINT, reason]);
     let invalid_before = invalid_counter.get();
     let body = query_envelope_with_account_filter("initiator", literal);
-
     let resp = app
         .clone()
         .oneshot(
@@ -1078,7 +1012,6 @@ async fn repo_agreements_query_filter_rejects_local8_literal() {
         "invalid repo filter literal should increment torii_address_invalid_total"
     );
 }
-
 #[tokio::test]
 async fn kaigi_relay_detail_accepts_encoded_segments() {
     let (app, operator_key_pair) = test_router_with_operator_key();
@@ -1106,7 +1039,6 @@ async fn kaigi_relay_detail_accepts_encoded_segments() {
         );
     }
 }
-
 #[tokio::test]
 async fn kaigi_relay_detail_rejects_invalid_segment() {
     let (app, operator_key_pair) = test_router_with_operator_key();
@@ -1126,7 +1058,6 @@ async fn kaigi_relay_detail_rejects_invalid_segment() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn kaigi_relay_detail_invalid_segment_increments_metric() {
     let (app, metrics, operator_key_pair) = build_test_router();
@@ -1138,7 +1069,6 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
         .torii_address_invalid_total
         .with_label_values(&[KAIGI_RELAY_DETAIL_CTX, reason]);
     let before = counter.get();
-
     let request = Request::builder()
         .uri(format!("/v1/kaigi/relays/{literal}"))
         .body(Body::empty())
@@ -1155,7 +1085,6 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(counter.get(), before + 1);
 }
-
 #[tokio::test]
 async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
     let (app, metrics, operator_key_pair) = build_test_router();
@@ -1167,7 +1096,6 @@ async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
         .torii_address_invalid_total
         .with_label_values(&[KAIGI_RELAY_DETAIL_CTX, reason]);
     let invalid_before = invalid_counter.get();
-
     let request = Request::builder()
         .uri(format!("/v1/kaigi/relays/{literal}"))
         .body(Body::empty())
@@ -1184,7 +1112,6 @@ async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(invalid_counter.get(), invalid_before + 1);
 }
-
 #[tokio::test]
 async fn nexus_public_lane_stake_accepts_validator_literals() {
     let app = test_router();
@@ -1212,7 +1139,6 @@ async fn nexus_public_lane_stake_accepts_validator_literals() {
         );
     }
 }
-
 #[tokio::test]
 async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
     let app = test_router();
@@ -1231,7 +1157,6 @@ async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
     let app = test_router();
@@ -1259,7 +1184,6 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
         );
     }
 }
-
 #[tokio::test]
 async fn nexus_public_lane_stake_rejects_public_key_validator() {
     let (app, metrics) = test_router_with_metrics();
@@ -1272,7 +1196,6 @@ async fn nexus_public_lane_stake_rejects_public_key_validator() {
         .torii_address_invalid_total
         .with_label_values(&[NEXUS_PUBLIC_LANE_STAKE_CTX, reason]);
     let before = counter.get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -1292,7 +1215,6 @@ async fn nexus_public_lane_stake_rejects_public_key_validator() {
         "public-key validator literals must increment invalid counter"
     );
 }
-
 #[tokio::test]
 async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
     let (app, metrics) = test_router_with_metrics();
@@ -1305,7 +1227,6 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
         .torii_address_invalid_total
         .with_label_values(&[NEXUS_PUBLIC_LANE_STAKE_CTX, reason]);
     let before = counter.get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -1321,7 +1242,6 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(counter.get(), before + 1);
 }
-
 #[tokio::test]
 async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
     let (app, metrics) = test_router_with_metrics();
@@ -1334,7 +1254,6 @@ async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
         .torii_address_invalid_total
         .with_label_values(&[NEXUS_PUBLIC_LANE_STAKE_CTX, reason]);
     let invalid_before = invalid_counter.get();
-
     let resp = app
         .clone()
         .oneshot(
@@ -1350,24 +1269,19 @@ async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(invalid_counter.get(), invalid_before + 1);
 }
-
 fn test_router() -> Router {
     build_test_router().0
 }
-
 fn test_router_with_metrics() -> (Router, Arc<Metrics>) {
     let (router, metrics, _operator_key_pair) = build_test_router();
     (router, metrics)
 }
-
 fn test_router_with_operator_key() -> (Router, KeyPair) {
     let (router, _metrics, operator_key_pair) = build_test_router();
     (router, operator_key_pair)
 }
-
 fn build_test_router() -> (Router, Arc<Metrics>, KeyPair) {
     use iroha_data_model::Registrable;
-
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -1447,10 +1361,8 @@ fn build_test_router() -> (Router, Arc<Metrics>, KeyPair) {
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
     );
-
     (torii.api_router_for_tests(), metrics, operator_key_pair)
 }
-
 fn account_segments() -> (String, String) {
     use iroha_crypto::PublicKey;
     use iroha_data_model::account::{AccountAddress, AccountId};
@@ -1461,11 +1373,9 @@ fn account_segments() -> (String, String) {
     let i105 = address.to_i105().expect("i105 encode");
     (canonical, i105)
 }
-
 fn accepted_account_segments() -> [String; 1] {
     [account_segments().0]
 }
-
 fn default_domain_segments_without_domain() -> (String, String) {
     use iroha_crypto::PublicKey;
     use iroha_data_model::account::{AccountAddress, AccountId};
@@ -1478,11 +1388,9 @@ fn default_domain_segments_without_domain() -> (String, String) {
         .expect("i105 encode");
     (canonical, i105)
 }
-
 fn accepted_default_domain_segments() -> [String; 1] {
     [default_domain_segments_without_domain().0]
 }
-
 fn tampered_tx_query_literal() -> String {
     let mut mutated = fixtures::TX_QUERY_ACCOUNT.canonical.clone();
     let last = mutated.pop().unwrap_or('0');
@@ -1490,7 +1398,6 @@ fn tampered_tx_query_literal() -> String {
     mutated.push(replacement);
     mutated
 }
-
 fn counter_total(counter: &prometheus::IntCounterVec) -> u64 {
     counter
         .collect()

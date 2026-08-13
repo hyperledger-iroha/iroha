@@ -5,7 +5,6 @@
 //! Proving keys are streamed into anonymous files, and the process emits only
 //! validated byte counts and shape summaries; it cannot frame or publish
 //! candidate or release artifacts.
-
 use std::{
     env,
     error::Error,
@@ -13,7 +12,6 @@ use std::{
     fs::File,
     io::{self, Write as _},
 };
-
 use iroha_core::zk::kagemusha_v2::{
     KagemushaGeneratedParityArtifactsV4, generate_kagemusha_pasta_cycle_artifacts_v4,
     run_kagemusha_k17_shape_probe_v5, start_kagemusha_generation_memory_guard_v4,
@@ -26,17 +24,14 @@ use iroha_data_model::offline::{
     KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4, KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
     KagemushaPastaCycleParityV1, KagemushaStepCircuitParamsV4,
 };
-
 const SUBCOMMAND: &str = "measure-compact-k17";
 const K17_SHAPE_PROBE_SUBCOMMAND: &str = "probe-compact-k17-shape";
 const EXPECTED_PARAMETERS_BYTES: usize = 8_388_676;
 const EXPECTED_VERIFYING_KEY_BYTES: usize = 20_362;
 const EXPECTED_PROVING_KEY_BYTES: u64 = 5_347_763_078;
-
 fn benchmark_error(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())
 }
-
 fn compact_k17_params() -> Result<KagemushaStepCircuitParamsV4, io::Error> {
     let params = KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
         .map_err(|error| benchmark_error(format!("compact circuit profile is invalid: {error}")))?;
@@ -50,7 +45,6 @@ fn compact_k17_params() -> Result<KagemushaStepCircuitParamsV4, io::Error> {
     }
     Ok(params)
 }
-
 fn validate_parity(
     label: &str,
     parity: KagemushaPastaCycleParityV1,
@@ -100,7 +94,6 @@ fn validate_parity(
     }
     Ok(measured)
 }
-
 fn run_measurement() -> Result<(), Box<dyn Error>> {
     // Start the mandatory in-process monitor before allocating either Pasta
     // parameter set or opening even the anonymous proving-key sinks.
@@ -119,7 +112,6 @@ fn run_measurement() -> Result<(), Box<dyn Error>> {
     .map_err(|error| benchmark_error(format!("compact generation failed: {error}")))?;
     step_eq_proving_key_sink.flush()?;
     step_ep_proving_key_sink.flush()?;
-
     let measured_eq = validate_parity(
         "Eq",
         KagemushaPastaCycleParityV1::StepEq,
@@ -137,7 +129,6 @@ fn run_measurement() -> Result<(), Box<dyn Error>> {
     {
         return Err(benchmark_error("generated Eq/Ep protocol structures collide").into());
     }
-
     let pair_bytes = u32::try_from(generated.measured_live_pair_bytes.len())
         .map_err(|_| benchmark_error("measured proof-pair length does not fit u32"))?;
     let step_bytes = generated
@@ -167,7 +158,6 @@ fn run_measurement() -> Result<(), Box<dyn Error>> {
     if measured_pair != generated.measured_live_pair_bytes.len() {
         return Err(benchmark_error("proof-pair validator returned a different byte count").into());
     }
-
     println!("benchmark=NON_SHIPPING");
     println!("eq_parameters_bytes={}", generated.step_eq.parameters.len());
     println!(
@@ -204,7 +194,6 @@ fn run_measurement() -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     match (args.next(), args.next()) {

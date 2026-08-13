@@ -2,7 +2,6 @@ use std::{
     num::NonZeroU64,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
     DataSpaceId, LaneId,
@@ -20,7 +19,6 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use tempfile::TempDir;
-
 use super::*;
 use crate::sumeragi::{
     FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressClass, FairV2IngressPushDisposition,
@@ -55,7 +53,6 @@ use crate::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-
 #[test]
 fn orphan_chunk_budget_obeys_encoded_payload_ceiling() {
     let maximum = wire::DataAvailabilityLayout {
@@ -70,7 +67,6 @@ fn orphan_chunk_budget_obeys_encoded_payload_ceiling() {
         maximum_orphan_chunk_bytes(maximum),
         wire::MAX_DA_ENCODED_PAYLOAD_BYTES
     );
-
     let small = wire::DataAvailabilityLayout {
         chunk_size_bytes: 8,
         max_chunk_count: 4,
@@ -78,7 +74,6 @@ fn orphan_chunk_budget_obeys_encoded_payload_ceiling() {
     };
     assert_eq!(maximum_orphan_chunk_bytes(small), 32);
 }
-
 fn test_io_command_channel(
     capacity: usize,
 ) -> (V2IoCommandSender, V2IoCommandReceiver, Arc<V2IoAdmission>) {
@@ -92,7 +87,6 @@ fn test_io_command_channel(
     );
     (sender, receiver, admission)
 }
-
 /// Build an empty Serve gate together with its exact actor-global ordinal source.
 pub(in crate::sumeragi) fn certified_serve_ingress_gate_fixture()
 -> (CertifiedServeIngressGate, RuntimeLifecycleOrdinalSource) {
@@ -103,7 +97,6 @@ pub(in crate::sumeragi) fn certified_serve_ingress_gate_fixture()
     };
     (gate, lifecycle_ordinals)
 }
-
 fn assert_durable_body_receipt_matches(
     receipt: &DurableBodyReceipt,
     context: &wire::HeightContext,
@@ -114,7 +107,6 @@ fn assert_durable_body_receipt_matches(
     assert_eq!(receipt.subject(), manifest.subject);
     assert_eq!(receipt.manifest_hash(), HashOf::new(manifest));
 }
-
 fn persistent_test_io_command_channel(
     capacity: usize,
     root: &Path,
@@ -138,7 +130,6 @@ fn persistent_test_io_command_channel(
     )?;
     Ok((sender, receiver, admission))
 }
-
 #[allow(clippy::too_many_arguments)]
 fn production_persistent_test_io_command_channel(
     capacity: usize,
@@ -171,7 +162,6 @@ fn production_persistent_test_io_command_channel(
     )?;
     Ok((sender, receiver, admission))
 }
-
 fn persist_unsealed_serve_fixture(
     root: &Path,
     context: &wire::HeightContext,
@@ -222,7 +212,6 @@ fn persist_unsealed_serve_fixture(
         .expect("persist fixture unsealed Serve lifecycle");
     lifecycle_id
 }
-
 fn persist_terminal_serve_fixture(
     root: &Path,
     context: &wire::HeightContext,
@@ -265,7 +254,6 @@ fn persist_terminal_serve_fixture(
         .expect("persist fixture terminal Serve lifecycle");
     lifecycle_id
 }
-
 fn persist_negative_serve_fixture(
     root: &Path,
     context: &wire::HeightContext,
@@ -305,7 +293,6 @@ fn persist_negative_serve_fixture(
         .expect("persist fixture negative Serve lifecycle");
     lifecycle_id
 }
-
 fn authenticated_serve_request(
     context: &wire::HeightContext,
     requester_key: &KeyPair,
@@ -345,7 +332,6 @@ fn authenticated_serve_request(
     })
     .expect("authenticate certified Serve fixture")
 }
-
 fn production_authenticated_serve_request(
     context: &wire::HeightContext,
     keys: &[KeyPair],
@@ -408,7 +394,6 @@ fn production_authenticated_serve_request(
         .collect();
     (authenticated, validator_pops)
 }
-
 fn certified_serve_response(
     request: &AuthenticatedCertifiedBodyRequest,
     manifest: wire::PayloadManifest,
@@ -428,7 +413,6 @@ fn certified_serve_response(
             .to_vec();
     response
 }
-
 fn commit_and_terminalize_serve(
     command_tx: &V2IoCommandSender,
     command_rx: &V2IoCommandReceiver,
@@ -465,7 +449,6 @@ fn commit_and_terminalize_serve(
         .expect("terminal response remains bound to the exact Serve lifecycle");
     admission.lifecycle_id
 }
-
 // Scheduler-attempt telemetry is intentionally excluded: even a failed
 // dequeue records that the fair-ingress queue received a service turn.
 #[derive(Debug, PartialEq, Eq)]
@@ -479,7 +462,6 @@ struct FairIngressAccountingSnapshot {
     nonempty_since: Option<Instant>,
     open: bool,
 }
-
 #[derive(Debug, PartialEq, Eq)]
 struct FairIngressLaneAccountingSnapshot {
     source: FairV2IngressSource,
@@ -491,7 +473,6 @@ struct FairIngressLaneAccountingSnapshot {
     timeout_vote_bytes: usize,
     transport_completion_bytes: usize,
 }
-
 #[derive(Debug, PartialEq, Eq)]
 struct FairIngressEntryAccountingSnapshot {
     admission_ordinal: u64,
@@ -500,7 +481,6 @@ struct FairIngressEntryAccountingSnapshot {
     wire_key: Option<FairV2IngressWireKey>,
     encoded_len: usize,
 }
-
 fn fair_ingress_accounting_snapshot(ingress: &FairV2Ingress) -> FairIngressAccountingSnapshot {
     let state = ingress.state.lock();
     FairIngressAccountingSnapshot {
@@ -541,7 +521,6 @@ fn fair_ingress_accounting_snapshot(ingress: &FairV2Ingress) -> FairIngressAccou
         open: state.open,
     }
 }
-
 fn gated_fair_ingress(
     context: &wire::HeightContext,
     command_tx: &V2IoCommandSender,
@@ -566,7 +545,6 @@ fn gated_fair_ingress(
     ingress.open().expect("open gated fair ingress");
     (ingress, gate)
 }
-
 fn certified_serve_inbound(
     request: &wire::CertifiedBodyRequest,
     authenticated_via: PeerId,
@@ -583,7 +561,6 @@ fn certified_serve_inbound(
     )
     .expect("fixture exact Serve route matches requester and authenticated hop")
 }
-
 fn certified_serve_inbound_with_route(
     request: &wire::CertifiedBodyRequest,
     authenticated_via: PeerId,
@@ -599,7 +576,6 @@ fn certified_serve_inbound_with_route(
     )
     .expect("fixture reply route matches exact Serve ingress")
 }
-
 fn drain_and_commit_gated_serve(
     ingress: &FairV2Ingress,
     command_tx: &V2IoCommandSender,
@@ -631,7 +607,6 @@ fn drain_and_commit_gated_serve(
         .expect("commit gated Serve fixture");
     (admission, committed)
 }
-
 struct SaturatedCompletionRuntime {
     queued: usize,
     capacity: usize,
@@ -640,7 +615,6 @@ struct SaturatedCompletionRuntime {
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: Option<usize>,
 }
-
 impl SaturatedCompletionRuntime {
     fn new(queued: usize, capacity: usize) -> Self {
         Self {
@@ -652,11 +626,9 @@ impl SaturatedCompletionRuntime {
             external_lifecycle_owner_capacity: None,
         }
     }
-
     fn reject_completion() -> Result<(), EnqueueError> {
         Err(EnqueueError::Full)
     }
-
     fn effect_ownership(
         &mut self,
         effect: &AdapterEffect,
@@ -718,7 +690,6 @@ impl SaturatedCompletionRuntime {
         };
         self.ownership_for_identity(tag, Hash::new(identity))
     }
-
     fn ownership_for_identity(
         &mut self,
         tag: EventTag,
@@ -737,19 +708,16 @@ impl SaturatedCompletionRuntime {
         Ok(ownership)
     }
 }
-
 impl EffectRuntime for SaturatedCompletionRuntime {
     fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         Ok(RuntimeStep::Idle)
     }
-
     fn step_recovery_effects(
         &mut self,
         now: Instant,
     ) -> Result<RuntimeStep<AdapterEffect>, String> {
         self.step_effects(now)
     }
-
     fn take_effect_ownership(
         &mut self,
         effects: &[AdapterEffect],
@@ -760,13 +728,11 @@ impl EffectRuntime for SaturatedCompletionRuntime {
             .collect::<Result<Vec<_>, _>>()?;
         bind_adapter_effect_batch_ownership(effects, ownership)
     }
-
     fn take_leader_wire_runtime_terminals(
         &mut self,
     ) -> Result<Vec<LeaderWireRuntimeTerminal>, String> {
         Ok(Vec::new())
     }
-
     fn set_external_lifecycle_owners(
         &mut self,
         owners: Vec<RuntimeLifecycleOwner>,
@@ -793,7 +759,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
         self.external_lifecycle_owners = owners;
         Ok(())
     }
-
     fn configure_external_lifecycle_owner_capacity(
         &mut self,
         max_pending_work: usize,
@@ -812,7 +777,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
         self.external_lifecycle_owner_capacity = Some(capacity);
         Ok(())
     }
-
     fn mint_local_proposal_effect_ownership(
         &mut self,
         tag: EventTag,
@@ -837,7 +801,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
             "saturated local proposal StoreBody replay seal did not match its owner".to_owned()
         })
     }
-
     fn reconcile_active_view_producer(
         &mut self,
         _tag: EventTag,
@@ -845,7 +808,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<(), String> {
         Ok(())
     }
-
     fn complete_active_view_producer_after_proposal_fanout(
         &mut self,
         _proposal_round: wire::ConsensusRound,
@@ -853,15 +815,12 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<(), String> {
         Ok(())
     }
-
     fn take_scheduler_ownership(&mut self) -> Result<(), String> {
         Ok(())
     }
-
     fn authoritative_tag(&self) -> Option<EventTag> {
         None
     }
-
     fn decided_body(
         &self,
     ) -> Result<
@@ -875,7 +834,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     > {
         Ok(None)
     }
-
     fn reserve_body_available(
         &mut self,
         _tag: EventTag,
@@ -883,16 +841,13 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<BodyAvailableReservation, EnqueueError> {
         Err(EnqueueError::Full)
     }
-
     fn commit_body_available(
         &mut self,
         _reservation: BodyAvailableReservation,
     ) -> Result<(), EnqueueError> {
         Ok(())
     }
-
     fn abort_body_available(&mut self, _reservation: BodyAvailableReservation) {}
-
     fn rebind_body_available(
         &mut self,
         _previous: EventTag,
@@ -901,7 +856,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<bool, String> {
         Ok(false)
     }
-
     fn rebind_unpublished_body_available(
         &mut self,
         _previous: EventTag,
@@ -911,7 +865,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<bool, String> {
         Ok(false)
     }
-
     fn retire_unpublished_body_available(
         &mut self,
         _tag: EventTag,
@@ -920,7 +873,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<bool, String> {
         Ok(false)
     }
-
     fn retire_body_available(
         &mut self,
         _tag: EventTag,
@@ -928,7 +880,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<bool, String> {
         Ok(false)
     }
-
     fn retire_body_pipeline_completions(
         &mut self,
         _tag: EventTag,
@@ -937,7 +888,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<RetiredBodyPipelineCompletions, String> {
         Ok(RetiredBodyPipelineCompletions::default())
     }
-
     fn retire_unsafe_proposals_for_lock(
         &mut self,
         _locked_round: wire::ConsensusRound,
@@ -945,7 +895,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<usize, String> {
         Ok(0)
     }
-
     fn retire_proposal_work_after_decision(
         &mut self,
         _decision_round: wire::ConsensusRound,
@@ -954,7 +903,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<DecisionProposalRetirement, String> {
         Ok(DecisionProposalRetirement::default())
     }
-
     fn enqueue_body_stored(
         &mut self,
         _tag: EventTag,
@@ -964,7 +912,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<(), EnqueueError> {
         Self::reject_completion()
     }
-
     fn enqueue_validation_succeeded(
         &mut self,
         _tag: EventTag,
@@ -974,7 +921,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<(), EnqueueError> {
         Self::reject_completion()
     }
-
     fn enqueue_validation_failed(
         &mut self,
         _tag: EventTag,
@@ -983,14 +929,12 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<(), EnqueueError> {
         Self::reject_completion()
     }
-
     fn enqueue_validation_failures_atomically(
         &mut self,
         _failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
     ) -> Result<(), EnqueueError> {
         Self::reject_completion()
     }
-
     fn enqueue_signature(
         &mut self,
         _tag: EventTag,
@@ -998,7 +942,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<(), EnqueueError> {
         Self::reject_completion()
     }
-
     fn enqueue_application_completed(
         &mut self,
         _tag: EventTag,
@@ -1006,7 +949,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<(), EnqueueError> {
         Self::reject_completion()
     }
-
     fn enqueue_local_proposal(
         &mut self,
         _tag: EventTag,
@@ -1016,7 +958,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<(), EnqueueError> {
         Self::reject_completion()
     }
-
     fn verify_certificate(
         &self,
         _context: &wire::HeightContext,
@@ -1024,7 +965,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<(), String> {
         Ok(())
     }
-
     fn authenticate_certified_body_request(
         &self,
         context: &wire::HeightContext,
@@ -1039,19 +979,15 @@ impl EffectRuntime for SaturatedCompletionRuntime {
             |context, certificate| self.verify_certificate(context, certificate),
         )
     }
-
     fn queued_commands(&self) -> usize {
         self.queued
     }
-
     fn remaining_completion_capacity(&self) -> usize {
         self.capacity.saturating_sub(self.queued)
     }
-
     fn has_certified_fence_escape_credit(&self) -> bool {
         false
     }
-
     fn queue_snapshot(&self, _now: Instant) -> RuntimeQueueSnapshot {
         let empty = RuntimeQueueLaneSnapshot {
             depth: 0,
@@ -1069,12 +1005,10 @@ impl EffectRuntime for SaturatedCompletionRuntime {
             },
         }
     }
-
     fn watchdog_threshold(&self) -> Duration {
         Duration::from_secs(1)
     }
 }
-
 #[test]
 fn saturated_completion_runtime_preserves_bounded_body_pipeline_ownership() {
     let (mut service, keys) = fixture();
@@ -1115,7 +1049,6 @@ fn saturated_completion_runtime_preserves_bounded_body_pipeline_ownership() {
         .pop()
         .expect("one effect has one owner");
     assert_eq!(fetch_owner, proposal_owner);
-
     runtime
         .set_external_lifecycle_owners(vec![proposal_owner.owner().clone()])
         .expect("one external owner fits");
@@ -1134,7 +1067,6 @@ fn saturated_completion_runtime_preserves_bounded_body_pipeline_ownership() {
         "rejected publication must preserve the prior bounded owner set"
     );
 }
-
 /// Build closed-network production services for sibling runner tests.
 pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
     let (exact_output_handoff_owner, _) = durable_exact_output_handoff_owner_pair();
@@ -1260,7 +1192,6 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
     };
     (service, keys)
 }
-
 fn lane_commit_qc(validator: PeerId) -> LaneBlockQcV1 {
     let validator_set = vec![validator];
     let validator_set_hash = HashOf::new(&validator_set);
@@ -1295,7 +1226,6 @@ fn lane_commit_qc(validator: PeerId) -> LaneBlockQcV1 {
         payload_availability_qc: None,
     }
 }
-
 fn non_retireable_lane_transport_messages(validator: PeerId) -> Vec<BlockMessage> {
     let qc = lane_commit_qc(validator.clone());
     let body = &qc.body;
@@ -1378,18 +1308,15 @@ fn non_retireable_lane_transport_messages(validator: PeerId) -> Vec<BlockMessage
         ),
     ]
 }
-
 /// Build a deterministic lane CommitQC block for sibling Sumeragi tests.
 pub(in crate::sumeragi) fn lane_commit_qc_block_message(validator: PeerId) -> BlockMessage {
     BlockMessage::LaneBlockQc(lane_commit_qc(validator))
 }
-
 fn lane_commit_qc_message(validator: PeerId) -> NetworkMessage {
     let wire = BlockMessageWire::try_preencoded(Arc::new(lane_commit_qc_block_message(validator)))
         .expect("encode final lane CommitQC");
     NetworkMessage::SumeragiBlock(Arc::new(wire))
 }
-
 fn global_commit_qc_message(
     artifact: &wire::finality::V2FinalityArtifact,
 ) -> wire::ConsensusMessageV2 {
@@ -1397,7 +1324,6 @@ fn global_commit_qc_message(
         artifact.commit_qc.clone(),
     ))
 }
-
 fn merge_share(label: &[u8]) -> MergeCommitteeSignature {
     MergeCommitteeSignature {
         version: iroha_data_model::merge::MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
@@ -1409,11 +1335,9 @@ fn merge_share(label: &[u8]) -> MergeCommitteeSignature {
         leader_candidate_body: None,
     }
 }
-
 fn merge_share_message(label: &[u8]) -> NetworkMessage {
     NetworkMessage::MergeCommitteeSignature(Arc::new(merge_share(label)))
 }
-
 fn lane_drain_vote(keypair: &KeyPair) -> LaneDrainVoteV1 {
     let signer = PeerId::new(keypair.public_key().clone());
     let validator_set = vec![signer.clone()];
@@ -1453,7 +1377,6 @@ fn lane_drain_vote(keypair: &KeyPair) -> LaneDrainVoteV1 {
     )
     .expect("valid worker lane-drain vote")
 }
-
 fn native_amx_output(context: &wire::HeightContext, signer: PeerId) -> NativeAmxMessage {
     let validator_set = vec![signer.clone()];
     NativeAmxMessage::PrepareVote(crate::native_amx::NativeAmxVoteV2 {
@@ -1495,7 +1418,6 @@ fn native_amx_output(context: &wire::HeightContext, signer: PeerId) -> NativeAmx
         bls_signature: vec![0x41; 48],
     })
 }
-
 fn certified_sidecar_outputs(
     local: &PeerId,
     peer: &PeerId,
@@ -1545,7 +1467,6 @@ fn certified_sidecar_outputs(
         CertifiedMergeSidecarMessage::Chunk(chunk),
     )
 }
-
 fn certified_sidecar_generation_hint(
     local: &PeerId,
     peer: &PeerId,
@@ -1575,7 +1496,6 @@ fn certified_sidecar_generation_hint(
     hint.hint_id = hint.canonical_hint_id();
     CertifiedMergeSidecarMessage::GenerationHint(hint)
 }
-
 fn certified_sidecar_close(
     local: &PeerId,
     peer: &PeerId,

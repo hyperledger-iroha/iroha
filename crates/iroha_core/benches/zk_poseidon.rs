@@ -10,11 +10,8 @@
 //! Run (with features):
 //!   cargo bench -p iroha_core --bench zk_poseidon \
 //!       --features zk-halo2,zk-halo2-ipa,zk-halo2-ipa-poseidon
-
 #![allow(clippy::needless_range_loop)]
-
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-
 #[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2-ipa-poseidon"))]
 mod benches {
     use halo2_proofs::{
@@ -34,9 +31,7 @@ mod benches {
         transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
     };
     use rand_core_06::OsRng;
-
     use super::*;
-
     // Local native Pow5 compressor used for comparison
     fn compress2_native(a: Scalar, b: Scalar) -> Scalar {
         let t0 = a + Scalar::from(7u64);
@@ -49,7 +44,6 @@ mod benches {
         let t1_5 = t1_4 * t1;
         Scalar::from(2) * t0_5 + Scalar::from(3) * t1_5
     }
-
     #[derive(Clone, Default)]
     struct ChipHarness<const REPS: usize>;
     impl<const REPS: usize> Circuit<Scalar> for ChipHarness<REPS> {
@@ -59,7 +53,6 @@ mod benches {
         );
         type FloorPlanner = SimpleFloorPlanner;
         type Params = ();
-
         fn without_witnesses(&self) -> Self {
             Self
         }
@@ -113,14 +106,12 @@ mod benches {
             Ok(())
         }
     }
-
     #[derive(Clone, Default)]
     struct NativeHarness<const REPS: usize>;
     impl<const REPS: usize> Circuit<Scalar> for NativeHarness<REPS> {
         type Config = halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
         type FloorPlanner = SimpleFloorPlanner;
         type Params = ();
-
         fn without_witnesses(&self) -> Self {
             Self
         }
@@ -148,12 +139,10 @@ mod benches {
             Ok(())
         }
     }
-
     fn bench_group<const REPS: usize>(c: &mut Criterion) {
         let mut group = c.benchmark_group(format!("poseidon_pow5_reps_{REPS}"));
         let k = 6u32;
         let params: ParamsIPA<Curve> = ParamsIPA::new(k);
-
         // Constrained local path
         let vk_chip: VerifyingKey<Curve> =
             keygen_vk(&params, &ChipHarness::<REPS>::default()).expect("vk");
@@ -181,7 +170,6 @@ mod benches {
                 std::hint::black_box(transcript.finalize());
             })
         });
-
         // Native path
         let vk_nat: VerifyingKey<Curve> =
             keygen_vk(&params, &NativeHarness::<REPS>::default()).expect("vk");
@@ -209,17 +197,14 @@ mod benches {
                 std::hint::black_box(transcript.finalize());
             })
         });
-
         group.finish();
     }
-
     pub fn criterion_benchmarks(c: &mut Criterion) {
         bench_group::<1>(c);
         bench_group::<8>(c);
         bench_group::<32>(c);
     }
 }
-
 #[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2-ipa-poseidon"))]
 criterion_group!(benches, benches::criterion_benchmarks);
 #[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2-ipa-poseidon"))]

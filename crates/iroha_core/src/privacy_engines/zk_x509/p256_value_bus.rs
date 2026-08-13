@@ -21,9 +21,7 @@
 //! padding.  No unconstrained external-read API is exposed here.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::sync::Arc;
-
 use thiserror::Error;
-
 use super::p256_air::ZkX509P256ModulusV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
@@ -3158,9 +3156,7 @@ pub(crate) fn evaluate_p256_value_bus_stark_terminal_opened_rows_v1(
 }
 #[cfg(test)]
 mod tests {
-    use super::super::p256_air::{
-        ZkX509P256ArithmeticKindV1, build_zk_x509_p256_arithmetic_trace_v1,
-    };
+    use super::super::p256_air::{ZkX509P256ArithmeticKindV1, build_zk_x509_p256_arithmetic_trace_v1};
     use super::*;
     use crate::privacy_engines::zk_x509::credential_pre_aux::{
         ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPreAuxV1,

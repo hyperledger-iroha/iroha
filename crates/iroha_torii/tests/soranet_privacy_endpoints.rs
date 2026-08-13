@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for Torii `SoraNet` privacy ingestion endpoints.
 #![cfg(feature = "telemetry")]
-
 use std::time::{SystemTime, UNIX_EPOCH};
-
 use axum::{
     http::{StatusCode, header},
     response::IntoResponse,
@@ -19,7 +17,6 @@ use iroha_torii::{
     handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
 };
 use norito::json::Value;
-
 async fn norito_json_response_value(response: axum::response::Response) -> Value {
     assert_eq!(
         response
@@ -34,7 +31,6 @@ async fn norito_json_response_value(response: axum::response::Response) -> Value
         .to_bytes();
     norito::json::from_slice(&body_bytes).unwrap()
 }
-
 #[tokio::test]
 async fn privacy_event_endpoint_rejects_when_disabled() {
     let telemetry = MaybeTelemetry::disabled();
@@ -50,7 +46,6 @@ async fn privacy_event_endpoint_rejects_when_disabled() {
         event,
         source: Some("disabled-test".into()),
     };
-
     let result = handle_post_soranet_privacy_event(telemetry, NoritoJson(dto)).await;
     let err = match result {
         Ok(_) => panic!("disabled telemetry must reject privacy events"),
@@ -61,7 +56,6 @@ async fn privacy_event_endpoint_rejects_when_disabled() {
         StatusCode::SERVICE_UNAVAILABLE
     );
 }
-
 #[tokio::test]
 async fn privacy_event_endpoint_accepts_payload() {
     let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
@@ -78,13 +72,11 @@ async fn privacy_event_endpoint_accepts_payload() {
         event,
         source: None,
     };
-
     let response = handle_post_soranet_privacy_event(telemetry.clone(), NoritoJson(dto))
         .await
         .unwrap()
         .into_response();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
-
     let body = norito_json_response_value(response).await;
     assert_eq!(body.get("status").and_then(Value::as_str), Some("accepted"));
     let bucket_secs = telemetry
@@ -99,7 +91,6 @@ async fn privacy_event_endpoint_accepts_payload() {
         Some(bucket_start)
     );
 }
-
 fn make_share(
     collector_id: u16,
     bucket_start: u64,
@@ -117,7 +108,6 @@ fn make_share(
     share.verified_bytes_share = 512;
     share
 }
-
 #[tokio::test]
 async fn privacy_share_endpoint_combines_shares() {
     let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
@@ -135,10 +125,8 @@ async fn privacy_share_endpoint_combines_shares() {
     let expected_accepted_total =
         u64::try_from(handshake_share).expect("handshake share is non-negative") * 2;
     let mode = SoranetPrivacyModeV1::Middle;
-
     let share_a = make_share(1, bucket_start, bucket_secs, mode, handshake_share);
     let share_b = make_share(2, bucket_start, bucket_secs, mode, handshake_share);
-
     for (share, fwd) in [
         (share_a, Some("collector-a".to_string())),
         (share_b, Some("collector-b".to_string())),
@@ -153,10 +141,8 @@ async fn privacy_share_endpoint_combines_shares() {
             .into_response();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
     }
-
     let metrics = telemetry.metrics().await;
     let bucket_label = bucket_start.to_string();
-
     let suppressed = metrics
         .soranet_privacy_bucket_suppressed
         .get_metric_with_label_values(&["middle", bucket_label.as_str()])
@@ -166,21 +152,18 @@ async fn privacy_share_endpoint_combines_shares() {
         (suppressed - 0.0).abs() < f64::EPSILON,
         "bucket should not be suppressed (value {suppressed})"
     );
-
     let accepted_total = metrics
         .soranet_privacy_circuit_events_total
         .get_metric_with_label_values(&["middle", bucket_label.as_str(), "accepted"])
         .unwrap()
         .get();
     assert_eq!(accepted_total, expected_accepted_total);
-
     let verified_bytes = metrics
         .soranet_privacy_verified_bytes_total
         .get_metric_with_label_values(&["middle", bucket_label.as_str()])
         .unwrap()
         .get();
     assert_eq!(verified_bytes, 1024);
-
     let avg_circuits = metrics
         .soranet_privacy_active_circuits_avg
         .get_metric_with_label_values(&["middle", bucket_label.as_str()])

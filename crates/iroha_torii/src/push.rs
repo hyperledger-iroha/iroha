@@ -5,7 +5,6 @@
 //! count-bounded so corrupted local persistence cannot determine peak memory.
 //! Remote provider bodies are streamed under one source-coupled ceiling, and
 //! successful delivery responses are not buffered.
-
 #[cfg(test)]
 use std::sync::Mutex;
 use std::{
@@ -16,7 +15,6 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD};
 use dashmap::DashMap;
@@ -38,9 +36,7 @@ use nonzero_ext::nonzero;
 use parking_lot::Mutex as StorageMutex;
 use reqwest::StatusCode as HttpStatusCode;
 use sha2::{Digest as _, Sha256};
-
 use crate::account_activity::AccountActivityRole;
-
 const PUSH_DIR: &str = "push";
 const DEVICES_DIR: &str = "devices";
 const QUEUE_DIR: &str = "queue";
@@ -51,7 +47,6 @@ const APNS_PRODUCTION_ENDPOINT: &str = "https://api.push.apple.com";
 const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(60 * 60);
 const DISPATCH_TICK: Duration = Duration::from_secs(5);
-
 // Push persistence is local best-effort state, but every record remains resident
 // after startup. These source-local ceilings bound both directory work and the
 // retained maps; field validation keeps a maximum-count set from amplifying its
@@ -77,7 +72,6 @@ const MAX_APNS_PRIVATE_KEY_BYTES: usize = 16 * 1024;
 // dispatch task's retained buffer without bound.
 const MAX_PUSH_PROVIDER_RESPONSE_BYTES: usize = 64 * 1024;
 const PUSH_DISPATCH_BATCH_SIZE: usize = 256;
-
 #[derive(Clone, Copy, Debug)]
 struct PushStorageLimits {
     max_devices: usize,
@@ -87,7 +81,6 @@ struct PushStorageLimits {
     max_queue_job_bytes: usize,
     dispatch_batch_size: usize,
 }
-
 const PUSH_STORAGE_LIMITS: PushStorageLimits = PushStorageLimits {
     max_devices: MAX_PUSH_DEVICES,
     max_queue_jobs: MAX_PUSH_QUEUE_JOBS,
@@ -96,14 +89,12 @@ const PUSH_STORAGE_LIMITS: PushStorageLimits = PushStorageLimits {
     max_queue_job_bytes: MAX_PUSH_QUEUE_JOB_BYTES,
     dispatch_batch_size: PUSH_DISPATCH_BATCH_SIZE,
 };
-
 /// Logical push notification target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Platform {
     Fcm,
     Apns,
 }
-
 impl Platform {
     fn from_label(label: &str) -> Result<Self, PushError> {
         match label.trim().to_ascii_uppercase().as_str() {
@@ -112,7 +103,6 @@ impl Platform {
             other => Err(PushError::InvalidPlatform(other.to_string())),
         }
     }
-
     fn from_stored(label: &str) -> Option<Self> {
         match label {
             "FCM" => Some(Self::Fcm),
@@ -120,7 +110,6 @@ impl Platform {
             _ => None,
         }
     }
-
     pub fn label(self) -> &'static str {
         match self {
             Self::Fcm => "FCM",
@@ -128,7 +117,6 @@ impl Platform {
         }
     }
 }
-
 /// Request payload for `POST /v1/notify/devices`.
 #[derive(
     Debug,
@@ -144,10 +132,8 @@ pub struct RegisterDeviceRequest {
     pub token: String,
     pub topics: Option<Vec<String>>,
 }
-
 /// Request payload for `DELETE /v1/notify/devices`.
 pub type UnregisterDeviceRequest = RegisterDeviceRequest;
-
 #[derive(Clone, Debug)]
 pub struct RegisteredDevice {
     pub account_id: String,
@@ -155,7 +141,6 @@ pub struct RegisteredDevice {
     pub topics: Vec<String>,
     pub token_fingerprint: String,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -174,7 +159,6 @@ pub struct PushActivityPayload {
     pub instruction_index: u64,
     pub direction: String,
 }
-
 #[derive(Debug, Clone)]
 pub enum PushError {
     Disabled,
@@ -186,7 +170,6 @@ pub enum PushError {
     EmptyToken,
     Storage(String),
 }
-
 /// Dispatch settings derived from configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DispatchSettings {
@@ -195,7 +178,6 @@ pub struct DispatchSettings {
     /// HTTP request timeout.
     pub request_timeout: Duration,
 }
-
 /// Provider-specific credentials derived from configuration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProviderCredentials {
@@ -211,7 +193,6 @@ pub enum ProviderCredentials {
         private_key_path: PathBuf,
     },
 }
-
 /// Single provider delivery attempt.
 #[derive(Clone, Debug)]
 pub struct PushDelivery {
@@ -219,7 +200,6 @@ pub struct PushDelivery {
     pub token: String,
     pub payload: PushActivityPayload,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DispatchOutcome {
     Sent,
@@ -227,7 +207,6 @@ pub enum DispatchOutcome {
     InvalidToken(String),
     PermanentFailure(String),
 }
-
 /// Dispatcher trait so provider delivery can be mocked in tests.
 #[async_trait]
 pub trait PushDispatcher: Send + Sync {
@@ -239,10 +218,8 @@ pub trait PushDispatcher: Send + Sync {
         credentials: &ProviderCredentials,
     ) -> DispatchOutcome;
 }
-
 #[derive(Clone, Default)]
 struct RealPushDispatcher;
-
 #[async_trait]
 impl PushDispatcher for RealPushDispatcher {
     async fn send(
@@ -277,7 +254,6 @@ impl PushDispatcher for RealPushDispatcher {
         }
     }
 }
-
 #[derive(Clone)]
 pub struct PushBridge {
     config: actual::Push,
@@ -289,16 +265,13 @@ pub struct PushBridge {
     storage_limits: PushStorageLimits,
     mutation_guard: Arc<StorageMutex<()>>,
 }
-
 impl PushBridge {
     pub fn new(config: actual::Push) -> Self {
         Self::with_dispatcher(config, Arc::new(RealPushDispatcher))
     }
-
     pub fn with_dispatcher(config: actual::Push, dispatcher: Arc<dyn PushDispatcher>) -> Self {
         Self::with_dispatcher_and_limits(config, dispatcher, PUSH_STORAGE_LIMITS)
     }
-
     fn with_dispatcher_and_limits(
         config: actual::Push,
         dispatcher: Arc<dyn PushDispatcher>,
@@ -322,7 +295,6 @@ impl PushBridge {
         bridge.load_from_disk();
         bridge
     }
-
     pub fn register_device(&self, request: RegisterDeviceRequest) -> Result<(), PushError> {
         if !self.config.enabled {
             return Err(PushError::Disabled);
@@ -346,7 +318,6 @@ impl PushBridge {
         let max_topics = self.config.max_topics_per_device.get().min(MAX_PUSH_TOPICS);
         let topics = normalize_topics(request.topics, max_topics)?;
         let token = token.to_owned();
-
         let token_fingerprint = fingerprint(token.as_bytes());
         let record = DeviceRecord {
             account_id: account_id.to_string(),
@@ -356,7 +327,6 @@ impl PushBridge {
             topics,
             updated_at_ms: now_ms(),
         };
-
         let _mutation = self.mutation_guard.lock();
         let old = self
             .devices
@@ -377,7 +347,6 @@ impl PushBridge {
         self.devices.insert(token_fingerprint, record);
         Ok(())
     }
-
     pub fn unregister_device(&self, request: UnregisterDeviceRequest) -> Result<(), PushError> {
         if !self.config.enabled {
             return Err(PushError::Disabled);
@@ -406,7 +375,6 @@ impl PushBridge {
         drop(record);
         self.remove_device_by_fingerprint(&token_fingerprint)
     }
-
     pub(crate) fn enqueue_activity(
         &self,
         account: &AccountId,
@@ -459,7 +427,6 @@ impl PushBridge {
         }
         Ok(queued)
     }
-
     pub async fn dispatch_due_once(&self) {
         if !self.config.enabled {
             return;
@@ -479,7 +446,6 @@ impl PushBridge {
             self.dispatch_job(job).await;
         }
     }
-
     pub fn start_event_worker(&self, kura: Arc<Kura>, events: EventsSender) {
         if !self.config.enabled {
             return;
@@ -510,27 +476,22 @@ impl PushBridge {
             }
         });
     }
-
     pub fn device_count(&self) -> usize {
         self.devices.len()
     }
-
     pub fn queued_count(&self) -> usize {
         self.queue.len()
     }
-
     #[cfg(test)]
     pub(crate) fn registered_device_by_token(&self, token: &str) -> Option<RegisteredDevice> {
         self.devices
             .get(&fingerprint(token.as_bytes()))
             .map(|entry| registered_device_from_record(&entry))
     }
-
     #[cfg(test)]
     pub(crate) fn registered_device(&self, token: &str) -> Option<RegisteredDevice> {
         self.registered_device_by_token(token)
     }
-
     fn enqueue_committed_block(&self, kura: &Kura, height: u64) {
         let Some(height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
             return;
@@ -540,7 +501,6 @@ impl PushBridge {
         };
         self.enqueue_block_activities(&block);
     }
-
     fn enqueue_block_activities(&self, block: &SignedBlock) {
         let block_height = block.header().height().get();
         for (entrypoint_hash, tx, result) in external_signed_transaction_results(block) {
@@ -568,7 +528,6 @@ impl PushBridge {
             }
         }
     }
-
     async fn dispatch_job(&self, job: DeliveryJob) {
         let Some(device) = self
             .devices
@@ -623,7 +582,6 @@ impl PushBridge {
             }
         }
     }
-
     fn reschedule_job(&self, mut job: DeliveryJob) {
         job.attempts = job.attempts.saturating_add(1);
         let backoff = retry_backoff(job.attempts);
@@ -644,11 +602,9 @@ impl PushBridge {
         }
         self.queue.insert(job.dedupe_key.clone(), job);
     }
-
     fn has_credentials(&self, platform: Platform) -> bool {
         self.credentials_for(platform).is_ok()
     }
-
     fn credentials_for(&self, platform: Platform) -> Result<ProviderCredentials, PushError> {
         match platform {
             Platform::Fcm => match (
@@ -695,7 +651,6 @@ impl PushBridge {
             }
         }
     }
-
     fn devices_for_account(&self, account_id: &str) -> Vec<DeviceRecord> {
         self.devices
             .iter()
@@ -704,7 +659,6 @@ impl PushBridge {
             .take(self.storage_limits.max_devices)
             .collect()
     }
-
     fn remove_device_by_fingerprint(&self, token_fingerprint: &str) -> Result<(), PushError> {
         let _mutation = self.mutation_guard.lock();
         let Some((_, record)) = self.devices.remove(token_fingerprint) else {
@@ -714,7 +668,6 @@ impl PushBridge {
             .map_err(storage_error)?;
         Ok(())
     }
-
     fn remove_job(&self, dedupe_key: &str) {
         let _mutation = self.mutation_guard.lock();
         self.queue.remove(dedupe_key);
@@ -722,7 +675,6 @@ impl PushBridge {
             iroha_logger::warn!(?error, "failed to remove push queue file");
         }
     }
-
     fn persist_device(&self, record: &DeviceRecord) -> Result<(), PushError> {
         validate_device_record(record, self.effective_max_topics()).map_err(storage_error)?;
         write_json_atomic(
@@ -732,7 +684,6 @@ impl PushBridge {
         )
         .map_err(storage_error)
     }
-
     fn persist_job(&self, job: &DeliveryJob) -> Result<(), PushError> {
         validate_delivery_job(job).map_err(storage_error)?;
         write_json_atomic(
@@ -742,12 +693,10 @@ impl PushBridge {
         )
         .map_err(storage_error)
     }
-
     fn load_from_disk(&self) {
         self.load_devices();
         self.load_queue();
     }
-
     fn load_devices(&self) {
         let root = self.data_dir.join(DEVICES_DIR);
         let accounts = match read_direct_directory(&root) {
@@ -847,7 +796,6 @@ impl PushBridge {
             }
         }
     }
-
     fn load_queue(&self) {
         let root = self.data_dir.join(QUEUE_DIR);
         let files = match read_direct_directory(&root) {
@@ -909,25 +857,21 @@ impl PushBridge {
             }
         }
     }
-
     fn effective_max_topics(&self) -> usize {
         self.config.max_topics_per_device.get().min(MAX_PUSH_TOPICS)
     }
-
     fn device_path(&self, account_id: &str, token_fingerprint: &str) -> PathBuf {
         self.data_dir
             .join(DEVICES_DIR)
             .join(fingerprint(account_id.as_bytes()))
             .join(format!("{token_fingerprint}.json"))
     }
-
     fn job_path(&self, dedupe_key: &str) -> PathBuf {
         self.data_dir
             .join(QUEUE_DIR)
             .join(format!("{dedupe_key}.json"))
     }
 }
-
 #[derive(
     Clone,
     Debug,
@@ -944,7 +888,6 @@ struct DeviceRecord {
     topics: Vec<String>,
     updated_at_ms: u64,
 }
-
 #[derive(
     Clone,
     Debug,
@@ -963,7 +906,6 @@ struct DeliveryJob {
     created_at_ms: u64,
     updated_at_ms: u64,
 }
-
 fn registered_device_from_record(record: &DeviceRecord) -> RegisteredDevice {
     RegisteredDevice {
         account_id: record.account_id.clone(),
@@ -972,14 +914,12 @@ fn registered_device_from_record(record: &DeviceRecord) -> RegisteredDevice {
         token_fingerprint: record.token_fingerprint.clone(),
     }
 }
-
 fn canonical_account(account_id: &str) -> Result<AccountId, PushError> {
     let trimmed = account_id.trim();
     AccountId::parse_encoded(trimmed)
         .map(|parsed| parsed.into_account_id())
         .map_err(|_| PushError::InvalidAccount(account_id.to_owned()))
 }
-
 fn validate_device_record(record: &DeviceRecord, max_topics: usize) -> io::Result<()> {
     let account = canonical_account(&record.account_id)
         .map_err(|_| invalid_data("persisted push device has an invalid account id"))?;
@@ -1034,7 +974,6 @@ fn validate_device_record(record: &DeviceRecord, max_topics: usize) -> io::Resul
     }
     Ok(())
 }
-
 fn validate_delivery_job(job: &DeliveryJob) -> io::Result<()> {
     let account = canonical_account(&job.account_id)
         .map_err(|_| invalid_data("persisted push job has an invalid account id"))?;
@@ -1063,14 +1002,12 @@ fn validate_delivery_job(job: &DeliveryJob) -> io::Result<()> {
     }
     Ok(())
 }
-
 fn is_lower_hex_fingerprint(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
-
 fn normalize_topics(
     topics: Option<Vec<String>>,
     max_topics: usize,
@@ -1109,14 +1046,12 @@ fn normalize_topics(
     }
     Ok(out)
 }
-
 fn trim_ref(value: Option<&str>) -> Option<&str> {
     value.and_then(|raw| {
         let trimmed = raw.trim();
         (!trimmed.is_empty()).then_some(trimmed)
     })
 }
-
 fn delivery_dedupe_key(payload: &PushActivityPayload, token_fingerprint: &str) -> String {
     fingerprint(
         format!(
@@ -1130,23 +1065,19 @@ fn delivery_dedupe_key(payload: &PushActivityPayload, token_fingerprint: &str) -
         .as_bytes(),
     )
 }
-
 fn retry_backoff(attempts: u32) -> Duration {
     let multiplier = 1u32.checked_shl(attempts.min(10)).unwrap_or(1 << 10);
     INITIAL_BACKOFF.saturating_mul(multiplier).min(MAX_BACKOFF)
 }
-
 fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(duration_ms)
         .unwrap_or_default()
 }
-
 fn fingerprint(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(digest.len() * 2);
@@ -1156,21 +1087,17 @@ fn fingerprint(bytes: &[u8]) -> String {
     }
     out
 }
-
 fn storage_error(error: io::Error) -> PushError {
     PushError::Storage(error.to_string())
 }
-
 fn storage_limit_error(label: &str, actual: usize, maximum: usize) -> PushError {
     PushError::Storage(format!(
         "{label} {actual} exceeds the push storage maximum {maximum}"
     ))
 }
-
 fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
-
 fn write_json_atomic<T>(path: &Path, value: &T, maximum: usize) -> io::Result<()>
 where
     T: norito::json::JsonSerialize + ?Sized,
@@ -1194,7 +1121,6 @@ where
     write_direct_regular_file(&tmp, &bytes)?;
     fs::rename(tmp, path)
 }
-
 fn read_json<T>(path: &Path, maximum: usize) -> io::Result<T>
 where
     T: norito::json::JsonDeserialize,
@@ -1203,7 +1129,6 @@ where
     norito::json::from_slice(&bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
 }
-
 fn read_direct_directory(path: &Path) -> io::Result<fs::ReadDir> {
     let metadata = fs::symlink_metadata(path)?;
     if push_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_dir() {
@@ -1213,11 +1138,9 @@ fn read_direct_directory(path: &Path) -> io::Result<fs::ReadDir> {
     }
     fs::read_dir(path)
 }
-
 fn read_bounded_stable_file(path: &Path, maximum: usize) -> io::Result<Vec<u8>> {
     read_bounded_stable_file_with(path, maximum, || Ok(()))
 }
-
 fn read_bounded_stable_file_with(
     path: &Path,
     maximum: usize,
@@ -1234,7 +1157,6 @@ fn read_bounded_stable_file_with(
             named_before.len()
         )));
     }
-
     let mut options = fs::OpenOptions::new();
     options.read(true);
     set_no_follow_open_options(&mut options);
@@ -1254,7 +1176,6 @@ fn read_bounded_stable_file_with(
     if !push_file_metadata_unchanged(&named_before, &opened_before) {
         return Err(invalid_data("push input changed identity while opening"));
     }
-
     after_open()?;
     let capacity = usize::try_from(opened_before.len())
         .unwrap_or(maximum)
@@ -1268,7 +1189,6 @@ fn read_bounded_stable_file_with(
             "push input exceeds the maximum {maximum} bytes"
         )));
     }
-
     let opened_after = file.metadata()?;
     let named_after = fs::symlink_metadata(path)?;
     if push_metadata_is_symlink_or_reparse(&named_after)
@@ -1281,7 +1201,6 @@ fn read_bounded_stable_file_with(
     }
     Ok(bytes)
 }
-
 fn write_direct_regular_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if push_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_file() => {
@@ -1318,12 +1237,10 @@ fn write_direct_regular_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     Ok(())
 }
-
 fn set_no_follow_open_options(options: &mut fs::OpenOptions) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(
             (rustix::fs::OFlags::NOFOLLOW
                 | rustix::fs::OFlags::NONBLOCK
@@ -1334,12 +1251,10 @@ fn set_no_follow_open_options(options: &mut fs::OpenOptions) {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
 }
-
 fn push_metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
@@ -1347,40 +1262,32 @@ fn push_metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
-
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
         return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
     }
     #[cfg(not(windows))]
     false
 }
-
 #[cfg(unix)]
 fn push_file_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(windows)]
 fn push_file_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     left.volume_serial_number().is_some()
         && left.file_index().is_some()
         && left.volume_serial_number() == right.volume_serial_number()
         && left.file_index() == right.file_index()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn push_file_metadata_same_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     push_file_metadata_same_identity(left, right)
         && left.len() == right.len()
         && left.mtime() == right.mtime()
@@ -1388,22 +1295,18 @@ fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bo
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     push_file_metadata_same_identity(left, right)
         && left.file_size() == right.file_size()
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 fn remove_file_if_exists(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -1411,7 +1314,6 @@ fn remove_file_if_exists(path: &Path) -> io::Result<()> {
         Err(error) => Err(error),
     }
 }
-
 fn remove_device_file(path: &Path) -> io::Result<()> {
     remove_file_if_exists(path)?;
     let Some(parent) = path.parent() else {
@@ -1433,7 +1335,6 @@ fn remove_device_file(path: &Path) -> io::Result<()> {
         }
     }
 }
-
 fn committed_block_height(event: &EventBox) -> Option<u64> {
     match event {
         EventBox::Pipeline(PipelineEventBox::Block(block_event)) => match block_event.status() {
@@ -1456,7 +1357,6 @@ fn committed_block_height(event: &EventBox) -> Option<u64> {
         _ => None,
     }
 }
-
 fn external_signed_transaction_results(
     block: &SignedBlock,
 ) -> impl Iterator<
@@ -1483,7 +1383,6 @@ fn external_signed_transaction_results(
             Some((entrypoint_hash, signed, result))
         })
 }
-
 async fn send_fcm_http_v1(
     project_id: &str,
     service_account_path: &Path,
@@ -1523,7 +1422,6 @@ async fn send_fcm_http_v1(
         Err(error) => DispatchOutcome::Retry(error.to_string()),
     }
 }
-
 async fn send_apns_http2(
     endpoint: &str,
     topic: &str,
@@ -1567,7 +1465,6 @@ async fn send_apns_http2(
         Err(error) => DispatchOutcome::Retry(error.to_string()),
     }
 }
-
 fn http_client(settings: &DispatchSettings) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .connect_timeout(settings.connect_timeout)
@@ -1576,7 +1473,6 @@ fn http_client(settings: &DispatchSettings) -> Result<reqwest::Client, String> {
         .build()
         .map_err(|error| error.to_string())
 }
-
 fn jwt_algorithm_name(algorithm: Algorithm) -> &'static str {
     match algorithm {
         Algorithm::HS256 => "HS256",
@@ -1593,7 +1489,6 @@ fn jwt_algorithm_name(algorithm: Algorithm) -> &'static str {
         Algorithm::EdDSA => "EdDSA",
     }
 }
-
 fn encode_jwt_claims(
     algorithm: Algorithm,
     key_id: Option<&str>,
@@ -1620,7 +1515,6 @@ fn encode_jwt_claims(
         .map_err(|error| error.to_string())?;
     Ok(format!("{message}.{signature}"))
 }
-
 async fn read_push_provider_response_bounded(
     mut response: reqwest::Response,
     source: &'static str,
@@ -1635,7 +1529,6 @@ async fn read_push_provider_response_bounded(
             "{source} declared a {length}-byte response, exceeding the {MAX_PUSH_PROVIDER_RESPONSE_BYTES}-byte ceiling"
         ));
     }
-
     let initial_capacity = declared
         .and_then(|length| usize::try_from(length).ok())
         .unwrap_or(0)
@@ -1666,7 +1559,6 @@ async fn read_push_provider_response_bounded(
     }
     Ok(body)
 }
-
 async fn mint_fcm_access_token(
     client: &reqwest::Client,
     service_account_path: &Path,
@@ -1718,7 +1610,6 @@ async fn mint_fcm_access_token(
         norito::json::from_slice(&bytes).map_err(|error| error.to_string())?;
     json_string_field(&value, "access_token")
 }
-
 fn mint_apns_provider_token(
     team_id: &str,
     key_id: &str,
@@ -1737,7 +1628,6 @@ fn mint_apns_provider_token(
         &EncodingKey::from_ec_pem(&private_key).map_err(|error| error.to_string())?,
     )
 }
-
 fn json_string_field(value: &norito::json::Value, field: &str) -> Result<String, String> {
     value
         .as_object()
@@ -1746,7 +1636,6 @@ fn json_string_field(value: &norito::json::Value, field: &str) -> Result<String,
         .map(ToOwned::to_owned)
         .ok_or_else(|| format!("missing `{field}`"))
 }
-
 fn fcm_body(token: &str, payload: &PushActivityPayload) -> norito::json::Value {
     norito::json!({
         "message": {
@@ -1769,7 +1658,6 @@ fn fcm_body(token: &str, payload: &PushActivityPayload) -> norito::json::Value {
         }
     })
 }
-
 fn apns_body(payload: &PushActivityPayload) -> norito::json::Value {
     norito::json!({
         "aps": {
@@ -1778,7 +1666,6 @@ fn apns_body(payload: &PushActivityPayload) -> norito::json::Value {
         "iroha": (push_data(payload))
     })
 }
-
 fn push_data(payload: &PushActivityPayload) -> norito::json::Value {
     norito::json!({
         "account_id": (payload.account_id.clone()),
@@ -1789,7 +1676,6 @@ fn push_data(payload: &PushActivityPayload) -> norito::json::Value {
         "direction": (payload.direction.clone())
     })
 }
-
 async fn classify_fcm_response(response: reqwest::Response) -> DispatchOutcome {
     let status = response.status();
     if status.is_success() {
@@ -1801,7 +1687,6 @@ async fn classify_fcm_response(response: reqwest::Response) -> DispatchOutcome {
         .unwrap_or_else(|error| format!("response body unavailable: {error}"));
     classify_fcm_status_body(status, &body)
 }
-
 async fn classify_apns_response(response: reqwest::Response) -> DispatchOutcome {
     let status = response.status();
     if status.is_success() {
@@ -1813,7 +1698,6 @@ async fn classify_apns_response(response: reqwest::Response) -> DispatchOutcome 
         .unwrap_or_else(|error| format!("response body unavailable: {error}"));
     classify_apns_status_body(status, &body)
 }
-
 fn classify_fcm_status_body(status: HttpStatusCode, body: &str) -> DispatchOutcome {
     if status.is_success() {
         return DispatchOutcome::Sent;
@@ -1829,7 +1713,6 @@ fn classify_fcm_status_body(status: HttpStatusCode, body: &str) -> DispatchOutco
     }
     DispatchOutcome::PermanentFailure(format!("FCM returned {status}: {body}"))
 }
-
 fn classify_apns_status_body(status: HttpStatusCode, body: &str) -> DispatchOutcome {
     if status.is_success() {
         return DispatchOutcome::Sent;
@@ -1846,7 +1729,6 @@ fn classify_apns_status_body(status: HttpStatusCode, body: &str) -> DispatchOutc
     }
     DispatchOutcome::PermanentFailure(format!("APNs returned {status}: {body}"))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1856,9 +1738,7 @@ mod tests {
         io::{AsyncReadExt as _, AsyncWriteExt as _},
         net::TcpListener,
     };
-
     const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
-
     async fn raw_provider_response(response: Vec<u8>) -> reqwest::Response {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1881,7 +1761,6 @@ mod tests {
             .await
             .expect("receive provider response headers")
     }
-
     fn chunked_provider_response(status: &str, body_len: usize) -> Vec<u8> {
         let mut response = format!(
             "HTTP/1.1 {status}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{body_len:X}\r\n"
@@ -1891,7 +1770,6 @@ mod tests {
         response.extend_from_slice(b"\r\n0\r\n\r\n");
         response
     }
-
     fn test_bridge_config() -> actual::Push {
         actual::Push {
             enabled: true,
@@ -1900,7 +1778,6 @@ mod tests {
             ..Default::default()
         }
     }
-
     fn test_storage_limits(max_devices: usize, max_queue_jobs: usize) -> PushStorageLimits {
         PushStorageLimits {
             max_devices,
@@ -1910,7 +1787,6 @@ mod tests {
             ..PUSH_STORAGE_LIMITS
         }
     }
-
     fn register_request(token: &str) -> RegisterDeviceRequest {
         RegisterDeviceRequest {
             account_id: TEST_ACCOUNT_I105.to_string(),
@@ -1919,7 +1795,6 @@ mod tests {
             topics: None,
         }
     }
-
     fn test_job(index: usize) -> DeliveryJob {
         let token_fingerprint = fingerprint(format!("token-{index}").as_bytes());
         let payload = PushActivityPayload {
@@ -1941,7 +1816,6 @@ mod tests {
             updated_at_ms: 0,
         }
     }
-
     #[test]
     fn encode_jwt_claims_builds_verifiable_compact_token() {
         let mut claims = norito::json::Map::new();
@@ -1960,7 +1834,6 @@ mod tests {
         .expect("JWT should encode");
         let parts: Vec<_> = token.split('.').collect();
         assert_eq!(parts.len(), 3);
-
         let header: norito::json::Value = norito::json::from_slice(
             &BASE64_URL_SAFE_NO_PAD
                 .decode(parts[0])
@@ -1970,7 +1843,6 @@ mod tests {
         assert_eq!(header["typ"].as_str(), Some("JWT"));
         assert_eq!(header["alg"].as_str(), Some("HS256"));
         assert_eq!(header["kid"].as_str(), Some("test-key"));
-
         let payload: norito::json::Value = norito::json::from_slice(
             &BASE64_URL_SAFE_NO_PAD
                 .decode(parts[1])
@@ -1989,13 +1861,11 @@ mod tests {
             .expect("signature should verify")
         );
     }
-
     #[test]
     fn bounded_push_file_read_accepts_exact_limit_and_rejects_limit_plus_one() {
         let directory = tempfile::tempdir().expect("push read directory");
         let path = directory.path().join("input.json");
         fs::write(&path, b"12345678").expect("write bounded input");
-
         assert_eq!(
             read_bounded_stable_file(&path, 8).expect("exact byte limit"),
             b"12345678"
@@ -2004,7 +1874,6 @@ mod tests {
             .expect_err("one byte beyond the limit must fail before allocation");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[tokio::test]
     async fn provider_response_reader_accepts_exact_limit_and_rejects_max_plus_one() {
         let declared = raw_provider_response(
@@ -2019,7 +1888,6 @@ mod tests {
             .await
             .expect_err("oversized Content-Length must fail before body allocation");
         assert!(declared_error.contains("declared"));
-
         let exact = raw_provider_response(chunked_provider_response(
             "400 Bad Request",
             MAX_PUSH_PROVIDER_RESPONSE_BYTES,
@@ -2032,7 +1900,6 @@ mod tests {
                 .len(),
             MAX_PUSH_PROVIDER_RESPONSE_BYTES
         );
-
         let streamed = raw_provider_response(chunked_provider_response(
             "400 Bad Request",
             MAX_PUSH_PROVIDER_RESPONSE_BYTES + 1,
@@ -2043,7 +1910,6 @@ mod tests {
             .expect_err("chunked max plus one must fail while streaming");
         assert!(streamed_error.contains("while streaming"));
     }
-
     #[tokio::test]
     async fn successful_provider_responses_skip_oversized_bodies() {
         let oversized_success = || {
@@ -2062,7 +1928,6 @@ mod tests {
             DispatchOutcome::Sent
         );
     }
-
     #[test]
     fn bounded_json_write_rejects_oversize_before_creating_temp_file() {
         let directory = tempfile::tempdir().expect("push write directory");
@@ -2073,7 +1938,6 @@ mod tests {
         assert!(!path.exists());
         assert!(!path.with_extension("json.tmp").exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn bounded_push_file_read_rejects_path_replacement_race() {
@@ -2082,26 +1946,21 @@ mod tests {
         let replacement = directory.path().join("replacement.json");
         fs::write(&path, b"old").expect("write original input");
         fs::write(&replacement, b"replacement").expect("write replacement input");
-
         let error = read_bounded_stable_file_with(&path, 32, || fs::rename(&replacement, &path))
             .expect_err("path replacement after open must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[cfg(unix)]
     #[test]
     fn bounded_push_file_read_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let directory = tempfile::tempdir().expect("push symlink directory");
         let target = directory.path().join("target.json");
         let link = directory.path().join("link.json");
         fs::write(&target, b"{}").expect("write symlink target");
         symlink(&target, &link).expect("create push symlink");
-
         assert!(read_bounded_stable_file(&link, 32).is_err());
     }
-
     #[test]
     fn write_side_device_capacity_is_hard() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2120,7 +1979,6 @@ mod tests {
         assert!(matches!(error, PushError::Storage(_)));
         assert_eq!(bridge.device_count(), 1);
     }
-
     #[test]
     fn startup_queue_enumeration_stops_at_hard_candidate_count() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2135,7 +1993,6 @@ mod tests {
             )
             .expect("write queue fixture");
         }
-
         let bridge = PushBridge::with_dispatcher_and_limits(
             test_bridge_config(),
             Arc::new(RealPushDispatcher),
@@ -2143,7 +2000,6 @@ mod tests {
         );
         assert_eq!(bridge.queued_count(), 2);
     }
-
     #[tokio::test]
     async fn due_queue_dispatch_collects_only_one_bounded_batch() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2159,7 +2015,6 @@ mod tests {
             let job = test_job(index);
             bridge.queue.insert(job.dedupe_key.clone(), job);
         }
-
         bridge.dispatch_due_once().await;
         assert_eq!(
             bridge.queued_count(),
@@ -2167,7 +2022,6 @@ mod tests {
             "one dispatch pass must consume at most one configured batch"
         );
     }
-
     #[test]
     fn write_side_queue_capacity_is_hard() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2199,7 +2053,6 @@ mod tests {
         assert!(matches!(error, PushError::Storage(_)));
         assert_eq!(bridge.queued_count(), 1);
     }
-
     #[test]
     fn disabled_rejected() {
         let bridge = PushBridge::new(actual::Push {
@@ -2216,7 +2069,6 @@ mod tests {
             .expect_err("push disabled");
         matches!(err, PushError::Disabled);
     }
-
     #[test]
     fn missing_credentials_rejected() {
         let bridge = PushBridge::new(actual::Push {
@@ -2235,7 +2087,6 @@ mod tests {
             .expect_err("missing creds");
         assert!(matches!(err, PushError::MissingCredentials { .. }));
     }
-
     #[test]
     fn too_many_topics_rejected() {
         let bridge = PushBridge::new(actual::Push {
@@ -2252,7 +2103,6 @@ mod tests {
             .expect_err("too many topics");
         assert!(matches!(err, PushError::TooManyTopics { max: 2 }));
     }
-
     #[test]
     fn fcm_response_classification_covers_provider_outcomes() {
         assert_eq!(
@@ -2276,7 +2126,6 @@ mod tests {
             DispatchOutcome::PermanentFailure(_)
         ));
     }
-
     #[test]
     fn apns_response_classification_covers_provider_outcomes() {
         assert_eq!(
@@ -2304,7 +2153,6 @@ mod tests {
             DispatchOutcome::PermanentFailure(_)
         ));
     }
-
     #[test]
     fn stores_device_on_success_and_loads_from_disk() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2319,7 +2167,6 @@ mod tests {
             })
             .expect("should store device");
         assert_eq!(bridge.device_count(), 1);
-
         let loaded = PushBridge::new(test_bridge_config());
         assert_eq!(loaded.device_count(), 1);
         let device = loaded
@@ -2327,7 +2174,6 @@ mod tests {
             .expect("device loaded by fingerprint");
         assert_eq!(device.account_id, TEST_ACCOUNT_I105);
     }
-
     #[test]
     fn unregister_removes_device() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2348,7 +2194,6 @@ mod tests {
         assert_eq!(bridge.device_count(), 0);
         assert!(bridge.registered_device("token-123").is_none());
     }
-
     #[test]
     fn alias_account_id_is_rejected() {
         let bridge = PushBridge::new(test_bridge_config());
@@ -2362,7 +2207,6 @@ mod tests {
             .expect_err("aliases must be rejected");
         assert!(matches!(err, PushError::InvalidAccount(account) if account == "alice@wallets"));
     }
-
     #[tokio::test]
     async fn queue_dedupes_and_dispatches_success() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2401,12 +2245,10 @@ mod tests {
             )
             .expect("dedupe");
         assert_eq!(bridge.queued_count(), 1);
-
         bridge.dispatch_due_once().await;
         assert_eq!(bridge.queued_count(), 0);
         assert_eq!(dispatcher.calls.lock().unwrap().len(), 1);
     }
-
     #[tokio::test]
     async fn retryable_failure_reschedules_job() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2442,7 +2284,6 @@ mod tests {
         assert_eq!(job.attempts, 1);
         assert!(job.next_attempt_ms > now_ms());
     }
-
     #[tokio::test]
     async fn invalid_token_removes_device_and_job() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2476,12 +2317,10 @@ mod tests {
         assert_eq!(bridge.queued_count(), 0);
         assert_eq!(bridge.device_count(), 0);
     }
-
     struct MockDispatcher {
         outcomes: Mutex<Vec<DispatchOutcome>>,
         calls: Arc<Mutex<Vec<PushDelivery>>>,
     }
-
     impl MockDispatcher {
         fn new(outcomes: Vec<DispatchOutcome>) -> Self {
             Self {
@@ -2490,7 +2329,6 @@ mod tests {
             }
         }
     }
-
     #[async_trait]
     impl PushDispatcher for MockDispatcher {
         async fn send(

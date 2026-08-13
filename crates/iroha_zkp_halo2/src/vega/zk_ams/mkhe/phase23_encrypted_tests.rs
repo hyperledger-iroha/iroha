@@ -6,10 +6,8 @@ use super::super::{
 };
 use super::*;
 use crate::vega::{MaskedRelaxedRandomErrorV1, VEGA_T256_SCALAR_MODULUS_BE_V1};
-
 const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
 const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
-
 fn test_profile() -> BgvProfile {
     BgvProfile {
         profile_id: [0x6e; 32],
@@ -29,12 +27,10 @@ fn test_profile() -> BgvProfile {
         max_work_units: 1 << 22,
     }
 }
-
 struct KatRandom {
     state: [u8; 32],
     counter: u64,
 }
-
 impl KatRandom {
     fn new(label: &[u8]) -> Self {
         Self {
@@ -43,7 +39,6 @@ impl KatRandom {
         }
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for KatRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         let mut written = 0;
@@ -61,11 +56,9 @@ impl MaskedRelaxedRandomSourceV1 for KatRandom {
         Ok(())
     }
 }
-
 fn s(value: u64) -> Scalar {
     Scalar::from_u64(value)
 }
-
 fn legacy_materialized_canonical_bytes_for_test(
     value: &ZkAmsPhase23MaterializedAccumulatorsV1,
 ) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
@@ -112,14 +105,12 @@ fn legacy_materialized_canonical_bytes_for_test(
     assert_eq!(bytes.len(), length);
     Ok(bytes)
 }
-
 fn read_materialized_test(
     bytes: &[u8],
 ) -> Result<ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsMkheErrorV1> {
     let mut reader = std::io::Cursor::new(bytes);
     super::super::read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1(&mut reader)
 }
-
 fn sparse_map(
     kind: ZkAmsPhase23MapKindV1,
     column_count: u32,
@@ -147,7 +138,6 @@ fn sparse_map(
     )
     .unwrap()
 }
-
 fn sample_map() -> ZkAmsPhase23SparseMapV1 {
     sparse_map(
         ZkAmsPhase23MapKindV1::A,
@@ -162,7 +152,6 @@ fn sample_map() -> ZkAmsPhase23SparseMapV1 {
         ],
     )
 }
-
 #[test]
 fn public_release_history_types_enforce_exact_geometry_and_canonical_encodings() {
     type PublicHistoryConstructor = fn(
@@ -174,7 +163,6 @@ fn public_release_history_types_enforce_exact_geometry_and_canonical_encodings()
     )
         -> Result<ZkAmsPhase23PublicFoldHistoryV1, ZkAmsMkheErrorV1>;
     let _public_constructor: PublicHistoryConstructor = ZkAmsPhase23PublicFoldHistoryV1::new;
-
     assert_eq!(ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1, 89);
     assert_eq!(ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, 512);
     assert_eq!(ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1, 1_024);
@@ -185,7 +173,6 @@ fn public_release_history_types_enforce_exact_geometry_and_canonical_encodings()
     let public_inputs = [s(3).to_be_bytes(); ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1];
     let witness = vec![generator; ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1];
     let error = vec![generator; ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1];
-
     assert_eq!(
         ZkAmsPhase23PublicAccumulatorV1::new(
             s(2).to_be_bytes(),
@@ -215,7 +202,6 @@ fn public_release_history_types_enforce_exact_geometry_and_canonical_encodings()
     assert_ne!(accumulator.witness_commitment_digest(), [0; 32]);
     assert_ne!(accumulator.error_commitment_digest(), [0; 32]);
     assert_ne!(accumulator.digest(), [0; 32]);
-
     let public_input_digest = public_input_vector_digest(&public_inputs).unwrap();
     assert_eq!(
         ZkAmsPhase23StrictPublicInstanceV1::new(public_inputs, [0; 32], witness.clone(),),
@@ -227,7 +213,6 @@ fn public_release_history_types_enforce_exact_geometry_and_canonical_encodings()
     assert_eq!(strict.public_input_digest(), public_input_digest);
     assert_ne!(strict.witness_commitment_digest(), [0; 32]);
     assert_ne!(strict.digest(), [0; 32]);
-
     let layout = canonical_release_commitment_preimage_layout_v1().unwrap();
     assert_eq!(
         ZkAmsPhase23CrossTermCommitmentV1::new(error.clone(), [0; 32]),
@@ -236,7 +221,6 @@ fn public_release_history_types_enforce_exact_geometry_and_canonical_encodings()
     let cross = ZkAmsPhase23CrossTermCommitmentV1::new(error, layout.digest()).unwrap();
     assert_eq!(cross.preimage_layout_digest(), layout.digest());
     assert_ne!(cross.digest(), [0; 32]);
-
     assert_eq!(
         composition_context_digest_v1(&[]),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
@@ -250,7 +234,6 @@ fn public_release_history_types_enforce_exact_geometry_and_canonical_encodings()
         [0; 32]
     );
 }
-
 fn fake_materializer_chunk(logical_values: u32, values: &[u64]) -> ZkAmsT256PackedPlaintextV1 {
     let layout = zk_ams_t256_packing_layout_v1(logical_values).unwrap();
     ZkAmsT256PackedPlaintextV1 {
@@ -267,7 +250,6 @@ fn fake_materializer_chunk(logical_values: u32, values: &[u64]) -> ZkAmsT256Pack
         digest: [0; 32],
     }
 }
-
 fn fake_materializer_chunks(u: [u64; 2]) -> Vec<ZkAmsT256PackedPlaintextV1> {
     [
         fake_materializer_chunk(1, &[11]),
@@ -279,7 +261,6 @@ fn fake_materializer_chunks(u: [u64; 2]) -> Vec<ZkAmsT256PackedPlaintextV1> {
     ]
     .into()
 }
-
 fn decode_fake_materializer_chunk(
     layout: ZkAmsT256PackingLayoutV1,
     packed: &ZkAmsT256PackedPlaintextV1,
@@ -297,7 +278,6 @@ fn decode_fake_materializer_chunk(
     }
     Ok(())
 }
-
 fn run_fake_materializer(
     chunks: Vec<Result<ZkAmsT256PackedPlaintextV1, ZkAmsMkheErrorV1>>,
 ) -> Result<ZkAmsPhase23MaterializedAccumulatorsV1, ZkAmsMkheErrorV1> {
@@ -313,7 +293,6 @@ fn run_fake_materializer(
         &mut decode_fake_materializer_chunk,
     )
 }
-
 #[test]
 fn owned_chunk_materializer_enforces_schedule_exhaustion_and_incremental_u() {
     let materialized = run_fake_materializer(
@@ -327,7 +306,6 @@ fn owned_chunk_materializer_enforces_schedule_exhaustion_and_incremental_u() {
     assert_eq!(materialized.u, vec![Scalar::from_u64(7)]);
     assert_eq!(materialized.e.len(), 2);
     assert_eq!(materialized.w.len(), 3);
-
     let mut reordered = fake_materializer_chunks([7, 7]);
     reordered.swap(0, 1);
     assert_eq!(
@@ -361,7 +339,6 @@ fn owned_chunk_materializer_enforces_schedule_exhaustion_and_incremental_u() {
         before_partial_error + 1
     );
 }
-
 #[test]
 fn callback_materializer_visibility_stays_parent_private() {
     let source = include_str!("phase23_encrypted.rs");
@@ -373,7 +350,6 @@ fn callback_materializer_visibility_stays_parent_private() {
             .contains("pub fn materialize_release_accumulator_chunk_stream_with_decoder_v1<I, D>(")
     );
 }
-
 #[test]
 fn streaming_large_owner_surface_is_move_only_redacted_and_zeroizing() {
     let phase_source = include_str!("phase23_encrypted.rs");
@@ -501,11 +477,9 @@ fn streaming_large_owner_surface_is_move_only_redacted_and_zeroizing() {
         "#[cfg_attr(test, derive(Clone))]\n#[derive(PartialEq, Eq)]\npub struct ZkAmsPhase23MaterializedAccumulatorsV1"
     ));
     assert!(!phase_source.contains(".field(\"w\", &self.w)"));
-
     let chunk = fake_materializer_chunk(1, &[9]);
     assert!(format!("{chunk:?}").len() < 1_024);
     drop(chunk);
-
     let before_partial_unwind = materialized_zeroized_drop_count_v1();
     let mut decoder_calls = 0_usize;
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -540,7 +514,6 @@ fn streaming_large_owner_surface_is_move_only_redacted_and_zeroizing() {
         materialized_zeroized_drop_count_v1(),
         before_partial_unwind + 1
     );
-
     let before_materialized = materialized_zeroized_drop_count_v1();
     let materialized = run_fake_materializer(
         fake_materializer_chunks([7, 7])
@@ -556,7 +529,6 @@ fn streaming_large_owner_surface_is_move_only_redacted_and_zeroizing() {
         before_materialized + 1
     );
 }
-
 #[test]
 fn canonical_release_maps_layout_order_and_source_shape_are_pinned() {
     let release =
@@ -585,7 +557,6 @@ fn canonical_release_maps_layout_order_and_source_shape_are_pinned() {
         require_release_relation_maps_v1([&tiny_maps[0], &tiny_maps[1], &tiny_maps[2]]),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
-
     let variable_count = 524_288;
     let public_input_count = 89;
     assert_eq!(
@@ -626,7 +597,6 @@ fn canonical_release_maps_layout_order_and_source_shape_are_pinned() {
         ),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     ));
-
     let layout = release.commitment_preimage_layout();
     assert_eq!(layout.version(), 1);
     assert_eq!(layout.message_value_count(), 1_048_576);
@@ -666,7 +636,6 @@ fn canonical_release_maps_layout_order_and_source_shape_are_pinned() {
         validate_commitment_preimage_layout(spliced_layout),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
-
     assert_eq!(
         zk_ams_phase23_release_map_set_digest_v1(),
         Ok(release.digest())
@@ -677,7 +646,6 @@ fn canonical_release_maps_layout_order_and_source_shape_are_pinned() {
         "the canonical release-map KAT drifted"
     );
 }
-
 #[test]
 fn paper_order_manifest_stream_matches_owned_csr_without_row_buffers() {
     let matrix = || {
@@ -725,7 +693,6 @@ fn paper_order_manifest_stream_matches_owned_csr_without_row_buffers() {
             vec![(1, s(6).to_be_bytes()), (4, s(7).to_be_bytes())],
         ]
     );
-
     let owned = |kind| {
         ZkAmsPhase23SparseMapV1::new(
             kind,
@@ -781,7 +748,6 @@ fn paper_order_manifest_stream_matches_owned_csr_without_row_buffers() {
         Ok(())
     );
 }
-
 #[test]
 fn canonical_release_map_source_retains_only_compact_streaming_metadata() {
     let source = include_str!("phase23_encrypted.rs");
@@ -820,7 +786,6 @@ fn canonical_release_map_source_retains_only_compact_streaming_metadata() {
     assert!(!compiler.contains("Vec<"));
     assert!(!compiler.contains("sort"));
 }
-
 struct TestKeys {
     authentication_a: AuthenticationSecret,
     authentication_b: AuthenticationSecret,
@@ -830,7 +795,6 @@ struct TestKeys {
     public_b: IndependentPublicKey,
     roster: PartySet,
 }
-
 impl TestKeys {
     fn generate(profile: &BgvProfile, random: &mut KatRandom) -> Self {
         let authentication_a = AuthenticationSecret::generate(random).unwrap();
@@ -852,7 +816,6 @@ impl TestKeys {
             roster,
         }
     }
-
     fn ordered_secrets(&self) -> Vec<&IndependentSecretKey> {
         if self.secret_a.party < self.secret_b.party {
             vec![&self.secret_a, &self.secret_b]
@@ -860,7 +823,6 @@ impl TestKeys {
             vec![&self.secret_b, &self.secret_a]
         }
     }
-
     fn ordered_participants(&self) -> Vec<(&IndependentSecretKey, &AuthenticationSecret)> {
         let mut participants = vec![
             (&self.secret_a, &self.authentication_a),
@@ -870,7 +832,6 @@ impl TestKeys {
         participants
     }
 }
-
 fn test_binding(
     profile: &BgvProfile,
     roster: &PartySet,
@@ -890,7 +851,6 @@ fn test_binding(
     )
     .unwrap()
 }
-
 fn encrypt_collective_vector(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -916,7 +876,6 @@ fn encrypt_collective_vector(
         .collect();
     EncryptedPackedVector::new(profile, binding, family, values.len() as u32, chunks).unwrap()
 }
-
 fn encrypt_collective_replicated_u(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -941,7 +900,6 @@ fn encrypt_collective_replicated_u(
     )
     .unwrap()
 }
-
 fn decrypt_collective_vector(
     profile: &BgvProfile,
     vector: &EncryptedPackedVector,
@@ -971,7 +929,6 @@ fn decrypt_collective_vector(
     output.truncate(logical);
     Ok(output)
 }
-
 fn generate_product_key(
     profile: &BgvProfile,
     party_set: &PartySet,
@@ -1012,7 +969,6 @@ fn generate_product_key(
         .collect::<Vec<_>>();
     aggregate_rkg_round_two(profile, &aggregate, &second).unwrap()
 }
-
 fn evaluation_keys(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -1118,7 +1074,6 @@ fn evaluation_keys(
     ];
     (galois, product)
 }
-
 fn make_state(
     profile: &BgvProfile,
     binding: ZkAmsPhase23EncryptedBindingV1,
@@ -1186,7 +1141,6 @@ fn make_state(
         w_commitment: w_commitment.iter().copied().map(s).collect(),
     }
 }
-
 fn evaluate_sparse_oracle(map: &ZkAmsPhase23SparseMapV1, input: &[u64]) -> Vec<u64> {
     (0..map.row_count as usize)
         .map(|row| {
@@ -1202,14 +1156,12 @@ fn evaluate_sparse_oracle(map: &ZkAmsPhase23SparseMapV1, input: &[u64]) -> Vec<u
         })
         .collect()
 }
-
 fn linear_fold_oracle(left: &[u64], right: &[u64], challenge: u64) -> Vec<u64> {
     left.iter()
         .zip(right)
         .map(|(left, right)| (left + challenge * right) % 17)
         .collect()
 }
-
 fn quadratic_fold_oracle(
     accumulated: &[u64],
     cross: &[u64],
@@ -1226,7 +1178,6 @@ fn quadratic_fold_oracle(
         })
         .collect()
 }
-
 #[test]
 fn canonical_sparse_csr_wire_roundtrip_and_digest_are_exact() {
     let map = sample_map();
@@ -1249,7 +1200,6 @@ fn canonical_sparse_csr_wire_roundtrip_and_digest_are_exact() {
     assert_eq!(status.release_kat_digest, [0; 32]);
     assert!(!status.release_kat_complete);
 }
-
 #[test]
 fn malformed_csr_noncanonical_coefficients_and_resource_bombs_fail_before_use() {
     let baseline = sample_map();
@@ -1273,7 +1223,6 @@ fn malformed_csr_noncanonical_coefficients_and_resource_bombs_fail_before_use() 
         mutate(&mut invalid);
         assert!(validate_sparse_map(&invalid).is_err());
     }
-
     let bytes = baseline.to_canonical_bytes().unwrap();
     for length in [0, 1, 17, bytes.len() - 1] {
         assert!(ZkAmsPhase23SparseMapV1::from_canonical_bytes(&bytes[..length]).is_err());
@@ -1298,7 +1247,6 @@ fn malformed_csr_noncanonical_coefficients_and_resource_bombs_fail_before_use() 
         Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
     );
 }
-
 #[test]
 fn tiny_conjugate_slot_packing_multiplies_and_rotates_as_the_ciphertext_oracle_requires() {
     let profile = test_profile();
@@ -1329,7 +1277,6 @@ fn tiny_conjugate_slot_packing_multiplies_and_rotates_as_the_ciphertext_oracle_r
         );
     }
 }
-
 #[test]
 fn signed_binary_rotation_preflights_the_complete_work() {
     for slots in [2, 4, 8, 16, 32, 256, 65_536] {
@@ -1345,19 +1292,16 @@ fn signed_binary_rotation_preflights_the_complete_work() {
             super::super::phase23_max_composed_rotation_key_switch_count(slots).unwrap()
         );
     }
-
     let base = test_profile();
     let party_a = ZkAmsMkhePartyIdV1::new([1; 32]).unwrap();
     let party_b = ZkAmsMkhePartyIdV1::new([2; 32]).unwrap();
     let roster = PartySet::singleton(party_a)
         .union(&PartySet::singleton(party_b))
         .unwrap();
-
     let rotation_multiplications =
         phase23_rotation_ring_multiplication_count(&base, roster.parties.len(), 1).unwrap();
     let ring_work = super::super::ring_multiplication_work(&base).unwrap();
     let rotation_work = ring_work * u64::try_from(rotation_multiplications).unwrap();
-
     let mut below_rotation = base.clone();
     below_rotation.max_work_units = rotation_work - 1;
     let below_binding = test_binding(&below_rotation, &roster, [3; 32], [4; 32]);
@@ -1366,7 +1310,6 @@ fn signed_binary_rotation_preflights_the_complete_work() {
         rotate_ciphertext_by_slot_shift(&below_rotation, below_binding, &below_ciphertext, 1, &[],),
         Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
     );
-
     let mut exact_rotation = base.clone();
     exact_rotation.max_work_units = rotation_work;
     let exact_binding = test_binding(&exact_rotation, &roster, [3; 32], [4; 32]);
@@ -1376,7 +1319,6 @@ fn signed_binary_rotation_preflights_the_complete_work() {
         Err(ZkAmsMkheErrorV1::MissingEvaluatedKey)
     );
 }
-
 #[test]
 fn materialized_six_family_wire_is_canonical_and_mutation_closed() {
     let shape = ZkAmsPhase23AccumulatorShapeV1::new(2, 6, 3, 5, 2).unwrap();
@@ -1420,14 +1362,12 @@ fn materialized_six_family_wire_is_canonical_and_mutation_closed() {
     trailing.push(0);
     assert!(read_materialized_test(&trailing).is_err());
 }
-
 #[test]
 fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
     struct PrefixFailingWriter {
         prefix: Vec<u8>,
         remaining: usize,
     }
-
     impl std::io::Write for PrefixFailingWriter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             if self.remaining == 0 {
@@ -1438,16 +1378,13 @@ fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
             self.remaining -= written;
             Ok(written)
         }
-
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
-
     struct PanicOnScalarWriter {
         written: usize,
     }
-
     impl std::io::Write for PanicOnScalarWriter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             if self.written >= PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1 {
@@ -1456,18 +1393,15 @@ fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
             self.written += bytes.len();
             Ok(bytes.len())
         }
-
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
-
     struct PanicAfterReader<'a> {
         bytes: &'a [u8],
         position: usize,
         panic_at: usize,
     }
-
     impl std::io::Read for PanicAfterReader<'_> {
         fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
             if self.position >= self.panic_at {
@@ -1483,7 +1417,6 @@ fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
             Ok(read)
         }
     }
-
     let shape = ZkAmsPhase23AccumulatorShapeV1::new(2, 2, 1, 2, 1).unwrap();
     let materialized = materialized_from_values(
         release_profile_v1().digest().unwrap(),
@@ -1502,7 +1435,6 @@ fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
     )
     .unwrap();
     let legacy_bytes = legacy_materialized_canonical_bytes_for_test(&materialized).unwrap();
-
     let scalar_scratch_count = || {
         super::super::phase23_materialized_wire::materialized_scalar_bytes_zeroized_drop_count_v1()
     };
@@ -1521,7 +1453,6 @@ fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
     );
     assert_eq!(failing_writer.prefix, legacy_bytes[..writer_prefix]);
     assert_eq!(scalar_scratch_count(), before_writer_error + 1);
-
     let before_writer_unwind = scalar_scratch_count();
     let mut panic_writer = PanicOnScalarWriter { written: 0 };
     let writer_unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1533,7 +1464,6 @@ fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
     }));
     assert!(writer_unwind.is_err());
     assert_eq!(scalar_scratch_count(), before_writer_unwind + 1);
-
     let scratch_count = || {
         super::super::phase23_materialized_wire::materialized_wire_buffer_zeroized_drop_count_v1()
     };
@@ -1542,7 +1472,6 @@ fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
     assert_eq!(decoded, materialized);
     assert_eq!(scratch_count(), before_success + 1);
     drop(decoded);
-
     let before_error_scratch = scratch_count();
     let before_error_owner = materialized_zeroized_drop_count_v1();
     let mut wrong_profile = legacy_bytes.clone();
@@ -1553,7 +1482,6 @@ fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
     );
     assert_eq!(scratch_count(), before_error_scratch + 1);
     assert_eq!(materialized_zeroized_drop_count_v1(), before_error_owner);
-
     let before_error_scratch = scratch_count();
     let mut invalid_header = legacy_bytes.clone();
     invalid_header[1 + 5 * 32] = 0;
@@ -1563,7 +1491,6 @@ fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
     );
     assert_eq!(scratch_count(), before_error_scratch + 1);
     assert_eq!(materialized_zeroized_drop_count_v1(), before_error_owner);
-
     let before_error_scratch = scratch_count();
     let partial_body_end = PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1 + 33;
     assert_eq!(
@@ -1575,7 +1502,6 @@ fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
         materialized_zeroized_drop_count_v1(),
         before_error_owner + 1
     );
-
     let before_unwind_scratch = scratch_count();
     let before_unwind_owner = materialized_zeroized_drop_count_v1();
     let mut panic_reader = PanicAfterReader {
@@ -1596,19 +1522,16 @@ fn materialized_streaming_codec_zeroizes_scratch_and_partial_owner() {
         before_unwind_owner + 1
     );
 }
-
 #[test]
 fn replicated_u_rejects_mismatched_slots_chunks_lengths_and_legacy_scalar_shape() {
     let u = s(3);
     assert_eq!(collapse_replicated_u_values(vec![u; 8], 8), Ok(vec![u]));
-
     let mut mismatched_slot = vec![u; 8];
     mismatched_slot[2] = s(4);
     assert_eq!(
         collapse_replicated_u_values(mismatched_slot, 8),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
-
     let mut mismatched_chunk = vec![u; 8];
     mismatched_chunk[4] = s(5);
     assert_eq!(
@@ -1624,7 +1547,6 @@ fn replicated_u_rejects_mismatched_slots_chunks_lengths_and_legacy_scalar_shape(
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold),
         "the pre-release single-slot U shape must not be accepted"
     );
-
     let profile = test_profile();
     let mut random = KatRandom::new(b"phase23-replicated-u-negative-kat");
     let keys = TestKeys::generate(&profile, &mut random);
@@ -1649,14 +1571,12 @@ fn replicated_u_rejects_mismatched_slots_chunks_lengths_and_legacy_scalar_shape(
     assert_eq!(valid.u.logical_value_count, valid.e.logical_value_count);
     assert_eq!(valid.u.chunks.len(), 2);
     assert_eq!(valid.u.chunks[0], valid.u.chunks[1]);
-
     let mut different_ciphertext_chunk = valid.clone();
     different_ciphertext_chunk.u.chunks[1] = zero_ciphertext(&profile, &keys.roster, 0).unwrap();
     assert_eq!(
         validate_accumulator_state(&profile, binding, &different_ciphertext_chunk),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
-
     let mut wrong_logical_length = valid.clone();
     wrong_logical_length.u.logical_value_count = 5;
     wrong_logical_length.u.digest =
@@ -1665,7 +1585,6 @@ fn replicated_u_rejects_mismatched_slots_chunks_lengths_and_legacy_scalar_shape(
         validate_accumulator_state(&profile, binding, &wrong_logical_length),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
-
     let mut legacy_single_slot = valid.clone();
     legacy_single_slot.u = EncryptedPackedVector::new(
         &profile,
@@ -1680,14 +1599,12 @@ fn replicated_u_rejects_mismatched_slots_chunks_lengths_and_legacy_scalar_shape(
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
 }
-
 #[test]
 fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_oracle() {
     let profile = test_profile();
     let mut random = KatRandom::new(b"phase23-encrypted-complete-kat");
     let keys = TestKeys::generate(&profile, &mut random);
     let provisional = test_binding(&profile, &keys.roster, [0x91; 32], [0x92; 32]);
-
     let acc_x = [2, 5];
     let acc_u = [3];
     let acc_e = [1, 2, 3, 4, 5, 6];
@@ -1725,7 +1642,6 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
     let binding = test_binding(&profile, &keys.roster, accumulated_digest, incoming_digest);
     validate_accumulator_state(&profile, binding, &accumulated).unwrap();
     validate_accumulator_state(&profile, binding, &incoming).unwrap();
-
     let map_a = sample_map();
     let map_b = sparse_map(
         ZkAmsPhase23MapKindV1::B,
@@ -1756,7 +1672,6 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
     assert_eq!(galois_keys.len(), 2 * (2 * schedule_bits - 1));
     assert_eq!(canonical_slot_shift_decomposition(4, 3), Ok((true, 1)));
     assert_eq!(canonical_slot_shift_decomposition(16, 7), Ok((true, 9)));
-
     let acc_z = acc_w
         .iter()
         .chain(&acc_x)
@@ -1782,7 +1697,6 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
         decrypt_collective_vector(&profile, &encrypted_az, &keys).unwrap(),
         evaluate_sparse_oracle(&map_a, &acc_z)
     );
-
     let cross = encrypted_equation_6(
         &profile,
         binding,
@@ -1811,7 +1725,6 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
     let decrypted_cross = decrypt_collective_vector(&profile, &cross, &keys).unwrap();
     assert_eq!(decrypted_cross, cross_oracle);
     assert_eq!(cross.chunks[0].level, 1);
-
     let r_t_values = [3, 10, 12];
     let r_t = encrypt_collective_vector(
         &profile,
@@ -1955,7 +1868,6 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
     );
     assert_eq!(folded.e.chunks[0].level, 1);
     assert_eq!(folded.r_e.chunks[0].level, 0);
-
     let x = decrypt_collective_vector(&profile, &folded.x, &keys).unwrap();
     let u = decrypt_collective_vector(&profile, &folded.u, &keys).unwrap();
     let e = decrypt_collective_vector(&profile, &folded.e, &keys).unwrap();
@@ -1991,7 +1903,6 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
         read_materialized_test(&materialized_wire),
         Ok(materialized.clone())
     );
-
     // Missing, duplicated, or transcript-spliced evaluated keys must never
     // trigger a plaintext or partial-roster fallback.
     assert!(
@@ -2075,7 +1986,6 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
         )
         .is_err()
     );
-
     // Session, fold, state, and Fiat--Shamir replay/substitution attempts
     // are rejected even when each substituted object is otherwise valid.
     let different_batch_binding = ZkAmsPhase23EncryptedBindingV1::new(
@@ -2170,7 +2080,6 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
         )
         .is_err()
     );
-
     let wrong_dimension_map = sparse_map(
         ZkAmsPhase23MapKindV1::A,
         7,
@@ -2209,7 +2118,6 @@ fn encrypted_sparse_equations_6_7_and_9_11_match_independent_two_party_scalar_or
         decrypt_collective_vector(&profile, &nonzero_padding, &keys),
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     );
-
     let mut kat = Keccak256::new();
     kat.update(b"iroha.zk-ams.v1.phase23.encrypted-tiny-complete-kat");
     for map in [&map_a, &map_b, &map_c, &g_map, &h_map] {

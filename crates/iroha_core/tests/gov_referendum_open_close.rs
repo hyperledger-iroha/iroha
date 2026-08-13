@@ -5,7 +5,6 @@
     clippy::too_many_lines,
     clippy::items_after_statements
 )]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -27,7 +26,6 @@ use iroha_data_model::{
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
-
 fn deploy_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -39,11 +37,9 @@ fn deploy_contract_address() -> iroha_data_model::smart_contract::ContractAddres
     )
     .expect("deploy contract address")
 }
-
 #[test]
 fn referendum_open_and_close_by_height() {
     use nonzero_ext::nonzero;
-
     // Build minimal state.
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -56,7 +52,6 @@ fn referendum_open_and_close_by_height() {
     let mut cfg = state.gov.clone();
     cfg.parliament_term_blocks = 100;
     state.set_gov(cfg);
-
     // Block H=1: create a proposed referendum with explicit [2,3] window.
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let pid = [0xAB; 32];
@@ -121,7 +116,6 @@ fn referendum_open_and_close_by_height() {
             .governance_stage_approvals_mut()
             .insert(rid.clone(), approvals);
         stx1.apply();
-
         let has_opened_at_h1 = sblock1.world.take_external_events().iter().any(|event| {
             matches!(
                 event,
@@ -137,7 +131,6 @@ fn referendum_open_and_close_by_height() {
         assert!(!has_opened_at_h1);
         sblock1.commit().expect("commit block at H=1");
     }
-
     {
         let view = state.view();
         let referendum = view
@@ -155,7 +148,6 @@ fn referendum_open_and_close_by_height() {
         assert!(approvals.quorum_met(ParliamentBody::RulesCommittee, 0));
         assert!(approvals.quorum_met(ParliamentBody::AgendaCouncil, 0));
     }
-
     // Block H=2: opens.
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     {
@@ -182,7 +174,6 @@ fn referendum_open_and_close_by_height() {
         assert!(status_open_at_h2);
         assert!(has_opened_event_at_h2 || status_open_at_h2);
     }
-
     // Block H=3: the inclusive end height remains open.
     let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut sblock3 = state.block(header3);
@@ -207,7 +198,6 @@ fn referendum_open_and_close_by_height() {
         .is_some_and(|record| record.status == GovernanceReferendumStatus::Open);
     assert!(status_open_at_h3);
     assert!(!has_closed_event_at_h3);
-
     // Block H=4: closes at h_end + 1.
     let header4 = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let mut sblock4 = state.block(header4);

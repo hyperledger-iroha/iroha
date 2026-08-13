@@ -1,11 +1,9 @@
 use super::*;
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires local process orchestration"]
 async fn taira_localnet_restart_catchup_behavior() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
-
     let temp_dir = localnet_tempdir("taira-restart")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
@@ -15,6 +13,5 @@ async fn taira_localnet_restart_catchup_behavior() -> Result<()> {
         Ok(())
     }
     .await;
-
     finalize_result(temp_dir, "taira_localnet_restart_catchup_behavior", result)
 }

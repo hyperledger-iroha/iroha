@@ -1,6 +1,5 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
-
 //! # Computations modulo q = 12289
 //!
 //! External callers should only see polynomials modulo `X^n+1` and
@@ -17,9 +16,7 @@
 //!
 //! Appropriate functions are provided to convert between these
 //! representations.
-
 use super::super::table_assets::read_u16_le;
-
 // In the code below, the internal representation uses the q range,
 // and Montgomery multiplications use R = 2^32 instead of the usual
 // R = 2^16. This representation speeds up operations, because if:
@@ -36,7 +33,6 @@ use super::super::table_assets::read_u16_le;
 // In other words, there is no need for a conditional subtraction of the
 // modulus. Also note that the c value above is obtained as a 16x16 product,
 // only the high 16 bits of which are actually needed.
-
 /// Check whether the provided polynomial with small coefficient is
 /// invertible modulo `X^n+1` and modulo q.
 pub fn mqpoly_small_is_invertible(logn: u32, f: &[i8], tmp: &mut [u16]) -> bool {
@@ -49,7 +45,6 @@ pub fn mqpoly_small_is_invertible(logn: u32, f: &[i8], tmp: &mut [u16]) -> bool 
     }
     (r >> 16) != 0
 }
-
 /// Compute `h = g/f mod X^n+1 mod q`.
 ///
 /// This function assumes that `f` is invertible. Output is in external
@@ -66,21 +61,16 @@ pub fn mqpoly_div_small(logn: u32, f: &[i8], g: &[i8], h: &mut [u16], tmp: &mut 
     mqpoly_NTT_to_int(logn, h);
     mqpoly_int_to_ext(logn, h);
 }
-
 /// Maximum squared norm for "small" vectors (floor(beta^2)).
 pub const SQBETA: [u32; 11] = [
     0, // unused
     101498, 208714, 428865, 892039, 1852696, 3842630, 7959734, 16468416, 34034726, 70265242,
 ];
-
 const Q: u32 = 12289;
-
 // -1/q mod 2^32
 const Q1I: u32 = 4143984639;
-
 // 2^64 mod q
 const R2: u32 = 5664;
-
 /// Convert a polynomial with signed coefficients into a polynomial modulo q
 /// (external representation).
 ///
@@ -91,24 +81,20 @@ pub fn mqpoly_signed_to_ext(logn: u32, v: &[i16], d: &mut [u16]) {
         d[i] = x.wrapping_add((x >> 16) & Q) as u16;
     }
 }
-
 // Addition modulo q (internal representation).
 #[inline(always)]
 fn mq_add(x: u32, y: u32) -> u32 {
     // a = q - (x + y)
     // -q <= a <= q - 2  (represented as u32)
     let a = Q.wrapping_sub(x + y);
-
     // If a < 0, add q.
     // b = -(x + y) mod q
     // 0 <= b <= q - 1
     let b = a.wrapping_add(Q & (a >> 16));
-
     // q - b = x + y mod q
     // 1 <= q - b <= q
     Q - b
 }
-
 // Subtraction modulo q (internal representation).
 #[inline(always)]
 fn mq_sub(x: u32, y: u32) -> u32 {
@@ -118,13 +104,11 @@ fn mq_sub(x: u32, y: u32) -> u32 {
     let b = a.wrapping_add(Q & (a >> 16));
     Q - b
 }
-
 // Halving modulo q (internal representation).
 #[inline(always)]
 fn mq_half(x: u32) -> u32 {
     (x + ((x & 1).wrapping_neg() & Q)) >> 1
 }
-
 // mq_mred(x) computes x/2^32 mod q, without output in the [1,q] range.
 // Input must be such that 1 <= x <= 3489673216. Note that this means
 // that we can add up to 23 products together, and mutualize their
@@ -135,19 +119,16 @@ fn mq_mred(x: u32) -> u32 {
     let c = (b >> 16) * Q;
     (c >> 16) + 1
 }
-
 // Montgomery multiplication modulo q (internal representation).
 #[inline(always)]
 fn mq_mmul(x: u32, y: u32) -> u32 {
     mq_mred(x * y)
 }
-
 // Division modulo q (internal representation). If the divisor is zero
 // (represented by q), then the result is zero.
 fn mq_div(x: u32, y: u32) -> u32 {
     // Convert y to Montgomery representation.
     let y = mq_mmul(y, R2);
-
     // 1/y = y^(q-2), with a custom addition chain.
     let y2 = mq_mmul(y, y);
     let y3 = mq_mmul(y2, y);
@@ -167,12 +148,10 @@ fn mq_div(x: u32, y: u32) -> u32 {
     let y6143 = mq_mmul(y5820, y323);
     let y12286 = mq_mmul(y6143, y6143);
     let iy = mq_mmul(y12286, y);
-
     // Multiply by x to get x/y. 1/y is in Montgomery representation but
     // x is not, so the product is in normal (internal) representation.
     mq_mmul(x, iy)
 }
-
 /// Given a polynomial with small coefficients, convert it to internal
 /// representation.
 ///
@@ -183,7 +162,6 @@ pub fn mqpoly_small_to_int(logn: u32, f: &[i8], d: &mut [u16]) {
         d[i] = (Q - x.wrapping_add((x >> 16) & Q)) as u16;
     }
 }
-
 /// Given a polynomial in internal representation, convert it to small
 /// coefficients.
 ///
@@ -204,7 +182,6 @@ pub fn mqpoly_int_to_small(logn: u32, d: &[u16], f: &mut [i8]) -> bool {
     }
     ov == 0
 }
-
 /// Given a polynomial in external representation, convert it to internal
 /// representation (in-place).
 pub fn mqpoly_ext_to_int(logn: u32, a: &mut [u16]) {
@@ -215,7 +192,6 @@ pub fn mqpoly_ext_to_int(logn: u32, a: &mut [u16]) {
         a[i] = (x + (Q & (x.wrapping_sub(1) >> 16))) as u16;
     }
 }
-
 /// Given a polynomial in internal representation, convert it to external
 /// representation (in-place).
 pub fn mqpoly_int_to_ext(logn: u32, a: &mut [u16]) {
@@ -226,7 +202,6 @@ pub fn mqpoly_int_to_ext(logn: u32, a: &mut [u16]) {
         a[i] = x.wrapping_add(Q & (x >> 16)) as u16;
     }
 }
-
 /// Convert a polynomial from internal representation to NTT (in-place).
 pub fn mqpoly_int_to_NTT(logn: u32, a: &mut [u16]) {
     if logn == 0 {
@@ -252,7 +227,6 @@ pub fn mqpoly_int_to_NTT(logn: u32, a: &mut [u16]) {
         t = ht;
     }
 }
-
 /// Convert a polynomial from NTT to internal representation (in-place).
 pub fn mqpoly_NTT_to_int(logn: u32, a: &mut [u16]) {
     if logn == 0 {
@@ -278,7 +252,6 @@ pub fn mqpoly_NTT_to_int(logn: u32, a: &mut [u16]) {
         t = dt;
     }
 }
-
 /// Multiply polynomial `a` by polynomial `b`; both must be in NTT
 /// representation.
 pub fn mqpoly_mul_ntt(logn: u32, a: &mut [u16], b: &[u16]) {
@@ -286,7 +259,6 @@ pub fn mqpoly_mul_ntt(logn: u32, a: &mut [u16], b: &[u16]) {
         a[i] = mq_mmul(mq_mmul(a[i] as u32, b[i] as u32), R2) as u16;
     }
 }
-
 /// Divide polynomial `a` by polynomial `b`; both must be in NTT
 /// representation.
 ///
@@ -302,7 +274,6 @@ pub fn mqpoly_div_ntt(logn: u32, a: &mut [u16], b: &[u16]) -> bool {
     }
     (r >> 16) != 0
 }
-
 /// Subtract polynomial `b` from polynomial `a`; both must be in internal
 /// representation, or both must be in NTT representation.
 pub fn mqpoly_sub_int(logn: u32, a: &mut [u16], b: &[u16]) {
@@ -310,7 +281,6 @@ pub fn mqpoly_sub_int(logn: u32, a: &mut [u16], b: &[u16]) {
         a[i] = mq_sub(a[i] as u32, b[i] as u32) as u16;
     }
 }
-
 /// Get the squared norm of a polynomial modulo q (assuming normalization
 /// of coefficients in `[-q/2,+q/2]`).
 ///
@@ -328,7 +298,6 @@ pub fn mqpoly_sqnorm(logn: u32, a: &[u16]) -> u32 {
     }
     s | (sat >> 31).wrapping_neg()
 }
-
 /// Get the square norm of a polynomial with signed integer coefficients.
 ///
 /// This function assumes that the squared norm fits on 32 bits (this is
@@ -341,7 +310,6 @@ pub fn signed_poly_sqnorm(logn: u32, a: &[i16]) -> u32 {
     }
     s
 }
-
 // NTT factors: if rev10() is the bit-reversal function over 10 bits,
 // then:
 //   GM[i] = (g^rev10(i))*2^32 mod q         (in [1,q])
@@ -350,9 +318,7 @@ pub fn signed_poly_sqnorm(logn: u32, a: &[i16]) -> u32 {
 // The factor 2^32 in GM[i] means that the value is in Montgomery
 // representation; the factor 2^31 for iGM[i] implies the same, with an
 // extra halving already injected in the computation.
-
 const MQ_NTT_BYTES: &[u8; 4_096] = include_bytes!("../assets/comm_ntt_u16le_v1.bin");
-
 const fn decode_mq_ntt(bytes: &[u8; 4_096]) -> ([u16; 1024], [u16; 1024]) {
     let mut gm = [0_u16; 1024];
     let mut inverse_gm = [0_u16; 1024];
@@ -364,7 +330,6 @@ const fn decode_mq_ntt(bytes: &[u8; 4_096]) -> ([u16; 1024], [u16; 1024]) {
     }
     (gm, inverse_gm)
 }
-
 const MQ_NTT_TABLES: ([u16; 1024], [u16; 1024]) = decode_mq_ntt(MQ_NTT_BYTES);
 pub(crate) const GM: [u16; 1024] = MQ_NTT_TABLES.0;
 pub(crate) const iGM: [u16; 1024] = MQ_NTT_TABLES.1;

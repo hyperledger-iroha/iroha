@@ -30,7 +30,6 @@ fn transactions_without_consensus_handshake_metadata(
             if filtered.is_empty() {
                 return None;
             }
-
             assert_eq!(
                 transaction.authority().try_signatory(),
                 Some(genesis_key_pair.public_key()),

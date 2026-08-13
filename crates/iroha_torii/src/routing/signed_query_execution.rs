@@ -12,7 +12,6 @@ pub struct QueryOptions {
     #[allow(dead_code)]
     pub gas_units: Option<u64>,
 }
-
 /// Verify a signed query and return the authenticated request payload.
 #[derive(Debug)]
 pub struct SignedQueryAdmission {
@@ -22,14 +21,12 @@ pub struct SignedQueryAdmission {
     body_read_timeout: Duration,
     replay_cache: ReplayCache,
 }
-
 /// Invalid relationship between signed-query freshness and replay retention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error(
     "signed-query replay retention must exceed twice the maximum clock skew and leave a nonzero request TTL"
 )]
 pub struct SignedQueryAdmissionConfigError;
-
 impl SignedQueryAdmission {
     /// Construct exact-lineage signed-query admission with bounded one-shot replay protection.
     ///
@@ -64,19 +61,16 @@ impl SignedQueryAdmission {
             replay_cache: ReplayCache::new(replay_retention, replay_capacity),
         })
     }
-
     /// Return the exact genesis-lineage identity accepted by this boundary.
     #[must_use]
     pub const fn network_id(&self) -> NetworkId {
         self.network_id
     }
-
     /// Return the largest signature-bound query lifetime accepted by this boundary.
     #[must_use]
     pub const fn max_time_to_live(&self) -> Duration {
         self.max_time_to_live
     }
-
     /// Return the complete configured interval in which body polling can
     /// still produce an admissible signed query.
     #[must_use]
@@ -84,7 +78,6 @@ impl SignedQueryAdmission {
         self.body_read_timeout
     }
 }
-
 fn signed_query_now_unix_ms() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -101,7 +94,6 @@ fn signed_query_now_unix_ms() -> Result<u64> {
             ))
         })
 }
-
 fn validate_signed_query_context_at(
     payload: &QueryRequestWithAuthority,
     admission: &SignedQueryAdmission,
@@ -112,14 +104,12 @@ fn validate_signed_query_context_at(
             "signed query targets a different network genesis".to_owned(),
         )));
     }
-
     let max_clock_skew_ms = u64::try_from(admission.max_clock_skew.as_millis()).unwrap_or(u64::MAX);
     if payload.creation_time_ms > now_ms.saturating_add(max_clock_skew_ms) {
         return Err(Error::from(ValidationFail::NotPermitted(
             "signed query creation time exceeds the allowed future clock skew".to_owned(),
         )));
     }
-
     let request_ttl = Duration::from_millis(payload.time_to_live_ms.get());
     if request_ttl > admission.max_time_to_live {
         return Err(Error::from(ValidationFail::NotPermitted(format!(
@@ -148,14 +138,12 @@ fn validate_signed_query_context_at(
     }
     Ok(())
 }
-
 fn consume_signed_query_nonce(
     payload: &QueryRequestWithAuthority,
     admission: &SignedQueryAdmission,
 ) -> Result<()> {
     consume_signed_query_replay_key(payload, None, admission)
 }
-
 /// Consume one authenticated internal route-scan replay key.
 ///
 /// A fanout coordinator consumes the client nonce once. Its sequential route
@@ -169,7 +157,6 @@ pub fn consume_signed_query_route_scan_nonce(
 ) -> Result<()> {
     consume_signed_query_replay_key(payload, Some(route), admission)
 }
-
 fn consume_signed_query_replay_key(
     payload: &QueryRequestWithAuthority,
     route: Option<RoutingDecision>,
@@ -177,7 +164,6 @@ fn consume_signed_query_replay_key(
 ) -> Result<()> {
     const CLIENT_DOMAIN: &[u8] = b"iroha:torii:signed-query-client-replay:v1\0";
     const ROUTE_DOMAIN: &[u8] = b"iroha:torii:signed-query-route-replay:v1\0";
-
     let replay_key = Hash::new_from_writer(|writer| {
         std::io::Write::write_all(
             writer,
@@ -243,7 +229,6 @@ fn consume_signed_query_replay_key(
         )),
     }
 }
-
 /// Verify and consume one exact-lineage, fresh signed query request.
 ///
 /// Network and time bounds are checked before signature work. The nonce is consumed only after a
@@ -255,7 +240,6 @@ pub fn verify_signed_query_request(
     let now_ms = signed_query_now_unix_ms()?;
     verify_signed_query_request_at(query, admission, now_ms)
 }
-
 /// Authenticate a fresh internal fanout route scan without consuming the
 /// client-wide nonce a second time.
 ///
@@ -270,7 +254,6 @@ pub fn authenticate_signed_query_route_scan_request(
     let now_ms = signed_query_now_unix_ms()?;
     authenticate_signed_query_request_at(query, admission, now_ms)
 }
-
 fn verify_signed_query_request_at(
     query: SignedQuery,
     admission: &SignedQueryAdmission,
@@ -280,7 +263,6 @@ fn verify_signed_query_request_at(
     consume_signed_query_nonce(&payload, admission)?;
     Ok(payload)
 }
-
 fn authenticate_signed_query_request_at(
     query: SignedQuery,
     admission: &SignedQueryAdmission,
@@ -314,7 +296,6 @@ fn authenticate_signed_query_request_at(
     })?;
     Ok(query.payload)
 }
-
 #[cfg(test)]
 mod signed_query_verification_tests {
     use iroha_crypto::SignatureOf;
@@ -326,21 +307,16 @@ mod signed_query_verification_tests {
             executor::prelude::FindExecutorDataModel, runtime::prelude::FindAbiVersion,
         },
     };
-
     use super::*;
-
     const NOW_MS: u64 = 1_000_000;
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
     }
-
     fn admission_for(network_id: NetworkId) -> SignedQueryAdmission {
         admission_with_capacity(network_id, NonZeroUsize::new(16).expect("nonzero capacity"))
     }
-
     fn admission_with_capacity(
         network_id: NetworkId,
         replay_capacity: NonZeroUsize,
@@ -353,7 +329,6 @@ mod signed_query_verification_tests {
         )
         .expect("valid signed-query admission fixture")
     }
-
     fn signed_find_abi_version(
         key_pair: &KeyPair,
         network_id: NetworkId,
@@ -372,7 +347,6 @@ mod signed_query_verification_tests {
             )
             .sign(key_pair)
     }
-
     fn fresh_signed_find_abi_version(
         key_pair: &KeyPair,
         network_id: NetworkId,
@@ -380,18 +354,15 @@ mod signed_query_verification_tests {
     ) -> SignedQuery {
         signed_find_abi_version(key_pair, network_id, NOW_MS, 10_000, nonce_seed)
     }
-
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn signature_of_with_malformed_ed25519_r<T>(
         signature: &SignatureOf<T>,
         replacement_r: &[u8; 32],
@@ -400,7 +371,6 @@ mod signed_query_verification_tests {
         payload[..replacement_r.len()].copy_from_slice(replacement_r);
         SignatureOf::from_signature(Signature::from_bytes(&payload))
     }
-
     #[test]
     fn body_read_timeout_covers_future_skew_and_complete_ttl() {
         let admission = SignedQueryAdmission::new(
@@ -410,11 +380,9 @@ mod signed_query_verification_tests {
             NonZeroUsize::new(1).expect("nonzero replay capacity"),
         )
         .expect("valid signed-query admission window");
-
         assert_eq!(admission.max_time_to_live(), Duration::from_secs(8));
         assert_eq!(admission.body_read_timeout(), Duration::from_secs(10));
     }
-
     #[test]
     fn verified_signed_query_returns_authenticated_payload() {
         let key_pair = checked_routing_fixture_keypair(
@@ -426,18 +394,15 @@ mod signed_query_verification_tests {
         let network_id = network_id(0x31);
         let admission = admission_for(network_id);
         let signed = fresh_signed_find_abi_version(&key_pair, network_id, 1);
-
         let verified = verify_signed_query_request_at(signed, &admission, NOW_MS)
             .expect("signed query should verify");
         let (verified_authority, verified_request) = verified.into_parts();
-
         assert_eq!(verified_authority, authority);
         assert!(matches!(
             verified_request,
             QueryRequest::Singular(SingularQueryBox::FindAbiVersion(_))
         ));
     }
-
     #[test]
     fn verify_signed_query_rejects_mismatched_authority() {
         let signer = checked_routing_fixture_keypair(
@@ -454,10 +419,8 @@ mod signed_query_verification_tests {
         let admission = admission_for(network_id);
         let mut signed = fresh_signed_find_abi_version(&signer, network_id, 2);
         signed.payload.authority = AccountId::new(other.public_key().clone());
-
         assert!(verify_signed_query_request_at(signed, &admission, NOW_MS).is_err());
     }
-
     #[test]
     fn verify_signed_query_rejects_multisig_authority_without_panicking() {
         let signer = checked_routing_fixture_keypair(
@@ -472,13 +435,11 @@ mod signed_query_verification_tests {
         let admission = admission_for(network_id);
         let mut malformed = fresh_signed_find_abi_version(&signer, network_id, 3);
         malformed.payload.authority = AccountId::new_multisig(policy);
-
         let response = match verify_signed_query_request_at(malformed, &admission, NOW_MS) {
             Ok(_) => panic!("directly signed multisig query authority must be rejected"),
             Err(error) => error.into_response(),
         };
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
         verify_signed_query_request_at(
             fresh_signed_find_abi_version(&signer, network_id, 3),
             &admission,
@@ -486,7 +447,6 @@ mod signed_query_verification_tests {
         )
         .expect("a valid follow-up query must still verify");
     }
-
     #[test]
     fn verify_signed_query_rejects_malformed_ed25519_signature_r() {
         let signer = checked_routing_fixture_keypair(
@@ -505,7 +465,6 @@ mod signed_query_verification_tests {
                 &invalid_signed.signature.0,
                 &replacement_r,
             ));
-
             let err = match verify_signed_query_request_at(invalid_signed, &admission, NOW_MS) {
                 Ok(_) => panic!("malformed signed query signature R must fail admission"),
                 Err(err) => err,
@@ -517,7 +476,6 @@ mod signed_query_verification_tests {
             );
         }
     }
-
     #[test]
     fn verify_signed_query_rejects_malformed_mldsa_signature_lengths() {
         let signer = checked_routing_fixture_keypair(
@@ -533,7 +491,6 @@ mod signed_query_verification_tests {
             NOW_MS,
         )
         .expect("valid ML-DSA signed query should verify before mutation");
-
         for label in ["truncated", "extended"] {
             let mut invalid_signed = fresh_signed_find_abi_version(&signer, network_id, 6);
             let mut malformed_payload = invalid_signed.signature.0.payload().to_vec();
@@ -547,7 +504,6 @@ mod signed_query_verification_tests {
             invalid_signed.signature = QuerySignature(SignatureOf::from_signature(
                 Signature::from_bytes(&malformed_payload),
             ));
-
             let err = match verify_signed_query_request_at(invalid_signed, &admission, NOW_MS) {
                 Ok(_) => {
                     panic!("malformed signed query ML-DSA signature length must fail admission")
@@ -561,7 +517,6 @@ mod signed_query_verification_tests {
             );
         }
     }
-
     #[test]
     fn signed_query_cannot_cross_genesis_lineages() {
         let signer = checked_routing_fixture_keypair(
@@ -580,7 +535,6 @@ mod signed_query_verification_tests {
             Err(error) => error,
         };
         assert!(format!("{error:?}").contains("different network genesis"));
-
         verify_signed_query_request_at(
             fresh_signed_find_abi_version(&signer, source_network, 7),
             &admission_for(source_network),
@@ -588,7 +542,6 @@ mod signed_query_verification_tests {
         )
         .expect("wrong-network rejection must not invalidate the original request");
     }
-
     #[test]
     fn signed_query_rejects_expired_and_excessively_future_timestamps() {
         let signer = checked_routing_fixture_keypair(
@@ -598,7 +551,6 @@ mod signed_query_verification_tests {
         );
         let network_id = network_id(0x43);
         let admission = admission_for(network_id);
-
         let expired = signed_find_abi_version(&signer, network_id, NOW_MS - 10_000, 10_000, 8);
         let error = match verify_signed_query_request_at(expired, &admission, NOW_MS) {
             Ok(_) => panic!("expiry is exclusive at creation time plus TTL"),
@@ -608,7 +560,6 @@ mod signed_query_verification_tests {
             error,
             Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Expired))
         ));
-
         let future = signed_find_abi_version(&signer, network_id, NOW_MS + 1_001, 10_000, 9);
         let error = match verify_signed_query_request_at(future, &admission, NOW_MS) {
             Ok(_) => panic!("creation time beyond clock skew must fail"),
@@ -616,7 +567,6 @@ mod signed_query_verification_tests {
         };
         assert!(format!("{error:?}").contains("future clock skew"));
     }
-
     #[test]
     fn signed_query_rejects_zero_nonce_and_ttl_beyond_replay_retention() {
         let signer = checked_routing_fixture_keypair(
@@ -626,14 +576,12 @@ mod signed_query_verification_tests {
         );
         let network_id = network_id(0x49);
         let admission = admission_for(network_id);
-
         let zero_nonce = signed_find_abi_version(&signer, network_id, NOW_MS, 10_000, 0);
         let error = match verify_signed_query_request_at(zero_nonce, &admission, NOW_MS) {
             Ok(_) => panic!("the all-zero nonce sentinel must fail closed"),
             Err(error) => error,
         };
         assert!(format!("{error:?}").contains("nonce must not be all-zero"));
-
         let excessive_ttl = signed_find_abi_version(&signer, network_id, NOW_MS, 10_001, 14);
         let error = match verify_signed_query_request_at(excessive_ttl, &admission, NOW_MS) {
             Ok(_) => panic!("request lifetime must fit entirely inside replay retention"),
@@ -641,7 +589,6 @@ mod signed_query_verification_tests {
         };
         assert!(format!("{error:?}").contains("replay-retention bound"));
     }
-
     #[test]
     fn every_signed_context_field_is_integrity_protected() {
         let signer = checked_routing_fixture_keypair(
@@ -652,36 +599,29 @@ mod signed_query_verification_tests {
         let source_network = network_id(0x44);
         let admission = admission_for(source_network);
         let mut mutations = Vec::new();
-
         let mut changed_network = fresh_signed_find_abi_version(&signer, source_network, 10);
         changed_network.payload.network_id = network_id(0x45);
         mutations.push(("network_id", changed_network));
-
         let mut changed_creation_time = fresh_signed_find_abi_version(&signer, source_network, 10);
         changed_creation_time.payload.creation_time_ms += 1;
         mutations.push(("creation_time_ms", changed_creation_time));
-
         let mut changed_ttl = fresh_signed_find_abi_version(&signer, source_network, 10);
         changed_ttl.payload.time_to_live_ms = NonZeroU64::new(9_999).expect("nonzero TTL");
         mutations.push(("time_to_live_ms", changed_ttl));
-
         let mut changed_nonce = fresh_signed_find_abi_version(&signer, source_network, 10);
         changed_nonce.payload.nonce = [0x46; 32];
         mutations.push(("nonce", changed_nonce));
-
         let mut changed_request = fresh_signed_find_abi_version(&signer, source_network, 10);
         changed_request.payload.request = QueryRequest::Singular(
             SingularQueryBox::FindExecutorDataModel(FindExecutorDataModel),
         );
         mutations.push(("request", changed_request));
-
         for (field, mutation) in mutations {
             let _error = match verify_signed_query_request_at(mutation, &admission, NOW_MS) {
                 Ok(_) => panic!("tampering with {field} must be rejected"),
                 Err(error) => error,
             };
         }
-
         verify_signed_query_request_at(
             fresh_signed_find_abi_version(&signer, source_network, 10),
             &admission,
@@ -689,7 +629,6 @@ mod signed_query_verification_tests {
         )
         .expect("tampered requests must not consume the authentic nonce");
     }
-
     #[test]
     fn signed_query_nonce_is_consumed_exactly_once() {
         let signer = checked_routing_fixture_keypair(
@@ -715,7 +654,6 @@ mod signed_query_verification_tests {
         };
         assert!(format!("{error:?}").contains("nonce already used"));
     }
-
     #[test]
     fn fanout_route_replay_keys_are_exact_route_scoped() {
         let signer = checked_routing_fixture_keypair(
@@ -727,7 +665,6 @@ mod signed_query_verification_tests {
         let admission = admission_for(network_id);
         let first_route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(9));
         let second_route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
-
         let client = verify_signed_query_request_at(
             fresh_signed_find_abi_version(&signer, network_id, 12),
             &admission,
@@ -736,7 +673,6 @@ mod signed_query_verification_tests {
         .expect("the fanout coordinator consumes the client nonce once");
         consume_signed_query_route_scan_nonce(&client, first_route, &admission)
             .expect("the first authorized route has an independent replay key");
-
         let second = authenticate_signed_query_request_at(
             fresh_signed_find_abi_version(&signer, network_id, 12),
             &admission,
@@ -745,7 +681,6 @@ mod signed_query_verification_tests {
         .expect("an internal route scan re-authenticates the client signature");
         consume_signed_query_route_scan_nonce(&second, second_route, &admission)
             .expect("one validator may serve a second authorized dataspace");
-
         let replay = authenticate_signed_query_request_at(
             fresh_signed_find_abi_version(&signer, network_id, 12),
             &admission,
@@ -756,7 +691,6 @@ mod signed_query_verification_tests {
             .expect_err("the same internal route scan must remain one-shot");
         assert!(format!("{error:?}").contains("nonce already used"));
     }
-
     #[test]
     fn signed_query_replay_cache_saturation_fails_closed_without_eviction() {
         let signer = checked_routing_fixture_keypair(
@@ -770,7 +704,6 @@ mod signed_query_verification_tests {
             NonZeroUsize::new(1).expect("nonzero replay capacity"),
         );
         let second = fresh_signed_find_abi_version(&signer, network_id, 13);
-
         verify_signed_query_request_at(
             fresh_signed_find_abi_version(&signer, network_id, 12),
             &admission,
@@ -787,7 +720,6 @@ mod signed_query_verification_tests {
                 QueryExecutionFail::CapacityLimit
             ))
         ));
-
         let error = match verify_signed_query_request_at(
             fresh_signed_find_abi_version(&signer, network_id, 12),
             &admission,
@@ -799,7 +731,6 @@ mod signed_query_verification_tests {
         assert!(format!("{error:?}").contains("nonce already used"));
     }
 }
-
 /// Immutable ordinary-query execution facts shared by admission and Core.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OrdinaryQueryExecutionPlan {
@@ -811,19 +742,16 @@ pub(crate) struct OrdinaryQueryExecutionPlan {
     requested_gas_budget: Option<u64>,
     continue_budget: Option<u64>,
 }
-
 impl OrdinaryQueryExecutionPlan {
     pub(crate) fn is_stored_start(self, request: &iroha_data_model::query::QueryRequest) -> bool {
         self.mode == iroha_core::query::snapshot::CursorMode::Stored
             && matches!(request, iroha_data_model::query::QueryRequest::Start(_))
     }
-
     /// Whether this request needs the complete source-bounded singular lane.
     pub(crate) const fn requires_singular_execution(self) -> bool {
         self.singular_execution
     }
 }
-
 /// Capture one app-local ordinary policy before any weighted promotion.
 pub(crate) fn ordinary_query_execution_plan(
     state: &CoreState,
@@ -835,7 +763,6 @@ pub(crate) fn ordinary_query_execution_plan(
         query::snapshot::CursorMode,
         smartcontracts::isi::query::{QueryCountMode, QueryLimits},
     };
-
     let pipeline = state.pipeline_snapshot();
     let configured_mode = || match pipeline.query_default_cursor_mode {
         iroha_config::parameters::actual::QueryCursorMode::Ephemeral => CursorMode::Ephemeral,
@@ -853,7 +780,6 @@ pub(crate) fn ordinary_query_execution_plan(
         }
         None => configured_mode(),
     };
-
     let continue_budget = match request {
         iroha_data_model::query::QueryRequest::Continue(cursor) => cursor.gas_budget,
         _ => None,
@@ -872,7 +798,6 @@ pub(crate) fn ordinary_query_execution_plan(
             .into());
         }
     }
-
     let count_mode = match opts.count_mode.as_deref() {
         Some("exact") => QueryCountMode::Exact,
         Some("bounded") | None => QueryCountMode::Bounded,
@@ -903,7 +828,6 @@ pub(crate) fn ordinary_query_execution_plan(
         continue_budget,
     })
 }
-
 /// Execute an ordinary query while Core owns the server's weighted lease.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub(crate) async fn execute_admitted_verified_query_with_server_owned_memory(
@@ -918,7 +842,6 @@ pub(crate) async fn execute_admitted_verified_query_with_server_owned_memory(
     use iroha_core::query::snapshot::{
         CursorMode, SnapshotQueryError, run_on_snapshot_with_server_owned_memory_arc,
     };
-
     #[cfg(feature = "telemetry")]
     let start = std::time::Instant::now();
     let authority = query.authority;
@@ -954,7 +877,6 @@ pub(crate) async fn execute_admitted_verified_query_with_server_owned_memory(
             SnapshotQueryError::Execution(execution) => ValidationFail::QueryFailed(execution),
         })
     })?;
-
     #[cfg(feature = "telemetry")]
     if tel.is_enabled() {
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -982,10 +904,8 @@ pub(crate) async fn execute_admitted_verified_query_with_server_owned_memory(
             );
         });
     }
-
     Ok(response)
 }
-
 /// Execute a previously verified query request with the provided options.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub(crate) async fn execute_verified_query_with_opts(
@@ -998,7 +918,6 @@ pub(crate) async fn execute_verified_query_with_opts(
     execute_verified_query_with_opts_inner(live_query_store, state, query, tel, opts, None, None)
         .await
 }
-
 /// Execute a previously verified query while retaining its physical-work admission permit.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub(crate) async fn execute_admitted_verified_query_with_opts(
@@ -1020,7 +939,6 @@ pub(crate) async fn execute_admitted_verified_query_with_opts(
     )
     .await
 }
-
 /// Output-specific Core limits carried by one server-owned fanout execution.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum FanoutQueryOutputLimits {
@@ -1029,7 +947,6 @@ pub(crate) enum FanoutQueryOutputLimits {
     /// Bounded producer/ownership limits for an admitted singular query.
     Singular(iroha_core::smartcontracts::isi::query::SingularQueryOutputLimits),
 }
-
 /// Execute an admitted verified query in the server-owned bounded fanout lane.
 ///
 /// This entry point always uses ephemeral cursor semantics and carries both the
@@ -1057,7 +974,6 @@ pub(crate) async fn execute_admitted_verified_query_for_fanout(
     )
     .await
 }
-
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 async fn execute_verified_query_with_opts_inner(
     live_query_store: LiveQueryStoreHandle,
@@ -1082,11 +998,9 @@ async fn execute_verified_query_with_opts_inner(
     };
     #[cfg(feature = "telemetry")]
     let start = std::time::Instant::now();
-
     let authority = query.authority.clone();
     let request = query.request;
     let pipeline = state.pipeline_snapshot();
-
     // Map config cursor mode to lane cursor mode (with query override)
     let mode = if fanout_execution.is_some() {
         LaneCursorMode::Ephemeral
@@ -1121,7 +1035,6 @@ async fn execute_verified_query_with_opts_inner(
         LaneCursorMode::Ephemeral => "ephemeral",
         LaneCursorMode::Stored => "stored",
     };
-
     // Optional gas gating for stored cursor mode (resource bound).
     // If configured (> 0) and the effective mode is Stored, enforce a minimum
     // client-provided budget. For continuations, honor the cursor's gas budget.
@@ -1144,7 +1057,6 @@ async fn execute_verified_query_with_opts_inner(
             }
         }
     }
-
     // Execute on a captured snapshot using the selected mode, offloaded to
     // a blocking worker pool to avoid tying up the server thread.
     let state_cloned = Arc::clone(&state);
@@ -1214,7 +1126,6 @@ async fn execute_verified_query_with_opts_inner(
             SnapshotQueryError::Execution(exec) => ValidationFail::QueryFailed(exec),
         })
     })?;
-
     #[cfg(feature = "telemetry")]
     if tel.is_enabled() {
         let ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -1239,6 +1150,5 @@ async fn execute_verified_query_with_opts_inner(
             );
         });
     }
-
     Ok(resp)
 }

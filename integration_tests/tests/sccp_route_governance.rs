@@ -1,7 +1,5 @@
 //! Four-peer consensus coverage for exact SCCP route governance.
-
 use std::time::{Duration, Instant};
-
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::{
@@ -33,23 +31,19 @@ use iroha_executor_data_model::permission::sccp::CanManageSccpGovernance;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use tokio::time::sleep;
-
 const REGISTRY_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(120);
 const TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
-
 fn word_u64(value: u64) -> [u8; 32] {
     let mut word = [0; 32];
     word[24..].copy_from_slice(&value.to_be_bytes());
     word
 }
-
 fn hex32(value: &str) -> [u8; 32] {
     hex::decode(value)
         .expect("static SCCP integration vector must be hexadecimal")
         .try_into()
         .expect("static SCCP integration vector must contain 32 bytes")
 }
-
 fn error_chain_text(error: &eyre::Report) -> String {
     let mut text = format!("{error:?}");
     for cause in error.chain() {
@@ -58,7 +52,6 @@ fn error_chain_text(error: &eyre::Report) -> String {
     }
     text
 }
-
 fn integration_verifying_key() -> SccpGroth16Bn254VerifyingKeyV1 {
     let g1 = SccpBn254G1PointV1 {
         x: word_u64(1),
@@ -92,7 +85,6 @@ fn integration_verifying_key() -> SccpGroth16Bn254VerifyingKeyV1 {
         },
     }
 }
-
 fn integration_outbound_policy() -> SccpOutboundProofPolicyV1 {
     SccpOutboundProofPolicyV1 {
         version: 1,
@@ -116,7 +108,6 @@ fn integration_outbound_policy() -> SccpOutboundProofPolicyV1 {
         },
     }
 }
-
 fn integration_sora_outbound_execution_policy() -> SccpSoraOutboundExecutionPolicyV1 {
     SccpSoraOutboundExecutionPolicyV1 {
         version: 1,
@@ -131,7 +122,6 @@ fn integration_sora_outbound_execution_policy() -> SccpSoraOutboundExecutionPoli
         gas_limit: 50_000_000,
     }
 }
-
 fn integration_route() -> SccpGovernedRouteV1 {
     let lane_id = SccpLaneIdV1 {
         source: SccpNetworkV1::EthereumMainnet,
@@ -193,7 +183,6 @@ fn integration_route() -> SccpGovernedRouteV1 {
         .expect("integration route must satisfy registration invariants");
     route
 }
-
 fn integration_native_anchor() -> SccpNativeTrustAnchorV1 {
     SccpNativeTrustAnchorV1 {
         backend: BridgeNativeProofBackendV1::EthereumBeacon,
@@ -201,7 +190,6 @@ fn integration_native_anchor() -> SccpNativeTrustAnchorV1 {
         checkpoint_height: 1,
     }
 }
-
 fn route_in_registry<'a>(
     registry: &'a iroha::data_model::bridge::SccpRegistryV1,
     key: &SccpRouteKeyV1,
@@ -212,7 +200,6 @@ fn route_in_registry<'a>(
         .flat_map(|lane| lane.routes.iter())
         .find(|route| route.key() == *key)
 }
-
 async fn wait_for_route_states(
     network: &Network,
     expected: &[(&SccpRouteKeyV1, Option<SccpRouteActivationV1>)],
@@ -260,18 +247,15 @@ async fn wait_for_route_states(
         sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn register_action(route: SccpGovernedRouteV1) -> ApplySccpRouteGovernance {
     ApplySccpRouteGovernance::new(SccpRouteGovernanceActionV1::Register(SccpRegisterRouteV1 {
         route,
         native_trust_anchor: Some(integration_native_anchor()),
     }))
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> {
     init_instruction_registry();
-
     let route = integration_route();
     let key = route.key();
     let custody_asset = AssetId::new(
@@ -298,7 +282,6 @@ async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> 
             Permission::from(CanManageSccpGovernance),
             ALICE_ID.clone(),
         ));
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(direct_sccp_route_governance_is_rejected_on_four_peers),
@@ -307,15 +290,12 @@ async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> 
     else {
         return Ok(());
     };
-
     let alice = network.client();
     let bob = network
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
-
     let initial_registry = wait_for_route_states(&network, &[(&key, None)]).await?;
     assert!(initial_registry.lanes.is_empty());
-
     let unauthorized = bob
         .submit_blocking(
             register_action(route.clone()),
@@ -330,7 +310,6 @@ async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> 
     );
     let after_unauthorized = wait_for_route_states(&network, &[(&key, None)]).await?;
     assert_eq!(after_unauthorized, initial_registry);
-
     let legacy_manager = alice
         .submit_blocking(
             register_action(route.clone()),
@@ -345,6 +324,5 @@ async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> 
     );
     let after_legacy_manager = wait_for_route_states(&network, &[(&key, None)]).await?;
     assert_eq!(after_legacy_manager, initial_registry);
-
     Ok(())
 }

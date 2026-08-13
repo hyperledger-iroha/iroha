@@ -9,6 +9,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   exact-network `OperatorSigningContext` for storage-state and legacy
   storage-fetch diagnostics. Public live integration no longer performs the
   retired unsigned diagnostic fetch.
+- Add strict signed SoraFS orderbook submit helpers with native route/signature/network preflight, pinned Norito receipt authentication, exact identity headers, one-shot deadlines, and non-resubmittable ambiguous-admission errors.
 - Hard-cut SoraFS pin listing to finalized, byte-bounded exclusive-keyset
   pages. The client rejects `offset`, legacy attestation/full-record payloads,
   forged or repeated continuation cursors, and anchor drift; list entries are

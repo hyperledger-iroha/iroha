@@ -1,9 +1,6 @@
 //! Small helper binary that validates hard-coded BLS keypairs.
-
 use std::error::Error;
-
 use iroha_crypto::{KeyPair, PrivateKey, PublicKey};
-
 const BLS_PAIRS: [(&str, &str); 4] = [
     (
         "ea01308683839424703437C5C8701F3A92D76E228337D2327602B8C0CED667A6ED7F8AD6360948B24FC21849E77411A0975B6D",
@@ -22,7 +19,6 @@ const BLS_PAIRS: [(&str, &str); 4] = [
         "89262081623DF6E560E259917D2AE1740FE840190AABBAC16083672E82FD99E184455D",
     ),
 ];
-
 fn validate_bls_pairs(pairs: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
     for (idx, (pub_hex, priv_hex)) in pairs.iter().enumerate() {
         let sk = priv_hex
@@ -36,36 +32,29 @@ fn validate_bls_pairs(pairs: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     validate_bls_pairs(&BLS_PAIRS)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn hard_coded_bls_pairs_validate() {
         validate_bls_pairs(&BLS_PAIRS).expect("hard-coded BLS keypairs must match");
     }
-
     #[test]
     fn mismatched_bls_pair_fails_closed() {
         let mismatched = [(BLS_PAIRS[0].0, BLS_PAIRS[1].1)];
         let err = validate_bls_pairs(&mismatched).expect_err("mismatched BLS pair must fail");
-
         assert!(
             err.to_string().contains("peer0: mismatch"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn malformed_bls_pair_fails_closed() {
         let malformed = [("not-a-public-key", BLS_PAIRS[0].1)];
         let err = validate_bls_pairs(&malformed).expect_err("malformed BLS pair must fail");
-
         assert!(
             err.to_string().contains("peer0 public parse"),
             "unexpected error: {err}"

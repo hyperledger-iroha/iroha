@@ -6,11 +6,9 @@ fn iso_profile_selection_is_query_bound_and_rejects_the_retired_header() {
         .expect("sample config enables the ISO bridge");
     let query =
         std::collections::HashMap::from([("profile".to_owned(), "generic-iso20022".to_owned())]);
-
     let selected = iso_profile_from_request(&runtime, &HeaderMap::new(), &query)
         .expect("signed query profile");
     assert_eq!(selected.id, "generic-iso20022");
-
     let mut headers = HeaderMap::new();
     headers.insert(
         "x-iroha-iso-profile",

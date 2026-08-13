@@ -1,6 +1,5 @@
 // Routed-read execution under one shared fanout reservation. Source-bounded
 // local producer seams remain intentionally incremental and inventoried.
-
 #[cfg(feature = "app_api")]
 fn merge_with_torii_fanout_headers<F>(diagnostics: ToriiFanoutDiagnostics, merge: F) -> Response
 where
@@ -10,7 +9,6 @@ where
         Ok(response) | Err(response) => with_torii_fanout_headers(response, diagnostics),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn torii_read_fanout_request(
     endpoint: ToriiReadEndpointV1,
@@ -54,7 +52,6 @@ async fn resolve_torii_proof_record_for_routes(
         )),
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn resolve_torii_proof_record_for_supported_routes(
     app: &SharedAppState,
@@ -71,7 +68,6 @@ async fn resolve_torii_proof_record_for_supported_routes(
             ToriiFanoutDiagnostics::default(),
         ));
     }
-
     let routed_by = routed_by_for_routes(app, &routes);
     let mut diagnostics = ToriiFanoutDiagnostics::default();
     let mut last_not_found = None;
@@ -85,7 +81,6 @@ async fn resolve_torii_proof_record_for_supported_routes(
         .checked_add(1)
         .ok_or_else(torii_routed_read_accounting_response)?;
     let mut payloads = budget.try_retained_vec(payload_capacity)?;
-
     let parsed_proof_id = proof_id
         .parse::<iroha_data_model::proof::ProofId>()
         .map_err(|error| {
@@ -100,7 +95,6 @@ async fn resolve_torii_proof_record_for_supported_routes(
     {
         budget.push_retained(&mut payloads, payload)?;
     }
-
     for route in &routes {
         diagnostics.record_attempt();
         let response = execute_torii_read_for_route(
@@ -138,7 +132,6 @@ async fn resolve_torii_proof_record_for_supported_routes(
             }
         }
     }
-
     if payloads.is_empty() {
         let response = last_not_found.unwrap_or_else(|| {
             last_route_unavailable.unwrap_or_else(|| {
@@ -151,7 +144,6 @@ async fn resolve_torii_proof_record_for_supported_routes(
         });
         return Err(with_torii_fanout_headers(response, diagnostics));
     }
-
     budget.begin_typed_merge();
     budget.admit_merge_btree::<Vec<u8>, ProofRecord>(1, payloads.len())?;
     let mut unique_payloads = BTreeMap::<Vec<u8>, ProofRecord>::new();
@@ -160,7 +152,6 @@ async fn resolve_torii_proof_record_for_supported_routes(
             .entry(payload.canonical_bytes)
             .or_insert(payload.value);
     }
-
     match unique_payloads.len() {
         1 => Ok((
             unique_payloads
@@ -180,7 +171,6 @@ async fn resolve_torii_proof_record_for_supported_routes(
         )),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn merged_trusted_internal_read_response<T>(
     payloads: Vec<ToriiBoundedNoritoPayload<T>>,
@@ -236,7 +226,6 @@ where
         )),
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_trusted_internal_read_for_resolved_routes<T>(
     app: &SharedAppState,
@@ -261,7 +250,6 @@ where
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_trusted_internal_read_for_supported_routes<T>(
     app: &SharedAppState,
@@ -303,7 +291,6 @@ where
     if let Err(response) = admission.admit_request_bytes(request_bytes) {
         return hold_query_fanout_memory_in_response_body(response, reservation);
     }
-
     let response = execute_torii_trusted_internal_read_for_resolved_routes_admitted::<T>(
         app,
         routes,
@@ -316,7 +303,6 @@ where
     .await;
     hold_query_fanout_memory_in_response_body(response, reservation)
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_trusted_internal_read_for_resolved_routes_admitted<T>(
     app: &SharedAppState,
@@ -341,7 +327,6 @@ where
             ToriiFanoutDiagnostics::default(),
         );
     }
-
     let mut diagnostics = ToriiFanoutDiagnostics::default();
     let mut saw_not_found = false;
     let mut saw_route_unavailable = false;
@@ -390,7 +375,6 @@ where
             }
         }
     }
-
     if payloads.is_empty() {
         let response = if saw_not_found {
             trusted_internal_read_error_response(
@@ -416,7 +400,6 @@ where
         };
         return with_torii_fanout_headers(response, diagnostics);
     }
-
     merge_with_torii_fanout_headers(diagnostics, || {
         merged_trusted_internal_read_response(
             payloads,
@@ -426,7 +409,6 @@ where
         )
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_internal_account_read_for_routes(
     app: &SharedAppState,
@@ -445,7 +427,6 @@ async fn execute_torii_internal_account_read_for_routes(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_internal_account_transaction_read_for_routes(
     app: &SharedAppState,
@@ -467,7 +448,6 @@ async fn execute_torii_internal_account_transaction_read_for_routes(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_internal_account_asset_read_for_routes(
     app: &SharedAppState,
@@ -493,7 +473,6 @@ async fn execute_torii_internal_account_asset_read_for_routes(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_account_read_for_resolved_routes(
     app: &SharedAppState,
@@ -512,7 +491,6 @@ async fn execute_torii_account_read_for_resolved_routes(
             ToriiFanoutDiagnostics::default(),
         );
     }
-
     let mut diagnostics = ToriiFanoutDiagnostics::default();
     let mut last_not_found = None;
     let mut last_route_unavailable = None;
@@ -567,7 +545,6 @@ async fn execute_torii_account_read_for_resolved_routes(
             }
         }
     }
-
     if payloads.is_empty() {
         let response = last_not_found.unwrap_or_else(|| {
             last_route_unavailable.unwrap_or_else(|| {
@@ -580,12 +557,10 @@ async fn execute_torii_account_read_for_resolved_routes(
         });
         return with_torii_fanout_headers(response, diagnostics);
     }
-
     merge_with_torii_fanout_headers(diagnostics, || {
         merged_account_read_response(payloads, format, routed_by_for_routes(app, &routes), budget)
     })
 }
-
 #[cfg(feature = "app_api")]
 fn account_history_payload_has_more(payload: &Value, item_count: usize, page_limit: u64) -> bool {
     payload
@@ -594,7 +569,6 @@ fn account_history_payload_has_more(payload: &Value, item_count: usize, page_lim
         .and_then(Value::as_bool)
         .unwrap_or_else(|| u64::try_from(item_count).unwrap_or(u64::MAX) >= page_limit)
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_account_history_read_for_resolved_routes(
     app: &SharedAppState,
@@ -677,7 +651,6 @@ async fn execute_torii_account_history_read_for_resolved_routes(
         }
         return with_torii_fanout_headers(response, diagnostics);
     }
-
     let (payloads, diagnostics, budget) = match collect_torii_account_history_json_payloads(
         &routes,
         &params,
@@ -710,7 +683,6 @@ async fn execute_torii_account_history_read_for_resolved_routes(
         Ok(collected) => collected,
         Err(response) => return response,
     };
-
     merge_with_torii_fanout_headers(diagnostics, || {
         merged_account_history_response(
             payloads,
@@ -722,7 +694,6 @@ async fn execute_torii_account_history_read_for_resolved_routes(
         )
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn collect_torii_account_history_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
@@ -753,13 +724,11 @@ where
     let mut last_route_unavailable = None;
     let mut budget = ToriiRoutedReadMemoryBudget::new(working_set_bytes, max_body_bytes)?;
     let mut payloads = budget.try_retained_vec(routes.len())?;
-
     for route in routes {
         diagnostics.record_attempt();
         let mut route_offset = 0_u64;
         let mut route_items_seen = 0_u64;
         let mut route_succeeded = false;
-
         loop {
             let mut page_params = params.clone();
             page_params.offset = route_offset;
@@ -777,7 +746,6 @@ where
                 Err(error) => return Err(error.into_response()),
             };
             let response = fetch(*route, page_query_string).await;
-
             if response.status() == StatusCode::NOT_FOUND {
                 diagnostics.record_skipped_response(&response);
                 if route_succeeded {
@@ -796,7 +764,6 @@ where
                 }
                 break;
             }
-
             let payload = match torii_json_body_value(response, &mut budget).await {
                 Ok(payload) => payload,
                 Err(response) => {
@@ -819,7 +786,6 @@ where
             route_succeeded = true;
             let item_count_u64 = u64::try_from(item_count).unwrap_or(u64::MAX);
             route_items_seen = route_items_seen.saturating_add(item_count_u64);
-
             if item_count == 0
                 || !has_more
                 || per_route_target.is_some_and(|target| route_items_seen >= target)
@@ -828,12 +794,10 @@ where
             }
             route_offset = route_offset.saturating_add(item_count_u64);
         }
-
         if route_succeeded {
             diagnostics.record_success();
         }
     }
-
     if payloads.is_empty() {
         let response = last_not_found.unwrap_or_else(|| {
             last_route_unavailable.unwrap_or_else(|| {
@@ -846,10 +810,8 @@ where
         });
         return Err(with_torii_fanout_headers(response, diagnostics));
     }
-
     Ok((payloads, diagnostics, budget))
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_read_fanout_for_resolved_routes(
     app: &SharedAppState,
@@ -875,7 +837,6 @@ async fn execute_torii_read_fanout_for_resolved_routes(
     )
     .await
 }
-
 /// Execute an authenticated incoming Read request inside one complete fanout
 /// working-set reservation.
 ///
@@ -925,7 +886,6 @@ async fn execute_incoming_torii_read_request_locally_bounded(
         };
     hold_query_fanout_memory_in_response_body(response, reservation)
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_read_for_supported_resolved_routes(
     app: &SharedAppState,
@@ -965,7 +925,6 @@ async fn execute_torii_read_for_supported_resolved_routes(
     if let Err(response) = admission.admit_request_bytes(request_bytes) {
         return hold_query_fanout_memory_in_response_body(response, reservation);
     }
-
     let response = execute_torii_read_fanout_for_resolved_routes_admitted(
         app,
         routes,
@@ -980,7 +939,6 @@ async fn execute_torii_read_for_supported_resolved_routes(
     .await;
     hold_query_fanout_memory_in_response_body(response, reservation)
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_read_fanout_for_resolved_routes_admitted(
     app: &SharedAppState,
@@ -1192,7 +1150,6 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_read_fanout_proxy_request(
     app: &SharedAppState,
@@ -1216,7 +1173,6 @@ async fn execute_torii_read_fanout_proxy_request(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_read_fanout_via_nexus(
     app: &SharedAppState,
@@ -1245,7 +1201,6 @@ async fn execute_torii_read_fanout_via_nexus(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_read_via_nexus_for_supported_routes(
     app: &SharedAppState,
@@ -1272,7 +1227,6 @@ async fn execute_torii_read_via_nexus_for_supported_routes(
         )
         .await;
     }
-
     let request = torii_read_fanout_request(
         endpoint,
         route_scope,
@@ -1289,7 +1243,6 @@ async fn execute_torii_read_via_nexus_for_supported_routes(
     if should_execute_route_locally(app.as_ref(), nexus_route) {
         return execute_torii_read_fanout_proxy_request(app, request, None).await;
     }
-
     execute_torii_proxy_request_with_fallback(
         app,
         nexus_route,
@@ -1297,7 +1250,6 @@ async fn execute_torii_read_via_nexus_for_supported_routes(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_fanout_list_read(
     app: &SharedAppState,
@@ -1318,7 +1270,6 @@ async fn execute_torii_fanout_list_read(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_list_read_for_routes(
     app: &SharedAppState,
@@ -1356,7 +1307,6 @@ async fn execute_torii_list_read_for_routes(
         .await
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_account_history_read_for_routes(
     app: &SharedAppState,
@@ -1392,7 +1342,6 @@ async fn execute_torii_account_history_read_for_routes(
         .await
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_fanout_singleton_read(
     app: &SharedAppState,
@@ -1413,7 +1362,6 @@ async fn execute_torii_fanout_singleton_read(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_asset_definition_singleton_read(
     app: &SharedAppState,
@@ -1433,11 +1381,9 @@ async fn execute_torii_asset_definition_singleton_read(
         )
         .await;
     }
-
     execute_torii_fanout_singleton_read(app, endpoint, vec![definition_literal], None, Vec::new())
         .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_singleton_read_for_routes(
     app: &SharedAppState,
@@ -1475,7 +1421,6 @@ async fn execute_torii_singleton_read_for_routes(
         .await
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_account_read_for_routes(
     app: &SharedAppState,
@@ -1496,7 +1441,6 @@ async fn execute_torii_account_read_for_routes(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_account_read_for_routes_scoped(
     app: &SharedAppState,
@@ -1532,7 +1476,6 @@ async fn execute_torii_account_read_for_routes_scoped(
         .await
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_fanout_portfolio_read(
     app: &SharedAppState,
@@ -1551,7 +1494,6 @@ async fn execute_torii_fanout_portfolio_read(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_fanout_dataspace_summary_read(
     app: &SharedAppState,
@@ -1570,7 +1512,6 @@ async fn execute_torii_fanout_dataspace_summary_read(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_fanout_space_directory_bindings_read(
     app: &SharedAppState,
@@ -1589,7 +1530,6 @@ async fn execute_torii_fanout_space_directory_bindings_read(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_fanout_space_directory_manifests_read(
     app: &SharedAppState,

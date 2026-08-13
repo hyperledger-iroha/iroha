@@ -4,7 +4,6 @@
 //! `daf14859b5aa3f8d75c42966ba7de83e6eb59997` (Unlicense).  The semantic
 //! delta is an explicit candidate cap, a bounded parity sampler, raw secret
 //! polynomial output, and mandatory NTRU/public-key self-checks.
-
 mod fxp;
 mod gauss;
 mod mp31;
@@ -12,19 +11,15 @@ mod ntru;
 mod poly;
 mod vect;
 mod zint31;
-
 use super::{DEGREE, LOG_DEGREE, MODULUS, Trapdoor, comm};
 use comm::PRNG as _;
 use zeroize::{Zeroize, Zeroizing};
-
 pub(super) const MAX_PARITY_ATTEMPTS_PER_POLYNOMIAL: u32 = 128;
-
 struct Workspace {
     temporary_u16: Vec<u16>,
     temporary_u32: Vec<u32>,
     temporary_fxr: Vec<fxp::FXR>,
 }
-
 impl Workspace {
     fn new() -> Self {
         Self {
@@ -34,7 +29,6 @@ impl Workspace {
         }
     }
 }
-
 impl Drop for Workspace {
     fn drop(&mut self) {
         self.temporary_u16.zeroize();
@@ -42,12 +36,10 @@ impl Drop for Workspace {
         self.temporary_fxr.zeroize();
     }
 }
-
 pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Trapdoor> {
     if max_candidates == 0 {
         return None;
     }
-
     let mut workspace = Workspace::new();
     let mut f = Zeroizing::new(vec![0_i8; DEGREE].into_boxed_slice());
     let mut g = Zeroizing::new(vec![0_i8; DEGREE].into_boxed_slice());
@@ -55,7 +47,6 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
     let mut capital_g = Zeroizing::new(vec![0_i8; DEGREE].into_boxed_slice());
     let mut h = Zeroizing::new(vec![0_u16; DEGREE].into_boxed_slice());
     let mut generator = comm::shake::SHAKE256_PRNG::new(seed);
-
     for _ in 0..max_candidates {
         if !gauss::sample_f_bounded(
             LOG_DEGREE,
@@ -70,7 +61,6 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
         ) {
             continue;
         }
-
         let squared_norm = f
             .iter()
             .copied()
@@ -105,7 +95,6 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
         ) {
             continue;
         }
-
         let (division_temporary, _) = workspace.temporary_u16.split_at_mut(DEGREE);
         comm::mq::mqpoly_div_small(LOG_DEGREE, &**f, &**g, &mut **h, division_temporary);
         if ntru_equation_holds(
@@ -126,14 +115,12 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
     }
     None
 }
-
 fn ntru_equation_holds(f: &[i8], g: &[i8], capital_f: &[i8], capital_g: &[i8]) -> bool {
     let mut equation = Zeroizing::new(vec![0_i64; DEGREE].into_boxed_slice());
     negacyclic_accumulate_i8(equation.as_mut(), f, capital_g, 1);
     negacyclic_accumulate_i8(equation.as_mut(), g, capital_f, -1);
     equation[0] == i64::from(MODULUS) && equation[1..].iter().all(|value| *value == 0)
 }
-
 fn public_key_equation_holds(f: &[i8], g: &[i8], h: &[u16]) -> bool {
     let modulus = i64::from(MODULUS);
     let mut product = Zeroizing::new(vec![0_i64; DEGREE].into_boxed_slice());
@@ -156,7 +143,6 @@ fn public_key_equation_holds(f: &[i8], g: &[i8], h: &[u16]) -> bool {
     }
     true
 }
-
 fn negacyclic_accumulate_i8(output: &mut [i64], left: &[i8], right: &[i8], outer_sign: i64) {
     for (left_index, left) in left.iter().copied().enumerate() {
         for (right_index, right) in right.iter().copied().enumerate() {

@@ -4,12 +4,16 @@
 //! the IFC1 consensus codec stays byte-for-byte pinned. The proof equations,
 //! IPA, generators container, and MSM implementation live in
 //! `iroha_zkp_halo2::generalized_bulletproof`.
-
-use std::{
-    ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
-    sync::OnceLock,
+use super::{
+    FcmpNativeErrorV1,
+    field::{
+        Field25519, HeliosPoint, HelioseleneField, SelenePoint, decode_field25519,
+        decode_helioselene, encode_field25519, encode_helioselene, field25519_from_u64,
+        field25519_is_odd, field25519_is_zero, hash_bytes_to_helios, hash_bytes_to_selene,
+        helioselene_is_odd, helioselene_is_zero, invert_field25519, invert_helioselene,
+        monero_varint, sqrt_field25519, sqrt_helioselene,
+    },
 };
-
 use blake2::{Blake2b512, Digest as _};
 #[cfg(test)]
 use iroha_zkp_halo2::generalized_bulletproof::multiexp;
@@ -23,19 +27,11 @@ pub(super) use iroha_zkp_halo2::generalized_bulletproof::{
 use p256::elliptic_curve::bigint::U256;
 use p256::elliptic_curve::subtle::Choice;
 use rand_core_06::{CryptoRng, RngCore};
-use zeroize::Zeroize;
-
-use super::{
-    FcmpNativeErrorV1,
-    field::{
-        Field25519, HeliosPoint, HelioseleneField, SelenePoint, decode_field25519,
-        decode_helioselene, encode_field25519, encode_helioselene, field25519_from_u64,
-        field25519_is_odd, field25519_is_zero, hash_bytes_to_helios, hash_bytes_to_selene,
-        helioselene_is_odd, helioselene_is_zero, invert_field25519, invert_helioselene,
-        monero_varint, sqrt_field25519, sqrt_helioselene,
-    },
+use std::{
+    ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+    sync::OnceLock,
 };
-
+use zeroize::Zeroize;
 const SCALAR_TAG: u8 = 0;
 const POINT_TAG: u8 = 1;
 const CHALLENGE_TAG: u8 = 2;
@@ -43,7 +39,6 @@ const CHALLENGE_RETRY_DOMAIN_V1: &[u8] = b"iroha:privacy:fcmp-plus-plus:nonzero-
 const MAX_TRANSCRIPT_CHALLENGE_ATTEMPTS_V1: usize = 128;
 const SELENE_BP_GENERATOR_COUNT: usize = 4_096;
 const HELIOS_BP_GENERATOR_COUNT: usize = 2_048;
-
 impl From<GeneralizedBulletproofErrorV1> for FcmpNativeErrorV1 {
     fn from(error: GeneralizedBulletproofErrorV1) -> Self {
         match error {
@@ -73,7 +68,6 @@ impl From<GeneralizedBulletproofErrorV1> for FcmpNativeErrorV1 {
         }
     }
 }
-
 fn shared_error(error: FcmpNativeErrorV1) -> GeneralizedBulletproofErrorV1 {
     match error {
         FcmpNativeErrorV1::ArithmeticInvariant => {
@@ -108,7 +102,6 @@ fn shared_error(error: FcmpNativeErrorV1) -> GeneralizedBulletproofErrorV1 {
         _ => GeneralizedBulletproofErrorV1::ArithmeticInvariant,
     }
 }
-
 macro_rules! impl_proof_scalar {
     (
         $field:ty,
@@ -124,19 +117,15 @@ macro_rules! impl_proof_scalar {
             const ZERO: Self = <$field>::ZERO;
             const ONE: Self = <$field>::ONE;
             const SCALAR_BITS: usize = 255;
-
             fn from_u64(value: u64) -> Self {
                 ($from_u64)(value)
             }
-
             fn decode(bytes: [u8; 32]) -> Option<Self> {
                 $decode(bytes)
             }
-
             fn encode(self) -> [u8; 32] {
                 $encode(self)
             }
-
             fn reduce_wide(bytes: [u8; 64]) -> Self {
                 // Preserve the pinned little-endian reduction exactly.
                 let radix = Self::from_u64(256);
@@ -144,38 +133,30 @@ macro_rules! impl_proof_scalar {
                     (accumulator * radix) + Self::from_u64(u64::from(*byte))
                 })
             }
-
             fn invert(self) -> Option<Self> {
                 ($invert)(self)
             }
-
             fn sqrt(self) -> Option<Self> {
                 $sqrt(self)
             }
-
             fn square(self) -> Self {
                 <$field>::square(&self)
             }
-
             fn double(self) -> Self {
                 self + self
             }
-
             fn is_zero(self) -> bool {
                 $zero(self)
             }
-
             fn is_odd(self) -> bool {
                 $odd(self)
             }
-
             fn clear_secret(&mut self) {
                 Zeroize::zeroize(self);
             }
         }
     };
 }
-
 impl_proof_scalar!(
     Field25519,
     decode_field25519,
@@ -196,7 +177,6 @@ impl_proof_scalar!(
     invert_helioselene,
     |value: u64| HelioseleneField::new(&U256::from(value))
 );
-
 macro_rules! impl_point_operators {
     ($point:ty, $scalar:ty) => {
         impl Add for $point {
@@ -242,7 +222,6 @@ macro_rules! impl_point_operators {
             type Scalar = $scalar;
             type Encoded = [u8; 32];
             const POINT_BYTES: usize = 32;
-
             fn identity() -> Self {
                 <$point>::identity()
             }
@@ -277,33 +256,26 @@ macro_rules! impl_point_operators {
         }
     };
 }
-
 impl_point_operators!(SelenePoint, Field25519);
 impl_point_operators!(HeliosPoint, HelioseleneField);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct SeleneSuite;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct HeliosSuite;
-
 impl ProofSuite for SeleneSuite {
     type Scalar = Field25519;
     type Point = SelenePoint;
-
     fn generators() -> &'static ProofGenerators<Self> {
         selene_bp_generators()
     }
 }
-
 impl ProofSuite for HeliosSuite {
     type Scalar = HelioseleneField;
     type Point = HeliosPoint;
-
     fn generators() -> &'static ProofGenerators<Self> {
         helios_bp_generators()
     }
 }
-
 fn build_generators<S: ProofSuite>(
     curve_name: &[u8],
     count: usize,
@@ -317,7 +289,6 @@ fn build_generators<S: ProofSuite>(
     h_domain.extend_from_slice(curve_name);
     h_domain.extend_from_slice(b" H");
     let h = hash_point(&h_domain);
-
     let mut g_bold = Vec::with_capacity(count);
     let mut h_bold = Vec::with_capacity(count);
     for index in 0..count {
@@ -326,7 +297,6 @@ fn build_generators<S: ProofSuite>(
         g_indexed.push(b' ');
         g_indexed.extend(monero_varint(index));
         g_bold.push(hash_point(&g_indexed));
-
         let mut h_indexed = h_domain.clone();
         h_indexed.push(b' ');
         h_indexed.extend(monero_varint(index));
@@ -335,31 +305,26 @@ fn build_generators<S: ProofSuite>(
     ProofGenerators::new(g, h, g_bold, h_bold)
         .expect("the frozen FCMP generator basis is non-empty and shape-valid")
 }
-
 pub(super) fn selene_bp_generators() -> &'static ProofGenerators<SeleneSuite> {
     static CELL: OnceLock<ProofGenerators<SeleneSuite>> = OnceLock::new();
     CELL.get_or_init(|| {
         build_generators::<SeleneSuite>(b"Selene", SELENE_BP_GENERATOR_COUNT, hash_bytes_to_selene)
     })
 }
-
 pub(super) fn helios_bp_generators() -> &'static ProofGenerators<HeliosSuite> {
     static CELL: OnceLock<ProofGenerators<HeliosSuite>> = OnceLock::new();
     CELL.get_or_init(|| {
         build_generators::<HeliosSuite>(b"Helios", HELIOS_BP_GENERATOR_COUNT, hash_bytes_to_helios)
     })
 }
-
 pub(super) struct FcmpProofRandomSource<'a, R> {
     rng: &'a mut R,
 }
-
 impl<'a, R> FcmpProofRandomSource<'a, R> {
     pub(super) fn new(rng: &'a mut R) -> Self {
         Self { rng }
     }
 }
-
 impl<R: RngCore + CryptoRng> ProofRandomSource for FcmpProofRandomSource<'_, R> {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), GeneralizedBulletproofErrorV1> {
         self.rng
@@ -367,7 +332,6 @@ impl<R: RngCore + CryptoRng> ProofRandomSource for FcmpProofRandomSource<'_, R> 
             .map_err(|_| GeneralizedBulletproofErrorV1::RandomnessUnavailable)
     }
 }
-
 pub(super) fn random_scalar_from_fcmp_rng<F, R>(rng: &mut R) -> Result<Option<F>, FcmpNativeErrorV1>
 where
     F: ProofScalar,
@@ -375,12 +339,10 @@ where
 {
     F::random(&mut FcmpProofRandomSource::new(rng)).map_err(Into::into)
 }
-
 pub(super) struct ProverTranscript {
     digest: Blake2b512,
     proof: Vec<u8>,
 }
-
 impl ProverTranscript {
     pub(super) fn new(context: [u8; 32]) -> Self {
         let mut digest = Blake2b512::new();
@@ -390,14 +352,12 @@ impl ProverTranscript {
             proof: Vec::new(),
         }
     }
-
     pub(super) fn push_scalar<F: ProofScalar>(&mut self, scalar: F) {
         self.digest.update([SCALAR_TAG]);
         let bytes = scalar.encode();
         self.digest.update(bytes);
         self.proof.extend_from_slice(&bytes);
     }
-
     pub(super) fn push_point<P: ProofPoint>(&mut self, point: P) {
         self.digest.update([POINT_TAG]);
         let bytes = point.encode();
@@ -405,11 +365,9 @@ impl ProverTranscript {
         self.digest.update(bytes.as_ref());
         self.proof.extend_from_slice(bytes.as_ref());
     }
-
     pub(super) fn challenge<S: ProofSuite>(&mut self) -> Result<S::Scalar, FcmpNativeErrorV1> {
         challenge::<S>(&mut self.digest)
     }
-
     pub(super) fn write_commitments<S: ProofSuite>(
         &mut self,
         vector: Vec<S::Point>,
@@ -433,23 +391,19 @@ impl ProverTranscript {
         }
         (vector, scalar)
     }
-
     pub(super) fn challenge_bytes(&mut self) -> [u8; 64] {
         self.digest.update([CHALLENGE_TAG]);
         self.digest.clone().finalize().into()
     }
-
     pub(super) fn complete(self) -> Vec<u8> {
         self.proof
     }
 }
-
 pub(super) struct VerifierTranscript<'a> {
     digest: Blake2b512,
     proof: &'a [u8],
     cursor: usize,
 }
-
 impl<'a> VerifierTranscript<'a> {
     pub(super) fn new(context: [u8; 32], proof: &'a [u8]) -> Self {
         let mut digest = Blake2b512::new();
@@ -460,21 +414,18 @@ impl<'a> VerifierTranscript<'a> {
             cursor: 0,
         }
     }
-
     pub(super) fn read_scalar<F: ProofScalar>(&mut self) -> Result<F, FcmpNativeErrorV1> {
         let bytes = self.take()?;
         self.digest.update([SCALAR_TAG]);
         self.digest.update(bytes);
         F::decode(bytes).ok_or(FcmpNativeErrorV1::ScalarEncoding)
     }
-
     pub(super) fn read_point<P: ProofPoint>(&mut self) -> Result<P, FcmpNativeErrorV1> {
         let bytes = self.take()?;
         self.digest.update([POINT_TAG]);
         self.digest.update(bytes);
         P::decode(bytes, false).map_err(Into::into)
     }
-
     fn take(&mut self) -> Result<[u8; 32], FcmpNativeErrorV1> {
         let end = self
             .cursor
@@ -492,11 +443,9 @@ impl<'a> VerifierTranscript<'a> {
         self.cursor = end;
         Ok(element)
     }
-
     pub(super) fn challenge<S: ProofSuite>(&mut self) -> Result<S::Scalar, FcmpNativeErrorV1> {
         challenge::<S>(&mut self.digest)
     }
-
     pub(super) fn read_commitments<S: ProofSuite>(
         &mut self,
         vector_count: usize,
@@ -522,17 +471,14 @@ impl<'a> VerifierTranscript<'a> {
         }
         Ok((vector, scalar))
     }
-
     pub(super) fn challenge_bytes(&mut self) -> [u8; 64] {
         self.digest.update([CHALLENGE_TAG]);
         self.digest.clone().finalize().into()
     }
-
     pub(super) fn consumed(&self) -> usize {
         self.cursor
     }
 }
-
 macro_rules! impl_shared_transcript {
     ($suite:ty) => {
         impl SharedProverTranscript<$suite> for ProverTranscript {
@@ -543,7 +489,6 @@ macro_rules! impl_shared_transcript {
                 ProverTranscript::push_scalar(self, scalar);
                 Ok(())
             }
-
             fn push_point(
                 &mut self,
                 point: <$suite as ProofSuite>::Point,
@@ -554,27 +499,23 @@ macro_rules! impl_shared_transcript {
                 ProverTranscript::push_point(self, point);
                 Ok(())
             }
-
             fn challenge(
                 &mut self,
             ) -> Result<<$suite as ProofSuite>::Scalar, GeneralizedBulletproofErrorV1> {
                 ProverTranscript::challenge::<$suite>(self).map_err(shared_error)
             }
         }
-
         impl SharedVerifierTranscript<$suite> for VerifierTranscript<'_> {
             fn read_scalar(
                 &mut self,
             ) -> Result<<$suite as ProofSuite>::Scalar, GeneralizedBulletproofErrorV1> {
                 VerifierTranscript::read_scalar(self).map_err(shared_error)
             }
-
             fn read_point(
                 &mut self,
             ) -> Result<<$suite as ProofSuite>::Point, GeneralizedBulletproofErrorV1> {
                 VerifierTranscript::read_point(self).map_err(shared_error)
             }
-
             fn challenge(
                 &mut self,
             ) -> Result<<$suite as ProofSuite>::Scalar, GeneralizedBulletproofErrorV1> {
@@ -583,10 +524,8 @@ macro_rules! impl_shared_transcript {
         }
     };
 }
-
 impl_shared_transcript!(SeleneSuite);
 impl_shared_transcript!(HeliosSuite);
-
 fn nonzero_challenge_from_scalar_stream<F: ProofScalar>(
     mut scalar_for_attempt: impl FnMut(usize) -> F,
 ) -> Result<F, FcmpNativeErrorV1> {
@@ -598,7 +537,6 @@ fn nonzero_challenge_from_scalar_stream<F: ProofScalar>(
     }
     Err(FcmpNativeErrorV1::TranscriptChallengeExhausted)
 }
-
 fn challenge<S: ProofSuite>(digest: &mut Blake2b512) -> Result<S::Scalar, FcmpNativeErrorV1> {
     digest.update([CHALLENGE_TAG]);
     let challenge_state = digest.clone();
@@ -623,11 +561,9 @@ fn challenge<S: ProofSuite>(digest: &mut Blake2b512) -> Result<S::Scalar, FcmpNa
         S::Scalar::reduce_wide(wide)
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn full_bulletproof_generator_domains_extend_tree_generators() {
         let selene = selene_bp_generators();
@@ -645,7 +581,6 @@ mod tests {
         assert_ne!(selene.g.encode(), selene.h.encode());
         assert_ne!(helios.g.encode(), helios.h.encode());
     }
-
     #[test]
     fn pippenger_matches_naive_multiexponentiation() {
         let generators = selene_bp_generators();
@@ -664,7 +599,6 @@ mod tests {
             });
         assert_eq!(multiexp::<SeleneSuite>(&terms), expected);
     }
-
     #[test]
     fn transcript_tags_and_strict_consumption_are_deterministic() {
         let context = [7_u8; 32];
@@ -675,7 +609,6 @@ mod tests {
         prover.push_point(point);
         let challenge_p = prover.challenge::<SeleneSuite>();
         let bytes = prover.complete();
-
         let mut verifier = VerifierTranscript::new(context, &bytes);
         assert_eq!(
             verifier.read_scalar::<Field25519>().expect("scalar"),
@@ -685,7 +618,6 @@ mod tests {
         assert_eq!(verifier.challenge::<SeleneSuite>(), challenge_p);
         assert_eq!(verifier.consumed(), bytes.len());
     }
-
     #[test]
     fn transcript_challenge_retries_zero_and_exhausts_at_a_fixed_bound() {
         let mut attempts = Vec::new();
@@ -700,7 +632,6 @@ mod tests {
         .expect("third challenge is non-zero");
         assert_eq!(challenge, Field25519::from_u64(7));
         assert_eq!(attempts, vec![0, 1, 2]);
-
         let mut exhaustion_attempts = 0;
         assert_eq!(
             nonzero_challenge_from_scalar_stream::<Field25519>(|_| {

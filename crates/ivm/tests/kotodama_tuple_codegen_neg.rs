@@ -1,5 +1,4 @@
 //! Codegen negative test: returning 14 values should fail with a clear message.
-
 #[test]
 fn compile_function_returning_fourteen_values_fails() {
     use ivm::kotodama::compiler::Compiler;
@@ -20,7 +19,6 @@ fn compile_function_returning_fourteen_values_fails() {
         "unexpected error message: {err}"
     );
 }
-
 #[test]
 fn callmulti_with_fourteen_returns_fails() {
     // Hit the CallMulti codegen guard via test helper without compiling a callee.
@@ -31,7 +29,6 @@ fn callmulti_with_fourteen_returns_fails() {
         "unexpected error message: {err}"
     );
 }
-
 #[test]
 fn compile_function_returning_thirteen_values_succeeds() {
     use ivm::kotodama::compiler::Compiler;
@@ -47,7 +44,6 @@ fn compile_function_returning_thirteen_values_succeeds() {
         .compile_source(src)
         .expect("expected 13-value return to compile");
 }
-
 #[test]
 fn callmulti_with_thirteen_returns_succeeds() {
     ivm::kotodama::compiler::test_helpers::try_emit_callmulti_guard_only(13)

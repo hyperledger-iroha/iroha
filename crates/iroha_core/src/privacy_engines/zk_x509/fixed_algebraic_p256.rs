@@ -10,11 +10,8 @@
 //! topology.  It emits structural affine, repeated-affine, and sparse atoms;
 //! it never constructs a `2^19 * 404` native matrix, an LDE, an artifact,
 //! a Merkle tree, or proof-supplied fixed bytes.
-
 use std::{sync::OnceLock, vec::Vec};
-
 use thiserror::Error;
-
 #[cfg(test)]
 use super::fixed_algebraic::ZkX509FixedAlgebraicAtomV1;
 #[cfg(test)]
@@ -50,17 +47,14 @@ use super::{
 use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, sha256_frame_v1,
 };
-
 /// Exact compact P-256 fixed-schedule semantics bound by the release profile.
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] =
     b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log25:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:typed-composite-children=134,134,46,46,22,22:each-child-generic-cap65536:composite-digest-binds-profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:sorted-whole-plan=min-exact-global-local-vs-phase-hybrid:global-local-on-tie:phase-hybrid=prefix893-local+min-local-vs13x43-phase+scalar-boundary222-local+min-local-vs63x222-phase+tail18-local:pinned-boundary-extents=1712,9984:pinned-repeated-extents=1888,10176:local-on-phase-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release";
-
 #[cfg(test)]
 const P256_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:p256-fixed-algebraic-compiler:v1";
 const P256_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:p256-fixed-algebraic-composite:v1";
-
 /// Exact number of unique verifier-owned schedules.
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1: usize = 6;
 /// Exact number of accepted registration aliases.
@@ -110,7 +104,6 @@ const P256_FIXED_ALGEBRAIC_CHILD_DIGESTS_V1: [[u8; 32]; 6] = [
         0xb1, 0x6b,
     ],
 ];
-
 const CERTIFICATE_ARITHMETIC_START_V1: usize = 0;
 const WALLET_ARITHMETIC_START_V1: usize =
     CERTIFICATE_ARITHMETIC_START_V1 + P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1;
@@ -122,7 +115,6 @@ const CERTIFICATE_SORTED_START_V1: usize =
     WALLET_EXECUTION_START_V1 + P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1;
 const WALLET_SORTED_START_V1: usize =
     CERTIFICATE_SORTED_START_V1 + P256_VALUE_BUS_STARK_FIXED_WIDTH_V1;
-
 const P256_ARITHMETIC_OPERATIONS_V1: usize = 14_828;
 const P256_INITIAL_VALUES_V1: usize = 850;
 const P256_VALUE_BUS_ASSERTIONS_V1: usize = 5;
@@ -162,7 +154,6 @@ const P256_VALUE_BUS_SORTED_ACTIVE_FACTORS_V1: usize =
         + P256_VALUE_BUS_ASSERTIONS_V1 * 2 * P256_VALUE_BUS_LIMBS_V1;
 const P256_VALUE_BUS_SORTED_ACTIVE_PACKED_ROWS_V1: usize =
     P256_VALUE_BUS_SORTED_ACTIVE_FACTORS_V1 / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
-
 // Native arithmetic fixed layout.
 const ARITH_KIND_MULTIPLY_V1: usize = 0;
 const ARITH_KIND_ADD_V1: usize = 1;
@@ -179,13 +170,11 @@ const ARITH_SLOT_LAST_V1: usize = ARITH_SLOT_FIRST_V1 + 1;
 const ARITH_OPERATION_FIRST_V1: usize = ARITH_SLOT_LAST_V1 + 1;
 const ARITH_OPERATION_LAST_V1: usize = ARITH_OPERATION_FIRST_V1 + 1;
 const ARITH_PADDING_V1: usize = ARITH_OPERATION_LAST_V1 + 1;
-
 // Arithmetic aggregate suffix.
 const ARITH_SCALAR_START_V1: usize = P256_ARITHMETIC_STARK_FIXED_WIDTH_V1;
 const ARITH_BOUNDARY_START_V1: usize = ARITH_SCALAR_START_V1 + 8 * 4;
 const ARITH_VALUE_COPY_START_V1: usize = ARITH_BOUNDARY_START_V1 + 3;
 const ARITH_VALUE_COPY_BOUNDARY_START_V1: usize = ARITH_VALUE_COPY_START_V1 + 3 * 2;
-
 // Packed value-bus layout.
 const VALUE_SLOT_WIDTH_V1: usize = 10;
 const VALUE_ACTIVE_V1: usize = 0;
@@ -200,7 +189,6 @@ const VALUE_BOOLEAN_V1: usize = 8;
 const VALUE_ZERO_V1: usize = 9;
 const VALUE_FIRST_V1: usize = 20;
 const VALUE_CONTINUATION_V1: usize = 21;
-
 // Value-execution aggregate suffix.
 const EXECUTION_WRITER_START_V1: usize = P256_VALUE_BUS_STARK_FIXED_WIDTH_V1;
 const EXECUTION_WRITER_EVENT_WIDTH_V1: usize = 2 * 3;
@@ -209,7 +197,6 @@ const EXECUTION_WRITER_MULTIPLICITY_START_V1: usize =
 const EXECUTION_WRITER_BOUNDARY_START_V1: usize = EXECUTION_WRITER_MULTIPLICITY_START_V1 + 2 * 4;
 const EXECUTION_VALUE_COPY_START_V1: usize = EXECUTION_WRITER_BOUNDARY_START_V1 + 3;
 const EXECUTION_VALUE_COPY_BOUNDARY_START_V1: usize = EXECUTION_VALUE_COPY_START_V1 + 2 * 2;
-
 const _: () = {
     assert!(
         P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1[0]
@@ -256,7 +243,6 @@ const _: () = {
             == ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1
     );
 };
-
 /// P-256 algebraic fixed compilation or alias-selection failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509P256FixedAlgebraicErrorV1 {
@@ -270,34 +256,29 @@ pub(crate) enum ZkX509P256FixedAlgebraicErrorV1 {
     #[error("zk-X509 P-256 algebraic fixed schedule is invalid: {0}")]
     Algebraic(ZkX509FixedAlgebraicErrorV1),
 }
-
 impl From<ZkX509FixedAlgebraicErrorV1> for ZkX509P256FixedAlgebraicErrorV1 {
     fn from(error: ZkX509FixedAlgebraicErrorV1) -> Self {
         Self::Algebraic(error)
     }
 }
-
 fn map_trace_error_v1(error: P256TraceCompilerErrorV1) -> ZkX509P256FixedAlgebraicErrorV1 {
     match error {
         P256TraceCompilerErrorV1::Resource => ZkX509P256FixedAlgebraicErrorV1::Resource,
         _ => ZkX509P256FixedAlgebraicErrorV1::Topology,
     }
 }
-
 fn map_external_error_v1(error: P256ExternalBindingErrorV1) -> ZkX509P256FixedAlgebraicErrorV1 {
     match error {
         P256ExternalBindingErrorV1::Resource => ZkX509P256FixedAlgebraicErrorV1::Resource,
         _ => ZkX509P256FixedAlgebraicErrorV1::Topology,
     }
 }
-
 fn map_adapter_error_v1(error: P256AggregateAdapterErrorV1) -> ZkX509P256FixedAlgebraicErrorV1 {
     match error {
         P256AggregateAdapterErrorV1::Resource => ZkX509P256FixedAlgebraicErrorV1::Resource,
         _ => ZkX509P256FixedAlgebraicErrorV1::Topology,
     }
 }
-
 /// One of the six unique P-256 fixed schedules.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ZkX509P256FixedAlgebraicScheduleKindV1 {
@@ -314,7 +295,6 @@ pub(crate) enum ZkX509P256FixedAlgebraicScheduleKindV1 {
     /// Wallet-ownership writer-first sorted value bus.
     WalletSorted,
 }
-
 impl ZkX509P256FixedAlgebraicScheduleKindV1 {
     /// Exact slice in the combined 404-column schedule.
     pub(crate) const fn start_width_v1(self) -> (usize, usize) {
@@ -342,7 +322,6 @@ impl ZkX509P256FixedAlgebraicScheduleKindV1 {
             Self::WalletSorted => (WALLET_SORTED_START_V1, P256_VALUE_BUS_STARK_FIXED_WIDTH_V1),
         }
     }
-
     /// Representative canonical MAIN registration.
     #[cfg(test)]
     pub(crate) fn representative_registration_v1(
@@ -363,7 +342,6 @@ impl ZkX509P256FixedAlgebraicScheduleKindV1 {
         P256MainRegistrationV1::new_v1(signature, adapter, local).map_err(map_adapter_error_v1)
     }
 }
-
 /// Resolve one of the exact fifteen supported MAIN registrations.
 pub(crate) fn zk_x509_p256_fixed_algebraic_schedule_for_registration_v1(
     registration: P256MainRegistrationV1,
@@ -395,7 +373,6 @@ pub(crate) fn zk_x509_p256_fixed_algebraic_schedule_for_registration_v1(
         _ => Err(ZkX509P256FixedAlgebraicErrorV1::Topology),
     }
 }
-
 /// Borrow one registration's fixed slice from a combined algebraic opening.
 pub(crate) fn zk_x509_p256_fixed_algebraic_row_for_registration_v1<'a>(
     combined: &'a [F],
@@ -415,44 +392,35 @@ pub(crate) fn zk_x509_p256_fixed_algebraic_row_for_registration_v1<'a>(
         .get(start..start + width)
         .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256ValueMetadataV1 {
     modulus: ZkX509P256ModulusV1,
     kind: P256ValueKindV1,
     reads: usize,
 }
-
 fn checked_add_v1(left: usize, right: usize) -> Result<usize, ZkX509P256FixedAlgebraicErrorV1> {
     left.checked_add(right)
         .ok_or(ZkX509P256FixedAlgebraicErrorV1::Resource)
 }
-
 fn checked_mul_v1(left: usize, right: usize) -> Result<usize, ZkX509P256FixedAlgebraicErrorV1> {
     left.checked_mul(right)
         .ok_or(ZkX509P256FixedAlgebraicErrorV1::Resource)
 }
-
 fn u16_v1(value: usize) -> Result<u16, ZkX509P256FixedAlgebraicErrorV1> {
     u16::try_from(value).map_err(|_| ZkX509P256FixedAlgebraicErrorV1::Resource)
 }
-
 fn u64_v1(value: usize) -> Result<u64, ZkX509P256FixedAlgebraicErrorV1> {
     u64::try_from(value).map_err(|_| ZkX509P256FixedAlgebraicErrorV1::Resource)
 }
-
 fn id_index_v1(id: P256ValueIdV1) -> Result<usize, ZkX509P256FixedAlgebraicErrorV1> {
     usize::try_from(id.0).map_err(|_| ZkX509P256FixedAlgebraicErrorV1::Resource)
 }
-
 fn f_usize_v1(value: usize) -> Result<F, ZkX509P256FixedAlgebraicErrorV1> {
     Ok(F(u64_v1(value)?))
 }
-
 fn negative_one_v1() -> F {
     F::ZERO.sub(F::ONE)
 }
-
 fn push_contiguous_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     column: usize,
@@ -482,7 +450,6 @@ fn push_contiguous_v1(
     )?;
     Ok(())
 }
-
 fn push_sparse_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     column: usize,
@@ -494,7 +461,6 @@ fn push_sparse_v1(
     }
     Ok(())
 }
-
 fn push_repeated_affine_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     column: usize,
@@ -533,7 +499,6 @@ fn push_repeated_affine_v1(
     )?;
     Ok(())
 }
-
 fn push_repeated_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     column: usize,
@@ -544,7 +509,6 @@ fn push_repeated_v1(
 ) -> Result<(), ZkX509P256FixedAlgebraicErrorV1> {
     push_repeated_affine_v1(builder, column, first, count, stride, value, F::ZERO)
 }
-
 fn push_strided_sequence_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     column: usize,
@@ -581,14 +545,12 @@ fn push_strided_sequence_v1(
     }
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256OperationCallSegmentV1 {
     first_operation: usize,
     calls: usize,
     operations_per_call: usize,
 }
-
 const P256_OPERATION_CALL_SEGMENTS_V1: [P256OperationCallSegmentV1; 2] = [
     P256OperationCallSegmentV1 {
         first_operation: 0,
@@ -601,14 +563,12 @@ const P256_OPERATION_CALL_SEGMENTS_V1: [P256OperationCallSegmentV1; 2] = [
         operations_per_call: P256_SCALAR_ROUND_OPERATIONS_V1,
     },
 ];
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum P256OperationSequenceAxisV1 {
     Row,
     Call,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256OperationSequenceRunV1 {
     first: usize,
@@ -617,14 +577,12 @@ struct P256OperationSequenceRunV1 {
     start_value: F,
     step: F,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct P256OperationSequencePlanV1 {
     #[cfg(test)]
     axis: P256OperationSequenceAxisV1,
     runs: Vec<P256OperationSequenceRunV1>,
 }
-
 fn append_projected_sequence_runs_v1(
     runs: &mut Vec<P256OperationSequenceRunV1>,
     physical_first: usize,
@@ -641,7 +599,6 @@ fn append_projected_sequence_runs_v1(
     if last_value >= values.len() {
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
-
     let value_at = |index: usize| -> Result<F, ZkX509P256FixedAlgebraicErrorV1> {
         values
             .get(checked_add_v1(
@@ -684,7 +641,6 @@ fn append_projected_sequence_runs_v1(
     }
     Ok(())
 }
-
 fn compile_p256_operation_sequence_plan_for_layout_v1(
     values: &[F],
     call_segments: &[P256OperationCallSegmentV1],
@@ -709,7 +665,6 @@ fn compile_p256_operation_sequence_plan_for_layout_v1(
         1,
         values.len(),
     )?;
-
     let mut call_runs = Vec::new();
     call_runs
         .try_reserve_exact(maximum_runs)
@@ -762,7 +717,6 @@ fn compile_p256_operation_sequence_plan_for_layout_v1(
         1,
         values.len() - row_tail_start,
     )?;
-
     if call_runs.len() < row_runs.len() {
         Ok(P256OperationSequencePlanV1 {
             #[cfg(test)]
@@ -777,7 +731,6 @@ fn compile_p256_operation_sequence_plan_for_layout_v1(
         })
     }
 }
-
 fn compile_p256_operation_sequence_plan_v1(
     values: &[F],
 ) -> Result<P256OperationSequencePlanV1, ZkX509P256FixedAlgebraicErrorV1> {
@@ -790,7 +743,6 @@ fn compile_p256_operation_sequence_plan_v1(
         P256_FINAL_OPERATION_START_V1,
     )
 }
-
 fn push_p256_operation_sequence_plan_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     column: usize,
@@ -810,7 +762,6 @@ fn push_p256_operation_sequence_plan_v1(
     }
     Ok(())
 }
-
 fn compile_value_metadata_v1(
     topology: &P256EcdsaTopologyV1,
 ) -> Result<Vec<P256ValueMetadataV1>, ZkX509P256FixedAlgebraicErrorV1> {
@@ -904,14 +855,12 @@ fn compile_value_metadata_v1(
     }
     Ok(metadata)
 }
-
 fn modulus_field_v1(modulus: ZkX509P256ModulusV1) -> F {
     match modulus {
         ZkX509P256ModulusV1::BaseField => F(1),
         ZkX509P256ModulusV1::ScalarField => F(2),
     }
 }
-
 fn value_kind_field_v1(kind: P256ValueKindV1) -> F {
     match kind {
         P256ValueKindV1::Input => F(1),
@@ -919,7 +868,6 @@ fn value_kind_field_v1(kind: P256ValueKindV1) -> F {
         P256ValueKindV1::Derived => F(3),
     }
 }
-
 fn modulus_limbs_v1(modulus: ZkX509P256ModulusV1) -> [u16; 16] {
     let bytes = match modulus {
         ZkX509P256ModulusV1::BaseField => P256_BASE_MODULUS_BE_V1,
@@ -930,11 +878,9 @@ fn modulus_limbs_v1(modulus: ZkX509P256ModulusV1) -> [u16; 16] {
         u16::from_le_bytes([bytes[low], bytes[low - 1]])
     })
 }
-
 fn value_slot_column_v1(slice_start: usize, slot: usize, field: usize) -> usize {
     slice_start + slot * VALUE_SLOT_WIDTH_V1 + field
 }
-
 fn arithmetic_kind_column_v1(kind: ZkX509P256ArithmeticKindV1) -> usize {
     match kind {
         ZkX509P256ArithmeticKindV1::Multiply => ARITH_KIND_MULTIPLY_V1,
@@ -942,7 +888,6 @@ fn arithmetic_kind_column_v1(kind: ZkX509P256ArithmeticKindV1) -> usize {
         ZkX509P256ArithmeticKindV1::Subtract => ARITH_KIND_SUBTRACT_V1,
     }
 }
-
 fn compile_arithmetic_fixed_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -956,7 +901,6 @@ fn compile_arithmetic_fixed_v1(
     if active_rows > P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 {
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
-
     // Each instruction kind is a maximal contiguous block selector.
     let mut run_start = 0_usize;
     while run_start < operations.len() {
@@ -975,7 +919,6 @@ fn compile_arithmetic_fixed_v1(
         )?;
         run_start = run_end;
     }
-
     // Base-field modulus limbs are the common schedule. Scalar-field
     // instructions add the exact limb delta on their contiguous operation
     // runs, avoiding sixteen copies of the complete instruction topology.
@@ -1035,7 +978,6 @@ fn compile_arithmetic_fixed_v1(
         }
         scalar_run_start = scalar_run_end;
     }
-
     // Coefficient and range-slot schedules repeat identically for every
     // instruction.
     for coefficient in 0..P256_ARITHMETIC_ROWS_PER_OPERATION_V1 {
@@ -1101,7 +1043,6 @@ fn compile_arithmetic_fixed_v1(
         F::ONE,
         F::ZERO,
     )?;
-
     // The scalar-bit source is confined to instruction positions 13 and 14.
     for slot in 0..8 {
         let scalar_column = slice_start + ARITH_SCALAR_START_V1 + slot * 4;
@@ -1156,13 +1097,11 @@ fn compile_arithmetic_fixed_v1(
             }
         }
     }
-
     push_boundary_v1(
         builder,
         slice_start + ARITH_BOUNDARY_START_V1,
         P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1,
     )?;
-
     // Three arithmetic-copy events occupy the first sixteen coefficient rows
     // of every operation.  Their addresses are affine both within and across
     // operations.
@@ -1194,7 +1133,6 @@ fn compile_arithmetic_fixed_v1(
         P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1,
     )
 }
-
 fn push_boundary_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     column_start: usize,
@@ -1207,7 +1145,6 @@ fn push_boundary_v1(
     push_sparse_v1(builder, column_start + 1, rows - 1, F::ONE)?;
     push_contiguous_v1(builder, column_start + 2, 0, rows - 1, F::ONE, F::ZERO)
 }
-
 fn compile_execution_fixed_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -1221,7 +1158,6 @@ fn compile_execution_fixed_v1(
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
     let operations = &topology.linked_operations;
-
     // Every arithmetic segment exposes 48 execution factors, followed by an
     // initial writer only in the first 850 segments.
     for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
@@ -1255,7 +1191,6 @@ fn compile_execution_fixed_v1(
             )?;
         }
     }
-
     // Operation operands use six parity-separated three-row progressions.
     // Compile each metadata vector once, compare its exact row-axis encoding
     // with the canonical formula-call transpose, and replay the smaller plan
@@ -1317,7 +1252,6 @@ fn compile_execution_fixed_v1(
             }
         }
     }
-
     // Limb and access schedules are identical in every arithmetic segment.
     for local in 0..48 {
         let slot = local % P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
@@ -1340,7 +1274,6 @@ fn compile_execution_fixed_v1(
             F(if operand == 2 { 1 } else { 2 }),
         )?;
     }
-
     // Initial writers are eight packed rows. Their identifiers, modulus, and
     // origin kind are affine sequences across the first 850 operation slots.
     let mut initial_ids = Vec::new();
@@ -1401,7 +1334,6 @@ fn compile_execution_fixed_v1(
             )?;
         }
     }
-
     let mut assertion_index = 0_usize;
     for equality in topology.equalities.iter().copied() {
         compile_execution_assertion_v1(
@@ -1430,7 +1362,6 @@ fn compile_execution_fixed_v1(
     if assertion_index != P256_VALUE_BUS_ASSERTIONS_V1 {
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
-
     // Canonical packed suffix.
     for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
         push_contiguous_v1(
@@ -1446,7 +1377,6 @@ fn compile_execution_fixed_v1(
     compile_writer_fixed_v1(builder, slice_start, topology.role, metadata.len())?;
     compile_value_copy_fixed_v1(builder, slice_start)
 }
-
 fn compile_execution_assertion_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -1523,7 +1453,6 @@ fn compile_execution_assertion_v1(
         F::ZERO,
     )
 }
-
 fn push_value_bus_boundaries_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -1538,7 +1467,6 @@ fn push_value_bus_boundaries_v1(
         F::ZERO,
     )
 }
-
 fn compile_writer_fixed_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -1565,7 +1493,6 @@ fn compile_writer_fixed_v1(
             .checked_add(1)
             .ok_or(ZkX509P256FixedAlgebraicErrorV1::Resource)?;
     }
-
     let mut active = [Vec::<(usize, F)>::new(), Vec::<(usize, F)>::new()];
     let mut addresses = [Vec::<(usize, F)>::new(), Vec::<(usize, F)>::new()];
     let mut selectors: [[Vec<(usize, F)>; 4]; 2] =
@@ -1648,7 +1575,6 @@ fn compile_writer_fixed_v1(
         P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1,
     )
 }
-
 fn push_point_series_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     column: usize,
@@ -1690,7 +1616,6 @@ fn push_point_series_v1(
     }
     Ok(())
 }
-
 fn compile_value_copy_fixed_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -1723,13 +1648,11 @@ fn compile_value_copy_fixed_v1(
         P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1,
     )
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum P256SortedRunAxisV1 {
     RelativeFactor,
     PerValue,
 }
-
 fn sorted_relative_factor_axis_atom_count_v1(
     run_start: usize,
     run_count: usize,
@@ -1751,7 +1674,6 @@ fn sorted_relative_factor_axis_atom_count_v1(
         2 * P256_VALUE_BUS_LIMBS_V1,
     )
 }
-
 fn sorted_per_value_axis_atom_count_v1(
     run_start: usize,
     run_count: usize,
@@ -1778,7 +1700,6 @@ fn sorted_per_value_axis_atom_count_v1(
     }
     Ok(atoms)
 }
-
 fn sorted_run_axis_v1(
     run_start: usize,
     run_count: usize,
@@ -1792,13 +1713,11 @@ fn sorted_run_axis_v1(
         Ok(P256SortedRunAxisV1::RelativeFactor)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum P256SortedRepeatedPhaseAxisV1 {
     Local,
     Phase,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256SortedRepeatedPhasePlanV1 {
     value_start: usize,
@@ -1809,7 +1728,6 @@ struct P256SortedRepeatedPhasePlanV1 {
     phase_atoms: usize,
     axis: P256SortedRepeatedPhaseAxisV1,
 }
-
 impl P256SortedRepeatedPhasePlanV1 {
     fn value_end_v1(self) -> Result<usize, ZkX509P256FixedAlgebraicErrorV1> {
         checked_add_v1(
@@ -1817,7 +1735,6 @@ impl P256SortedRepeatedPhasePlanV1 {
             checked_mul_v1(self.repeats, self.values_per_repeat)?,
         )
     }
-
     const fn selected_atoms_v1(self) -> usize {
         match self.axis {
             P256SortedRepeatedPhaseAxisV1::Local => self.local_atoms,
@@ -1825,13 +1742,11 @@ impl P256SortedRepeatedPhasePlanV1 {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum P256SortedWholeAxisV1 {
     GlobalLocal,
     PhaseHybrid,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256SortedRunPlanV1 {
     global_local_atoms: usize,
@@ -1843,7 +1758,6 @@ struct P256SortedRunPlanV1 {
     tail_local_atoms: usize,
     axis: P256SortedWholeAxisV1,
 }
-
 impl P256SortedRunPlanV1 {
     const fn selected_atoms_v1(self) -> usize {
         match self.axis {
@@ -1852,7 +1766,6 @@ impl P256SortedRunPlanV1 {
         }
     }
 }
-
 fn sorted_local_range_atom_count_v1(
     metadata: &[P256ValueMetadataV1],
     value_start: usize,
@@ -1878,7 +1791,6 @@ fn sorted_local_range_atom_count_v1(
     }
     Ok(atoms)
 }
-
 fn compile_sorted_repeated_phase_plan_v1(
     metadata: &[P256ValueMetadataV1],
     prefix: &[usize],
@@ -1923,7 +1835,6 @@ fn compile_sorted_repeated_phase_plan_v1(
         );
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
-
     for repetition in 0..repeats {
         let repeat_start =
             checked_add_v1(value_start, checked_mul_v1(repetition, values_per_repeat)?)?;
@@ -1976,7 +1887,6 @@ fn compile_sorted_repeated_phase_plan_v1(
         );
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
-
     let local_atoms = sorted_local_range_atom_count_v1(metadata, value_start, value_end)?;
     let mut phase_atoms = 0_usize;
     for template_offset in 0..values_per_repeat {
@@ -2002,7 +1912,6 @@ fn compile_sorted_repeated_phase_plan_v1(
         axis,
     })
 }
-
 fn compile_sorted_run_plan_v1(
     metadata: &[P256ValueMetadataV1],
     prefix: &[usize],
@@ -2103,7 +2012,6 @@ fn compile_sorted_run_plan_v1(
         axis,
     })
 }
-
 fn emit_sorted_relative_factor_axis_run_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -2178,7 +2086,6 @@ fn emit_sorted_relative_factor_axis_run_v1(
     }
     Ok(())
 }
-
 fn push_sorted_logical_stride_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -2231,7 +2138,6 @@ fn push_sorted_logical_stride_v1(
     }
     Ok(atoms)
 }
-
 fn emit_sorted_per_value_axis_run_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -2250,7 +2156,6 @@ fn emit_sorted_per_value_axis_run_v1(
     if logical_end != expected_end {
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
-
     let mut emitted = 0_usize;
     for value_offset in 0..run_count {
         let id = checked_add_v1(run_start, value_offset)?;
@@ -2313,7 +2218,6 @@ fn emit_sorted_per_value_axis_run_v1(
     }
     Ok(())
 }
-
 fn emit_sorted_local_range_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -2369,7 +2273,6 @@ fn emit_sorted_local_range_v1(
     }
     Ok(emitted)
 }
-
 fn emit_sorted_repeated_phase_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -2391,7 +2294,6 @@ fn emit_sorted_repeated_phase_v1(
     if block_rows == 0 {
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
-
     let mut emitted = 0_usize;
     for template_offset in 0..plan.values_per_repeat {
         let id = checked_add_v1(plan.value_start, template_offset)?;
@@ -2411,7 +2313,6 @@ fn emit_sorted_repeated_phase_v1(
                 f_usize_v1(plan.values_per_repeat)?,
             )?;
             emitted = checked_add_v1(emitted, 1)?;
-
             let limb = relative / per_limb;
             push_repeated_v1(
                 builder,
@@ -2453,7 +2354,6 @@ fn emit_sorted_repeated_phase_v1(
     }
     Ok(emitted)
 }
-
 fn emit_sorted_run_plan_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -2557,7 +2457,6 @@ fn emit_sorted_run_plan_v1(
     }
     Ok(())
 }
-
 fn compile_sorted_fixed_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -2593,7 +2492,6 @@ fn compile_sorted_fixed_v1(
     // Validate the complete repeated phase geometry and select the exact
     // whole-plan minimum before the first builder mutation.
     let run_plan = compile_sorted_run_plan_v1(metadata, &prefix)?;
-
     // Every sorted active factor is a read by default. The unique writer and
     // per-limb terminal positions add -1 corrections to access and
     // equal-next respectively.
@@ -2621,13 +2519,11 @@ fn compile_sorted_fixed_v1(
             F::ZERO,
         )?;
     }
-
     // The release topology contains two repeated metadata phases. Compare the
     // established global-local plan against a phase-hybrid transpose that
     // keeps the initial and final regions local. The established whole plan
     // wins ties.
     emit_sorted_run_plan_v1(builder, slice_start, metadata, &prefix, run_plan)?;
-
     compile_sorted_metadata_field_v1(
         builder,
         slice_start,
@@ -2646,7 +2542,6 @@ fn compile_sorted_fixed_v1(
     )?;
     push_value_bus_boundaries_v1(builder, slice_start)
 }
-
 fn compile_sorted_metadata_field_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -2677,7 +2572,6 @@ fn compile_sorted_metadata_field_v1(
     }
     Ok(())
 }
-
 fn push_logical_constant_range_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -2716,7 +2610,6 @@ fn push_logical_constant_range_v1(
     }
     Ok(atoms)
 }
-
 fn logical_constant_range_atom_count_v1(
     logical_start: usize,
     logical_end: usize,
@@ -2741,7 +2634,6 @@ fn logical_constant_range_atom_count_v1(
     }
     Ok(atoms)
 }
-
 /// Digest of the stable P-256 structural compiler descriptor.
 #[cfg(test)]
 pub(crate) fn zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1()
@@ -2752,7 +2644,6 @@ pub(crate) fn zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1()
     )
     .map_err(|_| ZkX509P256FixedAlgebraicErrorV1::Topology)
 }
-
 /// Typed composition of the six independently capped P-256 registrations.
 ///
 /// Child order is the canonical MAIN registration order: certificate
@@ -2763,7 +2654,6 @@ pub(crate) struct ZkX509P256FixedAlgebraicScheduleV1 {
     children: [ZkX509FixedAlgebraicScheduleV1; ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1],
     descriptor_digest: [u8; 32],
 }
-
 impl ZkX509P256FixedAlgebraicScheduleV1 {
     fn new_v1(
         children: [ZkX509FixedAlgebraicScheduleV1; ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1],
@@ -2808,18 +2698,15 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
             descriptor_digest,
         })
     }
-
     /// Exact combined fixed width in canonical child order.
     #[cfg(test)]
     pub(crate) const fn width_v1(&self) -> u16 {
         ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1 as u16
     }
-
     /// Digest binding compiler semantics and every ordered child descriptor.
     pub(crate) const fn descriptor_digest_v1(&self) -> [u8; 32] {
         self.descriptor_digest
     }
-
     /// Fail closed unless the compiled profile pins this exact composite.
     #[cfg(test)]
     pub(crate) fn verify_descriptor_digest_v1(
@@ -2831,13 +2718,11 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
         }
         Ok(())
     }
-
     /// Common child domain shared by all six registrations.
     #[cfg(test)]
     pub(crate) fn domain_v1(&self) -> ZkX509FixedAlgebraicDomainV1 {
         self.children[0].domain_v1()
     }
-
     /// Exact total across the six independently bounded atom collections.
     #[cfg(test)]
     pub(crate) fn atom_count_v1(&self) -> usize {
@@ -2846,7 +2731,6 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
             .map(|child| child.atoms_v1().len())
             .sum()
     }
-
     /// Borrow the six independently capped schedules in registration order.
     #[cfg(test)]
     pub(crate) fn children_v1(
@@ -2854,7 +2738,6 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
     ) -> &[ZkX509FixedAlgebraicScheduleV1; ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1] {
         &self.children
     }
-
     /// Evaluate one combined native row without constructing a native matrix.
     #[cfg(test)]
     pub(crate) fn native_row_v1(
@@ -2878,7 +2761,6 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
         }
         Ok(())
     }
-
     /// Evaluate and concatenate all six child openings in canonical order.
     pub(crate) fn evaluate_query_indices_v1(
         &self,
@@ -2893,7 +2775,6 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
         }
         ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(self.descriptor_digest, &parts)
     }
-
     #[cfg(test)]
     fn atoms_v1(&self) -> Vec<ZkX509FixedAlgebraicAtomV1> {
         let mut atoms = Vec::with_capacity(self.atom_count_v1());
@@ -2941,7 +2822,6 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
         atoms
     }
 }
-
 fn compile_p256_fixed_child_v1(
     domain: ZkX509FixedAlgebraicDomainV1,
     width: usize,
@@ -2953,7 +2833,6 @@ fn compile_p256_fixed_child_v1(
     compile(&mut builder)?;
     builder.finish_v1().map_err(Into::into)
 }
-
 /// Compile the exact six-schedule, 404-column verifier-owned P-256 schedule.
 pub(crate) fn compile_zk_x509_p256_fixed_algebraic_schedule_v1()
 -> Result<ZkX509P256FixedAlgebraicScheduleV1, ZkX509P256FixedAlgebraicErrorV1> {
@@ -2968,7 +2847,6 @@ pub(crate) fn compile_zk_x509_p256_fixed_algebraic_schedule_v1()
         .map_err(map_trace_error_v1)?;
     let certificate_metadata = compile_value_metadata_v1(&certificate)?;
     let wallet_metadata = compile_value_metadata_v1(&wallet)?;
-
     let mut children = Vec::new();
     children
         .try_reserve_exact(ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1)
@@ -3010,10 +2888,8 @@ pub(crate) fn compile_zk_x509_p256_fixed_algebraic_schedule_v1()
         })?;
     ZkX509P256FixedAlgebraicScheduleV1::new_v1(children)
 }
-
 static ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1: OnceLock<ZkX509P256FixedAlgebraicScheduleV1> =
     OnceLock::new();
-
 /// Borrow the canonical verifier-derived P-256 schedule.
 ///
 /// Only a successful compilation is cached. A transient allocation failure or
@@ -3031,14 +2907,12 @@ pub(crate) fn zk_x509_p256_fixed_algebraic_schedule_v1()
         .get()
         .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         fmt::Write as _,
     };
-
     use super::*;
     use crate::privacy_engines::{
         transparent_stark::{
@@ -3051,7 +2925,6 @@ mod tests {
             p256_aggregate_adapter::P256MainVerifierFixedSourceV1,
         },
     };
-
     // Filled from the first successful structural compilation and deliberately
     // pinned thereafter. A topology or atom-decomposition change must update
     // the profile and this KAT together.
@@ -3070,13 +2943,11 @@ mod tests {
         (41_848, 149_102, 8_642, 21_813_752, 14_828);
     const P256_FIXED_ALGEBRAIC_UNIQUE_REPEAT_STRIDES_KAT_V1: &[u64] =
         &[2, 3, 5, 7, 8, 16, 24, 25, 32, 944, 1_376, 5_088, 7_104];
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct P256DiagnosticStageCountV1 {
         stage: &'static str,
         atoms: usize,
     }
-
     fn exact_maximum_116_query_work_score_v1(schedule: &ZkX509FixedAlgebraicScheduleV1) -> u64 {
         let domain = schedule.domain_v1();
         let native_size = domain.native_size_v1().expect("bounded native size");
@@ -3098,7 +2969,6 @@ mod tests {
             group_counts.values().filter(|count| **count == 1).count(),
             12
         );
-
         let mut non_repeated = 0_u64;
         let mut repeated_runs = BTreeMap::<u64, (u64, u64)>::new();
         for atom in schedule.atoms_v1().iter().copied() {
@@ -3116,7 +2986,6 @@ mod tests {
                     .expect("bounded non-repeated atom count");
             }
         }
-
         let mut total = non_repeated
             .checked_mul(query_count)
             .expect("bounded non-repeated query work");
@@ -3142,7 +3011,6 @@ mod tests {
         }
         total
     }
-
     fn digest_hex_v1(digest: [u8; 32]) -> String {
         let mut encoded = String::with_capacity(64);
         for byte in digest {
@@ -3150,7 +3018,6 @@ mod tests {
         }
         encoded
     }
-
     #[test]
     fn collect_exact_release_kats_or_report_stage_v1() {
         let schedule = compile_zk_x509_p256_fixed_algebraic_schedule_v1()
@@ -3215,7 +3082,6 @@ mod tests {
                 .sum::<u64>(),
         );
     }
-
     fn reconstruct_operation_sequence_plan_v1(plan: &P256OperationSequencePlanV1) -> Vec<F> {
         let packed_rows = P256_VALUE_BUS_SEGMENT_ROWS_V1 / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
         let mut values = vec![F::ZERO; P256_ARITHMETIC_OPERATIONS_V1];
@@ -3232,7 +3098,6 @@ mod tests {
         }
         values
     }
-
     #[test]
     fn operation_sequence_row_and_call_axis_plans_are_exact_v1() {
         let zero_values = vec![F::ZERO; P256_ARITHMETIC_OPERATIONS_V1];
@@ -3244,7 +3109,6 @@ mod tests {
             reconstruct_operation_sequence_plan_v1(&tied_plan),
             zero_values
         );
-
         let row_values: Vec<F> = (0..P256_ARITHMETIC_OPERATIONS_V1)
             .map(|index| F(index as u64 + 1))
             .collect();
@@ -3256,7 +3120,6 @@ mod tests {
             reconstruct_operation_sequence_plan_v1(&row_plan),
             row_values
         );
-
         let mut call_values = vec![F::ZERO; P256_ARITHMETIC_OPERATIONS_V1];
         for (segment_index, segment) in P256_OPERATION_CALL_SEGMENTS_V1.iter().copied().enumerate()
         {
@@ -3289,7 +3152,6 @@ mod tests {
             call_values
         );
     }
-
     #[test]
     fn operation_sequence_plan_rejects_malformed_segment_boundaries_v1() {
         let values = vec![F::ONE; P256_ARITHMETIC_OPERATIONS_V1];
@@ -3358,7 +3220,6 @@ mod tests {
             Err(ZkX509P256FixedAlgebraicErrorV1::Resource)
         );
     }
-
     fn isolated_sorted_run_schedule_v1(
         axis: P256SortedRunAxisV1,
         run_start: usize,
@@ -3401,7 +3262,6 @@ mod tests {
         }
         builder.finish_v1().expect("canonical isolated run")
     }
-
     #[test]
     fn sorted_run_axis_uses_exact_costs_and_preserves_relative_ties_v1() {
         assert_eq!(sorted_relative_factor_axis_atom_count_v1(7, 3, 1), Ok(63));
@@ -3411,7 +3271,6 @@ mod tests {
             Ok(P256SortedRunAxisV1::RelativeFactor),
             "the established axis must win exact ties"
         );
-
         assert_eq!(
             sorted_run_axis_v1(7, 1, 1),
             Ok(P256SortedRunAxisV1::PerValue)
@@ -3426,7 +3285,6 @@ mod tests {
             sorted_run_axis_v1(7, 2, 5),
             Ok(P256SortedRunAxisV1::PerValue)
         );
-
         for malformed in [(0, 0, 1), (0, 1, 0)] {
             assert_eq!(
                 sorted_run_axis_v1(malformed.0, malformed.1, malformed.2),
@@ -3442,7 +3300,6 @@ mod tests {
             Err(ZkX509P256FixedAlgebraicErrorV1::Resource)
         );
     }
-
     #[test]
     fn sorted_run_axes_are_native_row_equivalent_with_exact_savings_v1() {
         let run_start = 7;
@@ -3462,7 +3319,6 @@ mod tests {
         );
         assert_eq!(relative.atoms_v1().len(), 187);
         assert_eq!(per_value.atoms_v1().len(), 72);
-
         let logical_end = run_count * P256_VALUE_BUS_LIMBS_V1 * per_limb;
         let mut relative_row = [F::ZERO; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1];
         let mut per_value_row = [F::ZERO; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1];
@@ -3476,7 +3332,6 @@ mod tests {
             assert_eq!(per_value_row, relative_row, "packed sorted row {row}");
         }
     }
-
     #[test]
     fn malformed_sorted_runs_fail_before_mutating_the_builder_v1() {
         let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
@@ -3493,7 +3348,6 @@ mod tests {
         builder
             .push_sparse_v1(21, 1_000, F(123))
             .expect("sentinel atom");
-
         assert_eq!(
             emit_sorted_relative_factor_axis_run_v1(&mut builder, 0, 1, 7, 2, 5),
             Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
@@ -3529,11 +3383,9 @@ mod tests {
             ),
             Err(ZkX509P256FixedAlgebraicErrorV1::Resource)
         );
-
         let schedule = builder.finish_v1().expect("sentinel-only schedule");
         assert_eq!(schedule.atoms_v1().len(), 1);
     }
-
     fn synthetic_phase_metadata_v1() -> (Vec<P256ValueMetadataV1>, Vec<usize>) {
         let leading = P256ValueMetadataV1 {
             modulus: ZkX509P256ModulusV1::BaseField,
@@ -3565,7 +3417,6 @@ mod tests {
         }
         (metadata, prefix)
     }
-
     fn isolated_synthetic_phase_schedule_v1(
         metadata: &[P256ValueMetadataV1],
         prefix: &[usize],
@@ -3602,7 +3453,6 @@ mod tests {
         }
         builder.finish_v1().expect("canonical isolated phase")
     }
-
     #[test]
     fn repeated_phase_axis_is_exact_and_native_row_equivalent_v1() {
         let (metadata, prefix) = synthetic_phase_metadata_v1();
@@ -3612,7 +3462,6 @@ mod tests {
         assert_eq!(plan.local_atoms, 165);
         assert_eq!(plan.phase_atoms, 157);
         assert_eq!(plan.axis, P256SortedRepeatedPhaseAxisV1::Phase);
-
         let local = isolated_synthetic_phase_schedule_v1(
             &metadata,
             &prefix,
@@ -3639,7 +3488,6 @@ mod tests {
             assert_eq!(phase_row, local_row, "synthetic phase row {row}");
         }
     }
-
     #[test]
     fn repeated_phase_template_drift_and_overflow_fail_before_mutation_v1() {
         let (metadata, prefix) = synthetic_phase_metadata_v1();
@@ -3668,7 +3516,6 @@ mod tests {
             compile_sorted_repeated_phase_plan_v1(&metadata, &prefix, 1, usize::MAX, 2),
             Err(ZkX509P256FixedAlgebraicErrorV1::Resource)
         );
-
         let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
             ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
             ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
@@ -3698,7 +3545,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn active_zero_writer_address_is_encoded_as_implicit_zero_v1() {
         let sources =
@@ -3712,7 +3558,6 @@ mod tests {
                 .any(|source| source.writer_id == P256ValueIdV1(0) && source.writer_limb == 0),
             "the release topology binds the first limb of constant value zero"
         );
-
         let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
             ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
             ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
@@ -3732,7 +3577,6 @@ mod tests {
         )
         .expect("zero is a canonical active writer address");
         let schedule = builder.finish_v1().expect("canonical writer schedule");
-
         // Initial value zero, limb zero occupies logical ordinal 48, hence
         // packed row 24 and slot zero.
         let mut row = [F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1];
@@ -3743,12 +3587,10 @@ mod tests {
         assert_eq!(row[EXECUTION_WRITER_START_V1 + 1], F::ONE);
         assert_eq!(row[EXECUTION_WRITER_START_V1 + 2], F::ZERO);
     }
-
     fn schedule_v1() -> &'static ZkX509P256FixedAlgebraicScheduleV1 {
         zk_x509_p256_fixed_algebraic_schedule_v1()
             .expect("canonical cached structural P-256 algebraic schedule")
     }
-
     fn native_source_v1() -> &'static P256MainVerifierFixedSourceV1 {
         static SOURCE: OnceLock<P256MainVerifierFixedSourceV1> = OnceLock::new();
         SOURCE.get_or_init(|| {
@@ -3756,7 +3598,6 @@ mod tests {
                 .expect("closed verifier-owned P-256 fixed source")
         })
     }
-
     const SCHEDULE_KINDS_V1: [ZkX509P256FixedAlgebraicScheduleKindV1;
         ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1] = [
         ZkX509P256FixedAlgebraicScheduleKindV1::CertificateArithmetic,
@@ -3766,7 +3607,6 @@ mod tests {
         ZkX509P256FixedAlgebraicScheduleKindV1::CertificateSorted,
         ZkX509P256FixedAlgebraicScheduleKindV1::WalletSorted,
     ];
-
     fn expected_combined_native_row_v1(row: usize) -> [F; ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1] {
         let mut combined = [F::ZERO; ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1];
         for kind in SCHEDULE_KINDS_V1 {
@@ -3782,7 +3622,6 @@ mod tests {
         }
         combined
     }
-
     fn kind_for_global_column_v1(column: usize) -> (ZkX509P256FixedAlgebraicScheduleKindV1, usize) {
         for kind in SCHEDULE_KINDS_V1 {
             let (start, width) = kind.start_width_v1();
@@ -3792,7 +3631,6 @@ mod tests {
         }
         panic!("test global column must be in the exact width");
     }
-
     #[test]
     fn exact_six_schedules_fifteen_aliases_and_widths() {
         assert_eq!(SCHEDULE_KINDS_V1.len(), 6);
@@ -3842,7 +3680,6 @@ mod tests {
         }
         assert_eq!(aliases, ZK_X509_P256_FIXED_ALGEBRAIC_ALIAS_COUNT_V1);
     }
-
     #[test]
     fn atom_count_and_descriptor_digest_are_exact_and_deterministic() {
         let first = schedule_v1();
@@ -3879,7 +3716,6 @@ mod tests {
             first.descriptor_digest_v1()
         );
     }
-
     #[test]
     fn composite_children_are_exact_and_reject_order_width_and_substitution_attacks() {
         let schedule = schedule_v1();
@@ -3891,21 +3727,18 @@ mod tests {
             core::array::from_fn(|index| { schedule.children_v1()[index].descriptor_digest_v1() }),
             P256_FIXED_ALGEBRAIC_CHILD_DIGESTS_V1
         );
-
         let mut reordered = schedule.children.clone();
         reordered.swap(2, 3);
         assert_eq!(
             ZkX509P256FixedAlgebraicScheduleV1::new_v1(reordered),
             Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
         );
-
         let mut substituted = schedule.children.clone();
         substituted[2] = substituted[3].clone();
         assert_eq!(
             ZkX509P256FixedAlgebraicScheduleV1::new_v1(substituted),
             Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
         );
-
         let domain = schedule.domain_v1();
         let mut wrong_width =
             ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(domain, 45).expect("bounded child");
@@ -3921,7 +3754,6 @@ mod tests {
             Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
         );
     }
-
     #[test]
     fn sorted_active_extent_is_distinct_from_execution_logical_extent_v1() {
         assert_eq!(P256_VALUE_BUS_SORTED_ACTIVE_PACKED_ROWS_V1, 362_752);
@@ -3929,7 +3761,6 @@ mod tests {
         assert!(
             P256_VALUE_BUS_SORTED_ACTIVE_PACKED_ROWS_V1 < P256_VALUE_BUS_LOGICAL_PACKED_ROWS_V1
         );
-
         let mut last_active = [F::ZERO; ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1];
         schedule_v1()
             .native_row_v1(
@@ -3965,7 +3796,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn atom_profile_and_unique_repetition_strides_are_exact() {
         let atoms = schedule_v1().atoms_v1();
@@ -4001,7 +3831,6 @@ mod tests {
         );
         assert_eq!(observed, expected);
     }
-
     #[test]
     fn native_rows_match_closed_provider_at_transitions_and_deterministic_samples() {
         let mut rows = BTreeSet::new();
@@ -4033,7 +3862,6 @@ mod tests {
             insert_boundary(start);
             insert_boundary(start + 16);
         }
-
         for role in [
             P256EcdsaRoleV1::CertificateOrCrl,
             P256EcdsaRoleV1::WalletOwnership,
@@ -4058,7 +3886,6 @@ mod tests {
                 logical += P256_VALUE_BUS_LIMBS_V1 * per_limb;
             }
         }
-
         let mut state = 0x9e37_79b9_7f4a_7c15_u64;
         for _ in 0..256 {
             state = state
@@ -4078,7 +3905,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn aliases_select_the_exact_native_schedule_slice() {
         for row in [0, 1, 415, 447, 448, 479, 474_655, 474_656, 524_287] {
@@ -4106,7 +3932,6 @@ mod tests {
             }
         }
     }
-
     fn combined_reference_coefficients_v1() -> Vec<F> {
         let selected = [
             (0_usize, F(3)),
@@ -4138,7 +3963,6 @@ mod tests {
         goldilocks_ifft_v1(&mut combined, root).expect("independent native IFFT");
         combined
     }
-
     fn evaluate_coefficients_v1(coefficients: &[F], point: F) -> F {
         coefficients
             .iter()
@@ -4147,7 +3971,6 @@ mod tests {
                 accumulator.mul(point).add(*coefficient)
             })
     }
-
     fn selected_opening_linear_combination_v1(row: &[F]) -> F {
         [
             (0_usize, F(3)),
@@ -4162,7 +3985,6 @@ mod tests {
             accumulator.add(row[column].mul(coefficient))
         })
     }
-
     #[test]
     fn ifft_coset_query_openings_match_independent_polynomial_evaluation() {
         let queries = [0_u64, 1, 63, 64, (1_u64 << 25) - 1];
@@ -4182,7 +4004,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     #[ignore = "release diagnostic materializes one 2^25 scalar coset LDE, never a width-404 matrix"]
     fn independent_coset_fft_matches_every_selected_query() {
@@ -4209,7 +4030,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn malformed_domains_descriptors_queries_and_registrations_fail_closed() {
         assert_eq!(
@@ -4255,7 +4075,6 @@ mod tests {
             zk_x509_p256_fixed_algebraic_row_for_registration_v1(&short, unsupported),
             Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
         );
-
         for signature in 0..P256_X5S1_SIGNATURES_V1 {
             for (adapter, locals) in [
                 (P256MainAdapterV1::ValueBus, 2),
@@ -4286,7 +4105,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn kernel_resource_and_canonicality_limits_fail_closed() {
         assert!(
@@ -4312,7 +4130,6 @@ mod tests {
             ZkX509FixedAlgebraicScheduleV1::new_v1(domain, 1, over_limit),
             Err(ZkX509FixedAlgebraicErrorV1::LimitExceeded)
         );
-
         let stress_domain =
             ZkX509FixedAlgebraicDomainV1::new_v1(20, 21, F(GOLDILOCKS_GENERATOR_V1))
                 .expect("bounded stress domain");
@@ -4342,7 +4159,6 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::LimitExceeded)
         );
     }
-
     #[test]
     #[ignore = "release diagnostic: exhaustive full-domain differential, one column at a time"]
     fn every_native_cell_matches_without_materializing_a_width_404_matrix() {

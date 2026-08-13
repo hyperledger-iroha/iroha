@@ -12,14 +12,10 @@
 //! both first messages and the complete ordered statement before deriving the
 //! challenge.  No clear evaluation or deterministic folded witness scalar
 //! enters the wire.
-
 use core::{convert::Infallible, mem};
 use std::collections::BTreeSet;
-
 use thiserror::Error;
-
 use crate::generalized_bulletproof::{ProofSuite, SecretMultiexpBuilder, multiexp};
-
 use super::super::super::{
     MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
     bulletproof_t256::{ZeroizingT256ScalarVecV1, ZkAmsT256BulletproofSuiteV1},
@@ -35,7 +31,6 @@ use super::{
     },
     terminal::ZkAmsPhase3PreparedTerminalOpeningsV1,
 };
-
 const BRIDGE_VERSION_V2: u8 = 2;
 const BRIDGE_ROWS_V2: usize = ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1
     + ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1;
@@ -50,7 +45,6 @@ const BRIDGE_MAX_CHALLENGE_ATTEMPTS_V2: u16 = 128;
 const BRIDGE_MAX_MASK_ATTEMPTS_V2: u8 = 2;
 const BRIDGE_MASK_ENTROPY_BYTES_V2: usize = 64;
 const BRIDGE_MASK_STATISTICAL_SECURITY_BITS_V2: u16 = 245;
-
 const HYRAX_KEY_LABEL_V2: &[u8] = b"iroha.zk-ams.v1.batch-admission.hyrax-t256";
 const BASIS_DIGEST_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.cross-basis.basis";
 const COMMITMENT_ROOT_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.cross-basis.commitment-root";
@@ -59,18 +53,15 @@ const BRIDGE_ROOT_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.cross-basis.root";
 const SCHNORR_TRANSCRIPT_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.cross-basis.representation-equality";
 const SCHNORR_CHALLENGE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.cross-basis.representation-equality.challenge";
-
 // These remain false until a single source-and-packing owner replaces both
 // uninhabited fields below and the terminal consumes its verified result.
 const BRIDGE_SOURCE_BOUND_V2: bool = false;
 const BRIDGE_PACKING_BOUND_V2: bool = false;
 const BRIDGE_TERMINAL_WIRED_V2: bool = false;
 const BRIDGE_RELEASE_ENABLED_V2: bool = false;
-
 const _: [(); 1_536] = [(); BRIDGE_ROWS_V2];
 const _: [(); 1_025] = [(); BRIDGE_BASIS_VIEW_V2];
 const _: [(); 32_866] = [(); BRIDGE_RAW_PROOF_BYTES_V2];
-
 #[derive(Debug, Error, PartialEq, Eq)]
 enum BridgeErrorV2 {
     #[error("cross-basis bridge dimensions are not the exact terminal shape")]
@@ -94,7 +85,6 @@ enum BridgeErrorV2 {
     #[error("cross-basis bridge production binding is unavailable")]
     BindingUnavailable,
 }
-
 /// Move-only production input.  There is intentionally no constructor.
 ///
 /// The terminal borrow is not enough to mint this type: the source and
@@ -105,7 +95,6 @@ struct BoundT256BridgeRowSetV2<'a> {
     source_binding: Infallible,
     packing_binding: Infallible,
 }
-
 /// Move-only production result.  It cannot exist while either upstream seal
 /// is uninhabited and exposes neither proof bytes nor any raw opening.
 struct VerifiedBridgeBindingV2 {
@@ -114,7 +103,6 @@ struct VerifiedBridgeBindingV2 {
     proof: RawBridgeProofV2,
     bridge_root: [u8; 32],
 }
-
 impl BoundT256BridgeRowSetV2<'_> {
     /// Poison the row owner before any validation which could fail.
     fn into_verified_v2(mut self) -> Result<VerifiedBridgeBindingV2, BridgeErrorV2> {
@@ -133,38 +121,31 @@ impl BoundT256BridgeRowSetV2<'_> {
         match (source_binding, packing_binding) {}
     }
 }
-
 struct RawBridgeProofV2 {
     bytes: [u8; BRIDGE_RAW_PROOF_BYTES_V2],
 }
-
 struct CheckedBasisV2 {
     points: Vec<Point>,
     digest: [u8; 32],
 }
-
 struct KernelStatementV2<'a> {
     binding_digest: [u8; 32],
     hyrax_commitments: &'a [Point],
     bp_commitments: &'a [Point],
 }
-
 struct KernelProverRowsV2<'a> {
     statement: KernelStatementV2<'a>,
     openings: &'a [Scalar],
 }
-
 struct AggregatedRowsV2 {
     opening: ZeroizingT256ScalarVecV1,
     hyrax_commitment: Point,
     bp_commitment: Point,
 }
-
 struct ProofWriterV2 {
     bytes: [u8; BRIDGE_RAW_PROOF_BYTES_V2],
     cursor: usize,
 }
-
 impl ProofWriterV2 {
     fn new() -> Self {
         Self {
@@ -172,18 +153,15 @@ impl ProofWriterV2 {
             cursor: 0,
         }
     }
-
     fn scalar(&mut self, scalar: Scalar) -> Result<(), BridgeErrorV2> {
         self.bytes(self.cursor, &scalar.to_le_bytes())
     }
-
     fn point(&mut self, point: Point) -> Result<(), BridgeErrorV2> {
         let encoded = point
             .to_non_identity_wire_bytes()
             .map_err(|_| BridgeErrorV2::Representation)?;
         self.bytes(self.cursor, &encoded)
     }
-
     fn bytes(&mut self, offset: usize, value: &[u8]) -> Result<(), BridgeErrorV2> {
         if offset != self.cursor {
             return Err(BridgeErrorV2::Wire);
@@ -200,7 +178,6 @@ impl ProofWriterV2 {
         self.cursor = end;
         Ok(())
     }
-
     fn finish(mut self) -> Result<RawBridgeProofV2, BridgeErrorV2> {
         if self.cursor != BRIDGE_RAW_PROOF_BYTES_V2 {
             return Err(BridgeErrorV2::Wire);
@@ -209,7 +186,6 @@ impl ProofWriterV2 {
         Ok(RawBridgeProofV2 { bytes })
     }
 }
-
 impl Drop for ProofWriterV2 {
     fn drop(&mut self) {
         self.bytes.fill(0);
@@ -218,12 +194,10 @@ impl Drop for ProofWriterV2 {
         let _ = core::hint::black_box(&mut self.bytes);
     }
 }
-
 struct ProofReaderV2<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
-
 impl<'a> ProofReaderV2<'a> {
     fn new(bytes: &'a [u8]) -> Result<Self, BridgeErrorV2> {
         if bytes.len() > BRIDGE_RAW_PROOF_BYTES_V2 {
@@ -234,7 +208,6 @@ impl<'a> ProofReaderV2<'a> {
         }
         Ok(Self { bytes, cursor: 0 })
     }
-
     fn scalar(&mut self) -> Result<Scalar, BridgeErrorV2> {
         let bytes: [u8; BRIDGE_SCALAR_BYTES_V2] = self
             .take::<BRIDGE_SCALAR_BYTES_V2>()?
@@ -242,12 +215,10 @@ impl<'a> ProofReaderV2<'a> {
             .map_err(|_| BridgeErrorV2::Wire)?;
         Scalar::from_le_bytes_exact(bytes).map_err(|_| BridgeErrorV2::Wire)
     }
-
     fn point(&mut self) -> Result<Point, BridgeErrorV2> {
         Point::from_non_identity_wire_bytes_exact(self.take::<BRIDGE_POINT_BYTES_V2>()?)
             .map_err(|_| BridgeErrorV2::Wire)
     }
-
     fn take<const N: usize>(&mut self) -> Result<&'a [u8], BridgeErrorV2> {
         let end = self.cursor.checked_add(N).ok_or(BridgeErrorV2::Wire)?;
         let value = self
@@ -257,7 +228,6 @@ impl<'a> ProofReaderV2<'a> {
         self.cursor = end;
         Ok(value)
     }
-
     fn finish(self) -> Result<(), BridgeErrorV2> {
         if self.cursor == self.bytes.len() {
             Ok(())
@@ -266,12 +236,10 @@ impl<'a> ProofReaderV2<'a> {
         }
     }
 }
-
 fn assert_t256_suite_v2() {
     fn same_types<S: ProofSuite<Scalar = Scalar, Point = Point>>() {}
     same_types::<ZkAmsT256BulletproofSuiteV1>();
 }
-
 fn hyrax_basis_v2() -> Result<CheckedBasisV2, BridgeErrorV2> {
     if HYRAX_KEY_LABEL_V2 != super::super::COMMITMENT_KEY_LABEL_V1 {
         return Err(BridgeErrorV2::Basis);
@@ -283,7 +251,6 @@ fn hyrax_basis_v2() -> Result<CheckedBasisV2, BridgeErrorV2> {
     view.push(key.hiding_generator());
     checked_basis_v2(view)
 }
-
 fn bp_basis_v2() -> Result<CheckedBasisV2, BridgeErrorV2> {
     assert_t256_suite_v2();
     let generators = ZkAmsT256BulletproofSuiteV1::generators();
@@ -297,7 +264,6 @@ fn bp_basis_v2() -> Result<CheckedBasisV2, BridgeErrorV2> {
     view.push(generators.h);
     checked_basis_v2(view)
 }
-
 fn checked_basis_v2(view: Vec<Point>) -> Result<CheckedBasisV2, BridgeErrorV2> {
     if view.len() != BRIDGE_BASIS_VIEW_V2 {
         return Err(BridgeErrorV2::Basis);
@@ -309,7 +275,6 @@ fn checked_basis_v2(view: Vec<Point>) -> Result<CheckedBasisV2, BridgeErrorV2> {
         digest,
     })
 }
-
 fn validate_independent_points_v2(points: &[Point]) -> Result<(), BridgeErrorV2> {
     let mut seen = BTreeSet::new();
     for point in points.iter().copied() {
@@ -326,7 +291,6 @@ fn validate_independent_points_v2(points: &[Point]) -> Result<(), BridgeErrorV2>
     }
     Ok(())
 }
-
 fn validate_disjoint_bases_v2(
     hyrax_basis: &CheckedBasisV2,
     bp_basis: &CheckedBasisV2,
@@ -355,7 +319,6 @@ fn validate_disjoint_bases_v2(
     }
     Ok(())
 }
-
 fn basis_digest_v2(points: &[Point]) -> Result<[u8; 32], BridgeErrorV2> {
     let mut hash = Keccak256::new();
     hash.update(BASIS_DIGEST_DOMAIN_V2);
@@ -379,7 +342,6 @@ fn basis_digest_v2(points: &[Point]) -> Result<[u8; 32], BridgeErrorV2> {
     }
     Ok(hash.finalize())
 }
-
 fn framed_hash_v2(domain: &[u8], fields: &[&[u8]]) -> Result<[u8; 32], BridgeErrorV2> {
     let mut hash = Keccak256::new();
     hash.update(b"ZBIP");
@@ -405,7 +367,6 @@ fn framed_hash_v2(domain: &[u8], fields: &[&[u8]]) -> Result<[u8; 32], BridgeErr
     }
     Ok(hash.finalize())
 }
-
 fn challenge_v2(domain: &[u8], seed: [u8; 32]) -> Result<Scalar, BridgeErrorV2> {
     for attempt in 0..BRIDGE_MAX_CHALLENGE_ATTEMPTS_V2 {
         let attempt = attempt.to_be_bytes();
@@ -422,7 +383,6 @@ fn challenge_v2(domain: &[u8], seed: [u8; 32]) -> Result<Scalar, BridgeErrorV2> 
     }
     Err(BridgeErrorV2::Arithmetic)
 }
-
 fn validate_statement_v2(statement: &KernelStatementV2<'_>) -> Result<(), BridgeErrorV2> {
     if statement.binding_digest == [0; 32]
         || statement.hyrax_commitments.len() != BRIDGE_ROWS_V2
@@ -437,7 +397,6 @@ fn validate_statement_v2(statement: &KernelStatementV2<'_>) -> Result<(), Bridge
     }
     Ok(())
 }
-
 fn commitment_root_v2(
     statement: &KernelStatementV2<'_>,
     hyrax_basis_digest: [u8; 32],
@@ -478,7 +437,6 @@ fn commitment_root_v2(
     }
     Ok(hash.finalize())
 }
-
 fn aggregate_rows_v2(
     rows: &KernelProverRowsV2<'_>,
     eta: Scalar,
@@ -527,7 +485,6 @@ fn aggregate_rows_v2(
         bp_commitment,
     })
 }
-
 fn secret_commit_v2(points: &[Point], scalars: &[Scalar]) -> Result<Point, BridgeErrorV2> {
     if points.len() != scalars.len() || points.is_empty() {
         return Err(BridgeErrorV2::Shape);
@@ -541,7 +498,6 @@ fn secret_commit_v2(points: &[Point], scalars: &[Scalar]) -> Result<Point, Bridg
     }
     terms.evaluate().map_err(|_| BridgeErrorV2::Arithmetic)
 }
-
 fn bridge_root_v2(
     statement: &KernelStatementV2<'_>,
     commitment_root: [u8; 32],
@@ -572,7 +528,6 @@ fn bridge_root_v2(
         ],
     )
 }
-
 fn sample_mask_v2<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
     hyrax_basis: &CheckedBasisV2,
@@ -600,7 +555,6 @@ fn sample_mask_v2<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(BridgeErrorV2::Random)
 }
-
 fn schnorr_challenge_v2(
     bridge_root: [u8; 32],
     hyrax_basis_digest: [u8; 32],
@@ -626,7 +580,6 @@ fn schnorr_challenge_v2(
     )?;
     challenge_v2(SCHNORR_CHALLENGE_DOMAIN_V2, seed)
 }
-
 fn respond_v2(
     mut mask: ZeroizingT256ScalarVecV1,
     opening: &ZeroizingT256ScalarVecV1,
@@ -640,7 +593,6 @@ fn respond_v2(
     }
     Ok(mask)
 }
-
 fn verify_representation_v2(
     hyrax_basis: &CheckedBasisV2,
     bp_basis: &CheckedBasisV2,
@@ -662,7 +614,6 @@ fn verify_representation_v2(
     }
     Ok(())
 }
-
 fn prepare_kernel_v2(
     statement: &KernelStatementV2<'_>,
     hyrax_basis: &CheckedBasisV2,
@@ -673,7 +624,6 @@ fn prepare_kernel_v2(
     let eta = challenge_v2(ETA_DOMAIN_V2, commitment_root)?;
     Ok((commitment_root, eta))
 }
-
 /// Consume the proof-session entropy owner so a successful first message
 /// cannot be replayed by invoking this session a second time.
 fn prove_kernel_v2<R: MaskedRelaxedRandomSourceV1>(
@@ -718,7 +668,6 @@ fn prove_kernel_v2<R: MaskedRelaxedRandomSourceV1>(
     verify_kernel_with_bases_v2(&rows.statement, &proof.bytes, &hyrax_basis, &bp_basis)?;
     Ok(proof)
 }
-
 fn verify_kernel_with_bases_v2(
     statement: &KernelStatementV2<'_>,
     proof_bytes: &[u8],
@@ -780,24 +729,20 @@ fn verify_kernel_with_bases_v2(
     )?;
     Ok(bridge_root)
 }
-
 fn verify_kernel_v2(
     statement: &KernelStatementV2<'_>,
     proof_bytes: &[u8],
 ) -> Result<[u8; 32], BridgeErrorV2> {
     verify_kernel_with_bases_v2(statement, proof_bytes, &hyrax_basis_v2()?, &bp_basis_v2()?)
 }
-
 #[cfg(test)]
 struct TestBridgePermitV2(());
-
 #[cfg(test)]
 impl TestBridgePermitV2 {
     fn mint() -> Self {
         Self(())
     }
 }
-
 #[cfg(test)]
 fn prove_with_test_permit_v2<R: MaskedRelaxedRandomSourceV1>(
     _permit: TestBridgePermitV2,
@@ -806,7 +751,6 @@ fn prove_with_test_permit_v2<R: MaskedRelaxedRandomSourceV1>(
 ) -> Result<RawBridgeProofV2, BridgeErrorV2> {
     prove_kernel_v2(random, rows)
 }
-
 #[cfg(test)]
 #[path = "terminal_cross_basis_ipa_tests.rs"]
 mod tests;

@@ -10,7 +10,23 @@ import requests
 from requests.structures import CaseInsensitiveDict
 
 import iroha_python.client as client_module
-from iroha_python import ToriiClient
+from iroha_python import (
+    LocalSigningContext,
+    SorafsOrderbookSubmissionAmbiguousError,
+    SorafsOrderbookSubmissionIdentity,
+    SorafsOrderbookSubmissionReceipt,
+    SorafsOrderbookSubmissionReceiptPayload,
+    ToriiClient,
+)
+from iroha_python.crypto import NetworkId
+from iroha_torii_client.tests.orderbook_submission_test import (
+    IDENTITY,
+    SIGNER,
+    Response as OrderbookResponse,
+    Verifier,
+    _patch_stock_adapter,
+    stock_session,
+)
 
 from .helpers import StubResponse
 
@@ -210,6 +226,10 @@ def _page(field: str, records: list[dict[str, Any]], cursor_field: str) -> dict[
 def test_orderbook_has_no_competing_local_wire_parsers() -> None:
     assert not hasattr(client_module, "_normalize_sorafs_orderbook_order")
     assert not hasattr(client_module, "_sorafs_orderbook_payload_bytes")
+    assert all(value.__module__ == "iroha_torii_client.orderbook_submission" for value in (
+        SorafsOrderbookSubmissionIdentity, SorafsOrderbookSubmissionReceipt,
+        SorafsOrderbookSubmissionReceiptPayload,
+    ))
 
 
 def test_sorafs_orderbook_read_helpers_parse_finalized_pages() -> None:
@@ -323,45 +343,82 @@ def test_sorafs_orderbook_event_list_honors_not_modified() -> None:
     assert session.calls[0]["headers"]["If-None-Match"] == '"same"'
 
 
-def test_sorafs_orderbook_submit_helpers_forward_signed_transactions() -> None:
-    receipt = _submission_receipt()
-    session = SequencedSession([StubResponse(202, receipt) for _ in range(3)])
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    assert client.submit_sorafs_orderbook_order(
-        b"\x01\x02\x03",
-        headers={"X-Trace": "order-submit"},
-    ) == receipt
-    assert client.submit_sorafs_orderbook_cancel(memoryview(b"\x04\x05")) == receipt
-    assert client.submit_sorafs_orderbook_receipt(bytearray([6])) == receipt
-
-    assert session.calls[0]["url"] == "http://torii.example/v1/sorafs/orderbook/orders"
-    assert session.calls[0]["data"] == b"\x01\x02\x03"
-    assert session.calls[0]["headers"]["Content-Type"] == "application/x-norito"
-    assert session.calls[0]["headers"]["X-Trace"] == "order-submit"
-    assert "X-Iroha-Signature" not in session.calls[0]["headers"]
-    assert session.calls[1]["data"] == b"\x04\x05"
-    assert session.calls[2]["url"] == "http://torii.example/v1/sorafs/orderbook/receipts"
-
-
 def test_sorafs_orderbook_helpers_reject_retired_and_unbounded_inputs() -> None:
     client = ToriiClient("http://torii.example", session=SequencedSession([]), max_retries=0)
 
     with pytest.raises(TypeError, match="unexpected keyword argument 'since'"):
         client.list_sorafs_orderbook_events(since=8)  # type: ignore[call-arg]
-    with pytest.raises(TypeError, match="unexpected keyword argument 'canonical_auth'"):
-        client.submit_sorafs_orderbook_order(  # type: ignore[call-arg]
-            b"\x01",
-            canonical_auth=object(),
-        )
     with pytest.raises(ValueError, match="1..=500"):
         client.list_sorafs_orderbook_events(limit=501)
     with pytest.raises(ValueError, match="all four finalized event cursor"):
         client.list_sorafs_orderbook_events(after_sequence=8)
-    with pytest.raises(TypeError, match="bytes-like canonical versioned SignedTransaction"):
-        client.submit_sorafs_orderbook_cancel([4, 5])
-    with pytest.raises(ValueError, match="must not be empty"):
-        client.submit_sorafs_orderbook_receipt(b"")
+
+
+def test_high_client_supplies_native_orderbook_adapter_and_local_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    network = NetworkId.from_bytes(bytes([0xA5]) * 32)
+    native = Verifier(expected_network=network)
+    response = OrderbookResponse()
+    session, transport = stock_session(response)
+    monkeypatch.setattr(client_module, "_require_crypto", lambda: native)
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        local_signing_context=LocalSigningContext(network),
+        chain_discriminant=369,
+        auth_token="bearer-secret",
+        api_token="api-secret",
+        default_headers={"X-Benign": "preserved"},
+        timeout=5,
+        max_retries=0,
+    )
+    receipt = client.submit_sorafs_orderbook_order(
+        bytearray(b"\x01"), expected_receipt_signer=SIGNER
+    )
+    assert receipt["payload"]["signer"] == SIGNER
+    assert native.inspected == b"\x01"
+    sent = transport.calls[0]
+    assert sent["request"].headers["Accept"] == "application/x-norito"
+    assert sent["request"].headers["Authorization"] == "Bearer bearer-secret"
+    assert sent["request"].headers["X-API-Token"] == "api-secret"
+    assert sent["request"].headers["X-Benign"] == "preserved"
+    assert sent["stream"] is True and sent["timeout"] == 5.0
+
+
+def test_high_client_requires_local_network_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = Verifier()
+    session, transport = stock_session(AssertionError("must not send"))
+    monkeypatch.setattr(client_module, "_require_crypto", lambda: native)
+    client = ToriiClient("https://torii.example", session=session, max_retries=0)
+    with pytest.raises(ValueError, match="local_signing_context"):
+        client.submit_sorafs_orderbook_order(
+            b"\x01", expected_receipt_signer=SIGNER
+        )
+    assert transport.calls == []
+
+
+def test_high_client_exposes_ambiguous_orderbook_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    network = NetworkId.from_bytes(bytes([0xA5]) * 32)
+    native = Verifier(expected_network=network)
+    session, _ = stock_session(OrderbookResponse(headers={"Content-Type": "text/plain"}))
+    monkeypatch.setattr(client_module, "_require_crypto", lambda: native)
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        local_signing_context=LocalSigningContext(network),
+        chain_discriminant=369,
+        max_retries=0,
+    )
+    with pytest.raises(SorafsOrderbookSubmissionAmbiguousError) as caught:
+        client.submit_sorafs_orderbook_order(
+            b"\x01", expected_receipt_signer=SIGNER
+        )
+    assert dict(caught.value.expected_identity) == IDENTITY
 
 
 def test_sorafs_orderbook_stream_helper_parses_finalized_sse() -> None:

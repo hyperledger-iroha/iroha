@@ -7,7 +7,6 @@ fn iso20022_operations_require_fresh_operator_signatures() {
         "X-Iroha-Operator-Nonce".to_owned(),
         "X-Iroha-Operator-Signature".to_owned(),
     ]);
-
     for descriptor in iroha_torii_shared::route_catalog::iso20022::ROUTES {
         let method = match descriptor.method() {
             CatalogHttpMethod::Get => "get",

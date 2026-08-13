@@ -3,12 +3,10 @@ use ivm::{
     halo2::{ECPoint, MintCircuit, MintPublic, MintWitness},
     pedersen_commit_truncated, poseidon6,
 };
-
 fn poseidon_hash(inputs: &[u64]) -> u64 {
     if inputs.is_empty() {
         return 0;
     }
-
     let mut idx = 0usize;
     let mut acc = 0u64;
     let mut first = true;
@@ -39,7 +37,6 @@ fn poseidon_hash(inputs: &[u64]) -> u64 {
     }
     acc
 }
-
 fn expected_public(w: &MintWitness) -> MintPublic {
     let coin_commitment = poseidon_hash(&[
         w.recipient.x,
@@ -61,7 +58,6 @@ fn expected_public(w: &MintWitness) -> MintPublic {
         token_commitment,
     }
 }
-
 #[test]
 fn test_mint_circuit_verify_ok() {
     let witness = MintWitness {
@@ -96,7 +92,6 @@ fn test_mint_circuit_verify_ok() {
         poseidon_hash(&[circuit.witness.token_id, circuit.witness.token_blind]);
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_mint_circuit_bad_commitment() {
     let witness = MintWitness {
@@ -117,7 +112,6 @@ fn test_mint_circuit_bad_commitment() {
     let circuit = MintCircuit::new(witness, public);
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_mint_circuit_bad_value_commitment() {
     let witness = MintWitness {
@@ -135,7 +129,6 @@ fn test_mint_circuit_bad_value_commitment() {
     let circuit = MintCircuit::new(witness, public);
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_mint_circuit_bad_token_commitment() {
     let witness = MintWitness {

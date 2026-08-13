@@ -5,13 +5,11 @@
 //! proofs exist, but they do not close the resource gate: canonical proof
 //! sizes, a full Phase-II/III work trace, and measured release-size peak memory
 //! must all be pinned by the release KAT.
-
 use super::{
     BgvProfile, ZkAmsMkheErrorV1, collective_eval_keys::seekable_evaluated_key_accounting,
     packing::ZK_AMS_T256_GALOIS_KEY_COUNT_V1, phase23_max_composed_rotation_key_switch_count,
     ring_multiplication_work, wire::derive_wire_length_certificate_v1,
 };
-
 /// Exact, overflow-checked static resource certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheResourceCertificateV1 {
@@ -78,7 +76,6 @@ pub struct ZkAmsMkheResourceCertificateV1 {
     /// Release-parameter peak resident memory has been measured and pinned.
     pub release_peak_memory_measured: bool,
 }
-
 impl ZkAmsMkheResourceCertificateV1 {
     /// Return true only when both static accounting and measured release
     /// evidence are complete.
@@ -94,7 +91,6 @@ impl ZkAmsMkheResourceCertificateV1 {
             && self.release_peak_memory_measured
     }
 }
-
 pub(super) fn derive_resource_certificate_v1(
     profile: &BgvProfile,
     party_count: usize,
@@ -103,7 +99,6 @@ pub(super) fn derive_resource_certificate_v1(
     if !profile.hybrid_rns_decomposition || !(2..=8).contains(&party_count) {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
     }
-
     let wire = derive_wire_length_certificate_v1(profile)?;
     let polynomial = wire.rns_polynomial_wire_bytes;
     let compact_ciphertext = wire.compact_collective_ciphertext_wire_bytes;
@@ -142,7 +137,6 @@ pub(super) fn derive_resource_certificate_v1(
                 .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
         )
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-
     Ok(ZkAmsMkheResourceCertificateV1 {
         governed_roster_wire_bytes: as_u64(wire.governed_roster_wire_bytes)?,
         ring_degree: u32::try_from(profile.ring_degree)
@@ -185,15 +179,12 @@ pub(super) fn derive_resource_certificate_v1(
         release_peak_memory_measured: false,
     })
 }
-
 fn as_u64(value: usize) -> Result<u64, ZkAmsMkheErrorV1> {
     u64::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn release_static_accounting_is_exact_but_not_runtime_evidence() {
         let profile = super::super::manifest::release_profile_v1();
@@ -257,20 +248,17 @@ mod tests {
         assert!(!certificate.release_peak_memory_measured);
         assert!(!certificate.is_release_ready());
     }
-
     #[test]
     fn every_static_ceiling_fails_independently_at_one_byte_below_accounting() {
         let baseline = super::super::manifest::release_profile_v1();
         let certificate =
             derive_resource_certificate_v1(&baseline, 8).expect("resource certificate");
-
         let mut ciphertext = baseline.clone();
         ciphertext.max_ciphertext_bytes =
             usize::try_from(certificate.compact_collective_ciphertext_wire_bytes - 1).unwrap();
         let ciphertext_certificate = derive_resource_certificate_v1(&ciphertext, 8)
             .expect("structural profile permits canonical wire ceiling check");
         assert!(!ciphertext_certificate.ciphertext_ceiling_met);
-
         let mut evaluated_key = baseline.clone();
         evaluated_key.max_evaluated_key_bytes =
             usize::try_from(certificate.seeded_collective_relinearization_key_wire_bytes - 1)
@@ -278,19 +266,16 @@ mod tests {
         let key_certificate = derive_resource_certificate_v1(&evaluated_key, 8)
             .expect("structural profile permits key check");
         assert!(!key_certificate.per_evaluated_key_ceiling_met);
-
         let mut composed_exact = baseline.clone();
         composed_exact.max_work_units = certificate.max_composed_rotation_work_units;
         let composed_exact_certificate = derive_resource_certificate_v1(&composed_exact, 8)
             .expect("exact composed-rotation work boundary");
         assert!(composed_exact_certificate.composed_rotation_work_ceiling_met);
-
         let mut composed_below = baseline.clone();
         composed_below.max_work_units = certificate.max_composed_rotation_work_units - 1;
         let composed_below_certificate = derive_resource_certificate_v1(&composed_below, 8)
             .expect("one-unit-below composed-rotation work boundary");
         assert!(!composed_below_certificate.composed_rotation_work_ceiling_met);
-
         let mut round = baseline.clone();
         round.max_round_bytes =
             usize::try_from(certificate.streamed_contribution_base_wire_bytes - 1).unwrap();
@@ -298,7 +283,6 @@ mod tests {
             derive_resource_certificate_v1(&round, 8),
             Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
         );
-
         let mut share = baseline.clone();
         share.max_share_bytes =
             usize::try_from(certificate.streamed_contribution_base_wire_bytes - 1).unwrap();
@@ -306,14 +290,12 @@ mod tests {
             derive_resource_certificate_v1(&share, 8),
             Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
         );
-
         for party_count in [0, 1, 9, usize::MAX] {
             assert_eq!(
                 derive_resource_certificate_v1(&baseline, party_count),
                 Err(ZkAmsMkheErrorV1::InvalidProfile)
             );
         }
-
         let mut workspace = baseline;
         workspace.max_workspace_bytes =
             usize::try_from(certificate.streamed_hybrid_workspace_bytes - 1).unwrap();
@@ -322,7 +304,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
         );
     }
-
     #[test]
     fn compact_collective_runtime_work_is_roster_size_independent() {
         let profile = super::super::manifest::release_profile_v1();
@@ -330,7 +311,6 @@ mod tests {
         assert_eq!(baseline.max_composed_rotation_key_switch_count, 8);
         assert_eq!(baseline.max_composed_rotation_work_units, 83_915_440_128);
         assert!(baseline.composed_rotation_work_ceiling_met);
-
         for party_count in 2..=8 {
             let candidate =
                 derive_resource_certificate_v1(&profile, party_count).expect("valid roster size");
@@ -341,7 +321,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn multiplication_only_undercount_is_rejected_after_hoisting() {
         let profile = super::super::manifest::release_profile_v1();
@@ -352,12 +331,10 @@ mod tests {
             .hybrid_key_switch_ntt_work_units
             .checked_mul(switches)
             .expect("release count fits");
-
         assert_eq!(multiplication_only, 54_509_174_784);
         assert!(multiplication_only <= profile.max_work_units);
         assert!(certificate.max_composed_rotation_work_units <= profile.max_work_units);
         assert!(certificate.composed_rotation_work_ceiling_met);
-
         let mut stale_ceiling = profile;
         stale_ceiling.max_work_units = multiplication_only;
         let recomputed = derive_resource_certificate_v1(&stale_ceiling, 8)

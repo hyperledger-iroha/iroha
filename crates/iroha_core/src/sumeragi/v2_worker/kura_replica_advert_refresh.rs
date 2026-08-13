@@ -1,7 +1,6 @@
 /// Maximum number of exact durable heights inspected by one Sumeragi owner
 /// turn.  A turn may transfer at most one fanout regardless of this bound.
 pub(crate) const KURA_REPLICA_ADVERT_REFRESH_PROBES_PER_TURN: usize = 8;
-
 /// Arithmetic proactive-refresh window at one exact durable tip.
 ///
 /// The newest `protected_tail` bodies are visited after the immediately
@@ -16,7 +15,6 @@ pub(crate) struct KuraReplicaAdvertRefreshWindow {
     tail_start: u64,
     tail_len: u64,
 }
-
 impl KuraReplicaAdvertRefreshWindow {
     fn new(durable_tip: u64, protected_tail: u64, evictable_window: u64) -> Self {
         let tail_len = durable_tip.min(protected_tail);
@@ -36,11 +34,9 @@ impl KuraReplicaAdvertRefreshWindow {
             tail_len,
         }
     }
-
     fn len(self) -> u64 {
         self.evictable_len.saturating_add(self.tail_len)
     }
-
     fn contains(self, height: u64) -> bool {
         if height == 0 || height > self.durable_tip || self.len() == 0 {
             return false;
@@ -52,7 +48,6 @@ impl KuraReplicaAdvertRefreshWindow {
         };
         height >= first
     }
-
     fn height_at(self, offset: u64) -> Option<u64> {
         let height = if offset < self.evictable_len {
             self.evictable_start.saturating_add(offset)
@@ -69,14 +64,12 @@ impl KuraReplicaAdvertRefreshWindow {
         Some(height)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct KuraReplicaAdvertRefreshCursor {
     anchor: Option<KuraReplicaAdvertRefreshTip>,
     window: KuraReplicaAdvertRefreshWindow,
     next_offset: u64,
 }
-
 impl KuraReplicaAdvertRefreshCursor {
     fn new(
         anchor: Option<KuraReplicaAdvertRefreshTip>,
@@ -88,31 +81,26 @@ impl KuraReplicaAdvertRefreshCursor {
             next_offset: 0,
         }
     }
-
     fn next_height(&mut self) -> Option<u64> {
         let height = self.window.height_at(self.next_offset)?;
         self.next_offset = self.next_offset.saturating_add(1);
         Some(height)
     }
-
     fn is_exhausted(self) -> bool {
         self.next_offset >= self.window.len()
     }
 }
-
 /// Exact canonical tip identity anchoring one arithmetic scan cycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct KuraReplicaAdvertRefreshTip {
     height: u64,
     block_hash: HashOf<BlockHeader>,
 }
-
 impl KuraReplicaAdvertRefreshTip {
     fn new(height: u64, block_hash: HashOf<BlockHeader>) -> Self {
         Self { height, block_hash }
     }
 }
-
 #[derive(Debug)]
 struct KuraReplicaAdvertRefreshState {
     observed_durable_tip: Option<KuraReplicaAdvertRefreshTip>,
@@ -130,7 +118,6 @@ struct KuraReplicaAdvertRefreshState {
     /// its older evictable prefix.
     follow_up_cycle_requested: bool,
 }
-
 impl KuraReplicaAdvertRefreshState {
     fn new(observed_durable_tip: Option<KuraReplicaAdvertRefreshTip>, now: Instant) -> Self {
         Self {
@@ -142,7 +129,6 @@ impl KuraReplicaAdvertRefreshState {
             follow_up_cycle_requested: false,
         }
     }
-
     fn note_durable_tip(&mut self, tip: Option<KuraReplicaAdvertRefreshTip>, now: Instant) {
         let unchanged = match (self.observed_durable_tip, tip) {
             (Some(previous), Some(current)) => {
@@ -173,7 +159,6 @@ impl KuraReplicaAdvertRefreshState {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct KuraReplicaAdvertRefreshTurnOutcome {
     pub(crate) probes: usize,
@@ -181,7 +166,6 @@ pub(crate) struct KuraReplicaAdvertRefreshTurnOutcome {
     pub(crate) retained_source: bool,
     pub(crate) scan_active: bool,
 }
-
 /// Single process-lifetime owner of proactive Kura replica-advert refresh.
 ///
 /// The runner creates this outside its height loop and lends the same owner to
@@ -196,7 +180,6 @@ pub(crate) struct KuraReplicaAdvertRefreshOwner {
     refresh_interval: Duration,
     state: Mutex<KuraReplicaAdvertRefreshState>,
 }
-
 impl KuraReplicaAdvertRefreshOwner {
     pub(crate) fn from_kura(kura: &Kura, now: Instant) -> Result<Self, String> {
         let protected_tail = u64::try_from(kura.blocks_in_memory().get())
@@ -215,7 +198,6 @@ impl KuraReplicaAdvertRefreshOwner {
             now,
         )
     }
-
     fn new(
         protected_tail: u64,
         evictable_window: u64,
@@ -242,7 +224,6 @@ impl KuraReplicaAdvertRefreshOwner {
             state: Mutex::new(KuraReplicaAdvertRefreshState::new(initial_durable_tip, now)),
         })
     }
-
     pub(crate) fn note_durable_tip(
         &self,
         tip: Option<(u64, HashOf<BlockHeader>)>,
@@ -266,7 +247,6 @@ impl KuraReplicaAdvertRefreshOwner {
             .retain(|height| active_window.contains(*height));
         Ok(())
     }
-
     /// Schedule exact body-free height hints retired by finality rollover.
     ///
     /// The current durable-tip window bounds and filters the hints. A later
@@ -300,7 +280,6 @@ impl KuraReplicaAdvertRefreshOwner {
         );
         Ok(scheduled)
     }
-
     fn lock_state(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, KuraReplicaAdvertRefreshState>, String> {
@@ -308,7 +287,6 @@ impl KuraReplicaAdvertRefreshOwner {
             .lock()
             .map_err(|_| "Kura replica advert refresh owner lock was poisoned".to_owned())
     }
-
     /// Advance one bounded owner turn.
     ///
     /// `probe` must authenticate keeper authority without reading the block
@@ -323,7 +301,6 @@ impl KuraReplicaAdvertRefreshOwner {
     ) -> Result<KuraReplicaAdvertRefreshTurnOutcome, String> {
         let mut state = self.lock_state()?;
         let mut outcome = KuraReplicaAdvertRefreshTurnOutcome::default();
-
         if let Some(source) = state.retained_source.as_ref() {
             outcome.fanout_attempted = true;
             if transfer(source)? == ExactFanoutOwnership::Owned {
@@ -333,7 +310,6 @@ impl KuraReplicaAdvertRefreshOwner {
             outcome.scan_active = state.cursor.is_some() || !state.urgent_heights.is_empty();
             return Ok(outcome);
         }
-
         while outcome.probes < KURA_REPLICA_ADVERT_REFRESH_PROBES_PER_TURN {
             let Some(height) = state.urgent_heights.pop_first() else {
                 break;
@@ -342,7 +318,6 @@ impl KuraReplicaAdvertRefreshOwner {
             let Some(source) = probe(height)? else {
                 continue;
             };
-
             outcome.fanout_attempted = true;
             if transfer(&source)? == ExactFanoutOwnership::SourceRetained {
                 state.retained_source = Some(source);
@@ -351,7 +326,6 @@ impl KuraReplicaAdvertRefreshOwner {
             outcome.scan_active = state.cursor.is_some() || !state.urgent_heights.is_empty();
             return Ok(outcome);
         }
-
         if state.cursor.is_none() {
             if now < state.next_cycle_at {
                 outcome.scan_active = !state.urgent_heights.is_empty();
@@ -375,7 +349,6 @@ impl KuraReplicaAdvertRefreshOwner {
             state.next_cycle_at = next_cycle_at;
             state.follow_up_cycle_requested = false;
         }
-
         while outcome.probes < KURA_REPLICA_ADVERT_REFRESH_PROBES_PER_TURN {
             let Some(height) = state
                 .cursor
@@ -388,7 +361,6 @@ impl KuraReplicaAdvertRefreshOwner {
             let Some(source) = probe(height)? else {
                 continue;
             };
-
             outcome.fanout_attempted = true;
             if transfer(&source)? == ExactFanoutOwnership::SourceRetained {
                 state.retained_source = Some(source);
@@ -397,7 +369,6 @@ impl KuraReplicaAdvertRefreshOwner {
             outcome.scan_active = true;
             return Ok(outcome);
         }
-
         if state.cursor.is_some_and(|cursor| cursor.is_exhausted()) {
             if state
                 .cursor
@@ -416,25 +387,21 @@ impl KuraReplicaAdvertRefreshOwner {
         Ok(outcome)
     }
 }
-
 #[cfg(test)]
 mod kura_replica_advert_refresh_tests {
     use super::*;
     use iroha_crypto::Algorithm;
-
     fn heights(window: KuraReplicaAdvertRefreshWindow) -> Vec<u64> {
         (0..window.len())
             .filter_map(|offset| window.height_at(offset))
             .collect()
     }
-
     fn tip(height: u64, domain: &[u8]) -> Option<KuraReplicaAdvertRefreshTip> {
         Some(KuraReplicaAdvertRefreshTip::new(
             height,
             HashOf::from_untyped_unchecked(Hash::new(domain)),
         ))
     }
-
     fn source(height: u64) -> KuraReplicaAdvertSourceV1 {
         let key = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::BlsNormal)
             .expect("deterministic refresh test keeper");
@@ -443,7 +410,6 @@ mod kura_replica_advert_refresh_tests {
             PeerId::new(key.public_key().clone()),
         )
     }
-
     #[test]
     fn refresh_window_is_evictable_first_and_overflow_safe() {
         let now = Instant::now();
@@ -469,7 +435,6 @@ mod kura_replica_advert_refresh_tests {
             .is_ok(),
             "the exact configured minimum must remain valid"
         );
-
         let window = KuraReplicaAdvertRefreshWindow::new(10, 3, 4);
         assert_eq!(heights(window), [4, 5, 6, 7, 8, 9, 10]);
         assert!(!window.contains(0));
@@ -492,7 +457,6 @@ mod kura_replica_advert_refresh_tests {
             ]
         );
     }
-
     #[test]
     fn refresh_turn_retains_one_source_and_attempts_at_most_one_fanout() {
         let now = Instant::now();
@@ -522,7 +486,6 @@ mod kura_replica_advert_refresh_tests {
         assert_eq!(first.probes, 1);
         assert_eq!(fanouts, [source(1)]);
         assert!(first.retained_source);
-
         let second = owner
             .drive_turn(
                 now,
@@ -537,7 +500,6 @@ mod kura_replica_advert_refresh_tests {
         assert_eq!(fanouts, [source(1), source(1)]);
         assert!(!second.retained_source);
         assert!(fanouts.len() <= 2, "each of two turns attempted one fanout");
-
         assert_eq!(
             owner
                 .schedule_retired_exact_output_heights([0, 2, 5, 6], now)
@@ -568,7 +530,6 @@ mod kura_replica_advert_refresh_tests {
                 .contains(&5)
         );
     }
-
     #[test]
     fn tip_advance_never_resets_an_in_progress_scan() {
         let now = Instant::now();
@@ -593,7 +554,6 @@ mod kura_replica_advert_refresh_tests {
             .expect("scan initial window");
         assert_eq!(first.probes, 4);
         assert_eq!(visited, [2, 3, 4, 5]);
-
         // Use a larger window than the per-turn probe bound to expose the
         // non-reset property across turns.
         let owner = KuraReplicaAdvertRefreshOwner::new(
@@ -637,7 +597,6 @@ mod kura_replica_advert_refresh_tests {
             )
             .expect("finish original window before following new tip");
         assert_eq!(visited, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
-
         visited.clear();
         owner
             .drive_turn(
@@ -650,7 +609,6 @@ mod kura_replica_advert_refresh_tests {
             )
             .expect("start immediate follow-up window");
         assert_eq!(visited, [13, 14, 15, 16, 17, 18, 19, 20]);
-
         let slow_owner = KuraReplicaAdvertRefreshOwner::new(
             5,
             6,
@@ -686,7 +644,6 @@ mod kura_replica_advert_refresh_tests {
             KURA_REPLICA_ADVERT_REFRESH_PROBES_PER_TURN
         );
     }
-
     #[test]
     fn same_height_tip_rewrite_requests_follow_up_without_starving_current_cursor() {
         let now = Instant::now();
@@ -710,7 +667,6 @@ mod kura_replica_advert_refresh_tests {
             )
             .expect("scan bounded original prefix");
         assert_eq!(visited, [10, 11, 12, 13, 14, 15, 16, 17]);
-
         owner
             .note_durable_tip(
                 Some((
@@ -731,7 +687,6 @@ mod kura_replica_advert_refresh_tests {
             )
             .expect("finish the original cursor without reset");
         assert_eq!(visited, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
-
         visited.clear();
         owner
             .drive_turn(

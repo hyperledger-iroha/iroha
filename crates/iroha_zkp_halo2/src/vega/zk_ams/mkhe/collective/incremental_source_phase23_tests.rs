@@ -1,5 +1,4 @@
 use super::*;
-
 fn test_digest_axes_v1() -> Phase23BundleDigestAxesV1 {
     Phase23BundleDigestAxesV1 {
         profile_digest: [1; 32],
@@ -24,11 +23,9 @@ fn test_digest_axes_v1() -> Phase23BundleDigestAxesV1 {
         public_artifact_manifest_bound: true,
     }
 }
-
 fn test_manifest_digests_v1() -> [[u8; 32]; PHASE23_RECORD_COUNT_V1] {
     core::array::from_fn(|ordinal| [u8::try_from(ordinal + 1).unwrap(); 32])
 }
-
 #[test]
 fn exact_record_schedule_is_x_u_e_re_w_rw() {
     let positions = (0..PHASE23_RECORD_COUNT_V1)
@@ -59,7 +56,6 @@ fn exact_record_schedule_is_x_u_e_re_w_rw() {
     assert_eq!(positions[42].used_slots_v1().unwrap(), 512);
     assert!(phase23_record_position_v1(43).is_err());
 }
-
 #[test]
 fn hostile_schedule_coordinates_fail_before_the_encryption_core() {
     let position = phase23_record_position_v1(5).unwrap();
@@ -89,7 +85,6 @@ fn hostile_schedule_coordinates_fail_before_the_encryption_core() {
     let foreign_layout = phase23_record_position_v1(0).unwrap().layout_v1().unwrap();
     assert!(require_expected_packed_coordinate_v1(position, foreign_layout, &packed).is_err());
 }
-
 #[test]
 fn named_peak_includes_the_preallocated_secret_chunk_pool() {
     assert_eq!(PHASE23_SECRET_CHUNK_POOL_PAYLOAD_BYTES_V1, 7_340_064);
@@ -99,7 +94,6 @@ fn named_peak_includes_the_preallocated_secret_chunk_pool() {
     assert_eq!(PHASE23_DECODER_WORKSPACE_BYTES_V1, 8 * 1_048_576);
     assert_eq!(PHASE23_COMPACT_MANIFEST_OWNER_BYTES_V1, 4_718_592);
 }
-
 #[test]
 fn bundle_digest_has_an_independent_exact_kat_and_changes_every_bound_axis() {
     let axes = test_digest_axes_v1();
@@ -109,7 +103,6 @@ fn bundle_digest_has_an_independent_exact_kat_and_changes_every_bound_axis() {
         hex::encode(digest),
         "99c927f9cf6b3772d28ae3776026266a17a8a9ea73082f7e551fc86a0ca4b1b6"
     );
-
     let mut changed_axes = axes;
     changed_axes.source_receipt_digest[0] ^= 1;
     assert_ne!(
@@ -129,14 +122,12 @@ fn bundle_digest_has_an_independent_exact_kat_and_changes_every_bound_axis() {
     unbound.public_artifact_manifest_bound = false;
     assert!(phase23_bundle_digest_from_frames_v1(unbound, &manifests).is_err());
 }
-
 #[test]
 fn structural_gate_preserves_validation_entropy_source_and_output_order() {
     let parent = include_str!("incremental_source.rs");
     let source = include_str!("incremental_source_phase23.rs");
     let external = include_str!("../phase23_rns_link_external_source.rs");
     let packing = include_str!("../packing.rs");
-
     let core = parent
         .split("fn encrypt_zk_ams_mkhe_collective_packed_streaming_borrowed_with_prepublication_v1")
         .nth(1)
@@ -161,7 +152,6 @@ fn structural_gate_preserves_validation_entropy_source_and_output_order() {
     assert!(source_callback < output);
     assert!(core.contains("F: FnOnce("));
     assert!(!core.contains("dyn Fn"));
-
     assert!(source.contains("try_reserve_exact(PHASE23_MAIN_BLOCKS_PER_RECORD_V1)"));
     assert!(source.contains("main.capacity() != PHASE23_MAIN_BLOCKS_PER_RECORD_V1"));
     assert!(source.contains("Phase23SecretRecordChunkPoolV1::try_new_exact_v1()?"));
@@ -186,7 +176,6 @@ fn structural_gate_preserves_validation_entropy_source_and_output_order() {
     assert!(external.contains("let mut live = self\n            .live\n            .take()"));
     assert!(packing.contains("impl Drop for ZkAmsT256PackedPlaintextV1"));
 }
-
 #[test]
 fn structural_gate_is_fail_closed_and_returns_one_move_only_owner_only_on_success() {
     let parent = include_str!("incremental_source.rs");
@@ -225,7 +214,6 @@ fn structural_gate_is_fail_closed_and_returns_one_move_only_owner_only_on_succes
     assert!(leaf.contains("impl Drop for ConfidentialSpoolChunkV1"));
     assert!(!source.contains("mem::forget"));
 }
-
 #[test]
 fn source_files_remain_below_the_global_budget_without_exceptions() {
     assert!(

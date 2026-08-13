@@ -5,9 +5,7 @@ fn finalized_cleanup_without_exact_output_seal_latches_restart() {
     let output_guard = Arc::clone(&service.output_guard);
     service.clean_teardown = false;
     let mut supervisor = V2CleanupSupervisor::default();
-
     let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
-
     assert!(output_guard.restart_required());
     assert!(
         outcome.warnings().iter().any(|warning| {
@@ -17,7 +15,6 @@ fn finalized_cleanup_without_exact_output_seal_latches_restart() {
         "finalized cleanup must diagnose an unsealed exact-output owner"
     );
 }
-
 #[test]
 fn finalized_cleanup_without_context_worker_retains_all_local_files() {
     let (mut service, keys) = fixture();
@@ -27,15 +24,12 @@ fn finalized_cleanup_without_context_worker_retains_all_local_files() {
     let chunk_root = directory.path().join("chunk-root-is-a-file");
     std::fs::write(&chunk_root, b"not a directory").expect("create adversarial chunk root");
     service.chunk_root = chunk_root.clone();
-
     let mut supervisor = V2CleanupSupervisor::default();
     let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
-
     assert_eq!(outcome.warnings().len(), 1);
     assert!(outcome.warnings()[0].reason().contains("unavailable"));
     assert!(chunk_root.is_file());
 }
-
 #[test]
 fn finalized_cleanup_reports_disconnected_worker_without_failing_rollover() {
     let (mut service, keys) = fixture();
@@ -53,10 +47,8 @@ fn finalized_cleanup_reports_disconnected_worker_without_failing_rollover() {
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission,
     });
-
     let mut supervisor = V2CleanupSupervisor::default();
     let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
-
     assert_eq!(outcome.warnings().len(), 1);
     assert_eq!(
         outcome.warnings()[0].target(),
@@ -64,7 +56,6 @@ fn finalized_cleanup_reports_disconnected_worker_without_failing_rollover() {
     );
     assert!(outcome.warnings()[0].reason().contains("disconnected"));
 }
-
 #[test]
 fn prelatched_finalized_cleanup_mutates_neither_queue_nor_chunks() {
     let (mut service, keys) = fixture();
@@ -85,16 +76,13 @@ fn prelatched_finalized_cleanup_mutates_neither_queue_nor_chunks() {
         admission,
     });
     service.output_guard.activate_restart_required();
-
     let mut supervisor = V2CleanupSupervisor::default();
     let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
-
     assert!(command_rx.try_recv().is_err());
     assert!(chunk_root.join("chunk").is_file());
     assert_eq!(outcome.warnings().len(), 1);
     assert!(outcome.warnings()[0].reason().contains("restart"));
 }
-
 #[test]
 fn finalized_cleanup_does_not_wait_for_post_retire_completion() {
     let (mut service, keys) = fixture();
@@ -114,13 +102,10 @@ fn finalized_cleanup_does_not_wait_for_post_retire_completion() {
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission,
     });
-
     let mut supervisor = V2CleanupSupervisor::default();
     let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
-
     assert!(outcome.warnings().is_empty());
 }
-
 #[test]
 fn finalized_cleanup_releases_rollover_after_retire_enqueue() {
     let (mut service, keys) = fixture();
@@ -150,9 +135,7 @@ fn finalized_cleanup_releases_rollover_after_retire_enqueue() {
     });
     let mut supervisor = V2CleanupSupervisor::default();
     let started = Instant::now();
-
     let outcome = service.finish_height(receipt, Duration::from_millis(10), &mut supervisor);
-
     accepted_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("worker accepted the queued Retire request");
@@ -162,7 +145,6 @@ fn finalized_cleanup_releases_rollover_after_retire_enqueue() {
     );
     assert!(outcome.warnings().is_empty());
 }
-
 #[test]
 fn finalized_cleanup_full_queue_timeout_allows_normal_worker_disconnect() {
     let (mut service, keys) = fixture();
@@ -212,9 +194,7 @@ fn finalized_cleanup_full_queue_timeout_allows_normal_worker_disconnect() {
         admission,
     });
     let mut supervisor = V2CleanupSupervisor::default();
-
     let outcome = service.finish_height(receipt, Duration::from_millis(10), &mut supervisor);
-
     assert!(
         allow_finalized_disconnect.load(AtomicOrdering::Acquire),
         "typed-finality timeout must authorize the ensuing normal disconnect"
@@ -226,19 +206,15 @@ fn finalized_cleanup_full_queue_timeout_allows_normal_worker_disconnect() {
     assert!(!output_guard.restart_required());
     assert!(output_guard.acquire().is_some());
 }
-
 #[test]
 fn cleanup_diagnostics_retain_height_context_and_block_hash() {
     let (service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
-
     let identity = CleanupWorkerIdentity::from_receipt(&receipt);
-
     assert_eq!(identity.height, receipt.height());
     assert_eq!(identity.context_id, receipt.context_id());
     assert_eq!(identity.block_hash, receipt.block_hash());
 }
-
 fn cleanup_job_fixture(
     service: &ProductionV2Services,
     receipt: &KuraV2CommitReceipt,
@@ -255,7 +231,6 @@ fn cleanup_job_fixture(
         chunk_root,
     }
 }
-
 #[test]
 fn cleanup_submission_is_bounded_and_never_waits_for_capacity() {
     let (service, keys) = fixture();
@@ -272,7 +247,6 @@ fn cleanup_submission_is_bounded_and_never_waits_for_capacity() {
             first_root.path().join("chunks"),
         ))
         .expect("first cleanup fills the bounded queue");
-
     let started = Instant::now();
     let error = submission
         .try_submit(cleanup_job_fixture(
@@ -285,7 +259,6 @@ fn cleanup_submission_is_bounded_and_never_waits_for_capacity() {
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(error.contains("queue is full"));
 }
-
 #[test]
 fn cleanup_worker_job_removes_bodies_and_chunks_off_the_consensus_path() {
     let (service, keys) = fixture();
@@ -299,13 +272,10 @@ fn cleanup_worker_job_removes_bodies_and_chunks_off_the_consensus_path() {
         .path()
         .join(hex::encode(service.context.id().0.as_ref()));
     assert!(context_directory.is_dir());
-
     execute_post_finality_cleanup(job);
-
     assert!(!context_directory.exists());
     assert!(!chunk_root.exists());
 }
-
 fn merge_sidecar_reference(label: &[u8]) -> CertifiedMergeLedgerReference {
     CertifiedMergeLedgerReference {
         version: 1,
@@ -334,7 +304,6 @@ fn merge_sidecar_reference(label: &[u8]) -> CertifiedMergeLedgerReference {
         ),
     }
 }
-
 fn chunk(
     manifest_hash: HashOf<wire::PayloadManifest>,
     index: u32,
@@ -349,7 +318,6 @@ fn chunk(
         signature: vec![0xA5],
     }
 }
-
 fn fair_ingress_route_owner(
     message: BlockMessage,
     semantic_origin: PeerId,
@@ -376,7 +344,6 @@ fn fair_ingress_route_owner(
         ownership,
     )
 }
-
 #[test]
 fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
     let (service, _) = fixture();
@@ -417,7 +384,6 @@ fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
     )
     .expect("source B ownership is exact")
     .expect("source B response fanout");
-
     assert!(retained.coalesce_retry(&candidate).expect("lossless merge"));
     assert_eq!(retained.targets.len(), 2);
     let ownership = retained
@@ -459,7 +425,6 @@ fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
         .expect("source B cursor");
     assert_eq!(source_a_cursor.message_cursor, 1);
     assert_eq!(source_b_cursor.message_cursor, 0);
-
     {
         let owned_fanout = |authenticated_via: PeerId, route: NetworkReplyRoute| {
             let (reply_routes, ownership) = fair_ingress_route_owner(
@@ -478,7 +443,6 @@ fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
             .expect("race source ownership is exact")
             .expect("race source response fanout")
         };
-
         let hub_c = PeerId::new(KeyPair::random().public_key().clone());
         let hub_d = PeerId::new(KeyPair::random().public_key().clone());
         let route_c = route_fixture.mint_via(requester.clone(), hub_c.clone());
@@ -493,7 +457,6 @@ fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
                 );
             })
             .expect("candidate source survives retained-source retirement");
-
         assert_eq!(
             plan.targets,
             vec![ReplyTargetMerge::Append { candidate_index: 0 }]
@@ -553,7 +516,6 @@ fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
                 .is_some_and(|ownership| ownership.validate_exact()
                     && ownership.matches_reply_routes(Some(retained_routes)))
         );
-
         let hub_e = PeerId::new(KeyPair::random().public_key().clone());
         let hub_f = PeerId::new(KeyPair::random().public_key().clone());
         let route_e = route_fixture.mint_via(requester.clone(), hub_e.clone());
@@ -568,7 +530,6 @@ fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
                 );
             })
             .expect("retained source survives candidate-source retirement");
-
         assert_eq!(
             plan.targets,
             vec![ReplyTargetMerge::Append { candidate_index: 0 }]
@@ -619,7 +580,6 @@ fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
                 .is_some_and(|ownership| ownership.validate_exact()
                     && ownership.matches_reply_routes(Some(retained_routes)))
         );
-
         let hub_g = PeerId::new(KeyPair::random().public_key().clone());
         let hub_h = PeerId::new(KeyPair::random().public_key().clone());
         let route_g = route_fixture.mint_via(requester.clone(), hub_g.clone());
@@ -689,7 +649,6 @@ fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
             matches!(&target.route, ExactTargetRoute::Reply(route)
                     if route.same_delivery(&route_h) && !target.parked)
         }));
-
         let reconnect_g = route_fixture.mint_via(requester.clone(), hub_g.clone());
         let (reconnect_routes, reconnect_ownership) = fair_ingress_route_owner(
             request.clone(),
@@ -743,7 +702,6 @@ fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
         assert_eq!(resumed_cursor.message_cursor, 1);
         assert_eq!(resumed_cursor.chunk_cursor, 0);
     }
-
     let missing = PendingExactFanout::claimed_with_reply_routes(
         vec![response],
         requester,
@@ -754,7 +712,6 @@ fn exact_output_coalescing_preserves_distinct_fair_ingress_admissions() {
     .expect("shape-only response fanout");
     assert!(retained.coalesce_retry(&missing).is_err());
 }
-
 #[test]
 fn orphan_chunk_coalescing_preserves_alternate_fair_ingress_routes() {
     let (mut service, _) = fixture();
@@ -773,7 +730,6 @@ fn orphan_chunk_coalescing_preserves_alternate_fair_ingress_routes() {
         fair_ingress_route_owner(message.clone(), sender.clone(), hub_a, route_a.clone());
     let (_, ownership_b) =
         fair_ingress_route_owner(message, sender.clone(), hub_b, route_b.clone());
-
     assert_eq!(
         service.buffer_orphan_payload_chunk_owned(
             sender.clone(),
@@ -800,7 +756,6 @@ fn orphan_chunk_coalescing_preserves_alternate_fair_ingress_routes() {
     assert!(routes.iter().any(|route| route.same_delivery(&route_a)));
     assert!(routes.iter().any(|route| route.same_delivery(&route_b)));
 }
-
 #[test]
 fn manifest_bound_duplicate_promotes_proofless_orphan_to_runtime_owner() {
     let (mut service, _) = fixture();
@@ -817,7 +772,6 @@ fn manifest_bound_duplicate_promotes_proofless_orphan_to_runtime_owner() {
     let route = route_fixture.mint_via(sender.clone(), hub.clone());
     let (_, proofless) = fair_ingress_route_owner(message, sender.clone(), hub, route);
     let mut productive = proofless.clone();
-
     let token = super::super::FairV2IngressLeaderWireToken {
         identity: super::super::FairV2IngressLeaderWireIdentity {
             context_id: service.context.id(),
@@ -889,7 +843,6 @@ fn manifest_bound_duplicate_promotes_proofless_orphan_to_runtime_owner() {
         productive.install_leader_wire_runtime_receipt(runtime),
         "productive duplicate must validate its exact runtime carrier"
     );
-
     assert_eq!(
         service
             .buffer_orphan_payload_chunk_owned(sender.clone(), payload_chunk.clone(), proofless,),
@@ -913,7 +866,6 @@ fn manifest_bound_duplicate_promotes_proofless_orphan_to_runtime_owner() {
     assert_eq!(service.orphan_chunk_count, 1);
     assert_eq!(service.orphan_chunk_bytes, 1);
 }
-
 fn bind_productive_orphan_test_ingress(
     service: &mut ProductionV2Services,
     directory: &TempDir,
@@ -990,7 +942,6 @@ fn bind_productive_orphan_test_ingress(
     service.leader_wire_ingress = Arc::clone(&ingress);
     ingress
 }
-
 fn admit_productive_orphan_runtime(
     ingress: &FairV2Ingress,
     message: wire::ConsensusMessageV2,
@@ -1012,7 +963,6 @@ fn admit_productive_orphan_runtime(
         .expect("bind productive-orphan runtime receipt");
     ownership
 }
-
 fn buffer_productive_orphan_for_replay(
     service: &mut ProductionV2Services,
     ingress: &FairV2Ingress,
@@ -1034,7 +984,6 @@ fn buffer_productive_orphan_for_replay(
     );
     token
 }
-
 fn productive_chunk_at_view(
     service: &ProductionV2Services,
     keys: &[KeyPair],
@@ -1082,7 +1031,6 @@ fn productive_chunk_at_view(
     .to_vec();
     (canonical_wire, manifest, proposal, chunk, sender)
 }
-
 fn admit_and_terminalize_productive_proposal(
     ingress: &FairV2Ingress,
     proposal: wire::Proposal,
@@ -1101,7 +1049,6 @@ fn admit_and_terminalize_productive_proposal(
         )
         .expect("terminalize proposal after binding its manifest coordinates");
 }
-
 fn chunk_effect_executor(
     service: &ProductionV2Services,
     recovered: BTreeMap<
@@ -1119,7 +1066,6 @@ fn chunk_effect_executor(
     )
     .expect("construct productive-chunk effect executor")
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order() {
@@ -1202,7 +1148,6 @@ fn durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order() {
             super::super::FairV2IngressLeaderWireStatus::Terminal,
             "durable_before_late_chunk={durable_before_late_chunk}"
         );
-
         let next_view = (1..=1_024)
             .find(|view| service.context.leader(*view) == service.context.leader(0))
             .expect("bounded view search returns to the same leader");
@@ -1237,7 +1182,6 @@ fn durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order() {
         );
     }
 }
-
 #[test]
 fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -1250,7 +1194,6 @@ fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps(
     let mut complete_recovered = BTreeMap::new();
     let mut recovered_keys = Vec::with_capacity(capacity);
     let mut tokens = Vec::with_capacity(capacity);
-
     for view in 0..u64::try_from(capacity).expect("fixture capacity fits u64") {
         let (_, manifest, proposal, chunk, sender) =
             productive_chunk_at_view(&service, &keys, view);
@@ -1277,7 +1220,6 @@ fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps(
             .sum::<usize>(),
         capacity
     );
-
     // Keep the last deterministic sweep position live while every other
     // exact owner is already durable. This forces a full cursor cycle and
     // a wrap before the final owner can retire.
@@ -1293,7 +1235,6 @@ fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps(
     let mut partial_recovered = complete_recovered.clone();
     assert!(partial_recovered.remove(&retained_key).is_some());
     let mut executor = chunk_effect_executor(&service, partial_recovered);
-
     let (command_tx, _command_rx, admission) = test_io_command_channel(1);
     let (completion_tx, completion_rx) = mpsc::sync_channel(1);
     service.io = Some(V2IoHandle {
@@ -1306,7 +1247,6 @@ fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps(
     completion_tx
         .try_send(V2IoCompletion::AuxiliaryNoop)
         .expect("queue completion behind the first bounded sweep");
-
     assert_eq!(
         service
             .replay_buffered_chunks(&mut executor)
@@ -1324,7 +1264,6 @@ fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps(
     // No worker owns this synthetic channel; remove it before service Drop
     // attempts the production shutdown handshake.
     drop(service.io.take());
-
     for _ in 1..capacity {
         let before = service.orphan_chunk_count;
         assert_eq!(
@@ -1353,7 +1292,6 @@ fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps(
         ingress.state.lock().leader_wire_lifecycles[&retained_token.slot].status,
         super::super::FairV2IngressLeaderWireStatus::Runtime
     );
-
     let mut complete_executor = chunk_effect_executor(&service, complete_recovered);
     assert_eq!(
         service
@@ -1376,7 +1314,6 @@ fn productive_orphan_lifecycle_sweep_bounds_turns_services_completion_and_wraps(
     );
     assert!(service.orphan_lifecycle_sweep_cursor.is_none());
 }
-
 #[test]
 fn productive_retry_after_proofless_reconstruction_does_not_become_orphan() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -1386,7 +1323,6 @@ fn productive_retry_after_proofless_reconstruction_does_not_become_orphan() {
     let gate_directory = TempDir::new().expect("temporary reconstructed-chunk gate");
     let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
     let (_, manifest, proposal, chunk, sender) = productive_chunk_at_view(&service, &keys, 0);
-
     let proofless = admit_productive_orphan_runtime(
         &ingress,
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone())),
@@ -1400,7 +1336,6 @@ fn productive_retry_after_proofless_reconstruction_does_not_become_orphan() {
             .expect("buffer proofless chunk"),
         PayloadChunkDisposition::Buffered
     );
-
     admit_and_terminalize_productive_proposal(&ingress, proposal, sender.clone());
     let tag = service.active_tag;
     executor
@@ -1423,7 +1358,6 @@ fn productive_retry_after_proofless_reconstruction_does_not_become_orphan() {
         1
     );
     assert_eq!(service.local_completions.len(), 1);
-
     let productive = admit_productive_orphan_runtime(
         &ingress,
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone())),
@@ -1445,7 +1379,6 @@ fn productive_retry_after_proofless_reconstruction_does_not_become_orphan() {
         super::super::FairV2IngressLeaderWireStatus::VolatileTerminal
     );
 }
-
 #[test]
 fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     let (mut service, keys) = fixture();
@@ -1495,7 +1428,6 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     .into_iter()
     .map(|chunk| u64::try_from(chunk.bytes.len()).expect("small orphan chunk"))
     .sum::<u64>();
-
     let _completing_token = buffer_productive_orphan_for_replay(
         &mut service,
         &ingress,
@@ -1518,7 +1450,6 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
         buffer_productive_orphan_for_replay(&mut service, &ingress, sender, tail_success_chunk);
     assert_eq!(service.orphan_chunk_count, 4);
     assert_eq!(service.orphan_chunk_bytes, expected_bytes);
-
     {
         let mut state = ingress.state.lock();
         state
@@ -1534,7 +1465,6 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
             "tail fault injection removes only its in-memory terminal target"
         );
     }
-
     let mut executor = V2EffectExecutor::with_runtime(
         SaturatedCompletionRuntime::new(0, 8),
         BTreeMap::new(),
@@ -1562,7 +1492,6 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
             &mut service,
         )
         .expect("open productive-orphan fetch session");
-
     let current_error = "leader-wire volatile terminal changed runtime ownership";
     let tail_error = "leader-wire volatile terminal has no runtime record";
     assert_eq!(
@@ -1606,7 +1535,6 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
         "tail retirement must continue after retaining its first error"
     );
 }
-
 #[test]
 fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     let (mut service, keys) = fixture();
@@ -1632,7 +1560,6 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     )
     .payload()
     .to_vec();
-
     let sender = service.context.roster[0].validator.clone();
     let hub_a = PeerId::new(KeyPair::random().public_key().clone());
     let hub_b = PeerId::new(KeyPair::random().public_key().clone());
@@ -1647,7 +1574,6 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     let (_, ownership_b) =
         fair_ingress_route_owner(message, sender.clone(), hub_b, route_b.clone());
     assert!(ownership_a.advance_reply_cursors(&route_a, 3, 5));
-
     let mut executor = V2EffectExecutor::with_runtime(
         SaturatedCompletionRuntime::new(0, 8),
         BTreeMap::new(),
@@ -1674,7 +1600,6 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
             .expect("coalesce alternate owned orphan route"),
         PayloadChunkDisposition::Duplicate
     );
-
     let expected_ownership_projection = {
         let ownership = service
             .orphan_chunks
@@ -1704,7 +1629,6 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
         assert_eq!((source_b.message_cursor, source_b.chunk_cursor), (7, 11));
         ownership.process_local_projection_hash()
     };
-
     let tag = EventTag::new(
         service.context.height,
         proposal.round.view,
@@ -1741,7 +1665,6 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
         retained.process_local_projection_hash(),
         expected_ownership_projection
     );
-
     assert_eq!(
         service
             .replay_buffered_chunks(&mut executor)
@@ -1761,14 +1684,12 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     ));
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn orphan_chunk_bounds_preserve_exact_duplicate_semantics_at_capacity() {
     let (mut service, _) = fixture();
     let hash = manifest_hash(b"manifest-a");
     let sender = service.context.roster[0].validator.clone();
     let first = chunk(hash, 0, b"a", 0);
-
     assert_eq!(
         service.buffer_orphan_payload_chunk(sender.clone(), first.clone()),
         PayloadChunkDisposition::Buffered
@@ -1794,7 +1715,6 @@ fn orphan_chunk_bounds_preserve_exact_duplicate_semantics_at_capacity() {
     assert_eq!(service.orphan_chunk_count, 1);
     assert_eq!(service.orphan_chunk_bytes, 1);
 }
-
 #[test]
 fn proofless_orphan_eviction_releases_exact_count_and_byte_capacity() {
     let (mut service, _) = fixture();
@@ -1811,7 +1731,6 @@ fn proofless_orphan_eviction_releases_exact_count_and_byte_capacity() {
         service.buffer_orphan_payload_chunk(sender, chunk(second_hash, 0, b"b", 0)),
         PayloadChunkDisposition::Buffered
     );
-
     assert!(service.evict_one_proofless_orphan_chunk());
     assert_eq!(service.orphan_chunk_count, 1);
     assert_eq!(service.orphan_chunk_bytes, 1);
@@ -1829,13 +1748,11 @@ fn proofless_orphan_eviction_releases_exact_count_and_byte_capacity() {
     assert!(service.orphan_chunks.is_empty());
     assert!(!service.evict_one_proofless_orphan_chunk());
 }
-
 #[test]
 fn authenticated_orphan_flood_stays_inside_frozen_count_and_byte_geometry() {
     let (mut service, _) = fixture();
     service.max_orphan_chunks = 4;
     service.max_orphan_chunk_bytes = 4;
-
     for sender_index in 0..4_u32 {
         let sender_position = usize::try_from(sender_index).expect("test sender index fits usize");
         let sender = service.context.roster[sender_position].validator.clone();
@@ -1855,7 +1772,6 @@ fn authenticated_orphan_flood_stays_inside_frozen_count_and_byte_geometry() {
     }
     assert_eq!(service.orphan_chunk_count, 4);
     assert_eq!(service.orphan_chunk_bytes, 4);
-
     let attacker = service.context.roster[0].validator.clone();
     let retained = chunk(manifest_hash(&[0xA0, 0]), 0, &[0], 0);
     assert_eq!(
@@ -1874,7 +1790,6 @@ fn authenticated_orphan_flood_stays_inside_frozen_count_and_byte_geometry() {
     assert_eq!(service.orphan_chunk_count, 4);
     assert_eq!(service.orphan_chunk_bytes, 4);
 }
-
 #[test]
 fn orphan_chunk_cheap_checks_reject_spoofing_and_oversize_without_allocation() {
     let (mut service, _) = fixture();
@@ -1882,7 +1797,6 @@ fn orphan_chunk_cheap_checks_reject_spoofing_and_oversize_without_allocation() {
     let hash = manifest_hash(b"manifest-cheap-checks");
     let validator_zero = service.context.roster[0].validator.clone();
     let validator_one = service.context.roster[1].validator.clone();
-
     assert_eq!(
         service.buffer_orphan_payload_chunk(validator_one, chunk(hash, 0, b"a", 0)),
         PayloadChunkDisposition::Rejected,
@@ -1910,7 +1824,6 @@ fn orphan_chunk_cheap_checks_reject_spoofing_and_oversize_without_allocation() {
     assert_eq!(service.orphan_chunk_count, 0);
     assert_eq!(service.orphan_chunk_bytes, 0);
 }
-
 #[test]
 fn merge_sidecar_validation_deferral_retains_exact_request_idempotently() {
     let (mut service, _) = fixture();
@@ -1928,7 +1841,6 @@ fn merge_sidecar_validation_deferral_retains_exact_request_idempotently() {
     };
     let reference = merge_sidecar_reference(b"merge sidecar");
     let work_id = EffectWorkId::for_test(7);
-
     service
         .work_deferred_for_merge_sidecar(work_id, round, subject, &reference)
         .expect("retain exact merge-sidecar deferral");
@@ -1943,7 +1855,6 @@ fn merge_sidecar_validation_deferral_retains_exact_request_idempotently() {
             .is_err(),
         "one work ID cannot claim conflicting reference metadata"
     );
-
     assert_eq!(service.merge_sidecar_deferrals.len(), 1);
     let deferred = service
         .take_merge_sidecar_deferral()
@@ -1954,7 +1865,6 @@ fn merge_sidecar_validation_deferral_retains_exact_request_idempotently() {
     assert_eq!(deferred.reference(), &reference);
     assert!(service.take_merge_sidecar_deferral().is_none());
 }
-
 #[test]
 fn merge_sidecar_validation_deferral_returns_error_at_capacity_without_eviction() {
     let (mut service, _) = fixture();
@@ -1975,7 +1885,6 @@ fn merge_sidecar_validation_deferral_returns_error_at_capacity_without_eviction(
     };
     let first_reference = merge_sidecar_reference(b"first merge sidecar");
     let second_reference = merge_sidecar_reference(b"second merge sidecar");
-
     service
         .work_deferred_for_merge_sidecar(
             EffectWorkId::for_test(1),
@@ -1996,7 +1905,6 @@ fn merge_sidecar_validation_deferral_returns_error_at_capacity_without_eviction(
             .is_err(),
         "a different validation cannot displace the retained exact request"
     );
-
     assert_eq!(service.merge_sidecar_deferrals.len(), 1);
     let retained = service
         .take_merge_sidecar_deferral()
@@ -2004,7 +1912,6 @@ fn merge_sidecar_validation_deferral_returns_error_at_capacity_without_eviction(
     assert_eq!(retained.subject(), first_subject);
     assert_eq!(retained.reference(), &first_reference);
 }
-
 #[test]
 fn outbound_payload_registration_is_exactly_idempotent_and_signed() {
     let (mut service, _) = fixture();
@@ -2022,7 +1929,6 @@ fn outbound_payload_registration_is_exactly_idempotent_and_signed() {
     };
     let encoded = encode_payload(&service.context, round, subject, payload).expect("encode");
     let expected_manifest = encoded.manifest().clone();
-
     assert_eq!(
         service
             .register_outbound_payload(service.active_tag, encoded.clone())
@@ -2048,7 +1954,6 @@ fn outbound_payload_registration_is_exactly_idempotent_and_signed() {
         wire::ConsensusMessageV2Payload::PayloadChunk(chunk) if !chunk.signature.is_empty()
     )));
 }
-
 #[test]
 fn decision_retires_candidate_and_outbound_work_but_keeps_exact_sidecar_deferral() {
     let (mut service, _) = fixture();
@@ -2095,14 +2000,12 @@ fn decision_retires_candidate_and_outbound_work_but_keeps_exact_sidecar_deferral
     service
         .register_outbound_payload(service.active_tag, encoded)
         .expect("retain terminally superseded outbound payload");
-
     service
         .retire_all_outbound_payloads()
         .expect("retire outbound payloads at Decision");
     service
         .retire_candidate_work_after_decision(decision_round, decision_subject)
         .expect("retire candidate work at Decision");
-
     assert!(service.proposal_work_retired);
     assert!(service.outbound_chunks.is_empty());
     assert!(service.locked_candidate_acquisition.is_none());
@@ -2123,7 +2026,6 @@ fn decision_retires_candidate_and_outbound_work_but_keeps_exact_sidecar_deferral
     assert!(command_rx.try_iter().next().is_some());
     detach_locked_candidate_io(&mut service);
 }
-
 fn outbound_payload_at_view(service: &ProductionV2Services, view: u64) -> EncodedV2Payload {
     let body = view.to_le_bytes();
     let subject = wire::BlockSubject {
@@ -2145,7 +2047,6 @@ fn outbound_payload_at_view(service: &ProductionV2Services, view: u64) -> Encode
     )
     .expect("encode view-owned payload")
 }
-
 fn timeout_certificate_at_view(
     service: &ProductionV2Services,
     view: u64,
@@ -2159,7 +2060,6 @@ fn timeout_certificate_at_view(
         groups: Vec::new(),
     }
 }
-
 #[test]
 fn entered_view_accepts_same_view_higher_generation_supersession() {
     let (mut service, _) = fixture();
@@ -2179,7 +2079,6 @@ fn entered_view_accepts_same_view_higher_generation_supersession() {
     service
         .register_outbound_payload(view_one, payload)
         .expect("retain work owned by the first view-one generation");
-
     assert!(
         service
             .entered_view(
@@ -2209,12 +2108,10 @@ fn entered_view_accepts_same_view_higher_generation_supersession() {
             timeout_certificate_at_view(&service, view_one.view() - 1),
         )
         .expect("a stricter same-round TC installs a new same-view generation");
-
     assert_eq!(service.active_tag, rebound);
     assert!(service.outbound_chunks.is_empty());
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn entered_view_advances_live_leader_wire_recovery_cut() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -2229,7 +2126,6 @@ fn entered_view_advances_live_leader_wire_recovery_cut() {
     service
         .entered_view(next, timeout_certificate_at_view(&service, initial.view()))
         .expect("install the certified successor and its live recovery cut");
-
     let (_, _, stale_proposal, _, stale_sender) =
         productive_chunk_at_view(&service, &keys, initial.view());
     assert!(matches!(
@@ -2241,7 +2137,6 @@ fn entered_view_advances_live_leader_wire_recovery_cut() {
         )),
         Err(super::super::FairV2IngressPushError::Rejected(_))
     ));
-
     let (_, _, current_proposal, _, current_sender) =
         productive_chunk_at_view(&service, &keys, next.view());
     assert!(matches!(
@@ -2254,7 +2149,6 @@ fn entered_view_advances_live_leader_wire_recovery_cut() {
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
 }
-
 #[test]
 fn durable_decision_advances_live_leader_wire_recovery_cut() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -2268,7 +2162,6 @@ fn durable_decision_advances_live_leader_wire_recovery_cut() {
     service
         .finish_decision_serve_reconciliation(Some(decided_subject))
         .expect("publish Decision and close live leader-wire admission");
-
     for view in [service.active_tag.view(), service.active_tag.view() + 1] {
         let (_, _, proposal, _, sender) = productive_chunk_at_view(&service, &keys, view);
         assert!(matches!(
@@ -2283,13 +2176,11 @@ fn durable_decision_advances_live_leader_wire_recovery_cut() {
     }
     detach_locked_candidate_io(&mut service);
 }
-
 #[test]
 fn outbound_payload_retention_is_constant_across_many_view_changes() {
     let (mut service, _) = fixture();
     let mut max_manifests = 0usize;
     let mut max_payload_bytes = 0usize;
-
     for view in 0..=1_024 {
         let tag = EventTag::new(
             service.context.height,
@@ -2323,11 +2214,9 @@ fn outbound_payload_retention_is_constant_across_many_view_changes() {
         assert_eq!(service.outbound_chunks.len(), 1);
         assert_eq!(payload_bytes, std::mem::size_of::<u64>());
     }
-
     assert_eq!(max_manifests, 1);
     assert_eq!(max_payload_bytes, std::mem::size_of::<u64>());
 }
-
 #[test]
 fn late_stale_proposal_signature_cannot_restore_pruned_outbound_payload() {
     let (mut service, _) = fixture();
@@ -2337,7 +2226,6 @@ fn late_stale_proposal_signature_cannot_restore_pruned_outbound_payload() {
         .register_outbound_payload(old_tag, old_payload.clone())
         .expect("register old-view proposal payload");
     assert_eq!(service.outbound_chunks.len(), 1);
-
     let new_tag = EventTag::new(
         service.context.height,
         old_tag.view() + 1,
@@ -2350,7 +2238,6 @@ fn late_stale_proposal_signature_cannot_restore_pruned_outbound_payload() {
         )
         .expect("install next certified view");
     assert!(service.outbound_chunks.is_empty());
-
     service
         .restore_outbound_payload_after_signature(CompletionDisposition::Stale, Some(old_payload))
         .expect("stale completion is retired without restoring bytes");
@@ -2358,7 +2245,6 @@ fn late_stale_proposal_signature_cannot_restore_pruned_outbound_payload() {
     assert_eq!(service.active_tag, new_tag);
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn observer_cannot_register_or_disseminate_a_proposal_payload() {
     let (mut service, _) = fixture();
@@ -2375,7 +2261,6 @@ fn observer_cannot_register_or_disseminate_a_proposal_payload() {
         view: 0,
     };
     let encoded = encode_payload(&service.context, round, subject, payload).expect("encode");
-
     assert!(
         service
             .register_outbound_payload(service.active_tag, encoded)
@@ -2383,7 +2268,6 @@ fn observer_cannot_register_or_disseminate_a_proposal_payload() {
     );
     assert!(service.outbound_chunks.is_empty());
 }
-
 #[test]
 fn pipeline_release_tracks_only_successfully_queued_durable_prepare_intent() {
     let (mut service, _) = fixture();
@@ -2427,7 +2311,6 @@ fn pipeline_release_tracks_only_successfully_queued_durable_prepare_intent() {
         signer: 0,
         signature: Vec::new(),
     };
-
     service
         .enqueue_consensus_sign(ConsensusSignTask::for_test(
             1,
@@ -2446,7 +2329,6 @@ fn pipeline_release_tracks_only_successfully_queued_durable_prepare_intent() {
         service.take_prepared_candidate(),
         Some(PreparedCandidateBody { tag, subject })
     );
-
     service
         .enqueue_consensus_sign(ConsensusSignTask::for_test(
             2,
@@ -2462,7 +2344,6 @@ fn pipeline_release_tracks_only_successfully_queued_durable_prepare_intent() {
         })
     ));
     assert_eq!(service.take_prepared_candidate(), None);
-
     // No worker owns this synthetic channel; remove it before service Drop
     // attempts the production shutdown handshake.
     drop(service.io.take());

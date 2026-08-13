@@ -16,7 +16,6 @@
 //! ephemeral signer serializes reads and retains one exact signed response so
 //! cancellation or response loss can retry a generation byte-for-byte without
 //! selecting a later head.
-
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
@@ -24,7 +23,6 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
 };
-
 use iroha_config::parameters::actual::SorafsProviderIngestFinalizedArchive;
 use iroha_core::{
     kura::Kura,
@@ -64,9 +62,7 @@ use sorafs_node::{
     ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
     provider_ingest_completed_musubi_capture_transcript_digest_v1,
 };
-
 const LIVE_SELECTION_ATTEMPTS_V1: usize = 4;
-
 /// Typed failure while opening and qualifying the provider-ingest archive.
 #[derive(Debug)]
 pub(crate) enum ProviderIngestFinalizedArchiveStartupErrorV1 {
@@ -98,7 +94,6 @@ pub(crate) enum ProviderIngestFinalizedArchiveStartupErrorV1 {
         source: Box<ProviderIngestFinalizedArchiveErrorV1>,
     },
 }
-
 impl fmt::Display for ProviderIngestFinalizedArchiveStartupErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -125,7 +120,6 @@ impl fmt::Display for ProviderIngestFinalizedArchiveStartupErrorV1 {
         }
     }
 }
-
 impl std::error::Error for ProviderIngestFinalizedArchiveStartupErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -137,7 +131,6 @@ impl std::error::Error for ProviderIngestFinalizedArchiveStartupErrorV1 {
         }
     }
 }
-
 /// Recovery mode authenticated while opening the provider-ingest archive.
 #[derive(Debug)]
 pub(crate) enum ProviderIngestFinalizedArchiveStartupModeV1 {
@@ -162,7 +155,6 @@ pub(crate) enum ProviderIngestFinalizedArchiveStartupModeV1 {
         activation_floor_created: bool,
     },
 }
-
 /// Exact archive qualification retained after daemon startup.
 #[derive(Debug)]
 #[must_use]
@@ -174,30 +166,25 @@ pub(crate) struct PreparedProviderIngestFinalizedArchiveV1 {
     signed_capture_reader: Option<ArchivedProviderIngestFinalizedLedgerV1>,
     retention_authority: Option<QualifiedProviderIngestRetentionAuthorityV1>,
 }
-
 impl PreparedProviderIngestFinalizedArchiveV1 {
     /// Return the exact authenticated startup mode.
     pub(crate) const fn startup_mode(&self) -> &ProviderIngestFinalizedArchiveStartupModeV1 {
         &self.startup_mode
     }
-
     /// Return the single-writer archive installed in the consensus commit
     /// corridor.
     pub(crate) const fn archive(&self) -> &Arc<ProviderIngestFinalizedArchiveV1> {
         &self.archive
     }
-
     /// Return the archive-only finalized assignment query adapter.
     pub(crate) fn query(&self) -> &Arc<ArchivedProviderIngestFinalizedLedgerV1> {
         &self.query
     }
-
     /// Return the independently cursor-fenced archive reader reserved for the
     /// supervised provider-ingest worker.
     pub(crate) fn runtime_query(&self) -> &Arc<ArchivedProviderIngestFinalizedLedgerV1> {
         &self.runtime_query
     }
-
     /// Take the one request-bound signed archive reader reserved for the inert
     /// completed-Musubi capture coordinator.
     ///
@@ -208,7 +195,6 @@ impl PreparedProviderIngestFinalizedArchiveV1 {
     ) -> Option<ArchivedProviderIngestFinalizedLedgerV1> {
         self.signed_capture_reader.take()
     }
-
     /// Return the authority qualified for explicit archive retention.
     pub(crate) const fn retention_authority(
         &self,
@@ -216,13 +202,11 @@ impl PreparedProviderIngestFinalizedArchiveV1 {
         self.retention_authority.as_ref()
     }
 }
-
 /// Exact configured retention authority retained after startup qualification.
 pub(crate) struct QualifiedProviderIngestRetentionAuthorityV1 {
     binding: ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
     authority: Arc<dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1>,
 }
-
 impl fmt::Debug for QualifiedProviderIngestRetentionAuthorityV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -232,7 +216,6 @@ impl fmt::Debug for QualifiedProviderIngestRetentionAuthorityV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl QualifiedProviderIngestRetentionAuthorityV1 {
     /// Return the exact credential-free expected authority binding.
     pub(crate) const fn binding(
@@ -240,14 +223,12 @@ impl QualifiedProviderIngestRetentionAuthorityV1 {
     ) -> &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1 {
         &self.binding
     }
-
     /// Return the runtime-only deployment-owned authority.
     pub(crate) const fn authority(
         &self,
     ) -> &Arc<dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1> {
         &self.authority
     }
-
     fn revalidate(&self) -> Result<(), ProviderIngestFinalizedArchiveStartupErrorV1> {
         let handle_before = self.authority.handle();
         let qualification = self.authority.qualification().map_err(|_| {
@@ -269,20 +250,17 @@ impl QualifiedProviderIngestRetentionAuthorityV1 {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArchiveStartupBoundaryV1 {
     Bootstrap,
     Qualified,
     PendingTip { height: u64 },
 }
-
 struct AuthenticatedArchiveStartupBoundaryV1<'state> {
     state_view: StateQueryView<'state>,
     state_height: u64,
     kind: ArchiveStartupBoundaryV1,
 }
-
 fn classify_archive_startup_boundary(
     state_height: u64,
     kura_height: u64,
@@ -308,7 +286,6 @@ fn classify_archive_startup_boundary(
         height: pending_height,
     })
 }
-
 fn validate_pending_archive_tip(
     pending_tip_height: u64,
     state_height: u64,
@@ -328,7 +305,6 @@ fn validate_pending_archive_tip(
         None => Err("non-genesis pending V2 replay requires an authenticated archive anchor"),
     }
 }
-
 fn classify_pending_replay_completion(
     expected_height: u64,
     durable_height: u64,
@@ -344,7 +320,6 @@ fn classify_pending_replay_completion(
         Some(_) => Err("recovery exposed a mismatched pending V2 durable tip"),
     }
 }
-
 /// Open and qualify the daemon-owned provider-ingest archive before consensus.
 ///
 /// The recovered State tip is reconciled against its non-forgeable Kura
@@ -434,7 +409,6 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
         retention_authority,
     })
 }
-
 fn open_provider_ingest_finalized_archive(
     config: &SorafsProviderIngestFinalizedArchive,
     network_id: &NetworkId,
@@ -521,7 +495,6 @@ fn open_provider_ingest_finalized_archive(
             },
         )
 }
-
 fn authenticate_archive_startup_boundary<'state>(
     state: &'state State,
     kura: &Kura,
@@ -572,7 +545,6 @@ fn authenticate_archive_startup_boundary<'state>(
         kind,
     })
 }
-
 fn select_archive_startup_mode(
     config: &SorafsProviderIngestFinalizedArchive,
     network_id: &NetworkId,
@@ -607,7 +579,6 @@ fn select_archive_startup_mode(
         ),
     }
 }
-
 fn prepare_qualified_archive_mode(
     config: &SorafsProviderIngestFinalizedArchive,
     network_id: &NetworkId,
@@ -637,7 +608,6 @@ fn prepare_qualified_archive_mode(
         live_qualification,
     })
 }
-
 fn prepare_pending_tip_archive_mode(
     network_id: &NetworkId,
     archive: &ProviderIngestFinalizedArchiveV1,
@@ -695,7 +665,6 @@ fn prepare_pending_tip_archive_mode(
         },
     )
 }
-
 fn qualify_pending_tip_archive(
     network_id: &NetworkId,
     archive: &ProviderIngestFinalizedArchiveV1,
@@ -713,7 +682,6 @@ fn qualify_pending_tip_archive(
             },
         )
 }
-
 fn activation_gate_for_startup_mode(
     startup_mode: &ProviderIngestFinalizedArchiveStartupModeV1,
 ) -> ArchiveActivationGateV1 {
@@ -732,7 +700,6 @@ fn activation_gate_for_startup_mode(
         },
     }
 }
-
 fn resolve_daemon_archive_root(
     daemon_storage_root: &Path,
     relative_root: &Path,
@@ -758,20 +725,17 @@ fn resolve_daemon_archive_root(
     }
     Ok(archive_root)
 }
-
 #[derive(Debug, Clone)]
 struct ActiveArchiveScanV1 {
     key: ProviderIngestFinalizedArchiveKeyV1,
     cursor: ProviderIngestFinalizedArchiveCursorV1,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArchiveActivationGateV1 {
     StrictLive,
     AwaitingGenesis,
     PendingTip { height: u64 },
 }
-
 impl ArchiveActivationGateV1 {
     fn accepts_visible_archive_tip(self, archive_tip_height: u64) -> bool {
         match self {
@@ -780,22 +744,18 @@ impl ArchiveActivationGateV1 {
         }
     }
 }
-
 type ArchivedCompletedMusubiCaptureSignerSlotV1 =
     Arc<Mutex<Option<Arc<ArchivedCompletedMusubiCaptureSignerV1>>>>;
-
 struct ArchivedCompletedMusubiCaptureSignerV1 {
     key_pair: KeyPair,
     session_generation: u64,
     signed_read: Mutex<ArchivedCompletedMusubiSignedReadStateV1>,
 }
-
 #[derive(Default)]
 struct ArchivedCompletedMusubiSignedReadStateV1 {
     last_request: Option<ProviderIngestCompletedMusubiCaptureRequestV1>,
     last_response: Option<ProviderIngestCompletedMusubiSignedCapturePageV1>,
 }
-
 impl ArchivedCompletedMusubiCaptureSignerV1 {
     fn try_new() -> Result<Self, ProviderIngestFinalizedLedgerErrorV1> {
         let key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
@@ -817,7 +777,6 @@ impl ArchivedCompletedMusubiCaptureSignerV1 {
             signed_read: Mutex::new(ArchivedCompletedMusubiSignedReadStateV1::default()),
         })
     }
-
     fn public_key_bytes(&self) -> Result<[u8; 32], ProviderIngestFinalizedLedgerErrorV1> {
         let (algorithm, public_key) = self
             .key_pair
@@ -832,7 +791,6 @@ impl ArchivedCompletedMusubiCaptureSignerV1 {
             .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)
     }
 }
-
 /// Archive-only provider assignment reader.
 ///
 /// One adapter permits one sequential scan at a time. The first page
@@ -860,7 +818,6 @@ pub struct ArchivedProviderIngestFinalizedLedgerV1 {
     signed_capture_source_reads: Arc<AtomicUsize>,
     active: Arc<Mutex<Option<ActiveArchiveScanV1>>>,
 }
-
 #[derive(Clone)]
 struct ArchivedProviderIngestFinalizedLedgerArgsV1 {
     network_id: NetworkId,
@@ -872,7 +829,6 @@ struct ArchivedProviderIngestFinalizedLedgerArgsV1 {
     max_kura_tip_lag_blocks: u64,
     activation_gate: ArchiveActivationGateV1,
 }
-
 impl fmt::Debug for ArchivedProviderIngestFinalizedLedgerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -885,16 +841,13 @@ impl fmt::Debug for ArchivedProviderIngestFinalizedLedgerV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ArchivedProviderIngestFinalizedLedgerV1 {
     fn new(args: ArchivedProviderIngestFinalizedLedgerArgsV1) -> Self {
         Self::new_with_capture_mode(args, None)
     }
-
     fn new_replay_safe_capture(args: ArchivedProviderIngestFinalizedLedgerArgsV1) -> Self {
         Self::new_with_capture_mode(args, Some(Arc::new(Mutex::new(None))))
     }
-
     fn new_with_capture_mode(
         args: ArchivedProviderIngestFinalizedLedgerArgsV1,
         capture_signer: Option<ArchivedCompletedMusubiCaptureSignerSlotV1>,
@@ -925,7 +878,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             active: Arc::new(Mutex::new(None)),
         }
     }
-
     fn completed_musubi_capture_verifier_binding(
         &self,
     ) -> Result<
@@ -940,7 +892,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             signer.public_key_bytes()?,
         )
     }
-
     fn completed_musubi_capture_signer(
         &self,
     ) -> Result<Arc<ArchivedCompletedMusubiCaptureSignerV1>, ProviderIngestFinalizedLedgerErrorV1>
@@ -960,17 +911,14 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             .cloned()
             .ok_or(ProviderIngestFinalizedLedgerErrorV1::Unavailable)
     }
-
     /// Return the exact genesis-derived security domain frozen into this reader.
     pub(crate) const fn network_id(&self) -> NetworkId {
         self.network_id
     }
-
     /// Return the exact provider index frozen into this reader.
     pub(crate) const fn provider_id(&self) -> ProviderId {
         self.provider_id
     }
-
     /// Requalify the captured archive against the current authenticated Kura
     /// boundary using the configured live-lag ceiling.
     pub(crate) fn qualify_live(
@@ -995,7 +943,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             },
         )
     }
-
     /// Validate adapter identity readiness without requiring a first commit to
     /// have completed before Sumeragi starts.
     ///
@@ -1024,7 +971,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             }
         }
     }
-
     fn strict_qualification_is_activated(
         &self,
         strict_result: &Result<
@@ -1049,7 +995,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             }
         }
     }
-
     fn awaiting_genesis_activation_ready(
         &self,
         strict_result: Result<
@@ -1075,7 +1020,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             reason: "provider-ingest genesis archive tip is not visible through committed State",
         })
     }
-
     fn pending_tip_activation_ready(
         &self,
         pending_tip_height: u64,
@@ -1105,7 +1049,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         })?;
         Ok(false)
     }
-
     fn activation_state_view(
         &self,
     ) -> Result<(StateQueryView<'_>, u64), ProviderIngestFinalizedArchiveErrorV1> {
@@ -1124,7 +1067,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         })?;
         Ok((view, height))
     }
-
     fn activation_kura_height(
         &self,
         operation: &'static str,
@@ -1141,7 +1083,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             },
         )
     }
-
     fn qualification_is_visible(
         &self,
         qualification: &ProviderIngestFinalizedArchiveQualificationV1,
@@ -1180,7 +1121,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         }
         Ok(true)
     }
-
     fn pending_replay_complete(
         &self,
         expected_height: u64,
@@ -1203,7 +1143,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         )
         .map_err(|reason| ProviderIngestFinalizedArchiveErrorV1::FinalityAuthentication { reason })
     }
-
     fn select_visible_committed_key(
         &self,
     ) -> Result<ProviderIngestFinalizedArchiveKeyV1, ProviderIngestFinalizedArchiveErrorV1> {
@@ -1247,7 +1186,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             },
         )
     }
-
     fn read_page_with_claim_factory(
         &self,
         claim_factory: Option<&ProviderIngestFinalizedClaimFactoryV1>,
@@ -1303,7 +1241,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             .map(|cursor| ActiveArchiveScanV1 { key, cursor });
         Ok(page)
     }
-
     fn read_replay_safe_capture_source_page(
         &self,
         at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
@@ -1358,7 +1295,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         }
         Ok(page)
     }
-
     fn read_and_sign_completed_musubi_capture_page(
         &self,
         request: ProviderIngestCompletedMusubiCaptureRequestV1,
@@ -1373,7 +1309,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             self.read_replay_safe_capture_source_page(at_finalized_cursor, after_order_id, limit)
         })
     }
-
     fn read_and_sign_completed_musubi_capture_page_with<ReadSource>(
         &self,
         request: ProviderIngestCompletedMusubiCaptureRequestV1,
@@ -1439,7 +1374,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         signed_read.last_response = Some(response.clone());
         Ok(response)
     }
-
     fn read_replay_safe_exact_capture_source_page(
         &self,
         key: &ProviderIngestFinalizedArchiveKeyV1,
@@ -1472,7 +1406,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
         map_archive_capture_source_page(self.network_id, self.provider_id, &archive_page)
     }
-
     #[cfg(test)]
     fn read_page_without_musubi_claims_for_test(
         &self,
@@ -1483,7 +1416,6 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         self.read_page_with_claim_factory(None, at_finalized_cursor, after_order_id, limit)
     }
 }
-
 impl ProviderIngestFinalizedLedgerV1 for ArchivedProviderIngestFinalizedLedgerV1 {
     fn read_assignment_page(
         &self,
@@ -1510,7 +1442,6 @@ impl ProviderIngestFinalizedLedgerV1 for ArchivedProviderIngestFinalizedLedgerV1
         })
     }
 }
-
 impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1
     for ArchivedProviderIngestFinalizedLedgerV1
 {
@@ -1522,7 +1453,6 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1
     > {
         self.completed_musubi_capture_verifier_binding()
     }
-
     fn read_signed_completed_musubi_capture_page(
         &self,
         request: ProviderIngestCompletedMusubiCaptureRequestV1,
@@ -1543,7 +1473,6 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1
         })
     }
 }
-
 fn map_archive_page(
     expected_network_id: NetworkId,
     expected_provider_id: ProviderId,
@@ -1651,7 +1580,6 @@ fn map_archive_page(
         next_after_order_id,
     })
 }
-
 fn map_archive_capture_source_page(
     expected_network_id: NetworkId,
     expected_provider_id: ProviderId,
@@ -1725,7 +1653,6 @@ fn map_archive_capture_source_page(
         ),
     )
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_core::{
@@ -1760,16 +1687,13 @@ mod tests {
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
         ReplicationOrderV1,
     };
-
     use super::*;
-
     fn physical_tempdir() -> std::io::Result<tempfile::TempDir> {
         let temp_root = std::env::temp_dir().canonicalize()?;
         tempfile::Builder::new()
             .prefix("irohad-provider-ingest-finalized-")
             .tempdir_in(temp_root)
     }
-
     fn archive_config() -> SorafsProviderIngestFinalizedArchive {
         SorafsProviderIngestFinalizedArchive {
             relative_root: PathBuf::from("provider-ingest-finalized-v1"),
@@ -1784,7 +1708,6 @@ mod tests {
             retention_authority: None,
         }
     }
-
     fn empty_state(chain_id: &ChainId, kura: &Arc<Kura>) -> Arc<State> {
         Arc::new(State::new_with_chain_for_testing(
             World::default(),
@@ -1793,19 +1716,16 @@ mod tests {
             chain_id.clone(),
         ))
     }
-
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             [seed; 32],
         )))
     }
-
     fn account(seed: u8) -> AccountId {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("deterministic account key");
         AccountId::new(key.public_key().clone())
     }
-
     fn replay_safe_archived_order(
         order_seed: u8,
         provider_id: ProviderId,
@@ -1878,7 +1798,6 @@ mod tests {
             musubi_archive: None,
         }
     }
-
     fn completion_record(
         provider_id: ProviderId,
         completed_by: AccountId,
@@ -1903,7 +1822,6 @@ mod tests {
             },
         }
     }
-
     fn archive_page_with_raw_musubi_binding() -> ProviderIngestFinalizedArchivePageV1 {
         let provider_id = ProviderId::new([0x51; 32]);
         let order_id = ReplicationOrderId::new([0x61; 32]);
@@ -1989,7 +1907,6 @@ mod tests {
             next_cursor: None,
         }
     }
-
     #[test]
     fn relative_archive_root_is_bound_below_daemon_root() {
         let daemon_root = physical_tempdir().expect("daemon root");
@@ -2009,7 +1926,6 @@ mod tests {
             assert!(resolve_daemon_archive_root(daemon_root.path(), rejected).is_err());
         }
     }
-
     #[test]
     fn enabled_retention_fails_before_open_without_injected_authority() {
         let daemon_root = physical_tempdir().expect("daemon root");
@@ -2036,7 +1952,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn fresh_height_zero_opens_empty_archive_for_genesis_capture() {
         let daemon_root = physical_tempdir().expect("daemon root");
@@ -2084,7 +1999,6 @@ mod tests {
                 .expect("bootstrap capture activation gate"),
             "capture readiness must not pretend genesis is already captured"
         );
-
         let runtime_query = prepared.runtime_query();
         let capture_query = prepared
             .signed_capture_reader
@@ -2147,7 +2061,6 @@ mod tests {
             "the prepared reader must not expose a second raw tenure"
         );
     }
-
     #[test]
     fn pending_boundary_allows_only_exact_tip_or_predecessor() {
         assert_eq!(
@@ -2161,7 +2074,6 @@ mod tests {
         assert!(classify_archive_startup_boundary(6, 8, Some(8)).is_err());
         assert!(classify_archive_startup_boundary(7, 8, None).is_err());
         assert!(classify_archive_startup_boundary(7, 8, Some(9)).is_err());
-
         assert_eq!(validate_pending_archive_tip(8, 7, Some(7)), Ok(()));
         assert_eq!(validate_pending_archive_tip(8, 7, Some(8)), Ok(()));
         assert_eq!(validate_pending_archive_tip(8, 8, Some(8)), Ok(()));
@@ -2171,12 +2083,10 @@ mod tests {
         assert!(validate_pending_archive_tip(8, 7, None).is_err());
         assert_eq!(validate_pending_archive_tip(1, 0, None), Ok(()));
         assert!(validate_pending_archive_tip(1, 1, None).is_err());
-
         let gate = ArchiveActivationGateV1::PendingTip { height: 8 };
         assert!(!gate.accepts_visible_archive_tip(7));
         assert!(gate.accepts_visible_archive_tip(8));
         assert!(gate.accepts_visible_archive_tip(9));
-
         assert_eq!(classify_pending_replay_completion(8, 8, Some(8)), Ok(false));
         assert_eq!(classify_pending_replay_completion(8, 8, None), Ok(true));
         assert_eq!(classify_pending_replay_completion(8, 9, None), Ok(true));
@@ -2185,7 +2095,6 @@ mod tests {
         assert!(classify_pending_replay_completion(8, 10, Some(9)).is_err());
         assert!(classify_pending_replay_completion(8, 8, Some(7)).is_err());
     }
-
     #[test]
     fn query_rejects_unbounded_page_before_archive_access() {
         let daemon_root = physical_tempdir().expect("daemon root");
@@ -2249,7 +2158,6 @@ mod tests {
         );
         assert!(capture_query.replay_safe_capture);
     }
-
     #[test]
     fn replay_safe_capture_exact_requests_do_not_consume_adapter_cursor_state() {
         let daemon_root = physical_tempdir().expect("daemon root");
@@ -2303,7 +2211,6 @@ mod tests {
                 activation_gate: ArchiveActivationGateV1::StrictLive,
             },
         );
-
         let first = query
             .read_replay_safe_exact_capture_source_page(&key, None, 1)
             .expect("first replay-safe capture page");
@@ -2331,7 +2238,6 @@ mod tests {
             "replay-safe reads must never consume adapter-local cursor state"
         );
     }
-
     // Keep the stateful cache sequence together so every assertion observes
     // the exact response retained by the immediately preceding generation.
     #[test]
@@ -2442,7 +2348,6 @@ mod tests {
             .expect("exact generation-one retry");
         assert_eq!(first_retry, first);
         assert_eq!(query.signed_capture_source_reads.load(Ordering::SeqCst), 1);
-
         let different_same_generation =
             ProviderIngestCompletedMusubiCaptureRequestV1::try_from_untrusted_reader_parts(
                 binding.clone(),
@@ -2489,7 +2394,6 @@ mod tests {
             })
             .expect("generation-two signed page");
         assert_eq!(query.signed_capture_source_reads.load(Ordering::SeqCst), 2);
-
         archive
             .insert(ProviderIngestFinalizedProjectionV1 {
                 key: ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 2, [0x68; 32], 2_000)
@@ -2517,7 +2421,6 @@ mod tests {
             "a lower generation must not replay after the cache advances"
         );
     }
-
     #[test]
     fn retained_full_cursor_rejects_public_cursor_substitution() {
         let daemon_root = physical_tempdir().expect("daemon root");
@@ -2569,7 +2472,6 @@ mod tests {
                 after_order_id,
             },
         });
-
         assert_eq!(
             query.read_page_without_musubi_claims_for_test(None, None, 1),
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
@@ -2600,7 +2502,6 @@ mod tests {
             "a substituted exclusive boundary must fail before archive access"
         );
     }
-
     #[test]
     fn raw_musubi_binding_requires_runtime_issued_claim_factory() {
         let mut page = archive_page_with_raw_musubi_binding();
@@ -2609,7 +2510,6 @@ mod tests {
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
             "publisher-shaped binding data cannot become a finalized claim"
         );
-
         page.rows[0]
             .replication_order
             .provider_completions
@@ -2619,7 +2519,6 @@ mod tests {
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
             "a finalized completion plus publisher-shaped binding still cannot forge either opaque claim"
         );
-
         page.rows[0].musubi_archive = None;
         page.rows[0].replication_order.musubi_archive = None;
         let generic = map_archive_page(test_network_id(0x91), page.provider_id, &page, None)

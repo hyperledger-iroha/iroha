@@ -24,7 +24,6 @@ fn nexus_reconfigure_does_not_revive_unknown_manifest_without_explicit_reload() 
         &registry_cfg,
     ));
     let frozen_digest = frozen.consensus_policy_digest();
-
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let state = State::new_for_testing(
@@ -34,7 +33,6 @@ fn nexus_reconfigure_does_not_revive_unknown_manifest_without_explicit_reload() 
     );
     queue.install_lane_manifests_with_state(&frozen, &state);
     assert!(!frozen.has_manifest_source_alias("future"));
-
     let expanded = LaneCatalog::new(
         nonzero!(2_u32),
         vec![
@@ -54,7 +52,6 @@ fn nexus_reconfigure_does_not_revive_unknown_manifest_without_explicit_reload() 
     nexus.registry = registry_cfg;
     nexus.lane_catalog = expanded.clone();
     nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&expanded);
-
     queue.reconfigure_nexus_with_state(&nexus, &state, None);
     let installed = queue.lane_manifests.read().clone();
     assert_eq!(installed.consensus_policy_digest(), frozen_digest);
@@ -66,7 +63,6 @@ fn nexus_reconfigure_does_not_revive_unknown_manifest_without_explicit_reload() 
         crate::governance::manifest::GovernanceGuardReason::MissingManifest
     );
     assert!(!installed.has_manifest_source_alias("future"));
-
     let explicitly_reloaded =
         LaneManifestRegistry::from_config(&expanded, &nexus.governance, &nexus.registry);
     assert!(

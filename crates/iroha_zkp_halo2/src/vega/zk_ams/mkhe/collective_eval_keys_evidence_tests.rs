@@ -4,7 +4,6 @@ fn synthetic_evidence_body(tag: u8, record_index: u32) -> [u8; 5] {
     body[1..].copy_from_slice(&record_index.to_be_bytes());
     body
 }
-
 fn synthetic_evidence_descriptor(tag: u8, record_index: u32) -> (u64, [u8; 32]) {
     let body = synthetic_evidence_body(tag, record_index);
     (
@@ -12,7 +11,6 @@ fn synthetic_evidence_descriptor(tag: u8, record_index: u32) -> (u64, [u8; 32]) 
         keccak256(&body),
     )
 }
-
 fn manual_evidence_descriptor_set_digest_v1(
     header: ZkAmsMkheCollectiveEvidenceSetHeaderV1,
     records: impl IntoIterator<Item = (u32, ZkAmsMkheCollectiveEvidenceRecordKindV1, u64, [u8; 32])>,
@@ -39,7 +37,6 @@ fn manual_evidence_descriptor_set_digest_v1(
     hash.update(&final_count.to_be_bytes());
     hash.finalize()
 }
-
 fn manual_cks_compact_output_set_digest_v1(
     purpose: ZkAmsMkheCollectiveEvaluatedKeyPurposeV1,
     ordinal: u8,
@@ -62,11 +59,9 @@ fn manual_cks_compact_output_set_digest_v1(
     hash.update(&final_count.to_be_bytes());
     hash.finalize()
 }
-
 fn synthetic_compact_output_digest(digit_index: u32) -> [u8; 32] {
     keccak256(&synthetic_evidence_body(0x53, digit_index))
 }
-
 fn evidence_capability_fixture(
     label: &[u8],
     epoch: u64,
@@ -165,7 +160,6 @@ fn evidence_capability_fixture(
         counts,
     }
 }
-
 fn synthetic_source_receipt(
     fixture: &EvidenceCapabilityFixture,
     record_index: u32,
@@ -183,7 +177,6 @@ fn synthetic_source_receipt(
         canonical_digest,
     )
 }
-
 fn synthetic_cks_receipt(
     fixture: &EvidenceCapabilityFixture,
     digit_index: u32,
@@ -198,7 +191,6 @@ fn synthetic_cks_receipt(
         synthetic_compact_output_digest(digit_index),
     )
 }
-
 fn mint_synthetic_evidence_capability(
     fixture: &EvidenceCapabilityFixture,
 ) -> ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1 {
@@ -211,7 +203,6 @@ fn mint_synthetic_evidence_capability(
     )
     .unwrap()
 }
-
 fn evidence_runtime_binding(
     fixture: &EvidenceCapabilityFixture,
 ) -> evidence_set::EvidenceSetRuntimeBindingV1 {
@@ -228,7 +219,6 @@ fn evidence_runtime_binding(
         collective_key_digest: axes.collective_key_digest,
     }
 }
-
 fn evidence_test_runtime(
     fixture: &EvidenceCapabilityFixture,
 ) -> ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
@@ -298,7 +288,6 @@ fn evidence_test_runtime(
     )
     .unwrap()
 }
-
 #[test]
 fn release_and_tiny_evidence_counts_are_distinct_and_exact() {
     let release = release_profile_v1();
@@ -420,7 +409,6 @@ fn release_and_tiny_evidence_counts_are_distinct_and_exact() {
         (ZkAmsMkheCollectiveEvidenceRecordKindV1::GaloisSource, 0)
     );
 }
-
 #[test]
 fn generator_and_receipt_collector_share_descriptor_set_recurrence() {
     let schedule = zk_ams_t256_galois_key_schedule_v1().unwrap();
@@ -484,7 +472,6 @@ fn generator_and_receipt_collector_share_descriptor_set_recurrence() {
     let cap = mint_synthetic_evidence_capability(&fixture);
     assert!(format!("{cap:?}").contains("privately_sealed: true"));
 }
-
 #[test]
 fn descriptor_set_recurrence_matches_independent_manual_framing_oracle() {
     let header = ZkAmsMkheCollectiveEvidenceSetHeaderV1 {
@@ -515,7 +502,6 @@ fn descriptor_set_recurrence_matches_independent_manual_framing_oracle() {
         expected,
         manual_evidence_descriptor_set_digest_v1(header, records, 3)
     );
-
     let mut wrong_header = header;
     wrong_header.galois_exponent ^= 2;
     assert_ne!(
@@ -550,7 +536,6 @@ fn descriptor_set_recurrence_matches_independent_manual_framing_oracle() {
         manual_evidence_descriptor_set_digest_v1(header, records, 2)
     );
 }
-
 #[test]
 fn compact_output_recurrence_matches_independent_manual_framing_oracle() {
     let purpose = ZkAmsMkheCollectiveEvaluatedKeyPurposeV1::Galois;
@@ -583,7 +568,6 @@ fn compact_output_recurrence_matches_independent_manual_framing_oracle() {
             3,
         )
     );
-
     for (wrong_purpose, wrong_ordinal, wrong_exponent, wrong_key) in [
         (
             ZkAmsMkheCollectiveEvaluatedKeyPurposeV1::Relinearization,
@@ -657,7 +641,6 @@ fn compact_output_recurrence_matches_independent_manual_framing_oracle() {
         )
     );
 }
-
 #[test]
 fn source_receipt_stream_rejects_missing_reorder_duplicate_extra_and_error() {
     let schedule = zk_ams_t256_galois_key_schedule_v1().unwrap();
@@ -747,7 +730,6 @@ fn source_receipt_stream_rejects_missing_reorder_duplicate_extra_and_error() {
         Err(ZkAmsMkheErrorV1::InvalidAuthentication)
     ));
 }
-
 #[test]
 fn cks_receipt_stream_rejects_missing_reorder_duplicate_extra_and_error() {
     let schedule = zk_ams_t256_galois_key_schedule_v1().unwrap();
@@ -840,7 +822,6 @@ fn cks_receipt_stream_rejects_missing_reorder_duplicate_extra_and_error() {
         Err(ZkAmsMkheErrorV1::InvalidAuthentication)
     ));
 }
-
 #[test]
 fn evidence_capability_rejects_context_entry_and_private_seal_splices() {
     let schedule = zk_ams_t256_galois_key_schedule_v1().unwrap();
@@ -945,7 +926,6 @@ fn evidence_capability_rejects_context_entry_and_private_seal_splices() {
         );
     }
 }
-
 #[test]
 fn invalid_capability_fails_before_any_provider_operation() {
     let schedule = zk_ams_t256_galois_key_schedule_v1().unwrap();
@@ -975,7 +955,6 @@ fn invalid_capability_fails_before_any_provider_operation() {
     assert_eq!(provider.provider_payload_len_calls, 0);
     assert_eq!(provider.seek_calls, 0);
     assert_eq!(provider.read_calls, 0);
-
     for field in 0..5 {
         let capability = mint_synthetic_evidence_capability(&fixture);
         let mut wrong_binding = evidence_runtime_binding(&fixture);
@@ -1032,7 +1011,6 @@ fn invalid_capability_fails_before_any_provider_operation() {
         assert!(consume_evidence_set_before_provider_v1(capability, wrong_binding).is_err());
     }
 }
-
 #[test]
 fn zark_scan_rejects_tampered_or_swapped_expected_cks_outputs() {
     let profile = test_profile();
@@ -1041,14 +1019,12 @@ fn zark_scan_rejects_tampered_or_swapped_expected_cks_outputs() {
     let pointer = artifact.attach_pointer();
     let expected = expected_published_test_key(&profile, &generated, pointer);
     assert!(validate_seekable_evaluated_key(&profile, expected, &mut artifact.clone()).is_ok());
-
     let mut tampered = expected;
     tampered.cks_compact_output_set_digest[0] ^= 1;
     assert!(matches!(
         validate_seekable_evaluated_key(&profile, tampered, &mut artifact.clone()),
         Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
     ));
-
     let swapped_output_digest = manual_cks_compact_output_set_digest_v1(
         expected.entry.purpose(),
         expected.entry.ordinal(),
@@ -1081,7 +1057,6 @@ fn zark_scan_rejects_tampered_or_swapped_expected_cks_outputs() {
         Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
     ));
 }
-
 #[test]
 fn evidence_capability_is_opaque_move_only_bounded_and_facaded() {
     let child = include_str!("collective_eval_keys/evidence_set.rs");

@@ -1,8 +1,6 @@
 //! Consolidated integration-test harness for FASTPQ prover coverage.
-
 #[path = "common/mod.rs"]
 mod common;
-
 #[path = "backend_regression.rs"]
 mod backend_regression;
 #[path = "document_examples.rs"]

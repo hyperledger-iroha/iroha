@@ -2,7 +2,6 @@
 //!
 //! This module wires the data-model oracle helpers into host-side validation so
 //! connectors and on-chain aggregation can reuse a single deterministic path.
-
 use iroha_crypto::Hash;
 #[cfg(test)]
 use iroha_crypto::SignatureOf;
@@ -15,7 +14,6 @@ use mv::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json;
-
 /// Deterministic admission pipeline for oracle observations.
 #[derive(Debug)]
 pub struct ObservationAdmission<'a> {
@@ -23,7 +21,6 @@ pub struct ObservationAdmission<'a> {
     slot: FeedSlot,
     request_hash: Hash,
 }
-
 impl<'a> ObservationAdmission<'a> {
     /// Create a new admission pipeline for a specific slot/request.
     #[must_use]
@@ -34,7 +31,6 @@ impl<'a> ObservationAdmission<'a> {
             request_hash,
         }
     }
-
     /// Validate an observation for cadence/feed/config/connector pins.
     ///
     /// # Errors
@@ -45,7 +41,6 @@ impl<'a> ObservationAdmission<'a> {
         self.config
             .validate_observation_meta(&observation.body)
             .map_err(OracleAggregationError::from)?;
-
         if observation.body.slot != self.slot {
             return Err(OracleAggregationError::SlotMismatch {
                 expected: self.slot,
@@ -58,11 +53,9 @@ impl<'a> ObservationAdmission<'a> {
                 provided: observation.body.request_hash,
             });
         }
-
         Ok(())
     }
 }
-
 /// Aggregate admitted observations into a report/outcome.
 ///
 /// # Errors
@@ -78,7 +71,6 @@ pub fn aggregate(
 ) -> Result<AggregationOutput, OracleAggregationError> {
     aggregate_observations(config, slot, request_hash, submitter, observations)
 }
-
 /// Validate a connector request before hashing/sending.
 ///
 /// # Errors
@@ -103,7 +95,6 @@ pub fn validate_connector_request(
         .validate_redaction()
         .map_err(OracleAggregationError::from)
 }
-
 /// In-memory aggregator that validates observations and produces a report/outcome.
 #[derive(Debug)]
 pub struct OracleAggregator<'a> {
@@ -111,7 +102,6 @@ pub struct OracleAggregator<'a> {
     buffer: Vec<Observation>,
     seen_providers: std::collections::BTreeSet<iroha_data_model::oracle::OracleId>,
 }
-
 impl<'a> OracleAggregator<'a> {
     /// Create a new aggregator for a feed slot/request.
     #[must_use]
@@ -122,7 +112,6 @@ impl<'a> OracleAggregator<'a> {
             seen_providers: std::collections::BTreeSet::new(),
         }
     }
-
     /// Validate and buffer an observation.
     ///
     /// # Errors
@@ -148,7 +137,6 @@ impl<'a> OracleAggregator<'a> {
         self.buffer.push(observation);
         Ok(())
     }
-
     /// Finalize aggregation with a given submitter.
     ///
     /// # Errors
@@ -167,7 +155,6 @@ impl<'a> OracleAggregator<'a> {
         )
     }
 }
-
 /// Key identifying a buffered observation window for `(feed, version, slot, request)`.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
@@ -189,7 +176,6 @@ pub struct ObservationWindowKey {
     /// Canonical request hash shared across the committee.
     pub request_hash: Hash,
 }
-
 impl ObservationWindowKey {
     /// Construct a new window key.
     #[must_use]
@@ -206,7 +192,6 @@ impl ObservationWindowKey {
             request_hash,
         }
     }
-
     /// Derive the replay key used for replay protection.
     #[must_use]
     pub fn replay_key(&self) -> ReplayKey {
@@ -218,7 +203,6 @@ impl ObservationWindowKey {
         )
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonKeyCodec for ObservationWindowKey {
     fn encode_json_key(&self, out: &mut String) {
@@ -226,13 +210,11 @@ impl JsonKeyCodec for ObservationWindowKey {
         json::JsonSerialize::json_serialize(self, &mut buf);
         json::write_json_string(&buf, out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
         json::JsonDeserialize::json_deserialize(&mut parser)
     }
 }
-
 /// Buffered observations for a single `(feed, slot, request_hash)` window.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
 #[cfg_attr(
@@ -252,7 +234,6 @@ pub struct ObservationWindow {
     /// Buffered observations keyed by provider id.
     pub observations: std::collections::BTreeMap<OracleId, Observation>,
 }
-
 impl ObservationWindow {
     /// Create an empty window for the given key.
     #[must_use]
@@ -264,7 +245,6 @@ impl ObservationWindow {
             observations: std::collections::BTreeMap::new(),
         }
     }
-
     /// Insert an observation after validating feed metadata and caps.
     ///
     /// # Errors
@@ -315,10 +295,8 @@ impl ObservationWindow {
                 oracle_id: provider_id,
             });
         }
-
         Ok(())
     }
-
     /// Consume the window and return observations in deterministic order.
     #[must_use]
     pub fn into_sorted(self) -> Vec<Observation> {
@@ -326,27 +304,22 @@ impl ObservationWindow {
         observations.sort_by(|left, right| left.body.provider_id.cmp(&right.body.provider_id));
         observations
     }
-
     /// Number of buffered observations.
     #[must_use]
     pub fn len(&self) -> usize {
         self.observations.len()
     }
-
     /// Returns `true` when there are no buffered observations.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.observations.is_empty()
     }
 }
-
 /// Alias for oracle feed event records.
 pub type FeedEventRecord = iroha_data_model::events::data::oracle::FeedEventRecord;
-
 #[cfg(test)]
 mod tests {
     use std::{num::NonZeroU64, str::FromStr};
-
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         account::AccountId,
@@ -356,24 +329,19 @@ mod tests {
             ObservationValue, OutlierPolicy, RiskClass,
         },
     };
-
     use super::*;
-
     fn feed_id(name: &str) -> iroha_data_model::oracle::FeedId {
         iroha_data_model::oracle::FeedId(Name::from_str(name).expect("feed name"))
     }
-
     fn oracle(name: &str, domain: &str) -> iroha_data_model::oracle::OracleId {
         let seed = format!("{name}:{domain}");
         let keypair = KeyPair::try_from_seed(seed.into_bytes(), Algorithm::Ed25519)
             .expect("test oracle seed derivation should succeed");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn sample_providers() -> Vec<iroha_data_model::oracle::OracleId> {
         vec![oracle("alice", "validators"), oracle("bob", "validators")]
     }
-
     fn sample_config() -> FeedConfig {
         FeedConfig {
             feed_id: feed_id("price_xor_usd"),
@@ -394,11 +362,9 @@ mod tests {
             replay_window_slots: NonZeroU64::new(4).unwrap(),
         }
     }
-
     fn sample_request_hash() -> Hash {
         Hash::new(b"price_xor_usd:slot10:request")
     }
-
     fn observation(provider: iroha_data_model::oracle::OracleId, value: i128) -> Observation {
         let body = ObservationBody {
             feed_id: feed_id("price_xor_usd"),
@@ -417,7 +383,6 @@ mod tests {
             signature: SignatureOf::from_signature(signature),
         }
     }
-
     #[test]
     fn aggregator_builds_report() {
         let config = sample_config();
@@ -427,7 +392,6 @@ mod tests {
             .expect("push first");
         agg.push(observation(providers[1].clone(), 1_002_000))
             .expect("push second");
-
         let output = agg
             .finalize(providers[0].clone())
             .expect("aggregation succeeds");
@@ -437,7 +401,6 @@ mod tests {
         ));
         assert_eq!(config.feed_id, output.report.feed_id);
     }
-
     #[test]
     fn aggregator_rejects_replays() {
         let config = sample_config();
@@ -451,7 +414,6 @@ mod tests {
             OracleAggregationError::DuplicateObservation { .. }
         ));
     }
-
     #[test]
     fn aggregator_enforces_max_observers() {
         let mut config = sample_config();
@@ -467,7 +429,6 @@ mod tests {
             OracleAggregationError::TooManyObservations { .. }
         ));
     }
-
     #[test]
     fn aggregator_rejects_slot_mismatch() {
         let config = sample_config();

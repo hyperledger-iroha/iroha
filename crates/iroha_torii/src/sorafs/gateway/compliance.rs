@@ -7,7 +7,6 @@
 //! Enabled feed transports attest a stable V1 handle, revision, and canonical
 //! hostname/SPKI policy digest before checkpoint state is opened and again
 //! before and after every feed operation.
-
 use std::{
     cmp::Ordering,
     collections::BTreeSet,
@@ -23,7 +22,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use blake3::Hasher;
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use flate2::read::GzDecoder;
@@ -31,9 +29,7 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
 use url::{Host, Url};
-
 use super::provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
-
 /// V1 schema version for compliance catalog payloads.
 pub const GATEWAY_COMPLIANCE_CATALOG_VERSION_V1: u8 = 1;
 /// V1 schema version for catalog signatures.
@@ -2345,7 +2341,6 @@ fn append_mutation_record(
 pub(crate) fn allow_all_gateway_compliance_controller_for_tests() -> Arc<GatewayComplianceController>
 {
     use ed25519_dalek::{Signer as _, SigningKey};
-
     let catalog_key = SigningKey::from_bytes(&[0xC1; 32]);
     let gateway_key = SigningKey::from_bytes(&[0xD2; 32]);
     let trust_policy = GatewayComplianceTrustPolicyV1 {
@@ -3841,7 +3836,6 @@ fn validate_checkpoint_parent(path: &Path) -> Result<(), GatewayComplianceError>
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let metadata = fs::symlink_metadata(path)
             .map_err(|error| persistence_io("inspect checkpoint parent", error))?;
         if metadata.permissions().mode() & 0o022 != 0 {
@@ -3930,7 +3924,6 @@ fn validate_file_permissions(
     label: &'static str,
 ) -> Result<(), GatewayComplianceError> {
     use std::os::unix::fs::PermissionsExt as _;
-
     if metadata.permissions().mode() & 0o022 != 0 {
         return Err(GatewayComplianceError::Persistence(format!(
             "{label} must not be group- or world-writable"
@@ -4175,12 +4168,9 @@ mod tests {
             atomic::{AtomicBool, AtomicUsize, Ordering as TestAtomicOrdering},
         },
     };
-
     use ed25519_dalek::{Signer as _, SigningKey};
     use flate2::{Compression, write::GzEncoder};
-
     use super::*;
-
     const NOW: u64 = 1_800_000_000;
     #[derive(Debug, Default)]
     struct MemoryStore {
@@ -6228,7 +6218,6 @@ mod tests {
     #[test]
     fn file_store_rejects_group_or_world_writable_parent() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
         let unsafe_parent = root.join("unsafe");
@@ -6244,7 +6233,6 @@ mod tests {
     #[test]
     fn file_store_rejects_symlink_lease_file() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
         let path = root.join("checkpoint.to");
@@ -6263,7 +6251,6 @@ mod tests {
     #[test]
     fn file_store_rejects_symlink_checkpoint() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
         let target = root.join("real.to");

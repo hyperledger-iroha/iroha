@@ -1,7 +1,5 @@
 //! Public Torii DTOs for the first-release Offline lifecycle.
-
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-
 use crate::ErrorEnvelope;
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -16,7 +14,6 @@ use iroha_data_model::{
         KagemushaActiveReceiverWitnessProofV1, KagemushaRecipientPaymentRequestV2,
     },
 };
-
 pub use iroha_data_model::offline::{
     KagemushaRecursiveSpendRedeemRequestV4 as OfflineRedeemRequest,
     KagemushaRecursiveSpendTopUpRequestV4 as OfflineTopUpRequest,
@@ -26,7 +23,6 @@ pub use iroha_data_model::offline::{
     OfflineAuthenticatedArtifactSet, OfflineReadiness, OfflineReadinessBlocker, OfflineStatus,
     OfflineVerifierId,
 };
-
 /// Stable public Norito schema name for the request-independent lineage query.
 pub const OFFLINE_RECIPIENT_LINEAGE_REQUEST_SCHEMA_NAME: &str =
     "iroha.torii.v1.offline.recipient_lineage.request";
@@ -50,7 +46,6 @@ pub const OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES: usize = 84;
 /// Maximum uncompressed peer-wire message containing one canonical offer.
 pub const OFFLINE_RECIPIENT_OFFER_MAX_PEER_WIRE_BYTES: usize =
     OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES + OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES;
-
 /// Request-independent receiver tuple whose proof can be prefetched while online.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -66,7 +61,6 @@ pub struct OfflineRecipientLineageSelectorV2 {
     /// Offline-cash asset definition.
     pub asset: AssetDefinitionId,
 }
-
 /// Receiver-lineage query guided by an externally trusted mobile checkpoint.
 ///
 /// The height is not itself a trust anchor. Native verification also requires
@@ -84,7 +78,6 @@ pub struct OfflineRecipientLineageRequest {
     /// Height of the externally trusted checkpoint proof which must start the response chain.
     pub trusted_checkpoint_height: u64,
 }
-
 /// Reusable proof-bearing active registration lineage for one receiver tuple.
 ///
 /// Authorization comes exclusively from the end-of-block active-receiver
@@ -115,7 +108,6 @@ pub struct OfflineRecipientRegistrationLineage {
     /// Canonical hash of the evaluated committed block.
     pub evaluated_block_hash: String,
 }
-
 impl OfflineRecipientRegistrationLineage {
     /// Verify every portable binding in this proof-bearing response.
     ///
@@ -161,13 +153,11 @@ impl OfflineRecipientRegistrationLineage {
         {
             return Err("receiver-lineage selector does not match the signed request".to_owned());
         }
-
         let evaluated_block_hash =
             exact_lower_hex_32("evaluated_block_hash", &self.evaluated_block_hash)?;
         if evaluated_block_hash.iter().all(|byte| *byte == 0) || evaluated_block_hash[31] & 1 == 0 {
             return Err("evaluated block hash is not a canonical Iroha hash".to_owned());
         }
-
         if self.finality_chain.is_empty()
             || self.finality_chain.len() > OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_PROOFS
         {
@@ -321,7 +311,6 @@ impl OfflineRecipientRegistrationLineage {
         Ok(artifact.context_id())
     }
 }
-
 /// Canonical portable peer offer verified without a live Torii connection.
 ///
 /// `publisher_checkpoint_envelope` is opaque to Iroha consensus/native
@@ -341,7 +330,6 @@ pub struct OfflineRecipientReceiveOfferV2 {
     /// Optional app-publisher checkpoint update envelope, capped at 2 KiB.
     pub publisher_checkpoint_envelope: Option<Vec<u8>>,
 }
-
 impl OfflineRecipientReceiveOfferV2 {
     /// Enforce the transport-only structure before app policy verification.
     ///
@@ -390,14 +378,12 @@ impl OfflineRecipientReceiveOfferV2 {
         }
         Ok(())
     }
-
     /// Opaque publisher checkpoint bytes for app-owned signature/policy checks.
     #[must_use]
     pub fn publisher_checkpoint_envelope(&self) -> Option<&[u8]> {
         self.publisher_checkpoint_envelope.as_deref()
     }
 }
-
 fn exact_lower_hex_32(field: &str, value: &str) -> Result<[u8; 32], String> {
     if value.len() != 64
         || !value
@@ -411,20 +397,17 @@ fn exact_lower_hex_32(field: &str, value: &str) -> Result<[u8; 32], String> {
         .map_err(|_| format!("{field} must be canonical lowercase 32-byte hex"))?;
     Ok(decoded)
 }
-
 /// Finalized anchor returned by an applied offline top-up.
 ///
 /// The underlying consensus wire type remains internally versioned, while the
 /// first-release public transport surface exposes only this current name.
 pub type OfflineTopUpAnchor = iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4;
-
 /// Finality proof returned with an applied offline top-up.
 ///
 /// The first-release transport exposes the current typed consensus proof
 /// directly. It is never wrapped as an opaque base64 payload and is required
 /// before a wallet may initialize recursive spending from the returned anchor.
 pub type OfflineTopUpFinalityProof = iroha_data_model::offline::KagemushaTopUpFinalityProofV2;
-
 /// Offline lifecycle command selected by an operation.
 #[derive(
     Debug,
@@ -446,7 +429,6 @@ pub enum OfflineOperationKind {
     #[norito(rename = "redeem")]
     Redeem,
 }
-
 /// Initial state returned after an offline command is accepted.
 #[derive(
     Debug,
@@ -465,7 +447,6 @@ pub enum OfflineOperationState {
     #[norito(rename = "pending")]
     Pending,
 }
-
 /// Reference returned by an accepted offline command.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -484,7 +465,6 @@ pub struct OfflineOperationReference {
     /// Signed request issuance time in Unix milliseconds.
     pub submitted_at_ms: u64,
 }
-
 /// Final result of an applied top-up operation.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -501,7 +481,6 @@ pub struct OfflineTopUpResult {
     /// Typed consensus proof bound to the exact finalized top-up anchor.
     pub finality_proof: OfflineTopUpFinalityProof,
 }
-
 /// Final result of an applied redemption operation.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -514,7 +493,6 @@ pub struct OfflineRedeemResult {
     /// Finalized chain time in Unix milliseconds.
     pub server_time_ms: u64,
 }
-
 /// Applied offline operation result, discriminated by command kind.
 #[expect(
     clippy::large_enum_variant,
@@ -532,7 +510,6 @@ pub enum OfflineOperationResult {
     #[norito(rename = "redeem")]
     Redeem(OfflineRedeemResult),
 }
-
 /// Pollable terminal or non-terminal state of an offline operation.
 #[expect(
     clippy::large_enum_variant,
@@ -574,20 +551,16 @@ pub enum OfflineOperationStatus {
         error: ErrorEnvelope,
     },
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-
     use super::*;
-
     #[derive(Debug, JsonDeserialize, JsonSerialize, PartialEq, Eq)]
     struct JsonDefaultByteMappingProbe {
         fixed: [u8; 4],
         dynamic: Vec<u8>,
         keyed: BTreeMap<[u8; 2], u8>,
     }
-
     #[test]
     fn norito_json_default_byte_and_map_key_mapping_is_exact() {
         let probe = JsonDefaultByteMappingProbe {
@@ -595,7 +568,6 @@ mod tests {
             dynamic: vec![0x00, 0xab, 0x10, 0xff],
             keyed: BTreeMap::from([([0x00, 0xff], 7)]),
         };
-
         let json = norito::json::to_string(&probe).expect("encode JSON mapping probe");
         assert_eq!(
             json,
@@ -604,13 +576,11 @@ mod tests {
         let decoded: JsonDefaultByteMappingProbe =
             norito::json::from_str(&json).expect("decode canonical JSON mapping probe");
         assert_eq!(decoded, probe);
-
         let lowercase: JsonDefaultByteMappingProbe = norito::json::from_str(
             r#"{"fixed":"00ab10ff","dynamic":[0,171,16,255],"keyed":{"00ff":7}}"#,
         )
         .expect("decode lowercase hexadecimal input");
         assert_eq!(lowercase, probe);
-
         let error = norito::json::from_str::<JsonDefaultByteMappingProbe>(
             r#"{"fixed":"00AB10FF","dynamic":[],"keyed":{"00FF":7,"00ff":8}}"#,
         )
@@ -620,7 +590,6 @@ mod tests {
             "unexpected duplicate-key error: {error}"
         );
     }
-
     fn universal_capability_status() -> OfflineStatus {
         OfflineStatus {
             mandatory: false,
@@ -634,7 +603,6 @@ mod tests {
             blockers: Vec::new(),
         }
     }
-
     #[test]
     fn universal_capability_roundtrips_without_asset_enrollment() {
         let capability = universal_capability_status();
@@ -642,18 +610,15 @@ mod tests {
         assert!(capability.ready);
         assert!(capability.assets.is_empty());
         assert!(capability.blockers.is_empty());
-
         let json = norito::json::to_vec(&capability).expect("encode capability JSON");
         let decoded_json: OfflineStatus =
             norito::json::from_slice(&json).expect("decode capability JSON");
         assert_eq!(decoded_json, capability);
-
         let archive = norito::to_bytes(&capability).expect("encode capability Norito");
         let decoded_norito: OfflineStatus =
             norito::decode_from_bytes(&archive).expect("decode capability Norito");
         assert_eq!(decoded_norito, capability);
     }
-
     #[test]
     fn universal_capability_json_is_strict_and_asset_neutral() {
         let canonical = norito::json::to_string(&universal_capability_status())
@@ -661,13 +626,11 @@ mod tests {
         assert!(!canonical.contains("asset_definition_id"));
         assert!(!canonical.contains("verifier"));
         assert!(!canonical.contains("artifact"));
-
         let unknown = canonical.replacen('{', r#"{"future_metadata":null,"#, 1);
         let error = norito::json::from_str::<OfflineStatus>(&unknown)
             .expect_err("unknown universal capability members fail closed");
         assert!(error.to_string().contains("unknown field"));
     }
-
     #[test]
     fn tagged_json_rejects_duplicate_discriminator_members() {
         for json in [
@@ -682,7 +645,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn operation_reference_is_direct_and_roundtrips() {
         let reference = OfflineOperationReference {
@@ -693,20 +655,17 @@ mod tests {
             status_uri: format!("/v1/offline/operations/{}", "11".repeat(32)),
             submitted_at_ms: 1_725_000_000_123,
         };
-
         let json = norito::json::to_vec(&reference).expect("encode operation reference JSON");
         let json_text = core::str::from_utf8(&json).expect("JSON is UTF-8");
         assert!(!json_text.contains("base64"));
         let decoded_json: OfflineOperationReference =
             norito::json::from_slice(&json).expect("decode operation reference JSON");
         assert_eq!(decoded_json, reference);
-
         let archive = norito::to_bytes(&reference).expect("encode operation reference Norito");
         let decoded_norito: OfflineOperationReference =
             norito::decode_from_bytes(&archive).expect("decode operation reference Norito");
         assert_eq!(decoded_norito, reference);
     }
-
     #[test]
     fn operation_reference_json_mapping_is_exact_and_lossless() {
         let operation_id = "11".repeat(32);
@@ -718,7 +677,6 @@ mod tests {
             status_uri: format!("/v1/offline/operations/{operation_id}"),
             submitted_at_ms: u64::MAX,
         };
-
         let json = norito::json::to_string(&reference).expect("encode operation reference JSON");
         assert_eq!(
             json,
@@ -736,7 +694,6 @@ mod tests {
             norito::json::from_str(&json).expect("decode lossless operation reference JSON");
         assert_eq!(decoded, reference);
     }
-
     #[test]
     fn operation_reference_json_rejects_duplicate_declared_fields() {
         let operation_id = "11".repeat(32);
@@ -754,7 +711,6 @@ mod tests {
             .expect_err("duplicate operation_id must be rejected");
         assert!(error.to_string().contains("duplicate field `operation_id`"));
     }
-
     #[test]
     fn operation_kind_json_rejects_unknown_tags() {
         let error = norito::json::from_str::<OfflineOperationKind>(
@@ -767,7 +723,6 @@ mod tests {
                 .contains("unknown variant `unknown_command`")
         );
     }
-
     #[test]
     fn operation_reference_golden_vector() {
         const EXPECTED_ARCHIVE_HEX: &str = "4e5254300000e8e2244e45e4be2a975e34957141128b00f0000000000000001f5b5402d6dc2092024140313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310400000000040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323258572f76312f6f66666c696e652f6f7065726174696f6e732f3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313108ffffffffffffffff";
@@ -783,7 +738,6 @@ mod tests {
         let archive_hex = hex::encode(archive);
         assert_eq!(archive_hex, EXPECTED_ARCHIVE_HEX);
     }
-
     #[test]
     fn operation_status_golden_vectors() {
         const PENDING_ARCHIVE_HEX: &str = "4e5254300000fb04214104df1bdcd39249bddd4db23a009600000000000000bdfee2508f80055702000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000041403232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323208ffffffffffffffff";
@@ -810,7 +764,6 @@ mod tests {
                 server_time_ms: 42,
             }),
         };
-
         for (expected, status) in [
             (PENDING_ARCHIVE_HEX, pending),
             (REJECTED_ARCHIVE_HEX, rejected),

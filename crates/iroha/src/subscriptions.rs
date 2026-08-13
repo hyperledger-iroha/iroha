@@ -1,5 +1,4 @@
 //! Subscription app API DTOs and helpers.
-
 use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
@@ -10,7 +9,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use norito::derive::{JsonDeserialize, JsonSerialize};
-
 /// Request payload for creating a subscription plan.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionPlanCreateRequest {
@@ -21,7 +19,6 @@ pub struct SubscriptionPlanCreateRequest {
     /// Subscription plan payload stored on the asset definition.
     pub plan: SubscriptionPlan,
 }
-
 /// Unsigned transaction draft returned for subscription plan registration.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionPlanCreateResponse {
@@ -34,7 +31,6 @@ pub struct SubscriptionPlanCreateResponse {
     /// Transaction-payload hash encoded as padded base64.
     pub signing_message_b64: String,
 }
-
 /// Query parameters for listing subscription plans.
 #[derive(Clone, Debug, Default, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionPlanListParams {
@@ -47,7 +43,6 @@ pub struct SubscriptionPlanListParams {
     /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
     pub count_mode: Option<String>,
 }
-
 /// Subscription plan list item.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionPlanListItem {
@@ -56,7 +51,6 @@ pub struct SubscriptionPlanListItem {
     /// Plan metadata payload.
     pub plan: SubscriptionPlan,
 }
-
 /// Response payload for listing subscription plans.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionPlanListResponse {
@@ -69,7 +63,6 @@ pub struct SubscriptionPlanListResponse {
     /// Count mode used to produce pagination metadata.
     pub count_mode: String,
 }
-
 /// Request payload for creating a subscription.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionCreateRequest {
@@ -88,7 +81,6 @@ pub struct SubscriptionCreateRequest {
     /// Grant `CanExecuteTrigger` to the plan provider for usage recording.
     pub grant_usage_to_provider: Option<bool>,
 }
-
 /// One canonical framed instruction returned for local signing.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionInstructionDraft {
@@ -97,7 +89,6 @@ pub struct SubscriptionInstructionDraft {
     /// Lowercase hexadecimal canonical framed instruction bytes.
     pub payload_hex: String,
 }
-
 /// Exact unsigned subscription creation draft.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionCreateResponse {
@@ -124,7 +115,6 @@ pub struct SubscriptionCreateResponse {
     /// Canonical instructions for local transaction signing.
     pub tx_instructions: Vec<SubscriptionInstructionDraft>,
 }
-
 /// Query parameters for listing subscriptions.
 #[derive(Clone, Debug, Default, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionListParams {
@@ -141,7 +131,6 @@ pub struct SubscriptionListParams {
     /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
     pub count_mode: Option<String>,
 }
-
 /// Subscription list item payload.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionListItem {
@@ -154,7 +143,6 @@ pub struct SubscriptionListItem {
     /// Optional plan metadata payload.
     pub plan: Option<SubscriptionPlan>,
 }
-
 /// Response payload for listing subscriptions.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionListResponse {
@@ -167,7 +155,6 @@ pub struct SubscriptionListResponse {
     /// Count mode used to produce pagination metadata.
     pub count_mode: String,
 }
-
 /// Response payload for fetching a subscription.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionGetResponse {
@@ -180,7 +167,6 @@ pub struct SubscriptionGetResponse {
     /// Optional plan metadata payload.
     pub plan: Option<SubscriptionPlan>,
 }
-
 /// Request payload for subscription status updates.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionActionRequest {
@@ -191,7 +177,6 @@ pub struct SubscriptionActionRequest {
     /// Optional cancel mode (`immediate` or `period_end`) for cancel requests.
     pub cancel_mode: Option<SubscriptionCancelMode>,
 }
-
 /// Cancelation mode for subscription cancel requests.
 #[derive(Clone, Copy, Debug, JsonDeserialize, JsonSerialize, PartialEq, Eq)]
 #[norito(tag = "mode", content = "value", rename_all = "snake_case")]
@@ -201,7 +186,6 @@ pub enum SubscriptionCancelMode {
     /// Cancel the subscription at the end of the current billing period.
     PeriodEnd,
 }
-
 /// Request payload for recording subscription usage.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionUsageRequest {
@@ -214,7 +198,6 @@ pub struct SubscriptionUsageRequest {
     /// Optional usage trigger id; derived when omitted.
     pub usage_trigger_id: Option<TriggerId>,
 }
-
 /// Exact projected details of a subscription action draft.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionActionDraftDetails {
@@ -229,7 +212,6 @@ pub struct SubscriptionActionDraftDetails {
     /// Exact subscription state produced by the draft.
     pub resulting_subscription: SubscriptionState,
 }
-
 /// Exact unsigned subscription action draft.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionActionResponse {
@@ -246,7 +228,6 @@ pub struct SubscriptionActionResponse {
     /// Canonical instructions for local transaction signing.
     pub tx_instructions: Vec<SubscriptionInstructionDraft>,
 }
-
 /// Unsigned transaction draft for recording subscription usage.
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
 pub struct SubscriptionUsageResponse {

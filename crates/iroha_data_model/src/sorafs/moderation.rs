@@ -5,18 +5,14 @@
 //! the `SoraFS`-specific ballot context used by moderation panels. Validators use
 //! explicit helpers to enforce schema versioning, signature coverage, and
 //! commit/reveal binding before accepting moderation evidence.
-
 use std::collections::BTreeSet;
-
 use blake2::digest::Digest;
 use iroha_crypto::{Algorithm, Blake2b256, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 #[cfg(feature = "json")]
 pub(crate) use crate::json_helpers::fixed_bytes::option as json_option_digest32;
-
 /// Schema version for `ModerationReproManifestV1`.
 pub const MODERATION_REPRO_MANIFEST_VERSION_V1: u16 = 1;
 /// Maximum model weight and threshold value in basis points.
@@ -92,7 +88,6 @@ pub const SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1: u16 = 1;
 pub const SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraFsModerationBallotRevealV1`].
 pub const SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1: u16 = 1;
-
 /// Deterministic bounded integer inference engine used by first-release models.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -105,7 +100,6 @@ pub enum ModerationModelEngineV1 {
     #[cfg_attr(feature = "json", norito(rename = "deterministic_linear_v1"))]
     DeterministicLinearV1,
 }
-
 /// Deterministic feature extraction profile used by first-release models.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -118,7 +112,6 @@ pub enum ModerationFeatureProfileV1 {
     #[cfg_attr(feature = "json", norito(rename = "byte_histogram_bigram_v1"))]
     ByteHistogramAndBigramV1,
 }
-
 /// One point in a monotonic, piecewise-linear calibration curve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -131,7 +124,6 @@ pub struct ModerationCalibrationKnotV1 {
     /// Calibrated risk score in basis points.
     pub score_bps: u16,
 }
-
 /// Canonical model artefact executed by the bounded integer moderation engine.
 ///
 /// The artefact intentionally contains no executable code, floating-point values,
@@ -165,7 +157,6 @@ pub struct ModerationModelArtifactV1 {
     /// Strictly input-ordered, score-monotonic calibration curve.
     pub calibration: Vec<ModerationCalibrationKnotV1>,
 }
-
 /// A score emitted for one manifest-bound moderation model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -182,7 +173,6 @@ pub struct ModerationModelScoreV1 {
     /// Calibrated model risk score in basis points.
     pub score_bps: u16,
 }
-
 /// Validation errors for canonical moderation model artefacts.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ModerationModelArtifactError {
@@ -255,7 +245,6 @@ pub enum ModerationModelArtifactError {
     #[error("moderation model linear accumulator can exceed the signed 64-bit range")]
     AccumulatorOverflow,
 }
-
 /// Return the exact first-release operation budget for an input bound and curve.
 ///
 /// The budget counts one unigram update per input byte, one adjacent-byte update
@@ -274,7 +263,6 @@ pub fn moderation_model_required_operations_v1(
         .checked_add((MODERATION_MODEL_FEATURE_COUNT_V1 as u64).checked_mul(2)?)?
         .checked_add(knots)
 }
-
 impl ModerationModelArtifactV1 {
     /// Validate all shape, range, and declared resource-budget invariants.
     ///
@@ -354,7 +342,6 @@ impl ModerationModelArtifactV1 {
         }
         Ok(())
     }
-
     /// Compute the digest binding every value that can affect model behaviour.
     #[must_use]
     pub fn behaviour_digest(&self) -> [u8; 32] {
@@ -382,7 +369,6 @@ impl ModerationModelArtifactV1 {
         *hasher.finalize().as_bytes()
     }
 }
-
 /// Governance-signed moderation reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -396,7 +382,6 @@ pub struct ModerationReproManifestV1 {
     #[norito(default)]
     pub signatures: Vec<ModerationReproSignatureV1>,
 }
-
 /// Canonical payload hashed and signed in the reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -430,7 +415,6 @@ pub struct ModerationReproBodyV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 /// Complete execution fingerprint for one model artefact referenced by the runner.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -467,7 +451,6 @@ pub struct ModerationModelFingerprintV1 {
     #[norito(default)]
     pub weight: Option<u16>,
 }
-
 /// Seed derivation metadata used to generate deterministic RNG inputs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -483,7 +466,6 @@ pub struct ModerationSeedMaterialV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub run_nonce: [u8; 32],
 }
-
 /// Threshold values used when aggregating moderation verdicts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -496,7 +478,6 @@ pub struct ModerationThresholdsV1 {
     /// Minimum combined score required to escalate content for review (basis points, 0-10_000).
     pub escalate: u16,
 }
-
 /// Signature and signer metadata for a reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -511,7 +492,6 @@ pub struct ModerationReproSignatureV1 {
     /// Typed signature covering [`ModerationReproBodyV1`].
     pub signature: SignatureOf<ModerationReproBodyV1>,
 }
-
 /// Validation summary returned after checking a reproducibility manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -529,7 +509,6 @@ pub struct ModerationReproManifestSummary {
     /// Number of valid signatures present.
     pub signer_count: u32,
 }
-
 /// Governance-signed runner trust policy bound to one reproducibility manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -543,7 +522,6 @@ pub struct ModerationTrustPolicyV1 {
     #[norito(default)]
     pub signatures: Vec<ModerationTrustPolicySignatureV1>,
 }
-
 /// Canonical body of a runner trust and freshness policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -591,7 +569,6 @@ pub struct ModerationTrustPolicyBodyV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 /// One runner signer authorization and its validity/revocation window.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -611,7 +588,6 @@ pub struct ModerationTrustedSignerV1 {
     #[norito(default)]
     pub revoked_at_unix: Option<u64>,
 }
-
 /// Governance signature over a moderation trust policy body.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -626,7 +602,6 @@ pub struct ModerationTrustPolicySignatureV1 {
     /// Typed signature covering [`ModerationTrustPolicyBodyV1`].
     pub signature: SignatureOf<ModerationTrustPolicyBodyV1>,
 }
-
 /// Canonical runner-signed screening result envelope.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -641,7 +616,6 @@ pub struct ModerationSignedScreeningResultV1 {
     /// Typed signature covering `body`.
     pub signature: SignatureOf<ModerationSignedScreeningBodyV1>,
 }
-
 /// Canonical body signed by an authorized deterministic runner.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -692,7 +666,6 @@ pub struct ModerationSignedScreeningBodyV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 /// Successful external trust-policy validation summary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -707,7 +680,6 @@ pub struct ModerationTrustPolicySummaryV1 {
     /// Committee result quorum.
     pub result_quorum: u16,
 }
-
 /// One authenticated runner contribution committed by a committee aggregate.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -729,7 +701,6 @@ pub struct ModerationCommitteeMemberV1 {
     /// Exclusive signed-result expiry.
     pub expires_at_unix: u64,
 }
-
 /// Deterministic aggregate over distinct, authenticated runner results.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -772,7 +743,6 @@ pub struct ModerationCommitteeAggregateV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub aggregate_digest: [u8; 32],
 }
-
 /// Payload retained in a tamper-evident moderation provenance record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -786,7 +756,6 @@ pub enum ModerationProvenancePayloadV1 {
     /// Exact authenticated committee aggregate.
     CommitteeAggregate(ModerationCommitteeAggregateV1),
 }
-
 /// One hash-chained moderation provenance entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -807,7 +776,6 @@ pub struct ModerationProvenanceEntryV1 {
     /// Complete canonical evidence payload.
     pub payload: ModerationProvenancePayloadV1,
 }
-
 /// Bounded tamper-evident moderation provenance segment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -826,7 +794,6 @@ pub struct ModerationProvenanceLogV1 {
     /// Ordered bounded entry inventory.
     pub entries: Vec<ModerationProvenanceEntryV1>,
 }
-
 /// Validation errors surfaced when checking reproducibility manifests.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ModerationReproValidationError {
@@ -1030,7 +997,6 @@ pub enum ModerationReproValidationError {
         source: iroha_crypto::Error,
     },
 }
-
 impl ModerationReproManifestV1 {
     /// Compute the canonical domain-separated digest committed by
     /// [`ModerationReproBodyV1::manifest_digest`].
@@ -1045,7 +1011,6 @@ impl ModerationReproManifestV1 {
     pub fn computed_manifest_digest(&self) -> Result<[u8; 32], norito::Error> {
         self.body.computed_manifest_digest()
     }
-
     /// Validate the manifest signatures and schema constraints.
     ///
     /// Returns a summary containing the manifest identifier, timestamps, and counts on success.
@@ -1076,7 +1041,6 @@ impl ModerationReproManifestV1 {
         moderation_repro_summary(&self.body, self.signatures.len())
     }
 }
-
 impl ModerationReproBodyV1 {
     /// Compute the canonical digest of this body with the digest slot zeroed.
     ///
@@ -1092,7 +1056,6 @@ impl ModerationReproBodyV1 {
         hasher.update(&encoded);
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Replace `manifest_digest` with the canonical domain-separated body digest.
     ///
     /// # Errors
@@ -1103,7 +1066,6 @@ impl ModerationReproBodyV1 {
         Ok(())
     }
 }
-
 fn validate_repro_body_header(
     body: &ModerationReproBodyV1,
 ) -> Result<(), ModerationReproValidationError> {
@@ -1159,7 +1121,6 @@ fn validate_repro_body_header(
     }
     Ok(())
 }
-
 fn validate_repro_text(
     value: &str,
     max_bytes: usize,
@@ -1174,7 +1135,6 @@ fn validate_repro_text(
     }
     Ok(())
 }
-
 fn validate_repro_thresholds(
     thresholds: ModerationThresholdsV1,
 ) -> Result<(), ModerationReproValidationError> {
@@ -1198,7 +1158,6 @@ fn validate_repro_thresholds(
     }
     Ok(())
 }
-
 fn validate_repro_models(
     models: &[ModerationModelFingerprintV1],
 ) -> Result<(), ModerationReproValidationError> {
@@ -1237,7 +1196,6 @@ fn validate_repro_models(
     }
     Ok(())
 }
-
 fn validate_repro_model_artifact(
     model: &ModerationModelFingerprintV1,
     artifact_paths: &mut BTreeSet<String>,
@@ -1262,7 +1220,6 @@ fn validate_repro_model_artifact(
     }
     Ok(())
 }
-
 /// Return whether `path` is a canonical platform-independent artefact path.
 ///
 /// Accepted paths are non-empty ASCII slash-separated components containing
@@ -1291,7 +1248,6 @@ pub fn is_canonical_moderation_artifact_path_v1(path: &str) -> bool {
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     })
 }
-
 fn validate_repro_model_uniqueness(
     model: &ModerationModelFingerprintV1,
     model_ids: &mut BTreeSet<[u8; 16]>,
@@ -1306,7 +1262,6 @@ fn validate_repro_model_uniqueness(
     }
     Ok(())
 }
-
 fn validate_repro_model_digests(
     model: &ModerationModelFingerprintV1,
     artifact_digests: &mut BTreeSet<[u8; 32]>,
@@ -1336,7 +1291,6 @@ fn validate_repro_model_digests(
     }
     Ok(())
 }
-
 fn validate_repro_model_shape(
     model: &ModerationModelFingerprintV1,
 ) -> Result<(), ModerationReproValidationError> {
@@ -1375,7 +1329,6 @@ fn validate_repro_model_shape(
     }
     Ok(())
 }
-
 fn validate_repro_signatures(
     signatures: &[ModerationReproSignatureV1],
     body: &ModerationReproBodyV1,
@@ -1413,7 +1366,6 @@ fn validate_repro_signatures(
     }
     Ok(())
 }
-
 fn moderation_repro_summary(
     body: &ModerationReproBodyV1,
     signature_count: usize,
@@ -1429,7 +1381,6 @@ fn moderation_repro_summary(
         signer_count,
     })
 }
-
 fn verify_repro_signature(
     signature: &SignatureOf<ModerationReproBodyV1>,
     public_key: &PublicKey,
@@ -1446,7 +1397,6 @@ fn verify_repro_signature(
     }
     signature.verify(public_key, body)
 }
-
 /// Trust-policy validation failures.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ModerationTrustPolicyError {
@@ -1564,7 +1514,6 @@ pub enum ModerationTrustPolicyError {
         required: u16,
     },
 }
-
 /// Signed screening-result validation failures.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ModerationSignedResultError {
@@ -1648,7 +1597,6 @@ pub enum ModerationSignedResultError {
         iroha_crypto::Error,
     ),
 }
-
 /// Authenticated committee aggregation failures.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ModerationCommitteeAggregateError {
@@ -1717,7 +1665,6 @@ pub enum ModerationCommitteeAggregateError {
         String,
     ),
 }
-
 /// Hash-chained provenance validation failures.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ModerationProvenanceError {
@@ -1784,7 +1731,6 @@ pub enum ModerationProvenanceError {
         String,
     ),
 }
-
 impl ModerationTrustPolicyBodyV1 {
     /// Compute the domain-separated policy digest with the digest slot zeroed.
     ///
@@ -1800,7 +1746,6 @@ impl ModerationTrustPolicyBodyV1 {
         hasher.update(&encoded);
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Refresh the canonical policy digest in place.
     ///
     /// # Errors
@@ -1811,7 +1756,6 @@ impl ModerationTrustPolicyBodyV1 {
         Ok(())
     }
 }
-
 impl ModerationTrustPolicyV1 {
     /// Validate structure, manifest binding, signatures, external trust roots,
     /// quorum downgrade resistance, and current policy activity.
@@ -1868,7 +1812,6 @@ impl ModerationTrustPolicyV1 {
             result_quorum: self.body.result_quorum,
         })
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "the fail-closed policy validator keeps all signed-field invariants together"
@@ -2052,7 +1995,6 @@ impl ModerationTrustPolicyV1 {
         Ok(())
     }
 }
-
 impl ModerationSignedScreeningBodyV1 {
     /// Compute the domain-separated evidence digest with its slot zeroed.
     ///
@@ -2068,7 +2010,6 @@ impl ModerationSignedScreeningBodyV1 {
         hasher.update(&encoded);
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Refresh the canonical evidence digest in place.
     ///
     /// # Errors
@@ -2079,7 +2020,6 @@ impl ModerationSignedScreeningBodyV1 {
         Ok(())
     }
 }
-
 impl ModerationReproBodyV1 {
     /// Compute the deterministic screening-policy digest consumed by signed
     /// runner results.
@@ -2100,7 +2040,6 @@ impl ModerationReproBodyV1 {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-
 impl ModerationSignedScreeningResultV1 {
     /// Verify manifest/policy bindings, signer authorization and revocation,
     /// deterministic score derivation, signature validity, and freshness.
@@ -2330,7 +2269,6 @@ impl ModerationSignedScreeningResultV1 {
             .map_err(ModerationSignedResultError::BadSignature)
     }
 }
-
 impl ModerationCommitteeAggregateV1 {
     /// Build a deterministic aggregate from externally authorized, distinct,
     /// fresh runner signatures.
@@ -2373,7 +2311,6 @@ impl ModerationCommitteeAggregateV1 {
                 maximum: MODERATION_COMMITTEE_MAX_RESULTS_V1,
             });
         }
-
         let mut ordered = Vec::new();
         ordered
             .try_reserve_exact(results.len())
@@ -2406,7 +2343,6 @@ impl ModerationCommitteeAggregateV1 {
                 required: policy.body.result_quorum,
             });
         }
-
         let first_subject = ordered[0].1.body.subject.clone();
         let first_subject_digest = ordered[0].1.body.subject_digest;
         let mut members = Vec::new();
@@ -2480,7 +2416,6 @@ impl ModerationCommitteeAggregateV1 {
             .map_err(|error| ModerationCommitteeAggregateError::Encoding(error.to_string()))?;
         Ok(aggregate)
     }
-
     /// Compute the domain-separated aggregate digest with its slot zeroed.
     ///
     /// # Errors
@@ -2495,7 +2430,6 @@ impl ModerationCommitteeAggregateV1 {
         hasher.update(&encoded);
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Refresh the canonical aggregate digest in place.
     ///
     /// # Errors
@@ -2506,7 +2440,6 @@ impl ModerationCommitteeAggregateV1 {
         Ok(())
     }
 }
-
 impl ModerationProvenanceEntryV1 {
     /// Compute the domain-separated entry digest with its slot zeroed.
     ///
@@ -2522,7 +2455,6 @@ impl ModerationProvenanceEntryV1 {
         hasher.update(&encoded);
         Ok(*hasher.finalize().as_bytes())
     }
-
     /// Refresh the canonical entry digest in place.
     ///
     /// # Errors
@@ -2533,7 +2465,6 @@ impl ModerationProvenanceEntryV1 {
         Ok(())
     }
 }
-
 impl ModerationProvenanceLogV1 {
     /// Create an empty provenance segment with a non-zero operator identifier.
     ///
@@ -2551,7 +2482,6 @@ impl ModerationProvenanceLogV1 {
             entries: Vec::new(),
         })
     }
-
     /// Append one complete evidence payload after validating the existing
     /// chain. The durable store remains responsible for validating the payload
     /// against the active manifest and trust policy before calling this method.
@@ -2611,7 +2541,6 @@ impl ModerationProvenanceLogV1 {
         self.entries.push(entry);
         Ok(self.head_digest)
     }
-
     /// Validate schema, bounds, ordering, timestamps, every hash-chain link,
     /// every entry digest, and the advertised head digest.
     ///
@@ -2698,7 +2627,6 @@ impl ModerationProvenanceLogV1 {
         Ok(())
     }
 }
-
 fn moderation_verdict_v1(score_bps: u16, thresholds: ModerationThresholdsV1) -> &'static str {
     if score_bps >= thresholds.escalate {
         "escalate"
@@ -2708,7 +2636,6 @@ fn moderation_verdict_v1(score_bps: u16, thresholds: ModerationThresholdsV1) -> 
         "pass"
     }
 }
-
 fn verify_trust_policy_signature(
     signature: &SignatureOf<ModerationTrustPolicyBodyV1>,
     public_key: &PublicKey,
@@ -2717,7 +2644,6 @@ fn verify_trust_policy_signature(
     validate_typed_signature_payload(signature.payload(), public_key)?;
     signature.verify(public_key, body)
 }
-
 fn verify_signed_result_signature(
     signature: &SignatureOf<ModerationSignedScreeningBodyV1>,
     public_key: &PublicKey,
@@ -2726,7 +2652,6 @@ fn verify_signed_result_signature(
     validate_typed_signature_payload(signature.payload(), public_key)?;
     signature.verify(public_key, body)
 }
-
 fn validate_typed_signature_payload(
     payload: &[u8],
     public_key: &PublicKey,
@@ -2737,7 +2662,6 @@ fn validate_typed_signature_payload(
         _ => Ok(()),
     }
 }
-
 /// `SoraFS` moderation-panel vote choices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2755,7 +2679,6 @@ pub enum SoraFsModerationVoteChoice {
     /// Escalate the case for another review path.
     Escalate,
 }
-
 impl SoraFsModerationVoteChoice {
     fn discriminant(self) -> u8 {
         match self {
@@ -2766,7 +2689,6 @@ impl SoraFsModerationVoteChoice {
         }
     }
 }
-
 /// Immutable case scope that every moderation commit/reveal payload must bind.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2792,7 +2714,6 @@ pub struct SoraFsModerationBallotContextV1 {
     #[norito(default)]
     pub evidence_uri: Option<String>,
 }
-
 impl SoraFsModerationBallotContextV1 {
     /// Validate structural fields that bind a moderation ballot to one case scope.
     ///
@@ -2824,7 +2745,6 @@ impl SoraFsModerationBallotContextV1 {
         }
         Ok(())
     }
-
     fn update_hash(&self, hasher: &mut Blake2b256) {
         hasher.update(self.version.to_le_bytes());
         update_hash_string(hasher, &self.case_id);
@@ -2841,7 +2761,6 @@ impl SoraFsModerationBallotContextV1 {
         }
     }
 }
-
 /// Juror commitment for a `SoraFS` moderation case.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2863,7 +2782,6 @@ pub struct SoraFsModerationBallotCommitV1 {
     /// UTC timestamp (milliseconds) when the commitment was recorded.
     pub committed_at_unix_ms: u64,
 }
-
 impl SoraFsModerationBallotCommitV1 {
     /// Validate this commitment and the supplied reveal against the shared `SoraFS` case context.
     ///
@@ -2897,7 +2815,6 @@ impl SoraFsModerationBallotCommitV1 {
         }
         Ok(())
     }
-
     /// Validate this commitment without requiring a reveal.
     ///
     /// # Errors
@@ -2921,7 +2838,6 @@ impl SoraFsModerationBallotCommitV1 {
         Ok(())
     }
 }
-
 /// Juror reveal for a `SoraFS` moderation case.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2945,7 +2861,6 @@ pub struct SoraFsModerationBallotRevealV1 {
     /// UTC timestamp (milliseconds) when the reveal was recorded.
     pub revealed_at_unix_ms: u64,
 }
-
 impl SoraFsModerationBallotRevealV1 {
     /// Compute the canonical commitment digest for this reveal.
     #[must_use]
@@ -2960,7 +2875,6 @@ impl SoraFsModerationBallotRevealV1 {
         hasher.update(&self.nonce);
         hasher.finalize().into()
     }
-
     /// Validate this reveal without requiring a stored commitment.
     ///
     /// # Errors
@@ -2989,7 +2903,6 @@ impl SoraFsModerationBallotRevealV1 {
         Ok(())
     }
 }
-
 /// Errors surfaced while validating `SoraFS` moderation ballots.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum SoraFsModerationBallotError {
@@ -3067,19 +2980,15 @@ pub enum SoraFsModerationBallotError {
     #[error("SoraFS moderation ballot commitment mismatch")]
     CommitmentMismatch,
 }
-
 fn update_hash_string(hasher: &mut Blake2b256, value: &str) {
     hasher.update((value.len() as u64).to_le_bytes());
     hasher.update(value.as_bytes());
 }
-
 fn is_zero_digest(digest: &[u8; 32]) -> bool {
     digest.iter().all(|byte| *byte == 0)
 }
-
 /// Schema version for [`AdversarialCorpusManifestV1`].
 pub const ADVERSARIAL_CORPUS_VERSION_V1: u16 = 1;
-
 /// Governance-signed registry describing adversarial corpus families.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3098,7 +3007,6 @@ pub struct AdversarialCorpusManifestV1 {
     #[norito(default)]
     pub families: Vec<AdversarialPerceptualFamilyV1>,
 }
-
 /// Perceptual hash/embedding family describing one moderated cluster.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3115,7 +3023,6 @@ pub struct AdversarialPerceptualFamilyV1 {
     #[norito(default)]
     pub variants: Vec<AdversarialPerceptualVariantV1>,
 }
-
 /// Entry describing a single adversarial variant and its fingerprints.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3152,7 +3059,6 @@ pub struct AdversarialPerceptualVariantV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 /// Validation errors surfaced when checking adversarial corpus manifests.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum AdversarialCorpusValidationError {
@@ -3212,7 +3118,6 @@ pub enum AdversarialCorpusValidationError {
         radius: u8,
     },
 }
-
 impl AdversarialCorpusManifestV1 {
     /// Validate manifest consistency before distributing it to gateways.
     ///
@@ -3284,23 +3189,18 @@ impl AdversarialCorpusManifestV1 {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
-
     use super::*;
-
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         norito::to_bytes(value).expect("encode alternate-layout moderation value")
     }
-
     /// Named mutation applied to a reproducibility body by validation tests.
     type ReproBodyTextMutation = (&'static str, fn(&mut ModerationReproBodyV1));
-
     fn sample_body() -> ModerationReproBodyV1 {
         let mut body = ModerationReproBodyV1 {
             schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
@@ -3339,17 +3239,14 @@ mod tests {
             .expect("refresh moderation fixture digest");
         body
     }
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked moderation fixture keypair")
     }
-
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} moderation fixture key generation should succeed: {err}")
         })
     }
-
     fn checked_signature(
         keypair: &KeyPair,
         body: &ModerationReproBodyV1,
@@ -3361,7 +3258,6 @@ mod tests {
             .expect("checked moderation reproducibility fixture verifies");
         signature
     }
-
     fn sign_manifest(mut body: ModerationReproBodyV1, roles: &[&str]) -> ModerationReproManifestV1 {
         body.refresh_manifest_digest()
             .expect("refresh moderation fixture digest before signing");
@@ -3375,12 +3271,9 @@ mod tests {
                 signature,
             });
         }
-
         signatures.sort_by(|left, right| left.public_key.cmp(&right.public_key));
-
         ModerationReproManifestV1 { body, signatures }
     }
-
     fn sign_manifest_with_keypair(
         mut body: ModerationReproBodyV1,
         role: &str,
@@ -3398,9 +3291,7 @@ mod tests {
             }],
         }
     }
-
     const TRUST_FIXTURE_NOW: u64 = 1_800_000_000;
-
     fn sample_trust_policy(
         manifest: &ModerationReproManifestV1,
         governance_keys: &[&KeyPair],
@@ -3452,7 +3343,6 @@ mod tests {
         signatures.sort_by(|left, right| left.public_key.cmp(&right.public_key));
         ModerationTrustPolicyV1 { body, signatures }
     }
-
     fn sample_signed_result(
         manifest: &ModerationReproManifestV1,
         policy: &ModerationTrustPolicyV1,
@@ -3499,14 +3389,12 @@ mod tests {
             body,
         }
     }
-
     fn fixture_trust_anchors(governance_keys: &[&KeyPair]) -> BTreeSet<PublicKey> {
         governance_keys
             .iter()
             .map(|keypair| keypair.public_key().clone())
             .collect()
     }
-
     fn resign_policy(policy: &mut ModerationTrustPolicyV1, governance_keys: &[&KeyPair]) {
         policy
             .body
@@ -3526,7 +3414,6 @@ mod tests {
             .signatures
             .sort_by(|left, right| left.public_key.cmp(&right.public_key));
     }
-
     fn resign_result(result: &mut ModerationSignedScreeningResultV1, runner_key: &KeyPair) {
         result
             .body
@@ -3535,7 +3422,6 @@ mod tests {
         result.signature = SignatureOf::try_new(runner_key.private_key(), &result.body)
             .expect("resign result fixture");
     }
-
     fn sample_model_artifact() -> ModerationModelArtifactV1 {
         let calibration = vec![
             ModerationCalibrationKnotV1 {
@@ -3566,7 +3452,6 @@ mod tests {
         let artifact = sample_model_artifact();
         artifact.validate().expect("valid model artefact");
         let digest = artifact.behaviour_digest();
-
         let mut changed = artifact.clone();
         changed.schema_version += 1;
         assert_ne!(changed.behaviour_digest(), digest);
@@ -3600,14 +3485,12 @@ mod tests {
             artifact.validate(),
             Err(ModerationModelArtifactError::UnsupportedVersion { .. })
         ));
-
         let mut artifact = sample_model_artifact();
         artifact.model_id = [0; 16];
         assert!(matches!(
             artifact.validate(),
             Err(ModerationModelArtifactError::MissingModelId)
         ));
-
         for max_input_bytes in [0, MODERATION_MODEL_MAX_INPUT_BYTES_V1 + 1] {
             let mut artifact = sample_model_artifact();
             artifact.max_input_bytes = max_input_bytes;
@@ -3616,28 +3499,24 @@ mod tests {
                 Err(ModerationModelArtifactError::InvalidMaxInput { .. })
             ));
         }
-
         let mut artifact = sample_model_artifact();
         artifact.weights.pop();
         assert!(matches!(
             artifact.validate(),
             Err(ModerationModelArtifactError::InvalidWeightCount { .. })
         ));
-
         let mut artifact = sample_model_artifact();
         artifact.calibration[1].input = artifact.calibration[0].input;
         assert!(matches!(
             artifact.validate(),
             Err(ModerationModelArtifactError::CalibrationInputOrder { .. })
         ));
-
         let mut artifact = sample_model_artifact();
         artifact.calibration[1].score_bps = MODERATION_REPRO_MAX_BPS + 1;
         assert!(matches!(
             artifact.validate(),
             Err(ModerationModelArtifactError::InvalidCalibrationScore { .. })
         ));
-
         let mut artifact = sample_model_artifact();
         artifact.calibration[0].score_bps = 1;
         artifact.calibration[1].score_bps = 0;
@@ -3645,7 +3524,6 @@ mod tests {
             artifact.validate(),
             Err(ModerationModelArtifactError::InvalidCalibrationScore { .. })
         ));
-
         for calibration in [
             vec![ModerationCalibrationKnotV1 {
                 input: 0,
@@ -3665,21 +3543,18 @@ mod tests {
                 Err(ModerationModelArtifactError::InvalidCalibrationCount { .. })
             ));
         }
-
         let mut artifact = sample_model_artifact();
         artifact.max_operations += 1;
         assert!(matches!(
             artifact.validate(),
             Err(ModerationModelArtifactError::InvalidOperationBudget { .. })
         ));
-
         let mut artifact = sample_model_artifact();
         artifact.working_memory_bytes += 1;
         assert!(matches!(
             artifact.validate(),
             Err(ModerationModelArtifactError::InvalidWorkingMemory { .. })
         ));
-
         let mut artifact = sample_model_artifact();
         artifact.bias = i64::MAX;
         artifact.weights[0] = 1;
@@ -3687,7 +3562,6 @@ mod tests {
             artifact.validate(),
             Err(ModerationModelArtifactError::AccumulatorOverflow)
         ));
-
         let mut artifact = sample_model_artifact();
         artifact.bias = i64::MIN;
         artifact.weights.fill(0);
@@ -3722,18 +3596,15 @@ mod tests {
             );
         }
     }
-
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn signature_with_malformed_ed25519_r(
         signature: &SignatureOf<ModerationReproBodyV1>,
         replacement_r: &[u8; 32],
@@ -3770,7 +3641,6 @@ mod tests {
                 },
             ],
         };
-
         let err = manifest.validate().expect_err("duplicate signer must fail");
         assert!(matches!(
             err,
@@ -3780,7 +3650,6 @@ mod tests {
     #[test]
     fn validate_rejects_malformed_ed25519_signature_r() {
         let manifest = sign_manifest(sample_body(), &["council"]);
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
             ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
@@ -3790,7 +3659,6 @@ mod tests {
                 &manifest.signatures[0].signature,
                 &replacement_r,
             );
-
             let err = invalid_manifest
                 .validate()
                 .expect_err("malformed moderation signature R must fail admission");
@@ -3812,7 +3680,6 @@ mod tests {
             .validate()
             .expect("valid ML-DSA moderation manifest verifies");
         let valid_signature = manifest.signatures[0].signature.payload().to_vec();
-
         for (label, replacement_signature) in [
             (
                 "short",
@@ -3827,7 +3694,6 @@ mod tests {
             let mut invalid_manifest = manifest.clone();
             invalid_manifest.signatures[0].signature =
                 SignatureOf::from_signature(Signature::from_bytes(&replacement_signature));
-
             let err = invalid_manifest
                 .validate()
                 .expect_err("malformed moderation ML-DSA signature length must fail admission");
@@ -3862,7 +3728,6 @@ mod tests {
                 field: "manifest_digest"
             }
         ));
-
         let mut body = sample_body();
         body.runner_hash = [0; 32];
         let manifest = sign_manifest(body, &["council"]);
@@ -3875,7 +3740,6 @@ mod tests {
                 field: "runner_hash"
             }
         ));
-
         let mut body = sample_body();
         body.seed_material.run_nonce = [0; 32];
         let manifest = sign_manifest(body, &["council"]);
@@ -3893,21 +3757,18 @@ mod tests {
             sign_manifest(body, &["council"]).validate(),
             Err(ModerationReproValidationError::MissingManifestId)
         ));
-
         let mut body = sample_body();
         body.issued_at_unix = 0;
         assert!(matches!(
             sign_manifest(body, &["council"]).validate(),
             Err(ModerationReproValidationError::MissingIssuedAt)
         ));
-
         let mut body = sample_body();
         body.seed_material.seed_version = 0;
         assert!(matches!(
             sign_manifest(body, &["council"]).validate(),
             Err(ModerationReproValidationError::MissingSeedVersion)
         ));
-
         let mutations: [ReproBodyTextMutation; 3] = [
             ("runtime_version", |body: &mut ModerationReproBodyV1| {
                 body.runtime_version = " runner".to_owned()
@@ -3939,14 +3800,12 @@ mod tests {
             manifest.validate(),
             Err(ModerationReproValidationError::ManifestDigestMismatch { .. })
         ));
-
         let mut manifest = sign_manifest(sample_body(), &["council", "sre"]);
         manifest.signatures.reverse();
         assert!(matches!(
             manifest.validate(),
             Err(ModerationReproValidationError::NonCanonicalSignatureOrder)
         ));
-
         let mut manifest = sign_manifest(sample_body(), &["council"]);
         manifest.signatures[0].role = "bad\nrole".to_owned();
         assert!(matches!(
@@ -3955,7 +3814,6 @@ mod tests {
                 field: "signatures.role"
             })
         ));
-
         let mut manifest = sign_manifest(sample_body(), &["council"]);
         manifest.signatures =
             vec![manifest.signatures[0].clone(); MODERATION_REPRO_MAX_SIGNATURES_V1 + 1];
@@ -3979,7 +3837,6 @@ mod tests {
                 value: 10_001
             }
         ));
-
         let mut body = sample_body();
         body.thresholds.escalate = MODERATION_REPRO_MAX_BPS + 1;
         let manifest = sign_manifest(body, &["council"]);
@@ -3993,7 +3850,6 @@ mod tests {
                 value: 10_001
             }
         ));
-
         let mut body = sample_body();
         body.thresholds = ModerationThresholdsV1 {
             quarantine: 8_000,
@@ -4026,7 +3882,6 @@ mod tests {
             err,
             ModerationReproValidationError::DuplicateModelId { .. }
         ));
-
         let mut body = sample_body();
         let mut duplicate = body.models[0].clone();
         duplicate.model_id = [0x45; 16];
@@ -4041,7 +3896,6 @@ mod tests {
             err,
             ModerationReproValidationError::DuplicateArtifactDigest { .. }
         ));
-
         let mut body = sample_body();
         let mut duplicate = body.models[0].clone();
         duplicate.model_id = [0x45; 16];
@@ -4072,7 +3926,6 @@ mod tests {
                 Err(ModerationReproValidationError::InvalidArtifactPath { .. })
             ));
         }
-
         let mut body = sample_body();
         let mut second = body.models[0].clone();
         second.model_id = [0x45; 16];
@@ -4083,7 +3936,6 @@ mod tests {
             sign_manifest(body, &["council"]).validate(),
             Err(ModerationReproValidationError::DuplicateArtifactPath { .. })
         ));
-
         for artifact_bytes in [0, MODERATION_MODEL_MAX_ARTIFACT_BYTES_V1 + 1] {
             let mut body = sample_body();
             body.models[0].artifact_bytes = artifact_bytes;
@@ -4092,7 +3944,6 @@ mod tests {
                 Err(ModerationReproValidationError::InvalidArtifactBytes { .. })
             ));
         }
-
         let mut body = sample_body();
         let mut lower = body.models[0].clone();
         lower.model_id = [0x43; 16];
@@ -4104,7 +3955,6 @@ mod tests {
             sign_manifest(body, &["council"]).validate(),
             Err(ModerationReproValidationError::NonCanonicalModelOrder)
         ));
-
         let mut body = sample_body();
         body.models = (1_u8..=u8::try_from(MODERATION_MODEL_MAX_MODELS_V1 + 1)
             .expect("model cap fits u8"))
@@ -4133,7 +3983,6 @@ mod tests {
                 Err(ModerationReproValidationError::InvalidCalibrationCount { .. })
             ));
         }
-
         for max_input_bytes in [0, MODERATION_MODEL_MAX_INPUT_BYTES_V1 + 1] {
             let mut body = sample_body();
             body.models[0].max_input_bytes = max_input_bytes;
@@ -4142,7 +3991,6 @@ mod tests {
                 Err(ModerationReproValidationError::InvalidModelMaxInput { .. })
             ));
         }
-
         let mut body = sample_body();
         body.models[0].working_memory_bytes += 1;
         assert!(matches!(
@@ -4160,7 +4008,6 @@ mod tests {
             err,
             ModerationReproValidationError::MissingModelId
         ));
-
         let mut body = sample_body();
         body.models[0].artifact_digest = [0; 32];
         let manifest = sign_manifest(body, &["council"]);
@@ -4174,7 +4021,6 @@ mod tests {
                 ..
             }
         ));
-
         let mut body = sample_body();
         body.models[0].weights_digest = [0; 32];
         let manifest = sign_manifest(body, &["council"]);
@@ -4201,7 +4047,6 @@ mod tests {
             err,
             ModerationReproValidationError::InvalidModelResourceBudget { .. }
         ));
-
         let mut body = sample_body();
         body.models[0].weight = Some(MODERATION_REPRO_MAX_BPS + 1);
         let manifest = sign_manifest(body, &["council"]);
@@ -4212,7 +4057,6 @@ mod tests {
             err,
             ModerationReproValidationError::InvalidModelWeight { weight: 10_001, .. }
         ));
-
         let mut body = sample_body();
         body.models[0].weight = Some(0);
         let manifest = sign_manifest(body, &["council"]);
@@ -4224,7 +4068,6 @@ mod tests {
             ModerationReproValidationError::MissingPositiveModelWeight
         ));
     }
-
     fn sample_ballot_context() -> SoraFsModerationBallotContextV1 {
         SoraFsModerationBallotContextV1 {
             version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
@@ -4236,7 +4079,6 @@ mod tests {
             evidence_uri: Some("sorafs://governance/evidence/case-0007".to_string()),
         }
     }
-
     fn sample_ballot_reveal(choice: SoraFsModerationVoteChoice) -> SoraFsModerationBallotRevealV1 {
         SoraFsModerationBallotRevealV1 {
             version: SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1,
@@ -4248,7 +4090,6 @@ mod tests {
             revealed_at_unix_ms: 1_738_001_000_000,
         }
     }
-
     fn sample_ballot_commit(choice: SoraFsModerationVoteChoice) -> SoraFsModerationBallotCommitV1 {
         let reveal = sample_ballot_reveal(choice);
         SoraFsModerationBallotCommitV1 {
@@ -4264,12 +4105,10 @@ mod tests {
     fn sorafs_moderation_ballot_commit_reveal_roundtrip() {
         let commit = sample_ballot_commit(SoraFsModerationVoteChoice::Overturn);
         let reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Overturn);
-
         commit
             .verify_reveal(&reveal)
             .expect("SoraFS moderation reveal matches commitment");
     }
-
     #[test]
     fn sorafs_moderation_ballot_commitment_is_domain_separated() {
         let reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Overturn);
@@ -4281,10 +4120,8 @@ mod tests {
         legacy.update((reveal.nonce.len() as u64).to_le_bytes());
         legacy.update(&reveal.nonce);
         let legacy: [u8; 32] = legacy.finalize().into();
-
         assert_ne!(reveal.compute_commitment(), legacy);
     }
-
     #[test]
     fn sorafs_moderation_ballot_binds_evidence_and_finance_context() {
         let commit = sample_ballot_commit(SoraFsModerationVoteChoice::Modify);
@@ -4294,14 +4131,12 @@ mod tests {
             .verify_reveal(&reveal)
             .expect_err("evidence digest mismatch must fail");
         assert!(matches!(err, SoraFsModerationBallotError::ContextMismatch));
-
         let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Modify);
         reveal.context.appeal_finance_config_version = "baseline-v2".to_string();
         let err = commit
             .verify_reveal(&reveal)
             .expect_err("finance config version mismatch must fail");
         assert!(matches!(err, SoraFsModerationBallotError::ContextMismatch));
-
         let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Modify);
         reveal.context.panel_roster_hash = [0xD7; 32];
         let err = commit
@@ -4309,7 +4144,6 @@ mod tests {
             .expect_err("panel roster hash mismatch must fail");
         assert!(matches!(err, SoraFsModerationBallotError::ContextMismatch));
     }
-
     #[test]
     fn sorafs_moderation_ballot_rejects_mismatched_choice_and_short_nonce() {
         let commit = sample_ballot_commit(SoraFsModerationVoteChoice::Uphold);
@@ -4321,7 +4155,6 @@ mod tests {
             err,
             SoraFsModerationBallotError::CommitmentMismatch
         ));
-
         let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Uphold);
         reveal.nonce = vec![0x01; 8];
         let err = commit
@@ -4332,7 +4165,6 @@ mod tests {
             SoraFsModerationBallotError::NonceTooShort { length: 8 }
         ));
     }
-
     #[test]
     fn sorafs_moderation_ballot_requires_case_policy_and_roster_scope() {
         let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Uphold);
@@ -4349,7 +4181,6 @@ mod tests {
             .verify_reveal(&reveal)
             .expect_err("blank case id must fail");
         assert!(matches!(err, SoraFsModerationBallotError::MissingCaseId));
-
         let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Uphold);
         reveal.context.policy_reference.clear();
         let commit = SoraFsModerationBallotCommitV1 {
@@ -4367,7 +4198,6 @@ mod tests {
             err,
             SoraFsModerationBallotError::MissingPolicyReference
         ));
-
         let mut reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Uphold);
         reveal.context.panel_roster_hash = [0; 32];
         let commit = SoraFsModerationBallotCommitV1 {
@@ -4386,7 +4216,6 @@ mod tests {
             SoraFsModerationBallotError::MissingPanelRosterHash
         ));
     }
-
     fn sample_family_manifest() -> AdversarialCorpusManifestV1 {
         AdversarialCorpusManifestV1 {
             schema_version: ADVERSARIAL_CORPUS_VERSION_V1,
@@ -4407,13 +4236,11 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn adversarial_manifest_validates() {
         let manifest = sample_family_manifest();
         manifest.validate().expect("manifest valid");
     }
-
     #[test]
     fn adversarial_manifest_rejects_missing_variants() {
         let mut manifest = sample_family_manifest();
@@ -4424,7 +4251,6 @@ mod tests {
             AdversarialCorpusValidationError::MissingVariants { .. }
         ));
     }
-
     #[test]
     fn adversarial_manifest_rejects_duplicate_family_ids() {
         let mut manifest = sample_family_manifest();
@@ -4432,14 +4258,12 @@ mod tests {
         duplicate.description = "same family id with different rows".to_string();
         duplicate.variants[0].variant_id = [0x03; 16];
         manifest.families.push(duplicate);
-
         let err = manifest.validate().expect_err("duplicate family id");
         assert!(matches!(
             err,
             AdversarialCorpusValidationError::DuplicateFamilyId { .. }
         ));
     }
-
     #[test]
     fn adversarial_manifest_rejects_duplicate_variant_ids_across_families() {
         let mut manifest = sample_family_manifest();
@@ -4447,14 +4271,12 @@ mod tests {
         second_family.family_id = [0x04; 16];
         second_family.description = "same variant id in another family".to_string();
         manifest.families.push(second_family);
-
         let err = manifest.validate().expect_err("duplicate variant id");
         assert!(matches!(
             err,
             AdversarialCorpusValidationError::DuplicateVariantId { .. }
         ));
     }
-
     #[test]
     fn adversarial_manifest_rejects_duplicate_variant_ids_within_family() {
         let mut manifest = sample_family_manifest();
@@ -4462,14 +4284,12 @@ mod tests {
         duplicate.attack_vector = "mosaic".to_string();
         duplicate.perceptual_hash = Some([0xBB; 32]);
         manifest.families[0].variants.push(duplicate);
-
         let err = manifest.validate().expect_err("duplicate variant id");
         assert!(matches!(
             err,
             AdversarialCorpusValidationError::DuplicateVariantId { .. }
         ));
     }
-
     #[test]
     fn adversarial_manifest_rejects_duplicate_perceptual_hashes() {
         let mut manifest = sample_family_manifest();
@@ -4477,14 +4297,12 @@ mod tests {
         duplicate.variant_id = [0x05; 16];
         duplicate.attack_vector = "crop_jitter".to_string();
         manifest.families[0].variants.push(duplicate);
-
         let err = manifest.validate().expect_err("duplicate perceptual hash");
         assert!(matches!(
             err,
             AdversarialCorpusValidationError::DuplicatePerceptualHash { .. }
         ));
     }
-
     #[test]
     fn adversarial_manifest_rejects_duplicate_embedding_digests() {
         let mut manifest = sample_family_manifest();
@@ -4494,14 +4312,12 @@ mod tests {
         duplicate.variant_id = [0x06; 16];
         duplicate.attack_vector = "embedding_collision".to_string();
         manifest.families[0].variants.push(duplicate);
-
         let err = manifest.validate().expect_err("duplicate embedding digest");
         assert!(matches!(
             err,
             AdversarialCorpusValidationError::DuplicateEmbeddingDigest { .. }
         ));
     }
-
     #[test]
     fn adversarial_manifest_requires_match_basis() {
         let mut manifest = sample_family_manifest();
@@ -4513,7 +4329,6 @@ mod tests {
             AdversarialCorpusValidationError::MissingMatchBasis { .. }
         ));
     }
-
     #[test]
     fn trust_policy_requires_external_governance_anchors() {
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
@@ -4522,7 +4337,6 @@ mod tests {
         let runner = checked_random_keypair();
         let policy = sample_trust_policy(&manifest, &[&governance_a, &governance_b], &[&runner], 1);
         let only_one_anchor = fixture_trust_anchors(&[&governance_a]);
-
         assert_eq!(
             policy
                 .validate_with_trust_anchors(&manifest, &only_one_anchor, 2, TRUST_FIXTURE_NOW)
@@ -4532,7 +4346,6 @@ mod tests {
                 required: 2,
             }
         );
-
         let anchors = fixture_trust_anchors(&[&governance_a, &governance_b]);
         let summary = policy
             .validate_with_trust_anchors(&manifest, &anchors, 2, TRUST_FIXTURE_NOW)
@@ -4540,7 +4353,6 @@ mod tests {
         assert_eq!(summary.trusted_governance_signature_count, 2);
         assert_eq!(summary.trusted_signer_count, 1);
     }
-
     #[test]
     fn trust_policy_rejects_external_quorum_downgrade() {
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
@@ -4548,7 +4360,6 @@ mod tests {
         let runner = checked_random_keypair();
         let policy = sample_trust_policy(&manifest, &[&governance], &[&runner], 1);
         let anchors = fixture_trust_anchors(&[&governance]);
-
         assert_eq!(
             policy
                 .validate_with_trust_anchors(&manifest, &anchors, 2, TRUST_FIXTURE_NOW)
@@ -4559,7 +4370,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn trust_policy_rejects_manifest_and_digest_tampering() {
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
@@ -4567,7 +4377,6 @@ mod tests {
         let runner = checked_random_keypair();
         let policy = sample_trust_policy(&manifest, &[&governance], &[&runner], 1);
         let anchors = fixture_trust_anchors(&[&governance]);
-
         let mut digest_tampered = policy.clone();
         digest_tampered.body.notes = Some("tampered after signing".to_string());
         assert_eq!(
@@ -4576,7 +4385,6 @@ mod tests {
                 .expect_err("body tamper must invalidate canonical digest"),
             ModerationTrustPolicyError::DigestMismatch
         );
-
         let mut rebound = policy;
         rebound.body.manifest_digest = [0xD0; 32];
         resign_policy(&mut rebound, &[&governance]);
@@ -4587,7 +4395,6 @@ mod tests {
             ModerationTrustPolicyError::ManifestBindingMismatch
         );
     }
-
     #[test]
     fn trust_policy_rejects_inactive_windows_and_invalid_revocation() {
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
@@ -4595,7 +4402,6 @@ mod tests {
         let runner = checked_random_keypair();
         let anchors = fixture_trust_anchors(&[&governance]);
         let mut policy = sample_trust_policy(&manifest, &[&governance], &[&runner], 1);
-
         assert!(matches!(
             policy
                 .validate_with_trust_anchors(
@@ -4609,7 +4415,6 @@ mod tests {
                 field: "policy_inactive"
             }
         ));
-
         policy.body.trusted_signers[0].revoked_at_unix =
             Some(policy.body.trusted_signers[0].valid_from_unix);
         resign_policy(&mut policy, &[&governance]);
@@ -4622,7 +4427,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn signed_result_validates_all_bindings_and_signature() {
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
@@ -4637,11 +4441,9 @@ mod tests {
             "cid:production-subject",
             TRUST_FIXTURE_NOW,
         );
-
         result
             .validate(&manifest, &policy, TRUST_FIXTURE_NOW + 1)
             .expect("fully bound signed result validates");
-
         let mut tampered = result.clone();
         tampered.body.combined_score_bps = 5_001;
         assert_eq!(
@@ -4650,7 +4452,6 @@ mod tests {
                 .expect_err("post-signature score tamper fails closed"),
             ModerationSignedResultError::CombinedScoreMismatch
         );
-
         let mut wrong_policy = result;
         wrong_policy.body.policy_digest = [0xEE; 32];
         resign_result(&mut wrong_policy, &runner);
@@ -4663,14 +4464,12 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn signed_result_freshness_ttl_and_expiry_fail_closed() {
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
         let governance = checked_random_keypair();
         let runner = checked_random_keypair();
         let policy = sample_trust_policy(&manifest, &[&governance], &[&runner], 1);
-
         let mut too_long = sample_signed_result(
             &manifest,
             &policy,
@@ -4690,7 +4489,6 @@ mod tests {
                 field: "expires_at_unix"
             }
         ));
-
         let expired = sample_signed_result(
             &manifest,
             &policy,
@@ -4707,7 +4505,6 @@ mod tests {
                 reason: "result expired"
             }
         ));
-
         let future = sample_signed_result(
             &manifest,
             &policy,
@@ -4723,7 +4520,6 @@ mod tests {
             ModerationSignedResultError::Freshness { .. }
         ));
     }
-
     #[test]
     fn revoked_signer_cannot_backdate_or_outlive_revocation() {
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
@@ -4733,7 +4529,6 @@ mod tests {
         let revocation = TRUST_FIXTURE_NOW + 100;
         policy.body.trusted_signers[0].revoked_at_unix = Some(revocation);
         resign_policy(&mut policy, &[&governance]);
-
         let backdated = sample_signed_result(
             &manifest,
             &policy,
@@ -4750,7 +4545,6 @@ mod tests {
                 reason: "signer was revoked"
             }
         ));
-
         assert!(matches!(
             backdated
                 .validate(&manifest, &policy, TRUST_FIXTURE_NOW + 1)
@@ -4760,7 +4554,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn authenticated_committee_is_distinct_deterministic_and_quorum_bound() {
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
@@ -4820,7 +4613,6 @@ mod tests {
             aggregate.computed_aggregate_digest().unwrap(),
             aggregate.aggregate_digest
         );
-
         let reordered = ModerationCommitteeAggregateV1::aggregate_authenticated(
             &manifest,
             &policy,
@@ -4831,7 +4623,6 @@ mod tests {
         )
         .expect("input order cannot affect aggregate");
         assert_eq!(aggregate, reordered);
-
         assert!(matches!(
             ModerationCommitteeAggregateV1::aggregate_authenticated(
                 &manifest,
@@ -4845,7 +4636,6 @@ mod tests {
             ModerationCommitteeAggregateError::DuplicateSigner { .. }
         ));
     }
-
     #[test]
     fn moderation_identity_digests_ignore_ambient_norito_layout() {
         let body = sample_body();
@@ -4918,7 +4708,6 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn authenticated_committee_rejects_subject_split_and_insufficient_quorum() {
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
@@ -4943,7 +4732,6 @@ mod tests {
             "cid:second",
             TRUST_FIXTURE_NOW,
         );
-
         assert_eq!(
             ModerationCommitteeAggregateV1::aggregate_authenticated(
                 &manifest,
@@ -4975,7 +4763,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn provenance_log_roundtrips_and_detects_chain_tampering() {
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
@@ -5021,7 +4808,6 @@ mod tests {
         )
         .expect("append committee aggregate");
         log.validate_chain().expect("valid provenance chain");
-
         let bytes = norito::encode_canonical(&log).expect("encode provenance");
         let decoded: ModerationProvenanceLogV1 =
             norito::decode_canonical(&bytes).expect("decode provenance");
@@ -5031,7 +4817,6 @@ mod tests {
             norito::decode_canonical::<ModerationProvenanceLogV1>(&alternate),
             Err(norito::Error::NonCanonicalEncoding)
         ));
-
         let mut predecessor_tamper = log.clone();
         predecessor_tamper.entries[1].previous_entry_digest = [0xFF; 32];
         assert_eq!(
@@ -5040,7 +4825,6 @@ mod tests {
                 .expect_err("predecessor tamper must be detected"),
             ModerationProvenanceError::PreviousDigestMismatch { index: 1 }
         );
-
         let mut payload_tamper = log.clone();
         let ModerationProvenancePayloadV1::SignedScreeningResult(result) =
             &mut payload_tamper.entries[0].payload
@@ -5054,7 +4838,6 @@ mod tests {
                 .expect_err("embedded evidence digest tamper must be detected"),
             ModerationProvenanceError::PayloadDigestMismatch { index: 0 }
         );
-
         let mut head_tamper = log;
         head_tamper.head_digest = [0xAB; 32];
         assert_eq!(
@@ -5064,14 +4847,12 @@ mod tests {
             ModerationProvenanceError::HeadDigestMismatch
         );
     }
-
     #[test]
     fn provenance_log_rejects_zero_id_time_regression_and_capacity_overflow() {
         assert_eq!(
             ModerationProvenanceLogV1::new([0; 16]).expect_err("zero log id"),
             ModerationProvenanceError::MissingLogId
         );
-
         let manifest = sign_manifest(sample_body(), &["manifest-governance"]);
         let governance = checked_random_keypair();
         let runner = checked_random_keypair();
@@ -5093,7 +4874,6 @@ mod tests {
             .expect_err("record cannot predate evidence"),
             ModerationProvenanceError::InvalidTimestamp { index: 0 }
         ));
-
         let mut oversized = ModerationProvenanceLogV1::new([2; 16]).expect("new log");
         let mut entry = ModerationProvenanceEntryV1 {
             sequence: 0,

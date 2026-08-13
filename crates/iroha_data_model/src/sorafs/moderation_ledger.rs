@@ -3,19 +3,15 @@
 //! The local moderation runtime remains useful for orchestration, but these
 //! records define the consensus-owned first-release source of truth for ballot
 //! policy, lifecycle transitions, challenges, outcomes, and no-show penalties.
-
 use std::collections::BTreeSet;
-
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::{
     account::AccountId,
     events::data::sorafs::{SorafsModerationLedgerEvent, SorafsRepairLedgerEvent},
     sorafs::moderation::{SoraFsModerationBallotContextV1, SoraFsModerationVoteChoice},
 };
-
 /// First-release moderation-ledger policy version.
 pub const MODERATION_LEDGER_POLICY_VERSION_V1: u16 = 1;
 /// First-release moderation case specification version.
@@ -71,7 +67,6 @@ pub const MODERATION_SORTITION_SEED_DOMAIN_V1: &[u8] = b"sorafs.moderation.sorti
 pub const MODERATION_SORTITION_SCORE_DOMAIN_V1: &[u8] = b"sorafs.moderation.sortition-score.v1";
 /// Domain separator for selected roster and waitlist commitments.
 pub const MODERATION_SORTITION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.sortition-record.v1";
-
 /// Governance-controlled limits and no-show penalties for authoritative ballots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -106,7 +101,6 @@ pub struct ModerationLedgerPolicyV1 {
     /// Penalty points recorded for a juror that committed but never revealed.
     pub unrevealed_commit_penalty_points: u32,
 }
-
 impl ModerationLedgerPolicyV1 {
     /// Validate all hard first-release policy bounds.
     ///
@@ -173,7 +167,6 @@ impl ModerationLedgerPolicyV1 {
         }
         Ok(())
     }
-
     /// Compute the canonical domain-separated policy digest.
     ///
     /// # Errors
@@ -183,7 +176,6 @@ impl ModerationLedgerPolicyV1 {
         canonical_digest(MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1, self)
     }
 }
-
 /// Validation errors for the authoritative moderation policy.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ModerationLedgerPolicyError {
@@ -249,7 +241,6 @@ pub enum ModerationLedgerPolicyError {
         unrevealed_commit: u32,
     },
 }
-
 /// Activated moderation policy with consensus provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -267,7 +258,6 @@ pub struct ModerationLedgerPolicyRecord {
     /// Governance authority that activated the policy.
     pub activated_by: AccountId,
 }
-
 /// Immutable active `PoP` registry anchors captured when an appeal is admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -296,7 +286,6 @@ pub struct ModerationPoPRegistrySnapshotV1 {
     /// Consensus block timestamp at which the snapshot was captured.
     pub captured_at_unix_ms: u64,
 }
-
 impl ModerationPoPRegistrySnapshotV1 {
     /// Validate that every authoritative anchor is present and non-inert.
     ///
@@ -326,7 +315,6 @@ impl ModerationPoPRegistrySnapshotV1 {
         }
         Ok(())
     }
-
     /// Compute the canonical, domain-separated snapshot digest.
     ///
     /// # Errors
@@ -336,7 +324,6 @@ impl ModerationPoPRegistrySnapshotV1 {
         canonical_digest(MODERATION_POP_SNAPSHOT_DIGEST_DOMAIN_V1, self)
     }
 }
-
 /// Invalid authoritative `PoP` snapshot.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ModerationPoPRegistrySnapshotError {
@@ -353,7 +340,6 @@ pub enum ModerationPoPRegistrySnapshotError {
     #[error("moderation PoP snapshot capture time must be non-zero")]
     ZeroCaptureTime,
 }
-
 /// Authoritative, pre-sortition appeal intake submitted by the appellant.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -409,7 +395,6 @@ pub struct ModerationAppealIntakeV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
 }
-
 impl ModerationAppealIntakeV1 {
     /// Validate the bounded appeal body independently of live policy and block time.
     ///
@@ -495,7 +480,6 @@ impl ModerationAppealIntakeV1 {
         }
         Ok(())
     }
-
     /// Compute the immutable canonical appeal-intake digest.
     ///
     /// # Errors
@@ -505,30 +489,25 @@ impl ModerationAppealIntakeV1 {
         canonical_digest(MODERATION_APPEAL_INTAKE_DIGEST_DOMAIN_V1, self)
     }
 }
-
 fn canonical_digest<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], norito::Error> {
     struct Blake3Writer<'a>(&'a mut blake3::Hasher);
-
     impl std::io::Write for Blake3Writer<'_> {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             self.0.update(bytes);
             Ok(bytes.len())
         }
-
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
-
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
     norito::core::write_canonical_to_writer(value, &mut Blake3Writer(&mut hasher))?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn validate_appeal_identifier(
     field: &'static str,
     value: &str,
@@ -541,7 +520,6 @@ fn validate_appeal_identifier(
     }
     Ok(())
 }
-
 /// Return whether a moderation identifier is bounded canonical ASCII.
 ///
 /// This grammar is shared by appeal, case, round, and challenge identifiers so
@@ -556,7 +534,6 @@ pub fn is_canonical_moderation_identifier_v1(value: &str) -> bool {
             byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/' | b'@')
         })
 }
-
 fn validate_canonical_account_list(accounts: &[AccountId]) -> Result<(), String> {
     let mut previous: Option<String> = None;
     for account in accounts {
@@ -570,7 +547,6 @@ fn validate_canonical_account_list(accounts: &[AccountId]) -> Result<(), String>
     }
     Ok(())
 }
-
 /// Structural appeal-intake validation failure.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum ModerationAppealIntakeError {
@@ -637,7 +613,6 @@ pub enum ModerationAppealIntakeError {
     )]
     InvalidDeadlines,
 }
-
 /// Public eligibility class retained without credential or attribute disclosure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -660,7 +635,6 @@ pub enum ModerationJurorEligibilityClassV1 {
     /// Observer-only credentials; never eligible for a voting panel.
     Observer,
 }
-
 /// Payload-free result of one verified private `PoP` membership proof.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -690,7 +664,6 @@ pub struct ModerationJurorEligibilityRecordV1 {
     /// Consensus block timestamp at admission.
     pub registered_at_unix_ms: u64,
 }
-
 /// Deterministically selected primary panel and failover queue.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -716,7 +689,6 @@ pub struct ModerationPanelSelectionV1 {
     /// Authorised moderation operator that closed registration.
     pub selected_by: AccountId,
 }
-
 /// One deterministic primary-juror no-show replacement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -729,7 +701,6 @@ pub struct ModerationJurorReplacementV1 {
     /// Next unused juror in the immutable waitlist.
     pub replacement_juror: AccountId,
 }
-
 /// Consensus-owned appeal/sortition lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -754,7 +725,6 @@ pub enum ModerationAppealStatusV1 {
     /// Underlying authoritative ballot reached a terminal outcome.
     Finalized,
 }
-
 /// Authoritative appeal intake, `PoP` snapshot, sortition, and activation record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -793,7 +763,6 @@ pub struct ModerationAppealRecordV1 {
     /// Underlying ballot finalization time, if finalized.
     pub finalized_at_unix_ms: Option<u64>,
 }
-
 /// Return the shared per-appeal `PoP` membership-proof challenge.
 #[must_use]
 pub fn sorafs_moderation_pop_challenge_v1(
@@ -806,7 +775,6 @@ pub fn sorafs_moderation_pop_challenge_v1(
     hasher.update(&pop_snapshot_digest);
     *hasher.finalize().as_bytes()
 }
-
 /// Return the bounded verifier context used by every candidate for one appeal.
 #[must_use]
 pub fn sorafs_moderation_pop_verifier_context_v1(intake_digest: [u8; 32]) -> String {
@@ -815,7 +783,6 @@ pub fn sorafs_moderation_pop_verifier_context_v1(intake_digest: [u8; 32]) -> Str
         hex::encode(intake_digest)
     )
 }
-
 /// Derive the immutable selection seed from appeal and non-applicant anchors.
 #[must_use]
 pub fn sorafs_moderation_sortition_seed_v1(
@@ -830,7 +797,6 @@ pub fn sorafs_moderation_sortition_seed_v1(
     hasher.update(&randomness_anchor);
     *hasher.finalize().as_bytes()
 }
-
 fn sortition_score(
     seed_digest: [u8; 32],
     candidate: &ModerationJurorEligibilityRecordV1,
@@ -841,7 +807,6 @@ fn sortition_score(
     hasher.update(&candidate.nullifier);
     *hasher.finalize().as_bytes()
 }
-
 /// Commit to one deterministic panel/waitlist result.
 #[must_use]
 pub fn sorafs_moderation_sortition_digest_v1(
@@ -866,13 +831,11 @@ pub fn sorafs_moderation_sortition_digest_v1(
     }
     *hasher.finalize().as_bytes()
 }
-
 /// Successful output of deterministic moderation panel selection.
 ///
 /// The tuple contains the primary jurors, waitlist, seed digest, and sortition
 /// digest, in that order.
 pub type ModerationPanelSelectionResultV1 = (Vec<AccountId>, Vec<AccountId>, [u8; 32], [u8; 32]);
-
 /// Select a panel and bounded failover queue independently of candidate input order.
 ///
 /// # Errors
@@ -961,7 +924,6 @@ pub fn sorafs_moderation_select_panel_v1(
     );
     Ok((jurors, waitlist, seed_digest, digest))
 }
-
 /// Deterministic sortition validation failure.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum ModerationSortitionError {
@@ -992,7 +954,6 @@ pub enum ModerationSortitionError {
         found: usize,
     },
 }
-
 /// Immutable input used to open one authoritative moderation ballot.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1020,7 +981,6 @@ pub struct ModerationCaseSpecV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
 }
-
 impl ModerationCaseSpecV1 {
     /// Validate context, identifiers, roster uniqueness, quorum, and deadline order.
     ///
@@ -1092,7 +1052,6 @@ impl ModerationCaseSpecV1 {
         Ok(())
     }
 }
-
 fn validate_identifier(field: &'static str, value: &str) -> Result<(), ModerationCaseSpecError> {
     if !is_canonical_moderation_identifier_v1(value) {
         return Err(ModerationCaseSpecError::InvalidIdentifier {
@@ -1102,7 +1061,6 @@ fn validate_identifier(field: &'static str, value: &str) -> Result<(), Moderatio
     }
     Ok(())
 }
-
 /// Structural moderation-case errors.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum ModerationCaseSpecError {
@@ -1158,7 +1116,6 @@ pub enum ModerationCaseSpecError {
     #[error("moderation case policy digest must be non-zero")]
     ZeroPolicyDigest,
 }
-
 /// Derive the roster digest shared by local and authoritative first-release ballots.
 #[must_use]
 pub fn sorafs_moderation_panel_roster_hash_v1(jurors: &[AccountId], quorum: u16) -> [u8; 32] {
@@ -1176,7 +1133,6 @@ pub fn sorafs_moderation_panel_roster_hash_v1(jurors: &[AccountId], quorum: u16)
     }
     *hasher.finalize().as_bytes()
 }
-
 /// Consensus lifecycle status of an authoritative case.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1195,7 +1151,6 @@ pub enum ModerationCaseStatusV1 {
     /// A terminal outcome and any no-show records have been persisted.
     Finalized,
 }
-
 /// Authoritative case header and constant-time lifecycle counters.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1228,7 +1183,6 @@ pub struct ModerationCaseRecordV1 {
     /// Number of challenges that expired unresolved and forced fail-safe closure.
     pub expired_challenge_count: u32,
 }
-
 /// Immutable accepted juror commitment and ledger provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1248,7 +1202,6 @@ pub struct ModerationCommitRecordV1 {
     /// Block timestamp assigned at admission.
     pub accepted_at_unix_ms: u64,
 }
-
 /// Immutable accepted juror reveal and ledger provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1268,7 +1221,6 @@ pub struct ModerationRevealRecordV1 {
     /// Block timestamp assigned at admission.
     pub accepted_at_unix_ms: u64,
 }
-
 /// Payload-free authoritative challenge category.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1293,7 +1245,6 @@ pub enum ModerationChallengeKindV1 {
     /// Bounded operator-reviewed category outside fixed labels.
     Other,
 }
-
 impl ModerationChallengeKindV1 {
     /// Return whether this category requires a target juror.
     #[must_use]
@@ -1304,7 +1255,6 @@ impl ModerationChallengeKindV1 {
         )
     }
 }
-
 /// Governance resolution for one challenge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1326,7 +1276,6 @@ pub enum ModerationChallengeDecisionV1 {
     /// jurors who were prevented from revealing.
     Expired,
 }
-
 /// Durable payload-free challenge and optional resolution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1360,7 +1309,6 @@ pub struct ModerationChallengeRecordV1 {
     /// Block timestamp at resolution.
     pub resolved_at_unix_ms: Option<u64>,
 }
-
 /// Vote counts in a terminal authoritative outcome.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1377,7 +1325,6 @@ pub struct ModerationVoteCountsV1 {
     /// `escalate` reveals.
     pub escalate: u32,
 }
-
 impl ModerationVoteCountsV1 {
     /// Return the sum of all choice counters when it fits in `u32`.
     #[must_use]
@@ -1387,7 +1334,6 @@ impl ModerationVoteCountsV1 {
             .checked_add(self.modify)?
             .checked_add(self.escalate)
     }
-
     /// Return the unique highest-vote choice, or `None` for empty/tied counts.
     #[must_use]
     pub fn winning_choice(self) -> Option<SoraFsModerationVoteChoice> {
@@ -1412,7 +1358,6 @@ impl ModerationVoteCountsV1 {
             .find_map(|(choice, count)| (count == maximum).then_some(choice))
     }
 }
-
 /// Terminal classification for an authoritative moderation case.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1433,7 +1378,6 @@ pub enum ModerationOutcomeKindV1 {
     /// An accepted challenge blocked reveal and tally processing.
     Challenged,
 }
-
 /// Immutable terminal outcome for one case and round.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1460,7 +1404,6 @@ pub struct ModerationOutcomeRecordV1 {
     /// Governance authority that finalized the case.
     pub finalized_by: AccountId,
 }
-
 /// Classification of one ballot no-show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1477,7 +1420,6 @@ pub enum ModerationNoShowKindV1 {
     /// Juror committed but submitted no accepted reveal.
     UnrevealedCommit,
 }
-
 /// Durable no-show penalty record derived atomically during finalization.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1501,7 +1443,6 @@ pub struct ModerationNoShowRecordV1 {
     /// Block timestamp assigned at finalization.
     pub recorded_at_unix_ms: u64,
 }
-
 /// Constant-time authoritative moderation-ledger counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1538,7 +1479,6 @@ pub struct ModerationLedgerStatusV1 {
     /// Block timestamp of the latest ledger mutation.
     pub updated_at_unix_ms: u64,
 }
-
 /// Finalized block anchor for one coherent moderation query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1552,7 +1492,6 @@ pub struct ModerationFinalizedCursorV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
-
 /// Exclusive cursor for one committed moderation event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1570,7 +1509,6 @@ pub struct ModerationFinalizedEventCursorV1 {
     /// Moderation-event index within the committing block.
     pub event_index: u32,
 }
-
 /// Typed moderation event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1590,7 +1528,6 @@ pub struct ModerationFinalizedEventV1 {
     /// Existing typed, payload-free native moderation event.
     pub event: SorafsModerationLedgerEvent,
 }
-
 impl ModerationFinalizedEventV1 {
     /// Return the exclusive cursor identifying this event.
     #[must_use]
@@ -1603,7 +1540,6 @@ impl ModerationFinalizedEventV1 {
         }
     }
 }
-
 /// Cursor-bounded page of typed committed moderation events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1620,7 +1556,6 @@ pub struct ModerationFinalizedEventPageV1 {
     /// Exclusive continuation cursor, present only when `has_more` is true.
     pub next_after: Option<ModerationFinalizedEventCursorV1>,
 }
-
 /// One appeal and every payload-free eligibility record from one finalized view.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1633,7 +1568,6 @@ pub struct ModerationFinalizedAppealViewV1 {
     /// Eligibility records sorted by canonical juror identity.
     pub eligibility: Vec<ModerationJurorEligibilityRecordV1>,
 }
-
 /// One case and every authoritative ballot subrecord from one finalized view.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1654,7 +1588,6 @@ pub struct ModerationFinalizedCaseViewV1 {
     /// No-show records sorted by canonical juror identity.
     pub no_shows: Vec<ModerationNoShowRecordV1>,
 }
-
 /// Complete bounded moderation projection read from one finalized state view.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1682,7 +1615,6 @@ pub struct ModerationFinalizedLedgerSnapshotV1 {
     /// Latest bounded committed-event suffix in increasing cursor order.
     pub events: Vec<ModerationFinalizedEventV1>,
 }
-
 impl ModerationFinalizedLedgerSnapshotV1 {
     /// Return the finalized anchor shared by the complete snapshot.
     #[must_use]
@@ -1692,7 +1624,6 @@ impl ModerationFinalizedLedgerSnapshotV1 {
             block_hash: self.finalized_block_hash,
         }
     }
-
     /// Return one appeal by exact case and round identifier.
     #[must_use]
     pub fn appeal(
@@ -1711,7 +1642,6 @@ impl ModerationFinalizedLedgerSnapshotV1 {
             .ok()
             .map(|index| &self.appeals[index])
     }
-
     /// Return one activated case by exact case and round identifier.
     #[must_use]
     pub fn case(&self, case_id: &str, round_id: &str) -> Option<&ModerationFinalizedCaseViewV1> {
@@ -1727,7 +1657,6 @@ impl ModerationFinalizedLedgerSnapshotV1 {
             .map(|index| &self.cases[index])
     }
 }
-
 /// First-release chain-authoritative repair-task record version.
 pub const REPAIR_LEDGER_TASK_VERSION_V1: u16 = 1;
 /// Shortest lease accepted by the chain-authoritative repair ledger.
@@ -1756,7 +1685,6 @@ pub const REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1: &[u8] = b"sorafs.repair.ledger-id
 pub const REPAIR_LEDGER_ACTION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.repair.action-digest.v1";
 /// Domain separator for repair appeal identities.
 pub const REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1: &[u8] = b"sorafs.repair.ledger-appeal-id.v1";
-
 /// Derive the immutable task identity from a subsystem's exactly-once source identity.
 #[must_use]
 pub fn sorafs_repair_task_id_v1(source_identity: [u8; 32]) -> [u8; 32] {
@@ -1765,7 +1693,6 @@ pub fn sorafs_repair_task_id_v1(source_identity: [u8; 32]) -> [u8; 32] {
     hasher.update(&source_identity);
     *hasher.finalize().as_bytes()
 }
-
 /// Derive a task-scoped digest for a bounded idempotency key.
 #[must_use]
 pub fn sorafs_repair_idempotency_digest_v1(ticket_id: &str, key: &str) -> [u8; 32] {
@@ -1781,7 +1708,6 @@ pub fn sorafs_repair_idempotency_digest_v1(ticket_id: &str, key: &str) -> [u8; 3
     }
     *hasher.finalize().as_bytes()
 }
-
 /// Derive the consensus action digest for one authority-bound repair instruction.
 ///
 /// Clients and durable transaction forwarders use this exact helper to
@@ -1814,7 +1740,6 @@ pub fn sorafs_repair_action_digest_v1<T: norito::core::NoritoSerialize>(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// Consensus-owned repair worker lease.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1833,7 +1758,6 @@ pub struct RepairLedgerLeaseV1 {
     /// Exclusive lease expiry; actions at or after this timestamp are rejected.
     pub expires_at_unix_ms: u64,
 }
-
 /// Successful repair outcome payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1845,7 +1769,6 @@ pub struct RepairLedgerCompletedV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub evidence_digest: [u8; 32],
 }
-
 /// Unsuccessful repair outcome payload without slashing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1857,7 +1780,6 @@ pub struct RepairLedgerFailedV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub failure_digest: [u8; 32],
 }
-
 /// Escalated repair outcome payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1869,7 +1791,6 @@ pub struct RepairLedgerEscalatedV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub slash_proposal_digest: [u8; 32],
 }
-
 /// One immutable terminal repair outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1888,7 +1809,6 @@ pub enum RepairLedgerTerminalKindV1 {
     /// Repair failed and atomically committed a slash proposal.
     Escalated(RepairLedgerEscalatedV1),
 }
-
 /// Provenance for the single terminal outcome of a repair task.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1905,7 +1825,6 @@ pub struct RepairLedgerTerminalOutcomeV1 {
     /// Finalizing block timestamp.
     pub finalized_at_unix_ms: u64,
 }
-
 /// Idempotent repair action accepted by consensus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1922,7 +1841,6 @@ pub struct RepairLedgerActionReceiptV1 {
     /// Task revision produced by the action.
     pub resulting_revision: u64,
 }
-
 /// Slash proposal committed atomically with an escalated terminal outcome.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1941,7 +1859,6 @@ pub struct RepairLedgerSlashRecordV1 {
     /// Committing block timestamp.
     pub submitted_at_unix_ms: u64,
 }
-
 /// Provider appeal committed against one escalated repair slash proposal.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1965,7 +1882,6 @@ pub struct RepairLedgerAppealRecordV1 {
     /// Committing block timestamp.
     pub submitted_at_unix_ms: u64,
 }
-
 /// Derive the immutable identity of a repair slash appeal.
 #[must_use]
 pub fn sorafs_repair_appeal_id_v1(
@@ -1991,7 +1907,6 @@ pub fn sorafs_repair_appeal_id_v1(
     hasher.update(&evidence_digest);
     *hasher.finalize().as_bytes()
 }
-
 /// Chain-authoritative repair task, lease, terminal result, slash, and appeal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2040,7 +1955,6 @@ pub struct RepairLedgerTaskV1 {
     /// Block timestamp of the latest accepted mutation.
     pub updated_at_unix_ms: u64,
 }
-
 /// Constant-time counters for the authoritative repair ledger.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2067,7 +1981,6 @@ pub struct RepairLedgerStatusV1 {
     /// Block timestamp of the latest mutation.
     pub updated_at_unix_ms: u64,
 }
-
 /// Finalized block anchor for one coherent repair-ledger query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2081,7 +1994,6 @@ pub struct RepairFinalizedCursorV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
-
 /// One authoritative repair task anchored to finalized chain state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2094,7 +2006,6 @@ pub struct RepairFinalizedTaskV1 {
     /// Chain-authoritative repair task.
     pub task: RepairLedgerTaskV1,
 }
-
 /// Authoritative repair counters anchored to finalized chain state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2107,7 +2018,6 @@ pub struct RepairFinalizedStatusV1 {
     /// Chain-authoritative repair-ledger counters.
     pub status: RepairLedgerStatusV1,
 }
-
 /// Cursor-bounded authoritative repair-task page.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2128,7 +2038,6 @@ pub struct RepairLedgerTaskPageV1 {
     )]
     pub next_after_task_id: Option<[u8; 32]>,
 }
-
 /// Exclusive cursor for one committed repair-ledger event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2146,7 +2055,6 @@ pub struct RepairFinalizedEventCursorV1 {
     /// Repair-event index within the committing block.
     pub event_index: u32,
 }
-
 /// Typed repair-ledger event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2166,7 +2074,6 @@ pub struct RepairFinalizedEventV1 {
     /// Existing typed, payload-free native repair-ledger event.
     pub event: SorafsRepairLedgerEvent,
 }
-
 impl RepairFinalizedEventV1 {
     /// Return the exclusive cursor identifying this event.
     #[must_use]
@@ -2179,7 +2086,6 @@ impl RepairFinalizedEventV1 {
         }
     }
 }
-
 /// Cursor-bounded page of typed committed repair-ledger events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2196,29 +2102,24 @@ pub struct RepairFinalizedEventPageV1 {
     /// Exclusive continuation cursor, present only when `has_more` is true.
     pub next_after: Option<RepairFinalizedEventCursorV1>,
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
-
     use super::*;
     use crate::sorafs::moderation::{
         SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotContextV1,
     };
-
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("nonzero deterministic Ed25519 seed");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         norito::to_bytes(value).expect("encode alternate-layout repair-ledger value")
     }
-
     fn assert_canonical_norito_round_trip<T>(value: &T)
     where
         T: core::fmt::Debug + PartialEq + norito::core::NoritoSerialize,
@@ -2243,7 +2144,6 @@ mod tests {
             Err(norito::Error::NonCanonicalEncoding)
         ));
     }
-
     fn policy() -> ModerationLedgerPolicyV1 {
         ModerationLedgerPolicyV1 {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
@@ -2259,7 +2159,6 @@ mod tests {
             unrevealed_commit_penalty_points: 20,
         }
     }
-
     fn case_spec() -> ModerationCaseSpecV1 {
         let jurors = vec![account(1), account(2), account(3)];
         ModerationCaseSpecV1 {
@@ -2282,7 +2181,6 @@ mod tests {
             policy_digest: policy().digest().unwrap(),
         }
     }
-
     fn appeal_intake() -> ModerationAppealIntakeV1 {
         let appellant = account(9);
         ModerationAppealIntakeV1 {
@@ -2309,7 +2207,6 @@ mod tests {
             policy_digest: policy().digest().unwrap(),
         }
     }
-
     fn eligibility(seed: u8, snapshot_digest: [u8; 32]) -> ModerationJurorEligibilityRecordV1 {
         ModerationJurorEligibilityRecordV1 {
             case_id: "appeal-1".to_owned(),
@@ -2323,18 +2220,15 @@ mod tests {
             registered_at_unix_ms: 1_500,
         }
     }
-
     #[test]
     fn policy_digest_and_case_roundtrip_are_stable() {
         let policy = policy();
         policy.validate().unwrap();
         assert_eq!(policy.digest().unwrap(), policy.digest().unwrap());
-
         let case = case_spec();
         case.validate().unwrap();
         assert_canonical_norito_round_trip(&case);
     }
-
     #[test]
     fn ledger_identity_digests_ignore_ambient_norito_layout() {
         let policy = policy();
@@ -2397,7 +2291,6 @@ mod tests {
             expected
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn finalized_event_page_json_roundtrip_preserves_typed_event() {
@@ -2423,7 +2316,6 @@ mod tests {
             has_more: true,
             next_after: Some(event.cursor()),
         };
-
         let json = norito::json::to_json(&page).expect("serialize finalized moderation event page");
         let decoded: ModerationFinalizedEventPageV1 =
             norito::json::from_json(&json).expect("deserialize finalized moderation event page");
@@ -2440,7 +2332,6 @@ mod tests {
         let Some(norito::json::Value::Object(ledger_event)) = committed_event.get("event") else {
             panic!("committed event must contain a typed ledger event");
         };
-
         assert_eq!(decoded, page);
         assert_eq!(
             ledger_event.get("kind"),
@@ -2450,7 +2341,6 @@ mod tests {
             }))
         );
     }
-
     #[test]
     fn moderation_identifiers_reject_controls_unicode_whitespace_and_overflow() {
         for valid in ["case-1", "round_2", "policy.v1", "ipfs:bag/id@v1"] {
@@ -2474,7 +2364,6 @@ mod tests {
             &"a".repeat(MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1 + 1)
         ));
     }
-
     #[test]
     fn policy_rejects_zero_and_overflowing_bounds() {
         let mut candidate = policy();
@@ -2508,7 +2397,6 @@ mod tests {
             Err(ModerationLedgerPolicyError::InvalidExclusionLimit { found: 0 })
         ));
     }
-
     #[test]
     fn case_rejects_duplicate_roster_bad_hash_and_inverted_windows() {
         let mut candidate = case_spec();
@@ -2517,21 +2405,18 @@ mod tests {
             candidate.validate(),
             Err(ModerationCaseSpecError::DuplicateJuror { .. })
         ));
-
         candidate = case_spec();
         candidate.context.panel_roster_hash[0] ^= 1;
         assert_eq!(
             candidate.validate(),
             Err(ModerationCaseSpecError::RosterHashMismatch)
         );
-
         candidate = case_spec();
         candidate.challenge_deadline_unix_ms = candidate.commit_deadline_unix_ms;
         assert_eq!(
             candidate.validate(),
             Err(ModerationCaseSpecError::InvalidDeadlines)
         );
-
         candidate = case_spec();
         candidate.round_id = "round-1\nforged".to_owned();
         assert!(matches!(
@@ -2541,7 +2426,6 @@ mod tests {
                 ..
             })
         ));
-
         candidate = case_spec();
         candidate.context.evidence_uri = Some("ipfs://evidence\tforged".to_owned());
         assert_eq!(
@@ -2549,7 +2433,6 @@ mod tests {
             Err(ModerationCaseSpecError::InvalidEvidenceUri)
         );
     }
-
     #[test]
     fn outcome_count_helpers_detect_ties_and_overflow() {
         let counts = ModerationVoteCountsV1 {
@@ -2584,13 +2467,11 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn appeal_intake_rejects_inert_material_exclusion_bias_and_bad_windows() {
         let intake = appeal_intake();
         intake.validate().unwrap();
         assert_eq!(intake.digest().unwrap(), intake.digest().unwrap());
-
         let mut invalid = intake.clone();
         invalid.proof_token_digest = [0; 32];
         assert!(matches!(
@@ -2599,7 +2480,6 @@ mod tests {
                 field: "proof_token_digest"
             })
         ));
-
         invalid = intake.clone();
         invalid.case_id = "appeal-1\nforged".to_owned();
         assert!(matches!(
@@ -2609,7 +2489,6 @@ mod tests {
                 ..
             })
         ));
-
         invalid = intake.clone();
         invalid.policy_reference = "policy-１".to_owned();
         assert!(matches!(
@@ -2619,21 +2498,18 @@ mod tests {
                 ..
             })
         ));
-
         invalid = intake.clone();
         invalid.evidence_uri = Some("ipfs://evidence\tforged".to_owned());
         assert_eq!(
             invalid.validate(),
             Err(ModerationAppealIntakeError::InvalidEvidenceUri)
         );
-
         invalid = intake.clone();
         invalid.exclusions.push(invalid.appellant.clone());
         assert!(matches!(
             invalid.validate(),
             Err(ModerationAppealIntakeError::InvalidExclusions(_))
         ));
-
         invalid = intake.clone();
         invalid.exclusions.clear();
         invalid.exclusions.push(account(8));
@@ -2641,7 +2517,6 @@ mod tests {
             invalid.validate(),
             Err(ModerationAppealIntakeError::AppellantNotExcluded)
         );
-
         invalid = intake;
         invalid.acceptance_deadline_unix_ms = invalid.registration_deadline_unix_ms;
         assert_eq!(
@@ -2649,7 +2524,6 @@ mod tests {
             Err(ModerationAppealIntakeError::InvalidDeadlines)
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -2724,7 +2598,6 @@ mod tests {
             .map(ToString::to_string)
             .collect::<BTreeSet<_>>();
         assert_eq!(unique.len(), 5);
-
         let mut duplicate_account = candidates.clone();
         duplicate_account[1].juror = duplicate_account[0].juror.clone();
         assert!(matches!(
@@ -2739,7 +2612,6 @@ mod tests {
             ),
             Err(ModerationSortitionError::DuplicateJuror { .. })
         ));
-
         let mut duplicate_person = candidates.clone();
         duplicate_person[1].nullifier = duplicate_person[0].nullifier;
         assert_eq!(
@@ -2754,7 +2626,6 @@ mod tests {
             ),
             Err(ModerationSortitionError::DuplicatePersonNullifier)
         );
-
         let mut observer = candidates.clone();
         observer[0].eligibility_class = ModerationJurorEligibilityClassV1::Observer;
         assert!(matches!(
@@ -2769,7 +2640,6 @@ mod tests {
             ),
             Err(ModerationSortitionError::InvalidCandidate { .. })
         ));
-
         let mut wrong_snapshot = candidates.clone();
         wrong_snapshot[0].pop_snapshot_digest = [0xCC; 32];
         assert!(matches!(
@@ -2784,7 +2654,6 @@ mod tests {
             ),
             Err(ModerationSortitionError::InvalidCandidate { .. })
         ));
-
         let mut mixed_scope = candidates.clone();
         mixed_scope[0].round_id = "round-2".to_owned();
         assert!(matches!(
@@ -2799,7 +2668,6 @@ mod tests {
             ),
             Err(ModerationSortitionError::InvalidCandidate { .. })
         ));
-
         assert_eq!(
             sorafs_moderation_select_panel_v1(
                 intake.digest().unwrap(),
@@ -2812,7 +2680,6 @@ mod tests {
             ),
             Err(ModerationSortitionError::InvalidBounds)
         );
-
         assert!(matches!(
             sorafs_moderation_select_panel_v1(
                 intake.digest().unwrap(),
@@ -2829,7 +2696,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -2844,7 +2710,6 @@ mod tests {
             sorafs_repair_idempotency_digest_v1("REP-1", "claim-1"),
             sorafs_repair_idempotency_digest_v1("REP-1", "claim-2")
         );
-
         let owner = account(21);
         let action_digest =
             sorafs_repair_action_digest_v1(&owner, &"claim-1").expect("encode repair action");
@@ -2894,7 +2759,6 @@ mod tests {
         let encoded = norito::encode_canonical(&task).unwrap();
         let decoded: RepairLedgerTaskV1 = norito::decode_canonical(&encoded).unwrap();
         assert_eq!(decoded, task);
-
         let finalized_cursor = RepairFinalizedCursorV1 {
             height: 7,
             block_hash: [0x71; 32],
@@ -2954,7 +2818,6 @@ mod tests {
         assert_canonical_norito_round_trip(&task_page);
         assert_canonical_norito_round_trip(&event_cursor);
         assert_canonical_norito_round_trip(&event_page);
-
         #[cfg(feature = "json")]
         {
             let encoded =
@@ -2962,14 +2825,12 @@ mod tests {
             let decoded: RepairFinalizedEventPageV1 = norito::json::from_slice(&encoded)
                 .expect("decode finalized repair event page JSON");
             assert_eq!(decoded, event_page);
-
             let encoded =
                 norito::json::to_vec(&task_page).expect("encode finalized repair task page JSON");
             let decoded: RepairLedgerTaskPageV1 =
                 norito::json::from_slice(&encoded).expect("decode finalized repair task page JSON");
             assert_eq!(decoded, task_page);
         }
-
         let appeal_a =
             sorafs_repair_appeal_id_v1(task_id, [0x44; 32], &task.submitted_by, [0x55; 32], "why");
         let appeal_b =

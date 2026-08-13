@@ -9,7 +9,6 @@ fn restart_required_guard_stops_serialized_runtime_before_any_effect_work() {
         .push_back(Ok(RuntimeStep::Advanced(Vec::new())));
     let queued_steps = executor.runtime.steps.len();
     executor.output_guard.activate_restart_required();
-
     assert!(matches!(
         executor.step(Instant::now(), &mut services),
         Err(EffectExecutorError::FailClosed(_))
@@ -26,7 +25,6 @@ fn restart_required_guard_stops_serialized_runtime_before_any_effect_work() {
     assert!(services.validation_tasks.is_empty());
     assert!(services.apply_tasks.is_empty());
 }
-
 #[test]
 fn failed_initial_local_store_admission_does_not_publish_pipeline_owner() {
     let fixture = Fixture::new();
@@ -34,7 +32,6 @@ fn failed_initial_local_store_admission_does_not_publish_pipeline_owner() {
     let mut services = fixture.services();
     let before = executor.body_ownership_projection();
     services.fail_on = Some("store");
-
     assert!(
         executor
             .admit_local_proposal(
@@ -52,7 +49,6 @@ fn failed_initial_local_store_admission_does_not_publish_pipeline_owner() {
         "failure injection was not consumed"
     );
 }
-
 #[test]
 fn failed_new_uncertified_fetch_admission_preserves_exact_projection() {
     let fixture = Fixture::new();
@@ -60,7 +56,6 @@ fn failed_new_uncertified_fetch_admission_preserves_exact_projection() {
     let mut services = fixture.services();
     let before = executor.body_ownership_projection();
     services.fail_on = Some("fetch");
-
     assert!(
         executor
             .consume_effects(
@@ -83,7 +78,6 @@ fn failed_new_uncertified_fetch_admission_preserves_exact_projection() {
         "failure injection was not consumed"
     );
 }
-
 #[test]
 fn failed_new_certified_fetch_admission_preserves_request_indexes() {
     let fixture = Fixture::new();
@@ -93,7 +87,6 @@ fn failed_new_certified_fetch_admission_preserves_request_indexes() {
     let mut services = fixture.services();
     let before = executor.body_ownership_projection();
     services.fail_on = Some("fetch");
-
     assert!(
         executor
             .consume_effects(
@@ -116,7 +109,6 @@ fn failed_new_certified_fetch_admission_preserves_request_indexes() {
         "failure injection was not consumed"
     );
 }
-
 #[test]
 fn failed_newer_certified_fetch_retransmission_preserves_exact_projection() {
     let fixture = Fixture::new();
@@ -137,7 +129,6 @@ fn failed_newer_certified_fetch_retransmission_preserves_exact_projection() {
         .expect("admit initial certified fetch");
     let before = executor.body_ownership_projection();
     services.fail_on = Some("fetch");
-
     assert!(
         executor
             .consume_effects(vec![effect], &mut services)
@@ -150,7 +141,6 @@ fn failed_newer_certified_fetch_retransmission_preserves_exact_projection() {
         "failure injection was not consumed by the exact service retry"
     );
 }
-
 #[test]
 fn failed_existing_fetch_certificate_upgrade_preserves_request_indexes() {
     let fixture = Fixture::new();
@@ -173,7 +163,6 @@ fn failed_existing_fetch_certificate_upgrade_preserves_request_indexes() {
     let sources = certified_sources(&fixture, &prepare);
     let before = executor.body_ownership_projection();
     services.fail_on = Some("fetch");
-
     assert!(
         executor
             .consume_effects(
@@ -196,7 +185,6 @@ fn failed_existing_fetch_certificate_upgrade_preserves_request_indexes() {
         "failure injection was not consumed"
     );
 }
-
 #[test]
 fn failed_staged_exact_body_runtime_admission_preserves_ready_owner() {
     let fixture = Fixture::new();
@@ -209,7 +197,6 @@ fn failed_staged_exact_body_runtime_admission_preserves_ready_owner() {
     let mut services = fixture.services();
     let before = executor.body_ownership_projection();
     executor.runtime.fail_enqueue = true;
-
     assert!(
         executor
             .consume_effects(
@@ -228,7 +215,6 @@ fn failed_staged_exact_body_runtime_admission_preserves_ready_owner() {
     assert_eq!(executor.body_ownership_projection(), before);
     assert_eq!(executor.runtime.fail_enqueue_hits, 1);
 }
-
 #[test]
 fn failed_staged_conflict_replacement_preserves_ready_bytes() {
     let fixture = Fixture::new();
@@ -246,7 +232,6 @@ fn failed_staged_conflict_replacement_preserves_ready_bytes() {
     let mut services = fixture.services();
     let before = executor.body_ownership_projection();
     services.fail_on = Some("fetch");
-
     assert!(
         executor
             .consume_effects(
@@ -269,7 +254,6 @@ fn failed_staged_conflict_replacement_preserves_ready_bytes() {
         "failure injection was not consumed"
     );
 }
-
 #[test]
 fn failed_retained_locked_body_runtime_admission_preserves_exact_projection() {
     let fixture = Fixture::new();
@@ -281,7 +265,6 @@ fn failed_retained_locked_body_runtime_admission_preserves_exact_projection() {
     let mut services = fixture.services();
     let before = executor.body_ownership_projection();
     executor.runtime.fail_enqueue = true;
-
     assert!(
         executor
             .consume_effects(
@@ -300,7 +283,6 @@ fn failed_retained_locked_body_runtime_admission_preserves_exact_projection() {
     assert_eq!(executor.body_ownership_projection(), before);
     assert_eq!(executor.runtime.fail_enqueue_hits, 1);
 }
-
 #[test]
 fn late_fetch_conflict_does_not_fill_pipeline_owner_manifest() {
     let fixture = Fixture::new();
@@ -324,7 +306,6 @@ fn late_fetch_conflict_does_not_fill_pipeline_owner_manifest() {
     );
     let mut services = fixture.services();
     let before = executor.body_ownership_projection();
-
     assert!(
         executor
             .consume_effects(
@@ -342,7 +323,6 @@ fn late_fetch_conflict_does_not_fill_pipeline_owner_manifest() {
     );
     assert_eq!(executor.body_ownership_projection(), before);
 }
-
 #[test]
 fn failed_detached_store_runtime_admission_preserves_exact_projection() {
     let fixture = Fixture::new();
@@ -366,7 +346,6 @@ fn failed_detached_store_runtime_admission_preserves_exact_projection() {
     let mut services = fixture.services();
     let before = executor.body_ownership_projection();
     executor.runtime.fail_enqueue = true;
-
     assert!(
         executor
             .consume_effects(
@@ -385,7 +364,6 @@ fn failed_detached_store_runtime_admission_preserves_exact_projection() {
     assert_eq!(executor.body_ownership_projection(), before);
     assert_eq!(executor.runtime.fail_enqueue_hits, 1);
 }
-
 #[test]
 fn failed_recovered_body_runtime_admission_preserves_durable_catalogue() {
     let fixture = Fixture::new();
@@ -403,7 +381,6 @@ fn failed_recovered_body_runtime_admission_preserves_durable_catalogue() {
         .insert(key, (fixture.manifest.clone(), receipt));
     let before = executor.body_ownership_projection();
     executor.runtime.fail_enqueue = true;
-
     assert!(
         executor
             .consume_effects(
@@ -422,7 +399,6 @@ fn failed_recovered_body_runtime_admission_preserves_durable_catalogue() {
     assert_eq!(executor.body_ownership_projection(), before);
     assert_eq!(executor.runtime.fail_enqueue_hits, 1);
 }
-
 #[test]
 fn successful_new_certified_fetch_commits_exact_task_and_request_once() {
     let fixture = Fixture::new();
@@ -430,7 +406,6 @@ fn successful_new_certified_fetch_commits_exact_task_and_request_once() {
     let sources = certified_sources(&fixture, &prepare);
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -456,7 +431,6 @@ fn successful_new_certified_fetch_commits_exact_task_and_request_once() {
         BTreeMap::from([(request_hash, task.id())])
     );
 }
-
 #[test]
 fn successful_fetch_certificate_upgrade_commits_exact_delta_once() {
     let fixture = Fixture::new();
@@ -478,7 +452,6 @@ fn successful_fetch_certificate_upgrade_commits_exact_delta_once() {
     let id = services.fetch_tasks[0].id();
     let prepare = fixture.qc(wire::GlobalPhase::Prepare);
     let sources = certified_sources(&fixture, &prepare);
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -505,7 +478,6 @@ fn successful_fetch_certificate_upgrade_commits_exact_delta_once() {
         BTreeMap::from([(request_hash, id)])
     );
 }
-
 #[test]
 fn successful_staged_conflict_retires_old_ready_only_after_fetch_admission() {
     let fixture = Fixture::new();
@@ -522,7 +494,6 @@ fn successful_staged_conflict_retires_old_ready_only_after_fetch_admission() {
     executor.ready_body_bytes = old_ready_bytes;
     executor.ready_bodies.insert(key, ready);
     let mut services = fixture.services();
-
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
@@ -546,7 +517,6 @@ fn successful_staged_conflict_retires_old_ready_only_after_fetch_admission() {
         Some(HashOf::new(&incoming))
     );
 }
-
 #[test]
 fn successful_ready_store_handoff_shares_exact_bytes_without_copy() {
     let fixture = Fixture::new();
@@ -557,7 +527,6 @@ fn successful_ready_store_handoff_shares_exact_bytes_without_copy() {
         .admit_ready_body_for_test(&fixture, &mut services)
         .expect("ready body");
     let ready_bytes = Arc::clone(&executor.ready_bodies[&key].bytes);
-
     executor
         .consume_effects(
             vec![AdapterEffect::StoreBody {
@@ -578,7 +547,6 @@ fn successful_ready_store_handoff_shares_exact_bytes_without_copy() {
         u64::try_from(ready_bytes.len()).expect("body length")
     );
 }
-
 #[test]
 fn runtime_wal_step_panic_latches_restart_required_before_callbacks() {
     let fixture = Fixture::new();
@@ -586,11 +554,9 @@ fn runtime_wal_step_panic_latches_restart_required_before_callbacks() {
     executor.runtime.panic_step = true;
     let output_guard = Arc::clone(&executor.output_guard);
     let mut services = fixture.services();
-
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = executor.step(Instant::now(), &mut services);
     }));
-
     assert!(unwind.is_err());
     assert!(output_guard.restart_required());
     assert!(output_guard.acquire().is_none());
@@ -599,7 +565,6 @@ fn runtime_wal_step_panic_latches_restart_required_before_callbacks() {
     assert!(services.fetch_tasks.is_empty());
     assert!(services.store_tasks.is_empty());
 }
-
 #[test]
 fn failed_body_available_admission_preserves_exact_body_owners() {
     let fixture = Fixture::new();
@@ -610,7 +575,6 @@ fn failed_body_available_admission_preserves_exact_body_owners() {
         .expect("stage exact fetch");
     let before = executor.body_ownership_projection();
     executor.runtime.fail_enqueue = true;
-
     assert_eq!(
         executor.finish_fetch(work_id, ready, &mut services),
         Err(EffectTransportError::Backpressure)
@@ -619,7 +583,6 @@ fn failed_body_available_admission_preserves_exact_body_owners() {
     assert_eq!(executor.runtime.fail_enqueue_hits, 1);
     assert!(executor.fatal_reason.is_none());
 }
-
 #[test]
 fn failed_store_admission_preserves_ready_owner_and_accounting() {
     let fixture = Fixture::new();
@@ -630,7 +593,6 @@ fn failed_store_admission_preserves_ready_owner_and_accounting() {
         .expect("ready body");
     let before = executor.body_ownership_projection();
     services.fail_on = Some("store");
-
     assert!(
         executor
             .consume_effects(
@@ -650,7 +612,6 @@ fn failed_store_admission_preserves_ready_owner_and_accounting() {
         "failure injection was not consumed"
     );
 }
-
 #[test]
 fn failed_body_stored_runtime_admission_preserves_pending_store() {
     let fixture = Fixture::new();
@@ -673,7 +634,6 @@ fn failed_body_stored_runtime_admission_preserves_pending_store() {
     let completion = services.execute_store(store_id);
     let before = executor.body_ownership_projection();
     executor.runtime.fail_enqueue = true;
-
     assert!(
         executor
             .complete_body_store(completion, &mut services)
@@ -682,7 +642,6 @@ fn failed_body_stored_runtime_admission_preserves_pending_store() {
     assert_eq!(executor.body_ownership_projection(), before);
     assert_eq!(executor.runtime.fail_enqueue_hits, 1);
 }
-
 #[test]
 fn failed_local_validation_admission_preserves_pending_store() {
     let fixture = Fixture::new();
@@ -700,7 +659,6 @@ fn failed_local_validation_admission_preserves_pending_store() {
     let completion = services.execute_store(store_id);
     let before = executor.body_ownership_projection();
     services.fail_on = Some("validation");
-
     assert!(
         executor
             .complete_body_store(completion, &mut services)
@@ -713,7 +671,6 @@ fn failed_local_validation_admission_preserves_pending_store() {
         "failure injection was not consumed"
     );
 }
-
 #[test]
 fn failed_validation_admission_preserves_durable_owner() {
     let fixture = Fixture::new();
@@ -739,7 +696,6 @@ fn failed_validation_admission_preserves_durable_owner() {
         .expect("record durable body");
     let before = executor.body_ownership_projection();
     services.fail_on = Some("validation");
-
     assert!(
         executor
             .consume_effects(
@@ -759,7 +715,6 @@ fn failed_validation_admission_preserves_durable_owner() {
         "failure injection was not consumed"
     );
 }
-
 #[test]
 fn failed_validation_completion_admission_preserves_pending_validation() {
     let fixture = Fixture::new();
@@ -801,7 +756,6 @@ fn failed_validation_completion_admission_preserves_pending_validation() {
     let completion = services.execute_validation(validation_id);
     let before = executor.body_ownership_projection();
     executor.runtime.fail_enqueue = true;
-
     assert!(
         executor
             .complete_body_validation(completion, &mut services)
@@ -810,7 +764,6 @@ fn failed_validation_completion_admission_preserves_pending_validation() {
     assert_eq!(executor.body_ownership_projection(), before);
     assert_eq!(executor.runtime.fail_enqueue_hits, 1);
 }
-
 #[test]
 fn successful_ready_store_validation_handoff_has_one_exact_owner() {
     let fixture = Fixture::new();
@@ -840,7 +793,6 @@ fn successful_ready_store_validation_handoff_has_one_exact_owner() {
         executor.pending_stores[&store_id].task,
         services.store_tasks[0]
     );
-
     let stored = services.execute_store(store_id);
     executor
         .complete_body_store(stored, &mut services)
@@ -853,7 +805,6 @@ fn successful_ready_store_validation_handoff_has_one_exact_owner() {
         Some(RuntimeCompletion::BodyStored(completion_tag, round, subject, _))
             if *completion_tag == tag(0) && (*round, *subject) == key
     ));
-
     executor
         .consume_effects(
             vec![AdapterEffect::ValidateBody {
@@ -870,7 +821,6 @@ fn successful_ready_store_validation_handoff_has_one_exact_owner() {
         executor.pending_validations[&validation.id()].task,
         *validation
     );
-
     // Missing-sidecar completion is still a validation completion: it
     // cannot mutate deferred ownership or call recovery services before
     // the immutable consumer owner is checked. Build the state through
@@ -916,7 +866,6 @@ fn successful_ready_store_validation_handoff_has_one_exact_owner() {
             _ => unreachable!("the test enumerates exact owner corruptions"),
         }
         let before = executor.body_ownership_projection();
-
         let error = executor
             .complete_body_validation(
                 BodyValidationCompletion::DeferredMergeSidecar {
@@ -935,7 +884,6 @@ fn successful_ready_store_validation_handoff_has_one_exact_owner() {
         assert!(services.deferred_merge_sidecars.is_empty());
     }
 }
-
 impl V2EffectExecutor<FakeRuntime> {
     fn stage_body_fetch_for_test(
         &mut self,
@@ -959,7 +907,6 @@ impl V2EffectExecutor<FakeRuntime> {
         .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
         Ok((id, ready_body))
     }
-
     fn admit_ready_body_for_test(
         &mut self,
         fixture: &Fixture,

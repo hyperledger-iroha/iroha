@@ -10,7 +10,6 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
     runtime
         .arm_live_clocks(started_at)
         .expect("arm the restarted runtime before freezing its clock owner");
-
     let message = signed_runtime_timeout_vote(&context, &keys, 0, 1);
     let source = context.roster[1].validator.clone();
     let (_leader_wire_directory, leader_wire_ingress, ownerships) = preowned_leader_wire_ownerships(
@@ -40,7 +39,6 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
         RuntimeTimeoutVoteEpisodeAdmissionPlan::NonCandidate
     ));
     assert_eq!(non_candidate.count_transition(), (0, 0));
-
     let deadline = started_at + runtime.round_timeout();
     let periodic_owner = runtime
         .mint_fresh_lifecycle_owner(
@@ -60,7 +58,6 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
         .expect("the frozen timeout owns one immutable receiver cut");
     assert!(periodic_owner.lifecycle_ordinal() < timeout_owner.lifecycle_ordinal());
     assert!(receipt.token().scheduler_ordinal() < timeout_owner.lifecycle_ordinal());
-
     let timeout_cut_ordinal = u64::try_from(timeout_physical_cut)
         .expect("the small test receiver cut fits its physical ordinal");
     let replay_physical_ordinal = timeout_cut_ordinal
@@ -84,7 +81,6 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
         !runtime.can_admit_timeout_vote_recovery_episode(&message, &restored_pre_runtime,),
         "the durable TimeoutIntent must execute before a restored vote can cross retained debt"
     );
-
     let timeout_step = runtime
         .step(deadline)
         .expect("the frozen absolute timeout runs before the restored replay");
@@ -119,7 +115,6 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
             .as_ref()
             .is_some_and(|episode| episode.pre_frozen_retransmit.is_none())
     );
-
     runtime
         .freeze_due_clock_owners(deadline)
         .expect("a fresh post-timeout periodic episode remains enabled");
@@ -131,7 +126,6 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
         post_timeout_retransmit.lifecycle_ordinal() > timeout_owner.lifecycle_ordinal(),
         "periodic replenishment must remain outside the frozen recovery prefix"
     );
-
     assert_eq!(
         runtime.clock_owner_reservation_blockers_occurrence(
             receipt.token().scheduler_ordinal(),
@@ -155,7 +149,6 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
         runtime.can_admit_timeout_vote_recovery_episode(&message, &restored_pre_runtime,),
         "the exact current-view replay predates the dispatched timeout owner"
     );
-
     let mut restored_runtime = restored_pre_runtime;
     restored_runtime.runtime_physical_cut = u128::from(replay_physical_ordinal).checked_add(1);
     restored_runtime.leader_wire_runtime_receipt = Some(receipt.clone());
@@ -220,7 +213,6 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
         }),
         "TimeoutVote recovery remains ordinary Progress rather than certificate authority"
     );
-
     let replay_step = runtime
         .try_step_pacemaker_escape(deadline)
         .expect("ordinary Progress replay preserves the live pacemaker")
@@ -253,7 +245,6 @@ fn restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut() {
     assert_eq!(runtime.round_tag().view(), 0);
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
     let directory = TempDir::new().expect("temporary straddled-TV runtime directory");
@@ -266,7 +257,6 @@ fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
     let (_leader_wire_directory, leader_wire_ingress, ownerships) =
         preowned_leader_wire_ownerships(&context, &[], lifecycle_ordinals);
     assert!(ownerships.is_empty());
-
     let started_at = Instant::now();
     runtime
         .arm_live_clocks(started_at)
@@ -283,7 +273,6 @@ fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
-
     let deadline = started_at + runtime.round_timeout();
     let timeout_owner = runtime
         .frozen_timeout_owner_for_test(deadline)
@@ -307,7 +296,6 @@ fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
             .is_none(),
         "the vote cannot cross before TimeoutIntent owns its durable turn"
     );
-
     let timeout_step = runtime
         .step(deadline)
         .expect("the absolute timeout runs before the straddled vote");
@@ -330,7 +318,6 @@ fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
     runtime
         .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
         .expect("publish the pending timeout signer owner");
-
     let mut inbound = leader_wire_ingress
         .try_recv_if(|inbound| {
             let BlockMessage::V2(candidate) = inbound.message() else {
@@ -376,7 +363,6 @@ fn pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot() {
     assert_eq!(runtime.ingress.certified_fence_escape_credit(), 0);
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view() {
     let directory = TempDir::new().expect("temporary fresh-TV runtime directory");
@@ -389,7 +375,6 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
     let (_leader_wire_directory, leader_wire_ingress, ownerships) =
         preowned_leader_wire_ownerships(&context, &[], lifecycle_ordinals);
     assert!(ownerships.is_empty());
-
     let started_at = Instant::now();
     runtime
         .arm_live_clocks(started_at)
@@ -473,7 +458,6 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
             .expect("the restored roster universe validates"),
         Some(timeout_ordinal)
     );
-
     for signer in [1_u32, 2_u32] {
         let highest_prepare_qc = (signer == 2).then(|| {
             signed_runtime_quorum_certificate_for_phase(
@@ -534,7 +518,6 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
             RuntimeTimeoutVoteEpisodeAdmissionPlan::FirstAdmission { .. }
         ));
         assert_eq!(first_plan.count_transition(), (0, 1));
-
         runtime
             .enqueue_network_with_ingress_ownership(message.clone(), ownership)
             .expect("authenticate and admit the fresh TimeoutVote");
@@ -581,7 +564,6 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
             usize::try_from(signer).expect("small signer count"),
             "an exact retry is 1→1 rather than replenishment"
         );
-
         let queue_len_before_replacement = runtime.queued_commands();
         let owners_before_replacement = runtime
             .timeout_recovery_episode
@@ -657,7 +639,6 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
         owners_before_full,
         "queue-full preflight cannot publish a 0→1 episode refinement"
     );
-
     let local_signature = Signature::new(keys[0].private_key(), &signature_preimage)
         .payload()
         .to_vec();
@@ -667,7 +648,6 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
     runtime
         .set_external_lifecycle_owners(Vec::new())
         .expect("retire the external signer after queuing its completion");
-
     let mut saw_local_timeout_vote = false;
     let mut saw_timeout_certificate = false;
     let mut saw_enter_view = false;
@@ -720,7 +700,6 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
     assert!(runtime.timeout_recovery_episode.is_none());
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission() {
     let runtime_directory = TempDir::new().expect("temporary restored-TV runtime directory");
@@ -747,7 +726,6 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
     let token = first_receipt.token().clone();
     first_ingress.close();
     drop(first_ingress);
-
     let restored_ingress = Arc::new(
         super::super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             64,
@@ -824,7 +802,6 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
     restored_ingress
         .open()
         .expect("open restored fair ingress only after binding");
-
     let started_at = Instant::now();
     runtime
         .arm_live_clocks(started_at)
@@ -840,7 +817,6 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
     let timeout_cut = runtime
         .timeout_owner_physical_cut
         .expect("timeout freezes the restored receiver cut");
-
     assert!(matches!(
         restored_ingress.try_push(InboundBlockMessage::new(
             BlockMessage::V2(message.clone()),
@@ -861,7 +837,6 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
             .is_none(),
         "the restored carrier remains queued until TimeoutIntent is durable"
     );
-
     let timeout_step = runtime
         .step(deadline)
         .expect("absolute timeout dispatches before the restored handoff");
@@ -888,7 +863,6 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
     runtime
         .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
         .expect("publish the pending timeout signer owner");
-
     let mut replay = restored_ingress
         .try_recv_if(|inbound| {
             let BlockMessage::V2(candidate) = inbound.message() else {
@@ -925,7 +899,6 @@ fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admissi
     assert_eq!(runtime.ingress.certified_fence_escape_credit(), 0);
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() {
     let directory = TempDir::new().expect("temporary multi-source QC directory");
@@ -938,7 +911,6 @@ fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() 
     );
     let first_source = PeerId::new(keys[0].public_key().clone());
     let second_source = PeerId::new(keys[1].public_key().clone());
-
     assert_eq!(
         runtime
             .enqueue_network_with_ingress_ownership(
@@ -958,7 +930,6 @@ fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() 
         owner_tag
     );
     assert_eq!(runtime.queued_commands(), 1);
-
     let retained = runtime
         .ingress
         .commands
@@ -973,7 +944,6 @@ fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() 
         retained.direct[1].process_local_projection_hash(),
         "direct carrier projections must retain their distinct authenticated-source identities"
     );
-
     let mut source_substituted = retained.clone();
     let substituted_source = PeerId::from(KeyPair::random().public_key().clone());
     source_substituted.direct[0].first.wire_key.origin = Some(substituted_source.clone());
@@ -995,7 +965,6 @@ fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() 
         !source_substituted.validate_exact(),
         "the retained runtime projection must reject an otherwise exact source substitution"
     );
-
     let mut reordered = retained.clone();
     reordered.direct.reverse();
     assert!(
@@ -1004,7 +973,6 @@ fn exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot() 
     );
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn exact_authenticated_tc_from_distinct_sources_bypasses_signer_as_one_owner() {
     let directory = TempDir::new().expect("temporary multi-source TC directory");
@@ -1048,7 +1016,6 @@ fn exact_authenticated_tc_from_distinct_sources_bypasses_signer_as_one_owner() {
     runtime
         .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
         .expect("publish the pending timeout signer owner");
-
     for source in &keys[..2] {
         assert_eq!(
             runtime
@@ -1069,7 +1036,6 @@ fn exact_authenticated_tc_from_distinct_sources_bypasses_signer_as_one_owner() {
         .expect("the queued TC retains both fair-ingress carriers");
     assert_eq!(queued.direct.len(), 2);
     assert!(queued.validate_exact());
-
     let step = runtime
         .try_step_pacemaker_escape(deadline)
         .expect("certified pacemaker selection remains valid")
@@ -1113,7 +1079,6 @@ fn exact_authenticated_tc_from_distinct_sources_bypasses_signer_as_one_owner() {
     assert!(runtime.deferred_lifecycle_ownership.is_empty());
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically() {
     let directory = TempDir::new().expect("temporary conflicting route directory");
@@ -1129,7 +1094,6 @@ fn same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically() {
     let conflicting_route = routes
         .forge_equal_ordinal_different_tenure(&first_route, source.clone(), source.clone())
         .expect("fixture owns the conflicting route authority");
-
     assert!(matches!(
         super::super::InboundBlockMessage::try_from_transport_with_reply_route(
             super::super::message::BlockMessage::V2(message.clone()),
@@ -1151,7 +1115,6 @@ fn same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically() {
         .and_then(|queued| queued.ingress_ownership.as_ref())
         .expect("the queued QC retains its first route")
         .clone();
-
     let mut conflicting_ownership = retained_before.direct[0].clone();
     conflicting_ownership.attempts[0].route = conflicting_route.clone();
     conflicting_ownership.latest.attempts_after[0].route = conflicting_route;
@@ -1176,7 +1139,6 @@ fn same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically() {
         Some("network ingress changed its authenticated fair-queue ownership")
     );
 }
-
 #[test]
 fn runtime_ingress_carrier_capacity_returns_backpressure_atomically() {
     let directory = TempDir::new().expect("temporary carrier-capacity directory");
@@ -1215,7 +1177,6 @@ fn runtime_ingress_carrier_capacity_returns_backpressure_atomically() {
     let retained_before = retained.clone();
     let queued_before = runtime.queued_commands();
     let excess_carrier = carrier();
-
     assert!(matches!(
         runtime.enqueue_network_with_ingress_ownership(message, excess_carrier),
         Err(NetworkIngressError::Backpressure(EnqueueError::Full))
@@ -1236,7 +1197,6 @@ fn runtime_ingress_carrier_capacity_returns_backpressure_atomically() {
     assert!(!runtime.fail_closed);
     assert!(runtime.fail_closed_reason.is_none());
 }
-
 #[test]
 fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
     let round = wire::ConsensusRound {
@@ -1304,7 +1264,6 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
         Err(NetworkIngressError::FailClosed)
     ));
     let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(5, 1, 1));
-
     assert_eq!(
         ingress
             .enqueue_authenticated(tag(0), CommandClass::Normal, authenticated(1))
@@ -1321,7 +1280,6 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
         ingress.check_capacity(CommandClass::Normal),
         Err(EnqueueError::ReservedCapacity)
     );
-
     let cursor_before = ingress.next_class;
     let tags_before = ingress
         .commands
@@ -1350,7 +1308,6 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
         Err(EnqueueError::ReservedCapacity),
         "a non-identical envelope still obeys the normal boundary"
     );
-
     ingress
         .enqueue_authenticated(tag(2), CommandClass::Progress, authenticated(3))
         .expect("progress reserve remains independent");
@@ -1377,7 +1334,6 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
         ),
         Err(EnqueueError::Full)
     );
-
     let full_tags = ingress
         .commands
         .iter()
@@ -1410,7 +1366,6 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
         "wire inequality cannot inherit the duplicate's full-queue exception"
     );
 }
-
 #[test]
 fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
     let directory = TempDir::new().expect("temporary completion-coalescing directory");
@@ -1427,7 +1382,6 @@ fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
         let validated = ValidatedBodyReceipt::for_test(durable.clone());
         (durable, validated)
     };
-
     let ingress_manifest = runtime_manifest(&context, 0x91);
     let (durable, _) = receipts(&ingress_manifest);
     stage_completion_for_queue_test(
@@ -1463,7 +1417,6 @@ fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
             local_proposal: 0,
         }
     );
-
     let deferred_store = runtime_manifest(&context, 0x92);
     let (durable, _) = receipts(&deferred_store);
     let active_before_store = runtime.driver.all_deferred_admission_ordinals();
@@ -1525,7 +1478,6 @@ fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
             .expect("retirement cannot retain a phantom store owner"),
         None
     );
-
     let deferred_validation = runtime_manifest(&context, 0x93);
     let (_, validated) = receipts(&deferred_validation);
     runtime
@@ -1552,7 +1504,6 @@ fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
             deferred_validation.subject,
         )
         .expect("retire the coalesced Busy-deferred validation owner");
-
     let deferred_proposal = runtime_manifest(&context, 0x94);
     let (durable, validated) = receipts(&deferred_proposal);
     runtime
@@ -1575,7 +1526,6 @@ fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
         )
         .expect("retire the coalesced Busy-deferred proposal owner");
 }
-
 #[test]
 fn body_available_rebind_rejects_uninstalled_destination_without_mutation() {
     let directory = TempDir::new().expect("temporary uninstalled-rebind directory");
@@ -1591,7 +1541,6 @@ fn body_available_rebind_rejects_uninstalled_destination_without_mutation() {
     runtime
         .enqueue_body_available(source_tag, manifest.clone())
         .expect("enqueue unique source owner");
-
     assert_eq!(
         runtime
             .rebind_body_available(source_tag, fabricated, &manifest)
@@ -1621,7 +1570,6 @@ fn body_available_rebind_rejects_uninstalled_destination_without_mutation() {
     );
     assert_eq!(runtime.queued_commands(), 0);
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origin() {
@@ -1635,7 +1583,6 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
     runtime
         .arm_live_clocks(now)
         .expect("arm runtime for authenticated Proposal replay");
-
     let proposal = signed_runtime_proposal(&context, &keys, 0xA7);
     let mut wrong_signature = proposal.clone();
     let wire::ConsensusMessageV2Payload::Proposal(wrong) = &mut wrong_signature.payload else {
@@ -1710,7 +1657,6 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         "certified Fetch cannot inherit ordinary Proposal replay origin"
     );
     let _proposal_terminals = runtime.take_leader_wire_runtime_terminals();
-
     let reservation = runtime
         .reserve_body_available_with_owner(tag, manifest.clone(), &fetch_ownership)
         .expect("reserve exact reconstructed body");
@@ -1757,7 +1703,6 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         panic!("exact Fetch owner projects one Store replay carrier")
     };
     assert!(store_replay.exactly_matches_store_pending(store_effect, &store_pending));
-
     let durable = DurableBodyReceipt::for_test(
         context.id(),
         manifest.round,
@@ -1783,7 +1728,6 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         panic!("exact durable receipt completes Store replay evidence")
     };
     assert!(stored_replay.exactly_matches_store(store_effect, &durable));
-
     runtime
         .enqueue_body_stored_with_owner(
             tag,
@@ -1851,7 +1795,6 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
     assert_eq!(runtime.queued_commands(), queued_before_drop);
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn periodic_decision_store_retry_carries_durable_commit_authority() {
     let directory = TempDir::new().expect("temporary periodic Decision-store directory");
@@ -1894,7 +1837,6 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
     runtime
         .commit_body_available(reservation)
         .expect("publish the owned body reconstruction completion");
-
     let RuntimeStep::Advanced(store_effects) =
         runtime.step(now).expect("dispatch body reconstruction")
     else {
@@ -1930,7 +1872,6 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
             .body_state_for_test(manifest.round, manifest.subject),
         super::super::v2_core::BodyState::Available,
     );
-
     let durable = DurableBodyReceipt::for_test(
         context.id(),
         manifest.round,
@@ -1983,7 +1924,6 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
             decision.execution_commitment,
         )
         .expect("outer Decision reconciliation preserves body recovery");
-
     let periodic_at = now + runtime.retransmit_interval();
     let RuntimeStep::Advanced(recovery_effects) = runtime
         .step(periodic_at)

@@ -50,16 +50,13 @@
 //! slot. The context digest must bind the protocol/version/role and complete
 //! canonical slot-to-application-coordinate mapping; reusing it after a
 //! mapping, order, or interpretation change is a caller error.
-
 #[cfg(unix)]
 use std::fs::{self, Metadata};
 use std::{fs::File, io, path::Path};
-
 use aead::{AeadInOut as _, KeyInit as _};
 use chacha20poly1305::XChaCha20Poly1305;
 use rand_core::{OsRng, TryRngCore as _};
 use zeroize::{Zeroize as _, Zeroizing};
-
 const AAD_DOMAIN_V1: &[u8] = b"iroha.confidential-spool.aad.v1\0";
 const LAYOUT_DOMAIN_V1: &[u8] = b"iroha.confidential-spool.fixed-layout.v1\0";
 const SNAPSHOT_DIGEST_DOMAIN_V1: &[u8] = b"iroha.confidential-spool.snapshot-digest.v1\0";
@@ -69,52 +66,38 @@ const ARENA_ID_BYTES_V1: usize = 16;
 const NONCE_BYTES_V1: usize = 24;
 const TAG_BYTES_V1: u64 = 16;
 const CONTEXT_DIGEST_BYTES_V1: usize = 32;
-
 /// Maximum supported number of fixed write-once slots in one V1 spool.
 ///
 /// The limit covers all currently audited Phase23 layouts. Release integration
 /// must still admit only its exact approved layout tuples.
 pub const CONFIDENTIAL_SPOOL_MAX_SLOTS_V1: u64 = 466_560;
-
 /// Maximum supported plaintext bytes in one V1 record (16 KiB).
 pub const CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1: u64 = 16_384;
-
 /// Maximum supported detached-file bytes in one V1 spool.
 ///
 /// This is the audited 466,560-record Phase23 arena at 8,192 plaintext bytes
 /// plus one 16-byte tag per record.
 pub const CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1: u64 = 3_829_524_480;
-
 /// Width of the semantic coordinate bound to every confidential spool slot.
 pub const CONFIDENTIAL_SPOOL_COORDINATE_BYTES_V1: usize = 32;
-
 /// Canonical plaintext-record count in the Phase23 RNS-Link secret source.
 pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_RECORDS_V1: u64 = 43;
-
 /// Fixed 8 KiB blocks occupied by one Phase23 RNS-Link secret record.
 pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_PER_RECORD_V1: u64 = 896;
-
 /// Exact 8 KiB slot count in the Phase23 RNS-Link secret-main spool.
 pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_V1: u64 = 38_528;
-
 /// Exact plaintext bytes in one Phase23 RNS-Link secret-main slot.
 pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_PLAINTEXT_BYTES_V1: u64 = 8_192;
-
 /// Exact authenticated file bytes in the Phase23 RNS-Link secret-main spool.
 pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_FILE_BYTES_V1: u64 = 316_237_824;
-
 /// Exact slot count in the Phase23 RNS-Link secret-nonce spool.
 pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_SLOTS_V1: u64 = 43;
-
 /// Exact plaintext bytes in one Phase23 RNS-Link secret-nonce slot.
 pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_PLAINTEXT_BYTES_V1: u64 = 32;
-
 /// Exact authenticated file bytes in the Phase23 RNS-Link secret-nonce spool.
 pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_FILE_BYTES_V1: u64 = 2_064;
-
 /// Combined authenticated file bytes in both Phase23 RNS-Link secret spools.
 pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_TOTAL_FILE_BYTES_V1: u64 = 316_239_888;
-
 const _: () = {
     assert!(
         CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_V1
@@ -150,7 +133,6 @@ const _: () = {
             <= CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1
     );
 };
-
 /// Errors returned by the V1 confidential spool.
 ///
 /// Filesystem errors intentionally retain only a coarse operation label and
@@ -259,7 +241,6 @@ pub enum ConfidentialSpoolErrorV1 {
     #[error("confidential spool handle is poisoned")]
     Poisoned,
 }
-
 /// Immutable fixed-record layout and application context for one V1 spool.
 ///
 /// Constructing a layout performs all record, file, AAD, and
@@ -277,7 +258,6 @@ pub struct ConfidentialSpoolLayoutV1 {
     aad_len: usize,
     context_digest: [u8; CONTEXT_DIGEST_BYTES_V1],
 }
-
 impl ConfidentialSpoolLayoutV1 {
     /// Validate a fixed-record layout and its nonzero protocol-context digest.
     ///
@@ -313,7 +293,6 @@ impl ConfidentialSpoolLayoutV1 {
                 "plaintext record length",
             ));
         }
-
         let ciphertext_record_len = plaintext_len
             .checked_add(TAG_BYTES_V1)
             .ok_or(ConfidentialSpoolErrorV1::GeometryOverflow)?;
@@ -338,7 +317,6 @@ impl ConfidentialSpoolLayoutV1 {
             .and_then(|value| value.checked_add(CONFIDENTIAL_SPOOL_COORDINATE_BYTES_V1))
             .and_then(|value| value.checked_add(2 * size_of::<u64>()))
             .ok_or(ConfidentialSpoolErrorV1::GeometryOverflow)?;
-
         Ok(Self {
             slot_count,
             plaintext_len,
@@ -348,7 +326,6 @@ impl ConfidentialSpoolLayoutV1 {
             context_digest,
         })
     }
-
     /// Construct the sole approved Phase23 RNS-Link secret-main layout.
     ///
     /// The caller-supplied public digest must bind the protocol version, the
@@ -364,7 +341,6 @@ impl ConfidentialSpoolLayoutV1 {
             context_digest,
         )
     }
-
     /// Construct the sole approved Phase23 RNS-Link secret-nonce layout.
     ///
     /// The caller-supplied public digest must bind the protocol version, the
@@ -379,27 +355,22 @@ impl ConfidentialSpoolLayoutV1 {
             context_digest,
         )
     }
-
     /// Return the fixed number of write-once slots.
     pub const fn slot_count_v1(&self) -> u64 {
         self.slot_count
     }
-
     /// Return the exact plaintext bytes in every slot.
     pub const fn plaintext_len_v1(&self) -> u64 {
         self.plaintext_len
     }
-
     /// Return the exact on-disk bytes per slot, including the 16-byte tag.
     pub const fn ciphertext_record_len_v1(&self) -> u64 {
         self.ciphertext_record_len
     }
-
     /// Return the exact detached file length.
     pub const fn file_len_v1(&self) -> u64 {
         self.file_len
     }
-
     /// Return the exact persistent sequential-cursor bytes.
     ///
     /// This narrow accounting excludes Rust/allocator overhead, key and arena
@@ -408,7 +379,6 @@ impl ConfidentialSpoolLayoutV1 {
     pub const fn writer_cursor_bytes_v1(&self) -> u64 {
         8
     }
-
     fn slot_index_v1(&self, slot: u64) -> Result<usize, ConfidentialSpoolErrorV1> {
         if slot >= self.slot_count {
             return Err(ConfidentialSpoolErrorV1::SlotOutOfRange {
@@ -418,14 +388,12 @@ impl ConfidentialSpoolLayoutV1 {
         }
         usize::try_from(slot).map_err(|_| ConfidentialSpoolErrorV1::AddressSpaceExceeded)
     }
-
     fn slot_offset_v1(&self, slot: u64) -> Result<u64, ConfidentialSpoolErrorV1> {
         self.slot_index_v1(slot)?;
         slot.checked_mul(self.ciphertext_record_len)
             .ok_or(ConfidentialSpoolErrorV1::GeometryOverflow)
     }
 }
-
 /// Move-only, zeroizing owner for exactly one plaintext chunk.
 ///
 /// [`Self::new_zeroed_v1`] is the only public constructor. Before initializing
@@ -439,7 +407,6 @@ pub struct ConfidentialSpoolChunkV1 {
     bytes: Zeroizing<Vec<u8>>,
     len: u64,
 }
-
 impl ConfidentialSpoolChunkV1 {
     /// Fallibly allocate an exact-size, zero-filled plaintext owner.
     ///
@@ -475,23 +442,19 @@ impl ConfidentialSpoolChunkV1 {
             len: requested_len,
         })
     }
-
     /// Borrow the exact plaintext bytes without transferring ownership.
     pub fn as_slice_v1(&self) -> &[u8] {
         &self.bytes
     }
-
     /// Mutably borrow the exact plaintext bytes without transferring ownership.
     pub fn as_mut_slice_v1(&mut self) -> &mut [u8] {
         &mut self.bytes
     }
-
     /// Return the exact plaintext length.
     pub fn len_v1(&self) -> u64 {
         self.len
     }
 }
-
 impl Drop for ConfidentialSpoolChunkV1 {
     fn drop(&mut self) {
         // Explicitly zero here as well as relying on `Zeroizing` so tests can
@@ -504,7 +467,6 @@ impl Drop for ConfidentialSpoolChunkV1 {
         }
     }
 }
-
 /// Move-only writer for a fixed-layout authenticated confidential spool.
 ///
 /// Slots must be written exactly once in strict numeric order. Dropping or explicitly
@@ -514,7 +476,6 @@ pub struct ConfidentialSpoolWriterV1 {
     resources: Option<ConfidentialSpoolResourcesV1>,
     next_slot: u64,
 }
-
 impl ConfidentialSpoolWriterV1 {
     /// Create an empty spool in the caller-selected directory.
     ///
@@ -535,14 +496,12 @@ impl ConfidentialSpoolWriterV1 {
         let mut entropy = OsEntropyV1;
         Self::create_in_with_entropy_v1(directory.as_ref(), layout, &mut entropy)
     }
-
     fn create_in_with_entropy_v1(
         directory: &Path,
         layout: ConfidentialSpoolLayoutV1,
         entropy: &mut impl EntropySourceV1,
     ) -> Result<Self, ConfidentialSpoolErrorV1> {
         let mut file = create_detached_empty_file_v1(directory)?;
-
         // Allocate first, then ask the entropy source to fill the final key
         // allocation directly. The secret is never assembled in a stack array.
         let mut key = Box::new(Zeroizing::new([0_u8; KEY_BYTES_V1]));
@@ -561,7 +520,6 @@ impl ConfidentialSpoolWriterV1 {
             ));
         }
         file.size_v1(layout.file_len)?;
-
         Ok(Self {
             resources: Some(ConfidentialSpoolResourcesV1 {
                 file,
@@ -572,7 +530,6 @@ impl ConfidentialSpoolWriterV1 {
             next_slot: 0,
         })
     }
-
     /// Encrypt and write one previously empty slot.
     ///
     /// Slot bounds, chunk length, and duplicate-slot checks are pure caller
@@ -606,7 +563,6 @@ impl ConfidentialSpoolWriterV1 {
                 actual: chunk.len_v1(),
             });
         }
-
         let mut resources = self
             .resources
             .take()
@@ -624,7 +580,6 @@ impl ConfidentialSpoolWriterV1 {
             Err(error) => Err(error),
         }
     }
-
     /// Consume and authenticate every record, returning an immutable snapshot.
     ///
     /// Sealing requires all slots and the exact file length. It rereads slots in
@@ -664,11 +619,9 @@ impl ConfidentialSpoolWriterV1 {
             digest,
         })
     }
-
     /// Consume the writer and abort its unlinked backing resources.
     pub fn abort_v1(self) {}
 }
-
 /// Move-only immutable sealed handle for authenticated random reads.
 ///
 /// The handle has no write, reopen, path, key, or file accessor. Dropping or
@@ -681,7 +634,6 @@ pub struct ConfidentialSpoolSnapshotV1 {
     ciphertext_record_len: u64,
     file_len: u64,
 }
-
 impl ConfidentialSpoolSnapshotV1 {
     /// Return the deterministic encrypted-snapshot digest.
     ///
@@ -690,27 +642,22 @@ impl ConfidentialSpoolSnapshotV1 {
     pub const fn snapshot_digest_v1(&self) -> &[u8; 32] {
         &self.digest
     }
-
     /// Return the immutable slot count.
     pub const fn slot_count_v1(&self) -> u64 {
         self.slot_count
     }
-
     /// Return the immutable plaintext bytes per slot.
     pub const fn plaintext_len_v1(&self) -> u64 {
         self.plaintext_len
     }
-
     /// Return the immutable ciphertext bytes per record, including its tag.
     pub const fn ciphertext_record_len_v1(&self) -> u64 {
         self.ciphertext_record_len
     }
-
     /// Return the immutable detached-file length.
     pub const fn file_len_v1(&self) -> u64 {
         self.file_len
     }
-
     /// Authentically read one random-access slot into a zeroizing owner.
     ///
     /// Slot bounds and exact expected-context equality are pure caller
@@ -737,7 +684,6 @@ impl ConfidentialSpoolSnapshotV1 {
         if resources.layout.context_digest != expected_context_digest {
             return Err(ConfidentialSpoolErrorV1::ContextDigestMismatch);
         }
-
         let mut resources = self
             .resources
             .take()
@@ -751,24 +697,19 @@ impl ConfidentialSpoolSnapshotV1 {
             Err(error) => Err(error),
         }
     }
-
     /// Consume the snapshot and abort its unlinked backing resources.
     pub fn abort_v1(self) {}
 }
-
 struct ConfidentialSpoolResourcesV1 {
     file: ConfidentialSpoolFileV1,
     key: Box<Zeroizing<[u8; KEY_BYTES_V1]>>,
     arena_id: [u8; ARENA_ID_BYTES_V1],
     layout: ConfidentialSpoolLayoutV1,
 }
-
 trait EntropySourceV1 {
     fn fill_v1(&mut self, destination: &mut [u8]) -> Result<(), ConfidentialSpoolErrorV1>;
 }
-
 struct OsEntropyV1;
-
 impl EntropySourceV1 for OsEntropyV1 {
     fn fill_v1(&mut self, destination: &mut [u8]) -> Result<(), ConfidentialSpoolErrorV1> {
         OsRng
@@ -776,7 +717,6 @@ impl EntropySourceV1 for OsEntropyV1 {
             .map_err(|_| ConfidentialSpoolErrorV1::EntropyUnavailable)
     }
 }
-
 struct ConfidentialSpoolFileV1 {
     file: File,
     #[cfg(unix)]
@@ -786,7 +726,6 @@ struct ConfidentialSpoolFileV1 {
     #[cfg(test)]
     faults: TestFileFaultsV1,
 }
-
 impl ConfidentialSpoolFileV1 {
     #[cfg(unix)]
     fn new_v1(file: File, device: u64, inode: u64) -> Self {
@@ -798,7 +737,6 @@ impl ConfidentialSpoolFileV1 {
             faults: TestFileFaultsV1::default(),
         }
     }
-
     fn validate_detached_v1(&mut self, expected_len: u64) -> Result<(), ConfidentialSpoolErrorV1> {
         self.maybe_fail_v1(TestableFileOperationV1::Metadata)?;
         let metadata = self
@@ -808,7 +746,6 @@ impl ConfidentialSpoolFileV1 {
         #[cfg(unix)]
         {
             use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
             if !metadata.file_type().is_file()
                 || metadata.permissions().mode() & 0o7777 != 0o600
                 || metadata.nlink() != 0
@@ -831,14 +768,12 @@ impl ConfidentialSpoolFileV1 {
             Err(ConfidentialSpoolErrorV1::UnsupportedPlatform)
         }
     }
-
     fn size_v1(&mut self, file_len: u64) -> Result<(), ConfidentialSpoolErrorV1> {
         self.file
             .set_len(file_len)
             .map_err(|error| file_error_v1("set-len", error))?;
         self.validate_detached_v1(file_len)
     }
-
     fn write_all_at_v1(
         &mut self,
         bytes: &[u8],
@@ -847,7 +782,6 @@ impl ConfidentialSpoolFileV1 {
         self.maybe_fail_v1(TestableFileOperationV1::Write)?;
         write_all_at_v1(&self.file, bytes, offset)
     }
-
     fn read_exact_at_v1(
         &mut self,
         bytes: &mut [u8],
@@ -856,7 +790,6 @@ impl ConfidentialSpoolFileV1 {
         self.maybe_fail_v1(TestableFileOperationV1::Read)?;
         read_exact_at_v1(&self.file, bytes, offset)
     }
-
     #[cfg(not(test))]
     fn maybe_fail_v1(
         &mut self,
@@ -864,7 +797,6 @@ impl ConfidentialSpoolFileV1 {
     ) -> Result<(), ConfidentialSpoolErrorV1> {
         Ok(())
     }
-
     #[cfg(test)]
     fn maybe_fail_v1(
         &mut self,
@@ -873,20 +805,17 @@ impl ConfidentialSpoolFileV1 {
         self.faults.check_v1(operation)
     }
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TestableFileOperationV1 {
     Metadata,
     Read,
     Write,
 }
-
 fn bytes_are_constant_v1(bytes: &[u8]) -> bool {
     bytes
         .first()
         .is_some_and(|first| bytes.iter().all(|byte| byte == first))
 }
-
 fn write_slot_operation_v1(
     resources: &mut ConfidentialSpoolResourcesV1,
     slot: u64,
@@ -912,7 +841,6 @@ fn write_slot_operation_v1(
     ensure_safe_detached_file_v1(resources)?;
     Ok(())
 }
-
 fn seal_operation_v1(
     resources: &mut ConfidentialSpoolResourcesV1,
 ) -> Result<[u8; 32], ConfidentialSpoolErrorV1> {
@@ -924,7 +852,6 @@ fn seal_operation_v1(
     let mut aad = allocate_aad_v1(&resources.layout)?;
     let mut hasher = blake3::Hasher::new();
     hash_snapshot_prefix_v1(&mut hasher, &resources.layout, &resources.arena_id);
-
     for slot in 0..resources.layout.slot_count {
         let coordinate = derived_coordinate_v1(&resources.layout, slot);
         let offset = resources.layout.slot_offset_v1(slot)?;
@@ -937,13 +864,11 @@ fn seal_operation_v1(
         resources
             .file
             .read_exact_at_v1(tag.as_mut_slice(), tag_offset)?;
-
         hasher.update(&slot.to_be_bytes());
         hasher.update(&coordinate);
         hasher.update(&resources.layout.ciphertext_record_len.to_be_bytes());
         hasher.update(chunk.as_slice_v1());
         hasher.update(tag.as_slice());
-
         let nonce = nonce_v1(&resources.arena_id, slot);
         fill_aad_v1(
             &mut aad,
@@ -960,7 +885,6 @@ fn seal_operation_v1(
     ensure_safe_detached_file_v1(resources)?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn read_slot_operation_v1(
     resources: &mut ConfidentialSpoolResourcesV1,
     slot: u64,
@@ -989,7 +913,6 @@ fn read_slot_operation_v1(
         .map_err(|_| ConfidentialSpoolErrorV1::Authentication)?;
     Ok(chunk)
 }
-
 fn derived_coordinate_v1(
     layout: &ConfidentialSpoolLayoutV1,
     slot: u64,
@@ -1003,7 +926,6 @@ fn derived_coordinate_v1(
     hasher.update(&slot.to_be_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn ensure_safe_detached_file_v1(
     resources: &mut ConfidentialSpoolResourcesV1,
 ) -> Result<(), ConfidentialSpoolErrorV1> {
@@ -1011,7 +933,6 @@ fn ensure_safe_detached_file_v1(
         .file
         .validate_detached_v1(resources.layout.file_len)
 }
-
 fn nonce_v1(arena_id: &[u8; ARENA_ID_BYTES_V1], slot: u64) -> aead::Nonce<XChaCha20Poly1305> {
     let mut nonce = aead::Nonce::<XChaCha20Poly1305>::default();
     debug_assert_eq!(nonce.len(), NONCE_BYTES_V1);
@@ -1019,7 +940,6 @@ fn nonce_v1(arena_id: &[u8; ARENA_ID_BYTES_V1], slot: u64) -> aead::Nonce<XChaCh
     nonce[ARENA_ID_BYTES_V1..].copy_from_slice(&slot.to_be_bytes());
     nonce
 }
-
 fn aad_v1(
     layout: &ConfidentialSpoolLayoutV1,
     arena_id: &[u8; ARENA_ID_BYTES_V1],
@@ -1030,7 +950,6 @@ fn aad_v1(
     fill_aad_v1(&mut aad, layout, arena_id, slot, coordinate);
     Ok(aad)
 }
-
 fn allocate_aad_v1(
     layout: &ConfidentialSpoolLayoutV1,
 ) -> Result<Zeroizing<Vec<u8>>, ConfidentialSpoolErrorV1> {
@@ -1045,7 +964,6 @@ fn allocate_aad_v1(
     aad.resize(layout.aad_len, 0);
     Ok(Zeroizing::new(aad))
 }
-
 fn fill_aad_v1(
     aad: &mut Zeroizing<Vec<u8>>,
     layout: &ConfidentialSpoolLayoutV1,
@@ -1078,13 +996,11 @@ fn fill_aad_v1(
     );
     debug_assert_eq!(offset, layout.aad_len);
 }
-
 fn write_aad_field_v1(output: &mut [u8], offset: &mut usize, field: &[u8]) {
     let end = *offset + field.len();
     output[*offset..end].copy_from_slice(field);
     *offset = end;
 }
-
 fn hash_snapshot_prefix_v1(
     hasher: &mut blake3::Hasher,
     layout: &ConfidentialSpoolLayoutV1,
@@ -1099,20 +1015,17 @@ fn hash_snapshot_prefix_v1(
     hasher.update(&layout.context_digest);
     hasher.update(arena_id);
 }
-
 fn file_error_v1(operation: &'static str, error: io::Error) -> ConfidentialSpoolErrorV1 {
     ConfidentialSpoolErrorV1::FileOperation {
         operation,
         kind: error.kind(),
     }
 }
-
 #[cfg(unix)]
 fn create_detached_empty_file_v1(
     directory: &Path,
 ) -> Result<ConfidentialSpoolFileV1, ConfidentialSpoolErrorV1> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
     let named = tempfile::Builder::new()
         .prefix(".iroha-confidential-spool-v1-")
         .tempfile_in(directory)
@@ -1133,7 +1046,6 @@ fn create_detached_empty_file_v1(
     {
         return Err(ConfidentialSpoolErrorV1::TemporaryFileIdentityMismatch);
     }
-
     let (file, temp_path) = named.into_parts();
     temp_path
         .close()
@@ -1150,7 +1062,6 @@ fn create_detached_empty_file_v1(
     {
         return Err(ConfidentialSpoolErrorV1::UnsafeDetachedFile);
     }
-
     // TODO: Replace this pathname-oriented tempfile setup with a reviewed
     // dirfd/openat/O_NOFOLLOW construction, then add mlock, MADV_DONTDUMP,
     // fork/descriptor policy, swap/core-dump policy, page-cache, crash,
@@ -1162,24 +1073,20 @@ fn create_detached_empty_file_v1(
         detached_metadata.ino(),
     ))
 }
-
 #[cfg(unix)]
 fn safe_pre_unlink_metadata_v1(metadata: &Metadata) -> bool {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
     metadata.file_type().is_file()
         && metadata.len() == 0
         && metadata.permissions().mode() & 0o7777 == 0o600
         && metadata.nlink() == 1
 }
-
 #[cfg(not(unix))]
 fn create_detached_empty_file_v1(
     _directory: &Path,
 ) -> Result<ConfidentialSpoolFileV1, ConfidentialSpoolErrorV1> {
     Err(ConfidentialSpoolErrorV1::UnsupportedPlatform)
 }
-
 #[cfg(unix)]
 fn write_all_at_v1(
     file: &File,
@@ -1187,7 +1094,6 @@ fn write_all_at_v1(
     mut offset: u64,
 ) -> Result<(), ConfidentialSpoolErrorV1> {
     use std::os::unix::fs::FileExt as _;
-
     while !bytes.is_empty() {
         let written = file
             .write_at(bytes, offset)
@@ -1208,7 +1114,6 @@ fn write_all_at_v1(
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn write_all_at_v1(
     _file: &File,
@@ -1217,7 +1122,6 @@ fn write_all_at_v1(
 ) -> Result<(), ConfidentialSpoolErrorV1> {
     Err(ConfidentialSpoolErrorV1::UnsupportedPlatform)
 }
-
 #[cfg(unix)]
 fn read_exact_at_v1(
     file: &File,
@@ -1225,7 +1129,6 @@ fn read_exact_at_v1(
     mut offset: u64,
 ) -> Result<(), ConfidentialSpoolErrorV1> {
     use std::os::unix::fs::FileExt as _;
-
     while !bytes.is_empty() {
         let read = file
             .read_at(bytes, offset)
@@ -1246,7 +1149,6 @@ fn read_exact_at_v1(
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn read_exact_at_v1(
     _file: &File,
@@ -1255,7 +1157,6 @@ fn read_exact_at_v1(
 ) -> Result<(), ConfidentialSpoolErrorV1> {
     Err(ConfidentialSpoolErrorV1::UnsupportedPlatform)
 }
-
 #[cfg(test)]
 #[derive(Default)]
 struct TestFileFaultsV1 {
@@ -1263,7 +1164,6 @@ struct TestFileFaultsV1 {
     fail_after: Option<(TestableFileOperationV1, usize)>,
     panic_next: Option<TestableFileOperationV1>,
 }
-
 #[cfg(test)]
 impl TestFileFaultsV1 {
     fn check_v1(
@@ -1296,20 +1196,16 @@ impl TestFileFaultsV1 {
         Ok(())
     }
 }
-
 #[cfg(test)]
 static TEST_ZEROIZED_CHUNK_DROPS_V1: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-
 #[cfg(test)]
 mod tests {
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         sync::atomic::Ordering,
     };
-
     use super::*;
-
     struct ScriptedEntropyV1 {
         key_byte: u8,
         arena_byte: u8,
@@ -1317,7 +1213,6 @@ mod tests {
         fail_call: Option<usize>,
         constant_call: Option<usize>,
     }
-
     impl ScriptedEntropyV1 {
         fn new_v1(key_byte: u8, arena_byte: u8) -> Self {
             Self {
@@ -1329,7 +1224,6 @@ mod tests {
             }
         }
     }
-
     impl EntropySourceV1 for ScriptedEntropyV1 {
         fn fill_v1(&mut self, destination: &mut [u8]) -> Result<(), ConfidentialSpoolErrorV1> {
             let call = self.calls.len();
@@ -1353,16 +1247,13 @@ mod tests {
             Ok(())
         }
     }
-
     fn layout_v1(slots: u64, plaintext_len: u64, context: &[u8]) -> ConfidentialSpoolLayoutV1 {
         ConfidentialSpoolLayoutV1::new_v1(slots, plaintext_len, context_digest_v1(context))
             .expect("valid test layout")
     }
-
     fn context_digest_v1(context: &[u8]) -> [u8; CONTEXT_DIGEST_BYTES_V1] {
         *blake3::hash(context).as_bytes()
     }
-
     fn writer_v1(
         directory: &Path,
         slots: u64,
@@ -1377,7 +1268,6 @@ mod tests {
         )
         .expect("create test spool")
     }
-
     fn chunk_v1(bytes: &[u8]) -> ConfidentialSpoolChunkV1 {
         let mut chunk = ConfidentialSpoolChunkV1::new_zeroed_v1(
             u64::try_from(bytes.len()).expect("test length"),
@@ -1386,11 +1276,9 @@ mod tests {
         chunk.as_mut_slice_v1().copy_from_slice(bytes);
         chunk
     }
-
     #[cfg(unix)]
     fn assert_live_descriptor_v1(resources: &ConfidentialSpoolResourcesV1) {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
         let metadata = resources.file.file.metadata().expect("descriptor metadata");
         assert!(metadata.file_type().is_file());
         assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
@@ -1399,7 +1287,6 @@ mod tests {
         assert_eq!(metadata.ino(), resources.file.inode);
         assert_eq!(metadata.len(), resources.layout.file_len);
     }
-
     #[cfg(unix)]
     fn read_record_v1(resources: &mut ConfidentialSpoolResourcesV1, slot: u64) -> Vec<u8> {
         let len =
@@ -1415,7 +1302,6 @@ mod tests {
             .expect("read test ciphertext record");
         record
     }
-
     #[cfg(unix)]
     fn overwrite_record_v1(resources: &mut ConfidentialSpoolResourcesV1, slot: u64, record: &[u8]) {
         assert_eq!(
@@ -1431,13 +1317,11 @@ mod tests {
             .write_all_at_v1(record, offset)
             .expect("overwrite test ciphertext record");
     }
-
     #[test]
     fn release_geometries_are_exact_and_headerless() {
         let q_pcs = layout_v1(194_560, 16_384, b"q-pcs-ten-row-lde-v1");
         assert_eq!(q_pcs.ciphertext_record_len_v1(), 16_400);
         assert_eq!(q_pcs.file_len_v1(), 3_190_784_000);
-
         let main = layout_v1(466_560, 8_192, b"phase23-external-records-v1");
         assert_eq!(main.ciphertext_record_len_v1(), 8_208);
         assert_eq!(main.file_len_v1(), 3_829_524_480);
@@ -1445,7 +1329,6 @@ mod tests {
         let nonce = layout_v1(43, 32, b"phase23-secret-nonces-v1");
         assert_eq!(nonce.file_len_v1(), 2_064);
         assert_eq!(main.file_len_v1() + nonce.file_len_v1(), 3_829_526_544);
-
         let secret_main = ConfidentialSpoolLayoutV1::phase23_rns_link_secret_main_v1(
             context_digest_v1(b"phase23-rns-link-secret-main-v1"),
         )
@@ -1467,7 +1350,6 @@ mod tests {
             CONFIDENTIAL_SPOOL_PHASE23_SECRET_TOTAL_FILE_BYTES_V1
         );
     }
-
     #[test]
     fn geometry_and_context_rejections_precede_external_effects() {
         assert!(matches!(
@@ -1517,7 +1399,6 @@ mod tests {
             Err(ConfidentialSpoolErrorV1::LimitExceeded("file length"))
         ));
     }
-
     #[test]
     fn standalone_chunk_constructor_enforces_exact_public_bounds() {
         assert!(matches!(
@@ -1543,7 +1424,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     #[cfg(unix)]
     fn entropy_fills_final_heap_key_then_independent_arena() {
@@ -1557,7 +1437,6 @@ mod tests {
         .expect("create spool");
         let resources = writer.resources.as_ref().expect("live resources");
         assert_live_descriptor_v1(resources);
-
         assert_eq!(entropy.calls.len(), 2);
         assert_eq!(entropy.calls[0].1, KEY_BYTES_V1);
         assert_eq!(entropy.calls[1].1, ARENA_ID_BYTES_V1);
@@ -1568,7 +1447,6 @@ mod tests {
         assert!(!bytes_are_constant_v1(&resources.arena_id));
         assert_ne!(entropy.calls[0].0, entropy.calls[1].0);
     }
-
     #[test]
     #[cfg(unix)]
     fn entropy_failure_and_inert_material_fail_closed() {
@@ -1583,7 +1461,6 @@ mod tests {
             ),
             Err(ConfidentialSpoolErrorV1::EntropyUnavailable)
         ));
-
         let mut inert_key = ScriptedEntropyV1::new_v1(0, 0x52);
         inert_key.constant_call = Some(0);
         assert!(matches!(
@@ -1616,7 +1493,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     #[cfg(unix)]
     fn public_os_entropy_abort_and_snapshot_geometry_lifecycle() {
@@ -1625,7 +1501,6 @@ mod tests {
         ConfidentialSpoolWriterV1::create_in_v1(abort_directory.path(), layout)
             .expect("create public writer")
             .abort_v1();
-
         let snapshot_directory = tempfile::tempdir().expect("snapshot temporary directory");
         let mut writer = ConfidentialSpoolWriterV1::create_in_v1(snapshot_directory.path(), layout)
             .expect("create public writer");
@@ -1640,7 +1515,6 @@ mod tests {
         assert_eq!(snapshot.file_len_v1(), 20);
         snapshot.abort_v1();
     }
-
     #[test]
     fn nonce_and_aad_framing_are_exact() {
         let layout = layout_v1(3, 5, b"ctx");
@@ -1650,7 +1524,6 @@ mod tests {
         assert_eq!(nonce.len(), NONCE_BYTES_V1);
         assert_eq!(&nonce[..ARENA_ID_BYTES_V1], &arena);
         assert_eq!(&nonce[ARENA_ID_BYTES_V1..], &2_u64.to_be_bytes());
-
         let aad = aad_v1(&layout, &arena, 2, &coordinate).expect("AAD");
         let mut expected = Vec::new();
         expected.extend_from_slice(AAD_DOMAIN_V1);
@@ -1667,7 +1540,6 @@ mod tests {
         expected.extend_from_slice(&21_u64.to_be_bytes());
         assert_eq!(aad.as_slice(), expected.as_slice());
         assert_eq!(aad.len(), aad.capacity());
-
         let mut coordinate_frame = Vec::new();
         coordinate_frame.extend_from_slice(COORDINATE_DOMAIN_V1);
         coordinate_frame.extend_from_slice(blake3::hash(b"ctx").as_bytes());
@@ -1677,7 +1549,6 @@ mod tests {
         coordinate_frame.extend_from_slice(&2_u64.to_be_bytes());
         assert_eq!(coordinate, *blake3::hash(&coordinate_frame).as_bytes());
     }
-
     #[test]
     fn derived_coordinate_separates_context_layout_and_slot() {
         let base = layout_v1(3, 5, b"coordinate-base");
@@ -1685,13 +1556,11 @@ mod tests {
         let other_count = layout_v1(4, 5, b"coordinate-base");
         let other_length = layout_v1(3, 6, b"coordinate-base");
         let coordinate = derived_coordinate_v1(&base, 0);
-
         assert_ne!(coordinate, derived_coordinate_v1(&base, 1));
         assert_ne!(coordinate, derived_coordinate_v1(&other_context, 0));
         assert_ne!(coordinate, derived_coordinate_v1(&other_count, 0));
         assert_ne!(coordinate, derived_coordinate_v1(&other_length, 0));
     }
-
     #[test]
     #[cfg(unix)]
     fn deterministic_inputs_have_one_canonical_authenticated_digest() {
@@ -1708,12 +1577,10 @@ mod tests {
                 .write_slot_v1(slot, chunk_v1(&[byte; 4]))
                 .expect("write second snapshot");
         }
-
         let first = first.seal_v1().expect("seal first");
         let second = second.seal_v1().expect("seal second");
         assert_eq!(first.snapshot_digest_v1(), second.snapshot_digest_v1());
     }
-
     #[test]
     #[cfg(unix)]
     fn sequential_duplicate_skip_length_and_bounds_preflights_preserve_retry() {
@@ -1759,7 +1626,6 @@ mod tests {
         assert!(writer.resources.is_some());
         writer.seal_v1().expect("complete seal");
     }
-
     #[test]
     #[cfg(unix)]
     fn roundtrip_and_bounds_preflight_preserve_random_read_snapshot() {
@@ -1816,7 +1682,6 @@ mod tests {
             .expect("random authenticated read");
         assert_eq!(first.as_slice_v1(), b"abcd");
     }
-
     #[test]
     #[cfg(unix)]
     fn injected_write_error_and_unwind_poison_and_zeroize() {
@@ -1836,7 +1701,6 @@ mod tests {
         ));
         assert!(writer.resources.is_none());
         assert!(TEST_ZEROIZED_CHUNK_DROPS_V1.load(Ordering::SeqCst) > before);
-
         let tag_dir = tempfile::tempdir().expect("tag-write temporary directory");
         let mut writer = writer_v1(tag_dir.path(), 1, 4, b"tag-write-error");
         writer
@@ -1856,7 +1720,6 @@ mod tests {
             writer.write_slot_v1(0, chunk_v1(b"abcd")),
             Err(ConfidentialSpoolErrorV1::Poisoned)
         ));
-
         let unwind_dir = tempfile::tempdir().expect("unwind temporary directory");
         let mut writer = writer_v1(unwind_dir.path(), 1, 4, b"write-unwind");
         writer
@@ -1874,7 +1737,6 @@ mod tests {
         assert!(writer.resources.is_none());
         assert!(TEST_ZEROIZED_CHUNK_DROPS_V1.load(Ordering::SeqCst) > before);
     }
-
     #[test]
     #[cfg(unix)]
     fn seal_authenticates_tampering_and_requires_every_slot() {
@@ -1887,7 +1749,6 @@ mod tests {
             incomplete.seal_v1(),
             Err(ConfidentialSpoolErrorV1::Incomplete { remaining: 1 })
         ));
-
         let tamper_dir = tempfile::tempdir().expect("tamper temporary directory");
         let mut tampered = writer_v1(tamper_dir.path(), 1, 4, b"tamper");
         tampered
@@ -1908,7 +1769,6 @@ mod tests {
             tampered.seal_v1(),
             Err(ConfidentialSpoolErrorV1::Authentication)
         ));
-
         let tag_dir = tempfile::tempdir().expect("tag-tamper temporary directory");
         let mut tampered = writer_v1(tag_dir.path(), 1, 4, b"tag-tamper");
         tampered
@@ -1931,7 +1791,6 @@ mod tests {
             Err(ConfidentialSpoolErrorV1::Authentication)
         ));
     }
-
     #[test]
     #[cfg(unix)]
     fn seal_rejects_record_duplicate_swap_and_cross_arena_replay() {
@@ -1950,7 +1809,6 @@ mod tests {
             duplicate.seal_v1(),
             Err(ConfidentialSpoolErrorV1::Authentication)
         ));
-
         let swap_dir = tempfile::tempdir().expect("swap temporary directory");
         let mut swapped = writer_v1(swap_dir.path(), 2, 4, b"swap-records");
         swapped
@@ -1968,7 +1826,6 @@ mod tests {
             swapped.seal_v1(),
             Err(ConfidentialSpoolErrorV1::Authentication)
         ));
-
         let source_dir = tempfile::tempdir().expect("source-arena temporary directory");
         let target_dir = tempfile::tempdir().expect("target-arena temporary directory");
         let layout = layout_v1(1, 4, b"cross-arena");
@@ -2003,7 +1860,6 @@ mod tests {
             Err(ConfidentialSpoolErrorV1::Authentication)
         ));
     }
-
     #[test]
     #[cfg(unix)]
     fn seal_rejects_key_arena_context_and_file_geometry_substitution() {
@@ -2025,7 +1881,6 @@ mod tests {
                 Err(ConfidentialSpoolErrorV1::Authentication)
             ));
         }
-
         for changed_len in [19_u64, 21] {
             let directory = tempfile::tempdir().expect("geometry temporary directory");
             let mut writer = writer_v1(directory.path(), 1, 4, b"geometry-substitution");
@@ -2046,7 +1901,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     #[cfg(unix)]
     fn every_operational_read_error_poison_drops_resources() {
@@ -2070,7 +1924,6 @@ mod tests {
             snapshot.read_slot_v1(0, context_digest_v1(b"read-failure")),
             Err(ConfidentialSpoolErrorV1::Poisoned)
         ));
-
         let unwind_dir = tempfile::tempdir().expect("read-unwind temporary directory");
         let mut writer = writer_v1(unwind_dir.path(), 1, 4, b"read-unwind");
         writer
@@ -2090,7 +1943,6 @@ mod tests {
         assert!(unwind.is_err());
         assert!(snapshot.resources.is_none());
     }
-
     #[test]
     #[cfg(unix)]
     fn each_read_revalidates_exact_file_length() {
@@ -2115,12 +1967,10 @@ mod tests {
         ));
         assert!(snapshot.resources.is_none());
     }
-
     #[test]
     #[cfg(unix)]
     fn each_read_revalidates_private_descriptor_mode() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let directory = tempfile::tempdir().expect("temporary directory");
         let mut writer = writer_v1(directory.path(), 1, 4, b"mode-recheck");
         writer.write_slot_v1(0, chunk_v1(b"abcd")).expect("write");
@@ -2139,7 +1989,6 @@ mod tests {
         ));
         assert!(snapshot.resources.is_none());
     }
-
     #[test]
     fn public_owners_have_no_clone_debug_or_escape_surface_in_source() {
         let source = include_str!("lib.rs");
@@ -2150,7 +1999,6 @@ mod tests {
             .split_once(TEST_MODULE_MARKER)
             .expect("inline test module marker")
             .0;
-
         fn public_method_names_v1(region: &str) -> Vec<&str> {
             region
                 .lines()
@@ -2162,7 +2010,6 @@ mod tests {
                 })
                 .collect()
         }
-
         let chunk_start = production
             .find("pub struct ConfidentialSpoolChunkV1")
             .expect("chunk owner declaration");

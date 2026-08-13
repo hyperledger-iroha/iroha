@@ -2,7 +2,6 @@
 //!
 //! The supervisor prepares filesystem layouts, generates a Kagami-aligned
 //! default genesis manifest, and can launch or stop child `iroha3d` processes.
-
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     env,
@@ -17,10 +16,8 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_prove,
 };
@@ -42,7 +39,6 @@ use once_cell::sync::OnceCell;
 use rand::{TryRngCore as _, rngs::OsRng};
 use tokio::runtime::Handle;
 use zeroize::{Zeroize as _, Zeroizing};
-
 use crate::{
     compose::{SigningAuthority, development_signing_authorities},
     config::{
@@ -62,17 +58,14 @@ use crate::{
     },
     vault::{SignerVault, SignerVaultError},
 };
-
 mod generation_lifecycle;
 mod ownership;
 mod selected_storage;
-
 use ownership::SupervisorOwnershipLock;
 #[cfg(test)]
 use selected_storage::resolve_selected_peer_storage_paths_with_hook;
 use selected_storage::validate_selected_peer_storage_paths_under_lock;
 pub use selected_storage::{SelectedPeerStoragePaths, resolve_selected_peer_storage_paths};
-
 const DEFAULT_CHAIN_ID: &str = "mochi-local";
 const DEFAULT_TORII_BASE_PORT: u16 = 8080;
 const DEFAULT_P2P_BASE_PORT: u16 = 1337;
@@ -5373,6 +5366,5 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
 }
 include!("supervisor/copy_helpers.rs");
 include!("supervisor/snapshot_hash_helpers.rs");
-
 #[cfg(test)]
 mod tests;

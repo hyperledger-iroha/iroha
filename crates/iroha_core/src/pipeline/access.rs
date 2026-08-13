@@ -2,13 +2,11 @@
 //!
 //! Produces deterministic read/write key sets to feed the conflict-aware
 //! scheduler described in `new_pipeline.md`.
-
 use core::fmt::Write as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, OnceLock},
 };
-
 use iroha_crypto::Hash as IrohaHash;
 // ZK ISIs live in the data model; import the module for pattern matches
 use iroha_data_model::isi::ExecuteTrigger;
@@ -39,7 +37,6 @@ use iroha_data_model::{
 use ivm::host::IVMHost;
 use mv::storage::StorageReadOnly; // bring trait into scope for .get()
 use parking_lot::RwLock;
-
 use crate::{
     executor::transaction_gas_limit,
     smartcontracts::triggers::set::{ExecutableRef, SetReadOnly},
@@ -1282,7 +1279,6 @@ fn hint_access_set_with_dynamic_if_safe(
     }
     for syscall in &report.syscalls {
         use ivm::syscalls::SyscallAccess;
-
         let covered = match ivm::syscalls::syscall_access(syscall.number) {
             SyscallAccess::None => true,
             SyscallAccess::StateRead => {
@@ -1711,7 +1707,6 @@ where
     }
     if let Some(rb) = any.downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>() {
         use iroha_data_model::isi::rwa::RwaInstructionBox;
-
         match rb {
             RwaInstructionBox::Register(r) => {
                 add_domain_rw(&mut set, r.rwa.domain());
@@ -2541,11 +2536,9 @@ mod tests {
         level::Level,
         transaction::{Executable, ExecutableBatchItem, IvmBytecode, TransactionBuilder},
     };
-
     use super::*;
     use crate::smartcontracts::Execute;
     use crate::state::{State, World};
-
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
     const TEST_GAS_LIMIT: u64 = 50_000_000;
     fn test_network_id() -> iroha_data_model::NetworkId {
@@ -3138,7 +3131,6 @@ mod tests {
     #[test]
     fn incomplete_entrypoint_hints_do_not_fall_through_to_contract_hints() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
-
         let program = state_get_test_program();
         let code_hash = ivm::contract_code_hash(&program);
         let contract_hints = AccessSetHints {
@@ -3185,7 +3177,6 @@ mod tests {
     #[test]
     fn dynamic_manifest_hints_are_not_scheduler_authoritative() {
         use iroha_data_model::smart_contract::manifest::{AccessSetHints, DynamicAccessHint};
-
         let program = state_get_test_program();
         let code_hash = ivm::contract_code_hash(&program);
         for dynamic_hint in [
@@ -3314,7 +3305,6 @@ seiyaku StaticAccessCounter {
     #[test]
     fn repeated_prepared_manifest_access_does_not_reprepare_the_artifact() {
         use crate::smartcontracts::ivm::cache::IvmCache;
-
         let source = r#"
 seiyaku WarmAccessCounter {
   state StateMap<int, int> Counters;
@@ -3766,7 +3756,6 @@ seiyaku DynamicAccessCounter {
     #[test]
     fn record_sccp_message_access_separates_profiles_but_not_binding_rotations() {
         use iroha_data_model::bridge::{SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1};
-
         let payload =
             sccp_transfer_payload(9, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
         let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
@@ -4409,7 +4398,6 @@ seiyaku DynamicAccessCounter {
     #[test]
     fn bytecode_access_fence_serializes_state_and_nested_targets_conservatively() {
         use iroha_data_model::transaction::IvmProved;
-
         fn program_with_syscall(number: u32) -> Vec<u8> {
             let mut program = ivm::ProgramMetadata::default().encode();
             program.extend_from_slice(
@@ -4482,7 +4470,6 @@ seiyaku DynamicAccessCounter {
     #[test]
     fn syscall_access_registry_fails_closed_for_unknown_numbers() {
         use ivm::syscalls::SyscallAccess;
-
         assert_eq!(
             ivm::syscalls::syscall_access(ivm::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT),
             SyscallAccess::None
@@ -4503,7 +4490,6 @@ seiyaku DynamicAccessCounter {
     #[test]
     fn helper_hidden_privileged_and_dynamic_syscalls_force_global_serialization() {
         use ivm::instruction::wide;
-
         for (label, syscall) in [
             ("ledger write", ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED),
             ("dynamic nested call", ivm::syscalls::SYSCALL_CALL_CONTRACT),
@@ -4675,7 +4661,6 @@ seiyaku DynamicAccessCounter {
     #[test]
     fn access_set_hints_reject_invalid_dynamic_state_hints() {
         use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
-
         let valid = DynamicAccessHint {
             base_key: "state:Orders".to_owned(),
             key_type: "int".to_owned(),
@@ -4764,7 +4749,6 @@ seiyaku DynamicAccessCounter {
         };
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-
         // World/state setup with one account to own the manifest
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain =
@@ -4835,7 +4819,6 @@ seiyaku DynamicAccessCounter {
             smart_contract::manifest::{AccessSetHints, MANIFEST_METADATA_KEY},
         };
         use iroha_primitives::json::Json;
-
         access_set_cache_clear();
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain =
@@ -4891,7 +4874,6 @@ seiyaku DynamicAccessCounter {
     fn access_set_cache_invalidates_on_manifest_update() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
-
         access_set_cache_clear();
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain =
@@ -4978,7 +4960,6 @@ seiyaku DynamicAccessCounter {
     fn ivm_access_falls_back_when_manifest_hints_invalid() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
-
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
@@ -5036,7 +5017,6 @@ seiyaku DynamicAccessCounter {
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
         };
         use nonzero_ext::nonzero;
-
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
@@ -5141,7 +5121,6 @@ seiyaku DynamicAccessCounter {
             ContractManifest, EntryPointKind, EntrypointDescriptor,
         };
         use nonzero_ext::nonzero;
-
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
@@ -5221,7 +5200,6 @@ seiyaku DynamicAccessCounter {
             smart_contract::manifest::{ContractManifest, EntryPointKind, EntrypointDescriptor},
         };
         use nonzero_ext::nonzero;
-
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
         let domain: Domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
@@ -5382,7 +5360,6 @@ seiyaku DynamicAccessCounter {
     #[test]
     fn execute_trigger_includes_access_from_trigger_instructions() {
         use nonzero_ext::nonzero;
-
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
@@ -5466,7 +5443,6 @@ seiyaku DynamicAccessCounter {
     #[test]
     fn execute_trigger_includes_trigger_metadata_keys() {
         use nonzero_ext::nonzero;
-
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
@@ -5529,7 +5505,6 @@ seiyaku DynamicAccessCounter {
     fn execute_trigger_uses_retained_entrypoint_hints_without_repreparing() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
-
         access_set_cache_clear();
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -5651,7 +5626,6 @@ seiyaku DynamicAccessCounter {
     fn execute_trigger_without_selector_does_not_use_entrypoint_hints() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
         use nonzero_ext::nonzero;
-
         access_set_cache_clear();
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();

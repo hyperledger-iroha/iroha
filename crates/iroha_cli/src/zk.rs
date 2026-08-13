@@ -20,9 +20,7 @@
 //!
 //! Provides thin wrappers over Torii app endpoints for ZK features. These are
 //! intended for operator/testing convenience and are not consensus-critical.
-
 use std::{fs::File, path::Path};
-
 use eyre::{Context, Result};
 // For base64 Engine trait (decode)
 use base64::Engine as _;
@@ -30,9 +28,7 @@ use iroha::client::{Client, ZkProofsFilter};
 use iroha::data_model::prelude::{Executable, InstructionBox};
 use iroha_crypto::Hash as CryptoHash;
 use iroha_zkp_halo2::OpenVerifyEnvelope as Halo2Envelope;
-
 use crate::{CliOutputFormat, Run, RunContext, json_utils, quote_and_sign_transaction};
-
 // Proof/attachment tooling shares the first-release CLI's 64 MiB local-input
 // corridor. Backend-specific VK inputs use the stricter 8 MiB protocol cap.
 // JSON and Norito decoders additionally receive explicit graph/allocation
@@ -43,7 +39,6 @@ const ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1: usize = 65_536;
 const ZK_CLI_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 4 * ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1;
 const ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 128 * 1024 * 1024;
 const ZK_CLI_MAX_NESTING_DEPTH_V1: usize = 64;
-
 // Binary `Vec<u8>` fields account their byte length as sequence elements, so
 // the binary limit must admit one complete proof-sized byte field. JSON arrays
 // use the much smaller graph limit below.
@@ -54,7 +49,6 @@ const ZK_CLI_BINARY_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimit
     ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1,
     ZK_CLI_MAX_NESTING_DEPTH_V1,
 );
-
 const ZK_CLI_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
     ZK_CLI_JSON_MAX_SEQUENCE_ELEMENTS_V1,
     ZK_CLI_INPUT_MAX_BYTES_V1,
@@ -62,7 +56,6 @@ const ZK_CLI_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits:
     ZK_CLI_MAX_DECODE_ALLOCATION_BYTES_V1,
     ZK_CLI_MAX_NESTING_DEPTH_V1,
 );
-
 fn read_zk_file_bounded(path: &Path, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
     let mut file =
         File::open(path).wrap_err_with(|| format!("failed to open {label} {}", path.display()))?;
@@ -89,7 +82,6 @@ fn read_zk_file_bounded(path: &Path, max_bytes: usize, label: &str) -> Result<Ve
     }
     Ok(bytes)
 }
-
 fn decode_zk_json_file<T>(path: &Path, label: &str) -> Result<T>
 where
     T: norito::json::JsonDeserialize,
@@ -108,7 +100,6 @@ where
     })
     .map_err(|error| eyre::eyre!("failed to decode {label} JSON: {error}"))
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
@@ -140,7 +131,6 @@ pub enum Command {
     /// Encode a confidential encrypted payload (memo) into Norito bytes/base64
     Envelope(EnvelopeArgs),
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RootsArgs {
     /// Canonical unprefixed Base58 `AssetDefinitionId`
@@ -150,7 +140,6 @@ pub struct RootsArgs {
     #[arg(long, default_value_t = 0)]
     max: u32,
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -168,13 +157,11 @@ impl Run for Command {
         }
     }
 }
-
 impl Command {
     pub(crate) fn allows_fallback_config(&self) -> bool {
         false
     }
 }
-
 impl Run for RootsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -183,7 +170,6 @@ impl Run for RootsArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct VerifyBatchArgs {
     /// Path to a Norito-encoded Vec<OpenVerifyEnvelope> (mutually exclusive with --json)
@@ -193,7 +179,6 @@ pub struct VerifyBatchArgs {
     #[arg(long, value_name = "PATH", conflicts_with = "norito")]
     json: Option<std::path::PathBuf>,
 }
-
 impl Run for VerifyBatchArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -212,7 +197,6 @@ impl Run for VerifyBatchArgs {
         eyre::bail!("provide either --norito <file> or --json <file>");
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct SchemaHashArgs {
     /// Path to a Norito-encoded `OpenVerifyEnvelope`
@@ -222,7 +206,6 @@ pub struct SchemaHashArgs {
     #[arg(long, value_name = "HEX", conflicts_with = "norito")]
     public_inputs_hex: Option<String>,
 }
-
 impl Run for SchemaHashArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let bytes = if let Some(path) = self.norito {
@@ -242,7 +225,6 @@ impl Run for SchemaHashArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ProofCommand {
     /// List proof records maintained by Torii.
@@ -256,7 +238,6 @@ pub enum ProofCommand {
     /// Submit a pruning transaction to enforce proof retention immediately.
     Prune(ProofPruneArgs),
 }
-
 impl Run for ProofCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -268,7 +249,6 @@ impl Run for ProofCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct ProofFilterArgs {
     /// Filter by backend identifier (e.g., `halo2/ipa`).
@@ -296,7 +276,6 @@ pub struct ProofFilterArgs {
     #[arg(long, value_name = "ORDER")]
     order: Option<String>,
 }
-
 impl ProofFilterArgs {
     fn as_filter(&self) -> Result<ZkProofsFilter<'_>> {
         if let Some(backend) = self.backend.as_deref() {
@@ -315,7 +294,6 @@ impl ProofFilterArgs {
         })
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProofListArgs {
     #[command(flatten)]
@@ -324,7 +302,6 @@ pub struct ProofListArgs {
     #[arg(long)]
     ids_only: bool,
 }
-
 impl Run for ProofListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -337,13 +314,11 @@ impl Run for ProofListArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProofCountArgs {
     #[command(flatten)]
     filter: ProofFilterArgs,
 }
-
 impl Run for ProofCountArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -354,7 +329,6 @@ impl Run for ProofCountArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProofGetArgs {
     /// Backend identifier (e.g., `halo2/ipa`).
@@ -364,7 +338,6 @@ pub struct ProofGetArgs {
     #[arg(long, value_name = "HASH")]
     hash: String,
 }
-
 impl Run for ProofGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -376,10 +349,8 @@ impl Run for ProofGetArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProofRetentionArgs {}
-
 impl Run for ProofRetentionArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -388,14 +359,12 @@ impl Run for ProofRetentionArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProofPruneArgs {
     /// Restrict pruning to a single backend (e.g., `halo2/ipa`). Omit to prune all backends.
     #[arg(long, value_name = "BACKEND")]
     backend: Option<String>,
 }
-
 impl Run for ProofPruneArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         if let Some(backend) = self.backend.as_deref() {
@@ -406,14 +375,12 @@ impl Run for ProofPruneArgs {
         context.finish(Executable::Instructions(vec![prune].into()))
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ProverCommand {
     /// Manage prover reports
     #[command(subcommand)]
     Reports(ProverReportsCommand),
 }
-
 impl Run for ProverCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -421,7 +388,6 @@ impl Run for ProverCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ProverReportsCommand {
     /// List available prover reports (JSON array)
@@ -435,7 +401,6 @@ pub enum ProverReportsCommand {
     /// Count reports matching filters (server-side)
     Count(ProverReportsCountArgs),
 }
-
 impl Run for ProverReportsCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -447,7 +412,6 @@ impl Run for ProverReportsCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProverReportsListArgs {
     /// Print a one-line summary per report (id, ok, `content_type`, `zk1_tags`)
@@ -500,7 +464,6 @@ pub struct ProverReportsListArgs {
     latest: bool,
     // (duplicate removed)
 }
-
 impl Run for ProverReportsListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -590,7 +553,6 @@ impl Run for ProverReportsListArgs {
             }
             filtered.push(v.clone());
         }
-
         if !self.summary {
             // Apply client-side field projection if requested
             if let Some(csv) = &self.fields {
@@ -636,7 +598,6 @@ impl Run for ProverReportsListArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProverReportsCountArgs {
     /// Show only successful reports
@@ -664,7 +625,6 @@ pub struct ProverReportsCountArgs {
     #[arg(long, value_name = "MS")]
     before_ms: Option<u64>,
 }
-
 impl Run for ProverReportsCountArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -692,11 +652,9 @@ impl Run for ProverReportsCountArgs {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod prover_list_tests {
     use super::*;
-
     fn sample_reports() -> norito::json::Value {
         let json = r#"[
             {"id":"a","ok":true,"content_type":"application/json"},
@@ -705,7 +663,6 @@ mod prover_list_tests {
         ]"#;
         norito::json::from_str(json).expect("sample reports")
     }
-
     #[test]
     fn filter_ok_only() {
         let arr = sample_reports().as_array().unwrap().clone();
@@ -716,7 +673,6 @@ mod prover_list_tests {
             .collect();
         assert_eq!(filtered.len(), 2);
     }
-
     #[test]
     fn filter_by_tag() {
         let arr = sample_reports().as_array().unwrap().clone();
@@ -734,7 +690,6 @@ mod prover_list_tests {
         assert_eq!(filtered[0].get("id").and_then(|x| x.as_str()), Some("c"));
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProverReportsCleanupArgs {
     /// Proceed without confirmation (dangerous)
@@ -771,7 +726,6 @@ pub struct ProverReportsCleanupArgs {
     #[arg(long)]
     server: bool,
 }
-
 impl Run for ProverReportsCleanupArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -881,7 +835,6 @@ impl Run for ProverReportsCleanupArgs {
                 ids.push(id.to_string());
             }
         }
-
         // Sort ids for deterministic deletion order
         ids.sort();
         context.println(format!("Matched {} report(s)", ids.len()))?;
@@ -902,14 +855,12 @@ impl Run for ProverReportsCleanupArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProverReportsGetArgs {
     /// Report id (attachment id)
     #[arg(long, value_name = "ID")]
     id: String,
 }
-
 impl Run for ProverReportsGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -918,14 +869,12 @@ impl Run for ProverReportsGetArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProverReportsDeleteArgs {
     /// Report id (attachment id)
     #[arg(long, value_name = "ID")]
     id: String,
 }
-
 impl Run for ProverReportsDeleteArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -934,7 +883,6 @@ impl Run for ProverReportsDeleteArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum IvmCommand {
     /// Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
@@ -948,7 +896,6 @@ pub enum IvmCommand {
     /// Derive a circuit/vk-bound proving key archive (.pk) from verifying key bytes (.vk) for the Halo2 IPA IVM bind circuit
     DerivePk(IvmDerivePkArgs),
 }
-
 impl Run for IvmCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -960,14 +907,12 @@ impl Run for IvmCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IvmDeriveArgs {
     /// Path to a JSON request DTO `{ vk_ref, authority, metadata, bytecode }`
     #[arg(long, value_name = "PATH")]
     json: std::path::PathBuf,
 }
-
 impl Run for IvmDeriveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -977,7 +922,6 @@ impl Run for IvmDeriveArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IvmProveArgs {
     /// Path to a JSON request DTO `{ vk_ref, authority, metadata, bytecode, proved? }`
@@ -993,7 +937,6 @@ pub struct IvmProveArgs {
     #[arg(long, default_value_t = 0)]
     timeout_secs: u64,
 }
-
 impl Run for IvmProveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -1008,12 +951,10 @@ impl Run for IvmProveArgs {
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre::eyre!("response missing job_id"))?
             .to_string();
-
         let started = std::time::Instant::now();
         let poll = std::time::Duration::from_millis(self.poll_interval_ms.max(10));
         let timeout =
             (self.timeout_secs > 0).then(|| std::time::Duration::from_secs(self.timeout_secs));
-
         loop {
             if let Some(timeout) = timeout
                 && started.elapsed() >= timeout
@@ -1036,14 +977,12 @@ impl Run for IvmProveArgs {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IvmProveGetArgs {
     /// Prove job id returned by `iroha zk ivm prove`
     #[arg(long, value_name = "JOB_ID")]
     job_id: String,
 }
-
 impl Run for IvmProveGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -1052,14 +991,12 @@ impl Run for IvmProveGetArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IvmProveDeleteArgs {
     /// Prove job id returned by `iroha zk ivm prove`
     #[arg(long, value_name = "JOB_ID")]
     job_id: String,
 }
-
 impl Run for IvmProveDeleteArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -1068,7 +1005,6 @@ impl Run for IvmProveDeleteArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IvmDerivePkArgs {
     /// Backend label for the verifying key bytes (must match Torii `vk_ref.backend`), e.g. `halo2/ipa`
@@ -1081,7 +1017,6 @@ pub struct IvmDerivePkArgs {
     #[arg(long, value_name = "PATH")]
     out: std::path::PathBuf,
 }
-
 impl Run for IvmDerivePkArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let vk_bytes =
@@ -1100,13 +1035,11 @@ impl Run for IvmDerivePkArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum VoteCommand {
     /// Get election tally (JSON)
     Tally(VoteTallyArgs),
 }
-
 impl Run for VoteCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1114,7 +1047,6 @@ impl Run for VoteCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct VoteTallyArgs {
     /// Election identifier
@@ -1125,7 +1057,6 @@ pub struct VoteTallyArgs {
     )]
     election_id: String,
 }
-
 impl Run for VoteTallyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -1134,7 +1065,6 @@ impl Run for VoteTallyArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum AttachmentsCommand {
     /// Upload a file as an attachment. Returns JSON metadata.
@@ -1148,7 +1078,6 @@ pub enum AttachmentsCommand {
     /// Cleanup attachments by filters (age/content-type/ids). Deletes individually via API.
     Cleanup(AttachmentCleanupArgs),
 }
-
 impl Run for AttachmentsCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1160,7 +1089,6 @@ impl Run for AttachmentsCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AttachmentUploadArgs {
     /// Path to the file to upload
@@ -1170,7 +1098,6 @@ pub struct AttachmentUploadArgs {
     #[arg(long, value_name = "MIME", default_value = "application/octet-stream")]
     content_type: String,
 }
-
 impl Run for AttachmentUploadArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -1180,10 +1107,8 @@ impl Run for AttachmentUploadArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AttachmentListArgs {}
-
 impl Run for AttachmentListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -1192,7 +1117,6 @@ impl Run for AttachmentListArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AttachmentGetArgs {
     /// Attachment id (hex)
@@ -1202,7 +1126,6 @@ pub struct AttachmentGetArgs {
     #[arg(long, value_name = "PATH")]
     out: std::path::PathBuf,
 }
-
 impl Run for AttachmentGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -1216,14 +1139,12 @@ impl Run for AttachmentGetArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AttachmentDeleteArgs {
     /// Attachment id (hex)
     #[arg(long, value_name = "ID")]
     id: String,
 }
-
 impl Run for AttachmentDeleteArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -1232,7 +1153,6 @@ impl Run for AttachmentDeleteArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AttachmentCleanupArgs {
     /// Proceed without confirmation
@@ -1263,7 +1183,6 @@ pub struct AttachmentCleanupArgs {
     #[arg(long)]
     summary: bool,
 }
-
 fn now_ms_u64() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -1271,7 +1190,6 @@ fn now_ms_u64() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
-
 fn select_attachment_ids(
     list: &norito::json::Value,
     content_type_sub: Option<&str>,
@@ -1321,7 +1239,6 @@ fn select_attachment_ids(
     }
     out
 }
-
 impl Run for AttachmentCleanupArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -1332,7 +1249,6 @@ impl Run for AttachmentCleanupArgs {
         } else {
             self.before_ms
         };
-
         if !(self.all
             || self.content_type.is_some()
             || before_ms.is_some()
@@ -1346,7 +1262,6 @@ impl Run for AttachmentCleanupArgs {
         if self.all && !self.yes {
             eyre::bail!("--all requires --yes confirmation");
         }
-
         let mut matches = if self.all {
             // select everything
             select_attachment_ids(&list, None, None, &[], None, now_ms)
@@ -1367,7 +1282,6 @@ impl Run for AttachmentCleanupArgs {
         {
             matches.truncate(cap);
         }
-
         if !self.yes {
             if self.ids_only {
                 let ids = json_utils::json_array(matches.iter().map(|(id, _, _, _)| id.as_str()))?;
@@ -1397,7 +1311,6 @@ impl Run for AttachmentCleanupArgs {
             }
             return Ok(());
         }
-
         // Proceed with deletion
         let mut ok = 0usize;
         let mut failed = 0usize;
@@ -1411,11 +1324,9 @@ impl Run for AttachmentCleanupArgs {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod attachments_cleanup_tests {
     use super::select_attachment_ids;
-
     #[test]
     fn selects_by_ct_and_age() {
         let now_ms = 1_000_000u64;
@@ -1438,9 +1349,7 @@ mod attachments_cleanup_tests {
         assert_eq!(ids, vec!["b"]);
     }
 }
-
 // ---------------- Confidential envelope helpers ----------------
-
 #[derive(clap::Args, Debug)]
 pub struct EnvelopeArgs {
     /// Ephemeral public key (hex, 64 chars).
@@ -1465,7 +1374,6 @@ pub struct EnvelopeArgs {
     #[arg(long, default_value_t = false)]
     print_json: bool,
 }
-
 fn parse_hex_array<const N: usize>(s: &str) -> eyre::Result<[u8; N]> {
     let bytes = hex::decode(s).map_err(|e| eyre::eyre!("invalid hex: {e}"))?;
     if bytes.len() != N {
@@ -1475,14 +1383,12 @@ fn parse_hex_array<const N: usize>(s: &str) -> eyre::Result<[u8; N]> {
     out.copy_from_slice(&bytes);
     Ok(out)
 }
-
 fn build_encrypted_payload(
     ephemeral_hex: &str,
     nonce_hex: &str,
     ciphertext_b64: &str,
 ) -> eyre::Result<iroha::data_model::confidential::ConfidentialEncryptedPayload> {
     use iroha::data_model::confidential::ConfidentialEncryptedPayload;
-
     let ephemeral = parse_hex_array::<32>(ephemeral_hex)?;
     let nonce = parse_hex_array::<24>(nonce_hex)?;
     let ciphertext = base64::engine::general_purpose::STANDARD
@@ -1492,7 +1398,6 @@ fn build_encrypted_payload(
         ephemeral, nonce, ciphertext,
     ))
 }
-
 fn validate_encrypted_payload(
     payload: iroha::data_model::confidential::ConfidentialEncryptedPayload,
 ) -> eyre::Result<iroha::data_model::confidential::ConfidentialEncryptedPayload> {
@@ -1501,7 +1406,6 @@ fn validate_encrypted_payload(
         .map_err(|e| eyre::eyre!("invalid encrypted payload: {e}"))?;
     Ok(payload)
 }
-
 fn encode_encrypted_payload(
     ephemeral_hex: &str,
     nonce_hex: &str,
@@ -1514,7 +1418,6 @@ fn encode_encrypted_payload(
     let bytes = norito::codec::encode_adaptive(&payload);
     Ok((payload, bytes))
 }
-
 impl Run for EnvelopeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
         let (payload, bytes) = encode_encrypted_payload(
@@ -1522,37 +1425,30 @@ impl Run for EnvelopeArgs {
             &self.nonce_hex,
             &self.ciphertext_b64,
         )?;
-
         if let Some(path) = &self.output {
             std::fs::write(path, &bytes)
                 .with_context(|| format!("failed to write envelope to {}", path.display()))?;
             context.println(format!("Wrote {} bytes to {}", bytes.len(), path.display()))?;
         }
-
         if self.output.is_none() || self.print_base64 {
             let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
             context.println(encoded)?;
         }
-
         if self.print_hex {
             context.println(hex::encode(&bytes))?;
         }
-
         if self.print_json {
             context.print_data(&payload)?;
         }
-
         Ok(())
     }
 }
-
 fn parse_hex_string(hex_str: &str) -> eyre::Result<Vec<u8>> {
     let trimmed = hex_str.trim();
     let without_prefix = trimmed.strip_prefix("0x").unwrap_or(trimmed);
     let bytes = hex::decode(without_prefix).map_err(|e| eyre::eyre!("invalid hex string: {e}"))?;
     Ok(bytes)
 }
-
 fn ensure_verifier_backend_registry_label_v1<'a>(backend: &'a str, field: &str) -> Result<&'a str> {
     if backend.is_empty() {
         eyre::bail!("{field} must be non-empty");
@@ -1562,21 +1458,17 @@ fn ensure_verifier_backend_registry_label_v1<'a>(backend: &'a str, field: &str) 
     }
     Ok(backend)
 }
-
 fn parse_hex32_lower(value: &str, field: &str) -> Result<String> {
     let bytes = parse_hex32_str(value, field)?;
     Ok(hex::encode(bytes))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn checked_zk_ed25519_key_fixture() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
             .expect("generate checked ZK fixture key")
     }
-
     #[test]
     fn zk_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_zk_ed25519_key_fixture();
@@ -1584,10 +1476,8 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("ZK fixture key advertises a valid algorithm");
-
         assert_eq!(actual, iroha_crypto::Algorithm::Ed25519);
     }
-
     #[test]
     fn proof_filter_args_reject_unsupported_backend_labels() {
         for backend in [
@@ -1622,7 +1512,6 @@ mod tests {
             assert!(format!("{err}").contains("unsupported verifier-registry label"));
         }
     }
-
     #[test]
     fn parse_vk_id_pair_rejects_unsupported_backend_aliases_and_accepts_registry_labels() {
         for literal in [
@@ -1650,18 +1539,15 @@ mod tests {
                 "{literal:?} must reject before building a verifying-key id"
             );
         }
-
         let parsed = parse_vk_id_pair("halo2/pasta/ivm-execution-v1:vk_ivm")
             .expect("canonical IVM execution vk id");
         assert_eq!(parsed.backend.as_str(), "halo2/pasta/ivm-execution-v1");
         assert_eq!(parsed.name.as_str(), "vk_ivm");
-
         let parsed =
             parse_vk_id_pair("stark/fri/poseidon2-goldilocks:vk_stark").expect("stark vk id");
         assert_eq!(parsed.backend.as_str(), "stark/fri/poseidon2-goldilocks");
         assert_eq!(parsed.name.as_str(), "vk_stark");
     }
-
     #[test]
     fn parse_hex32_lower_canonicalizes_and_rejects_malformed_hashes() {
         assert_eq!(
@@ -1681,20 +1567,17 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_hex_array_exact_length() {
         let value = "01".repeat(32);
         let arr = parse_hex_array::<32>(&value).expect("parse hex array");
         assert_eq!(arr, [1u8; 32]);
     }
-
     #[test]
     fn parse_hex_array_rejects_wrong_length() {
         let err = parse_hex_array::<24>("00").expect_err("should fail");
         assert!(format!("{err}").contains("expected 24 bytes"));
     }
-
     #[test]
     fn encode_encrypted_payload_returns_expected_bytes() {
         use base64::Engine as _;
@@ -1708,11 +1591,9 @@ mod tests {
         assert_eq!(payload, decoded);
         assert!(!expected_b64.is_empty());
     }
-
     #[test]
     fn vk_submission_backend_parser_accepts_only_supported_open_verify_engines() {
         use iroha::data_model::zk::BackendTag;
-
         for (label, expected) in [
             ("halo2/ipa", BackendTag::Halo2IpaPasta),
             ("stark/fri", BackendTag::Stark),
@@ -1724,7 +1605,6 @@ mod tests {
                 "{label} must map to its exact generic engine",
             );
         }
-
         for label in [
             "halo2/ipa/orchard",
             "groth16/bls12-377",
@@ -1736,7 +1616,6 @@ mod tests {
                 .expect_err("protocol names and unknown labels must not map to generic engines");
         }
     }
-
     fn sample_vk_submission(namespace: Option<&str>) -> VkSubmissionJson {
         VkSubmissionJson {
             backend: "halo2/ipa".to_owned(),
@@ -1758,12 +1637,10 @@ mod tests {
             namespace: namespace.map(str::to_owned),
         }
     }
-
     #[test]
     fn vk_submission_namespace_explicit_and_defaults() {
         let encoded = norito::json::to_value(&sample_vk_submission(Some("offline_kagemusha")))
             .expect("serialize VK submission fixture");
-
         let explicit: VkSubmissionJson =
             norito::json::from_value(encoded.clone()).expect("deserialize explicit namespace");
         assert_eq!(
@@ -1772,7 +1649,6 @@ mod tests {
                 .namespace,
             "offline_kagemusha"
         );
-
         let mut omitted = encoded.clone();
         omitted
             .as_object_mut()
@@ -1786,7 +1662,6 @@ mod tests {
                 .namespace,
             DEFAULT_VK_NAMESPACE
         );
-
         let mut null = encoded;
         null.as_object_mut()
             .expect("VK submission JSON object")
@@ -1800,7 +1675,6 @@ mod tests {
             DEFAULT_VK_NAMESPACE
         );
     }
-
     #[test]
     fn vk_submission_namespace_rejects_blank_or_untrimmed_values() {
         for namespace in ["", " \t ", " offline_kagemusha", "offline_kagemusha "] {
@@ -1812,12 +1686,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn vk_submission_rejects_signing_secrets_and_unknown_fields() {
         let encoded =
             norito::json::to_value(&sample_vk_submission(None)).expect("serialize VK submission");
-
         for field in ["authority", "private_key", "unexpected"] {
             let mut value = encoded.clone();
             value
@@ -1835,7 +1707,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn encode_encrypted_payload_rejects_empty_ciphertext() {
         let epk = "07".repeat(32);
@@ -1847,7 +1718,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn encode_encrypted_payload_rejects_low_order_ephemeral_key() {
         let epk = "00".repeat(32);
@@ -1859,7 +1729,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn zk_file_reader_accepts_exact_limit_and_rejects_sparse_overflow() {
         let directory = tempfile::tempdir().expect("create ZK input directory");
@@ -1869,7 +1738,6 @@ mod tests {
             read_zk_file_bounded(&exact, 32, "fixture").expect("read exact ZK input"),
             vec![0xA5; 32]
         );
-
         let oversized = directory.path().join("oversized.bin");
         let file = File::create(&oversized).expect("create sparse ZK input");
         file.set_len(33).expect("extend sparse ZK input");
@@ -1877,7 +1745,6 @@ mod tests {
             .expect_err("first over-limit ZK input must fail before reading");
         assert!(error.to_string().contains("first-release limit"));
     }
-
     #[test]
     fn zk_json_depth_bound_rejects_first_overflow() {
         let directory = tempfile::tempdir().expect("create ZK JSON directory");
@@ -1890,7 +1757,6 @@ mod tests {
         std::fs::write(&exact, exact_body).expect("write exact-depth JSON");
         let _: norito::json::Value =
             decode_zk_json_file(&exact, "fixture").expect("exact JSON depth is admitted");
-
         let over = directory.path().join("over.json");
         let over_body = format!(
             "{}0{}",
@@ -1903,9 +1769,7 @@ mod tests {
         assert!(error.to_string().contains("lexical resource bounds"));
     }
 }
-
 // --------------- Register ZK Asset ---------------
-
 #[derive(clap::Args, Debug)]
 pub struct ZkRegisterAssetArgs {
     /// Canonical unprefixed Base58 `AssetDefinitionId`
@@ -1918,7 +1782,6 @@ pub struct ZkRegisterAssetArgs {
     #[arg(long, value_name = "BACKEND:NAME")]
     vk_shield: Option<String>,
 }
-
 fn parse_vk_id_pair(s: &str) -> eyre::Result<iroha::data_model::proof::VerifyingKeyId> {
     use iroha::data_model::proof::VerifyingKeyId;
     let (backend, name) = s
@@ -1934,12 +1797,10 @@ fn parse_vk_id_pair(s: &str) -> eyre::Result<iroha::data_model::proof::Verifying
     }
     Ok(VerifyingKeyId::new(backend, name))
 }
-
 impl Run for ZkRegisterAssetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
         use iroha::data_model::isi::zk::RegisterZkAsset;
         use iroha::data_model::prelude::{AssetDefinitionId, InstructionBox};
-
         let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
         let vk_unshield = match self.vk_unshield {
             Some(s) => Some(parse_vk_id_pair(&s)?),
@@ -1957,7 +1818,6 @@ impl Run for ZkRegisterAssetArgs {
         context.finish(vec![ib])
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum VkCommand {
     /// Register a verifying key record with the configured account and key
@@ -1967,7 +1827,6 @@ pub enum VkCommand {
     /// Get a verifying key record by backend and name
     Get(VkGetArgs),
 }
-
 impl Run for VkCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1977,7 +1836,6 @@ impl Run for VkCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct VkRegisterArgs {
     /// Path to a JSON DTO file for register (backend, name, version, optional `vk_bytes` (base64)
@@ -1986,7 +1844,6 @@ pub struct VkRegisterArgs {
     #[arg(long, value_name = "PATH")]
     json: std::path::PathBuf,
 }
-
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
 #[cfg_attr(test, derive(norito::json::JsonSerialize))]
 #[norito(deny_unknown_fields)]
@@ -2021,12 +1878,10 @@ struct VkSubmissionJson {
     #[norito(default)]
     namespace: Option<String>,
 }
-
 struct PreparedVkSubmission {
     id: iroha::data_model::proof::VerifyingKeyId,
     record: iroha::data_model::proof::VerifyingKeyRecord,
 }
-
 fn signed_vk_register_transaction(
     client: &Client,
     metadata: iroha::data_model::prelude::Metadata,
@@ -2034,7 +1889,6 @@ fn signed_vk_register_transaction(
     fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 ) -> Result<iroha::data_model::prelude::SignedTransaction> {
     use iroha::data_model::{isi::verifying_keys, transaction::Executable};
-
     let executable = Executable::Instructions(
         vec![InstructionBox::from(verifying_keys::RegisterVerifyingKey {
             id: prepared.id,
@@ -2046,7 +1900,6 @@ fn signed_vk_register_transaction(
         .map(|(transaction, _)| transaction)
         .wrap_err("failed to quote and sign VK register transaction")
 }
-
 fn signed_vk_update_transaction(
     client: &Client,
     metadata: iroha::data_model::prelude::Metadata,
@@ -2054,7 +1907,6 @@ fn signed_vk_update_transaction(
     fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 ) -> Result<iroha::data_model::prelude::SignedTransaction> {
     use iroha::data_model::{isi::verifying_keys, transaction::Executable};
-
     let executable = Executable::Instructions(
         vec![InstructionBox::from(verifying_keys::UpdateVerifyingKey {
             id: prepared.id,
@@ -2066,7 +1918,6 @@ fn signed_vk_update_transaction(
         .map(|(transaction, _)| transaction)
         .wrap_err("failed to quote and sign VK update transaction")
 }
-
 fn parse_hex32_str(value: &str, field: &str) -> Result<[u8; 32]> {
     let trimmed = value.strip_prefix("0x").unwrap_or(value);
     let bytes = hex::decode(trimmed).wrap_err_with(|| format!("invalid {field}"))?;
@@ -2077,18 +1928,14 @@ fn parse_hex32_str(value: &str, field: &str) -> Result<[u8; 32]> {
     out.copy_from_slice(&bytes);
     Ok(out)
 }
-
 fn parse_commitment_hex(value: &str) -> Result<[u8; 32]> {
     parse_hex32_str(value, "commitment_hex")
 }
-
 fn vk_backend_tag_from_label(label: &str) -> Result<iroha::data_model::zk::BackendTag> {
     iroha_core::zk::verifier_backend_registry_tag_v1(label)
         .ok_or_else(|| eyre::eyre!("unsupported generic OpenVerify backend `{label}`"))
 }
-
 const DEFAULT_VK_NAMESPACE: &str = "core";
-
 fn resolve_vk_namespace(namespace: Option<&str>) -> Result<String> {
     let Some(namespace) = namespace else {
         return Ok(DEFAULT_VK_NAMESPACE.to_owned());
@@ -2101,7 +1948,6 @@ fn resolve_vk_namespace(namespace: Option<&str>) -> Result<String> {
     }
     Ok(namespace.to_owned())
 }
-
 fn build_vk_record(
     payload: &VkSubmissionJson,
 ) -> Result<iroha::data_model::proof::VerifyingKeyRecord> {
@@ -2110,10 +1956,8 @@ fn build_vk_record(
         proof::{VerifyingKeyBox, VerifyingKeyRecord},
     };
     use iroha_core::zk::hash_vk;
-
     let backend =
         ensure_verifier_backend_registry_label_v1(&payload.backend, "verifying key backend")?;
-
     let vk_bytes = match payload.vk_bytes.as_deref() {
         Some(value) => Some(
             base64::engine::general_purpose::STANDARD
@@ -2122,7 +1966,6 @@ fn build_vk_record(
         ),
         None => None,
     };
-
     let mut key_opt = None;
     let commitment;
     let vk_len_value;
@@ -2156,7 +1999,6 @@ fn build_vk_record(
     } else {
         eyre::bail!("provide either vk_bytes or commitment_hex");
     }
-
     let backend_tag = vk_backend_tag_from_label(backend)?;
     let schema_hash = parse_hex32_str(
         &payload.public_inputs_schema_hash_hex,
@@ -2176,7 +2018,6 @@ fn build_vk_record(
             eyre::bail!("withdraw_height must be >= activation_height");
         }
     }
-
     let mut record = VerifyingKeyRecord::new_with_owner(
         payload.version,
         payload.circuit_id.clone(),
@@ -2198,7 +2039,6 @@ fn build_vk_record(
     record.gas_schedule_id = payload.gas_schedule_id.clone();
     Ok(record)
 }
-
 fn load_vk_submission(path: &std::path::Path) -> Result<PreparedVkSubmission> {
     let payload: VkSubmissionJson = decode_zk_json_file(path, "verifying-key submission")?;
     let backend =
@@ -2208,7 +2048,6 @@ fn load_vk_submission(path: &std::path::Path) -> Result<PreparedVkSubmission> {
     let record = build_vk_record(&payload)?;
     Ok(PreparedVkSubmission { id, record })
 }
-
 impl Run for VkRegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -2224,7 +2063,6 @@ impl Run for VkRegisterArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct VkUpdateArgs {
     /// Path to a JSON DTO file for update (backend, name, version, optional `vk_bytes` or
@@ -2233,7 +2071,6 @@ pub struct VkUpdateArgs {
     #[arg(long, value_name = "PATH")]
     json: std::path::PathBuf,
 }
-
 impl Run for VkUpdateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -2249,7 +2086,6 @@ impl Run for VkUpdateArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct VkGetArgs {
     /// Backend identifier (e.g., "halo2/ipa")
@@ -2259,7 +2095,6 @@ pub struct VkGetArgs {
     #[arg(long, value_name = "NAME")]
     name: String,
 }
-
 impl Run for VkGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let backend =

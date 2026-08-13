@@ -1,10 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Metrics registry hygiene tests (telemetry feature only).
 #![cfg(feature = "telemetry")]
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 #[test]
 fn shared_metrics_reset_clears_counters() {
     // Start fresh registry.
@@ -14,7 +12,6 @@ fn shared_metrics_reset_clears_counters() {
         .with_label_values(&["/tests/metrics-reset", "reason"]);
     counter.inc();
     assert_eq!(counter.get(), 1);
-
     // Reset should give a new registry with zeroed counters.
     let reset = fixtures::reset_shared_metrics();
     let counter_after = reset
@@ -26,7 +23,6 @@ fn shared_metrics_reset_clears_counters() {
         "reset_shared_metrics should return a fresh registry"
     );
 }
-
 #[test]
 fn duplicate_metric_panic_env_is_enabled() {
     fixtures::enable_duplicate_metric_panic();

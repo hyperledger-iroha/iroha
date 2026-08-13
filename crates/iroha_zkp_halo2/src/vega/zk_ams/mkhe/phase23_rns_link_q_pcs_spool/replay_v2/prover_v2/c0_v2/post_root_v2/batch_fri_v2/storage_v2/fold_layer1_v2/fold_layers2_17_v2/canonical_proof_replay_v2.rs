@@ -1,9 +1,6 @@
 //! Sequential final-proof replay adapter shared by B1 through B17.
-
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::CanonicalProofSectionV2;
-
 use super::*;
-
 pub(in super::super::super::super) struct FriLayerCanonicalProofReplayV2 {
     owner: Option<FriLayerRootedV2>,
     purpose: Option<CanonicalTreePurposeBoundV2>,
@@ -14,7 +11,6 @@ pub(in super::super::super::super) struct FriLayerCanonicalProofReplayV2 {
     batch_schedule_digest: [u8; 32],
     fold_schedule_digest: [u8; 32],
 }
-
 fn terminal_marker_matches_v2(
     owner: &FriLayerRootedV2,
     marker: &FriLayerReplayCompleteV2,
@@ -28,7 +24,6 @@ fn terminal_marker_matches_v2(
         && marker.binding.layer0_binding.batch_schedule_digest == batch_schedule_digest
         && same_layer0_binding_v2(marker.binding.layer0_binding, owner.layer0_binding)
 }
-
 impl FriLayerRootedV2 {
     pub(in super::super::super::super) fn begin_canonical_proof_replay_v2(
         mut self,
@@ -80,17 +75,14 @@ impl FriLayerRootedV2 {
         })
     }
 }
-
 impl CanonicalTreeReplayV2 for FriLayerCanonicalProofReplayV2 {
     type Owner = FriLayerRootedV2;
-
     fn shape_v2(&self) -> Result<CanonicalTreeReplayShapeV2, ProverPrerequisiteErrorV2> {
         if self.owner.is_none() || self.purpose.is_none() {
             return Err(ProverPrerequisiteErrorV2::Poisoned);
         }
         Ok(self.shape)
     }
-
     fn read_next_column_v2(
         &mut self,
     ) -> Result<AuthenticatedReplayChunkV2, ProverPrerequisiteErrorV2> {
@@ -110,7 +102,6 @@ impl CanonicalTreeReplayV2 for FriLayerCanonicalProofReplayV2 {
         self.owner = Some(owner);
         Ok(chunk)
     }
-
     fn complete_v2(mut self) -> Result<Self::Owner, ProverPrerequisiteErrorV2> {
         let owner = self
             .owner
@@ -145,11 +136,9 @@ impl CanonicalTreeReplayV2 for FriLayerCanonicalProofReplayV2 {
         Ok(owner)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn source_guards_require_the_b17_terminal_completion_marker() {
         let source = include_str!("canonical_proof_replay_v2.rs");

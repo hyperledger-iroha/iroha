@@ -1,8 +1,6 @@
 //! Tests for truncated payloads and checksum mismatches.
-
 use iroha_schema::IntoSchema;
 use norito::{decode_from_bytes, to_bytes};
-
 #[test]
 fn truncated_uncompressed_payload_yields_length_mismatch() {
     let v = vec![0u8; 256];
@@ -13,7 +11,6 @@ fn truncated_uncompressed_payload_yields_length_mismatch() {
     // Length mismatch is returned when the reader cannot fill the declared length.
     assert!(format!("{err}").contains("length mismatch"), "got: {err:?}");
 }
-
 #[test]
 fn checksum_mismatch_detected() {
     let s = String::from("checksum");
@@ -27,13 +24,11 @@ fn checksum_mismatch_detected() {
         "got: {err:?}"
     );
 }
-
 #[test]
 fn truncated_compressed_payload_yields_length_mismatch() {
     // Ensure compression is enabled in default features; the helper will decode either form.
     #[derive(Debug, PartialEq, IntoSchema, norito::NoritoSerialize, norito::NoritoDeserialize)]
     struct Blob(Vec<u8>);
-
     let v = Blob((0..8192u32).map(|i| (i as u8).wrapping_mul(31)).collect());
     let mut bytes = norito::to_compressed_bytes(&v, Some(norito::CompressionConfig::default()))
         .expect("encode compressed");

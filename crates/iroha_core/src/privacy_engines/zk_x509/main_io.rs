@@ -5,13 +5,11 @@
 //! prover-selected channel metadata, or trace-derived length can change it.
 //! The MAIN assembler compares its witness-bearing declarations byte-for-byte
 //! with this plan before committing either I/O base table.
-
 use iroha_data_model::privacy::{
     IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyStatementV1,
     ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
 };
 use thiserror::Error;
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::io_air::ZkX509IoChannelWitnessV1;
 use super::{
@@ -28,10 +26,8 @@ use super::{
         ZK_X509_PROJECTION_HASH_BUFFER_BYTES_V1, ZK_X509_PROJECTION_SPKI_DER_BYTES_V1,
     },
 };
-
 /// Stable identity of the verifier-owned MAIN I/O declaration compiler.
 pub(crate) const ZK_X509_MAIN_IO_DECLARATIONS_DESCRIPTOR_V1: &[u8] = b"zk-x509-main-io-declarations-v1-incompatible:statement-only:three-spki-prefix:serial-length+padded:per-disclosure-attribute-length+padded:three-certificate-tbs-pairs:optional-certificate-selector:three-certificate-signature-triples:crl-tbs+complete-crl+signature:issuer+leaf-keys:issuer+root-spki:active-projection-sha-triples:public-digests-verifier-fixed:declarations=40+5d:logical-rows=55922+4736d:max74866:fixed-capacity262144:first-release";
-
 /// Fixed declaration count with no selective disclosures.
 pub(crate) const ZK_X509_MAIN_IO_BASE_DECLARATIONS_V1: usize = 40;
 /// Additional declarations for each selectively disclosed attribute.
@@ -43,13 +39,11 @@ pub(crate) const ZK_X509_MAIN_IO_LOGICAL_ROWS_PER_DISCLOSURE_V1: usize = 4_736;
 /// Maximum logical byte-access rows admitted by the closed statement shape.
 pub(crate) const ZK_X509_MAIN_IO_MAX_LOGICAL_ROWS_V1: usize = ZK_X509_MAIN_IO_BASE_LOGICAL_ROWS_V1
     + ZK_X509_MAIN_IO_LOGICAL_ROWS_PER_DISCLOSURE_V1 * ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1;
-
 const FIXED_CERTIFICATE_SLOTS_V1: usize = 3;
 const LENGTH_BYTES_V1: usize = core::mem::size_of::<u64>();
 const SIGNATURE_DER_BYTES_V1: usize = 72;
 const SHA256_DIGEST_BYTES_V1: usize = 32;
 const OPTIONAL_CERTIFICATE_SELECTOR_BYTES_V1: usize = 1;
-
 /// Verifier-owned declarations and the exact non-padding row census.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509MainIoDeclarationsV1 {
@@ -58,7 +52,6 @@ pub(crate) struct ZkX509MainIoDeclarationsV1 {
     /// Exact producer-plus-consumer byte accesses before fixed-capacity padding.
     pub(crate) logical_active_rows: usize,
 }
-
 impl ZkX509MainIoDeclarationsV1 {
     /// Reject witness-selected channel metadata before either base table is built.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -76,7 +69,6 @@ impl ZkX509MainIoDeclarationsV1 {
         }
         Ok(())
     }
-
     /// Replay the statement-only compiler and reject any altered plan field.
     #[cfg(test)]
     pub(crate) fn validate_for_statement_v1(
@@ -90,7 +82,6 @@ impl ZkX509MainIoDeclarationsV1 {
         Ok(())
     }
 }
-
 /// Statement validation, topology, or bounded-allocation failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509MainIoPlanErrorV1 {
@@ -104,7 +95,6 @@ pub(crate) enum ZkX509MainIoPlanErrorV1 {
     #[error("zk-X509 MAIN I/O declaration resource bound is exceeded")]
     Resource,
 }
-
 impl From<ZkX509IoAirErrorV1> for ZkX509MainIoPlanErrorV1 {
     fn from(error: ZkX509IoAirErrorV1) -> Self {
         if error == ZkX509IoAirErrorV1::Resource {
@@ -114,11 +104,9 @@ impl From<ZkX509IoAirErrorV1> for ZkX509MainIoPlanErrorV1 {
         }
     }
 }
-
 fn endpoint_v1(role: ZkX509IoSegmentRoleV1) -> ZkX509IoEndpointV1 {
     ZkX509IoEndpointV1 { role, instance: 0 }
 }
-
 fn copy_bytes_v1(bytes: &[u8]) -> Result<Vec<u8>, ZkX509MainIoPlanErrorV1> {
     let mut copy = Vec::new();
     copy.try_reserve_exact(bytes.len())
@@ -126,7 +114,6 @@ fn copy_bytes_v1(bytes: &[u8]) -> Result<Vec<u8>, ZkX509MainIoPlanErrorV1> {
     copy.extend_from_slice(bytes);
     Ok(copy)
 }
-
 fn copy_endpoints_v1(
     endpoints: &[ZkX509IoEndpointV1],
 ) -> Result<Vec<ZkX509IoEndpointV1>, ZkX509MainIoPlanErrorV1> {
@@ -136,7 +123,6 @@ fn copy_endpoints_v1(
     copy.extend_from_slice(endpoints);
     Ok(copy)
 }
-
 fn push_declaration_v1(
     declarations: &mut Vec<ZkX509IoChannelDeclarationV1>,
     producer: ZkX509IoEndpointV1,
@@ -156,7 +142,6 @@ fn push_declaration_v1(
     });
     Ok(())
 }
-
 fn push_private_copy_v1(
     declarations: &mut Vec<ZkX509IoChannelDeclarationV1>,
     producer: ZkX509IoEndpointV1,
@@ -165,7 +150,6 @@ fn push_private_copy_v1(
 ) -> Result<(), ZkX509MainIoPlanErrorV1> {
     push_declaration_v1(declarations, producer, &[consumer], byte_len, None)
 }
-
 fn push_projection_sha_invocation_v1(
     declarations: &mut Vec<ZkX509IoChannelDeclarationV1>,
     public_digest: Option<&[u8; SHA256_DIGEST_BYTES_V1]>,
@@ -199,7 +183,6 @@ fn push_projection_sha_invocation_v1(
         )
     }
 }
-
 fn append_shared_prefix_v1(
     declarations: &mut Vec<ZkX509IoChannelDeclarationV1>,
     disclosed_attributes: usize,
@@ -232,7 +215,6 @@ fn append_shared_prefix_v1(
     }
     Ok(())
 }
-
 fn append_rfc5280_tail_v1(
     declarations: &mut Vec<ZkX509IoChannelDeclarationV1>,
 ) -> Result<(), ZkX509MainIoPlanErrorV1> {
@@ -240,7 +222,6 @@ fn append_rfc5280_tail_v1(
     let sha = endpoint_v1(ZkX509IoSegmentRoleV1::Sha256);
     let p256 = endpoint_v1(ZkX509IoSegmentRoleV1::P256);
     let ca_accumulator = endpoint_v1(ZkX509IoSegmentRoleV1::CaAccumulator);
-
     for _ in 0..FIXED_CERTIFICATE_SLOTS_V1 {
         push_private_copy_v1(
             declarations,
@@ -302,7 +283,6 @@ fn append_rfc5280_tail_v1(
         ZK_X509_PROJECTION_SPKI_DER_BYTES_V1,
     )
 }
-
 fn logical_rows_v1(
     declarations: &[ZkX509IoChannelDeclarationV1],
 ) -> Result<usize, ZkX509MainIoPlanErrorV1> {
@@ -322,7 +302,6 @@ fn logical_rows_v1(
         .ok_or(ZkX509MainIoPlanErrorV1::Resource)
     })
 }
-
 /// Compile the exact verifier-owned MAIN byte-channel graph.
 ///
 /// The full typed statement is first validated against the Taira hard-ceiling
@@ -335,7 +314,6 @@ pub(crate) fn compile_zk_x509_main_io_declarations_v1(
     PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone())
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ZkX509MainIoPlanErrorV1::Statement)?;
-
     let disclosed_attributes = statement.disclosed_attributes.len();
     if disclosed_attributes > ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
         return Err(ZkX509MainIoPlanErrorV1::Statement);
@@ -351,7 +329,6 @@ pub(crate) fn compile_zk_x509_main_io_declarations_v1(
     declarations
         .try_reserve_exact(expected_declarations)
         .map_err(|_| ZkX509MainIoPlanErrorV1::Resource)?;
-
     append_shared_prefix_v1(&mut declarations, disclosed_attributes)?;
     append_rfc5280_tail_v1(&mut declarations)?;
     push_projection_sha_invocation_v1(
@@ -369,7 +346,6 @@ pub(crate) fn compile_zk_x509_main_io_declarations_v1(
         )?;
     }
     push_projection_sha_invocation_v1(&mut declarations, None)?;
-
     validate_declarations_v1(&declarations)?;
     let logical_active_rows = logical_rows_v1(&declarations)?;
     let expected_logical_rows = ZK_X509_MAIN_IO_BASE_LOGICAL_ROWS_V1
@@ -388,23 +364,19 @@ pub(crate) fn compile_zk_x509_main_io_declarations_v1(
     if logical_active_rows > ZK_X509_IO_FIXED_CAPACITY_ROWS_V1 {
         return Err(ZkX509MainIoPlanErrorV1::Resource);
     }
-
     Ok(ZkX509MainIoDeclarationsV1 {
         declarations,
         logical_active_rows,
     })
 }
-
 #[cfg(test)]
 pub(crate) mod tests {
     use iroha_data_model::privacy::{
         PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1, PrivacyNullifierV1,
         PrivacyZkX509DisclosedAttributeV1,
     };
-
     use super::*;
     use crate::privacy_engines::zk_x509::projection_air::tests::fixture;
-
     pub(crate) fn statement_with_disclosures_v1(
         disclosures: usize,
     ) -> IrohaZkX509StarkP256StatementV1 {
@@ -426,7 +398,6 @@ pub(crate) mod tests {
             .collect();
         statement
     }
-
     fn assert_private_copy_v1(
         declaration: &ZkX509IoChannelDeclarationV1,
         producer: ZkX509IoSegmentRoleV1,
@@ -441,7 +412,6 @@ pub(crate) mod tests {
         );
         assert_eq!(declaration.public_value, None);
     }
-
     fn assert_rfc_tail_v1(
         declarations: &[ZkX509IoChannelDeclarationV1],
         mut cursor: usize,
@@ -530,7 +500,6 @@ pub(crate) mod tests {
         );
         cursor + 2
     }
-
     #[test]
     fn every_disclosure_count_has_exact_topology_counts_and_rows() {
         for disclosures in 0..=ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
@@ -564,7 +533,6 @@ pub(crate) mod tests {
                 plan.declarations.len()
             );
             validate_declarations_v1(&plan.declarations).expect("canonical declarations");
-
             let mut cursor = 0;
             for _ in 0..FIXED_CERTIFICATE_SLOTS_V1 {
                 assert_private_copy_v1(
@@ -597,7 +565,6 @@ pub(crate) mod tests {
             }
             cursor = assert_rfc_tail_v1(&plan.declarations, cursor);
             assert_eq!(cursor, 31 + 2 * disclosures);
-
             let expected_public_digests =
                 core::iter::once(statement.subject_public_key_digest.as_bytes().as_slice())
                     .chain(core::iter::once(
@@ -673,7 +640,6 @@ pub(crate) mod tests {
             );
         }
     }
-
     #[test]
     fn maximum_disclosure_shape_hits_the_pinned_maximum_not_capacity_padding() {
         let statement = statement_with_disclosures_v1(ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1);
@@ -688,13 +654,11 @@ pub(crate) mod tests {
             187_278
         );
     }
-
     #[test]
     fn each_public_digest_changes_exactly_its_own_channel() {
         let statement = statement_with_disclosures_v1(ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1);
         let baseline = compile_zk_x509_main_io_declarations_v1(&statement).expect("baseline plan");
         let projection_start = 31 + 2 * ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1;
-
         for public_digest in 0..2 + ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
             let mut changed = statement.clone();
             let replacement = [0xD0_u8.wrapping_add(public_digest as u8); SHA256_DIGEST_BYTES_V1];
@@ -722,11 +686,9 @@ pub(crate) mod tests {
             assert_eq!(changed.logical_active_rows, baseline.logical_active_rows);
         }
     }
-
     #[test]
     fn malformed_statement_shapes_fail_before_emitting_a_plan() {
         let mut malformed = Vec::new();
-
         let mut too_many = statement_with_disclosures_v1(ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1);
         too_many
             .disclosed_attributes
@@ -735,39 +697,31 @@ pub(crate) mod tests {
                 attribute_digest: PrivacyAttributeDigestV1::new([0x91; SHA256_DIGEST_BYTES_V1]),
             });
         malformed.push(too_many);
-
         let mut unsupported_index = statement_with_disclosures_v1(1);
         unsupported_index.disclosed_attributes[0].index = 4;
         malformed.push(unsupported_index);
-
         let mut duplicate = statement_with_disclosures_v1(2);
         duplicate.disclosed_attributes[1].index = duplicate.disclosed_attributes[0].index;
         malformed.push(duplicate);
-
         let mut descending = statement_with_disclosures_v1(2);
         descending.disclosed_attributes[0].index = 3;
         descending.disclosed_attributes[1].index = 1;
         malformed.push(descending);
-
         let mut zero_attribute = statement_with_disclosures_v1(1);
         zero_attribute.disclosed_attributes[0].attribute_digest =
             PrivacyAttributeDigestV1::new([0; SHA256_DIGEST_BYTES_V1]);
         malformed.push(zero_attribute);
-
         let mut zero_subject = statement_with_disclosures_v1(0);
         zero_subject.subject_public_key_digest =
             PrivacyCertificateKeyDigestV1::new([0; SHA256_DIGEST_BYTES_V1]);
         malformed.push(zero_subject);
-
         let mut zero_nullifier = statement_with_disclosures_v1(0);
         zero_nullifier.certificate_nullifier = PrivacyNullifierV1::new([0; SHA256_DIGEST_BYTES_V1]);
         malformed.push(zero_nullifier);
-
         let mut inverted_window = statement_with_disclosures_v1(0);
         inverted_window.presentation_not_after_unix_seconds =
             inverted_window.presentation_not_before_unix_seconds;
         malformed.push(inverted_window);
-
         for statement in malformed {
             assert_eq!(
                 compile_zk_x509_main_io_declarations_v1(&statement),
@@ -775,7 +729,6 @@ pub(crate) mod tests {
             );
         }
     }
-
     #[test]
     fn exact_replay_rejects_every_plan_metadata_class() {
         let statement = statement_with_disclosures_v1(2);
@@ -784,29 +737,22 @@ pub(crate) mod tests {
         canonical
             .validate_for_statement_v1(&statement)
             .expect("canonical replay");
-
         let mut mutations = Vec::new();
-
         let mut changed = canonical.clone();
         changed.declarations[0].channel = 1;
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed.declarations.swap(0, 1);
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed.declarations[0].byte_len += 1;
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed.declarations[0].producer = endpoint_v1(ZkX509IoSegmentRoleV1::Sha256);
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed.declarations[0].consumers[0] = endpoint_v1(ZkX509IoSegmentRoleV1::P256);
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         let public = changed
             .declarations
@@ -815,19 +761,15 @@ pub(crate) mod tests {
             .expect("public declaration");
         public.public_value.as_mut().expect("public value")[0] ^= 1;
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed.logical_active_rows += 1;
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed.declarations.pop();
         mutations.push(changed);
-
         let mut changed = canonical.clone();
         changed.declarations.push(canonical.declarations[0].clone());
         mutations.push(changed);
-
         for mutation in mutations {
             assert_eq!(
                 mutation.validate_for_statement_v1(&statement),

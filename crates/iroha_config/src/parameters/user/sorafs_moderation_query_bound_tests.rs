@@ -4,7 +4,6 @@ fn moderation_snapshot_defaults_equal_native_query_ceilings() {
     assert_eq!(config.max_cases, MODERATION_QUERY_MAX_CASES_V1);
     assert_eq!(config.max_events, MODERATION_QUERY_MAX_EVENTS_V1);
 }
-
 #[test]
 fn moderation_snapshot_native_query_ceilings_parse_exactly() {
     let mut config = valid_config();
@@ -14,7 +13,6 @@ fn moderation_snapshot_native_query_ceilings_parse_exactly() {
     assert!(config.parse(true, &mut emitter).is_some());
     assert!(emitter.into_result().is_ok());
 }
-
 #[test]
 fn moderation_snapshot_bounds_reject_each_native_ceiling_plus_one() {
     for configure in [
@@ -38,7 +36,6 @@ fn moderation_snapshot_bounds_reject_each_native_ceiling_plus_one() {
         assert!(diagnostic.contains("must be within 1..="));
     }
 }
-
 #[test]
 fn moderation_snapshot_bounds_reject_each_zero_independently() {
     for configure in [

@@ -54,7 +54,6 @@ fn restored_valid_qc_without_local_retention_authority_is_negative() {
         );
     }
 }
-
 #[test]
 fn restored_negative_outcome_tags_must_match_reconstructed_authority() {
     let (service, keys) = fixture_with_block_payload();
@@ -165,7 +164,6 @@ fn restored_negative_outcome_tags_must_match_reconstructed_authority() {
         );
     }
 }
-
 #[test]
 fn strict_higher_view_replaces_negative_without_resurrecting_exact_request() {
     let (service, keys) = fixture_with_block_payload();
@@ -312,7 +310,6 @@ fn strict_higher_view_replaces_negative_without_resurrecting_exact_request() {
     drop(ingress);
     drop(command_rx);
     drop(command_tx);
-
     let (restart_tx, _restart_rx, _admission) = production_persistent_test_io_command_channel(
         4,
         serve_root.path(),
@@ -369,7 +366,6 @@ fn strict_higher_view_replaces_negative_without_resurrecting_exact_request() {
         .unbind_certified_serve_gate(&restart_gate)
         .expect("retire restarted strict higher gate");
 }
-
 #[test]
 fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
     let (service, keys) = fixture_with_block_payload();
@@ -410,7 +406,6 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
         canonical_wire,
         &keys[0],
     );
-
     let live_serve_root = TempDir::new().expect("live supersession Serve root");
     let live_lifecycle_id = {
         let (command_tx, command_rx, _admission) =
@@ -454,7 +449,6 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
             assert!(tracked.reply_routes.is_some());
             assert!(tracked.ingress_ownership.is_some());
         }
-
         assert!(matches!(
             ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
             Ok(FairV2IngressPushDisposition::Enqueued)
@@ -667,7 +661,6 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
             .expect("retire live supersession gate");
         admission.lifecycle_id
     };
-
     let (live_restart_tx, _live_restart_rx, _admission) =
         production_persistent_test_io_command_channel(
             4,
@@ -692,7 +685,6 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
             CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
         ))
     );
-
     let terminal_serve_root = TempDir::new().expect("startup terminal supersession root");
     let terminal_lifecycle_id = persist_terminal_serve_fixture(
         terminal_serve_root.path(),
@@ -726,7 +718,6 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
             CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
         ))
     );
-
     let raw_serve_root = TempDir::new().expect("post-Decision raw admission root");
     let raw_lifecycle_id = persist_unsealed_serve_fixture(
         raw_serve_root.path(),
@@ -764,7 +755,6 @@ fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
         );
     }
 }
-
 #[test]
 fn missing_or_retargeted_reply_capability_is_rejected_before_serve_admission() {
     let (service, keys) = fixture_with_block_payload();
@@ -846,7 +836,6 @@ fn missing_or_retargeted_reply_capability_is_rejected_before_serve_admission() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire route-less Serve gate");
 }
-
 #[test]
 fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity() {
     let (service, keys) = fixture_with_block_payload();
@@ -941,7 +930,6 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
         .is_err(),
         "the requester signature is valid, but production QC verification must reject the fixture certificate"
     );
-
     let via = context.roster[0].validator.clone();
     let retry_via = context.roster[3].validator.clone();
     let body_root = TempDir::new().expect("invalid-QC quarantine body root");
@@ -962,7 +950,6 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
             .expect("raw invalid-QC admission owns one physical occurrence")
             .lifecycle_id();
         assert_eq!(invalid_lifecycle.admission_ordinal, 1);
-
         let mut reject_invalid_qc = |inbound: &InboundBlockMessage| {
             let BlockMessage::V2(message) = inbound.message() else {
                 panic!("invalid-QC fixture changed transport message class")
@@ -1034,7 +1021,6 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
             command_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
-
         for _ in 0..2 {
             assert!(matches!(
                 ingress.try_push(certified_serve_inbound(
@@ -1058,7 +1044,6 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
             .expect("retire invalid-QC quarantine gate");
         invalid_lifecycle
     };
-
     let (command_tx, _command_rx, _admission) =
         persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
             .expect("restart invalid-QC quarantine queue");
@@ -1093,7 +1078,6 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
         ),
         Ok(())
     ));
-
     let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
     assert!(matches!(
         ingress.try_push(certified_serve_inbound(honest.request(), via)),
@@ -1143,7 +1127,6 @@ fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_c
         .unbind_certified_serve_gate(&gate)
         .expect("retire honest-capacity quarantine gate");
 }
-
 #[test]
 fn durable_raw_admission_restart_locally_seals_before_later_producers() {
     let (service, keys) = fixture_with_block_payload();
@@ -1178,7 +1161,6 @@ fn durable_raw_admission_restart_locally_seals_before_later_producers() {
     let _ = body_store
         .store(payload.manifest().clone(), canonical_wire)
         .expect("retain raw-admission restart body");
-
     let (scheduler_ordinal, lifecycle_id) = {
         let (command_tx, _command_rx, _admission) =
             persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
@@ -1237,7 +1219,6 @@ fn durable_raw_admission_restart_locally_seals_before_later_producers() {
             .expect("detach pre-crash raw carrier");
         (barrier.scheduler_ordinal(), barrier.lifecycle_id())
     };
-
     let (command_tx, command_rx, _admission) = production_persistent_test_io_command_channel(
         2,
         serve_root.path(),
@@ -1354,7 +1335,6 @@ fn durable_raw_admission_restart_locally_seals_before_later_producers() {
             .expect("inspect coalesced restored barrier"),
         Some(restored_barrier)
     );
-
     let (admission, committed) = drain_and_commit_gated_serve(
         &ingress,
         &command_tx,
@@ -1378,13 +1358,11 @@ fn durable_raw_admission_restart_locally_seals_before_later_producers() {
         lifecycle_id.admission_ordinal,
         "physical replay cannot mint another logical Serve lifecycle"
     );
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire raw-admission restart fixture gate");
 }
-
 #[test]
 fn restored_observer_waiter_is_locally_serviced_without_requester_fairness() {
     let (service, keys) = fixture_with_block_payload();
@@ -1408,7 +1386,6 @@ fn restored_observer_waiter_is_locally_serviced_without_requester_fairness() {
     let _ = body_store
         .store(payload.manifest().clone(), canonical_wire)
         .expect("retain observer startup-discharge body");
-
     let (scheduler_ordinal, lifecycle_id) = {
         let (command_tx, _command_rx, _admission) =
             persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
@@ -1444,7 +1421,6 @@ fn restored_observer_waiter_is_locally_serviced_without_requester_fairness() {
             .expect("detach pre-crash observer carrier");
         (barrier.scheduler_ordinal(), barrier.lifecycle_id())
     };
-
     let (command_tx, command_rx, _admission) = production_persistent_test_io_command_channel(
         2,
         serve_root.path(),
@@ -1491,7 +1467,6 @@ fn restored_observer_waiter_is_locally_serviced_without_requester_fairness() {
                 .iter()
                 .any(|lifecycle| lifecycle.lifecycle_id == lifecycle_id)
     );
-
     let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
     assert_eq!(
         gate.dormant_ingress_scheduler_ordinal()
@@ -1520,7 +1495,6 @@ fn restored_observer_waiter_is_locally_serviced_without_requester_fairness() {
             ..
         })
     ));
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound(
             request.request(),
@@ -1542,13 +1516,11 @@ fn restored_observer_waiter_is_locally_serviced_without_requester_fairness() {
     );
     assert_eq!(admission.lifecycle_id, lifecycle_id);
     assert!(matches!(replay, CertifiedServeCommit::Replay { .. }));
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire observer restore fixture gate");
 }
-
 #[test]
 fn durable_raw_waiter_rejects_mutated_logical_lineage() {
     let (service, keys) = fixture_with_block_payload();
@@ -1579,7 +1551,6 @@ fn durable_raw_waiter_rejects_mutated_logical_lineage() {
             .unbind_certified_serve_gate(&gate)
             .expect("detach raw-lineage carrier");
     }
-
     let family_capacity = certified_serve_family_capacity(context.roster.len(), 2, 2)
         .expect("raw-lineage family capacity");
     let (store, mut persisted) =
@@ -1597,7 +1568,6 @@ fn durable_raw_waiter_rejects_mutated_logical_lineage() {
     store
         .persist(&persisted)
         .expect("publish canonically checksummed lineage mutation");
-
     let error =
         match persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store) {
             Ok(_) => panic!("mutated raw lifecycle lineage must fail closed"),
@@ -1608,7 +1578,6 @@ fn durable_raw_waiter_rejects_mutated_logical_lineage() {
         "unexpected raw-lineage rejection: {error}"
     );
 }
-
 #[test]
 fn certified_serve_abort_mismatch_preserves_logical_and_physical_handoff() {
     let (service, keys) = fixture_with_block_payload();
@@ -1731,7 +1700,6 @@ fn certified_serve_abort_mismatch_preserves_logical_and_physical_handoff() {
         .unbind_certified_serve_gate(&gate)
         .expect("retire abort-mismatch fixture gate");
 }
-
 #[test]
 fn certified_serve_abort_error_preserves_primary_and_rollback_failures() {
     let primary = "primary Serve failure".to_owned();
@@ -1746,7 +1714,6 @@ fn certified_serve_abort_error_preserves_primary_and_rollback_failures() {
     assert!(combined.starts_with(&primary));
     assert!(combined.contains("durable rollback failure"));
 }
-
 #[test]
 fn raw_admission_persistence_failure_rolls_back_logical_lineage() {
     let (service, keys) = fixture_with_block_payload();
@@ -1773,7 +1740,6 @@ fn raw_admission_persistence_failure_rolls_back_logical_lineage() {
         .with_extension("norito.tmp");
     fs::create_dir(&temporary_state).expect("block atomic raw-admission temporary file");
     let before = fair_ingress_accounting_snapshot(&ingress);
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound(request.request(), via)),
         Err(FairV2IngressPushError::Closed(_))
@@ -1809,7 +1775,6 @@ fn raw_admission_persistence_failure_rolls_back_logical_lineage() {
         .unbind_certified_serve_gate(&gate)
         .expect("detach failed raw-admission gate");
 }
-
 #[test]
 fn fair_ingress_gate_overflow_closes_without_partial_admission() {
     let (service, keys) = fixture_with_block_payload();
@@ -1830,7 +1795,6 @@ fn fair_ingress_gate_overflow_closes_without_partial_admission() {
     }
     command_tx.queue.lifecycle_ordinals.exhaust_for_test();
     let before = fair_ingress_accounting_snapshot(&ingress);
-
     assert!(matches!(
         ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
         Err(FairV2IngressPushError::Closed(_))
@@ -1857,12 +1821,10 @@ fn fair_ingress_gate_overflow_closes_without_partial_admission() {
     ));
     let repeated = fair_ingress_accounting_snapshot(&ingress);
     assert_eq!(repeated, after);
-
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("closed empty ingress detaches failed gate");
 }
-
 #[test]
 fn fair_ingress_classifies_current_historical_future_and_unauthenticated_requests() {
     let (mut service, keys) = fixture();
@@ -1884,7 +1846,6 @@ fn fair_ingress_classifies_current_historical_future_and_unauthenticated_request
         persistent_test_io_command_channel(2, serve_root.path(), &service.context, &body_store)
             .expect("open raw-gate persistent queue");
     let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
     let (mut foreign_service, foreign_keys) = fixture();
     allow_fixture_block_payload(&mut foreign_service.context);
     foreign_service.context.network_id =
@@ -1906,7 +1867,6 @@ fn fair_ingress_classifies_current_historical_future_and_unauthenticated_request
         ingress.try_push(certified_serve_inbound(foreign.request(), via.clone(),)),
         Err(FairV2IngressPushError::Rejected(_))
     ));
-
     let forged_outer = InboundBlockMessage::from_transport(
         BlockMessage::V2(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::CertifiedBodyRequest(authenticated.request().clone()),
@@ -1918,7 +1878,6 @@ fn fair_ingress_classifies_current_historical_future_and_unauthenticated_request
         ingress.try_push(forged_outer),
         Err(FairV2IngressPushError::Rejected(_))
     ));
-
     let mut future = authenticated.request().clone();
     future.round.height += 1;
     future.certificate.round.height += 1;
@@ -1930,7 +1889,6 @@ fn fair_ingress_classifies_current_historical_future_and_unauthenticated_request
         ingress.try_push(certified_serve_inbound(&future, via.clone())),
         Err(FairV2IngressPushError::Rejected(_))
     ));
-
     let mut invalid = authenticated.request().clone();
     invalid.signature[0] ^= 0xFF;
     assert!(matches!(
@@ -1952,12 +1910,10 @@ fn fair_ingress_classifies_current_historical_future_and_unauthenticated_request
         0,
         "raw gate rejection precedes both fair and Serve ordinal mutation"
     );
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire rejection fixture gate");
-
     let mut active_context = service.context.clone();
     active_context.height += 1;
     active_context.snapshot_bootstrap = Some(wire::SnapshotBootstrapAnchor {
@@ -1981,7 +1937,6 @@ fn fair_ingress_classifies_current_historical_future_and_unauthenticated_request
     )
     .expect("open active-height persistent queue");
     let (historical_ingress, historical_gate) = gated_fair_ingress(&active_context, &active_tx);
-
     assert!(matches!(
         historical_ingress.try_push(certified_serve_inbound(authenticated.request(), via,)),
         Ok(FairV2IngressPushDisposition::Enqueued)
@@ -2069,12 +2024,9 @@ fn fair_ingress_classifies_current_historical_future_and_unauthenticated_request
         .unbind_certified_serve_gate(&historical_gate)
         .expect("retire historical classification gate");
 }
-
 include!("v2_worker_serve_unsealed_cases.rs");
 include!("v2_worker_serve_decision_restart_cases.rs");
-
 include!("v2_worker_certified_serve_budget_cases.rs");
-
 #[test]
 fn abnormal_service_drop_shuts_worker_down_before_blocking_final_drain() {
     let (mut service, _) = fixture();
@@ -2112,9 +2064,7 @@ fn abnormal_service_drop_shuts_worker_down_before_blocking_final_drain() {
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission,
     });
-
     drop(service);
-
     shutdown_seen_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("abnormal teardown must stop the worker before draining admitted output");
@@ -2122,7 +2072,6 @@ fn abnormal_service_drop_shuts_worker_down_before_blocking_final_drain() {
     assert!(output_guard.restart_required());
     assert!(output_guard.acquire().is_none());
 }
-
 #[test]
 fn recovery_gate_is_cross_thread_and_precedes_fatal_completion() {
     let gate = ConsensusOutputGuard::isolated();
@@ -2144,7 +2093,6 @@ fn recovery_gate_is_cross_thread_and_precedes_fatal_completion() {
             worker_candidate_published.store(true, Ordering::Release);
         }
     });
-
     let completion = completion_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("fatal completion must follow recovery admission closure");
@@ -2170,7 +2118,6 @@ fn recovery_gate_is_cross_thread_and_precedes_fatal_completion() {
         "no candidate may be published after the fatal durability transition"
     );
 }
-
 #[test]
 fn io_command_panic_latches_restart_required_before_unwinding() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -2182,12 +2129,10 @@ fn io_command_panic_latches_restart_required_before_unwinding() {
             });
         }
     });
-
     assert!(unwind.is_err());
     assert!(output_guard.restart_required());
     assert!(output_guard.acquire().is_none());
 }
-
 #[test]
 fn retire_panic_closes_gate_before_inflight_output_drains() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -2203,7 +2148,6 @@ fn retire_panic_closes_gate_before_inflight_output_drains() {
         });
         assert!(unwind.is_err());
     });
-
     entered_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("Retire operation entered");
@@ -2219,12 +2163,10 @@ fn retire_panic_closes_gate_before_inflight_output_drains() {
         output_guard.acquire().is_none(),
         "no later output may cross the gate after the Retire panic"
     );
-
     drop(admitted_output);
     worker.join().expect("join panicking Retire model");
     assert!(output_guard.acquire().is_none());
 }
-
 #[test]
 fn retire_failure_is_nonfatal_and_leaves_output_guard_open() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -2241,11 +2183,9 @@ fn retire_failure_is_nonfatal_and_leaves_output_guard_open() {
     ));
     worker_failure_guard.disarm();
     drop(worker_failure_guard);
-
     assert!(!output_guard.restart_required());
     assert!(output_guard.acquire().is_some());
 }
-
 #[test]
 fn io_worker_lifetime_guard_latches_panic_after_success_before_completion_delivery() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -2263,12 +2203,10 @@ fn io_worker_lifetime_guard_latches_panic_after_success_before_completion_delive
             panic!("model panic before completion delivery");
         }
     });
-
     assert!(unwind.is_err());
     assert!(output_guard.restart_required());
     assert!(output_guard.acquire().is_none());
 }
-
 #[test]
 fn io_worker_explicit_shutdown_leaves_output_guard_open() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -2276,11 +2214,9 @@ fn io_worker_explicit_shutdown_leaves_output_guard_open() {
         V2IoWorkerFailureGuard::new(Arc::clone(&output_guard), Arc::new(AtomicBool::new(false)));
     worker_failure_guard.disarm();
     drop(worker_failure_guard);
-
     assert!(!output_guard.restart_required());
     assert!(output_guard.acquire().is_some());
 }
-
 #[test]
 fn flagged_finalized_disconnect_leaves_output_guard_open() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -2288,13 +2224,10 @@ fn flagged_finalized_disconnect_leaves_output_guard_open() {
     allow_finalized_disconnect.store(true, AtomicOrdering::Release);
     let worker_failure_guard =
         V2IoWorkerFailureGuard::new(Arc::clone(&output_guard), allow_finalized_disconnect);
-
     drop(worker_failure_guard);
-
     assert!(!output_guard.restart_required());
     assert!(output_guard.acquire().is_some());
 }
-
 #[test]
 fn flagged_worker_panic_closes_gate_before_inflight_output_drains() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -2308,7 +2241,6 @@ fn flagged_worker_panic_closes_gate_before_inflight_output_drains() {
         entered_tx.send(()).expect("publish worker entry");
         panic!("model flagged finalized-cleanup worker panic");
     });
-
     entered_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("flagged worker entered");
@@ -2321,19 +2253,16 @@ fn flagged_worker_panic_closes_gate_before_inflight_output_drains() {
         output_guard.acquire().is_none(),
         "the finalized-disconnect flag must never suppress panic closure"
     );
-
     drop(admitted_output);
     assert!(worker.join().is_err());
     assert!(output_guard.acquire().is_none());
 }
-
 #[test]
 fn flagged_worker_fail_stop_error_still_latches_restart_required() {
     let output_guard = ConsensusOutputGuard::isolated();
     let allow_finalized_disconnect = Arc::new(AtomicBool::new(true));
     let worker_failure_guard =
         V2IoWorkerFailureGuard::new(Arc::clone(&output_guard), allow_finalized_disconnect);
-
     assert!(
         execute_fail_stop_io_command(&output_guard, || {
             Err("injected fail-stop I/O error".to_owned())
@@ -2341,11 +2270,9 @@ fn flagged_worker_fail_stop_error_still_latches_restart_required() {
         .is_err()
     );
     drop(worker_failure_guard);
-
     assert!(output_guard.restart_required());
     assert!(output_guard.acquire().is_none());
 }
-
 #[test]
 fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
     let (mut service, _) = fixture();
@@ -2384,7 +2311,6 @@ fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
             },
         });
     service.output_guard.activate_restart_required();
-
     assert!(service.take_prepared_candidate().is_none());
     let blocked_subject = wire::BlockSubject {
         parent_block_hash: None,
@@ -2414,11 +2340,9 @@ fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
     assert!(service.output_permit().is_err());
     drop(completion_tx);
 }
-
 fn manifest_hash(label: &[u8]) -> HashOf<wire::PayloadManifest> {
     HashOf::from_untyped_unchecked(Hash::new(label))
 }
-
 /// Build exact finality and Kura-receipt authority for sibling rollover tests.
 pub(in crate::sumeragi) fn durable_finality_fixture(
     service: &ProductionV2Services,
@@ -2491,11 +2415,9 @@ pub(in crate::sumeragi) fn durable_finality_fixture(
     artifact.validate().expect("valid worker finality artifact");
     (KuraV2CommitReceipt::for_test(&artifact), artifact)
 }
-
 fn durable_receipt(service: &ProductionV2Services, keys: &[KeyPair]) -> KuraV2CommitReceipt {
     durable_finality_fixture(service, keys).0
 }
-
 fn seal_empty_exact_output_for_cleanup_test(service: &ProductionV2Services) {
     let pending = service
         .pending_exact_output
@@ -2510,7 +2432,6 @@ fn seal_empty_exact_output_for_cleanup_test(service: &ProductionV2Services) {
         .seal()
         .expect("seal the cleanup fixture's empty exact-output corridor");
 }
-
 /// Rebind closed-network production services to an exact durable context.
 pub(in crate::sumeragi) fn service_for_history_context(
     kura: Arc<Kura>,
@@ -2519,7 +2440,6 @@ pub(in crate::sumeragi) fn service_for_history_context(
 ) -> ProductionV2Services {
     service_for_history_context_with_local_validator(kura, context, validators, 0)
 }
-
 /// Rebind a closed-network service to an explicit paired handoff owner.
 pub(in crate::sumeragi) fn service_for_history_context_with_handoff_owner(
     kura: Arc<Kura>,
@@ -2531,7 +2451,6 @@ pub(in crate::sumeragi) fn service_for_history_context_with_handoff_owner(
     service.exact_output_handoff_owner = exact_output_handoff_owner;
     service
 }
-
 /// Rebind one explicit validator and pair the service with its exact handoff owner.
 pub(in crate::sumeragi) fn service_for_history_context_with_local_validator_and_handoff_owner(
     kura: Arc<Kura>,
@@ -2549,7 +2468,6 @@ pub(in crate::sumeragi) fn service_for_history_context_with_local_validator_and_
     service.exact_output_handoff_owner = exact_output_handoff_owner;
     service
 }
-
 /// Rebind closed-network production services to one validator in an exact durable context.
 pub(in crate::sumeragi) fn service_for_history_context_with_local_validator(
     kura: Arc<Kura>,
@@ -2601,7 +2519,6 @@ pub(in crate::sumeragi) fn service_for_history_context_with_local_validator(
     );
     service
 }
-
 fn successor_service_for_history(
     kura: Arc<Kura>,
     parent: &wire::finality::V2FinalityArtifact,
@@ -2609,7 +2526,6 @@ fn successor_service_for_history(
 ) -> ProductionV2Services {
     successor_service_for_history_as(kura, parent, validators, 0)
 }
-
 fn successor_service_for_history_as(
     kura: Arc<Kura>,
     parent: &wire::finality::V2FinalityArtifact,

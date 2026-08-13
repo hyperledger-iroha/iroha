@@ -1,7 +1,5 @@
 //! Public-surface checks for deployment-owned daemon providers and publication factories.
-
 use std::sync::Arc;
-
 use irohad::{
     BuildLine, IrohaRuntimeDeps, IrohaRuntimeProviderBindingsV1,
     IrohaRuntimeProviderCatalogErrorV1, IrohaRuntimeProviderRegistryErrorV1,
@@ -17,13 +15,9 @@ use irohad::{
     },
     serve_runtime_provider_broker_with_fallible_readiness_v1,
 };
-
 struct DeploymentRegistry;
-
 struct ExternalMusubiPublicationFactory;
-
 struct ExternalMusubiPublicationRunner;
-
 impl MusubiPublicationPrivateServiceRunnerV1 for ExternalMusubiPublicationRunner {
     fn serve(
         self: Box<Self>,
@@ -35,7 +29,6 @@ impl MusubiPublicationPrivateServiceRunnerV1 for ExternalMusubiPublicationRunner
         })
     }
 }
-
 impl MusubiPublicationPrivateServiceFactoryV1 for ExternalMusubiPublicationFactory {
     fn build(
         self: Box<Self>,
@@ -52,9 +45,7 @@ impl MusubiPublicationPrivateServiceFactoryV1 for ExternalMusubiPublicationFacto
         )))
     }
 }
-
 struct DeploymentBrokerBackendRegistry;
-
 impl RuntimeProviderBrokerBackendRegistryV1 for DeploymentBrokerBackendRegistry {
     fn resolve(
         &self,
@@ -63,7 +54,6 @@ impl RuntimeProviderBrokerBackendRegistryV1 for DeploymentBrokerBackendRegistry 
         Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
     }
 }
-
 impl IrohaRuntimeProviderRegistryV1 for DeploymentRegistry {
     fn resolve(
         &self,
@@ -81,16 +71,13 @@ impl IrohaRuntimeProviderRegistryV1 for DeploymentRegistry {
         Ok(IrohaRuntimeDeps::default())
     }
 }
-
 struct ExternalProofOutcomeSigner {
     public_key: iroha_crypto::PublicKey,
 }
-
 impl ExternalProofOutcomeSigner {
     const HANDLE: &'static str = "hsm://external-launcher/proof-outcome/primary";
     const QUALIFICATION: iroha_torii::SorafsNativeTransactionSignerQualificationV1 =
         iroha_torii::SorafsNativeTransactionSignerQualificationV1::new(1, [0x41; 32]);
-
     fn new() -> Self {
         let keypair =
             iroha_crypto::KeyPair::try_from_seed(vec![0x41; 32], iroha_crypto::Algorithm::Ed25519)
@@ -99,32 +86,26 @@ impl ExternalProofOutcomeSigner {
             public_key: keypair.public_key().clone(),
         }
     }
-
     fn account_id(&self) -> iroha_data_model::account::AccountId {
         iroha_data_model::account::AccountId::new(self.public_key.clone())
     }
 }
-
 impl iroha_torii::SorafsNativeTransactionSignerProviderV1 for ExternalProofOutcomeSigner {
     fn role(&self) -> iroha_torii::SorafsNativeTransactionSignerRoleV1 {
         iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome
     }
-
     fn handle(&self) -> &str {
         Self::HANDLE
     }
-
     fn authority(&self) -> iroha_data_model::account::AccountId {
         self.account_id()
     }
-
     fn public_key(
         &self,
     ) -> Result<iroha_crypto::PublicKey, iroha_torii::SorafsNativeTransactionSignerProbeErrorV1>
     {
         Ok(self.public_key.clone())
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -134,7 +115,6 @@ impl iroha_torii::SorafsNativeTransactionSignerProviderV1 for ExternalProofOutco
         Ok(Self::QUALIFICATION)
     }
 }
-
 impl iroha_torii::SoraFsProofOutcomeTransactionSigner for ExternalProofOutcomeSigner {
     fn sign(
         &self,
@@ -146,7 +126,6 @@ impl iroha_torii::SoraFsProofOutcomeTransactionSigner for ExternalProofOutcomeSi
         Err(iroha_torii::SoraFsProofOutcomeSigningError::Refused)
     }
 }
-
 #[test]
 fn external_crate_can_implement_registry_and_name_standard_launcher() {
     let registry: Arc<dyn IrohaRuntimeProviderRegistryV1> = Arc::new(DeploymentRegistry);
@@ -154,11 +133,9 @@ fn external_crate_can_implement_registry_and_name_standard_launcher() {
         BuildLine,
         &dyn IrohaRuntimeProviderRegistryV1,
     ) -> ReportResult<(), MainError> = irohad::run_with_runtime_provider_registry;
-
     assert_eq!(Arc::strong_count(&registry), 1);
     let _ = launcher;
 }
-
 #[test]
 fn external_crate_can_implement_factory_and_name_publication_launchers() {
     let standalone_launcher: fn(
@@ -173,12 +150,10 @@ fn external_crate_can_implement_factory_and_name_publication_launchers() {
         irohad::run_with_runtime_provider_registry_and_musubi_publication;
     let factory: Box<dyn MusubiPublicationPrivateServiceFactoryV1> =
         Box::new(ExternalMusubiPublicationFactory);
-
     let _ = standalone_launcher;
     let _ = combined_launcher;
     drop(factory);
 }
-
 #[test]
 fn external_crate_can_implement_and_name_broker_backend_launcher() {
     let registry: &dyn RuntimeProviderBrokerBackendRegistryV1 = &DeploymentBrokerBackendRegistry;
@@ -186,7 +161,6 @@ fn external_crate_can_implement_and_name_broker_backend_launcher() {
     let _ = RuntimeProviderBrokerDeploymentV1::try_new;
     let _ = RuntimeProviderBrokerDeploymentV1::serve;
 }
-
 #[test]
 fn external_crate_can_name_standard_broker_executable_shell() {
     let load: fn(
@@ -207,7 +181,6 @@ fn external_crate_can_name_standard_broker_executable_shell() {
     let serve_systemd =
         RuntimeProviderBrokerExecutableV1::serve_until_shutdown_signal_with_systemd_notify;
     let catalog_path = RuntimeProviderBrokerExecutableArgsV1::catalog_path;
-
     let _ = (
         load,
         assemble,
@@ -220,7 +193,6 @@ fn external_crate_can_name_standard_broker_executable_shell() {
         catalog_path,
     );
 }
-
 #[test]
 fn external_crate_can_name_standalone_governance_view_projection() {
     let projection: fn(
@@ -231,10 +203,8 @@ fn external_crate_can_name_standalone_governance_view_projection() {
         IrohaRuntimeProviderBindingsV1,
         IrohaRuntimeProviderRegistryErrorV1,
     > = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_view;
-
     let _ = projection;
 }
-
 #[test]
 fn external_crate_can_name_secret_free_broker_catalog_handoff() {
     let export: fn(
@@ -246,11 +216,9 @@ fn external_crate_can_name_secret_free_broker_catalog_handoff() {
     )
         -> Result<IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderCatalogErrorV1> =
         IrohaRuntimeProviderBindingsV1::load_canonical_v1;
-
     assert_eq!(RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1, 256 * 1024);
     let _ = (export, load);
 }
-
 #[test]
 fn checked_in_binaries_are_explicitly_adapter_disabled() {
     let source = include_str!("../src/bin/iroha3d.rs");
@@ -262,11 +230,9 @@ fn checked_in_binaries_are_explicitly_adapter_disabled() {
     assert!(!compact.contains("run_with_runtime_provider_registry"));
     assert!(!compact.contains("run_with_musubi_publication"));
 }
-
 #[test]
 fn external_crate_can_construct_runtime_dependencies_with_public_builders() {
     let provider = Arc::new(ExternalProofOutcomeSigner::new());
     let dependencies = IrohaRuntimeDeps::default().with_sorafs_proof_outcome_signer(provider);
-
     assert!(!dependencies.is_empty());
 }

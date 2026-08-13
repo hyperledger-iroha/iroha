@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke test that Torii exposes telemetry-gated Sumeragi routes via the merged sub-router.
 #![cfg(feature = "telemetry")]
-
 use std::sync::Arc;
-
 use axum::{extract::ConnectInfo, http::Request};
 use http::StatusCode;
 use iroha_config::parameters::actual::TelemetryProfile;
@@ -15,9 +13,7 @@ use iroha_core::{
 };
 use iroha_torii::{MaybeTelemetry, Torii};
 use tower::ServiceExt as _;
-
 mod fixtures;
-
 fn signed_loopback_get(
     cfg: &iroha_config::parameters::actual::Root,
     uri: &'static str,
@@ -32,7 +28,6 @@ fn signed_loopback_get(
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
     request
 }
-
 #[tokio::test]
 async fn sumeragi_tel_subrouter_exposes_endpoints() {
     // Minimal Torii setup with telemetry enabled
@@ -70,7 +65,6 @@ async fn sumeragi_tel_subrouter_exposes_endpoints() {
         telemetry_handle,
     );
     let app = torii.api_router_for_tests();
-
     for uri in ["/v1/sumeragi/pacemaker", "/v1/sumeragi/phases"] {
         let resp = app
             .clone()
@@ -82,7 +76,6 @@ async fn sumeragi_tel_subrouter_exposes_endpoints() {
             StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
         ));
     }
-
     for retired in [
         "/v1/sumeragi/rbc",
         "/v1/sumeragi/rbc/delivered/0/0",

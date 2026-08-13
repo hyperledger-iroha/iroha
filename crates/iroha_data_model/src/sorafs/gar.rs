@@ -3,14 +3,11 @@
 //! These types mirror the structured policy hints embedded in GAR v2 payloads.
 //! They allow hosts, gateways, and governance tooling to exchange licensing,
 //! moderation, and telemetry directives without relying on ad-hoc JSON maps.
-
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::account::AccountId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-
 /// Licensing bundle referenced by a GAR payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -31,7 +28,6 @@ pub struct GarLicenseSetV1 {
     #[norito(default)]
     pub reference_uri: Option<String>,
 }
-
 /// CDN-facing policy embedded in GAR v2 payloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -58,7 +54,6 @@ pub struct GarCdnPolicyV1 {
     #[norito(default)]
     pub legal_hold: bool,
 }
-
 /// Moderation directive embedded in GAR v2.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -74,7 +69,6 @@ pub struct GarModerationDirectiveV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 /// Moderation action enforced by the directive.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default, Hash, PartialOrd, Ord,
@@ -95,7 +89,6 @@ pub enum GarModerationAction {
     #[cfg_attr(feature = "json", norito(rename = "block"))]
     Block,
 }
-
 impl GarModerationAction {
     fn as_str(self) -> &'static str {
         match self {
@@ -105,7 +98,6 @@ impl GarModerationAction {
             Self::Block => "block",
         }
     }
-
     #[cfg(feature = "json")]
     fn parse(value: &str) -> Result<Self, norito::json::Error> {
         match value {
@@ -119,18 +111,14 @@ impl GarModerationAction {
         }
     }
 }
-
 #[cfg(feature = "json")]
 mod gar_json_impl {
     use norito::json::{Error, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser};
-
     use super::GarModerationAction;
-
     impl FastJsonWrite for GarModerationAction {
         fn write_json(&self, out: &mut String) {
             JsonSerialize::json_serialize(self.as_str(), out);
         }
-
         fn write_json_to(
             &self,
             out: &mut dyn norito::json::JsonWriteSink,
@@ -138,7 +126,6 @@ mod gar_json_impl {
             norito::json::write_json_string_to(self.as_str(), out)
         }
     }
-
     impl JsonDeserialize for GarModerationAction {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let value = parser.parse_string()?;
@@ -146,7 +133,6 @@ mod gar_json_impl {
         }
     }
 }
-
 /// Metrics/telemetry policy surfaced through GAR.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -161,7 +147,6 @@ pub struct GarMetricsPolicyV1 {
     #[norito(default)]
     pub allowed_metrics: Vec<String>,
 }
-
 /// Structured policy payload embedded in GAR v2.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -186,28 +171,23 @@ pub struct GarPolicyPayloadV1 {
     #[norito(default)]
     pub rpt_digest: Option<[u8; 32]>,
 }
-
 #[cfg(feature = "json")]
 mod rpt_digest_json {
     use norito::json::{BoundedJsonError, Error, JsonWriteSink, Parser};
-
     #[allow(clippy::ref_option)]
     pub fn serialize(value: &Option<[u8; 32]>, out: &mut String) {
         crate::json_helpers::fixed_bytes::option::serialize(value, out);
     }
-
     pub fn serialize_bounded(
         value: &Option<[u8; 32]>,
         out: &mut dyn JsonWriteSink,
     ) -> Result<(), BoundedJsonError> {
         crate::json_helpers::fixed_bytes::option::serialize_bounded(value, out)
     }
-
     pub fn deserialize(parser: &mut Parser<'_>) -> Result<Option<[u8; 32]>, Error> {
         crate::json_helpers::fixed_bytes::option::deserialize(parser)
     }
 }
-
 /// Gateway enforcement actions recorded for audit/compliance (SNNet-15G1).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -242,7 +222,6 @@ pub enum GarEnforcementActionV1 {
     #[cfg_attr(feature = "json", norito(rename = "custom"))]
     Custom(String),
 }
-
 /// Deterministic receipt recorded whenever a GAR policy action is enforced.
 ///
 /// These receipts allow the SNNet-15G1 compliance tooling to export audit-ready
@@ -284,11 +263,9 @@ pub struct GarEnforcementReceiptV1 {
     #[norito(default)]
     pub labels: Vec<String>,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn receipt_round_trip_via_norito_codec() {
         let receipt = GarEnforcementReceiptV1 {
@@ -318,7 +295,6 @@ mod tests {
             norito::decode_from_bytes(&bytes).expect("decode receipt");
         assert_eq!(receipt, decoded);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn receipt_round_trip_via_json() {
@@ -346,7 +322,6 @@ mod tests {
             norito::json::from_slice(&json_bytes).expect("decode json");
         assert_eq!(receipt, decoded);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn cdn_policy_round_trip_via_json() {
@@ -366,7 +341,6 @@ mod tests {
             telemetry_labels: vec!["cdn".to_string()],
             rpt_digest: Some([0xCD; 32]),
         };
-
         let encoded = norito::json::to_vec(&payload).expect("encode policy");
         let compact = norito::json::to_json(&payload).expect("encode compact policy JSON");
         assert_eq!(

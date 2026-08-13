@@ -1,16 +1,13 @@
 //! Streaming helpers (HPKE fingerprinters, suite listings).
-
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::streaming::STREAMING_DEFAULT_KEM_SUITE;
 use iroha_crypto::streaming::kyber_public_fingerprint_with_suite;
 use soranet_pq::{MlKemSuite, SuiteParseError};
 use std::fmt::Write as _;
-
 use crate::cli_output::print_with_optional_text;
 use crate::json_macros::JsonSerialize;
 use crate::{Run, RunContext};
-
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Compute the ML-KEM fingerprint advertised in `EncryptionSuite::Kyber*`.
@@ -18,7 +15,6 @@ pub enum Command {
     /// List supported ML-KEM suite identifiers.
     Suites,
 }
-
 #[derive(Args, Debug)]
 pub struct FingerprintArgs {
     /// ML-KEM suite to use (e.g., `mlkem512`, `mlkem768`, `mlkem1024`).
@@ -28,19 +24,16 @@ pub struct FingerprintArgs {
     #[arg(long = "public-key", value_name = "HEX")]
     pub public_key_hex: String,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct FingerprintOutput {
     suite: String,
     fingerprint_hex: String,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct SuitesOutput {
     default_suite: String,
     suites: Vec<String>,
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -59,17 +52,14 @@ impl Run for Command {
         }
     }
 }
-
 impl FingerprintArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let suite = match self.suite {
             Some(label) => parse_suite(&label)?,
             None => STREAMING_DEFAULT_KEM_SUITE,
         };
-
         let public_key =
             hex::decode(&self.public_key_hex).wrap_err("failed to decode Kyber public key hex")?;
-
         let fingerprint =
             kyber_public_fingerprint_with_suite(&public_key, suite).map_err(|err| {
                 eyre!(
@@ -77,7 +67,6 @@ impl FingerprintArgs {
                     suite.to_string()
                 )
             })?;
-
         let output = FingerprintOutput {
             suite: suite.to_string(),
             fingerprint_hex: format!("0x{}", hex::encode(fingerprint)),
@@ -89,12 +78,10 @@ impl FingerprintArgs {
         print_with_optional_text(context, Some(text), &output)
     }
 }
-
 fn parse_suite(raw: &str) -> Result<MlKemSuite> {
     raw.parse::<MlKemSuite>()
         .map_err(|SuiteParseError(value)| eyre!("unsupported ML-KEM suite '{value}'"))
 }
-
 fn render_suites_text(rows: &[String]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "Supported ML-KEM suites:");
@@ -103,21 +90,18 @@ fn render_suites_text(rows: &[String]) -> String {
     }
     out
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_i18n::{Bundle, Language, Localizer};
     use soranet_pq::generate_mlkem_keypair_from_os as generate_mlkem_keypair;
     use std::fmt::Display;
-
     struct TestContext {
         output_format: crate::CliOutputFormat,
         printed: Vec<String>,
         config: iroha::config::Config,
         i18n: Localizer,
     }
-
     impl TestContext {
         fn new(output_format: crate::CliOutputFormat) -> Self {
             Self {
@@ -128,32 +112,25 @@ mod tests {
             }
         }
     }
-
     impl RunContext for TestContext {
         fn config(&self) -> &iroha::config::Config {
             &self.config
         }
-
         fn transaction_metadata(&self) -> Option<&iroha::data_model::metadata::Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             false
         }
-
         fn i18n(&self) -> &Localizer {
             &self.i18n
         }
-
         fn output_format(&self) -> crate::CliOutputFormat {
             self.output_format
         }
-
         fn print_data<T>(&mut self, data: &T) -> eyre::Result<()>
         where
             T: norito::json::JsonSerialize + ?Sized,
@@ -162,13 +139,11 @@ mod tests {
             self.printed.push(rendered);
             Ok(())
         }
-
         fn println(&mut self, data: impl Display) -> eyre::Result<()> {
             self.printed.push(data.to_string());
             Ok(())
         }
     }
-
     #[test]
     fn suites_run_emits_json_in_json_mode() {
         let mut ctx = TestContext::new(crate::CliOutputFormat::Json);
@@ -182,7 +157,6 @@ mod tests {
             Some(STREAMING_DEFAULT_KEM_SUITE.to_string().as_str())
         );
     }
-
     #[test]
     fn fingerprint_run_emits_json_with_hex() {
         let mut ctx = TestContext::new(crate::CliOutputFormat::Json);
@@ -204,7 +178,6 @@ mod tests {
         assert!(fingerprint.starts_with("0x"));
         assert_eq!(fingerprint.len(), 66);
     }
-
     #[test]
     fn render_suites_text_includes_header() {
         let text = render_suites_text(&vec!["mlkem512".into()]);

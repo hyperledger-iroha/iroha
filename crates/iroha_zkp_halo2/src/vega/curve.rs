@@ -1,10 +1,9 @@
 //! Canonical T256 group boundary for the pinned Vega profile.
-
+use super::{VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1, sponge::shake256};
 use core::{
     fmt,
     ops::{Add, Neg as _, Sub},
 };
-
 #[cfg(test)]
 use halo2curves::t256::Fp;
 use halo2curves::{
@@ -14,24 +13,18 @@ use halo2curves::{
     t256::{T256, T256Affine},
 };
 use thiserror::Error;
-
-use super::{VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1, sponge::shake256};
-
 /// Big-endian modulus of the canonical T256 coordinate field.
 pub const VEGA_T256_BASE_MODULUS_BE_V1: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
     0x7e, 0x72, 0xb4, 0x2b, 0x30, 0xe7, 0x31, 0x77, 0x93, 0x13, 0x56, 0x61, 0xb1, 0xc4, 0xb1, 0x17,
 ];
-
 #[cfg(test)]
 const CANONICAL_GENERATOR_Y_BE_V1: [u8; 32] = [
     0x5a, 0x6d, 0xd3, 0x2d, 0xf5, 0x87, 0x08, 0xe6, 0x4e, 0x97, 0x34, 0x5c, 0xbe, 0x66, 0x60, 0x0d,
     0xec, 0xd9, 0xd5, 0x38, 0xa3, 0x51, 0xbb, 0x3c, 0x30, 0xb4, 0x95, 0x49, 0x25, 0xb1, 0xf0, 0x2d,
 ];
-
 /// Maximum number of deterministic Hyrax generators derived in one call.
 pub const MAX_VEGA_T256_GENERATORS_V1: usize = 1 << 20;
-
 /// Failure at the strict T256 point or generator-derivation boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaCurveError {
@@ -73,7 +66,6 @@ pub enum VegaCurveError {
     #[error("linked T256 implementation disagrees with the canonical x=3 generator")]
     CanonicalGeneratorMismatch,
 }
-
 /// A point in Vega's canonical T256 prime-order group.
 ///
 /// The linked `halo2curves` 0.9 implementation uses a historical x=5 generator.
@@ -81,7 +73,6 @@ pub enum VegaCurveError {
 /// protocol's x=3 generator is constructed and checked explicitly.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct VegaT256PointV1(pub(super) T256);
-
 impl VegaT256PointV1 {
     /// Construct Vega's canonical x=3 generator.
     ///
@@ -101,7 +92,6 @@ impl VegaT256PointV1 {
             .map(Self)
             .ok_or(VegaCurveError::CanonicalGeneratorMismatch)
     }
-
     /// Decode one exact, non-identity canonical 33-byte proof point.
     ///
     /// The format is one flag byte (`0x00` or `0x80`, the parity of `y`)
@@ -131,7 +121,6 @@ impl VegaT256PointV1 {
         if x >= VEGA_T256_BASE_MODULUS_BE_V1 {
             return Err(VegaCurveError::NonCanonicalCoordinate);
         }
-
         let repr = raw.into();
         let point = Option::<T256>::from(T256::from_bytes(&repr))
             .map(Self)
@@ -147,7 +136,6 @@ impl VegaT256PointV1 {
         }
         Ok(point)
     }
-
     /// Encode this point in the canonical non-identity 33-byte proof format.
     ///
     /// # Errors
@@ -159,7 +147,6 @@ impl VegaT256PointV1 {
         }
         Ok(self.0.to_bytes().into())
     }
-
     /// Return this point's canonical big-endian affine coordinates.
     ///
     /// # Errors
@@ -181,7 +168,6 @@ impl VegaT256PointV1 {
         y.reverse();
         Ok((x, y))
     }
-
     /// Return the exact upstream transcript representation `x_LE || y_LE`.
     ///
     /// # Errors
@@ -198,25 +184,21 @@ impl VegaT256PointV1 {
         output[32..].copy_from_slice(&y);
         Ok(output)
     }
-
     /// Return whether this point is the group identity.
     #[must_use]
     pub fn is_identity(self) -> bool {
         bool::from(self.0.is_identity())
     }
-
     /// Negate a T256 point.
     #[must_use]
     pub fn negate(self) -> Self {
         Self(self.0.neg())
     }
-
     /// Multiply this point by one canonical T256 scalar.
     #[must_use]
     pub fn mul_scalar(self, scalar: VegaT256ScalarV1) -> Self {
         Self(self.0 * scalar.0)
     }
-
     /// Select `a` for zero and `b` for one without secret-dependent branches.
     ///
     /// Only the low bit of `choice` is used. Multiplication by that scalar uses
@@ -226,7 +208,6 @@ impl VegaT256PointV1 {
     pub fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
         *a + (*b - *a).mul_scalar(VegaT256ScalarV1::from_u64(u64::from(choice & 1)))
     }
-
     /// Replace this complete projective point instance with the identity.
     ///
     /// This is best-effort safe erasure for a named value. The point is
@@ -237,11 +218,9 @@ impl VegaT256PointV1 {
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         let _ = core::hint::black_box(&mut *self);
     }
-
     pub(super) fn identity() -> Self {
         Self(T256::identity())
     }
-
     fn has_prime_order(self) -> bool {
         // T256 has cofactor one. Checking the published group order with raw
         // double-and-add avoids the vacuous `Fq::from(q) == 0` scalar path and
@@ -258,23 +237,18 @@ impl VegaT256PointV1 {
         result.is_identity()
     }
 }
-
 impl Add for VegaT256PointV1 {
     type Output = Self;
-
     fn add(self, rhs: Self) -> Self::Output {
         Self(self.0 + rhs.0)
     }
 }
-
 impl Sub for VegaT256PointV1 {
     type Output = Self;
-
     fn sub(self, rhs: Self) -> Self::Output {
         Self(self.0 - rhs.0)
     }
 }
-
 impl fmt::Debug for VegaT256PointV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_identity() {
@@ -291,7 +265,6 @@ impl fmt::Debug for VegaT256PointV1 {
             .finish()
     }
 }
-
 /// Derive canonical nothing-up-my-sleeve T256 generators from a label.
 ///
 /// This is the pinned Vega derivation: SHAKE256 emits consecutive 32-byte
@@ -330,7 +303,6 @@ pub fn derive_t256_generators_v1(
         })
         .collect()
 }
-
 #[cfg(test)]
 fn base_from_be_exact(bytes: [u8; 32]) -> Option<Fp> {
     if bytes >= VEGA_T256_BASE_MODULUS_BE_V1 {
@@ -340,18 +312,15 @@ fn base_from_be_exact(bytes: [u8; 32]) -> Option<Fp> {
     repr.reverse();
     Option::from(Fp::from_repr(repr.into()))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn decode_hex<const N: usize>(value: &str) -> [u8; N] {
         hex::decode(value)
             .expect("valid hex")
             .try_into()
             .expect("fixed vector length")
     }
-
     #[test]
     fn canonical_generator_and_group_law_match_independent_vectors() {
         let generator = VegaT256PointV1::canonical_generator().expect("canonical generator");
@@ -380,12 +349,10 @@ mod tests {
             generator.mul_scalar(VegaT256ScalarV1::from_u64(2)) - generator,
             generator
         );
-
         let mut q_minus_one = VEGA_T256_SCALAR_MODULUS_BE_V1;
         q_minus_one[31] -= 1;
         let minus_one = VegaT256ScalarV1::from_be_bytes_exact(q_minus_one).expect("q - 1 scalar");
         assert!((generator.mul_scalar(minus_one) + generator).is_identity());
-
         let identity = VegaT256PointV1::identity();
         assert_eq!(
             VegaT256PointV1::conditional_select(&identity, &generator, 0),
@@ -399,7 +366,6 @@ mod tests {
         cleared.clear_secret();
         assert_eq!(cleared, identity);
     }
-
     #[test]
     fn generator_derivation_matches_independent_rfc9380_vector() {
         let point = derive_t256_generators_v1(b"vega-t256-kat", 1)
@@ -411,7 +377,6 @@ mod tests {
             decode_hex("8025a4e3128f042d728e58b7e09a51b72585be4435f4e94aac8517f2e158b3eae6")
         );
     }
-
     #[test]
     fn strict_point_wire_rejects_every_malleable_boundary_class() {
         let generator = VegaT256PointV1::canonical_generator().expect("canonical generator");
@@ -466,7 +431,6 @@ mod tests {
             Err(VegaCurveError::OffCurve)
         );
     }
-
     #[test]
     fn point_transcript_encoding_is_uncompressed_little_endian() {
         let generator = VegaT256PointV1::canonical_generator().expect("canonical generator");
@@ -481,7 +445,6 @@ mod tests {
             Err(VegaCurveError::IdentityTranscriptPoint)
         );
     }
-
     #[test]
     fn generator_derivation_bounds_are_closed() {
         assert_eq!(

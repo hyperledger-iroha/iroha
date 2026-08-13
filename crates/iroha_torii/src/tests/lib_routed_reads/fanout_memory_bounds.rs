@@ -1,5 +1,4 @@
 // Focused cross-dataspace fanout allocation and pagination bounds.
-
 fn fanout_memory_test_request(
     limit: Option<u64>,
 ) -> iroha_data_model::query::QueryRequestWithAuthority {
@@ -23,7 +22,6 @@ fn fanout_memory_test_request(
         iroha_test_samples::ALICE_ID.clone(),
     )
 }
-
 fn assert_invalid_fanout_pagination(response: Response) {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
@@ -34,7 +32,6 @@ fn assert_invalid_fanout_pagination(response: Response) {
         Some("invalid_pagination")
     );
 }
-
 #[test]
 fn fanout_route_scan_rejects_window_above_fetch_budget() {
     let mut request = fanout_memory_test_request(Some(1));
@@ -45,14 +42,12 @@ fn fanout_route_scan_rejects_window_above_fetch_budget() {
         std::num::NonZeroU64::new(1),
         crate::routing::app_query_limits().max_fetch_size,
     );
-
     let response = match fanout_route_scan_query_request(&request) {
         Ok(_) => panic!("offset plus limit above the fetch budget must fail closed"),
         Err(response) => response,
     };
     assert_invalid_fanout_pagination(response);
 }
-
 #[test]
 fn fanout_route_scan_without_limit_rejects_offset_above_fetch_budget() {
     let mut request = fanout_memory_test_request(None);
@@ -63,14 +58,12 @@ fn fanout_route_scan_without_limit_rejects_offset_above_fetch_budget() {
         None,
         crate::routing::app_query_limits().max_fetch_size + 1,
     );
-
     let response = match fanout_route_scan_query_request(&request) {
         Ok(_) => panic!("an offset beyond the fetch budget must fail closed"),
         Err(response) => response,
     };
     assert_invalid_fanout_pagination(response);
 }
-
 #[test]
 fn fanout_route_scan_rejects_overflowing_window() {
     let mut request = fanout_memory_test_request(Some(1));
@@ -81,14 +74,12 @@ fn fanout_route_scan_rejects_overflowing_window() {
         std::num::NonZeroU64::new(2),
         u64::MAX,
     );
-
     let response = match fanout_route_scan_query_request(&request) {
         Ok(_) => panic!("overflowing pagination must fail closed"),
         Err(response) => response,
     };
     assert_invalid_fanout_pagination(response);
 }
-
 #[test]
 fn unbounded_iterable_fanout_is_rejected_by_explicit_capability_map() {
     let response = ensure_bounded_fanout_query(&fanout_memory_test_request(Some(1)))
@@ -102,7 +93,6 @@ fn unbounded_iterable_fanout_is_rejected_by_explicit_capability_map() {
         Some("query_unsupported")
     );
 }
-
 #[test]
 fn fast_dsl_identity_query_fails_before_nested_component_decode() {
     let request = authorize_query_for_test(
@@ -129,7 +119,6 @@ fn fast_dsl_identity_query_fails_before_nested_component_decode() {
         .expect_err("fast-DSL components must fail before nested decode");
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
-
 #[test]
 fn singular_fanout_is_admitted_without_a_variant_allowlist() {
     let request = authorize_query_for_test(
@@ -145,7 +134,6 @@ fn singular_fanout_is_admitted_without_a_variant_allowlist() {
         BoundedFanoutQueryKind::Singular
     );
 }
-
 #[test]
 fn singular_fanout_retains_only_the_first_matching_result() {
     let output = |abi_version| {
@@ -159,13 +147,11 @@ fn singular_fanout_retains_only_the_first_matching_result() {
     retain_matching_singular_fanout_output(&mut retained, output(1))
         .expect("an equal current result is compared and dropped");
     assert_eq!(retained, Some(output(1)));
-
     let response = retain_matching_singular_fanout_output(&mut retained, output(2))
         .expect_err("different route results must conflict");
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(retained, Some(output(1)));
 }
-
 #[test]
 fn singular_fanout_drops_decoded_template_before_route_loop() {
     let source = include_str!("../../lib.rs");
@@ -182,12 +168,10 @@ fn singular_fanout_drops_decoded_template_before_route_loop() {
     let route_loop = singular
         .find("for route in routes")
         .expect("singular fanout remains sequential");
-
     assert!(template_drop < route_loop);
     assert!(singular.contains("decode_verified_singular_fanout_request_bounded"));
     assert!(!singular.contains("clone_verified_query_request_bounded"));
 }
-
 #[test]
 fn outer_accumulator_rejects_a_wrong_first_route_variant_before_pinning() {
     let mut accumulator =
@@ -201,7 +185,6 @@ fn outer_accumulator_rejects_a_wrong_first_route_variant_before_pinning() {
     )
     .expect_err("a wrong first route must not choose the accumulator discriminant");
     assert_eq!(response.status(), StatusCode::CONFLICT);
-
     push_bounded_canonical_fanout_batch(
         &mut accumulator,
         BoundedCanonicalFanoutVariant::RoleId,
@@ -209,7 +192,6 @@ fn outer_accumulator_rejects_a_wrong_first_route_variant_before_pinning() {
     )
     .expect("the expected variant remains admissible after the rejected route");
 }
-
 #[test]
 fn canonical_unit_payload_rejects_nonempty_bytes_without_decoding() {
     let mut hostile = [0_u8; 32];
@@ -220,7 +202,6 @@ fn canonical_unit_payload_rejects_nonempty_bytes_without_decoding() {
         "a non-unit query sharing RoleId/TriggerId output must fail on raw payload shape"
     );
 }
-
 #[test]
 fn canonical_iterable_writer_matches_query_response_wire_and_exact_cap() {
     let cases = [
@@ -245,7 +226,6 @@ fn canonical_iterable_writer_matches_query_response_wire_and_exact_cap() {
             BoundedCanonicalFanoutVariant::TriggerId,
         ),
     ];
-
     assert_eq!(
         core::mem::align_of::<BoundedCanonicalIterableFanoutResponse>(),
         core::mem::align_of::<iroha_data_model::query::QueryResponse>(),
@@ -265,7 +245,6 @@ fn canonical_iterable_writer_matches_query_response_wire_and_exact_cap() {
         let encoded = crate::utils::encode_norito_bounded(&bounded, golden.len())
             .expect("the exact response boundary must fit");
         assert_eq!(encoded, golden);
-
         let error = crate::utils::encode_norito_bounded(&bounded, golden.len() - 1)
             .expect_err("F + 1 must fail before allocating the destination");
         assert!(matches!(
@@ -277,7 +256,6 @@ fn canonical_iterable_writer_matches_query_response_wire_and_exact_cap() {
         ));
     }
 }
-
 #[test]
 fn canonical_iterable_writer_rejects_wrong_first_arm() {
     let response = iroha_data_model::query::QueryResponse::Iterable(
@@ -296,7 +274,6 @@ fn canonical_iterable_writer_rejects_wrong_first_arm() {
     .expect_err("the request-pinned RoleId arm must reject a first TriggerId route");
     assert_eq!(rejection.status(), StatusCode::CONFLICT);
 }
-
 #[test]
 fn query_fanout_slot_count_enforces_aggregate_byte_budget() {
     assert_eq!(
@@ -311,7 +288,6 @@ fn query_fanout_slot_count_enforces_aggregate_byte_budget() {
     assert_eq!(query_fanout_slot_count(63_999_999, 64_000_000, 32), None);
     assert_eq!(query_fanout_slot_count(128_000_000, 0, 32), None);
 }
-
 #[test]
 fn fanout_envelope_charges_exact_signed_and_verified_request_frames() {
     let unit = 2_048_usize;
@@ -327,13 +303,11 @@ fn fanout_envelope_charges_exact_signed_and_verified_request_frames() {
     assert_eq!(envelope.accumulator_retained_bytes, unit);
     assert_eq!(envelope.final_body_bytes, unit * 2);
     assert!(envelope.phases_fit());
-
     assert!(
         QueryFanoutMemoryEnvelope::for_request_lengths(working_set, unit, unit + 1).is_err(),
         "the verified frame is measured independently and cannot exceed its admission unit"
     );
 }
-
 #[test]
 fn fanout_envelope_covers_outer_and_local_core_accumulators() {
     let envelope = QueryFanoutMemoryEnvelope::for_request_lengths(64_000_000, 4_096, 8_192)
@@ -398,7 +372,6 @@ fn fanout_envelope_covers_outer_and_local_core_accumulators() {
     );
     assert!(envelope.phases_fit());
 }
-
 #[test]
 fn fanout_envelope_covers_retain_first_singular_comparison() {
     let envelope = QueryFanoutMemoryEnvelope::for_request_lengths(64_000_000, 4_096, 8_192)
@@ -430,7 +403,6 @@ fn fanout_envelope_covers_retain_first_singular_comparison() {
         retained_core_builder, current_source_or_decode,
         "one retained builder and exactly one maximum current share distinct resident phases"
     );
-
     let limits = envelope.singular_output_limits();
     assert_eq!(
         limits.max_frame_bytes(),
@@ -441,7 +413,6 @@ fn fanout_envelope_covers_retain_first_singular_comparison() {
         u64::try_from(envelope.decode_allocated_bytes).expect("decode limit fits u64")
     );
 }
-
 #[test]
 fn fanout_fixed_overhead_covers_the_protocol_route_catalogue() {
     let ingress_fixed = query_ingress_fixed_overhead_bytes()
@@ -492,7 +463,6 @@ fn fanout_fixed_overhead_covers_the_protocol_route_catalogue() {
         QUERY_FANOUT_PUBLIC_KEY_VALIDATION_SCRATCH_BYTES,
         iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES
     );
-
     let envelope = QueryFanoutMemoryEnvelope::for_request_lengths(64_000_000, 4_096, 8_192)
         .expect("the protocol-fixed validation scratch fits the working set");
     let local_scan = checked_sum([
@@ -518,14 +488,12 @@ fn fanout_fixed_overhead_covers_the_protocol_route_catalogue() {
     .expect("complete test accounting fits usize");
     assert!(accounted_peak <= envelope.working_set_bytes);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn huge_online_population_does_not_expand_authoritative_candidate_partition() {
     const ONLINE_PEERS: u32 = 4_096;
     const AUTHORITATIVE_PEERS: usize =
         iroha_core::governance::manifest::LANE_MANIFEST_MAX_VALIDATORS_V1;
-
     let peers = (0..ONLINE_PEERS)
         .map(|index| {
             let mut seed = vec![0x5a_u8; 32];
@@ -555,10 +523,8 @@ fn huge_online_population_does_not_expand_authoritative_candidate_partition() {
     let (_online_tx, online_rx) =
         tokio::sync::watch::channel(peers.into_iter().collect::<std::collections::HashSet<_>>());
     let provider = OnlinePeersProvider::new_with_response_limit(online_rx, 1);
-
     let first = partition_authoritative_lane_peer_statuses(&provider, statuses.clone());
     let second = partition_authoritative_lane_peer_statuses(&provider, statuses);
-
     assert_eq!(first.authoritative_total_count, AUTHORITATIVE_PEERS);
     assert_eq!(first.authoritative, expected);
     assert_eq!(first.online, expected);
@@ -572,7 +538,6 @@ fn huge_online_population_does_not_expand_authoritative_candidate_partition() {
     assert_eq!(second.offline, first.offline);
     assert!(usize::try_from(ONLINE_PEERS).unwrap() > first.online.len());
 }
-
 #[test]
 fn fanout_request_charge_does_not_multiply_by_route_count() {
     let envelope = QueryFanoutMemoryEnvelope::for_request_lengths(64_000_000, 1_024, 2_048)
@@ -582,7 +547,6 @@ fn fanout_request_charge_does_not_multiply_by_route_count() {
         assert!(envelope.phases_fit());
     }
 }
-
 #[test]
 fn fanout_request_representation_depth_is_named_and_checked() {
     assert_eq!(QUERY_FANOUT_HTTP_SIGNED_REQUEST_REPRESENTATIONS, 6);
@@ -591,7 +555,6 @@ fn fanout_request_representation_depth_is_named_and_checked() {
     assert_eq!(QUERY_FANOUT_VERIFIED_REQUEST_REPRESENTATIONS, 1);
     assert_eq!(QUERY_FANOUT_PHASE_COUNT, 7);
     assert_eq!(QUERY_FANOUT_PREBODY_UNITS, 15);
-
     let signed = 3_usize;
     let verified = 5_usize;
     assert_eq!(
@@ -610,7 +573,6 @@ fn fanout_request_representation_depth_is_named_and_checked() {
         "representation accounting must reject multiplication overflow"
     );
 }
-
 #[test]
 fn fanout_prebody_exact_boundary_and_checked_phase_overflow() {
     let working_set = 64_000_000;
@@ -623,7 +585,6 @@ fn fanout_prebody_exact_boundary_and_checked_phase_overflow() {
         QueryFanoutMemoryEnvelope::for_request_lengths(working_set, unit + 1, unit).is_err(),
         "one signed-query byte above the pre-body unit must fail before decode"
     );
-
     let near_overflow = QueryFanoutMemoryEnvelope {
         working_set_bytes: usize::MAX,
         request_bytes: usize::MAX,
@@ -640,7 +601,6 @@ fn fanout_prebody_exact_boundary_and_checked_phase_overflow() {
         "checked admission arithmetic must never turn saturation into success"
     );
 }
-
 #[test]
 fn query_memory_geometry_splits_one_aggregate_pool_without_overcommit() {
     let aggregate = 64_000_000;
@@ -672,7 +632,6 @@ fn query_memory_geometry_splits_one_aggregate_pool_without_overcommit() {
         "small valid body limits must derive a complete slot instead of being disabled"
     );
 }
-
 #[test]
 fn ingress_envelope_accounts_raw_decode_canonical_and_scope_phases() {
     let fixed = query_ingress_fixed_overhead_bytes().expect("ingress fixed overhead fits usize");
@@ -688,13 +647,11 @@ fn ingress_envelope_accounts_raw_decode_canonical_and_scope_phases() {
     assert!(envelope.phases_fit());
     assert!(QueryIngressMemoryEnvelope::from_slot_bytes(fixed, usize::MAX).is_none());
 }
-
 #[test]
 fn internal_proxy_http_envelope_accounts_decode_shared_frame_and_scratch() {
     let fixed = query_fanout_fixed_overhead_bytes().expect("proxy fixed overhead fits usize");
     let envelope = ToriiProxyHttpIngressEnvelope::from_max_content_bytes(17)
         .expect("exact proxy HTTP phase boundary should fit");
-
     assert_eq!(
         envelope.working_set_bytes,
         fixed + TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1 + 4 * 17
@@ -705,7 +662,6 @@ fn internal_proxy_http_envelope_accounts_decode_shared_frame_and_scratch() {
     assert_eq!(envelope.forwarding_transient_bytes, 17);
     assert!(envelope.phases_fit());
 }
-
 #[test]
 fn public_ingress_and_local_clone_share_one_fanout_decode_phase() {
     let geometry = query_memory_geometry(64_000_000, 64_000_000, 32)
@@ -722,13 +678,11 @@ fn public_ingress_and_local_clone_share_one_fanout_decode_phase() {
         .request_decode_limits(geometry.ingress.body_bytes)
         .expect("bounded local-clone decode limits should fit")
         .max_total_allocated_bytes();
-
     assert!(
         ingress_decode + local_clone_decode <= provisional.request_decode_allocated_bytes,
         "the retained ingress request and one local clone must fit fanout's single D phase"
     );
 }
-
 #[test]
 fn skewed_query_memory_pool_cannot_raise_ingress_above_fanout_or_content_cap() {
     let max_content = 1;
@@ -739,7 +693,6 @@ fn skewed_query_memory_pool_cannot_raise_ingress_above_fanout_or_content_cap() {
     assert!(geometry.ingress.body_bytes <= max_content);
     assert!(geometry.ingress.body_bytes <= fanout.route_body_bytes);
 }
-
 #[test]
 fn fanout_decode_limits_use_the_reserved_allocation_phase() {
     let envelope = QueryFanoutMemoryEnvelope::for_request_lengths(64_000_000, 1_024, 2_048)
@@ -774,7 +727,6 @@ fn fanout_decode_limits_use_the_reserved_allocation_phase() {
         "a nested scope query and its extracted route identifier split the other half of D"
     );
 }
-
 #[test]
 fn ingress_scope_cannot_borrow_the_larger_unowned_fanout_limit() {
     let geometry = query_memory_geometry(64_000_000, 64_000_000, 32)
@@ -788,7 +740,6 @@ fn ingress_scope_cannot_borrow_the_larger_unowned_fanout_limit() {
         hostile_len <= fanout_limits.decode_allocated_bytes,
         "fixture must fit provisional fanout while exceeding held ingress"
     );
-
     let hostile_payload = vec![0_u8; hostile_len];
     let response =
         decode_query_payload_bounded::<iroha_data_model::prelude::FindDomainsByAccountId>(
@@ -805,7 +756,6 @@ fn ingress_scope_cannot_borrow_the_larger_unowned_fanout_limit() {
         Some("query_capacity_exceeded")
     );
 }
-
 #[test]
 fn prebody_geometry_cannot_shrink_after_exact_request_measurement() {
     let working_set = 64_000_000;
@@ -823,7 +773,6 @@ fn prebody_geometry_cannot_shrink_after_exact_request_measurement() {
         "bounded initial decode remains within the exact post-verification envelope"
     );
 }
-
 #[test]
 fn fanout_decode_budget_accepts_exact_bound_and_rejects_next_byte() {
     let mut budget = ToriiFanoutDecodeBudget::new(8);
@@ -831,16 +780,13 @@ fn fanout_decode_budget_accepts_exact_bound_and_rejects_next_byte() {
     assert!(budget.remaining().is_err());
     assert!(budget.charge(1).is_err());
 }
-
 #[test]
 fn versioned_ingress_counts_bad_exact_serializer_before_destination_allocation() {
     use std::sync::atomic::{AtomicUsize, Ordering};
-
     struct BadExact<'a> {
         calls: &'a AtomicUsize,
         payload: [u8; 32],
     }
-
     impl norito::core::NoritoSerialize for BadExact<'_> {
         fn serialize(
             &self,
@@ -850,22 +796,18 @@ fn versioned_ingress_counts_bad_exact_serializer_before_destination_allocation()
             std::io::Write::write_all(writer, &self.payload)?;
             Ok(())
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             Some(0)
         }
     }
-
     impl iroha_version::Version for BadExact<'_> {
         fn version(&self) -> u8 {
             1
         }
-
         fn supported_versions() -> core::ops::Range<u8> {
             1..2
         }
     }
-
     let calls = AtomicUsize::new(0);
     let hostile = BadExact {
         calls: &calls,
@@ -879,17 +821,14 @@ fn versioned_ingress_counts_bad_exact_serializer_before_destination_allocation()
         1,
         "the rejected value must only run the sink preflight, never destination encoding"
     );
-
     let encoded = encode_versioned_norito_bounded(&hostile, 33)
         .expect("the exact real frame boundary should fit");
     assert_eq!(encoded.len(), 33);
     assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
-
 #[test]
 fn fixed_capacity_norito_writer_refuses_growth_past_preflight() {
     use std::io::Write as _;
-
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(3)
@@ -904,7 +843,6 @@ fn fixed_capacity_norito_writer_refuses_growth_past_preflight() {
     assert!(writer.write_all(&[4]).is_err());
     assert_eq!(bytes, [1, 2, 3]);
 }
-
 #[tokio::test]
 async fn non_norito_signed_query_is_rejected_before_body_memory_admission() {
     let authority = routed_read_test_account(0xd7);
@@ -922,7 +860,6 @@ async fn non_norito_signed_query_is_rejected_before_body_memory_admission() {
         request
             .extensions_mut()
             .insert(crate::loopback_connect_info());
-
         let response =
             match <AdmittedSignedQuery as axum::extract::FromRequest<SharedAppState>>::from_request(
                 request, &app,
@@ -947,7 +884,6 @@ async fn non_norito_signed_query_is_rejected_before_body_memory_admission() {
         );
     }
 }
-
 #[tokio::test]
 async fn bounded_json_signed_query_remains_supported() {
     let key_pair = crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair(
@@ -969,7 +905,6 @@ async fn bounded_json_signed_query_remains_supported() {
     request
         .extensions_mut()
         .insert(crate::loopback_connect_info());
-
     let admitted =
         <AdmittedSignedQuery as axum::extract::FromRequest<SharedAppState>>::from_request(
             request, &app,
@@ -981,7 +916,6 @@ async fn bounded_json_signed_query_remains_supported() {
         norito::codec::Encode::encode(&signed_query)
     );
 }
-
 #[tokio::test]
 async fn duplicate_signed_query_content_type_is_rejected_before_body_poll() {
     let authority = routed_read_test_account(0xd8);
@@ -1001,7 +935,6 @@ async fn duplicate_signed_query_content_type_is_rejected_before_body_poll() {
     request
         .extensions_mut()
         .insert(crate::loopback_connect_info());
-
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(50),
         <AdmittedSignedQuery as axum::extract::FromRequest<SharedAppState>>::from_request(
@@ -1026,7 +959,6 @@ async fn duplicate_signed_query_content_type_is_rejected_before_body_poll() {
         "duplicate media rejection must not consume fanout execution memory"
     );
 }
-
 #[tokio::test]
 async fn slow_signed_query_body_does_not_occupy_fanout_execution_memory() {
     let authority = routed_read_test_account(0xd9);
@@ -1042,7 +974,6 @@ async fn slow_signed_query_body_does_not_occupy_fanout_execution_memory() {
     request
         .extensions_mut()
         .insert(crate::loopback_connect_info());
-
     let mut extraction = Box::pin(<AdmittedSignedQuery as axum::extract::FromRequest<
         SharedAppState,
     >>::from_request(request, &app));
@@ -1066,7 +997,6 @@ async fn slow_signed_query_body_does_not_occupy_fanout_execution_memory() {
         ingress_before
     );
 }
-
 #[tokio::test]
 async fn stalled_signed_query_body_releases_ingress_at_signature_window() {
     let authority = routed_read_test_account(0xea);
@@ -1092,7 +1022,6 @@ async fn stalled_signed_query_body_releases_ingress_at_signature_window() {
     request
         .extensions_mut()
         .insert(crate::loopback_connect_info());
-
     let admission = tokio::time::timeout(
         Duration::from_millis(100),
         <AdmittedSignedQuery as axum::extract::FromRequest<SharedAppState>>::from_request(
@@ -1105,7 +1034,6 @@ async fn stalled_signed_query_body_releases_ingress_at_signature_window() {
         Ok(_) => panic!("a stalled signed-query body must time out"),
         Err(response) => response,
     };
-
     assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
     assert_eq!(
         app.query_ingress_inflight.available_permits(),
@@ -1113,7 +1041,6 @@ async fn stalled_signed_query_body_releases_ingress_at_signature_window() {
         "timing out a stalled body must release its complete ingress slot"
     );
 }
-
 #[tokio::test]
 async fn ingress_to_fanout_promotion_fails_fast_without_starving_other_bodies() {
     let authority = routed_read_test_account(0xda);
@@ -1124,7 +1051,6 @@ async fn ingress_to_fanout_promotion_fails_fast_without_starving_other_bodies() 
     let ingress = acquire_query_ingress_memory(&app)
         .await
         .expect("one body owns an ingress slot");
-
     let rejection = match try_acquire_query_fanout_memory(&app) {
         Ok(_) => panic!("promotion must not wait while it owns ingress memory"),
         Err(response) => response,
@@ -1135,7 +1061,6 @@ async fn ingress_to_fanout_promotion_fails_fast_without_starving_other_bodies() 
         ingress_before - 1,
         "failed promotion must leave all other ingress slots available"
     );
-
     drop(ingress);
     drop(fanout);
     assert_eq!(
@@ -1143,7 +1068,6 @@ async fn ingress_to_fanout_promotion_fails_fast_without_starving_other_bodies() 
         ingress_before
     );
 }
-
 #[tokio::test]
 async fn incompatible_response_diagnostic_does_not_format_hostile_payload() {
     let hostile = iroha_data_model::query::QueryResponse::Iterable(
@@ -1167,7 +1091,6 @@ async fn incompatible_response_diagnostic_does_not_format_hostile_payload() {
     assert!(bytes.len() < 512);
     assert!(!bytes.as_ref().contains(&b'x'));
 }
-
 #[tokio::test]
 async fn canonical_fanout_error_does_not_format_hostile_conversion_payload() {
     let response = canonical_fanout_error_response(
@@ -1180,18 +1103,15 @@ async fn canonical_fanout_error_does_not_format_hostile_conversion_payload() {
     assert!(bytes.len() < 512);
     assert!(!bytes.as_ref().contains(&b'x'));
 }
-
 #[tokio::test]
 async fn skipped_route_response_drops_body_and_its_permit_before_next_route() {
     use std::sync::atomic::{AtomicBool, Ordering};
-
     struct DropProbe(Arc<AtomicBool>);
     impl Drop for DropProbe {
         fn drop(&mut self) {
             self.0.store(true, Ordering::SeqCst);
         }
     }
-
     let dropped = Arc::new(AtomicBool::new(false));
     let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
     let body_permit = semaphore
@@ -1208,7 +1128,6 @@ async fn skipped_route_response_drops_body_and_its_permit_before_next_route() {
         .status(StatusCode::NOT_FOUND)
         .body(body)
         .expect("hostile route response");
-
     let mut skipped = SkippedRoutedQueryErrors::default();
     skipped.record_and_drop(response);
     assert!(
@@ -1227,7 +1146,6 @@ async fn skipped_route_response_drops_body_and_its_permit_before_next_route() {
         }
     );
 }
-
 #[test]
 fn hostile_remote_batch_decode_stops_at_explicit_allocation_limit() {
     let batch = iroha_data_model::query::QueryOutputBatchBox::String(vec!["x".repeat(32 * 1024)]);
@@ -1249,7 +1167,6 @@ fn hostile_remote_batch_decode_stops_at_explicit_allocation_limit() {
         "remote route output must fail before allocating its hostile string"
     );
 }
-
 #[test]
 fn fanout_decode_limits_reject_element_count_overflow() {
     let overflowing_encoded_len = usize::MAX / 8 + 1;
@@ -1258,12 +1175,10 @@ fn fanout_decode_limits_reject_element_count_overflow() {
         "decoder element-limit arithmetic must fail closed instead of saturating"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn stalled_admitted_body_cannot_start_a_second_body_decode() {
     use std::sync::atomic::{AtomicBool, Ordering};
-
     let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
     let stalled_body_reservation = semaphore
         .clone()
@@ -1290,7 +1205,6 @@ async fn stalled_admitted_body_cannot_start_a_second_body_decode() {
     );
     assert!(!second_decode_started.load(Ordering::SeqCst));
     drop(stalled_body_reservation);
-
     let _reservation = semaphore
         .clone()
         .acquire_owned()
@@ -1298,7 +1212,6 @@ async fn stalled_admitted_body_cannot_start_a_second_body_decode() {
         .expect("the released byte-envelope slot becomes available");
     assert_eq!(semaphore.available_permits(), 0);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn query_fanout_memory_permit_lives_until_response_body_is_dropped() {
@@ -1312,12 +1225,10 @@ async fn query_fanout_memory_permit_lives_until_response_body_is_dropped() {
         Response::new(Body::from(Bytes::from_static(b"bounded"))),
         QueryFanoutMemoryReservation::new(permit),
     );
-
     assert_eq!(semaphore.available_permits(), 0);
     drop(response);
     assert_eq!(semaphore.available_permits(), 1);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn query_fanout_memory_permit_transfers_through_proxy_snapshot_and_slow_body() {
@@ -1331,11 +1242,9 @@ async fn query_fanout_memory_permit_transfers_through_proxy_snapshot_and_slow_bo
         Response::new(Body::from(Bytes::from_static(b"bounded"))),
         QueryFanoutMemoryReservation::new(permit),
     );
-
     let admitted = response_to_admitted_torii_proxy_snapshot(response, 8).await;
     assert_eq!(admitted.snapshot.body, b"bounded");
     assert_eq!(semaphore.available_permits(), 0);
-
     let response = torii_proxy_snapshot_to_response(admitted.snapshot);
     let response = hold_query_fanout_memory_reservation_in_response_body(
         response,
@@ -1344,7 +1253,6 @@ async fn query_fanout_memory_permit_transfers_through_proxy_snapshot_and_slow_bo
             .expect("fanout response must transfer its reservation"),
     );
     assert_eq!(semaphore.available_permits(), 0);
-
     let (parts, body) = response.into_parts();
     drop(parts);
     assert_eq!(semaphore.available_permits(), 0);
@@ -1354,7 +1262,6 @@ async fn query_fanout_memory_permit_transfers_through_proxy_snapshot_and_slow_bo
     assert_eq!(body.to_bytes(), Bytes::from_static(b"bounded"));
     assert_eq!(semaphore.available_permits(), 1);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn query_fanout_worker_clone_survives_cancelled_response() {
@@ -1370,7 +1277,6 @@ async fn query_fanout_worker_clone_survives_cancelled_response() {
         Response::new(Body::from(Bytes::from_static(b"bounded"))),
         reservation,
     );
-
     drop(response);
     assert_eq!(
         semaphore.available_permits(),

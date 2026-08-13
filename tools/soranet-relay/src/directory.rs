@@ -1,12 +1,10 @@
 //! Guard directory snapshot tooling (builder, rotation, inspection).
 #![allow(unexpected_cfgs)]
-
 use std::{
     collections::{HashMap, TryReserveError},
     fs,
     path::{Path, PathBuf},
 };
-
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use hex::FromHexError;
 use iroha_crypto::soranet::{
@@ -30,12 +28,8 @@ use soranet_pq::{
     MlDsaError, MlDsaKeyPair, MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
 };
 use thiserror::Error;
-
-use crate::guard::{
-    GuardPinningProof, GuardPinningProofValidationError, verify_guard_pinning_proof,
-};
+use crate::guard::{GuardPinningProof, GuardPinningProofValidationError, verify_guard_pinning_proof};
 use crate::{checked_ed25519_verifying_key_from_bytes, config::read_bounded_direct_regular_file};
-
 // The builder admits at most the encoded corpus that a full first-release
 // 64-relay directory can reference. JSON escaping can expand the source while
 // decoded strings remain under the separately audited 640 KiB budget.
@@ -51,7 +45,6 @@ const DIRECTORY_BUILD_CONFIG_JSON_MAX_ALLOCATED_BYTES_V1: usize =
 const DIRECTORY_BUILD_CONFIG_JSON_MAX_DEPTH_V1: usize = 8;
 const DIRECTORY_BUILD_CONFIG_LABEL_MAX_BYTES_V1: usize = 256;
 const DIRECTORY_BUILD_CONFIG_PATH_MAX_BYTES_V1: usize = 4 * 1024;
-
 // A proof only restates bounded fields from one SRCv2 bundle plus its snapshot
 // path. Capping it at the source bundle's 64 KiB ceiling admits the worst-case
 // 4 KiB path and ML-KEM-1024 hex field even when JSON-escaped.
@@ -63,12 +56,10 @@ const GUARD_PINNING_PROOF_JSON_MAX_TOTAL_ELEMENTS_V1: usize = 32;
 const GUARD_PINNING_PROOF_JSON_MAX_ALLOCATED_BYTES_V1: usize =
     2 * GUARD_PINNING_PROOF_JSON_MAX_BYTES_V1;
 const GUARD_PINNING_PROOF_JSON_MAX_DEPTH_V1: usize = 4;
-
 // One proof can exist for each first-release relay. Counting every directory
 // entry, not only JSON candidates, bounds traversal work before collection and
 // sorting.
 const GUARD_PINNING_PROOF_DIRECTORY_MAX_ENTRIES_V1: usize = GUARD_DIRECTORY_MAX_RELAYS_V1;
-
 const DIRECTORY_BUILD_CONFIG_JSON_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     DIRECTORY_BUILD_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1,
     DIRECTORY_BUILD_CONFIG_JSON_MAX_FIELD_BYTES_V1,
@@ -76,7 +67,6 @@ const DIRECTORY_BUILD_CONFIG_JSON_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits:
     DIRECTORY_BUILD_CONFIG_JSON_MAX_ALLOCATED_BYTES_V1,
     DIRECTORY_BUILD_CONFIG_JSON_MAX_DEPTH_V1,
 );
-
 const GUARD_PINNING_PROOF_JSON_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     GUARD_PINNING_PROOF_JSON_MAX_SEQUENCE_ELEMENTS_V1,
     GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1,
@@ -84,7 +74,6 @@ const GUARD_PINNING_PROOF_JSON_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::ne
     GUARD_PINNING_PROOF_JSON_MAX_ALLOCATED_BYTES_V1,
     GUARD_PINNING_PROOF_JSON_MAX_DEPTH_V1,
 );
-
 const fn directory_build_config_json_preflight_limits_v1() -> json::JsonPreflightLimits {
     json::JsonPreflightLimits::new(
         DIRECTORY_BUILD_CONFIG_JSON_MAX_BYTES_V1,
@@ -99,7 +88,6 @@ const fn directory_build_config_json_preflight_limits_v1() -> json::JsonPrefligh
         DIRECTORY_BUILD_CONFIG_JSON_MAX_DEPTH_V1,
     )
 }
-
 const fn guard_pinning_proof_json_preflight_limits_v1() -> json::JsonPreflightLimits {
     json::JsonPreflightLimits::new(
         GUARD_PINNING_PROOF_JSON_MAX_BYTES_V1,
@@ -114,7 +102,6 @@ const fn guard_pinning_proof_json_preflight_limits_v1() -> json::JsonPreflightLi
         GUARD_PINNING_PROOF_JSON_MAX_DEPTH_V1,
     )
 }
-
 /// Configuration used to build a directory snapshot.
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 pub struct DirectoryBuildConfig {
@@ -141,14 +128,12 @@ pub struct DirectoryBuildConfig {
     #[norito(default)]
     pub guard_pinning_proofs: Vec<PinningProofConfig>,
 }
-
 /// Optional build-time overrides for directory snapshots.
 #[derive(Debug, Default)]
 pub struct DirectoryBuildOptions<'a> {
     /// Directory containing guard pinning proofs to ingest.
     pub guard_pinning_proofs_dir: Option<&'a Path>,
 }
-
 /// Issuer entry supplied by the directory configuration.
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 pub struct IssuerConfig {
@@ -161,28 +146,24 @@ pub struct IssuerConfig {
     #[norito(default)]
     pub mldsa_hex: String,
 }
-
 /// Certificate bundle path supplied by the configuration.
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 pub struct BundleConfig {
     /// Path to the Norito-encoded certificate bundle.
     pub path: PathBuf,
 }
-
 /// Guard pinning proof supplied by the configuration.
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 pub struct PinningProofConfig {
     /// Path to the proof file (JSON).
     pub path: PathBuf,
 }
-
 /// Snapshot plus extracted metadata.
 #[derive(Debug)]
 pub struct DirectorySnapshotBundle {
     pub snapshot: GuardDirectorySnapshotV2,
     pub metadata: DirectoryMetadata,
 }
-
 /// Snapshot metadata exposed by the tooling.
 #[derive(Debug, Clone)]
 pub struct DirectoryMetadata {
@@ -203,7 +184,6 @@ pub struct DirectoryMetadata {
     /// Guard pinning proofs bundled alongside the snapshot.
     pub guard_pinning_proofs: Vec<GuardPinningProofSummary>,
 }
-
 /// Issuer summary rendered in CLI output.
 #[derive(Debug, Clone)]
 pub struct IssuerSummary {
@@ -216,7 +196,6 @@ pub struct IssuerSummary {
     /// Whether an ML-DSA key was provided.
     pub has_mldsa: bool,
 }
-
 /// Certificate summary rendered in CLI output.
 #[derive(Debug, Clone)]
 pub struct CertificateSummary {
@@ -235,7 +214,6 @@ pub struct CertificateSummary {
     /// Certificate validity window end in UNIX seconds.
     pub valid_until: i64,
 }
-
 /// Guard pinning proof summary rendered in CLI output.
 #[derive(Debug, Clone, JsonSerialize)]
 pub struct GuardPinningProofSummary {
@@ -266,7 +244,6 @@ pub struct GuardPinningProofSummary {
     /// Reputation weight advertised by the certificate.
     pub reputation_weight: u32,
 }
-
 /// Errors raised while collecting guard pinning proofs for directory publishers.
 #[derive(Debug, Error)]
 pub enum GuardPinningCollectError {
@@ -311,7 +288,6 @@ pub enum GuardPinningCollectError {
     #[error(transparent)]
     Build(#[from] Box<DirectoryBuildError>),
 }
-
 /// Error raised while building a snapshot from configuration.
 #[derive(Debug, Error)]
 pub enum DirectoryBuildError {
@@ -447,7 +423,6 @@ pub enum DirectoryBuildError {
     #[error("failed to derive {field} from supplied certificates")]
     MissingDerivedField { field: &'static str },
 }
-
 /// Error raised while rotating issuer keys.
 #[derive(Debug, Error)]
 pub enum DirectoryRotateError {
@@ -507,14 +482,12 @@ pub enum DirectoryRotateError {
         source: norito::Error,
     },
 }
-
 /// Result returned when rotating issuer material.
 #[derive(Debug)]
 pub struct RotationOutput {
     pub bundle: DirectorySnapshotBundle,
     pub keys: RotationKeys,
 }
-
 /// Key material produced during rotation.
 #[derive(Debug, Clone)]
 pub struct RotationKeys {
@@ -524,7 +497,6 @@ pub struct RotationKeys {
     pub mldsa_secret: Vec<u8>,
     pub fingerprint: [u8; 32],
 }
-
 /// Build a guard directory snapshot from configuration.
 ///
 /// # Errors
@@ -535,7 +507,6 @@ pub fn build_snapshot_from_config(
 ) -> Result<DirectorySnapshotBundle, DirectoryBuildError> {
     build_snapshot_from_config_with_options(path, DirectoryBuildOptions::default())
 }
-
 /// Build a guard directory snapshot from configuration with optional overrides.
 ///
 /// # Errors
@@ -573,7 +544,6 @@ pub fn build_snapshot_from_config_with_options(
     }
     build_snapshot(config, path.parent().unwrap_or_else(|| Path::new(".")))
 }
-
 /// Read and decode one first-release guard pinning proof from a stable direct
 /// regular file.
 ///
@@ -610,7 +580,6 @@ pub fn read_guard_pinning_proof_file(
         source,
     })
 }
-
 /// Rotate issuer material for an existing snapshot using OS randomness.
 ///
 /// # Errors
@@ -623,7 +592,6 @@ pub fn rotate_snapshot_with_os_rng(
     let mut rng = <StdRng as SeedableRng>::from_rng(&mut entropy);
     rotate_snapshot(snapshot_bytes, &mut rng)
 }
-
 /// Rotate issuer material for an existing snapshot with the provided RNG.
 ///
 /// # Errors
@@ -637,7 +605,6 @@ pub fn rotate_snapshot<R: RngCore + CryptoRng>(
         .map_err(|source| DirectoryRotateError::Decode { source })?;
     rotate_snapshot_struct(snapshot, rng)
 }
-
 /// Produce metadata for an existing snapshot.
 ///
 /// # Errors
@@ -650,7 +617,6 @@ pub fn inspect_snapshot(
     let metadata = summarize_snapshot(&snapshot)?;
     Ok(DirectorySnapshotBundle { snapshot, metadata })
 }
-
 fn build_snapshot(
     config: DirectoryBuildConfig,
     base_dir: &Path,
@@ -662,10 +628,8 @@ fn build_snapshot(
     if config.bundles.is_empty() {
         return Err(DirectoryBuildError::NoBundles);
     }
-
     let validation_phase = CertificateValidationPhase::Phase3RequireDual;
     let issuers = load_issuers(&config.issuers)?;
-
     let mut issuer_map: HashMap<[u8; 32], usize> = HashMap::new();
     issuer_map
         .try_reserve(issuers.len())
@@ -680,7 +644,6 @@ fn build_snapshot(
             });
         }
     }
-
     let mut parsed_bundles: Vec<(PathBuf, RelayCertificateBundleV2)> = Vec::new();
     parsed_bundles
         .try_reserve_exact(config.bundles.len())
@@ -696,12 +659,10 @@ fn build_snapshot(
             source,
         })?;
     let mut retained_bundle_bytes = 0_usize;
-
     let mut directory_hash = parse_optional_hash(config.directory_hash_hex.as_deref())?;
     let mut published_at = config.published_at_unix;
     let mut valid_after = config.valid_after_unix;
     let mut valid_until = config.valid_until_unix;
-
     for bundle_config in &config.bundles {
         let absolute_path = if bundle_config.path.is_absolute() {
             bundle_config.path.clone()
@@ -724,7 +685,6 @@ fn build_snapshot(
                 source,
             }
         })?;
-
         let fingerprint = bundle.certificate.issuer_fingerprint;
         let issuer_index = issuer_map.get(&fingerprint).ok_or_else(|| {
             DirectoryBuildError::UnknownIssuerForCertificate {
@@ -733,7 +693,6 @@ fn build_snapshot(
             }
         })?;
         let issuer = &issuers[*issuer_index];
-
         bundle
             .verify_signatures(
                 &issuer.verifying_key,
@@ -744,7 +703,6 @@ fn build_snapshot(
                 path: absolute_path.clone(),
                 source,
             })?;
-
         update_directory_hash(
             &mut directory_hash,
             bundle.certificate.directory_hash,
@@ -768,7 +726,6 @@ fn build_snapshot(
             "valid_until_unix",
             &absolute_path,
         )?;
-
         certificate_summaries.push(CertificateSummary {
             path: Some(absolute_path.clone()),
             relay_id_hex: hex::encode(bundle.certificate.relay_id),
@@ -780,7 +737,6 @@ fn build_snapshot(
         });
         parsed_bundles.push((absolute_path, bundle));
     }
-
     let directory_hash = directory_hash.ok_or(DirectoryBuildError::MissingDerivedField {
         field: "directory_hash",
     })?;
@@ -793,7 +749,6 @@ fn build_snapshot(
     let valid_until = valid_until.ok_or(DirectoryBuildError::MissingDerivedField {
         field: "valid_until_unix",
     })?;
-
     let mut issuer_list = Vec::new();
     issuer_list
         .try_reserve_exact(issuers.len())
@@ -821,7 +776,6 @@ fn build_snapshot(
             mldsa65_public: issuer.mldsa_public,
         });
     }
-
     let mut relays = Vec::new();
     relays
         .try_reserve_exact(parsed_bundles.len())
@@ -839,7 +793,6 @@ fn build_snapshot(
                 })?;
         relays.push(GuardDirectoryRelayEntryV2 { certificate });
     }
-
     let snapshot = GuardDirectorySnapshotV2 {
         version: GUARD_DIRECTORY_VERSION_V2,
         directory_hash,
@@ -850,7 +803,6 @@ fn build_snapshot(
         issuers: issuer_list,
         relays,
     };
-
     let mut guard_pinning_proofs =
         load_guard_pinning_proofs(&config.guard_pinning_proofs, base_dir, &snapshot)?;
     if let Some(dir) = config.guard_pinning_proofs_dir.as_ref() {
@@ -895,7 +847,6 @@ fn build_snapshot(
             }
         }
     }
-
     let metadata = DirectoryMetadata {
         directory_hash_hex: hex::encode(directory_hash),
         published_at_unix: published_at,
@@ -906,10 +857,8 @@ fn build_snapshot(
         certificates: certificate_summaries,
         guard_pinning_proofs,
     };
-
     Ok(DirectorySnapshotBundle { snapshot, metadata })
 }
-
 fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
     snapshot: GuardDirectorySnapshotV2,
     rng: &mut R,
@@ -935,16 +884,13 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
             phase: validation_phase,
         });
     }
-
     let issuer = &snapshot.issuers[0];
     let verifying_key = checked_ed25519_verifying_key_from_bytes(&issuer.ed25519_public)
         .map_err(|reason| DirectoryRotateError::InvalidIssuerKeyMaterial { reason })?;
-
     let mut parsed_bundles: Vec<RelayCertificateBundleV2> =
         Vec::with_capacity(snapshot.relays.len());
     let mut certificate_summaries: Vec<CertificateSummary> =
         Vec::with_capacity(snapshot.relays.len());
-
     for (index, relay_entry) in snapshot.relays.iter().enumerate() {
         let bundle = RelayCertificateBundleV2::from_cbor(&relay_entry.certificate)
             .map_err(|source| DirectoryRotateError::CertificateDecode { index, source })?;
@@ -962,7 +908,6 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
         });
         parsed_bundles.push(bundle);
     }
-
     let mut ed_seed = [0u8; 32];
     rng.fill_bytes(&mut ed_seed);
     if ed_seed.iter().all(|byte| *byte == 0) {
@@ -972,7 +917,6 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
     }
     let signing_key = SigningKey::from_bytes(&ed_seed);
     let ed_public = signing_key.verifying_key().to_bytes();
-
     let mldsa_keys: MlDsaKeyPair =
         generate_mldsa_keypair(MlDsaSuite::MlDsa65).map_err(|source| {
             DirectoryRotateError::KeyGeneration {
@@ -982,10 +926,8 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
         })?;
     let mldsa_public = mldsa_keys.public_key().to_vec();
     let mldsa_secret = mldsa_keys.secret_key().to_vec();
-
     let fingerprint = compute_issuer_fingerprint(&ed_public, &mldsa_public)
         .map_err(|source| DirectoryRotateError::IssuerFingerprint { source })?;
-
     let mut relays: Vec<GuardDirectoryRelayEntryV2> = Vec::with_capacity(parsed_bundles.len());
     for (index, bundle) in parsed_bundles.into_iter().enumerate() {
         let mut certificate = bundle.certificate;
@@ -997,7 +939,6 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
             certificate: reissued.to_cbor(),
         });
     }
-
     let snapshot = GuardDirectorySnapshotV2 {
         version: snapshot.version,
         directory_hash: snapshot.directory_hash,
@@ -1012,7 +953,6 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
         }],
         relays,
     };
-
     let metadata = DirectoryMetadata {
         directory_hash_hex: hex::encode(snapshot.directory_hash),
         published_at_unix: snapshot.published_at_unix,
@@ -1028,7 +968,6 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
         certificates: certificate_summaries,
         guard_pinning_proofs: Vec::new(),
     };
-
     let keys = RotationKeys {
         ed25519_secret: ed_seed,
         ed25519_public: ed_public,
@@ -1036,13 +975,11 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
         mldsa_secret,
         fingerprint,
     };
-
     Ok(RotationOutput {
         bundle: DirectorySnapshotBundle { snapshot, metadata },
         keys,
     })
 }
-
 fn summarize_snapshot(
     snapshot: &GuardDirectorySnapshotV2,
 ) -> Result<DirectoryMetadata, DirectoryRotateError> {
@@ -1051,11 +988,9 @@ fn summarize_snapshot(
             phase: snapshot.validation_phase,
         },
     )?;
-
     let mut issuer_summaries: Vec<IssuerSummary> = Vec::with_capacity(snapshot.issuers.len());
     let mut issuer_records: HashMap<[u8; 32], (VerifyingKey, Vec<u8>)> =
         HashMap::with_capacity(snapshot.issuers.len());
-
     for issuer in &snapshot.issuers {
         let verifying_key = checked_ed25519_verifying_key_from_bytes(&issuer.ed25519_public)
             .map_err(|reason| DirectoryRotateError::InvalidIssuerKeyMaterial { reason })?;
@@ -1070,10 +1005,8 @@ fn summarize_snapshot(
             has_mldsa: !issuer.mldsa65_public.is_empty(),
         });
     }
-
     let mut certificate_summaries: Vec<CertificateSummary> =
         Vec::with_capacity(snapshot.relays.len());
-
     for (index, relay_entry) in snapshot.relays.iter().enumerate() {
         let bundle = RelayCertificateBundleV2::from_cbor(&relay_entry.certificate)
             .map_err(|source| DirectoryRotateError::CertificateDecode { index, source })?;
@@ -1094,7 +1027,6 @@ fn summarize_snapshot(
             valid_until: bundle.certificate.valid_until,
         });
     }
-
     Ok(DirectoryMetadata {
         directory_hash_hex: hex::encode(snapshot.directory_hash),
         published_at_unix: snapshot.published_at_unix,
@@ -1106,7 +1038,6 @@ fn summarize_snapshot(
         guard_pinning_proofs: Vec::new(),
     })
 }
-
 struct LoadedIssuer {
     label: Option<String>,
     verifying_key: VerifyingKey,
@@ -1114,7 +1045,6 @@ struct LoadedIssuer {
     mldsa_public: Vec<u8>,
     fingerprint: [u8; 32],
 }
-
 fn validate_directory_build_config_limits(
     config: &DirectoryBuildConfig,
 ) -> Result<(), DirectoryBuildError> {
@@ -1133,7 +1063,6 @@ fn validate_directory_build_config_limits(
         config.guard_pinning_proofs.len(),
         GUARD_DIRECTORY_MAX_RELAYS_V1,
     )?;
-
     for issuer in &config.issuers {
         if let Some(label) = issuer.label.as_deref() {
             validate_field_len(
@@ -1154,7 +1083,6 @@ fn validate_directory_build_config_limits(
     }
     Ok(())
 }
-
 fn validate_entry_count(
     field: &'static str,
     found: usize,
@@ -1169,7 +1097,6 @@ fn validate_entry_count(
     }
     Ok(())
 }
-
 fn validate_field_len(
     field: &'static str,
     found: usize,
@@ -1184,7 +1111,6 @@ fn validate_field_len(
     }
     Ok(())
 }
-
 fn validate_config_path(field: &'static str, path: &Path) -> Result<(), DirectoryBuildError> {
     validate_field_len(
         field,
@@ -1192,7 +1118,6 @@ fn validate_config_path(field: &'static str, path: &Path) -> Result<(), Director
         DIRECTORY_BUILD_CONFIG_PATH_MAX_BYTES_V1,
     )
 }
-
 fn account_retained_bundle_bytes(
     retained: usize,
     additional: usize,
@@ -1213,7 +1138,6 @@ fn account_retained_bundle_bytes(
     }
     Ok(found)
 }
-
 fn try_clone_bounded_string(
     value: &str,
     artifact: &'static str,
@@ -1225,7 +1149,6 @@ fn try_clone_bounded_string(
     owned.push_str(value);
     Ok(owned)
 }
-
 fn load_issuers(configs: &[IssuerConfig]) -> Result<Vec<LoadedIssuer>, DirectoryBuildError> {
     let mut loaded = Vec::new();
     loaded
@@ -1265,7 +1188,6 @@ fn load_issuers(configs: &[IssuerConfig]) -> Result<Vec<LoadedIssuer>, Directory
     }
     Ok(loaded)
 }
-
 fn load_guard_pinning_proofs(
     configs: &[PinningProofConfig],
     base_dir: &Path,
@@ -1274,7 +1196,6 @@ fn load_guard_pinning_proofs(
     if configs.is_empty() {
         return Ok(Vec::new());
     }
-
     let mut summaries = Vec::new();
     summaries
         .try_reserve_exact(configs.len())
@@ -1282,7 +1203,6 @@ fn load_guard_pinning_proofs(
             artifact: "guard pinning proof summaries",
             source,
         })?;
-
     for proof_config in configs {
         let absolute_path = if proof_config.path.is_absolute() {
             proof_config.path.clone()
@@ -1296,7 +1216,6 @@ fn load_guard_pinning_proofs(
                 source,
             }
         })?;
-
         if summaries
             .iter()
             .any(|summary: &GuardPinningProofSummary| summary.relay_id_hex == proof.relay_id_hex())
@@ -1306,16 +1225,13 @@ fn load_guard_pinning_proofs(
                 path: absolute_path.clone(),
             });
         }
-
         summaries.push(GuardPinningProofSummary::try_from_proof(
             absolute_path,
             &proof,
         )?);
     }
-
     Ok(summaries)
 }
-
 impl GuardPinningProofSummary {
     fn try_from_proof(
         path: PathBuf,
@@ -1356,7 +1272,6 @@ impl GuardPinningProofSummary {
         })
     }
 }
-
 /// Collect and validate guard pinning proofs stored in the supplied directory.
 ///
 /// Returns the verified summaries that directory publishers can staple into the
@@ -1375,7 +1290,6 @@ pub fn collect_guard_pinning_proofs_from_directory(
         GUARD_DIRECTORY_MAX_RELAYS_V1,
     )
 }
-
 fn collect_guard_pinning_proofs_from_directory_with_limit(
     directory: &Path,
     snapshot: &GuardDirectorySnapshotV2,
@@ -1390,7 +1304,6 @@ fn collect_guard_pinning_proofs_from_directory_with_limit(
             path: directory.to_path_buf(),
         });
     }
-
     let mut configs = Vec::new();
     configs
         .try_reserve_exact(maximum_proofs)
@@ -1412,7 +1325,6 @@ fn collect_guard_pinning_proofs_from_directory_with_limit(
             path: directory.to_path_buf(),
             source,
         })?;
-
     let mut entry_count = 0_usize;
     for entry in entries {
         let entry = entry.map_err(|source| GuardPinningCollectError::EntryIo {
@@ -1463,18 +1375,15 @@ fn collect_guard_pinning_proofs_from_directory_with_limit(
             path: absolute_directory.join(entry.file_name()),
         });
     }
-
     if configs.is_empty() {
         return Err(GuardPinningCollectError::NoProofs {
             path: directory.to_path_buf(),
         });
     }
-
     configs.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     load_guard_pinning_proofs(&configs, Path::new(""), snapshot)
         .map_err(|source| GuardPinningCollectError::Build(Box::new(source)))
 }
-
 fn decode_mldsa_bytes(value: &str, label: String) -> Result<Vec<u8>, DirectoryBuildError> {
     if value.is_empty() {
         return Err(DirectoryBuildError::IssuerMissingMlDsa { label });
@@ -1492,13 +1401,11 @@ fn decode_mldsa_bytes(value: &str, label: String) -> Result<Vec<u8>, DirectoryBu
     }
     Ok(bytes)
 }
-
 fn parse_optional_hash(value: Option<&str>) -> Result<Option<[u8; 32]>, DirectoryBuildError> {
     value
         .map(|hex_value| decode_hex_array::<32>(hex_value, "directory_hash_hex"))
         .transpose()
 }
-
 fn decode_hex_array<const N: usize>(
     value: &str,
     field: &str,
@@ -1518,7 +1425,6 @@ fn decode_hex_array<const N: usize>(
     array.copy_from_slice(&bytes);
     Ok(array)
 }
-
 fn update_directory_hash(
     current: &mut Option<[u8; 32]>,
     candidate: [u8; 32],
@@ -1541,7 +1447,6 @@ fn update_directory_hash(
         }
     }
 }
-
 fn update_field(
     current: &mut Option<i64>,
     candidate: i64,
@@ -1566,14 +1471,11 @@ fn update_field(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, SystemTime};
-
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
-
     use iroha_crypto::soranet::{
         certificate::{
             CapabilityToggle, KemRotationModeV1, KemRotationPolicyV1, RelayCapabilityFlagsV1,
@@ -1584,15 +1486,12 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::{MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use tempfile::tempdir;
-
     use super::*;
     use crate::guard::{GuardDirectoryEntry, persist_guard_pinning_proof};
-
     const SMALL_ORDER_ED25519_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     #[test]
     fn directory_build_config_file_limit_accepts_exact_and_rejects_plus_one() {
         let dir = tempdir().expect("tempdir");
@@ -1603,14 +1502,12 @@ mod tests {
             .expect("encode config")
             .into_bytes();
         assert!(bytes.len() < DIRECTORY_BUILD_CONFIG_JSON_MAX_BYTES_V1);
-
         bytes.resize(DIRECTORY_BUILD_CONFIG_JSON_MAX_BYTES_V1, b' ');
         fs::write(&path, &bytes).expect("write exact config");
         assert!(matches!(
             build_snapshot_from_config(&path),
             Err(DirectoryBuildError::NoIssuers)
         ));
-
         bytes.push(b' ');
         fs::write(&path, bytes).expect("write oversized config");
         let err = build_snapshot_from_config(&path).expect_err("max + 1 must fail at file read");
@@ -1621,19 +1518,16 @@ mod tests {
             other => panic!("unexpected oversized config error: {other:?}"),
         }
     }
-
     #[test]
     fn guard_pinning_proof_file_limit_accepts_exact_and_rejects_plus_one() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("proof.json");
         let mut bytes = minimal_guard_pinning_proof_json("");
         assert!(bytes.len() < GUARD_PINNING_PROOF_JSON_MAX_BYTES_V1);
-
         bytes.resize(GUARD_PINNING_PROOF_JSON_MAX_BYTES_V1, b' ');
         fs::write(&path, &bytes).expect("write exact proof");
         let proof = read_guard_pinning_proof_file(&path).expect("exact proof size is admitted");
         assert!(proof.snapshot_path().is_empty());
-
         bytes.push(b' ');
         fs::write(&path, bytes).expect("write oversized proof");
         let err =
@@ -1645,7 +1539,6 @@ mod tests {
             other => panic!("unexpected oversized proof error: {other:?}"),
         }
     }
-
     #[test]
     fn guard_pinning_proof_field_limit_accepts_exact_and_rejects_plus_one() {
         let dir = tempdir().expect("tempdir");
@@ -1655,7 +1548,6 @@ mod tests {
             .expect("write exact-field proof");
         let proof = read_guard_pinning_proof_file(&path).expect("exact field size is admitted");
         assert_eq!(proof.snapshot_path().len(), exact_path.len());
-
         let oversized_path = "p".repeat(GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1 + 1);
         fs::write(&path, minimal_guard_pinning_proof_json(&oversized_path))
             .expect("write oversized-field proof");
@@ -1664,7 +1556,6 @@ mod tests {
             Err(DirectoryBuildError::GuardPinningProofAdmission { .. })
         ));
     }
-
     #[test]
     fn directory_build_source_counts_accept_exact_and_reject_plus_one() {
         validate_directory_build_config_limits(&config_with_counts(
@@ -1673,7 +1564,6 @@ mod tests {
             GUARD_DIRECTORY_MAX_RELAYS_V1,
         ))
         .expect("exact source counts are admitted");
-
         assert_too_many_config_entries(
             config_with_counts(GUARD_DIRECTORY_MAX_ISSUERS_V1 + 1, 0, 0),
             "issuers",
@@ -1693,7 +1583,6 @@ mod tests {
             GUARD_DIRECTORY_MAX_RELAYS_V1,
         );
     }
-
     #[test]
     fn directory_config_json_sequence_preflight_accepts_exact_and_rejects_plus_one() {
         let dir = tempdir().expect("tempdir");
@@ -1706,7 +1595,6 @@ mod tests {
             build_snapshot_from_config(&path),
             Err(DirectoryBuildError::NoIssuers)
         ));
-
         write_directory_config(
             &path,
             &config_with_counts(0, GUARD_DIRECTORY_MAX_RELAYS_V1 + 1, 0),
@@ -1716,7 +1604,6 @@ mod tests {
             Err(DirectoryBuildError::JsonAdmission { .. })
         ));
     }
-
     #[test]
     fn retained_bundle_byte_accounting_accepts_exact_and_rejects_plus_one() {
         assert_eq!(
@@ -1733,20 +1620,17 @@ mod tests {
             }) if found == GUARD_DIRECTORY_BUNDLE_MAX_TOTAL_BYTES_V1 + 1
         ));
     }
-
     #[test]
     fn relay_bundle_file_limit_accepts_exact_and_rejects_plus_one() {
         let dir = tempdir().expect("tempdir");
         let bundle_path = dir.path().join("relay.cbor");
         let config_path = dir.path().join("directory.json");
         write_directory_config(&config_path, &config_for_bundle(&bundle_path));
-
         fs::write(&bundle_path, vec![0_u8; SRC_V2_MAX_BUNDLE_BYTES]).expect("write exact bundle");
         assert!(matches!(
             build_snapshot_from_config(&config_path),
             Err(DirectoryBuildError::CertificateVerify { .. })
         ));
-
         fs::write(&bundle_path, vec![0_u8; SRC_V2_MAX_BUNDLE_BYTES + 1])
             .expect("write oversized bundle");
         let err = build_snapshot_from_config(&config_path)
@@ -1758,7 +1642,6 @@ mod tests {
             other => panic!("unexpected oversized bundle error: {other:?}"),
         }
     }
-
     #[test]
     fn proof_directory_inventory_limit_accepts_exact_and_rejects_plus_one() {
         let dir = tempdir().expect("tempdir");
@@ -1773,7 +1656,6 @@ mod tests {
             collect_guard_pinning_proofs_from_directory(dir.path(), &empty_snapshot()),
             Err(GuardPinningCollectError::NoProofs { .. })
         ));
-
         fs::write(dir.path().join("overflow.txt"), b"ignored").expect("write overflow entry");
         assert!(matches!(
             collect_guard_pinning_proofs_from_directory(dir.path(), &empty_snapshot()),
@@ -1784,7 +1666,6 @@ mod tests {
             }) if found == GUARD_PINNING_PROOF_DIRECTORY_MAX_ENTRIES_V1 + 1
         ));
     }
-
     #[test]
     fn proof_directory_respects_remaining_relay_capacity_before_collection() {
         let dir = tempdir().expect("tempdir");
@@ -1806,12 +1687,10 @@ mod tests {
             })
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn builder_inputs_and_discovered_proofs_reject_symbolic_links() {
         let dir = tempdir().expect("tempdir");
-
         let config_target = dir.path().join("config-target.json");
         write_directory_config(&config_target, &config_with_counts(0, 0, 0));
         let config_link = dir.path().join("config-link.json");
@@ -1821,7 +1700,6 @@ mod tests {
             Err(DirectoryBuildError::Io { source, .. })
                 if source.kind() == std::io::ErrorKind::InvalidData
         ));
-
         let bundle_target = dir.path().join("bundle-target.cbor");
         fs::write(&bundle_target, [0_u8]).expect("write bundle target");
         let bundle_link = dir.path().join("bundle-link.cbor");
@@ -1833,7 +1711,6 @@ mod tests {
             Err(DirectoryBuildError::Io { source, .. })
                 if source.kind() == std::io::ErrorKind::InvalidData
         ));
-
         let proof_target = dir.path().join("proof-target.json");
         fs::write(&proof_target, minimal_guard_pinning_proof_json("")).expect("write proof target");
         let proof_link = dir.path().join("proof-link.json");
@@ -1843,7 +1720,6 @@ mod tests {
             Err(DirectoryBuildError::GuardPinningProofIo { source, .. })
                 if source.kind() == std::io::ErrorKind::InvalidData
         ));
-
         let evidence = dir.path().join("evidence");
         fs::create_dir(&evidence).expect("create evidence directory");
         symlink(&proof_target, evidence.join("discovered.json")).expect("symlink discovered proof");
@@ -1851,7 +1727,6 @@ mod tests {
             collect_guard_pinning_proofs_from_directory(&evidence, &empty_snapshot()),
             Err(GuardPinningCollectError::NoProofs { .. })
         ));
-
         let evidence_link = dir.path().join("evidence-link");
         symlink(&evidence, &evidence_link).expect("symlink evidence directory");
         assert!(matches!(
@@ -1859,7 +1734,6 @@ mod tests {
             Err(GuardPinningCollectError::NotDirectory { .. })
         ));
     }
-
     #[test]
     fn build_snapshot_rejects_all_zero_issuer_ed25519_key_material() {
         let dir = tempdir().expect("tempdir");
@@ -1881,7 +1755,6 @@ mod tests {
             guard_pinning_proofs: Vec::new(),
         };
         write_directory_config(&config_path, &config);
-
         let err = build_snapshot_from_config(&config_path)
             .expect_err("all-zero issuer key must fail before certificate reads");
         match err {
@@ -1895,7 +1768,6 @@ mod tests {
             other => panic!("unexpected directory build error: {other:?}"),
         }
     }
-
     #[test]
     fn build_snapshot_requires_mldsa65_issuer_key() {
         let dir = tempdir().expect("tempdir");
@@ -1920,7 +1792,6 @@ mod tests {
             guard_pinning_proofs: Vec::new(),
         };
         write_directory_config(&config_path, &config);
-
         let err = build_snapshot_from_config(&config_path)
             .expect_err("the first-release directory builder must require ML-DSA-65");
         assert!(
@@ -1932,7 +1803,6 @@ mod tests {
             "unexpected directory build error: {err:?}"
         );
     }
-
     #[test]
     fn build_snapshot_from_config_roundtrip() {
         let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
@@ -1944,7 +1814,6 @@ mod tests {
         let ed_public = signing_key.verifying_key().to_bytes();
         let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
             .expect("sample issuer fingerprint should compute");
-
         let certificate = sample_certificate(fingerprint);
         let bundle = certificate
             .clone()
@@ -1953,7 +1822,6 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let bundle_path = dir.path().join("alpha.cbor");
         fs::write(&bundle_path, bundle.to_cbor()).expect("write bundle");
-
         let config_path = dir.path().join("directory.json");
         let config = DirectoryBuildConfig {
             directory_hash_hex: Some(hex::encode(bundle.certificate.directory_hash)),
@@ -1972,7 +1840,6 @@ mod tests {
             guard_pinning_proofs: Vec::new(),
         };
         write_directory_config(&config_path, &config);
-
         let bundle = build_snapshot_from_config(&config_path).expect("build snapshot");
         assert_eq!(bundle.snapshot.directory_hash, certificate.directory_hash);
         assert_eq!(bundle.metadata.certificates.len(), 1);
@@ -1990,7 +1857,6 @@ mod tests {
             hex::encode(fingerprint)
         );
     }
-
     #[test]
     fn build_snapshot_rejects_small_order_issuer_ed25519_key_material() {
         let dir = tempdir().expect("tempdir");
@@ -2012,7 +1878,6 @@ mod tests {
             guard_pinning_proofs: Vec::new(),
         };
         write_directory_config(&config_path, &config);
-
         let err = build_snapshot_from_config(&config_path)
             .expect_err("weak issuer key must fail before certificate reads");
         match err {
@@ -2026,7 +1891,6 @@ mod tests {
             other => panic!("unexpected directory build error: {other:?}"),
         }
     }
-
     #[test]
     fn build_snapshot_ingests_guard_pinning_proofs() {
         let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
@@ -2038,22 +1902,18 @@ mod tests {
         let ed_public = signing_key.verifying_key().to_bytes();
         let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
             .expect("sample issuer fingerprint should compute");
-
         let certificate = sample_certificate(fingerprint);
         let bundle = certificate
             .clone()
             .issue(&signing_key, issuer_keys.secret_key())
             .expect("issue");
-
         let dir = tempdir().expect("tempdir");
         let bundle_path = dir.path().join("relay.cbor");
         fs::write(&bundle_path, bundle.to_cbor()).expect("write bundle");
-
         let config_path = dir.path().join("directory.json");
         let snapshot_path = dir.path().join("snapshots/current.norito");
         let proof_rel_path = PathBuf::from("evidence/entry.json");
         let proof_abs_path = dir.path().join(&proof_rel_path);
-
         let mut config = DirectoryBuildConfig {
             directory_hash_hex: Some(hex::encode(bundle.certificate.directory_hash)),
             published_at_unix: Some(bundle.certificate.published_at),
@@ -2071,14 +1931,12 @@ mod tests {
             guard_pinning_proofs: Vec::new(),
         };
         write_directory_config(&config_path, &config);
-
         // Build once to derive the snapshot bytes used by relays in production.
         let initial_bundle =
             build_snapshot_from_config(&config_path).expect("initial build succeeds");
         let snapshot_bytes = initial_bundle.snapshot.to_bytes().expect("encode snapshot");
         fs::create_dir_all(snapshot_path.parent().expect("snapshot dir")).expect("create dir");
         fs::write(&snapshot_path, snapshot_bytes).expect("write snapshot");
-
         let entry = GuardDirectoryEntry {
             bundle: bundle.clone(),
             snapshot_valid_until_unix: initial_bundle.snapshot.valid_until_unix,
@@ -2093,7 +1951,6 @@ mod tests {
             SystemTime::UNIX_EPOCH + Duration::from_secs(42),
         )
         .expect("persist proof");
-
         // Rebuild with guard pinning proofs so the metadata captures the evidence.
         config.guard_pinning_proofs = vec![PinningProofConfig {
             path: proof_rel_path.clone(),
@@ -2120,7 +1977,6 @@ mod tests {
             certificate.bandwidth_bytes_per_sec
         );
     }
-
     #[test]
     fn build_snapshot_collects_guard_pinning_directory() {
         let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
@@ -2132,23 +1988,19 @@ mod tests {
         let ed_public = signing_key.verifying_key().to_bytes();
         let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
             .expect("sample issuer fingerprint should compute");
-
         let certificate = sample_certificate(fingerprint);
         let bundle = certificate
             .clone()
             .issue(&signing_key, issuer_keys.secret_key())
             .expect("issue");
-
         let dir = tempdir().expect("tempdir");
         let bundle_path = dir.path().join("relay.cbor");
         fs::write(&bundle_path, bundle.to_cbor()).expect("write bundle");
-
         let config_path = dir.path().join("directory.json");
         let snapshot_path = dir.path().join("snapshots/current.norito");
         let evidence_dir = dir.path().join("evidence");
         fs::create_dir_all(&evidence_dir).expect("create evidence dir");
         let proof_path = evidence_dir.join("entry.json");
-
         let mut config = DirectoryBuildConfig {
             directory_hash_hex: Some(hex::encode(bundle.certificate.directory_hash)),
             published_at_unix: Some(bundle.certificate.published_at),
@@ -2166,7 +2018,6 @@ mod tests {
             guard_pinning_proofs: Vec::new(),
         };
         write_directory_config(&config_path, &config);
-
         let snapshot_bundle =
             build_snapshot_from_config(&config_path).expect("initial snapshot build succeeds");
         let snapshot_bytes = snapshot_bundle
@@ -2175,7 +2026,6 @@ mod tests {
             .expect("encode snapshot");
         fs::create_dir_all(snapshot_path.parent().expect("snapshot dir")).expect("create dir");
         fs::write(&snapshot_path, snapshot_bytes).expect("write snapshot");
-
         let entry = GuardDirectoryEntry {
             bundle,
             snapshot_valid_until_unix: snapshot_bundle.snapshot.valid_until_unix,
@@ -2190,11 +2040,9 @@ mod tests {
             SystemTime::UNIX_EPOCH + Duration::from_secs(42),
         )
         .expect("persist proof");
-
         // Rebuild with guard_pinning_proofs_dir so the builder discovers evidence automatically.
         config.guard_pinning_proofs_dir = Some(PathBuf::from("evidence"));
         write_directory_config(&config_path, &config);
-
         let bundle_with_proof = build_snapshot_from_config(&config_path).expect("rebuild snapshot");
         assert_eq!(
             bundle_with_proof.metadata.guard_pinning_proofs.len(),
@@ -2208,7 +2056,6 @@ mod tests {
             "proof summary path should canonicalize the discovered file"
         );
     }
-
     #[test]
     fn collect_guard_pinning_proofs_from_directory_verifies_entries() {
         let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
@@ -2220,23 +2067,19 @@ mod tests {
         let ed_public = signing_key.verifying_key().to_bytes();
         let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
             .expect("sample issuer fingerprint should compute");
-
         let certificate = sample_certificate(fingerprint);
         let bundle = certificate
             .clone()
             .issue(&signing_key, issuer_keys.secret_key())
             .expect("issue");
-
         let dir = tempdir().expect("tempdir");
         let bundle_path = dir.path().join("relay.cbor");
         fs::write(&bundle_path, bundle.to_cbor()).expect("write bundle");
-
         let config_path = dir.path().join("directory.json");
         let snapshot_path = dir.path().join("snapshots/current.norito");
         let evidence_dir = dir.path().join("evidence");
         fs::create_dir_all(&evidence_dir).expect("create evidence dir");
         let proof_path = evidence_dir.join("entry.json");
-
         let config = DirectoryBuildConfig {
             directory_hash_hex: Some(hex::encode(bundle.certificate.directory_hash)),
             published_at_unix: Some(bundle.certificate.published_at),
@@ -2254,7 +2097,6 @@ mod tests {
             guard_pinning_proofs: Vec::new(),
         };
         write_directory_config(&config_path, &config);
-
         let snapshot_bundle =
             build_snapshot_from_config(&config_path).expect("initial snapshot build succeeds");
         let snapshot_bytes = snapshot_bundle
@@ -2263,7 +2105,6 @@ mod tests {
             .expect("encode snapshot");
         fs::create_dir_all(snapshot_path.parent().expect("snapshot dir")).expect("create dir");
         fs::write(&snapshot_path, snapshot_bytes).expect("write snapshot");
-
         let entry = GuardDirectoryEntry {
             bundle,
             snapshot_valid_until_unix: snapshot_bundle.snapshot.valid_until_unix,
@@ -2278,7 +2119,6 @@ mod tests {
             SystemTime::UNIX_EPOCH + Duration::from_secs(7),
         )
         .expect("persist proof");
-
         let summaries =
             collect_guard_pinning_proofs_from_directory(&evidence_dir, &snapshot_bundle.snapshot)
                 .expect("collect summaries");
@@ -2289,7 +2129,6 @@ mod tests {
             proof_path.canonicalize().expect("canonicalize proof path")
         );
     }
-
     #[test]
     fn rotate_snapshot_reissues_certificates() {
         let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
@@ -2301,13 +2140,11 @@ mod tests {
         let ed_public = signing_key.verifying_key().to_bytes();
         let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
             .expect("sample issuer fingerprint should compute");
-
         let certificate = sample_certificate(fingerprint);
         let bundle = certificate
             .clone()
             .issue(&signing_key, issuer_keys.secret_key())
             .expect("issue");
-
         let snapshot = GuardDirectorySnapshotV2 {
             version: GUARD_DIRECTORY_VERSION_V2,
             directory_hash: certificate.directory_hash,
@@ -2326,18 +2163,15 @@ mod tests {
                 certificate: bundle.to_cbor(),
             }],
         };
-
         let bytes = snapshot.to_bytes().expect("encode snapshot");
         let mut rng = StdRng::seed_from_u64(0xDEADBEEF);
         let output = rotate_snapshot(&bytes, &mut rng).expect("rotate snapshot");
-
         assert_eq!(
             output.bundle.metadata.certificates.len(),
             snapshot.relays.len()
         );
         assert_ne!(output.keys.fingerprint, fingerprint);
         assert_ne!(output.keys.ed25519_public, ed_public);
-
         let new_verifying = VerifyingKey::from_bytes(&output.keys.ed25519_public).expect("key");
         for entry in &output.bundle.snapshot.relays {
             let bundle = RelayCertificateBundleV2::from_cbor(&entry.certificate).expect("bundle");
@@ -2350,7 +2184,6 @@ mod tests {
                 .expect("verify");
         }
     }
-
     #[test]
     fn rotate_snapshot_rejects_pre_release_validation_phase() {
         let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
@@ -2382,7 +2215,6 @@ mod tests {
         };
         let bytes = snapshot.to_bytes().expect("encode snapshot");
         let mut rng = StdRng::seed_from_u64(0xBAD_CAFE);
-
         let err = rotate_snapshot(&bytes, &mut rng)
             .expect_err("rotation must not preserve a pre-release validation policy");
         assert!(
@@ -2395,27 +2227,21 @@ mod tests {
             "unexpected directory rotation error: {err:?}"
         );
     }
-
     #[test]
     fn rotate_snapshot_rejects_all_zero_generated_ed25519_seed() {
         struct ZeroRng;
-
         impl RngCore for ZeroRng {
             fn next_u32(&mut self) -> u32 {
                 0
             }
-
             fn next_u64(&mut self) -> u64 {
                 0
             }
-
             fn fill_bytes(&mut self, dest: &mut [u8]) {
                 dest.fill(0);
             }
         }
-
         impl CryptoRng for ZeroRng {}
-
         let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
             .expect("ML-DSA keypair generation should succeed");
         let mut rng = StdRng::seed_from_u64(0xA55A56);
@@ -2425,13 +2251,11 @@ mod tests {
         let ed_public = signing_key.verifying_key().to_bytes();
         let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
             .expect("sample issuer fingerprint should compute");
-
         let certificate = sample_certificate(fingerprint);
         let bundle = certificate
             .clone()
             .issue(&signing_key, issuer_keys.secret_key())
             .expect("issue");
-
         let snapshot = GuardDirectorySnapshotV2 {
             version: GUARD_DIRECTORY_VERSION_V2,
             directory_hash: certificate.directory_hash,
@@ -2450,12 +2274,10 @@ mod tests {
                 certificate: bundle.to_cbor(),
             }],
         };
-
         let bytes = snapshot.to_bytes().expect("encode snapshot");
         let mut rng = ZeroRng;
         let err = rotate_snapshot(&bytes, &mut rng)
             .expect_err("all-zero generated Ed25519 issuer seed must fail");
-
         match err {
             DirectoryRotateError::InvalidGeneratedIssuerKeyMaterial { reason } => {
                 assert!(reason.contains("all zero"), "unexpected reason: {reason}");
@@ -2463,7 +2285,6 @@ mod tests {
             other => panic!("unexpected directory rotation error: {other:?}"),
         }
     }
-
     fn sample_certificate(fingerprint: [u8; 32]) -> RelayCertificateV2 {
         let identity = [0x22; 32];
         RelayCertificateV2 {
@@ -2511,7 +2332,6 @@ mod tests {
             pq_kem_public: vec![0x66; MlKemSuite::MlKem1024.public_key_len()],
         }
     }
-
     fn config_with_counts(
         issuer_count: usize,
         bundle_count: usize,
@@ -2542,7 +2362,6 @@ mod tests {
                 .collect(),
         }
     }
-
     fn config_for_bundle(path: &Path) -> DirectoryBuildConfig {
         let signing_key = SigningKey::from_bytes(&[0x45; 32]);
         DirectoryBuildConfig {
@@ -2562,7 +2381,6 @@ mod tests {
             guard_pinning_proofs: Vec::new(),
         }
     }
-
     fn empty_snapshot() -> GuardDirectorySnapshotV2 {
         GuardDirectorySnapshotV2 {
             version: GUARD_DIRECTORY_VERSION_V2,
@@ -2577,7 +2395,6 @@ mod tests {
             relays: Vec::new(),
         }
     }
-
     fn minimal_guard_pinning_proof_json(snapshot_path: &str) -> Vec<u8> {
         format!(
             concat!(
@@ -2606,7 +2423,6 @@ mod tests {
         )
         .into_bytes()
     }
-
     fn assert_too_many_config_entries(
         config: DirectoryBuildConfig,
         expected_field: &'static str,
@@ -2624,7 +2440,6 @@ mod tests {
                 && maximum == expected_maximum
         ));
     }
-
     fn write_directory_config(path: &Path, config: &DirectoryBuildConfig) {
         let json_value = norito::json::to_value(config).expect("serialize config");
         let json = norito::json::to_string(&json_value).expect("encode config");

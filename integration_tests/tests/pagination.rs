@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Pagination behaviour integration tests for query iterators.
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{
@@ -10,7 +9,6 @@ use iroha::{
 use iroha_data_model::query::dsl::SelectorTuple;
 use iroha_test_network::*;
 use nonzero_ext::nonzero;
-
 #[test]
 fn pagination_behaves() -> Result<()> {
     // Stored cursors are required to validate multi-batch pagination behavior.
@@ -26,16 +24,13 @@ fn pagination_behaves() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     register_assets(&client)?;
-
     // limits_should_work
     let vec = client
         .query(FindAssetsDefinitions::new())
         .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 0))
         .execute_all()?;
     assert_eq!(vec.len(), 7);
-
     // Stored bounded cursors intentionally omit exact remaining counts so the
     // first response can stay cheap; the iterator reports the current batch as
     // the lower bound and streams the rest through cursors.
@@ -51,7 +46,6 @@ fn pagination_behaves() -> Result<()> {
     assert_eq!(iter.size_hint(), (2, None));
     let remaining = iter.collect::<Result<Vec<_>, _>>()?;
     assert_eq!(remaining.len(), 3);
-
     // fetch_size_should_work
     {
         use iroha::data_model::query::{
@@ -60,7 +54,6 @@ fn pagination_behaves() -> Result<()> {
             dsl::CompoundPredicate,
             parameters::{FetchSize, QueryParams, Sorting},
         };
-
         let with_filter: QueryWithFilter<AssetDefinition> =
             QueryWithFilter::new_with_query((), CompoundPredicate::PASS, SelectorTuple::default());
         let qbox: QueryBox<QueryOutputBatchBox> = with_filter.into();
@@ -73,17 +66,13 @@ fn pagination_behaves() -> Result<()> {
             ),
         );
         let (first_batch, remaining_items, _continue_cursor) = client.start_query(query)?;
-
         assert_eq!(first_batch.len(), 3);
         assert_eq!(remaining_items, None);
     }
-
     Ok(())
 }
-
 fn register_assets(client: &Client) -> Result<()> {
     const MAX_INSTRUCTIONS_PER_TX: usize = 5;
-
     let register: Vec<InstructionBox> = pagination_asset_definitions()
         .into_iter()
         .map(|(asset_definition_id, name)| {
@@ -99,17 +88,14 @@ fn register_assets(client: &Client) -> Result<()> {
             .into()
         })
         .collect();
-
     for chunk in register.chunks(MAX_INSTRUCTIONS_PER_TX) {
         client.submit_all_blocking::<InstructionBox>(
             chunk.iter().cloned(),
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
     }
-
     Ok(())
 }
-
 fn pagination_asset_definitions() -> Vec<(AssetDefinitionId, String)> {
     ('a'..='j')
         .map(|c| c.to_string())
@@ -122,7 +108,6 @@ fn pagination_asset_definitions() -> Vec<(AssetDefinitionId, String)> {
         })
         .collect()
 }
-
 #[test]
 fn pagination_asset_definition_ids_are_canonical_base58_literals() {
     let definitions = pagination_asset_definitions();

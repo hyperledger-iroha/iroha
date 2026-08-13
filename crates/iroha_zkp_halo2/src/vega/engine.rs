@@ -1,12 +1,9 @@
 //! Released Microsoft Vega-MC proof boundary for the Figure 9 mDL relation.
-
-use thiserror::Error;
-
 use super::{
     MAX_VEGA_PROOF_BYTES_V1, VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1, VegaT256ScalarV1 as Scalar,
     figure9::{VEGA_MDL_FIGURE9_SHA256_STEPS_V1, VegaMdlFigure9WitnessV1},
 };
-
+use thiserror::Error;
 /// Exact external privacy protocol label absorbed through the core public
 /// context values.
 pub const VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1: &[u8] = b"vega-existing-credential-zk-v0";
@@ -54,7 +51,6 @@ pub const VEGA_MDL_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
     0xe7, 0x54, 0xae, 0xbc, 0x68, 0xf6, 0x44, 0x01, 0xb5, 0x89, 0x19, 0x83, 0xfb, 0xae, 0xff, 0x81,
     0xbc, 0x4b, 0x4d, 0x59, 0x92, 0x1a, 0x72, 0xc3, 0xa6, 0x2a, 0xa9, 0x9a, 0x19, 0x26, 0x0a, 0x2a,
 ];
-
 /// Hard release cap for caller-selected Vega workers.
 pub const MAX_VEGA_PROVER_WORKERS_V1: usize = 20;
 /// Conservative resident-memory admission budget for one canonical MC proof.
@@ -64,7 +60,6 @@ const PROVER_WORKER_MEMORY_BOUND_BYTES: usize = 768 * 1024;
 pub const MAX_VEGA_PROVER_RELEASE_MEMORY_CEILING_BYTES_V1: usize =
     VEGA_PROVER_SHARED_MEMORY_BOUND_BYTES_V1
         + MAX_VEGA_PROVER_WORKERS_V1 * PROVER_WORKER_MEMORY_BOUND_BYTES;
-
 /// Explicit failure returned by an injected cryptographic random source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaRandomSourceErrorV1 {
@@ -72,20 +67,17 @@ pub enum VegaRandomSourceErrorV1 {
     #[error("Vega cryptographic random source is unavailable")]
     Unavailable,
 }
-
 /// Fallible random-byte source used to seed the proof-scoped canonical Vega
 /// CSPRNG.
 pub trait VegaRandomSourceV1 {
     /// Fill the entire destination or return an error.
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), VegaRandomSourceErrorV1>;
 }
-
 /// Explicit bounded worker configuration for the canonical Vega-MC prover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VegaMdlProverConfigV1 {
     worker_count: usize,
 }
-
 impl VegaMdlProverConfigV1 {
     /// Select the exact Rayon pool size used by setup-independent preparation
     /// and proving work.
@@ -103,26 +95,22 @@ impl VegaMdlProverConfigV1 {
         }
         Ok(Self { worker_count })
     }
-
     /// Exact number of prover workers.
     #[must_use]
     pub const fn worker_count(self) -> usize {
         self.worker_count
     }
-
     /// Conservative worker-local scratch bound.
     #[must_use]
     pub const fn commitment_worker_scratch_bound_bytes(self) -> usize {
         self.worker_count * PROVER_WORKER_MEMORY_BOUND_BYTES
     }
-
     /// Conservative release-mode resident-memory admission ceiling.
     #[must_use]
     pub const fn release_memory_ceiling_bytes(self) -> usize {
         VEGA_PROVER_SHARED_MEMORY_BOUND_BYTES_V1 + self.commitment_worker_scratch_bound_bytes()
     }
 }
-
 /// Consensus context bound as four exact public scalars in the MC core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VegaMdlProofContextV1<'a> {
@@ -143,7 +131,6 @@ pub struct VegaMdlProofContextV1<'a> {
     /// Digest of the native engine manifest.
     pub engine_manifest_digest: [u8; 32],
 }
-
 /// Failure while proving, decoding, or verifying the released Vega proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaMdlProofErrorV1 {
@@ -187,7 +174,6 @@ pub enum VegaMdlProofErrorV1 {
     #[error("Vega proof verification failed")]
     VerificationFailed,
 }
-
 /// Exact verifier-key-derived Microsoft Vega-MC proof dimensions.
 ///
 /// This is an owned first-party view of every sequence bound carried by the
@@ -265,7 +251,6 @@ pub struct VegaMdlProofDimensionsV1 {
     /// Scalars in each relaxed-Spartan direct opening.
     pub relaxed_opening_scalars: usize,
 }
-
 /// Return the exact canonical MC dimensions.
 ///
 /// # Errors
@@ -274,19 +259,16 @@ pub struct VegaMdlProofDimensionsV1 {
 pub fn vega_mdl_proof_dimensions_v1() -> Result<VegaMdlProofDimensionsV1, VegaMdlProofErrorV1> {
     super::canonical_mc::proof_dimensions()
 }
-
 /// Return the pinned digest of the complete Figure 9 relation.
 #[must_use]
 pub const fn vega_mdl_canonical_relation_digest_v1() -> [u8; 32] {
     VEGA_MDL_CANONICAL_RELATION_DIGEST_V1
 }
-
 /// Return the digest of the released MC adapter/profile manifest.
 #[must_use]
 pub const fn vega_mdl_compiled_profile_digest_v1() -> [u8; 32] {
     VEGA_MDL_COMPILED_PROFILE_DIGEST_V1
 }
-
 /// Return the SHA-256 digest of the canonical Microsoft Vega-MC verifier key.
 ///
 /// # Errors
@@ -295,7 +277,6 @@ pub const fn vega_mdl_compiled_profile_digest_v1() -> [u8; 32] {
 pub fn vega_mdl_verifier_digest_v1() -> Result<[u8; 32], VegaMdlProofErrorV1> {
     super::canonical_mc::verifier_digest()
 }
-
 /// Validate one independent canonical Microsoft verifier-key/proof fixture.
 ///
 /// This low-level conformance hook exists for release-vector tests. Production
@@ -313,7 +294,6 @@ pub fn vega_microsoft_fixture_conformance_v1(
 ) -> Result<([u8; 32], VegaMdlProofDimensionsV1, usize, usize), VegaMdlProofErrorV1> {
     super::canonical_mc::validate_microsoft_fixture(verifier_key, proof)
 }
-
 /// Prove the Figure 9 relation with the complete pinned Vega-MC pipeline.
 ///
 /// # Errors
@@ -328,7 +308,6 @@ pub fn prove_vega_mdl_figure9_v1<R: VegaRandomSourceV1>(
 ) -> Result<Vec<u8>, VegaMdlProofErrorV1> {
     super::canonical_mc::prove_figure9_mc(context, public_inputs, witness, config, random)
 }
-
 /// Verify one bounded, canonical, context-bound Vega-MC Figure 9 proof.
 ///
 /// # Errors
@@ -342,8 +321,6 @@ pub fn verify_vega_mdl_figure9_v1(
 ) -> Result<(), VegaMdlProofErrorV1> {
     super::canonical_mc::verify_figure9_mc(context, public_inputs, proof_bytes)
 }
-
 /// Number of uniform SHA-256 compression instances in the released split.
 pub const VEGA_MDL_MC_STEP_COUNT_V1: usize = VEGA_MDL_FIGURE9_SHA256_STEPS_V1;
-
 const _: () = assert!(MAX_VEGA_PROOF_BYTES_V1 == 524_288);

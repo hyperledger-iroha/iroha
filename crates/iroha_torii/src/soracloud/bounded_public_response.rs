@@ -1,5 +1,4 @@
 //! Response-byte boundary for the intentionally public Soracloud discovery reads.
-
 use axum::{
     body::Body,
     http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
@@ -8,10 +7,8 @@ use axum::{
 use iroha_core::soracloud_runtime::SoracloudUploadedModelEncryptionRecipient;
 use iroha_data_model::soracloud::SoraUploadedModelEncryptionRecipientV1;
 use norito::json::JsonSerialize;
-
 /// Maximum encoded JSON bytes returned by one public discovery read.
 pub(super) const MAX_JSON_BYTES: usize = 64 * 1024;
-
 /// Encode one public discovery object under the fixed first-release byte cap.
 pub(super) fn json<T: JsonSerialize>(value: &T) -> Response {
     let bytes = match norito::json::to_vec(value) {
@@ -24,7 +21,6 @@ pub(super) fn json<T: JsonSerialize>(value: &T) -> Response {
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     response
 }
-
 /// Convert and encode the current public uploaded-model encryption recipient.
 pub(super) fn encryption_recipient(
     recipient: SoracloudUploadedModelEncryptionRecipient,
@@ -41,16 +37,13 @@ pub(super) fn encryption_recipient(
         },
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn encoded_json_is_capped_before_response_dispatch() {
         let value = norito::json!({ "value": ("x".repeat(MAX_JSON_BYTES)) });
         assert_eq!(json(&value).status(), StatusCode::SERVICE_UNAVAILABLE);
-
         let value = norito::json!({ "value": "bounded" });
         let response = json(&value);
         assert_eq!(response.status(), StatusCode::OK);

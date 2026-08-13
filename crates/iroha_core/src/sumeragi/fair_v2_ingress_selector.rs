@@ -14,7 +14,6 @@ pub(crate) enum FairV2IngressBarrierBypass {
     /// Let the finite current-view TimeoutVote episode reach its predicate.
     TimeoutVoteEpisode,
 }
-
 /// Exact Certified-Serve authority consulted by one fair-ingress selector cut.
 ///
 /// The handle is retained only to compare actor identity. Mutable queue state
@@ -28,7 +27,6 @@ struct FairV2IngressServeSelectorProjection {
     certified_body_request_cutoff: Option<u64>,
     selected_predecessors_cleared: bool,
 }
-
 impl PartialEq for FairV2IngressServeSelectorProjection {
     fn eq(&self, other: &Self) -> bool {
         let same_gate = match (&self.gate, &other.gate) {
@@ -43,9 +41,7 @@ impl PartialEq for FairV2IngressServeSelectorProjection {
             && self.selected_predecessors_cleared == other.selected_predecessors_cleared
     }
 }
-
 impl Eq for FairV2IngressServeSelectorProjection {}
-
 fn fair_v2_ingress_serve_selector_projection(
     state: &FairV2IngressState,
     physical_cut: Option<u128>,
@@ -122,7 +118,6 @@ fn fair_v2_ingress_serve_selector_projection(
         selected_predecessors_cleared,
     })
 }
-
 /// Exact leader-wire authority consulted by one fair-ingress selector cut.
 #[derive(Clone, Debug)]
 struct FairV2IngressLeaderWireSelectorProjection {
@@ -136,7 +131,6 @@ struct FairV2IngressLeaderWireSelectorProjection {
     body_dependency: Option<(ConsensusRound, BlockSubject)>,
     control_barrier: bool,
 }
-
 impl PartialEq for FairV2IngressLeaderWireSelectorProjection {
     fn eq(&self, other: &Self) -> bool {
         let same_gate = match (&self.gate, &other.gate) {
@@ -155,9 +149,7 @@ impl PartialEq for FairV2IngressLeaderWireSelectorProjection {
             && self.control_barrier == other.control_barrier
     }
 }
-
 impl Eq for FairV2IngressLeaderWireSelectorProjection {}
-
 fn fair_v2_ingress_leader_wire_selector_projection(
     state: &FairV2IngressState,
     selected_serve_barrier: Option<v2_worker::CertifiedServeBarrier>,
@@ -184,7 +176,6 @@ fn fair_v2_ingress_leader_wire_selector_projection(
             return Err("leader-wire selector changed its durable Ingress owner set".to_owned());
         }
     }
-
     let mut carrier_ordinals = BTreeMap::new();
     for entry in state.lanes.values().flat_map(|lane| lane.entries.iter()) {
         let Some(token) = entry.leader_wire_token.as_ref() else {
@@ -240,7 +231,6 @@ fn fair_v2_ingress_leader_wire_selector_projection(
     }) {
         selected_barrier = None;
     }
-
     let body_dependency = selected_barrier.as_ref().and_then(|owner| {
         state
             .lanes
@@ -289,7 +279,6 @@ fn fair_v2_ingress_leader_wire_selector_projection(
         control_barrier,
     })
 }
-
 /// Queue-local eligibility of one exact fair-ingress occurrence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FairV2IngressQueueGateVerdict {
@@ -297,7 +286,6 @@ enum FairV2IngressQueueGateVerdict {
     Strict,
     Dependency,
 }
-
 fn fair_v2_ingress_queue_gate_verdict(
     source: &FairV2IngressSource,
     lane: &FairV2IngressLane,
@@ -313,7 +301,6 @@ fn fair_v2_ingress_queue_gate_verdict(
     let leader_wire_barrier = leader.selected_barrier.as_ref();
     let leader_wire_body_dependency = leader.body_dependency;
     let leader_wire_control_barrier = leader.control_barrier;
-
     // A control occurrence may wait for downstream capacity, but a later view
     // or conflicting carrier in the same semantic slot cannot replace it.
     let has_live_control_predecessor = lane

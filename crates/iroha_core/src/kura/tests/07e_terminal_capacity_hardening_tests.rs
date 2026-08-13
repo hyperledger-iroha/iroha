@@ -121,7 +121,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .expect("construct signed Live ActivateKura successor"),
     );
     let authentication_facts = (height_context_id, 1, 1, reservation_group);
-
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("authenticated bootstrap Kura");
     for entry in lane_config.entries() {
@@ -203,7 +202,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     ));
     assert!(!bootstrap_path.exists());
     drop(kura);
-
     assert!(Kura::new(&config, &lane_config).is_err());
     assert!(bootstrap_atomic_temp.exists());
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
@@ -310,7 +308,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     fs::write(&bootstrap_path, &bootstrap_bytes)
         .expect("restore bootstrap after retirement oversize test");
     drop(kura);
-
     let hardlink_alias = temp_dir.path().join("lifecycle-bootstrap-hardlink-alias");
     fs::hard_link(&bootstrap_path, &hardlink_alias).expect("create bootstrap hardlink alias");
     assert!(
@@ -318,7 +315,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         "startup must reject a multiply linked lifecycle bootstrap",
     );
     fs::remove_file(&hardlink_alias).expect("remove bootstrap hardlink alias");
-
     let mut tampered_bootstrap = bootstrap_bytes.clone();
     let tampered_byte = tampered_bootstrap
         .last_mut()
@@ -330,7 +326,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         "startup must reject bootstrap signature, canonical, or self-hash drift",
     );
     fs::write(&bootstrap_path, &bootstrap_bytes).expect("restore canonical bootstrap");
-
     let canonical_bootstrap =
         Kura::decode_autonomous_lifecycle_bootstrap(&bootstrap_path, &bootstrap_bytes)
             .expect("decode canonical signed bootstrap");
@@ -348,7 +343,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         "startup must reject an exact-size corrupted bootstrap signature",
     );
     fs::write(&bootstrap_path, &bootstrap_bytes).expect("restore bootstrap after signature test");
-
     let mut substituted_source = canonical_bootstrap.clone();
     substituted_source.body.custody.source =
         AutonomousLifecyclePayloadCustodySourceV1::ProtectedCarrierReceive;
@@ -369,7 +363,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     );
     fs::write(&bootstrap_path, &bootstrap_bytes)
         .expect("restore bootstrap after source-substitution test");
-
     let mut corrupted_evidence = canonical_bootstrap.clone();
     corrupted_evidence.body.custody.evidence_hash =
         Hash::new(b"corrupted bootstrap custody evidence hash");
@@ -390,7 +383,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     );
     fs::write(&bootstrap_path, &bootstrap_bytes)
         .expect("restore bootstrap after evidence-hash test");
-
     let wrong_local_signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let mut wrong_signer_bootstrap = canonical_bootstrap.clone();
     wrong_signer_bootstrap.signature = <[u8; 96]>::try_from(
@@ -412,7 +404,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     );
     fs::write(&bootstrap_path, &bootstrap_bytes)
         .expect("restore bootstrap after wrong-signer test");
-
     let process_generation_path =
         Kura::autonomous_lifecycle_process_generation_path_for(temp_dir.path());
     let generation_one_bytes =
@@ -461,7 +452,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         .expect("restore generation-one record after replay test");
     fs::write(&bootstrap_path, &bootstrap_bytes)
         .expect("restore bootstrap after generation replay test");
-
     fs::File::options()
         .write(true)
         .open(&bootstrap_path)
@@ -473,7 +463,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         "startup must reject an oversized bootstrap before decoding",
     );
     fs::write(&bootstrap_path, &bootstrap_bytes).expect("restore bounded bootstrap");
-
     assert_bootstrap_atomic_temp_recovery_controls(
         temp_dir.path(),
         &config,
@@ -483,7 +472,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         &bootstrap_bytes,
     );
     let bootstrap_parent = bootstrap_path.parent().expect("bootstrap path has parent");
-
     let legacy_bootstrap = bootstrap_parent.join(format!(
         "autonomous_lifecycle_bootstrap_v0_{:020}_{:020}.norito",
         1, payload.origin_proposal.descriptor.proposal_height,
@@ -494,11 +482,9 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         "startup must reject legacy bootstrap paths without decoding them",
     );
     fs::remove_file(&legacy_bootstrap).expect("remove legacy bootstrap path");
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-
         let symlink_target = temp_dir.path().join("lifecycle-bootstrap-symlink-target");
         fs::write(&symlink_target, &bootstrap_bytes).expect("write bootstrap symlink target");
         fs::remove_file(&bootstrap_path).expect("remove stable bootstrap for symlink fixture");
@@ -511,7 +497,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         fs::remove_file(&symlink_target).expect("remove bootstrap symlink target");
         fs::write(&bootstrap_path, &bootstrap_bytes).expect("restore bootstrap after symlink test");
     }
-
     let (kura, _) = Kura::new(&config, &lane_config)
         .expect("bootstrap-only startup retains intent without mutating payload");
     kura.bind_local_peer_id(local_peer.clone())
@@ -546,7 +531,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist exact payload after signed bootstrap");
     drop(kura);
-
     let (kura, _) = Kura::new(&config, &lane_config)
         .expect("payload-durable bootstrap crash boundary is restartable");
     kura.bind_local_peer_id(local_peer.clone())
@@ -582,7 +566,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         LaneBlockAuxiliaryPersistenceOutcome::Persisted,
     );
     drop(kura);
-
     let (kura, _) = Kura::new(&config, &lane_config)
         .expect("Prepared-durable bootstrap crash boundary is restartable");
     kura.bind_local_peer_id(local_peer.clone())
@@ -618,7 +601,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         LaneBlockAuxiliaryPersistenceOutcome::Persisted,
     );
     drop(kura);
-
     let (kura, _) = Kura::new(&config, &lane_config)
         .expect("Live-durable bootstrap crash boundary is restartable");
     kura.bind_local_peer_id(local_peer.clone())
@@ -683,7 +665,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         .is_err(),
         "completed or historical bootstrap bytes must never be replayed around durable state",
     );
-
     let (current, takeover_lease) = completion.into_cursor_read().into_parts();
     let current = current.expect("completion returns exact historical Live cursor");
     let direct_current_live = sign_cursor(
@@ -719,7 +700,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         Some(&crashed_cursor),
         "successful old-generation takeover must return its exact durable cursor",
     );
-
     let mut recovered = crashed;
     recovered.session.crashed = 0;
     let recover = ProductionInFlightFirstReleaseTransitionProjection {
@@ -756,7 +736,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         Some(&live_recovered),
         "successful current-generation recovery must return its exact durable cursor",
     );
-
     // Build the canonical merge source in a separate Kura so none of the
     // target crash-stage fixtures gain payload, READY, or certified-session
     // durability before their signed bootstrap reaches that boundary.
@@ -772,7 +751,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let terminal_carrier_height = terminal_carrier.header().height().get();
     let terminal_carrier_hash = terminal_carrier.hash();
     drop(terminal_source_kura);
-
     for receipt_stage in [
         AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly,
         AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable,
@@ -973,7 +951,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             );
         }
         drop(terminal_kura);
-
         let (restarted_terminal_kura, _) = Kura::new(&terminal_config, &lane_config)
             .expect("receipt-terminal Live lifecycle unit is restart-valid");
         restarted_terminal_kura
@@ -996,7 +973,6 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         );
     }
 }
-
 struct CanonicalTerminalCapacityFixture {
     _temp_dir: TempDir,
     kura: Arc<Kura>,
@@ -1011,7 +987,6 @@ struct CanonicalTerminalCapacityFixture {
     reserved_post_wsv_bytes: u64,
     admitted_limit: u64,
 }
-
 fn assert_exact_canonical_terminal_publication(
     publication: AutonomousLifecycleCanonicalCarrierSourceOutcomePublication,
     entry: &MergeLedgerEntry,
@@ -1040,7 +1015,6 @@ fn assert_exact_canonical_terminal_publication(
         );
     }
 }
-
 fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
     let temp_dir = TempDir::new().expect("canonical terminal capacity temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -1074,7 +1048,6 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
     let generation = kura
         .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim canonical terminal capacity generation");
-
     let mut executions = Vec::new();
     let mut bindings = Vec::new();
     let mut reservation_groups = Vec::new();
@@ -1106,7 +1079,6 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
             descriptor.proposal_height,
         ));
     }
-
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
     let raw_carrier = blocks.next();
@@ -1202,7 +1174,6 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
     );
     kura.persist_merge_lane_block_application_receipts(&merge_entry, carrier_height, carrier_hash)
         .expect("persist capacity carrier receipts");
-
     let batch = merge_entry
         .execution_batch
         .as_ref()
@@ -1259,7 +1230,6 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
         admitted_limit,
     }
 }
-
 #[test]
 fn canonical_pending_capacity_preflights_full_set_and_consumes_reserved_slots_idempotently() {
     let mut fixture = canonical_terminal_capacity_fixture();
@@ -1275,7 +1245,6 @@ fn canonical_pending_capacity_preflights_full_set_and_consumes_reserved_slots_id
         .collect::<Vec<_>>();
     assert!(budgets_before.iter().all(|budget| budget.0));
     assert!(fixture.outcome_paths.iter().all(|path| !path.exists()));
-
     let (persisted_count, unindexed_bytes) = fixture
         .kura
         .persisted_count_and_unindexed_bytes()
@@ -1318,7 +1287,6 @@ fn canonical_pending_capacity_preflights_full_set_and_consumes_reserved_slots_id
             .contains("reserved terminal or carrier capacity")
     );
     assert!(fixture.outcome_paths.iter().all(|path| !path.exists()));
-
     Arc::get_mut(&mut fixture.kura)
         .expect("capacity fixture Kura remains exclusive")
         .max_disk_usage_bytes = fixture.admitted_limit;
@@ -1333,7 +1301,6 @@ fn canonical_pending_capacity_preflights_full_set_and_consumes_reserved_slots_id
         &fixture.reservation_groups,
     );
     assert!(fixture.outcome_paths.iter().all(|path| path.is_file()));
-
     let budgets_after = fixture
         .route_identities
         .iter()
@@ -1391,7 +1358,6 @@ fn canonical_pending_capacity_preflights_full_set_and_consumes_reserved_slots_id
         );
     }
 }
-
 #[test]
 fn canonical_complete_releases_shared_transient_and_store_retry_stutters() {
     let mut fixture = canonical_terminal_capacity_fixture();
@@ -1449,7 +1415,6 @@ fn canonical_complete_releases_shared_transient_and_store_retry_stutters() {
             .expect("read released carrier envelope"),
         0,
     );
-
     fixture
         .kura
         .post_wsv_lane_artifact_budget_reservations
@@ -1483,7 +1448,6 @@ fn canonical_complete_releases_shared_transient_and_store_retry_stutters() {
         "all-Complete recovery inventory must stutter without a reservation map",
     );
 }
-
 #[test]
 fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
     let temp_dir = TempDir::new().expect("release capacity temp dir");
@@ -1522,7 +1486,6 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
         .expect("derive release capacity barrier");
     kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
         .expect("durably release exact Queue claims");
-
     let physical = kura
         .kura_disk_usage_bytes()
         .expect("measure pre-Pending release bytes");
@@ -1569,7 +1532,6 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
         payload.origin_proposal.descriptor.proposal_height,
     );
     assert!(!path.exists());
-
     Arc::get_mut(&mut kura)
         .expect("release Kura remains exclusive after rejection")
         .max_disk_usage_bytes = exact_limit;
@@ -1638,7 +1600,6 @@ pub(crate) fn persist_merge_application_receipt_for_autonomous_payload_for_test(
     )
     .expect("read terminal merge receipt")
 }
-
 #[test]
 fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1693,7 +1654,6 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
         producer.private_key(),
     )
     .expect("construct merge-terminal autonomous payload");
-
     kura.install_lane_incarnation_marker_for_test(
         lane_entry,
         proposal.descriptor.lane_incarnation,
@@ -1718,7 +1678,6 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
             proposal.descriptor.lane_block_height,
         )
         .expect("read retained execution input before terminal receipt");
-
     let (parent, carrier, merge_entry) = canonical_terminal_merge_carrier_for_test(execution, 1);
     let carrier_height = carrier.header().height().get();
     let carrier_hash = carrier.hash();
@@ -1733,7 +1692,6 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
     );
     kura.persist_merge_lane_block_application_receipts(&merge_entry, carrier_height, carrier_hash)
         .expect("persist terminal merge receipt and frontier");
-
     let receipt = kura
         .read_lane_block_application_receipt(
             proposal.descriptor.lane_id,

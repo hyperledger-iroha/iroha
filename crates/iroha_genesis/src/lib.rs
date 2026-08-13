@@ -16,7 +16,6 @@
     clippy::clone_on_copy
 )]
 mod bounded_manifest;
-
 pub use bounded_manifest::{
     GENESIS_IVM_BYTECODE_MAX_BYTES_V1, GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1,
     GENESIS_MANIFEST_JSON_MAX_BYTES_V1, GENESIS_MANIFEST_JSON_MAX_DEPTH_V1,
@@ -25,7 +24,6 @@ pub use bounded_manifest::{
     read_signed_genesis, read_signed_genesis_bytes, signed_genesis_decode_limits_v1,
     validate_genesis_manifest_json,
 };
-
 use core::num::NonZeroU64;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -36,7 +34,6 @@ use std::{
     sync::LazyLock,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use base64::Engine as _;
 use derive_more::Constructor;
 use eyre::{Result, WrapErr, eyre};
@@ -490,7 +487,6 @@ pub struct ManifestCrypto {
 impl Default for ManifestCrypto {
     fn default() -> Self {
         use iroha_config::parameters::defaults::crypto as defaults;
-
         Self {
             sm_openssl_preview: defaults::enable_sm_openssl_preview(),
             sm_intrinsics: defaults::sm_intrinsics_policy(),
@@ -802,7 +798,6 @@ impl GenesisVkRegistry {
 /// Norito-compatible JSON helpers for serializing and deserializing genesis instruction lists.
 pub mod genesis_instructions_json {
     use std::{collections::BTreeMap, str::FromStr};
-
     use iroha_data_model::{
         account::{NewAccount, OpaqueAccountId},
         asset::definition::NewAssetDefinition,
@@ -829,9 +824,7 @@ pub mod genesis_instructions_json {
     };
     use iroha_primitives::numeric::Numeric;
     use norito::json::{self, Number, Parser, SeqVisitor, Value};
-
     use super::*;
-
     /// Render a slice of instructions into a JSON array suitable for the genesis manifest.
     pub fn serialize(instructions: &[InstructionBox], out: &mut String) {
         out.push('[');
@@ -1596,7 +1589,6 @@ pub mod genesis_instructions_json {
     #[allow(clippy::too_many_lines)]
     fn instruction_to_value(instruction: &InstructionBox) -> Option<Value> {
         use norito::json::Map;
-
         fn wrap(kind: &str, variant: &str, value: Value) -> Value {
             let mut variant_map = Map::new();
             variant_map.insert(variant.to_string(), value);
@@ -1907,7 +1899,6 @@ pub mod genesis_instructions_json {
     #[cfg(test)]
     mod tests {
         use std::{collections::BTreeSet, num::NonZeroU64, path::PathBuf};
-
         #[allow(unused_imports)]
         use iroha_data_model::{
             asset::AssetDefinitionAlias,
@@ -1943,9 +1934,7 @@ pub mod genesis_instructions_json {
         };
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
-
         use super::*;
-
         #[test]
         fn instructions_to_value_keeps_structure() {
             let domain =
@@ -2748,7 +2737,6 @@ impl NormalizedGenesis {
     #[must_use]
     pub fn to_json_value(&self) -> norito::json::Value {
         use norito::json::{Number, Value};
-
         let mut map = norito::json::Map::new();
         map.insert(
             "chain".to_string(),
@@ -2834,7 +2822,6 @@ impl IvmPath {
 }
 fn parameter_targets_same_slot(lhs: &Parameter, rhs: &Parameter) -> bool {
     use core::mem::discriminant;
-
     match (lhs, rhs) {
         (Parameter::Sumeragi(a), Parameter::Sumeragi(b)) => discriminant(a) == discriminant(b),
         (Parameter::Block(a), Parameter::Block(b)) => discriminant(a) == discriminant(b),
@@ -3356,7 +3343,6 @@ impl RawGenesisTransaction {
 #[cfg(test)]
 #[path = "genesis_manifest_tests.rs"]
 mod tests2;
-
 impl RawGenesisTransaction {
     /// Iterate over all instructions contained in this manifest.
     #[must_use]
@@ -4411,9 +4397,7 @@ mod tests {
     use iroha_test_samples::{ALICE_KEYPAIR, BOB_KEYPAIR};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use tempfile::TempDir;
-
     use super::*;
-
     #[test]
     fn aggregate_genesis_ivm_bytecode_budget_accepts_exact_limit() {
         assert_eq!(
@@ -4600,7 +4584,6 @@ mod tests {
     #[test]
     fn shipped_genesis_assets_have_non_blank_human_names() -> Result<()> {
         use iroha_data_model::asset::definition::validate_asset_name;
-
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let manifests = [
             repo_root.join("defaults/genesis.json"),
@@ -4653,7 +4636,6 @@ mod tests {
     #[test]
     fn shipped_public_genesis_manifests_do_not_fake_public_xor() -> Result<()> {
         use std::collections::BTreeSet;
-
         const PUBLIC_TAIRA_XOR_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
         const PUBLIC_XOR_ALIAS: &str = "xor#universal";
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

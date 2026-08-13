@@ -1,9 +1,7 @@
 #[cfg(test)]
 mod otel_tests {
     use std::sync::Arc;
-
     use super::*;
-
     #[test]
     fn global_fetch_otel_is_singleton() {
         let first = global_sorafs_fetch_otel();
@@ -13,7 +11,6 @@ mod otel_tests {
             "expected OTEL handle to be singleton"
         );
     }
-
     #[test]
     fn global_gateway_otel_is_singleton() {
         let first = global_sorafs_gateway_otel();
@@ -23,7 +20,6 @@ mod otel_tests {
             "expected gateway OTEL handle to be singleton"
         );
     }
-
     #[cfg(not(feature = "otel-exporter"))]
     #[test]
     fn installing_exporter_without_feature_fails() {
@@ -38,7 +34,6 @@ mod otel_tests {
             "expected exporter installation to fail without otel-exporter feature"
         );
     }
-
     #[cfg(feature = "otel-exporter")]
     #[tokio::test]
     async fn installing_exporter_with_valid_configuration_succeeds() {

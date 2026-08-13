@@ -451,6 +451,9 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
     status_path, status_source = load(
         "crates/iroha_core/src/sumeragi/status.rs"
     )
+    first_release_path, first_release_source = load(
+        "crates/iroha_core/src/sumeragi/v2_first_release_recovery.rs"
+    )
     if status_source:
         begin = region(
             status_path,
@@ -755,7 +758,17 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             status_source,
             (
                 "fn complete_tip_retirement_and_successor_owner_bind_are_release_bound()",
-                "crate::sumeragi::v2_lifecycle_coordinator::run_complete_tip_retirement_release_regressions()",
+                "crate::sumeragi::v2_first_release_recovery::run_complete_tip_retirement_release_regressions(",
+            ),
+        )
+    if first_release_source:
+        require_tokens(
+            first_release_path,
+            "CompleteTip first-release recovery seam",
+            first_release_source,
+            (
+                "pub(crate) use super::v2_lifecycle_coordinator::{",
+                "run_complete_tip_retirement_release_regressions",
             ),
         )
     sumeragi_path, sumeragi_source = load(
@@ -3426,7 +3439,13 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 (
                     "fn recovered_lifecycle_signed_broadcast_declares_next_vote(",
                     "fn recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(",
-                    "broadcast.paired_next_sign != Some((next_address, next_digest))",
+                    "let (next, next_digest) = broadcast.paired_next_sign?",
+                    "next.ordinal == broadcast_ordinal.checked_add(1)?",
+                    "next_record.state == super::LifecycleState::Ready",
+                    "next_record.owner == next.owner",
+                    "next_record.physical_slots.get(&next.slot) == Some(&next_digest)",
+                    "self.recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(",
+                    ") != Some(next_sign_ordinal)",
                     "DurableRecoveredLifecycleNextWalVoteSign(next_sign)",
                 ),
             )

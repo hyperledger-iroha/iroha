@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
@@ -7,10 +6,8 @@ use ivm::{
     syscalls,
 };
 use norito::to_bytes;
-
 mod common;
 use common::assemble_syscalls;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
@@ -24,16 +21,13 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
     AccountId::new(public_key)
 }
-
 fn make_account_tlv(account: &AccountId) -> Vec<u8> {
     let account = account.to_string();
     make_tlv(PointerType::AccountId as u16, account.as_bytes())
 }
-
 fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
     let payload = to_bytes(account).expect("encode account into Norito");
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -45,7 +39,6 @@ fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 #[test]
 fn nft_burn_asset_then_unregister_account_succeeds() {
     // Caller starts as alice; later we switch caller to bob for the burn.
@@ -70,7 +63,6 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // Register domain wonder
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
@@ -78,7 +70,6 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
-
     // Register the recipient account
     let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
@@ -86,7 +77,6 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
-
     // Mint NFT owned by bob
     let nft_id = b"rose:uuid:ok$wonder";
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft_id);
@@ -100,7 +90,6 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     let prog_nft = assemble_syscalls(&[syscalls::SYSCALL_NFT_MINT_ASSET as u8]);
     vm.load_program(&prog_nft).unwrap();
     vm.run().expect("mint nft");
-
     // Attempt to unregister bob: fails because NFT exists
     let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
@@ -108,13 +97,11 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     let prog_uacc = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ACCOUNT as u8]);
     vm.load_program(&prog_uacc).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
-
     // Switch caller to bob to burn NFT
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
         host.set_caller_subject(bob.clone());
     }
-
     // Burn NFT (owner=bob)
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft_id);
     vm.memory.preload_input(0, &tlv_nft).expect("preload input");
@@ -122,7 +109,6 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     let prog_burn = assemble_syscalls(&[syscalls::SYSCALL_NFT_BURN_ASSET as u8]);
     vm.load_program(&prog_burn).unwrap();
     vm.run().expect("burn nft");
-
     // Switch back to alice and unregister bob: should now succeed
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");

@@ -1,7 +1,5 @@
 //! Sealed production authentication for lifecycle planner inputs.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use super::{
     CapacityClass, LifecycleCoordinator, LifecycleState, LifecycleWorkClass,
     LifecycleWorkRegistryHolder, PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
@@ -23,12 +21,10 @@ use crate::sumeragi::{
         RecoveredLifecycleSignCapacityCaptureErrorV1, RecoveredLifecycleSignCapacityCaptureV1,
     },
 };
-
 #[cfg(not(test))]
 use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
 #[cfg(test)]
 use crate::sumeragi::v2_runner::LifecycleRunnerRankSnapshot;
-
 /// Capability proving that raw planner rows are assembled only inside this
 /// production factory.
 ///
@@ -39,13 +35,10 @@ use crate::sumeragi::v2_runner::LifecycleRunnerRankSnapshot;
 pub(crate) struct AuthenticatedSchedulerInputsFactory {
     _linearity: AuthenticatedSchedulerInputsFactoryLinearity,
 }
-
 struct AuthenticatedSchedulerInputsFactoryLinearity;
-
 impl Drop for AuthenticatedSchedulerInputsFactoryLinearity {
     fn drop(&mut self) {}
 }
-
 impl AuthenticatedSchedulerInputsFactory {
     fn new() -> Self {
         Self {
@@ -53,7 +46,6 @@ impl AuthenticatedSchedulerInputsFactory {
         }
     }
 }
-
 /// Closed origin of the six live rank components.
 ///
 /// A direct completion is already owned at its final typed consumer. It has no
@@ -63,7 +55,6 @@ impl AuthenticatedSchedulerInputsFactory {
 enum AuthenticatedLiveRankDebts {
     DirectRegistryCompletion,
 }
-
 fn authenticated_ready_row(
     factory: &AuthenticatedSchedulerInputsFactory,
     record: &super::LifecycleRecord,
@@ -89,7 +80,6 @@ fn authenticated_ready_row(
         live_debts,
     )
 }
-
 fn authenticated_scheduler_inputs(
     factory: AuthenticatedSchedulerInputsFactory,
     generations: BTreeMap<super::WaitSource, u64>,
@@ -97,7 +87,6 @@ fn authenticated_scheduler_inputs(
 ) -> SchedulerInputs {
     SchedulerInputs::from_authenticated(factory, generations, ready)
 }
-
 impl AuthenticatedLiveRankDebts {
     const fn components(self) -> [u64; 6] {
         match self {
@@ -105,7 +94,6 @@ impl AuthenticatedLiveRankDebts {
         }
     }
 }
-
 /// Failure while the production owner authenticates one complete direct-work
 /// Ready census.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,7 +137,6 @@ pub(crate) enum ProductionSchedulerInputsError {
         ordinal: u128,
     },
 }
-
 /// Result of one complete recovered Decision Apply claim-and-dispatch turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyDispatchV1 {
@@ -161,7 +148,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyDispatchV1 {
         ordinal: u128,
     },
 }
-
 /// Closed failure before or during recovered Decision Apply dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyDispatchErrorV1 {
@@ -186,7 +172,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyDispatchErrorV1 {
     /// The reserved queue key and claimed carrier projection disagreed.
     ReservedCommandMismatch,
 }
-
 /// Result of one complete lifecycle-owned recovered Sign claim and dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignDispatchV1 {
@@ -198,7 +183,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignDispatchV1 {
         ordinal: u128,
     },
 }
-
 /// Closed failure before or during recovered Sign dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignDispatchErrorV1 {
@@ -223,7 +207,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignDispatchErrorV1 {
     /// The reserved key and claimed carrier projection disagreed.
     ReservedCommandMismatch,
 }
-
 /// Result of one restart-safe recovered signed-Broadcast refanout attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "recovered signed Broadcast refanout result must be observed"]
@@ -242,7 +225,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignedBroadcastRefanout
         ordinal: u128,
     },
 }
-
 /// Closed failure before a recovered signed Broadcast enters exact output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1 {
@@ -261,7 +243,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignedBroadcastRefanout
     /// Planning did not return the authenticated Broadcast lease.
     UnexpectedPlan,
 }
-
 /// Result of one recovered Decision Fetch request-dispatch turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchDispatchV1 {
@@ -273,7 +254,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchDispatchV1 {
         ordinal: u128,
     },
 }
-
 /// Closed failure before or during recovered Decision Fetch request dispatch.
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchDispatchErrorV1 {
@@ -300,7 +280,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchDispatchErrorV1 {
     /// The reserved executor key and claimed carrier disagreed.
     ReservedOwnerMismatch,
 }
-
 /// Phase-A outcome for one selected recovered Decision Fetch response.
 #[must_use = "capacity wait or queued durable persistence must remain owner-visible"]
 pub(crate) enum ProductionRecoveredDecisionFetchPersistenceV1 {
@@ -312,7 +291,6 @@ pub(crate) enum ProductionRecoveredDecisionFetchPersistenceV1 {
         ordinal: u128,
     },
 }
-
 /// Closed failure before recovered Decision Fetch Phase-A queue publication.
 #[must_use]
 pub(crate) enum ProductionRecoveredDecisionFetchPersistenceErrorV1 {
@@ -336,7 +314,6 @@ pub(crate) enum ProductionRecoveredDecisionFetchPersistenceErrorV1 {
         prepared: PreparedLifecycleIngressSelector,
     },
 }
-
 /// Opaque service-generation wait retaining every ingress observation.
 #[must_use = "retry only after the same service release generation advances"]
 pub(crate) struct PreparedProductionIngressCapacityWait {
@@ -344,7 +321,6 @@ pub(crate) struct PreparedProductionIngressCapacityWait {
     wait: LifecycleIoCapacityWait,
     selector: PreparedLifecycleIngressSelector,
 }
-
 impl PreparedProductionIngressCapacityWait {
     /// Classify the exact retained service generation without exposing it.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -365,7 +341,6 @@ impl PreparedProductionIngressCapacityWait {
         }
     }
 }
-
 /// Opaque status of one service-owned capacity-generation wait.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProductionIngressCapacityStatus {
@@ -378,21 +353,18 @@ pub(crate) enum ProductionIngressCapacityStatus {
     /// The retained wait no longer names a live service and requires restart.
     RestartRequired,
 }
-
 /// Exact successful result after the target lease was blocked behind its
 /// physically queued persistence command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct QueuedProductionIngressFetch {
     ordinal: u128,
 }
-
 impl QueuedProductionIngressFetch {
     /// Return the exact lifecycle ordinal now blocked behind its queued command.
     pub(crate) const fn ordinal(self) -> u128 {
         self.ordinal
     }
 }
-
 /// Opaque outcome of the complete production ingress plan/submit/settle cut.
 #[must_use = "queued work or its service-generation wait must be retained"]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
@@ -402,7 +374,6 @@ pub(crate) enum ProductionIngressTurnPreparation {
     /// One exact persistence command now precedes the blocked Fetch lease.
     Queued(QueuedProductionIngressFetch),
 }
-
 /// Failure before a complete ingress-bearing scheduler precursor is sealed.
 #[must_use = "typed pre-plan rejection or fail-stop post-plan failure must be handled"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -444,7 +415,6 @@ pub(crate) enum ProductionIngressSchedulerInputsError {
         prepared: PreparedLifecycleIngressSelector,
     },
 }
-
 /// Authenticate the complete subset of Ready work already owned directly by
 /// the concrete registry.
 ///
@@ -463,7 +433,6 @@ fn direct_registry_scheduler_inputs(
     if let Some(lease) = coordinator.active_lease.as_ref() {
         return Err(ProductionSchedulerInputsError::UnsettledLease(lease.id));
     }
-
     let exact_ready = coordinator
         .records
         .iter()
@@ -474,7 +443,6 @@ fn direct_registry_scheduler_inputs(
     if exact_ready != coordinator.ready_index {
         return Err(ProductionSchedulerInputsError::InvalidReadyCensus);
     }
-
     let factory = AuthenticatedSchedulerInputsFactory::new();
     let mut ready = BTreeMap::new();
     for ordinal in &coordinator.ready_index {
@@ -575,14 +543,12 @@ fn direct_registry_scheduler_inputs(
             return Err(ProductionSchedulerInputsError::InvalidReadyCensus);
         }
     }
-
     Ok(authenticated_scheduler_inputs(
         factory,
         BTreeMap::new(),
         ready,
     ))
 }
-
 impl ProductionLifecycleOwnerV1 {
     /// Plan one turn from the complete directly-owned production Ready census.
     ///
@@ -595,7 +561,6 @@ impl ProductionLifecycleOwnerV1 {
         let inputs = direct_registry_scheduler_inputs(&self.coordinator, &self.registry)?;
         Ok(self.coordinator.plan_turn(inputs))
     }
-
     /// Reserve, claim, and queue the sole Ready recovered Decision Apply.
     ///
     /// This fixed transaction admits no selector or raw command fields. The
@@ -622,7 +587,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.dispatch_recovered_decision_apply_with_runner_debt(services, executor, runner.debt())
     }
-
     /// Exercise the exact recovered Apply dispatch with a fixture-owned runner snapshot.
     #[cfg(test)]
     pub(in crate::sumeragi) fn dispatch_recovered_decision_apply(
@@ -643,7 +607,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.dispatch_recovered_decision_apply_with_runner_debt(services, executor, runner.debt())
     }
-
     fn dispatch_recovered_decision_apply_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
@@ -761,7 +724,6 @@ impl ProductionLifecycleOwnerV1 {
         reservation.commit(prepared);
         Ok(ProductionRecoveredDecisionApplyDispatchV1::Queued { ordinal })
     }
-
     /// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.
     ///
     /// The current Completion cursor is borrow-bound. Worker capacity is
@@ -789,7 +751,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.dispatch_recovered_lifecycle_sign_with_runner_debt(services, executor, runner.debt())
     }
-
     /// Exercise recovered Sign dispatch with a fixture-owned runner snapshot.
     #[cfg(test)]
     pub(in crate::sumeragi) fn dispatch_recovered_lifecycle_sign(
@@ -810,7 +771,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.dispatch_recovered_lifecycle_sign_with_runner_debt(services, executor, runner.debt())
     }
-
     fn dispatch_recovered_lifecycle_sign_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
@@ -921,13 +881,12 @@ impl ProductionLifecycleOwnerV1 {
                 lease
             }
             super::TurnPlan::Execute(lease) => {
-                let rolled_back = lease.output_reservation().map_or_else(
-                    || self.coordinator.rollback_unpublished_turn(&lease),
-                    |reservation| {
-                        self.coordinator
-                            .rollback_unpublished_reserved_turn(&lease, reservation.class())
-                    },
-                );
+                let rolled_back = if let Some(output_reservation) = lease.output_reservation() {
+                    self.coordinator
+                        .rollback_unpublished_reserved_turn(&lease, output_reservation.class())
+                } else {
+                    self.coordinator.rollback_unpublished_turn(&lease)
+                };
                 assert!(
                     rolled_back,
                     "unexpected recovered Sign plan must restore its unpublished claim"
@@ -970,7 +929,6 @@ impl ProductionLifecycleOwnerV1 {
         reservation.commit(prepared);
         Ok(ProductionRecoveredLifecycleSignDispatchV1::Queued { ordinal })
     }
-
     /// Refanout one durable recovered signed Broadcast at the live Completion cursor.
     #[cfg(not(test))]
     pub(in crate::sumeragi) fn refanout_recovered_lifecycle_signed_broadcast(
@@ -992,7 +950,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(services, runner.debt())
     }
-
     /// Exercise durable recovered Broadcast refanout with a fixture-owned cursor.
     #[cfg(test)]
     pub(in crate::sumeragi) fn refanout_recovered_lifecycle_signed_broadcast(
@@ -1014,7 +971,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(services, runner.debt())
     }
-
     fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
@@ -1105,7 +1061,6 @@ impl ProductionLifecycleOwnerV1 {
                 })?;
             None
         };
-
         let factory = AuthenticatedSchedulerInputsFactory::new();
         let mut ready_rows = BTreeMap::new();
         for ready_ordinal in &exact_ready {
@@ -1337,7 +1292,6 @@ impl ProductionLifecycleOwnerV1 {
         // local actor admission is not a durable terminal receipt.
         Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned { ordinal })
     }
-
     /// Sign, reserve, claim, and publish the sole recovered Decision Fetch request.
     ///
     /// Exact-output ownership and the executor's vacant dedicated request slot
@@ -1364,7 +1318,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.dispatch_recovered_decision_fetch_with_runner_debt(services, executor, runner.debt())
     }
-
     /// Exercise recovered Decision Fetch dispatch with a fixture-owned runner snapshot.
     #[cfg(test)]
     pub(in crate::sumeragi) fn dispatch_recovered_decision_fetch(
@@ -1385,7 +1338,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.dispatch_recovered_decision_fetch_with_runner_debt(services, executor, runner.debt())
     }
-
     fn dispatch_recovered_decision_fetch_with_runner_debt(
         &mut self,
         services: &ProductionV2Services,
@@ -1553,7 +1505,6 @@ impl ProductionLifecycleOwnerV1 {
         output.commit();
         Ok(ProductionRecoveredDecisionFetchDispatchV1::Dispatched { ordinal })
     }
-
     /// Persist one selected recovered Decision Fetch response while retaining
     /// its fair-ingress occurrence, request owner, carrier, and claimed lease.
     #[cfg(not(test))]
@@ -1580,7 +1531,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.persist_recovered_decision_fetch_response_after_runner(services, executor, selector)
     }
-
     /// Exercise Phase A with a fixture-owned current Ingress snapshot.
     #[cfg(test)]
     #[allow(clippy::result_large_err)]
@@ -1606,7 +1556,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.persist_recovered_decision_fetch_response_after_runner(services, executor, selector)
     }
-
     #[allow(clippy::result_large_err)]
     fn persist_recovered_decision_fetch_response_after_runner(
         &mut self,
@@ -1636,7 +1585,6 @@ impl ProductionLifecycleOwnerV1 {
         {
             return Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignOwner);
         }
-
         let mode = executor.lifecycle_mode_rank_snapshot();
         if mode.height() != context.height()
             || mode.context_id().0.as_ref() != context.id().as_bytes()
@@ -1711,7 +1659,6 @@ impl ProductionLifecycleOwnerV1 {
         assert_eq!(self.coordinator.active_lease.as_ref(), Some(&lease));
         Ok(ProductionRecoveredDecisionFetchPersistenceV1::Queued { ordinal })
     }
-
     /// Plan, submit, and reblock one exact selected certified-Fetch response.
     ///
     /// The selected response is reauthenticated against the exact Waiting
@@ -1744,7 +1691,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.plan_ingress_turn_with_runner_debt(services, executor, mode, selector, runner.debt())
     }
-
     /// Exercise the production transaction with a fixture-owned rank snapshot.
     ///
     /// Normal builds have no snapshot-taking entry point; they can call only
@@ -1768,7 +1714,6 @@ impl ProductionLifecycleOwnerV1 {
         }
         self.plan_ingress_turn_with_runner_debt(services, executor, mode, selector, runner.debt())
     }
-
     #[allow(clippy::result_large_err, clippy::too_many_lines)]
     fn plan_ingress_turn_with_runner_debt(
         &mut self,
@@ -1930,11 +1875,9 @@ impl ProductionLifecycleOwnerV1 {
         ))
     }
 }
-
 #[cfg(test)]
 mod recovered_sign_capacity_tests {
     use std::collections::{BTreeMap, BTreeSet};
-
     use super::super::schema::SchedulerEpisode;
     use super::{AuthenticatedSchedulerInputsFactory, authenticated_ready_row};
     use crate::sumeragi::v2_lifecycle_coordinator::{
@@ -1943,11 +1886,9 @@ mod recovered_sign_capacity_tests {
         OwnerId, PhysicalSlotId, PredecessorScope, SchedulerEpisodeUniverse,
         work_registry::ReadyRecoveredLifecycleSignAttestationV1,
     };
-
     fn digest(byte: u8) -> LifecycleDigest {
         LifecycleDigest::new([byte; 32])
     }
-
     #[test]
     fn recovered_sign_ready_row_reserves_its_broadcast_capacity_before_claim() {
         let context = digest(0x31);
@@ -2003,7 +1944,6 @@ mod recovered_sign_capacity_tests {
             [0; 6],
         )
         .expect("closed recovered Sign attestation authenticates its Ready row");
-
         assert_eq!(
             row.output_capacity_class(),
             Some(CapacityClass::Consensus),
@@ -2011,7 +1951,6 @@ mod recovered_sign_capacity_tests {
         );
     }
 }
-
 #[cfg(test)]
 impl LifecycleCoordinator {
     /// Exercise the sealed production factory without constructing storage.
@@ -2022,7 +1961,6 @@ impl LifecycleCoordinator {
         direct_registry_scheduler_inputs(self, registry)
     }
 }
-
 #[cfg(test)]
 impl ProductionLifecycleOwnerV1 {
     /// Build one storage-owning production owner around the exact selected
@@ -2039,7 +1977,6 @@ impl ProductionLifecycleOwnerV1 {
             AdmissionDecision, CapacityClass, WaitToken,
             concrete_admission::AdapterEffectAdmissionTransaction, schema::CapacityGeometry,
         };
-
         let (context, _, _, _, expected_key, expected_root, source) = prepared
             .certified_fetch_ready_authority_for_test()
             .expect("selected Fetch must derive its exact lifecycle authority");
@@ -2073,7 +2010,6 @@ impl ProductionLifecycleOwnerV1 {
         assert!(coordinator.ready_index.remove(&ordinal));
         record.state = LifecycleState::Waiting(WaitToken::new(source, 0));
         assert!(coordinator.observed_generation.insert(source, 0).is_none());
-
         let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
             root.join("body"),
             verified.context().clone(),
@@ -2107,7 +2043,6 @@ impl ProductionLifecycleOwnerV1 {
             source,
         )
     }
-
     /// Move the owner's exact startup body store into the bounded test worker
     /// while retaining only its comparison seal in the running owner.
     pub(in crate::sumeragi) fn bind_body_store_to_planner_io_for_test(
@@ -2132,7 +2067,6 @@ impl ProductionLifecycleOwnerV1 {
         self.body_store_identity = Some(identity);
         fixture
     }
-
     /// Project the exact Fetch wait state without exposing mutable owner parts.
     pub(in crate::sumeragi) fn fetch_wait_projection_for_test(
         &self,

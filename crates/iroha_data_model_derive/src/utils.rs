@@ -1,14 +1,12 @@
 use manyhow::{Error as ManyhowError, ToTokensError};
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
-
 /// Extension trait for [`darling::Error`] adding a `with_spans` helper.
 #[allow(dead_code)]
 pub trait DarlingErrorExt: Sized {
     /// Attaches multiple spans to the error.
     fn with_spans(self, spans: impl IntoIterator<Item = impl Into<Span>>) -> Self;
 }
-
 impl DarlingErrorExt for darling::Error {
     fn with_spans(self, spans: impl IntoIterator<Item = impl Into<Span>>) -> Self {
         let mut iter = spans.into_iter();
@@ -22,7 +20,6 @@ impl DarlingErrorExt for darling::Error {
         self.with_span(&r)
     }
 }
-
 /// Finds an optional single attribute with specified name.
 ///
 /// Returns `None` if no attributes with specified name are found.
@@ -37,7 +34,6 @@ pub fn find_single_attr_opt<'a>(
     // Ignore duplicates beyond the first to keep existing call sites tolerant of repeated attrs.
     Some(attr)
 }
-
 /// Parses a single attribute of the form `#[attr_name(...)]` for darling using a `syn::parse::Parse` implementation.
 ///
 /// If no attribute with specified name is found, returns `Ok(None)`.
@@ -50,13 +46,10 @@ pub fn parse_single_list_attr_opt<Body: syn::parse::Parse>(
     attrs: &[syn::Attribute],
 ) -> darling::Result<Option<Body>> {
     let mut accumulator = darling::error::Accumulator::default();
-
     let Some(attr) = find_single_attr_opt(&mut accumulator, attr_name, attrs) else {
         return accumulator.finish_with(None);
     };
-
     let mut kind = None;
-
     match &attr.meta {
         syn::Meta::Path(_) | syn::Meta::NameValue(_) => accumulator.push(darling::Error::custom(
             format!("Expected #[{attr_name}(...)] attribute to be a list"),
@@ -65,10 +58,8 @@ pub fn parse_single_list_attr_opt<Body: syn::parse::Parse>(
             kind = accumulator.handle(syn::parse2(list.tokens.clone()).map_err(Into::into));
         }
     }
-
     accumulator.finish_with(kind)
 }
-
 /// Parses a single attribute of the form `#[attr_name(...)]`.
 /// Returns an error if attribute is missing.
 pub fn parse_single_list_attr<Body: syn::parse::Parse>(
@@ -78,24 +69,19 @@ pub fn parse_single_list_attr<Body: syn::parse::Parse>(
     parse_single_list_attr_opt(attr_name, attrs)?
         .ok_or_else(|| darling::Error::custom(format!("Missing `#[{attr_name}(...)]` attribute")))
 }
-
 #[derive(Debug)]
 pub struct DarlingErrorWrapper(pub darling::Error);
-
 impl ToTokensError for DarlingErrorWrapper {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         self.0.clone().write_errors().to_tokens(tokens);
     }
 }
-
 pub fn darling_error(err: darling::Error) -> ManyhowError {
     ManyhowError::from(DarlingErrorWrapper(err))
 }
-
 pub fn darling_result<T>(result: darling::Result<T>) -> manyhow::Result<T, DarlingErrorWrapper> {
     result.map_err(DarlingErrorWrapper)
 }
-
 // Macro for automatic `syn::parse::Parse` implementation for keyword attribute structs.
 #[allow(unused_macros)]
 macro_rules! attr_struct {
@@ -115,7 +101,6 @@ macro_rules! attr_struct {
                 $field_vis $field_name : $field_ty,
             )*
         }
-
         impl syn::parse::Parse for $name {
             fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
                 Ok(Self {
@@ -125,16 +110,12 @@ macro_rules! attr_struct {
         }
     };
 }
-
 #[allow(unused_imports)]
 pub(crate) use attr_struct;
-
 #[cfg(test)]
 mod tests {
     use syn::parse_quote;
-
     use super::*;
-
     #[test]
     fn find_single_attr_opt_works() {
         let attrs: Vec<syn::Attribute> = vec![parse_quote!(#[test_attr(foo)])];
@@ -143,27 +124,23 @@ mod tests {
         acc.finish().unwrap();
         assert!(attr.path().is_ident("test_attr"));
     }
-
     #[test]
     fn parse_single_list_attr_opt_parses() {
         let attrs: Vec<syn::Attribute> = vec![parse_quote!(#[test_attr(foo)])];
         let parsed: Option<syn::Ident> = parse_single_list_attr_opt("test_attr", &attrs).unwrap();
         assert_eq!(parsed.unwrap().to_string(), "foo");
     }
-
     #[test]
     fn parse_single_list_attr_requires_attr() {
         let attrs: Vec<syn::Attribute> = vec![parse_quote!(#[test_attr(foo)])];
         let parsed: syn::Ident = parse_single_list_attr("test_attr", &attrs).unwrap();
         assert_eq!(parsed.to_string(), "foo");
     }
-
     #[test]
     fn darling_error_ext_with_spans() {
         let err = darling::Error::custom("err").with_spans([Span::call_site()]);
         let _ = err;
     }
-
     #[test]
     fn attr_struct_macro_parses() {
         attr_struct! {

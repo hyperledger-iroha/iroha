@@ -13,7 +13,6 @@ pub(crate) enum AutonomousLaneReservationCertificationV1 {
     /// commit certificate.
     Exact(CertifiedLaneBlockArtifact),
 }
-
 impl AutonomousLaneReservationCertificationV1 {
     /// Return whether lane-local certification forbids terminal-loser release.
     #[must_use]
@@ -21,7 +20,6 @@ impl AutonomousLaneReservationCertificationV1 {
         matches!(self, Self::Exact(_))
     }
 }
-
 /// Strict read-only Kura classification for one complete Queue reservation
 /// group.
 ///
@@ -53,7 +51,6 @@ pub(crate) enum AutonomousLaneReservationEvidenceV1 {
         certification: AutonomousLaneReservationCertificationV1,
     },
 }
-
 /// Typed failure returned by exact autonomous reservation classification.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AutonomousLaneReservationEvidenceError {
@@ -97,7 +94,6 @@ pub(crate) enum AutonomousLaneReservationEvidenceError {
     #[error(transparent)]
     Kura(#[from] Error),
 }
-
 #[derive(Debug, Default)]
 struct AutonomousReservationLaneInventory {
     directory_present: bool,
@@ -106,13 +102,11 @@ struct AutonomousReservationLaneInventory {
     lane_latest: BTreeMap<u64, u64>,
     route_latest_bytes: Option<u64>,
 }
-
 #[derive(Debug, Clone)]
 struct AutonomousReservationAttemptRead {
     payload: LaneExecutablePayloadV1,
     retirement: Option<AutonomousLaneSlotRetirementV1>,
 }
-
 #[derive(Debug, Default)]
 struct AutonomousReservationCertifiedLaneSnapshot {
     requested: BTreeMap<u64, CertifiedLaneBlockArtifact>,

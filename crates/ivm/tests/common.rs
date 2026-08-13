@@ -1,8 +1,6 @@
 //! Shared fixtures and helpers for IVM integration tests.
-
 #![allow(dead_code)]
 use std::vec::Vec;
-
 // --- CompactProofBundle helpers via syscalls (test-only utilities) ---
 use iroha_data_model::{prelude::*, smart_contract::manifest::EntryPointKind};
 use iroha_primitives::{bigint::BigInt, json::Json, numeric_abi::IntValueV1};
@@ -15,17 +13,14 @@ use ivm_abi::state_value::{
     StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
     state_value_schema_hash_v1,
 };
-
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 pub const HALT: [u8; 4] = HALT_WORD.to_le_bytes();
-
 /// Build a deterministic exact network identity for VM fixtures.
 pub fn test_network_id(marker: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([marker; Hash::LENGTH]),
     ))
 }
-
 /// Select a named Kotodama V1 entrypoint after loading its artifact.
 ///
 /// V1 artifacts deliberately begin with a non-dispatching `HALT`; raw VM tests
@@ -46,7 +41,6 @@ pub fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     vm.set_program_counter(pc)
         .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
 }
-
 /// Encode a small fixture integer using the schema-bound Kotodama V1 `int` record.
 pub fn encode_int_state_value(value: i64) -> Vec<u8> {
     let frame = IntValueV1::try_new(BigInt::from_i128(i128::from(value)))
@@ -55,7 +49,6 @@ pub fn encode_int_state_value(value: i64) -> Vec<u8> {
         .expect("encode canonical int frame");
     encode_pointer_state_value(StateValueKindV1::Int, PointerType::Int, &frame)
 }
-
 /// Decode and validate a Kotodama V1 `int` state record known to fit `i64`.
 pub fn decode_int_state_value(payload: &[u8]) -> i64 {
     let envelope = decode_pointer_state_value(payload, StateValueKindV1::Int);
@@ -64,7 +57,6 @@ pub fn decode_int_state_value(payload: &[u8]) -> i64 {
         .try_to_i64()
         .expect("test state int fits i64")
 }
-
 /// Decode one pointer-backed Kotodama `int` word.
 pub fn decode_int_word(vm: &IVM, pointer: u64) -> BigInt {
     let tlv = vm
@@ -79,29 +71,24 @@ pub fn decode_int_word(vm: &IVM, pointer: u64) -> BigInt {
         .unwrap_or_else(|error| panic!("decode int pointer 0x{pointer:08x}: {error:?}"))
         .into_int()
 }
-
 /// Decode one pointer-backed Kotodama `int` word known to fit an `i64`.
 pub fn decode_i64_word(vm: &IVM, pointer: u64) -> i64 {
     decode_int_word(vm, pointer)
         .try_to_i64()
         .unwrap_or_else(|| panic!("int pointer 0x{pointer:08x} does not fit i64"))
 }
-
 /// Decode one pointer-backed Kotodama `int` return register.
 pub fn decode_int_register(vm: &IVM, register: usize) -> BigInt {
     decode_int_word(vm, vm.register(register))
 }
-
 /// Decode one pointer-backed Kotodama `int` return known to fit an `i64`.
 pub fn decode_i64_register(vm: &IVM, register: usize) -> i64 {
     decode_i64_word(vm, vm.register(register))
 }
-
 /// Encode raw bytes as a schema-bound Kotodama V1 `Bytes` state record.
 pub fn encode_bytes_state_value(value: &[u8]) -> Vec<u8> {
     encode_pointer_state_value(StateValueKindV1::Bytes, PointerType::Blob, value)
 }
-
 /// Decode a schema-bound Kotodama V1 `Bytes` state record.
 pub fn decode_bytes_state_value(payload: &[u8]) -> Vec<u8> {
     let envelope = decode_pointer_state_value(payload, StateValueKindV1::Bytes);
@@ -110,14 +97,12 @@ pub fn decode_bytes_state_value(payload: &[u8]) -> Vec<u8> {
     assert_eq!(tlv.type_id, PointerType::Blob);
     tlv.payload.to_vec()
 }
-
 /// Decode one non-negative pointer-backed Kotodama `int` return as `u64`.
 pub fn decode_u64_register(vm: &IVM, register: usize) -> u64 {
     decode_int_register(vm, register)
         .try_to_u64()
         .unwrap_or_else(|| panic!("int return in r{register} does not fit u64"))
 }
-
 /// Encode one pointer-backed value using the schema-bound Kotodama V1 record.
 pub fn encode_pointer_state_value(
     kind: StateValueKindV1,
@@ -145,7 +130,6 @@ pub fn encode_pointer_state_value(
     })
     .expect("encode pointer state record")
 }
-
 /// Decode and structurally validate one pointer-backed Kotodama V1 state record.
 pub fn decode_pointer_state_value(payload: &[u8], kind: StateValueKindV1) -> Vec<u8> {
     assert!(kind.is_pointer(), "state kind must use a pointer word");
@@ -166,7 +150,6 @@ pub fn decode_pointer_state_value(payload: &[u8], kind: StateValueKindV1) -> Vec
     };
     envelope.clone()
 }
-
 fn assemble_contract_syscalls_with_states(
     numbers: &[u8],
     states: Vec<EmbeddedStateDescriptor>,
@@ -207,12 +190,10 @@ fn assemble_contract_syscalls_with_states(
     program.extend_from_slice(&HALT);
     program
 }
-
 /// Assemble an admitted contract fixture that may perform dynamic ledger writes.
 pub fn assemble_ledger_write_contract_syscalls(numbers: &[u8]) -> Vec<u8> {
     assemble_contract_syscalls_with_states(numbers, Vec::new(), vec!["*".to_owned()])
 }
-
 /// Assemble an admitted contract fixture over declared `Bytes` durable state.
 pub fn assemble_bytes_state_contract_syscalls(numbers: &[u8], state_names: &[&str]) -> Vec<u8> {
     let states = state_names
@@ -228,7 +209,6 @@ pub fn assemble_bytes_state_contract_syscalls(numbers: &[u8], state_names: &[&st
         .collect();
     assemble_contract_syscalls_with_states(numbers, states, write_keys)
 }
-
 fn assemble_words(words: &[u32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(words.len() * 4);
     for &word in words {
@@ -236,14 +216,12 @@ fn assemble_words(words: &[u32]) -> Vec<u8> {
     }
     assemble(&bytes)
 }
-
 fn syscall_prog(syscall: u8) -> Vec<u8> {
     assemble_words(&[
         encoding::wide::encode_sys(instruction::wide::system::SCALL, syscall),
         HALT_WORD,
     ])
 }
-
 /// Issue GET_MERKLE_COMPACT via SCALL and decode into a CompactProofBundle.
 pub fn syscall_memory_compact_bundle(
     vm: &mut IVM,
@@ -259,7 +237,6 @@ pub fn syscall_memory_compact_bundle(
     let prog = syscall_prog(syscalls::SYSCALL_GET_MERKLE_COMPACT as u8);
     vm.load_program(&prog).expect("load program");
     vm.run().expect("syscall");
-
     // Parse header and decode typed compact proof
     let mut hdr = [0u8; 1 + 4 + 4];
     vm.memory.load_bytes(out_ptr, &mut hdr).expect("hdr");
@@ -284,7 +261,6 @@ pub fn syscall_memory_compact_bundle(
         root,
     }
 }
-
 /// Issue GET_REGISTER_MERKLE_COMPACT via SCALL and decode into a CompactProofBundle.
 pub fn syscall_registers_compact_bundle(
     vm: &mut IVM,
@@ -300,7 +276,6 @@ pub fn syscall_registers_compact_bundle(
     let prog = syscall_prog(syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT as u8);
     vm.load_program(&prog).expect("load program");
     vm.run().expect("syscall");
-
     // Parse header and decode typed compact proof
     let mut hdr = [0u8; 1 + 4 + 4];
     vm.memory.load_bytes(out_ptr, &mut hdr).expect("hdr");
@@ -325,10 +300,8 @@ pub fn syscall_registers_compact_bundle(
         root,
     }
 }
-
 pub const MODE_VECTOR: u8 = 0x02;
 pub const MODE_ZK: u8 = ivm::ivm_mode::ZK;
-
 pub fn assemble_with_mode(code: &[u8], mode: u8) -> Vec<u8> {
     let vector_length = if (mode & MODE_VECTOR) != 0 { 4 } else { 0 };
     let meta = ProgramMetadata {
@@ -342,11 +315,9 @@ pub fn assemble_with_mode(code: &[u8], mode: u8) -> Vec<u8> {
     v.extend_from_slice(code);
     v
 }
-
 pub fn assemble(code: &[u8]) -> Vec<u8> {
     assemble_with_mode(code, 0)
 }
-
 /// Assemble a program with an `LTLB` literal section and return the program
 /// bytes plus the literal addresses inside the loaded code region.
 pub fn assemble_with_literal_section(code: &[u8], literals: &[&[u8]]) -> (Vec<u8>, Vec<u64>) {
@@ -376,7 +347,6 @@ pub fn assemble_with_literal_section(code: &[u8], literals: &[&[u8]]) -> (Vec<u8
     program.extend_from_slice(code);
     (program, literal_addrs)
 }
-
 /// Assemble a program that consists of one or more syscall instructions followed by HALT.
 pub fn assemble_syscalls<T>(syscalls: &[T]) -> Vec<u8>
 where
@@ -394,7 +364,6 @@ where
     code.extend_from_slice(&HALT);
     assemble(&code)
 }
-
 /// Assemble a SCALL/HALT program with a literal-table prefix and return the
 /// program bytes plus literal addresses inside the loaded code region.
 pub fn assemble_syscalls_with_literal_section<T>(
@@ -416,14 +385,12 @@ where
     code.extend_from_slice(&HALT);
     assemble_with_literal_section(&code, literals)
 }
-
 pub fn assemble_zk(code: &[u8], max_cycles: u64) -> Vec<u8> {
     let mut header = assemble_with_mode(code, MODE_ZK);
     // overwrite max_cycles in header (bytes 8..16)
     header[8..16].copy_from_slice(&max_cycles.to_le_bytes());
     header
 }
-
 pub fn payload_for_type(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     match pointer_type {
         PointerType::AccountId => encode_account_id_payload(payload),
@@ -438,12 +405,10 @@ pub fn payload_for_type(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
         _ => payload.to_vec(),
     }
 }
-
 pub fn json_from_payload(payload: &[u8]) -> norito::json::Value {
     let json: Json = norito::decode_from_bytes(payload).expect("decode Json payload");
     norito::json::from_str(json.get()).expect("parse Json payload")
 }
-
 fn encode_from_str<T>(payload: &[u8], label: &str) -> Vec<u8>
 where
     T: core::str::FromStr + norito::NoritoSerialize,
@@ -455,32 +420,27 @@ where
         .unwrap_or_else(|e| panic!("{label} literal `{raw}` failed to parse: {e}"));
     norito::to_bytes(&value).expect("encode payload")
 }
-
 fn encode_account_id_payload(payload: &[u8]) -> Vec<u8> {
     // Some tests already provide Norito-encoded AccountId payload bytes.
     if norito::decode_from_bytes::<AccountId>(payload).is_ok() {
         return payload.to_vec();
     }
-
     let raw = core::str::from_utf8(payload).expect("payload must be utf-8");
     let account = AccountId::parse_encoded(raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .unwrap_or_else(|err| panic!("AccountId literal `{raw}` failed to parse: {err}"));
     norito::to_bytes(&account).expect("encode payload")
 }
-
 fn encode_json_payload(payload: &[u8]) -> Vec<u8> {
     let raw = core::str::from_utf8(payload).expect("json payload must be utf-8");
     let json = Json::from_str_norito(raw).expect("parse json payload");
     norito::to_bytes(&json).expect("encode json payload")
 }
-
 fn encode_name_payload(payload: &[u8]) -> Vec<u8> {
     // Some tests already provide Norito-encoded Name payload bytes.
     if norito::decode_from_bytes::<Name>(payload).is_ok() {
         return payload.to_vec();
     }
-
     let raw = core::str::from_utf8(payload).expect("payload must be utf-8");
     match raw.parse::<Name>() {
         Ok(name) => norito::to_bytes(&name).expect("encode payload"),
@@ -489,12 +449,10 @@ fn encode_name_payload(payload: &[u8]) -> Vec<u8> {
         Err(_) => payload.to_vec(),
     }
 }
-
 fn encode_domain_id_payload(payload: &[u8]) -> Vec<u8> {
     if norito::decode_from_bytes::<DomainId>(payload).is_ok() {
         return payload.to_vec();
     }
-
     let raw = core::str::from_utf8(payload).expect("payload must be utf-8");
     // Older IVM pointer-TLV tests still pass bare domain labels. Canonicalize
     // those onto the universal dataspace so the helper matches the checked-in

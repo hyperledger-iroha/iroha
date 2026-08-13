@@ -2,7 +2,6 @@
 //!
 //! This crate owns configuration templating, process lifecycle management,
 //! and Torii client plumbing shared by every MOCHI front end.
-
 pub mod bootstrap;
 pub mod chaos;
 pub mod compose;
@@ -15,7 +14,6 @@ pub mod state;
 pub mod supervisor;
 pub mod torii;
 pub mod vault;
-
 pub use bootstrap::{
     BootstrapArtifact, BootstrapBundle, BootstrapInputs, BootstrapWriteError, ENV_LOCAL_FILE,
     KOTLIN_SAMPLE_FILE, RUST_SAMPLE_FILE, TYPESCRIPT_SAMPLE_FILE, ensure_http_base, shell_quote,
@@ -43,18 +41,14 @@ pub use genesis::{default_manifest, sample_cabbage_definition_id, sample_rose_de
 pub use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 pub use iroha_telemetry::metrics::{Status as TelemetryStatus, TxGossipSnapshot};
 pub use logs::{LifecycleEvent, LogStreamKind, PeerLogEvent, PeerLogStream};
-pub use state::{
-    StateCursor, StateEntry, StatePage, StateQueryError, StateQueryKind, run_state_query,
-};
+pub use state::{StateCursor, StateEntry, StatePage, StateQueryError, StateQueryKind, run_state_query};
 pub use supervisor::{
     BinaryPaths, BinaryVersionInfo, CompatibilityReport, KagamiVerifyReport, PeerHandle, PeerState,
     Result as SupervisorResult, SelectedPeerStoragePaths, Supervisor, SupervisorBuilder,
     SupervisorError, SupervisorSessionInfo, resolve_selected_peer_storage_paths,
 };
 #[cfg(any(test, feature = "test"))]
-pub use supervisor::{
-    kagami_stub_genesis_policies_from_config, sign_kagami_stub_genesis_from_config,
-};
+pub use supervisor::{kagami_stub_genesis_policies_from_config, sign_kagami_stub_genesis_from_config};
 pub use torii::{
     BlockDecodeStage, BlockStream, BlockStreamDecodeError, BlockStreamEvent, BlockSummary,
     EventCategory, EventDecodeStage, EventStream, EventStreamDecodeError, EventStreamEvent,
@@ -67,11 +61,9 @@ pub use torii::{
     decode_norito_with_alignment, wait_for_all_managed_peers_genesis,
 };
 pub use vault::{SIGNERS_FILE_NAME, SignerVault, SignerVaultError};
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn supervisor_builder_uses_requested_profile() {
         let builder = SupervisorBuilder::new(ProfilePreset::SinglePeer);

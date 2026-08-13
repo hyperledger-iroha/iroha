@@ -1,7 +1,5 @@
 // Regressions for the bounded local SoraFS gateway response path.
-
 use super::*;
-
 #[test]
 fn site_ranges_are_bounded_and_single_only() {
     let empty = HeaderMap::new();
@@ -19,7 +17,6 @@ fn site_ranges_are_bounded_and_single_only() {
             .status(),
         StatusCode::PAYLOAD_TOO_LARGE
     );
-
     let mut headers = HeaderMap::new();
     headers.insert(header::RANGE, HeaderValue::from_static("bytes=2-5"));
     assert_eq!(
@@ -47,7 +44,6 @@ fn site_ranges_are_bounded_and_single_only() {
         StatusCode::BAD_REQUEST
     );
 }
-
 #[test]
 fn active_content_types_require_isolated_origin() {
     for media_type in [

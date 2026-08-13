@@ -13,7 +13,6 @@
 //! the complete prepass before its corresponding output stage can be sealed.
 //! A late failure can leave only unauthorizing CAS orphans: neither a key
 //! authority nor a ciphertext manifest is issued.
-
 use super::super::{
     PlaintextModulus, bytes_mod_u64, cyclic_ntt,
     direct_object_transport::{
@@ -31,15 +30,12 @@ use super::super::{
 };
 use super::*;
 use crate::vega::VEGA_T256_SCALAR_MODULUS_BE_V1;
-
 #[cfg(test)]
 use super::super::direct_object_transport::{
     ZkAmsMkheDirectObjectPublishedBindingV1, ZkAmsMkheDirectObjectSealTokenV1,
     ZkAmsMkheDirectObjectStagingTokenV1,
 };
-
 // BEGIN PRIVATE INCREMENTAL COLLECTIVE ENCRYPTION PREREQUISITE V1
-
 const COLLECTIVE_RNS_COMPONENT_COUNT_V1: usize = 2;
 const STREAMING_COLLECTIVE_RNS_LIMBS_V1: usize = RELEASE_MODULI_V1.len();
 const STREAMING_COLLECTIVE_LIMB_COUNT_BYTES_V1: usize = 4;
@@ -55,13 +51,11 @@ const STREAMING_COLLECTIVE_KEY_AUTHORITY_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.streaming-collective-key-authority";
 const STREAMING_COLLECTIVE_CIPHERTEXT_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.streaming-collective-ciphertext-manifest";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CollectiveRnsComponentV1 {
     First,
     Second,
 }
-
 impl CollectiveRnsComponentV1 {
     const fn ordinal(self) -> usize {
         match self {
@@ -70,7 +64,6 @@ impl CollectiveRnsComponentV1 {
         }
     }
 }
-
 /// Incremental hash state for exactly two flat, component-major RNS
 /// polynomials. Limb and modulus ordinals are validation inputs only: the
 /// legacy framing commits one big-endian flat coefficient count followed by
@@ -87,7 +80,6 @@ struct ComponentMajorRnsDigestStateV1 {
     next_component: usize,
     next_limb: usize,
 }
-
 impl ComponentMajorRnsDigestStateV1 {
     fn new(mut hash: Box<Keccak256>, profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         profile.validate()?;
@@ -108,11 +100,9 @@ impl ComponentMajorRnsDigestStateV1 {
             next_limb: 0,
         })
     }
-
     fn expects(&self, component: CollectiveRnsComponentV1, limb: usize) -> bool {
         self.next_component == component.ordinal() && self.next_limb == limb
     }
-
     fn absorb_next_limb_v1(
         &mut self,
         component: CollectiveRnsComponentV1,
@@ -155,7 +145,6 @@ impl ComponentMajorRnsDigestStateV1 {
         }
         Ok(())
     }
-
     fn finish(mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         if self.next_component != COLLECTIVE_RNS_COMPONENT_COUNT_V1 || self.next_limb != 0 {
             return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
@@ -168,7 +157,6 @@ impl ComponentMajorRnsDigestStateV1 {
         Ok(digest)
     }
 }
-
 /// Exact component-major collective-public-key digest cursor. This is a hash
 /// parity helper only, not a validated-key or source-record capability.
 #[allow(
@@ -178,7 +166,6 @@ impl ComponentMajorRnsDigestStateV1 {
 pub(super) struct ComponentMajorCollectivePublicKeyDigestV1 {
     state: ComponentMajorRnsDigestStateV1,
 }
-
 #[allow(
     dead_code,
     reason = "private incremental source prerequisite is not wired to an external store yet"
@@ -206,7 +193,6 @@ impl ComponentMajorCollectivePublicKeyDigestV1 {
             state: ComponentMajorRnsDigestStateV1::new(hash, profile)?,
         })
     }
-
     pub(super) fn absorb_next_public_a_limb_v1(
         &mut self,
         limb: usize,
@@ -215,7 +201,6 @@ impl ComponentMajorCollectivePublicKeyDigestV1 {
         self.state
             .absorb_next_limb_v1(CollectiveRnsComponentV1::First, limb, coefficients)
     }
-
     pub(super) fn absorb_next_collective_public_b_limb_v1(
         &mut self,
         limb: usize,
@@ -224,7 +209,6 @@ impl ComponentMajorCollectivePublicKeyDigestV1 {
         self.state
             .absorb_next_limb_v1(CollectiveRnsComponentV1::Second, limb, coefficients)
     }
-
     pub(super) fn finish(
         self,
         share_digests: &[[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
@@ -244,14 +228,12 @@ impl ComponentMajorCollectivePublicKeyDigestV1 {
             .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)
     }
 }
-
 #[derive(Clone, Copy)]
 struct IncrementalCollectiveKeyBindingV1 {
     profile_digest: [u8; 32],
     roster_digest: [u8; 32],
     epoch: u64,
 }
-
 impl IncrementalCollectiveKeyBindingV1 {
     const fn from_validated_key_v1(key: &ZkAmsMkheCollectivePublicKeyV1) -> Self {
         Self {
@@ -260,7 +242,6 @@ impl IncrementalCollectiveKeyBindingV1 {
             epoch: key.epoch,
         }
     }
-
     const fn from_streaming_binding_v1(key: &ZkAmsMkheStreamingCollectiveKeyBindingV1) -> Self {
         Self {
             profile_digest: key.profile_digest,
@@ -269,7 +250,6 @@ impl IncrementalCollectiveKeyBindingV1 {
         }
     }
 }
-
 /// Private proof that the full legacy key was validated exactly once before
 /// any plaintext scratch allocation or randomness. It is a transitional
 /// prerequisite; the future external source must mint an equivalent binding
@@ -279,7 +259,6 @@ struct ValidatedIncrementalCollectiveKeyV1<'key> {
     key: &'key ZkAmsMkheCollectivePublicKeyV1,
     binding: IncrementalCollectiveKeyBindingV1,
 }
-
 impl<'key> ValidatedIncrementalCollectiveKeyV1<'key> {
     fn new(
         key: &'key ZkAmsMkheCollectivePublicKeyV1,
@@ -292,13 +271,11 @@ impl<'key> ValidatedIncrementalCollectiveKeyV1<'key> {
         })
     }
 }
-
 /// Exact component-major collective-ciphertext digest cursor. Its framing is
 /// byte-for-byte identical to `ZkAmsMkheCollectiveCiphertextV1::compute_digest`.
 struct ComponentMajorCollectiveCiphertextDigestV1 {
     state: ComponentMajorRnsDigestStateV1,
 }
-
 impl ComponentMajorCollectiveCiphertextDigestV1 {
     fn new_with_preallocated_hash_v1(
         profile: &BgvProfile,
@@ -317,7 +294,6 @@ impl ComponentMajorCollectiveCiphertextDigestV1 {
             hash,
         )
     }
-
     fn new_with_prevalidated_profile_digest_v1(
         profile: &BgvProfile,
         profile_digest: [u8; 32],
@@ -344,11 +320,9 @@ impl ComponentMajorCollectiveCiphertextDigestV1 {
             state: ComponentMajorRnsDigestStateV1::new(hash, profile)?,
         })
     }
-
     fn expects(&self, component: CollectiveRnsComponentV1, limb: usize) -> bool {
         self.state.expects(component, limb)
     }
-
     fn absorb_next_limb_v1(
         &mut self,
         component: CollectiveRnsComponentV1,
@@ -359,26 +333,22 @@ impl ComponentMajorCollectiveCiphertextDigestV1 {
             .absorb_next_limb_v1(component, limb, coefficients)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidCiphertext)
     }
-
     fn finish(self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.state
             .finish()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidCiphertext)
     }
 }
-
 /// Heap-stable, optimizer-resistant owner for one reusable release-RNS limb.
 /// It is allocated while zero and deliberately implements neither `Clone` nor
 /// `Debug`.
 struct ZeroizingCollectiveEncryptionLimbV1(Box<[u64]>);
-
 #[cfg(test)]
 std::thread_local! {
     static COLLECTIVE_ENCRYPTION_LIMB_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 impl ZeroizingCollectiveEncryptionLimbV1 {
     fn new_zeroed_v1(coefficient_count: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut coefficients = Vec::new();
@@ -388,20 +358,16 @@ impl ZeroizingCollectiveEncryptionLimbV1 {
         coefficients.resize(coefficient_count, 0);
         Ok(Self(coefficients.into_boxed_slice()))
     }
-
     fn as_slice(&self) -> &[u64] {
         &self.0
     }
-
     fn as_mut_slice(&mut self) -> &mut [u64] {
         &mut self.0
     }
 }
-
 impl Drop for ZeroizingCollectiveEncryptionLimbV1 {
     fn drop(&mut self) {
         clear_secret_u64_slice_v1(self.0.as_mut());
-
         #[cfg(test)]
         if self.0.iter().all(|coefficient| *coefficient == 0) {
             let _ = COLLECTIVE_ENCRYPTION_LIMB_ZEROIZED_DROPS_V1
@@ -409,19 +375,16 @@ impl Drop for ZeroizingCollectiveEncryptionLimbV1 {
         }
     }
 }
-
 /// Heap-stable, zeroizing owner for one of the three signed RLWE witnesses.
 /// It is allocated before entropy is requested and filled in place, so moves
 /// after sampling move only its box pointer.
 struct ZeroizingCollectiveEncryptionWitnessV1(Box<[i64]>);
-
 #[cfg(test)]
 std::thread_local! {
     static COLLECTIVE_ENCRYPTION_WITNESS_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 impl ZeroizingCollectiveEncryptionWitnessV1 {
     fn new_zeroed_v1(coefficient_count: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut coefficients = Vec::new();
@@ -431,24 +394,19 @@ impl ZeroizingCollectiveEncryptionWitnessV1 {
         coefficients.resize(coefficient_count, 0);
         Ok(Self(coefficients.into_boxed_slice()))
     }
-
     fn as_slice(&self) -> &[i64] {
         &self.0
     }
-
     fn as_mut_slice(&mut self) -> &mut [i64] {
         &mut self.0
     }
-
     fn is_zero(&self) -> bool {
         self.0.iter().all(|coefficient| *coefficient == 0)
     }
 }
-
 impl Drop for ZeroizingCollectiveEncryptionWitnessV1 {
     fn drop(&mut self) {
         clear_secret_i64_slice_v1(self.0.as_mut());
-
         #[cfg(test)]
         if self.is_zero() {
             let _ = COLLECTIVE_ENCRYPTION_WITNESS_ZEROIZED_DROPS_V1
@@ -456,7 +414,6 @@ impl Drop for ZeroizingCollectiveEncryptionWitnessV1 {
         }
     }
 }
-
 /// Exactly two reusable one-limb owners. No third arithmetic/result limb is
 /// allocated: the left owner becomes the result, while the right owner is
 /// erased and reused after the NTT product.
@@ -464,7 +421,6 @@ struct ZeroizingCollectiveEncryptionWorkspaceV1 {
     left: ZeroizingCollectiveEncryptionLimbV1,
     right: ZeroizingCollectiveEncryptionLimbV1,
 }
-
 /// All heap owners established before the first entropy draw. The bounded limb
 /// and witness owners are fallibly allocated; fixed-size sponge boxes retain
 /// Rust's usual OOM-abort semantics and are never claimed to be fallible.
@@ -474,7 +430,6 @@ struct PreallocatedCollectiveEncryptionEntropyOwnersV1 {
     transcript_hash: Option<Box<Keccak256>>,
     ciphertext_hash: Option<Box<Keccak256>>,
 }
-
 impl PreallocatedCollectiveEncryptionEntropyOwnersV1 {
     fn new_zeroed_v1() -> Self {
         Self {
@@ -485,7 +440,6 @@ impl PreallocatedCollectiveEncryptionEntropyOwnersV1 {
         }
     }
 }
-
 impl ZeroizingCollectiveEncryptionWorkspaceV1 {
     fn new_zeroed_v1(coefficient_count: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         Ok(Self {
@@ -494,7 +448,6 @@ impl ZeroizingCollectiveEncryptionWorkspaceV1 {
         })
     }
 }
-
 /// Typed immutable borrow of one completed public ciphertext limb. The
 /// component/limb/modulus association cannot be changed by the writer that
 /// receives this borrow.
@@ -504,7 +457,6 @@ struct FilledIncrementalCollectiveCiphertextLimbV1<'limb> {
     modulus: u64,
     coefficients: &'limb [u64],
 }
-
 #[allow(
     dead_code,
     reason = "private source prerequisite is parity-tested before confidential-store wiring"
@@ -513,20 +465,16 @@ impl FilledIncrementalCollectiveCiphertextLimbV1<'_> {
     fn component(&self) -> CollectiveRnsComponentV1 {
         self.component
     }
-
     fn limb(&self) -> usize {
         self.limb
     }
-
     fn modulus(&self) -> u64 {
         self.modulus
     }
-
     fn coefficients(&self) -> &[u64] {
         self.coefficients
     }
 }
-
 /// Private, non-authorizing one-limb encryption kernel.
 ///
 /// The only retained secret state is the opening nonce and the three native
@@ -556,7 +504,6 @@ struct IncrementalCollectiveEncryptionKernelV1<'plaintext, 'key> {
     ciphertext_digest: ComponentMajorCollectiveCiphertextDigestV1,
     poisoned: bool,
 }
-
 #[allow(
     dead_code,
     reason = "private source prerequisite is parity-tested before confidential-store wiring"
@@ -565,7 +512,6 @@ struct CompletedIncrementalCollectiveEncryptionV1 {
     transcript_digest: [u8; 32],
     ciphertext_digest: [u8; 32],
 }
-
 #[allow(
     dead_code,
     reason = "private source prerequisite is parity-tested before confidential-store wiring"
@@ -598,7 +544,6 @@ impl<'plaintext, 'key> IncrementalCollectiveEncryptionKernelV1<'plaintext, 'key>
             random,
         )
     }
-
     fn new_validated_inner_v1<R: MaskedRelaxedRandomSourceV1>(
         profile: &BgvProfile,
         key: &'key ZkAmsMkheCollectivePublicKeyV1,
@@ -617,7 +562,6 @@ impl<'plaintext, 'key> IncrementalCollectiveEncryptionKernelV1<'plaintext, 'key>
             random,
         )
     }
-
     fn new_with_validated_key_v1<R: MaskedRelaxedRandomSourceV1>(
         profile: &BgvProfile,
         validated_key: ValidatedIncrementalCollectiveKeyV1<'key>,
@@ -704,21 +648,18 @@ impl<'plaintext, 'key> IncrementalCollectiveEncryptionKernelV1<'plaintext, 'key>
             poisoned: false,
         })
     }
-
     fn absorb_next_constant_limb_v1(
         &mut self,
         limb: usize,
     ) -> Result<FilledIncrementalCollectiveCiphertextLimbV1<'_>, ZkAmsMkheErrorV1> {
         self.absorb_next_limb_inner_v1(CollectiveRnsComponentV1::First, limb)
     }
-
     fn absorb_next_linear_limb_v1(
         &mut self,
         limb: usize,
     ) -> Result<FilledIncrementalCollectiveCiphertextLimbV1<'_>, ZkAmsMkheErrorV1> {
         self.absorb_next_limb_inner_v1(CollectiveRnsComponentV1::Second, limb)
     }
-
     fn absorb_next_limb_inner_v1(
         &mut self,
         component: CollectiveRnsComponentV1,
@@ -795,7 +736,6 @@ impl<'plaintext, 'key> IncrementalCollectiveEncryptionKernelV1<'plaintext, 'key>
             coefficients: self.workspace.left.as_slice(),
         })
     }
-
     fn finish(self) -> Result<CompletedIncrementalCollectiveEncryptionV1, ZkAmsMkheErrorV1> {
         if self.poisoned
             || self.input_identity.encryption_nonce.is_zero()
@@ -811,7 +751,6 @@ impl<'plaintext, 'key> IncrementalCollectiveEncryptionKernelV1<'plaintext, 'key>
         })
     }
 }
-
 fn validate_incremental_canonical_plaintext_v1(
     profile: &BgvProfile,
     canonical_plaintext: &[[u8; 32]],
@@ -844,7 +783,6 @@ fn validate_incremental_canonical_plaintext_v1(
     }
     Ok(())
 }
-
 fn fill_incremental_plaintext_limb_v1(
     profile: &BgvProfile,
     canonical_plaintext: &[[u8; 32]],
@@ -879,7 +817,6 @@ fn fill_incremental_plaintext_limb_v1(
     }
     Ok(())
 }
-
 fn derive_collective_encryption_nonce_into_v1<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
     nonce: &mut ZeroizingEncryptionNonce,
@@ -909,7 +846,6 @@ fn derive_collective_encryption_nonce_into_v1<R: MaskedRelaxedRandomSourceV1>(
     }
     Ok(())
 }
-
 fn collective_encryption_transcript_digest_with_preallocated_hash_v1(
     key: &ZkAmsMkheCollectivePublicKeyV1,
     topology: CollectiveEncryptionInputTopologyV1,
@@ -931,7 +867,6 @@ fn collective_encryption_transcript_digest_with_preallocated_hash_v1(
         hash,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn collective_encryption_transcript_digest_from_axes_with_preallocated_hash_v1(
     profile_digest: [u8; 32],
@@ -974,7 +909,6 @@ fn collective_encryption_transcript_digest_from_axes_with_preallocated_hash_v1(
     hash.finalize_into(&mut digest);
     digest
 }
-
 fn sample_nonzero_ternary_into_v1<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     random: &mut R,
@@ -1019,7 +953,6 @@ fn sample_nonzero_ternary_into_v1<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
-
 fn sample_bounded_error_into_v1<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     random: &mut R,
@@ -1053,7 +986,6 @@ fn sample_bounded_error_into_v1<R: MaskedRelaxedRandomSourceV1>(
     }
     Ok(())
 }
-
 fn negacyclic_multiply_signed_rhs_two_limb_v1(
     left: &mut [u64],
     right: &mut [u64],
@@ -1090,7 +1022,6 @@ fn negacyclic_multiply_signed_rhs_two_limb_v1(
     }
     Ok(())
 }
-
 fn add_scaled_error_and_message_in_place_v1(
     profile: &BgvProfile,
     modulus: u64,
@@ -1121,9 +1052,7 @@ fn add_scaled_error_and_message_in_place_v1(
     }
     Ok(())
 }
-
 // END PRIVATE INCREMENTAL COLLECTIVE ENCRYPTION PREREQUISITE V1
-
 #[derive(Clone, Copy)]
 struct PurposeForkedCollectiveKeyAdmissionAxesV1 {
     profile_digest: [u8; 32],
@@ -1134,25 +1063,20 @@ struct PurposeForkedCollectiveKeyAdmissionAxesV1 {
     key_digest: [u8; 32],
     staged_admission_digest: [u8; 32],
 }
-
 struct StreamingCollectiveKeyAdmissionSealV1;
-
 /// One-shot purpose seal accepted only by key-limb publication.
 pub(crate) struct ZkAmsMkheStreamingCollectiveKeyAdmissionV1 {
     _seal: StreamingCollectiveKeyAdmissionSealV1,
     axes: PurposeForkedCollectiveKeyAdmissionAxesV1,
     admission_digest: [u8; 32],
 }
-
 struct StreamingCollectiveEvalAdmissionSealV1;
-
 /// Distinct one-shot purpose seal reserved for the evaluated-key runtime.
 pub(crate) struct ZkAmsMkheStreamingCollectiveEvalAdmissionV1 {
     _seal: StreamingCollectiveEvalAdmissionSealV1,
     axes: PurposeForkedCollectiveKeyAdmissionAxesV1,
     admission_digest: [u8; 32],
 }
-
 /// Consume the raw staged admission once and purpose-fork two non-cloneable
 /// successors. Neither successor can be reconstructed from public digests.
 pub(crate) fn fork_zk_ams_mkhe_staged_collective_key_admission_v1(
@@ -1202,7 +1126,6 @@ pub(crate) fn fork_zk_ams_mkhe_staged_collective_key_admission_v1(
         },
     ))
 }
-
 fn purpose_forked_collective_key_admission_digest_v1(
     domain: &[u8],
     axes: PurposeForkedCollectiveKeyAdmissionAxesV1,
@@ -1219,7 +1142,6 @@ fn purpose_forked_collective_key_admission_digest_v1(
     hash.update(&axes.staged_admission_digest);
     hash.finalize()
 }
-
 fn validate_purpose_forked_collective_key_admission_v1(
     domain: &[u8],
     axes: PurposeForkedCollectiveKeyAdmissionAxesV1,
@@ -1249,7 +1171,6 @@ fn validate_purpose_forked_collective_key_admission_v1(
     }
     Ok(())
 }
-
 impl ZkAmsMkheStreamingCollectiveKeyAdmissionV1 {
     fn consume_for_key_v1(
         self,
@@ -1267,7 +1188,6 @@ impl ZkAmsMkheStreamingCollectiveKeyAdmissionV1 {
         )
     }
 }
-
 impl ZkAmsMkheStreamingCollectiveEvalAdmissionV1 {
     /// Consume the evaluated-runtime purpose seal beside its exact native key.
     pub(crate) fn consume_for_key_v1(
@@ -1286,10 +1206,8 @@ impl ZkAmsMkheStreamingCollectiveEvalAdmissionV1 {
         )
     }
 }
-
 struct StreamingCollectiveEncryptionKeyAuthoritySealV1;
 struct StreamingCollectiveEvalKeyBindingSealV1;
-
 /// Compact binding shared by source-backed encryption and future bounded
 /// evaluated-key runtimes. It contains key identity and source locations only;
 /// fresh-encryption topology and sample state deliberately live elsewhere.
@@ -1308,7 +1226,6 @@ pub(super) struct ZkAmsMkheStreamingCollectiveKeyBindingV1 {
     public_b_limb_pointers: Vec<ZkAmsMkheDirectObjectPointerV1>,
     binding_digest: [u8; 32],
 }
-
 impl core::fmt::Debug for ZkAmsMkheStreamingCollectiveKeyBindingV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1322,7 +1239,6 @@ impl core::fmt::Debug for ZkAmsMkheStreamingCollectiveKeyBindingV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheStreamingCollectiveKeyBindingV1 {
     fn from_validated_native_key_v1(
         key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -1352,7 +1268,6 @@ impl ZkAmsMkheStreamingCollectiveKeyBindingV1 {
         binding.validate_for_native_key_v1(key, profile)?;
         Ok(binding)
     }
-
     fn validate_for_profile_v1(&self, profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
         profile.validate()?;
         if self.version != MKHE_VERSION_V1
@@ -1390,7 +1305,6 @@ impl ZkAmsMkheStreamingCollectiveKeyBindingV1 {
         }
         Ok(())
     }
-
     fn validate_release_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
         self.validate_for_profile_v1(&profile)?;
@@ -1401,7 +1315,6 @@ impl ZkAmsMkheStreamingCollectiveKeyBindingV1 {
         }
         Ok(())
     }
-
     /// Validate a materialized native reference against every compact identity
     /// axis without constructing a second native key owner.
     pub(super) fn validate_for_native_key_v1(
@@ -1426,7 +1339,6 @@ impl ZkAmsMkheStreamingCollectiveKeyBindingV1 {
         Ok(())
     }
 }
-
 /// Sealed compact authority retained by the evaluated-key runtime.
 ///
 /// The two native key polynomials and the 76 direct-object pointers remain
@@ -1447,7 +1359,6 @@ pub(crate) struct ZkAmsMkheStreamingCollectiveEvalKeyBindingV1 {
     eval_admission_digest: [u8; 32],
     binding_digest: [u8; 32],
 }
-
 impl core::fmt::Debug for ZkAmsMkheStreamingCollectiveEvalKeyBindingV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1459,7 +1370,6 @@ impl core::fmt::Debug for ZkAmsMkheStreamingCollectiveEvalKeyBindingV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheStreamingCollectiveEvalKeyBindingV1 {
     #[cfg(test)]
     pub(crate) fn test_from_verified_axes_v1(
@@ -1490,7 +1400,6 @@ impl ZkAmsMkheStreamingCollectiveEvalKeyBindingV1 {
         binding.validate_release_v1()?;
         Ok(binding)
     }
-
     pub(crate) fn validate_release_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
         profile.validate()?;
@@ -1512,35 +1421,27 @@ impl ZkAmsMkheStreamingCollectiveEvalKeyBindingV1 {
         }
         Ok(())
     }
-
     pub(crate) const fn profile_digest(&self) -> [u8; 32] {
         self.profile_digest
     }
-
     pub(crate) const fn roster_digest(&self) -> [u8; 32] {
         self.roster_digest
     }
-
     pub(crate) const fn key_material_digest(&self) -> [u8; 32] {
         self.key_material_digest
     }
-
     pub(crate) const fn epoch(&self) -> u64 {
         self.epoch
     }
-
     pub(crate) const fn transcript_digest(&self) -> [u8; 32] {
         self.transcript_digest
     }
-
     pub(crate) const fn key_digest(&self) -> [u8; 32] {
         self.key_digest
     }
-
     pub(crate) const fn binding_digest(&self) -> [u8; 32] {
         self.binding_digest
     }
-
     #[cfg(test)]
     pub(crate) fn validate_native_key_v1(
         &self,
@@ -1561,7 +1462,6 @@ impl ZkAmsMkheStreamingCollectiveEvalKeyBindingV1 {
         }
         Ok(())
     }
-
     pub(crate) fn validate_ciphertext_binding_v1(
         &self,
         ciphertext: &ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_>,
@@ -1583,7 +1483,6 @@ impl ZkAmsMkheStreamingCollectiveEvalKeyBindingV1 {
         Ok(())
     }
 }
-
 /// Move-only proof that the staged CPK successor published and reread every
 /// key limb before releasing the native `2P` key owner.
 pub struct ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1 {
@@ -1595,7 +1494,6 @@ pub struct ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1 {
     next_sample_index: u64,
     failed: bool,
 }
-
 impl core::fmt::Debug for ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1607,7 +1505,6 @@ impl core::fmt::Debug for ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1 {
     fn validate_for_profile_v1(&self, profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
         self.binding.validate_for_profile_v1(profile)?;
@@ -1630,95 +1527,79 @@ impl ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1 {
         }
         Ok(())
     }
-
     fn validate_release_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
         self.binding.validate_release_v1()?;
         self.validate_for_profile_v1(&release_profile_v1())
     }
-
     pub(super) fn binding_v1(&self) -> &ZkAmsMkheStreamingCollectiveKeyBindingV1 {
         &self.binding
     }
-
     /// Frozen release-profile digest.
     #[must_use]
     pub const fn profile_digest(&self) -> [u8; 32] {
         self.binding.profile_digest
     }
-
     /// Frozen release security-certificate digest.
     #[must_use]
     pub const fn security_certificate_digest(&self) -> [u8; 32] {
         self.binding.security_certificate_digest
     }
-
     /// Exact governed roster digest.
     #[must_use]
     pub const fn roster_digest(&self) -> [u8; 32] {
         self.binding.roster_digest
     }
-
     /// Exact governed authentication-key material digest.
     #[must_use]
     pub const fn key_material_digest(&self) -> [u8; 32] {
         self.binding.key_material_digest
     }
-
     /// Governed secret/key epoch.
     #[must_use]
     pub const fn epoch(&self) -> u64 {
         self.binding.epoch
     }
-
     /// Exact staged CPK transcript digest.
     #[must_use]
     pub const fn transcript_digest(&self) -> [u8; 32] {
         self.binding.transcript_digest
     }
-
     /// Consensus digest of the exact native collective public key.
     #[must_use]
     pub const fn key_digest(&self) -> [u8; 32] {
         self.binding.key_digest
     }
-
     /// Ordered exact pointers to all common-`a` limbs.
     #[must_use]
     pub fn public_a_limb_pointers(&self) -> &[ZkAmsMkheDirectObjectPointerV1] {
         &self.binding.public_a_limb_pointers
     }
-
     /// Ordered exact pointers to all aggregate-`b` limbs.
     #[must_use]
     pub fn public_b_limb_pointers(&self) -> &[ZkAmsMkheDirectObjectPointerV1] {
         &self.binding.public_b_limb_pointers
     }
-
     /// Receipts proving every common-`a` limb was sealed, published, and reread.
     #[must_use]
     pub fn public_a_publication_receipts(&self) -> &[ZkAmsMkheDirectObjectPublicationReceiptV1] {
         &self.public_a_publication_receipts
     }
-
     /// Receipts proving every aggregate-`b` limb was sealed, published, and reread.
     #[must_use]
     pub fn public_b_publication_receipts(&self) -> &[ZkAmsMkheDirectObjectPublicationReceiptV1] {
         &self.public_b_publication_receipts
     }
-
     /// Digest binding every key axis, limb pointer, and publication receipt.
     #[must_use]
     pub const fn authority_digest(&self) -> [u8; 32] {
         self.authority_digest
     }
-
     /// Sole sample index accepted by the next successful fresh encryption.
     #[must_use]
     pub const fn next_sample_index(&self) -> u64 {
         self.next_sample_index
     }
 }
-
 fn streaming_collective_eval_key_binding_digest_v1(
     binding: &ZkAmsMkheStreamingCollectiveEvalKeyBindingV1,
 ) -> [u8; 32] {
@@ -1737,7 +1618,6 @@ fn streaming_collective_eval_key_binding_digest_v1(
     hash.update(&binding.eval_admission_digest);
     hash.finalize()
 }
-
 /// Consume the evaluated-key admission beside the exact published key
 /// authority and return the sole compact runtime successor.
 pub(crate) fn bind_zk_ams_mkhe_streaming_collective_eval_key_v1(
@@ -1783,7 +1663,6 @@ pub(crate) fn bind_zk_ams_mkhe_streaming_collective_eval_key_v1(
     binding.validate_release_v1()?;
     Ok(binding)
 }
-
 /// Consume the staged CPK admission while publishing every native key limb.
 /// No authority is returned unless all 76 publication transactions complete
 /// their seal, CAS publish, authoritative lookup, and independent readback.
@@ -1806,14 +1685,12 @@ where
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
-
     let limbs = profile.moduli.len();
     let mut public_a_limb_pointers = try_streaming_vec_with_capacity_v1(limbs)?;
     let mut public_b_limb_pointers = try_streaming_vec_with_capacity_v1(limbs)?;
     let mut public_a_publication_receipts = try_streaming_vec_with_capacity_v1(limbs)?;
     let mut public_b_publication_receipts = try_streaming_vec_with_capacity_v1(limbs)?;
     let mut scratch = [0_u8; ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1];
-
     for limb in 0..limbs {
         let receipt = publish_streaming_collective_limb_v1(
             ZkAmsMkheDirectObjectKindV1::CollectivePublicA,
@@ -1834,7 +1711,6 @@ where
         public_b_limb_pointers.push(receipt.pointer());
         public_b_publication_receipts.push(receipt);
     }
-
     let binding = ZkAmsMkheStreamingCollectiveKeyBindingV1::from_validated_native_key_v1(
         key,
         &profile,
@@ -1859,7 +1735,6 @@ where
     authority.validate_release_v1()?;
     Ok(authority)
 }
-
 fn try_streaming_vec_with_capacity_v1<T>(capacity: usize) -> Result<Vec<T>, ZkAmsMkheErrorV1> {
     let mut values = Vec::new();
     values
@@ -1870,7 +1745,6 @@ fn try_streaming_vec_with_capacity_v1<T>(capacity: usize) -> Result<Vec<T>, ZkAm
     }
     Ok(values)
 }
-
 fn streaming_collective_limb_object_bytes_v1(
     profile: &BgvProfile,
 ) -> Result<u64, ZkAmsMkheErrorV1> {
@@ -1882,7 +1756,6 @@ fn streaming_collective_limb_object_bytes_v1(
     u32::try_from(profile.ring_degree).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     u64::try_from(coefficient_bytes).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn validate_streaming_collective_limb_pointer_v1(
     kind: ZkAmsMkheDirectObjectKindV1,
     pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -1897,7 +1770,6 @@ fn validate_streaming_collective_limb_pointer_v1(
     }
     Ok(())
 }
-
 fn publish_streaming_collective_limb_v1<P>(
     kind: ZkAmsMkheDirectObjectKindV1,
     coefficients: &[u64],
@@ -1938,7 +1810,6 @@ where
     }
     transaction.finish()
 }
-
 fn streaming_collective_key_binding_digest_v1(
     binding: &ZkAmsMkheStreamingCollectiveKeyBindingV1,
     profile: &BgvProfile,
@@ -1992,7 +1863,6 @@ fn streaming_collective_key_binding_digest_v1(
     }
     Ok(hash.finalize())
 }
-
 fn validate_streaming_collective_key_publication_receipts_v1(
     binding: &ZkAmsMkheStreamingCollectiveKeyBindingV1,
     public_a_receipts: &[ZkAmsMkheDirectObjectPublicationReceiptV1],
@@ -2038,7 +1908,6 @@ fn validate_streaming_collective_key_publication_receipts_v1(
     }
     Ok(())
 }
-
 fn streaming_collective_key_authority_digest_v1(
     binding: &ZkAmsMkheStreamingCollectiveKeyBindingV1,
     public_a_receipts: &[ZkAmsMkheDirectObjectPublicationReceiptV1],
@@ -2079,7 +1948,6 @@ fn streaming_collective_key_authority_digest_v1(
     }
     Ok(hash.finalize())
 }
-
 /// Allocation-free canonical reader for one exact `u32 N || N*u64` limb.
 /// The transaction never owns the provider and fills an existing arithmetic
 /// owner instead of returning a `Vec`.
@@ -2088,7 +1956,6 @@ struct StreamingCollectiveLimbReaderV1 {
     ring_degree: usize,
     consumed: bool,
 }
-
 impl StreamingCollectiveLimbReaderV1 {
     fn begin<P>(
         kind: ZkAmsMkheDirectObjectKindV1,
@@ -2114,7 +1981,6 @@ impl StreamingCollectiveLimbReaderV1 {
             consumed: false,
         })
     }
-
     fn read_limb_into_v1<P>(
         &mut self,
         provider: &mut P,
@@ -2166,7 +2032,6 @@ impl StreamingCollectiveLimbReaderV1 {
         }
         Ok(())
     }
-
     fn finish<P>(
         self,
         provider: &mut P,
@@ -2180,14 +2045,12 @@ impl StreamingCollectiveLimbReaderV1 {
         self.transaction.finish(provider)
     }
 }
-
 fn streaming_source_snapshot_axes_v1(
     receipt: &ZkAmsMkheDirectObjectReadReceiptV1,
 ) -> ([u8; 32], [u8; 32]) {
     let snapshot = receipt.snapshot();
     (snapshot.provider_identity(), snapshot.snapshot_identity())
 }
-
 fn validate_streaming_source_receipt_v1(
     receipt: &ZkAmsMkheDirectObjectReadReceiptV1,
     kind: ZkAmsMkheDirectObjectKindV1,
@@ -2204,7 +2067,6 @@ fn validate_streaming_source_receipt_v1(
     }
     Ok(())
 }
-
 fn validate_streaming_second_source_receipt_v1(
     prepass: &ZkAmsMkheDirectObjectReadReceiptV1,
     second_pass: &ZkAmsMkheDirectObjectReadReceiptV1,
@@ -2221,7 +2083,6 @@ fn validate_streaming_second_source_receipt_v1(
     }
     Ok(())
 }
-
 struct StreamingCollectiveEncryptionRecordOwnersV1 {
     public_a_limb_pointers: Vec<ZkAmsMkheDirectObjectPointerV1>,
     public_b_limb_pointers: Vec<ZkAmsMkheDirectObjectPointerV1>,
@@ -2235,7 +2096,6 @@ struct StreamingCollectiveEncryptionRecordOwnersV1 {
     linear_publication_receipts: Vec<ZkAmsMkheDirectObjectPublicationReceiptV1>,
     scratch: Box<[u8; ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1]>,
 }
-
 impl StreamingCollectiveEncryptionRecordOwnersV1 {
     fn new_v1(
         binding: &ZkAmsMkheStreamingCollectiveKeyBindingV1,
@@ -2262,7 +2122,6 @@ impl StreamingCollectiveEncryptionRecordOwnersV1 {
         })
     }
 }
-
 /// All secret and record owners fallibly allocated before any source-provider
 /// call. Entropy cannot be requested from this state.
 struct PreparedStreamingCollectiveEncryptionV1 {
@@ -2275,7 +2134,6 @@ struct PreparedStreamingCollectiveEncryptionV1 {
     entropy_owners: PreallocatedCollectiveEncryptionEntropyOwnersV1,
     records: StreamingCollectiveEncryptionRecordOwnersV1,
 }
-
 impl PreparedStreamingCollectiveEncryptionV1 {
     fn new_v1(
         binding: &ZkAmsMkheStreamingCollectiveKeyBindingV1,
@@ -2303,7 +2161,6 @@ impl PreparedStreamingCollectiveEncryptionV1 {
             records,
         })
     }
-
     fn authenticate_key_source_v1<P>(
         mut self,
         provider: &mut P,
@@ -2359,11 +2216,9 @@ impl PreparedStreamingCollectiveEncryptionV1 {
         Ok(SourceAuthenticatedStreamingCollectiveEncryptionV1(self))
     }
 }
-
 /// Both complete A/B source prepasses have finished; only this state may draw
 /// the nonce and RLWE witnesses.
 struct SourceAuthenticatedStreamingCollectiveEncryptionV1(PreparedStreamingCollectiveEncryptionV1);
-
 struct StreamingCollectiveEncryptionKernelV1<'plaintext> {
     profile: BgvProfile,
     canonical_plaintext: &'plaintext [[u8; 32]],
@@ -2377,12 +2232,10 @@ struct StreamingCollectiveEncryptionKernelV1<'plaintext> {
     ciphertext_digest: ComponentMajorCollectiveCiphertextDigestV1,
     poisoned: bool,
 }
-
 struct ActiveStreamingCollectiveEncryptionV1<'plaintext> {
     kernel: StreamingCollectiveEncryptionKernelV1<'plaintext>,
     records: StreamingCollectiveEncryptionRecordOwnersV1,
 }
-
 struct CompletedStreamingCollectiveEncryptionV1 {
     topology: CollectiveEncryptionInputTopologyV1,
     sample_index: u64,
@@ -2390,7 +2243,6 @@ struct CompletedStreamingCollectiveEncryptionV1 {
     ciphertext_digest: [u8; 32],
     records: StreamingCollectiveEncryptionRecordOwnersV1,
 }
-
 impl SourceAuthenticatedStreamingCollectiveEncryptionV1 {
     fn activate_v1<'plaintext, R>(
         self,
@@ -2492,7 +2344,6 @@ impl SourceAuthenticatedStreamingCollectiveEncryptionV1 {
         })
     }
 }
-
 impl StreamingCollectiveEncryptionKernelV1<'_> {
     #[allow(clippy::too_many_arguments)]
     fn publish_next_limb_v1<K, P>(
@@ -2540,7 +2391,6 @@ impl StreamingCollectiveEncryptionKernelV1<'_> {
             source_pointer,
             &self.profile,
         )?;
-
         // Poison before either provider is entered. A caught unwind, source
         // error, or output-stage error can never resume this witness state.
         self.poisoned = true;
@@ -2557,7 +2407,6 @@ impl StreamingCollectiveEncryptionKernelV1<'_> {
                 .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
                 .to_be_bytes(),
         )?;
-
         let modulus = self.profile.moduli[limb];
         let root = self.profile.negacyclic_roots[limb];
         let mut source_reader = StreamingCollectiveLimbReaderV1::begin(
@@ -2617,7 +2466,6 @@ impl StreamingCollectiveEncryptionKernelV1<'_> {
             self.workspace.left.as_slice(),
             scratch,
         )?;
-
         // The complete second source hash and exact prepass snapshot equality
         // are checked before output sealing/publishing can begin.
         let second_pass_receipt = source_reader.finish(key_provider)?;
@@ -2638,7 +2486,6 @@ impl StreamingCollectiveEncryptionKernelV1<'_> {
         Ok((second_pass_receipt, output_receipt))
     }
 }
-
 fn write_streaming_collective_limb_coefficients_v1<P>(
     transaction: &mut ZkAmsMkheDirectObjectPublicationTransactionV1<'_, P>,
     coefficients: &[u64],
@@ -2665,7 +2512,6 @@ where
     }
     Ok(())
 }
-
 impl ActiveStreamingCollectiveEncryptionV1<'_> {
     fn publish_all_v1<K, P>(
         &mut self,
@@ -2727,7 +2573,6 @@ impl ActiveStreamingCollectiveEncryptionV1<'_> {
         }
         Ok(())
     }
-
     fn finish(self) -> Result<CompletedStreamingCollectiveEncryptionV1, ZkAmsMkheErrorV1> {
         if self.kernel.poisoned
             || self.kernel.input_identity.encryption_nonce.is_zero()
@@ -2752,7 +2597,6 @@ impl ActiveStreamingCollectiveEncryptionV1<'_> {
         })
     }
 }
-
 struct StreamingCollectiveAutomorphismDigestV1 {
     hash: Keccak256,
     ring_degree: usize,
@@ -2760,7 +2604,6 @@ struct StreamingCollectiveAutomorphismDigestV1 {
     next_component: usize,
     next_limb: usize,
 }
-
 impl StreamingCollectiveAutomorphismDigestV1 {
     fn new_v1(
         eval_key: &ZkAmsMkheStreamingCollectiveEvalKeyBindingV1,
@@ -2797,7 +2640,6 @@ impl StreamingCollectiveAutomorphismDigestV1 {
             next_limb: 0,
         })
     }
-
     fn absorb_limb_v1(
         &mut self,
         component: usize,
@@ -2842,7 +2684,6 @@ impl StreamingCollectiveAutomorphismDigestV1 {
         }
         Ok(())
     }
-
     fn finish(self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         if self.next_component != COLLECTIVE_RNS_COMPONENT_COUNT_V1 || self.next_limb != 0 {
             return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
@@ -2854,7 +2695,6 @@ impl StreamingCollectiveAutomorphismDigestV1 {
         Ok(digest)
     }
 }
-
 /// Preallocated, poison-on-failure output publication state for one streamed
 /// automorphism. No output pointer can be supplied independently of its
 /// publication/readback receipt.
@@ -2870,7 +2710,6 @@ pub(crate) struct ZkAmsMkheStreamingCollectiveAutomorphismOutputV1 {
     scratch: [u8; ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1],
     failed: bool,
 }
-
 impl ZkAmsMkheStreamingCollectiveAutomorphismOutputV1 {
     pub(crate) fn publish_constant_limb_v1<P>(
         &mut self,
@@ -2889,7 +2728,6 @@ impl ZkAmsMkheStreamingCollectiveAutomorphismOutputV1 {
             publisher,
         )
     }
-
     pub(crate) fn publish_linear_limb_v1<P>(
         &mut self,
         limb: usize,
@@ -2907,7 +2745,6 @@ impl ZkAmsMkheStreamingCollectiveAutomorphismOutputV1 {
             publisher,
         )
     }
-
     fn publish_limb_v1<P>(
         &mut self,
         component: usize,
@@ -2958,7 +2795,6 @@ impl ZkAmsMkheStreamingCollectiveAutomorphismOutputV1 {
         }
         result
     }
-
     pub(crate) fn finish_v1(
         self,
         mut input: ZkAmsMkheStreamingCollectiveCiphertextV1,
@@ -2996,7 +2832,6 @@ impl ZkAmsMkheStreamingCollectiveAutomorphismOutputV1 {
         Ok(input)
     }
 }
-
 pub(crate) fn prepare_zk_ams_mkhe_streaming_collective_automorphism_output_v1(
     input: &ZkAmsMkheStreamingCollectiveCiphertextV1,
     eval_key: &ZkAmsMkheStreamingCollectiveEvalKeyBindingV1,
@@ -3025,7 +2860,6 @@ pub(crate) fn prepare_zk_ams_mkhe_streaming_collective_automorphism_output_v1(
         failed: false,
     })
 }
-
 /// Move-only compact authority for one exact source-backed collective
 /// ciphertext. Every component is represented by 38 independently addressed
 /// limb objects; no native `2P` ciphertext owner or secret opening is retained.
@@ -3057,9 +2891,7 @@ pub struct ZkAmsMkheStreamingCollectiveCiphertextV1 {
     linear_publication_receipts: Vec<ZkAmsMkheDirectObjectPublicationReceiptV1>,
     manifest_digest: [u8; 32],
 }
-
 struct StreamingCollectiveCiphertextBindingSealV1;
-
 /// Sealed borrowed view used by bounded decryption and evaluated-key runtimes.
 /// It has no public constructor and cannot outlive the validated manifest.
 pub(crate) struct ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'manifest> {
@@ -3083,102 +2915,83 @@ pub(crate) struct ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'manifest> {
     linear_publication_receipts: &'manifest [ZkAmsMkheDirectObjectPublicationReceiptV1],
     manifest_digest: [u8; 32],
 }
-
 impl ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_> {
     /// Frozen release-profile digest.
     pub(crate) const fn profile_digest(&self) -> [u8; 32] {
         self.profile_digest
     }
-
     /// Frozen security-certificate digest.
     pub(crate) const fn security_certificate_digest(&self) -> [u8; 32] {
         self.security_certificate_digest
     }
-
     /// Exact governed roster digest.
     pub(crate) const fn roster_digest(&self) -> [u8; 32] {
         self.roster_digest
     }
-
     /// Exact governed authentication-key material digest.
     pub(crate) const fn key_material_digest(&self) -> [u8; 32] {
         self.key_material_digest
     }
-
     /// Governed secret/key epoch.
     pub(crate) const fn epoch(&self) -> u64 {
         self.epoch
     }
-
     /// Exact staged CPK transcript digest.
     pub(crate) const fn key_transcript_digest(&self) -> [u8; 32] {
         self.key_transcript_digest
     }
-
     /// Consensus digest of the collective public key.
     pub(crate) const fn key_digest(&self) -> [u8; 32] {
         self.key_digest
     }
-
     /// Digest binding ordered A/B limb pointers and key identity.
     pub(crate) const fn key_binding_digest(&self) -> [u8; 32] {
         self.key_binding_digest
     }
-
     /// Digest of the move-only key publication authority.
     pub(crate) const fn key_authority_digest(&self) -> [u8; 32] {
         self.key_authority_digest
     }
-
     /// Monotonic fresh-encryption sample index.
     pub(crate) const fn sample_index(&self) -> u64 {
         self.sample_index
     }
-
     /// Ciphertext level; fresh ingress is exactly zero.
     pub(crate) const fn level(&self) -> u8 {
         self.level
     }
-
     /// Exact fresh-encryption transcript digest.
     pub(crate) const fn transcript_digest(&self) -> [u8; 32] {
         self.transcript_digest
     }
-
     /// Native component-major ciphertext digest.
     pub(crate) const fn ciphertext_digest(&self) -> [u8; 32] {
         self.ciphertext_digest
     }
-
     /// Ordered constant-component limb pointers.
     pub(crate) const fn constant_limb_pointers(&self) -> &[ZkAmsMkheDirectObjectPointerV1] {
         self.constant_limb_pointers
     }
-
     /// Ordered linear-component limb pointers.
     pub(crate) const fn linear_limb_pointers(&self) -> &[ZkAmsMkheDirectObjectPointerV1] {
         self.linear_limb_pointers
     }
-
     /// Publication/readback receipts for every constant limb.
     pub(crate) const fn constant_publication_receipts(
         &self,
     ) -> &[ZkAmsMkheDirectObjectPublicationReceiptV1] {
         self.constant_publication_receipts
     }
-
     /// Publication/readback receipts for every linear limb.
     pub(crate) const fn linear_publication_receipts(
         &self,
     ) -> &[ZkAmsMkheDirectObjectPublicationReceiptV1] {
         self.linear_publication_receipts
     }
-
     /// Digest binding the complete source and publication manifest.
     pub(crate) const fn manifest_digest(&self) -> [u8; 32] {
         self.manifest_digest
     }
-
     fn read_component_limb_into_v1<P>(
         &self,
         kind: ZkAmsMkheDirectObjectKindV1,
@@ -3224,7 +3037,6 @@ impl ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_> {
         }
         Ok(receipt)
     }
-
     /// Reread and authenticate one exact constant-component limb into caller
     /// storage. The fresh receipt must equal the manifest's post-publication
     /// receipt, including provider and immutable-snapshot identity.
@@ -3248,7 +3060,6 @@ impl ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_> {
             scratch,
         )
     }
-
     /// Reread and authenticate one exact linear-component limb into caller
     /// storage. The fresh receipt must equal the manifest's post-publication
     /// receipt, including provider and immutable-snapshot identity.
@@ -3273,7 +3084,6 @@ impl ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_> {
         )
     }
 }
-
 impl core::fmt::Debug for ZkAmsMkheStreamingCollectiveCiphertextV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -3287,7 +3097,6 @@ impl core::fmt::Debug for ZkAmsMkheStreamingCollectiveCiphertextV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
     fn from_completed_v1(
         completed: CompletedStreamingCollectiveEncryptionV1,
@@ -3341,12 +3150,10 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
         manifest.validate_with_profile_digest_v1(profile, binding.profile_digest)?;
         Ok(manifest)
     }
-
     fn validate_for_profile_v1(&self, profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
         let profile_digest = profile.digest()?;
         self.validate_with_profile_digest_v1(profile, profile_digest)
     }
-
     fn validate_with_profile_digest_v1(
         &self,
         profile: &BgvProfile,
@@ -3385,7 +3192,6 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
         {
             return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
         }
-
         let mut common_source_snapshot = None;
         for (kind, pointers, prepasses, second_passes) in [
             (
@@ -3419,7 +3225,6 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
                 }
             }
         }
-
         let mut output_publication_identity = None;
         let mut common_output_snapshot = None;
         for (kind, pointers, receipts) in [
@@ -3466,7 +3271,6 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
         }
         Ok(())
     }
-
     /// Validate the self-contained manifest beside the exact retained key authority.
     pub(super) fn validate_for_authority_v1(
         &self,
@@ -3491,7 +3295,6 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
         }
         Ok(())
     }
-
     fn sealed_binding_with_profile_v1(
         &self,
         profile: &BgvProfile,
@@ -3519,7 +3322,6 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
             manifest_digest: self.manifest_digest,
         })
     }
-
     /// Borrow the sole validated downstream binding. No raw-digest or
     /// pointer-only constructor exists for this capability.
     pub(crate) fn sealed_binding_v1(
@@ -3527,74 +3329,62 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
     ) -> Result<ZkAmsMkheStreamingCollectiveCiphertextBindingV1<'_>, ZkAmsMkheErrorV1> {
         self.sealed_binding_with_profile_v1(&release_profile_v1())
     }
-
     /// Frozen release-profile digest.
     #[must_use]
     pub const fn profile_digest(&self) -> [u8; 32] {
         self.profile_digest
     }
-
     /// Exact governed roster digest.
     #[must_use]
     pub const fn roster_digest(&self) -> [u8; 32] {
         self.roster_digest
     }
-
     /// Governed secret/key epoch.
     #[must_use]
     pub const fn epoch(&self) -> u64 {
         self.epoch
     }
-
     /// Exact collective-public-key digest.
     #[must_use]
     pub const fn key_digest(&self) -> [u8; 32] {
         self.key_digest
     }
-
     /// Monotonic fresh-encryption sample index.
     #[must_use]
     pub const fn sample_index(&self) -> u64 {
         self.sample_index
     }
-
     /// Fresh ciphertext level. The bounded ingress path emits exactly level zero.
     #[must_use]
     pub const fn level(&self) -> u8 {
         self.level
     }
-
     /// Exact fresh-encryption transcript digest, byte-identical to the native path.
     #[must_use]
     pub const fn transcript_digest(&self) -> [u8; 32] {
         self.transcript_digest
     }
-
     /// Native component-major ciphertext digest without a native ciphertext owner.
     #[must_use]
     pub const fn ciphertext_digest(&self) -> [u8; 32] {
         self.ciphertext_digest
     }
-
     /// Ordered exact pointers to all 38 constant-component limbs.
     #[must_use]
     pub fn constant_limb_pointers(&self) -> &[ZkAmsMkheDirectObjectPointerV1] {
         &self.constant_limb_pointers
     }
-
     /// Ordered exact pointers to all 38 linear-component limbs.
     #[must_use]
     pub fn linear_limb_pointers(&self) -> &[ZkAmsMkheDirectObjectPointerV1] {
         &self.linear_limb_pointers
     }
-
     /// Digest binding key authority, source passes, output publications, and order.
     #[must_use]
     pub const fn manifest_digest(&self) -> [u8; 32] {
         self.manifest_digest
     }
 }
-
 fn streaming_collective_ciphertext_manifest_digest_v1(
     manifest: &ZkAmsMkheStreamingCollectiveCiphertextV1,
     profile: &BgvProfile,
@@ -3704,7 +3494,6 @@ fn streaming_collective_ciphertext_manifest_digest_v1(
     }
     Ok(hash.finalize())
 }
-
 /// Parent-private borrowed core with one synchronous pre-publication hook.
 /// The public wrapper below still owns and erases the packed plaintext.
 fn encrypt_zk_ams_mkhe_collective_packed_streaming_borrowed_with_prepublication_v1<
@@ -3745,7 +3534,6 @@ where
     if sample_index >= zk_ams_mkhe_release_manifest_v1()?.max_samples_per_secret_epoch {
         return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
     }
-
     // This decoder scratch is scoped away before the two limbs, three
     // witnesses, record capacities, or provider transactions are established.
     {
@@ -3758,7 +3546,6 @@ where
     let before_output_publication = prepare_before_entropy()?;
     let topology = CollectiveEncryptionInputTopologyV1::from_packed(layout, plaintext);
     let prepared = PreparedStreamingCollectiveEncryptionV1::new_v1(&authority.binding, &profile)?;
-
     // From here onward any returned provider/random/output error permanently
     // poisons this authority. All local allocations already exist, and a
     // caught unwind cannot resume a partially used source or witness state.
@@ -3804,7 +3591,6 @@ where
         Err(error) => Err(error),
     }
 }
-
 /// Encrypt one validated packed plaintext with bounded key-source and output
 /// memory. The packed owner is consumed and zeroized on every return path.
 /// Sample order is authority-owned; callers cannot repeat or skip an index.
@@ -3831,15 +3617,12 @@ where
         || Ok(|_: &[[u8; 32]], _: &[i64], _: &[i64], _: &[i64], _: &[u8; 32]| Ok(())),
     )
 }
-
 #[path = "incremental_source_phase23.rs"]
 mod phase23_orchestrator;
-
 pub(super) use phase23_orchestrator::{
     GlobalLookupCanonicalReopenSealV1, Phase23GlobalLookupSourceReopenedV1,
     Phase23GlobalLookupSourceReplayV1,
 };
-
 #[cfg(test)]
 #[path = "incremental_source_tests.rs"]
 mod tests;

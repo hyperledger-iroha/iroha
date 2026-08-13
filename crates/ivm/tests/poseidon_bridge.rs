@@ -1,6 +1,5 @@
 //! Ensure the Poseidon compression used by Merkle gadgets equals the internal
 //! `poseidon2` permutation for a single level (both child orderings).
-
 #[test]
 fn poseidon_merkle_level_matches_internal() {
     let samples: &[(u64, u64)] = &[
@@ -15,14 +14,12 @@ fn poseidon_merkle_level_matches_internal() {
         let r0 = ivm::halo2::verify_merkle_path_depth(leaf, 0, &[sib; 32], 1);
         let e0 = ivm::poseidon2(leaf, sib);
         assert_eq!(r0, e0, "poseidon(left, right) mismatch");
-
         // Depth=1, index LSB=1 => acc is right child
         let r1 = ivm::halo2::verify_merkle_path_depth(leaf, 1, &[sib; 32], 1);
         let e1 = ivm::poseidon2(sib, leaf);
         assert_eq!(r1, e1, "poseidon(right, left) mismatch");
     }
 }
-
 #[test]
 fn bridge_matches_internal_poseidon2() {
     let mut vectors = Vec::new();
@@ -39,7 +36,6 @@ fn bridge_matches_internal_poseidon2() {
         let bridge64 = ivm::pair_hash_u64(a, b);
         let internal64 = ivm::poseidon2(a, b);
         assert_eq!(bridge64, internal64, "low64 mismatch for ({a}, {b})");
-
         let bridge_bytes = ivm::pair_hash_bytes(a, b);
         assert_eq!(
             &bridge_bytes[..8],
@@ -48,7 +44,6 @@ fn bridge_matches_internal_poseidon2() {
         );
     }
 }
-
 #[test]
 fn bridge_matches_internal_poseidon6() {
     let mut cases = vec![

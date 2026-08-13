@@ -6,7 +6,6 @@
 //! hash chained so corruption before the final, incomplete crash tail fails closed. Recovery
 //! verifies frames incrementally and fixed height-local record/payload ceilings are enforced both
 //! while opening and before append I/O, keeping valid replay memory bounded.
-
 use std::{
     ffi::{OsStr, OsString},
     fs::{self, File},
@@ -14,7 +13,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-
 use super::v2_core::{
     SAFETY_WAL_FILE_HEADER_LEN as FILE_HEADER_LEN, SAFETY_WAL_FRAME_HEADER_LEN as FRAME_HEADER_LEN,
     SAFETY_WAL_FRAME_MAGIC as FRAME_MAGIC, SAFETY_WAL_HASH_LEN as HASH_LEN,
@@ -23,9 +21,7 @@ use super::v2_core::{
     WalIoStage, WalRetirementAuthorization, encode_wal_file_header, recover_wal_file,
 };
 #[cfg(test)]
-use super::v2_core::{
-    SAFETY_WAL_FILE_MAGIC as FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION as FORMAT_VERSION,
-};
+use super::v2_core::{SAFETY_WAL_FILE_MAGIC as FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION as FORMAT_VERSION};
 #[cfg(any(test, not(all(unix, not(target_os = "espidf")))))]
 use std::fs::OpenOptions;
 #[cfg(all(unix, not(target_os = "espidf")))]
@@ -33,27 +29,22 @@ use std::path::Component;
 #[cfg(all(unix, not(target_os = "espidf")))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use thiserror::Error;
-
 #[cfg(test)]
 const FILE_HEADER_PREFIX_LEN: usize = FILE_MAGIC.len() + 2 + 2 + HASH_LEN + HASH_LEN;
-
 /// Maximum complete frames retained by one height-local safety WAL.
 pub(crate) const SAFETY_WAL_MAX_RECORDS: usize = 8 * 1024;
 /// Maximum combined payload bytes retained by one height-local safety WAL.
 pub(crate) const SAFETY_WAL_MAX_TOTAL_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 const SAFETY_WAL_RECOVERY_SCRATCH_BYTES: usize = 64 * 1024;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WalRetentionLimits {
     max_records: usize,
     max_payload_bytes: usize,
 }
-
 const WAL_RETENTION_LIMITS: WalRetentionLimits = WalRetentionLimits {
     max_records: SAFETY_WAL_MAX_RECORDS,
     max_payload_bytes: SAFETY_WAL_MAX_TOTAL_PAYLOAD_BYTES,
 };
-
 /// A record recovered from the safety WAL.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RecoveredRecord {
@@ -64,29 +55,24 @@ pub(crate) struct RecoveredRecord {
     /// Opaque Norito payload bytes supplied by the consensus adapter.
     payload: Vec<u8>,
 }
-
 impl RecoveredRecord {
     /// Return the physical frame sequence starting at zero.
     pub(crate) const fn sequence(&self) -> u64 {
         self.sequence
     }
-
     /// Return the verified hash of this exact complete frame.
     pub(crate) const fn frame_hash(&self) -> [u8; HASH_LEN] {
         self.frame_hash
     }
-
     /// Borrow the opaque canonical payload carried by this frame.
     pub(crate) fn payload(&self) -> &[u8] {
         &self.payload
     }
-
     /// Match an append acknowledgement to this exact retained frame.
     pub(crate) fn exactly_matches_receipt(&self, receipt: SafetyWalAppendReceipt) -> bool {
         self.sequence == receipt.sequence && self.frame_hash == receipt.frame_hash
     }
 }
-
 /// Exact frame identity acknowledged only after the safety WAL is synchronized.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "a synchronized WAL append receipt must be checked against its reducer intent"]
@@ -94,19 +80,16 @@ pub(crate) struct SafetyWalAppendReceipt {
     sequence: u64,
     frame_hash: [u8; HASH_LEN],
 }
-
 impl SafetyWalAppendReceipt {
     /// Return the acknowledged physical frame sequence.
     pub(crate) const fn sequence(self) -> u64 {
         self.sequence
     }
-
     /// Return the acknowledged hash of the exact complete frame.
     pub(crate) const fn frame_hash(self) -> [u8; HASH_LEN] {
         self.frame_hash
     }
 }
-
 /// Errors raised while opening, replaying, or appending the safety WAL.
 #[derive(Debug, Error)]
 pub(crate) enum SafetyWalError {
@@ -201,7 +184,6 @@ pub(crate) enum SafetyWalError {
         reason: &'static str,
     },
 }
-
 /// Opened, no-follow owner of the post-open directory containing one safety WAL.
 ///
 /// The raw directory handle and canonical path never cross this module. Fixed
@@ -217,7 +199,6 @@ struct BoundSafetyWalDirectory {
     #[cfg(all(unix, not(target_os = "espidf")))]
     identity: (u64, u64),
 }
-
 /// Private descriptor-relative owner of one fixed safety-WAL-adjacent entry.
 #[derive(Debug)]
 struct BoundSafetyWalAdjacentEntry {
@@ -227,82 +208,69 @@ struct BoundSafetyWalAdjacentEntry {
     entry_name: OsString,
     display_path: PathBuf,
 }
-
 /// Move-only authority for the fixed serviced-candidate sibling snapshot.
 #[derive(Debug)]
 #[must_use = "serviced-candidate storage authority must open its fixed adjacent store"]
 pub(crate) struct SafetyWalServicedCandidateStoreAuthority {
     entry: BoundSafetyWalAdjacentEntry,
 }
-
 /// Move-only authority for the fixed leader-wire lifecycle sibling snapshot.
 #[derive(Debug)]
 #[must_use = "leader-wire storage authority must open its fixed adjacent store"]
 pub(crate) struct SafetyWalLeaderWireStoreAuthority {
     entry: BoundSafetyWalAdjacentEntry,
 }
-
 impl SafetyWalServicedCandidateStoreAuthority {
     /// Read the complete fixed snapshot through its retained directory owner.
     pub(crate) fn read_bounded(&self, maximum: u64) -> Result<Option<Vec<u8>>, String> {
         self.entry.read_bounded(maximum, "serviced-candidate")
     }
-
     /// Atomically replace and directory-sync the fixed snapshot.
     pub(crate) fn publish_atomic(&self, frame: &[u8], maximum: u64) -> Result<(), String> {
         self.entry
             .publish_atomic(frame, maximum, "serviced-candidate")
     }
-
     /// Remove and directory-sync the exact fixed snapshot, when present.
     pub(crate) fn retire(self, maximum: u64) -> Result<(), String> {
         self.entry.retire(maximum, "serviced-candidate")
     }
-
     /// Return the diagnostic path only to in-module and extracted test fixtures.
     #[cfg(test)]
     pub(crate) fn path_for_test(&self) -> &Path {
         &self.entry.display_path
     }
-
     #[cfg(test)]
     pub(crate) fn for_test_path(safety_wal_path: &Path) -> Result<Self, String> {
         BoundSafetyWalAdjacentEntry::for_test_path(safety_wal_path, ".serviced-candidates")
             .map(|entry| Self { entry })
     }
 }
-
 impl SafetyWalLeaderWireStoreAuthority {
     /// Read the complete fixed snapshot through its retained directory owner.
     pub(crate) fn read_bounded(&self, maximum: u64) -> Result<Option<Vec<u8>>, String> {
         self.entry.read_bounded(maximum, "leader-wire lifecycle")
     }
-
     /// Atomically replace and directory-sync the fixed snapshot.
     pub(crate) fn publish_atomic(&self, frame: &[u8], maximum: u64) -> Result<(), String> {
         self.entry
             .publish_atomic(frame, maximum, "leader-wire lifecycle")
     }
-
     /// Remove and directory-sync the exact fixed snapshot, when present.
     #[allow(dead_code)]
     pub(crate) fn retire(self, maximum: u64) -> Result<(), String> {
         self.entry.retire(maximum, "leader-wire lifecycle")
     }
-
     /// Return the diagnostic path only to in-module and extracted test fixtures.
     #[cfg(test)]
     pub(crate) fn path_for_test(&self) -> &Path {
         &self.entry.display_path
     }
-
     #[cfg(test)]
     pub(crate) fn for_test_path(safety_wal_path: &Path) -> Result<Self, String> {
         BoundSafetyWalAdjacentEntry::for_test_path(safety_wal_path, ".leader-wire-lifecycles")
             .map(|entry| Self { entry })
     }
 }
-
 impl BoundSafetyWalDirectory {
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn from_kura_authority(
@@ -339,7 +307,6 @@ impl BoundSafetyWalDirectory {
             identity,
         })
     }
-
     #[cfg(test)]
     fn bind(expected_path: &Path) -> io::Result<Self> {
         #[cfg(all(unix, not(target_os = "espidf")))]
@@ -362,7 +329,6 @@ impl BoundSafetyWalDirectory {
                 identity,
             })
         }
-
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             let metadata = fs::symlink_metadata(expected_path)?;
@@ -380,7 +346,6 @@ impl BoundSafetyWalDirectory {
             })
         }
     }
-
     fn verify_linked(&self) -> io::Result<()> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
@@ -408,7 +373,6 @@ impl BoundSafetyWalDirectory {
             }
             Ok(())
         }
-
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             fs::symlink_metadata(&self.expected_path).and_then(|metadata| {
@@ -423,7 +387,6 @@ impl BoundSafetyWalDirectory {
             })
         }
     }
-
     fn open_wal_leaf(&self, name: &OsStr) -> io::Result<(File, bool)> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
@@ -476,7 +439,6 @@ impl BoundSafetyWalDirectory {
             self.verify_linked()?;
             Ok((file, created))
         }
-
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             self.verify_linked()?;
@@ -498,12 +460,10 @@ impl BoundSafetyWalDirectory {
             Ok((file, created))
         }
     }
-
     fn verify_leaf(&self, file: &File, name: &OsStr) -> io::Result<()> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             self.verify_linked()?;
             let opened = file.metadata()?;
             let linked =
@@ -522,7 +482,6 @@ impl BoundSafetyWalDirectory {
             }
             Ok(())
         }
-
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             self.verify_linked()?;
@@ -541,7 +500,6 @@ impl BoundSafetyWalDirectory {
             Ok(())
         }
     }
-
     fn sync(&self) -> io::Result<()> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
@@ -549,13 +507,11 @@ impl BoundSafetyWalDirectory {
             self.directory.sync_all()?;
             self.verify_linked()
         }
-
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             self.verify_linked()
         }
     }
-
     fn unlink_exact_leaf(&self, name: &OsStr, file: &File) -> io::Result<()> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
@@ -564,7 +520,6 @@ impl BoundSafetyWalDirectory {
                 .map_err(io::Error::from)?;
             self.sync()
         }
-
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             self.verify_leaf(file, name)?;
@@ -573,7 +528,6 @@ impl BoundSafetyWalDirectory {
         }
     }
 }
-
 impl BoundSafetyWalAdjacentEntry {
     #[cfg(any(test, all(unix, not(target_os = "espidf"))))]
     fn from_wal(
@@ -600,7 +554,6 @@ impl BoundSafetyWalAdjacentEntry {
             display_path,
         })
     }
-
     #[cfg(test)]
     fn for_test_path(safety_wal_path: &Path, suffix: &str) -> Result<Self, String> {
         let parent = safety_wal_parent(safety_wal_path).map_err(|error| error.to_string())?;
@@ -609,12 +562,10 @@ impl BoundSafetyWalAdjacentEntry {
             Arc::new(BoundSafetyWalDirectory::bind(&parent).map_err(|error| error.to_string())?);
         Self::from_wal(directory, safety_wal_path, suffix).map_err(|error| error.to_string())
     }
-
     fn read_bounded(&self, maximum: u64, label: &str) -> Result<Option<Vec<u8>>, String> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             self.directory.verify_linked().map_err(|error| {
                 self.error(label, "verify adjacent directory before read", error)
             })?;
@@ -711,7 +662,6 @@ impl BoundSafetyWalAdjacentEntry {
             }
             Ok(Some(bytes))
         }
-
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             let _ = maximum;
@@ -721,12 +671,10 @@ impl BoundSafetyWalAdjacentEntry {
             ))
         }
     }
-
     fn publish_atomic(&self, frame: &[u8], maximum: u64, label: &str) -> Result<(), String> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             let frame_len = u64::try_from(frame.len())
                 .map_err(|_| format!("{label} snapshot frame length is not representable"))?;
             if frame_len > maximum {
@@ -734,7 +682,6 @@ impl BoundSafetyWalAdjacentEntry {
                     "{label} snapshot frame exceeds its bounded publication size"
                 ));
             }
-
             self.directory.verify_linked().map_err(|error| {
                 self.error(label, "verify adjacent directory before publication", error)
             })?;
@@ -846,7 +793,6 @@ impl BoundSafetyWalAdjacentEntry {
             }
             Ok(())
         }
-
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             let _ = (frame, maximum);
@@ -856,12 +802,10 @@ impl BoundSafetyWalAdjacentEntry {
             ))
         }
     }
-
     fn retire(self, maximum: u64, label: &str) -> Result<(), String> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
             use std::os::unix::fs::MetadataExt as _;
-
             self.directory.verify_linked().map_err(|error| {
                 self.error(label, "verify adjacent directory before retirement", error)
             })?;
@@ -951,7 +895,6 @@ impl BoundSafetyWalAdjacentEntry {
                 .map_err(|error| self.error(label, "sync adjacent retirement", error))?;
             Ok(())
         }
-
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             let _ = maximum;
@@ -961,14 +904,12 @@ impl BoundSafetyWalAdjacentEntry {
             ))
         }
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn temporary_name(&self) -> OsString {
         let mut name = self.entry_name.clone();
         name.push(".tmp");
         name
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn remove_stale_temporary(&self, name: &OsStr, label: &str) -> Result<(), String> {
         match rustix::fs::statat(
@@ -993,7 +934,6 @@ impl BoundSafetyWalAdjacentEntry {
             }
         }
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn ensure_replaceable_target(&self, label: &str) -> Result<(), String> {
         match rustix::fs::statat(
@@ -1011,7 +951,6 @@ impl BoundSafetyWalAdjacentEntry {
                 .map_err(|error| self.error(label, "validate adjacent publication target", error)),
         }
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn error(&self, label: &str, operation: &str, source: io::Error) -> String {
         format!(
@@ -1020,7 +959,6 @@ impl BoundSafetyWalAdjacentEntry {
         )
     }
 }
-
 #[cfg(test)]
 fn safety_wal_parent(path: &Path) -> io::Result<PathBuf> {
     if path.file_name().is_none() {
@@ -1035,7 +973,6 @@ fn safety_wal_parent(path: &Path) -> io::Result<PathBuf> {
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf())
 }
-
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn direct_lexical_directory_metadata(path: &Path) -> io::Result<fs::Metadata> {
     let metadata = fs::symlink_metadata(path)?;
@@ -1047,11 +984,9 @@ fn direct_lexical_directory_metadata(path: &Path) -> io::Result<fs::Metadata> {
     }
     Ok(metadata)
 }
-
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn open_canonical_directory_nofollow(path: &Path) -> io::Result<File> {
     use std::os::unix::fs::MetadataExt as _;
-
     if !path.is_absolute() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -1119,18 +1054,14 @@ fn open_canonical_directory_nofollow(path: &Path) -> io::Result<File> {
     }
     Ok(current)
 }
-
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn unix_file_identity(metadata: &fs::Metadata) -> (u64, u64) {
     use std::os::unix::fs::MetadataExt as _;
-
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn unix_metadata_revision_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.len() == right.len()
@@ -1141,12 +1072,10 @@ fn unix_metadata_revision_unchanged(left: &fs::Metadata, right: &fs::Metadata) -
         && left.mode() == right.mode()
         && left.nlink() == right.nlink()
 }
-
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn wal_metadata_revision_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     unix_metadata_revision_unchanged(left, right)
 }
-
 #[cfg(not(all(unix, not(target_os = "espidf"))))]
 fn wal_metadata_revision_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.is_file()
@@ -1155,7 +1084,6 @@ fn wal_metadata_revision_unchanged(left: &fs::Metadata, right: &fs::Metadata) ->
         && left.modified().ok() == right.modified().ok()
         && left.permissions().readonly() == right.permissions().readonly()
 }
-
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn ensure_unix_regular_single_link_stat(stat: &rustix::fs::Stat) -> io::Result<()> {
     if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
@@ -1168,7 +1096,6 @@ fn ensure_unix_regular_single_link_stat(stat: &rustix::fs::Stat) -> io::Result<(
     }
     Ok(())
 }
-
 /// Append-only, hash-chained Sumeragi safety WAL.
 #[derive(Debug)]
 pub(crate) struct SafetyWal {
@@ -1184,7 +1111,6 @@ pub(crate) struct SafetyWal {
     #[cfg(all(unix, not(target_os = "espidf")))]
     leader_wire_authority_minted: AtomicBool,
 }
-
 impl SafetyWal {
     /// Open the production WAL through one descriptor-relative Kura authority.
     #[cfg(all(unix, not(target_os = "espidf")))]
@@ -1225,7 +1151,6 @@ impl SafetyWal {
             key_hash,
         )
     }
-
     /// Reject production opening where descriptor-relative ancestry is unavailable.
     #[cfg(not(all(unix, not(target_os = "espidf"))))]
     pub(crate) fn open_with_kura_authority(
@@ -1245,7 +1170,6 @@ impl SafetyWal {
             reason: "descriptor-relative Kura-root storage is unavailable",
         })
     }
-
     /// Open or create a WAL bound to the supplied network, protocol, and consensus-key hashes.
     ///
     /// An incomplete final frame is treated as an unacknowledged crash tail and truncated. Any
@@ -1284,7 +1208,6 @@ impl SafetyWal {
             .file_name()
             .expect("safety_wal_parent rejected a missing file name")
             .to_os_string();
-
         Self::open_bound(
             path,
             directory,
@@ -1294,7 +1217,6 @@ impl SafetyWal {
             key_hash,
         )
     }
-
     fn open_bound(
         path: PathBuf,
         directory: Arc<BoundSafetyWalDirectory>,
@@ -1304,7 +1226,6 @@ impl SafetyWal {
         key_hash: [u8; HASH_LEN],
     ) -> Result<Self, SafetyWalError> {
         let parent = directory.expected_path.clone();
-
         let identity = WalFileIdentity::new(protocol_version, network_id, key_hash);
         let (mut file, created) =
             directory
@@ -1313,7 +1234,6 @@ impl SafetyWal {
                     path: path.clone(),
                     source,
                 })?;
-
         if created
             || file
                 .metadata()
@@ -1338,7 +1258,6 @@ impl SafetyWal {
                 source,
             })?;
         }
-
         directory
             .verify_leaf(&file, &wal_name)
             .map_err(|source| SafetyWalError::Io {
@@ -1414,7 +1333,6 @@ impl SafetyWal {
                 path: path.clone(),
                 source,
             })?;
-
         let append_state = WalAppendState::from_verified_stream_recovery(
             recovery.next_sequence,
             recovery.last_frame_hash,
@@ -1433,12 +1351,10 @@ impl SafetyWal {
             leader_wire_authority_minted: AtomicBool::new(false),
         })
     }
-
     /// Return all records recovered during open.
     pub(crate) fn recovered_records(&self) -> &[RecoveredRecord] {
         &self.records
     }
-
     /// Compare this open WAL with one recovery-sealed canonical path.
     ///
     /// The path itself stays private so lifecycle startup can validate storage
@@ -1450,7 +1366,6 @@ impl SafetyWal {
                 .verify_leaf(&self.file, &self.wal_name)
                 .is_ok()
     }
-
     /// Mint the sole fixed serviced-candidate sibling authority.
     pub(crate) fn mint_serviced_candidate_store_authority(
         &self,
@@ -1478,7 +1393,6 @@ impl SafetyWal {
             })?;
             Ok(SafetyWalServicedCandidateStoreAuthority { entry })
         }
-
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             let _ = expected;
@@ -1488,7 +1402,6 @@ impl SafetyWal {
             })
         }
     }
-
     /// Mint the sole fixed leader-wire lifecycle sibling authority.
     pub(crate) fn mint_leader_wire_store_authority(
         &self,
@@ -1516,7 +1429,6 @@ impl SafetyWal {
             })?;
             Ok(SafetyWalLeaderWireStoreAuthority { entry })
         }
-
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             let _ = expected;
@@ -1526,7 +1438,6 @@ impl SafetyWal {
             })
         }
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn verify_expected_binding(&self, expected: &Path) -> Result<(), SafetyWalError> {
         if self.path != expected {
@@ -1545,7 +1456,6 @@ impl SafetyWal {
                 source,
             })
     }
-
     /// Append and synchronise an opaque Norito record.
     ///
     /// A successful return is the durability acknowledgement used by the reducer. On any error,
@@ -1556,7 +1466,6 @@ impl SafetyWal {
     ) -> Result<SafetyWalAppendReceipt, SafetyWalError> {
         self.append_with_limits(payload, WAL_RETENTION_LIMITS)
     }
-
     fn append_with_limits(
         &mut self,
         payload: &[u8],
@@ -1598,7 +1507,6 @@ impl SafetyWal {
         self.payload_bytes = next_payload_bytes;
         Ok(receipt)
     }
-
     /// Retire a closed height's WAL after the caller has validated Kura's
     /// durable block-and-finality receipt.
     ///
@@ -1619,7 +1527,6 @@ impl SafetyWal {
         remove_wal_file(path, &directory, &wal_name, file)
     }
 }
-
 fn remove_wal_file(
     path: PathBuf,
     directory: &BoundSafetyWalDirectory,
@@ -1645,7 +1552,6 @@ fn remove_wal_file(
     drop(file);
     Ok(())
 }
-
 struct StreamingWalRecovery {
     records: Vec<RecoveredRecord>,
     payload_bytes: usize,
@@ -1654,7 +1560,6 @@ struct StreamingWalRecovery {
     next_sequence: u64,
     last_frame_hash: [u8; HASH_LEN],
 }
-
 fn enforce_retention_limits(
     path: &Path,
     current_records: usize,
@@ -1677,7 +1582,6 @@ fn enforce_retention_limits(
     }
     Ok((records, payload_bytes))
 }
-
 #[allow(clippy::too_many_lines)]
 fn recover_wal_stream(
     file: &mut File,
@@ -1697,7 +1601,6 @@ fn recover_wal_stream(
             path: path.to_path_buf(),
             source,
         })?;
-
     let mut file_header = [0_u8; FILE_HEADER_LEN];
     let header_len = read_up_to(file, &mut file_header).map_err(|source| SafetyWalError::Io {
         path: path.to_path_buf(),
@@ -1711,14 +1614,12 @@ fn recover_wal_stream(
     }
     recover_wal_file(&file_header, identity, &frame_hash)
         .map_err(|error| map_codec_error(path, error))?;
-
     let mut records = Vec::new();
     let mut payload_bytes = 0_usize;
     let mut valid_prefix_len = u64::try_from(FILE_HEADER_LEN).expect("WAL header length fits u64");
     let mut incomplete_tail = false;
     let mut expected_sequence = 0_u64;
     let mut previous_hash = [0_u8; HASH_LEN];
-
     while valid_prefix_len < file_len {
         let frame_start = valid_prefix_len;
         let mut frame_header = [0_u8; FRAME_HEADER_LEN];
@@ -1731,7 +1632,6 @@ fn recover_wal_stream(
             incomplete_tail = true;
             break;
         }
-
         let mut offset = 0_usize;
         if frame_header[offset..offset + FRAME_MAGIC.len()] != FRAME_MAGIC {
             return Err(map_codec_error(
@@ -1758,7 +1658,6 @@ fn recover_wal_stream(
         offset += 4;
         let mut encoded_previous = [0_u8; HASH_LEN];
         encoded_previous.copy_from_slice(&frame_header[offset..offset + HASH_LEN]);
-
         if sequence != expected_sequence {
             return Err(map_codec_error(
                 path,
@@ -1786,7 +1685,6 @@ fn recover_wal_stream(
                 },
             ));
         }
-
         let frame_len = FRAME_HEADER_LEN
             .checked_add(payload_len)
             .and_then(|length| length.checked_add(HASH_LEN))
@@ -1804,7 +1702,6 @@ fn recover_wal_stream(
             incomplete_tail = true;
             break;
         }
-
         let retention =
             enforce_retention_limits(path, records.len(), payload_bytes, payload_len, limits);
         let mut hasher = blake3::Hasher::new();
@@ -1874,7 +1771,6 @@ fn recover_wal_stream(
             )
         })?;
     }
-
     Ok(StreamingWalRecovery {
         records,
         payload_bytes,
@@ -1884,7 +1780,6 @@ fn recover_wal_stream(
         last_frame_hash: previous_hash,
     })
 }
-
 fn read_up_to(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
     let mut read = 0_usize;
     while read < buffer.len() {
@@ -1897,31 +1792,25 @@ fn read_up_to(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
     }
     Ok(read)
 }
-
 struct FileAppendIo<'a> {
     file: &'a mut File,
     directory: &'a BoundSafetyWalDirectory,
     wal_name: &'a OsStr,
 }
-
 impl WalAppendIo for FileAppendIo<'_> {
     type Error = io::Error;
-
     fn write_all(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
         self.directory.verify_leaf(self.file, self.wal_name)?;
         self.file.write_all(bytes)
     }
-
     fn flush(&mut self) -> Result<(), Self::Error> {
         self.file.flush()
     }
-
     fn sync_data(&mut self) -> Result<(), Self::Error> {
         self.file.sync_data()?;
         self.directory.verify_leaf(self.file, self.wal_name)
     }
 }
-
 fn map_append_error(path: &Path, error: WalAppendError<io::Error>) -> SafetyWalError {
     match error {
         WalAppendError::Codec(error) => map_codec_error(path, error),
@@ -1935,7 +1824,6 @@ fn map_append_error(path: &Path, error: WalAppendError<io::Error>) -> SafetyWalE
         },
     }
 }
-
 fn map_codec_error(path: &Path, error: WalCodecError) -> SafetyWalError {
     match error {
         WalCodecError::InvalidHeader(reason) => SafetyWalError::InvalidHeader {
@@ -1974,23 +1862,18 @@ fn map_codec_error(path: &Path, error: WalCodecError) -> SafetyWalError {
         },
     }
 }
-
 fn frame_hash(bytes: &[u8]) -> [u8; HASH_LEN] {
     *blake3::hash(bytes).as_bytes()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const NETWORK_ID: [u8; HASH_LEN] = [0x11; HASH_LEN];
     const KEY: [u8; HASH_LEN] = [0x22; HASH_LEN];
     const PROTOCOL: u16 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION;
-
     fn read_test_u16(bytes: &[u8]) -> u16 {
         u16::from_le_bytes(bytes.try_into().expect("two-byte fixture field"))
     }
-
     #[test]
     fn file_header_uses_the_declared_canonical_layout() {
         let header =
@@ -1999,7 +1882,6 @@ mod tests {
         let protocol_offset = format_offset + 2;
         let network_id_offset = protocol_offset + 2;
         let key_offset = network_id_offset + HASH_LEN;
-
         assert_eq!(&header[..FILE_MAGIC.len()], &FILE_MAGIC);
         assert_eq!(
             read_test_u16(&header[format_offset..protocol_offset]),
@@ -2016,7 +1898,6 @@ mod tests {
             &frame_hash(&header[..FILE_HEADER_PREFIX_LEN])
         );
     }
-
     #[test]
     fn append_reopens_and_replays_hash_chained_records() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2029,7 +1910,6 @@ mod tests {
             assert_eq!(commit.sequence(), 1);
             (prepare, commit)
         };
-
         let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("reopen WAL");
         assert_eq!(
             wal.recovered_records(),
@@ -2048,7 +1928,6 @@ mod tests {
         );
         assert_eq!(wal.payload_bytes, b"prepare".len() + b"commit".len());
     }
-
     #[test]
     fn append_retention_limits_fail_before_file_or_hash_state_changes() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2066,7 +1945,6 @@ mod tests {
             .expect("append exact payload boundary");
         let file_len = wal.file.metadata().expect("WAL metadata").len();
         let append_state = wal.append_state;
-
         assert!(matches!(
             wal.append_with_limits(b"", limits),
             Err(SafetyWalError::RetentionLimitExceeded {
@@ -2081,7 +1959,6 @@ mod tests {
         assert_eq!(wal.append_state, append_state);
         assert_eq!(wal.recovered_records().len(), 2);
         assert_eq!(wal.payload_bytes, 5);
-
         let payload_path = dir.path().join("sumeragi-v2-payload.wal");
         let mut payload_wal =
             SafetyWal::open(&payload_path, PROTOCOL, NETWORK_ID, KEY).expect("open payload WAL");
@@ -2116,7 +1993,6 @@ mod tests {
         assert_eq!(payload_wal.recovered_records().len(), 1);
         assert_eq!(payload_wal.payload_bytes, 5);
     }
-
     #[test]
     fn streaming_recovery_accepts_the_boundary_and_rejects_the_next_frame() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2127,7 +2003,6 @@ mod tests {
             let _two = wal.append(b"two").expect("append two");
             let _three = wal.append(b"three").expect("append three");
         }
-
         let identity = WalFileIdentity::new(PROTOCOL, NETWORK_ID, KEY);
         let mut file = File::open(&path).expect("open WAL for streaming recovery");
         let exact = recover_wal_stream(
@@ -2143,7 +2018,6 @@ mod tests {
         assert_eq!(exact.records.len(), 3);
         assert_eq!(exact.payload_bytes, 11);
         assert_eq!(exact.next_sequence, 3);
-
         let error = match recover_wal_stream(
             &mut file,
             &path,
@@ -2167,16 +2041,13 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn open_wal_matches_only_its_exact_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
-
         assert!(wal.matches_path(&path));
         assert!(!wal.matches_path(&dir.path().join("foreign.wal")));
-
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
             let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2191,7 +2062,6 @@ mod tests {
                 KEY,
             );
             assert!(matches!(rejected, Err(SafetyWalError::Io { .. })));
-
             let expected = kura
                 .sumeragi_v2_storage_root()
                 .join("wal")
@@ -2209,30 +2079,25 @@ mod tests {
             assert!(bound.matches_path(&expected));
         }
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     #[test]
     fn open_rejects_a_preexisting_symlink_for_the_owned_wal_directory() {
         use std::os::unix::fs::symlink;
-
         let root = tempfile::tempdir().expect("tempdir");
         let foreign = root.path().join("foreign-wal-directory");
         fs::create_dir(&foreign).expect("create foreign WAL directory");
         let parent = root.path().join("wal");
         symlink(&foreign, &parent).expect("substitute the WAL directory with a symlink");
         let path = parent.join("sumeragi-v2.wal");
-
         assert!(matches!(
             SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY),
             Err(SafetyWalError::Io { .. })
         ));
         assert!(!foreign.join("sumeragi-v2.wal").exists());
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     fn substitute_wal_parent(root: &Path, parent: &Path) -> (PathBuf, PathBuf) {
         use std::os::unix::fs::symlink;
-
         let retained = root.join("retained-wal-directory");
         let foreign = root.join("foreign-wal-directory");
         fs::rename(parent, &retained).expect("move the opened WAL directory");
@@ -2240,7 +2105,6 @@ mod tests {
         symlink(&foreign, parent).expect("substitute the canonical WAL directory name");
         (retained, foreign)
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     #[test]
     fn parent_substitution_poisoning_prevents_wal_append_acknowledgement() {
@@ -2249,7 +2113,6 @@ mod tests {
         let path = parent.join("sumeragi-v2.wal");
         let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
         let (retained, foreign) = substitute_wal_parent(root.path(), &parent);
-
         assert!(!wal.matches_path(&path));
         assert!(matches!(
             wal.append(b"must not receive a durability receipt"),
@@ -2267,7 +2130,6 @@ mod tests {
             Err(SafetyWalError::Io { .. })
         ));
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     #[test]
     fn adjacent_authorities_reject_parent_substitution_without_path_fallback() {
@@ -2290,7 +2152,6 @@ mod tests {
             Err(SafetyWalError::FailedClosed { .. })
         ));
         let (retained, foreign) = substitute_wal_parent(root.path(), &parent);
-
         assert!(serviced.read_bounded(1024).is_err());
         assert!(leader.publish_atomic(b"must not publish", 1024).is_err());
         for directory in [&retained, &foreign] {
@@ -2306,7 +2167,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     #[test]
     fn adjacent_authority_bounds_publish_read_and_retirement() {
@@ -2317,7 +2177,6 @@ mod tests {
             .mint_leader_wire_store_authority(&path)
             .expect("mint leader-wire authority");
         let adjacent = path.with_file_name("sumeragi-v2.wal.leader-wire-lifecycles");
-
         assert!(leader.publish_atomic(b"oversized", 4).is_err());
         leader
             .publish_atomic(b"bounded", 7)
@@ -2329,7 +2188,6 @@ mod tests {
         leader.retire(7).expect("retire exact adjacent entry");
         assert!(!adjacent.exists());
     }
-
     #[test]
     fn incomplete_final_frame_is_truncated_as_unacknowledged() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2345,12 +2203,10 @@ mod tests {
             .expect("open append")
             .write_all(b"S2FR\x01\x00")
             .expect("write crash tail");
-
         let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("recover WAL");
         assert_eq!(wal.recovered_records().len(), 1);
         assert_eq!(fs::metadata(path).expect("metadata").len(), good_len);
     }
-
     #[test]
     fn incomplete_final_payload_and_checksum_are_discarded_atomically() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2376,7 +2232,6 @@ mod tests {
             .expect("open WAL for truncation")
             .set_len(partial_len)
             .expect("truncate in final payload");
-
         let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("recover WAL");
         assert_eq!(
             wal.recovered_records(),
@@ -2388,7 +2243,6 @@ mod tests {
         );
         assert_eq!(fs::metadata(path).expect("metadata").len(), good_len);
     }
-
     #[test]
     fn complete_corrupt_frame_fails_closed() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2401,13 +2255,11 @@ mod tests {
         let payload_offset = FILE_HEADER_LEN + FRAME_HEADER_LEN;
         bytes[payload_offset] ^= 0x80;
         fs::write(&path, bytes).expect("corrupt WAL");
-
         assert!(matches!(
             SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY),
             Err(SafetyWalError::CorruptFrame { .. })
         ));
     }
-
     #[test]
     fn complete_hash_chain_break_after_valid_record_fails_closed() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2423,7 +2275,6 @@ mod tests {
         let mut bytes = fs::read(&path).expect("read WAL");
         bytes[previous_hash_offset] ^= 0x80;
         fs::write(&path, bytes).expect("break hash chain");
-
         assert!(matches!(
             SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY),
             Err(SafetyWalError::CorruptFrame {
@@ -2433,13 +2284,11 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn identity_mismatch_fails_closed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         drop(SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL"));
-
         assert!(matches!(
             SafetyWal::open(&path, PROTOCOL, NETWORK_ID, [0x33; HASH_LEN]),
             Err(SafetyWalError::IdentityMismatch {
@@ -2462,7 +2311,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn append_io_failure_poisoning_requires_verified_reopen() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2471,7 +2319,6 @@ mod tests {
         let read_only = File::open(&path).expect("open read-only WAL handle");
         let writable = std::mem::replace(&mut wal.file, read_only);
         drop(writable);
-
         assert!(matches!(
             wal.append(b"must fail before acknowledgement"),
             Err(SafetyWalError::AppendIo {
@@ -2485,13 +2332,11 @@ mod tests {
             Err(SafetyWalError::FailedClosed { .. })
         ));
         assert!(wal.recovered_records().is_empty());
-
         drop(wal);
         let reopened = SafetyWal::open(path, PROTOCOL, NETWORK_ID, KEY).expect("verified reopen");
         assert!(reopened.recovered_records().is_empty());
         assert!(!reopened.append_state.is_failed_closed());
     }
-
     #[test]
     fn physical_retirement_removes_and_directory_syncs_a_closed_height_log() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -7,13 +7,11 @@
 //! Encoding note: `Numeric` serializes as a helper carrying `(mantissa, scale)`.
 //! The mantissa is a raw [`crate::bigint::BigInt`] integer (no decimal scale
 //! is embedded in the integer), and the scale is stored separately as a `u32`.
-
 use core::{cmp::Ordering, str::FromStr};
 use std::{
     string::{String, ToString},
     vec::Vec,
 };
-
 pub use iroha_primitives_derive::numeric;
 use norito::{
     Archived, Error, NoritoDeserialize, NoritoSerialize,
@@ -21,9 +19,7 @@ use norito::{
 };
 use num_bigint::BigInt as UnboundedBigInt;
 use num_traits::{One as _, Signed as _, Zero as _};
-
 use crate::bigint::BigInt;
-
 /// Width of the signed two's-complement domain shared by Kotodama `int`,
 /// `decimal` mantissas, and `quantity` mantissas.
 pub const MAX_MANTISSA_BITS: usize = 512;
@@ -2763,7 +2759,6 @@ impl core::fmt::Display for Numeric {
         }
     }
 }
-
 mod scale_ {
     /// Borrowed wire-compatible view of a numeric mantissa.
     pub(super) struct BigIntView<'a>(
@@ -2811,14 +2806,11 @@ mod scale_ {
         pub(super) scale: u32,
     }
 }
-
 mod schema_ {
     use iroha_schema::{
         Compact, Declaration, Ident, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId,
     };
-
     use super::*;
-
     impl TypeId for Numeric {
         fn id() -> Ident {
             "Numeric".to_string()
@@ -2893,12 +2885,9 @@ mod schema_ {
 #[cfg(test)]
 mod tests {
     use core::cmp::Ordering;
-
     use num_bigint::BigInt as ReferenceInt;
     use num_traits::{One as _, Signed as _, Zero as _};
-
     use super::*;
-
     #[test]
     fn check_add() {
         let a = Numeric::new(10, 0);
@@ -3863,7 +3852,6 @@ mod tests {
     fn public_quantity_construction_makes_equality_ordering_and_hash_canonical() {
         use core::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
-
         let representations = [
             Numeric::new(1, 0),
             Numeric::new(10, 1),

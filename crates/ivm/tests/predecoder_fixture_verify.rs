@@ -2,17 +2,13 @@
 //!
 //! These tests are optional: if the fixture directory does not exist
 //! (not generated yet), they log a message and return early without failing.
-
 use std::{fs, path::PathBuf};
-
 use ivm::ivm_cache::IvmCache;
 use norito::json::Value;
 use sha2::{Digest, Sha256};
-
 fn fixtures_root() -> PathBuf {
     ivm::predecoder_fixtures::default_predecoder_mixed_root()
 }
-
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
@@ -24,7 +20,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     }
     s
 }
-
 #[test]
 fn fixture_decoded_json_matches_decoder() {
     let root = fixtures_root();
@@ -56,17 +51,14 @@ fn fixture_decoded_json_matches_decoder() {
     }
     let code = fs::read(root.join("code.bin")).expect("read code.bin");
     let decoded = IvmCache::decode_stream(&code).expect("decode ok");
-
     let decoded_json = fs::read(root.join("decoded.json")).expect("read decoded.json");
     let v: Value = norito::json::from_slice(&decoded_json).expect("parse json");
-
     // format string should match
     let fmt = match &v {
         Value::Object(m) => m.get("format").and_then(|v| v.as_str()).unwrap_or(""),
         _ => "",
     };
     assert_eq!(fmt, "ivm.predecoder.v1");
-
     // code sha256 should match
     let expected_sha = match &v {
         Value::Object(m) => m
@@ -76,7 +68,6 @@ fn fixture_decoded_json_matches_decoder() {
         _ => panic!("decoded.json is not an object"),
     };
     assert_eq!(expected_sha, sha256_hex(&code));
-
     // Compare decoded ops
     let arr = match &v {
         Value::Object(m) => m
@@ -101,7 +92,6 @@ fn fixture_decoded_json_matches_decoder() {
         assert_eq!(inst as u32, op.inst, "inst mismatch at {i}");
     }
 }
-
 #[test]
 fn fixture_artifacts_conform_to_index() {
     let root = fixtures_root();
@@ -132,7 +122,6 @@ fn fixture_artifacts_conform_to_index() {
     // Load code and decoded reference
     let code = fs::read(root.join("code.bin")).expect("read code.bin");
     let decoded_ref = IvmCache::decode_stream(&code).expect("decode ok");
-
     // Load index.json
     let index_bytes = fs::read(root.join("index.json")).expect("read index.json");
     let idx: Value = norito::json::from_slice(&index_bytes).expect("parse json");
@@ -141,7 +130,6 @@ fn fixture_artifacts_conform_to_index() {
         _ => "",
     };
     assert_eq!(fmt, "ivm.predecoder.v1/index");
-
     let artifacts_dir = match &idx {
         Value::Object(m) => {
             let rel = m
@@ -152,7 +140,6 @@ fn fixture_artifacts_conform_to_index() {
         }
         _ => panic!("index.json is not object"),
     };
-
     let artifacts = match &idx {
         Value::Object(m) => m
             .get("artifacts")
@@ -160,7 +147,6 @@ fn fixture_artifacts_conform_to_index() {
             .expect("artifacts array present"),
         _ => panic!("index.json is not object"),
     };
-
     // For each artifact, verify sha256 and that decoding matches the reference.
     for entry in artifacts {
         let (fname, expected_sha) = match entry {

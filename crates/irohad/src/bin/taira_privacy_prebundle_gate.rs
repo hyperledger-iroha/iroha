@@ -1,7 +1,5 @@
 //! Fail-closed privacy capability gate for public Taira validator bundles.
-
 use std::collections::BTreeSet;
-
 use iroha_core::privacy_profiles::compiled_privacy_profile_v1;
 #[cfg(test)]
 use iroha_data_model::privacy::privacy_protocol_label_is_reserved_v1;
@@ -9,7 +7,6 @@ use iroha_data_model::privacy::{
     PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyCompiledProfileSnapshotV1, PrivacyProtocolIdV1,
 };
 use sha2::{Digest, Sha256};
-
 const EXACT12_MATRIX: &str = include_str!("../../../../fixtures/privacy/exact12_v1.tsv");
 const EXPECTED_PROFILE_COUNT: usize = 12;
 const EXPECTED_REGISTRY_SHA256: &str =
@@ -18,7 +15,6 @@ const EXPECTED_REGISTRY_SHA256: &str =
 // matrix and this deployment pin must be regenerated together.
 const EXPECTED_MATRIX_SHA256: &str =
     "1dd3e975d1fd13bcd8a63a8ea216ea7b8220d52c1d8a867bb64009162b8027e1";
-
 fn is_canonical_nonzero_sha256_hex(value: &str) -> bool {
     value.len() == 64
         && value
@@ -26,14 +22,12 @@ fn is_canonical_nonzero_sha256_hex(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         && value.bytes().any(|byte| byte != b'0')
 }
-
 fn main() {
     if let Err(error) = run() {
         eprintln!("Taira privacy prebundle gate failed: {error}");
         std::process::exit(1);
     }
 }
-
 fn validate_exact12_matrix_v1(matrix: &str) -> Result<String, String> {
     if !matrix.ends_with('\n')
         || matrix.contains('\r')
@@ -43,7 +37,6 @@ fn validate_exact12_matrix_v1(matrix: &str) -> Result<String, String> {
     {
         return Err("exact12 matrix is not canonical LF-delimited text".to_owned());
     }
-
     let mut matrix_version = None;
     let mut expected_registry_digest = None;
     let mut protocol_rows = Vec::new();
@@ -113,7 +106,6 @@ fn validate_exact12_matrix_v1(matrix: &str) -> Result<String, String> {
             typed_envelope_rows.len()
         ));
     }
-
     let mut registry_preimage = String::new();
     let mut active_labels = BTreeSet::new();
     for (expected_index, protocol_id) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
@@ -154,7 +146,6 @@ fn validate_exact12_matrix_v1(matrix: &str) -> Result<String, String> {
         registry_preimage.push_str(protocol_id.canonical_label());
         registry_preimage.push('\n');
     }
-
     let retired_set = retired_labels.iter().copied().collect::<BTreeSet<_>>();
     if retired_set.len() != retired_labels.len() {
         return Err("exact12 matrix repeats a retired protocol label".to_owned());
@@ -171,7 +162,6 @@ fn validate_exact12_matrix_v1(matrix: &str) -> Result<String, String> {
             ));
         }
     }
-
     let registry_digest = hex::encode(Sha256::digest(registry_preimage.as_bytes()));
     if registry_digest != EXPECTED_REGISTRY_SHA256 {
         return Err(format!(
@@ -186,7 +176,6 @@ fn validate_exact12_matrix_v1(matrix: &str) -> Result<String, String> {
     }
     Ok(registry_digest)
 }
-
 fn validate_compiled_profile_row_v1(
     index: usize,
     expected_protocol_id: PrivacyProtocolIdV1,
@@ -221,7 +210,6 @@ fn validate_compiled_profile_row_v1(
     }
     Ok(())
 }
-
 fn validate_compiled_profiles_v1(
     profiles: &[PrivacyCompiledProfileSnapshotV1],
 ) -> Result<String, String> {
@@ -242,7 +230,6 @@ fn validate_compiled_profiles_v1(
         .map_err(|error| format!("compiled profile rows are not canonically encodable: {error}"))?;
     Ok(hex::encode(Sha256::digest(encoded)))
 }
-
 fn build_release_report_v1(
     registry_digest: &str,
     profiles: &[PrivacyCompiledProfileSnapshotV1],
@@ -289,7 +276,6 @@ fn build_release_report_v1(
     norito::json::to_json(&norito::json::Value::Object(report))
         .map_err(|error| format!("privacy release report is not JSON encodable: {error}"))
 }
-
 fn run() -> Result<(), String> {
     let registry_digest = validate_exact12_matrix_v1(EXACT12_MATRIX)?;
     let profiles = PrivacyProtocolIdV1::ALL
@@ -308,11 +294,9 @@ fn run() -> Result<(), String> {
     println!("{}", build_release_report_v1(&registry_digest, &profiles)?);
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn assert_rejected(matrix: &str, expected: &str) {
         let error = validate_exact12_matrix_v1(matrix).expect_err("mutation must be rejected");
         assert!(
@@ -320,7 +304,6 @@ mod tests {
             "expected {expected:?} in rejection, got {error:?}"
         );
     }
-
     fn without_first_line_starting_with(matrix: &str, prefix: &str) -> String {
         let mut removed = false;
         let mut output = String::new();
@@ -335,7 +318,6 @@ mod tests {
         assert!(removed, "fixture must contain line prefix {prefix:?}");
         output
     }
-
     #[test]
     fn frozen_matrix_shape_is_accepted_before_compiled_profile_checks() {
         assert_eq!(
@@ -343,7 +325,6 @@ mod tests {
             EXPECTED_REGISTRY_SHA256
         );
     }
-
     #[test]
     fn noncanonical_text_framing_is_rejected() {
         assert_rejected(
@@ -359,7 +340,6 @@ mod tests {
             "canonical LF-delimited",
         );
     }
-
     #[test]
     fn duplicate_headers_and_bad_indices_are_rejected() {
         assert_rejected(
@@ -383,7 +363,6 @@ mod tests {
             "bad index",
         );
     }
-
     #[test]
     fn reordered_or_missing_exact12_routes_are_rejected() {
         assert_rejected(
@@ -403,7 +382,6 @@ mod tests {
             "privacy registry is not exact12",
         );
     }
-
     #[test]
     fn typed_envelope_variant_and_digest_mutations_are_rejected() {
         assert_rejected(
@@ -431,7 +409,6 @@ mod tests {
             "non-canonical digest",
         );
     }
-
     #[test]
     fn retired_protocol_set_is_exact_unique_and_unrepresentable() {
         assert_rejected(
@@ -451,7 +428,6 @@ mod tests {
             "frozen retired-label set",
         );
     }
-
     #[test]
     fn retired_matrix_rows_match_the_shared_data_model_reservation_in_order() {
         let matrix_retired = EXACT12_MATRIX
@@ -467,7 +443,6 @@ mod tests {
             assert!(PrivacyProtocolIdV1::from_canonical_label(label).is_none());
         }
     }
-
     #[test]
     fn frozen_registry_digest_is_independently_recomputed() {
         assert_rejected(
@@ -479,7 +454,6 @@ mod tests {
             "frozen first-release registry digest",
         );
     }
-
     #[test]
     fn valid_looking_typed_kat_substitution_breaks_the_frozen_artifact_digest() {
         assert_rejected(
@@ -491,7 +465,6 @@ mod tests {
             "matrix artifact digest mismatch",
         );
     }
-
     #[test]
     fn compiled_profile_report_rejects_missing_duplicate_and_reordered_routes() {
         let first = PrivacyCompiledProfileSnapshotV1::from(
@@ -503,14 +476,12 @@ mod tests {
                 .expect_err("missing route must reject")
                 .contains("not exact12")
         );
-
         let duplicate = vec![first; EXPECTED_PROFILE_COUNT];
         assert!(
             validate_compiled_profiles_v1(&duplicate)
                 .expect_err("duplicate route must reject")
                 .contains("route 1")
         );
-
         let second = PrivacyCompiledProfileSnapshotV1::from(
             compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
                 .expect("PGC is compiled"),
@@ -526,7 +497,6 @@ mod tests {
             .contains("route 0")
         );
     }
-
     #[test]
     fn compiled_profile_report_rejects_each_consensus_binding_mutation() {
         let profile = PrivacyCompiledProfileSnapshotV1::from(

@@ -1,7 +1,6 @@
 #[test]
 fn roster_sidecar_roundtrip_with_stake_snapshot() {
     use iroha_config::base::WithOrigin;
-
     let temp_dir = TempDir::new().unwrap();
     let (kura, _count) = Kura::new(
         &Config {
@@ -23,7 +22,6 @@ fn roster_sidecar_roundtrip_with_stake_snapshot() {
         &RuntimeLaneConfig::default(),
     )
     .unwrap();
-
     let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let roster = vec![peer];
@@ -64,22 +62,18 @@ fn roster_sidecar_roundtrip_with_stake_snapshot() {
         None,
         Some(stake_snapshot.clone()),
     );
-
     kura.write_roster_metadata(&sidecar);
     let got = kura.read_roster_metadata(1).expect("sidecar exists");
-
     assert_eq!(got.height, 1);
     assert_eq!(got.block_hash, block_hash);
     assert_eq!(got.format_label(), "roster.snapshot");
     assert_eq!(got.stake_snapshot, Some(stake_snapshot));
     assert_eq!(got.roster_snapshot(), Some(roster));
 }
-
 #[derive(Debug, Encode, Decode, PartialEq, Eq)]
 struct DummySidecar {
     height: u64,
 }
-
 #[derive(Clone, Copy, Debug)]
 enum ProgressSidecarBarrierFailure {
     Data,
@@ -87,7 +81,6 @@ enum ProgressSidecarBarrierFailure {
     ImmediateDirectory,
     AncestorDirectory(usize),
 }
-
 impl ProgressSidecarBarrierFailure {
     fn inject(self) {
         match self {
@@ -100,7 +93,6 @@ impl ProgressSidecarBarrierFailure {
         }
     }
 }
-
 fn strict_progress_sidecar_failure_modes() -> [(&'static str, ProgressSidecarBarrierFailure); 6] {
     [
         ("data", ProgressSidecarBarrierFailure::Data),
@@ -123,7 +115,6 @@ fn strict_progress_sidecar_failure_modes() -> [(&'static str, ProgressSidecarBar
         ),
     ]
 }
-
 fn strict_indexed_sidecar_failure_modes() -> [(&'static str, fn()); 3] {
     [
         ("data", fail_next_indexed_sidecar_data_sync_for_tests),
@@ -131,14 +122,12 @@ fn strict_indexed_sidecar_failure_modes() -> [(&'static str, fn()); 3] {
         ("directory", fail_next_indexed_sidecar_dir_sync_for_tests),
     ]
 }
-
 fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
     for (label, inject_failure) in strict_indexed_sidecar_failure_modes() {
         let temp_dir = TempDir::new().unwrap();
         let data_path = temp_dir.path().join(ROSTER_SIDECARS_DATA_FILE);
         let index_path = temp_dir.path().join(ROSTER_SIDECARS_INDEX_FILE);
         let payload = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode dummy sidecar");
-
         inject_failure();
         assert!(
             !Kura::append_indexed_sidecar(
@@ -163,7 +152,6 @@ fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
         .expect("failed barrier leaves an exact page-cache payload readable");
         assert_eq!(readable.height, 1);
         let first_data_len = fs::metadata(&data_path).expect("data metadata").len();
-
         inject_failure();
         assert!(
             !Kura::append_indexed_sidecar(
@@ -198,7 +186,6 @@ fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
         );
     }
 }
-
 fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
     for overwrite_placeholder in [false, true] {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -206,7 +193,6 @@ fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
         let index_path = temp_dir.path().join(ROSTER_SIDECARS_INDEX_FILE);
         let payload =
             norito::to_bytes(&DummySidecar { height: 1 }).expect("encode height-one dummy sidecar");
-
         let baseline_len = if overwrite_placeholder {
             let height_two = norito::to_bytes(&DummySidecar { height: 2 })
                 .expect("encode height-two dummy sidecar");
@@ -229,7 +215,6 @@ fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
         } else {
             0
         };
-
         fail_next_indexed_sidecar_initial_data_sync_for_tests();
         assert!(
             !Kura::append_indexed_sidecar(
@@ -262,7 +247,6 @@ fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
             .is_none(),
             "the failed pre-index write must not publish a readable height-one entry"
         );
-
         assert!(
             Kura::append_indexed_sidecar(
                 &data_path,
@@ -295,7 +279,6 @@ fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
         );
     }
 }
-
 fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let data_path = temp_dir.path().join(ROSTER_SIDECARS_DATA_FILE);
@@ -304,7 +287,6 @@ fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
     let replacement =
         norito::to_bytes(&DummySidecar { height: 11 }).expect("encode replacement payload");
     let second = norito::to_bytes(&DummySidecar { height: 2 }).expect("encode second payload");
-
     assert!(Kura::append_indexed_sidecar(
         &data_path,
         &index_path,
@@ -323,7 +305,6 @@ fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
         data.write_all(bytes).expect("append crash residue");
         data.sync_data().expect("persist crash residue fixture");
     };
-
     append_residue(b"unpublished-exact-retry");
     assert!(Kura::append_indexed_sidecar(
         &data_path,
@@ -340,7 +321,6 @@ fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
         u64::try_from(first.len()).expect("first length fits u64"),
         "an exact-existing retry must trim a crash suffix before returning"
     );
-
     append_residue(b"unpublished-replacement");
     assert!(Kura::append_indexed_sidecar(
         &data_path,
@@ -359,7 +339,6 @@ fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
         after_replacement,
         "replacement retry must retain one old payload and one replacement only"
     );
-
     append_residue(b"unpublished-new-height");
     assert!(Kura::append_indexed_sidecar(
         &data_path,
@@ -397,11 +376,9 @@ fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
         Some(DummySidecar { height: 2 })
     );
 }
-
 #[cfg(unix)]
 fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
     use std::os::unix::fs::symlink;
-
     for substitution in ["data", "index", "directory"] {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -422,7 +399,6 @@ fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
         let index_sentinel = b"external-index-sentinel";
         fs::write(&external_data, data_sentinel).expect("write external data sentinel");
         fs::write(&external_index, index_sentinel).expect("write external index sentinel");
-
         match substitution {
             "data" => symlink(&external_data, &data_path).expect("substitute data symlink"),
             "index" => symlink(&external_index, &index_path).expect("substitute index symlink"),
@@ -433,7 +409,6 @@ fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
             }
             _ => unreachable!("fixed substitution matrix"),
         }
-
         let payload = norito::to_bytes(&DummySidecar { height: 1 })
             .expect("encode progress mutation payload");
         assert!(
@@ -461,11 +436,9 @@ fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
         );
     }
 }
-
 #[cfg(unix)]
 fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacement() {
     use std::os::unix::fs::symlink;
-
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
@@ -477,7 +450,6 @@ fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacemen
         .open_bound_progress_namespace(&data_path, &index_path)
         .expect("bind progress namespace");
     let bound_metadata = namespace.directories[0].metadata.clone();
-
     fs::write(sidecar_dir.join("concurrent-child"), b"published")
         .expect("publish an unrelated child in the bound directory");
     let after_child = fs::symlink_metadata(&sidecar_dir).expect("stat mutated directory");
@@ -489,7 +461,6 @@ fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacemen
         kura.bound_progress_namespace_unchanged(&namespace),
         "ordinary child publication must keep the descriptor-bound namespace valid"
     );
-
     let displaced = kura.store_root().join("displaced-progress-directory");
     fs::rename(&sidecar_dir, &displaced).expect("displace the bound directory");
     fs::create_dir(&sidecar_dir).expect("install a different directory at the bound path");
@@ -502,7 +473,6 @@ fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacemen
         !kura.bound_progress_namespace_unchanged(&namespace),
         "an inode substitution must invalidate the descriptor-bound namespace"
     );
-
     fs::remove_dir(&sidecar_dir).expect("remove replacement directory");
     symlink(&displaced, &sidecar_dir).expect("install namespace symlink");
     assert!(
@@ -514,7 +484,6 @@ fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacemen
         "a new binding must reject a symlinked progress directory"
     );
 }
-
 fn absent_progress_namespace_requires_every_directory_barrier() {
     for (label, failure) in strict_progress_sidecar_failure_modes().into_iter().skip(2) {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -540,7 +509,6 @@ fn absent_progress_namespace_requires_every_directory_barrier() {
             "absent namespace must fail closed at the {label} barrier"
         );
     }
-
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
@@ -564,7 +532,6 @@ fn absent_progress_namespace_requires_every_directory_barrier() {
         "a sidecar appearing after the absence scan must invalidate the witness"
     );
 }
-
 #[cfg(unix)]
 fn progress_prepend_directory_failure_retries_without_corruption() {
     for (label, failure) in strict_progress_sidecar_failure_modes().into_iter().skip(2) {
@@ -582,7 +549,6 @@ fn progress_prepend_directory_failure_retries_without_corruption() {
         let index_path = sidecar_dir.join("prepend.index");
         let height_two = norito::to_bytes(&DummySidecar { height: 2 }).expect("encode height two");
         let height_one = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode height one");
-
         let namespace = kura
             .open_bound_progress_namespace(&data_path, &index_path)
             .expect("bind initial progress namespace");
@@ -599,7 +565,6 @@ fn progress_prepend_directory_failure_retries_without_corruption() {
             ),
             "prepare height two for the {label} failure"
         );
-
         let namespace = kura
             .open_bound_progress_namespace(&data_path, &index_path)
             .expect("rebind progress namespace before prepend");
@@ -624,7 +589,6 @@ fn progress_prepend_directory_failure_retries_without_corruption() {
             u64::try_from(height_two.len() + height_one.len()).expect("fixture length fits u64"),
             "a post-publication {label} failure must not truncate indexed payload bytes"
         );
-
         drop(kura);
         let (reopened, _) =
             Kura::new(&config, &lane_config).expect("reopen Kura after failed prepend");
@@ -673,13 +637,11 @@ fn progress_prepend_directory_failure_retries_without_corruption() {
         );
     }
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(clippy::too_many_lines)]
 fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
     use std::fs::{File, OpenOptions};
     use std::os::unix::fs::{MetadataExt as _, symlink};
-
     assert_eq!(
         BoundProgressRecoveryFailure::from_io(&std::io::Error::new(
             ErrorKind::WouldBlock,
@@ -694,7 +656,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         )),
         BoundProgressRecoveryFailure::InvalidData,
     );
-
     let fixture = || {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -789,7 +750,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         )
         .expect("stage progress append intent");
     };
-
     // Exercise the production writer at every journal-specific file seam.
     // Each failed acknowledgement is recovered before one exact retry.
     let journal_faults: [(&str, fn()); 3] = [
@@ -850,7 +810,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Some(DummySidecar { height: 1 })
         );
     }
-
     // Publication and cleanup each bind the immediate directory and every
     // ancestor through the Kura root. Fail every depth in both phases.
     for calls_before_failure in [0, 1] {
@@ -907,7 +866,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             ));
         }
     }
-
     // A build name is not authoritative: main mutation cannot start until
     // the atomic no-replace promotion publishes the final intent name.
     {
@@ -922,7 +880,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         assert!(!build_path.exists());
         assert!(!data_path.exists() && !index_path.exists());
     }
-
     // A partial first-write payload/index under a valid intent rolls back
     // to true pair absence, after which the durable source can retry once.
     {
@@ -964,7 +921,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Some(DummySidecar { height: 1 })
         );
     }
-
     // Once the exact payload suffix is complete, recovery rolls a torn
     // index forward from the bounded postimage and clears the marker.
     {
@@ -1004,7 +960,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         );
         assert!(!Kura::bound_progress_append_intent_path(&index_path).exists());
     }
-
     // A full-length suffix with the wrong digest is not a committed
     // postimage. Recovery restores the exact old pair and a later retry
     // appends the intended payload once.
@@ -1065,7 +1020,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         );
         assert_eq!(read(&data_path, &index_path, 2), None);
         assert!(!Kura::bound_progress_append_intent_path(&index_path).exists());
-
         persist(&kura, &data_path, &index_path, 2, &intended);
         assert_eq!(
             read(&data_path, &index_path, 2),
@@ -1076,7 +1030,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             old_data_len + u64::try_from(intended.len()).expect("intended suffix length")
         );
     }
-
     // A complete payload followed by a crash before an existing entry is
     // replaced is rolled forward without disturbing unrelated data bytes.
     {
@@ -1144,7 +1097,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             old_data_len + u64::try_from(replacement.len()).expect("replacement length")
         );
     }
-
     // Old binaries could crash after creating the index name or while
     // appending its final entry without a journal. Only the unambiguous
     // empty/partial suffix is rolled back; the durable source then retries.
@@ -1157,7 +1109,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             "bound recovery legacy bootstrap test",
         ));
         assert!(!index_path.exists());
-
         let based_payload = norito::to_bytes(&DummySidecar { height: 2 })
             .expect("encode legacy based-index payload");
         let based_header = SidecarIndexLayout::base_header(2);
@@ -1173,7 +1124,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             fs::metadata(&index_path).expect("base-header index").len(),
             0
         );
-
         let malformed_data = b"must not be truncated";
         let mut malformed_header = SidecarIndexLayout::base_header(2);
         malformed_header[8..16].copy_from_slice(&0_u64.to_le_bytes());
@@ -1194,7 +1144,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         );
         fs::remove_file(&data_path).expect("clear malformed-header data fixture");
         fs::remove_file(&index_path).expect("clear malformed-header index fixture");
-
         let payload =
             norito::to_bytes(&DummySidecar { height: 1 }).expect("encode legacy partial append");
         let entry = SidecarIndexEntry {
@@ -1217,7 +1166,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Some(DummySidecar { height: 1 })
         );
     }
-
     // A lone data temp precedes the index commit marker and is discarded.
     {
         let (_temp_dir, kura, data_path, index_path) = fixture();
@@ -1236,7 +1184,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Some(DummySidecar { height: 1 })
         );
     }
-
     // When both pre-publication temps are incomplete, cleanup removes the
     // index commit marker first and preserves the authoritative main pair.
     {
@@ -1259,7 +1206,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Some(DummySidecar { height: 1 })
         );
     }
-
     // A complete rewrite pair is published data-first and remains exact.
     {
         let (_temp_dir, kura, data_path, index_path) = fixture();
@@ -1291,7 +1237,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Some(DummySidecar { height: 7 })
         );
     }
-
     // An index-only recovery marker represents data that already reached
     // its main name. It is validated against that exact payload and promoted.
     {
@@ -1323,7 +1268,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Some(DummySidecar { height: 8 })
         );
     }
-
     let stage_prepend = |complete_payload: bool| {
         let (temp_dir, kura, data_path, index_path) = fixture();
         let height_two = norito::to_bytes(&DummySidecar { height: 2 }).expect("encode height two");
@@ -1377,7 +1321,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             original_len,
         )
     };
-
     // A complete prepend suffix is recovered by publishing its exact index.
     {
         let (_temp_dir, kura, data_path, index_path, temp_index_path, _) = stage_prepend(true);
@@ -1396,7 +1339,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Some(DummySidecar { height: 2 })
         );
     }
-
     // A partial prepend suffix was never published. Recovery keeps the
     // main index authoritative and truncates the incomplete payload.
     {
@@ -1420,7 +1362,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Some(DummySidecar { height: 2 })
         );
     }
-
     // Absence is only meaningful in the directory hierarchy that was
     // bound. Replacing that hierarchy after binding must not turn a
     // missing recovery artifact into a successful absence observation.
@@ -1435,7 +1376,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         let displaced_dir = temp_dir.path().join("displaced-lane-artifacts");
         fs::rename(&sidecar_dir, &displaced_dir).expect("displace bound namespace");
         fs::create_dir(&sidecar_dir).expect("install replacement namespace");
-
         let missing_temp = data_path.with_extension("norito.tmp");
         assert!(
             kura.open_optional_bound_progress_file(&namespace, &missing_temp)
@@ -1452,7 +1392,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             "the replacement namespace must remain untouched"
         );
     }
-
     // Unlike a build, a malformed published intent is an ambiguous
     // durable mutation authority and must fail closed without touching the
     // otherwise valid main pair.
@@ -1494,7 +1433,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Err(BoundProgressRecoveryFailure::InvalidData)
         );
     }
-
     // The pre-release V1 record had the same positional fields except for
     // the relative namespace identity. Even when that old layout is
     // canonically encoded and sealed under the intent digest domain, it is
@@ -1518,7 +1456,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             new_index_bytes: Vec<u8>,
             integrity_hash: Hash,
         }
-
         let (_temp_dir, kura, data_path, index_path) = fixture();
         let first = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode first");
         let second = norito::to_bytes(&DummySidecar { height: 2 }).expect("encode second");
@@ -1593,7 +1530,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             .expect("stage exact pre-namespace suffix");
         let data_before = fs::read(&data_path).expect("staged pre-namespace data");
         let index_before = fs::read(&index_path).expect("pre-namespace index bytes");
-
         assert!(!kura.recover_bound_progress_sidecar_artifacts(
             &data_path,
             &index_path,
@@ -1624,7 +1560,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Err(BoundProgressRecoveryFailure::InvalidData)
         );
     }
-
     // A canonical Norito record is still invalid authority when its index
     // postimage does not encode the journaled payload at the target
     // height. Classification must be terminal and recovery must not first
@@ -1687,7 +1622,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Err(BoundProgressRecoveryFailure::InvalidData)
         );
     }
-
     // Canonical encoding alone cannot make a corrupted undo window safe.
     // The record hash is verified before rollback is allowed to rewrite
     // an existing index entry.
@@ -1747,7 +1681,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Err(BoundProgressRecoveryFailure::InvalidData)
         );
     }
-
     // An intact, correctly sealed intent cannot be transplanted between
     // sibling lane directories even when the main pairs have identical
     // basenames, lengths, layouts, contents, and an exact roll-forward
@@ -1892,7 +1825,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             Err(BoundProgressRecoveryFailure::InvalidData)
         );
     }
-
     // Active and retired geometry namespaces are equally non-
     // interchangeable. This covers a deeper archive path rather than
     // relying only on sibling-name separation.
@@ -1985,7 +1917,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             "rejected archive authority must remain for diagnosis"
         );
     }
-
     // The identity deliberately excludes the absolute Kura root. Stop the
     // owner, rename the actual root directory (including the intent and
     // main pair), and reopen it at the new location: the same directory
@@ -2054,7 +1985,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         let source_root_metadata = fs::metadata(&source_root).expect("source root metadata");
         drop(source_namespace);
         drop(source_kura);
-
         fs::rename(&source_root, &relocated_root_path).expect("relocate whole Kura root");
         assert!(!source_root.exists(), "the old root path must be absent");
         let relocated_root_metadata =
@@ -2064,7 +1994,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             (relocated_root_metadata.dev(), relocated_root_metadata.ino(),),
             "root relocation must preserve the directory object"
         );
-
         let relocated_config = kura_config_for_path(&relocated_root_path, BLOCKS_IN_MEMORY);
         let (relocated_kura, _) =
             Kura::new(&relocated_config, &lane_config).expect("reopen relocated Kura root");
@@ -2097,7 +2026,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             read(&relocated_data, &relocated_index, 2),
             Some(DummySidecar { height: 2 })
         );
-
         let root_data = relocated_root.join("root-progress.norito");
         let root_index = relocated_root.join("root-progress.index");
         let root_namespace = relocated_kura
@@ -2111,7 +2039,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             "a root-level pair has an unambiguous empty parent identity"
         );
     }
-
     // Every predictable recovery name rejects a symlink without changing
     // either the main pair or the external target.
     for extension in [
@@ -2170,7 +2097,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             (index_identity.dev(), index_identity.ino())
         );
     }
-
     // The two new predictable names also reject multi-link and
     // non-regular substitutions, not just symlinks.
     {
@@ -2205,7 +2131,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             index_before
         );
     }
-
     {
         let (_temp_dir, kura, data_path, index_path) = fixture();
         let main = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode main");
@@ -2230,7 +2155,6 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         );
     }
 }
-
 fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
     for include_current_receipt in [false, true] {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -2276,7 +2200,6 @@ fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
         let first_proposal = proposal(&first);
         let second_proposal = proposal(&second);
         let third_proposal = proposal(&third);
-
         let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         kura.store_block(Arc::clone(&first))
             .expect("store first lane block");
@@ -2284,7 +2207,6 @@ fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
             .expect("store second lane block");
         kura.store_block(Arc::clone(&third))
             .expect("store third lane block");
-
         let persist_direct = |proposal: &LaneBlockProposalV1,
                               preflight_state_height: u64,
                               state_hash_marker: &'static [u8]| {
@@ -2326,7 +2248,6 @@ fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
                 .expect("persist intervening current-format receipt");
         }
         persist_direct(&third_proposal, 13, b"direct-snapshot-third-state");
-
         for entry in kura
             .lane_storage_entries
             .lock()
@@ -2383,7 +2304,6 @@ fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
                 }
             }
         }
-
         let structural = kura
             .active_lane_block_application_receipts_structural_snapshot()
             .expect("mixed/sparse structural snapshot must be readable");
@@ -2433,73 +2353,60 @@ fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
         }));
     }
 }
-
 mod progress_witness_durability {
     #[test]
     fn absent_progress_namespace_requires_every_directory_barrier() {
         super::absent_progress_namespace_requires_every_directory_barrier();
     }
-
     #[test]
     fn certified_lane_block_strict_retry_reissues_every_barrier() {
         super::certified_lane_block_strict_retry_reissues_every_barrier();
     }
-
     #[test]
     fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
         super::direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries();
     }
-
     #[test]
     fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
         super::lane_block_application_receipt_strict_retry_reissues_every_barrier();
     }
-
     #[test]
     fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
         super::initial_preindex_data_sync_failure_rolls_back_payload_before_retry();
     }
-
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         super::bound_progress_recovery_handles_crash_phases_without_path_escape();
     }
-
     #[cfg(unix)]
     #[test]
     fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
         super::progress_sidecar_mutation_rejects_symlinks_without_external_writes();
     }
-
     #[cfg(unix)]
     #[test]
     fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacement() {
         super::bound_progress_directory_binding_allows_child_mutation_but_rejects_replacement();
     }
-
     #[cfg(unix)]
     #[test]
     fn progress_prepend_directory_failure_retries_without_corruption() {
         super::progress_prepend_directory_failure_retries_without_corruption();
     }
-
     #[test]
     fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails() {
         super::predecessor_application_receipt_fails_closed_while_durability_barrier_fails();
     }
-
     #[test]
     fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
         super::strict_sidecar_retry_reissues_barriers_for_exact_existing_payload();
     }
-
     #[test]
     fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
         super::unindexed_crash_suffix_is_repaired_before_retry_or_append();
     }
 }
-
 #[test]
 fn roster_sidecar_read_reissues_durability_barriers() {
     let failure_modes: [(&str, fn()); 2] = [
@@ -2510,7 +2417,6 @@ fn roster_sidecar_read_reissues_durability_barriers() {
         let kura = Kura::blank_kura_for_testing();
         let block_hash = store_dummy_blocks(&kura, 1)[0];
         let sidecar = RosterSidecar::new(1, block_hash, None, None, None);
-
         inject_failure();
         assert!(
             !kura.write_roster_metadata(&sidecar),
@@ -2531,14 +2437,12 @@ fn roster_sidecar_read_reissues_durability_barriers() {
         assert_eq!(recovered.stake_snapshot, sidecar.stake_snapshot);
     }
 }
-
 #[test]
 fn sidecar_append_rejects_zero_height() {
     let temp_dir = TempDir::new().unwrap();
     let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let payload = norito::to_bytes(&DummySidecar { height: 0 }).expect("encode sidecar");
-
     assert!(
         !Kura::append_indexed_sidecar(
             &data_path,
@@ -2555,7 +2459,6 @@ fn sidecar_append_rejects_zero_height() {
     assert!(!data_path.exists(), "data file should not be created");
     assert!(!index_path.exists(), "index file should not be created");
 }
-
 #[test]
 fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
     let temp_dir = TempDir::new().unwrap();
@@ -2566,7 +2469,6 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
         height: high_height,
     })
     .expect("encode high sidecar");
-
     assert!(Kura::append_indexed_sidecar(
         &data_path,
         &index_path,
@@ -2582,7 +2484,6 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
         INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + PIPELINE_INDEX_ENTRY_SIZE_U64,
         "a high first height must not allocate entries from height one"
     );
-
     let mut index = std::fs::File::open(&index_path).expect("open based index");
     let index_len = index.metadata().expect("index metadata").len();
     let layout =
@@ -2590,7 +2491,6 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
     assert!(layout.is_based());
     assert_eq!(layout.base_height, high_height);
     assert_eq!(layout.height_range(), Some(high_height..=high_height));
-
     let temp_index_path = index_path.with_extension("index.tmp");
     fs::rename(&index_path, &temp_index_path).expect("stage index as recovery temp");
     let recovered = Kura::read_indexed_sidecar_from_paths(
@@ -2610,7 +2510,6 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
         !temp_index_path.exists(),
         "promoted temp index should be gone"
     );
-
     let preceding_height = high_height - 1;
     let preceding_payload = norito::to_bytes(&DummySidecar {
         height: preceding_height,
@@ -2637,7 +2536,6 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
         .expect("read sidecar after bounded backward prepend");
         assert_eq!(recovered.height, expected_height);
     }
-
     let sparse_height = high_height + 2;
     let sparse_payload = norito::to_bytes(&DummySidecar {
         height: sparse_height,
@@ -2682,7 +2580,6 @@ fn based_sidecar_index_handles_high_initial_height_and_sparse_recovery() {
         INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + 4 * PIPELINE_INDEX_ENTRY_SIZE_U64
     );
 }
-
 #[test]
 fn based_sidecar_index_pruning_preserves_base_height() {
     let temp_dir = TempDir::new().unwrap();
@@ -2690,7 +2587,6 @@ fn based_sidecar_index_pruning_preserves_base_height() {
     let index_path = temp_dir.path().join(LANE_ARTIFACTS_INDEX_FILE);
     let base_height = MAX_INDEXED_SIDECAR_GAP_ENTRIES * 2 + 11;
     let retention = NonZeroUsize::new(2).expect("non-zero retention");
-
     for height in base_height..=base_height + 2 {
         let payload = norito::to_bytes(&DummySidecar { height }).expect("encode based sidecar");
         assert!(Kura::append_indexed_sidecar(
@@ -2704,7 +2600,6 @@ fn based_sidecar_index_pruning_preserves_base_height() {
             SidecarIndexOrigin::FirstWrite,
         ));
     }
-
     assert!(
         Kura::read_indexed_sidecar_from_paths(
             base_height,
@@ -2727,7 +2622,6 @@ fn based_sidecar_index_pruning_preserves_base_height() {
         .expect("retained based sidecar");
         assert_eq!(sidecar.height, height);
     }
-
     let mut index = std::fs::File::open(&index_path).expect("open pruned based index");
     let index_len = index.metadata().expect("index metadata").len();
     let layout =
@@ -2742,7 +2636,6 @@ fn based_sidecar_index_pruning_preserves_base_height() {
         "main",
     ));
 }
-
 #[test]
 fn legacy_sidecar_index_keeps_normal_sparse_gaps_readable() {
     let temp_dir = TempDir::new().unwrap();
@@ -2761,7 +2654,6 @@ fn legacy_sidecar_index_keeps_normal_sparse_gaps_readable() {
             SidecarIndexOrigin::HeightOne,
         ));
     }
-
     assert_eq!(
         fs::metadata(&index_path).expect("index metadata").len(),
         4 * PIPELINE_INDEX_ENTRY_SIZE_U64,
@@ -2789,7 +2681,6 @@ fn legacy_sidecar_index_keeps_normal_sparse_gaps_readable() {
     .expect("read legacy sparse sidecar");
     assert_eq!(sidecar.height, 4);
 }
-
 #[test]
 fn sidecar_append_rejects_oversized_gap_without_file_growth() {
     let temp_dir = TempDir::new().unwrap();
@@ -2814,7 +2705,6 @@ fn sidecar_append_rejects_oversized_gap_without_file_growth() {
         height: hostile_height,
     })
     .expect("encode hostile sidecar");
-
     assert!(!Kura::append_indexed_sidecar(
         &data_path,
         &index_path,
@@ -2834,7 +2724,6 @@ fn sidecar_append_rejects_oversized_gap_without_file_growth() {
         index_before
     );
 }
-
 #[test]
 fn based_sidecar_append_rejects_oversized_backward_gap_without_file_growth() {
     let temp_dir = TempDir::new().unwrap();
@@ -2862,7 +2751,6 @@ fn based_sidecar_append_rejects_oversized_backward_gap_without_file_growth() {
         height: hostile_height,
     })
     .expect("encode hostile preceding sidecar");
-
     assert!(!Kura::append_indexed_sidecar(
         &data_path,
         &index_path,
@@ -2882,14 +2770,12 @@ fn based_sidecar_append_rejects_oversized_backward_gap_without_file_growth() {
         index_before
     );
 }
-
 #[test]
 fn sidecar_append_rejects_max_height_before_creating_files() {
     let temp_dir = TempDir::new().unwrap();
     let data_path = temp_dir.path().join(LANE_ARTIFACTS_DATA_FILE);
     let index_path = temp_dir.path().join(LANE_ARTIFACTS_INDEX_FILE);
     let payload = norito::to_bytes(&DummySidecar { height: u64::MAX }).expect("encode max sidecar");
-
     assert!(!Kura::append_indexed_sidecar(
         &data_path,
         &index_path,

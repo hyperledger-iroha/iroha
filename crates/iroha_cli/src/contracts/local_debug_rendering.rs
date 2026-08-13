@@ -1,12 +1,8 @@
 //! Rendering helpers for local contract-debug responses.
-
 use std::collections::BTreeMap;
-
 use eyre::{Result, WrapErr as _};
 use iroha::data_model::{isi::InstructionBox, prelude::StatePath};
-
 use super::{LocalContractDebugEntrypoint, LocalContractDebugParam};
-
 /// Build the stable JSON-facing entrypoint description for a local execution.
 pub(super) fn build_local_debug_entrypoint(
     descriptor: &ivm::EmbeddedEntrypointDescriptor,
@@ -27,7 +23,6 @@ pub(super) fn build_local_debug_entrypoint(
             .collect(),
     }
 }
-
 /// Serialize queued instructions without changing their canonical JSON shape.
 pub(super) fn render_queued_instructions(queued: &[InstructionBox]) -> Result<norito::json::Value> {
     let values = queued
@@ -37,7 +32,6 @@ pub(super) fn render_queued_instructions(queued: &[InstructionBox]) -> Result<no
         .wrap_err("failed to serialize queued instructions")?;
     Ok(norito::json::Value::Array(values))
 }
-
 /// Render the durable-state overlay using canonical state paths and hex values.
 pub(super) fn render_durable_state_overlay(
     overlay: &BTreeMap<StatePath, Option<Vec<u8>>>,

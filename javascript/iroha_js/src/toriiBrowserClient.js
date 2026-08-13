@@ -349,33 +349,20 @@ function hashLiteralCrc16(body) {
   for (const byte of Buffer.from(`hash:${body}`, "utf8")) {
     crc ^= (byte & 0xff) << 8;
     for (let bit = 0; bit < 8; bit += 1) {
-      crc =
-        (crc & 0x8000) !== 0
-          ? ((crc << 1) ^ 0x1021) & 0xffff
-          : (crc << 1) & 0xffff;
+      crc = (crc & 0x8000) !== 0 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
     }
   }
   return crc.toString(16).toUpperCase().padStart(4, "0");
 }
 
 function requireMatchingReceiptHashHeader(response, name, expectedHash) {
-  const literal = response.headers.get(name);
-  if (literal === null) return;
-  const match = HASH_LITERAL_PATTERN.exec(literal);
-  if (match === null || hashLiteralCrc16(match[1]) !== match[2]) {
-    throw new Error(`${name} must be a canonical Iroha hash literal`);
+  const value = response.headers.get(name);
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new Error(`${name} must occur exactly once as a lowercase 32-byte hash`);
   }
-  if (match[1].toLowerCase() !== expectedHash) {
+  if (value !== expectedHash) {
     throw new Error(`${name} does not match the locally signed transaction`);
   }
-}
-
-function innerSignedTransactionHashHex(versionedSignedTransaction) {
-  // Torii's signed-transaction field hashes the unversioned inner wire body.
-  // The public pipeline identity instead hashes its External entrypoint wrapper.
-  const digest = Buffer.from(blake2b256(versionedSignedTransaction.subarray(1)));
-  digest[digest.length - 1] |= 1;
-  return digest.toString("hex");
 }
 
 function requireTransactionBytes(value, context) {
@@ -1731,7 +1718,6 @@ export class ToriiBrowserClient {
       "submitTransaction signedTransaction",
     );
     const expectedEntrypointHash = browserSignedTransactionHashHex(body);
-    const expectedSignedTransactionHash = innerSignedTransactionHashHex(body);
     return this._json("POST", "/v1/pipeline/transactions", {
       rawBody: body,
       contentType: "application/x-norito",
@@ -1756,7 +1742,7 @@ export class ToriiBrowserClient {
         requireMatchingReceiptHashHeader(
           response,
           "x-iroha-signed-transaction-hash",
-          expectedSignedTransactionHash,
+          expectedEntrypointHash,
         );
       },
     });

@@ -3,7 +3,6 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
-
 use indexmap::{IndexMap, IndexSet};
 use iroha_data_model::events::data::prelude::{
     AccountEventFilter, AccountEventSet, AssetDefinitionEventFilter, AssetDefinitionEventSet,
@@ -40,13 +39,9 @@ use iroha_primitives::{
     numeric::{MAX_MANTISSA_BYTES, Numeric, NumericError, RoundingMode},
 };
 use norito::json::{self, native::Number as JsonNumber};
-
 use super::ast::*;
-use crate::builtins::{
-    Builtin, BuiltinCallPolicy, BuiltinMode, BuiltinSurface, PointerConstructor,
-};
+use crate::builtins::{Builtin, BuiltinCallPolicy, BuiltinMode, BuiltinSurface, PointerConstructor};
 use crate::source::{MAX_NESTING_DEPTH, MAX_TOKENS};
-
 /// First-release collection-iteration limit.
 ///
 /// V1 accepts only compiler-proven literal bounds. This cap is part of the
@@ -1327,7 +1322,6 @@ impl SemanticContext {
         vars: &HashMap<String, Type>,
     ) -> Result<bool, SemanticError> {
         use crate::resolved::ResolvedValueTarget;
-
         let Some((target, _)) = self.validate_value_target(expression, name, vars)? else {
             return Ok(self.current_mutable_bindings.borrow().contains(name));
         };
@@ -4907,7 +4901,6 @@ fn coerce_contextual_numeric_literals(
     right: &mut TypedExpr,
 ) -> Result<(), SemanticError> {
     use BinaryOp::*;
-
     let comparison = matches!(op, Eq | Ne | Lt | Le | Gt | Ge);
     let left_type = resolve_struct_type(&left.ty);
     let right_type = resolve_struct_type(&right.ty);
@@ -10765,7 +10758,6 @@ fn analyze_list_method_call(
 }
 fn numeric_rounding_mode(expression: &Expr) -> Option<(RoundingMode, i64)> {
     use ivm_abi::numeric::RoundingModeV1 as AbiMode;
-
     let (mode, tag) = match expression {
         Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
             return numeric_rounding_mode(expression);
@@ -15212,7 +15204,6 @@ fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bo
 mod tests {
     use super::*;
     use crate::parser::parse_test_fragment as parse;
-
     fn shared_struct_dag_source(levels: usize, repeated_reads: usize) -> String {
         let mut source = String::from("seiyaku SharedTypes {\n");
         for index in 0..levels {
@@ -18369,7 +18360,6 @@ mod tests {
     #[test]
     fn trigger_decl_builds_typed_metadata() {
         use iroha_data_model::account::AccountId;
-
         let authority_literal = sample_account_literal();
         let program = parse(&format!(
             r#"
@@ -18509,7 +18499,6 @@ mod tests {
     #[test]
     fn trigger_decl_supports_transfer_specific_asset_filter() {
         use iroha_data_model::account::ParsedAccountId;
-
         let source_literal = sample_account_literal();
         let source = AccountId::parse_encoded(source_literal.as_str())
             .map(ParsedAccountId::into_account_id)
@@ -18797,7 +18786,6 @@ mod tests {
     #[test]
     fn trigger_decl_supports_pipeline_filter() {
         use iroha_data_model::events::pipeline::{BlockEventFilter, BlockStatus};
-
         let program = parse(include_str!(
             "semantic/test_sources/trigger_decl_supports_pipeline_filter_1.ko"
         ))
@@ -18814,7 +18802,6 @@ mod tests {
     #[test]
     fn trigger_decl_supports_pipeline_transaction_approved_filter() {
         use iroha_data_model::events::pipeline::{TransactionEventFilter, TransactionStatus};
-
         let program = parse(include_str!(
             "semantic/test_sources/trigger_decl_supports_pipeline_transaction_approved_filter_1.ko"
         ))

@@ -1,9 +1,6 @@
 //! Sequential final-proof replay adapter for B0.
-
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::CanonicalProofSectionV2;
-
 use super::*;
-
 pub(in super::super) struct FriLayer0CanonicalProofReplayV2 {
     owner: Option<FriLayer0RootedV2>,
     purpose: Option<CanonicalTreePurposeBoundV2>,
@@ -11,7 +8,6 @@ pub(in super::super) struct FriLayer0CanonicalProofReplayV2 {
     next_column: u64,
     ordinal: u8,
 }
-
 impl FriLayer0RootedV2 {
     pub(in super::super) fn begin_canonical_proof_replay_v2(
         mut self,
@@ -48,7 +44,6 @@ impl FriLayer0RootedV2 {
             ordinal: section.ordinal_v2(),
         })
     }
-
     fn validate_canonical_shape_v2(
         &self,
         shape: CanonicalTreeReplayShapeV2,
@@ -64,17 +59,14 @@ impl FriLayer0RootedV2 {
         Ok(())
     }
 }
-
 impl CanonicalTreeReplayV2 for FriLayer0CanonicalProofReplayV2 {
     type Owner = FriLayer0RootedV2;
-
     fn shape_v2(&self) -> Result<CanonicalTreeReplayShapeV2, ProverPrerequisiteErrorV2> {
         if self.owner.is_none() || self.purpose.is_none() {
             return Err(ProverPrerequisiteErrorV2::Poisoned);
         }
         Ok(self.shape)
     }
-
     fn read_next_column_v2(
         &mut self,
     ) -> Result<AuthenticatedReplayChunkV2, ProverPrerequisiteErrorV2> {
@@ -94,7 +86,6 @@ impl CanonicalTreeReplayV2 for FriLayer0CanonicalProofReplayV2 {
         self.owner = Some(owner);
         Ok(chunk)
     }
-
     fn complete_v2(mut self) -> Result<Self::Owner, ProverPrerequisiteErrorV2> {
         let owner = self
             .owner

@@ -11,7 +11,6 @@
 //! authentication paths for each access together with the resulting Merkle
 //! roots, allowing external circuits to verify the trace without storing the
 //! full register file.
-
 /// Default maximum trace length used for padding.
 /// Default maximum trace length used for padding.
 ///
@@ -19,7 +18,6 @@
 /// cycles. As the proving backend and hardware improved we can handle larger
 /// traces, so the limit is now 2^17 cycles by default.
 pub const MAX_CYCLES: u64 = 1 << 17; // 131_072 cycles
-
 use std::{
     cell::RefCell,
     num::NonZeroU64,
@@ -28,44 +26,36 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
-
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
-
 thread_local! {
     /// Global pointer used by [`Registers`] to log Merkle proofs.
     pub(crate) static REG_LOGGER: RefCell<Option<*mut RegLog>> = const { RefCell::new(None) };
 }
-
 static PROVER_THREADS: AtomicUsize = AtomicUsize::new(0);
 static PROVER_STACK_SIZE: LazyLock<AtomicUsize> =
     LazyLock::new(|| AtomicUsize::new(crate::parallel::thread_stack_size()));
 static PROVER_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
-
 /// Install a register logger for the current thread.
 pub fn set_reg_logger(ptr: Option<*mut RegLog>) {
     REG_LOGGER.with(|l| *l.borrow_mut() = ptr);
 }
-
 /// RAII helper that clears the register logger when dropped.
 pub struct RegLoggerGuard {
     installed: bool,
 }
-
 impl RegLoggerGuard {
     /// Install the register logger and return a guard that will clear it on drop.
     pub fn install(log: &mut RegLog) -> Self {
         set_reg_logger(Some(log as *mut _));
         Self { installed: true }
     }
-
     /// Return a no-op guard for cases where register logging is disabled.
     pub const fn noop() -> Self {
         Self { installed: false }
     }
 }
-
 impl Drop for RegLoggerGuard {
     fn drop(&mut self) {
         if self.installed {
@@ -73,7 +63,6 @@ impl Drop for RegLoggerGuard {
         }
     }
 }
-
 /// Execute `f` if a register logger is installed.
 pub(crate) fn with_reg_logger<F: FnOnce(&mut RegLog)>(f: F) {
     REG_LOGGER.with(|l| {
@@ -82,7 +71,6 @@ pub(crate) fn with_reg_logger<F: FnOnce(&mut RegLog)>(f: F) {
         }
     });
 }
-
 fn configured_prover_threads() -> usize {
     let raw = PROVER_THREADS.load(Ordering::Relaxed);
     if raw == 0 {
@@ -91,27 +79,22 @@ fn configured_prover_threads() -> usize {
         raw
     }
 }
-
 /// Return the effective prover/trace verification worker cap.
 #[must_use]
 pub fn prover_threads() -> usize {
     configured_prover_threads()
 }
-
 /// Configure the Rayon worker cap for prover/trace verification (0 = auto/physical cores).
 pub fn set_prover_threads(threads: usize) {
     PROVER_THREADS.store(threads, Ordering::Relaxed);
 }
-
 /// Override the stack size used by prover Rayon pools.
 pub fn set_prover_stack_size(bytes: usize) {
     PROVER_STACK_SIZE.store(bytes.max(1), Ordering::Relaxed);
 }
-
 fn prover_stack_size() -> usize {
     PROVER_STACK_SIZE.load(Ordering::Relaxed)
 }
-
 fn prover_pool() -> &'static rayon::ThreadPool {
     PROVER_POOL.get_or_init(|| {
         let threads = configured_prover_threads();
@@ -122,11 +105,9 @@ fn prover_pool() -> &'static rayon::ThreadPool {
             .expect("failed to build prover thread pool")
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn reg_logger_guard_clears_on_drop() {
         let mut log = RegLog::default();
@@ -138,14 +119,12 @@ mod tests {
             });
             assert!(observed, "guard must expose logger while active");
         }
-
         let mut ran_after_drop = false;
         with_reg_logger(|_| {
             ran_after_drop = true;
         });
         assert!(!ran_after_drop, "logger should be cleared after guard drop");
     }
-
     #[test]
     fn reg_logger_guard_clears_on_unwind() {
         let mut log = RegLog::default();
@@ -154,14 +133,12 @@ mod tests {
             panic!("intentional");
         }));
         assert!(result.is_err(), "expected panic to be captured");
-
         let mut ran_after_panic = false;
         with_reg_logger(|_| {
             ran_after_panic = true;
         });
         assert!(!ran_after_panic, "logger should be cleared after panic");
     }
-
     #[test]
     fn prover_thread_override_round_trips() {
         let baseline = super::configured_prover_threads();
@@ -173,7 +150,6 @@ mod tests {
         assert!(auto >= 1);
         super::set_prover_threads(baseline);
     }
-
     #[test]
     fn verify_trace_handles_empty_inputs() {
         // Ensure a pre-existing global Rayon pool does not block prover pool creation.
@@ -183,7 +159,6 @@ mod tests {
         let result = verify_trace(&[], &[], &[], &[]);
         assert!(result.is_ok());
     }
-
     #[test]
     fn verify_trace_rejects_cross_chunk_memory_writes() {
         let root =
@@ -204,7 +179,6 @@ mod tests {
         );
     }
 }
-
 /// A constraint generated by an ASSERT-like instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Constraint {
@@ -219,19 +193,16 @@ pub enum Constraint {
     /// Register value must fit in `bits` bits at cycle `cycle`.
     Range { reg: usize, bits: u8, cycle: u64 },
 }
-
 /// Collector for constraints encountered during execution.
 #[derive(Default, Clone)]
 pub struct ConstraintLog {
     pub list: Vec<Constraint>,
 }
-
 impl ConstraintLog {
     pub fn record(&mut self, c: Constraint) {
         self.list.push(c);
     }
 }
-
 /// A memory access recorded during ZK execution.
 /// Record of a single memory operation together with the Merkle authentication
 /// path to the accessed location.  The path proves inclusion of the affected
@@ -253,19 +224,16 @@ pub enum MemEvent {
         root: HashOf<MerkleTree<[u8; 32]>>,
     },
 }
-
 /// Collector for memory read/write events.
 #[derive(Default, Clone)]
 pub struct MemLog {
     pub events: Vec<MemEvent>,
 }
-
 impl MemLog {
     pub fn record(&mut self, e: MemEvent) {
         self.events.push(e);
     }
 }
-
 /// Record of a register access together with its Merkle proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegEvent {
@@ -284,18 +252,15 @@ pub enum RegEvent {
         root: HashOf<MerkleTree<[u8; 32]>>,
     },
 }
-
 #[derive(Default, Clone)]
 pub struct RegLog {
     pub events: Vec<RegEvent>,
 }
-
 impl RegLog {
     pub fn record(&mut self, e: RegEvent) {
         self.events.push(e);
     }
 }
-
 /// Snapshot of the VM state for one cycle used when generating ZK proofs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegisterState {
@@ -303,7 +268,6 @@ pub struct RegisterState {
     pub gpr: [u64; 256],
     pub tags: [bool; 256],
 }
-
 /// Collector for the register trace. When zero-knowledge padding is enabled the
 /// prover needs the complete sequence of register states to construct the
 /// witness.
@@ -311,27 +275,23 @@ pub struct RegisterState {
 pub struct TraceLog {
     pub states: Vec<RegisterState>,
 }
-
 impl TraceLog {
     pub fn record(&mut self, pc: u64, gpr: [u64; 256], tags: [bool; 256]) {
         self.states.push(RegisterState { pc, gpr, tags });
     }
 }
-
 /// Compact trace log storing only changed registers.
 #[derive(Default, Clone)]
 pub struct DeltaTraceLog {
     pub entries: Vec<DeltaEntry>,
     last: Option<RegisterState>,
 }
-
 /// One compact trace entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeltaEntry {
     pub pc: u64,
     pub changes: Vec<(usize, u64, bool)>,
 }
-
 impl DeltaTraceLog {
     pub fn record(&mut self, pc: u64, gpr: [u64; 256], tags: [bool; 256]) {
         if let Some(prev) = &self.last {
@@ -353,7 +313,6 @@ impl DeltaTraceLog {
         }
         self.last = Some(RegisterState { pc, gpr, tags });
     }
-
     pub fn expand(&self) -> Vec<RegisterState> {
         let mut result = Vec::new();
         let (mut gpr, mut tags) = if let Some(first) = self.entries.first() {
@@ -386,7 +345,6 @@ impl DeltaTraceLog {
         result
     }
 }
-
 /// Merkle roots of registers and memory for a single cycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepEntry {
@@ -394,13 +352,11 @@ pub struct StepEntry {
     pub reg_root: HashOf<MerkleTree<[u8; 32]>>,
     pub mem_root: HashOf<MerkleTree<[u8; 32]>>,
 }
-
 /// Collector for per-cycle Merkle roots.
 #[derive(Default, Clone)]
 pub struct StepLog {
     pub steps: Vec<StepEntry>,
 }
-
 impl StepLog {
     pub fn record(
         &mut self,
@@ -415,7 +371,6 @@ impl StepLog {
         });
     }
 }
-
 /// Verify a trace against recorded constraints.
 ///
 /// This helper is a lightweight stand‑in for a real proof verifier. It checks
@@ -464,7 +419,6 @@ pub fn verify_trace(
             }
             Ok::<(), crate::error::VMError>(())
         })?;
-
         // Verify memory Merkle proofs
         mem_log.par_iter().try_for_each(|e| {
             const CHUNK: usize = 32;
@@ -516,7 +470,6 @@ pub fn verify_trace(
                 _ => Err(crate::error::VMError::AssertionFailed),
             }
         })?;
-
         // Verify register Merkle proofs
         reg_log.par_iter().try_for_each(|e| {
             let (idx, value, tag, path, root) = match e {
@@ -563,7 +516,6 @@ pub fn verify_trace(
                 Err(crate::error::VMError::AssertionFailed)
             }
         })?;
-
         if trace
             .last()
             .map(|state| state.gpr.contains(&0xDEAD_BEEF_DEAD_BEEFu64))

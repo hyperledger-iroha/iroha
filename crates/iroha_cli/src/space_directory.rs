@@ -1,12 +1,10 @@
 //! Space Directory operator helpers.
-
 use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use crate::{Run, RunContext};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
@@ -35,7 +33,6 @@ use reqwest::{
     header::{ACCEPT, HeaderValue},
 };
 use url::Url;
-
 const SPACE_DIRECTORY_INPUT_MAX_BYTES_V1: usize = super::MAX_CLI_STDIN_BYTES_V1;
 const SPACE_DIRECTORY_MAX_SEQUENCE_ELEMENTS_V1: usize = 65_536;
 const SPACE_DIRECTORY_MAX_TOTAL_ELEMENTS_V1: usize = 4 * SPACE_DIRECTORY_MAX_SEQUENCE_ELEMENTS_V1;
@@ -43,7 +40,6 @@ const SPACE_DIRECTORY_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 128 * 1024 * 1024;
 const SPACE_DIRECTORY_MAX_NESTING_DEPTH_V1: usize = 64;
 const SPACE_DIRECTORY_ERROR_PREVIEW_BYTES_V1: usize = 4 * 1024;
 const SPACE_DIRECTORY_OUTPUT_MAX_BYTES_V1: usize = 2 * SPACE_DIRECTORY_INPUT_MAX_BYTES_V1;
-
 const SPACE_DIRECTORY_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
     SPACE_DIRECTORY_MAX_SEQUENCE_ELEMENTS_V1,
     SPACE_DIRECTORY_INPUT_MAX_BYTES_V1,
@@ -51,7 +47,6 @@ const SPACE_DIRECTORY_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLim
     SPACE_DIRECTORY_MAX_DECODE_ALLOCATION_BYTES_V1,
     SPACE_DIRECTORY_MAX_NESTING_DEPTH_V1,
 );
-
 #[allow(clippy::large_enum_variant)]
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -62,7 +57,6 @@ pub enum Command {
     #[command(subcommand)]
     Bindings(BindingsCommand),
 }
-
 #[allow(clippy::large_enum_variant)]
 #[derive(clap::Subcommand, Debug)]
 pub enum ManifestCommand {
@@ -81,7 +75,6 @@ pub enum ManifestCommand {
     /// Scaffold manifest/profile templates for a UAID + dataspace pair.
     Scaffold(ManifestScaffoldArgs),
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ManifestAuditBundleArgs {
     /// Path to the Norito-encoded `AssetPermissionManifest` (.to).
@@ -100,7 +93,6 @@ pub struct ManifestAuditBundleArgs {
     #[arg(long, value_name = "TEXT")]
     pub notes: Option<String>,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ManifestPublishArgs {
     /// Path to the Norito-encoded `AssetPermissionManifest` (.to).
@@ -113,7 +105,6 @@ pub struct ManifestPublishArgs {
     #[arg(long, value_name = "TEXT")]
     pub reason: Option<String>,
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -122,7 +113,6 @@ impl Run for Command {
         }
     }
 }
-
 impl Run for ManifestCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -136,7 +126,6 @@ impl Run for ManifestCommand {
         }
     }
 }
-
 impl Run for ManifestPublishArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let manifest = self.load_manifest()?;
@@ -152,13 +141,11 @@ impl Run for ManifestPublishArgs {
         context.finish(vec![isi])
     }
 }
-
 impl ManifestPublishArgs {
     fn load_manifest(&self) -> Result<AssetPermissionManifest> {
         load_manifest_from_sources(self.manifest.as_deref(), self.manifest_json.as_deref())
     }
 }
-
 fn apply_manifest_reason_bounded(
     manifest: &mut AssetPermissionManifest,
     reason: &str,
@@ -188,7 +175,6 @@ fn apply_manifest_reason_bounded(
     }
     Ok(())
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ManifestEncodeArgs {
     /// Path to the JSON `AssetPermissionManifest`.
@@ -201,30 +187,25 @@ pub struct ManifestEncodeArgs {
     #[arg(long, value_name = "PATH")]
     pub hash_out: Option<PathBuf>,
 }
-
 impl ManifestEncodeArgs {
     fn resolve_out(&self) -> PathBuf {
         self.out
             .clone()
             .unwrap_or_else(|| self.json.with_extension("manifest.to"))
     }
-
     fn resolve_hash_out(&self, to_path: &Path) -> PathBuf {
         self.hash_out
             .clone()
             .unwrap_or_else(|| to_path.with_extension("hash"))
     }
 }
-
 impl Run for ManifestEncodeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let json_bytes = read_space_directory_file_bounded(&self.json, "manifest JSON")?;
         let manifest: AssetPermissionManifest =
             decode_space_directory_json(&json_bytes, "manifest JSON")?;
-
         let encoded = norito::core::to_bytes_bounded(&manifest, SPACE_DIRECTORY_INPUT_MAX_BYTES_V1)
             .map_err(|error| eyre!("failed to encode bounded manifest payload: {error}"))?;
-
         let out_path = self.resolve_out();
         if let Some(parent) = out_path.parent()
             && !parent.as_os_str().is_empty()
@@ -235,7 +216,6 @@ impl Run for ManifestEncodeArgs {
         std::fs::write(&out_path, &encoded).wrap_err_with(|| {
             format!("failed to write Norito payload to {}", out_path.display())
         })?;
-
         let hash = iroha_crypto::Hash::new(&encoded);
         let hash_hex = hex::encode(hash.as_ref());
         let hash_path = self.resolve_hash_out(out_path.as_path());
@@ -247,7 +227,6 @@ impl Run for ManifestEncodeArgs {
         std::fs::write(&hash_path, format!("{hash_hex}\n")).wrap_err_with(|| {
             format!("failed to write manifest hash to {}", hash_path.display())
         })?;
-
         context.println(format!(
             "Wrote Norito payload ({:?} bytes) to {}",
             encoded.len(),
@@ -261,7 +240,6 @@ impl Run for ManifestEncodeArgs {
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ManifestRevokeArgs {
     /// UAID whose manifest should be revoked.
@@ -277,7 +255,6 @@ pub struct ManifestRevokeArgs {
     #[arg(long, value_name = "TEXT")]
     pub reason: Option<String>,
 }
-
 impl Run for ManifestRevokeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let uaid = self
@@ -294,7 +271,6 @@ impl Run for ManifestRevokeArgs {
         context.finish(vec![InstructionBox::from(instruction)])
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ManifestExpireArgs {
     /// UAID whose manifest should be expired.
@@ -307,7 +283,6 @@ pub struct ManifestExpireArgs {
     #[arg(long, value_name = "EPOCH")]
     pub expired_epoch: u64,
 }
-
 impl Run for ManifestExpireArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let uaid = self
@@ -323,7 +298,6 @@ impl Run for ManifestExpireArgs {
         context.finish(vec![InstructionBox::from(instruction)])
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ManifestFetchArgs {
     /// UAID literal whose manifests should be fetched.
@@ -345,7 +319,6 @@ pub struct ManifestFetchArgs {
     #[arg(long = "json-out", value_name = "PATH")]
     pub json_out: Option<PathBuf>,
 }
-
 impl Run for ManifestFetchArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = SpaceDirectoryRestClient::new(context.config())?;
@@ -356,7 +329,6 @@ impl Run for ManifestFetchArgs {
         context.print_data(&payload)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ManifestScaffoldArgs {
     /// Universal account identifier (`uaid:<hex>` or raw 64-hex digest, LSB=1).
@@ -393,7 +365,6 @@ pub struct ManifestScaffoldArgs {
     #[command(flatten)]
     pub profile: ManifestScaffoldProfileArgs,
 }
-
 #[derive(clap::Args, Debug, Default)]
 pub struct ManifestScaffoldAllowArgs {
     /// Optional dataspace override for the allow entry scope.
@@ -425,7 +396,6 @@ pub struct ManifestScaffoldAllowArgs {
     #[arg(long = "allow-notes", value_name = "TEXT", id = "allow_notes")]
     pub notes: Option<String>,
 }
-
 #[derive(clap::Args, Debug, Default)]
 pub struct ManifestScaffoldDenyArgs {
     /// Optional dataspace override for the deny entry scope.
@@ -450,7 +420,6 @@ pub struct ManifestScaffoldDenyArgs {
     #[arg(long = "deny-notes", value_name = "TEXT", id = "deny_notes")]
     pub notes: Option<String>,
 }
-
 #[derive(clap::Args, Debug, Default)]
 pub struct ManifestScaffoldProfileArgs {
     /// Dataspace profile identifier (default `profile.<dataspace>.v1`).
@@ -551,7 +520,6 @@ pub struct ManifestScaffoldProfileArgs {
     )]
     pub pagerduty_service: Option<String>,
 }
-
 impl Run for ManifestScaffoldArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let uaid = parse_uaid_literal(&self.uaid)?;
@@ -567,14 +535,12 @@ impl Run for ManifestScaffoldArgs {
             expiry_epoch: self.expiry_epoch,
             entries,
         };
-
         let manifest_path = self.resolve_manifest_out(&manifest)?;
         write_json(&manifest_path, &manifest)?;
         context.println(format!(
             "Wrote Space Directory manifest scaffold to {}",
             manifest_path.display()
         ))?;
-
         if let Some(profile_path) = self.resolve_profile_out(&manifest_path)? {
             let profile_json = self
                 .profile
@@ -585,11 +551,9 @@ impl Run for ManifestScaffoldArgs {
                 profile_path.display()
             ))?;
         }
-
         Ok(())
     }
 }
-
 impl ManifestScaffoldArgs {
     fn build_entries(&self, manifest_dataspace: DataSpaceId) -> Result<Vec<ManifestEntry>> {
         let mut entries = Vec::new();
@@ -607,7 +571,6 @@ impl ManifestScaffoldArgs {
         }
         Ok(entries)
     }
-
     fn resolve_manifest_out(&self, manifest: &AssetPermissionManifest) -> Result<PathBuf> {
         let path = self.manifest_out.as_ref().map_or_else(
             || {
@@ -623,7 +586,6 @@ impl ManifestScaffoldArgs {
         ensure_parent_dir(&path)?;
         Ok(path)
     }
-
     fn resolve_profile_out(&self, manifest_path: &Path) -> Result<Option<PathBuf>> {
         let path = self.profile_out.as_ref().map_or_else(
             || {
@@ -638,7 +600,6 @@ impl ManifestScaffoldArgs {
         Ok(Some(path))
     }
 }
-
 impl ManifestScaffoldAllowArgs {
     fn build_entry(
         &self,
@@ -672,7 +633,6 @@ impl ManifestScaffoldAllowArgs {
             notes,
         }))
     }
-
     fn is_empty(&self) -> bool {
         self.dataspace.is_none()
             && self.program.is_none()
@@ -682,7 +642,6 @@ impl ManifestScaffoldAllowArgs {
             && self.max_amount.is_none()
     }
 }
-
 impl ManifestScaffoldDenyArgs {
     fn build_entry(
         &self,
@@ -712,7 +671,6 @@ impl ManifestScaffoldDenyArgs {
             notes,
         }))
     }
-
     fn is_empty(&self) -> bool {
         self.dataspace.is_none()
             && self.program.is_none()
@@ -722,7 +680,6 @@ impl ManifestScaffoldDenyArgs {
             && self.reason.is_none()
     }
 }
-
 impl ManifestScaffoldProfileArgs {
     #[allow(clippy::too_many_lines)]
     fn build_profile_value(
@@ -783,7 +740,6 @@ impl ManifestScaffoldProfileArgs {
             .pagerduty_service
             .clone()
             .unwrap_or_else(|| "space-directory-oncall".to_owned());
-
         let mut governance = json::Map::new();
         governance.insert("issuer".into(), JsonValue::from(governance_issuer));
         governance.insert("evidence_ticket".into(), JsonValue::from(governance_ticket));
@@ -791,7 +747,6 @@ impl ManifestScaffoldProfileArgs {
             "quorum".into(),
             JsonValue::from(u64::from(governance_quorum)),
         );
-
         let mut da_profile = json::Map::new();
         da_profile.insert("class".into(), JsonValue::from(da_class));
         da_profile.insert("quorum".into(), JsonValue::from(u64::from(da_quorum)));
@@ -808,7 +763,6 @@ impl ManifestScaffoldProfileArgs {
             "rotation_epochs".into(),
             JsonValue::from(da_rotation_epochs),
         );
-
         let mut composability = json::Map::new();
         composability.insert("group_id_hex".into(), JsonValue::from(composability_group));
         composability.insert(
@@ -820,7 +774,6 @@ impl ManifestScaffoldProfileArgs {
             "deny_wins_policy".into(),
             JsonValue::from(default_notes.unwrap_or("update with governance guidance")),
         );
-
         let mut audit_hooks = json::Map::new();
         audit_hooks.insert(
             "events".into(),
@@ -834,7 +787,6 @@ impl ManifestScaffoldProfileArgs {
             "pagerduty_service".into(),
             JsonValue::from(pagerduty_service),
         );
-
         let mut profile = json::Map::new();
         profile.insert("profile_id".into(), JsonValue::from(profile_id));
         profile.insert("dataspace".into(), JsonValue::from(dataspace));
@@ -863,17 +815,14 @@ impl ManifestScaffoldProfileArgs {
             JsonValue::Object(composability),
         );
         profile.insert("audit_hooks".into(), JsonValue::Object(audit_hooks));
-
         JsonValue::Object(profile)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum BindingsCommand {
     /// Fetch UAID dataspace bindings via Torii.
     Fetch(BindingsFetchArgs),
 }
-
 impl Run for BindingsCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -881,7 +830,6 @@ impl Run for BindingsCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct BindingsFetchArgs {
     /// UAID literal whose bindings should be fetched.
@@ -891,7 +839,6 @@ pub struct BindingsFetchArgs {
     #[arg(long = "json-out", value_name = "PATH")]
     pub json_out: Option<PathBuf>,
 }
-
 impl Run for BindingsFetchArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = SpaceDirectoryRestClient::new(context.config())?;
@@ -902,7 +849,6 @@ impl Run for BindingsFetchArgs {
         context.print_data(&payload)
     }
 }
-
 #[derive(Default, clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ManifestStatusArg {
     Active,
@@ -910,7 +856,6 @@ pub enum ManifestStatusArg {
     #[default]
     All,
 }
-
 impl ManifestStatusArg {
     fn as_query_value(self) -> &'static str {
         match self {
@@ -920,7 +865,6 @@ impl ManifestStatusArg {
         }
     }
 }
-
 impl Run for ManifestAuditBundleArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let manifest =
@@ -933,19 +877,16 @@ impl Run for ManifestAuditBundleArgs {
                 self.out_dir.display()
             )
         })?;
-
         let manifest_json_name = "manifest.json";
         let manifest_to_name = "manifest.to";
         let manifest_hash_name = "manifest.hash";
         let profile_json_name = "profile.json";
         let bundle_name = "audit_bundle.json";
-
         let manifest_json_path = self.out_dir.join(manifest_json_name);
         let manifest_to_path = self.out_dir.join(manifest_to_name);
         let manifest_hash_path = self.out_dir.join(manifest_hash_name);
         let profile_out_path = self.out_dir.join(profile_json_name);
         let bundle_path = self.out_dir.join(bundle_name);
-
         let manifest_json_bytes = encode_space_directory_json_bounded(&manifest)
             .wrap_err("failed to serialize manifest JSON for audit bundle")?;
         fs::write(&manifest_json_path, manifest_json_bytes).wrap_err_with(|| {
@@ -954,14 +895,12 @@ impl Run for ManifestAuditBundleArgs {
                 manifest_json_path.display()
             )
         })?;
-
         fs::write(&manifest_to_path, &encoded).wrap_err_with(|| {
             format!(
                 "failed to write manifest Norito payload to {}",
                 manifest_to_path.display()
             )
         })?;
-
         let manifest_hash = iroha_crypto::Hash::new(&encoded);
         let manifest_hash_hex = hex::encode(manifest_hash.as_ref());
         fs::write(&manifest_hash_path, format!("{manifest_hash_hex}\n")).wrap_err_with(|| {
@@ -970,7 +909,6 @@ impl Run for ManifestAuditBundleArgs {
                 manifest_hash_path.display()
             )
         })?;
-
         let profile_bytes = read_space_directory_file_bounded(&self.profile, "dataspace profile")?;
         let profile_json: JsonValue =
             decode_space_directory_json(&profile_bytes, "dataspace profile JSON")?;
@@ -983,7 +921,6 @@ impl Run for ManifestAuditBundleArgs {
                 profile_out_path.display()
             )
         })?;
-
         let audit_hooks = extract_audit_hooks(&profile_json)?;
         let generated_at_ms = current_unix_time_ms()?;
         let dataspace_id: u64 = manifest.dataspace.into();
@@ -1004,13 +941,11 @@ impl Run for ManifestAuditBundleArgs {
             },
             profile: profile_json,
         };
-
         let bundle_bytes = encode_space_directory_json_bounded(&bundle)
             .wrap_err("failed to serialize audit bundle metadata")?;
         fs::write(&bundle_path, bundle_bytes).wrap_err_with(|| {
             format!("failed to write audit bundle to {}", bundle_path.display())
         })?;
-
         context.println(format!(
             "Wrote Space Directory audit bundle to {}",
             bundle_path.display()
@@ -1018,13 +953,11 @@ impl Run for ManifestAuditBundleArgs {
         Ok(())
     }
 }
-
 struct SpaceDirectoryRestClient {
     client: BlockingHttpClient,
     base_url: Url,
     basic_auth: Option<(String, String)>,
 }
-
 impl SpaceDirectoryRestClient {
     fn new(config: &Config) -> Result<Self> {
         let client = BlockingHttpClient::builder()
@@ -1043,7 +976,6 @@ impl SpaceDirectoryRestClient {
             basic_auth,
         })
     }
-
     fn fetch_manifests(&self, args: &ManifestFetchArgs) -> Result<JsonValue> {
         let mut url = build_space_directory_url(
             &self.base_url,
@@ -1072,7 +1004,6 @@ impl SpaceDirectoryRestClient {
         }
         self.get_json(&url)
     }
-
     fn fetch_bindings(&self, args: &BindingsFetchArgs) -> Result<JsonValue> {
         let url = build_space_directory_url(
             &self.base_url,
@@ -1080,7 +1011,6 @@ impl SpaceDirectoryRestClient {
         )?;
         self.get_json(&url)
     }
-
     fn get_json(&self, url: &Url) -> Result<JsonValue> {
         let mut request = self
             .client
@@ -1111,7 +1041,6 @@ impl SpaceDirectoryRestClient {
         decode_space_directory_json(&bytes, "Torii response JSON")
     }
 }
-
 fn write_json_response(path: &Path, value: &JsonValue) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -1122,7 +1051,6 @@ fn write_json_response(path: &Path, value: &JsonValue) -> Result<()> {
     let bytes = encode_space_directory_json_bounded(value)?;
     fs::write(path, bytes).wrap_err_with(|| format!("failed to write {}", path.display()))
 }
-
 fn build_space_directory_url(base: &Url, segments: &[&str]) -> Result<Url> {
     let mut url = base.clone();
     {
@@ -1134,7 +1062,6 @@ fn build_space_directory_url(base: &Url, segments: &[&str]) -> Result<Url> {
     }
     Ok(url)
 }
-
 fn load_manifest_from_sources(
     manifest_path: Option<&Path>,
     manifest_json_path: Option<&Path>,
@@ -1158,7 +1085,6 @@ fn load_manifest_from_sources(
         (Some(_), Some(_)) => unreachable!("clap enforces conflicts"),
     }
 }
-
 fn read_space_directory_file_bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
     let path_metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to inspect {label} {}", path.display()))?;
@@ -1175,7 +1101,6 @@ fn read_space_directory_file_bounded(path: &Path, label: &str) -> Result<Vec<u8>
             SPACE_DIRECTORY_INPUT_MAX_BYTES_V1
         ));
     }
-
     let mut file = open_space_directory_input_file(path)
         .wrap_err_with(|| format!("failed to open {label} {}", path.display()))?;
     let before = file
@@ -1198,7 +1123,6 @@ fn read_space_directory_file_bounded(path: &Path, label: &str) -> Result<Vec<u8>
     }
     Ok(bytes)
 }
-
 #[cfg(unix)]
 fn open_space_directory_input_file(path: &Path) -> std::io::Result<fs::File> {
     let descriptor = rustix::fs::open(
@@ -1208,23 +1132,19 @@ fn open_space_directory_input_file(path: &Path) -> std::io::Result<fs::File> {
     )?;
     Ok(fs::File::from(descriptor))
 }
-
 #[cfg(windows)]
 fn open_space_directory_input_file(path: &Path) -> std::io::Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     fs::OpenOptions::new()
         .read(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_space_directory_input_file(path: &Path) -> std::io::Result<fs::File> {
     fs::File::open(path)
 }
-
 fn read_space_directory_body_bounded<R: std::io::Read>(
     reader: &mut R,
     declared_bytes: Option<u64>,
@@ -1237,7 +1157,6 @@ fn read_space_directory_body_bounded<R: std::io::Read>(
     }
     super::read_cli_input_bounded(reader, max_bytes, "Space Directory response body")
 }
-
 fn decode_space_directory_json<T>(bytes: &[u8], label: &str) -> Result<T>
 where
     T: JsonDeserialize,
@@ -1259,7 +1178,6 @@ where
     norito::with_decode_limits_scope(SPACE_DIRECTORY_DECODE_LIMITS_V1, || json::from_slice(bytes))
         .map_err(|_| eyre!("{label} could not be decoded within its resource limits"))
 }
-
 fn encode_space_directory_json_bounded<T>(value: &T) -> Result<Vec<u8>>
 where
     T: JsonSerialize + ?Sized,
@@ -1268,7 +1186,6 @@ where
         .map(String::into_bytes)
         .map_err(|error| eyre!("JSON output exceeds its bounded resource corridor: {error}"))
 }
-
 fn extract_audit_hooks(profile: &JsonValue) -> Result<Option<AuditHookSummary>> {
     let Some(raw_hooks) = profile.get("audit_hooks") else {
         return Ok(None);
@@ -1297,7 +1214,6 @@ fn extract_audit_hooks(profile: &JsonValue) -> Result<Option<AuditHookSummary>> 
     );
     Ok(Some(hooks))
 }
-
 fn current_unix_time_ms() -> Result<u64> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1305,7 +1221,6 @@ fn current_unix_time_ms() -> Result<u64> {
     u64::try_from(duration.as_millis())
         .map_err(|_| eyre!("system clock exceeded u64::MAX milliseconds since UNIX_EPOCH"))
 }
-
 fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -1315,25 +1230,21 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn default_scaffold_dir() -> PathBuf {
     PathBuf::from("artifacts")
         .join("space_directory")
         .join("scaffold")
 }
-
 fn write_json<T: JsonSerialize>(path: &Path, value: &T) -> Result<()> {
     ensure_parent_dir(path)?;
     let bytes = encode_space_directory_json_bounded(value)?;
     fs::write(path, bytes).wrap_err_with(|| format!("failed to write {}", path.display()))
 }
-
 fn parse_quantity(value: &str, flag: &str) -> Result<Quantity> {
     value
         .parse::<Quantity>()
         .wrap_err_with(|| format!("{flag} must be a non-negative decimal quantity"))
 }
-
 fn parse_allowance_window(value: Option<&str>) -> Result<AllowanceWindow> {
     value
         .map(|raw| raw.trim().to_ascii_lowercase())
@@ -1352,11 +1263,9 @@ fn parse_allowance_window(value: Option<&str>) -> Result<AllowanceWindow> {
             },
         )
 }
-
 #[cfg(test)]
 mod quantity_tests {
     use super::*;
-
     #[test]
     fn allowance_cap_parser_rejects_negative_quantity() {
         let error = parse_quantity("-1", "--allow-max-amount")
@@ -1364,7 +1273,6 @@ mod quantity_tests {
         assert!(error.to_string().contains("non-negative decimal quantity"));
     }
 }
-
 fn opt_program(value: Option<&str>, flag: &str) -> Result<Option<SmartContractId>> {
     value
         .map(|raw| {
@@ -1373,7 +1281,6 @@ fn opt_program(value: Option<&str>, flag: &str) -> Result<Option<SmartContractId
         })
         .transpose()
 }
-
 fn opt_name(value: Option<&str>, flag: &str) -> Result<Option<Name>> {
     value
         .map(|raw| {
@@ -1382,7 +1289,6 @@ fn opt_name(value: Option<&str>, flag: &str) -> Result<Option<Name>> {
         })
         .transpose()
 }
-
 fn opt_asset(value: Option<&str>, flag: &str) -> Result<Option<AssetDefinitionId>> {
     value
         .map(|raw| {
@@ -1391,7 +1297,6 @@ fn opt_asset(value: Option<&str>, flag: &str) -> Result<Option<AssetDefinitionId
         })
         .transpose()
 }
-
 fn opt_amx_role(value: Option<&str>, flag: &str) -> Result<Option<AmxRole>> {
     value
         .map(|raw| match raw.trim().to_ascii_lowercase().as_str() {
@@ -1401,7 +1306,6 @@ fn opt_amx_role(value: Option<&str>, flag: &str) -> Result<Option<AmxRole>> {
         })
         .transpose()
 }
-
 fn update_scope_defaults(
     mut scope: CapabilityScope,
     manifest_dataspace: DataSpaceId,
@@ -1411,12 +1315,10 @@ fn update_scope_defaults(
     }
     scope
 }
-
 fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId> {
     UniversalAccountId::from_str(raw.trim())
         .wrap_err("UAID literal must be `uaid:<hex>` or a 64-hex digest")
 }
-
 #[derive(Debug, JsonSerialize)]
 struct ManifestAuditBundle {
     generated_at_ms: u64,
@@ -1432,7 +1334,6 @@ struct ManifestAuditBundle {
     artifacts: BundleArtifacts,
     profile: JsonValue,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct BundleArtifacts {
     manifest_json: String,
@@ -1440,7 +1341,6 @@ struct BundleArtifacts {
     manifest_hash: String,
     profile_json: String,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 struct AuditHookSummary {
     events: Vec<String>,
@@ -1449,7 +1349,6 @@ struct AuditHookSummary {
     #[norito(default)]
     pagerduty_service: Option<String>,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1472,7 +1371,6 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
     use url::Url;
-
     #[test]
     fn parse_uaid_literal_accepts_prefixed_or_raw() {
         let uaid = UniversalAccountId::from_hash(CryptoHash::new(b"cli-uaid"));
@@ -1482,20 +1380,17 @@ mod tests {
             format!("uaid:{hex}"),
             format!("UAID:{}", hex.to_uppercase()),
         ];
-
         for literal in variants {
             let parsed = parse_uaid_literal(&literal).expect("parse UAID literal");
             assert_eq!(parsed, uaid);
         }
     }
-
     #[test]
     fn manifest_encode_writes_payload_and_hash_with_defaults() {
         let manifest = sample_manifest();
         let dir = tempdir().expect("tmpdir");
         let json_path = dir.path().join("manifest.json");
         write_manifest_json(&json_path, &manifest);
-
         let mut ctx = TestContext::new();
         ManifestEncodeArgs {
             json: json_path.clone(),
@@ -1504,12 +1399,10 @@ mod tests {
         }
         .run(&mut ctx)
         .expect("encode manifest");
-
         let to_path = dir.path().join("manifest.manifest.to");
         let hash_path = dir.path().join("manifest.manifest.hash");
         assert!(to_path.exists(), "missing encoded payload");
         assert!(hash_path.exists(), "missing hash payload");
-
         let encoded = std::fs::read(&to_path).expect("read encoded manifest");
         let decoded: AssetPermissionManifest =
             norito::decode_from_bytes(&encoded).expect("decode Norito manifest");
@@ -1519,7 +1412,6 @@ mod tests {
             norito::to_bytes(&manifest).expect("encode canonical Norito manifest"),
             "encode command must emit canonical Norito bytes"
         );
-
         let expected_hash = iroha_crypto::Hash::new(&encoded);
         let hash_body = std::fs::read_to_string(&hash_path).expect("read manifest hash file");
         assert_eq!(
@@ -1527,7 +1419,6 @@ mod tests {
             hex::encode(expected_hash.as_ref()),
             "hash file did not match encoded payload"
         );
-
         assert_eq!(
             ctx.lines.len(),
             2,
@@ -1542,14 +1433,12 @@ mod tests {
             "missing hash log line"
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn manifest_scaffold_writes_manifest_and_profile_templates() {
         let dir = tempdir().expect("tmpdir");
         let manifest_path = dir.path().join("fixture").join("manifest.json");
         let profile_path = dir.path().join("fixture").join("profile.json");
-
         let allow_args = ManifestScaffoldAllowArgs {
             program: Some("cbdc.transfer".to_owned()),
             method: Some("transfer".to_owned()),
@@ -1599,7 +1488,6 @@ mod tests {
             pagerduty_service: Some("Nexus-SpaceDirectory".to_owned()),
             ..Default::default()
         };
-
         let mut ctx = TestContext::new();
         ManifestScaffoldArgs {
             uaid: sample_manifest().uaid.to_string(),
@@ -1616,10 +1504,8 @@ mod tests {
         }
         .run(&mut ctx)
         .expect("scaffold manifest/profile");
-
         assert!(manifest_path.exists(), "manifest scaffold missing");
         assert!(profile_path.exists(), "profile scaffold missing");
-
         let manifest_json: JsonValue =
             json::from_slice(&fs::read(&manifest_path).expect("read manifest scaffold"))
                 .expect("parse manifest scaffold");
@@ -1636,7 +1522,6 @@ mod tests {
             Some(2),
             "manifest scaffold should include two entries"
         );
-
         let profile_json: JsonValue =
             json::from_slice(&fs::read(&profile_path).expect("read profile scaffold"))
                 .expect("parse profile scaffold");
@@ -1665,7 +1550,6 @@ mod tests {
             "scaffold command should log manifest path"
         );
     }
-
     #[test]
     fn manifest_encode_respects_custom_output_paths() {
         let manifest = sample_manifest();
@@ -1673,7 +1557,6 @@ mod tests {
         let json_path = dir.path().join("fixtures").join("manifest.json");
         std::fs::create_dir_all(json_path.parent().unwrap()).expect("json dir");
         write_manifest_json(&json_path, &manifest);
-
         let out_path = dir
             .path()
             .join("artifacts")
@@ -1686,7 +1569,6 @@ mod tests {
             .join("nexus")
             .join("uaid")
             .join("wholesale.hash");
-
         let mut ctx = TestContext::new();
         ManifestEncodeArgs {
             json: json_path,
@@ -1695,10 +1577,8 @@ mod tests {
         }
         .run(&mut ctx)
         .expect("encode manifest with overrides");
-
         assert!(out_path.exists(), "custom output path was not created");
         assert!(hash_path.exists(), "custom hash path was not created");
-
         let encoded = std::fs::read(&out_path).expect("read encoded manifest");
         let decoded: AssetPermissionManifest =
             norito::decode_from_bytes(&encoded).expect("decode canonical Norito manifest");
@@ -1711,12 +1591,10 @@ mod tests {
             "hash file did not match encoded payload"
         );
     }
-
     fn write_manifest_json(path: &Path, manifest: &AssetPermissionManifest) {
         let json_bytes = norito::json::to_vec(manifest).expect("serialize manifest to JSON");
         std::fs::write(path, json_bytes).expect("write JSON manifest");
     }
-
     fn sample_manifest() -> AssetPermissionManifest {
         AssetPermissionManifest {
             version: ManifestVersion::V1,
@@ -1741,12 +1619,10 @@ mod tests {
             }],
         }
     }
-
     fn checked_space_directory_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked space directory fixture key")
     }
-
     #[test]
     fn build_space_directory_url_appends_segments() {
         let base = Url::parse("https://example.test/torii/").expect("base url");
@@ -1760,27 +1636,23 @@ mod tests {
             "https://example.test/torii/v1/space-directory/uaids/uaid:abc/manifests"
         );
     }
-
     #[test]
     fn manifest_status_arg_serializes_expected_labels() {
         assert_eq!(ManifestStatusArg::Active.as_query_value(), "active");
         assert_eq!(ManifestStatusArg::Inactive.as_query_value(), "inactive");
         assert_eq!(ManifestStatusArg::All.as_query_value(), "all");
     }
-
     #[test]
     fn manifest_reason_rejects_aggregate_expansion_before_mutation() {
         let mut manifest = sample_manifest();
         manifest.entries[0].notes = None;
         manifest.entries.push(manifest.entries[0].clone());
         let before = manifest.clone();
-
         let error = apply_manifest_reason_bounded(&mut manifest, "ab", 3)
             .expect_err("aggregate max plus one must fail");
         assert!(error.to_string().contains("retained limit"));
         assert_eq!(manifest, before, "failed admission must not mutate entries");
     }
-
     #[test]
     fn bounded_file_reader_rejects_sparse_max_plus_one() {
         let dir = tempdir().expect("tmpdir");
@@ -1790,7 +1662,6 @@ mod tests {
             read_space_directory_file_bounded(&small, "test input").expect("small input"),
             b"{}"
         );
-
         let oversized = dir.path().join("oversized.json");
         let file = fs::File::create(&oversized).expect("create sparse input");
         file.set_len(SPACE_DIRECTORY_INPUT_MAX_BYTES_V1 as u64 + 1)
@@ -1800,23 +1671,19 @@ mod tests {
             .expect_err("max plus one must fail before allocation");
         assert!(error.to_string().contains("first-release limit"));
     }
-
     #[cfg(unix)]
     #[test]
     fn bounded_file_reader_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tmpdir");
         let target = dir.path().join("target.json");
         fs::write(&target, b"{}").expect("write target");
         let link = dir.path().join("link.json");
         symlink(&target, &link).expect("create symlink");
-
         let error = read_space_directory_file_bounded(&link, "test input")
             .expect_err("symlink must fail closed");
         assert!(error.to_string().contains("direct regular file"));
     }
-
     #[test]
     fn response_reader_preflights_length_and_probes_growth() {
         struct PanicReader;
@@ -1825,11 +1692,9 @@ mod tests {
                 panic!("declared oversize must fail before reading")
             }
         }
-
         let declared = read_space_directory_body_bounded(&mut PanicReader, Some(17), 16)
             .expect_err("declared max plus one must fail");
         assert!(declared.to_string().contains("Content-Length"));
-
         let mut exact = std::io::Cursor::new([0_u8; 16]);
         assert_eq!(
             read_space_directory_body_bounded(&mut exact, None, 16)
@@ -1842,7 +1707,6 @@ mod tests {
             .expect_err("chunked max plus one must fail");
         assert!(error.to_string().contains("first-release limit"));
     }
-
     #[test]
     fn json_decoder_accepts_exact_depth_and_rejects_one_more() {
         let exact = format!(
@@ -1852,13 +1716,11 @@ mod tests {
         );
         decode_space_directory_json::<JsonValue>(exact.as_bytes(), "test JSON")
             .expect("exact nesting depth");
-
         let over = format!("[{exact}]");
         let error = decode_space_directory_json::<JsonValue>(over.as_bytes(), "test JSON")
             .expect_err("max depth plus one must fail");
         assert!(error.to_string().contains("lexical resource bounds"));
     }
-
     #[test]
     fn write_json_response_creates_parent_directories() {
         let dir = tempdir().expect("tmpdir");
@@ -1871,13 +1733,11 @@ mod tests {
             "json output should include the dataspaces array"
         );
     }
-
     struct TestContext {
         cfg: Config,
         lines: Vec<String>,
         i18n: Localizer,
     }
-
     impl TestContext {
         fn new() -> Self {
             let key_pair = checked_space_directory_key_fixture();
@@ -1911,7 +1771,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn test_context_uses_checked_ed25519_key_generation() {
         let context = TestContext::new();
@@ -1921,38 +1780,30 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("space directory fixture key advertises a valid algorithm");
-
         assert_eq!(actual, Algorithm::Ed25519);
     }
-
     impl RunContext for TestContext {
         fn config(&self) -> &Config {
             &self.cfg
         }
-
         fn transaction_metadata(&self) -> Option<&Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             false
         }
-
         fn i18n(&self) -> &Localizer {
             &self.i18n
         }
-
         fn print_data<T>(&mut self, _data: &T) -> Result<()>
         where
             T: JsonSerialize + ?Sized,
         {
             Ok(())
         }
-
         fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
             self.lines.push(data.to_string());
             Ok(())

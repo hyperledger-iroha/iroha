@@ -1,5 +1,4 @@
 //! RS16 chunk commitment helpers for DA ingest.
-
 use axum::http::StatusCode;
 use iroha_data_model::da::{
     ingest::DaIngestRequest,
@@ -8,7 +7,6 @@ use iroha_data_model::da::{
 };
 use iroha_primitives::erasure::rs16 as erasure_rs16;
 use sorafs_car::ChunkStore;
-
 /// Smallest DA chunk accepted by the synchronous RS16 ingest path.
 pub(super) const MIN_CHUNK_SIZE_BYTES: u32 = 1024;
 /// Largest DA chunk accepted by the synchronous RS16 ingest path.
@@ -29,12 +27,10 @@ pub(super) const MAX_CANONICAL_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
 pub(super) const MAX_ERASURE_GENERATED_BYTES: u64 = 128 * 1024 * 1024;
 /// Maximum transient RS16 symbol workspace admitted for one ingest request.
 pub(super) const MAX_ERASURE_WORKSPACE_BYTES: u64 = 128 * 1024 * 1024;
-
 // With at most 1,024 data chunks, 64 data/parity shards, and 64 row-parity
 // stripes, the largest legal manifest contains 10,240 commitments. Keep a
 // little headroom while retaining a hard allocation ceiling.
 const MAX_MANIFEST_CHUNK_COMMITMENTS: usize = 16 * 1024;
-
 /// Reject erasure layouts whose bounded dimensions still multiply into an
 /// excessive CPU or memory workload.
 ///
@@ -56,7 +52,6 @@ pub(super) fn validate_erasure_work_budget(
     if data_shards == 0 {
         return Err("erasure profile must include at least one data shard");
     }
-
     let stripes = data_chunk_count.div_ceil(data_shards) as u128;
     let data_shards = data_shards as u128;
     let parity_shards = parity_shards as u128;
@@ -65,7 +60,6 @@ pub(super) fn validate_erasure_work_budget(
     let columns = data_shards
         .checked_add(parity_shards)
         .ok_or("erasure work dimensions overflow")?;
-
     let global_parity_chunks = stripes
         .checked_mul(parity_shards)
         .ok_or("erasure work dimensions overflow")?;
@@ -79,7 +73,6 @@ pub(super) fn validate_erasure_work_budget(
     if generated_bytes > u128::from(MAX_ERASURE_GENERATED_BYTES) {
         return Err("erasure profile exceeds the 128 MiB generated-parity budget");
     }
-
     // `encode_parity` returns a second parity vector before those symbols are
     // moved into the stripe. With row parity enabled, every completed stripe
     // remains resident and the column pass additionally clones one symbol
@@ -117,10 +110,8 @@ pub(super) fn validate_erasure_work_budget(
     if workspace_bytes > u128::from(MAX_ERASURE_WORKSPACE_BYTES) {
         return Err("erasure profile exceeds the 128 MiB RS16 workspace budget");
     }
-
     Ok(())
 }
-
 pub(super) fn build_chunk_commitments(
     request: &DaIngestRequest,
     chunk_store: &ChunkStore,
@@ -133,7 +124,6 @@ pub(super) fn build_chunk_commitments(
         |_index, _symbols| Ok(()),
     )
 }
-
 pub(super) fn build_chunk_commitments_with_parity_observer<F>(
     request: &DaIngestRequest,
     chunk_store: &ChunkStore,
@@ -157,7 +147,6 @@ where
             "chunk_size is outside the supported RS16 ingest range".into(),
         ));
     }
-
     let data_shards = usize::from(request.erasure_profile.data_shards);
     let parity_shards = usize::from(request.erasure_profile.parity_shards);
     if data_shards == 0 {
@@ -173,7 +162,6 @@ where
             "erasure profile exceeds the bounded RS16 shard limits".to_string(),
         ));
     }
-
     let symbol_count = chunk_size / 2;
     let chunks = chunk_store.chunks();
     if chunks.is_empty() {
@@ -185,7 +173,6 @@ where
             "DA manifest exceeds the bounded source-chunk limit".to_string(),
         ));
     }
-
     let stripes = chunks.len().div_ceil(data_shards);
     let row_parity = usize::from(request.erasure_profile.row_parity_stripes);
     if row_parity > usize::from(MAX_ROW_PARITY_STRIPES)
@@ -230,7 +217,6 @@ where
     };
     let mut hash_scratch = Vec::with_capacity(symbol_count.saturating_mul(2));
     let mut next_index: u32 = 0;
-
     for stripe in 0..stripes {
         let mut stripe_symbols = Vec::with_capacity(data_shards + parity_shards);
         for shard_idx in 0..data_shards {
@@ -266,11 +252,9 @@ where
                         format!("chunk {chunk_idx} extends past canonical payload"),
                     ));
                 }
-
                 let symbols =
                     erasure_rs16::symbols_from_chunk(symbol_count, &canonical_payload[offset..end]);
                 stripe_symbols.push(symbols.clone());
-
                 let index = allocate_chunk_index(&mut next_index)?;
                 let stripe_id = manifest_u32_index(stripe, "manifest stripe id")?;
                 commitments.push(ChunkCommitment::new_with_role(
@@ -285,14 +269,12 @@ where
                 stripe_symbols.push(vec![0u16; symbol_count]);
             }
         }
-
         if parity_shards == 0 {
             if retain_row_parity_matrix {
                 stripe_symbols_matrix.push(stripe_symbols);
             }
             continue;
         }
-
         let parity_symbols: Vec<Vec<u16>> =
             erasure_rs16::encode_parity(&stripe_symbols, parity_shards).map_err(|_| {
                 (
@@ -300,7 +282,6 @@ where
                     "failed to compute parity shards".into(),
                 )
             })?;
-
         for (parity_idx, symbols) in parity_symbols.iter().enumerate() {
             let digest = digest_symbols_le(symbols, &mut hash_scratch);
             let offset = erasure_rs16::parity_offset(
@@ -316,7 +297,6 @@ where
                     "parity chunk offset exceeded supported size".into(),
                 )
             })?;
-
             let index = allocate_chunk_index(&mut next_index)?;
             parity_observer(index, symbols)?;
             let stripe_id = manifest_u32_index(stripe, "manifest stripe id")?;
@@ -330,12 +310,10 @@ where
             ));
             stripe_symbols.push(symbols.clone());
         }
-
         if retain_row_parity_matrix {
             stripe_symbols_matrix.push(stripe_symbols);
         }
     }
-
     if row_parity > 0 {
         let column_count = data_shards + parity_shards;
         let global_parity_bytes = stripes
@@ -368,7 +346,6 @@ where
                     .unwrap_or_else(|| vec![0u16; symbol_count]);
                 column_symbols.push(stripe_row);
             }
-
             let parity_cols: Vec<Vec<u16>> =
                 erasure_rs16::encode_parity(&column_symbols, row_parity).map_err(|_| {
                     (
@@ -376,10 +353,8 @@ where
                         "failed to compute row-parity stripes".into(),
                     )
                 })?;
-
             for (row_parity_idx, symbols) in parity_cols.iter().enumerate() {
                 let digest = digest_symbols_le(symbols, &mut hash_scratch);
-
                 let row_parity_chunk_index = row_parity_idx
                     .checked_mul(column_count)
                     .and_then(|base| base.checked_add(column))
@@ -418,10 +393,8 @@ where
             }
         }
     }
-
     Ok(commitments)
 }
-
 fn digest_symbols_le(symbols: &[u16], scratch: &mut Vec<u8>) -> [u8; 32] {
     scratch.clear();
     scratch.reserve(symbols.len().saturating_mul(2));
@@ -430,7 +403,6 @@ fn digest_symbols_le(symbols: &[u16], scratch: &mut Vec<u8>) -> [u8; 32] {
     }
     *blake3::hash(scratch.as_slice()).as_bytes()
 }
-
 fn manifest_u32_index(value: usize, label: &str) -> Result<u32, (StatusCode, String)> {
     u32::try_from(value).map_err(|_| {
         (
@@ -439,7 +411,6 @@ fn manifest_u32_index(value: usize, label: &str) -> Result<u32, (StatusCode, Str
         )
     })
 }
-
 fn chunk_commitment_capacity_hint(
     data_chunk_count: usize,
     data_shards: usize,
@@ -455,7 +426,6 @@ fn chunk_commitment_capacity_hint(
             "erasure profile must include at least one data shard".into(),
         ));
     }
-
     let stripes = data_chunk_count.div_ceil(data_shards);
     let column_count = data_shards.checked_add(parity_shards).ok_or_else(|| {
         (
@@ -492,7 +462,6 @@ fn chunk_commitment_capacity_hint(
     }
     Ok(total)
 }
-
 fn allocate_chunk_index(counter: &mut u32) -> Result<u32, (StatusCode, String)> {
     let idx = *counter;
     *counter = counter.checked_add(1).ok_or_else(|| {
@@ -503,17 +472,13 @@ fn allocate_chunk_index(counter: &mut u32) -> Result<u32, (StatusCode, String)> 
     })?;
     Ok(idx)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn allocate_chunk_index_rejects_overflow_without_wrapping() {
         let mut counter = u32::MAX;
-
         let err = allocate_chunk_index(&mut counter).expect_err("exhausted index must reject");
-
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(
             err.1.contains("chunk index space"),
@@ -522,15 +487,12 @@ mod tests {
         );
         assert_eq!(counter, u32::MAX);
     }
-
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn manifest_u32_index_rejects_overflow_without_saturating() {
         let overflow = u32::MAX as usize + 1;
-
         let err = manifest_u32_index(overflow, "manifest stripe id")
             .expect_err("overflowed stripe id must reject");
-
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(
             err.1
@@ -539,25 +501,20 @@ mod tests {
             err.1
         );
     }
-
     #[test]
     fn chunk_commitment_capacity_hint_counts_row_parity_once_per_column() {
         let capacity =
             chunk_commitment_capacity_hint(5, 2, 1, 2).expect("capacity math should fit");
-
         assert_eq!(
             capacity, 14,
             "5 data chunks + 3 global parity chunks + 2 row parity stripes across 3 columns"
         );
     }
-
     #[test]
     fn chunk_commitment_capacity_hint_rejects_resource_exhaustion_before_allocation() {
         let data_chunks = MAX_MANIFEST_CHUNK_COMMITMENTS;
-
         let err = chunk_commitment_capacity_hint(data_chunks, 1, 1, 0)
             .expect_err("commitment count over the operational limit must reject");
-
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(
             err.1.contains("bounded commitment allocation"),
@@ -565,7 +522,6 @@ mod tests {
             err.1
         );
     }
-
     #[test]
     fn erasure_work_budget_rejects_multiplicative_parity_amplification() {
         let err = validate_erasure_work_budget(
@@ -576,15 +532,12 @@ mod tests {
             0,
         )
         .expect_err("bounded dimensions must not permit four GiB of parity work");
-
         assert!(err.contains("generated-parity budget"), "{err}");
     }
-
     #[test]
     fn erasure_work_budget_rejects_large_retained_row_matrix() {
         let err = validate_erasure_work_budget(32, MAX_CHUNK_SIZE_BYTES as usize, 1, 32, 1)
             .expect_err("row-parity matrix must fit the explicit workspace budget");
-
         assert!(err.contains("RS16 workspace budget"), "{err}");
     }
 }

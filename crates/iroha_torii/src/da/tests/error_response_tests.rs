@@ -1,6 +1,5 @@
 // Included by `da::ingest::tests`; keeping this test here preserves its
 // original module path while separating error-envelope negotiation coverage.
-
 #[tokio::test]
 async fn da_ingest_error_response_negotiates_error_envelopes() {
     let (parts, body) = build_error_response(
@@ -25,7 +24,6 @@ async fn da_ingest_error_response_negotiates_error_envelopes() {
         norito::decode_from_bytes(&bytes).expect("decode Norito error envelope");
     assert_eq!(envelope.code, "bad_request");
     assert_eq!(envelope.message, "bad payload");
-
     let (parts, body) =
         build_error_response(StatusCode::CONFLICT, "duplicate", ResponseFormat::Json).into_parts();
     assert_eq!(parts.status, StatusCode::CONFLICT);

@@ -5,7 +5,6 @@
 //! `iroha_core` and returns ordinary production transactions and governance
 //! records so integration gates exercise the exact Torii, DA/RBC, verifier,
 //! and atomic state-transition paths used by validators.
-
 use iroha_crypto::{PrivateKey, PublicKey};
 use iroha_data_model::{
     prelude::{AccountId, AssetDefinitionId},
@@ -31,7 +30,6 @@ use iroha_data_model::{
 };
 use rand_core_06::{CryptoRng, Error as RngError06, RngCore};
 use zeroize::Zeroizing;
-
 use super::{
     PrivacyReleaseTransactionContextV1, network_seed_v1, signed_payload_v1, statement_context_v1,
     transaction_payload_v1,
@@ -81,27 +79,21 @@ use crate::{
     privacy_release_evidence::{EvidenceRng06, EvidenceRng09, PrivacyReleaseEvidenceErrorClassV1},
     privacy_state::compute_privacy_pgc_account_state_root_v1,
 };
-
 struct UnavailableIssuanceRngV1;
-
 impl RngCore for UnavailableIssuanceRngV1 {
     fn next_u32(&mut self) -> u32 {
         0
     }
-
     fn next_u64(&mut self) -> u64 {
         0
     }
-
     fn fill_bytes(&mut self, destination: &mut [u8]) {
         destination.fill(0);
     }
-
     fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError06> {
         Err(RngError06::new("cached issuance must not read randomness"))
     }
 }
-
 impl CryptoRng for UnavailableIssuanceRngV1 {}
 /// One canonical network-bound VeRange action.
 #[derive(Clone, Debug)]
@@ -111,7 +103,6 @@ pub struct PrivacyReleaseVeRangeNetworkActionV1 {
     /// Exact public statement carried by `transaction`.
     pub statement: VeRangeTransparentRangeStatementV1,
 }
-
 /// One canonical network-bound Bootle/Lantern presentation and its required
 /// authoritative issuer policy.
 #[derive(Clone, Debug)]
@@ -126,7 +117,6 @@ pub struct PrivacyReleaseBootleLanternNetworkActionV1 {
     /// Exact public statement carried by `transaction`.
     pub statement: IrohaBootleLanternAnoncredStatementV1,
 }
-
 /// One canonical Anonymous-PGC account bootstrap and successor payment.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseAnonymousPgcNetworkActionV1 {
@@ -139,7 +129,6 @@ pub struct PrivacyReleaseAnonymousPgcNetworkActionV1 {
     /// Exact public payment statement carried by `transaction`.
     pub statement: AnonymousPgcKOutOfNStatementV1,
 }
-
 /// One canonical FCMP++ action and its complete authoritative output-set
 /// bootstrap.
 #[derive(Clone, Debug)]
@@ -151,7 +140,6 @@ pub struct PrivacyReleaseFcmpNetworkActionV1 {
     /// Exact public statement carried by `transaction`.
     pub statement: MoneroFcmpPlusPlusStatementV1,
 }
-
 /// One canonical private-IVM note action and its authoritative program-pool
 /// bootstrap.
 #[derive(Clone, Debug)]
@@ -163,7 +151,6 @@ pub struct PrivacyReleaseIvmPrivateNoteNetworkActionV1 {
     /// Exact public statement carried by `transaction`.
     pub statement: IrohaIvmPrivateNoteStarkStatementV1,
 }
-
 /// One canonical governed ZK-ACE transparent transfer.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseZkAceNetworkActionV1 {
@@ -174,11 +161,9 @@ pub struct PrivacyReleaseZkAceNetworkActionV1 {
     /// Exact public statement carried by `transaction`.
     pub statement: ZkAcePqAuthorizationStatementV1,
 }
-
 fn evidence_error() -> PrivacyReleaseEvidenceErrorClassV1 {
     PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed
 }
-
 fn validate_context_and_signer_v1(
     context: &PrivacyReleaseTransactionContextV1,
     private_key: &PrivateKey,
@@ -194,7 +179,6 @@ fn validate_context_and_signer_v1(
     }
     Ok(())
 }
-
 fn draft_intent_v1(
     context: &PrivacyReleaseTransactionContextV1,
     envelope: PrivacyProofEnvelopeV1,
@@ -207,7 +191,6 @@ fn draft_intent_v1(
     }
     Ok(intent)
 }
-
 fn finish_transaction_v1(
     context: &PrivacyReleaseTransactionContextV1,
     envelope: PrivacyProofEnvelopeV1,
@@ -226,7 +209,6 @@ fn finish_transaction_v1(
     }
     signed_payload_v1(payload, expected_intent, private_key)
 }
-
 fn placeholder_envelope_v1(
     profile: CompiledPrivacyProfileV1,
     statement: PrivacyStatementV1,
@@ -246,7 +228,6 @@ fn placeholder_envelope_v1(
         proof,
     }
 }
-
 fn final_envelope_v1(
     profile: CompiledPrivacyProfileV1,
     statement: PrivacyStatementV1,
@@ -269,7 +250,6 @@ fn final_envelope_v1(
         proof,
     })
 }
-
 fn secret_scalar_v1(
     master: [u8; 32],
     purpose: &[u8],
@@ -287,7 +267,6 @@ fn secret_scalar_v1(
     );
     SecretScalarV1::from_bytes(bytes).map_err(|_| evidence_error())
 }
-
 /// Build one governed, transaction-intent-bound native ZK-ACE transfer.
 ///
 /// `fixture_seed` fixes the policy witness and stable replay nullifier, while
@@ -376,7 +355,6 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         statement,
     })
 }
-
 /// Build one transaction-intent- and genesis-bound native VeRange action.
 ///
 /// Values are restricted to the canonical 32-bit profile and the closed
@@ -476,7 +454,6 @@ pub fn build_privacy_release_verange_network_action_v1(
         statement,
     })
 }
-
 /// Build one transaction-intent-, governed-policy-, and genesis-bound native
 /// Bootle/Lantern presentation.
 pub fn build_privacy_release_bootle_lantern_network_action_v1(
@@ -548,7 +525,6 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
         &authorization.encode().map_err(|_| evidence_error())?,
     )
     .map_err(|_| evidence_error())?;
-
     let mut statement = IrohaBootleLanternAnoncredStatementV1 {
         context: context.clone(),
         issuer_id: policy.issuer_id,
@@ -571,7 +547,6 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
         ),
     )?;
     statement.context.transaction_intent_digest = intent;
-
     let mut attributes = [[0_u8; 8]; 8];
     attributes[1] = [1; 8];
     let mut holder_issuance_rng = EvidenceRng06::new(network_seed_v1(
@@ -660,7 +635,6 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
         PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(proof)),
     )?;
     let transaction = finish_transaction_v1(&transaction_context, envelope, intent, private_key)?;
-
     let successor_parameter_id = PrivacyParameterIdV1::new(network_seed_v1(
         fixture_seed,
         b"bootle-successor-issuer-parameter",
@@ -713,14 +687,12 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
         statement,
     })
 }
-
 fn model_pgc_ciphertext_v1(ciphertext: TwistedElGamalCiphertextV1) -> PrivacyP256CiphertextV1 {
     PrivacyP256CiphertextV1 {
         left: PrivacyP256PointV1::new(*ciphertext.left().as_bytes()),
         right: PrivacyP256PointV1::new(*ciphertext.right().as_bytes()),
     }
 }
-
 fn model_pgc_accounts_v1(
     public_keys: &[TwistedElGamalPublicKeyV1],
     balances: &[TwistedElGamalCiphertextV1],
@@ -737,7 +709,6 @@ fn model_pgc_accounts_v1(
         })
         .collect())
 }
-
 /// Build a chain-bound Anonymous-PGC bootstrap proof and one transaction-bound
 /// payment that advances its complete encrypted account table exactly once.
 ///
@@ -758,7 +729,6 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
     const RECIPIENT_COUNT: usize = 2;
     const SENDER_INDEX: usize = 7;
     const RECIPIENT_INDICES: [usize; RECIPIENT_COUNT] = [2, 12];
-
     let profile = compiled_privacy_profile_v1(
         iroha_data_model::privacy::PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
     )
@@ -870,7 +840,6 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
     }
     let bootstrap_proof = PrivacyPgcBootstrapProofBytesV1::new(bootstrap_proof);
     let bootstrap_proof_digest = bootstrap_proof.digest().map_err(|_| evidence_error())?;
-
     let mut transfer_values = vec![0_i64; ACCOUNT_COUNT];
     transfer_values[RECIPIENT_INDICES[0]] = 20;
     transfer_values[RECIPIENT_INDICES[1]] = 30;
@@ -1004,7 +973,6 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
         statement,
     })
 }
-
 fn model_fcmp_output_v1(output: FcmpOutputTupleV1) -> PrivacyFcmpOutputTupleV1 {
     let (output_key, linking_tag_generator, amount_commitment) = output.components();
     PrivacyFcmpOutputTupleV1 {
@@ -1013,13 +981,11 @@ fn model_fcmp_output_v1(output: FcmpOutputTupleV1) -> PrivacyFcmpOutputTupleV1 {
         amount_commitment,
     }
 }
-
 fn fcmp_scalar_v1(value: u64) -> [u8; 32] {
     let mut scalar = [0_u8; 32];
     scalar[..8].copy_from_slice(&value.to_le_bytes());
     scalar
 }
-
 /// Build one canonical one-input/one-output native FCMP++ transaction.
 ///
 /// Reusing the same `fixture_seed` with a distinct transaction context
@@ -1058,7 +1024,6 @@ pub fn build_privacy_release_fcmp_network_action_v1(
             initial_outputs,
         });
     bootstrap.validate().map_err(|_| evidence_error())?;
-
     let native_public_inputs = inputs
         .iter()
         .map(|input| input.public_input().map_err(|_| evidence_error()))
@@ -1077,7 +1042,6 @@ pub fn build_privacy_release_fcmp_network_action_v1(
         .iter()
         .map(|opening| model_fcmp_output_v1(opening.output()))
         .collect::<Vec<_>>();
-
     // The closed one-layer release fixture creates its output key as 43*B
     // (zero T blinding). Reconstructing the wallet note here is independently
     // checked against the public tuple and opening; fixture drift therefore
@@ -1166,7 +1130,6 @@ pub fn build_privacy_release_fcmp_network_action_v1(
         statement,
     })
 }
-
 /// Build one canonical one-input/one-output private-IVM note transaction.
 ///
 /// Reusing the same pool and fixture seed with a distinct transaction context
@@ -1218,7 +1181,6 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-
     let mut statement = fixture.statement;
     statement.context = statement_context_v1(&transaction_context, profile);
     statement.action_digest = statement
@@ -1265,24 +1227,19 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
         statement,
     })
 }
-
 // Stateful retained-network action builders are defined below. Keeping them
 // in this module lets all six paths share the exact two-pass intent and final
 // envelope checks above.
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         metadata::Metadata,
         prelude::{DomainId, Name},
         transaction::FeePaymentIntent,
     };
-
     use super::*;
-
     fn context(key_pair: &KeyPair) -> PrivacyReleaseTransactionContextV1 {
         PrivacyReleaseTransactionContextV1 {
             network_id: crate::privacy_release_evidence::release_network_id_from_genesis_hash(
@@ -1297,14 +1254,12 @@ mod tests {
             genesis_hash: [0xA7; 32],
         }
     }
-
     fn asset() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             "release_asset".parse::<Name>().expect("asset name"),
         )
     }
-
     #[test]
     fn scalar_derivation_is_nonzero_and_domain_separated() {
         let left = secret_scalar_v1([7; 32], b"left", 0).expect("left scalar");
@@ -1320,7 +1275,6 @@ mod tests {
         let right_commitment = commit(VeRangeBitLengthV1::Bits32, 1, &right).expect("right commit");
         assert_ne!(left_commitment, right_commitment);
     }
-
     #[test]
     fn invalid_context_and_closed_builder_bounds_reject_before_proving() {
         let key_pair = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
@@ -1369,7 +1323,6 @@ mod tests {
             .expect_err("zero ZK-ACE amount must reject"),
             PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed
         );
-
         let mut zero_genesis = valid.clone();
         zero_genesis.genesis_hash = [0; 32];
         assert_eq!(

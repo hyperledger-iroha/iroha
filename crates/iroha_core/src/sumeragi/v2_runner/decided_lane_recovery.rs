@@ -3,7 +3,6 @@ enum PreparedCertifiedServe {
     Rejected(String),
     Service(String),
 }
-
 enum DecidedLaneRecoveryCurrentServe {
     Authenticated {
         authenticated_via: PeerId,
@@ -16,7 +15,6 @@ enum DecidedLaneRecoveryCurrentServe {
     },
     Service(String),
 }
-
 enum DecidedLaneRecoveryIngressPreparation {
     LaneLocal,
     KuraReplicaAdvert,
@@ -24,12 +22,10 @@ enum DecidedLaneRecoveryIngressPreparation {
     HistoricalServe,
     LeaderWireRetire,
 }
-
 enum DecidedLaneRecoveryCurrentDrain<Admission> {
     Admitted(Admission),
     Rejected(String),
 }
-
 enum DecidedLaneRecoveryDrainAuthorization<Admission> {
     LaneLocal,
     KuraReplicaAdvert,
@@ -37,32 +33,26 @@ enum DecidedLaneRecoveryDrainAuthorization<Admission> {
     HistoricalServe,
     LeaderWireRetire,
 }
-
 enum DecidedLaneRecoveryDrainDecision<Admission> {
     Retain,
     Authorized(DecidedLaneRecoveryDrainAuthorization<Admission>),
     FailClosed(String),
 }
-
 trait DecidedLaneRecoveryDrainAuthorizer {
     type Admission;
-
     fn stage_negative(
         &mut self,
         request_hash: HashOf<wire::CertifiedBodyRequest>,
         outcome: CertifiedServeNegativeOutcome,
     ) -> Result<(), String>;
-
     fn prepare_exact(
         &mut self,
         authenticated_via: &PeerId,
         request: AuthenticatedCertifiedBodyRequest,
     ) -> Result<Self::Admission, CertifiedServePrepareError>;
 }
-
 impl DecidedLaneRecoveryDrainAuthorizer for ProductionV2Services {
     type Admission = CertifiedServeAdmission;
-
     fn stage_negative(
         &mut self,
         request_hash: HashOf<wire::CertifiedBodyRequest>,
@@ -70,7 +60,6 @@ impl DecidedLaneRecoveryDrainAuthorizer for ProductionV2Services {
     ) -> Result<(), String> {
         self.stage_certified_serve_rejection(request_hash, outcome)
     }
-
     fn prepare_exact(
         &mut self,
         authenticated_via: &PeerId,
@@ -79,7 +68,6 @@ impl DecidedLaneRecoveryDrainAuthorizer for ProductionV2Services {
         self.prepare_certified_request(authenticated_via, request)
     }
 }
-
 fn authorize_decided_lane_recovery_drain<A: DecidedLaneRecoveryDrainAuthorizer>(
     preparation: DecidedLaneRecoveryIngressPreparation,
     authorizer: &mut A,
@@ -149,7 +137,6 @@ fn authorize_decided_lane_recovery_drain<A: DecidedLaneRecoveryDrainAuthorizer>(
         },
     }
 }
-
 fn prepare_decided_lane_recovery_ingress(
     inbound: &InboundBlockMessage,
     active_height: wire::Height,
@@ -255,13 +242,11 @@ fn prepare_decided_lane_recovery_ingress(
         },
     )
 }
-
 #[derive(Debug)]
 enum KuraReplicaAdvertAdmissionError {
     InvalidAdvert(String),
     Fatal(crate::kura::Error),
 }
-
 fn classify_kura_replica_advert_admission_error(
     error: crate::kura::Error,
 ) -> KuraReplicaAdvertAdmissionError {
@@ -272,7 +257,6 @@ fn classify_kura_replica_advert_admission_error(
         error => KuraReplicaAdvertAdmissionError::Fatal(error),
     }
 }
-
 /// Consume one fixed-small authenticated Kura replica advert without exposing
 /// it to either consensus reducer.
 ///
@@ -353,7 +337,6 @@ fn admit_kura_replica_advert_ingress(
     }
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IngressDrainMode {
     /// Normal completion/runtime/ingress round-robin.
@@ -365,7 +348,6 @@ enum V2IngressDrainMode {
     /// certificate credit.
     TimeoutVoteEpisode,
 }
-
 fn drain_v2_ingress(
     receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor,
@@ -1004,7 +986,6 @@ fn drain_v2_ingress(
     }
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DecidedLaneRecoveryDrainCommitOutcome {
     LaneLocal,
@@ -1013,26 +994,18 @@ enum DecidedLaneRecoveryDrainCommitOutcome {
     HistoricalServe,
     LeaderWireVolatile,
 }
-
 trait DecidedLaneRecoveryDrainCommitter {
     type Admission;
-
     fn commit_lane_local(&mut self) -> Result<(), V2RunnerError>;
-
     fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError>;
-
     fn commit_current_serve(
         &mut self,
         current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
     ) -> Result<(), V2RunnerError>;
-
     fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError>;
-
     fn commit_historical_serve(&mut self) -> Result<(), V2RunnerError>;
-
     fn commit_leader_wire_volatile(&mut self) -> Result<(), V2RunnerError>;
 }
-
 fn commit_decided_lane_recovery_drain<C: DecidedLaneRecoveryDrainCommitter>(
     authorization: DecidedLaneRecoveryDrainAuthorization<C::Admission>,
     committer: &mut C,
@@ -1062,7 +1035,6 @@ fn commit_decided_lane_recovery_drain<C: DecidedLaneRecoveryDrainCommitter>(
         }
     }
 }
-
 struct ProductionDecidedLaneRecoveryDrainCommitter<'a> {
     receiver: &'a FairV2Ingress,
     inbound: Option<InboundBlockMessage>,
@@ -1076,7 +1048,6 @@ struct ProductionDecidedLaneRecoveryDrainCommitter<'a> {
     local_key: &'a KeyPair,
     block_sync_server: &'a mut V2BlockSyncServer,
 }
-
 impl ProductionDecidedLaneRecoveryDrainCommitter<'_> {
     fn take_inbound(&mut self) -> Result<InboundBlockMessage, V2RunnerError> {
         self.inbound.take().ok_or_else(|| {
@@ -1086,7 +1057,6 @@ impl ProductionDecidedLaneRecoveryDrainCommitter<'_> {
             )
         })
     }
-
     fn take_bound_leader_wire(&mut self) -> Result<FairV2IngressOwnershipEvidence, V2RunnerError> {
         self.bound_leader_wire.take().ok_or_else(|| {
             V2RunnerError::Service(
@@ -1095,10 +1065,8 @@ impl ProductionDecidedLaneRecoveryDrainCommitter<'_> {
         })
     }
 }
-
 impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCommitter<'_> {
     type Admission = CertifiedServeAdmission;
-
     fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
         let inbound = self.take_inbound()?;
         let _ = self
@@ -1107,12 +1075,10 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
         let _ = self.lane_work.service_next_historical_recovery()?;
         Ok(())
     }
-
     fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError> {
         let inbound = self.take_inbound()?;
         admit_kura_replica_advert_ingress(self.receiver, self.kura, inbound)
     }
-
     fn commit_current_serve(
         &mut self,
         current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
@@ -1148,7 +1114,6 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
             }
         }
     }
-
     fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError> {
         let inbound = self.inbound.as_mut().ok_or_else(|| {
             V2RunnerError::Service(
@@ -1175,7 +1140,6 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
         self.bound_leader_wire = Some(ingress_ownership);
         Ok(())
     }
-
     fn commit_historical_serve(&mut self) -> Result<(), V2RunnerError> {
         let inbound = self.take_inbound()?;
         let ingress_ownership = self.take_bound_leader_wire()?;
@@ -1251,14 +1215,12 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
         }
         Ok(())
     }
-
     fn commit_leader_wire_volatile(&mut self) -> Result<(), V2RunnerError> {
         let _ = self.take_inbound()?;
         let ingress_ownership = self.take_bound_leader_wire()?;
         mark_leader_wire_volatile(self.receiver, &ingress_ownership)
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn drain_decided_lane_recovery_ingress(
     receiver: &FairV2Ingress,

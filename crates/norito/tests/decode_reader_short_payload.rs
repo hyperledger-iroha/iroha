@@ -1,23 +1,18 @@
 //! Decode-from-reader coverage for short payloads vs archived size.
-
 use std::io::Cursor;
-
 use iroha_schema::IntoSchema;
 use norito::{NoritoDeserialize, NoritoSerialize};
-
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct LargePayload {
     bytes: [u8; 256],
     label: String,
 }
-
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 #[allow(clippy::large_enum_variant)]
 enum ShortPayloadEnum {
     Unit,
     Large(LargePayload),
 }
-
 #[test]
 fn decode_from_reader_handles_short_payload() {
     let value = ShortPayloadEnum::Unit;

@@ -1,12 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical I105 account IDs.
-
 use std::{
     env,
     sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox::{
     self, start_network_async_or_skip as sandbox_start_network_async_or_skip,
@@ -27,18 +25,14 @@ use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use reqwest::Client;
-
 type SurfaceSpec<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
-
 const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64;
-
 fn env_flag_enabled(raw: &str) -> bool {
     matches!(
         raw.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
 }
-
 fn effective_file_permit_parallelism_limit() -> usize {
     if let Ok(raw) = env::var("IROHA_TEST_SERIALIZE_NETWORKS")
         && env_flag_enabled(&raw)
@@ -58,7 +52,6 @@ fn effective_file_permit_parallelism_limit() -> usize {
         .saturating_div(DEFAULT_NETWORK_PARALLELISM_PEERS.max(1))
         .max(1)
 }
-
 fn install_network_parallelism_override() {
     static NETWORK_PARALLELISM_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLock::new();
     // Keep this suite bounded and avoid over-admitting network starts when the underlying
@@ -67,7 +60,6 @@ fn install_network_parallelism_override() {
     NETWORK_PARALLELISM_GUARD
         .get_or_init(|| sandbox::override_network_parallelism(None, Some(suite_parallelism)));
 }
-
 async fn start_network_async_or_skip(
     builder: NetworkBuilder,
     context: &str,
@@ -75,7 +67,6 @@ async fn start_network_async_or_skip(
     install_network_parallelism_override();
     sandbox_start_network_async_or_skip(builder, context).await
 }
-
 fn http_client() -> Client {
     Client::builder()
         .timeout(Duration::from_secs(30))
@@ -83,7 +74,6 @@ fn http_client() -> Client {
         .build()
         .expect("http client should build")
 }
-
 fn kaigi_operator_http_client() -> Client {
     Client::builder()
         .timeout(Duration::from_secs(30))
@@ -92,7 +82,6 @@ fn kaigi_operator_http_client() -> Client {
         .build()
         .expect("Kaigi operator HTTP client should build")
 }
-
 async fn kaigi_operator_get(
     http: &Client,
     client: &iroha::client::Client,
@@ -125,7 +114,6 @@ async fn kaigi_operator_get(
         .send()
         .await?)
 }
-
 fn checked_random_account_id() -> AccountId {
     AccountId::new(
         KeyPair::try_random()
@@ -134,12 +122,10 @@ fn checked_random_account_id() -> AccountId {
             .clone(),
     )
 }
-
 #[test]
 fn address_canonicalisation_account_fixture_uses_checked_randomness() {
     let _account_id = checked_random_account_id();
 }
-
 fn extract_account_ids(value: &norito::json::Value) -> Vec<String> {
     value
         .as_object()
@@ -158,7 +144,6 @@ fn extract_account_ids(value: &norito::json::Value) -> Vec<String> {
         })
         .unwrap_or_default()
 }
-
 async fn wait_for_account_in_query(
     http: &Client,
     url: reqwest::Url,
@@ -191,7 +176,6 @@ async fn wait_for_account_in_query(
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
-
 fn extract_holder_account_ids(value: &norito::json::Value) -> Vec<String> {
     value
         .as_object()
@@ -210,7 +194,6 @@ fn extract_holder_account_ids(value: &norito::json::Value) -> Vec<String> {
         })
         .unwrap_or_default()
 }
-
 async fn find_asset_definition_with_holders(
     http: &Client,
     base: &reqwest::Url,
@@ -230,7 +213,6 @@ async fn find_asset_definition_with_holders(
             "failed to list asset definitions for holder test selection: {status} body={body}"
         ));
     }
-
     let parsed: norito::json::Value = norito::json::from_str(&body)?;
     let definition_ids: Vec<String> = parsed
         .as_object()
@@ -248,7 +230,6 @@ async fn find_asset_definition_with_holders(
                 .collect()
         })
         .unwrap_or_default();
-
     let mut first_successful_definition: Option<String> = None;
     for definition_id in definition_ids {
         let mut holders_url = base.clone();
@@ -263,7 +244,6 @@ async fn find_asset_definition_with_holders(
             path.push("holders");
         }
         holders_url.query_pairs_mut().append_pair("limit", "8");
-
         let holders_resp = http
             .get(holders_url)
             .header("Accept", "application/json")
@@ -285,14 +265,11 @@ async fn find_asset_definition_with_holders(
             return Ok(Some(definition_id));
         }
     }
-
     if let Some(definition_id) = first_successful_definition {
         return Ok(Some(definition_id));
     }
-
     Ok(None)
 }
-
 fn extract_explorer_authorities(value: &norito::json::Value) -> Vec<String> {
     value
         .as_object()
@@ -311,7 +288,6 @@ fn extract_explorer_authorities(value: &norito::json::Value) -> Vec<String> {
         })
         .unwrap_or_default()
 }
-
 fn extract_account_transaction_authorities(value: &norito::json::Value) -> Vec<String> {
     value
         .as_object()
@@ -330,16 +306,13 @@ fn extract_account_transaction_authorities(value: &norito::json::Value) -> Vec<S
         })
         .unwrap_or_default()
 }
-
 fn assert_authorities_are_i105(authorities: &[String]) -> Result<()> {
     for literal in authorities {
         AccountAddress::parse_encoded(literal, None)
             .wrap_err_with(|| format!("authority {literal} should parse as account address"))?;
     }
-
     Ok(())
 }
-
 fn find_repo_entry<'a>(
     value: &'a norito::json::Value,
     agreement_id: &str,
@@ -360,36 +333,30 @@ fn find_repo_entry<'a>(
             })
         })
 }
-
 fn i105_alice_literal() -> String {
     let account_address = ALICE_ID
         .to_account_address()
         .expect("account address should encode");
     account_address.to_i105().expect("I105 address encoding")
 }
-
 fn i105_bob_literal() -> String {
     let account_address = BOB_ID
         .to_account_address()
         .expect("account address should encode");
     account_address.to_i105().expect("I105 address encoding")
 }
-
 fn dotted_i105_literal(i105_literal: &str) -> String {
     let mut chars = i105_literal.chars();
     let sentinel: String = chars.by_ref().take(4).collect();
     let remainder: String = chars.collect();
     format!("{sentinel}.{remainder}")
 }
-
 fn dotted_i105_alice_literal() -> String {
     dotted_i105_literal(&i105_alice_literal())
 }
-
 fn dotted_i105_bob_literal() -> String {
     dotted_i105_literal(&i105_bob_literal())
 }
-
 fn local8_literal() -> String {
     let account_address = ALICE_ID
         .to_account_address()
@@ -398,9 +365,7 @@ fn local8_literal() -> String {
         .canonical_hex()
         .expect("canonical hex encoding");
     let canonical = hex::decode(&canonical_hex[2..]).expect("canonical hex decoding succeeds");
-
     let digest = [0xA5; 12];
-
     // Construct a legacy Local-12 layout and then truncate it to Local-8 to emulate
     // a pre-cutover payload shape that must be rejected by the parser.
     let mut legacy = Vec::with_capacity(canonical.len() + digest.len());
@@ -411,17 +376,14 @@ fn local8_literal() -> String {
     legacy.drain(10..14); // trim digest bytes to Local-8 legacy width
     format!("0x{}", hex::encode(legacy))
 }
-
 fn public_key_literal() -> String {
     let public_key = ALICE_KEYPAIR.public_key().to_string();
     format!("{public_key}@banka.centralbank")
 }
-
 struct KaigiRelaySeed {
     relay_i105: String,
     reporter_i105: String,
 }
-
 fn account_endpoint_url(
     base: &reqwest::Url,
     account_literal: &str,
@@ -442,7 +404,6 @@ fn account_endpoint_url(
     }
     url
 }
-
 fn explorer_account_qr_url(base: &reqwest::Url, account_literal: &str) -> reqwest::Url {
     let mut url = base.clone();
     {
@@ -458,7 +419,6 @@ fn explorer_account_qr_url(base: &reqwest::Url, account_literal: &str) -> reqwes
     }
     url
 }
-
 #[tokio::test]
 async fn accounts_listing_emits_i105_identifiers() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -470,7 +430,6 @@ async fn accounts_listing_emits_i105_identifiers() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let http = http_client();
     let url = network
         .client()
@@ -490,7 +449,6 @@ async fn accounts_listing_emits_i105_identifiers() -> Result<()> {
     let body = resp.text().await?;
     let parsed: norito::json::Value = norito::json::from_str(&body)?;
     let ids = extract_account_ids(&parsed);
-
     let expected = ALICE_ID.to_string();
     assert!(
         ids.iter().any(|id| id == &expected),
@@ -500,10 +458,8 @@ async fn accounts_listing_emits_i105_identifiers() -> Result<()> {
         ids.iter().all(|id| !id.contains('@')),
         "account listing should emit canonical I105 strings"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn accounts_query_accepts_i105_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -515,12 +471,10 @@ async fn accounts_query_accepts_i105_filter_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let expected = ALICE_ID.to_string();
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{expected}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
-
     let http = http_client();
     let url = network
         .client()
@@ -545,10 +499,8 @@ async fn accounts_query_accepts_i105_filter_literals() -> Result<()> {
         ids.iter().all(|id| id == &expected),
         "accounts query should return I105 literal {expected}, got {ids:?}"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn accounts_listing_filter_rejects_dotted_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -560,7 +512,6 @@ async fn accounts_listing_filter_rejects_dotted_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("dotted I105 literal must fail strict parsing")
@@ -593,10 +544,8 @@ async fn accounts_listing_filter_rejects_dotted_i105_literals() -> Result<()> {
         body.contains(&reason),
         "response body should mention {reason}, got {body}"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn accounts_query_rejects_dotted_i105_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -608,7 +557,6 @@ async fn accounts_query_rejects_dotted_i105_filter_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("dotted I105 literal must fail strict parsing")
@@ -617,7 +565,6 @@ async fn accounts_query_rejects_dotted_i105_filter_literals() -> Result<()> {
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
-
     let http = http_client();
     let url = network
         .client()
@@ -641,10 +588,8 @@ async fn accounts_query_rejects_dotted_i105_filter_literals() -> Result<()> {
         body.contains(&reason),
         "response body should mention {reason}, got {body}"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn accounts_listing_supports_i105_response() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -656,7 +601,6 @@ async fn accounts_listing_supports_i105_response() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let http = http_client();
     let url = network
         .client()
@@ -684,10 +628,8 @@ async fn accounts_listing_supports_i105_response() -> Result<()> {
         AccountId::parse_encoded(id)
             .wrap_err_with(|| format!("account id {id} should parse as canonical I105"))?;
     }
-
     Ok(())
 }
-
 #[tokio::test]
 async fn accounts_query_supports_i105_response() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -699,7 +641,6 @@ async fn accounts_query_supports_i105_response() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let body = r#"{"filter":null,"sort":[],"pagination":{"limit":8,"offset":0},"fetch_size":null,"select":null}"#;
     let http = http_client();
     let url = network
@@ -726,10 +667,8 @@ async fn accounts_query_supports_i105_response() -> Result<()> {
         ids.iter().any(|id| id == &expected),
         "I105 literal {expected} missing from query response {ids:?}"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -741,20 +680,17 @@ async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
     let http = http_client();
-
     let surfaces: [SurfaceSpec; 3] = [
         (&["assets"], &[("limit", "4")]),
         (&["transactions"], &[("limit", "4")]),
         (&["permissions"], &[("limit", "4")]),
     ];
-
     for (segments, query_pairs) in surfaces {
         let mut url = account_endpoint_url(&network.client().torii_url, literal.as_str(), segments);
         {
@@ -779,10 +715,8 @@ async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
             "response body should mention {reason}, got {body}"
         );
     }
-
     Ok(())
 }
-
 #[tokio::test]
 async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -794,7 +728,6 @@ async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let literal = local8_literal();
     let local8_reason = AccountId::parse_encoded(&literal)
         .expect_err("local8 literal must fail to parse")
@@ -806,7 +739,6 @@ async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
         (&["transactions"], &[("limit", "4")]),
         (&["permissions"], &[("limit", "4")]),
     ];
-
     for (segments, query_pairs) in surfaces {
         let mut url = account_endpoint_url(&network.client().torii_url, literal.as_str(), segments);
         {
@@ -831,10 +763,8 @@ async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
             "response body should mention {local8_reason}, got {body}"
         );
     }
-
     Ok(())
 }
-
 #[tokio::test]
 async fn account_path_endpoints_reject_public_key_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -846,7 +776,6 @@ async fn account_path_endpoints_reject_public_key_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let literal = public_key_literal();
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key@domain literal must fail strict parsing")
@@ -858,7 +787,6 @@ async fn account_path_endpoints_reject_public_key_literals() -> Result<()> {
         (&["transactions"], &[("limit", "4")]),
         (&["permissions"], &[("limit", "4")]),
     ];
-
     for (segments, query_pairs) in surfaces {
         let mut url = account_endpoint_url(&network.client().torii_url, literal.as_str(), segments);
         {
@@ -883,10 +811,8 @@ async fn account_path_endpoints_reject_public_key_literals() -> Result<()> {
             "response body should mention {reason}, got {body}"
         );
     }
-
     Ok(())
 }
-
 #[tokio::test]
 async fn asset_holders_get_supports_i105_response() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -898,7 +824,6 @@ async fn asset_holders_get_supports_i105_response() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let http = http_client();
     let Some(definition_literal) =
         find_asset_definition_with_holders(&http, &network.client().torii_url).await?
@@ -939,10 +864,8 @@ async fn asset_holders_get_supports_i105_response() -> Result<()> {
         AccountId::parse_encoded(id)
             .wrap_err_with(|| format!("holder id {id} should parse as canonical I105"))?;
     }
-
     Ok(())
 }
-
 #[tokio::test]
 async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -954,7 +877,6 @@ async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()>
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("dotted I105 literal must fail strict parsing")
@@ -963,7 +885,6 @@ async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()>
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["account_id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null}}"#
     );
-
     let http = http_client();
     let Some(definition_literal) =
         find_asset_definition_with_holders(&http, &network.client().torii_url).await?
@@ -1000,10 +921,8 @@ async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()>
         body.contains(&reason),
         "response body should mention {reason}, got {body}"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn account_transactions_get_returns_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -1015,7 +934,6 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     // Ensure the account has at least one external transaction to format.
     let client = network.client();
     let peer_clients: Vec<_> = network.peers().iter().map(|peer| peer.client()).collect();
@@ -1048,17 +966,14 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
         }
     })
     .await??;
-
     let http = http_client();
     let account_literal = ALICE_ID.to_string();
     let i105_literal = account_literal.clone();
-
     let base = account_endpoint_url(
         &network.client().torii_url,
         &account_literal,
         &["transactions"],
     );
-
     let default_url = {
         let mut url = base.clone();
         {
@@ -1075,7 +990,6 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
         }
         url
     };
-
     let authorities = {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
@@ -1116,7 +1030,6 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
         "I105 default should include canonical literal {account_literal}, got {authorities:?}"
     );
     assert_authorities_are_i105(&authorities)?;
-
     let resp = http
         .get(i105_url.clone())
         .header("Accept", "application/json")
@@ -1134,10 +1047,8 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
         "I105 response should include {i105_literal}, got {authorities:?}"
     );
     assert_authorities_are_i105(&authorities)?;
-
     Ok(())
 }
-
 #[tokio::test]
 async fn account_transactions_query_returns_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -1149,7 +1060,6 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     // Ensure the account has at least one external transaction to format.
     let client = network.client();
     let peer_clients: Vec<_> = network.peers().iter().map(|peer| peer.client()).collect();
@@ -1182,17 +1092,14 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
         }
     })
     .await??;
-
     let http = http_client();
     let account_literal = ALICE_ID.to_string();
     let i105_literal = account_literal.clone();
-
     let url = account_endpoint_url(
         &network.client().torii_url,
         &account_literal,
         &["transactions", "query"],
     );
-
     let default_body = r#"{"filter":null,"sort":[],"pagination":{"offset":0,"limit":8},"fetch_size":null,"select":null}"#;
     let authorities = {
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -1236,7 +1143,6 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
         "I105 default query should include canonical literal {account_literal}, got {authorities:?}"
     );
     assert_authorities_are_i105(&authorities)?;
-
     let i105_body = r#"{"filter":null,"sort":[],"pagination":{"offset":0,"limit":8},"fetch_size":null,"select":null}"#;
     let resp = http
         .post(url.clone())
@@ -1257,10 +1163,8 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
         "I105 query response should include {i105_literal}, got {authorities:?}"
     );
     assert_authorities_are_i105(&authorities)?;
-
     Ok(())
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn explorer_transactions_emit_i105_literals() -> Result<()> {
@@ -1273,17 +1177,14 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let http = http_client();
     let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
     let i105_literal = account_literal.clone();
-
     let base = network
         .client()
         .torii_url
         .join("/v1/explorer/transactions")
         .expect("join explorer transactions url");
-
     let default_url = {
         let mut url = base.clone();
         {
@@ -1316,7 +1217,6 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
             .all(|literal| literal == &account_literal),
         "explorer transactions should default to I105 literals; got {authorities:?}"
     );
-
     let i105_url = {
         let mut url = base.clone();
         {
@@ -1347,7 +1247,6 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         authorities.iter().all(|literal| literal == &i105_literal),
         "explorer transactions should honour canonical I105; got {authorities:?}"
     );
-
     let dotted_i105_filter = dotted_i105_literal(&i105_literal);
     let dotted_i105_filter_url = {
         let mut url = base;
@@ -1378,10 +1277,8 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         body.contains(&dotted_i105_reason),
         "response body should mention {dotted_i105_reason}, got {body}"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn explorer_instructions_emit_i105_literals() -> Result<()> {
@@ -1394,17 +1291,14 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let http = http_client();
     let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
     let i105_literal = account_literal.clone();
-
     let base = network
         .client()
         .torii_url
         .join("/v1/explorer/instructions")
         .expect("join explorer instructions url");
-
     let default_url = {
         let mut url = base.clone();
         {
@@ -1437,7 +1331,6 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
             .all(|literal| literal == &account_literal),
         "explorer instructions should default to I105 literals; got {authorities:?}"
     );
-
     let i105_url = {
         let mut url = base.clone();
         {
@@ -1468,7 +1361,6 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         authorities.iter().all(|literal| literal == &i105_literal),
         "explorer instructions should honour canonical I105; got {authorities:?}"
     );
-
     let dotted_i105_filter = dotted_i105_literal(&i105_literal);
     let dotted_i105_filter_url = {
         let mut url = base;
@@ -1499,10 +1391,8 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         body.contains(&dotted_i105_reason),
         "response body should mention {dotted_i105_reason}, got {body}"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn explorer_account_qr_defaults_to_i105_for_discriminant() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -1514,7 +1404,6 @@ async fn explorer_account_qr_defaults_to_i105_for_discriminant() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let http = http_client();
     let canonical_literal = ALICE_ID.to_string();
     let url = explorer_account_qr_url(&network.client().torii_url, &canonical_literal);
@@ -1568,10 +1457,8 @@ async fn explorer_account_qr_defaults_to_i105_for_discriminant() -> Result<()> {
             > 0,
         "qr_version should be present and non-zero"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn explorer_account_qr_accepts_i105_hint() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -1583,7 +1470,6 @@ async fn explorer_account_qr_accepts_i105_hint() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let http = http_client();
     let canonical_literal = ALICE_ID.to_string();
     let url = explorer_account_qr_url(&network.client().torii_url, &canonical_literal);
@@ -1610,10 +1496,8 @@ async fn explorer_account_qr_accepts_i105_hint() -> Result<()> {
         Some(canonical_literal.as_str()),
         "literal should honour the i105 preference"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn accounts_query_rejects_local8_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -1625,7 +1509,6 @@ async fn accounts_query_rejects_local8_filter_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let literal = local8_literal();
     let local8_reason = AccountId::parse_encoded(&literal)
         .expect_err("local8 literal must fail to parse")
@@ -1657,10 +1540,8 @@ async fn accounts_query_rejects_local8_filter_literals() -> Result<()> {
         body.contains(&local8_reason),
         "response body should mention {local8_reason}, got {body}"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
@@ -1672,7 +1553,6 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let literal = public_key_literal();
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key@domain literal must fail strict parsing")
@@ -1704,10 +1584,8 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
         body.contains(&reason),
         "response body should mention {reason}, got {body}"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() -> Result<()> {
     let domain_id: DomainId = DomainId::try_new("aliases", "universal")?;
@@ -1733,7 +1611,6 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let client = network.client();
     let url = client
         .torii_url
@@ -1742,10 +1619,8 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
     let expected = account_id.to_string();
     let http = http_client();
     wait_for_account_in_query(&http, url.clone(), &expected).await?;
-
     let alias_literal = format!("{}@{}", label.label, domain_id);
     let i105_literal = dotted_i105_literal(&account_id.to_string());
-
     let alias_body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{alias_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
@@ -1773,7 +1648,6 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
         alias_ids.iter().all(|id| !id.contains('@')),
         "alias query should still return canonical ids, got {alias_ids:?}"
     );
-
     let body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{i105_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
@@ -1799,10 +1673,8 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
         body.contains(&reason),
         "response body should mention {reason}, got {body}"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn repo_agreements_emit_i105_literals() -> Result<()> {
@@ -1829,7 +1701,6 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         )
         .into(),
     ];
-
     let maturity_ms = u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)?
@@ -1853,12 +1724,10 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         maturity_ms,
         RepoGovernance::with_defaults(1_500, 43_200),
     );
-
     let mut builder = NetworkBuilder::new();
     for isi in setup_instructions {
         builder = builder.with_genesis_instruction(isi);
     }
-
     let Some(network) =
         start_network_async_or_skip(builder, stringify!(repo_agreements_emit_i105_literals))
             .await?
@@ -1878,7 +1747,6 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         return Ok(());
     }
     network.ensure_blocks(2).await?;
-
     let http = http_client();
     let base = client.torii_url.clone();
     let i105_alice = ALICE_ID.to_string();
@@ -1886,7 +1754,6 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     let agreement_literal = agreement_id.to_string();
     let i105_alice = i105_alice.clone();
     let i105_bob = i105_bob.clone();
-
     let mut default_url = base.join("/v1/repo/agreements")?;
     {
         let mut qp = default_url.query_pairs_mut();
@@ -1927,7 +1794,6 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         counterparty, i105_bob,
         "repo agreements must default to I105 counterparties"
     );
-
     let mut i105_url = base.join("/v1/repo/agreements")?;
     {
         let mut qp = i105_url.query_pairs_mut();
@@ -1962,7 +1828,6 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         counterparty, i105_bob,
         "repo agreements should honour canonical I105 for counterparties"
     );
-
     let query_url = base.join("/v1/repo/agreements/query")?;
     let query_body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{agreement_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
@@ -1998,17 +1863,14 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         counterparty, i105_bob,
         "repo agreements query should honour canonical I105"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // integration coverage requires full scenario setup
 async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     let relay_id = BOB_ID.clone();
     let reporter_id = ALICE_ID.clone();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
-
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),
         hpke_public_key: vec![0xAA; 32],
@@ -2020,7 +1882,6 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         .map_err(|err| eyre!("serialize Kaigi relay registration: {err}"))?;
     let set_registration =
         SetKeyValue::domain(domain_id.clone(), registration_key, registration_value);
-
     let call_name: Name = "integration-demo".parse()?;
     let feedback = KaigiRelayFeedback {
         relay_id: relay_id.clone(),
@@ -2034,11 +1895,9 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     let feedback_value =
         Json::try_new(feedback).map_err(|err| eyre!("serialize Kaigi relay feedback: {err}"))?;
     let set_feedback = SetKeyValue::domain(domain_id, feedback_key, feedback_value);
-
     let mut builder = NetworkBuilder::new();
     builder = builder.with_genesis_instruction(set_registration);
     builder = builder.with_genesis_instruction(set_feedback);
-
     let Some(network) =
         start_network_async_or_skip(builder, stringify!(kaigi_endpoints_emit_i105_literals))
             .await?
@@ -2046,15 +1905,12 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-
     let seed = KaigiRelaySeed {
         relay_i105: relay_id.to_string(),
         reporter_i105: reporter_id.to_string(),
     };
-
     let client = network.client();
     let http = kaigi_operator_http_client();
-
     let summary_resp = kaigi_operator_get(&http, &client, "/v1/kaigi/relays").await?;
     assert!(
         summary_resp.status().is_success(),
@@ -2081,7 +1937,6 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         "expected I105 literal {} in kaigi summary, got {default_literals:?}",
         seed.relay_i105
     );
-
     let i105_resp = kaigi_operator_get(&http, &client, "/v1/kaigi/relays").await?;
     assert!(
         i105_resp.status().is_success(),
@@ -2107,7 +1962,6 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         "expected I105 literal {} in kaigi summary, got {i105_literals:?}",
         seed.relay_i105
     );
-
     let legacy_relay_literal = dotted_i105_bob_literal();
     let detail_target = format!("/v1/kaigi/relays/{legacy_relay_literal}");
     let detail_resp = kaigi_operator_get(&http, &client, &detail_target).await?;
@@ -2126,7 +1980,6 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         body.contains(&reason),
         "response body should mention {reason}, got {body}"
     );
-
     let formatted_detail_target = format!("/v1/kaigi/relays/{}", seed.relay_i105);
     let formatted_resp = kaigi_operator_get(&http, &client, &formatted_detail_target).await?;
     assert!(
@@ -2154,6 +2007,5 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         reported_by_literal, seed.reporter_i105,
         "reported_by should honour canonical I105"
     );
-
     Ok(())
 }

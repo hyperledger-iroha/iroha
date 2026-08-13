@@ -12,9 +12,7 @@
 //! relation.  Composition/FRI challenge counts are deliberately outside this
 //! module and remain three.  Aggregate registration and consensus activation
 //! remain false until every terminal below is wired to its numeric consumer.
-
 use thiserror::Error;
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::der_air::rfc5280_io_witnesses_v1;
 use super::{
@@ -2305,7 +2303,6 @@ fn parse_time_cells_v1(
     tag: u32,
 ) -> Result<(u64, Vec<ZkX509Rfc5280SourceCellV1>), ZkX509Rfc5280StarkErrorV1> {
     use time::{Date, Month, PrimitiveDateTime, Time};
-
     let bytes = cells.iter().map(|cell| cell.value).collect::<Vec<_>>();
     let (year, offset, z_offset) = if tag == 23 {
         if bytes.len() != 13 || bytes[12] != b'Z' {
@@ -9296,7 +9293,6 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
 #[cfg(test)]
 mod tests {
     use sha2::{Digest as _, Sha256};
-
     use super::*;
     use crate::privacy_engines::zk_x509::{
         der_air::build_zk_x509_rfc5280_trace_v1, relation::tests::fixture,

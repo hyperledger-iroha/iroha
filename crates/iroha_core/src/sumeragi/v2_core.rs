@@ -5,7 +5,6 @@
 //! The excluded `iroha_sumeragi_core` crate is only a verification harness over
 //! these sources, so publishing `iroha_core` never depends on files outside its
 //! own package root.
-
 // These dependency-free source modules also form the public API of the
 // standalone `iroha_sumeragi_core` verification crate. Some public accessors
 // are not used by the private embedded adapter, so its compilation cannot
@@ -27,14 +26,12 @@ mod types;
 // currently consumes only the logical replay subset.
 #[allow(dead_code)]
 mod wal;
-
 // The dependency-free reducer and the configured exact-output geometry must
 // reserve the same complete effect batch. Array-length equality makes drift a
 // production compile error without introducing `iroha_config` into the formal
 // harness.
 const _: [(); refinement::MAX_EFFECTS_PER_STEP] =
     [(); iroha_config::parameters::defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP];
-
 #[allow(unused_imports)]
 pub(crate) use committee::{
     Committee, CommitteeError, CommitteeRole, MAX_COMMITTEE_SIZE, MIN_COMMITTEE_SIZE,
@@ -177,10 +174,8 @@ pub use refinement::{
     check_production_two_stage_relay_retry_transition,
     production_two_stage_relay_retry_trace_refines_source_fairness_kernel,
 };
-
 /// Schema of the production-reachable first-release transition witness.
 pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TRANSITION_WITNESS_VERSION: u16 = 1;
-
 /// SHA-256 identity of the reviewed TLA+ action source for witness schema V1.
 ///
 /// The formal source checker recomputes this value from
@@ -193,7 +188,6 @@ pub(crate) const PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256:
     word2: 0xe1f8_d08a_a23a_38f4,
     word3: 0x2a16_ecef_1e85_8f7d,
 };
-
 /// Explicit classification accepted by the production trace replay reducer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProductionInFlightFirstReleaseReplayStepV1 {
@@ -204,7 +198,6 @@ pub(crate) enum ProductionInFlightFirstReleaseReplayStepV1 {
     /// Post-carrier receipt/index repair which changes no abstract fact.
     RepairPostCarrierEvidenceStutter,
 }
-
 fn append_first_release_identity_v1(bytes: &mut Vec<u8>, identity: CanonicalIdentityProjection) {
     bytes.push(identity.domain);
     bytes.push(identity.kind);
@@ -213,11 +206,9 @@ fn append_first_release_identity_v1(bytes: &mut Vec<u8>, identity: CanonicalIden
     bytes.extend_from_slice(&identity.word2.to_be_bytes());
     bytes.extend_from_slice(&identity.word3.to_be_bytes());
 }
-
 fn append_first_release_bool_v1(bytes: &mut Vec<u8>, value: bool) {
     bytes.push(u8::from(value));
 }
-
 /// Canonically encode the complete fixed-width abstract state for witness V1.
 fn canonical_first_release_state_bytes_v1(
     state: ProductionInFlightFirstReleaseStateProjection,
@@ -230,20 +221,16 @@ fn canonical_first_release_state_bytes_v1(
     bytes.extend_from_slice(&state.replicated_carrier_owners.to_be_bytes());
     bytes.extend_from_slice(&state.payload_binding_a.to_be_bytes());
     append_first_release_identity_v1(&mut bytes, state.binding_a);
-
     bytes.push(state.queue.plan_state);
     bytes.extend_from_slice(&state.queue.selected_count.to_be_bytes());
     bytes.push(state.queue.reservation_state);
-
     bytes.extend_from_slice(&state.carrier.kura_active.to_be_bytes());
     bytes.extend_from_slice(&state.carrier.execution_input_durable.to_be_bytes());
     append_first_release_bool_v1(&mut bytes, state.carrier.ready_qc_durable);
-
     bytes.extend_from_slice(&state.session.bodies.to_be_bytes());
     bytes.extend_from_slice(&state.session.ready_authorized.to_be_bytes());
     bytes.extend_from_slice(&state.session.crashed.to_be_bytes());
     append_first_release_bool_v1(&mut bytes, state.session.producer_alive);
-
     append_first_release_bool_v1(&mut bytes, state.history.ever_queue_plan_v4);
     append_first_release_bool_v1(&mut bytes, state.history.ever_reservation_v5);
     bytes.extend_from_slice(&state.history.ever_execution_input_durable.to_be_bytes());
@@ -260,7 +247,6 @@ fn canonical_first_release_state_bytes_v1(
     );
     bytes.extend_from_slice(&state.history.pending_high_water.to_be_bytes());
     bytes.extend_from_slice(&state.history.released_high_water.to_be_bytes());
-
     append_first_release_identity_v1(&mut bytes, state.decision.lane_commit_scope);
     append_first_release_identity_v1(&mut bytes, state.decision.release_scope);
     bytes.extend_from_slice(&state.decision.lane_commit_owner.to_be_bytes());
@@ -268,14 +254,12 @@ fn canonical_first_release_state_bytes_v1(
     append_first_release_bool_v1(&mut bytes, state.decision.wsv_committed);
     bytes.push(state.decision.application_count);
     bytes.extend_from_slice(&state.decision.applied_by.to_be_bytes());
-
     append_first_release_bool_v1(&mut bytes, state.release.kura_retired);
     bytes.extend_from_slice(&state.release.pending_prefix.to_be_bytes());
     bytes.extend_from_slice(&state.release.released_prefix.to_be_bytes());
     append_first_release_bool_v1(&mut bytes, state.release.fifo_restored);
     bytes
 }
-
 fn production_in_flight_first_release_state_digest_v1(
     state: ProductionInFlightFirstReleaseStateProjection,
 ) -> ProductionDigest256Projection {
@@ -295,7 +279,6 @@ fn production_in_flight_first_release_state_digest_v1(
         ]),
     }
 }
-
 fn production_in_flight_first_release_transition_witness_v1(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
 ) -> ProductionInFlightFirstReleaseTransitionWitnessV1 {
@@ -309,7 +292,6 @@ fn production_in_flight_first_release_transition_witness_v1(
         source_identity: PRODUCTION_IN_FLIGHT_FIRST_RELEASE_TLA_SOURCE_SHA256,
     }
 }
-
 /// Independently authenticate one V1 witness against its exact projection.
 #[must_use]
 pub(crate) fn authenticate_production_in_flight_first_release_transition_witness_v1(
@@ -320,7 +302,6 @@ pub(crate) fn authenticate_production_in_flight_first_release_transition_witness
         && production_in_flight_first_release_witness_binding_kernel(projection, witness)
         && witness == production_in_flight_first_release_transition_witness_v1(projection)
 }
-
 /// Replay one classified trace step through the sole composed production relation.
 ///
 /// The reducer rejects both named stutters unless the caller classifies them
@@ -355,7 +336,6 @@ pub(crate) fn check_production_in_flight_first_release_replay_step_v1(
     authenticate_production_in_flight_first_release_transition_witness_v1(projection, witness)
         .then(|| checked.with_first_release_witness(witness))
 }
-
 /// Check and witness any of the 27 first-release production actions.
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_transition(
@@ -372,13 +352,11 @@ pub(crate) fn check_production_in_flight_first_release_transition(
     };
     check_production_in_flight_first_release_replay_step_v1(projection, classification)
 }
-
 fn witness_derived_first_release_transition(
     checked: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
 ) -> Option<CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>> {
     check_production_in_flight_first_release_transition(checked.into_projection())
 }
-
 /// Derive, check, and witness `FanoutFromProducer`.
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_fanout_from_producer_transition(
@@ -391,7 +369,6 @@ pub(crate) fn check_production_in_flight_first_release_fanout_from_producer_tran
         )?,
     )
 }
-
 /// Derive, check, and witness `ServeLateBody`.
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_serve_late_body_transition(
@@ -405,7 +382,6 @@ pub(crate) fn check_production_in_flight_first_release_serve_late_body_transitio
         )?,
     )
 }
-
 /// Derive, check, and witness `Crash`.
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_crash_transition(
@@ -416,7 +392,6 @@ pub(crate) fn check_production_in_flight_first_release_crash_transition(
         refinement::check_production_in_flight_first_release_crash_transition(before, actor)?,
     )
 }
-
 /// Derive, check, and witness `Recover`.
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_recover_transition(
@@ -427,7 +402,6 @@ pub(crate) fn check_production_in_flight_first_release_recover_transition(
         refinement::check_production_in_flight_first_release_recover_transition(before, actor)?,
     )
 }
-
 /// Derive, check, and witness the reservation-snapshot stutter.
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_recover_reservation_snapshot_transition(
@@ -439,7 +413,6 @@ pub(crate) fn check_production_in_flight_first_release_recover_reservation_snaps
         )?,
     )
 }
-
 /// Derive, check, and witness `RehydrateLocalKuraCustody`.
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(
@@ -452,7 +425,6 @@ pub(crate) fn check_production_in_flight_first_release_rehydrate_local_kura_cust
         )?,
     )
 }
-
 /// Derive, check, and witness the post-carrier evidence-repair stutter.
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_repair_post_carrier_evidence_transition(
@@ -488,6 +460,5 @@ pub(crate) use wal::{
 };
 #[cfg(test)]
 pub(crate) use wal::{SAFETY_WAL_FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION};
-
 #[cfg(test)]
 mod tests;

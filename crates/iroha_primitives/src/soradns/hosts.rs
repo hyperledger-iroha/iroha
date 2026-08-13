@@ -1,8 +1,6 @@
 //! Deterministic `SoraDNS` gateway host derivation.
-
 use blake3::hash as blake3_hash;
 use thiserror::Error;
-
 /// Maximum length of a fully-qualified domain name accepted by the helper.
 const MAX_FQDN_LENGTH: usize = 253;
 /// Maximum length of an individual DNS label.
@@ -11,7 +9,6 @@ const CANONICAL_SUFFIX: &str = "gw.sora.id";
 const PRETTY_SUFFIX: &str = "gw.sora.name";
 const TAIRA_MON_PRETTY_SUFFIX: &str = "mon.taira.sora.net";
 const CANONICAL_WILDCARD: &str = "*.gw.sora.id";
-
 /// Gateway host derivation profile.
 ///
 /// The canonical hash namespace remains fixed. Deployments can choose their
@@ -20,39 +17,33 @@ const CANONICAL_WILDCARD: &str = "*.gw.sora.id";
 pub struct GatewayHostProfile<'a> {
     pretty_suffix: &'a str,
 }
-
 impl<'a> GatewayHostProfile<'a> {
     /// Create a profile that derives pretty hosts under `pretty_suffix`.
     #[must_use]
     pub const fn new(pretty_suffix: &'a str) -> Self {
         Self { pretty_suffix }
     }
-
     /// Default upstream `SoraDNS` gateway profile.
     #[must_use]
     pub const fn default_profile() -> GatewayHostProfile<'static> {
         GatewayHostProfile::new(PRETTY_SUFFIX)
     }
-
     /// Taira Mon gateway profile.
     #[must_use]
     pub const fn taira_mon() -> GatewayHostProfile<'static> {
         GatewayHostProfile::new(TAIRA_MON_PRETTY_SUFFIX)
     }
-
     /// Pretty-host suffix used by this profile.
     #[must_use]
     pub const fn pretty_suffix(&self) -> &str {
         self.pretty_suffix
     }
 }
-
 impl Default for GatewayHostProfile<'static> {
     fn default() -> Self {
         Self::default_profile()
     }
 }
-
 /// Errors returned when deriving gateway hosts from an FQDN.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum GatewayHostError {
@@ -86,7 +77,6 @@ pub enum GatewayHostError {
         character: char,
     },
 }
-
 /// Deterministic gateway hosts associated with a `SoraDNS` name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayHostBindings {
@@ -95,38 +85,32 @@ pub struct GatewayHostBindings {
     canonical_host: String,
     pretty_host: String,
 }
-
 impl GatewayHostBindings {
     /// Returns the canonicalised FQDN used for hashing.
     #[must_use]
     pub fn normalized_name(&self) -> &str {
         &self.normalized_name
     }
-
     /// Returns the base32-encoded Blake3 label used for canonical resolution.
     #[must_use]
     pub fn canonical_label(&self) -> &str {
         &self.canonical_label
     }
-
     /// Returns the canonical gateway host (`<hash>.gw.sora.id`).
     #[must_use]
     pub fn canonical_host(&self) -> &str {
         &self.canonical_host
     }
-
     /// Returns the pretty gateway host (`<fqdn>.gw.sora.name`).
     #[must_use]
     pub fn pretty_host(&self) -> &str {
         &self.pretty_host
     }
-
     /// Returns the wildcard pattern authorised for canonical hosts.
     #[must_use]
     pub const fn canonical_wildcard() -> &'static str {
         CANONICAL_WILDCARD
     }
-
     /// Returns the host patterns that a GAR entry must authorise.
     #[must_use]
     pub fn host_patterns(&self) -> [&str; 3] {
@@ -136,7 +120,6 @@ impl GatewayHostBindings {
             self.pretty_host(),
         ]
     }
-
     /// Checks whether the supplied hostname matches one of the derived hosts.
     #[must_use]
     pub fn matches_host(&self, candidate: &str) -> bool {
@@ -144,31 +127,26 @@ impl GatewayHostBindings {
             .is_some_and(|host| host == self.canonical_host || host == self.pretty_host)
     }
 }
-
 /// Return the canonical gateway suffix (`gw.sora.id`).
 #[must_use]
 pub const fn canonical_gateway_suffix() -> &'static str {
     CANONICAL_SUFFIX
 }
-
 /// Return the pretty gateway suffix (`gw.sora.name`).
 #[must_use]
 pub const fn pretty_gateway_suffix() -> &'static str {
     PRETTY_SUFFIX
 }
-
 /// Return the Taira Mon pretty gateway suffix (`mon.taira.sora.net`).
 #[must_use]
 pub const fn taira_mon_pretty_gateway_suffix() -> &'static str {
     TAIRA_MON_PRETTY_SUFFIX
 }
-
 /// Return the wildcard pattern authorised for canonical hosts (`*.gw.sora.id`).
 #[must_use]
 pub const fn canonical_gateway_wildcard_pattern() -> &'static str {
     CANONICAL_WILDCARD
 }
-
 /// Derive deterministic gateway hosts for the supplied `SoraDNS` FQDN.
 ///
 /// The FQDN must already be ASCII-compatible (Punycode) and follow the
@@ -180,7 +158,6 @@ pub const fn canonical_gateway_wildcard_pattern() -> &'static str {
 pub fn derive_gateway_hosts(fqdn: &str) -> Result<GatewayHostBindings, GatewayHostError> {
     derive_gateway_hosts_with_profile(fqdn, GatewayHostProfile::default_profile())
 }
-
 /// Derive deterministic gateway hosts for the supplied `SoraDNS` FQDN using a
 /// custom pretty-host profile.
 ///
@@ -210,7 +187,6 @@ pub fn derive_gateway_hosts_with_profile(
         pretty_host,
     })
 }
-
 fn normalise_fqdn(input: &str) -> Result<String, GatewayHostError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -273,14 +249,12 @@ fn normalise_fqdn(input: &str) -> Result<String, GatewayHostError> {
     }
     Ok(normalised)
 }
-
 fn enforce_fqdn_length(host: &str) -> Result<(), GatewayHostError> {
     if host.len() > MAX_FQDN_LENGTH {
         return Err(GatewayHostError::NameTooLong { length: host.len() });
     }
     Ok(())
 }
-
 fn canonicalise_host(host: &str) -> Option<String> {
     let trimmed = host.trim();
     if trimmed.is_empty() {
@@ -297,7 +271,6 @@ fn canonicalise_host(host: &str) -> Option<String> {
     }
     Some(trimmed.to_ascii_lowercase())
 }
-
 fn encode_base32_lower(data: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
     if data.is_empty() {
@@ -321,11 +294,9 @@ fn encode_base32_lower(data: &[u8]) -> String {
     }
     String::from_utf8(out).expect("alphabet contains valid ASCII")
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn derives_canonical_and_pretty_hosts() {
         let bindings = derive_gateway_hosts("App.Dao.SORA").expect("hosts to derive");
@@ -344,7 +315,6 @@ mod tests {
         assert!(bindings.matches_host("APP.DAO.SORA.GW.SORA.NAME"));
         assert!(!bindings.matches_host("example.com"));
     }
-
     #[test]
     fn derives_taira_mon_pretty_hosts() {
         let bindings = derive_gateway_hosts_with_profile(
@@ -360,7 +330,6 @@ mod tests {
         assert!(bindings.canonical_host().ends_with(".gw.sora.id"));
         assert!(bindings.matches_host("SOLSWAP-INDEXER.SORA.MON.TAIRA.SORA.NET"));
     }
-
     #[test]
     fn canonical_label_matches_blake3_base32() {
         let bindings = derive_gateway_hosts("docs.sora").expect("hosts to derive");
@@ -372,7 +341,6 @@ mod tests {
             format!("{expected_label}.{}", canonical_gateway_suffix())
         );
     }
-
     #[test]
     fn rejects_invalid_characters() {
         let err = derive_gateway_hosts("app dao sora").expect_err("invalid character");
@@ -381,13 +349,11 @@ mod tests {
             GatewayHostError::UnsupportedCharacter { character: ' ' }
         ));
     }
-
     #[test]
     fn rejects_consecutive_dots() {
         let err = derive_gateway_hosts("app..sora").expect_err("consecutive dots");
         assert!(matches!(err, GatewayHostError::ConsecutiveDots));
     }
-
     #[test]
     fn rejects_long_labels() {
         let label = "a".repeat(MAX_LABEL_LENGTH + 1);

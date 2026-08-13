@@ -3,23 +3,17 @@
 //! QUIC protects the transport with TLS, while this layer extends the hybrid
 //! `SoraNet` handshake's confidentiality and integrity guarantees to application
 //! data.  Every QUIC stream and wire direction receives an independent key.
-
 use std::fmt;
-
 use aead::{AeadInOut, KeyInit};
 use chacha20poly1305::ChaCha20Poly1305;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-
 use crate::SessionKey;
-
 mod io;
-
 #[doc(hidden)]
 pub use zeroize::Zeroize as __RecordZeroize;
-
 /// Magic and protocol version carried by every protected record.
 pub const RECORD_MAGIC: [u8; 4] = *b"SNR1";
 /// Number of bytes in the authenticated record header.
@@ -28,12 +22,10 @@ pub const RECORD_HEADER_LEN: usize = 16;
 pub const RECORD_TAG_LEN: usize = 16;
 /// Maximum plaintext carried by one record.
 pub const MAX_RECORD_PLAINTEXT_LEN: usize = 64 * 1024;
-
 const SESSION_KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const KDF_SALT: &[u8] = b"iroha.soranet.record.hkdf-sha256.v1";
 const KDF_INFO: &[u8] = b"iroha.soranet.record.chacha20poly1305.key.v1";
-
 /// Endpoint role used to assign unambiguous wire directions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -43,7 +35,6 @@ pub enum RecordEndpoint {
     /// The relay accepting the `SoraNet` connection.
     Relay = 1,
 }
-
 /// QUIC stream directionality committed into record-key derivation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -53,7 +44,6 @@ pub enum RecordStreamKind {
     /// A unidirectional QUIC stream.
     Unidirectional = 1,
 }
-
 /// Stable QUIC stream identity used for per-stream key separation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordStreamContext {
@@ -61,7 +51,6 @@ pub struct RecordStreamContext {
     kind: RecordStreamKind,
     index: u64,
 }
-
 impl RecordStreamContext {
     /// Construct a context from the QUIC initiator, directionality, and stream index.
     #[must_use]
@@ -72,7 +61,6 @@ impl RecordStreamContext {
             index,
         }
     }
-
     fn encoded(self) -> [u8; 10] {
         let mut encoded = [0_u8; 10];
         encoded[0] = self.initiator as u8;
@@ -81,7 +69,6 @@ impl RecordStreamContext {
         encoded
     }
 }
-
 /// Failures produced by the `SoraNet` record protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RecordError {
@@ -139,20 +126,17 @@ pub enum RecordError {
     #[error("record authentication failed")]
     Authentication,
 }
-
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum WireDirection {
     ClientToRelay = 0,
     RelayToClient = 1,
 }
-
 /// Root state from which direction- and stream-specific record keys are derived.
 pub struct RecordLayer {
     endpoint: RecordEndpoint,
     session_key: Zeroizing<[u8; SESSION_KEY_LEN]>,
 }
-
 impl fmt::Debug for RecordLayer {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -161,7 +145,6 @@ impl fmt::Debug for RecordLayer {
             .finish_non_exhaustive()
     }
 }
-
 impl RecordLayer {
     /// Bind a record layer to a negotiated `SoraNet` session key and local role.
     ///
@@ -183,7 +166,6 @@ impl RecordLayer {
             session_key: key,
         })
     }
-
     /// Derive independent sending and receiving state for one QUIC stream.
     ///
     /// # Errors
@@ -201,7 +183,6 @@ impl RecordLayer {
             opener: RecordOpener::new(&receive_key),
         })
     }
-
     fn derive_key(
         &self,
         context: RecordStreamContext,
@@ -219,7 +200,6 @@ impl RecordLayer {
         Ok(key)
     }
 }
-
 /// Sending and receiving state for one protected QUIC stream.
 pub struct DuplexRecordLayer {
     /// State for records sent by the local endpoint.
@@ -227,13 +207,11 @@ pub struct DuplexRecordLayer {
     /// State for records received by the local endpoint.
     pub opener: RecordOpener,
 }
-
 /// Stateful authenticated-record encoder.
 pub struct RecordSealer {
     cipher: ChaCha20Poly1305,
     next_sequence: u64,
 }
-
 impl fmt::Debug for RecordSealer {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -242,7 +220,6 @@ impl fmt::Debug for RecordSealer {
             .finish_non_exhaustive()
     }
 }
-
 impl RecordSealer {
     fn new(key: &Zeroizing<[u8; SESSION_KEY_LEN]>) -> Self {
         let cipher = ChaCha20Poly1305::new_from_slice(key.as_ref())
@@ -252,7 +229,6 @@ impl RecordSealer {
             next_sequence: 0,
         }
     }
-
     /// Seal one plaintext into a complete `header || ciphertext || tag` record.
     ///
     /// # Errors
@@ -263,7 +239,6 @@ impl RecordSealer {
         self.seal_into(plaintext, &mut output)?;
         Ok(output)
     }
-
     /// Seal one plaintext while reusing the caller-provided output allocation.
     ///
     /// # Errors
@@ -281,7 +256,6 @@ impl RecordSealer {
         if self.next_sequence == u64::MAX {
             return Err(RecordError::SequenceExhausted);
         }
-
         let header = encode_header(self.next_sequence, plaintext.len());
         output.reserve(RECORD_HEADER_LEN + plaintext.len() + RECORD_TAG_LEN);
         output.extend_from_slice(plaintext);
@@ -304,13 +278,11 @@ impl RecordSealer {
         Ok(())
     }
 }
-
 /// Stateful authenticated-record decoder.
 pub struct RecordOpener {
     cipher: ChaCha20Poly1305,
     next_sequence: u64,
 }
-
 impl fmt::Debug for RecordOpener {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -319,7 +291,6 @@ impl fmt::Debug for RecordOpener {
             .finish_non_exhaustive()
     }
 }
-
 impl RecordOpener {
     fn new(key: &Zeroizing<[u8; SESSION_KEY_LEN]>) -> Self {
         let cipher = ChaCha20Poly1305::new_from_slice(key.as_ref())
@@ -329,7 +300,6 @@ impl RecordOpener {
             next_sequence: 0,
         }
     }
-
     /// Validate a header and return the ciphertext-and-tag length to read.
     ///
     /// This does not advance the expected sequence; only successful
@@ -343,7 +313,6 @@ impl RecordOpener {
         let (_, plaintext_len) = self.parse_header(header)?;
         Ok(plaintext_len + RECORD_TAG_LEN)
     }
-
     /// Authenticate and open a complete record.
     ///
     /// # Errors
@@ -364,7 +333,6 @@ impl RecordOpener {
         self.open_parts_into(header, ciphertext, &mut output)?;
         Ok(output)
     }
-
     /// Authenticate a header and body while reusing the output allocation.
     ///
     /// # Errors
@@ -409,7 +377,6 @@ impl RecordOpener {
         self.next_sequence += 1;
         Ok(())
     }
-
     fn parse_header(&self, header: &[u8; RECORD_HEADER_LEN]) -> Result<(u64, usize), RecordError> {
         if header[..RECORD_MAGIC.len()] != RECORD_MAGIC {
             return Err(RecordError::InvalidMagic);
@@ -443,7 +410,6 @@ impl RecordOpener {
         Ok((sequence, plaintext_len))
     }
 }
-
 fn encode_header(sequence: u64, plaintext_len: usize) -> [u8; RECORD_HEADER_LEN] {
     let plaintext_len =
         u32::try_from(plaintext_len).expect("bounded record plaintext length fits in u32");
@@ -453,18 +419,15 @@ fn encode_header(sequence: u64, plaintext_len: usize) -> [u8; RECORD_HEADER_LEN]
     header[12..16].copy_from_slice(&plaintext_len.to_be_bytes());
     header
 }
-
 fn nonce_for_sequence(sequence: u64) -> aead::Nonce<ChaCha20Poly1305> {
     let mut bytes = [0_u8; NONCE_LEN];
     bytes[4..].copy_from_slice(&sequence.to_be_bytes());
     aead::Nonce::<ChaCha20Poly1305>::try_from(bytes.as_slice())
         .expect("record nonce has the algorithm's fixed nonce length")
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn layers() -> (RecordLayer, RecordLayer) {
         let key = SessionKey::new((0_u8..32).collect());
         (
@@ -472,7 +435,6 @@ mod tests {
             RecordLayer::new(&key, RecordEndpoint::Relay).expect("relay layer"),
         )
     }
-
     #[test]
     fn client_and_relay_records_roundtrip_in_both_directions() {
         let (client, relay) = layers();
@@ -480,7 +442,6 @@ mod tests {
             RecordStreamContext::new(RecordEndpoint::Client, RecordStreamKind::Bidirectional, 7);
         let mut client = client.stream(context).expect("client stream");
         let mut relay = relay.stream(context).expect("relay stream");
-
         let request = client.sealer.seal(b"request").expect("seal request");
         assert_eq!(
             relay.opener.open(&request).expect("open request"),
@@ -492,7 +453,6 @@ mod tests {
             b"response"
         );
     }
-
     #[test]
     fn first_release_record_vector_is_stable() {
         let (client, _) = layers();
@@ -500,7 +460,6 @@ mod tests {
             RecordStreamContext::new(RecordEndpoint::Client, RecordStreamKind::Bidirectional, 7);
         let mut stream = client.stream(context).expect("client stream");
         let record = stream.sealer.seal(b"request").expect("seal");
-
         assert_eq!(
             hex::encode(record),
             concat!(
@@ -510,7 +469,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn stream_and_direction_keys_are_separated() {
         let (client, relay) = layers();
@@ -522,7 +480,6 @@ mod tests {
         let mut relay_first = relay.stream(first).expect("relay first");
         let mut relay_second = relay.stream(second).expect("relay second");
         let record = client_first.sealer.seal(b"bound").expect("seal");
-
         assert!(matches!(
             relay_second.opener.open(&record),
             Err(RecordError::Authentication)
@@ -536,7 +493,6 @@ mod tests {
             Err(RecordError::Authentication)
         ));
     }
-
     #[test]
     fn tampering_and_replay_fail_closed_without_advancing_state() {
         let (client, relay) = layers();
@@ -547,7 +503,6 @@ mod tests {
         let record = client.sealer.seal(b"authenticated").expect("seal");
         let mut tampered = record.clone();
         *tampered.last_mut().expect("tag byte") ^= 1;
-
         assert!(matches!(
             relay.opener.open(&tampered),
             Err(RecordError::Authentication)
@@ -564,7 +519,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn malformed_lengths_are_rejected_before_allocation_or_decryption() {
         let (client, relay) = layers();
@@ -577,13 +531,11 @@ mod tests {
         record[12..16].copy_from_slice(&oversized.to_be_bytes());
         let header: &[u8; RECORD_HEADER_LEN] =
             record[..RECORD_HEADER_LEN].try_into().expect("header");
-
         assert!(matches!(
             relay.opener.ciphertext_len(header),
             Err(RecordError::PlaintextTooLarge { .. })
         ));
     }
-
     #[test]
     fn invalid_session_key_length_is_rejected() {
         let key = SessionKey::new(vec![0xAA; 31]);

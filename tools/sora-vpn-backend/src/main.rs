@@ -1,10 +1,7 @@
 #![allow(unexpected_cfgs)]
-
 //! Runs the privileged local backend used by the Sora VPN client.
-
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-
 use std::{
     collections::HashSet,
     env,
@@ -18,7 +15,6 @@ use std::{
 };
 #[cfg(target_os = "linux")]
 use std::{ffi::CStr, os::fd::FromRawFd};
-
 use clap::Parser;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -27,7 +23,6 @@ use tokio::{
     net::{TcpListener, UnixListener, UnixStream},
     signal::unix::{SignalKind, signal},
 };
-
 const DEFAULT_BACKEND_ENDPOINT: &str = "unix:/tmp/sora-vpn-backend.sock";
 const DEFAULT_INTERFACE_PREFIX: &str = "svpn";
 const DEFAULT_ROUTE_CMD: &str = "ip";
@@ -41,7 +36,6 @@ const LINUX_IFF_TUN: nix::libc::c_short = 0x0001;
 const LINUX_IFF_NO_PI: nix::libc::c_short = 0x1000;
 #[cfg(target_os = "linux")]
 const LINUX_TUNSETIFF: nix::libc::c_ulong = 0x4004_54ca;
-
 #[derive(Debug, Parser)]
 #[command(name = "sora-vpn-backend")]
 struct Cli {
@@ -76,7 +70,6 @@ struct Cli {
     )]
     enable_ipv6_nat: bool,
 }
-
 #[derive(Debug, Clone)]
 struct BackendConfig {
     endpoint: BackendEndpoint,
@@ -93,13 +86,11 @@ struct BackendConfig {
     egress_v4_interface: Option<String>,
     egress_v6_interface: Option<String>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BackendEndpoint {
     Unix(PathBuf),
     Tcp(String),
 }
-
 impl BackendConfig {
     fn from_cli(cli: Cli) -> Result<Self, BackendError> {
         let endpoint = parse_backend_endpoint(&cli.endpoint)?;
@@ -117,7 +108,6 @@ impl BackendConfig {
                 "interface_prefix `{interface_prefix}` exceeds Linux IFNAMSIZ"
             )));
         }
-
         let default_mtu = normalize_mtu(cli.mtu)?;
         let egress_interface = cli
             .egress_interface
@@ -150,7 +140,6 @@ impl BackendConfig {
         } else {
             None
         };
-
         Ok(Self {
             endpoint,
             bootstrap_secret,
@@ -168,7 +157,6 @@ impl BackendConfig {
         })
     }
 }
-
 impl BackendEndpoint {
     fn label(&self) -> String {
         match self {
@@ -177,7 +165,6 @@ impl BackendEndpoint {
         }
     }
 }
-
 fn parse_backend_endpoint(endpoint: &str) -> Result<BackendEndpoint, BackendError> {
     let trimmed = endpoint.trim();
     if let Some(path) = trimmed.strip_prefix("unix:") {
@@ -207,7 +194,6 @@ fn parse_backend_endpoint(endpoint: &str) -> Result<BackendEndpoint, BackendErro
         "backend endpoint must start with unix:/path or tcp://host:port".to_owned(),
     ))
 }
-
 fn parse_optional_secret(secret: Option<&str>) -> Result<Option<[u8; 32]>, BackendError> {
     let Some(secret) = secret.map(str::trim).filter(|secret| !secret.is_empty()) else {
         return Ok(None);
@@ -225,29 +211,24 @@ fn parse_optional_secret(secret: Option<&str>) -> Result<Option<[u8; 32]>, Backe
     bytes.copy_from_slice(&decoded);
     Ok(Some(bytes))
 }
-
 #[cfg(target_os = "linux")]
 fn default_allowed_uid() -> Option<u32> {
     // SAFETY: geteuid has no preconditions and does not dereference pointers.
     Some(unsafe { nix::libc::geteuid() })
 }
-
 #[cfg(not(target_os = "linux"))]
 fn default_allowed_uid() -> Option<u32> {
     None
 }
-
 #[cfg(target_os = "linux")]
 fn default_allowed_gid() -> Option<u32> {
     // SAFETY: getegid has no preconditions and does not dereference pointers.
     Some(unsafe { nix::libc::getegid() })
 }
-
 #[cfg(not(target_os = "linux"))]
 fn default_allowed_gid() -> Option<u32> {
     None
 }
-
 #[cfg(target_os = "linux")]
 fn verify_unix_peer_credentials(
     stream: &UnixStream,
@@ -273,7 +254,6 @@ fn verify_unix_peer_credentials(
     }
     Ok(())
 }
-
 #[cfg(not(target_os = "linux"))]
 fn verify_unix_peer_credentials(
     _stream: &UnixStream,
@@ -287,7 +267,6 @@ fn verify_unix_peer_credentials(
     }
     Ok(())
 }
-
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct VpnBackendBootstrap {
     session_id_hex: String,
@@ -295,7 +274,6 @@ struct VpnBackendBootstrap {
     session_routes: Vec<String>,
     mtu_bytes: u16,
 }
-
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct VpnBackendBootstrapEnvelope {
     bootstrap: VpnBackendBootstrap,
@@ -303,7 +281,6 @@ struct VpnBackendBootstrapEnvelope {
     nonce: [u8; 16],
     mac: [u8; 32],
 }
-
 #[derive(Debug, Clone)]
 struct SessionRuntimeConfig {
     interface_name: String,
@@ -312,7 +289,6 @@ struct SessionRuntimeConfig {
     session_routes: Vec<ParsedCidr>,
     nat_cidrs: Vec<ParsedCidr>,
 }
-
 impl SessionRuntimeConfig {
     fn from_bootstrap(
         config: &BackendConfig,
@@ -339,58 +315,49 @@ impl SessionRuntimeConfig {
         })
     }
 }
-
 #[derive(Debug, Clone)]
 struct PreparedTunnel {
     device: Arc<LinuxTunDevice>,
     applied_network: AppliedNetworkState,
     packet_read_mtu: usize,
 }
-
 #[derive(Debug, Clone)]
 struct AppliedNetworkState {
     interface_name: String,
     forwarding_leases: Vec<IpFamily>,
     nat_rules: Vec<NatRule>,
 }
-
 #[derive(Debug, Clone)]
 struct ForwardingReservation {
     previous_value: String,
     ref_count: usize,
 }
-
 #[derive(Debug, Default)]
 struct SharedNetworkState {
     ipv4_forwarding: Option<ForwardingReservation>,
     ipv6_forwarding: Option<ForwardingReservation>,
 }
-
 #[derive(Debug, Clone)]
 struct NatRule {
     family: IpFamily,
     source_cidr: String,
     egress_interface: String,
 }
-
 #[derive(Debug)]
 struct LinuxTunDevice {
     file: AsyncFd<fs::File>,
     name: String,
 }
-
 #[derive(Debug, Default)]
 struct PacketStreamDecoder {
     buffer: Vec<u8>,
     expected_len: Option<usize>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IpFamily {
     V4,
     V6,
 }
-
 impl IpFamily {
     const fn flag(self) -> &'static str {
         match self {
@@ -398,21 +365,18 @@ impl IpFamily {
             Self::V6 => "-6",
         }
     }
-
     const fn max_prefix(self) -> u8 {
         match self {
             Self::V4 => 32,
             Self::V6 => 128,
         }
     }
-
     const fn forwarding_key(self) -> &'static str {
         match self {
             Self::V4 => "net.ipv4.ip_forward",
             Self::V6 => "net.ipv6.conf.all.forwarding",
         }
     }
-
     const fn nat_program(self) -> &'static str {
         match self {
             Self::V4 => "iptables",
@@ -420,13 +384,11 @@ impl IpFamily {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedCidr {
     address: IpAddr,
     prefix: u8,
 }
-
 impl ParsedCidr {
     const fn family(&self) -> IpFamily {
         match self.address {
@@ -434,12 +396,10 @@ impl ParsedCidr {
             IpAddr::V6(_) => IpFamily::V6,
         }
     }
-
     fn render(&self) -> String {
         format!("{}/{}", self.address, self.prefix)
     }
 }
-
 #[derive(Debug, Error)]
 enum BackendError {
     #[error("invalid backend config: {0}")]
@@ -451,7 +411,6 @@ enum BackendError {
     #[error("backend state error: {0}")]
     State(String),
 }
-
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -463,7 +422,6 @@ async fn main() -> ExitCode {
         }
     }
 }
-
 async fn run(cli: Cli) -> Result<(), BackendError> {
     let config = BackendConfig::from_cli(cli)?;
     let shared_network = Arc::new(Mutex::new(SharedNetworkState::default()));
@@ -472,10 +430,8 @@ async fn run(cli: Cli) -> Result<(), BackendError> {
         config.endpoint.label(),
         config.interface_prefix
     );
-
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
-
     match &config.endpoint {
         BackendEndpoint::Tcp(addr) => {
             let listener = TcpListener::bind(addr.as_str()).await?;
@@ -525,7 +481,6 @@ async fn run(cli: Cli) -> Result<(), BackendError> {
         }
     }
 }
-
 async fn serve_connection<S>(
     mut stream: S,
     remote: String,
@@ -556,7 +511,6 @@ where
         "vpn backend accepted {remote} on interface {}",
         prepared.applied_network.interface_name
     );
-
     let session_result = backend_packet_loop(
         Arc::clone(&prepared.device),
         stream,
@@ -564,7 +518,6 @@ where
     )
     .await;
     let cleanup_result = cleanup_tunnel(prepared, shared_network);
-
     match (session_result, cleanup_result) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) => Err(error),
@@ -574,7 +527,6 @@ where
         ))),
     }
 }
-
 fn prepare_tunnel(
     config: &BackendConfig,
     session_config: &SessionRuntimeConfig,
@@ -586,7 +538,6 @@ fn prepare_tunnel(
         forwarding_leases: Vec::new(),
         nat_rules: Vec::new(),
     };
-
     if let Err(error) = apply_tunnel_link_config(
         &applied_network.interface_name,
         session_config.mtu,
@@ -602,7 +553,6 @@ fn prepare_tunnel(
         let _ = cleanup_network(&applied_network, shared_network);
         return Err(error);
     }
-
     if config.ipv4_forward && has_family(&session_config.session_routes, IpFamily::V4) {
         match acquire_forwarding(shared_network, IpFamily::V4) {
             Ok(()) => applied_network.forwarding_leases.push(IpFamily::V4),
@@ -621,7 +571,6 @@ fn prepare_tunnel(
             }
         }
     }
-
     if config.enable_ipv4_nat {
         let Some(egress_interface) = config.egress_v4_interface.as_ref() else {
             let _ = cleanup_network(&applied_network, shared_network);
@@ -666,14 +615,12 @@ fn prepare_tunnel(
             }
         }
     }
-
     Ok(PreparedTunnel {
         device,
         applied_network,
         packet_read_mtu: usize::from(session_config.mtu),
     })
 }
-
 fn cleanup_tunnel(
     prepared: PreparedTunnel,
     shared_network: &Arc<Mutex<SharedNetworkState>>,
@@ -682,7 +629,6 @@ fn cleanup_tunnel(
     drop(prepared);
     Ok(())
 }
-
 fn cleanup_network(
     applied: &AppliedNetworkState,
     shared_network: &Arc<Mutex<SharedNetworkState>>,
@@ -713,7 +659,6 @@ fn cleanup_network(
         Err(error) => Err(error),
     }
 }
-
 async fn backend_packet_loop<S>(
     device: Arc<LinuxTunDevice>,
     stream: S,
@@ -725,12 +670,10 @@ where
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
     let (mut reader, mut writer) = tokio::io::split(stream);
-
     let upstream = tun_to_socket_loop(Arc::clone(&device), &mut writer, packet_read_mtu);
     let downstream = socket_to_tun_loop(device, &mut reader);
     tokio::pin!(upstream);
     tokio::pin!(downstream);
-
     tokio::select! {
         _ = sigterm.recv() => Ok(()),
         _ = sigint.recv() => Ok(()),
@@ -738,7 +681,6 @@ where
         result = &mut downstream => result,
     }
 }
-
 fn unix_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -746,7 +688,6 @@ fn unix_time_ms() -> u64 {
         .as_millis()
         .min(u128::from(u64::MAX)) as u64
 }
-
 fn vpn_backend_bootstrap_mac(
     secret: &[u8; 32],
     bootstrap: &VpnBackendBootstrap,
@@ -760,7 +701,6 @@ fn vpn_backend_bootstrap_mac(
     hasher.update(nonce);
     *hasher.finalize().as_bytes()
 }
-
 async fn read_vpn_backend_bootstrap<R: AsyncRead + Unpin>(
     reader: &mut R,
     config: &BackendConfig,
@@ -821,7 +761,6 @@ async fn read_vpn_backend_bootstrap<R: AsyncRead + Unpin>(
     }
     Ok(envelope.bootstrap)
 }
-
 async fn write_vpn_backend_status<W: AsyncWrite + Unpin>(
     writer: &mut W,
     ready: bool,
@@ -841,7 +780,6 @@ async fn write_vpn_backend_status<W: AsyncWrite + Unpin>(
     writer.write_all(payload).await?;
     Ok(())
 }
-
 async fn tun_to_socket_loop<W: AsyncWriteExt + Unpin>(
     device: Arc<LinuxTunDevice>,
     writer: &mut W,
@@ -857,7 +795,6 @@ async fn tun_to_socket_loop<W: AsyncWriteExt + Unpin>(
         writer.write_all(&encoded).await?;
     }
 }
-
 async fn socket_to_tun_loop<R: AsyncReadExt + Unpin>(
     device: Arc<LinuxTunDevice>,
     reader: &mut R,
@@ -874,12 +811,10 @@ async fn socket_to_tun_loop<R: AsyncReadExt + Unpin>(
         }
     }
 }
-
 impl PacketStreamDecoder {
     fn ingest(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>, BackendError> {
         self.buffer.extend_from_slice(bytes);
         let mut packets = Vec::new();
-
         loop {
             if self.expected_len.is_none() {
                 if self.buffer.len() < PACKET_LEN_PREFIX_BYTES {
@@ -889,7 +824,6 @@ impl PacketStreamDecoder {
                 self.buffer.drain(..PACKET_LEN_PREFIX_BYTES);
                 self.expected_len = Some(len);
             }
-
             let Some(expected_len) = self.expected_len else {
                 break;
             };
@@ -900,11 +834,9 @@ impl PacketStreamDecoder {
             self.expected_len = None;
             packets.push(packet);
         }
-
         Ok(packets)
     }
 }
-
 impl LinuxTunDevice {
     #[cfg(target_os = "linux")]
     fn create(requested_name: &str) -> Result<Self, BackendError> {
@@ -914,7 +846,6 @@ impl LinuxTunDevice {
                 "invalid Linux interface name {requested_name}"
             )));
         }
-
         let fd = unsafe {
             nix::libc::open(
                 c"/dev/net/tun".as_ptr() as *const _,
@@ -924,7 +855,6 @@ impl LinuxTunDevice {
         if fd < 0 {
             return Err(BackendError::Io(io::Error::last_os_error()));
         }
-
         let mut req = unsafe { std::mem::zeroed::<nix::libc::ifreq>() };
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -934,7 +864,6 @@ impl LinuxTunDevice {
             );
             req.ifr_ifru.ifru_flags = (LINUX_IFF_TUN | LINUX_IFF_NO_PI) as _;
         }
-
         let ioctl_result = unsafe { nix::libc::ioctl(fd, LINUX_TUNSETIFF as _, &req) };
         if ioctl_result < 0 {
             let error = io::Error::last_os_error();
@@ -943,7 +872,6 @@ impl LinuxTunDevice {
             }
             return Err(BackendError::Io(error));
         }
-
         let name = unsafe { CStr::from_ptr(req.ifr_name.as_ptr()) }
             .to_string_lossy()
             .into_owned();
@@ -951,18 +879,15 @@ impl LinuxTunDevice {
         let file = AsyncFd::new(file)?;
         Ok(Self { file, name })
     }
-
     #[cfg(not(target_os = "linux"))]
     fn create(_requested_name: &str) -> Result<Self, BackendError> {
         Err(BackendError::State(
             "sora-vpn-backend only supports Linux TUN hosts".to_owned(),
         ))
     }
-
     fn name(&self) -> &str {
         &self.name
     }
-
     async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             let mut guard = self.file.readable().await?;
@@ -975,7 +900,6 @@ impl LinuxTunDevice {
             }
         }
     }
-
     async fn send(&self, buf: &[u8]) -> io::Result<usize> {
         loop {
             let mut guard = self.file.writable().await?;
@@ -989,7 +913,6 @@ impl LinuxTunDevice {
         }
     }
 }
-
 fn encode_packet_stream_frame(packet: &[u8]) -> Result<Vec<u8>, BackendError> {
     let packet_len = u16::try_from(packet.len()).map_err(|_| {
         BackendError::State(format!(
@@ -1002,7 +925,6 @@ fn encode_packet_stream_frame(packet: &[u8]) -> Result<Vec<u8>, BackendError> {
     encoded.extend_from_slice(packet);
     Ok(encoded)
 }
-
 fn apply_tunnel_link_config(
     interface_name: &str,
     mtu: u16,
@@ -1020,7 +942,6 @@ fn apply_tunnel_link_config(
             "up".to_owned(),
         ],
     )?;
-
     for address in tunnel_addresses {
         run_command(
             DEFAULT_ROUTE_CMD,
@@ -1036,7 +957,6 @@ fn apply_tunnel_link_config(
     }
     Ok(())
 }
-
 fn apply_client_routes(interface_name: &str, routes: &[ParsedCidr]) -> Result<(), BackendError> {
     for route in routes {
         run_command(
@@ -1053,7 +973,6 @@ fn apply_client_routes(interface_name: &str, routes: &[ParsedCidr]) -> Result<()
     }
     Ok(())
 }
-
 fn acquire_forwarding(
     shared_network: &Arc<Mutex<SharedNetworkState>>,
     family: IpFamily,
@@ -1083,7 +1002,6 @@ fn acquire_forwarding(
         }
     }
 }
-
 fn release_forwarding(
     shared_network: &Arc<Mutex<SharedNetworkState>>,
     family: IpFamily,
@@ -1114,7 +1032,6 @@ fn release_forwarding(
     )?;
     Ok(())
 }
-
 fn forwarding_slot_mut(
     shared_network: &mut SharedNetworkState,
     family: IpFamily,
@@ -1124,7 +1041,6 @@ fn forwarding_slot_mut(
         IpFamily::V6 => &mut shared_network.ipv6_forwarding,
     }
 }
-
 fn apply_nat_rule(
     family: IpFamily,
     source_cidr: &str,
@@ -1140,19 +1056,16 @@ fn apply_nat_rule(
             }
         )));
     }
-
     let args = nat_rule_args("-C", source_cidr, egress_interface);
     if run_command(program, args).is_err() {
         run_command(program, nat_rule_args("-A", source_cidr, egress_interface))?;
     }
-
     Ok(Some(NatRule {
         family,
         source_cidr: source_cidr.to_owned(),
         egress_interface: egress_interface.to_owned(),
     }))
 }
-
 fn remove_nat_rule(rule: &NatRule) -> Result<(), BackendError> {
     let result = run_command(
         rule.family.nat_program(),
@@ -1170,7 +1083,6 @@ fn remove_nat_rule(rule: &NatRule) -> Result<(), BackendError> {
         Err(error) => Err(error),
     }
 }
-
 fn nat_rule_args(action: &str, source_cidr: &str, egress_interface: &str) -> Vec<String> {
     vec![
         "-w".to_owned(),
@@ -1186,7 +1098,6 @@ fn nat_rule_args(action: &str, source_cidr: &str, egress_interface: &str) -> Vec
         "MASQUERADE".to_owned(),
     ]
 }
-
 fn resolve_egress_interface(
     override_interface: Option<&str>,
     family: IpFamily,
@@ -1206,7 +1117,6 @@ fn resolve_egress_interface(
     )?;
     Ok(output.lines().find_map(parse_route_device))
 }
-
 fn parse_route_device(line: &str) -> Option<String> {
     let tokens = line.split_whitespace().collect::<Vec<_>>();
     let mut idx = 0usize;
@@ -1218,7 +1128,6 @@ fn parse_route_device(line: &str) -> Option<String> {
     }
     None
 }
-
 fn normalize_mtu(value: u64) -> Result<u16, BackendError> {
     if value == 0 || value > u64::from(u16::MAX) {
         return Err(BackendError::InvalidConfig(format!(
@@ -1229,7 +1138,6 @@ fn normalize_mtu(value: u64) -> Result<u16, BackendError> {
     u16::try_from(value)
         .map_err(|_| BackendError::InvalidConfig(format!("mtu {value} does not fit into u16")))
 }
-
 fn derive_interface_name(prefix: &str, session_id_hex: &str) -> Result<String, BackendError> {
     let normalized_prefix = trim_to_option(prefix).ok_or_else(|| {
         BackendError::InvalidConfig("interface prefix must not be empty".to_owned())
@@ -1257,11 +1165,9 @@ fn derive_interface_name(prefix: &str, session_id_hex: &str) -> Result<String, B
     };
     Ok(format!("{normalized_prefix}{suffix}"))
 }
-
 fn parse_cidr_list(values: &[String]) -> Result<Vec<ParsedCidr>, BackendError> {
     values.iter().map(|value| parse_cidr(value)).collect()
 }
-
 fn parse_cidr(value: &str) -> Result<ParsedCidr, BackendError> {
     let trimmed = value.trim();
     let Some((address, prefix)) = trimmed.split_once('/') else {
@@ -1282,23 +1188,19 @@ fn parse_cidr(value: &str) -> Result<ParsedCidr, BackendError> {
     }
     Ok(ParsedCidr { address, prefix })
 }
-
 fn has_family(values: &[ParsedCidr], family: IpFamily) -> bool {
     values.iter().any(|value| value.family() == family)
 }
-
 fn trim_to_option(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
-
 fn command_exists(program: &str) -> bool {
     let Some(path) = env::var_os("PATH") else {
         return false;
     };
     env::split_paths(&path).any(|dir| dir.join(program).exists())
 }
-
 fn run_command<I, S>(program: &str, args: I) -> Result<String, BackendError>
 where
     I: IntoIterator<Item = S>,
@@ -1323,13 +1225,10 @@ where
         collected.join(" ")
     )))
 }
-
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
-
     use super::*;
-
     #[test]
     fn parse_cidr_accepts_ipv4() {
         let parsed = parse_cidr("10.208.0.1/32").expect("cidr");
@@ -1341,7 +1240,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn parse_cidr_accepts_ipv6() {
         let parsed = parse_cidr("fd53:7261:6574::1/128").expect("cidr");
@@ -1357,13 +1255,11 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn parse_route_device_extracts_dev_name() {
         let device = parse_route_device("default via 192.168.1.1 dev eth0 proto dhcp metric 100");
         assert_eq!(device.as_deref(), Some("eth0"));
     }
-
     #[test]
     fn packet_stream_round_trips_fragmented_payload() {
         let packet = vec![0xAB; 1500];
@@ -1374,7 +1270,6 @@ mod tests {
         let second = decoder.ingest(&encoded[700..]).expect("second fragment");
         assert_eq!(second, vec![packet]);
     }
-
     #[test]
     fn derive_interface_name_appends_session_suffix() {
         let name = derive_interface_name("svpn", "deadbeefcafebabe").expect("name");
@@ -1382,7 +1277,6 @@ mod tests {
         assert!(name.len() < nix::libc::IFNAMSIZ);
         assert_ne!(name, "svpn");
     }
-
     fn test_cli() -> Cli {
         Cli {
             endpoint: DEFAULT_BACKEND_ENDPOINT.to_owned(),
@@ -1398,7 +1292,6 @@ mod tests {
             enable_ipv6_nat: false,
         }
     }
-
     #[tokio::test]
     async fn bootstrap_round_trips_from_framed_norito() {
         let bootstrap = VpnBackendBootstrap {
@@ -1425,13 +1318,11 @@ mod tests {
             .expect("len");
         writer.write_all(&payload).await.expect("payload");
         let config = BackendConfig::from_cli(test_cli()).expect("config");
-
         let decoded = read_vpn_backend_bootstrap(&mut reader, &config, false)
             .await
             .expect("decoded");
         assert_eq!(decoded, bootstrap);
     }
-
     #[tokio::test]
     async fn tcp_bootstrap_rejects_bad_mac_and_replay() {
         let secret = [0xA5; 32];
@@ -1456,7 +1347,6 @@ mod tests {
             ..test_cli()
         })
         .expect("config");
-
         let mut bad = envelope.clone();
         bad.mac[0] ^= 0xFF;
         let (mut writer, mut reader) = tokio::io::duplex(4096);
@@ -1465,7 +1355,6 @@ mod tests {
             .await
             .expect_err("bad mac must fail");
         assert!(error.to_string().contains("MAC"));
-
         let stale_timestamp = unix_time_ms().saturating_sub(VPN_BACKEND_BOOTSTRAP_MAX_SKEW_MS + 1);
         let stale_nonce = [0x66; 16];
         let mut stale = VpnBackendBootstrapEnvelope {
@@ -1481,14 +1370,12 @@ mod tests {
             .await
             .expect_err("stale timestamp must fail");
         assert!(stale_error.to_string().contains("stale"));
-
         let (mut writer, mut reader) = tokio::io::duplex(4096);
         write_bootstrap_test_frame(&mut writer, &envelope).await;
         let decoded = read_vpn_backend_bootstrap(&mut reader, &config, true)
             .await
             .expect("valid bootstrap");
         assert_eq!(decoded, bootstrap);
-
         let (mut writer, mut reader) = tokio::io::duplex(4096);
         write_bootstrap_test_frame(&mut writer, &envelope).await;
         let replay = read_vpn_backend_bootstrap(&mut reader, &config, true)
@@ -1496,7 +1383,6 @@ mod tests {
             .expect_err("replay must fail");
         assert!(replay.to_string().contains("replayed"));
     }
-
     #[cfg(unix)]
     #[tokio::test]
     async fn unix_peer_credentials_reject_unauthorized_peer() {
@@ -1508,7 +1394,6 @@ mod tests {
                 || error.to_string().contains("not supported")
         );
     }
-
     async fn write_bootstrap_test_frame<W: AsyncWrite + Unpin>(
         writer: &mut W,
         envelope: &VpnBackendBootstrapEnvelope,
@@ -1524,14 +1409,12 @@ mod tests {
             .expect("len");
         writer.write_all(&payload).await.expect("payload");
     }
-
     #[tokio::test]
     async fn status_frame_round_trips() {
         let (mut writer, mut reader) = tokio::io::duplex(256);
         write_vpn_backend_status(&mut writer, true, "ready")
             .await
             .expect("status write");
-
         let mut status = [0u8; 1];
         reader.read_exact(&mut status).await.expect("status");
         assert_eq!(status[0], VPN_BACKEND_STATUS_READY);
@@ -1542,7 +1425,6 @@ mod tests {
         reader.read_exact(&mut payload).await.expect("payload");
         assert_eq!(payload, b"ready");
     }
-
     #[test]
     fn session_runtime_config_uses_bootstrap_values() {
         let config = BackendConfig::from_cli(Cli {
@@ -1550,7 +1432,6 @@ mod tests {
             ..test_cli()
         })
         .expect("config");
-
         let session = SessionRuntimeConfig::from_bootstrap(
             &config,
             VpnBackendBootstrap {
@@ -1564,7 +1445,6 @@ mod tests {
             },
         )
         .expect("session config");
-
         assert_eq!(session.mtu, 1400);
         assert_eq!(session.tunnel_addresses.len(), 2);
         assert_eq!(session.nat_cidrs, session.session_routes);

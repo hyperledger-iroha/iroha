@@ -26,7 +26,6 @@
 //! Filesystem-backed journal and staged-CAR access is qualified on Unix. Other
 //! targets fail closed with the platform's unsupported error before inspecting
 //! or creating the selected state path.
-
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -37,7 +36,6 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
-
 use iroha::musubi_runtime::{
     MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1, MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1,
     MusubiSeedIngressCarPlanV1,
@@ -78,14 +76,11 @@ use norito::{
     codec::{Decode, Encode},
 };
 use sorafs_car::{CarBuildPlan, CarVerifier, ChunkStore};
-
 use crate::atomic_io::{AtomicWriteError, AtomicWriteRoot};
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt as _;
-
 const JOURNAL_SCHEMA: &str = "musubi-publication-journal";
 const JOURNAL_VERSION: u8 = 1;
 const JOURNAL_DIRECTORY: &str = "publication-v1";
@@ -102,13 +97,11 @@ const STAGED_PLAN_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
 );
 const STAGED_CAR_PLAN_HEAP_LIMIT_BYTES_V1: usize =
     sorafs_car::DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES;
-
 #[cfg(all(test, unix))]
 std::thread_local! {
     static TEST_PUBLICATION_READ_FIFO_SUBSTITUTIONS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-
 /// Maximum number of exact archive-registration transaction generations in one V1 operation.
 pub const MUSUBI_MAX_ARCHIVE_REGISTRATION_ATTEMPTS_V1: usize = 8;
 /// Maximum number of append-only archive-location transaction generations in one V1 operation.
@@ -173,48 +166,38 @@ const FINAL_CHECKPOINT_DOMAIN: &[u8] = b"iroha.musubi.final-checkpoint.v1";
 const FILE_SHARE_READ: u32 = 0x0000_0001;
 #[cfg(windows)]
 const FILE_SHARE_WRITE: u32 = 0x0000_0002;
-
 /// Stable identifier used to make every remote publication transition idempotent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode)]
 pub struct PublicationOperationIdV1([u8; 32]);
-
 impl PublicationOperationIdV1 {
     /// Return the exact operation-id bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
-
     fn from_request(request: &PublicationRequestV1) -> Self {
         Self(domain_hash(OPERATION_ID_DOMAIN, &request.encode()))
     }
-
     fn is_zero(self) -> bool {
         self.0.iter().all(|byte| *byte == 0)
     }
 }
-
 impl fmt::Display for PublicationOperationIdV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&hex::encode(self.0))
     }
 }
-
 /// Error returned when a detached publication operation id is not canonical hex.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublicationOperationIdParseError;
-
 impl fmt::Display for PublicationOperationIdParseError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("publication operation id must be 64 non-zero lowercase hex digits")
     }
 }
-
 impl Error for PublicationOperationIdParseError {}
-
 impl FromStr for PublicationOperationIdV1 {
     type Err = PublicationOperationIdParseError;
-
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         if raw.len() != 64
             || raw
@@ -232,7 +215,6 @@ impl FromStr for PublicationOperationIdV1 {
         Ok(operation_id)
     }
 }
-
 /// Public inputs that remain stable across every retry of one publication.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationRequestV1 {
@@ -259,14 +241,12 @@ pub struct PublicationRequestV1 {
     /// Unpredictable public anti-replay nonce for this operation.
     pub nonce: [u8; 32],
 }
-
 impl PublicationRequestV1 {
     /// Return the exact genesis-derived network identity.
     #[must_use]
     pub const fn network_id(&self) -> NetworkId {
         self.network_id
     }
-
     /// Validate all immutable publication, archive, deployment, and revision bindings.
     ///
     /// # Errors
@@ -328,13 +308,11 @@ impl PublicationRequestV1 {
         }
         Ok(())
     }
-
     /// Derive the stable idempotency identifier for this exact request.
     #[must_use]
     pub fn operation_id(&self) -> PublicationOperationIdV1 {
         PublicationOperationIdV1::from_request(self)
     }
-
     fn receipt_binding(&self) -> MusubiSeedIngressReceiptBindingV1 {
         MusubiSeedIngressReceiptBindingV1 {
             network_id: self.network_id(),
@@ -348,7 +326,6 @@ impl PublicationRequestV1 {
             nonce: self.nonce,
         }
     }
-
     pub(crate) fn publish_instruction(&self) -> PublishMusubiReleaseV1 {
         PublishMusubiReleaseV1::new(
             self.namespace.clone(),
@@ -358,7 +335,6 @@ impl PublicationRequestV1 {
             self.expected_governance_revision,
         )
     }
-
     /// Construct the one canonical archive-registration instruction for this operation receipt.
     pub(crate) fn archive_registration_instruction(
         &self,
@@ -371,7 +347,6 @@ impl PublicationRequestV1 {
         )
     }
 }
-
 /// The seven production phases of Musubi V1 publication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode)]
 pub enum PublicationPhaseV1 {
@@ -390,7 +365,6 @@ pub enum PublicationPhaseV1 {
     /// Verify the exact finalized home record and universal resolver row.
     FinalVerification,
 }
-
 /// Secret-free proof that the clean package and exact verification graph were checked.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationValidationEvidenceV1 {
@@ -415,7 +389,6 @@ pub struct PublicationValidationEvidenceV1 {
     /// Finalized registry snapshot against which the exact graph was checked.
     pub resolution_snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl PublicationValidationEvidenceV1 {
     fn validate_for(&self, request: &PublicationRequestV1) -> Result<(), PublicationError> {
         let manifest = &request.publication.manifest;
@@ -439,7 +412,6 @@ impl PublicationValidationEvidenceV1 {
         Ok(())
     }
 }
-
 /// Durable exact transaction intent for immutable archive registration.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveRegistrationIntentV1 {
@@ -456,7 +428,6 @@ pub struct PublicationArchiveRegistrationIntentV1 {
     /// Canonical transaction hash derived from `signed_transaction`.
     pub transaction_hash: [u8; 32],
 }
-
 impl PublicationArchiveRegistrationIntentV1 {
     /// Bind an exact prebuilt transaction to the immutable operation and registration instruction.
     #[must_use]
@@ -477,7 +448,6 @@ impl PublicationArchiveRegistrationIntentV1 {
             transaction_hash,
         }
     }
-
     pub(crate) fn validate_for(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -521,7 +491,6 @@ impl PublicationArchiveRegistrationIntentV1 {
         Ok(())
     }
 }
-
 /// Return the earliest consensus validity deadline shared by the signed transaction and receipt.
 pub(crate) fn archive_registration_intent_valid_until_ms(
     intent: &PublicationArchiveRegistrationIntentV1,
@@ -537,7 +506,6 @@ pub(crate) fn archive_registration_intent_valid_until_ms(
     let transaction_expires_at_ms = created_at_ms.checked_add(ttl_ms)?;
     Some(transaction_expires_at_ms.min(intent.staging_receipt.payload.expires_at_ms))
 }
-
 /// Exact finalized registry evidence that an archive identity remained absent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveAbsenceEvidenceV1 {
@@ -550,7 +518,6 @@ pub struct PublicationArchiveAbsenceEvidenceV1 {
     /// Exact retention decision proving that the registry did not know the archive.
     pub decision: MusubiArchiveRetentionDecisionV1,
 }
-
 impl PublicationArchiveAbsenceEvidenceV1 {
     /// Validate that this evidence names the request's exact deployment and absent archive.
     pub(crate) fn validate_for(
@@ -575,7 +542,6 @@ impl PublicationArchiveAbsenceEvidenceV1 {
         Ok(())
     }
 }
-
 /// Provable terminal state of one exact archive-registration transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum PublicationArchiveRegistrationTerminalReasonV1 {
@@ -592,7 +558,6 @@ pub enum PublicationArchiveRegistrationTerminalReasonV1 {
         finalized_time_ms: u64,
     },
 }
-
 /// Durable terminal and finalized-absence evidence for one exact registration attempt.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveRegistrationTerminalV1 {
@@ -603,7 +568,6 @@ pub struct PublicationArchiveRegistrationTerminalV1 {
     /// Finalized exact-identity query proving that no conflicting archive was present.
     pub absence: PublicationArchiveAbsenceEvidenceV1,
 }
-
 impl PublicationArchiveRegistrationTerminalV1 {
     /// Construct terminal evidence for a finalized registry expiration.
     #[must_use]
@@ -620,7 +584,6 @@ impl PublicationArchiveRegistrationTerminalV1 {
             absence,
         }
     }
-
     /// Construct terminal evidence from finalized chain time and exact archive absence.
     #[must_use]
     pub fn finalized_validity_window_elapsed(
@@ -636,7 +599,6 @@ impl PublicationArchiveRegistrationTerminalV1 {
             absence,
         }
     }
-
     /// Validate this terminal proof against the exact persisted registration intent.
     pub(crate) fn validate_for(
         &self,
@@ -670,7 +632,6 @@ impl PublicationArchiveRegistrationTerminalV1 {
         Ok(())
     }
 }
-
 /// One immutable exact transaction generation and its optional terminal evidence.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveRegistrationAttemptV1 {
@@ -681,7 +642,6 @@ pub struct PublicationArchiveRegistrationAttemptV1 {
     /// Terminal and finalized-absence evidence, appended before a later generation is allowed.
     pub terminal: Option<PublicationArchiveRegistrationTerminalV1>,
 }
-
 impl PublicationArchiveRegistrationAttemptV1 {
     fn new(generation: u8, intent: PublicationArchiveRegistrationIntentV1) -> Self {
         Self {
@@ -690,7 +650,6 @@ impl PublicationArchiveRegistrationAttemptV1 {
             terminal: None,
         }
     }
-
     fn validate_for(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -704,7 +663,6 @@ impl PublicationArchiveRegistrationAttemptV1 {
         Ok(())
     }
 }
-
 /// Result of inspecting or submitting one exact archive-registration generation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(
@@ -719,7 +677,6 @@ pub enum PublicationArchiveRegistrationAdvanceV1 {
     /// The exact transaction is terminal and the archive is finalized absent/conflict-free.
     TerminalAbsent(PublicationArchiveRegistrationTerminalV1),
 }
-
 /// Finalized authoritative archive record recovered for one exact registration transaction.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationRegisteredArchiveV1 {
@@ -732,7 +689,6 @@ pub struct PublicationRegisteredArchiveV1 {
     /// Authoritative archive record embedded in the finalized archive-location query page.
     pub archive: MusubiArchiveRecordV1,
 }
-
 impl PublicationRegisteredArchiveV1 {
     pub(crate) fn validate_for(
         &self,
@@ -765,7 +721,6 @@ impl PublicationRegisteredArchiveV1 {
         Ok(())
     }
 }
-
 /// Main-journal identity of one immutable provider-registration transaction sidecar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationProviderRegistrationTransactionCheckpointV1 {
@@ -782,7 +737,6 @@ pub struct PublicationProviderRegistrationTransactionCheckpointV1 {
     /// Domain-separated hash of the complete immutable sidecar bytes.
     pub sidecar_hash: [u8; 32],
 }
-
 /// Compact main-journal anchor for one location generation's immutable provider sidecars.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationProviderRegistrationCheckpointV1 {
@@ -799,7 +753,6 @@ pub struct PublicationProviderRegistrationCheckpointV1 {
     /// Append-only identities and hashes of every expected signed-transaction sidecar.
     pub transactions: Vec<PublicationProviderRegistrationTransactionCheckpointV1>,
 }
-
 impl PublicationProviderRegistrationCheckpointV1 {
     pub(crate) fn validate_for(
         &self,
@@ -826,7 +779,6 @@ impl PublicationProviderRegistrationCheckpointV1 {
                 "provider-registration checkpoint identity or bound is invalid".to_owned(),
             ));
         }
-
         let mut provider_attempts = BTreeMap::<ProviderId, (u8, u64)>::new();
         for transaction in &self.transactions {
             if transaction.key.validate().is_err()
@@ -862,7 +814,6 @@ impl PublicationProviderRegistrationCheckpointV1 {
         Ok(())
     }
 }
-
 /// Result of checking provider registrations before a location transaction may be signed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PublicationProviderRegistrationCheckpointAdvanceV1 {
@@ -871,7 +822,6 @@ pub enum PublicationProviderRegistrationCheckpointAdvanceV1 {
     /// Persist this append-only compact anchor before any referenced transaction is submitted.
     Updated(PublicationProviderRegistrationCheckpointV1),
 }
-
 /// Exact signed compare-and-set transaction prepared for one archive-location generation.
 ///
 /// This value is persisted before submission. A crash can therefore replay or inspect the exact
@@ -905,7 +855,6 @@ pub struct PublicationArchiveLocationIntentV1 {
     /// Canonical hash of `signed_transaction`.
     pub transaction_hash: [u8; 32],
 }
-
 impl PublicationArchiveLocationIntentV1 {
     /// Bind one exact signed transaction to its finalized preparation snapshot.
     #[must_use]
@@ -938,7 +887,6 @@ impl PublicationArchiveLocationIntentV1 {
             transaction_hash,
         }
     }
-
     /// Reconstruct the sole canonical instruction carried by this generation.
     #[must_use]
     pub fn instruction(&self) -> AddMusubiArchiveLocationV1 {
@@ -953,7 +901,6 @@ impl PublicationArchiveLocationIntentV1 {
             expected_location_revision: self.expected_location_revision,
         }
     }
-
     pub(crate) fn validate_for(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -1024,7 +971,6 @@ impl PublicationArchiveLocationIntentV1 {
         Ok(())
     }
 }
-
 /// Finalized application evidence for one exact archive-location transaction.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveRegistrationV1 {
@@ -1035,14 +981,12 @@ pub struct PublicationArchiveRegistrationV1 {
     /// Complete finalized current archive/location page at or after application.
     pub finalized_page: MusubiArchiveLocationPageV1,
 }
-
 impl PublicationArchiveRegistrationV1 {
     /// Return the stable location identity for this generation.
     #[must_use]
     pub const fn location_id(&self) -> MusubiArchiveLocationIdV1 {
         self.intent.location_id
     }
-
     /// Return the exact location from the finalized page.
     pub(crate) fn location(&self) -> Result<&MusubiArchiveLocationV1, PublicationError> {
         self.finalized_page
@@ -1056,7 +1000,6 @@ impl PublicationArchiveRegistrationV1 {
                 )
             })
     }
-
     pub(crate) fn validate_polled_page(
         &self,
         request: &PublicationRequestV1,
@@ -1113,7 +1056,6 @@ impl PublicationArchiveRegistrationV1 {
         }
         Ok(())
     }
-
     fn validate_for(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -1160,7 +1102,6 @@ impl PublicationArchiveRegistrationV1 {
         Ok(())
     }
 }
-
 /// Why one exact archive-location generation can never become the active generation again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum PublicationArchiveLocationTerminalReasonV1 {
@@ -1186,7 +1127,6 @@ pub enum PublicationArchiveLocationTerminalReasonV1 {
     #[codec(index = 3)]
     Retired,
 }
-
 /// Durable finalized floor against which one archive-location terminal was accepted.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[allow(
@@ -1204,7 +1144,6 @@ pub enum PublicationArchiveLocationTerminalFloorV1 {
     #[codec(index = 2)]
     Replication(PublicationReplicationCheckpointV1),
 }
-
 /// Finalized full-directory evidence terminating one archive-location generation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveLocationTerminalV1 {
@@ -1215,7 +1154,6 @@ pub struct PublicationArchiveLocationTerminalV1 {
     /// Complete finalized directory proving the generation's identity is absent.
     pub finalized_page: MusubiArchiveLocationPageV1,
 }
-
 impl PublicationArchiveLocationTerminalV1 {
     #[allow(
         clippy::too_many_lines,
@@ -1348,7 +1286,6 @@ impl PublicationArchiveLocationTerminalV1 {
         Ok(())
     }
 }
-
 /// One bounded append-only archive-location transaction generation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveLocationAttemptV1 {
@@ -1363,7 +1300,6 @@ pub struct PublicationArchiveLocationAttemptV1 {
     /// Finalized floor against which `terminal` was accepted, retained for journal recovery.
     pub terminal_floor: Option<PublicationArchiveLocationTerminalFloorV1>,
 }
-
 impl PublicationArchiveLocationAttemptV1 {
     fn new(generation: u8, intent: PublicationArchiveLocationIntentV1) -> Self {
         Self {
@@ -1375,7 +1311,6 @@ impl PublicationArchiveLocationAttemptV1 {
         }
     }
 }
-
 /// Result of submitting or recovering one exact archive-location transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(
@@ -1390,7 +1325,6 @@ pub enum PublicationArchiveLocationAdvanceV1 {
     /// The exact transaction is terminal and the complete finalized directory excludes its ID.
     Terminal(PublicationArchiveLocationTerminalV1),
 }
-
 /// Result of polling the current finalized state of the active location generation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PublicationReplicationAdvanceV1 {
@@ -1401,7 +1335,6 @@ pub enum PublicationReplicationAdvanceV1 {
     /// Complete finalized proof that the stable location identity was retired.
     Retired(PublicationArchiveLocationTerminalV1),
 }
-
 /// Durable finalized replication floor for one active archive-location generation.
 ///
 /// Retaining the complete directory page prevents a later lagging absence response from being
@@ -1411,7 +1344,6 @@ pub struct PublicationReplicationCheckpointV1 {
     /// Complete finalized archive-location directory containing the active healthy location.
     pub finalized_page: MusubiArchiveLocationPageV1,
 }
-
 impl PublicationReplicationCheckpointV1 {
     /// Return the active generation's exact location from this finalized page.
     pub(crate) fn location(
@@ -1429,7 +1361,6 @@ impl PublicationReplicationCheckpointV1 {
                     .to_owned(),
             })
     }
-
     pub(crate) fn validate_for(
         &self,
         request: &PublicationRequestV1,
@@ -1442,7 +1373,6 @@ impl PublicationReplicationCheckpointV1 {
         validate_replication(request, registration, self.location(registration)?)
     }
 }
-
 pub(crate) fn validate_archive_location_page(
     request: &PublicationRequestV1,
     registered: &PublicationRegisteredArchiveV1,
@@ -1479,7 +1409,6 @@ pub(crate) fn validate_archive_location_page(
     }
     Ok(())
 }
-
 /// Exact public evidence returned after one provider readback.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationReadbackEvidenceV1 {
@@ -1496,7 +1425,6 @@ pub struct PublicationReadbackEvidenceV1 {
     /// Verification-lock digest parsed from the returned canonical bundle.
     pub verification_lock_digest: MusubiVerificationLockDigestV1,
 }
-
 impl PublicationReadbackEvidenceV1 {
     fn validate_for(
         &self,
@@ -1520,7 +1448,6 @@ impl PublicationReadbackEvidenceV1 {
         Ok(())
     }
 }
-
 fn validate_readback_subset(
     request: &PublicationRequestV1,
     location: &MusubiArchiveLocationV1,
@@ -1545,7 +1472,6 @@ fn validate_readback_subset(
     }
     Ok(())
 }
-
 /// Finalized replication and readback floor that authorized one release signature.
 ///
 /// The floor is retained inside each attempt rather than inferred from the journal head. A
@@ -1562,7 +1488,6 @@ pub struct PublicationReleasePreparationFloorV1 {
     /// Exact two-provider readbacks used before signing.
     pub readbacks: Vec<PublicationReadbackEvidenceV1>,
 }
-
 impl PublicationReleasePreparationFloorV1 {
     /// Construct and validate an independently auditable release-preparation floor.
     ///
@@ -1587,7 +1512,6 @@ impl PublicationReleasePreparationFloorV1 {
         floor.validate_for_registration(request, registration)?;
         Ok(floor)
     }
-
     fn validate_for(&self, request: &PublicationRequestV1) -> Result<(), PublicationError> {
         let page = &self.replication.finalized_page;
         page.validate()
@@ -1632,7 +1556,6 @@ impl PublicationReleasePreparationFloorV1 {
         }
         validate_readback_subset(request, location, &self.readbacks)
     }
-
     fn location(&self) -> Option<&MusubiArchiveLocationV1> {
         self.replication
             .finalized_page
@@ -1641,7 +1564,6 @@ impl PublicationReleasePreparationFloorV1 {
             .ok()
             .map(|index| &self.replication.finalized_page.items[index])
     }
-
     fn validate_for_registration(
         &self,
         request: &PublicationRequestV1,
@@ -1662,7 +1584,6 @@ impl PublicationReleasePreparationFloorV1 {
         validate_readback_subset(request, location, &self.readbacks)
     }
 }
-
 /// Compact, reconstructable authorization envelope for an exact release transaction.
 ///
 /// Immutable request fields and the sole publish instruction are deliberately not duplicated.
@@ -1682,7 +1603,6 @@ pub struct PublicationReleaseSignedEnvelopeV1 {
     /// Complete canonical multisig proof bundle, when the publisher is multisig.
     pub multisig_signatures: Option<MultisigSignatures>,
 }
-
 impl PublicationReleaseSignedEnvelopeV1 {
     /// Extract a compact envelope only from the exact canonical V1 release transaction shape.
     ///
@@ -1719,7 +1639,6 @@ impl PublicationReleaseSignedEnvelopeV1 {
         }
         Ok(envelope)
     }
-
     /// Reconstruct and validate the sole exact signed release transaction.
     ///
     /// # Errors
@@ -1755,7 +1674,6 @@ impl PublicationReleaseSignedEnvelopeV1 {
         Ok(signed_transaction)
     }
 }
-
 /// Durable compact intent for one exact fee-quoted release transaction.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationReleaseSubmissionIntentV1 {
@@ -1776,7 +1694,6 @@ pub struct PublicationReleaseSubmissionIntentV1 {
     /// Minimal fields needed to reconstruct the exact signed transaction.
     pub envelope: PublicationReleaseSignedEnvelopeV1,
 }
-
 impl PublicationReleaseSubmissionIntentV1 {
     /// Extract, reconstruct, and bind one exact signed transaction before any submission.
     ///
@@ -1810,7 +1727,6 @@ impl PublicationReleaseSubmissionIntentV1 {
         intent.validate_for(operation_id, request)?;
         Ok(intent)
     }
-
     /// Reconstruct and validate the complete transaction represented by this compact intent.
     ///
     /// # Errors
@@ -1844,7 +1760,6 @@ impl PublicationReleaseSubmissionIntentV1 {
         }
         Ok(signed_transaction)
     }
-
     fn validate_for(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -1860,7 +1775,6 @@ impl PublicationReleaseSubmissionIntentV1 {
             .map(|_| ())
     }
 }
-
 /// Synchronized finalized proof that the exact release was absent at one consensus time.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationReleaseAbsenceEvidenceV1 {
@@ -1871,7 +1785,6 @@ pub struct PublicationReleaseAbsenceEvidenceV1 {
     /// Complete same-snapshot retention response and consensus-committed block time.
     pub retention_page: MusubiArchiveRetentionPageV1,
 }
-
 impl PublicationReleaseAbsenceEvidenceV1 {
     pub(crate) fn validate_for(
         &self,
@@ -1922,16 +1835,13 @@ impl PublicationReleaseAbsenceEvidenceV1 {
         }
         Ok(())
     }
-
     fn snapshot(&self) -> MusubiRegistrySnapshotV1 {
         self.resolver_page.snapshot
     }
-
     fn finalized_time_ms(&self) -> u64 {
         self.retention_page.finalized_time_ms
     }
 }
-
 /// Authoritative terminal classification for one exact release transaction generation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum PublicationReleaseSubmissionTerminalReasonV1 {
@@ -1958,7 +1868,6 @@ pub enum PublicationReleaseSubmissionTerminalReasonV1 {
         absence: PublicationReleaseAbsenceEvidenceV1,
     },
 }
-
 /// Terminal evidence appended before a successor release signature may be persisted.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationReleaseSubmissionTerminalV1 {
@@ -1969,7 +1878,6 @@ pub struct PublicationReleaseSubmissionTerminalV1 {
     /// Authoritative terminal classification.
     pub reason: PublicationReleaseSubmissionTerminalReasonV1,
 }
-
 impl PublicationReleaseSubmissionTerminalV1 {
     /// Bind an authoritative expired status to one exact compact intent.
     #[must_use]
@@ -1987,7 +1895,6 @@ impl PublicationReleaseSubmissionTerminalV1 {
             },
         }
     }
-
     /// Bind finalized consensus-time expiry and exact-release absence to one intent.
     #[must_use]
     pub fn finalized_validity_window_elapsed(
@@ -2002,7 +1909,6 @@ impl PublicationReleaseSubmissionTerminalV1 {
             },
         }
     }
-
     /// Bind an authoritative finalized rejection to one exact compact intent.
     #[must_use]
     pub fn registry_rejected(
@@ -2019,7 +1925,6 @@ impl PublicationReleaseSubmissionTerminalV1 {
             },
         }
     }
-
     fn validate_for(
         &self,
         request: &PublicationRequestV1,
@@ -2077,7 +1982,6 @@ impl PublicationReleaseSubmissionTerminalV1 {
         }
         Ok(())
     }
-
     fn absence(&self) -> &PublicationReleaseAbsenceEvidenceV1 {
         match &self.reason {
             PublicationReleaseSubmissionTerminalReasonV1::RegistryExpired { absence, .. }
@@ -2090,7 +1994,6 @@ impl PublicationReleaseSubmissionTerminalV1 {
         }
     }
 }
-
 /// Append-only authoritative outcome of one exact release transaction generation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[allow(
@@ -2110,7 +2013,6 @@ pub enum PublicationReleaseSubmissionOutcomeV1 {
     #[codec(index = 1)]
     Terminal(PublicationReleaseSubmissionTerminalV1),
 }
-
 /// Authoritative payload progress for one already-journaled release transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(
@@ -2125,7 +2027,6 @@ pub enum PublicationReleaseSubmissionAdvanceV1 {
     /// The exact transaction is terminal and synchronized exact-release absence was proven.
     Terminal(PublicationReleaseSubmissionTerminalV1),
 }
-
 impl PublicationReleaseSubmissionOutcomeV1 {
     /// Retain finalized payload application evidence with the intent's local wire binding.
     #[must_use]
@@ -2138,7 +2039,6 @@ impl PublicationReleaseSubmissionOutcomeV1 {
             signed_transaction_digest: intent.signed_transaction_digest,
         }
     }
-
     fn validate_for(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -2173,7 +2073,6 @@ impl PublicationReleaseSubmissionOutcomeV1 {
         }
     }
 }
-
 /// One bounded append-only release transaction generation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationReleaseSubmissionAttemptV1 {
@@ -2184,7 +2083,6 @@ pub struct PublicationReleaseSubmissionAttemptV1 {
     /// Applied or terminal evidence appended before any later journal transition.
     pub outcome: Option<PublicationReleaseSubmissionOutcomeV1>,
 }
-
 impl PublicationReleaseSubmissionAttemptV1 {
     /// Construct a live release generation that has not acquired terminal evidence.
     #[must_use]
@@ -2195,7 +2093,6 @@ impl PublicationReleaseSubmissionAttemptV1 {
             outcome: None,
         }
     }
-
     fn validate_for(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -2220,7 +2117,6 @@ impl PublicationReleaseSubmissionAttemptV1 {
         Ok(())
     }
 }
-
 /// Return the signature-bound validity deadline for one release intent.
 pub(crate) fn release_submission_valid_until_ms(
     intent: &PublicationReleaseSubmissionIntentV1,
@@ -2230,7 +2126,6 @@ pub(crate) fn release_submission_valid_until_ms(
         .creation_time_ms
         .checked_add(intent.envelope.time_to_live_ms.get())
 }
-
 fn validate_release_signed_transaction_shape(
     request: &PublicationRequestV1,
     signed_transaction: &SignedTransaction,
@@ -2274,7 +2169,6 @@ fn validate_release_signed_transaction_shape(
     }
     Ok(())
 }
-
 fn release_signed_transaction_wire_v1(
     signed_transaction: &SignedTransaction,
 ) -> Result<Vec<u8>, PublicationError> {
@@ -2285,7 +2179,6 @@ fn release_signed_transaction_wire_v1(
             reason: format!("release transaction V1 wire encoding failed: {error}"),
         })
 }
-
 /// Idempotent Native AMX submission and authoritative application evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationAmxSubmissionV1 {
@@ -2298,7 +2191,6 @@ pub struct PublicationAmxSubmissionV1 {
     /// Authoritative block height at which the payload transaction was applied.
     pub applied_height: u64,
 }
-
 impl PublicationAmxSubmissionV1 {
     /// Bind an applied payload hash and height to the exact idempotent publish instruction.
     #[must_use]
@@ -2315,7 +2207,6 @@ impl PublicationAmxSubmissionV1 {
             applied_height,
         }
     }
-
     fn validate_for(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -2341,7 +2232,6 @@ impl PublicationAmxSubmissionV1 {
         Ok(())
     }
 }
-
 /// Exact finalized home-dataspace and universal-index publication result.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationFinalEvidenceV1 {
@@ -2354,7 +2244,6 @@ pub struct PublicationFinalEvidenceV1 {
     /// Exact compact release row in the universal sparse index.
     pub universal_release: MusubiResolverReleaseRowV1,
 }
-
 impl PublicationFinalEvidenceV1 {
     fn validate_for(
         &self,
@@ -2420,7 +2309,6 @@ impl PublicationFinalEvidenceV1 {
         Ok(())
     }
 }
-
 /// Compact local journal commitment to one fully verified paired release projection.
 ///
 /// The checkpoint binds the immutable request and canonical projection digests, but its public
@@ -2447,7 +2335,6 @@ pub struct PublicationFinalCheckpointV1 {
     /// Integrity digest binding every compact checkpoint field and projection digest.
     pub checkpoint_digest: [u8; 32],
 }
-
 impl PublicationFinalCheckpointV1 {
     fn from_verified(
         request: &PublicationRequestV1,
@@ -2488,7 +2375,6 @@ impl PublicationFinalCheckpointV1 {
         checkpoint.validate_for(request, submission)?;
         Ok(checkpoint)
     }
-
     fn digest(&self) -> Result<[u8; 32], PublicationError> {
         let mut payload = self.clone();
         payload.checkpoint_digest = [0; 32];
@@ -2500,7 +2386,6 @@ impl PublicationFinalCheckpointV1 {
         })?;
         Ok(domain_hash(FINAL_CHECKPOINT_DOMAIN, &canonical))
     }
-
     fn validate_for(
         &self,
         request: &PublicationRequestV1,
@@ -2542,7 +2427,6 @@ impl PublicationFinalCheckpointV1 {
         Ok(())
     }
 }
-
 /// Completed publication result returned by ordinary publish or resume.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationResultV1 {
@@ -2553,7 +2437,6 @@ pub struct PublicationResultV1 {
     /// Compact local commitment to the verified exact registry projections.
     pub final_checkpoint: PublicationFinalCheckpointV1,
 }
-
 /// Durable, secret-free operation journal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationJournalV1 {
@@ -2592,7 +2475,6 @@ pub struct PublicationJournalV1 {
     /// Present only after exact finalized home/index verification and compaction.
     pub completion: Option<PublicationFinalCheckpointV1>,
 }
-
 impl PublicationJournalV1 {
     fn new(request: PublicationRequestV1) -> Result<Self, PublicationError> {
         request.validate()?;
@@ -2617,7 +2499,6 @@ impl PublicationJournalV1 {
             completion: None,
         })
     }
-
     /// Validate schema, operation identity, exact evidence, and phase consistency.
     ///
     /// # Errors
@@ -3026,7 +2907,6 @@ impl PublicationJournalV1 {
                 "journal completion is present before final verification".to_owned(),
             ));
         }
-
         if let Some(validation) = &self.validation {
             validation.validate_for(&self.request)?;
         }
@@ -3096,7 +2976,6 @@ impl PublicationJournalV1 {
         }
         Ok(())
     }
-
     fn validate_canonical_budgets(&self) -> Result<(), PublicationError> {
         let full_size = canonical_encoded_len(self).map_err(PublicationError::InvalidJournal)?;
         if full_size > MAX_JOURNAL_BYTES_USIZE {
@@ -3104,7 +2983,6 @@ impl PublicationJournalV1 {
                 "journal canonical size {full_size} exceeds {MAX_JOURNAL_BYTES_USIZE} bytes"
             )));
         }
-
         let mut non_release = self.clone();
         non_release.release_submission_attempts.clear();
         non_release.submission = None;
@@ -3117,7 +2995,6 @@ impl PublicationJournalV1 {
                  {JOURNAL_NON_RELEASE_BUDGET_BYTES}-byte budget"
             )));
         }
-
         let mut release_attempts_size = 0_usize;
         for attempt in &self.release_submission_attempts {
             let attempt_size =
@@ -3154,7 +3031,6 @@ impl PublicationJournalV1 {
                  {JOURNAL_RELEASE_ATTEMPTS_BUDGET_BYTES}-byte budget"
             )));
         }
-
         let submission_size = self
             .submission
             .as_ref()
@@ -3194,7 +3070,6 @@ impl PublicationJournalV1 {
         }
         Ok(())
     }
-
     fn registration(&self) -> Result<&PublicationArchiveRegistrationV1, PublicationError> {
         self.archive_location_attempts
             .last()
@@ -3206,7 +3081,6 @@ impl PublicationJournalV1 {
                 )
             })
     }
-
     /// Convert a completed journal into its stable publication result.
     pub fn result(&self) -> Option<PublicationResultV1> {
         Some(PublicationResultV1 {
@@ -3216,7 +3090,6 @@ impl PublicationJournalV1 {
         })
     }
 }
-
 fn validate_option<T>(required: bool, value: Option<&T>) -> Result<(), PublicationError> {
     if required != value.is_some() {
         return Err(PublicationError::InvalidJournal(
@@ -3225,7 +3098,6 @@ fn validate_option<T>(required: bool, value: Option<&T>) -> Result<(), Publicati
     }
     Ok(())
 }
-
 fn archive_registration_attempts_are_append_only(
     previous: &[PublicationArchiveRegistrationAttemptV1],
     next: &[PublicationArchiveRegistrationAttemptV1],
@@ -3246,7 +3118,6 @@ fn archive_registration_attempts_are_append_only(
         && previous[last].terminal.is_none()
         && next[last].terminal.is_some()
 }
-
 fn provider_registration_checkpoints_are_append_only(
     previous: &[PublicationProviderRegistrationCheckpointV1],
     next: &[PublicationProviderRegistrationCheckpointV1],
@@ -3276,7 +3147,6 @@ fn provider_registration_checkpoints_are_append_only(
         && after.transactions.len() == before.transactions.len().saturating_add(1)
         && before.transactions == after.transactions[..before.transactions.len()]
 }
-
 fn archive_location_attempts_are_append_only(
     previous: &[PublicationArchiveLocationAttemptV1],
     next: &[PublicationArchiveLocationAttemptV1],
@@ -3314,7 +3184,6 @@ fn archive_location_attempts_are_append_only(
         && after.terminal_floor.is_some();
     registration_appended || terminal_appended
 }
-
 fn release_submission_attempts_are_append_only(
     previous: &[PublicationReleaseSubmissionAttemptV1],
     next: &[PublicationReleaseSubmissionAttemptV1],
@@ -3349,7 +3218,6 @@ fn release_submission_attempts_are_append_only(
         && previous[last].outcome.is_none()
         && next[last].outcome.is_some()
 }
-
 /// Runtime-only source of exact CAR bytes and their canonical build-plan witness.
 pub trait PublicationCarSource {
     /// Open a new reader at byte zero. Implementations must not persist their path or credentials.
@@ -3358,7 +3226,6 @@ pub trait PublicationCarSource {
     ///
     /// Returns an I/O error when the exact bounded CAR cannot be opened safely at byte zero.
     fn open_car(&self) -> io::Result<Box<dyn Read + '_>>;
-
     /// Return the exact validated seed-ingress wire plan for this CAR.
     ///
     /// The plan is runtime-only publication input. Implementations must not put its bytes or a
@@ -3373,7 +3240,6 @@ pub trait PublicationCarSource {
         commitment: &MusubiArchiveCommitmentV1,
     ) -> io::Result<MusubiSeedIngressCarPlanV1>;
 }
-
 /// Deterministic operation-local CAR and plan stored beside, but never inside, the journal.
 #[derive(Clone, Debug)]
 pub struct PublicationStagedCarSourceV1 {
@@ -3382,7 +3248,6 @@ pub struct PublicationStagedCarSourceV1 {
     plan_path: PathBuf,
     expected_size: u64,
 }
-
 impl PublicationStagedCarSourceV1 {
     /// Bind immutable CAR and plan locations for one operation below an explicit state root.
     #[must_use]
@@ -3398,19 +3263,16 @@ impl PublicationStagedCarSourceV1 {
             expected_size,
         }
     }
-
     /// Return the deterministic operation-local path without persisting it in the journal.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
-
     /// Return the deterministic immutable plan-sidecar path outside the journal.
     #[must_use]
     pub fn plan_path(&self) -> &Path {
         &self.plan_path
     }
-
     /// Durably stage exact CAR bytes and their canonical plan below the private operation directory.
     ///
     /// Identical retries reuse both verified regular files. A different body or plan at the same
@@ -3469,7 +3331,6 @@ impl PublicationStagedCarSourceV1 {
         }
         Ok(source)
     }
-
     fn reopen_plan(
         &self,
         commitment: &MusubiArchiveCommitmentV1,
@@ -3522,7 +3383,6 @@ impl PublicationStagedCarSourceV1 {
         }
         Ok(plan)
     }
-
     fn load_car_bytes_for_plan(&self) -> io::Result<Vec<u8>> {
         let size = usize::try_from(self.expected_size).map_err(|_| {
             invalid_plan_source("staged publication CAR length does not fit this platform")
@@ -3542,7 +3402,6 @@ impl PublicationStagedCarSourceV1 {
         }
         Ok(bytes)
     }
-
     fn verify_digest(
         &self,
         expected_digest: MusubiContentDigestV1,
@@ -3580,14 +3439,12 @@ impl PublicationStagedCarSourceV1 {
         Ok(())
     }
 }
-
 fn invalid_staged_car_plan() -> PublicationError {
     PublicationError::InvalidEvidence {
         phase: PublicationPhaseV1::Validation,
         reason: "staged CAR and plan do not reproduce their bounded archive commitment".to_owned(),
     }
 }
-
 fn staged_car_plan_matches_commitment(
     commitment: &MusubiArchiveCommitmentV1,
     plan: &CarBuildPlan,
@@ -3629,7 +3486,6 @@ fn staged_car_plan_matches_commitment(
     chunk_store.payload_digest() == &plan.payload_digest
         && chunk_store.por_tree().root() == commitment.por_root.as_bytes()
 }
-
 impl PublicationCarSource for PublicationStagedCarSourceV1 {
     fn open_car(&self) -> io::Result<Box<dyn Read + '_>> {
         if !cfg!(unix) {
@@ -3674,7 +3530,6 @@ impl PublicationCarSource for PublicationStagedCarSourceV1 {
             complete: false,
         }))
     }
-
     fn car_plan(
         &self,
         commitment: &MusubiArchiveCommitmentV1,
@@ -3682,11 +3537,9 @@ impl PublicationCarSource for PublicationStagedCarSourceV1 {
         self.reopen_plan(commitment)
     }
 }
-
 fn invalid_plan_source(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
-
 fn unsupported_publication_filesystem_error() -> io::Error {
     // TODO: Enable non-Unix publication files only after a safe stable handle-identity,
     // single-link, and no-follow file-open abstraction is available.
@@ -3695,7 +3548,6 @@ fn unsupported_publication_filesystem_error() -> io::Error {
         "secure Musubi publication filesystem access is unsupported on this platform",
     )
 }
-
 struct StableCarReader {
     path: PathBuf,
     file: File,
@@ -3704,7 +3556,6 @@ struct StableCarReader {
     observed: u64,
     complete: bool,
 }
-
 impl StableCarReader {
     fn validate_complete_snapshot(&self) -> io::Result<()> {
         let opened = self.file.metadata()?;
@@ -3723,7 +3574,6 @@ impl StableCarReader {
         Ok(())
     }
 }
-
 impl Read for StableCarReader {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         if self.complete || buffer.is_empty() {
@@ -3753,7 +3603,6 @@ impl Read for StableCarReader {
         Ok(read)
     }
 }
-
 /// Classification for a transport or remote-state failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicationBackendFailureClass {
@@ -3762,27 +3611,23 @@ pub enum PublicationBackendFailureClass {
     /// Retrying without changing external state cannot succeed.
     Permanent,
 }
-
 /// Redacted backend failure carrying only a stable public code.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicationBackendError {
     class: PublicationBackendFailureClass,
     code: String,
 }
-
 impl PublicationBackendError {
     /// Construct a retryable backend failure from a bounded stable code.
     #[must_use]
     pub fn retryable(code: impl Into<String>) -> Self {
         Self::new(PublicationBackendFailureClass::Retryable, code)
     }
-
     /// Construct a permanent backend failure from a bounded stable code.
     #[must_use]
     pub fn permanent(code: impl Into<String>) -> Self {
         Self::new(PublicationBackendFailureClass::Permanent, code)
     }
-
     fn new(class: PublicationBackendFailureClass, code: impl Into<String>) -> Self {
         let candidate = code.into();
         let code = if !candidate.is_empty()
@@ -3797,28 +3642,23 @@ impl PublicationBackendError {
         };
         Self { class, code }
     }
-
     /// Return whether the same idempotent call may be retried.
     #[must_use]
     pub const fn class(&self) -> PublicationBackendFailureClass {
         self.class
     }
-
     /// Return the stable, redacted failure code.
     #[must_use]
     pub fn code(&self) -> &str {
         &self.code
     }
 }
-
 impl fmt::Display for PublicationBackendError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.code)
     }
 }
-
 impl Error for PublicationBackendError {}
-
 /// Runtime publication adapter. Credentials and endpoints remain inside this object.
 pub trait PublicationBackend {
     /// Return current Unix time in milliseconds for receipt validation.
@@ -3827,7 +3667,6 @@ pub trait PublicationBackend {
     ///
     /// Returns a backend error when the trusted publication clock cannot be sampled.
     fn current_time_ms(&mut self) -> Result<u64, PublicationBackendError>;
-
     /// Validate and compiler-check the clean CAR and exact dependency graph.
     ///
     /// # Errors
@@ -3839,7 +3678,6 @@ pub trait PublicationBackend {
         request: &PublicationRequestV1,
         car: &mut dyn Read,
     ) -> Result<PublicationValidationEvidenceV1, PublicationBackendError>;
-
     /// Stage the CAR only through an admitted, authenticated seed-ingress service.
     ///
     /// # Errors
@@ -3853,7 +3691,6 @@ pub trait PublicationBackend {
         plan: &MusubiSeedIngressCarPlanV1,
         car: &mut dyn Read,
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError>;
-
     /// Prebuild, fee-quote, and sign the exact archive-registration transaction without submitting it.
     ///
     /// # Errors
@@ -3865,7 +3702,6 @@ pub trait PublicationBackend {
         request: &PublicationRequestV1,
         receipt: &MusubiSeedIngressReceiptV1,
     ) -> Result<PublicationArchiveRegistrationIntentV1, PublicationBackendError>;
-
     /// Submit or recover the exact durable registration transaction and authoritative archive.
     ///
     /// # Errors
@@ -3878,7 +3714,6 @@ pub trait PublicationBackend {
         request: &PublicationRequestV1,
         intent: &PublicationArchiveRegistrationIntentV1,
     ) -> Result<PublicationArchiveRegistrationAdvanceV1, PublicationBackendError>;
-
     /// Revalidate or extend the compact provider-sidecar anchor before any proof submission.
     ///
     /// Backends that do not use detached provider-registration sidecars may retain this ready
@@ -3899,7 +3734,6 @@ pub trait PublicationBackend {
     ) -> Result<PublicationProviderRegistrationCheckpointAdvanceV1, PublicationBackendError> {
         Ok(PublicationProviderRegistrationCheckpointAdvanceV1::Ready)
     }
-
     /// Coordinate and sign one exact location CAS without submitting it.
     ///
     /// # Errors
@@ -3913,7 +3747,6 @@ pub trait PublicationBackend {
         generation: u8,
         prior_location_ids: &[MusubiArchiveLocationIdV1],
     ) -> Result<PublicationArchiveLocationIntentV1, PublicationBackendError>;
-
     /// Submit or recover the exact journaled location CAS and finalized directory state.
     ///
     /// # Errors
@@ -3928,7 +3761,6 @@ pub trait PublicationBackend {
         intent: &PublicationArchiveLocationIntentV1,
         prior_location_ids: &[MusubiArchiveLocationIdV1],
     ) -> Result<PublicationArchiveLocationAdvanceV1, PublicationBackendError>;
-
     /// Poll finalized provider completions and return a healthy location at quorum.
     ///
     /// # Errors
@@ -3940,7 +3772,6 @@ pub trait PublicationBackend {
         request: &PublicationRequestV1,
         registration: &PublicationArchiveRegistrationV1,
     ) -> Result<PublicationReplicationAdvanceV1, PublicationBackendError>;
-
     /// Read and fully verify the archive through one selected finalized provider.
     ///
     /// # Errors
@@ -3953,7 +3784,6 @@ pub trait PublicationBackend {
         location: &MusubiArchiveLocationV1,
         provider: ProviderId,
     ) -> Result<PublicationReadbackEvidenceV1, PublicationBackendError>;
-
     /// Prebuild, fee-quote, and sign one exact release transaction without submitting it.
     ///
     /// # Errors
@@ -3966,7 +3796,6 @@ pub trait PublicationBackend {
         request: &PublicationRequestV1,
         preparation: &PublicationReleasePreparationFloorV1,
     ) -> Result<PublicationReleaseSubmissionIntentV1, PublicationBackendError>;
-
     /// Query status first, then submit or replay the exact journaled release transaction.
     ///
     /// When `allow_absent_submission` is false, an absent transaction must remain unsent; exact
@@ -3983,7 +3812,6 @@ pub trait PublicationBackend {
         intent: &PublicationReleaseSubmissionIntentV1,
         allow_absent_submission: bool,
     ) -> Result<PublicationReleaseSubmissionAdvanceV1, PublicationBackendError>;
-
     /// Poll finality and query both the exact home record and exact universal index row.
     ///
     /// # Errors
@@ -3996,7 +3824,6 @@ pub trait PublicationBackend {
         submission: &PublicationAmxSubmissionV1,
     ) -> Result<Option<PublicationFinalEvidenceV1>, PublicationBackendError>;
 }
-
 /// One step of a resumable publication.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(
@@ -4011,13 +3838,11 @@ pub enum PublicationAdvanceV1 {
     /// Exact home and universal-index verification completed.
     Complete(PublicationResultV1),
 }
-
 /// Durable operation-journal storage below an explicit user-level state root.
 #[derive(Debug)]
 pub struct PublicationJournalStore {
     root: AtomicWriteRoot,
 }
-
 struct PublicationOperationLockV1 {
     file: File,
     path: PathBuf,
@@ -4026,7 +3851,6 @@ struct PublicationOperationLockV1 {
     parent_path: PathBuf,
     parent_identity: fs::Metadata,
 }
-
 impl PublicationOperationLockV1 {
     fn validate(&self) -> Result<(), PublicationError> {
         let opened = self.file.metadata().map_err(PublicationError::JournalIo)?;
@@ -4050,7 +3874,6 @@ impl PublicationOperationLockV1 {
         }
         Ok(())
     }
-
     fn finish<T>(self, result: Result<T, PublicationError>) -> Result<T, PublicationError> {
         let unlock = File::unlock(&self.file).map_err(PublicationError::JournalIo);
         match result {
@@ -4059,7 +3882,6 @@ impl PublicationOperationLockV1 {
         }
     }
 }
-
 impl PublicationJournalStore {
     /// Open or create the private `publication-v1` journal directory.
     ///
@@ -4099,7 +3921,6 @@ impl PublicationJournalStore {
         }
         Ok(Self { root })
     }
-
     /// Persist a new operation, or return the identical existing operation idempotently.
     ///
     /// # Errors
@@ -4130,7 +3951,6 @@ impl PublicationJournalStore {
         })();
         operation_lock.finish(result)
     }
-
     /// Load and fully validate one journal by typed operation id.
     ///
     /// # Errors
@@ -4211,7 +4031,6 @@ impl PublicationJournalStore {
         journal.validate()?;
         Ok(journal)
     }
-
     fn write(&self, journal: &PublicationJournalV1) -> Result<(), PublicationError> {
         journal.validate()?;
         let bytes = norito::encode_canonical(journal).map_err(|error| {
@@ -4228,7 +4047,6 @@ impl PublicationJournalStore {
             .replace(&journal_relative_path(journal.operation_id), &bytes)
             .map_err(PublicationError::JournalWrite)
     }
-
     fn transition(
         &self,
         previous: &PublicationJournalV1,
@@ -4291,7 +4109,6 @@ impl PublicationJournalStore {
         })();
         operation_lock.finish(result)
     }
-
     fn lock_operation(
         &self,
         operation_id: PublicationOperationIdV1,
@@ -4316,7 +4133,6 @@ impl PublicationJournalStore {
                 "publication journal directory changed identity".to_owned(),
             ));
         }
-
         let path = self
             .root
             .path()
@@ -4333,7 +4149,6 @@ impl PublicationJournalStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(PublicationError::JournalIo(error)),
         };
-
         let (file, created) = match before.as_ref() {
             Some(_) => (
                 open_existing_operation_lock(&path).map_err(PublicationError::JournalIo)?,
@@ -4384,7 +4199,6 @@ impl PublicationJournalStore {
         Ok(operation_lock)
     }
 }
-
 fn release_successor_preparation_is_ready(
     journal: &PublicationJournalV1,
     preparation: &PublicationReleasePreparationFloorV1,
@@ -4444,7 +4258,6 @@ fn release_successor_preparation_is_ready(
             });
     Ok(higher_same_location || retired_then_replaced)
 }
-
 fn prepare_release_submission_attempt(
     journal: &PublicationJournalV1,
     registration: &PublicationArchiveRegistrationV1,
@@ -4483,24 +4296,19 @@ fn prepare_release_submission_attempt(
         generation, intent,
     )))
 }
-
 include!("publish_engine.rs");
 fn journal_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
     Path::new(JOURNAL_DIRECTORY).join(format!("{operation_id}.{JOURNAL_EXTENSION}"))
 }
-
 fn operation_lock_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
     Path::new(JOURNAL_DIRECTORY).join(format!("{operation_id}.{JOURNAL_LOCK_EXTENSION}"))
 }
-
 fn staged_car_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
     PathBuf::from(JOURNAL_DIRECTORY).join(format!("{operation_id}.{STAGED_CAR_EXTENSION}"))
 }
-
 fn staged_plan_relative_path(operation_id: PublicationOperationIdV1) -> PathBuf {
     PathBuf::from(JOURNAL_DIRECTORY).join(format!("{operation_id}.{STAGED_PLAN_EXTENSION}"))
 }
-
 fn domain_hash(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(
@@ -4517,13 +4325,11 @@ fn domain_hash(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     hasher.update(bytes);
     *hasher.finalize().as_bytes()
 }
-
 fn canonical_encoded_len<T: Encode>(value: &T) -> Result<usize, String> {
     norito::encode_canonical(value)
         .map(|bytes| bytes.len())
         .map_err(|error| format!("canonical Norito encoding failed: {error}"))
 }
-
 fn ensure_release_component_budget<T: Encode>(
     value: &T,
     maximum: usize,
@@ -4540,19 +4346,16 @@ fn ensure_release_component_budget<T: Encode>(
     }
     Ok(())
 }
-
 fn archive_registration_instruction_digest(instruction: &RegisterMusubiArchiveV1) -> [u8; 32] {
     let canonical = norito::encode_canonical(instruction)
         .expect("typed archive registration instruction has a canonical Norito encoding");
     domain_hash(ARCHIVE_REGISTRATION_INSTRUCTION_DOMAIN, &canonical)
 }
-
 fn archive_location_instruction_digest(instruction: &AddMusubiArchiveLocationV1) -> [u8; 32] {
     let canonical = norito::encode_canonical(instruction)
         .expect("typed archive location instruction has a canonical Norito encoding");
     domain_hash(ARCHIVE_LOCATION_INSTRUCTION_DOMAIN, &canonical)
 }
-
 fn open_existing_operation_lock(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true);
@@ -4561,7 +4364,6 @@ fn open_existing_operation_lock(path: &Path) -> io::Result<File> {
     options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
     options.open(path)
 }
-
 fn create_operation_lock(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create_new(true);
@@ -4572,7 +4374,6 @@ fn create_operation_lock(path: &Path) -> io::Result<File> {
     options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
     options.open(path)
 }
-
 #[cfg(unix)]
 fn operation_lock_metadata_is_safe(metadata: &fs::Metadata, parent: &fs::Metadata) -> bool {
     metadata_is_safe_regular_file(metadata)
@@ -4580,24 +4381,20 @@ fn operation_lock_metadata_is_safe(metadata: &fs::Metadata, parent: &fs::Metadat
         && metadata.permissions().mode() & 0o7777 == 0o600
         && metadata.uid() == parent.uid()
 }
-
 #[cfg(not(unix))]
 const fn operation_lock_metadata_is_safe(_metadata: &fs::Metadata, _parent: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn journal_directory_metadata_is_safe(metadata: &fs::Metadata) -> bool {
     metadata.is_dir()
         && !metadata.file_type().is_symlink()
         && metadata.permissions().mode() & 0o7777 == 0o700
 }
-
 #[cfg(not(unix))]
 const fn journal_directory_metadata_is_safe(_metadata: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn same_directory(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     journal_directory_metadata_is_safe(left)
@@ -4606,12 +4403,10 @@ fn same_directory(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ino() == right.ino()
         && left.uid() == right.uid()
 }
-
 #[cfg(not(unix))]
 const fn same_directory(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 fn metadata_is_safe_regular_file(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -4625,18 +4420,14 @@ fn metadata_is_safe_regular_file(metadata: &fs::Metadata) -> bool {
         false
     }
 }
-
 #[cfg(unix)]
 fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     metadata.nlink() == 1
 }
-
 #[cfg(unix)]
 fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.file_type() == right.file_type()
@@ -4648,12 +4439,10 @@ fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.nlink() == 1
         && right.nlink() == 1
 }
-
 #[cfg(not(unix))]
 const fn same_file_snapshot(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 fn open_read_only_no_follow_nonblocking(path: &Path) -> io::Result<File> {
     if !cfg!(unix) {
         let _ = path;
@@ -4664,19 +4453,16 @@ fn open_read_only_no_follow_nonblocking(path: &Path) -> io::Result<File> {
     set_no_follow_nonblocking(&mut options);
     options.open(path)
 }
-
 fn set_no_follow_nonblocking(options: &mut OpenOptions) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         // A substituted FIFO or device must never block before descriptor metadata rejects it.
         options.custom_flags(platform_no_follow_flag() | platform_nonblocking_flag());
     }
     #[cfg(not(unix))]
     let _ = options;
 }
-
 #[cfg(all(test, unix))]
 fn substitute_publication_read_target_with_fifo_for_test(path: &Path) -> io::Result<()> {
     let substitute = TEST_PUBLICATION_READ_FIFO_SUBSTITUTIONS.with(|remaining| {
@@ -4702,7 +4488,6 @@ fn substitute_publication_read_target_with_fifo_for_test(path: &Path) -> io::Res
         ))
     }
 }
-
 #[cfg(all(
     target_os = "android",
     not(any(
@@ -4714,7 +4499,6 @@ fn substitute_publication_read_target_with_fifo_for_test(path: &Path) -> io::Res
     ))
 ))]
 compile_error!("Musubi publication file reads are not qualified for this Android architecture");
-
 #[cfg(all(
     unix,
     not(any(
@@ -4729,12 +4513,10 @@ compile_error!("Musubi publication file reads are not qualified for this Android
     ))
 ))]
 compile_error!("Musubi publication file reads are not qualified for this Unix target");
-
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
 const fn platform_no_follow_flag() -> i32 {
     0x400000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
@@ -4742,7 +4524,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
@@ -4750,7 +4531,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -4764,7 +4544,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "linux",
     not(any(
@@ -4778,7 +4557,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -4794,7 +4572,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -4807,7 +4584,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x80
 }
-
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "sparc", target_arch = "sparc64")
@@ -4815,7 +4591,6 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x4000
 }
-
 #[cfg(any(
     target_os = "android",
     all(
@@ -4833,7 +4608,6 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x800
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -4849,28 +4623,23 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x4
 }
-
 #[cfg(all(test, unix))]
 mod tests {
     include!("publish_fixture_tests.rs");
     include!("publish_backend_test_support.rs");
     include!("publish_recovery_tests.rs");
 }
-
 #[cfg(all(test, not(unix)))]
 mod unsupported_platform_tests {
     use iroha_data_model::{
         musubi::{MusubiArchiveCommitmentV1, MusubiContentDigestV1},
         sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
     };
-
     use crate::atomic_io::AtomicWriteErrorCode;
-
     use super::{
         PublicationCarSource, PublicationError, PublicationJournalStore, PublicationOperationIdV1,
         PublicationStagedCarSourceV1,
     };
-
     fn minimal_valid_commitment() -> MusubiArchiveCommitmentV1 {
         let descriptor = sorafs_car::chunker_registry::default_descriptor();
         let commitment = MusubiArchiveCommitmentV1 {
@@ -4896,15 +4665,12 @@ mod unsupported_platform_tests {
         commitment.validate().expect("minimal commitment");
         commitment
     }
-
     #[test]
     fn publication_journal_open_fails_before_inspecting_or_creating_the_root() {
         let parent = tempfile::tempdir().expect("temporary parent");
         let requested = parent.path().join("must-remain-absent");
-
         let error = PublicationJournalStore::open(&requested)
             .expect_err("non-Unix publication journal must fail");
-
         assert!(matches!(
             error,
             PublicationError::JournalWrite(error)
@@ -4912,7 +4678,6 @@ mod unsupported_platform_tests {
         ));
         assert!(!requested.exists());
     }
-
     #[test]
     fn staged_car_and_plan_readers_return_unsupported_before_metadata_io() {
         let parent = tempfile::tempdir().expect("temporary parent");
@@ -4922,14 +4687,11 @@ mod unsupported_platform_tests {
             .parse::<PublicationOperationIdV1>()
             .expect("non-zero operation id");
         let source = PublicationStagedCarSourceV1::new(&requested, operation_id, 1);
-
         let error = match source.open_car() {
             Err(error) => error,
             Ok(_) => panic!("non-Unix staged CAR read must fail"),
         };
-
         assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
-
         let error = source
             .car_plan(&minimal_valid_commitment())
             .expect_err("non-Unix staged plan read must fail");

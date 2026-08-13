@@ -2,24 +2,20 @@
 #[tokio::test]
 async fn get_block_hashes_after_hash() {
     const BLOCK_CNT: usize = 10;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let mut block_hashes = vec![];
     for i in 1..=BLOCK_CNT {
         let block = new_dummy_block_with_payload(|header| {
             header.set_height(NonZeroU64::new(i as u64).unwrap());
             header.set_prev_block_hash(block_hashes.last().copied());
         });
-
         let mut state_block = state.block(block.as_ref().header());
         block_hashes.push(block.as_ref().hash());
         let _events = state_block.apply(&block, Vec::new());
         state_block.commit().unwrap();
     }
-
     assert!(
         state
             .view()
@@ -33,17 +29,14 @@ async fn get_block_hashes_after_hash() {
             .eq(block_hashes.into_iter().skip(7))
     );
 }
-
 #[test]
 fn block_hashes_commit_applies_pending_only_on_commit() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let initial_len = state.block_hashes.view().len();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let hash = header.hash();
-
     {
         let mut block_hashes = state.block_hashes.block();
         block_hashes.push(hash);
@@ -54,18 +47,15 @@ fn block_hashes_commit_applies_pending_only_on_commit() {
         );
         block_hashes.commit_for_tests();
     }
-
     let view = state.block_hashes.view();
     assert_eq!(view.len(), initial_len + 1);
     assert_eq!(view.iter().last().copied(), Some(hash));
 }
-
 #[test]
 fn block_hashes_block_and_revert_replaces_tail_on_commit() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let first_hash = first_header.hash();
     {
@@ -73,7 +63,6 @@ fn block_hashes_block_and_revert_replaces_tail_on_commit() {
         block_hashes.push(first_hash);
         block_hashes.commit_for_tests();
     }
-
     let replacement_header = BlockHeader::new(
         NonZeroU64::new(2).unwrap(),
         Some(first_hash),
@@ -89,18 +78,15 @@ fn block_hashes_block_and_revert_replaces_tail_on_commit() {
         block_hashes.push(replacement_hash);
         block_hashes.commit_for_tests();
     }
-
     let view = state.block_hashes.view();
     assert_eq!(view.len(), 1);
     assert_eq!(view.iter().last().copied(), Some(replacement_hash));
 }
-
 #[test]
 fn block_hashes_prepare_commit_releases_read_lock() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     let mut block_hashes = state.block_hashes.block();
     assert_eq!(block_hashes.len(), 0);
     assert!(
@@ -113,20 +99,17 @@ fn block_hashes_prepare_commit_releases_read_lock() {
         "prepare_commit should release the snapshot read guard before commit"
     );
 }
-
 #[test]
 fn block_hashes_committed_height_cache_tracks_commits() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-
     assert_eq!(state.committed_height(), 0);
     assert_eq!(
         state.committed_height(),
         state.block_hashes.view().len(),
         "cached committed height must match block-hash journal length at genesis"
     );
-
     let first_hash = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0).hash();
     {
         let mut block_hashes = state.block_hashes.block();
@@ -138,7 +121,6 @@ fn block_hashes_committed_height_cache_tracks_commits() {
         state.block_hashes.view().len(),
         "cached committed height must be refreshed after block commit"
     );
-
     let replacement_hash = BlockHeader::new(
         NonZeroU64::new(2).unwrap(),
         Some(first_hash),
@@ -159,7 +141,6 @@ fn block_hashes_committed_height_cache_tracks_commits() {
         "cached committed height must track block-and-revert commits"
     );
 }
-
 #[test]
 fn state_contains_ivm_runtime() {
     let kura = Kura::blank_kura_for_testing();
@@ -167,26 +148,21 @@ fn state_contains_ivm_runtime() {
     let state = State::new(World::default(), kura, query_handle);
     assert_eq!(state.ivm.gas_remaining, 0);
 }
-
 #[tokio::test]
 async fn get_blocks_from_height() {
     const BLOCK_CNT: usize = 10;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura.clone(), query_handle);
-
     for i in 1..=BLOCK_CNT {
         let block = new_dummy_block_with_payload(|header| {
             header.set_height(NonZeroU64::new(i as u64).unwrap());
         });
-
         let mut state_block = state.block(block.as_ref().header());
         let _events = state_block.apply(&block, Vec::new());
         state_block.commit().unwrap();
         kura.store_block(block).expect("store block");
     }
-
     assert_eq!(
         &state
             .view()
@@ -196,27 +172,22 @@ async fn get_blocks_from_height() {
         &[8, 9, 10]
     );
 }
-
 #[tokio::test]
 async fn all_blocks_skips_missing_kura_entries() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura.clone(), query_handle);
-
     for height in 1..=3_u64 {
         let block = new_dummy_block_with_payload(|header| {
             header.set_height(NonZeroU64::new(height).unwrap());
         });
-
         let mut state_block = state.block(block.as_ref().header());
         let _events = state_block.apply(&block, Vec::new());
         state_block.commit().unwrap();
-
         if height != 3 {
             kura.store_block(block).expect("store block");
         }
     }
-
     let heights: Vec<_> = state
         .view()
         .all_blocks(nonzero!(1_usize))
@@ -224,7 +195,6 @@ async fn all_blocks_skips_missing_kura_entries() {
         .collect();
     assert_eq!(heights, vec![1, 2]);
 }
-
 #[test]
 fn role_account_range() {
     let (account_id, _account_keypair) = gen_account_in("wonderland");
@@ -238,7 +208,6 @@ fn role_account_range() {
     ]
     .map(|role| (role, ()));
     let map = Storage::from_iter(roles);
-
     let view = map.view();
     let range = view
         .range(RoleIdByAccountBounds::new(&account_id))
@@ -248,13 +217,10 @@ fn role_account_range() {
         assert_eq!(&role.account, &account_id);
     }
 }
-
 #[test]
 fn asset_account_range() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-
     let account_id = gen_account_in("wonderland").0;
-
     let accounts = [
         account_id.clone(),
         account_id.clone(),
@@ -271,7 +237,6 @@ fn asset_account_range() {
         AssetDefinitionId::derive_from_components(domain_id.clone(), "d".parse().unwrap()),
         AssetDefinitionId::derive_from_components(domain_id.clone(), "e".parse().unwrap()),
     ];
-
     let mut assets = accounts
         .into_iter()
         .zip(asset_definitions)
@@ -286,13 +251,11 @@ fn asset_account_range() {
         ),
         (),
     ));
-
     let map: Storage<_, _> = assets.into_iter().collect();
     let view = map.view();
     let range = view.range(AssetByAccountBounds::new(&account_id));
     assert_eq!(range.count(), 3);
 }
-
 #[test]
 fn asset_account_definition_range_includes_all_scopes() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -301,7 +264,6 @@ fn asset_account_definition_range_includes_all_scopes() {
         AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
     let other_definition =
         AssetDefinitionId::derive_from_components(domain_id, "tulip".parse().unwrap());
-
     let assets = [
         AssetId::new(target_definition.clone(), account_id.clone()),
         AssetId::with_scope(
@@ -313,7 +275,6 @@ fn asset_account_definition_range_includes_all_scopes() {
         AssetId::new(target_definition.clone(), gen_account_in("other").0),
     ]
     .map(|asset_id| (asset_id, ()));
-
     let map: Storage<_, _> = assets.into_iter().collect();
     let view = map.view();
     let range = view
@@ -322,24 +283,20 @@ fn asset_account_definition_range_includes_all_scopes() {
             &target_definition,
         ))
         .collect::<Vec<_>>();
-
     assert_eq!(range.len(), 2, "global + scoped partitions should match");
     for (asset_id, ()) in range {
         assert_eq!(asset_id.account(), &account_id);
         assert_eq!(asset_id.definition(), &target_definition);
     }
 }
-
 #[test]
 fn set_asset_metadata_inserts_value_and_event() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
-
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
-
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     Register::domain(Domain::new(domain_id.clone()))
         .execute(&ALICE_ID, &mut stx)
@@ -364,13 +321,11 @@ fn set_asset_metadata_inserts_value_and_event() {
     Mint::asset_quantity(1_u32, asset_id.clone())
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-
     let key: Name = "note".parse().unwrap();
     let value = Json::from(norito::json!("important"));
     SetAssetKeyValue::new(asset_id.clone(), key.clone(), value.clone())
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-
     let events = stx.world.take_external_events();
     assert!(
         events.iter().any(|event| {
@@ -388,21 +343,17 @@ fn set_asset_metadata_inserts_value_and_event() {
         }),
         "expected Asset::MetadataInserted event"
     );
-
     let metadata = stx.world.asset_metadata_mut_or_default(&asset_id).unwrap();
     assert_eq!(metadata.get(&key), Some(&value));
 }
-
 #[test]
 fn remove_asset_metadata_emits_event_and_clears_entry() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
-
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
-
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     Register::domain(Domain::new(domain_id.clone()))
         .execute(&ALICE_ID, &mut stx)
@@ -427,14 +378,12 @@ fn remove_asset_metadata_emits_event_and_clears_entry() {
     Mint::asset_quantity(1_u32, asset_id.clone())
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-
     let key: Name = "flag".parse().unwrap();
     let value = Json::from(norito::json!(true));
     SetAssetKeyValue::new(asset_id.clone(), key.clone(), value.clone())
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.world.take_external_events();
-
     let missing_key: Name = "missing".parse().unwrap();
     let err = RemoveAssetKeyValue::new(asset_id.clone(), missing_key.clone())
         .execute(&ALICE_ID, &mut stx)
@@ -443,11 +392,9 @@ fn remove_asset_metadata_emits_event_and_clears_entry() {
         err,
         Error::Find(FindError::MetadataKey(m)) if m == missing_key
     ));
-
     RemoveAssetKeyValue::new(asset_id.clone(), key.clone())
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
-
     let events = stx.world.take_external_events();
     assert!(
         events.iter().any(|event| {
@@ -465,10 +412,8 @@ fn remove_asset_metadata_emits_event_and_clears_entry() {
         }),
         "expected Asset::MetadataRemoved event"
     );
-
     assert!(stx.world.asset_metadata.get(&asset_id).is_none());
 }
-
 #[tokio::test]
 async fn new_for_testing_works() {
     let kura = Kura::blank_kura_for_testing();
@@ -477,7 +422,6 @@ async fn new_for_testing_works() {
     // Basic smoke check: view is accessible
     let _ = state.view();
 }
-
 #[test]
 fn test_constructors_seed_exact_kura_lane_markers() {
     let assert_marker = |state: &State, kura: &Arc<Kura>| {
@@ -500,7 +444,6 @@ fn test_constructors_seed_exact_kura_lane_markers() {
         kura.persist_committed_lane_block_session(&session, &signer_pops)
             .expect("test constructor must install its exact active lane marker");
     };
-
     let kura = Kura::blank_kura_for_testing();
     let state = State::new(
         World::default(),
@@ -508,7 +451,6 @@ fn test_constructors_seed_exact_kura_lane_markers() {
         LiveQueryStore::start_test(),
     );
     assert_marker(&state, &kura);
-
     let kura = Kura::blank_kura_for_testing();
     let state = State::new_with_chain(
         World::default(),
@@ -517,7 +459,6 @@ fn test_constructors_seed_exact_kura_lane_markers() {
         ChainId::from("state-marker-new-with-chain"),
     );
     assert_marker(&state, &kura);
-
     let kura = Kura::blank_kura_for_testing();
     let state = State::with_telemetry(
         World::default(),
@@ -526,7 +467,6 @@ fn test_constructors_seed_exact_kura_lane_markers() {
         StateTelemetry::default(),
     );
     assert_marker(&state, &kura);
-
     let kura = Kura::blank_kura_for_testing();
     let state = State::new_for_testing(
         World::default(),
@@ -535,28 +475,23 @@ fn test_constructors_seed_exact_kura_lane_markers() {
     );
     assert_marker(&state, &kura);
 }
-
 #[test]
 fn elections_mut_seeds_storage() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
-
     let block = new_dummy_block_with_payload(|_| {});
     let mut state_block = state.block(block.as_ref().header());
     let mut stx = state_block.transaction();
-
     let election_id = "election-1".to_string();
     stx.world
         .elections_mut()
         .insert(election_id.clone(), ElectionState::default());
     stx.apply();
     state_block.commit().expect("commit block");
-
     let view = state.view();
     assert!(view.world.elections().get(&election_id).is_some());
 }
-
 #[test]
 fn soracloud_runtime_records_are_visible_through_world_view() {
     let mut world = World::new();
@@ -969,7 +904,6 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
             selected_peer_id: None,
         },
     );
-
     let view = world.view();
     assert!(
         view.soracloud_service_revisions()
@@ -1049,12 +983,10 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
             .is_some()
     );
 }
-
 #[tokio::test]
 async fn new_for_testing_uses_config_chain_id() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
-
     assert_eq!(state.chain_id, *super::DEFAULT_TEST_CHAIN_ID);
 }

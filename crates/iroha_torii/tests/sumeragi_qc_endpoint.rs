@@ -1,10 +1,7 @@
 //! Router-level coverage for the authoritative Sumeragi v2 QC endpoint.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "telemetry")]
-
 use std::sync::{Mutex, MutexGuard};
-
 use axum::{Router, body::Body, http::Request, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::sumeragi::status;
@@ -20,13 +17,10 @@ use iroha_data_model::block::{
 };
 use iroha_torii::SumeragiV2QcResponse;
 use tower::ServiceExt as _;
-
 static QC_ENDPOINT_TEST_LOCK: Mutex<()> = Mutex::new(());
-
 struct PublishedStatus {
     _guard: MutexGuard<'static, ()>,
 }
-
 impl PublishedStatus {
     fn install(value: SumeragiV2Status) -> Self {
         let guard = QC_ENDPOINT_TEST_LOCK
@@ -36,13 +30,11 @@ impl PublishedStatus {
         Self { _guard: guard }
     }
 }
-
 impl Drop for PublishedStatus {
     fn drop(&mut self) {
         status::clear_v2_status();
     }
 }
-
 fn status_fixture() -> (SumeragiV2Status, QuorumCertificateRef) {
     let context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
         b"height-context",
@@ -106,7 +98,6 @@ fn status_fixture() -> (SumeragiV2Status, QuorumCertificateRef) {
         certificate,
     )
 }
-
 fn qc_endpoint_app() -> Router {
     Router::new().route(
         "/v1/sumeragi/qc",
@@ -116,7 +107,6 @@ fn qc_endpoint_app() -> Router {
         }),
     )
 }
-
 #[tokio::test]
 async fn sumeragi_qc_json_uses_v2_certificate_references() {
     let (status, certificate) = status_fixture();
@@ -130,7 +120,6 @@ async fn sumeragi_qc_json_uses_v2_certificate_references() {
         )
         .await
         .expect("QC response");
-
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let body = response
         .into_body()
@@ -142,7 +131,6 @@ async fn sumeragi_qc_json_uses_v2_certificate_references() {
     assert_eq!(decoded.highest_prepare_qc, Some(certificate));
     assert_eq!(decoded.locked_prepare_qc, Some(certificate));
 }
-
 #[tokio::test]
 async fn sumeragi_qc_norito_uses_v2_certificate_references() {
     let (status, certificate) = status_fixture();
@@ -157,7 +145,6 @@ async fn sumeragi_qc_norito_uses_v2_certificate_references() {
         )
         .await
         .expect("QC response");
-
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let body = response
         .into_body()

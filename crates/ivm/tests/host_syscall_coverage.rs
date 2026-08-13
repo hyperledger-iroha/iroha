@@ -1,7 +1,5 @@
 //! ABI v1 host syscall coverage checks.
-
 use std::{collections::HashMap, str::FromStr};
-
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     CoreHost, IVM, IVMHost, VMError, gas,
@@ -15,7 +13,6 @@ use ivm::{
     syscall_metering::SyscallMetering,
     syscalls,
 };
-
 fn sample_account() -> AccountId {
     let public_key = PublicKey::from_str(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
@@ -23,11 +20,9 @@ fn sample_account() -> AccountId {
     .expect("sample public key parses");
     AccountId::new(public_key)
 }
-
 fn wsv_host() -> WsvHost {
     WsvHost::new_with_subject(MockWorldStateView::new(), sample_account(), HashMap::new())
 }
-
 fn assert_not_unknown_syscall(result: Result<u64, VMError>, host_name: &str, number: u32) {
     if let Err(error) = result
         && let VMError::UnknownSyscall(actual) = error.as_unmetered()
@@ -35,7 +30,6 @@ fn assert_not_unknown_syscall(result: Result<u64, VMError>, host_name: &str, num
         panic!("{host_name} returned UnknownSyscall({actual:#x}) for ABI v1 syscall {number:#x}");
     }
 }
-
 fn assert_host_covers_abi<H>(host_name: &str, make_host: impl Fn() -> H)
 where
     H: IVMHost,
@@ -49,7 +43,6 @@ where
         let result = host.syscall(number, &mut vm);
         assert_not_unknown_syscall(result, host_name, number);
     }
-
     for number in [
         syscalls::SYSCALL_JSON_BUILD,
         syscalls::SYSCALL_STATE_VALUE_ENCODE,
@@ -65,7 +58,6 @@ where
         );
     }
 }
-
 fn assert_prepare_covers_abi<H>(host_name: &str, make_host: impl Fn() -> H)
 where
     H: IVMHost,
@@ -76,7 +68,6 @@ where
         assert_not_unknown_syscall(host.prepare_syscall(number, &vm), host_name, number);
     }
 }
-
 fn assert_fastpq_scope_gas<H>(mut host: H)
 where
     H: IVMHost,
@@ -86,14 +77,12 @@ where
         host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm),
         Ok(gas::G_FASTPQ_BATCH)
     );
-
     let error = host
         .syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_END, &mut vm)
         .expect_err("empty FastPQ batch is rejected after fixed scope gas");
     assert_eq!(error.metered_gas(), Some(gas::G_FASTPQ_BATCH));
     assert!(matches!(error.as_unmetered(), VMError::DecodeError));
 }
-
 fn bytes_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut envelope = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     envelope.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -107,7 +96,6 @@ fn bytes_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     envelope.extend_from_slice(Hash::new(payload).as_ref());
     envelope
 }
-
 fn assert_normalize_norito_bytes_conformance<H>(mut make_host: impl FnMut() -> H)
 where
     H: IVMHost,
@@ -127,7 +115,6 @@ where
             .syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &mut vm)
             .expect("normalize valid byte carrier");
         assert_eq!(gas, quote);
-
         let normalized = vm.register(10);
         assert_ne!(
             normalized, source,
@@ -140,7 +127,6 @@ where
         assert_eq!(tlv.version, 1);
         assert_eq!(tlv.payload, PAYLOAD);
     }
-
     for invalid in [None, Some(PointerType::Name)] {
         let mut vm = IVM::new(u64::MAX);
         if let Some(pointer_type) = invalid {
@@ -159,7 +145,6 @@ where
             Err(VMError::NoritoInvalid)
         ));
     }
-
     let mut vm = IVM::new(u64::MAX);
     let mut malformed = bytes_tlv(PointerType::Blob, b"corrupt digest");
     *malformed.last_mut().expect("digest byte") ^= 1;
@@ -178,7 +163,6 @@ where
         host.syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &mut vm)
             .is_err()
     );
-
     let mut vm = IVM::new(u64::MAX);
     let unowned_stack = bytes_tlv(PointerType::Blob, b"unowned stack bytes");
     vm.store_bytes(ivm::Memory::STACK_START, &unowned_stack)
@@ -194,14 +178,12 @@ where
         Err(VMError::NoritoInvalid)
     ));
 }
-
 #[test]
 fn abi_v1_allowed_syscalls_are_covered_by_lightweight_hosts() {
     assert_host_covers_abi("DefaultHost", DefaultHost::new);
     assert_host_covers_abi("CoreHost", CoreHost::new);
     assert_host_covers_abi("WsvHost", wsv_host);
 }
-
 #[test]
 fn abi_v1_allowed_syscalls_have_one_exhaustive_host_metering_registry() {
     let registry = abi_v1_host_syscall_metering_registry();
@@ -239,7 +221,6 @@ fn abi_v1_allowed_syscalls_have_one_exhaustive_host_metering_registry() {
             "ABI-v1 registry is missing the {class:?} work class"
         );
     }
-
     let unknown = 0x00ff_fffe;
     assert!(!syscalls::is_syscall_allowed(
         ivm::SyscallPolicy::AbiV1,
@@ -255,7 +236,6 @@ fn abi_v1_allowed_syscalls_have_one_exhaustive_host_metering_registry() {
         None,
         "unknown numbers must not inherit a formula from their access class"
     );
-
     for &number in syscalls::abi_syscall_list() {
         let spec = host_syscall_metering_spec(ivm::SyscallPolicy::AbiV1, number)
             .expect("allowed syscall has metering metadata");
@@ -267,7 +247,6 @@ fn abi_v1_allowed_syscalls_have_one_exhaustive_host_metering_registry() {
         assert_eq!(spec.metering, expected, "metering mode for {number:#x}");
     }
 }
-
 #[test]
 fn ledger_query_syscalls_use_the_descriptor_bound_v1_formula() {
     for number in [
@@ -296,27 +275,23 @@ fn ledger_query_syscalls_use_the_descriptor_bound_v1_formula() {
         );
     }
 }
-
 #[test]
 fn abi_v1_prepare_paths_never_treat_an_allowed_syscall_as_unclassified() {
     assert_prepare_covers_abi("DefaultHost", DefaultHost::new);
     assert_prepare_covers_abi("CoreHost", CoreHost::new);
     assert_prepare_covers_abi("WsvHost", wsv_host);
 }
-
 #[test]
 fn fastpq_batch_scope_syscalls_charge_fixed_gas_in_all_hosts() {
     assert_fastpq_scope_gas(DefaultHost::new());
     assert_fastpq_scope_gas(CoreHost::new());
     assert_fastpq_scope_gas(wsv_host());
 }
-
 #[test]
 fn normalize_norito_bytes_is_identical_across_lightweight_hosts() {
     assert_normalize_norito_bytes_conformance(DefaultHost::new);
     assert_normalize_norito_bytes_conformance(CoreHost::new);
     assert_normalize_norito_bytes_conformance(wsv_host);
-
     assert!(syscalls::is_syscall_allowed(
         ivm::SyscallPolicy::AbiV1,
         syscalls::SYSCALL_NORMALIZE_NORITO_BYTES

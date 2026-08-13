@@ -1,14 +1,10 @@
 //! Exact, cumulative decoding for opaque iterable-query components.
-
 use norito::core::{NoritoDeserialize, NoritoSerialize};
-
 use super::{Error, QueryLimits};
-
 struct ExactBareWriter<'a> {
     expected: &'a [u8],
     written: usize,
 }
-
 impl std::io::Write for ExactBareWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let end = self
@@ -21,12 +17,10 @@ impl std::io::Write for ExactBareWriter<'_> {
         self.written = end;
         Ok(bytes.len())
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
-
 fn decode_exact_in_scope<T>(bytes: &[u8]) -> Result<T, Error>
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
@@ -54,7 +48,6 @@ where
     }
     Ok(value)
 }
-
 /// Decode an exact canonical bare payload for legacy, non-server callers.
 pub(super) fn decode_iter_query_payload_exact<T>(bytes: &[u8]) -> Option<T>
 where
@@ -62,7 +55,6 @@ where
 {
     decode_exact_in_scope(bytes).ok()
 }
-
 /// Cumulative decoder for the query, predicate, and selector in one Start.
 ///
 /// Ordinary ingress retains the outer erased request in half of its observable
@@ -72,7 +64,6 @@ pub(super) struct FastIterComponentDecoder {
     remaining_allocated_bytes: usize,
     maximum_component_bytes: usize,
 }
-
 impl FastIterComponentDecoder {
     pub(super) fn new(limits: QueryLimits, components: [&[u8]; 3]) -> Result<Self, Error> {
         let encoded_bytes = components.into_iter().try_fold(0_usize, |total, bytes| {
@@ -91,7 +82,6 @@ impl FastIterComponentDecoder {
             maximum_component_bytes: ordinary_half.unwrap_or(usize::MAX),
         })
     }
-
     pub(super) fn decode<T>(&mut self, bytes: &[u8]) -> Result<T, Error>
     where
         T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
@@ -100,7 +90,6 @@ impl FastIterComponentDecoder {
             Error::Conversion("failed to decode iterable query component".to_owned())
         })
     }
-
     /// Try one of several concrete query variants sharing an item kind.
     pub(super) fn try_decode<T>(&mut self, bytes: &[u8]) -> Result<Option<T>, Error>
     where
@@ -108,7 +97,6 @@ impl FastIterComponentDecoder {
     {
         self.try_decode_measured(bytes)
     }
-
     fn try_decode_measured<T>(&mut self, bytes: &[u8]) -> Result<Option<T>, Error>
     where
         T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
@@ -136,17 +124,14 @@ impl FastIterComponentDecoder {
         Ok(Some(decoded))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_data_model::query::domain::prelude::FindDomains;
-
     #[test]
     fn exact_decode_accepts_canonical_unit_and_rejects_trailing_or_short_layouts() {
         let bytes = norito::codec::Encode::encode(&FindDomains);
         assert!(decode_iter_query_payload_exact::<FindDomains>(&bytes).is_some());
-
         let mut trailing = bytes.clone();
         trailing.push(0);
         assert!(decode_iter_query_payload_exact::<FindDomains>(&trailing).is_none());

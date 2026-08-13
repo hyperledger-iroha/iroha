@@ -1,24 +1,18 @@
 use std::{panic::AssertUnwindSafe, sync::OnceLock};
-
 use crate::{
     generalized_bulletproof::{ProofGenerators, ProofSuite},
     vega::bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1,
 };
-
 use super::*;
-
 const PRODUCTION_SOURCE_V1: &str = include_str!("source_openings_v1.rs");
 const CANONICAL_REOPEN_SOURCE_V1: &str = include_str!("source_openings_v1/canonical_reopen_v1.rs");
 const REPLAY_SOURCE_V1: &str = include_str!("../global_lookup_source_replay_v1.rs");
 const EXTERNAL_SOURCE_V1: &str = include_str!("../../../phase23_rns_link_external_source.rs");
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TinySourceOpeningSuiteV1;
-
 impl ProofSuite for TinySourceOpeningSuiteV1 {
     type Scalar = Scalar;
     type Point = Point;
-
     fn generators() -> &'static ProofGenerators<Self> {
         static GENERATORS: OnceLock<ProofGenerators<TinySourceOpeningSuiteV1>> = OnceLock::new();
         GENERATORS.get_or_init(|| {
@@ -28,14 +22,11 @@ impl ProofSuite for TinySourceOpeningSuiteV1 {
         })
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IdentitySourceOpeningSuiteV1;
-
 impl ProofSuite for IdentitySourceOpeningSuiteV1 {
     type Scalar = Scalar;
     type Point = Point;
-
     fn generators() -> &'static ProofGenerators<Self> {
         static GENERATORS: OnceLock<ProofGenerators<IdentitySourceOpeningSuiteV1>> =
             OnceLock::new();
@@ -46,7 +37,6 @@ impl ProofSuite for IdentitySourceOpeningSuiteV1 {
         })
     }
 }
-
 fn context_axes_v1() -> SourceOpeningContextAxesV1 {
     SourceOpeningContextAxesV1 {
         source_receipt_digest: [0x11; 32],
@@ -54,7 +44,6 @@ fn context_axes_v1() -> SourceOpeningContextAxesV1 {
         replay_spool_context_digest: [0x33; 32],
     }
 }
-
 fn opening_record_v1() -> SourceOpeningRecordV1 {
     let mapping_digest = exact_source_opening_mapping_digest_v1().unwrap();
     let blinding_context_digest = source_opening_blinding_context_digest_v1(
@@ -100,7 +89,6 @@ fn opening_record_v1() -> SourceOpeningRecordV1 {
         record_digest: [0; 32],
     }
 }
-
 #[test]
 fn exact_group_commitment_and_corrected_io_accounting_are_frozen() {
     assert_eq!(SOURCE_OPENING_GROUPS_PER_RECORD_V1, 8);
@@ -124,7 +112,6 @@ fn exact_group_commitment_and_corrected_io_accounting_are_frozen() {
     assert_eq!(WEIGHTED_COLUMN_NAMED_HEAP_BYTES_V1, 1_067_776);
     assert!(WEIGHTED_COLUMN_NAMED_HEAP_BYTES_V1 < 2_700_000);
 }
-
 #[test]
 fn source_and_inverse_packing_coordinates_are_exact_bijections() {
     let mut seen = [false; SOURCE_OPENING_SCALARS_PER_GROUP_V1];
@@ -146,7 +133,6 @@ fn source_and_inverse_packing_coordinates_are_exact_bijections() {
     }
     assert!(source_opening_group_coordinate_v1(344).is_err());
 }
-
 #[test]
 fn mapping_and_context_kats_reject_order_duplicates_and_wrong_axes() {
     let groups: [u16; SOURCE_OPENING_GROUP_COUNT_V1] = core::array::from_fn(|index| index as u16);
@@ -158,7 +144,6 @@ fn mapping_and_context_kats_reject_order_duplicates_and_wrong_axes() {
         hex::encode(mapping),
         "8216632703174865bcbf16b05ed3c8a3571dc11672cf5dc1c2f00c288fa912f1"
     );
-
     let mut reordered_groups = groups;
     reordered_groups.swap(0, 1);
     assert_ne!(
@@ -179,7 +164,6 @@ fn mapping_and_context_kats_reject_order_duplicates_and_wrong_axes() {
     assert!(source_opening_mapping_digest_for_orders_v1(&groups, &duplicate_source).is_err());
     assert!(source_opening_mapping_digest_for_orders_v1(&groups[..343], &source).is_err());
     assert!(source_opening_mapping_digest_for_orders_v1(&groups, &source[..16_383]).is_err());
-
     let context = source_opening_context_digest_v1(
         &context_axes_v1(),
         GLOBAL_LOOKUP_TOPOLOGY_KAT_V1,
@@ -215,7 +199,6 @@ fn mapping_and_context_kats_reject_order_duplicates_and_wrong_axes() {
         .is_err()
     );
 }
-
 #[test]
 fn tiny_commitment_kat_uses_secret_msm_and_identity_is_rejected() {
     let values = [
@@ -239,7 +222,6 @@ fn tiny_commitment_kat_uses_secret_msm_and_identity_is_rejected() {
             .to_non_identity_wire_bytes()
             .unwrap()
     );
-
     let before = zeroizing_t256_scalar_vec_drop_count_v1();
     {
         let mut hostile = ZeroizingT256ScalarVecV1::with_capacity(1);
@@ -271,7 +253,6 @@ fn tiny_commitment_kat_uses_secret_msm_and_identity_is_rejected() {
         .is_err()
     );
 }
-
 #[test]
 fn canonical_parse_entropy_errors_and_unwinds_fail_closed() {
     let mut destination = ZeroizingT256ScalarVecV1::with_capacity(256);
@@ -284,7 +265,6 @@ fn canonical_parse_entropy_errors_and_unwinds_fail_closed() {
         append_canonical_block_scalars_v1(&mut destination, &[0; PHASE23_MAIN_BLOCK_BYTES_V1 - 1],)
             .is_err()
     );
-
     let mut healthy = GlobalLookupSourceOpeningEntropySealV1::TestOnly(
         DeterministicSourceOpeningEntropyV1::new_v1([0x41; 32]),
     );
@@ -295,7 +275,6 @@ fn canonical_parse_entropy_errors_and_unwinds_fail_closed() {
     assert_ne!(first.get(), second.get());
     assert_eq!(first_chunk.as_mut_slice_v1(), first.get().to_be_bytes());
     assert_eq!(second_chunk.as_mut_slice_v1(), second.get().to_be_bytes());
-
     let mut failing = GlobalLookupSourceOpeningEntropySealV1::TestOnly(
         DeterministicSourceOpeningEntropyV1::with_fault_v1(
             [0x42; 32],
@@ -321,7 +300,6 @@ fn canonical_parse_entropy_errors_and_unwinds_fail_closed() {
     }));
     assert!(unwind.is_err());
 }
-
 #[test]
 fn receipt_kat_and_mutations_keep_every_proof_authority_and_release_gate_false() {
     let mut record = opening_record_v1();
@@ -335,7 +313,6 @@ fn receipt_kat_and_mutations_keep_every_proof_authority_and_release_gate_false()
         "af5d0d2832b2dfb03d485e219e86fb33de1cf85c2298a80b9c8309a91db90a66"
     );
     validate_source_opening_record_v1(&record).unwrap();
-
     let mutations: [fn(&mut SourceOpeningRecordV1); 16] = [
         |record| record.group_count -= 1,
         |record| record.total_source_scalars -= 1,
@@ -361,7 +338,6 @@ fn receipt_kat_and_mutations_keep_every_proof_authority_and_release_gate_false()
         assert!(validate_source_opening_record_v1(&changed).is_err());
     }
 }
-
 #[test]
 fn private_sink_accepts_zero_weights_rejects_bad_shape_and_has_no_coordinate_arguments() {
     let mut zero_weights = ZeroizingT256ScalarVecV1::with_capacity(SOURCE_OPENING_GROUP_COUNT_V1);
@@ -381,7 +357,6 @@ fn private_sink_accepts_zero_weights_rejects_bad_shape_and_has_no_coordinate_arg
             .copied()
             .all(Scalar::is_zero)
     );
-
     let mut short_weights =
         ZeroizingT256ScalarVecV1::with_capacity(SOURCE_OPENING_GROUP_COUNT_V1 - 1);
     for _ in 0..SOURCE_OPENING_GROUP_COUNT_V1 - 1 {
@@ -400,7 +375,6 @@ fn private_sink_accepts_zero_weights_rejects_bad_shape_and_has_no_coordinate_arg
     assert_eq!(sink.group_weights.len(), 344);
     assert_eq!(sink.source_column.len(), 16_384);
     assert_eq!(sink.packing_column.len(), 16_384);
-
     let trait_source = PRODUCTION_SOURCE_V1
         .split("trait PurposeBoundCanonicalOpeningSinkV1")
         .nth(1)
@@ -414,7 +388,6 @@ fn private_sink_accepts_zero_weights_rejects_bad_shape_and_has_no_coordinate_arg
     assert!(!trait_source.contains("block:"));
     assert!(!trait_source.contains("index:"));
 }
-
 #[test]
 fn source_identity_write_seal_poison_and_privacy_guards_are_structural() {
     for required in [

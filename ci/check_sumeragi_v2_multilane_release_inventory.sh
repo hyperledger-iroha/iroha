@@ -11,9 +11,11 @@ readonly native_file="integration_tests/tests/native_amx_routing.rs"
 readonly native_recovery_file="$native_file"
 readonly launcher="scripts/run_nexus_cross_dataspace_atomic_swap.sh"
 readonly release_runner="scripts/run_sumeragi_v2_release_gates.sh"
+readonly release_runner_support="scripts/run_sumeragi_v2_release_gates_support.sh"
 readonly release_bootstrap="scripts/bootstrap_sumeragi_v2_release.py"
 readonly release_bootstrap_test="pytests/scripts/sumeragi_v2_release_bootstrap_test.py"
 readonly cargo_cache_copier="scripts/copy_sumeragi_v2_release_cargo_cache.py"
+readonly cargo_cache_ack_component="scripts/copy_sumeragi_v2_release_cargo_cache_validation_ack.py"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
 readonly sdk_diagnostics_harness="ci/run_sumeragi_v2_sdk_diagnostics.sh"
 readonly js_sdk_diagnostics_test="javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"
@@ -22,7 +24,9 @@ readonly closure_ledger="specs/sumeragi_v2_multilane_closure_ledger.md"
 readonly release_receipt_writer="scripts/write_sumeragi_v2_release_receipt.py"
 readonly release_receipt_component="scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"
 readonly release_receipt_corridor_component="scripts/write_sumeragi_v2_release_receipt_corridor_log.py"
-readonly release_receipt_publish_component="scripts/write_sumeragi_v2_release_receipt_publish_helpers.py"
+readonly release_receipt_gate_component="scripts/write_sumeragi_v2_release_receipt_gate_evidence.py"
+readonly release_receipt_publication_component="scripts/write_sumeragi_v2_release_receipt_publication.py"
+readonly release_bootstrap_component="scripts/bootstrap_sumeragi_v2_release_receipt_replay.py"
 readonly prebuilt_bundle_shell="scripts/sumeragi_v2_prebuilt_bundle.sh"
 readonly prebuilt_bundle_helper="scripts/sumeragi_v2_prebuilt_bundle.py"
 readonly process_policy="scripts/sumeragi_v2_release_process_policy.sh"
@@ -54,6 +58,20 @@ readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
 readonly canonical_production_test_count=854
+
+for release_support_component in \
+  "$release_runner_support" \
+  "$cargo_cache_ack_component" \
+  "$release_receipt_component" \
+  "$release_receipt_corridor_component" \
+  "$release_receipt_gate_component" \
+  "$release_receipt_publication_component" \
+  "$release_bootstrap_component"; do
+  if [[ ! -f "$release_support_component" || -L "$release_support_component" ]]; then
+    echo "release support component must be a regular non-symlink file: ${release_support_component}" >&2
+    exit 1
+  fi
+done
 
 require_nonignored_test() {
   local path="$1"
@@ -132,10 +150,6 @@ if [[ ! -f "$release_receipt_component" || -L "$release_receipt_component" ]]; t
 fi
 if [[ ! -f "$release_receipt_corridor_component" || -L "$release_receipt_corridor_component" ]]; then
   echo "release receipt corridor-log component must be a regular non-symlink file" >&2
-  exit 1
-fi
-if [[ ! -f "$release_receipt_publish_component" || -L "$release_receipt_publish_component" ]]; then
-  echo "release receipt publish-helper component must be a regular non-symlink file" >&2
   exit 1
 fi
 if [[ ! -f "$cargo_proxy" || -L "$cargo_proxy" ]]; then
@@ -244,6 +258,12 @@ require_exact_token \
   "    \"write_sumeragi_v2_release_receipt_formal_artifacts.py\","
 require_exact_token \
   "$release_receipt_writer" \
+  "    \"write_sumeragi_v2_release_receipt_gate_evidence.py\","
+require_exact_token \
+  "$release_receipt_writer" \
+  "    \"write_sumeragi_v2_release_receipt_publication.py\","
+require_exact_token \
+  "$release_receipt_writer" \
   "for _release_receipt_component in _RELEASE_RECEIPT_COMPONENT_FILES:"
 require_exact_token \
   "$release_receipt_writer" \
@@ -258,7 +278,7 @@ require_exact_token \
   "$release_receipt_writer" \
   "_G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER = ("
 require_exact_token \
-  "$release_receipt_writer" \
+  "$release_receipt_gate_component" \
   '        "native_grouped_pruning_evidence": "passed",'
 for grouped_suite in \
   '    ("openapi", 7),' \
@@ -294,12 +314,16 @@ python3 -I -S - \
   "$release_receipt_writer" \
   "$release_receipt_component" \
   "$release_receipt_corridor_component" \
-  "$release_receipt_publish_component" \
   "$canonical_production_test_count" \
   "$process_policy" \
   "$cargo_cache_copier" \
   "$release_bootstrap" \
-  "$release_bootstrap_test" <<'PY'
+  "$release_bootstrap_test" \
+  "$release_runner_support" \
+  "$cargo_cache_ack_component" \
+  "$release_receipt_gate_component" \
+  "$release_receipt_publication_component" \
+  "$release_bootstrap_component" <<'PY'
 from __future__ import annotations
 
 import ast
@@ -310,7 +334,10 @@ import sys
 
 
 runner = Path(sys.argv[1])
-source = runner.read_text(encoding="utf-8")
+runner_parent_source = runner.read_text(encoding="utf-8")
+runner_support = Path(sys.argv[10])
+runner_support_source = runner_support.read_text(encoding="utf-8")
+source = runner_parent_source + "\n" + runner_support_source
 lines = source.splitlines()
 receipt_writer = Path(sys.argv[2])
 receipt_source = receipt_writer.read_text(encoding="utf-8")
@@ -318,17 +345,32 @@ receipt_component = Path(sys.argv[3])
 receipt_component_source = receipt_component.read_text(encoding="utf-8")
 receipt_corridor_component = Path(sys.argv[4])
 receipt_corridor_component_source = receipt_corridor_component.read_text(encoding="utf-8")
-receipt_publish_component = Path(sys.argv[5])
-receipt_publish_component_source = receipt_publish_component.read_text(encoding="utf-8")
-canonical_production_test_count = int(sys.argv[6])
-process_policy = Path(sys.argv[7])
+canonical_production_test_count = int(sys.argv[5])
+process_policy = Path(sys.argv[6])
 process_policy_source = process_policy.read_text(encoding="utf-8")
-cargo_cache_copier = Path(sys.argv[8])
+cargo_cache_copier = Path(sys.argv[7])
 cargo_cache_source = cargo_cache_copier.read_text(encoding="utf-8")
 release_bootstrap = Path(sys.argv[8])
 release_bootstrap_source = release_bootstrap.read_text(encoding="utf-8")
 release_bootstrap_test = Path(sys.argv[9])
 release_bootstrap_test_source = release_bootstrap_test.read_text(encoding="utf-8")
+cargo_cache_ack_component = Path(sys.argv[11])
+cargo_cache_ack_component_source = cargo_cache_ack_component.read_text(
+    encoding="utf-8"
+)
+receipt_gate_component = Path(sys.argv[12])
+receipt_gate_component_source = receipt_gate_component.read_text(encoding="utf-8")
+receipt_publication_component = Path(sys.argv[13])
+receipt_publication_component_source = receipt_publication_component.read_text(
+    encoding="utf-8"
+)
+release_bootstrap_component = Path(sys.argv[14])
+release_bootstrap_component_source = release_bootstrap_component.read_text(
+    encoding="utf-8"
+)
+cargo_cache_closure_source = (
+    cargo_cache_source + "\n" + cargo_cache_ack_component_source
+)
 
 
 def reject(message: str) -> None:
@@ -394,6 +436,82 @@ def assigned_string_collection(source_text: str, name: str) -> tuple[str, ...]:
     return tuple(values)
 
 
+runner_support_manifest = """readonly release_runner_support_components=(
+  scripts/run_sumeragi_v2_release_gates_support.sh
+)"""
+if runner_parent_source.count(runner_support_manifest) != 1:
+    reject("release runner support manifest is not exact")
+runner_support_digest_match = re.search(
+    r'^readonly release_runner_support_sha256="([0-9a-f]{64})"$',
+    runner_parent_source,
+    flags=re.MULTILINE,
+)
+if (
+    runner_support_digest_match is None
+    or runner_support_digest_match.group(1)
+    != hashlib.sha256(runner_support.read_bytes()).hexdigest()
+):
+    reject("release runner support digest is not exact")
+if runner_parent_source.count(
+    'source "${repo_root}/scripts/run_sumeragi_v2_release_gates_support.sh"'
+) != 1:
+    reject("release runner support lexical-load edge is not exact")
+runner_support_functions = (
+    "sha256_file", "canonical_executable", "canonical_git_executable",
+    "canonical_path", "resolve_pinned_rust_tool_executable",
+    "release_identity_json", "identity_field",
+    "localnet_binary_attestation_valid",
+    "ensure_source_bound_localnet_binaries",
+    "export_source_bound_localnet_binaries", "verify_release_identity",
+    "record_corridor_log", "run_corridor_leg", "run_cooperative_gate",
+    "corridor_contract_log_path", "is_production_data_model_module",
+    "run_multilane_focus_crate_tests", "run_multilane_focus_test_target",
+    "append_g_unit_inventory", "require_g_unit_log_results",
+)
+for function_name in runner_support_functions:
+    definition = f"{function_name}() {{"
+    if runner_parent_source.splitlines().count(definition) != 0:
+        reject(f"release runner parent still owns {function_name}")
+    if runner_support_source.splitlines().count(definition) != 1:
+        reject(f"release runner support ownership changed for {function_name}")
+
+cargo_cache_tree = ast.parse(cargo_cache_source)
+cargo_cache_assignments = {
+    target.id: node.value
+    for node in cargo_cache_tree.body
+    if isinstance(node, ast.Assign)
+    for target in node.targets
+    if isinstance(target, ast.Name)
+}
+if ast.literal_eval(cargo_cache_assignments["VALIDATION_ACK_COMPONENT_FILES"]) != (
+    "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
+):
+    reject("validation acknowledgment component manifest is not exact")
+if (
+    ast.literal_eval(cargo_cache_assignments["VALIDATION_ACK_COMPONENT_SHA256"])
+    != hashlib.sha256(cargo_cache_ack_component.read_bytes()).hexdigest()
+):
+    reject("validation acknowledgment component digest is not exact")
+if len(cargo_cache_ack_component_source.splitlines()) >= 3_000:
+    reject("validation acknowledgment component exceeds its source budget")
+component_tree = ast.parse(cargo_cache_ack_component_source)
+if sum(
+    isinstance(node, ast.FunctionDef) and node.name == "_validation_ack"
+    for node in cargo_cache_tree.body
+) != 1 or sum(
+    isinstance(node, ast.FunctionDef) and node.name == "_validation_ack"
+    for node in component_tree.body
+) != 1:
+    reject("validation acknowledgment dispatcher/implementation ownership changed")
+for token in (
+    'sealed_component = source / "scripts" / component_name',
+    'elif Path(__file__).name == "copy_sumeragi_v2_release_cargo_cache.py":',
+    'exec(compile(payload, str(component), "exec"), namespace)',
+):
+    if cargo_cache_source.count(token) != 1:
+        reject(f"validation acknowledgment authenticated-load contract changed: {token}")
+
+
 if set(assigned_string_collection(release_bootstrap_source, "_RELEASE_SHELL_UTILITY_NAMES")) != set(expected_shell_utilities):
     reject("bootstrap shell-utility command closure is not exact")
 if set(assigned_string_collection(release_bootstrap_source, "_RELEASE_LANGUAGE_TOOL_NAMES")) != set(expected_language_tools):
@@ -402,7 +520,7 @@ if assigned_string_collection(cargo_cache_source, "_RELEASE_SHELL_UTILITY_NAMES"
     reject("private-runtime shell-utility command closure is not exact")
 for token, count in (
     ("*_RELEASE_SHELL_UTILITY_NAMES,", 2),
-    ("set(tools) != _REQUIRED_RUNNER_TOOL_NAMES", 1),
+    ("set(tools) != _REQUIRED_RUNNER_TOOL_NAMES", 2),
 ):
     observed = (
         cargo_cache_source.count(token)
@@ -468,7 +586,7 @@ for token, count in (
     ("receipt-validation-ack.json", 3),
     ("receipt validation acknowledgment contract is not exact", 1),
 ):
-    if cargo_cache_source.count(token) != count:
+    if cargo_cache_closure_source.count(token) != count:
         raise SystemExit(
             f"{cargo_cache_copier}: private cache-copy contract token is not exact: {token!r}"
         )
@@ -527,6 +645,7 @@ for node in receipt_tree.body:
         and target.id
         in {
             "_RELEASE_RECEIPT_COMPONENT_FILES",
+            "_RELEASE_RECEIPT_COMPONENT_SHA256",
             "_PRODUCTION_TEST_COUNT",
             "_PRODUCTION_MODULES",
             "_APALACHE_REFINEMENT_RESULTS",
@@ -537,7 +656,8 @@ for node in receipt_tree.body:
 expected_receipt_components = (
     "write_sumeragi_v2_release_receipt_formal_artifacts.py",
     "write_sumeragi_v2_release_receipt_corridor_log.py",
-    "write_sumeragi_v2_release_receipt_publish_helpers.py",
+    "write_sumeragi_v2_release_receipt_gate_evidence.py",
+    "write_sumeragi_v2_release_receipt_publication.py",
 )
 if (
     receipt_assignments.get("_RELEASE_RECEIPT_COMPONENT_FILES")
@@ -573,8 +693,32 @@ expected_receipt_corridor_component_symbols = (
     "_owned_unlink_name",
     "_corridor_legs",
 )
-expected_receipt_publish_component_symbols = (
-    "_complete_write",
+expected_receipt_gate_component_symbols = (
+    "_canonical_production_tests", "_canonical_g_unit_rows",
+    "_g_unit_leg_command", "_production_module_command", "_load_identity",
+    "_load_tsv", "_require_fields", "_artifact", "_tlaps_resource_int",
+    "_tlaps_resource_float", "_tlaps_resource_timestamp",
+    "_validate_tlaps_resource_evidence", "_prebuilt_directory_inventory",
+    "_prebuilt_version_transcripts", "_prebuilt_binary_bundle",
+    "_corridor_artifacts", "_seed_run_logs", "_seed_localnet_manifests",
+    "_scan_scaling_bundle", "_capture_scaling_bundle", "_load_scaling_json",
+    "_scaling_ref_path", "_path_contract_artifact", "_sdk_relative_path",
+    "_sdk_inventory_records", "_sdk_source_inventory", "_sdk_source_path",
+    "_sdk_project_source_records", "_sdk_validate_private_source_manifest",
+    "_sdk_binding_contract", "_sdk_validate_control_files",
+    "_sdk_validate_tar", "_sdk_public_archive",
+    "_validate_sdk_dependency_evidence", "_validate_scaling_evidence",
+    "_read_g12_snapshot", "_decode_g12_tsv", "_g12_completion_fields",
+    "_validate_g12_log", "_require_g12_directory_inventory",
+    "_validate_g4p_log", "_validate_g4p_evidence", "_validate_g12_evidence",
+    "_runtime_tool_probe_evidence",
+)
+expected_receipt_publication_component_symbols = (
+    "build_receipt", "_iter_artifact_records", "_capture_path_contract",
+    "_snapshot_receipt_inputs", "_capture_directory_contract",
+    "_revalidate_receipt_inputs", "_fsync_receipt_inputs",
+    "_existing_receipt_contract", "_complete_write",
+    "_publish_terminal_receipt", "main",
 )
 parent_component_symbols = tuple(
     node.name
@@ -583,7 +727,8 @@ parent_component_symbols = tuple(
     and node.name
     in expected_receipt_component_symbols
     + expected_receipt_corridor_component_symbols
-    + expected_receipt_publish_component_symbols
+    + expected_receipt_gate_component_symbols
+    + expected_receipt_publication_component_symbols
 )
 if parent_component_symbols:
     reject("receipt writer formal-artifact functions are not source-isolated")
@@ -608,17 +753,65 @@ corridor_component_symbols = tuple(
 )
 if corridor_component_symbols != expected_receipt_corridor_component_symbols:
     reject("receipt writer corridor-log component symbol inventory is not exact")
-receipt_publish_component_tree = ast.parse(
-    receipt_publish_component_source,
-    filename=str(receipt_publish_component),
+receipt_gate_component_tree = ast.parse(
+    receipt_gate_component_source, filename=str(receipt_gate_component)
 )
-publish_component_symbols = tuple(
+receipt_gate_component_symbols = tuple(
     node.name
-    for node in receipt_publish_component_tree.body
+    for node in receipt_gate_component_tree.body
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
 )
-if publish_component_symbols != expected_receipt_publish_component_symbols:
-    reject("receipt writer publish-helper component symbol inventory is not exact")
+if receipt_gate_component_symbols != expected_receipt_gate_component_symbols:
+    reject("receipt writer gate-evidence component symbol inventory is not exact")
+receipt_publication_component_symbols = tuple(
+    node.name
+    for node in ast.parse(
+        receipt_publication_component_source,
+        filename=str(receipt_publication_component),
+    ).body
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+)
+if (
+    receipt_publication_component_symbols
+    != expected_receipt_publication_component_symbols
+):
+    reject("receipt writer publication component symbol inventory is not exact")
+receipt_component_paths = (
+    receipt_component,
+    receipt_corridor_component,
+    receipt_gate_component,
+    receipt_publication_component,
+)
+expected_receipt_component_digests = {
+    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+    for path in receipt_component_paths
+}
+if (
+    receipt_assignments.get("_RELEASE_RECEIPT_COMPONENT_SHA256")
+    != expected_receipt_component_digests
+):
+    reject("receipt writer component digests are not exact")
+bootstrap_tree = ast.parse(
+    release_bootstrap_source, filename=str(release_bootstrap)
+)
+bootstrap_assignments = {
+    node.targets[0].id: ast.literal_eval(node.value)
+    for node in bootstrap_tree.body
+    if isinstance(node, ast.Assign)
+    and len(node.targets) == 1
+    and isinstance(node.targets[0], ast.Name)
+    and node.targets[0].id
+    in {"_BOOTSTRAP_COMPONENT_FILES", "_BOOTSTRAP_COMPONENT_SHA256"}
+}
+if bootstrap_assignments != {
+    "_BOOTSTRAP_COMPONENT_FILES": (release_bootstrap_component.name,),
+    "_BOOTSTRAP_COMPONENT_SHA256": {
+        release_bootstrap_component.name: hashlib.sha256(
+            release_bootstrap_component.read_bytes()
+        ).hexdigest()
+    },
+}:
+    reject("bootstrap component manifest or digest is not exact")
 if (
     receipt_assignments.get("_PRODUCTION_TEST_COUNT")
     != canonical_production_test_count
@@ -887,14 +1080,16 @@ if direct_cargo_lines:
 
 version_functions = [
     node
-    for node in receipt_tree.body
+    for node in receipt_gate_component_tree.body
     if isinstance(node, ast.FunctionDef)
     and node.name == "_prebuilt_version_transcripts"
 ]
 if len(version_functions) != 1:
     reject("receipt writer must define one prebuilt version transcript validator")
 version_function = version_functions[0]
-version_source = ast.get_source_segment(receipt_source, version_function) or ""
+version_source = (
+    ast.get_source_segment(receipt_gate_component_source, version_function) or ""
+)
 subprocess_calls = [
     node
     for node in ast.walk(receipt_tree)
@@ -1413,6 +1608,7 @@ python3 -I -S - \
   "$taira_runner" \
   "$launcher" \
   "$release_receipt_writer" \
+  "$release_receipt_gate_component" \
   "$cargo_cache_copier" \
   "$prebuilt_bundle_shell" \
   "$prebuilt_bundle_helper" \
@@ -1421,7 +1617,9 @@ python3 -I -S - \
   "$pr_workflow" \
   "$nexus_cross_dataspace_pr_helper" \
   "$nexus_cross_lane_pr_helper" \
-  "$nexus_pr_helper_test" <<'PY'
+  "$nexus_pr_helper_test" \
+  "$release_runner_support" \
+  "$cargo_cache_ack_component" <<'PY'
 from __future__ import annotations
 
 from pathlib import Path
@@ -1455,6 +1653,16 @@ expected_edges = (
         "scripts/run_sumeragi_v2_release_gates.sh",
         "scripts/copy_sumeragi_v2_release_cargo_cache.py",
         'pr_clone_helper="$pr_source_root/scripts/copy_sumeragi_v2_release_cargo_cache.py"',
+    ),
+    (
+        "scripts/run_sumeragi_v2_release_gates.sh",
+        "scripts/run_sumeragi_v2_release_gates_support.sh",
+        'source "${repo_root}/scripts/run_sumeragi_v2_release_gates_support.sh"',
+    ),
+    (
+        "scripts/copy_sumeragi_v2_release_cargo_cache.py",
+        "scripts/copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
+        '"copy_sumeragi_v2_release_cargo_cache_validation_ack.py",',
     ),
     (
         "scripts/run_sumeragi_v2_release_gates.sh",
@@ -1710,6 +1918,8 @@ if re.search(r"\b(?:rm|unlink)\b[^\n]*cancel", predicate):
     reject("shared root predicate must never delete an operator marker")
 for script in guarded_cargo_scripts:
     source = sources[script]
+    if script == "scripts/run_sumeragi_v2_release_gates.sh":
+        source += "\n" + sources["scripts/run_sumeragi_v2_release_gates_support.sh"]
     if any(
         definition in source
         for definition in (
@@ -1957,6 +2167,7 @@ for forbidden in ("_workspace_target", 'repo_root / "target"'):
         reject(f"prebuilt bundle helper retains repository target authority: {forbidden!r}")
 
 release = sources["scripts/run_sumeragi_v2_release_gates.sh"]
+release_support = sources["scripts/run_sumeragi_v2_release_gates_support.sh"]
 main_entry = release.index('release_gate_boundary "release-runner:entry"')
 main_root_guards = [
     match.start()
@@ -1964,7 +2175,14 @@ main_root_guards = [
         r'require_disjoint_release_roots "\$repo_root"', release
     )
 ]
-if len(main_root_guards) != 3 or main_root_guards[-1] >= main_entry:
+if (
+    len(main_root_guards) != 2
+    or main_root_guards[-1] >= main_entry
+    or release_support.count('require_disjoint_release_roots "$repo_root"') != 1
+    or release.index(
+        'source "${repo_root}/scripts/run_sumeragi_v2_release_gates_support.sh"'
+    ) >= main_entry
+):
     reject("every main-runner path must validate roots before its entry boundary")
 if "--no-skip-build" in release:
     reject("release runner may not request reentrant localnet builds")
@@ -2163,7 +2381,7 @@ for token in (
     if token not in publisher:
         reject(f"release marker publisher lacks fail-closed token {token!r}")
 
-receipt_writer = sources["scripts/write_sumeragi_v2_release_receipt.py"]
+receipt_writer = sources["scripts/write_sumeragi_v2_release_receipt_gate_evidence.py"]
 for token in (
     'f"CARGO_TARGET_DIR={cargo_target_dir} "',
     'f"IROHA_TEST_TARGET_DIR={program_target_dir} "',

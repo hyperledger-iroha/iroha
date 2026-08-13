@@ -10,7 +10,6 @@ fn config_rejects_noncanonical_webauthn_rp_ids_and_origins() {
             "{rp_id:?} must fail closed"
         );
     }
-
     for origin in [
         "http://review.example",
         "https://operator:secret@review.example",
@@ -28,14 +27,12 @@ fn config_rejects_noncanonical_webauthn_rp_ids_and_origins() {
             "{origin:?} must fail closed"
         );
     }
-
     let mut canonical = valid_config(key.verifying_key().to_bytes());
     canonical.webauthn_allowed_origins = vec!["https://login.review.example:8443".to_owned()];
     canonical
         .validate()
         .expect("canonical non-default origin port");
 }
-
 #[test]
 fn case_bound_webauthn_session_rotates_grants_reauthorizes_and_survives_restart() {
     let fixture = EvidenceViewerFixture::new();
@@ -78,7 +75,6 @@ fn case_bound_webauthn_session_rotates_grants_reauthorizes_and_survives_restart(
     );
     let session_id = issued.session.local_session.session_id;
     let initial_grant = issued.grant.expose().to_owned();
-
     let first_manifest = service
         .manifest(
             session_id,
@@ -127,7 +123,6 @@ fn case_bound_webauthn_session_rotates_grants_reauthorizes_and_survives_restart(
             .expect_err("rotated grant must be single use"),
         EvidenceViewerErrorV1::AuthenticationRejected
     );
-
     drop(service);
     let restarted = fixture.open();
     let second_manifest = restarted
@@ -145,7 +140,6 @@ fn case_bound_webauthn_session_rotates_grants_reauthorizes_and_survives_restart(
     let receipts = restarted.receipts(None, 16).expect("read receipt chain");
     assert_eq!(receipts.len(), 3);
     assert_receipt_chain(&receipts, &fixture.config);
-
     fixture
         .authorization
         .set_allowed(JUROR_ACCOUNT, EvidenceViewerRoleV1::Juror, false);
@@ -206,7 +200,6 @@ fn case_bound_webauthn_session_rotates_grants_reauthorizes_and_survives_restart(
         "the exact fifteen-minute boundary must be expired"
     );
 }
-
 #[test]
 fn signed_transparency_projection_is_authoritative_payload_free_and_restart_stable() {
     let fixture = EvidenceViewerFixture::new();
@@ -242,7 +235,6 @@ fn signed_transparency_projection_is_authoritative_payload_free_and_restart_stab
         )
         .expect("record signed interaction");
     let rotated_grant = rotated_grant.expose().to_owned();
-
     let legacy = fixture
         .node
         .export_moderation_evidence_viewer_snapshot()
@@ -251,7 +243,6 @@ fn signed_transparency_projection_is_authoritative_payload_free_and_restart_stab
         legacy.sessions.is_empty() && legacy.access_events.is_empty(),
         "the production viewer must not populate the competing local registry"
     );
-
     let checkpoint_digest = current_checkpoint_digest(&service);
     let signer_calls_before_reads = fixture.signer.sign_call_count();
     let first_page = service
@@ -296,7 +287,6 @@ fn signed_transparency_projection_is_authoritative_payload_free_and_restart_stab
             fixture.config.receipt_signer_public_key,
         )
         .expect("verify complete transparency page");
-
     let mut substituted_cursor = cursor;
     substituted_cursor.receipt_digest[0] ^= 1;
     assert_eq!(
@@ -310,7 +300,6 @@ fn signed_transparency_projection_is_authoritative_payload_free_and_restart_stab
         signer_calls_before_reads,
         "audit reads must return the retained signed anchor without invoking the signer"
     );
-
     let encoded =
         norito::to_bytes(&full_projection).expect("encode payload-free transparency page");
     for secret in [
@@ -329,7 +318,6 @@ fn signed_transparency_projection_is_authoritative_payload_free_and_restart_stab
             "payload-free projection leaked forbidden material"
         );
     }
-
     drop(service);
     let restarted = fixture.open();
     assert_eq!(
@@ -344,7 +332,6 @@ fn signed_transparency_projection_is_authoritative_payload_free_and_restart_stab
         .expect("export legacy evidence viewer snapshot");
     assert!(legacy.sessions.is_empty() && legacy.access_events.is_empty());
 }
-
 #[test]
 fn transparency_projection_binds_signed_checkpoint_limit_and_freshness() {
     let fixture = EvidenceViewerFixture::new();
@@ -378,7 +365,6 @@ fn transparency_projection_binds_signed_checkpoint_limit_and_freshness() {
             .expect_err("zero-sequence predecessor must fail"),
         EvidenceViewerErrorV1::InvalidRequest
     );
-
     let empty_page = service
         .transparency_projection(checkpoint_digest, None, 16)
         .expect("read signed empty checkpoint");
@@ -392,7 +378,6 @@ fn transparency_projection_binds_signed_checkpoint_limit_and_freshness() {
             fixture.config.receipt_signer_public_key,
         )
         .expect("verify signed empty checkpoint");
-
     let differently_bounded = service
         .transparency_projection(checkpoint_digest, None, 17)
         .expect("read same checkpoint with a different bound");
@@ -405,7 +390,6 @@ fn transparency_projection_binds_signed_checkpoint_limit_and_freshness() {
         signer_calls_before_reads,
         "status and projection reads must not invoke the signer"
     );
-
     let mut tampered_limit = empty_page.clone();
     tampered_limit.page_limit = 15;
     assert_eq!(
@@ -424,7 +408,6 @@ fn transparency_projection_binds_signed_checkpoint_limit_and_freshness() {
         ),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint)
     );
-
     fixture.issue_challenge(
         &service,
         JUROR_ACCOUNT,
@@ -440,7 +423,6 @@ fn transparency_projection_binds_signed_checkpoint_limit_and_freshness() {
         EvidenceViewerErrorV1::CheckpointChanged
     );
 }
-
 #[test]
 fn finalized_reauthorization_rejects_same_height_forks_and_persists_monotonic_head() {
     let fixture = EvidenceViewerFixture::new();
@@ -453,7 +435,6 @@ fn finalized_reauthorization_rejects_same_height_forks_and_persists_monotonic_he
         BASE_UNIX_MS,
     );
     let challenge_token = challenge.challenge.expose().to_owned();
-
     fixture
         .authorization
         .set_finalized_anchor(77, [0x93; 32], BASE_UNIX_MS - 1_000);
@@ -483,7 +464,6 @@ fn finalized_reauthorization_rejects_same_height_forks_and_persists_monotonic_he
         .expect("exact challenge anchor remains usable");
     let session_id = issued.session.local_session.session_id;
     let first_grant = issued.grant.expose().to_owned();
-
     fixture
         .authorization
         .set_finalized_anchor(78, [0x94; 32], BASE_UNIX_MS - 500);
@@ -500,7 +480,6 @@ fn finalized_reauthorization_rejects_same_height_forks_and_persists_monotonic_he
     assert_eq!(advanced.manifest.finalized_height, 78);
     assert_eq!(advanced.manifest.finalized_block_hash, [0x94; 32]);
     let second_grant = advanced.rotated_grant.expose().to_owned();
-
     fixture
         .authorization
         .set_finalized_anchor(78, [0x95; 32], BASE_UNIX_MS - 500);
@@ -533,7 +512,6 @@ fn finalized_reauthorization_rejects_same_height_forks_and_persists_monotonic_he
             .expect_err("persisted finalized head must reject rollback"),
         EvidenceViewerErrorV1::Forbidden
     );
-
     drop(service);
     let restarted = fixture.open();
     fixture

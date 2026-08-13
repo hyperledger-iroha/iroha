@@ -1,6 +1,5 @@
 //! IR lowering tests for tuple returns and CallMulti/TuplePack/TupleGet.
 use ivm::kotodama::{ir, parser::parse, semantic::analyze};
-
 #[test]
 fn lower_call_tuple_return_emits_callmulti_and_tuplepack() {
     let src = r#"
@@ -38,7 +37,6 @@ fn lower_call_tuple_return_emits_callmulti_and_tuplepack() {
     }
     assert!(saw_callmulti && saw_tuplepack);
 }
-
 #[test]
 fn lower_return_tuple_emits_returnn() {
     let src = r#"

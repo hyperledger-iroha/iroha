@@ -5,24 +5,19 @@
 //! parameter sets. These structures model the governance state transitions
 //! (publish → activate → deprecate → withdraw) and advertise the hashes that
 //! wallets and validators must verify before accepting an upgrade.
-
 use core::fmt::{self, Display, Formatter};
-
 use iroha_crypto::kex::{KeyExchangeScheme as _, X25519Sha256};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
     core::{self as norito_core, DecodeFromSlice, Error as NoritoError},
 };
-
 #[cfg(feature = "json")]
 use crate::json_helpers::fixed_bytes;
-
 /// Version discriminator for confidential encrypted payloads (v1 layout).
 pub const CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1: u8 = 1;
 /// Maximum encrypted note payload bytes accepted by confidential instructions.
 pub const CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES: usize = 64 * 1024;
-
 /// AEAD-wrapped note payload for confidential instructions.
 ///
 /// This envelope carries the metadata required to decrypt a shielded note payload:
@@ -51,7 +46,6 @@ pub struct ConfidentialEncryptedPayload {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     ciphertext: Vec<u8>,
 }
-
 fn varint_len(len: usize) -> usize {
     let mut value = len;
     let mut bytes = 0;
@@ -63,7 +57,6 @@ fn varint_len(len: usize) -> usize {
         value >>= 7;
     }
 }
-
 fn write_varint<W: std::io::Write>(writer: &mut W, len: usize) -> Result<(), NoritoError> {
     let mut value = len;
     loop {
@@ -77,7 +70,6 @@ fn write_varint<W: std::io::Write>(writer: &mut W, len: usize) -> Result<(), Nor
     }
     Ok(())
 }
-
 fn read_varint(bytes: &[u8]) -> Result<(usize, usize), NoritoError> {
     let mut value: usize = 0;
     let mut shift = 0usize;
@@ -114,7 +106,6 @@ fn read_varint(bytes: &[u8]) -> Result<(usize, usize), NoritoError> {
     }
     Err(NoritoError::LengthMismatch)
 }
-
 impl ConfidentialEncryptedPayload {
     const EPHEMERAL_LEN: usize = 32;
     const NONCE_LEN: usize = 24;
@@ -128,37 +119,31 @@ impl ConfidentialEncryptedPayload {
             ciphertext,
         }
     }
-
     /// Return the envelope version recorded on-wire.
     #[must_use]
     pub const fn version(&self) -> u8 {
         self.version
     }
-
     /// Check whether the envelope uses a supported layout.
     #[must_use]
     pub fn is_supported(&self) -> bool {
         self.version == CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1
     }
-
     /// Sender's ephemeral public key bytes.
     #[must_use]
     pub const fn ephemeral_pubkey(&self) -> &[u8; 32] {
         &self.ephemeral_pubkey
     }
-
     /// AEAD nonce bytes.
     #[must_use]
     pub const fn nonce(&self) -> &[u8; 24] {
         &self.nonce
     }
-
     /// Encrypted payload bytes.
     #[must_use]
     pub fn ciphertext(&self) -> &[u8] {
         &self.ciphertext
     }
-
     /// Validate that the envelope is usable for confidential-note decryption.
     ///
     /// # Errors
@@ -188,20 +173,17 @@ impl ConfidentialEncryptedPayload {
         })?;
         Ok(())
     }
-
     /// Consume the envelope and return the ciphertext.
     #[must_use]
     pub fn into_ciphertext(self) -> Vec<u8> {
         self.ciphertext
     }
 }
-
 impl Default for ConfidentialEncryptedPayload {
     fn default() -> Self {
         Self::new([0; 32], [0; 24], Vec::new())
     }
 }
-
 impl norito::NoritoSerialize for ConfidentialEncryptedPayload {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         if self.ciphertext.len() > CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES {
@@ -216,7 +198,6 @@ impl norito::NoritoSerialize for ConfidentialEncryptedPayload {
         writer.write_all(&self.ciphertext)?;
         Ok(())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(
             1 + Self::EPHEMERAL_LEN
@@ -225,18 +206,15 @@ impl norito::NoritoSerialize for ConfidentialEncryptedPayload {
                 + self.ciphertext.len(),
         )
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.encoded_len_hint()
     }
 }
-
 impl<'de> norito::NoritoDeserialize<'de> for ConfidentialEncryptedPayload {
     fn deserialize(archived: &'de norito_core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ConfidentialEncryptedPayload deserialization must succeed for valid archives")
     }
-
     fn try_deserialize(archived: &'de norito_core::Archived<Self>) -> Result<Self, NoritoError> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let payload = norito_core::payload_slice_from_ptr(ptr)?;
@@ -245,7 +223,6 @@ impl<'de> norito::NoritoDeserialize<'de> for ConfidentialEncryptedPayload {
         Ok(value)
     }
 }
-
 impl<'a> norito_core::DecodeFromSlice<'a> for ConfidentialEncryptedPayload {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
         if bytes.len() < 1 + Self::EPHEMERAL_LEN + Self::NONCE_LEN {
@@ -282,7 +259,6 @@ impl<'a> norito_core::DecodeFromSlice<'a> for ConfidentialEncryptedPayload {
         Ok((payload, cipher_end))
     }
 }
-
 /// Status of a confidential registry entry.
 ///
 /// Entries begin in the `Proposed` state once governance publishes new
@@ -301,14 +277,12 @@ pub enum ConfidentialStatus {
     /// Entry has been withdrawn and must reject verification attempts.
     Withdrawn,
 }
-
 impl ConfidentialStatus {
     /// Returns true if the status permits active use.
     #[must_use]
     pub const fn is_active(self) -> bool {
         matches!(self, ConfidentialStatus::Active)
     }
-
     fn from_u8(value: u8) -> Result<Self, NoritoError> {
         match value {
             0 => Ok(Self::Proposed),
@@ -320,7 +294,6 @@ impl ConfidentialStatus {
         }
     }
 }
-
 impl From<ConfidentialStatus> for u8 {
     fn from(status: ConfidentialStatus) -> Self {
         match status {
@@ -330,14 +303,12 @@ impl From<ConfidentialStatus> for u8 {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for ConfidentialStatus {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
         let (raw, used) = u8::decode_from_slice(bytes)?;
         ConfidentialStatus::from_u8(raw).map(|status| (status, used))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for ConfidentialStatus {
     fn json_serialize(&self, out: &mut String) {
@@ -348,7 +319,6 @@ impl norito::json::JsonSerialize for ConfidentialStatus {
         };
         norito::json::write_json_string(label, out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -361,7 +331,6 @@ impl norito::json::JsonSerialize for ConfidentialStatus {
         norito::json::write_json_string_to(label, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ConfidentialStatus {
     fn json_deserialize(
@@ -376,7 +345,6 @@ impl norito::json::JsonDeserialize for ConfidentialStatus {
         }
     }
 }
-
 /// Digest advertising the active confidential feature set (verifier keys, parameters, and policy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -410,7 +378,6 @@ pub struct ConfidentialFeatureDigest {
     )]
     pub zk_policy_hash: Option<[u8; 32]>,
 }
-
 impl ConfidentialFeatureDigest {
     /// Construct a new digest from individual components.
     #[must_use]
@@ -429,7 +396,6 @@ impl ConfidentialFeatureDigest {
             zk_policy_hash,
         }
     }
-
     /// Returns `true` if all fields are `None`.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
@@ -440,16 +406,13 @@ impl ConfidentialFeatureDigest {
             && self.zk_policy_hash.is_none()
     }
 }
-
 /// Ruleset version embedded into [`ConfidentialFeatureDigest::conf_rules_version`] for v1 networks.
 pub const CONFIDENTIAL_RULES_VERSION: u32 = 1;
-
 /// Default genesis confidential-policy hash for bundled ZK defaults and the empty SCCP registry.
 pub const DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH: [u8; 32] = [
     0xed, 0x13, 0xe7, 0xdb, 0x7c, 0xfb, 0xf0, 0x92, 0xc1, 0x9a, 0x26, 0xef, 0x4a, 0x03, 0x9d, 0x09,
     0x1c, 0xb6, 0x6e, 0x04, 0xca, 0x78, 0x5e, 0xb8, 0xc3, 0xed, 0xa4, 0xb9, 0xa0, 0x27, 0xc5, 0x5c,
 ];
-
 /// Default digest advertising the v1 ruleset and canonical genesis confidential policy.
 pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
     ConfidentialFeatureDigest::new(
@@ -459,7 +422,6 @@ pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
         Some(CONFIDENTIAL_RULES_VERSION),
         Some(DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH),
     );
-
 /// Identifier for confidential parameter registries (Pedersen/Poseidon).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -474,39 +436,33 @@ pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
 pub struct ConfidentialParamsId {
     value: u32,
 }
-
 impl ConfidentialParamsId {
     /// Construct a new identifier from a raw integer value.
     #[must_use]
     pub const fn new(value: u32) -> Self {
         Self { value }
     }
-
     /// Access the underlying integer value.
     #[must_use]
     pub const fn get(self) -> u32 {
         self.value
     }
 }
-
 impl From<u32> for ConfidentialParamsId {
     fn from(value: u32) -> Self {
         Self { value }
     }
 }
-
 impl From<ConfidentialParamsId> for u32 {
     fn from(value: ConfidentialParamsId) -> Self {
         value.value
     }
 }
-
 impl Display for ConfidentialParamsId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.value)
     }
 }
-
 /// Descriptor for a Pedersen parameter set tracked on-ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -539,7 +495,6 @@ pub struct PedersenParams {
     /// Lifecycle status of the parameter entry.
     pub status: ConfidentialStatus,
 }
-
 impl PedersenParams {
     /// Returns `true` if the parameter set is usable for verification at `height`.
     #[must_use]
@@ -554,7 +509,6 @@ impl PedersenParams {
         }
     }
 }
-
 /// Descriptor for a Poseidon parameter set tracked on-ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -587,7 +541,6 @@ pub struct PoseidonParams {
     /// Lifecycle status of the parameter entry.
     pub status: ConfidentialStatus,
 }
-
 impl PoseidonParams {
     /// Returns `true` if the parameter set is usable for verification at `height`.
     #[must_use]
@@ -602,18 +555,14 @@ impl PoseidonParams {
         }
     }
 }
-
 /// Frequently used confidential registry types.
 pub mod prelude {
     pub use super::{ConfidentialParamsId, ConfidentialStatus, PedersenParams, PoseidonParams};
 }
-
 #[cfg(test)]
 mod tests {
     use norito::codec::{decode_adaptive, encode_adaptive};
-
     use super::*;
-
     #[test]
     fn pedersen_roundtrip() {
         let params = PedersenParams {
@@ -633,7 +582,6 @@ mod tests {
         assert!(decoded.is_effective_at(15));
         assert!(!decoded.is_effective_at(35));
     }
-
     #[test]
     fn poseidon_roundtrip() {
         let params = PoseidonParams {
@@ -653,7 +601,6 @@ mod tests {
         assert!(decoded.is_effective_at(10));
         assert!(!decoded.is_effective_at(30));
     }
-
     #[test]
     fn encrypted_payload_roundtrips() {
         let payload =
@@ -678,13 +625,11 @@ mod tests {
         assert!(decoded.is_supported());
         assert_eq!(decoded.version(), CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1);
     }
-
     #[test]
     fn encrypted_payload_validation_accepts_supported_nonempty_payload() {
         let payload = ConfidentialEncryptedPayload::new([7u8; 32], [2u8; 24], vec![3, 4, 5]);
         payload.validate().expect("payload validates");
     }
-
     #[test]
     fn encrypted_payload_validation_rejects_empty_ciphertext() {
         let payload = ConfidentialEncryptedPayload::new([7u8; 32], [2u8; 24], Vec::new());
@@ -696,7 +641,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn encrypted_payload_validation_rejects_oversized_ciphertext() {
         let payload = ConfidentialEncryptedPayload::new(
@@ -711,7 +655,6 @@ mod tests {
             err.to_string().contains("ciphertext must not exceed"),
             "unexpected error: {err}"
         );
-
         let err = norito::to_bytes(&payload)
             .expect_err("oversized confidential ciphertext must fail serialization");
         assert!(
@@ -719,7 +662,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn encrypted_payload_decode_rejects_noncanonical_ciphertext_length() {
         let mut payload = Vec::new();
@@ -728,7 +670,6 @@ mod tests {
         payload.extend_from_slice(&[2u8; 24]);
         payload.extend_from_slice(&[0x83, 0x00]);
         payload.extend_from_slice(&[3, 4, 5]);
-
         let err = ConfidentialEncryptedPayload::decode_from_slice(&payload)
             .expect_err("non-canonical confidential ciphertext length must fail");
         assert!(
@@ -736,7 +677,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn encrypted_payload_decode_rejects_oversized_ciphertext_length() {
         let mut payload = Vec::new();
@@ -748,7 +688,6 @@ mod tests {
             CONFIDENTIAL_ENCRYPTED_PAYLOAD_MAX_CIPHERTEXT_BYTES + 1,
         )
         .expect("write oversized length");
-
         let err = ConfidentialEncryptedPayload::decode_from_slice(&payload)
             .expect_err("oversized confidential ciphertext length must fail");
         assert!(
@@ -756,7 +695,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn encrypted_payload_validation_rejects_low_order_ephemeral_key() {
         for ephemeral in [[0u8; 32], {
@@ -774,7 +712,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn empty_payload_initializes_with_zeroed_metadata() {
         let payload = ConfidentialEncryptedPayload::default();

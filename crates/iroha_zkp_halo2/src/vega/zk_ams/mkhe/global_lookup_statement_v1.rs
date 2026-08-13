@@ -7,20 +7,17 @@
 //! false.
 
 #![allow(dead_code, reason = "production entry seals are uninhabited")]
-
 use core::convert::Infallible;
-
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
-
 #[path = "global_lookup_statement_v1/challenge_v1.rs"]
 mod challenge_v1;
 #[path = "global_lookup_statement_v1/external_sumcheck_storage_v1.rs"]
 mod external_sumcheck_storage_v1;
 #[path = "global_lookup_statement_v1/global_lookup_committed_mle_v1.rs"]
 mod global_lookup_committed_mle_v1;
-
+#[path = "global_lookup_statement_v1/vector_arithmetic_plane_openings_v1.rs"]
+mod vector_arithmetic_plane_openings_v1;
 use challenge_v1::challenge_manifest_digest_v1;
-
 const GLOBAL_LOOKUP_VERSION_V1: u8 = 1;
 const COORDINATES_PER_PLANE_V1: usize = 1 << 14;
 const EXISTING_ACTIVE_PLANES_V1: usize = 11_696;
@@ -41,7 +38,6 @@ const ACTIVE_LOOKUP_PLANES_V1: usize = 31_768;
 const VIRTUAL_ZERO_PLANES_V1: usize = 1_000;
 const PADDED_LOOKUP_PLANES_V1: usize = 1 << 15;
 const ACTIVE_LOOKUP_VALUES_V1: u64 = 520_486_912;
-
 const COEFFICIENT_EQUATIONS_V1: usize = 14;
 const PRIOR_CUBIC_MESSAGES_V1: usize = 233;
 const REQUIRED_CUBIC_MESSAGES_V1: usize = 234;
@@ -63,7 +59,6 @@ const POST_BATCH_RESIDUAL_COMMITMENT_BYTES_V1: usize = 3 * 33;
 const POST_BATCH_RESIDUAL_COMMITMENT_FRAMES_INSTANTIATED_V1: bool = true;
 const VECTOR_ARITHMETIC_PROOFS_INSTANTIATED_V1: bool = false;
 const COEFFICIENT_CHALLENGE_WIRE_BYTES_V1: usize = 0;
-
 const PRIOR_RADIX_QPCS_BYTES_V1: usize = 31_395_509;
 const CONDITIONAL_CROSS_FIELD_BYTES_V1: usize = 1_828_422;
 const CUBIC_EXTENSION_BYTES_V1: usize = CUBIC_MESSAGE_BYTES_V1;
@@ -82,7 +77,6 @@ const CONDITIONAL_TOTAL_BYTES_V1: Option<usize> = None;
 const CONDITIONAL_MARGIN_BYTES_V1: Option<usize> = None;
 const LOOKUP_SOUNDNESS_NUMERATOR_V1: u64 = 520_519_678;
 const LOOKUP_SOUNDNESS_BITS_X100_FLOOR_V1: u32 = 22_704;
-
 const TOPOLOGY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.global-lookup.topology\0";
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.global-lookup.transcript\0";
 const SOUNDNESS_FORMULA_V1: &[u8] =
@@ -96,7 +90,6 @@ const COEFFICIENT_AGGREGATION_LANGUAGE_V1: &[u8] = b"for-s=0..13,for-v-in-{0,1}^
 const SPECIAL_QUADRATIC_AGGREGATION_LANGUAGE_V1: &[u8] = b"on-v-in-{0,1}^14:q_3[v]=sum_g(kappa^g*(bD_g[v]*(bD_g[v]-1)+delta*bS_g[v]*(bS_g[v]-1)+delta^2*bD_g[v]*bS_g[v]));q_5[v]=sum_g(kappa^g*(sum_h=0..17(delta^h*beta_g,h[v]*(beta_g,h[v]-1))+delta^18*(m_g[v]-bD_g[v]*beta_g,16[v])+delta^19*(beta_g,17[v]-beta_g,16[v]+m_g[v])));q_8[v]=sum_u(kappa^u*(x_u[v]+n_u[v])*n_u[v]);Q_3=MLE(q_3);Q_5=MLE(q_5);Q_8=MLE(q_8);never-extend-these-products-off-the-Boolean-cube";
 const COEFFICIENT_ENDPOINT_LANGUAGE_V1: &[u8] = b"for-s=0..13:ordered-hidden-endpoints=(A_s=Q_s(r_s),B_s=eq(tau,r_s)*A_s,Z_s=mask-terminal_s);A_s-opens-the-same-framed-q_s-commitment-for-s-in(3,5,8)-or-the-same-verifier-derived-linear-aggregate-for-all-other-s-that-the-sumcheck-uses;gate0:B_s-eq(tau,r_s)*A_s=0;gate1:Cfinal_s-B_s-Z_s=0";
 const POST_BATCH_RESIDUAL_REQUIREMENT_LANGUAGE_V1: &[u8] = b"after-kappa-delta-before-gtilde0:ordered-statements=(3,5,8);each-requires-one-blinded-length-2^14-q_s-vector-commitment-and-one-vector-arithmetic-proof-binding-every-q_s[v]-to-its-exact-frozen-Boolean-coordinate-formula-in-canonical-owner/residual-order;commitments=3*canonical-nonidentity-33B=99B-and-transcript-frames-instantiated;vector-proofs=3-required-but-codec-uninstantiated-and-wire-bytes-undefined;not-counted-as-hidden-endpoints-or-IPAs";
-
 const LOOKUP_PROOF_VERIFIED_V1: bool = false;
 const ZERO_KNOWLEDGE_ACCEPTED_V1: bool = false;
 const SOURCE_SAME_OPENING_VERIFIED_V1: bool = false;
@@ -108,7 +101,6 @@ const OPERATIONAL_RECEIPT_ACCEPTED_V1: bool = false;
 const AUTHORITY_MINTED_V1: bool = false;
 const RSS_QUALIFIED_V1: bool = false;
 const RELEASE_READY_V1: bool = false;
-
 const _: () = {
     assert!(ADDED_PLANES_V1 == COMPARATOR_PLANES_V1 + SMALL_SOURCE_PLANES_V1 + Q_MASK_PLANES_V1);
     assert!(ADDED_PLANES_V1 == ADDED_PRE_Z_PLANES_V1 + ADDED_INVERSE_PLANES_V1);
@@ -139,7 +131,6 @@ const _: () = {
     assert!((LOOKUP_SOUNDNESS_NUMERATOR_V1 << 35) < 0xffff_ffff_0000_0001);
     assert!(!RELEASE_READY_V1);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GlobalLookupErrorV1 {
     Shape,
@@ -149,7 +140,6 @@ enum GlobalLookupErrorV1 {
     Encoding,
     ChallengeExhausted,
 }
-
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AddedPlaneRoleV1 {
@@ -166,7 +156,6 @@ enum AddedPlaneRoleV1 {
     QMaskComplementDigit = 11,
     QMaskComplementInverse = 12,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AddedPlaneCoordinateV1 {
     ordinal: usize,
@@ -176,12 +165,10 @@ struct AddedPlaneCoordinateV1 {
     column: usize,
     active_lookup_slot: Option<usize>,
 }
-
 #[rustfmt::skip]
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ActiveLookupRoleV1 { ComparatorDifferenceDigit = 1, SmallPositive = 2, SmallNegativeMagnitude = 3, QMaskDigit = 4, QMaskComplementDigit = 5 }
-
 impl AddedPlaneCoordinateV1 {
     const fn is_inverse_v1(self) -> bool {
         matches!(
@@ -194,7 +181,6 @@ impl AddedPlaneCoordinateV1 {
         )
     }
 }
-
 fn added_plane_coordinate_v1(
     ordinal: usize,
 ) -> Result<AddedPlaneCoordinateV1, GlobalLookupErrorV1> {
@@ -293,19 +279,15 @@ fn added_plane_coordinate_v1(
         }),
     })
 }
-
 #[rustfmt::skip]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LookupPlaneCoordinateV1 { Existing { ordinal: usize, role: ExistingLookupPlaneRoleV1 }, Added(AddedPlaneCoordinateV1), VirtualZero { ordinal: usize } }
-
 #[rustfmt::skip]
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExistingLookupPlaneRoleV1 { DDigit = 1, SlackDigit = 2 }
-
 #[rustfmt::skip]
 const fn existing_lookup_role_v1(slot: usize) -> ExistingLookupPlaneRoleV1 { if slot < 5_848 { ExistingLookupPlaneRoleV1::DDigit } else { ExistingLookupPlaneRoleV1::SlackDigit } }
-
 fn lookup_plane_coordinate_v1(slot: usize) -> Result<LookupPlaneCoordinateV1, GlobalLookupErrorV1> {
     if slot < EXISTING_ACTIVE_PLANES_V1 {
         return Ok(LookupPlaneCoordinateV1::Existing {
@@ -343,7 +325,6 @@ fn lookup_plane_coordinate_v1(slot: usize) -> Result<LookupPlaneCoordinateV1, Gl
     }
     Err(GlobalLookupErrorV1::Shape)
 }
-
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CoefficientEquationRoleV1 {
@@ -362,7 +343,6 @@ enum CoefficientEquationRoleV1 {
     SourceCoefficientSameOpening = 13,
     PackingTransposeSameOpening = 14,
 }
-
 #[rustfmt::skip]
 const COEFFICIENT_EQUATION_ROLES_V1: [CoefficientEquationRoleV1; COEFFICIENT_EQUATIONS_V1] = [
     CoefficientEquationRoleV1::DRadixReconstruction, CoefficientEquationRoleV1::SlackRadixReconstruction,
@@ -373,7 +353,6 @@ const COEFFICIENT_EQUATION_ROLES_V1: [CoefficientEquationRoleV1; COEFFICIENT_EQU
     CoefficientEquationRoleV1::QMaskComplementReconstruction, CoefficientEquationRoleV1::StructuralMaskTopZero,
     CoefficientEquationRoleV1::SourceCoefficientSameOpening, CoefficientEquationRoleV1::PackingTransposeSameOpening,
 ];
-
 impl CoefficientEquationRoleV1 {
     const fn formula_v1(self) -> &'static [u8] {
         match self {
@@ -394,14 +373,12 @@ impl CoefficientEquationRoleV1 {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EquationEndpointV1 {
     AggregateAtPoint,
     EqualityWeightedAggregate,
     MaskTerminal,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GroupBinderEndpointV1 {
     Source,
@@ -409,7 +386,6 @@ enum GroupBinderEndpointV1 {
     Selector,
     Residual,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LookupEndpointV1 {
     Candidate,
@@ -419,7 +395,6 @@ enum LookupEndpointV1 {
     MaskedAccumulator,
     Residual,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HiddenEndpointRoleV1 {
     Equation {
@@ -429,7 +404,6 @@ enum HiddenEndpointRoleV1 {
     GroupBinder(GroupBinderEndpointV1),
     GlobalLookup(LookupEndpointV1),
 }
-
 fn hidden_endpoint_role_v1(ordinal: usize) -> Result<HiddenEndpointRoleV1, GlobalLookupErrorV1> {
     if ordinal < COEFFICIENT_EQUATIONS_V1 * 3 {
         let endpoint = match ordinal % 3 {
@@ -468,14 +442,12 @@ fn hidden_endpoint_role_v1(ordinal: usize) -> Result<HiddenEndpointRoleV1, Globa
     }
     Err(GlobalLookupErrorV1::Shape)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IpaStatementRoleV1 {
     Equation(CoefficientEquationRoleV1),
     GroupBinder,
     GlobalLookup,
 }
-
 fn ipa_statement_role_v1(ordinal: usize) -> Result<IpaStatementRoleV1, GlobalLookupErrorV1> {
     match ordinal {
         0..=13 => Ok(IpaStatementRoleV1::Equation(
@@ -486,19 +458,16 @@ fn ipa_statement_role_v1(ordinal: usize) -> Result<IpaStatementRoleV1, GlobalLoo
         _ => Err(GlobalLookupErrorV1::Shape),
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EndpointGateRoleV1 {
     StatementGate0,
     StatementGate1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct EndpointGateCoordinateV1 {
     statement_ordinal: usize,
     role: EndpointGateRoleV1,
 }
-
 fn endpoint_gate_coordinate_v1(
     ordinal: usize,
 ) -> Result<EndpointGateCoordinateV1, GlobalLookupErrorV1> {
@@ -514,16 +483,13 @@ fn endpoint_gate_coordinate_v1(
         },
     })
 }
-
 #[rustfmt::skip]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CubicMessageCoordinateV1 { ordinal: usize, role: CubicMessageRoleV1, equation: Option<CoefficientEquationRoleV1>, local_round: usize, extends_prior_schedule: bool }
-
 #[rustfmt::skip]
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CubicMessageRoleV1 { Equation = 1, GroupBinder = 2, GlobalLookup = 3 }
-
 #[rustfmt::skip]
 fn cubic_message_coordinate_v1(ordinal: usize) -> Result<CubicMessageCoordinateV1, GlobalLookupErrorV1> {
     let (role, equation, local_round) = match ordinal {
@@ -534,11 +500,9 @@ fn cubic_message_coordinate_v1(ordinal: usize) -> Result<CubicMessageCoordinateV
     };
     Ok(CubicMessageCoordinateV1 { ordinal, role, equation, local_round, extends_prior_schedule: ordinal == PRIOR_CUBIC_MESSAGES_V1 })
 }
-
 fn absorb_usize_v1(hash: &mut Keccak256, value: usize) {
     hash.update(&(value as u64).to_be_bytes());
 }
-
 #[rustfmt::skip]
 /// Return the exact topology digest shared with authenticated source replay.
 pub(super) fn global_lookup_topology_digest_v1() -> [u8; 32] {
@@ -622,7 +586,6 @@ pub(super) fn global_lookup_topology_digest_v1() -> [u8; 32] {
     hash.update(SOUNDNESS_FORMULA_V1);
     hash.finalize()
 }
-
 const fn endpoint_tag_v1(role: HiddenEndpointRoleV1) -> u8 {
     match role {
         HiddenEndpointRoleV1::Equation { equation, endpoint } => {
@@ -632,7 +595,6 @@ const fn endpoint_tag_v1(role: HiddenEndpointRoleV1) -> u8 {
         HiddenEndpointRoleV1::GlobalLookup(endpoint) => 46 + endpoint as u8,
     }
 }
-
 const fn ipa_tag_v1(role: IpaStatementRoleV1) -> u8 {
     match role {
         IpaStatementRoleV1::Equation(equation) => equation as u8,
@@ -640,7 +602,6 @@ const fn ipa_tag_v1(role: IpaStatementRoleV1) -> u8 {
         IpaStatementRoleV1::GlobalLookup => 16,
     }
 }
-
 fn chain_frame_v1(state: [u8; 32], label: &[u8], payload: &[u8]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(TRANSCRIPT_DOMAIN_V1);
@@ -652,13 +613,11 @@ fn chain_frame_v1(state: [u8; 32], label: &[u8], payload: &[u8]) -> [u8; 32] {
     hash.update(payload);
     hash.finalize()
 }
-
 fn require_nonzero_v1(digest: [u8; 32]) -> Result<[u8; 32], GlobalLookupErrorV1> {
     (digest != [0; 32])
         .then_some(digest)
         .ok_or(GlobalLookupErrorV1::Context)
 }
-
 #[derive(Clone, Copy)]
 struct GlobalLookupContextV1 {
     fixed_axes_digest: [u8; 32],
@@ -668,7 +627,6 @@ struct GlobalLookupContextV1 {
     cross_field_digest: [u8; 32],
     qpcs_initial_root: [u8; 32],
 }
-
 /// Owners stream into opaque sinks; none of these contracts returns backing
 /// storage, a point slice, or an owner handle.
 trait OpaqueStreamingOwnerV1<Stage>: Sized {
@@ -678,13 +636,11 @@ trait OpaqueStreamingOwnerV1<Stage>: Sized {
         sink: &mut OpaqueFrameSinkV1,
     ) -> Result<(), GlobalLookupErrorV1>;
 }
-
 struct OpaqueFrameSinkV1 {
     next_ordinal: usize,
     required: usize,
     state: [u8; 32],
 }
-
 impl OpaqueFrameSinkV1 {
     fn absorb_v1(&mut self, ordinal: usize, digest: [u8; 32]) -> Result<(), GlobalLookupErrorV1> {
         if ordinal != self.next_ordinal || ordinal >= self.required || digest == [0; 32] {
@@ -695,7 +651,6 @@ impl OpaqueFrameSinkV1 {
         Ok(())
     }
 }
-
 enum SourcePackingOwnerSealV1 {
     Production {
         authenticated_source: Infallible,
@@ -705,7 +660,6 @@ enum SourcePackingOwnerSealV1 {
     #[cfg(test)]
     TestOnly,
 }
-
 enum LookupOwnerSealV1 {
     Production {
         canonical_planes: Infallible,
@@ -715,7 +669,6 @@ enum LookupOwnerSealV1 {
     #[cfg(test)]
     TestOnly,
 }
-
 enum ProofOwnerSealV1 {
     Production {
         sumcheck: Infallible,
@@ -725,13 +678,11 @@ enum ProofOwnerSealV1 {
     #[cfg(test)]
     TestOnly,
 }
-
 struct BoundOwnerSealsV1 {
     source_packing_seal: SourcePackingOwnerSealV1,
     lookup_seal: LookupOwnerSealV1,
     proof_seal: ProofOwnerSealV1,
 }
-
 #[derive(Clone, Copy)]
 struct BoundTranscriptFramesV1 {
     commitment_digest: [u8; 32],
@@ -750,7 +701,6 @@ struct BoundTranscriptFramesV1 {
     mask_ipas: usize,
     gates: usize,
 }
-
 impl BoundTranscriptFramesV1 {
     fn validate_v1(self) -> Result<(), GlobalLookupErrorV1> {
         let digests = [
@@ -788,11 +738,9 @@ impl BoundTranscriptFramesV1 {
         Ok(())
     }
 }
-
 fn conditional_accounting_v1() -> Option<(usize, usize)> {
     CONDITIONAL_TOTAL_BYTES_V1.zip(CONDITIONAL_MARGIN_BYTES_V1)
 }
-
 #[cfg(test)]
 #[path = "global_lookup_statement_v1_tests.rs"]
 mod tests;

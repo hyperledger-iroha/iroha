@@ -19,7 +19,6 @@ fn canonical_lane_ownership_crosses_strict_barriers_before_batched_block_commit(
         );
         let block_hash = block.hash();
         let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-
         inject_failure();
         assert!(
             kura.store_block(Arc::clone(&block)).is_err(),
@@ -40,7 +39,6 @@ fn canonical_lane_ownership_crosses_strict_barriers_before_batched_block_commit(
             None,
             "failed pre-commit ownership staging must roll back durably"
         );
-
         kura.store_block(block)
             .unwrap_or_else(|error| panic!("retry after {label} barrier failure: {error:?}"));
         assert_eq!(

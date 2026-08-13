@@ -5,16 +5,13 @@
 //! provider, every limb reread is checked against two independently domain-
 //! separated index digests, and proof responses are the only release-sized
 //! owner retained across limbs.
-
 use super::*;
 use crate::vega::sponge::Shake256Reader;
-
 const SOURCE_RELEASE_LIMBS_V1: usize = 38;
 const INDEXED_SOURCE_NATIVE_LIMB_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-polynomial-digest.indexed-limb";
 const INDEXED_SOURCE_WIRE_LIMB_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-polynomial.indexed-limb";
-
 /// Seekable, digest-bound location of one canonical release polynomial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) struct IndexedActiveSourcePolynomialV1 {
@@ -25,7 +22,6 @@ pub(in super::super) struct IndexedActiveSourcePolynomialV1 {
     wire_limb_digests: [[u8; 32]; SOURCE_RELEASE_LIMBS_V1],
     nonzero: bool,
 }
-
 impl IndexedActiveSourcePolynomialV1 {
     #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn new(
@@ -52,16 +48,13 @@ impl IndexedActiveSourcePolynomialV1 {
             nonzero,
         })
     }
-
     pub(in super::super) const fn native_digest(self) -> [u8; 32] {
         self.native_digest
     }
-
     pub(in super::super) const fn wire_digest(self) -> [u8; 32] {
         self.wire_digest
     }
 }
-
 /// Small indexed form of one of the three source-statement families.
 pub(in super::super) enum IndexedActiveSourceStatementV1 {
     RkgRoundOne {
@@ -97,7 +90,6 @@ pub(in super::super) enum IndexedActiveSourceStatementV1 {
         digit_index: u32,
     },
 }
-
 impl IndexedActiveSourceStatementV1 {
     pub(in super::super) const fn public_key_polynomials(
         &self,
@@ -123,7 +115,6 @@ impl IndexedActiveSourceStatementV1 {
             } => (*public_a, *party_public_b),
         }
     }
-
     pub(in super::super) fn expected_witnesses(&self) -> usize {
         match self {
             Self::RkgRoundOne { .. } | Self::Galois { .. } => 5,
@@ -131,7 +122,6 @@ impl IndexedActiveSourceStatementV1 {
         }
     }
 }
-
 pub(in super::super) fn indexed_source_limb_hashers_v1(
     profile: &super::super::BgvProfile,
     limb: usize,
@@ -159,9 +149,7 @@ pub(in super::super) fn indexed_source_limb_hashers_v1(
     }
     Ok((native, wire))
 }
-
 struct ZeroizingSourceU64V1(Vec<u64>);
-
 impl ZeroizingSourceU64V1 {
     fn zeroed(length: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
@@ -171,7 +159,6 @@ impl ZeroizingSourceU64V1 {
         values.resize(length, 0);
         Ok(Self(values))
     }
-
     fn with_capacity(length: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
         values
@@ -180,21 +167,17 @@ impl ZeroizingSourceU64V1 {
         Ok(Self(values))
     }
 }
-
 impl core::ops::Deref for ZeroizingSourceU64V1 {
     type Target = [u64];
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl core::ops::DerefMut for ZeroizingSourceU64V1 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-
 impl Drop for ZeroizingSourceU64V1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.0);
@@ -203,9 +186,7 @@ impl Drop for ZeroizingSourceU64V1 {
         let _ = core::hint::black_box(values);
     }
 }
-
 struct ZeroizingSourceI64V1(Vec<i64>);
-
 impl ZeroizingSourceI64V1 {
     fn zeroed(length: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
@@ -216,15 +197,12 @@ impl ZeroizingSourceI64V1 {
         Ok(Self(values))
     }
 }
-
 impl core::ops::Deref for ZeroizingSourceI64V1 {
     type Target = [i64];
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl Drop for ZeroizingSourceI64V1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.0);
@@ -233,9 +211,7 @@ impl Drop for ZeroizingSourceI64V1 {
         let _ = core::hint::black_box(values);
     }
 }
-
 struct ZeroizingSourceBoolV1(Vec<bool>);
-
 impl ZeroizingSourceBoolV1 {
     fn zeroed(length: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
@@ -246,21 +222,17 @@ impl ZeroizingSourceBoolV1 {
         Ok(Self(values))
     }
 }
-
 impl core::ops::Deref for ZeroizingSourceBoolV1 {
     type Target = [bool];
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl core::ops::DerefMut for ZeroizingSourceBoolV1 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-
 impl Drop for ZeroizingSourceBoolV1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.0);
@@ -269,13 +241,11 @@ impl Drop for ZeroizingSourceBoolV1 {
         let _ = core::hint::black_box(values);
     }
 }
-
 struct ZeroizingSourceResponsesV1 {
     witness_count: usize,
     ring_degree: usize,
     values: Vec<i64>,
 }
-
 impl ZeroizingSourceResponsesV1 {
     fn allocate(witness_count: usize, ring_degree: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let length = witness_count
@@ -291,11 +261,9 @@ impl ZeroizingSourceResponsesV1 {
             values,
         })
     }
-
     fn push(&mut self, value: i64) {
         self.values.push(value);
     }
-
     fn response(&self, index: usize) -> Result<&[i64], ZkAmsMkheErrorV1> {
         if index >= self.witness_count {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
@@ -311,7 +279,6 @@ impl ZeroizingSourceResponsesV1 {
             .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)
     }
 }
-
 impl Drop for ZeroizingSourceResponsesV1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.values);
@@ -320,7 +287,6 @@ impl Drop for ZeroizingSourceResponsesV1 {
         let _ = core::hint::black_box(values);
     }
 }
-
 /// Parsed proof state with no retained canonical byte vector.
 pub(in super::super) struct ParsedIndexedActiveSourceProofV1 {
     statement_digest: [u8; 32],
@@ -329,7 +295,6 @@ pub(in super::super) struct ParsedIndexedActiveSourceProofV1 {
     responses: ZeroizingSourceResponsesV1,
     contribution: ZkAmsMkheActiveContributionV1,
 }
-
 impl core::fmt::Debug for ParsedIndexedActiveSourceProofV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -339,7 +304,6 @@ impl core::fmt::Debug for ParsedIndexedActiveSourceProofV1 {
             .finish_non_exhaustive()
     }
 }
-
 fn derive_indexed_sparse_challenge_v1(
     ring_degree: usize,
     challenge_seed: [u8; 32],
@@ -403,7 +367,6 @@ fn derive_indexed_sparse_challenge_v1(
     }
     Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
 }
-
 pub(in super::super) fn decode_indexed_active_source_proof_v1<R: std::io::Read>(
     reader: &mut R,
     encoded_len: u64,
@@ -421,7 +384,6 @@ pub(in super::super) fn decode_indexed_active_source_proof_v1<R: std::io::Read>(
     if usize::try_from(encoded_len).ok() != Some(exact_bytes) {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
-
     let mut evidence_header = [0_u8; ACTIVE_RKG_EVIDENCE_HEADER_BYTES_V1];
     read_active_evidence_io_exact(reader, &mut evidence_header)?;
     if evidence_header[..4] != ACTIVE_RKG_EVIDENCE_TAG_V1
@@ -443,7 +405,6 @@ pub(in super::super) fn decode_indexed_active_source_proof_v1<R: std::io::Read>(
     if statement_digest == [0; 32] {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
-
     let mut proof_header = [0_u8; RKG_LINEAR_PROOF_WIRE_HEADER_BYTES_V1];
     read_active_evidence_io_exact(reader, &mut proof_header)?;
     if proof_header[..4] != RKG_LINEAR_PROOF_WIRE_TAG_V1
@@ -468,7 +429,6 @@ pub(in super::super) fn decode_indexed_active_source_proof_v1<R: std::io::Read>(
     // Allocate the public challenge before the much larger response owner so
     // an allocation failure cannot strand partially decoded proof material.
     let challenge = derive_indexed_sparse_challenge_v1(profile.ring_degree, challenge_seed)?;
-
     let mut responses =
         ZeroizingSourceResponsesV1::allocate(expected_witnesses, profile.ring_degree)?;
     const RESPONSE_BATCH_BYTES: usize = 8 * 1024;
@@ -493,7 +453,6 @@ pub(in super::super) fn decode_indexed_active_source_proof_v1<R: std::io::Read>(
     if responses.values.len() != expected_witnesses * profile.ring_degree {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
-
     let mut contribution_bytes = [0_u8; ACTIVE_RKG_EVIDENCE_CONTRIBUTION_BYTES_V1];
     read_active_evidence_io_exact(reader, &mut contribution_bytes)?;
     let contribution = decode_active_evidence_contribution_exact(&contribution_bytes)?;
@@ -505,7 +464,6 @@ pub(in super::super) fn decode_indexed_active_source_proof_v1<R: std::io::Read>(
         contribution,
     })
 }
-
 fn read_indexed_source_limb<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     indexed: IndexedActiveSourcePolynomialV1,
@@ -555,7 +513,6 @@ fn read_indexed_source_limb<R: std::io::Read + std::io::Seek>(
     }
     Ok(residues)
 }
-
 fn derive_rkg_common_a_limb_v1(
     profile: &super::super::BgvProfile,
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -629,7 +586,6 @@ fn derive_rkg_common_a_limb_v1(
     }
     Ok(output)
 }
-
 fn validate_indexed_common_a<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     profile: &super::super::BgvProfile,
@@ -657,7 +613,6 @@ fn validate_indexed_common_a<R: std::io::Read + std::io::Seek>(
     }
     Ok(())
 }
-
 fn update_rns_hash_header(
     hash: &mut Keccak256,
     profile: &super::super::BgvProfile,
@@ -674,7 +629,6 @@ fn update_rns_hash_header(
     );
     Ok(())
 }
-
 fn update_indexed_rns_hash<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     hash: &mut Keccak256,
@@ -699,7 +653,6 @@ fn update_indexed_rns_hash<R: std::io::Read + std::io::Seek>(
     }
     Ok(())
 }
-
 fn indexed_difference_nonzero<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     profile: &super::super::BgvProfile,
@@ -720,7 +673,6 @@ fn indexed_difference_nonzero<R: std::io::Read + std::io::Seek>(
     }
     Ok(nonzero)
 }
-
 fn update_indexed_difference_rns_hash<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     hash: &mut Keccak256,
@@ -744,7 +696,6 @@ fn update_indexed_difference_rns_hash<R: std::io::Read + std::io::Seek>(
     }
     Ok(())
 }
-
 fn update_statement_prefix(
     hash: &mut Keccak256,
     profile: &super::super::BgvProfile,
@@ -775,7 +726,6 @@ fn update_statement_prefix(
     );
     Ok(())
 }
-
 fn update_term_prefix(
     hash: &mut Keccak256,
     witness_index: usize,
@@ -793,7 +743,6 @@ fn update_term_prefix(
     );
     Ok(())
 }
-
 fn update_collective_public_key_statement_hash<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     hash: &mut Keccak256,
@@ -813,7 +762,6 @@ fn update_collective_public_key_statement_hash<R: std::io::Read + std::io::Seek>
     update_term_prefix(hash, 1, 1)?;
     update_scaled_identity_rns_hash_v1(hash, profile, None)
 }
-
 fn indexed_source_statement_digest<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     profile: &super::super::BgvProfile,
@@ -863,7 +811,6 @@ fn indexed_source_statement_digest<R: std::io::Read + std::io::Seek>(
             update_indexed_rns_hash(reader, &mut hash, profile, *common_a, true)?;
             update_term_prefix(&mut hash, 3, 1)?;
             update_scaled_identity_rns_hash_v1(&mut hash, profile, None)?;
-
             hash.update(&2_u32.to_be_bytes());
             hash.update(&1_u32.to_be_bytes());
             update_indexed_rns_hash(reader, &mut hash, profile, *h1, false)?;
@@ -917,7 +864,6 @@ fn indexed_source_statement_digest<R: std::io::Read + std::io::Seek>(
             update_indexed_rns_hash(reader, &mut hash, profile, *common_a, true)?;
             update_term_prefix(&mut hash, 3, 1)?;
             update_scaled_identity_rns_hash_v1(&mut hash, profile, None)?;
-
             hash.update(&2_u32.to_be_bytes());
             hash.update(&1_u32.to_be_bytes());
             update_indexed_rns_hash(reader, &mut hash, profile, *h1, false)?;
@@ -929,7 +875,6 @@ fn indexed_source_statement_digest<R: std::io::Read + std::io::Seek>(
             }
             update_term_prefix(&mut hash, 4, 1)?;
             update_scaled_identity_rns_hash_v1(&mut hash, profile, None)?;
-
             let positive = (party == *right).then_some(*aggregate_h0);
             let secret_multiplier_nonzero =
                 indexed_difference_nonzero(reader, profile, positive, *aggregate_h1)?;
@@ -1005,7 +950,6 @@ fn indexed_source_statement_digest<R: std::io::Read + std::io::Seek>(
             update_indexed_rns_hash(reader, &mut hash, profile, *party_public_b, false)?;
             update_term_prefix(&mut hash, 3, 1)?;
             update_scaled_identity_rns_hash_v1(&mut hash, profile, None)?;
-
             hash.update(&2_u32.to_be_bytes());
             hash.update(
                 &u32::try_from(exponent)
@@ -1022,7 +966,6 @@ fn indexed_source_statement_digest<R: std::io::Read + std::io::Seek>(
     }
     Ok(hash.finalize())
 }
-
 fn zeroizing_negacyclic_multiply_signed_v1(
     left: &[u64],
     right: &[i64],
@@ -1062,7 +1005,6 @@ fn zeroizing_negacyclic_multiply_signed_v1(
     }
     Ok(left_twisted)
 }
-
 fn add_product(
     output: &mut [u64],
     product: &[u64],
@@ -1081,7 +1023,6 @@ fn add_product(
     }
     Ok(())
 }
-
 #[derive(Clone, Copy)]
 enum LimbMultiplierV1<'a> {
     Indexed(&'a IndexedActiveSourcePolynomialV1, bool),
@@ -1091,14 +1032,12 @@ enum LimbMultiplierV1<'a> {
     },
     ScaledIdentity(Option<usize>),
 }
-
 #[derive(Clone, Copy)]
 struct SourceRelationTermV1<'a> {
     witness_index: usize,
     witness_automorphism_exponent: usize,
     multiplier: LimbMultiplierV1<'a>,
 }
-
 fn transformed_signed(
     values: &[i64],
     exponent: usize,
@@ -1133,7 +1072,6 @@ fn transformed_signed(
     }
     Ok(Some(output))
 }
-
 fn read_limb_multiplier<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     multiplier: &LimbMultiplierV1<'_>,
@@ -1166,7 +1104,6 @@ fn read_limb_multiplier<R: std::io::Read + std::io::Seek>(
         LimbMultiplierV1::ScaledIdentity(_) => Ok(None),
     }
 }
-
 fn verify_relation_output<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     hash: &mut Keccak256,
@@ -1244,7 +1181,6 @@ fn verify_relation_output<R: std::io::Read + std::io::Seek>(
     }
     Ok(())
 }
-
 fn verify_collective_public_key_output<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     hash: &mut Keccak256,
@@ -1291,7 +1227,6 @@ fn verify_collective_public_key_output<R: std::io::Read + std::io::Seek>(
     }
     Ok(())
 }
-
 fn proof_payload_digest(
     profile: &super::super::BgvProfile,
     context: LinearProofContextV1,
@@ -1317,7 +1252,6 @@ fn proof_payload_digest(
     }
     Ok(hash.finalize())
 }
-
 /// Fixed-size result retained by the outer receipt seal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) struct VerifiedIndexedActiveSourceProofV1 {
@@ -1325,7 +1259,6 @@ pub(in super::super) struct VerifiedIndexedActiveSourceProofV1 {
     pub(in super::super) payload_digest: [u8; 32],
     pub(in super::super) contribution_digest: [u8; 32],
 }
-
 pub(in super::super) fn verify_indexed_active_source_proof_v1<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -1687,11 +1620,9 @@ pub(in super::super) fn verify_indexed_active_source_proof_v1<R: std::io::Read +
         contribution_digest: proof.contribution.digest()?,
     })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn bounded_major_heap_equation_excludes_full_rns_owner() {
         const LIMB_BYTES: usize = 131_072 * 8;
@@ -1705,7 +1636,6 @@ mod tests {
         assert!(core::mem::size_of::<IndexedActiveSourcePolynomialV1>() <= 2_512);
         assert!(core::mem::size_of::<IndexedActiveSourceStatementV1>() <= 21 * 1024);
     }
-
     #[test]
     fn production_source_has_no_full_rns_relation_builder() {
         let source = include_str!("source_stream.rs");

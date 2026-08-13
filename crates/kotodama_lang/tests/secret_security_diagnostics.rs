@@ -1,14 +1,11 @@
 //! Public-session security diagnostics for Kotodama V1 `Secret<T>` flows.
-
 use kotodama_lang::{
     compiler::{CompilerOptions, DEFAULT_MAX_CYCLES},
     diagnostic::{DiagnosticBundle, DiagnosticPhase, Severity},
     session::{CompileRequest, CompilerSession},
 };
 use norito::json::{self, Value};
-
 const SOURCE_NAME: &str = "security/secret-flow.ko";
-
 #[derive(Clone, Copy)]
 struct RejectCase {
     name: &'static str,
@@ -16,7 +13,6 @@ struct RejectCase {
     code: &'static str,
     primary: &'static str,
 }
-
 const REJECT_CASES: &[RejectCase] = &[
     RejectCase {
         name: "direct-secret-control-flow",
@@ -159,7 +155,6 @@ const REJECT_CASES: &[RejectCase] = &[
         primary: "crypto::valcom(left: value, right: 7)",
     },
 ];
-
 fn zk_session() -> CompilerSession {
     CompilerSession::new(CompilerOptions {
         force_zk: true,
@@ -167,14 +162,12 @@ fn zk_session() -> CompilerSession {
         ..CompilerOptions::default()
     })
 }
-
 fn request(source: &str) -> CompileRequest<'_> {
     CompileRequest {
         source,
         source_name: Some(SOURCE_NAME),
     }
 }
-
 fn reject_with_check_and_build(case: RejectCase) -> DiagnosticBundle {
     let session = zk_session();
     let check = session
@@ -190,7 +183,6 @@ fn reject_with_check_and_build(case: RejectCase) -> DiagnosticBundle {
     );
     check
 }
-
 fn assert_rejection(case: RejectCase, bundle: &DiagnosticBundle) {
     assert_eq!(bundle.diagnostics.len(), 1, "{}: {bundle:?}", case.name);
     let diagnostic = &bundle.diagnostics[0];
@@ -210,7 +202,6 @@ fn assert_rejection(case: RejectCase, bundle: &DiagnosticBundle) {
         case.name,
         diagnostic.message
     );
-
     let span = diagnostic
         .primary_span
         .as_ref()
@@ -239,7 +230,6 @@ fn assert_rejection(case: RejectCase, bundle: &DiagnosticBundle) {
         case.name
     );
 }
-
 #[test]
 fn compiler_session_rejects_every_public_secret_flow_with_exact_diagnostics() {
     for case in REJECT_CASES.iter().copied() {
@@ -247,7 +237,6 @@ fn compiler_session_rejects_every_public_secret_flow_with_exact_diagnostics() {
         assert_rejection(case, &bundle);
     }
 }
-
 #[test]
 fn approved_all_secret_commitment_checks_and_builds() {
     let source = r#"seiyaku Privacy {
@@ -269,7 +258,6 @@ fn approved_all_secret_commitment_checks_and_builds() {
     assert!(!output.artifact.is_empty());
     assert_eq!(output.manifest.seiyaku_name.as_deref(), Some("Privacy"));
 }
-
 #[test]
 fn human_json_and_sarif_preserve_the_same_secret_security_record() {
     let case = REJECT_CASES[0];
@@ -277,18 +265,15 @@ fn human_json_and_sarif_preserve_the_same_secret_security_record() {
     assert_rejection(case, &bundle);
     let diagnostic = &bundle.diagnostics[0];
     let canonical = diagnostic.to_json_value();
-
     let rendered_json = bundle.render_json().expect("render JSON diagnostic");
     let json_value: Value = json::from_str(&rendered_json).expect("parse JSON diagnostic");
     assert_eq!(json_value[0], canonical);
-
     let rendered_sarif = bundle.render_sarif().expect("render SARIF diagnostic");
     let sarif_value: Value = json::from_str(&rendered_sarif).expect("parse SARIF diagnostic");
     assert_eq!(
         sarif_value["runs"][0]["results"][0]["properties"]["kotodama"],
         canonical
     );
-
     let human = bundle.render_human();
     assert!(human.contains(&format!("error[{}] semantic", diagnostic.code)));
     assert!(human.contains(&diagnostic.message));

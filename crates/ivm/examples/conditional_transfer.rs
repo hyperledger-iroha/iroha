@@ -5,7 +5,6 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-
 use iroha_data_model::{
     account::AccountId, asset::AssetDefinitionId, domain::DomainId, nexus::DataSpaceId,
 };
@@ -14,12 +13,10 @@ use ivm::{
     IVM, PointerType, VMError, encoding, host::IVMHost, instruction, kotodama::wide as kwide,
     syscalls,
 };
-
 #[derive(Clone)]
 struct AssetHost {
     state: Arc<Mutex<HashMap<(AccountId, AssetDefinitionId), u64>>>,
 }
-
 impl AssetHost {
     fn new(initial_balances: &[(AccountId, AssetDefinitionId, u64)]) -> Self {
         let mut map = HashMap::new();
@@ -30,12 +27,10 @@ impl AssetHost {
             state: Arc::new(Mutex::new(map)),
         }
     }
-
     fn balance(&self, account: &AccountId, asset: &AssetDefinitionId) -> u64 {
         let state = self.state.lock().expect("state mutex poisoned");
         *state.get(&(account.clone(), asset.clone())).unwrap_or(&0)
     }
-
     fn decode_account(vm: &IVM, register: usize) -> Result<AccountId, VMError> {
         let tlv = vm.validate_tlv(vm.register(register))?;
         if tlv.type_id != PointerType::AccountId {
@@ -43,7 +38,6 @@ impl AssetHost {
         }
         norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
     }
-
     fn decode_asset(vm: &IVM) -> Result<AssetDefinitionId, VMError> {
         let tlv = vm.validate_tlv(vm.register(12))?;
         if tlv.type_id != PointerType::AssetDefinitionId {
@@ -51,7 +45,6 @@ impl AssetHost {
         }
         norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
     }
-
     fn decode_amount(vm: &IVM) -> Result<u64, VMError> {
         let tlv = vm.validate_tlv(vm.register(13))?;
         if tlv.type_id != PointerType::Quantity {
@@ -62,7 +55,6 @@ impl AssetHost {
             .into_quantity();
         u64::try_from(quantity.into_numeric()).map_err(|_| VMError::DecodeError)
     }
-
     fn decode_dataspace(vm: &IVM) -> Result<DataSpaceId, VMError> {
         let tlv = vm.validate_tlv(vm.register(14))?;
         if tlv.type_id != PointerType::DataSpaceId {
@@ -71,7 +63,6 @@ impl AssetHost {
         norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)
     }
 }
-
 impl IVMHost for AssetHost {
     fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
         match number {
@@ -79,7 +70,6 @@ impl IVMHost for AssetHost {
             _ => Err(VMError::UnknownSyscall(number)),
         }
     }
-
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         match number {
             syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
@@ -110,13 +100,11 @@ impl IVMHost for AssetHost {
             _ => Err(VMError::UnknownSyscall(number)),
         }
     }
-
     /// Downcast support for hosts with extra methods/state.
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
 }
-
 fn build_program() -> Vec<u8> {
     let mut prog = ivm::ProgramMetadata::default().encode();
     // If the scalar balance in x15 is below the scalar amount in x16, abort.
@@ -144,7 +132,6 @@ fn build_program() -> Vec<u8> {
     prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     prog
 }
-
 fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut envelope = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
     envelope.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -158,7 +145,6 @@ fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
     envelope
 }
-
 fn main() {
     let alice = AccountId::new(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"

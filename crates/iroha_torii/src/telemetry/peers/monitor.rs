@@ -6,7 +6,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use eyre::{Report, eyre};
 use http::StatusCode;
 use iroha_config::client_api::ConfigGetDTO;
@@ -23,10 +22,8 @@ use tokio::{
 };
 use tracing::{Instrument, info_span};
 use url::Url;
-
 use super::{GeoLocation, GeoLookupConfig, PeerConfigSnapshot, ToriiUrl};
 use crate::operator_signatures;
-
 const GEO_QUERY_FIELDS: &str = "status,message,lat,lon,country,city";
 #[cfg(test)]
 const GET_STATUS_INTERVAL: Duration = Duration::from_millis(200);
@@ -50,7 +47,6 @@ const CONFIG_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const PEERS_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 /// Fixed-schema `/status` response accepted from one monitored node.
 const STATUS_RESPONSE_MAX_BYTES: usize = 64 * 1024;
-
 /// Read one remote response without allowing a peer, proxy, or decompressor to
 /// grow a monitor task's resident body buffer without bound.
 async fn read_response_body_bounded(
@@ -70,7 +66,6 @@ async fn read_response_body_bounded(
             "{label} response declares {declared} bytes, exceeding the {max_bytes}-byte limit"
         ));
     }
-
     let initial_capacity = response
         .content_length()
         .and_then(|declared| usize::try_from(declared).ok())
@@ -95,7 +90,6 @@ async fn read_response_body_bounded(
     }
     Ok(body)
 }
-
 #[derive(Clone, Copy, Debug)]
 pub struct Metrics {
     pub block: u32,
@@ -108,7 +102,6 @@ pub struct Metrics {
     pub status_rtt_p95: Option<Duration>,
     pub observed_at_ms: Option<u64>,
 }
-
 #[derive(Clone, Debug)]
 pub enum Update {
     Connected(Box<PeerConfigSnapshot>),
@@ -118,7 +111,6 @@ pub enum Update {
     Geo(GeoLocation),
     Peers(BTreeSet<PublicKey>),
 }
-
 pub fn run(
     torii_url: ToriiUrl,
     geo_config: GeoLookupConfig,
@@ -127,13 +119,11 @@ pub fn run(
 ) -> (mpsc::Receiver<Update>, impl Future<Output = ()> + Sized) {
     let (tx, rx) = mpsc::channel(128);
     let url = Arc::new(torii_url);
-
     let fut = {
         let tx = tx.clone();
         let url = Arc::clone(&url);
         async move {
             let mut set = JoinSet::new();
-
             if geo_config.enabled {
                 let geo_span_url = Arc::clone(&url);
                 let geo_config = geo_config.clone();
@@ -192,7 +182,6 @@ pub fn run(
             } else {
                 iroha_logger::debug!("peer geo lookups disabled by configuration");
             }
-
             let monitor_span_url = Arc::clone(&url);
             set.spawn(
                 {
@@ -204,7 +193,6 @@ pub fn run(
                                     .await;
                             iroha_logger::debug!(?cfg, "peer connected");
                             let _ = tx.send(Update::Connected(Box::new(cfg))).await;
-
                             let (status_fin_tx, status_fin_rx) = oneshot::channel();
                             let mut workers = JoinSet::new();
                             workers.spawn({
@@ -240,20 +228,16 @@ pub fn run(
                 }
                 .instrument(info_span!("peer_monitor", torii_url = %monitor_span_url.as_ref())),
             );
-
             while set.join_next().await.is_some() {}
         }
     };
-
     (rx, fut)
 }
-
 #[derive(Debug)]
 enum IpApiComResponse {
     Success(GeoLocation),
     Fail { message: String },
 }
-
 #[derive(thiserror::Error, Debug)]
 enum RequestError {
     #[error("request to geo endpoint failed: {0:?}")]
@@ -263,7 +247,6 @@ enum RequestError {
     #[error("geo endpoint returned invalid payload: {0}")]
     InvalidResponse(String),
 }
-
 #[derive(thiserror::Error, Debug)]
 enum GeoLookupError {
     #[error("geo lookup disabled")]
@@ -281,11 +264,9 @@ enum GeoLookupError {
     #[error(transparent)]
     Request(#[from] RequestError),
 }
-
 fn decode_ip_api_response(bytes: &[u8]) -> Result<IpApiComResponse, RequestError> {
     let value: Value =
         json::from_slice(bytes).map_err(|err| RequestError::InvalidResponse(err.to_string()))?;
-
     let object = match value {
         Value::Object(object) => object,
         _ => {
@@ -294,12 +275,10 @@ fn decode_ip_api_response(bytes: &[u8]) -> Result<IpApiComResponse, RequestError
             ));
         }
     };
-
     let status = object
         .get("status")
         .and_then(Value::as_str)
         .ok_or_else(|| RequestError::InvalidResponse("missing status field".to_owned()))?;
-
     match status {
         "success" => {
             let lat = object
@@ -320,7 +299,6 @@ fn decode_ip_api_response(bytes: &[u8]) -> Result<IpApiComResponse, RequestError
                 .and_then(Value::as_str)
                 .ok_or_else(|| RequestError::InvalidResponse("missing city field".to_owned()))?
                 .to_owned();
-
             Ok(IpApiComResponse::Success(GeoLocation {
                 lat,
                 lon,
@@ -341,7 +319,6 @@ fn decode_ip_api_response(bytes: &[u8]) -> Result<IpApiComResponse, RequestError
         ))),
     }
 }
-
 async fn collect_geo(
     torii_url: &ToriiUrl,
     geo_config: GeoLookupConfig,
@@ -351,7 +328,6 @@ async fn collect_geo(
     }
     let client = Client::new();
     let url = construct_geo_query(torii_url, geo_config.endpoint.as_ref())?;
-
     let do_request = || async {
         let response = client.get(url.clone()).send().await?;
         let bytes = read_response_body_bounded(response, GEO_RESPONSE_MAX_BYTES, "geo lookup")
@@ -363,7 +339,6 @@ async fn collect_geo(
             IpApiComResponse::Fail { message } => Err(RequestError::FailResponse { message }),
         }
     };
-
     loop {
         match do_request().await {
             Ok(value) => return Ok(value),
@@ -386,21 +361,18 @@ async fn collect_geo(
         }
     }
 }
-
 fn is_public_geo_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost") {
         return false;
     }
     host.parse::<IpAddr>().map_or(true, is_public_ip)
 }
-
 fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(addr) => is_public_ipv4(addr),
         IpAddr::V6(addr) => is_public_ipv6(addr),
     }
 }
-
 fn is_public_ipv4(addr: Ipv4Addr) -> bool {
     if addr.is_private()
         || addr.is_loopback()
@@ -432,7 +404,6 @@ fn is_public_ipv4(addr: Ipv4Addr) -> bool {
     }
     true
 }
-
 fn is_public_ipv6(addr: Ipv6Addr) -> bool {
     if addr.is_loopback()
         || addr.is_unspecified()
@@ -455,7 +426,6 @@ fn is_public_ipv6(addr: Ipv6Addr) -> bool {
     }
     true
 }
-
 fn construct_geo_query(
     torii_url: &ToriiUrl,
     endpoint: Option<&Url>,
@@ -489,17 +459,14 @@ fn construct_geo_query(
         .append_pair("fields", GEO_QUERY_FIELDS);
     Ok(url)
 }
-
 fn value_to_u32(value: &Value) -> Option<u32> {
     value.as_u64().and_then(|raw| u32::try_from(raw).ok())
 }
-
 fn decode_legacy_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> {
     let value: Value = json::from_slice(bytes)?;
     let payload = value
         .as_object()
         .ok_or_else(|| eyre!("expected object payload"))?;
-
     let queue = payload
         .get("queue")
         .and_then(Value::as_object)
@@ -508,12 +475,10 @@ fn decode_legacy_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSna
         .get("network")
         .and_then(Value::as_object)
         .ok_or_else(|| eyre!("missing network object"))?;
-
     let public_key = payload
         .get("public_key")
         .and_then(Value::as_str)
         .and_then(|raw| PublicKey::from_str(raw).ok());
-
     let queue_capacity = queue.get("capacity").and_then(value_to_u32);
     let network_block_gossip_size = network.get("block_gossip_size").and_then(value_to_u32);
     let network_block_gossip_period_ms = network
@@ -525,7 +490,6 @@ fn decode_legacy_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSna
     let network_tx_gossip_period_ms = network
         .get("transaction_gossip_period_ms")
         .and_then(Value::as_u64);
-
     Ok(PeerConfigSnapshot {
         public_key,
         queue_capacity,
@@ -535,7 +499,6 @@ fn decode_legacy_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSna
         network_tx_gossip_period_ms,
     })
 }
-
 fn decode_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> {
     match json::from_slice::<ConfigGetDTO>(bytes) {
         Ok(config) => Ok(PeerConfigSnapshot::from(&config)),
@@ -550,7 +513,6 @@ fn decode_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> 
         }
     }
 }
-
 fn decode_operator_access_error(bytes: &[u8]) -> Option<String> {
     let value: Value = json::from_slice(bytes).ok()?;
     let payload = value.as_object()?;
@@ -560,7 +522,6 @@ fn decode_operator_access_error(bytes: &[u8]) -> Option<String> {
     }
     None
 }
-
 async fn get_config_with_retry(
     torii_url: &ToriiUrl,
     network_id: &NetworkId,
@@ -574,7 +535,6 @@ async fn get_config_with_retry(
     let config_uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION
         .parse()
         .expect("static configuration URI");
-
     let do_request = || async {
         let mut request = client.get(url.clone());
         if let Some(key_pair) = operator_signer {
@@ -612,7 +572,6 @@ async fn get_config_with_retry(
         let config = decode_peer_config_payload(&bytes)?;
         Ok::<_, Report>(config)
     };
-
     let mut interval = GET_CONFIG_INIT_INTERVAL;
     loop {
         match do_request().await {
@@ -627,7 +586,6 @@ async fn get_config_with_retry(
         }
     }
 }
-
 fn signed_peers_request(
     client: &Client,
     url: Url,
@@ -649,7 +607,6 @@ fn signed_peers_request(
     .map_err(|error| eyre!("failed to sign /v1/peers operator request: {error}"))?;
     client.get(url).headers(headers).build().map_err(Into::into)
 }
-
 async fn get_peers_periodic(
     torii_url: &ToriiUrl,
     network_id: &NetworkId,
@@ -664,7 +621,6 @@ async fn get_peers_periodic(
         .0
         .join(iroha_torii_shared::uri::PEERS)
         .expect("valid url");
-
     let get = || async {
         let request = signed_peers_request(&client, url.clone(), network_id, operator_signer)?;
         let response = client.execute(request).await?;
@@ -678,10 +634,8 @@ async fn get_peers_periodic(
             .map_err(|err| eyre!("failed to decode /v1/peers payload: {err}"))?;
         Ok::<_, Report>(peers)
     };
-
     let mut interval = tokio::time::interval(GET_PEERS_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
     loop {
         match get().await {
             Ok(peers) => {
@@ -709,14 +663,12 @@ async fn get_peers_periodic(
         interval.tick().await;
     }
 }
-
 fn peer_public_key(peer_repr: &str) -> eyre::Result<PublicKey> {
     let (public_key, _) = peer_repr
         .split_once('@')
         .ok_or_else(|| eyre!("peer value missing '@' separator"))?;
     PublicKey::from_str(public_key).map_err(|err| eyre!(err))
 }
-
 async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Update>) {
     #[derive(thiserror::Error, Debug)]
     enum GetError {
@@ -731,12 +683,10 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
         #[error("invalid bounded response: {0}")]
         Response(String),
     }
-
     let mut avg_commit_time = AverageCommitTime::<AVG_COMMIT_BLOCK_TIME_WINDOW>::new();
     let mut status_rtt_window = LatencyWindow::<STATUS_RTT_WINDOW>::new();
     let client = Client::new();
     let url = torii_url.0.join("/status").expect("valid url");
-
     let get_status = || async {
         let started_at = Instant::now();
         let resp = client
@@ -762,7 +712,6 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
         let observed_at_ms = unix_epoch_ms();
         Ok::<_, GetError>((status, request_rtt, observed_at_ms))
     };
-
     let mut telemetry_unsupported_checked = Instant::now();
     let mut interval = tokio::time::interval(GET_STATUS_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -819,25 +768,20 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
         interval.tick().await;
     }
 }
-
 fn unix_epoch_ms() -> Option<u64> {
     let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
     u64::try_from(elapsed.as_millis()).ok()
 }
-
 #[derive(Default)]
 struct AverageCommitTime<const N: usize> {
     buff: CircularBuffer<N>,
     last_height: Option<u64>,
 }
-
 const AVG_COMMIT_BLOCK_TIME_WINDOW: usize = 16;
-
 impl<const N: usize> AverageCommitTime<N> {
     fn new() -> Self {
         Self::default()
     }
-
     fn observe(&mut self, height: u64, block_time: Duration) {
         if self.last_height.map(|x| x == height).unwrap_or(false) {
             return;
@@ -845,7 +789,6 @@ impl<const N: usize> AverageCommitTime<N> {
         self.last_height = Some(height);
         self.buff.push_back(block_time);
     }
-
     fn calculate(&self) -> Option<Duration> {
         let sum = self
             .buff
@@ -857,21 +800,17 @@ impl<const N: usize> AverageCommitTime<N> {
         })
     }
 }
-
 #[derive(Default)]
 struct LatencyWindow<const N: usize> {
     buff: CircularBuffer<N>,
 }
-
 impl<const N: usize> LatencyWindow<N> {
     fn new() -> Self {
         Self::default()
     }
-
     fn observe(&mut self, sample: Duration) {
         self.buff.push_back(sample);
     }
-
     fn average(&self) -> Option<Duration> {
         let sum = self
             .buff
@@ -879,7 +818,6 @@ impl<const N: usize> LatencyWindow<N> {
             .fold(None, |acc, x| Some(acc.unwrap_or(Duration::ZERO) + *x))?;
         sum.checked_div(self.buff.len() as u32)
     }
-
     fn percentile(&self, percentile: u8) -> Option<Duration> {
         let mut values_ms = self
             .buff
@@ -893,9 +831,7 @@ impl<const N: usize> LatencyWindow<N> {
             let single = u64::try_from(values_ms[0]).ok()?;
             return Some(Duration::from_millis(single));
         }
-
         values_ms.sort_unstable();
-
         let clamped = percentile.min(100) as f64;
         let rank = (clamped / 100.0) * ((values_ms.len() - 1) as f64);
         let lower = rank.floor() as usize;
@@ -914,12 +850,10 @@ impl<const N: usize> LatencyWindow<N> {
         Some(Duration::from_millis(selected.round() as u64))
     }
 }
-
 #[derive(Default)]
 struct CircularBuffer<const N: usize> {
     data: VecDeque<Duration>,
 }
-
 impl<const N: usize> CircularBuffer<N> {
     fn push_back(&mut self, value: Duration) {
         if self.data.len() == N {
@@ -927,22 +861,18 @@ impl<const N: usize> CircularBuffer<N> {
         }
         self.data.push_back(value);
     }
-
     fn iter(&self) -> impl Iterator<Item = &Duration> {
         self.data.iter()
     }
-
     fn len(&self) -> usize {
         self.data.len()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
-
     async fn raw_http_response(response: Vec<u8>) -> reqwest::Response {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -963,7 +893,6 @@ mod tests {
             .await
             .expect("receive raw response headers")
     }
-
     #[tokio::test]
     async fn bounded_response_reader_rejects_declared_and_streamed_overflow() {
         let declared = raw_http_response(
@@ -974,7 +903,6 @@ mod tests {
             .await
             .expect_err("declared overflow must fail before body retention");
         assert!(declared_error.to_string().contains("declares 9 bytes"));
-
         let exact = raw_http_response(
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n8\r\n12345678\r\n0\r\n\r\n"
                 .to_vec(),
@@ -986,7 +914,6 @@ mod tests {
                 .expect("exact limit is accepted"),
             b"12345678"
         );
-
         let streamed = raw_http_response(
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n9\r\n123456789\r\n0\r\n\r\n"
                 .to_vec(),
@@ -997,7 +924,6 @@ mod tests {
             .expect_err("chunked overflow must fail at max plus one");
         assert!(streamed_error.to_string().contains("while streaming"));
     }
-
     #[test]
     fn decode_ip_api_com_success() {
         let payload = br#"{
@@ -1007,9 +933,7 @@ mod tests {
             "country":"Japan",
             "city":"Tokyo"
         }"#;
-
         let response = decode_ip_api_response(payload).expect("payload should decode");
-
         match response {
             IpApiComResponse::Success(geo) => {
                 assert!((geo.lat - 35.0).abs() < f64::EPSILON);
@@ -1020,16 +944,13 @@ mod tests {
             other => panic!("unexpected response: {other:?}"),
         }
     }
-
     #[test]
     fn decode_ip_api_com_failure_response() {
         let payload = br#"{
             "status":"fail",
             "message":"invalid query"
         }"#;
-
         let response = decode_ip_api_response(payload).expect("payload should decode");
-
         match response {
             IpApiComResponse::Fail { message } => {
                 assert_eq!(message, "invalid query");
@@ -1037,7 +958,6 @@ mod tests {
             other => panic!("unexpected response: {other:?}"),
         }
     }
-
     #[test]
     fn geo_host_publicity_checks() {
         assert!(!is_public_geo_host("127.0.0.1"));
@@ -1052,7 +972,6 @@ mod tests {
         assert!(is_public_geo_host("::ffff:8.8.8.8"));
         assert!(is_public_geo_host("example.com"));
     }
-
     #[test]
     fn construct_geo_query_requires_explicit_endpoint() {
         let torii_url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
@@ -1060,7 +979,6 @@ mod tests {
             construct_geo_query(&torii_url, None).expect_err("missing endpoint should fail closed");
         assert!(matches!(err, GeoLookupError::MissingEndpoint));
     }
-
     #[test]
     fn construct_geo_query_rejects_non_https_endpoint() {
         let torii_url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
@@ -1074,7 +992,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn construct_geo_query_uses_custom_endpoint() {
         let torii_url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
@@ -1088,7 +1005,6 @@ mod tests {
             .find_map(|(key, value)| (key == "fields").then(|| value.into_owned()));
         assert_eq!(fields.as_deref(), Some(GEO_QUERY_FIELDS));
     }
-
     #[tokio::test]
     async fn collect_geo_respects_disabled_config() {
         let url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
@@ -1097,7 +1013,6 @@ mod tests {
             .expect_err("disabled config should short-circuit");
         assert!(matches!(err, GeoLookupError::Disabled));
     }
-
     #[tokio::test]
     async fn collect_geo_rejects_non_public_hosts() {
         let url: ToriiUrl = "http://127.0.0.1:8080".parse().expect("valid torii url");
@@ -1117,7 +1032,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn collect_geo_requires_explicit_endpoint_when_enabled() {
         let url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
@@ -1132,7 +1046,6 @@ mod tests {
         .expect_err("missing endpoint should fail closed");
         assert!(matches!(err, GeoLookupError::MissingEndpoint));
     }
-
     #[tokio::test]
     async fn collect_geo_rejects_non_https_endpoint() {
         let url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
@@ -1152,7 +1065,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn metrics_timeout_exits_poll_loop() {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -1165,7 +1077,6 @@ mod tests {
                 tokio::time::sleep(Duration::from_secs(60)).await;
             }
         });
-
         let url: ToriiUrl = format!("http://{addr}").parse().expect("valid torii url");
         let (tx, _rx) = mpsc::channel(1);
         let result = tokio::time::timeout(
@@ -1173,11 +1084,9 @@ mod tests {
             get_metrics_periodic_timeout(&url, tx),
         )
         .await;
-
         accept_task.abort();
         assert!(result.is_ok(), "metrics loop should exit after timeout");
     }
-
     #[tokio::test]
     async fn metrics_marks_telemetry_unsupported_on_service_unavailable() {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -1193,13 +1102,11 @@ mod tests {
                 let _ = socket.write_all(response).await;
             }
         });
-
         let url: ToriiUrl = format!("http://{addr}").parse().expect("valid torii url");
         let (tx, mut rx) = mpsc::channel(4);
         let metrics_task = tokio::spawn(async move {
             get_metrics_periodic_timeout(&url, tx).await;
         });
-
         let timeout =
             TELEMETRY_UNSUPPORTED_CHECK_INTERVAL + GET_STATUS_INTERVAL + GET_STATUS_INTERVAL;
         let update = tokio::time::timeout(timeout, rx.recv())
@@ -1207,11 +1114,9 @@ mod tests {
             .expect("telemetry update timeout")
             .expect("telemetry update");
         assert!(matches!(update, Update::TelemetryUnsupported));
-
         metrics_task.abort();
         server.abort();
     }
-
     #[test]
     fn decode_peer_config_payload_accepts_legacy_without_public_key() {
         let payload = br#"{
@@ -1223,7 +1128,6 @@ mod tests {
                 "transaction_gossip_period_ms": 2500
             }
         }"#;
-
         let decoded = decode_peer_config_payload(payload).expect("legacy payload should decode");
         assert!(decoded.public_key.is_none());
         assert_eq!(decoded.queue_capacity, Some(512));
@@ -1232,7 +1136,6 @@ mod tests {
         assert_eq!(decoded.network_tx_gossip_size, Some(32));
         assert_eq!(decoded.network_tx_gossip_period_ms, Some(2500));
     }
-
     #[test]
     fn decode_peer_config_payload_rejects_invalid_legacy_shape() {
         let payload = br#"{ "error": "unauthorized" }"#;
@@ -1243,7 +1146,6 @@ mod tests {
             "unexpected error: {message}"
         );
     }
-
     #[test]
     fn operator_access_error_payload_is_detected() {
         let payload = br#"{
@@ -1255,13 +1157,11 @@ mod tests {
             Some("operator_signature_missing")
         );
     }
-
     #[test]
     fn non_operator_error_payload_is_not_treated_as_configless_fallback() {
         let payload = br#"{"code":"some_other_error","message":"boom"}"#;
         assert!(decode_operator_access_error(payload).is_none());
     }
-
     #[test]
     fn peer_monitor_builds_an_exact_signed_empty_body_get() {
         let cfg = crate::test_utils::mk_minimal_root_cfg();
@@ -1271,10 +1171,8 @@ mod tests {
             .build()
             .expect("test HTTP client");
         let url = Url::parse("https://peer.example/v1/peers").expect("peers URL");
-
         let request = signed_peers_request(&client, url, &network_id, Some(&cfg.common.key_pair))
             .expect("signed peers request");
-
         assert_eq!(request.method(), reqwest::Method::GET);
         assert_eq!(request.url().path(), "/v1/peers");
         assert!(request.url().query().is_none());
@@ -1290,7 +1188,6 @@ mod tests {
         assert!(!request.headers().contains_key("authorization"));
         assert!(!request.headers().contains_key("x-api-token"));
     }
-
     #[test]
     fn peer_monitor_fails_before_dispatch_without_an_operator_signer() {
         let client = Client::new();
@@ -1304,7 +1201,6 @@ mod tests {
         .expect_err("missing operator signer must fail closed");
         assert!(error.to_string().contains("operator signing context"));
     }
-
     #[test]
     fn latency_window_calculates_average_and_percentile() {
         let mut window = LatencyWindow::<4>::new();
@@ -1312,7 +1208,6 @@ mod tests {
         window.observe(Duration::from_millis(30));
         window.observe(Duration::from_millis(20));
         window.observe(Duration::from_millis(40));
-
         assert_eq!(
             window.average().map(|duration| duration.as_millis()),
             Some(25)
@@ -1322,7 +1217,6 @@ mod tests {
             Some(39)
         );
     }
-
     #[test]
     fn latency_window_keeps_latest_samples_only() {
         let mut window = LatencyWindow::<3>::new();
@@ -1330,7 +1224,6 @@ mod tests {
         window.observe(Duration::from_millis(20));
         window.observe(Duration::from_millis(30));
         window.observe(Duration::from_millis(40));
-
         // oldest sample (10ms) is evicted
         assert_eq!(
             window.average().map(|duration| duration.as_millis()),

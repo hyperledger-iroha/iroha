@@ -63,7 +63,6 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         payload_block_hint: None,
     };
     proposal.proposal_hash = proposal.computed_proposal_hash();
-
     let accepted =
         crate::tx::AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
     let reservation = crate::queue::LaneQueueReservationKeyV2 {
@@ -104,7 +103,6 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         producer_keypair.private_key(),
     )
     .expect("canonical autonomous QueuePlan fixture payload");
-
     let validator_pops = validator_set
         .iter()
         .map(|validator| {
@@ -128,10 +126,7 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         .collect::<Vec<_>>();
     let prepare_body = proposal.vote_body(CertPhase::Prepare);
     let availability_body = crate::lane_consensus::lane_payload_availability_body(
-        &payload,
-        &proposal,
-        network_id,
-        epoch,
+        &payload, &proposal, network_id, epoch,
     )
     .expect("fixture availability body");
     let prepare_votes = selected_keypairs
@@ -258,7 +253,6 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         input,
     }
 }
-
 fn seed_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[u8]) {
     let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
         &state.network_id,
@@ -279,7 +273,6 @@ fn seed_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[
     .expect("fixture pending QueuePlan obligation");
     world.commit();
 }
-
 fn seed_pending_queue_plan_binding_state_for_test(
     state: &State,
     binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
@@ -288,20 +281,21 @@ fn seed_pending_queue_plan_binding_state_for_test(
         .install_queue_plan_pending_binding_for_test(binding)
         .expect("fixture pending QueuePlan binding");
 }
-
-fn commit_block_metadata_with_genesis_checkpoint_to_state(
-    state: &State,
-    block: &SignedBlock,
-) {
+fn commit_block_metadata_with_genesis_checkpoint_to_state(state: &State, block: &SignedBlock) {
     commit_block_metadata_to_state(state, block);
     let revision = MusubiResolverIndexRevisionV1::default();
-    assert_eq!(state.world.view().musubi_resolver_index_revision(), revision.get());
+    assert_eq!(
+        state.world.view().musubi_resolver_index_revision(),
+        revision.get()
+    );
     let checkpoint = MusubiRegistrySnapshotV1 {
         finalized_height: block.header().height().get(),
         finalized_block_hash: *block.hash().as_ref(),
         index_revision: revision.get(),
     };
-    checkpoint.validate().expect("valid genesis resolver checkpoint");
+    checkpoint
+        .validate()
+        .expect("valid genesis resolver checkpoint");
     let mut world = state.world.block();
     assert!(
         world
@@ -312,7 +306,6 @@ fn commit_block_metadata_with_genesis_checkpoint_to_state(
     );
     world.commit();
 }
-
 fn queue_plan_pending_obligation_for_test(
     state: &State,
     certificate: &[u8],
@@ -325,7 +318,6 @@ fn queue_plan_pending_obligation_for_test(
     State::queue_plan_pending_obligation_from_admission(&admission)
         .expect("fixture pending QueuePlan obligation")
 }
-
 fn clear_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[u8]) {
     let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
         &state.network_id,
@@ -348,7 +340,6 @@ fn clear_exact_queue_plan_admission_state_for_test(state: &State, certificate: &
     );
     world.commit();
 }
-
 fn persist_merge_carrier_finality_chain_for_state_test(
     state: &State,
     parent: &SignedBlock,
@@ -360,7 +351,6 @@ fn persist_merge_carrier_finality_chain_for_state_test(
         ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
         QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
     };
-
     fn artifact_for_block(
         state: &State,
         block: &SignedBlock,
@@ -487,7 +477,6 @@ fn persist_merge_carrier_finality_chain_for_state_test(
         artifact.verify().expect("fixture finality verifies");
         artifact
     }
-
     let parent_finality = artifact_for_block(state, parent, None, keypairs);
     let _ = state
         .kura
@@ -499,7 +488,6 @@ fn persist_merge_carrier_finality_chain_for_state_test(
         .store_v2_finality_artifact(&carrier_finality)
         .expect("persist exact merge-carrier finality");
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the fixture builds one fully certified autonomous execution carrier"
@@ -553,7 +541,6 @@ fn autonomous_merge_commit_authorization_fixture(
         replay.commit();
         key
     });
-
     let tag = 0x6A;
     let entrypoint = queue_plan_entrypoint_for_state_test(&state, tag);
     let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
@@ -653,7 +640,6 @@ fn autonomous_merge_commit_authorization_fixture(
     );
     (state, entry, carrier, expired_axt_replay_key)
 }
-
 fn staged_autonomous_merge_commit_block<'state>(
     state: &'state State,
     entry: &MergeLedgerEntry,
@@ -690,27 +676,23 @@ fn staged_autonomous_merge_commit_block<'state>(
     );
     state_block
 }
-
 fn stage_exact_empty_autonomous_carrier_membership_for_pre_vote(state_block: &mut StateBlock<'_>) {
     let height = autonomous_carrier_transaction_height(state_block);
     state_block
         .transactions
         .insert_block(std::collections::HashSet::new(), height);
 }
-
 fn autonomous_carrier_transaction_height(state_block: &StateBlock<'_>) -> NonZeroUsize {
     usize::try_from(state_block._curr_block.height().get())
         .ok()
         .and_then(NonZeroUsize::new)
         .expect("autonomous carrier height fits canonical transaction storage")
 }
-
 struct ExactTestStateBlockCommitAuthorization {
     carrier_block_hash: HashOf<BlockHeader>,
     execution_reference: iroha_data_model::block::CertifiedMergeLedgerReference,
     lane_count: usize,
 }
-
 impl StateBlockCommitAuthorization for ExactTestStateBlockCommitAuthorization {
     fn consume_for_state_commit(
         self: Box<Self>,
@@ -736,7 +718,6 @@ impl StateBlockCommitAuthorization for ExactTestStateBlockCommitAuthorization {
         Ok(())
     }
 }
-
 fn exact_test_state_commit_authorization(
     state_block: &StateBlock<'_>,
 ) -> Box<dyn StateBlockCommitAuthorization> {
@@ -756,7 +737,6 @@ fn exact_test_state_commit_authorization(
             .len(),
     })
 }
-
 fn commit_staged_autonomous_for_test(
     state_block: StateBlock<'_>,
 ) -> Result<(), TransactionsBlockError> {

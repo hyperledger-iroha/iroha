@@ -6,7 +6,6 @@
 //! candidate record. Finalization never regenerates proof material: it binds the
 //! unchanged candidate to supplied evidence and authenticates the resulting
 //! release before publishing a distinct final directory atomically.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
@@ -16,7 +15,6 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-
 use iroha_core::zk::kagemusha_artifact_v4::{
     KagemushaValidatedArtifactPayloadV4, read_kagemusha_pasta_cycle_artifact_v4,
     read_kagemusha_pasta_cycle_candidate_artifact_v4,
@@ -85,7 +83,6 @@ use iroha_data_model::{
 };
 use norito::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest, Sha256};
-
 const HELP: &str = "\
 Generate an unsigned ABI-21 candidate, then finalize those exact bytes after approval.
 
@@ -159,10 +156,8 @@ physical capacity, safety ceiling, absolute maximum, enforcement profile, and
 policy used by the in-process guard. It does not start a monitor or allocate
 candidate material.
 ";
-
 const OPTIONAL_MEMORY_LIMIT_OPTION: &str = "memory-limit-bytes";
 const MEMORY_CAPACITY_OPTIONS: &[&str] = &[];
-
 const GENERATE_OPTIONS: &[&str] = &[
     "out-dir",
     // Injected by `run_kagemusha_v4_generation.py`; callers cannot select it.
@@ -183,7 +178,6 @@ const GENERATE_OPTIONS: &[&str] = &[
     "step-ep-circuit-params",
     "topup-finality-roster",
 ];
-
 const FINALIZE_OPTIONS: &[&str] = &[
     "candidate-dir",
     "out-dir",
@@ -193,7 +187,6 @@ const FINALIZE_OPTIONS: &[&str] = &[
     "cryptographic-review",
     OPTIONAL_MEMORY_LIMIT_OPTION,
 ];
-
 const PUBLISH_STAGED_CANDIDATE_OPTIONS: &[&str] = &[
     "out-dir",
     "staging-id",
@@ -203,10 +196,8 @@ const PUBLISH_STAGED_CANDIDATE_OPTIONS: &[&str] = &[
     "source-tree-sha256",
     OPTIONAL_MEMORY_LIMIT_OPTION,
 ];
-
 const VALIDATE_CANDIDATE_OPTIONS: &[&str] =
     &["candidate-dir", "out-dir", OPTIONAL_MEMORY_LIMIT_OPTION];
-
 const MANIFEST_JSON_FILE_NAME: &str = "manifest.json";
 const MANIFEST_NORITO_FILE_NAME: &str = "manifest.norito";
 const MANIFEST_NORITO_SHA256_FILE_NAME: &str = "manifest.norito.sha256";
@@ -233,14 +224,12 @@ const BUILD_REVIEWED_SOURCE_CLOSURE_SHA256: Option<&str> =
 const TRUSTED_GIT_EXECUTABLE: &str = "/usr/bin/git";
 const TRUSTED_PYTHON_EXECUTABLE: &str = "/usr/bin/python3";
 const TRUSTED_TOOL_PATH: &str = "/usr/bin:/bin";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSpec {
     file_name: &'static str,
     parity: KagemushaPastaCycleParityV1,
     kind: KagemushaPastaCycleArtifactKindV4,
 }
-
 const INPUTS: [InputSpec; 8] = [
     InputSpec {
         file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMS_IPA_FILE_NAME_V4,
@@ -283,7 +272,6 @@ const INPUTS: [InputSpec; 8] = [
         kind: KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
     },
 ];
-
 fn validate_artifacts_sequentially<I, T, E, F>(artifacts: I, mut validate: F) -> Result<(), E>
 where
     I: IntoIterator,
@@ -294,7 +282,6 @@ where
     }
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FileSnapshot {
     #[cfg(unix)]
@@ -311,7 +298,6 @@ struct FileSnapshot {
     #[cfg(unix)]
     changed_nanoseconds: i64,
 }
-
 #[cfg(unix)]
 fn checked_stat_value<T, U>(value: T) -> Option<U>
 where
@@ -319,7 +305,6 @@ where
 {
     U::try_from(value).ok()
 }
-
 impl FileSnapshot {
     fn from_metadata(metadata: &fs::Metadata) -> Self {
         #[cfg(unix)]
@@ -342,16 +327,13 @@ impl FileSnapshot {
             }
         }
     }
-
     #[cfg(unix)]
     fn identity(self) -> (u64, u64) {
         (self.device, self.inode)
     }
-
     #[cfg(unix)]
     fn from_stat(value: &rustix::fs::Stat) -> Option<Self> {
         use rustix::fs::FileType as RustixFileType;
-
         (RustixFileType::from_raw_mode(value.st_mode) == RustixFileType::RegularFile
             && checked_stat_value::<_, u64>(value.st_nlink)? == 1)
             .then_some(Self {
@@ -365,7 +347,6 @@ impl FileSnapshot {
             })
     }
 }
-
 struct OpenedInput {
     file: File,
     path: PathBuf,
@@ -377,13 +358,11 @@ struct OpenedInput {
     size_bytes: u64,
     sha256: [u8; 32],
 }
-
 impl OpenedInput {
     fn rewind_and_verify(&mut self) -> Result<(), Box<dyn Error>> {
         self.file.seek(SeekFrom::Start(0))?;
         self.verify_unchanged()
     }
-
     fn verify_unchanged(&self) -> Result<(), Box<dyn Error>> {
         let opened = self.file.metadata()?;
         #[cfg(unix)]
@@ -410,7 +389,6 @@ impl OpenedInput {
         }
         Ok(())
     }
-
     fn rehash_and_verify(&mut self) -> Result<(), Box<dyn Error>> {
         self.verify_unchanged()?;
         self.file.seek(SeekFrom::Start(0))?;
@@ -421,7 +399,6 @@ impl OpenedInput {
         self.file.seek(SeekFrom::Start(0))?;
         self.verify_unchanged()
     }
-
     fn read_all(&mut self) -> Result<Vec<u8>, Box<dyn Error>> {
         let capacity = usize::try_from(self.size_bytes)?;
         let mut bytes = Vec::with_capacity(capacity);
@@ -432,7 +409,6 @@ impl OpenedInput {
         self.rewind_and_verify()?;
         Ok(bytes)
     }
-
     fn copy_exact_to(&mut self, output: &mut File) -> Result<(), Box<dyn Error>> {
         self.file.seek(SeekFrom::Start(0))?;
         let copied = io::copy(
@@ -446,7 +422,6 @@ impl OpenedInput {
         self.rewind_and_verify()
     }
 }
-
 struct ProfileMetadata {
     parity: KagemushaPastaCycleParityV1,
     circuit_id: &'static str,
@@ -455,7 +430,6 @@ struct ProfileMetadata {
     compiled_protocol_structure_sha256: [u8; 32],
     step_proof_size_bytes: u32,
 }
-
 struct BundleMetadata {
     network_id: NetworkId,
     asset: AssetDefinitionId,
@@ -474,7 +448,6 @@ struct BundleMetadata {
     measured_proof_pair: Vec<u8>,
     profiles: [ProfileMetadata; 2],
 }
-
 struct PreparedArtifact {
     spec: InputSpec,
     payload: GeneratedPayload,
@@ -484,24 +457,20 @@ struct PreparedArtifact {
     header: KagemushaPastaCycleFramedArtifactHeaderV4,
     total_size: u64,
 }
-
 struct GeneratedArtifact {
     spec: InputSpec,
     payload: GeneratedPayload,
 }
-
 struct PreparedBundle {
     metadata: BundleMetadata,
     generated_artifacts: Vec<GeneratedArtifact>,
     vesta_proving_key_size_bytes: u64,
     pallas_proving_key_size_bytes: u64,
 }
-
 enum GeneratedPayload {
     Memory(Vec<u8>),
     Staged(StagedGeneratedPayload),
 }
-
 impl GeneratedPayload {
     fn identity(&self) -> Result<(u64, [u8; 32]), Box<dyn Error>> {
         match self {
@@ -510,20 +479,17 @@ impl GeneratedPayload {
         }
     }
 }
-
 struct StagedGeneratedPayload {
     file: File,
     size_bytes: u64,
     sha256: [u8; 32],
 }
-
 struct BoundedDigestFileWriter {
     file: File,
     maximum_bytes: u64,
     written: u64,
     hasher: Sha256,
 }
-
 impl BoundedDigestFileWriter {
     fn new(directory: &PublicationDirectory, name: &str) -> Result<Self, Box<dyn Error>> {
         #[cfg(unix)]
@@ -540,7 +506,6 @@ impl BoundedDigestFileWriter {
             hasher: Sha256::new(),
         })
     }
-
     fn finish(
         mut self,
         expected_size_bytes: u64,
@@ -569,7 +534,6 @@ impl BoundedDigestFileWriter {
         })
     }
 }
-
 impl Write for BoundedDigestFileWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let requested = u64::try_from(bytes.len())
@@ -595,12 +559,10 @@ impl Write for BoundedDigestFileWriter {
             .ok_or_else(|| io::Error::other("proving-key write count overflow"))?;
         Ok(written)
     }
-
     fn flush(&mut self) -> io::Result<()> {
         self.file.flush()
     }
 }
-
 #[derive(Debug, JsonSerialize)]
 struct CandidateValidationArtifactV1 {
     role: String,
@@ -610,7 +572,6 @@ struct CandidateValidationArtifactV1 {
     payload_size_bytes: u64,
     payload_sha256: String,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct CandidateValidationReportV2 {
     schema: String,
@@ -633,7 +594,6 @@ struct CandidateValidationReportV2 {
     topup_finality_roster_size_bytes: u64,
     topup_finality_roster_sha256: String,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
 struct FullSourceTreeIdentityV1 {
     schema: String,
@@ -643,7 +603,6 @@ struct FullSourceTreeIdentityV1 {
     reviewed_source_closure: KagemushaReviewedSourceClosureV1,
     reviewed_source_closure_descriptor_sha256: String,
 }
-
 #[derive(Debug)]
 enum PublicationCommitOutcomeV1 {
     Committed {
@@ -654,7 +613,6 @@ enum PublicationCommitOutcomeV1 {
         parent_sync_error: String,
     },
 }
-
 impl PublicationCommitOutcomeV1 {
     fn emit(self) -> std::process::ExitCode {
         let (status, final_path, parent_directory_durable, parent_sync_error) = match self {
@@ -692,12 +650,10 @@ impl PublicationCommitOutcomeV1 {
         }
     }
 }
-
 enum CommandOutcomeV1 {
     Completed,
     Publication(PublicationCommitOutcomeV1),
 }
-
 fn main() -> std::process::ExitCode {
     match run_main() {
         Ok(CommandOutcomeV1::Completed) => std::process::ExitCode::SUCCESS,
@@ -708,7 +664,6 @@ fn main() -> std::process::ExitCode {
         }
     }
 }
-
 fn run_main() -> Result<CommandOutcomeV1, Box<dyn Error>> {
     let mut arguments = env::args().skip(1);
     let Some(command) = arguments.next() else {
@@ -766,7 +721,6 @@ fn run_main() -> Result<CommandOutcomeV1, Box<dyn Error>> {
         _ => unreachable!("command was checked above"),
     }
 }
-
 fn parse_options(
     arguments: impl IntoIterator<Item = String>,
     allowed_options: &[&str],
@@ -797,14 +751,12 @@ fn parse_options(
     }
     Ok(options)
 }
-
 fn required<'a>(options: &'a BTreeMap<String, String>, name: &str) -> &'a str {
     options
         .get(name)
         .expect("required option checked by main")
         .as_str()
 }
-
 fn canonical_norito_bytes<T>(value: &T, label: &str) -> Result<Vec<u8>, Box<dyn Error>>
 where
     T: PartialEq + norito::NoritoSerialize,
@@ -817,7 +769,6 @@ where
     }
     Ok(bytes)
 }
-
 fn decode_canonical_norito<T>(bytes: &[u8], label: &str) -> Result<T, Box<dyn Error>>
 where
     T: norito::NoritoSerialize,
@@ -830,14 +781,12 @@ where
     }
     Ok(value)
 }
-
 fn canonical_unsigned_decimal(value: &str) -> bool {
     value == "0"
         || value.as_bytes().split_first().is_some_and(|(first, rest)| {
             matches!(first, b'1'..=b'9') && rest.iter().all(u8::is_ascii_digit)
         })
 }
-
 fn is_kagemusha_v4_portable_identifier(value: &str) -> bool {
     if value.is_empty()
         || value.len() > 128
@@ -855,7 +804,6 @@ fn is_kagemusha_v4_portable_identifier(value: &str) -> bool {
     {
         return false;
     }
-
     // Windows resolves these basenames as device aliases even when an
     // extension follows. Reject them so the same release identifier names
     // exactly one artifact directory on every supported build host.
@@ -872,7 +820,6 @@ fn is_kagemusha_v4_portable_identifier(value: &str) -> bool {
             || basename_bytes[..3].eq_ignore_ascii_case(b"lpt"))
         && matches!(basename_bytes[3], b'1'..=b'9'))
 }
-
 fn parse_u32(options: &BTreeMap<String, String>, name: &str) -> Result<u32, Box<dyn Error>> {
     let value = required(options, name);
     if !canonical_unsigned_decimal(value) {
@@ -882,7 +829,6 @@ fn parse_u32(options: &BTreeMap<String, String>, name: &str) -> Result<u32, Box<
         .parse::<u32>()
         .map_err(|error| format!("--{name} must fit u32: {error}").into())
 }
-
 fn parse_u64(options: &BTreeMap<String, String>, name: &str) -> Result<u64, Box<dyn Error>> {
     let value = required(options, name);
     if !canonical_unsigned_decimal(value) {
@@ -892,7 +838,6 @@ fn parse_u64(options: &BTreeMap<String, String>, name: &str) -> Result<u64, Box<
         .parse::<u64>()
         .map_err(|error| format!("--{name} must fit u64: {error}").into())
 }
-
 fn parse_optional_nonzero_u64(
     options: &BTreeMap<String, String>,
     name: &str,
@@ -911,7 +856,6 @@ fn parse_optional_nonzero_u64(
     }
     Ok(Some(parsed))
 }
-
 fn parse_digest(
     options: &BTreeMap<String, String>,
     name: &str,
@@ -931,17 +875,13 @@ fn parse_digest(
     }
     Ok(digest)
 }
-
 fn open_input(path: &Path, maximum: u64, label: &str) -> Result<OpenedInput, Box<dyn Error>> {
     #[cfg(not(unix))]
     return Err(format!("{label} opening is unsupported on this non-Unix target").into());
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         use rustix::fs::{Mode, OFlags};
-
         let before = fs::symlink_metadata(path)?;
         if before.file_type().is_symlink() || !before.is_file() || before.nlink() != 1 {
             return Err(format!(
@@ -986,7 +926,6 @@ fn open_input(path: &Path, maximum: u64, label: &str) -> Result<OpenedInput, Box
         })
     }
 }
-
 fn hash_open_file(
     file: &mut File,
     expected_size: u64,
@@ -1013,7 +952,6 @@ fn hash_open_file(
     }
     Ok(hasher.finalize().into())
 }
-
 fn decode_canonical_circuit_params(
     input: &mut OpenedInput,
     label: &str,
@@ -1029,7 +967,6 @@ fn decode_canonical_circuit_params(
     }
     Ok(params)
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "generation, calibration, and artifact extraction form one ordered fail-closed capability-consuming flow"
@@ -1091,7 +1028,6 @@ fn prepare_bundle_metadata(
     let generation_memory_limit_bytes = memory_guard.effective_memory_limit_bytes();
     let generation_memory_enforcement_profile =
         memory_guard.memory_enforcement_profile().to_owned();
-
     let requested_vesta_params =
         decode_canonical_circuit_params(vesta_params_input, "--step-eq-circuit-params")?;
     let requested_pallas_params =
@@ -1108,7 +1044,6 @@ fn prepare_bundle_metadata(
     let vesta_generated = generated.step_eq;
     let pallas_generated = generated.step_ep;
     let measured_proof_pair = generated.measured_live_pair_bytes;
-
     let vesta_layout = vesta_generated
         .circuit_params
         .validate_release_generation_profile()
@@ -1137,7 +1072,6 @@ fn prepare_bundle_metadata(
     {
         return Err("generated V4 profile calibration metadata is inconsistent".into());
     }
-
     let vesta_bootstrap_bytes = validate_kagemusha_step_bootstrap_payload_v4(
         &vesta_generated.bootstrap_witness,
         &vesta_generated.circuit_params,
@@ -1155,7 +1089,6 @@ fn prepare_bundle_metadata(
     {
         return Err("generated bootstrap measurements differ from calibrated Step sizes".into());
     }
-
     let measured_pair_bytes = u32::try_from(measured_proof_pair.len())
         .map_err(|_| "measured V4 proof pair length does not fit u32")?;
     let measured_steps = vesta_generated
@@ -1179,7 +1112,6 @@ fn prepare_bundle_metadata(
     if measured != measured_proof_pair.len() {
         return Err("V4 proof-pair validator returned a different measurement".into());
     }
-
     let generated_artifacts = vec![
         GeneratedArtifact {
             spec: INPUTS[0],
@@ -1255,7 +1187,6 @@ fn prepare_bundle_metadata(
         pallas_proving_key_size_bytes: pallas_generated.proving_key_size_bytes,
     })
 }
-
 fn validate_generated_artifacts(artifacts: &[GeneratedArtifact]) -> Result<(), Box<dyn Error>> {
     if artifacts.len() != INPUTS.len()
         || artifacts
@@ -1282,18 +1213,15 @@ fn validate_generated_artifacts(artifacts: &[GeneratedArtifact]) -> Result<(), B
     }
     Ok(())
 }
-
 fn profile_for(metadata: &BundleMetadata, parity: KagemushaPastaCycleParityV1) -> &ProfileMetadata {
     match parity {
         KagemushaPastaCycleParityV1::StepEq => &metadata.profiles[0],
         KagemushaPastaCycleParityV1::StepEp => &metadata.profiles[1],
     }
 }
-
 fn framed_schema_matches_release(framed_schema: &str, release_schema: &str) -> bool {
     framed_schema == release_schema
 }
-
 fn framed_generations_match_release_and_profile(
     framed_release: &str,
     release_id: &str,
@@ -1302,11 +1230,9 @@ fn framed_generations_match_release_and_profile(
 ) -> bool {
     framed_release == release_id && framed_parameters == profile_parameters
 }
-
 fn roster_generation_matches_release(archive_generation: &str, release_id: &str) -> bool {
     archive_generation == release_id
 }
-
 fn roster_generation_binding_is_exact(
     archive_generation: &str,
     descriptor_generation: &str,
@@ -1316,7 +1242,6 @@ fn roster_generation_binding_is_exact(
         && descriptor_generation == release_id
         && archive_generation == descriptor_generation
 }
-
 fn descriptor_matches_framed_artifact(
     descriptor: &KagemushaPastaCycleArtifactV4,
     header: &KagemushaPastaCycleFramedArtifactHeaderV4,
@@ -1329,7 +1254,6 @@ fn descriptor_matches_framed_artifact(
         && descriptor.payload_size_bytes == header.payload_size_bytes
         && descriptor.payload_sha256 == header.payload_sha256
 }
-
 fn validate_header_v4(
     header: &KagemushaPastaCycleFramedArtifactHeaderV4,
     profile: &ProfileMetadata,
@@ -1386,7 +1310,6 @@ fn validate_header_v4(
     }
     Ok(())
 }
-
 fn validate_header_against_candidate_v4(
     header: &KagemushaPastaCycleFramedArtifactHeaderV4,
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -1453,7 +1376,6 @@ fn validate_header_against_candidate_v4(
     }
     Ok(())
 }
-
 fn prepare_artifact(
     artifact: GeneratedArtifact,
     metadata: &BundleMetadata,
@@ -1503,7 +1425,6 @@ fn prepare_artifact(
         total_size,
     })
 }
-
 fn trusted_source_command(executable: &str) -> Command {
     let mut command = Command::new(executable);
     command.env_clear().env("PATH", TRUSTED_TOOL_PATH);
@@ -1514,7 +1435,6 @@ fn trusted_source_command(executable: &str) -> Command {
     }
     command
 }
-
 fn validate_base_source_head(source_commit: &str) -> Result<(), Box<dyn Error>> {
     let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let head = trusted_source_command(TRUSTED_GIT_EXECUTABLE)
@@ -1536,10 +1456,8 @@ fn validate_base_source_head(source_commit: &str) -> Result<(), Box<dyn Error>> 
         )
         .into());
     }
-
     Ok(())
 }
-
 fn is_lower_hex(value: &str, expected_len: usize) -> bool {
     value.len() == expected_len
         && value
@@ -1547,7 +1465,6 @@ fn is_lower_hex(value: &str, expected_len: usize) -> bool {
             .iter()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
 }
-
 fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error>> {
     let (Some(reviewed_closure), Some(reviewed_closure_sha256)) = (
         BUILD_REVIEWED_SOURCE_CLOSURE,
@@ -1599,7 +1516,6 @@ fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error
     }
     Ok(identity)
 }
-
 fn validate_current_source(
     expected_commit: &str,
     expected_tree_sha256: [u8; 32],
@@ -1620,7 +1536,6 @@ fn validate_current_source(
     }
     Ok(first)
 }
-
 fn validate_current_manifest_source(
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
 ) -> Result<(), Box<dyn Error>> {
@@ -1636,7 +1551,6 @@ fn validate_current_manifest_source(
     }
     Ok(())
 }
-
 fn generation_memory_binding_is_exact_v4(
     manifest_memory_limit_bytes: u64,
     manifest_memory_enforcement_profile: &str,
@@ -1646,7 +1560,6 @@ fn generation_memory_binding_is_exact_v4(
     manifest_memory_limit_bytes == expected_memory_limit_bytes
         && manifest_memory_enforcement_profile == expected_memory_enforcement_profile
 }
-
 fn validate_generation_memory_binding_v4(
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     expected_memory_limit_bytes: u64,
@@ -1669,7 +1582,6 @@ fn validate_generation_memory_binding_v4(
     }
     Ok(())
 }
-
 fn validate_embedded_candidate_source(
     expected_commit: &str,
     expected_tree_sha256: [u8; 32],
@@ -1703,7 +1615,6 @@ fn validate_embedded_candidate_source(
     }
     Ok(())
 }
-
 #[cfg_attr(
     any(target_os = "linux", target_os = "android", target_os = "macos"),
     expect(
@@ -1727,7 +1638,6 @@ fn build_candidate(
         "Kagemusha V4 bundle publication requires Linux, Android, or macOS atomic directory publication"
             .into(),
     );
-
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         let expected_tree = parse_digest(options, "source-tree-sha256")?;
@@ -1746,7 +1656,6 @@ fn build_candidate(
         }
         let trusted_parent =
             TrustedOutputParent::open_pinned(&out_dir, required(options, "output-parent-fd"))?;
-
         let staging_id = required(options, "staging-id");
         if !is_lower_hex(staging_id, 32) {
             return Err("guard-supplied Kagemusha staging id is invalid".into());
@@ -1813,7 +1722,6 @@ fn build_candidate(
             .into_iter()
             .map(|artifact| prepare_artifact(artifact, &metadata))
             .collect::<Result<Vec<_>, _>>()?;
-
         let mut roster_input = open_input(
             Path::new(required(options, "topup-finality-roster")),
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
@@ -1836,7 +1744,6 @@ fn build_candidate(
         let expected_memory_limit_bytes = metadata.generation_memory_limit_bytes;
         let expected_memory_enforcement_profile =
             metadata.generation_memory_enforcement_profile.clone();
-
         if let Err(error) = write_candidate(
             &publication,
             metadata,
@@ -1907,7 +1814,6 @@ fn build_candidate(
         Ok(())
     }
 }
-
 fn publish_staged_candidate(
     options: &BTreeMap<String, String>,
     memory_guard: KagemushaGenerationMemoryGuardV4,
@@ -1917,7 +1823,6 @@ fn publish_staged_candidate(
         "Kagemusha V4 bundle publication requires Linux, Android, or macOS atomic directory publication"
             .into(),
     );
-
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         let expected_memory_limit_bytes = memory_guard.effective_memory_limit_bytes();
@@ -1964,7 +1869,6 @@ fn publish_staged_candidate(
         trusted_parent.publish_presynced(std::ffi::OsStr::new(staging_name), &publication)
     }
 }
-
 fn open_and_match_candidate_file(
     candidate: &PublicationDirectory,
     name: &str,
@@ -1980,7 +1884,6 @@ fn open_and_match_candidate_file(
     tracked.push(input);
     Ok(())
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the staged-candidate audit must retain one ordered inode, digest, schema, artifact, roster, and source revalidation flow"
@@ -2027,7 +1930,6 @@ fn verify_staged_candidate_for_publication(
         return Err("staged V4 candidate source identity changed before publication".into());
     }
     tracked_metadata.push(candidate_input);
-
     let candidate_sha256: [u8; 32] = Sha256::digest(&candidate_bytes).into();
     if candidate_record
         .sha256()
@@ -2062,7 +1964,6 @@ fn verify_staged_candidate_for_publication(
             &mut tracked_metadata,
         )?;
     }
-
     let descriptors = manifest
         .profiles
         .iter()
@@ -2091,7 +1992,6 @@ fn verify_staged_candidate_for_publication(
         }
         artifact_inputs.push(input);
     }
-
     let roster_descriptor = &manifest.topup_finality_roster_artifact;
     let mut roster_input = candidate.open_bound_input(
         &roster_descriptor.file_name,
@@ -2138,7 +2038,6 @@ fn verify_staged_candidate_for_publication(
     if covered_until < manifest.withdrawal_height {
         return Err("staged V4 top-up finality roster does not cover the release window".into());
     }
-
     for input in &mut tracked_metadata {
         input.rehash_and_verify()?;
     }
@@ -2153,7 +2052,6 @@ fn verify_staged_candidate_for_publication(
     }
     Ok(())
 }
-
 fn process_staged_candidate_recursive_step_two_v4(
     publication: &PublicationDirectory,
     receipt: Option<&KagemushaRecursiveSpendQualificationReceiptV4>,
@@ -2181,7 +2079,6 @@ fn process_staged_candidate_recursive_step_two_v4(
     let manifest_sha256: [u8; 32] =
         Sha256::digest(norito::encode_canonical(&candidate_record.manifest)?).into();
     candidate_input.rehash_and_verify()?;
-
     let descriptor = |parity, kind| -> Result<KagemushaPastaCycleArtifactV4, Box<dyn Error>> {
         candidate_record
             .manifest
@@ -2224,7 +2121,6 @@ fn process_staged_candidate_recursive_step_two_v4(
         };
     let step_eq_proving_key_file = open_proving_key(&step_eq_proving_key)?;
     let step_ep_proving_key_file = open_proving_key(&step_ep_proving_key)?;
-
     let mut load = |parity, kind| {
         if kind == KagemushaPastaCycleArtifactKindV4::ProvingKey {
             return Err(
@@ -2307,14 +2203,12 @@ fn process_staged_candidate_recursive_step_two_v4(
         .map_err(|error| format!("invalid staged V4 qualification receipt: {error}"))?;
     Ok(qualified_receipt)
 }
-
 fn generate_staged_candidate_recursive_step_two_receipt_v4(
     publication: &PublicationDirectory,
     memory_guard: &KagemushaGenerationMemoryGuardV4,
 ) -> Result<KagemushaRecursiveSpendQualificationReceiptV4, Box<dyn Error>> {
     process_staged_candidate_recursive_step_two_v4(publication, None, memory_guard)
 }
-
 fn verify_staged_candidate_recursive_step_two_receipt_v4(
     publication: &PublicationDirectory,
     memory_guard: &KagemushaGenerationMemoryGuardV4,
@@ -2349,7 +2243,6 @@ fn verify_staged_candidate_recursive_step_two_receipt_v4(
     publication.verify_candidate_inventory()?;
     Ok(verified)
 }
-
 #[cfg_attr(
     any(target_os = "linux", target_os = "android", target_os = "macos"),
     expect(
@@ -2363,17 +2256,14 @@ fn validate_candidate(
 ) -> Result<PublicationCommitOutcomeV1, Box<dyn Error>> {
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     return Err("Kagemusha V4 candidate validation requires Linux, Android, or macOS".into());
-
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let expected_memory_limit_bytes = memory_guard.effective_memory_limit_bytes();
         let expected_memory_enforcement_profile = memory_guard.memory_enforcement_profile();
         let candidate =
             PublicationDirectory::open_existing(PathBuf::from(required(options, "candidate-dir")))?;
         candidate.verify_candidate_inventory()?;
-
         let mut tracked_metadata = Vec::new();
         let mut candidate_input = candidate.open_bound_input(
             CANDIDATE_MANIFEST_NORITO_FILE_NAME,
@@ -2405,7 +2295,6 @@ fn validate_candidate(
             .qualified_candidate_sha256(&candidate_record)
             .map_err(|error| format!("failed to identify qualified candidate: {error}"))?;
         tracked_metadata.push(candidate_input);
-
         let candidate_sha256: [u8; 32] = Sha256::digest(&candidate_bytes).into();
         if candidate_record
             .sha256()
@@ -2440,7 +2329,6 @@ fn validate_candidate(
                 &mut tracked_metadata,
             )?;
         }
-
         let manifest_bytes = canonical_norito_bytes(manifest, "unsigned V4 candidate manifest")?;
         let manifest_sha256: [u8; 32] = Sha256::digest(&manifest_bytes).into();
         let descriptors = manifest
@@ -2451,7 +2339,6 @@ fn validate_candidate(
         if descriptors.len() != INPUTS.len() {
             return Err("V4 candidate does not contain the exact eight-artifact inventory".into());
         }
-
         let mut artifact_inputs = Vec::with_capacity(INPUTS.len());
         let mut artifact_report = Vec::with_capacity(INPUTS.len());
         for (((role, spec), descriptor), expected_index) in
@@ -2488,7 +2375,6 @@ fn validate_candidate(
             });
             artifact_inputs.push(input);
         }
-
         let roster_descriptor = &manifest.topup_finality_roster_artifact;
         let mut roster_input = candidate.open_bound_input(
             &roster_descriptor.file_name,
@@ -2537,7 +2423,6 @@ fn validate_candidate(
                 "V4 candidate top-up finality roster does not cover the release window".into(),
             );
         }
-
         let report = CandidateValidationReportV2 {
             schema: CANDIDATE_VALIDATION_REPORT_SCHEMA_V2.to_owned(),
             candidate_record_sha256: hex::encode(candidate_sha256),
@@ -2566,7 +2451,6 @@ fn validate_candidate(
         };
         let mut report_json = norito::json::to_string_pretty(&report)?;
         report_json.push('\n');
-
         for input in &mut tracked_metadata {
             input.rehash_and_verify()?;
         }
@@ -2576,7 +2460,6 @@ fn validate_candidate(
         roster_input.rehash_and_verify()?;
         candidate.verify_candidate_inventory()?;
         validate_current_manifest_source(manifest)?;
-
         let out_dir = PathBuf::from(required(options, "out-dir"));
         if out_dir.exists() {
             return Err(format!("output directory already exists: {}", out_dir.display()).into());
@@ -2650,7 +2533,6 @@ fn validate_candidate(
         Ok(outcome)
     }
 }
-
 #[cfg_attr(
     any(target_os = "linux", target_os = "android", target_os = "macos"),
     expect(
@@ -2667,17 +2549,14 @@ fn finalize_release(
         "Kagemusha V4 release finalization requires Linux, Android, or macOS atomic directory publication"
             .into(),
     );
-
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let expected_memory_limit_bytes = memory_guard.effective_memory_limit_bytes();
         let expected_memory_enforcement_profile = memory_guard.memory_enforcement_profile();
         let candidate =
             PublicationDirectory::open_existing(PathBuf::from(required(options, "candidate-dir")))?;
         candidate.verify_candidate_inventory()?;
-
         let mut tracked_metadata = Vec::new();
         let mut candidate_manifest_input = candidate.open_bound_input(
             CANDIDATE_MANIFEST_NORITO_FILE_NAME,
@@ -2710,13 +2589,11 @@ fn finalize_release(
             .map_err(|error| format!("failed to identify qualified V4 candidate: {error}"))?;
         let candidate_manifest = candidate_record.manifest.clone();
         tracked_metadata.push(candidate_manifest_input);
-
         let mut candidate_json = norito::json::to_string_pretty(&candidate_record)?;
         candidate_json.push('\n');
         let candidate_manifest_sha256: [u8; 32] = Sha256::digest(&candidate_manifest_bytes).into();
         let candidate_manifest_sha256_text =
             format!("{}\n", hex::encode(candidate_manifest_sha256));
-
         for (name, maximum, label, expected) in [
             (
                 CANDIDATE_MANIFEST_JSON_FILE_NAME,
@@ -2740,7 +2617,6 @@ fn finalize_release(
                 &mut tracked_metadata,
             )?;
         }
-
         let mut policy_input = open_input(
             Path::new(required(options, "release-policy")),
             MAX_POLICY_BYTES,
@@ -2752,7 +2628,6 @@ fn finalize_release(
         policy
             .validate()
             .map_err(|error| format!("invalid V4 release policy: {error}"))?;
-
         let mut attestation_input = open_input(
             Path::new(required(options, "release-attestation")),
             MAX_ATTESTATION_BYTES,
@@ -2761,7 +2636,6 @@ fn finalize_release(
         let attestation_bytes = attestation_input.read_all()?;
         let attestation: KagemushaRecursiveSpendReleaseAttestationV4 =
             decode_canonical_norito(&attestation_bytes, "V4 release attestation")?;
-
         let evidence_maximum =
             u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1)?;
         let mut benchmark_input = open_input(
@@ -2783,7 +2657,6 @@ fn finalize_release(
             qualified_candidate_sha256,
         )
         .map_err(|error| format!("invalid signed V4 cryptographic review: {error}"))?;
-
         #[cfg(unix)]
         {
             let external_identities = BTreeSet::from([
@@ -2798,7 +2671,6 @@ fn finalize_release(
                 );
             }
         }
-
         let benchmark_evidence_sha256: [u8; 32] = Sha256::digest(&benchmark_bytes).into();
         let cryptographic_review_sha256: [u8; 32] = Sha256::digest(&review_bytes).into();
         if benchmark_evidence_sha256 == cryptographic_review_sha256 {
@@ -2826,7 +2698,6 @@ fn finalize_release(
         {
             return Err("authenticated V4 release changed its manifest identity".into());
         }
-
         let mut headers = BTreeMap::new();
         let mut staged_inputs = Vec::with_capacity(INPUTS.len() + 2);
         for descriptor in manifest
@@ -2884,19 +2755,16 @@ fn finalize_release(
             qualification_receipt_input,
         ));
         candidate.verify_candidate_inventory()?;
-
         let manifest_bytes = canonical_norito_bytes(&manifest, "final V4 manifest")?;
         let mut manifest_json = norito::json::to_string_pretty(&manifest)?;
         manifest_json.push('\n');
         let manifest_sha256: [u8; 32] = Sha256::digest(&manifest_bytes).into();
         let manifest_sha256_text = format!("{}\n", hex::encode(manifest_sha256));
-
         let out_dir = PathBuf::from(required(options, "out-dir"));
         if out_dir.exists() {
             return Err(format!("output directory already exists: {}", out_dir.display()).into());
         }
         let trusted_parent = TrustedOutputParent::open(&out_dir)?;
-
         let mut staging_builder = tempfile::Builder::new();
         staging_builder
             .prefix(".kagemusha-v4-final-staging-")
@@ -2912,7 +2780,6 @@ fn finalize_release(
             staging.path().to_owned(),
             &staging_name,
         )?;
-
         for (name, input) in &mut staged_inputs {
             let mut output = publication.create_file(name)?;
             input.copy_exact_to(&mut output)?;
@@ -2944,7 +2811,6 @@ fn finalize_release(
         ] {
             publication.write_exact_file(name, bytes)?;
         }
-
         for (name, bytes, maximum) in [
             (
                 MANIFEST_NORITO_FILE_NAME,
@@ -3078,7 +2944,6 @@ fn finalize_release(
             MAX_MANIFEST_BYTES,
         )?;
         publication.verify_final_inventory()?;
-
         for input in &mut tracked_metadata {
             input.rehash_and_verify()?;
         }
@@ -3124,7 +2989,6 @@ fn finalize_release(
         Ok(outcome)
     }
 }
-
 fn prepare_topup_finality_roster(
     input: &mut OpenedInput,
     metadata: &BundleMetadata,
@@ -3182,7 +3046,6 @@ fn prepare_topup_finality_roster(
         .map_err(|error| format!("invalid V4 roster descriptor: {error}"))?;
     Ok((bytes, descriptor))
 }
-
 fn validate_release_roster_validator_floor(
     validator_counts: impl IntoIterator<Item = usize>,
 ) -> Result<(), Box<dyn Error>> {
@@ -3196,7 +3059,6 @@ fn validate_release_roster_validator_floor(
     }
     Ok(())
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "candidate framing, manifest construction, and pre-publication verification are one ordered security boundary"
@@ -3223,7 +3085,6 @@ fn write_candidate(
         }
         staged_headers.push((header, descriptor));
     }
-
     let mut roster_output =
         publication.create_file(KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4)?;
     roster_output.write_all(roster_bytes)?;
@@ -3234,7 +3095,6 @@ fn write_candidate(
         roster_bytes,
         KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
     )?;
-
     let manifest = KagemushaRecursiveSpendArtifactManifestV4 {
         schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
         version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
@@ -3290,7 +3150,6 @@ fn write_candidate(
     manifest
         .validate_unsigned_candidate()
         .map_err(|error| format!("generated V4 candidate manifest is invalid: {error}"))?;
-
     for (header, descriptor) in &staged_headers {
         validate_header_against_candidate_v4(header, &manifest, descriptor)
             .map_err(|error| format!("staged V4 header is not manifest-bound: {error}"))?;
@@ -3320,7 +3179,6 @@ fn write_candidate(
     {
         return Err("generated V4 manifest does not admit its initialization proof pair".into());
     }
-
     let candidate = KagemushaRecursiveSpendCandidateV4 {
         schema: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4.to_owned(),
         version: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
@@ -3334,7 +3192,6 @@ fn write_candidate(
     candidate_json.push('\n');
     let candidate_sha256: [u8; 32] = Sha256::digest(&candidate_norito).into();
     let candidate_sha256_text = format!("{}\n", hex::encode(candidate_sha256));
-
     for (name, bytes) in [
         (
             CANDIDATE_MANIFEST_NORITO_FILE_NAME,
@@ -3348,7 +3205,6 @@ fn write_candidate(
     ] {
         publication.write_exact_file(name, bytes)?;
     }
-
     for (name, bytes, maximum) in [
         (
             CANDIDATE_MANIFEST_NORITO_FILE_NAME,
@@ -3370,7 +3226,6 @@ fn write_candidate(
     }
     Ok(())
 }
-
 fn package_artifact(
     publication: &PublicationDirectory,
     artifact: PreparedArtifact,
@@ -3433,14 +3288,12 @@ fn package_artifact(
     }
     Ok((header, descriptor))
 }
-
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 struct TrustedOutputParent {
     path: PathBuf,
     file: File,
     output_name: std::ffi::OsString,
 }
-
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 impl TrustedOutputParent {
     fn open(out_dir: &Path) -> Result<Self, Box<dyn Error>> {
@@ -3448,7 +3301,6 @@ impl TrustedOutputParent {
         let file = File::open(&path)?;
         Self::finish_open(path, file, output_name)
     }
-
     fn open_pinned(out_dir: &Path, descriptor_text: &str) -> Result<Self, Box<dyn Error>> {
         let descriptor = descriptor_text
             .parse::<i32>()
@@ -3460,12 +3312,10 @@ impl TrustedOutputParent {
             .map_err(|_| "guard-supplied output-parent descriptor is unavailable")?;
         Self::finish_open(path, file, output_name)
     }
-
     fn validated_path_and_name(
         out_dir: &Path,
     ) -> Result<(PathBuf, std::ffi::OsString), Box<dyn Error>> {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
         let output_name = out_dir
             .file_name()
             .filter(|name| !name.is_empty())
@@ -3499,14 +3349,12 @@ impl TrustedOutputParent {
         }
         Ok((path, output_name))
     }
-
     fn finish_open(
         path: PathBuf,
         file: File,
         output_name: std::ffi::OsString,
     ) -> Result<Self, Box<dyn Error>> {
         use std::os::unix::fs::MetadataExt as _;
-
         let opened = file.metadata()?;
         let current = fs::metadata(&path)?;
         if !opened.is_dir() || opened.dev() != current.dev() || opened.ino() != current.ino() {
@@ -3529,7 +3377,6 @@ impl TrustedOutputParent {
             output_name,
         })
     }
-
     fn publish(
         &self,
         staging_name: &std::ffi::OsStr,
@@ -3538,7 +3385,6 @@ impl TrustedOutputParent {
         self.file.sync_all()?;
         self.publish_presynced(staging_name, publication)
     }
-
     fn publish_presynced(
         &self,
         staging_name: &std::ffi::OsStr,
@@ -3546,7 +3392,6 @@ impl TrustedOutputParent {
     ) -> Result<PublicationCommitOutcomeV1, Box<dyn Error>> {
         self.publish_presynced_with_parent_sync(staging_name, publication, File::sync_all)
     }
-
     fn publish_presynced_with_parent_sync<F>(
         &self,
         staging_name: &std::ffi::OsStr,
@@ -3557,7 +3402,6 @@ impl TrustedOutputParent {
         F: FnOnce(&File) -> io::Result<()>,
     {
         use rustix::fs::FileType as RustixFileType;
-
         publication.verify_identity()?;
         let staging = rustix::fs::statat(
             &self.file,
@@ -3589,7 +3433,6 @@ impl TrustedOutputParent {
         })
     }
 }
-
 struct PublicationDirectory {
     path: PathBuf,
     file: File,
@@ -3600,12 +3443,10 @@ struct PublicationDirectory {
     #[cfg(unix)]
     path_bound: bool,
 }
-
 impl PublicationDirectory {
     #[cfg(unix)]
     fn open_at(parent: &File, path: PathBuf, name: &std::ffi::OsStr) -> io::Result<Self> {
         use rustix::fs::{Mode, OFlags};
-
         let file = File::from(rustix::fs::openat(
             parent,
             name,
@@ -3614,11 +3455,9 @@ impl PublicationDirectory {
         )?);
         Self::validate(path, file, false)
     }
-
     #[cfg(unix)]
     fn open_existing(path: PathBuf) -> io::Result<Self> {
         use rustix::fs::{Mode, OFlags};
-
         let before = fs::symlink_metadata(&path)?;
         if before.file_type().is_symlink() || !before.is_dir() {
             return Err(io::Error::other(
@@ -3644,7 +3483,6 @@ impl PublicationDirectory {
         }
         Self::validate(path, file, true)
     }
-
     fn validate(path: PathBuf, file: File, path_bound: bool) -> io::Result<Self> {
         let opened = file.metadata()?;
         if !opened.is_dir() {
@@ -3655,7 +3493,6 @@ impl PublicationDirectory {
         #[cfg(unix)]
         {
             use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
             if opened.uid() != rustix::process::geteuid().as_raw()
                 || opened.permissions().mode() & 0o077 != 0
             {
@@ -3689,13 +3526,11 @@ impl PublicationDirectory {
             Ok(Self { path, file })
         }
     }
-
     fn create_file(&self, name: &str) -> io::Result<File> {
         validate_publication_file_name(name)?;
         #[cfg(unix)]
         {
             use rustix::fs::{Mode, OFlags};
-
             let file = File::from(rustix::fs::openat(
                 &self.file,
                 name,
@@ -3713,11 +3548,9 @@ impl PublicationDirectory {
                 .open(self.path.join(name))
         }
     }
-
     #[cfg(unix)]
     fn create_unlinked_file(&self, name: &str) -> io::Result<File> {
         use rustix::fs::{Mode, OFlags};
-
         validate_publication_file_name(name)?;
         let file = File::from(rustix::fs::openat(
             &self.file,
@@ -3730,13 +3563,11 @@ impl PublicationDirectory {
         self.file.sync_all()?;
         Ok(file)
     }
-
     fn write_exact_file(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
         let mut file = self.create_file(name)?;
         file.write_all(bytes)?;
         file.sync_all()
     }
-
     #[cfg(unix)]
     fn write_atomic_exact_file(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
         validate_publication_file_name(name)?;
@@ -3754,13 +3585,11 @@ impl PublicationDirectory {
         )?;
         self.file.sync_all()
     }
-
     fn open_file(&self, name: &str) -> io::Result<File> {
         validate_publication_file_name(name)?;
         #[cfg(unix)]
         {
             use rustix::fs::{Mode, OFlags};
-
             let file = File::from(rustix::fs::openat(
                 &self.file,
                 name,
@@ -3775,7 +3604,6 @@ impl PublicationDirectory {
             File::open(self.path.join(name))
         }
     }
-
     fn open_bound_input(
         &self,
         name: &str,
@@ -3817,13 +3645,11 @@ impl PublicationDirectory {
             sha256,
         })
     }
-
     fn verify_identity(&self) -> io::Result<()> {
         let opened = self.file.metadata()?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
             if !opened.is_dir()
                 || opened.dev() != self.device
                 || opened.ino() != self.inode
@@ -3855,7 +3681,6 @@ impl PublicationDirectory {
         }
         Ok(())
     }
-
     fn verify_exact_file(&self, name: &str, expected: &[u8], maximum: u64) -> io::Result<()> {
         let mut file = self.open_file(name)?;
         let expected_len = u64::try_from(expected.len())
@@ -3875,7 +3700,6 @@ impl PublicationDirectory {
         }
         Ok(())
     }
-
     fn verify_file_digest(
         &self,
         name: &str,
@@ -3894,7 +3718,6 @@ impl PublicationDirectory {
         }
         Ok(())
     }
-
     fn verify_framed_artifact(
         &self,
         release: &KagemushaAuthenticatedReleaseV4,
@@ -3923,7 +3746,6 @@ impl PublicationDirectory {
         }
         Ok(validated)
     }
-
     fn verify_candidate_framed_artifact(
         &self,
         manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -3994,15 +3816,12 @@ impl PublicationDirectory {
         }
         Ok(header)
     }
-
     fn verify_unqualified_candidate_inventory(&self) -> io::Result<()> {
         self.verify_candidate_inventory_with_receipt(false)
     }
-
     fn verify_candidate_inventory(&self) -> io::Result<()> {
         self.verify_candidate_inventory_with_receipt(true)
     }
-
     fn verify_candidate_inventory_with_receipt(&self, receipt_required: bool) -> io::Result<()> {
         let mut expected = INPUTS
             .iter()
@@ -4021,7 +3840,6 @@ impl PublicationDirectory {
         }
         self.verify_inventory(&expected)
     }
-
     fn verify_final_inventory(&self) -> io::Result<()> {
         let expected = INPUTS
             .iter()
@@ -4041,16 +3859,13 @@ impl PublicationDirectory {
             .collect::<BTreeSet<_>>();
         self.verify_inventory(&expected)
     }
-
     fn verify_inventory(&self, expected: &BTreeSet<String>) -> io::Result<()> {
         self.verify_identity()?;
         let mut actual = BTreeSet::new();
         #[cfg(unix)]
         {
             use std::{ffi::OsStr, os::unix::ffi::OsStrExt as _};
-
             use rustix::fs::{AtFlags, Dir, FileType as RustixFileType};
-
             let mut entries = Dir::read_from(&self.file).map_err(io::Error::from)?;
             for entry in &mut entries {
                 let entry = entry.map_err(io::Error::from)?;
@@ -4099,12 +3914,10 @@ impl PublicationDirectory {
         self.verify_identity()?;
         Ok(())
     }
-
     fn sync(&self) -> io::Result<()> {
         self.file.sync_all()
     }
 }
-
 fn validate_publication_file_name(name: &str) -> io::Result<()> {
     let mut components = Path::new(name).components();
     if !matches!(components.next(), Some(std::path::Component::Normal(_)))
@@ -4116,11 +3929,9 @@ fn validate_publication_file_name(name: &str) -> io::Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn verify_owner_private_regular_file(file: &File) -> io::Result<()> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.nlink() != 1 || metadata.permissions().mode() & 0o077 != 0 {
         return Err(io::Error::new(
@@ -4130,28 +3941,22 @@ fn verify_owner_private_regular_file(file: &File) -> io::Result<()> {
     }
     Ok(())
 }
-
 #[cfg(all(test, unix))]
 mod tests {
     use std::{cell::Cell, os::unix::fs::PermissionsExt as _, rc::Rc};
-
     use super::*;
-
     struct LivePayload {
         live: Rc<Cell<usize>>,
     }
-
     impl Drop for LivePayload {
         fn drop(&mut self) {
             self.live.set(self.live.get() - 1);
         }
     }
-
     #[test]
     fn release_roster_requires_four_validators_in_every_window() {
         validate_release_roster_validator_floor([4, 7, 4])
             .expect("all release roster windows meet the public-validator floor");
-
         for (counts, expected_window) in
             [(vec![0], 0), (vec![1], 0), (vec![3], 0), (vec![4, 3, 9], 1)]
         {
@@ -4165,7 +3970,6 @@ mod tests {
             assert!(error.contains("at least 4"), "{error}");
         }
     }
-
     fn assert_descriptor_binding(
         descriptor: &KagemushaPastaCycleArtifactV4,
         header: &KagemushaPastaCycleFramedArtifactHeaderV4,
@@ -4184,7 +3988,6 @@ mod tests {
             total_size
         ));
     }
-
     #[test]
     fn embedded_candidate_source_seal_must_be_present_exact_and_canonical() {
         let commit = "a".repeat(40);
@@ -4198,7 +4001,6 @@ mod tests {
             false,
         )
         .expect("matching embedded source seal");
-
         assert!(validate_embedded_candidate_source(&commit, tree, None, None, false).is_err());
         assert!(
             validate_embedded_candidate_source(
@@ -4233,7 +4035,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn source_validation_uses_fixed_tools_and_a_sanitized_path() {
         let source = include_str!("kagemusha_recursive_spend_v4_bundle.rs");
@@ -4244,14 +4045,12 @@ mod tests {
             .split_once("fn build_candidate(")
             .expect("source-validation boundary exists")
             .0;
-
         assert!(validation.contains("command.env_clear()"));
         assert!(validation.contains("TRUSTED_GIT_EXECUTABLE"));
         assert!(validation.contains("TRUSTED_PYTHON_EXECUTABLE"));
         assert!(!validation.contains("Command::new(\"git\")"));
         assert!(!validation.contains("KAGEMUSHA_SOURCE_SEAL_PYTHON"));
     }
-
     #[test]
     fn generated_candidate_metadata_revalidates_both_release_profiles() {
         let source = include_str!("kagemusha_recursive_spend_v4_bundle.rs");
@@ -4262,7 +4061,6 @@ mod tests {
             .split_once("fn validate_generated_artifacts(")
             .expect("candidate metadata preparation boundary exists")
             .0;
-
         assert_eq!(
             preparation
                 .matches(".validate_release_generation_profile()")
@@ -4271,7 +4069,6 @@ mod tests {
             "generated Eq and Ep profiles must both pass the exact release gate"
         );
     }
-
     #[test]
     fn publication_rejects_a_replaced_staging_directory() {
         let root = tempfile::tempdir().expect("temporary test root");
@@ -4287,20 +4084,17 @@ mod tests {
         let publication =
             PublicationDirectory::open_at(&trusted_parent.file, staging_path.clone(), staging_name)
                 .expect("open staging descriptor");
-
         fs::rename(&staging_path, root.path().join("displaced"))
             .expect("displace staging directory");
         fs::create_dir(&staging_path).expect("replace staging directory");
         fs::set_permissions(&staging_path, fs::Permissions::from_mode(0o700))
             .expect("owner-private replacement");
-
         assert!(
             trusted_parent.publish(staging_name, &publication).is_err(),
             "the staging name must still identify the verified directory"
         );
         assert!(!out_dir.exists());
     }
-
     #[test]
     fn post_rename_parent_sync_failure_is_commit_uncertain_not_generic_failure() {
         let root = tempfile::tempdir().expect("temporary test root");
@@ -4316,7 +4110,6 @@ mod tests {
         let publication =
             PublicationDirectory::open_at(&trusted_parent.file, staging_path.clone(), staging_name)
                 .expect("open staging descriptor");
-
         let outcome = trusted_parent
             .publish_presynced_with_parent_sync(staging_name, &publication, |_| {
                 Err(io::Error::other("injected post-rename sync failure"))
@@ -4343,7 +4136,6 @@ mod tests {
             "a commit-uncertain outcome must expose that the staging name was consumed"
         );
     }
-
     #[test]
     fn artifact_inventory_is_exact_eq_then_ep_four_role_order() {
         assert_eq!(INPUTS.len(), 8);
@@ -4398,7 +4190,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn cross_layer_bindings_reject_top_level_and_descriptor_substitution() {
         let manifest_schema = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4;
@@ -4410,7 +4201,6 @@ mod tests {
             "substituted.schema",
             manifest_schema
         ));
-
         let release_generation = "release-generation";
         let parameter_generation = "parameter-generation";
         assert!(framed_generations_match_release_and_profile(
@@ -4441,12 +4231,10 @@ mod tests {
             release_generation,
         ));
     }
-
     #[test]
     fn final_artifact_validation_drops_each_payload_before_loading_the_next() {
         let live = Rc::new(Cell::new(0));
         let peak = Rc::new(Cell::new(0));
-
         validate_artifacts_sequentially(0..INPUTS.len(), |_| {
             assert_eq!(live.get(), 0, "the prior artifact payload must be dropped");
             live.set(1);
@@ -4456,11 +4244,9 @@ mod tests {
             })
         })
         .expect("sequential validation succeeds");
-
         assert_eq!(live.get(), 0);
         assert_eq!(peak.get(), 1);
     }
-
     #[test]
     fn bounded_digest_writer_enforces_cap_and_keeps_anonymous_payload_exact() {
         let root = tempfile::tempdir().expect("temporary test root");
@@ -4472,7 +4258,6 @@ mod tests {
             .expect("owner-private publication");
         let publication = PublicationDirectory::open_existing(publication_path.clone())
             .expect("open publication");
-
         let payload_name = ".bounded-digest-payload.part";
         let mut writer =
             BoundedDigestFileWriter::new(&publication, payload_name).expect("open payload sink");
@@ -4496,7 +4281,6 @@ mod tests {
             .read_to_end(&mut payload)
             .expect("read anonymous payload");
         assert_eq!(payload, b"abc");
-
         let mut wrong_length =
             BoundedDigestFileWriter::new(&publication, ".bounded-digest-wrong-length.part")
                 .expect("open mismatch sink");
@@ -4506,7 +4290,6 @@ mod tests {
             .expect("write mismatch payload");
         assert!(wrong_length.finish(2, "test payload").is_err());
     }
-
     #[test]
     fn finalizer_uses_the_sequential_authenticated_artifact_path() {
         let source = include_str!("kagemusha_recursive_spend_v4_bundle.rs");
@@ -4517,12 +4300,10 @@ mod tests {
             .split_once("\nfn prepare_topup_finality_roster(")
             .expect("release finalizer boundary exists")
             .0;
-
         assert!(finalizer.contains("validate_artifacts_sequentially("));
         assert!(!finalizer.contains("validated_artifacts.push("));
         assert!(!finalizer.contains("KagemushaPastaCycleProverArtifactsV4::new("));
     }
-
     #[test]
     fn parser_rejects_unknown_duplicate_and_noncanonical_numbers() {
         assert!(
@@ -4588,7 +4369,6 @@ mod tests {
         let zero = BTreeMap::from([(OPTIONAL_MEMORY_LIMIT_OPTION.to_owned(), "0".to_owned())]);
         assert!(parse_optional_nonzero_u64(&zero, OPTIONAL_MEMORY_LIMIT_OPTION).is_err());
     }
-
     #[test]
     fn active_memory_guard_must_match_the_candidate_contract_exactly() {
         let profile = "self-physical-footprint-v1";
@@ -4611,7 +4391,6 @@ mod tests {
             profile,
         ));
     }
-
     #[test]
     fn v4_portable_identifiers_are_single_cross_platform_components() {
         for valid in ["release-20", "parameters_v4", "cycle.2026-07"] {
@@ -4621,12 +4400,10 @@ mod tests {
             assert!(!is_kagemusha_v4_portable_identifier(invalid));
         }
     }
-
     #[test]
     fn candidate_source_must_match_the_signed_checkout_head() {
         assert!(validate_base_source_head("0000000000000000000000000000000000000000").is_err());
     }
-
     #[test]
     fn krv4_framing_is_canonical_and_payload_bound() {
         let root = tempfile::tempdir().expect("temporary test root");
@@ -4722,11 +4499,9 @@ mod tests {
             <[u8; 32]>::from(Sha256::digest(payload))
         );
     }
-
     #[test]
     fn input_open_rejects_symlinks() {
         use std::os::unix::fs::symlink;
-
         let root = tempfile::tempdir().expect("temporary test root");
         let target = root.path().join("target");
         fs::write(&target, b"not empty").expect("write target");

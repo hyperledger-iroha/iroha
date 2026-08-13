@@ -3,12 +3,9 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
-
 use super::*;
-
 static REPLAY_DIRECTORY_SEQUENCE_V2: AtomicU64 = AtomicU64::new(0);
 static REPLAY_TEST_MODULI_V2: [u64; 2] = [97, 113];
-
 const CQ_MAPPING_KAT_V2: [u8; 32] = [
     0x01, 0xe6, 0xd1, 0xaf, 0x4f, 0x15, 0x35, 0xa9, 0x2f, 0xf3, 0x3b, 0x68, 0x10, 0x75, 0x87, 0xef,
     0xa7, 0x3a, 0x9c, 0xce, 0xc2, 0x48, 0x54, 0x15, 0xef, 0x99, 0x78, 0xdf, 0xe8, 0x17, 0x2f, 0xbe,
@@ -21,9 +18,7 @@ const FRI_17_MAPPING_KAT_V2: [u8; 32] = [
     0xcc, 0xb8, 0x3e, 0x88, 0xe5, 0x67, 0x2e, 0xdd, 0x15, 0x64, 0x70, 0x1b, 0x07, 0x51, 0x7c, 0xf9,
     0x62, 0x4a, 0xf4, 0x36, 0xc9, 0x4f, 0x65, 0x01, 0x2d, 0xf5, 0xec, 0x8f, 0x5b, 0x52, 0x34, 0x2d,
 ];
-
 struct ReplayDirectoryV2(PathBuf);
-
 impl ReplayDirectoryV2 {
     fn new_v2() -> Self {
         let sequence = REPLAY_DIRECTORY_SEQUENCE_V2.fetch_add(1, Ordering::SeqCst);
@@ -35,20 +30,17 @@ impl ReplayDirectoryV2 {
         Self(path)
     }
 }
-
 impl Drop for ReplayDirectoryV2 {
     fn drop(&mut self) {
         fs::remove_dir(&self.0).expect("remove empty replay directory");
     }
 }
-
 fn replay_context_v2() -> PublicSpoolContextV2 {
     PublicSpoolContextV2 {
         sealed_source_transcript_digest: [0x31; 32],
         source_algebra_binding_digest: [0x32; 32],
     }
 }
-
 fn replay_geometry_v2() -> SpoolGeometryV2 {
     SpoolGeometryV2 {
         ring_degree: 4,
@@ -59,7 +51,6 @@ fn replay_geometry_v2() -> SpoolGeometryV2 {
         moduli: &REPLAY_TEST_MODULI_V2,
     }
 }
-
 #[cfg(unix)]
 fn coefficient_stage_v2(directory: &ReplayDirectoryV2) -> QPcsCoefficientReplayStageV2 {
     let geometry = replay_geometry_v2();
@@ -82,7 +73,6 @@ fn coefficient_stage_v2(directory: &ReplayDirectoryV2) -> QPcsCoefficientReplayS
     }
     writer.seal_coefficients_for_replay_v2().unwrap()
 }
-
 #[test]
 fn exact_storage_equations_mappings_and_kats_are_frozen() {
     let parameter = [0x42; 32];
@@ -98,7 +88,6 @@ fn exact_storage_equations_mappings_and_kats_are_frozen() {
         fixed_row_column_v2(38, 0, LdeRowRoleV2::Product),
         Err(QPcsSpoolErrorV2::InvalidReplayPurpose)
     );
-
     let axes = RowScratchAxesV2 {
         limb: 37,
         repetition: 4,
@@ -133,7 +122,6 @@ fn exact_storage_equations_mappings_and_kats_are_frozen() {
         row_scratch_layout_v2(parameter, RowScratchAxesV2 { pass: 2, ..axes }),
         Err(QPcsSpoolErrorV2::InvalidReplayPurpose)
     );
-
     let mut total = 0_u64;
     for (layer, expected_file) in FRI_RELEASE_FILES_V2.iter().enumerate() {
         let layout = fri_layer_layout_v2(parameter, u8::try_from(layer).unwrap()).unwrap();
@@ -162,13 +150,11 @@ fn exact_storage_equations_mappings_and_kats_are_frozen() {
         cq.mapping_digest
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn coefficient_replay_phase_order_error_and_unwind_are_fail_closed() {
     let directory = ReplayDirectoryV2::new_v2();
     let geometry = replay_geometry_v2();
-
     let mut while_lde_open = coefficient_stage_v2(&directory);
     while_lde_open
         .push_lde_block_v2(
@@ -189,12 +175,10 @@ fn coefficient_replay_phase_order_error_and_unwind_are_fail_closed() {
         reader.complete_v2(),
         Err(QPcsSpoolErrorV2::ReplayIncomplete)
     ));
-
     assert!(matches!(
         coefficient_stage_v2(&directory).seal_lde_v2(),
         Err(QPcsSpoolErrorV2::ReplayIncomplete)
     ));
-
     let mut bad_context = coefficient_stage_v2(&directory);
     bad_context.coefficient_context_digest = [0x99; 32];
     let mut reader = bad_context.begin_next_coefficient_row_v2().unwrap();
@@ -208,7 +192,6 @@ fn coefficient_replay_phase_order_error_and_unwind_are_fail_closed() {
         reader.read_next_block_v2(),
         Err(QPcsSpoolErrorV2::Poisoned)
     ));
-
     let mut reader = coefficient_stage_v2(&directory)
         .begin_next_coefficient_row_v2()
         .unwrap();
@@ -221,7 +204,6 @@ fn coefficient_replay_phase_order_error_and_unwind_are_fail_closed() {
         Err(QPcsSpoolErrorV2::Poisoned)
     ));
 }
-
 #[cfg(unix)]
 fn derived_snapshot_v2(
     role: StorageRoleV2,
@@ -266,11 +248,9 @@ fn derived_snapshot_v2(
     )
     .unwrap()
 }
-
 fn encoded_slot_v2(chunk: &AuthenticatedReplayChunkV2) -> u64 {
     u64::from_be_bytes(chunk.bytes_v2()[..8].try_into().unwrap())
 }
-
 #[cfg(unix)]
 #[test]
 fn transpose_and_fold_readers_derive_only_the_exact_next_coordinates() {
@@ -296,7 +276,6 @@ fn transpose_and_fold_readers_derive_only_the_exact_next_coordinates() {
         owner.begin_next_cq_transpose_window_v2(),
         Err(QPcsSpoolErrorV2::InvalidStoragePhase)
     ));
-
     let mut owner = derived_snapshot_v2(StorageRoleV2::FriLayer, 8, 2, 2);
     for expected in [[(0, 4), (2, 6)], [(1, 5), (3, 7)]] {
         let mut fold = owner.begin_next_fri_fold_column_v2().unwrap();
@@ -312,7 +291,6 @@ fn transpose_and_fold_readers_derive_only_the_exact_next_coordinates() {
         owner.begin_next_fri_fold_column_v2(),
         Err(QPcsSpoolErrorV2::InvalidStoragePhase)
     ));
-
     let mut fold = derived_snapshot_v2(StorageRoleV2::FriLayer, 2, 1, 2)
         .begin_next_fri_fold_column_v2()
         .unwrap();
@@ -322,7 +300,6 @@ fn transpose_and_fold_readers_derive_only_the_exact_next_coordinates() {
     assert_eq!(pair.values_per_half, 1);
     assert!(fold.complete_v2().is_ok());
 }
-
 #[test]
 fn authenticated_replay_chunks_zeroize_on_drop() {
     let before = REPLAY_CHUNK_ZEROIZED_DROPS_V2.load(Ordering::SeqCst);

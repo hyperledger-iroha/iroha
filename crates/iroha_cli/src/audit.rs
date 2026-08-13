@@ -9,7 +9,6 @@
     clippy::map_unwrap_or,
     clippy::cast_possible_truncation
 )]
-
 use clap::ArgAction;
 use eyre::Result;
 use fastpq_prover::{OperationKind, RowUsage, StateTransition, TransitionBatch, build_trace};
@@ -24,18 +23,15 @@ use std::{
     fs,
     path::Path,
 };
-
 use crate::{
     Run, RunContext,
     json_utils::{json_array, json_object, json_value},
 };
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Fetch current execution witness snapshot from Torii debug endpoints
     Witness(WitnessArgs),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -43,7 +39,6 @@ impl Run for Command {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct WitnessArgs {
     /// Fetch Norito-encoded binary instead of JSON
@@ -96,7 +91,6 @@ pub struct WitnessArgs {
     )]
     fastpq_parameter: String,
 }
-
 impl Run for WitnessArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -109,18 +103,15 @@ impl Run for WitnessArgs {
         Self::run_json(context, &client)
     }
 }
-
 #[derive(Clone)]
 struct FilterSpec {
     prefix: String,
     arg: Option<String>,
 }
-
 impl WitnessArgs {
     fn include_fastpq_batches(&self) -> bool {
         self.fastpq_batches && !self.no_fastpq_batches
     }
-
     fn run_decode<C: RunContext>(&self, context: &mut C, path: &Path) -> Result<()> {
         let witness = Self::load_exec_witness(path)?;
         let specs = self.filter_specs();
@@ -140,7 +131,6 @@ impl WitnessArgs {
         context.print_data(&payload)?;
         Ok(())
     }
-
     fn run_binary<C: RunContext>(&self, context: &mut C, client: &Client) -> Result<()> {
         let bytes = client.get_debug_witness_norito()?;
         if let Some(path) = &self.out {
@@ -151,19 +141,16 @@ impl WitnessArgs {
         }
         Ok(())
     }
-
     fn run_json<C: RunContext>(context: &mut C, client: &Client) -> Result<()> {
         let v = client.get_debug_witness_json()?;
         context.print_data(&v)?;
         Ok(())
     }
-
     fn load_exec_witness(path: &Path) -> Result<ExecWitness> {
         let bytes = fs::read(path)?;
         let mut slice: &[u8] = &bytes;
         norito::codec::Decode::decode(&mut slice).map_err(|e| eyre::eyre!("decode witness: {e}"))
     }
-
     fn collect_entries(
         entries: &[ExecKv],
         specs: &[FilterSpec],
@@ -182,7 +169,6 @@ impl WitnessArgs {
         }
         Ok(out)
     }
-
     fn collect_transcripts(
         transcripts: &[TransferTranscriptBundle],
     ) -> Result<Vec<norito::json::Value>> {
@@ -198,7 +184,6 @@ impl WitnessArgs {
         }
         Ok(out)
     }
-
     fn collect_fastpq_batches(&self, witness: &ExecWitness) -> Result<Vec<norito::json::Value>> {
         let batches = fastpq::batches_from_exec_witness(witness)?;
         if !self.fastpq_parameter.is_empty() {
@@ -214,7 +199,6 @@ impl WitnessArgs {
         }
         batches.iter().map(Self::transition_batch_to_json).collect()
     }
-
     fn transition_batch_to_json(batch: &TransitionBatch) -> Result<norito::json::Value> {
         let trace = build_trace(batch).map_err(|err| eyre::eyre!("build FASTPQ trace: {err}"))?;
         let transitions = batch
@@ -237,7 +221,6 @@ impl WitnessArgs {
         }
         json_object(fields)
     }
-
     fn metadata_json(metadata: &BTreeMap<String, Vec<u8>>) -> Result<norito::json::Value> {
         let entries = metadata
             .iter()
@@ -245,7 +228,6 @@ impl WitnessArgs {
             .collect::<Result<Vec<_>>>()?;
         json_object(entries)
     }
-
     fn transition_json(transition: &StateTransition) -> Result<norito::json::Value> {
         json_object(vec![
             ("key_hex", json_value(&Self::hex(&transition.key))?),
@@ -260,7 +242,6 @@ impl WitnessArgs {
             ("operation", Self::operation_json(&transition.operation)?),
         ])
     }
-
     fn public_inputs_json(inputs: &fastpq_prover::PublicInputs) -> Result<norito::json::Value> {
         json_object(vec![
             ("dsid_hex", json_value(&Self::hex(&inputs.dsid))?),
@@ -274,7 +255,6 @@ impl WitnessArgs {
             ),
         ])
     }
-
     fn operation_json(operation: &OperationKind) -> Result<norito::json::Value> {
         match operation {
             OperationKind::Transfer => json_object(vec![("kind", json_value("Transfer")?)]),
@@ -303,11 +283,9 @@ impl WitnessArgs {
             OperationKind::MetaSet => json_object(vec![("kind", json_value("MetaSet")?)]),
         }
     }
-
     fn hex(bytes: &[u8]) -> String {
         format!("0x{}", hex::encode(bytes))
     }
-
     fn decode_value_json(bytes: &[u8]) -> Result<norito::json::Value> {
         match String::from_utf8(bytes.to_vec()) {
             Ok(s) => {
@@ -320,7 +298,6 @@ impl WitnessArgs {
             Err(_) => json_object(vec![("raw_hex", json_value(&hex::encode(bytes))?)]),
         }
     }
-
     fn pretty_key_label(key: &[u8]) -> String {
         if key.is_empty() {
             return format!("hex:{}", hex::encode(key));
@@ -371,13 +348,11 @@ impl WitnessArgs {
             _ => format!("hex:{}", hex::encode(key)),
         }
     }
-
     fn filter_specs(&self) -> Vec<FilterSpec> {
         self.filter
             .as_ref()
             .map_or_else(Vec::new, |s| expand_filter_specs(s))
     }
-
     fn label_allowed(label: &str, specs: &[FilterSpec]) -> bool {
         if specs.is_empty() {
             return true;
@@ -407,7 +382,6 @@ impl WitnessArgs {
         })
     }
 }
-
 fn expand_prefixes(spec: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for raw in spec.split(',') {
@@ -451,7 +425,6 @@ fn expand_prefixes(spec: &str) -> Vec<String> {
     out.retain(|s| seen.insert(s.clone()));
     out
 }
-
 fn expand_filter_specs(spec: &str) -> Vec<FilterSpec> {
     let expanded = expand_prefixes(spec);
     let mut out: Vec<FilterSpec> = Vec::new();
@@ -478,7 +451,6 @@ fn expand_filter_specs(spec: &str) -> Vec<FilterSpec> {
     });
     out
 }
-
 fn glob_match(pattern: &str, text: &str) -> bool {
     let mut pi = 0usize;
     let mut ti = 0usize;
@@ -537,35 +509,29 @@ fn row_usage_json(usage: RowUsage) -> Result<norito::json::Value> {
         ("transfer_ratio", json_value(&round3(ratio))?),
     ])
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
-
     #[derive(Parser, Debug)]
     #[command(no_binary_name = true)]
     struct Wrapper {
         #[command(flatten)]
         args: WitnessArgs,
     }
-
     fn parse_args(args: &[&str]) -> WitnessArgs {
         Wrapper::parse_from(args).args
     }
-
     #[test]
     fn fastpq_batches_enabled_by_default() {
         let args = parse_args(&[]);
         assert!(args.include_fastpq_batches());
     }
-
     #[test]
     fn fastpq_batches_can_be_disabled() {
         let args = parse_args(&["--no-fastpq-batches"]);
         assert!(!args.include_fastpq_batches());
     }
-
     #[test]
     fn fastpq_batches_flag_reenables_output() {
         let args = parse_args(&["--no-fastpq-batches", "--fastpq-batches"]);

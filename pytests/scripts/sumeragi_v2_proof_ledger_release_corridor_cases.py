@@ -11,7 +11,7 @@ def test_release_inventory_constants_match_current_source_seal(
         "07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "4f91147622f605e1724fdab9a6c9bb674797b319d5225a0951a9ebe2894a2e45"
+        "52013220063971a7c26e12c9342958f855555b5183f3cf10e4bdae384277943a"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -279,9 +279,20 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     seed_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_seed_matrix.sh"
     ).read_text(encoding="utf-8")
-    release_source = (
+    release_parent_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
     ).read_text(encoding="utf-8")
+    release_support_source = (
+        ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates_support.sh"
+    ).read_text(encoding="utf-8")
+    release_support_loader = (
+        'source "${repo_root}/scripts/run_sumeragi_v2_release_gates_support.sh"'
+    )
+    assert release_parent_source.count(release_support_loader) == 1
+    release_source = release_parent_source.replace(
+        release_support_loader,
+        f"{release_support_loader}\n{release_support_source}",
+    )
     harness_source = (
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_harness.sh"
     ).read_text(encoding="utf-8")
@@ -292,7 +303,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "scripts/write_sumeragi_v2_release_receipt.py",
         "scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py",
         "scripts/write_sumeragi_v2_release_receipt_corridor_log.py",
-        "scripts/write_sumeragi_v2_release_receipt_publish_helpers.py",
+        "scripts/write_sumeragi_v2_release_receipt_gate_evidence.py",
+        "scripts/write_sumeragi_v2_release_receipt_publication.py",
     )
     taira_source = read_reviewed_source_bundle(
         "integration_tests/tests/taira_public_localnet.rs"
@@ -1879,6 +1891,9 @@ kura.claim_autonomous_lifecycle_process_generation(
     taira_run = release_source.index("run_taira_v2_24h_soak.sh")
     final_manifest = release_source.index("final_release_source_manifest_sha256")
     final_proof_check = release_source.index("final_proof_evidence_args=(")
+    final_proof_invocation = release_source.index(
+        '"${final_proof_evidence_args[@]}"', final_proof_check
+    )
     sealed_child_call = release_source.index(
         '"$release_child_bin/bash" '
         '"$sealed_repo_root/scripts/run_sumeragi_v2_release_gates.sh" --release'
@@ -1924,7 +1939,10 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert release_source.count("\n  run_release_formal_gate\n") == 1
     assert release_source.count("\n  run_release_scaling_gate\n") == 1
     assert seed_matrix < pr_branch < pr_fast_formal
-    final_proof_region = release_source[final_proof_check:aggregate_receipt]
+    final_proof_region = release_source[
+        final_proof_check : final_proof_invocation
+        + len('"${final_proof_evidence_args[@]}"')
+    ]
     assert "--release" in final_proof_region
     assert (
         '--evidence "${SUMERAGI_V2_FORMAL_EVIDENCE_DIR}/proof_evidence.json"'
@@ -1941,11 +1959,23 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert '"${final_proof_evidence_args[@]}"' in final_proof_region
     assert "/tmp/iroha-sumeragi-v2-release-host-" not in release_source
     assert "IROHA_RELEASE_AGGREGATE_RECEIPT_PATH_FILE" not in release_source
-    assert 'release_invocation_root="${release_bootstrap_evidence_dir}/release-runner"' in release_source
+    assert "release_invocation_base=/private/tmp" in release_source
+    assert "release_invocation_base=/tmp" in release_source
+    assert (
+        'tempfile.mkdtemp(prefix="iroha-sumeragi-v2-release.", dir=base)'
+        in release_source
+    )
+    assert (
+        '"$release_invocation_base" "$repo_root" '
+        '"$release_bootstrap_evidence_dir" \\\n'
+        '    "$inherited_cargo_cache_home"'
+        in release_source
+    )
+    assert 'readonly sealed_repo_root="${release_invocation_root}/source"' in release_source
     assert '--bootstrap-completion "$SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION"' in release_source
     assert '--expected-bootstrap-completion-sha256' in release_source
-    assert '--bootstrap-candidate-root "$IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT"' in release_source
-    assert '--bootstrap-runner "$IROHA_RELEASE_BOOTSTRAP_RUNNER"' in release_source
+    assert '--bootstrap-candidate-root "$repo_root"' in release_source
+    assert '--bootstrap-runner "$repo_root/scripts/run_sumeragi_v2_release_gates.sh"' in release_source
     assert 'mv -- "$release_receipt_partial"' not in release_source
     production_inventory_end = release_source.index("\n)", production_units)
     production_inventory = tuple(
@@ -2725,7 +2755,12 @@ kura.claim_autonomous_lifecycle_process_generation(
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
+        Path("scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py"),
+        Path("scripts/write_sumeragi_v2_release_receipt_corridor_log.py"),
+        Path("scripts/write_sumeragi_v2_release_receipt_gate_evidence.py"),
+        Path("scripts/write_sumeragi_v2_release_receipt_publication.py"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/bootstrap_sumeragi_v2_release_receipt_replay.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("formal/sumeragi_v2/README.md"),
         Path("formal/sumeragi_v2/PROOF.md"),
@@ -2744,7 +2779,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     )
     canonical_g4p_runner = g4p_runner_path.read_text(encoding="utf-8")
     g4p_argument = (
-        '  --g4p-completion "$multilane_four_peer_completion_path" \\\n'
+        '      --g4p-completion "$multilane_four_peer_completion_path" \\\n'
     )
     assert canonical_g4p_runner.count(g4p_argument) == 1
     baseline_errors = module._production_liveness_release_inventory_errors(
@@ -2759,10 +2794,64 @@ kura.claim_autonomous_lifecycle_process_generation(
         or "canonical module/test inventory SHA-256" in error
         for error in baseline_errors
     ), baseline_errors
+    for component_relative, expected_error in (
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt_gate_evidence.py"),
+            "release receipt component SHA-256 must equal",
+        ),
+        (
+            Path("scripts/bootstrap_sumeragi_v2_release_receipt_replay.py"),
+            "release bootstrap component SHA-256 must equal",
+        ),
+    ):
+        component_path = g4p_fidelity_root / component_relative
+        canonical_component = component_path.read_text(encoding="utf-8")
+        component_path.write_text(
+            canonical_component + "\n# source-binding mutation\n",
+            encoding="utf-8",
+        )
+        component_errors = module._production_liveness_release_inventory_errors(
+            g4p_fidelity_root
+        )
+        assert any(expected_error in error for error in component_errors), (
+            expected_error,
+            component_errors,
+        )
+        component_path.write_text(canonical_component, encoding="utf-8")
+
+    for parent_relative, manifest_name, component_name, expected_error in (
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            "_RELEASE_RECEIPT_COMPONENT_FILES",
+            "write_sumeragi_v2_release_receipt_publication.py",
+            "release receipt component manifest must equal",
+        ),
+        (
+            Path("scripts/bootstrap_sumeragi_v2_release.py"),
+            "_BOOTSTRAP_COMPONENT_FILES",
+            "bootstrap_sumeragi_v2_release_receipt_replay.py",
+            "release bootstrap component manifest must equal",
+        ),
+    ):
+        parent_path = g4p_fidelity_root / parent_relative
+        canonical_parent = parent_path.read_text(encoding="utf-8")
+        assert canonical_parent.count(f'    "{component_name}",') == 1
+        parent_path.write_text(
+            canonical_parent.replace(f'    "{component_name}",\n', "", 1),
+            encoding="utf-8",
+        )
+        manifest_errors = module._production_liveness_release_inventory_errors(
+            g4p_fidelity_root
+        )
+        assert any(expected_error in error for error in manifest_errors), (
+            manifest_name,
+            manifest_errors,
+        )
+        parent_path.write_text(canonical_parent, encoding="utf-8")
     g4p_runner_path.write_text(
         canonical_g4p_runner.replace(
             g4p_argument,
-            '  --g4p-completion "$nexus_cross_completion_path" \\\n',
+            '      --g4p-completion "$nexus_cross_completion_path" \\\n',
             1,
         ),
         encoding="utf-8",

@@ -13,7 +13,6 @@ async fn alias_lookup_by_account_unsigned_read_returns_only_public_aliases() {
     configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     bind_account_alias_for_test(&app, &authority, "merchant@restricted");
-
     let request = routing::AliasLookupByAccountRequestDto {
         account_id: authority.to_string(),
         dataspace: None,
@@ -32,7 +31,6 @@ async fn alias_lookup_by_account_unsigned_read_returns_only_public_aliases() {
     .await
     .expect("unsigned lookup should return only visible public aliases")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -43,7 +41,6 @@ async fn alias_lookup_by_account_unsigned_read_returns_only_public_aliases() {
     assert_eq!(dto.total, 1);
     assert_eq!(dto.items[0].alias, "merchant@universal");
 }
-
 #[tokio::test]
 async fn alias_lookup_by_account_rejects_unsigned_restricted_alias_lookup() {
     let authority = checked_torii_test_account_id(
@@ -58,7 +55,6 @@ async fn alias_lookup_by_account_rejects_unsigned_restricted_alias_lookup() {
     ));
     configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@restricted");
-
     let request = routing::AliasLookupByAccountRequestDto {
         account_id: authority.to_string(),
         dataspace: Some("restricted".to_owned()),
@@ -76,7 +72,6 @@ async fn alias_lookup_by_account_rejects_unsigned_restricted_alias_lookup() {
     )
     .await
     .expect_err("unsigned restricted alias lookup must fail closed");
-
     assert!(matches!(
         &error,
         Error::AppUnauthorized {
@@ -86,7 +81,6 @@ async fn alias_lookup_by_account_rejects_unsigned_restricted_alias_lookup() {
     ));
     assert_eq!(error.into_response().status(), StatusCode::UNAUTHORIZED);
 }
-
 #[tokio::test]
 async fn alias_lookup_by_account_rejects_invalid_auth_for_restricted_filter() {
     let authority = checked_torii_test_account_id(
@@ -100,7 +94,6 @@ async fn alias_lookup_by_account_rejects_invalid_auth_for_restricted_filter() {
         DataSpaceId::new(10),
     ));
     configure_private_ingress_routes_for_test(&mut app);
-
     let request = routing::AliasLookupByAccountRequestDto {
         account_id: authority.to_string(),
         dataspace: Some("restricted".to_owned()),
@@ -123,7 +116,6 @@ async fn alias_lookup_by_account_rejects_invalid_auth_for_restricted_filter() {
     )
     .await
     .expect_err("incomplete canonical authentication must fail closed");
-
     assert!(matches!(
         &error,
         Error::AppUnauthorized {
@@ -133,7 +125,6 @@ async fn alias_lookup_by_account_rejects_invalid_auth_for_restricted_filter() {
     ));
     assert_eq!(error.into_response().status(), StatusCode::UNAUTHORIZED);
 }
-
 #[tokio::test]
 async fn alias_lookup_by_account_explicit_restricted_filter_requires_exact_resolve_permission() {
     let caller_keypair = checked_torii_test_ed25519_keypair(
@@ -153,7 +144,6 @@ async fn alias_lookup_by_account_explicit_restricted_filter_requires_exact_resol
         ));
     configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &target, "merchant@restricted");
-
     let request = routing::AliasLookupByAccountRequestDto {
         account_id: target.to_string(),
         dataspace: Some("restricted".to_owned()),
@@ -175,10 +165,8 @@ async fn alias_lookup_by_account_explicit_restricted_filter_requires_exact_resol
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
-
 #[tokio::test]
 async fn account_alias_enumeration_rejects_signed_caller_without_exact_scope() {
     let caller_keypair = checked_torii_test_ed25519_keypair(
@@ -198,7 +186,6 @@ async fn account_alias_enumeration_rejects_signed_caller_without_exact_scope() {
     );
     let app = mk_app_state_for_tests_with_world(world);
     bind_account_alias_for_test(&app, &target, "merchant@universal");
-
     let method = Method::GET;
     let uri: axum::http::Uri = format!("/v1/accounts/{target}/aliases")
         .parse()
@@ -217,14 +204,12 @@ async fn account_alias_enumeration_rejects_signed_caller_without_exact_scope() {
         Err(error) => error,
         Ok(_) => panic!("caller without exact alias scope must not enumerate bindings"),
     };
-
     assert!(matches!(
         error,
         Error::Query(ValidationFail::NotPermitted(message))
             if message == "exact account-alias resolve permission is required"
     ));
 }
-
 #[tokio::test]
 async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant() {
     let caller_keypair = checked_torii_test_ed25519_keypair(
@@ -249,7 +234,6 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
     bind_account_alias_for_test(&app, &target, "merchant@restricted");
     bind_account_alias_for_test(&app, &target, "merchant@bank.restricted");
     grant_alias_resolve_dataspace_permission(&app, &caller, restricted_dataspace);
-
     let request = routing::AliasLookupByAccountRequestDto {
         account_id: target.to_string(),
         dataspace: None,
@@ -271,7 +255,6 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -281,7 +264,6 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
         norito::json::from_slice(&body).expect("json decode");
     assert_eq!(dto.total, 1);
     assert_eq!(dto.items[0].alias, "merchant@restricted");
-
     let domain_alias = AccountAlias::from_literal(
         "merchant@bank.restricted",
         &app.state.nexus_snapshot().dataspace_catalog,
@@ -313,7 +295,6 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
             .any(|item| item.alias == "merchant@bank.restricted")
     );
 }
-
 #[tokio::test]
 async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_has_no_reachable_aliases()
  {
@@ -339,7 +320,6 @@ async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_
     )
     .expect("foreign account alias");
     grant_alias_resolve_permissions(&app, &authority, &alias);
-
     let request = routing::AliasLookupByAccountRequestDto {
         account_id: authority.to_string(),
         dataspace: None,
@@ -361,7 +341,6 @@ async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_
     .await
     .expect("handler should return a routed response")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -388,7 +367,6 @@ async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_
     assert!(dto.items.is_empty());
     assert_eq!(dto.source.as_deref(), Some("fanout"));
 }
-
 #[tokio::test]
 async fn alias_resolve_rejects_account_label_without_authoritative_binding() {
     let alias = "banking@centralbank.universal";
@@ -448,7 +426,6 @@ async fn alias_resolve_rejects_account_label_without_authoritative_binding() {
         &alias_label,
         &body,
     );
-
     let response = handler_alias_resolve(
         State(app),
         axum::http::Method::POST,
@@ -460,10 +437,8 @@ async fn alias_resolve_rejects_account_label_without_authoritative_binding() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn alias_resolve_rejects_rekey_record_without_authoritative_binding() {
     let alias = "banking@centralbank.universal";
@@ -508,7 +483,6 @@ async fn alias_resolve_rejects_rekey_record_without_authoritative_binding() {
         &alias_label,
         &body,
     );
-
     let response = handler_alias_resolve(
         State(app),
         axum::http::Method::POST,
@@ -520,10 +494,8 @@ async fn alias_resolve_rejects_rekey_record_without_authoritative_binding() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn contract_alias_resolve_returns_not_found_for_unknown_alias() {
@@ -543,7 +515,6 @@ async fn contract_alias_resolve_returns_not_found_for_unknown_alias() {
         .parse()
         .expect("contract alias resolve URI");
     let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
-
     let response = handler_contract_alias_resolve(
         State(app),
         method,
@@ -555,10 +526,8 @@ async fn contract_alias_resolve_returns_not_found_for_unknown_alias() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn contract_alias_resolve_returns_bound_contract() {
@@ -588,7 +557,6 @@ async fn contract_alias_resolve_returns_bound_contract() {
         .parse()
         .expect("contract alias resolve URI");
     let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
-
     let response = handler_contract_alias_resolve(
         State(app),
         method,
@@ -600,7 +568,6 @@ async fn contract_alias_resolve_returns_bound_contract() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -638,7 +605,6 @@ async fn contract_alias_resolve_returns_bound_contract() {
     assert_eq!(dto.contract_alias_binding.status, "permanent");
     assert_eq!(dto.source, "world_state");
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn ram_lfe_program_policies_list_registered_program() {
@@ -650,7 +616,6 @@ async fn ram_lfe_program_policies_list_registered_program() {
     let (_policy, program_policy) =
         sample_programmed_identifier_policy(&authority, &signer, &policy_id);
     let mut app = mk_app_state_for_tests();
-
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
@@ -663,14 +628,12 @@ async fn ram_lfe_program_policies_list_registered_program() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
     tx.apply();
     block.commit().expect("commit block");
-
     let response = handler_ram_lfe_program_policies(
         State(app),
         HeaderMap::new(),
@@ -679,7 +642,6 @@ async fn ram_lfe_program_policies_list_registered_program() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -699,7 +661,6 @@ async fn ram_lfe_program_policies_list_registered_program() {
     assert_eq!(dto.items[0].input_encryption.as_deref(), Some("bfv-v1"));
     assert!(dto.items[0].ram_fhe_profile.is_some());
 }
-
 #[cfg(feature = "app_api")]
 #[test]
 fn encrypted_only_request_dtos_reject_plaintext_fields() {
@@ -713,7 +674,6 @@ fn encrypted_only_request_dtos_reject_plaintext_fields() {
             .contains("unknown field `input_hex`"),
         "unexpected RAM-LFE request error: {ram_lfe_err}"
     );
-
     let output_opening = String::from_utf8(
         norito::json::to_vec(&dummy_output_opening_for_access_test())
             .expect("encode dummy opening"),
@@ -730,7 +690,6 @@ fn encrypted_only_request_dtos_reject_plaintext_fields() {
         "unexpected identifier request error: {identifier_err}"
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn ram_lfe_execute_returns_receipt() {
@@ -742,7 +701,6 @@ async fn ram_lfe_execute_returns_receipt() {
     let (_policy, program_policy) =
         sample_programmed_identifier_policy(&authority, &signer, &policy_id);
     let mut app = mk_app_state_for_tests();
-
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
@@ -755,14 +713,12 @@ async fn ram_lfe_execute_returns_receipt() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
     tx.apply();
     block.commit().expect("commit block");
-
     let response = handler_ram_lfe_execute(
         State(app),
         HeaderMap::new(),
@@ -779,7 +735,6 @@ async fn ram_lfe_execute_returns_receipt() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -806,7 +761,6 @@ async fn ram_lfe_execute_returns_receipt() {
     assert_eq!(dto.receipt.attestation.kind, "signed");
     assert!(dto.receipt.attestation.signature.is_some());
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
@@ -818,7 +772,6 @@ async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
     let (_policy, program_policy) =
         sample_programmed_identifier_policy(&authority, &signer, &policy_id);
     let mut app = mk_app_state_for_tests();
-
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
@@ -831,14 +784,12 @@ async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
     tx.apply();
     block.commit().expect("commit block");
-
     let ciphertext = encrypted_identifier_ciphertext(
         &program_policy,
         b"receipt-verify-input",
@@ -850,7 +801,6 @@ async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
     let receipt = resolver
         .issue_execution_receipt(&program_policy, &draft)
         .expect("issue RAM-LFE receipt");
-
     let response = handler_ram_lfe_receipt_verify(
         State(app),
         HeaderMap::new(),
@@ -863,7 +813,6 @@ async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -878,7 +827,6 @@ async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
     assert_eq!(dto.output_hash_matches, Some(true));
     assert!(dto.error.is_none());
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
@@ -892,7 +840,6 @@ async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
     let (_policy, program_policy) =
         sample_programmed_identifier_policy(&authority, &signer, &policy_id);
     let mut app = mk_app_state_for_tests();
-
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
@@ -905,14 +852,12 @@ async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
     tx.apply();
     block.commit().expect("commit block");
-
     let ciphertext = encrypted_identifier_ciphertext(
         &program_policy,
         b"receipt-verify-input",
@@ -926,7 +871,6 @@ async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
         .expect("issue RAM-LFE receipt");
     receipt.payload.executed_at_ms = 1;
     receipt.payload.expires_at_ms = Some(2);
-
     let response = handler_ram_lfe_receipt_verify(
         State(app),
         HeaderMap::new(),
@@ -939,7 +883,6 @@ async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -955,7 +898,6 @@ async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
             .contains("is expired")
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_policies_lists_registered_policy() {
@@ -970,7 +912,6 @@ async fn identifier_policies_lists_registered_policy() {
         .build(&authority);
     let world = World::with([domain], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-
     let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x11,
@@ -989,20 +930,17 @@ async fn identifier_policies_lists_registered_policy() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
     tx.apply();
     block.commit().expect("commit block");
-
     let response =
         handler_identifier_policies(State(app), HeaderMap::new(), crate::loopback_connect_info())
             .await
             .expect("handler should succeed")
             .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -1025,7 +963,6 @@ async fn identifier_policies_lists_registered_policy() {
     );
     assert!(dto.items[0].ram_fhe_profile.is_none());
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_policies_expose_programmed_ram_fhe_profile() {
@@ -1042,7 +979,6 @@ async fn identifier_policies_expose_programmed_ram_fhe_profile() {
         .build(&authority);
     let world = World::with([domain], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-
     let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x13,
@@ -1062,20 +998,17 @@ async fn identifier_policies_expose_programmed_ram_fhe_profile() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
     tx.apply();
     block.commit().expect("commit block");
-
     let response =
         handler_identifier_policies(State(app), HeaderMap::new(), crate::loopback_connect_info())
             .await
             .expect("handler should succeed")
             .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -1098,7 +1031,6 @@ async fn identifier_policies_expose_programmed_ram_fhe_profile() {
         iroha_crypto::BfvRamEncryptedInputMode::EncryptedEnvelopeV1
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_policies_enforce_token_policy() {
@@ -1110,7 +1042,6 @@ async fn identifier_policies_enforce_token_policy() {
         tokens.insert("token-identifier".to_owned());
         state.api_tokens_set = Arc::new(tokens);
     }
-
     let missing = handler_identifier_policies(
         State(app.clone()),
         HeaderMap::new(),
@@ -1121,7 +1052,6 @@ async fn identifier_policies_enforce_token_policy() {
         missing,
         Err(Error::Query(ValidationFail::NotPermitted(_)))
     ));
-
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("token-identifier"));
     let response = handler_identifier_policies(State(app), headers, crate::loopback_connect_info())
@@ -1130,7 +1060,6 @@ async fn identifier_policies_enforce_token_policy() {
         .into_response();
     assert_eq!(response.status(), StatusCode::OK);
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_resolve_returns_bound_account() {
@@ -1146,7 +1075,6 @@ async fn identifier_resolve_returns_bound_account() {
         .build(&authority);
     let world = World::with([domain], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-
     let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x15,
@@ -1166,7 +1094,6 @@ async fn identifier_resolve_returns_bound_account() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-
     let encrypted_input = encrypted_identifier_ciphertext(
         &program_policy,
         b"+15551234567",
@@ -1184,7 +1111,6 @@ async fn identifier_resolve_returns_bound_account() {
             output_opening.clone(),
         )
         .expect("derive opaque id");
-
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
         .expect("claim receipt");
@@ -1207,7 +1133,6 @@ async fn identifier_resolve_returns_bound_account() {
     .expect("claim identifier");
     tx.apply();
     block.commit().expect("commit block");
-
     let response = handler_identifier_resolve(
         State(app),
         HeaderMap::new(),
@@ -1221,7 +1146,6 @@ async fn identifier_resolve_returns_bound_account() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -1250,7 +1174,6 @@ async fn identifier_resolve_returns_bound_account() {
     assert_eq!(dto.payload.uaid, uaid.to_string());
     assert_eq!(dto.payload.account_id, authority.to_string());
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
@@ -1266,7 +1189,6 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
         .build(&authority);
     let world = World::with([domain], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-
     let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x17,
@@ -1286,7 +1208,6 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-
     let encrypted_input = encrypted_identifier_ciphertext(
         &program_policy,
         b"+15551234567",
@@ -1304,7 +1225,6 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
             output_opening.clone(),
         )
         .expect("derive opaque id");
-
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
         .expect("claim receipt");
@@ -1327,7 +1247,6 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
     .expect("claim identifier");
     tx.apply();
     block.commit().expect("commit block");
-
     let response = handler_identifier_resolve(
         State(app),
         HeaderMap::new(),
@@ -1341,7 +1260,6 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -1356,7 +1274,6 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
     assert_eq!(dto.payload.account_id, authority.to_string());
     assert_eq!(dto.payload.execution.backend, "bfv-programmed-sha3-256-v1");
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_resolve_accepts_bfv_encrypted_input() {
@@ -1369,7 +1286,6 @@ async fn identifier_resolve_accepts_bfv_encrypted_input() {
         .build(&authority);
     let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-
     let policy_id: IdentifierPolicyId = "string#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x19,
@@ -1395,7 +1311,6 @@ async fn identifier_resolve_accepts_bfv_encrypted_input() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-
     let input = "ab";
     let encrypted_input_ciphertext = encrypt_identifier_from_seed(
         &public_parameters,
@@ -1441,7 +1356,6 @@ async fn identifier_resolve_accepts_bfv_encrypted_input() {
     .expect("claim identifier");
     tx.apply();
     block.commit().expect("commit block");
-
     let response = handler_identifier_resolve(
         State(app),
         HeaderMap::new(),
@@ -1455,7 +1369,6 @@ async fn identifier_resolve_accepts_bfv_encrypted_input() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -1471,7 +1384,6 @@ async fn identifier_resolve_accepts_bfv_encrypted_input() {
     assert_eq!(dto.payload.opaque_id, draft.opaque_id.to_string());
     assert_eq!(dto.payload.receipt_hash, draft.receipt_hash.to_string());
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
@@ -1486,7 +1398,6 @@ async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
         [],
     );
     let mut app = mk_app_state_for_tests_with_world(world);
-
     let policy_id: IdentifierPolicyId = "string#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x1b,
@@ -1512,7 +1423,6 @@ async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-
     {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = app.state.block(header);
@@ -1526,7 +1436,6 @@ async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
         tx.apply();
         block.commit().expect("commit block");
     }
-
     let mut malformed = norito::to_bytes(
         &encrypt_identifier_from_seed(
             &public_parameters,
@@ -1548,7 +1457,6 @@ async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
     malformed[23..31].copy_from_slice(&payload_len);
     malformed[31..39].copy_from_slice(&checksum);
     malformed.extend_from_slice(&payload);
-
     let err = handler_identifier_resolve(
         State(app),
         HeaderMap::new(),
@@ -1561,7 +1469,6 @@ async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
     )
     .await
     .expect_err("malformed ciphertext should be rejected");
-
     let message = match &err {
         Error::Query(ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
@@ -1573,7 +1480,6 @@ async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
         "unexpected conversion message: {message}"
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_resolve_enforces_token_policy() {
@@ -1585,7 +1491,6 @@ async fn identifier_resolve_enforces_token_policy() {
         tokens.insert("token-resolve".to_owned());
         state.api_tokens_set = Arc::new(tokens);
     }
-
     let missing = handler_identifier_resolve(
         State(app),
         HeaderMap::new(),
@@ -1602,7 +1507,6 @@ async fn identifier_resolve_enforces_token_policy() {
         Err(Error::Query(ValidationFail::NotPermitted(_)))
     ));
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_claim_receipt_normalizes_phone_input() {
@@ -1618,7 +1522,6 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
         .build(&authority);
     let world = World::with([domain], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-
     let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x1d,
@@ -1638,14 +1541,12 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
     tx.apply();
     block.commit().expect("commit block");
-
     let encrypted_input = encrypted_identifier_ciphertext(
         &program_policy,
         b"+15551234567",
@@ -1669,7 +1570,6 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -1690,7 +1590,6 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
     assert_eq!(dto.payload.uaid, uaid.to_string());
     assert_eq!(dto.payload.account_id, authority.to_string());
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_receipt_lookup_returns_persisted_claim() {
@@ -1705,7 +1604,6 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
         .build(&authority);
     let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-
     let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x1f,
@@ -1725,7 +1623,6 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-
     let encrypted_input = encrypted_identifier_ciphertext(
         &program_policy,
         b"+15551234567",
@@ -1759,7 +1656,6 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
     .expect("claim identifier");
     tx.apply();
     block.commit().expect("commit block");
-
     let response = handler_identifier_receipt_lookup(
         State(app),
         HeaderMap::new(),
@@ -1769,7 +1665,6 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -1783,7 +1678,6 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
     assert_eq!(dto.uaid, uaid.to_string());
     assert_eq!(dto.account_id, authority.to_string());
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn identifier_claim_receipt_enforces_token_policy() {
@@ -1795,7 +1689,6 @@ async fn identifier_claim_receipt_enforces_token_policy() {
         tokens.insert("token-claim".to_owned());
         state.api_tokens_set = Arc::new(tokens);
     }
-
     let missing = handler_identifier_claim_receipt(
         State(app),
         HeaderMap::new(),
@@ -1813,7 +1706,6 @@ async fn identifier_claim_receipt_enforces_token_policy() {
         Err(Error::Query(ValidationFail::NotPermitted(_)))
     ));
 }
-
 #[tokio::test]
 async fn asset_alias_resolve_returns_definition_fields() {
     let authority =
@@ -1836,7 +1728,6 @@ async fn asset_alias_resolve_returns_definition_fields() {
     let world = World::with([domain], [account], [definition]);
     let app = mk_app_state_for_tests_with_world(world);
     bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
-
     let response = handler_asset_alias_resolve(
         State(app),
         NoritoJson(routing::AssetAliasResolveRequestDto {
@@ -1846,7 +1737,6 @@ async fn asset_alias_resolve_returns_definition_fields() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -1870,7 +1760,6 @@ async fn asset_alias_resolve_returns_definition_fields() {
     assert_eq!(alias_binding.grace_until_ms, None);
     assert_eq!(dto.source.as_deref(), Some("world_state"));
 }
-
 #[tokio::test]
 async fn asset_alias_resolve_accepts_short_form_alias() {
     let authority = checked_torii_test_account_id(0x02, "derive short asset alias fixture key");
@@ -1892,7 +1781,6 @@ async fn asset_alias_resolve_accepts_short_form_alias() {
     let world = World::with([domain], [account], [definition]);
     let app = mk_app_state_for_tests_with_world(world);
     bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
-
     let response = handler_asset_alias_resolve(
         State(app),
         NoritoJson(routing::AssetAliasResolveRequestDto {
@@ -1902,7 +1790,6 @@ async fn asset_alias_resolve_accepts_short_form_alias() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -1924,7 +1811,6 @@ async fn asset_alias_resolve_accepts_short_form_alias() {
     assert_eq!(alias_binding.status, "permanent");
     assert_eq!(dto.source.as_deref(), Some("world_state"));
 }
-
 #[tokio::test]
 async fn asset_definition_get_returns_full_definition_by_base58_id() {
     let authority = checked_torii_test_account_id(0x03, "derive asset definition get fixture key");
@@ -1947,7 +1833,6 @@ async fn asset_definition_get_returns_full_definition_by_base58_id() {
     let world = World::with([domain], [account], [definition.clone()]);
     let app = mk_app_state_for_tests_with_world(world);
     bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
-
     let response = handler_asset_definition_get(
         State(app),
         HeaderMap::new(),
@@ -1957,7 +1842,6 @@ async fn asset_definition_get_returns_full_definition_by_base58_id() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -1984,7 +1868,6 @@ async fn asset_definition_get_returns_full_definition_by_base58_id() {
         Some("permanent")
     );
 }
-
 #[tokio::test]
 async fn asset_alias_resolve_returns_not_found_after_grace() {
     let authority = checked_torii_test_account_id(0x04, "derive expired asset alias fixture key");
@@ -2014,10 +1897,8 @@ async fn asset_alias_resolve_returns_not_found_after_grace() {
         1,
         1_000,
     );
-
     let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
     record_latest_committed_header_for_test(&app, 2, after_grace);
-
     let response = handler_asset_alias_resolve(
         State(app),
         NoritoJson(routing::AssetAliasResolveRequestDto {
@@ -2027,10 +1908,8 @@ async fn asset_alias_resolve_returns_not_found_after_grace() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn asset_definition_get_reports_expired_pending_cleanup_status_after_grace() {
     let authority =
@@ -2061,10 +1940,8 @@ async fn asset_definition_get_reports_expired_pending_cleanup_status_after_grace
         1,
         1_000,
     );
-
     let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
     record_latest_committed_header_for_test(&app, 2, after_grace);
-
     let response = handler_asset_definition_get(
         State(app),
         HeaderMap::new(),
@@ -2074,7 +1951,6 @@ async fn asset_definition_get_reports_expired_pending_cleanup_status_after_grace
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -2087,7 +1963,6 @@ async fn asset_definition_get_reports_expired_pending_cleanup_status_after_grace
     );
     assert_eq!(dto["alias"].as_str(), Some(alias.as_ref()));
 }
-
 #[tokio::test]
 async fn parse_asset_definition_id_rejects_alias_after_grace() {
     let authority =
@@ -2118,10 +1993,8 @@ async fn parse_asset_definition_id_rejects_alias_after_grace() {
         1,
         1_000,
     );
-
     let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
     record_latest_committed_header_for_test(&app, 2, after_grace);
-
     let error = parse_asset_definition_id(app.as_ref(), alias.as_ref())
         .expect_err("expired alias must stop resolving");
     assert!(matches!(
@@ -2131,7 +2004,6 @@ async fn parse_asset_definition_id_rejects_alias_after_grace() {
         ))
     ));
 }
-
 #[tokio::test]
 async fn parse_asset_definition_id_accepts_base58_and_alias_literals() {
     let authority = checked_torii_test_account_id(0x07, "derive parse asset alias fixture key");
@@ -2180,7 +2052,6 @@ async fn parse_asset_definition_id_accepts_base58_and_alias_literals() {
         2,
         0,
     );
-
     assert_eq!(
         parse_asset_definition_id(app.as_ref(), "cbdc#bankb.dataspace")
             .expect("long alias should resolve"),
@@ -2203,7 +2074,6 @@ async fn parse_asset_definition_id_accepts_base58_and_alias_literals() {
         prefixed_error,
         Error::Query(ValidationFail::TooComplex)
     ));
-
     let missing_error = parse_asset_definition_id(app.as_ref(), "cbdc#missing")
         .expect_err("unknown alias should be rejected");
     assert!(
@@ -2216,7 +2086,6 @@ async fn parse_asset_definition_id_accepts_base58_and_alias_literals() {
         "unexpected error: {missing_error:?}"
     );
 }
-
 #[tokio::test]
 async fn resolve_tx_history_allowed_asset_definition_id_accepts_base58_literal_without_local_definition()
  {
@@ -2235,14 +2104,12 @@ async fn resolve_tx_history_allowed_asset_definition_id_accepts_base58_literal_w
         allowed_asset_definition_id: Some(expected.to_string()),
         ..TxHistoryAccessPolicy::default()
     });
-
     assert_eq!(
         resolve_tx_history_allowed_asset_definition_id(app.as_ref())
             .expect("base58 selector should not require local definition"),
         Some(expected)
     );
 }
-
 #[tokio::test]
 async fn resolve_tx_history_allowed_asset_definition_id_keeps_alias_selectors_strict() {
     let authority =
@@ -2256,7 +2123,6 @@ async fn resolve_tx_history_allowed_asset_definition_id_keeps_alias_selectors_st
         allowed_asset_definition_id: Some("cbdc#missing".to_owned()),
         ..TxHistoryAccessPolicy::default()
     });
-
     let error = resolve_tx_history_allowed_asset_definition_id(app.as_ref())
         .expect_err("unknown alias selector must remain strict");
     assert!(matches!(
@@ -2266,7 +2132,6 @@ async fn resolve_tx_history_allowed_asset_definition_id_keeps_alias_selectors_st
         ))
     ));
 }
-
 #[tokio::test]
 async fn asset_alias_resolve_returns_not_found_for_unknown_alias() {
     let app = mk_app_state_for_tests();
@@ -2279,10 +2144,8 @@ async fn asset_alias_resolve_returns_not_found_for_unknown_alias() {
     .await
     .expect("handler should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn torii_norito_body_decodes_successful_responses() {
     let record = ProofRecord {
@@ -2303,33 +2166,27 @@ async fn torii_norito_body_decodes_successful_responses() {
         phase_bytes,
     )
     .expect("proof record decode budget should fit");
-
     let decoded =
         super::torii_norito_body::<ProofRecord>(response, "proof record response", &mut budget)
             .await
             .expect("norito body should decode");
-
     assert_eq!(decoded.value, record);
 }
-
 #[tokio::test]
 async fn resolve_torii_proof_record_for_routes_fanouts_matching_records() {
     let mut app = mk_app_state_for_tests();
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let id = seed_proof_record(&app, "debug-proof", [0xBC; 32]);
     let routes = super::torii_all_dataspace_routes(app.as_ref());
-
     let (record, diagnostics, routed_by, _reservation) =
         super::resolve_torii_proof_record_for_routes(&app, routes, id.clone())
             .await
             .expect("proof record fanout should resolve");
-
     assert_eq!(record.id.to_string(), id);
     assert_eq!(diagnostics.attempted_routes, 3);
     assert_eq!(diagnostics.succeeded_routes, 3);
     assert_eq!(routed_by, "local");
 }
-
 #[tokio::test]
 async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unavailable_when_missing()
  {
@@ -2341,7 +2198,6 @@ async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unav
         proof_hash: [0x44; 32],
     }
     .to_string();
-
     let response = match super::resolve_torii_proof_record_for_routes(
         &app,
         vec![foreign_route, local_route],
@@ -2352,7 +2208,6 @@ async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unav
         Ok(_) => panic!("missing proof record should return an error response"),
         Err(response) => response,
     };
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_ne!(
         response
@@ -2363,7 +2218,6 @@ async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unav
         "a definitive missing-proof response should outrank an unrelated unavailable route",
     );
 }
-
 #[tokio::test]
 async fn resolve_torii_proof_record_for_routes_returns_route_unavailable_when_only_unavailable() {
     let mut app = mk_app_state_for_tests();
@@ -2374,7 +2228,6 @@ async fn resolve_torii_proof_record_for_routes_returns_route_unavailable_when_on
         proof_hash: [0x55; 32],
     }
     .to_string();
-
     let response =
         match super::resolve_torii_proof_record_for_routes(&app, vec![foreign_route], missing_id)
             .await
@@ -2382,7 +2235,6 @@ async fn resolve_torii_proof_record_for_routes_returns_route_unavailable_when_on
             Ok(_) => panic!("offline authoritative route should be unavailable"),
             Err(response) => response,
         };
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         response
@@ -2392,12 +2244,10 @@ async fn resolve_torii_proof_record_for_routes_returns_route_unavailable_when_on
         Some("route_unavailable")
     );
 }
-
 #[tokio::test]
 async fn proof_record_get_advertises_cache_and_304() {
     let app = mk_app_state_for_tests();
     let id = seed_proof_record(&app, "debug-proof", [0xAB; 32]);
-
     let first = handler_proof_record_get(
         State(app.clone()),
         HeaderMap::new(),
@@ -2429,7 +2279,6 @@ async fn proof_record_get_advertises_cache_and_304() {
     assert!(!body.is_empty(), "first response includes body");
     let record = norito::decode_from_bytes::<ProofRecord>(&body).expect("proof record body");
     assert_eq!(record.id.to_string(), id);
-
     let mut conditional_headers = HeaderMap::new();
     conditional_headers.insert(axum::http::header::IF_NONE_MATCH, etag);
     let not_modified = handler_proof_record_get(
@@ -2448,13 +2297,11 @@ async fn proof_record_get_advertises_cache_and_304() {
         .to_bytes();
     assert!(empty.is_empty(), "304 responses have no body");
 }
-
 #[tokio::test]
 async fn proof_record_get_reports_fanout_headers_when_dataspaces_are_configured() {
     let mut app = mk_app_state_for_tests();
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let id = seed_proof_record(&app, "debug-proof", [0xCD; 32]);
-
     let response = handler_proof_record_get(
         State(app.clone()),
         HeaderMap::new(),
@@ -2464,7 +2311,6 @@ async fn proof_record_get_reports_fanout_headers_when_dataspaces_are_configured(
     .await
     .expect("proof record ok")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -2487,7 +2333,6 @@ async fn proof_record_get_reports_fanout_headers_when_dataspaces_are_configured(
             .and_then(|value| value.to_str().ok()),
         Some("3")
     );
-
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
         .unwrap()
@@ -2495,7 +2340,6 @@ async fn proof_record_get_reports_fanout_headers_when_dataspaces_are_configured(
     let record = norito::decode_from_bytes::<ProofRecord>(&body).expect("proof record body");
     assert_eq!(record.id.to_string(), id);
 }
-
 #[tokio::test]
 async fn proof_record_get_returns_not_found_when_all_routes_miss() {
     let mut app = mk_app_state_for_tests();
@@ -2505,7 +2349,6 @@ async fn proof_record_get_returns_not_found_when_all_routes_miss() {
         proof_hash: [0x73; 32],
     }
     .to_string();
-
     let response = handler_proof_record_get(
         State(app.clone()),
         HeaderMap::new(),
@@ -2515,7 +2358,6 @@ async fn proof_record_get_returns_not_found_when_all_routes_miss() {
     .await
     .expect("proof handler should return a response")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -2523,7 +2365,6 @@ async fn proof_record_get_returns_not_found_when_all_routes_miss() {
     let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).expect("error envelope payload");
     assert_eq!(envelope.code, "proof_record_not_found");
 }
-
 #[tokio::test]
 async fn proof_retention_status_reports_counts() {
     let mut app = mk_app_state_for_tests();
@@ -2569,7 +2410,6 @@ async fn proof_retention_status_reports_counts() {
             stx.world.proofs_mut_for_testing().insert(id.clone(), rec);
             id
         };
-
         let _ = insert_record([0xCC; 32], stale_height);
         let _ = insert_record([0xDD; 32], boundary_height);
         let _ = insert_record([0xEE; 32], fresh_height);
@@ -2589,7 +2429,6 @@ async fn proof_retention_status_reports_counts() {
         3,
         "expected three proof records in the fixture"
     );
-
     let response = handler_proof_retention_status(
         State(app.clone()),
         HeaderMap::new(),
@@ -2600,7 +2439,6 @@ async fn proof_retention_status_reports_counts() {
     .expect("retention status ok")
     .into_response();
     assert_eq!(response.status(), StatusCode::OK);
-
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
         .unwrap()
@@ -2624,7 +2462,6 @@ async fn proof_retention_status_reports_counts() {
     assert_eq!(backend.oldest_height, Some(stale_height));
     assert_eq!(backend.newest_height, Some(fresh_height));
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn axt_proof_cache_debug_reports_snapshot() {
@@ -2667,7 +2504,6 @@ async fn axt_proof_cache_debug_reports_snapshot() {
                 entries: policy_entries,
             });
     }
-
     let response = handler_axt_proof_cache_status(
         State(app.clone()),
         HeaderMap::new(),
@@ -2676,7 +2512,6 @@ async fn axt_proof_cache_debug_reports_snapshot() {
     .await
     .expect("handler ok")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await
@@ -2702,7 +2537,6 @@ async fn axt_proof_cache_debug_reports_snapshot() {
     assert_eq!(entry.verified_slot, 5);
     assert_eq!(entry.expiry_slot, Some(10));
 }
-
 #[test]
 fn axt_reject_query_response_carries_headers() {
     let ctx = AxtRejectContext {
@@ -2771,7 +2605,6 @@ fn axt_reject_query_response_carries_headers() {
     assert_eq!(axt.dataspace, Some(7));
     assert_eq!(axt.lane, Some(3));
 }
-
 #[tokio::test]
 async fn proof_get_egress_throttled_returns_retry_after() {
     let mut app = mk_app_state_for_tests();
@@ -2781,7 +2614,6 @@ async fn proof_get_egress_throttled_returns_retry_after() {
         state.proof_limits.retry_after = std::time::Duration::from_secs(2);
         state.proof_egress_limiter = limits::RateLimiter::new_u64(Some(1), Some(1));
     }
-
     let resp = handler_get_proof_by_backend_hash(
         State(app.clone()),
         HeaderMap::new(),
@@ -2790,7 +2622,6 @@ async fn proof_get_egress_throttled_returns_retry_after() {
     )
     .await
     .unwrap_or_else(Error::into_response);
-
     assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     let retry_after = resp
         .headers()
@@ -2799,7 +2630,6 @@ async fn proof_get_egress_throttled_returns_retry_after() {
         .unwrap_or_default();
     assert_eq!(retry_after, "2");
 }
-
 #[tokio::test]
 async fn proof_body_limit_rejects_oversize_body() {
     let mut app = mk_app_state_for_tests();
@@ -2809,7 +2639,6 @@ async fn proof_body_limit_rejects_oversize_body() {
     }
     let err = enforce_proof_body_limit(&app, 16, "v1/zk/verify-batch")
         .expect_err("oversized proof should be rejected");
-
     match err {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(msg),
@@ -2820,7 +2649,6 @@ async fn proof_body_limit_rejects_oversize_body() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[tokio::test]
 async fn proof_request_rate_limit_counts_requests_instead_of_body_chunks() {
     let mut app = mk_app_state_for_tests();
@@ -2828,7 +2656,6 @@ async fn proof_request_rate_limit_counts_requests_instead_of_body_chunks() {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.proof_rate_limiter = limits::RateLimiter::new(Some(2), Some(60));
     }
-
     // This was the first permanently unserviceable size under the former
     // 4-KiB chunk cost: floor(245_760 / 4_096) + 1 == 61 > burst 60.
     check_proof_access(
@@ -2842,7 +2669,6 @@ async fn proof_request_rate_limit_counts_requests_instead_of_body_chunks() {
     .await
     .expect("one maximum-size request must consume one request token");
 }
-
 #[tokio::test]
 async fn proof_request_rate_limit_admits_max_body_cost_and_throttles_repetition() {
     let mut app = mk_app_state_for_tests();
@@ -2855,7 +2681,6 @@ async fn proof_request_rate_limit_admits_max_body_cost_and_throttles_repetition(
     let max_body = app.proof_limits.max_body_bytes as usize;
     enforce_proof_body_limit(&app, max_body, "v1/zk/verify-batch")
         .expect("configured maximum body remains admissible");
-
     check_proof_access(
         &app,
         &headers,

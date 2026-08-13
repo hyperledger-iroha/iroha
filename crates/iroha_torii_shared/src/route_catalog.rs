@@ -3,13 +3,10 @@
 //! The catalog is deliberately independent of an HTTP framework. Torii uses it
 //! to decide which routes are mounted for a build, while documentation and
 //! client tooling consume explicit projections of the same descriptors.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 #[path = "route_catalog/path_shape.rs"]
 mod path_shape;
 use path_shape::normalized_route_shape;
-
 /// HTTP methods supported by the Torii route catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HttpMethod {
@@ -26,7 +23,6 @@ pub enum HttpMethod {
     /// Delete a resource.
     Delete,
 }
-
 impl HttpMethod {
     /// Return the canonical uppercase spelling of the method.
     #[must_use]
@@ -41,7 +37,6 @@ impl HttpMethod {
         }
     }
 }
-
 /// Security and audience boundary for a route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ApiSurface {
@@ -54,7 +49,6 @@ pub enum ApiSurface {
     /// Protocol-native endpoint whose listener is declared independently.
     Protocol,
 }
-
 /// Listener on which a route is eligible to be mounted.
 ///
 /// Torii currently exposes one HTTP listener. Audience and authentication are
@@ -66,7 +60,6 @@ pub enum Listener {
     /// The single configured Torii HTTP listener.
     Torii,
 }
-
 /// Authentication contract enforced by the route boundary.
 ///
 /// Most policies are middleware-backed. Protocol exchanges and explicitly
@@ -112,7 +105,6 @@ pub enum AuthenticationPolicy {
     /// Listener-wide controls can still restrict this route.
     Unauthenticated,
 }
-
 /// Deterministic effect class for one Torii route.
 /// The classification describes the strongest server-side effect reachable
 /// through the route. A handler which can both read and mutate is therefore a
@@ -129,7 +121,6 @@ pub enum RouteEffect {
     /// SSE, WebSocket, or another response which deliberately remains open.
     LongLivedStream,
 }
-
 /// Principal eligibility required before a route may perform its effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AdmissionPolicy {
@@ -148,7 +139,6 @@ pub enum AdmissionPolicy {
     /// effect is performed.
     TargetRoute,
 }
-
 /// Router path normalization accepted by a route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PathNormalization {
@@ -156,7 +146,6 @@ pub enum PathNormalization {
     /// duplicate-slash/case aliases.
     Strict,
 }
-
 /// How the router matches the path declared by a descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RouteMatch {
@@ -165,7 +154,6 @@ pub enum RouteMatch {
     /// Match a final `{*parameter}` wildcard segment.
     Wildcard,
 }
-
 /// Whether a path follows the canonical `/v1` grammar or is a reviewed exception.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PathPolicy {
@@ -177,7 +165,6 @@ pub enum PathPolicy {
         reason: &'static str,
     },
 }
-
 /// Feature/capability expression controlling whether a route is available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FeatureGate {
@@ -190,7 +177,6 @@ pub enum FeatureGate {
     /// The route requires at least one listed build feature or runtime capability.
     Any(&'static [&'static str]),
 }
-
 impl FeatureGate {
     /// Determine whether this expression is satisfied by `features`.
     #[must_use]
@@ -203,42 +189,35 @@ impl FeatureGate {
         }
     }
 }
-
 /// Features enabled for one catalog projection.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EnabledFeatures<'a> {
     names: &'a [&'a str],
 }
-
 impl<'a> EnabledFeatures<'a> {
     /// Construct a feature set from canonical Cargo feature names.
     #[must_use]
     pub const fn new(names: &'a [&'a str]) -> Self {
         Self { names }
     }
-
     /// Construct an empty feature set.
     #[must_use]
     pub const fn none() -> Self {
         Self { names: &[] }
     }
-
     /// Return whether `name` is enabled.
     #[must_use]
     pub fn contains(self, name: &str) -> bool {
         self.names.contains(&name)
     }
 }
-
 /// Explicit documentation and tooling exposure decisions for a route.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct RouteProjections(u8);
-
 impl RouteProjections {
     const OPENAPI_BIT: u8 = 1 << 0;
     const SDK_BIT: u8 = 1 << 1;
     const MCP_BIT: u8 = 1 << 2;
-
     /// Do not expose the route through a generated projection.
     pub const NONE: Self = Self(0);
     /// Expose the route in `OpenAPI` only.
@@ -251,32 +230,27 @@ impl RouteProjections {
     pub const OPENAPI_AND_SDK: Self = Self(Self::OPENAPI_BIT | Self::SDK_BIT);
     /// Expose the route in every generated projection.
     pub const ALL: Self = Self(Self::OPENAPI_BIT | Self::SDK_BIT | Self::MCP_BIT);
-
     /// Return whether the route belongs in the `OpenAPI` projection.
     #[must_use]
     pub const fn openapi(self) -> bool {
         self.0 & Self::OPENAPI_BIT != 0
     }
-
     /// Return whether the route belongs in the canonical SDK projection.
     #[must_use]
     pub const fn sdk(self) -> bool {
         self.0 & Self::SDK_BIT != 0
     }
-
     /// Return whether the route is explicitly allowlisted for MCP.
     #[must_use]
     pub const fn mcp(self) -> bool {
         self.0 & Self::MCP_BIT != 0
     }
-
     /// Combine two projection sets.
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 }
-
 /// A consumer-specific view of the canonical route catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CatalogProjection {
@@ -289,7 +263,6 @@ pub enum CatalogProjection {
     /// Enabled routes explicitly allowlisted for MCP.
     Mcp,
 }
-
 /// A framework-level route which is intentionally not an application
 /// operation in `OpenAPI`, SDK, or MCP projections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -300,7 +273,6 @@ pub enum ImplicitRouteKind {
     /// CORS middleware may terminate a preflight OPTIONS request before the application handler.
     CorsOptions,
 }
-
 /// Manifest entry for framework-generated HTTP behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImplicitRouteDescriptor {
@@ -308,27 +280,23 @@ pub struct ImplicitRouteDescriptor {
     path: &'static str,
     kind: ImplicitRouteKind,
 }
-
 impl ImplicitRouteDescriptor {
     /// Return the explicit route which authorizes this framework behavior.
     #[must_use]
     pub const fn parent_route_id(self) -> &'static str {
         self.parent_route_id
     }
-
     /// Return the exact path affected by the framework behavior.
     #[must_use]
     pub const fn path(self) -> &'static str {
         self.path
     }
-
     /// Return the framework behavior kind.
     #[must_use]
     pub const fn kind(self) -> ImplicitRouteKind {
         self.kind
     }
 }
-
 /// Static metadata describing one canonical Torii route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RouteDescriptor {
@@ -348,7 +316,6 @@ pub struct RouteDescriptor {
     implicit_head: bool,
     cors_options: bool,
 }
-
 impl RouteDescriptor {
     /// Construct a route with explicit effect and admission metadata.
     /// No effect or admission default exists: every descriptor must state both
@@ -381,160 +348,135 @@ impl RouteDescriptor {
             cors_options: false,
         }
     }
-
     /// Set the build-feature expression for the route.
     #[must_use]
     pub const fn with_feature_gate(mut self, feature_gate: FeatureGate) -> Self {
         self.feature_gate = feature_gate;
         self
     }
-
     /// Set the route-specific authentication policy.
     #[must_use]
     pub const fn with_authentication(mut self, authentication: AuthenticationPolicy) -> Self {
         self.authentication = authentication;
         self
     }
-
     /// Replace the explicitly declared effect with a more precise classification.
     #[must_use]
     pub const fn with_effect(mut self, effect: RouteEffect) -> Self {
         self.effect = effect;
         self
     }
-
     /// Replace the explicitly declared admission policy with a more precise classification.
     #[must_use]
     pub const fn with_admission(mut self, admission: AdmissionPolicy) -> Self {
         self.admission = admission;
         self
     }
-
     /// Set generated documentation and tooling projections.
     #[must_use]
     pub const fn with_projections(mut self, projections: RouteProjections) -> Self {
         self.projections = projections;
         self
     }
-
     /// Set the router match behavior.
     #[must_use]
     pub const fn with_route_match(mut self, route_match: RouteMatch) -> Self {
         self.route_match = route_match;
         self
     }
-
     /// Set the path grammar policy.
     #[must_use]
     pub const fn with_path_policy(mut self, path_policy: PathPolicy) -> Self {
         self.path_policy = path_policy;
         self
     }
-
     /// Declare whether GET may also generate framework-level HEAD behavior.
     #[must_use]
     pub const fn with_implicit_head(mut self, implicit_head: bool) -> Self {
         self.implicit_head = implicit_head;
         self
     }
-
     /// Declare whether CORS middleware may answer OPTIONS for this path.
     #[must_use]
     pub const fn with_cors_options(mut self, cors_options: bool) -> Self {
         self.cors_options = cors_options;
         self
     }
-
     /// Return the stable, low-cardinality telemetry and generation identifier.
     #[must_use]
     pub const fn stable_route_id(self) -> &'static str {
         self.stable_route_id
     }
-
     /// Return the HTTP method.
     #[must_use]
     pub const fn method(self) -> HttpMethod {
         self.method
     }
-
     /// Return the canonical router path.
     #[must_use]
     pub const fn path(self) -> &'static str {
         self.path
     }
-
     /// Return the security and audience surface.
     #[must_use]
     pub const fn surface(self) -> ApiSurface {
         self.surface
     }
-
     /// Return the listener on which the route is mounted.
     #[must_use]
     pub const fn listener(self) -> Listener {
         self.listener
     }
-
     /// Return the strongest server-side effect reachable through the route.
     #[must_use]
     pub const fn effect(self) -> RouteEffect {
         self.effect
     }
-
     /// Return the principal eligibility required before executing the route.
     #[must_use]
     pub const fn admission(self) -> AdmissionPolicy {
         self.admission
     }
-
     /// Return the route-specific authentication policy.
     #[must_use]
     pub const fn authentication(self) -> AuthenticationPolicy {
         self.authentication
     }
-
     /// Return the build-feature expression.
     #[must_use]
     pub const fn feature_gate(self) -> FeatureGate {
         self.feature_gate
     }
-
     /// Return the explicit generated projections.
     #[must_use]
     pub const fn projections(self) -> RouteProjections {
         self.projections
     }
-
     /// Return the router match behavior.
     #[must_use]
     pub const fn route_match(self) -> RouteMatch {
         self.route_match
     }
-
     /// Return the path grammar policy.
     #[must_use]
     pub const fn path_policy(self) -> PathPolicy {
         self.path_policy
     }
-
     /// Return the path normalization policy.
     #[must_use]
     pub const fn path_normalization(self) -> PathNormalization {
         self.path_normalization
     }
-
     /// Return whether framework-level HEAD behavior is declared.
     #[must_use]
     pub const fn implicit_head(self) -> bool {
         self.implicit_head
     }
-
     /// Return whether CORS middleware may answer OPTIONS.
     #[must_use]
     pub const fn cors_options(self) -> bool {
         self.cors_options
     }
-
     fn is_in_projection(
         self,
         projection: CatalogProjection,
@@ -552,26 +494,22 @@ impl RouteDescriptor {
         }
     }
 }
-
 /// Read-only view over a canonical set of route descriptors.
 #[derive(Debug, Clone, Copy)]
 pub struct RouteCatalog<'a> {
     routes: &'a [RouteDescriptor],
 }
-
 impl<'a> RouteCatalog<'a> {
     /// Construct a catalog over `routes`.
     #[must_use]
     pub const fn new(routes: &'a [RouteDescriptor]) -> Self {
         Self { routes }
     }
-
     /// Return every descriptor in declaration order.
     #[must_use]
     pub const fn routes(self) -> &'a [RouteDescriptor] {
         self.routes
     }
-
     /// Validate uniqueness, grammar, listener boundaries, and projection policy.
     /// All violations are returned in declaration order so CI can report a
     /// complete catalog failure in one run.
@@ -583,7 +521,6 @@ impl<'a> RouteCatalog<'a> {
     pub fn validate(self) -> Result<(), Vec<CatalogValidationError>> {
         validate_catalog(self.routes)
     }
-
     /// Materialize one consumer projection in declaration order.
     /// Mounted, `OpenAPI`, and MCP projections honor `features`. The SDK
     /// projection is the canonical feature-independent superset.
@@ -598,7 +535,6 @@ impl<'a> RouteCatalog<'a> {
             .filter(|route| route.is_in_projection(projection, features))
             .collect()
     }
-
     /// Materialize declared framework-level HEAD and CORS OPTIONS behavior.
     /// These entries remain separate from explicit application operations so
     /// projections never accidentally generate SDK or MCP methods for them.
@@ -629,7 +565,6 @@ impl<'a> RouteCatalog<'a> {
         routes
     }
 }
-
 /// One catalog validation failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CatalogValidationError {
@@ -638,7 +573,6 @@ pub struct CatalogValidationError {
     /// Machine-readable validation failure.
     pub kind: CatalogValidationErrorKind,
 }
-
 /// Machine-readable catalog validation failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatalogValidationErrorKind {
@@ -713,7 +647,6 @@ pub enum CatalogValidationErrorKind {
     /// Catch-all method routing cannot be projected into generated tooling.
     AnyMethodToolingProjection,
 }
-
 /// Validate a complete route catalog.
 /// This function reports all detected violations rather than stopping at the
 /// first one. An empty slice is valid so feature-composed catalogs can be
@@ -732,10 +665,8 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
     let mut ids = BTreeSet::new();
     let mut method_paths = BTreeMap::new();
     let mut method_shapes = BTreeMap::new();
-
     for route in routes {
         let route_id = route.stable_route_id;
-
         if !valid_stable_route_id(route_id) {
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
@@ -766,14 +697,12 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::DuplicateMethodAndShape { existing_route_id },
             });
         }
-
         if let Err(reason) = validate_path(route) {
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
                 kind: CatalogValidationErrorKind::InvalidPath { reason },
             });
         }
-
         match route.feature_gate {
             FeatureGate::All(names) | FeatureGate::Any(names) if names.is_empty() => {
                 errors.push(CatalogValidationError {
@@ -794,7 +723,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 }
             }
         }
-
         if route.surface == ApiSurface::Diagnostic
             && (route.projections.sdk() || route.projections.mcp())
         {
@@ -803,7 +731,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::DiagnosticToolingProjection,
             });
         }
-
         if route.authentication == AuthenticationPolicy::ProtocolHandshake
             && route.projections.mcp()
         {
@@ -812,7 +739,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::ProtocolHandshakeMcpProjection,
             });
         }
-
         if route.surface == ApiSurface::Operator
             && !matches!(
                 route.authentication,
@@ -827,7 +753,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::OperatorSurfaceRequiresAuthentication,
             });
         }
-
         if route.authentication == AuthenticationPolicy::OperatorCredentialExchange
             && route.surface != ApiSurface::Operator
         {
@@ -836,7 +761,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::OperatorCredentialExchangeRequiresOperatorSurface,
             });
         }
-
         if route.admission == AdmissionPolicy::TargetRoute
             && route.authentication != AuthenticationPolicy::NestedRouteAuthentication
         {
@@ -854,7 +778,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::NestedAuthenticationRequiresProtocolTargetRoute,
             });
         }
-
         match (route.effect, route.admission) {
             (RouteEffect::Mutation, AdmissionPolicy::Public) => {
                 errors.push(CatalogValidationError {
@@ -876,14 +799,12 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
             }
             _ => {}
         }
-
         if route.surface == ApiSurface::Operator && route.admission != AdmissionPolicy::Operator {
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
                 kind: CatalogValidationErrorKind::OperatorSurfaceRequiresOperatorAdmission,
             });
         }
-
         if route.admission == AdmissionPolicy::AuthenticatedAccount
             && !matches!(
                 route.authentication,
@@ -899,7 +820,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::AuthenticatedAccountRequiresAuthentication,
             });
         }
-
         if route.admission == AdmissionPolicy::AuthenticatedProtocolPrincipal
             && route.authentication != AuthenticationPolicy::ProtocolHandshake
         {
@@ -908,7 +828,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::AuthenticatedProtocolPrincipalRequiresHandshake,
             });
         }
-
         if route.admission == AdmissionPolicy::ValidatorRosterMember
             && !matches!(
                 route.authentication,
@@ -922,7 +841,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::ValidatorAdmissionRequiresAuthentication,
             });
         }
-
         if route.admission == AdmissionPolicy::Operator
             && !matches!(
                 route.authentication,
@@ -938,7 +856,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::OperatorAdmissionRequiresAuthentication,
             });
         }
-
         if route.effect == RouteEffect::LongLivedStream {
             if !matches!(route.method, HttpMethod::Get | HttpMethod::Any) {
                 errors.push(CatalogValidationError {
@@ -956,7 +873,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 });
             }
         }
-
         if route.implicit_head && route.method != HttpMethod::Get {
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
@@ -968,7 +884,6 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::GetRequiresImplicitHead,
             });
         }
-
         if route.method == HttpMethod::Any {
             if route.surface != ApiSurface::Protocol {
                 errors.push(CatalogValidationError {
@@ -984,14 +899,12 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
             }
         }
     }
-
     if errors.is_empty() {
         Ok(())
     } else {
         Err(errors)
     }
 }
-
 fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
     let path = route.path;
     if !path.starts_with('/') {
@@ -1006,21 +919,18 @@ fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
     if path.contains(['?', '#', '%']) {
         return Err("path must not contain query, fragment, or percent-encoded text");
     }
-
     if let PathPolicy::ProtocolException { reason } = route.path_policy {
         if reason.trim().is_empty() {
             return Err("protocol exception must include a review rationale");
         }
         return validate_wildcard_shape(path, route.route_match);
     }
-
     let Some(remaining_path) = path.strip_prefix("/v1/") else {
         return Err("canonical path must begin with /v1/");
     };
     if remaining_path.is_empty() {
         return Err("canonical path must name a resource after /v1");
     }
-
     let segment_count = remaining_path.split('/').count();
     let mut parameters = BTreeSet::new();
     for (index, segment) in remaining_path.split('/').enumerate() {
@@ -1055,10 +965,8 @@ fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
             }
         }
     }
-
     validate_wildcard_shape(path, route.route_match)
 }
-
 fn validate_wildcard_shape(path: &str, route_match: RouteMatch) -> Result<(), &'static str> {
     let segment_count = path.split('/').count();
     let mut wildcard_count = 0;
@@ -1080,11 +988,9 @@ fn validate_wildcard_shape(path: &str, route_match: RouteMatch) -> Result<(), &'
         }
     }
 }
-
 fn valid_stable_route_id(value: &str) -> bool {
     !value.is_empty() && value.split('.').all(valid_snake_name)
 }
-
 fn valid_snake_name(value: &str) -> bool {
     let mut bytes = value.bytes();
     let Some(first) = bytes.next() else {
@@ -1093,7 +999,6 @@ fn valid_snake_name(value: &str) -> bool {
     if !first.is_ascii_lowercase() {
         return false;
     }
-
     let mut previous_underscore = false;
     for byte in bytes {
         if byte == b'_' {
@@ -1109,7 +1014,6 @@ fn valid_snake_name(value: &str) -> bool {
     }
     !previous_underscore
 }
-
 fn valid_kebab_segment(value: &str) -> bool {
     let mut bytes = value.bytes();
     let Some(first) = bytes.next() else {
@@ -1118,7 +1022,6 @@ fn valid_kebab_segment(value: &str) -> bool {
     if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
         return false;
     }
-
     let mut previous_hyphen = false;
     for byte in bytes {
         if byte == b'-' {
@@ -1134,7 +1037,6 @@ fn valid_kebab_segment(value: &str) -> bool {
     }
     !previous_hyphen
 }
-
 fn valid_feature_name(value: &str) -> bool {
     let mut bytes = value.bytes();
     let Some(first) = bytes.next() else {
@@ -1145,7 +1047,6 @@ fn valid_feature_name(value: &str) -> bool {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
         })
 }
-
 fn validate_feature_name(
     route_id: &'static str,
     feature: &'static str,
@@ -1158,14 +1059,12 @@ fn validate_feature_name(
         });
     }
 }
-
 /// Universal offline-wallet protocol route descriptors.
 pub mod offline {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         RouteDescriptor, RouteEffect, RouteProjections,
     };
-
     /// Fetch the node's universal offline-wallet interface capability.
     pub const READINESS_PATH: &str = "/v1/offline/readiness";
     /// Resolve proof-bearing active registration lineage for an authenticated account.
@@ -1176,7 +1075,6 @@ pub mod offline {
     pub const REDEEM_PATH: &str = "/v1/offline/redeem";
     /// Fetch one offline operation by its canonical operation ID.
     pub const OPERATION_PATH: &str = "/v1/offline/operations/{operation_id}";
-
     /// Descriptor for universal offline-wallet capability discovery.
     pub const READINESS: RouteDescriptor = RouteDescriptor::new(
         "offline.readiness",
@@ -1247,19 +1145,16 @@ pub mod offline {
     .with_projections(RouteProjections::ALL)
     .with_implicit_head(true)
     .with_cors_options(true);
-
     /// Canonical first-release offline API catalog.
     pub const ROUTES: &[RouteDescriptor] =
         &[READINESS, RECIPIENT_LINEAGE, TOP_UP, REDEEM, OPERATION];
 }
-
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
 pub mod aliases {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         RouteDescriptor, RouteEffect, RouteProjections,
     };
-
     const fn public_lookup(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             stable_route_id,
@@ -1274,7 +1169,6 @@ pub mod aliases {
         .with_projections(RouteProjections::ALL)
         .with_cors_options(true)
     }
-
     /// Resolve an account alias.
     pub const RESOLVE: RouteDescriptor = public_lookup("aliases.resolve", "/v1/aliases/resolve");
     /// Plan one atomic declarative alias setup transaction.
@@ -1311,7 +1205,6 @@ pub mod aliases {
     /// Resolve an asset alias.
     pub const ASSET_RESOLVE: RouteDescriptor =
         public_lookup("assets.alias.resolve", "/v1/assets/aliases/resolve");
-
     /// Alias routes registered when `app_api` is compiled.
     pub const ROUTES: &[RouteDescriptor] = &[
         SETUP_PLAN,
@@ -1325,19 +1218,16 @@ pub mod aliases {
         ASSET_RESOLVE,
     ];
 }
-
 /// Fee quoting and sponsor-program read descriptors.
 pub mod fees {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         RouteDescriptor, RouteEffect, RouteProjections,
     };
-
     /// Canonical fee quote path.
     pub const QUOTE_PATH: &str = "/v1/fees/quote";
     /// Canonical exact sponsor-program lookup path.
     pub const SPONSOR_PROGRAM_BY_ID_PATH: &str = "/v1/fee-sponsor-programs/by-id";
-
     const fn account_signed_post(
         stable_route_id: &'static str,
         path: &'static str,
@@ -1357,7 +1247,6 @@ pub mod fees {
         .with_projections(RouteProjections::ALL)
         .with_cors_options(true)
     }
-
     /// Quote the required signature-bound fee intent for one unsigned payload.
     pub const QUOTE: RouteDescriptor =
         account_signed_post("fees.quote", QUOTE_PATH, RouteEffect::ExpensiveCompute);
@@ -1367,18 +1256,15 @@ pub mod fees {
         SPONSOR_PROGRAM_BY_ID_PATH,
         RouteEffect::ReadOnly,
     );
-
     /// Canonical first-release fee API catalog.
     pub const ROUTES: &[RouteDescriptor] = &[QUOTE, SPONSOR_PROGRAM_BY_ID];
 }
-
 /// Operator `WebAuthn` credential-registration and login descriptors.
 pub mod operator_authentication {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, HttpMethod, Listener, RouteDescriptor,
         RouteEffect, RouteProjections,
     };
-
     const fn credential_exchange(
         stable_route_id: &'static str,
         path: &'static str,
@@ -1396,7 +1282,6 @@ pub mod operator_authentication {
         .with_projections(RouteProjections::OPENAPI)
         .with_cors_options(true)
     }
-
     /// Start operator `WebAuthn` credential registration.
     pub const REGISTRATION_OPTIONS: RouteDescriptor = credential_exchange(
         "operator.authentication.registration_options",
@@ -1417,7 +1302,6 @@ pub mod operator_authentication {
         "operator.authentication.login_verify",
         "/v1/operator/auth/login/verify",
     );
-
     /// Complete operator credential-exchange route family.
     pub const ROUTES: &[RouteDescriptor] = &[
         REGISTRATION_OPTIONS,
@@ -1426,14 +1310,12 @@ pub mod operator_authentication {
         LOGIN_VERIFY,
     ];
 }
-
 /// Core node information and operator configuration descriptors.
 pub mod core {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
-
     /// Node API/build information.
     pub const API_VERSION: RouteDescriptor = RouteDescriptor::new(
         "core.api_version",
@@ -1742,7 +1624,6 @@ pub mod core {
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true);
-
     /// Core information routes registered by `add_core_info_routes`.
     pub const INFO_ROUTES: &[RouteDescriptor] = &[
         API_VERSION,
@@ -1770,14 +1651,12 @@ pub mod core {
     /// Time routes registered by `add_time_routes`.
     pub const TIME_ROUTES: &[RouteDescriptor] = &[TIME_NOW, TIME_STATUS];
 }
-
 /// Diagnostic and self-description protocol exceptions.
 pub mod diagnostic {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
     };
-
     /// Root diagnostic status document.
     pub const STATUS: RouteDescriptor = RouteDescriptor::new(
         "diagnostic.status",
@@ -1890,14 +1769,12 @@ pub mod diagnostic {
         reason: "OpenAPI document discovery convention",
     })
     .with_implicit_head(true);
-
     /// Schema route registered by `add_schema_routes`.
     pub const SCHEMA_ROUTES: &[RouteDescriptor] = &[SCHEMA];
     /// `OpenAPI` routes registered by `add_openapi_routes`.
     pub const OPENAPI_ROUTES: &[RouteDescriptor] = &[OPENAPI_JSON, OPENAPI];
     /// Profiling route registered by `add_profiling_routes`.
     pub const PROFILE_ROUTES: &[RouteDescriptor] = &[PROFILE];
-
     /// Diagnostic and self-description routes registered by the builder.
     pub const ROUTES: &[RouteDescriptor] = &[
         STATUS,
@@ -1909,14 +1786,12 @@ pub mod diagnostic {
         OPENAPI,
     ];
 }
-
 /// Transaction, query, proof, and pipeline routes.
 pub mod pipeline {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         RouteDescriptor, RouteEffect, RouteProjections,
     };
-
     /// Submit one signed transaction.
     pub const TRANSACTION: RouteDescriptor = RouteDescriptor::new(
         "pipeline.transaction.submit",
@@ -2088,7 +1963,6 @@ pub mod pipeline {
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true);
-
     /// Pipeline routes currently registered through the authoritative builder.
     pub const ROUTES: &[RouteDescriptor] = &[
         TRANSACTION,
@@ -2106,14 +1980,12 @@ pub mod pipeline {
         POLICY,
     ];
 }
-
 /// ISO 20022 bridge submission, record, audit, and XML-view descriptors.
 pub mod iso20022 {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, HttpMethod, Listener, RouteDescriptor,
         RouteEffect, RouteProjections,
     };
-
     const fn public_post(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             stable_route_id,
@@ -2128,7 +2000,6 @@ pub mod iso20022 {
         .with_projections(RouteProjections::ALL)
         .with_cors_options(true)
     }
-
     const fn public_get(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             stable_route_id,
@@ -2144,7 +2015,6 @@ pub mod iso20022 {
         .with_implicit_head(true)
         .with_cors_options(true)
     }
-
     /// Submit a pacs.008 customer-credit-transfer message.
     pub const PACS008_SUBMIT: RouteDescriptor =
         public_post("iso20022.pacs008.submit", "/v1/iso20022/pacs008");
@@ -2203,7 +2073,6 @@ pub mod iso20022 {
         "iso20022.message.sese025",
         "/v1/iso20022/messages/{msg_id}/sese025",
     );
-
     /// Complete first-release ISO 20022 route family.
     pub const ROUTES: &[RouteDescriptor] = &[
         PACS008_SUBMIT,
@@ -2224,14 +2093,12 @@ pub mod iso20022 {
         MESSAGE_SESE025,
     ];
 }
-
 /// Data-availability ingestion, proof-policy, commitment, and pin descriptors.
 pub mod data_availability {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         RouteDescriptor, RouteEffect, RouteProjections,
     };
-
     const fn public_post(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             stable_route_id,
@@ -2245,7 +2112,6 @@ pub mod data_availability {
         .with_projections(RouteProjections::ALL)
         .with_cors_options(true)
     }
-
     const fn public_get(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             stable_route_id,
@@ -2260,7 +2126,6 @@ pub mod data_availability {
         .with_implicit_head(true)
         .with_cors_options(true)
     }
-
     /// Ingest a data-availability blob and routing manifest.
     pub const INGEST: RouteDescriptor = public_post("data_availability.ingest", "/v1/da/ingest")
         .with_feature_gate(FeatureGate::Feature("app_api"))
@@ -2321,7 +2186,6 @@ pub mod data_availability {
     .with_effect(RouteEffect::ExpensiveCompute)
     .with_admission(AdmissionPolicy::AuthenticatedAccount)
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
-
     /// Complete data-availability route family.
     pub const ROUTES: &[RouteDescriptor] = &[
         INGEST,
@@ -2336,18 +2200,15 @@ pub mod data_availability {
         PIN_INTENTS_VERIFY,
     ];
 }
-
 /// First-release Musubi typed-query and unsigned-instruction descriptors.
 #[path = "route_catalog/musubi.rs"]
 pub mod musubi;
-
 /// Protocol-native event and peer transports.
 pub mod streaming {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
-
     /// Peer-to-peer WebSocket upgrade endpoint.
     pub const P2P: RouteDescriptor = RouteDescriptor::new(
         "protocol.p2p_websocket",
@@ -2432,27 +2293,22 @@ pub mod streaming {
         reason: "WebSocket transport endpoint",
     })
     .with_implicit_head(true);
-
     /// Application streaming routes registered when `app_api` is compiled.
     pub const APP_ROUTES: &[RouteDescriptor] =
         &[EVENTS_SSE, CONTRACT_EVENTS_SSE, SUBSCRIPTION_WS, BLOCKS_WS];
 }
-
 /// Native MCP transport routes.
 #[path = "route_catalog/mcp_transport.rs"]
 pub mod mcp_transport;
-
 /// Iroha Connect pairing and relay routes.
 #[path = "route_catalog/connect.rs"]
 pub mod connect;
-
 /// Telemetry-gated operator diagnostics, privacy ingestion, and asset-holder routes.
 pub mod telemetry {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         RouteDescriptor, RouteEffect, RouteProjections,
     };
-
     const fn telemetry_operator_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2468,7 +2324,6 @@ pub mod telemetry {
         .with_projections(RouteProjections::ALL)
         .with_implicit_head(true)
     }
-
     const fn telemetry_collector_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2484,7 +2339,6 @@ pub mod telemetry {
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
         .with_cors_options(true)
     }
-
     const fn app_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2500,7 +2354,6 @@ pub mod telemetry {
         .with_implicit_head(true)
         .with_cors_options(true)
     }
-
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2516,7 +2369,6 @@ pub mod telemetry {
         .with_projections(RouteProjections::ALL)
         .with_cors_options(true)
     }
-
     /// Read pacemaker status.
     pub const PACEMAKER: RouteDescriptor =
         telemetry_operator_get("operator.sumeragi.pacemaker", "/v1/sumeragi/pacemaker");
@@ -2545,7 +2397,6 @@ pub mod telemetry {
         "asset.holder.query",
         "/v1/assets/{definition_id}/holders/query",
     );
-
     /// Complete route family registered by `add_telemetry_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
         PACEMAKER,
@@ -2558,14 +2409,12 @@ pub mod telemetry {
         ASSET_HOLDERS_QUERY,
     ];
 }
-
 /// Consensus evidence, SCCP, VRF, finality, and Sumeragi introspection routes.
 pub mod sumeragi {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
-
     const fn public_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2580,11 +2429,9 @@ pub mod sumeragi {
         .with_implicit_head(true)
         .with_cors_options(true)
     }
-
     const fn public_sccp_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         public_get(id, path).with_projections(RouteProjections::OPENAPI_AND_SDK)
     }
-
     const fn operator_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2600,11 +2447,9 @@ pub mod sumeragi {
         .with_implicit_head(true)
         .with_cors_options(true)
     }
-
     const fn telemetry_operator_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         operator_get(id, path).with_feature_gate(FeatureGate::Feature("telemetry"))
     }
-
     const fn telemetry_sse(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2623,7 +2468,6 @@ pub mod sumeragi {
         })
         .with_implicit_head(true)
     }
-
     /// Count persisted consensus evidence records as an authenticated operator.
     pub const EVIDENCE_COUNT: RouteDescriptor =
         operator_get("sumeragi.evidence.count", "/v1/sumeragi/evidence/count");
@@ -2662,7 +2506,6 @@ pub mod sumeragi {
     /// Read one persisted VRF epoch snapshot as an authenticated operator.
     pub const VRF_EPOCH: RouteDescriptor =
         operator_get("sumeragi.vrf.epoch.read", "/v1/sumeragi/vrf/epoch/{epoch}");
-
     /// Read the authoritative Sumeragi status snapshot as an authenticated operator.
     pub const STATUS: RouteDescriptor =
         telemetry_operator_get("sumeragi.status.read", "/v1/sumeragi/status");
@@ -2727,7 +2570,6 @@ pub mod sumeragi {
         "sumeragi.commit_qc.read",
         "/v1/sumeragi/commit-qcs/{block_hash}",
     );
-
     /// Complete route family registered by `add_sumeragi_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
         EVIDENCE_COUNT,
@@ -2760,14 +2602,12 @@ pub mod sumeragi {
         COMMIT_QC,
     ];
 }
-
 /// Runtime, zero-knowledge, node-projection, and governance routes.
 pub mod runtime_governance {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
-
     const fn public_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2782,7 +2622,6 @@ pub mod runtime_governance {
         .with_implicit_head(true)
         .with_cors_options(true)
     }
-
     const fn public_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2796,17 +2635,13 @@ pub mod runtime_governance {
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
         .with_cors_options(true)
     }
-
     const fn app_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         public_get(id, path).with_feature_gate(FeatureGate::Feature("app_api"))
     }
-
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         public_post(id, path).with_feature_gate(FeatureGate::Feature("app_api"))
     }
-
     include!("route_catalog/runtime_governance_helpers.rs");
-
     const fn operator_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2821,7 +2656,6 @@ pub mod runtime_governance {
         .with_projections(RouteProjections::OPENAPI)
         .with_implicit_head(true)
     }
-
     const fn operator_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -2835,15 +2669,12 @@ pub mod runtime_governance {
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_projections(RouteProjections::OPENAPI)
     }
-
     const fn app_operator_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         operator_get(id, path).with_feature_gate(FeatureGate::Feature("app_api"))
     }
-
     const fn app_operator_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         operator_post(id, path).with_feature_gate(FeatureGate::Feature("app_api"))
     }
-
     /// Read registered zero-knowledge roots.
     pub const ZK_ROOTS: RouteDescriptor = account_compute_post("zk.roots.read", "/v1/zk/roots");
     /// Build a zero-knowledge Merkle path.
@@ -2890,7 +2721,6 @@ pub mod runtime_governance {
     /// Count filtered zero-knowledge attachments.
     pub const ZK_ATTACHMENTS_COUNT: RouteDescriptor =
         app_signed_get("zk.attachment.count", "/v1/zk/attachments/count");
-
     /// Read the active runtime ABI version.
     pub const RUNTIME_ABI_ACTIVE: RouteDescriptor =
         signed_get("runtime.abi.active", "/v1/runtime/abi/active");
@@ -2965,7 +2795,6 @@ pub mod runtime_governance {
         "operator.runtime.upgrade.cancel",
         "/v1/runtime/upgrades/cancel/{id}",
     );
-
     /// Draft a ministry agenda proposal for local signing.
     pub const MINISTRY_AGENDA_DRAFT: RouteDescriptor = app_signed_post(
         "ministry.agenda_proposal.draft",
@@ -3177,10 +3006,8 @@ pub mod runtime_governance {
         GOV_CITIZEN_STATUS,
     ];
 }
-
 #[path = "route_catalog/sorafs_pop.rs"]
 mod sorafs_pop;
-
 /// `SoraFS` discovery, storage, transparency, reputation, and gateway routes.
 pub mod sorafs {
     pub use super::sorafs_pop::{
@@ -3193,7 +3020,6 @@ pub mod sorafs {
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
     };
-
     const fn public_get(
         stable_route_id: &'static str,
         path: &'static str,
@@ -3213,7 +3039,6 @@ pub mod sorafs {
         .with_implicit_head(true)
         .with_cors_options(true)
     }
-
     const fn public_post(
         stable_route_id: &'static str,
         path: &'static str,
@@ -3232,15 +3057,12 @@ pub mod sorafs {
         .with_projections(projections)
         .with_cors_options(true)
     }
-
     const fn documented_get(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         public_get(stable_route_id, path, RouteProjections::OPENAPI_AND_SDK)
     }
-
     const fn documented_post(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         public_post(stable_route_id, path, RouteProjections::OPENAPI_AND_SDK)
     }
-
     const fn authenticated_documented_get(
         stable_route_id: &'static str,
         path: &'static str,
@@ -3249,7 +3071,6 @@ pub mod sorafs {
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
-
     const fn authenticated_documented_post(
         stable_route_id: &'static str,
         path: &'static str,
@@ -3259,9 +3080,7 @@ pub mod sorafs {
             .with_effect(RouteEffect::Mutation)
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
-
     include!("route_catalog/sorafs_route_helpers.rs");
-
     const fn stream_get(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             stable_route_id,
@@ -3277,7 +3096,6 @@ pub mod sorafs {
         .with_projections(RouteProjections::OPENAPI)
         .with_implicit_head(true)
     }
-
     const fn protocol_get(
         stable_route_id: &'static str,
         path: &'static str,
@@ -3299,7 +3117,6 @@ pub mod sorafs {
         .with_path_policy(PathPolicy::ProtocolException { reason })
         .with_implicit_head(true)
     }
-
     /// Read configured `SoraFS` publication peers.
     pub const STORAGE_PEERS: RouteDescriptor =
         documented_get("sorafs.storage_peer.list", "/v1/sorafs/storage/peers");
@@ -3358,7 +3175,6 @@ pub mod sorafs {
     /// Read a bounded finalized active-epoch hedge-intent page.
     pub const HEDGING_INTENTS: RouteDescriptor =
         authenticated_documented_get("sorafs.hedging_intent.list", "/v1/sorafs/hedging/intents");
-
     /// Read the local Governance DAG dashboard.
     pub const GOVERNANCE_DAG_DASHBOARD: RouteDescriptor = operator_local_get(
         "sorafs.governance_dag.dashboard",
@@ -3394,7 +3210,6 @@ pub mod sorafs {
         "sorafs.governance_dag.publish_kind",
         "/v1/sorafs/governance/dag/publish-index/kinds/{payload_kind}",
     );
-
     /// List published transparency cycles.
     pub const TRANSPARENCY_CYCLES: RouteDescriptor = documented_get(
         "sorafs.transparency_cycle.list",
@@ -3446,7 +3261,6 @@ pub mod sorafs {
         "sorafs.transparency_token.verify",
         "/v1/sorafs/transparency/tokens/verify",
     );
-
     /// List local appeal-finance reports.
     pub const APPEAL_FINANCE_REPORTS_GET: RouteDescriptor = documented_get(
         "sorafs.appeal_finance_report.list",
@@ -3472,7 +3286,6 @@ pub mod sorafs {
         "sorafs.appeal_finance_settlement_receipt.list",
         "/v1/sorafs/appeals/finance/settlement-receipts",
     );
-
     /// Read the Governance DAG CAR-publication queue.
     pub const GOVERNANCE_DAG_CAR_QUEUE: RouteDescriptor = operator_local_get(
         "sorafs.governance_dag.car_queue",
@@ -3523,7 +3336,6 @@ pub mod sorafs {
         "sorafs.governance_dag.runtime_kind",
         "/v1/sorafs/governance/dag/runtime/kinds/{payload_kind}",
     );
-
     /// Read the latest reputation snapshot.
     pub const REPUTATION_LATEST_GET: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_snapshot.latest",
@@ -3568,7 +3380,6 @@ pub mod sorafs {
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_implicit_head(true);
-
     /// Read the `SoraFS` pin registry.
     pub const PIN_REGISTRY: RouteDescriptor = documented_get("sorafs.pin.list", "/v1/sorafs/pin");
     /// Read one `SoraFS` pin manifest.
@@ -3683,7 +3494,6 @@ pub mod sorafs {
         RouteMatch::Wildcard,
         "content-addressed SoraFS gateway wildcard",
     );
-
     /// Complete route family registered by `add_sorafs_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
         STORAGE_PEERS,
@@ -3776,14 +3586,12 @@ pub mod sorafs {
         CID_PATH,
     ];
 }
-
 /// Application-facing resource, explorer, webhook, and protocol routes.
 pub mod application_api {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
     };
-
     const fn app_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -3799,7 +3607,6 @@ pub mod application_api {
         .with_implicit_head(true)
         .with_cors_options(true)
     }
-
     const fn internal_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -3814,7 +3621,6 @@ pub mod application_api {
         .with_projections(RouteProjections::NONE)
         .with_implicit_head(true)
     }
-
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -3829,23 +3635,18 @@ pub mod application_api {
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
         .with_cors_options(true)
     }
-
     const fn app_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path).with_projections(RouteProjections::SDK)
     }
-
     const fn app_sdk_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_post(id, path).with_projections(RouteProjections::SDK)
     }
-
     include!("route_catalog/authenticated_post_helpers.rs");
-
     const fn onboarding_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path)
             .with_authentication(AuthenticationPolicy::OnboardingToken)
             .with_admission(AdmissionPolicy::Operator)
     }
-
     const fn faucet_protocol_mutation_post(
         id: &'static str,
         path: &'static str,
@@ -3855,7 +3656,6 @@ pub mod application_api {
             .with_effect(RouteEffect::Mutation)
             .with_admission(AdmissionPolicy::AuthenticatedProtocolPrincipal)
     }
-
     const fn app_delete(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -3870,15 +3670,12 @@ pub mod application_api {
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
         .with_cors_options(true)
     }
-
     const fn app_wildcard_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_sdk_get(id, path).with_route_match(RouteMatch::Wildcard)
     }
-
     const fn app_wildcard_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         account_compute_sdk_post(id, path).with_route_match(RouteMatch::Wildcard)
     }
-
     const fn push_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_post(id, path)
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
@@ -3886,7 +3683,6 @@ pub mod application_api {
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
             .with_feature_gate(FeatureGate::All(&["app_api", "push"]))
     }
-
     const fn push_delete(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_delete(id, path)
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
@@ -3894,7 +3690,6 @@ pub mod application_api {
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
             .with_feature_gate(FeatureGate::All(&["app_api", "push"]))
     }
-
     const fn app_protocol_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -3913,15 +3708,12 @@ pub mod application_api {
         })
         .with_implicit_head(true)
     }
-
     const fn app_unprojected_protocol_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_protocol_get(id, path).with_projections(RouteProjections::NONE)
     }
-
     const fn telemetry_protocol_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_protocol_get(id, path).with_feature_gate(FeatureGate::All(&["app_api", "telemetry"]))
     }
-
     const fn telemetry_diagnostic_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -3935,23 +3727,19 @@ pub mod application_api {
         .with_feature_gate(FeatureGate::All(&["app_api", "telemetry"]))
         .with_implicit_head(true)
     }
-
     const fn telemetry_documented_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         telemetry_diagnostic_get(id, path).with_projections(RouteProjections::OPENAPI)
     }
-
     macro_rules! declare_routes {
         ($($name:ident => $factory:ident($id:literal, $path:literal);)+) => {
             $(
                 #[doc = concat!("Descriptor for `", $path, "`.")]
                 pub const $name: RouteDescriptor = $factory($id, $path);
             )+
-
             /// Complete application API route family.
             pub const ROUTES: &[RouteDescriptor] = &[$($name),+];
         };
     }
-
     declare_routes! {
         APP_API_BINDINGS_GET => app_sdk_get("application.app_api_bindings_get", "/v1/app-api/bindings");
         APP_API_CID_BY_CID_GET => app_sdk_get("application.app_api_cid_by_cid_get", "/v1/app-api/cid/{cid}");
@@ -4149,14 +3937,12 @@ pub mod application_api {
         WEBHOOKS_BY_ID_DELETE => operator_signed_delete("application.webhooks_by_id_delete", "/v1/webhooks/{id}");
     }
 }
-
 /// Contract execution, multisig, verification-key, and proof-service routes.
 pub mod contracts_and_verification_keys {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
-
     const fn app_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -4172,13 +3958,11 @@ pub mod contracts_and_verification_keys {
         .with_implicit_head(true)
         .with_cors_options(true)
     }
-
     const fn app_account_read_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path)
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
-
     const fn app_public_read_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -4193,21 +3977,17 @@ pub mod contracts_and_verification_keys {
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
         .with_cors_options(true)
     }
-
     const fn app_account_read_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_public_read_post(id, path)
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
-
     const fn app_account_compute_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_account_read_post(id, path).with_effect(RouteEffect::ExpensiveCompute)
     }
-
     const fn app_account_mutation_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_account_read_post(id, path).with_effect(RouteEffect::Mutation)
     }
-
     const fn app_signed_body_mutation_post(
         id: &'static str,
         path: &'static str,
@@ -4217,13 +3997,11 @@ pub mod contracts_and_verification_keys {
             .with_effect(RouteEffect::Mutation)
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
-
     const fn app_unprojected_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path)
             .with_authentication(AuthenticationPolicy::Unauthenticated)
             .with_projections(RouteProjections::NONE)
     }
-
     const fn app_unprojected_static_asset_get(
         id: &'static str,
         path: &'static str,
@@ -4232,33 +4010,27 @@ pub mod contracts_and_verification_keys {
             reason: "browser static asset filename requires a media-type extension",
         })
     }
-
     const fn app_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path).with_projections(RouteProjections::SDK)
     }
-
     const fn app_account_read_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_account_read_get(id, path).with_projections(RouteProjections::SDK)
     }
-
     const fn app_account_compute_sdk_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_account_compute_post(id, path).with_projections(RouteProjections::SDK)
     }
-
     const fn app_account_mutation_sdk_post(
         id: &'static str,
         path: &'static str,
     ) -> RouteDescriptor {
         app_account_mutation_post(id, path).with_projections(RouteProjections::SDK)
     }
-
     const fn app_signed_body_mutation_sdk_post(
         id: &'static str,
         path: &'static str,
     ) -> RouteDescriptor {
         app_signed_body_mutation_post(id, path).with_projections(RouteProjections::SDK)
     }
-
     const fn app_operator_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -4273,7 +4045,6 @@ pub mod contracts_and_verification_keys {
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI)
     }
-
     const fn app_protocol_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -4292,23 +4063,19 @@ pub mod contracts_and_verification_keys {
         })
         .with_implicit_head(true)
     }
-
     const fn app_unprojected_protocol_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_protocol_get(id, path).with_projections(RouteProjections::NONE)
     }
-
     macro_rules! declare_routes {
         ($($name:ident => $factory:ident($id:literal, $path:literal);)+) => {
             $(
                 #[doc = concat!("Descriptor for `", $path, "`.")]
                 pub const $name: RouteDescriptor = $factory($id, $path);
             )+
-
             /// Complete contract and verification-key route family.
             pub const ROUTES: &[RouteDescriptor] = &[$($name),+];
         };
     }
-
     declare_routes! {
         CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET => app_account_read_get("contracts.contracts_code_bytes_by_code_hash_get", "/v1/contracts/code-bytes/{code_hash}");
         CONTRACTS_ALIASES_POST => app_account_mutation_post("contracts.contracts_aliases_post", "/v1/contracts/aliases");
@@ -4459,14 +4226,12 @@ pub mod contracts_and_verification_keys {
         CONTRACTS_CODE_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_BY_JOB_ID_GET => app_account_read_sdk_get("contracts.contracts_code_by_code_hash_verified_source_jobs_by_job_id_get", "/v1/contracts/code/{code_hash}/verified-source-jobs/{job_id}");
     }
 }
-
 /// Protocol-native `SoraCloud` public gateway routes.
 pub mod soracloud_gateway {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteMatch,
     };
-
     /// Resolve a `SoraDNS` name to the root of its active public runtime.
     pub const SORADNS_ROOT: RouteDescriptor = RouteDescriptor::new(
         "protocol.soracloud.soradns_root",
@@ -4529,18 +4294,15 @@ pub mod soracloud_gateway {
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "public SoraCloud runtime gateway wildcard",
     });
-
     /// Canonical public-runtime gateway route set.
     pub const ROUTES: &[RouteDescriptor] = &[SORADNS_ROOT, SORADNS_PATH, LOCAL_ROOT, LOCAL_PATH];
 }
-
 /// Raw content and `SoraDNS` directory routes.
 pub mod content_directory {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
     };
-
     /// Read one path from a registered content bundle.
     pub const CONTENT: RouteDescriptor = RouteDescriptor::new(
         "protocol.content.read",
@@ -4585,11 +4347,9 @@ pub mod content_directory {
     .with_projections(RouteProjections::OPENAPI)
     .with_implicit_head(true)
     .with_cors_options(true);
-
     /// Canonical raw-content and directory route set.
     pub const ROUTES: &[RouteDescriptor] = &[CONTENT, SORADNS_LATEST, SORADNS_EVENTS];
 }
-
 /// Canonical descriptors enforced by Torii's mounted-route registry.
 /// Router assembly fails when any enabled descriptor is missing or when a
 /// registration does not match this catalog exactly.
@@ -4618,7 +4378,6 @@ const CATALOGED_ROUTE_FAMILIES: &[&[RouteDescriptor]] = &[
     content_directory::ROUTES,
     offline::ROUTES,
 ];
-
 const fn cataloged_route_count(families: &[&[RouteDescriptor]]) -> usize {
     let mut count = 0;
     let mut family_index = 0;
@@ -4628,9 +4387,7 @@ const fn cataloged_route_count(families: &[&[RouteDescriptor]]) -> usize {
     }
     count
 }
-
 const CATALOGED_ROUTE_COUNT: usize = cataloged_route_count(CATALOGED_ROUTE_FAMILIES);
-
 const fn flatten_cataloged_routes() -> [RouteDescriptor; CATALOGED_ROUTE_COUNT] {
     let mut routes = [aliases::SETUP_PLAN; CATALOGED_ROUTE_COUNT];
     let mut output_index = 0;
@@ -4647,14 +4404,11 @@ const fn flatten_cataloged_routes() -> [RouteDescriptor; CATALOGED_ROUTE_COUNT] 
     }
     routes
 }
-
 const CATALOGED_ROUTE_STORAGE: [RouteDescriptor; CATALOGED_ROUTE_COUNT] =
     flatten_cataloged_routes();
-
 /// Canonical descriptors enforced by Torii's mounted-route registry.
 ///
 /// Router assembly fails when any enabled descriptor is missing or when a
 /// registration does not match this catalog exactly.
 pub const CATALOGED_ROUTES: &[RouteDescriptor] = &CATALOGED_ROUTE_STORAGE;
-
 include!("route_catalog/tests.rs");

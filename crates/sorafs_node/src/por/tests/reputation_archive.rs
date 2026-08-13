@@ -1,5 +1,4 @@
 // PoR reputation work and authenticated replay-archive regressions.
-
 #[test]
 fn reputation_work_and_ack_checkpoint_roundtrip_byte_identically() {
     let source = PorTracker::default();
@@ -21,7 +20,6 @@ fn reputation_work_and_ack_checkpoint_roundtrip_byte_identically() {
     source
         .acknowledge_reputation_terminal(first.sequence, first.work_digest)
         .unwrap();
-
     let second_challenge = next_challenge(&first_challenge, 1);
     let second_proof = sample_proof(&second_challenge);
     source.record_challenge(&second_challenge).unwrap();
@@ -39,7 +37,6 @@ fn reputation_work_and_ack_checkpoint_roundtrip_byte_identically() {
         .reputation_work;
     let checkpoint = source.checkpoint();
     let canonical = norito::to_bytes(&checkpoint).expect("encode source checkpoint");
-
     let restored = PorTracker::default();
     restored
         .restore_checkpoint(checkpoint)
@@ -60,7 +57,6 @@ fn reputation_work_and_ack_checkpoint_roundtrip_byte_identically() {
     );
     assert_eq!(restored.pending_reputation_terminal_count(), 1);
 }
-
 #[test]
 fn tracker_refuses_bounded_status_history_exhaustion() {
     let tracker = PorTracker::with_entry_limit(1);
@@ -71,7 +67,6 @@ fn tracker_refuses_bounded_status_history_exhaustion() {
         tracker.record_challenge(&second),
         Err(PorTrackerError::PendingRetentionExhausted { limit: 1 })
     ));
-
     let proof = sample_proof(&first);
     tracker
         .record_proof(&proof, &sample_provider_key())
@@ -103,7 +98,6 @@ fn tracker_refuses_bounded_status_history_exhaustion() {
         "acknowledgement does not erase bounded historical status"
     );
 }
-
 #[test]
 fn status_generation_overflow_fails_before_each_lifecycle_mutation() {
     let challenge_tracker = PorTracker::default();
@@ -118,7 +112,6 @@ fn status_generation_overflow_fails_before_each_lifecycle_mutation() {
         Err(PorTrackerError::StatusGenerationExhausted)
     ));
     assert!(!challenge_tracker.contains_challenge(&challenge.challenge_id));
-
     let proof_tracker = PorTracker::default();
     proof_tracker.record_challenge(&challenge).unwrap();
     proof_tracker
@@ -132,7 +125,6 @@ fn status_generation_overflow_fails_before_each_lifecycle_mutation() {
         Err(PorTrackerError::StatusGenerationExhausted)
     ));
     assert_eq!(proof_tracker.proof_digest(&challenge.challenge_id), None);
-
     let verdict_tracker = PorTracker::default();
     verdict_tracker.record_challenge(&challenge).unwrap();
     verdict_tracker
@@ -158,7 +150,6 @@ fn status_generation_overflow_fails_before_each_lifecycle_mutation() {
             .is_none()
     );
 }
-
 #[test]
 fn tracker_checkpoint_preserves_pending_proofs_and_finalized_payloads() {
     let source = PorTracker::with_entry_limit(4);
@@ -181,7 +172,6 @@ fn tracker_checkpoint_preserves_pending_proofs_and_finalized_payloads() {
     source
         .record_proof(&pending_proof, &sample_provider_key())
         .unwrap();
-
     let checkpoint = source.checkpoint();
     let encoded = norito::to_bytes(&checkpoint).unwrap();
     let checkpoint = norito::decode_from_bytes(&encoded).unwrap();
@@ -204,7 +194,6 @@ fn tracker_checkpoint_preserves_pending_proofs_and_finalized_payloads() {
         )
         .unwrap();
 }
-
 #[test]
 fn tracker_projects_each_first_release_proof_lifecycle_stage() {
     let tracker = PorTracker::with_entry_limit(2);
@@ -216,7 +205,6 @@ fn tracker_projects_each_first_release_proof_lifecycle_stage() {
         PorChallengeOutcome::AwaitingProof
     );
     assert!(awaiting.statuses[0].proof_digest.is_none());
-
     let proof = sample_proof(&challenge);
     tracker
         .record_proof(&proof, &sample_provider_key())
@@ -230,7 +218,6 @@ fn tracker_projects_each_first_release_proof_lifecycle_stage() {
         submitted.statuses[0].proof_digest,
         Some(proof.proof_digest())
     );
-
     let restored = PorTracker::with_entry_limit(2);
     restored.restore_checkpoint(tracker.checkpoint()).unwrap();
     assert_eq!(
@@ -249,7 +236,6 @@ fn tracker_projects_each_first_release_proof_lifecycle_stage() {
         PorChallengeOutcome::Verified
     );
 }
-
 #[test]
 fn tracker_checkpoint_rejects_forged_finalized_verdict_signature() {
     let source = PorTracker::default();
@@ -264,7 +250,6 @@ fn tracker_checkpoint_rejects_forged_finalized_verdict_signature() {
             1,
         )
         .unwrap();
-
     let mut checkpoint = source.checkpoint();
     checkpoint.finalized[0].verdict.auditor_signatures[0].signature[0] ^= 1;
     let restored = PorTracker::default();
@@ -273,7 +258,6 @@ fn tracker_checkpoint_rejects_forged_finalized_verdict_signature() {
         Err(PorTrackerError::VerdictSignatureInvalid(_))
     ));
 }
-
 #[test]
 fn tracker_checkpoint_rejects_reputation_sequence_terminal_and_ack_tampering() {
     let source = PorTracker::default();
@@ -296,7 +280,6 @@ fn tracker_checkpoint_rejects_reputation_sequence_terminal_and_ack_tampering() {
         .acknowledge_reputation_terminal(work.sequence, work.work_digest)
         .unwrap();
     let checkpoint = source.checkpoint();
-
     for mutation in 0..3 {
         let mut tampered = checkpoint.clone();
         match mutation {
@@ -322,7 +305,6 @@ fn tracker_checkpoint_rejects_reputation_sequence_terminal_and_ack_tampering() {
         );
     }
 }
-
 #[test]
 fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts() {
     let tracker = PorTracker::with_entry_limit(1);
@@ -358,7 +340,6 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
         .acknowledge_reputation_terminal(work.sequence, work.work_digest)
         .unwrap();
     let before_compaction = tracker.checkpoint();
-
     assert_eq!(
         tracker
             .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
@@ -376,7 +357,6 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
         status_after_compaction.statuses[0].status,
         PorChallengeOutcome::Verified
     );
-
     // Simulate a crash after the external append but before the node
     // checkpoint. Restoring the old checkpoint must drive an exact append
     // replay, not create a second archive record.
@@ -395,7 +375,6 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
         norito::to_bytes(&tracker.checkpoint()).unwrap(),
         norito::to_bytes(&after_compaction).unwrap()
     );
-
     let restored = PorTracker::with_entry_limit(1);
     restored
         .restore_checkpoint(after_compaction.clone())
@@ -421,7 +400,6 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
         ),
         Err(PorTrackerError::ChallengeConflict)
     ));
-
     let replay = restored
         .record_verdict_with_archive_and_bounds(
             &verdict,
@@ -448,7 +426,6 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
         ),
         Err(PorTrackerError::VerdictConflict)
     ));
-
     assert!(matches!(
         restored.record_proof_with_archive_and_bounds(
             &proof,
@@ -458,7 +435,6 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
         ),
         Ok(PorProofRecordOutcomeV1::ExactReplay(_))
     ));
-
     let fresh = next_challenge(&challenge, 1);
     assert_eq!(
         restored
@@ -487,7 +463,6 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
             .collect::<Vec<_>>(),
         vec![fresh.challenge_id]
     );
-
     let archived_status = match restored
         .record_proof_with_archive_and_bounds(
             &proof,
@@ -505,7 +480,6 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
         .expect("archived replay produces a same-generation projection no-op");
     assert_eq!(replay_update.generation, fresh_update.generation);
     assert!(replay_update.removed_challenge_ids.is_empty());
-
     let mut conflicting_proof = proof.clone();
     conflicting_proof.samples[0].chunk_digest[0] ^= 1;
     resign_sample_proof(&mut conflicting_proof);
@@ -518,7 +492,6 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
         ),
         Err(PorTrackerError::DuplicateProof)
     ));
-
     let mut tampered_acknowledgement = after_compaction.clone();
     tampered_acknowledgement
         .acknowledged_reputation_terminal
@@ -529,7 +502,6 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
         PorTracker::with_entry_limit(1).restore_checkpoint(tampered_acknowledgement),
         Err(PorTrackerError::InvalidCheckpoint(_))
     ));
-
     let mut tampered = after_compaction;
     tampered
         .replay_archive_receipt
@@ -541,7 +513,6 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
         Err(PorTrackerError::InvalidReplayArchiveReceipt)
     ));
 }
-
 #[test]
 fn archive_call_paths_reject_post_call_binding_drift() {
     let tracker = PorTracker::with_entry_limit(2);
@@ -562,7 +533,6 @@ fn archive_call_paths_reject_post_call_binding_drift() {
     tracker
         .acknowledge_reputation_terminal(work.sequence, work.work_digest)
         .unwrap();
-
     let archive = MemoryReplayArchive::new(0x95);
     let before_compaction = tracker.checkpoint();
     let compaction_drift = BindingDriftReplayArchive::new(&archive);
@@ -580,12 +550,10 @@ fn archive_call_paths_reject_post_call_binding_drift() {
         1,
         "the exact external append remains retryable after local rollback"
     );
-
     tracker
         .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
         .expect("exact append replay commits local compaction");
     let compacted = tracker.checkpoint();
-
     let fresh = next_challenge(&challenge, 1);
     let challenge_drift = BindingDriftReplayArchive::new(&archive);
     assert!(matches!(
@@ -601,7 +569,6 @@ fn archive_call_paths_reject_post_call_binding_drift() {
         compacted,
         "post-lookup binding drift must not admit an absent challenge"
     );
-
     let verdict_drift = BindingDriftReplayArchive::new(&archive);
     assert!(matches!(
         tracker.record_verdict_with_archive_and_bounds(
@@ -620,7 +587,6 @@ fn archive_call_paths_reject_post_call_binding_drift() {
         "post-lookup binding drift must not return an archived verdict"
     );
 }
-
 #[test]
 fn archive_compaction_requires_authoritative_head_installation() {
     let tracker = PorTracker::with_entry_limit(1);
@@ -642,7 +608,6 @@ fn archive_compaction_requires_authoritative_head_installation() {
     tracker
         .acknowledge_reputation_terminal(work.sequence, work.work_digest)
         .unwrap();
-
     let archive = MemoryReplayArchive::new(0x96);
     let stale_head_archive = StaleHeadReplayArchive { inner: &archive };
     let before_compaction = tracker.checkpoint();
@@ -660,7 +625,6 @@ fn archive_compaction_requires_authoritative_head_installation() {
         1,
         "the externally committed record remains available for exact retry"
     );
-
     assert_eq!(
         tracker
             .compact_acknowledged_with_replay_archive(&archive, archive.binding, 1)
@@ -673,7 +637,6 @@ fn archive_compaction_requires_authoritative_head_installation() {
         archive.current_head().expect("authoritative archive head")
     );
 }
-
 #[test]
 fn archive_readback_requires_successor_chain_to_checkpoint_head() {
     let tracker = PorTracker::with_entry_limit(2);
@@ -692,7 +655,6 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
         )
         .unwrap()
         .reputation_work;
-
     let second_challenge = next_challenge(&first_challenge, 1);
     let second_proof = sample_proof(&second_challenge);
     tracker.record_challenge(&second_challenge).unwrap();
@@ -714,7 +676,6 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
     tracker
         .acknowledge_reputation_terminal(second_work.sequence, second_work.work_digest)
         .unwrap();
-
     let archive = MemoryReplayArchive::new(0x92);
     let pre_archive_checkpoint = tracker.checkpoint();
     assert_eq!(
@@ -776,7 +737,6 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
             PorFinalizedReplayArchiveProofBoundsV1::production_default(),
         )
         .expect("contiguous signed successor chain reaches pinned head");
-
     let mut truncated = readback.clone();
     truncated.successor_receipts.clear();
     assert!(matches!(
@@ -787,7 +747,6 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
         ),
         Err(PorTrackerError::InvalidReplayArchiveReceipt)
     ));
-
     let mut count_flood = readback.clone();
     count_flood
         .successor_receipts
@@ -834,7 +793,6 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
         Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected),
         "the typed in-memory adapter must reject an oversized canonical proof before return"
     );
-
     let first_record = pre_archive_checkpoint
         .finalized
         .iter()
@@ -854,7 +812,6 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
         Some(checkpoint_head),
         "a historical exact retry must not roll the monotonic head back"
     );
-
     let absent_challenge_id = [0xFA; 32];
     let PorFinalizedReplayArchiveLookupV1::Absent(absence) = archive
         .lookup(
@@ -886,7 +843,6 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
         Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected),
         "the adapter must reject a stale expected checkpoint head"
     );
-
     let restored_ancestor = PorTracker::with_entry_limit(2);
     restored_ancestor
         .restore_checkpoint(first_archive_checkpoint.clone())
@@ -905,7 +861,6 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
         fully_archived_checkpoint,
         "startup reconciliation must advance the local checkpoint to the proved prefix"
     );
-
     let restored_empty_head = PorTracker::with_entry_limit(2);
     restored_empty_head
         .restore_checkpoint(pre_archive_checkpoint)
@@ -924,7 +879,6 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
         fully_archived_checkpoint,
         "the exact live prefix must be compacted locally without a format-level intent"
     );
-
     let mut insufficient_ack_checkpoint = first_archive_checkpoint;
     insufficient_ack_checkpoint.acknowledged_reputation_terminal =
         Some(PorReputationTerminalAckV1 {
@@ -943,7 +897,6 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
         ),
         Err(PorTrackerError::ReplayArchiveHeadRollback)
     ));
-
     let fresh_tracker = PorTracker::with_entry_limit(2);
     assert!(matches!(
         fresh_tracker.reconcile_restored_replay_archive_head(
@@ -962,7 +915,6 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
             )
             .expect("an exact restored head needs no reconciliation")
     );
-
     let latest_head = archive
         .state
         .lock()
@@ -989,5 +941,4 @@ fn archive_readback_requires_successor_chain_to_checkpoint_head() {
     ));
     archive.state.lock().expect("archive state").latest_head = Some(latest_head);
 }
-
 // Textual inclusion preserves the original PoR test-module paths.

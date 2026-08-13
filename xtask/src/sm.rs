@@ -4,7 +4,6 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hex::encode_upper;
 use iroha_crypto::{
@@ -16,19 +15,16 @@ use iroha_crypto::{
 use norito::json::{self, Value};
 use rand_core_06::OsRng;
 use zeroize::Zeroize;
-
 #[derive(Clone)]
 pub enum OutputTarget {
     Stdout,
     File(PathBuf),
 }
-
 impl OutputTarget {
     pub fn file(path: PathBuf) -> Self {
         OutputTarget::File(path)
     }
 }
-
 #[derive(Default)]
 pub struct SmOperatorSnippetOptions {
     pub distid: Option<String>,
@@ -36,14 +32,12 @@ pub struct SmOperatorSnippetOptions {
     pub json_out: Option<OutputTarget>,
     pub snippet_out: Option<OutputTarget>,
 }
-
 /// Source for Wycheproof SM2 fixtures.
 pub enum WycheproofInput {
     File(PathBuf),
     Url(String),
     Official,
 }
-
 /// Options for importing/sanitizing Wycheproof SM2 fixtures.
 pub struct WycheproofSyncOptions {
     pub input: WycheproofInput,
@@ -51,7 +45,6 @@ pub struct WycheproofSyncOptions {
     pub generator_version: Option<String>,
     pub pretty: bool,
 }
-
 pub fn generate_sm_operator_snippet(
     options: SmOperatorSnippetOptions,
 ) -> Result<(), Box<dyn Error>> {
@@ -66,28 +59,21 @@ pub fn generate_sm_operator_snippet(
             Sm2PrivateKey::random(distid.clone(), &mut rng)?
         }
     };
-
     let material = SmOperatorKeyMaterial::new(&private)?;
-
     let json_target = options
         .json_out
         .unwrap_or_else(|| OutputTarget::file(Path::new("sm2-key.json").to_path_buf()));
     let snippet_target = options
         .snippet_out
         .unwrap_or_else(|| OutputTarget::file(Path::new("client-sm2.toml").to_path_buf()));
-
     let json_payload = material.json_pretty();
     write_output(&json_target, json_payload.as_bytes())?;
-
     let snippet_payload = material.snippet().to_string();
     write_output(&snippet_target, snippet_payload.as_bytes())?;
-
     Ok(())
 }
-
 const WYCHEPROOF_SM2_OFFICIAL_URL: &str =
     "https://raw.githubusercontent.com/google/wycheproof/main/testvectors/sm2_sign_test.json";
-
 pub fn sync_wycheproof(options: WycheproofSyncOptions) -> Result<(), Box<dyn Error>> {
     let WycheproofSyncOptions {
         input,
@@ -95,7 +81,6 @@ pub fn sync_wycheproof(options: WycheproofSyncOptions) -> Result<(), Box<dyn Err
         generator_version,
         pretty,
     } = options;
-
     let raw = match input {
         WycheproofInput::File(path) => fs::read_to_string(&path)
             .map_err(|err| format!("failed to read {}: {err}", path.display()))?,
@@ -104,21 +89,17 @@ pub fn sync_wycheproof(options: WycheproofSyncOptions) -> Result<(), Box<dyn Err
     };
     let parsed: Value =
         norito::json::from_str(&raw).map_err(|err| format!("parse Wycheproof SM2 JSON: {err}"))?;
-
     let mut root = parsed
         .as_object()
         .cloned()
         .ok_or("Wycheproof SM2 payload must be a JSON object")?;
-
     let algorithm = root
         .get("algorithm")
         .and_then(Value::as_str)
         .unwrap_or("SM2")
         .to_string();
-
     let mut sanitized_groups = Vec::new();
     let mut total_tests: u64 = 0;
-
     let groups = root
         .remove("testGroups")
         .ok_or("Wycheproof SM2 payload missing testGroups")?;
@@ -126,23 +107,19 @@ pub fn sync_wycheproof(options: WycheproofSyncOptions) -> Result<(), Box<dyn Err
         .as_array()
         .cloned()
         .ok_or("Wycheproof SM2 testGroups must be an array")?;
-
     for group in groups {
         let mut group_obj = group
             .as_object()
             .cloned()
             .ok_or("Wycheproof SM2 test group must be an object")?;
-
         let distid = group_obj
             .remove("distid")
             .and_then(|value| value.as_str().map(str::to_string))
             .unwrap_or_else(|| "1234567812345678".to_string());
-
         let group_id = group_obj
             .get("groupId")
             .and_then(Value::as_u64)
             .map(Value::from);
-
         let key_value = group_obj
             .remove("key")
             .ok_or("Wycheproof SM2 group missing key")?;
@@ -154,7 +131,6 @@ pub fn sync_wycheproof(options: WycheproofSyncOptions) -> Result<(), Box<dyn Err
             .and_then(Value::as_str)
             .ok_or("Wycheproof SM2 key missing uncompressed SEC1 point")?
             .to_string();
-
         let tests_value = group_obj
             .remove("tests")
             .ok_or("Wycheproof SM2 group missing tests array")?;
@@ -162,13 +138,11 @@ pub fn sync_wycheproof(options: WycheproofSyncOptions) -> Result<(), Box<dyn Err
             .as_array()
             .cloned()
             .ok_or("Wycheproof SM2 tests must be an array")?;
-
         let mut sanitized_tests = Vec::with_capacity(tests.len());
         for test in tests {
             let test_obj = test
                 .as_object()
                 .ok_or("Wycheproof SM2 test case must be an object")?;
-
             let tc_id = test_obj
                 .get("tcId")
                 .and_then(Value::as_u64)
@@ -193,7 +167,6 @@ pub fn sync_wycheproof(options: WycheproofSyncOptions) -> Result<(), Box<dyn Err
                 .and_then(Value::as_str)
                 .ok_or("Wycheproof SM2 test missing result")?
                 .to_string();
-
             let mut flag_values = Vec::new();
             if let Some(flags) = test_obj.get("flags").and_then(Value::as_array) {
                 for flag in flags {
@@ -202,7 +175,6 @@ pub fn sync_wycheproof(options: WycheproofSyncOptions) -> Result<(), Box<dyn Err
                     }
                 }
             }
-
             let mut test_map = norito::json::Map::new();
             test_map.insert("tcId".to_string(), Value::from(tc_id));
             test_map.insert("comment".to_string(), Value::from(comment));
@@ -210,15 +182,12 @@ pub fn sync_wycheproof(options: WycheproofSyncOptions) -> Result<(), Box<dyn Err
             test_map.insert("msg".to_string(), Value::from(message));
             test_map.insert("result".to_string(), Value::from(result));
             test_map.insert("sig".to_string(), Value::from(signature));
-
             sanitized_tests.push(Value::Object(test_map));
         }
-
         let tests_count = sanitized_tests.len() as u64;
         total_tests = total_tests
             .checked_add(tests_count)
             .ok_or("Wycheproof SM2 test count overflow")?;
-
         let mut sanitized_group = norito::json::Map::new();
         sanitized_group.insert("distid".to_string(), Value::from(distid));
         if let Some(id_value) = group_id {
@@ -235,13 +204,10 @@ pub fn sync_wycheproof(options: WycheproofSyncOptions) -> Result<(), Box<dyn Err
             sanitized_group.insert("comment".to_string(), Value::from(comment.to_string()));
         }
         sanitized_group.insert("tests".to_string(), Value::Array(sanitized_tests));
-
         sanitized_groups.push(Value::Object(sanitized_group));
     }
-
     let mut sanitized_root = norito::json::Map::new();
     sanitized_root.insert("algorithm".to_string(), Value::from(algorithm));
-
     let generator_version = generator_version
         .or_else(|| {
             root.remove("generatorVersion")
@@ -252,25 +218,20 @@ pub fn sync_wycheproof(options: WycheproofSyncOptions) -> Result<(), Box<dyn Err
         "generatorVersion".to_string(),
         Value::from(generator_version),
     );
-
     sanitized_root.insert("numberOfTests".to_string(), Value::from(total_tests));
     sanitized_root.insert("testGroups".to_string(), Value::Array(sanitized_groups));
-
     let value = Value::Object(sanitized_root);
     let output_json = if pretty {
         norito::json::to_json_pretty(&value)?
     } else {
         norito::json::to_json(&value)?
     };
-
     write_parent(&output)?;
     fs::write(&output, output_json.as_bytes())
         .map_err(|err| format!("failed to write {}: {err}", output.display()))?;
     println!("updated {} ({} tests)", output.display(), total_tests);
-
     Ok(())
 }
-
 fn fetch_wycheproof_url(url: &str) -> Result<String, Box<dyn Error>> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("iroha-xtask/wycheproof-sync (rust)")
@@ -287,7 +248,6 @@ fn fetch_wycheproof_url(url: &str) -> Result<String, Box<dyn Error>> {
         .text()
         .map_err(|err| format!("read response body from {url}: {err}").into())
 }
-
 fn write_parent(path: &Path) -> Result<(), Box<dyn Error>> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -296,7 +256,6 @@ fn write_parent(path: &Path) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn write_output(target: &OutputTarget, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     match target {
         OutputTarget::Stdout => {
@@ -311,18 +270,15 @@ fn write_output(target: &OutputTarget, bytes: &[u8]) -> Result<(), Box<dyn Error
     }
     Ok(())
 }
-
 fn decode_hex(raw: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     let trimmed = raw.trim();
     let without_prefix = trimmed.strip_prefix("0x").unwrap_or(trimmed);
     Ok(hex::decode(without_prefix)?)
 }
-
 struct SmOperatorKeyMaterial {
     json: Value,
     snippet: String,
 }
-
 impl SmOperatorKeyMaterial {
     fn new(private: &Sm2PrivateKey) -> Result<Self, Box<dyn Error>> {
         let artifacts = collect_sm2_artifacts(private)?;
@@ -367,21 +323,16 @@ impl SmOperatorKeyMaterial {
             ),
         ])
         .expect("static SM2 key payload");
-
         let snippet = render_snippet(&artifacts);
-
         Ok(Self { json, snippet })
     }
-
     fn json_pretty(&self) -> String {
         norito::json::to_json_pretty(&self.json).expect("SM2 payload serializes")
     }
-
     fn snippet(&self) -> &str {
         &self.snippet
     }
 }
-
 struct Sm2Artifacts {
     distid: String,
     private_key_hex: String,
@@ -394,17 +345,14 @@ struct Sm2Artifacts {
     public_key_config: String,
     public_key_pem: String,
 }
-
 fn collect_sm2_artifacts(private: &Sm2PrivateKey) -> Result<Sm2Artifacts, Box<dyn Error>> {
     let distid = private.distid().to_string();
-
     let mut secret = private.secret_bytes();
     let private_key_hex = encode_upper(secret);
     let private_key_b64 = BASE64.encode(secret);
     let private_payload = encode_sm2_private_key_payload(&distid, &secret)?;
     let private_key_config = PrivateKey::from_bytes(Algorithm::Sm2, &private_payload)?.to_string();
     let private_key_pem = private.to_pkcs8_pem()?;
-
     let public = private.public_key();
     let public_bytes = public.to_sec1_bytes(false);
     let public_compressed = public.to_sec1_bytes(true);
@@ -414,9 +362,7 @@ fn collect_sm2_artifacts(private: &Sm2PrivateKey) -> Result<Sm2Artifacts, Box<dy
     let public_payload = encode_sm2_public_key_payload(&distid, &public_bytes)?;
     let public_key_config = PublicKey::from_bytes(Algorithm::Sm2, &public_payload)?.to_string();
     let public_key_pem = public.to_public_key_pem()?;
-
     secret.zeroize();
-
     Ok(Sm2Artifacts {
         distid,
         private_key_hex,
@@ -430,7 +376,6 @@ fn collect_sm2_artifacts(private: &Sm2PrivateKey) -> Result<Sm2Artifacts, Box<dy
         public_key_pem,
     })
 }
-
 fn render_snippet(artifacts: &Sm2Artifacts) -> String {
     format!(
         r#"# Account key material

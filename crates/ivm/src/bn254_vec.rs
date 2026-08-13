@@ -4,11 +4,8 @@
 //! At runtime [`field_dispatch::field_impl`] selects an implementation
 //! based on the host CPU features (SSE2, AVX2, AVX-512 or NEON).
 //! The scalar routines serve as a portable fallback.
-
 use halo2curves::{bn256::Fr, ff::PrimeField};
-
 use crate::field_dispatch::field_impl;
-
 /// BN254 field modulus in little-endian limb form.
 pub const MODULUS: [u64; 4] = [
     0x43e1f593f0000001,
@@ -16,11 +13,9 @@ pub const MODULUS: [u64; 4] = [
     0xb85045b68181585d,
     0x30644e72e131a029,
 ];
-
 /// Field element represented as four 64-bit limbs (little-endian).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FieldElem(pub [u64; 4]);
-
 impl FieldElem {
     /// Convert from an `Fr` element.
     pub fn from_fr(f: Fr) -> Self {
@@ -34,12 +29,10 @@ impl FieldElem {
         }
         FieldElem(limbs)
     }
-
     /// Create a field element from a 64-bit value.
     pub fn from_u64(v: u64) -> Self {
         Self::from_fr(Fr::from(v))
     }
-
     /// Convert back to `Fr`.
     #[allow(clippy::wrong_self_convention)]
     pub fn to_fr(&self) -> Fr {
@@ -49,7 +42,6 @@ impl FieldElem {
         }
         Fr::from_repr(bytes.into()).expect("valid field element")
     }
-
     /// Convert to a 64-bit value by truncating the field representation.
     #[allow(clippy::wrong_self_convention)]
     pub fn to_u64(&self) -> u64 {
@@ -59,7 +51,6 @@ impl FieldElem {
         u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
     }
 }
-
 /// Add two field elements using a portable scalar routine.
 ///
 /// This function is intentionally simple and only meant to provide
@@ -75,7 +66,6 @@ pub fn add_scalar(a: FieldElem, b: FieldElem) -> FieldElem {
     reduce_mod(&mut out);
     FieldElem(out)
 }
-
 /// Subtract two field elements using a portable scalar routine.
 pub fn sub_scalar(a: FieldElem, b: FieldElem) -> FieldElem {
     let mut out = [0u64; 4];
@@ -94,12 +84,10 @@ pub fn sub_scalar(a: FieldElem, b: FieldElem) -> FieldElem {
     }
     FieldElem(out)
 }
-
 /// Multiply two field elements using the halo2curves implementation.
 pub fn mul_scalar(a: FieldElem, b: FieldElem) -> FieldElem {
     FieldElem::from_fr(a.to_fr() * b.to_fr())
 }
-
 /// Multiply two field elements and return the unreduced 512-bit result.
 pub fn wide_mul(a: FieldElem, b: FieldElem) -> [u64; 8] {
     let mut acc = [0u128; 8];
@@ -113,7 +101,6 @@ pub fn wide_mul(a: FieldElem, b: FieldElem) -> [u64; 8] {
         }
         acc[i + 4] += carry;
     }
-
     for i in 0..7 {
         let carry = acc[i] >> 64;
         acc[i] &= 0xffff_ffff_ffff_ffff;
@@ -121,22 +108,18 @@ pub fn wide_mul(a: FieldElem, b: FieldElem) -> [u64; 8] {
             acc[i + 1] += carry;
         }
     }
-
     let mut out = [0u64; 8];
     for (o, a) in out.iter_mut().zip(acc.iter()) {
         *o = *a as u64;
     }
     out
 }
-
 /// Reduce a 512-bit value modulo the BN254 prime.
 pub fn reduce_wide(val: [u64; 8]) -> [u64; 4] {
     // Convert to a 512-bit integer and perform a constant-time modulo reduction.
     use crypto_bigint::{Encoding, NonZero, U256, U512};
-
     const MOD_BYTES: &str = "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001";
     const MODULUS: U256 = U256::from_be_hex(MOD_BYTES);
-
     let mut bytes = [0u8; 64];
     for i in 0..8 {
         bytes[i * 8..(i + 1) * 8].copy_from_slice(&val[i].to_le_bytes());
@@ -148,7 +131,6 @@ pub fn reduce_wide(val: [u64; 8]) -> [u64; 4] {
     let limbs = reduced.to_words();
     [limbs[0], limbs[1], limbs[2], limbs[3]]
 }
-
 /// Add two field elements using the selected SIMD backend.
 pub fn add(a: FieldElem, b: FieldElem) -> FieldElem {
     #[cfg(feature = "cuda")]
@@ -157,7 +139,6 @@ pub fn add(a: FieldElem, b: FieldElem) -> FieldElem {
     }
     field_impl().add(a, b)
 }
-
 /// Subtract two field elements using the selected SIMD backend.
 pub fn sub(a: FieldElem, b: FieldElem) -> FieldElem {
     #[cfg(feature = "cuda")]
@@ -166,7 +147,6 @@ pub fn sub(a: FieldElem, b: FieldElem) -> FieldElem {
     }
     field_impl().sub(a, b)
 }
-
 /// Multiply two field elements using the selected SIMD backend.
 pub fn mul(a: FieldElem, b: FieldElem) -> FieldElem {
     #[cfg(feature = "cuda")]
@@ -175,7 +155,6 @@ pub fn mul(a: FieldElem, b: FieldElem) -> FieldElem {
     }
     field_impl().mul(a, b)
 }
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 unsafe fn add_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
@@ -193,7 +172,6 @@ unsafe fn add_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
         _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, lo);
         _mm_storeu_si128(tmp.as_mut_ptr().add(2) as *mut __m128i, hi);
     }
-
     let mut carry = 0u64;
     for (i, limb) in tmp.iter_mut().enumerate() {
         let partial = *limb;
@@ -209,7 +187,6 @@ unsafe fn add_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
 }
 // Compute a borrow chain and conditionally add the modulus when the
 // result underflows.
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 unsafe fn sub_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
@@ -225,7 +202,6 @@ unsafe fn sub_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
         _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, lo);
         _mm_storeu_si128(tmp.as_mut_ptr().add(2) as *mut __m128i, hi);
     }
-
     let mut borrow = 0u64;
     for (i, limb) in tmp.iter_mut().enumerate() {
         let partial = *limb;
@@ -244,12 +220,10 @@ unsafe fn sub_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
     }
     FieldElem(tmp)
 }
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 unsafe fn mul_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
     use std::arch::x86_64::*;
-
     #[inline(always)]
     fn mul_u64(x: u64, y: u64) -> u128 {
         unsafe {
@@ -271,7 +245,6 @@ unsafe fn mul_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
                 + ((hh_u as u128) << 64)
         }
     }
-
     let mut acc = [0u128; 8];
     for i in 0..4 {
         let mut carry = 0u128;
@@ -279,13 +252,11 @@ unsafe fn mul_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
             let idx = i + j;
             let prod = mul_u64(a.0[i], b.0[j]);
             let t = acc[idx] + prod + carry;
-
             acc[idx] = t & 0xffff_ffff_ffff_ffff;
             carry = t >> 64;
         }
         acc[i + 4] += carry;
     }
-
     for i in 0..7 {
         let carry = acc[i] >> 64;
         acc[i] &= 0xffff_ffff_ffff_ffff;
@@ -293,7 +264,6 @@ unsafe fn mul_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
             acc[i + 1] += carry;
         }
     }
-
     let mut out = [0u64; 8];
     for i in 0..8 {
         out[i] = acc[i] as u64;
@@ -303,7 +273,6 @@ unsafe fn mul_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
     assert_eq!(reduced, scalar);
     reduced
 }
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn add_avx2(a: FieldElem, b: FieldElem) -> FieldElem {
@@ -317,7 +286,6 @@ unsafe fn add_avx2(a: FieldElem, b: FieldElem) -> FieldElem {
         let sum = _mm256_add_epi64(va, vb);
         _mm256_storeu_si256(tmp.as_mut_ptr() as *mut __m256i, sum);
     }
-
     let mut carry = 0u64;
     for (i, t) in tmp.iter_mut().enumerate().take(4) {
         let partial = *t;
@@ -333,7 +301,6 @@ unsafe fn add_avx2(a: FieldElem, b: FieldElem) -> FieldElem {
 }
 // After the vector subtraction borrow is resolved in scalar and the modulus
 // is added back if needed.
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn sub_avx2(a: FieldElem, b: FieldElem) -> FieldElem {
@@ -345,7 +312,6 @@ unsafe fn sub_avx2(a: FieldElem, b: FieldElem) -> FieldElem {
         let diff = _mm256_sub_epi64(va, vb);
         _mm256_storeu_si256(tmp.as_mut_ptr() as *mut __m256i, diff);
     }
-
     let mut borrow = 0u64;
     for (i, t) in tmp.iter_mut().enumerate().take(4) {
         let partial = *t;
@@ -364,26 +330,22 @@ unsafe fn sub_avx2(a: FieldElem, b: FieldElem) -> FieldElem {
     }
     FieldElem(tmp)
 }
-
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn mul_avx2(a: FieldElem, b: FieldElem) -> FieldElem {
     // Reuse SSE2 implementation; AVX2 lacks 64-bit multiply.
     unsafe { mul_sse2(a, b) }
 }
-
 #[cfg(target_arch = "x86_64")]
 unsafe fn add_avx512(a: FieldElem, b: FieldElem) -> FieldElem {
     // AVX-512 intrinsics are unstable on stable Rust. Use the AVX2 path.
     unsafe { add_avx2(a, b) }
 }
-
 #[cfg(target_arch = "x86_64")]
 unsafe fn sub_avx512(a: FieldElem, b: FieldElem) -> FieldElem {
     // AVX-512 intrinsics are unstable on stable Rust. Use the AVX2 path.
     unsafe { sub_avx2(a, b) }
 }
-
 #[cfg(target_arch = "x86_64")]
 unsafe fn mul_avx512(a: FieldElem, b: FieldElem) -> FieldElem {
     // Use SSE2 path for AVX-512 as well.
@@ -405,7 +367,6 @@ unsafe fn add_neon(a: FieldElem, b: FieldElem) -> FieldElem {
         let sum1 = vaddq_u64(va1, vb1);
         vst1q_u64(tmp.as_mut_ptr().add(2), sum1);
     }
-
     let mut carry = 0u64;
     for (i, t) in tmp.iter_mut().enumerate().take(4) {
         let partial = *t;
@@ -417,7 +378,6 @@ unsafe fn add_neon(a: FieldElem, b: FieldElem) -> FieldElem {
     reduce_mod(&mut tmp);
     FieldElem(tmp)
 }
-
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 // Subtract using NEON then correct the result with a scalar borrow chain.
@@ -434,7 +394,6 @@ unsafe fn sub_neon(a: FieldElem, b: FieldElem) -> FieldElem {
         let diff1 = vsubq_u64(va1, vb1);
         vst1q_u64(tmp.as_mut_ptr().add(2), diff1);
     }
-
     let mut borrow = 0u64;
     for (i, t) in tmp.iter_mut().enumerate().take(4) {
         let partial = *t;
@@ -453,12 +412,10 @@ unsafe fn sub_neon(a: FieldElem, b: FieldElem) -> FieldElem {
     }
     FieldElem(tmp)
 }
-
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn mul_neon(a: FieldElem, b: FieldElem) -> FieldElem {
     use std::arch::aarch64::*;
-
     #[inline(always)]
     unsafe fn mul_u64_neon(x: u64, y: u64) -> u128 {
         let x_parts = [x as u32, (x >> 32) as u32];
@@ -473,7 +430,6 @@ unsafe fn mul_neon(a: FieldElem, b: FieldElem) -> FieldElem {
         let cross1 = unsafe { vgetq_lane_u64(cross, 1) };
         (ll as u128) + ((u128::from(cross0) + u128::from(cross1)) << 32) + ((hh as u128) << 64)
     }
-
     const MASK: u128 = 0xffff_ffff_ffff_ffff;
     let mut acc = [0u128; 8];
     for i in 0..4 {
@@ -487,7 +443,6 @@ unsafe fn mul_neon(a: FieldElem, b: FieldElem) -> FieldElem {
         }
         acc[i + 4] += carry;
     }
-
     for limb in 0..7 {
         let carry = acc[limb] >> 64;
         acc[limb] &= MASK;
@@ -495,14 +450,12 @@ unsafe fn mul_neon(a: FieldElem, b: FieldElem) -> FieldElem {
             acc[limb + 1] += carry;
         }
     }
-
     let mut wide = [0u64; 8];
     for (dst, src) in wide.iter_mut().zip(acc.iter()) {
         *dst = *src as u64;
     }
     FieldElem(reduce_wide(wide))
 }
-
 #[cfg(target_arch = "x86_64")]
 fn geq(a: &[u64; 4], b: &[u64; 4]) -> bool {
     for i in (0..4).rev() {
@@ -514,7 +467,6 @@ fn geq(a: &[u64; 4], b: &[u64; 4]) -> bool {
     }
     true
 }
-
 #[cfg(target_arch = "x86_64")]
 fn sub_mod(target: &mut [u64; 4], modulus: &[u64; 4]) {
     let mut borrow = 0u128;
@@ -524,7 +476,6 @@ fn sub_mod(target: &mut [u64; 4], modulus: &[u64; 4]) {
         borrow = (tmp >> 127) & 1; // high bit indicates borrow
     }
 }
-
 fn sub_mod_checked(a: &[u64; 4], modulus: &[u64; 4]) -> ([u64; 4], u64) {
     let mut out = [0u64; 4];
     let mut borrow = 0u128;
@@ -535,7 +486,6 @@ fn sub_mod_checked(a: &[u64; 4], modulus: &[u64; 4]) -> ([u64; 4], u64) {
     }
     (out, borrow as u64)
 }
-
 fn reduce_mod(a: &mut [u64; 4]) {
     let (tmp, borrow) = sub_mod_checked(a, &MODULUS);
     let mask = borrow.wrapping_sub(1);
@@ -543,40 +493,32 @@ fn reduce_mod(a: &mut [u64; 4]) {
         a[i] = (tmp[i] & mask) | (a[i] & !mask);
     }
 }
-
 #[cfg(target_arch = "aarch64")]
 use crate::NeonField;
 use crate::{Avx2Field, Avx512Field, FieldArithmetic, ScalarField, Sse2Field};
-
 impl FieldArithmetic for ScalarField {
     fn add(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         add_scalar(a, b)
     }
-
     fn sub(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         sub_scalar(a, b)
     }
-
     fn mul(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         mul_scalar(a, b)
     }
 }
-
 #[cfg(target_arch = "x86_64")]
 impl FieldArithmetic for Sse2Field {
     fn add(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { add_sse2(a, b) }
     }
-
     fn sub(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { sub_sse2(a, b) }
     }
-
     fn mul(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { mul_sse2(a, b) }
     }
 }
-
 #[cfg(not(target_arch = "x86_64"))]
 impl FieldArithmetic for Sse2Field {
     fn add(&self, a: FieldElem, b: FieldElem) -> FieldElem {
@@ -584,62 +526,50 @@ impl FieldArithmetic for Sse2Field {
         // Use the scalar fallback implementation.
         add_scalar(a, b)
     }
-
     fn sub(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         sub_scalar(a, b)
     }
-
     fn mul(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         mul_scalar(a, b)
     }
 }
-
 #[cfg(target_arch = "x86_64")]
 impl FieldArithmetic for Avx2Field {
     fn add(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { add_avx2(a, b) }
     }
-
     fn sub(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { sub_avx2(a, b) }
     }
-
     fn mul(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { mul_avx2(a, b) }
     }
 }
-
 #[cfg(not(target_arch = "x86_64"))]
 impl FieldArithmetic for Avx2Field {
     fn add(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         // AVX2 is not available on this architecture; using scalar fallback.
         add_scalar(a, b)
     }
-
     fn sub(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         sub_scalar(a, b)
     }
-
     fn mul(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         mul_scalar(a, b)
     }
 }
-
 #[cfg(target_arch = "x86_64")]
 impl FieldArithmetic for Avx512Field {
     fn add(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { add_avx512(a, b) }
     }
-
     fn sub(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { sub_avx512(a, b) }
     }
-
     fn mul(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { mul_avx512(a, b) }
     }
 }
-
 #[cfg(not(target_arch = "x86_64"))]
 impl FieldArithmetic for Avx512Field {
     fn add(&self, a: FieldElem, b: FieldElem) -> FieldElem {
@@ -647,40 +577,32 @@ impl FieldArithmetic for Avx512Field {
         // scalar implementation instead.
         add_scalar(a, b)
     }
-
     fn sub(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         sub_scalar(a, b)
     }
-
     fn mul(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         mul_scalar(a, b)
     }
 }
-
 #[cfg(target_arch = "aarch64")]
 impl FieldArithmetic for NeonField {
     fn add(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { add_neon(a, b) }
     }
-
     fn sub(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { sub_neon(a, b) }
     }
-
     fn mul(&self, a: FieldElem, b: FieldElem) -> FieldElem {
         unsafe { mul_neon(a, b) }
     }
 }
-
 #[cfg(test)]
 mod tests {
     #[cfg(target_arch = "aarch64")]
     use halo2curves::bn256::Fr;
     #[cfg(target_arch = "aarch64")]
     use rand_core::{RngCore, impls::fill_bytes_via_next};
-
     use super::*;
-
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn mul_sse2_matches_scalar() {
@@ -690,7 +612,6 @@ mod tests {
             assert_eq!(unsafe { mul_sse2(a, b) }, mul_scalar(a, b));
         }
     }
-
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn mul_avx2_matches_scalar() {
@@ -700,7 +621,6 @@ mod tests {
             assert_eq!(unsafe { mul_avx2(a, b) }, mul_scalar(a, b));
         }
     }
-
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn mul_avx512_matches_scalar() {
@@ -710,14 +630,12 @@ mod tests {
             assert_eq!(unsafe { mul_avx512(a, b) }, mul_scalar(a, b));
         }
     }
-
     #[test]
     #[cfg(target_arch = "aarch64")]
     fn mul_neon_matches_scalar() {
         if !std::arch::is_aarch64_feature_detected!("neon") {
             return;
         }
-
         let specials = [
             FieldElem([0, 0, 0, 0]),
             FieldElem::from_u64(1),
@@ -725,7 +643,6 @@ mod tests {
             FieldElem::from_fr(Fr::from(17u64)),
             FieldElem::from_fr(Fr::from(u64::MAX)),
         ];
-
         for &lhs in &specials {
             for &rhs in &specials {
                 assert_eq!(
@@ -735,14 +652,11 @@ mod tests {
                 );
             }
         }
-
         struct DeterministicRng(u64);
-
         impl RngCore for DeterministicRng {
             fn next_u32(&mut self) -> u32 {
                 self.next_u64() as u32
             }
-
             fn next_u64(&mut self) -> u64 {
                 let mut x = self.0;
                 x ^= x << 7;
@@ -751,12 +665,10 @@ mod tests {
                 self.0 = x;
                 x
             }
-
             fn fill_bytes(&mut self, dest: &mut [u8]) {
                 fill_bytes_via_next(self, dest);
             }
         }
-
         let mut rng = DeterministicRng(0xdecafbad_d00df00d);
         for _ in 0..128 {
             let a = FieldElem::from_fr(Fr::from(rng.next_u64()));
@@ -768,7 +680,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn add_sse2_carry_matches_scalar() {
@@ -778,7 +689,6 @@ mod tests {
             assert_eq!(unsafe { add_sse2(a, b) }, add_scalar(a, b));
         }
     }
-
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn sub_sse2_borrow_matches_scalar() {
@@ -788,7 +698,6 @@ mod tests {
             assert_eq!(unsafe { sub_sse2(a, b) }, sub_scalar(a, b));
         }
     }
-
     #[test]
     #[cfg(target_arch = "aarch64")]
     fn add_neon_carry_matches_scalar() {
@@ -798,7 +707,6 @@ mod tests {
             assert_eq!(unsafe { add_neon(a, b) }, add_scalar(a, b));
         }
     }
-
     #[test]
     #[cfg(target_arch = "aarch64")]
     fn sub_neon_borrow_matches_scalar() {

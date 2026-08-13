@@ -1,14 +1,10 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
-
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-
 use zeroize::DefaultIsZeroes;
-
 // ========================================================================
 // Floating-point operations
 // ========================================================================
-
 // The FLR type represents an IEEE-754:2008 'binary64' value, or more
 // specifically a subset of such values.
 //
@@ -62,23 +58,17 @@ use zeroize::DefaultIsZeroes;
 //    shall not be used. Moreover, operations are over secret values and
 //    thus should take care not to leak information through
 //    side-channels, in particular timing.
-
 #[path = "flr_emu.rs"]
 mod backend;
-
 pub(crate) use backend::FLR;
-
 impl Default for FLR {
     fn default() -> Self {
         FLR::ZERO
     }
 }
-
 impl DefaultIsZeroes for FLR {}
-
 impl Add<FLR> for FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn add(self, other: FLR) -> FLR {
         let mut r = self;
@@ -86,10 +76,8 @@ impl Add<FLR> for FLR {
         r
     }
 }
-
 impl Add<&FLR> for FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn add(self, other: &FLR) -> FLR {
         let mut r = self;
@@ -97,10 +85,8 @@ impl Add<&FLR> for FLR {
         r
     }
 }
-
 impl Add<FLR> for &FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn add(self, other: FLR) -> FLR {
         let mut r = *self;
@@ -108,10 +94,8 @@ impl Add<FLR> for &FLR {
         r
     }
 }
-
 impl Add<&FLR> for &FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn add(self, other: &FLR) -> FLR {
         let mut r = *self;
@@ -119,24 +103,20 @@ impl Add<&FLR> for &FLR {
         r
     }
 }
-
 impl AddAssign<FLR> for FLR {
     #[inline(always)]
     fn add_assign(&mut self, other: FLR) {
         self.set_add(other);
     }
 }
-
 impl AddAssign<&FLR> for FLR {
     #[inline(always)]
     fn add_assign(&mut self, other: &FLR) {
         self.set_add(*other);
     }
 }
-
 impl Div<FLR> for FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn div(self, other: FLR) -> FLR {
         let mut r = self;
@@ -144,10 +124,8 @@ impl Div<FLR> for FLR {
         r
     }
 }
-
 impl Div<&FLR> for FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn div(self, other: &FLR) -> FLR {
         let mut r = self;
@@ -155,10 +133,8 @@ impl Div<&FLR> for FLR {
         r
     }
 }
-
 impl Div<FLR> for &FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn div(self, other: FLR) -> FLR {
         let mut r = *self;
@@ -166,10 +142,8 @@ impl Div<FLR> for &FLR {
         r
     }
 }
-
 impl Div<&FLR> for &FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn div(self, other: &FLR) -> FLR {
         let mut r = *self;
@@ -177,24 +151,20 @@ impl Div<&FLR> for &FLR {
         r
     }
 }
-
 impl DivAssign<FLR> for FLR {
     #[inline(always)]
     fn div_assign(&mut self, other: FLR) {
         self.set_div(other);
     }
 }
-
 impl DivAssign<&FLR> for FLR {
     #[inline(always)]
     fn div_assign(&mut self, other: &FLR) {
         self.set_div(*other);
     }
 }
-
 impl Mul<FLR> for FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn mul(self, other: FLR) -> FLR {
         let mut r = self;
@@ -202,10 +172,8 @@ impl Mul<FLR> for FLR {
         r
     }
 }
-
 impl Mul<&FLR> for FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn mul(self, other: &FLR) -> FLR {
         let mut r = self;
@@ -213,10 +181,8 @@ impl Mul<&FLR> for FLR {
         r
     }
 }
-
 impl Mul<FLR> for &FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn mul(self, other: FLR) -> FLR {
         let mut r = *self;
@@ -224,10 +190,8 @@ impl Mul<FLR> for &FLR {
         r
     }
 }
-
 impl Mul<&FLR> for &FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn mul(self, other: &FLR) -> FLR {
         let mut r = *self;
@@ -235,24 +199,20 @@ impl Mul<&FLR> for &FLR {
         r
     }
 }
-
 impl MulAssign<FLR> for FLR {
     #[inline(always)]
     fn mul_assign(&mut self, other: FLR) {
         self.set_mul(other);
     }
 }
-
 impl MulAssign<&FLR> for FLR {
     #[inline(always)]
     fn mul_assign(&mut self, other: &FLR) {
         self.set_mul(*other);
     }
 }
-
 impl Neg for FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn neg(self) -> FLR {
         let mut r = self;
@@ -260,10 +220,8 @@ impl Neg for FLR {
         r
     }
 }
-
 impl Neg for &FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn neg(self) -> FLR {
         let mut r = *self;
@@ -271,10 +229,8 @@ impl Neg for &FLR {
         r
     }
 }
-
 impl Sub<FLR> for FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn sub(self, other: FLR) -> FLR {
         let mut r = self;
@@ -282,10 +238,8 @@ impl Sub<FLR> for FLR {
         r
     }
 }
-
 impl Sub<&FLR> for FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn sub(self, other: &FLR) -> FLR {
         let mut r = self;
@@ -293,10 +247,8 @@ impl Sub<&FLR> for FLR {
         r
     }
 }
-
 impl Sub<FLR> for &FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn sub(self, other: FLR) -> FLR {
         let mut r = *self;
@@ -304,10 +256,8 @@ impl Sub<FLR> for &FLR {
         r
     }
 }
-
 impl Sub<&FLR> for &FLR {
     type Output = FLR;
-
     #[inline(always)]
     fn sub(self, other: &FLR) -> FLR {
         let mut r = *self;
@@ -315,14 +265,12 @@ impl Sub<&FLR> for &FLR {
         r
     }
 }
-
 impl SubAssign<FLR> for FLR {
     #[inline(always)]
     fn sub_assign(&mut self, other: FLR) {
         self.set_sub(other);
     }
 }
-
 impl SubAssign<&FLR> for FLR {
     #[inline(always)]
     fn sub_assign(&mut self, other: &FLR) {

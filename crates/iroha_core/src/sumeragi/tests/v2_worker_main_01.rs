@@ -20,7 +20,6 @@ fn certified_sidecar_close_ack(
     ack.close_id = ack.canonical_close_id();
     CertifiedMergeSidecarMessage::CloseAck(ack)
 }
-
 fn certified_sidecar_control_fanout(
     scope: ExactOutputCreationScope,
     peer: &PeerId,
@@ -53,7 +52,6 @@ fn certified_sidecar_control_fanout(
         .expect("valid worker sidecar-control rollover claim")
         .expect("one exact worker sidecar-control fanout")
 }
-
 fn certified_sidecar_reply_control_fanout(
     scope: ExactOutputCreationScope,
     peer: &PeerId,
@@ -75,7 +73,6 @@ fn certified_sidecar_reply_control_fanout(
         .expect("valid worker responder-control rollover claim")
         .expect("one exact worker responder-control fanout")
 }
-
 fn certified_sidecar_request_fanout(
     scope: ExactOutputCreationScope,
     local: &PeerId,
@@ -100,7 +97,6 @@ fn certified_sidecar_request_fanout(
     .expect("valid worker sidecar-request rollover claim")
     .expect("one exact worker sidecar-request fanout")
 }
-
 fn certified_sidecar_flush_fixture(
     chunk: &CertifiedMergeSidecarChunkV1,
     route: &NetworkReplyRoute,
@@ -127,16 +123,13 @@ fn certified_sidecar_flush_fixture(
     .expect("bind exact worker-side sidecar flush fixture");
     (control, ack, admission)
 }
-
 fn merge_share_digest(message: &NetworkMessage) -> Hash {
     let NetworkMessage::MergeCommitteeSignature(signature) = message else {
         panic!("expected exact merge-share output");
     };
     signature.message_digest
 }
-
 include!("v2_worker_reply_route_cases.rs");
-
 #[test]
 fn pending_reply_flush_fifo_head_quiesces_later_same_source_fanout() {
     let (service, _) = fixture();
@@ -157,7 +150,6 @@ fn pending_reply_flush_fifo_head_quiesces_later_same_source_fanout() {
         pending.enqueue(routed(merge_share_message(b"older pending flush"))),
         Ok(ExactFanoutOwnership::Owned)
     );
-
     let mut flush_control = None;
     assert_eq!(
         pending.drive_with_budget_ack(1, |post, ticket, attempted, timeout_attempt| {
@@ -182,7 +174,6 @@ fn pending_reply_flush_fifo_head_quiesces_later_same_source_fanout() {
         pending.enqueue(routed(merge_share_message(b"later same source"))),
         Ok(ExactFanoutOwnership::Owned)
     );
-
     assert_eq!(
         pending.drive_with_budget_ack(usize::MAX, |_post, _ticket, _route, _timeout_attempt| {
             panic!("a later same-source fanout must wait behind its pending flush head")
@@ -194,7 +185,6 @@ fn pending_reply_flush_fifo_head_quiesces_later_same_source_fanout() {
     assert!(pending.fanouts[1].has_dispatchable_target());
     drop(flush_control);
 }
-
 #[test]
 fn ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses() {
     let (service, _) = fixture();
@@ -214,7 +204,6 @@ fn ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses
     reply_routes
         .merge(&NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"))
         .expect("retain both authenticated sources");
-
     let mut pending =
         PendingExactOutput::new(2, 1, 2, &[]).expect("two ordinary reply attempts fit");
     assert_eq!(
@@ -275,7 +264,6 @@ fn ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses
             .count(),
         2
     );
-
     pending
         .poll_reply_flushes()
         .expect("source B writer flush advances independently");
@@ -287,7 +275,6 @@ fn ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses
     assert!(!pending.source_fifo_owners.contains_key(&source_b));
     assert_eq!(pending.ownership_units, 1);
     assert_eq!(target_a.reply_writer_timeout_attempt, 0);
-
     assert!(routes.mark_reply_unwritable_while_delivery_active(&route_a));
     assert!(
         source_a_control
@@ -310,7 +297,6 @@ fn ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses
         Some(&BTreeSet::from([fifo_id]))
     );
     assert_eq!(pending.ownership_units, 1);
-
     assert!(routes.retire(&route_a));
     let reconnected_a = routes.mint_via(peer.clone(), hub_a);
     assert_eq!(
@@ -332,7 +318,6 @@ fn ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses
         &target_a.route,
         ExactTargetRoute::Reply(route) if route.same_delivery(&reconnected_a)
     ));
-
     let mut retry_control = None;
     assert_eq!(
         pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, timeout_attempt| {
@@ -369,7 +354,6 @@ fn ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses
     assert_eq!(pending.ownership_units, 0);
     assert!(pending.source_fifo_owners.is_empty());
 }
-
 #[test]
 fn closed_flush_on_delivery_active_unwritable_route_parks_without_cursor_advance() {
     let (service, _) = fixture();
@@ -389,7 +373,6 @@ fn closed_flush_on_delivery_active_unwritable_route_parks_without_cursor_advance
             .expect("one draining reply fanout"),
         )
         .expect("retain the draining reply");
-
     let mut control = None;
     pending
         .drive_with_budget_ack(usize::MAX, |post, ticket, attempted, _timeout_attempt| {
@@ -407,7 +390,6 @@ fn closed_flush_on_delivery_active_unwritable_route_parks_without_cursor_advance
     pending
         .poll_reply_flushes()
         .expect("closed draining flush is a recoverable route transition");
-
     let target = &pending.fanouts[0].targets[0];
     assert_eq!(target.message_index, 0);
     assert_eq!(
@@ -425,7 +407,6 @@ fn closed_flush_on_delivery_active_unwritable_route_parks_without_cursor_advance
     );
     assert!(!pending.source_fifo_owners.is_empty());
 }
-
 #[test]
 fn adaptive_reply_timeout_grows_closed_preserves_and_flushed_resets_attempt() {
     let (service, _) = fixture();
@@ -448,7 +429,6 @@ fn adaptive_reply_timeout_grows_closed_preserves_and_flushed_resets_attempt() {
             .expect("two-message adaptive reply fanout"),
         )
         .expect("retain the adaptive reply fanout");
-
     let mut timeout_control = None;
     pending
         .drive_with_budget_ack(1, |post, _ticket, route, timeout_attempt| {
@@ -479,7 +459,6 @@ fn adaptive_reply_timeout_grows_closed_preserves_and_flushed_resets_attempt() {
         pending.fanouts[0].targets[0].reply_writer_timeout_attempt,
         1
     );
-
     let mut closed_control = None;
     pending
         .drive_with_budget_ack(1, |post, _ticket, route, timeout_attempt| {
@@ -509,7 +488,6 @@ fn adaptive_reply_timeout_grows_closed_preserves_and_flushed_resets_attempt() {
         pending.fanouts[0].targets[0].reply_writer_timeout_attempt,
         1
     );
-
     let mut flushed_control = None;
     pending
         .drive_with_budget_ack(1, |post, _ticket, route, timeout_attempt| {
@@ -539,7 +517,6 @@ fn adaptive_reply_timeout_grows_closed_preserves_and_flushed_resets_attempt() {
     assert_eq!(target.message_index, 1);
     assert_eq!(target.reply_writer_timeout_attempt, 0);
 }
-
 #[test]
 fn reply_flush_attempt_identity_mismatch_fails_without_cursor_or_attempt_advance() {
     let (service, _) = fixture();
@@ -560,7 +537,6 @@ fn reply_flush_attempt_identity_mismatch_fails_without_cursor_or_attempt_advance
         )
         .expect("retain the adaptive reply fanout");
     pending.fanouts[0].targets[0].reply_writer_timeout_attempt = 1;
-
     let error = pending
         .drive_with_budget_ack(1, |post, ticket, attempted, timeout_attempt| {
             assert!(ticket.is_none());
@@ -578,7 +554,6 @@ fn reply_flush_attempt_identity_mismatch_fails_without_cursor_or_attempt_advance
         })
         .expect_err("attempt-zero acknowledgement must not satisfy attempt one");
     assert!(error.contains("timeout-attempt identity"));
-
     let target = &pending.fanouts[0].targets[0];
     assert_eq!(target.message_index, 0);
     assert_eq!(target.reply_writer_timeout_attempt, 1);
@@ -587,9 +562,7 @@ fn reply_flush_attempt_identity_mismatch_fails_without_cursor_or_attempt_advance
     assert!(target.pending_flush.is_none());
     assert_eq!(pending.ownership_units, 1);
 }
-
 include!("v2_worker_backpressure_cases.rs");
-
 /// Exercise a dead-target output through synthesized durable-height handoff.
 ///
 /// The fixture validates the production output/handoff contract only; it
@@ -633,7 +606,6 @@ pub(in crate::sumeragi) fn production_output_handoff_with_dead_target() -> wire:
             .push((post.peer_id, kind));
         Ok(())
     });
-
     service
         .post_lane_block(blocked.clone(), lane_message.clone())
         .expect("retain finalized-height lane certificate for blocked target");
@@ -642,11 +614,9 @@ pub(in crate::sumeragi) fn production_output_handoff_with_dead_target() -> wire:
             .has_pending_exact_output()
             .expect("inspect pending production output")
     );
-
     service
         .post_lane_block(later_responsive.clone(), lane_message)
         .expect("later responsive fanout enters the non-full corridor");
-
     assert_eq!(attempts.load(Ordering::Relaxed), 2);
     let admitted = admitted.lock().expect("inspect admitted production output");
     assert_eq!(
@@ -665,7 +635,6 @@ pub(in crate::sumeragi) fn production_output_handoff_with_dead_target() -> wire:
     assert_eq!(pending.fanouts[0].peers[0], blocked);
     assert!(pending.fanouts[0].targets[0].current.is_some());
     drop(pending);
-
     service.broadcast_merge_to_voters(merge_share(b"rollover merge share"));
     let (sidecar_request, _sidecar_chunk) =
         certified_sidecar_outputs(&service.local_peer, &blocked);
@@ -679,7 +648,6 @@ pub(in crate::sumeragi) fn production_output_handoff_with_dead_target() -> wire:
         3,
         "lane, merge-share, and locally initiated sidecar request stay owned"
     );
-
     assert_eq!(
         service
             .handoff_applied_height_output_to_durable_reconstruction(
@@ -698,12 +666,10 @@ pub(in crate::sumeragi) fn production_output_handoff_with_dead_target() -> wire:
     assert!(!service.output_guard.restart_required());
     context
 }
-
 #[test]
 fn production_output_path_serves_later_fanout_while_target_stays_backpressured() {
     let _ = production_output_handoff_with_dead_target();
 }
-
 #[test]
 fn response_outputs_without_exact_routes_fail_stop() {
     let (mut service, _) = fixture();
@@ -748,7 +714,6 @@ fn response_outputs_without_exact_routes_fail_stop() {
     }
     drop(pending);
     assert!(!service.output_guard.restart_required());
-
     let (service, _) = fixture();
     let peer = service.context.roster[1].validator.clone();
     assert!(
@@ -758,7 +723,6 @@ fn response_outputs_without_exact_routes_fail_stop() {
         "the lane-only transport must reject decode-only global traffic"
     );
     assert!(service.output_guard.restart_required());
-
     let (service, _) = fixture();
     let peer = service.context.roster[1].validator.clone();
     service.post_native_amx(
@@ -766,14 +730,12 @@ fn response_outputs_without_exact_routes_fail_stop() {
         native_amx_output(&service.context, service.local_peer.clone()),
     );
     assert!(service.output_guard.restart_required());
-
     let (service, _) = fixture();
     let peer = service.context.roster[1].validator.clone();
     let (_request, chunk) = certified_sidecar_outputs(&service.local_peer, &peer);
     service.post_certified_merge_sidecar(peer, chunk);
     assert!(service.output_guard.restart_required());
 }
-
 #[test]
 fn locally_authorized_autonomous_transport_has_durable_rollover_claim() {
     let (mut service, _) = fixture();
@@ -791,7 +753,6 @@ fn locally_authorized_autonomous_transport_has_durable_rollover_claim() {
             .post_lane_block(target.clone(), message.clone())
             .expect("retain locally reconstructable autonomous transport");
     }
-
     let pending = service
         .lock_pending_exact_output()
         .expect("inspect autonomous rollover claims");
@@ -808,7 +769,6 @@ fn locally_authorized_autonomous_transport_has_durable_rollover_claim() {
         ));
     }
 }
-
 #[test]
 fn generation_hint_requires_exact_reply_route_ownership() {
     let (mut service, _) = fixture();
@@ -874,7 +834,6 @@ fn generation_hint_requires_exact_reply_route_ownership() {
     ));
     assert_eq!(fanout.certified_sidecar_topology_progress_target(), None);
     drop(pending);
-
     let (missing_route_service, _) = fixture();
     let missing_route_peer = missing_route_service.context.roster[1].validator.clone();
     let missing_route_hint = Arc::new(certified_sidecar_generation_hint(
@@ -907,7 +866,6 @@ fn generation_hint_requires_exact_reply_route_ownership() {
     );
     assert!(missing_route_service.output_guard.restart_required());
 }
-
 #[test]
 fn lane_drain_vote_uses_one_authenticated_exact_output_claim() {
     let (service, keys) = fixture();
@@ -918,7 +876,6 @@ fn lane_drain_vote_uses_one_authenticated_exact_output_claim() {
         vote: vote.clone(),
     };
     assert_eq!(service.can_retain_lane_work_effect(&effect), Ok(true));
-
     service.post_lane_drain_vote(target.clone(), vote.clone());
     let pending = service
         .lock_pending_exact_output()
@@ -939,7 +896,6 @@ fn lane_drain_vote_uses_one_authenticated_exact_output_claim() {
         } if claimed_target == &target && *vote_hash == HashOf::new(&vote)
     ));
     drop(pending);
-
     let mut tampered = vote;
     tampered.bls_signature[0] ^= 0x01;
     let error = service
@@ -950,7 +906,6 @@ fn lane_drain_vote_uses_one_authenticated_exact_output_claim() {
         .expect_err("tampered drain vote must fail before corridor reservation");
     assert!(error.contains("invalid vote evidence"));
 }
-
 #[test]
 fn sidecar_receipts_use_a_separate_bounded_control_queue() {
     let (service, _) = fixture();
@@ -1001,7 +956,6 @@ fn sidecar_receipts_use_a_separate_bounded_control_queue() {
     assert_eq!(pending.ownership_units, 0);
     assert_eq!(pending.pending_sidecar_flushes(), 0);
     assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
-
     assert_eq!(pending.enqueue(fanout()), Ok(ExactFanoutOwnership::Owned));
     assert_eq!(
         pending.drive_with_budget_ack(1, |_post, _ticket, _route, _timeout_attempt| {
@@ -1011,7 +965,6 @@ fn sidecar_receipts_use_a_separate_bounded_control_queue() {
     );
     assert_eq!(pending.ownership_units, 1);
     assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
-
     pending
         .admitted_sidecar_chunks
         .pop_front()
@@ -1047,9 +1000,7 @@ fn sidecar_receipts_use_a_separate_bounded_control_queue() {
     assert_eq!(pending.pending_sidecar_flushes(), 0);
     assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
 }
-
 include!("v2_worker_recovered_lifecycle_output_cases.rs");
-
 #[test]
 fn actor_backpressure_cannot_change_returned_payload_identity() {
     let (service, _) = fixture();
@@ -1061,7 +1012,6 @@ fn actor_backpressure_cannot_change_returned_payload_identity() {
             PendingExactFanout::new(vec![original], vec![peer]).expect("original exact fanout"),
         )
         .expect("retain original exact fanout");
-
     let error = pending
         .drive_with(|mut post, ticket, _route| {
             post.data = merge_share_message(b"mutated returned output");
@@ -1072,12 +1022,10 @@ fn actor_backpressure_cannot_change_returned_payload_identity() {
             })
         })
         .expect_err("the actor cannot substitute a same-target payload");
-
     assert!(error.contains("changed an exact output payload"));
     assert!(pending.is_pending());
     assert!(pending.fanouts[0].targets[0].current.is_none());
 }
-
 #[test]
 fn exact_output_retry_rejects_a_different_message_identity() {
     let (service, _) = fixture();
@@ -1103,7 +1051,6 @@ fn exact_output_retry_rejects_a_different_message_identity() {
         vec![ExactTargetRoute::Reply(reply_route)],
     )
     .expect("conflicting retransmission");
-
     assert!(retained.can_coalesce_retry(&exact_retry));
     assert_ne!(retained.message_hashes, conflicting.message_hashes);
     assert!(
@@ -1112,7 +1059,6 @@ fn exact_output_retry_rejects_a_different_message_identity() {
             .expect("conflicting retry is structurally valid")
     );
 }
-
 #[test]
 fn outbound_corridor_capacity_keeps_the_owned_front_bounded() {
     let (service, _) = fixture();
@@ -1145,7 +1091,6 @@ fn outbound_corridor_capacity_keeps_the_owned_front_bounded() {
     );
     assert_eq!(pending.fanouts.len(), 1);
 }
-
 #[test]
 fn applied_height_handoff_rejects_output_without_reconstruction() {
     let (service, keys) = fixture();
@@ -1161,14 +1106,11 @@ fn applied_height_handoff_rejects_output_without_reconstruction() {
             .expect("non-empty exact-only fanout"),
         )
         .expect("retain exact-only fanout");
-
     let error = pending
         .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
         .expect_err("exact-only output cannot enter durable reconstruction handoff");
-
     assert!(error.contains("no typed applied-height rollover claim"));
     assert!(pending.is_pending());
-
     let mut other_context = service.context.clone();
     other_context.height = other_context.height.saturating_add(1);
     let native = native_amx_output(&other_context, service.local_peer.clone());
@@ -1202,7 +1144,6 @@ fn applied_height_handoff_rejects_output_without_reconstruction() {
     assert!(error.contains("another creation scope"));
     assert!(wrong.is_pending());
 }
-
 #[test]
 fn closed_network_actor_fails_stop_before_later_output() {
     let (service, _) = fixture();
@@ -1215,11 +1156,9 @@ fn closed_network_actor_fails_stop_before_later_output() {
                 .expect("non-empty final QC fanout"),
         )
         .expect("retain final QC before actor admission");
-
     let error = service
         .retry_pending_exact_output()
         .expect_err("a permanently closed network actor must fail stop");
-
     assert!(error.contains("network actor closed"));
     assert!(service.output_guard.restart_required());
     let pending = service
@@ -1232,7 +1171,6 @@ fn closed_network_actor_fails_stop_before_later_output() {
         .expect("closed actor returned the exact final QC post");
     assert!(matches!(&retained.data, NetworkMessage::SumeragiBlock(_)));
 }
-
 #[test]
 fn full_exact_output_corridor_does_not_disguise_non_progress_routes_as_backpressure() {
     let (service, _) = fixture();
@@ -1256,12 +1194,10 @@ fn full_exact_output_corridor_does_not_disguise_non_progress_routes_as_backpress
         vec![ExactTargetRoute::Topology],
     )
     .expect_err("a non-progress route has no reliable scheduler class");
-
     assert!(error.contains("no reliable progress class"));
     assert_eq!(pending.fanouts.len(), 1);
     assert!(!service.output_guard.restart_required());
 }
-
 fn locked_candidate_subject(label: &[u8]) -> wire::BlockSubject {
     wire::BlockSubject {
         parent_block_hash: None,
@@ -1269,11 +1205,9 @@ fn locked_candidate_subject(label: &[u8]) -> wire::BlockSubject {
         payload_hash: Hash::new(label),
     }
 }
-
 fn locked_candidate_tag(view: u64) -> EventTag {
     EventTag::new(1, view, Generation::new(view + 1))
 }
-
 fn locked_candidate_round(service: &ProductionV2Services, view: u64) -> wire::ConsensusRound {
     wire::ConsensusRound {
         context_id: service.context.id(),
@@ -1281,7 +1215,6 @@ fn locked_candidate_round(service: &ProductionV2Services, view: u64) -> wire::Co
         view,
     }
 }
-
 fn attach_locked_candidate_io(
     service: &mut ProductionV2Services,
     capacity: usize,
@@ -1297,17 +1230,14 @@ fn attach_locked_candidate_io(
     });
     command_rx
 }
-
 fn detach_locked_candidate_io(service: &mut ProductionV2Services) {
     drop(service.io.take());
 }
-
 #[test]
 fn locked_candidate_requests_coalesce_by_immutable_subject() {
     let (mut service, _) = fixture();
     let command_rx = attach_locked_candidate_io(&mut service, 4);
     let subject = locked_candidate_subject(b"coalesced locked candidate");
-
     service
         .request_locked_candidate(
             locked_candidate_tag(0),
@@ -1337,7 +1267,6 @@ fn locked_candidate_requests_coalesce_by_immutable_subject() {
             subject,
         )
         .expect("rebind the same acquisition to a newer same-view generation");
-
     let commands = command_rx.try_iter().collect::<Vec<_>>();
     assert!(matches!(
         commands.as_slice(),
@@ -1352,14 +1281,12 @@ fn locked_candidate_requests_coalesce_by_immutable_subject() {
     assert_eq!(acquisition.pending_count(), 1);
     detach_locked_candidate_io(&mut service);
 }
-
 #[test]
 fn locked_candidate_completion_uses_latest_consumer_without_reloading() {
     let (mut service, _) = fixture();
     let command_rx = attach_locked_candidate_io(&mut service, 4);
     let subject = locked_candidate_subject(b"rebound locked candidate");
     let canonical_wire = b"exact durable body".to_vec();
-
     service
         .request_locked_candidate(
             locked_candidate_tag(0),
@@ -1388,7 +1315,6 @@ fn locked_candidate_completion_uses_latest_consumer_without_reloading() {
             subject,
         )
         .expect("advance the ready result consumer");
-
     let first = service
         .take_loaded_candidate()
         .expect("deliver ready bytes to the latest view");
@@ -1397,7 +1323,6 @@ fn locked_candidate_completion_uses_latest_consumer_without_reloading() {
     assert_eq!(first.subject(), subject);
     assert_eq!(first.into_canonical_wire(), canonical_wire);
     assert!(service.take_loaded_candidate().is_none());
-
     service
         .request_locked_candidate(
             locked_candidate_tag(4),
@@ -1416,7 +1341,6 @@ fn locked_candidate_completion_uses_latest_consumer_without_reloading() {
     ));
     detach_locked_candidate_io(&mut service);
 }
-
 #[test]
 fn locked_candidate_consumer_rebind_rejects_stale_or_regressive_tags() {
     let (mut service, _) = fixture();
@@ -1429,7 +1353,6 @@ fn locked_candidate_consumer_rebind_rejects_stale_or_regressive_tags() {
             subject,
         )
         .expect("queue current-view acquisition");
-
     let stale = service
         .request_locked_candidate(
             locked_candidate_tag(1),
@@ -1447,7 +1370,6 @@ fn locked_candidate_consumer_rebind_rejects_stale_or_regressive_tags() {
     assert_eq!(command_rx.try_iter().count(), 1);
     detach_locked_candidate_io(&mut service);
 }
-
 #[test]
 fn locked_candidate_duplicate_or_wrong_completion_is_rejected() {
     let (mut service, _) = fixture();
@@ -1468,7 +1390,6 @@ fn locked_candidate_duplicate_or_wrong_completion_is_rejected() {
         }) if queued == subject => acquisition_id,
         _ => panic!("expected the owned candidate load"),
     };
-
     let completion_error = service
         .complete_locked_candidate_load(LockedCandidateLoad {
             acquisition_id,
@@ -1486,7 +1407,6 @@ fn locked_candidate_duplicate_or_wrong_completion_is_rejected() {
         &acquisition.state,
         LockedCandidateAcquisitionState::Loading { .. }
     ));
-
     service
         .complete_locked_candidate_load(LockedCandidateLoad {
             acquisition_id,
@@ -1504,7 +1424,6 @@ fn locked_candidate_duplicate_or_wrong_completion_is_rejected() {
     assert!(duplicate.contains("completed more than once"));
     detach_locked_candidate_io(&mut service);
 }
-
 #[test]
 fn locked_candidate_future_completion_is_rejected_without_replacing_owner() {
     let (mut service, _) = fixture();
@@ -1530,7 +1449,6 @@ fn locked_candidate_future_completion_is_rejected_without_replacing_owner() {
             .checked_add(1)
             .expect("test acquisition ID has a successor"),
     );
-
     let future = service
         .complete_locked_candidate_load(LockedCandidateLoad {
             acquisition_id: future_id,
@@ -1554,7 +1472,6 @@ fn locked_candidate_future_completion_is_rejected_without_replacing_owner() {
     assert!(service.take_loaded_candidate().is_none());
     detach_locked_candidate_io(&mut service);
 }
-
 #[test]
 fn higher_different_lock_replaces_load_and_retires_stale_completion() {
     let (mut service, _) = fixture();
@@ -1575,7 +1492,6 @@ fn higher_different_lock_replaces_load_and_retires_stale_completion() {
         }) if subject == original => acquisition_id,
         _ => panic!("expected original candidate load"),
     };
-
     service
         .request_locked_candidate(
             locked_candidate_tag(1),
@@ -1605,7 +1521,6 @@ fn higher_different_lock_replaces_load_and_retires_stale_completion() {
         _ => panic!("expected one replacement candidate load"),
     };
     assert!(replacement_id > original_id);
-
     assert_eq!(
         service
             .complete_locked_candidate_load(LockedCandidateLoad {
@@ -1638,7 +1553,6 @@ fn higher_different_lock_replaces_load_and_retires_stale_completion() {
     ));
     detach_locked_candidate_io(&mut service);
 }
-
 #[test]
 fn superseded_locked_candidate_failure_starts_latest_acquisition() {
     let (mut service, _) = fixture();
@@ -1666,7 +1580,6 @@ fn superseded_locked_candidate_failure_starts_latest_acquisition() {
             replacement,
         )
         .expect("install higher same-incarnation lock");
-
     assert_eq!(
         service
             .locked_candidate_load_failed(
@@ -1684,7 +1597,6 @@ fn superseded_locked_candidate_failure_starts_latest_acquisition() {
     ));
     detach_locked_candidate_io(&mut service);
 }
-
 #[test]
 fn unavailable_locked_candidate_waits_for_matching_durable_store() {
     let (mut service, _) = fixture();
@@ -1704,7 +1616,6 @@ fn unavailable_locked_candidate_waits_for_matching_durable_store() {
         }) if queued == subject => acquisition_id,
         _ => panic!("expected initial candidate load"),
     };
-
     assert_eq!(
         service
             .locked_candidate_load_unavailable(acquisition_id, subject)
@@ -1721,7 +1632,6 @@ fn unavailable_locked_candidate_waits_for_matching_durable_store() {
     ));
     assert_eq!(acquisition.pending_count(), 1);
     assert!(!service.output_guard.restart_required());
-
     service
         .request_locked_candidate(
             locked_candidate_tag(0),
@@ -1749,7 +1659,6 @@ fn unavailable_locked_candidate_waits_for_matching_durable_store() {
     ));
     detach_locked_candidate_io(&mut service);
 }
-
 #[test]
 fn unavailable_locked_candidate_rebinds_latest_consumer_before_retry() {
     let (mut service, _) = fixture();
@@ -1773,7 +1682,6 @@ fn unavailable_locked_candidate_rebinds_latest_consumer_before_retry() {
     service
         .locked_candidate_load_unavailable(initial_id, subject)
         .expect("local absence waits for certified recovery");
-
     service
         .request_locked_candidate(
             locked_candidate_tag(7),
@@ -1797,7 +1705,6 @@ fn unavailable_locked_candidate_rebinds_latest_consumer_before_retry() {
         command_rx.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-
     service
         .retry_locked_candidate_after_store(subject)
         .expect("matching durable store starts one replacement read");
@@ -1833,7 +1740,6 @@ fn unavailable_locked_candidate_rebinds_latest_consumer_before_retry() {
     ));
     detach_locked_candidate_io(&mut service);
 }
-
 fn proposal_body_and_payload(
     context: &wire::HeightContext,
     keys: &[KeyPair],
@@ -1853,7 +1759,6 @@ fn proposal_body_and_payload(
     };
     (canonical_wire, payload, proposal)
 }
-
 fn proposal_body_and_payload_at_view(
     context: &wire::HeightContext,
     keys: &[KeyPair],
@@ -1894,7 +1799,6 @@ fn proposal_body_and_payload_at_view(
         .expect("encode fixture proposal payload");
     (canonical_wire, payload)
 }
-
 fn allow_fixture_block_payload(context: &mut wire::HeightContext) {
     context.da_layout = wire::DataAvailabilityLayout {
         encoding: wire::PayloadEncoding::ReedSolomon16,
@@ -1906,15 +1810,12 @@ fn allow_fixture_block_payload(context: &mut wire::HeightContext) {
     };
     context.validate().expect("widened fixture context");
 }
-
 fn fixture_with_block_payload() -> (ProductionV2Services, Vec<KeyPair>) {
     let (mut service, keys) = fixture();
     allow_fixture_block_payload(&mut service.context);
     (service, keys)
 }
-
 type ConsensusRouteObservation = (PeerId, wire::ConsensusMessageV2);
-
 fn install_consensus_route_observer(
     service: &mut ProductionV2Services,
 ) -> Arc<Mutex<Vec<ConsensusRouteObservation>>> {
@@ -1936,7 +1837,6 @@ fn install_consensus_route_observer(
     });
     observations
 }
-
 fn take_consensus_route_observations(
     observations: &Mutex<Vec<ConsensusRouteObservation>>,
 ) -> Vec<ConsensusRouteObservation> {
@@ -1946,7 +1846,6 @@ fn take_consensus_route_observations(
             .expect("inspect consensus route observations"),
     )
 }
-
 fn proposal_route_targets(
     observations: &[ConsensusRouteObservation],
     round: wire::ConsensusRound,
@@ -1964,7 +1863,6 @@ fn proposal_route_targets(
         })
         .collect()
 }
-
 fn chunk_route_targets(
     observations: &[ConsensusRouteObservation],
     manifest: &wire::PayloadManifest,
@@ -1982,7 +1880,6 @@ fn chunk_route_targets(
         })
         .collect()
 }
-
 fn set_local_validator(
     service: &mut ProductionV2Services,
     keys: &[KeyPair],
@@ -1993,7 +1890,6 @@ fn set_local_validator(
     service.local_peer = service.context.roster[index].validator.clone();
     service.key_pair = keys[index].clone();
 }
-
 fn routing_vote(service: &ProductionV2Services, view: u64, phase: wire::GlobalPhase) -> wire::Vote {
     let round = wire::ConsensusRound {
         context_id: service.context.id(),
@@ -2022,14 +1918,12 @@ fn routing_vote(service: &ProductionV2Services, view: u64, phase: wire::GlobalPh
         signature: vec![0xA5; 48],
     }
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
     use super::super::v2_lifecycle_coordinator::{
         RecoveredLifecycleSignClassV1, RecoveredLifecycleSignDispatchIdentityV1,
     };
-
     let (mut service, keys) = fixture_with_block_payload();
     let directory = TempDir::new().expect("temporary recovered Proposal output store");
     let body_store = V2BodyStore::open(directory.path(), service.context.clone())
@@ -2067,7 +1961,6 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
     service
         .set_exact_output_shared_unit_capacity_for_test(1)
         .expect("install adversarial one-unit output corridor");
-
     let authority_context = service_context;
     let authority = |identity: V2BodyStoreInstanceIdentity, guard: Arc<ConsensusOutputGuard>| {
         super::super::v2::RecoveredLifecycleProposalExactOutputAuthorityV1::for_test(
@@ -2083,7 +1976,6 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
         )
         .expect("fixture Proposal output authority is structurally exact")
     };
-
     let foreign_directory = TempDir::new().expect("temporary foreign Proposal output store");
     let foreign_identity = V2BodyStore::open(foreign_directory.path(), service.context.clone())
         .expect("open foreign Proposal output store")
@@ -2107,7 +1999,6 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
             .is_err(),
         "a same-store Proposal cannot cross a foreign output guard"
     );
-
     service.set_exact_output_admission_hook(|post, ticket| {
         Err(NetworkActorAdmissionError::Backpressured {
             message: post,
@@ -2169,7 +2060,6 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
     );
     assert!(service.fast_path_proposals.is_empty());
     assert!(!service.output_guard.restart_required());
-
     service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
     assert!(
         !service
@@ -2325,14 +2215,12 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
     assert!(!service.output_guard.restart_required());
     service_io.detach(&mut service);
 }
-
 #[test]
 fn prepare_and_commit_votes_reach_every_remote_voter_across_views() {
     let (mut service, _) = fixture();
     let observations = install_consensus_route_observer(&mut service);
     let roster_len = u64::try_from(service.context.roster.len()).expect("fixture roster length");
     let expected = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
-
     for view in 0..roster_len {
         let round = wire::ConsensusRound {
             context_id: service.context.id(),
@@ -2366,7 +2254,6 @@ fn prepare_and_commit_votes_reach_every_remote_voter_across_views() {
         }
     }
 }
-
 #[test]
 fn first_proposal_routes_manifest_control_to_all_and_chunks_to_set_a() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -2386,13 +2273,11 @@ fn first_proposal_routes_manifest_control_to_all_and_chunks_to_set_a() {
         .into_iter()
         .collect::<BTreeSet<_>>();
     let observations = install_consensus_route_observer(&mut service);
-
     service
         .broadcast_consensus(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
         ))
         .expect("broadcast first proposal");
-
     let routed = take_consensus_route_observations(&observations);
     assert_eq!(
         proposal_route_targets(&routed, proposal.round, &manifest),
@@ -2408,7 +2293,6 @@ fn first_proposal_routes_manifest_control_to_all_and_chunks_to_set_a() {
         wire::ConsensusMessageV2Payload::PayloadChunk(_)
     )));
 }
-
 #[test]
 fn same_round_proposal_retransmission_expands_chunks_to_set_b_and_all_voters() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -2436,13 +2320,11 @@ fn same_round_proposal_retransmission_expands_chunks_to_set_b_and_all_voters() {
     let observations = install_consensus_route_observer(&mut service);
     let message =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal.clone()));
-
     service
         .broadcast_consensus(message.clone())
         .expect("broadcast first proposal occurrence");
     let first = take_consensus_route_observations(&observations);
     assert_eq!(chunk_route_targets(&first, &manifest), expected_fast);
-
     service
         .broadcast_consensus(message)
         .expect("broadcast same-round proposal retransmission");
@@ -2455,7 +2337,6 @@ fn same_round_proposal_retransmission_expands_chunks_to_set_b_and_all_voters() {
         expected_all
     );
 }
-
 #[test]
 fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -2469,7 +2350,6 @@ fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
             rank: 1,
         })
     });
-
     let blocking_vote = routing_vote(&service, 0, wire::GlobalPhase::Prepare);
     assert_eq!(
         service
@@ -2484,7 +2364,6 @@ fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
             .has_pending_exact_output()
             .expect("inspect actor-backpressured control")
     );
-
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     set_local_validator(&mut service, &keys, proposal.proposer);
     service
@@ -2518,7 +2397,6 @@ fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
         "failed aggregate admission cannot consume the first-send marker"
     );
     assert!(!service.output_guard.restart_required());
-
     service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
     assert!(
         !service
@@ -2539,7 +2417,6 @@ fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
     assert!(service.fast_path_proposals.contains(&proposal.round));
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -2561,7 +2438,6 @@ fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
         )
         .expect("install certified successor view");
     assert!(service.fast_path_proposals.is_empty());
-
     let (_, payload) = proposal_body_and_payload_at_view(&service.context, &keys, new_tag.view());
     let manifest = payload.manifest().clone();
     let proposal = wire::Proposal {
@@ -2590,13 +2466,11 @@ fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
     let expected_all = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
     assert_ne!(expected_set_a, expected_all);
     let observations = install_consensus_route_observer(&mut service);
-
     service
         .broadcast_consensus(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
         ))
         .expect("broadcast first proposal in certified successor view");
-
     let routed = take_consensus_route_observations(&observations);
     assert_eq!(chunk_route_targets(&routed, &manifest), expected_set_a);
     assert_eq!(
@@ -2608,13 +2482,11 @@ fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
         BTreeSet::from([proposal.round])
     );
 }
-
 fn install_temporary_chunk_root(service: &mut ProductionV2Services) -> TempDir {
     let directory = TempDir::new().expect("temporary chunk root");
     service.chunk_root = directory.path().to_path_buf();
     directory
 }
-
 fn certified_fetch_task(
     service: &ProductionV2Services,
     id: u64,
@@ -2647,7 +2519,6 @@ fn certified_fetch_task(
     };
     BodyFetchTask::certified_for_test(id, tag, manifest, vec![service.local_peer.clone()], request)
 }
-
 #[test]
 fn certified_fetch_fans_out_to_every_frozen_roster_archive() {
     let (mut service, keys) = fixture();
@@ -2696,11 +2567,9 @@ fn certified_fetch_fans_out_to_every_frozen_roster_archive() {
             .push(post.peer_id);
         Ok(())
     });
-
     service
         .enqueue_body_fetch(task.clone())
         .expect("fan out one certified request to every remote archive");
-
     assert_eq!(task.sources(), sources.as_slice());
     assert_eq!(
         admitted
@@ -2718,7 +2587,6 @@ fn certified_fetch_fans_out_to_every_frozen_roster_archive() {
         "every remote fixture archive is intentionally outside the one-signer QC"
     );
 }
-
 #[test]
 fn replayed_proposal_signature_restores_exact_durable_payload() {
     let (mut service, keys) = fixture();
@@ -2742,7 +2610,6 @@ fn replayed_proposal_signature_restores_exact_durable_payload() {
     let completion =
         sign_consensus_task(&body_store, &service.context, &keys[proposer], task, true)
             .expect("sign replayed proposal");
-
     let V2IoCompletion::Signature {
         work_id,
         signature,
@@ -2755,9 +2622,7 @@ fn replayed_proposal_signature_restores_exact_durable_payload() {
     assert!(!signature.is_empty());
     assert_eq!(restored, payload);
 }
-
 include!("v2_worker_nonzero_view_restart.rs");
-
 #[test]
 fn replayed_proposal_signature_rejects_missing_durable_payload() {
     let (mut service, keys) = fixture();

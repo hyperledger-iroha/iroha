@@ -3,7 +3,6 @@
 // Extend cautiously when adding new ISIs (Peer, Parameters, ExecuteTrigger, etc.).
 //! Structures and impls related to processing Iroha Virtual Machine (IVM)
 //! runtime executors.
-
 use core::{
     convert::TryFrom,
     ops::{Deref, DerefMut},
@@ -13,7 +12,6 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{Arc, Mutex},
 };
-
 use base64::Engine as _;
 use derive_more::Debug;
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility, NexusFees, Pipeline};
@@ -80,7 +78,6 @@ use norito::{
     to_bytes,
 };
 use settlement_router::haircut::LiquidityProfile;
-
 #[cfg(feature = "zk-preverify")]
 use crate::zk::PreverifyResult;
 use crate::{
@@ -914,7 +911,6 @@ pub(crate) fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> 
 #[cfg(test)]
 mod encoded_result_program_tests {
     use super::*;
-
     #[test]
     fn encoded_result_program_is_admitted_and_copies_exact_bytes() {
         let result = [0xde, 0xad, 0xbe, 0xef, 0x42];
@@ -10949,9 +10945,7 @@ impl LoadedExecutor {
 /// `LoadedExecutor` when required.
 pub mod executor_norito {
     use std::panic::{AssertUnwindSafe, catch_unwind};
-
     use super::*;
-
     /// Local DTO used for Norito encoding of `Executor`.
     #[derive(Encode, Decode)]
     enum ExecutorDto {
@@ -10994,7 +10988,6 @@ pub mod executor_norito {
     #[cfg(test)]
     mod tests {
         use super::*;
-
         #[test]
         fn initial_roundtrip() {
             let exec = Executor::Initial;
@@ -11052,7 +11045,6 @@ mod tests {
     use ivm::instruction;
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
-
     #[test]
     fn multisig_role_namespace_reservation_is_process_independent() {
         for name in [
@@ -11754,7 +11746,6 @@ mod tests {
     fn initial_executor_requires_exact_enactment_permission_before_state_lookup() {
         use iroha_data_model::isi::governance::{AtWindow, EnactReferendum};
         use iroha_executor_data_model::permission::governance::CanEnactGovernance;
-
         let authority = checked_account_id();
         let account = Account::new(authority.clone()).build(&authority);
         let mut world = World::with([], [account], []);
@@ -11921,7 +11912,6 @@ mod tests {
             trigger::action::{Action, Repeats},
         };
         use iroha_executor_data_model::permission::account::AccountAliasPermissionScope;
-
         let legitimate_root = checked_account_id();
         let adjacent_owner = checked_account_id();
         let governed_domain =
@@ -16020,7 +16010,6 @@ mod tests {
             message.contains("live authorization") && message.contains("sequential")));
     }
     use std::collections::{BTreeMap, BTreeSet};
-
     #[allow(dead_code)]
     fn encode_load(rd: u8, base: u8, imm12: u16, funct3: u8) -> u32 {
         let imm = u32::from(imm12 & 0x0fff);
@@ -16055,7 +16044,6 @@ mod tests {
         };
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-
         let (_sink_id, _sink_kp) = gen_account_in("wonderland");
         let (_sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -16151,7 +16139,6 @@ mod tests {
         };
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-
         fn execute_with_window(
             activation_height: Option<u64>,
             withdraw_height: Option<u64>,
@@ -16254,7 +16241,6 @@ mod tests {
         };
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -16326,7 +16312,6 @@ mod tests {
             transaction::{Executable, TransactionBuilder},
         };
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -16527,7 +16512,6 @@ mod tests {
     #[test]
     fn initial_executor_rejects_raw_domain_registration_after_genesis() {
         use iroha_executor_data_model::permission::domain::CanRegisterDomain;
-
         let existing_domain =
             DomainId::try_new("wonderland", "universal").expect("existing domain id");
         let world = World::with(
@@ -18470,7 +18454,6 @@ mod tests {
         permission: Option<&str>,
     ) -> (Vec<u8>, u64) {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
         contract_program_with_entrypoint_kind(entrypoint, EntryPointKind::Kotoage, permission)
     }
     fn contract_program_with_entrypoint_kind(
@@ -18479,7 +18462,6 @@ mod tests {
         permission: Option<&str>,
     ) -> (Vec<u8>, u64) {
         use ivm::{EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, ProgramMetadata};
-
         let descriptor = EmbeddedEntrypointDescriptor {
             name: entrypoint.to_owned(),
             kind,
@@ -18527,7 +18509,6 @@ mod tests {
         kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
     ) -> Vec<u8> {
         use ivm::{EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, ProgramMetadata};
-
         let descriptor = EmbeddedEntrypointDescriptor {
             name: entrypoint.to_owned(),
             kind,
@@ -19464,7 +19445,6 @@ seiyaku IdentityRequired {
     #[test]
     fn nested_contract_dispatch_accepts_view_without_relaxing_top_level_calls() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
         let (program, expected_entrypoint_pc) = contract_program_with_entrypoint_kind(
             "configuration",
             EntryPointKind::View,
@@ -19545,7 +19525,6 @@ seiyaku IdentityRequired {
     #[test]
     fn prepared_view_resolver_accepts_only_views_and_preserves_exact_permission() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
         let (program, expected_pc) = contract_program_with_entrypoint_kind(
             "inspect",
             EntryPointKind::View,
@@ -19586,7 +19565,6 @@ seiyaku IdentityRequired {
     #[test]
     fn prepared_resolvers_reject_private_witness_entrypoints_before_host_execution() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
         let transaction_program =
             contract_program_with_private_input_entrypoint("commit", EntryPointKind::Kotoage);
         let transaction_contract = ivm::prepare_contract(Arc::<[u8]>::from(transaction_program))
@@ -19624,7 +19602,6 @@ seiyaku IdentityRequired {
     #[test]
     fn raw_contract_dispatch_rejects_lifecycle_entrypoints() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
         for (selector, kind) in [
             ("hajimari", EntryPointKind::Hajimari),
             ("kaizen", EntryPointKind::Kaizen),
@@ -19645,7 +19622,6 @@ seiyaku IdentityRequired {
     #[test]
     fn top_level_contract_invocation_uses_branded_lifecycle_permissions() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -19691,7 +19667,6 @@ seiyaku IdentityRequired {
     #[test]
     fn contract_transaction_dispatch_rejects_view_entrypoints() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
         let (program, _) =
             contract_program_with_entrypoint_kind("inspect", EntryPointKind::View, None);
         let mut metadata = Metadata::default();

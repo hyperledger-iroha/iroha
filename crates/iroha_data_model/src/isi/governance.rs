@@ -4,17 +4,13 @@
 //! executed by the corresponding core governance paths. They also define the
 //! exact CLI and Torii draft surfaces; endpoint-local aliases are not part of
 //! the instruction format.
-
 use std::{string::String, vec::Vec};
-
 #[cfg(feature = "governance")]
 use crate::governance::types::ParliamentBody;
 #[cfg(not(feature = "governance"))]
 type ParliamentBody = ();
-
 use iroha_primitives::numeric::Quantity;
 use norito::codec::{Decode, Encode};
-
 #[cfg(not(feature = "governance"))]
 pub use self::at_window_placeholder::AtWindow;
 #[cfg(feature = "governance")]
@@ -29,14 +25,11 @@ use crate::{
         ValidationFeeTreasuryPayoutBindingV1,
     },
 };
-
 #[cfg(test)]
 use crate::isi::bridge::SccpRouteGovernanceActionV1;
-
 #[cfg(not(feature = "governance"))]
 mod at_window_placeholder {
     use super::*;
-
     #[derive(
         Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
     )]
@@ -52,7 +45,6 @@ mod at_window_placeholder {
         pub upper: u64,
     }
 }
-
 /// Voting mode for a referendum
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
@@ -63,7 +55,6 @@ pub enum VotingMode {
     /// Plain-text quadratic voting flow.
     Plain,
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for VotingMode {
     fn json_serialize(&self, out: &mut String) {
@@ -75,7 +66,6 @@ impl norito::json::JsonSerialize for VotingMode {
             out,
         );
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -89,7 +79,6 @@ impl norito::json::JsonSerialize for VotingMode {
         )
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for VotingMode {
     fn json_deserialize(
@@ -103,7 +92,6 @@ impl norito::json::JsonDeserialize for VotingMode {
         }
     }
 }
-
 /// Council derivation method.
 #[derive(
     Clone,
@@ -125,7 +113,6 @@ pub enum CouncilDerivationKind {
     #[default]
     Manual,
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for CouncilDerivationKind {
     fn json_serialize(&self, out: &mut String) {
@@ -135,7 +122,6 @@ impl norito::json::JsonSerialize for CouncilDerivationKind {
         };
         norito::json::write_json_string(label, out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -147,7 +133,6 @@ impl norito::json::JsonSerialize for CouncilDerivationKind {
         norito::json::write_json_string_to(label, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for CouncilDerivationKind {
     fn json_deserialize(
@@ -161,7 +146,6 @@ impl norito::json::JsonDeserialize for CouncilDerivationKind {
         }
     }
 }
-
 /// Propose deployment of an IVM bytecode (`.to`) by hash
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeDeployContract {
@@ -180,9 +164,7 @@ pub struct ProposeDeployContract {
     /// Optional manifest provenance to attest the contract manifest on enactment.
     pub manifest_provenance: Option<ManifestProvenance>,
 }
-
 impl crate::seal::Instruction for ProposeDeployContract {}
-
 /// Propose a runtime upgrade manifest through governance.
 ///
 /// Ledger admission requires an exact `CanProposeRuntimeUpgrade` permission whose ABI version and
@@ -196,9 +178,7 @@ pub struct ProposeRuntimeUpgradeProposal {
     /// Optional voting mode for the referendum created by this proposal (default Zk).
     pub mode: Option<VotingMode>,
 }
-
 impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
-
 /// Propose one closed SCCP registry action through governance.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeSccpRouteGovernance {
@@ -209,9 +189,7 @@ pub struct ProposeSccpRouteGovernance {
     /// Optional voting mode for the referendum created by this proposal (default Zk).
     pub mode: Option<VotingMode>,
 }
-
 impl crate::seal::Instruction for ProposeSccpRouteGovernance {}
-
 /// Propose one closed `SoraFS` provider-owner transition through governance.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeSorafsProviderGovernance {
@@ -222,9 +200,7 @@ pub struct ProposeSorafsProviderGovernance {
     /// Optional voting mode for the referendum created by this proposal (default ZK).
     pub mode: Option<VotingMode>,
 }
-
 impl crate::seal::Instruction for ProposeSorafsProviderGovernance {}
-
 /// Propose one validation-fee policy through SORA Parliament.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeValidationFeePolicy {
@@ -239,9 +215,7 @@ pub struct ProposeValidationFeePolicy {
     /// Exact PLAIN electorate contract bound into the proposal fingerprint.
     pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
-
 impl crate::seal::Instruction for ProposeValidationFeePolicy {}
-
 /// Propose one exact validation-fee payout lifecycle through SORA Parliament.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeValidationFeePayoutLifecycle {
@@ -257,9 +231,7 @@ pub struct ProposeValidationFeePayoutLifecycle {
     /// Exact PLAIN electorate contract bound into the proposal fingerprint.
     pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
-
 impl crate::seal::Instruction for ProposeValidationFeePayoutLifecycle {}
-
 /// Cast a ZK ballot (default voting mode)
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct CastZkBallot {
@@ -273,9 +245,7 @@ pub struct CastZkBallot {
     /// `nullifier`; `amount` is an exact canonical non-negative [`Quantity`] string.
     pub public_inputs_json: String,
 }
-
 impl crate::seal::Instruction for CastZkBallot {}
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -314,7 +284,6 @@ pub struct BallotProof {
     /// Optional direction hint (Aye/Nay/Abstain).
     pub direction: Option<String>,
 }
-
 /// Cast a non‑ZK quadratic ballot (optional mode)
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct CastPlainBallot {
@@ -329,9 +298,7 @@ pub struct CastPlainBallot {
     /// 0=Aye, 1=Nay, 2=Abstain
     pub direction: u8,
 }
-
 impl crate::seal::Instruction for CastPlainBallot {}
-
 /// Enact an approved referendum (host validates certificate separately)
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
@@ -350,9 +317,7 @@ pub struct EnactReferendum {
     /// Window describing when enactment is valid.
     pub at_window: AtWindow,
 }
-
 impl crate::seal::Instruction for EnactReferendum {}
-
 /// Enact a finalized threshold referendum for one exact SCCP route action.
 ///
 /// Unlike the generic referendum instruction, this surface carries the full
@@ -377,9 +342,7 @@ pub struct EnactSccpRouteGovernance {
     /// Exact finalized enactment window.
     pub at_window: AtWindow,
 }
-
 impl crate::seal::Instruction for EnactSccpRouteGovernance {}
-
 /// Finalize a referendum: compute tally and emit Approved/Rejected events
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 #[cfg_attr(
@@ -393,9 +356,7 @@ pub struct FinalizeReferendum {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub proposal_id: [u8; 32],
 }
-
 impl crate::seal::Instruction for FinalizeReferendum {}
-
 /// Record a council approval for a governance proposal.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema,
@@ -408,9 +369,7 @@ pub struct ApproveGovernanceProposal {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub proposal_id: [u8; 32],
 }
-
 impl crate::seal::Instruction for ApproveGovernanceProposal {}
-
 /// Equal citizen decision recorded by a seated Parliament member.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
@@ -423,7 +382,6 @@ pub enum ParliamentDecision {
     /// Record presence without supporting or rejecting the proposal.
     Abstain,
 }
-
 impl ParliamentDecision {
     /// Stable lowercase label used by JSON clients.
     #[must_use]
@@ -435,13 +393,11 @@ impl ParliamentDecision {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for ParliamentDecision {
     fn json_serialize(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -449,7 +405,6 @@ impl norito::json::JsonSerialize for ParliamentDecision {
         norito::json::write_json_string_to(self.as_str(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ParliamentDecision {
     fn json_deserialize(
@@ -466,7 +421,6 @@ impl norito::json::JsonDeserialize for ParliamentDecision {
         }
     }
 }
-
 /// Cast an equal signed Parliament ballot for a proposal stage.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
@@ -484,9 +438,7 @@ pub struct CastParliamentBallot {
     /// Equal citizen decision signed by the transaction authority.
     pub decision: ParliamentDecision,
 }
-
 impl crate::seal::Instruction for CastParliamentBallot {}
-
 /// Persist a council membership for an epoch.
 ///
 /// This instruction records an explicitly administered `members` roster for
@@ -502,9 +454,7 @@ pub struct PersistCouncilForEpoch {
     #[norito(default)]
     pub alternates: Vec<crate::account::AccountId>,
 }
-
 impl crate::seal::Instruction for PersistCouncilForEpoch {}
-
 /// Discipline event recorded for a citizen assigned to a governance role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
 #[cfg_attr(
@@ -520,19 +470,16 @@ pub enum CitizenServiceEvent {
     /// Citizen committed misconduct during the assignment.
     Misconduct,
 }
-
 impl core::cmp::PartialOrd for CitizenServiceEvent {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl core::cmp::Ord for CitizenServiceEvent {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         (*self as u8).cmp(&(*other as u8))
     }
 }
-
 /// Record a citizen service discipline event (decline, no-show, misconduct) for a role/epoch.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 #[cfg_attr(
@@ -549,9 +496,7 @@ pub struct RecordCitizenServiceOutcome {
     /// Recorded event kind.
     pub event: CitizenServiceEvent,
 }
-
 impl crate::seal::Instruction for RecordCitizenServiceOutcome {}
-
 /// Bond the configured citizenship amount to join the citizen registry.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct RegisterCitizen {
@@ -560,18 +505,14 @@ pub struct RegisterCitizen {
     /// Amount to bond (must meet or exceed the configured floor).
     pub amount: Quantity,
 }
-
 impl crate::seal::Instruction for RegisterCitizen {}
-
 /// Unbond and remove a citizen from the registry.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct UnregisterCitizen {
     /// Account to remove from the registry.
     pub owner: AccountId,
 }
-
 impl crate::seal::Instruction for UnregisterCitizen {}
-
 /// Slash a governance bond lock for a referendum.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct SlashGovernanceLock {
@@ -584,9 +525,7 @@ pub struct SlashGovernanceLock {
     /// Human-readable reason recorded with the slash event.
     pub reason: String,
 }
-
 impl crate::seal::Instruction for SlashGovernanceLock {}
-
 /// Restitute a previously slashed governance bond lock.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct RestituteGovernanceLock {
@@ -599,13 +538,10 @@ pub struct RestituteGovernanceLock {
     /// Human-readable reason recorded with the restitution event.
     pub reason: String,
 }
-
 impl crate::seal::Instruction for RestituteGovernanceLock {}
-
 fn governance_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_governance_decode_from_slice {
     ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -614,7 +550,6 @@ macro_rules! impl_governance_decode_from_slice {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -631,7 +566,6 @@ macro_rules! impl_governance_decode_from_slice {
         }
     };
 }
-
 impl_governance_decode_from_slice!(ProposeDeployContract {
     contract_address: crate::smart_contract::ContractAddress,
     code_hash_hex: String,
@@ -641,25 +575,21 @@ impl_governance_decode_from_slice!(ProposeDeployContract {
     mode: Option<VotingMode>,
     manifest_provenance: Option<ManifestProvenance>,
 });
-
 impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
     manifest: RuntimeUpgradeManifest,
     window: Option<AtWindow>,
     mode: Option<VotingMode>,
 });
-
 impl_governance_decode_from_slice!(ProposeSccpRouteGovernance {
     anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
     window: Option<AtWindow>,
     mode: Option<VotingMode>,
 });
-
 impl_governance_decode_from_slice!(ProposeSorafsProviderGovernance {
     action: SorafsProviderGovernanceActionV1,
     window: Option<AtWindow>,
     mode: Option<VotingMode>,
 });
-
 impl_governance_decode_from_slice!(ProposeValidationFeePolicy {
     policy: ValidationFeePolicyV1,
     payout_lifecycle_proposal_id: Option<[u8; 32]>,
@@ -667,20 +597,17 @@ impl_governance_decode_from_slice!(ProposeValidationFeePolicy {
     mode: Option<VotingMode>,
     plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 });
-
 impl_governance_decode_from_slice!(ProposeValidationFeePayoutLifecycle {
     payout_binding: ValidationFeeTreasuryPayoutBindingV1,
     referendum_window: Option<AtWindow>,
     mode: Option<VotingMode>,
     plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 });
-
 impl_governance_decode_from_slice!(CastZkBallot {
     election_id: String,
     proof_b64: String,
     public_inputs_json: String,
 });
-
 impl_governance_decode_from_slice!(CastPlainBallot {
     referendum_id: String,
     owner: AccountId,
@@ -688,90 +615,74 @@ impl_governance_decode_from_slice!(CastPlainBallot {
     duration_blocks: u64,
     direction: u8,
 });
-
 impl_governance_decode_from_slice!(SlashGovernanceLock {
     referendum_id: String,
     owner: AccountId,
     amount: Quantity,
     reason: String,
 });
-
 impl_governance_decode_from_slice!(RestituteGovernanceLock {
     referendum_id: String,
     owner: AccountId,
     amount: Quantity,
     reason: String,
 });
-
 impl_governance_decode_from_slice!(EnactReferendum {
     referendum_id: [u8; 32],
     preimage_hash: [u8; 32],
     at_window: AtWindow,
 });
-
 impl_governance_decode_from_slice!(EnactSccpRouteGovernance {
     referendum_id: [u8; 32],
     anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
     at_window: AtWindow,
 });
-
 impl_governance_decode_from_slice!(FinalizeReferendum {
     referendum_id: String,
     proposal_id: [u8; 32],
 });
-
 impl_governance_decode_from_slice!(ApproveGovernanceProposal {
     body: ParliamentBody,
     proposal_id: [u8; 32],
 });
-
 impl_governance_decode_from_slice!(CastParliamentBallot {
     body: ParliamentBody,
     proposal_id: [u8; 32],
     decision: ParliamentDecision,
 });
-
 impl_governance_decode_from_slice!(PersistCouncilForEpoch {
     epoch: u64,
     members: Vec<crate::account::AccountId>,
     alternates: Vec<crate::account::AccountId>,
 });
-
 impl_governance_decode_from_slice!(RecordCitizenServiceOutcome {
     owner: AccountId,
     epoch: u64,
     role: String,
     event: CitizenServiceEvent,
 });
-
 impl_governance_decode_from_slice!(RegisterCitizen {
     owner: AccountId,
     amount: Quantity,
 });
-
 impl_governance_decode_from_slice!(UnregisterCitizen { owner: AccountId });
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::core::DecodeFromSlice;
-
     use super::*;
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked governance fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn window() -> AtWindow {
         AtWindow {
             lower: 10,
             upper: 20,
         }
     }
-
     #[cfg(feature = "json")]
     fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
@@ -784,13 +695,11 @@ mod tests {
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         );
     }
-
     fn contract_address() -> crate::smart_contract::ContractAddress {
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
             .parse()
             .expect("contract address")
     }
-
     fn runtime_manifest() -> RuntimeUpgradeManifest {
         RuntimeUpgradeManifest {
             name: "runtime-upgrade".to_string(),
@@ -806,7 +715,6 @@ mod tests {
             provenance: Vec::new(),
         }
     }
-
     fn sccp_route_action() -> SccpRouteGovernanceActionV1 {
         SccpRouteGovernanceActionV1::Remove(crate::bridge::SccpRouteKeyV1 {
             lane_id: crate::bridge::SccpLaneIdV1 {
@@ -818,7 +726,6 @@ mod tests {
             revision: 1,
         })
     }
-
     fn sccp_route_anchor() -> crate::isi::bridge::SccpRouteGovernanceAnchorV1 {
         crate::isi::bridge::SccpRouteGovernanceAnchorV1 {
             network_id: NetworkId::from_genesis_hash(
@@ -829,7 +736,6 @@ mod tests {
             action: sccp_route_action(),
         }
     }
-
     fn sorafs_provider_action() -> SorafsProviderGovernanceActionV1 {
         SorafsProviderGovernanceActionV1::Establish(
             crate::isi::sorafs::EstablishSorafsProviderOwnerV1 {
@@ -838,7 +744,6 @@ mod tests {
             },
         )
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -849,7 +754,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
     where
         T: crate::isi::Instruction
@@ -867,7 +771,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[derive(Encode)]
     struct ForgedCastPlainBallot {
         referendum_id: String,
@@ -876,7 +779,6 @@ mod tests {
         duration_blocks: u64,
         direction: u8,
     }
-
     #[test]
     fn governance_amount_rejects_negative_numeric_payload() {
         let encoded = ForgedCastPlainBallot {
@@ -889,7 +791,6 @@ mod tests {
         .encode();
         assert!(CastPlainBallot::decode_from_slice(&encoded).is_err());
     }
-
     #[test]
     fn encode_roundtrip_basic() {
         let p = ProposeDeployContract {
@@ -906,7 +807,6 @@ mod tests {
         let dec = ProposeDeployContract::decode(&mut cur).unwrap();
         assert_eq!(p, dec);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn voting_mode_json_is_canonical_and_rejects_aliases() {
@@ -936,7 +836,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn parliament_decision_json_is_exact_lowercase() {
@@ -957,7 +856,6 @@ mod tests {
                 decision
             );
         }
-
         for alias in ["Approve", "Reject", "Abstain", " approve", "approve "] {
             let json = format!("\"{alias}\"");
             assert!(
@@ -966,14 +864,12 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn council_derivation_json_has_exact_checked_bound() {
         assert_exact_json(&CouncilDerivationKind::Sortition);
         assert_exact_json(&CouncilDerivationKind::Manual);
     }
-
     #[test]
     fn runtime_upgrade_proposal_roundtrip() {
         let ins = ProposeRuntimeUpgradeProposal {
@@ -986,7 +882,6 @@ mod tests {
         let dec = ProposeRuntimeUpgradeProposal::decode(&mut cur).unwrap();
         assert_eq!(ins, dec);
     }
-
     #[test]
     fn sccp_route_governance_proposal_roundtrip() {
         let ins = ProposeSccpRouteGovernance {
@@ -999,7 +894,6 @@ mod tests {
         let dec = ProposeSccpRouteGovernance::decode(&mut cur).unwrap();
         assert_eq!(ins, dec);
     }
-
     #[test]
     fn sorafs_provider_governance_proposal_roundtrip() {
         let instruction = ProposeSorafsProviderGovernance {
@@ -1012,7 +906,6 @@ mod tests {
             .expect("decode SoraFS provider-governance proposal");
         assert_eq!(instruction, decoded);
     }
-
     #[test]
     fn at_window_roundtrip() {
         let win = AtWindow { lower: 1, upper: 2 };
@@ -1021,7 +914,6 @@ mod tests {
         let dec = AtWindow::decode(&mut cur).unwrap();
         assert_eq!(win, dec);
     }
-
     #[test]
     fn approve_proposal_roundtrip() {
         let ins = ApproveGovernanceProposal {
@@ -1033,7 +925,6 @@ mod tests {
         let dec = ApproveGovernanceProposal::decode(&mut cur).unwrap();
         assert_eq!(ins, dec);
     }
-
     #[test]
     fn at_window_decodes_from_slice_via_norito() {
         let window = AtWindow {
@@ -1046,7 +937,6 @@ mod tests {
         assert_eq!(decoded, window);
         assert_eq!(used, bytes.len());
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn governance_decode_from_slice_roundtrips() {
@@ -1133,11 +1023,9 @@ mod tests {
         });
         assert_slice_roundtrip(UnregisterCitizen { owner: account(1) });
     }
-
     #[test]
     fn governance_default_registry_decodes_type_names() {
         let registry = crate::isi::registry::default();
-
         assert_registry_decodes(
             &registry,
             ProposeDeployContract {

@@ -1,7 +1,5 @@
 //! Test utility to print the norito-encoded asset ID for CLI minting.
-
 use iroha_data_model::prelude::*;
-
 #[test]
 fn print_usd_asset_norito() {
     // User account — i105 literal (no @domain)

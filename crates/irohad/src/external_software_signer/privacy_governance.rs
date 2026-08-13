@@ -11,9 +11,7 @@
 //! Request account fields use the data model's canonical JSON address representation:
 //! bounded lowercase `0x` canonical bytes.  They never accept aliases, legacy
 //! `key@domain` literals, or Unicode I105 text at this ASCII JSON boundary.
-
 use std::num::NonZeroU32;
-
 use iroha_crypto::{Algorithm, PublicKey, sha256};
 use iroha_data_model::{
     NetworkId,
@@ -26,7 +24,6 @@ use iroha_data_model::{
     transaction::{Executable, FeePaymentIntent, TransactionBuilder, TransactionDomain},
 };
 use norito::json::{Map, Value};
-
 pub(super) const PRIVACY_GOVERNANCE_PROVISIONING_BLOCKER_V1: &str =
     "MissingRetainedGenesisSignerFinalizePrivacyGenesisV1";
 pub(super) const PRIVACY_GOVERNANCE_REQUEST_SCHEMA_V1: &str =
@@ -35,7 +32,6 @@ pub(super) const PRIVACY_GOVERNANCE_AUTHORITY_ENVELOPE_SCHEMA_V1: &str =
     "iroha.taira.privacy_governance_authority.v1";
 pub(super) const PRIVACY_GOVERNANCE_REPLAY_NAMESPACE_V1: &str =
     "iroha.taira.privacy_governance_authority_replay.v1";
-
 const REQUEST_SCHEMA_VERSION_V1: u64 = 1;
 const REQUEST_OPERATION_V1: &str = "sign-exact12-privacy-governance-transaction-v1";
 const REQUEST_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy_governance_authority_request.v1\0";
@@ -52,7 +48,6 @@ const MAX_TRANSACTION_PAYLOAD_BYTES_V1: usize = 8 * 1024 * 1024;
 const MAX_TEXT_BYTES_V1: usize = 4_096;
 const MAX_REQUEST_LIFETIME_MILLIS_V1: u64 = 15 * 60 * 1_000;
 const MAX_TRANSACTION_CREATION_TIME_MILLIS_V1: u64 = i64::MAX as u64;
-
 const REQUEST_FIELDS_V1: &[&str] = &[
     "activation",
     "authority_envelope_schema",
@@ -118,7 +113,6 @@ const TRANSACTION_FIELDS_V1: &[&str] = &[
     "time_to_live_millis",
 ];
 const FEE_FIELDS_V1: &[&str] = &["charge_limits", "gas_limit", "payer"];
-
 /// Independently pinned semantic inputs which a future retained-key service must own.
 ///
 /// These values are not accepted from the request.  The future service must populate
@@ -149,14 +143,12 @@ pub(super) struct PrivacyGovernanceExpectedContextV1 {
     pub(super) expires_at_unix_millis: u64,
     pub(super) transaction_nonce: NonZeroU32,
 }
-
 /// Exact predecessor supplied by the authenticated live audit state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PrivacyGovernanceAuditPredecessorV1 {
     pub(super) sequence: u64,
     pub(super) head_sha256: [u8; 32],
 }
-
 /// One receipt's claimed newly committed audit position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PrivacyGovernanceAuditCommitV1 {
@@ -164,14 +156,12 @@ pub(super) struct PrivacyGovernanceAuditCommitV1 {
     pub(super) previous_head_sha256: [u8; 32],
     pub(super) committed_head_sha256: [u8; 32],
 }
-
 /// Post-commit journal head independently reread from authenticated live state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PrivacyGovernanceAuthenticatedLiveAuditV1 {
     pub(super) sequence: u64,
     pub(super) head_sha256: [u8; 32],
 }
-
 /// Result of the pure semantic request validation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ValidatedPrivacyGovernanceRequestV1 {
@@ -184,7 +174,6 @@ pub(super) struct ValidatedPrivacyGovernanceRequestV1 {
     pub(super) issued_at_unix_millis: u64,
     pub(super) expires_at_unix_millis: u64,
 }
-
 /// Closed reason returned by the inert semantic contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PrivacyGovernanceSemanticErrorV1 {
@@ -200,7 +189,6 @@ pub(super) enum PrivacyGovernanceSemanticErrorV1 {
     Activation,
     AuditPredecessor,
 }
-
 /// Validate one exact request without performing I/O or exposing a signing path.
 ///
 /// The authenticated kernel peer UID is checked before request parsing.  The caller
@@ -217,7 +205,6 @@ pub(super) fn validate_privacy_governance_request_v1(
         return Err(PrivacyGovernanceSemanticErrorV1::KernelPeer);
     }
     validate_expected_context(expected)?;
-
     let value = parse_canonical_request(request_bytes)?;
     let request = exact_object(&value, REQUEST_FIELDS_V1)?;
     if required_u64(request, "schema_version")? != REQUEST_SCHEMA_VERSION_V1
@@ -230,7 +217,6 @@ pub(super) fn validate_privacy_governance_request_v1(
             "request schema",
         ));
     }
-
     let request_id = required_sha256(request, "request_id")?;
     let mut body = (*request).clone();
     body.remove("request_id")
@@ -246,7 +232,6 @@ pub(super) fn validate_privacy_governance_request_v1(
             "request id",
         ));
     }
-
     let activation = nested_object(request, "activation", ACTIVATION_FIELDS_V1)?;
     let candidate = nested_object(request, "candidate", CANDIDATE_FIELDS_V1)?;
     let controller = nested_object(request, "controller", CONTROLLER_FIELDS_V1)?;
@@ -255,7 +240,6 @@ pub(super) fn validate_privacy_governance_request_v1(
     let run = nested_object(request, "run", RUN_FIELDS_V1)?;
     let transaction = nested_object(request, "transaction", TRANSACTION_FIELDS_V1)?;
     let fee = nested_object(transaction, "fee_payment", FEE_FIELDS_V1)?;
-
     require_sha256_axis(
         candidate,
         "candidate_binding_sha256",
@@ -334,7 +318,6 @@ pub(super) fn validate_privacy_governance_request_v1(
         expected.unsigned_genesis_sha256,
         "unsigned genesis",
     )?;
-
     let network_hash = *expected.network_id.as_bytes();
     for (object, field) in [
         (genesis, "expected_hash"),
@@ -354,7 +337,6 @@ pub(super) fn validate_privacy_governance_request_v1(
             "transaction authority",
         ));
     }
-
     if required_str(transaction, "domain")? != TRANSACTION_DOMAIN_V1
         || required_str(transaction, "executable_kind")? != TRANSACTION_EXECUTABLE_KIND_V1
         || required_str(transaction, "payload_codec")? != TRANSACTION_PAYLOAD_CODEC_V1
@@ -374,7 +356,6 @@ pub(super) fn validate_privacy_governance_request_v1(
             "request fee, metadata, or attachments",
         ));
     }
-
     let issued_at = required_positive_u64(run, "issued_at_unix_millis")?;
     let expires_at = required_positive_u64(run, "expires_at_unix_millis")?;
     let run_nonce = required_sha256(run, "nonce")?;
@@ -403,7 +384,6 @@ pub(super) fn validate_privacy_governance_request_v1(
     {
         return Err(PrivacyGovernanceSemanticErrorV1::TimeWindow);
     }
-
     let protocol_label = required_text(activation, "protocol")?;
     let protocol_id = PrivacyProtocolIdV1::from_canonical_label(protocol_label)
         .ok_or(PrivacyGovernanceSemanticErrorV1::Activation)?;
@@ -432,7 +412,6 @@ pub(super) fn validate_privacy_governance_request_v1(
     {
         return Err(PrivacyGovernanceSemanticErrorV1::Activation);
     }
-
     let transaction_payload = required_canonical_base64(
         transaction,
         "payload_norito_base64",
@@ -455,10 +434,8 @@ pub(super) fn validate_privacy_governance_request_v1(
         activate_at,
         &instruction_bytes,
     )?;
-
     let operation_id = derive_operation_id_v1(request_id, run_nonce);
     let replay_id = derive_replay_id_v1(run_nonce);
-
     Ok(ValidatedPrivacyGovernanceRequestV1 {
         request_id,
         request_sha256: sha256(request_bytes),
@@ -470,7 +447,6 @@ pub(super) fn validate_privacy_governance_request_v1(
         expires_at_unix_millis: expires_at,
     })
 }
-
 /// Authoritative native operation identity for a future replay journal.
 ///
 /// The barriered Python scaffold only checks that a receipt field is digest-shaped;
@@ -509,7 +485,6 @@ fn derive_operation_id_v1(request_id: [u8; 32], run_nonce: [u8; 32]) -> [u8; 32]
     preimage.extend_from_slice(&run_nonce);
     sha256(preimage)
 }
-
 /// Stable namespace-and-nonce identity which a future journal must reserve before signing.
 fn derive_replay_id_v1(run_nonce: [u8; 32]) -> [u8; 32] {
     let replay_namespace = PRIVACY_GOVERNANCE_REPLAY_NAMESPACE_V1.as_bytes();
@@ -531,7 +506,6 @@ fn derive_replay_id_v1(run_nonce: [u8; 32]) -> [u8; 32] {
     preimage.extend_from_slice(&run_nonce);
     sha256(preimage)
 }
-
 /// Validate that a receipt commit is the exact fresh successor of a live predecessor
 /// and equals a separately authenticated post-commit journal head.
 pub(super) fn validate_privacy_governance_audit_successor_v1(
@@ -558,7 +532,6 @@ pub(super) fn validate_privacy_governance_audit_successor_v1(
     }
     Ok(())
 }
-
 fn validate_expected_context(
     expected: &PrivacyGovernanceExpectedContextV1,
 ) -> Result<(), PrivacyGovernanceSemanticErrorV1> {
@@ -602,7 +575,6 @@ fn validate_expected_context(
     require_minimum_activation_delay(lifecycle.proposed_at_height, lifecycle.activate_at_height)
         .map_err(|_| PrivacyGovernanceSemanticErrorV1::InvalidExpectedContext)
 }
-
 fn validate_genesis_identity(
     genesis: &Map,
     expected: &PrivacyGovernanceExpectedContextV1,
@@ -619,7 +591,6 @@ fn validate_genesis_identity(
             "genesis public key",
         ));
     }
-
     let authority_text = required_text(genesis, "authority_account_id")?;
     let parsed = parse_canonical_account_address(authority_text)?;
     let parsed_account = parsed
@@ -634,7 +605,6 @@ fn validate_genesis_identity(
     }
     Ok(())
 }
-
 fn parse_canonical_account_address(
     text: &str,
 ) -> Result<AccountAddress, PrivacyGovernanceSemanticErrorV1> {
@@ -676,7 +646,6 @@ fn parse_canonical_account_address(
     }
     Ok(address)
 }
-
 fn validate_transaction_payload(
     payload: &iroha_data_model::transaction::TransactionPayload,
     expected: &PrivacyGovernanceExpectedContextV1,
@@ -711,7 +680,6 @@ fn validate_transaction_payload(
             "fee, metadata, or attachments",
         ));
     }
-
     let Executable::Instructions(instructions) = &payload.instructions else {
         return Err(PrivacyGovernanceSemanticErrorV1::TransactionIntent(
             "executable kind",
@@ -743,7 +711,6 @@ fn validate_transaction_payload(
     }
     require_minimum_activation_delay(proposed_at, activate_at)
 }
-
 fn require_minimum_activation_delay(
     proposed_at: u64,
     activate_at: u64,
@@ -756,7 +723,6 @@ fn require_minimum_activation_delay(
     }
     Ok(())
 }
-
 fn parse_canonical_request(bytes: &[u8]) -> Result<Value, PrivacyGovernanceSemanticErrorV1> {
     if bytes.is_empty() || bytes.len() > MAX_REQUEST_BYTES_V1 || !bytes.is_ascii() {
         return Err(PrivacyGovernanceSemanticErrorV1::NonCanonicalRequest);
@@ -768,7 +734,6 @@ fn parse_canonical_request(bytes: &[u8]) -> Result<Value, PrivacyGovernanceSeman
     }
     Ok(value)
 }
-
 fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, PrivacyGovernanceSemanticErrorV1> {
     let mut bytes = norito::json::to_json(value)
         .map_err(|_| PrivacyGovernanceSemanticErrorV1::NonCanonicalRequest)?
@@ -779,7 +744,6 @@ fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, PrivacyGovernanceSeman
     bytes.push(b'\n');
     Ok(bytes)
 }
-
 fn exact_object<'a>(
     value: &'a Value,
     fields: &[&str],
@@ -796,7 +760,6 @@ fn exact_object<'a>(
     }
     Ok(object)
 }
-
 fn nested_object<'a>(
     object: &'a Map,
     field: &'static str,
@@ -809,7 +772,6 @@ fn nested_object<'a>(
         fields,
     )
 }
-
 fn required_str<'a>(
     object: &'a Map,
     field: &'static str,
@@ -819,7 +781,6 @@ fn required_str<'a>(
         .and_then(Value::as_str)
         .ok_or(PrivacyGovernanceSemanticErrorV1::RequestContract(field))
 }
-
 fn required_text<'a>(
     object: &'a Map,
     field: &'static str,
@@ -830,11 +791,9 @@ fn required_text<'a>(
     }
     Ok(value)
 }
-
 fn bounded_ascii(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_TEXT_BYTES_V1 && value.is_ascii()
 }
-
 fn required_u64(
     object: &Map,
     field: &'static str,
@@ -844,7 +803,6 @@ fn required_u64(
         .and_then(Value::as_u64)
         .ok_or(PrivacyGovernanceSemanticErrorV1::RequestContract(field))
 }
-
 fn required_positive_u64(
     object: &Map,
     field: &'static str,
@@ -855,7 +813,6 @@ fn required_positive_u64(
     }
     Ok(value)
 }
-
 fn required_null(
     object: &Map,
     field: &'static str,
@@ -865,7 +822,6 @@ fn required_null(
         .map(Value::is_null)
         .ok_or(PrivacyGovernanceSemanticErrorV1::RequestContract(field))
 }
-
 fn required_empty_array(
     object: &Map,
     field: &'static str,
@@ -876,7 +832,6 @@ fn required_empty_array(
         .map(|value| value.is_empty())
         .ok_or(PrivacyGovernanceSemanticErrorV1::RequestContract(field))
 }
-
 fn required_empty_object(
     object: &Map,
     field: &'static str,
@@ -887,7 +842,6 @@ fn required_empty_object(
         .map(|value| value.is_empty())
         .ok_or(PrivacyGovernanceSemanticErrorV1::RequestContract(field))
 }
-
 fn required_sha256(
     object: &Map,
     field: &'static str,
@@ -898,7 +852,6 @@ fn required_sha256(
     }
     Ok(digest)
 }
-
 fn required_iroha_hash(
     object: &Map,
     field: &'static str,
@@ -909,7 +862,6 @@ fn required_iroha_hash(
     }
     Ok(hash)
 }
-
 fn required_commit(
     object: &Map,
     field: &'static str,
@@ -920,7 +872,6 @@ fn required_commit(
     }
     Ok(commit)
 }
-
 fn required_lower_hex<const N: usize>(
     object: &Map,
     field: &'static str,
@@ -943,7 +894,6 @@ fn required_lower_hex<const N: usize>(
     }
     Ok(decoded)
 }
-
 fn lower_hex_nibble(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -951,7 +901,6 @@ fn lower_hex_nibble(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-
 fn require_sha256_axis(
     object: &Map,
     field: &'static str,
@@ -963,7 +912,6 @@ fn require_sha256_axis(
     }
     Ok(())
 }
-
 fn require_commit_axis(
     object: &Map,
     field: &'static str,
@@ -975,7 +923,6 @@ fn require_commit_axis(
     }
     Ok(())
 }
-
 fn require_text_axis(
     object: &Map,
     field: &'static str,
@@ -987,7 +934,6 @@ fn require_text_axis(
     }
     Ok(())
 }
-
 fn required_canonical_base64(
     object: &Map,
     field: &'static str,
@@ -1011,7 +957,6 @@ fn required_canonical_base64(
     if decoded_len == 0 || decoded_len > maximum_decoded_bytes {
         return Err(PrivacyGovernanceSemanticErrorV1::RequestContract(field));
     }
-
     let mut decoded = Vec::with_capacity(decoded_len);
     let group_count = encoded.len() / 4;
     for (index, group) in encoded.chunks_exact(4).enumerate() {
@@ -1051,7 +996,6 @@ fn required_canonical_base64(
     }
     Ok(decoded)
 }
-
 fn base64_sextet(byte: u8) -> Option<u8> {
     match byte {
         b'A'..=b'Z' => Some(byte - b'A'),
@@ -1062,15 +1006,12 @@ fn base64_sextet(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-
 fn is_zero<const N: usize>(bytes: &[u8; N]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{num::NonZeroU64, time::Duration};
-
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         block::BlockHeader,
@@ -1086,22 +1027,17 @@ mod tests {
         transaction::{ExecutableBatchItem, TransactionPayload},
     };
     use iroha_primitives::json::Json;
-
     use super::*;
-
     const TEST_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
     const FOREIGN_PUBLIC_KEY: &str =
         "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
-
     fn digest(label: &[u8]) -> [u8; 32] {
         sha256(label)
     }
-
     fn commit(byte: u8) -> [u8; 20] {
         [byte; 20]
     }
-
     fn fixture_context() -> PrivacyGovernanceExpectedContextV1 {
         let public_key = TEST_PUBLIC_KEY
             .parse::<PublicKey>()
@@ -1158,7 +1094,6 @@ mod tests {
             transaction_nonce: NonZeroU32::new(7).expect("nonzero nonce"),
         }
     }
-
     fn valid_payload(context: &PrivacyGovernanceExpectedContextV1) -> TransactionPayload {
         let mut builder = TransactionBuilder::new(
             context.network_id,
@@ -1174,19 +1109,16 @@ mod tests {
             .set_nonce(context.transaction_nonce);
         builder.into_payload().expect("valid payload")
     }
-
     fn encode_payload(payload: TransactionPayload) -> Vec<u8> {
         TransactionBuilder::from_payload(payload)
             .expect("test payload remains structurally encodable")
             .encode_payload()
     }
-
     fn activation_bytes(context: &PrivacyGovernanceExpectedContextV1) -> Vec<u8> {
         let instruction =
             InstructionBox::from(RegisterPrivacyProtocolActivationV1::new(context.activation));
         instruction.dyn_encode()
     }
-
     fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
         Value::Object(
             entries
@@ -1195,7 +1127,6 @@ mod tests {
                 .collect(),
         )
     }
-
     fn hex(bytes: &[u8]) -> String {
         const DIGITS: &[u8; 16] = b"0123456789abcdef";
         let mut out = String::with_capacity(bytes.len() * 2);
@@ -1205,7 +1136,6 @@ mod tests {
         }
         out
     }
-
     fn base64(bytes: &[u8]) -> String {
         const TABLE: &[u8; 64] =
             b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1229,14 +1159,12 @@ mod tests {
         }
         out
     }
-
     fn proposed_heights(context: &PrivacyGovernanceExpectedContextV1) -> (u64, u64) {
         let PrivacyProtocolLifecycleV1::Proposed(lifecycle) = context.activation.lifecycle else {
             panic!("fixture activation is proposed");
         };
         (lifecycle.proposed_at_height, lifecycle.activate_at_height)
     }
-
     fn request_value_with_payload(
         context: &PrivacyGovernanceExpectedContextV1,
         payload_bytes: &[u8],
@@ -1418,7 +1346,6 @@ mod tests {
             ),
         ])
     }
-
     fn reseal_request_id(value: &mut Value) -> Vec<u8> {
         value
             .as_object_mut()
@@ -1433,13 +1360,11 @@ mod tests {
             .insert("request_id".to_owned(), Value::from(hex(&sha256(preimage))));
         canonical_json_bytes(value).expect("canonical request")
     }
-
     fn valid_request(context: &PrivacyGovernanceExpectedContextV1) -> Vec<u8> {
         let payload = encode_payload(valid_payload(context));
         let mut value = request_value_with_payload(context, &payload);
         reseal_request_id(&mut value)
     }
-
     fn nested_mut<'a>(value: &'a mut Value, field: &str) -> &'a mut Map {
         value
             .as_object_mut()
@@ -1449,7 +1374,6 @@ mod tests {
             .as_object_mut()
             .expect("nested object")
     }
-
     fn replace_payload(value: &mut Value, bytes: &[u8]) {
         let transaction = nested_mut(value, "transaction");
         transaction.insert(
@@ -1467,7 +1391,6 @@ mod tests {
             );
         }
     }
-
     fn validate(
         bytes: &[u8],
         context: &PrivacyGovernanceExpectedContextV1,
@@ -1479,7 +1402,6 @@ mod tests {
             context,
         )
     }
-
     #[test]
     fn exact_request_and_transaction_are_bound_without_authority_side_effects() {
         let context = fixture_context();
@@ -1500,7 +1422,6 @@ mod tests {
         assert!(!is_zero(&validated.transaction_payload_sha256));
         assert_eq!(validated.transaction_payload_hash[31] & 1, 1);
     }
-
     #[test]
     fn root_peer_is_checked_before_any_request_decode() {
         let context = fixture_context();
@@ -1523,7 +1444,6 @@ mod tests {
             Err(PrivacyGovernanceSemanticErrorV1::NonCanonicalRequest)
         );
     }
-
     #[test]
     fn canonical_request_rejects_coercion_duplicates_and_recomputed_self_hashes() {
         let context = fixture_context();
@@ -1534,7 +1454,6 @@ mod tests {
             validate(&spaced, &context),
             Err(PrivacyGovernanceSemanticErrorV1::NonCanonicalRequest)
         );
-
         assert!(request.ends_with(b"}\n"));
         let mut duplicate = request[..request.len() - 2].to_vec();
         duplicate.extend_from_slice(b",\"schema_version\":1}\n");
@@ -1542,7 +1461,6 @@ mod tests {
             validate(&duplicate, &context),
             Err(PrivacyGovernanceSemanticErrorV1::NonCanonicalRequest)
         );
-
         for non_integer in [Value::Bool(true), Value::from(1.0_f64)] {
             let mut value: Value = norito::json::from_slice(&request).expect("request JSON");
             value
@@ -1569,11 +1487,9 @@ mod tests {
                 ))
             ));
         }
-
         let foreign_network = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign-request-network")),
         );
-
         let splice_cases = [
             (
                 "candidate",
@@ -1612,7 +1528,6 @@ mod tests {
                 "splice {section}.{field} was admitted"
             );
         }
-
         let canonical_authority = context
             .genesis_authority
             .to_canonical_hex()
@@ -1651,7 +1566,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn canonical_payload_rejects_trailing_bytes_and_noncanonical_base64() {
         let context = fixture_context();
@@ -1670,7 +1584,6 @@ mod tests {
                 "payload_norito_base64"
             ))
         ));
-
         let mut trailing = encode_payload(valid_payload(&context));
         trailing.push(0);
         let mut value: Value = norito::json::from_slice(&request).expect("request JSON");
@@ -1681,7 +1594,6 @@ mod tests {
             Err(PrivacyGovernanceSemanticErrorV1::TransactionPayload)
         );
     }
-
     #[test]
     fn transaction_semantics_reject_domain_authority_time_fee_and_metadata_splices() {
         let context = fixture_context();
@@ -1694,7 +1606,6 @@ mod tests {
         let foreign_network = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign-network")),
         );
-
         let mut attacks = Vec::new();
         let mut payload = original.clone();
         payload.domain = TransactionDomain::Genesis;
@@ -1722,7 +1633,6 @@ mod tests {
             .metadata
             .insert("hostile".parse::<Name>().expect("name"), Json::new("value"));
         attacks.push(payload);
-
         for payload in attacks {
             let bytes = encode_payload(payload);
             let mut value: Value = norito::json::from_slice(&request).expect("request JSON");
@@ -1734,7 +1644,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn transaction_semantics_reject_attachments_batches_and_instruction_splices() {
         let context = fixture_context();
@@ -1748,7 +1657,6 @@ mod tests {
         let mut attached = original.clone();
         attached.attachments =
             Some(ProofAttachmentList::try_from(vec![attachment]).expect("one attachment"));
-
         let registration = RegisterPrivacyProtocolActivationV1::new(context.activation);
         let mut batched = original.clone();
         batched.instructions = Executable::Batch(
@@ -1760,7 +1668,6 @@ mod tests {
         let mut doubled = original;
         doubled.instructions =
             Executable::Instructions(vec![registration.clone().into(), registration.into()].into());
-
         for payload in [attached, batched, doubled] {
             let bytes = encode_payload(payload);
             let mut value: Value = norito::json::from_slice(&request).expect("request JSON");
@@ -1772,7 +1679,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn activation_and_time_replay_contracts_fail_closed() {
         let context = fixture_context();
@@ -1795,7 +1701,6 @@ mod tests {
             ),
             Err(PrivacyGovernanceSemanticErrorV1::TimeWindow)
         );
-
         let mut replay: Value = norito::json::from_slice(&request).expect("request JSON");
         nested_mut(&mut replay, "run").insert(
             "replay_namespace".to_owned(),
@@ -1806,7 +1711,6 @@ mod tests {
             validate(&replay, &context),
             Err(PrivacyGovernanceSemanticErrorV1::Replay)
         );
-
         let mut activation: Value = norito::json::from_slice(&request).expect("request JSON");
         nested_mut(&mut activation, "activation")
             .insert("activate_at_height".to_owned(), Value::from(399_u64));
@@ -1815,7 +1719,6 @@ mod tests {
             validate(&activation, &context),
             Err(PrivacyGovernanceSemanticErrorV1::Activation)
         );
-
         let mut instruction: Value = norito::json::from_slice(&request).expect("request JSON");
         let replacement = b"candidate-generated-activation";
         let replacement_sha256 = hex(&sha256(replacement));
@@ -1839,7 +1742,6 @@ mod tests {
             validate(&instruction, &context),
             Err(PrivacyGovernanceSemanticErrorV1::Activation)
         );
-
         let first = validate(&request, &context).expect("first request");
         let mut second_context = context.clone();
         second_context.candidate_binding_sha256 = digest(b"second-candidate");
@@ -1855,7 +1757,6 @@ mod tests {
             "one run nonce must retain one journal replay identity"
         );
     }
-
     #[test]
     fn audit_commit_requires_exact_fresh_live_successor() {
         let predecessor = PrivacyGovernanceAuditPredecessorV1 {
@@ -1873,7 +1774,6 @@ mod tests {
         };
         validate_privacy_governance_audit_successor_v1(predecessor, committed, authenticated_live)
             .expect("fresh successor");
-
         let attacks = [
             PrivacyGovernanceAuditCommitV1 {
                 sequence: 8,
@@ -1954,7 +1854,6 @@ mod tests {
             Err(PrivacyGovernanceSemanticErrorV1::AuditPredecessor)
         );
     }
-
     #[test]
     fn production_surface_has_no_role_service_or_signing_caller() {
         let parent = include_str!("../external_software_signer.rs");

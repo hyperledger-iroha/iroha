@@ -1,5 +1,4 @@
 //! Orchestration layer that wires configuration, workload generation, and fault injection together.
-
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -14,7 +13,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use color_eyre::{
     Result,
     eyre::{WrapErr, eyre},
@@ -52,7 +50,6 @@ use tokio::{
 };
 use toml::{Table, Value as TomlValue};
 use tracing::{debug, info, warn};
-
 use crate::{
     config::{ChaosConfig, WorkloadProfile},
     faults::{
@@ -7489,13 +7486,11 @@ struct MetricsSnapshot {
 #[cfg(test)]
 mod tests {
     use std::{env, io};
-
     use color_eyre::eyre::{WrapErr, eyre};
     use iroha_crypto::Hash;
     use iroha_data_model::isi::SetParameter;
     use iroha_test_network::init_instruction_registry;
     use tokio::time::timeout;
-
     use super::*;
     use crate::config::{
         DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,

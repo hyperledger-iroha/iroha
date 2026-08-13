@@ -6,7 +6,6 @@ fn require_subscription_draft_account(
 ) -> Result<(), Error> {
     require_runtime_governance_account(requested, &verified.account, context)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_subscription_plans_list(
     State(app): State<SharedAppState>,
@@ -18,7 +17,6 @@ async fn handler_subscription_plans_list(
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_subscription_plans(app.state.clone(), AxQuery(p)).await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -29,6 +27,5 @@ async fn handler_subscription_plans_list(
         enforce,
     )
     .await?;
-
     routing::handle_v1_subscription_plans(app.state.clone(), AxQuery(p)).await
 }

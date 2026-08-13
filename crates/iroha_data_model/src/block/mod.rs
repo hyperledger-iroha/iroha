@@ -1,7 +1,6 @@
 //! This module contains `Block` and related implementations.
 //!
 //! `Block`s are organized into a linear sequence over time (also known as the block chain).
-
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -11,7 +10,6 @@ use std::{
     time::Duration,
     vec::Vec,
 };
-
 use iroha_crypto::{Hash, HashOf, MerkleTree, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
@@ -23,16 +21,11 @@ use norito::{
         default_encode_flags, hardware_crc64 as norito_crc64,
     },
 };
-
 use self::proofs::{BlockReceiptProof, ExecutionReceiptProof};
-use crate::da::commitment::{
-    DaCommitmentBundle, DaProofPolicy, DaProofPolicyBundle, DaProofScheme,
-};
+use crate::da::commitment::{DaCommitmentBundle, DaProofPolicy, DaProofPolicyBundle, DaProofScheme};
 #[cfg(any(test, feature = "test-fixtures"))]
 use crate::da::pin_intent::DaPinIntentBundle;
-
 pub mod proofs;
-
 fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
     let limit = norito::core::max_archive_len();
     if limit == u64::MAX {
@@ -60,7 +53,6 @@ pub mod execution_context;
 pub mod header;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
-
 pub use execution_context::{
     AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1,
     BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1, BlockExecutionContextBundle,
@@ -69,7 +61,6 @@ pub use execution_context::{
 };
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
-
 #[cfg(feature = "transparent_api")]
 use crate::fastpq::TransferTranscript;
 #[cfg(feature = "transparent_api")]
@@ -79,11 +70,9 @@ use crate::transaction::signed::TransactionResultInner;
 use crate::transaction::signed::{SignedTransaction, TransactionEntrypoint};
 #[cfg(feature = "transparent_api")]
 use crate::trigger::TimeTriggerEntrypoint;
-
 #[model]
 mod model {
     use super::*;
-
     /// Block collecting signatures from validators.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema, Decode)]
     #[cfg_attr(
@@ -103,9 +92,7 @@ mod model {
         pub(super) result: Option<BlockResult>,
     }
 }
-
 pub use self::model::*;
-
 /// Error returned when attaching transaction results would make block Merkle roots inconsistent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetTransactionResultsError {
@@ -580,7 +567,6 @@ impl SignedBlock {
         result: &TransactionResultInner,
     ) -> bool {
         use crate::transaction::signed::TransactionResult;
-
         let Some(result_state) = self.result.as_mut() else {
             return false;
         };
@@ -879,7 +865,6 @@ impl SignedBlock {
         da_proof_policies: Option<DaProofPolicyBundle>,
     ) -> Result<SignedBlock, iroha_crypto::Error> {
         use nonzero_ext::nonzero;
-
         let da_commitments = da_commitments.filter(|bundle| !bundle.is_empty());
         let mut entry_merkle = MerkleTree::default();
         for tx in &transactions {
@@ -1025,24 +1010,18 @@ impl iroha_version::codec::DecodeVersioned for SignedBlock {
 #[cfg(feature = "http")]
 pub mod stream {
     //! Blocks for streaming API.
-
     use std::{num::NonZeroU64, sync::Arc};
-
     use iroha_schema::IntoSchema;
     use norito::{
         codec::{Decode, Encode},
         core::{Error as NoritoError, NoritoSerialize},
     };
-
     pub use self::model::*;
     use super::*;
-
     #[model]
     mod model {
         use std::num::NonZeroU64;
-
         use super::*;
-
         /// Request sent to subscribe to blocks stream starting from the given height.
         #[derive(Debug, Clone, Copy, Decode, Encode, IntoSchema)]
         #[cfg_attr(
@@ -1091,17 +1070,13 @@ pub mod stream {
         }
     }
 }
-
 pub mod error {
     //! Module containing errors that can occur during instruction evaluation
-
     pub use self::model::*;
     use super::*;
-
     #[model]
     mod model {
         use super::*;
-
         /// The reason for rejecting a transaction with new blocks.
         #[derive(
             Debug,
@@ -1586,7 +1561,6 @@ pub fn decode_framed_signed_block(
     bytes: &[u8],
 ) -> Result<SignedBlock, iroha_version::error::Error> {
     use iroha_version::error::Error as VersionError;
-
     if bytes.len() <= 1 {
         return Err(VersionError::NotVersioned);
     }
@@ -1617,7 +1591,6 @@ fn decode_framed_versioned_signed_block_inner(
     raw_for_error: &[u8],
 ) -> Result<SignedBlock, iroha_version::error::Error> {
     use iroha_version::{RawVersioned, UnsupportedVersion, error::Error as VersionError};
-
     if !SignedBlock::supported_versions().contains(&version) {
         return Err(VersionError::UnsupportedVersion(Box::new(
             UnsupportedVersion::new(version, RawVersioned::NoritoBytes(raw_for_error.to_vec())),
@@ -1626,7 +1599,6 @@ fn decode_framed_versioned_signed_block_inner(
     let view = norito::core::from_bytes_view(framed_payload).map_err(VersionError::from)?;
     view.decode::<SignedBlock>().map_err(VersionError::from)
 }
-
 pub mod prelude {
     //! For glob-import
     pub use super::{BlockHeader, BlockSignature, SignedBlock, error::BlockRejectionReason};
@@ -1634,11 +1606,9 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use norito::codec::{DecodeAll as _, Encode};
-
     use super::*;
     use crate::consensus::PreviousRosterEvidence;
     // Bring commonly used types referenced in transparent API tests.
@@ -2483,9 +2453,7 @@ mod tests {
     }
     #[test]
     fn genesis_defaults_confidential_digest() {
-        use crate::{
-            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
-        };
+        use crate::{account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder};
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -2503,7 +2471,6 @@ mod tests {
     #[test]
     fn encode_versioned_prefixes_norito_payload() {
         use nonzero_ext::nonzero;
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
@@ -2643,7 +2610,6 @@ mod tests {
     #[test]
     fn decode_versioned_signed_block_rejects_trailing_bytes() {
         use nonzero_ext::nonzero;
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
@@ -2680,7 +2646,6 @@ mod tests {
     #[test]
     fn frame_deframe_versioned_bytes_roundtrip() {
         use nonzero_ext::nonzero;
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
@@ -2725,7 +2690,6 @@ mod tests {
     #[test]
     fn canonical_wire_matches_framed_payload() {
         use nonzero_ext::nonzero;
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
@@ -2755,9 +2719,7 @@ mod tests {
     }
     #[test]
     fn canonical_wire_roundtrips_genesis_block() {
-        use crate::{
-            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
-        };
+        use crate::{account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder};
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -2782,7 +2744,6 @@ mod tests {
     #[test]
     fn set_da_commitments_updates_header_hash() {
         use nonzero_ext::nonzero;
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = SignedBlock {
             signatures: BTreeSet::new(),
@@ -2863,7 +2824,6 @@ mod tests {
     #[test]
     fn decode_versioned_signed_block_accepts_framed_payload() {
         use nonzero_ext::nonzero;
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
@@ -2893,7 +2853,6 @@ mod tests {
     #[test]
     fn framed_signed_block_preserves_recorded_layout_flags() {
         use nonzero_ext::nonzero;
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
@@ -2922,7 +2881,6 @@ mod tests {
     #[test]
     fn signed_block_da_commitments_roundtrip() {
         use nonzero_ext::nonzero;
-
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = SignedBlock {
             signatures: BTreeSet::new(),
@@ -2954,7 +2912,6 @@ mod tests {
     #[test]
     fn set_da_pin_intents_updates_header_hash() {
         use nonzero_ext::nonzero;
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = SignedBlock {
             signatures: BTreeSet::new(),
@@ -2997,12 +2954,10 @@ mod tests {
     #[test]
     fn signed_block_previous_roster_evidence_setter_updates_header_hash_and_roundtrips() {
         use nonzero_ext::nonzero;
-
         use crate::consensus::{
             PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
         };
         use crate::peer::PeerId;
-
         let kp_a = checked_random_keypair();
         let kp_b = checked_random_keypair();
         let validator_set = vec![
@@ -3195,7 +3150,6 @@ mod tests {
     #[test]
     fn signed_block_has_results_only_after_assignment() {
         use crate::transaction::signed::TransactionEntrypoint;
-
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let keypair = checked_random_keypair();
         let mut block = SignedBlock::presigned(
@@ -3260,10 +3214,8 @@ mod tests {
     #[test]
     fn set_transaction_results_records_fastpq_transcripts() {
         use std::{collections::BTreeMap, num::NonZeroU64};
-
         use iroha_crypto::Hash;
         use iroha_primitives::numeric::Quantity;
-
         use crate::{
             account::AccountId,
             asset::id::AssetDefinitionId,
@@ -3323,7 +3275,6 @@ mod tests {
     #[test]
     fn lane_finality_can_only_be_attached_after_results_fix_the_header() {
         use std::num::NonZeroU64;
-
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let keypair = checked_random_keypair();
         let signature = checked_block_signature(0, &keypair, &header);
@@ -3350,9 +3301,7 @@ mod tests {
     #[test]
     fn set_transaction_results_records_committed_fragment_count() {
         use std::num::NonZeroU64;
-
         use crate::transaction::TransactionResultInner;
-
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let keypair = checked_random_keypair();
         let signature = checked_block_signature(0, &keypair, &header);
@@ -3382,7 +3331,6 @@ mod tests {
     #[test]
     fn set_transaction_results_rejects_noncanonical_snapshot_without_mutation() {
         use std::num::NonZeroU64;
-
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let keypair = checked_random_keypair();
         let signature = checked_block_signature(0, &keypair, &header);
@@ -3427,10 +3375,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn block_proofs_include_fastpq_transcripts() {
         use std::{collections::BTreeMap, num::NonZeroU64};
-
         use iroha_crypto::Hash;
         use iroha_primitives::numeric::Quantity;
-
         use crate::{
             account::AccountId,
             asset::id::AssetDefinitionId,
@@ -3538,10 +3484,8 @@ mod tests {
     #[test]
     fn set_transaction_results_updates_merkle_roots_with_time_triggers() {
         use std::num::NonZeroU64;
-
         use iroha_crypto::MerkleTree;
         use iroha_primitives::const_vec::ConstVec;
-
         use crate::{
             account::AccountId,
             domain::DomainId,
@@ -3605,7 +3549,6 @@ mod tests {
     #[test]
     fn set_transaction_results_rejects_too_short_external_hash_prefix() {
         use std::num::NonZeroU64;
-
         use crate::{
             account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
@@ -3640,7 +3583,6 @@ mod tests {
     #[test]
     fn set_transaction_results_rejects_result_count_mismatch() {
         use std::num::NonZeroU64;
-
         use crate::{
             account::AccountId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
@@ -3692,9 +3634,7 @@ mod tests {
     #[test]
     fn set_transaction_results_rejects_external_hash_mismatch() {
         use std::num::NonZeroU64;
-
         use iroha_crypto::Hash;
-
         use crate::{
             account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
@@ -3732,9 +3672,7 @@ mod tests {
     #[test]
     fn set_transaction_results_rejects_existing_header_merkle_mismatch() {
         use std::num::NonZeroU64;
-
         use iroha_crypto::{Hash, MerkleTree};
-
         use crate::{
             account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
@@ -3771,9 +3709,7 @@ mod tests {
     #[test]
     fn proofs_for_entry_hash_matches_merkle_roots() {
         use std::num::NonZeroU64;
-
         use iroha_crypto::MerkleTree;
-
         use crate::{
             account::AccountId,
             domain::DomainId,
@@ -3846,10 +3782,8 @@ mod tests {
     #[test]
     fn proofs_for_external_entry_with_time_trigger_use_full_executed_root() {
         use std::num::NonZeroU64;
-
         use iroha_crypto::MerkleTree;
         use iroha_primitives::const_vec::ConstVec;
-
         use crate::{
             account::AccountId,
             transaction::{
@@ -3913,10 +3847,8 @@ mod tests {
     #[test]
     fn proofs_for_time_trigger_use_extended_root() {
         use std::num::NonZeroU64;
-
         use iroha_crypto::MerkleTree;
         use iroha_primitives::const_vec::ConstVec;
-
         use crate::{
             account::AccountId,
             domain::DomainId,
@@ -3991,9 +3923,7 @@ mod tests {
     #[test]
     fn proofs_for_entry_hash_missing_returns_none() {
         use std::num::NonZeroU64;
-
         use iroha_crypto::Hash;
-
         use crate::{
             account::AccountId,
             domain::DomainId,
@@ -4056,9 +3986,7 @@ mod tests {
     }
     #[test]
     fn framing_derives_flags_instead_of_reusing_tls_state() {
-        use crate::{
-            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
-        };
+        use crate::{account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder};
         let keypair = checked_random_keypair();
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -4099,7 +4027,6 @@ mod tests {
     #[test]
     fn update_transaction_result_incremental_matches_full_rebuild() {
         use nonzero_ext::nonzero;
-
         // Prepare a small block with a few transactions and empty triggers.
         let txs: Vec<crate::transaction::signed::SignedTransaction> = Vec::new();
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);

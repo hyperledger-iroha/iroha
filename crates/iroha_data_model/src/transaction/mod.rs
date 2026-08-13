@@ -1,5 +1,4 @@
 //! Transaction structures and related implementations.
-
 /// Error types surfaced by transaction validation and execution.
 pub mod error;
 /// Executable payloads backing transactions and triggers.
@@ -8,7 +7,6 @@ pub mod executable;
 pub mod receipt;
 /// Signed transaction forms and helpers.
 pub mod signed;
-
 pub use executable::{
     Executable, ExecutableBatchItem, IvmBytecode, IvmProved, TransactionGasLimitError,
     parse_transaction_gas_limit, require_transaction_gas_limit,
@@ -22,9 +20,7 @@ pub use signed::{
     TransactionBuilder, TransactionDomain, TransactionEntrypoint, TransactionPayload,
     TransactionResult, TransactionResultInner, TransactionSignature,
 };
-
 pub use crate::trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntrypoint};
-
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{

@@ -1,7 +1,5 @@
 //! Guard directory snapshot helpers.
-
 #![allow(unexpected_cfgs)]
-
 use std::{
     collections::{HashMap, HashSet},
     convert::TryFrom,
@@ -9,13 +7,11 @@ use std::{
     io::{self, Read as _},
     path::Path,
 };
-
 use blake3::Hasher as Blake3Hasher;
 use norito::{
     DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_from_bytes_with_limits, to_bytes,
 };
 use soranet_pq::MlDsaSuite;
-
 use crate::{
     signature::ed25519::{Ed25519Sha512, PublicKey as Ed25519PublicKey},
     soranet::certificate::{
@@ -23,12 +19,9 @@ use crate::{
         SRC_V2_MAX_BUNDLE_BYTES,
     },
 };
-
 const SRC_V2_ISSUER_FINGERPRINT_DOMAIN: &[u8] = b"soranet.src.v2.issuer";
 const GUARD_DIRECTORY_SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"soranet.guard-directory.snapshot.v2";
-
 type IssuersByFingerprint<'a> = HashMap<[u8; 32], (Ed25519PublicKey, &'a [u8])>;
-
 /// Schema version used by `GuardDirectorySnapshotV2`.
 pub const GUARD_DIRECTORY_VERSION_V2: u8 = 2;
 /// Maximum encoded size of one first-release guard-directory snapshot.
@@ -41,7 +34,6 @@ pub const GUARD_DIRECTORY_MAX_RELAYS_V1: usize = 64;
 pub const GUARD_DIRECTORY_ISSUER_MLDSA65_MAX_BYTES_V1: usize = 1_952;
 /// Maximum byte length of one embedded relay certificate bundle.
 pub const GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1: usize = SRC_V2_MAX_BUNDLE_BYTES;
-
 const GUARD_DIRECTORY_DECODE_MAX_ALLOCATED_BYTES_V1: usize =
     2 * GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1;
 const GUARD_DIRECTORY_DECODE_MAX_NESTING_DEPTH_V1: usize = 16;
@@ -72,7 +64,6 @@ const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 compile_error!(
     "guard-directory file loading requires a defined no-follow open flag on this Unix target"
 );
-
 const fn guard_directory_decode_limits_v1() -> DecodeLimits {
     DecodeLimits::new(
         GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1,
@@ -82,7 +73,6 @@ const fn guard_directory_decode_limits_v1() -> DecodeLimits {
         GUARD_DIRECTORY_DECODE_MAX_NESTING_DEPTH_V1,
     )
 }
-
 /// Read one guard-directory snapshot from a stable, direct regular file.
 ///
 /// The final path component is opened without following symbolic links or
@@ -106,19 +96,16 @@ pub fn read_guard_directory_snapshot_file(path: &Path) -> io::Result<Vec<u8>> {
     if named_before.len() > max_bytes {
         return Err(guard_directory_snapshot_too_large());
     }
-
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(GUARD_DIRECTORY_O_NOFOLLOW_FLAG);
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
@@ -134,7 +121,6 @@ pub fn read_guard_directory_snapshot_file(path: &Path) -> io::Result<Vec<u8>> {
             "guard directory snapshot changed identity or type while opening",
         ));
     }
-
     let capacity = usize::try_from(opened_before.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -148,7 +134,6 @@ pub fn read_guard_directory_snapshot_file(path: &Path) -> io::Result<Vec<u8>> {
     if bytes.len() > GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1 {
         return Err(guard_directory_snapshot_too_large());
     }
-
     let opened_after = file.metadata()?;
     let named_after = fs::symlink_metadata(path)?;
     let observed_bytes = u64::try_from(bytes.len()).map_err(|_| {
@@ -172,7 +157,6 @@ pub fn read_guard_directory_snapshot_file(path: &Path) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-
 fn guard_directory_snapshot_too_large() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
@@ -181,7 +165,6 @@ fn guard_directory_snapshot_too_large() -> io::Error {
         ),
     )
 }
-
 fn guard_directory_metadata_is_link(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
@@ -189,37 +172,31 @@ fn guard_directory_metadata_is_link(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
-
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
         return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
     }
     #[cfg(not(windows))]
     false
 }
-
 #[cfg(unix)]
 fn guard_directory_metadata_identifies_same_file(
     left: &fs::Metadata,
     right: &fs::Metadata,
 ) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(windows)]
 fn guard_directory_metadata_identifies_same_file(
     left: &fs::Metadata,
     right: &fs::Metadata,
 ) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     left.volume_serial_number().is_some()
         && left.file_index().is_some()
         && left.volume_serial_number() == right.volume_serial_number()
         && left.file_index() == right.file_index()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn guard_directory_metadata_identifies_same_file(
     _left: &fs::Metadata,
@@ -227,7 +204,6 @@ fn guard_directory_metadata_identifies_same_file(
 ) -> bool {
     false
 }
-
 /// Norito-encoded guard directory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
@@ -250,7 +226,6 @@ pub struct GuardDirectorySnapshotV2 {
     /// Relay certificate bundles.
     pub relays: Vec<GuardDirectoryRelayEntryV2>,
 }
-
 impl GuardDirectorySnapshotV2 {
     /// Encode the snapshot to Norito bytes.
     ///
@@ -263,7 +238,6 @@ impl GuardDirectorySnapshotV2 {
         validate_snapshot_encoded_len(bytes.len())?;
         Ok(bytes)
     }
-
     /// Decode and inspect a snapshot without establishing external trust or freshness.
     ///
     /// This verifies schema invariants and the self-consistency of signatures
@@ -278,7 +252,6 @@ impl GuardDirectorySnapshotV2 {
         snapshot.validate(None, false)?;
         Ok(snapshot)
     }
-
     /// Authenticate an exact snapshot artifact and validate it at a supplied time.
     ///
     /// `expected_snapshot_digest` must arrive over a trust path independent of
@@ -300,7 +273,6 @@ impl GuardDirectorySnapshotV2 {
         snapshot.validate(Some(at_unix), true)?;
         Ok(snapshot)
     }
-
     /// Authenticate a snapshot and retain one validated relay bundle while
     /// streaming validation across the bounded relay set.
     ///
@@ -331,12 +303,10 @@ impl GuardDirectorySnapshotV2 {
             relay,
         })
     }
-
     fn decode_bounded(bytes: &[u8]) -> Result<Self, norito::Error> {
         validate_snapshot_encoded_len(bytes.len())?;
         decode_from_bytes_with_limits(bytes, guard_directory_decode_limits_v1())
     }
-
     fn validate_resource_bounds(&self) -> Result<(), norito::Error> {
         if self.issuers.len() > GUARD_DIRECTORY_MAX_ISSUERS_V1 {
             return Err(norito::Error::Message(format!(
@@ -368,7 +338,6 @@ impl GuardDirectorySnapshotV2 {
         }
         Ok(())
     }
-
     fn validate(
         &self,
         at_unix: Option<i64>,
@@ -377,7 +346,6 @@ impl GuardDirectorySnapshotV2 {
         self.validate_and_select_relay(at_unix, require_first_release_policy, None)
             .map(drop)
     }
-
     fn validate_and_select_relay(
         &self,
         at_unix: Option<i64>,
@@ -405,7 +373,6 @@ impl GuardDirectorySnapshotV2 {
             target_relay_id,
         )
     }
-
     fn validate_header(&self) -> Result<CertificateValidationPhase, norito::Error> {
         if self.version != GUARD_DIRECTORY_VERSION_V2 {
             return Err(norito::Error::Message(format!(
@@ -437,7 +404,6 @@ impl GuardDirectorySnapshotV2 {
         }
         Ok(validation_phase)
     }
-
     fn validate_at(&self, at_unix: i64) -> Result<(), norito::Error> {
         if at_unix < 0 {
             return Err(norito::Error::Message(
@@ -458,7 +424,6 @@ impl GuardDirectorySnapshotV2 {
         }
         Ok(())
     }
-
     fn validate_issuers(
         &self,
         validation_phase: CertificateValidationPhase,
@@ -497,7 +462,6 @@ impl GuardDirectorySnapshotV2 {
         }
         Ok(issuers_by_fingerprint)
     }
-
     fn validate_issuer_mldsa65_public_key_len(
         validation_phase: CertificateValidationPhase,
         mldsa65_public: &[u8],
@@ -513,7 +477,6 @@ impl GuardDirectorySnapshotV2 {
         }
         validate_issuer_mldsa65_public_key_shape(mldsa65_public)
     }
-
     fn validate_relays(
         &self,
         validation_phase: CertificateValidationPhase,
@@ -570,7 +533,6 @@ impl GuardDirectorySnapshotV2 {
         }
         Ok(selected)
     }
-
     fn validate_relay_certificate_window(
         &self,
         certificate: &RelayCertificateV2,
@@ -595,7 +557,6 @@ impl GuardDirectorySnapshotV2 {
         Ok(())
     }
 }
-
 /// One relay retained from a fully authenticated guard-directory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedGuardDirectoryRelayV2 {
@@ -604,7 +565,6 @@ pub struct AuthenticatedGuardDirectoryRelayV2 {
     /// Exact validated relay bundle selected by relay identity.
     pub relay: RelayCertificateBundleV2,
 }
-
 fn validate_snapshot_encoded_len(len: usize) -> Result<(), norito::Error> {
     if len > GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1 {
         return Err(norito::Error::Message(format!(
@@ -613,7 +573,6 @@ fn validate_snapshot_encoded_len(len: usize) -> Result<(), norito::Error> {
     }
     Ok(())
 }
-
 fn validate_snapshot_digest(
     bytes: &[u8],
     expected_snapshot_digest: [u8; 32],
@@ -629,7 +588,6 @@ fn validate_snapshot_digest(
     }
     Ok(())
 }
-
 /// Compute the domain-separated digest that authenticates exact snapshot bytes.
 #[must_use]
 pub fn compute_snapshot_digest(bytes: &[u8]) -> [u8; 32] {
@@ -638,7 +596,6 @@ pub fn compute_snapshot_digest(bytes: &[u8]) -> [u8; 32] {
     hasher.update(bytes);
     hasher.finalize().into()
 }
-
 /// Governance issuer record embedded in guard directory snapshots.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct GuardDirectoryIssuerV1 {
@@ -650,14 +607,12 @@ pub struct GuardDirectoryIssuerV1 {
     #[norito(default)]
     pub mldsa65_public: Vec<u8>,
 }
-
 /// Relay entry embedded in guard directory snapshots.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct GuardDirectoryRelayEntryV2 {
     /// Serialized `RelayCertificateBundleV2` payload.
     pub certificate: Vec<u8>,
 }
-
 /// Compute the canonical issuer fingerprint used by SRC v2.
 ///
 /// # Errors
@@ -670,7 +625,6 @@ pub fn compute_issuer_fingerprint(
 ) -> Result<[u8; 32], norito::Error> {
     compute_issuer_fingerprint_inner(ed25519, mldsa_public)
 }
-
 /// Compute the canonical issuer fingerprint used by SRC v2.
 ///
 /// # Errors
@@ -683,7 +637,6 @@ pub fn try_compute_issuer_fingerprint(
 ) -> Result<[u8; 32], norito::Error> {
     compute_issuer_fingerprint_inner(ed25519, mldsa_public)
 }
-
 fn compute_issuer_fingerprint_inner(
     ed25519: &[u8; 32],
     mldsa_public: &[u8],
@@ -697,7 +650,6 @@ fn compute_issuer_fingerprint_inner(
     hasher.update(mldsa_public);
     Ok(hasher.finalize().into())
 }
-
 fn issuer_fingerprint_len_bytes(len: usize) -> Result<[u8; 4], norito::Error> {
     let len = u32::try_from(len).map_err(|_| {
         norito::Error::Message(format!(
@@ -706,7 +658,6 @@ fn issuer_fingerprint_len_bytes(len: usize) -> Result<[u8; 4], norito::Error> {
     })?;
     Ok(len.to_be_bytes())
 }
-
 fn validate_issuer_ed25519_public_key(ed25519: &[u8; 32]) -> Result<(), norito::Error> {
     Ed25519Sha512::parse_public_key(ed25519)
         .map(drop)
@@ -716,7 +667,6 @@ fn validate_issuer_ed25519_public_key(ed25519: &[u8; 32]) -> Result<(), norito::
             ))
         })
 }
-
 fn validate_issuer_mldsa65_public_key_shape(mldsa_public: &[u8]) -> Result<(), norito::Error> {
     if mldsa_public.is_empty() {
         return Ok(());
@@ -735,7 +685,6 @@ fn validate_issuer_mldsa65_public_key_shape(mldsa_public: &[u8]) -> Result<(), n
     }
     Ok(())
 }
-
 /// Encode the validation phase to its wire representation.
 #[must_use]
 pub const fn encode_validation_phase(phase: CertificateValidationPhase) -> u8 {
@@ -745,7 +694,6 @@ pub const fn encode_validation_phase(phase: CertificateValidationPhase) -> u8 {
         CertificateValidationPhase::Phase3RequireDual => 3,
     }
 }
-
 /// Decode a validation phase from its wire representation.
 #[must_use]
 pub const fn decode_validation_phase(raw: u8) -> Option<CertificateValidationPhase> {
@@ -756,7 +704,6 @@ pub const fn decode_validation_phase(raw: u8) -> Option<CertificateValidationPha
         _ => None,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,11 +718,9 @@ mod tests {
     use soranet_pq::{
         HedgedRngSeed, MlKemSuite, generate_mldsa_keypair_from_seed as generate_mldsa_keypair,
     };
-
     fn sample_issuer_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[0x11; SECRET_KEY_LENGTH])
     }
-
     fn sample_mldsa_keypair(personalization: &'static [u8]) -> soranet_pq::MlDsaKeyPair {
         generate_mldsa_keypair(
             MlDsaSuite::MlDsa65,
@@ -784,7 +729,6 @@ mod tests {
         )
         .expect("sample ML-DSA keypair")
     }
-
     fn sample_relay_certificate(
         directory_hash: [u8; 32],
         issuer_fingerprint: [u8; 32],
@@ -838,7 +782,6 @@ mod tests {
             pq_kem_public: vec![0x66; MlKemSuite::MlKem768.public_key_len()],
         }
     }
-
     fn sample_relay_bundle(
         directory_hash: [u8; 32],
         issuer_fingerprint: [u8; 32],
@@ -855,14 +798,12 @@ mod tests {
         }
         bundle
     }
-
     fn replace_first_relay_bundle(
         snapshot: &mut GuardDirectorySnapshotV2,
         bundle: &RelayCertificateBundleV2,
     ) {
         snapshot.relays[0].certificate = bundle.to_cbor();
     }
-
     fn mutate_first_relay_bundle(
         snapshot: &mut GuardDirectorySnapshotV2,
         mutate: impl FnOnce(&mut RelayCertificateBundleV2),
@@ -872,7 +813,6 @@ mod tests {
         mutate(&mut bundle);
         replace_first_relay_bundle(snapshot, &bundle);
     }
-
     fn sample_snapshot() -> GuardDirectorySnapshotV2 {
         let issuer_signing_key = sample_issuer_signing_key();
         let issuer_mldsa = sample_mldsa_keypair(b"directory-snapshot-issuer");
@@ -908,7 +848,6 @@ mod tests {
             }],
         }
     }
-
     fn sample_phase1_single_signature_snapshot() -> GuardDirectorySnapshotV2 {
         let issuer_signing_key = sample_issuer_signing_key();
         let issuer_mldsa = sample_mldsa_keypair(b"directory-snapshot-phase1-signer");
@@ -944,7 +883,6 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn encode_decode_validation_phase_roundtrip() {
         for phase in [
@@ -958,7 +896,6 @@ mod tests {
         assert_eq!(decode_validation_phase(0), None);
         assert_eq!(decode_validation_phase(4), None);
     }
-
     #[test]
     fn compute_fingerprint_changes_with_keys() {
         let ed_a = sample_issuer_signing_key().verifying_key().to_bytes();
@@ -967,37 +904,30 @@ mod tests {
             .to_bytes();
         let ml_a = vec![0xAA; MlDsaSuite::MlDsa65.public_key_len()];
         let ml_b = vec![0xBB; MlDsaSuite::MlDsa65.public_key_len()];
-
         let fingerprint_a =
             compute_issuer_fingerprint(&ed_a, &ml_a).expect("fingerprint A should compute");
         let fingerprint_b =
             compute_issuer_fingerprint(&ed_b, &ml_a).expect("fingerprint B should compute");
         let fingerprint_c =
             compute_issuer_fingerprint(&ed_a, &ml_b).expect("fingerprint C should compute");
-
         assert_ne!(fingerprint_a, fingerprint_b);
         assert_ne!(fingerprint_a, fingerprint_c);
         assert_ne!(fingerprint_b, fingerprint_c);
     }
-
     #[test]
     fn compute_fingerprint_matches_try_helper() {
         let ed25519 = sample_issuer_signing_key().verifying_key().to_bytes();
         let mldsa_public = vec![0xAA; MlDsaSuite::MlDsa65.public_key_len()];
-
         let via_try = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
             .expect("canonical issuer fingerprint should compute");
         let direct = compute_issuer_fingerprint(&ed25519, &mldsa_public)
             .expect("canonical issuer fingerprint should compute");
-
         assert_eq!(via_try, direct);
     }
-
     #[test]
     fn issuer_fingerprint_rejects_invalid_ed25519_public_key() {
         let ed25519 = [0u8; 32];
         let mldsa_public = vec![0xAA; MlDsaSuite::MlDsa65.public_key_len()];
-
         let err = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
             .expect_err("weak issuer Ed25519 public key must fail closed");
         assert!(
@@ -1005,12 +935,10 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn issuer_fingerprint_rejects_invalid_mldsa_public_key_length() {
         let ed25519 = sample_issuer_signing_key().verifying_key().to_bytes();
         let mldsa_public = vec![0xAA; MlDsaSuite::MlDsa65.public_key_len() - 1];
-
         let err = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
             .expect_err("invalid issuer ML-DSA public-key length must fail closed");
         assert!(
@@ -1018,12 +946,10 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn issuer_fingerprint_rejects_all_zero_mldsa_public_key() {
         let ed25519 = sample_issuer_signing_key().verifying_key().to_bytes();
         let mldsa_public = vec![0u8; MlDsaSuite::MlDsa65.public_key_len()];
-
         let err = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
             .expect_err("all-zero issuer ML-DSA public key must fail closed");
         assert!(
@@ -1031,13 +957,11 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn issuer_fingerprint_length_overflow_fails_closed() {
         let Some(too_long) = (u64::from(u32::MAX) + 1).try_into().ok() else {
             return;
         };
-
         let err = issuer_fingerprint_len_bytes(too_long)
             .expect_err("oversized issuer public-key length must fail closed");
         assert!(
@@ -1045,28 +969,23 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn snapshot_roundtrip() {
         let snapshot = sample_snapshot();
-
         let bytes = snapshot.to_bytes().expect("serialize");
         let decoded = GuardDirectorySnapshotV2::inspect_bytes(&bytes).expect("deserialize");
         assert_eq!(snapshot, decoded);
     }
-
     #[test]
     fn snapshot_file_reader_accepts_regular_file_and_rejects_oversize() {
         let temporary = tempfile::tempdir().expect("create guard-directory test root");
         let path = temporary.path().join("guard-directory.norito");
         let expected = b"bounded guard directory";
         fs::write(&path, expected).expect("write bounded regular file");
-
         assert_eq!(
             read_guard_directory_snapshot_file(&path).expect("read bounded regular file"),
             expected
         );
-
         fs::File::create(&path)
             .expect("recreate oversized sparse file")
             .set_len(
@@ -1080,7 +999,6 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("first-release limit"));
     }
-
     #[test]
     fn snapshot_file_reader_rejects_non_regular_path() {
         let temporary = tempfile::tempdir().expect("create guard-directory test root");
@@ -1089,24 +1007,20 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("direct regular file"));
     }
-
     #[cfg(unix)]
     #[test]
     fn snapshot_file_reader_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let temporary = tempfile::tempdir().expect("create guard-directory test root");
         let target = temporary.path().join("target.norito");
         let link = temporary.path().join("guard-directory.norito");
         fs::write(&target, b"guard directory").expect("write target");
         symlink(&target, &link).expect("create symlink fixture");
-
         let error = read_guard_directory_snapshot_file(&link)
             .expect_err("symlinked guard directory must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("direct regular file"));
     }
-
     #[test]
     fn snapshot_wire_length_fails_before_decode() {
         let oversized = vec![0_u8; GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1 + 1];
@@ -1117,7 +1031,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn snapshot_producer_enforces_issuer_and_relay_counts() {
         let mut issuers = sample_snapshot();
@@ -1126,7 +1039,6 @@ mod tests {
             .to_bytes()
             .expect_err("producer must reject too many issuers");
         assert!(issuer_err.to_string().contains("issuer count"));
-
         let mut relays = sample_snapshot();
         relays.relays = vec![relays.relays[0].clone(); GUARD_DIRECTORY_MAX_RELAYS_V1 + 1];
         let relay_err = relays
@@ -1134,20 +1046,17 @@ mod tests {
             .expect_err("producer must reject too many relays");
         assert!(relay_err.to_string().contains("relay count"));
     }
-
     #[test]
     fn snapshot_producer_accepts_first_release_resource_boundaries() {
         let mut snapshot = sample_snapshot();
         snapshot.issuers = vec![snapshot.issuers[0].clone(); GUARD_DIRECTORY_MAX_ISSUERS_V1];
         snapshot.relays[0].certificate = vec![0_u8; GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1];
         snapshot.relays = vec![snapshot.relays[0].clone(); GUARD_DIRECTORY_MAX_RELAYS_V1];
-
         let bytes = snapshot
             .to_bytes()
             .expect("all exact first-release resource boundaries must encode");
         assert!(bytes.len() <= GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1);
     }
-
     #[test]
     fn snapshot_consumer_enforces_entry_counts_after_bounded_decode() {
         let mut issuers = sample_snapshot();
@@ -1156,16 +1065,13 @@ mod tests {
         let issuer_err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("consumer must reject too many issuers");
         assert!(issuer_err.to_string().contains("issuer count"));
-
         let mut snapshot = sample_snapshot();
         snapshot.relays = vec![snapshot.relays[0].clone(); GUARD_DIRECTORY_MAX_RELAYS_V1 + 1];
         let bytes = norito::to_bytes(&snapshot).expect("encode out-of-policy wire fixture");
-
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("consumer must reject too many relays");
         assert!(err.to_string().contains("relay count"));
     }
-
     #[test]
     fn snapshot_producer_enforces_per_entry_byte_bounds() {
         let mut issuer = sample_snapshot();
@@ -1175,7 +1081,6 @@ mod tests {
             .to_bytes()
             .expect_err("producer must reject oversized issuer material");
         assert!(issuer_err.to_string().contains("public key length"));
-
         let mut relay = sample_snapshot();
         relay.relays[0].certificate =
             vec![0_u8; GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1 + 1];
@@ -1184,7 +1089,6 @@ mod tests {
             .expect_err("producer must reject oversized relay bundle");
         assert!(relay_err.to_string().contains("certificate bundle length"));
     }
-
     #[test]
     fn snapshot_consumer_enforces_per_entry_byte_bounds() {
         let mut issuer = sample_snapshot();
@@ -1195,7 +1099,6 @@ mod tests {
         let issuer_err = GuardDirectorySnapshotV2::inspect_bytes(&issuer_bytes)
             .expect_err("consumer must reject oversized issuer material");
         assert!(issuer_err.to_string().contains("public key length"));
-
         let mut relay = sample_snapshot();
         relay.relays[0].certificate =
             vec![0_u8; GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1 + 1];
@@ -1204,7 +1107,6 @@ mod tests {
         GuardDirectorySnapshotV2::inspect_bytes(&relay_bytes)
             .expect_err("consumer decode budget must reject oversized relay bundle");
     }
-
     #[test]
     fn authenticated_relay_selection_returns_exact_validated_bundle() {
         let snapshot = sample_snapshot();
@@ -1213,7 +1115,6 @@ mod tests {
         let relay_id = expected.certificate.relay_id;
         let bytes = snapshot.to_bytes().expect("serialize snapshot");
         let digest = compute_snapshot_digest(&bytes);
-
         let selected = GuardDirectorySnapshotV2::authenticate_relay_bytes_at(
             &bytes,
             digest,
@@ -1226,7 +1127,6 @@ mod tests {
             snapshot.valid_until_unix
         );
         assert_eq!(selected.relay, expected);
-
         let err = GuardDirectorySnapshotV2::authenticate_relay_bytes_at(
             &bytes,
             digest,
@@ -1236,13 +1136,11 @@ mod tests {
         .expect_err("unknown relay identity must fail closed");
         assert!(err.to_string().contains("absent"));
     }
-
     #[test]
     fn exact_snapshot_digest_authenticates_embedded_issuer_set() {
         let trusted = sample_snapshot();
         let trusted_bytes = trusted.to_bytes().expect("serialize trusted snapshot");
         let trusted_digest = compute_snapshot_digest(&trusted_bytes);
-
         let attacker_signing_key = SigningKey::from_bytes(&[0x13; SECRET_KEY_LENGTH]);
         let attacker_mldsa = sample_mldsa_keypair(b"directory-snapshot-attacker");
         let attacker_ed25519 = attacker_signing_key.verifying_key().to_bytes();
@@ -1266,7 +1164,6 @@ mod tests {
         )
         .to_cbor();
         let forged_bytes = forged.to_bytes().expect("serialize forged snapshot");
-
         GuardDirectorySnapshotV2::inspect_bytes(&forged_bytes)
             .expect("self-signed snapshot is structurally self-consistent");
         let err = GuardDirectorySnapshotV2::authenticate_bytes_at(
@@ -1277,13 +1174,11 @@ mod tests {
         .expect_err("a digest for another artifact must reject substituted issuers");
         assert!(err.to_string().contains("snapshot digest mismatch"));
     }
-
     #[test]
     fn authenticated_snapshot_enforces_half_open_validity_window() {
         let snapshot = sample_snapshot();
         let bytes = snapshot.to_bytes().expect("serialize");
         let digest = compute_snapshot_digest(&bytes);
-
         GuardDirectorySnapshotV2::authenticate_bytes_at(&bytes, digest, snapshot.valid_after_unix)
             .expect("valid_after is inclusive");
         GuardDirectorySnapshotV2::authenticate_bytes_at(
@@ -1292,7 +1187,6 @@ mod tests {
             snapshot.valid_until_unix - 1,
         )
         .expect("last second before valid_until is valid");
-
         let early = GuardDirectorySnapshotV2::authenticate_bytes_at(
             &bytes,
             digest,
@@ -1300,7 +1194,6 @@ mod tests {
         )
         .expect_err("not-yet-valid snapshot must fail");
         assert!(early.to_string().contains("not yet valid"));
-
         let expired = GuardDirectorySnapshotV2::authenticate_bytes_at(
             &bytes,
             digest,
@@ -1309,7 +1202,6 @@ mod tests {
         .expect_err("valid_until is exclusive");
         assert!(expired.to_string().contains("expired"));
     }
-
     #[test]
     fn authenticated_snapshot_rejects_pre_release_validation_phase() {
         let mut snapshot = sample_snapshot();
@@ -1317,7 +1209,6 @@ mod tests {
             encode_validation_phase(CertificateValidationPhase::Phase2PreferDual);
         let bytes = snapshot.to_bytes().expect("serialize");
         let digest = compute_snapshot_digest(&bytes);
-
         GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect("phase 2 remains available for structural diagnostics");
         let err = GuardDirectorySnapshotV2::authenticate_bytes_at(
@@ -1331,7 +1222,6 @@ mod tests {
             "unexpected authentication error: {err}"
         );
     }
-
     #[test]
     fn snapshot_rejects_unknown_validation_phase() {
         let mut snapshot = sample_snapshot();
@@ -1339,7 +1229,6 @@ mod tests {
         let bytes = snapshot.to_bytes().expect("serialize");
         assert!(GuardDirectorySnapshotV2::inspect_bytes(&bytes).is_err());
     }
-
     #[test]
     fn snapshot_rejects_version_mismatch() {
         let mut snapshot = sample_snapshot();
@@ -1347,42 +1236,35 @@ mod tests {
         let bytes = snapshot.to_bytes().expect("serialize");
         assert!(GuardDirectorySnapshotV2::inspect_bytes(&bytes).is_err());
     }
-
     #[test]
     fn snapshot_rejects_empty_issuer_set() {
         let mut snapshot = sample_snapshot();
         snapshot.issuers.clear();
         let bytes = snapshot.to_bytes().expect("serialize");
-
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("empty issuer set must fail");
         assert!(err.to_string().contains("at least one issuer"));
     }
-
     #[test]
     fn snapshot_rejects_empty_relay_set() {
         let mut snapshot = sample_snapshot();
         snapshot.relays.clear();
         let bytes = snapshot.to_bytes().expect("serialize");
-
         let err =
             GuardDirectorySnapshotV2::inspect_bytes(&bytes).expect_err("empty relay set must fail");
         assert!(err.to_string().contains("at least one relay"));
     }
-
     #[test]
     fn snapshot_rejects_invalid_time_window() {
         let mut snapshot = sample_snapshot();
         snapshot.valid_until_unix = snapshot.valid_after_unix;
         let bytes = snapshot.to_bytes().expect("serialize");
         assert!(GuardDirectorySnapshotV2::inspect_bytes(&bytes).is_err());
-
         let mut snapshot = sample_snapshot();
         snapshot.valid_after_unix = snapshot.valid_until_unix + 1;
         let bytes = snapshot.to_bytes().expect("serialize");
         assert!(GuardDirectorySnapshotV2::inspect_bytes(&bytes).is_err());
     }
-
     #[test]
     fn snapshot_rejects_issuer_fingerprint_mismatch() {
         let mut snapshot = sample_snapshot();
@@ -1392,7 +1274,6 @@ mod tests {
             .expect_err("fingerprint mismatch should fail");
         assert!(err.to_string().contains("fingerprint"));
     }
-
     #[test]
     fn snapshot_rejects_duplicate_issuer_fingerprints() {
         let mut snapshot = sample_snapshot();
@@ -1403,7 +1284,6 @@ mod tests {
             .expect_err("duplicate issuer should fail");
         assert!(err.to_string().contains("duplicate"));
     }
-
     #[test]
     fn snapshot_rejects_invalid_mldsa65_public_key_length() {
         let mut snapshot = sample_snapshot();
@@ -1414,14 +1294,12 @@ mod tests {
             .expect_err("invalid ML-DSA-65 public key length should fail");
         assert!(err.to_string().contains("ML-DSA-65 public key"));
     }
-
     #[test]
     fn snapshot_rejects_invalid_mldsa65_public_key_length_before_fingerprint() {
         let mut snapshot = sample_snapshot();
         snapshot.issuers[0].mldsa65_public.truncate(1);
         snapshot.issuers[0].fingerprint = [0xEE; 32];
         let bytes = snapshot.to_bytes().expect("serialize");
-
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("issuer ML-DSA-65 key shape must fail before fingerprint");
         let message = err.to_string();
@@ -1434,14 +1312,12 @@ mod tests {
             "shape preflight should run before fingerprint comparison: {message}"
         );
     }
-
     #[test]
     fn snapshot_rejects_all_zero_mldsa65_public_key_before_fingerprint() {
         let mut snapshot = sample_snapshot();
         snapshot.issuers[0].mldsa65_public = vec![0u8; MlDsaSuite::MlDsa65.public_key_len()];
         snapshot.issuers[0].fingerprint = [0xEE; 32];
         let bytes = snapshot.to_bytes().expect("serialize");
-
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("all-zero issuer ML-DSA-65 key must fail before fingerprint");
         let message = err.to_string();
@@ -1454,7 +1330,6 @@ mod tests {
             "inert key preflight should run before fingerprint comparison: {message}"
         );
     }
-
     #[test]
     fn snapshot_rejects_missing_mldsa65_public_key_after_phase1() {
         let mut snapshot = sample_snapshot();
@@ -1469,7 +1344,6 @@ mod tests {
             .expect_err("phase 3 requires ML-DSA-65 issuer key");
         assert!(err.to_string().contains("required"));
     }
-
     #[test]
     fn snapshot_allows_phase1_empty_mldsa65_public_key() {
         let snapshot = sample_phase1_single_signature_snapshot();
@@ -1477,7 +1351,6 @@ mod tests {
         GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect("phase 1 may carry an issuer without ML-DSA-65 key");
     }
-
     #[test]
     fn snapshot_phase2_accepts_single_signature_relay() {
         let mut snapshot = sample_snapshot();
@@ -1490,30 +1363,25 @@ mod tests {
         GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect("phase 2 accepts Ed25519-only relay certificates during rollout");
     }
-
     #[test]
     fn snapshot_rejects_invalid_issuer_ed25519_public_key() {
         let mut snapshot = sample_snapshot();
         snapshot.issuers[0].ed25519_public = [0xFF; 32];
         snapshot.issuers[0].fingerprint = [0xEE; 32];
         let bytes = snapshot.to_bytes().expect("serialize");
-
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("invalid issuer Ed25519 public key should fail");
         assert!(err.to_string().contains("Ed25519 public key"));
     }
-
     #[test]
     fn snapshot_rejects_malformed_relay_certificate_bundle() {
         let mut snapshot = sample_snapshot();
         snapshot.relays[0].certificate = vec![0x99, 0x00, 0x01];
         let bytes = snapshot.to_bytes().expect("serialize");
-
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("malformed relay certificate bundle should fail");
         assert!(err.to_string().contains("relay certificate bundle"));
     }
-
     #[test]
     fn snapshot_rejects_relay_certificate_unknown_issuer() {
         let mut snapshot = sample_snapshot();
@@ -1521,12 +1389,10 @@ mod tests {
             bundle.certificate.issuer_fingerprint = [0xEE; 32];
         });
         let bytes = snapshot.to_bytes().expect("serialize");
-
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("relay certificate with unknown issuer should fail");
         assert!(err.to_string().contains("unknown issuer"));
     }
-
     #[test]
     fn snapshot_rejects_relay_certificate_directory_hash_mismatch() {
         let mut snapshot = sample_snapshot();
@@ -1534,12 +1400,10 @@ mod tests {
             bundle.certificate.directory_hash = [0xDD; 32];
         });
         let bytes = snapshot.to_bytes().expect("serialize");
-
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("relay certificate with mismatched directory hash should fail");
         assert!(err.to_string().contains("directory_hash"));
     }
-
     #[test]
     fn snapshot_rejects_relay_certificate_outside_snapshot_window() {
         let mut snapshot = sample_snapshot();
@@ -1551,7 +1415,6 @@ mod tests {
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("relay certificate not valid at snapshot start should fail");
         assert!(err.to_string().contains("valid_after"));
-
         let mut snapshot = sample_snapshot();
         let snapshot_valid_until = snapshot.valid_until_unix;
         mutate_first_relay_bundle(&mut snapshot, |bundle| {
@@ -1561,7 +1424,6 @@ mod tests {
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("relay certificate expiring inside snapshot window should fail");
         assert!(err.to_string().contains("valid_until"));
-
         let mut snapshot = sample_snapshot();
         let snapshot_published_at = snapshot.published_at_unix;
         mutate_first_relay_bundle(&mut snapshot, |bundle| {
@@ -1572,18 +1434,15 @@ mod tests {
             .expect_err("relay certificate published after snapshot should fail");
         assert!(err.to_string().contains("published_at"));
     }
-
     #[test]
     fn snapshot_rejects_duplicate_relay_ids() {
         let mut snapshot = sample_snapshot();
         snapshot.relays.push(snapshot.relays[0].clone());
         let bytes = snapshot.to_bytes().expect("serialize");
-
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("duplicate relay id should fail");
         assert!(err.to_string().contains("duplicate relay id"));
     }
-
     #[test]
     fn snapshot_rejects_bad_relay_certificate_ed25519_signature() {
         let mut snapshot = sample_snapshot();
@@ -1591,12 +1450,10 @@ mod tests {
             bundle.signatures.ed25519[0] ^= 0xFF;
         });
         let bytes = snapshot.to_bytes().expect("serialize");
-
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("bad relay Ed25519 signature should fail");
         assert!(err.to_string().contains("signature verification"));
     }
-
     #[test]
     fn snapshot_rejects_bad_relay_certificate_mldsa65_signature() {
         let mut snapshot = sample_snapshot();
@@ -1609,7 +1466,6 @@ mod tests {
             signature[0] ^= 0xFF;
         });
         let bytes = snapshot.to_bytes().expect("serialize");
-
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
             .expect_err("bad relay ML-DSA signature should fail");
         assert!(err.to_string().contains("signature verification"));

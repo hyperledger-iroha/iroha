@@ -7,12 +7,10 @@ use super::super::collective::{
 };
 use super::super::sample_uniform_rns;
 use super::*;
-
 const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
 const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
 const TEST_SMUDGE_BITS: usize = 8;
 const TEST_FINAL_RESIDUAL_BITS: usize = 24;
-
 fn test_profile() -> BgvProfile {
     BgvProfile {
         profile_id: [0xd8; 32],
@@ -32,12 +30,10 @@ fn test_profile() -> BgvProfile {
         max_work_units: 1 << 20,
     }
 }
-
 struct KatRandom {
     state: [u8; 32],
     counter: u64,
 }
-
 impl KatRandom {
     fn new(label: &[u8]) -> Self {
         Self {
@@ -46,7 +42,6 @@ impl KatRandom {
         }
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for KatRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         let mut cursor = 0;
@@ -63,41 +58,32 @@ impl MaskedRelaxedRandomSourceV1 for KatRandom {
         Ok(())
     }
 }
-
 struct FailingRandom;
-
 impl MaskedRelaxedRandomSourceV1 for FailingRandom {
     fn fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         Err(MaskedRelaxedRandomErrorV1::Unavailable)
     }
 }
-
 struct PartiallyFailingRandom;
-
 impl MaskedRelaxedRandomSourceV1 for PartiallyFailingRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         destination.fill(0xa5);
         Err(MaskedRelaxedRandomErrorV1::Unavailable)
     }
 }
-
 struct ConstantRandom(u8);
-
 impl MaskedRelaxedRandomSourceV1 for ConstantRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         destination.fill(self.0);
         Ok(())
     }
 }
-
 struct FastDeterministicRandom(u64);
-
 impl FastDeterministicRandom {
     fn new(label: &[u8]) -> Self {
         let digest = keccak256(label);
         Self(u64::from_be_bytes(digest[..8].try_into().unwrap()))
     }
-
     fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut value = self.0;
@@ -106,7 +92,6 @@ impl FastDeterministicRandom {
         value ^ (value >> 31)
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for FastDeterministicRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         for chunk in destination.chunks_mut(8) {
@@ -116,7 +101,6 @@ impl MaskedRelaxedRandomSourceV1 for FastDeterministicRandom {
         Ok(())
     }
 }
-
 struct Fixture {
     profile: BgvProfile,
     parties: super::super::PartySet,
@@ -127,7 +111,6 @@ struct Fixture {
     ciphertext: ZkAmsMkheCollectiveCiphertextV1,
     message: Vec<u64>,
 }
-
 fn fixture(label: &[u8]) -> Fixture {
     let profile = test_profile();
     profile.validate().unwrap();
@@ -254,7 +237,6 @@ fn fixture(label: &[u8]) -> Fixture {
         message,
     }
 }
-
 fn make_shares(fixture: &Fixture, label: &[u8]) -> Vec<AuthenticatedDecryptionShareV1> {
     let mut random = KatRandom::new(label);
     (0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1)
@@ -278,7 +260,6 @@ fn make_shares(fixture: &Fixture, label: &[u8]) -> Vec<AuthenticatedDecryptionSh
         })
         .collect()
 }
-
 #[test]
 fn release_tests_do_not_retain_full_roster_public_key_material() {
     let source = include_str!("decryption_tests.rs");
@@ -293,7 +274,6 @@ fn release_tests_do_not_retain_full_roster_public_key_material() {
             "release tests must not restore the retained {forbidden} corridor",
         );
     }
-
     let evidence =
         super::super::cpk_ceremony::zk_ams_mkhe_cpk_ceremony_residency_evidence_v1().unwrap();
     assert_eq!(evidence.final_native_collective_key_bytes, 79_691_776);
@@ -306,7 +286,6 @@ fn release_tests_do_not_retain_full_roster_public_key_material() {
     assert_eq!(evidence.authenticated_peak_residency_digest, [0; 32]);
     assert!(!evidence.release_certified);
 }
-
 #[test]
 fn native_full_roster_compatibility_is_test_only_and_not_facaded() {
     let decryption = include_str!("decryption.rs");
@@ -344,7 +323,6 @@ fn native_full_roster_compatibility_is_test_only_and_not_facaded() {
             "native full-roster compatibility must remain test-only: {marker}",
         );
     }
-
     let facades = [
         include_str!("../mkhe.rs"),
         include_str!("../../zk_ams.rs"),
@@ -366,7 +344,6 @@ fn native_full_roster_compatibility_is_test_only_and_not_facaded() {
             "production facade must omit test-only native surface: {forbidden}",
         );
     }
-
     for owner in [
         "ZkAmsMkheCollectiveCiphertextV1",
         "ZkAmsMkheCollectiveLevelOneV1",
@@ -387,7 +364,6 @@ fn native_full_roster_compatibility_is_test_only_and_not_facaded() {
             assert!(gated_use.len() < 256, "detached cfg(test) for {owner}");
         }
     }
-
     for retained in [
         "ZkAmsMkheCollectivePartyStateV1",
         "ZkAmsMkheCollectivePublicKeyShareV1",
@@ -414,7 +390,6 @@ fn native_full_roster_compatibility_is_test_only_and_not_facaded() {
         }
     }
 }
-
 #[test]
 fn materialized_collective_key_compatibility_is_test_only_outside_cpk_finalization() {
     let evaluated_keys = include_str!("collective_eval_keys.rs");
@@ -443,7 +418,6 @@ fn materialized_collective_key_compatibility_is_test_only_outside_cpk_finalizati
             "materialized collective-key compatibility must remain test-only: {required}",
         );
     }
-
     let cks_stream = include_str!("collective_eval_keys/cks_stream.rs");
     assert!(
         cks_stream
@@ -451,7 +425,6 @@ fn materialized_collective_key_compatibility_is_test_only_outside_cpk_finalizati
     );
     assert!(evaluated_keys.contains("pub(super) fn from_staged_verified_digests("));
 }
-
 #[test]
 fn prepared_collective_batch_api_is_public_through_vega() {
     type Prepare = fn(
@@ -462,7 +435,6 @@ fn prepared_collective_batch_api_is_public_through_vega() {
         crate::vega::ZkAmsMkheErrorV1,
     >;
     let _: Prepare = crate::vega::prepare_zk_ams_mkhe_collective_public_a_v1;
-
     type Generate = fn(
         &crate::vega::ZkAmsMkheGovernedActiveRosterV1,
         &crate::vega::ZkAmsMkhePreparedCollectivePublicAV1,
@@ -481,7 +453,6 @@ fn prepared_collective_batch_api_is_public_through_vega() {
             FastDeterministicRandom,
         >;
 }
-
 #[test]
 fn exact_wide_sign_magnitude_boundaries_are_canonical_and_no_wrap() {
     let maximum = WideMagnitudeV1::max_for_bits(1_855).unwrap();
@@ -510,7 +481,6 @@ fn exact_wide_sign_magnitude_boundaries_are_canonical_and_no_wrap() {
         Err(ZkAmsMkheErrorV1::InvalidWireEncoding)
     );
 }
-
 #[test]
 fn t256_wide_reduction_and_centering_boundaries_are_exact() {
     let modulus = wide_from_be(&super::super::VEGA_T256_SCALAR_MODULUS_BE_V1).unwrap();
@@ -529,14 +499,12 @@ fn t256_wide_reduction_and_centering_boundaries_are_exact() {
     assert_eq!(reduce_wide_mod_t256(modulus), [0; 32]);
     assert_eq!(reduce_wide_mod_t256(modulus_plus_one), one_be);
     assert_eq!(reduce_wide_mod_t256(twice_modulus), [0; 32]);
-
     let negative_one = SignedCrtV1::normalized(true, one);
     let canonical = t256_subtract_modulus(one_be).unwrap();
     let reduced = reduce_wide_mod_t256(negative_one.magnitude);
     assert_eq!(t256_subtract_modulus(reduced).unwrap(), canonical);
     assert!(canonical > super::super::T256_CENTERED_MAX_BE_V1);
 }
-
 #[test]
 fn unavailable_zero_and_constant_random_sources_fail_closed() {
     assert_eq!(
@@ -557,7 +525,6 @@ fn unavailable_zero_and_constant_random_sources_fail_closed() {
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     );
 }
-
 #[test]
 fn transient_secret_owners_zeroize_after_partial_rng_error_and_unwind() {
     reset_decryption_transient_zeroized_drop_count_v1();
@@ -566,14 +533,12 @@ fn transient_secret_owners_zeroize_after_partial_rng_error_and_unwind() {
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     );
     assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
-
     let bound = WideMagnitudeV1::max_for_bits(TEST_SMUDGE_BITS).unwrap();
     assert_eq!(
         sample_signed_wide(&bound, &mut PartiallyFailingRandom),
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     );
     assert_eq!(decryption_transient_zeroized_drop_count_v1(), 2);
-
     let profile = test_profile();
     let unwind = std::panic::catch_unwind(|| {
         let mut small = ZeroizingI64VectorV1::with_capacity(2).unwrap();
@@ -589,7 +554,6 @@ fn transient_secret_owners_zeroize_after_partial_rng_error_and_unwind() {
     assert!(unwind.is_err());
     assert_eq!(decryption_transient_zeroized_drop_count_v1(), 6);
 }
-
 #[test]
 fn compact_cpk_share_validation_rejects_moved_two_party_proof_substitution() {
     let mut roster_random =
@@ -609,7 +573,6 @@ fn compact_cpk_share_validation_rejects_moved_two_party_proof_substitution() {
     let transcript_digest = keccak256(b"decryption-two-share-substitution.transcript");
     let prepared_public_a =
         prepare_zk_ams_mkhe_collective_public_a_v1(&governed_roster, transcript_digest).unwrap();
-
     let mut party_zero_random =
         FastDeterministicRandom::new(b"decryption-two-share-substitution-party-0");
     let (party_zero_state, baseline) =
@@ -622,7 +585,6 @@ fn compact_cpk_share_validation_rejects_moved_two_party_proof_substitution() {
         )
         .unwrap();
     drop(party_zero_state);
-
     let mut party_one_random =
         FastDeterministicRandom::new(b"decryption-two-share-substitution-party-1");
     let (party_one_state, proof_donor) =
@@ -635,7 +597,6 @@ fn compact_cpk_share_validation_rejects_moved_two_party_proof_substitution() {
         )
         .unwrap();
     drop(party_one_state);
-
     assert_eq!(
         validate_collective_public_key_share_for_verified_cpk_compact_v1(
             &governed_roster,
@@ -645,7 +606,6 @@ fn compact_cpk_share_validation_rejects_moved_two_party_proof_substitution() {
         ),
         Ok(baseline.digest())
     );
-
     // Move the baseline instead of cloning its release-sized polynomial/proof
     // owners. At most the shared A and two party B/proof payloads coexist.
     let mut substitution = baseline;
@@ -692,7 +652,6 @@ fn complete_eight_party_native_decryption_kat_recovers_plaintext() {
     assert!(result.maximum_residual_bits <= TEST_FINAL_RESIDUAL_BITS as u16);
     assert_ne!(result.ordered_share_set_digest, [0; 32]);
 }
-
 #[test]
 fn canonical_share_wire_roundtrip_rehashes_and_reverifies_every_relation() {
     let fixture = fixture(b"decryption-wire-kat");
@@ -734,7 +693,6 @@ fn canonical_share_wire_roundtrip_rehashes_and_reverifies_every_relation() {
         .unwrap();
     }
 }
-
 #[test]
 fn release_resource_evidence_is_exact_for_split_transport() {
     let evidence = zk_ams_mkhe_decryption_resource_evidence_v1().unwrap();
@@ -806,7 +764,6 @@ fn release_resource_evidence_is_exact_for_split_transport() {
         evidence.total_share_record_bytes
     );
     assert_ne!(evidence.evidence_digest, [0; 32]);
-
     let mut forged_native_ready = evidence;
     forged_native_ready.native_peak_residency_certified = true;
     forged_native_ready.split_transport_ready = true;
@@ -816,7 +773,6 @@ fn release_resource_evidence_is_exact_for_split_transport() {
         Err(ZkAmsMkheErrorV1::InvalidProfile)
     );
 }
-
 #[test]
 fn release_split_objects_have_exact_canonical_sizes_and_preflight() {
     let profile = release_profile_v1();
@@ -845,7 +801,6 @@ fn release_split_objects_have_exact_canonical_sizes_and_preflight() {
     noncanonical_polynomial[4..12].copy_from_slice(&profile.moduli[0].to_be_bytes());
     assert!(decode_decryption_polynomial_object(&noncanonical_polynomial).is_err());
     drop(noncanonical_polynomial);
-
     let proof = DecryptionRelationProofV1 {
         wide_response_bytes: evidence.wide_response_coefficient_bytes,
         challenge_seed: [0x5a; 32],
@@ -907,7 +862,6 @@ fn release_split_objects_have_exact_canonical_sizes_and_preflight() {
     assert_ne!(polynomial_pointer.payload_blake3(), [0; 32]);
     assert_ne!(proof_pointer.payload_blake3(), [0; 32]);
 }
-
 #[test]
 fn sound_share_ceiling_boundary_is_exact_to_one_byte() {
     let baseline = zk_ams_mkhe_decryption_resource_evidence_v1().unwrap();
@@ -922,7 +876,6 @@ fn sound_share_ceiling_boundary_is_exact_to_one_byte() {
     let short = derive_decryption_resource_evidence(&one_short).unwrap();
     assert!(!short.share_ceiling_met);
     assert_eq!(short.ceiling_shortfall_bytes, 1);
-
     let mut exact = release_profile_v1();
     exact.max_share_bytes = usize::try_from(baseline.minimum_sound_share_ceiling_bytes).unwrap();
     let exact = derive_decryption_resource_evidence(&exact).unwrap();
@@ -938,7 +891,6 @@ fn sound_share_ceiling_boundary_is_exact_to_one_byte() {
         usize::try_from(baseline.minimum_sound_share_ceiling_bytes).unwrap()
     );
 }
-
 #[test]
 fn missing_excess_duplicate_and_reordered_sets_identify_first_slot() {
     let fixture = fixture(b"decryption-set-negative");
@@ -955,7 +907,6 @@ fn missing_excess_duplicate_and_reordered_sets_identify_first_slot() {
     .unwrap_err();
     assert_eq!(missing.reason, DecryptionAbortReasonV1::MissingShare);
     assert_eq!(missing.party_index, 7);
-
     let mut excess = shares.clone();
     excess.push(shares[0].clone());
     assert_eq!(
@@ -972,7 +923,6 @@ fn missing_excess_duplicate_and_reordered_sets_identify_first_slot() {
         .reason,
         DecryptionAbortReasonV1::ExcessShare
     );
-
     for mutation in [
         {
             let mut values = shares.clone();
@@ -1002,7 +952,6 @@ fn missing_excess_duplicate_and_reordered_sets_identify_first_slot() {
         assert_ne!(abort.evidence_digest, [0; 32]);
     }
 }
-
 #[test]
 fn every_binding_axis_and_replay_axis_fails_closed() {
     let fixture = fixture(b"decryption-binding-negative");
@@ -1052,12 +1001,10 @@ fn every_binding_axis_and_replay_axis_fails_closed() {
         .is_err()
     );
 }
-
 #[test]
 fn polynomial_public_key_proof_and_authentication_mutations_are_rejected() {
     let fixture = fixture(b"decryption-proof-negative");
     let shares = make_shares(&fixture, b"decryption-proof-negative-shares");
-
     let mut share_poly = shares[2].clone();
     share_poly.share.coefficients[0] =
         (share_poly.share.coefficients[0] + 1) % fixture.profile.moduli[0];
@@ -1073,7 +1020,6 @@ fn polynomial_public_key_proof_and_authentication_mutations_are_rejected() {
         ),
         Err(ZkAmsMkheErrorV1::InvalidAuthentication)
     );
-
     let mut bad_relation = fixture.relations[2].clone();
     bad_relation.party_b.coefficients[0] =
         (bad_relation.party_b.coefficients[0] + 1) % fixture.profile.moduli[0];
@@ -1089,7 +1035,6 @@ fn polynomial_public_key_proof_and_authentication_mutations_are_rejected() {
         )
         .is_err()
     );
-
     for mutation in 0..4 {
         let mut proof = shares[2].clone();
         match mutation {
@@ -1130,7 +1075,6 @@ fn polynomial_public_key_proof_and_authentication_mutations_are_rejected() {
         .is_err(),
         "a proof must not replay under another smudging bound"
     );
-
     let mut signature = shares[2].clone();
     signature.authentication.signature[64] ^= 1;
     assert_eq!(
@@ -1146,13 +1090,11 @@ fn polynomial_public_key_proof_and_authentication_mutations_are_rejected() {
         Err(ZkAmsMkheErrorV1::InvalidAuthentication)
     );
 }
-
 #[test]
 fn cross_party_relation_proof_authentication_and_ciphertext_splices_fail() {
     let fixture = fixture(b"decryption-splice-negative");
     let shares = make_shares(&fixture, b"decryption-splice-negative-shares");
     let index = 4;
-
     let mut proof_splice = shares[index].clone();
     proof_splice.proof = shares[index + 1].proof.clone();
     assert!(
@@ -1167,7 +1109,6 @@ fn cross_party_relation_proof_authentication_and_ciphertext_splices_fail() {
         )
         .is_err()
     );
-
     let mut authentication_splice = shares[index].clone();
     authentication_splice.authentication = shares[index + 1].authentication.clone();
     assert!(
@@ -1182,7 +1123,6 @@ fn cross_party_relation_proof_authentication_and_ciphertext_splices_fail() {
         )
         .is_err()
     );
-
     assert!(
         verify_authenticated_share(
             &fixture.profile,
@@ -1195,7 +1135,6 @@ fn cross_party_relation_proof_authentication_and_ciphertext_splices_fail() {
         )
         .is_err()
     );
-
     for mutate_constant in [false, true] {
         let mut constant = fixture.ciphertext.constant().clone();
         let mut linear = fixture.ciphertext.linear().clone();
@@ -1229,7 +1168,6 @@ fn cross_party_relation_proof_authentication_and_ciphertext_splices_fail() {
             .is_err()
         );
     }
-
     let mut wrong_profile = fixture.profile.clone();
     wrong_profile.profile_id[0] ^= 1;
     assert!(
@@ -1245,7 +1183,6 @@ fn cross_party_relation_proof_authentication_and_ciphertext_splices_fail() {
         .is_err()
     );
 }
-
 #[test]
 fn response_bounds_reject_one_step_over_every_family() {
     let fixture = fixture(b"decryption-response-bound-negative");
@@ -1259,7 +1196,6 @@ fn response_bounds_reject_one_step_over_every_family() {
     )
     .unwrap();
     let (_, wide_limit, _) = wide_response_parameters(TEST_SMUDGE_BITS, weight).unwrap();
-
     let mut secret = share.proof.clone();
     secret.secret_response[0] = secret_limit + 1;
     let mut error = share.proof.clone();
@@ -1293,7 +1229,6 @@ fn response_bounds_reject_one_step_over_every_family() {
         );
     }
 }
-
 #[test]
 fn decoder_preflights_truncation_extension_counts_residues_and_negative_zero() {
     let fixture = fixture(b"decryption-wire-negative");
@@ -1325,7 +1260,6 @@ fn decoder_preflights_truncation_extension_counts_residues_and_negative_zero() {
             .is_err()
         );
     }
-
     let polynomial_offset = TEST_DECRYPTION_SHARE_HEADER_BYTES_V1 + 4;
     let mut noncanonical = encoded.clone();
     noncanonical[polynomial_offset..polynomial_offset + 8]
@@ -1340,7 +1274,6 @@ fn decoder_preflights_truncation_extension_counts_residues_and_negative_zero() {
         )
         .is_err()
     );
-
     let proof_offset = TEST_DECRYPTION_SHARE_HEADER_BYTES_V1
         + checked_rns_polynomial_bytes(&fixture.profile).unwrap();
     let wide_bytes = usize::from(share.proof.wide_response_bytes);
@@ -1360,7 +1293,6 @@ fn decoder_preflights_truncation_extension_counts_residues_and_negative_zero() {
         .is_err()
     );
 }
-
 #[test]
 fn final_centered_correctness_bound_is_enforced_after_all_proofs() {
     let fixture = fixture(b"decryption-bound-negative");

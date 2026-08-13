@@ -20,7 +20,6 @@
 //! A Galois contribution is
 //! `b_i = -a_d*s_i + g^d*sigma_k(s_i) + p*e_i`, hence
 //! `sum_i b_i + a_d*S = g^d*sigma_k(S) + p*sum_i e_i`.
-
 use super::{
     ArtifactAuthentication, BgvProfile, MKHE_VERSION_V1, MaskedRelaxedRandomSourceV1,
     ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
@@ -42,7 +41,6 @@ use super::{
     wire::derive_wire_length_certificate_v1,
 };
 use crate::vega::sponge::{Keccak256, keccak256};
-
 const DIRECT_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-collective-eval-context";
 const DIRECT_COMMON_A_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-collective-rkg-common-a";
 const DIRECT_TARGET_A_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.direct-collective-galois-target-a";
@@ -72,10 +70,8 @@ const DIRECT_EVALUATED_KEY_SET_ADMISSION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-collective-evaluated-key-set-admission";
 const DIRECT_NOISE_INTEGRATION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-collective-noise-integration";
-
 const ACTIVE_SPARSE_CHALLENGE_WEIGHT_V1: u8 = 60;
 const RESIDUE_BYTES_V1: usize = core::mem::size_of::<u64>();
-
 /// Exact evaluated-key target of one direct-collective ceremony.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZkAmsMkheDirectEvaluatedKeyTargetV1 {
@@ -87,7 +83,6 @@ pub enum ZkAmsMkheDirectEvaluatedKeyTargetV1 {
         schedule_index: u8,
     },
 }
-
 impl ZkAmsMkheDirectEvaluatedKeyTargetV1 {
     const fn tag(self) -> u8 {
         match self {
@@ -96,7 +91,6 @@ impl ZkAmsMkheDirectEvaluatedKeyTargetV1 {
         }
     }
 }
-
 /// Canonical contribution round in the direct ceremony.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -110,13 +104,11 @@ pub enum ZkAmsMkheDirectCeremonyRoundV1 {
     /// Automorphism-linked `b_i` publication.
     Galois = 4,
 }
-
 impl ZkAmsMkheDirectCeremonyRoundV1 {
     const fn tag(self) -> u8 {
         self as u8
     }
 }
-
 /// Polynomial role carried by one canonical limb stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -132,12 +124,10 @@ pub enum ZkAmsMkheDirectPolynomialRoleV1 {
     /// Party-local public-`A` normalization component `N_i`.
     RkgNormalization = 5,
 }
-
 impl ZkAmsMkheDirectPolynomialRoleV1 {
     const fn tag(self) -> u8 {
         self as u8
     }
-
     const fn belongs_to(self, round: ZkAmsMkheDirectCeremonyRoundV1) -> bool {
         matches!(
             (self, round),
@@ -153,7 +143,6 @@ impl ZkAmsMkheDirectPolynomialRoleV1 {
         )
     }
 }
-
 /// Complete immutable identity of one evaluated-key digit ceremony.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheDirectCeremonyContextV1 {
@@ -177,7 +166,6 @@ pub struct ZkAmsMkheDirectCeremonyContextV1 {
     initial_round_digest: [u8; 32],
     context_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectCeremonyContextV1 {
     /// Build one release-profile context without accepting any contribution.
     ///
@@ -289,7 +277,6 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
         value.validate(roster)?;
         Ok(value)
     }
-
     /// Mint one context from the complete opaque CPK secret-binding set.
     ///
     /// Callers cannot provide lineage leaves or a root.  Both are taken from
@@ -322,7 +309,6 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
         value.validate(roster)?;
         Ok(value)
     }
-
     /// Revalidate the exact relinearization context used by an RKG-ephemeral
     /// membership source against the opaque CPK secret-binding set.
     ///
@@ -352,43 +338,36 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
         }
         Ok(())
     }
-
     /// Frozen profile digest.
     #[must_use]
     pub const fn profile_digest(self) -> [u8; 32] {
         self.profile_digest
     }
-
     /// Exact governed roster digest.
     #[must_use]
     pub const fn roster_digest(self) -> [u8; 32] {
         self.roster_digest
     }
-
     /// Exact authentication-key material digest of the roster.
     #[must_use]
     pub const fn key_material_digest(self) -> [u8; 32] {
         self.key_material_digest
     }
-
     /// Governed nonzero secret epoch.
     #[must_use]
     pub const fn epoch(self) -> u64 {
         self.epoch
     }
-
     /// Parent collective-public-key transcript digest.
     #[must_use]
     pub const fn transcript_digest(self) -> [u8; 32] {
         self.transcript_digest
     }
-
     /// Digest of the already verified collective public key.
     #[must_use]
     pub const fn collective_public_key_digest(self) -> [u8; 32] {
         self.collective_public_key_digest
     }
-
     /// Root of the eight proof-layer secret-lineage commitments.
     ///
     /// The exact proof layer must link each leaf to the same `s_i` used by the
@@ -397,61 +376,61 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
     pub const fn secret_lineage_root(self) -> [u8; 32] {
         self.secret_lineage_root
     }
-
+    /// Exact persistent-secret lineage at one governed party position.
+    pub(super) fn direct_secret_lineage_digest(
+        self,
+        party_index: u8,
+    ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+        self.secret_lineage_digests
+            .get(usize::from(party_index))
+            .copied()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPartySet)
+    }
     /// Bound evaluated-key target.
     #[must_use]
     pub const fn target(self) -> ZkAmsMkheDirectEvaluatedKeyTargetV1 {
         self.target
     }
-
     /// Exact evaluated-key ordinal (relinearization zero, then Galois order).
     #[must_use]
     pub const fn evaluated_key_ordinal(self) -> u8 {
         self.evaluated_key_ordinal
     }
-
     /// Exact hybrid-RNS gadget digit.
     #[must_use]
     pub const fn digit_index(self) -> u8 {
         self.digit_index
     }
-
     /// Exact frozen odd Galois exponent, or zero for relinearization.
     #[must_use]
     pub const fn galois_exponent(self) -> u32 {
         self.galois_exponent
     }
-
     /// Seed for deterministic rejection-sampled RKG common `a`.
     #[must_use]
     pub const fn common_a_seed(self) -> [u8; 32] {
         self.common_a_seed
     }
-
     /// Seed for deterministic rejection-sampled Galois target `a_d`.
     #[must_use]
     pub const fn target_a_seed(self) -> [u8; 32] {
         self.target_a_seed
     }
-
     /// Seed for the final public `A` in the compact relinearization key.
     #[must_use]
     pub const fn final_a_seed(self) -> [u8; 32] {
         self.final_a_seed
     }
-
     /// Required `prior_round_digest` for the first contribution set.
     #[must_use]
     pub const fn initial_round_digest(self) -> [u8; 32] {
         self.initial_round_digest
     }
-
     /// Consensus identity of every context field and both `a` derivations.
     #[must_use]
     pub const fn digest(self) -> [u8; 32] {
         self.context_digest
     }
-
     fn validate(self, roster: &ZkAmsMkheGovernedActiveRosterV1) -> Result<(), ZkAmsMkheErrorV1> {
         roster.validate()?;
         let rebuilt = Self::new_unchecked_inputs(
@@ -468,7 +447,6 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
         }
         Ok(())
     }
-
     fn new_unchecked_inputs(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         transcript_digest: [u8; 32],
@@ -570,7 +548,6 @@ impl ZkAmsMkheDirectCeremonyContextV1 {
         })
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn direct_context_binding_digest(
     profile_digest: [u8; 32],
@@ -607,7 +584,6 @@ fn direct_context_binding_digest(
     frame.extend_from_slice(&galois_exponent.to_be_bytes());
     keccak256(&frame)
 }
-
 fn direct_secret_lineage_root(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     lineage_digests: &[[u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
@@ -633,7 +609,6 @@ fn direct_secret_lineage_root(
     }
     Ok(hash.finalize())
 }
-
 fn derive_a_seed(domain: &[u8], binding_digest: [u8; 32]) -> [u8; 32] {
     let seed = hash_domain_parts(
         domain,
@@ -642,7 +617,6 @@ fn derive_a_seed(domain: &[u8], binding_digest: [u8; 32]) -> [u8; 32] {
     debug_assert_ne!(seed, [0; 32]);
     seed
 }
-
 fn hash_domain_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(domain);
@@ -656,7 +630,6 @@ fn hash_domain_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     }
     hash.finalize()
 }
-
 /// Audit result for the retired sparse-challenge proof as a direct-ceremony proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheDirectProofAuditV1 {
@@ -677,7 +650,6 @@ pub struct ZkAmsMkheDirectProofAuditV1 {
     /// Digest of the audit facts and all relevant domains.
     pub audit_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectProofAuditV1 {
     /// Recompute the fail-closed audit result.
     pub fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
@@ -695,7 +667,6 @@ impl ZkAmsMkheDirectProofAuditV1 {
         Ok(())
     }
 }
-
 /// Return the machine-checkable fail-closed direct-ceremony proof audit.
 pub fn zk_ams_mkhe_direct_proof_audit_v1() -> Result<ZkAmsMkheDirectProofAuditV1, ZkAmsMkheErrorV1>
 {
@@ -703,7 +674,6 @@ pub fn zk_ams_mkhe_direct_proof_audit_v1() -> Result<ZkAmsMkheDirectProofAuditV1
     value.validate()?;
     Ok(value)
 }
-
 fn derive_direct_proof_audit_v1() -> ZkAmsMkheDirectProofAuditV1 {
     let mut value = ZkAmsMkheDirectProofAuditV1 {
         sparse_challenge_weight: ACTIVE_SPARSE_CHALLENGE_WEIGHT_V1,
@@ -735,7 +705,6 @@ fn derive_direct_proof_audit_v1() -> ZkAmsMkheDirectProofAuditV1 {
     );
     value
 }
-
 /// Exact deterministic bounds for the direct-collective evaluated-key algebra.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheDirectNoiseCertificateV1 {
@@ -758,7 +727,6 @@ pub struct ZkAmsMkheDirectNoiseCertificateV1 {
     /// Digest of the exact algebra and numeric bounds.
     pub certificate_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectNoiseCertificateV1 {
     /// Recompute every algebraic worst-case bound.
     pub fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
@@ -774,7 +742,6 @@ impl ZkAmsMkheDirectNoiseCertificateV1 {
         Ok(())
     }
 }
-
 /// Return exact release-profile direct-ceremony noise accounting.
 pub fn zk_ams_mkhe_direct_noise_certificate_v1()
 -> Result<ZkAmsMkheDirectNoiseCertificateV1, ZkAmsMkheErrorV1> {
@@ -782,7 +749,6 @@ pub fn zk_ams_mkhe_direct_noise_certificate_v1()
     value.validate()?;
     Ok(value)
 }
-
 fn derive_direct_noise_certificate(
     profile: &BgvProfile,
 ) -> Result<ZkAmsMkheDirectNoiseCertificateV1, ZkAmsMkheErrorV1> {
@@ -842,7 +808,6 @@ fn derive_direct_noise_certificate(
     value.certificate_digest = keccak256(&frame);
     Ok(value)
 }
-
 /// Opaque admission of the complete 32-key, 38-digit direct evaluated-key set.
 ///
 /// There is deliberately no public constructor or decoder.  A production
@@ -868,14 +833,12 @@ pub struct ZkAmsMkheDirectEvaluatedKeySetAdmissionV1 {
     resource_certificate_digest: [u8; 32],
     admission_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectEvaluatedKeySetAdmissionV1 {
     /// Consensus identity of the complete admitted evaluated-key set.
     #[must_use]
     pub const fn digest(self) -> [u8; 32] {
         self.admission_digest
     }
-
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
         let expected_key_count = ZK_AMS_T256_GALOIS_KEY_COUNT_V1
@@ -905,7 +868,6 @@ impl ZkAmsMkheDirectEvaluatedKeySetAdmissionV1 {
         Ok(())
     }
 }
-
 fn direct_evaluated_key_set_admission_digest(
     admission: ZkAmsMkheDirectEvaluatedKeySetAdmissionV1,
 ) -> [u8; 32] {
@@ -926,7 +888,6 @@ fn direct_evaluated_key_set_admission_digest(
     frame.extend_from_slice(&admission.resource_certificate_digest);
     hash_domain_parts(DIRECT_EVALUATED_KEY_SET_ADMISSION_DOMAIN_V1, &[&frame])
 }
-
 /// Conditional integration of direct-key intrinsic noise with the retired
 /// evaluated-key CKS correction.
 ///
@@ -1000,7 +961,6 @@ pub struct ZkAmsMkheDirectNoiseIntegrationCertificateV1 {
     /// Digest of every integration fact above.
     pub certificate_digest: [u8; 32],
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DirectPhase23NoiseScheduleV1 {
     p_scaled_relinearization: u16,
@@ -1019,13 +979,11 @@ struct DirectPhase23NoiseScheduleV1 {
     internal_final: u16,
     internal_margin: u16,
 }
-
 fn direct_bound_add(left: u16, right: u16) -> Result<u16, ZkAmsMkheErrorV1> {
     left.max(right)
         .checked_add(1)
         .ok_or(ZkAmsMkheErrorV1::InvalidProfile)
 }
-
 fn direct_ceil_log2(value: usize) -> Result<u16, ZkAmsMkheErrorV1> {
     if value == 0 {
         return Err(ZkAmsMkheErrorV1::InvalidProfile);
@@ -1033,13 +991,11 @@ fn direct_ceil_log2(value: usize) -> Result<u16, ZkAmsMkheErrorV1> {
     u16::try_from(usize::BITS - (value - 1).leading_zeros())
         .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)
 }
-
 fn direct_bound_sum(value: u16, count: usize) -> Result<u16, ZkAmsMkheErrorV1> {
     value
         .checked_add(direct_ceil_log2(count)?)
         .ok_or(ZkAmsMkheErrorV1::InvalidProfile)
 }
-
 fn direct_bound_polynomial_mul(
     left: u16,
     right: u16,
@@ -1049,7 +1005,6 @@ fn direct_bound_polynomial_mul(
         .and_then(|value| value.checked_add(log_ring_degree))
         .ok_or(ZkAmsMkheErrorV1::InvalidProfile)
 }
-
 fn derive_direct_phase23_noise_schedule_v1()
 -> Result<DirectPhase23NoiseScheduleV1, ZkAmsMkheErrorV1> {
     let profile = release_profile_v1();
@@ -1069,7 +1024,6 @@ fn derive_direct_phase23_noise_schedule_v1()
     let plaintext_modulus = 256_u16;
     let ternary = 1_u16;
     let sampled_error = direct_ceil_log2(usize::from(profile.error_eta) + 1)?;
-
     // Independently rederive the unchanged ingress CKS schedule.  This is not
     // imported from noise.rs, so changing either implementation is detected by
     // tests and certificate validation rather than silently self-confirming.
@@ -1088,7 +1042,6 @@ fn derive_direct_phase23_noise_schedule_v1()
         .checked_add(plaintext_modulus)
         .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
     let ingress_cks = direct_bound_add(independent_fresh_residual, cks_smudge_residual)?;
-
     let p_scaled_relinearization = u16::from(direct.relinearization_intrinsic_error_bits)
         .checked_add(plaintext_modulus)
         .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
@@ -1181,7 +1134,6 @@ fn derive_direct_phase23_noise_schedule_v1()
     let internal_margin = centered_capacity
         .checked_sub(internal_final)
         .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
-
     Ok(DirectPhase23NoiseScheduleV1 {
         p_scaled_relinearization,
         hybrid_key_switch,
@@ -1200,7 +1152,6 @@ fn derive_direct_phase23_noise_schedule_v1()
         internal_margin,
     })
 }
-
 impl ZkAmsMkheDirectNoiseIntegrationCertificateV1 {
     /// Recheck all conditional facts against both source certificates.
     pub fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1250,13 +1201,11 @@ impl ZkAmsMkheDirectNoiseIntegrationCertificateV1 {
         Ok(())
     }
 }
-
 /// Return the current fail-closed integration fact without a direct-key token.
 pub fn zk_ams_mkhe_direct_noise_integration_certificate_v1()
 -> Result<ZkAmsMkheDirectNoiseIntegrationCertificateV1, ZkAmsMkheErrorV1> {
     derive_direct_noise_integration_certificate(None)
 }
-
 /// Return the conditional integration fact for an opaque complete direct-key set.
 pub fn zk_ams_mkhe_direct_noise_integration_for_admitted_keys_v1(
     admission: &ZkAmsMkheDirectEvaluatedKeySetAdmissionV1,
@@ -1264,7 +1213,6 @@ pub fn zk_ams_mkhe_direct_noise_integration_for_admitted_keys_v1(
     admission.validate()?;
     derive_direct_noise_integration_certificate(Some(admission.admission_digest))
 }
-
 fn derive_direct_noise_integration_certificate(
     admission_digest: Option<[u8; 32]>,
 ) -> Result<ZkAmsMkheDirectNoiseIntegrationCertificateV1, ZkAmsMkheErrorV1> {
@@ -1311,7 +1259,6 @@ fn derive_direct_noise_integration_certificate(
     value.validate()?;
     Ok(value)
 }
-
 fn direct_noise_integration_digest(
     value: ZkAmsMkheDirectNoiseIntegrationCertificateV1,
 ) -> [u8; 32] {
@@ -1360,7 +1307,6 @@ fn direct_noise_integration_digest(
     }
     hash_domain_parts(DIRECT_NOISE_INTEGRATION_DOMAIN_V1, &[&frame])
 }
-
 /// Exact byte/work accounting and open release gates for the direct ceremony.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheDirectResourceCertificateV1 {
@@ -1408,7 +1354,6 @@ pub struct ZkAmsMkheDirectResourceCertificateV1 {
     /// Digest of all counts, ceilings, and gate values.
     pub certificate_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectResourceCertificateV1 {
     /// Recompute exact release byte/work accounting.
     pub fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1428,7 +1373,6 @@ impl ZkAmsMkheDirectResourceCertificateV1 {
         Ok(())
     }
 }
-
 /// Return exact release-profile direct-ceremony resource accounting.
 pub fn zk_ams_mkhe_direct_resource_certificate_v1()
 -> Result<ZkAmsMkheDirectResourceCertificateV1, ZkAmsMkheErrorV1> {
@@ -1436,7 +1380,6 @@ pub fn zk_ams_mkhe_direct_resource_certificate_v1()
     value.validate()?;
     Ok(value)
 }
-
 fn derive_direct_resource_certificate(
     profile: &BgvProfile,
 ) -> Result<ZkAmsMkheDirectResourceCertificateV1, ZkAmsMkheErrorV1> {
@@ -1553,7 +1496,6 @@ fn derive_direct_resource_certificate(
     value.certificate_digest = keccak256(&frame);
     Ok(value)
 }
-
 /// Content receipt produced after one polynomial has been streamed canonically.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheDirectPolynomialStreamReceiptV1 {
@@ -1565,21 +1507,18 @@ pub struct ZkAmsMkheDirectPolynomialStreamReceiptV1 {
     polynomial_digest: [u8; 32],
     canonical_bytes: u64,
 }
-
 impl ZkAmsMkheDirectPolynomialStreamReceiptV1 {
     /// Exact canonical polynomial digest.
     #[must_use]
     pub const fn polynomial_digest(self) -> [u8; 32] {
         self.polynomial_digest
     }
-
     /// Exact canonical raw residue bytes consumed.
     #[must_use]
     pub const fn canonical_bytes(self) -> u64 {
         self.canonical_bytes
     }
 }
-
 /// Allocation-bounded canonical admission of one polynomial, one RNS limb at a time.
 pub struct ZkAmsMkheDirectPolynomialStreamV1 {
     context_digest: [u8; 32],
@@ -1592,7 +1531,6 @@ pub struct ZkAmsMkheDirectPolynomialStreamV1 {
     canonical_bytes: usize,
     hash: Keccak256,
 }
-
 impl core::fmt::Debug for ZkAmsMkheDirectPolynomialStreamV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1607,7 +1545,6 @@ impl core::fmt::Debug for ZkAmsMkheDirectPolynomialStreamV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheDirectPolynomialStreamV1 {
     /// Begin one exact release-profile polynomial stream.
     pub fn begin(
@@ -1672,7 +1609,6 @@ impl ZkAmsMkheDirectPolynomialStreamV1 {
             hash,
         })
     }
-
     /// Admit exactly the next complete canonical RNS limb.
     ///
     /// Length, order, and every residue are checked before the hash state or
@@ -1718,7 +1654,6 @@ impl ZkAmsMkheDirectPolynomialStreamV1 {
         self.canonical_bytes = next_bytes;
         Ok(())
     }
-
     /// Finish only after all limbs were received and the expected digest matches.
     pub fn finish(self) -> Result<ZkAmsMkheDirectPolynomialStreamReceiptV1, ZkAmsMkheErrorV1> {
         let resources = zk_ams_mkhe_direct_resource_certificate_v1()?;
@@ -1742,7 +1677,6 @@ impl ZkAmsMkheDirectPolynomialStreamV1 {
         })
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DirectContributionPayloadV1 {
     RkgRoundOne {
@@ -1759,7 +1693,6 @@ enum DirectContributionPayloadV1 {
         b: ZkAmsMkheDirectPolynomialStreamReceiptV1,
     },
 }
-
 /// Authenticated contribution which can only be constructed by a proof adapter.
 ///
 /// There is intentionally no public constructor or decoder in V1.  This type
@@ -1782,63 +1715,53 @@ pub struct ZkAmsMkheDirectVerifiedContributionV1 {
     authentication: ArtifactAuthentication,
     contribution_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectVerifiedContributionV1 {
     /// Bound roster position.
     #[must_use]
     pub const fn party_index(&self) -> u8 {
         self.party_index
     }
-
     /// Bound contributor identity.
     #[must_use]
     pub const fn party(&self) -> ZkAmsMkhePartyIdV1 {
         self.party
     }
-
     /// Bound ceremony round.
     #[must_use]
     pub const fn round(&self) -> ZkAmsMkheDirectCeremonyRoundV1 {
         self.round
     }
-
     /// Digest of the exact prior aggregate round.
     #[must_use]
     pub const fn prior_round_digest(&self) -> [u8; 32] {
         self.prior_round_digest
     }
-
     /// Persistent proof-layer commitment to this party's `s_i`.
     #[must_use]
     pub const fn secret_lineage_digest(&self) -> [u8; 32] {
         self.secret_lineage_digest
     }
-
     /// Proof-layer commitment to `u_i`, or zero for a Galois contribution.
     #[must_use]
     pub const fn rkg_ephemeral_lineage_digest(&self) -> [u8; 32] {
         self.rkg_ephemeral_lineage_digest
     }
-
     /// Digest of the consumed, actual-commitment relation-use capability.
     #[must_use]
     pub const fn relation_use_digest(&self) -> [u8; 32] {
         self.relation_use_digest
     }
-
     /// Digest of the complete contribution including proof identity and signature.
     #[must_use]
     pub const fn digest(&self) -> [u8; 32] {
         self.contribution_digest
     }
-
     /// Digest of the exact canonical proof-evidence stream for this party slot.
     #[must_use]
     pub const fn evidence_set_digest(&self) -> [u8; 32] {
         self.evidence_set_digest
     }
 }
-
 fn persistent_relation_for_round(
     round: ZkAmsMkheDirectCeremonyRoundV1,
 ) -> PersistentDirectRelationV1 {
@@ -1849,7 +1772,6 @@ fn persistent_relation_for_round(
         ZkAmsMkheDirectCeremonyRoundV1::Galois => PersistentDirectRelationV1::Galois,
     }
 }
-
 fn direct_relation_contribution_statement_digest(
     context: ZkAmsMkheDirectCeremonyContextV1,
     round: ZkAmsMkheDirectCeremonyRoundV1,
@@ -1858,8 +1780,55 @@ fn direct_relation_contribution_statement_digest(
     party: ZkAmsMkhePartyIdV1,
     payload: DirectContributionPayloadV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let (digests, count) = match (round, payload) {
+        (
+            ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne,
+            DirectContributionPayloadV1::RkgRoundOne { h0, h1 },
+        ) => ([h0.polynomial_digest, h1.polynomial_digest], 2),
+        (
+            ZkAmsMkheDirectCeremonyRoundV1::RkgRoundTwo,
+            DirectContributionPayloadV1::RkgRoundTwo { k },
+        ) => ([k.polynomial_digest, [0; 32]], 1),
+        (
+            ZkAmsMkheDirectCeremonyRoundV1::RkgNormalize,
+            DirectContributionPayloadV1::RkgNormalize { normalization },
+        ) => ([normalization.polynomial_digest, [0; 32]], 1),
+        (ZkAmsMkheDirectCeremonyRoundV1::Galois, DirectContributionPayloadV1::Galois { b }) => {
+            ([b.polynomial_digest, [0; 32]], 1)
+        }
+        _ => return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
+    };
+    direct_relation_contribution_statement_from_polynomials_v1(
+        context,
+        round,
+        prior_round_digest,
+        party_index,
+        party,
+        &digests[..count],
+    )
+}
+/// Recompute the contribution statement from exact ordered polynomial receipts.
+///
+/// This is the narrow proof-codec bridge: RKG round one necessarily supplies
+/// two separately addressed polynomial digests, while every other round
+/// supplies exactly one; it neither authenticates nor admits a contribution.
+pub(super) fn direct_relation_contribution_statement_from_polynomials_v1(
+    context: ZkAmsMkheDirectCeremonyContextV1,
+    round: ZkAmsMkheDirectCeremonyRoundV1,
+    prior_round_digest: [u8; 32],
+    party_index: u8,
+    party: ZkAmsMkhePartyIdV1,
+    polynomial_digests: &[[u8; 32]],
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     if prior_round_digest == [0; 32]
         || usize::from(party_index) >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+        || polynomial_digests.contains(&[0; 32])
+        || polynomial_digests.len()
+            != if round == ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne {
+                2
+            } else {
+                1
+            }
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
@@ -1879,37 +1848,28 @@ fn direct_relation_contribution_statement_digest(
     hash.update(&context.common_a_seed);
     hash.update(&context.target_a_seed);
     hash.update(&context.final_a_seed);
-    match payload {
-        DirectContributionPayloadV1::RkgRoundOne { h0, h1 }
-            if round == ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne =>
-        {
+    match (round, polynomial_digests) {
+        (ZkAmsMkheDirectCeremonyRoundV1::RkgRoundOne, [h0, h1]) => {
             hash.update(&[1]);
-            hash.update(&h0.polynomial_digest);
-            hash.update(&h1.polynomial_digest);
+            hash.update(h0);
+            hash.update(h1);
         }
-        DirectContributionPayloadV1::RkgRoundTwo { k }
-            if round == ZkAmsMkheDirectCeremonyRoundV1::RkgRoundTwo =>
-        {
+        (ZkAmsMkheDirectCeremonyRoundV1::RkgRoundTwo, [k]) => {
             hash.update(&[2]);
-            hash.update(&k.polynomial_digest);
+            hash.update(k);
         }
-        DirectContributionPayloadV1::RkgNormalize { normalization }
-            if round == ZkAmsMkheDirectCeremonyRoundV1::RkgNormalize =>
-        {
+        (ZkAmsMkheDirectCeremonyRoundV1::RkgNormalize, [normalization]) => {
             hash.update(&[3]);
-            hash.update(&normalization.polynomial_digest);
+            hash.update(normalization);
         }
-        DirectContributionPayloadV1::Galois { b }
-            if round == ZkAmsMkheDirectCeremonyRoundV1::Galois =>
-        {
+        (ZkAmsMkheDirectCeremonyRoundV1::Galois, [b]) => {
             hash.update(&[4]);
-            hash.update(&b.polynomial_digest);
+            hash.update(b);
         }
         _ => return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
     }
     Ok(hash.finalize())
 }
-
 /// Sole constructor used after the exact proof verifier has consumed an
 /// actual-commitment relation capability.  It is unreachable while that
 /// verifier remains fail-closed.
@@ -1999,7 +1959,6 @@ fn mint_verified_contribution_from_exact_receipt<R: MaskedRelaxedRandomSourceV1>
     validate_verified_contribution(roster, context, round, prior_round_digest, &contribution)?;
     Ok(contribution)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DirectCoordinatorPhaseV1 {
     RkgRoundOne,
@@ -2008,7 +1967,6 @@ enum DirectCoordinatorPhaseV1 {
     Galois,
     Complete,
 }
-
 /// Coordinator state that admits only the unforgeable verified type above.
 ///
 /// The coordinator owns no party secret and stores only eight fixed-size
@@ -2026,7 +1984,6 @@ pub struct ZkAmsMkheDirectCoordinatorV1 {
     completed_admission_digests: [Option<[u8; 32]>; 3],
     completed_round_digest: Option<[u8; 32]>,
 }
-
 impl core::fmt::Debug for ZkAmsMkheDirectCoordinatorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -2049,7 +2006,6 @@ impl core::fmt::Debug for ZkAmsMkheDirectCoordinatorV1 {
             .finish()
     }
 }
-
 impl ZkAmsMkheDirectCoordinatorV1 {
     /// Start a coordinator without allocating any polynomial or accepting evidence.
     pub fn new(
@@ -2075,7 +2031,6 @@ impl ZkAmsMkheDirectCoordinatorV1 {
             completed_round_digest: None,
         })
     }
-
     fn active_round(&self) -> Result<ZkAmsMkheDirectCeremonyRoundV1, ZkAmsMkheErrorV1> {
         match self.phase {
             DirectCoordinatorPhaseV1::RkgRoundOne => {
@@ -2091,7 +2046,6 @@ impl ZkAmsMkheDirectCoordinatorV1 {
             DirectCoordinatorPhaseV1::Complete => Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
         }
     }
-
     /// Admit one proof-verified and authenticated contribution transactionally.
     pub fn admit(
         &mut self,
@@ -2143,7 +2097,6 @@ impl ZkAmsMkheDirectCoordinatorV1 {
         self.slots[index] = Some(contribution.contribution_digest);
         Ok(())
     }
-
     /// Return the exact ordered set digest once all eight roster slots exist.
     pub fn ordered_contribution_set_digest(
         &self,
@@ -2164,7 +2117,6 @@ impl ZkAmsMkheDirectCoordinatorV1 {
             &self.slots,
         )
     }
-
     #[cfg(test)]
     fn advance_after_verified_aggregate(
         &mut self,
@@ -2255,7 +2207,6 @@ impl ZkAmsMkheDirectCoordinatorV1 {
         Ok(aggregate_round_digest)
     }
 }
-
 fn direct_admission_history_digest(
     context: ZkAmsMkheDirectCeremonyContextV1,
     history: &[Option<[u8; 32]>; 3],
@@ -2277,7 +2228,6 @@ fn direct_admission_history_digest(
     }
     Ok(hash.finalize())
 }
-
 /// Bounded-memory source of proof-verified public contributions.
 ///
 /// The provider is read twice in canonical roster order.  Returning a
@@ -2287,14 +2237,12 @@ fn direct_admission_history_digest(
 pub trait ZkAmsMkheDirectVerifiedContributionProviderV1 {
     /// Exact number of available contribution records.
     fn contribution_count(&mut self) -> Result<usize, ZkAmsMkheErrorV1>;
-
     /// Read one proof-verified record at its canonical roster position.
     fn read_verified_contribution(
         &mut self,
         index: usize,
     ) -> Result<ZkAmsMkheDirectVerifiedContributionV1, ZkAmsMkheErrorV1>;
 }
-
 /// Admission manifest for one complete ordered direct-contribution set.
 ///
 /// This small object binds both deterministic `a` seeds, the complete context,
@@ -2316,81 +2264,68 @@ pub struct ZkAmsMkheDirectAdmittedContributionSetV1 {
     provider_replay_digest: [u8; 32],
     admission_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectAdmittedContributionSetV1 {
     /// Complete direct-ceremony context digest.
     #[must_use]
     pub const fn context_digest(self) -> [u8; 32] {
         self.context_digest
     }
-
     /// Deterministic rejection-sampling seed for RKG common `a`.
     #[must_use]
     pub const fn common_a_seed(self) -> [u8; 32] {
         self.common_a_seed
     }
-
     /// Deterministic rejection-sampling seed for Galois target `a_d`.
     #[must_use]
     pub const fn target_a_seed(self) -> [u8; 32] {
         self.target_a_seed
     }
-
     /// Seed of the normalized compact relinearization-key `A` polynomial.
     #[must_use]
     pub const fn final_a_seed(self) -> [u8; 32] {
         self.final_a_seed
     }
-
     /// Root of the eight persistent `s_i` proof-lineage commitments.
     #[must_use]
     pub const fn secret_lineage_root(self) -> [u8; 32] {
         self.secret_lineage_root
     }
-
     /// Ordered digest of the eight RKG `u_i` commitments (or Galois zero markers).
     #[must_use]
     pub const fn ordered_ephemeral_lineage_set_digest(self) -> [u8; 32] {
         self.ordered_ephemeral_lineage_set_digest
     }
-
     /// Exact admitted contribution round.
     #[must_use]
     pub const fn round(self) -> ZkAmsMkheDirectCeremonyRoundV1 {
         self.round
     }
-
     /// Digest of the exact aggregate state preceding this round.
     #[must_use]
     pub const fn prior_round_digest(self) -> [u8; 32] {
         self.prior_round_digest
     }
-
     /// Digest of all eight authenticated contributions in roster order.
     #[must_use]
     pub const fn ordered_contribution_set_digest(self) -> [u8; 32] {
         self.ordered_contribution_set_digest
     }
-
     /// Digest of all eight proof-evidence streams in roster order.
     #[must_use]
     pub const fn ordered_evidence_set_digest(self) -> [u8; 32] {
         self.ordered_evidence_set_digest
     }
-
     /// Digest of the exact second provider replay.
     #[must_use]
     pub const fn provider_replay_digest(self) -> [u8; 32] {
         self.provider_replay_digest
     }
-
     /// Mandatory identity to bind into aggregate-round and key manifests.
     #[must_use]
     pub const fn admission_digest(self) -> [u8; 32] {
         self.admission_digest
     }
 }
-
 /// Admit and replay the complete ordered contribution set for the active round.
 ///
 /// V1 fails before provider I/O because the exact direct proof gate is open.
@@ -2413,7 +2348,6 @@ where
     }
     admit_ordered_set_inner(roster, coordinator, provider)
 }
-
 fn admit_ordered_set_inner<P>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     coordinator: &mut ZkAmsMkheDirectCoordinatorV1,
@@ -2466,7 +2400,6 @@ where
         prior_round_digest,
         &ephemeral_lineage_digests,
     );
-
     let mut replay = Keccak256::new();
     replay.update(DIRECT_ADMITTED_SET_DOMAIN_V1);
     replay.update(&context.context_digest);
@@ -2521,7 +2454,6 @@ where
     *coordinator = staged;
     Ok(admitted)
 }
-
 fn ordered_lineage_set_digest(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     context: ZkAmsMkheDirectCeremonyContextV1,
@@ -2547,7 +2479,6 @@ fn ordered_lineage_set_digest(
     }
     hash.finalize()
 }
-
 fn ordered_evidence_set_digest(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     context: ZkAmsMkheDirectCeremonyContextV1,
@@ -2578,7 +2509,6 @@ fn ordered_evidence_set_digest(
     }
     Ok(hash.finalize())
 }
-
 fn ordered_contribution_set_digest(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     context: ZkAmsMkheDirectCeremonyContextV1,
@@ -2610,7 +2540,6 @@ fn ordered_contribution_set_digest(
     }
     Ok(hash.finalize())
 }
-
 fn validate_verified_contribution(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     context: ZkAmsMkheDirectCeremonyContextV1,
@@ -2659,7 +2588,6 @@ fn validate_verified_contribution(
         .authentication
         .verify(DIRECT_CONTRIBUTION_AUTH_DOMAIN_V1, statement)
 }
-
 fn validate_contribution_payload(
     context: ZkAmsMkheDirectCeremonyContextV1,
     contribution: &ZkAmsMkheDirectVerifiedContributionV1,
@@ -2707,7 +2635,6 @@ fn validate_contribution_payload(
         _ => Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
     }
 }
-
 fn direct_contribution_auth_statement(
     contribution: &ZkAmsMkheDirectVerifiedContributionV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -2716,7 +2643,6 @@ fn direct_contribution_auth_statement(
     frame.extend_from_slice(&contribution.evidence_set_digest);
     Ok(hash_domain_parts(DIRECT_CONTRIBUTION_DOMAIN_V1, &[&frame]))
 }
-
 fn direct_contribution_digest(
     contribution: &ZkAmsMkheDirectVerifiedContributionV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -2730,7 +2656,6 @@ fn direct_contribution_digest(
         ],
     ))
 }
-
 fn direct_contribution_frame(
     contribution: &ZkAmsMkheDirectVerifiedContributionV1,
 ) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
@@ -2773,7 +2698,6 @@ fn direct_contribution_frame(
     }
     Ok(frame)
 }
-
 #[cfg(test)]
 fn authenticate_test_verified_contribution<R: MaskedRelaxedRandomSourceV1>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2836,17 +2760,14 @@ fn authenticate_test_verified_contribution<R: MaskedRelaxedRandomSourceV1>(
     // admission, rather than the test fixture, rejects them transactionally.
     Ok(contribution)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::{MaskedRelaxedRandomErrorV1, sponge::keccak256};
-
     struct KatRandom {
         label: Vec<u8>,
         counter: u64,
     }
-
     impl KatRandom {
         fn new(label: &[u8]) -> Self {
             Self {
@@ -2855,7 +2776,6 @@ mod tests {
             }
         }
     }
-
     impl MaskedRelaxedRandomSourceV1 for KatRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             let mut written = 0;
@@ -2871,7 +2791,6 @@ mod tests {
             Ok(())
         }
     }
-
     fn roster_fixture(
         label: &[u8],
     ) -> (
@@ -2889,7 +2808,6 @@ mod tests {
         let roster = ZkAmsMkheGovernedActiveRosterV1::new(41, references, &mut random).unwrap();
         (roster, secrets, random)
     }
-
     fn context_fixture(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         target: ZkAmsMkheDirectEvaluatedKeyTargetV1,
@@ -2906,7 +2824,6 @@ mod tests {
         )
         .unwrap()
     }
-
     fn test_complete_evaluated_key_set_admission(
         context: ZkAmsMkheDirectCeremonyContextV1,
     ) -> ZkAmsMkheDirectEvaluatedKeySetAdmissionV1 {
@@ -2934,7 +2851,6 @@ mod tests {
         admission.validate().unwrap();
         admission
     }
-
     #[test]
     fn proof_audit_is_fail_closed_and_even_weight_entropy_is_not_an_extractor() {
         let audit = zk_ams_mkhe_direct_proof_audit_v1().unwrap();
@@ -2944,7 +2860,6 @@ mod tests {
         assert!(!audit.exact_extractor_pinned);
         assert!(!audit.structured_module_sis_reduction_pinned);
         assert!(!audit.release_proof_admission_enabled);
-
         // In R = F_17[X]/(X^4+1), both challenges below have exact even
         // weight two. Their difference evaluates to zero at the ring root 2,
         // hence is a zero divisor and cannot be divided out by an extractor.
@@ -2965,7 +2880,6 @@ mod tests {
         assert_eq!(evaluate(&difference, 2), 0);
         assert_ne!(difference, [0; 4]);
     }
-
     #[test]
     fn release_noise_and_resource_accounting_are_exact_and_fail_closed() {
         let noise = zk_ams_mkhe_direct_noise_certificate_v1().unwrap();
@@ -2974,7 +2888,6 @@ mod tests {
         assert_eq!(noise.relinearization_intrinsic_error_bound, 33_554_464);
         assert_eq!(noise.galois_intrinsic_error_bound, 16);
         assert_eq!(noise.relinearization_intrinsic_error_bits, 26);
-
         let resources = zk_ams_mkhe_direct_resource_certificate_v1().unwrap();
         assert_eq!(resources.rns_limb_count, 38);
         assert_eq!(resources.chunk_bytes, 1_048_576);
@@ -2994,7 +2907,6 @@ mod tests {
         assert!(!resources.proof_streaming_certified);
         assert!(!resources.release_gate);
     }
-
     #[test]
     fn old_cks_noise_schedule_is_inapplicable_only_with_complete_direct_key_admission() {
         let without_admission = zk_ams_mkhe_direct_noise_integration_certificate_v1().unwrap();
@@ -3059,7 +2971,6 @@ mod tests {
         assert!(without_admission.direct_phase23_noise_schedule_pinned);
         assert!(!without_admission.direct_phase23_noise_schedule_applies);
         assert!(!without_admission.release_gate);
-
         let (roster, _, _) = roster_fixture(b"direct-noise-integration");
         let context = context_fixture(
             &roster,
@@ -3087,12 +2998,10 @@ mod tests {
         assert!(with_admission.direct_phase23_noise_schedule_pinned);
         assert!(with_admission.direct_phase23_noise_schedule_applies);
         assert!(!with_admission.release_gate);
-
         let mut substituted = admission;
         substituted.ordered_complete_key_set_digest[0] ^= 1;
         assert!(zk_ams_mkhe_direct_noise_integration_for_admitted_keys_v1(&substituted).is_err());
     }
-
     #[test]
     fn context_binds_every_coordinate_and_all_three_a_derivations() {
         let (roster, _, _) = roster_fixture(b"direct-context");
@@ -3105,7 +3014,6 @@ mod tests {
         assert_ne!(base.common_a_seed(), base.target_a_seed());
         assert_ne!(base.common_a_seed(), base.final_a_seed());
         assert_ne!(base.target_a_seed(), base.final_a_seed());
-
         let galois = context_fixture(
             &roster,
             ZkAmsMkheDirectEvaluatedKeyTargetV1::Galois { schedule_index: 0 },
@@ -3114,7 +3022,6 @@ mod tests {
         assert_ne!(galois.galois_exponent(), 0);
         assert_ne!(galois.digest(), base.digest());
         assert_ne!(galois.common_a_seed(), base.common_a_seed());
-
         assert!(
             ZkAmsMkheDirectCeremonyContextV1::new(
                 &roster,
@@ -3156,7 +3063,6 @@ mod tests {
             .is_err()
         );
     }
-
     fn stream_digest(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         context: ZkAmsMkheDirectCeremonyContextV1,
@@ -3182,7 +3088,6 @@ mod tests {
         }
         hash.finalize()
     }
-
     #[test]
     fn canonical_limb_stream_is_transactional_and_rejects_all_shape_splices() {
         let (roster, _, _) = roster_fixture(b"direct-stream");
@@ -3235,7 +3140,6 @@ mod tests {
             stream.admit_limb(index, limb).unwrap();
         }
         assert_eq!(stream.finish().unwrap().polynomial_digest(), expected);
-
         let wrong = ZkAmsMkheDirectPolynomialStreamV1::begin(
             &roster,
             context,
@@ -3258,7 +3162,6 @@ mod tests {
             .is_err()
         );
     }
-
     fn fake_receipt(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         context: ZkAmsMkheDirectCeremonyContextV1,
@@ -3279,7 +3182,6 @@ mod tests {
                 .polynomial_bytes,
         }
     }
-
     fn test_ephemeral_lineage(
         context: ZkAmsMkheDirectCeremonyContextV1,
         party_index: usize,
@@ -3289,7 +3191,6 @@ mod tests {
             &[&context.context_digest, &[party_index as u8]],
         )
     }
-
     fn make_round_one_contributions(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         secrets: &[ZkAmsMkheActivePartySecretV1],
@@ -3333,7 +3234,6 @@ mod tests {
             })
             .collect()
     }
-
     fn make_round_two_contributions(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         secrets: &[ZkAmsMkheActivePartySecretV1],
@@ -3369,7 +3269,6 @@ mod tests {
             })
             .collect()
     }
-
     fn make_normalization_contributions(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         secrets: &[ZkAmsMkheActivePartySecretV1],
@@ -3405,7 +3304,6 @@ mod tests {
             })
             .collect()
     }
-
     fn make_galois_contributions(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         secrets: &[ZkAmsMkheActivePartySecretV1],
@@ -3440,7 +3338,6 @@ mod tests {
             })
             .collect()
     }
-
     #[derive(Clone)]
     struct VecContributionProvider {
         records: Vec<ZkAmsMkheDirectVerifiedContributionV1>,
@@ -3448,7 +3345,6 @@ mod tests {
         reads: usize,
         replay_substitution: Option<(usize, ZkAmsMkheDirectVerifiedContributionV1)>,
     }
-
     impl VecContributionProvider {
         fn new(records: Vec<ZkAmsMkheDirectVerifiedContributionV1>) -> Self {
             let count = records.len();
@@ -3460,12 +3356,10 @@ mod tests {
             }
         }
     }
-
     impl ZkAmsMkheDirectVerifiedContributionProviderV1 for VecContributionProvider {
         fn contribution_count(&mut self) -> Result<usize, ZkAmsMkheErrorV1> {
             Ok(self.count)
         }
-
         fn read_verified_contribution(
             &mut self,
             index: usize,
@@ -3484,7 +3378,6 @@ mod tests {
                 .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         }
     }
-
     #[test]
     fn ordered_provider_replay_is_bounded_and_release_admission_is_fail_closed() {
         let (roster, secrets, mut random) = roster_fixture(b"direct-provider");
@@ -3493,7 +3386,6 @@ mod tests {
             ZkAmsMkheDirectEvaluatedKeyTargetV1::Relinearization,
         );
         let records = make_round_one_contributions(&roster, &secrets, context, &mut random);
-
         let mut unavailable_coordinator =
             ZkAmsMkheDirectCoordinatorV1::new(&roster, context).unwrap();
         let mut unavailable = VecContributionProvider::new(records.clone());
@@ -3507,7 +3399,6 @@ mod tests {
         );
         assert_eq!(unavailable.reads, 0);
         assert!(unavailable_coordinator.slots.iter().all(Option::is_none));
-
         let mut coordinator = ZkAmsMkheDirectCoordinatorV1::new(&roster, context).unwrap();
         let mut provider = VecContributionProvider::new(records.clone());
         let admitted = admit_ordered_set_inner(&roster, &mut coordinator, &mut provider).unwrap();
@@ -3525,46 +3416,37 @@ mod tests {
         assert_ne!(admitted.ordered_evidence_set_digest(), [0; 32]);
         assert_ne!(admitted.provider_replay_digest(), [0; 32]);
         assert_ne!(admitted.admission_digest(), [0; 32]);
-
         let reject = |mut source: VecContributionProvider| {
             let mut candidate = ZkAmsMkheDirectCoordinatorV1::new(&roster, context).unwrap();
             assert!(admit_ordered_set_inner(&roster, &mut candidate, &mut source).is_err());
             assert!(candidate.slots.iter().all(Option::is_none));
             source.reads
         };
-
         let omitted = VecContributionProvider::new(records[..7].to_vec());
         assert_eq!(reject(omitted), 0);
-
         let mut reordered_records = records.clone();
         reordered_records.swap(0, 1);
         let reordered = VecContributionProvider::new(reordered_records);
         assert_eq!(reject(reordered), 1);
-
         let mut duplicated_records = records.clone();
         duplicated_records[1] = duplicated_records[0].clone();
         let duplicated = VecContributionProvider::new(duplicated_records);
         assert_eq!(reject(duplicated), 2);
-
         let mut proof_splice_records = records.clone();
         proof_splice_records[2].proof_digest = records[3].proof_digest;
         let proof_splice = VecContributionProvider::new(proof_splice_records);
         assert_eq!(reject(proof_splice), 3);
-
         let mut relation_use_splice_records = records.clone();
         relation_use_splice_records[3].relation_use_digest = records[4].relation_use_digest;
         let relation_use_splice = VecContributionProvider::new(relation_use_splice_records);
         assert_eq!(reject(relation_use_splice), 4);
-
         let mut evidence_splice_records = records.clone();
         evidence_splice_records[6].evidence_set_digest = records[7].evidence_set_digest;
         let evidence_splice = VecContributionProvider::new(evidence_splice_records);
         assert_eq!(reject(evidence_splice), 7);
-
         let mut replay_substitution = VecContributionProvider::new(records.clone());
         replay_substitution.replay_substitution = Some((4, records[5].clone()));
         assert_eq!(reject(replay_substitution), 13);
-
         let context_mutations: [fn(&mut ZkAmsMkheDirectCeremonyContextV1); 7] = [
             |context: &mut ZkAmsMkheDirectCeremonyContextV1| context.common_a_seed[0] ^= 1,
             |context: &mut ZkAmsMkheDirectCeremonyContextV1| context.target_a_seed[0] ^= 1,
@@ -3586,7 +3468,6 @@ mod tests {
             assert_eq!(source.reads, 0);
             assert!(candidate.slots.iter().all(Option::is_none));
         }
-
         let cross_purpose_context = context_fixture(
             &roster,
             ZkAmsMkheDirectEvaluatedKeyTargetV1::Galois { schedule_index: 0 },
@@ -3599,7 +3480,6 @@ mod tests {
                 .is_err()
         );
         assert_eq!(cross_purpose.reads, 1);
-
         let references: [&ZkAmsMkheActivePartySecretV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
             core::array::from_fn(|index| &secrets[index]);
         let next_epoch_roster =
@@ -3621,7 +3501,6 @@ mod tests {
         );
         assert_eq!(cross_epoch.reads, 1);
     }
-
     #[test]
     fn coordinator_binds_order_prior_round_replay_and_authentication() {
         let (roster, secrets, mut random) = roster_fixture(b"direct-state-machine");
@@ -3655,7 +3534,6 @@ mod tests {
                 .is_err()
         );
         assert_eq!(coordinator.slots, snapshot);
-
         coordinator = ZkAmsMkheDirectCoordinatorV1::new(&roster, context).unwrap();
         let mut round_one_provider = VecContributionProvider::new(round_one.clone());
         admit_ordered_set_inner(&roster, &mut coordinator, &mut round_one_provider).unwrap();
@@ -3672,7 +3550,6 @@ mod tests {
                 .is_err()
         );
         assert!(coordinator.admit(&roster, &round_one[0]).is_err());
-
         let payload = DirectContributionPayloadV1::RkgRoundTwo {
             k: fake_receipt(
                 &roster,
@@ -3708,7 +3585,6 @@ mod tests {
         assert!(coordinator.admit(&roster, &round_two).is_err());
         coordinator.admit(&roster, &authentic).unwrap();
     }
-
     #[test]
     fn normalized_rkg_requires_complete_same_secret_and_ephemeral_lineage() {
         let (roster, secrets, mut random) = roster_fixture(b"direct-normalization-state-machine");
@@ -3717,7 +3593,6 @@ mod tests {
             ZkAmsMkheDirectEvaluatedKeyTargetV1::Relinearization,
         );
         let mut coordinator = ZkAmsMkheDirectCoordinatorV1::new(&roster, context).unwrap();
-
         let round_one = make_round_one_contributions(&roster, &secrets, context, &mut random);
         let mut round_one_provider = VecContributionProvider::new(round_one);
         let round_one_admitted =
@@ -3735,7 +3610,6 @@ mod tests {
                 ],
             )
             .unwrap();
-
         let round_two_payload = |label: &[u8]| DirectContributionPayloadV1::RkgRoundTwo {
             k: fake_receipt(
                 &roster,
@@ -3762,7 +3636,6 @@ mod tests {
         .unwrap();
         assert!(coordinator.admit(&roster, &wrong_ephemeral).is_err());
         assert!(coordinator.slots[0].is_none());
-
         let wrong_secret = authenticate_test_verified_contribution(
             &roster,
             context,
@@ -3779,7 +3652,6 @@ mod tests {
         .unwrap();
         assert!(coordinator.admit(&roster, &wrong_secret).is_err());
         assert!(coordinator.slots[0].is_none());
-
         let round_two = make_round_two_contributions(
             &roster,
             &secrets,
@@ -3807,7 +3679,6 @@ mod tests {
         let round_two_aggregate = coordinator
             .advance_after_verified_aggregate(&roster, &[keccak256(b"normalization-k")])
             .unwrap();
-
         let normalization_payload =
             |role, label: &[u8]| DirectContributionPayloadV1::RkgNormalize {
                 normalization: fake_receipt(
@@ -3841,7 +3712,6 @@ mod tests {
                 .admit(&roster, &wrong_normalization_secret)
                 .is_err()
         );
-
         let nonzero_normalization_u = authenticate_test_verified_contribution(
             &roster,
             context,
@@ -3864,7 +3734,6 @@ mod tests {
                 .admit(&roster, &nonzero_normalization_u)
                 .is_err()
         );
-
         let wrong_normalization_role = authenticate_test_verified_contribution(
             &roster,
             context,
@@ -3888,7 +3757,6 @@ mod tests {
                 .is_err()
         );
         assert!(coordinator.slots.iter().all(Option::is_none));
-
         let normalization = make_normalization_contributions(
             &roster,
             &secrets,
@@ -3902,7 +3770,6 @@ mod tests {
         );
         assert_eq!(omitted_normalization.reads, 0);
         assert!(coordinator.slots.iter().all(Option::is_none));
-
         let mut reordered_normalization_records = normalization.clone();
         reordered_normalization_records.swap(0, 1);
         let mut reordered_normalization =
@@ -3913,7 +3780,6 @@ mod tests {
         );
         assert_eq!(reordered_normalization.reads, 1);
         assert!(coordinator.slots.iter().all(Option::is_none));
-
         let mut substituted_normalization = VecContributionProvider::new(normalization.clone());
         substituted_normalization.replay_substitution = Some((3, normalization[4].clone()));
         assert!(
@@ -3922,7 +3788,6 @@ mod tests {
         );
         assert_eq!(substituted_normalization.reads, 12);
         assert!(coordinator.slots.iter().all(Option::is_none));
-
         let mut normalization_provider = VecContributionProvider::new(normalization.clone());
         let normalization_admitted =
             admit_ordered_set_inner(&roster, &mut coordinator, &mut normalization_provider)
@@ -3954,7 +3819,6 @@ mod tests {
                 .is_err()
         );
         assert_eq!(coordinator.slots, full_slots);
-
         let final_aggregate = coordinator
             .advance_after_verified_aggregate(&roster, &[keccak256(b"final-b")])
             .unwrap();
@@ -3965,7 +3829,6 @@ mod tests {
         assert_ne!(completion, final_aggregate);
         assert!(coordinator.admit(&roster, &normalization[0]).is_err());
     }
-
     #[test]
     fn galois_round_requires_zero_u_same_secret_and_canonical_provider_replay() {
         let (roster, secrets, mut random) = roster_fixture(b"direct-galois-state-machine");
@@ -3975,7 +3838,6 @@ mod tests {
         );
         let mut coordinator = ZkAmsMkheDirectCoordinatorV1::new(&roster, context).unwrap();
         let contributions = make_galois_contributions(&roster, &secrets, context, &mut random);
-
         let payload = |label: &[u8]| DirectContributionPayloadV1::Galois {
             b: fake_receipt(
                 &roster,
@@ -4001,7 +3863,6 @@ mod tests {
         )
         .unwrap();
         assert!(coordinator.admit(&roster, &nonzero_u).is_err());
-
         let wrong_secret = authenticate_test_verified_contribution(
             &roster,
             context,
@@ -4018,14 +3879,12 @@ mod tests {
         .unwrap();
         assert!(coordinator.admit(&roster, &wrong_secret).is_err());
         assert!(coordinator.slots.iter().all(Option::is_none));
-
         let mut reordered_records = contributions.clone();
         reordered_records.swap(2, 3);
         let mut reordered = VecContributionProvider::new(reordered_records);
         assert!(admit_ordered_set_inner(&roster, &mut coordinator, &mut reordered).is_err());
         assert_eq!(reordered.reads, 3);
         assert!(coordinator.slots.iter().all(Option::is_none));
-
         let mut provider = VecContributionProvider::new(contributions.clone());
         let admitted = admit_ordered_set_inner(&roster, &mut coordinator, &mut provider).unwrap();
         assert_eq!(provider.reads, 16);
@@ -4050,28 +3909,24 @@ mod tests {
         assert_ne!(aggregate, completion);
         assert!(coordinator.admit(&roster, &contributions[0]).is_err());
     }
-
     fn add_poly(left: &[i64], right: &[i64], modulus: i64) -> Vec<i64> {
         left.iter()
             .zip(right)
             .map(|(left, right)| (left + right).rem_euclid(modulus))
             .collect()
     }
-
     fn sub_poly(left: &[i64], right: &[i64], modulus: i64) -> Vec<i64> {
         left.iter()
             .zip(right)
             .map(|(left, right)| (left - right).rem_euclid(modulus))
             .collect()
     }
-
     fn scale_poly(value: &[i64], scalar: i64, modulus: i64) -> Vec<i64> {
         value
             .iter()
             .map(|coefficient| (coefficient * scalar).rem_euclid(modulus))
             .collect()
     }
-
     fn negacyclic_mul(left: &[i64], right: &[i64], modulus: i64) -> Vec<i64> {
         let mut output = vec![0_i64; left.len()];
         for (left_index, left_coefficient) in left.iter().enumerate() {
@@ -4089,7 +3944,6 @@ mod tests {
         }
         output
     }
-
     fn automorphism(value: &[i64], exponent: usize, modulus: i64) -> Vec<i64> {
         let twice_degree = value.len() * 2;
         let mut output = vec![0_i64; value.len()];
@@ -4103,7 +3957,6 @@ mod tests {
         }
         output
     }
-
     #[test]
     fn tiny_direct_collective_rkg_and_galois_algebra_are_exact() {
         const N: usize = 8;
@@ -4185,7 +4038,6 @@ mod tests {
             Q,
         );
         assert_eq!(decrypted, expected);
-
         let final_a = [23, 2, 31, 17, 43, 5, 47, 7];
         let e3 = [[-1, 0, 1, 0, -1, 0, 1, 0]; PARTIES];
         let h1_minus_final_a = sub_poly(&h1, &final_a, Q);
@@ -4202,7 +4054,6 @@ mod tests {
         let normalized_decryption = add_poly(&final_b, &negacyclic_mul(&final_a, &s, Q), Q);
         let normalized_expected = add_poly(&expected, &scale_poly(&sum(&e3), P, Q), Q);
         assert_eq!(normalized_decryption, normalized_expected);
-
         let exponent = 3;
         let galois_errors = [[1, 0, -1, 0, 0, 1, 0, -1]; PARTIES];
         let mut b = vec![0; N];

@@ -8,7 +8,6 @@ use std::{
     sync::OnceLock,
     vec::Vec,
 };
-
 use icu_normalizer::{ComposingNormalizer, ComposingNormalizerBorrowed, provider::Baked};
 use idna::{
     AsciiDenyList,
@@ -18,31 +17,24 @@ use iroha_data_model_derive::model;
 use iroha_primitives::conststr::ConstString;
 use norito::core::{DecodeFromSlice, Error as NoritoError};
 use sha2::{Digest as _, Sha256};
-
 const ERR_DOMAIN_NORMALISATION: &str = "domain name failed UTS-46 STD3 normalization requirements";
 const ERR_NFC_PROFILE: &str =
     "compiled NFC normalization data does not match the consensus profile";
-
 pub use self::model::*;
 use crate::error::ParseError;
-
 /// Maximum UTF-8 byte length of a canonical [`Name`].
 ///
 /// The bound matches the DNS-style full-name ceiling already used by domain
 /// normalization. Counting bytes, rather than Unicode scalar values, also
 /// bounds the canonical Norito representation independently of platform.
 pub const MAX_NAME_BYTES: usize = 255;
-
 const EXPECTED_NFC_DATA_SHA256: [u8; 32] = [
     0xbe, 0x71, 0xcd, 0xd0, 0x40, 0x2b, 0x3d, 0xf5, 0x8c, 0x10, 0xe7, 0xbd, 0x33, 0x3d, 0xb0, 0x59,
     0x95, 0x13, 0x5c, 0xf3, 0x70, 0x4f, 0xa3, 0x7b, 0x1e, 0xb9, 0x2f, 0xa0, 0x4a, 0x18, 0x7d, 0x2e,
 ];
-
 type NormalizerCell = OnceLock<Result<ComposingNormalizerBorrowed<'static>, ()>>;
-
 /// Lazily initialized, profile-checked NFC normalizer shared across [`Name`] parsing.
 static NFC_NORMALIZER: NormalizerCell = NormalizerCell::new();
-
 fn hash_nfc_data_field(hasher: &mut Sha256, label: &[u8], bytes: &[u8]) {
     hasher.update(
         u64::try_from(label.len())
@@ -57,11 +49,9 @@ fn hash_nfc_data_field(hasher: &mut Sha256, label: &[u8], bytes: &[u8]) {
     );
     hasher.update(bytes);
 }
-
 /// Fingerprint every baked table used by ICU4X NFC normalization.
 fn nfc_data_sha256() -> [u8; 32] {
     let mut hasher = Sha256::new();
-
     let nfd = Baked::SINGLETON_NORMALIZER_NFD_DATA_V1;
     hasher.update(b"nfd-ranges-v1");
     for range in nfd.trie.iter_ranges() {
@@ -70,7 +60,6 @@ fn nfc_data_sha256() -> [u8; 32] {
         hasher.update(range.value.to_le_bytes());
     }
     hasher.update(nfd.passthrough_cap.to_le_bytes());
-
     let tables = Baked::SINGLETON_NORMALIZER_NFD_TABLES_V1;
     hash_nfc_data_field(
         &mut hasher,
@@ -82,17 +71,14 @@ fn nfc_data_sha256() -> [u8; 32] {
         b"nfd-scalars24-v1",
         tables.scalars24.as_bytes(),
     );
-
     let nfc = Baked::SINGLETON_NORMALIZER_NFC_V1;
     hash_nfc_data_field(
         &mut hasher,
         b"nfc-compositions-v1",
         nfc.canonical_compositions.data.as_bytes(),
     );
-
     hasher.finalize().into()
 }
-
 fn checked_nfc_normalizer(
     expected_data_sha256: &[u8; 32],
 ) -> Result<ComposingNormalizerBorrowed<'static>, ()> {
@@ -102,21 +88,17 @@ fn checked_nfc_normalizer(
         Err(())
     }
 }
-
 fn nfc_normalizer() -> Result<&'static ComposingNormalizerBorrowed<'static>, ParseError> {
     NFC_NORMALIZER
         .get_or_init(|| checked_nfc_normalizer(&EXPECTED_NFC_DATA_SHA256))
         .as_ref()
         .map_err(|()| ParseError::new(ERR_NFC_PROFILE))
 }
-
 #[model]
 mod model {
     use derive_more::{Debug, Display};
     use iroha_schema::IntoSchema;
-
     use super::*;
-
     /// `Name` struct represents the type of Iroha Entities names, such as
     /// [`Domain`](`crate::domain::Domain`) name or
     /// [`Account`](`crate::account::Account`) name.
@@ -125,7 +107,6 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct Name(pub(super) ConstString);
 }
-
 impl Name {
     /// Check if `candidate` string would be valid [`Name`].
     ///
@@ -133,7 +114,6 @@ impl Name {
     /// Fails if not valid [`Name`].
     fn validate_str(candidate: &str) -> Result<(), ParseError> {
         const FORBIDDEN_CHARS: [char; 3] = ['@', '#', '$'];
-
         if candidate.is_empty() {
             return Err(ParseError {
                 reason: "Empty `Name`",
@@ -168,7 +148,6 @@ impl Name {
         }
         Ok(())
     }
-
     /// Return a canonical form of the input string according to the Name normalization policy.
     ///
     /// Applies ICU-backed NFC composition so canonically equivalent sequences share the same
@@ -185,14 +164,12 @@ impl Name {
         // instance and reuse it for every invocation.
         Ok(nfc_normalizer()?.normalize(candidate))
     }
-
     fn parse(candidate: &str) -> Result<Self, ParseError> {
         Self::validate_str(candidate)?;
         let normalized = Self::normalize(candidate)?;
         Self::validate_str(normalized.as_ref())?;
         Ok(Self(ConstString::from(normalized.as_ref())))
     }
-
     fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
         let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;
         if len > MAX_NAME_BYTES {
@@ -212,7 +189,6 @@ impl Name {
         norito::core::note_payload_access(bytes, end);
         Ok((name, end))
     }
-
     /// Returns true if this name is reserved for internal use.
     ///
     /// Currently reserves `"genesis"` (case-insensitive) to help prevent
@@ -221,27 +197,22 @@ impl Name {
         self.0.as_ref().eq_ignore_ascii_case("genesis")
     }
 }
-
 impl norito::core::NoritoSerialize for Name {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for Name {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("Name deserialization must succeed for valid archives")
     }
-
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -258,47 +229,38 @@ impl<'a> norito::core::NoritoDeserialize<'a> for Name {
             }
             return Self::decode_wire(payload).map(|(name, _)| name);
         }
-
         let string = norito::core::NoritoDeserialize::deserialize(archived.cast::<String>());
         Name::from_str(string.as_str())
             .map_err(|err| norito::core::Error::Message(err.reason.into()))
     }
 }
-
 impl AsRef<str> for Name {
     fn as_ref(&self) -> &str {
         self.0.as_ref()
     }
 }
-
 impl Borrow<str> for Name {
     fn borrow(&self) -> &str {
         self.0.as_ref()
     }
 }
-
 impl FromStr for Name {
     type Err = ParseError;
-
     fn from_str(candidate: &str) -> Result<Self, Self::Err> {
         Self::parse(candidate)
     }
 }
-
 impl TryFrom<String> for Name {
     type Error = ParseError;
-
     fn try_from(candidate: String) -> Result<Self, Self::Error> {
         Self::parse(&candidate)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for Name {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
         Self::decode_wire(bytes)
     }
 }
-
 /// Canonicalise a domain label using UTS-46 STD3 rules and ASCII folding.
 ///
 /// # Errors
@@ -328,7 +290,6 @@ pub fn canonicalize_domain_label(raw: &str) -> Result<String, ParseError> {
     }
     Ok(label)
 }
-
 fn reject_disallowed_unicode(label: &str) -> Result<(), ParseError> {
     if label
         .chars()
@@ -338,7 +299,6 @@ fn reject_disallowed_unicode(label: &str) -> Result<(), ParseError> {
     }
     Ok(())
 }
-
 pub(crate) fn is_bidi_control(ch: char) -> bool {
     matches!(
         ch,
@@ -349,13 +309,11 @@ pub(crate) fn is_bidi_control(ch: char) -> bool {
             | '\u{2066}'..='\u{2069}'
     )
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for Name {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -363,7 +321,6 @@ impl norito::json::FastJsonWrite for Name {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for Name {
     fn json_deserialize(
@@ -373,26 +330,19 @@ impl norito::json::JsonDeserialize for Name {
         Name::from_str(&value).map_err(|err| norito::json::Error::Message(err.reason.into()))
     }
 }
-
 // Norito deserialization is derived via `Decode` above.
 // DecodeFromSlice is provided via a crate-level shim in `norito_slice_decode.rs`.
-
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::Name;
 }
-
 #[cfg(test)]
 mod tests {
     use std::borrow::ToOwned as _;
-
     use norito::codec::{Decode, Encode};
-
     use super::*;
     // Trait import not required; tests roundtrip via header-framed helpers.
-
     const INVALID_NAMES: [&str; 4] = ["", " ", "@", "#"];
-
     #[cfg(feature = "json")]
     #[test]
     fn deserialize_name() {
@@ -400,11 +350,9 @@ mod tests {
             let invalid_name = Name(invalid_name.to_owned().into());
             let serialized = norito::json::to_json(&invalid_name).expect("Valid");
             let name = norito::json::from_str::<Name>(serialized.as_str());
-
             assert!(name.is_err());
         }
     }
-
     #[test]
     fn decode_name() {
         // Limit to valid strings for roundtrip via codec
@@ -420,7 +368,6 @@ mod tests {
             assert_eq!(reparsed, name);
         }
     }
-
     #[test]
     fn name_rejects_account_literal_text() {
         let err = Name::from_str("alice@banka")
@@ -430,7 +377,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn norito_roundtrip_preserves_value() {
         let samples = ["wonderland", "éclair", "genesis-domain"];
@@ -443,21 +389,18 @@ mod tests {
             assert!(cursor.is_empty(), "decoder must consume entire buffer");
         }
     }
-
     #[test]
     fn invalid_names_rejected() {
         for s in INVALID_NAMES {
             assert!(Name::from_str(s).is_err(), "should reject: {s:?}");
         }
     }
-
     #[test]
     fn name_utf8_byte_limit_is_enforced_by_both_constructors() {
         let ascii_boundary = "a".repeat(MAX_NAME_BYTES);
         let ascii_over_limit = "a".repeat(MAX_NAME_BYTES + 1);
         let unicode_boundary = "é".repeat(MAX_NAME_BYTES / "é".len());
         let unicode_over_limit = format!("{unicode_boundary}é");
-
         for valid in [&ascii_boundary, &unicode_boundary] {
             let parsed = Name::from_str(valid).expect("boundary name must be accepted");
             let converted =
@@ -478,7 +421,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn controls_and_bidirectional_controls_are_rejected() {
         for invalid in [
@@ -500,7 +442,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn norito_decoders_cannot_bypass_name_validation() {
         for invalid in [
@@ -510,7 +451,6 @@ mod tests {
         ] {
             let forged = Name(ConstString::from(invalid.as_str()));
             let encoded = forged.encode();
-
             let mut cursor = encoded.as_slice();
             assert!(
                 Name::decode(&mut cursor).is_err(),
@@ -520,7 +460,6 @@ mod tests {
                 <Name as DecodeFromSlice>::decode_from_slice(&encoded).is_err(),
                 "slice decoder accepted invalid Name: {invalid:?}"
             );
-
             let framed = norito::to_bytes(&forged).expect("encode forged Name fixture");
             assert!(
                 norito::decode_from_bytes::<Name>(&framed).is_err(),
@@ -528,7 +467,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn slice_decoder_rejects_declared_oversize_before_body_access() {
         let mut declared_oversize = Vec::new();
@@ -536,7 +474,6 @@ mod tests {
             &mut declared_oversize,
             u64::try_from(MAX_NAME_BYTES + 1).expect("name limit fits u64"),
         );
-
         let error = <Name as DecodeFromSlice>::decode_from_slice(&declared_oversize)
             .expect_err("oversized declared Name must fail before its missing body is read");
         assert!(
@@ -544,7 +481,6 @@ mod tests {
             "decoder reached a generic truncation error before the Name limit: {error}"
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn json_decoder_cannot_bypass_name_validation() {
@@ -559,7 +495,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reserved_name_detection_is_case_insensitive() {
         assert!(Name::from_str("genesis").unwrap().is_reserved());
@@ -567,62 +502,52 @@ mod tests {
         assert!(Name::from_str("GENESIS").unwrap().is_reserved());
         assert!(!Name::from_str("genesisx").unwrap().is_reserved());
     }
-
     #[test]
     fn whitespace_is_rejected_anywhere() {
         for s in [" leading", "trailing ", "in side", " "] {
             assert!(Name::from_str(s).is_err(), "should reject: {s:?}");
         }
     }
-
     #[test]
     fn canonicalize_domain_label_lowercases_ascii() {
         let canonical = canonicalize_domain_label("Treasury").expect("ASCII domains canonicalize");
         assert_eq!(canonical, "treasury");
     }
-
     #[test]
     fn canonicalize_domain_label_produces_punycode() {
         let canonical = canonicalize_domain_label("例え").expect("punycode conversion");
         assert_eq!(canonical, "xn--r8jz45g");
     }
-
     #[test]
     fn canonicalize_domain_label_rejects_invalid_chars() {
         assert!(canonicalize_domain_label("bad label").is_err());
     }
-
     #[test]
     fn canonicalize_domain_label_accepts_multilabel_idn() {
         let canonical =
             canonicalize_domain_label("例え.テスト").expect("multilabel IDNs canonicalize");
         assert_eq!(canonical, "xn--r8jz45g.xn--zckzah");
     }
-
     #[test]
     fn canonicalize_domain_label_rejects_extended_latin_letters() {
         assert!(canonicalize_domain_label("wÍḷd-card").is_err());
     }
-
     #[test]
     fn canonicalize_domain_label_allows_latin1_supplement_letters() {
         let canonical =
             canonicalize_domain_label("bücher.example").expect("latin-1 diacritics allowed");
         assert_eq!(canonical, "xn--bcher-kva.example");
     }
-
     #[test]
     fn nfc_data_matches_consensus_profile() {
         assert_eq!(nfc_data_sha256(), EXPECTED_NFC_DATA_SHA256);
     }
-
     #[test]
     fn nfc_normalizer_rejects_unreviewed_data_profile() {
         let mut unreviewed_profile = EXPECTED_NFC_DATA_SHA256;
         unreviewed_profile[0] ^= 0x01;
         assert!(checked_nfc_normalizer(&unreviewed_profile).is_err());
     }
-
     #[test]
     fn nfc_normalization_matches_pinned_regression_corpus() {
         // This corpus exercises canonical decomposition, composition, combining
@@ -638,7 +563,6 @@ mod tests {
             ("a\u{0315}\u{0300}", "\u{00E0}\u{0315}"),
             ("\u{1E0A}\u{0323}", "\u{1E0C}\u{0307}"),
         ];
-
         for (input, expected) in cases {
             let normalized = Name::from_str(input).expect("normalization corpus input is valid");
             let canonical = Name::from_str(expected).expect("normalization corpus output is valid");

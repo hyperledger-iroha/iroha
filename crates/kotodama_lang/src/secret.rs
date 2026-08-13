@@ -5,9 +5,7 @@
 //! cryptographic declassifiers below.  This module also performs a final walk
 //! over typed programs so future type-checker changes cannot accidentally turn
 //! a rejected secret flow into an accepted one.
-
 use std::collections::HashSet;
-
 use crate::{
     ast::FunctionKind,
     builtins::{Builtin, BuiltinAccess},
@@ -16,14 +14,12 @@ use crate::{
         TypedProgram, TypedStatement,
     },
 };
-
 fn error(code: &'static str, message: impl Into<String>) -> SemanticError {
     SemanticError {
         code,
         message: message.into(),
     }
 }
-
 /// Return whether a type contains confidential data, including through a
 /// tuple, list, map, or user-defined product type.
 pub(crate) fn type_contains_secret(ty: &Type) -> bool {
@@ -39,7 +35,6 @@ pub(crate) fn type_contains_secret(ty: &Type) -> bool {
         _ => false,
     }
 }
-
 /// Return whether this is one of the exact V1 private-input representations.
 pub(crate) fn is_secret_numeric(ty: &Type) -> bool {
     matches!(
@@ -48,7 +43,6 @@ pub(crate) fn is_secret_numeric(ty: &Type) -> bool {
             if matches!(inner.as_ref(), Type::Int | Type::Decimal | Type::Quantity)
     )
 }
-
 /// Reject a secret-dependent branch, assertion, or loop condition.
 pub(crate) fn reject_secret_control_flow(expr: &TypedExpr) -> Result<(), SemanticError> {
     if expression_contains_secret(expr) {
@@ -59,7 +53,6 @@ pub(crate) fn reject_secret_control_flow(expr: &TypedExpr) -> Result<(), Semanti
     }
     Ok(())
 }
-
 /// Reject ordinary arithmetic, comparison, equality, or casts on secrets.
 pub(crate) fn reject_secret_ordinary_operation(
     operands: &[&TypedExpr],
@@ -72,7 +65,6 @@ pub(crate) fn reject_secret_ordinary_operation(
     }
     Ok(())
 }
-
 /// Reject secret-derived map and durable-state keys.
 pub(crate) fn reject_secret_key(expr: &TypedExpr) -> Result<(), SemanticError> {
     if expression_contains_secret(expr) {
@@ -83,7 +75,6 @@ pub(crate) fn reject_secret_key(expr: &TypedExpr) -> Result<(), SemanticError> {
     }
     Ok(())
 }
-
 /// Reject a secret-derived durable-state value before ordinary assignability
 /// diagnostics can hide the security-relevant reason.
 pub(crate) fn reject_secret_state_value(expr: &TypedExpr) -> Result<(), SemanticError> {
@@ -95,7 +86,6 @@ pub(crate) fn reject_secret_state_value(expr: &TypedExpr) -> Result<(), Semantic
     }
     Ok(())
 }
-
 /// Check secret arguments before a builtin's ordinary signature validation.
 ///
 /// The accepted declassifiers deliberately require all scalar operands to be
@@ -113,7 +103,6 @@ pub(crate) fn validate_builtin_call(
     if secret_args == 0 {
         return Ok(());
     }
-
     match builtin {
         Builtin::Valcom => {
             if args.iter().all(|arg| is_secret_numeric(&arg.ty)) {
@@ -198,7 +187,6 @@ pub(crate) fn validate_builtin_call(
         }
     }
 }
-
 /// Apply the defense-in-depth secret-flow validation pass to a typed program.
 pub(crate) fn validate_program(
     program: &TypedProgram,
@@ -211,7 +199,6 @@ pub(crate) fn validate_program(
             TypedItem::Function(function) => function.name.clone(),
         })
         .collect::<HashSet<_>>();
-
     let uses_secret = program
         .states
         .iter()
@@ -225,7 +212,6 @@ pub(crate) fn validate_program(
             "Secret<T> is available only when compiler build configuration enables ZK mode",
         ));
     }
-
     for state in &program.states {
         if type_contains_secret(&state.ty) {
             return Err(error(
@@ -237,7 +223,6 @@ pub(crate) fn validate_program(
             ));
         }
     }
-
     for item in &program.items {
         match item {
             TypedItem::Function(function) => validate_function(function, &functions)?,
@@ -245,11 +230,9 @@ pub(crate) fn validate_program(
     }
     Ok(())
 }
-
 fn is_runtime_entrypoint(function: &TypedFunction) -> bool {
     !matches!(function.modifiers.kind, FunctionKind::Private)
 }
-
 fn validate_function(
     function: &TypedFunction,
     functions: &HashSet<String>,
@@ -278,10 +261,8 @@ fn validate_function(
             ),
         ));
     }
-
     validate_block(&function.body, public, functions)
 }
-
 fn validate_block(
     block: &TypedBlock,
     public_return: bool,
@@ -301,7 +282,6 @@ fn validate_block(
     }
     Ok(())
 }
-
 fn validate_statement(
     statement: &TypedStatement,
     public_return: bool,
@@ -392,7 +372,6 @@ fn validate_statement(
         }
     }
 }
-
 fn validate_expr(expr: &TypedExpr, functions: &HashSet<String>) -> Result<(), SemanticError> {
     match expr.kind() {
         ExprKind::Binary { left, right, .. } => {
@@ -524,7 +503,6 @@ fn validate_expr(expr: &TypedExpr, functions: &HashSet<String>) -> Result<(), Se
         | ExprKind::Ident(_) => Ok(()),
     }
 }
-
 fn expression_contains_secret(expr: &TypedExpr) -> bool {
     if type_contains_secret(&expr.ty) {
         return true;
@@ -621,7 +599,6 @@ fn expression_contains_secret(expr: &TypedExpr) -> bool {
         | ExprKind::Ident(_) => false,
     }
 }
-
 fn function_contains_secret(function: &TypedFunction) -> bool {
     function
         .param_types
@@ -630,7 +607,6 @@ fn function_contains_secret(function: &TypedFunction) -> bool {
         || function.ret_ty.as_ref().is_some_and(type_contains_secret)
         || block_contains_secret(&function.body)
 }
-
 fn block_contains_secret(block: &TypedBlock) -> bool {
     block.statements.iter().any(statement_contains_secret)
         || block
@@ -638,7 +614,6 @@ fn block_contains_secret(block: &TypedBlock) -> bool {
             .as_ref()
             .is_some_and(|tail| expression_contains_secret(tail))
 }
-
 fn statement_contains_secret(statement: &TypedStatement) -> bool {
     match statement.kind() {
         TypedStatement::Let { value, .. } | TypedStatement::Expr(value) => {
@@ -690,21 +665,18 @@ fn statement_contains_secret(statement: &TypedStatement) -> bool {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use crate::{
         parser::parse_test_fragment as parse,
         semantic::{SemanticContext, SemanticError, Type, analyze},
     };
-
     fn analyze_error(source: &str) -> SemanticError {
         let program = parse(source).expect("secret-flow fixture should parse");
         SemanticContext::with_zk_enabled(true)
             .analyze(&program)
             .expect_err("secret-flow fixture should fail semantic analysis")
     }
-
     #[test]
     fn commitments_are_the_explicit_declassification_boundary() {
         let source = r#"
@@ -721,7 +693,6 @@ mod tests {
             .analyze(&program)
             .expect("approved commitment should accept secret inputs");
     }
-
     #[test]
     fn secret_requires_zk_build_configuration() {
         let program = parse("fn keep(Secret<int> value) -> Secret<int> { return value; }")
@@ -729,7 +700,6 @@ mod tests {
         let error = analyze(&program).expect_err("ZK-disabled secret type must fail");
         assert_eq!(error.code, "E_SECRET_REQUIRES_ZK");
     }
-
     #[test]
     fn secret_detection_recurses_through_lists() {
         let ty = Type::List(
@@ -738,7 +708,6 @@ mod tests {
         );
         assert!(super::type_contains_secret(&ty));
     }
-
     #[test]
     fn public_secret_return_is_rejected() {
         let error = analyze_error(
@@ -752,7 +721,6 @@ mod tests {
         );
         assert_eq!(error.code, "E_SECRET_PUBLIC_RETURN");
     }
-
     #[test]
     fn secret_control_flow_is_rejected() {
         let error = analyze_error(
@@ -769,7 +737,6 @@ mod tests {
         );
         assert_eq!(error.code, "E_SECRET_ARITHMETIC");
     }
-
     #[test]
     fn secret_logs_and_host_writes_are_rejected() {
         let log_error = analyze_error(
@@ -783,7 +750,6 @@ mod tests {
             "#,
         );
         assert_eq!(log_error.code, "E_SECRET_LOG");
-
         let host_error = analyze_error(
             r#"
                 seiyaku Privacy {
@@ -796,7 +762,6 @@ mod tests {
         );
         assert_eq!(host_error.code, "E_SECRET_STATE_SINK");
     }
-
     #[test]
     fn secret_state_keys_and_values_are_rejected() {
         let key_error = analyze_error(
@@ -811,7 +776,6 @@ mod tests {
             "#,
         );
         assert_eq!(key_error.code, "E_SECRET_STATE_KEY");
-
         let value_error = analyze_error(
             r#"
                 seiyaku Privacy {
@@ -825,7 +789,6 @@ mod tests {
         );
         assert_eq!(value_error.code, "E_SECRET_STATE_WRITE");
     }
-
     #[test]
     fn commitment_operands_cannot_mix_public_and_secret_values() {
         let error = analyze_error(
@@ -843,7 +806,6 @@ mod tests {
         );
         assert_eq!(error.code, "E_SECRET_MIXED_COMMITMENT");
     }
-
     #[test]
     fn flat_crypto_spellings_are_rejected() {
         for call in [

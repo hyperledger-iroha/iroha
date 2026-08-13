@@ -1,6 +1,5 @@
 //! Kotodama DEX demo: compile and run a simple XYK pool on IVM.
 use std::collections::BTreeMap;
-
 use iroha_crypto::Hash;
 use iroha_data_model::{DomainId, prelude::Name};
 use iroha_primitives::{json::Json, numeric::Quantity, numeric_abi::QuantityValueV1};
@@ -9,11 +8,9 @@ use ivm::{
     ProgramMetadata, encode_argument_record_from_json,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
-
 fn fixture_account(hex_public_key: &str) -> AccountId {
     AccountId::new(hex_public_key.parse().expect("public key"))
 }
-
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -27,7 +24,6 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(Hash::new(payload).as_ref());
     out
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) Compile the Kotodama sample to IVM bytecode
     let src = include_str!("../../kotodama_lang/src/samples/dex_simple.ko");
@@ -44,7 +40,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("swap entrypoint descriptor");
     let entrypoint_pc =
         u64::try_from(metadata.prefix_len()).expect("program prefix fits u64") + swap.entry_pc;
-
     // 2) Prepare a tiny world with Alice (trader), Pool account, and two assets
     let alice =
         fixture_account("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
@@ -60,7 +55,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             DomainId::try_new("wonderland", "universal")?,
             "eth".parse()?,
         );
-
     // Initial balances: Alice has 1_000 USDC, pool has 997 USDC and 100 ETH.
     // These reserves make the post-fee share exactly 0.5, so the mock ledger's
     // scale-zero quantity policy can apply the quoted output without rounding.
@@ -76,7 +70,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wsv.grant_permission(&alice, PermissionToken::ReadAccountAssets(alice.clone()));
     wsv.grant_permission(&alice, PermissionToken::ReadAccountAssets(pool.clone()));
     let alice_subject = alice.clone();
-
     // 3) Encode the Torii boundary payload as the schema-bound V1 argument record.
     let amount_in = 1_000_u64;
     let arguments = Json::from(norito::json!({
@@ -101,14 +94,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         WsvHost::new_with_subject(wsv, alice_subject, Default::default()).with_public_inputs(
             BTreeMap::from([(input_name, tlv(PointerType::NoritoBytes, &record))]),
         );
-
     // 4) Create the VM, attach the host, and select the public wrapper.
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&bytecode).expect("load program");
     vm.set_program_counter(entrypoint_pc)
         .expect("select swap entrypoint");
-
     // 5) Run the program and decode the pointer-backed quantity in r10.
     vm.run().expect("run VM");
     let result = vm
@@ -118,7 +109,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let amount_out = QuantityValueV1::decode_frame(result.payload)
         .expect("decode canonical swap quantity")
         .into_quantity();
-
     // 6) Report the typed result. The host retains the updated mock balances.
     println!("Swap result: sold {amount_in} USDC for {amount_out} ETH (quoted)");
     println!("Accounts: trader={alice} ; pool={pool}");

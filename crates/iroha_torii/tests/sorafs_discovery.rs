@@ -1,7 +1,6 @@
 //! Tests Torii's `SoraFS` discovery cache using the mesh harness from provider advert suites.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
-
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     convert::TryInto,
@@ -13,7 +12,6 @@ use std::{
     sync::Arc,
     time::{Duration, UNIX_EPOCH},
 };
-
 use axum::{
     Router,
     body::Body,
@@ -98,12 +96,10 @@ use sorafs_manifest::{
 };
 use tempfile::{TempDir, tempdir};
 use tower::ServiceExt as _;
-
 const ISSUED_AT: u64 = 1_700_000_000;
 const TTL_SECS: u64 = 3_600;
 const STATUS_TIMESTAMP_KEY: &str = "sorafs_status_timestamp_unix";
 const GOVERNANCE_REFS_KEY: &str = "sorafs_governance_refs";
-
 trait ProviderAdvertCacheTestExt {
     fn ingest(
         &mut self,
@@ -111,7 +107,6 @@ trait ProviderAdvertCacheTestExt {
         now: u64,
     ) -> Result<AdvertIngestResult, AdvertError>;
 }
-
 impl ProviderAdvertCacheTestExt for ProviderAdvertCache {
     fn ingest(
         &mut self,
@@ -122,11 +117,9 @@ impl ProviderAdvertCacheTestExt for ProviderAdvertCache {
         self.commit_prepared(prepared, now)
     }
 }
-
 fn ingest_tests_enabled() -> bool {
     std::env::var("SORAFS_TORII_SKIP_INGEST_TESTS").map_or(true, |value| value != "1")
 }
-
 fn range_capability_payload(span: u32, granularity: u32) -> Vec<u8> {
     ProviderCapabilityRangeV1 {
         max_chunk_span: span,
@@ -138,18 +131,15 @@ fn range_capability_payload(span: u32, granularity: u32) -> Vec<u8> {
     .to_bytes()
     .expect("construct range capability payload")
 }
-
 fn chunk_range_capability(span: u32, granularity: u32) -> CapabilityTlv {
     CapabilityTlv {
         cap_type: CapabilityType::ChunkRangeFetch,
         payload: range_capability_payload(span, granularity),
     }
 }
-
 fn default_range_capability() -> CapabilityTlv {
     chunk_range_capability(32, 1)
 }
-
 fn soranet_pq_capability() -> CapabilityTlv {
     let payload = ProviderCapabilitySoranetPqV1 {
         supports_guard: true,
@@ -163,13 +153,11 @@ fn soranet_pq_capability() -> CapabilityTlv {
         payload,
     }
 }
-
 #[derive(Clone)]
 struct ProviderFixture {
     advert: ProviderAdvertV1,
     envelope: ProviderAdmissionEnvelopeV1,
 }
-
 fn find_alias_entry<'a>(
     aliases: &'a [json::Value],
     namespace: &str,
@@ -185,14 +173,12 @@ fn find_alias_entry<'a>(
             })
     })
 }
-
 fn manifest_entries(response: &json::Value) -> &[json::Value] {
     response
         .get("manifests")
         .and_then(json::Value::as_array)
         .unwrap_or_else(|| panic!("manifests array present; got {response:?}"))
 }
-
 #[test]
 fn torii_mesh_propagates_valid_advert() {
     let signing_key = SigningKey::from_bytes(&[7u8; 32]);
@@ -209,9 +195,7 @@ fn torii_mesh_propagates_valid_advert() {
         ],
         false,
     );
-
     let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
-
     let mut mesh = ToriiMesh::with_edges(
         vec![
             ToriiNode::new(
@@ -241,10 +225,8 @@ fn torii_mesh_propagates_valid_advert() {
         ],
         &[("alpha", "beta"), ("beta", "gamma")],
     );
-
     mesh.publish("alpha", &fixture.advert, ISSUED_AT + 30)
         .expect("propagation succeeds");
-
     for id in ["alpha", "beta", "gamma"] {
         let node = mesh.node(id);
         assert_eq!(node.stored_count(), 1, "{id} must retain the advert");
@@ -258,7 +240,6 @@ fn torii_mesh_propagates_valid_advert() {
         );
     }
 }
-
 #[test]
 fn soranet_mesh_filters_capabilities_over_shared_dht() {
     let signing_key = SigningKey::from_bytes(&[0xA1; 32]);
@@ -275,9 +256,7 @@ fn soranet_mesh_filters_capabilities_over_shared_dht() {
         ],
         true,
     );
-
     let registry = admission_registry_from_fixtures(std::slice::from_ref(&mixed_fixture));
-
     let mut mesh = ToriiMesh::with_edges(
         vec![
             ToriiNode::new(
@@ -293,10 +272,8 @@ fn soranet_mesh_filters_capabilities_over_shared_dht() {
         ],
         &[("hub", "edge-a"), ("edge-a", "edge-b")],
     );
-
     mesh.publish("hub", &mixed_fixture.advert, ISSUED_AT + 48)
         .expect("advert propagates across shared SORA Nexus DHT mesh");
-
     let hub_caps = mesh
         .node("hub")
         .capabilities_for(&mixed_fixture.advert.body.provider_id)
@@ -309,7 +286,6 @@ fn soranet_mesh_filters_capabilities_over_shared_dht() {
         ],
         "hub keeps full capability set"
     );
-
     for edge in ["edge-a", "edge-b"] {
         let caps = mesh
             .node(edge)
@@ -322,7 +298,6 @@ fn soranet_mesh_filters_capabilities_over_shared_dht() {
         );
     }
 }
-
 #[test]
 fn torii_mesh_enforces_grease_policy() {
     let signing_key = SigningKey::from_bytes(&[8u8; 32]);
@@ -330,7 +305,6 @@ fn torii_mesh_enforces_grease_policy() {
         cap_type: CapabilityType::VendorReserved,
         payload: vec![0xAB, 0xCD],
     };
-
     let grease_fixture = make_signed_advert(
         &signing_key,
         [0x55; 32],
@@ -344,7 +318,6 @@ fn torii_mesh_enforces_grease_policy() {
         ],
         true,
     );
-
     let strict_fixture = make_signed_advert(
         &signing_key,
         [0x77; 32],
@@ -358,10 +331,8 @@ fn torii_mesh_enforces_grease_policy() {
         ],
         false,
     );
-
     let registry =
         admission_registry_from_fixtures(&[grease_fixture.clone(), strict_fixture.clone()]);
-
     let mut mesh = ToriiMesh::with_edges(
         vec![
             ToriiNode::new(
@@ -378,7 +349,6 @@ fn torii_mesh_enforces_grease_policy() {
         ],
         &[("modern", "relay"), ("relay", "strict")],
     );
-
     mesh.publish("modern", &grease_fixture.advert, ISSUED_AT + 45)
         .expect("GREASE-enabled advert must propagate");
     assert_eq!(
@@ -391,7 +361,6 @@ fn torii_mesh_enforces_grease_policy() {
         mesh.node("strict").rejection_reasons().is_empty(),
         "strict node should not reject GREASE advert with flag set"
     );
-
     mesh.publish("modern", &strict_fixture.advert, ISSUED_AT + 60)
         .expect("origin accepts advert");
     assert!(
@@ -408,7 +377,6 @@ fn torii_mesh_enforces_grease_policy() {
         "strict node should record rejection for unknown capabilities"
     );
 }
-
 #[test]
 fn provider_cache_warns_when_chunk_range_missing() {
     let signing_key = SigningKey::from_bytes(&[0x90; 32]);
@@ -430,7 +398,6 @@ fn provider_cache_warns_when_chunk_range_missing() {
         ],
         registry,
     );
-
     let result = cache
         .ingest(missing_range_fixture.advert.clone(), ISSUED_AT + 15)
         .expect("advert should be accepted with warnings");
@@ -444,7 +411,6 @@ fn provider_cache_warns_when_chunk_range_missing() {
             .contains(&AdvertWarning::MissingChunkRangeCapability),
         "ingestion must emit missing_chunk_range warning"
     );
-
     let record = cache
         .record_by_provider(&missing_range_fixture.advert.body.provider_id)
         .expect("record stored");
@@ -455,7 +421,6 @@ fn provider_cache_warns_when_chunk_range_missing() {
         "cache record must retain warning metadata"
     );
 }
-
 #[test]
 fn provider_cache_rejects_relaxed_signature_policy_even_when_signed() {
     let signing_key = SigningKey::from_bytes(&[0x91; 32]);
@@ -480,7 +445,6 @@ fn provider_cache_rejects_relaxed_signature_policy_even_when_signed() {
         ],
         registry,
     );
-
     let mut advert = modern_fixture.advert.clone();
     advert.signature_strict = false;
     resign_advert(&mut advert, &signing_key);
@@ -493,7 +457,6 @@ fn provider_cache_rejects_relaxed_signature_policy_even_when_signed() {
     );
     assert!(cache.is_empty(), "rejected advert must not be cached");
 }
-
 #[test]
 fn provider_cache_rejects_soranet_transport_without_capability() {
     let signing_key = SigningKey::from_bytes(&[0x9A; 32]);
@@ -519,7 +482,6 @@ fn provider_cache_rejects_soranet_transport_without_capability() {
         ],
         registry,
     );
-
     let mut advert = fixture.advert.clone();
     advert.body.transport_hints = Some(vec![TransportHintV1 {
         protocol: TransportProtocol::SoraNetRelay,
@@ -536,7 +498,6 @@ fn provider_cache_rejects_soranet_transport_without_capability() {
         "validation error must surface soranet transport without capability"
     );
 }
-
 #[test]
 fn provider_cache_accepts_soranet_transport_with_capability() {
     if !ingest_tests_enabled() {
@@ -567,7 +528,6 @@ fn provider_cache_accepts_soranet_transport_with_capability() {
         ],
         registry,
     );
-
     let result = cache
         .ingest(fixture.advert.clone(), ISSUED_AT + 15)
         .expect("soranet transport with capability must ingest cleanly");
@@ -596,7 +556,6 @@ fn provider_cache_accepts_soranet_transport_with_capability() {
         "transport hints must include soranet relay"
     );
 }
-
 #[test]
 fn provider_cache_rejects_invalid_signature_when_strict() {
     let signing_key = SigningKey::from_bytes(&[0x92; 32]);
@@ -628,14 +587,12 @@ fn provider_cache_rejects_invalid_signature_when_strict() {
         .record_by_provider(&fixture.advert.body.provider_id)
         .expect("current advert cached")
         .fingerprint();
-
     let mut advert = fixture.advert.clone();
     advert
         .signature
         .signature
         .iter_mut()
         .for_each(|byte| *byte ^= 0xFF);
-
     let err = cache
         .ingest(advert, ISSUED_AT + 30)
         .expect_err("strict advert must reject invalid signature");
@@ -651,7 +608,6 @@ fn provider_cache_rejects_invalid_signature_when_strict() {
         &current_fingerprint
     );
 }
-
 #[test]
 fn provider_cache_rejects_all_zero_signature_material_when_strict() {
     let signing_key = SigningKey::from_bytes(&[0x9A; 32]);
@@ -676,10 +632,8 @@ fn provider_cache_rejects_all_zero_signature_material_when_strict() {
         ],
         registry,
     );
-
     let mut advert = fixture.advert.clone();
     advert.signature.signature.fill(0);
-
     let err = cache
         .ingest(advert, ISSUED_AT + 30)
         .expect_err("strict advert must reject all-zero signature material");
@@ -688,7 +642,6 @@ fn provider_cache_rejects_all_zero_signature_material_when_strict() {
         "expected all-zero signature failure, got: {err:?}"
     );
 }
-
 #[test]
 fn provider_cache_rejects_invalid_signature_with_relaxed_flag() {
     let signing_key = SigningKey::from_bytes(&[0x93; 32]);
@@ -720,7 +673,6 @@ fn provider_cache_rejects_invalid_signature_with_relaxed_flag() {
         .record_by_provider(&fixture.advert.body.provider_id)
         .expect("current advert cached")
         .fingerprint();
-
     let mut advert = fixture.advert.clone();
     advert.signature_strict = false;
     if let Some(first) = advert.signature.signature.first_mut() {
@@ -739,7 +691,6 @@ fn provider_cache_rejects_invalid_signature_with_relaxed_flag() {
     assert_eq!(stored.fingerprint(), &current_fingerprint);
     assert_eq!(stored.advert(), &fixture.advert);
 }
-
 #[test]
 fn provider_cache_prunes_expired_records() {
     let signing_key = SigningKey::from_bytes(&[0x94; 32]);
@@ -764,7 +715,6 @@ fn provider_cache_prunes_expired_records() {
         ],
         registry,
     );
-
     let ingest_result = cache
         .ingest(fixture.advert.clone(), ISSUED_AT + 25)
         .expect("fresh advert ingested");
@@ -781,7 +731,6 @@ fn provider_cache_prunes_expired_records() {
         "pruned advert must be removed from cache"
     );
 }
-
 #[test]
 fn torii_mesh_rejects_stale_and_duplicate_adverts() {
     let signing_key = SigningKey::from_bytes(&[9u8; 32]);
@@ -795,9 +744,7 @@ fn torii_mesh_rejects_stale_and_duplicate_adverts() {
         }],
         false,
     );
-
     let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
-
     let mut mesh = ToriiMesh::with_edges(
         vec![ToriiNode::new(
             "alpha",
@@ -809,7 +756,6 @@ fn torii_mesh_rejects_stale_and_duplicate_adverts() {
         )],
         &[],
     );
-
     let expired_at = fixture.advert.expires_at.saturating_add(1);
     let err = mesh
         .publish("alpha", &fixture.advert, expired_at)
@@ -819,7 +765,6 @@ fn torii_mesh_rejects_stale_and_duplicate_adverts() {
         "expected expiration error, got: {err}"
     );
     assert_eq!(mesh.node("alpha").stored_count(), 0);
-
     mesh.publish("alpha", &fixture.advert, ISSUED_AT + 5)
         .expect("fresh advert accepted");
     assert_eq!(mesh.node("alpha").stored_count(), 1);
@@ -831,7 +776,6 @@ fn torii_mesh_rejects_stale_and_duplicate_adverts() {
         "duplicate advert must not increment store count"
     );
 }
-
 #[test]
 fn provider_cache_rejects_non_monotonic_replacements_without_losing_current_record() {
     let signing_key = SigningKey::from_bytes(&[0x95; 32]);
@@ -847,11 +791,9 @@ fn provider_cache_rejects_non_monotonic_replacements_without_losing_current_reco
     );
     let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
     let mut cache = ProviderAdvertCache::new([CapabilityType::ToriiGateway], registry);
-
     cache
         .ingest(fixture.advert.clone(), ISSUED_AT + 1)
         .expect("initial advert stored");
-
     let mut current = fixture.advert.clone();
     current.issued_at += 60;
     current.expires_at += 60;
@@ -867,7 +809,6 @@ fn provider_cache_rejects_non_monotonic_replacements_without_losing_current_reco
         .record_by_provider(&current.body.provider_id)
         .expect("newer record cached")
         .fingerprint();
-
     let err = cache
         .ingest(fixture.advert.clone(), current.issued_at + 1)
         .expect_err("older signed advert replay must be rejected");
@@ -880,7 +821,6 @@ fn provider_cache_rejects_non_monotonic_replacements_without_losing_current_reco
         } if current_issued_at == current.issued_at
             && incoming_issued_at == fixture.advert.issued_at
     ));
-
     let mut conflicting = current.clone();
     conflicting.expires_at += 1;
     resign_advert(&mut conflicting, &signing_key);
@@ -896,7 +836,6 @@ fn provider_cache_rejects_non_monotonic_replacements_without_losing_current_reco
         } if current_issued_at == current.issued_at
             && incoming_issued_at == current.issued_at
     ));
-
     let stored = cache
         .record_by_provider(&current.body.provider_id)
         .expect("current record preserved after rejected replacements");
@@ -904,7 +843,6 @@ fn provider_cache_rejects_non_monotonic_replacements_without_losing_current_reco
     assert_eq!(stored.advert(), &current);
     assert_eq!(cache.len(), 1);
 }
-
 #[test]
 fn provider_cache_retains_replay_high_water_after_short_lived_record_is_pruned() {
     let signing_key = SigningKey::from_bytes(&[0x97; 32]);
@@ -923,7 +861,6 @@ fn provider_cache_retains_replay_high_water_after_short_lived_record_is_pruned()
     cache
         .ingest(fixture.advert.clone(), ISSUED_AT + 1)
         .expect("initial long-lived advert stored");
-
     let mut short_lived = fixture.advert.clone();
     short_lived.issued_at += 60;
     short_lived.expires_at = short_lived.issued_at + 1;
@@ -931,12 +868,10 @@ fn provider_cache_retains_replay_high_water_after_short_lived_record_is_pruned()
     cache
         .ingest(short_lived.clone(), short_lived.issued_at)
         .expect("newer short-lived advert replaces the initial record");
-
     let after_short_expiry = short_lived.expires_at + 1;
     assert_eq!(cache.prune_stale(after_short_expiry), 1);
     assert!(cache.is_empty());
     assert!(after_short_expiry < fixture.advert.expires_at);
-
     let err = cache
         .ingest(fixture.advert.clone(), after_short_expiry)
         .expect_err("pruning must not permit replay of an older still-valid advert");
@@ -951,7 +886,6 @@ fn provider_cache_retains_replay_high_water_after_short_lived_record_is_pruned()
     ));
     assert!(cache.is_empty(), "replayed advert must not be restored");
 }
-
 #[test]
 fn provider_cache_persists_replay_high_water_across_restart() {
     let signing_key = SigningKey::from_bytes(&[0x98; 32]);
@@ -969,7 +903,6 @@ fn provider_cache_persists_replay_high_water_across_restart() {
     let temp = tempdir().expect("temporary replay checkpoint directory");
     let checkpoint = temp.path().join("provider-advert-replay.to");
     let capacity = NonZeroUsize::new(8).unwrap();
-
     let mut latest = fixture.advert.clone();
     latest.issued_at += 60;
     latest.expires_at += 60;
@@ -989,7 +922,6 @@ fn provider_cache_persists_replay_high_water_across_restart() {
             .ingest(latest.clone(), latest.issued_at)
             .expect("store newer advert and durable high-water mark");
     }
-
     let mut restarted = ProviderAdvertCache::new_persistent(
         [CapabilityType::ToriiGateway],
         registry.clone(),
@@ -1017,7 +949,6 @@ fn provider_cache_persists_replay_high_water_across_restart() {
         restarted.is_empty(),
         "replayed advert must not mutate cache"
     );
-
     assert!(matches!(
         restarted
             .ingest(latest.clone(), latest.issued_at + 1)
@@ -1026,7 +957,6 @@ fn provider_cache_persists_replay_high_water_across_restart() {
         AdvertIngest::Stored { .. }
     ));
     drop(restarted);
-
     let mut restarted_again = ProviderAdvertCache::new_persistent(
         [CapabilityType::ToriiGateway],
         registry,
@@ -1043,7 +973,6 @@ fn provider_cache_persists_replay_high_water_across_restart() {
     assert!(matches!(err, AdvertError::NonMonotonicIssuedAt { .. }));
     assert!(restarted_again.is_empty());
 }
-
 #[test]
 fn provider_cache_corrupt_replay_checkpoint_fails_closed_on_restart() {
     let signing_key = SigningKey::from_bytes(&[0x99; 32]);
@@ -1072,12 +1001,10 @@ fn provider_cache_corrupt_replay_checkpoint_fails_closed_on_restart() {
         .ingest(fixture.advert, ISSUED_AT + 1)
         .expect("write valid checkpoint");
     drop(cache);
-
     let mut bytes = fs::read(&checkpoint).expect("read checkpoint");
     let last = bytes.last_mut().expect("checkpoint is non-empty");
     *last ^= 0x80;
     fs::write(&checkpoint, bytes).expect("corrupt checkpoint in place");
-
     let err = ProviderAdvertCache::new_persistent(
         [CapabilityType::ToriiGateway],
         registry,
@@ -1087,7 +1014,6 @@ fn provider_cache_corrupt_replay_checkpoint_fails_closed_on_restart() {
     .expect_err("corrupt checkpoint must disable cache initialization");
     assert!(matches!(err, ReplayCheckpointError::Codec(_)));
 }
-
 #[test]
 fn provider_cache_checkpoint_failure_rolls_back_memory_state() {
     let signing_key = SigningKey::from_bytes(&[0x9A; 32]);
@@ -1112,14 +1038,12 @@ fn provider_cache_checkpoint_failure_rolls_back_memory_state() {
         capacity,
     )
     .expect("initialize persistent cache");
-
     fs::create_dir(&checkpoint).expect("replace absent checkpoint with a directory");
     let err = cache
         .ingest(fixture.advert.clone(), ISSUED_AT + 1)
         .expect_err("non-file checkpoint target must reject admission");
     assert!(matches!(err, AdvertError::ReplayCheckpoint(_)));
     assert!(cache.is_empty(), "failed persistence must not store advert");
-
     fs::remove_dir(&checkpoint).expect("remove blocking checkpoint directory");
     assert!(matches!(
         cache
@@ -1129,7 +1053,6 @@ fn provider_cache_checkpoint_failure_rolls_back_memory_state() {
         AdvertIngest::Stored { .. }
     ));
 }
-
 #[test]
 fn provider_cache_rejects_tampered_expiry_and_future_issue_without_mutation() {
     let signing_key = SigningKey::from_bytes(&[0x96; 32]);
@@ -1152,14 +1075,12 @@ fn provider_cache_rejects_tampered_expiry_and_future_issue_without_mutation() {
         .record_by_provider(&fixture.advert.body.provider_id)
         .expect("record cached")
         .fingerprint();
-
     let mut extended = fixture.advert.clone();
     extended.expires_at += 60;
     let err = cache
         .ingest(extended, ISSUED_AT + 2)
         .expect_err("copied signature must not authorize an extended expiry");
     assert!(matches!(err, AdvertError::Signature(_)));
-
     let now = ISSUED_AT + 30;
     let mut future = fixture.advert.clone();
     future.issued_at = now + 1;
@@ -1175,7 +1096,6 @@ fn provider_cache_rejects_tampered_expiry_and_future_issue_without_mutation() {
             issued_at,
         }) if observed_now == now && issued_at == now + 1
     ));
-
     let stored = cache
         .record_by_provider(&fixture.advert.body.provider_id)
         .expect("existing record preserved after rejected replacements");
@@ -1183,7 +1103,6 @@ fn provider_cache_rejects_tampered_expiry_and_future_issue_without_mutation() {
     assert_eq!(stored.advert(), &fixture.advert);
     assert_eq!(cache.len(), 1);
 }
-
 #[test]
 fn torii_mesh_rejects_invalid_path_policy() {
     let signing_key = SigningKey::from_bytes(&[0xBA; 32]);
@@ -1199,9 +1118,7 @@ fn torii_mesh_rejects_invalid_path_policy() {
     );
     let mut advert = fixture.advert.clone();
     advert.body.path_policy.min_guard_weight = 0;
-
     let registry = admission_registry_from_fixtures(&[fixture]);
-
     let mut mesh = ToriiMesh::with_edges(
         vec![ToriiNode::new(
             "alpha",
@@ -1219,13 +1136,11 @@ fn torii_mesh_rejects_invalid_path_policy() {
     );
     assert_eq!(mesh.node("alpha").stored_count(), 0);
 }
-
 struct ToriiNode {
     id: &'static str,
     cache: ProviderAdvertCache,
     rejections: Vec<String>,
 }
-
 impl ToriiNode {
     fn new(id: &'static str, known: &[CapabilityType], admission: Arc<AdmissionRegistry>) -> Self {
         Self {
@@ -1234,7 +1149,6 @@ impl ToriiNode {
             rejections: Vec::new(),
         }
     }
-
     fn ingest(
         &mut self,
         advert: &ProviderAdvertV1,
@@ -1249,34 +1163,28 @@ impl ToriiNode {
             }
         }
     }
-
     fn stored_count(&self) -> usize {
         self.cache.len()
     }
-
     fn capabilities_for(&self, provider_id: &[u8; 32]) -> Option<Vec<CapabilityType>> {
         self.cache
             .record_by_provider(provider_id)
             .map(|record| record.known_capabilities().to_vec())
     }
-
     #[allow(dead_code)]
     fn warnings_for(&self, provider_id: &[u8; 32]) -> Option<Vec<AdvertWarning>> {
         self.cache
             .record_by_provider(provider_id)
             .map(|record| record.warnings().to_vec())
     }
-
     fn rejection_reasons(&self) -> &[String] {
         &self.rejections
     }
 }
-
 struct ToriiMesh {
     nodes: HashMap<&'static str, ToriiNode>,
     adjacency: HashMap<&'static str, Vec<&'static str>>,
 }
-
 impl ToriiMesh {
     fn with_edges(nodes: Vec<ToriiNode>, edges: &[(&'static str, &'static str)]) -> Self {
         let mut adjacency: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
@@ -1294,7 +1202,6 @@ impl ToriiMesh {
             adjacency,
         }
     }
-
     fn publish(
         &mut self,
         origin: &'static str,
@@ -1312,12 +1219,10 @@ impl ToriiMesh {
             },
             Err(err) => return Err(err),
         }
-
         let mut queue = VecDeque::new();
         queue.push_back((origin, advert.clone()));
         let mut visited: HashSet<&'static str> = HashSet::new();
         visited.insert(origin);
-
         while let Some((current, advert_payload)) = queue.pop_front() {
             if let Some(neighbors) = self.adjacency.get(current).cloned() {
                 for neighbor in neighbors {
@@ -1341,12 +1246,10 @@ impl ToriiMesh {
         }
         Ok(())
     }
-
     fn node(&self, id: &'static str) -> &ToriiNode {
         self.nodes.get(id).expect("node registered in mesh")
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn make_signed_advert(
     signing_key: &SigningKey,
@@ -1428,7 +1331,6 @@ fn make_signed_advert(
     };
     body.validate().expect("test advert body must validate");
     let body_clone = body.clone();
-
     let mut advert = ProviderAdvertV1 {
         version: PROVIDER_ADVERT_VERSION_V1,
         issued_at: ISSUED_AT,
@@ -1448,7 +1350,6 @@ fn make_signed_advert(
         .signature_payload_bytes()
         .expect("serialize advert envelope for signing");
     advert.signature.signature = signing_key.sign(&signature_payload).to_bytes().to_vec();
-
     let attestation = EndpointAttestationV1 {
         version: ENDPOINT_ATTESTATION_VERSION_V1,
         kind: EndpointAttestationKind::Mtls,
@@ -1462,7 +1363,6 @@ fn make_signed_advert(
     let (vrf_public, vrf_private) = BlsNormal::keypair(KeyGenOption::UseSeed(provider_id.to_vec()))
         .expect("derive provider VRF fixture key");
     let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
-
     let proposal = ProviderAdmissionProposalV1 {
         version: sorafs_manifest::PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,
         provider_id,
@@ -1492,12 +1392,10 @@ fn make_signed_advert(
         stream_budget,
         transport_hints: transport_hints.clone(),
     };
-
     let proposal_digest =
         compute_proposal_digest(&proposal).expect("compute proposal digest for fixture");
     let advert_body_digest =
         compute_advert_body_digest(&body_clone).expect("compute advert body digest");
-
     let council_key = SigningKey::from_bytes(&[0x42; 32]);
     let mut envelope = ProviderAdmissionEnvelopeV1 {
         version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
@@ -1517,10 +1415,8 @@ fn make_signed_advert(
         signer: council_key.verifying_key().to_bytes(),
         signature: council_signature.to_bytes().to_vec(),
     });
-
     ProviderFixture { advert, envelope }
 }
-
 fn resign_advert(advert: &mut ProviderAdvertV1, signing_key: &SigningKey) {
     advert.signature.algorithm = SignatureAlgorithm::Ed25519;
     advert.signature.public_key = signing_key.verifying_key().to_bytes().to_vec();
@@ -1530,12 +1426,10 @@ fn resign_advert(advert: &mut ProviderAdvertV1, signing_key: &SigningKey) {
         .expect("serialize provider advert signature envelope");
     advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
 }
-
 fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/sorafs_manifest/provider_admission")
 }
-
 fn test_admission_config(envelopes_dir: PathBuf) -> SorafsAdmission {
     let council_keys = [0x42, 0x45]
         .into_iter()
@@ -1551,7 +1445,6 @@ fn test_admission_config(envelopes_dir: PathBuf) -> SorafsAdmission {
         signature_threshold: NonZeroUsize::new(1).expect("non-zero test threshold"),
     }
 }
-
 fn fixture_from_disk(advert_name: &str, envelope_name: &str) -> ProviderFixture {
     let advert_path = fixtures_root().join(advert_name);
     let envelope_path = fixtures_root().join(envelope_name);
@@ -1573,7 +1466,6 @@ fn fixture_from_disk(advert_name: &str, envelope_name: &str) -> ProviderFixture 
         decode_from_bytes(&envelope_bytes).expect("decode provider envelope fixture from disk");
     ProviderFixture { advert, envelope }
 }
-
 fn admission_registry_from_fixtures(fixtures: &[ProviderFixture]) -> Arc<AdmissionRegistry> {
     let envelopes = fixtures
         .iter()
@@ -1594,7 +1486,6 @@ fn admission_registry_from_fixtures(fixtures: &[ProviderFixture]) -> Arc<Admissi
         .expect("fixture admission registry must be valid");
     Arc::new(registry)
 }
-
 struct ToriiHarness {
     #[allow(dead_code)]
     torii: Torii,
@@ -1610,7 +1501,6 @@ struct ToriiHarness {
     // isolated for the lifetime of each parallel test harness.
     _torii_data_dir: TempDir,
 }
-
 /// Deterministic test-only signer used by this discovery integration harness.
 ///
 /// Handles intentionally retain production lexical shape so the harness
@@ -1621,7 +1511,6 @@ struct DiscoveryNativeTransactionSigner {
     qualification: SorafsNativeTransactionSignerQualificationV1,
     key_pair: KeyPair,
 }
-
 impl DiscoveryNativeTransactionSigner {
     fn for_role(role: SorafsNativeTransactionSignerRoleV1) -> Self {
         let (handle, seed) = match role {
@@ -1644,7 +1533,6 @@ impl DiscoveryNativeTransactionSigner {
                 .expect("derive deterministic discovery native signer"),
         }
     }
-
     fn configured_binding(
         &self,
     ) -> iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
@@ -1658,31 +1546,25 @@ impl DiscoveryNativeTransactionSigner {
             policy_digest: self.qualification.policy_digest(),
         }
     }
-
     fn sign_payload(&self, payload: TransactionPayload) -> Result<SignedTransaction, ()> {
         TransactionBuilder::from_payload(payload)
             .and_then(|builder| builder.try_sign(self.key_pair.private_key()))
             .map_err(|_| ())
     }
 }
-
 impl SorafsNativeTransactionSignerProviderV1 for DiscoveryNativeTransactionSigner {
     fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
         self.role
     }
-
     fn handle(&self) -> &str {
         self.handle
     }
-
     fn authority(&self) -> AccountId {
         AccountId::new(self.key_pair.public_key().clone())
     }
-
     fn public_key(&self) -> Result<PublicKey, SorafsNativeTransactionSignerProbeErrorV1> {
         Ok(self.key_pair.public_key().clone())
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -1692,7 +1574,6 @@ impl SorafsNativeTransactionSignerProviderV1 for DiscoveryNativeTransactionSigne
         Ok(self.qualification)
     }
 }
-
 macro_rules! impl_discovery_signer_role {
     ($trait_name:ident, $error:ident) => {
         impl $trait_name for DiscoveryNativeTransactionSigner {
@@ -1702,7 +1583,6 @@ macro_rules! impl_discovery_signer_role {
         }
     };
 }
-
 impl_discovery_signer_role!(
     SoraFsProofOutcomeTransactionSigner,
     SoraFsProofOutcomeSigningError
@@ -1719,7 +1599,6 @@ impl_discovery_signer_role!(
     SoraFsOrderbookTransactionSigner,
     SoraFsOrderbookTransactionSigningError
 );
-
 fn enable_storage_with_discovery_native_signers(cfg: &mut actual_cfg::Root) {
     cfg.torii.sorafs_storage.enabled = true;
     let configured = &mut cfg.torii.sorafs_storage.native_transaction_signers;
@@ -1742,7 +1621,6 @@ fn enable_storage_with_discovery_native_signers(cfg: &mut actual_cfg::Root) {
             .configured_binding(),
     );
 }
-
 fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let torii_data_dir = tempdir().expect("temporary Torii data directory");
     let mut cfg = cfg.clone();
@@ -1795,10 +1673,8 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let queue_cfg = actual_cfg::Queue::default();
     let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(CoreQueue::from_config(queue_cfg, queue_events));
-
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-
     let chain_id_arc = Arc::new(chain_id.clone());
     let runtime_deps = ToriiRuntimeDeps::new(MaybeTelemetry::disabled());
     let runtime_deps = if let Some((proof, repair, reserve, orderbook)) = native_signers {
@@ -1831,7 +1707,6 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     );
     let app = torii.api_router_for_tests();
     let alias_policy = cfg.torii.sorafs_alias_cache;
-
     ToriiHarness {
         torii,
         app,
@@ -1844,7 +1719,6 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
         _torii_data_dir: torii_data_dir,
     }
 }
-
 struct ManifestSetup {
     manifest_digest: RegistryManifestDigest,
     manifest_digest_hex: String,
@@ -1853,14 +1727,12 @@ struct ManifestSetup {
     retention_epoch: u64,
     manifest_cid: Vec<u8>,
 }
-
 struct ManifestRequestFixture {
     transaction: SignedTransaction,
     authority: AuthorityCreds,
     manifest_payload: Vec<u8>,
     manifest_digest_hex: String,
 }
-
 fn submit_transaction(harness: &ToriiHarness, tx: SignedTransaction, next_height: &mut u64) {
     let accepted_tx = AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
     harness
@@ -1883,7 +1755,6 @@ fn submit_transaction(harness: &ToriiHarness, tx: SignedTransaction, next_height
     );
     *next_height += 1;
 }
-
 fn encode_alias_proof_bytes(
     alias_namespace: &str,
     alias_name: &str,
@@ -1936,15 +1807,12 @@ fn encode_alias_proof_bytes(
     });
     to_bytes(&bundle).expect("encode alias proof bundle")
 }
-
 fn checked_signature(private_key: &PrivateKey, payload: &[u8]) -> Signature {
     Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
-
 fn checked_manifest_request_authority_fixture() -> KeyPair {
     KeyPair::try_random().expect("generate checked manifest request authority fixture keypair")
 }
-
 #[test]
 fn manifest_request_authority_fixture_uses_checked_ed25519_key_generation() {
     let key_pair = checked_manifest_request_authority_fixture();
@@ -1952,10 +1820,8 @@ fn manifest_request_authority_fixture_uses_checked_ed25519_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture manifest request authority public key has a valid algorithm");
-
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
 }
-
 fn manifest_request_fixture<F>(network_id: NetworkId, tweak_manifest: F) -> ManifestRequestFixture
 where
     F: FnOnce(&mut ManifestV1),
@@ -1996,7 +1862,6 @@ where
     )
     .with_instructions([instruction])
     .sign(key_pair.private_key());
-
     ManifestRequestFixture {
         transaction,
         authority,
@@ -2004,7 +1869,6 @@ where
         manifest_digest_hex,
     }
 }
-
 fn assert_sorafs_pin_error(body: &[u8], expected_code: &str, expected_message: &str) {
     let envelope: json::Value =
         json::from_slice(body).expect("pin registration error must be canonical JSON");
@@ -2022,11 +1886,9 @@ fn assert_sorafs_pin_error(body: &[u8], expected_code: &str, expected_message: &
         "pin registration error message must contain {expected_message:?}; got {message:?}"
     );
 }
-
 fn create_manifest_setup(harness: &ToriiHarness, next_height: &mut u64) -> ManifestSetup {
     create_manifest_setup_with_seed(harness, next_height, 0xAB, None, None)
 }
-
 #[allow(clippy::too_many_lines)]
 fn create_manifest_setup_with_seed(
     harness: &ToriiHarness,
@@ -2068,7 +1930,6 @@ fn create_manifest_setup_with_seed(
     let submitted_epoch = 12;
     // RegisterPinManifest auto-approves the manifest at the submitted epoch.
     let approved_epoch = submitted_epoch;
-
     let register = RegisterPinManifest::new(
         manifest.encode().expect("encode canonical manifest"),
         None,
@@ -2082,7 +1943,6 @@ fn create_manifest_setup_with_seed(
     .with_instructions([dm::InstructionBox::from(register)])
     .sign(&authority.private_key.0);
     submit_transaction(harness, register_tx, next_height);
-
     if let Some(timestamp) = status_timestamp_unix {
         let prev_hash = harness
             .state
@@ -2117,14 +1977,12 @@ fn create_manifest_setup_with_seed(
             .expect("commit manifest status timestamp block");
         *next_height += 1;
     }
-
     let view = harness.state.view();
     let manifests_store = view.world().pin_manifests();
     assert!(
         manifests_store.get(&manifest_digest).is_some(),
         "manifest must exist in registry after registration"
     );
-
     ManifestSetup {
         manifest_digest,
         manifest_digest_hex,
@@ -2134,7 +1992,6 @@ fn create_manifest_setup_with_seed(
         manifest_cid,
     }
 }
-
 fn create_successor_manifest(
     harness: &ToriiHarness,
     predecessor: &ManifestSetup,
@@ -2150,7 +2007,6 @@ fn create_successor_manifest(
         Some(status_timestamp_unix),
     )
 }
-
 fn ensure_authority_registered(
     harness: &ToriiHarness,
     authority: &AuthorityCreds,
@@ -2172,7 +2028,6 @@ fn ensure_authority_registered(
         return;
     }
     drop(view);
-
     let prev_hash = harness
         .state
         .view()
@@ -2188,21 +2043,18 @@ fn ensure_authority_registered(
     );
     let mut block = harness.state.block(header);
     let mut tx = block.transaction();
-
     if !account_exists {
         let account = dm::Account::new(authority.account.clone()).build(&authority.account);
         let (account_id, account_value) = account.into_key_value();
         tx.world_mut_for_testing()
             .insert_account_for_testing(account_id, account_value);
     }
-
     if !treasury_exists {
         let account = dm::Account::new(treasury.clone()).build(&authority.account);
         let (account_id, account_value) = account.into_key_value();
         tx.world_mut_for_testing()
             .insert_account_for_testing(account_id, account_value);
     }
-
     if !fee_asset_exists {
         let definition = dm::AssetDefinition::numeric(
             fee_asset_id.clone(),
@@ -2214,7 +2066,6 @@ fn ensure_authority_registered(
             .execute(&authority.account, &mut tx)
             .expect("register SoraFS fee asset definition");
     }
-
     if !fee_balance_exists {
         dm::Mint::asset_quantity(
             10_000_000_000_000_u128,
@@ -2223,11 +2074,9 @@ fn ensure_authority_registered(
         .execute(&authority.account, &mut tx)
         .expect("mint SoraFS fee balance for test authority");
     }
-
     tx.apply();
     block.commit().expect("commit authority registration block");
 }
-
 fn attach_governance_revocation(
     harness: &ToriiHarness,
     setup: &ManifestSetup,
@@ -2263,7 +2112,6 @@ fn attach_governance_revocation(
             "pin_digest_hex".into(),
             json::Value::String(setup.manifest_digest_hex.clone()),
         );
-
         let mut entry = json::Map::new();
         entry.insert(
             "kind".into(),
@@ -2278,7 +2126,6 @@ fn attach_governance_revocation(
             "signers".into(),
             json::Value::Array(vec![json::Value::String("council-1".to_owned())]),
         );
-
         let value = json::Value::Array(vec![json::Value::Object(entry)]);
         record.metadata.insert(key, Json::from(value));
         let status_key = Name::from_str(STATUS_TIMESTAMP_KEY).expect("status timestamp key");
@@ -2293,7 +2140,6 @@ fn attach_governance_revocation(
     block.commit().expect("commit governance metadata block");
     *next_height += 1;
 }
-
 #[allow(clippy::too_many_arguments)]
 fn bind_alias_with_proof(
     harness: &ToriiHarness,
@@ -2327,7 +2173,6 @@ fn bind_alias_with_proof(
         bound_epoch,
         expiry_epoch,
     );
-
     let prev_hash = harness
         .state
         .view()
@@ -2343,7 +2188,6 @@ fn bind_alias_with_proof(
     );
     let mut block = harness.state.block(header);
     let mut tx = block.transaction();
-
     {
         let world = tx.world_mut_for_testing();
         {
@@ -2353,26 +2197,21 @@ fn bind_alias_with_proof(
                 .expect("manifest must exist before binding alias");
             record.alias = Some(binding.clone());
         }
-
         {
             let aliases = world.manifest_aliases_mut_for_testing();
             aliases.insert(ManifestAliasId::from(&binding), alias_record);
         }
     }
-
     tx.apply();
     block.commit().expect("commit alias binding block");
 }
-
 #[tokio::test]
 async fn sorafs_routes_disabled_when_cache_off() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = false;
     cfg.torii.sorafs_discovery.admission = None;
-
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
-
     let response = app
         .oneshot(
             Request::builder()
@@ -2382,20 +2221,16 @@ async fn sorafs_routes_disabled_when_cache_off() {
         )
         .await
         .expect("router responds");
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 #[should_panic(expected = "SoraFS discovery/admission enforcement requires")]
 async fn sorafs_discovery_startup_rejects_missing_admission_policy() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     cfg.torii.sorafs_discovery.admission = None;
-
     let _ = build_torii_harness(&cfg);
 }
-
 #[tokio::test]
 #[should_panic(expected = "invalid SoraFS provider admission council policy")]
 async fn sorafs_discovery_startup_rejects_empty_trust_set() {
@@ -2405,20 +2240,16 @@ async fn sorafs_discovery_startup_rejects_empty_trust_set() {
     let mut admission = test_admission_config(temp.path().to_path_buf());
     admission.trusted_council_keys.clear();
     cfg.torii.sorafs_discovery.admission = Some(admission);
-
     let _ = build_torii_harness(&cfg);
 }
-
 #[tokio::test]
 async fn sorafs_routes_enabled_with_admission_dir() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let temp = tempdir().expect("temp dir");
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     cfg.torii.sorafs_discovery.admission = Some(test_admission_config(temp.path().to_path_buf()));
-
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
-
     let response = app
         .clone()
         .oneshot(
@@ -2429,9 +2260,7 @@ async fn sorafs_routes_enabled_with_admission_dir() {
         )
         .await
         .expect("router responds");
-
     assert_eq!(response.status(), StatusCode::OK);
-
     let body = BodyExt::collect(response.into_body())
         .await
         .expect("collect body")
@@ -2452,15 +2281,12 @@ async fn sorafs_routes_enabled_with_admission_dir() {
             .is_empty()
     );
 }
-
 #[tokio::test]
 async fn sorafs_capacity_route_disabled_when_storage_off() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = false;
-
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
-
     let response = app
         .oneshot(
             Request::builder()
@@ -2470,18 +2296,14 @@ async fn sorafs_capacity_route_disabled_when_storage_off() {
         )
         .await
         .expect("router responds");
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn sorafs_pin_register_route_disabled_when_storage_off() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = false;
-
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
-
     let response = app
         .oneshot(
             Request::builder()
@@ -2493,10 +2315,8 @@ async fn sorafs_pin_register_route_disabled_when_storage_off() {
         )
         .await
         .expect("router responds");
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
 #[test]
 #[should_panic(
     expected = "storage-enabled discovery fixture must explicitly configure every native signer binding"
@@ -2504,20 +2324,16 @@ async fn sorafs_pin_register_route_disabled_when_storage_off() {
 fn storage_enabled_discovery_harness_rejects_missing_explicit_native_signers() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
-
     let _ = build_torii_harness(&cfg);
 }
-
 #[tokio::test]
 async fn sorafs_capacity_route_enabled_when_storage_on() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
-
     let response = app
         .oneshot(
             Request::builder()
@@ -2527,9 +2343,7 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
         )
         .await
         .expect("router responds");
-
     assert_eq!(response.status(), StatusCode::OK);
-
     let body = BodyExt::collect(response.into_body())
         .await
         .expect("collect body")
@@ -2564,14 +2378,12 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
             .is_empty()
     );
 }
-
 #[tokio::test]
 async fn retired_storage_ingest_is_not_mounted_and_local_inventory_requires_authentication() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-
     let harness = build_torii_harness(&cfg);
     let response = harness
         .app
@@ -2588,7 +2400,6 @@ async fn retired_storage_ingest_is_not_mounted_and_local_inventory_requires_auth
         )
         .await
         .expect("retired ingest response");
-
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     for path in [
         "/v1/sorafs/aliases",
@@ -2609,7 +2420,6 @@ async fn retired_storage_ingest_is_not_mounted_and_local_inventory_requires_auth
             .expect("unsigned SoraFS inventory response");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
     }
-
     let fetch_response = harness
         .app
         .clone()
@@ -2625,7 +2435,6 @@ async fn retired_storage_ingest_is_not_mounted_and_local_inventory_requires_auth
         .expect("unsigned malformed storage fetch response");
     assert_eq!(fetch_response.status(), StatusCode::UNAUTHORIZED);
 }
-
 fn pin_register_http_request(body: Vec<u8>, content_type: &'static str) -> Request<Body> {
     let mut request = Request::builder()
         .method("POST")
@@ -2641,7 +2450,6 @@ fn pin_register_http_request(body: Vec<u8>, content_type: &'static str) -> Reque
         ))));
     request
 }
-
 #[tokio::test]
 async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -2654,7 +2462,6 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let mut next_height = 1;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
-
     let submitted_hash = fixture.transaction.hash();
     let body = norito::json::to_vec(&fixture.transaction).expect("serialize signed transaction");
     let response = harness
@@ -2708,7 +2515,6 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
         "the dedicated route must queue the original caller-signed transaction unchanged"
     );
 }
-
 #[tokio::test]
 async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -2721,7 +2527,6 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let mut next_height = 1;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
-
     let response = harness
         .app
         .clone()
@@ -2742,7 +2547,6 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
         String::from_utf8_lossy(&body)
     );
 }
-
 #[tokio::test]
 async fn sorafs_pin_register_validates_signed_manifest_bytes() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -2753,7 +2557,6 @@ async fn sorafs_pin_register_validates_signed_manifest_bytes() {
     let fixture = manifest_request_fixture(harness.network_id, |manifest| {
         manifest.chunking.name = "bogus".into();
     });
-
     let response = harness
         .app
         .clone()
@@ -2774,7 +2577,6 @@ async fn sorafs_pin_register_validates_signed_manifest_bytes() {
         "chunker descriptor mismatch",
     );
 }
-
 #[tokio::test]
 async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -2789,7 +2591,6 @@ async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
         "manifest_payload": (BASE64_STANDARD.encode(&fixture.manifest_payload)),
         "submitted_epoch": 6_u64
     });
-
     let response = harness
         .app
         .clone()
@@ -2805,7 +2606,6 @@ async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
         "the removed secret-bearing DTO must fail closed"
     );
 }
-
 #[tokio::test]
 async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -2813,7 +2613,6 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let two_instructions = TransactionBuilder::new(
         harness.network_id,
@@ -2844,7 +2643,6 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
         "sorafs_pin_transaction_instruction_count_invalid",
         "exactly one RegisterPinManifest",
     );
-
     let wrong_network =
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"Sorafs discovery wrong-network fixture",
@@ -2861,7 +2659,6 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let tamper_key = checked_manifest_request_authority_fixture();
     let tampered = fixture
@@ -2878,7 +2675,6 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -2888,14 +2684,12 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let app = build_torii_harness(&cfg).app;
-
     let invalid_json = app
         .clone()
         .oneshot(pin_register_http_request(b"{".to_vec(), "application/json"))
         .await
         .expect("router responds");
     assert_eq!(invalid_json.status(), StatusCode::BAD_REQUEST);
-
     let invalid_norito = app
         .oneshot(pin_register_http_request(
             vec![0xFF, 0x00, 0x01, 0x02],
@@ -2905,7 +2699,6 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
         .expect("router responds");
     assert_eq!(invalid_norito.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
@@ -2924,11 +2717,9 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     let storage_dir = tempdir().expect("storage dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
-
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
     let setup = create_manifest_setup(&harness, &mut next_height);
-
     let positive_ttl = harness.alias_policy.positive_ttl_secs();
     let refresh_window = harness.alias_policy.refresh_window_secs();
     let freshness_margin = positive_ttl.saturating_sub(refresh_window);
@@ -2939,7 +2730,6 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
     let now = unix_now_secs();
     let generated_at = now.saturating_sub(fresh_age);
     let expires_at = now.saturating_add(positive_ttl.saturating_mul(2));
-
     bind_alias_with_proof(
         &harness,
         &setup,
@@ -2951,7 +2741,6 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
         setup.retention_epoch,
         &mut next_height,
     );
-
     let request = Request::builder()
         .method("GET")
         .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
@@ -2971,25 +2760,20 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
         .expect("collect body")
         .to_bytes();
     let body_text = String::from_utf8_lossy(&body_bytes);
-
     assert_eq!(status, StatusCode::OK, "body={body_text}");
-
     let cache_control = headers
         .get(CACHE_CONTROL)
         .and_then(|value| value.to_str().ok());
     let expected_cache = format!("max-age={positive_ttl}, stale-while-revalidate={refresh_window}");
     assert_eq!(cache_control, Some(expected_cache.as_str()));
-
     let proof_status = headers
         .get("sora-proof-status")
         .and_then(|value| value.to_str().ok());
     assert_eq!(proof_status, Some("fresh"));
-
     assert!(
         headers.get(WARNING).is_none(),
         "fresh responses must not emit warning headers"
     );
-
     let age = headers
         .get(AGE)
         .and_then(|value| value.to_str().ok())
@@ -3003,7 +2787,6 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
         age <= fresh_age.saturating_add(5),
         "age should closely match configured fresh proof age ({age} vs {fresh_age})"
     );
-
     let alias_label = headers
         .get("sora-name")
         .and_then(|value| value.to_str().ok());
@@ -3015,7 +2798,6 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
             .is_some_and(|value| !value.is_empty()),
         "Sora-Proof header must be present for fresh responses"
     );
-
     let body: json::Value = json::from_slice(&body_bytes).expect("parse response body");
     let aliases = body
         .get("aliases")
@@ -3077,7 +2859,6 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
         "fresh manifest should not expose governance references"
     );
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
@@ -3096,11 +2877,9 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     let storage_dir = tempdir().expect("storage dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
-
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
     let setup = create_manifest_setup(&harness, &mut next_height);
-
     let positive_ttl = harness.alias_policy.positive_ttl_secs();
     let refresh_window = harness.alias_policy.refresh_window_secs();
     let refresh_age = {
@@ -3119,7 +2898,6 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
     let now = unix_now_secs();
     let generated_at = now.saturating_sub(refresh_age);
     let expires_at = now.saturating_add(positive_ttl.saturating_mul(2));
-
     bind_alias_with_proof(
         &harness,
         &setup,
@@ -3131,7 +2909,6 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
         setup.retention_epoch,
         &mut next_height,
     );
-
     let request = Request::builder()
         .method("GET")
         .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
@@ -3151,20 +2928,16 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
         .expect("collect body")
         .to_bytes();
     let body_text = String::from_utf8_lossy(&body_bytes);
-
     assert_eq!(status, StatusCode::OK, "body={body_text}");
-
     let cache_control = headers
         .get(CACHE_CONTROL)
         .and_then(|value| value.to_str().ok());
     let expected_cache = format!("max-age={positive_ttl}, stale-while-revalidate={refresh_window}");
     assert_eq!(cache_control, Some(expected_cache.as_str()));
-
     let proof_status = headers
         .get("sora-proof-status")
         .and_then(|value| value.to_str().ok());
     assert_eq!(proof_status, Some("refresh"));
-
     let warning = headers
         .get(WARNING)
         .and_then(|value| value.to_str().ok())
@@ -3173,7 +2946,6 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
         warning.contains("alias proof refresh in-flight"),
         "refresh-window responses must emit refresh warning (got {warning})"
     );
-
     let age = headers
         .get(AGE)
         .and_then(|value| value.to_str().ok())
@@ -3188,12 +2960,10 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
         age <= refresh_age.saturating_add(5),
         "age should remain below positive TTL ({age} vs {refresh_age})"
     );
-
     let alias_label = headers
         .get("sora-name")
         .and_then(|value| value.to_str().ok());
     assert_eq!(alias_label, Some("docs-refresh/sora"));
-
     let body: json::Value = json::from_slice(&body_bytes).expect("parse response body");
     let aliases = body
         .get("aliases")
@@ -3211,7 +2981,6 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
         Some(refresh_window)
     );
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
@@ -3230,17 +2999,14 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     let storage_dir = tempdir().expect("storage dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
-
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
     let setup = create_manifest_setup(&harness, &mut next_height);
-
     let positive_ttl = harness.alias_policy.positive_ttl_secs();
     let refresh_window = harness.alias_policy.refresh_window_secs();
     let now = unix_now_secs();
     let generated_at = now.saturating_sub(positive_ttl + 45);
     let expires_at = now + 300;
-
     bind_alias_with_proof(
         &harness,
         &setup,
@@ -3252,7 +3018,6 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
         setup.retention_epoch,
         &mut next_height,
     );
-
     let list_request = Request::builder()
         .method("GET")
         .uri("/v1/sorafs/pin")
@@ -3271,7 +3036,6 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
         .expect("collect list body")
         .to_bytes();
     println!("LIST BODY {}", String::from_utf8_lossy(&list_body));
-
     let request = Request::builder()
         .method("GET")
         .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
@@ -3291,14 +3055,11 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
         .expect("collect body")
         .to_bytes();
     let body_text = String::from_utf8_lossy(&body_bytes);
-
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body={body_text}");
-
     let proof_status = headers
         .get("sora-proof-status")
         .and_then(|value| value.to_str().ok());
     assert_eq!(proof_status, Some("expired"));
-
     let age = headers
         .get(AGE)
         .and_then(|value| value.to_str().ok())
@@ -3308,13 +3069,11 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
         age >= positive_ttl,
         "age header should reflect stale proof (age={age}, ttl={positive_ttl})"
     );
-
     let retry_after_expected = refresh_window.to_string();
     let retry_after = headers
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok());
     assert_eq!(retry_after, Some(retry_after_expected.as_str()));
-
     let warning = headers
         .get(WARNING)
         .and_then(|value| value.to_str().ok())
@@ -3323,12 +3082,10 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
         warning.contains("alias proof stale"),
         "warning header should mention stale proof: {warning}"
     );
-
     let cache_control = headers
         .get(CACHE_CONTROL)
         .and_then(|value| value.to_str().ok());
     assert_eq!(cache_control, Some("no-store"));
-
     let body: json::Value = json::from_slice(&body_bytes).expect("parse response body");
     assert_eq!(
         body.get("cache_state").and_then(json::Value::as_str),
@@ -3346,7 +3103,6 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
         "stale response should report remaining expiry window"
     );
 }
-
 #[tokio::test]
 async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
     if !ingest_tests_enabled() {
@@ -3364,16 +3120,13 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     let storage_dir = tempdir().expect("storage dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
-
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
     let setup = create_manifest_setup(&harness, &mut next_height);
-
     let hard_expiry = harness.alias_policy.hard_expiry_secs();
     let now = unix_now_secs();
     let generated_at = now.saturating_sub(hard_expiry + 90);
     let expires_at = now.saturating_sub(30);
-
     bind_alias_with_proof(
         &harness,
         &setup,
@@ -3385,7 +3138,6 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
         setup.retention_epoch,
         &mut next_height,
     );
-
     let request = Request::builder()
         .method("GET")
         .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
@@ -3405,18 +3157,15 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
         .expect("collect body")
         .to_bytes();
     let body_text = String::from_utf8_lossy(&body_bytes);
-
     assert_eq!(status, StatusCode::PRECONDITION_FAILED, "body={body_text}");
     assert!(
         headers.get(RETRY_AFTER).is_none(),
         "hard-expired responses must not include Retry-After"
     );
-
     let proof_status = headers
         .get("sora-proof-status")
         .and_then(|value| value.to_str().ok());
     assert_eq!(proof_status, Some("hard-expired"));
-
     let age = headers
         .get(AGE)
         .and_then(|value| value.to_str().ok())
@@ -3426,7 +3175,6 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
         age >= hard_expiry,
         "age header should reflect hard-expired proof (age={age}, hard_expiry={hard_expiry})"
     );
-
     let warning = headers
         .get(WARNING)
         .and_then(|value| value.to_str().ok())
@@ -3435,12 +3183,10 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
         warning.contains("alias proof expired"),
         "warning header should mention expired proof: {warning}"
     );
-
     let cache_control = headers
         .get(CACHE_CONTROL)
         .and_then(|value| value.to_str().ok());
     assert_eq!(cache_control, Some("no-store"));
-
     let body: json::Value = json::from_slice(&body_bytes).expect("parse response body");
     assert_eq!(
         body.get("cache_state").and_then(json::Value::as_str),
@@ -3455,7 +3201,6 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
         "expired response must not contain remaining expiry interval"
     );
 }
-
 #[tokio::test]
 async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
     if !ingest_tests_enabled() {
@@ -3475,11 +3220,9 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
-
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
     let setup = create_manifest_setup(&harness, &mut next_height);
-
     let now = unix_now_secs();
     bind_alias_with_proof(
         &harness,
@@ -3493,7 +3236,6 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
         &mut next_height,
     );
     next_height += 1;
-
     let alias_label = "docs-revoked/gamma";
     attach_governance_revocation(
         &harness,
@@ -3502,7 +3244,6 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
         now.saturating_sub(5),
         &mut next_height,
     );
-
     let request = Request::builder()
         .method("GET")
         .uri(format!("/v1/sorafs/pin/{}", setup.manifest_digest_hex))
@@ -3522,9 +3263,7 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
         .expect("collect body")
         .to_bytes();
     let body_text = String::from_utf8_lossy(&body_bytes);
-
     assert_eq!(status, StatusCode::GONE, "body={body_text}");
-
     let revocation_ttl = harness.alias_policy.revocation_ttl.as_secs();
     let expected_cache = format!("max-age={revocation_ttl}");
     assert_eq!(
@@ -3544,7 +3283,6 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
         .get("sora-proof-status")
         .and_then(|value| value.to_str().ok());
     assert_eq!(proof_status, Some("governance-refused"));
-
     let body: json::Value = json::from_slice(&body_bytes).expect("parse response body");
     assert_eq!(
         body.get("cache_state").and_then(json::Value::as_str),
@@ -3555,7 +3293,6 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
         Some("alias proof revoked by governance")
     );
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn sorafs_alias_listing_reports_successor_refusal() {
@@ -3576,15 +3313,12 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
-
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
-
     let base = create_manifest_setup(&harness, &mut next_height);
     let successor_timestamp = unix_now_secs().saturating_sub(30);
     let successor =
         create_successor_manifest(&harness, &base, &mut next_height, 0xBC, successor_timestamp);
-
     let now = unix_now_secs();
     bind_alias_with_proof(
         &harness,
@@ -3597,7 +3331,6 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
         base.retention_epoch,
         &mut next_height,
     );
-
     let list_request = Request::builder()
         .method("GET")
         .uri("/v1/sorafs/pin")
@@ -3634,12 +3367,10 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
     let alias_entry = find_alias_entry(manifests, "docs-successor", "alpha").unwrap_or_else(|| {
         panic!("docs-successor/alpha alias present; aliases={alias_inventory:?}")
     });
-
     assert!(
         alias_entry.get("cache_decision").is_none(),
         "alias listing no longer surfaces cache_decision",
     );
-
     let lineage = alias_entry
         .get("lineage")
         .and_then(json::Value::as_object)
@@ -3690,7 +3421,6 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
         Some(expected_successor_iso.as_str())
     );
 }
-
 async fn fetch_alias_entry(harness: &ToriiHarness, alias_label: &str) -> json::Value {
     let list_request = Request::builder()
         .method("GET")
@@ -3718,7 +3448,6 @@ async fn fetch_alias_entry(harness: &ToriiHarness, alias_label: &str) -> json::V
         .expect("alias entry present")
         .clone()
 }
-
 #[tokio::test]
 async fn sorafs_alias_listing_reports_governance_revocation() {
     if !ingest_tests_enabled() {
@@ -3738,10 +3467,8 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
-
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
-
     let manifest = create_manifest_setup_with_seed(&harness, &mut next_height, 0xC1, None, None);
     let now = unix_now_secs();
     bind_alias_with_proof(
@@ -3756,7 +3483,6 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
         &mut next_height,
     );
     next_height += 1;
-
     let alias_label = "docs-governance/beta";
     let effective_at = now.saturating_sub(5);
     attach_governance_revocation(
@@ -3766,14 +3492,11 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
         effective_at,
         &mut next_height,
     );
-
     let alias_entry = fetch_alias_entry(&harness, alias_label).await;
-
     assert!(
         alias_entry.get("cache_decision").is_none(),
         "alias list no longer reports cache_decision",
     );
-
     let metadata = alias_entry
         .get("metadata")
         .and_then(json::Value::as_object)
@@ -3808,6 +3531,5 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
         Some(effective_at)
     );
 }
-
 include!("sorafs_discovery/storage_path_fixture.rs");
 include!("sorafs_discovery/fixture_key_mismatch_test.rs");

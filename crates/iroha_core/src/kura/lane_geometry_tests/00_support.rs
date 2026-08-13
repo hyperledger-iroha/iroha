@@ -7,7 +7,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
 use iroha_config::{
     base::WithOrigin,
     kura::{FsyncMode, InitMode},
@@ -51,7 +50,6 @@ use iroha_data_model::{
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use nonzero_ext::nonzero;
 use tempfile::TempDir as RawTempDir;
-
 use super::*;
 use crate::{
     block::BlockBuilder,
@@ -65,11 +63,9 @@ use crate::{
     },
     tx::AcceptedTransaction,
 };
-
 // Keep the authenticated archive payload comfortably larger than the checkpoint sidecar.
 // This makes the net disk-reclamation assertion independent of small encoding-size changes.
 const GC_PAYLOAD_LEN: usize = 16 * 1024;
-
 fn test_network_id(label: &[u8]) -> iroha_data_model::NetworkId {
     iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
         iroha_crypto::Hash::new(label),

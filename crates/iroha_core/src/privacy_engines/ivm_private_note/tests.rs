@@ -1,5 +1,4 @@
 use std::str::FromStr as _;
-
 use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
@@ -13,7 +12,6 @@ use iroha_data_model::{
     },
 };
 use rand_08::{SeedableRng as _, rngs::StdRng};
-
 use super::{
     PRIVATE_PROGRAM_BYTES_V1, PrivateInstructionV1, PrivateNotePlaintextV1, PrivateOpcodeV1,
     PrivateProgramV1,
@@ -27,18 +25,15 @@ use super::{
         validate_private_note_relation_v1,
     },
 };
-
 fn bytes(seed: u8) -> [u8; 32] {
     [seed; 32]
 }
-
 fn asset() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal").expect("test domain"),
         iroha_data_model::name::Name::from_str("ivmnote").expect("test asset"),
     )
 }
-
 fn context() -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
         network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -55,7 +50,6 @@ fn context() -> PrivacyStatementContextV1 {
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(bytes(0x36)),
     }
 }
-
 fn conservation_program() -> PrivateProgramV1 {
     let mut instructions = [PrivateInstructionV1::HALT; 16];
     instructions[0] = PrivateInstructionV1 {
@@ -81,14 +75,12 @@ fn conservation_program() -> PrivateProgramV1 {
     };
     PrivateProgramV1 { instructions }
 }
-
 #[derive(Clone)]
 pub(super) struct Fixture {
     pub(super) statement: IrohaIvmPrivateNoteStarkStatementV1,
     pub(super) witness: IvmPrivateNoteWitnessV1,
     pub(super) input_commitment: PrivacyCommitmentV1,
 }
-
 pub(super) fn fixture() -> Fixture {
     let program = conservation_program();
     let program_id = derive_private_program_id_v1(&program).expect("program id");
@@ -182,14 +174,12 @@ pub(super) fn fixture() -> Fixture {
         input_commitment,
     }
 }
-
 fn redigest(statement: &mut IrohaIvmPrivateNoteStarkStatementV1) {
     statement.action_digest = PrivacyActionDigestV1::new([0; 32]);
     statement.action_digest = statement
         .computed_action_digest()
         .expect("canonical action digest");
 }
-
 fn rebind_program(value: &mut Fixture, program: PrivateProgramV1) {
     value.witness.program = program;
     value.statement.program_id =
@@ -220,7 +210,6 @@ fn rebind_program(value: &mut Fixture, program: PrivateProgramV1) {
     value.statement.state_root = PrivacyRootV1::new(root);
     redigest(&mut value.statement);
 }
-
 #[test]
 fn canonical_relation_accepts_and_derives_only_statement_effects() {
     let value = fixture();
@@ -233,7 +222,6 @@ fn canonical_relation_accepts_and_derives_only_statement_effects() {
     assert_eq!(relation.final_registers[4], 0);
     assert_eq!(relation.invocations.len(), 38);
 }
-
 #[test]
 fn program_authority_commitment_and_stable_nullifier_kats_are_pinned() {
     let value = fixture();
@@ -271,7 +259,6 @@ fn program_authority_commitment_and_stable_nullifier_kats_are_pinned() {
         ]
     );
 }
-
 #[test]
 fn nullifier_is_stable_across_every_replay_context() {
     let value = fixture();
@@ -283,7 +270,6 @@ fn nullifier_is_stable_across_every_replay_context() {
         value.input_commitment,
     )
     .expect("canonical nullifier");
-
     let mut replay = value.statement.clone();
     replay.context.network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
@@ -307,7 +293,6 @@ fn nullifier_is_stable_across_every_replay_context() {
     redigest(&mut replay);
     validate_private_note_relation_v1(&replay, &value.witness)
         .expect("the replay relation retains the same ledger-visible nullifier");
-
     let different_position = input.leaf_position ^ u32::MAX;
     assert_ne!(different_position, input.leaf_position);
     let position_independent = derive_note_nullifier_v1(
@@ -318,7 +303,6 @@ fn nullifier_is_stable_across_every_replay_context() {
     )
     .expect("position-independent nullifier");
     assert_eq!(canonical, position_independent);
-
     let mut other_pool = value.statement.clone();
     other_pool.pool_id = PrivacyPoolIdV1::new(bytes(0xa2));
     assert_ne!(
@@ -332,7 +316,6 @@ fn nullifier_is_stable_across_every_replay_context() {
         .expect("pool-separated nullifier")
     );
 }
-
 #[test]
 fn program_codec_rejects_every_noncanonical_shape() {
     let program = conservation_program();
@@ -382,46 +365,39 @@ fn program_codec_rejects_every_noncanonical_shape() {
         Err(IvmPrivateNoteRelationErrorV1::NonCanonicalProgram)
     );
 }
-
 #[test]
 fn relation_rejects_witness_and_membership_mutations() {
     let canonical = fixture();
-
     let mut changed = canonical.clone();
     changed.witness.inputs[0].spending_secret[0] ^= 1;
     assert_eq!(
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::SpendingAuthorityMismatch)
     );
-
     let mut changed = canonical.clone();
     changed.witness.inputs[0].note.rho[0] ^= 1;
     assert_eq!(
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::NullifierMismatch)
     );
-
     let mut changed = canonical.clone();
     changed.witness.inputs[0].authentication_path[17][9] ^= 1;
     assert_eq!(
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::Membership)
     );
-
     let mut changed = canonical.clone();
     changed.witness.inputs[0].leaf_position ^= 1;
     assert_eq!(
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::Membership)
     );
-
     let mut changed = canonical.clone();
     changed.witness.outputs[0].note.memo_digest[0] ^= 1;
     assert_eq!(
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::CommitmentMismatch)
     );
-
     let mut changed = canonical.clone();
     changed.witness.inputs[0].authentication_path[0] = [0; 32];
     assert_eq!(
@@ -429,11 +405,9 @@ fn relation_rejects_witness_and_membership_mutations() {
         Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent)
     );
 }
-
 #[test]
 fn relation_rejects_public_replays_and_value_attacks() {
     let canonical = fixture();
-
     let mut changed = canonical.clone();
     changed.statement.context.transaction_intent_digest =
         PrivacyTransactionIntentDigestV1::new(bytes(0xb1));
@@ -441,7 +415,6 @@ fn relation_rejects_public_replays_and_value_attacks() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::InvalidStatement)
     );
-
     let mut changed = canonical.clone();
     changed.statement.context.parameter_digest = PrivacyParameterDigestV1::new([0; 32]);
     redigest(&mut changed.statement);
@@ -449,7 +422,6 @@ fn relation_rejects_public_replays_and_value_attacks() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::InvalidStatement)
     );
-
     let mut changed = canonical.clone();
     changed.statement.nullifiers[0] = PrivacyNullifierV1::new(bytes(0xb2));
     redigest(&mut changed.statement);
@@ -457,7 +429,6 @@ fn relation_rejects_public_replays_and_value_attacks() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::NullifierMismatch)
     );
-
     let mut changed = canonical.clone();
     changed.statement.state_root = PrivacyRootV1::new(bytes(0xb3));
     redigest(&mut changed.statement);
@@ -465,7 +436,6 @@ fn relation_rejects_public_replays_and_value_attacks() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::Membership)
     );
-
     let mut changed = canonical.clone();
     changed.statement.execution_epoch += 1;
     redigest(&mut changed.statement);
@@ -473,7 +443,6 @@ fn relation_rejects_public_replays_and_value_attacks() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::InvalidStatement)
     );
-
     let mut changed = canonical.clone();
     changed.witness.outputs[0].note.value -= 1;
     changed.statement.output_commitments[0] =
@@ -484,7 +453,6 @@ fn relation_rejects_public_replays_and_value_attacks() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::ValueConservation)
     );
-
     let mut changed = canonical.clone();
     changed.statement.value_balance = PrivacyValueBalanceV1 {
         direction: PrivacyValueBalanceDirectionV1::IntoPool,
@@ -495,7 +463,6 @@ fn relation_rejects_public_replays_and_value_attacks() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::ValueOverflow)
     );
-
     let mut changed = canonical.clone();
     changed.statement.encrypted_outputs[0].ciphertext.clear();
     redigest(&mut changed.statement);
@@ -503,7 +470,6 @@ fn relation_rejects_public_replays_and_value_attacks() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::InvalidStatement)
     );
-
     let mut changed = canonical.clone();
     changed.witness.inputs.clear();
     assert_eq!(
@@ -511,11 +477,9 @@ fn relation_rejects_public_replays_and_value_attacks() {
         Err(IvmPrivateNoteRelationErrorV1::WitnessShape)
     );
 }
-
 #[test]
 fn relation_rejects_noncanonical_ciphertext_and_binds_canonical_bytes() {
     let canonical = fixture();
-
     let mut malformed = canonical.clone();
     malformed.statement.encrypted_outputs[0].ciphertext = vec![0xde, 0xad, 0xbe, 0xef];
     redigest(&mut malformed.statement);
@@ -523,7 +487,6 @@ fn relation_rejects_noncanonical_ciphertext_and_binds_canonical_bytes() {
         validate_private_note_relation_v1(&malformed.statement, &malformed.witness),
         Err(IvmPrivateNoteRelationErrorV1::InvalidStatement)
     );
-
     let mut changed = canonical.clone();
     let last = changed.statement.encrypted_outputs[0].ciphertext.len() - 1;
     changed.statement.encrypted_outputs[0].ciphertext[last] ^= 1;
@@ -531,7 +494,6 @@ fn relation_rejects_noncanonical_ciphertext_and_binds_canonical_bytes() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::InvalidStatement)
     );
-
     // The relation binds the exact canonical ciphertext through the action
     // digest. Recipient-local AEAD authentication, tested by the wallet codec,
     // deliberately remains outside the arithmetic relation.
@@ -539,11 +501,9 @@ fn relation_rejects_noncanonical_ciphertext_and_binds_canonical_bytes() {
     validate_private_note_relation_v1(&changed.statement, &changed.witness)
         .expect("redigested canonical ciphertext is relation-bound");
 }
-
 #[test]
 fn deterministic_vm_rejects_arithmetic_assertion_and_program_attacks() {
     let canonical = fixture();
-
     let mut changed = canonical.clone();
     changed.witness.program = PrivateProgramV1 {
         instructions: [PrivateInstructionV1::HALT; 16],
@@ -552,7 +512,6 @@ fn deterministic_vm_rejects_arithmetic_assertion_and_program_attacks() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::ProgramIdMismatch)
     );
-
     let mut underflow = [PrivateInstructionV1::HALT; 16];
     underflow[0] = PrivateInstructionV1 {
         opcode: PrivateOpcodeV1::SubChecked,
@@ -572,7 +531,6 @@ fn deterministic_vm_rejects_arithmetic_assertion_and_program_attacks() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::ProgramArithmetic)
     );
-
     let mut assertion = [PrivateInstructionV1::HALT; 16];
     assertion[0] = PrivateInstructionV1 {
         opcode: PrivateOpcodeV1::AssertLessOrEqual,
@@ -592,7 +550,6 @@ fn deterministic_vm_rejects_arithmetic_assertion_and_program_attacks() {
         validate_private_note_relation_v1(&changed.statement, &changed.witness),
         Err(IvmPrivateNoteRelationErrorV1::ProgramAssertion)
     );
-
     let mut no_halt = [PrivateInstructionV1::HALT; 16];
     no_halt.fill(PrivateInstructionV1 {
         opcode: PrivateOpcodeV1::MoveImmediate,
@@ -610,11 +567,9 @@ fn deterministic_vm_rejects_arithmetic_assertion_and_program_attacks() {
         Err(IvmPrivateNoteRelationErrorV1::ProgramDoesNotHalt)
     );
 }
-
 #[test]
 fn relation_rejects_duplicate_and_reused_note_material() {
     let canonical = fixture();
-
     let mut duplicate = canonical.clone();
     let mut second = duplicate.witness.inputs[0].clone();
     second.note.rho[0] ^= 1;
@@ -634,7 +589,6 @@ fn relation_rejects_duplicate_and_reused_note_material() {
         validate_private_note_relation_v1(&duplicate.statement, &duplicate.witness),
         Err(IvmPrivateNoteRelationErrorV1::Duplicate)
     );
-
     let mut reused = canonical;
     reused.witness.outputs[0].note = reused.witness.inputs[0].note.clone();
     reused.statement.output_commitments[0] = reused.input_commitment;

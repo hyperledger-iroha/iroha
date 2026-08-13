@@ -8,20 +8,16 @@
 //!   high-RTT outliers.
 //! - Aggregates offsets via trimmed median; exposes `now()` for Torii and
 //!   timers.
-
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{OnceLock, RwLock},
     time::Instant,
 };
-
 use iroha_config::parameters::actual::NtsEnforcementMode;
 use iroha_data_model::peer::Peer;
 use norito::codec::{Decode, Encode};
 use tokio::sync::watch;
-
 use crate::IrohaNetwork;
-
 /// Outbound time probe message (peer → peer).
 #[derive(Clone, Copy, Debug, Encode, Decode)]
 pub struct TimePing {
@@ -30,7 +26,6 @@ pub struct TimePing {
     /// Local send timestamp (ms since UNIX epoch).
     pub t1_ms: u64,
 }
-
 /// Inbound time probe response (peer → peer).
 #[derive(Clone, Copy, Debug, Encode, Decode)]
 pub struct TimePong {
@@ -41,7 +36,6 @@ pub struct TimePong {
     /// Receiver timestamp at response send.
     pub t3_ms: u64,
 }
-
 /// Snapshot of the current network time estimation.
 #[derive(Clone, Copy, Debug)]
 pub struct NetworkTimeStatus {
@@ -60,7 +54,6 @@ pub struct NetworkTimeStatus {
     /// Health evaluation flags for the current status snapshot.
     pub health: NtsHealth,
 }
-
 /// Health evaluation flags for the current NTS snapshot.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug)]
@@ -74,7 +67,6 @@ pub struct NtsHealth {
     /// Overall health status (true only when all checks pass and no fallback).
     pub healthy: bool,
 }
-
 /// Health policy thresholds for evaluating NTS snapshots.
 #[derive(Debug, Clone, Copy)]
 pub struct NtsHealthPolicy {
@@ -85,7 +77,6 @@ pub struct NtsHealthPolicy {
     /// Maximum confidence (MAD) in ms permitted before NTS is considered unhealthy (0 disables).
     pub max_confidence_ms: u64,
 }
-
 impl NtsHealthPolicy {
     fn evaluate(
         self,
@@ -106,7 +97,6 @@ impl NtsHealthPolicy {
         }
     }
 }
-
 impl Default for NtsHealthPolicy {
     fn default() -> Self {
         Self {
@@ -116,20 +106,17 @@ impl Default for NtsHealthPolicy {
         }
     }
 }
-
 #[derive(Clone, Copy)]
 struct Sample {
     offset_ms: i64,
     rtt_ms: u64,
     expires_at: Instant,
 }
-
 #[derive(Clone, Copy)]
 struct OutstandingProbe {
     t1_ms: u64,
     expires_at: Instant,
 }
-
 /// Runtime parameters for the Network Time Service.
 #[derive(Debug, Clone, Copy)]
 pub struct Params {
@@ -154,7 +141,6 @@ pub struct Params {
     /// Enforcement mode for unhealthy NTS during admission.
     pub enforcement_mode: NtsEnforcementMode,
 }
-
 impl Default for Params {
     fn default() -> Self {
         Self {
@@ -171,7 +157,6 @@ impl Default for Params {
         }
     }
 }
-
 impl From<&iroha_config::parameters::actual::Nts> for Params {
     fn from(x: &iroha_config::parameters::actual::Nts) -> Self {
         Self {
@@ -192,7 +177,6 @@ impl From<&iroha_config::parameters::actual::Nts> for Params {
         }
     }
 }
-
 struct Service {
     outstanding: BTreeMap<(iroha_data_model::peer::PeerId, u64), OutstandingProbe>,
     per_peer: BTreeMap<iroha_data_model::peer::PeerId, VecDeque<Sample>>, // ring buffer
@@ -208,7 +192,6 @@ struct Service {
     rtt_ms_sum: u64,
     rtt_ms_count: u64,
 }
-
 impl Service {
     fn new(params: Params) -> Self {
         Self {
@@ -225,11 +208,9 @@ impl Service {
             rtt_ms_count: 0,
         }
     }
-
     fn probe_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.params.max_rtt_ms)
     }
-
     fn sample_freshness_window(&self) -> std::time::Duration {
         let retained_rounds = u32::try_from(self.params.per_peer_buffer.max(1)).unwrap_or(u32::MAX);
         self.params
@@ -237,20 +218,16 @@ impl Service {
             .saturating_mul(retained_rounds)
             .saturating_add(self.probe_timeout())
     }
-
     fn deadline_after(now: Instant, duration: std::time::Duration) -> Instant {
         // An unrepresentable deadline must not turn into unbounded state retention.
         now.checked_add(duration).unwrap_or(now)
     }
-
     fn probe_deadline(&self, sent_at: Instant) -> Instant {
         Self::deadline_after(sent_at, self.probe_timeout())
     }
-
     fn sample_deadline(&self, received_at: Instant) -> Instant {
         Self::deadline_after(received_at, self.sample_freshness_window())
     }
-
     fn prune_expired(&mut self, now: Instant) {
         self.outstanding.retain(|_, probe| probe.expires_at > now);
         self.per_peer.retain(|_, samples| {
@@ -258,7 +235,6 @@ impl Service {
             !samples.is_empty()
         });
     }
-
     fn take_live_probe(
         &mut self,
         peer: &iroha_data_model::peer::PeerId,
@@ -268,7 +244,6 @@ impl Service {
         self.prune_expired(received_at);
         self.outstanding.remove(&(peer.clone(), id))
     }
-
     fn debug_snapshot(&mut self, now: Instant) -> Vec<(String, i64, u64, usize)> {
         self.prune_expired(now);
         self.per_peer
@@ -280,7 +255,6 @@ impl Service {
             })
             .collect()
     }
-
     fn record_sample(&mut self, peer: iroha_data_model::peer::PeerId, sample: Sample) {
         let cap = self.params.per_peer_buffer.max(1);
         let samples = self.per_peer.entry(peer).or_insert_with(VecDeque::new);
@@ -290,7 +264,6 @@ impl Service {
         samples.push_back(sample);
     }
 }
-
 fn initialize_service_once<'a>(
     cell: &'a OnceLock<tokio::sync::Mutex<Service>>,
     params: Params,
@@ -302,7 +275,6 @@ fn initialize_service_once<'a>(
     });
     (service, initialized_here)
 }
-
 fn sampler_interval(period: std::time::Duration) -> tokio::time::Interval {
     let mut ticker = tokio::time::interval(period);
     // Replaying missed rounds creates a burst of probes whose cardinality is
@@ -310,16 +282,13 @@ fn sampler_interval(period: std::time::Duration) -> tokio::time::Interval {
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     ticker
 }
-
 static SERVICE: OnceLock<tokio::sync::Mutex<Service>> = OnceLock::new();
 static PARAMS_SNAPSHOT: OnceLock<RwLock<ParamsSnapshot>> = OnceLock::new();
-
 #[derive(Clone, Copy, Debug)]
 struct ParamsSnapshot {
     enforcement_mode: NtsEnforcementMode,
     health_policy: NtsHealthPolicy,
 }
-
 fn params_snapshot_store() -> &'static RwLock<ParamsSnapshot> {
     PARAMS_SNAPSHOT.get_or_init(|| {
         RwLock::new(ParamsSnapshot {
@@ -328,13 +297,11 @@ fn params_snapshot_store() -> &'static RwLock<ParamsSnapshot> {
         })
     })
 }
-
 fn params_snapshot() -> ParamsSnapshot {
     params_snapshot_store()
         .read()
         .map_or_else(|err| *err.into_inner(), |guard| *guard)
 }
-
 /// Configure the NTS admission policy snapshot used before the service starts.
 pub fn configure(params: Params) {
     let snapshot = ParamsSnapshot {
@@ -345,7 +312,6 @@ pub fn configure(params: Params) {
         *guard = snapshot;
     }
 }
-
 fn lock_service(mutex: &tokio::sync::Mutex<Service>) -> tokio::sync::MutexGuard<'_, Service> {
     if tokio::runtime::Handle::try_current().is_ok() {
         tokio::task::block_in_place(|| mutex.blocking_lock())
@@ -353,7 +319,6 @@ fn lock_service(mutex: &tokio::sync::Mutex<Service>) -> tokio::sync::MutexGuard<
         mutex.blocking_lock()
     }
 }
-
 fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -363,11 +328,9 @@ fn now_ms() -> u64 {
         .try_into()
         .unwrap_or(0)
 }
-
 fn clone_bounded<'a, T: Clone + 'a>(values: impl Iterator<Item = &'a T>, limit: usize) -> Vec<T> {
     values.take(limit).cloned().collect()
 }
-
 /// Start the NTS background sampler with explicit parameters. Idempotent.
 pub fn start_with_params(
     network: IrohaNetwork,
@@ -426,12 +389,10 @@ pub fn start_with_params(
         }
     });
 }
-
 /// Start the NTS background sampler with default parameters. Idempotent.
 pub fn start(network: IrohaNetwork, peers_rx: watch::Receiver<BTreeSet<Peer>>) {
     start_with_params(network, peers_rx, Params::default())
 }
-
 /// Handle incoming time messages from the network relay.
 pub async fn handle_message(peer: Peer, msg: crate::NetworkMessage, network: &IrohaNetwork) {
     match msg {
@@ -487,7 +448,6 @@ pub async fn handle_message(peer: Peer, msg: crate::NetworkMessage, network: &Ir
         _ => {}
     }
 }
-
 /// Compute current network time status using trimmed median.
 /// Compute current network time status using a trimmed-median aggregator over
 /// per-peer NTP-style samples. Falls back to local time if no samples exist.
@@ -585,7 +545,6 @@ pub fn now() -> NetworkTimeStatus {
             .evaluate(sample_count, offset, mad, fallback),
     }
 }
-
 /// Compute a trimmed median and MAD (median absolute deviation) from a list of offsets.
 /// Mutates the input vector by sorting it.
 fn trimmed_median_and_mad(offsets: &mut [i64], trim_percent: u8) -> (i64, u64) {
@@ -604,7 +563,6 @@ fn trimmed_median_and_mad(offsets: &mut [i64], trim_percent: u8) -> (i64, u64) {
     let mad = devs[devs.len() / 2];
     (median, mad)
 }
-
 /// Debug snapshot of per-peer samples for diagnostics endpoints.
 pub fn debug_snapshot() -> Vec<(String, i64, u64, usize)> {
     let svc_opt = SERVICE.get();
@@ -614,7 +572,6 @@ pub fn debug_snapshot() -> Vec<(String, i64, u64, usize)> {
     let mut svc = lock_service(svc_opt.unwrap());
     svc.debug_snapshot(Instant::now())
 }
-
 /// RTT histogram helpers for telemetry (bucket bounds in ms).
 pub fn rtt_bucket_bounds_ms() -> &'static [u64] {
     if let Some(lock) = SERVICE.get() {
@@ -623,7 +580,6 @@ pub fn rtt_bucket_bounds_ms() -> &'static [u64] {
     }
     &[]
 }
-
 /// RTT histogram counts per bucket.
 pub fn rtt_bucket_counts() -> Vec<u64> {
     if let Some(lock) = SERVICE.get() {
@@ -632,7 +588,6 @@ pub fn rtt_bucket_counts() -> Vec<u64> {
     }
     Vec::new()
 }
-
 /// RTT histogram sum of observed RTTs in ms.
 pub fn rtt_ms_sum() -> u64 {
     if let Some(lock) = SERVICE.get() {
@@ -641,7 +596,6 @@ pub fn rtt_ms_sum() -> u64 {
     }
     0
 }
-
 /// RTT histogram count of observations.
 pub fn rtt_ms_count() -> u64 {
     if let Some(lock) = SERVICE.get() {
@@ -650,7 +604,6 @@ pub fn rtt_ms_count() -> u64 {
     }
     0
 }
-
 /// Current NTS enforcement mode for time-sensitive admission.
 pub fn enforcement_mode() -> NtsEnforcementMode {
     if let Some(lock) = SERVICE.get() {
@@ -659,24 +612,19 @@ pub fn enforcement_mode() -> NtsEnforcementMode {
     }
     params_snapshot().enforcement_mode
 }
-
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, rc::Rc};
-
     use super::*;
-
     fn service_for_tests(params: Params) -> Service {
         Service::new(params)
     }
-
     #[test]
     fn peer_snapshot_clones_only_the_round_cap() {
         #[derive(Debug)]
         struct CloneCounter {
             clones: Rc<Cell<usize>>,
         }
-
         impl Clone for CloneCounter {
             fn clone(&self) -> Self {
                 self.clones.set(self.clones.get() + 1);
@@ -685,27 +633,22 @@ mod tests {
                 }
             }
         }
-
         let clones = Rc::new(Cell::new(0));
         let peers = (0..128)
             .map(|_| CloneCounter {
                 clones: Rc::clone(&clones),
             })
             .collect::<Vec<_>>();
-
         let snapshot = clone_bounded(peers.iter(), 3);
-
         assert_eq!(snapshot.len(), 3);
         assert_eq!(clones.get(), 3, "uncapped peer snapshots amplify memory");
     }
-
     fn test_peer_id() -> iroha_data_model::peer::PeerId {
         let key_pair =
             iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
                 .expect("generate test peer key");
         iroha_data_model::peer::PeerId::new(key_pair.public_key().clone())
     }
-
     fn insert_sample(
         svc: &mut Service,
         peer: iroha_data_model::peer::PeerId,
@@ -721,18 +664,15 @@ mod tests {
             },
         );
     }
-
     #[test]
     fn service_initialization_assigns_one_sampler_owner() {
         let cell = OnceLock::new();
         let (first, first_owns_sampler) = initialize_service_once(&cell, Params::default());
         let (second, second_owns_sampler) = initialize_service_once(&cell, Params::default());
-
         assert!(first_owns_sampler);
         assert!(!second_owns_sampler);
         assert!(std::ptr::eq(first, second));
     }
-
     #[tokio::test]
     async fn sampler_interval_skips_missed_rounds() {
         let ticker = sampler_interval(std::time::Duration::from_millis(10));
@@ -742,7 +682,6 @@ mod tests {
         );
         tokio::task::yield_now().await;
     }
-
     #[test]
     fn sample_ring_allocates_lazily_and_honors_its_limit() {
         let large_params = Params {
@@ -752,14 +691,12 @@ mod tests {
         let mut svc = service_for_tests(large_params);
         let peer = test_peer_id();
         let received_at = Instant::now();
-
         insert_sample(&mut svc, peer.clone(), received_at);
         let first_capacity = svc.per_peer[&peer].capacity();
         assert!(
             first_capacity < large_params.per_peer_buffer,
             "the first sample must not reserve the configured ring limit"
         );
-
         let params = Params {
             per_peer_buffer: 8,
             ..Params::default()
@@ -771,7 +708,6 @@ mod tests {
         }
         assert_eq!(svc.per_peer[&peer].len(), params.per_peer_buffer);
     }
-
     #[test]
     fn trimmed_median_and_mad_basics() {
         let mut v = vec![10, 12, 13, 1000, 11, 9, 8, 10, 12, -1000];
@@ -784,7 +720,6 @@ mod tests {
         // MAD should be small given tight cluster around ~11
         assert!(mad <= 2, "mad {mad} too large");
     }
-
     #[test]
     fn now_fallback_without_service() {
         // SERVICE is unset in this test process; ensure fallback path returns without panicking
@@ -797,7 +732,6 @@ mod tests {
         assert!(s.fallback);
         assert!(!s.health.healthy);
     }
-
     #[test]
     fn enforcement_mode_uses_configured_params_without_service() {
         configure(Params {
@@ -807,7 +741,6 @@ mod tests {
         assert_eq!(enforcement_mode(), NtsEnforcementMode::Reject);
         configure(Params::default());
     }
-
     #[test]
     fn unanswered_probes_are_bounded_by_the_rtt_deadline() {
         let params = Params {
@@ -825,7 +758,6 @@ mod tests {
                 .expect("test round count fits");
         let maximum_live_probes = params.sample_cap_per_round * active_rounds;
         let mut saw_overlapping_rounds = false;
-
         for round in 0_u32..128 {
             let now = start
                 .checked_add(params.sample_interval.saturating_mul(round))
@@ -854,7 +786,6 @@ mod tests {
             saw_overlapping_rounds,
             "the test must exercise several simultaneously live probe rounds"
         );
-
         let after_last_deadline = start
             .checked_add(
                 params
@@ -865,7 +796,6 @@ mod tests {
             .expect("test deadline fits");
         svc.prune_expired(after_last_deadline);
         assert!(svc.outstanding.is_empty());
-
         let peer = test_peer_id();
         svc.outstanding.insert(
             (peer.clone(), 999),
@@ -879,7 +809,6 @@ mod tests {
             "a pong received at or after the RTT deadline must be ignored"
         );
     }
-
     #[test]
     fn rotating_peer_samples_and_diagnostics_remain_bounded_by_ring_horizon() {
         let params = Params {
@@ -892,7 +821,6 @@ mod tests {
         let mut svc = service_for_tests(params);
         let start = Instant::now();
         let maximum_live_peers = params.sample_cap_per_round * (params.per_peer_buffer + 1);
-
         for round in 0_u32..128 {
             let now = start
                 .checked_add(params.sample_interval.saturating_mul(round))
@@ -908,7 +836,6 @@ mod tests {
                 "diagnostics must only clone samples in the configured retention horizon"
             );
         }
-
         let recent = start
             .checked_add(params.sample_interval.saturating_mul(128))
             .expect("test deadline fits");
@@ -923,7 +850,6 @@ mod tests {
             !svc.per_peer.is_empty(),
             "a sample remains usable beyond its RTT deadline for the ring horizon"
         );
-
         let after_horizon = recent
             .checked_add(svc.sample_freshness_window())
             .expect("test deadline fits");
@@ -931,7 +857,6 @@ mod tests {
         assert!(svc.per_peer.is_empty());
         assert!(svc.debug_snapshot(after_horizon).is_empty());
     }
-
     #[test]
     fn nts_health_policy_evaluates_thresholds() {
         let policy = NtsHealthPolicy {
@@ -944,19 +869,16 @@ mod tests {
         assert!(ok.offset_ok);
         assert!(ok.confidence_ok);
         assert!(ok.healthy);
-
         let offset_bad = policy.evaluate(2, 250, 20, false);
         assert!(offset_bad.min_samples_ok);
         assert!(!offset_bad.offset_ok);
         assert!(offset_bad.confidence_ok);
         assert!(!offset_bad.healthy);
-
         let samples_bad = policy.evaluate(1, 10, 20, false);
         assert!(!samples_bad.min_samples_ok);
         assert!(samples_bad.offset_ok);
         assert!(samples_bad.confidence_ok);
         assert!(!samples_bad.healthy);
-
         let fallback = policy.evaluate(2, 10, 20, true);
         assert!(!fallback.healthy);
     }

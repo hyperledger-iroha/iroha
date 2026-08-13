@@ -1,7 +1,5 @@
 //! Static guards for the uninhabited residual-commitment boundary.
-
 use super::*;
-
 #[test]
 fn coefficient_gate_oracle_has_the_frozen_two_residuals() {
     let aggregate = Scalar::from_u64(3);
@@ -23,7 +21,6 @@ fn coefficient_gate_oracle_has_the_frozen_two_residuals() {
         Scalar::zero()
     );
 }
-
 #[test]
 fn residual_commitment_fixture_points_are_exact_and_ordered() {
     let generator = Point::canonical_generator().expect("canonical generator");
@@ -47,7 +44,6 @@ fn residual_commitment_fixture_points_are_exact_and_ordered() {
         );
     }
 }
-
 #[test]
 #[rustfmt::skip]
 fn source_guards_freeze_ordered_points_and_the_uninhabited_production_seal() {

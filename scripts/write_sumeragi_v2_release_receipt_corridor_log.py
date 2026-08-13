@@ -60,6 +60,8 @@ _RECEIPT_VALIDATION_OPTION_ORDER = (
     "--sdk-dependency-archive",
     "--sdk-dependency-input-inventory",
     "--sdk-dependency-final-work-inventory",
+    "--runtime-tool-probe-manifest",
+    "--runtime-tool-probe-result",
     "--expected-scaling-trial-harness-sha256",
     "--expected-scaling-configuration-sha256",
     "--expected-scaling-irohad-sha256",
@@ -102,6 +104,8 @@ _RECEIPT_VALIDATION_PATH_OPTIONS = frozenset(
         "--sdk-dependency-archive",
         "--sdk-dependency-input-inventory",
         "--sdk-dependency-final-work-inventory",
+        "--runtime-tool-probe-manifest",
+        "--runtime-tool-probe-result",
         "--repository-root",
         "--output",
         "--validation-ack",
@@ -1164,6 +1168,13 @@ def _owned_unlink_name(
             pass
         else:
             raise ReceiptError("owned unlink replacement retained after quarantine")
+        os.unlink(quarantine, dir_fd=directory_fd)
+        try:
+            os.stat(quarantine, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ReceiptError("owned unlink quarantine retained after unlink")
         return True
     except FileNotFoundError:
         return False

@@ -1,9 +1,7 @@
 //! End-to-end multihash roundtrip tests for `MlDsa` / ML-DSA-65 keys.
-
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
 use pqcrypto_mldsa::mldsa65;
 use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
-
 #[test]
 fn mldsa_public_key_multihash_roundtrip() {
     let kp = KeyPair::try_from_seed(b"iroha:ml-dsa:multihash:pk".to_vec(), Algorithm::MlDsa)
@@ -32,7 +30,6 @@ fn mldsa_public_key_multihash_roundtrip() {
         parsed.try_to_bytes().expect("parsed public key bytes").1
     );
 }
-
 #[test]
 fn mldsa_private_key_multihash_roundtrip_exposed() {
     let kp = KeyPair::try_from_seed(b"iroha:ml-dsa:multihash:sk".to_vec(), Algorithm::MlDsa)

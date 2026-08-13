@@ -14,7 +14,6 @@ fn committed_transactions_indexed_snapshot(
     )
     .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
-
 #[cfg(feature = "app_api")]
 fn collect_committed_transaction_page<T>(
     state: &CoreState,
@@ -76,7 +75,6 @@ fn collect_committed_transaction_page<T>(
         has_more,
     })
 }
-
 #[cfg(feature = "app_api")]
 fn collect_sorted_committed_transaction_page<K: Ord, T>(
     state: &CoreState,
@@ -128,7 +126,6 @@ fn collect_sorted_committed_transaction_page<K: Ord, T>(
         },
     )
     .map_err(|error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error)))?;
-
     let mut entries = heap.into_vec();
     entries.sort_by(|left, right| match left.key.cmp(&right.key) {
         Ordering::Equal => left.seq.cmp(&right.seq),

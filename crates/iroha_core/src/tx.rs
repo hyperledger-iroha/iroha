@@ -10,7 +10,6 @@
 //!
 //! This is also where the actual execution of instructions, as well
 //! as various forms of validation are performed.
-
 use core::{fmt, str::FromStr as _};
 use std::{
     borrow::Cow,
@@ -18,7 +17,6 @@ use std::{
     sync::{Arc, LazyLock, OnceLock},
     time::{Duration, SystemTime, SystemTimeError},
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use eyre::Result;
 use hex;
@@ -49,7 +47,6 @@ use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
-
 use crate::{
     compliance::{LaneComplianceContext, LaneComplianceEvaluation},
     governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
@@ -934,9 +931,7 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
 #[cfg(test)]
 mod confidential_policy_admission_tests {
     use iroha_data_model::asset::definition::ConfidentialPolicyMode;
-
     use super::{ConfidentialPolicyAdmissionAction, confidential_policy_allows_action};
-
     #[test]
     fn kagemusha_value_movement_requires_convertible_policy() {
         for action in [
@@ -4990,7 +4985,6 @@ pub(crate) fn enforce_fraud_policy(
 }
 fn expected_band_from_score(score_bps: u16) -> iroha_config::parameters::actual::FraudRiskBand {
     use iroha_config::parameters::actual::FraudRiskBand;
-
     if score_bps > 1_000 {
         match score_bps {
             ..=2_499 => FraudRiskBand::Low,
@@ -5020,7 +5014,6 @@ pub mod tests {
         str::FromStr,
         sync::Arc,
     };
-
     use iroha_crypto::{
         Algorithm, Hash, KeyPair, MerkleProof,
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
@@ -5079,7 +5072,6 @@ pub mod tests {
     use iroha_schema::Ident;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         block::{BlockBuilder, CommittedBlock, ValidBlock},
@@ -5297,7 +5289,6 @@ pub mod tests {
     #[test]
     fn dataspace_label_helper_uses_alias_and_fallback() {
         use iroha_data_model::nexus::DataSpaceMetadata;
-
         let catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
@@ -5473,15 +5464,12 @@ pub mod tests {
             other => panic!("expected TransactionLimit failure, got {other:?}"),
         }
     }
-
     mod signature_rejection_tests {
         //! Verifies stable rejection-code classification for malformed
         //! signature bundles and transaction-domain metadata.
         //!
         //! Kept isolated from the transaction implementation's production code.
-
         use super::*;
-
         include!("tx/signature_rejection_tests.rs");
     }
     #[test]
@@ -5630,7 +5618,6 @@ pub mod tests {
     #[test]
     fn multisig_account_direct_signing_rejected_in_validation() {
         use iroha_data_model::domain::DomainId;
-
         let chain: ChainId = "multisig-direct".parse().unwrap();
         let domain_id: DomainId = DomainId::try_new("multisig", "universal").unwrap();
         let signer1 = checked_random_tx_keypair();
@@ -5757,7 +5744,6 @@ pub mod tests {
     #[test]
     fn multisig_signatory_role_does_not_block_direct_signing() {
         use iroha_data_model::domain::DomainId;
-
         let chain: ChainId = "multisig-role-only".parse().unwrap();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let (authority_id, keypair) = gen_account_in("wonderland");
@@ -5817,7 +5803,6 @@ pub mod tests {
     fn multisig_signatory_role_can_submit_multisig_propose_envelope() {
         use iroha_data_model::domain::DomainId;
         use iroha_executor_data_model::isi::multisig::MultisigPropose;
-
         let chain: ChainId = "multisig-propose-role-allowed".parse().unwrap();
         let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
         let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
@@ -5902,7 +5887,6 @@ pub mod tests {
     fn lane_validator_gating_allows_multisig_propose_envelope_from_live_signer() {
         use iroha_data_model::domain::DomainId;
         use iroha_executor_data_model::isi::multisig::MultisigPropose;
-
         let chain: ChainId = "multisig-propose-lane-validator-bypass".parse().unwrap();
         let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
         let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
@@ -7570,7 +7554,6 @@ pub mod tests {
     }
     fn fraud_metadata_with_assessment(assessment: &FraudAssessment) -> Metadata {
         use iroha_primitives::json::Json;
-
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("fraud_assessment_band").expect("static name"),
@@ -7804,7 +7787,6 @@ pub mod tests {
     fn tx_rejected_when_pipeline_gas_charge_limit_is_required_but_missing() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         // Minimal state with one domain/account as authority
         let (world, authority_id, kp) = world_with_authority("domain");
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -8045,7 +8027,6 @@ pub mod tests {
     fn validate_ivm_header_accepts_supported_versions() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         // World with a single domain and account as authority
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -8072,7 +8053,6 @@ pub mod tests {
     fn validate_ivm_header_rejects_unknown_abi() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8103,7 +8083,6 @@ pub mod tests {
     fn validate_ivm_header_rejects_abi_zero() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8135,7 +8114,6 @@ pub mod tests {
     fn validate_generic_ivm_rejects_reserved_manifest_metadata_before_decode() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8173,7 +8151,6 @@ pub mod tests {
     fn validate_ivm_rejects_stale_authenticated_cntr_abi_hash() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8229,7 +8206,6 @@ pub mod tests {
             transaction::{Executable, TransactionBuilder},
         };
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8315,7 +8291,6 @@ pub mod tests {
     fn validate_ivm_manifest_abi_and_code_hash_match() {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8369,7 +8344,6 @@ pub mod tests {
             transaction::{Executable, TransactionBuilder},
         };
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8430,7 +8404,6 @@ pub mod tests {
             transaction::{Executable, TransactionBuilder},
         };
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8491,7 +8464,6 @@ pub mod tests {
             transaction::{Executable, TransactionBuilder},
         };
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8577,7 +8549,6 @@ pub mod tests {
     fn validate_ivm_max_cycles_structured_error() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8609,7 +8580,6 @@ pub mod tests {
     fn validate_ivm_missing_max_cycles_rejected() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8640,7 +8610,6 @@ pub mod tests {
     fn validate_ivm_max_cycles_exceeds_fuel_rejected() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8680,7 +8649,6 @@ pub mod tests {
     fn validate_ivm_instruction_limit_enforced() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8721,7 +8689,6 @@ pub mod tests {
     fn validate_ivm_decoded_byte_limit_enforced() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8759,7 +8726,6 @@ pub mod tests {
     fn validate_ivm_manifest_lookup_in_state() {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8813,7 +8779,6 @@ pub mod tests {
     fn validate_ivm_unknown_syscall_rejected_at_admission() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8854,7 +8819,6 @@ pub mod tests {
     fn validate_ivm_unknown_scallx_rejected_at_admission() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -8893,7 +8857,6 @@ pub mod tests {
     #[test]
     fn invalid_signature_is_rejected() {
         use std::time::Duration;
-
         use iroha_data_model::prelude::*;
         let (authority_id, keypair) = gen_account_in("wonderland");
         let instruction = SetKeyValue::account(authority_id.clone(), "k".parse().unwrap(), "v");
@@ -8944,9 +8907,7 @@ pub mod tests {
     #[test]
     fn ivm_bytecode_oversize_is_rejected_at_admission() {
         use std::time::Duration;
-
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
-
         // Build a valid signed transaction with an oversized IVM bytecode blob
         let (authority_id, kp) = gen_account_in("wonderland");
         // Limit bytecode size to 1024 bytes for this test
@@ -8986,7 +8947,6 @@ pub mod tests {
     #[test]
     fn ivm_bytecode_at_limit_is_accepted_at_admission() {
         use std::time::Duration;
-
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         let (authority_id, kp) = gen_account_in("wonderland");
         // Use an exact bytecode-size limit that can be represented by the 17-byte
@@ -9027,7 +8987,6 @@ pub mod tests {
     #[test]
     fn ivm_missing_gas_bound_rejected_at_admission() {
         use std::time::Duration;
-
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         let (authority_id, kp) = gen_account_in("wonderland");
         let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
@@ -9087,7 +9046,6 @@ pub mod tests {
     #[test]
     fn ivm_proved_missing_gas_bound_rejected_at_admission() {
         use std::time::Duration;
-
         use iroha_data_model::transaction::{Executable, IvmProved, TransactionBuilder};
         let (authority_id, kp) = gen_account_in("wonderland");
         let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
@@ -9129,7 +9087,6 @@ pub mod tests {
     #[test]
     fn contract_call_missing_gas_bound_rejected_at_admission() {
         use std::time::Duration;
-
         use iroha_data_model::transaction::{
             Executable, TransactionBuilder, executable::ContractInvocation,
         };
@@ -9437,7 +9394,6 @@ pub mod tests {
     #[test]
     fn accept_transaction_requires_expires_at_height_when_configured() {
         use std::time::Duration;
-
         use iroha_data_model::isi::Log;
         use iroha_logger::Level;
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -9480,7 +9436,6 @@ pub mod tests {
     #[test]
     fn accept_transaction_requires_tx_sequence_when_configured() {
         use std::time::Duration;
-
         use iroha_data_model::isi::Log;
         use iroha_logger::Level;
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -9523,7 +9478,6 @@ pub mod tests {
     #[test]
     fn signature_verification_result_reports_invalid_signature() {
         use std::time::Duration;
-
         let (authority_id, kp) = gen_account_in("wonderland");
         let (other_id, _other_kp) = gen_account_in("underland");
         let tx = TransactionBuilder::new(
@@ -9665,7 +9619,6 @@ pub mod tests {
     #[test]
     fn retired_heartbeat_marker_rejects_non_empty_transactions() {
         use std::time::Duration;
-
         use iroha_data_model::isi::Log;
         use iroha_logger::Level;
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -9702,12 +9655,10 @@ pub mod tests {
     #[test]
     fn transaction_expired_at_height_is_rejected_by_state() {
         use std::time::Duration;
-
         use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-
         let (mut world, authority_id, kp) = world_with_authority("wonderland");
         let mut params = iroha_data_model::parameter::system::Parameters::default();
         params.transaction = params.transaction.with_ingress_enforcement(true, false);
@@ -9768,12 +9719,10 @@ pub mod tests {
     #[test]
     fn sequence_not_increasing_is_rejected_by_state() {
         use std::time::Duration;
-
         use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-
         let (mut world, authority_id, kp) = world_with_authority("wonderland");
         world.tx_sequences.insert(authority_id.clone(), 5);
         let mut params = iroha_data_model::parameter::system::Parameters::default();
@@ -9835,12 +9784,10 @@ pub mod tests {
     #[test]
     fn sequence_increasing_is_accepted_by_state() {
         use std::time::Duration;
-
         use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-
         let (mut world, authority_id, kp) = world_with_authority("wonderland");
         world.tx_sequences.insert(authority_id.clone(), 5);
         let mut params = iroha_data_model::parameter::system::Parameters::default();
@@ -9908,7 +9855,6 @@ pub mod tests {
         };
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -9964,7 +9910,6 @@ pub mod tests {
         };
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-
         let (world, authority_id, kp) = world_with_authority("wonderland");
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
@@ -9998,10 +9943,8 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         assert!(result.is_ok(), "max_cycles within bound should pass");
     }
-
     mod time_trigger {
         use super::*;
-
         /// # Scenario
         ///
         /// 1. Transaction: Alice sends a large donation to Bob.
@@ -10034,10 +9977,8 @@ pub mod tests {
             ]);
         }
     }
-
     mod data_trigger {
         use super::*;
-
         /// # Scenario
         ///
         /// 1. Transaction: Alice sends a large donation to Bob.
@@ -10813,7 +10754,6 @@ pub mod tests {
     #[test]
     fn generic_ivm_cannot_hide_contract_admin_syscalls_from_governance() {
         use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
-
         let chain: ChainId = "generic-ivm-contract-admin-governance".parse().unwrap();
         let (mut world, authority, keypair) = world_with_authority("wonderland");
         let (second_validator, _) = gen_account_in("wonderland");
@@ -10995,7 +10935,6 @@ pub mod tests {
     #[test]
     fn non_governed_manifest_validators_do_not_gate_state_policy_for_ivm_contract_metadata() {
         use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
-
         let chain: ChainId = "non-governed-manifest-ivm-contract".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let (validator, _) = gen_account_in("wonderland");
@@ -11062,7 +11001,6 @@ pub mod tests {
     #[test]
     fn validate_transaction_without_context_uses_live_autoscale_route() {
         use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
-
         let chain: ChainId = "tx-live-autoscale-route".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let kura = Kura::blank_kura_for_testing();
@@ -11184,7 +11122,6 @@ pub mod tests {
     #[test]
     fn validate_transaction_without_context_ignores_autoscale_when_nexus_disabled() {
         use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
-
         let chain: ChainId = "tx-disabled-nexus-autoscale-route".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let kura = Kura::blank_kura_for_testing();
@@ -11502,9 +11439,7 @@ pub mod tests {
     }
     #[test]
     fn lane_block_execution_input_uses_descriptor_indices_and_routing_context() {
-        use iroha_data_model::transaction::{
-            Executable, TransactionBuilder, executable::IvmBytecode,
-        };
+        use iroha_data_model::transaction::{Executable, TransactionBuilder, executable::IvmBytecode};
         let chain: ChainId = "lane-execution-input-route".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {
@@ -11585,9 +11520,7 @@ pub mod tests {
     }
     #[test]
     fn lane_block_execution_input_rejects_forged_hashes_before_state_execution() {
-        use iroha_data_model::transaction::{
-            Executable, TransactionBuilder, executable::IvmBytecode,
-        };
+        use iroha_data_model::transaction::{Executable, TransactionBuilder, executable::IvmBytecode};
         let chain: ChainId = "lane-execution-input-forged".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {
@@ -11624,9 +11557,7 @@ pub mod tests {
     }
     #[test]
     fn lane_block_execution_input_rejects_duplicate_signed_entrypoints_before_state_execution() {
-        use iroha_data_model::transaction::{
-            Executable, TransactionBuilder, executable::IvmBytecode,
-        };
+        use iroha_data_model::transaction::{Executable, TransactionBuilder, executable::IvmBytecode};
         let chain: ChainId = "lane-execution-input-duplicate".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {
@@ -11662,9 +11593,7 @@ pub mod tests {
     }
     #[test]
     fn lane_block_execution_input_preserves_full_width_entrypoint_indices() {
-        use iroha_data_model::transaction::{
-            Executable, TransactionBuilder, executable::IvmBytecode,
-        };
+        use iroha_data_model::transaction::{Executable, TransactionBuilder, executable::IvmBytecode};
         let chain: ChainId = "lane-execution-input-full-width-index".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {

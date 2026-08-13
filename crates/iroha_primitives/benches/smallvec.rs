@@ -2,7 +2,6 @@
 use criterion::Criterion;
 use iroha_primitives::small::{SmallVec, smallvec};
 use norito::codec::{Decode, Encode};
-
 /// Benchmark decoding a pre-encoded small vector using the Norito codec.
 fn deserialize_smallvec(c: &mut Criterion) {
     let vec: SmallVec<[u32; 8]> = SmallVec(smallvec![1u32; 32]);
@@ -15,7 +14,6 @@ fn deserialize_smallvec(c: &mut Criterion) {
         })
     });
 }
-
 /// Criterion entry point for the smallvec benchmark binary.
 fn main() {
     let mut c = Criterion::default().configure_from_args();

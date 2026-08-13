@@ -1,6 +1,5 @@
 #![doc = "Governance ZK ballot must fail when referendum is missing or outside window."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -18,7 +17,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-
 #[test]
 fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
     let kura = Kura::blank_kura_for_testing();
@@ -62,7 +60,6 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
                 domain_tag: "gov:ballot:v1".to_string(),
             },
         );
-
         // Missing referendum
         let ballot = CastZkBallot {
             election_id: "missing".to_string(),
@@ -77,7 +74,6 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
             err.to_string().contains("referendum"),
             "unexpected error: {err}"
         );
-
         // Closed referendum
         stx.world.governance_referenda_mut().insert(
             "closed".to_string(),
@@ -121,7 +117,6 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
         stx.apply();
         sblock.commit().expect("commit block at H=1");
     }
-
     // Outside window
     let header_late = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let mut sblock_late = state.block(header_late);

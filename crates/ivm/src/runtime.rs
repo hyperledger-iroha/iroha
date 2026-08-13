@@ -23,18 +23,15 @@
 //!     .build();
 //! // ... attach host, load programs, run, etc.
 //! ```
-
 use std::{
     any::Any,
     sync::{Arc, Mutex},
 };
-
 pub use crate::ivm::{
     AccelerationPolicy, HardwareCapabilities, IvmBuilder, IvmConfig, IvmConfigBuilder,
 };
 pub use crate::stack_policy::IvmStackPolicy;
 use crate::{VMError, host::IVMHost, ivm::IVM, metadata::ProgramMetadata, syscalls};
-
 /// Runtime operations exposed by the VM core.
 pub trait VmEngine {
     /// Attach a host implementation. Hosts are responsible for syscall handling
@@ -42,19 +39,15 @@ pub trait VmEngine {
     /// generic parameter ensures strongly typed hosts can be attached without
     /// forcing callers to allocate trait objects themselves.
     fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H);
-
     /// Load a compiled program (`.to` bytecode) into the VM. Implementations
     /// must preserve the existing INPUT buffer so that hosts can preload TLVs
     /// deterministically prior to execution.
     fn load_program(&mut self, program: &[u8]) -> Result<(), VMError>;
-
     /// Execute the currently loaded program from the `pc`. Errors must surface
     /// deterministically and leave the VM in a halted state.
     fn run(&mut self) -> Result<(), VMError>;
-
     /// Access immutable program metadata as parsed from the bytecode header.
     fn program_metadata(&self) -> &ProgramMetadata;
-
     /// Convenience helper that sets a host, loads a program and immediately
     /// executes it. Useful for embedding scenarios where the host lifecycle is
     /// scoped to a single call.
@@ -68,25 +61,20 @@ pub trait VmEngine {
         self.run()
     }
 }
-
 impl VmEngine for IVM {
     fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H) {
         IVM::set_host(self, host);
     }
-
     fn load_program(&mut self, program: &[u8]) -> Result<(), VMError> {
         IVM::load_program(self, program)
     }
-
     fn run(&mut self) -> Result<(), VMError> {
         IVM::run(self)
     }
-
     fn program_metadata(&self) -> &ProgramMetadata {
         IVM::metadata(self)
     }
 }
-
 /// Wrapper that enforces syscall policy before delegating to the underlying host.
 ///
 /// Future iterations will extend this struct with pointer-ABI validation tables
@@ -94,88 +82,71 @@ impl VmEngine for IVM {
 pub struct SyscallDispatcher<H> {
     inner: H,
 }
-
 impl<H> SyscallDispatcher<H> {
     /// Create a dispatcher around `host`.
     pub fn new(host: H) -> Self {
         Self { inner: host }
     }
-
     /// Access the wrapped host.
     pub fn inner(&self) -> &H {
         &self.inner
     }
-
     /// Access the wrapped host mutably.
     pub fn inner_mut(&mut self) -> &mut H {
         &mut self.inner
     }
-
     /// Consume the dispatcher and return the wrapped host.
     pub fn into_inner(self) -> H {
         self.inner
     }
 }
-
 impl<H: IVMHost> IVMHost for SyscallDispatcher<H> {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
         self.inner.prepare_syscall(number, vm)
     }
-
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         if !self.allows_syscall(vm.syscall_policy(), number) {
             return Err(VMError::UnknownSyscall(number));
         }
         self.inner.syscall(number, vm)
     }
-
     fn allows_syscall(&self, policy: crate::SyscallPolicy, number: u32) -> bool {
         self.inner.allows_syscall(policy, number)
     }
-
     fn as_any(&mut self) -> &mut dyn Any
     where
         Self: 'static,
     {
         self.inner.as_any()
     }
-
     fn supports_concurrent_blocks(&self) -> bool {
         self.inner.supports_concurrent_blocks()
     }
-
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         self.inner.checkpoint()
     }
-
     fn restore(&mut self, snapshot: &dyn Any) -> bool {
         self.inner.restore(snapshot)
     }
-
     fn begin_tx(&mut self, declared: &crate::parallel::StateAccessSet) -> Result<(), VMError> {
         self.inner.begin_tx(declared)
     }
-
     fn finish_tx(&mut self) -> Result<crate::host::AccessLog, VMError> {
         self.inner.finish_tx()
     }
-
     fn access_logging_supported(&self) -> bool {
         self.inner.access_logging_supported()
     }
 }
-
 /// Shared host wrapper used when cloning VMs across worker threads.
 pub(crate) struct SharedHost {
     inner: Arc<Mutex<Option<Box<dyn IVMHost + Send + Sync>>>>,
 }
-
 impl SharedHost {
     fn new(inner: Arc<Mutex<Option<Box<dyn IVMHost + Send + Sync>>>>) -> Self {
         Self { inner }
     }
 }
-
 impl IVMHost for SharedHost {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
         let guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
@@ -184,7 +155,6 @@ impl IVMHost for SharedHost {
         };
         host.prepare_syscall(number, vm)
     }
-
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         let Some(host) = guard.as_mut() else {
@@ -192,7 +162,6 @@ impl IVMHost for SharedHost {
         };
         host.syscall(number, vm)
     }
-
     fn allows_syscall(&self, policy: crate::SyscallPolicy, number: u32) -> bool {
         let guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard
@@ -200,14 +169,12 @@ impl IVMHost for SharedHost {
             .map(|h| h.allows_syscall(policy, number))
             .unwrap_or_else(|| syscalls::is_syscall_allowed(policy, number))
     }
-
     fn as_any(&mut self) -> &mut dyn Any
     where
         Self: 'static,
     {
         self
     }
-
     fn supports_concurrent_blocks(&self) -> bool {
         let guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard
@@ -215,17 +182,14 @@ impl IVMHost for SharedHost {
             .map(|h| h.supports_concurrent_blocks())
             .unwrap_or(false)
     }
-
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         let guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard.as_ref().and_then(|h| h.checkpoint())
     }
-
     fn restore(&mut self, snapshot: &dyn Any) -> bool {
         let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard.as_mut().map(|h| h.restore(snapshot)).unwrap_or(false)
     }
-
     fn begin_tx(&mut self, declared: &crate::parallel::StateAccessSet) -> Result<(), VMError> {
         let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard
@@ -233,7 +197,6 @@ impl IVMHost for SharedHost {
             .map(|h| h.begin_tx(declared))
             .unwrap_or(Ok(()))
     }
-
     fn finish_tx(&mut self) -> Result<crate::host::AccessLog, VMError> {
         let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard
@@ -241,7 +204,6 @@ impl IVMHost for SharedHost {
             .map(|h| h.finish_tx())
             .unwrap_or_else(|| Ok(crate::host::AccessLog::default()))
     }
-
     fn access_logging_supported(&self) -> bool {
         let guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
         guard
@@ -250,7 +212,6 @@ impl IVMHost for SharedHost {
             .unwrap_or(false)
     }
 }
-
 impl SyscallDispatcher<SharedHost> {
     /// Clone-safe dispatcher that forwards calls through a shared host.
     pub fn shared(host: Arc<Mutex<Option<Box<dyn IVMHost + Send + Sync>>>>) -> Self {

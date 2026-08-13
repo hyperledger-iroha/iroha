@@ -1,5 +1,4 @@
 //! Macros for implementing common traits for ID types.
-
 macro_rules! string_id {
     ($($ty:ty),+ $(,)?) => {
         $(
@@ -9,8 +8,6 @@ macro_rules! string_id {
                     let repr = self.to_string();
                     norito::json::JsonSerialize::json_serialize(&repr, out);
                 }
-
-
                 fn write_json_to(
                     &self,
                     out: &mut dyn norito::json::JsonWriteSink,
@@ -18,7 +15,6 @@ macro_rules! string_id {
                     norito::json::write_json_string_to(&self.to_string(), out)
                 }
             }
-
             #[cfg(feature = "json")]
             impl norito::json::JsonDeserialize for $ty {
                 fn json_deserialize(

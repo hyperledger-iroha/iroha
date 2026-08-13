@@ -1,14 +1,11 @@
 //! WsvHost: INPUT_PUBLISH_TLV rejects invalid pointer-ABI envelopes.
-
 use iroha_crypto::PublicKey;
 use ivm::{
     IVM, VMError,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
-
 mod common;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&type_id.to_be_bytes());
@@ -19,12 +16,10 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 fn account(_domain: &str, public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().expect("public key");
     AccountId::new(public_key)
 }
-
 fn wsv_host() -> WsvHost {
     let wsv = MockWorldStateView::new();
     let caller = account(
@@ -33,7 +28,6 @@ fn wsv_host() -> WsvHost {
     );
     WsvHost::new_with_subject(wsv, caller.clone(), Default::default())
 }
-
 #[test]
 fn wsv_host_input_publish_rejects_unknown_type_id() {
     let mut vm = IVM::new(u64::MAX);

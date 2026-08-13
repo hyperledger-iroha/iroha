@@ -12,7 +12,6 @@ pub struct ToriiSoranetPrivacyIngest {
     #[config(default = "defaults::torii::soranet_privacy_ingest::allow_cidrs()")]
     pub allow_cidrs: Vec<String>,
 }
-
 impl Default for ToriiSoranetPrivacyIngest {
     fn default() -> Self {
         Self {
@@ -23,7 +22,6 @@ impl Default for ToriiSoranetPrivacyIngest {
         }
     }
 }
-
 impl ToriiSoranetPrivacyIngest {
     fn parse(self) -> actual::SoranetPrivacyIngest {
         actual::SoranetPrivacyIngest {

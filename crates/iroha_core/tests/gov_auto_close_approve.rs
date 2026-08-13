@@ -1,7 +1,6 @@
 //! Auto-close approval test: decision at `h_end + 1`, anchored to inclusive `h_end`.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::too_many_lines, clippy::items_after_statements)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -14,11 +13,9 @@ use iroha_data_model::{
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
-
 fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
-
 fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -30,11 +27,9 @@ fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddr
     )
     .expect("proposal contract address")
 }
-
 #[test]
 fn auto_close_emits_approved() {
     use core::num::NonZeroU64;
-
     use iroha_data_model::{
         events::data::governance::GovernanceEvent,
         isi::governance::{CastPlainBallot, ProposeDeployContract, VotingMode},
@@ -45,7 +40,6 @@ fn auto_close_emits_approved() {
         CanProposeContractDeployment, CanSubmitGovernanceBallot,
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-
     // Minimal state
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -56,7 +50,6 @@ fn auto_close_emits_approved() {
     let bob_account: Account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [alice_account, bob_account], []);
     let mut state = State::new_for_testing(world, kura, query_handle);
-
     // Use default thresholds (1/2) and min_turnout=0
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
@@ -67,7 +60,6 @@ fn auto_close_emits_approved() {
     cfg.min_enactment_delay = 1;
     cfg.window_span = 2;
     state.set_gov(cfg);
-
     // H=1: propose a Plain referendum
     let block1 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).unwrap(),
@@ -134,7 +126,6 @@ fn auto_close_emits_approved() {
         stx1.apply();
         let _ = sblock1.commit();
     }
-
     // H=2: open + seed weights (approve sqrt(9)=3, reject sqrt(1)=1)
     let block2 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(2).unwrap(),
@@ -206,7 +197,6 @@ fn auto_close_emits_approved() {
         )));
     }
     let _ = sblock2.commit();
-
     // H=3 is the inclusive end height: the referendum remains open.
     let block3 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(3).unwrap(),
@@ -229,7 +219,6 @@ fn auto_close_emits_approved() {
             )
     )));
     sblock3.commit().expect("commit inclusive end block");
-
     // H=4: auto-close/tally with evidence anchored to H=3.
     let block4 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(4).unwrap(),

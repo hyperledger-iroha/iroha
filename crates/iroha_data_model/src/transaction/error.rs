@@ -1,10 +1,8 @@
 //! Module containing errors that can occur in transaction lifecycle.
-
 use std::{
     fmt::{Display, Formatter, Result as FmtResult},
     string::String,
 };
-
 #[cfg(feature = "json")]
 use base64::Engine as _;
 #[cfg(feature = "json")]
@@ -15,17 +13,14 @@ use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 pub use self::model::*;
 use crate::{
     ValidationFail,
     isi::{Instruction, InstructionBox},
 };
-
 #[model]
 mod model {
     use super::*;
-
     /// Error which indicates max instruction count was reached
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
@@ -35,7 +30,6 @@ mod model {
         /// Reason why transaction exceeds limits
         pub reason: String,
     }
-
     /// Transaction was rejected because of one of its instructions failing.
     #[derive(Getters, Debug, Clone, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -46,7 +40,6 @@ mod model {
         /// Error which happened during execution
         pub reason: String,
     }
-
     /// Transaction was rejected because execution of IVM bytecode failed
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[display("Failed to execute IVM bytecode: {reason}")]
@@ -57,7 +50,6 @@ mod model {
         /// Error which happened during execution
         pub reason: String,
     }
-
     /// Possible reasons for trigger-specific execution failure.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -66,7 +58,6 @@ mod model {
         /// Exceeded maximum depth for synchronous trigger execution or chained data triggers.
         MaxDepthExceeded,
     }
-
     #[cfg(feature = "json")]
     impl norito::json::JsonSerialize for TriggerExecutionFail {
         fn json_serialize(&self, out: &mut String) {
@@ -75,7 +66,6 @@ mod model {
             };
             norito::json::write_json_string(label, out);
         }
-
         fn json_serialize_to(
             &self,
             out: &mut dyn norito::json::JsonWriteSink,
@@ -83,7 +73,6 @@ mod model {
             norito::json::write_json_string_to("MaxDepthExceeded", out)
         }
     }
-
     #[cfg(feature = "json")]
     impl norito::json::JsonDeserialize for TriggerExecutionFail {
         fn json_deserialize(
@@ -98,7 +87,6 @@ mod model {
             }
         }
     }
-
     /// The reason for rejecting transaction which happened because of transaction.
     #[derive(
         Debug,
@@ -141,13 +129,11 @@ mod model {
         TriggerExecution(#[source] TriggerExecutionFail),
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for TransactionRejectionReason {
     fn json_serialize(&self, out: &mut String) {
         norito::json::write_canonical_base64_json(self, out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -155,7 +141,6 @@ impl norito::json::JsonSerialize for TransactionRejectionReason {
         norito::json::write_canonical_base64_json_to(self, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for TransactionRejectionReason {
     fn json_deserialize(
@@ -169,7 +154,6 @@ impl norito::json::JsonDeserialize for TransactionRejectionReason {
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
-
 impl PartialEq for InstructionExecutionFail {
     fn eq(&self, other: &Self) -> bool {
         Instruction::id(&*self.instruction) == Instruction::id(&*other.instruction)
@@ -177,19 +161,16 @@ impl PartialEq for InstructionExecutionFail {
             && self.reason == other.reason
     }
 }
-
 impl Display for InstructionExecutionFail {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "Failed to execute instruction: {}", self.reason)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for TransactionLimitError {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.reason, out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -197,7 +178,6 @@ impl norito::json::FastJsonWrite for TransactionLimitError {
         norito::json::JsonSerialize::json_serialize_to(&self.reason, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for TransactionLimitError {
     fn json_deserialize(
@@ -207,13 +187,11 @@ impl norito::json::JsonDeserialize for TransactionLimitError {
         Ok(Self { reason })
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for IvmExecutionFail {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.reason, out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -221,7 +199,6 @@ impl norito::json::FastJsonWrite for IvmExecutionFail {
         norito::json::JsonSerialize::json_serialize_to(&self.reason, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for IvmExecutionFail {
     fn json_deserialize(
@@ -231,29 +208,21 @@ impl norito::json::JsonDeserialize for IvmExecutionFail {
         Ok(Self { reason })
     }
 }
-
 impl std::error::Error for TransactionLimitError {}
-
 impl std::error::Error for InstructionExecutionFail {}
-
 impl std::error::Error for IvmExecutionFail {}
-
 impl std::error::Error for TriggerExecutionFail {}
-
 pub mod prelude {
     //! The prelude re-exports most commonly used traits, structs and macros from this module.
-
     pub use super::{
         InstructionExecutionFail, IvmExecutionFail, TransactionRejectionReason,
         TriggerExecutionFail,
     };
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Level, isi::Log};
-
     #[cfg(feature = "json")]
     #[test]
     fn rejection_reason_json_is_canonical_and_ambient_independent() {
@@ -281,7 +250,6 @@ mod tests {
                 canonical_json
             );
         }
-
         let alternate_frame = {
             let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             norito::to_bytes(&reason).expect("encode alternate-layout rejection reason")
@@ -290,7 +258,6 @@ mod tests {
             .expect("encode alternate rejection frame as JSON string");
         norito::json::from_json::<TransactionRejectionReason>(&alternate_json)
             .expect_err("alternate-layout rejection JSON must be rejected");
-
         fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
             let expected = norito::json::to_json(value).expect("serialize ordinary JSON");
             assert_eq!(
@@ -310,7 +277,6 @@ mod tests {
             reason: "ivm".to_owned(),
         });
     }
-
     #[test]
     fn instruction_execution_fail_equality() {
         let log = Log::new(Level::INFO, "log".to_string());
@@ -323,13 +289,11 @@ mod tests {
             reason: "reason".to_string(),
         };
         assert_eq!(fail1, fail2);
-
         let different_instruction = InstructionExecutionFail {
             instruction: InstructionBox::from(Log::new(Level::INFO, "other".to_string())),
             reason: "reason".to_string(),
         };
         assert_ne!(fail1, different_instruction);
-
         let different_reason = InstructionExecutionFail {
             instruction: fail1.instruction.clone(),
             reason: "other".to_string(),

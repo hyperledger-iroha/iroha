@@ -5,15 +5,12 @@
 //! and signing material outside argv and repository configuration, and inject an authenticated
 //! HTTPS ingress here. This module never routes through Torii or the daemon-private runtime
 //! provider broker.
-
 mod finality;
-
 pub use finality::{
     MusubiPublicationFinalizedArchiveRegistrationQueryV1,
     MusubiPublicationFinalizedArchiveRegistrationReadErrorV1,
     MusubiPublicationFinalizedArchiveRegistrationReaderV1,
 };
-
 // TODO: Supply a deployment-qualified runner only after the production boundaries below exist.
 // The stock tree deliberately cannot assemble one from the current SoraFS/Torii primitives:
 //
@@ -50,13 +47,10 @@ pub use finality::{
 // substitute an in-memory backend, treat the local two-slot store as protection from privileged
 // offline rollback, treat a public query response or publisher-supplied bytes as finality evidence,
 // or revive the retired public Torii upload path.
-
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
-
 use iroha_core::{queue::Queue, state::State};
 use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
-
 /// Live daemon-owned dependencies made available only after trusted startup replay.
 ///
 /// The context carries handles rather than snapshots so a long-running publication backend can
@@ -69,7 +63,6 @@ pub struct MusubiPublicationPrivateServiceContextV1 {
     queue: Arc<Queue>,
     sorafs_node: sorafs_node::NodeHandle,
 }
-
 impl core::fmt::Debug for MusubiPublicationPrivateServiceContextV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -78,7 +71,6 @@ impl core::fmt::Debug for MusubiPublicationPrivateServiceContextV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl MusubiPublicationPrivateServiceContextV1 {
     /// Capture the exact handles owned by a successfully assembled daemon.
     pub(crate) fn new(
@@ -94,19 +86,16 @@ impl MusubiPublicationPrivateServiceContextV1 {
             sorafs_node,
         }
     }
-
     /// Exact genesis-derived network identity already validated by daemon startup.
     #[must_use]
     pub const fn network_id(&self) -> NetworkId {
         self.network_id
     }
-
     /// Clone the live finalized-state handle.
     #[must_use]
     pub fn state(&self) -> Arc<State> {
         Arc::clone(&self.state)
     }
-
     /// Bind a read-only finalized archive-registration reader to these exact daemon handles.
     #[must_use]
     pub fn finalized_archive_registration_reader(
@@ -117,20 +106,17 @@ impl MusubiPublicationPrivateServiceContextV1 {
             Arc::clone(&self.state),
         )
     }
-
     /// Clone the node's transaction-admission queue handle.
     #[must_use]
     pub fn queue(&self) -> Arc<Queue> {
         Arc::clone(&self.queue)
     }
-
     /// Clone the embedded SoraFS node handle.
     #[must_use]
     pub fn sorafs_node(&self) -> sorafs_node::NodeHandle {
         self.sorafs_node.clone()
     }
 }
-
 /// Redacted failure while assembling an injected private publication deployment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationPrivateServiceFactoryErrorV1 {
@@ -139,7 +125,6 @@ pub enum MusubiPublicationPrivateServiceFactoryErrorV1 {
     /// A supplied dependency failed its deployment qualification or identity binding.
     Unqualified,
 }
-
 impl core::fmt::Display for MusubiPublicationPrivateServiceFactoryErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
@@ -148,9 +133,7 @@ impl core::fmt::Display for MusubiPublicationPrivateServiceFactoryErrorV1 {
         })
     }
 }
-
 impl std::error::Error for MusubiPublicationPrivateServiceFactoryErrorV1 {}
-
 /// One-shot deployment-owned factory invoked after daemon handles are ready.
 ///
 /// The factory may assemble the private HTTPS runner and its protocol core from the exact live
@@ -167,7 +150,6 @@ pub trait MusubiPublicationPrivateServiceFactoryV1: Send + 'static {
         context: MusubiPublicationPrivateServiceContextV1,
     ) -> Result<MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateServiceFactoryErrorV1>;
 }
-
 /// Redacted terminal failure from a deployment-owned private HTTPS ingress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiPublicationPrivateIngressErrorV1 {
@@ -176,12 +158,10 @@ pub enum MusubiPublicationPrivateIngressErrorV1 {
     /// The injected ingress failed its own deployment qualification or identity checks.
     Unqualified,
 }
-
 /// Boxed lifetime-independent ingress future accepted by the daemon supervisor.
 pub type MusubiPublicationPrivateIngressFutureV1 = Pin<
     Box<dyn Future<Output = Result<(), MusubiPublicationPrivateIngressErrorV1>> + Send + 'static>,
 >;
-
 /// Deployment-owned runner for the three fixed private publication routes.
 pub trait MusubiPublicationPrivateServiceRunnerV1: Send + 'static {
     /// Serve until shutdown while forwarding bounded requests to the publication service core.
@@ -194,12 +174,10 @@ pub trait MusubiPublicationPrivateServiceRunnerV1: Send + 'static {
     /// SoraFS backends; `irohad` never receives those secrets or dependency objects.
     fn serve(self: Box<Self>, shutdown: ShutdownSignal) -> MusubiPublicationPrivateIngressFutureV1;
 }
-
 /// Complete injected private-service deployment assembled outside stock `irohad` configuration.
 pub struct MusubiPublicationPrivateDeploymentV1 {
     runner: Box<dyn MusubiPublicationPrivateServiceRunnerV1>,
 }
-
 impl core::fmt::Debug for MusubiPublicationPrivateDeploymentV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -207,14 +185,12 @@ impl core::fmt::Debug for MusubiPublicationPrivateDeploymentV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl MusubiPublicationPrivateDeploymentV1 {
     /// Assemble a deployment from an already qualified core and private HTTPS ingress.
     #[must_use]
     pub fn new(runner: Box<dyn MusubiPublicationPrivateServiceRunnerV1>) -> Self {
         Self { runner }
     }
-
     /// Start the private service as one supervisor child.
     ///
     /// A return before shutdown, including a nominal `Ok(())`, is fatal and deliberately causes
@@ -238,7 +214,6 @@ impl MusubiPublicationPrivateDeploymentV1 {
         Child::new(task, OnShutdown::Wait(Duration::from_secs(2)))
     }
 }
-
 /// Stock-launcher state for a service that cannot start without deployment injection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MusubiPublicationPrivateServiceAvailabilityV1 {
@@ -248,7 +223,6 @@ pub enum MusubiPublicationPrivateServiceAvailabilityV1 {
     /// A deployment-owned private service was assembled and handed to the supervisor.
     Supervised,
 }
-
 /// Start an optional deployment, leaving the stock daemon explicitly unavailable by default.
 ///
 /// The returned child must be monitored by the caller's `Supervisor` when present.
@@ -268,7 +242,6 @@ pub fn start_injected_musubi_publication_private_service_v1(
         ),
     }
 }
-
 /// Build and start an optional late-bound deployment.
 ///
 /// `None` remains the stock fail-closed state. A factory failure is returned before a child can be
@@ -296,14 +269,12 @@ pub fn build_and_start_injected_musubi_publication_private_service_v1(
         shutdown,
     ))
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
-
     use super::*;
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_core::{
@@ -313,9 +284,7 @@ mod tests {
     };
     use iroha_futures::supervisor::Supervisor;
     use sorafs_node::config::StorageConfig;
-
     struct EarlyExitRunner;
-
     impl MusubiPublicationPrivateServiceRunnerV1 for EarlyExitRunner {
         fn serve(
             self: Box<Self>,
@@ -324,11 +293,9 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
     }
-
     struct ShutdownAwareRunner {
         started: Arc<AtomicBool>,
     }
-
     impl MusubiPublicationPrivateServiceRunnerV1 for ShutdownAwareRunner {
         fn serve(
             self: Box<Self>,
@@ -341,7 +308,6 @@ mod tests {
             })
         }
     }
-
     fn factory_context() -> MusubiPublicationPrivateServiceContextV1 {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -356,7 +322,6 @@ mod tests {
             sorafs_node,
         )
     }
-
     struct RecordingFactory {
         called: Arc<AtomicBool>,
         expected_state: Arc<State>,
@@ -364,7 +329,6 @@ mod tests {
         expected_capacity: Arc<sorafs_node::capacity::CapacityManager>,
         runner_started: Arc<AtomicBool>,
     }
-
     impl MusubiPublicationPrivateServiceFactoryV1 for RecordingFactory {
         fn build(
             self: Box<Self>,
@@ -388,9 +352,7 @@ mod tests {
             )))
         }
     }
-
     struct FailingFactory;
-
     impl MusubiPublicationPrivateServiceFactoryV1 for FailingFactory {
         fn build(
             self: Box<Self>,
@@ -402,7 +364,6 @@ mod tests {
             Err(MusubiPublicationPrivateServiceFactoryErrorV1::Unqualified)
         }
     }
-
     #[test]
     fn stock_launch_is_fail_closed_and_starts_no_child() {
         let (availability, child) =
@@ -413,7 +374,6 @@ mod tests {
         );
         assert!(child.is_none());
     }
-
     #[test]
     fn absent_factory_is_fail_closed_and_starts_no_child() {
         let (availability, child) = build_and_start_injected_musubi_publication_private_service_v1(
@@ -428,7 +388,6 @@ mod tests {
         );
         assert!(child.is_none());
     }
-
     #[test]
     fn factory_failure_precedes_child_start() {
         let result = build_and_start_injected_musubi_publication_private_service_v1(
@@ -445,7 +404,6 @@ mod tests {
             MusubiPublicationPrivateServiceFactoryErrorV1::Unqualified
         );
     }
-
     #[tokio::test]
     async fn factory_receives_exact_handles_once_and_joins_supervisor() {
         let context = factory_context();
@@ -472,12 +430,10 @@ mod tests {
         );
         assert!(called.load(Ordering::SeqCst));
         supervisor.monitor(child.expect("factory-built deployment child"));
-
         shutdown.send();
         assert!(supervisor.start().await.is_ok());
         assert!(runner_started.load(Ordering::SeqCst));
     }
-
     #[tokio::test]
     async fn injected_runner_early_return_is_fatal_to_supervision() {
         let mut supervisor = Supervisor::new();
@@ -494,7 +450,6 @@ mod tests {
         supervisor.monitor(child.expect("injected deployment child"));
         assert!(supervisor.start().await.is_err());
     }
-
     #[tokio::test]
     async fn injected_runner_shares_supervisor_shutdown_and_exits_cleanly() {
         let started = Arc::new(AtomicBool::new(false));
@@ -513,7 +468,6 @@ mod tests {
             MusubiPublicationPrivateServiceAvailabilityV1::Supervised
         );
         supervisor.monitor(child.expect("injected deployment child"));
-
         shutdown.send();
         assert!(supervisor.start().await.is_ok());
         assert!(started.load(Ordering::SeqCst));

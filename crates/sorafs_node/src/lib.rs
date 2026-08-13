@@ -5,7 +5,6 @@
     clippy::collapsible_if,
     clippy::field_reassign_with_default
 )]
-
 pub mod appeal_finance_transaction_forwarder;
 pub mod capacity;
 pub mod config;
@@ -378,7 +377,6 @@ const EVIDENCE_VIEWER_AUDIT_CYCLE_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.moderation.evidence_viewer_audit.cycle_id.v1";
 const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.entry_id.v1";
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
@@ -389,15 +387,12 @@ use std::{
     sync::{Arc, Mutex, OnceLock, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use capacity::{
     CapacityError, CapacityFinalizedCursorV1, CapacityManager, CapacityReconcileModeV1,
     CapacityReconciliationOutcomeV1, CapacityUsageSnapshot,
 };
 #[cfg(test)]
-use capacity::{
-    DeclarationWindow, FinalizedReplicationBindingV1, ReplicationPlan, ReplicationRelease,
-};
+use capacity::{DeclarationWindow, FinalizedReplicationBindingV1, ReplicationPlan, ReplicationRelease};
 use config::{GcConfig, RepairConfig, StorageConfig};
 #[cfg(test)]
 use iroha_data_model::sorafs::pin_registry::{PinManifestFinalizedRecordV1, PinStatus};
@@ -517,7 +512,6 @@ pub use transparency::{
     proof_token_issuance_from_base64, proof_token_issuance_from_frame,
     reserve_finalized_event_source_entry,
 };
-
 #[cfg(test)]
 use crate::metering::ReplicationUsageSample;
 use crate::{
@@ -16020,9 +16014,7 @@ impl NodeHandle {
             Ok(Ok(_)) | Ok(Err(ProviderIngestLocalStorageErrorV1::Permanent)) => {
                 Err(ProviderIngestLocalStorageErrorV1::Permanent)
             }
-            Ok(Err(ProviderIngestLocalStorageErrorV1::Quarantined)) => {
-                Err(ProviderIngestLocalStorageErrorV1::Quarantined)
-            }
+            Ok(Err(error @ ProviderIngestLocalStorageErrorV1::Quarantined)) => Err(error),
             Ok(Err(ProviderIngestLocalStorageErrorV1::Retryable)) => {
                 Err(ProviderIngestLocalStorageErrorV1::Retryable)
             }
@@ -16451,7 +16443,6 @@ fn moderation_evidence_viewer_error_from_object_error(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
@@ -16465,10 +16456,7 @@ mod tests {
         },
         time::Duration,
     };
-
-    use iroha_crypto::{
-        Algorithm, Hash, HashOf, KeyPair, Signature as IrohaSignature, SignatureOf,
-    };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature as IrohaSignature, SignatureOf};
     use iroha_data_model::{
         ChainId,
         block::BlockHeader,
@@ -16535,7 +16523,6 @@ mod tests {
         },
     };
     use tempfile::TempDir;
-
     use super::*;
     use crate::config::RuntimeRetentionPolicy;
     use crate::por::test_support::{
@@ -16548,7 +16535,6 @@ mod tests {
         sample_verdict as por_sample_verdict,
     };
     use crate::repair_ledger_projection::RepairLedgerTaskProjectionBuilderV1;
-
     include!("lib_early_test_support.rs");
     fn startup_por_archive_binding(seed: u8) -> PorFinalizedReplayArchiveBindingV1 {
         let key_pair =
@@ -18030,7 +18016,6 @@ mod tests {
             dek: &[u8; 32],
         ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
-
             let key = self.wrapping_key(&self.active_key_id)?;
             let nonce = Self::nonce(&self.active_key_id, context_digest, key);
             SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key)
@@ -18051,7 +18036,6 @@ mod tests {
             wrapped_dek: &[u8],
         ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
-
             let key = self.wrapping_key(key_id)?;
             let nonce = Self::nonce(key_id, context_digest, key);
             SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key)
@@ -19013,7 +18997,6 @@ mod tests {
     #[test]
     fn local_checkpoint_rejects_symlink_targets_and_parents() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         let temp = tempfile::tempdir().expect("temp dir");
         let root = temp.path().canonicalize().expect("canonical temp dir");
         let victim = root.join("victim");
@@ -19443,7 +19426,6 @@ mod tests {
     #[test]
     fn auxiliary_runtime_checkpoint_symlink_fails_startup() {
         use std::os::unix::fs::symlink;
-
         let (cfg, _dir) = storage_config_with_temp_dir();
         drop(NodeHandle::new(cfg.clone()));
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
@@ -20157,7 +20139,6 @@ mod tests {
     fn signed_reputation_snapshot_fixture() -> SignedReputationSnapshotV1 {
         signed_reputation_snapshot_fixture_with([0x42; 16], unix_now_secs(), None)
     }
-
     fn transparency_ledger_publication_fixture() -> ModerationLedgerCyclePublicationV1 {
         use iroha_data_model::sorafs::transparency::{
             MODERATION_LEDGER_ENTRY_VERSION_V1, ModerationLedgerEntryKindV1,
@@ -20212,7 +20193,6 @@ mod tests {
         )
         .expect("transparency ledger publication fixture")
     }
-
     fn privacy_aggregate_fixture(aggregate_id: &str, seed: u8) -> ModerationPrivacyAggregateV1 {
         use iroha_data_model::sorafs::transparency::{
             MODERATION_PRIVACY_AGGREGATE_VERSION_V1, MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
@@ -20342,7 +20322,6 @@ mod tests {
             labels: vec!["guardian-freeze".to_string(), "sfm4c".to_string()],
         }
     }
-
     fn privacy_aggregate_cycle_config() -> PrivacyAggregateCycleConfig {
         use iroha_data_model::sorafs::transparency::{
             MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerMetadataV1,
@@ -21292,7 +21271,6 @@ mod tests {
     #[test]
     fn moderation_quarantine_store_rejects_symlink_entries_on_restart() {
         use std::os::unix::fs::symlink;
-
         let (cfg, _dir) = storage_config_with_temp_dir();
         drop(NodeHandle::new(cfg.clone()));
         let victim = cfg.data_dir().join("quarantine-symlink-victim");
@@ -21532,7 +21510,6 @@ mod tests {
     #[test]
     fn moderation_evidence_viewer_audit_report_records_transparency_source_entry() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
-
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let payload = b"evidence viewer audit report fixture".to_vec();
         let mut screening = moderation_screening_input_fixture(
@@ -21651,7 +21628,6 @@ mod tests {
     #[test]
     fn moderation_evidence_viewer_audit_report_publish_due_publishes_and_is_idempotent() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
-
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let handle = node_with_test_quarantine_key_wrapper(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
@@ -22351,7 +22327,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-
             let target = root.join("valid-policy.to");
             write_local_checkpoint_atomic(
                 &target,
@@ -22998,7 +22973,6 @@ mod tests {
     #[test]
     fn record_transparency_ledger_source_entry_is_idempotent_and_rejects_conflicts() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
-
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
         let entry = transparency_ledger_source_entry(
@@ -23028,7 +23002,6 @@ mod tests {
     #[test]
     fn publish_transparency_ledger_source_entries_builds_and_publishes_publication() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
-
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
@@ -23224,7 +23197,6 @@ mod tests {
     #[test]
     fn publish_privacy_aggregate_cycle_builds_and_publishes_publication() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
-
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
         let publisher = Arc::new(RecordingPublisher::default());

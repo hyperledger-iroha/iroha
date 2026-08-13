@@ -1,11 +1,7 @@
 //! Strict sparse relaxed-R1CS algebra for the Vega Neutron/Nova composition.
-
-use std::collections::HashMap;
-
-use thiserror::Error;
-
 use super::{VegaT256ScalarV1 as Scalar, commitment::Commitment};
-
+use std::collections::HashMap;
+use thiserror::Error;
 /// Failure while constructing or evaluating a Vega R1CS object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum R1csError {
@@ -22,7 +18,6 @@ pub(super) enum R1csError {
     #[error("Vega R1CS assignment does not satisfy the relation")]
     Unsatisfied,
 }
-
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct SparseMatrix {
     rows: usize,
@@ -32,7 +27,6 @@ pub(super) struct SparseMatrix {
     coefficient_ids: CoefficientIds,
     coefficient_dictionary: Vec<Scalar>,
 }
-
 /// Append-only CSR construction for a fixed number of canonical rows.
 ///
 /// The builder retains the final CSR buffers plus a pre-sized dictionary
@@ -49,7 +43,6 @@ pub(super) struct SparseMatrixRowBuilder {
     coefficient_dictionary: Vec<Scalar>,
     coefficient_lookup: HashMap<[u8; 32], u32>,
 }
-
 /// Per-entry dictionary IDs at the narrowest width that represents exact `D`.
 #[derive(Debug, PartialEq, Eq)]
 enum CoefficientIds {
@@ -57,12 +50,10 @@ enum CoefficientIds {
     U16(Vec<u16>),
     U32(Vec<u32>),
 }
-
 /// Fallible unique-coefficient counter for one canonical matrix profile.
 pub(super) struct CoefficientDictionaryCounter {
     coefficients: HashMap<[u8; 32], ()>,
 }
-
 struct FoldRowInputs<'a> {
     relaxed_witness: &'a [Scalar],
     strict_witness: &'a [Scalar],
@@ -70,7 +61,6 @@ struct FoldRowInputs<'a> {
     relaxed_public_inputs: &'a [Scalar],
     strict_public_inputs: &'a [Scalar],
 }
-
 impl SparseMatrix {
     pub(super) fn new(
         rows: usize,
@@ -103,23 +93,18 @@ impl SparseMatrix {
         }
         builder.finish()
     }
-
     pub(super) fn rows(&self) -> usize {
         self.rows
     }
-
     pub(super) fn columns(&self) -> usize {
         self.columns
     }
-
     pub(super) fn nonzero_count(&self) -> usize {
         self.coefficient_ids.len()
     }
-
     pub(super) fn coefficient_count(&self) -> usize {
         self.coefficient_dictionary.len()
     }
-
     #[cfg(test)]
     pub(super) fn canonical_entries(&self) -> impl Iterator<Item = (usize, usize, Scalar)> + '_ {
         self.row_offsets
@@ -138,7 +123,6 @@ impl SparseMatrix {
                 })
             })
     }
-
     pub(super) fn row_entries(
         &self,
         row: usize,
@@ -151,7 +135,6 @@ impl SparseMatrix {
             )
         }))
     }
-
     #[cfg(test)]
     pub(super) fn multiply(&self, vector: &[Scalar]) -> Result<Vec<Scalar>, R1csError> {
         if vector.len() != self.columns {
@@ -167,7 +150,6 @@ impl SparseMatrix {
         }
         Ok(output)
     }
-
     #[cfg(test)]
     pub(super) fn bind_rows(&self, row_weights: &[Scalar]) -> Result<Vec<Scalar>, R1csError> {
         if row_weights.len() != self.rows {
@@ -183,7 +165,6 @@ impl SparseMatrix {
         }
         Ok(output)
     }
-
     pub(super) fn evaluate(
         &self,
         row_weights: &[Scalar],
@@ -202,7 +183,6 @@ impl SparseMatrix {
         }
         Ok(result)
     }
-
     fn row_bounds(&self, row: usize) -> Option<core::ops::Range<usize>> {
         let next_row = row.checked_add(1)?;
         let start =
@@ -211,7 +191,6 @@ impl SparseMatrix {
             usize::try_from(*self.row_offsets.get(next_row)?).expect("u32 CSR offset fits usize");
         Some(start..end)
     }
-
     fn coefficient(&self, index: usize) -> Scalar {
         let dictionary_index = self
             .coefficient_ids
@@ -223,7 +202,6 @@ impl SparseMatrix {
             .expect("CSR coefficient ID indexes the immutable dictionary")
     }
 }
-
 impl SparseMatrixRowBuilder {
     /// Start a fixed-row CSR matrix with exactly counted nonzero storage.
     pub(super) fn new(
@@ -259,7 +237,6 @@ impl SparseMatrixRowBuilder {
             coefficient_lookup,
         })
     }
-
     /// Consume one column-sorted, nonzero CSR row.
     pub(super) fn append_canonical_row<I>(&mut self, entries: I) -> Result<(), R1csError>
     where
@@ -317,7 +294,6 @@ impl SparseMatrixRowBuilder {
             .push(u32::try_from(new_nonzero_count).map_err(|_| R1csError::CsrStorageOverflow)?);
         Ok(())
     }
-
     /// Finish the matrix, appending empty offsets through the fixed row count.
     pub(super) fn finish(mut self) -> Result<SparseMatrix, R1csError> {
         if self.column_indices.len() != self.expected_nonzero_count
@@ -342,7 +318,6 @@ impl SparseMatrixRowBuilder {
             coefficient_dictionary: self.coefficient_dictionary,
         })
     }
-
     #[cfg(test)]
     fn storage_capacities(&self) -> (usize, usize, usize, usize, usize) {
         (
@@ -354,7 +329,6 @@ impl SparseMatrixRowBuilder {
         )
     }
 }
-
 impl CoefficientIds {
     fn with_capacity(nonzero_count: usize, coefficient_count: usize) -> Result<Self, R1csError> {
         let largest_id = coefficient_count.saturating_sub(1);
@@ -366,7 +340,6 @@ impl CoefficientIds {
             Ok(Self::U32(try_vec_with_exact_capacity(nonzero_count)?))
         }
     }
-
     fn push(&mut self, id: u32) -> Result<(), R1csError> {
         match self {
             Self::U8(ids) => ids.push(u8::try_from(id).map_err(|_| R1csError::CsrStorageOverflow)?),
@@ -377,7 +350,6 @@ impl CoefficientIds {
         }
         Ok(())
     }
-
     fn get(&self, index: usize) -> Option<usize> {
         match self {
             Self::U8(ids) => ids.get(index).copied().map(usize::from),
@@ -388,7 +360,6 @@ impl CoefficientIds {
                 .and_then(|id| usize::try_from(id).ok()),
         }
     }
-
     fn len(&self) -> usize {
         match self {
             Self::U8(ids) => ids.len(),
@@ -396,7 +367,6 @@ impl CoefficientIds {
             Self::U32(ids) => ids.len(),
         }
     }
-
     #[cfg(test)]
     fn capacity(&self) -> usize {
         match self {
@@ -405,7 +375,6 @@ impl CoefficientIds {
             Self::U32(ids) => ids.capacity(),
         }
     }
-
     #[cfg(test)]
     fn element_width(&self) -> usize {
         match self {
@@ -415,14 +384,12 @@ impl CoefficientIds {
         }
     }
 }
-
 impl CoefficientDictionaryCounter {
     pub(super) fn new() -> Self {
         Self {
             coefficients: HashMap::new(),
         }
     }
-
     pub(super) fn observe(&mut self, coefficient: Scalar) -> Result<(), R1csError> {
         let coefficient = coefficient.to_be_bytes();
         if self.coefficients.contains_key(&coefficient) {
@@ -444,12 +411,10 @@ impl CoefficientDictionaryCounter {
         debug_assert_eq!(self.coefficients.len(), next_len);
         Ok(())
     }
-
     pub(super) fn len(&self) -> usize {
         self.coefficients.len()
     }
 }
-
 fn validate_csr_dimensions(
     rows: usize,
     columns: usize,
@@ -466,7 +431,6 @@ fn validate_csr_dimensions(
     }
     Ok(())
 }
-
 fn try_vec_with_exact_capacity<T>(capacity: usize) -> Result<Vec<T>, R1csError> {
     let mut values = Vec::new();
     values
@@ -474,7 +438,6 @@ fn try_vec_with_exact_capacity<T>(capacity: usize) -> Result<Vec<T>, R1csError> 
         .map_err(|_| R1csError::CsrStorageAllocation)?;
     Ok(values)
 }
-
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Shape {
     constraint_count: usize,
@@ -484,7 +447,6 @@ pub(super) struct Shape {
     pub(super) b: SparseMatrix,
     pub(super) c: SparseMatrix,
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct MatrixProducts {
@@ -492,7 +454,6 @@ pub(super) struct MatrixProducts {
     pub(super) b: Vec<Scalar>,
     pub(super) c: Vec<Scalar>,
 }
-
 impl Shape {
     pub(super) fn new(
         constraint_count: usize,
@@ -525,23 +486,18 @@ impl Shape {
             c,
         })
     }
-
     pub(super) fn constraint_count(&self) -> usize {
         self.constraint_count
     }
-
     pub(super) fn variable_count(&self) -> usize {
         self.variable_count
     }
-
     pub(super) fn public_input_count(&self) -> usize {
         self.public_input_count
     }
-
     pub(super) fn columns(&self) -> usize {
         self.variable_count + 1 + self.public_input_count
     }
-
     #[cfg(test)]
     pub(super) fn multiply(&self, assignment: &[Scalar]) -> Result<MatrixProducts, R1csError> {
         if assignment.len() != self.columns() {
@@ -553,7 +509,6 @@ impl Shape {
             c: self.c.multiply(assignment)?,
         })
     }
-
     pub(super) fn validate_relaxed_assignment(
         &self,
         witness: &[Scalar],
@@ -577,7 +532,6 @@ impl Shape {
         }
         Ok(())
     }
-
     /// Validate `A z * B z = C z` without allocating a zero error vector or
     /// full matrix products.
     pub(super) fn validate_strict_assignment(
@@ -601,7 +555,6 @@ impl Shape {
         }
         Ok(())
     }
-
     /// Check whether one emitted circuit row exactly matches this immutable
     /// shape's canonical A/B/C row, without allocating matrix products.
     pub(super) fn matches_canonical_constraint_row(
@@ -618,7 +571,6 @@ impl Shape {
             && self.row_matches(&self.b, row, b)
             && self.row_matches(&self.c, row, c))
     }
-
     /// Return whether every A/B/C row from `start` through the fixed padded
     /// tail is empty.
     pub(super) fn has_only_empty_rows_from(&self, start: usize) -> Result<bool, R1csError> {
@@ -635,7 +587,6 @@ impl Shape {
             })
         }))
     }
-
     /// Derive the sole relaxed error vector while streaming rows directly.
     pub(super) fn derive_relaxed_error(
         &self,
@@ -655,7 +606,6 @@ impl Shape {
         }
         Ok(error)
     }
-
     /// Derive Nova's cross term without materializing a combined assignment
     /// or all three matrix products.
     pub(super) fn derive_fold_cross_term(
@@ -692,7 +642,6 @@ impl Shape {
         }
         Ok(cross_term)
     }
-
     fn row_matches(
         &self,
         matrix: &SparseMatrix,
@@ -704,7 +653,6 @@ impl Shape {
             .expect("bounded row was checked")
             .eq(expected)
     }
-
     fn evaluate_assignment_row(
         &self,
         matrix: &SparseMatrix,
@@ -727,7 +675,6 @@ impl Shape {
                 sum + coefficient * value
             })
     }
-
     fn evaluate_fold_row(
         &self,
         matrix: &SparseMatrix,
@@ -751,19 +698,16 @@ impl Shape {
             })
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Instance {
     pub(super) witness_commitment: Commitment,
     pub(super) public_inputs: Vec<Scalar>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Witness {
     pub(super) values: Vec<Scalar>,
     pub(super) blindings: Vec<Scalar>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RelaxedInstance {
     pub(super) witness_commitment: Commitment,
@@ -771,7 +715,6 @@ pub(super) struct RelaxedInstance {
     pub(super) public_inputs: Vec<Scalar>,
     pub(super) relaxation: Scalar,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RelaxedWitness {
     pub(super) values: Vec<Scalar>,
@@ -779,16 +722,13 @@ pub(super) struct RelaxedWitness {
     pub(super) error: Vec<Scalar>,
     pub(super) error_blindings: Vec<Scalar>,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::algebra::inner_product;
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     fn multiplication_shape() -> Shape {
         // z = [x, ONE, y], constraint x * x = y.
         let a = SparseMatrix::new(1, 3, &[(0, 0, s(1))]).expect("canonical A");
@@ -796,7 +736,6 @@ mod tests {
         let c = SparseMatrix::new(1, 3, &[(0, 2, s(1))]).expect("canonical C");
         Shape::new(1, 1, 1, a, b, c).expect("valid shape")
     }
-
     #[test]
     fn strict_and_relaxed_assignments_are_checked_exactly() {
         let shape = multiplication_shape();
@@ -812,7 +751,6 @@ mod tests {
         );
         assert!(shape.validate_strict_assignment(&[], &[s(9)]).is_err());
     }
-
     #[test]
     fn assignment_validation_streams_rows_without_full_products() {
         let source = include_str!("r1cs.rs");
@@ -829,7 +767,6 @@ mod tests {
         assert!(!validation.contains("self.multiply(&assignment)"));
         assert!(!validation.contains("Vec::with_capacity(self.columns())"));
     }
-
     #[test]
     fn row_streamed_error_and_cross_term_match_full_products() {
         let shape = multiplication_shape();
@@ -855,7 +792,6 @@ mod tests {
                 .expect("dimensions"),
             expected_error
         );
-
         let strict_witness = [s(5)];
         let strict_public = [s(25)];
         let effective_relaxation = relaxation + Scalar::one();
@@ -884,7 +820,6 @@ mod tests {
             expected_cross_term
         );
     }
-
     #[test]
     fn sparse_matrix_rejects_duplicates_ordering_zero_and_bounds() {
         assert!(SparseMatrix::new(1, 1, &[(0, 0, s(0))]).is_err());
@@ -893,7 +828,6 @@ mod tests {
         assert!(SparseMatrix::new(1, 2, &[(0, 1, s(1)), (0, 0, s(1))]).is_err());
         assert!(SparseMatrix::new(1, 1, &[(0, 0, s(1)), (0, 0, s(2))]).is_err());
     }
-
     #[test]
     fn sparse_matrix_exposes_the_complete_canonical_entry_order() {
         let entries = [(0, 1, s(3)), (1, 0, s(4)), (1, 2, s(5))];
@@ -902,7 +836,6 @@ mod tests {
         assert_eq!(matrix.coefficient_count(), entries.len());
         assert_eq!(matrix.canonical_entries().collect::<Vec<_>>(), entries);
     }
-
     #[test]
     fn coefficient_dictionary_deduplicates_in_first_csr_occurrence_order() {
         let entries = [(0, 0, s(2)), (0, 2, s(2)), (1, 1, s(3)), (2, 0, s(2))];
@@ -917,7 +850,6 @@ mod tests {
             vec![s(32), s(21), s(10)]
         );
     }
-
     #[test]
     fn coefficient_ids_select_the_smallest_exact_width_at_boundaries() {
         for (coefficient_count, expected_width) in
@@ -929,13 +861,11 @@ mod tests {
             assert_eq!(ids.len(), 0);
             assert_eq!(ids.capacity(), 0);
         }
-
         let mut u8_ids = CoefficientIds::U8(Vec::new());
         assert_eq!(u8_ids.push(256), Err(R1csError::CsrStorageOverflow));
         let mut u16_ids = CoefficientIds::U16(Vec::new());
         assert_eq!(u16_ids.push(65_536), Err(R1csError::CsrStorageOverflow));
     }
-
     #[test]
     fn retained_csr_payload_matches_the_adaptive_memory_equations() {
         fn payload_bytes(rows: usize, entries: usize, distinct: usize, id_width: usize) -> usize {
@@ -943,7 +873,6 @@ mod tests {
                 + (core::mem::size_of::<u32>() + id_width) * entries
                 + core::mem::size_of::<Scalar>() * distinct
         }
-
         let (rows, entries, distinct) = (8, 40, 7);
         assert_eq!(
             payload_bytes(rows, entries, distinct, 1),
@@ -958,7 +887,6 @@ mod tests {
             4 * (rows + 1) + 8 * entries + 32 * distinct
         );
     }
-
     #[test]
     fn u32_csr_row_iteration_matches_canonical_entry_order() {
         let entries = [(0, 1, s(3)), (2, 0, s(4)), (2, 3, s(5))];
@@ -979,7 +907,6 @@ mod tests {
         }
         assert!(matrix.row_entries(usize::MAX).is_none());
     }
-
     #[test]
     fn row_builder_pads_trailing_empty_rows_and_preserves_algebra() {
         let entries = [(0, 0, s(2)), (1, 2, s(3))];
@@ -1016,7 +943,6 @@ mod tests {
         assert_eq!(actual.row_entries(2).expect("trailing row").count(), 0);
         assert_eq!(actual.row_entries(3).expect("trailing row").count(), 0);
     }
-
     #[test]
     fn row_builder_rejects_overfilled_and_underfilled_exact_storage() {
         let mut overfilled = SparseMatrixRowBuilder::new(1, 2, 1, 1).expect("exact storage");
@@ -1026,14 +952,12 @@ mod tests {
             Err(R1csError::CsrEntryCountMismatch)
         );
         assert_eq!(overfilled.storage_capacities(), capacities);
-
         let mut underfilled = SparseMatrixRowBuilder::new(2, 2, 2, 1).expect("exact storage");
         underfilled
             .append_canonical_row([(0, s(1))])
             .expect("first row fits");
         assert_eq!(underfilled.finish(), Err(R1csError::CsrEntryCountMismatch));
     }
-
     #[test]
     fn row_builder_rejects_under_and_over_counted_coefficient_dictionaries() {
         let mut undercounted = SparseMatrixRowBuilder::new(1, 2, 2, 1).expect("bounded storage");
@@ -1041,7 +965,6 @@ mod tests {
             undercounted.append_canonical_row([(0, s(1)), (1, s(2))]),
             Err(R1csError::CsrEntryCountMismatch)
         );
-
         let mut overcounted = SparseMatrixRowBuilder::new(2, 1, 2, 2).expect("bounded storage");
         overcounted
             .append_canonical_row([(0, s(1))])
@@ -1051,7 +974,6 @@ mod tests {
             .expect("repeated coefficient");
         assert_eq!(overcounted.finish(), Err(R1csError::CsrEntryCountMismatch));
     }
-
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn csr_storage_rejects_values_outside_u32_without_allocating() {
@@ -1073,7 +995,6 @@ mod tests {
             Err(R1csError::CsrStorageOverflow)
         );
     }
-
     #[test]
     fn csr_source_keeps_compact_indices_dictionary_ids_and_fallible_reservation() {
         let source = include_str!("r1cs.rs");
@@ -1102,7 +1023,6 @@ mod tests {
         assert!(!production.contains("coefficients: Vec<Scalar>"));
         assert!(!production.contains("BTreeMap"));
         assert!(!production.contains("BTreeSet"));
-
         let retained_matrix = production
             .split("pub(super) struct SparseMatrix {")
             .nth(1)
@@ -1111,7 +1031,6 @@ mod tests {
         assert!(retained_matrix.contains("coefficient_ids: CoefficientIds"));
         assert!(retained_matrix.contains("coefficient_dictionary: Vec<Scalar>"));
         assert!(!retained_matrix.contains("HashMap"));
-
         let row_reader = production
             .split("pub(super) fn row_entries")
             .nth(1)
@@ -1122,7 +1041,6 @@ mod tests {
         assert!(!row_reader.contains("HashMap"));
         assert_eq!(core::mem::size_of::<Scalar>(), 32);
     }
-
     #[test]
     fn matrix_binding_matches_full_bilinear_evaluation() {
         let shape = multiplication_shape();
@@ -1134,7 +1052,6 @@ mod tests {
                 .expect("aligned")
         );
     }
-
     #[test]
     fn release_shape_and_sparse_matrix_are_not_deep_cloneable() {
         let source = include_str!("r1cs.rs");

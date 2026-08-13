@@ -54,7 +54,6 @@ enum ExitStreamError {
     #[error("failed to finish exit stream: {0}")]
     SendFinish(io::Error),
 }
-
 #[derive(Debug, Error)]
 enum IncentiveStreamError {
     #[error("measurement frame length must be non-zero")]
@@ -74,7 +73,6 @@ enum IncentiveStreamError {
     #[error("measurement stream read error: {0}")]
     Read(io::Error),
 }
-
 #[derive(Debug, Error)]
 enum HandshakeError {
     #[error("timeout waiting for {0}")]

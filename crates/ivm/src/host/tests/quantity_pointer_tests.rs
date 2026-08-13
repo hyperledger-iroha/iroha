@@ -1,11 +1,8 @@
 //! Pointer-ABI provenance and canonical quantity admission tests for the default IVM host.
-
 use super::*;
-
 #[test]
 fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
     let blob = test_tlv(PointerType::Blob, b"owned-heap-input");
-
     let mut heap_vm = IVM::new(u64::MAX);
     let heap_pointer = heap_vm
         .alloc_heap(u64::try_from(blob.len()).expect("TLV length fits u64"))
@@ -22,7 +19,6 @@ fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
         .expect("validate hash result");
     assert_eq!(digest.type_id, PointerType::Blob);
     assert_eq!(digest.payload.len(), 32);
-
     for (label, pointer) in [
         ("unallocated HEAP", Memory::HEAP_START),
         ("OUTPUT", Memory::OUTPUT_START),
@@ -41,7 +37,6 @@ fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
         );
         assert_eq!(vm.register(10), pointer);
     }
-
     let mut partial_vm = IVM::new(u64::MAX);
     let owned_blob_bytes = blob
         .len()
@@ -58,7 +53,6 @@ fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
         DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut partial_vm),
         Err(VMError::NoritoInvalid)
     ));
-
     for malformed in [test_tlv(PointerType::Name, b"wrong-type"), {
         let mut corrupted = blob.clone();
         let last = corrupted.len() - 1;
@@ -75,7 +69,6 @@ fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
             Err(VMError::NoritoInvalid)
         ));
     }
-
     let mut code_vm = IVM::new(u64::MAX);
     let mut code = crate::encoding::wide::encode_halt().to_le_bytes().to_vec();
     let code_pointer = u64::try_from(code.len()).expect("code offset fits u64");
@@ -87,7 +80,6 @@ fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
         Err(VMError::NoritoInvalid)
     ));
 }
-
 #[test]
 fn expect_tlv_enforces_pointer_policy() {
     crate::set_banner_enabled(false);
@@ -111,7 +103,6 @@ fn expect_tlv_enforces_pointer_policy() {
         VMError::AbiTypeNotAllowed { abi: 2, type_id } if type_id == PointerType::AccountId as u16
     ));
 }
-
 #[test]
 fn quantity_arguments_require_canonical_quantity_pointer() {
     crate::set_banner_enabled(false);
@@ -128,7 +119,6 @@ fn quantity_arguments_require_canonical_quantity_pointer() {
         DefaultHost::expect_quantity(&vm, 13),
         Ok(canonical_payload.len())
     );
-
     let account_ptr = vm
         .alloc_input_tlv(&test_tlv(PointerType::AccountId, &[]))
         .expect("allocate account fixture");
@@ -143,7 +133,6 @@ fn quantity_arguments_require_canonical_quantity_pointer() {
     vm.set_register(12, definition_ptr);
     vm.set_register(14, dataspace_ptr);
     let expected_gas = DefaultHost::mutation_gas(canonical_payload.len());
-
     let mut scoped_host = DefaultHost::new();
     assert_eq!(
         scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
@@ -153,7 +142,6 @@ fn quantity_arguments_require_canonical_quantity_pointer() {
         scoped_host.syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm),
         Ok(expected_gas)
     );
-
     let mut batch_host = DefaultHost::new();
     assert_eq!(
         batch_host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm),
@@ -164,7 +152,6 @@ fn quantity_arguments_require_canonical_quantity_pointer() {
         Ok(expected_gas)
     );
     assert!(batch_host.fastpq_batch_has_entries);
-
     let legacy_payload =
         norito::to_bytes(&canonical.into_numeric()).expect("encode legacy Numeric");
     let legacy_ptr = vm
@@ -175,7 +162,6 @@ fn quantity_arguments_require_canonical_quantity_pointer() {
         DefaultHost::expect_quantity(&vm, 13),
         Err(VMError::NoritoInvalid)
     );
-
     let noncanonical = Numeric::new(1_250_u32, 3);
     let noncanonical_ptr = vm
         .alloc_input_tlv(&test_tlv(
@@ -189,12 +175,10 @@ fn quantity_arguments_require_canonical_quantity_pointer() {
         Err(VMError::DecodeError)
     );
 }
-
 #[test]
 fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
     crate::set_banner_enabled(false);
     let mut vm = IVM::new(u64::MAX);
-
     let account_ptr = vm
         .alloc_input_tlv(&test_tlv(PointerType::AccountId, &[]))
         .expect("allocate account fixture");
@@ -229,7 +213,6 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
             &[0x5a; MAX_QUANTITY_FRAME_BYTES_V1],
         ))
         .expect("allocate maximum-sized noncanonical quantity");
-
     vm.set_register(13, maximum_sized_noncanonical_ptr);
     assert_eq!(
         read_bounded_tlv_payload_len_at(
@@ -246,7 +229,6 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         Err(VMError::DecodeError),
         "size admission must not replace canonical frame validation"
     );
-
     for (label, pointer) in [
         ("valid digest", valid_oversized_ptr),
         ("corrupt digest", quantity_ptr),
@@ -269,7 +251,6 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         );
         assert!(vm.memory.write_log().is_empty(), "{label}");
     }
-
     vm.set_register(10, account_ptr);
     vm.set_register(11, account_ptr);
     vm.set_register(12, definition_ptr);
@@ -282,7 +263,6 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         vm.register(13),
         vm.register(14),
     ];
-
     let mut scoped_host = DefaultHost::new();
     vm.memory.clear_tracking();
     assert_eq!(
@@ -294,7 +274,6 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         "header-only preparation must reject the oversized frame before reading its payload"
     );
     assert!(vm.memory.write_log().is_empty());
-
     vm.memory.clear_tracking();
     assert_eq!(
         scoped_host.syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm),
@@ -319,7 +298,6 @@ fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
         ],
         registers_before
     );
-
     let mut batch_host = DefaultHost::new();
     assert_eq!(
         batch_host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm),

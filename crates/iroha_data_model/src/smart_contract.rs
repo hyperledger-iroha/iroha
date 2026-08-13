@@ -1,14 +1,11 @@
 //! This module contains data and structures related only to smart contract execution
-
 use std::{format, str::FromStr, string::String, vec::Vec};
-
 use bech32::{Bech32m, Hrp};
 use iroha_data_model_derive::model;
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 use crate::{
     account::{AccountAddressError, AccountId, rekey::AccountAliasDomain},
     error::ParseError,
@@ -16,17 +13,13 @@ use crate::{
     name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
-
 pub mod payloads {
     //! Contexts with function arguments for different entrypoints
-
     use norito::{
         codec::{Decode, Encode},
         core::DecodeFromSlice,
     };
-
     use crate::{block::BlockHeader, prelude::*};
-
     /// Context for smart contract entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
@@ -36,7 +29,6 @@ pub mod payloads {
         /// Block currently being processed
         pub curr_block: BlockHeader,
     }
-
     /// Context for trigger entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
@@ -50,7 +42,6 @@ pub mod payloads {
         /// Event which triggered the execution
         pub event: EventBox,
     }
-
     /// Context for migrate entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
@@ -60,7 +51,6 @@ pub mod payloads {
         /// Block currently being processed (or latest block hash for queries)
         pub curr_block: BlockHeader,
     }
-
     /// Generic payload for `validate_*()` entrypoints of executor.
     #[derive(Debug, Clone, Encode, Decode)]
     pub struct Validate<T> {
@@ -69,7 +59,6 @@ pub mod payloads {
         /// Operation to be validated
         pub target: T,
     }
-
     impl<'a, T> DecodeFromSlice<'a> for Validate<T>
     where
         T: for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSerialize,
@@ -78,16 +67,12 @@ pub mod payloads {
             norito::core::decode_field_canonical::<Self>(bytes)
         }
     }
-
     #[cfg(test)]
     mod payloads_tests {
         use core::num::NonZeroU64;
-
         use iroha_crypto::KeyPair;
         use norito::core::DecodeFromSlice;
-
         use super::*;
-
         fn checked_random_account_id() -> AccountId {
             AccountId::new(
                 KeyPair::try_random()
@@ -96,7 +81,6 @@ pub mod payloads {
                     .clone(),
             )
         }
-
         #[test]
         fn validate_decode_from_slice_roundtrips_any_query() {
             let authority = checked_random_account_id();
@@ -127,7 +111,6 @@ pub mod payloads {
             );
             let validate = Validate { context, target };
             let bytes = validate.encode();
-
             let (decoded, used) = Validate::<crate::query::AnyQueryBox>::decode_from_slice(&bytes)
                 .expect("decode validate");
             assert_eq!(used, bytes.len());
@@ -142,55 +125,44 @@ pub mod payloads {
         }
     }
 }
-
 /// Metadata key tracking the next public contract deploy nonce for an account.
 pub const CONTRACT_DEPLOY_NONCE_METADATA_KEY: &str = "contract_deploy_nonce";
-
 /// Runtime permission marker required for a contract's `hajimari`/`始まり` lifecycle entrypoint.
 ///
 /// The host materializes this marker as an exact `CanInvokeContractEntrypoint`
 /// token bound to the deployed address and lifecycle selector.
 pub const CONTRACT_HAJIMARI_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
-
 /// Runtime permission required to invoke a contract's `kaizen`/`改善` lifecycle entrypoint.
 ///
 /// ABI V1 uses the same address-and-selector scoped invocation permission for
 /// lifecycle operations as it does for permissioned public entrypoints.
 pub const CONTRACT_KAIZEN_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
-
 /// Canonical human-readable prefix for every Bech32m contract address.
 ///
 /// Exact genesis-derived network identity is committed inside the address digest. The
 /// presentation prefix is therefore deliberately network-independent and parsers reject every
 /// other prefix.
 pub const CONTRACT_ADDRESS_HRP: &str = "irohac";
-
 const CONTRACT_ADDRESS_VERSION_V1: u8 = 1;
 const CONTRACT_ADDRESS_TAG_V1: &[u8] = b"iroha:contract-address:v1";
 const CONTRACT_SUBJECT_HASH_TO_POINT_TAG_V1: &[u8] = b"iroha:contract-subject:hash-to-point:v1:";
 const CONTRACT_ADDRESS_HASH_LEN: usize = 20;
 const CONTRACT_ADDRESS_PAYLOAD_LEN_V1: usize = 1 + 8 + CONTRACT_ADDRESS_HASH_LEN;
-
 pub use self::model::*;
-
 #[model]
 mod model {
     use derive_more::Display;
-
     use super::*;
-
     /// Canonical Bech32m-encoded public contract address.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractAlias(pub(super) ConstString);
-
     /// Canonical Bech32m-encoded public contract address.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractAddress(pub(super) ConstString);
-
     /// Active smart-contract instance binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
@@ -203,13 +175,11 @@ mod model {
         pub code_hash: iroha_crypto::Hash,
     }
 }
-
 struct ContractAliasSegments<'a> {
     name: &'a str,
     domain: Option<&'a str>,
     dataspace: &'a str,
 }
-
 impl ContractAlias {
     /// Build a contract alias from validated components.
     ///
@@ -232,7 +202,6 @@ impl ContractAlias {
         );
         literal.parse()
     }
-
     /// Contract alias name segment (`<name>`).
     #[must_use]
     pub fn name_segment(&self) -> &str {
@@ -240,7 +209,6 @@ impl ContractAlias {
             .expect("contract alias must remain valid after construction");
         segments.name
     }
-
     /// Optional alias-domain segment (`<domain>`).
     #[must_use]
     pub fn domain_segment(&self) -> Option<&str> {
@@ -248,7 +216,6 @@ impl ContractAlias {
             .expect("contract alias must remain valid after construction");
         segments.domain
     }
-
     /// Dataspace segment (`<dataspace>`).
     #[must_use]
     pub fn dataspace_segment(&self) -> &str {
@@ -256,7 +223,6 @@ impl ContractAlias {
             .expect("contract alias must remain valid after construction");
         segments.dataspace
     }
-
     /// Resolve the alias components against the dataspace catalog.
     ///
     /// # Errors
@@ -283,7 +249,6 @@ impl ContractAlias {
         Ok((name, domain, dataspace))
     }
 }
-
 fn split_contract_alias_segments(input: &str) -> Result<ContractAliasSegments<'_>, ParseError> {
     let (name, right) = input.split_once("::").ok_or_else(|| {
         ParseError::new(
@@ -320,7 +285,6 @@ fn split_contract_alias_segments(input: &str) -> Result<ContractAliasSegments<'_
         dataspace: right,
     })
 }
-
 fn normalize_contract_alias_segment(
     value: &str,
     segment: &'static str,
@@ -357,10 +321,8 @@ fn normalize_contract_alias_segment(
     })?;
     Ok(normalized.as_ref().to_owned())
 }
-
 impl FromStr for ContractAlias {
     type Err = ParseError;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -376,7 +338,6 @@ impl FromStr for ContractAlias {
                 "contract alias must not contain control characters",
             ));
         }
-
         let segments = split_contract_alias_segments(trimmed)?;
         let name = normalize_contract_alias_segment(segments.name, "contract alias name")?;
         let domain = segments
@@ -392,33 +353,27 @@ impl FromStr for ContractAlias {
         Ok(Self(ConstString::from(&*canonical)))
     }
 }
-
 impl AsRef<str> for ContractAlias {
     fn as_ref(&self) -> &str {
         self.0.as_ref()
     }
 }
-
 impl norito::core::NoritoSerialize for ContractAlias {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for ContractAlias {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ContractAlias deserialization must succeed for valid archives")
     }
-
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -427,13 +382,11 @@ impl<'a> norito::core::NoritoDeserialize<'a> for ContractAlias {
             .map_err(|err| norito::core::Error::Message(err.reason.into()))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ContractAlias {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -441,7 +394,6 @@ impl norito::json::FastJsonWrite for ContractAlias {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ContractAlias {
     fn json_deserialize(
@@ -454,7 +406,6 @@ impl norito::json::JsonDeserialize for ContractAlias {
         })
     }
 }
-
 /// Errors returned when deriving or parsing a [`ContractAddress`].
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ContractAddressError {
@@ -479,7 +430,6 @@ pub enum ContractAddressError {
     #[error("failed to derive contract address from deployer account: {0}")]
     InvalidDeployer(String),
 }
-
 impl ContractAddress {
     /// Derive a deterministic contract address from deployer identity, nonce, and dataspace.
     ///
@@ -500,14 +450,12 @@ impl ContractAddress {
     ) -> Result<Self, ContractAddressError> {
         let hrp = Hrp::parse(CONTRACT_ADDRESS_HRP)
             .map_err(|err| ContractAddressError::InvalidHrp(err.to_string()))?;
-
         let deployer_bytes = deployer
             .to_account_address()
             .and_then(|address| address.canonical_bytes())
             .map_err(|err: AccountAddressError| {
                 ContractAddressError::InvalidDeployer(err.to_string())
             })?;
-
         let deployer_len = u32::try_from(deployer_bytes.len()).map_err(|_| {
             ContractAddressError::InvalidDeployer(
                 "canonical deployer bytes exceed the contract-address framing limit".to_owned(),
@@ -527,18 +475,15 @@ impl ContractAddress {
         preimage.extend_from_slice(&deploy_nonce.to_be_bytes());
         preimage.extend_from_slice(&deployer_len.to_be_bytes());
         preimage.extend_from_slice(&deployer_bytes);
-
         let digest = blake3::hash(&preimage);
         let mut payload = Vec::with_capacity(CONTRACT_ADDRESS_PAYLOAD_LEN_V1);
         payload.push(CONTRACT_ADDRESS_VERSION_V1);
         payload.extend_from_slice(&dataspace_id.as_u64().to_be_bytes());
         payload.extend_from_slice(&digest.as_bytes()[..CONTRACT_ADDRESS_HASH_LEN]);
-
         let encoded = bech32::encode::<Bech32m>(hrp, &payload)
             .map_err(|err| ContractAddressError::InvalidLiteral(err.to_string()))?;
         encoded.parse()
     }
-
     /// Decode the dataspace identifier embedded in the address payload.
     ///
     /// # Errors
@@ -554,7 +499,6 @@ impl ContractAddress {
         bytes.copy_from_slice(&payload[1..9]);
         Ok(DataSpaceId::new(u64::from_be_bytes(bytes)))
     }
-
     /// Derive the canonical, non-signable contract subject identifier used for contract-owned
     /// authority.
     ///
@@ -583,40 +527,33 @@ impl ContractAddress {
                 .expect("contract subject hash-to-point retry counter exhausted");
         }
     }
-
     /// Borrow the canonical encoded literal.
     #[must_use]
     pub fn as_str(&self) -> &str {
         self.as_ref()
     }
 }
-
 impl AsRef<str> for ContractAddress {
     fn as_ref(&self) -> &str {
         &self.0
     }
 }
-
 impl norito::core::NoritoSerialize for ContractAddress {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::NoritoSerialize>::serialize(&self.as_ref(), writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_ref())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_ref())
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for ContractAddress {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ContractAddress deserialization must succeed for valid archives")
     }
-
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -625,22 +562,18 @@ impl<'a> norito::core::NoritoDeserialize<'a> for ContractAddress {
             .map_err(|err| norito::core::Error::Message(err.to_string()))
     }
 }
-
 impl FromStr for ContractAddress {
     type Err = ContractAddressError;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         decode_contract_address(value)?;
         Ok(Self(ConstString::from(value)))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ContractAddress {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -648,7 +581,6 @@ impl norito::json::FastJsonWrite for ContractAddress {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ContractAddress {
     fn json_deserialize(
@@ -661,7 +593,6 @@ impl norito::json::JsonDeserialize for ContractAddress {
         })
     }
 }
-
 #[cfg(feature = "json")]
 fn reserve_contract_json_decode(
     raw_bytes: usize,
@@ -678,7 +609,6 @@ fn reserve_contract_json_decode(
     norito::core::reserve_decode_allocation(bytes)
         .map_err(norito::json::Error::from_decode_resource)
 }
-
 fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddressError> {
     if value.trim().is_empty() {
         return Err(ContractAddressError::InvalidLiteral(
@@ -690,7 +620,6 @@ fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddres
             "contract address must not contain leading or trailing whitespace".to_owned(),
         ));
     }
-
     let (hrp, payload) = bech32::decode(value)
         .map_err(|err| ContractAddressError::InvalidLiteral(err.to_string()))?;
     if payload.is_empty() {
@@ -699,7 +628,6 @@ fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddres
             expected: CONTRACT_ADDRESS_PAYLOAD_LEN_V1,
         });
     }
-
     match payload[0] {
         CONTRACT_ADDRESS_VERSION_V1 => {
             if payload.len() != CONTRACT_ADDRESS_PAYLOAD_LEN_V1 {
@@ -711,16 +639,13 @@ fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddres
         }
         version => return Err(ContractAddressError::UnsupportedVersion(version)),
     }
-
     if hrp.as_str() != CONTRACT_ADDRESS_HRP {
         return Err(ContractAddressError::InvalidHrp(format!(
             "expected `{CONTRACT_ADDRESS_HRP}`, found `{hrp}`"
         )));
     }
-
     Ok((hrp, payload))
 }
-
 /// Re-export commonly used smart-contract types.
 pub mod prelude {
     pub use super::{
@@ -728,26 +653,21 @@ pub mod prelude {
         ContractInstance,
     };
 }
-
 #[cfg(test)]
 mod contract_address_tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-
     use super::*;
     use crate::{block::BlockHeader, id::ChainId};
-
     fn network_id(seed: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             seed,
         )))
     }
-
     fn cross_sdk_network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()
             .expect("fixed network identity must be canonical")
     }
-
     fn checked_random_account_id() -> AccountId {
         AccountId::new(
             KeyPair::try_random()
@@ -756,7 +676,6 @@ mod contract_address_tests {
                 .clone(),
         )
     }
-
     #[test]
     fn contract_address_derivation_is_deterministic() {
         let authority = checked_random_account_id();
@@ -772,7 +691,6 @@ mod contract_address_tests {
         );
         assert!(first.as_str().starts_with(CONTRACT_ADDRESS_HRP));
     }
-
     #[test]
     fn contract_address_derivation_matches_cross_sdk_vector() {
         let private_key =
@@ -784,7 +702,6 @@ mod contract_address_tests {
                 .public_key()
                 .clone(),
         );
-
         let address = ContractAddress::derive(
             &cross_sdk_network_id(),
             &authority,
@@ -792,13 +709,11 @@ mod contract_address_tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive pinned contract address");
-
         assert_eq!(
             address.as_str(),
             "irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp"
         );
     }
-
     #[test]
     fn contract_address_derivation_changes_with_nonce_and_exact_network_id() {
         let authority = checked_random_account_id();
@@ -821,17 +736,14 @@ mod contract_address_tests {
         let second =
             ContractAddress::derive(&second_deployment.1, &authority, 0, DataSpaceId::UNIVERSAL)
                 .expect("second-network address");
-
         assert_ne!(first, next_nonce);
         assert_ne!(first, second);
         assert!(second.as_str().starts_with(CONTRACT_ADDRESS_HRP));
     }
-
     #[test]
     fn contract_address_derivation_ignores_account_display_discriminant() {
         let authority = checked_random_account_id();
         let network_id = network_id(b"contract-address-display-independence");
-
         let first = {
             let _display_prefix = crate::account::address::ChainDiscriminantGuard::enter(42);
             ContractAddress::derive(&network_id, &authority, 0, DataSpaceId::UNIVERSAL)
@@ -842,11 +754,9 @@ mod contract_address_tests {
             ContractAddress::derive(&network_id, &authority, 0, DataSpaceId::UNIVERSAL)
                 .expect("derive with second display prefix")
         };
-
         assert_eq!(first, second);
         assert!(first.as_str().starts_with(CONTRACT_ADDRESS_HRP));
     }
-
     #[test]
     fn contract_address_subject_is_deterministic_and_unique_per_address() {
         let authority = checked_random_account_id();
@@ -855,24 +765,20 @@ mod contract_address_tests {
             .expect("first contract address");
         let second = ContractAddress::derive(&network_id, &authority, 1, DataSpaceId::UNIVERSAL)
             .expect("second contract address");
-
         assert_eq!(first.subject_id(), first.subject_id());
         assert_ne!(first.subject_id(), second.subject_id());
     }
-
     #[test]
     fn contract_address_subject_consensus_vector() {
         let address: ContractAddress =
             "irohac1qyqqqqqqqqqqqqpze5aq5vfxha4qlvu4q80e0ff4yesw50c37z96q"
                 .parse()
                 .expect("pinned contract address");
-
         assert_eq!(
             hex::encode(address.subject_id().expect_single_signatory().to_bytes().1),
             "c19d0326bf14cb44e4e11d5c561f5f69367c305e2bc3ee29086b49aa07df3a55"
         );
     }
-
     #[test]
     fn contract_address_parser_rejects_invalid_literals() {
         let err = "not-an-address"
@@ -886,7 +792,6 @@ mod contract_address_tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn contract_address_parser_rejects_a_valid_payload_with_the_wrong_hrp() {
         let authority = checked_random_account_id();
@@ -901,13 +806,11 @@ mod contract_address_tests {
         let wrong_hrp = Hrp::parse("sorac").expect("static wrong HRP");
         let wrong_literal =
             bech32::encode::<Bech32m>(wrong_hrp, &payload).expect("encode wrong-HRP literal");
-
         assert!(matches!(
             wrong_literal.parse::<ContractAddress>(),
             Err(ContractAddressError::InvalidHrp(_))
         ));
     }
-
     #[test]
     fn contract_alias_parses_long_literal() {
         let alias: ContractAlias = "router::dex.universal".parse().expect("valid alias");
@@ -915,7 +818,6 @@ mod contract_address_tests {
         assert_eq!(alias.domain_segment(), Some("dex"));
         assert_eq!(alias.dataspace_segment(), "universal");
     }
-
     #[test]
     fn contract_alias_parses_short_literal() {
         let alias: ContractAlias = "router::universal".parse().expect("valid alias");
@@ -923,7 +825,6 @@ mod contract_address_tests {
         assert_eq!(alias.domain_segment(), None);
         assert_eq!(alias.dataspace_segment(), "universal");
     }
-
     #[test]
     fn contract_alias_resolves_alias_domain_segment() {
         let alias: ContractAlias = "router::dex.centralbank".parse().expect("valid alias");
@@ -937,9 +838,7 @@ mod contract_address_tests {
             },
         ])
         .expect("catalog");
-
         let (name, domain, dataspace) = alias.resolve_components(&catalog).expect("resolve");
-
         assert_eq!(name, "router".parse::<Name>().expect("name"));
         assert_eq!(
             domain,
@@ -951,7 +850,6 @@ mod contract_address_tests {
         );
         assert_eq!(dataspace, DataSpaceId::new(9));
     }
-
     #[test]
     fn contract_alias_rejects_invalid_literals() {
         for raw in [
@@ -968,7 +866,6 @@ mod contract_address_tests {
             assert!(raw.parse::<ContractAlias>().is_err(), "must fail: {raw}");
         }
     }
-
     #[cfg(feature = "json")]
     fn assert_measured_json_decode<T>(json: &str)
     where
@@ -997,7 +894,6 @@ mod contract_address_tests {
         ));
         assert!(usage.total_allocated_bytes() <= exact - 1);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn contract_alias_and_address_json_decode_are_measured_exactly() {
@@ -1006,24 +902,20 @@ mod contract_address_tests {
             "\"irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp\"",
         );
     }
-
     #[test]
     fn contract_alias_norito_wire_is_validated_string_literal() {
         let alias: ContractAlias = "router::dex.universal".parse().expect("valid alias");
         let alias_bytes = norito::codec::Encode::encode(&alias);
         let string_bytes = norito::codec::Encode::encode(&alias.as_ref().to_owned());
         assert_eq!(alias_bytes, string_bytes);
-
         let decoded = <ContractAlias as norito::codec::Decode>::decode(&mut alias_bytes.as_slice())
             .expect("decode contract alias");
         assert_eq!(decoded, alias);
-
         let invalid_bytes = norito::codec::Encode::encode(&"router".to_owned());
         let err = <ContractAlias as norito::codec::Decode>::decode(&mut invalid_bytes.as_slice())
             .expect_err("invalid alias literal must fail");
         assert!(err.to_string().contains("contract alias"));
     }
-
     #[test]
     fn contract_address_norito_wire_is_validated_string_literal() {
         let authority = checked_random_account_id();
@@ -1037,12 +929,10 @@ mod contract_address_tests {
         let address_bytes = norito::codec::Encode::encode(&address);
         let string_bytes = norito::codec::Encode::encode(&address.as_ref().to_owned());
         assert_eq!(address_bytes, string_bytes);
-
         let decoded =
             <ContractAddress as norito::codec::Decode>::decode(&mut address_bytes.as_slice())
                 .expect("decode contract address");
         assert_eq!(decoded, address);
-
         let invalid_bytes = norito::codec::Encode::encode(&"not-an-address".to_owned());
         let err = <ContractAddress as norito::codec::Decode>::decode(&mut invalid_bytes.as_slice())
             .expect_err("invalid address literal must fail");
@@ -1051,20 +941,17 @@ mod contract_address_tests {
 }
 /// Exact recursive schemas for public Kotodama entrypoint boundaries.
 pub mod entrypoint;
-
 // Smart contract manifest types and helpers.
 pub mod manifest {
     //! Manifest metadata for IVM smart contracts.
     //! It can be attached to a transaction's `metadata` under a well-known
     //! key for admission-time checks. When attached or registered, a V1
     //! manifest must carry both consensus-binding hashes.
-
     use iroha_crypto::{Error as CryptoError, Hash, KeyPair, PublicKey, Signature};
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
     #[cfg(feature = "json")]
     use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
-
     use crate::{
         account::AccountId,
         events::EventFilterBox,
@@ -1072,10 +959,8 @@ pub mod manifest {
         smart_contract::entrypoint::{EntrypointArgumentSchemaV1, EntrypointValueTypeV1},
         trigger::{TriggerId, action::Repeats},
     };
-
     /// Well-known metadata key used to attach a contract manifest.
     pub const MANIFEST_METADATA_KEY: &str = "contract_manifest";
-
     /// Smart contract manifest used for admission-time validation.
     ///
     /// `code_hash` and `abi_hash` remain represented as options so malformed
@@ -1147,7 +1032,6 @@ pub mod manifest {
         #[norito(default)]
         pub provenance: Option<ManifestProvenance>,
     }
-
     /// Bounded dynamic state access advertised by a compiler.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1170,7 +1054,6 @@ pub mod manifest {
         /// Maximum number of state keys touched by this dynamic access.
         pub max_keys: u32,
     }
-
     /// Advisory read/write keys used by the scheduler when present in a manifest.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     pub struct AccessSetHints {
@@ -1185,7 +1068,6 @@ pub mod manifest {
         #[norito(default)]
         pub dynamic_writes: Vec<DynamicAccessHint>,
     }
-
     #[cfg(feature = "json")]
     impl FastJsonWrite for AccessSetHints {
         fn write_json(&self, out: &mut String) {
@@ -1207,7 +1089,6 @@ pub mod manifest {
             JsonSerialize::json_serialize(&self.dynamic_writes, out);
             out.push('}');
         }
-
         fn write_json_to(
             &self,
             out: &mut dyn json::JsonWriteSink,
@@ -1226,24 +1107,20 @@ pub mod manifest {
             Ok(())
         }
     }
-
     #[cfg(feature = "json")]
     impl JsonDeserialize for AccessSetHints {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             parser.skip_ws();
             parser.consume_char(b'{')?;
-
             let mut read_keys: Option<Vec<String>> = None;
             let mut write_keys: Option<Vec<String>> = None;
             let mut dynamic_reads: Option<Vec<DynamicAccessHint>> = None;
             let mut dynamic_writes: Option<Vec<DynamicAccessHint>> = None;
-
             loop {
                 parser.skip_ws();
                 if parser.try_consume_char(b'}')? {
                     break;
                 }
-
                 let key = parser.parse_key()?;
                 match key.as_str() {
                     "read_keys" => {
@@ -1274,7 +1151,6 @@ pub mod manifest {
                         return Err(json::Error::unknown_field(other));
                     }
                 }
-
                 if parser.consume_comma_if_present()? {
                     continue;
                 }
@@ -1282,10 +1158,8 @@ pub mod manifest {
                 parser.consume_char(b'}')?;
                 break;
             }
-
             let read_keys = read_keys.ok_or_else(|| json::Error::missing_field("read_keys"))?;
             let write_keys = write_keys.ok_or_else(|| json::Error::missing_field("write_keys"))?;
-
             Ok(AccessSetHints {
                 read_keys,
                 write_keys,
@@ -1294,7 +1168,6 @@ pub mod manifest {
             })
         }
     }
-
     /// Signature metadata binding a manifest to an approved signer.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1321,7 +1194,6 @@ pub mod manifest {
         /// Signature over the manifest payload (see [`ContractManifestSignaturePayload`]).
         pub signature: Signature,
     }
-
     /// Declarative metadata for a compiled entrypoint.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1380,7 +1252,6 @@ pub mod manifest {
         #[norito(default)]
         pub triggers: Vec<TriggerDescriptor>,
     }
-
     /// Declarative parameter metadata for a public or view entrypoint.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1406,7 +1277,6 @@ pub mod manifest {
         /// Canonical type name advertised to clients.
         pub type_name: String,
     }
-
     /// Declarative durable state schema advertised by a compiled contract.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1432,7 +1302,6 @@ pub mod manifest {
         /// Canonical durable value type stored under this key.
         pub type_name: String,
     }
-
     /// Stable application error code exposed by a compiled contract.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1460,7 +1329,6 @@ pub mod manifest {
         /// Explicit non-zero numeric code returned on abort.
         pub code: u32,
     }
-
     /// Localized message text for a specific language tag.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1486,7 +1354,6 @@ pub mod manifest {
         /// Localized message text.
         pub text: String,
     }
-
     /// Translation entry keyed by a stable message id.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1512,7 +1379,6 @@ pub mod manifest {
         /// Localized translations for this message.
         pub translations: Vec<KotobaTranslation>,
     }
-
     /// Entrypoint callback target referenced by a trigger declaration.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1539,7 +1405,6 @@ pub mod manifest {
         /// Entrypoint name to invoke.
         pub entrypoint: String,
     }
-
     /// Declarative trigger metadata attached to an entrypoint.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1575,7 +1440,6 @@ pub mod manifest {
         /// Callback target for this trigger.
         pub callback: TriggerCallback,
     }
-
     /// Entry point category advertised by Kotodama.
     #[derive(Debug, Clone, Copy, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1606,7 +1470,6 @@ pub mod manifest {
         /// `kaizen`/`改善` lifecycle declaration.
         Kaizen,
     }
-
     /// Canonical payload signed to attest a manifest.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(
@@ -1657,7 +1520,6 @@ pub mod manifest {
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
     }
-
     impl From<&ContractManifest> for ContractManifestSignaturePayload {
         fn from(manifest: &ContractManifest) -> Self {
             Self {
@@ -1674,21 +1536,18 @@ pub mod manifest {
             }
         }
     }
-
     impl ContractManifest {
         /// Build the canonical payload that must be signed for provenance checks.
         #[must_use]
         pub fn signature_payload(&self) -> ContractManifestSignaturePayload {
             ContractManifestSignaturePayload::from(self)
         }
-
         /// Encode the canonical signing payload into Norito bytes.
         #[must_use]
         pub fn signature_payload_bytes(&self) -> Vec<u8> {
             norito::encode_canonical(&self.signature_payload())
                 .expect("manifest signature payload encoding must succeed")
         }
-
         /// Attach provenance by signing the canonical payload with the provided key pair.
         ///
         /// # Errors
@@ -1704,7 +1563,6 @@ pub mod manifest {
             });
             Ok(self)
         }
-
         /// Attach provenance by signing the canonical payload with the provided key pair.
         #[must_use]
         pub fn signed(self, key_pair: &KeyPair) -> Self {
@@ -1712,11 +1570,9 @@ pub mod manifest {
                 .expect("contract manifest signing should succeed")
         }
     }
-
     #[cfg(all(test, feature = "json"))]
     mod tests {
         use super::*;
-
         #[test]
         fn access_set_hints_roundtrip() {
             let hints = AccessSetHints {
@@ -1725,18 +1581,15 @@ pub mod manifest {
                 dynamic_reads: Vec::new(),
                 dynamic_writes: Vec::new(),
             };
-
             let json = norito::json::to_json(&hints).expect("serialize access hints");
             assert_eq!(
                 json,
                 "{\"read_keys\":[\"account:satoshi\"],\"write_keys\":[\"asset:btc#iroha\"],\"dynamic_reads\":[],\"dynamic_writes\":[]}"
             );
-
             let decoded: AccessSetHints = norito::json::from_str(&json).expect("deserialize hints");
             assert_eq!(decoded.read_keys, hints.read_keys);
             assert_eq!(decoded.write_keys, hints.write_keys);
         }
-
         #[test]
         fn entrypoint_kind_json_uses_only_branded_v1_names() {
             for (kind, name) in [
@@ -1751,18 +1604,15 @@ pub mod manifest {
                     norito::json::from_str(&json).expect("deserialize branded entrypoint kind");
                 assert_eq!(decoded, kind);
             }
-
             for retired in ["Public", "public", "Init", "init", "Upgrade", "upgrade"] {
                 let json = format!(r#"{{"kind":"{retired}","value":null}}"#);
                 norito::json::from_str::<EntryPointKind>(&json)
                     .expect_err("retired English entrypoint kind must be rejected");
             }
         }
-
         #[test]
         fn entrypoint_descriptor_includes_triggers() {
             use crate::{events::EventFilterBox, trigger::action::Repeats};
-
             let trigger = TriggerDescriptor {
                 id: "wake".parse().expect("trigger id"),
                 repeats: Repeats::Indefinitely,
@@ -1815,7 +1665,6 @@ pub mod manifest {
             assert_eq!(decoded.triggers.len(), 1);
             assert_eq!(decoded.triggers[0].callback.entrypoint, "run");
         }
-
         #[test]
         fn access_set_hints_missing_fields_fail() {
             let err = norito::json::from_str::<AccessSetHints>("{}")
@@ -1831,17 +1680,13 @@ pub mod manifest {
             }
         }
     }
-
     #[cfg(test)]
     mod manifest_signing_tests {
         use iroha_crypto::KeyPair;
-
         use super::*;
-
         fn checked_random_keypair() -> KeyPair {
             KeyPair::try_random().expect("test fixture random key generation should succeed")
         }
-
         #[test]
         fn signature_payload_excludes_provenance_and_verifies() {
             let kp = checked_random_keypair();
@@ -1862,7 +1707,6 @@ pub mod manifest {
                 }]),
                 provenance: None,
             };
-
             let payload = manifest.signature_payload_bytes();
             {
                 let alternate_flags =
@@ -1880,13 +1724,11 @@ pub mod manifest {
                 signer: kp.public_key().clone(),
                 signature: signature.clone(),
             });
-
             // Provenance should not affect the payload bytes.
             assert_eq!(payload, manifest.signature_payload_bytes());
             signature
                 .verify(kp.public_key(), &payload)
                 .expect("signature must verify");
-
             manifest.error_codes.as_mut().expect("error codes")[0].code = 1002;
             assert!(
                 signature
@@ -1895,7 +1737,6 @@ pub mod manifest {
                 "manifest provenance must bind stable error codes"
             );
         }
-
         #[test]
         fn try_signed_attaches_verifiable_provenance() {
             let kp = checked_random_keypair();
@@ -1912,11 +1753,9 @@ pub mod manifest {
                 error_codes: None,
                 provenance: None,
             };
-
             let signed = manifest.try_signed(&kp).expect("sign manifest");
             let provenance = signed.provenance.as_ref().expect("manifest provenance");
             let payload = signed.signature_payload_bytes();
-
             assert_eq!(provenance.signer, kp.public_key().clone());
             provenance
                 .signature

@@ -1,11 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Loopback integration test covering FeedbackHint/ReceiverReport flow and parity decisions.
-
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr},
     time::Duration,
 };
-
 use eyre::{Result as EyreResult, eyre};
 use iroha_core::streaming::StreamingHandle;
 use iroha_crypto::{Algorithm, KeyPair, streaming::FeedbackStateSnapshot};
@@ -20,7 +18,6 @@ use norito::streaming::{
     FeedbackHintFrame, ReceiverReport, Resolution, SyncDiagnostics, TransportCapabilities,
 };
 use tokio::time::timeout;
-
 const FEEDBACK_FP_SHIFT: u32 = 16;
 const FEEDBACK_ALPHA_FP: u32 = 13_107;
 const FEEDBACK_OFFSET_FP: u32 = 327;
@@ -28,16 +25,13 @@ const FEEDBACK_CEIL_BIAS: u32 = 0xFFFF;
 const FEC_WINDOW_CHUNKS: u32 = 12;
 const MAX_PARITY_CHUNKS: u8 = 6;
 const LOOPBACK_TIMEOUT: Duration = Duration::from_secs(15);
-
 fn fill_hash(byte: u8) -> [u8; 32] {
     [byte; 32]
 }
-
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn loss_ratio_to_q16(loss_ratio: f64) -> u32 {
     ((loss_ratio * 65_536.0).round()) as u32
 }
-
 fn ewma_update(current: u32, sample: u32) -> u32 {
     if current == sample {
         return current;
@@ -52,7 +46,6 @@ fn ewma_update(current: u32, sample: u32) -> u32 {
     let clamped = next.clamp(0, i64::from(u32::MAX));
     u32::try_from(clamped).expect("clamped to u32")
 }
-
 fn parity_from_loss_fp(loss_fp: u32) -> u8 {
     let scaled = (u64::from(loss_fp) * 5) / 4;
     let adjusted = (scaled + u64::from(FEEDBACK_OFFSET_FP)) * u64::from(FEC_WINDOW_CHUNKS);
@@ -60,13 +53,11 @@ fn parity_from_loss_fp(loss_fp: u32) -> u8 {
         .min(u64::from(MAX_PARITY_CHUNKS));
     u8::try_from(parity).expect("parity within u8")
 }
-
 fn make_peer(keys: &KeyPair, port: u16) -> Peer {
     let std_addr = StdSocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let addr = SocketAddr::from(std_addr);
     Peer::new(addr, keys.public_key().clone())
 }
-
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::too_many_lines)]
 async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
@@ -88,40 +79,33 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
     };
     let listen_addr = server.local_addr().map_err(|err| eyre!(err))?;
     let server_certificate_fingerprint = server.certificate_fingerprint();
-
     let publisher_keys = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked streaming publisher Ed25519 keypair");
     let viewer_keys = KeyPair::try_random().expect("generate checked streaming viewer keypair");
     let publisher_peer = make_peer(&publisher_keys, 24_101);
     let viewer_peer = make_peer(&viewer_keys, 24_102);
-
     let feedback_caps = CapabilityFlags::from_bits(
         CapabilityFlags::FEATURE_FEEDBACK_HINTS | CapabilityFlags::FEATURE_PRIVACY_PROVIDER,
     );
     let publisher_handle = StreamingHandle::new().with_capabilities(feedback_caps);
     let viewer_handle = StreamingHandle::new().with_capabilities(feedback_caps);
-
     let stream_id = fill_hash(0xA1);
     let first_loss_fp = loss_ratio_to_q16(0.07);
     let second_loss_fp = loss_ratio_to_q16(0.01);
     let expected_initial_parity = parity_from_loss_fp(first_loss_fp);
     let expected_ewma_after_second = ewma_update(first_loss_fp, second_loss_fp);
-
     let server_task = {
         let server = server.clone();
         let publisher_handle = publisher_handle.clone();
         let viewer_peer = viewer_peer.clone();
         async move {
             let mut conn = server.accept().await.map_err(|err| eyre!(err))?;
-
             let mut publisher_caps = TransportCapabilities::kyber768_default();
             publisher_caps.max_segment_datagram_size = 1_024;
-
             let (_ack, resolution) = publisher_handle
                 .negotiate_publisher_transport(&viewer_peer, &mut conn, publisher_caps)
                 .await
                 .map_err(|err| eyre!(err))?;
-
             let mut hints = 0_u8;
             let mut reports = 0_u8;
             while hints < 2 || reports < 2 {
@@ -135,16 +119,13 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
                     _ => {}
                 }
             }
-
             let parity = publisher_handle
                 .feedback_parity(viewer_peer.id())
                 .expect("parity recorded");
             let snapshot = publisher_handle
                 .feedback_snapshot(viewer_peer.id())
                 .expect("snapshot recorded");
-
             conn.close();
-
             Ok::<(u8, FeedbackStateSnapshot, u16), eyre::Report>((
                 parity,
                 snapshot,
@@ -152,7 +133,6 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
             ))
         }
     };
-
     let viewer_task = {
         let publisher_peer = publisher_peer.clone();
         let viewer_handle = viewer_handle.clone();
@@ -162,7 +142,6 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
                 StreamingClient::connect(&endpoint, server_certificate_fingerprint, settings)
                     .await
                     .map_err(|err| eyre!(err))?;
-
             let report = CapabilityReport {
                 stream_id,
                 endpoint_role: CapabilityRole::Viewer,
@@ -182,7 +161,6 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
             };
             let mut viewer_caps = TransportCapabilities::kyber768_default();
             viewer_caps.max_segment_datagram_size = 1_100;
-
             let (_ack, resolution) = viewer_handle
                 .negotiate_viewer_transport(
                     &publisher_peer,
@@ -192,7 +170,6 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
                 )
                 .await
                 .map_err(|err| eyre!(err))?;
-
             let hint_primary = FeedbackHintFrame {
                 stream_id,
                 loss_ewma_q16: first_loss_fp,
@@ -227,7 +204,6 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
                     violation_count: 0,
                 }),
             };
-
             let hint_followup = FeedbackHintFrame {
                 stream_id,
                 loss_ewma_q16: second_loss_fp,
@@ -253,7 +229,6 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
                 fec_budget: 0,
                 sync_diagnostics: None,
             };
-
             client
                 .connection()
                 .send_control_frame(&ControlFrame::FeedbackHint(hint_primary))
@@ -264,7 +239,6 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
                 .send_control_frame(&ControlFrame::ReceiverReport(report_primary))
                 .await
                 .map_err(|err| eyre!(err))?;
-
             client
                 .connection()
                 .send_control_frame(&ControlFrame::FeedbackHint(hint_followup))
@@ -275,7 +249,6 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
                 .send_control_frame(&ControlFrame::ReceiverReport(report_followup))
                 .await
                 .map_err(|err| eyre!(err))?;
-
             // Let the publisher consume the control frames and terminate first. Closing
             // immediately can race with stream delivery and surface a spurious "closed by peer".
             let _ = client.connection().quic_connection().closed().await;
@@ -283,12 +256,10 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
             Ok::<(), eyre::Report>(())
         }
     };
-
     let join_outcome = timeout(LOOPBACK_TIMEOUT, async {
         tokio::try_join!(server_task, viewer_task)
     })
     .await;
-
     match join_outcome {
         Err(_) => {
             server.shutdown().await;

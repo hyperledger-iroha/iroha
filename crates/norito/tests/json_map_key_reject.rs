@@ -1,9 +1,6 @@
 //! Tests covering `json_from_map_key` fast-path validation and duplicate detection.
-
 use std::collections::HashMap;
-
 use norito::json::{self, JsonDeserialize};
-
 #[test]
 fn json_map_key_fast_path_rejects_invalid_keys() {
     let invalid = norito::json!({ "truthy": 1 });
@@ -12,7 +9,6 @@ fn json_map_key_fast_path_rejects_invalid_keys() {
         json::Error::Message(msg) => assert_eq!(msg, "expected bool"),
         other => panic!("expected message error, got {other:?}"),
     }
-
     let err = json::from_json::<HashMap<bool, u32>>(r#"{"truthy":1}"#)
         .expect_err("parser path should reject invalid bool keys");
     match err {
@@ -31,7 +27,6 @@ fn json_map_key_fast_path_rejects_invalid_keys() {
         }
         other => panic!("expected duplicate-field error, got {other:?}"),
     }
-
     let err = json::from_json::<HashMap<u64, u32>>(r#"{"1":0,"01":1}"#)
         .expect_err("parser path should detect duplicate numeric keys");
     match err {
@@ -39,7 +34,6 @@ fn json_map_key_fast_path_rejects_invalid_keys() {
         other => panic!("expected duplicate-field error, got {other:?}"),
     }
 }
-
 #[test]
 fn json_map_key_rejects_invalid_numeric_keys() {
     let invalid = norito::json!({ "not_an_int": 1 });
@@ -49,7 +43,6 @@ fn json_map_key_rejects_invalid_numeric_keys() {
         json::Error::Message(msg) => assert_eq!(msg, "expected u64"),
         other => panic!("expected message error, got {other:?}"),
     }
-
     let err = json::from_json::<HashMap<u64, u32>>(r#"{"not_an_int":1}"#)
         .expect_err("parser path should reject non-numeric map keys");
     match err {
@@ -57,7 +50,6 @@ fn json_map_key_rejects_invalid_numeric_keys() {
         other => panic!("expected message error, got {other:?}"),
     }
 }
-
 #[test]
 fn json_map_key_rejects_negative_numbers() {
     let invalid = norito::json!({ "-1": 1 });
@@ -67,7 +59,6 @@ fn json_map_key_rejects_negative_numbers() {
         json::Error::Message(msg) => assert_eq!(msg, "expected u64"),
         other => panic!("expected message error, got {other:?}"),
     }
-
     let err = json::from_json::<HashMap<u64, u32>>(r#"{"-1":1}"#)
         .expect_err("parser path should reject negative keys for unsigned map");
     match err {
@@ -75,7 +66,6 @@ fn json_map_key_rejects_negative_numbers() {
         other => panic!("expected message error, got {other:?}"),
     }
 }
-
 #[test]
 fn json_set_fast_path_rejects_duplicates() {
     let dup = norito::json!([1, 1]);
@@ -85,7 +75,6 @@ fn json_set_fast_path_rejects_duplicates() {
         json::Error::Message(msg) => assert_eq!(msg, "duplicate element in set"),
         other => panic!("expected duplicate-element error, got {other:?}"),
     }
-
     let err = json::from_json::<std::collections::HashSet<u32>>(r#"[1,1]"#)
         .expect_err("parser path should reject duplicate set elements");
     match err {
@@ -93,7 +82,6 @@ fn json_set_fast_path_rejects_duplicates() {
         other => panic!("expected duplicate-element error, got {other:?}"),
     }
 }
-
 #[test]
 fn json_btreeset_fast_path_rejects_duplicates() {
     let dup = norito::json!([1, 1]);
@@ -103,7 +91,6 @@ fn json_btreeset_fast_path_rejects_duplicates() {
         json::Error::Message(msg) => assert_eq!(msg, "duplicate element in set"),
         other => panic!("expected duplicate-element error, got {other:?}"),
     }
-
     let err = json::from_json::<std::collections::BTreeSet<u32>>(r#"[1,1]"#)
         .expect_err("parser path should reject duplicate BTreeSet elements");
     match err {
@@ -111,7 +98,6 @@ fn json_btreeset_fast_path_rejects_duplicates() {
         other => panic!("expected duplicate-element error, got {other:?}"),
     }
 }
-
 #[test]
 fn json_map_bool_duplicate_detection() {
     let err = json::from_json::<HashMap<bool, u32>>(r#"{"true":0,"true":1}"#)
@@ -121,7 +107,6 @@ fn json_map_bool_duplicate_detection() {
         other => panic!("expected duplicate-field error, got {other:?}"),
     }
 }
-
 #[test]
 fn json_btreemap_duplicate_detection() {
     let dup = norito::json!({ "1": 0, "01": 1 });
@@ -131,7 +116,6 @@ fn json_btreemap_duplicate_detection() {
         json::Error::DuplicateField { field } => assert!(field == "1" || field == "01"),
         other => panic!("expected duplicate-field error, got {other:?}"),
     }
-
     let err = json::from_json::<std::collections::BTreeMap<u64, u32>>(r#"{"1":0,"01":1}"#)
         .expect_err("parser path should detect duplicate numeric keys");
     match err {
@@ -139,7 +123,6 @@ fn json_btreemap_duplicate_detection() {
         other => panic!("expected duplicate-field error, got {other:?}"),
     }
 }
-
 #[test]
 fn json_map_key_rejects_numeric_overflow() {
     let overflow = norito::json!({ "300": 1 });
@@ -149,7 +132,6 @@ fn json_map_key_rejects_numeric_overflow() {
         json::Error::Message(msg) => assert_eq!(msg, "u8 overflow"),
         other => panic!("expected overflow error, got {other:?}"),
     }
-
     let err = json::from_json::<HashMap<u8, u32>>(r#"{"300":1}"#)
         .expect_err("parser path should reject u8 overflow");
     match err {
@@ -157,7 +139,6 @@ fn json_map_key_rejects_numeric_overflow() {
         other => panic!("expected overflow error, got {other:?}"),
     }
 }
-
 #[test]
 fn json_map_key_rejects_nonzero_zero_key() {
     let zeroish = norito::json!({ "0": 1 });
@@ -167,7 +148,6 @@ fn json_map_key_rejects_nonzero_zero_key() {
         json::Error::Message(msg) => assert_eq!(msg, "expected non-zero u32"),
         other => panic!("expected non-zero error, got {other:?}"),
     }
-
     let err = json::from_json::<HashMap<core::num::NonZeroU32, u32>>(r#"{"0":1}"#)
         .expect_err("parser path should reject zero for NonZero keys");
     match err {
@@ -175,21 +155,18 @@ fn json_map_key_rejects_nonzero_zero_key() {
         other => panic!("expected non-zero error, got {other:?}"),
     }
 }
-
 #[test]
 fn bool_map_key_rejects_non_bool_inputs() {
     for key in ["", "truthy", "False", "0", "yes", " true "] {
         let mut map = norito::json::Map::new();
         map.insert(key.to_owned(), norito::json!(1));
         let value = norito::json::Value::Object(map);
-
         let err = HashMap::<bool, u8>::json_from_value(&value)
             .expect_err("value path should reject non-bool keys");
         match err {
             json::Error::Message(msg) => assert_eq!(msg, "expected bool"),
             other => panic!("expected bool error, got {other:?}"),
         }
-
         let json_text = norito::json::to_json(&value).expect("serialize test map");
         let err = json::from_json::<HashMap<bool, u8>>(&json_text)
             .expect_err("parser path should reject non-bool keys");
@@ -199,7 +176,6 @@ fn bool_map_key_rejects_non_bool_inputs() {
         }
     }
 }
-
 #[test]
 fn hashset_rejects_duplicate_elements_for_deterministic_values() {
     for value in [0_u32, 1, 42, u32::MAX] {
@@ -210,7 +186,6 @@ fn hashset_rejects_duplicate_elements_for_deterministic_values() {
             json::Error::Message(msg) => assert_eq!(msg, "duplicate element in set"),
             other => panic!("expected duplicate-element error, got {other:?}"),
         }
-
         let json_text = norito::json::to_json(&arr).expect("serialize duplicate set");
         let err = json::from_json::<std::collections::HashSet<u32>>(&json_text)
             .expect_err("parser path should reject duplicate set elements");
@@ -220,7 +195,6 @@ fn hashset_rejects_duplicate_elements_for_deterministic_values() {
         }
     }
 }
-
 #[test]
 fn btreeset_rejects_duplicate_elements_for_deterministic_values() {
     for value in [0_u32, 1, 42, u32::MAX] {
@@ -231,7 +205,6 @@ fn btreeset_rejects_duplicate_elements_for_deterministic_values() {
             json::Error::Message(msg) => assert_eq!(msg, "duplicate element in set"),
             other => panic!("expected duplicate-element error, got {other:?}"),
         }
-
         let json_text = norito::json::to_json(&arr).expect("serialize duplicate set");
         let err = json::from_json::<std::collections::BTreeSet<u32>>(&json_text)
             .expect_err("parser path should reject duplicate BTreeSet elements");
@@ -241,19 +214,16 @@ fn btreeset_rejects_duplicate_elements_for_deterministic_values() {
         }
     }
 }
-
 #[test]
 fn numeric_duplicate_strings_canonicalise_for_deterministic_values() {
     for (value, pad) in [(0_u64, 1_usize), (1, 2), (42, 3), (u64::MAX, 4)] {
         let canonical = value.to_string();
         let padded = format!("{:0width$}", value, width = canonical.len() + pad);
         assert_ne!(canonical, padded);
-
         let mut map = norito::json::Map::new();
         map.insert(canonical.clone(), norito::json!(0));
         map.insert(padded.clone(), norito::json!(1));
         let json_map = norito::json::Value::Object(map);
-
         let err = HashMap::<u64, u32>::json_from_value(&json_map)
             .expect_err("value path should reject duplicate numeric key encodings");
         match err {
@@ -265,7 +235,6 @@ fn numeric_duplicate_strings_canonicalise_for_deterministic_values() {
             }
             other => panic!("expected duplicate-field error, got {other:?}"),
         }
-
         let json_text = norito::json::to_json(&json_map).expect("serialize duplicate numeric map");
         let err = json::from_json::<HashMap<u64, u32>>(&json_text)
             .expect_err("parser path should reject duplicate numeric key encodings");
@@ -280,7 +249,6 @@ fn numeric_duplicate_strings_canonicalise_for_deterministic_values() {
         }
     }
 }
-
 #[test]
 fn numeric_map_keys_roundtrip_for_deterministic_values() {
     for values in [
@@ -290,7 +258,6 @@ fn numeric_map_keys_roundtrip_for_deterministic_values() {
         vec![u64::MAX, 0, 42, u64::MAX],
     ] {
         use std::collections::HashSet;
-
         let mut seen = HashSet::new();
         let mut json_map = norito::json::Map::new();
         for v in values {
@@ -298,7 +265,6 @@ fn numeric_map_keys_roundtrip_for_deterministic_values() {
                 json_map.insert(v.to_string(), norito::json!(v));
             }
         }
-
         let value = norito::json::Value::Object(json_map.clone());
         let parsed = HashMap::<u64, u64>::json_from_value(&value)
             .expect("value path should decode canonical numeric keys");
@@ -310,7 +276,6 @@ fn numeric_map_keys_roundtrip_for_deterministic_values() {
                 .expect("stored numeric value");
             assert_eq!(expected, *v);
         }
-
         let json_text = norito::json::to_json(&value).expect("serialize numeric map");
         let parsed_from_str = json::from_json::<HashMap<u64, u64>>(&json_text)
             .expect("parser path should decode canonical numeric keys");

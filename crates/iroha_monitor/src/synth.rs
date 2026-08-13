@@ -9,13 +9,10 @@
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-
 use std::f32::consts::{PI, TAU};
-
 use crate::etenraku::{
     self, OrnamentMark, Ornaments, SequenceEvent, SequenceLayer, layer_intonation_cents,
 };
-
 const MASTER_GAIN: f32 = 0.26;
 const TAIL_SECONDS: f32 = 3.5;
 const PAN_SHO: f32 = 0.0;
@@ -26,14 +23,12 @@ const PAN_BIWA: f32 = -0.08;
 const PAN_TAIKO: f32 = -0.05;
 const PAN_SHOKO: f32 = 0.14;
 const PAN_KAKKO: f32 = 0.05;
-
 fn saturating_samples(value: f32) -> u32 {
     if !value.is_finite() {
         return 0;
     }
     value.clamp(0.0, u32::MAX as f32) as u32
 }
-
 /// Streaming synth state used by the CPAL callback.
 pub struct SynthState {
     events: Vec<TimedEvent>,
@@ -46,14 +41,12 @@ pub struct SynthState {
     timeline: etenraku::ScoreTimeline,
     finished: bool,
 }
-
 #[derive(Clone)]
 struct TimedEvent {
     sample: u64,
     beat: f32,
     event: SequenceEvent,
 }
-
 #[derive(Clone, Copy)]
 struct RenderContext {
     section_index: usize,
@@ -61,7 +54,6 @@ struct RenderContext {
     bar_phase: f32,
     dist_to_obachi: f32,
 }
-
 impl RenderContext {
     fn new(_time_seconds: f32, beat: f32) -> Self {
         let hyoshi = (beat / etenraku::HYOSHI_BEATS).floor();
@@ -77,34 +69,28 @@ impl RenderContext {
             dist_to_obachi,
         }
     }
-
     fn section_index(&self) -> usize {
         self.section_index.min(2)
     }
-
     fn dist_to_obachi(&self) -> f32 {
         self.dist_to_obachi
     }
 }
-
 impl SynthState {
     pub fn render_chunk(&mut self, dest: &mut [f32]) {
         if dest.is_empty() {
             return;
         }
-
         if self.finished {
             dest.fill(0.0);
             return;
         }
-
         let channels = self.channels.max(1);
         assert!(
             dest.len().is_multiple_of(channels),
             "dest buffer must be a multiple of the channel count"
         );
         dest.fill(0.0);
-
         let frames = dest.len() / channels;
         for frame_idx in 0..frames {
             // Dispatch due events.
@@ -120,14 +106,12 @@ impl SynthState {
                 }
                 self.event_idx += 1;
             }
-
             let time_seconds = self.current_sample as f32 / self.sample_rate;
             let beat = self.timeline.beat_at(time_seconds);
             let context = RenderContext::new(time_seconds, beat);
             let (mut left, mut right) = self.voices.next_stereo_sample(context);
             left *= MASTER_GAIN;
             right *= MASTER_GAIN;
-
             let offset = frame_idx * channels;
             match channels {
                 1 => dest[offset] = (left + right) * 0.5,
@@ -144,7 +128,6 @@ impl SynthState {
                     }
                 }
             }
-
             self.current_sample = self.current_sample.saturating_add(1);
             if self.event_idx >= self.events.len()
                 && self.voices.is_idle()
@@ -156,12 +139,10 @@ impl SynthState {
         }
     }
 }
-
 /// Build the streaming synth state for the monitor's builtin audio.
 pub fn prepare(sample_rate: u32, channels: usize) -> SynthState {
     let (raw_events, timeline) = etenraku::synth_events();
     let sample_rate_f = sample_rate.max(1) as f32;
-
     let mut events: Vec<TimedEvent> = raw_events
         .into_iter()
         .filter(|event| {
@@ -191,19 +172,16 @@ pub fn prepare(sample_rate: u32, channels: usize) -> SynthState {
             }
         })
         .collect();
-
     events.sort_by(|a, b| {
         a.sample
             .cmp(&b.sample)
             .then_with(|| b.event.on.cmp(&a.event.on))
             .then_with(|| a.event.note.cmp(&b.event.note))
     });
-
     let last_event_sample = events.iter().map(|ev| ev.sample).max().unwrap_or(0);
     let tail = ((timeline.total_seconds() + TAIL_SECONDS) * sample_rate_f).ceil();
     let tail_samples = u64::try_from(tail as i64).unwrap_or(0);
     let total_samples = last_event_sample.max(tail_samples);
-
     SynthState {
         events,
         event_idx: 0,
@@ -216,7 +194,6 @@ pub fn prepare(sample_rate: u32, channels: usize) -> SynthState {
         finished: false,
     }
 }
-
 struct RetroVoices {
     sho: ShoVoice,
     hichiriki: HichirikiVoice,
@@ -227,7 +204,6 @@ struct RetroVoices {
     shoko: PercussionVoice,
     kakko: PercussionVoice,
 }
-
 impl RetroVoices {
     fn new(sample_rate: f32) -> Self {
         Self {
@@ -241,7 +217,6 @@ impl RetroVoices {
             kakko: PercussionVoice::new(sample_rate, PercussionInstrument::Kakko),
         }
     }
-
     fn note_on(&mut self, event: SequenceEvent, beat: f32) {
         match event.layer {
             SequenceLayer::Sho => self.sho.note_on(event.note, event.vel, beat),
@@ -260,7 +235,6 @@ impl RetroVoices {
             SequenceLayer::Kakko => self.kakko.note_on(event.note, event.vel),
         }
     }
-
     fn note_off(&mut self, event: SequenceEvent, _beat: f32) {
         match event.layer {
             SequenceLayer::Sho => self.sho.note_off(event.note),
@@ -273,7 +247,6 @@ impl RetroVoices {
             SequenceLayer::Kakko => self.kakko.note_off(),
         }
     }
-
     fn next_stereo_sample(&mut self, ctx: RenderContext) -> (f32, f32) {
         let sho = self.sho.next_sample(ctx);
         let hichiriki = self.hichiriki.next_sample(ctx);
@@ -283,7 +256,6 @@ impl RetroVoices {
         let taiko = self.taiko.next_sample();
         let shoko = self.shoko.next_sample();
         let kakko = self.kakko.next_sample();
-
         let (mut left, mut right) = pan_sample(sho, PAN_SHO);
         let (hl, hr) = pan_sample(hichiriki, PAN_HICHIRIKI);
         let (rl, rr) = pan_sample(ryuteki, PAN_RYUTEKI);
@@ -292,12 +264,10 @@ impl RetroVoices {
         let (tl, tr) = pan_sample(taiko, PAN_TAIKO);
         let (sl, sr) = pan_sample(shoko, PAN_SHOKO);
         let (xl, xr) = pan_sample(kakko, PAN_KAKKO);
-
         left += hl + rl + kl + bl + tl + sl + xl;
         right += hr + rr + kr + br + tr + sr + xr;
         (left, right)
     }
-
     fn is_idle(&self) -> bool {
         self.sho.is_idle()
             && self.hichiriki.is_idle()
@@ -309,14 +279,12 @@ impl RetroVoices {
             && self.kakko.is_idle()
     }
 }
-
 #[derive(Clone, Copy)]
 enum PercussionInstrument {
     Taiko,
     Shoko,
     Kakko,
 }
-
 struct PercussionVoice {
     sample_rate: f32,
     instrument: PercussionInstrument,
@@ -336,7 +304,6 @@ struct PercussionVoice {
     tail_threshold: f32,
     noise: Lcg32,
 }
-
 impl PercussionVoice {
     fn new(sample_rate: f32, instrument: PercussionInstrument) -> Self {
         let seed = match instrument {
@@ -364,7 +331,6 @@ impl PercussionVoice {
             noise: Lcg32::new(seed),
         }
     }
-
     fn note_on(&mut self, note: u8, velocity: u8) {
         self.phase = 0.0;
         self.overtone_phase = 0.0;
@@ -413,25 +379,21 @@ impl PercussionVoice {
         self.noise
             .reseed((u32::from(note) << 9) ^ u32::from(velocity) ^ 0x51A7_0F21);
     }
-
     fn note_off(&mut self) {
         self.amplitude *= 0.32;
         self.noise_level *= 0.2;
         self.pitch_env *= 0.4;
     }
-
     fn next_sample(&mut self) -> f32 {
         if !self.active {
             return 0.0;
         }
-
         let pitch_bend = self.pitch_env * self.pitch_drop_hz;
         let body_freq = self.base_freq + pitch_bend;
         let overtone_freq = body_freq * self.overtone_ratio;
         self.phase = wrap_phase(self.phase + TAU * body_freq / self.sample_rate);
         self.overtone_phase =
             wrap_phase(self.overtone_phase + TAU * overtone_freq / self.sample_rate);
-
         let noise = self.noise.next() * self.noise_level;
         let sample = match self.instrument {
             PercussionInstrument::Taiko => {
@@ -453,7 +415,6 @@ impl PercussionVoice {
                 soft_clip((body + shell).mul_add(self.amplitude, noise * 0.06))
             }
         };
-
         self.amplitude *= self.amp_decay;
         self.pitch_env *= self.pitch_decay;
         self.noise_level *= self.noise_decay;
@@ -463,18 +424,15 @@ impl PercussionVoice {
         }
         sample
     }
-
     fn is_idle(&self) -> bool {
         !self.active
     }
 }
-
 struct ShoVoice {
     sample_rate: f32,
     notes: Vec<ShoOsc>,
     noise: Lcg32,
 }
-
 struct ShoOsc {
     note: u8,
     oscillator: Oscillator,
@@ -483,7 +441,6 @@ struct ShoOsc {
     detune_ratio: f32,
     transition_env: f32,
 }
-
 impl ShoVoice {
     fn new(sample_rate: f32) -> Self {
         Self {
@@ -492,7 +449,6 @@ impl ShoVoice {
             noise: Lcg32::new(0x5A5A_1F1F),
         }
     }
-
     fn note_on(&mut self, note: u8, velocity: u8, beat: f32) {
         let freq = midi_note_to_freq(note, SequenceLayer::Sho);
         let gain = velocity_to_gain(velocity) * 0.52;
@@ -514,7 +470,6 @@ impl ShoVoice {
             existing.transition_env = 1.0;
             return;
         }
-
         let mut envelope = Envelope::with_times(self.sample_rate, attack, release);
         envelope.trigger();
         self.notes.push(ShoOsc {
@@ -526,13 +481,11 @@ impl ShoVoice {
             transition_env: 1.0,
         });
     }
-
     fn note_off(&mut self, note: u8) {
         if let Some(existing) = self.notes.iter_mut().find(|osc| osc.note == note) {
             existing.envelope.release();
         }
     }
-
     fn next_sample(&mut self, ctx: RenderContext) -> f32 {
         let section = ctx.section_index();
         let breath_gain = sho_breath_gain(&ctx);
@@ -564,12 +517,10 @@ impl ShoVoice {
         };
         acc * section_halo
     }
-
     fn is_idle(&self) -> bool {
         self.notes.is_empty()
     }
 }
-
 struct HichirikiVoice {
     sample_rate: f32,
     oscillator: Oscillator,
@@ -590,7 +541,6 @@ struct HichirikiVoice {
     current_note: u8,
     noise: Lcg32,
 }
-
 impl HichirikiVoice {
     fn new(sample_rate: f32) -> Self {
         Self {
@@ -614,7 +564,6 @@ impl HichirikiVoice {
             noise: Lcg32::new(0x1357_2468),
         }
     }
-
     fn note_on(&mut self, note: u8, velocity: u8, ornaments: Ornaments, beat: f32) {
         self.current_note = note;
         let freq = midi_note_to_freq(note, SequenceLayer::Hichiriki);
@@ -627,19 +576,16 @@ impl HichirikiVoice {
         let release = 0.32;
         self.envelope.reset_with(self.sample_rate, attack, release);
         self.envelope.trigger();
-
         let mut gain = velocity_to_gain(velocity) * 0.74;
         if ornaments.contains(OrnamentMark::Fukura) {
             gain *= 1.06;
         }
         self.base_gain = gain;
-
         self.breath_mix = if ornaments.contains(OrnamentMark::Fukura) {
             0.22
         } else {
             0.16
         };
-
         self.vibrato_rate = if ornaments.contains(OrnamentMark::Mawashi) {
             5.4
         } else {
@@ -651,7 +597,6 @@ impl HichirikiVoice {
             7.0
         };
         self.vibrato_phase = 0.0;
-
         let base_delay: f32 = if ornaments.contains(OrnamentMark::Tataku) {
             0.26
         } else {
@@ -660,7 +605,6 @@ impl HichirikiVoice {
         let delay_samples = base_delay.mul_add(self.sample_rate, 0.0).round().max(0.0);
         self.vibrato_delay_samples = saturating_samples(delay_samples);
         self.vibrato_counter = 0;
-
         if ornaments.contains(OrnamentMark::Seme) {
             let peak = self.noise.next().mul_add(0.08, 0.30);
             self.glide_peak_cents = (peak * 100.0).clamp(20.0, 45.0);
@@ -685,25 +629,20 @@ impl HichirikiVoice {
             self.glide_release_samples = 0;
             self.glide_counter = 0;
         }
-
         let lag = self.noise.next().abs().mul_add(0.03, 0.04);
         self.breath_lag_samples = saturating_samples(lag.mul_add(self.sample_rate, 0.0).max(0.0));
         self.breath_env = 0.0;
-
         self.noise
             .reseed((u32::from(note) << 16) ^ u32::from(velocity) ^ 0x9E37_79B9 ^ beat.to_bits());
     }
-
     fn note_off(&mut self) {
         self.envelope.release();
     }
-
     fn next_sample(&mut self, ctx: RenderContext) -> f32 {
         let env = self.envelope.advance();
         if env <= f32::EPSILON && self.envelope.is_idle() {
             return 0.0;
         }
-
         self.vibrato_counter = self.vibrato_counter.saturating_add(1);
         let obachi_lock = ctx.dist_to_obachi().abs() < 0.18;
         let mut cents_mod = 0.0;
@@ -723,7 +662,6 @@ impl HichirikiVoice {
             }
             self.glide_counter = self.glide_counter.saturating_add(1);
         }
-
         if !obachi_lock
             && self.vibrato_counter >= self.vibrato_delay_samples
             && self.vibrato_depth_cents > 0.0
@@ -732,7 +670,6 @@ impl HichirikiVoice {
             self.vibrato_phase =
                 (self.vibrato_phase + TAU * self.vibrato_rate / self.sample_rate).rem_euclid(TAU);
         }
-
         match self.current_note % 12 {
             4 | 9 => {
                 if obachi_lock {
@@ -749,29 +686,24 @@ impl HichirikiVoice {
             }
             _ => {}
         }
-
         let base_freq = midi_note_to_freq(self.current_note, SequenceLayer::Hichiriki);
         self.oscillator
             .set_freq(base_freq * cents_to_ratio(cents_mod));
         let phase = self.oscillator.advance_phase(self.sample_rate);
         let tone = reed_wave(phase);
-
         let mut target_noise = self.breath_mix * env.mul_add(0.4, 0.6);
         if self.vibrato_counter < self.breath_lag_samples {
             target_noise *= 0.25;
         }
         self.breath_env = target_noise.mul_add(0.12, self.breath_env * 0.88);
         let breath = self.noise.next() * self.breath_env;
-
         let sample = tone.mul_add(self.breath_env.mul_add(-0.32, 1.0), breath);
         sample * self.base_gain * env
     }
-
     fn is_idle(&self) -> bool {
         self.envelope.is_idle()
     }
 }
-
 struct RyutekiVoice {
     sample_rate: f32,
     oscillator: Oscillator,
@@ -791,7 +723,6 @@ struct RyutekiVoice {
     current_note: u8,
     noise: Lcg32,
 }
-
 impl RyutekiVoice {
     fn new(sample_rate: f32) -> Self {
         Self {
@@ -814,14 +745,12 @@ impl RyutekiVoice {
             noise: Lcg32::new(0x2468_ACED),
         }
     }
-
     fn note_on(&mut self, note: u8, velocity: u8, ornaments: Ornaments, beat: f32) {
         self.current_note = note;
         let freq = midi_note_to_freq(note, SequenceLayer::Ryuteki);
         self.oscillator = Oscillator::new(freq);
         self.envelope.reset_with(self.sample_rate, 0.045, 0.28);
         self.envelope.trigger();
-
         self.base_gain = velocity_to_gain(velocity) * 0.56;
         self.noise_env = 1.0;
         self.noise_decay = exp_decay(self.sample_rate, 0.08);
@@ -851,20 +780,16 @@ impl RyutekiVoice {
         self.lip_phase = 0.0;
         self.noise.reseed((u32::from(note) << 8) ^ 0xA5A5_1122);
     }
-
     fn note_off(&mut self) {
         self.envelope.release();
     }
-
     fn next_sample(&mut self, ctx: RenderContext) -> f32 {
         let env = self.envelope.advance();
         if env <= f32::EPSILON && self.envelope.is_idle() {
             return 0.0;
         }
-
         self.noise_env *= self.noise_decay;
         let noise_env = self.noise_env.clamp(0.0, 1.0);
-
         self.vibrato_counter = self.vibrato_counter.saturating_add(1);
         let obachi_lock = ctx.dist_to_obachi().abs() < 0.18;
         let mut cents_mod = 0.0;
@@ -872,7 +797,6 @@ impl RyutekiVoice {
         if !obachi_lock {
             cents_mod += self.lip_phase.sin() * self.lip_depth_cents;
         }
-
         if !obachi_lock
             && self.vibrato_counter >= self.vibrato_delay_samples
             && self.vibrato_depth_cents > 0.0
@@ -881,7 +805,6 @@ impl RyutekiVoice {
             self.vibrato_phase =
                 (self.vibrato_phase + TAU * self.vibrato_rate / self.sample_rate).rem_euclid(TAU);
         }
-
         // Hyōshi-based intonation shading near obachi landing.
         let phase = ctx.hyoshi_phase;
         if (7.2..=8.0).contains(&phase) {
@@ -890,30 +813,24 @@ impl RyutekiVoice {
             let blend = ((phase - 8.0) / 1.0).clamp(0.0, 1.0);
             cents_mod -= 2.0 * (1.0 - blend);
         }
-
         if matches!(self.current_note % 12, 1 | 6) && (7.0..=7.4).contains(&phase) {
             cents_mod -= 1.5;
         }
-
         let base_freq = midi_note_to_freq(self.current_note, SequenceLayer::Ryuteki);
         self.oscillator
             .set_freq(base_freq * cents_to_ratio(cents_mod));
         let phase = self.oscillator.advance_phase(self.sample_rate);
         let tone = flute_wave(phase);
-
         let breath_mix = noise_env.mul_add(0.6, 0.4);
         let env_mix = env.mul_add(0.5, 0.5);
         let breath = self.noise.next() * self.noise_level * breath_mix * env_mix;
         let sample = tone.mul_add(self.noise_level.mul_add(-0.25, 1.0), breath);
-
         sample * self.base_gain * env
     }
-
     fn is_idle(&self) -> bool {
         self.envelope.is_idle()
     }
 }
-
 struct KotoVoice {
     sample_rate: f32,
     active: bool,
@@ -930,7 +847,6 @@ struct KotoVoice {
     noise_burst: f32,
     noise: Lcg32,
 }
-
 impl KotoVoice {
     fn new(sample_rate: f32) -> Self {
         Self {
@@ -950,7 +866,6 @@ impl KotoVoice {
             noise: Lcg32::new(0xBEEF_CAFE),
         }
     }
-
     fn note_on(&mut self, note: u8, velocity: u8, ornaments: Ornaments) {
         self.carrier_freq = midi_note_to_freq(note, SequenceLayer::Koto);
         self.mod_freq = self.carrier_freq * 1.52;
@@ -973,23 +888,19 @@ impl KotoVoice {
         self.noise
             .reseed((u32::from(note) << 4) ^ u32::from(velocity) ^ 0xCAFE_BABE);
     }
-
     fn note_off(&mut self) {
         self.amplitude *= 0.35;
         self.mod_env *= 0.35;
     }
-
     fn next_sample(&mut self) -> f32 {
         if !self.active {
             return 0.0;
         }
-
         let mod_signal = self.mod_phase.sin() * self.mod_index * self.mod_env * 0.32;
         let base = self.carrier_phase + mod_signal;
         let primary = base.sin();
         let duplex = (base * 2.01).sin() * 0.16;
         let body = (base * 0.51 + 0.25).sin() * 0.08;
-
         let noise_jitter = self.noise.next();
         let freq_step = self
             .carrier_freq
@@ -999,7 +910,6 @@ impl KotoVoice {
             self.mod_freq
                 .mul_add(TAU / self.sample_rate, self.mod_phase),
         );
-
         self.amplitude *= self.amp_decay;
         self.mod_env *= self.mod_decay;
         if self.amplitude < self.tail_threshold {
@@ -1014,12 +924,10 @@ impl KotoVoice {
         }
         soft_clip(sample)
     }
-
     fn is_idle(&self) -> bool {
         !self.active
     }
 }
-
 struct BiwaVoice {
     sample_rate: f32,
     active: bool,
@@ -1034,7 +942,6 @@ struct BiwaVoice {
     tail_threshold: f32,
     noise: Lcg32,
 }
-
 impl BiwaVoice {
     fn new(sample_rate: f32) -> Self {
         Self {
@@ -1052,7 +959,6 @@ impl BiwaVoice {
             noise: Lcg32::new(0x0B1A_0B1A),
         }
     }
-
     fn note_on(&mut self, note: u8, velocity: u8, ornaments: Ornaments) {
         self.freq = midi_note_to_freq(note, SequenceLayer::Biwa);
         self.overtone_freq = self.freq * 1.48;
@@ -1076,47 +982,37 @@ impl BiwaVoice {
         self.tail_threshold = 4.0e-3;
         self.active = true;
     }
-
     fn note_off(&mut self) {
         self.amplitude *= 0.45;
         self.attack_noise *= 0.3;
     }
-
     fn next_sample(&mut self) -> f32 {
         if !self.active {
             return 0.0;
         }
-
         self.phase = wrap_phase(self.phase + TAU * self.freq / self.sample_rate);
         self.overtone_phase =
             wrap_phase(self.overtone_phase + TAU * self.overtone_freq / self.sample_rate);
-
         let body = self.phase.sin();
         let overtone = self.overtone_phase.sin() * 0.28;
         let twang = self.phase.mul_add(2.0, 0.2).sin() * 0.14;
         let attack = self.noise.next() * 0.05 * self.attack_noise;
-
         self.amplitude *= self.amp_decay;
         self.attack_noise *= self.attack_decay;
-
         if self.amplitude < self.tail_threshold {
             self.active = false;
             return 0.0;
         }
-
         soft_clip((body + overtone + twang).mul_add(self.amplitude, attack))
     }
-
     fn is_idle(&self) -> bool {
         !self.active
     }
 }
-
 struct Oscillator {
     phase: f32,
     freq: f32,
 }
-
 impl Oscillator {
     fn new(freq: f32) -> Self {
         Self {
@@ -1124,24 +1020,20 @@ impl Oscillator {
             freq: freq.max(1.0),
         }
     }
-
     fn set_freq(&mut self, freq: f32) {
         self.freq = freq.max(1.0);
     }
-
     fn advance_phase(&mut self, sample_rate: f32) -> f32 {
         self.phase = wrap_phase(self.phase + TAU * self.freq / sample_rate);
         self.phase
     }
 }
-
 struct Envelope {
     level: f32,
     attack_step: f32,
     release_step: f32,
     state: EnvelopeState,
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EnvelopeState {
     Idle,
@@ -1149,7 +1041,6 @@ enum EnvelopeState {
     Sustain,
     Release,
 }
-
 impl Envelope {
     fn with_times(sample_rate: f32, attack_seconds: f32, release_seconds: f32) -> Self {
         let mut env = Self {
@@ -1163,24 +1054,20 @@ impl Envelope {
         }
         env
     }
-
     fn reset_with(&mut self, sample_rate: f32, attack_seconds: f32, release_seconds: f32) {
         self.level = 0.0;
         self.attack_step = step_for(sample_rate, attack_seconds).min(1.0);
         self.release_step = step_for(sample_rate, release_seconds).min(1.0);
         self.state = EnvelopeState::Idle;
     }
-
     fn trigger(&mut self) {
         self.state = EnvelopeState::Attack;
     }
-
     fn release(&mut self) {
         if self.state != EnvelopeState::Idle {
             self.state = EnvelopeState::Release;
         }
     }
-
     fn advance(&mut self) -> f32 {
         match self.state {
             EnvelopeState::Idle => {
@@ -1204,54 +1091,44 @@ impl Envelope {
         }
         self.level
     }
-
     fn is_idle(&self) -> bool {
         matches!(self.state, EnvelopeState::Idle)
     }
 }
-
 #[derive(Clone)]
 struct Lcg32(u32);
-
 impl Lcg32 {
     fn new(seed: u32) -> Self {
         let seed = if seed == 0 { 1 } else { seed };
         Self(seed)
     }
-
     fn reseed(&mut self, seed: u32) {
         self.0 = if seed == 0 { 1 } else { seed };
     }
-
     fn next(&mut self) -> f32 {
         self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         let bits = (self.0 >> 9) | 0x3F80_0000;
         f32::from_bits(bits) - 1.5
     }
 }
-
 fn midi_note_to_freq(note: u8, layer: SequenceLayer) -> f32 {
     let base = 440.0 * ((f32::from(note) - 69.0) / 12.0).exp2();
     let cents = layer_intonation_cents(layer, note);
     base * cents_to_ratio(cents)
 }
-
 fn cents_to_ratio(cents: f32) -> f32 {
     (cents / 1200.0).exp2()
 }
-
 fn velocity_to_gain(vel: u8) -> f32 {
     let norm = f32::from(vel).clamp(0.0, 127.0) / 127.0;
     norm.powf(1.35)
 }
-
 fn pan_sample(sample: f32, pan: f32) -> (f32, f32) {
     let pan = pan.clamp(-1.0, 1.0);
     let left = sample * (0.5 * (1.0 - pan));
     let right = sample * (0.5 * (1.0 + pan));
     (left, right)
 }
-
 fn step_for(sample_rate: f32, seconds: f32) -> f32 {
     if seconds <= 0.0 {
         1.0
@@ -1259,7 +1136,6 @@ fn step_for(sample_rate: f32, seconds: f32) -> f32 {
         1.0 / (sample_rate * seconds)
     }
 }
-
 fn exp_decay(sample_rate: f32, seconds: f32) -> f32 {
     if seconds <= 0.0 {
         0.0
@@ -1267,7 +1143,6 @@ fn exp_decay(sample_rate: f32, seconds: f32) -> f32 {
         (-1.0 / (sample_rate * seconds)).exp()
     }
 }
-
 fn wrap_phase(phase: f32) -> f32 {
     let wrapped = phase % TAU;
     if wrapped < 0.0 {
@@ -1276,11 +1151,9 @@ fn wrap_phase(phase: f32) -> f32 {
         wrapped
     }
 }
-
 fn soft_clip(sample: f32) -> f32 {
     (sample * 1.2).tanh() * 0.9
 }
-
 fn reed_wave(phase: f32) -> f32 {
     let fundamental = phase.sin();
     let second = phase.mul_add(2.0, 0.08).sin() * 0.46;
@@ -1288,7 +1161,6 @@ fn reed_wave(phase: f32) -> f32 {
     let fifth = (phase * 5.0).sin() * 0.08;
     soft_clip(fundamental + second + third + fifth)
 }
-
 fn flute_wave(phase: f32) -> f32 {
     let fundamental = phase.sin();
     let second = phase.mul_add(2.0, 0.02).sin() * 0.18;
@@ -1296,7 +1168,6 @@ fn flute_wave(phase: f32) -> f32 {
     let shimmer = phase.mul_add(4.0, 0.1).sin() * 0.03;
     soft_clip(fundamental + second + third + shimmer)
 }
-
 fn sho_wave(phase: f32, breath_shape: f32) -> f32 {
     let principal = phase.sin();
     let upper = (phase * 2.0).sin() * 0.22;
@@ -1304,7 +1175,6 @@ fn sho_wave(phase: f32, breath_shape: f32) -> f32 {
     let air = phase.mul_add(4.0, -0.08).sin() * 0.04 * breath_shape;
     soft_clip(principal + upper + hollow + air)
 }
-
 fn sho_detune_cents(note: u8) -> f32 {
     match note {
         69 => 1.2,  // A4
@@ -1321,7 +1191,6 @@ fn sho_detune_cents(note: u8) -> f32 {
         _ => 0.0,
     }
 }
-
 fn sho_breath_gain(ctx: &RenderContext) -> f32 {
     let section_scale = match ctx.section_index() {
         0 => 1.0,
@@ -1340,7 +1209,6 @@ fn sho_breath_gain(ctx: &RenderContext) -> f32 {
     };
     (base * section_scale).clamp(0.6, 1.5)
 }
-
 fn sho_breath_shape(raw: f32) -> f32 {
     let clamped = raw.clamp(0.6, 1.4);
     let t = ((clamped - 0.6) / 0.8).clamp(0.0, 1.0);
@@ -1348,18 +1216,15 @@ fn sho_breath_shape(raw: f32) -> f32 {
     let exp = 1.0 - (-3.0 * t).exp();
     exp.mul_add(0.15, cosine.mul_add(0.3, clamped * 0.55))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn sample_context(sample_idx: usize, sample_rate: f32) -> RenderContext {
         let time = sample_idx as f32 / sample_rate;
         // Approximate beat progression around 54 BPM for testing.
         let beat = time * (54.0 / 60.0);
         RenderContext::new(time, beat)
     }
-
     #[test]
     fn sho_voice_attack_and_release() {
         let mut sho = ShoVoice::new(48_000.0);
@@ -1377,7 +1242,6 @@ mod tests {
         }
         assert!(sho.is_idle(), "sho should release to silence");
     }
-
     #[test]
     fn hichiriki_noise_blend() {
         let mut voice = HichirikiVoice::new(48_000.0);
@@ -1395,7 +1259,6 @@ mod tests {
         }
         assert!(voice.is_idle(), "hichiriki envelope should finish");
     }
-
     #[test]
     fn koto_decay_stops_voice() {
         let mut voice = KotoVoice::new(48_000.0);
@@ -1410,7 +1273,6 @@ mod tests {
         }
         assert!(voice.is_idle(), "koto should decay to silence");
     }
-
     #[test]
     fn biwa_decay_stops_voice() {
         let mut voice = BiwaVoice::new(48_000.0);
@@ -1429,7 +1291,6 @@ mod tests {
         }
         assert!(voice.is_idle(), "biwa should decay to silence");
     }
-
     #[test]
     fn percussion_voice_emits_and_decays() {
         let mut voice = PercussionVoice::new(48_000.0, PercussionInstrument::Taiko);
@@ -1445,7 +1306,6 @@ mod tests {
         }
         assert!(voice.is_idle(), "taiko should decay to silence");
     }
-
     #[test]
     fn prepare_keeps_percussion_layers() {
         let state = prepare(48_000, 2);
@@ -1471,7 +1331,6 @@ mod tests {
             "builtin synth should keep kakko events"
         );
     }
-
     #[test]
     fn sho_detune_table_balances() {
         // Sum detune offsets for a full aitake chord and ensure the drift is near zero.

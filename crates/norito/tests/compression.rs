@@ -2,7 +2,6 @@
 #![allow(clippy::manual_div_ceil)]
 use iroha_schema::IntoSchema;
 use norito::core::*;
-
 #[derive(IntoSchema, NoritoSerialize, NoritoDeserialize)]
 #[repr(C)]
 struct Data {
@@ -15,7 +14,6 @@ struct Data {
     g: u32,
     h: u32,
 }
-
 impl Data {
     fn new(val: u32) -> Self {
         Self {
@@ -30,7 +28,6 @@ impl Data {
         }
     }
 }
-
 #[test]
 fn zstd_roundtrip() {
     let d = Data::new(1);
@@ -41,7 +38,6 @@ fn zstd_roundtrip() {
     let decoded = <Data as NoritoDeserialize>::deserialize(&archived);
     assert_eq!(decoded.a, 1);
 }
-
 #[test]
 fn deterministic_compression() {
     let d = Data::new(2);
@@ -50,7 +46,6 @@ fn deterministic_compression() {
     let b2 = to_compressed_bytes(&d, Some(cfg)).unwrap();
     assert_eq!(b1, b2);
 }
-
 #[test]
 fn no_compression() {
     let d = Data::new(3);
@@ -59,7 +54,6 @@ fn no_compression() {
     let decoded = <Data as NoritoDeserialize>::deserialize(&archived);
     assert_eq!(decoded.d, 3);
 }
-
 #[test]
 fn compressed_vec_roundtrip() {
     let payload: Vec<u32> = (0..128).collect();
@@ -68,7 +62,6 @@ fn compressed_vec_roundtrip() {
     let decoded = <Vec<u32> as NoritoDeserialize>::deserialize(&archived);
     assert_eq!(decoded, payload);
 }
-
 #[test]
 fn corrupt_data() {
     let d = Data::new(4);
@@ -77,7 +70,6 @@ fn corrupt_data() {
     bytes[Header::SIZE + 1] ^= 0xFF; // corrupt the payload
     assert!(from_compressed_bytes::<Data>(&bytes).is_err());
 }
-
 #[cfg(feature = "gpu-compression")]
 #[test]
 fn gpu_zstd_roundtrip() {

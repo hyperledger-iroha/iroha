@@ -157,3 +157,41 @@ quote, or fall back to the authority. Legacy transaction metadata keys
 `IROHA_NETWORK_ID` must be the canonical checksummed hash literal generated
 from the deployment genesis; a display chain label is never accepted as a
 signing domain.
+
+## Signed SoraFS orderbook submission
+
+The lightweight client exposes the three signed orderbook submit routes only
+with an explicitly injected native verifier:
+
+```python
+from iroha_torii_client import SorafsOrderbookSubmissionAmbiguousError, ToriiClient
+
+client = ToriiClient(
+    "https://torii.example",
+    orderbook_native_verifier=trusted_native_provider,
+    orderbook_chain_discriminant=369,
+)
+receipt = client.submit_sorafs_orderbook_order(
+    signed_transaction_bytes,
+    expected_network_id=network_id,
+    expected_receipt_signer=torii_receipt_public_key,
+)
+```
+
+The provider must implement
+`inspect_sorafs_orderbook_submission_v1(...)` and
+`verify_sorafs_orderbook_submission_receipt_v1(...)`. Without both, or without
+the exact expected network, deployment I105 chain discriminant, and receipt
+signer, submission fails before HTTP.
+The strict route requires a canonical HTTPS base URL, snapshots an exact stock
+`requests.Session`, and constructs its own zero-retry adapter. It sends only
+qualified explicit headers/proxies/`verify`/`cert`, ignores `trust_env`, netrc,
+environment proxy/CA discovery, hooks, cookie persistence, and Requests elapsed
+timing, and rejects custom sessions, ambient cookies, or mutable transport
+configuration. Its positive timeout (30 seconds by default) is a Requests
+connect/read inactivity timeout, not an absolute deadline: a slow drip may
+exceed that wall time.
+After dispatch, catch `SorafsOrderbookSubmissionAmbiguousError`, reconcile its
+payload-free `expected_identity` against finalized state, and never resubmit
+automatically. The full `iroha_python.ToriiClient` supplies this native provider
+and derives the expected network from its local signing context.

@@ -12,14 +12,12 @@ fn reservation_group_identity(
         proposal_identity_hash: key.proposal_identity_hash,
     }
 }
-
 fn reservation_key_matches_group(
     key: &crate::queue::LaneQueueReservationKeyV2,
     group: &LaneQueueReservationGroupIdentityV1,
 ) -> bool {
     reservation_group_identity(key) == *group
 }
-
 fn invalid_historical_autonomous_recovery(
     input: &HistoricalAutonomousReservationInstallV1,
     detail: impl Into<String>,
@@ -29,14 +27,12 @@ fn invalid_historical_autonomous_recovery(
         detail: detail.into(),
     }
 }
-
 fn canonical_payload_contains_group_in_order(
     payload: &LaneExecutablePayloadV1,
     group: &LaneQueueReservationReconciliationGroupV1,
 ) -> bool {
     payload.reservation_keys == group.ordered_keys
 }
-
 fn autonomous_payload_overlaps_group_transaction_identity(
     payload: &LaneExecutablePayloadV1,
     group: &LaneQueueReservationReconciliationGroupV1,
@@ -48,7 +44,6 @@ fn autonomous_payload_overlaps_group_transaction_identity(
         })
     })
 }
-
 fn proposal_from_canonical_lane_ownership(
     ownership: &SumeragiLanePayloadOwnership,
     block_hash: HashOf<BlockHeader>,
@@ -91,7 +86,6 @@ fn proposal_from_canonical_lane_ownership(
     proposal.proposal_hash = proposal.computed_proposal_hash();
     Some(proposal)
 }
-
 /// Immutable, finality-authenticated installation input for one unfinished
 /// historical autonomous lane proposal.
 ///
@@ -124,12 +118,10 @@ pub(crate) struct HistoricalAutonomousReservationInstallV1 {
     /// Exact FIFO-ordered Queue ownership group carried by the payload.
     pub(crate) reservation_group: LaneQueueReservationReconciliationGroupV1,
 }
-
 impl HistoricalAutonomousReservationInstallV1 {
     pub(crate) const VERSION: u16 = 1;
     const DIGEST_DOMAIN: &'static [u8] =
         b"iroha:sumeragi:historical-autonomous-reservation-recovery:v1\0";
-
     fn new(
         canonical_body: CanonicalExecutedBlockNeedV1,
         historical_context: wire::HeightContext,
@@ -153,7 +145,6 @@ impl HistoricalAutonomousReservationInstallV1 {
         install.recovery_id = install.computed_recovery_id();
         install
     }
-
     /// Recompute the exact immutable record identity. Kura must reject any
     /// installation whose stored identity differs from this value.
     #[must_use]
@@ -163,7 +154,6 @@ impl HistoricalAutonomousReservationInstallV1 {
         let identity: Hash = HashOf::new(&canonical).into();
         Hash::new_from_chunks(&[Self::DIGEST_DOMAIN, identity.as_ref()])
     }
-
     #[must_use]
     pub(crate) fn has_valid_identity(&self) -> bool {
         self.version == Self::VERSION
@@ -172,7 +162,6 @@ impl HistoricalAutonomousReservationInstallV1 {
             && self.computed_recovery_id() == self.recovery_id
     }
 }
-
 /// Durable publication result for one immutable historical autonomous record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HistoricalAutonomousLaneRecoveryInstallOutcome {
@@ -181,7 +170,6 @@ pub(crate) enum HistoricalAutonomousLaneRecoveryInstallOutcome {
     /// The exact complete record and both dependencies were already durable.
     AlreadyInstalled,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CanonicalAutonomousCarrierDisposition {
     NotFinalized,
@@ -193,22 +181,18 @@ enum CanonicalAutonomousCarrierDisposition {
     /// the proposal but cannot reconstruct autonomous executable bytes.
     ExactOrdinary,
 }
-
 impl CanonicalAutonomousCarrierDisposition {
     fn is_exact(&self) -> bool {
         matches!(self, Self::ExactAutonomous(_) | Self::ExactOrdinary)
     }
-
     fn is_absent(&self) -> bool {
         matches!(self, Self::Absent)
     }
 }
-
 enum CanonicalAutonomousCarrierInspection {
     Available(CanonicalAutonomousCarrierDisposition),
     MissingBody(CanonicalExecutedBlockNeedV1),
 }
-
 fn collect_canonical_executed_block_need(
     needs: &mut BTreeMap<u64, CanonicalExecutedBlockNeedV1>,
     need: CanonicalExecutedBlockNeedV1,

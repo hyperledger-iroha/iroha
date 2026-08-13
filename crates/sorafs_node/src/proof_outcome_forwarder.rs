@@ -5,13 +5,11 @@
 //! finalized.  This module retains only bounded delivery metadata and the exact
 //! signed transaction selected by the runtime signer.  It never projects an
 //! outcome independently of finalized ledger state.
-
 use std::{
     collections::BTreeSet,
     path::Path,
     sync::{Arc, Mutex},
 };
-
 use iroha_data_model::{
     isi::sorafs::{
         SorafsPdpProofOutcomeSubmissionV1, SorafsPotrProofOutcomeSubmissionV1,
@@ -32,14 +30,12 @@ use sorafs_manifest::{
     PDP_GOVERNANCE_ARCHIVE_MAX_CANONICAL_BYTES_V1, PdpGovernanceArchiveV1, PotrReceiptV1,
 };
 use thiserror::Error;
-
 #[cfg(test)]
 use crate::durable_transaction_forwarder::CheckpointWriterGuard;
 use crate::durable_transaction_forwarder::{
     self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
     DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
-
 /// Durable outbox checkpoint schema version.
 pub const PROOF_OUTCOME_OUTBOX_CHECKPOINT_VERSION_V1: u8 = 1;
 /// File containing the canonical proof-outcome delivery checkpoint.
@@ -48,7 +44,6 @@ pub const PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1: &str = "proof-outcome-fo
 pub const PROOF_OUTCOME_OUTBOX_DEFAULT_MAX_ATTEMPTS_V1: u32 = 8;
 /// Maximum number of entries returned by one worker scan.
 pub const PROOF_OUTCOME_OUTBOX_MAX_SCAN_ITEMS_V1: usize = 1_000;
-
 const CHECKPOINT_LOCK_FILE_NAME: &str = "proof-outcome-forwarder-state.lock";
 const OPERATION_ID_DOMAIN_V1: &[u8] = b"sorafs.proof-outcome.forwarder.operation.v1\0";
 const CHECKPOINT_ELEMENT_AMPLIFICATION_LIMIT: usize = 4;
@@ -71,7 +66,6 @@ const POTR_RECEIPT_DECODE_LIMITS: norito::DecodeLimits = norito::DecodeLimits::n
     4 * PROOF_OUTCOME_MAX_POTR_RECEIPT_BYTES_V1 + 4 * 1024,
     32,
 );
-
 /// Bounded persistence and retry policy for the delivery outbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProofOutcomeOutboxPolicyV1 {
@@ -86,7 +80,6 @@ pub struct ProofOutcomeOutboxPolicyV1 {
     /// Maximum canonical checkpoint bytes.
     pub checkpoint_max_bytes: u64,
 }
-
 impl ProofOutcomeOutboxPolicyV1 {
     /// Validate the bounded first-release policy.
     pub fn validate(self) -> Result<(), ProofOutcomeOutboxError> {
@@ -101,7 +94,6 @@ impl ProofOutcomeOutboxPolicyV1 {
         Ok(())
     }
 }
-
 /// Durable enqueue result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProofOutcomeEnqueueResultV1 {
@@ -116,7 +108,6 @@ pub enum ProofOutcomeEnqueueResultV1 {
         operation_id: [u8; 32],
     },
 }
-
 impl ProofOutcomeEnqueueResultV1 {
     /// Return the stable operation identity.
     #[must_use]
@@ -126,7 +117,6 @@ impl ProofOutcomeEnqueueResultV1 {
         }
     }
 }
-
 /// Runtime-visible durable delivery state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProofOutcomeDeliveryStateV1 {
@@ -141,7 +131,6 @@ pub enum ProofOutcomeDeliveryStateV1 {
     /// The exact transaction is known pending or applied but not finalized as an outcome.
     Submitted,
 }
-
 impl From<StoredDeliveryStateV1> for ProofOutcomeDeliveryStateV1 {
     fn from(value: StoredDeliveryStateV1) -> Self {
         match value {
@@ -153,7 +142,6 @@ impl From<StoredDeliveryStateV1> for ProofOutcomeDeliveryStateV1 {
         }
     }
 }
-
 /// Exact pending delivery returned to the Torii worker.
 #[derive(Debug, Clone)]
 pub struct ProofOutcomePendingDeliveryV1 {
@@ -186,7 +174,6 @@ pub struct ProofOutcomePendingDeliveryV1 {
     /// Exact signed transaction retained before queue submission.
     pub signed_transaction: Option<SignedTransaction>,
 }
-
 /// Reason retained for a payload-free terminal dead letter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProofOutcomeDeadLetterReasonV1 {
@@ -197,7 +184,6 @@ pub enum ProofOutcomeDeadLetterReasonV1 {
     /// Bounded retries were exhausted after finalized absence was proven.
     RetryExhausted,
 }
-
 /// Payload-free terminal delivery record for operator reconciliation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProofOutcomeDeadLetterV1 {
@@ -216,14 +202,12 @@ pub struct ProofOutcomeDeadLetterV1 {
     /// Finalized block hash paired with the observed height.
     pub observed_finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredDeadLetterReasonV1 {
     FinalizedConflict,
     TransactionRejected,
     RetryExhausted,
 }
-
 impl From<ProofOutcomeDeadLetterReasonV1> for StoredDeadLetterReasonV1 {
     fn from(value: ProofOutcomeDeadLetterReasonV1) -> Self {
         match value {
@@ -233,7 +217,6 @@ impl From<ProofOutcomeDeadLetterReasonV1> for StoredDeadLetterReasonV1 {
         }
     }
 }
-
 impl From<StoredDeadLetterReasonV1> for ProofOutcomeDeadLetterReasonV1 {
     fn from(value: StoredDeadLetterReasonV1) -> Self {
         match value {
@@ -243,7 +226,6 @@ impl From<StoredDeadLetterReasonV1> for ProofOutcomeDeadLetterReasonV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredPendingDeliveryV1 {
     sequence: u64,
@@ -261,7 +243,6 @@ struct StoredPendingDeliveryV1 {
     baseline_finalized_block_hash: [u8; 32],
     signed_transaction: Option<SignedTransaction>,
 }
-
 impl StoredPendingDeliveryV1 {
     fn snapshot(&self) -> ProofOutcomePendingDeliveryV1 {
         ProofOutcomePendingDeliveryV1 {
@@ -282,51 +263,39 @@ impl StoredPendingDeliveryV1 {
         }
     }
 }
-
 impl DeliveryRecord for StoredPendingDeliveryV1 {
     type Transaction = SignedTransaction;
-
     fn delivery_state(&self) -> StoredDeliveryStateV1 {
         self.state
     }
-
     fn set_delivery_state(&mut self, state: StoredDeliveryStateV1) {
         self.state = state;
     }
-
     fn attempts(&self) -> u32 {
         self.attempts
     }
-
     fn set_attempts(&mut self, attempts: u32) {
         self.attempts = attempts;
     }
-
     fn baseline_finalized_height(&self) -> u64 {
         self.baseline_finalized_height
     }
-
     fn set_baseline_finalized_height(&mut self, height: u64) {
         self.baseline_finalized_height = height;
     }
-
     fn baseline_finalized_block_hash(&self) -> [u8; 32] {
         self.baseline_finalized_block_hash
     }
-
     fn set_baseline_finalized_block_hash(&mut self, block_hash: [u8; 32]) {
         self.baseline_finalized_block_hash = block_hash;
     }
-
     fn signed_transaction(&self) -> Option<&Self::Transaction> {
         self.signed_transaction.as_ref()
     }
-
     fn set_signed_transaction(&mut self, transaction: Option<Self::Transaction>) {
         self.signed_transaction = transaction;
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredCompletedDeliveryV1 {
     operation_id: [u8; 32],
@@ -336,7 +305,6 @@ struct StoredCompletedDeliveryV1 {
     finalized_height: u64,
     finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredDeadLetterV1 {
     operation_id: [u8; 32],
@@ -351,7 +319,6 @@ struct StoredDeadLetterV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProofOutcomeOutboxCheckpointV1 {
     version: u8,
@@ -360,7 +327,6 @@ struct ProofOutcomeOutboxCheckpointV1 {
     completed: Vec<StoredCompletedDeliveryV1>,
     dead_letters: Vec<StoredDeadLetterV1>,
 }
-
 impl Default for ProofOutcomeOutboxCheckpointV1 {
     fn default() -> Self {
         Self {
@@ -372,14 +338,12 @@ impl Default for ProofOutcomeOutboxCheckpointV1 {
         }
     }
 }
-
 #[derive(Debug)]
 struct DurableState {
     checkpoint: ProofOutcomeOutboxCheckpointV1,
     fingerprint: Option<[u8; 32]>,
     durability_failure: Option<String>,
 }
-
 /// Durable, bounded delivery outbox.
 #[derive(Debug, Clone)]
 pub struct ProofOutcomeOutbox {
@@ -387,7 +351,6 @@ pub struct ProofOutcomeOutbox {
     state: Arc<Mutex<DurableState>>,
     store: Option<Arc<CheckpointStore>>,
 }
-
 impl ProofOutcomeOutbox {
     /// Construct a bounded non-persistent outbox for unit tests.
     #[cfg(test)]
@@ -403,7 +366,6 @@ impl ProofOutcomeOutbox {
             store: None,
         })
     }
-
     /// Open or create a durable outbox below `state_dir`.
     pub fn open(
         state_dir: &Path,
@@ -438,7 +400,6 @@ impl ProofOutcomeOutbox {
         }
         Ok(outbox)
     }
-
     /// Persist one exact PDP governance archive before local terminal handoff completes.
     pub fn enqueue_pdp(
         &self,
@@ -464,7 +425,6 @@ impl ProofOutcomeOutbox {
             }),
         })
     }
-
     /// Persist one exact governed PoTR receipt before local terminal handoff completes.
     pub fn enqueue_potr(
         &self,
@@ -473,7 +433,6 @@ impl ProofOutcomeOutbox {
     ) -> Result<ProofOutcomeEnqueueResultV1, ProofOutcomeOutboxError> {
         self.enqueue(prepare_potr_delivery(receipt, admission_envelope_digest)?)
     }
-
     /// Return pending entries in stable sequence order.
     pub fn pending(
         &self,
@@ -481,7 +440,6 @@ impl ProofOutcomeOutbox {
     ) -> Result<Vec<ProofOutcomePendingDeliveryV1>, ProofOutcomeOutboxError> {
         self.pending_after(None, limit)
     }
-
     /// Return a circular page of pending entries after an immutable sequence cursor.
     ///
     /// Entries with a sequence greater than `after_sequence` are returned first,
@@ -510,7 +468,6 @@ impl ProofOutcomeOutbox {
             .map(StoredPendingDeliveryV1::snapshot)
             .collect())
     }
-
     /// Return payload-free dead letters in stable operation order.
     pub fn dead_letters(
         &self,
@@ -536,7 +493,6 @@ impl ProofOutcomeOutbox {
             })
             .collect())
     }
-
     /// Restore an explicitly selected dead letter for operator-controlled replay.
     ///
     /// The expected outcome digest prevents a stale administrative command from
@@ -583,7 +539,6 @@ impl ProofOutcomeOutbox {
         candidate.pending.sort_by_key(|entry| entry.sequence);
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Claim a ready entry for isolated runtime signing.
     ///
     /// The transition is durable before the signer is invoked.  The signer
@@ -605,7 +560,6 @@ impl ProofOutcomeOutbox {
         self.commit_candidate(&mut state, candidate)?;
         Ok(snapshot)
     }
-
     /// Persist the exact signed transaction before exposing it to the queue.
     pub fn store_signed_transaction(
         &self,
@@ -624,7 +578,6 @@ impl ProofOutcomeOutbox {
         self.commit_candidate(&mut state, candidate)?;
         Ok(transaction_hash)
     }
-
     /// Release an isolated signing claim after a signer failure.
     ///
     /// No signed transaction or queue capability existed in this state, so
@@ -637,7 +590,6 @@ impl ProofOutcomeOutbox {
             durable::release_signing_claim(entry).map_err(Into::into)
         })
     }
-
     /// Mark a durable signed transaction ambiguous before queue submission.
     pub fn begin_submission(
         &self,
@@ -650,14 +602,12 @@ impl ProofOutcomeOutbox {
         self.commit_candidate(&mut state, candidate)?;
         Ok(transaction)
     }
-
     /// Record that the exact signed transaction is pending or applied.
     pub fn mark_submitted(&self, operation_id: [u8; 32]) -> Result<(), ProofOutcomeOutboxError> {
         self.mutate_entry(operation_id, |entry| {
             durable::mark_submitted(entry).map_err(Into::into)
         })
     }
-
     /// Record a queue failure known to have happened before submission.
     pub fn mark_not_submitted(
         &self,
@@ -667,7 +617,6 @@ impl ProofOutcomeOutbox {
             durable::mark_not_submitted(entry).map_err(Into::into)
         })
     }
-
     /// Permit retry of the same signed transaction after finalized absence is proven.
     pub fn mark_finalized_absent(
         &self,
@@ -692,7 +641,6 @@ impl ProofOutcomeOutbox {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Reconcile one exact finalized ledger outcome and retain a bounded tombstone.
     pub fn mark_finalized(
         &self,
@@ -742,7 +690,6 @@ impl ProofOutcomeOutbox {
             .sort_by_key(|completed| completed.operation_id);
         self.commit_candidate(&mut state, candidate)
     }
-
     /// Re-sign an exact rejected or expired operation, or dead-letter at the bound.
     ///
     /// A terminal pipeline rejection proves the prior transaction cannot later
@@ -771,7 +718,6 @@ impl ProofOutcomeOutbox {
         }
         self.commit_candidate(&mut state, candidate)
     }
-
     fn enqueue(
         &self,
         prepared: PreparedDelivery,
@@ -833,7 +779,6 @@ impl ProofOutcomeOutbox {
         self.commit_candidate(&mut state, candidate)?;
         Ok(ProofOutcomeEnqueueResultV1::Inserted { operation_id })
     }
-
     fn mutate_entry(
         &self,
         operation_id: [u8; 32],
@@ -844,7 +789,6 @@ impl ProofOutcomeOutbox {
         mutate(find_pending_mut(&mut candidate, operation_id)?)?;
         self.commit_candidate(&mut state, candidate)
     }
-
     fn move_to_dead_letter(
         &self,
         checkpoint: &mut ProofOutcomeOutboxCheckpointV1,
@@ -875,7 +819,6 @@ impl ProofOutcomeOutbox {
             .sort_by_key(|dead| dead.operation_id);
         Ok(())
     }
-
     fn lock_state(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, DurableState>, ProofOutcomeOutboxError> {
@@ -888,7 +831,6 @@ impl ProofOutcomeOutbox {
         }
         Ok(state)
     }
-
     fn commit_candidate(
         &self,
         state: &mut DurableState,
@@ -914,7 +856,6 @@ impl ProofOutcomeOutbox {
         Ok(())
     }
 }
-
 struct PreparedDelivery {
     kind: ProofOutcomeKindV1,
     identity_digest: [u8; 32],
@@ -924,7 +865,6 @@ struct PreparedDelivery {
     admission_envelope_digest: [u8; 32],
     submission: SorafsProofOutcomeSubmissionV1,
 }
-
 fn prepare_potr_delivery(
     receipt: &PotrReceiptV1,
     admission_envelope_digest: [u8; 32],
@@ -957,7 +897,6 @@ fn prepare_potr_delivery(
         }),
     })
 }
-
 /// Derive the canonical durable outbox operation identity for one governed
 /// final PoTR receipt.
 ///
@@ -974,7 +913,6 @@ pub fn potr_proof_outcome_operation_id_v1(
 ) -> Result<[u8; 32], ProofOutcomeOutboxError> {
     operation_id(&prepare_potr_delivery(receipt, admission_envelope_digest)?)
 }
-
 impl PreparedDelivery {
     fn validate(&self) -> Result<(), ProofOutcomeOutboxError> {
         if self.identity_digest == [0; 32]
@@ -997,7 +935,6 @@ impl PreparedDelivery {
         }
         Ok(())
     }
-
     fn validate_source_binding(&self) -> Result<(), ProofOutcomeOutboxError> {
         self.validate()?;
         match &self.submission {
@@ -1042,7 +979,6 @@ impl PreparedDelivery {
         Ok(())
     }
 }
-
 fn decode_pdp_archive_source(
     bytes: &[u8],
 ) -> Result<PdpGovernanceArchiveV1, ProofOutcomeOutboxError> {
@@ -1060,7 +996,6 @@ fn decode_pdp_archive_source(
     }
     Ok(archive)
 }
-
 fn decode_potr_receipt_source(bytes: &[u8]) -> Result<PotrReceiptV1, ProofOutcomeOutboxError> {
     if bytes.is_empty() || bytes.len() > PROOF_OUTCOME_MAX_POTR_RECEIPT_BYTES_V1 {
         return Err(ProofOutcomeOutboxError::InvalidSubmission);
@@ -1074,7 +1009,6 @@ fn decode_potr_receipt_source(bytes: &[u8]) -> Result<PotrReceiptV1, ProofOutcom
     }
     Ok(receipt)
 }
-
 fn operation_id(prepared: &PreparedDelivery) -> Result<[u8; 32], ProofOutcomeOutboxError> {
     let submission = norito::to_bytes(&prepared.submission)
         .map_err(ProofOutcomeOutboxError::CanonicalEncoding)?;
@@ -1090,7 +1024,6 @@ fn operation_id(prepared: &PreparedDelivery) -> Result<[u8; 32], ProofOutcomeOut
     hasher.update(&submission);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn find_pending_mut(
     checkpoint: &mut ProofOutcomeOutboxCheckpointV1,
     operation_id: [u8; 32],
@@ -1101,7 +1034,6 @@ fn find_pending_mut(
         .find(|entry| entry.operation_id == operation_id)
         .ok_or(ProofOutcomeOutboxError::UnknownOperation)
 }
-
 fn pending_position(
     checkpoint: &ProofOutcomeOutboxCheckpointV1,
     operation_id: [u8; 32],
@@ -1112,7 +1044,6 @@ fn pending_position(
         .position(|entry| entry.operation_id == operation_id)
         .ok_or(ProofOutcomeOutboxError::UnknownOperation)
 }
-
 fn validate_signed_transaction(
     entry: &StoredPendingDeliveryV1,
     transaction: &SignedTransaction,
@@ -1132,7 +1063,6 @@ fn validate_signed_transaction(
     }
     Ok(())
 }
-
 fn finalized_matches(entry: &StoredPendingDeliveryV1, outcome: &ProofOutcomeRecordV1) -> bool {
     outcome.kind() == entry.kind
         && outcome.identity_digest == entry.identity_digest
@@ -1141,7 +1071,6 @@ fn finalized_matches(entry: &StoredPendingDeliveryV1, outcome: &ProofOutcomeReco
         && outcome.manifest_digest == entry.manifest_digest
         && outcome.admission_envelope_digest == entry.admission_envelope_digest
 }
-
 fn validate_checkpoint(
     checkpoint: &ProofOutcomeOutboxCheckpointV1,
     policy: ProofOutcomeOutboxPolicyV1,
@@ -1227,25 +1156,21 @@ fn validate_checkpoint(
     }
     Ok(())
 }
-
 fn validate_finalized_cursor(
     cursor: ProofOutcomeFinalizedCursorV1,
 ) -> Result<(), ProofOutcomeOutboxError> {
     durable::validate_finalized_cursor(finalized_cursor(cursor)).map_err(Into::into)
 }
-
 const fn finalized_cursor(cursor: ProofOutcomeFinalizedCursorV1) -> FinalizedCursorV1 {
     FinalizedCursorV1 {
         height: cursor.height,
         block_hash: cursor.block_hash,
     }
 }
-
 #[derive(Debug)]
 struct CheckpointStore {
     inner: AtomicCheckpointStore,
 }
-
 impl CheckpointStore {
     fn new(root: &Path, max_bytes: u64) -> Result<Self, ProofOutcomeOutboxError> {
         Ok(Self {
@@ -1257,7 +1182,6 @@ impl CheckpointStore {
             )?,
         })
     }
-
     fn load(
         &self,
         policy: ProofOutcomeOutboxPolicyV1,
@@ -1282,7 +1206,6 @@ impl CheckpointStore {
             .map_err(|_| ProofOutcomeOutboxError::InvalidCheckpoint)?;
         Ok((checkpoint, fingerprint))
     }
-
     fn commit(
         &self,
         checkpoint: &ProofOutcomeOutboxCheckpointV1,
@@ -1295,7 +1218,6 @@ impl CheckpointStore {
             .map_err(Into::into)
     }
 }
-
 fn validate_checkpoint_source_bindings(
     checkpoint: &ProofOutcomeOutboxCheckpointV1,
 ) -> Result<(), ProofOutcomeOutboxError> {
@@ -1325,7 +1247,6 @@ fn validate_checkpoint_source_bindings(
     }
     Ok(())
 }
-
 fn checkpoint_decode_limits(
     encoded_bytes: usize,
 ) -> Result<norito::DecodeLimits, ProofOutcomeOutboxError> {
@@ -1347,7 +1268,6 @@ fn checkpoint_decode_limits(
         CHECKPOINT_MAX_NESTING_DEPTH,
     ))
 }
-
 /// Durable proof-outcome delivery errors.
 #[derive(Debug, Error)]
 pub enum ProofOutcomeOutboxError {
@@ -1421,7 +1341,6 @@ pub enum ProofOutcomeOutboxError {
     #[error("proof-outcome outbox runtime lock is poisoned")]
     RuntimePoisoned,
 }
-
 impl From<DeliveryTransitionError> for ProofOutcomeOutboxError {
     fn from(error: DeliveryTransitionError) -> Self {
         match error {
@@ -1431,7 +1350,6 @@ impl From<DeliveryTransitionError> for ProofOutcomeOutboxError {
         }
     }
 }
-
 impl From<CheckpointStoreError> for ProofOutcomeOutboxError {
     fn from(error: CheckpointStoreError) -> Self {
         match error {
@@ -1444,14 +1362,11 @@ impl From<CheckpointStoreError> for ProofOutcomeOutboxError {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fs, io::Write as _, time::Duration};
-
     #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt as _;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -1476,9 +1391,7 @@ mod tests {
         },
     };
     use tempfile::TempDir;
-
     use super::*;
-
     fn test_network_id() -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
@@ -1486,10 +1399,8 @@ mod tests {
             iroha_crypto::Hash::new(b"proof-outcome-forwarder-test"),
         ))
     }
-
     #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
     struct NestedSourceDepthBomb(Option<Box<NestedSourceDepthBomb>>);
-
     fn write_private_checkpoint(path: &Path, bytes: &[u8]) {
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -1501,7 +1412,6 @@ mod tests {
         file.write_all(bytes)
             .expect("write private checkpoint fixture");
     }
-
     fn policy() -> ProofOutcomeOutboxPolicyV1 {
         ProofOutcomeOutboxPolicyV1 {
             max_pending: 8,
@@ -1511,14 +1421,12 @@ mod tests {
             checkpoint_max_bytes: 4 * 1024 * 1024,
         }
     }
-
     fn cursor(height: u64, hash_byte: u8) -> ProofOutcomeFinalizedCursorV1 {
         ProofOutcomeFinalizedCursorV1 {
             height,
             block_hash: [hash_byte; 32],
         }
     }
-
     fn signed_receipt_with_request_id(request_id: [u8; 16]) -> PotrReceiptV1 {
         let gateway = KeyPair::try_from_seed(vec![1; 32], Algorithm::Ed25519).unwrap();
         let provider = KeyPair::try_from_seed(vec![2; 32], Algorithm::MlDsa).unwrap();
@@ -1547,11 +1455,9 @@ mod tests {
         )
         .unwrap()
     }
-
     fn signed_receipt() -> PotrReceiptV1 {
         signed_receipt_with_request_id([5; 16])
     }
-
     fn maximum_bounded_signed_receipt() -> PotrReceiptV1 {
         let gateway = KeyPair::try_from_seed(vec![1; 32], Algorithm::Ed25519).unwrap();
         let provider = KeyPair::try_from_seed(vec![2; 32], Algorithm::MlDsa).unwrap();
@@ -1580,7 +1486,6 @@ mod tests {
         )
         .unwrap()
     }
-
     fn maximum_bounded_pdp_archive() -> PdpGovernanceArchiveV1 {
         let mut remaining_hot_leaves = PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1;
         let mut samples = Vec::with_capacity(PDP_MAX_SEGMENT_SAMPLES_V1);
@@ -1637,7 +1542,6 @@ mod tests {
         archive.validate().expect("maximum bounded PDP archive");
         archive
     }
-
     fn replace_norito_schema<T: norito::NoritoSerialize>(bytes: &mut [u8]) {
         const SCHEMA_OFFSET: usize = 4 + 1 + 1;
         const SCHEMA_LEN: usize = 16;
@@ -1645,7 +1549,6 @@ mod tests {
         bytes[SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN]
             .copy_from_slice(&<T as norito::NoritoSerialize>::schema_hash());
     }
-
     fn checkpoint_with_corrupt_potr_source(
         receipt_payload: Vec<u8>,
     ) -> ProofOutcomeOutboxCheckpointV1 {
@@ -1669,7 +1572,6 @@ mod tests {
         entry.operation_id = operation_id(&prepared).unwrap();
         checkpoint
     }
-
     fn minimum_checkpoint_allocation_budget(bytes: &[u8]) -> usize {
         let encoded_bytes = bytes.len();
         let total_elements = encoded_bytes
@@ -1710,7 +1612,6 @@ mod tests {
         }
         lower
     }
-
     fn signed_transaction(pending: &ProofOutcomePendingDeliveryV1, seed: u8) -> SignedTransaction {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap();
         let mut builder = TransactionBuilder::new(
@@ -1724,7 +1625,6 @@ mod tests {
         builder.set_creation_time(Duration::from_secs(1));
         builder.try_sign(key.private_key()).unwrap()
     }
-
     fn finalized(
         pending: &ProofOutcomePendingDeliveryV1,
         receipt: &PotrReceiptV1,
@@ -1774,7 +1674,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn signed_transaction_is_persisted_before_ambiguous_submission_and_finalization() {
         let outbox = ProofOutcomeOutbox::in_memory(policy()).unwrap();
@@ -1806,7 +1705,6 @@ mod tests {
             ProofOutcomeEnqueueResultV1::Existing { .. }
         ));
     }
-
     #[test]
     fn signer_failure_releases_claim_without_consuming_an_attempt() {
         let outbox = ProofOutcomeOutbox::in_memory(policy()).unwrap();
@@ -1815,7 +1713,6 @@ mod tests {
             .enqueue_potr(&receipt, [6; 32])
             .unwrap()
             .operation_id();
-
         outbox.claim_for_signing(operation, cursor(1, 1)).unwrap();
         outbox.release_signing_claim(operation).unwrap();
         let ready = outbox.pending(8).unwrap().remove(0);
@@ -1824,12 +1721,10 @@ mod tests {
         assert_eq!(ready.baseline_finalized_height, 0);
         assert_eq!(ready.baseline_finalized_block_hash, [0; 32]);
         assert!(ready.signed_transaction.is_none());
-
         let reclaimed = outbox.claim_for_signing(operation, cursor(2, 2)).unwrap();
         assert_eq!(reclaimed.operation_id, operation);
         assert_eq!(reclaimed.attempts, 0);
     }
-
     #[test]
     fn known_prequeue_failure_retains_the_exact_signed_transaction() {
         let outbox = ProofOutcomeOutbox::in_memory(policy()).unwrap();
@@ -1843,7 +1738,6 @@ mod tests {
         outbox
             .store_signed_transaction(operation, transaction.clone())
             .unwrap();
-
         assert_eq!(outbox.begin_submission(operation).unwrap(), transaction);
         outbox.mark_not_submitted(operation).unwrap();
         let retry = outbox.pending(8).unwrap().remove(0);
@@ -1852,7 +1746,6 @@ mod tests {
         assert_eq!(retry.signed_transaction.as_ref(), Some(&transaction));
         assert_eq!(outbox.begin_submission(operation).unwrap(), transaction);
     }
-
     #[test]
     fn pending_after_advances_and_wraps_without_repeating_a_page_entry() {
         let outbox = ProofOutcomeOutbox::in_memory(policy()).unwrap();
@@ -1864,7 +1757,6 @@ mod tests {
                 )
                 .unwrap();
         }
-
         let first = outbox.pending_after(None, 3).unwrap();
         assert_eq!(
             first.iter().map(|entry| entry.sequence).collect::<Vec<_>>(),
@@ -1889,7 +1781,6 @@ mod tests {
             second.len()
         );
     }
-
     #[test]
     fn crash_recovery_resets_only_isolated_signing_and_retains_ambiguous_transaction() {
         let dir = TempDir::new().unwrap();
@@ -1901,7 +1792,6 @@ mod tests {
         receipt_b.gateway_signature = None;
         receipt_b.provider_signature = None;
         let receipt_b = sign_potr_receipt_v1(receipt_b, &gateway, &provider).unwrap();
-
         let outbox = ProofOutcomeOutbox::open(dir.path(), policy()).unwrap();
         let operation_a = outbox
             .enqueue_potr(&receipt_a, [6; 32])
@@ -1918,7 +1808,6 @@ mod tests {
             .unwrap();
         outbox.begin_submission(operation_b).unwrap();
         drop(outbox);
-
         let restored = ProofOutcomeOutbox::open(dir.path(), policy()).unwrap();
         let pending = restored.pending(8).unwrap();
         assert_eq!(
@@ -1936,7 +1825,6 @@ mod tests {
         assert_eq!(ambiguous.state, ProofOutcomeDeliveryStateV1::Ambiguous);
         assert!(ambiguous.signed_transaction.is_some());
     }
-
     #[test]
     fn crash_before_rename_orphan_does_not_replace_the_last_durable_checkpoint() {
         let dir = TempDir::new().unwrap();
@@ -1947,18 +1835,15 @@ mod tests {
             .unwrap()
             .operation_id();
         drop(outbox);
-
         let orphan = dir.path().join(format!(
             ".{PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1}.999999.999999.tmp"
         ));
         std::fs::write(&orphan, b"crash-before-rename partial checkpoint").unwrap();
-
         let restored = ProofOutcomeOutbox::open(dir.path(), policy()).unwrap();
         let pending = restored.pending(8).unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].operation_id, operation);
     }
-
     #[test]
     fn poisoned_checkpoint_source_binding_fails_closed_on_restart() {
         let dir = TempDir::new().unwrap();
@@ -1966,7 +1851,6 @@ mod tests {
         let outbox = ProofOutcomeOutbox::open(dir.path(), policy()).unwrap();
         outbox.enqueue_potr(&receipt, [6; 32]).unwrap();
         drop(outbox);
-
         let checkpoint_path = dir
             .path()
             .join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1);
@@ -1975,13 +1859,11 @@ mod tests {
             norito::decode_from_bytes(&bytes).unwrap();
         checkpoint.pending[0].provider_id = ProviderId::new([0xEE; 32]);
         std::fs::write(&checkpoint_path, norito::to_bytes(&checkpoint).unwrap()).unwrap();
-
         assert!(matches!(
             ProofOutcomeOutbox::open(dir.path(), policy()),
             Err(ProofOutcomeOutboxError::InvalidCheckpoint)
         ));
     }
-
     #[test]
     fn nested_source_allocation_and_depth_bombs_fail_closed_on_restart() {
         let mut allocation_bomb = norito::to_compressed_bytes(
@@ -2014,7 +1896,6 @@ mod tests {
             ProofOutcomeOutbox::open(allocation_dir.path(), policy()),
             Err(ProofOutcomeOutboxError::InvalidCheckpoint)
         ));
-
         let mut depth_bomb = NestedSourceDepthBomb(None);
         for _ in 0..64 {
             depth_bomb = NestedSourceDepthBomb(Some(Box::new(depth_bomb)));
@@ -2049,7 +1930,6 @@ mod tests {
             Err(ProofOutcomeOutboxError::InvalidCheckpoint)
         ));
     }
-
     #[test]
     fn checkpoint_decode_budget_accepts_exact_policy_maximum_and_rejects_one_byte_over() {
         let outbox = ProofOutcomeOutbox::in_memory(ProofOutcomeOutboxPolicyV1 {
@@ -2122,7 +2002,6 @@ mod tests {
         };
         validate_checkpoint(&decoded, exact_policy).unwrap();
         validate_checkpoint_source_bindings(&decoded).unwrap();
-
         let dir = TempDir::new().unwrap();
         write_private_checkpoint(
             &dir.path()
@@ -2139,7 +2018,6 @@ mod tests {
             Err(ProofOutcomeOutboxError::CheckpointTooLarge)
         ));
     }
-
     #[test]
     fn compressed_checkpoint_allocation_bomb_is_rejected_before_owned_materialization() {
         let mut bomb = ProofOutcomeOutboxCheckpointV1::default();
@@ -2177,7 +2055,6 @@ mod tests {
             norito::core::from_bytes_view(&compressed).is_err(),
             "zero-copy preflight must reject compressed checkpoint archives"
         );
-
         let dir = TempDir::new().unwrap();
         write_private_checkpoint(
             &dir.path()
@@ -2194,7 +2071,6 @@ mod tests {
             Err(ProofOutcomeOutboxError::InvalidCheckpoint)
         ));
     }
-
     #[test]
     fn finalized_conflict_is_dead_lettered_and_never_reported_as_success() {
         let outbox = ProofOutcomeOutbox::in_memory(policy()).unwrap();
@@ -2220,7 +2096,6 @@ mod tests {
             ProofOutcomeDeadLetterReasonV1::FinalizedConflict
         );
     }
-
     #[test]
     fn finalized_absence_advances_retry_cursor_and_dead_letters_at_bound() {
         let outbox = ProofOutcomeOutbox::in_memory(policy()).unwrap();
@@ -2237,7 +2112,6 @@ mod tests {
         outbox
             .mark_finalized_absent(operation, cursor(2, 2))
             .unwrap();
-
         let retry = outbox.pending(8).unwrap().remove(0);
         assert_eq!(retry.state, ProofOutcomeDeliveryStateV1::Signed);
         assert_eq!(retry.attempts, 2);
@@ -2261,7 +2135,6 @@ mod tests {
             ProofOutcomeDeadLetterReasonV1::RetryExhausted
         );
     }
-
     #[test]
     fn terminal_rejection_allows_bounded_signer_rotation() {
         let outbox = ProofOutcomeOutbox::in_memory(policy()).unwrap();
@@ -2279,7 +2152,6 @@ mod tests {
         outbox
             .mark_transaction_rejected(operation, cursor(2, 2))
             .unwrap();
-
         let ready = outbox.pending(8).unwrap().remove(0);
         assert_eq!(ready.state, ProofOutcomeDeliveryStateV1::Ready);
         assert_eq!(ready.attempts, 1);
@@ -2311,12 +2183,10 @@ mod tests {
         assert_eq!(retried.state, ProofOutcomeDeliveryStateV1::Ready);
         assert_eq!(retried.attempts, 0);
     }
-
     #[cfg(unix)]
     #[test]
     fn checkpoint_open_rejects_symlink_and_hardlink_targets() {
         use std::{fs, os::unix::fs::symlink};
-
         let symlink_dir = TempDir::new().unwrap();
         let outside = symlink_dir.path().join("outside.to");
         fs::write(&outside, b"not a checkpoint").unwrap();
@@ -2331,7 +2201,6 @@ mod tests {
             ProofOutcomeOutbox::open(symlink_dir.path(), policy()),
             Err(ProofOutcomeOutboxError::CheckpointIo)
         ));
-
         let hardlink_dir = TempDir::new().unwrap();
         let outside = hardlink_dir.path().join("outside.to");
         fs::write(&outside, b"not a checkpoint").unwrap();
@@ -2347,7 +2216,6 @@ mod tests {
             Err(ProofOutcomeOutboxError::CheckpointIo)
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn checkpoint_parent_path_swap_is_rejected_without_writing_the_replacement() {
@@ -2356,7 +2224,6 @@ mod tests {
         let displaced_dir = outer.path().join("displaced-state");
         let outbox = ProofOutcomeOutbox::open(&state_dir, policy()).unwrap();
         outbox.enqueue_potr(&signed_receipt(), [6; 32]).unwrap();
-
         fs::rename(&state_dir, &displaced_dir).unwrap();
         fs::create_dir(&state_dir).unwrap();
         let mut second_receipt = signed_receipt();
@@ -2376,14 +2243,12 @@ mod tests {
                 .exists(),
             "the replacement directory must not receive checkpoint data"
         );
-
         drop(outbox);
         fs::remove_dir(&state_dir).unwrap();
         fs::rename(&displaced_dir, &state_dir).unwrap();
         let restored = ProofOutcomeOutbox::open(&state_dir, policy()).unwrap();
         assert_eq!(restored.pending(8).unwrap().len(), 1);
     }
-
     #[cfg(unix)]
     #[test]
     fn writer_guard_collapses_path_aliases_and_rejects_hardlinked_lock_files() {
@@ -2398,7 +2263,6 @@ mod tests {
             Err(CheckpointStoreError::Busy)
         ));
         drop(held);
-
         let alias_dir = TempDir::new().unwrap();
         let hardlink = alias_dir.path().join(CHECKPOINT_LOCK_FILE_NAME);
         std::fs::hard_link(&lock_path, &hardlink).unwrap();

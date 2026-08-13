@@ -6,7 +6,6 @@
 //! Every successful stream still crosses [`MusubiCache::install`], so provider
 //! authentication cannot replace commitment, CAR, `PoR`, bundle, or source-tree
 //! verification.
-
 use std::{
     collections::BTreeSet,
     error::Error,
@@ -14,7 +13,6 @@ use std::{
     io::{self, Read},
     path::{Path, PathBuf},
 };
-
 use iroha_data_model::{
     NetworkId,
     musubi::{
@@ -28,16 +26,13 @@ use iroha_data_model::{
 use sorafs_car::{
     CarBuildPlan, CarStreamingWriter, CarWriteError, ProfileId, compute_chunk_plan_digest_sha3,
 };
-
 use crate::{
     cache::{CacheError, InstallOutcome, MusubiCache},
     registry::{RegistryFailureClassV1, RegistryReadClientV1},
 };
-
 const RELEASE_PATH: &str = ".musubi/semantic-release.norito";
 const DESCRIPTOR_PATH: &str = ".musubi/artifact-descriptor.norito";
 const VERIFICATION_LOCK_PATH: &str = ".musubi/verification-lock.norito";
-
 /// Stable classification for a secret-redacted archive fetch failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArchiveFetchFailureClassV1 {
@@ -50,7 +45,6 @@ pub enum ArchiveFetchFailureClassV1 {
     /// Configuration, authoritative evidence, or local state must change.
     Permanent,
 }
-
 /// Closed integrity surface reported by the authenticated consumer fetch path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArchiveFetchIntegritySurfaceV1 {
@@ -59,7 +53,6 @@ pub enum ArchiveFetchIntegritySurfaceV1 {
     /// Authenticated control evidence failed outside the immutable archive commitment.
     Other,
 }
-
 /// Deployment-owned observer for authoritative consumer-fetch integrity attempts.
 ///
 /// The one-shot CLI intentionally installs no observer. A long-lived host may map
@@ -70,40 +63,33 @@ pub trait ArchiveFetchIntegrityObserverV1: Send + Sync {
     /// Record one failed provider attempt admitted into deterministic failover.
     fn record_integrity_failure(&self, surface: ArchiveFetchIntegritySurfaceV1);
 }
-
 /// Stable archive fetch error that never contains endpoints, tokens, or response bodies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArchiveFetchErrorV1 {
     class: ArchiveFetchFailureClassV1,
     code: &'static str,
 }
-
 impl ArchiveFetchErrorV1 {
     const fn new(class: ArchiveFetchFailureClassV1, code: &'static str) -> Self {
         Self { class, code }
     }
-
     /// Return the retry and integrity classification.
     #[must_use]
     pub const fn class(self) -> ArchiveFetchFailureClassV1 {
         self.class
     }
-
     /// Return the stable public error code.
     #[must_use]
     pub const fn code(self) -> &'static str {
         self.code
     }
 }
-
 impl fmt::Display for ArchiveFetchErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.code)
     }
 }
-
 impl Error for ArchiveFetchErrorV1 {}
-
 /// Stable transport-only failure returned by an authenticated `SoraFS` runtime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArchiveTransportErrorV1 {
@@ -111,14 +97,12 @@ pub struct ArchiveTransportErrorV1 {
     code: &'static str,
     integrity_surface: Option<ArchiveFetchIntegritySurfaceV1>,
 }
-
 impl ArchiveTransportErrorV1 {
     /// Construct a retryable transport failure.
     #[must_use]
     pub const fn retryable(code: &'static str) -> Self {
         Self::new(ArchiveFetchFailureClassV1::Retryable, code, None)
     }
-
     /// Construct a provider-integrity failure.
     #[must_use]
     pub const fn integrity(code: &'static str) -> Self {
@@ -128,7 +112,6 @@ impl ArchiveTransportErrorV1 {
             Some(ArchiveFetchIntegritySurfaceV1::ArchiveCommitment),
         )
     }
-
     /// Construct an authenticated control-integrity failure outside the archive commitment.
     #[must_use]
     pub const fn other_integrity(code: &'static str) -> Self {
@@ -138,19 +121,16 @@ impl ArchiveTransportErrorV1 {
             Some(ArchiveFetchIntegritySurfaceV1::Other),
         )
     }
-
     /// Construct an unavailable provider/archive failure.
     #[must_use]
     pub const fn unavailable(code: &'static str) -> Self {
         Self::new(ArchiveFetchFailureClassV1::Unavailable, code, None)
     }
-
     /// Construct a permanent transport/configuration failure.
     #[must_use]
     pub const fn permanent(code: &'static str) -> Self {
         Self::new(ArchiveFetchFailureClassV1::Permanent, code, None)
     }
-
     const fn new(
         class: ArchiveFetchFailureClassV1,
         code: &'static str,
@@ -167,34 +147,28 @@ impl ArchiveTransportErrorV1 {
             integrity_surface,
         }
     }
-
     /// Return the transport retry classification.
     #[must_use]
     pub const fn class(self) -> ArchiveFetchFailureClassV1 {
         self.class
     }
-
     /// Return the stable redacted code.
     #[must_use]
     pub const fn code(self) -> &'static str {
         self.code
     }
-
     /// Return the typed integrity surface without classifying the public code.
     #[must_use]
     pub const fn integrity_surface(self) -> Option<ArchiveFetchIntegritySurfaceV1> {
         self.integrity_surface
     }
 }
-
 impl fmt::Display for ArchiveTransportErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.code)
     }
 }
-
 impl Error for ArchiveTransportErrorV1 {}
-
 /// Runtime boundary for paged storage-plan reads and authenticated provider CAR streams.
 pub trait AuthenticatedSorafsArchiveTransportV1 {
     /// Load the complete bounded storage plan from the assigned provider.
@@ -214,7 +188,6 @@ pub trait AuthenticatedSorafsArchiveTransportV1 {
         provider: ProviderId,
         commitment: &MusubiArchiveCommitmentV1,
     ) -> Result<CarBuildPlan, ArchiveTransportErrorV1>;
-
     /// Open an authenticated, timeout-bounded CAR stream for one assigned provider.
     ///
     /// Stream tokens and provider endpoints remain runtime-only. Implementations
@@ -235,7 +208,6 @@ pub trait AuthenticatedSorafsArchiveTransportV1 {
         commitment: &MusubiArchiveCommitmentV1,
         plan: &CarBuildPlan,
     ) -> Result<Box<dyn Read + Send + 'static>, ArchiveTransportErrorV1>;
-
     /// Consume a transport failure raised after the returned reader was opened.
     ///
     /// The default is appropriate for transports whose readers cannot fail for
@@ -246,11 +218,9 @@ pub trait AuthenticatedSorafsArchiveTransportV1 {
         None
     }
 }
-
 /// Fail-closed transport used when provider discovery/token/stream services are absent.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UnavailableSorafsArchiveTransportV1;
-
 impl AuthenticatedSorafsArchiveTransportV1 for UnavailableSorafsArchiveTransportV1 {
     fn storage_plan(
         &mut self,
@@ -263,7 +233,6 @@ impl AuthenticatedSorafsArchiveTransportV1 for UnavailableSorafsArchiveTransport
             "SORAFS_ARCHIVE_PLAN_SERVICE_NOT_CONFIGURED",
         ))
     }
-
     fn open_authenticated_car(
         &mut self,
         _pin_manifest: &ManifestDigest,
@@ -277,15 +246,12 @@ impl AuthenticatedSorafsArchiveTransportV1 for UnavailableSorafsArchiveTransport
         ))
     }
 }
-
 /// Production authenticated `SoraFS` archive transport.
 pub type ProductionSorafsArchiveTransportV1 =
     iroha::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1;
-
 /// Parsed secret-free fetch configuration that defers operator keys, DNS, and HTTP clients.
 pub type PreparedProductionSorafsArchiveTransportV1 =
     iroha::musubi_archive_fetch::PreparedMusubiArchiveFetchConfigV1;
-
 /// Parse the fetch subtree from the same bounded `client.toml` image used by registry reads.
 ///
 /// # Errors
@@ -300,7 +266,6 @@ pub fn prepare_production_archive_transport_v1(
     )
     .map_err(runtime_error)
 }
-
 /// Materialize a prepared fetch configuration after the immutable cache reports a miss.
 ///
 /// # Errors
@@ -310,7 +275,6 @@ pub fn build_production_archive_transport_v1(
 ) -> Result<ProductionSorafsArchiveTransportV1, ArchiveTransportErrorV1> {
     prepared.build_client().map_err(runtime_error)
 }
-
 /// Load the exact-network operator-authenticated production archive transport from `client.toml`.
 ///
 /// Only `[musubi.fetch]` is admitted. Account keys, account identities, mutation credentials,
@@ -325,7 +289,6 @@ pub fn load_production_archive_transport_v1(
     let path = config.map_or_else(|| PathBuf::from("client.toml"), Path::to_path_buf);
     ProductionSorafsArchiveTransportV1::load_platform_file(&path).map_err(runtime_error)
 }
-
 impl AuthenticatedSorafsArchiveTransportV1 for ProductionSorafsArchiveTransportV1 {
     fn storage_plan(
         &mut self,
@@ -341,7 +304,6 @@ impl AuthenticatedSorafsArchiveTransportV1 for ProductionSorafsArchiveTransportV
         )
         .map_err(runtime_error)
     }
-
     fn open_authenticated_car(
         &mut self,
         pin_manifest: &ManifestDigest,
@@ -358,7 +320,6 @@ impl AuthenticatedSorafsArchiveTransportV1 for ProductionSorafsArchiveTransportV
         )
         .map_err(runtime_error)
     }
-
     fn take_stream_failure(&mut self) -> Option<ArchiveTransportErrorV1> {
         iroha::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1::take_stream_failure(
             self,
@@ -366,7 +327,6 @@ impl AuthenticatedSorafsArchiveTransportV1 for ProductionSorafsArchiveTransportV
         .map(runtime_error)
     }
 }
-
 /// Exact cache-install result and finalized provider evidence used for the fetch.
 #[derive(Debug)]
 pub struct ArchiveFetchOutcomeV1 {
@@ -379,7 +339,6 @@ pub struct ArchiveFetchOutcomeV1 {
     /// Immutable cache publication result.
     pub cache: InstallOutcome,
 }
-
 /// Exact finalized archive commitment and provider plan selected without reading CAR bytes.
 #[derive(Clone, Debug)]
 pub struct PreparedArchivePlanV1 {
@@ -396,7 +355,6 @@ pub struct PreparedArchivePlanV1 {
     /// Complete canonical plan bound to the commitment.
     pub plan: CarBuildPlan,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct ArchiveCandidateV1 {
     rank: u8,
@@ -404,7 +362,6 @@ struct ArchiveCandidateV1 {
     pin_manifest: ManifestDigest,
     provider: ProviderId,
 }
-
 /// Fetch adapter joining finalized registry evidence to the immutable cache boundary.
 #[derive(Clone)]
 pub struct MusubiArchiveFetchAdapterV1<'client> {
@@ -413,13 +370,11 @@ pub struct MusubiArchiveFetchAdapterV1<'client> {
     integrity_observer: Option<&'client dyn ArchiveFetchIntegrityObserverV1>,
     expected_deployment: Option<ArchiveFetchDeploymentBindingV1>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ArchiveFetchDeploymentBindingV1 {
     network_id: NetworkId,
     minimum_snapshot: MusubiRegistrySnapshotV1,
 }
-
 impl fmt::Debug for MusubiArchiveFetchAdapterV1<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -428,7 +383,6 @@ impl fmt::Debug for MusubiArchiveFetchAdapterV1<'_> {
             .finish_non_exhaustive()
     }
 }
-
 impl<'client> MusubiArchiveFetchAdapterV1<'client> {
     /// Bind an authenticated finalized registry reader and an explicit user cache.
     #[must_use]
@@ -440,7 +394,6 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
             expected_deployment: None,
         }
     }
-
     /// Bind finalized archive-location evidence to an exact lock deployment and minimum snapshot.
     ///
     /// Locked graph fetches use this boundary so a changed endpoint cannot supply provider
@@ -458,7 +411,6 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
         });
         self
     }
-
     /// Attach the long-lived host's bounded integrity observer.
     #[must_use]
     pub const fn with_integrity_observer(
@@ -468,7 +420,6 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
         self.integrity_observer = Some(observer);
         self
     }
-
     /// Fetch one exact archive with deterministic location/provider failover.
     ///
     /// Healthy locations must still have the V1 quorum. Degraded locations are
@@ -492,7 +443,6 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
         transport: &mut dyn AuthenticatedSorafsArchiveTransportV1,
     ) -> Result<ArchiveFetchOutcomeV1, ArchiveFetchErrorV1> {
         let (commitment, candidates) = self.finalized_candidates(archive_id)?;
-
         let mut retryable = None;
         let mut integrity = None;
         let mut permanent = None;
@@ -637,13 +587,11 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
                 }
             }
         }
-
         Err(integrity
             .or(retryable)
             .or(permanent)
             .map_or_else(archive_unavailable, transport_error))
     }
-
     /// Select and validate one exact finalized provider plan without reading CAR bytes.
     ///
     /// This shares the same registry/location/attestation and transport-plan trust boundary as
@@ -705,7 +653,6 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
             .or(permanent)
             .map_or_else(archive_unavailable, transport_error))
     }
-
     fn finalized_candidates(
         &self,
         archive_id: ArchiveId,
@@ -781,7 +728,6 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
         Ok((commitment, candidates))
     }
 }
-
 fn validate_deployment_binding(
     expected: &ArchiveFetchDeploymentBindingV1,
     observed_network_id: NetworkId,
@@ -801,7 +747,6 @@ fn validate_deployment_binding(
     }
     Ok(())
 }
-
 fn validate_location_evidence(
     expected_archive: ArchiveId,
     snapshot_height: u64,
@@ -813,7 +758,6 @@ fn validate_location_evidence(
     }
     Ok(())
 }
-
 fn prioritize_distinct_providers(
     mut candidates: Vec<ArchiveCandidateV1>,
 ) -> Vec<ArchiveCandidateV1> {
@@ -837,7 +781,6 @@ fn prioritize_distinct_providers(
     }
     ordered
 }
-
 fn validate_transport_plan(
     commitment: &MusubiArchiveCommitmentV1,
     plan: &CarBuildPlan,
@@ -865,7 +808,6 @@ fn validate_transport_plan(
     {
         return Err(invalid());
     }
-
     let mut source_count = 0_usize;
     let mut release_count = 0_u8;
     let mut descriptor_count = 0_u8;
@@ -901,7 +843,6 @@ fn validate_transport_plan(
     }
     Ok(())
 }
-
 fn record_transport_failure(
     observer: Option<&dyn ArchiveFetchIntegrityObserverV1>,
     error: ArchiveTransportErrorV1,
@@ -922,7 +863,6 @@ fn record_transport_failure(
         }
     }
 }
-
 fn registry_error(error: crate::registry::RegistryErrorV1) -> ArchiveFetchErrorV1 {
     let class = match error.class() {
         RegistryFailureClassV1::Retryable => ArchiveFetchFailureClassV1::Retryable,
@@ -933,18 +873,15 @@ fn registry_error(error: crate::registry::RegistryErrorV1) -> ArchiveFetchErrorV
     };
     ArchiveFetchErrorV1::new(class, error.code())
 }
-
 const fn transport_error(error: ArchiveTransportErrorV1) -> ArchiveFetchErrorV1 {
     ArchiveFetchErrorV1::new(error.class(), error.code())
 }
-
 fn runtime_error(
     error: iroha::musubi_archive_fetch::MusubiArchiveRuntimeErrorV1,
 ) -> ArchiveTransportErrorV1 {
     use iroha::musubi_archive_fetch::{
         MusubiArchiveRuntimeFailureClassV1, MusubiArchiveRuntimeIntegritySurfaceV1,
     };
-
     match error.class() {
         MusubiArchiveRuntimeFailureClassV1::Retryable => {
             ArchiveTransportErrorV1::retryable(error.code())
@@ -965,21 +902,18 @@ fn runtime_error(
         }
     }
 }
-
 const fn archive_unavailable() -> ArchiveFetchErrorV1 {
     ArchiveFetchErrorV1::new(
         ArchiveFetchFailureClassV1::Unavailable,
         "MUSUBI_ARCHIVE_UNAVAILABLE",
     )
 }
-
 const fn invalid_evidence() -> ArchiveFetchErrorV1 {
     ArchiveFetchErrorV1::new(
         ArchiveFetchFailureClassV1::Permanent,
         "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID",
     )
 }
-
 const fn stable_code(code: &str) -> bool {
     let bytes = code.as_bytes();
     if bytes.is_empty() || bytes.len() > 96 {
@@ -995,40 +929,33 @@ const fn stable_code(code: &str) -> bool {
     }
     true
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
-
     use iroha_data_model::{
         musubi::{MusubiContentDigestV1, MusubiProviderBundleAttestationSetDigestV1},
         sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid, ReplicationOrderId},
     };
     use sorafs_car::FileEntry;
-
     use super::*;
-
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()
             .expect("network id")
     }
-
     fn other_network_id() -> NetworkId {
         "hash:214A4C8F95074B216BE2F72EB93166506DAE0B1026ED01EF5A760632CD93ABAB#50FA"
             .parse()
             .expect("other network id")
     }
-
     #[derive(Default)]
     struct CountingIntegrityObserver {
         archive_commitment: AtomicUsize,
         other: AtomicUsize,
     }
-
     impl ArchiveFetchIntegrityObserverV1 for CountingIntegrityObserver {
         fn record_integrity_failure(&self, surface: ArchiveFetchIntegritySurfaceV1) {
             match surface {
@@ -1041,7 +968,6 @@ mod tests {
             }
         }
     }
-
     fn commitment() -> MusubiArchiveCommitmentV1 {
         MusubiArchiveCommitmentV1 {
             root_cid: ManifestRootCid::from_blake3_digest([1; 32]).expect("root CID"),
@@ -1064,7 +990,6 @@ mod tests {
             chunk_count: 1,
         }
     }
-
     fn compact_location(archive_id: ArchiveId) -> MusubiArchiveLocationV1 {
         MusubiArchiveLocationV1 {
             location_id: MusubiArchiveLocationIdV1::new([0x31; 32]),
@@ -1082,7 +1007,6 @@ mod tests {
             state: MusubiArchiveLocationStateV1::Healthy,
         }
     }
-
     fn transport_plan_fixture() -> (MusubiArchiveCommitmentV1, CarBuildPlan) {
         let files = [
             (
@@ -1141,13 +1065,11 @@ mod tests {
         };
         (commitment, plan)
     }
-
     #[test]
     fn transport_error_codes_are_closed_and_redacted() {
         let invalid = ArchiveTransportErrorV1::retryable("token=secret");
         assert_eq!(invalid.code(), "MUSUBI_ARCHIVE_TRANSPORT_FAILED");
         assert_eq!(invalid.class(), ArchiveFetchFailureClassV1::Retryable);
-
         let valid = ArchiveTransportErrorV1::integrity("SORAFS_CHUNK_DIGEST_MISMATCH");
         assert_eq!(valid.code(), "SORAFS_CHUNK_DIGEST_MISMATCH");
         assert_eq!(valid.class(), ArchiveFetchFailureClassV1::Integrity);
@@ -1156,14 +1078,12 @@ mod tests {
             Some(ArchiveFetchIntegritySurfaceV1::ArchiveCommitment)
         );
     }
-
     #[test]
     fn integrity_observer_records_each_admitted_attempt_exactly_once() {
         let observer = CountingIntegrityObserver::default();
         let mut retryable = None;
         let mut integrity = None;
         let mut permanent = None;
-
         for error in [
             ArchiveTransportErrorV1::integrity("SORAFS_FIRST_PROVIDER_INVALID"),
             ArchiveTransportErrorV1::retryable("SORAFS_RETRYABLE"),
@@ -1179,19 +1099,16 @@ mod tests {
                 &mut permanent,
             );
         }
-
         assert_eq!(observer.archive_commitment.load(Ordering::SeqCst), 2);
         assert_eq!(observer.other.load(Ordering::SeqCst), 1);
         assert!(retryable.is_some());
         assert!(integrity.is_some());
         assert!(permanent.is_some());
     }
-
     #[test]
     fn transport_plan_is_revalidated_before_cache_or_maintenance_use() {
         let (commitment, plan) = transport_plan_fixture();
         validate_transport_plan(&commitment, &plan).expect("exact provider plan");
-
         let mut substituted = plan.clone();
         substituted.chunks[0].digest[0] ^= 0xff;
         let error = validate_transport_plan(&commitment, &substituted)
@@ -1201,7 +1118,6 @@ mod tests {
             error.integrity_surface(),
             Some(ArchiveFetchIntegritySurfaceV1::ArchiveCommitment)
         );
-
         let mut hinted = plan.clone();
         hinted.chunks[0].taikai_segment_hint = Some(sorafs_car::TaikaiSegmentHint {
             event: "event".to_owned(),
@@ -1215,11 +1131,9 @@ mod tests {
             validate_transport_plan(&commitment, &hinted).is_err(),
             "Musubi V1 provider plans must reject uncommitted Taikai hints"
         );
-
         let mut wrong_root = commitment.clone();
         wrong_root.root_cid = ManifestRootCid::from_blake3_digest([0xaa; 32]).expect("other CID");
         assert!(validate_transport_plan(&wrong_root, &plan).is_err());
-
         let mut substituted_files = plan;
         let source = substituted_files
             .files
@@ -1232,7 +1146,6 @@ mod tests {
             .expect("substituted file geometry remains structurally valid");
         assert!(validate_transport_plan(&commitment, &substituted_files).is_err());
     }
-
     #[test]
     fn candidate_order_prefers_distinct_providers_within_each_health_rank() {
         let candidate = |rank, location: u8, provider| ArchiveCandidateV1 {
@@ -1270,7 +1183,6 @@ mod tests {
             vec![0, 0, 0, 1, 1]
         );
     }
-
     fn deployment_binding() -> ArchiveFetchDeploymentBindingV1 {
         ArchiveFetchDeploymentBindingV1 {
             network_id: network_id(),
@@ -1281,7 +1193,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn locked_fetch_binding_rejects_another_network() {
         let expected = deployment_binding();
@@ -1291,7 +1202,6 @@ mod tests {
         assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
         assert_eq!(error.class(), ArchiveFetchFailureClassV1::Permanent);
     }
-
     #[test]
     fn locked_fetch_binding_rejects_a_regressing_snapshot() {
         let expected = deployment_binding();
@@ -1312,7 +1222,6 @@ mod tests {
             assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
         }
     }
-
     #[test]
     fn locked_fetch_binding_rejects_a_same_height_snapshot_conflict() {
         let expected = deployment_binding();
@@ -1324,7 +1233,6 @@ mod tests {
             .expect_err("a conflicting finalized block at the anchor height must fail");
         assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
     }
-
     #[test]
     fn locked_fetch_binding_rejects_an_invalid_observed_snapshot() {
         let expected = deployment_binding();
@@ -1339,7 +1247,6 @@ mod tests {
             );
         assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
     }
-
     #[test]
     fn locked_fetch_binding_accepts_the_anchor_and_a_later_snapshot() {
         let expected = deployment_binding();
@@ -1356,7 +1263,6 @@ mod tests {
         )
         .expect("a non-regressing later finalized snapshot is valid");
     }
-
     #[cfg(unix)]
     #[test]
     fn fetch_adapter_records_the_expected_locked_deployment() {
@@ -1373,17 +1279,14 @@ mod tests {
         let expected = deployment_binding();
         let adapter = MusubiArchiveFetchAdapterV1::new(&registry, &cache)
             .with_expected_deployment(expected.network_id, expected.minimum_snapshot);
-
         assert_eq!(adapter.expected_deployment.as_ref(), Some(&expected));
     }
-
     #[test]
     fn compact_location_evidence_binds_archive_and_finalized_height() {
         let archive_id = ArchiveId::new([0x41; 32]);
         let location = compact_location(archive_id);
         validate_location_evidence(archive_id, location.finalized_height, &location)
             .expect("matching compact finalized location");
-
         let error = validate_location_evidence(
             ArchiveId::new([0x42; 32]),
             location.finalized_height,
@@ -1391,13 +1294,11 @@ mod tests {
         )
         .expect_err("a location from another archive must fail");
         assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
-
         let error =
             validate_location_evidence(archive_id, location.finalized_height - 1, &location)
                 .expect_err("a location newer than the query snapshot must fail");
         assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
     }
-
     #[test]
     fn unavailable_transport_fails_before_opening_a_stream() {
         let mut transport = UnavailableSorafsArchiveTransportV1;
@@ -1408,7 +1309,6 @@ mod tests {
         assert_eq!(error.code(), "SORAFS_ARCHIVE_PLAN_SERVICE_NOT_CONFIGURED");
         assert_eq!(error.class(), ArchiveFetchFailureClassV1::Permanent);
     }
-
     #[cfg(unix)]
     #[test]
     fn exact_fetch_rejects_a_zero_archive_before_network_access() {
@@ -1426,7 +1326,6 @@ mod tests {
         let adapter =
             MusubiArchiveFetchAdapterV1::new(&registry, &cache).with_integrity_observer(&observer);
         let mut transport = UnavailableSorafsArchiveTransportV1;
-
         let error = adapter
             .fetch_exact(ArchiveId::new([0; 32]), &mut transport)
             .expect_err("zero archive identity must fail locally");

@@ -1,5 +1,4 @@
 // Bounded collection and decode helpers for application routed reads.
-
 #[cfg(feature = "app_api")]
 #[derive(Debug)]
 struct ToriiFanoutJsonPayloads {
@@ -7,7 +6,6 @@ struct ToriiFanoutJsonPayloads {
     diagnostics: ToriiFanoutDiagnostics,
     budget: ToriiRoutedReadMemoryBudget,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug)]
 struct ToriiFanoutRoutedJsonPayloads {
@@ -15,7 +13,6 @@ struct ToriiFanoutRoutedJsonPayloads {
     diagnostics: ToriiFanoutDiagnostics,
     budget: ToriiRoutedReadMemoryBudget,
 }
-
 #[cfg(feature = "app_api")]
 async fn collect_torii_singleton_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
@@ -32,7 +29,6 @@ where
     let mut last_route_unavailable = None;
     let mut budget = ToriiRoutedReadMemoryBudget::new(working_set_bytes, max_body_bytes)?;
     let mut payloads = budget.try_retained_vec(routes.len())?;
-
     for route in routes {
         diagnostics.record_attempt();
         let response = fetch(*route).await;
@@ -57,7 +53,6 @@ where
             }
         }
     }
-
     if payloads.is_empty() {
         let response = last_not_found.unwrap_or_else(|| {
             last_route_unavailable.unwrap_or_else(|| {
@@ -70,14 +65,12 @@ where
         });
         return Err(with_torii_fanout_headers(response, diagnostics));
     }
-
     Ok(ToriiFanoutJsonPayloads {
         payloads,
         diagnostics,
         budget,
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn collect_torii_list_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
@@ -94,7 +87,6 @@ where
     let mut last_route_unavailable = None;
     let mut budget = ToriiRoutedReadMemoryBudget::new(working_set_bytes, max_body_bytes)?;
     let mut payloads = budget.try_retained_vec(routes.len())?;
-
     for route in routes {
         diagnostics.record_attempt();
         let response = fetch(*route).await;
@@ -119,7 +111,6 @@ where
             }
         }
     }
-
     if payloads.is_empty() {
         let response = last_not_found.unwrap_or_else(|| {
             last_route_unavailable.unwrap_or_else(|| {
@@ -132,14 +123,12 @@ where
         });
         return Err(with_torii_fanout_headers(response, diagnostics));
     }
-
     Ok(ToriiFanoutJsonPayloads {
         payloads,
         diagnostics,
         budget,
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn collect_torii_routed_list_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
@@ -156,7 +145,6 @@ where
     let mut last_route_unavailable = None;
     let mut budget = ToriiRoutedReadMemoryBudget::new(working_set_bytes, max_body_bytes)?;
     let mut payloads = budget.try_retained_vec(routes.len())?;
-
     for route in routes {
         diagnostics.record_attempt();
         let response = fetch(*route).await;
@@ -181,7 +169,6 @@ where
             }
         }
     }
-
     if payloads.is_empty() {
         let response = last_not_found.unwrap_or_else(|| {
             last_route_unavailable.unwrap_or_else(|| {
@@ -194,14 +181,12 @@ where
         });
         return Err(with_torii_fanout_headers(response, diagnostics));
     }
-
     Ok(ToriiFanoutRoutedJsonPayloads {
         payloads,
         diagnostics,
         budget,
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn collect_torii_paginated_list_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
@@ -219,13 +204,11 @@ where
     let mut last_route_unavailable = None;
     let mut budget = ToriiRoutedReadMemoryBudget::new(working_set_bytes, max_body_bytes)?;
     let mut payloads = budget.try_retained_vec(routes.len())?;
-
     for route in routes {
         diagnostics.record_attempt();
         let mut route_offset = 0_u64;
         let mut route_total = None;
         let mut route_succeeded = false;
-
         loop {
             let response = fetch(*route, route_offset, page_limit).await;
             if response.status() == StatusCode::NOT_FOUND {
@@ -244,7 +227,6 @@ where
                 last_route_unavailable = Some(response);
                 break;
             }
-
             let payload = match torii_json_body_value(response, &mut budget).await {
                 Ok(payload) => payload,
                 Err(response) => {
@@ -267,18 +249,15 @@ where
             route_total = Some(page.total);
             route_succeeded = true;
             budget.push_retained(&mut payloads, payload)?;
-
             if !page.has_more {
                 break;
             }
             route_offset = route_offset.saturating_add(page.item_count);
         }
-
         if route_succeeded {
             diagnostics.record_success();
         }
     }
-
     if payloads.is_empty() {
         let response = last_not_found.unwrap_or_else(|| {
             last_route_unavailable.unwrap_or_else(|| {
@@ -291,14 +270,12 @@ where
         });
         return Err(with_torii_fanout_headers(response, diagnostics));
     }
-
     Ok(ToriiFanoutJsonPayloads {
         payloads,
         diagnostics,
         budget,
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn collect_torii_alias_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
@@ -318,11 +295,9 @@ where
     let mut last_permission_denied = None;
     let mut budget = ToriiRoutedReadMemoryBudget::new(working_set_bytes, max_body_bytes)?;
     let mut payloads = budget.try_retained_vec(routes.len())?;
-
     for _ in 0..denied_routes {
         diagnostics.record_denied();
     }
-
     if routes.is_empty() {
         let response = if diagnostics.denied_routes > 0 {
             torii_alias_permission_denied_response(permission_denied_message)
@@ -335,7 +310,6 @@ where
         };
         return Err(with_torii_fanout_headers(response, diagnostics));
     }
-
     for route in routes {
         diagnostics.record_attempt();
         let response = fetch(*route).await;
@@ -365,7 +339,6 @@ where
             }
         }
     }
-
     if payloads.is_empty() {
         let response = last_permission_denied.unwrap_or_else(|| {
             if diagnostics.denied_routes > 0 {
@@ -384,14 +357,12 @@ where
         });
         return Err(with_torii_fanout_headers(response, diagnostics));
     }
-
     Ok(ToriiFanoutJsonPayloads {
         payloads,
         diagnostics,
         budget,
     })
 }
-
 #[cfg(feature = "app_api")]
 fn filter_permission_opened_alias_lookup_payload(
     app: &SharedAppState,
@@ -456,7 +427,6 @@ fn filter_permission_opened_alias_lookup_payload(
     *total_value = Value::from(total);
     Ok(payload)
 }
-
 #[cfg(feature = "app_api")]
 async fn collect_torii_alias_lookup_json_payloads<F, Fut>(
     app: &SharedAppState,
@@ -478,11 +448,9 @@ where
     let mut last_permission_denied = None;
     let mut budget = ToriiRoutedReadMemoryBudget::new(working_set_bytes, max_body_bytes)?;
     let mut payloads = budget.try_retained_vec(routes.len())?;
-
     for _ in 0..denied_routes {
         diagnostics.record_denied();
     }
-
     if routes.is_empty() {
         let response = if diagnostics.denied_routes > 0 {
             torii_alias_permission_denied_response(permission_denied_message)
@@ -495,7 +463,6 @@ where
         };
         return Err(with_torii_fanout_headers(response, diagnostics));
     }
-
     for route in routes {
         diagnostics.record_attempt();
         let response = fetch(route.route).await;
@@ -535,7 +502,6 @@ where
             }
         }
     }
-
     if payloads.is_empty() {
         let response = last_permission_denied.unwrap_or_else(|| {
             if diagnostics.denied_routes > 0 {
@@ -554,7 +520,6 @@ where
         });
         return Err(with_torii_fanout_headers(response, diagnostics));
     }
-
     Ok(ToriiFanoutJsonPayloads {
         payloads,
         diagnostics,
@@ -577,12 +542,10 @@ async fn bound_torii_single_route_response(
     let body = axum::body::to_bytes(body, body_limit)
         .await
         .map_err(|_| torii_routed_read_body_response())?;
-
     if !status.is_success() {
         parts.headers.remove(axum::http::header::CONTENT_LENGTH);
         return Ok(Response::from_parts(parts, Body::from(body)));
     }
-
     match response_format {
         ToriiProxyResponseFormatV1::Json => {
             let plan = budget.decode_plan(body.len())?;
@@ -627,7 +590,6 @@ async fn bound_torii_single_route_response(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn torii_json_body_value(
     response: Response,
@@ -637,7 +599,6 @@ async fn torii_json_body_value(
     if !status.is_success() {
         return Err(response);
     }
-
     let body = axum::body::to_bytes(response.into_body(), budget.route_body_limit())
         .await
         .map_err(|_| torii_routed_read_body_response())?;
@@ -655,7 +616,6 @@ async fn torii_json_body_value(
     drop(canonical);
     Ok(value)
 }
-
 #[cfg(feature = "app_api")]
 async fn torii_json_body<T>(
     response: Response,
@@ -669,7 +629,6 @@ where
     if !status.is_success() {
         return Err(response);
     }
-
     let body = axum::body::to_bytes(response.into_body(), budget.route_body_limit())
         .await
         .map_err(|_| torii_routed_read_body_response())?;
@@ -689,7 +648,6 @@ where
         canonical_bytes,
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn torii_norito_body<T>(
     response: Response,
@@ -703,7 +661,6 @@ where
     if !status.is_success() {
         return Err(response);
     }
-
     let body = axum::body::to_bytes(response.into_body(), budget.route_body_limit())
         .await
         .map_err(|_| torii_routed_read_body_response())?;

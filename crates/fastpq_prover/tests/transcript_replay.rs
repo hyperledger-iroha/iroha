@@ -1,8 +1,6 @@
 //! V1 transcript regression fixtures.
-
 #[cfg(feature = "fastpq-gpu")]
 use std::{fs, path::Path};
-
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_prover::{
     OperationKind, Proof, Prover, PublicInputs, StateTransition, TransitionBatch,
@@ -25,12 +23,10 @@ use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
 #[cfg(feature = "fastpq-gpu")]
 const FIXTURE_NAME: &str = "stage4_balanced_preview.bin";
-
 #[cfg(feature = "fastpq-gpu")]
 mod common;
 #[cfg(feature = "fastpq-gpu")]
 use common::fixture_update_requested;
-
 #[cfg(feature = "fastpq-gpu")]
 fn annotate_batch(batch: &mut TransitionBatch) {
     batch.public_inputs.dsid = [0x11; 16];
@@ -40,7 +36,6 @@ fn annotate_batch(batch: &mut TransitionBatch) {
     batch.public_inputs.perm_root = [0xCC; 32];
     batch.public_inputs.tx_set_hash = [0xDD; 32];
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn preview_fixture_batch(rows: usize) -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
@@ -90,14 +85,12 @@ fn preview_fixture_batch(rows: usize) -> TransitionBatch {
     batch.public_inputs.new_root = new_root;
     batch
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn fixture_path() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(FIXTURE_NAME)
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
@@ -106,7 +99,6 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     let _ = domain;
     AccountId::new(keypair.public_key().clone())
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTransition) {
     let asset_definition = AssetDefinitionId::derive_from_components(
@@ -160,13 +152,11 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
     );
     (transcript, sender, receiver)
 }
-
 #[cfg(feature = "fastpq-gpu")]
 #[test]
 fn v1_preview_fixture_verifies_transcript() {
     let batch = preview_fixture_batch(64);
     let path = fixture_path();
-
     if fixture_update_requested() {
         let prover = Prover::canonical("fastpq-lane-balanced").expect("prover");
         let proof = prover.prove(&batch).expect("proof");
@@ -174,16 +164,13 @@ fn v1_preview_fixture_verifies_transcript() {
         fs::write(&path, &encoded).expect("write fixture");
         panic!("updated {FIXTURE_NAME}; re-run tests without FASTPQ_UPDATE_FIXTURES to validate");
     }
-
     let expected = include_bytes!("fixtures/stage4_balanced_preview.bin");
     assert!(
         !expected.is_empty(),
         "fixture {FIXTURE_NAME} is empty; set FASTPQ_UPDATE_FIXTURES=1 and re-run tests"
     );
-
     let proof: Proof = norito::decode_from_bytes(expected).expect("decode proof");
     verify(&batch, &proof).expect("fixture proof verifies");
-
     let prover = Prover::canonical("fastpq-lane-balanced").expect("prover");
     let regenerated = prover.prove(&batch).expect("regenerate proof");
     let encoded = to_bytes(&regenerated).expect("encode regenerated proof");

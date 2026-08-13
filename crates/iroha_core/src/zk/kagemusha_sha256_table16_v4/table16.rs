@@ -10,38 +10,31 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 use std::marker::PhantomData;
-
 use ff::PrimeField;
 use halo2_proofs::{
     circuit::{Chip, Layouter, Region, Value},
     plonk::{Advice, Column, ConstraintSystem, Error, Expression, Fixed, Selector},
     poly::Rotation,
 };
-
 mod compression;
 mod gates;
 mod message_schedule;
 mod spread_table;
 pub(crate) mod util;
-
 use compression::*;
 use gates::*;
 use message_schedule::*;
 use spread_table::*;
-
 use crate::zk::kagemusha_sha256_table16_v4::{
     AssignedBits, AssignedBlockWord, BlockWord, PaddedByte, Sha256Instructions,
 };
-
 #[derive(Clone, Debug)]
 struct PackConfig {
     bytes: [Column<Advice>; 4],
     word: Column<Advice>,
     s_pack: Selector,
 }
-
 impl PackConfig {
     fn configure<F: PrimeField>(
         meta: &mut ConstraintSystem<F>,
@@ -56,17 +49,14 @@ impl PackConfig {
             let two_8 = Expression::Constant(F::from(1 << 8));
             let two_16 = Expression::Constant(F::from(1 << 16));
             let two_24 = Expression::Constant(F::from(1 << 24));
-
             vec![q * (b0 * two_24 + b1 * two_16 + b2 * two_8 + b3 - word)]
         });
-
         Self {
             bytes,
             word,
             s_pack,
         }
     }
-
     fn assign_block<F: PrimeField>(
         &self,
         layouter: &mut impl Layouter<F>,
@@ -79,7 +69,6 @@ impl PackConfig {
                 let mut words = Vec::with_capacity(super::BLOCK_SIZE);
                 for (word_index, bytes) in block.chunks_exact(4).enumerate() {
                     self.s_pack.enable(&mut region, word_index)?;
-
                     let mut value = Value::known(0_u32);
                     for (byte_index, byte) in bytes.iter().enumerate() {
                         value = value
@@ -104,7 +93,6 @@ impl PackConfig {
                             }
                         }
                     }
-
                     words.push(AssignedBits::<32, F>::assign(
                         &mut region,
                         || format!("packed word {word_index}"),
@@ -113,13 +101,11 @@ impl PackConfig {
                         value,
                     )?);
                 }
-
                 words.try_into().map_err(|_| Error::Synthesis)
             },
         )
     }
 }
-
 /// Configuration for a [`Table16Chip`].
 #[derive(Clone, Debug)]
 pub struct Table16Config {
@@ -128,33 +114,27 @@ pub struct Table16Config {
     compression: CompressionConfig,
     pack: PackConfig,
 }
-
 #[derive(Clone, Debug)]
 struct Table16SharedConfig {
     lookup: SpreadTable,
     constant: Column<Fixed>,
 }
-
 /// A chip that implements SHA-256 with a maximum lookup table size of $2^16$.
 #[derive(Clone, Debug)]
 pub struct Table16Chip<F: PrimeField> {
     config: Table16Config,
     _marker: PhantomData<F>,
 }
-
 impl<F: PrimeField> Chip<F> for Table16Chip<F> {
     type Config = Table16Config;
     type Loaded = ();
-
     fn config(&self) -> &Self::Config {
         &self.config
     }
-
     fn loaded(&self) -> &Self::Loaded {
         &()
     }
 }
-
 impl<F: PrimeField> Table16Chip<F> {
     fn assert_field_size() {
         assert!(
@@ -162,7 +142,6 @@ impl<F: PrimeField> Table16Chip<F> {
             "Table16 SHA-256 requires a field modulus larger than 2^64 - 1"
         );
     }
-
     /// Reconstructs this chip from the given config.
     pub fn construct(config: <Self as Chip<F>>::Config) -> Self {
         Self::assert_field_size();
@@ -171,14 +150,12 @@ impl<F: PrimeField> Table16Chip<F> {
             _marker: PhantomData,
         }
     }
-
     fn configure_shared(meta: &mut ConstraintSystem<F>) -> Table16SharedConfig {
         let lookup = SpreadTableChip::<F>::configure_table(meta);
         let constant = meta.fixed_column();
         meta.enable_constant(constant);
         Table16SharedConfig { lookup, constant }
     }
-
     fn configure_lane(
         meta: &mut ConstraintSystem<F>,
         shared: &Table16SharedConfig,
@@ -208,25 +185,21 @@ impl<F: PrimeField> Table16Chip<F> {
             shared.lookup.clone(),
         );
         let lookup_inputs = lookup.input.clone();
-
         let a_1 = lookup_inputs.dense;
         let a_2 = lookup_inputs.spread;
         for column in [a_1, a_2, a_3, a_4, message_schedule_column, a_6, a_7, a_8] {
             meta.enable_equality(column);
         }
         let _ = shared.constant;
-
         let compression = CompressionConfig::configure(
             meta,
             lookup_inputs.clone(),
             message_schedule_column,
             extras,
         );
-
         let message_schedule =
             MessageScheduleConfig::configure(meta, lookup_inputs, message_schedule_column, extras);
         let pack = PackConfig::configure(meta, [a_3, a_4, a_6, a_7], message_schedule_column);
-
         Table16Config {
             lookup,
             message_schedule,
@@ -234,7 +207,6 @@ impl<F: PrimeField> Table16Chip<F> {
             pack,
         }
     }
-
     /// Configure several independent Table16 lanes that share exactly one
     /// three-column spread table and one fixed constant column.
     pub(crate) fn configure_lanes<const LANES: usize>(
@@ -248,7 +220,6 @@ impl<F: PrimeField> Table16Chip<F> {
             Self::configure_lane(meta, &shared, advice, lookup_tail)
         })
     }
-
     /// Configures a circuit to include this chip.
     #[cfg(test)]
     pub fn configure(meta: &mut ConstraintSystem<F>) -> <Self as Chip<F>>::Config {
@@ -257,7 +228,6 @@ impl<F: PrimeField> Table16Chip<F> {
             .next()
             .expect("one Table16 lane")
     }
-
     /// Copy-binds range-checked source bytes into canonical, padded SHA-256
     /// blocks and constrains their big-endian packing into 32-bit words.
     #[cfg(test)]
@@ -274,7 +244,6 @@ impl<F: PrimeField> Table16Chip<F> {
         if padded_len % super::BLOCK_BYTE_SIZE != 0 {
             return Err(Error::Synthesis);
         }
-
         let mut padded = Vec::new();
         padded
             .try_reserve_exact(padded_len)
@@ -288,7 +257,6 @@ impl<F: PrimeField> Table16Chip<F> {
                 .count(),
             input.len()
         );
-
         let mut blocks = Vec::with_capacity(padded_len / super::BLOCK_BYTE_SIZE);
         for (block_index, block) in padded.chunks_exact(super::BLOCK_BYTE_SIZE).enumerate() {
             let block: [PaddedByte<F>; super::BLOCK_BYTE_SIZE] =
@@ -301,7 +269,6 @@ impl<F: PrimeField> Table16Chip<F> {
         }
         Ok(blocks)
     }
-
     pub(crate) fn assign_padded_block(
         &self,
         layouter: &mut impl Layouter<F>,
@@ -310,20 +277,16 @@ impl<F: PrimeField> Table16Chip<F> {
     ) -> Result<[AssignedBlockWord<F>; super::BLOCK_SIZE], Error> {
         self.config.pack.assign_block(layouter, block, block_index)
     }
-
     /// Loads the lookup table required by this chip into the circuit.
     pub fn load(config: Table16Config, layouter: &mut impl Layouter<F>) -> Result<(), Error> {
         SpreadTableChip::load(config.lookup, layouter)
     }
 }
-
 impl<F: PrimeField> Sha256Instructions<F> for Table16Chip<F> {
     type State = State<F>;
-
     fn initialization_vector(&self, layouter: &mut impl Layouter<F>) -> Result<Self::State, Error> {
         self.config().compression.initialize_with_iv(layouter)
     }
-
     // Given a chaining state and an input message block, copy-decompose the
     // state, compress the message block, and return the final state.
     // The values of the blockword array are re-assigned to satisfy the satisfy the
@@ -346,16 +309,13 @@ impl<F: PrimeField> Sha256Instructions<F> for Table16Chip<F> {
         let initialized_state = config
             .compression
             .initialize_with_state(layouter, chaining_state.clone())?;
-
         // extract the values that need to be input in `process`
         let input_values = input.clone().map(|word| BlockWord(word.value_u32()));
         // the output is well formed due to the constraints in `process`. The w values
         // are therefore rangechecked
-
         // assign the values for message schedule. Note that at these point the values
         // used are arbitrary and not-connected to the assigned input
         let (w, w_halves) = config.message_schedule.process(layouter, input_values)?;
-
         // here we make the connection with the input. Specifically, we assert that the
         // first 16 values returned by message schedule that represent the 16
         // 32-bit input words to be absorbed are equal with the assigned input
@@ -370,12 +330,10 @@ impl<F: PrimeField> Sha256Instructions<F> for Table16Chip<F> {
                 Ok(())
             },
         )?;
-
         config
             .compression
             .compress(layouter, initialized_state, w_halves, lookup_inputs)
     }
-
     fn digest(
         &self,
         layouter: &mut impl Layouter<F>,
@@ -386,7 +344,6 @@ impl<F: PrimeField> Sha256Instructions<F> for Table16Chip<F> {
         self.config().compression.digest(layouter, state.clone())
     }
 }
-
 /// Common assignment patterns used by Table16 regions.
 trait Table16Assignment<F: PrimeField> {
     /// Assign cells for general spread computation used in sigma, ch, ch_neg,
@@ -431,18 +388,15 @@ trait Table16Assignment<F: PrimeField> {
             row + 2,
             r_1_odd.map(SpreadWord::<16, 32>::new),
         )?;
-
         // Assign and copy R_1^{odd}
         r_1_odd
             .spread
             .copy_advice(|| "Assign and copy R_1^{odd}", region, a_3, row)?;
-
         Ok((
             (r_0_even.dense, r_1_even.dense),
             (r_0_odd.dense, r_1_odd.dense),
         ))
     }
-
     /// Assign outputs of sigma gates
     #[allow(clippy::too_many_arguments)]
     fn assign_sigma_outputs(
@@ -459,22 +413,17 @@ trait Table16Assignment<F: PrimeField> {
         let (even, _odd) = self.assign_spread_outputs(
             region, lookup, a_3, row, r_0_even, r_0_odd, r_1_even, r_1_odd,
         )?;
-
         Ok(even)
     }
 }
-
 #[cfg(test)]
 mod constraint_inventory_tests {
     use halo2_proofs::{halo2curves::pasta::Fp, plonk::ConstraintSystem};
-
     use super::Table16Chip;
-
     #[test]
     fn five_lane_tail_relation_adds_no_fixed_selector_or_permutation_columns() {
         let mut meta = ConstraintSystem::<Fp>::default();
         let _ = Table16Chip::<Fp>::configure_lanes::<5>(&mut meta);
-
         assert_eq!(meta.num_advice_columns(), 55);
         assert_eq!(meta.num_fixed_columns(), 4);
         assert_eq!(meta.num_instance_columns(), 0);

@@ -1,6 +1,5 @@
 #![allow(clippy::assertions_on_constants)]
 //! Test fixtures exercising `iroha_config` parameter loading and validation.
-
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -9,7 +8,6 @@ use std::{
     sync::{Mutex, MutexGuard, Once},
     time::Duration,
 };
-
 use assertables::assert_contains;
 use error_stack::{Report, ResultExt};
 use expect_test::expect_file;
@@ -38,7 +36,6 @@ use soranet_pq::MlKemSuite;
 use thiserror::Error;
 use toml::{Table, Value as TomlValue};
 use url::Url;
-
 fn fixtures_dir() -> PathBuf {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
@@ -47,7 +44,6 @@ fn fixtures_dir() -> PathBuf {
     });
     PathBuf::from("tests/fixtures")
 }
-
 fn parse_env(raw: impl AsRef<str>) -> HashMap<String, String> {
     raw.as_ref()
         .lines()
@@ -63,13 +59,11 @@ fn parse_env(raw: impl AsRef<str>) -> HashMap<String, String> {
         })
         .collect()
 }
-
 fn test_env_from_file(p: impl AsRef<Path>) -> MockEnv {
     let contents = fs::read_to_string(p).expect("the path should be valid");
     let map = parse_env(contents);
     MockEnv::with_map(map)
 }
-
 fn strip_ansi_codes(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -89,12 +83,10 @@ fn strip_ansi_codes(input: &str) -> String {
     }
     result
 }
-
 struct AddressRuntimeGuard {
     chain_discriminant: u16,
     _lock: MutexGuard<'static, ()>,
 }
-
 impl AddressRuntimeGuard {
     fn capture() -> Self {
         static ADDRESS_RUNTIME_LOCK: Mutex<()> = Mutex::new(());
@@ -107,19 +99,15 @@ impl AddressRuntimeGuard {
         }
     }
 }
-
 impl Drop for AddressRuntimeGuard {
     fn drop(&mut self) {
         iroha_data_model::account::address::set_chain_discriminant(self.chain_discriminant);
     }
 }
-
 #[derive(Error, Debug)]
 #[error("failed to load config from fixtures")]
 struct FixtureConfigLoadError;
-
 include!("fixtures/soranet_transport_identity_tests.rs");
-
 fn load_config_from_fixtures(path: impl AsRef<Path>) -> Result<Config, FixtureConfigLoadError> {
     let config = ConfigReader::new()
         .read_toml_with_extends(fixtures_dir().join(path))
@@ -128,10 +116,8 @@ fn load_config_from_fixtures(path: impl AsRef<Path>) -> Result<Config, FixtureCo
         .change_context(FixtureConfigLoadError)?
         .parse()
         .change_context(FixtureConfigLoadError)?;
-
     Ok(config)
 }
-
 #[allow(dead_code)]
 fn load_user_config_from_fixtures(
     path: impl AsRef<Path>,
@@ -142,7 +128,6 @@ fn load_user_config_from_fixtures(
         .read_and_complete::<UserConfig>()
         .change_context(FixtureConfigLoadError)
 }
-
 #[test]
 fn quic_datagram_buffers_default_to_one_mib() {
     assert_eq!(
@@ -162,7 +147,6 @@ fn quic_datagram_buffers_default_to_one_mib() {
             >= defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get()
     );
 }
-
 /// This test not only asserts that the minimal set of fields is enough;
 /// it also gives an insight into every single default value
 #[test]
@@ -170,11 +154,9 @@ fn quic_datagram_buffers_default_to_one_mib() {
 fn minimal_config_snapshot() {
     let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
         .expect("config should be valid");
-
     // Snapshot updated to include new Sumeragi fields and other defaults
     expect_file!["fixtures/minimal_config_snapshot.txt"].assert_debug_eq(&config);
 }
-
 #[test]
 fn torii_receipt_signer_parses() {
     let config =
@@ -196,7 +178,6 @@ fn torii_receipt_signer_parses() {
         Algorithm::Ed25519
     );
 }
-
 #[test]
 fn torii_ram_lfe_parses() {
     let config = load_config_from_fixtures("torii_ram_lfe.toml").expect("config should be valid");
@@ -205,7 +186,6 @@ fn torii_ram_lfe_parses() {
         .ram_lfe
         .expect("RAM-LFE runtime should be configured");
     assert_eq!(runtime.programs.len(), 1);
-
     let program = &runtime.programs[0];
     let expected_program_id = "phone_retail".parse().expect("program id");
     assert_eq!(program.program_id, expected_program_id);
@@ -220,33 +200,27 @@ fn torii_ram_lfe_parses() {
         "receipt ttl should parse as milliseconds"
     );
 }
-
 #[test]
 fn ivm_banner_defaults_enabled() {
     let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
         .expect("config should be valid");
-
     assert!(config.ivm.banner.show, "banner should default to on");
     assert!(config.ivm.banner.beep, "beep should default to on");
 }
-
 #[test]
 fn torii_max_content_len_defaults_to_sixty_four_megabytes() {
     let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
         .expect("config should be valid");
-
     assert_eq!(
         config.torii.max_content_len.0,
         defaults::torii::MAX_CONTENT_LEN.0,
         "minimal configs should inherit the runtime Torii body-cap default"
     );
 }
-
 #[test]
 fn ivm_banner_override_applies() {
     let config =
         load_config_from_fixtures("ivm_banner_override.toml").expect("config should be valid");
-
     assert!(
         !config.ivm.banner.show,
         "override should disable banner rendering"
@@ -256,14 +230,11 @@ fn ivm_banner_override_applies() {
         "override should disable beep rendering"
     );
 }
-
 #[test]
 fn nexus_lane_requires_alias() {
     use std::num::NonZeroU32;
-
     use iroha_config::parameters::user::{LaneDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -275,18 +246,14 @@ fn nexus_lane_requires_alias() {
         }],
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn nexus_rejects_zero_axt_slot_length() {
     use std::num::NonZeroU32;
-
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -307,16 +274,13 @@ fn nexus_rejects_zero_axt_slot_length() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn nexus_relay_worker_requires_lane_relay_burn() {
     use iroha_config::parameters::user::{Nexus, NexusRelayWorker};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         enabled: true,
@@ -326,18 +290,15 @@ fn nexus_relay_worker_requires_lane_relay_burn() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     let error = format!("{:?}", emitter.into_result().expect_err("invalid config"));
     assert!(error.contains("nexus.relay_worker.enabled"));
 }
-
 #[test]
 fn nexus_relay_worker_parses_with_lane_relay_burn() {
     use iroha_config::parameters::actual::NexusFeeSettlementMode;
     use iroha_config::parameters::user::{Nexus, NexusFees, NexusRelayWorker};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         enabled: true,
@@ -352,7 +313,6 @@ fn nexus_relay_worker_parses_with_lane_relay_burn() {
         },
         ..Nexus::default()
     };
-
     let parsed = nexus.parse(&mut emitter).expect("valid config");
     emitter.into_result().expect("no parse errors");
     assert!(parsed.relay_worker.enabled);
@@ -366,7 +326,6 @@ fn nexus_relay_worker_parses_with_lane_relay_burn() {
         defaults::nexus::fees::sponsor_vault_custody_account_id()
     );
 }
-
 #[test]
 fn nexus_rejects_out_of_range_axt_slot_length() {
     let result = load_config_from_fixtures("bad.nexus_axt_slot_length_too_large.toml");
@@ -375,20 +334,16 @@ fn nexus_rejects_out_of_range_axt_slot_length() {
         "slot length above guardrail must be rejected"
     );
 }
-
 #[test]
 fn nexus_rejects_negative_axt_slot_length() {
     let result = load_config_from_fixtures("bad.nexus_axt_slot_length_negative.toml");
     assert!(result.is_err(), "negative slot length must be rejected");
 }
-
 #[test]
 fn nexus_rejects_axt_clock_skew_above_slot_length() {
     use std::num::NonZeroU32;
-
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -408,18 +363,14 @@ fn nexus_rejects_axt_clock_skew_above_slot_length() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn nexus_rejects_zero_axt_replay_retention_slots() {
     use std::num::NonZeroU32;
-
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -438,11 +389,9 @@ fn nexus_rejects_zero_axt_replay_retention_slots() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn nexus_rejects_out_of_range_axt_replay_retention_slots() {
     let result = load_config_from_fixtures("bad.nexus_axt_replay_retention_too_large.toml");
@@ -451,7 +400,6 @@ fn nexus_rejects_out_of_range_axt_replay_retention_slots() {
         "replay retention above guardrail must be rejected"
     );
 }
-
 #[test]
 fn nexus_axt_fields_load_from_fixture() {
     let config = load_config_from_fixtures("nexus_axt_full.toml").expect("config should be valid");
@@ -460,7 +408,6 @@ fn nexus_axt_fields_load_from_fixture() {
     assert_eq!(config.nexus.axt.proof_cache_ttl_slots.get(), 8);
     assert_eq!(config.nexus.axt.replay_retention_slots.get(), 256);
 }
-
 #[test]
 fn nexus_multilane_requires_enable_flag() {
     let result = load_config_from_fixtures("bad.nexus_multilane_disabled.toml");
@@ -475,7 +422,6 @@ fn nexus_multilane_requires_enable_flag() {
         "error should mention multi-lane catalogs (got {debug})"
     );
 }
-
 #[test]
 fn nexus_lane_overrides_rejected_when_disabled() {
     let result = load_config_from_fixtures("bad.nexus_lane_overrides_disabled.toml");
@@ -490,7 +436,6 @@ fn nexus_lane_overrides_rejected_when_disabled() {
         "error should explain that overrides are ignored in single-lane mode (got {debug})"
     );
 }
-
 #[test]
 fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
     let report = load_config_from_fixtures("bad.sumeragi_legacy_v1_fields.toml")
@@ -503,7 +448,6 @@ fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
         "diagnostic should identify a retired v1 table: {message}",
     );
 }
-
 #[test]
 fn retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage() {
     let report = load_config_from_fixtures("bad.retired_plan_journal_toggle.toml")
@@ -511,12 +455,10 @@ fn retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage(
     let message = strip_ansi_codes(&format!("{report:?}"));
     assert_contains!(message, "unknown parameter: `queue.plan_journal_enabled`");
 }
-
 #[test]
 fn nexus_lane_relay_emergency_requires_nexus_enabled() {
     use iroha_config::parameters::user::{LaneRelayEmergency, Nexus};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         enabled: false,
@@ -526,7 +468,6 @@ fn nexus_lane_relay_emergency_requires_nexus_enabled() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     let err = emitter
         .into_result()
@@ -537,14 +478,11 @@ fn nexus_lane_relay_emergency_requires_nexus_enabled() {
         "nexus.lane_relay_emergency.enabled requires nexus.enabled = true"
     );
 }
-
 #[test]
 fn nexus_lane_relay_emergency_rejects_zero_threshold() {
     use std::num::NonZeroU32;
-
     use iroha_config::parameters::user::{LaneDescriptor, LaneRelayEmergency, Nexus};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         enabled: true,
@@ -563,7 +501,6 @@ fn nexus_lane_relay_emergency_rejects_zero_threshold() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     let err = emitter
         .into_result()
@@ -574,14 +511,11 @@ fn nexus_lane_relay_emergency_rejects_zero_threshold() {
         "nexus.lane_relay_emergency.multisig_threshold must be > 0"
     );
 }
-
 #[test]
 fn nexus_lane_relay_emergency_rejects_threshold_above_members() {
     use std::num::NonZeroU32;
-
     use iroha_config::parameters::user::{LaneDescriptor, LaneRelayEmergency, Nexus};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         enabled: true,
@@ -600,7 +534,6 @@ fn nexus_lane_relay_emergency_rejects_threshold_above_members() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     let err = emitter
         .into_result()
@@ -611,12 +544,10 @@ fn nexus_lane_relay_emergency_rejects_threshold_above_members() {
         "nexus.lane_relay_emergency.multisig_threshold 6 must be <= multisig_members 5"
     );
 }
-
 #[test]
 fn nexus_storage_weights_require_full_budget() {
     use iroha_config::parameters::user::{Nexus, NexusStorage, NexusStorageWeights};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         storage: NexusStorage {
@@ -631,7 +562,6 @@ fn nexus_storage_weights_require_full_budget() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     let err = emitter
         .into_result()
@@ -639,12 +569,10 @@ fn nexus_storage_weights_require_full_budget() {
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "nexus.storage.disk_budget_weights");
 }
-
 #[test]
 fn nexus_storage_weights_require_positive_subsystem_shares() {
     use iroha_config::parameters::user::{Nexus, NexusStorage, NexusStorageWeights};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         storage: NexusStorage {
@@ -659,7 +587,6 @@ fn nexus_storage_weights_require_positive_subsystem_shares() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     let err = emitter
         .into_result()
@@ -669,7 +596,6 @@ fn nexus_storage_weights_require_positive_subsystem_shares() {
     assert_contains!(debug, "soravpn_spool_bps");
     assert_contains!(debug, "greater than zero");
 }
-
 #[test]
 fn nexus_profile_template_enables_multilane_defaults() {
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -677,7 +603,6 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .and_then(Path::parent)
         .expect("workspace root")
         .join("defaults/nexus/config.toml");
-
     let source = fs::read_to_string(&config_path).expect("read Nexus signing profile");
     let mut table: toml::Table = toml::from_str(&source).expect("parse Nexus signing profile");
     let expected_hash = table
@@ -694,14 +619,12 @@ fn nexus_profile_template_enables_multilane_defaults() {
     *expected_hash = TomlValue::String(
         Hash::new(b"iroha-config non-runtime Nexus profile inspection").to_string(),
     );
-
     let config = ConfigReader::new()
         .with_toml_source(iroha_config_base::toml::TomlSource::inline(table))
         .read_and_complete::<UserConfig>()
         .change_context(FixtureConfigLoadError)
         .and_then(|user| user.parse().change_context(FixtureConfigLoadError))
         .expect("Nexus profile config should parse");
-
     assert!(
         config.nexus.enabled,
         "Nexus profile must set nexus.enabled = true"
@@ -739,14 +662,12 @@ fn nexus_profile_template_enables_multilane_defaults() {
     );
     assert_eq!(config.nexus.lane_relay_emergency.multisig_members.get(), 5);
 }
-
 #[test]
 fn lane_profile_home_applies_throttles() {
     let config = load_config_from_fixtures("home_lane_profile.toml")
         .expect("config should be valid with lane profile override");
     let expected_limits = LaneProfile::Home.derived_limits();
     let network = &config.network;
-
     assert_eq!(network.lane_profile, LaneProfile::Home);
     assert_eq!(network.max_incoming, expected_limits.max_incoming);
     assert_eq!(
@@ -762,13 +683,11 @@ fn lane_profile_home_applies_throttles() {
         expected_limits.low_priority_rate_per_sec
     );
 }
-
 #[test]
 fn streaming_soranet_overrides_apply() {
     let config = load_config_from_fixtures("streaming_soranet_override.toml")
         .expect("config should load with soranet overrides");
     let soranet = &config.streaming.soranet;
-
     assert!(
         soranet.enabled,
         "override should keep SoraNet provisioning enabled"
@@ -802,7 +721,6 @@ fn streaming_soranet_overrides_apply() {
         "provision queue capacity should default when not overridden"
     );
 }
-
 #[test]
 fn streaming_bundled_requires_build_flag() {
     assert!(
@@ -812,7 +730,6 @@ fn streaming_bundled_requires_build_flag() {
     let result = load_config_from_fixtures("streaming_bundled.toml");
     result.expect("streaming_bundled config should load on bundled builds");
 }
-
 #[test]
 fn streaming_bundle_width_above_tables_rejected() {
     assert!(
@@ -831,7 +748,6 @@ fn streaming_bundle_width_above_tables_rejected() {
         "error should report the available bundled width from the tables (got {debug})"
     );
 }
-
 #[test]
 fn streaming_bundle_width_below_minimum_rejected() {
     assert!(
@@ -850,7 +766,6 @@ fn streaming_bundle_width_below_minimum_rejected() {
         "error should report the minimum bundled width requirement (got {debug})"
     );
 }
-
 #[test]
 fn streaming_bundle_width_zero_rejected() {
     assert!(
@@ -869,7 +784,6 @@ fn streaming_bundle_width_zero_rejected() {
         "error should report the available bundled width from the tables (got {debug})"
     );
 }
-
 #[test]
 fn streaming_invalid_kyber_suite_rejected() {
     let result = load_config_from_fixtures("bad.streaming_kyber_suite.toml");
@@ -878,7 +792,6 @@ fn streaming_invalid_kyber_suite_rejected() {
         "invalid streaming.kyber_suite must be rejected"
     );
 }
-
 #[test]
 fn soranet_handshake_kem_suite_override() {
     let config = load_config_from_fixtures("soranet_handshake_kem_suite_override.toml")
@@ -889,7 +802,6 @@ fn soranet_handshake_kem_suite_override() {
         "override should downshift the KEM suite id"
     );
 }
-
 #[test]
 fn soranet_handshake_invalid_kem_suite_rejected() {
     let result = load_config_from_fixtures("bad.soranet_handshake_kem_suite.toml");
@@ -898,7 +810,6 @@ fn soranet_handshake_invalid_kem_suite_rejected() {
         "invalid network.soranet_handshake.kem_suite must be rejected"
     );
 }
-
 #[test]
 fn soranet_handshake_zero_difficulty_rejected() {
     let result = load_config_from_fixtures("bad.soranet_handshake_zero_difficulty.toml");
@@ -907,17 +818,14 @@ fn soranet_handshake_zero_difficulty_rejected() {
         "zero-difficulty SoraNet admission must be rejected"
     );
 }
-
 #[test]
 fn routing_policy_dataspace_resolution() {
     use std::num::NonZeroU32;
-
     use iroha_config::parameters::user::{
         DataSpaceDescriptor, LaneDescriptor, Nexus, RouteMatcher, RoutingPolicy, RoutingRule,
     };
     use iroha_config_base::util::Emitter;
     use iroha_data_model::nexus::DataSpaceId;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(2).expect("nonzero"),
@@ -958,28 +866,21 @@ fn routing_policy_dataspace_resolution() {
         },
         ..Nexus::default()
     };
-
     let parsed = nexus
         .parse(&mut emitter)
         .expect("routing policy should parse");
     assert!(emitter.into_result().is_ok());
-
     assert_eq!(parsed.routing_policy.default_dataspace, DataSpaceId::new(1));
     assert_eq!(
         parsed.routing_policy.rules[0].dataspace,
         Some(DataSpaceId::UNIVERSAL)
     );
 }
-
 #[test]
 fn routing_policy_lane_dataspace_mismatch_rejected() {
     use std::num::NonZeroU32;
-
-    use iroha_config::parameters::user::{
-        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
-    };
+    use iroha_config::parameters::user::{DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -1007,7 +908,6 @@ fn routing_policy_lane_dataspace_mismatch_rejected() {
         },
         ..Nexus::default()
     };
-
     let parsed = nexus.parse(&mut emitter);
     assert!(
         parsed.is_none(),
@@ -1022,14 +922,11 @@ fn routing_policy_lane_dataspace_mismatch_rejected() {
         "error should mention mismatched default dataspace (got {debug})"
     );
 }
-
 #[test]
 fn dataspace_fault_tolerance_zero_rejected() {
     use std::num::NonZeroU32;
-
     use iroha_config::parameters::user::{DataSpaceDescriptor, LaneDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -1051,19 +948,16 @@ fn dataspace_fault_tolerance_zero_rejected() {
         }],
         ..Nexus::default()
     };
-
     let parsed = nexus.parse(&mut emitter);
     assert!(parsed.is_none(), "fault_tolerance=0 must be rejected");
     let err = emitter.into_result().expect_err("parse error expected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "fault_tolerance must be >= 1");
 }
-
 #[test]
 fn dataspace_manifest_hash_required_for_non_universal() {
     use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         dataspace_catalog: vec![DataSpaceDescriptor {
@@ -1076,18 +970,15 @@ fn dataspace_manifest_hash_required_for_non_universal() {
         }],
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     let err = emitter.into_result().expect_err("parse error expected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "must specify `manifest_hash`");
 }
-
 #[test]
 fn dataspace_explicit_id_must_match_manifest_hash() {
     use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         dataspace_catalog: vec![DataSpaceDescriptor {
@@ -1102,23 +993,17 @@ fn dataspace_explicit_id_must_match_manifest_hash() {
         }],
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     let err = emitter.into_result().expect_err("parse error expected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "does not match manifest_hash-derived id");
 }
-
 #[test]
 fn dataspace_fee_sponsor_program_id_parses() {
     use std::num::NonZeroU32;
-
-    use iroha_config::parameters::user::{
-        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
-    };
+    use iroha_config::parameters::user::{DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy};
     use iroha_config_base::util::Emitter;
     use iroha_data_model::nexus::DataSpaceId;
-
     let mut emitter = Emitter::<ParseError>::new();
     let program_id = format!(
         "{}/default",
@@ -1151,7 +1036,6 @@ fn dataspace_fee_sponsor_program_id_parses() {
         },
         ..Nexus::default()
     };
-
     let parsed = nexus
         .parse(&mut emitter)
         .expect("dataspace fee sponsor should parse");
@@ -1164,16 +1048,11 @@ fn dataspace_fee_sponsor_program_id_parses() {
         Some(program_id)
     );
 }
-
 #[test]
 fn dataspace_fee_sponsor_program_id_rejects_malformed_literal() {
     use std::num::NonZeroU32;
-
-    use iroha_config::parameters::user::{
-        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
-    };
+    use iroha_config::parameters::user::{DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         enabled: true,
@@ -1202,19 +1081,16 @@ fn dataspace_fee_sponsor_program_id_rejects_malformed_literal() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     let err = emitter.into_result().expect_err("parse error expected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "fee_sponsor_program_id");
 }
-
 #[test]
 fn dataspace_fee_sponsor_program_id_requires_nexus_enabled() {
     use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
     use iroha_data_model::nexus::DataSpaceId;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         enabled: false,
@@ -1231,20 +1107,16 @@ fn dataspace_fee_sponsor_program_id_requires_nexus_enabled() {
         }],
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     let err = emitter.into_result().expect_err("parse error expected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "nexus.enabled");
 }
-
 #[test]
 fn routing_policy_unknown_dataspace_rejected() {
     use std::num::NonZeroU32;
-
     use iroha_config::parameters::user::{LaneDescriptor, Nexus, RoutingPolicy};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -1261,18 +1133,14 @@ fn routing_policy_unknown_dataspace_rejected() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn lane_registry_rejects_zero_poll_interval() {
     use std::{num::NonZeroU32, time::Duration};
-
     use iroha_config::parameters::user::{LaneDescriptor, LaneRegistryConfig, Nexus};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -1288,18 +1156,14 @@ fn lane_registry_rejects_zero_poll_interval() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn governance_default_module_must_exist() {
     use std::num::NonZeroU32;
-
     use iroha_config::parameters::user::{GovernanceCatalogConfig, LaneDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -1315,20 +1179,16 @@ fn governance_default_module_must_exist() {
         },
         ..Nexus::default()
     };
-
     assert!(nexus.parse(&mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn governance_catalog_trims_and_parses_modules() {
     use std::{collections::BTreeMap, num::NonZeroU32};
-
     use iroha_config::parameters::user::{
         GovernanceCatalogConfig, GovernanceModule, LaneDescriptor, Nexus,
     };
     use iroha_config_base::util::Emitter;
-
     let mut modules = BTreeMap::new();
     modules.insert(
         " parliament ".into(),
@@ -1341,7 +1201,6 @@ fn governance_catalog_trims_and_parses_modules() {
             },
         },
     );
-
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -1357,7 +1216,6 @@ fn governance_catalog_trims_and_parses_modules() {
         },
         ..Nexus::default()
     };
-
     let parsed = nexus.parse(&mut emitter).expect("governance should parse");
     assert!(emitter.into_result().is_ok());
     let catalog = parsed.governance;
@@ -1369,22 +1227,17 @@ fn governance_catalog_trims_and_parses_modules() {
     assert_eq!(module.module_type.as_deref(), Some("council"));
     assert_eq!(module.params.get("quorum"), Some(&"67".to_string()));
 }
-
 #[test]
 fn config_with_genesis() {
     let _config =
         load_config_from_fixtures("minimal_alone_with_genesis.toml").expect("should be valid");
 }
-
 #[test]
 fn parse_does_not_apply_chain_discriminant_runtime_setting() {
     let _runtime_guard = AddressRuntimeGuard::capture();
-
     iroha_data_model::account::address::set_chain_discriminant(0x02F1);
-
     let config = load_config_from_fixtures("minimal_chain_discriminant.toml")
         .expect("config with chain discriminant should parse");
-
     assert_eq!(*config.common.chain_discriminant.value(), 777);
     assert_eq!(
         config.gov.bond_escrow_account,
@@ -1403,12 +1256,10 @@ fn parse_does_not_apply_chain_discriminant_runtime_setting() {
         0x02F1
     );
 }
-
 #[test]
 fn self_is_presented_in_trusted_peers() {
     let config =
         load_config_from_fixtures("minimal_alone_with_genesis.toml").expect("valid config");
-
     assert!(
         config
             .common
@@ -1419,24 +1270,19 @@ fn self_is_presented_in_trusted_peers() {
             .contains(config.common.peer.id())
     );
 }
-
 #[test]
 fn missing_fields() {
     let error = load_config_from_fixtures("bad.missing_fields.toml")
         .expect_err("should fail without missing fields");
-
     let msg = strip_ansi_codes(&format!("{error:?}"));
-
     assert_contains!(msg, "missing parameter: `chain`");
     assert_contains!(msg, "missing parameter: `public_key`");
     assert_contains!(msg, "missing parameter: `network.address`");
 }
-
 #[test]
 fn sorafs_penalty_and_telemetry_roundtrip() {
     let config = load_config_from_fixtures("sorafs_penalty_and_telemetry.toml")
         .expect("config should parse with SoraFS governance overrides");
-
     let penalty = config.gov.sorafs_penalty;
     assert_eq!(penalty.utilisation_floor_bps, 7600);
     assert_eq!(penalty.uptime_floor_bps, 9650);
@@ -1447,7 +1293,6 @@ fn sorafs_penalty_and_telemetry_roundtrip() {
     assert_eq!(penalty.max_pdp_failures, 1);
     assert_eq!(penalty.max_potr_breaches, 2);
     assert_eq!(penalty.cooldown_window_secs(1_800), 5_400);
-
     let telemetry = &config.gov.sorafs_telemetry;
     assert!(!telemetry.require_submitter);
     assert!(telemetry.require_nonce);
@@ -1463,31 +1308,26 @@ fn sorafs_penalty_and_telemetry_roundtrip() {
         .collect();
     assert_eq!(telemetry.submitters, expected);
 }
-
 #[test]
 fn sorafs_penalty_unknown_field_rejected() {
     let error = load_config_from_fixtures("bad.sorafs_penalty_unknown.toml")
         .expect_err("unknown penalty field should be rejected");
-
     let msg = strip_ansi_codes(&format!("{error:?}"));
     assert_contains!(
         msg,
         "unknown parameter: `gov.sorafs_penalty.unexpected_penalty_knob`"
     );
 }
-
 #[test]
 fn sorafs_telemetry_unknown_field_rejected() {
     let error = load_config_from_fixtures("bad.sorafs_telemetry_unknown.toml")
         .expect_err("unknown telemetry field should be rejected");
-
     let msg = strip_ansi_codes(&format!("{error:?}"));
     assert_contains!(
         msg,
         "unknown parameter: `gov.sorafs_telemetry.unknown_submitter_field`"
     );
 }
-
 #[test]
 fn sorafs_site_binding_zero_entry_limit_is_rejected() {
     assert!(
@@ -1495,13 +1335,11 @@ fn sorafs_site_binding_zero_entry_limit_is_rejected() {
         "site binding entry limits must remain non-zero"
     );
 }
-
 /// Aims the purpose of checking that every single provided env variable is consumed and parsed
 /// into a valid config.
 #[test]
 fn full_envs_set_is_consumed() {
     let env = test_env_from_file(fixtures_dir().join("full.env"));
-
     // Read, complete, and fully parse into the actual config to ensure all
     // env-backed fields (including nested sections) are queried and consumed.
     let config = ConfigReader::new()
@@ -1514,7 +1352,6 @@ fn full_envs_set_is_consumed() {
         config.streaming.key_material.identity().algorithm(),
         iroha_crypto::Algorithm::Ed25519
     );
-
     // Ensure every provided variable was consumed by the reader.
     assert_eq!(env.unvisited(), HashSet::new());
     // NOTE: The config now includes many additional env-backed knobs with defaults
@@ -1522,11 +1359,9 @@ fn full_envs_set_is_consumed() {
     // if not present in the environment. That makes `env.unknown()` non-empty in
     // this test scenario. We intentionally no longer assert on `unknown()` here.
 }
-
 #[test]
 fn config_from_file_and_env() {
     let env = test_env_from_file(fixtures_dir().join("minimal_file_and_env.env"));
-
     ConfigReader::new()
         .with_env(env)
         .read_toml_with_extends(fixtures_dir().join("minimal_file_and_env.toml"))
@@ -1536,7 +1371,6 @@ fn config_from_file_and_env() {
         .parse()
         .expect("should be fine, again");
 }
-
 #[test]
 fn full_config_parses_fine() {
     let cfg = load_config_from_fixtures("full.toml").expect("should be fine");
@@ -1569,7 +1403,6 @@ fn full_config_parses_fine() {
     );
     assert_eq!(admission.trusted_council_keys.len(), 1);
     assert_eq!(admission.signature_threshold.get(), 1);
-
     let alias_policy = cfg.torii.sorafs_alias_cache;
     assert_eq!(alias_policy.positive_ttl.as_secs(), 600);
     assert_eq!(alias_policy.refresh_window.as_secs(), 120);
@@ -1602,7 +1435,6 @@ fn full_config_parses_fine() {
         ]
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn taira_config_enables_untrusted_cid_hosting() {
@@ -1611,10 +1443,8 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .and_then(Path::parent)
         .expect("workspace root")
         .join("configs/soranexus/taira/config.toml");
-
     let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
     let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
-
     assert!(
         doc.get("settlement")
             .and_then(TomlValue::as_table)
@@ -1622,7 +1452,6 @@ fn taira_config_enables_untrusted_cid_hosting() {
             .is_none(),
         "Taira must not model universal offline-wallet support as backend configuration"
     );
-
     let dataspaces = doc
         .get("nexus")
         .and_then(TomlValue::as_table)
@@ -1657,7 +1486,6 @@ fn taira_config_enables_untrusted_cid_hosting() {
         Some(8_477_022_798_449_861_195),
         "mobile dataspace id should match its manifest hash"
     );
-
     let nexus = doc
         .get("nexus")
         .and_then(TomlValue::as_table)
@@ -1723,7 +1551,6 @@ fn taira_config_enables_untrusted_cid_hosting() {
             "Taira profile must not retain retired generic confidential route {retired}"
         );
     }
-
     let block = doc
         .get("sumeragi")
         .and_then(TomlValue::as_table)
@@ -1758,7 +1585,6 @@ fn taira_config_enables_untrusted_cid_hosting() {
         Some(4),
         "Taira profile should keep enough scan budget for cheap txs"
     );
-
     let queues = doc
         .get("sumeragi")
         .and_then(TomlValue::as_table)
@@ -1784,7 +1610,6 @@ fn taira_config_enables_untrusted_cid_hosting() {
         Some(43 * 1024 * 1024),
         "Taira should retain one canonical outer-ingress wire-byte quota per source"
     );
-
     let untrusted = doc
         .get("sorafs")
         .and_then(TomlValue::as_table)
@@ -1793,7 +1618,6 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .and_then(|gateway| gateway.get("untrusted_hosting"))
         .and_then(TomlValue::as_table)
         .expect("sorafs.gateway.untrusted_hosting should be configured");
-
     assert_eq!(
         untrusted.get("enabled").and_then(TomlValue::as_bool),
         Some(true),
@@ -1811,7 +1635,6 @@ fn taira_config_enables_untrusted_cid_hosting() {
             .and_then(TomlValue::as_bool),
         Some(true)
     );
-
     let suffixes = untrusted
         .get("cid_host_suffixes")
         .and_then(TomlValue::as_table)
@@ -1824,7 +1647,6 @@ fn taira_config_enables_untrusted_cid_hosting() {
         suffixes.get("taira").and_then(TomlValue::as_str),
         Some("sorafs.taira.sora.org")
     );
-
     let runtime = doc
         .get("soracloud_runtime")
         .and_then(TomlValue::as_table)
@@ -1853,15 +1675,12 @@ fn taira_config_enables_untrusted_cid_hosting() {
         "Taira Soracloud submissions should use the exact genesis sponsor program"
     );
 }
-
 #[test]
 fn crypto_section_defaults_applied() {
     use iroha_crypto::Algorithm;
-
     let cfg = load_config_from_fixtures("minimal_with_trusted_peers.toml")
         .expect("minimal config should be valid");
     let crypto = &cfg.crypto;
-
     assert_eq!(
         crypto.enable_sm_openssl_preview,
         defaults::crypto::ENABLE_SM_OPENSSL_PREVIEW
@@ -1877,23 +1696,19 @@ fn crypto_section_defaults_applied() {
     );
     assert_eq!(crypto.allowed_curve_ids, vec![1, 4]);
 }
-
 #[test]
 fn crypto_section_respects_env_overrides() {
     use iroha_crypto::Algorithm;
-
     let (default_hash, allowed_signing_env) = if cfg!(feature = "sm") {
         ("sm3-256", "ed25519,secp256k1,sm2")
     } else {
         ("blake2b-256", "ed25519,secp256k1")
     };
-
     let mut env = MockEnv::new()
         .set("CRYPTO_DEFAULT_HASH", default_hash)
         .set("CRYPTO_ALLOWED_SIGNING", allowed_signing_env)
         .set("CRYPTO_SM2_DISTID_DEFAULT", "CN12345678901234")
         .set("CRYPTO_CURVES_ALLOWED_IDS", "1,4");
-
     env = env.set(
         "CRYPTO_SM_OPENSSL_PREVIEW",
         if cfg!(feature = "sm-ffi-openssl") {
@@ -1902,7 +1717,6 @@ fn crypto_section_respects_env_overrides() {
             "false"
         },
     );
-
     let cfg = ConfigReader::new()
         .with_env(env)
         .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
@@ -1912,37 +1726,30 @@ fn crypto_section_respects_env_overrides() {
         .parse()
         .expect("actual config with env overrides");
     let crypto = &cfg.crypto;
-
     assert_eq!(crypto.default_hash, default_hash);
     assert_eq!(crypto.sm2_distid_default, "CN12345678901234");
     assert_eq!(
         crypto.enable_sm_openssl_preview,
         cfg!(feature = "sm-ffi-openssl")
     );
-
     #[cfg(feature = "sm")]
     assert_eq!(
         crypto.allowed_signing,
         vec![Algorithm::Ed25519, Algorithm::Secp256k1, Algorithm::Sm2]
     );
-
     #[cfg(not(feature = "sm"))]
     assert_eq!(
         crypto.allowed_signing,
         vec![Algorithm::Ed25519, Algorithm::Secp256k1]
     );
-
     assert_eq!(crypto.allowed_curve_ids, vec![1, 4]);
 }
-
 #[test]
 fn fraud_monitoring_config_overrides_and_defaults() {
     let cfg = load_config_from_fixtures("fraud_monitoring.toml")
         .expect("fraud monitoring config should parse");
     let fraud = &cfg.fraud_monitoring;
-
     assert!(fraud.enabled);
-
     let endpoints: Vec<&str> = fraud.service_endpoints.iter().map(Url::as_str).collect();
     assert_eq!(
         endpoints,
@@ -1951,7 +1758,6 @@ fn fraud_monitoring_config_overrides_and_defaults() {
             "https://fraud.secondary/verify"
         ],
     );
-
     assert_eq!(
         fraud.connect_timeout,
         defaults::fraud_monitoring::CONNECT_TIMEOUT,
@@ -1960,14 +1766,11 @@ fn fraud_monitoring_config_overrides_and_defaults() {
     assert_eq!(fraud.missing_assessment_grace, Duration::from_secs(5),);
     assert_eq!(fraud.required_minimum_band, Some(FraudRiskBand::Medium));
 }
-
 #[test]
 fn sumeragi_v2_explicit_schema_parses() {
     use iroha_config::parameters::actual::NodeRole;
-
     let cfg = load_config_from_fixtures("sumeragi_v2.toml")
         .expect("first-release v2 configuration should parse");
-
     assert_eq!(
         cfg.network
             .max_total_connections
@@ -2009,7 +1812,6 @@ fn sumeragi_v2_explicit_schema_parses() {
     assert_eq!(shared.block_cadence_ms, 1_000);
     assert_eq!(shared.limits.max_queue_scan, 999);
 }
-
 #[test]
 fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
     for (fixture, expected) in [
@@ -2039,7 +1841,6 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         assert_contains!(format!("{report:?}"), expected);
     }
 }
-
 #[test]
 fn sumeragi_v2_does_not_accept_retired_environment_toggles() {
     let baseline = ConfigReader::new()
@@ -2050,7 +1851,6 @@ fn sumeragi_v2_does_not_accept_retired_environment_toggles() {
         .expect("read user config")
         .parse()
         .expect("parse actual config");
-
     let with_retired_env = ConfigReader::new()
         .with_env(
             MockEnv::new()
@@ -2064,7 +1864,6 @@ fn sumeragi_v2_does_not_accept_retired_environment_toggles() {
         .expect("retired environment names are not schema inputs")
         .parse()
         .expect("retired environment names cannot alter v2 config");
-
     assert_eq!(
         baseline
             .sumeragi
@@ -2093,12 +1892,10 @@ fn gost_config_rejects_tc26_consensus_keys() {
         "public_key/private_key must be BLS-normal for consensus"
     );
 }
-
 #[test]
 fn pipeline_workers_env_parses() {
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
     use iroha_config_base::env::MockEnv;
-
     // Default: use minimal base file so required params are satisfied,
     // then ensure workers fall back to defaults (0 = auto)
     let cfg = ConfigReader::new()
@@ -2109,7 +1906,6 @@ fn pipeline_workers_env_parses() {
         .expect("user view")
         .parse();
     assert!(cfg.is_ok());
-
     // Override via env
     let env = MockEnv::new().set("PIPELINE_WORKERS", "7");
     let cfg2: Actual = ConfigReader::new()
@@ -2122,7 +1918,6 @@ fn pipeline_workers_env_parses() {
         .expect("parse actual config with env");
     assert_eq!(cfg2.pipeline.workers, 7);
 }
-
 #[test]
 fn logger_level_env_accepts_lowercase() {
     use iroha_config::{
@@ -2130,7 +1925,6 @@ fn logger_level_env_accepts_lowercase() {
         parameters::{actual::Root as Actual, user::Root as User},
     };
     use iroha_config_base::env::MockEnv;
-
     let env = MockEnv::new().set("LOG_LEVEL", "info");
     let cfg: Actual = ConfigReader::new()
         .with_env(env)
@@ -2140,19 +1934,12 @@ fn logger_level_env_accepts_lowercase() {
         .expect("user config with env")
         .parse()
         .expect("actual config with lowercase log level env");
-
     assert_eq!(cfg.logger.level, Level::INFO);
 }
-
 include!("fixtures/tls_fallback_defaults_test.rs");
-
 include!("fixtures/trusted_proxy_defaults_test.rs");
-
 include!("fixtures/torii_internal_api_trust_defaults_test.rs");
-
 include!("fixtures/network_frame_defaults_test.rs");
-
 include!("fixtures/sumeragi_v2_default_profile_test.rs");
-
 // type alias used through fixtures for newer error-stack API
 type Result<T, E> = core::result::Result<T, Report<E>>;

@@ -5,9 +5,7 @@
 //! conflicting with the complete privacy ledger. Every map still participates
 //! in the same [`crate::state::StateTransaction`], so a rejected transaction
 //! cannot leave a partial replay marker, commitment, or root behind.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use iroha_data_model::{
     AssetDefinitionId,
     account::AccountId,
@@ -55,9 +53,7 @@ use norito::{
     json,
 };
 use thiserror::Error;
-
 mod pgc_account_root;
-
 pub(crate) use pgc_account_root::compute_privacy_pgc_account_state_root_v1;
 pub use pgc_account_root::{
     PrivacyPgcAccountStateRootErrorV1, derive_privacy_pgc_account_state_root_v1,
@@ -9221,7 +9217,6 @@ impl_validated_json_key!(PrivacyPgcPoolInvariantKeyV1);
 #[cfg(test)]
 mod tests {
     use std::str::FromStr as _;
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::privacy::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
@@ -9252,9 +9247,7 @@ mod tests {
     };
     use mv::{json::JsonKeyCodec, storage::Storage};
     use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
-
     use super::*;
-
     fn nonzero(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
@@ -9433,7 +9426,6 @@ mod tests {
     }
     fn fcmp_output_tuple(seed: u64) -> PrivacyFcmpOutputTupleV1 {
         use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
-
         let point = |multiple| {
             (ED25519_BASEPOINT_POINT * Scalar::from(multiple))
                 .compress()

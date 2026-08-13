@@ -6,15 +6,12 @@
 //! execution payload: the immutable transfer-route contract account and the
 //! successful transaction receipt. No RPC assertion, owner-authorized generic
 //! emitter, proxy convention, or domain-only fallback is admitted.
-
 use alloc::{collections::BTreeSet, vec::Vec};
 use core::fmt;
-
 use iroha_data_model::bridge::sccp::{
     SccpEvmSourceEmitterV1, SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
 };
 use tiny_keccak::{Hasher as _, Keccak};
-
 use super::{
     H256, SccpPayloadV1, canonical_sccp_payload_bytes, decode_canonical_sccp_payload_bytes,
     prefixed_blake2b, sccp_lane_id_hash_v1, sccp_lane_source_event_digest_v1, sccp_message_id,
@@ -28,7 +25,6 @@ use crate::ethereum_native::{
     NextSyncCommitteeBranch, Root, SYNC_COMMITTEE_BITS_BYTES, SYNC_COMMITTEE_SIZE, SyncAggregate,
     SyncCommittee,
 };
-
 const ETHEREUM_NATIVE_ANCHOR_PREFIX_V1: &[u8] = b"sccp:ethereum:native-anchor:v1";
 const ETHEREUM_SOURCE_EVENT_SIGNATURE_V1: &[u8] =
     b"SccpTransfer(bytes32,bytes32,bytes32,bytes32,bytes32,bytes)";
@@ -52,7 +48,6 @@ const EMPTY_TRIE_ROOT: H256 = [
     0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
     0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
 ];
-
 /// Closed Ethereum fork tag used by the SCCP wire DTOs.
 #[derive(
     Clone,
@@ -80,7 +75,6 @@ pub enum EthereumNativeForkV1 {
     /// Fulu.
     Fulu,
 }
-
 impl From<EthereumNativeForkV1> for EthereumFork {
     fn from(value: EthereumNativeForkV1) -> Self {
         match value {
@@ -93,7 +87,6 @@ impl From<EthereumNativeForkV1> for EthereumFork {
         }
     }
 }
-
 impl From<EthereumFork> for EthereumNativeForkV1 {
     fn from(value: EthereumFork) -> Self {
         match value {
@@ -106,7 +99,6 @@ impl From<EthereumFork> for EthereumNativeForkV1 {
         }
     }
 }
-
 /// One governed fork activation in an Ethereum light-client schedule.
 #[derive(
     Clone,
@@ -126,7 +118,6 @@ pub struct EthereumNativeForkActivationV1 {
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub version: Vec<u8>,
 }
-
 /// Complete closed Altair-through-Fulu fork schedule.
 #[derive(
     Clone,
@@ -155,7 +146,6 @@ pub struct EthereumNativeForkScheduleV1 {
     /// Fulu activation.
     pub fulu: EthereumNativeForkActivationV1,
 }
-
 /// Wire representation of the official SSZ `BeaconBlockHeader`.
 #[derive(
     Clone,
@@ -185,7 +175,6 @@ pub struct EthereumNativeBeaconHeaderV1 {
     #[norito(with = "crate::json_utils::hex32")]
     pub body_root: H256,
 }
-
 /// Wire representation of the Capella execution payload header.
 #[derive(
     Clone,
@@ -244,7 +233,6 @@ pub struct EthereumNativeCapellaExecutionHeaderV1 {
     #[norito(with = "crate::json_utils::hex32")]
     pub withdrawals_root: H256,
 }
-
 /// Wire representation of the Deneb execution payload header used through Fulu.
 #[derive(
     Clone,
@@ -266,7 +254,6 @@ pub struct EthereumNativeDenebExecutionHeaderV1 {
     #[norito(with = "crate::json_utils::u64_string")]
     pub excess_blob_gas: u64,
 }
-
 /// Fork-closed execution payload header carried by a light-client header.
 #[derive(
     Clone,
@@ -285,7 +272,6 @@ pub enum EthereumNativeExecutionHeaderV1 {
     /// Deneb layout, inherited unchanged by Electra and Fulu.
     Deneb(EthereumNativeDenebExecutionHeaderV1),
 }
-
 /// Wire representation of a fork-specific Ethereum `LightClientHeader`.
 #[derive(
     Clone,
@@ -308,7 +294,6 @@ pub struct EthereumNativeLightClientHeaderV1 {
     #[norito(with = "crate::json_utils::vec_bytes_hex")]
     pub execution_branch: Vec<Vec<u8>>,
 }
-
 /// Wire representation of the official 512-position sync committee.
 #[derive(
     Clone,
@@ -328,7 +313,6 @@ pub struct EthereumNativeSyncCommitteeV1 {
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub aggregate_public_key: Vec<u8>,
 }
-
 /// Wire representation of a governed `LightClientBootstrap`.
 #[derive(
     Clone,
@@ -349,7 +333,6 @@ pub struct EthereumNativeLightClientBootstrapV1 {
     #[norito(with = "crate::json_utils::vec_bytes_hex")]
     pub current_sync_committee_branch: Vec<Vec<u8>>,
 }
-
 /// Wire representation of one full Ethereum `LightClientUpdate`.
 #[derive(
     Clone,
@@ -384,7 +367,6 @@ pub struct EthereumNativeLightClientUpdateV1 {
     #[norito(with = "crate::json_utils::u64_string")]
     pub signature_slot: u64,
 }
-
 /// Immutable governed native Ethereum light-client anchor.
 #[derive(
     Clone,
@@ -412,7 +394,6 @@ pub struct EthereumNativeTrustedAnchorV1 {
     #[norito(with = "crate::json_utils::hex32")]
     pub anchor_state_commitment: H256,
 }
-
 /// Canonical Ethereum MPT inclusion nodes ordered from root to leaf.
 #[derive(
     Clone,
@@ -430,7 +411,6 @@ pub struct EthereumNativeMptProofV1 {
     #[norito(with = "crate::json_utils::vec_bytes_hex")]
     pub nodes: Vec<Vec<u8>>,
 }
-
 /// Finalized execution fields duplicated in the proof for explicit binding.
 #[derive(
     Clone,
@@ -465,7 +445,6 @@ pub struct EthereumNativeFinalizedExecutionV1 {
     #[norito(with = "crate::json_utils::hex32")]
     pub receipts_root: H256,
 }
-
 /// Complete native Ethereum SCCP source proof.
 #[derive(
     Clone,
@@ -517,7 +496,6 @@ pub struct EthereumNativeSourceProofV1 {
     /// Receipts-trie proof for the successful typed or legacy receipt.
     pub receipt_proof: EthereumNativeMptProofV1,
 }
-
 /// MPT opening role used in precise verification errors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EthereumNativeMptRoleV1 {
@@ -526,7 +504,6 @@ pub enum EthereumNativeMptRoleV1 {
     /// Successful transaction receipt opening.
     Receipt,
 }
-
 /// Errors produced by native Ethereum SCCP source verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EthereumNativeSourceErrorV1 {
@@ -591,13 +568,11 @@ pub enum EthereumNativeSourceErrorV1 {
     /// The receipt did not contain exactly one expected canonical SCCP source event.
     SourceEventLogMismatch,
 }
-
 impl From<EthereumLightClientError> for EthereumNativeSourceErrorV1 {
     fn from(value: EthereumLightClientError) -> Self {
         Self::LightClient(value)
     }
 }
-
 impl fmt::Display for EthereumNativeSourceErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -658,9 +633,7 @@ impl fmt::Display for EthereumNativeSourceErrorV1 {
         }
     }
 }
-
 impl std::error::Error for EthereumNativeSourceErrorV1 {}
-
 /// Fully authenticated result of native Ethereum SCCP source verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValidatedEthereumNativeSourceV1 {
@@ -693,7 +666,6 @@ pub struct ValidatedEthereumNativeSourceV1 {
     /// Transaction index opened in the receipts trie.
     pub transaction_index: u64,
 }
-
 fn activation_from_wire(
     activation: &EthereumNativeForkActivationV1,
 ) -> Result<ForkActivation, EthereumNativeSourceErrorV1> {
@@ -701,7 +673,6 @@ fn activation_from_wire(
         .map_err(|_| EthereumNativeSourceErrorV1::MalformedWire("fork version"))?;
     Ok(ForkActivation::new(activation.epoch, version))
 }
-
 fn schedule_from_wire(
     schedule: &EthereumNativeForkScheduleV1,
 ) -> Result<ForkSchedule, EthereumNativeSourceErrorV1> {
@@ -718,7 +689,6 @@ fn schedule_from_wire(
     )
     .map_err(Into::into)
 }
-
 fn beacon_header_from_wire(header: &EthereumNativeBeaconHeaderV1) -> BeaconBlockHeader {
     BeaconBlockHeader {
         slot: header.slot,
@@ -728,7 +698,6 @@ fn beacon_header_from_wire(header: &EthereumNativeBeaconHeaderV1) -> BeaconBlock
         body_root: header.body_root,
     }
 }
-
 fn capella_execution_from_wire(
     header: &EthereumNativeCapellaExecutionHeaderV1,
 ) -> Result<CapellaExecutionPayloadHeader, EthereumNativeSourceErrorV1> {
@@ -754,7 +723,6 @@ fn capella_execution_from_wire(
         withdrawals_root: header.withdrawals_root,
     })
 }
-
 fn deneb_execution_from_wire(
     header: &EthereumNativeDenebExecutionHeaderV1,
 ) -> Result<DenebExecutionPayloadHeader, EthereumNativeSourceErrorV1> {
@@ -779,7 +747,6 @@ fn deneb_execution_from_wire(
         excess_blob_gas: header.excess_blob_gas,
     })
 }
-
 fn fixed_roots<const N: usize>(
     roots: &[Vec<u8>],
     field: &'static str,
@@ -798,7 +765,6 @@ fn fixed_roots<const N: usize>(
         .try_into()
         .map_err(|_| EthereumNativeSourceErrorV1::MalformedWire(field))
 }
-
 fn light_client_header_from_wire(
     header: &EthereumNativeLightClientHeaderV1,
 ) -> Result<LightClientHeader, EthereumNativeSourceErrorV1> {
@@ -857,7 +823,6 @@ fn light_client_header_from_wire(
         )),
     }
 }
-
 fn sync_committee_from_wire(
     committee: &EthereumNativeSyncCommitteeV1,
 ) -> Result<SyncCommittee, EthereumNativeSourceErrorV1> {
@@ -887,7 +852,6 @@ fn sync_committee_from_wire(
         BlsPublicKey::new(aggregate_public_key),
     ))
 }
-
 fn current_committee_branch_from_wire(
     fork: EthereumNativeForkV1,
     roots: &[Vec<u8>],
@@ -905,7 +869,6 @@ fn current_committee_branch_from_wire(
         )?),
     })
 }
-
 fn next_committee_branch_from_wire(
     fork: EthereumNativeForkV1,
     roots: &[Vec<u8>],
@@ -923,7 +886,6 @@ fn next_committee_branch_from_wire(
         )?),
     })
 }
-
 fn finality_branch_from_wire(
     fork: EthereumNativeForkV1,
     roots: &[Vec<u8>],
@@ -935,7 +897,6 @@ fn finality_branch_from_wire(
         _ => FinalityBranch::PreElectra(fixed_roots::<6>(roots, "pre-Electra finality branch")?),
     })
 }
-
 fn bootstrap_from_wire(
     bootstrap: &EthereumNativeLightClientBootstrapV1,
 ) -> Result<LightClientBootstrap, EthereumNativeSourceErrorV1> {
@@ -948,7 +909,6 @@ fn bootstrap_from_wire(
         )?,
     })
 }
-
 fn update_from_wire(
     update: &EthereumNativeLightClientUpdateV1,
 ) -> Result<LightClientUpdate, EthereumNativeSourceErrorV1> {
@@ -976,14 +936,12 @@ fn update_from_wire(
         signature_slot: update.signature_slot,
     })
 }
-
 fn is_ethereum_network(network: SccpNetworkV1) -> bool {
     matches!(
         network,
         SccpNetworkV1::EthereumMainnet | SccpNetworkV1::EthereumSepolia
     )
 }
-
 fn validate_trusted_anchor(
     anchor: &EthereumNativeTrustedAnchorV1,
 ) -> Result<EthereumLightClientState, EthereumNativeSourceErrorV1> {
@@ -1005,7 +963,6 @@ fn validate_trusted_anchor(
     }
     Ok(state)
 }
-
 /// Validate and hash one governed native Ethereum trusted anchor.
 ///
 /// # Errors
@@ -1020,7 +977,6 @@ pub fn ethereum_native_trusted_anchor_hash_v1(
         norito::to_bytes(anchor).map_err(|_| EthereumNativeSourceErrorV1::InvalidNoritoEncoding)?;
     Ok(prefixed_blake2b(ETHEREUM_NATIVE_ANCHOR_PREFIX_V1, &encoded))
 }
-
 /// Decode a size-bounded, canonical Norito native Ethereum source proof.
 ///
 /// # Errors
@@ -1065,7 +1021,6 @@ pub fn decode_ethereum_native_source_proof_v1(
     validate_decoded_source_proof_bounds(&proof)?;
     Ok(proof)
 }
-
 /// Decode a size-bounded JSON native Ethereum source proof.
 ///
 /// # Errors
@@ -1085,7 +1040,6 @@ pub fn decode_ethereum_native_source_proof_json_v1(
     validate_decoded_source_proof_bounds(&proof)?;
     Ok(proof)
 }
-
 fn validate_decoded_source_proof_bounds(
     proof: &EthereumNativeSourceProofV1,
 ) -> Result<(), EthereumNativeSourceErrorV1> {
@@ -1098,13 +1052,11 @@ fn validate_decoded_source_proof_bounds(
     validate_mpt_proof_bounds(&proof.receipt_proof, EthereumNativeMptRoleV1::Receipt)?;
     Ok(())
 }
-
 #[derive(Clone, Copy)]
 enum RlpItem<'a> {
     Bytes { payload: &'a [u8] },
     List { payload: &'a [u8], raw: &'a [u8] },
 }
-
 fn read_big_endian_len(bytes: &[u8]) -> Option<usize> {
     if bytes.is_empty() || bytes[0] == 0 || bytes.len() > core::mem::size_of::<usize>() {
         return None;
@@ -1113,7 +1065,6 @@ fn read_big_endian_len(bytes: &[u8]) -> Option<usize> {
         value.checked_mul(256)?.checked_add(usize::from(*byte))
     })
 }
-
 fn parse_rlp_item_at<'a>(bytes: &'a [u8], cursor: &mut usize) -> Option<RlpItem<'a>> {
     let start = *cursor;
     let first = *bytes.get(start)?;
@@ -1177,20 +1128,17 @@ fn parse_rlp_item_at<'a>(bytes: &'a [u8], cursor: &mut usize) -> Option<RlpItem<
         }
     }
 }
-
 fn parse_single_rlp(bytes: &[u8]) -> Option<RlpItem<'_>> {
     let mut cursor = 0usize;
     let item = parse_rlp_item_at(bytes, &mut cursor)?;
     (cursor == bytes.len()).then_some(item)
 }
-
 fn parse_rlp_list(bytes: &[u8], max_items: usize) -> Option<Vec<RlpItem<'_>>> {
     let RlpItem::List { payload, .. } = parse_single_rlp(bytes)? else {
         return None;
     };
     parse_rlp_list_payload(payload, max_items)
 }
-
 fn parse_rlp_list_payload(payload: &[u8], max_items: usize) -> Option<Vec<RlpItem<'_>>> {
     let mut cursor = 0usize;
     let mut items = Vec::new();
@@ -1202,14 +1150,12 @@ fn parse_rlp_list_payload(payload: &[u8], max_items: usize) -> Option<Vec<RlpIte
     }
     (cursor == payload.len()).then_some(items)
 }
-
 fn rlp_bytes(item: RlpItem<'_>) -> Option<&[u8]> {
     match item {
         RlpItem::Bytes { payload, .. } => Some(payload),
         RlpItem::List { .. } => None,
     }
 }
-
 fn keccak256(bytes: &[u8]) -> H256 {
     let mut hasher = Keccak::v256();
     hasher.update(bytes);
@@ -1217,7 +1163,6 @@ fn keccak256(bytes: &[u8]) -> H256 {
     hasher.finalize(&mut output);
     output
 }
-
 fn key_nibbles(bytes: &[u8]) -> Vec<u8> {
     let mut nibbles = Vec::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
@@ -1226,7 +1171,6 @@ fn key_nibbles(bytes: &[u8]) -> Vec<u8> {
     }
     nibbles
 }
-
 fn decode_compact_path(bytes: &[u8]) -> Option<(bool, Vec<u8>)> {
     if bytes.is_empty() {
         return None;
@@ -1247,13 +1191,11 @@ fn decode_compact_path(bytes: &[u8]) -> Option<(bool, Vec<u8>)> {
         Some((is_leaf, nibbles.get(2..)?.to_vec()))
     }
 }
-
 #[derive(Clone)]
 enum MptNodeReference {
     Hash(H256),
     Inline(Vec<u8>),
 }
-
 fn child_reference(item: RlpItem<'_>) -> Result<Option<MptNodeReference>, ()> {
     match item {
         RlpItem::Bytes { payload: [] } => Ok(None),
@@ -1270,7 +1212,6 @@ fn child_reference(item: RlpItem<'_>) -> Result<Option<MptNodeReference>, ()> {
         RlpItem::List { .. } => Err(()),
     }
 }
-
 fn validate_mpt_proof_bounds(
     proof: &EthereumNativeMptProofV1,
     role: EthereumNativeMptRoleV1,
@@ -1296,7 +1237,6 @@ fn validate_mpt_proof_bounds(
     }
     Ok(())
 }
-
 fn resolve_mpt_node_reference(
     reference: MptNodeReference,
     proof: &EthereumNativeMptProofV1,
@@ -1321,7 +1261,6 @@ fn resolve_mpt_node_reference(
         MptNodeReference::Inline(raw) => Ok(raw),
     }
 }
-
 fn verify_mpt_inclusion(
     root: H256,
     key: &[u8],
@@ -1338,7 +1277,6 @@ fn verify_mpt_inclusion(
     let mut expected = MptNodeReference::Hash(root);
     let mut first_node = true;
     let mut previous_was_extension = false;
-
     loop {
         let raw = resolve_mpt_node_reference(expected, proof, &mut proof_cursor, first_node, role)?;
         first_node = false;
@@ -1418,7 +1356,6 @@ fn verify_mpt_inclusion(
         }
     }
 }
-
 fn canonical_uint_bytes(item: RlpItem<'_>, max_bytes: usize) -> Option<&[u8]> {
     let bytes = rlp_bytes(item)?;
     if bytes.len() > max_bytes || bytes.first() == Some(&0) {
@@ -1426,7 +1363,6 @@ fn canonical_uint_bytes(item: RlpItem<'_>, max_bytes: usize) -> Option<&[u8]> {
     }
     Some(bytes)
 }
-
 fn account_storage_root(
     value: &[u8],
     expected_code_hash: H256,
@@ -1455,7 +1391,6 @@ fn account_storage_root(
     }
     Ok(storage_root)
 }
-
 fn rlp_encode_u64(value: u64) -> Vec<u8> {
     if value == 0 {
         return vec![0x80];
@@ -1482,7 +1417,6 @@ fn rlp_encode_u64(value: u64) -> Vec<u8> {
     encoded.extend_from_slice(value);
     encoded
 }
-
 struct ExpectedEthereumSourceEventV1<'a> {
     emitter: [u8; 20],
     lane_hash: H256,
@@ -1492,7 +1426,6 @@ struct ExpectedEthereumSourceEventV1<'a> {
     route_config_hash: H256,
     payload: &'a [u8],
 }
-
 fn validate_receipt_event(
     receipt: &[u8],
     expected: &ExpectedEthereumSourceEventV1<'_>,
@@ -1588,7 +1521,6 @@ fn validate_receipt_event(
     }
     Ok(())
 }
-
 fn canonical_transfer_event_data_matches(
     data: &[u8],
     expected_payload_hash: H256,
@@ -1631,7 +1563,6 @@ fn canonical_transfer_event_data_matches(
         && data.get(128..128 + payload_len) == Some(expected_payload)
         && data[128 + payload_len..].iter().all(|byte| *byte == 0)
 }
-
 fn finalized_execution_matches(
     explicit: &EthereumNativeFinalizedExecutionV1,
     header: &LightClientHeader,
@@ -1651,7 +1582,6 @@ fn finalized_execution_matches(
         && explicit.receipts_root.iter().any(|byte| *byte != 0)
         && explicit.receipts_root != EMPTY_TRIE_ROOT
 }
-
 struct EthereumNativeExpectedStatementV1<'a> {
     source_identity: &'a SccpSourceIdentityV1,
     source_identity_hash: H256,
@@ -1660,7 +1590,6 @@ struct EthereumNativeExpectedStatementV1<'a> {
     payload_hash: H256,
     payload: &'a [u8],
 }
-
 #[derive(Clone, Copy)]
 struct ValidatedEthereumNativeStatementV1 {
     source_identity_hash: H256,
@@ -1670,7 +1599,6 @@ struct ValidatedEthereumNativeStatementV1 {
     route_config_hash: H256,
     source_event_digest: H256,
 }
-
 fn validate_ethereum_native_statement_v1(
     proof: &EthereumNativeSourceProofV1,
     expected: &EthereumNativeExpectedStatementV1<'_>,
@@ -1700,7 +1628,6 @@ fn validate_ethereum_native_statement_v1(
     if runtime_code_hash == EMPTY_CODE_HASH {
         return Err(EthereumNativeSourceErrorV1::InvalidSourceIdentity);
     }
-
     let identity_hash = sccp_source_identity_hash_v1(&proof.source_identity)
         .ok_or(EthereumNativeSourceErrorV1::InvalidSourceIdentity)?;
     if expected.source_identity_hash.iter().all(|byte| *byte == 0)
@@ -1744,7 +1671,6 @@ fn validate_ethereum_native_statement_v1(
     if proof.source_event_digest != source_event_digest {
         return Err(EthereumNativeSourceErrorV1::SourceEventDigestMismatch);
     }
-
     Ok(ValidatedEthereumNativeStatementV1 {
         source_identity_hash: identity_hash,
         lane_hash,
@@ -1754,7 +1680,6 @@ fn validate_ethereum_native_statement_v1(
         source_event_digest,
     })
 }
-
 #[derive(Clone, Copy)]
 struct AuthenticatedEthereumNativeFinalityV1 {
     trusted_anchor_hash: H256,
@@ -1763,7 +1688,6 @@ struct AuthenticatedEthereumNativeFinalityV1 {
     beacon_block_root: H256,
     execution: AuthenticatedExecutionBlock,
 }
-
 fn authenticate_ethereum_native_finality_v1(
     proof: &EthereumNativeSourceProofV1,
     expected_trusted_anchor_hash: H256,
@@ -1808,7 +1732,6 @@ fn authenticate_ethereum_native_finality_v1(
         execution,
     })
 }
-
 /// Verify a complete native Ethereum SCCP source proof.
 ///
 /// The caller supplies the exact expected identity and its canonical hash, the
@@ -1838,7 +1761,6 @@ pub fn verify_ethereum_native_source_proof_v1(
     };
     let statement = validate_ethereum_native_statement_v1(proof, &expected)?;
     let finality = authenticate_ethereum_native_finality_v1(proof, expected.trusted_anchor_hash)?;
-
     let account_key = keccak256(&statement.emitter);
     let account_value = verify_mpt_inclusion(
         finality.execution.state_root,
@@ -1864,7 +1786,6 @@ pub fn verify_ethereum_native_source_proof_v1(
         payload: expected.payload,
     };
     validate_receipt_event(&receipt, &expected_event)?;
-
     Ok(ValidatedEthereumNativeSourceV1 {
         source_identity_hash: statement.source_identity_hash,
         lane_hash: statement.lane_hash,
@@ -1882,7 +1803,6 @@ pub fn verify_ethereum_native_source_proof_v1(
         transaction_index: proof.transaction_index,
     })
 }
-
 /// Build a complete positive fixture for one caller-supplied SCCP statement.
 #[cfg(any(test, feature = "test-fixtures"))]
 #[expect(
@@ -1911,30 +1831,24 @@ pub(super) fn ethereum_native_positive_test_fixture_for_statement(
         proof,
     )
 }
-
 #[cfg(any(test, feature = "test-fixtures"))]
 mod test_fixtures {
     use std::collections::BTreeMap;
-
     use sha2::{Digest as _, Sha256};
-
     use super::*;
     use crate::sccp_source_identity_hash_v1;
-
     const GENERATOR_PUBLIC_KEY: [u8; 48] = [
         0x97, 0xf1, 0xd3, 0xa7, 0x31, 0x97, 0xd7, 0x94, 0x26, 0x95, 0x63, 0x8c, 0x4f, 0xa9, 0xac,
         0x0f, 0xc3, 0x68, 0x8c, 0x4f, 0x97, 0x74, 0xb9, 0x05, 0xa1, 0x4e, 0x3a, 0x3f, 0x17, 0x1b,
         0xac, 0x58, 0x6c, 0x55, 0xe8, 0x3f, 0xf9, 0x7a, 0x1a, 0xef, 0xfb, 0x3a, 0xf0, 0x0a, 0xdb,
         0x22, 0xc6, 0xbb,
     ];
-
     fn hash_nodes(left: &H256, right: &H256) -> H256 {
         let mut hasher = Sha256::new();
         hasher.update(left);
         hasher.update(right);
         hasher.finalize().into()
     }
-
     fn merkle_root_from_branch(mut leaf: H256, gindex: u64, branch: &[H256]) -> H256 {
         for (height, sibling) in branch.iter().enumerate() {
             leaf = if (gindex >> height) & 1 == 0 {
@@ -1945,7 +1859,6 @@ mod test_fixtures {
         }
         leaf
     }
-
     fn sparse_node(gindex: u64, max_depth: usize, explicit: &BTreeMap<u64, H256>) -> H256 {
         if let Some(value) = explicit.get(&gindex) {
             return *value;
@@ -1959,7 +1872,6 @@ mod test_fixtures {
             &sparse_node(gindex * 2 + 1, max_depth, explicit),
         )
     }
-
     fn sparse_branch(target: u64, max_depth: usize, explicit: &BTreeMap<u64, H256>) -> Vec<H256> {
         let depth = (u64::BITS - 1 - target.leading_zeros()) as usize;
         let mut branch = Vec::with_capacity(depth);
@@ -1970,7 +1882,6 @@ mod test_fixtures {
         }
         branch
     }
-
     fn encode_length(len: usize, short: u8, long: u8) -> Vec<u8> {
         if len < 56 {
             return vec![short + u8::try_from(len).unwrap()];
@@ -1982,7 +1893,6 @@ mod test_fixtures {
         out.extend_from_slice(len_bytes);
         out
     }
-
     pub(super) fn encode_bytes(bytes: &[u8]) -> Vec<u8> {
         if bytes.len() == 1 && bytes[0] < 0x80 {
             return bytes.to_vec();
@@ -1991,7 +1901,6 @@ mod test_fixtures {
         out.extend_from_slice(bytes);
         out
     }
-
     pub(super) fn encode_list(fields: &[Vec<u8>]) -> Vec<u8> {
         let len = fields.iter().map(Vec::len).sum();
         let mut out = encode_length(len, 0xc0, 0xf7);
@@ -2000,7 +1909,6 @@ mod test_fixtures {
         }
         out
     }
-
     pub(super) fn single_leaf_proof(key: &[u8], value: &[u8]) -> (H256, EthereumNativeMptProofV1) {
         let mut compact_path = Vec::with_capacity(1 + key.len());
         compact_path.push(0x20);
@@ -2011,14 +1919,12 @@ mod test_fixtures {
             EthereumNativeMptProofV1 { nodes: vec![node] },
         )
     }
-
     fn activation(epoch: u64, tag: u8) -> EthereumNativeForkActivationV1 {
         EthereumNativeForkActivationV1 {
             epoch,
             version: vec![tag, 0, 0, 0],
         }
     }
-
     fn schedule_wire() -> EthereumNativeForkScheduleV1 {
         EthereumNativeForkScheduleV1 {
             genesis_validators_root: [0xa5; 32],
@@ -2030,14 +1936,12 @@ mod test_fixtures {
             fulu: activation(u64::MAX, 6),
         }
     }
-
     fn committee_wire() -> EthereumNativeSyncCommitteeV1 {
         EthereumNativeSyncCommitteeV1 {
             public_keys: vec![GENERATOR_PUBLIC_KEY.to_vec(); SYNC_COMMITTEE_SIZE],
             aggregate_public_key: GENERATOR_PUBLIC_KEY.to_vec(),
         }
     }
-
     pub(super) fn canonical_event_data(
         payload_hash: H256,
         route_config_hash: H256,
@@ -2056,7 +1960,6 @@ mod test_fixtures {
         data.resize(128 + padded_len, 0);
         data
     }
-
     #[expect(
         clippy::too_many_arguments,
         reason = "the fixture keeps each authenticated event field independently mutable for negative tests"
@@ -2085,7 +1988,6 @@ mod test_fixtures {
             duplicate,
         )
     }
-
     pub(super) fn receipt_with_topics(
         emitter: [u8; 20],
         topics: &[H256],
@@ -2122,7 +2024,6 @@ mod test_fixtures {
         typed.extend_from_slice(&payload);
         typed
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "the fixture constructs one internally coherent Ethereum proof and trusted anchor end to end"
@@ -2146,7 +2047,6 @@ mod test_fixtures {
         let lane_hash = sccp_lane_id_hash_v1(identity.lane).unwrap();
         let digest =
             sccp_lane_source_event_digest_v1(identity.lane, message_id, payload_hash).unwrap();
-
         let SccpSourceEmitterV1::Evm(emitter) = identity.emitter else {
             unreachable!("Ethereum fixture uses an EVM emitter");
         };
@@ -2172,7 +2072,6 @@ mod test_fixtures {
         );
         let receipt_key = rlp_encode_u64(0);
         let (receipts_root, receipt_proof) = single_leaf_proof(&receipt_key, &receipt);
-
         let execution_wire = EthereumNativeCapellaExecutionHeaderV1 {
             parent_hash: [1; 32],
             fee_recipient: vec![2; 20],
@@ -2193,7 +2092,6 @@ mod test_fixtures {
         let execution = capella_execution_from_wire(&execution_wire).unwrap();
         let execution_branch = [[0x71; 32], [0x72; 32], [0x73; 32], [0x74; 32]];
         let body_root = merkle_root_from_branch(execution.hash_tree_root(), 25, &execution_branch);
-
         let committee_wire = committee_wire();
         let committee = sync_committee_from_wire(&committee_wire).unwrap();
         let mut explicit = BTreeMap::new();
@@ -2264,14 +2162,11 @@ mod test_fixtures {
         (identity, identity_hash, anchor_hash, proof)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
-
     use super::test_fixtures::*;
     use super::*;
-
     fn test_payload() -> &'static [u8] {
         static PAYLOAD: OnceLock<Vec<u8>> = OnceLock::new();
         PAYLOAD
@@ -2297,7 +2192,6 @@ mod tests {
             })
             .as_slice()
     }
-
     fn test_message_id() -> H256 {
         let payload = decode_canonical_sccp_payload_bytes(test_payload()).unwrap();
         sccp_message_id(
@@ -2309,7 +2203,6 @@ mod tests {
         )
         .unwrap()
     }
-
     #[test]
     fn independently_constructed_single_leaf_mpt_vector_is_canonical() {
         let key = [0x12, 0x34];
@@ -2328,7 +2221,6 @@ mod tests {
             Ok(value.to_vec())
         );
     }
-
     #[test]
     fn native_source_proof_roundtrips_and_authenticates_state_and_receipt_tries() {
         let (identity, identity_hash, anchor_hash, _, _, proof) =
@@ -2353,7 +2245,6 @@ mod tests {
         assert_eq!(validated.execution_block_number, 17_000_000);
         assert_eq!(validated.transaction_index, 0);
     }
-
     #[test]
     fn identity_lane_anchor_statement_and_final_state_are_role_bound() {
         let (identity, identity_hash, anchor_hash, proof) =
@@ -2369,7 +2260,6 @@ mod tests {
                 proof,
             )
         };
-
         let mut mutated = proof.clone();
         mutated.source_identity_hash[0] ^= 1;
         assert_eq!(
@@ -2407,7 +2297,6 @@ mod tests {
             Err(EthereumNativeSourceErrorV1::FinalizedExecutionMismatch)
         );
     }
-
     #[test]
     fn pre_capella_finalized_anchor_is_rejected_without_execution_alias() {
         let (identity, identity_hash, _, mut proof) =
@@ -2429,7 +2318,6 @@ mod tests {
         proof.final_state_commitment = state.state_commitment();
         proof.trusted_anchor_hash =
             ethereum_native_trusted_anchor_hash_v1(&proof.trusted_anchor).unwrap();
-
         assert_eq!(
             verify_ethereum_native_source_proof_v1(
                 &identity,
@@ -2443,7 +2331,6 @@ mod tests {
             Err(EthereumNativeSourceErrorV1::MissingFinalizedExecution)
         );
     }
-
     #[test]
     fn mpt_rejects_wrong_key_trailing_and_duplicate_nodes() {
         let key = [0x12, 0x34];
@@ -2476,7 +2363,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn mpt_rejects_noncanonical_leaf_encodings() {
         let noncanonical = EthereumNativeMptProofV1 {
@@ -2508,7 +2394,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn mpt_short_children_reject_explicit_and_hashed_aliases() {
         // A canonical short child is embedded as raw RLP. Repeating it as an
@@ -2563,7 +2448,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn mpt_rejects_account_and_receipt_role_replay() {
         let (identity, identity_hash, anchor_hash, mut source) =
@@ -2584,7 +2468,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn account_opening_rejects_code_and_scalar_aliases() {
         let storage_root = [0x41; 32];
@@ -2610,7 +2493,6 @@ mod tests {
             Err(EthereumNativeSourceErrorV1::MalformedAccount)
         );
     }
-
     struct ReceiptEventFixture {
         emitter: [u8; 20],
         lane: [u8; 32],
@@ -2620,7 +2502,6 @@ mod tests {
         payload_hash: [u8; 32],
         payload: &'static [u8],
     }
-
     impl ReceiptEventFixture {
         fn new() -> Self {
             let payload = test_payload();
@@ -2634,7 +2515,6 @@ mod tests {
                 payload,
             }
         }
-
         fn expected(&self) -> ExpectedEthereumSourceEventV1<'_> {
             ExpectedEthereumSourceEventV1 {
                 emitter: self.emitter,
@@ -2646,11 +2526,9 @@ mod tests {
                 payload: self.payload,
             }
         }
-
         fn validate(&self, receipt: &[u8]) -> Result<(), EthereumNativeSourceErrorV1> {
             validate_receipt_event(receipt, &self.expected())
         }
-
         fn receipt(&self, succeeded: bool, duplicate: bool) -> Vec<u8> {
             event_receipt(
                 self.emitter,
@@ -2664,18 +2542,15 @@ mod tests {
                 duplicate,
             )
         }
-
         fn canonical_data(&self) -> Vec<u8> {
             canonical_event_data(self.payload_hash, self.config_hash, self.payload)
         }
     }
-
     #[test]
     fn receipt_accepts_one_exact_successful_transfer_event() {
         let fixture = ReceiptEventFixture::new();
         assert_eq!(fixture.validate(&fixture.receipt(true, false)), Ok(()));
     }
-
     #[test]
     fn receipt_rejects_failed_and_duplicate_transfer_events() {
         let fixture = ReceiptEventFixture::new();
@@ -2688,7 +2563,6 @@ mod tests {
             Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
         );
     }
-
     #[test]
     fn receipt_rejects_wrong_or_non_exact_transfer_topics() {
         let fixture = ReceiptEventFixture::new();
@@ -2777,7 +2651,6 @@ mod tests {
             Err(EthereumNativeSourceErrorV1::MalformedReceipt)
         );
     }
-
     #[test]
     fn receipt_rejects_noncanonical_abi_data() {
         let fixture = ReceiptEventFixture::new();
@@ -2812,7 +2685,6 @@ mod tests {
             Err(EthereumNativeSourceErrorV1::SourceEventLogMismatch)
         );
     }
-
     #[test]
     fn receipt_rejects_legacy_event_and_unknown_envelope_type() {
         let fixture = ReceiptEventFixture::new();
@@ -2838,7 +2710,6 @@ mod tests {
             Err(EthereumNativeSourceErrorV1::MalformedReceipt)
         );
     }
-
     #[test]
     fn proof_bounds_reject_empty_oversized_and_excess_update_material() {
         assert_eq!(
@@ -2879,7 +2750,6 @@ mod tests {
                 MAX_ENCODED_SOURCE_PROOF_BYTES + 1
             ))
         );
-
         let (_, _, _, proof) = source_fixture_for_statement(test_message_id(), test_payload());
         let mut compressed_alias = norito::to_bytes(&proof).unwrap();
         compressed_alias[NORITO_COMPRESSION_OFFSET] = 1;
@@ -2896,7 +2766,6 @@ mod tests {
                 MAX_ENCODED_SOURCE_PROOF_BYTES + 1
             ))
         );
-
         let mut too_many_updates = proof;
         let dummy = EthereumNativeLightClientUpdateV1 {
             attested_header: too_many_updates.trusted_anchor.bootstrap.header.clone(),

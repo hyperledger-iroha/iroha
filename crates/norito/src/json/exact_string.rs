@@ -1,7 +1,5 @@
 //! Exact-layout storage for measured JSON sequence and string decoding.
-
 use super::Error;
-
 pub(super) fn allocate<T>(length: usize) -> Result<Vec<T>, Error> {
     if length == 0 || core::mem::size_of::<T>() == 0 {
         return Ok(Vec::new());

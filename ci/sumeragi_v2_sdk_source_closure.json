@@ -763,6 +763,7 @@
       "javascript/iroha_js/src/soracloud.js",
       "javascript/iroha_js/src/soradns.js",
       "javascript/iroha_js/src/sorafs.js",
+      "javascript/iroha_js/src/sorafsOrderbookSubmission.d.ts",
       "javascript/iroha_js/src/sorafsOrderbookSubmission.js",
       "javascript/iroha_js/src/sorafsPorWeek.js",
       "javascript/iroha_js/src/soranetPuzzleClient.js",

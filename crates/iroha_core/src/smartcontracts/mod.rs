@@ -3,7 +3,6 @@
 //! Most of the traits mentioned [`isi`] or Iroha Special Instructions are the main way of interacting
 //! with the [`State`](crate::state::State); even IVM-based smart contracts can only interact with the
 //! [`World`](crate::state::World) via instructions.
-
 /// On-chain smart contract manifest/code registry helpers.
 pub mod code;
 pub mod isi;
@@ -11,16 +10,13 @@ pub mod isi;
 pub mod ivm;
 /// Helpers for size limits and similar guards.
 pub mod limits;
-
 use iroha_data_model::{
     isi::error::InstructionExecutionError as Error,
     prelude::*,
     query::{dsl::CompoundPredicate, error::QueryExecutionFail},
 };
 pub use isi::*;
-
 use crate::state::{StateReadOnly, StateTransaction};
-
 /// Trait implementations should provide actions to apply changes on [`StateTransaction`].
 pub trait Execute {
     /// Apply actions to `state_transaction` on behalf of `authority`.
@@ -33,7 +29,6 @@ pub trait Execute {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error>;
 }
-
 /// This trait defines how an Iroha Iterable query is executed.
 pub trait ValidQuery: iroha_data_model::query::Query {
     /// Execute a query on a read-only state.
@@ -49,7 +44,6 @@ pub trait ValidQuery: iroha_data_model::query::Query {
         state_ro: &impl StateReadOnly,
     ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail>;
 }
-
 /// This trait defines how an Iroha Singular query is executed.
 pub trait ValidSingularQuery: iroha_data_model::query::SingularQuery {
     /// Execute a query on a read-only state.

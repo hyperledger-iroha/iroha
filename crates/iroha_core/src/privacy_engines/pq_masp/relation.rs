@@ -5,9 +5,7 @@
 //! commitments, and checked value conservation. ML-DSA verification and the
 //! ML-KEM/XChaCha output codec are separate native proof-wire checks; neither
 //! is represented by a caller-selectable backend tag.
-
 use std::{collections::BTreeSet, fmt};
-
 use iroha_data_model::privacy::{
     PQ_MASP_MAX_INPUTS_V1, PQ_MASP_MAX_OUTPUTS_V1, PqMaspStarkStatementV1,
     PrivacyAuthorizationKeyDigestV1, PrivacyCommitmentV1, PrivacyNamespaceScopeV1,
@@ -17,14 +15,12 @@ use iroha_data_model::privacy::{
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroize;
-
 /// Exact depth of the validator-owned PQ note tree.
 pub const PQ_MASP_TREE_DEPTH_V1: usize = 32;
 /// Maximum consumed notes in the sole compiled relation.
 pub const PQ_MASP_INPUT_BOUND_V1: usize = PQ_MASP_MAX_INPUTS_V1 as usize;
 /// Maximum created notes in the sole compiled relation.
 pub const PQ_MASP_OUTPUT_BOUND_V1: usize = PQ_MASP_MAX_OUTPUTS_V1 as usize;
-
 pub(super) const HASH_FRAME_DOMAIN_V1: &[u8] = b"iroha:privacy:pq-masp:hash-frame:v1";
 pub(super) const NULLIFIER_KEY_DOMAIN_V1: &[u8] = b"iroha:privacy:pq-masp:nullifier-key:v1";
 pub(super) const NOTE_COMMITMENT_DOMAIN_V1: &[u8] = b"iroha:privacy:pq-masp:note-commitment:v1";
@@ -35,12 +31,10 @@ pub(super) const ACCUMULATOR_LEAF_DOMAIN_V1: &[u8] =
     b"iroha.privacy.proof-managed-note-tree.leaf.v1";
 pub(super) const ACCUMULATOR_NODE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.proof-managed-note-tree.node.v1";
-
 /// Complete relation descriptor committed by the compiled engine manifest.
 pub(crate) const PQ_MASP_ENGINE_DESCRIPTOR_V1: &[u8] = b"pq-masp-stark-v0:native-rust:first-release:inputs=1..2:outputs=1..2:values=u128-checked:membership=sha256-depth32-exact-ledger-domains:nullifier=stable-note-secret+rho+commitment+pool:ownership=statement-mldsa65-key-digest:authorization=outer-mldsa65-over-canonical-statement-digest+inner-proof-digest:producer=typed-redacted-witness+relation-and-key-preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind-policy-v1+block1-stark-replay+block2-independent-health-sha256-authorization-hedge+block3plus-stark+self-verify:encryption=mlkem768+xchacha20poly1305+internal-fixed64-health-sha256-seed:successor=validator-derived-only:legacy=unrepresentable";
 /// Exact SHA-256 framing consumed by the native oracle and AIR.
 pub(crate) const PQ_MASP_HASH_PROFILE_DESCRIPTOR_V1: &[u8] = b"sha256:frame-domain-len-u16be-field-count-u16be-field-len-u64be:nullifier-key+note-commitment+stable-nullifier+ordered-recipient-and-encapsulation-digest:proof-managed-leaf-and-level-node-exact-v1";
-
 /// Plaintext committed by one PQ-MASP note.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PqMaspNotePlaintextV1 {
@@ -59,7 +53,6 @@ pub struct PqMaspNotePlaintextV1 {
     /// Wallet-defined payload digest.
     pub(crate) memo_digest: [u8; 32],
 }
-
 impl PqMaspNotePlaintextV1 {
     /// Construct one canonical nonzero PQ-MASP note plaintext.
     ///
@@ -89,56 +82,47 @@ impl PqMaspNotePlaintextV1 {
         validate_note_v1(&note)?;
         Ok(note)
     }
-
     /// Return the atomic value.
     #[must_use]
     pub const fn value(&self) -> u128 {
         self.value
     }
-
     /// Return the committed ML-DSA authorization-key digest.
     #[must_use]
     pub const fn authorization_key_digest(&self) -> PrivacyAuthorizationKeyDigestV1 {
         self.authorization_key_digest
     }
-
     /// Return the committed ML-KEM recipient identifier.
     #[must_use]
     pub const fn recipient_key_digest(&self) -> PrivacyRecipientIdV1 {
         self.recipient_key_digest
     }
-
     /// Return the digest opening expected from the nullifier secret.
     #[must_use]
     pub const fn nullifier_key_digest(&self) -> &[u8; 32] {
         &self.nullifier_key_digest
     }
-
     /// Return the unique note nonce.
     #[must_use]
     pub const fn rho(&self) -> &[u8; 32] {
         &self.rho
     }
-
     /// Return the commitment blinding.
     #[must_use]
     pub const fn blinding(&self) -> &[u8; 32] {
         &self.blinding
     }
-
     /// Return the wallet-defined memo digest.
     #[must_use]
     pub const fn memo_digest(&self) -> &[u8; 32] {
         &self.memo_digest
     }
 }
-
 impl fmt::Debug for PqMaspNotePlaintextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PqMaspNotePlaintextV1(<redacted>)")
     }
 }
-
 impl Drop for PqMaspNotePlaintextV1 {
     fn drop(&mut self) {
         self.value = 0;
@@ -150,7 +134,6 @@ impl Drop for PqMaspNotePlaintextV1 {
         self.memo_digest.zeroize();
     }
 }
-
 /// Wallet-local consumed-note witness.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PqMaspInputWitnessV1 {
@@ -163,7 +146,6 @@ pub struct PqMaspInputWitnessV1 {
     /// Exact depth-32 sibling path.
     pub(crate) authentication_path: [[u8; 32]; PQ_MASP_TREE_DEPTH_V1],
 }
-
 impl PqMaspInputWitnessV1 {
     /// Construct one typed consumed-note witness.
     ///
@@ -192,25 +174,21 @@ impl PqMaspInputWitnessV1 {
             authentication_path,
         })
     }
-
     /// Borrow the committed plaintext.
     #[must_use]
     pub const fn note(&self) -> &PqMaspNotePlaintextV1 {
         &self.note
     }
-
     /// Return the zero-based leaf position.
     #[must_use]
     pub const fn leaf_position(&self) -> u32 {
         self.leaf_position
     }
-
     /// Borrow the exact depth-32 authentication path.
     #[must_use]
     pub const fn authentication_path(&self) -> &[[u8; 32]; PQ_MASP_TREE_DEPTH_V1] {
         &self.authentication_path
     }
-
     /// Derive the public commitment opened by this input witness.
     pub fn commitment_v1(
         &self,
@@ -218,7 +196,6 @@ impl PqMaspInputWitnessV1 {
     ) -> Result<PrivacyCommitmentV1, PqMaspRelationErrorV1> {
         derive_pq_masp_note_commitment_v1(statement, &self.note)
     }
-
     /// Derive the stable public nullifier for this input and pool.
     ///
     /// The nullifier secret remains encapsulated by the redacted witness and
@@ -236,27 +213,23 @@ impl PqMaspInputWitnessV1 {
         )
     }
 }
-
 impl fmt::Debug for PqMaspInputWitnessV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PqMaspInputWitnessV1(<redacted>)")
     }
 }
-
 impl Drop for PqMaspInputWitnessV1 {
     fn drop(&mut self) {
         self.nullifier_secret.zeroize();
         self.authentication_path.zeroize();
     }
 }
-
 /// Wallet-local created-note witness.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PqMaspOutputWitnessV1 {
     /// Committed note plaintext.
     pub(crate) note: PqMaspNotePlaintextV1,
 }
-
 impl PqMaspOutputWitnessV1 {
     /// Construct one typed created-note witness.
     ///
@@ -267,20 +240,17 @@ impl PqMaspOutputWitnessV1 {
         validate_note_v1(&note)?;
         Ok(Self { note })
     }
-
     /// Borrow the committed plaintext.
     #[must_use]
     pub const fn note(&self) -> &PqMaspNotePlaintextV1 {
         &self.note
     }
 }
-
 impl fmt::Debug for PqMaspOutputWitnessV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PqMaspOutputWitnessV1(<redacted>)")
     }
 }
-
 /// Complete bounded PQ-MASP witness.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PqMaspWitnessV1 {
@@ -289,7 +259,6 @@ pub struct PqMaspWitnessV1 {
     /// Created notes in public-commitment order.
     pub(crate) outputs: Vec<PqMaspOutputWitnessV1>,
 }
-
 impl PqMaspWitnessV1 {
     /// Construct one exact first-release PQ-MASP witness.
     ///
@@ -310,20 +279,17 @@ impl PqMaspWitnessV1 {
         }
         Ok(Self { inputs, outputs })
     }
-
     /// Borrow consumed notes in public-nullifier order.
     #[must_use]
     pub fn inputs(&self) -> &[PqMaspInputWitnessV1] {
         &self.inputs
     }
-
     /// Borrow created notes in public-commitment order.
     #[must_use]
     pub fn outputs(&self) -> &[PqMaspOutputWitnessV1] {
         &self.outputs
     }
 }
-
 impl fmt::Debug for PqMaspWitnessV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -333,7 +299,6 @@ impl fmt::Debug for PqMaspWitnessV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Semantic role of one SHA-256 invocation in the compiled STARK schedule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PqMaspSha256RoleV1 {
@@ -345,7 +310,6 @@ pub(super) enum PqMaspSha256RoleV1 {
     OutputCommitment { output: u8 },
     EncryptionKeySet,
 }
-
 /// One exact SHA-256 invocation consumed by the STARK witness compiler.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct PqMaspSha256InvocationV1 {
@@ -353,7 +317,6 @@ pub(super) struct PqMaspSha256InvocationV1 {
     pub(super) preimage: Vec<u8>,
     pub(super) digest: [u8; 32],
 }
-
 impl fmt::Debug for PqMaspSha256InvocationV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -363,14 +326,12 @@ impl fmt::Debug for PqMaspSha256InvocationV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl Drop for PqMaspSha256InvocationV1 {
     fn drop(&mut self) {
         self.preimage.zeroize();
         self.digest.zeroize();
     }
 }
-
 /// Fully checked relation material retained only by the prover.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ValidatedPqMaspRelationV1 {
@@ -378,7 +339,6 @@ pub(crate) struct ValidatedPqMaspRelationV1 {
     pub(super) input_sum: u128,
     pub(super) output_sum: u128,
 }
-
 impl fmt::Debug for ValidatedPqMaspRelationV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -388,7 +348,6 @@ impl fmt::Debug for ValidatedPqMaspRelationV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Native relation or witness failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PqMaspRelationErrorV1 {
@@ -435,11 +394,9 @@ pub enum PqMaspRelationErrorV1 {
     #[error("PQ-MASP bounded allocation failed")]
     AllocationFailure,
 }
-
 fn is_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
-
 fn frame_preimage_v1(domain: &[u8], fields: &[&[u8]]) -> Result<Vec<u8>, PqMaspRelationErrorV1> {
     let domain_len = u16::try_from(domain.len()).map_err(|_| PqMaspRelationErrorV1::Encoding)?;
     let field_count = u16::try_from(fields.len()).map_err(|_| PqMaspRelationErrorV1::Encoding)?;
@@ -472,7 +429,6 @@ fn frame_preimage_v1(domain: &[u8], fields: &[&[u8]]) -> Result<Vec<u8>, PqMaspR
     }
     Ok(preimage)
 }
-
 fn sha256_invocation_v1(
     role: PqMaspSha256RoleV1,
     domain: &[u8],
@@ -486,7 +442,6 @@ fn sha256_invocation_v1(
         digest,
     })
 }
-
 fn note_commitment_invocation_v1(
     role: PqMaspSha256RoleV1,
     statement: &PqMaspStarkStatementV1,
@@ -511,7 +466,6 @@ fn note_commitment_invocation_v1(
         ],
     )
 }
-
 pub(super) fn namespace_v1(statement: &PqMaspStarkStatementV1) -> PrivacyNamespaceV1 {
     PrivacyNamespaceV1::new(
         PrivacyProtocolIdV1::PqMaspStarkV0,
@@ -520,7 +474,6 @@ pub(super) fn namespace_v1(statement: &PqMaspStarkStatementV1) -> PrivacyNamespa
         }),
     )
 }
-
 fn validate_note_v1(note: &PqMaspNotePlaintextV1) -> Result<(), PqMaspRelationErrorV1> {
     if note.value == 0
         || note.authorization_key_digest.is_zero()
@@ -533,7 +486,6 @@ fn validate_note_v1(note: &PqMaspNotePlaintextV1) -> Result<(), PqMaspRelationEr
     }
     Ok(())
 }
-
 /// Derive the digest committed by a note for its nullifier secret.
 pub fn derive_pq_masp_nullifier_key_digest_v1(
     nullifier_secret: &[u8; 32],
@@ -548,7 +500,6 @@ pub fn derive_pq_masp_nullifier_key_digest_v1(
     )?
     .digest)
 }
-
 /// Derive the sole canonical PQ note commitment.
 pub fn derive_pq_masp_note_commitment_v1(
     statement: &PqMaspStarkStatementV1,
@@ -563,7 +514,6 @@ pub fn derive_pq_masp_note_commitment_v1(
         .digest,
     ))
 }
-
 /// Derive a stable nullifier for a committed note.
 ///
 /// Transaction, action, anchor, and epoch data are intentionally absent.
@@ -592,7 +542,6 @@ pub fn derive_pq_masp_nullifier_v1(
         .digest,
     ))
 }
-
 /// Commit the exact ordered ML-KEM recipient-key digests.
 pub fn derive_pq_masp_note_encryption_keys_digest_v1(
     statement: &PqMaspStarkStatementV1,
@@ -603,7 +552,6 @@ pub fn derive_pq_masp_note_encryption_keys_digest_v1(
     let invocation = note_encryption_keys_invocation_v1(statement)?;
     Ok(PrivacyNoteEncryptionKeyDigestV1::new(invocation.digest))
 }
-
 fn note_encryption_keys_invocation_v1(
     statement: &PqMaspStarkStatementV1,
 ) -> Result<PqMaspSha256InvocationV1, PqMaspRelationErrorV1> {
@@ -626,7 +574,6 @@ fn note_encryption_keys_invocation_v1(
         &fields,
     )
 }
-
 pub(super) fn accumulator_leaf_invocation_v1(
     statement: &PqMaspStarkStatementV1,
     input: u8,
@@ -652,7 +599,6 @@ pub(super) fn accumulator_leaf_invocation_v1(
         preimage,
     })
 }
-
 pub(super) fn accumulator_node_invocation_v1(
     input: u8,
     level: u8,
@@ -673,7 +619,6 @@ pub(super) fn accumulator_node_invocation_v1(
         preimage,
     })
 }
-
 pub(super) fn validate_statement_v1(
     statement: &PqMaspStarkStatementV1,
 ) -> Result<(), PqMaspRelationErrorV1> {
@@ -724,14 +669,12 @@ pub(super) fn validate_statement_v1(
         .validate()
         .map_err(|_| PqMaspRelationErrorV1::InvalidStatement)
 }
-
 fn checked_sum(mut values: impl Iterator<Item = u128>) -> Result<u128, PqMaspRelationErrorV1> {
     values.try_fold(0_u128, |sum, value| {
         sum.checked_add(value)
             .ok_or(PqMaspRelationErrorV1::ValueOverflow)
     })
 }
-
 /// Validate the complete native witness relation and compile its SHA schedule.
 pub(crate) fn validate_pq_masp_relation_v1(
     statement: &PqMaspStarkStatementV1,
@@ -747,7 +690,6 @@ pub(crate) fn validate_pq_masp_relation_v1(
     {
         return Err(PqMaspRelationErrorV1::WitnessShape);
     }
-
     let mut invocations = Vec::new();
     invocations
         .try_reserve_exact(
@@ -779,7 +721,6 @@ pub(crate) fn validate_pq_masp_relation_v1(
             return Err(PqMaspRelationErrorV1::Duplicate);
         }
         invocations.push(key_invocation);
-
         let commitment = derive_pq_masp_note_commitment_v1(statement, &input_witness.note)?;
         if !spent_commitments.insert(commitment) {
             return Err(PqMaspRelationErrorV1::Duplicate);
@@ -789,7 +730,6 @@ pub(crate) fn validate_pq_masp_relation_v1(
             statement,
             &input_witness.note,
         )?);
-
         let nullifier = derive_pq_masp_nullifier_v1(
             statement,
             &input_witness.nullifier_secret,
@@ -809,7 +749,6 @@ pub(crate) fn validate_pq_masp_relation_v1(
                 statement.pool_id.as_bytes(),
             ],
         )?);
-
         let leaf = accumulator_leaf_invocation_v1(statement, input_index, commitment)?;
         let mut current = leaf.digest;
         invocations.push(leaf);
@@ -828,7 +767,6 @@ pub(crate) fn validate_pq_masp_relation_v1(
             return Err(PqMaspRelationErrorV1::Membership);
         }
     }
-
     let mut output_commitments = BTreeSet::new();
     for (index, ((output, expected_commitment), encrypted)) in witness
         .outputs
@@ -856,7 +794,6 @@ pub(crate) fn validate_pq_masp_relation_v1(
         )?);
     }
     invocations.push(note_encryption_keys_invocation_v1(statement)?);
-
     let input_sum = checked_sum(witness.inputs.iter().map(|input| input.note.value))?;
     let output_sum = checked_sum(witness.outputs.iter().map(|output| output.note.value))?;
     if input_sum != output_sum {
@@ -868,12 +805,10 @@ pub(crate) fn validate_pq_masp_relation_v1(
         output_sum,
     })
 }
-
 #[cfg(test)]
 /// Canonical fixtures shared by the relation and extension-AIR suites.
 pub(crate) mod tests {
     use std::str::FromStr as _;
-
     use iroha_data_model::{
         asset::AssetDefinitionId,
         domain::DomainId,
@@ -888,13 +823,10 @@ pub(crate) mod tests {
             PrivacyVerifierDigestV1,
         },
     };
-
     use super::*;
-
     fn raw(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
-
     fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
             network_id: iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -911,7 +843,6 @@ pub(crate) mod tests {
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(6)),
         }
     }
-
     fn encrypted_output_shell(
         recipient: PrivacyRecipientIdV1,
         commitment: PrivacyCommitmentV1,
@@ -929,7 +860,6 @@ pub(crate) mod tests {
             ciphertext,
         }
     }
-
     fn statement_shell() -> PqMaspStarkStatementV1 {
         let commitment = PrivacyCommitmentV1::new(raw(10));
         let recipient = PrivacyRecipientIdV1::new(raw(11));
@@ -952,7 +882,6 @@ pub(crate) mod tests {
             authorization_epoch: 1,
         }
     }
-
     fn empty_authentication_path_v1() -> [[u8; 32]; PQ_MASP_TREE_DEPTH_V1] {
         const EMPTY_LEAF_DOMAIN_V1: &[u8] = b"iroha.privacy.proof-managed-note-tree.empty-leaf.v1";
         let mut path = [[0_u8; 32]; PQ_MASP_TREE_DEPTH_V1];
@@ -966,7 +895,6 @@ pub(crate) mod tests {
         }
         path
     }
-
     fn anchor_for_input_v1(
         statement: &PqMaspStarkStatementV1,
         commitment: PrivacyCommitmentV1,
@@ -989,7 +917,6 @@ pub(crate) mod tests {
         }
         PrivacyRootV1::new(current)
     }
-
     /// Build the canonical one-input/one-output relation fixture.
     pub(crate) fn valid_fixture() -> (PqMaspStarkStatementV1, PqMaspWitnessV1) {
         let mut statement = statement_shell();
@@ -1045,7 +972,6 @@ pub(crate) mod tests {
             },
         )
     }
-
     /// Rebind the canonical one-input fixture to a real authorization key.
     pub(crate) fn valid_fixture_with_authorization_key_digest(
         authorization_key_digest: PrivacyAuthorizationKeyDigestV1,
@@ -1071,7 +997,6 @@ pub(crate) mod tests {
         .expect("stable nullifier");
         (statement, witness)
     }
-
     /// Build the exact two-input/two-output boundary fixture.
     pub(crate) fn valid_two_by_two_fixture() -> (PqMaspStarkStatementV1, PqMaspWitnessV1) {
         let mut statement = statement_shell();
@@ -1134,7 +1059,6 @@ pub(crate) mod tests {
             )
             .expect("second nullifier"),
         ];
-
         let first_output = PqMaspNotePlaintextV1 {
             value: 55,
             authorization_key_digest: PrivacyAuthorizationKeyDigestV1::new(raw(60)),
@@ -1194,7 +1118,6 @@ pub(crate) mod tests {
             },
         )
     }
-
     #[test]
     fn complete_relation_accepts_one_input_output_and_records_every_hash() {
         let (statement, witness) = valid_fixture();
@@ -1212,7 +1135,6 @@ pub(crate) mod tests {
             PqMaspSha256RoleV1::EncryptionKeySet
         );
     }
-
     #[test]
     fn complete_relation_accepts_the_exact_two_by_two_boundary() {
         let (statement, witness) = valid_two_by_two_fixture();
@@ -1221,21 +1143,18 @@ pub(crate) mod tests {
         assert_eq!(validated.input_sum, 100);
         assert_eq!(validated.output_sum, 100);
         assert_eq!(validated.invocations.len(), 75);
-
         let mut wrong_position = witness.clone();
         wrong_position.inputs[1].leaf_position = 0;
         assert_eq!(
             validate_pq_masp_relation_v1(&statement, &wrong_position),
             Err(PqMaspRelationErrorV1::Membership)
         );
-
         let mut reordered_nullifiers = statement.clone();
         reordered_nullifiers.nullifiers.swap(0, 1);
         assert_eq!(
             validate_pq_masp_relation_v1(&reordered_nullifiers, &witness),
             Err(PqMaspRelationErrorV1::NullifierMismatch)
         );
-
         let mut reordered_outputs = statement.clone();
         reordered_outputs.output_commitments.swap(0, 1);
         reordered_outputs.encrypted_outputs.swap(0, 1);
@@ -1247,7 +1166,6 @@ pub(crate) mod tests {
             Err(PqMaspRelationErrorV1::RecipientMismatch)
         );
     }
-
     #[test]
     fn nullifier_is_stable_across_transaction_action_anchor_and_epoch() {
         let (statement, witness) = valid_fixture();
@@ -1277,7 +1195,6 @@ pub(crate) mod tests {
             .expect("replayed nullifier"),
             expected
         );
-
         replay.pool_id = PrivacyPoolIdV1::new(raw(92));
         assert_ne!(
             derive_pq_masp_nullifier_v1(
@@ -1290,11 +1207,9 @@ pub(crate) mod tests {
             expected
         );
     }
-
     #[test]
     fn relation_rejects_every_private_binding_mutation() {
         let (statement, witness) = valid_fixture();
-
         let mut wrong_authority = witness.clone();
         wrong_authority.inputs[0].note.authorization_key_digest =
             PrivacyAuthorizationKeyDigestV1::new(raw(30));
@@ -1302,35 +1217,30 @@ pub(crate) mod tests {
             validate_pq_masp_relation_v1(&statement, &wrong_authority),
             Err(PqMaspRelationErrorV1::AuthorizationKeyMismatch)
         );
-
         let mut wrong_secret = witness.clone();
         wrong_secret.inputs[0].nullifier_secret[0] ^= 1;
         assert_eq!(
             validate_pq_masp_relation_v1(&statement, &wrong_secret),
             Err(PqMaspRelationErrorV1::NullifierKeyMismatch)
         );
-
         let mut wrong_path = witness.clone();
         wrong_path.inputs[0].authentication_path[7][3] ^= 1;
         assert_eq!(
             validate_pq_masp_relation_v1(&statement, &wrong_path),
             Err(PqMaspRelationErrorV1::Membership)
         );
-
         let mut wrong_recipient = witness.clone();
         wrong_recipient.outputs[0].note.recipient_key_digest = PrivacyRecipientIdV1::new(raw(31));
         assert_eq!(
             validate_pq_masp_relation_v1(&statement, &wrong_recipient),
             Err(PqMaspRelationErrorV1::RecipientMismatch)
         );
-
         let mut inflation = witness.clone();
         inflation.outputs[0].note.value += 1;
         assert_eq!(
             validate_pq_masp_relation_v1(&statement, &inflation),
             Err(PqMaspRelationErrorV1::CommitmentMismatch)
         );
-
         let mut wrong_key_set = statement.clone();
         wrong_key_set.note_encryption_key_digest = PrivacyNoteEncryptionKeyDigestV1::new(raw(32));
         assert_eq!(
@@ -1338,18 +1248,15 @@ pub(crate) mod tests {
             Err(PqMaspRelationErrorV1::InvalidStatement)
         );
     }
-
     #[test]
     fn relation_rejects_shape_duplicates_and_checked_value_failures() {
         let (statement, witness) = valid_fixture();
-
         let mut empty = witness.clone();
         empty.inputs.clear();
         assert_eq!(
             validate_pq_masp_relation_v1(&statement, &empty),
             Err(PqMaspRelationErrorV1::WitnessShape)
         );
-
         let mut duplicate_statement = statement.clone();
         duplicate_statement.nullifiers.push(statement.nullifiers[0]);
         let mut duplicate_witness = witness.clone();
@@ -1358,7 +1265,6 @@ pub(crate) mod tests {
             validate_pq_masp_relation_v1(&duplicate_statement, &duplicate_witness),
             Err(PqMaspRelationErrorV1::InvalidStatement)
         );
-
         let mut unequal_statement = statement.clone();
         let mut unequal = witness.clone();
         unequal.outputs[0].note.value = 69;
@@ -1370,7 +1276,6 @@ pub(crate) mod tests {
             validate_pq_masp_relation_v1(&unequal_statement, &unequal),
             Err(PqMaspRelationErrorV1::ValueConservation)
         );
-
         let mut overflow = witness.clone();
         overflow.inputs[0].note.value = u128::MAX;
         let second = PqMaspInputWitnessV1 {
@@ -1396,11 +1301,9 @@ pub(crate) mod tests {
             Err(PqMaspRelationErrorV1::ValueOverflow)
         );
     }
-
     #[test]
     fn relation_rejects_zero_witness_components_and_cross_namespace_replay() {
         let (statement, witness) = valid_fixture();
-
         let mutations: [fn(&mut PqMaspWitnessV1); 13] = [
             |value| value.inputs[0].note.value = 0,
             |value| {
@@ -1434,7 +1337,6 @@ pub(crate) mod tests {
                 Err(PqMaspRelationErrorV1::ZeroWitnessComponent)
             );
         }
-
         let mut other_pool = statement.clone();
         other_pool.pool_id = PrivacyPoolIdV1::new(raw(93));
         assert!(matches!(
@@ -1443,7 +1345,6 @@ pub(crate) mod tests {
                 | PqMaspRelationErrorV1::CommitmentMismatch
                 | PqMaspRelationErrorV1::Membership)
         ));
-
         let mut other_asset = statement.clone();
         other_asset.asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
@@ -1456,7 +1357,6 @@ pub(crate) mod tests {
                 | PqMaspRelationErrorV1::Membership)
         ));
     }
-
     #[test]
     fn statement_caps_zero_values_and_encrypted_output_shapes_fail_closed() {
         let (statement, witness) = valid_fixture();
@@ -1486,7 +1386,6 @@ pub(crate) mod tests {
                 Err(PqMaspRelationErrorV1::InvalidStatement)
             );
         }
-
         let (mut over_input_cap, mut over_input_witness) = valid_two_by_two_fixture();
         let mut third = over_input_witness.inputs[0].clone();
         third.nullifier_secret = raw(94);
@@ -1502,7 +1401,6 @@ pub(crate) mod tests {
             validate_pq_masp_relation_v1(&over_input_cap, &over_input_witness),
             Err(PqMaspRelationErrorV1::InvalidStatement)
         );
-
         let (mut duplicate_output, duplicate_output_witness) = valid_two_by_two_fixture();
         duplicate_output
             .output_commitments

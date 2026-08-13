@@ -5,20 +5,16 @@
 //! leader seed, DA layout, and proofs of possession that were frozen before it
 //! can authenticate that WAL. This store persists those canonical inputs before
 //! the corresponding WAL is opened and never overwrites a conflicting height.
-
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, ErrorKind, Read, Write},
     path::{Path, PathBuf},
 };
-
 use iroha_crypto::Hash;
 use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode, DecodeAll, Encode};
 use thiserror::Error;
-
 use super::v2::VerifiedHeightContext;
-
 const FILE_MAGIC: &[u8; 8] = b"SUMV2CTX";
 const FRAME_VERSION: u16 = 1;
 const HASH_LEN: usize = 32;
@@ -35,7 +31,6 @@ const MAX_CONTEXT_FIXED_BYTES: usize = 64 * 1024;
 const MAX_CONTEXT_PAYLOAD_BYTES: usize =
     MAX_CONTEXT_FIXED_BYTES + wire::MAX_VALIDATORS_PER_HEIGHT * MAX_CONTEXT_BYTES_PER_VALIDATOR;
 const MAX_CONTEXT_FRAME_BYTES: usize = HEADER_LEN + MAX_CONTEXT_PAYLOAD_BYTES;
-
 /// Canonical V1 context and PoPs required to reopen one reducer height.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct PersistedHeightContext {
@@ -43,7 +38,6 @@ pub(crate) struct PersistedHeightContext {
     context: wire::HeightContext,
     proofs_of_possession: Vec<Vec<u8>>,
 }
-
 impl PersistedHeightContext {
     /// Snapshot an already verified context without weakening its provenance.
     pub(crate) fn from_verified(context: &VerifiedHeightContext) -> Self {
@@ -53,17 +47,14 @@ impl PersistedHeightContext {
             proofs_of_possession: context.proofs_of_possession().to_vec(),
         }
     }
-
     /// Borrow the frozen wire context.
     pub(crate) const fn context(&self) -> &wire::HeightContext {
         &self.context
     }
-
     /// Borrow PoPs in frozen-roster order.
     pub(crate) fn proofs_of_possession(&self) -> &[Vec<u8>] {
         &self.proofs_of_possession
     }
-
     fn validate_layout(&self) -> Result<(), V2ContextStoreError> {
         if self.format_version != FRAME_VERSION {
             return Err(V2ContextStoreError::UnsupportedVersion(self.format_version));
@@ -82,7 +73,6 @@ impl PersistedHeightContext {
         Ok(())
     }
 }
-
 /// Append-only context store rooted beside Kura's v2 finality sidecars.
 #[derive(Clone, Debug)]
 pub(crate) struct V2ContextStore {
@@ -97,14 +87,12 @@ pub(crate) struct V2ContextStore {
     #[cfg(test)]
     publication_pause: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<ContextIoPause>>>>,
 }
-
 #[cfg(test)]
 #[derive(Debug)]
 struct ContextIoPause {
     reached: std::sync::Barrier,
     resume: std::sync::Barrier,
 }
-
 impl V2ContextStore {
     /// Open the store and synchronously create its directory.
     pub(crate) fn open(root: impl AsRef<Path>) -> Result<Self, V2ContextStoreError> {
@@ -124,7 +112,6 @@ impl V2ContextStore {
             publication_pause: std::sync::Arc::new(std::sync::Mutex::new(None)),
         })
     }
-
     /// Read one context directly from a storage root without creating or synchronizing paths.
     ///
     /// Provisional snapshot authentication uses this to detect an existing immutable conflict
@@ -160,7 +147,6 @@ impl V2ContextStore {
         }
         .load(height)
     }
-
     /// Persist an immutable record before opening its height WAL.
     ///
     /// An exact repeat is idempotent. A different record at the same height is
@@ -217,7 +203,6 @@ impl V2ContextStore {
         }
         Ok(())
     }
-
     /// Load and checksum-verify one exact height record.
     pub(crate) fn load(
         &self,
@@ -236,11 +221,9 @@ impl V2ContextStore {
         }
         Ok(Some(record))
     }
-
     fn path(&self, height: wire::Height) -> PathBuf {
         self.directory.join(format!("{height:020}.norito"))
     }
-
     fn read_frame_bytes(&self, path: &Path) -> Result<Option<Vec<u8>>, V2ContextStoreError> {
         stable_read_file(
             &self.root,
@@ -275,7 +258,6 @@ impl V2ContextStore {
             },
         )
     }
-
     #[cfg(test)]
     fn pause_next_read_before_lookup(&self) -> std::sync::Arc<ContextIoPause> {
         let pause = std::sync::Arc::new(ContextIoPause {
@@ -289,7 +271,6 @@ impl V2ContextStore {
             Some(std::sync::Arc::clone(&pause));
         pause
     }
-
     #[cfg(test)]
     fn pause_next_read_after_open(&self) -> std::sync::Arc<ContextIoPause> {
         let pause = std::sync::Arc::new(ContextIoPause {
@@ -303,7 +284,6 @@ impl V2ContextStore {
             Some(std::sync::Arc::clone(&pause));
         pause
     }
-
     #[cfg(test)]
     fn pause_next_publication(&self) -> std::sync::Arc<ContextIoPause> {
         let pause = std::sync::Arc::new(ContextIoPause {
@@ -318,7 +298,6 @@ impl V2ContextStore {
         pause
     }
 }
-
 fn encode_frame(record: &PersistedHeightContext) -> Result<Vec<u8>, V2ContextStoreError> {
     let payload = record.encode();
     if payload.len() > MAX_CONTEXT_PAYLOAD_BYTES {
@@ -345,7 +324,6 @@ fn encode_frame(record: &PersistedHeightContext) -> Result<Vec<u8>, V2ContextSto
     frame.extend_from_slice(&payload);
     Ok(frame)
 }
-
 fn decode_frame(bytes: &[u8]) -> Result<PersistedHeightContext, V2ContextStoreError> {
     if bytes.len() > MAX_CONTEXT_FRAME_BYTES {
         return Err(V2ContextStoreError::TooLarge {
@@ -400,7 +378,6 @@ fn decode_frame(bytes: &[u8]) -> Result<PersistedHeightContext, V2ContextStoreEr
     }
     Ok(record)
 }
-
 fn compare_existing_frame(
     path: &Path,
     existing: &[u8],
@@ -420,65 +397,51 @@ fn compare_existing_frame(
         height: expected_record.context.height,
     })
 }
-
 #[derive(Debug)]
 struct StableDirectory {
     canonical_path: PathBuf,
     metadata: fs::Metadata,
 }
-
 #[derive(Debug)]
 struct StableFile {
     canonical_path: PathBuf,
     metadata: fs::Metadata,
     directory_metadata: fs::Metadata,
 }
-
 #[cfg(unix)]
 fn metadata_same_object(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(windows)]
 fn metadata_same_object(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     left.volume_serial_number() == right.volume_serial_number()
         && left.file_index() == right.file_index()
         && left.volume_serial_number().is_some()
         && left.file_index().is_some()
 }
-
 #[cfg(all(not(unix), not(windows)))]
 fn metadata_same_object(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.file_type() == right.file_type() && left.created().ok() == right.created().ok()
 }
-
 #[cfg(unix)]
 fn is_single_link(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     metadata.nlink() == 1
 }
-
 #[cfg(windows)]
 fn is_single_link(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     metadata.number_of_links() == Some(1)
 }
-
 #[cfg(all(not(unix), not(windows)))]
 fn is_single_link(_metadata: &fs::Metadata) -> bool {
     true
 }
-
 #[cfg(unix)]
 fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     metadata_same_object(left, right)
         && left.nlink() == 1
         && right.nlink() == 1
@@ -488,11 +451,9 @@ fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     metadata_same_object(left, right)
         && left.number_of_links() == Some(1)
         && right.number_of_links() == Some(1)
@@ -500,14 +461,12 @@ fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
-
 #[cfg(all(not(unix), not(windows)))]
 fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     metadata_same_object(left, right)
         && left.len() == right.len()
         && left.modified().ok() == right.modified().ok()
 }
-
 fn stable_directory(
     root: &Path,
     expected: &Path,
@@ -563,7 +522,6 @@ fn stable_directory(
         metadata: after,
     }))
 }
-
 fn stable_file_metadata(
     root: &Path,
     directory: &Path,
@@ -617,7 +575,6 @@ fn stable_file_metadata(
         directory_metadata: directory_after.metadata,
     }))
 }
-
 fn stable_read_file(
     root: &Path,
     root_identity: &fs::Metadata,
@@ -661,7 +618,6 @@ fn stable_read_file(
         ));
     }
     after_open();
-
     let expected_len =
         usize::try_from(before.metadata.len()).map_err(|_| V2ContextStoreError::TooLarge {
             actual: before.metadata.len(),
@@ -697,7 +653,6 @@ fn stable_read_file(
     }
     Ok(Some(bytes))
 }
-
 fn require_root_identity(root: &Path, expected: &fs::Metadata) -> Result<(), V2ContextStoreError> {
     let current = stable_directory(root, root)?.ok_or_else(|| {
         unsafe_path(
@@ -713,7 +668,6 @@ fn require_root_identity(root: &Path, expected: &fs::Metadata) -> Result<(), V2C
     }
     Ok(())
 }
-
 fn require_directory_identity(
     root: &Path,
     directory: &Path,
@@ -733,7 +687,6 @@ fn require_directory_identity(
     }
     Ok(())
 }
-
 fn ensure_context_directory(
     root: &Path,
     directory: &Path,
@@ -796,7 +749,6 @@ fn ensure_context_directory(
     }
     Ok((final_root.metadata, final_directory.metadata))
 }
-
 fn ensure_store_root(root: &Path) -> Result<(), V2ContextStoreError> {
     match fs::symlink_metadata(root) {
         Ok(_) => {
@@ -846,7 +798,6 @@ fn ensure_store_root(root: &Path) -> Result<(), V2ContextStoreError> {
     }
     sync_directory_stable(parent, &parent_after.metadata)
 }
-
 fn write_atomic_synced_noclobber(
     root: &Path,
     root_identity: &fs::Metadata,
@@ -981,7 +932,6 @@ fn write_atomic_synced_noclobber(
     require_directory_identity(root, directory, directory_identity)?;
     Ok(true)
 }
-
 fn sync_directory_stable(path: &Path, expected: &fs::Metadata) -> Result<(), V2ContextStoreError> {
     let directory = File::open(path).map_err(|source| io_error(path, source))?;
     let opened = directory
@@ -1006,21 +956,18 @@ fn sync_directory_stable(path: &Path, expected: &fs::Metadata) -> Result<(), V2C
     }
     Ok(())
 }
-
 fn io_error(path: &Path, source: io::Error) -> V2ContextStoreError {
     V2ContextStoreError::Io {
         path: path.to_path_buf(),
         source,
     }
 }
-
 fn unsafe_path(path: &Path, reason: &'static str) -> V2ContextStoreError {
     V2ContextStoreError::UnsafePath {
         path: path.to_path_buf(),
         reason,
     }
 }
-
 /// Fail-closed context persistence or recovery error.
 #[derive(Debug, Error)]
 pub(crate) enum V2ContextStoreError {
@@ -1091,22 +1038,17 @@ pub(crate) enum V2ContextStoreError {
         actual: wire::Height,
     },
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Barrier};
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{NetworkId, block::BlockHeader, peer::PeerId};
-
     use super::*;
-
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x93; Hash::LENGTH]),
         ))
     }
-
     fn record() -> PersistedHeightContext {
         let mut validators = (1_u8..=4)
             .map(|seed| {
@@ -1161,7 +1103,6 @@ mod tests {
             context,
         }
     }
-
     #[test]
     fn record_roundtrips_and_exact_repeat_is_idempotent() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1171,11 +1112,9 @@ mod tests {
         store.persist(&record).expect("repeat exact record");
         assert_eq!(store.load(1).expect("load record"), Some(record));
     }
-
     #[test]
     fn non_v1_frame_is_rejected() {
         const UNSUPPORTED_VERSION: u16 = 2;
-
         let root = tempfile::tempdir().expect("tempdir");
         let store = V2ContextStore::open(root.path()).expect("open store");
         let record = record();
@@ -1193,19 +1132,16 @@ mod tests {
         frame[FILE_MAGIC.len()..FILE_MAGIC.len() + std::mem::size_of::<u16>()]
             .copy_from_slice(&UNSUPPORTED_VERSION.to_le_bytes());
         fs::write(&path, frame).expect("write unsupported context frame");
-
         assert!(matches!(
             store.load(record.context().height),
             Err(V2ContextStoreError::UnsupportedVersion(UNSUPPORTED_VERSION))
         ));
     }
-
     #[test]
     fn open_creates_a_missing_store_root_as_one_direct_synced_child() {
         let parent = tempfile::tempdir().expect("tempdir");
         let root = parent.path().join("sumeragi_v2");
         let store = V2ContextStore::open(&root).expect("create direct store hierarchy");
-
         assert_eq!(store.root, root);
         assert!(
             fs::symlink_metadata(&store.root)
@@ -1218,14 +1154,12 @@ mod tests {
                 .is_dir()
         );
     }
-
     #[test]
     fn corruption_and_conflicting_height_fail_closed() {
         let root = tempfile::tempdir().expect("tempdir");
         let store = V2ContextStore::open(root.path()).expect("open store");
         let record = record();
         store.persist(&record).expect("persist record");
-
         let path = store.path(1);
         let mut bytes = fs::read(&path).expect("read frame");
         *bytes.last_mut().expect("nonempty frame") ^= 0x80;
@@ -1234,7 +1168,6 @@ mod tests {
             store.load(1),
             Err(V2ContextStoreError::HashMismatch)
         ));
-
         fs::remove_file(&path).expect("remove corrupt frame");
         store.persist(&record).expect("restore record");
         let mut conflicting = record;
@@ -1244,7 +1177,6 @@ mod tests {
             Err(V2ContextStoreError::ConflictingHeight { height: 1 })
         ));
     }
-
     #[test]
     fn noncanonical_bls_pop_lengths_are_rejected_before_publication() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1259,7 +1191,6 @@ mod tests {
             assert_eq!(store.load(1).expect("final path remains absent"), None);
         }
     }
-
     #[test]
     fn incomplete_temporary_frame_is_unacknowledged() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1272,7 +1203,6 @@ mod tests {
             .expect("replace unacknowledged write");
         assert!(store.load(1).expect("load final").is_some());
     }
-
     #[test]
     fn oversized_frame_is_rejected_before_allocation() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1282,7 +1212,6 @@ mod tests {
             .expect("create oversized frame")
             .set_len(u64::try_from(MAX_CONTEXT_FRAME_BYTES).expect("limit fits u64") + 1)
             .expect("size oversized frame sparsely");
-
         assert!(matches!(
             store.load(1),
             Err(V2ContextStoreError::TooLarge { actual, max })
@@ -1290,14 +1219,12 @@ mod tests {
                     && max == MAX_CONTEXT_FRAME_BYTES
         ));
     }
-
     #[test]
     fn trailing_and_truncated_frames_fail_closed() {
         let root = tempfile::tempdir().expect("tempdir");
         let store = V2ContextStore::open(root.path()).expect("open store");
         let path = store.path(1);
         let canonical = encode_frame(&record()).expect("encode canonical frame");
-
         let mut trailing = canonical.clone();
         trailing.push(0);
         fs::write(&path, trailing).expect("write trailing frame");
@@ -1305,14 +1232,12 @@ mod tests {
             store.load(1),
             Err(V2ContextStoreError::MalformedFrame)
         ));
-
         fs::write(&path, &canonical[..canonical.len() - 1]).expect("write truncated frame");
         assert!(matches!(
             store.load(1),
             Err(V2ContextStoreError::MalformedFrame)
         ));
     }
-
     #[test]
     fn checksum_valid_noncanonical_same_value_is_not_an_idempotent_repeat() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1334,25 +1259,21 @@ mod tests {
         frame.extend_from_slice(Hash::new(&payload).as_ref());
         frame.extend_from_slice(&payload);
         fs::write(&path, frame).expect("write checksum-valid ambiguous frame");
-
         assert!(matches!(
             store.persist(&record()),
             Err(V2ContextStoreError::Decode(_)) | Err(V2ContextStoreError::NonCanonicalFrame)
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn symlink_and_hardlink_contexts_are_rejected_without_touching_victims() {
         use std::os::unix::fs::symlink;
-
         let root = tempfile::tempdir().expect("tempdir");
         let store = V2ContextStore::open(root.path()).expect("open store");
         let path = store.path(1);
         let victim = root.path().join("victim");
         fs::write(&victim, b"do-not-touch").expect("write victim");
         symlink(&victim, &path).expect("plant final-path symlink");
-
         assert!(matches!(
             store.load(1),
             Err(V2ContextStoreError::UnsafePath { .. })
@@ -1362,7 +1283,6 @@ mod tests {
             Err(V2ContextStoreError::UnsafePath { .. })
         ));
         assert_eq!(fs::read(&victim).expect("read victim"), b"do-not-touch");
-
         fs::remove_file(&path).expect("remove symlink");
         fs::hard_link(&victim, &path).expect("plant final-path hardlink");
         assert!(matches!(
@@ -1375,19 +1295,16 @@ mod tests {
         ));
         assert_eq!(fs::read(&victim).expect("read victim"), b"do-not-touch");
     }
-
     #[cfg(unix)]
     #[test]
     fn preplanted_predictable_temporary_symlink_cannot_clobber_a_victim() {
         use std::os::unix::fs::symlink;
-
         let root = tempfile::tempdir().expect("tempdir");
         let store = V2ContextStore::open(root.path()).expect("open store");
         let victim = root.path().join("victim");
         fs::write(&victim, b"preserve-me").expect("write victim");
         let retired_predictable_temp = store.path(1).with_extension("norito.tmp");
         symlink(&victim, &retired_predictable_temp).expect("plant retired temporary symlink");
-
         store
             .persist(&record())
             .expect("publish through random create-new temporary");
@@ -1399,7 +1316,6 @@ mod tests {
                 .is_symlink()
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn file_path_swap_after_open_is_detected() {
@@ -1415,18 +1331,15 @@ mod tests {
         let pause = store.pause_next_read_after_open();
         let loader = store.clone();
         let join = std::thread::spawn(move || loader.load(1));
-
         pause.reached.wait();
         fs::rename(&path, &displaced).expect("displace opened context");
         fs::write(&path, replacement_frame).expect("swap replacement into canonical path");
         pause.resume.wait();
-
         assert!(matches!(
             join.join().expect("loader thread"),
             Err(V2ContextStoreError::UnsafePath { .. })
         ));
     }
-
     #[test]
     fn missing_context_cannot_hide_root_replacement_during_lookup() {
         let parent = tempfile::tempdir().expect("tempdir");
@@ -1436,29 +1349,24 @@ mod tests {
         let pause = store.pause_next_read_before_lookup();
         let loader = store.clone();
         let join = std::thread::spawn(move || loader.load(1));
-
         pause.reached.wait();
         fs::rename(&root, &displaced).expect("displace authenticated root");
         fs::create_dir(&root).expect("create substituted root");
         fs::create_dir(root.join("contexts")).expect("create empty substituted context directory");
         pause.resume.wait();
-
         assert!(matches!(
             join.join().expect("loader thread"),
             Err(V2ContextStoreError::UnsafePath { .. })
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn symlinked_context_directory_is_rejected() {
         use std::os::unix::fs::symlink;
-
         let root = tempfile::tempdir().expect("tempdir");
         let target = tempfile::tempdir().expect("target tempdir");
         symlink(target.path(), root.path().join("contexts"))
             .expect("plant context-directory symlink");
-
         assert!(matches!(
             V2ContextStore::open(root.path()),
             Err(V2ContextStoreError::UnsafePath { .. })
@@ -1472,7 +1380,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn replaced_direct_context_directory_is_rejected_between_operations() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1480,7 +1387,6 @@ mod tests {
         let displaced = root.path().join("contexts.displaced");
         fs::rename(&store.directory, &displaced).expect("displace authenticated directory");
         fs::create_dir(&store.directory).expect("install replacement direct directory");
-
         assert!(matches!(
             store.load(1),
             Err(V2ContextStoreError::UnsafePath { .. })
@@ -1499,17 +1405,14 @@ mod tests {
             "rejected replacement directory must receive no context or temporary"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn symlinked_store_root_is_rejected_without_touching_its_target() {
         use std::os::unix::fs::symlink;
-
         let parent = tempfile::tempdir().expect("tempdir");
         let target = tempfile::tempdir().expect("target tempdir");
         let root = parent.path().join("sumeragi_v2");
         symlink(target.path(), &root).expect("plant store-root symlink");
-
         assert!(matches!(
             V2ContextStore::open(&root),
             Err(V2ContextStoreError::UnsafePath { .. })
@@ -1523,7 +1426,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn opened_store_rejects_root_directory_replacement() {
         let parent = tempfile::tempdir().expect("tempdir");
@@ -1533,7 +1435,6 @@ mod tests {
         fs::rename(&root, &displaced).expect("displace authenticated root");
         fs::create_dir(&root).expect("create substituted root");
         fs::create_dir(root.join("contexts")).expect("create substituted context directory");
-
         assert!(matches!(
             store.load(1),
             Err(V2ContextStoreError::UnsafePath { .. })
@@ -1543,7 +1444,6 @@ mod tests {
             Err(V2ContextStoreError::UnsafePath { .. })
         ));
     }
-
     #[test]
     fn proofs_of_possession_require_exact_bls_normal_length() {
         for invalid_len in [0, BLS_NORMAL_POP_BYTES - 1, BLS_NORMAL_POP_BYTES + 1] {
@@ -1555,7 +1455,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn concurrent_same_record_writers_are_idempotent_and_leave_no_temporaries() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1587,7 +1486,6 @@ mod tests {
             "all random temporaries must be cleaned up"
         );
     }
-
     #[test]
     fn deterministic_publication_race_never_replaces_the_winner() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -1599,11 +1497,9 @@ mod tests {
         let pause = store.pause_next_publication();
         let writer = store.clone();
         let join = std::thread::spawn(move || writer.persist(&first));
-
         pause.reached.wait();
         fs::write(store.path(1), winner_frame).expect("publish competing immutable record");
         pause.resume.wait();
-
         assert!(matches!(
             join.join().expect("writer thread"),
             Err(V2ContextStoreError::ConflictingHeight { height: 1 })
@@ -1621,7 +1517,6 @@ mod tests {
             .count();
         assert_eq!(temporaries, 0, "losing random temporary must be cleaned up");
     }
-
     #[test]
     fn concurrent_conflicting_writers_publish_exactly_one_immutable_value() {
         let root = tempfile::tempdir().expect("tempdir");

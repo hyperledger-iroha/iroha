@@ -1,5 +1,4 @@
 //! Headless Mochi sandbox lifecycle commands.
-
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -9,32 +8,27 @@ use std::{
     process,
     time::Duration,
 };
-
 use mochi_core::{
     BootstrapBundle, BootstrapInputs, BootstrapWriteError, LocalMcpProbeResult, PeerState,
     ReadinessOptions, Supervisor, SupervisorSessionInfo, ToriiClient, ToriiError,
     wait_for_all_managed_peers_genesis, write_bootstrap_bundle,
 };
 use tokio::runtime::Runtime;
-
 use super::{
     CliOverrides, configured_readiness_options_for, configured_readiness_smoke_for,
     prepare_supervisor_with_overrides, resolve_workspace_root_for_cli,
 };
-
 const LOCAL_MCP_STARTUP_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 const LOCAL_MCP_STARTUP_MAX_BACKOFF: Duration = Duration::from_secs(1);
 const REHEARSAL_PEER_COUNT: usize = 4;
 const REHEARSAL_EVIDENCE_SCHEMA: u64 = 1;
 const REHEARSAL_EVIDENCE_MAX_BYTES: usize = 2_048;
 const INTERNAL_GENESIS_TEST_OVERRIDE: &str = "MOCHI_TEST_USE_INTERNAL_GENESIS";
-
 #[derive(Clone, Copy)]
 struct ReadinessRequirements {
     all_peers_genesis: bool,
     smoke: bool,
 }
-
 impl ReadinessRequirements {
     const SERVE_WITH_SMOKE: Self = Self {
         all_peers_genesis: true,
@@ -46,12 +40,10 @@ impl ReadinessRequirements {
     };
     const REHEARSAL: Self = Self::SERVE_WITH_SMOKE;
 }
-
 struct ReadinessProof {
     session: SupervisorSessionInfo,
     mcp_probe: LocalMcpProbeResult,
 }
-
 fn write_session_metadata_file(
     session_path: &Path,
     workspace_root: &Path,
@@ -100,7 +92,6 @@ fn write_session_metadata_file(
         )
     })
 }
-
 fn bootstrap_inputs_from_session(session: &SupervisorSessionInfo) -> BootstrapInputs {
     BootstrapInputs {
         api_base: session.api_base.clone(),
@@ -111,7 +102,6 @@ fn bootstrap_inputs_from_session(session: &SupervisorSessionInfo) -> BootstrapIn
         private_key: session.private_key.clone(),
     }
 }
-
 fn write_bootstrap_files_for_session(
     workspace_root: &Path,
     session: &SupervisorSessionInfo,
@@ -119,7 +109,6 @@ fn write_bootstrap_files_for_session(
     let bundle = BootstrapBundle::render(&bootstrap_inputs_from_session(session));
     write_bootstrap_bundle(workspace_root, &bundle, true)
 }
-
 /// Run the long-lived headless sandbox server.
 pub(super) fn run_serve(overrides: CliOverrides) -> Result<(), String> {
     let (supervisor, supervisor_error, bundle_config) =
@@ -129,12 +118,10 @@ pub(super) fn run_serve(overrides: CliOverrides) -> Result<(), String> {
             .map(|err| format!("failed during sandbox preparation: {err}"))
             .unwrap_or_else(|| "failed during sandbox preparation".to_owned())
     })?;
-
     let workspace_root =
         resolve_workspace_root_for_cli(&overrides, bundle_config.as_ref(), Some(&supervisor));
     let readiness_smoke = configured_readiness_smoke_for(bundle_config.as_ref(), &overrides);
     let readiness_options = configured_readiness_options_for(&overrides);
-
     supervisor
         .start_all()
         .map_err(|err| format!("failed while starting peers: {err}"))?;
@@ -150,10 +137,8 @@ pub(super) fn run_serve(overrides: CliOverrides) -> Result<(), String> {
         requirements,
         "sandbox startup",
     ))?;
-
     write_bootstrap_files_for_session(&workspace_root, &proof.session)
         .map_err(|err| format!("failed while writing workspace bootstrap files: {err}"))?;
-
     let session_path = proof.session.sandbox_root.join("session.json");
     write_session_metadata_file(
         &session_path,
@@ -162,18 +147,15 @@ pub(super) fn run_serve(overrides: CliOverrides) -> Result<(), String> {
         readiness_smoke,
         &proof.mcp_probe,
     )?;
-
     println!("MOCHI sandbox ready");
     println!("  workspace: {}", workspace_root.display());
     println!("  sandbox: {}", proof.session.sandbox_root.display());
     println!("  torii: {}", proof.session.torii_url);
     println!("  mcp: {}", proof.session.mcp_url);
     println!("  session: {}", session_path.display());
-
     runtime.block_on(wait_for_shutdown_signal());
     Ok(())
 }
-
 /// Run a bounded, one-shot rehearsal of live four-peer wipe and re-genesis.
 pub(super) fn run_wipe_rehearsal(overrides: CliOverrides) -> Result<(), String> {
     require_disposable_data_root(&overrides)?;
@@ -181,7 +163,6 @@ pub(super) fn run_wipe_rehearsal(overrides: CliOverrides) -> Result<(), String> 
     if overrides.readiness_smoke == Some(false) {
         return Err("wipe rehearsal requires readiness smoke; remove `--disable-smoke`".to_owned());
     }
-
     let (supervisor, supervisor_error, bundle_config) =
         prepare_supervisor_with_overrides(&overrides);
     let mut supervisor = supervisor.ok_or_else(|| {
@@ -194,12 +175,10 @@ pub(super) fn run_wipe_rehearsal(overrides: CliOverrides) -> Result<(), String> 
             "wipe rehearsal requires readiness smoke; enable it in the selected config".to_owned(),
         );
     }
-
     let expected_aliases = peer_aliases(&supervisor);
     validate_exact_four_peer_topology(&expected_aliases)?;
     let readiness_options = configured_readiness_options_for(&overrides);
     let runtime = Runtime::new().map_err(|err| format!("failed to create runtime: {err}"))?;
-
     supervisor
         .start_all()
         .map_err(|err| format!("failed while starting rehearsal peers: {err}"))?;
@@ -213,7 +192,6 @@ pub(super) fn run_wipe_rehearsal(overrides: CliOverrides) -> Result<(), String> 
     let running_before = running_aliases(&supervisor);
     validate_running_aliases("initial generation", &expected_aliases, &running_before)?;
     let old_generation_id = supervisor.generation_id().to_owned();
-
     supervisor
         .wipe_and_regenerate()
         .map_err(|err| format!("wipe and re-genesis failed: {err}"))?;
@@ -227,7 +205,6 @@ pub(super) fn run_wipe_rehearsal(overrides: CliOverrides) -> Result<(), String> 
         &running_before,
         &running_after_restart,
     )?;
-
     let regenerated_proof = runtime.block_on(prove_readiness(
         &supervisor,
         readiness_options,
@@ -243,7 +220,6 @@ pub(super) fn run_wipe_rehearsal(overrides: CliOverrides) -> Result<(), String> 
         &running_before,
         &running_after_readiness,
     )?;
-
     let evidence = encode_rehearsal_evidence(
         &old_generation_id,
         &new_generation_id,
@@ -257,7 +233,6 @@ pub(super) fn run_wipe_rehearsal(overrides: CliOverrides) -> Result<(), String> 
     println!("{evidence}");
     Ok(())
 }
-
 async fn prove_readiness(
     supervisor: &Supervisor,
     readiness_options: ReadinessOptions,
@@ -270,7 +245,6 @@ async fn prove_readiness(
     let client = supervisor
         .torii_client(&session.peer_alias)
         .ok_or_else(|| format!("failed to create a Torii client for {stage}"))?;
-
     if requirements.all_peers_genesis {
         let managed_clients = managed_peer_clients(supervisor, stage)?;
         wait_for_all_managed_peers_genesis(managed_clients, readiness_options)
@@ -303,13 +277,11 @@ async fn prove_readiness(
                 )
             })?;
     }
-
     let mcp_probe = validate_local_mcp_for_startup(&client, readiness_options.timeout)
         .await
         .map_err(|err| format!("failed while validating local MCP in {stage}: {err}"))?;
     Ok(ReadinessProof { session, mcp_probe })
 }
-
 fn managed_peer_clients(
     supervisor: &Supervisor,
     stage: &str,
@@ -330,7 +302,6 @@ fn managed_peer_clients(
         })
         .collect()
 }
-
 fn peer_aliases(supervisor: &Supervisor) -> Vec<String> {
     supervisor
         .peers()
@@ -338,7 +309,6 @@ fn peer_aliases(supervisor: &Supervisor) -> Vec<String> {
         .map(|peer| peer.alias().to_owned())
         .collect()
 }
-
 fn running_aliases(supervisor: &Supervisor) -> Vec<String> {
     supervisor
         .peers()
@@ -347,7 +317,6 @@ fn running_aliases(supervisor: &Supervisor) -> Vec<String> {
         .map(|peer| peer.alias().to_owned())
         .collect()
 }
-
 fn validate_exact_four_peer_topology(expected_aliases: &[String]) -> Result<(), String> {
     let aliases = alias_set("rehearsal topology", expected_aliases)?;
     if aliases.len() != REHEARSAL_PEER_COUNT {
@@ -358,7 +327,6 @@ fn validate_exact_four_peer_topology(expected_aliases: &[String]) -> Result<(), 
     }
     Ok(())
 }
-
 fn validate_running_aliases(
     stage: &str,
     expected_aliases: &[String],
@@ -373,7 +341,6 @@ fn validate_running_aliases(
     }
     Ok(())
 }
-
 fn validate_transition(
     old_generation_id: &str,
     new_generation_id: &str,
@@ -390,7 +357,6 @@ fn validate_transition(
     validate_running_aliases("initial generation", expected_aliases, running_before)?;
     validate_running_aliases("regenerated generation", expected_aliases, running_after)
 }
-
 fn alias_set(label: &str, aliases: &[String]) -> Result<BTreeSet<String>, String> {
     let set = aliases.iter().cloned().collect::<BTreeSet<_>>();
     if set.len() != aliases.len() {
@@ -398,7 +364,6 @@ fn alias_set(label: &str, aliases: &[String]) -> Result<BTreeSet<String>, String
     }
     Ok(set)
 }
-
 fn encode_rehearsal_evidence(
     old_generation_id: &str,
     new_generation_id: &str,
@@ -441,7 +406,6 @@ fn encode_rehearsal_evidence(
     }
     Ok(encoded)
 }
-
 fn require_disposable_data_root(overrides: &CliOverrides) -> Result<PathBuf, String> {
     let root = overrides.data_root.clone().ok_or_else(|| {
         "wipe rehearsal requires an explicit fresh `--data-root <path>`".to_owned()
@@ -487,7 +451,6 @@ fn require_disposable_data_root(overrides: &CliOverrides) -> Result<PathBuf, Str
     }
     Ok(root)
 }
-
 fn reject_test_genesis_override() -> Result<(), String> {
     if env::var_os(INTERNAL_GENESIS_TEST_OVERRIDE).is_some() {
         return Err(format!(
@@ -496,7 +459,6 @@ fn reject_test_genesis_override() -> Result<(), String> {
     }
     Ok(())
 }
-
 async fn validate_local_mcp_for_startup(
     client: &ToriiClient,
     readiness_timeout: Duration,
@@ -509,7 +471,6 @@ async fn validate_local_mcp_for_startup(
     )
     .await
 }
-
 async fn retry_local_mcp_rate_limit<F, Fut>(
     mut probe: F,
     readiness_timeout: Duration,
@@ -534,7 +495,6 @@ where
                 if error.retry_after().is_none() {
                     backoff = backoff.saturating_mul(2).min(max_backoff);
                 }
-
                 let now = tokio::time::Instant::now();
                 let Some(remaining) = deadline.checked_duration_since(now) else {
                     return Err(local_mcp_readiness_timeout(readiness_timeout));
@@ -554,20 +514,17 @@ where
         }
     }
 }
-
 fn local_mcp_retry_delay(error: &ToriiError, fallback: Duration) -> Option<Duration> {
     if !local_mcp_error_is_rate_limited(error) {
         return None;
     }
     Some(error.retry_after().unwrap_or(fallback))
 }
-
 fn local_mcp_readiness_timeout(readiness_timeout: Duration) -> ToriiError {
     ToriiError::Timeout {
         context: format!("local MCP readiness after {readiness_timeout:?}"),
     }
 }
-
 fn local_mcp_error_is_rate_limited(error: &ToriiError) -> bool {
     matches!(error, ToriiError::RateLimited { .. })
         || matches!(
@@ -575,7 +532,6 @@ fn local_mcp_error_is_rate_limited(error: &ToriiError) -> bool {
             ToriiError::UnexpectedStatus { status, .. } if status.as_u16() == 429
         )
 }
-
 async fn wait_for_shutdown_signal() {
     #[cfg(unix)]
     {
@@ -631,24 +587,19 @@ async fn wait_for_shutdown_signal() {
         let _ = tokio::signal::ctrl_c().await;
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-
     use norito::json::Value;
-
     use super::*;
-
     fn aliases() -> Vec<String> {
         (0..REHEARSAL_PEER_COUNT)
             .map(|index| format!("peer{index}"))
             .collect()
     }
-
     fn local_mcp_probe_fixture() -> LocalMcpProbeResult {
         LocalMcpProbeResult {
             protocol_version: "2025-06-18".to_owned(),
@@ -657,11 +608,9 @@ mod tests {
             tool_names: vec!["iroha.health".to_owned()],
         }
     }
-
     fn local_mcp_rate_limit_error(retry_after: Option<Duration>) -> ToriiError {
         ToriiError::RateLimited { retry_after }
     }
-
     fn session_fixture(root: &Path) -> SupervisorSessionInfo {
         let sandbox_root = root.join(".mochi/sandbox/four-peer-bft");
         SupervisorSessionInfo {
@@ -681,13 +630,11 @@ mod tests {
             onboarding_token_file: sandbox_root.join("runtime/onboarding.token"),
         }
     }
-
     #[test]
     fn bootstrap_inputs_preserve_the_session_contract() {
         let temp = tempfile::tempdir().expect("tempdir");
         let session = session_fixture(temp.path());
         let inputs = bootstrap_inputs_from_session(&session);
-
         assert_eq!(inputs.api_base, session.api_base);
         assert_eq!(inputs.torii_url, session.torii_url);
         assert_eq!(inputs.mcp_url.as_deref(), Some(session.mcp_url.as_str()));
@@ -698,14 +645,12 @@ mod tests {
             session.private_key.as_deref()
         );
     }
-
     #[test]
     fn bootstrap_writer_emits_all_local_connection_artifacts() {
         let temp = tempfile::tempdir().expect("tempdir");
         let session = session_fixture(temp.path());
         let written = write_bootstrap_files_for_session(temp.path(), &session)
             .expect("write bootstrap files");
-
         assert_eq!(written.len(), 4);
         let env_local =
             fs::read_to_string(temp.path().join(".env.local")).expect("read generated env file");
@@ -718,7 +663,6 @@ mod tests {
             assert!(temp.path().join(relative).is_file(), "missing {relative}");
         }
     }
-
     #[test]
     fn session_metadata_binds_generation_without_exposing_onboarding_secrets() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -732,7 +676,6 @@ mod tests {
             &local_mcp_probe_fixture(),
         )
         .expect("write session metadata");
-
         let payload: Value = norito::json::from_slice(
             &fs::read(&session_path).expect("read generated session metadata"),
         )
@@ -768,19 +711,16 @@ mod tests {
             assert!(!payload.contains_key(forbidden));
         }
     }
-
     #[test]
     fn transition_requires_new_generation_and_exact_running_set() {
         let peers = aliases();
         validate_transition("generation-a", "generation-b", &peers, &peers, &peers)
             .expect("exact transition");
-
         let same_generation =
             validate_transition("generation-a", "generation-a", &peers, &peers, &peers)
                 .expect_err("same generation must fail");
         assert!(same_generation.contains("did not select a new generation"));
     }
-
     #[test]
     fn transition_rejects_missing_or_duplicate_running_aliases() {
         let peers = aliases();
@@ -788,14 +728,12 @@ mod tests {
         let error = validate_transition("generation-a", "generation-b", &peers, &peers, &missing)
             .expect_err("missing peer must fail");
         assert!(error.contains("running aliases differ"));
-
         let mut duplicate = peers.clone();
         duplicate[3] = duplicate[2].clone();
         let error = validate_transition("generation-a", "generation-b", &peers, &peers, &duplicate)
             .expect_err("duplicate peer must fail");
         assert!(error.contains("duplicate peer aliases"));
     }
-
     #[test]
     fn transition_rejects_non_four_peer_topology() {
         let peers = aliases()[..3].to_vec();
@@ -803,7 +741,6 @@ mod tests {
             .expect_err("three peers must fail");
         assert!(error.contains("requires exactly 4 peers"));
     }
-
     #[test]
     fn evidence_is_bounded_and_contains_both_proofs() {
         let encoded = encode_rehearsal_evidence(
@@ -825,7 +762,6 @@ mod tests {
         );
         assert_ne!(value["old_generation_id"], value["new_generation_id"]);
     }
-
     #[test]
     fn disposable_root_must_be_explicit_and_empty() {
         let missing = CliOverrides::default();
@@ -834,7 +770,6 @@ mod tests {
                 .expect_err("implicit root must fail")
                 .contains("explicit fresh")
         );
-
         let temp = tempfile::tempdir().expect("tempdir");
         let empty = temp.path().join("empty");
         fs::create_dir(&empty).expect("create empty root");
@@ -844,7 +779,6 @@ mod tests {
             require_disposable_data_root(&overrides).expect("empty root accepted"),
             empty
         );
-
         fs::write(empty.join("existing"), b"state").expect("write existing state");
         assert!(
             require_disposable_data_root(&overrides)
@@ -852,12 +786,10 @@ mod tests {
                 .contains("is not empty")
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn disposable_root_rejects_symlink() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let target = temp.path().join("target");
         let link = temp.path().join("link");
@@ -871,7 +803,6 @@ mod tests {
                 .contains("non-symlink")
         );
     }
-
     #[test]
     fn local_mcp_startup_retry_recovers_from_transient_429() {
         let runtime = Runtime::new().expect("runtime");
@@ -892,14 +823,12 @@ mod tests {
             Duration::ZERO,
             Duration::ZERO,
         ));
-
         assert_eq!(
             result.expect("third attempt succeeds"),
             local_mcp_probe_fixture()
         );
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
     }
-
     #[test]
     fn local_mcp_startup_retry_never_retries_protocol_failure() {
         let runtime = Runtime::new().expect("runtime");
@@ -916,11 +845,9 @@ mod tests {
                 Duration::ZERO,
             ))
             .expect_err("protocol failure must be returned immediately");
-
         assert!(matches!(error, ToriiError::Decode(_)));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn local_mcp_startup_retry_is_bounded() {
         let runtime = Runtime::new().expect("runtime");
@@ -937,7 +864,6 @@ mod tests {
                 Duration::from_millis(2),
             ))
             .expect_err("persistent throttling must reach the readiness deadline");
-
         assert!(matches!(
             error,
             ToriiError::Timeout { context } if context.contains("local MCP readiness")
@@ -948,7 +874,6 @@ mod tests {
             "a Retry-After beyond the remaining deadline cannot trigger another probe"
         );
     }
-
     #[test]
     fn local_mcp_startup_retry_honors_server_retry_after() {
         let retry_after = Duration::from_secs(7);

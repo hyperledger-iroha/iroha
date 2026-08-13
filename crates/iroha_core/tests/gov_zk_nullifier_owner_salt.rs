@@ -3,9 +3,7 @@
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #![allow(clippy::too_many_lines, clippy::collapsible_match)]
-
 mod zk_testkit;
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -19,11 +17,9 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
-
 fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
-
 fn proposal_contract_address(
     owner: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::smart_contract::ContractAddress {
@@ -37,11 +33,9 @@ fn proposal_contract_address(
     )
     .expect("proposal contract address")
 }
-
 #[test]
 fn zk_ballot_nullifier_commit_duplicate_rejected() {
     use core::{num::NonZeroU64, time::Duration};
-
     use iroha_data_model::{
         events::data::governance::GovernanceEvent,
         isi::governance::{CastZkBallot, ProposeDeployContract, VotingMode},
@@ -55,7 +49,6 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     let (alice_id, _alice_kp) = iroha_test_samples::gen_account_in("wonderland");
     let (escrow_id, _escrow_kp) = iroha_test_samples::gen_account_in("wonderland");
     let (receiver_id, _receiver_kp) = iroha_test_samples::gen_account_in("wonderland");
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId =
@@ -119,7 +112,6 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     cfg.conviction_step_blocks = 1;
     cfg.slash_double_vote_bps = 2_500;
     state.set_gov(cfg);
-
     // Create a block at H=1 and open a Zk referendum via ProposeDeployContract
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).unwrap(),
@@ -174,7 +166,6 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         .iter()
         .next()
         .map_or_else(|| "rid-zk".to_string(), |(k, _)| k.clone());
-
     let create = iroha_data_model::isi::zk::CreateElection {
         election_id: rid.clone(),
         options: 1,
@@ -199,7 +190,6 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
             .expect("create election");
         stx.apply();
     }
-
     let proof_b64 = bundle.proof_b64();
     let root_hint = hex::encode(bundle.root_bytes());
     let public = norito::json::object([
@@ -233,7 +223,6 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
             .expect("first ballot ok");
         stx1.apply();
     }
-
     // Re-submit with the same commit → duplicate nullifier rejection
     let instr2 = CastZkBallot {
         election_id: rid.clone(),
@@ -287,7 +276,6 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         .0;
     assert_eq!(escrow_balance, Quantity::from(100_u64));
     assert_eq!(receiver_balance, Quantity::zero());
-
     // The same commitment is distinct in another election because the election id is part of the
     // nullifier domain separation.
     let rid_alt = format!("{rid}-alt");
@@ -324,7 +312,6 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         );
         stx_alt.apply();
     }
-
     let public2 = norito::json::object([
         (
             "owner",
@@ -356,7 +343,6 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
             .expect("same commitment in second election must be accepted");
         stx3.apply();
     }
-
     // Both successful elections emit acceptance. The rejected duplicate event was observed only
     // inside its rolled-back transaction above.
     let events = sblock.world.take_external_events();

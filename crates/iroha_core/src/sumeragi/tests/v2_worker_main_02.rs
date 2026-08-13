@@ -17,7 +17,6 @@ fn proposal_signing_restores_chunks_only_when_outbound_payload_is_absent() {
         proposal.round.view,
         Generation::new(service.context.height),
     );
-
     service
         .enqueue_consensus_sign(ConsensusSignTask::for_test(
             9,
@@ -32,7 +31,6 @@ fn proposal_signing_restores_chunks_only_when_outbound_payload_is_absent() {
             ..
         })
     ));
-
     service
         .register_outbound_payload(tag, payload)
         .expect("register live proposal payload");
@@ -50,12 +48,10 @@ fn proposal_signing_restores_chunks_only_when_outbound_payload_is_absent() {
             ..
         })
     ));
-
     // No worker owns this synthetic channel; remove it before service Drop
     // attempts the production shutdown handshake.
     drop(service.io.take());
 }
-
 #[test]
 fn completion_sources_alternate_under_simultaneous_bursts() {
     let (mut service, _) = fixture();
@@ -74,7 +70,6 @@ fn completion_sources_alternate_under_simultaneous_bursts() {
     completion_tx
         .try_send(V2IoCompletion::AuxiliaryNoop)
         .expect("second I/O completion");
-
     let payload = b"completion fairness body";
     let subject = wire::BlockSubject {
         parent_block_hash: None,
@@ -106,7 +101,6 @@ fn completion_sources_alternate_under_simultaneous_bursts() {
                 body: payload.to_vec().into(),
             });
     }
-
     assert!(matches!(
         service.take_next_completion(true),
         IoCompletionTake {
@@ -158,10 +152,8 @@ fn completion_sources_alternate_under_simultaneous_bursts() {
             retained_runtime: false
         }
     ));
-
     drop(service.io.take());
 }
-
 #[test]
 fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_io() {
     let (mut service, _) = fixture();
@@ -187,7 +179,6 @@ fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission,
     });
-
     let payload = b"older local reconstruction";
     let subject = wire::BlockSubject {
         parent_block_hash: None,
@@ -218,7 +209,6 @@ fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_
             manifest,
             body: payload.to_vec().into(),
         });
-
     let first_ticket_ordinal = 50;
     assert_eq!(
         service
@@ -259,7 +249,6 @@ fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_
         1,
         "the later I/O completion must remain outside runtime"
     );
-
     for fresh_ticket_ordinal in first_ticket_ordinal..=later_ordinal {
         assert!(
             service
@@ -287,7 +276,6 @@ fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_
         1,
         "retransmission churn cannot let an equal-or-later completion overtake its ticket"
     );
-
     assert_eq!(
         service
             .certified_serve_predecessor_completion_evidence(true, later_ordinal + 1)
@@ -306,7 +294,6 @@ fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_
         1,
         "completion evidence must not consume the projected I/O result"
     );
-
     assert!(matches!(
         service.take_exact_serve_predecessor_completion(true, later_ordinal + 1),
         IoCompletionTake {
@@ -325,7 +312,6 @@ fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_
         .acknowledge_completion_at(0);
     drop(service.io.take());
 }
-
 #[test]
 fn timeout_recovery_completion_prefix_includes_cut_and_excludes_successor() {
     let (mut service, _) = fixture();
@@ -357,7 +343,6 @@ fn timeout_recovery_completion_prefix_includes_cut_and_excludes_successor() {
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission,
     });
-
     assert!(matches!(
         service.take_timeout_recovery_prefix_completion(true, timeout_ordinal),
         IoCompletionTake {
@@ -409,7 +394,6 @@ fn timeout_recovery_completion_prefix_includes_cut_and_excludes_successor() {
         .acknowledge_completion_at(0);
     drop(service.io.take());
 }
-
 #[test]
 fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -451,7 +435,6 @@ fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
             .expect("reserve adversarial post-ticket lifecycle ordinal"),
         6
     );
-
     let (completion_tx, completion_rx) = mpsc::sync_channel(2);
     let older_io_work_id = EffectWorkId::for_test(1);
     try_send_tracked_completion_with_lifecycle_ordinal(
@@ -484,7 +467,6 @@ fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission,
     });
-
     let payload = b"same-rank replacement source";
     let subject = wire::BlockSubject {
         parent_block_hash: None,
@@ -515,7 +497,6 @@ fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
             manifest,
             body: payload.to_vec().into(),
         });
-
     assert!(
         service
             .claim_certified_serve_runtime_episode(barrier)
@@ -543,7 +524,6 @@ fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
     service
         .finish_certified_serve_runtime_episode_turn(barrier, true)
         .expect("remaining same-rank local owner reopens the episode");
-
     assert!(
         service
             .claim_certified_serve_runtime_episode(barrier)
@@ -593,14 +573,12 @@ fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
             retained_runtime: false,
         }
     ));
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire repeated-claim gate");
     drop(service.io.take());
 }
-
 #[test]
 fn completed_exact_serve_episode_reopens_once_for_new_runtime_witness() {
     let (service, keys) = fixture_with_block_payload();
@@ -635,7 +613,6 @@ fn completed_exact_serve_episode_reopens_once_for_new_runtime_witness() {
         .expect("inspect predecessor-witness barrier")
         .expect("admitted exact request owns a barrier");
     assert_eq!(barrier.scheduler_ordinal(), 3);
-
     let first = ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 1, 1);
     assert!(
         command_tx
@@ -660,7 +637,6 @@ fn completed_exact_serve_episode_reopens_once_for_new_runtime_witness() {
             .claim_serve_runtime_episode(barrier)
             .expect("same witness cannot reopen a completed turn")
     );
-
     let conflicting =
         ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 1);
     assert!(
@@ -676,7 +652,6 @@ fn completed_exact_serve_episode_reopens_once_for_new_runtime_witness() {
             .is_err(),
         "the consumer cannot skip a predecessor episode ordinal"
     );
-
     let replenished =
         ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 2);
     assert!(
@@ -703,7 +678,6 @@ fn completed_exact_serve_episode_reopens_once_for_new_runtime_witness() {
             .is_err(),
         "a consumed predecessor episode cannot regress"
     );
-
     let (admission, committed) = drain_and_commit_gated_serve(
         &ingress,
         &command_tx,
@@ -721,13 +695,11 @@ fn completed_exact_serve_episode_reopens_once_for_new_runtime_witness() {
         .expect("consume the post-Serve producer handoff")
         .expect("final target retirement owes one producer episode");
     drop(producer_episode);
-
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
         .expect("retire predecessor-witness gate");
 }
-
 #[test]
 fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission() {
     let (service, keys) = fixture_with_block_payload();
@@ -780,7 +752,6 @@ fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
             .expect("inspect the full frozen prefix"),
         "the runner must wait instead of dispatching a retained effect into a full queue"
     );
-
     let tag = EventTag::new(
         service.context.height,
         proposal.round.view,
@@ -812,7 +783,6 @@ fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
         ),
         Err(V2IoTrySendError::Full(_))
     ));
-
     assert!(matches!(
         command_rx.try_recv(),
         Ok(V2IoCommand::LoadCandidate {
@@ -864,7 +834,6 @@ fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
     ));
     command_rx.complete_work(EffectWorkId::for_test(1));
     command_tx.acknowledge_completion(EffectWorkId::for_test(1));
-
     let _prepared = command_tx
         .prepare_reserved_serve(
             CertifiedServeOwnerKey::Roster(requester.clone()),
@@ -923,7 +892,6 @@ fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
             .claim_serve_runtime_episode(barrier)
             .expect("sealed causal ownership cannot be resurrected")
     );
-
     let (admission, committed) = drain_and_commit_gated_serve(
         &ingress,
         &command_tx,
@@ -940,7 +908,6 @@ fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
         .unbind_certified_serve_gate(&gate)
         .expect("retire the full Control-prefix fixture gate");
 }
-
 #[test]
 fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
     let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
@@ -971,7 +938,6 @@ fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission,
     };
-
     assert!(
         !io.record_completion_service_attempt(1),
         "a free runtime slot must not accrue completion service debt"
@@ -991,7 +957,6 @@ fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
         );
         assert_eq!(snapshot.max_service_debt, expected_debt);
     }
-
     assert!(matches!(
         io.try_recv_completion_unacknowledged(),
         Ok(V2IoCompletion::Signature { work_id, .. })
@@ -1004,7 +969,6 @@ fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
     assert_eq!(drained.oldest_age, None);
     assert_eq!(drained.max_service_debt, 0);
 }
-
 #[test]
 fn production_drain_publishes_worker_completion_behind_full_runtime_fifo() {
     let (mut service, keys) = fixture();
@@ -1019,7 +983,6 @@ fn production_drain_publishes_worker_completion_behind_full_runtime_fifo() {
     )
     .expect("construct saturated effect executor");
     assert_eq!(executor.remaining_completion_capacity(), 0);
-
     let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
     let channel_capacity = admission.capacity();
     let (command_tx, command_rx) = v2_io_command_channel(
@@ -1097,7 +1060,6 @@ fn production_drain_publishes_worker_completion_behind_full_runtime_fifo() {
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission,
     });
-
     assert_eq!(
         service
             .drain_completions(&mut executor)
@@ -1146,7 +1108,6 @@ fn production_drain_publishes_worker_completion_behind_full_runtime_fifo() {
         Some(V2IoWorkState::CompletionPending),
         "the later runtime result must not be popped or acknowledged"
     );
-
     assert_eq!(
         service
             .drain_completions(&mut executor)
@@ -1197,7 +1158,6 @@ fn production_drain_publishes_worker_completion_behind_full_runtime_fifo() {
     assert_eq!(drained.max_service_debt, 0);
     drop(service.io.take());
 }
-
 #[test]
 fn successful_auxiliary_drain_republishes_cleared_completion_ownership() {
     let (mut service, _) = fixture();
@@ -1229,7 +1189,6 @@ fn successful_auxiliary_drain_republishes_cleared_completion_ownership() {
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission,
     });
-
     assert!(service.last_status.is_none());
     assert_eq!(
         service
@@ -1246,7 +1205,6 @@ fn successful_auxiliary_drain_republishes_cleared_completion_ownership() {
     assert_eq!(published.effect_completion_queue.max_service_debt, 0);
     drop(service.io.take());
 }
-
 #[test]
 fn auxiliary_completion_drain_is_batch_bounded() {
     let (mut service, _) = fixture();
@@ -1282,7 +1240,6 @@ fn auxiliary_completion_drain_is_batch_bounded() {
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission,
     });
-
     assert_eq!(
         service
             .drain_completions(&mut executor)
@@ -1315,7 +1272,6 @@ fn auxiliary_completion_drain_is_batch_bounded() {
     );
     drop(service.io.take());
 }
-
 #[test]
 fn cancelling_fetch_consumes_queued_reconstruction_owner() {
     let (mut service, keys) = fixture();
@@ -1334,17 +1290,14 @@ fn cancelling_fetch_consumes_queued_reconstruction_owner() {
             manifest: payload.manifest().clone(),
             body: canonical_wire.into(),
         });
-
     service
         .cancel_body_fetch(&task)
         .expect("queued reconstruction owns the cancelled fetch");
-
     assert!(service.fetches.is_empty());
     assert!(service.fetch_by_manifest.is_empty());
     assert!(service.local_completions.is_empty());
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner() {
     let (mut service, keys) = fixture();
@@ -1379,7 +1332,6 @@ fn fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner() {
         Some(&task.id())
     );
     assert!(!service.output_guard.restart_required());
-
     let (mut service, keys) = fixture();
     allow_fixture_block_payload(&mut service.context);
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
@@ -1420,7 +1372,6 @@ fn fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner() {
     ));
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn invalid_fetch_consumer_rebind_fails_closed_without_consuming_owner() {
     let (mut service, keys) = fixture();
@@ -1439,16 +1390,13 @@ fn invalid_fetch_consumer_rebind_fails_closed_without_consuming_owner() {
             manifest: payload.manifest().clone(),
             body: canonical_wire.into(),
         });
-
     let error = service
         .rebind_body_fetch(&task, task.clone())
         .expect_err("same-view consumer rebind must fail closed");
-
     assert!(error.contains("invalid consumer rebind"));
     assert_eq!(service.local_completions.len(), 1);
     assert!(service.output_guard.restart_required());
 }
-
 #[test]
 fn retransmitting_fetch_with_queued_reconstruction_is_idempotent() {
     let (mut service, keys) = fixture();
@@ -1467,17 +1415,14 @@ fn retransmitting_fetch_with_queued_reconstruction_is_idempotent() {
             manifest: payload.manifest().clone(),
             body: canonical_wire.into(),
         });
-
     service
         .enqueue_body_fetch(task)
         .expect("queued reconstruction makes retransmission idempotent");
-
     assert!(service.fetches.is_empty());
     assert!(service.fetch_by_manifest.is_empty());
     assert_eq!(service.local_completions.len(), 1);
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn retransmitting_fetch_with_conflicting_queued_manifest_fails_closed() {
     let (mut service, keys) = fixture();
@@ -1501,18 +1446,15 @@ fn retransmitting_fetch_with_conflicting_queued_manifest_fails_closed() {
             manifest: conflicting_manifest,
             body: canonical_wire.into(),
         });
-
     let error = service
         .enqueue_body_fetch(task)
         .expect_err("conflicting queued result must fail closed");
-
     assert!(error.contains("inconsistent manifest ownership"));
     assert!(service.fetches.is_empty());
     assert!(service.fetch_by_manifest.is_empty());
     assert_eq!(service.local_completions.len(), 1);
     assert!(service.output_guard.restart_required());
 }
-
 #[test]
 fn cancelling_fetch_consumes_live_session_and_manifest_owner() {
     let (mut service, keys) = fixture();
@@ -1528,17 +1470,14 @@ fn cancelling_fetch_consumes_live_session_and_manifest_owner() {
     service
         .enqueue_body_fetch(task.clone())
         .expect("open exact live reconstruction session");
-
     service
         .cancel_body_fetch(&task)
         .expect("live reconstruction session owns the cancelled fetch");
-
     assert!(service.fetches.is_empty());
     assert!(service.fetch_by_manifest.is_empty());
     assert!(service.local_completions.is_empty());
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
     let (mut service, keys) = fixture();
@@ -1589,7 +1528,6 @@ fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
     let authenticated =
         authenticate_payload_chunk(&service.context, &invalid_manifest, chunk, &sender)
             .expect("authenticate chunk committed by invalid manifest");
-
     assert_eq!(
         service
             .accept_authenticated_chunk(&task, authenticated)
@@ -1603,7 +1541,6 @@ fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
     );
     assert!(service.local_completions.is_empty());
     assert!(!service.output_guard.restart_required());
-
     service
         .complete_body_reconstruction_fetch(&task)
         .expect("the reducer retires the exact rejected reconstruction owner");
@@ -1611,7 +1548,6 @@ fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
     assert!(service.fetch_by_manifest.is_empty());
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn cancelling_unowned_fetch_fails_closed() {
     let (mut service, keys) = fixture();
@@ -1623,15 +1559,12 @@ fn cancelling_unowned_fetch_fails_closed() {
         Generation::new(service.context.height),
     );
     let task = BodyFetchTask::ordinary_for_test(43, tag, payload.manifest().clone());
-
     let error = service
         .cancel_body_fetch(&task)
         .expect_err("missing service ownership must fail closed");
-
     assert!(error.contains("has no service owner"));
     assert!(service.output_guard.restart_required());
 }
-
 #[test]
 fn cancelling_fetch_with_overlapping_owners_fails_closed() {
     let (mut service, keys) = fixture();
@@ -1656,11 +1589,9 @@ fn cancelling_fetch_with_overlapping_owners_fails_closed() {
             manifest: payload.manifest().clone(),
             body: canonical_wire.into(),
         });
-
     let error = service
         .cancel_body_fetch(&task)
         .expect_err("overlapping service ownership must fail closed");
-
     assert!(error.contains("has conflicting service owners"));
     assert!(service.fetches.contains_key(&work_id));
     assert_eq!(
@@ -1670,7 +1601,6 @@ fn cancelling_fetch_with_overlapping_owners_fails_closed() {
     assert_eq!(service.local_completions.len(), 1);
     assert!(service.output_guard.restart_required());
 }
-
 #[test]
 fn service_monotonically_upgrades_body_fetch_authority_in_both_orders() {
     let (mut service, keys) = fixture();
@@ -1706,7 +1636,6 @@ fn service_monotonically_upgrades_body_fetch_authority_in_both_orders() {
             .get(&HashOf::new(payload.manifest())),
         Some(&hybrid.id())
     );
-
     let (mut service, keys) = fixture();
     let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
@@ -1742,7 +1671,6 @@ fn service_monotonically_upgrades_body_fetch_authority_in_both_orders() {
         Some(&hybrid.id())
     );
 }
-
 #[test]
 fn certified_completion_retires_exact_live_or_reconstructed_owner() {
     let (mut service, keys) = fixture();
@@ -1783,7 +1711,6 @@ fn certified_completion_retires_exact_live_or_reconstructed_owner() {
     );
     assert!(service.local_completions.is_empty());
     assert!(!service.output_guard.restart_required());
-
     let foreign_guard = ConsensusOutputGuard::isolated();
     let foreign_permit = foreign_guard.acquire().expect("foreign output permit");
     let prepared = service
@@ -1812,7 +1739,6 @@ fn certified_completion_retires_exact_live_or_reconstructed_owner() {
         .expect("certified response retires live owner");
     assert!(service.fetches.is_empty());
     assert!(service.fetch_by_manifest.is_empty());
-
     let queued_ordinary = BodyFetchTask::ordinary_for_test(54, tag, payload.manifest().clone());
     let queued_task = certified_fetch_task(
         &service,
@@ -1838,7 +1764,6 @@ fn certified_completion_retires_exact_live_or_reconstructed_owner() {
     assert!(service.local_completions.is_empty());
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn certified_completion_preflight_rejects_mismatched_task_without_owner_mutation() {
     let (mut service, keys) = fixture();
@@ -1875,11 +1800,9 @@ fn certified_completion_preflight_rejects_mismatched_task_without_owner_mutation
         proposal.subject,
     );
     let manifest_hash = HashOf::new(payload.manifest());
-
     let error = service
         .complete_certified_body_fetch(&mismatched)
         .expect_err("a different executor task cannot retire the live service owner");
-
     assert!(error.contains("differs from executor ownership"));
     assert_eq!(
         service
@@ -1898,7 +1821,6 @@ fn certified_completion_preflight_rejects_mismatched_task_without_owner_mutation
         "preflight rejection occurs before the guarded mutation boundary",
     );
 }
-
 #[test]
 fn cancellation_rejects_a_different_task_without_consuming_exact_owner() {
     let (mut service, keys) = fixture();
@@ -1923,11 +1845,9 @@ fn cancellation_rejects_a_different_task_without_consuming_exact_owner() {
         ),
         payload.manifest().clone(),
     );
-
     let error = service
         .cancel_body_fetch(&wrong)
         .expect_err("different task identity must fail closed");
-
     assert!(error.contains("differs from executor ownership"));
     assert!(service.fetches.contains_key(&task.id()));
     assert_eq!(
@@ -1938,7 +1858,6 @@ fn cancellation_rejects_a_different_task_without_consuming_exact_owner() {
     );
     assert!(service.output_guard.restart_required());
 }
-
 #[test]
 fn corrupt_manifest_index_is_preserved_and_fails_closed_before_cancellation() {
     let (mut service, keys) = fixture();
@@ -1959,11 +1878,9 @@ fn corrupt_manifest_index_is_preserved_and_fails_closed_before_cancellation() {
     service
         .fetch_by_manifest
         .insert(manifest_hash, innocent_owner);
-
     let error = service
         .cancel_body_fetch(&task)
         .expect_err("corrupt manifest ownership must fail closed");
-
     assert!(error.contains("mismatched manifest owner"));
     assert_eq!(
         service.fetch_by_manifest.get(&manifest_hash),
@@ -1972,7 +1889,6 @@ fn corrupt_manifest_index_is_preserved_and_fails_closed_before_cancellation() {
     assert!(service.fetches.contains_key(&task.id()));
     assert!(service.output_guard.restart_required());
 }
-
 #[test]
 fn duplicate_queued_fetch_owners_fail_closed_without_consumption() {
     let (mut service, keys) = fixture();
@@ -1993,16 +1909,13 @@ fn duplicate_queued_fetch_owners_fail_closed_without_consumption() {
                 body: body.clone().into(),
             });
     }
-
     let error = service
         .cancel_body_fetch(&task)
         .expect_err("duplicate queue ownership must fail closed");
-
     assert!(error.contains("duplicate queued reconstruction owners"));
     assert_eq!(service.local_completions.len(), 2);
     assert!(service.output_guard.restart_required());
 }
-
 #[test]
 fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
     let (mut service, keys) = fixture();
@@ -2023,7 +1936,6 @@ fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
         service.fetch_by_manifest.remove(&manifest_hash),
         Some(task.id())
     );
-
     let error = service
         .cancel_body_fetch(&task)
         .expect_err("missing manifest index must fail closed");
@@ -2031,7 +1943,6 @@ fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
     assert!(service.fetch_by_manifest.is_empty());
     assert!(service.fetches.contains_key(&task.id()));
     assert!(service.output_guard.restart_required());
-
     let (mut service, keys) = fixture();
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
@@ -2043,7 +1954,6 @@ fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
     let task = BodyFetchTask::ordinary_for_test(59, tag, payload.manifest().clone());
     let manifest_hash = HashOf::new(payload.manifest());
     service.fetch_by_manifest.insert(manifest_hash, task.id());
-
     let error = service
         .cancel_body_fetch(&task)
         .expect_err("orphan manifest index must fail closed");
@@ -2054,7 +1964,6 @@ fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
     );
     assert!(service.fetches.is_empty());
     assert!(service.output_guard.restart_required());
-
     let (mut service, keys) = fixture();
     let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
@@ -2071,7 +1980,6 @@ fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
     let manifest_hash = HashOf::new(payload.manifest());
     let wrong_owner = EffectWorkId::for_test(1_000);
     service.fetch_by_manifest.insert(manifest_hash, wrong_owner);
-
     let error = service
         .cancel_body_fetch(&task)
         .expect_err("wrong manifest index must fail closed");
@@ -2083,7 +1991,6 @@ fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
     assert!(service.fetches.contains_key(&task.id()));
     assert!(service.output_guard.restart_required());
 }
-
 #[test]
 fn io_queue_cancellation_frees_capacity_without_reordering_retained_work() {
     let (mut service, keys) = fixture();
@@ -2103,7 +2010,6 @@ fn io_queue_cancellation_frees_capacity_without_reordering_retained_work() {
         restore_outbound_payload: false,
     };
     let (command_tx, command_rx, admission) = test_io_command_channel(2);
-
     command_tx
         .try_send(sign(1))
         .expect("queue first signing task");
@@ -2123,7 +2029,6 @@ fn io_queue_cancellation_frees_capacity_without_reordering_retained_work() {
     command_tx
         .try_send(sign(3))
         .expect("reclaimed slot accepts current-view work");
-
     for expected in [2, 3] {
         let command = command_rx.try_recv().expect("retained queued command");
         let work_id = command.work_id().expect("signing work identifier");
@@ -2136,7 +2041,6 @@ fn io_queue_cancellation_frees_capacity_without_reordering_retained_work() {
         Err(mpsc::TryRecvError::Empty)
     ));
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-
     let durable = DurableBodyReceipt::for_test(
         service.context.id(),
         proposal.round,
@@ -2169,7 +2073,6 @@ fn io_queue_cancellation_frees_capacity_without_reordering_retained_work() {
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
     drop(service.io.take());
 }
-
 #[test]
 fn io_queue_reports_active_store_cancellation_as_retained() {
     let (mut service, keys) = fixture();
@@ -2183,7 +2086,6 @@ fn io_queue_reports_active_store_cancellation_as_retained() {
     let task = BodyStoreTask::for_test(5, tag, payload.manifest().clone(), body);
     let work_id = task.id();
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
-
     command_tx
         .try_send(V2IoCommand::Store(task))
         .expect("queue body store");
@@ -2198,7 +2100,6 @@ fn io_queue_reports_active_store_cancellation_as_retained() {
         command_tx.queue.lock().work[&work_id].state,
         V2IoWorkState::Active
     );
-
     command_rx.complete_work(work_id);
     assert!(
         !command_tx
@@ -2213,20 +2114,16 @@ fn io_queue_reports_active_store_cancellation_as_retained() {
     assert!(command_tx.queue.lock().work.is_empty());
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
 }
-
 #[test]
 fn io_queue_rejects_cancellation_without_tracked_ownership() {
     let (command_tx, _command_rx, _admission) = test_io_command_channel(1);
     let missing = EffectWorkId::for_test(6);
-
     let error = command_tx
         .cancel(missing, V2IoCancellableKind::Store)
         .expect_err("missing work ownership must not look active");
-
     assert!(error.contains("has no tracked owner"));
     assert!(command_tx.queue.lock().work.is_empty());
 }
-
 #[test]
 fn io_queue_validation_identity_is_only_work_id_and_durable_receipt() {
     let (mut service, keys) = fixture();
@@ -2249,7 +2146,6 @@ fn io_queue_validation_identity_is_only_work_id_and_durable_receipt() {
         ),
     );
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
-
     command_tx
         .try_send(V2IoCommand::Validate(exact.clone()))
         .expect("queue immutable validation");
@@ -2262,7 +2158,6 @@ fn io_queue_validation_identity_is_only_work_id_and_durable_receipt() {
         Err(V2IoTrySendError::ConflictingWorkId { work_id, .. })
             if work_id == EffectWorkId::for_test(8)
     ));
-
     let command = command_rx.try_recv().expect("single validation command");
     let work_id = command.work_id().expect("validation work identifier");
     assert_eq!(work_id, EffectWorkId::for_test(8));
@@ -2273,7 +2168,6 @@ fn io_queue_validation_identity_is_only_work_id_and_durable_receipt() {
     command_tx.acknowledge_completion(work_id);
     assert!(command_tx.queue.lock().work.is_empty());
 }
-
 #[test]
 fn io_queue_duplicate_apply_coalesces_and_conflicting_work_id_fails_closed() {
     let (mut service, keys) = fixture();
@@ -2319,7 +2213,6 @@ fn io_queue_duplicate_apply_coalesces_and_conflicting_work_id_fails_closed() {
         validated,
     );
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
-
     command_tx
         .try_send(V2IoCommand::Apply(task.clone()))
         .expect("queue exact apply");
@@ -2332,7 +2225,6 @@ fn io_queue_duplicate_apply_coalesces_and_conflicting_work_id_fails_closed() {
         Err(V2IoTrySendError::ConflictingWorkId { work_id, .. })
             if work_id == EffectWorkId::for_test(7)
     ));
-
     let command = command_rx.try_recv().expect("single coalesced apply");
     let work_id = command.work_id().expect("apply work identifier");
     assert_eq!(work_id, EffectWorkId::for_test(7));
@@ -2352,7 +2244,6 @@ fn io_queue_duplicate_apply_coalesces_and_conflicting_work_id_fails_closed() {
     command_tx.acknowledge_completion(work_id);
     assert!(command_tx.queue.lock().work.is_empty());
 }
-
 #[test]
 fn selected_serve_target_waits_for_complete_physical_prefix_and_excludes_later_ingress() {
     let (service, keys) = fixture_with_block_payload();
@@ -2391,7 +2282,6 @@ fn selected_serve_target_waits_for_complete_physical_prefix_and_excludes_later_i
     };
     let predecessor_height = service.context.height.saturating_add(1);
     let later_height = service.context.height.saturating_add(2);
-
     assert!(matches!(
         ingress.try_push(ordinary(predecessor_height, &via)),
         Ok(FairV2IngressPushDisposition::Enqueued)
@@ -2462,7 +2352,6 @@ fn selected_serve_target_waits_for_complete_physical_prefix_and_excludes_later_i
             ..
         }) if candidate.height == predecessor_height
     ));
-
     let mut prepared = None;
     let mut target = ingress
         .try_recv_if(|inbound| {
@@ -2503,7 +2392,6 @@ fn selected_serve_target_waits_for_complete_physical_prefix_and_excludes_later_i
     ));
     assert_eq!(ingress.len(), 1);
 }
-
 #[test]
 fn selected_serve_request_unblocks_matching_body_dependent_control() {
     let (service, keys) = fixture_with_block_payload();
@@ -2535,7 +2423,6 @@ fn selected_serve_request_unblocks_matching_body_dependent_control() {
     let proposal_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
     ));
-
     for (case, control_message) in [
         ("proposal", proposal_message),
         ("vote", vote_message),
@@ -2570,7 +2457,6 @@ fn selected_serve_request_unblocks_matching_body_dependent_control() {
             .expect("configure production-shaped combined ingress");
         ingress.require_certified_serve_gate();
         ingress.require_leader_wire_lifecycle_gate();
-
         let directory = TempDir::new().expect("temporary combined ingress gate");
         let wal_path = directory
             .path()
@@ -2619,7 +2505,6 @@ fn selected_serve_request_unblocks_matching_body_dependent_control() {
             )
             .expect("bind leader gate to the same actor-global ordinal source");
         ingress.open().expect("open combined production ingress");
-
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::new(
                 control_message,
@@ -2644,7 +2529,6 @@ fn selected_serve_request_unblocks_matching_body_dependent_control() {
             Some(1),
             "case={case}"
         );
-
         let mut prepared = None;
         let mut body_request = ingress
             .try_recv_if_checked(|inbound| {

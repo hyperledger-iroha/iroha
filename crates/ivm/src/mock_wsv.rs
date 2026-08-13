@@ -6,7 +6,6 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-
 use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
 pub use iroha_data_model::account::AccountId;
 pub use iroha_data_model::prelude::{AssetDefinitionId, DomainId, Mintable, Name, NftId, Peer};
@@ -32,7 +31,6 @@ use norito::{
     json::{self as njson},
 };
 use sha2::{Digest as _, Sha256};
-
 #[cfg(test)]
 use crate::memory::Memory;
 use crate::{
@@ -1487,9 +1485,7 @@ fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
 // duplicate import caused E0252 (name defined multiple times). Remove it.
 // use crate::{error::VMError, host::IVMHost, ivm::IVM, syscalls};
 use core::str;
-
 use iroha_data_model::isi::{InstructionBox as DMInstructionBox, zk as DMZk};
-
 // -----------------------------
 // ZK shielded ledger structures
 // -----------------------------
@@ -4750,7 +4746,6 @@ impl IVMHost for WsvHost {
 #[cfg(test)]
 mod tests_peer_json {
     use super::*;
-
     #[test]
     fn parse_peer_accepts_canonical_string_and_wrapped_json() {
         const SAMPLE: &str =
@@ -4781,7 +4776,6 @@ mod tests_peer_json {
 #[cfg(test)]
 mod tests_axt_policy_snapshot {
     use super::*;
-
     #[test]
     fn axt_policy_snapshot_model_roundtrips() {
         let mut wsv = MockWorldStateView::new();
@@ -4871,10 +4865,8 @@ mod tests_axt_policy_snapshot {
 #[cfg(test)]
 mod tests_governance_elections {
     use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
-
     use super::*;
     use crate::Memory;
-
     fn vote_vk_id() -> VerifyingKeyId {
         VerifyingKeyId::new("halo2/ipa", "governance_vote_vk")
     }
@@ -5443,7 +5435,6 @@ mod tests_governance_elections {
 #[cfg(test)]
 mod tests_zk_asset_bindings {
     use super::*;
-
     #[test]
     fn register_asset_definition_does_not_require_domain_row_for_opaque_id() {
         let caller: AccountId = test_account_id(
@@ -5501,9 +5492,7 @@ mod tests_zk_asset_bindings {
 #[cfg(test)]
 mod tests_nft_decode {
     use std::collections::HashMap;
-
     use super::*;
-
     #[test]
     fn decode_nft_payload_accepts_norito_encoded_bytes() {
         let nft_id: NftId = "n0$wonderland.universal".parse().unwrap();
@@ -5521,11 +5510,9 @@ mod tests_nft_decode {
 #[cfg(test)]
 mod tests_null_decode {
     use std::collections::HashMap;
-
     use super::*;
     use iroha_data_model::prelude::Name;
     use iroha_primitives::json::Json;
-
     fn load_int_state_map_schema(vm: &mut IVM, name: &str) {
         let interface = crate::metadata::EmbeddedContractInterfaceV1 {
             seiyaku_name: "MockWsvStateMapFixture".to_owned(),

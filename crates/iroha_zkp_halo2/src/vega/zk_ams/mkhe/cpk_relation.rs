@@ -23,14 +23,11 @@
 //! Their scalar field is the T256 plaintext field, so encoding the full BGV
 //! equation in that field would erase `t*e`.  No membership-only path in this
 //! module can construct a relation receipt or contribution capability.
-
 use core::{
     fmt,
     sync::atomic::{Ordering, compiler_fence},
 };
-
 use thiserror::Error;
-
 use crate::{
     generalized_bulletproof::{ProofRandomSource, ProofSuite, multiexp},
     vega::{
@@ -42,7 +39,6 @@ use crate::{
         sponge::{Keccak256, Shake256Reader},
     },
 };
-
 use super::{
     ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
     ZkAmsMkhePartyIdV1,
@@ -69,28 +65,23 @@ use super::{
     signed_mod,
     wire::ZkAmsMkheAuthenticationWireV1,
 };
-
 #[path = "cpk_relation_common_a.rs"]
 mod common_a;
 pub(super) use common_a::{
     ZkAmsMkhePreparedCollectivePublicAContextV1, active_collective_public_a_limb_frame_bytes_v1,
     derive_active_collective_public_a_limb_v1, prepare_active_collective_public_a_v1,
 };
-
 const CPK_SHARE_STATEMENT_MAGIC_V1: [u8; 4] = *b"ZCPS";
 const CPK_RELATION_PROOF_MAGIC_V1: [u8; 4] = *b"ZCPR";
-
 const CPK_RELATION_ALGORITHM_V1: u8 = 1;
 const CPK_PUBLIC_A_DERIVATION_ALGORITHM_V1: u8 = 1;
 const CPK_RELATION_FLAGS_V1: u16 = 0;
-
 /// Sealed direct-object tag for the exact party-local CPK `b` polynomial.
 pub(super) const ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_TAG_V1: u8 =
     ZkAmsMkheDirectObjectKindV1::CpkPartyB as u8;
 /// Sealed direct-object tag for the exact native CPK relation proof.
 pub(super) const ZK_AMS_MKHE_CPK_RELATION_PROOF_OBJECT_TAG_V1: u8 =
     ZkAmsMkheDirectObjectKindV1::CpkRelationProof as u8;
-
 /// Exact release ring degree.
 pub(super) const ZK_AMS_MKHE_CPK_RING_DEGREE_V1: usize = 131_072;
 /// Exact release RNS-limb count.
@@ -106,7 +97,6 @@ pub(super) const ZK_AMS_MKHE_CPK_RELATION_WITNESSES_V1: usize = 2;
 pub(super) const ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1: usize = 4;
 /// Exact bits in each challenge coordinate.
 pub(super) const ZK_AMS_MKHE_CPK_CHALLENGE_BITS_V1: usize = 32;
-
 /// Largest possible shift `c*w` for `c <= u32::MAX` and `|w| <= 2`.
 pub(super) const ZK_AMS_MKHE_CPK_CHALLENGE_SHIFT_BOUND_V1: i64 = 8_589_934_590;
 /// Exact uniform mask interval is `[-M, M]`.
@@ -119,12 +109,10 @@ pub(super) const ZK_AMS_MKHE_CPK_MAX_FORK_LIFT_DIFFERENCE_V1: i64 =
 /// Hard whole-attempt retry ceiling.  The ordinal is never transcript material.
 pub(super) const ZK_AMS_MKHE_CPK_OUTER_RETRY_CEILING_V1: usize = 128;
 const CPK_INTEGER_SAMPLER_RETRY_CEILING_V1: usize = 128;
-
 const CPK_SIGNED_RESPONSE_BYTES_V1: usize = 8;
 const CPK_T256_SCALAR_BYTES_V1: usize = 32;
 const CPK_T256_POINT_BYTES_V1: usize = 33;
 const CPK_CHALLENGE_SEED_BYTES_V1: usize = 32;
-
 /// Exact canonical party-`b` payload length: `u32 || 38*131072*u64`.
 pub(super) const ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1: usize =
     4 + ZK_AMS_MKHE_CPK_RNS_LIMBS_V1 * ZK_AMS_MKHE_CPK_RING_DEGREE_V1 * 8;
@@ -154,17 +142,14 @@ pub(super) const ZK_AMS_MKHE_CPK_RELATION_BODY_BYTES_V1: usize = CPK_CHALLENGE_S
 /// Exact complete relation-proof object width.
 pub(super) const ZK_AMS_MKHE_CPK_RELATION_PROOF_BYTES_V1: usize =
     ZK_AMS_MKHE_CPK_RELATION_HEADER_BYTES_V1 + ZK_AMS_MKHE_CPK_RELATION_BODY_BYTES_V1;
-
 /// Exact bound-one persistent-secret membership evidence width.
 pub(super) const ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_BYTES_V1: usize =
     ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_WIRE_BYTES_V1;
 /// Exact analogous bound-two public-error membership evidence width.
 pub(super) const ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_BYTES_V1: usize =
     ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1;
-
 /// Admission stays closed until the complete verifier is connected to the collective-key runtime.
 pub(super) const ZK_AMS_MKHE_CPK_RELATION_VERIFICATION_GATE_V1: bool = false;
-
 const CPK_SHARE_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.cpk-share-statement";
 const CPK_SECRET_MEMBERSHIP_WIRE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.cpk-secret-membership-wire";
@@ -191,7 +176,6 @@ const CPK_COMPLETE_CONTRIBUTION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.cpk-relation.complete-contribution";
 const CPK_AUTHENTICATION_WIRE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.cpk-relation.authentication-wire";
-
 const _: () = {
     assert!(ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_TAG_V1 == 9);
     assert!(ZK_AMS_MKHE_CPK_RELATION_PROOF_OBJECT_TAG_V1 == 10);
@@ -220,11 +204,9 @@ const _: () = {
     assert!(ZK_AMS_MKHE_CPK_RELATION_PROOF_BYTES_V1 < 32 * 1024 * 1024);
     assert!(!ZK_AMS_MKHE_CPK_RELATION_VERIFICATION_GATE_V1);
 };
-
 // TODO: Connect the complete native receipt below to the collective-key share
 // admission/runtime and archive its release-size four-peer KAT before opening
 // `ZK_AMS_MKHE_CPK_RELATION_VERIFICATION_GATE_V1`.
-
 /// Stable errors at the exact native CPK relation boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum ZkAmsMkheCpkRelationErrorV1 {
@@ -280,11 +262,9 @@ pub(super) enum ZkAmsMkheCpkRelationErrorV1 {
     #[error("ZK-AMS CPK relation resource ceiling exceeded")]
     ResourceCeiling,
 }
-
 /// Sealed exact pointer to a party-local CPK `b` object (direct-object tag 9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkheCpkPartyBPointerV1(ZkAmsMkheDirectObjectPointerV1);
-
 impl ZkAmsMkheCpkPartyBPointerV1 {
     /// Construct the sole party-`b` pointer shape from a complete content hash.
     pub(super) fn new(payload_blake3: [u8; 32]) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
@@ -296,7 +276,6 @@ impl ZkAmsMkheCpkPartyBPointerV1 {
         .map(Self)
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ObjectPointer)
     }
-
     /// Decode exactly one tag-9 pointer; tags 1--8 and 10 are never aliases.
     pub(super) fn from_wire_bytes_exact(bytes: &[u8]) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
         let pointer = ZkAmsMkheDirectObjectPointerV1::decode_exact(
@@ -309,25 +288,21 @@ impl ZkAmsMkheCpkPartyBPointerV1 {
         }
         Ok(Self(pointer))
     }
-
     /// Encode the existing 78-byte direct-object pointer frame.
     #[must_use]
     pub(super) fn to_wire_bytes(self) -> [u8; ZK_AMS_MKHE_CPK_OBJECT_POINTER_BYTES_V1] {
         self.0.encode()
     }
-
     /// Complete BLAKE3 content address of the exact party-`b` object.
     #[must_use]
     pub(super) const fn payload_blake3(self) -> [u8; 32] {
         self.0.payload_blake3()
     }
-
     /// Keccak binding of kind, exact length, and content address.
     #[must_use]
     pub(super) const fn pointer_digest(self) -> [u8; 32] {
         self.0.pointer_digest()
     }
-
     /// Exact direct-object pointer retained by the verified CPK statement.
     ///
     /// This remains crate-private: a bare pointer is public data, not a CPK
@@ -337,11 +312,9 @@ impl ZkAmsMkheCpkPartyBPointerV1 {
         self.0
     }
 }
-
 /// Sealed exact pointer to one CPK relation proof object (direct-object tag 10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkheCpkRelationProofPointerV1(ZkAmsMkheDirectObjectPointerV1);
-
 impl ZkAmsMkheCpkRelationProofPointerV1 {
     /// Construct the sole relation-proof pointer shape from a complete content hash.
     pub(super) fn new(payload_blake3: [u8; 32]) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
@@ -353,7 +326,6 @@ impl ZkAmsMkheCpkRelationProofPointerV1 {
         .map(Self)
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ObjectPointer)
     }
-
     /// Decode exactly one tag-10 pointer; no generic proof tag is accepted.
     pub(super) fn from_wire_bytes_exact(bytes: &[u8]) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
         let pointer = ZkAmsMkheDirectObjectPointerV1::decode_exact(
@@ -366,26 +338,22 @@ impl ZkAmsMkheCpkRelationProofPointerV1 {
         }
         Ok(Self(pointer))
     }
-
     /// Encode the existing 78-byte direct-object pointer frame.
     #[must_use]
     pub(super) fn to_wire_bytes(self) -> [u8; ZK_AMS_MKHE_CPK_OBJECT_POINTER_BYTES_V1] {
         self.0.encode()
     }
-
     /// Complete BLAKE3 content address of the exact proof object.
     #[must_use]
     pub(super) const fn payload_blake3(self) -> [u8; 32] {
         self.0.payload_blake3()
     }
-
     /// Keccak binding of kind, exact length, and content address.
     #[must_use]
     pub(super) const fn pointer_digest(self) -> [u8; 32] {
         self.0.pointer_digest()
     }
 }
-
 /// Complete stable statement that precedes membership and relation evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkheCpkShareStatementV1 {
@@ -403,7 +371,6 @@ pub(super) struct ZkAmsMkheCpkShareStatementV1 {
     epoch: u64,
     party_b_pointer: ZkAmsMkheCpkPartyBPointerV1,
 }
-
 impl ZkAmsMkheCpkShareStatementV1 {
     /// Construct a canonical source statement from already governed axes.
     ///
@@ -439,7 +406,6 @@ impl ZkAmsMkheCpkShareStatementV1 {
         statement.validate()?;
         Ok(statement)
     }
-
     /// Construct the sole statement accepted under an independently governed roster.
     ///
     /// Profile, security-certificate, roster, key-material, epoch, party, and
@@ -477,7 +443,6 @@ impl ZkAmsMkheCpkShareStatementV1 {
             party_b_pointer,
         )
     }
-
     fn validate(self) -> Result<(), ZkAmsMkheCpkRelationErrorV1> {
         if self.generator_basis_digest != ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1
             || [
@@ -503,7 +468,6 @@ impl ZkAmsMkheCpkShareStatementV1 {
         }
         Ok(())
     }
-
     fn validate_against_governed_roster(
         self,
         roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -537,7 +501,6 @@ impl ZkAmsMkheCpkShareStatementV1 {
         }
         Ok(profile)
     }
-
     /// Encode the unique 362-byte, big-endian statement frame.
     pub(super) fn to_wire_bytes(
         self,
@@ -567,7 +530,6 @@ impl ZkAmsMkheCpkShareStatementV1 {
         bytes[284..362].copy_from_slice(&self.party_b_pointer.to_wire_bytes());
         Ok(bytes)
     }
-
     /// Decode exactly one statement and reject all alternate dimensions or reserved bytes.
     pub(super) fn from_wire_bytes_exact(bytes: &[u8]) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
         if bytes.len() != ZK_AMS_MKHE_CPK_SHARE_STATEMENT_BYTES_V1
@@ -602,7 +564,6 @@ impl ZkAmsMkheCpkShareStatementV1 {
         statement.validate()?;
         Ok(statement)
     }
-
     /// Stable digest of the complete canonical statement, excluding no source axis.
     pub(super) fn statement_digest(self) -> Result<[u8; 32], ZkAmsMkheCpkRelationErrorV1> {
         let wire = self.to_wire_bytes()?;
@@ -611,32 +572,27 @@ impl ZkAmsMkheCpkShareStatementV1 {
             &wire,
         ))
     }
-
     /// Exact content-addressed party-`b` pointer bound by this statement.
     #[must_use]
     pub(super) const fn party_b_pointer(self) -> ZkAmsMkheCpkPartyBPointerV1 {
         self.party_b_pointer
     }
-
     /// Exact governed contributor.
     #[must_use]
     pub(super) const fn party(self) -> ZkAmsMkhePartyIdV1 {
         self.party
     }
-
     /// Exact governed roster position.
     #[must_use]
     pub(super) const fn party_index(self) -> usize {
         self.party_index as usize
     }
 }
-
 /// Complete role-separated context for the public CPK error polynomial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkheCpkErrorMembershipContextV1 {
     inner: ExactEightChunkMembershipContextV1<CpkErrorMembershipRoleV1>,
 }
-
 impl ZkAmsMkheCpkErrorMembershipContextV1 {
     /// Derive all seven repeated axes plus the digest of the complete CPK statement.
     pub(super) fn from_share_statement(
@@ -655,49 +611,40 @@ impl ZkAmsMkheCpkErrorMembershipContextV1 {
         .map(|inner| Self { inner })
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
     }
-
     #[must_use]
     pub(super) const fn profile_digest(self) -> [u8; 32] {
         self.inner.profile_digest()
     }
-
     #[must_use]
     pub(super) const fn roster_digest(self) -> [u8; 32] {
         self.inner.roster_digest()
     }
-
     #[must_use]
     pub(super) const fn key_material_digest(self) -> [u8; 32] {
         self.inner.key_material_digest()
     }
-
     #[must_use]
     pub(super) const fn epoch(self) -> u64 {
         self.inner.epoch()
     }
-
     #[must_use]
     pub(super) const fn cpk_transcript_digest(self) -> [u8; 32] {
         self.inner.cpk_transcript_digest()
     }
-
     #[must_use]
     pub(super) const fn party(self) -> ZkAmsMkhePartyIdV1 {
         self.inner.party()
     }
-
     #[must_use]
     pub(super) const fn share_statement_digest(self) -> [u8; 32] {
         self.inner.share_statement_digest()
     }
-
     /// Error-role transcript context digest.
     #[must_use]
     pub(super) fn context_digest(self) -> [u8; 32] {
         self.inner.context_digest()
     }
 }
-
 /// Canonical eight-chunk bound-two evidence for the public CPK error polynomial.
 ///
 /// This type is not interchangeable with persistent-secret membership even
@@ -706,7 +653,6 @@ impl ZkAmsMkheCpkErrorMembershipContextV1 {
 pub(super) struct ZkAmsMkheCpkErrorMembershipEvidenceV1 {
     inner: ExactEightChunkMembershipEvidenceV1<CpkErrorMembershipRoleV1>,
 }
-
 impl ZkAmsMkheCpkErrorMembershipEvidenceV1 {
     /// Prove and locally verify all eight bound-two error chunks.
     pub(super) fn prove<R: ProofRandomSource>(
@@ -719,7 +665,6 @@ impl ZkAmsMkheCpkErrorMembershipEvidenceV1 {
             .map(|inner| Self { inner })
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
     }
-
     /// Verify and assemble eight externally supplied bound-two chunks.
     pub(super) fn from_proof_chunks_verified(
         context: ZkAmsMkheCpkErrorMembershipContextV1,
@@ -729,28 +674,24 @@ impl ZkAmsMkheCpkErrorMembershipEvidenceV1 {
             .map(|inner| Self { inner })
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
     }
-
     /// Strictly decode exactly 12,819 bytes with the `ZCEM` role frame.
     pub(super) fn from_wire_bytes_exact(bytes: &[u8]) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
         ExactEightChunkMembershipEvidenceV1::from_wire_bytes_exact(bytes)
             .map(|inner| Self { inner })
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
     }
-
     /// Encode the unique 12,819-byte CPK-error membership frame.
     pub(super) fn to_wire_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheCpkRelationErrorV1> {
         self.inner
             .to_wire_bytes()
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
     }
-
     /// Replay all eight bound-two proofs without retaining a capability.
     pub(super) fn verify(&self) -> Result<(), ZkAmsMkheCpkRelationErrorV1> {
         self.inner
             .verify()
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
     }
-
     /// Consume the evidence and return a move-only membership-only receipt.
     pub(super) fn into_verified(
         self,
@@ -760,45 +701,37 @@ impl ZkAmsMkheCpkErrorMembershipEvidenceV1 {
             .map(|inner| ZkAmsMkheVerifiedCpkErrorMembershipV1 { inner })
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
     }
-
     #[must_use]
     pub(super) const fn context(&self) -> ZkAmsMkheCpkErrorMembershipContextV1 {
         ZkAmsMkheCpkErrorMembershipContextV1 {
             inner: self.inner.context(),
         }
     }
-
     #[must_use]
     pub(super) const fn chunks(&self) -> &[ZkAmsT256MembershipProofV1; ZK_AMS_MKHE_CPK_CHUNKS_V1] {
         self.inner.chunks()
     }
-
     #[must_use]
     pub(super) fn commitments(&self) -> [Point; ZK_AMS_MKHE_CPK_CHUNKS_V1] {
         self.inner.commitments()
     }
-
     #[must_use]
     pub(super) const fn generator_basis_digest(&self) -> [u8; 32] {
         self.inner.generator_basis_digest()
     }
-
     #[must_use]
     pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
         self.inner.commitment_set_digest()
     }
-
     #[must_use]
     pub(super) const fn proof_set_digest(&self) -> [u8; 32] {
         self.inner.proof_set_digest()
     }
-
     #[must_use]
     pub(super) const fn verifier_transcript_digest(&self) -> [u8; 32] {
         self.inner.verifier_transcript_digest()
     }
 }
-
 /// Move-only proof-verified membership receipt for the CPK error role.
 ///
 /// It is deliberately membership-only and cannot construct a relation receipt
@@ -806,7 +739,6 @@ impl ZkAmsMkheCpkErrorMembershipEvidenceV1 {
 pub(super) struct ZkAmsMkheVerifiedCpkErrorMembershipV1 {
     inner: VerifiedExactEightChunkMembershipV1<CpkErrorMembershipRoleV1>,
 }
-
 impl ZkAmsMkheVerifiedCpkErrorMembershipV1 {
     #[must_use]
     pub(super) const fn context(&self) -> ZkAmsMkheCpkErrorMembershipContextV1 {
@@ -814,33 +746,27 @@ impl ZkAmsMkheVerifiedCpkErrorMembershipV1 {
             inner: self.inner.context(),
         }
     }
-
     #[must_use]
     pub(super) const fn commitments(&self) -> &[Point; ZK_AMS_MKHE_CPK_CHUNKS_V1] {
         self.inner.commitments()
     }
-
     #[must_use]
     pub(super) const fn generator_basis_digest(&self) -> [u8; 32] {
         self.inner.generator_basis_digest()
     }
-
     #[must_use]
     pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
         self.inner.commitment_set_digest()
     }
-
     #[must_use]
     pub(super) const fn proof_set_digest(&self) -> [u8; 32] {
         self.inner.proof_set_digest()
     }
-
     #[must_use]
     pub(super) const fn verifier_transcript_digest(&self) -> [u8; 32] {
         self.inner.verifier_transcript_digest()
     }
 }
-
 impl fmt::Debug for ZkAmsMkheVerifiedCpkErrorMembershipV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -856,7 +782,6 @@ impl fmt::Debug for ZkAmsMkheVerifiedCpkErrorMembershipV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Move-only, fail-closed input scaffold consumed by the complete CPK verifier.
 ///
 /// Possession establishes the two role-specific membership proof sets and
@@ -866,7 +791,6 @@ pub(super) struct ZkAmsMkheVerifiedCpkMembershipInputsV1 {
     secret: ZkAmsMkheVerifiedPersistentMembershipV1,
     error: ZkAmsMkheVerifiedCpkErrorMembershipV1,
 }
-
 impl fmt::Debug for ZkAmsMkheVerifiedCpkMembershipInputsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -882,7 +806,6 @@ impl fmt::Debug for ZkAmsMkheVerifiedCpkMembershipInputsV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Fixed canonical header for one complete CPK relation proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkheCpkRelationHeaderV1 {
@@ -892,7 +815,6 @@ pub(super) struct ZkAmsMkheCpkRelationHeaderV1 {
     error_membership_wire_digest: [u8; 32],
     party_b_pointer_digest: [u8; 32],
 }
-
 impl ZkAmsMkheCpkRelationHeaderV1 {
     /// Bind the exact canonical statement and both complete membership wires.
     pub(super) fn new(
@@ -922,7 +844,6 @@ impl ZkAmsMkheCpkRelationHeaderV1 {
         header.validate()?;
         Ok(header)
     }
-
     fn validate(self) -> Result<(), ZkAmsMkheCpkRelationErrorV1> {
         if self.generator_basis_digest != ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1
             || [
@@ -937,7 +858,6 @@ impl ZkAmsMkheCpkRelationHeaderV1 {
         }
         Ok(())
     }
-
     fn validate_against(
         self,
         statement: ZkAmsMkheCpkShareStatementV1,
@@ -964,7 +884,6 @@ impl ZkAmsMkheCpkRelationHeaderV1 {
         }
         Ok(())
     }
-
     /// Encode the fully enumerated 208-byte header.
     pub(super) fn to_wire_bytes(
         self,
@@ -997,7 +916,6 @@ impl ZkAmsMkheCpkRelationHeaderV1 {
         bytes[204..208].fill(0);
         Ok(bytes)
     }
-
     /// Decode one exact header and reject all alternate dimensions or reserved bits.
     pub(super) fn from_wire_bytes_exact(bytes: &[u8]) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
         if bytes.len() != ZK_AMS_MKHE_CPK_RELATION_HEADER_BYTES_V1
@@ -1034,7 +952,6 @@ impl ZkAmsMkheCpkRelationHeaderV1 {
         Ok(header)
     }
 }
-
 fn validate_cpk_membership_context_axes_v1(
     statement: ZkAmsMkheCpkShareStatementV1,
     secret_context: ZkAmsMkhePersistentMembershipContextV1,
@@ -1058,7 +975,6 @@ fn validate_cpk_membership_context_axes_v1(
     }
     Ok(())
 }
-
 /// Verify both exact membership inputs while keeping the native CPK equation fail closed.
 ///
 /// The returned object is only an input scaffold.  It does not read party `b`,
@@ -1078,14 +994,12 @@ pub(super) fn verify_zk_ams_mkhe_cpk_membership_inputs_v1(
     let error =
         ZkAmsMkheCpkErrorMembershipEvidenceV1::from_wire_bytes_exact(error_membership_wire)?;
     validate_cpk_membership_context_axes_v1(statement, secret.context(), error.context())?;
-
     let secret = secret
         .into_verified()
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)?;
     let error = error.into_verified()?;
     Ok(ZkAmsMkheVerifiedCpkMembershipInputsV1 { secret, error })
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CpkRelationShapeV1 {
     repetitions: usize,
@@ -1093,7 +1007,6 @@ struct CpkRelationShapeV1 {
     degree: usize,
     chunks: usize,
 }
-
 impl CpkRelationShapeV1 {
     const RELEASE: Self = Self {
         repetitions: ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1,
@@ -1101,7 +1014,6 @@ impl CpkRelationShapeV1 {
         degree: ZK_AMS_MKHE_CPK_RING_DEGREE_V1,
         chunks: ZK_AMS_MKHE_CPK_CHUNKS_V1,
     };
-
     fn validate(self) -> Result<(), ZkAmsMkheCpkRelationErrorV1> {
         if self.repetitions != ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1
             || self.witnesses != ZK_AMS_MKHE_CPK_RELATION_WITNESSES_V1
@@ -1113,7 +1025,6 @@ impl CpkRelationShapeV1 {
         }
         Ok(())
     }
-
     fn response_count(self) -> Result<usize, ZkAmsMkheCpkRelationErrorV1> {
         self.validate()?;
         self.repetitions
@@ -1121,7 +1032,6 @@ impl CpkRelationShapeV1 {
             .and_then(|value| value.checked_mul(self.degree))
             .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)
     }
-
     fn blind_response_count(self) -> Result<usize, ZkAmsMkheCpkRelationErrorV1> {
         self.validate()?;
         self.repetitions
@@ -1129,7 +1039,6 @@ impl CpkRelationShapeV1 {
             .and_then(|value| value.checked_mul(self.chunks))
             .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)
     }
-
     fn body_bytes(self) -> Result<usize, ZkAmsMkheCpkRelationErrorV1> {
         CPK_CHALLENGE_SEED_BYTES_V1
             .checked_add(
@@ -1147,14 +1056,12 @@ impl CpkRelationShapeV1 {
             .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)
     }
 }
-
 #[derive(PartialEq, Eq)]
 struct CpkRelationBodyV1 {
     challenge_seed: [u8; 32],
     responses: Vec<i64>,
     blind_responses: Vec<Scalar>,
 }
-
 impl fmt::Debug for CpkRelationBodyV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1165,7 +1072,6 @@ impl fmt::Debug for CpkRelationBodyV1 {
             .finish()
     }
 }
-
 impl CpkRelationBodyV1 {
     fn validate(&self, shape: CpkRelationShapeV1) -> Result<(), ZkAmsMkheCpkRelationErrorV1> {
         if self.responses.len() != shape.response_count()?
@@ -1179,7 +1085,6 @@ impl CpkRelationBodyV1 {
         }
         Ok(())
     }
-
     fn to_wire_bytes(
         &self,
         shape: CpkRelationShapeV1,
@@ -1202,7 +1107,6 @@ impl CpkRelationBodyV1 {
         }
         Ok(bytes)
     }
-
     fn from_wire_bytes_exact(
         shape: CpkRelationShapeV1,
         bytes: &[u8],
@@ -1248,13 +1152,11 @@ impl CpkRelationBodyV1 {
         Ok(body)
     }
 }
-
 /// Canonical in-memory proof container.  Parsing it never verifies the relation.
 pub(super) struct ZkAmsMkheCpkRelationProofV1 {
     header: ZkAmsMkheCpkRelationHeaderV1,
     body: CpkRelationBodyV1,
 }
-
 impl fmt::Debug for ZkAmsMkheCpkRelationProofV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1264,7 +1166,6 @@ impl fmt::Debug for ZkAmsMkheCpkRelationProofV1 {
             .finish()
     }
 }
-
 impl ZkAmsMkheCpkRelationProofV1 {
     /// Combine a bound header with common-box prover responses.
     pub(super) fn from_prover_response(
@@ -1278,7 +1179,6 @@ impl ZkAmsMkheCpkRelationProofV1 {
             body: response.body,
         })
     }
-
     /// Encode the unique fixed-size proof object.
     pub(super) fn to_wire_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheCpkRelationErrorV1> {
         let header = self.header.to_wire_bytes()?;
@@ -1293,7 +1193,6 @@ impl ZkAmsMkheCpkRelationProofV1 {
         }
         Ok(wire)
     }
-
     /// Decode the exact complete proof object without minting verification authority.
     pub(super) fn from_wire_bytes_exact(bytes: &[u8]) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
         if bytes.len() != ZK_AMS_MKHE_CPK_RELATION_PROOF_BYTES_V1 {
@@ -1308,52 +1207,43 @@ impl ZkAmsMkheCpkRelationProofV1 {
         )?;
         Ok(Self { header, body })
     }
-
     /// Bound header; its digests still require membership and statement verification.
     #[must_use]
     pub(super) const fn header(&self) -> ZkAmsMkheCpkRelationHeaderV1 {
         self.header
     }
-
     /// Stored seed used only to reconstruct challenges before recomputing the transcript.
     #[must_use]
     pub(super) const fn challenge_seed(&self) -> [u8; 32] {
         self.body.challenge_seed
     }
-
     /// Exact signed response arena in repetition/role/coefficient order.
     #[must_use]
     pub(super) fn responses(&self) -> &[i64] {
         &self.body.responses
     }
-
     /// Exact response blindings in repetition/role/chunk order.
     #[must_use]
     pub(super) fn blind_responses(&self) -> &[Scalar] {
         &self.body.blind_responses
     }
 }
-
 /// Owned named integer copies that receive best-effort erasure on drop.
 ///
 /// Rust does not guarantee erasure of compiler-created copies or registers,
 /// and destructors do not run after process abort.
 struct BestEffortErasingI64VecV1(Vec<i64>);
-
 impl BestEffortErasingI64VecV1 {
     fn as_slice(&self) -> &[i64] {
         &self.0
     }
-
     fn as_mut_slice(&mut self) -> &mut [i64] {
         &mut self.0
     }
-
     fn into_public(mut self) -> Vec<i64> {
         core::mem::take(&mut self.0)
     }
 }
-
 impl Drop for BestEffortErasingI64VecV1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.0);
@@ -1362,27 +1252,22 @@ impl Drop for BestEffortErasingI64VecV1 {
         let _ = core::hint::black_box(&mut *values);
     }
 }
-
 /// Owned named scalar copies that receive best-effort erasure on drop.
 ///
 /// `Scalar` is `Copy`, so arithmetic can still create compiler temporaries and
 /// register copies outside this owner's reach.
 struct BestEffortErasingScalarVecV1(Vec<Scalar>);
-
 impl BestEffortErasingScalarVecV1 {
     fn as_slice(&self) -> &[Scalar] {
         &self.0
     }
-
     fn as_mut_slice(&mut self) -> &mut [Scalar] {
         &mut self.0
     }
-
     fn into_public(mut self) -> Vec<Scalar> {
         core::mem::take(&mut self.0)
     }
 }
-
 impl Drop for BestEffortErasingScalarVecV1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.0);
@@ -1393,28 +1278,23 @@ impl Drop for BestEffortErasingScalarVecV1 {
         let _ = core::hint::black_box(&mut *values);
     }
 }
-
 /// Fixed-size secret byte owner with best-effort named-copy erasure on drop.
 ///
 /// The owner must be constructed before handing its buffer to a fallible or
 /// panicking entropy source. Decoders borrow its array so the guarded entropy
 /// is not first duplicated into an unmanaged stack array.
 struct BestEffortErasingBytesV1<const N: usize>([u8; N]);
-
 impl<const N: usize> BestEffortErasingBytesV1<N> {
     fn zeroed() -> Self {
         Self([0; N])
     }
-
     fn as_mut_slice(&mut self) -> &mut [u8] {
         &mut self.0
     }
-
     fn as_array(&self) -> &[u8; N] {
         &self.0
     }
 }
-
 impl<const N: usize> Drop for BestEffortErasingBytesV1<N> {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -1427,23 +1307,19 @@ impl<const N: usize> Drop for BestEffortErasingBytesV1<N> {
         }
     }
 }
-
 /// One secret-derived named scalar copy erased best-effort on every exit path.
 ///
 /// `Scalar` is `Copy`, so the arithmetic operand exposed to `AddAssign` and
 /// compiler-created register temporaries remain outside this owner's reach.
 struct BestEffortErasingScalarCopyV1(Scalar);
-
 impl BestEffortErasingScalarCopyV1 {
     fn new(value: Scalar) -> Self {
         Self(value)
     }
-
     fn expose_copy(&self) -> Scalar {
         self.0
     }
 }
-
 impl Drop for BestEffortErasingScalarCopyV1 {
     fn drop(&mut self) {
         let scalar = core::hint::black_box(&mut self.0);
@@ -1456,15 +1332,12 @@ impl Drop for BestEffortErasingScalarCopyV1 {
         }
     }
 }
-
 #[cfg(test)]
 static CPK_FIXED_BYTES_ERASURE_DROP_CALLS_V1: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
-
 #[cfg(test)]
 static CPK_SCALAR_COPY_ERASURE_DROP_CALLS_V1: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
-
 /// One unpublished set of common-box masks and commitment blindings.
 ///
 /// Its owned named copies receive best-effort erasure on drop. Compiler-created
@@ -1474,7 +1347,6 @@ pub(super) struct ZkAmsMkheCpkRelationMaskAttemptV1 {
     masks: BestEffortErasingI64VecV1,
     blind_masks: BestEffortErasingScalarVecV1,
 }
-
 impl fmt::Debug for ZkAmsMkheCpkRelationMaskAttemptV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1485,7 +1357,6 @@ impl fmt::Debug for ZkAmsMkheCpkRelationMaskAttemptV1 {
             .finish()
     }
 }
-
 impl ZkAmsMkheCpkRelationMaskAttemptV1 {
     /// Sample every release-shape mask exactly uniformly and every scalar blinding freshly.
     pub(super) fn sample<R: MaskedRelaxedRandomSourceV1>(
@@ -1493,7 +1364,6 @@ impl ZkAmsMkheCpkRelationMaskAttemptV1 {
     ) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
         Self::sample_for_shape(CpkRelationShapeV1::RELEASE, random)
     }
-
     fn sample_for_shape<R: MaskedRelaxedRandomSourceV1>(
         shape: CpkRelationShapeV1,
         random: &mut R,
@@ -1526,19 +1396,16 @@ impl ZkAmsMkheCpkRelationMaskAttemptV1 {
             blind_masks,
         })
     }
-
     /// Signed masks in repetition/role/coefficient order for first-message algebra.
     #[must_use]
     pub(super) fn masks(&self) -> &[i64] {
         self.masks.as_slice()
     }
-
     /// Scalar masks in repetition/role/chunk order for commitment first messages.
     #[must_use]
     pub(super) fn blind_masks(&self) -> &[Scalar] {
         self.blind_masks.as_slice()
     }
-
     /// Consume one attempt into public responses or reject it.
     ///
     /// Rejected attempts retain no externally reachable partial response, and
@@ -1628,7 +1495,6 @@ impl ZkAmsMkheCpkRelationMaskAttemptV1 {
         Ok(ZkAmsMkheCpkProverResponseV1 { body })
     }
 }
-
 /// Public `z`/`rho` response material produced only after a complete common-box attempt accepts.
 ///
 /// Unlike unpublished named mask copies, accepted proof responses are public
@@ -1637,7 +1503,6 @@ impl ZkAmsMkheCpkRelationMaskAttemptV1 {
 pub(super) struct ZkAmsMkheCpkProverResponseV1 {
     body: CpkRelationBodyV1,
 }
-
 impl fmt::Debug for ZkAmsMkheCpkProverResponseV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1646,7 +1511,6 @@ impl fmt::Debug for ZkAmsMkheCpkProverResponseV1 {
             .finish()
     }
 }
-
 /// Sample and reject complete attempts, delegating only actual first-message algebra.
 ///
 /// The callback must compute all commitment and RNS first messages from the
@@ -1683,7 +1547,6 @@ where
         &mut derive_challenges,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn construct_cpk_responses_with_aborts_for_shape_v1<R, F>(
     shape: CpkRelationShapeV1,
@@ -1726,7 +1589,6 @@ where
     }
     Err(ZkAmsMkheCpkRelationErrorV1::RetryExhausted)
 }
-
 fn sample_exact_uniform_signed_box_v1<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
     bound: i64,
@@ -1762,7 +1624,6 @@ fn sample_exact_uniform_signed_box_v1<R: MaskedRelaxedRandomSourceV1>(
     }
     Err(ZkAmsMkheCpkRelationErrorV1::RandomUnavailable)
 }
-
 fn sample_t256_scalar_v1<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<Scalar, ZkAmsMkheCpkRelationErrorV1> {
@@ -1772,7 +1633,6 @@ fn sample_t256_scalar_v1<R: MaskedRelaxedRandomSourceV1>(
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::RandomUnavailable)?;
     Ok(Scalar::from_uniform_le_bytes_ref(uniform.as_array()))
 }
-
 fn response_index(
     shape: CpkRelationShapeV1,
     repetition: usize,
@@ -1789,7 +1649,6 @@ fn response_index(
         .and_then(|value| value.checked_add(coefficient))
         .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)
 }
-
 fn blind_response_index(
     shape: CpkRelationShapeV1,
     repetition: usize,
@@ -1806,11 +1665,9 @@ fn blind_response_index(
         .and_then(|value| value.checked_add(chunk))
         .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)
 }
-
 /// Typed digest reconstructed from actual commitment first-message points.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkheCpkCommitmentFirstMessageDigestV1([u8; 32]);
-
 impl ZkAmsMkheCpkCommitmentFirstMessageDigestV1 {
     /// Hash one repetition in strict secret-chunks-then-error-chunks order.
     pub(super) fn from_reconstructed_points(
@@ -1820,7 +1677,6 @@ impl ZkAmsMkheCpkCommitmentFirstMessageDigestV1 {
     ) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
         Self::from_reconstructed_points_for_shape(repetition, secret, error)
     }
-
     fn from_reconstructed_points_for_shape(
         repetition: usize,
         secret: &[Point],
@@ -1857,7 +1713,6 @@ impl ZkAmsMkheCpkCommitmentFirstMessageDigestV1 {
         Ok(Self(hash.finalize()))
     }
 }
-
 /// Incremental, poisoning hash of one actual RNS first-message polynomial set.
 pub(super) struct ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1 {
     shape: CpkRnsDigestShapeV1,
@@ -1868,13 +1723,11 @@ pub(super) struct ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1 {
     hash: Keccak256,
     failed: bool,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CpkRnsDigestShapeV1 {
     limbs: usize,
     degree: usize,
 }
-
 impl ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1 {
     /// Begin one release-shape repetition digest before reading any limb.
     pub(super) fn new(repetition: usize) -> Result<Self, ZkAmsMkheCpkRelationErrorV1> {
@@ -1886,7 +1739,6 @@ impl ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1 {
             },
         )
     }
-
     fn new_for_shape(
         repetition: usize,
         shape: CpkRnsDigestShapeV1,
@@ -1920,7 +1772,6 @@ impl ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1 {
             failed: false,
         })
     }
-
     /// Begin exactly the next limb and bind its ordinal and prime modulus.
     pub(super) fn begin_limb(
         &mut self,
@@ -1949,7 +1800,6 @@ impl ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1 {
         self.next_coefficient = 0;
         Ok(())
     }
-
     /// Absorb a nonempty canonical residue chunk without making chunking transcript-visible.
     pub(super) fn update_residues(
         &mut self,
@@ -1980,7 +1830,6 @@ impl ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1 {
         self.next_coefficient = end;
         Ok(())
     }
-
     /// Finish one limb only after all exact coefficients were absorbed.
     pub(super) fn finish_limb(&mut self) -> Result<(), ZkAmsMkheCpkRelationErrorV1> {
         if self.failed
@@ -1995,7 +1844,6 @@ impl ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1 {
         self.next_limb += 1;
         Ok(())
     }
-
     /// Finalize only after all 38 release limbs (or the internal test shape) complete.
     pub(super) fn finish(
         self,
@@ -2011,11 +1859,9 @@ impl ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1 {
         Ok(ZkAmsMkheCpkRnsFirstMessageDigestV1(self.hash.finalize()))
     }
 }
-
 /// Typed digest obtained only by completing an ordered canonical RNS stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkheCpkRnsFirstMessageDigestV1([u8; 32]);
-
 /// Reconstruct the global seed and four ordinal-bound challenges from actual evidence axes.
 ///
 /// Both membership wires must already have passed their respective proof
@@ -2064,7 +1910,6 @@ pub(super) fn reconstruct_zk_ams_mkhe_cpk_challenges_v1(
     let seed = hash.finalize();
     Ok((seed, cpk_challenges_from_seed_v1(seed)))
 }
-
 /// Derive all four coordinates without rejection; zero is a canonical challenge.
 fn cpk_challenges_from_seed_v1(seed: [u8; 32]) -> [u32; ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1] {
     core::array::from_fn(|repetition| {
@@ -2076,7 +1921,6 @@ fn cpk_challenges_from_seed_v1(seed: [u8; 32]) -> [u32; ZK_AMS_MKHE_CPK_CHALLENG
         u32::from_be_bytes(digest[..4].try_into().expect("four-byte challenge prefix"))
     })
 }
-
 fn active_collective_public_a_context_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     cpk_transcript_digest: [u8; 32],
@@ -2097,7 +1941,6 @@ fn active_collective_public_a_context_v1(
     context.extend_from_slice(&cpk_transcript_digest);
     Ok(context)
 }
-
 fn cpk_public_a_context_digest_v1(
     profile: &BgvProfile,
     roster: &ZkAmsMkheGovernedActiveRosterV1,
@@ -2122,7 +1965,6 @@ fn cpk_public_a_context_digest_v1(
     hash.update(&derivation_context);
     Ok(hash.finalize())
 }
-
 fn t256_scalar_from_signed_i64_v1(value: i64) -> Scalar {
     let magnitude = Scalar::from_u64(value.unsigned_abs());
     if value < 0 {
@@ -2131,7 +1973,6 @@ fn t256_scalar_from_signed_i64_v1(value: i64) -> Scalar {
         magnitude
     }
 }
-
 fn reconstruct_cpk_commitment_first_messages_for_shape_v1(
     shape: CpkRelationShapeV1,
     body: &CpkRelationBodyV1,
@@ -2161,7 +2002,6 @@ fn reconstruct_cpk_commitment_first_messages_for_shape_v1(
     if chunk_coefficients == 0 || chunk_coefficients > generators.g_bold.len() {
         return Err(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling);
     }
-
     let mut digests = Vec::new();
     digests
         .try_reserve_exact(shape.repetitions)
@@ -2224,7 +2064,6 @@ fn reconstruct_cpk_commitment_first_messages_for_shape_v1(
         .try_into()
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn reconstruct_cpk_rns_first_messages_for_shape_v1<DA, RB>(
     relation_shape: CpkRelationShapeV1,
@@ -2268,7 +2107,6 @@ where
     {
         return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
     }
-
     let mut builders = Vec::new();
     builders
         .try_reserve_exact(relation_shape.repetitions)
@@ -2278,7 +2116,6 @@ where
             repetition, rns_shape,
         )?);
     }
-
     for (limb, ((&modulus, &root), &plaintext_modulus)) in moduli
         .iter()
         .zip(negacyclic_roots)
@@ -2347,7 +2184,6 @@ where
             builder.finish_limb()?;
         }
     }
-
     let mut digests = Vec::new();
     digests
         .try_reserve_exact(builders.len())
@@ -2359,14 +2195,12 @@ where
         .try_into()
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)
 }
-
 struct CpkPartyBStreamReaderV1<'a, P: ?Sized> {
     provider: &'a mut P,
     transaction: ZkAmsMkheDirectObjectReadTransactionV1,
     shape: CpkRnsDigestShapeV1,
     next_limb: usize,
 }
-
 impl<'a, P> CpkPartyBStreamReaderV1<'a, P>
 where
     P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
@@ -2420,7 +2254,6 @@ where
         }
         Ok(reader)
     }
-
     fn read_limb(
         &mut self,
         limb: usize,
@@ -2462,7 +2295,6 @@ where
         self.next_limb += 1;
         Ok(values)
     }
-
     fn finish(self) -> Result<ZkAmsMkheDirectObjectReadReceiptV1, ZkAmsMkheCpkRelationErrorV1> {
         if self.next_limb != self.shape.limbs || self.transaction.remaining_bytes() != 0 {
             return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
@@ -2472,7 +2304,6 @@ where
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::DirectObject)
     }
 }
-
 fn read_cpk_relation_proof_object_v1<P>(
     pointer: ZkAmsMkheCpkRelationProofPointerV1,
     provider: &mut P,
@@ -2514,7 +2345,6 @@ where
     let proof = ZkAmsMkheCpkRelationProofV1::from_wire_bytes_exact(&wire)?;
     Ok((proof, receipt))
 }
-
 fn direct_object_receipts_share_snapshot_v1(
     left: &ZkAmsMkheDirectObjectReadReceiptV1,
     right: &ZkAmsMkheDirectObjectReadReceiptV1,
@@ -2522,7 +2352,6 @@ fn direct_object_receipts_share_snapshot_v1(
     left.snapshot().provider_identity() == right.snapshot().provider_identity()
         && left.snapshot().snapshot_identity() == right.snapshot().snapshot_identity()
 }
-
 fn complete_cpk_contribution_digest_v1(
     statement: ZkAmsMkheCpkShareStatementV1,
     header: ZkAmsMkheCpkRelationHeaderV1,
@@ -2552,7 +2381,6 @@ fn complete_cpk_contribution_digest_v1(
     ));
     Ok(hash.finalize())
 }
-
 fn authentication_from_wire_v1(
     authentication: ZkAmsMkheAuthenticationWireV1,
 ) -> ArtifactAuthentication {
@@ -2563,7 +2391,6 @@ fn authentication_from_wire_v1(
         signature: authentication.signature(),
     }
 }
-
 fn cpk_authentication_wire_digest_v1(authentication: ZkAmsMkheAuthenticationWireV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(CPK_AUTHENTICATION_WIRE_DOMAIN_V1);
@@ -2573,7 +2400,6 @@ fn cpk_authentication_wire_digest_v1(authentication: ZkAmsMkheAuthenticationWire
     hash.update(&authentication.signature());
     hash.finalize()
 }
-
 /// Authenticate the exact statement, both membership wires, and both direct-object pointers.
 ///
 /// The relation proof must already have been encoded and content-addressed.
@@ -2608,7 +2434,6 @@ pub(super) fn authenticate_zk_ams_mkhe_cpk_contribution_v1<R: MaskedRelaxedRando
     )
     .map_err(|_| ZkAmsMkheCpkRelationErrorV1::Authentication)
 }
-
 fn verify_cpk_contribution_authentication_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     statement: ZkAmsMkheCpkShareStatementV1,
@@ -2630,7 +2455,6 @@ fn verify_cpk_contribution_authentication_v1(
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::Authentication)?;
     Ok(authentication)
 }
-
 /// Verify the complete native CPK relation under an independently governed roster.
 ///
 /// Both direct objects must be served by the same immutable provider snapshot.
@@ -2677,7 +2501,6 @@ where
         secret_membership_wire,
         error_membership_wire,
     )?;
-
     let challenges = cpk_challenges_from_seed_v1(proof.challenge_seed());
     let commitment_first_messages = reconstruct_cpk_commitment_first_messages_for_shape_v1(
         CpkRelationShapeV1::RELEASE,
@@ -2686,7 +2509,6 @@ where
         membership_inputs.secret.commitments(),
         membership_inputs.error.commitments(),
     )?;
-
     let rns_shape = CpkRnsDigestShapeV1 {
         limbs: ZK_AMS_MKHE_CPK_RNS_LIMBS_V1,
         degree: ZK_AMS_MKHE_CPK_RING_DEGREE_V1,
@@ -2731,7 +2553,6 @@ where
     ) {
         return Err(ZkAmsMkheCpkRelationErrorV1::DirectObject);
     }
-
     let (reconstructed_seed, reconstructed_challenges) = reconstruct_zk_ams_mkhe_cpk_challenges_v1(
         statement,
         secret_membership_wire,
@@ -2743,7 +2564,6 @@ where
     if reconstructed_seed != proof.challenge_seed() || reconstructed_challenges != challenges {
         return Err(ZkAmsMkheCpkRelationErrorV1::Transcript);
     }
-
     let mut receipt = VerifiedZkAmsMkheCpkRelationReceiptV1 {
         _seal: CpkRelationVerificationSealV1,
         _membership_inputs: membership_inputs,
@@ -2772,7 +2592,6 @@ where
     }
     Ok(receipt)
 }
-
 /// Non-serializable receipt constructed only by the complete native verifier.
 ///
 /// It is intentionally neither `Clone` nor `Copy` and has no decoder or
@@ -2795,9 +2614,7 @@ pub(super) struct VerifiedZkAmsMkheCpkRelationReceiptV1 {
     authentication_wire_digest: [u8; 32],
     verification_digest: [u8; 32],
 }
-
 struct CpkRelationVerificationSealV1;
-
 impl fmt::Debug for VerifiedZkAmsMkheCpkRelationReceiptV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2809,24 +2626,20 @@ impl fmt::Debug for VerifiedZkAmsMkheCpkRelationReceiptV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Move-only contribution capability obtainable only from a complete relation receipt.
 pub(super) struct VerifiedZkAmsMkheCpkContributionV1 {
     receipt: VerifiedZkAmsMkheCpkRelationReceiptV1,
 }
-
 impl VerifiedZkAmsMkheCpkContributionV1 {
     /// Consume a complete relation receipt.  No membership evidence can call this directly.
     pub(super) fn from_verified_relation(receipt: VerifiedZkAmsMkheCpkRelationReceiptV1) -> Self {
         Self { receipt }
     }
-
     /// Deterministic verification provenance; never a replacement for the capability.
     #[must_use]
     pub(super) const fn verification_digest(&self) -> [u8; 32] {
         self.receipt.verification_digest
     }
-
     /// Consume the complete contribution into the sole lineage accepted by
     /// collective-key-share admission.
     ///
@@ -2853,7 +2666,6 @@ impl VerifiedZkAmsMkheCpkContributionV1 {
         }
         Ok(source.into_binding_source())
     }
-
     /// Consume the complete verifier capability for bounded decryption setup.
     ///
     /// Unlike the legacy admission adapter, this transition does not accept a
@@ -2912,7 +2724,6 @@ impl VerifiedZkAmsMkheCpkContributionV1 {
         })
     }
 }
-
 impl fmt::Debug for VerifiedZkAmsMkheCpkContributionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2924,7 +2735,6 @@ impl fmt::Debug for VerifiedZkAmsMkheCpkContributionV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Move-only CPK lineage plus exact direct-object provenance for decryption.
 ///
 /// There is no decoder, raw-pointer constructor, or `Clone` implementation.
@@ -2935,13 +2745,11 @@ pub(super) struct VerifiedZkAmsMkheCompactDecryptionSourceV1 {
     party_b_pointer: ZkAmsMkheCpkPartyBPointerV1,
     party_b_read_receipt: ZkAmsMkheDirectObjectReadReceiptV1,
 }
-
 impl VerifiedZkAmsMkheCompactDecryptionSourceV1 {
     #[must_use]
     pub(super) const fn party_b_pointer(&self) -> ZkAmsMkheDirectObjectPointerV1 {
         self.party_b_pointer.direct_object_pointer()
     }
-
     pub(super) fn into_parts(
         self,
     ) -> (
@@ -2955,12 +2763,10 @@ impl VerifiedZkAmsMkheCompactDecryptionSourceV1 {
             self.party_b_read_receipt,
         )
     }
-
     fn into_binding_source(self) -> VerifiedZkAmsMkheCpkBindingSourceV1 {
         self.binding_source
     }
 }
-
 impl fmt::Debug for VerifiedZkAmsMkheCompactDecryptionSourceV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2969,7 +2775,6 @@ impl fmt::Debug for VerifiedZkAmsMkheCompactDecryptionSourceV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Move-only secret-commitment lineage sealed by the complete CPK verifier.
 ///
 /// The fields are private to this module and there is no decoder or public
@@ -2993,69 +2798,53 @@ pub(super) struct VerifiedZkAmsMkheCpkBindingSourceV1 {
     verifier_transcript_digest: [u8; 32],
     relation_verification_digest: [u8; 32],
 }
-
 impl VerifiedZkAmsMkheCpkBindingSourceV1 {
     pub(super) const fn profile_digest(&self) -> [u8; 32] {
         self.profile_digest
     }
-
     pub(super) const fn security_certificate_digest(&self) -> [u8; 32] {
         self.security_certificate_digest
     }
-
     pub(super) const fn roster_digest(&self) -> [u8; 32] {
         self.roster_digest
     }
-
     pub(super) const fn key_material_digest(&self) -> [u8; 32] {
         self.key_material_digest
     }
-
     pub(super) const fn epoch(&self) -> u64 {
         self.epoch
     }
-
     pub(super) const fn cpk_transcript_digest(&self) -> [u8; 32] {
         self.cpk_transcript_digest
     }
-
     pub(super) const fn party_index(&self) -> usize {
         self.party_index as usize
     }
-
     pub(super) const fn party(&self) -> ZkAmsMkhePartyIdV1 {
         self.party
     }
-
     pub(super) const fn party_b_payload_blake3(&self) -> [u8; 32] {
         self.party_b_payload_blake3
     }
-
     pub(super) const fn generator_basis_digest(&self) -> [u8; 32] {
         self.generator_basis_digest
     }
-
     pub(super) const fn commitments(&self) -> &[Point; ZK_AMS_MKHE_CPK_CHUNKS_V1] {
         &self.commitments
     }
-
     pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
         self.commitment_set_digest
     }
-
     pub(super) const fn membership_proof_digest(&self) -> [u8; 32] {
         self.membership_proof_digest
     }
-
     pub(super) const fn verifier_transcript_digest(&self) -> [u8; 32] {
         self.verifier_transcript_digest
     }
-
     pub(super) const fn relation_verification_digest(&self) -> [u8; 32] {
         self.relation_verification_digest
     }
 }
-
 impl fmt::Debug for VerifiedZkAmsMkheCpkBindingSourceV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3067,7 +2856,6 @@ impl fmt::Debug for VerifiedZkAmsMkheCpkBindingSourceV1 {
             .finish_non_exhaustive()
     }
 }
-
 fn verified_relation_digest(receipt: &VerifiedZkAmsMkheCpkRelationReceiptV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(CPK_VERIFIED_RELATION_DOMAIN_V1);
@@ -3082,7 +2870,6 @@ fn verified_relation_digest(receipt: &VerifiedZkAmsMkheCpkRelationReceiptV1) -> 
     hash.update(&receipt._relation_proof_read_receipt.receipt_digest());
     hash.finalize()
 }
-
 fn framed_wire_digest(domain: &[u8], wire: &[u8]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(domain);
@@ -3091,7 +2878,6 @@ fn framed_wire_digest(domain: &[u8], wire: &[u8]) -> [u8; 32] {
     hash.update(wire);
     hash.finalize()
 }
-
 fn array_at<const N: usize>(
     bytes: &[u8],
     offset: usize,
@@ -3105,7 +2891,6 @@ fn array_at<const N: usize>(
         .try_into()
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::RelationBody)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3113,7 +2898,6 @@ mod tests {
         MaskedRelaxedRandomErrorV1, VEGA_T256_SCALAR_MODULUS_BE_V1, derive_t256_generators_v1,
         sponge::keccak256,
     };
-
     fn digest(label: &[u8], axis: &[u8]) -> [u8; 32] {
         let mut hash = Keccak256::new();
         hash.update(b"iroha.zk-ams.v1.mkhe.cpk-relation.test-axis");
@@ -3123,7 +2907,6 @@ mod tests {
         hash.update(axis);
         hash.finalize()
     }
-
     fn share_statement_fixture(label: &[u8]) -> ZkAmsMkheCpkShareStatementV1 {
         ZkAmsMkheCpkShareStatementV1::new(
             digest(label, b"profile"),
@@ -3140,7 +2923,6 @@ mod tests {
         )
         .expect("test statement")
     }
-
     fn membership_wires(label: &[u8]) -> (Vec<u8>, Vec<u8>) {
         let secret_block = digest(label, b"secret-membership");
         let error_block = digest(label, b"error-membership");
@@ -3152,7 +2934,6 @@ mod tests {
             .collect();
         (secret, error)
     }
-
     fn synthetic_error_membership(
         statement: ZkAmsMkheCpkShareStatementV1,
         label: &[u8],
@@ -3200,7 +2981,6 @@ mod tests {
         .expect("synthetic error evidence");
         ZkAmsMkheCpkErrorMembershipEvidenceV1 { inner }
     }
-
     fn header_fixture(
         label: &[u8],
     ) -> (
@@ -3215,7 +2995,6 @@ mod tests {
             ZkAmsMkheCpkRelationHeaderV1::new(statement, &secret, &error).expect("test header");
         (statement, secret, error, header)
     }
-
     fn tiny_relation_shape() -> CpkRelationShapeV1 {
         CpkRelationShapeV1 {
             repetitions: ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1,
@@ -3224,7 +3003,6 @@ mod tests {
             chunks: 2,
         }
     }
-
     fn tiny_body() -> CpkRelationBodyV1 {
         let shape = tiny_relation_shape();
         let mut responses = vec![0; shape.response_count().expect("tiny response count")];
@@ -3242,7 +3020,6 @@ mod tests {
             blind_responses,
         }
     }
-
     fn tiny_public_vector_commitment(values: &[i64], blinding: Scalar) -> Point {
         let generators = ZkAmsT256BulletproofSuiteV1::generators();
         let mut terms = values
@@ -3254,7 +3031,6 @@ mod tests {
         terms.push((blinding, generators.h));
         multiexp::<ZkAmsT256BulletproofSuiteV1>(&terms)
     }
-
     #[derive(Clone)]
     struct TinyObjectProvider {
         pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -3262,7 +3038,6 @@ mod tests {
         provider_identity: [u8; 32],
         snapshot_identity: [u8; 32],
     }
-
     impl TinyObjectProvider {
         fn cpk_party_b(bytes: Vec<u8>) -> Self {
             let pointer = ZkAmsMkheDirectObjectPointerV1::from_payload(
@@ -3278,16 +3053,13 @@ mod tests {
             }
         }
     }
-
     impl ZkAmsMkheDirectObjectReadAtProviderV1 for TinyObjectProvider {
         fn provider_identity(&mut self) -> Result<[u8; 32], super::super::ZkAmsMkheErrorV1> {
             Ok(self.provider_identity)
         }
-
         fn snapshot_identity(&mut self) -> Result<[u8; 32], super::super::ZkAmsMkheErrorV1> {
             Ok(self.snapshot_identity)
         }
-
         fn object_len(
             &mut self,
             pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -3298,7 +3070,6 @@ mod tests {
             u64::try_from(self.bytes.len())
                 .map_err(|_| super::super::ZkAmsMkheErrorV1::ResourceCeilingExceeded)
         }
-
         fn read_at(
             &mut self,
             pointer: ZkAmsMkheDirectObjectPointerV1,
@@ -3321,7 +3092,6 @@ mod tests {
             Ok(destination.len())
         }
     }
-
     fn tiny_party_b_wire(limbs: &[Vec<u64>]) -> Vec<u8> {
         let count = limbs.iter().map(Vec::len).sum::<usize>();
         let mut bytes = Vec::with_capacity(4 + count * 8);
@@ -3333,12 +3103,10 @@ mod tests {
         }
         bytes
     }
-
     struct StreamRandom {
         seed: [u8; 32],
         counter: u64,
     }
-
     impl StreamRandom {
         fn new(label: &[u8]) -> Self {
             Self {
@@ -3347,7 +3115,6 @@ mod tests {
             }
         }
     }
-
     impl MaskedRelaxedRandomSourceV1 for StreamRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             let mut written = 0;
@@ -3364,12 +3131,10 @@ mod tests {
             Ok(())
         }
     }
-
     struct ExactBlockRandom {
         blocks: Vec<[u8; 16]>,
         next: usize,
     }
-
     impl MaskedRelaxedRandomSourceV1 for ExactBlockRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             if destination.len() != 16 {
@@ -3384,9 +3149,7 @@ mod tests {
             Ok(())
         }
     }
-
     struct FailingRandom;
-
     impl MaskedRelaxedRandomSourceV1 for FailingRandom {
         fn fill_bytes(
             &mut self,
@@ -3395,20 +3158,16 @@ mod tests {
             Err(MaskedRelaxedRandomErrorV1::Unavailable)
         }
     }
-
     struct PanickingRandom;
-
     impl MaskedRelaxedRandomSourceV1 for PanickingRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             destination.fill(0xa5);
             panic!("injected entropy-source panic after writing secret bytes")
         }
     }
-
     struct EndpointRandom {
         signed_block: [u8; 16],
     }
-
     impl MaskedRelaxedRandomSourceV1 for EndpointRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             match destination.len() {
@@ -3423,7 +3182,6 @@ mod tests {
             Ok(())
         }
     }
-
     fn manual_attempt(
         shape: CpkRelationShapeV1,
         mask: i64,
@@ -3445,7 +3203,6 @@ mod tests {
             ]),
         }
     }
-
     fn commitment_point_arrays() -> (
         [Point; ZK_AMS_MKHE_CPK_CHUNKS_V1],
         [Point; ZK_AMS_MKHE_CPK_CHUNKS_V1],
@@ -3461,7 +3218,6 @@ mod tests {
             core::array::from_fn(|index| points[ZK_AMS_MKHE_CPK_CHUNKS_V1 + index]);
         (secret, error)
     }
-
     fn commitment_digests()
     -> [ZkAmsMkheCpkCommitmentFirstMessageDigestV1; ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1] {
         let (secret, error) = commitment_point_arrays();
@@ -3472,7 +3228,6 @@ mod tests {
             .expect("commitment digest")
         })
     }
-
     fn rns_digests()
     -> [ZkAmsMkheCpkRnsFirstMessageDigestV1; ZK_AMS_MKHE_CPK_CHALLENGE_REPETITIONS_V1] {
         core::array::from_fn(|repetition| {
@@ -3499,14 +3254,12 @@ mod tests {
             builder.finish().expect("RNS digest")
         })
     }
-
     #[test]
     fn sealed_object_kinds_are_exact_and_never_alias_existing_tags() {
         assert_eq!(ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_TAG_V1, 9);
         assert_eq!(ZK_AMS_MKHE_CPK_RELATION_PROOF_OBJECT_TAG_V1, 10);
         assert_eq!(ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1, 39_845_892);
         assert_eq!(ZK_AMS_MKHE_CPK_RELATION_PROOF_BYTES_V1, 8_390_896);
-
         let party_b = ZkAmsMkheCpkPartyBPointerV1::new(digest(b"pointer", b"party-b"))
             .expect("party-b pointer");
         let wire = party_b.to_wire_bytes();
@@ -3520,14 +3273,12 @@ mod tests {
             ZkAmsMkheCpkPartyBPointerV1::from_wire_bytes_exact(&wire),
             Ok(party_b)
         );
-
         for end in 0..wire.len() {
             assert!(ZkAmsMkheCpkPartyBPointerV1::from_wire_bytes_exact(&wire[..end]).is_err());
         }
         let mut trailing = wire.to_vec();
         trailing.push(0);
         assert!(ZkAmsMkheCpkPartyBPointerV1::from_wire_bytes_exact(&trailing).is_err());
-
         for occupied in 1..=8 {
             let mut aliased = wire;
             aliased[5] = occupied;
@@ -3547,7 +3298,6 @@ mod tests {
         );
         assert!(ZkAmsMkheCpkPartyBPointerV1::from_wire_bytes_exact(&proof_wire).is_err());
         assert!(ZkAmsMkheCpkRelationProofPointerV1::from_wire_bytes_exact(&wire).is_err());
-
         let mut wrong_length = wire;
         wrong_length[13] ^= 1;
         assert!(ZkAmsMkheCpkPartyBPointerV1::from_wire_bytes_exact(&wrong_length).is_err());
@@ -3562,7 +3312,6 @@ mod tests {
             Err(ZkAmsMkheCpkRelationErrorV1::ObjectPointer)
         );
     }
-
     #[test]
     fn statement_codec_is_exact_and_binds_every_governed_axis() {
         let statement = share_statement_fixture(b"canonical-statement");
@@ -3578,7 +3327,6 @@ mod tests {
         let mut trailing = wire.to_vec();
         trailing.extend_from_slice(&[0, 0]);
         assert!(ZkAmsMkheCpkShareStatementV1::from_wire_bytes_exact(&trailing).is_err());
-
         for offset in [0, 4, 5, 6, 7, 8, 12, 14, 18, 28, 284] {
             let mut changed = wire;
             changed[offset] ^= 1;
@@ -3593,7 +3341,6 @@ mod tests {
         let mut zero_epoch = wire;
         zero_epoch[20..28].fill(0);
         assert!(ZkAmsMkheCpkShareStatementV1::from_wire_bytes_exact(&zero_epoch).is_err());
-
         let baseline_digest = statement.statement_digest().expect("statement digest");
         for offset in [60, 92, 124, 156, 188, 220, 252] {
             let mut changed = wire;
@@ -3613,7 +3360,6 @@ mod tests {
             baseline_digest
         );
     }
-
     #[test]
     fn cpk_error_membership_context_binds_every_complete_statement_axis() {
         let statement = share_statement_fixture(b"membership-context-axes");
@@ -3642,7 +3388,6 @@ mod tests {
         );
         assert_eq!(error.party(), statement.party);
         assert_eq!(error.share_statement_digest(), statement_digest);
-
         for axis in 0..10 {
             let mut changed = statement;
             match axis {
@@ -3685,7 +3430,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cpk_error_membership_facade_is_exact_strict_and_role_separated() {
         let statement = share_statement_fixture(b"error-membership-wire");
@@ -3711,12 +3455,10 @@ mod tests {
         assert_ne!(evidence.commitment_set_digest(), [0; 32]);
         assert_ne!(evidence.proof_set_digest(), [0; 32]);
         assert_ne!(evidence.verifier_transcript_digest(), [0; 32]);
-
         let decoded =
             ZkAmsMkheCpkErrorMembershipEvidenceV1::from_wire_bytes_exact(&wire).expect("decode");
         assert_eq!(decoded, evidence);
         assert_eq!(decoded.to_wire_bytes().expect("re-encode"), wire);
-
         for end in 0..wire.len() {
             assert_eq!(
                 ZkAmsMkheCpkErrorMembershipEvidenceV1::from_wire_bytes_exact(&wire[..end]),
@@ -3741,7 +3483,6 @@ mod tests {
                 "mutation at {offset} was accepted"
             );
         }
-
         let mut disguised_as_secret = wire[..ZK_AMS_MKHE_CPK_SECRET_MEMBERSHIP_BYTES_V1].to_vec();
         disguised_as_secret[..4].copy_from_slice(b"ZPME");
         disguised_as_secret[5] = 1;
@@ -3751,7 +3492,6 @@ mod tests {
         );
         assert!(!ZK_AMS_MKHE_CPK_RELATION_VERIFICATION_GATE_V1);
     }
-
     #[test]
     fn relation_header_codec_rejects_alternate_shapes_reserved_bytes_and_splices() {
         let (statement, secret, error, header) = header_fixture(b"header-codec");
@@ -3764,14 +3504,12 @@ mod tests {
         header
             .validate_against(statement, &secret, &error)
             .expect("header bindings");
-
         for end in 0..wire.len() {
             assert!(ZkAmsMkheCpkRelationHeaderV1::from_wire_bytes_exact(&wire[..end]).is_err());
         }
         let mut trailing = wire.to_vec();
         trailing.push(0);
         assert!(ZkAmsMkheCpkRelationHeaderV1::from_wire_bytes_exact(&trailing).is_err());
-
         for offset in [
             0, 4, 5, 6, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 32, 40, 76, 204, 207,
         ] {
@@ -3787,7 +3525,6 @@ mod tests {
             zero[offset..offset + 32].fill(0);
             assert!(ZkAmsMkheCpkRelationHeaderV1::from_wire_bytes_exact(&zero).is_err());
         }
-
         let mut changed_secret = secret.clone();
         changed_secret[0] ^= 1;
         assert_eq!(
@@ -3815,7 +3552,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn small_shape_body_codec_is_canonical_at_every_boundary() {
         let shape = tiny_relation_shape();
@@ -3829,14 +3565,12 @@ mod tests {
             decoded.responses[decoded.responses.len() - 1],
             ZK_AMS_MKHE_CPK_RESPONSE_BOUND_V1
         );
-
         for end in 0..wire.len() {
             assert!(CpkRelationBodyV1::from_wire_bytes_exact(shape, &wire[..end]).is_err());
         }
         let mut trailing = wire.clone();
         trailing.push(0);
         assert!(CpkRelationBodyV1::from_wire_bytes_exact(shape, &trailing).is_err());
-
         for (index, invalid) in [
             ZK_AMS_MKHE_CPK_RESPONSE_BOUND_V1 + 1,
             -ZK_AMS_MKHE_CPK_RESPONSE_BOUND_V1 - 1,
@@ -3850,21 +3584,18 @@ mod tests {
             changed[offset..offset + 8].copy_from_slice(&invalid.to_be_bytes());
             assert!(CpkRelationBodyV1::from_wire_bytes_exact(shape, &changed).is_err());
         }
-
         let scalar_offset = CPK_CHALLENGE_SEED_BYTES_V1 + shape.response_count().unwrap() * 8;
         let mut modulus_le = VEGA_T256_SCALAR_MODULUS_BE_V1;
         modulus_le.reverse();
         let mut noncanonical = wire.clone();
         noncanonical[scalar_offset..scalar_offset + 32].copy_from_slice(&modulus_le);
         assert!(CpkRelationBodyV1::from_wire_bytes_exact(shape, &noncanonical).is_err());
-
         let mut modulus_minus_one = VEGA_T256_SCALAR_MODULUS_BE_V1;
         modulus_minus_one[31] -= 1;
         modulus_minus_one.reverse();
         let mut canonical_max = wire.clone();
         canonical_max[scalar_offset..scalar_offset + 32].copy_from_slice(&modulus_minus_one);
         assert!(CpkRelationBodyV1::from_wire_bytes_exact(shape, &canonical_max).is_ok());
-
         let mut invalid_body = tiny_body();
         invalid_body.responses[1] = ZK_AMS_MKHE_CPK_RESPONSE_BOUND_V1 + 1;
         assert_eq!(
@@ -3872,7 +3603,6 @@ mod tests {
             Err(ZkAmsMkheCpkRelationErrorV1::RelationBody)
         );
     }
-
     #[test]
     fn commitment_digest_binds_repetition_role_chunk_and_actual_point() {
         let points = derive_t256_generators_v1(
@@ -3926,7 +3656,6 @@ mod tests {
             Err(ZkAmsMkheCpkRelationErrorV1::FirstMessageRejected)
         );
     }
-
     #[test]
     fn rns_digest_builder_is_chunking_independent_ordered_and_poisoning() {
         let shape = CpkRnsDigestShapeV1 {
@@ -3952,42 +3681,34 @@ mod tests {
             builder.finish().unwrap()
         };
         assert_eq!(build(false), build(true));
-
         let mut wrong_order =
             ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1::new_for_shape(0, shape).unwrap();
         assert!(wrong_order.begin_limb(1, q0).is_err());
         assert!(wrong_order.begin_limb(0, q0).is_err());
-
         let mut no_limb =
             ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1::new_for_shape(0, shape).unwrap();
         assert!(no_limb.update_residues(&[1]).is_err());
-
         let mut empty =
             ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1::new_for_shape(0, shape).unwrap();
         empty.begin_limb(0, q0).unwrap();
         assert!(empty.update_residues(&[]).is_err());
-
         let mut short =
             ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1::new_for_shape(0, shape).unwrap();
         short.begin_limb(0, q0).unwrap();
         short.update_residues(&[1, 2, 3]).unwrap();
         assert!(short.finish_limb().is_err());
-
         let mut overrun =
             ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1::new_for_shape(0, shape).unwrap();
         overrun.begin_limb(0, q0).unwrap();
         assert!(overrun.update_residues(&[1, 2, 3, 4, 5]).is_err());
-
         let mut noncanonical =
             ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1::new_for_shape(0, shape).unwrap();
         noncanonical.begin_limb(0, q0).unwrap();
         assert!(noncanonical.update_residues(&[0, 1, q0, 3]).is_err());
-
         let mut small_modulus =
             ZkAmsMkheCpkRnsFirstMessageDigestBuilderV1::new_for_shape(0, shape).unwrap();
         assert!(small_modulus.begin_limb(0, u64::from(u32::MAX)).is_err());
     }
-
     #[test]
     fn global_transcript_binds_all_evidence_before_all_challenges() {
         let (statement, secret, error, header) = header_fixture(b"global-transcript");
@@ -4003,7 +3724,6 @@ mod tests {
         )
         .expect("baseline transcript");
         assert_eq!(baseline.1, cpk_challenges_from_seed_v1(baseline.0));
-
         let repeated = reconstruct_zk_ams_mkhe_cpk_challenges_v1(
             statement,
             &secret,
@@ -4014,7 +3734,6 @@ mod tests {
         )
         .expect("repeated transcript");
         assert_eq!(repeated, baseline);
-
         let mut changed_secret = secret.clone();
         let middle_secret_byte = changed_secret.len() / 2;
         changed_secret[middle_secret_byte] ^= 1;
@@ -4041,7 +3760,6 @@ mod tests {
         )
         .unwrap();
         assert_ne!(changed, baseline);
-
         let mut reordered_commitments = commitments;
         reordered_commitments.swap(0, 3);
         assert_ne!(
@@ -4070,7 +3788,6 @@ mod tests {
             .unwrap(),
             baseline
         );
-
         let other_statement = share_statement_fixture(b"global-transcript-other");
         let other_header =
             ZkAmsMkheCpkRelationHeaderV1::new(other_statement, &secret, &error).unwrap();
@@ -4087,14 +3804,12 @@ mod tests {
             baseline
         );
     }
-
     #[test]
     fn exact_signed_sampler_hits_both_endpoints_and_rejects_biased_prefixes() {
         let bound = ZK_AMS_MKHE_CPK_MASK_BOUND_V1 as u128;
         let width = 2 * bound + 1;
         let threshold = width.wrapping_neg() % width;
         assert_ne!(threshold, 0);
-
         let mut minimum = ExactBlockRandom {
             blocks: vec![width.to_be_bytes()],
             next: 0,
@@ -4104,7 +3819,6 @@ mod tests {
                 .unwrap(),
             -ZK_AMS_MKHE_CPK_MASK_BOUND_V1
         );
-
         let mut maximum = ExactBlockRandom {
             blocks: vec![(width - 1).to_be_bytes()],
             next: 0,
@@ -4114,7 +3828,6 @@ mod tests {
                 .unwrap(),
             ZK_AMS_MKHE_CPK_MASK_BOUND_V1
         );
-
         let mut rejected = ExactBlockRandom {
             blocks: vec![[0; 16]; CPK_INTEGER_SAMPLER_RETRY_CEILING_V1],
             next: 0,
@@ -4139,7 +3852,6 @@ mod tests {
             Err(ZkAmsMkheCpkRelationErrorV1::Witness)
         );
     }
-
     #[test]
     fn sampler_byte_owners_erase_named_copies_during_unwind() {
         let before_integer = CPK_FIXED_BYTES_ERASURE_DROP_CALLS_V1.load(Ordering::SeqCst);
@@ -4154,7 +3866,6 @@ mod tests {
             CPK_FIXED_BYTES_ERASURE_DROP_CALLS_V1.load(Ordering::SeqCst) > before_integer,
             "the 16-byte sampler owner must observe its erased named copy during unwind"
         );
-
         let before_scalar = CPK_FIXED_BYTES_ERASURE_DROP_CALLS_V1.load(Ordering::SeqCst);
         let scalar_unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = sample_t256_scalar_v1(&mut PanickingRandom);
@@ -4165,7 +3876,6 @@ mod tests {
             "the 64-byte sampler owner must observe its erased named copy during unwind"
         );
     }
-
     #[test]
     fn secret_derived_scalar_owner_erases_its_named_copy_during_unwind() {
         let before = CPK_SCALAR_COPY_ERASURE_DROP_CALLS_V1.load(Ordering::SeqCst);
@@ -4181,7 +3891,6 @@ mod tests {
             "the scalar owner must observe its erased named copy during unwind"
         );
     }
-
     #[test]
     fn identity_first_message_rejection_retries_once_then_succeeds() {
         let shape = tiny_relation_shape();
@@ -4229,7 +3938,6 @@ mod tests {
         assert_eq!(callback_calls, 2);
         response.body.validate(shape).expect("valid response body");
     }
-
     #[test]
     fn identity_first_message_rejections_exhaust_exact_outer_bound() {
         let shape = tiny_relation_shape();
@@ -4270,7 +3978,6 @@ mod tests {
         drop(derive);
         assert_eq!(callback_calls, ZK_AMS_MKHE_CPK_OUTER_RETRY_CEILING_V1);
     }
-
     #[test]
     fn unrelated_transcript_error_is_terminal_without_retry() {
         let shape = tiny_relation_shape();
@@ -4311,7 +4018,6 @@ mod tests {
         drop(derive);
         assert_eq!(callback_calls, 1);
     }
-
     #[test]
     fn response_construction_is_exact_atomic_and_whole_attempt_bounded() {
         let shape = tiny_relation_shape();
@@ -4358,7 +4064,6 @@ mod tests {
                 }
             }
         }
-
         let mut wrong_challenges = challenges;
         wrong_challenges[0] ^= 1;
         assert_eq!(
@@ -4383,7 +4088,6 @@ mod tests {
             ),
             Err(ZkAmsMkheCpkRelationErrorV1::ResponseRejected)
         );
-
         let mut invalid_secret = secret;
         invalid_secret[0] = 2;
         assert_eq!(
@@ -4422,7 +4126,6 @@ mod tests {
             ),
             Err(ZkAmsMkheCpkRelationErrorV1::Witness)
         );
-
         let bound = ZK_AMS_MKHE_CPK_MASK_BOUND_V1 as u128;
         let width = 2 * bound + 1;
         let mut endpoint_random = EndpointRandom {
@@ -4442,7 +4145,6 @@ mod tests {
             Err(ZkAmsMkheCpkRelationErrorV1::RetryExhausted)
         ));
     }
-
     #[test]
     fn tiny_attempt_sampling_has_exact_shape_and_rng_failures_are_atomic() {
         let shape = tiny_relation_shape();
@@ -4466,7 +4168,6 @@ mod tests {
             ZkAmsMkheCpkRelationErrorV1::RandomUnavailable
         );
     }
-
     #[test]
     fn reconstructed_commitment_messages_match_masks_and_bind_every_public_axis() {
         let shape = tiny_relation_shape();
@@ -4562,7 +4263,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reconstructed, expected);
-
         let mut changed_response = CpkRelationBodyV1 {
             challenge_seed: body.challenge_seed,
             responses: body.responses.clone(),
@@ -4621,11 +4321,9 @@ mod tests {
             Err(ZkAmsMkheCpkRelationErrorV1::MembershipEvidence)
         );
     }
-
     #[test]
     fn streamed_native_relation_matches_mask_equation_and_detects_adversarial_changes() {
         use super::super::manifest::{RELEASE_MODULI_V1, RELEASE_NEGACYCLIC_ROOTS_V1};
-
         let relation_shape = tiny_relation_shape();
         let rns_shape = CpkRnsDigestShapeV1 {
             limbs: 2,
@@ -4745,7 +4443,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reconstructed, expected);
-
         let mut changed_b = party_b.clone();
         changed_b[0][0] = mod_add(changed_b[0][0], 1, moduli[0]);
         assert_ne!(
@@ -4801,11 +4498,9 @@ mod tests {
             Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation)
         );
     }
-
     #[test]
     fn canonical_party_b_reader_is_single_pass_exact_and_fail_closed() {
         use super::super::manifest::RELEASE_MODULI_V1;
-
         let shape = CpkRnsDigestShapeV1 {
             limbs: 2,
             degree: 4,
@@ -4819,7 +4514,6 @@ mod tests {
         let receipt = reader.finish().unwrap();
         assert_eq!(receipt.payload_blake3(), pointer.payload_blake3());
         assert_eq!(receipt.canonical_bytes(), pointer.payload_bytes());
-
         let mut wrong_count_wire = tiny_party_b_wire(&limbs);
         wrong_count_wire[..4].copy_from_slice(&7_u32.to_be_bytes());
         let mut wrong_count = TinyObjectProvider::cpk_party_b(wrong_count_wire);
@@ -4827,7 +4521,6 @@ mod tests {
             CpkPartyBStreamReaderV1::begin(wrong_count.pointer, shape, &mut wrong_count),
             Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation)
         ));
-
         let mut noncanonical_limbs = limbs.clone();
         noncanonical_limbs[0][2] = RELEASE_MODULI_V1[0];
         let mut noncanonical =
@@ -4838,7 +4531,6 @@ mod tests {
             reader.read_limb(0, RELEASE_MODULI_V1[0]),
             Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation)
         );
-
         let mut trailing_wire = tiny_party_b_wire(&limbs);
         trailing_wire.extend_from_slice(&0_u64.to_be_bytes());
         let mut trailing = TinyObjectProvider::cpk_party_b(trailing_wire);
@@ -4847,7 +4539,6 @@ mod tests {
             Err(ZkAmsMkheCpkRelationErrorV1::ObjectPointer)
         ));
     }
-
     #[test]
     fn production_capability_boundary_stays_fail_closed() {
         assert!(!ZK_AMS_MKHE_CPK_RELATION_VERIFICATION_GATE_V1);

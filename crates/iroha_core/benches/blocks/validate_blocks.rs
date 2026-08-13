@@ -1,22 +1,17 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "./common.rs"]
 mod common;
-
 use std::sync::{Arc, OnceLock};
-
 use common::*;
 use iroha_core::{prelude::*, state::State, sumeragi::network_topology::Topology};
 use iroha_crypto::Algorithm;
 use iroha_data_model::{isi::InstructionBox, prelude::*};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-
 type InstructionBatch = Arc<[InstructionBox]>;
-
 const BENCH_DOMAINS: usize = 4;
 const BENCH_ACCOUNTS_PER_DOMAIN: usize = 25;
 const BENCH_ASSETS_PER_DOMAIN: usize = 25;
 const BENCH_DELETE_EVERY_NTH: usize = 5;
-
 /// Lazily prepared instruction batches shared across benchmark iterations to
 /// keep setup work bounded while still exercising meaningful block validation.
 fn instruction_batches() -> &'static [InstructionBatch; 3] {
@@ -54,7 +49,6 @@ fn instruction_batches() -> &'static [InstructionBatch; 3] {
         ]
     })
 }
-
 pub struct StateValidateBlocks {
     state: State,
     instructions: Vec<InstructionBatch>,
@@ -63,7 +57,6 @@ pub struct StateValidateBlocks {
     topology: Topology,
     peer_private_key: PrivateKey,
 }
-
 impl StateValidateBlocks {
     /// Create [`State`] and blocks for benchmarking
     ///
@@ -86,7 +79,6 @@ impl StateValidateBlocks {
         );
         seed_benchmark_domains(&mut state, &domain_ids, &alice_id);
         let instructions = instruction_batches().to_vec();
-
         Self {
             state,
             instructions,
@@ -96,7 +88,6 @@ impl StateValidateBlocks {
             peer_private_key,
         }
     }
-
     /// Run benchmark body.
     ///
     /// # Errors
@@ -131,7 +122,6 @@ impl StateValidateBlocks {
             let _events = state_block.apply_without_execution(&block, topology.as_ref().to_owned());
             assert_eq!(state_block.height(), base_height + i);
             state_block.commit().unwrap();
-
             let block_arc = Arc::new(block.into());
             let state_view = state.view();
             state_view

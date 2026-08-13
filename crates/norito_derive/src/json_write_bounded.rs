@@ -1,23 +1,18 @@
 //! Checked JSON writer code-generation helpers.
-
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, Generics, Path, meta::ParseNestedMeta};
-
 use super::{ContainerAttr, FieldAttr, add_bound};
-
 pub(super) fn parse_helper_path(meta: &ParseNestedMeta<'_>) -> syn::Result<Path> {
     let literal: syn::LitStr = meta.value()?.parse()?;
     syn::parse_str(&literal.value())
         .map_err(|error| meta.error(format!("invalid path `{}`: {error}", literal.value())))
 }
-
 #[derive(Default)]
 pub(super) struct EnumAttr {
     pub(super) tag: Option<String>,
     pub(super) content: Option<String>,
 }
-
 impl EnumAttr {
     pub(super) fn parse(attrs: &[Attribute]) -> syn::Result<Self> {
         let container = ContainerAttr::parse(attrs)?;
@@ -27,12 +22,10 @@ impl EnumAttr {
         })
     }
 }
-
 #[derive(Debug, Default)]
 pub(super) struct VariantAttr {
     pub(super) rename: Option<String>,
 }
-
 impl VariantAttr {
     pub(super) fn parse(attrs: &[Attribute]) -> syn::Result<Self> {
         let mut out = Self::default();
@@ -55,7 +48,6 @@ impl VariantAttr {
         Ok(out)
     }
 }
-
 impl FieldAttr {
     pub(super) fn parse_with(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
         if self.combined_json_helper {
@@ -66,7 +58,6 @@ impl FieldAttr {
         }
         Ok(())
     }
-
     pub(super) fn parse_bounded_with(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
         if self.combined_json_helper {
             return Err(meta.error("`json` cannot be combined with `with` or `bounded_with`"));
@@ -80,7 +71,6 @@ impl FieldAttr {
         }
         Ok(())
     }
-
     pub(super) fn parse_json_helper(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
         if self.with.is_some() || self.bounded_with.is_some() || self.combined_json_helper {
             return Err(meta.error("`json` cannot be combined with `with` or `bounded_with`"));
@@ -95,19 +85,16 @@ impl FieldAttr {
         self.combined_json_helper = true;
         Ok(())
     }
-
     pub(super) fn require_json_serialize_bound(&self, generics: &mut Generics, ty: &syn::Type) {
         if self.with.is_none() {
             add_bound(generics, ty, quote!(norito::json::JsonSerialize));
         }
     }
-
     pub(super) fn require_json_deserialize_bound(&self, generics: &mut Generics, ty: &syn::Type) {
         if self.with.is_none() {
             add_bound(generics, ty, quote!(norito::json::JsonDeserialize));
         }
     }
-
     pub(super) fn deserializer_call(&self, ty: &syn::Type, parser: TokenStream2) -> TokenStream2 {
         if let Some(path) = &self.with {
             quote! { #path::deserialize(#parser)? }
@@ -115,7 +102,6 @@ impl FieldAttr {
             quote! { <#ty as norito::json::JsonDeserialize>::json_deserialize(#parser)? }
         }
     }
-
     pub(super) fn deserialize_from_value(
         &self,
         ty: &syn::Type,
@@ -128,7 +114,6 @@ impl FieldAttr {
             #call
         }}
     }
-
     pub(super) fn bounded_serializer_call(
         &self,
         value: TokenStream2,

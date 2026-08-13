@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test for /v1/zk/roots using a minimal in-memory state.
 #![allow(clippy::too_many_lines)]
-
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
-
 use axum::{Router, routing::post};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -17,11 +15,9 @@ use iroha_torii::NoritoJson;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use tower::ServiceExt as _;
-
 const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const NORITO_MIME_TYPE: &str = "application/x-norito";
-
 fn zk_config_with_tree_roots_history_len(
     tree_roots_history_len: NonZeroUsize,
 ) -> iroha_config::parameters::actual::Zk {
@@ -119,7 +115,6 @@ fn zk_config_with_tree_roots_history_len(
         },
     }
 }
-
 fn seeded_zk_roots_state(
     tree_roots_history_len: NonZeroUsize,
     commitment_count: u8,
@@ -132,7 +127,6 @@ fn seeded_zk_roots_state(
             tree_roots_history_len,
         ))
         .expect("empty SCCP outbox accepts roots test configuration");
-
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("zkd", "universal").expect("domain id"),
@@ -198,7 +192,6 @@ fn seeded_zk_roots_state(
         );
         let _ = block.commit();
     }
-
     let state = Arc::new(state);
     let roots_all = state
         .view()
@@ -209,7 +202,6 @@ fn seeded_zk_roots_state(
         .unwrap_or_default();
     (state, asset_def_id, asset_alias.to_owned(), roots_all)
 }
-
 fn zk_roots_router(state: Arc<State>) -> Router {
     Router::new().route(
         "/v1/zk/roots",
@@ -226,13 +218,11 @@ fn zk_roots_router(state: Arc<State>) -> Router {
         }),
     )
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     let (state, _asset_def_id, asset_alias, roots_all) =
         seeded_zk_roots_state(nonzero!(3_usize), 5);
     let app = zk_roots_router(state.clone());
-
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", asset_alias.clone()),
         iroha_torii::json_entry("max", 0u64),
@@ -263,7 +253,6 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     // latest must equal last root
     let latest = v.get("latest").and_then(|x| x.as_str()).unwrap_or("");
     assert_eq!(latest, hex::encode(roots_all.last().copied().unwrap()));
-
     // Query with max=2 (bounded by requested)
     let req_second_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", asset_alias),
@@ -289,7 +278,6 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
         .count();
     assert_eq!(second_root_count, 2);
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_returns_all_roots_when_request_exceeds_history() {
     let (state, asset_def_id, _asset_alias, roots_all) =
@@ -306,12 +294,10 @@ async fn zk_roots_endpoint_returns_all_roots_when_request_exceeds_history() {
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(req_body))
         .unwrap();
-
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let payload: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-
     assert_eq!(
         payload
             .get("roots")
@@ -344,7 +330,6 @@ async fn zk_roots_endpoint_returns_all_roots_when_request_exceeds_history() {
         Some(64)
     );
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_bounds_nonzero_max_by_cap() {
     let (state, _asset_def_id, asset_alias, roots_all) =
@@ -361,7 +346,6 @@ async fn zk_roots_endpoint_bounds_nonzero_max_by_cap() {
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(req_body))
         .unwrap();
-
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -376,7 +360,6 @@ async fn zk_roots_endpoint_bounds_nonzero_max_by_cap() {
         .rev()
         .map(hex::encode)
         .collect();
-
     assert_eq!(
         payload
             .get("roots")
@@ -388,7 +371,6 @@ async fn zk_roots_endpoint_bounds_nonzero_max_by_cap() {
         want_hex
     );
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_returns_profile_defined_empty_root() {
     let (state, asset_def_id, _asset_alias, roots_all) =
@@ -406,7 +388,6 @@ async fn zk_roots_endpoint_returns_profile_defined_empty_root() {
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(req_body))
         .unwrap();
-
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -426,7 +407,6 @@ async fn zk_roots_endpoint_returns_profile_defined_empty_root() {
         Some(expected.as_str())
     );
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_accepts_trimmed_alias_literal() {
     let (state, _asset_def_id, asset_alias, roots_all) =
@@ -443,12 +423,10 @@ async fn zk_roots_endpoint_accepts_trimmed_alias_literal() {
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(req_body))
         .unwrap();
-
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let payload: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-
     assert_eq!(
         payload
             .get("roots")
@@ -464,7 +442,6 @@ async fn zk_roots_endpoint_accepts_trimmed_alias_literal() {
         Some(hex::encode(roots_all.last().copied().unwrap()).as_str())
     );
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_negotiates_norito_for_non_empty_payload() {
     let (state, _asset_def_id, asset_alias, roots_all) =
@@ -493,7 +470,6 @@ async fn zk_roots_endpoint_negotiates_norito_for_non_empty_payload() {
         .header(http::header::ACCEPT, NORITO_MIME_TYPE)
         .body(axum::body::Body::from(req_body))
         .unwrap();
-
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
     assert_eq!(
@@ -507,7 +483,6 @@ async fn zk_roots_endpoint_negotiates_norito_for_non_empty_payload() {
     assert_eq!(bytes, expected_bytes);
     assert!(roots_all.len() >= 2);
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_returns_406_for_unsupported_accept_header() {
     let (state, asset_def_id, _asset_alias, _roots_all) =
@@ -525,7 +500,6 @@ async fn zk_roots_endpoint_returns_406_for_unsupported_accept_header() {
         .header(http::header::ACCEPT, "text/plain")
         .body(axum::body::Body::from(req_body))
         .unwrap();
-
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::NOT_ACCEPTABLE);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();

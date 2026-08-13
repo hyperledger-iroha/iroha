@@ -1,5 +1,4 @@
 // Native AMX reservation coverage remains in the parent queue::tests module.
-
 #[test]
 fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -138,7 +137,6 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
             &admission_binding,
         )
         .expect("durably enqueue globally bound Native AMX transaction");
-
     let participant_scope = LaneQueueReservationScopeV1 {
         lane_id: participant.lane_id,
         dataspace_id: participant.dataspace_id,
@@ -174,7 +172,6 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
              carrier commits its exact registry marker"
     );
     assert_eq!(queue.queued_len(), 1);
-
     install_queue_plan_registry_value_for_test(&state, &admission_binding);
     assert_eq!(
         state
@@ -189,7 +186,6 @@ fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
             .is_empty()
     );
     assert_eq!(queue.queued_len(), 1);
-
     assert!(
         queue
             .reserve_transactions_for_lane_bounded(

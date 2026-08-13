@@ -1,10 +1,7 @@
 //! Governance lifecycle events for the data event stream.
-
 use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use super::*;
-
 #[model]
 mod model {
     use super::*;
@@ -13,7 +10,6 @@ mod model {
         isi::governance::ParliamentDecision,
     };
     use iroha_primitives::numeric::Quantity;
-
     /// Governance lifecycle events.
     #[derive(
         Debug,
@@ -70,7 +66,6 @@ mod model {
         /// A citizen service discipline event was recorded.
         CitizenServiceRecorded(GovernanceCitizenServiceRecorded),
     }
-
     /// Proposal submitted payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -83,7 +78,6 @@ mod model {
         /// Canonical public contract address targeted by the proposal when applicable.
         pub contract_address: Option<crate::smart_contract::ContractAddress>,
     }
-
     /// Lock created payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -98,7 +92,6 @@ mod model {
         /// Expiry height (inclusive)
         pub expiry_height: u64,
     }
-
     /// Lock extended payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -113,7 +106,6 @@ mod model {
         /// New expiry height (inclusive)
         pub expiry_height: u64,
     }
-
     /// Proposal enacted payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -122,7 +114,6 @@ mod model {
         /// Deterministic proposal id
         pub id: [u8; 32],
     }
-
     /// Proposal approved payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -131,7 +122,6 @@ mod model {
         /// Deterministic proposal id
         pub id: [u8; 32],
     }
-
     /// Proposal rejected payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -140,7 +130,6 @@ mod model {
         /// Deterministic proposal id
         pub id: [u8; 32],
     }
-
     /// Ballot mode (ZK or Plain)
     #[derive(
         Debug,
@@ -162,7 +151,6 @@ mod model {
         /// Transparent, quadratic-weighted ballot
         Plain,
     }
-
     /// Ballot accepted payload
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -175,7 +163,6 @@ mod model {
         /// Optional weight when available (e.g., Plain mode); None for ZK ballots.
         pub weight: Option<u128>,
     }
-
     /// Ballot rejected payload
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -186,7 +173,6 @@ mod model {
         /// Free-form reason (stable messages preferred)
         pub reason: String,
     }
-
     /// Reason for slashing or restituting a governance bond.
     #[derive(
         Debug,
@@ -214,7 +200,6 @@ mod model {
         /// Restitution granted after appeal or correction.
         Restitution,
     }
-
     /// Referendum opened payload
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -227,7 +212,6 @@ mod model {
         /// Enactment window end height (inclusive)
         pub h_end: u64,
     }
-
     /// Referendum closed payload
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -238,7 +222,6 @@ mod model {
         /// Block height at which the referendum was closed
         pub at_height: u64,
     }
-
     /// Lock unlocked payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -251,7 +234,6 @@ mod model {
         /// Amount unlocked
         pub amount: Quantity,
     }
-
     /// Lock slashed payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -270,7 +252,6 @@ mod model {
         /// Free-form note attached to the slash decision.
         pub note: String,
     }
-
     /// Lock restitution payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -287,7 +268,6 @@ mod model {
         /// Free-form note attached to the restitution decision.
         pub note: String,
     }
-
     /// Citizen registry entry created.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -298,7 +278,6 @@ mod model {
         /// Bonded amount held in escrow.
         pub amount: Quantity,
     }
-
     /// Citizen registry entry removed (bond returned).
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -309,7 +288,6 @@ mod model {
         /// Amount returned from escrow.
         pub amount: Quantity,
     }
-
     /// Council persisted payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -328,7 +306,6 @@ mod model {
         /// Derivation method.
         pub derived_by: crate::isi::governance::CouncilDerivationKind,
     }
-
     /// Parliament selection recorded for an epoch.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -339,7 +316,6 @@ mod model {
         /// Body rosters for the epoch.
         pub bodies: ParliamentBodies,
     }
-
     /// Parliament approval recorded payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -357,7 +333,6 @@ mod model {
         /// Quorum required to open the referendum.
         pub required: u32,
     }
-
     /// Parliament ballot recorded payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -381,7 +356,6 @@ mod model {
         /// Quorum required for an approve or reject decision.
         pub required: u32,
     }
-
     /// Citizen service discipline event payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -402,7 +376,6 @@ mod model {
         pub cooldown_until: u64,
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
     GovernanceEvent,
@@ -429,7 +402,6 @@ impl_json_via_norito_bytes!(
     GovernanceCitizenRevoked,
     GovernanceCitizenServiceRecorded,
 );
-
 /// Prelude exports
 pub mod prelude {
     pub use super::{

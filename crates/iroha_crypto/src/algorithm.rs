@@ -1,7 +1,6 @@
 use core::{fmt, str::FromStr};
 #[cfg(not(feature = "ffi_import"))]
 use std::string::String;
-
 use iroha_schema::{IntoSchema, TypeId};
 #[cfg(not(feature = "ffi_import"))]
 use norito::json::{
@@ -9,9 +8,7 @@ use norito::json::{
 };
 #[cfg(not(feature = "ffi_import"))]
 use norito::{Decode, Encode, core as norito_core};
-
 use crate::error::NoSuchAlgorithm;
-
 /// String algorithm representation
 pub const ED_25519: &str = "ed25519";
 /// String algorithm representation
@@ -42,7 +39,6 @@ pub const BLS_SMALL: &str = "bls_small";
 #[cfg(feature = "sm")]
 /// String algorithm representation
 pub const SM2: &str = "sm2";
-
 crate::ffi::ffi_item! {
     /// Algorithm for hashing & signing
     ///
@@ -96,10 +92,8 @@ crate::ffi::ffi_item! {
         /// SM2 signature scheme (GM/T 0003-2012)
         Sm2 = 10,
     }
-
     ffi_type(opaque)
 }
-
 impl Algorithm {
     /// Maps the algorithm to its static string representation
     pub const fn as_static_str(self) -> &'static str {
@@ -125,7 +119,6 @@ impl Algorithm {
             Self::Sm2 => SM2,
         }
     }
-
     /// Exact byte length of a canonical detached signature payload.
     ///
     /// Keeping this geometry with the feature-dependent enum prevents
@@ -150,16 +143,13 @@ impl Algorithm {
         }
     }
 }
-
 impl fmt::Display for Algorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_static_str())
     }
 }
-
 impl FromStr for Algorithm {
     type Err = NoSuchAlgorithm;
-
     fn from_str(algorithm: &str) -> Result<Self, Self::Err> {
         match algorithm {
             ED_25519 => Ok(Algorithm::Ed25519),
@@ -185,10 +175,8 @@ impl FromStr for Algorithm {
         }
     }
 }
-
 impl TryFrom<u8> for Algorithm {
     type Error = ();
-
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Algorithm::Ed25519),
@@ -214,18 +202,15 @@ impl TryFrom<u8> for Algorithm {
         }
     }
 }
-
 #[cfg(not(feature = "ffi_import"))]
 impl IntoSchema for Algorithm {
     fn type_name() -> String {
         "Algorithm".into()
     }
-
     fn update_schema_map(map: &mut iroha_schema::MetaMap) {
         if map.contains_key::<Self>() {
             return;
         }
-
         let mut variants = Vec::new();
         let mut push_variant = |tag: &str, discriminant: u32| {
             variants.push(iroha_schema::EnumVariant {
@@ -234,7 +219,6 @@ impl IntoSchema for Algorithm {
                 ty: None,
             });
         };
-
         push_variant("Ed25519", Algorithm::Ed25519 as u32);
         push_variant("Secp256k1", Algorithm::Secp256k1 as u32);
         #[cfg(feature = "bls")]
@@ -268,13 +252,11 @@ impl IntoSchema for Algorithm {
         }
         #[cfg(feature = "sm")]
         push_variant("Sm2", Algorithm::Sm2 as u32);
-
         map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
             variants,
         }));
     }
 }
-
 #[cfg(not(feature = "ffi_import"))]
 impl<'a> norito_core::DecodeFromSlice<'a> for Algorithm {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito_core::Error> {
@@ -284,14 +266,12 @@ impl<'a> norito_core::DecodeFromSlice<'a> for Algorithm {
         Ok((algorithm, used))
     }
 }
-
 #[cfg(not(feature = "ffi_import"))]
 impl NoritoJsonSerialize for Algorithm {
     fn json_serialize(&self, out: &mut String) {
         let value = self.as_static_str().to_string();
         NoritoJsonSerialize::json_serialize(&value, out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -299,7 +279,6 @@ impl NoritoJsonSerialize for Algorithm {
         json::write_json_string_to(self.as_static_str(), out)
     }
 }
-
 #[cfg(not(feature = "ffi_import"))]
 impl NoritoJsonDeserialize for Algorithm {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -308,7 +287,6 @@ impl NoritoJsonDeserialize for Algorithm {
             .map_err(|_| json::Error::Message(format!("unknown algorithm '{value}'")))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,9 +295,7 @@ mod tests {
         let mut cases = Vec::new();
         cases.push((Algorithm::Ed25519, ED_25519, 0u8));
         cases.push((Algorithm::Secp256k1, SECP_256_K1, 1u8));
-
         cases.push((Algorithm::MlDsa, ML_DSA, 4u8));
-
         #[cfg(feature = "gost")]
         cases.extend_from_slice(&[
             (
@@ -348,13 +324,11 @@ mod tests {
                 9u8,
             ),
         ]);
-
         #[cfg(feature = "bls")]
         cases.extend_from_slice(&[
             (Algorithm::BlsNormal, BLS_NORMAL, 2u8),
             (Algorithm::BlsSmall, BLS_SMALL, 3u8),
         ]);
-
         for (alg, name, value) in cases {
             assert_eq!(alg.as_static_str(), name);
             assert_eq!(Algorithm::from_str(name).unwrap(), alg);
@@ -362,13 +336,11 @@ mod tests {
             assert_eq!(alg as u8, value);
         }
     }
-
     #[test]
     fn canonical_signature_payload_lengths_are_stable() {
         assert_eq!(Algorithm::Ed25519.signature_payload_len(), 64);
         assert_eq!(Algorithm::Secp256k1.signature_payload_len(), 64);
         assert_eq!(Algorithm::MlDsa.signature_payload_len(), 3_309);
-
         #[cfg(feature = "gost")]
         {
             assert_eq!(

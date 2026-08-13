@@ -5,14 +5,11 @@
 //! enums, and proof envelopes must bind all three together with governed
 //! parameter, verifier, statement-schema, and engine-manifest digests. There
 //! are no free-form identifiers, aliases, or fallback proof variants.
-
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-
 use crate::{AssetDefinitionId, NetworkId, account::AccountId, asset::AssetBalanceScope};
-
 pub use iroha_zkp_halo2::vega::{
     VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, VEGA_MDL_BIRTH_RANDOM_BYTES_V1,
     VEGA_MDL_FULL_DATE_TEXT_BYTES_V1, VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1,
@@ -20,7 +17,6 @@ pub use iroha_zkp_halo2::vega::{
     VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
     VEGA_MDL_MSO_PAYLOAD_BYTES_V1, VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1,
 };
-
 /// Domain separator used to hash canonical [`PrivacyStatementV1`] values.
 pub const PRIVACY_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:statement:v1";
 /// Domain separator used to hash canonical [`PrivacyNativeConsensusBindingV1`] values.
@@ -122,7 +118,6 @@ pub const ZK_X509_CRL_DER_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.der.v1";
 pub const ZK_X509_CRL_ISSUER_SPKI_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.issuer-spki.v1";
 /// Implicit version committed by every X.509 governance-record digest.
 pub const ZK_X509_GOVERNANCE_RECORD_VERSION_V1: u16 = 1;
-
 /// Maximum privacy actions admitted in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1: u32 = 1;
 /// Maximum privacy actions admitted in one Taira block.
@@ -161,7 +156,6 @@ pub const TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1: u32 = 8;
 pub const TAIRA_PRIVACY_RETAINED_ROOT_COUNT_V1: u32 = 2_048;
 /// Minimum on-chain notice before a privacy-policy tightening becomes effective.
 pub const MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1: u64 = 300;
-
 /// Canonical first-release privacy protocol identity.
 ///
 /// Variant order is part of the Norito wire contract. New protocols require a
@@ -216,7 +210,6 @@ pub enum PrivacyProtocolIdV1 {
     #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v0"))]
     PqMaspStarkV0,
 }
-
 /// Frozen protocol labels retired before the first-release privacy registry.
 ///
 /// These identifiers remain reserved so generic proof systems, SDKs, and
@@ -234,11 +227,9 @@ pub const PRIVACY_RETIRED_PROTOCOL_LABELS_V1: [&str; 10] = [
     "miden-stark-note-v1",
     "aztec-private-rollup-v1",
 ];
-
 impl PrivacyProtocolIdV1 {
     /// Number of protocols in the closed first-release registry.
     pub const COUNT: usize = 12;
-
     /// Every protocol in canonical Norito discriminant order.
     pub const ALL: [Self; Self::COUNT] = [
         Self::ZkAcePqAuthorizationV0,
@@ -254,7 +245,6 @@ impl PrivacyProtocolIdV1 {
         Self::IrohaIvmPrivateNoteStarkV1,
         Self::PqMaspStarkV0,
     ];
-
     /// Exact external identifier used by SDK catalogs, governance tooling, and
     /// the BOI Privacy Lab.
     ///
@@ -277,7 +267,6 @@ impl PrivacyProtocolIdV1 {
             Self::PqMaspStarkV0 => "pq-masp-stark-v0",
         }
     }
-
     /// Exact Norito statement/proof variant label carried by the first-release
     /// cross-SDK matrix.
     ///
@@ -302,7 +291,6 @@ impl PrivacyProtocolIdV1 {
             Self::PqMaspStarkV0 => "PqMaspStarkV0",
         }
     }
-
     /// Parse one exact first-release external identifier.
     ///
     /// Returns `None` for aliases, retired identifiers, and non-canonical
@@ -325,7 +313,6 @@ impl PrivacyProtocolIdV1 {
             _ => None,
         }
     }
-
     /// Exact proof system required by this protocol.
     #[must_use]
     pub const fn expected_proof_system(self) -> PrivacyProofSystemIdV1 {
@@ -352,7 +339,6 @@ impl PrivacyProtocolIdV1 {
             Self::MoneroFcmpPlusPlusV1 => PrivacyProofSystemIdV1::FcmpPlusPlusCurveTreeBulletproofs,
         }
     }
-
     /// Exact native verifier engine required by this protocol.
     #[must_use]
     pub const fn expected_engine(self) -> PrivacyEngineIdV1 {
@@ -374,7 +360,6 @@ impl PrivacyProtocolIdV1 {
         }
     }
 }
-
 #[cfg(any(test, feature = "privacy-exact12-conformance"))]
 pub use exact12_fixture::{
     PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyExact12FixtureBundleV1,
@@ -384,7 +369,6 @@ pub use exact12_fixture::{
     privacy_exact12_matrix_bytes_v1, privacy_exact12_typed_envelope_rows_v1,
     validate_privacy_exact12_fixture_bundle_v1,
 };
-
 /// Return whether `label` is reserved by the first-release privacy registry.
 ///
 /// Active and retired labels are both exact, case-sensitive reservations.
@@ -395,7 +379,6 @@ pub fn privacy_protocol_label_is_reserved_v1(label: &str) -> bool {
     PrivacyProtocolIdV1::from_canonical_label(label).is_some()
         || PRIVACY_RETIRED_PROTOCOL_LABELS_V1.contains(&label)
 }
-
 /// Exact proof-system profile selected by a privacy protocol.
 ///
 /// This is intentionally distinct from [`PrivacyProtocolIdV1`] because several
@@ -453,7 +436,6 @@ pub enum PrivacyProofSystemIdV1 {
     #[cfg_attr(feature = "json", norito(rename = "lantern-lnp22-module-linear-norm"))]
     LanternLnp22ModuleLinearNorm,
 }
-
 /// Native verifier engine implementation selected by a privacy protocol.
 ///
 /// Engine identity binds the pinned experimental Rust implementation
@@ -499,7 +481,6 @@ pub enum PrivacyEngineIdV1 {
     #[cfg_attr(feature = "json", norito(rename = "native-lantern-lnp22"))]
     NativeLanternLnp22,
 }
-
 macro_rules! define_privacy_digest {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -527,45 +508,38 @@ macro_rules! define_privacy_digest {
             #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
             pub [u8; 32],
         );
-
         impl $name {
             /// Construct a digest from exactly 32 bytes.
             #[must_use]
             pub const fn new(bytes: [u8; 32]) -> Self {
                 Self(bytes)
             }
-
             /// Borrow the exact digest bytes.
             #[must_use]
             pub const fn as_bytes(&self) -> &[u8; 32] {
                 &self.0
             }
-
             /// Consume the digest and return its exact bytes.
             #[must_use]
             pub const fn into_bytes(self) -> [u8; 32] {
                 self.0
             }
-
             /// Return `true` when every digest byte is zero.
             #[must_use]
             pub fn is_zero(&self) -> bool {
                 self.0.iter().all(|byte| *byte == 0)
             }
         }
-
         impl From<[u8; 32]> for $name {
             fn from(bytes: [u8; 32]) -> Self {
                 Self::new(bytes)
             }
         }
-
         impl From<$name> for [u8; 32] {
             fn from(value: $name) -> Self {
                 value.into_bytes()
             }
         }
-
         impl AsRef<[u8; 32]> for $name {
             fn as_ref(&self) -> &[u8; 32] {
                 self.as_bytes()
@@ -573,7 +547,6 @@ macro_rules! define_privacy_digest {
         }
     };
 }
-
 define_privacy_digest!(
     /// Digest of the governed public parameter set for a protocol.
     PrivacyParameterDigestV1
@@ -739,7 +712,6 @@ define_privacy_digest!(
     /// Self-digest of one immutable authoritative signed-CRL revision.
     PrivacyZkX509CrlRecordDigestV1
 );
-
 impl PrivacyX509CrlDerDigestV1 {
     /// Hash the complete exact signed DER CRL with the canonical X.509 frame.
     #[must_use]
@@ -750,7 +722,6 @@ impl PrivacyX509CrlDerDigestV1 {
         ))
     }
 }
-
 impl PrivacyX509CrlIssuerSpkiDigestV1 {
     /// Hash the complete exact issuer SPKI DER with the canonical X.509 frame.
     #[must_use]
@@ -761,7 +732,6 @@ impl PrivacyX509CrlIssuerSpkiDigestV1 {
         ))
     }
 }
-
 define_privacy_digest!(
     /// Canonical commitment-tree or accumulator root.
     PrivacyRootV1
@@ -798,7 +768,6 @@ define_privacy_digest!(
     /// Digest of one canonical governed ZK-AMS registry bootstrap.
     PrivacyZkAmsRegistryBootstrapDigestV1
 );
-
 macro_rules! define_ristretto255_encoding {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -826,20 +795,17 @@ macro_rules! define_ristretto255_encoding {
             #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
             pub [u8; 32],
         );
-
         impl $name {
             /// Construct from exactly 32 encoded bytes.
             #[must_use]
             pub const fn new(bytes: [u8; 32]) -> Self {
                 Self(bytes)
             }
-
             /// Borrow the exact compressed bytes.
             #[must_use]
             pub const fn as_bytes(&self) -> &[u8; 32] {
                 &self.0
             }
-
             /// Return `true` for the all-zero sentinel encoding.
             ///
             /// The native engine additionally decodes the point, rejects
@@ -851,7 +817,6 @@ macro_rules! define_ristretto255_encoding {
         }
     };
 }
-
 define_ristretto255_encoding!(
     /// Canonical compressed Ristretto255 ZK-AMS seed public key.
     PrivacyZkAmsSeedPublicKeyV1
@@ -860,7 +825,6 @@ define_ristretto255_encoding!(
     /// Canonical compressed Ristretto255 MLSAGS key image.
     PrivacyZkAmsKeyImageV1
 );
-
 // Keep the implementation in this public module: textual includes improve
 // navigation without changing path-derived Norito identities.
 include!("privacy/protocol.rs");
@@ -869,7 +833,6 @@ pub use capability_manifest::*;
 include!("privacy/credentials.rs");
 include!("privacy/statements.rs");
 include!("privacy/proofs.rs");
-
 #[cfg(test)]
 mod tests {
     include!("privacy/tests/protocol_and_proofs.rs");

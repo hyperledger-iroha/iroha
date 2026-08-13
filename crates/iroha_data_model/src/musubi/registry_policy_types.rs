@@ -13,7 +13,6 @@ pub enum MusubiRegistryAdmissionModeV1 {
     /// Public admission subject to normal ownership and payment checks.
     Open,
 }
-
 /// Versioned first-release Musubi registry policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -30,7 +29,6 @@ pub struct MusubiRegistryPolicyV1 {
     /// Prospective alias prices.
     pub alias_pricing: MusubiAliasPricingPolicyV1,
 }
-
 impl Default for MusubiRegistryPolicyV1 {
     fn default() -> Self {
         Self {

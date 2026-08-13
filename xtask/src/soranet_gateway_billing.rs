@@ -1,7 +1,6 @@
 //! Billing harness for the SoraGlobal Gateway CDN (SN15-M0-9).
 //! Rates usage against the meter catalog, enforces guardrails, and emits ledger
 //! projections plus CSV/Parquet exports for reconciliation.
-
 use std::{
     collections::BTreeMap,
     fs::{self, File},
@@ -9,7 +8,6 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
-
 use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt16Array, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use eyre::{Result, WrapErr};
@@ -24,7 +22,6 @@ use norito::{
     json,
 };
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct MeterDefinition {
     pub id: String,
@@ -34,27 +31,23 @@ pub struct MeterDefinition {
     pub region_multipliers_bps: BTreeMap<String, u16>,
     pub discount_tiers: Vec<DiscountTier>,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct DiscountTier {
     pub threshold: u64,
     pub discount_bps: u16,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct UsageEntry {
     pub meter_id: String,
     pub quantity: u64,
     pub region: String,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct UsageSnapshot {
     pub window: String,
     pub tenant: Option<String>,
     pub entries: Vec<UsageEntry>,
 }
-
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct GuardrailsConfig {
     pub catalog_version: String,
@@ -65,7 +58,6 @@ pub struct GuardrailsConfig {
     pub min_invoice_micros: u64,
     pub notes: Vec<String>,
 }
-
 impl GuardrailsConfig {
     pub fn default_for_m0() -> Self {
         Self {
@@ -79,7 +71,6 @@ impl GuardrailsConfig {
         }
     }
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 pub struct InvoiceLine {
     pub meter_id: String,
@@ -93,7 +84,6 @@ pub struct InvoiceLine {
     pub line_total_micros: u64,
     pub effective_unit_micros: u64,
 }
-
 #[derive(Debug, JsonSerialize)]
 pub struct GuardrailOutcome {
     pub soft_cap_micros: u64,
@@ -106,7 +96,6 @@ pub struct GuardrailOutcome {
     pub hard_cap_exceeded: bool,
     pub below_min_invoice: bool,
 }
-
 #[derive(Debug, JsonSerialize)]
 pub struct InvoiceSummary {
     pub window: String,
@@ -117,14 +106,12 @@ pub struct InvoiceSummary {
     pub totals: InvoiceTotals,
     pub guardrails: GuardrailOutcome,
 }
-
 #[derive(Debug, JsonSerialize)]
 pub struct InvoiceTotals {
     pub line_count: usize,
     pub total_micros: u64,
     pub total_xor: f64,
 }
-
 #[derive(Debug, JsonSerialize)]
 pub struct LedgerProjection {
     pub asset_definition: AssetDefinitionId,
@@ -134,7 +121,6 @@ pub struct LedgerProjection {
     pub total_xor: f64,
     pub transfer_batch: InstructionBox,
 }
-
 #[derive(Debug)]
 pub struct BillingOptions {
     pub usage_path: PathBuf,
@@ -146,7 +132,6 @@ pub struct BillingOptions {
     pub asset_definition: String,
     pub allow_hard_cap: bool,
 }
-
 #[derive(Debug)]
 pub struct BillingOutcome {
     pub invoice_path: PathBuf,
@@ -156,7 +141,6 @@ pub struct BillingOutcome {
     pub reconciliation_report_path: PathBuf,
     pub total_micros: u64,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 pub struct MergeNote {
     pub meter_id: String,
@@ -164,19 +148,15 @@ pub struct MergeNote {
     pub merged_count: usize,
     pub total_quantity: u64,
 }
-
 pub fn run_billing(options: BillingOptions) -> Result<BillingOutcome> {
     let catalog = load_catalog(&options.catalog_path)?;
     let usage = load_usage(&options.usage_path)?;
     let guardrails = load_guardrails(options.guardrails_path.as_deref())?;
-
     let meter_map: BTreeMap<_, _> = catalog
         .iter()
         .map(|meter| (meter.id.clone(), meter))
         .collect();
-
     let (normalized_entries, merge_notes) = normalize_usage_entries(&usage.entries)?;
-
     let mut lines = Vec::new();
     for entry in &normalized_entries {
         let Some(meter) = meter_map.get(&entry.meter_id) else {
@@ -219,13 +199,10 @@ pub fn run_billing(options: BillingOptions) -> Result<BillingOutcome> {
             effective_unit_micros: effective_unit_micros as u64,
         });
     }
-
     lines.sort_by(|a, b| a.meter_id.cmp(&b.meter_id).then(a.region.cmp(&b.region)));
-
     let total_micros: u64 = lines.iter().map(|line| line.line_total_micros).sum();
     let total_xor = total_micros as f64 / 1_000_000.0;
     let guardrail_outcome = evaluate_guardrails(&guardrails, total_micros);
-
     if guardrail_outcome.hard_cap_exceeded && !options.allow_hard_cap {
         return Err(eyre::eyre!(
             "hard cap exceeded ({} micro-XOR) and override not allowed",
@@ -239,7 +216,6 @@ pub fn run_billing(options: BillingOptions) -> Result<BillingOutcome> {
             guardrails.min_invoice_micros
         ));
     }
-
     let invoice = InvoiceSummary {
         window: usage.window.clone(),
         tenant: usage.tenant.clone(),
@@ -253,27 +229,22 @@ pub fn run_billing(options: BillingOptions) -> Result<BillingOutcome> {
         },
         guardrails: guardrail_outcome,
     };
-
     fs::create_dir_all(&options.output_dir).wrap_err_with(|| {
         format!(
             "failed to create output directory {}",
             options.output_dir.display()
         )
     })?;
-
     let invoice_path = options.output_dir.join("billing_invoice.json");
     let file = File::create(&invoice_path)
         .wrap_err_with(|| format!("failed to create invoice {}", invoice_path.display()))?;
     json::to_writer_pretty(file, &invoice).wrap_err("failed to write invoice JSON")?;
-
     let csv_path = options.output_dir.join("billing_invoice.csv");
     let csv = render_csv(&lines);
     fs::write(&csv_path, csv)
         .wrap_err_with(|| format!("failed to write CSV export {}", csv_path.display()))?;
-
     let parquet_path = options.output_dir.join("billing_invoice.parquet");
     write_parquet(&lines, &parquet_path)?;
-
     let catalog_copy = options.output_dir.join("meter_catalog.json");
     fs::copy(&options.catalog_path, &catalog_copy).wrap_err_with(|| {
         format!(
@@ -281,7 +252,6 @@ pub fn run_billing(options: BillingOptions) -> Result<BillingOutcome> {
             options.catalog_path.display()
         )
     })?;
-
     let usage_copy = options.output_dir.join("billing_usage_snapshot.json");
     fs::copy(&options.usage_path, &usage_copy).wrap_err_with(|| {
         format!(
@@ -289,7 +259,6 @@ pub fn run_billing(options: BillingOptions) -> Result<BillingOutcome> {
             options.usage_path.display()
         )
     })?;
-
     let guardrail_copy = options.output_dir.join("billing_guardrails.json");
     let guard_file = File::create(&guardrail_copy).wrap_err_with(|| {
         format!(
@@ -298,7 +267,6 @@ pub fn run_billing(options: BillingOptions) -> Result<BillingOutcome> {
         )
     })?;
     json::to_writer_pretty(guard_file, &guardrails).wrap_err("failed to write guardrail copy")?;
-
     let ledger_path = options.output_dir.join("billing_ledger_projection.json");
     let ledger_projection = build_ledger_projection(
         &options.payer,
@@ -314,7 +282,6 @@ pub fn run_billing(options: BillingOptions) -> Result<BillingOutcome> {
     })?;
     json::to_writer_pretty(ledger_file, &ledger_projection)
         .wrap_err("failed to write ledger projection")?;
-
     let reconciliation_report_path = options.output_dir.join("billing_reconciliation_report.md");
     let report = render_reconciliation_report(&invoice, &ledger_projection, &guardrails);
     fs::write(&reconciliation_report_path, report).wrap_err_with(|| {
@@ -323,7 +290,6 @@ pub fn run_billing(options: BillingOptions) -> Result<BillingOutcome> {
             reconciliation_report_path.display()
         )
     })?;
-
     Ok(BillingOutcome {
         invoice_path,
         csv_path,
@@ -333,7 +299,6 @@ pub fn run_billing(options: BillingOptions) -> Result<BillingOutcome> {
         total_micros,
     })
 }
-
 fn load_catalog(path: &Path) -> Result<Vec<MeterDefinition>> {
     let file = File::open(path)
         .wrap_err_with(|| format!("failed to open meter catalog {}", path.display()))?;
@@ -344,7 +309,6 @@ fn load_catalog(path: &Path) -> Result<Vec<MeterDefinition>> {
     }
     Ok(meters)
 }
-
 fn load_usage(path: &Path) -> Result<UsageSnapshot> {
     let file = File::open(path)
         .wrap_err_with(|| format!("failed to open usage snapshot {}", path.display()))?;
@@ -358,7 +322,6 @@ fn load_usage(path: &Path) -> Result<UsageSnapshot> {
     }
     Ok(usage)
 }
-
 fn load_guardrails(path: Option<&Path>) -> Result<GuardrailsConfig> {
     if let Some(path) = path {
         let file = File::open(path)
@@ -367,10 +330,8 @@ fn load_guardrails(path: Option<&Path>) -> Result<GuardrailsConfig> {
             .wrap_err_with(|| format!("failed to parse guardrail config {}", path.display()))?;
         return Ok(guardrails);
     }
-
     Ok(GuardrailsConfig::default_for_m0())
 }
-
 fn calculate_line_total(
     base_price_micros: u64,
     quantity: u64,
@@ -388,11 +349,9 @@ fn calculate_line_total(
     u64::try_from(discounted)
         .map_err(|_| eyre::eyre!("line total exceeds u64 range for meter spend calculation"))
 }
-
 fn apply_bps(value: u128, bps: u16) -> u128 {
     (value * u128::from(bps) + 5_000) / 10_000
 }
-
 fn evaluate_guardrails(config: &GuardrailsConfig, total_micros: u64) -> GuardrailOutcome {
     let alert_threshold =
         apply_bps(config.soft_cap_micros as u128, config.alert_threshold_bps) as u64;
@@ -408,7 +367,6 @@ fn evaluate_guardrails(config: &GuardrailsConfig, total_micros: u64) -> Guardrai
         below_min_invoice: total_micros < config.min_invoice_micros,
     }
 }
-
 fn render_csv(lines: &[InvoiceLine]) -> String {
     let mut out = String::from(
         "meter_id,region,unit,quantity,effective_unit_micros,line_total_micros,discount_bps,region_multiplier_bps\n",
@@ -428,7 +386,6 @@ fn render_csv(lines: &[InvoiceLine]) -> String {
     }
     out
 }
-
 fn write_parquet(lines: &[InvoiceLine], path: &Path) -> Result<()> {
     let meter_ids: ArrayRef = Arc::new(StringArray::from_iter(
         lines.iter().map(|line| Some(line.meter_id.as_str())),
@@ -459,7 +416,6 @@ fn write_parquet(lines: &[InvoiceLine], path: &Path) -> Result<()> {
             .iter()
             .map(|line| Some(line.line_total_micros as f64 / 1_000_000.0)),
     ));
-
     let schema = Arc::new(Schema::new(vec![
         Field::new("meter_id", DataType::Utf8, false),
         Field::new("region", DataType::Utf8, false),
@@ -471,7 +427,6 @@ fn write_parquet(lines: &[InvoiceLine], path: &Path) -> Result<()> {
         Field::new("discount_bps", DataType::UInt16, false),
         Field::new("region_multiplier_bps", DataType::UInt16, false),
     ]));
-
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
@@ -487,7 +442,6 @@ fn write_parquet(lines: &[InvoiceLine], path: &Path) -> Result<()> {
         ],
     )
     .wrap_err("failed to build Parquet record batch")?;
-
     let props = WriterProperties::builder()
         .set_compression(Compression::UNCOMPRESSED)
         .build();
@@ -501,7 +455,6 @@ fn write_parquet(lines: &[InvoiceLine], path: &Path) -> Result<()> {
     writer.close().wrap_err("failed to close Parquet writer")?;
     Ok(())
 }
-
 fn normalize_usage_entries(entries: &[UsageEntry]) -> Result<(Vec<UsageEntry>, Vec<MergeNote>)> {
     let mut aggregated: BTreeMap<(String, String), (u64, usize)> = BTreeMap::new();
     for entry in entries {
@@ -530,7 +483,6 @@ fn normalize_usage_entries(entries: &[UsageEntry]) -> Result<(Vec<UsageEntry>, V
             .ok_or_else(|| eyre::eyre!("usage quantity overflow for meter `{meter_id}`"))?;
         *count += 1;
     }
-
     let mut normalized = Vec::with_capacity(aggregated.len());
     let mut merge_notes = Vec::new();
     for ((meter_id, region), (quantity, merged_count)) in aggregated {
@@ -548,13 +500,10 @@ fn normalize_usage_entries(entries: &[UsageEntry]) -> Result<(Vec<UsageEntry>, V
             });
         }
     }
-
     normalized.sort_by(|a, b| a.meter_id.cmp(&b.meter_id).then(a.region.cmp(&b.region)));
     merge_notes.sort_by(|a, b| a.meter_id.cmp(&b.meter_id).then(a.region.cmp(&b.region)));
-
     Ok((normalized, merge_notes))
 }
-
 fn resolve_discount(entry: &UsageEntry, meter: &MeterDefinition) -> Result<u16> {
     let discount_bps = meter
         .discount_tiers
@@ -565,7 +514,6 @@ fn resolve_discount(entry: &UsageEntry, meter: &MeterDefinition) -> Result<u16> 
         .unwrap_or(0);
     Ok(discount_bps)
 }
-
 fn build_ledger_projection(
     payer: &str,
     treasury: &str,
@@ -596,7 +544,6 @@ fn build_ledger_projection(
         transfer_batch: InstructionBox::from(batch),
     })
 }
-
 fn micros_to_quantity(micros: u64) -> Result<Quantity> {
     let units = micros / 1_000_000;
     let fractional = micros % 1_000_000;
@@ -604,7 +551,6 @@ fn micros_to_quantity(micros: u64) -> Result<Quantity> {
     Quantity::from_str(&repr)
         .wrap_err_with(|| format!("failed to convert {micros} micro-XOR into Quantity"))
 }
-
 fn render_reconciliation_report(
     invoice: &InvoiceSummary,
     ledger: &LedgerProjection,
@@ -653,16 +599,12 @@ Next steps:\n\
         invoice.guardrails.below_min_invoice
     )
 }
-
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, fs::File};
-
     use norito::json::{self, Value};
     use tempfile::tempdir;
-
     use super::*;
-
     #[test]
     fn billing_normalizes_duplicate_usage_entries() {
         let temp = tempdir().expect("tempdir");
@@ -670,7 +612,6 @@ mod tests {
         let usage_path = temp.path().join("usage.json");
         let guardrails_path = temp.path().join("guardrails.json");
         let output_dir = temp.path().join("out");
-
         let mut regions = BTreeMap::new();
         regions.insert("NA".to_string(), 10_000);
         let catalog = vec![MeterDefinition {
@@ -683,7 +624,6 @@ mod tests {
         }];
         json::to_writer_pretty(File::create(&catalog_path).expect("catalog file"), &catalog)
             .expect("write catalog");
-
         let usage = UsageSnapshot {
             window: "2026-10".to_string(),
             tenant: Some("demo".to_string()),
@@ -702,7 +642,6 @@ mod tests {
         };
         json::to_writer_pretty(File::create(&usage_path).expect("usage file"), &usage)
             .expect("write usage");
-
         let guardrails = GuardrailsConfig {
             catalog_version: "m0".to_string(),
             currency: "XOR".to_string(),
@@ -717,7 +656,6 @@ mod tests {
             &guardrails,
         )
         .expect("write guardrails");
-
         let outcome = run_billing(BillingOptions {
             usage_path,
             catalog_path,
@@ -729,11 +667,9 @@ mod tests {
             allow_hard_cap: false,
         })
         .expect("billing run succeeds");
-
         let invoice: Value =
             json::from_reader(File::open(outcome.invoice_path).expect("invoice file"))
                 .expect("parse invoice");
-
         let normalized = invoice["normalized_entries"]
             .as_array()
             .expect("normalized entries array");
@@ -754,7 +690,6 @@ mod tests {
             "rating should reflect merged quantity"
         );
     }
-
     #[test]
     fn billing_rejects_unknown_region_in_usage() {
         let temp = tempdir().expect("tempdir");
@@ -762,7 +697,6 @@ mod tests {
         let usage_path = temp.path().join("usage.json");
         let guardrails_path = temp.path().join("guardrails.json");
         let output_dir = temp.path().join("out");
-
         let mut regions = BTreeMap::new();
         regions.insert("NA".to_string(), 10_000);
         let catalog = vec![MeterDefinition {
@@ -775,7 +709,6 @@ mod tests {
         }];
         json::to_writer_pretty(File::create(&catalog_path).expect("catalog file"), &catalog)
             .expect("write catalog");
-
         let usage = UsageSnapshot {
             window: "2026-10".to_string(),
             tenant: None,
@@ -787,7 +720,6 @@ mod tests {
         };
         json::to_writer_pretty(File::create(&usage_path).expect("usage file"), &usage)
             .expect("write usage");
-
         let guardrails = GuardrailsConfig {
             catalog_version: "m0".to_string(),
             currency: "XOR".to_string(),
@@ -802,7 +734,6 @@ mod tests {
             &guardrails,
         )
         .expect("write guardrails");
-
         let result = run_billing(BillingOptions {
             usage_path,
             catalog_path,
@@ -813,7 +744,6 @@ mod tests {
             asset_definition: "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string(),
             allow_hard_cap: false,
         });
-
         assert!(
             result
                 .expect_err("region mismatch should fail")

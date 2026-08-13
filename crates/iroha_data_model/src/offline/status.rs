@@ -3,10 +3,8 @@
 //! These types live in the data model because they are shared by Torii
 //! responses and node telemetry. Keeping them here prevents either transport
 //! layer from depending on the other.
-
 use iroha_schema::IntoSchema;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-
 /// Legacy machine-readable diagnostic for an explicitly requested proof release.
 #[derive(
     Debug,
@@ -26,7 +24,6 @@ pub struct OfflineReadinessBlocker {
     /// Human-readable explanation; clients must not match this text.
     pub message: String,
 }
-
 /// Stable registry identity of the verifier selected for offline transfers.
 #[derive(
     Debug,
@@ -46,7 +43,6 @@ pub struct OfflineVerifierId {
     /// Human-readable key name within the backend namespace.
     pub name: String,
 }
-
 /// Active confidential-transfer verifier selected at a readiness snapshot.
 ///
 /// This is the public, key-material-free subset of the authoritative registry
@@ -74,19 +70,14 @@ pub struct OfflineActiveTransferVerifier {
     /// First block at which the verifier is inactive, exclusive; `None` means no scheduled withdrawal.
     pub withdrawal_height: Option<u64>,
 }
-
 /// Active public-to-confidential top-up shield verifier.
 pub type OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier;
-
 /// Active confidential-unshield verifier selected at the readiness snapshot.
 pub type OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier;
-
 /// Active ABI-21 V4 recursive `StepEq` verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier;
-
 /// Active ABI-21 V4 recursive `StepEp` verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier;
-
 /// Authenticated ABI-21 recursive release selected at a readiness snapshot.
 ///
 /// Every digest is lowercase hexadecimal, non-zero, and distinct in public
@@ -123,13 +114,11 @@ pub struct OfflineAuthenticatedArtifactSet {
     /// Authoritative fixed scale of the asset bound to the release.
     pub asset_scale: u32,
 }
-
 impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use norito::json::{Error, MapVisitor};
-
         let mut visitor = MapVisitor::new(parser)?;
         let mut id = None;
         let mut version = None;
@@ -139,7 +128,6 @@ impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
         let mut max_proof_bytes = None;
         let mut activation_height = None;
         let mut withdrawal_height = None;
-
         while let Some(key) = visitor.next_key()? {
             let field = key.as_str();
             match field {
@@ -195,7 +183,6 @@ impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
             }
         }
         visitor.finish()?;
-
         Ok(Self {
             id: id.ok_or_else(|| Error::missing_field("id"))?,
             version: version.ok_or_else(|| Error::missing_field("version"))?,
@@ -212,7 +199,6 @@ impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
         })
     }
 }
-
 /// Legacy snapshot-bound diagnostics for one asset-specific proof release.
 ///
 /// This does not enroll an asset for offline use and is never node readiness.
@@ -255,7 +241,6 @@ pub struct OfflineReadiness {
     /// Complete known blocker set.
     pub blockers: Vec<OfflineReadinessBlocker>,
 }
-
 /// Universal offline protocol capability projection embedded in node status.
 #[derive(
     Debug,
@@ -289,7 +274,6 @@ pub struct OfflineStatus {
     /// Command-specific proof-material diagnostics; never startup blockers.
     pub blockers: Vec<OfflineReadinessBlocker>,
 }
-
 impl norito::json::JsonDeserialize for OfflineReadiness {
     #[expect(
         clippy::too_many_lines,
@@ -299,7 +283,6 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use norito::json::{Error, MapVisitor};
-
         let mut visitor = MapVisitor::new(parser)?;
         let mut cash_handoff_capability = None;
         let mut required_bridge_abi_version = None;
@@ -318,7 +301,6 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         let mut recursive_lineage_supported = None;
         let mut ready = None;
         let mut blockers = None;
-
         while let Some(key) = visitor.next_key()? {
             let field = key.as_str();
             match field {
@@ -436,7 +418,6 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
             }
         }
         visitor.finish()?;
-
         Ok(Self {
             cash_handoff_capability: cash_handoff_capability
                 .ok_or_else(|| Error::missing_field("cash_handoff_capability"))?,
@@ -470,11 +451,9 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn sample_verifier() -> OfflineActiveTransferVerifier {
         OfflineActiveTransferVerifier {
             id: OfflineVerifierId {
@@ -490,7 +469,6 @@ mod tests {
             withdrawal_height: None,
         }
     }
-
     fn sample_readiness() -> OfflineReadiness {
         OfflineReadiness {
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
@@ -515,7 +493,6 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn readiness_json_roundtrip_is_strict() {
         let readiness = sample_readiness();
@@ -523,14 +500,11 @@ mod tests {
         let decoded: OfflineReadiness =
             norito::json::from_json(&json).expect("deserialize readiness");
         assert_eq!(decoded, readiness);
-
         let unknown = json.replacen("\"max_hops\":8", "\"unknown\":0,\"max_hops\":8", 1);
         assert!(norito::json::from_json::<OfflineReadiness>(&unknown).is_err());
-
         let duplicate = json.replacen("\"max_hops\":8", "\"max_hops\":8,\"max_hops\":8", 1);
         assert!(norito::json::from_json::<OfflineReadiness>(&duplicate).is_err());
     }
-
     #[test]
     fn universal_status_norito_roundtrip_preserves_exact_projection() {
         let status = OfflineStatus {

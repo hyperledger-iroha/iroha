@@ -3,7 +3,6 @@
 //! Measures CPU vs GPU planner operations when the Metal backend is enabled
 //! and emits JSON suitable for dashboards or release artefacts. See
 //! `specs/fastpq_plan.md` (Stage 5) for expected usage.
-
 #![allow(
     clippy::assigning_clones,
     clippy::case_sensitive_file_extension_comparisons,
@@ -21,7 +20,6 @@
     clippy::unnecessary_map_or,
     clippy::unwrap_or_default
 )]
-
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 fn main() {
     if let Err(error) = harness::run() {
@@ -29,12 +27,10 @@ fn main() {
         std::process::exit(1);
     }
 }
-
 #[cfg(not(all(feature = "fastpq-gpu", target_os = "macos")))]
 fn main() {
     eprintln!("fastpq_metal_bench targets macOS with `fastpq-gpu`; skipping build.");
 }
-
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod tests {
     use fastpq_prover::{
@@ -42,13 +38,11 @@ mod tests {
         TwiddleCacheStats,
     };
     use norito::json::Value;
-
     use super::harness::{
         self, BenchOperation, Config, OperationFilter, QueueDeltaAccumulator, Summary,
         ZeroFillSummary, kernel_stats_value, queue_stats_value, round3, twiddle_cache_value,
         zero_fill_value,
     };
-
     fn assert_close(actual: f64, expected: f64) {
         let delta = (actual - expected).abs();
         assert!(
@@ -56,7 +50,6 @@ mod tests {
             "expected {expected}, got {actual} (delta {delta})"
         );
     }
-
     #[test]
     fn summary_rounds_samples() {
         let samples = [1.1111, 2.2222, 3.3333];
@@ -65,14 +58,12 @@ mod tests {
         assert_close(summary.max_ms(), 3.333);
         assert_close(summary.mean_ms(), 2.222);
     }
-
     #[test]
     fn round3_matches_expected() {
         assert_close(round3(0.0), 0.0);
         assert_close(round3(1.2346), 1.235);
         assert_close(round3(1.2344), 1.234);
     }
-
     #[test]
     fn config_parses_trace_options() {
         let args = vec![
@@ -89,7 +80,6 @@ mod tests {
         assert_eq!(trace.seconds, 42);
         assert!(trace.output.ends_with("bench.trace"));
     }
-
     #[test]
     fn trace_template_requires_output() {
         let args = vec![
@@ -98,7 +88,6 @@ mod tests {
         ];
         assert!(Config::from_iter(args.into_iter()).is_err());
     }
-
     #[test]
     fn trace_auto_sets_default_output() {
         let args = vec!["--trace-auto".to_owned()];
@@ -108,7 +97,6 @@ mod tests {
         assert_eq!(trace.template, harness::DEFAULT_TRACE_TEMPLATE);
         assert_eq!(trace.seconds, harness::DEFAULT_TRACE_SECONDS);
     }
-
     #[test]
     fn trace_auto_allows_template_overrides() {
         let args = vec![
@@ -124,21 +112,18 @@ mod tests {
         assert_eq!(trace.template, "Custom Metal Trace");
         assert_eq!(trace.seconds, 42);
     }
-
     #[test]
     fn config_parses_require_telemetry_flag() {
         let args = vec!["--require-telemetry".to_owned()];
         let cfg = Config::from_iter(args.into_iter()).expect("require telemetry parses");
         assert!(cfg.require_telemetry);
     }
-
     #[test]
     fn config_parses_require_gpu_flag() {
         let args = vec!["--require-gpu".to_owned()];
         let cfg = Config::from_iter(args.into_iter()).expect("require gpu parses");
         assert!(cfg.require_gpu);
     }
-
     #[test]
     fn trace_dir_generates_timestamped_files() {
         let args = vec![
@@ -167,7 +152,6 @@ mod tests {
         );
         assert!(name.ends_with(".trace"));
     }
-
     #[test]
     fn trace_dir_conflicts_with_other_trace_outputs() {
         let args = vec![
@@ -177,7 +161,6 @@ mod tests {
             "custom.trace".to_owned(),
         ];
         assert!(Config::from_iter(args.into_iter()).is_err());
-
         let args = vec![
             "--trace-dir".to_owned(),
             "traces".to_owned(),
@@ -185,14 +168,12 @@ mod tests {
         ];
         assert!(Config::from_iter(args.into_iter()).is_err());
     }
-
     #[test]
     fn gpu_probe_flag_enables_probe() {
         let args = vec!["--gpu-probe".to_owned()];
         let cfg = Config::from_iter(args.into_iter()).expect("gpu probe flag parses");
         assert!(cfg.gpu_probe);
     }
-
     #[test]
     fn operation_filter_parses_poseidon() {
         let args = vec!["--operation".to_owned(), "poseidon_hash_columns".to_owned()];
@@ -204,7 +185,6 @@ mod tests {
         assert!(cfg.operation.includes(BenchOperation::Poseidon));
         assert!(!cfg.operation.includes(BenchOperation::Fft));
     }
-
     #[test]
     fn operation_filter_parses_poseidon_merkle_pairs() {
         let args = vec!["--operation".to_owned(), "poseidon_merkle_pairs".to_owned()];
@@ -216,7 +196,6 @@ mod tests {
         assert!(cfg.operation.includes(BenchOperation::PoseidonMerklePairs));
         assert!(!cfg.operation.includes_fft_tuning());
     }
-
     #[test]
     fn operation_filter_parses_bn254_poseidon_words() {
         let args = vec!["--operation".to_owned(), "bn254_poseidon_words".to_owned()];
@@ -227,7 +206,6 @@ mod tests {
         ));
         assert!(!cfg.operation.includes_fft_tuning());
     }
-
     #[test]
     fn zero_fill_value_includes_bytes_and_ms() {
         let summary = Summary::from_samples(&[1.0, 2.0, 3.0]);
@@ -254,7 +232,6 @@ mod tests {
         assert!(ms.contains_key("max_ms"));
         assert!(!object.contains_key("queue_delta"));
     }
-
     #[test]
     fn zero_fill_value_serializes_queue_delta() {
         let summary = Summary::from_samples(&[1.0, 1.0, 1.0]);
@@ -286,7 +263,6 @@ mod tests {
             3
         );
     }
-
     #[test]
     fn queue_delta_accumulator_merges_samples() {
         let mut accumulator = QueueDeltaAccumulator::default();
@@ -314,7 +290,6 @@ mod tests {
         assert!((merged.busy_ms - 0.3).abs() < f64::EPSILON);
         assert!((merged.overlap_ms - 0.15).abs() < f64::EPSILON);
     }
-
     #[test]
     fn queue_stats_value_serializes_lane_metrics() {
         let stats = QueueDepthStats {
@@ -361,7 +336,6 @@ mod tests {
         );
         assert!(first.contains_key("overlap_ratio"));
     }
-
     #[test]
     fn kernel_stats_summary_captures_samples() {
         let samples = vec![
@@ -422,7 +396,6 @@ mod tests {
             .expect("fft samples array");
         assert_eq!(samples_array.len(), 1);
     }
-
     #[test]
     fn bn254_dispatch_summary_filters_single_group_samples() {
         let samples = vec![
@@ -489,7 +462,6 @@ mod tests {
             2048
         );
     }
-
     #[test]
     fn twiddle_cache_value_reports_savings() {
         let stats = TwiddleCacheStats {
@@ -532,7 +504,6 @@ mod tests {
             round3(stats.before_ms - stats.after_ms)
         );
     }
-
     #[test]
     fn post_tile_value_captures_dispatches() {
         let samples = vec![
@@ -572,7 +543,6 @@ mod tests {
             .expect("kinds array present");
         assert_eq!(kinds.len(), 2);
     }
-
     #[test]
     fn poseidon_micro_mode_env_parser_handles_overrides() {
         assert_eq!(
@@ -588,7 +558,6 @@ mod tests {
             "unexpected override parsed"
         );
     }
-
     #[test]
     fn fastpq_gpu_override_detects_gpu_synonyms() {
         for value in ["gpu", "GPU", "enable", "ENABLED", "1", " on "] {
@@ -598,7 +567,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn fastpq_gpu_override_handles_cpu_synonyms() {
         for value in ["cpu", "off", "disable", "DISABLED", "0"] {
@@ -608,7 +576,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn fastpq_gpu_override_defaults_to_false() {
         assert!(
@@ -621,15 +588,12 @@ mod tests {
         );
     }
 }
-
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod heuristics_value_tests {
     use fastpq_prover::{
         AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, CommandLimitSnapshot, CommandLimitSource,
     };
-
     use super::harness::heuristics_value;
-
     #[test]
     fn poseidon_snapshot_serializes() {
         let snapshot = AdaptiveScheduleSnapshot {
@@ -682,7 +646,6 @@ mod heuristics_value_tests {
         );
     }
 }
-
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 mod harness {
     use std::{
@@ -695,7 +658,6 @@ mod harness {
         sync::{Arc, Mutex},
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
-
     use fastpq_isi::{
         find_by_name,
         poseidon::{FIELD_MODULUS as GOLDILOCKS_MODULUS, PoseidonSponge as CpuPoseidonSponge},
@@ -719,7 +681,6 @@ mod harness {
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     use metal::{Device, MTLDeviceLocation};
     use norito::json::{self, Value};
-
     fn debug_env_var(name: &str) -> Option<String> {
         #[cfg(any(test, debug_assertions))]
         {
@@ -731,7 +692,6 @@ mod harness {
             None
         }
     }
-
     pub(super) const DEFAULT_TRACE_TEMPLATE: &str = "Metal System Trace";
     pub(super) const DEFAULT_TRACE_OUTPUT: &str = "fastpq.trace";
     pub(super) const DEFAULT_TRACE_SECONDS: u32 = 60;
@@ -744,13 +704,11 @@ mod harness {
     const POSEIDON_MICRO_SCALAR_LANES: &str = "32";
     const POSEIDON_MICRO_SCALAR_BATCH: &str = "1";
     const TRACE_NODE_DOMAIN: &[u8] = b"fastpq:v1:trace:node";
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum PoseidonMicroMode {
         Default,
         Scalar,
     }
-
     impl PoseidonMicroMode {
         fn as_str(self) -> &'static str {
             match self {
@@ -759,14 +717,12 @@ mod harness {
             }
         }
     }
-
     #[derive(Debug, Clone)]
     pub(crate) struct TraceOptions {
         pub(crate) output: PathBuf,
         pub(crate) template: String,
         pub(crate) seconds: u32,
     }
-
     #[derive(Debug, Clone)]
     pub(crate) struct Config {
         pub(crate) rows: usize,
@@ -779,16 +735,13 @@ mod harness {
         pub(crate) require_gpu: bool,
         pub(crate) require_telemetry: bool,
     }
-
     impl Config {
         const DEFAULT_ROWS: usize = 20_000;
         const DEFAULT_WARMUPS: usize = 1;
         const DEFAULT_ITERATIONS: usize = 5;
-
         fn parse() -> Result<Self, String> {
             Self::from_iter(env::args().skip(1))
         }
-
         pub(crate) fn from_iter<I>(mut args: I) -> Result<Self, String>
         where
             I: Iterator<Item = String>,
@@ -927,7 +880,6 @@ mod harness {
             })
         }
     }
-
     fn print_usage() {
         println!(concat!(
             "Usage: fastpq_metal_bench [--rows <u32>] [--warmups <u32>] [--iterations <u32>] [--output <path>] ",
@@ -941,7 +893,6 @@ mod harness {
             "             `--gpu-probe` emits a GPU detection snapshot (override, resolved mode, enumerated Metal devices) before running the bench."
         ));
     }
-
     fn auto_trace_output(dir: &Path, rows: usize, iterations: usize) -> Result<PathBuf, String> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -950,7 +901,6 @@ mod harness {
         let file_name = format!("fastpq_metal_trace_{timestamp}_rows{rows}_iter{iterations}.trace");
         Ok(dir.join(file_name))
     }
-
     fn parse_usize<I>(args: &mut I, flag: &str) -> Result<usize, String>
     where
         I: Iterator<Item = String>,
@@ -962,7 +912,6 @@ mod harness {
             .parse::<usize>()
             .map_err(|err| format!("{flag} expects a positive integer: {err}"))
     }
-
     fn parse_u32<I>(args: &mut I, flag: &str) -> Result<u32, String>
     where
         I: Iterator<Item = String>,
@@ -974,13 +923,11 @@ mod harness {
             .parse::<u32>()
             .map_err(|err| format!("{flag} expects a positive integer: {err}"))
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum OperationFilter {
         All,
         Only(BenchOperation),
     }
-
     impl OperationFilter {
         fn parse(raw: &str) -> Result<Self, String> {
             if raw.eq_ignore_ascii_case("all") {
@@ -991,11 +938,9 @@ mod harness {
                 .map_err(|_| format!("unknown --operation '{raw}'"))?;
             Ok(Self::Only(op))
         }
-
         pub(crate) fn includes(&self, op: BenchOperation) -> bool {
             matches!(self, Self::All) || matches!(self, Self::Only(single) if *single == op)
         }
-
         pub(crate) fn includes_fft_tuning(&self) -> bool {
             !matches!(
                 self,
@@ -1005,7 +950,6 @@ mod harness {
             )
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum BenchOperation {
         Fft,
@@ -1015,7 +959,6 @@ mod harness {
         PoseidonMerklePairs,
         Bn254PoseidonWords,
     }
-
     impl BenchOperation {
         fn as_str(&self) -> &'static str {
             match self {
@@ -1028,10 +971,8 @@ mod harness {
             }
         }
     }
-
     impl std::str::FromStr for BenchOperation {
         type Err = ();
-
         fn from_str(s: &str) -> Result<Self, Self::Err> {
             match s {
                 "fft" => Ok(Self::Fft),
@@ -1046,14 +987,12 @@ mod harness {
             }
         }
     }
-
     #[derive(Debug, Clone)]
     pub struct Summary {
         mean: f64,
         min: f64,
         max: f64,
     }
-
     impl Summary {
         pub fn from_samples(samples: &[f64]) -> Self {
             debug_assert!(!samples.is_empty());
@@ -1074,26 +1013,21 @@ mod harness {
                 max: round3(max),
             }
         }
-
         pub fn min_ms(&self) -> f64 {
             self.min
         }
-
         pub fn max_ms(&self) -> f64 {
             self.max
         }
-
         pub fn mean_ms(&self) -> f64 {
             self.mean
         }
     }
-
     #[derive(Debug, Clone, Copy)]
     struct Speedup {
         ratio: f64,
         delta_ms: f64,
     }
-
     impl Speedup {
         fn between(cpu: &Summary, gpu: &Summary) -> Self {
             let ratio = match gpu.mean_ms() {
@@ -1107,11 +1041,9 @@ mod harness {
             }
         }
     }
-
     pub fn round3(value: f64) -> f64 {
         (value * 1_000.0).round() / 1_000.0
     }
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(super) enum RunState {
         Ok,
@@ -1119,7 +1051,6 @@ mod harness {
         GpuFallback,
         TelemetryMissing,
     }
-
     impl RunState {
         fn as_str(self) -> &'static str {
             match self {
@@ -1130,7 +1061,6 @@ mod harness {
             }
         }
     }
-
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct RunStatus {
         state: RunState,
@@ -1139,7 +1069,6 @@ mod harness {
         gpu_available: bool,
         backend_label: String,
     }
-
     impl RunStatus {
         fn value(&self) -> Value {
             let mut map = json::Map::new();
@@ -1167,26 +1096,22 @@ mod harness {
             }
             Value::Object(map)
         }
-
         fn is_ok(&self) -> bool {
             self.state == RunState::Ok
         }
     }
-
     #[derive(Debug, Clone)]
     pub(crate) struct ZeroFillSummary {
         pub(crate) bytes: usize,
         pub(crate) ms: Summary,
         pub(crate) queue_delta: Option<QueueDepthStats>,
     }
-
     #[derive(Default)]
     struct ZeroFillAccumulator {
         bytes: Option<usize>,
         samples: Vec<f64>,
         queue_delta: Option<QueueDepthStats>,
     }
-
     impl ZeroFillAccumulator {
         fn record(&mut self, stats: LdeHostStats, fallback_delta: Option<QueueDepthStats>) {
             if let Some(bytes) = self.bytes {
@@ -1207,7 +1132,6 @@ mod harness {
                 }
             }
         }
-
         fn finish(self) -> Option<ZeroFillSummary> {
             if self.samples.is_empty() {
                 return None;
@@ -1220,12 +1144,10 @@ mod harness {
             })
         }
     }
-
     #[derive(Default)]
     pub(crate) struct QueueDeltaAccumulator {
         total: Option<QueueDepthStats>,
     }
-
     impl QueueDeltaAccumulator {
         pub(crate) fn record(&mut self, delta: QueueDepthStats) {
             if let Some(existing) = &mut self.total {
@@ -1234,12 +1156,10 @@ mod harness {
                 self.total = Some(delta);
             }
         }
-
         pub(crate) fn finalize(self) -> Option<QueueDepthStats> {
             self.total
         }
     }
-
     fn measure_in_place<F>(
         source: &[Vec<u64>],
         warmups: usize,
@@ -1264,7 +1184,6 @@ mod harness {
         }
         Summary::from_samples(&samples)
     }
-
     fn measure_map<F, R>(source: &[Vec<u64>], warmups: usize, iterations: usize, op: F) -> Summary
     where
         F: Fn(&[Vec<u64>]) -> R,
@@ -1282,7 +1201,6 @@ mod harness {
         }
         Summary::from_samples(&samples)
     }
-
     fn measure_word_batch<F, R>(
         source: &Bn254PoseidonWordBatch,
         warmups: usize,
@@ -1305,7 +1223,6 @@ mod harness {
         }
         Summary::from_samples(&samples)
     }
-
     fn measure_word_batch_optional<F, R>(
         source: &Bn254PoseidonWordBatch,
         warmups: usize,
@@ -1328,7 +1245,6 @@ mod harness {
         }
         Some(Summary::from_samples(&samples))
     }
-
     fn measure_merkle_pairs<F, R>(
         source: &[[u64; 2]],
         warmups: usize,
@@ -1351,7 +1267,6 @@ mod harness {
         }
         Summary::from_samples(&samples)
     }
-
     fn measure_merkle_pairs_optional<F, R>(
         source: &[[u64; 2]],
         warmups: usize,
@@ -1374,7 +1289,6 @@ mod harness {
         }
         Some(Summary::from_samples(&samples))
     }
-
     fn measure_gpu_lde(
         planner: &Planner,
         source: &[Vec<u64>],
@@ -1407,7 +1321,6 @@ mod harness {
         enable_lde_host_stats(false);
         (Summary::from_samples(&samples), zero_fill.finish())
     }
-
     fn measure_poseidon_gpu(
         domains: &[String],
         source: &[Vec<u64>],
@@ -1457,11 +1370,9 @@ mod harness {
             (Some(Summary::from_samples(&samples)), queue_snapshot)
         }
     }
-
     fn elapsed_ms(duration: Duration) -> f64 {
         duration.as_secs_f64() * 1_000.0
     }
-
     fn generated_columns(len: usize, column_count: usize, seed: u64) -> Vec<Vec<u64>> {
         let mut columns = Vec::with_capacity(column_count);
         for column in 0..column_count {
@@ -1479,13 +1390,11 @@ mod harness {
         }
         columns
     }
-
     fn build_domains(column_count: usize) -> Vec<String> {
         (0..column_count)
             .map(|idx| format!("fastpq:v1:trace:column:bench_{idx:02}"))
             .collect()
     }
-
     fn domain_seed(bytes: &[u8]) -> u64 {
         let digest = Hash::new(bytes);
         let mut chunk = [0u8; 8];
@@ -1493,7 +1402,6 @@ mod harness {
         let reduced = u128::from(u64::from_le_bytes(chunk)) % u128::from(GOLDILOCKS_MODULUS);
         u64::try_from(reduced).expect("reduction fits into u64")
     }
-
     fn hash_columns_cpu(domains: &[String], columns: &[Vec<u64>]) -> Vec<u64> {
         domains
             .iter()
@@ -1506,7 +1414,6 @@ mod harness {
             })
             .collect()
     }
-
     fn generate_merkle_pairs(pair_count: usize) -> Vec<[u64; 2]> {
         (0..pair_count)
             .map(|idx| {
@@ -1522,7 +1429,6 @@ mod harness {
             })
             .collect()
     }
-
     fn hash_merkle_pairs_cpu(pairs: &[[u64; 2]]) -> Vec<u64> {
         pairs
             .iter()
@@ -1534,12 +1440,10 @@ mod harness {
             })
             .collect()
     }
-
     fn hash_merkle_pairs_gpu(pairs: &[[u64; 2]]) -> Option<Vec<u64>> {
         let batch = PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN, pairs)?;
         hash_columns_gpu_batch(&batch)
     }
-
     fn collect_poseidon_merkle_pairs_operation(config: &Config, gpu_available: bool) -> Value {
         let pairs = generate_merkle_pairs(config.rows.max(1));
         let cpu_summary = measure_merkle_pairs(
@@ -1567,12 +1471,10 @@ mod harness {
             None,
         )
     }
-
     struct Bn254PoseidonWordBatch {
         words: Vec<u64>,
         slices: Vec<Bn254PoseidonBatchSlice>,
     }
-
     fn collect_bn254_poseidon_words_operation(config: &Config, gpu_available: bool) -> Value {
         let batch = generate_bn254_poseidon_word_batch(config.rows);
         let cpu_summary = measure_word_batch(&batch, config.warmups, config.iterations, |input| {
@@ -1594,7 +1496,6 @@ mod harness {
             None,
         )
     }
-
     fn generate_bn254_poseidon_word_batch(rows: usize) -> Bn254PoseidonWordBatch {
         let mut words = Vec::with_capacity(rows.saturating_mul(5));
         let mut slices = Vec::with_capacity(rows);
@@ -1620,7 +1521,6 @@ mod harness {
         }
         Bn254PoseidonWordBatch { words, slices }
     }
-
     fn hash_bn254_poseidon_words_cpu(
         words: &[u64],
         slices: &[Bn254PoseidonBatchSlice],
@@ -1634,12 +1534,10 @@ mod harness {
             })
             .collect()
     }
-
     enum PoseidonGpuOutcome {
         Gpu(Vec<u64>),
         CpuFallback(Vec<u64>),
     }
-
     fn hash_columns_gpu(domains: &[String], columns: &[Vec<u64>]) -> PoseidonGpuOutcome {
         let domain_refs: Vec<&str> = domains.iter().map(|domain| domain.as_str()).collect();
         if let Some(batch) = PoseidonColumnBatch::from_domains_and_columns(&domain_refs, columns) {
@@ -1652,7 +1550,6 @@ mod harness {
         }
         PoseidonGpuOutcome::CpuFallback(hash_columns_cpu(domains, columns))
     }
-
     fn summary_value(summary: &Summary) -> Value {
         let mut map = json::Map::new();
         map.insert(
@@ -1669,7 +1566,6 @@ mod harness {
         );
         Value::Object(map)
     }
-
     fn speedup_value(cpu: &Summary, gpu: &Summary) -> Value {
         let comparison = Speedup::between(cpu, gpu);
         let mut map = json::Map::new();
@@ -1683,7 +1579,6 @@ mod harness {
         );
         Value::Object(map)
     }
-
     pub(crate) fn zero_fill_value(stats: &ZeroFillSummary) -> Value {
         let mut map = json::Map::new();
         map.insert(
@@ -1696,7 +1591,6 @@ mod harness {
         }
         Value::Object(map)
     }
-
     fn column_staging_phase_value(stats: &ColumnStagingPhaseStats) -> json::Map {
         let total = stats.flatten_ms + stats.wait_ms;
         let wait_ratio = if total <= f64::EPSILON {
@@ -1723,7 +1617,6 @@ mod harness {
         );
         map
     }
-
     fn column_staging_samples_value(samples: &[ColumnStagingSample]) -> Value {
         let rows: Vec<_> = samples
             .iter()
@@ -1750,7 +1643,6 @@ mod harness {
             .collect();
         Value::Array(rows)
     }
-
     fn column_staging_value(stats: &ColumnStagingStats) -> Value {
         let total = stats.total();
         let mut map = column_staging_phase_value(&total);
@@ -1784,7 +1676,6 @@ mod harness {
         map.insert("samples".into(), Value::Object(samples));
         Value::Object(map)
     }
-
     pub(super) fn operation_value(
         name: &str,
         input_len: usize,
@@ -1820,7 +1711,6 @@ mod harness {
         }
         Value::Object(map)
     }
-
     fn bn254_metric_name(operation: &str) -> Option<&'static str> {
         match operation {
             "fft" => Some("acceleration.bn254_fft_ms"),
@@ -1830,14 +1720,12 @@ mod harness {
             _ => None,
         }
     }
-
     fn summary_mean_ms(value: &Value) -> Option<f64> {
         value
             .as_object()
             .and_then(|map| map.get("mean_ms"))
             .and_then(Value::as_f64)
     }
-
     fn metric_entry(entry: &Value, backend_label: &str) -> Option<(String, Value)> {
         let map = entry.as_object()?;
         let operation = map.get("operation")?.as_str()?;
@@ -1860,7 +1748,6 @@ mod harness {
         }
         Some((metric.to_owned(), Value::Object(metric_map)))
     }
-
     pub(super) fn bn254_metrics_value(operations: &[Value], backend_label: &str) -> Option<Value> {
         let mut entries = BTreeMap::new();
         for entry in operations {
@@ -1877,7 +1764,6 @@ mod harness {
         }
         Some(Value::Object(map))
     }
-
     pub(super) fn twiddle_cache_value(stats: &TwiddleCacheStats) -> Value {
         let mut map = json::Map::new();
         map.insert(
@@ -1903,7 +1789,6 @@ mod harness {
         );
         Value::Object(map)
     }
-
     fn fft_tuning_value(tuning: &FftTuning) -> Value {
         let mut map = json::Map::new();
         map.insert(
@@ -1916,7 +1801,6 @@ mod harness {
         );
         Value::Object(map)
     }
-
     pub(super) fn queue_stats_value(stats: &QueueDepthStats) -> Value {
         let overlap_ratio = if stats.busy_ms <= f64::EPSILON {
             0.0
@@ -2014,7 +1898,6 @@ mod harness {
         }
         Value::Object(map)
     }
-
     fn classify_run(
         gpu_available: bool,
         backend_label: &str,
@@ -2034,7 +1917,6 @@ mod harness {
                 backend_label: backend_label.to_owned(),
             };
         }
-
         let has_gpu_timings = operations.iter().any(|entry| {
             entry
                 .as_object()
@@ -2047,7 +1929,6 @@ mod harness {
             reasons.push("gpu_timings_missing".to_owned());
             RunState::GpuFallback
         };
-
         match queue_stats {
             None => {
                 reasons.push("missing_queue_telemetry".to_owned());
@@ -2076,7 +1957,6 @@ mod harness {
                 state = RunState::TelemetryMissing;
             }
         }
-
         RunStatus {
             state,
             reasons,
@@ -2085,7 +1965,6 @@ mod harness {
             backend_label: backend_label.to_owned(),
         }
     }
-
     pub(super) fn heuristics_value(snapshot: &AdaptiveScheduleSnapshot) -> Option<Value> {
         let mut map = json::Map::new();
         if let Some(limit) = snapshot.max_in_flight.as_ref() {
@@ -2122,7 +2001,6 @@ mod harness {
             Some(Value::Object(map))
         }
     }
-
     fn command_limit_value(snapshot: &CommandLimitSnapshot) -> Value {
         let mut map = json::Map::new();
         map.insert(
@@ -2161,7 +2039,6 @@ mod harness {
         }
         Value::Object(map)
     }
-
     fn batch_snapshot_value(snapshot: &BatchHeuristicSnapshot) -> Value {
         let mut map = json::Map::new();
         map.insert(
@@ -2196,7 +2073,6 @@ mod harness {
         );
         Value::Object(map)
     }
-
     pub(super) fn kernel_stats_value(samples: &[KernelStatsSample]) -> Value {
         let mut by_kind: BTreeMap<&'static str, KindSummary> = BTreeMap::new();
         for sample in samples {
@@ -2217,7 +2093,6 @@ mod harness {
         map.insert("by_kind".into(), Value::Object(kinds));
         Value::Object(map)
     }
-
     pub(super) fn poseidon_profiles_value(samples: &[KernelStatsSample]) -> Option<Value> {
         let mut summary = KindSummary::default();
         let mut recorded = false;
@@ -2229,7 +2104,6 @@ mod harness {
         }
         recorded.then(|| summary.into_value())
     }
-
     fn summarize_bn254_samples(samples: &[KernelStatsSample]) -> Option<Value> {
         if samples.is_empty() {
             return None;
@@ -2294,7 +2168,6 @@ mod harness {
         }
         Some(Value::Object(map))
     }
-
     pub(super) fn bn254_dispatch_summary(samples: &[KernelStatsSample]) -> Option<Value> {
         let mut fft = Vec::new();
         let mut lde = Vec::new();
@@ -2324,7 +2197,6 @@ mod harness {
             Some(Value::Object(map))
         }
     }
-
     pub(super) fn poseidon_pipeline_value(stats: &PoseidonPipelineStats) -> Value {
         let mut map = json::Map::new();
         map.insert("enabled".into(), Value::Bool(stats.enabled));
@@ -2364,7 +2236,6 @@ mod harness {
         );
         Value::Object(map)
     }
-
     pub(super) fn post_tile_value(samples: &[PostTileSample]) -> Value {
         let mut by_kind: BTreeMap<&'static str, PostTileKindSummary> = BTreeMap::new();
         for sample in samples {
@@ -2385,7 +2256,6 @@ mod harness {
         map.insert("kinds".into(), Value::Array(entries));
         Value::Object(map)
     }
-
     #[derive(Default)]
     struct KindSummary {
         samples: Vec<Value>,
@@ -2396,7 +2266,6 @@ mod harness {
         bandwidth: RangeAgg,
         occupancy: RangeAgg,
     }
-
     impl KindSummary {
         fn record(&mut self, sample: &KernelStatsSample) {
             self.count = self.count.saturating_add(1);
@@ -2408,7 +2277,6 @@ mod harness {
             }
             let occupancy = sample_occupancy(sample);
             self.occupancy.record(occupancy);
-
             let mut entry = json::Map::new();
             entry.insert(
                 "columns".into(),
@@ -2460,7 +2328,6 @@ mod harness {
             );
             self.samples.push(Value::Object(entry));
         }
-
         fn into_value(self) -> Value {
             let mut map = json::Map::new();
             map.insert(
@@ -2486,7 +2353,6 @@ mod harness {
             Value::Object(map)
         }
     }
-
     #[derive(Default)]
     struct PostTileKindSummary {
         dispatch_count: u64,
@@ -2494,7 +2360,6 @@ mod harness {
         log_len: IntRangeAgg,
         columns: IntRangeAgg,
     }
-
     impl PostTileKindSummary {
         fn record(&mut self, sample: &PostTileSample) {
             self.dispatch_count = self.dispatch_count.saturating_add(1);
@@ -2502,7 +2367,6 @@ mod harness {
             self.log_len.record(sample.log_len.into());
             self.columns.record(sample.columns.into());
         }
-
         fn into_value(self, kind: &str) -> Value {
             let mut map = json::Map::new();
             map.insert("kind".into(), Value::String(kind.to_owned()));
@@ -2516,7 +2380,6 @@ mod harness {
             Value::Object(map)
         }
     }
-
     #[derive(Clone, Copy, Default)]
     struct IntRangeAgg {
         min: u64,
@@ -2524,7 +2387,6 @@ mod harness {
         sum: u128,
         count: u64,
     }
-
     impl IntRangeAgg {
         fn record(&mut self, value: u64) {
             if self.count == 0 {
@@ -2537,7 +2399,6 @@ mod harness {
             self.sum = self.sum.saturating_add(u128::from(value));
             self.count = self.count.saturating_add(1);
         }
-
         fn into_value(self) -> Value {
             if self.count == 0 {
                 return Value::Null;
@@ -2559,7 +2420,6 @@ mod harness {
             Value::Object(map)
         }
     }
-
     #[derive(Clone, Copy, Default)]
     struct RangeAgg {
         min: f64,
@@ -2567,7 +2427,6 @@ mod harness {
         sum: f64,
         count: u64,
     }
-
     impl RangeAgg {
         fn record(&mut self, value: f64) {
             if self.count == 0 {
@@ -2580,7 +2439,6 @@ mod harness {
             self.sum += value;
             self.count = self.count.saturating_add(1);
         }
-
         fn into_value(self) -> Value {
             if self.count == 0 {
                 Value::Null
@@ -2603,7 +2461,6 @@ mod harness {
             }
         }
     }
-
     fn sample_bandwidth_gbps(sample: &KernelStatsSample) -> Option<f64> {
         if sample.duration_ms <= f64::EPSILON {
             return None;
@@ -2615,7 +2472,6 @@ mod harness {
         let gbps = (sample.bytes as f64) / seconds / 1_000_000_000.0;
         Some(gbps)
     }
-
     fn sample_occupancy(sample: &KernelStatsSample) -> f64 {
         if sample.max_threads_per_group == 0 {
             return 0.0;
@@ -2623,25 +2479,21 @@ mod harness {
         let ratio = (sample.threadgroup_width as f64) / (sample.max_threads_per_group as f64);
         ratio.clamp(0.0, 1.0)
     }
-
     struct ColumnSets {
         time: Vec<Vec<u64>>,
         coeff: Vec<Vec<u64>>,
         freq: Vec<Vec<u64>>,
         domains: Vec<String>,
     }
-
     impl ColumnSets {
         fn poseidon_elements(&self, column_count: usize) -> usize {
             self.coeff.first().map_or(0, Vec::len) * column_count
         }
     }
-
     struct OperationTimings {
         cpu: Summary,
         gpu: Option<Summary>,
     }
-
     fn ensure_trace_environment(config: &Config) -> Result<(), String> {
         let Some(trace) = config.trace.as_ref() else {
             return Ok(());
@@ -2651,7 +2503,6 @@ mod harness {
         }
         launch_trace(trace)
     }
-
     fn launch_trace(trace: &TraceOptions) -> Result<(), String> {
         if let Some(parent) = trace.output.parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
@@ -2692,7 +2543,6 @@ mod harness {
         }
         Err("xctrace terminated by signal".into())
     }
-
     pub fn run() -> Result<(), String> {
         if let Some(mode) = poseidon_micro_mode_from_env() {
             run_poseidon_micro_child(mode)?;
@@ -2703,7 +2553,6 @@ mod harness {
         let params = find_by_name("fastpq-lane-balanced")
             .ok_or_else(|| "canonical parameter set 'fastpq-lane-balanced' missing".to_owned())?;
         let planner = Planner::new(params);
-
         let padded = config
             .rows
             .checked_next_power_of_two()
@@ -2712,7 +2561,6 @@ mod harness {
         let blowup_log = planner.blowup_log();
         let column_count = 16usize;
         let eval_len = padded << blowup_log;
-
         let columns = prepare_columns(&planner, padded, column_count);
         let (resolved_mode, backend_label, gpu_available) =
             resolve_execution_metadata(config.gpu_probe);
@@ -2861,7 +2709,6 @@ mod harness {
                 "telemetry guard triggered (--require-telemetry): {joined}"
             ));
         }
-
         let report_inputs = ReportInputs {
             parameter_name: params.name,
             config: &config,
@@ -2889,7 +2736,6 @@ mod harness {
         let payload = build_report(&report_inputs, operations);
         write_report(&payload, config.output.as_deref())
     }
-
     pub(crate) fn parse_poseidon_micro_mode(raw: &str) -> Option<PoseidonMicroMode> {
         match raw {
             "default" => Some(PoseidonMicroMode::Default),
@@ -2897,13 +2743,11 @@ mod harness {
             _ => None,
         }
     }
-
     pub(crate) fn poseidon_micro_mode_from_env() -> Option<PoseidonMicroMode> {
         env::var(POSEIDON_MICRO_ENV)
             .ok()
             .and_then(|value| parse_poseidon_micro_mode(value.as_str()))
     }
-
     fn run_poseidon_micro_child(mode: PoseidonMicroMode) -> Result<(), String> {
         if !matches!(ExecutionMode::Auto.resolve(), ExecutionMode::Gpu) {
             return Err("Poseidon microbench requires FASTPQ_GPU=gpu".into());
@@ -2999,11 +2843,9 @@ mod harness {
         println!("{text}");
         Ok(())
     }
-
     fn generate_poseidon_micro_columns(len: usize, column_count: usize) -> Vec<Vec<u64>> {
         generated_columns(len, column_count, 0x7d6e_12ba)
     }
-
     fn capture_poseidon_microbench(gpu_available: bool, backend_label: &str) -> Option<Value> {
         if !(gpu_available && backend_label == "metal") {
             return None;
@@ -3028,7 +2870,6 @@ mod harness {
         };
         build_poseidon_micro_report(default_sample, scalar_sample)
     }
-
     fn invoke_poseidon_micro_child(mode: PoseidonMicroMode) -> Result<Value, String> {
         let exe = env::current_exe()
             .map_err(|err| format!("failed to locate benchmark executable: {err}"))?;
@@ -3054,7 +2895,6 @@ mod harness {
         json::from_slice(&output.stdout)
             .map_err(|err| format!("failed to parse Poseidon microbench output: {err}"))
     }
-
     fn build_poseidon_micro_report(default_sample: Value, scalar_sample: Value) -> Option<Value> {
         let default_mean = micro_sample_mean(&default_sample)?;
         let scalar_mean = micro_sample_mean(&scalar_sample)?;
@@ -3069,18 +2909,15 @@ mod harness {
         }
         Some(Value::Object(map))
     }
-
     fn micro_sample_mean(sample: &Value) -> Option<f64> {
         sample
             .as_object()
             .and_then(|map| map.get("mean_ms"))
             .and_then(Value::as_f64)
     }
-
     #[cfg(test)]
     mod zero_fill_tests {
         use super::{LdeHostStats, QueueDepthStats, ZeroFillAccumulator};
-
         #[test]
         fn accumulator_merges_queue_deltas() {
             let mut accumulator = ZeroFillAccumulator::default();
@@ -3127,13 +2964,10 @@ mod harness {
             assert_eq!(delta.limit, 4);
         }
     }
-
     #[cfg(test)]
     mod speedup_tests {
         use fastpq_prover::{KernelKind, KernelStatsSample};
-
         use super::{Speedup, Summary, poseidon_profiles_value, round3, speedup_value};
-
         #[test]
         fn speedup_between_reports_ratio_and_delta() {
             let cpu = Summary::from_samples(&[6.0, 6.0, 6.0]);
@@ -3142,7 +2976,6 @@ mod harness {
             assert_eq!(comparison.ratio, round3(3.0));
             assert_eq!(comparison.delta_ms, round3(4.0));
         }
-
         #[test]
         fn speedup_value_serializes_expected_fields() {
             let cpu = Summary::from_samples(&[4.0, 4.0]);
@@ -3154,7 +2987,6 @@ mod harness {
             assert!(object.contains_key("ratio"));
             assert!(object.contains_key("delta_ms"));
         }
-
         #[test]
         fn poseidon_profiles_only_includes_poseidon_samples() {
             let samples = [
@@ -3196,7 +3028,6 @@ mod harness {
             assert!(map.get("samples").is_some(), "poseidon samples missing");
         }
     }
-
     #[test]
     fn inject_zero_fill_updates_lde_entry() {
         let summary = Summary::from_samples(&[5.0, 6.0]);
@@ -3217,7 +3048,6 @@ mod harness {
             "zero_fill missing after injection"
         );
     }
-
     #[test]
     fn inject_zero_fill_noop_without_lde_entry() {
         let summary = Summary::from_samples(&[5.0, 6.0]);
@@ -3231,7 +3061,6 @@ mod harness {
         let mut operations = vec![self::operation_value("fft", 4, 2, &cpu, Some(&gpu), None)];
         assert!(!self::inject_zero_fill(&mut operations, &zero_fill));
     }
-
     #[test]
     fn bn254_metrics_capture_cpu_and_gpu_latency() {
         let cpu_fft = Summary::from_samples(&[10.0, 14.0]);
@@ -3256,18 +3085,15 @@ mod harness {
         assert_eq!(lde.get("cpu").and_then(Value::as_f64), Some(20.0));
         assert!(!lde.contains_key("metal"));
     }
-
     #[test]
     fn enforce_gpu_requirement_errors_when_requested() {
         let error = self::enforce_gpu_requirement(true, false, false, ExecutionMode::Cpu, "none")
             .expect_err("missing GPU should error when required");
         assert!(error.contains("--require-gpu"));
         assert!(error.contains("resolved mode=cpu"));
-
         self::enforce_gpu_requirement(false, false, false, ExecutionMode::Cpu, "none")
             .expect("cpu fallback allowed when GPU not required");
     }
-
     #[test]
     fn classify_run_marks_missing_queue() {
         let cpu = Summary::from_samples(&[1.0]);
@@ -3288,7 +3114,6 @@ mod harness {
                 .any(|reason| reason.contains("missing_queue_telemetry"))
         );
     }
-
     #[test]
     fn classify_run_detects_gpu_fallback() {
         let cpu = Summary::from_samples(&[1.0, 1.1]);
@@ -3317,7 +3142,6 @@ mod harness {
                 .any(|reason| reason.contains("gpu_timings_missing"))
         );
     }
-
     #[test]
     fn classify_run_accepts_complete_gpu_capture() {
         let cpu = Summary::from_samples(&[1.0, 1.2]);
@@ -3343,7 +3167,6 @@ mod harness {
         assert!(status.reasons.is_empty());
         assert_eq!(status.dispatch_count, Some(3));
     }
-
     #[test]
     fn classify_run_accepts_word_batch_without_column_staging() {
         let cpu = Summary::from_samples(&[1.0]);
@@ -3369,7 +3192,6 @@ mod harness {
         assert_eq!(status.state, RunState::Ok);
         assert!(status.reasons.is_empty());
     }
-
     fn prepare_columns(planner: &Planner, padded: usize, column_count: usize) -> ColumnSets {
         let time_columns = generated_columns(padded, column_count, 0x51a2_d3f4);
         let mut coeff_columns = time_columns.clone();
@@ -3384,7 +3206,6 @@ mod harness {
             domains,
         }
     }
-
     fn collect_operations(
         planner: &Planner,
         config: &Config,
@@ -3397,7 +3218,6 @@ mod harness {
         let mut operations = Vec::new();
         let mut zero_fill_result = None;
         let mut poseidon_queue = None;
-
         if config.operation.includes(BenchOperation::Fft) {
             let timings = OperationTimings {
                 cpu: measure_in_place(&columns.time, config.warmups, config.iterations, |cols| {
@@ -3418,7 +3238,6 @@ mod harness {
                 None,
             ));
         }
-
         if config.operation.includes(BenchOperation::Ifft) {
             let timings = OperationTimings {
                 cpu: measure_in_place(&columns.freq, config.warmups, config.iterations, |cols| {
@@ -3439,7 +3258,6 @@ mod harness {
                 None,
             ));
         }
-
         if config.operation.includes(BenchOperation::Lde) {
             let cpu_summary = measure_map(
                 &columns.coeff,
@@ -3464,7 +3282,6 @@ mod harness {
                 zero_fill_metrics.as_ref(),
             ));
         }
-
         if config.operation.includes(BenchOperation::Poseidon) {
             let cpu_summary = measure_map(
                 &columns.coeff,
@@ -3492,7 +3309,6 @@ mod harness {
                 None,
             ));
         }
-
         if config
             .operation
             .includes(BenchOperation::PoseidonMerklePairs)
@@ -3502,7 +3318,6 @@ mod harness {
                 gpu_available,
             ));
         }
-
         if config
             .operation
             .includes(BenchOperation::Bn254PoseidonWords)
@@ -3512,10 +3327,8 @@ mod harness {
                 gpu_available,
             ));
         }
-
         (operations, zero_fill_result, poseidon_queue)
     }
-
     fn capture_gpu_telemetry_probe(
         planner: &Planner,
         columns: &ColumnSets,
@@ -3535,7 +3348,6 @@ mod harness {
         };
         (zero_fill, queue_stats)
     }
-
     fn synthesize_zero_fill(columns: usize, eval_len: usize, iterations: usize) -> ZeroFillSummary {
         let total_len = columns.saturating_mul(eval_len).max(1);
         let bytes = total_len.saturating_mul(mem::size_of::<u64>()).max(1);
@@ -3554,7 +3366,6 @@ mod harness {
             queue_delta: None,
         }
     }
-
     pub(super) fn inject_zero_fill(operations: &mut [Value], summary: &ZeroFillSummary) -> bool {
         for entry in operations {
             if let Some(map) = entry.as_object_mut() {
@@ -3570,7 +3381,6 @@ mod harness {
         }
         false
     }
-
     fn resolve_execution_metadata(log_probe: bool) -> (ExecutionMode, String, bool) {
         let requested_mode = ExecutionMode::Auto;
         let backend_label = Arc::new(Mutex::new(None::<String>));
@@ -3593,7 +3403,6 @@ mod harness {
         }
         (resolved_mode, backend, gpu_available)
     }
-
     pub(super) fn enforce_gpu_requirement(
         require_gpu: bool,
         gpu_forced: bool,
@@ -3623,7 +3432,6 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
             backend_label
         ))
     }
-
     pub(crate) fn fastpq_gpu_forced_raw(raw: Option<&str>) -> bool {
         raw.map(|value| {
             matches!(
@@ -3633,11 +3441,9 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
         })
         .unwrap_or(false)
     }
-
     pub(crate) fn fastpq_gpu_forced_via_env() -> bool {
         fastpq_gpu_forced_raw(debug_env_var("FASTPQ_GPU").as_deref())
     }
-
     fn log_gpu_probe_summary(
         requested: ExecutionMode,
         resolved: ExecutionMode,
@@ -3659,7 +3465,6 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
         #[cfg(not(all(feature = "fastpq-gpu", target_os = "macos")))]
         eprintln!("  Metal device inventory unavailable on this platform");
     }
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     fn log_metal_device_inventory() {
         let devices = Device::all();
@@ -3684,12 +3489,10 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
             );
         }
     }
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     fn bool_display(value: bool) -> &'static str {
         if value { "yes" } else { "no" }
     }
-
     #[cfg_attr(
         not(any(test, all(feature = "fastpq-gpu", target_os = "macos"))),
         allow(dead_code)
@@ -3718,7 +3521,6 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
         }
         None
     }
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     fn capture_device_profile() -> Option<Value> {
         let device = Device::system_default()?;
@@ -3776,12 +3578,10 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
         }
         Some(Value::Object(profile))
     }
-
     #[cfg(not(all(feature = "fastpq-gpu", target_os = "macos")))]
     fn capture_device_profile() -> Option<Value> {
         None
     }
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     fn device_location_label(location: MTLDeviceLocation) -> &'static str {
         match location {
@@ -3791,7 +3591,6 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
             MTLDeviceLocation::Unspecified => "unspecified",
         }
     }
-
     #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
     fn hw_model_identifier() -> Option<String> {
         let output = Command::new("sysctl")
@@ -3810,7 +3609,6 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
             Some(trimmed.to_owned())
         }
     }
-
     struct ReportInputs<'a> {
         parameter_name: &'a str,
         config: &'a Config,
@@ -3835,7 +3633,6 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
         poseidon_micro: Option<Value>,
         device_profile: Option<Value>,
     }
-
     fn build_report(inputs: &ReportInputs<'_>, operations: Vec<Value>) -> Value {
         let mut report = BTreeMap::new();
         report.insert(
@@ -3969,7 +3766,6 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
         report.insert("operations".to_owned(), Value::Array(operations));
         Value::Object(report)
     }
-
     fn write_report(payload: &Value, output: Option<&Path>) -> Result<(), String> {
         let json_text = json::to_json_pretty(payload).map_err(|err| err.to_string())?;
         if let Some(path) = output {
@@ -3981,16 +3777,13 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
         }
         Ok(())
     }
-
     #[cfg(test)]
     mod apple_soc_tests {
         use super::apple_soc_label;
-
         #[test]
         fn detects_plain_soc_label() {
             assert_eq!(apple_soc_label("Apple M3"), Some(String::from("M3")));
         }
-
         #[test]
         fn detects_soc_with_suffix() {
             assert_eq!(
@@ -3998,7 +3791,6 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
                 Some(String::from("M2 Max"))
             );
         }
-
         #[test]
         fn ignores_non_apple_devices() {
             assert_eq!(apple_soc_label("AMD Radeon Pro 5500M"), None);

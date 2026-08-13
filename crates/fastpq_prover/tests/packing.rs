@@ -1,9 +1,6 @@
 //! FASTPQ packing roundtrip tests.
-
 use std::path::{Path, PathBuf};
-
 use fastpq_prover::{pack_bytes, unpack_bytes};
-
 #[test]
 fn roundtrip_reference_vectors() {
     for data in load_vectors() {
@@ -12,13 +9,11 @@ fn roundtrip_reference_vectors() {
         assert_eq!(unpack_bytes(&packed), data);
     }
 }
-
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
 }
-
 fn load_vectors() -> Vec<Vec<u8>> {
     let path = fixtures_dir().join("packing_roundtrip.json");
     let bytes = std::fs::read(&path).expect("read packing_roundtrip.json");
@@ -27,7 +22,6 @@ fn load_vectors() -> Vec<Vec<u8>> {
     let array = value
         .as_array()
         .expect("packing_roundtrip.json must contain an array");
-
     array
         .iter()
         .enumerate()
@@ -41,7 +35,6 @@ fn load_vectors() -> Vec<Vec<u8>> {
         })
         .collect()
 }
-
 fn decode_hex(input: &str) -> Result<Vec<u8>, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -53,7 +46,6 @@ fn decode_hex(input: &str) -> Result<Vec<u8>, String> {
             trimmed.len()
         ));
     }
-
     let mut bytes = Vec::with_capacity(trimmed.len() / 2);
     for chunk in trimmed.as_bytes().chunks_exact(2) {
         let hi = decode_nibble(chunk[0])?;
@@ -62,7 +54,6 @@ fn decode_hex(input: &str) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-
 fn decode_nibble(value: u8) -> Result<u8, String> {
     match value {
         b'0'..=b'9' => Ok(value - b'0'),

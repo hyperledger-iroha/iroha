@@ -1,7 +1,5 @@
 //! Subscription plan and billing helpers.
-
 use std::{fs, path::PathBuf};
-
 use eyre::{Result, WrapErr};
 use iroha::{
     client::Client,
@@ -13,9 +11,7 @@ use iroha::{
     },
 };
 use iroha_primitives::numeric::Quantity;
-
 use crate::{Run, RunContext};
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Manage subscription plans (asset definition metadata).
@@ -25,7 +21,6 @@ pub enum Command {
     #[command(subcommand)]
     Subscription(SubscriptionCommand),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -34,7 +29,6 @@ impl Run for Command {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum PlanCommand {
     /// Register a subscription plan on an asset definition.
@@ -42,7 +36,6 @@ pub enum PlanCommand {
     /// List subscription plans, optionally filtered by provider.
     List(PlanListArgs),
 }
-
 impl Run for PlanCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -51,7 +44,6 @@ impl Run for PlanCommand {
         }
     }
 }
-
 fn resolve_account_id_arg<C: RunContext>(
     context: &C,
     literal: &str,
@@ -60,7 +52,6 @@ fn resolve_account_id_arg<C: RunContext>(
     crate::resolve_account_id(context, literal)
         .wrap_err_with(|| format!("failed to resolve {flag}"))
 }
-
 fn resolve_optional_account_id<C: RunContext>(
     context: &C,
     literal: Option<&str>,
@@ -70,7 +61,6 @@ fn resolve_optional_account_id<C: RunContext>(
         .map(|value| resolve_account_id_arg(context, value, flag))
         .transpose()
 }
-
 #[derive(clap::Args, Debug)]
 pub struct PlanCreateArgs {
     /// Authority account identifier (canonical I105 account literal).
@@ -83,7 +73,6 @@ pub struct PlanCreateArgs {
     #[arg(long, value_name = "PATH")]
     pub plan_json: Option<PathBuf>,
 }
-
 impl Run for PlanCreateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -94,7 +83,6 @@ impl Run for PlanCreateArgs {
         context.print_data(&response)
     }
 }
-
 impl PlanCreateArgs {
     fn to_request(
         &self,
@@ -108,7 +96,6 @@ impl PlanCreateArgs {
         })
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct PlanListArgs {
     /// Filter by plan provider (account id).
@@ -121,7 +108,6 @@ pub struct PlanListArgs {
     #[arg(long, default_value_t = 0)]
     pub offset: u64,
 }
-
 impl Run for PlanListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -133,7 +119,6 @@ impl Run for PlanListArgs {
         context.print_data(&response)
     }
 }
-
 impl PlanListArgs {
     fn to_params(&self, provider: Option<String>) -> SubscriptionPlanListParams {
         SubscriptionPlanListParams {
@@ -144,7 +129,6 @@ impl PlanListArgs {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum SubscriptionCommand {
     /// Create a subscription and billing trigger.
@@ -166,7 +150,6 @@ pub enum SubscriptionCommand {
     /// Record usage for a subscription usage plan.
     Usage(SubscriptionUsageArgs),
 }
-
 impl Run for SubscriptionCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -212,7 +195,6 @@ impl Run for SubscriptionCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct SubscriptionCreateArgs {
     /// Authority account identifier (canonical I105 account literal).
@@ -237,7 +219,6 @@ pub struct SubscriptionCreateArgs {
     #[arg(long)]
     pub grant_usage_to_provider: Option<bool>,
 }
-
 impl Run for SubscriptionCreateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -247,7 +228,6 @@ impl Run for SubscriptionCreateArgs {
         context.print_data(&response)
     }
 }
-
 impl SubscriptionCreateArgs {
     fn to_request(&self, authority: AccountId) -> Result<SubscriptionCreateRequest> {
         Ok(SubscriptionCreateRequest {
@@ -261,7 +241,6 @@ impl SubscriptionCreateArgs {
         })
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct SubscriptionListArgs {
     /// Filter by subscriber account.
@@ -280,7 +259,6 @@ pub struct SubscriptionListArgs {
     #[arg(long, default_value_t = 0)]
     pub offset: u64,
 }
-
 impl Run for SubscriptionListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -295,7 +273,6 @@ impl Run for SubscriptionListArgs {
         context.print_data(&response)
     }
 }
-
 impl SubscriptionListArgs {
     fn to_params(
         &self,
@@ -312,14 +289,12 @@ impl SubscriptionListArgs {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct SubscriptionGetArgs {
     /// Subscription NFT id.
     #[arg(long, value_name = "NFT_ID")]
     pub subscription_id: iroha::data_model::nft::NftId,
 }
-
 impl Run for SubscriptionGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -327,7 +302,6 @@ impl Run for SubscriptionGetArgs {
         context.print_data(&response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct SubscriptionActionArgs {
     /// Subscription NFT id.
@@ -343,7 +317,6 @@ pub struct SubscriptionActionArgs {
     #[arg(long)]
     pub cancel_at_period_end: bool,
 }
-
 impl SubscriptionActionArgs {
     fn to_request(
         &self,
@@ -361,7 +334,6 @@ impl SubscriptionActionArgs {
         })
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct SubscriptionUsageArgs {
     /// Subscription NFT id.
@@ -380,7 +352,6 @@ pub struct SubscriptionUsageArgs {
     #[arg(long)]
     pub usage_trigger_id: Option<iroha::data_model::trigger::TriggerId>,
 }
-
 impl Run for SubscriptionUsageArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -390,7 +361,6 @@ impl Run for SubscriptionUsageArgs {
         context.print_data(&response)
     }
 }
-
 impl SubscriptionUsageArgs {
     fn to_request(&self, authority: AccountId) -> Result<SubscriptionUsageRequest> {
         Ok(SubscriptionUsageRequest {
@@ -401,7 +371,6 @@ impl SubscriptionUsageArgs {
         })
     }
 }
-
 fn load_plan<C: RunContext>(
     context: &C,
     path: Option<&PathBuf>,
@@ -413,14 +382,12 @@ fn load_plan<C: RunContext>(
         crate::parse_json_stdin(context)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
-
     use super::*;
     use iroha::data_model::{
         account::AccountId,
@@ -435,52 +402,41 @@ mod tests {
         trigger::TriggerId,
     };
     use iroha_crypto::{Algorithm, KeyPair};
-
     struct DummyContext;
-
     impl RunContext for DummyContext {
         fn config(&self) -> &crate::Config {
             unreachable!("dummy context does not provide config")
         }
-
         fn transaction_metadata(&self) -> Option<&crate::Metadata> {
             unreachable!("dummy context does not provide metadata")
         }
-
         fn input_instructions(&self) -> bool {
             unreachable!("dummy context does not read stdin")
         }
-
         fn output_instructions(&self) -> bool {
             unreachable!("dummy context does not write stdout")
         }
-
         fn i18n(&self) -> &crate::Localizer {
             unreachable!("dummy context does not provide i18n")
         }
-
         fn print_data<T>(&mut self, _data: &T) -> Result<()>
         where
             T: crate::JsonSerialize + ?Sized,
         {
             unreachable!("dummy context does not print")
         }
-
         fn println(&mut self, _data: impl std::fmt::Display) -> Result<()> {
             unreachable!("dummy context does not print")
         }
     }
-
     fn sample_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
-
     fn sample_account_id(seed: u8) -> AccountId {
         let key_pair = sample_key_pair(seed);
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn sample_key_pair_uses_checked_seed_derivation() {
         assert_eq!(sample_key_pair(3).algorithm(), Algorithm::Ed25519);
@@ -489,7 +445,6 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     fn sample_plan(provider: AccountId, asset_definition: AssetDefinitionId) -> SubscriptionPlan {
         SubscriptionPlan {
             provider,
@@ -508,7 +463,6 @@ mod tests {
             }),
         }
     }
-
     #[test]
     fn plan_create_args_build_request() {
         let provider = sample_account_id(1);
@@ -528,7 +482,6 @@ mod tests {
             plan_id: plan_id.clone(),
             plan_json: None,
         };
-
         let request = args
             .to_request(provider.clone(), plan.clone())
             .expect("request");
@@ -536,7 +489,6 @@ mod tests {
         assert_eq!(request.plan_id, plan_id);
         assert_eq!(request.plan, plan);
     }
-
     #[test]
     fn plan_list_args_build_params() {
         let provider = sample_account_id(1).to_string();
@@ -550,7 +502,6 @@ mod tests {
         assert_eq!(params.limit, Some(5));
         assert_eq!(params.offset, 2);
     }
-
     #[test]
     fn subscription_create_args_build_request() {
         let subscriber = sample_account_id(2);
@@ -573,7 +524,6 @@ mod tests {
             first_charge_ms: Some(1_700),
             grant_usage_to_provider: Some(true),
         };
-
         let request = args.to_request(subscriber.clone()).expect("request");
         assert_eq!(request.authority, subscriber);
         assert_eq!(request.subscription_id, subscription_id);
@@ -583,7 +533,6 @@ mod tests {
         assert_eq!(request.first_charge_ms, Some(1_700));
         assert_eq!(request.grant_usage_to_provider, Some(true));
     }
-
     #[test]
     fn subscription_list_args_build_params() {
         let owned_by = sample_account_id(2).to_string();
@@ -602,7 +551,6 @@ mod tests {
         assert_eq!(params.limit, Some(10));
         assert_eq!(params.offset, 4);
     }
-
     #[test]
     fn subscription_action_args_build_request() {
         let subscriber = sample_account_id(2);
@@ -615,7 +563,6 @@ mod tests {
             charge_at_ms: Some(500),
             cancel_at_period_end: false,
         };
-
         let request = args.to_request(subscriber.clone(), false).expect("request");
         assert_eq!(request.authority, subscriber);
         assert_eq!(request.charge_at_ms, Some(500));
@@ -627,7 +574,6 @@ mod tests {
             Some(SubscriptionCancelMode::Immediate)
         );
     }
-
     #[test]
     fn subscription_usage_args_build_request() {
         let subscriber = sample_account_id(2);
@@ -643,14 +589,12 @@ mod tests {
             delta: Quantity::from(4_u32),
             usage_trigger_id: Some(usage_trigger_id.clone()),
         };
-
         let request = args.to_request(subscriber.clone()).expect("request");
         assert_eq!(request.authority, subscriber);
         assert_eq!(request.unit_key, unit_key);
         assert_eq!(request.delta, Quantity::from(4_u32));
         assert_eq!(request.usage_trigger_id, Some(usage_trigger_id));
     }
-
     #[test]
     fn load_plan_reads_json_file() {
         let provider = sample_account_id(1);
@@ -661,7 +605,6 @@ mod tests {
             );
         let plan = sample_plan(provider, asset_definition);
         let payload = norito::json::to_json(&plan).expect("encode plan");
-
         let mut path = std::env::temp_dir();
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -669,11 +612,9 @@ mod tests {
             .as_nanos();
         path.push(format!("iroha_cli_subscription_plan_{ts}.json"));
         fs::write(&path, payload).expect("write plan json");
-
         let context = DummyContext;
         let parsed = load_plan(&context, Some(&path)).expect("load plan");
         assert_eq!(parsed, plan);
-
         let _ = fs::remove_file(path);
     }
 }

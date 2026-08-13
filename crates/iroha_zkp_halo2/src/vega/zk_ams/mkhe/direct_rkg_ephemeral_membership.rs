@@ -13,9 +13,7 @@
 //! recomputes every commitment before retaining the opening.
 
 #![allow(dead_code)]
-
 use thiserror::Error;
-
 use crate::{
     generalized_bulletproof::ProofRandomSource,
     vega::{
@@ -28,7 +26,6 @@ use crate::{
         sponge::Keccak256,
     },
 };
-
 use super::{
     MKHE_VERSION_V1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
@@ -47,18 +44,15 @@ use super::{
         ZK_AMS_MKHE_RKG_EPHEMERAL_MEMBERSHIP_WIRE_BYTES_V1,
     },
 };
-
 const RKG_EPHEMERAL_STATEMENT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-rkg-ephemeral-membership.statement";
 const RKG_EPHEMERAL_VERIFIED_SOURCE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.direct-rkg-ephemeral-membership.verified-source";
-
 const _: () = {
     assert!(ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1 == 8);
     assert!(ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1 == 131_072);
     assert!(ZK_AMS_MKHE_RKG_EPHEMERAL_MEMBERSHIP_WIRE_BYTES_V1 == 12_291);
 };
-
 /// Stable wrapper failures before the active binding capability is minted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum ZkAmsMkheDirectRkgEphemeralMembershipErrorV1 {
@@ -69,7 +63,6 @@ pub(super) enum ZkAmsMkheDirectRkgEphemeralMembershipErrorV1 {
     #[error(transparent)]
     ExactMembership(#[from] ExactEightChunkMembershipErrorV1),
 }
-
 /// Canonical wrapper context for one party-local RKG `u_i` source.
 ///
 /// The exact membership frame carries the common profile/roster/key/epoch,
@@ -92,7 +85,6 @@ pub(super) struct ZkAmsMkheDirectRkgEphemeralMembershipContextV1 {
     secret_lineage_identity_digest: [u8; 32],
     statement_digest: [u8; 32],
 }
-
 impl ZkAmsMkheDirectRkgEphemeralMembershipContextV1 {
     /// Derive every axis from the governed roster, opaque secret-binding set,
     /// and validated direct relinearization context.
@@ -134,7 +126,6 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipContextV1 {
             .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
         Ok(context)
     }
-
     fn validate(self) -> Result<(), ZkAmsMkheDirectRkgEphemeralMembershipErrorV1> {
         if self.profile_digest == [0; 32]
             || self.roster_digest == [0; 32]
@@ -153,7 +144,6 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipContextV1 {
         }
         Ok(())
     }
-
     fn to_exact(
         self,
     ) -> Result<
@@ -172,24 +162,19 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipContextV1 {
         )
         .map_err(Into::into)
     }
-
     pub(super) const fn statement_digest(self) -> [u8; 32] {
         self.statement_digest
     }
-
     pub(super) const fn direct_context_digest(self) -> [u8; 32] {
         self.direct_context_digest
     }
-
     pub(super) const fn party_index(self) -> usize {
         self.party_index as usize
     }
-
     pub(super) const fn record_index(self) -> u32 {
         self.record_index
     }
 }
-
 fn rkg_ephemeral_statement_digest_v1(
     context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
 ) -> [u8; 32] {
@@ -210,14 +195,12 @@ fn rkg_ephemeral_statement_digest_v1(
     hash.update(&context.secret_lineage_identity_digest);
     hash.finalize()
 }
-
 /// Canonical public evidence for one direct RKG-ephemeral opening.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1 {
     context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
     inner: ExactEightChunkMembershipEvidenceV1<RkgEphemeralMembershipRoleV1>,
 }
-
 impl ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1 {
     /// Prove and locally verify all eight bound-one chunks.
     pub(super) fn prove<Random: ProofRandomSource>(
@@ -235,7 +218,6 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1 {
         )?;
         Ok(Self { context, inner })
     }
-
     /// Decode exactly 12,291 bytes at a verifier-derived wrapper context.
     ///
     /// There is no context-free decoder: the omitted direct axes are carried
@@ -257,7 +239,6 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1 {
             inner,
         })
     }
-
     /// Encode the unique role-separated exact-membership wire.
     pub(super) fn to_wire_bytes(
         &self,
@@ -268,7 +249,6 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1 {
         }
         self.inner.to_wire_bytes().map_err(Into::into)
     }
-
     /// Replay all eight proofs and mint the sole move-only wrapper source.
     pub(super) fn into_verified(
         self,
@@ -281,7 +261,6 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1 {
         let verified = self.inner.into_verified()?;
         VerifiedRkgEphemeralMembershipSourceV1::from_exact_verifier(self.context, verified)
     }
-
     #[cfg(test)]
     pub(super) fn assemble_for_test(
         context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
@@ -295,7 +274,6 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1 {
         )?;
         Ok(Self { context, inner })
     }
-
     #[cfg(test)]
     pub(super) fn into_verified_with_for_test<F>(
         self,
@@ -316,7 +294,6 @@ impl ZkAmsMkheDirectRkgEphemeralMembershipEvidenceV1 {
         VerifiedRkgEphemeralMembershipSourceV1::from_exact_verifier(self.context, verified)
     }
 }
-
 /// Move-only exact-verifier source for one RKG-ephemeral binding.
 ///
 /// This type has no decoder, public constructor, or `Clone` implementation.
@@ -327,7 +304,6 @@ pub(super) struct VerifiedRkgEphemeralMembershipSourceV1 {
     verified: VerifiedExactEightChunkMembershipV1<RkgEphemeralMembershipRoleV1>,
     source_verification_digest: [u8; 32],
 }
-
 impl VerifiedRkgEphemeralMembershipSourceV1 {
     fn from_exact_verifier(
         context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
@@ -348,7 +324,6 @@ impl VerifiedRkgEphemeralMembershipSourceV1 {
             .map_err(|_| ZkAmsMkheDirectRkgEphemeralMembershipErrorV1::Context)?;
         Ok(source)
     }
-
     pub(super) fn validate_against(
         &self,
         expected_context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
@@ -370,32 +345,25 @@ impl VerifiedRkgEphemeralMembershipSourceV1 {
         }
         Ok(())
     }
-
     pub(super) const fn generator_basis_digest(&self) -> [u8; 32] {
         self.verified.generator_basis_digest()
     }
-
     pub(super) const fn commitments(&self) -> &[Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1] {
         self.verified.commitments()
     }
-
     pub(super) const fn commitment_set_digest(&self) -> [u8; 32] {
         self.verified.commitment_set_digest()
     }
-
     pub(super) const fn membership_proof_digest(&self) -> [u8; 32] {
         self.verified.proof_set_digest()
     }
-
     pub(super) const fn verifier_transcript_digest(&self) -> [u8; 32] {
         self.verified.verifier_transcript_digest()
     }
-
     pub(super) const fn source_verification_digest(&self) -> [u8; 32] {
         self.source_verification_digest
     }
 }
-
 impl core::fmt::Debug for VerifiedRkgEphemeralMembershipSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -412,7 +380,6 @@ impl core::fmt::Debug for VerifiedRkgEphemeralMembershipSourceV1 {
             .finish_non_exhaustive()
     }
 }
-
 fn verified_source_digest_v1(
     source: &VerifiedRkgEphemeralMembershipSourceV1,
 ) -> Result<[u8; 32], ExactEightChunkMembershipErrorV1> {
@@ -440,7 +407,6 @@ fn verified_source_digest_v1(
     hash.update(&source.verified.verifier_transcript_digest());
     Ok(hash.finalize())
 }
-
 /// Move-only owner of one exact RKG-ephemeral opening and its compact binding.
 pub(super) struct RetainedRkgEphemeralOpeningV1 {
     context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
@@ -448,7 +414,6 @@ pub(super) struct RetainedRkgEphemeralOpeningV1 {
     u: ZeroizingT256ScalarVecV1,
     blindings: [ZeroizingT256ScalarCopyV1; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
 }
-
 impl RetainedRkgEphemeralOpeningV1 {
     /// Verify, bind, and retain one complete opening.
     ///
@@ -508,7 +473,6 @@ impl RetainedRkgEphemeralOpeningV1 {
             verifier_binding,
         ))
     }
-
     /// Borrow the retained opening only inside one authorized RKG-round call.
     ///
     /// `RkgNormalize` and `Galois` are rejected before the closure runs. The
@@ -547,7 +511,6 @@ impl RetainedRkgEphemeralOpeningV1 {
         Ok(use_opening(self.u.as_slice(), blindings))
     }
 }
-
 impl core::fmt::Debug for RetainedRkgEphemeralOpeningV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -558,7 +521,6 @@ impl core::fmt::Debug for RetainedRkgEphemeralOpeningV1 {
             .finish_non_exhaustive()
     }
 }
-
 fn verify_retained_opening_commitments_v1(
     binding: &VerifiedPersistentWitnessBindingV1,
     u: &ZeroizingT256ScalarVecV1,
@@ -585,9 +547,7 @@ fn verify_retained_opening_commitments_v1(
     }
     Ok(())
 }
-
 struct ZeroizingRkgEphemeralCoefficientChunkV1(Vec<i8>);
-
 impl ZeroizingRkgEphemeralCoefficientChunkV1 {
     fn from_scalars(values: &[Scalar]) -> Result<Self, ZkAmsMkheErrorV1> {
         if values.len() != ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1 {
@@ -608,12 +568,10 @@ impl ZeroizingRkgEphemeralCoefficientChunkV1 {
         }
         Ok(coefficients)
     }
-
     fn as_slice(&self) -> &[i8] {
         &self.0
     }
 }
-
 impl Drop for ZeroizingRkgEphemeralCoefficientChunkV1 {
     fn drop(&mut self) {
         let coefficients = core::hint::black_box(&mut self.0);
@@ -622,7 +580,6 @@ impl Drop for ZeroizingRkgEphemeralCoefficientChunkV1 {
         let _ = core::hint::black_box(&mut *coefficients);
     }
 }
-
 #[cfg(test)]
 #[path = "direct_rkg_ephemeral_membership_tests.rs"]
 mod tests;

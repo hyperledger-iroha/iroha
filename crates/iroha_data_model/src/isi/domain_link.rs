@@ -2,9 +2,7 @@
 //!
 //! The executor routes this shape through the current alias intent classifier,
 //! including exact dataspace and PSP-domain isolation checks.
-
 use super::*;
-
 isi! {
     /// Bind or clear non-primary aliases for an existing account.
     pub struct SetAccountAliasBinding {
@@ -21,11 +19,9 @@ isi! {
         pub lease_expiry_ms: Option<u64>,
     }
 }
-
 impl SetAccountAliasBinding {
     /// Stable legacy wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.alias.binding.set";
-
     /// Create a binding instruction.
     #[must_use]
     pub fn bind(
@@ -39,7 +35,6 @@ impl SetAccountAliasBinding {
             lease_expiry_ms,
         }
     }
-
     /// Create an instruction that clears every non-primary alias binding.
     #[must_use]
     pub fn clear(account: AccountId) -> Self {
@@ -50,9 +45,7 @@ impl SetAccountAliasBinding {
         }
     }
 }
-
 impl crate::seal::Instruction for SetAccountAliasBinding {}
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SetAccountAliasBinding {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -60,7 +53,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAccountAliasBinding {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let account = super::decode_aos_canonical_field::<AccountId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -96,24 +88,20 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAccountAliasBinding {
         ))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         account::rekey::{AccountAlias, AccountAliasDomain},
         nexus::DataSpaceId,
     };
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive alias-binding fixture keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn legacy_alias_binding_roundtrips() {
         let alias = AccountAlias::new(

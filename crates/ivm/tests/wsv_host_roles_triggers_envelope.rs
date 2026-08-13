@@ -1,5 +1,4 @@
 //! Rejection coverage for the retired JSON A0 administration envelope.
-
 use iroha_crypto::Hash;
 use iroha_primitives::json::Json;
 use ivm::{
@@ -8,7 +7,6 @@ use ivm::{
     syscalls,
 };
 use ivm_abi::codec::encode_canonical_norito;
-
 fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -19,7 +17,6 @@ fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&hash);
     out
 }
-
 #[test]
 fn json_admin_envelopes_are_rejected_for_every_a0_tag_without_mutation() {
     let caller = AccountId::new(
@@ -37,7 +34,6 @@ fn json_admin_envelopes_are_rejected_for_every_a0_tag_without_mutation() {
         .alloc_input_tlv(&make_tlv(PointerType::Json, &payload))
         .expect("allocate JSON envelope");
     vm.set_register(10, pointer);
-
     for tag in [
         0,
         syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,

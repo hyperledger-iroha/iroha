@@ -8,9 +8,7 @@
 //! while fresh collective ciphertext lineage now binds an opening-owned opaque
 //! nonce instead of their digest. This topology-only slice still supplies no
 //! hiding source/witness link and does not claim complete confidentiality.
-
 use core::ptr;
-
 use super::super::{
     ZkAmsMkheErrorV1,
     collective::{
@@ -35,14 +33,11 @@ use super::{
     verify_zk_ams_phase23_native_bgv_opening_v1,
 };
 use crate::vega::sponge::Keccak256;
-
 const STATE_OWNED_OPENINGS_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.state-owned-native-bgv-openings";
-
 /// Exact number of native openings in `X/U/E/rE/W/rW` chunk order.
 pub(in super::super) const ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1: usize =
     RNS_LINK_RELEASE_COMMITMENTS_V1;
-
 const CANONICAL_FAMILY_CHUNK_COUNTS_V1: [(ZkAmsPhase23RnsLinkFamilyV1, u16);
     RNS_LINK_FAMILY_COUNT_V1] = [
     (ZkAmsPhase23RnsLinkFamilyV1::X, 1),
@@ -52,18 +47,15 @@ const CANONICAL_FAMILY_CHUNK_COUNTS_V1: [(ZkAmsPhase23RnsLinkFamilyV1, u16);
     (ZkAmsPhase23RnsLinkFamilyV1::W, 8),
     (ZkAmsPhase23RnsLinkFamilyV1::RW, 1),
 ];
-
 const _: () = {
     assert!(ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1 == 43);
     assert!(1 + 16 + 16 + 1 + 8 + 1 == ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CanonicalOpeningPositionV1 {
     family: ZkAmsPhase23RnsLinkFamilyV1,
     chunk_index: u16,
 }
-
 /// Move-only streaming verifier for one canonical packed accumulator owner.
 ///
 /// `new` accepts no family, plaintext, or chunk-index labels. The only
@@ -88,7 +80,6 @@ struct CanonicalOpeningPositionV1 {
 pub(in super::super) struct StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
     live: Option<Box<StateOwnedRnsLinkAccumulatorOpeningStreamV1<'a>>>,
 }
-
 struct StateOwnedRnsLinkAccumulatorOpeningStreamV1<'a> {
     packed_owner: &'a ZkAmsPhase23PackedAccumulatorSetV1,
     common_key: &'a ZkAmsMkheCollectivePublicKeyV1,
@@ -99,7 +90,6 @@ struct StateOwnedRnsLinkAccumulatorOpeningStreamV1<'a> {
     q_native_relation_sink: Option<ZkAmsPhase23QNativeRelationAdapterSinkV1>,
     next_opening: usize,
 }
-
 /// Aggregate topology metadata emitted only after all 43 native openings were
 /// consumed successfully in canonical state-owner order.
 ///
@@ -123,7 +113,6 @@ pub(in super::super) struct ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPref
     q_native_secret_packed_plaintext_owner_hardened: bool,
     digest: [u8; 32],
 }
-
 impl<'a> StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
     /// Begin the exact 43-opening stream for one packed owner, one public-key
     /// owner, and one canonically ordered ciphertext-reference set.
@@ -137,7 +126,6 @@ impl<'a> StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
         // before any expensive secret-opening verification.
         validate_unique_pointer_set_v1(&ciphertexts)?;
         validate_common_ciphertext_context_v1(common_key, &ciphertexts)?;
-
         let geometry = derive_zk_ams_phase23_rns_link_release_geometry_v1()?;
         validate_canonical_geometry_v1(&geometry)?;
         let packed_preflight =
@@ -148,13 +136,11 @@ impl<'a> StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
         {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         let key_digest = common_key.digest();
         if key_digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
         let q_native_relation_sink = ZkAmsPhase23QNativeRelationAdapterSinkV1::new(geometry)?;
-
         Ok(Self {
             live: Some(Box::new(StateOwnedRnsLinkAccumulatorOpeningStreamV1 {
                 packed_owner,
@@ -167,7 +153,6 @@ impl<'a> StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
             })),
         })
     }
-
     /// Consume, verify, and forget exactly the next canonical owned opening.
     ///
     /// The return type exposes no family/index label, callback, checked token,
@@ -185,7 +170,6 @@ impl<'a> StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
         self.live = Some(live);
         Ok(())
     }
-
     /// Finish by value only after exactly 43 successful ordered absorbs.
     ///
     /// Early finish consumes the stream and returns no partial metadata.
@@ -197,7 +181,6 @@ impl<'a> StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
             .finish_into_unverified_metadata_v1()
     }
 }
-
 impl StateOwnedRnsLinkAccumulatorOpeningStreamV1<'_> {
     fn absorb_next_opening_v1(
         &mut self,
@@ -219,7 +202,6 @@ impl StateOwnedRnsLinkAccumulatorOpeningStreamV1<'_> {
             self.common_key,
             expected_ciphertext,
         )?;
-
         // The owned opening is dropped by this private verifier on success,
         // error, or unwind.  The concrete sink advances inside the collective
         // verifier and retains only public topology/count metadata.
@@ -241,7 +223,6 @@ impl StateOwnedRnsLinkAccumulatorOpeningStreamV1<'_> {
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         Ok(())
     }
-
     fn finish_into_unverified_metadata_v1(
         mut self: Box<Self>,
     ) -> Result<ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1, ZkAmsMkheErrorV1> {
@@ -266,7 +247,6 @@ impl StateOwnedRnsLinkAccumulatorOpeningStreamV1<'_> {
         if key_digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         // No packed-preflight, plaintext, RNS-binding, ciphertext-lineage, or
         // opening digest leaves the stream.  Those deterministic values are
         // not hiding commitments for the low-entropy secret families.
@@ -296,7 +276,6 @@ impl StateOwnedRnsLinkAccumulatorOpeningStreamV1<'_> {
         if digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         Ok(
             ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1 {
                 geometry_digest: self.geometry.digest,
@@ -318,7 +297,6 @@ impl StateOwnedRnsLinkAccumulatorOpeningStreamV1<'_> {
         )
     }
 }
-
 fn canonical_opening_position_v1(ordinal: usize) -> Option<CanonicalOpeningPositionV1> {
     let mut family_start = 0_usize;
     for (family, chunk_count) in CANONICAL_FAMILY_CHUNK_COUNTS_V1 {
@@ -333,7 +311,6 @@ fn canonical_opening_position_v1(ordinal: usize) -> Option<CanonicalOpeningPosit
     }
     None
 }
-
 fn canonical_packed_plaintext_v1(
     packed: &ZkAmsPhase23PackedAccumulatorSetV1,
     position: CanonicalOpeningPositionV1,
@@ -350,7 +327,6 @@ fn canonical_packed_plaintext_v1(
         .get(usize::from(position.chunk_index))
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn expected_borrow_for_ordinal_v1<'a, T>(
     items: &[&'a T; ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1],
     ordinal: usize,
@@ -360,7 +336,6 @@ fn expected_borrow_for_ordinal_v1<'a, T>(
         .copied()
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn validate_canonical_geometry_v1(
     geometry: &ZkAmsPhase23RnsLinkReleaseGeometryV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -381,7 +356,6 @@ fn validate_canonical_geometry_v1(
     }
     Ok(())
 }
-
 fn validate_unique_pointer_set_v1<T>(
     items: &[&T; ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1],
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -392,7 +366,6 @@ fn validate_unique_pointer_set_v1<T>(
     }
     Ok(())
 }
-
 fn validate_common_ciphertext_context_v1(
     key: &ZkAmsMkheCollectivePublicKeyV1,
     ciphertexts: &[&ZkAmsMkheCollectiveCiphertextV1;
@@ -413,7 +386,6 @@ fn validate_common_ciphertext_context_v1(
     }
     Ok(())
 }
-
 fn validate_expected_chunk_v1(
     geometry: &ZkAmsPhase23RnsLinkReleaseGeometryV1,
     expected_family: ZkAmsPhase23RnsLinkFamilyGeometryV1,
@@ -445,7 +417,6 @@ fn validate_expected_chunk_v1(
     }
     Ok(())
 }
-
 fn validate_q_native_relation_metadata_v1(
     expected_opening_count: u16,
     metadata: ZkAmsPhase23QNativeRelationUnverifiedMetadataV1,
@@ -477,14 +448,12 @@ fn validate_q_native_relation_metadata_v1(
     }
     Ok(())
 }
-
 fn require_complete_opening_count_v1(count: usize) -> Result<(), ZkAmsMkheErrorV1> {
     if count != ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -492,9 +461,7 @@ mod tests {
         panic::{AssertUnwindSafe, catch_unwind},
         rc::Rc,
     };
-
     use super::*;
-
     type BeginStateOwnedOpeningsV1 =
         for<'a> fn(
             &'a ZkAmsPhase23PackedAccumulatorSetV1,
@@ -512,7 +479,6 @@ mod tests {
         ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1,
         ZkAmsMkheErrorV1,
     >;
-
     fn begin_state_owned_openings_v1<'a>(
         packed_owner: &'a ZkAmsPhase23PackedAccumulatorSetV1,
         common_key: &'a ZkAmsMkheCollectivePublicKeyV1,
@@ -521,20 +487,17 @@ mod tests {
     ) -> Result<StateOwnedRnsLinkAccumulatorOpeningsV1<'a>, ZkAmsMkheErrorV1> {
         StateOwnedRnsLinkAccumulatorOpeningsV1::new(packed_owner, common_key, ciphertexts)
     }
-
     fn absorb_state_owned_opening_v1<'a>(
         stream: &mut StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
         opening: ZkAmsMkheCollectiveEncryptionOpeningV1,
     ) -> Result<(), ZkAmsMkheErrorV1> {
         stream.absorb_next_opening_v1(opening)
     }
-
     fn finish_state_owned_openings_v1<'a>(
         stream: StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
     ) -> Result<ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1, ZkAmsMkheErrorV1> {
         stream.finish_into_unverified_metadata_v1()
     }
-
     #[test]
     fn streaming_boundary_is_fixed_width_borrow_tied_and_small() {
         let _: BeginStateOwnedOpeningsV1 = begin_state_owned_openings_v1;
@@ -547,7 +510,6 @@ mod tests {
         assert!(core::mem::size_of::<ZkAmsPhase23QNativeRelationAdapterSinkV1>() < 1024);
         assert!(core::mem::size_of::<StateOwnedRnsLinkAccumulatorOpeningsV1<'static>>() < 4096);
     }
-
     #[test]
     fn canonical_positions_cover_exact_x_u_e_re_w_rw_order_once() {
         let expected = CANONICAL_FAMILY_CHUNK_COUNTS_V1;
@@ -568,7 +530,6 @@ mod tests {
         assert_eq!(canonical_opening_position_v1(43), None);
         assert_eq!(canonical_opening_position_v1(usize::MAX), None);
     }
-
     #[test]
     fn early_finish_and_excess_opening_are_rejected() {
         for incomplete in [0, 1, 42, 44, usize::MAX] {
@@ -581,7 +542,6 @@ mod tests {
         assert!(canonical_opening_position_v1(42).is_some());
         assert!(canonical_opening_position_v1(43).is_none());
     }
-
     #[test]
     fn duplicate_ciphertext_pointers_are_rejected_before_verification() {
         let values: [u16; 43] = core::array::from_fn(|index| u16::try_from(index).unwrap());
@@ -593,7 +553,6 @@ mod tests {
             validate_unique_pointer_set_v1(&duplicate),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let production = include_str!("phase23_rns_link_state_owned.rs")
             .split("#[cfg(test)]")
             .next()
@@ -615,7 +574,6 @@ mod tests {
                     .unwrap()
         );
     }
-
     #[test]
     fn canonical_ciphertext_borrow_order_is_fixed_and_bounded() {
         let ciphertext_values: [u16; 43] =
@@ -632,15 +590,12 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
     }
-
     struct DropProbe(Rc<Cell<bool>>);
-
     impl Drop for DropProbe {
         fn drop(&mut self) {
             self.0.set(true);
         }
     }
-
     fn advance_poisoning_probe_v1<T>(
         live: &mut Option<Box<T>>,
         advance: impl FnOnce(&mut T) -> Result<(), ZkAmsMkheErrorV1>,
@@ -650,7 +605,6 @@ mod tests {
         *live = Some(state);
         Ok(())
     }
-
     #[test]
     fn error_and_unwind_destroy_live_state_and_forbid_retry() {
         let success_drop = Rc::new(Cell::new(false));
@@ -663,7 +617,6 @@ mod tests {
         );
         drop(successful_live);
         assert!(success_drop.get());
-
         let error_drop = Rc::new(Cell::new(false));
         let mut live = Some(Box::new(DropProbe(Rc::clone(&error_drop))));
         assert_eq!(
@@ -672,7 +625,6 @@ mod tests {
         );
         assert!(live.is_none());
         assert!(error_drop.get());
-
         let retry_called = Cell::new(false);
         assert_eq!(
             advance_poisoning_probe_v1(&mut live, |_| {
@@ -682,7 +634,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
         assert!(!retry_called.get());
-
         let unwind_drop = Rc::new(Cell::new(false));
         let mut unwinding_live = Some(Box::new(DropProbe(Rc::clone(&unwind_drop))));
         let caught = catch_unwind(AssertUnwindSafe(|| {
@@ -695,7 +646,6 @@ mod tests {
         assert!(unwinding_live.is_none());
         assert!(unwind_drop.get());
     }
-
     #[test]
     fn q_native_topology_metadata_rejects_count_or_false_axis_overclaim() {
         let baseline = ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
@@ -712,7 +662,6 @@ mod tests {
             digest: [3; 32],
         };
         validate_q_native_relation_metadata_v1(43, baseline).unwrap();
-
         for hostile in [
             ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
                 opening_count: 42,
@@ -753,7 +702,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn production_surface_has_no_labels_partial_token_or_heavy_collection() {
         let source = include_str!("phase23_rns_link_state_owned.rs");
@@ -826,7 +774,6 @@ mod tests {
                 "missing false axis: {required}"
             );
         }
-
         let constructor = production
             .split("pub(in super::super) fn new(")
             .nth(1)
@@ -846,7 +793,6 @@ mod tests {
                 "caller label escaped: {forbidden}"
             );
         }
-
         let absorb = production
             .split("pub(in super::super) fn absorb_next_opening_v1(")
             .nth(1)
@@ -863,7 +809,6 @@ mod tests {
                 "absorb authority escaped: {forbidden}"
             );
         }
-
         let finish = production
             .split("pub(in super::super) fn finish_into_unverified_metadata_v1(")
             .nth(1)
@@ -875,7 +820,6 @@ mod tests {
         assert!(!finish.contains("&self"));
         assert!(finish.contains("Unverified"));
         assert_eq!(production.matches("pub(in super::super) fn ").count(), 3);
-
         assert!(parent_source.contains(
             "#[cfg(test)]\npub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(());"
         ));
@@ -899,7 +843,6 @@ mod tests {
                 "permit gains forbidden construction or codec: {forbidden}"
             );
         }
-
         assert!(!collective_source.contains("with_validated_proof_witness_v1"));
         assert!(collective_source.contains("#[cfg(test)]\n    pub(super) fn verify_and_consume"));
         let unit_adapter = collective_source
@@ -939,7 +882,6 @@ mod tests {
             1
         );
         assert!(!production.contains("verify_and_consume_phase23_native_bgv_opening_v1"));
-
         assert!(!parent_source.contains("VerifiedZkAmsPhase23NativeBgvOpeningV1"));
         assert!(
             parent_source.contains("#[cfg(test)]\nfn verify_zk_ams_phase23_native_bgv_opening_v1")
@@ -1009,7 +951,6 @@ mod tests {
             "let mut preflight = Box::new(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1"
         ));
         assert!(parent_preflight.contains("Ok(preflight)"));
-
         for forbidden in [
             "VerifiedZkAmsPhase23NativeBgvOpeningV1",
             "VerifyNativeBgvOpeningV1",
@@ -1030,7 +971,6 @@ mod tests {
                 "audit omits aggregate streaming boundary: {required}"
             );
         }
-
         let canonical_order = [
             "ZkAmsPhase23RnsLinkFamilyV1::X => packed.x.as_slice()",
             "ZkAmsPhase23RnsLinkFamilyV1::U => packed.u.as_slice()",

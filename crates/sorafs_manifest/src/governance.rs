@@ -1,7 +1,5 @@
 //! Governance DAG node schemas used for audit publishing.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroha_crypto::{Algorithm, PublicKey};
@@ -9,7 +7,6 @@ use norito::core::NoritoSerialize as _;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use soranet_pq::MlDsaSuite;
 use thiserror::Error;
-
 use crate::{
     capacity::ReplicationOrderV1,
     deal::{DealSettlementV1, XorQuantity},
@@ -2931,10 +2928,8 @@ fn validate_receipt_hex(
     }
     Ok(())
 }
-
 mod borrowed_norito {
     use norito::core::NoritoSerialize;
-
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
     impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
@@ -5167,11 +5162,9 @@ pub enum GovernanceLogSignatureVerificationError {
 #[cfg(test)]
 mod tests {
     use std::error::Error as _;
-
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
-
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -5215,7 +5208,6 @@ mod tests {
     }
     fn supported_layouts() -> [u8; 8] {
         use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-
         [
             0,
             COMPACT_LEN,

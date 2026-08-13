@@ -26,6 +26,7 @@ import subprocess
 import sys
 import sysconfig
 import time
+import types
 from typing import Any, Iterable
 
 
@@ -48,6 +49,7 @@ _MARKER_KEYS = {
     "candidate_identity",
     "candidate_identity_sha256",
     "trusted_inputs",
+    "release_approvals",
     "identity_verification",
     "runner",
     "trusted_execution_probes",
@@ -63,6 +65,12 @@ _TRUSTED_INPUT_KEYS = {
     "receipt_validator",
     "receipt_validator_support",
     "runtime_helper",
+    "tool_probe_helper",
+    "approval_contract",
+    "approval_offline_toolchain_sdk",
+    "approval_formal_proof_tools",
+    "approval_network_scale_soak",
+    "approval_final_bootstrap_publication",
     "sdk_dependency_bundle_manifest",
     "revocation",
     "runner_tool_manifest",
@@ -87,6 +95,16 @@ _TRUSTED_ARCHIVE_NAMES = {
     "receipt_validator": "validate-receipt.py",
     "receipt_validator_support": "sumeragi_v2_localnet_manifest.py",
     "runtime_helper": "copy-release-runtime.py",
+    "tool_probe_helper": "probe-release-tools.py",
+    "approval_contract": "release-approval-contract.py",
+    "approval_offline_toolchain_sdk": (
+        "offline-toolchain-sdk.approval.v1.json"
+    ),
+    "approval_formal_proof_tools": "formal-proof-tools.approval.v1.json",
+    "approval_network_scale_soak": "network-scale-soak.approval.v1.json",
+    "approval_final_bootstrap_publication": (
+        "final-bootstrap-publication.approval.v1.json"
+    ),
     "sdk_dependency_bundle_manifest": "sdk-dependency-bundle-manifest.json",
     "revocation": "bootstrap-revocation",
     "runner_tool_manifest": "runner-tool-manifest.json",
@@ -94,11 +112,44 @@ _TRUSTED_ARCHIVE_NAMES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "bc6c901f9e011b38ba49392e99457bfd21eb365c8744c144887907229a2ee117"
+        "f5c4e3bf8d8a86890abba38f559058df676e5a311aacead265ce0f999d6395bd"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "43a815d4257ad6296a48e125dfab52c5f31aabba5210f4154641164887e48886"
     ),
+    "write_sumeragi_v2_release_receipt_gate_evidence.py": (
+        "0cc7e2a43479fb27305974559c331d4494df161cfc7c75fe9c51f324b09e058a"
+    ),
+    "write_sumeragi_v2_release_receipt_publication.py": (
+        "d5f666eab695c3ca4668a3a3e1074a53b8fc63aac3d852036d0c20622e027b45"
+    ),
+}
+_BOOTSTRAP_COMPONENT_SHA256 = {
+    "bootstrap_sumeragi_v2_release_receipt_replay.py": (
+        "a11e17139adf7257126328d7f0c9f2903a6911c9ff4a81e50bb2818362f2b39b"
+    ),
+}
+_APPROVAL_CLASS_IDS = (
+    "offline-toolchain-sdk",
+    "formal-proof-tools",
+    "network-scale-soak",
+    "final-bootstrap-publication",
+)
+_APPROVAL_INPUT_LABELS = {
+    class_id: "approval_" + class_id.replace("-", "_")
+    for class_id in _APPROVAL_CLASS_IDS
+}
+_APPROVAL_ATTESTATION_NAMES = {
+    class_id: f"{class_id}.approval-attestation.v1.json"
+    for class_id in _APPROVAL_CLASS_IDS
+}
+_APPROVAL_SET_ATTESTATION_NAME = "release-approval-set-attestation.v1.json"
+_APPROVAL_SET_ARCHIVE_ID = "release-approval.set-attestation.v1"
+_APPROVAL_OPERATION_COUNTS = {
+    "offline-toolchain-sdk": 23,
+    "formal-proof-tools": 38,
+    "network-scale-soak": 8,
+    "final-bootstrap-publication": 8,
 }
 _FRAMEWORK_PYTHON = _TRUSTED_ARCHIVE_NAMES["python"] != "python3"
 _EXECUTABLE_INPUTS = {"bash", "git", "python", "ssh_keygen"}
@@ -1133,6 +1184,203 @@ def _validate_framework_python_runtime(
     return inventory, directory
 
 
+def _load_release_approval_contract(snapshot: Snapshot) -> Any:
+    """Load the approval API from one authenticated bootstrap archive."""
+
+    module_name = "_sumeragi_v2_release_approval_" + snapshot.sha256
+    module = types.ModuleType(module_name)
+    module.__file__ = str(snapshot.path)
+    module.__package__ = ""
+    sys.modules[module_name] = module
+    try:
+        exec(compile(snapshot.data, str(snapshot.path), "exec"), module.__dict__)
+    except BaseException as error:
+        raise ValidationError(
+            "archived release approval contract could not be loaded"
+        ) from error
+    finally:
+        sys.modules.pop(module_name, None)
+    required = (
+        "APPROVAL_ARCHIVE_IDS",
+        "APPROVAL_CLASS_ORDER",
+        "APPROVAL_OPERATION_PLAN_SHA256",
+        "APPROVAL_SET_ARCHIVE_FORMAT",
+        "ReleaseApprovalClass",
+        "ReleaseApprovalError",
+        "build_release_approval_expectations",
+        "load_protected_release_approval_set",
+        "sanitized_release_approval_set_archive",
+    )
+    if any(not hasattr(module, name) for name in required):
+        raise ValidationError("archived release approval contract API is incomplete")
+    if tuple(value.value for value in module.APPROVAL_CLASS_ORDER) != _APPROVAL_CLASS_IDS:
+        raise ValidationError("archived release approval class order is not exact")
+    return module
+
+
+def _release_approval_archive_record(
+    value: Any,
+    *,
+    label: str,
+    archive_id: str,
+    archive_name: str,
+    snapshot: Snapshot,
+) -> None:
+    record = _exact_dict(
+        value,
+        {"archive_id", "archive_name", "mode", "sha256", "size_bytes"},
+        label,
+    )
+    if (
+        record["archive_id"] != archive_id
+        or record["archive_name"] != archive_name
+        or _mode(record["mode"], f"{label} mode") != _DATA_MODE
+        or _digest(record["sha256"], f"{label} digest") != snapshot.sha256
+        or _strict_int(record["size_bytes"], f"{label} size")
+        != len(snapshot.data)
+    ):
+        raise ValidationError(f"{label} archive binding is not exact")
+
+
+def _release_approvals(
+    value: Any,
+    *,
+    evidence: DirectorySnapshot,
+    identity: dict[str, Any],
+    archives: dict[str, Snapshot],
+) -> list[Snapshot]:
+    """Independently replay all four exact approvals and sanitized archives."""
+
+    marker = _exact_dict(
+        value,
+        {
+            "format",
+            "schema_version",
+            "candidate_oid",
+            "candidate_tree",
+            "protected_tool_manifest_sha256",
+            "evidence_root_id",
+            "expected_duration_seconds",
+            "operation_plan_sha256",
+            "class_attestations",
+            "set_attestation",
+        },
+        "release approvals",
+    )
+    module = _load_release_approval_contract(archives["approval_contract"])
+    if (
+        marker["format"] != module.APPROVAL_SET_ARCHIVE_FORMAT
+        or _strict_int(marker["schema_version"], "release approval schema") != 1
+        or marker["candidate_oid"] != identity["head_commit"]
+        or marker["candidate_tree"] != identity["head_tree"]
+        or marker["protected_tool_manifest_sha256"]
+        != archives["runner_tool_manifest"].sha256
+    ):
+        raise ValidationError("release approval candidate/tool binding is not exact")
+    durations = _exact_dict(
+        marker["expected_duration_seconds"],
+        set(_APPROVAL_CLASS_IDS),
+        "release approval durations",
+    )
+    if any(type(value) is not int for value in durations.values()):
+        raise ValidationError("release approval durations are not exact integers")
+    expected_plan_digests = {
+        approval_class.value: digest
+        for approval_class, digest in module.APPROVAL_OPERATION_PLAN_SHA256.items()
+    }
+    if marker["operation_plan_sha256"] != expected_plan_digests:
+        raise ValidationError("release approval operation plans are not exact")
+    try:
+        expectations = module.build_release_approval_expectations(
+            candidate_oid=identity["head_commit"],
+            candidate_tree=identity["head_tree"],
+            protected_tool_manifest_sha256=archives[
+                "runner_tool_manifest"
+            ].sha256,
+            evidence_root_id=marker["evidence_root_id"],
+            offline_toolchain_sdk_duration_seconds=durations[
+                "offline-toolchain-sdk"
+            ],
+            formal_proof_tools_duration_seconds=durations[
+                "formal-proof-tools"
+            ],
+            network_scale_soak_duration_seconds=durations[
+                "network-scale-soak"
+            ],
+            final_bootstrap_publication_duration_seconds=durations[
+                "final-bootstrap-publication"
+            ],
+        )
+        approvals = module.load_protected_release_approval_set(
+            {
+                module.ReleaseApprovalClass(class_id): archives[
+                    _APPROVAL_INPUT_LABELS[class_id]
+                ].path
+                for class_id in _APPROVAL_CLASS_IDS
+            },
+            expectations=expectations,
+            expected_owner_uid=os.getuid(),
+        )
+    except module.ReleaseApprovalError as error:
+        raise ValidationError(f"release approval replay failed: {error}") from error
+    if {
+        approval.class_id.value: len(approval.operations)
+        for approval in approvals
+    } != _APPROVAL_OPERATION_COUNTS:
+        raise ValidationError("release approval operation counts are not exact")
+    class_records = _exact_dict(
+        marker["class_attestations"],
+        set(_APPROVAL_CLASS_IDS),
+        "release approval class attestations",
+    )
+    snapshots: list[Snapshot] = []
+    for approval in approvals:
+        class_id = approval.class_id.value
+        archive_name = _APPROVAL_ATTESTATION_NAMES[class_id]
+        snapshot = _read_at(
+            evidence,
+            archive_name,
+            f"sanitized release approval {class_id}",
+            maximum_bytes=_MAX_EVIDENCE_BYTES,
+            expected_mode=_DATA_MODE,
+        )
+        sanitized = approval.sanitized_archive()
+        if snapshot.data != sanitized.canonical_bytes or snapshot.sha256 != sanitized.sha256:
+            raise ValidationError(
+                f"sanitized release approval {class_id} is not exact"
+            )
+        _release_approval_archive_record(
+            class_records[class_id],
+            label=f"release approval {class_id}",
+            archive_id=module.APPROVAL_ARCHIVE_IDS[approval.class_id],
+            archive_name=archive_name,
+            snapshot=snapshot,
+        )
+        snapshots.append(snapshot)
+    set_snapshot = _read_at(
+        evidence,
+        _APPROVAL_SET_ATTESTATION_NAME,
+        "sanitized release approval set",
+        maximum_bytes=_MAX_EVIDENCE_BYTES,
+        expected_mode=_DATA_MODE,
+    )
+    sanitized_set = module.sanitized_release_approval_set_archive(approvals)
+    if (
+        set_snapshot.data != sanitized_set.canonical_bytes
+        or set_snapshot.sha256 != sanitized_set.sha256
+    ):
+        raise ValidationError("sanitized release approval set is not exact")
+    _release_approval_archive_record(
+        marker["set_attestation"],
+        label="release approval set",
+        archive_id=_APPROVAL_SET_ARCHIVE_ID,
+        archive_name=_APPROVAL_SET_ATTESTATION_NAME,
+        snapshot=set_snapshot,
+    )
+    snapshots.append(set_snapshot)
+    return snapshots
+
+
 def _trusted_inputs(
     value: Any,
     evidence: DirectorySnapshot,
@@ -1154,7 +1402,9 @@ def _trusted_inputs(
         record_keys = base_record_keys
         if label == "python" and _FRAMEWORK_PYTHON:
             record_keys = record_keys | {"runtime"}
-        if label == "receipt_validator" and "components" in records[label]:
+        if label == "bootstrap":
+            record_keys = record_keys | {"components"}
+        if label == "receipt_validator":
             record_keys = record_keys | {"components"}
         record = _exact_dict(
             records[label], record_keys, f"trusted input {label}",
@@ -1191,7 +1441,58 @@ def _trusted_inputs(
             framework_inventory, framework_directory = (
                 _validate_framework_python_runtime(record["runtime"], evidence)
             )
-        if label == "receipt_validator" and "components" in record:
+        if label == "bootstrap":
+            components = _exact_dict(
+                record["components"],
+                set(_BOOTSTRAP_COMPONENT_SHA256),
+                "bootstrap components",
+            )
+            for name, expected_digest in sorted(
+                _BOOTSTRAP_COMPONENT_SHA256.items()
+            ):
+                component_record = _exact_dict(
+                    components[name],
+                    {"archive_id", "archive_name", "mode", "sha256", "size_bytes"},
+                    f"bootstrap component {name}",
+                )
+                if (
+                    component_record["archive_id"]
+                    != "release-bootstrap.bootstrap-component.v1:" + name
+                    or component_record["archive_name"] != name
+                    or _mode(
+                        component_record["mode"],
+                        f"bootstrap component {name} mode",
+                    )
+                    != _DATA_MODE
+                    or _digest(
+                        component_record["sha256"],
+                        f"bootstrap component {name} digest",
+                    )
+                    != expected_digest
+                ):
+                    raise ValidationError(
+                        f"bootstrap component {name} binding is wrong"
+                    )
+                component = _read_at(
+                    evidence,
+                    name,
+                    f"bootstrap component {name}",
+                    maximum_bytes=_MAX_HELPER_BYTES,
+                    expected_mode=_DATA_MODE,
+                )
+                if (
+                    component.sha256 != expected_digest
+                    or len(component.data)
+                    != _strict_int(
+                        component_record["size_bytes"],
+                        f"bootstrap component {name} size",
+                    )
+                ):
+                    raise ValidationError(
+                        f"bootstrap component {name} bytes are wrong"
+                    )
+                archives["bootstrap_component:" + name] = component
+        if label == "receipt_validator":
             components = _exact_dict(
                 record["components"],
                 set(_RECEIPT_VALIDATOR_COMPONENT_SHA256),
@@ -1876,6 +2177,141 @@ def _run_bounded(
     )
 
 
+def _replay_runner_tool_probes(
+    value: Any,
+    *,
+    evidence: DirectorySnapshot,
+    archives: dict[str, Snapshot],
+    tools: dict[str, Snapshot],
+    environment: dict[str, str],
+) -> tuple[Snapshot, Snapshot]:
+    """Independently replay the protected 41-command functional closure."""
+
+    closure = _exact_dict(
+        value,
+        {"manifest", "result", "value"},
+        "runner tool functional probes",
+    )
+    manifest_record = _exact_dict(
+        closure["manifest"],
+        {"archive_id", "archive_name", "mode", "sha256", "size_bytes"},
+        "runner tool probe manifest",
+    )
+    result_record = _exact_dict(
+        closure["result"],
+        {"archive_id", "archive_name", "mode", "sha256", "size_bytes"},
+        "runner tool probe result",
+    )
+    expected_records = (
+        (
+            manifest_record,
+            "runner-tool-probe-manifest.json",
+            "release-bootstrap.runner-tool-probe-manifest.v1",
+        ),
+        (
+            result_record,
+            "runner-tool-probes.json",
+            "release-bootstrap.runner-tool-probes.v1",
+        ),
+    )
+    snapshots: list[Snapshot] = []
+    for record, name, archive_id in expected_records:
+        if (
+            record["archive_id"] != archive_id
+            or record["archive_name"] != name
+            or _mode(record["mode"], f"{name} mode") != _DATA_MODE
+        ):
+            raise ValidationError(f"{name} archive binding is wrong")
+        snapshot = _read_at(
+            evidence,
+            name,
+            name,
+            maximum_bytes=_MAX_HELPER_OUTPUT_BYTES,
+            expected_mode=_DATA_MODE,
+        )
+        if (
+            snapshot.sha256 != _digest(record["sha256"], f"{name} digest")
+            or len(snapshot.data)
+            != _strict_int(record["size_bytes"], f"{name} size")
+        ):
+            raise ValidationError(f"{name} bytes do not match the marker")
+        snapshots.append(snapshot)
+    manifest, result_snapshot = snapshots
+    result_value = _parse_canonical(result_snapshot, "runner tool probe result")
+    if result_value != closure["value"]:
+        raise ValidationError("runner tool probe value differs from its archive")
+    result_value = _exact_dict(
+        result_value,
+        {
+            "format",
+            "host_family",
+            "probe_contract_sha256",
+            "schema_version",
+            "tool_count",
+            "tools",
+        },
+        "runner tool probe value",
+    )
+    results = result_value["tools"]
+    if (
+        result_value["format"]
+        != "iroha-sumeragi-v2-release-tool-functional-probes"
+        or _strict_int(result_value["schema_version"], "tool probe schema") != 1
+        or _strict_int(result_value["tool_count"], "tool probe count") != 41
+        or not isinstance(results, dict)
+        or set(results) != set(tools)
+        or len(tools) != 41
+    ):
+        raise ValidationError("runner tool probe inventory is not exact")
+    for name, tool in tools.items():
+        record = _exact_dict(
+            results[name],
+            {
+                "archive_id", "exit_status", "invocation_sha256", "mode",
+                "operation_id", "postcondition_sha256", "sha256",
+                "size_bytes", "stderr_sha256", "stderr_size_bytes",
+                "stdout_sha256", "stdout_size_bytes",
+            },
+            f"runner tool probe {name}",
+        )
+        if (
+            record["archive_id"] != f"release-runner-tool.{name}.v1"
+            or record["mode"] != "0500"
+            or record["sha256"] != tool.sha256
+            or _strict_int(record["size_bytes"], f"tool probe {name} size")
+            != len(tool.data)
+        ):
+            raise ValidationError(f"runner tool probe {name} binding is wrong")
+    probe_root = evidence.path / ".validator-runner-tool-probe"
+    replay = _run_bounded(
+        archives["python"].path,
+        (
+            "-I",
+            "-S",
+            str(archives["tool_probe_helper"].path),
+            "--tool-manifest",
+            str(manifest.path),
+            "--expected-tool-manifest-sha256",
+            manifest.sha256,
+            "--probe-root",
+            str(probe_root),
+        ),
+        cwd=evidence.path,
+        environment=environment,
+    )
+    if (
+        replay.returncode != 0
+        or replay.stderr
+        or replay.stdout != result_snapshot.data
+        or probe_root.exists()
+        or probe_root.is_symlink()
+    ):
+        raise ValidationError(
+            "independent runner tool functional-probe replay failed"
+        )
+    return manifest, result_snapshot
+
+
 def _runner_contract(
     value: Any,
     evidence: DirectorySnapshot,
@@ -1883,7 +2319,13 @@ def _runner_contract(
     runner_argument: Path,
     archives: dict[str, Snapshot],
     checkpoint: str,
-) -> tuple[Snapshot, dict[str, str], Path, list[AliasSnapshot], list[Snapshot]]:
+) -> tuple[
+    Snapshot,
+    dict[str, str],
+    Path,
+    list[AliasSnapshot],
+    dict[str, Snapshot],
+]:
     keys = {
         "archive_id",
         "invocation",
@@ -1974,7 +2416,7 @@ def _runner_contract(
         expected_mode=_DIRECTORY_MODE,
     )
     tool_aliases: list[AliasSnapshot] = []
-    tool_sources: list[Snapshot] = []
+    tool_sources: dict[str, Snapshot] = {}
     tool_archive_path = evidence.path / "runner-tools"
     tool_archive_directory = _open_directory(
         tool_archive_path,
@@ -2058,7 +2500,7 @@ def _runner_contract(
             ):
                 raise ValidationError(f"runner tool {name} integrity record is wrong")
             tool_aliases.append(alias)
-            tool_sources.append(source)
+            tool_sources[name] = source
     finally:
         os.close(tool_directory.descriptor)
         os.close(tool_archive_directory.descriptor)
@@ -2122,6 +2564,12 @@ def _environment_contract(
     policy = {
         "SUMERAGI_V2_RELEASE_RUNTIME_HELPER": str(archives["runtime_helper"].path),
         "SUMERAGI_V2_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": archives["runtime_helper"].sha256,
+        "SUMERAGI_V2_RELEASE_TOOL_PROBE_HELPER": str(
+            archives["tool_probe_helper"].path
+        ),
+        "SUMERAGI_V2_RELEASE_EXPECTED_TOOL_PROBE_HELPER_SHA256": archives[
+            "tool_probe_helper"
+        ].sha256,
         "SUMERAGI_V2_RELEASE_SSH_KEYGEN_BIN": str(archives["ssh_keygen"].path),
         "SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256": archives["git"].sha256,
         "SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256": archives["ssh_keygen"].sha256,
@@ -2144,6 +2592,12 @@ def _environment_contract(
     aliases.update({
         "IROHA_RELEASE_RUNTIME_HELPER": str(archives["runtime_helper"].path),
         "IROHA_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": archives["runtime_helper"].sha256,
+        "IROHA_RELEASE_TOOL_PROBE_HELPER": str(
+            archives["tool_probe_helper"].path
+        ),
+        "IROHA_RELEASE_EXPECTED_TOOL_PROBE_HELPER_SHA256": archives[
+            "tool_probe_helper"
+        ].sha256,
         "IROHA_RELEASE_SDK_DEPENDENCY_BUNDLE_MANIFEST": str(
             archives["sdk_dependency_bundle_manifest"].path
         ),
@@ -2202,6 +2656,8 @@ def _inventory(evidence: DirectorySnapshot, checkpoint: str) -> None:
         "runner-tools",
         "runner-stderr.log",
         "runner-stdout.log",
+        "runner-tool-probe-manifest.json",
+        "runner-tool-probes.json",
         "tmp",
         *{
             name
@@ -2209,6 +2665,10 @@ def _inventory(evidence: DirectorySnapshot, checkpoint: str) -> None:
             if "/" not in name
         },
         *set(_IDENTITY_RECORD_NAMES.values()),
+        *set(_APPROVAL_ATTESTATION_NAMES.values()),
+        *set(_BOOTSTRAP_COMPONENT_SHA256),
+        *set(_RECEIPT_VALIDATOR_COMPONENT_SHA256),
+        _APPROVAL_SET_ATTESTATION_NAME,
     }
     if _FRAMEWORK_PYTHON:
         required.update({"python-runtime", "python-runtime-input.json"})
@@ -2404,6 +2864,12 @@ def validate(args: argparse.Namespace) -> None:
         ) = _trusted_inputs(
             marker_value["trusted_inputs"], evidence, candidate,
         )
+        approval_snapshots = _release_approvals(
+            marker_value["release_approvals"],
+            evidence=evidence,
+            identity=identity,
+            archives=archives,
+        )
         resolved_python = Path(sys.executable).resolve(strict=True)
         if resolved_python != archives["python"].path:
             raise ValidationError("validator is not running under the archived Python")
@@ -2419,10 +2885,14 @@ def validate(args: argparse.Namespace) -> None:
             marker_value["runner"], evidence, candidate, args.runner, archives,
             args.checkpoint,
         )
-        probes = _exact_dict(marker_value["trusted_execution_probes"], {"bash", "python"}, "trusted execution probes")
+        probes = _exact_dict(
+            marker_value["trusted_execution_probes"],
+            {"bash", "python", "runner_tool_closure"},
+            "trusted execution probes",
+        )
         python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
         expected_python_stdout = f"{archives['python'].path}\n".encode()
-        if probes != {
+        if {key: probes[key] for key in ("bash", "python")} != {
             "bash": {"argv": [str(archives["bash"].path), "-c", ":"], "exit_status": 0},
             "python": {
                 "argv": [
@@ -2455,6 +2925,13 @@ def validate(args: argparse.Namespace) -> None:
             marker_digest,
             tool_directory,
             args.checkpoint,
+        )
+        tool_probe_manifest, tool_probe_result = _replay_runner_tool_probes(
+            probes["runner_tool_closure"],
+            evidence=evidence,
+            archives=archives,
+            tools=runner_tool_sources,
+            environment=environment,
         )
         # The manifest helper ran before policy aliases were added.  Recreate that
         # exact smaller environment, using only the bootstrap base plus PATH.
@@ -2558,7 +3035,10 @@ def validate(args: argparse.Namespace) -> None:
             expected_validator,
             *archives.values(),
             *source_snapshots,
-            *runner_tool_sources,
+            *approval_snapshots,
+            *runner_tool_sources.values(),
+            tool_probe_manifest,
+            tool_probe_result,
             *unique_records.values(),
         ]
         if args.checkpoint == "sealed" and release_result_snapshot is not None:

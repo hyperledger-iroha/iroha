@@ -1,33 +1,27 @@
 //! SN15-M0 operations pack for the SoraGlobal Gateway CDN.
 //! Emits observability, compliance, and security scaffolding so M0 PoPs
 //! rehearse the full evidence bundle before production.
-
 use std::{
     fs::{self, File},
     path::{Path, PathBuf},
 };
-
 use eyre::{Result, WrapErr, eyre};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json::{self, Value},
 };
 use time::OffsetDateTime;
-
 use crate::soranet_gateway_chaos::{self, ChaosScenario, ScenarioPack, ScheduleEntry};
-
 #[derive(Debug)]
 pub struct GatewayOpsOptions {
     pub output_dir: PathBuf,
     pub pop: String,
 }
-
 #[derive(Debug)]
 pub struct GatewayOpsMultiOptions {
     pub output_dir: PathBuf,
     pub pops: Vec<String>,
 }
-
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct GatewayOpsOutcome {
@@ -46,7 +40,6 @@ pub struct GatewayOpsOutcome {
     pub pq_checklist_path: PathBuf,
     pub summary_path: PathBuf,
 }
-
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct GatewayOpsFederatedOutcome {
@@ -56,7 +49,6 @@ pub struct GatewayOpsFederatedOutcome {
     pub gameday_rotation_markdown_path: PathBuf,
     pub summary_path: PathBuf,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct GatewayOpsSummary {
     pop: String,
@@ -74,7 +66,6 @@ struct GatewayOpsSummary {
     security_baseline_path: String,
     pq_checklist_path: String,
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize, Clone, PartialEq, Eq)]
 pub struct GamedayRotationEntry {
     pub pop: String,
@@ -82,7 +73,6 @@ pub struct GamedayRotationEntry {
     pub scenarios: Vec<String>,
     pub owner: String,
 }
-
 /// Write the SN15-M0 observability/compliance/security pack to disk.
 pub fn write_gateway_ops_pack(options: GatewayOpsOptions) -> Result<GatewayOpsOutcome> {
     let GatewayOpsOptions { output_dir, pop } = options;
@@ -92,7 +82,6 @@ pub fn write_gateway_ops_pack(options: GatewayOpsOptions) -> Result<GatewayOpsOu
             output_dir.display()
         )
     })?;
-
     let otel_config_path = output_dir.join("otel_collector.yaml");
     let dashboard_path = output_dir.join("grafana_dashboard.json");
     let alert_rules_path = output_dir.join("alert_rules.yml");
@@ -104,7 +93,6 @@ pub fn write_gateway_ops_pack(options: GatewayOpsOptions) -> Result<GatewayOpsOu
     let security_baseline_path = output_dir.join("security_baseline.md");
     let pq_checklist_path = output_dir.join("pq_readiness_checklist.json");
     let summary_path = output_dir.join("ops_summary.json");
-
     let pop_label = sanitize_label(&pop);
     let chaos_assets = soranet_gateway_chaos::write_chaos_assets(
         &output_dir,
@@ -134,14 +122,12 @@ pub fn write_gateway_ops_pack(options: GatewayOpsOptions) -> Result<GatewayOpsOu
     let chaos_scenarios_path = chaos_assets.scenarios_path.clone();
     let chaos_runbook_path = chaos_assets.runbook_path.clone();
     let gameday_schedule_path = chaos_assets.schedule_path.clone();
-
     fs::write(&otel_config_path, render_otel_config(&pop_label)).wrap_err_with(|| {
         format!(
             "failed to write OTEL collector config {}",
             otel_config_path.display()
         )
     })?;
-
     let dashboard_spec = render_dashboard(&pop_label);
     let dashboard_file = File::create(&dashboard_path)
         .wrap_err_with(|| format!("create {}", dashboard_path.display()))?;
@@ -151,7 +137,6 @@ pub fn write_gateway_ops_pack(options: GatewayOpsOptions) -> Result<GatewayOpsOu
             dashboard_path.display()
         )
     })?;
-
     fs::write(&alert_rules_path, render_alert_rules(&pop_label))
         .wrap_err_with(|| format!("failed to write alert rules {}", alert_rules_path.display()))?;
     fs::write(&gameday_plan_path, render_gameday_plan(&pop_label)).wrap_err_with(|| {
@@ -204,7 +189,6 @@ pub fn write_gateway_ops_pack(options: GatewayOpsOptions) -> Result<GatewayOpsOu
             security_baseline_path.display()
         )
     })?;
-
     let pq_checklist = render_pq_checklist(&pop_label);
     let pq_file = File::create(&pq_checklist_path)
         .wrap_err_with(|| format!("create {}", pq_checklist_path.display()))?;
@@ -214,7 +198,6 @@ pub fn write_gateway_ops_pack(options: GatewayOpsOptions) -> Result<GatewayOpsOu
             pq_checklist_path.display()
         )
     })?;
-
     let summary = GatewayOpsSummary {
         pop,
         otel_config_path: summarize_path(&otel_config_path, &output_dir),
@@ -235,7 +218,6 @@ pub fn write_gateway_ops_pack(options: GatewayOpsOptions) -> Result<GatewayOpsOu
         .wrap_err_with(|| format!("create {}", summary_path.display()))?;
     json::to_writer_pretty(summary_file, &summary)
         .wrap_err_with(|| format!("failed to write ops summary {}", summary_path.display()))?;
-
     Ok(GatewayOpsOutcome {
         otel_config_path,
         dashboard_path,
@@ -253,7 +235,6 @@ pub fn write_gateway_ops_pack(options: GatewayOpsOptions) -> Result<GatewayOpsOu
         summary_path,
     })
 }
-
 /// Write the multi-PoP SN15-F observability pack for the alpha rollout (three PoPs).
 pub fn write_gateway_ops_federated_pack(
     options: GatewayOpsMultiOptions,
@@ -263,14 +244,12 @@ pub fn write_gateway_ops_federated_pack(
             "at least one pop must be provided for the federated ops pack"
         ));
     }
-
     fs::create_dir_all(&options.output_dir).wrap_err_with(|| {
         format!(
             "failed to create federated ops output directory `{}`",
             options.output_dir.display()
         )
     })?;
-
     let mut outcomes = Vec::new();
     for pop in &options.pops {
         let pop_dir = options.output_dir.join(sanitize_label(pop));
@@ -280,7 +259,6 @@ pub fn write_gateway_ops_federated_pack(
         })?;
         outcomes.push(outcome);
     }
-
     let federated_otel_config_path = options.output_dir.join("otel_federated.yaml");
     fs::write(
         &federated_otel_config_path,
@@ -292,7 +270,6 @@ pub fn write_gateway_ops_federated_pack(
             federated_otel_config_path.display()
         )
     })?;
-
     let rotation_path = options.output_dir.join("gameday_rotation.json");
     let rotation_markdown_path = options.output_dir.join("gameday_rotation.md");
     let rotation_entries = build_gameday_rotation(&options.pops, &outcomes)?;
@@ -314,7 +291,6 @@ pub fn write_gateway_ops_federated_pack(
             rotation_markdown_path.display()
         )
     })?;
-
     let summary_path = options.output_dir.join("ops_federated_summary.json");
     let mut summary = json::Map::new();
     summary.insert("pops".into(), norito::json!(options.pops));
@@ -341,7 +317,6 @@ pub fn write_gateway_ops_federated_pack(
             summary_path.display()
         )
     })?;
-
     Ok(GatewayOpsFederatedOutcome {
         per_pop: outcomes,
         federated_otel_config_path,
@@ -350,7 +325,6 @@ pub fn write_gateway_ops_federated_pack(
         summary_path,
     })
 }
-
 fn render_otel_config(pop_label: &str) -> String {
     let topic = format!("otel-{pop_label}");
     format!(
@@ -446,7 +420,6 @@ service:\n\
 "
     )
 }
-
 fn render_dashboard(pop_label: &str) -> Value {
     let payload = format!(
         r#"{{
@@ -501,13 +474,11 @@ fn render_dashboard(pop_label: &str) -> Value {
     );
     json::from_str(&payload).expect("dashboard template valid")
 }
-
 fn render_federated_otel_config(pops: &[String]) -> String {
     let mut kafka_receivers = String::new();
     let mut trace_receivers = Vec::new();
     let mut gateway_targets = String::new();
     let mut resolver_targets = String::new();
-
     for pop in pops {
         let label = sanitize_label(pop);
         kafka_receivers.push_str(&format!(
@@ -521,7 +492,6 @@ fn render_federated_otel_config(pops: &[String]) -> String {
             "            - targets: [\"{label}.resolver:9100\"]\n              labels:\n                pop: {label}\n                role: resolver\n"
         ));
     }
-
     let trace_receivers = trace_receivers.join(", ");
     format!(
         "# Federated OTEL collector profile (SN15-F multi-PoP)\n\
@@ -566,7 +536,6 @@ service:\n\
 "
     )
 }
-
 fn render_alert_rules(pop_label: &str) -> String {
     format!(
         "# Prometheus alert rules for {pop_label} (SN15-M0-10/11)\n\
@@ -620,7 +589,6 @@ groups:\n\
         description: \"Tune sampling percentage or Kafka throughput; span loss invalidates change packets for observability GA.\"\n"
     )
 }
-
 fn render_gameday_plan(pop_label: &str) -> String {
     format!(
         "# SN15-M0 GameDay Scenarios ({pop_label})\n\
@@ -632,7 +600,6 @@ fn render_gameday_plan(pop_label: &str) -> String {
 - **Evidence bundle:** Attach alert exports, Grafana screenshots, chaos_report.json/md from the harness, and any manual rollback notes to the GameDay invite.\n"
     )
 }
-
 fn render_compliance_outline(pop_label: &str) -> String {
     format!(
         "# GAR Enforcement Outline ({pop_label}, SN15-M0-11)\n\
@@ -644,7 +611,6 @@ fn render_compliance_outline(pop_label: &str) -> String {
 - **Runbooks:** When ResolverProofStale fires, block new GAR entries, rotate cache-version expectations, and attach the latest enforcement receipt set to the rollback bundle.\n"
     )
 }
-
 fn render_security_baseline(pop_label: &str) -> String {
     format!(
         "# Security Baseline & PQ Readiness ({pop_label}, SN15-M0-12)\n\
@@ -658,11 +624,9 @@ fn render_security_baseline(pop_label: &str) -> String {
 - **Incident handling:** Tabletop quarterly for cache poison + resolver stale-proof scenarios with clear rollback hooks and Alertmanager routing to GAR/legal on-call roles.\n"
     )
 }
-
 fn render_pq_checklist(pop_label: &str) -> Value {
     let canary1 = format!("canary1.{pop_label}.gw.sora.id");
     let canary2 = format!("canary2.{pop_label}.gw.sora.id");
-
     norito::json!({
         "pop": pop_label,
         "tls_keys": {
@@ -689,7 +653,6 @@ fn render_pq_checklist(pop_label: &str) -> Value {
         }
     })
 }
-
 fn render_chaos_plan(
     pop_label: &str,
     scenarios: &[ChaosScenario],
@@ -757,7 +720,6 @@ fn render_chaos_plan(
     }
     out
 }
-
 fn render_chaos_metrics(pop_label: &str) -> Value {
     let mut bgp = json::Map::new();
     bgp.insert("id".into(), norito::json!("bgp_flap_recovery"));
@@ -772,7 +734,6 @@ fn render_chaos_metrics(pop_label: &str) -> Value {
         "goal".into(),
         norito::json!("BgpSessionFlap clears after rollback; convergence within 10 minutes."),
     );
-
     let mut resolver = json::Map::new();
     resolver.insert("id".into(), norito::json!("resolver_proof_age"));
     resolver.insert(
@@ -786,7 +747,6 @@ fn render_chaos_metrics(pop_label: &str) -> Value {
         "goal".into(),
         norito::json!("Proofs refresh within 15 minutes after brownout recovery."),
     );
-
     let mut cache = json::Map::new();
     cache.insert("id".into(), norito::json!("cache_hit_recovery"));
     cache.insert(
@@ -800,7 +760,6 @@ fn render_chaos_metrics(pop_label: &str) -> Value {
         "goal".into(),
         norito::json!("Cache hit rate returns to >=92% after verifier restart."),
     );
-
     let mut tail = json::Map::new();
     tail.insert("id".into(), norito::json!("tail_sampling_clear"));
     tail.insert(
@@ -814,7 +773,6 @@ fn render_chaos_metrics(pop_label: &str) -> Value {
         "goal".into(),
         norito::json!("Tail sampling drops back to 0 once chaos run ends."),
     );
-
     let checks = vec![
         Value::Object(bgp),
         Value::Object(resolver),
@@ -830,7 +788,6 @@ fn render_chaos_metrics(pop_label: &str) -> Value {
     );
     Value::Object(root)
 }
-
 fn render_chaos_injector(pop_label: &str, scenarios: &[ChaosScenario]) -> String {
     let mut supported = String::new();
     let mut supported_list = String::new();
@@ -844,7 +801,6 @@ fn render_chaos_injector(pop_label: &str, scenarios: &[ChaosScenario]) -> String
         supported_list.push_str(&scenario.id);
         supported_list.push('\n');
     }
-
     format!(
         "#!/usr/bin/env bash\n\
 set -euo pipefail\n\
@@ -930,7 +886,6 @@ echo \"Finished. Inspect chaos_report.json/md under ${{OUTPUT_DIR}}/run_* for ev
         pop = pop_label,
     )
 }
-
 fn build_gameday_rotation(
     pops: &[String],
     outcomes: &[GatewayOpsOutcome],
@@ -961,7 +916,6 @@ fn build_gameday_rotation(
     rotation.sort_by(|a, b| a.quarter.cmp(&b.quarter).then_with(|| a.pop.cmp(&b.pop)));
     Ok(rotation)
 }
-
 fn render_gameday_rotation_markdown(entries: &[GamedayRotationEntry]) -> String {
     let mut out = String::new();
     out.push_str("# Federated GameDay Rotation\n\n");
@@ -978,7 +932,6 @@ fn render_gameday_rotation_markdown(entries: &[GamedayRotationEntry]) -> String 
     }
     out
 }
-
 fn sanitize_label(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -990,22 +943,17 @@ fn sanitize_label(input: &str) -> String {
     }
     out.trim_matches('-').to_string()
 }
-
 fn summarize_path(path: &Path, root: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .display()
         .to_string()
 }
-
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, fs};
-
     use tempfile::tempdir;
-
     use super::*;
-
     #[test]
     fn writes_chaos_assets() {
         let dir = tempdir().expect("tempdir");
@@ -1014,13 +962,11 @@ mod tests {
             pop: "Pop-Test".to_string(),
         };
         let outcome = write_gateway_ops_pack(opts).expect("write pack");
-
         let plan = fs::read_to_string(&outcome.chaos_plan_path).expect("chaos plan");
         assert!(
             plan.contains("prefix-withdrawal"),
             "chaos plan should mention prefix withdrawal"
         );
-
         let scenarios = fs::read(&outcome.chaos_scenarios_path).expect("chaos scenarios json");
         let scenario_pack: ScenarioPack =
             json::from_slice(&scenarios).expect("scenario pack parses");
@@ -1031,13 +977,11 @@ mod tests {
                 .any(|scenario| scenario.id == "trustless-verifier-failure"),
             "scenario JSON should include verifier failure id"
         );
-
         let runbook = fs::read_to_string(&outcome.chaos_runbook_path).expect("chaos runbook");
         assert!(
             runbook.contains("Gateway Chaos Runbook"),
             "runbook should describe chaos harness usage"
         );
-
         let schedule_bytes =
             fs::read(&outcome.gameday_schedule_path).expect("gameday schedule exists");
         let quarterly: Vec<ScheduleEntry> =
@@ -1047,13 +991,11 @@ mod tests {
             4,
             "schedule should include four quarterly entries"
         );
-
         let metrics = fs::read_to_string(&outcome.chaos_metrics_path).expect("chaos metrics json");
         assert!(
             metrics.contains("cache_hits_total"),
             "metrics JSON should include cache hit expression"
         );
-
         let injector =
             fs::read_to_string(&outcome.chaos_injector_path).expect("chaos injector script");
         assert!(
@@ -1061,7 +1003,6 @@ mod tests {
             "injector script should wrap the chaos harness"
         );
     }
-
     #[test]
     fn writes_federated_pack() {
         let dir = tempdir().expect("tempdir");
@@ -1071,21 +1012,18 @@ mod tests {
         };
         let outcome = write_gateway_ops_federated_pack(opts).expect("write federated pack");
         assert_eq!(outcome.per_pop.len(), 2, "should build per-pop packs");
-
         let federated =
             fs::read_to_string(&outcome.federated_otel_config_path).expect("federated otel config");
         assert!(
             federated.contains("kafka/sjc-01") && federated.contains("kafka/iad-01"),
             "federated config should include kafka receivers for each pop"
         );
-
         let rotation_bytes =
             fs::read(&outcome.gameday_rotation_path).expect("rotation schedule exists");
         let rotation: Vec<GamedayRotationEntry> =
             json::from_slice(&rotation_bytes).expect("rotation parses");
         let seen_pops: HashSet<_> = rotation.iter().map(|entry| entry.pop.as_str()).collect();
         assert_eq!(seen_pops.len(), 2, "rotation should cover both pops");
-
         let summary = fs::read_to_string(&outcome.summary_path).expect("federated summary exists");
         assert!(
             summary.contains("gameday_rotation.json"),

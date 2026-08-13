@@ -6,10 +6,8 @@
 //! constructor, and validates only the byte-pinned evidence for the exact
 //! release profile.  Consequently an input object, a copied estimate, or a
 //! caller-supplied result cannot close the manifest security gate.
-
 use super::{BgvProfile, ZkAmsMkheErrorV1, modulus_product_bit_len};
 use crate::vega::sponge::keccak256;
-
 const LATTICE_ESTIMATOR_COMMIT_V1: [u8; 20] = [
     0x3e, 0x48, 0xef, 0x42, 0x1e, 0xc2, 0x56, 0xaf, 0xdd, 0xb3, 0xe7, 0xd2, 0x24, 0x9a, 0x77, 0xea,
     0xb6, 0xe9, 0xba, 0x12,
@@ -18,7 +16,6 @@ const SAGE_BINDER_ENVIRONMENT_COMMIT_V1: [u8; 20] = [
     0xf7, 0x41, 0xd5, 0xd9, 0x48, 0xbb, 0xa2, 0x21, 0x41, 0x5b, 0x07, 0x4e, 0x55, 0x05, 0x5e, 0xdd,
     0x33, 0x71, 0x70, 0xb6,
 ];
-
 const FROZEN_SECURITY_PARAMETERS_DIGEST_V1: [u8; 32] =
     decode_hex_32(b"f07b2ba5586a2929ae04110b19a7c73583a2241c9f32b5b1567b1e5fcea27df7");
 const FROZEN_CANDIDATE_INPUT_DIGEST_V1: [u8; 32] =
@@ -33,7 +30,6 @@ const SECURITY_GUIDELINE_SHA256_V1: [u8; 32] =
     decode_hex_32(b"9c48bdef18f6e459d1d50bd5f250c89c740f87c9b9fbd98d1cd59f0d5c25d32e");
 const SECURITY_CERTIFICATE_DIGEST_V1: [u8; 32] =
     decode_hex_32(b"c4ee05ced738f441a25cd66b5d870d25e105757e3ed9871d8b7696ba80181d72");
-
 const SAGE_VERSION_MAJOR_V1: u16 = 10;
 const SAGE_VERSION_MINOR_V1: u16 = 9;
 const FROZEN_MINIMUM_SECURITY_BITS_V1: u16 = 172;
@@ -42,7 +38,6 @@ const SECURITY_GUIDELINE_IDENTITY_V1: &str = concat!(
     "doi:10.62056/anxra69p1:section-5.1:",
     "primal-usvp+primal-bdd+dual-hybrid:hybrid-bdd-only-through-2^14"
 );
-
 const fn decode_hex_nibble(byte: u8) -> u8 {
     match byte {
         b'0'..=b'9' => byte - b'0',
@@ -50,7 +45,6 @@ const fn decode_hex_nibble(byte: u8) -> u8 {
         _ => panic!("frozen digest contains non-lowercase-hex input"),
     }
 }
-
 const fn decode_hex_32(hex: &[u8; 64]) -> [u8; 32] {
     let mut output = [0_u8; 32];
     let mut index = 0;
@@ -61,7 +55,6 @@ const fn decode_hex_32(hex: &[u8; 64]) -> [u8; 32] {
     }
     output
 }
-
 /// Exact estimator inputs. This descriptor is not a security result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheSecurityCandidateV1 {
@@ -87,7 +80,6 @@ pub struct ZkAmsMkheSecurityCandidateV1 {
     /// Pinned Sage/Binder execution-environment revision.
     pub sage_environment_commit: [u8; 20],
 }
-
 /// Estimator family that produced one frozen attack record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -97,7 +89,6 @@ pub enum ZkAmsMkheSecurityEstimatorSuiteV1 {
     /// HE Security Guidelines section 5.1 attack/model selection.
     Guideline = 2,
 }
-
 /// Exact attack identity within one estimator family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -111,7 +102,6 @@ pub enum ZkAmsMkheSecurityAttackV1 {
     /// Dual-hybrid attack required by the guidelines.
     DualHybrid = 4,
 }
-
 /// One exact, transcript-pinned estimator result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheSecurityAttackRecordV1 {
@@ -121,39 +111,33 @@ pub struct ZkAmsMkheSecurityAttackRecordV1 {
     rop_log2_floor: u16,
     result_repr_sha256: [u8; 32],
 }
-
 impl ZkAmsMkheSecurityAttackRecordV1 {
     /// Estimator family used for this result.
     #[must_use]
     pub const fn suite(self) -> ZkAmsMkheSecurityEstimatorSuiteV1 {
         self.suite
     }
-
     /// Exact attack identity.
     #[must_use]
     pub const fn attack(self) -> ZkAmsMkheSecurityAttackV1 {
         self.attack
     }
-
     /// Exact 50-digit estimator output for `log2(rop)`.
     #[must_use]
     pub const fn rop_log2(self) -> &'static str {
         self.rop_log2
     }
-
     /// Conservative integral security strength used by admission.
     #[must_use]
     pub const fn rop_log2_floor(self) -> u16 {
         self.rop_log2_floor
     }
-
     /// SHA-256 of the estimator's exact canonical result representation.
     #[must_use]
     pub const fn result_repr_sha256(self) -> [u8; 32] {
         self.result_repr_sha256
     }
 }
-
 const FROZEN_ATTACKS_V1: [ZkAmsMkheSecurityAttackRecordV1; 6] = [
     ZkAmsMkheSecurityAttackRecordV1 {
         suite: ZkAmsMkheSecurityEstimatorSuiteV1::Rough,
@@ -210,7 +194,6 @@ const FROZEN_ATTACKS_V1: [ZkAmsMkheSecurityAttackRecordV1; 6] = [
         ),
     },
 ];
-
 /// Frozen, non-caller-constructible security result for the release profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheSecurityCertificateV1 {
@@ -233,74 +216,62 @@ pub struct ZkAmsMkheSecurityCertificateV1 {
     target_security_bits: u16,
     certificate_digest: [u8; 32],
 }
-
 impl ZkAmsMkheSecurityCertificateV1 {
     /// Certificate schema version.
     #[must_use]
     pub const fn version(self) -> u8 {
         self.version
     }
-
     /// Exact security-parameter digest certified by the estimator transcript.
     #[must_use]
     pub const fn security_parameters_digest(self) -> [u8; 32] {
         self.security_parameters_digest
     }
-
     /// Digest of every exact estimator input.
     #[must_use]
     pub const fn candidate_input_digest(self) -> [u8; 32] {
         self.candidate_input_digest
     }
-
     /// Pinned upstream lattice-estimator revision.
     #[must_use]
     pub const fn lattice_estimator_commit(self) -> [u8; 20] {
         self.lattice_estimator_commit
     }
-
     /// SHA-256 of the verified official SageMath disk image.
     #[must_use]
     pub const fn sage_dmg_sha256(self) -> [u8; 32] {
         self.sage_dmg_sha256
     }
-
     /// SHA-256 of the exact fail-closed estimator runner.
     #[must_use]
     pub const fn estimator_runner_sha256(self) -> [u8; 32] {
         self.estimator_runner_sha256
     }
-
     /// SHA-256 of the canonical estimator transcript.
     #[must_use]
     pub const fn estimator_transcript_sha256(self) -> [u8; 32] {
         self.estimator_transcript_sha256
     }
-
     /// Exact ordered attack results.
     #[must_use]
     pub const fn attacks(&self) -> &[ZkAmsMkheSecurityAttackRecordV1; 6] {
         &self.attacks
     }
-
     /// Minimum floored `log2(rop)` over every required attack result.
     #[must_use]
     pub const fn minimum_security_bits(self) -> u16 {
         self.minimum_security_bits
     }
-
     /// Required classical security target.
     #[must_use]
     pub const fn target_security_bits(self) -> u16 {
         self.target_security_bits
     }
-
     /// Consensus digest of every certificate field except this digest itself.
     #[must_use]
     pub const fn certificate_digest(self) -> [u8; 32] {
         self.certificate_digest
     }
-
     fn validate_for(
         &self,
         candidate: ZkAmsMkheSecurityCandidateV1,
@@ -335,7 +306,6 @@ impl ZkAmsMkheSecurityCertificateV1 {
         Ok(())
     }
 }
-
 const FROZEN_SECURITY_CERTIFICATE_V1: ZkAmsMkheSecurityCertificateV1 =
     ZkAmsMkheSecurityCertificateV1 {
         version: 1,
@@ -357,7 +327,6 @@ const FROZEN_SECURITY_CERTIFICATE_V1: ZkAmsMkheSecurityCertificateV1 =
         target_security_bits: FROZEN_TARGET_SECURITY_BITS_V1,
         certificate_digest: SECURITY_CERTIFICATE_DIGEST_V1,
     };
-
 pub(super) fn derive_security_candidate_v1(
     profile: &BgvProfile,
     target_security_bits: u16,
@@ -373,7 +342,6 @@ pub(super) fn derive_security_candidate_v1(
     let max_samples_per_secret_epoch = u64::from(ring_degree)
         .checked_mul(512)
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-
     Ok(ZkAmsMkheSecurityCandidateV1 {
         security_parameters_digest: profile.security_parameters_digest()?,
         ring_degree,
@@ -387,7 +355,6 @@ pub(super) fn derive_security_candidate_v1(
         sage_environment_commit: SAGE_BINDER_ENVIRONMENT_COMMIT_V1,
     })
 }
-
 pub(super) fn security_candidate_input_digest_v1(
     candidate: ZkAmsMkheSecurityCandidateV1,
 ) -> [u8; 32] {
@@ -405,14 +372,12 @@ pub(super) fn security_candidate_input_digest_v1(
     frame.extend_from_slice(&candidate.sage_environment_commit);
     keccak256(&frame)
 }
-
 pub(super) fn frozen_security_certificate_v1(
     candidate: ZkAmsMkheSecurityCandidateV1,
 ) -> Result<ZkAmsMkheSecurityCertificateV1, ZkAmsMkheErrorV1> {
     FROZEN_SECURITY_CERTIFICATE_V1.validate_for(candidate)?;
     Ok(FROZEN_SECURITY_CERTIFICATE_V1)
 }
-
 fn security_certificate_digest_v1(certificate: &ZkAmsMkheSecurityCertificateV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(1_024);
     frame.extend_from_slice(b"iroha.zk-ams.v1.mkhe.security-certificate");
@@ -446,22 +411,18 @@ fn security_certificate_digest_v1(certificate: &ZkAmsMkheSecurityCertificateV1) 
     frame.extend_from_slice(&certificate.target_security_bits.to_be_bytes());
     keccak256(&frame)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn exact_candidate() -> ZkAmsMkheSecurityCandidateV1 {
         derive_security_candidate_v1(&super::super::manifest::release_profile_v1(), 128)
             .expect("estimator inputs")
     }
-
     #[test]
     fn security_parameters_and_resource_policy_have_independent_identities() {
         let baseline = super::super::manifest::release_profile_v1();
         let baseline_security = baseline.security_parameters_digest().unwrap();
         let baseline_resources = baseline.resource_policy_digest().unwrap();
-
         let mut raised_work_ceiling = baseline.clone();
         raised_work_ceiling.max_work_units += 1;
         assert_eq!(
@@ -477,7 +438,6 @@ mod tests {
             raised_work_ceiling.digest().unwrap(),
             baseline.digest().unwrap()
         );
-
         let mut changed_distribution = baseline;
         changed_distribution.error_eta = 3;
         assert_ne!(
@@ -489,7 +449,6 @@ mod tests {
             baseline_resources
         );
     }
-
     #[test]
     fn frozen_estimator_inputs_bind_the_exact_profile_and_have_no_result_surface() {
         let candidate = exact_candidate();
@@ -517,7 +476,6 @@ mod tests {
             FROZEN_CANDIDATE_INPUT_DIGEST_V1
         );
     }
-
     #[test]
     fn estimator_input_downgrades_and_same_q_bit_profile_splices_fail_closed() {
         let profile = super::super::manifest::release_profile_v1();
@@ -531,7 +489,6 @@ mod tests {
             derive_security_candidate_v1(&wrong_error, 128),
             Err(ZkAmsMkheErrorV1::InvalidProfile)
         );
-
         let candidate = exact_candidate();
         let expected = security_candidate_input_digest_v1(candidate);
         let mutations = [
@@ -584,7 +541,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn frozen_certificate_binds_exact_environment_attacks_and_minimum() {
         let certificate = frozen_security_certificate_v1(exact_candidate()).expect("certificate");
@@ -614,7 +570,6 @@ mod tests {
             security_certificate_digest_v1(&certificate)
         );
     }
-
     #[test]
     fn every_certificate_evidence_class_is_immutable_and_fail_closed() {
         let candidate = exact_candidate();
@@ -651,13 +606,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn attack_reorder_duplicate_downgrade_and_record_mutations_fail_closed() {
         let candidate = exact_candidate();
         let baseline = FROZEN_SECURITY_CERTIFICATE_V1;
         let mut mutations = Vec::new();
-
         let mut reordered = baseline;
         reordered.attacks.swap(0, 1);
         mutations.push(reordered);
@@ -679,7 +632,6 @@ mod tests {
         let mut representation = baseline;
         representation.attacks[0].result_repr_sha256[0] ^= 1;
         mutations.push(representation);
-
         for mutation in mutations {
             assert_eq!(
                 mutation.validate_for(candidate),

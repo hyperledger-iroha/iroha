@@ -39,7 +39,6 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
         assert_eq!(fixture.queue.inflight_guards.load(Ordering::Relaxed), 0);
         fixture.assert_live_journal_claim();
     };
-
     let all_transactions_fixture = globally_bound_guard_fixture();
     poison_expired_global_identity(&all_transactions_fixture);
     let state_view = all_transactions_fixture.state.view();
@@ -53,7 +52,6 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
     );
     drop(state_view);
     assert_faulted_owner_retained(&all_transactions_fixture);
-
     let bounded_snapshot_fixture = globally_bound_guard_fixture();
     poison_expired_global_identity(&bounded_snapshot_fixture);
     let state_view = bounded_snapshot_fixture.state.view();
@@ -90,7 +88,6 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
         "bounded failure publication must release the selection-owner lock"
     );
     assert_faulted_owner_retained(&bounded_snapshot_fixture);
-
     let revalidation_fixture = globally_bound_guard_fixture();
     poison_expired_global_identity(&revalidation_fixture);
     let revalidation_hash = revalidation_fixture.transaction.hash();
@@ -140,14 +137,11 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
         "revalidation fault publication must release the transition-index lock"
     );
     assert_faulted_owner_retained(&revalidation_fixture);
-
     let fixture = globally_bound_guard_fixture();
     let hash = fixture.transaction.hash();
-
     let guard = fixture.pop_guard();
     drop(guard);
     fixture.assert_restored_fifo_owner();
-
     let routing_plan = fixture
         .binding
         .routing_plan()
@@ -179,7 +173,6 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
     fixture
         .time_handle
         .advance(fixture.transaction_time_to_live + Duration::from_millis(1));
-
     let mut expired = Vec::new();
     assert!(
         fixture

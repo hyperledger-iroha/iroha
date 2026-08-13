@@ -1,14 +1,11 @@
 //! Query functionality. The common error type is also defined here,
 //! alongside functions for converting them into HTTP responses.
-
 mod canonical_topk;
 mod fast_iter_decode;
 mod ordinary_iterable;
 mod ordinary_memory;
 mod singular_memory;
-
 pub(crate) use ordinary_iterable::predicate_json_value_for_execution as ordinary_predicate_json_value;
-
 pub use canonical_topk::{
     CANONICAL_QUERY_OUTPUT_CONTAINER_OVERHEAD_BYTES, CANONICAL_QUERY_PREBOUNDED_SOURCE_BYTES,
     CANONICAL_QUERY_RETAINED_ITEM_OVERHEAD_BYTES, CanonicalQueryOutputAccumulator,
@@ -32,7 +29,6 @@ pub(crate) use singular_memory::{
     own_singular_query_struct, own_singular_query_value, own_singular_query_values,
     singular_query_decode_limits, singular_query_frame_limit, singular_query_limits_active,
 };
-
 use std::{
     cell::Cell,
     collections::BinaryHeap,
@@ -40,7 +36,6 @@ use std::{
     ops::ControlFlow,
     sync::{Arc, Mutex, Weak},
 };
-
 use eyre::Result;
 use iroha_config::parameters::{
     actual::{Pipeline as PipelineActual, Torii as ToriiActual},
@@ -58,9 +53,7 @@ use iroha_data_model::{
     },
 };
 use norito::core::{Header, NoritoSerialize};
-
 use fast_iter_decode::{FastIterComponentDecoder, decode_iter_query_payload_exact};
-
 use crate::{
     prelude::ValidSingularQuery,
     query::{
@@ -1427,7 +1420,6 @@ fn compare_sorted_query_keys<K: Ord>(
     order: SortOrder,
 ) -> core::cmp::Ordering {
     use core::cmp::Ordering::*;
-
     match (left_key, right_key) {
         (None, None) => left_tiebreak.cmp(right_tiebreak),
         (None, Some(_)) => Greater,
@@ -3247,7 +3239,6 @@ fn validate_query_request_limits(
 #[cfg(test)]
 mod fetch_size_limit_tests {
     use std::io::Write;
-
     use iroha_config::parameters::{actual::Root as ConfigRoot, defaults::torii as torii_defaults};
     use iroha_data_model::{
         permission::Permission,
@@ -3260,9 +3251,7 @@ mod fetch_size_limit_tests {
     use iroha_primitives::json::Json;
     use nonzero_ext::nonzero;
     use tempfile::NamedTempFile;
-
     use super::*;
-
     fn request_with_fetch_size(fetch_size: u64) -> QueryRequest {
         let fetch_size = std::num::NonZeroU64::new(fetch_size).expect("nonzero fetch size");
         QueryRequest::Start(QueryWithParams {
@@ -3508,7 +3497,6 @@ mod tests {
     #![allow(clippy::many_single_char_names)]
     use core::time::Duration;
     use std::{borrow::Cow, num::NonZeroUsize, sync::Arc};
-
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         AccountId, ChainId, DomainId, Level, NetworkId,
@@ -3519,7 +3507,6 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
     use mv::storage::StorageReadOnly as _;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         block::*,
@@ -3656,13 +3643,11 @@ mod tests {
         iroha_data_model::escrow::AssetEscrowRecord,
     ) {
         use std::collections::BTreeSet;
-
         use iroha_data_model::{
             asset::AssetDefinitionId,
             escrow::{AssetEscrowKind, AssetEscrowRecord, AssetEscrowStatus, EscrowId},
         };
         use iroha_primitives::numeric::Quantity;
-
         let escrow_id = EscrowId::new(Hash::new("query-dispatch-escrow"));
         let record = AssetEscrowRecord {
             id: escrow_id,
@@ -3964,7 +3949,6 @@ mod tests {
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use nonzero_ext::nonzero;
-
         // Build sample domains with a sortable metadata key "rank"
         let mut d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let mut d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
@@ -4018,7 +4002,6 @@ mod tests {
             query::parameters::{FetchSize, Pagination, QueryParams, SortOrder, Sorting},
         };
         use nonzero_ext::nonzero;
-
         // Domains with rank metadata
         let mut d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let mut d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
@@ -4525,7 +4508,6 @@ mod tests {
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use nonzero_ext::nonzero;
-
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
@@ -4558,7 +4540,6 @@ mod tests {
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use nonzero_ext::nonzero;
-
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
@@ -4593,13 +4574,11 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
-
         use iroha_data_model::{
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use nonzero_ext::nonzero;
-
         let domains = ["d1", "d2", "d3", "d4", "d5"]
             .into_iter()
             .map(|name| Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&ALICE_ID))
@@ -4678,7 +4657,6 @@ mod tests {
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use nonzero_ext::nonzero;
-
         let domain =
             Domain::new(DomainId::try_new("bounded", "universal").unwrap()).build(&ALICE_ID);
         let params = QueryParams {
@@ -4701,7 +4679,6 @@ mod tests {
     #[test]
     fn stored_bounded_runtime_applies_the_server_execution_budget() {
         use iroha_data_model::query::parameters::FetchSize;
-
         let decode = norito::DecodeLimits::new(16, 1_024, 32, 4 * 1_024, 8);
         let source_bytes = ORDINARY_NAME_ID_SOURCE_BYTES;
         let response_bytes = 4 * 1_024;
@@ -4763,7 +4740,6 @@ mod tests {
     async fn stored_unsorted_bounded_cursor_rejects_tail_above_hard_byte_bound() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
         use nonzero_ext::nonzero;
-
         let first = domain_with_query_payload("bounded-first", 8, 0);
         let oversized = domain_with_query_payload(
             "bounded-oversized",
@@ -4795,7 +4771,6 @@ mod tests {
             Arc, Weak,
             atomic::{AtomicUsize, Ordering},
         };
-
         use iroha_data_model::{
             domain::Domain,
             query::{
@@ -4805,7 +4780,6 @@ mod tests {
             },
         };
         use nonzero_ext::nonzero;
-
         let domains = ["d1", "d2", "d3", "d4", "d5"]
             .into_iter()
             .map(|name| Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&ALICE_ID))
@@ -4867,7 +4841,6 @@ mod tests {
             Arc, Weak,
             atomic::{AtomicUsize, Ordering},
         };
-
         use iroha_data_model::{
             domain::Domain,
             query::{
@@ -4877,7 +4850,6 @@ mod tests {
             },
         };
         use nonzero_ext::nonzero;
-
         let domains = ["d1", "d2", "d3", "d4", "d5"]
             .into_iter()
             .map(|name| Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&ALICE_ID))
@@ -4935,13 +4907,11 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
-
         use iroha_data_model::{
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use nonzero_ext::nonzero;
-
         let visited = Arc::new(AtomicUsize::new(0));
         let visited_for_iter = Arc::clone(&visited);
         let iter = ["d1", "d2", "d3"].into_iter().map(move |name| {
@@ -4977,13 +4947,11 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
-
         use iroha_data_model::{
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use nonzero_ext::nonzero;
-
         let visited = Arc::new(AtomicUsize::new(0));
         let visited_for_iter = Arc::clone(&visited);
         let iter = ["d1", "d2", "d3"].into_iter().map(move |name| {
@@ -5044,7 +5012,6 @@ mod tests {
     async fn stored_sorted_fast_start_matches_legacy_first_batch_variants() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
         use std::num::NonZeroU64;
-
         let cases = [
             (0_u64, None, 1_u64),
             (0_u64, None, 2_u64),
@@ -5105,7 +5072,6 @@ mod tests {
     async fn deferred_stored_start_first_continue_preserves_global_order() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
         use nonzero_ext::nonzero;
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
@@ -5175,7 +5141,6 @@ mod tests {
     #[tokio::test]
     async fn validate_for_ivm_rejects_continue() {
         use iroha_data_model::query::parameters::ForwardCursor;
-
         struct DummyValidator {
             authority: AccountId,
         }
@@ -5332,7 +5297,6 @@ mod tests {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
         use iroha_futures::supervisor::ShutdownSignal;
         use iroha_primitives::json::Json;
-
         // Build world with three domains and ALICE account
         let d1_id: DomainId = DomainId::try_new("d1", "universal").unwrap();
         let d2_id: DomainId = DomainId::try_new("d2", "universal").unwrap();
@@ -5414,7 +5378,6 @@ mod tests {
             parameters::{QueryParams, SortOrder, Sorting},
         };
         use iroha_futures::supervisor::ShutdownSignal;
-
         fn make_world() -> World {
             let d1_id: DomainId = DomainId::try_new("d1", "universal").unwrap();
             let d2_id: DomainId = DomainId::try_new("d2", "universal").unwrap();
@@ -5519,7 +5482,6 @@ mod tests {
             parameters::QueryParams,
         };
         use iroha_futures::supervisor::ShutdownSignal;
-
         fn make_world() -> (World, AssetDefinitionId, AssetId) {
             let domain =
                 iroha_data_model::domain::Domain::new(DomainId::try_new("w", "universal").unwrap())
@@ -5636,7 +5598,6 @@ mod tests {
             parameters::QueryParams,
         };
         use iroha_futures::supervisor::ShutdownSignal;
-
         fn make_world() -> World {
             let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
             let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -5738,7 +5699,6 @@ mod tests {
             parameters::QueryParams,
         };
         use iroha_futures::supervisor::ShutdownSignal;
-
         fn make_world() -> World {
             let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
             let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -5922,7 +5882,6 @@ mod tests {
         };
         use iroha_futures::supervisor::ShutdownSignal;
         use iroha_primitives::json::Json;
-
         // Build world with three domains and ALICE account
         let d1_id: DomainId = DomainId::try_new("d1", "universal").unwrap();
         let d2_id: DomainId = DomainId::try_new("d2", "universal").unwrap();
@@ -6003,7 +5962,6 @@ mod tests {
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
         use iroha_futures::supervisor::ShutdownSignal;
-
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let n1 = Nft::new("n1$w.universal".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
@@ -6064,7 +6022,6 @@ mod tests {
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use iroha_futures::supervisor::ShutdownSignal;
-
         // Minimal world with ALICE
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -6143,7 +6100,6 @@ mod tests {
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
         use iroha_futures::supervisor::ShutdownSignal;
-
         // World with ordered domains a,b,c
         let a: Domain = Domain::new(DomainId::try_new("a", "universal").unwrap()).build(&ALICE_ID);
         let b: Domain = Domain::new(DomainId::try_new("b", "universal").unwrap()).build(&ALICE_ID);
@@ -6205,7 +6161,6 @@ mod tests {
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
         use iroha_futures::supervisor::ShutdownSignal;
-
         // World with ordered domains a,b,c,d
         let a: Domain = Domain::new(DomainId::try_new("a", "universal").unwrap()).build(&ALICE_ID);
         let b: Domain = Domain::new(DomainId::try_new("b", "universal").unwrap()).build(&ALICE_ID);
@@ -6284,7 +6239,6 @@ mod tests {
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use iroha_futures::supervisor::ShutdownSignal;
-
         // Build world with two accounts and two asset definitions
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let (acc1_id, _) = iroha_test_samples::gen_account_in("w");
@@ -6402,7 +6356,6 @@ mod tests {
         };
         use iroha_futures::supervisor::ShutdownSignal;
         use iroha_primitives::json::Json;
-
         // Create a domain and three accounts in it with ranked metadata
         let w: Domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let (a_id, _) = iroha_test_samples::gen_account_in("w");
@@ -6480,7 +6433,6 @@ mod tests {
             FetchSize, Pagination, QueryParams, SortOrder, Sorting,
         };
         use iroha_primitives::json::Json;
-
         // Prepare three accounts with identical sortable metadata key "rank"
         let (a_id, _) = iroha_test_samples::gen_account_in("w");
         let (b_id, _) = iroha_test_samples::gen_account_in("w");
@@ -6533,7 +6485,6 @@ mod tests {
             FetchSize, Pagination, QueryParams, SortOrder, Sorting,
         };
         use iroha_primitives::json::Json;
-
         let make = |name: &str| {
             AssetDefinition::numeric(
                 iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -6590,7 +6541,6 @@ mod tests {
             FetchSize, Pagination, QueryParams, SortOrder, Sorting,
         };
         use iroha_futures::supervisor::ShutdownSignal;
-
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let mut ad1 = AssetDefinition::numeric(
@@ -6688,7 +6638,6 @@ mod tests {
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use iroha_futures::supervisor::ShutdownSignal;
-
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
@@ -6980,7 +6929,6 @@ mod tests {
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
         use iroha_futures::supervisor::ShutdownSignal;
-
         // World with a domain, ALICE account, one asset definition, and a minted asset
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let ad_id: AssetDefinitionId =
@@ -7074,7 +7022,6 @@ mod tests {
             parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
         use iroha_futures::supervisor::ShutdownSignal;
-
         // World with a domain, two accounts, one asset definition, and a minted asset to one account
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let (acc1_id, _) = iroha_test_samples::gen_account_in("wonderland");
@@ -7163,7 +7110,6 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     async fn iter_dispatch_accounts_with_asset_parity_and_continue() {
         use std::collections::BTreeSet;
-
         use iroha_config::parameters::actual::LiveQueryStore as StoreCfg;
         use iroha_data_model::query::{
             QueryBox, QueryItemKind, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
@@ -7172,7 +7118,6 @@ mod tests {
             parameters::{FetchSize, QueryParams, Sorting},
         };
         use iroha_futures::supervisor::ShutdownSignal;
-
         fn build_state_with_holdings() -> (
             State,
             crate::query::store::LiveQueryStoreHandle,
@@ -7334,7 +7279,6 @@ mod tests {
     #[test]
     fn find_transactions_bounded_ephemeral_scans_only_the_page_carriers() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7372,7 +7316,6 @@ mod tests {
     #[test]
     fn find_transactions_bounded_replay_ignores_blocks_appended_after_start() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         let state = Arc::new(fixture.sandbox.state);
         let state_view = state.view();
@@ -7427,7 +7370,6 @@ mod tests {
     #[test]
     fn find_transactions_exact_ephemeral_counts_without_complete_carrier_snapshot() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7466,7 +7408,6 @@ mod tests {
     #[test]
     fn find_transactions_exact_budget_charges_matches_outside_pagination_window() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7499,7 +7440,6 @@ mod tests {
     #[test]
     fn find_transactions_false_predicate_cannot_force_uncharged_projection() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7557,7 +7497,6 @@ mod tests {
     #[test]
     fn find_transactions_stored_start_precharges_before_false_predicate_or_sorted_projection() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let mut fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         fixture.sandbox.state.pipeline.query_stored_min_gas_units = 1;
         let state = Arc::new(fixture.sandbox.state);
@@ -7647,7 +7586,6 @@ mod tests {
     #[test]
     fn find_transactions_stored_continue_precharges_and_underfunded_retry_does_not_advance() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let mut fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         // A one-item continuation replays its current two-entry carrier and
         // probes the next two-entry carrier to establish `has_more`.
@@ -7710,7 +7648,6 @@ mod tests {
     #[test]
     fn find_transactions_exact_stored_replay_preserves_count_cursor_and_order() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         let state = Arc::new(fixture.sandbox.state);
         let state_view = state.view();
@@ -7771,7 +7708,6 @@ mod tests {
     #[test]
     fn find_transactions_sorted_prefix_matches_deterministic_full_order_across_pages() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         let state = Arc::new(fixture.sandbox.state);
         let state_view = state.view();
@@ -7840,7 +7776,6 @@ mod tests {
     #[test]
     fn find_transactions_exact_replay_fails_closed_on_sidecar_corruption() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         let target_entry_hash = fixture.target_entry_hash;
         let state = Arc::new(fixture.sandbox.state);
@@ -7890,7 +7825,6 @@ mod tests {
     #[test]
     fn find_transactions_stored_without_replay_rejects_required_continuation() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
@@ -7935,7 +7869,6 @@ mod tests {
     #[test]
     fn find_transactions_bounded_defers_old_corruption_but_exact_fails() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         fixture
             .sandbox
@@ -7978,7 +7911,6 @@ mod tests {
     #[test]
     fn find_transactions_rejects_unbounded_or_oversized_sorted_prefix() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
-
         let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let query_handle = state_view.query_handle().clone();
@@ -8786,7 +8718,6 @@ mod tests {
             FetchSize, Pagination, QueryParams, SortOrder, Sorting,
         };
         use iroha_futures::supervisor::ShutdownSignal;
-
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let mut ad1 = AssetDefinition::numeric(
@@ -8882,7 +8813,6 @@ mod tests {
         };
         use iroha_futures::supervisor::ShutdownSignal;
         use iroha_primitives::json::Json;
-
         let w: Domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let (a_id, _) = iroha_test_samples::gen_account_in("w");
         let (b_id, _) = iroha_test_samples::gen_account_in("w");
@@ -8960,7 +8890,6 @@ mod tests {
         use iroha_futures::supervisor::ShutdownSignal;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-
         let w: Domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let (a_id, _) = iroha_test_samples::gen_account_in("w");
         let (b_id, _) = iroha_test_samples::gen_account_in("w");
@@ -9048,7 +8977,6 @@ mod tests {
         };
         use iroha_futures::supervisor::ShutdownSignal;
         use nonzero_ext::nonzero;
-
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let mut ad1 = AssetDefinition::numeric(
@@ -9156,7 +9084,6 @@ mod tests {
         use iroha_futures::supervisor::ShutdownSignal;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-
         // Build three asset definitions with rank metadata: 0,1,2
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -9267,7 +9194,6 @@ mod tests {
         use iroha_futures::supervisor::ShutdownSignal;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-
         // Build three asset definitions with rank metadata: 0,1,2
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -9378,7 +9304,6 @@ mod tests {
         use iroha_futures::supervisor::ShutdownSignal;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-
         // Build three accounts with explicit rank metadata: a(0), b(1), c(2)
         let w: Domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let (a_id, _) = iroha_test_samples::gen_account_in("w");
@@ -9476,7 +9401,6 @@ mod tests {
         use iroha_futures::supervisor::ShutdownSignal;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
-
         // Build three accounts with rank metadata: 0,1,2
         let w: Domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let (a0_id, _) = iroha_test_samples::gen_account_in("w");

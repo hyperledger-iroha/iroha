@@ -4,7 +4,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-
 use blake3::Hasher as Blake3Hasher;
 use hex::FromHex;
 use iroha_data_model::ministry::{AgendaProposalAction, AgendaProposalV1};
@@ -19,20 +18,17 @@ use serde_json::{self, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use walkdir::WalkDir;
-
 pub enum Command {
     Validate(ValidateOptions),
     Sortition(SortitionOptions),
     Impact(ImpactOptions),
 }
-
 #[derive(Clone)]
 pub struct ValidateOptions {
     pub proposal_path: PathBuf,
     pub registry_path: Option<PathBuf>,
     pub allow_registry_conflicts: bool,
 }
-
 #[derive(Clone)]
 pub struct SortitionOptions {
     pub roster_path: PathBuf,
@@ -40,7 +36,6 @@ pub struct SortitionOptions {
     pub seed_hex: String,
     pub output_path: Option<PathBuf>,
 }
-
 #[derive(Clone, Default)]
 pub struct ImpactOptions {
     pub proposal_paths: Vec<PathBuf>,
@@ -49,13 +44,11 @@ pub struct ImpactOptions {
     pub policy_snapshot_path: Option<PathBuf>,
     pub output_path: Option<PathBuf>,
 }
-
 impl Command {
     pub fn impact(options: ImpactOptions) -> Self {
         Self::Impact(options)
     }
 }
-
 pub fn run(command: Command) -> Result<(), Box<dyn Error>> {
     match command {
         Command::Validate(options) => validate_proposal(options),
@@ -82,7 +75,6 @@ pub fn run(command: Command) -> Result<(), Box<dyn Error>> {
         Command::Impact(options) => run_impact(options),
     }
 }
-
 fn run_sortition(options: &SortitionOptions) -> Result<SortitionSummary, Box<dyn Error>> {
     const ALGORITHM: &str = "agenda-sortition-blake3-v1";
     let roster_bytes = fs::read(&options.roster_path).map_err(|err| {
@@ -104,12 +96,10 @@ fn run_sortition(options: &SortitionOptions) -> Result<SortitionSummary, Box<dyn
         )
         .into());
     }
-
     let seed = parse_seed(&options.seed_hex)?;
     if options.slots == 0 {
         return Err("sortition requires --slots >= 1".into());
     }
-
     let eligible_members = build_eligible_members(&roster)?;
     if eligible_members.is_empty() {
         return Err("roster contains no eligible members".into());
@@ -122,7 +112,6 @@ fn run_sortition(options: &SortitionOptions) -> Result<SortitionSummary, Box<dyn
         )
         .into());
     }
-
     let seed_hex = options.seed_hex.trim().to_ascii_lowercase();
     let roster_digest = digest_roster(&roster_bytes);
     let leaves = hash_leaves(&eligible_members)?;
@@ -132,7 +121,6 @@ fn run_sortition(options: &SortitionOptions) -> Result<SortitionSummary, Box<dyn
         .and_then(|layer| layer.first())
         .copied()
         .ok_or("failed to derive Merkle root for roster")?;
-
     let draws = perform_draws(&eligible_members, options.slots, seed)?;
     let mut selected = Vec::with_capacity(draws.len());
     for draw in draws {
@@ -156,7 +144,6 @@ fn run_sortition(options: &SortitionOptions) -> Result<SortitionSummary, Box<dyn
             merkle_proof: proof.into_iter().map(hex::encode).collect(),
         });
     }
-
     Ok(SortitionSummary {
         format_version: 1,
         algorithm: ALGORITHM.to_string(),
@@ -169,7 +156,6 @@ fn run_sortition(options: &SortitionOptions) -> Result<SortitionSummary, Box<dyn
         selected,
     })
 }
-
 fn run_impact(options: ImpactOptions) -> Result<(), Box<dyn Error>> {
     let proposals = load_impact_proposals(&options)?;
     let registry = match &options.registry_path {
@@ -196,7 +182,6 @@ fn run_impact(options: ImpactOptions) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn load_impact_proposals(options: &ImpactOptions) -> Result<Vec<LoadedProposal>, Box<dyn Error>> {
     let paths = collect_proposal_paths(options)?;
     let mut proposals = Vec::with_capacity(paths.len());
@@ -209,7 +194,6 @@ fn load_impact_proposals(options: &ImpactOptions) -> Result<Vec<LoadedProposal>,
     }
     Ok(proposals)
 }
-
 fn collect_proposal_paths(options: &ImpactOptions) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let mut paths: BTreeSet<PathBuf> = BTreeSet::new();
     for path in &options.proposal_paths {
@@ -243,7 +227,6 @@ fn collect_proposal_paths(options: &ImpactOptions) -> Result<Vec<PathBuf>, Box<d
     }
     Ok(paths.into_iter().collect())
 }
-
 fn build_impact_report(
     proposals: &[LoadedProposal],
     registry: Option<&DuplicateRegistry>,
@@ -253,33 +236,27 @@ fn build_impact_report(
         .map(DuplicateRegistry::build_index)
         .unwrap_or_default();
     let policy_index = policy.map(PolicySnapshot::build_index).unwrap_or_default();
-
     let mut summaries = Vec::with_capacity(proposals.len());
     let mut totals = ImpactTotals::default();
     let mut total_family_counters: BTreeMap<String, HashFamilyCounters> = BTreeMap::new();
-
     for loaded in proposals {
         totals.proposals_analyzed += 1;
         let mut proposal_family_counters: BTreeMap<String, HashFamilyCounters> = BTreeMap::new();
         let mut conflicts = Vec::new();
         let mut registry_conflicts = 0usize;
         let mut policy_conflicts = 0usize;
-
         for target in &loaded.proposal.targets {
             totals.targets_analyzed += 1;
             let family_key = target.hash_family.to_lowercase();
             let fingerprint = target.fingerprint_key();
             let registry_hits = registry_index.get(&fingerprint);
             let policy_hits = policy_index.get(&fingerprint);
-
             let proposal_entry = proposal_family_counters
                 .entry(family_key.clone())
                 .or_default();
             proposal_entry.targets += 1;
-
             let total_entry = total_family_counters.entry(family_key).or_default();
             total_entry.targets += 1;
-
             if let Some(entries) = registry_hits {
                 let hit_count = entries.len();
                 if hit_count > 0 {
@@ -298,7 +275,6 @@ fn build_impact_report(
                     }
                 }
             }
-
             if let Some(entries) = policy_hits {
                 let hit_count = entries.len();
                 if hit_count > 0 {
@@ -318,7 +294,6 @@ fn build_impact_report(
                 }
             }
         }
-
         let hash_families = proposal_family_counters
             .into_iter()
             .map(|(hash_family, counters)| HashFamilyImpact {
@@ -328,7 +303,6 @@ fn build_impact_report(
                 policy_conflicts: counters.policy_conflicts,
             })
             .collect();
-
         summaries.push(ProposalImpactSummary {
             proposal_id: loaded.proposal.proposal_id.clone(),
             action: format_action(loaded.proposal.action).to_string(),
@@ -340,7 +314,6 @@ fn build_impact_report(
             policy_conflicts,
         });
     }
-
     let aggregated_hash_families = total_family_counters
         .into_iter()
         .map(|(hash_family, counters)| HashFamilyImpact {
@@ -350,9 +323,7 @@ fn build_impact_report(
             policy_conflicts: counters.policy_conflicts,
         })
         .collect();
-
     totals.hash_families = aggregated_hash_families;
-
     ImpactReport {
         format_version: 1,
         generated_at: OffsetDateTime::now_utc()
@@ -362,7 +333,6 @@ fn build_impact_report(
         totals,
     }
 }
-
 fn format_action(action: AgendaProposalAction) -> &'static str {
     match action {
         AgendaProposalAction::AddToDenylist => "add-to-denylist",
@@ -370,19 +340,16 @@ fn format_action(action: AgendaProposalAction) -> &'static str {
         AgendaProposalAction::AmendPolicy => "amend-policy",
     }
 }
-
 struct LoadedProposal {
     proposal: AgendaProposalV1,
     source_path: String,
 }
-
 #[derive(Default)]
 struct HashFamilyCounters {
     targets: usize,
     registry_conflicts: usize,
     policy_conflicts: usize,
 }
-
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct ImpactReport {
     pub(crate) format_version: u32,
@@ -390,7 +357,6 @@ pub(crate) struct ImpactReport {
     pub(crate) proposals: Vec<ProposalImpactSummary>,
     pub(crate) totals: ImpactTotals,
 }
-
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub(crate) struct ImpactTotals {
     pub(crate) proposals_analyzed: usize,
@@ -400,7 +366,6 @@ pub(crate) struct ImpactTotals {
     #[serde(default)]
     pub(crate) hash_families: Vec<HashFamilyImpact>,
 }
-
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct ProposalImpactSummary {
     pub(crate) proposal_id: String,
@@ -412,7 +377,6 @@ pub(crate) struct ProposalImpactSummary {
     pub(crate) registry_conflicts: usize,
     pub(crate) policy_conflicts: usize,
 }
-
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct HashFamilyImpact {
     pub(crate) hash_family: String,
@@ -420,7 +384,6 @@ pub(crate) struct HashFamilyImpact {
     pub(crate) registry_conflicts: usize,
     pub(crate) policy_conflicts: usize,
 }
-
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct ConflictDetail {
     pub(crate) source: ConflictSource,
@@ -430,25 +393,21 @@ pub(crate) struct ConflictDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) note: Option<String>,
 }
-
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ConflictSource {
     DuplicateRegistry,
     PolicySnapshot,
 }
-
 fn validate_proposal(options: ValidateOptions) -> Result<(), Box<dyn Error>> {
     let proposal = load_proposal(&options.proposal_path)?;
     proposal
         .validate()
         .map_err(|err| format!("agenda proposal validation failed: {err}"))?;
-
     if let Some(path) = options.registry_path.as_ref() {
         let registry = DuplicateRegistry::load(path)?;
         registry.check_conflicts(&proposal, options.allow_registry_conflicts)?;
     }
-
     println!(
         "agenda proposal `{}` validated ({} target(s), {} evidence attachment(s))",
         proposal.proposal_id,
@@ -457,7 +416,6 @@ fn validate_proposal(options: ValidateOptions) -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
-
 fn load_proposal(path: &Path) -> Result<AgendaProposalV1, Box<dyn Error>> {
     let bytes = fs::read(path).map_err(|err| {
         format!(
@@ -473,13 +431,11 @@ fn load_proposal(path: &Path) -> Result<AgendaProposalV1, Box<dyn Error>> {
     })?;
     Ok(proposal)
 }
-
 #[derive(Deserialize)]
 struct SortitionRoster {
     format_version: u32,
     members: Vec<SortitionMember>,
 }
-
 #[derive(Clone, Deserialize, Serialize)]
 struct SortitionMember {
     member_id: String,
@@ -496,13 +452,11 @@ struct SortitionMember {
     #[serde(flatten)]
     extra: BTreeMap<String, JsonValue>,
 }
-
 #[derive(Clone)]
 struct EligibleMember {
     member: SortitionMember,
     original_index: usize,
 }
-
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct SortitionSummary {
     pub(crate) format_version: u32,
@@ -515,13 +469,11 @@ pub(crate) struct SortitionSummary {
     pub(crate) merkle_root_hex: String,
     pub(crate) selected: Vec<SelectedMemberSummary>,
 }
-
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct SortitionDigestSummary {
     pub(crate) blake3_hex: String,
     pub(crate) sha256_hex: String,
 }
-
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct SelectedMemberSummary {
     pub(crate) member_id: String,
@@ -539,19 +491,16 @@ pub(crate) struct SelectedMemberSummary {
     pub(crate) leaf_hash_hex: String,
     pub(crate) merkle_proof: Vec<String>,
 }
-
 struct DrawResult {
     member_index: usize,
     draw_position: usize,
     entropy: [u8; 32],
 }
-
 #[derive(Deserialize)]
 struct DuplicateRegistry {
     #[serde(default)]
     entries: Vec<DuplicateRegistryEntry>,
 }
-
 impl DuplicateRegistry {
     fn load(path: &Path) -> Result<Self, Box<dyn Error>> {
         let raw = fs::read_to_string(path)?;
@@ -563,7 +512,6 @@ impl DuplicateRegistry {
         })?;
         Ok(registry)
     }
-
     fn check_conflicts(
         &self,
         proposal: &AgendaProposalV1,
@@ -615,7 +563,6 @@ impl DuplicateRegistry {
         }
         Err(message.into())
     }
-
     fn build_index(&self) -> BTreeMap<String, Vec<RegistryConflictRef>> {
         let mut map: BTreeMap<String, Vec<RegistryConflictRef>> = BTreeMap::new();
         for entry in &self.entries {
@@ -629,7 +576,6 @@ impl DuplicateRegistry {
         map
     }
 }
-
 fn parse_seed(input: &str) -> Result<[u8; 32], Box<dyn Error>> {
     let trimmed = input.trim();
     if trimmed.len() != 64 {
@@ -643,7 +589,6 @@ fn parse_seed(input: &str) -> Result<[u8; 32], Box<dyn Error>> {
         .map_err(|err| format!("failed to decode sortition seed hex: {err}"))?;
     Ok(bytes)
 }
-
 fn build_eligible_members(roster: &SortitionRoster) -> Result<Vec<EligibleMember>, Box<dyn Error>> {
     let mut eligible = Vec::new();
     for (index, member) in roster.members.iter().cloned().enumerate() {
@@ -664,7 +609,6 @@ fn build_eligible_members(roster: &SortitionRoster) -> Result<Vec<EligibleMember
     }
     Ok(eligible)
 }
-
 fn digest_roster(bytes: &[u8]) -> SortitionDigestSummary {
     let mut sha256 = Sha256::new();
     sha256.update(bytes);
@@ -673,7 +617,6 @@ fn digest_roster(bytes: &[u8]) -> SortitionDigestSummary {
         sha256_hex: hex::encode(sha256.finalize()),
     }
 }
-
 fn hash_leaves(members: &[EligibleMember]) -> Result<Vec<[u8; 32]>, Box<dyn Error>> {
     members
         .iter()
@@ -688,7 +631,6 @@ fn hash_leaves(members: &[EligibleMember]) -> Result<Vec<[u8; 32]>, Box<dyn Erro
         })
         .collect()
 }
-
 fn perform_draws(
     members: &[EligibleMember],
     slots: usize,
@@ -715,14 +657,12 @@ fn perform_draws(
     }
     Ok(draws)
 }
-
 fn hash_leaf(payload: &[u8]) -> [u8; 32] {
     let mut hasher = Blake3Hasher::new();
     hasher.update(b"agenda-sortition-leaf-v1");
     hasher.update(payload);
     *hasher.finalize().as_bytes()
 }
-
 fn hash_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut hasher = Blake3Hasher::new();
     hasher.update(b"agenda-sortition-node-v1");
@@ -730,7 +670,6 @@ fn hash_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     hasher.update(right);
     *hasher.finalize().as_bytes()
 }
-
 fn build_merkle_layers(leaves: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
     let mut layers = Vec::new();
     if leaves.is_empty() {
@@ -752,7 +691,6 @@ fn build_merkle_layers(leaves: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
     }
     layers
 }
-
 fn build_merkle_proof(layers: &[Vec<[u8; 32]>], mut index: usize) -> Vec<[u8; 32]> {
     let mut proof = Vec::new();
     if layers.is_empty() {
@@ -774,7 +712,6 @@ fn build_merkle_proof(layers: &[Vec<[u8; 32]>], mut index: usize) -> Vec<[u8; 32
     }
     proof
 }
-
 fn draw_entropy(seed: [u8; 32], draw_position: usize, member_id: &str) -> [u8; 32] {
     let mut hasher = Blake3Hasher::new();
     hasher.update(b"agenda-sortition-draw-v1");
@@ -783,15 +720,12 @@ fn draw_entropy(seed: [u8; 32], draw_position: usize, member_id: &str) -> [u8; 3
     hasher.update(member_id.as_bytes());
     *hasher.finalize().as_bytes()
 }
-
 const fn default_weight() -> u64 {
     1
 }
-
 const fn default_true() -> bool {
     true
 }
-
 #[derive(Deserialize)]
 struct DuplicateRegistryEntry {
     hash_family: String,
@@ -800,7 +734,6 @@ struct DuplicateRegistryEntry {
     #[serde(default)]
     note: Option<String>,
 }
-
 impl DuplicateRegistryEntry {
     fn fingerprint(&self) -> String {
         format!(
@@ -810,18 +743,15 @@ impl DuplicateRegistryEntry {
         )
     }
 }
-
 struct RegistryConflictRef {
     proposal_id: String,
     note: Option<String>,
 }
-
 #[derive(Deserialize)]
 struct PolicySnapshot {
     #[serde(default)]
     entries: Vec<PolicySnapshotEntry>,
 }
-
 impl PolicySnapshot {
     fn load(path: &Path) -> Result<Self, Box<dyn Error>> {
         let raw = fs::read_to_string(path).map_err(|err| {
@@ -838,7 +768,6 @@ impl PolicySnapshot {
         })?;
         Ok(snapshot)
     }
-
     fn build_index(&self) -> BTreeMap<String, Vec<PolicyConflictRef>> {
         let mut map: BTreeMap<String, Vec<PolicyConflictRef>> = BTreeMap::new();
         for entry in &self.entries {
@@ -852,7 +781,6 @@ impl PolicySnapshot {
         map
     }
 }
-
 #[derive(Deserialize)]
 struct PolicySnapshotEntry {
     hash_family: String,
@@ -861,7 +789,6 @@ struct PolicySnapshotEntry {
     #[serde(default)]
     note: Option<String>,
 }
-
 impl PolicySnapshotEntry {
     fn fingerprint(&self) -> String {
         format!(
@@ -871,25 +798,20 @@ impl PolicySnapshotEntry {
         )
     }
 }
-
 struct PolicyConflictRef {
     policy_id: String,
     note: Option<String>,
 }
-
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-
     use hex::FromHex;
     use iroha_data_model::ministry::{
         AGENDA_PROPOSAL_VERSION_V1, AgendaEvidenceAttachment, AgendaEvidenceKind,
         AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget,
     };
     use tempfile::NamedTempFile;
-
     use super::*;
-
     const TEST_ROSTER: &str = r#"{
         "format_version": 1,
         "members": [
@@ -900,7 +822,6 @@ mod tests {
             {"member_id": "citizen:erin", "weight": 1, "role": "citizen", "eligible": false}
         ]
     }"#;
-
     const TEST_SEED: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SAMPLE_PROPOSAL: &str = r#"{
   "version": 1,
@@ -959,7 +880,6 @@ mod tests {
     "AC-2025-014"
   ]
 }"#;
-
     #[test]
     fn load_proposal_parses_sample_payload() {
         let mut file = NamedTempFile::new().expect("temp file");
@@ -973,7 +893,6 @@ mod tests {
         );
         assert_eq!(proposal.evidence.len(), 3);
     }
-
     #[test]
     fn sortition_is_deterministic() {
         let roster_file = write_roster(TEST_ROSTER);
@@ -985,7 +904,6 @@ mod tests {
         };
         let summary = run_sortition(&options).expect("sortition");
         assert_eq!(summary.selected.len(), 2);
-
         let repeat = run_sortition(&options).expect("sortition repeat");
         let initial: Vec<_> = summary
             .selected
@@ -999,7 +917,6 @@ mod tests {
             .collect();
         assert_eq!(initial, rerun);
     }
-
     #[test]
     fn merkle_proofs_round_trip_to_root() {
         let roster_file = write_roster(TEST_ROSTER);
@@ -1010,7 +927,6 @@ mod tests {
             output_path: None,
         };
         let summary = run_sortition(&options).expect("sortition");
-
         let roster: SortitionRoster =
             serde_json::from_str(TEST_ROSTER).expect("parse roster fixture");
         let eligible = build_eligible_members(&roster).expect("eligible");
@@ -1018,7 +934,6 @@ mod tests {
         let layers = build_merkle_layers(&leaves);
         let root = layers.last().unwrap()[0];
         assert_eq!(hex::encode(root), summary.merkle_root_hex);
-
         for selected in summary.selected {
             let mut index = selected.eligible_index;
             let mut computed = leaves[index];
@@ -1034,7 +949,6 @@ mod tests {
             assert_eq!(hex::encode(computed), summary.merkle_root_hex);
         }
     }
-
     #[test]
     fn impact_report_summarises_conflicts() {
         let proposal_a = sample_loaded_proposal(
@@ -1060,16 +974,13 @@ mod tests {
                 note: None,
             }],
         };
-
         let report = build_impact_report(&[proposal_a, proposal_b], Some(&registry), Some(&policy));
-
         assert_eq!(report.totals.proposals_analyzed, 2);
         assert_eq!(report.totals.targets_analyzed, 3);
         assert_eq!(report.totals.registry_conflicts, 1);
         assert_eq!(report.totals.policy_conflicts, 1);
         assert_eq!(report.proposals[0].conflicts.len(), 1);
         assert_eq!(report.proposals[1].conflicts.len(), 1);
-
         let families: Vec<_> = report
             .totals
             .hash_families
@@ -1078,7 +989,6 @@ mod tests {
             .collect();
         assert_eq!(families, vec![("blake3-256", 2), ("sha256", 1)]);
     }
-
     fn sample_loaded_proposal(
         proposal_id: &str,
         hashes: Vec<(&str, &str)>,
@@ -1094,7 +1004,6 @@ mod tests {
                 reason: "sample".into(),
             })
             .collect();
-
         let proposal = AgendaProposalV1 {
             version: AGENDA_PROPOSAL_VERSION_V1,
             proposal_id: proposal_id.into(),
@@ -1122,13 +1031,11 @@ mod tests {
             },
             duplicates: Vec::new(),
         };
-
         LoadedProposal {
             proposal,
             source_path: source.into(),
         }
     }
-
     fn write_roster(contents: &str) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");
         file.write_all(contents.as_bytes()).expect("write roster");

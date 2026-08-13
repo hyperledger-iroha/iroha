@@ -4,9 +4,7 @@
 //! [`iroha_config`]. The deployment registry never receives the full node
 //! configuration, because that structure also contains validator keys, API
 //! tokens, and other values that runtime-provider discovery must not observe.
-
 use std::fmt;
-
 use iroha_config::parameters::{
     actual::Root as Config,
     defaults::{
@@ -22,25 +20,20 @@ use iroha_config::parameters::{
 };
 use iroha_data_model::NetworkId;
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
-
 use crate::IrohaRuntimeDeps;
-
 mod binding_collection;
 mod binding_types;
 mod catalog;
 mod dependency_scope;
 mod stream_token_gateway;
 mod stream_token_signer;
-
 pub use catalog::{IrohaRuntimeProviderCatalogErrorV1, RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1};
-
 use binding_collection::{
     append_required_governance_request_auth_binding, append_required_governance_service_binding,
     collect_configured_bindings, governance_request_ingress_binding_from_service,
 };
 pub(crate) use binding_types::{EvidenceViewerWebAuthnBindingV1, PopCredentialRuntimeBindingV1};
 use dependency_scope::{dependency_is_present, has_unrequested_dependency};
-
 const MAX_PROVIDER_INGEST_SOURCE_STREAMS_V1: u32 = 1_024;
 const GOVERNANCE_DAG_SIGNER_STARTUP_CHALLENGE_DOMAIN_V1: &[u8] =
     b"sorafs.governance-dag.registry-startup-possession.v1\0";
@@ -1359,7 +1352,6 @@ const fn native_signer_role_for_slot(
     slot: IrohaRuntimeProviderSlotV1,
 ) -> Option<iroha_torii::SorafsNativeTransactionSignerRoleV1> {
     use iroha_torii::SorafsNativeTransactionSignerRoleV1 as Role;
-
     match slot {
         IrohaRuntimeProviderSlotV1::ProofOutcomeTransactionSigner => Some(Role::ProofOutcome),
         IrohaRuntimeProviderSlotV1::RepairTransactionSigner => Some(Role::Repair),
@@ -2057,11 +2049,11 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
         return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
     }
     qualify_musubi_provider_attestation_dependencies(bindings, &dependencies)?;
-    // TODO: Before the provider-attestation startup rejection can be removed,
-    // run authenticated readiness and revalidate all three live effects
-    // against these exact bindings around every operation, and fence approval
-    // authority against finalized package-owner state. This registry probe is
-    // deliberately inert and does not establish operation-time readiness.
+    // This registry probe deliberately performs metadata-only pre/post
+    // qualification and no readiness or effects. Before the startup rejection
+    // is removed, the activation coordinator must run bounded authenticated
+    // readiness and supply the governed operation-time wrappers that fence all
+    // three effects and finalized package-owner authority.
     qualify_bootle_lantern_issuance_dependency(bindings, &dependencies)?;
     qualify_fenced_privacy_dependencies(bindings, &dependencies)?;
     qualify_governance_dag_signer_dependency(bindings, &dependencies)?;
@@ -2086,7 +2078,6 @@ fn qualify_bootle_lantern_issuance_dependency(
     dependencies: &IrohaRuntimeDeps,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     use iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryErrorV1 as ProviderError;
-
     let slot = IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry;
     let Some(expected) = bindings.iter().find(|binding| binding.slot() == slot) else {
         return Ok(());
@@ -2114,7 +2105,6 @@ fn map_soracloud_runtime_signer_qualification_error(
     error: crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationErrorV1,
 ) -> IrohaRuntimeProviderRegistryErrorV1 {
     use crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationErrorV1 as Error;
-
     match error {
         Error::ProviderUnavailable => IrohaRuntimeProviderRegistryErrorV1::Unavailable,
         Error::InvalidProviderHandle | Error::TestProviderRejected => {
@@ -2242,7 +2232,6 @@ fn map_soracloud_hf_credential_qualification_error(
     error: crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationErrorV1,
 ) -> IrohaRuntimeProviderRegistryErrorV1 {
     use crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationErrorV1 as Error;
-
     match error {
         Error::ProviderUnavailable => IrohaRuntimeProviderRegistryErrorV1::Unavailable,
         Error::InvalidProviderHandle | Error::TestProviderRejected => {
@@ -2408,7 +2397,6 @@ fn qualify_governance_request_auth_dependencies(
     dependencies: &IrohaRuntimeDeps,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     for (slot, authenticator) in [
         (
             Slot::GovernanceDagIpfsAuthenticator,
@@ -2504,7 +2492,6 @@ fn validate_musubi_provider_attestation_binding_set(
     bindings: &IrohaRuntimeProviderBindingsV1,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     const SLOTS: [Slot; 3] = [
         Slot::MusubiProviderAttestationClockSeal,
         Slot::MusubiProviderAttestationApprovalSigner,
@@ -2560,7 +2547,6 @@ fn qualify_musubi_provider_attestation_dependencies(
     dependencies: &IrohaRuntimeDeps,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     let Some(clock_binding) = bindings
         .iter()
         .find(|binding| binding.slot() == Slot::MusubiProviderAttestationClockSeal)
@@ -2791,7 +2777,6 @@ fn map_native_signer_qualification_error(
     error: iroha_torii::SorafsNativeTransactionSignerQualificationErrorV1,
 ) -> IrohaRuntimeProviderRegistryErrorV1 {
     use iroha_torii::SorafsNativeTransactionSignerQualificationErrorV1 as Error;
-
     match error {
         Error::ProviderUnavailable => IrohaRuntimeProviderRegistryErrorV1::Unavailable,
         Error::InvalidProviderHandle => IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected,
@@ -2863,7 +2848,6 @@ fn qualify_provider_ingest_dependencies(
     dependencies: &IrohaRuntimeDeps,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     use IrohaRuntimeProviderSlotV1 as Slot;
-
     let binding = |slot| bindings.iter().find(|binding| binding.slot() == slot);
     if let Some(expected) = binding(Slot::ProviderIngestAuthenticatedSource) {
         let source = dependencies
@@ -3477,11 +3461,9 @@ mod tests {
         },
         time::Duration,
     };
-
     use super::*;
     use iroha_config_base::{toml::TomlSource, util::Bytes};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-
     fn standalone_bootle_lantern_bindings()
     -> iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1 {
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(

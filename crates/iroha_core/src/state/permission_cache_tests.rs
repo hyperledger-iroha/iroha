@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-
 use iroha_data_model::{
     account::AccountId,
     domain::DomainId,
@@ -18,30 +17,24 @@ use iroha_executor_data_model::permission::{
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
-
 use super::*;
 use crate::{
     prelude::{AcceptedTransaction, StateReadOnly},
     smartcontracts::Execute,
 };
-
 fn wonderland_domain_id() -> DomainId {
     DomainId::try_new("wonderland", "universal").expect("domain id")
 }
-
 fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
     Account::new(account_id.clone())
 }
-
 fn new_genesis_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
     Account::new(account_id.clone())
 }
-
 #[test]
 fn revoke_permission_invalidates_trigger_cache() {
     let (registrar, _) = gen_account_in("wonderland");
     let (owner, _) = gen_account_in("wonderland");
-
     let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
     let registrar_account = new_wonderland_account(&registrar).build(&registrar);
     let owner_account = new_wonderland_account(&owner).build(&registrar);
@@ -49,67 +42,54 @@ fn revoke_permission_invalidates_trigger_cache() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(world, kura, query);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let permission = CanRegisterTrigger {
         authority: owner.clone(),
     };
-
     Grant::account_permission(permission.clone(), registrar.clone())
         .execute(&registrar, &mut stx)
         .expect("grant trigger permission");
-
     assert!(
         stx.can_register_trigger_for(&registrar, &owner),
         "permission should allow trigger registration"
     );
-
     Revoke::account_permission(permission, registrar.clone())
         .execute(&registrar, &mut stx)
         .expect("revoke trigger permission");
-
     assert!(
         !stx.can_register_trigger_for(&registrar, &owner),
         "cache must be invalidated after revoke"
     );
 }
-
 #[test]
 fn trigger_permission_payload_with_whitespace_decodes() {
     let (registrar, _) = gen_account_in("wonderland");
-
     let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
     let registrar_account = new_wonderland_account(&registrar).build(&registrar);
     let world = World::with([domain], [registrar_account], []);
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(world, kura, query);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let trigger_id: TriggerId = "trigger_alpha".parse().unwrap();
     let raw_payload = "{  \"trigger\"  :   \"trigger_alpha\" }";
     let permission = iroha_data_model::permission::Permission::new(
         "CanExecuteTrigger".into(),
         Json::from_raw_json(raw_payload.to_owned()).expect("valid permission JSON fixture"),
     );
-
     stx.world
         .account_permissions
         .insert(registrar.clone(), BTreeSet::from([permission]));
-
     assert!(
         stx.can_execute_trigger_for(&registrar, &trigger_id),
         "Norito decoder should handle non-canonical JSON payloads"
     );
     assert!(stx.can_execute_trigger_for(&registrar, &trigger_id));
 }
-
 #[test]
 fn permission_deserialized_from_json_matches_canonical_permission() {
     let stored: Permission = norito::json::from_str(
@@ -122,9 +102,7 @@ fn permission_deserialized_from_json_matches_canonical_permission() {
     let target = Permission::from(CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     });
-
     let permissions = BTreeSet::from([stored]);
-
     assert!(
         permissions.contains(&target),
         "deserialized permissions should use canonical JSON payloads: stored={}, target={}",
@@ -136,19 +114,15 @@ fn permission_deserialized_from_json_matches_canonical_permission() {
         target.payload().get(),
     );
 }
-
 #[test]
 fn role_granted_trigger_permissions_cache_and_invalidate() {
     let (registrar, _) = gen_account_in("wonderland");
     let (owner, _) = gen_account_in("wonderland");
-
     let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
     let registrar_account = new_wonderland_account(&registrar).build(&registrar);
     let owner_account = new_wonderland_account(&owner).build(&registrar);
-
     let role_id: RoleId = "trigger_role".parse().unwrap();
     let trigger_id: TriggerId = "trigger_alpha".parse().unwrap();
-
     let role = Role::new(role_id.clone(), registrar.clone())
         .add_permission(CanRegisterTrigger {
             authority: owner.clone(),
@@ -157,18 +131,14 @@ fn role_granted_trigger_permissions_cache_and_invalidate() {
             trigger: trigger_id.clone(),
         })
         .build(&registrar);
-
     let mut world = World::with([domain], [registrar_account, owner_account], []);
     assert!(world.roles.insert(role_id.clone(), role).is_none());
-
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(world, kura, query);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     assert!(
         !stx.can_register_trigger_for(&registrar, &owner),
         "role permissions should not apply before membership"
@@ -177,11 +147,9 @@ fn role_granted_trigger_permissions_cache_and_invalidate() {
         !stx.can_execute_trigger_for(&registrar, &trigger_id),
         "role permissions should not apply before membership"
     );
-
     Grant::account_role(role_id.clone(), registrar.clone())
         .execute(&registrar, &mut stx)
         .expect("grant account role");
-
     assert!(
         stx.can_register_trigger_for(&registrar, &owner),
         "granting role should allow trigger registration"
@@ -190,15 +158,12 @@ fn role_granted_trigger_permissions_cache_and_invalidate() {
         stx.can_execute_trigger_for(&registrar, &trigger_id),
         "granting role should allow trigger execution"
     );
-
     // Cached value should remain true while role membership stays in place.
     assert!(stx.can_register_trigger_for(&registrar, &owner));
     assert!(stx.can_execute_trigger_for(&registrar, &trigger_id));
-
     Revoke::account_role(role_id, registrar.clone())
         .execute(&registrar, &mut stx)
         .expect("revoke account role");
-
     assert!(
         !stx.can_register_trigger_for(&registrar, &owner),
         "revoking role should invalidate cache and revoke registration permission"
@@ -208,7 +173,6 @@ fn role_granted_trigger_permissions_cache_and_invalidate() {
         "revoking role should invalidate cache and revoke execution permission"
     );
 }
-
 fn previous_roster_evidence_for_parent(
     parent: &SignedBlock,
     roster: &[PeerId],
@@ -236,7 +200,6 @@ fn previous_roster_evidence_for_parent(
         stake_snapshot: None,
     }
 }
-
 fn build_test_block(
     accepted: AcceptedTransaction<'static>,
     parent: Option<&SignedBlock>,
@@ -252,7 +215,6 @@ fn build_test_block(
     }
     builder.sign(signer).unpack(|_| {})
 }
-
 fn install_permission_cache_replay_parameters(state: &State) {
     let mut parameters = state.world.parameters.block();
     parameters.set_parameter(iroha_data_model::parameter::system::Parameter::Custom(
@@ -261,7 +223,6 @@ fn install_permission_cache_replay_parameters(state: &State) {
     ));
     parameters.commit();
 }
-
 fn replay_permission_cache_blocks(
     kura: &Arc<Kura>,
     state: &mut State,
@@ -289,7 +250,6 @@ fn replay_permission_cache_blocks(
     }
     Ok(())
 }
-
 #[test]
 fn permission_cache_rebuilds_after_restart() {
     // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
@@ -303,7 +263,6 @@ fn permission_cache_rebuilds_after_restart() {
         std::panic::resume_unwind(payload);
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn permission_cache_rebuilds_after_restart_impl() {
     use std::{
@@ -311,7 +270,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
         num::{NonZeroU64, NonZeroUsize},
         sync::Arc,
     };
-
     use iroha_config::{
         base::WithOrigin,
         kura::InitMode,
@@ -334,7 +292,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
     use iroha_test_samples::{
         SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
     };
-
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -347,7 +304,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
             temp_dir.path().display()
         );
     }
-
     let make_config = |dir: &tempfile::TempDir| Config {
         init_mode: InitMode::Strict,
         store_dir: WithOrigin::inline(dir.path().to_path_buf()),
@@ -358,7 +314,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
             iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-
         block_sync_roster_retention:
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
@@ -366,7 +321,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let lane_config = LaneConfig::default();
-
     let (kura, _) = Kura::new(&make_config(&temp_dir), &lane_config).expect("init kura");
     let live_query = {
         let _guard = runtime.enter();
@@ -387,7 +341,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
         params_block.commit();
     }
     let mut recorded_blocks: Vec<Arc<SignedBlock>> = Vec::new();
-
     let leader_keypair =
         crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
     let (leader_public_key, leader_private_key) = leader_keypair.into_parts();
@@ -397,7 +350,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
     let leader_pop =
         iroha_crypto::bls_normal_pop_prove(&leader_private_key).expect("generate BLS PoP");
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     let (registrar, registrar_keypair) = gen_account_in("wonderland");
     let (owner, owner_keypair) = gen_account_in("wonderland");
     let trigger_id: TriggerId = "trigger_alpha".parse().unwrap();
@@ -431,7 +383,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
     let genesis_block = genesis_builder
         .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
         .expect("genesis");
-
     {
         let mut state_block = state.block(genesis_block.0.header());
         let time_source = TimeSource::new_system();
@@ -504,7 +455,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
             .execute(&owner, &mut stx)
             .expect("dry-run grant execute");
     }
-
     let grant_tx = TransactionBuilder::new(
         state.network_id,
         owner.clone(),
@@ -522,7 +472,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
     ])
     .sign(owner_keypair.private_key());
     let accepted_grant = AcceptedTransaction::new_unchecked(Cow::Owned(grant_tx));
-
     let latest_block = state.view().latest_block();
     let unverified_grant = build_test_block(
         accepted_grant,
@@ -594,7 +543,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
             "execute permission should exist before restart (cached exec entries: {exec_cached})"
         );
     }
-
     drop(state);
     let live_query = {
         let _guard = runtime.enter();
@@ -712,7 +660,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
         );
         recorded_blocks.push(Arc::clone(&block_arc));
     }
-
     let latest_hash = state
         .view()
         .latest_block()
@@ -736,7 +683,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
             "execution permission revoked"
         );
     }
-
     drop(state);
     let live_query = {
         let _guard = runtime.enter();
@@ -762,7 +708,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
             "owner account should exist after replay"
         );
     }
-
     let latest_hash = state
         .view()
         .latest_block()
@@ -782,12 +727,10 @@ fn permission_cache_rebuilds_after_restart_impl() {
             "execution should remain revoked after restart"
         );
     }
-
     let role_id: RoleId = "trigger_role_restart".parse().unwrap();
     let role = Role::new(role_id.clone(), owner.clone())
         .add_permission(permission_register.clone())
         .add_permission(permission_execute.clone());
-
     let register_role_tx = TransactionBuilder::new(
         state.network_id,
         owner.clone(),
@@ -840,7 +783,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
         );
         recorded_blocks.push(Arc::clone(&block_arc));
     }
-
     let latest_hash = state
         .view()
         .latest_block()
@@ -860,7 +802,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
             "role membership should allow trigger execution"
         );
     }
-
     drop(state);
     let live_query = {
         let _guard = runtime.enter();
@@ -874,7 +815,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
     }
     replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
         .expect("replay stored blocks after role grant");
-
     let latest_hash = state
         .view()
         .latest_block()
@@ -894,7 +834,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
             "role-based execution permission should survive restart"
         );
     }
-
     let revoke_role_tx = TransactionBuilder::new(
         state.network_id,
         owner.clone(),
@@ -948,7 +887,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
         );
         recorded_blocks.push(Arc::clone(&block_arc));
     }
-
     let latest_hash = state
         .view()
         .latest_block()
@@ -972,7 +910,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
             "role revocation should remove trigger execution permission"
         );
     }
-
     drop(state);
     let live_query = {
         let _guard = runtime.enter();
@@ -986,7 +923,6 @@ fn permission_cache_rebuilds_after_restart_impl() {
     }
     replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
         .expect("replay stored blocks after role revoke");
-
     let latest_hash = state
         .view()
         .latest_block()

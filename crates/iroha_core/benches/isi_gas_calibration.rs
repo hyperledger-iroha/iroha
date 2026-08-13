@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::all)]
 //! Prints per-instruction `ns/op`, `gas/op`, and `ns/gas` to guide calibration.
-
 use criterion::{BatchSize, Criterion};
 use iroha_core::{
     executor::{Executor, InstructionExecutionProfile},
@@ -23,22 +22,18 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
-
 const BENCH_DOMAIN_NAME: &str = "wonderland";
 const BENCH_DATASPACE_NAME: &str = "universal";
 const BENCH_ASSET_NAME: &str = "xor";
-
 #[derive(Clone)]
 struct BenchContext {
     authority: AccountId,
     recipient: AccountId,
 }
-
 struct BenchState {
     state: State,
     ctx: BenchContext,
 }
-
 impl BenchState {
     fn apply_instrs(&mut self, instrs: impl IntoIterator<Item = InstructionBox>) {
         let instructions: Vec<InstructionBox> = instrs.into_iter().collect();
@@ -62,11 +57,9 @@ impl BenchState {
         block.commit().expect("setup block commit");
     }
 }
-
 fn bench_block_header() -> BlockHeader {
     BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0)
 }
-
 /// Construct a world state with a single domain and two accounts (authority + recipient)
 /// suitable for running isolated ISI executor benchmarks.
 fn build_bench_state() -> BenchState {
@@ -89,9 +82,7 @@ fn build_bench_state() -> BenchState {
         },
     }
 }
-
 fn setup_none(_state: &mut BenchState) {}
-
 fn setup_role_exists(state: &mut BenchState) {
     let role_id: RoleId = "bench_role".parse().expect("role id");
     let new_role = Role::new(role_id, state.ctx.recipient.clone());
@@ -105,7 +96,6 @@ fn setup_role_exists(state: &mut BenchState) {
     tx.apply();
     block.commit().expect("setup block commit");
 }
-
 fn setup_role_assigned(state: &mut BenchState) {
     setup_role_exists(state);
     let role_id: RoleId = "bench_role".parse().expect("role id");
@@ -115,18 +105,15 @@ fn setup_role_assigned(state: &mut BenchState) {
     )
     .into()]);
 }
-
 fn setup_asset_definition(state: &mut BenchState) {
     state.apply_instrs([Register::asset_definition(bench_asset_definition()).into()]);
 }
-
 fn setup_asset_and_balance(state: &mut BenchState) {
     setup_asset_definition(state);
     let ad = bench_asset_definition_id();
     let asset_id = AssetId::of(ad, state.ctx.authority.clone());
     state.apply_instrs([iroha_data_model::isi::Mint::asset_quantity(10_u32, asset_id).into()]);
 }
-
 fn setup_trigger_registered(state: &mut BenchState) {
     let trigger_id: TriggerId = "bench_trg".parse().expect("trigger id");
     let action = Action::new(
@@ -141,7 +128,6 @@ fn setup_trigger_registered(state: &mut BenchState) {
     let trigger = Trigger::new(trigger_id, action);
     state.apply_instrs([Register::trigger(trigger).into()]);
 }
-
 fn bench_asset_definition_id() -> AssetDefinitionId {
     iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new(BENCH_DOMAIN_NAME, BENCH_DATASPACE_NAME).expect("valid domain id"),
@@ -150,7 +136,6 @@ fn bench_asset_definition_id() -> AssetDefinitionId {
             .expect("valid asset definition name"),
     )
 }
-
 /// Construct a valid asset definition fixture for registration benchmarks.
 fn bench_asset_definition() -> iroha_data_model::asset::NewAssetDefinition {
     AssetDefinition::numeric(
@@ -160,7 +145,6 @@ fn bench_asset_definition() -> iroha_data_model::asset::NewAssetDefinition {
         None,
     )
 }
-
 /// Benchmark a single ISI by executing it in a fresh transaction for each iteration.
 fn bench_isi(
     c: &mut Criterion,
@@ -197,7 +181,6 @@ fn bench_isi(
     });
     g.finish();
 }
-
 /// Register the individual ISI microbenchmarks for this group.
 fn run_benchmarks(c: &mut Criterion) {
     bench_isi(c, "RegisterAccount", setup_none, |_ctx| {
@@ -243,7 +226,6 @@ fn run_benchmarks(c: &mut Criterion) {
         iroha_data_model::isi::Transfer::asset_quantity(id, 1_u32, ctx.recipient.clone()).into()
     });
 }
-
 /// Criterion entrypoint for this benchmark binary.
 fn main() {
     #[allow(unused_imports)]

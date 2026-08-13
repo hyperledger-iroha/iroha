@@ -1,5 +1,4 @@
 // Deferred certified merge-sidecar recovery driver.
-
 fn drive_merge_sidecar_recovery(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,

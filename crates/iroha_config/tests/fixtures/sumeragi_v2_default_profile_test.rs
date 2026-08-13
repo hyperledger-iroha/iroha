@@ -3,7 +3,6 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     use defaults::sumeragi::npos;
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
     use iroha_config_base::read::ConfigReader;
-
     assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 4);
     assert_eq!(defaults::sumeragi::BLOCK_CADENCE_MS, 1_000);
     assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER, 10);
@@ -42,7 +41,6 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     assert_eq!(defaults::sumeragi::QUEUE_CHUNK_CAPACITY.get(), 2_048);
     assert_eq!(defaults::sumeragi::QUEUE_READY_BODY_CAPACITY.get(), 128);
     assert_eq!(npos::EPOCH_LENGTH_BLOCKS, 3_600);
-
     let cfg: Actual = ConfigReader::new()
         .read_toml_with_extends(fixtures_dir().join("base.toml"))
         .expect("base file should be valid")

@@ -4,24 +4,20 @@ use norito::{
     core::{DecodeFlagsGuard, Header, NoritoDeserialize, NoritoSerialize, header_flags},
     deserialize_from, serialize_into,
 };
-
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
 struct TestData {
     a: u32,
     b: bool,
 }
-
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
 struct VecStruct {
     flag: bool,
     values: Vec<u8>,
 }
-
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
 struct OptionStruct {
     value: Option<[u8; 32]>,
 }
-
 #[test]
 fn roundtrip_no_compression() {
     let data = TestData { a: 42, b: true };
@@ -30,7 +26,6 @@ fn roundtrip_no_compression() {
     let decoded: TestData = deserialize_from(buf.as_slice()).unwrap();
     assert_eq!(data, decoded);
 }
-
 #[test]
 fn roundtrip_zstd() {
     let data = TestData { a: 7, b: false };
@@ -39,7 +34,6 @@ fn roundtrip_zstd() {
     let decoded: TestData = deserialize_from(buf.as_slice()).unwrap();
     assert_eq!(data, decoded);
 }
-
 #[test]
 fn empty_vec_roundtrip() {
     let original: Vec<u8> = Vec::new();
@@ -48,7 +42,6 @@ fn empty_vec_roundtrip() {
     let decoded = <Vec<u8> as NoritoDeserialize>::deserialize(archived);
     assert_eq!(original, decoded);
 }
-
 #[test]
 fn empty_vec_struct_roundtrip() {
     let value = VecStruct {
@@ -69,7 +62,6 @@ fn empty_vec_struct_roundtrip() {
     );
     let payload = &bytes[Header::SIZE..];
     assert!(payload.len() >= 1 + 1 + 1 + 8, "payload too short");
-
     let mut offset = 0usize;
     let _guard = DecodeFlagsGuard::enter(flags);
     let read_len = |data: &[u8], pos: &mut usize| -> usize {
@@ -77,12 +69,10 @@ fn empty_vec_struct_roundtrip() {
         *pos += hdr;
         len
     };
-
     let flag_len = read_len(payload, &mut offset);
     assert_eq!(flag_len, 1, "bool field must report length 1");
     assert_eq!(payload[offset], 0);
     offset += flag_len;
-
     let vec_len = read_len(payload, &mut offset);
     assert_eq!(
         vec_len, 8,
@@ -96,17 +86,14 @@ fn empty_vec_struct_roundtrip() {
         payload.len(),
         "unexpected trailing bytes in payload"
     );
-
     let mut inner_len_bytes = [0u8; 8];
     inner_len_bytes.copy_from_slice(vec_bytes);
     let inner_len = u64::from_le_bytes(inner_len_bytes);
     assert_eq!(inner_len, 0, "empty Vec<u8> must report zero elements");
-
     let archived = norito::core::from_bytes::<VecStruct>(&bytes).unwrap();
     let decoded = VecStruct::deserialize(archived);
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn fixed_option_without_size_header() {
     let value = OptionStruct {
@@ -120,17 +107,14 @@ fn fixed_option_without_size_header() {
     assert_eq!(header_flags, 0);
     let mut payload = fresh[Header::SIZE..].to_vec();
     assert!(payload.len() >= 8 + 1 + 8);
-
     // Struct field payload length.
     let mut len_bytes = [0u8; 8];
     len_bytes.copy_from_slice(&payload[..8]);
     let field_len = u64::from_le_bytes(len_bytes) as usize;
     assert!(field_len > 0);
     assert_eq!(payload.len(), 8 + field_len);
-
     let field_start = 8;
     assert_eq!(payload[field_start], 1, "Option tag must be Some");
-
     let mut inner_len = [0u8; 8];
     inner_len.copy_from_slice(&payload[field_start + 1..field_start + 9]);
     let inner_len = u64::from_le_bytes(inner_len) as usize;
@@ -139,10 +123,8 @@ fn fixed_option_without_size_header() {
         field_len - 1 - 8,
         "inner payload length should match Option body"
     );
-
     // Remove the inner length header to simulate corruption.
     payload.drain(field_start + 1..field_start + 9);
-
     let fixed_bytes =
         norito::core::frame_bare_with_header_flags::<OptionStruct>(&payload, header_flags).unwrap();
     let err = norito::decode_from_bytes::<OptionStruct>(&fixed_bytes)

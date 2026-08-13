@@ -4,20 +4,15 @@
 //! that owner enters the five-row reuse guard.  The stored row has exactly `N`
 //! canonical residues and authenticates `S[N - 1] = 0`.  The sealed store is
 //! move-only and exposes only a sequential, purpose-bound replay.
-
 use core::sync::atomic;
 use std::path::Path;
-
 use iroha_confidential_spool::{
     CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1,
     CONFIDENTIAL_SPOOL_MAX_SLOTS_V1, ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1,
     ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
-
 use crate::vega::sponge::Keccak256;
-
 use super::*;
-
 const MASK_SPOOL_MAPPING_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.rns-link.q-pcs.mask-s-spool.mapping\0";
 const MASK_SPOOL_CONTEXT_DOMAIN_V2: &[u8] =
@@ -37,10 +32,8 @@ const RELEASE_MASK_S_TOTAL_IO_BYTES_V2: u64 = 399_237_120;
 const RELEASE_MASK_S_TRANSIENT_CHUNK_HEAP_BYTES_V2: u64 = 8_192;
 const MASK_S_REPLAY_BOUND_V2: bool = true;
 const CROSS_FIELD_MASK_PROOF_COMPLETE_V2: bool = false;
-
 #[cfg(test)]
 static MASK_REPLAY_CHUNK_ZEROIZED_DROPS_V2: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
-
 const _: () = {
     assert!(
         RELEASE_MASK_S_SLOTS_V2
@@ -66,7 +59,6 @@ const _: () = {
     assert!(MASK_S_REPLAY_BOUND_V2);
     assert!(!CROSS_FIELD_MASK_PROOF_COMPLETE_V2);
 };
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct MaskSpoolDescriptorV2 {
     relations: u16,
@@ -76,7 +68,6 @@ struct MaskSpoolDescriptorV2 {
     file_bytes: u64,
     mapping_digest: [u8; 32],
 }
-
 fn mask_spool_descriptor_v2(
     geometry: SpoolGeometryV2,
     parameter_digest: [u8; 32],
@@ -156,7 +147,6 @@ fn mask_spool_descriptor_v2(
         mapping_digest,
     })
 }
-
 fn mask_spool_context_v2(
     parameter_digest: [u8; 32],
     descriptor: MaskSpoolDescriptorV2,
@@ -177,12 +167,10 @@ fn mask_spool_context_v2(
     }
     Ok(digest)
 }
-
 struct LiveMaskSpoolWriterV2 {
     writer: ConfidentialSpoolWriterV1,
     next_relation: u16,
 }
-
 pub(super) struct MaskSpoolWriterV2 {
     live: Option<LiveMaskSpoolWriterV2>,
     geometry: SpoolGeometryV2,
@@ -191,7 +179,6 @@ pub(super) struct MaskSpoolWriterV2 {
     context: PublicSpoolContextV2,
     context_digest: [u8; 32],
 }
-
 impl MaskSpoolWriterV2 {
     pub(super) fn create_v2(
         directory: &Path,
@@ -222,7 +209,6 @@ impl MaskSpoolWriterV2 {
             context_digest,
         })
     }
-
     pub(super) fn push_next_mask_v2(
         &mut self,
         limb: u8,
@@ -288,7 +274,6 @@ impl MaskSpoolWriterV2 {
         self.live = Some(live);
         Ok(())
     }
-
     pub(super) fn seal_v2(mut self) -> Result<MaskSpoolSealedV2, ProverPrerequisiteErrorV2> {
         let live = self
             .live
@@ -307,7 +292,6 @@ impl MaskSpoolWriterV2 {
         })
     }
 }
-
 /// Move-only authenticated S store. Replay remains internal and sequential.
 pub(super) struct MaskSpoolSealedV2 {
     snapshot: Option<ConfidentialSpoolSnapshotV1>,
@@ -317,7 +301,6 @@ pub(super) struct MaskSpoolSealedV2 {
     context: PublicSpoolContextV2,
     context_digest: [u8; 32],
 }
-
 impl MaskSpoolSealedV2 {
     /// Return the revalidated encrypted-snapshot identity for transcript
     /// binding. This digest is not an authentication authority or a plaintext
@@ -342,7 +325,6 @@ impl MaskSpoolSealedV2 {
             .then_some(digest)
             .ok_or(ProverPrerequisiteErrorV2::InvalidC0Context)
     }
-
     pub(super) fn begin_replay_v2(
         mut self,
     ) -> Result<MaskReplayReaderV2, ProverPrerequisiteErrorV2> {
@@ -367,12 +349,10 @@ impl MaskSpoolSealedV2 {
         })
     }
 }
-
 pub(super) struct MaskReplayReaderV2 {
     owner: Option<MaskSpoolSealedV2>,
     next_slot: u64,
 }
-
 impl MaskReplayReaderV2 {
     pub(super) fn read_next_block_v2(
         &mut self,
@@ -415,7 +395,6 @@ impl MaskReplayReaderV2 {
         self.owner = Some(owner);
         Ok(MaskReplayChunkV2 { chunk })
     }
-
     pub(super) fn complete_v2(mut self) -> Result<MaskSpoolSealedV2, ProverPrerequisiteErrorV2> {
         let owner = self
             .owner
@@ -427,17 +406,14 @@ impl MaskReplayReaderV2 {
         Ok(owner)
     }
 }
-
 pub(super) struct MaskReplayChunkV2 {
     chunk: ConfidentialSpoolChunkV1,
 }
-
 impl MaskReplayChunkV2 {
     pub(super) fn bytes_v2(&self) -> &[u8] {
         self.chunk.as_slice_v1()
     }
 }
-
 impl Drop for MaskReplayChunkV2 {
     fn drop(&mut self) {
         self.chunk.as_mut_slice_v1().fill(0);
@@ -446,7 +422,6 @@ impl Drop for MaskReplayChunkV2 {
         MASK_REPLAY_CHUNK_ZEROIZED_DROPS_V2.fetch_add(1, atomic::Ordering::SeqCst);
     }
 }
-
 #[cfg(test)]
 pub(super) fn zero_mask_spool_for_test_v2(
     directory: &Path,
@@ -467,7 +442,6 @@ pub(super) fn zero_mask_spool_for_test_v2(
     }
     writer.seal_v2()
 }
-
 #[cfg(test)]
 #[path = "s_spool_v2_tests.rs"]
 mod tests;

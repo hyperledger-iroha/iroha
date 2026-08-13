@@ -2,15 +2,12 @@
 //!
 //! E.g. peer A changes address, connects to peer B,
 //! and then peer B will broadcast address of peer A to other peers.
-
 #![allow(clippy::disallowed_types)]
-
 #[allow(clippy::disallowed_types)]
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     time::Duration,
 };
-
 use iroha_config::parameters::actual::TrustedPeers;
 use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{
@@ -25,32 +22,26 @@ use iroha_p2p::{
 use iroha_primitives::{addr::SocketAddr, unique_vec::UniqueVec};
 use norito::{NoritoDeserialize, NoritoSerialize, codec::Encode, core as ncore};
 use tokio::sync::mpsc;
-
 use crate::{IrohaNetwork, NetworkMessage};
-
 /// Trust tracking entry with decay metadata.
 #[derive(Debug, Clone)]
 struct TrustEntry {
     score: i64,
     last_updated: std::time::Instant,
 }
-
 #[derive(Debug, Clone, Copy)]
 struct TrustPenalties {
     bad_gossip: i64,
     unknown_peer: i64,
 }
-
 const PENALTY_REASON_INVALID_SIGNATURE: &str = "invalid_signature";
 const PENALTY_REASON_UNKNOWN_PEER: &str = "unknown_peer";
-
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 enum TrustPenaltyKind {
     BadGossip,
     UnknownPeer,
 }
-
 impl TrustPenaltyKind {
     fn amount(self, penalties: &TrustPenalties) -> i64 {
         match self {
@@ -59,7 +50,6 @@ impl TrustPenaltyKind {
         }
     }
 }
-
 /// Deterministic trust tracker used by the peers gossiper.
 #[derive(Debug, Clone)]
 struct TrustBook {
@@ -68,7 +58,6 @@ struct TrustBook {
     penalties: TrustPenalties,
     min_score: i64,
 }
-
 impl TrustBook {
     fn new(decay_half_life: Duration, penalties: TrustPenalties, min_score: i32) -> Self {
         Self {
@@ -78,7 +67,6 @@ impl TrustBook {
             min_score: i64::from(min_score),
         }
     }
-
     fn seed<I: IntoIterator<Item = PeerId>>(&mut self, peers: I, now: std::time::Instant) {
         for peer in peers {
             self.entries.entry(peer).or_insert(TrustEntry {
@@ -87,7 +75,6 @@ impl TrustBook {
             });
         }
     }
-
     fn decay_entry(
         entry: &mut TrustEntry,
         decay_half_life: std::time::Duration,
@@ -114,7 +101,6 @@ impl TrustBook {
             .unwrap_or(now);
         steps_u64
     }
-
     fn with_entry<R, F>(&mut self, peer: &PeerId, now: std::time::Instant, mut f: F) -> R
     where
         F: FnMut(&mut TrustEntry) -> R,
@@ -131,13 +117,11 @@ impl TrustBook {
         self.record_decay(peer, ticks);
         result
     }
-
     fn score(&mut self, peer: &PeerId, now: std::time::Instant) -> i64 {
         let score = self.with_entry(peer, now, |entry| entry.score);
         self.record_score(peer, score);
         score
     }
-
     fn penalize(
         &mut self,
         peer: &PeerId,
@@ -154,15 +138,12 @@ impl TrustBook {
         self.record_penalty(reason_label);
         score
     }
-
     fn min_score(&self) -> i64 {
         self.min_score
     }
-
     fn should_drop(&mut self, peer: &PeerId, now: std::time::Instant) -> bool {
         self.score(peer, now) <= self.min_score
     }
-
     fn record_score(&self, peer: &PeerId, score: i64) {
         let _ = self;
         if let Some(metrics) = iroha_telemetry::metrics::global() {
@@ -173,7 +154,6 @@ impl TrustBook {
                 .set(score);
         }
     }
-
     fn record_decay(&self, peer: &PeerId, ticks: u64) {
         if ticks == 0 {
             return;
@@ -187,7 +167,6 @@ impl TrustBook {
                 .inc_by(ticks);
         }
     }
-
     fn record_penalty(&self, reason: &str) {
         let _ = self;
         if let Some(metrics) = iroha_telemetry::metrics::global() {
@@ -198,21 +177,18 @@ impl TrustBook {
         }
     }
 }
-
 /// [`PeersGossiper`] actor handle.
 #[derive(Debug)]
 enum GossipEvent {
     Peers { gossip: PeersGossip, from: Peer },
     Trust { gossip: PeerTrustGossip, from: Peer },
 }
-
 /// Handle to interact with the peers gossiper actor.
 #[derive(Clone)]
 pub struct PeersGossiperHandle {
     message_sender: mpsc::Sender<GossipEvent>,
     update_topology_sender: mpsc::UnboundedSender<UpdateTopology>,
 }
-
 impl PeersGossiperHandle {
     /// Send [`PeersGossip`] to actor.
     ///
@@ -239,7 +215,6 @@ impl PeersGossiperHandle {
             }
         }
     }
-
     /// Send signed trust gossip to actor.
     ///
     /// Messages are best-effort: if the queue is full, the gossip is dropped
@@ -265,14 +240,12 @@ impl PeersGossiperHandle {
             }
         }
     }
-
     /// Send [`UpdateTopology`] message on network actor.
     pub fn update_topology(&self, topology: UpdateTopology) {
         if let Err(err) = self.update_topology_sender.send(topology) {
             iroha_logger::warn!(?err, "Peers gossiper dropped topology update");
         }
     }
-
     /// Build a handle that drops all gossip messages, for unit tests that do not need a live
     /// gossiper task.
     #[cfg(test)]
@@ -287,7 +260,6 @@ impl PeersGossiperHandle {
         }
     }
 }
-
 /// Actor which gossips peers addresses.
 pub struct PeersGossiper {
     /// Id of the current peer
@@ -326,12 +298,10 @@ pub struct PeersGossiper {
     trust: TrustBook,
     network: IrohaNetwork,
 }
-
 struct TrustGossipOutcome {
     newly_trusted: BTreeSet<PeerId>,
     drop_sender: bool,
 }
-
 /// Terminology:
 /// * Topology - public keys of current network derived from blockchain (Register/Unregister Peer Isi)
 /// * Peers addresses - currently known addresses for peers in topology. Might be unknown for some peer.
@@ -347,7 +317,6 @@ impl PeersGossiper {
     fn gossip_interval(configured: Duration) -> Duration {
         configured
     }
-
     fn next_gossip_backoff(
         current: Duration,
         min: Duration,
@@ -359,7 +328,6 @@ impl PeersGossiper {
         }
         current.saturating_mul(2).min(max)
     }
-
     fn note_gossip_change(&mut self, now: std::time::Instant) {
         self.gossip_pending = true;
         self.gossip_backoff = self.gossip_period;
@@ -368,7 +336,6 @@ impl PeersGossiper {
             self.gossip_next_deadline = next;
         }
     }
-
     fn drop_backpressure_active(&mut self, now: std::time::Instant) -> bool {
         let current = iroha_p2p::network::subscriber_queue_full_count();
         if current > self.last_drop_count {
@@ -378,7 +345,6 @@ impl PeersGossiper {
         self.last_drop_at
             .is_some_and(|last| now.saturating_duration_since(last) < self.gossip_backoff)
     }
-
     fn maybe_gossip(&mut self, now: std::time::Instant) {
         if now < self.gossip_next_deadline {
             return;
@@ -486,7 +452,6 @@ impl PeersGossiper {
         gossiper.network_update_peers_addresses();
         gossiper.network_update_peer_capabilities();
         gossiper.update_trusted_peers_on_network();
-
         let (message_sender, message_receiver) = mpsc::channel(1);
         let (update_topology_sender, update_topology_receiver) = mpsc::unbounded_channel();
         (
@@ -504,7 +469,6 @@ impl PeersGossiper {
             ),
         )
     }
-
     async fn run(
         mut self,
         mut message_receiver: mpsc::Receiver<GossipEvent>,
@@ -563,7 +527,6 @@ impl PeersGossiper {
             tokio::task::yield_now().await;
         }
     }
-
     fn set_current_topology(&mut self, UpdateTopology(topology): UpdateTopology) -> bool {
         let force_disconnect = topology.is_empty();
         let validator_dial_roster: HashSet<_> = topology
@@ -575,16 +538,13 @@ impl PeersGossiper {
         if !force_disconnect {
             new_topology.extend(self.static_trusted_peers.iter().cloned());
         }
-
         self.gossip_peers.retain(|peer, map| {
             if !new_topology.contains(peer) {
                 return false;
             }
-
             map.retain(|peer, _| new_topology.contains(peer));
             !map.is_empty()
         });
-
         let removed: Vec<_> = self
             .current_topology
             .difference(&new_topology)
@@ -595,7 +555,6 @@ impl PeersGossiper {
             .cloned()
             .collect();
         let unchanged = new_topology == self.current_topology;
-
         let mut trust_changed = false;
         if force_disconnect {
             trust_changed |= !self.trusted_peers.is_empty()
@@ -625,7 +584,6 @@ impl PeersGossiper {
         if trust_changed {
             self.update_trusted_peers_on_network();
         }
-
         self.current_topology.clone_from(&new_topology);
         let mut capabilities_changed = false;
         self.peer_capabilities.retain(|peer_id, _| {
@@ -654,7 +612,6 @@ impl PeersGossiper {
         }
         !unchanged || capabilities_changed
     }
-
     fn sorted_online_peers<I>(peers: I) -> UniqueVec<Peer>
     where
         I: IntoIterator<Item = Peer>,
@@ -663,7 +620,6 @@ impl PeersGossiper {
         peers.sort();
         UniqueVec::from_iter(peers)
     }
-
     fn gossip_fingerprint(
         peers: &UniqueVec<Peer>,
         peer_capabilities: &BTreeMap<PeerId, PeerTransportCapabilities>,
@@ -699,7 +655,6 @@ impl PeersGossiper {
         }
         fingerprint
     }
-
     fn gossip_peers(&mut self) -> bool {
         let online_peers = self.network.online_peers(Clone::clone);
         if self.refresh_online_peer_capabilities() {
@@ -723,7 +678,6 @@ impl PeersGossiper {
             data: peers_msg,
             priority: iroha_p2p::Priority::Low,
         });
-
         let trust = self.sign_trust_entries(&trust_infos);
         if !trust.is_empty() {
             let trust_msg = NetworkMessage::PeerTrustGossip(Box::new(PeerTrustGossip {
@@ -737,7 +691,6 @@ impl PeersGossiper {
         }
         true
     }
-
     fn trust_payload(network_id: &NetworkId, info: &PeerTrustInfo) -> Vec<u8> {
         let mut payload = Vec::from(b"iroha-peer-trust:v2\0".as_slice());
         payload.extend_from_slice(network_id.as_bytes());
@@ -746,7 +699,6 @@ impl PeersGossiper {
         payload.extend_from_slice(&info.score.encode());
         payload
     }
-
     fn trust_infos(&mut self, now: std::time::Instant) -> Vec<PeerTrustInfo> {
         self.trusted_peers
             .iter()
@@ -762,7 +714,6 @@ impl PeersGossiper {
             })
             .collect()
     }
-
     fn sign_trust_entries(&self, infos: &[PeerTrustInfo]) -> Vec<SignedPeerTrust> {
         infos
             .iter()
@@ -786,7 +737,6 @@ impl PeersGossiper {
             })
             .collect()
     }
-
     fn evict_if_low_trust(&mut self, peer_id: &PeerId, now: std::time::Instant) -> bool {
         if self.trust.should_drop(peer_id, now) {
             if self.trusted_peers.remove(peer_id) {
@@ -798,7 +748,6 @@ impl PeersGossiper {
             false
         }
     }
-
     fn restore_if_recovered(&mut self, peer_id: &PeerId, now: std::time::Instant) {
         if self.trust_candidates.contains(peer_id)
             && !self.trusted_peers.contains(peer_id)
@@ -809,7 +758,6 @@ impl PeersGossiper {
             self.update_trusted_peers_on_network();
         }
     }
-
     fn handle_peers_gossip(
         &mut self,
         PeersGossip {
@@ -867,7 +815,6 @@ impl PeersGossiper {
         }
         addresses_changed || capabilities_changed
     }
-
     fn handle_trust_gossip(
         &mut self,
         PeerTrustGossip { network_id, trust }: PeerTrustGossip,
@@ -897,7 +844,6 @@ impl PeersGossiper {
             return false;
         }
         self.restore_if_recovered(from_peer.id(), now);
-
         let outcome = process_trust_records(
             &self.network_id,
             trust,
@@ -922,7 +868,6 @@ impl PeersGossiper {
         }
         trust_changed
     }
-
     fn network_update_peers_addresses(&self) {
         let mut peers = Vec::new();
         for (id, address) in &self.initial_peers {
@@ -931,7 +876,6 @@ impl PeersGossiper {
         for (id, addresses) in &self.gossip_peers {
             peers.push((id.clone(), choose_address_majority_rule(addresses)));
         }
-
         // Always send the full set of known addresses; the network layer will
         // avoid redundant dials to already-connected peers.
         let update = UpdatePeers(
@@ -942,7 +886,6 @@ impl PeersGossiper {
         );
         self.network.update_peers_addresses(update);
     }
-
     fn refresh_online_peer_capabilities(&mut self) -> bool {
         let observed = self.network.online_peer_capabilities(Clone::clone);
         let mut changed = false;
@@ -956,7 +899,6 @@ impl PeersGossiper {
         }
         changed
     }
-
     fn network_update_peer_capabilities(&self) {
         let update = UpdatePeerCapabilities(
             self.peer_capabilities
@@ -969,14 +911,12 @@ impl PeersGossiper {
         );
         self.network.update_peer_capabilities(update);
     }
-
     fn update_trusted_peers_on_network(&self) {
         self.network.update_trusted_peers(UpdateTrustedPeers(
             self.trusted_peers.clone().into_iter().collect(),
         ));
     }
 }
-
 fn process_trust_records(
     network_id: &NetworkId,
     trust: Vec<SignedPeerTrust>,
@@ -1056,7 +996,6 @@ fn process_trust_records(
         drop_sender: false,
     }
 }
-
 fn choose_address_majority_rule(addresses: &BTreeMap<PeerId, SocketAddr>) -> SocketAddr {
     let mut count_map = BTreeMap::new();
     for address in addresses.values() {
@@ -1069,7 +1008,6 @@ fn choose_address_majority_rule(addresses: &BTreeMap<PeerId, SocketAddr>) -> Soc
         .expect("There must be no empty inner map in addresses")
         .clone()
 }
-
 /// Message for gossiping peers addresses.
 #[derive(Debug, Clone)]
 pub struct PeersGossip {
@@ -1078,14 +1016,12 @@ pub struct PeersGossip {
     /// Transport capabilities known to the sender keyed by peer id.
     pub peer_capabilities: BTreeMap<PeerId, PeerTransportCapabilities>,
 }
-
 /// Wire representation for peers gossip.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct PeersGossipWire {
     peers: Vec<Peer>,
     peer_capabilities: BTreeMap<PeerId, PeerTransportCapabilities>,
 }
-
 /// Signed trust gossip payload.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub struct PeerTrustGossip {
@@ -1094,7 +1030,6 @@ pub struct PeerTrustGossip {
     /// Signed trust reports emitted by the sender.
     pub trust: Vec<SignedPeerTrust>,
 }
-
 /// Trust information about a peer as reported by the sender.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub struct PeerTrustInfo {
@@ -1105,7 +1040,6 @@ pub struct PeerTrustInfo {
     /// Trust score recorded by the sender.
     pub score: i32,
 }
-
 /// Trust report bundled with a signature from the sender.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub struct SignedPeerTrust {
@@ -1114,7 +1048,6 @@ pub struct SignedPeerTrust {
     /// Signature proving authenticity of the trust record.
     pub signature: Vec<u8>,
 }
-
 impl NoritoSerialize for PeersGossip {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         // Serialize peers as Vec to preserve insertion order.
@@ -1125,12 +1058,10 @@ impl NoritoSerialize for PeersGossip {
         wire.serialize(writer)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for PeersGossip {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("PeersGossip decode")
     }
-
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
@@ -1152,7 +1083,6 @@ impl<'a> NoritoDeserialize<'a> for PeersGossip {
         })
     }
 }
-
 impl<'a> ncore::DecodeFromSlice<'a> for PeersGossip {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         if let Ok((wire, used)) = ncore::decode_field_canonical::<PeersGossipWire>(bytes) {
@@ -1174,20 +1104,17 @@ impl<'a> ncore::DecodeFromSlice<'a> for PeersGossip {
         ))
     }
 }
-
 impl<'a> ncore::DecodeFromSlice<'a> for PeerTrustGossip {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         ncore::decode_field_canonical(bytes)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet, HashSet},
         time::Instant,
     };
-
     use iroha_config::{
         base::WithOrigin,
         parameters::actual::{
@@ -1197,19 +1124,15 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::block::{BlockHeader, consensus_v2::ConsensusMode};
-
     use super::*;
-
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
     }
-
     fn trust_test_network_id() -> NetworkId {
         test_network_id(0x51)
     }
-
     fn signed_trust_payload_for_network(
         signer: &KeyPair,
         network_id: &NetworkId,
@@ -1223,35 +1146,28 @@ mod tests {
         .payload()
         .to_vec()
     }
-
     fn signed_trust_payload(signer: &KeyPair, info: &PeerTrustInfo) -> Vec<u8> {
         signed_trust_payload_for_network(signer, &trust_test_network_id(), info)
     }
-
     fn checked_seed_keypair(seed: &[u8]) -> KeyPair {
         KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
             .expect("derive checked peers gossiper Ed25519 fixture keypair")
     }
-
     fn checked_seed_keypair_with_algorithm(seed: &[u8], algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(seed.to_vec(), algorithm)
             .expect("derive checked peers gossiper fixture keypair")
     }
-
     fn checked_random_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("generate checked peers gossiper BLS fixture keypair")
     }
-
     #[test]
     fn peers_gossip_roundtrip() {
         // Use seeded keypairs to produce valid Ed25519 public keys deterministically.
         let kp1 = checked_seed_keypair(&[1, 2, 3, 4]);
         let kp2 = checked_seed_keypair(&[5, 6, 7, 8]);
-
         let peer1 = Peer::new("127.0.0.1:8080".parse().unwrap(), kp1.public_key().clone());
         let peer2 = Peer::new("127.0.0.1:8081".parse().unwrap(), kp2.public_key().clone());
-
         let gossip = PeersGossip {
             peers: UniqueVec::from_iter(vec![peer1.clone(), peer2.clone()]),
             peer_capabilities: BTreeMap::from([(
@@ -1263,7 +1179,6 @@ mod tests {
         };
         let bytes = ncore::to_bytes(&gossip).expect("serialize gossip");
         let decoded: PeersGossip = norito::decode_from_bytes(&bytes).expect("decode gossip");
-
         let decoded_peers: Vec<_> = decoded.peers.into_iter().collect();
         assert_eq!(decoded_peers, vec![peer1.clone(), peer2.clone()]);
         assert_eq!(
@@ -1273,7 +1188,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn peer_trust_gossip_roundtrip() {
         let kp = checked_seed_keypair(&[9, 10, 11, 12]);
@@ -1294,13 +1208,11 @@ mod tests {
         let bytes = ncore::to_bytes(&gossip).expect("serialize trust gossip");
         let decoded: PeerTrustGossip =
             norito::decode_from_bytes(&bytes).expect("decode trust gossip");
-
         assert_eq!(decoded.trust.len(), 1);
         assert_eq!(decoded.network_id, trust_test_network_id());
         assert_eq!(decoded.trust[0].info.peer_id, info.peer_id);
         assert_eq!(decoded.trust[0].signature, sig);
     }
-
     #[test]
     fn sign_trust_entries_produces_verifiable_records() {
         let signer = checked_seed_keypair(&[59, 60, 61, 62]);
@@ -1351,9 +1263,7 @@ mod tests {
             trusted: true,
             score: 2,
         }];
-
         let signed = gossiper.sign_trust_entries(&infos);
-
         assert_eq!(signed.len(), 1);
         assert_eq!(signed[0].info.peer_id, infos[0].peer_id);
         Signature::try_from_bytes(&signed[0].signature)
@@ -1363,7 +1273,6 @@ mod tests {
                 &PeersGossiper::trust_payload(&gossiper.network_id, &signed[0].info),
             )
             .expect("trust record signature must verify");
-
         let foreign_network_id = test_network_id(0x52);
         Signature::try_from_bytes(&signed[0].signature)
             .expect("checked peer-trust signature fixture")
@@ -1385,7 +1294,6 @@ mod tests {
             "foreign-network trust gossip must be rejected before trust-book mutation"
         );
     }
-
     #[test]
     fn trust_book_penalty_and_decay() {
         let mut trust = TrustBook::new(
@@ -1401,23 +1309,18 @@ mod tests {
         let peer_id = peer.id().clone();
         let now = Instant::now();
         trust.seed([peer_id.clone()], now);
-
         assert_eq!(trust.score(&peer_id, now), 0);
-
         let after_penalty =
             trust.penalize(&peer_id, TrustPenaltyKind::BadGossip, "bad_gossip", now);
         assert_eq!(after_penalty, -4);
         assert!(trust.should_drop(&peer_id, now));
-
         let later = now + Duration::from_millis(200);
         assert_eq!(trust.score(&peer_id, later), -2);
-
         let drop_score = trust.penalize(&peer_id, TrustPenaltyKind::BadGossip, "bad_gossip", later);
         assert_eq!(drop_score, -6);
         let later_again = later + Duration::from_millis(400);
         assert_eq!(trust.score(&peer_id, later_again), -1);
         assert!(!trust.should_drop(&peer_id, later_again));
-
         let unknown = trust.penalize(
             &peer_id,
             TrustPenaltyKind::UnknownPeer,
@@ -1427,13 +1330,11 @@ mod tests {
         assert_eq!(unknown, -4);
         assert!(trust.should_drop(&peer_id, later_again));
     }
-
     #[test]
     fn gossip_interval_respects_config_value() {
         let configured = Duration::from_millis(250);
         assert_eq!(PeersGossiper::gossip_interval(configured), configured);
     }
-
     #[test]
     fn gossip_backoff_doubles_and_resets() {
         let min = Duration::from_millis(100);
@@ -1447,7 +1348,6 @@ mod tests {
         let reset = PeersGossiper::next_gossip_backoff(backoff, min, max, true);
         assert_eq!(reset, min);
     }
-
     #[test]
     fn gossip_fingerprint_is_stable_and_detects_changes() {
         let kp1 = checked_seed_keypair(&[51, 52, 53, 54]);
@@ -1460,7 +1360,6 @@ mod tests {
             "127.0.0.1:9401".parse().expect("addr"),
             kp2.public_key().clone(),
         );
-
         let ordered = PeersGossiper::sorted_online_peers(vec![peer1.clone(), peer2.clone()]);
         let reversed = PeersGossiper::sorted_online_peers(vec![peer2.clone(), peer1.clone()]);
         let capabilities = BTreeMap::from([(
@@ -1474,7 +1373,6 @@ mod tests {
             trusted: true,
             score: 0,
         }];
-
         let ordered_fingerprint =
             PeersGossiper::gossip_fingerprint(&ordered, &capabilities, &trust);
         let reversed_fingerprint =
@@ -1483,7 +1381,6 @@ mod tests {
             ordered_fingerprint, reversed_fingerprint,
             "peer order should be canonicalized before fingerprinting"
         );
-
         let changed_trust = vec![PeerTrustInfo {
             peer_id: peer1.id().clone(),
             trusted: false,
@@ -1494,7 +1391,6 @@ mod tests {
             PeersGossiper::gossip_fingerprint(&ordered, &capabilities, &changed_trust),
             "trust changes should force a fresh gossip payload"
         );
-
         let changed_capabilities = BTreeMap::from([(
             peer1.id().clone(),
             PeerTransportCapabilities {
@@ -1507,7 +1403,6 @@ mod tests {
             "capability changes should force a fresh gossip payload"
         );
     }
-
     #[test]
     fn gossiper_handle_drops_messages_when_receiver_closed() {
         let handle = PeersGossiperHandle::closed_for_tests();
@@ -1516,7 +1411,6 @@ mod tests {
             "127.0.0.1:9999".parse().expect("addr"),
             kp.public_key().clone(),
         );
-
         handle.gossip(
             PeersGossip {
                 peers: UniqueVec::from_iter(vec![peer.clone()]),
@@ -1533,14 +1427,12 @@ mod tests {
         );
         handle.update_topology(UpdateTopology(HashSet::new()));
     }
-
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn topology_update_preserves_static_trusted_peers() {
         let listen_addr: SocketAddr = "127.0.0.1:0".parse().expect("addr");
         let key_pair = checked_random_bls_keypair();
         let peer_id = PeerId::from(key_pair.public_key().clone());
-
         let network_cfg = NetworkConfig {
             address: WithOrigin::inline(listen_addr.clone()),
             public_address: WithOrigin::inline(listen_addr.clone()),
@@ -1682,9 +1574,7 @@ mod tests {
             tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         };
-
         let network = IrohaNetwork::closed_for_tests();
-
         let local_peer = Peer::new(listen_addr, peer_id.clone());
         let observer_kp = checked_random_bls_keypair();
         let observer_peer = Peer::new(
@@ -1696,7 +1586,6 @@ mod tests {
             others: UniqueVec::from_iter(vec![observer_peer.clone()]),
             pops: BTreeMap::new(),
         };
-
         let trusted_list = trusted_peers.others.clone();
         let initial_peers = trusted_list
             .iter()
@@ -1736,7 +1625,6 @@ mod tests {
             ),
             network: network.clone(),
         };
-
         let dynamic_kp = checked_random_bls_keypair();
         let dynamic_peer_id = PeerId::from(dynamic_kp.public_key().clone());
         gossiper.trusted_peers.insert(dynamic_peer_id.clone());
@@ -1749,11 +1637,9 @@ mod tests {
                 last_updated: Instant::now(),
             },
         );
-
         let validator_kp = checked_random_bls_keypair();
         let validator_peer_id = PeerId::from(validator_kp.public_key().clone());
         gossiper.set_current_topology(UpdateTopology([validator_peer_id].into_iter().collect()));
-
         assert!(
             gossiper.trusted_peers.contains(observer_peer.id()),
             "configured observer should remain trusted even if excluded from topology"
@@ -1778,9 +1664,7 @@ mod tests {
             !gossiper.trust_candidates.contains(&dynamic_peer_id),
             "removed dynamic peer should not remain a trust candidate"
         );
-
         gossiper.set_current_topology(UpdateTopology(HashSet::new()));
-
         assert!(
             gossiper.current_topology.is_empty(),
             "empty topology updates should force the local dial set to disconnect"
@@ -1794,19 +1678,16 @@ mod tests {
             "empty topology updates should clear runtime trust candidates"
         );
     }
-
     #[test]
     fn topology_update_adds_new_trusted_peers() {
         let key_pair = checked_random_bls_keypair();
         let peer_id = PeerId::from(key_pair.public_key().clone());
         let _local_peer = Peer::new("127.0.0.1:9100".parse().expect("addr"), peer_id.clone());
-
         let observer_kp = checked_random_bls_keypair();
         let observer_peer = Peer::new(
             "127.0.0.1:9101".parse().expect("addr"),
             observer_kp.public_key().clone(),
         );
-
         let trusted_set: BTreeSet<_> = [peer_id.clone(), observer_peer.id().clone()]
             .into_iter()
             .collect();
@@ -1814,7 +1695,6 @@ mod tests {
         let current_topology = trusted_set.clone();
         let initial_peers =
             BTreeMap::from([(observer_peer.id().clone(), observer_peer.address().clone())]);
-
         let mut gossiper = PeersGossiper {
             peer_id,
             network_id: trust_test_network_id(),
@@ -1846,17 +1726,14 @@ mod tests {
             ),
             network: IrohaNetwork::closed_for_tests(),
         };
-
         let added_kp = checked_random_bls_keypair();
         let added_peer = Peer::new(
             "127.0.0.1:9102".parse().expect("addr"),
             added_kp.public_key().clone(),
         );
         let added_id = added_peer.id().clone();
-
         let update = UpdateTopology(HashSet::from_iter(vec![added_id.clone()]));
         gossiper.set_current_topology(update);
-
         assert!(
             gossiper.trusted_peers.contains(&added_id),
             "new topology member should be trusted"
@@ -1870,7 +1747,6 @@ mod tests {
             "new topology member should be seeded in trust book"
         );
     }
-
     #[test]
     fn trust_gossip_penalizes_unknown_peer_in_permissioned_mode() {
         let kp_sender = checked_seed_keypair(&[17, 18, 19, 20]);
@@ -1883,7 +1759,6 @@ mod tests {
             "127.0.0.1:9001".parse().expect("addr"),
             kp_unknown.public_key().clone(),
         );
-
         let info = PeerTrustInfo {
             peer_id: unknown_peer.id().clone(),
             trusted: false,
@@ -1901,7 +1776,6 @@ mod tests {
             -2,
         );
         trust_book.seed([from_peer.id().clone()], now);
-
         let outcome = process_trust_records(
             &trust_test_network_id(),
             trust,
@@ -1912,7 +1786,6 @@ mod tests {
             &mut trust_book,
             now,
         );
-
         assert!(
             outcome.drop_sender,
             "sender should be dropped after unknown peer penalty"
@@ -1920,7 +1793,6 @@ mod tests {
         assert!(outcome.newly_trusted.is_empty());
         assert!(trust_book.score(from_peer.id(), now) <= -2);
     }
-
     #[test]
     fn trust_gossip_penalizes_all_zero_signature_material() {
         let kp_sender = checked_seed_keypair(&[17, 18, 19, 20]);
@@ -1933,7 +1805,6 @@ mod tests {
             "127.0.0.1:9001".parse().expect("addr"),
             kp_reported.public_key().clone(),
         );
-
         let info = PeerTrustInfo {
             peer_id: reported_peer.id().clone(),
             trusted: true,
@@ -1953,7 +1824,6 @@ mod tests {
             -2,
         );
         trust_book.seed([from_peer.id().clone()], now);
-
         let outcome = process_trust_records(
             &trust_test_network_id(),
             trust,
@@ -1964,7 +1834,6 @@ mod tests {
             &mut trust_book,
             now,
         );
-
         assert!(
             outcome.drop_sender,
             "sender should be dropped after all-zero trust-signature penalty"
@@ -1972,7 +1841,6 @@ mod tests {
         assert!(outcome.newly_trusted.is_empty());
         assert!(trust_book.score(from_peer.id(), now) <= -2);
     }
-
     #[test]
     fn trust_gossip_penalizes_malformed_ed25519_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -1984,7 +1852,6 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let kp_sender = checked_seed_keypair(&[18, 19, 20, 21]);
         let kp_reported = checked_seed_keypair(&[22, 23, 24, 25]);
         let from_peer = Peer::new(
@@ -2001,7 +1868,6 @@ mod tests {
             score: 1,
         };
         let valid_signature = signed_trust_payload(&kp_sender, &info);
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -2022,7 +1888,6 @@ mod tests {
                 -2,
             );
             trust_book.seed([from_peer.id().clone()], now);
-
             let outcome = process_trust_records(
                 &trust_test_network_id(),
                 trust,
@@ -2033,7 +1898,6 @@ mod tests {
                 &mut trust_book,
                 now,
             );
-
             assert!(
                 outcome.drop_sender,
                 "{label} Ed25519 trust signature R must drop the sender"
@@ -2045,7 +1909,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn trust_gossip_penalizes_malformed_mldsa_signature_lengths() {
         let kp_sender =
@@ -2067,7 +1930,6 @@ mod tests {
         let valid_signature = signed_trust_payload(&kp_sender, &info);
         iroha_crypto::mldsa65_parse_signature(&valid_signature)
             .expect("valid trust-gossip ML-DSA signature parses");
-
         for (label, replacement_signature) in [
             (
                 "short",
@@ -2093,7 +1955,6 @@ mod tests {
                 -2,
             );
             trust_book.seed([from_peer.id().clone()], now);
-
             let outcome = process_trust_records(
                 &trust_test_network_id(),
                 trust,
@@ -2104,7 +1965,6 @@ mod tests {
                 &mut trust_book,
                 now,
             );
-
             assert!(
                 outcome.drop_sender,
                 "{label} ML-DSA trust signature length must drop the sender"
@@ -2116,7 +1976,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn unknown_peer_penalty_evicts_and_recovers_after_decay() {
         let kp_sender = checked_seed_keypair(&[33, 34, 35, 36]);
@@ -2129,7 +1988,6 @@ mod tests {
             "127.0.0.1:9201".parse().expect("addr"),
             kp_unknown.public_key().clone(),
         );
-
         let info = PeerTrustInfo {
             peer_id: unknown_peer.id().clone(),
             trusted: false,
@@ -2147,7 +2005,6 @@ mod tests {
             -2,
         );
         trust_book.seed([from_peer.id().clone()], now);
-
         let outcome = process_trust_records(
             &trust_test_network_id(),
             trust,
@@ -2158,10 +2015,8 @@ mod tests {
             &mut trust_book,
             now,
         );
-
         assert!(outcome.drop_sender);
         assert!(trust_book.should_drop(from_peer.id(), now));
-
         // After decay, the sender can clear the floor and be reinstated via the recovery path.
         let recovered_at = now + Duration::from_millis(300);
         let recovered_score = trust_book.score(from_peer.id(), recovered_at);
@@ -2169,7 +2024,6 @@ mod tests {
             recovered_score > trust_book.min_score(),
             "decay should allow recovery after penalties"
         );
-
         let mut trusted_peers = BTreeSet::new();
         let trust_candidates = BTreeSet::from([from_peer.id().clone()]);
         if trust_candidates.contains(from_peer.id())
@@ -2177,13 +2031,11 @@ mod tests {
         {
             trusted_peers.insert(from_peer.id().clone());
         }
-
         assert!(
             trusted_peers.contains(from_peer.id()),
             "peer should be eligible for reinstatement after decay"
         );
     }
-
     #[test]
     fn trust_gossip_allows_public_mode_without_penalty() {
         let kp_sender = checked_seed_keypair(&[25, 26, 27, 28]);
@@ -2196,7 +2048,6 @@ mod tests {
             "127.0.0.1:9101".parse().expect("addr"),
             kp_unknown.public_key().clone(),
         );
-
         let info = PeerTrustInfo {
             peer_id: unknown_peer.id().clone(),
             trusted: true,
@@ -2214,7 +2065,6 @@ mod tests {
             -4,
         );
         trust_book.seed([from_peer.id().clone()], now);
-
         let outcome = process_trust_records(
             &trust_test_network_id(),
             trust,
@@ -2225,7 +2075,6 @@ mod tests {
             &mut trust_book,
             now,
         );
-
         assert!(!outcome.drop_sender);
         assert_eq!(outcome.newly_trusted.len(), 1);
         assert_eq!(
@@ -2238,7 +2087,6 @@ mod tests {
         );
         assert_eq!(trust_book.score(from_peer.id(), now), 0);
     }
-
     #[test]
     fn trust_gossip_allows_trusted_sender_to_introduce_peer() {
         let kp_sender = checked_seed_keypair(&[41, 42, 43, 44]);
@@ -2251,7 +2099,6 @@ mod tests {
             "127.0.0.1:9301".parse().expect("addr"),
             kp_unknown.public_key().clone(),
         );
-
         let info = PeerTrustInfo {
             peer_id: unknown_peer.id().clone(),
             trusted: true,
@@ -2269,7 +2116,6 @@ mod tests {
             -2,
         );
         trust_book.seed([from_peer.id().clone()], now);
-
         let outcome = process_trust_records(
             &trust_test_network_id(),
             trust,
@@ -2280,7 +2126,6 @@ mod tests {
             &mut trust_book,
             now,
         );
-
         assert!(!outcome.drop_sender);
         assert!(
             outcome.newly_trusted.contains(unknown_peer.id()),

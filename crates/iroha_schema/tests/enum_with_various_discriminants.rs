@@ -1,14 +1,11 @@
 //! Enum discriminant schema tests.
-
 mod common;
-
 use common::{assert_schema, entry};
 use iroha_schema::prelude::*;
 use norito::{
     Decode, Encode,
     codec::{DecodeAll as _, Encode as _},
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, IntoSchema, Encode, Decode)]
 enum Foo {
     #[codec(index = 10)]
@@ -18,16 +15,13 @@ enum Foo {
     #[codec(index = 999)]
     D,
 }
-
 #[test]
 fn discriminant() {
     assert_schema::<Foo>("enum_various.discriminant", &[entry::<Foo>("Foo")]);
 }
-
 #[test]
 fn schema_discriminants_match_encoded_u32_tags() {
     let cases = [(Foo::A, 10_u32), (Foo::B, 11), (Foo::C, 300), (Foo::D, 999)];
-
     for (value, expected) in cases {
         let encoded = value.encode();
         assert_eq!(

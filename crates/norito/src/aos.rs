@@ -19,9 +19,7 @@
 //! Notes
 //! - These helpers are intentionally `pub` so tests and other crates can use
 //!   them for building/inspecting AoS bodies in isolation when needed.
-
 use crate::core::{self, Error};
-
 #[inline]
 fn take_bytes<'a>(body: &'a [u8], off: &mut usize, len: usize) -> Result<&'a [u8], Error> {
     let end = (*off).checked_add(len).ok_or_else(|| {
@@ -43,7 +41,6 @@ fn take_bytes<'a>(body: &'a [u8], off: &mut usize, len: usize) -> Result<&'a [u8
     *off = end;
     Ok(slice)
 }
-
 #[inline]
 fn take_byte(body: &[u8], off: &mut usize) -> Result<u8, Error> {
     let b = *body.get(*off).ok_or_else(|| {
@@ -59,7 +56,6 @@ fn take_byte(body: &[u8], off: &mut usize) -> Result<u8, Error> {
     })?;
     Ok(b)
 }
-
 #[inline]
 fn read_len_prefix(body: &[u8], off: &mut usize) -> Result<usize, Error> {
     let tail = body.get(*off..).ok_or_else(|| {
@@ -81,7 +77,6 @@ fn read_len_prefix(body: &[u8], off: &mut usize) -> Result<usize, Error> {
     })?;
     Ok(len)
 }
-
 #[inline]
 fn read_sequence_len_prefix(body: &[u8], off: &mut usize) -> Result<usize, Error> {
     let tail = body.get(*off..).ok_or_else(|| {
@@ -103,7 +98,6 @@ fn read_sequence_len_prefix(body: &[u8], off: &mut usize) -> Result<usize, Error
     })?;
     Ok(len)
 }
-
 #[inline]
 fn ensure_no_trailing(body: &[u8], off: usize) -> Result<(), Error> {
     if off == body.len() {
@@ -117,14 +111,12 @@ fn ensure_no_trailing(body: &[u8], off: usize) -> Result<(), Error> {
         ))
     }
 }
-
 /// Version byte for ad‑hoc AoS bodies emitted by adaptive helpers.
 ///
 /// The low nibble encodes the version of the AoS body layout, starting at 0x1.
 /// High nibble is reserved (must be 0 for now).
 pub const AOS_FORMAT_VERSION: u8 = 0x1;
 const MIN_AOS_ROW_BYTES: usize = 10;
-
 #[inline]
 pub fn write_len_and_ver(buf: &mut Vec<u8>, n: usize) {
     // Length prefix honoring active layout flags, followed by a single
@@ -132,7 +124,6 @@ pub fn write_len_and_ver(buf: &mut Vec<u8>, n: usize) {
     core::write_len_to_vec(buf, n as u64);
     buf.push(AOS_FORMAT_VERSION);
 }
-
 #[inline]
 pub fn read_len_and_ver(body: &[u8]) -> Result<(usize, usize), Error> {
     let mut off = 0usize;
@@ -155,9 +146,7 @@ pub fn read_len_and_ver(body: &[u8]) -> Result<(usize, usize), Error> {
     }
     Ok((n, off))
 }
-
 // === (u64, u32, bool) ===
-
 /// Encode AoS rows shaped as `(u64, u32, bool)` into an ad-hoc body.
 pub fn encode_rows_u64_u32_bool(rows: &[(u64, u32, bool)]) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -169,7 +158,6 @@ pub fn encode_rows_u64_u32_bool(rows: &[(u64, u32, bool)]) -> Vec<u8> {
     }
     buf
 }
-
 /// Decode AoS rows `(u64, u32, bool)` from an ad-hoc body.
 pub fn decode_rows_u64_u32_bool(body: &[u8]) -> Result<Vec<(u64, u32, bool)>, Error> {
     let (n, mut off) = read_len_and_ver(body)?;
@@ -186,9 +174,7 @@ pub fn decode_rows_u64_u32_bool(body: &[u8]) -> Result<Vec<(u64, u32, bool)>, Er
     ensure_no_trailing(body, off)?;
     Ok(out)
 }
-
 // === (u64, bytes/str, bool) ===
-
 /// Encode AoS rows shaped as `(u64, &[u8], bool)` into an ad-hoc body.
 pub fn encode_rows_u64_bytes_bool(rows: &[(u64, &[u8], bool)]) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -201,7 +187,6 @@ pub fn encode_rows_u64_bytes_bool(rows: &[(u64, &[u8], bool)]) -> Vec<u8> {
     }
     buf
 }
-
 /// Decode AoS rows `(u64, Vec<u8>, bool)` from an ad-hoc body.
 pub fn decode_rows_u64_bytes_bool(body: &[u8]) -> Result<Vec<(u64, Vec<u8>, bool)>, Error> {
     let (n, mut off) = read_len_and_ver(body)?;
@@ -218,7 +203,6 @@ pub fn decode_rows_u64_bytes_bool(body: &[u8]) -> Result<Vec<(u64, Vec<u8>, bool
     ensure_no_trailing(body, off)?;
     Ok(out)
 }
-
 /// Encode AoS rows shaped as `(u64, &str, bool)` into an ad-hoc body.
 pub fn encode_rows_u64_str_bool(rows: &[(u64, &str, bool)]) -> Vec<u8> {
     // Reuse the bytes version by converting to bytes on the fly.
@@ -228,7 +212,6 @@ pub fn encode_rows_u64_str_bool(rows: &[(u64, &str, bool)]) -> Vec<u8> {
         .collect();
     encode_rows_u64_bytes_bool(&borrowed)
 }
-
 /// Decode AoS rows `(u64, String, bool)` from an ad-hoc body.
 pub fn decode_rows_u64_str_bool(body: &[u8]) -> Result<Vec<(u64, String, bool)>, Error> {
     let tmp = decode_rows_u64_bytes_bool(body)?;
@@ -241,9 +224,7 @@ pub fn decode_rows_u64_str_bool(body: &[u8]) -> Result<Vec<(u64, String, bool)>,
     }
     Ok(out)
 }
-
 // === (u64, bytes/str, u32, bool) ===
-
 /// Encode AoS rows shaped as `(u64, &[u8], u32, bool)` into an ad-hoc body.
 pub fn encode_rows_u64_bytes_u32_bool(rows: &[(u64, &[u8], u32, bool)]) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -257,7 +238,6 @@ pub fn encode_rows_u64_bytes_u32_bool(rows: &[(u64, &[u8], u32, bool)]) -> Vec<u
     }
     buf
 }
-
 /// Decode AoS rows `(u64, Vec<u8>, u32, bool)` from an ad-hoc body.
 #[allow(clippy::type_complexity)]
 pub fn decode_rows_u64_bytes_u32_bool(
@@ -279,7 +259,6 @@ pub fn decode_rows_u64_bytes_u32_bool(
     ensure_no_trailing(body, off)?;
     Ok(out)
 }
-
 /// Encode AoS rows shaped as `(u64, &str, u32, bool)` into an ad-hoc body.
 pub fn encode_rows_u64_str_u32_bool(rows: &[(u64, &str, u32, bool)]) -> Vec<u8> {
     let borrowed: Vec<(u64, &[u8], u32, bool)> = rows
@@ -288,7 +267,6 @@ pub fn encode_rows_u64_str_u32_bool(rows: &[(u64, &str, u32, bool)]) -> Vec<u8> 
         .collect();
     encode_rows_u64_bytes_u32_bool(&borrowed)
 }
-
 /// Decode AoS rows `(u64, String, u32, bool)` from an ad-hoc body.
 pub fn decode_rows_u64_str_u32_bool(body: &[u8]) -> Result<Vec<(u64, String, u32, bool)>, Error> {
     let tmp = decode_rows_u64_bytes_u32_bool(body)?;
@@ -301,9 +279,7 @@ pub fn decode_rows_u64_str_u32_bool(body: &[u8]) -> Result<Vec<(u64, String, u32
     }
     Ok(out)
 }
-
 // === (u64, Option<&str>, bool) and (u64, Option<u32>, bool) ===
-
 /// Encode AoS rows `(u64, Option<&str>, bool)` using the standard ad‑hoc body.
 pub fn encode_rows_u64_optstr_bool(rows: &[(u64, Option<&str>, bool)]) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -322,7 +298,6 @@ pub fn encode_rows_u64_optstr_bool(rows: &[(u64, Option<&str>, bool)]) -> Vec<u8
     }
     buf
 }
-
 /// Decode AoS rows `(u64, Option<String>, bool)` from the ad‑hoc body.
 pub fn decode_rows_u64_optstr_bool(body: &[u8]) -> Result<Vec<(u64, Option<String>, bool)>, Error> {
     let (n, mut off) = read_len_and_ver(body)?;
@@ -350,7 +325,6 @@ pub fn decode_rows_u64_optstr_bool(body: &[u8]) -> Result<Vec<(u64, Option<Strin
     ensure_no_trailing(body, off)?;
     Ok(out)
 }
-
 /// Encode AoS rows `(u64, Option<u32>, bool)` using the standard ad‑hoc body.
 pub fn encode_rows_u64_optu32_bool(rows: &[(u64, Option<u32>, bool)]) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -368,7 +342,6 @@ pub fn encode_rows_u64_optu32_bool(rows: &[(u64, Option<u32>, bool)]) -> Vec<u8>
     }
     buf
 }
-
 /// Decode AoS rows `(u64, Option<u32>, bool)` from the ad‑hoc body.
 pub fn decode_rows_u64_optu32_bool(body: &[u8]) -> Result<Vec<(u64, Option<u32>, bool)>, Error> {
     let (n, mut off) = read_len_and_ver(body)?;
@@ -393,11 +366,8 @@ pub fn decode_rows_u64_optu32_bool(body: &[u8]) -> Result<Vec<(u64, Option<u32>,
     ensure_no_trailing(body, off)?;
     Ok(out)
 }
-
 // === (u64, enum(Name(String)|Code(u32)), bool) ===
-
 use crate::columnar::{EnumBorrow, RowEnumOwned};
-
 /// Encode AoS rows `(u64, enum{Name|Code}, bool)` using the historical ad-hoc body.
 ///
 /// Note: enum AoS keeps a minimal header without the version byte to match
@@ -423,7 +393,6 @@ pub fn encode_rows_u64_enum_bool(rows: &[(u64, EnumBorrow<'_>, bool)]) -> Vec<u8
     }
     buf
 }
-
 /// Decode AoS rows `(u64, RowEnumOwned, bool)` from the ad-hoc body.
 pub fn decode_rows_u64_enum_bool(body: &[u8]) -> Result<Vec<(u64, RowEnumOwned, bool)>, Error> {
     // Read length without version byte for enum AoS
@@ -464,11 +433,9 @@ pub fn decode_rows_u64_enum_bool(body: &[u8]) -> Result<Vec<(u64, RowEnumOwned, 
     ensure_no_trailing(body, off)?;
     Ok(out)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn aos_bytes_bool_roundtrip() {
         let rows: Vec<(u64, Vec<u8>, bool)> = vec![
@@ -484,7 +451,6 @@ mod tests {
         let dec = decode_rows_u64_bytes_bool(&enc).expect("decode");
         assert_eq!(rows, dec);
     }
-
     #[test]
     fn aos_str_bool_roundtrip() {
         let rows_owned: Vec<(u64, String, bool)> = vec![
@@ -500,7 +466,6 @@ mod tests {
         let dec = decode_rows_u64_str_bool(&enc).expect("decode");
         assert_eq!(rows_owned, dec);
     }
-
     #[test]
     fn aos_u32_bool_roundtrip() {
         let rows: Vec<(u64, u32, bool)> = vec![(1, 5, true), (2, 17, false), (9, 0, true)];
@@ -508,7 +473,6 @@ mod tests {
         let dec = decode_rows_u64_u32_bool(&enc).expect("decode");
         assert_eq!(rows, dec);
     }
-
     #[test]
     fn aos_str_u32_bool_roundtrip() {
         let rows_owned: Vec<(u64, String, u32, bool)> =
@@ -521,7 +485,6 @@ mod tests {
         let dec = decode_rows_u64_str_u32_bool(&enc).expect("decode");
         assert_eq!(rows_owned, dec);
     }
-
     #[test]
     fn aos_opt_str_bool_roundtrip() {
         let rows: Vec<(u64, Option<&str>, bool)> = vec![(1, Some("x"), true), (2, None, false)];
@@ -531,7 +494,6 @@ mod tests {
             vec![(1, Some("x".to_string()), true), (2, None, false)];
         assert_eq!(decoded, expected);
     }
-
     #[test]
     fn aos_opt_u32_bool_roundtrip() {
         let rows: Vec<(u64, Option<u32>, bool)> = vec![(10, Some(7), true), (11, None, false)];
@@ -539,15 +501,12 @@ mod tests {
         let decoded = decode_rows_u64_optu32_bool(&bytes).expect("decode");
         assert_eq!(decoded, vec![(10, Some(7), true), (11, None, false)]);
     }
-
     #[test]
     fn aos_opt_str_rejects_noncanonical_option_tag() {
         let mut bytes = encode_rows_u64_optstr_bool(&[(1, Some("x"), true)]);
         let tag_offset = core::len_prefix_len(1) + 1 + 8;
         bytes[tag_offset] = 2;
-
         let err = decode_rows_u64_optstr_bool(&bytes).expect_err("invalid option tag");
-
         assert!(matches!(
             err,
             Error::InvalidTag {
@@ -556,15 +515,12 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn aos_opt_u32_rejects_noncanonical_option_tag() {
         let mut bytes = encode_rows_u64_optu32_bool(&[(1, Some(7), true)]);
         let tag_offset = core::len_prefix_len(1) + 1 + 8;
         bytes[tag_offset] = 2;
-
         let err = decode_rows_u64_optu32_bool(&bytes).expect_err("invalid option tag");
-
         assert!(matches!(
             err,
             Error::InvalidTag {
@@ -573,7 +529,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn aos_header_rejects_excessive_row_count() {
         let mut body = Vec::new();
@@ -581,7 +536,6 @@ mod tests {
         let result = read_len_and_ver(&body);
         assert!(matches!(result, Err(Error::LengthMismatch)));
     }
-
     #[test]
     fn aos_enum_rejects_excessive_row_count() {
         let mut body = Vec::new();

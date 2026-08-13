@@ -5,9 +5,7 @@
 //! allocate before pagination observes an item. Unadapted producers stop
 //! before `ValidQuery::execute`; each admitted producer instead owns rows
 //! through its query-specific bounded adapter.
-
 #![allow(unsafe_code)]
-
 use std::{
     alloc::{Layout, alloc},
     any::TypeId,
@@ -15,7 +13,6 @@ use std::{
     mem::MaybeUninit,
     ptr::NonNull,
 };
-
 use iroha_data_model::{
     peer::PeerId,
     query::{dsl::CompoundPredicate, error::QueryExecutionFail as Error, parameters::QueryParams},
@@ -24,13 +21,11 @@ use norito::{
     core::NoritoSerialize,
     json::{JsonSerialize, Value},
 };
-
 use super::{OrdinaryQueryExecutionLimits, ordinary_memory::OrdinaryCursorMode};
 use crate::{
     smartcontracts::ValidQuery,
     state::{StateReadOnly, WorldReadOnly},
 };
-
 /// The world-state producer count admitted through a source-specific adapter.
 #[cfg(test)]
 pub(super) const ADMITTED_WORLD_PRODUCERS: usize = 1;
@@ -41,7 +36,6 @@ pub(super) const WORLD_PRODUCER_RESIDUALS: usize = 36;
 /// The Kura producer count awaiting an authenticated bounded reader/projection.
 #[cfg(test)]
 pub(super) const KURA_PRODUCER_RESIDUALS: usize = 3;
-
 /// Execute a legacy iterable only for callers which did not attach the
 /// server-owned ordinary memory corridor.
 ///
@@ -88,25 +82,21 @@ where
         query, predicate, state,
     )?))
 }
-
 enum OrdinaryIterable<I, T> {
     Legacy(I),
     Peers(ExactOwnedRows<T>),
 }
-
 impl<I, T> Iterator for OrdinaryIterable<I, T>
 where
     I: Iterator<Item = T>,
 {
     type Item = T;
-
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Legacy(iter) => iter.next(),
             Self::Peers(iter) => iter.next(),
         }
     }
-
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
             Self::Legacy(iter) => iter.size_hint(),
@@ -114,7 +104,6 @@ where
         }
     }
 }
-
 fn cast_owned_exact<From: 'static, To: 'static>(value: From) -> Result<To, Error> {
     if TypeId::of::<From>() != TypeId::of::<To>() {
         return Err(Error::Conversion(
@@ -127,14 +116,12 @@ fn cast_owned_exact<From: 'static, To: 'static>(value: From) -> Result<To, Error
     let source: *const From = &*value;
     Ok(unsafe { source.cast::<To>().read() })
 }
-
 /// Serialize a predicate candidate through the checked ordinary JSON helper.
 pub(crate) fn predicate_json_value_for_execution<T: JsonSerialize + ?Sized>(
     value: &T,
 ) -> Option<Value> {
     iroha_data_model::query::json::predicate_json_value_for_execution(value)
 }
-
 fn try_exact_uninit_box<T>(len: usize) -> Result<(Box<[MaybeUninit<T>]>, u64), Error> {
     let layout = Layout::array::<MaybeUninit<T>>(len).map_err(|_| Error::CapacityLimit)?;
     let bytes = u64::try_from(layout.size()).map_err(|_| Error::CapacityLimit)?;
@@ -152,13 +139,11 @@ fn try_exact_uninit_box<T>(len: usize) -> Result<(Box<[MaybeUninit<T>]>, u64), E
     // representation permitted for a zero-sized allocation) and is unique.
     Ok((unsafe { Box::from_raw(slice) }, bytes))
 }
-
 pub(super) struct ExactOwnedRows<T> {
     slots: Box<[MaybeUninit<T>]>,
     len: usize,
     next: usize,
 }
-
 impl<T> ExactOwnedRows<T> {
     pub(super) fn new(len: usize, maximum_bytes: u64) -> Result<Self, Error> {
         let layout = Layout::array::<MaybeUninit<T>>(len).map_err(|_| Error::CapacityLimit)?;
@@ -174,7 +159,6 @@ impl<T> ExactOwnedRows<T> {
             next: 0,
         })
     }
-
     pub(super) fn push(&mut self, value: T) -> Result<(), Error> {
         let Some(slot) = self.slots.get_mut(self.len) else {
             return Err(Error::CapacityLimit);
@@ -183,14 +167,12 @@ impl<T> ExactOwnedRows<T> {
         self.len += 1;
         Ok(())
     }
-
     pub(super) fn finish(self) -> Result<Self, Error> {
         if self.len != self.slots.len() {
             return Err(Error::CapacityLimit);
         }
         Ok(self)
     }
-
     pub(super) fn into_vec(self) -> Result<Vec<T>, Error> {
         if self.next != 0 || self.len != self.slots.len() {
             return Err(Error::CapacityLimit);
@@ -205,10 +187,8 @@ impl<T> ExactOwnedRows<T> {
         Ok(unsafe { Box::from_raw(raw) }.into_vec())
     }
 }
-
 impl<T> Iterator for ExactOwnedRows<T> {
     type Item = T;
-
     fn next(&mut self) -> Option<Self::Item> {
         if self.next == self.len {
             return None;
@@ -218,15 +198,12 @@ impl<T> Iterator for ExactOwnedRows<T> {
         // SAFETY: `index < len` is initialized and transferred once.
         Some(unsafe { self.slots[index].assume_init_read() })
     }
-
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.len.saturating_sub(self.next);
         (remaining, Some(remaining))
     }
 }
-
 impl<T> ExactSizeIterator for ExactOwnedRows<T> {}
-
 impl<T> Drop for ExactOwnedRows<T> {
     fn drop(&mut self) {
         for slot in &mut self.slots[self.next..self.len] {
@@ -235,18 +212,15 @@ impl<T> Drop for ExactOwnedRows<T> {
         }
     }
 }
-
 struct ExactFrameWriter {
     bytes: Box<[MaybeUninit<u8>]>,
     written: usize,
 }
-
 impl ExactFrameWriter {
     fn new(len: usize) -> Result<Self, Error> {
         let (bytes, _) = try_exact_uninit_box(len)?;
         Ok(Self { bytes, written: 0 })
     }
-
     fn finish(self) -> Result<Box<[u8]>, Error> {
         if self.written != self.bytes.len() {
             return Err(Error::CapacityLimit);
@@ -255,7 +229,6 @@ impl ExactFrameWriter {
         Ok(unsafe { self.bytes.assume_init() })
     }
 }
-
 impl io::Write for ExactFrameWriter {
     fn write(&mut self, source: &[u8]) -> io::Result<usize> {
         let remaining = self.bytes.len().saturating_sub(self.written);
@@ -275,12 +248,10 @@ impl io::Write for ExactFrameWriter {
         self.written += take;
         Ok(take)
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
-
 /// Encode one canonical frame through an exact fallible allocation. Converting
 /// the completed box into a vector is zero-copy and preserves `capacity == len`.
 pub(super) fn encode_bounded_frame<T: NoritoSerialize>(
@@ -296,7 +267,6 @@ pub(super) fn encode_bounded_frame<T: NoritoSerialize>(
         .map_err(|_| Error::CapacityLimit)?;
     Ok(writer.finish()?.into_vec())
 }
-
 fn decode_bounded_frame<T>(
     frame: &[u8],
     maximum_allocated_bytes: usize,
@@ -320,7 +290,6 @@ where
         usage.total_allocated_bytes(),
     ))
 }
-
 fn collect_peers(
     params: &QueryParams,
     limits: OrdinaryQueryExecutionLimits,
@@ -351,7 +320,6 @@ fn collect_peers(
     let mut selected = 0_u64;
     let mut visited = 0_u64;
     let mut traversed_bytes = 0_u64;
-
     for peer in state.world().peers() {
         let frame = encode_bounded_frame(peer, maximum)?;
         visited = visited.checked_add(1).ok_or(Error::CapacityLimit)?;
@@ -373,7 +341,6 @@ fn collect_peers(
             break;
         }
     }
-
     let selected = usize::try_from(selected).map_err(|_| Error::CapacityLimit)?;
     let mut rows = ExactOwnedRows::new(selected, source_maximum)?;
     let mut retained_bytes = 0_u64;
@@ -414,12 +381,10 @@ fn collect_peers(
     }
     rows.finish()
 }
-
 fn peer_prefix_target(fetch: u64, limit: Option<u64>) -> Result<u64, Error> {
     let probe = fetch.checked_add(1).ok_or(Error::CapacityLimit)?;
     Ok(limit.map_or(probe, |limit| limit.min(probe)))
 }
-
 /// Fixed-layout fallible max-heap used to retain the smallest `capacity`
 /// values without `Vec`/`BinaryHeap` capacity excess.
 pub(super) struct ExactTopK<T> {
@@ -427,7 +392,6 @@ pub(super) struct ExactTopK<T> {
     len: usize,
     next: usize,
 }
-
 impl<T: Ord> ExactTopK<T> {
     /// Allocate exactly `keep` slots, rejecting layout overflow, the caller's
     /// byte ceiling, or allocator failure before any item is inserted.
@@ -448,18 +412,15 @@ impl<T: Ord> ExactTopK<T> {
             bytes,
         ))
     }
-
     fn initialized(&self) -> &[T] {
         // SAFETY: every slot below `len` is initialized and `MaybeUninit<T>`
         // has the same layout as `T`.
         unsafe { core::slice::from_raw_parts(self.slots.as_ptr().cast::<T>(), self.len) }
     }
-
     fn initialized_mut(&mut self) -> &mut [T] {
         // SAFETY: every slot below `len` is initialized and uniquely borrowed.
         unsafe { core::slice::from_raw_parts_mut(self.slots.as_mut_ptr().cast::<T>(), self.len) }
     }
-
     fn sift_up(&mut self, mut index: usize) {
         let values = self.initialized_mut();
         while index > 0 {
@@ -471,7 +432,6 @@ impl<T: Ord> ExactTopK<T> {
             index = parent;
         }
     }
-
     fn sift_down(&mut self, mut index: usize) {
         let len = self.len;
         let values = self.initialized_mut();
@@ -493,7 +453,6 @@ impl<T: Ord> ExactTopK<T> {
             index = largest;
         }
     }
-
     /// Retain the smallest `capacity` values and return the displaced value.
     pub(super) fn retain_smallest(&mut self, value: T) -> Option<T> {
         if self.slots.is_empty() {
@@ -512,7 +471,6 @@ impl<T: Ord> ExactTopK<T> {
         self.sift_down(0);
         Some(displaced)
     }
-
     /// Convert the retained heap into ascending iterator order in-place.
     pub(super) fn into_sorted(mut self) -> Self {
         self.initialized_mut().sort_unstable();
@@ -520,10 +478,8 @@ impl<T: Ord> ExactTopK<T> {
         self
     }
 }
-
 impl<T> Iterator for ExactTopK<T> {
     type Item = T;
-
     fn next(&mut self) -> Option<Self::Item> {
         if self.next == self.len {
             return None;
@@ -534,15 +490,12 @@ impl<T> Iterator for ExactTopK<T> {
         // that slot's ownership exactly once.
         Some(unsafe { self.slots[index].assume_init_read() })
     }
-
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.len.saturating_sub(self.next);
         (remaining, Some(remaining))
     }
 }
-
 impl<T> ExactSizeIterator for ExactTopK<T> {}
-
 impl<T> Drop for ExactTopK<T> {
     fn drop(&mut self) {
         for slot in &mut self.slots[self.next..self.len] {
@@ -552,11 +505,9 @@ impl<T> Drop for ExactTopK<T> {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn residual_inventory_is_explicit_and_exhaustive() {
         assert_eq!(ADMITTED_WORLD_PRODUCERS, 1);
@@ -567,7 +518,6 @@ mod tests {
             40
         );
     }
-
     #[test]
     fn bounded_peer_prefix_matches_ephemeral_pagination_probe() {
         assert_eq!(peer_prefix_target(16, None).expect("probe"), 17);
@@ -575,7 +525,6 @@ mod tests {
         assert_eq!(peer_prefix_target(16, Some(16)).expect("page limit"), 16);
         assert_eq!(peer_prefix_target(16, Some(32)).expect("long limit"), 17);
     }
-
     #[test]
     fn exact_topk_retains_smallest_values_in_order() {
         let (mut heap, bytes) = ExactTopK::new(3, 3 * 8).expect("three exact u64 slots");
@@ -585,12 +534,10 @@ mod tests {
         }
         assert_eq!(heap.into_sorted().collect::<Vec<_>>(), [2, 3, 5]);
     }
-
     #[test]
     fn exact_topk_rejects_max_minus_one_before_allocation() {
         assert!(ExactTopK::<u64>::new(3, 3 * 8 - 1).is_err());
     }
-
     #[test]
     fn exact_canonical_frame_has_no_capacity_excess() {
         let expected = norito::core::encoded_frame_len(&17_u64).expect("count frame");
@@ -599,7 +546,6 @@ mod tests {
         assert_eq!(bytes.capacity(), expected);
         assert!(encode_bounded_frame(&17_u64, expected - 1).is_err());
     }
-
     #[test]
     fn ordinary_source_never_reaches_legacy_execute() {
         let source = include_str!("ordinary_iterable.rs");

@@ -5,11 +5,9 @@
 //! These DTOs provide the on-wire and persistence representations of merge
 //! entries. See `specs/merge_ledger.md` for the normative behaviour the
 //! runtime must enforce when producing and validating these records.
-
 use iroha_crypto::{Hash, HashOf, MerkleTree, PublicKey};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{
     NetworkId,
     block::{
@@ -24,7 +22,6 @@ use crate::{
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
-
 const MERGE_LEDGER_ENTRY_HASH_DOMAIN: &[u8] = b"iroha:merge:ledger-entry:v2\0";
 const LANE_DRAIN_INTENT_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-intent:v1\0";
 const LANE_DRAIN_CERTIFICATE_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-certificate:v1\0";
@@ -32,33 +29,28 @@ const LANE_DRAIN_CERTIFICATE_SIGNATURE_DOMAIN: &[u8] =
     b"iroha:nexus:lane-drain-certificate-signature:v1\0";
 const LANE_DRAIN_EMPTY_UNRESOLVED_EVIDENCE_ROOT_DOMAIN: &[u8] =
     b"iroha:nexus:lane-drain:unresolved-evidence:empty:v1\0";
-
 /// Current-only first-release merge-ledger entry layout.
 ///
 /// Version two adds globally ordered queue-plan admission controls. Version one
 /// has no compatibility path and is intentionally rejected by live consensus.
 pub const MERGE_LEDGER_ENTRY_VERSION_V2: u8 = 2;
-
 /// Maximum canonical framed size of one full merge-ledger entry.
 ///
 /// This is the protocol-wide limit used by pending sidecars, compact block
 /// references, recovery, and admission. Keep all consumers on this constant so
 /// a certified entry cannot be accepted by one layer and rejected by another.
 pub const MAX_MERGE_LEDGER_ENTRY_BYTES: usize = 16 * 1024 * 1024;
-
 /// Maximum canonical size of the execution-batch field inside a merge entry.
 ///
 /// Four MiB of the full-entry envelope is reserved for the active-lane set,
 /// snapshots, merge QC, and Norito framing. Admission still checks the exact
 /// final full-entry size after the QC is attached.
 pub const MAX_MERGE_EXECUTION_BATCH_BYTES: usize = 12 * 1024 * 1024;
-
 /// Maximum number of ordered entrypoints in one certified merge execution batch.
 ///
 /// Lane-local proposal admission uses the same ceiling so every certified lane
 /// block is individually eligible for inclusion in a global merge batch.
 pub const MAX_MERGE_EXECUTION_ENTRYPOINTS: usize = 4_096;
-
 /// Maximum canonical size of one authenticated autonomous-lane source bundle.
 ///
 /// A merge execution repeats selected payload material beside this bundle and
@@ -66,16 +58,12 @@ pub const MAX_MERGE_EXECUTION_ENTRYPOINTS: usize = 4_096;
 /// four-MiB source ceiling therefore preserves enough of the 12-MiB execution
 /// envelope for every individually certified lane source to remain mergeable.
 pub const MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES: usize = 4 * 1024 * 1024;
-
 /// Maximum number of globally ordered queue-plan admission controls in one entry.
 pub const MAX_MERGE_QUEUE_PLAN_ADMISSIONS: usize = 4_096;
-
 /// Maximum canonical size of one opaque queue-plan admission certificate.
 pub const MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES: usize = 1024 * 1024;
-
 /// Maximum aggregate queue-plan admission bytes carried by one merge entry.
 pub const MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES: usize = 4 * 1024 * 1024;
-
 /// Maximum canonical size reserved for the certified-proposal half of one source bundle.
 ///
 /// The certified envelope repeats the bounded entrypoint commitments in the proposal and
@@ -83,7 +71,6 @@ pub const MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES: usize = 4 * 1024 * 1024;
 /// Keeping this reservation protocol-wide prevents an autonomous view chain from consuming the
 /// complete source budget before the globally executable certificate is attached.
 pub const MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES: usize = 1024 * 1024;
-
 /// Maximum canonical size of the autonomous payload and authenticated view-chain half.
 ///
 /// `NewView` persistence checkpoints before this budget is exceeded. The independently bounded
@@ -91,26 +78,22 @@ pub const MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES: usize = 1024 * 1024;
 /// [`MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES`].
 pub const MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES: usize =
     MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES - MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
-
 /// Current versioned merge-committee share layout.
 ///
 /// Version two is the first layout that transports the leader's exact pre-QC
 /// candidate body. The preceding unversioned layout has no compatibility path
 /// and is intentionally not admitted by live consensus.
 pub const MERGE_COMMITTEE_SIGNATURE_VERSION_V2: u8 = 2;
-
 /// Return whether an exact canonical full-entry length is protocol-admissible.
 #[must_use]
 pub const fn merge_ledger_entry_size_within_limit(encoded_len: usize) -> bool {
     encoded_len <= MAX_MERGE_LEDGER_ENTRY_BYTES
 }
-
 /// Return whether an exact canonical execution-batch length fits its reserved envelope.
 #[must_use]
 pub const fn merge_execution_batch_size_within_limit(encoded_len: usize) -> bool {
     encoded_len <= MAX_MERGE_EXECUTION_BATCH_BYTES
 }
-
 /// Return whether opaque queue-plan admission bytes fit their protocol envelope.
 #[must_use]
 pub fn merge_queue_plan_admissions_within_limits(admissions: &[Vec<u8>]) -> bool {
@@ -127,7 +110,6 @@ pub fn merge_queue_plan_admissions_within_limits(admissions: &[Vec<u8>]) -> bool
         })
         .is_some_and(|total| total <= MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES)
 }
-
 /// Proof of possession for one signer selected by a merge QC bitmap.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -140,7 +122,6 @@ pub struct MergeSignerProof {
     /// BLS proof of possession for the indexed validator key.
     pub proof_of_possession: Vec<u8>,
 }
-
 /// Exact durable Native AMX application identity required by a drain frontier.
 ///
 /// The hashes bind the independently persisted finality, manifest, receipt,
@@ -190,12 +171,10 @@ pub struct LaneDrainNativeFrontierEvidenceV1 {
     /// Hash of the exact bounded route/incarnation latest-index artifact.
     pub latest_index_artifact_hash: Hash,
 }
-
 impl LaneDrainNativeFrontierEvidenceV1 {
     /// Current exact first-release evidence layout version.
     pub const VERSION: u16 = 1;
 }
-
 /// One evidence-aware lane frontier shared by every drain phase.
 ///
 /// `native_application` is present only when the replicated WSV frontier was
@@ -228,11 +207,9 @@ pub struct LaneDrainFrontierV1 {
     /// protocol empty root.
     pub unresolved_evidence_root: Hash,
 }
-
 impl LaneDrainFrontierV1 {
     /// Current exact first-release layout version.
     pub const VERSION: u8 = 1;
-
     /// Build an ordinary (non-Native-derived) frontier.
     #[must_use]
     pub fn ordinary(
@@ -253,7 +230,6 @@ impl LaneDrainFrontierV1 {
             unresolved_evidence_root: lane_drain_empty_unresolved_evidence_root(),
         }
     }
-
     /// Return whether this frontier binds the supplied active route.
     #[must_use]
     pub fn matches_route(
@@ -267,13 +243,11 @@ impl LaneDrainFrontierV1 {
             && self.lane_incarnation == lane_incarnation
     }
 }
-
 /// Canonical root proving that no unresolved drain evidence was selected.
 #[must_use]
 pub fn lane_drain_empty_unresolved_evidence_root() -> Hash {
     Hash::new(LANE_DRAIN_EMPTY_UNRESOLVED_EVIDENCE_ROOT_DOMAIN)
 }
-
 /// Canonical first phase of an automatic lane retirement.
 ///
 /// Committing an intent closes the named lane to new work after
@@ -315,7 +289,6 @@ pub struct LaneDrainIntentV1 {
     /// Minimum distinct signers required for a drain certificate.
     pub min_quorum: u32,
 }
-
 impl LaneDrainIntentV1 {
     /// Return the domain-separated canonical intent hash.
     #[must_use]
@@ -328,7 +301,6 @@ impl LaneDrainIntentV1 {
         ]))
     }
 }
-
 /// Lane-committee statement that no certified successor exists beyond one
 /// final contiguous frontier for a committed drain intent.
 ///
@@ -350,7 +322,6 @@ pub struct LaneDrainCertificateBodyV1 {
     /// Final evidence-aware contiguous frontier certified by the committee.
     pub final_frontier: LaneDrainFrontierV1,
 }
-
 impl LaneDrainCertificateBodyV1 {
     /// Build the domain-separated BLS signature preimage.
     #[must_use]
@@ -364,7 +335,6 @@ impl LaneDrainCertificateBodyV1 {
         preimage
     }
 }
-
 /// Self-contained quorum certificate closing one lane incarnation at an exact
 /// globally applied frontier.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -384,7 +354,6 @@ pub struct LaneDrainCertificateV1 {
     /// Aggregate BLS-normal signature over [`LaneDrainCertificateBodyV1::signature_preimage`].
     pub aggregate_signature: Vec<u8>,
 }
-
 impl LaneDrainCertificateV1 {
     /// Return the domain-separated canonical certificate hash.
     #[must_use]
@@ -397,7 +366,6 @@ impl LaneDrainCertificateV1 {
         ]))
     }
 }
-
 /// Globally carried proof that an exact lane drain certificate was accepted at
 /// a specific canonical carrier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -418,12 +386,10 @@ pub struct LaneDrainCommitmentV1 {
     /// Exact signed evidence-aware frontier carried by the certificate.
     pub frontier: LaneDrainFrontierV1,
 }
-
 impl LaneDrainCommitmentV1 {
     /// Current exact first-release commitment layout version.
     pub const VERSION: u8 = 1;
 }
-
 /// Consensus-persisted two-phase drain state embedded in an autoscale-managed
 /// lane's reserved metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -440,7 +406,6 @@ pub struct LaneDrainStateV1 {
     /// Globally carried certificate commitment once the lane is fully drained.
     pub commitment: Option<LaneDrainCommitmentV1>,
 }
-
 impl LaneDrainStateV1 {
     /// Return `true` once the exact lane committee certificate has been
     /// globally ordered by a later merge carrier.
@@ -449,7 +414,6 @@ impl LaneDrainStateV1 {
         self.commitment.is_some()
     }
 }
-
 /// Canonical active lane incarnation and first eligible proposal height.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -468,7 +432,6 @@ pub struct MergeLaneBinding {
     /// First global proposal height eligible to use this incarnation.
     pub activation_height: u64,
 }
-
 /// BFT quorum certificate produced by the merge committee for a merge-ledger entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -501,7 +464,6 @@ pub struct MergeQuorumCertificate {
     /// Deterministic transcript hash used when verifying the certificate.
     pub message_digest: Hash,
 }
-
 impl MergeQuorumCertificate {
     /// Construct a new quorum certificate using explicit fields.
     #[expect(
@@ -538,7 +500,6 @@ impl MergeQuorumCertificate {
         }
     }
 }
-
 /// Signature share emitted by a merge-committee member.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -569,7 +530,6 @@ pub struct MergeCommitteeSignature {
     /// before emitting a follower share.
     pub leader_candidate_body: Option<Vec<u8>>,
 }
-
 /// Canonical per-lane snapshot recorded inside a merge-ledger entry.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -606,7 +566,6 @@ pub struct MergeLaneSnapshot {
     /// consults a follower's opportunistic relay cache.
     pub relay_envelope: Option<LaneRelayEnvelope>,
 }
-
 /// Proof of possession retained for a signer of an embedded lane-local QC.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -619,7 +578,6 @@ pub struct MergeLaneSignerProof {
     /// BLS proof of possession for `public_key`.
     pub proof_of_possession: Vec<u8>,
 }
-
 /// One commit-certified lane block and its deterministic execution transcript.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -678,7 +636,6 @@ pub struct MergeLaneExecution {
     /// Canonical hash of `settlement_commitment`.
     pub settlement_hash: HashOf<LaneBlockCommitment>,
 }
-
 /// Merge-committee-certified total-order execution batch.
 ///
 /// The batch is self-contained so a node that crashes after the merge-log append
@@ -719,7 +676,6 @@ pub struct MergeExecutionBatch {
     /// Canonical digest of every preceding field in this batch.
     pub batch_hash: Hash,
 }
-
 /// Ordered log entry produced by the merge ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -764,24 +720,20 @@ pub struct MergeLedgerEntry {
     /// certificate bindings through an immutable WSV compare-and-set.
     pub queue_plan_admissions: Vec<Vec<u8>>,
 }
-
 impl MergeLedgerEntry {
     /// Current supported entry layout.
     pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V2;
-
     /// Return whether this entry advertises the current first-release layout.
     #[must_use]
     pub const fn has_current_version(&self) -> bool {
         self.version == Self::VERSION
     }
-
     /// Return the canonical framed Norito bytes used by hash-addressed entry sidecars.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
         norito::encode_canonical(self)
             .expect("merge-ledger entry must have a canonical Norito encoding")
     }
-
     /// Return the single canonical, domain-separated hash used by compact block
     /// references, pending sidecars, committed carrier indexes, and receipts.
     #[must_use]
@@ -792,25 +744,21 @@ impl MergeLedgerEntry {
             bytes.as_slice(),
         ]))
     }
-
     /// Return the exact canonical framed length committed by compact references.
     #[must_use]
     pub fn canonical_encoded_len(&self) -> u64 {
         u64::try_from(self.canonical_bytes().len()).unwrap_or(u64::MAX)
     }
-
     /// Return whether this entry fits the protocol-wide full-entry envelope.
     #[must_use]
     pub fn canonical_size_within_limit(&self) -> bool {
         merge_ledger_entry_size_within_limit(self.canonical_bytes().len())
     }
-
     /// Number of lanes represented by this entry.
     #[must_use]
     pub fn lane_count(&self) -> usize {
         self.lane_snapshots.len()
     }
-
     /// Canonical lane tips derived from [`Self::lane_snapshots`].
     #[must_use]
     pub fn lane_tips(&self) -> Vec<HashOf<BlockHeader>> {
@@ -819,7 +767,6 @@ impl MergeLedgerEntry {
             .map(|snapshot| snapshot.tip_hash)
             .collect()
     }
-
     /// Canonical merge-hint roots derived from [`Self::lane_snapshots`].
     #[must_use]
     pub fn merge_hint_roots(&self) -> Vec<Hash> {
@@ -829,15 +776,11 @@ impl MergeLedgerEntry {
             .collect()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, KeyPair};
-
     use super::*;
-
     #[derive(Encode)]
     struct UnversionedMergeLedgerEntry {
         epoch_id: u64,
@@ -849,7 +792,6 @@ mod tests {
         global_state_root: Hash,
         merge_qc: MergeQuorumCertificate,
     }
-
     #[derive(Encode)]
     struct LegacyMergeLedgerEntry {
         version: u8,
@@ -862,7 +804,6 @@ mod tests {
         global_state_root: Hash,
         merge_qc: MergeQuorumCertificate,
     }
-
     #[derive(Encode)]
     struct PreDrainMergeLedgerEntry {
         version: u8,
@@ -876,7 +817,6 @@ mod tests {
         merge_qc: MergeQuorumCertificate,
         execution_batch: Option<MergeExecutionBatch>,
     }
-
     #[derive(Encode)]
     struct PreviousMergeLedgerEntryV1 {
         version: u8,
@@ -891,19 +831,15 @@ mod tests {
         execution_batch: Option<MergeExecutionBatch>,
         lane_drain_certificates: Vec<LaneDrainCertificateV1>,
     }
-
     fn sample_tip(label: &[u8]) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::new(label))
     }
-
     fn sample_hash(label: &[u8]) -> Hash {
         Hash::new(label)
     }
-
     fn sample_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(label)))
     }
-
     fn sample_lane_drain_intent() -> LaneDrainIntentV1 {
         let validator_set = vec![PeerId::new(
             KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -932,7 +868,6 @@ mod tests {
             min_quorum: 1,
         }
     }
-
     fn sample_lane_drain_certificate() -> LaneDrainCertificateV1 {
         let intent = sample_lane_drain_intent();
         let validator_set = intent.validator_set.clone();
@@ -954,7 +889,6 @@ mod tests {
             aggregate_signature: vec![0xA5; 96],
         }
     }
-
     fn sample_lane_drain_commitment() -> LaneDrainCommitmentV1 {
         LaneDrainCommitmentV1 {
             version: 1,
@@ -972,7 +906,6 @@ mod tests {
             ),
         }
     }
-
     fn sample_execution_batch() -> MergeExecutionBatch {
         let base_state_hash =
             HashOf::from_untyped_unchecked(sample_hash(b"legacy-batch-base-state"));
@@ -1005,7 +938,6 @@ mod tests {
             batch_hash: sample_hash(b"legacy-batch-hash"),
         }
     }
-
     fn assert_commitment_canonical_wire_changes(
         baseline: &LaneDrainCommitmentV1,
         changed: &LaneDrainCommitmentV1,
@@ -1025,7 +957,6 @@ mod tests {
             "{field} must bind the hash-relevant canonical representation"
         );
     }
-
     fn assert_state_canonical_wire_changes(
         baseline: &LaneDrainStateV1,
         changed: &LaneDrainStateV1,
@@ -1044,7 +975,6 @@ mod tests {
             "{field} must bind the hash-relevant canonical representation"
         );
     }
-
     fn assert_canonical_decoder_rejects_invalid_wire<T>(encoded: &[u8], fixture: &str)
     where
         for<'de> T: norito::NoritoDeserialize<'de>,
@@ -1055,21 +985,18 @@ mod tests {
                 "{fixture} truncated at byte {prefix_len} must be rejected"
             );
         }
-
         let mut trailing = encoded.to_vec();
         trailing.push(0xA5);
         assert!(
             norito::decode_from_bytes::<T>(&trailing).is_err(),
             "{fixture} with trailing data must be rejected"
         );
-
         let mut malformed_header = encoded.to_vec();
         malformed_header[0] ^= 0xFF;
         assert!(
             norito::decode_from_bytes::<T>(&malformed_header).is_err(),
             "{fixture} with malformed Norito magic must be rejected"
         );
-
         let mut malformed_payload = encoded.to_vec();
         let payload_byte = malformed_payload
             .last_mut()
@@ -1080,7 +1007,6 @@ mod tests {
             "{fixture} with a checksum-invalid payload must be rejected"
         );
     }
-
     fn sample_settlement(
         lane_id: LaneId,
         lane_incarnation: Hash,
@@ -1103,7 +1029,6 @@ mod tests {
             native_amx_receipts: Vec::new(),
         }
     }
-
     #[test]
     fn merge_protocol_size_limits_are_inclusive_and_reserve_entry_headroom() {
         assert!(merge_execution_batch_size_within_limit(
@@ -1144,13 +1069,11 @@ mod tests {
                     + 1
             ]));
     }
-
     #[test]
     fn reserved_entry_headroom_fits_maximum_execution_committee_and_lane_bindings() {
         const MAX_ACTIVE_LANES: usize = 1_024;
         const MAX_MERGE_VALIDATORS: usize = 4_096;
         const BLS_PROOF_BYTES: usize = 96;
-
         let keypair =
             KeyPair::try_random_with_algorithm(Algorithm::BlsNormal).expect("BLS fixture keypair");
         let peer = PeerId::new(keypair.public_key().clone());
@@ -1207,7 +1130,6 @@ mod tests {
             "maximum committee/lane envelope {envelope_overhead} exceeds reserved headroom"
         );
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -1309,7 +1231,6 @@ mod tests {
             global_state_root: sample_hash(b"global"),
             merge_qc: qc.clone(),
         };
-
         assert_eq!(entry.lane_count(), 2);
         assert_eq!(entry.lane_tips().len(), 2);
         assert_eq!(entry.merge_hint_roots().len(), 2);
@@ -1330,12 +1251,10 @@ mod tests {
                 "merge entry identity must ignore the caller's ambient Norito layout"
             );
         }
-
         let encoded = Encode::encode(&entry);
         let decoded = MergeLedgerEntry::decode(&mut &encoded[..])
             .expect("merge entry rounds trips through Norito");
         assert_eq!(decoded, entry);
-
         let unversioned = UnversionedMergeLedgerEntry {
             epoch_id: entry.epoch_id,
             lane_catalog_hash: entry.lane_catalog_hash,
@@ -1351,7 +1270,6 @@ mod tests {
             MergeLedgerEntry::decode(&mut unversioned_encoded.as_slice()).is_err(),
             "the unversioned merge-entry layout must fail closed"
         );
-
         let legacy = LegacyMergeLedgerEntry {
             version: MergeLedgerEntry::VERSION,
             epoch_id: entry.epoch_id,
@@ -1368,7 +1286,6 @@ mod tests {
             MergeLedgerEntry::decode(&mut legacy_encoded.as_slice()).is_err(),
             "the layout omitting execution and drain fields must fail closed"
         );
-
         let previous_batch = sample_execution_batch();
         let previous = PreDrainMergeLedgerEntry {
             version: MergeLedgerEntry::VERSION,
@@ -1387,7 +1304,6 @@ mod tests {
             MergeLedgerEntry::decode(&mut previous_encoded.as_slice()).is_err(),
             "the layout omitting drain certificates must fail closed"
         );
-
         let previous_v1 = PreviousMergeLedgerEntryV1 {
             version: 1,
             epoch_id: entry.epoch_id,
@@ -1406,12 +1322,10 @@ mod tests {
             MergeLedgerEntry::decode(&mut previous_v1_encoded.as_slice()).is_err(),
             "the complete version-one layout must fail closed"
         );
-
         let mut unsupported = entry;
         unsupported.version = MergeLedgerEntry::VERSION.saturating_add(1);
         assert!(!unsupported.has_current_version());
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -1434,7 +1348,6 @@ mod tests {
             validator_count: u32,
             min_quorum: u32,
         }
-
         #[derive(Encode)]
         struct LegacyLaneDrainCertificateBodyV1 {
             version: u8,
@@ -1442,7 +1355,6 @@ mod tests {
             final_lane_block_height: u64,
             final_lane_block_descriptor_hash: Option<Hash>,
         }
-
         #[derive(Encode)]
         struct LegacyLaneDrainCommitmentV1 {
             certificate_hash: HashOf<LaneDrainCertificateV1>,
@@ -1451,13 +1363,11 @@ mod tests {
             final_lane_block_height: u64,
             final_lane_block_descriptor_hash: Option<Hash>,
         }
-
         #[derive(Encode)]
         struct LegacyLaneDrainStateV1 {
             version: u8,
             intent: LaneDrainIntentV1,
         }
-
         #[derive(Encode)]
         struct LegacyMergeLaneSnapshot {
             lane_id: LaneId,
@@ -1471,7 +1381,6 @@ mod tests {
             settlement_commitment: LaneBlockCommitment,
             settlement_hash: HashOf<LaneBlockCommitment>,
         }
-
         let intent = sample_lane_drain_intent();
         let legacy_intent = LegacyLaneDrainIntentV1 {
             version: intent.version,
@@ -1490,7 +1399,6 @@ mod tests {
         }
         .encode();
         assert!(LaneDrainIntentV1::decode(&mut legacy_intent.as_slice()).is_err());
-
         let legacy_body = LegacyLaneDrainCertificateBodyV1 {
             version: 1,
             intent: intent.clone(),
@@ -1499,7 +1407,6 @@ mod tests {
         }
         .encode();
         assert!(LaneDrainCertificateBodyV1::decode(&mut legacy_body.as_slice()).is_err());
-
         let legacy_commitment = LegacyLaneDrainCommitmentV1 {
             certificate_hash: sample_lane_drain_certificate().canonical_hash(),
             merge_entry_hash: HashOf::from_untyped_unchecked(sample_hash(b"legacy-merge-entry")),
@@ -1509,10 +1416,8 @@ mod tests {
         }
         .encode();
         assert!(LaneDrainCommitmentV1::decode(&mut legacy_commitment.as_slice()).is_err());
-
         let legacy_state = LegacyLaneDrainStateV1 { version: 1, intent }.encode();
         assert!(LaneDrainStateV1::decode(&mut legacy_state.as_slice()).is_err());
-
         let settlement = sample_settlement(
             LaneId::new(3),
             sample_hash(b"legacy-snapshot-incarnation"),
@@ -1535,7 +1440,6 @@ mod tests {
         .encode();
         assert!(MergeLaneSnapshot::decode(&mut legacy_snapshot.as_slice()).is_err());
     }
-
     #[test]
     fn lane_drain_intent_and_certificate_hash_every_consensus_field() {
         let intent = sample_lane_drain_intent();
@@ -1544,7 +1448,6 @@ mod tests {
         let decoded = LaneDrainIntentV1::decode(&mut encoded.as_slice())
             .expect("lane drain intent round-trips");
         assert_eq!(decoded, intent);
-
         macro_rules! assert_intent_field_bound {
             ($mutation:expr, $field:literal) => {{
                 let mut changed = intent.clone();
@@ -1612,7 +1515,6 @@ mod tests {
             |changed: &mut LaneDrainIntentV1| changed.min_quorum += 1,
             "min_quorum"
         );
-
         let certificate = sample_lane_drain_certificate();
         let certificate_hash = certificate.canonical_hash();
         let signature_preimage = certificate.body.signature_preimage();
@@ -1640,7 +1542,6 @@ mod tests {
         let decoded = LaneDrainCertificateV1::decode(&mut encoded.as_slice())
             .expect("lane drain certificate round-trips");
         assert_eq!(decoded, certificate);
-
         let mut changed = certificate.clone();
         changed.body.final_frontier.lane_block_height = changed
             .body
@@ -1657,7 +1558,6 @@ mod tests {
         changed.aggregate_signature[0] ^= 0xFF;
         assert_ne!(changed.canonical_hash(), certificate_hash);
     }
-
     #[test]
     fn lane_drain_commitment_canonical_wire_roundtrip_and_field_binding() {
         let commitment = sample_lane_drain_commitment();
@@ -1680,25 +1580,20 @@ mod tests {
             &canonical,
             "drain commitment",
         );
-
         let mut changed = commitment;
         changed.version = changed.version.saturating_add(1);
         assert_commitment_canonical_wire_changes(&commitment, &changed, "version");
-
         changed = commitment;
         changed.certificate_hash =
             HashOf::from_untyped_unchecked(sample_hash(b"different-drain-certificate"));
         assert_commitment_canonical_wire_changes(&commitment, &changed, "certificate_hash");
-
         changed = commitment;
         changed.merge_entry_hash =
             HashOf::from_untyped_unchecked(sample_hash(b"different-merge-entry"));
         assert_commitment_canonical_wire_changes(&commitment, &changed, "merge_entry_hash");
-
         changed = commitment;
         changed.carrier_height = changed.carrier_height.saturating_add(1);
         assert_commitment_canonical_wire_changes(&commitment, &changed, "carrier_height");
-
         changed = commitment;
         changed.frontier.lane_block_height = changed.frontier.lane_block_height.saturating_add(1);
         assert_commitment_canonical_wire_changes(
@@ -1706,7 +1601,6 @@ mod tests {
             &changed,
             "frontier.lane_block_height",
         );
-
         changed = commitment;
         changed.frontier.lane_block_descriptor_hash =
             Some(sample_hash(b"different-final-drain-tip"));
@@ -1715,7 +1609,6 @@ mod tests {
             &changed,
             "frontier.lane_block_descriptor_hash value",
         );
-
         changed = commitment;
         changed.frontier.lane_block_descriptor_hash = None;
         assert_commitment_canonical_wire_changes(
@@ -1724,7 +1617,6 @@ mod tests {
             "frontier.lane_block_descriptor_hash presence",
         );
     }
-
     #[test]
     fn lane_drain_state_canonical_wire_roundtrip_and_field_binding() {
         let intent_only = LaneDrainStateV1 {
@@ -1742,7 +1634,6 @@ mod tests {
             norito::to_bytes(&decoded_intent_only).expect("intent-only state re-encodes"),
             intent_only_bytes
         );
-
         let certified = LaneDrainStateV1 {
             commitment: Some(sample_lane_drain_commitment()),
             ..intent_only.clone()
@@ -1761,19 +1652,15 @@ mod tests {
             intent_only_bytes, certified_bytes,
             "commitment presence must bind the canonical state representation"
         );
-
         let mut changed = certified.clone();
         changed.version = changed.version.saturating_add(1);
         assert_state_canonical_wire_changes(&certified, &changed, "version");
-
         changed = certified.clone();
         changed.intent.network_id = sample_network_id(b"different-state-intent");
         assert_state_canonical_wire_changes(&certified, &changed, "intent");
-
         changed = certified.clone();
         changed.commitment = None;
         assert_state_canonical_wire_changes(&certified, &changed, "commitment presence");
-
         changed = certified.clone();
         changed
             .commitment
@@ -1782,7 +1669,6 @@ mod tests {
             .carrier_height += 1;
         assert_state_canonical_wire_changes(&certified, &changed, "commitment value");
     }
-
     #[test]
     fn lane_drain_state_canonical_decoder_rejects_invalid_wire() {
         let intent = sample_lane_drain_intent();
@@ -1807,7 +1693,6 @@ mod tests {
             "certified state",
         );
     }
-
     #[test]
     fn quorum_certificate_roundtrip() {
         let qc = MergeQuorumCertificate::new(
@@ -1829,7 +1714,6 @@ mod tests {
             .expect("quorum certificate round-trips");
         assert_eq!(decoded, qc);
     }
-
     #[test]
     fn merge_committee_signature_roundtrip() {
         let signature = MergeCommitteeSignature {

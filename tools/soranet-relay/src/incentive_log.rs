@@ -2,7 +2,6 @@
 //!
 //! Writes Norito-encoded `RelayEpochMetricsV1` payloads to a spool directory so
 //! offline auditors can replay the incentive pipeline deterministically.
-
 use std::{
     fs,
     io::Write,
@@ -10,7 +9,6 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-
 use iroha_data_model::soranet::incentives::RelayEpochMetricsV1;
 use norito::{
     core::to_bytes_bounded,
@@ -18,7 +16,6 @@ use norito::{
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-
 use crate::{
     error::RelayError,
     incentives::{
@@ -26,10 +23,8 @@ use crate::{
         INCENTIVE_MAX_ACTIVE_EPOCHS_V1, INCENTIVE_MAX_RETAINED_MEASUREMENTS_V1,
     },
 };
-
 /// First-release maximum encoded incentive snapshot size.
 pub const INCENTIVE_SNAPSHOT_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
-
 /// Errors surfaced while persisting incentive snapshots.
 #[derive(Debug, Error)]
 pub enum IncentiveLogError {
@@ -44,13 +39,11 @@ pub enum IncentiveLogError {
     #[error("incentive snapshot digest cache is poisoned")]
     Poisoned,
 }
-
 impl From<IncentiveLogError> for RelayError {
     fn from(err: IncentiveLogError) -> Self {
         RelayError::Logging(err.to_string())
     }
 }
-
 /// Configuration for incentive snapshot persistence.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct IncentiveLogConfig {
@@ -65,7 +58,6 @@ pub struct IncentiveLogConfig {
     #[norito(default = "IncentiveLogConfig::default_max_measurements_per_epoch")]
     pub max_measurements_per_epoch: usize,
 }
-
 impl Default for IncentiveLogConfig {
     fn default() -> Self {
         Self {
@@ -76,22 +68,17 @@ impl Default for IncentiveLogConfig {
         }
     }
 }
-
 impl IncentiveLogConfig {
     const DEFAULT_SPOOL_DIR: &'static str = "artifacts/incentives";
-
     const fn default_max_active_epochs() -> usize {
         INCENTIVE_DEFAULT_ACTIVE_EPOCHS
     }
-
     const fn default_max_measurements_per_epoch() -> usize {
         INCENTIVE_DEFAULT_MEASUREMENTS_PER_EPOCH
     }
-
     pub fn new() -> Self {
         Self::default()
     }
-
     pub fn apply_defaults(&mut self) {
         if self.enable && self.spool_dir.is_none() {
             self.spool_dir = Some(PathBuf::from(Self::DEFAULT_SPOOL_DIR));
@@ -103,7 +90,6 @@ impl IncentiveLogConfig {
             self.max_measurements_per_epoch = Self::default_max_measurements_per_epoch();
         }
     }
-
     /// Applies defaults and validates the first-release retained-memory
     /// geometry.
     pub fn validate(&mut self) -> Result<(), IncentiveLogError> {
@@ -135,7 +121,6 @@ impl IncentiveLogConfig {
         }
         Ok(())
     }
-
     pub fn as_logger(
         &self,
         relay_id_hex: &str,
@@ -156,7 +141,6 @@ impl IncentiveLogConfig {
         )?))
     }
 }
-
 /// Writes Norito-encoded incentive snapshots to disk.
 #[derive(Debug)]
 pub struct IncentiveLogger {
@@ -167,7 +151,6 @@ pub struct IncentiveLogger {
     /// Sorted, fully preallocated `(epoch, digest)` cache.
     seen: Mutex<Vec<(u32, [u8; 32])>>,
 }
-
 impl IncentiveLogger {
     fn new(
         spool_dir: PathBuf,
@@ -207,7 +190,6 @@ impl IncentiveLogger {
             seen: Mutex::new(seen),
         })
     }
-
     /// Persist a snapshot if it has changed since the last write.
     pub fn write_snapshot(&self, metrics: &RelayEpochMetricsV1) -> Result<(), IncentiveLogError> {
         if metrics.measurement_ids.len() > self.max_measurements_per_epoch {
@@ -221,7 +203,6 @@ impl IncentiveLogger {
         let payload = to_bytes_bounded(metrics, INCENTIVE_SNAPSHOT_MAX_BYTES_V1)
             .map_err(|error| IncentiveLogError::Encode(error.to_string()))?;
         let digest_bytes: [u8; 32] = Sha256::digest(&payload).into();
-
         let mut guard = self.seen.lock().map_err(|_| IncentiveLogError::Poisoned)?;
         let cached_position = guard.binary_search_by_key(&metrics.epoch, |(epoch, _)| *epoch);
         if let Ok(index) = cached_position
@@ -238,18 +219,15 @@ impl IncentiveLogger {
                 metrics.epoch, self.max_seen_epochs
             )));
         }
-
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_micros();
-
         let mut temporary = tempfile::Builder::new()
             .prefix(".iroha-incentive-snapshot-")
             .tempfile_in(&self.spool_dir)?;
         temporary.write_all(&payload)?;
         temporary.as_file().sync_all()?;
-
         const MAX_CREATE_ATTEMPTS: u32 = 1_024;
         for attempt in 0..MAX_CREATE_ATTEMPTS {
             let mut candidate = self.spool_dir.clone();
@@ -265,7 +243,6 @@ impl IncentiveLogger {
                 )
             };
             candidate.push(suffix);
-
             match temporary.persist_noclobber(&candidate) {
                 Ok(_) => {
                     #[cfg(unix)]
@@ -296,7 +273,6 @@ impl IncentiveLogger {
         )))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::{
@@ -304,9 +280,7 @@ mod tests {
         soranet::incentives::{RelayComplianceStatusV1, RelayEpochMetricsV1},
     };
     use tempfile::TempDir;
-
     use super::*;
-
     fn sample_metrics(epoch: u32) -> RelayEpochMetricsV1 {
         RelayEpochMetricsV1 {
             relay_id: [0x11; 32],
@@ -321,7 +295,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn logger(
         dir: &TempDir,
         max_seen_epochs: usize,
@@ -335,23 +308,19 @@ mod tests {
         )
         .expect("create logger")
     }
-
     #[test]
     fn deduplicates_snapshots() {
         let dir = TempDir::new().expect("spool dir");
         let logger = logger(&dir, 2, 2);
         let metrics = sample_metrics(1);
-
         logger.write_snapshot(&metrics).expect("first write");
         logger.write_snapshot(&metrics).expect("deduplicated write");
-
         let files: Vec<_> = fs::read_dir(dir.path())
             .expect("read dir")
             .collect::<Result<_, _>>()
             .expect("entries");
         assert_eq!(files.len(), 1);
     }
-
     #[test]
     fn digest_cache_retains_the_newest_exact_epoch_window() {
         let dir = TempDir::new().expect("spool dir");
@@ -367,13 +336,11 @@ mod tests {
             vec![2, 3]
         );
         drop(guard);
-
         assert!(matches!(
             logger.write_snapshot(&sample_metrics(1)),
             Err(IncentiveLogError::Capacity(message)) if message.contains("newest 2")
         ));
     }
-
     #[test]
     fn measurement_overflow_rejects_before_file_creation() {
         let dir = TempDir::new().expect("spool dir");

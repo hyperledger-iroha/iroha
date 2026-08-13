@@ -1,12 +1,10 @@
 //! Known-answer regression tests for the `SoraNet` PQ helpers.
 #![allow(clippy::unwrap_used)]
-
 use norito::json::{self, Map, Value};
 use soranet_pq::{
     HedgedRngSeed, MlDsaSuite, MlKemSuite, decapsulate_mlkem, hedged_chacha20_rng, sign_mldsa,
     verify_mldsa,
 };
-
 #[test]
 fn mlkem_vectors_decapsulate_to_expected_shared_secret() {
     let root = load_vectors();
@@ -29,7 +27,6 @@ fn mlkem_vectors_decapsulate_to_expected_shared_secret() {
         assert_eq!(shared.as_bytes(), expected_secret.as_slice());
     }
 }
-
 #[test]
 fn mldsa_vectors_verify_and_resign() {
     let root = load_vectors();
@@ -48,10 +45,8 @@ fn mldsa_vectors_verify_and_resign() {
         let secret_key = decode_hex_field(obj, "secret_key");
         let message = decode_hex_field(obj, "message");
         let signature = decode_hex_field(obj, "signature");
-
         verify_mldsa(suite, &public_key, &[], &message, &signature)
             .expect("fixture signature verifies");
-
         let mut sign_rng = hedged_chacha20_rng(
             HedgedRngSeed::from_entropy([suite.suite_id(); 32]),
             b"pq-kat:mldsa:sign",
@@ -62,12 +57,10 @@ fn mldsa_vectors_verify_and_resign() {
             .expect("regenerated signature verifies");
     }
 }
-
 fn load_vectors() -> Value {
     let bytes = include_bytes!("fixtures/pq_vectors.json");
     json::from_slice(bytes).expect("decode pq vectors JSON")
 }
-
 fn decode_hex_field(obj: &Map, key: &str) -> Vec<u8> {
     let value = obj
         .get(key)
@@ -75,7 +68,6 @@ fn decode_hex_field(obj: &Map, key: &str) -> Vec<u8> {
         .unwrap_or_else(|| panic!("missing {key}"));
     decode_hex(value)
 }
-
 fn parse_mlkem_suite(label: &str) -> MlKemSuite {
     match label {
         "mlkem512" => MlKemSuite::MlKem512,
@@ -84,7 +76,6 @@ fn parse_mlkem_suite(label: &str) -> MlKemSuite {
         other => panic!("unknown ML-KEM suite {other}"),
     }
 }
-
 fn parse_mldsa_suite(label: &str) -> MlDsaSuite {
     match label {
         "mldsa44" => MlDsaSuite::MlDsa44,
@@ -93,7 +84,6 @@ fn parse_mldsa_suite(label: &str) -> MlDsaSuite {
         other => panic!("unknown ML-DSA suite {other}"),
     }
 }
-
 fn decode_hex(input: &str) -> Vec<u8> {
     assert!(
         input.len().is_multiple_of(2),
@@ -108,7 +98,6 @@ fn decode_hex(input: &str) -> Vec<u8> {
     }
     bytes
 }
-
 fn decode_nibble(byte: u8) -> u8 {
     match byte {
         b'0'..=b'9' => byte - b'0',

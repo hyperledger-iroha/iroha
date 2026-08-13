@@ -1,5 +1,4 @@
 //! Candidate-binding artifact profiles for terminal V4 registry tests.
-
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
@@ -17,7 +16,6 @@ use iroha_data_model::offline::{
     KagemushaPastaCycleArtifactV4, KagemushaPastaCycleParityV1, KagemushaPastaCycleProofProfileV4,
     KagemushaPastaPublicLayoutV4, KagemushaStepCircuitParamsV4,
 };
-
 fn candidate_binding_artifact(
     kind: KagemushaPastaCycleArtifactKindV4,
     file_name: &str,
@@ -32,7 +30,6 @@ fn candidate_binding_artifact(
         payload_sha256: [tag.wrapping_add(1); 32],
     }
 }
-
 pub(super) fn candidate_binding_profile(
     parity: KagemushaPastaCycleParityV1,
     tag: u8,

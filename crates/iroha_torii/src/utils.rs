@@ -1,11 +1,9 @@
 //! Utilities for Norito encoding and Axum integration.
-
 use std::{
     any::{Any, TypeId},
     future::Future,
     sync::Arc,
 };
-
 use axum::{
     http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
@@ -89,7 +87,6 @@ fn is_valid_bounded_public_text(value: &str, max_characters: usize) -> bool {
 #[cfg(test)]
 mod public_error_grammar_tests {
     use super::{MAX_ERROR_MESSAGE_CHARACTERS, is_valid_error_message, is_valid_reject_code};
-
     #[test]
     fn error_messages_require_exact_non_control_text() {
         for valid in [
@@ -1316,7 +1313,6 @@ pub fn respond_value_with_format(value: Value, _format: ResponseFormat) -> Respo
 #[cfg(test)]
 #[path = "tests/utils_response_format.rs"]
 mod response_format_tests;
-
 /// Structure to reply using Norito encoding
 #[derive(Debug)]
 pub struct NoritoBody<T>(pub T);
@@ -1362,7 +1358,6 @@ impl<T: JsonSerialize + Send + 'static> IntoResponse for JsonBody<T> {
         res
     }
 }
-
 pub mod extractors {
     use axum::{
         body::Bytes,
@@ -1374,9 +1369,7 @@ pub mod extractors {
         json::{self, JsonDeserializeOwned, Number, Value},
     };
     use urlencoding::decode;
-
     use super::*;
-
     fn typed_request_rejection(
         status: StatusCode,
         code: &'static str,
@@ -1947,7 +1940,6 @@ pub mod extractors {
     #[cfg(feature = "telemetry")]
     fn classify_norito_error(error: &norito::Error) -> &'static str {
         use norito::Error;
-
         match error {
             Error::InvalidMagic => "invalid_magic",
             Error::UnsupportedVersion { .. } => "unsupported_version",
@@ -2425,9 +2417,7 @@ pub mod extractors {
         use http_body_util::BodyExt as _;
         use iroha_version::{RawVersioned, UnsupportedVersion, Version};
         use norito::core::{NoritoDeserialize, NoritoSerialize};
-
         use super::*;
-
         #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
         struct Dummy(u32);
         #[test]
@@ -3895,7 +3885,6 @@ pub mod extractors {
         #[tokio::test]
         async fn offline_norito_http_extractor_accepts_max_shaped_redeem_and_rejects_compression() {
             use iroha_torii_shared::offline_api::OfflineRedeemRequest;
-
             let top_up = offline_ingress_top_up_fixture();
             let redeem = offline_ingress_max_shaped_redeem_fixture(&top_up);
             let canonical =
@@ -4480,7 +4469,6 @@ pub mod extractors {
         #[tokio::test]
         async fn norito_json_decode_failure_increments_metric() {
             use iroha_telemetry::metrics::global_or_default;
-
             #[derive(
                 Clone,
                 Debug,

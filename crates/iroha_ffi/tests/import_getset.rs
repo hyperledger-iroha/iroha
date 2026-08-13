@@ -1,8 +1,6 @@
 //! FFI import/getset tests: validates generated getters/setters across FFI.
 #![allow(unsafe_code)]
-
 use iroha_ffi::{ffi, ffi_import};
-
 // Localize macro-generated items in a module; re-export for tests.
 mod types {
     //! FFI types used for import/getset coverage.
@@ -11,7 +9,6 @@ mod types {
         /// Wrapper type imported from FFI.
         #[derive(Clone, PartialEq, Eq)]
         pub struct Name;
-
         /// Struct imported from FFI for accessor validation.
         #[ffi_import]
         #[derive(Clone, PartialEq, Eq, Setters, Getters, MutGetters)]
@@ -26,18 +23,14 @@ mod types {
             name: Name,
         }
     }
-
     /// Public shim to obtain a `RefName` without calling a private method across the module boundary.
     pub fn name_as_ref(v: &super::Name) -> super::RefName<'_> {
         v.as_ref()
     }
 }
-
 pub use types::*;
-
 iroha_ffi::handles! {Name, FfiStruct}
 iroha_ffi::decl_ffi_fns! {Drop, Clone, Eq}
-
 #[ffi_import]
 impl Name {
     /// Construct a new `Name` from a `String`.
@@ -45,7 +38,6 @@ impl Name {
         unreachable!("replaced by ffi_import")
     }
 }
-
 #[ffi_import]
 impl FfiStruct {
     /// Construct a new `FfiStruct` from parts.
@@ -53,36 +45,29 @@ impl FfiStruct {
         unreachable!("replaced by ffi_import")
     }
 }
-
 #[test]
 fn import_shared_fns() {
     let mut ffi_struct = FfiStruct::new("ipso facto".to_string(), 42);
     ffi_struct.set_id(84);
     assert!(&mut 84 == ffi_struct.id_mut());
-
     assert!(*types::name_as_ref(&Name::new("ipso facto".to_string())) == *ffi_struct.name());
 }
-
 mod ffi {
     use iroha_ffi::{
         FfiConvert, FfiOutPtr, FfiOutPtrWrite, FfiReturn, FfiType, def_ffi_fns, slice::RefMutSlice,
     };
-
     iroha_ffi::handles! {ExternName, ExternFfiStruct}
-
     def_ffi_fns! { dealloc }
     def_ffi_fns! {
         Drop: {ExternName, ExternFfiStruct},
         Clone: {ExternName, ExternFfiStruct},
         Eq: {ExternName, ExternFfiStruct},
     }
-
     /// Structure that `Name` points to.
     #[derive(Debug, Clone, PartialEq, Eq, FfiType)]
     #[ffi_type(opaque)]
     #[repr(C)]
     pub struct ExternName(String);
-
     /// Structure that `FfiStruct` points to.
     #[derive(Debug, Clone, PartialEq, Eq, FfiType)]
     #[ffi_type(opaque)]
@@ -91,7 +76,6 @@ mod ffi {
         id: u8,
         name: ExternName,
     }
-
     #[unsafe(no_mangle)]
     unsafe extern "C" fn Name__new(
         input1: RefMutSlice<u8>,
@@ -103,7 +87,6 @@ mod ffi {
         unsafe { output.write(Box::into_raw(opaque)) };
         FfiReturn::Ok
     }
-
     #[unsafe(no_mangle)]
     unsafe extern "C" fn FfiStruct__new(
         input1: RefMutSlice<u8>,
@@ -118,7 +101,6 @@ mod ffi {
         unsafe { output.write(Box::into_raw(opaque)) };
         FfiReturn::Ok
     }
-
     #[unsafe(no_mangle)]
     unsafe extern "C" fn FfiStruct__id(
         input: *const ExternFfiStruct,
@@ -128,7 +110,6 @@ mod ffi {
         unsafe { output.write(&raw const input.id) };
         FfiReturn::Ok
     }
-
     #[unsafe(no_mangle)]
     unsafe extern "C" fn FfiStruct__id_mut(
         input: *mut ExternFfiStruct,
@@ -138,7 +119,6 @@ mod ffi {
         unsafe { output.write(&raw mut input.id) };
         FfiReturn::Ok
     }
-
     #[unsafe(no_mangle)]
     unsafe extern "C" fn FfiStruct__set_id(
         input: *mut ExternFfiStruct,
@@ -149,7 +129,6 @@ mod ffi {
         input.id = value;
         FfiReturn::Ok
     }
-
     #[unsafe(no_mangle)]
     unsafe extern "C" fn FfiStruct__name(
         input: *const ExternFfiStruct,

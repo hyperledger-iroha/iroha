@@ -3,12 +3,10 @@ use iroha_schema::IntoSchema;
 #[cfg(feature = "json")]
 use mv::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
-
 use super::capacity::ProviderId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata, musubi::ArchiveId};
-
 /// Exact byte length of a canonical first-release manifest root CID.
 pub const MANIFEST_ROOT_CID_LENGTH: usize = sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;
 /// Hard maximum number of summaries in one finalized pin-manifest page.
@@ -17,12 +15,10 @@ pub const PIN_MANIFEST_QUERY_MAX_ITEMS_V1: u32 = 256;
 pub const PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1: u32 = 256 * 1024;
 /// Smallest caller-selected byte budget accepted for a pin-manifest page.
 pub const PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1: u32 = 1024;
-
 /// Canonical binary `CIDv1` identifying the content DAG root of a manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
 pub struct ManifestRootCid([u8; MANIFEST_ROOT_CID_LENGTH]);
-
 impl ManifestRootCid {
     /// Constructs a root CID after validating the complete first-release layout.
     ///
@@ -34,7 +30,6 @@ impl ManifestRootCid {
         validate_manifest_root_cid_bytes(&bytes)?;
         Ok(Self(bytes))
     }
-
     /// Builds the canonical first-release root CID for a non-zero BLAKE3 digest.
     ///
     /// # Errors
@@ -53,13 +48,11 @@ impl ManifestRootCid {
         bytes[4..].copy_from_slice(&digest);
         Ok(Self(bytes))
     }
-
     /// Returns the binary CID bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; MANIFEST_ROOT_CID_LENGTH] {
         &self.0
     }
-
     /// Copies a canonical-width CID from a byte slice.
     ///
     /// # Errors
@@ -74,43 +67,34 @@ impl ManifestRootCid {
         Self::new(bytes)
     }
 }
-
 impl TryFrom<&[u8]> for ManifestRootCid {
     type Error = ManifestRootCidError;
-
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         Self::try_from_slice(bytes)
     }
 }
-
 impl TryFrom<Vec<u8>> for ManifestRootCid {
     type Error = ManifestRootCidError;
-
     fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
         Self::try_from_slice(&bytes)
     }
 }
-
 impl norito::NoritoSerialize for ManifestRootCid {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::NoritoSerialize::serialize(&self.0, writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         norito::NoritoSerialize::encoded_len_hint(&self.0)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         norito::NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
-
 impl<'de> norito::NoritoDeserialize<'de> for ManifestRootCid {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("archived manifest root CID must use the canonical first-release layout")
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -120,13 +104,11 @@ impl<'de> norito::NoritoDeserialize<'de> for ManifestRootCid {
         Self::new(bytes).map_err(|error| norito::core::Error::Message(error.to_string()))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for ManifestRootCid {
     fn json_serialize(&self, out: &mut String) {
         crate::json_helpers::fixed_bytes::serialize(&self.0, out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -144,7 +126,6 @@ impl norito::json::JsonSerialize for ManifestRootCid {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ManifestRootCid {
     fn json_deserialize(
@@ -154,7 +135,6 @@ impl norito::json::JsonDeserialize for ManifestRootCid {
         Self::new(bytes).map_err(|error| norito::json::Error::Message(error.to_string()))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ManifestRootCid {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = bytes;
@@ -163,7 +143,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ManifestRootCid {
         Ok((value, start_len - cursor.len()))
     }
 }
-
 /// Error returned when a manifest root CID is not canonical for the first release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ManifestRootCidError {
@@ -172,13 +151,11 @@ pub struct ManifestRootCidError {
     /// Observed value, or zero when the digest itself is inert.
     pub found: usize,
 }
-
 impl ManifestRootCidError {
     const fn new(kind: ManifestRootCidErrorKind, found: usize) -> Self {
         Self { kind, found }
     }
 }
-
 impl std::fmt::Display for ManifestRootCidError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.kind {
@@ -213,9 +190,7 @@ impl std::fmt::Display for ManifestRootCidError {
         }
     }
 }
-
 impl std::error::Error for ManifestRootCidError {}
-
 /// Canonical-layout rule violated by a manifest root CID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ManifestRootCidErrorKind {
@@ -232,7 +207,6 @@ pub enum ManifestRootCidErrorKind {
     /// CID carries an inert all-zero digest.
     InertDigest,
 }
-
 fn validate_manifest_root_cid_bytes(
     bytes: &[u8; MANIFEST_ROOT_CID_LENGTH],
 ) -> Result<(), ManifestRootCidError> {
@@ -268,7 +242,6 @@ fn validate_manifest_root_cid_bytes(
     }
     Ok(())
 }
-
 /// Canonical BLAKE3-256 digest of a `sorafs_manifest::ManifestV1`.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
@@ -278,20 +251,17 @@ fn validate_manifest_root_cid_bytes(
 pub struct ManifestDigest(
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
 );
-
 impl ManifestDigest {
     /// Construct a new manifest digest wrapper.
     #[must_use]
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Access the raw digest bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
-
     /// Computes the canonical digest for a [`sorafs_manifest::ManifestV1`].
     ///
     /// # Errors
@@ -303,7 +273,6 @@ impl ManifestDigest {
         manifest.digest().map(|hash| Self(*hash.as_bytes()))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ManifestDigest {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = bytes;
@@ -313,25 +282,21 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ManifestDigest {
         Ok((value, consumed))
     }
 }
-
 #[allow(dead_code)]
 fn _assert_manifest_digest_decode<'a>()
 where
     ManifestDigest: norito::core::DecodeFromSlice<'a>,
 {
 }
-
 #[cfg(feature = "json")]
 impl JsonKeyCodec for ManifestDigest {
     fn encode_json_key(&self, out: &mut String) {
         self.as_bytes().encode_json_key(out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }
 }
-
 /// Registry handle describing the chunker profile selected for a manifest.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -347,7 +312,6 @@ pub struct ChunkerProfileHandle {
     /// Multihash code used when deriving chunk digests.
     pub multihash_code: u64,
 }
-
 impl ChunkerProfileHandle {
     /// Format the canonical handle string (`namespace.name@semver`).
     #[must_use]
@@ -355,7 +319,6 @@ impl ChunkerProfileHandle {
         format!("{}.{}@{}", self.namespace, self.name, self.semver)
     }
 }
-
 /// Storage replication policy negotiated with the pin registry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -367,7 +330,6 @@ pub struct PinPolicy {
     /// Epoch (inclusive) until which the manifest must remain pinned.
     pub retention_epoch: u64,
 }
-
 impl Default for PinPolicy {
     fn default() -> Self {
         Self {
@@ -377,7 +339,6 @@ impl Default for PinPolicy {
         }
     }
 }
-
 /// Storage tier classification for `SoraFS` replicas.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default, Hash,
@@ -393,7 +354,6 @@ pub enum StorageClass {
     /// Archival replicas retained for compliance.
     Cold,
 }
-
 /// Optional alias binding approved alongside a manifest.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -406,7 +366,6 @@ pub struct ManifestAliasBinding {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub proof: Vec<u8>,
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ManifestAliasBinding {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = bytes;
@@ -416,7 +375,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ManifestAliasBinding {
         Ok((value, consumed))
     }
 }
-
 /// Lifecycle status of a manifest within the pin registry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -435,7 +393,6 @@ pub enum PinStatus {
         u64,
     ),
 }
-
 impl PinStatus {
     /// Returns true if the manifest currently requires replication.
     #[must_use]
@@ -443,7 +400,6 @@ impl PinStatus {
         matches!(self, Self::Approved(_))
     }
 }
-
 /// Closed lifecycle selector for bounded pin-manifest pages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -456,7 +412,6 @@ pub enum PinStatusKindV1 {
     /// Retired manifests retained only as bounded lifecycle evidence.
     Retired,
 }
-
 impl PinStatusKindV1 {
     /// Return whether this selector accepts the supplied lifecycle state.
     #[must_use]
@@ -469,7 +424,6 @@ impl PinStatusKindV1 {
         )
     }
 }
-
 /// Consensus-maintained resource usage for a global or per-account pin scope.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
@@ -484,7 +438,6 @@ pub struct PinResourceUsage {
     /// Aggregate content bytes represented by live manifests in the scope.
     pub content_bytes: u64,
 }
-
 impl PinResourceUsage {
     /// Return usage after charging one manifest, or `None` on arithmetic overflow.
     #[must_use]
@@ -500,7 +453,6 @@ impl PinResourceUsage {
             content_bytes,
         })
     }
-
     /// Return usage after releasing one live manifest's content bytes.
     ///
     /// The retained-record count remains charged. `None` reports a missing
@@ -519,7 +471,6 @@ impl PinResourceUsage {
         })
     }
 }
-
 /// Consensus-maintained bounded lineage summary for one pin manifest.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
@@ -531,7 +482,6 @@ pub struct PinLineageSummaryV1 {
     /// Number of retained direct successors registered for this manifest.
     pub direct_successor_count: u32,
 }
-
 impl PinLineageSummaryV1 {
     /// Construct a root summary with no predecessor or successor edges.
     #[must_use]
@@ -541,7 +491,6 @@ impl PinLineageSummaryV1 {
             direct_successor_count: 0,
         }
     }
-
     /// Construct a child summary from its parent, or `None` if depth overflows.
     #[must_use]
     pub const fn checked_child(self) -> Option<Self> {
@@ -553,7 +502,6 @@ impl PinLineageSummaryV1 {
             direct_successor_count: 0,
         })
     }
-
     /// Return the parent summary after charging one direct successor.
     #[must_use]
     pub const fn checked_add_successor(self) -> Option<Self> {
@@ -566,7 +514,6 @@ impl PinLineageSummaryV1 {
         })
     }
 }
-
 /// XOR fee payment recorded when a public pin manifest is admitted.
 #[allow(missing_copy_implementations)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -581,7 +528,6 @@ pub struct PinFeePayment {
     /// Nominal fee amount.
     pub amount: Quantity,
 }
-
 /// Registry record capturing the lifecycle of a manifest pin request.
 #[allow(missing_copy_implementations)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -629,7 +575,6 @@ pub struct PinManifestRecord {
     #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
     pub pin_fee_payment: Option<PinFeePayment>,
 }
-
 /// Finalized block anchor for one coherent pin-manifest query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -643,7 +588,6 @@ pub struct PinManifestFinalizedCursorV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
-
 /// One authoritative pin manifest anchored to finalized chain state.
 #[allow(missing_copy_implementations)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -657,7 +601,6 @@ pub struct PinManifestFinalizedRecordV1 {
     /// Chain-authoritative pin-manifest lifecycle record.
     pub manifest: PinManifestRecord,
 }
-
 /// Bounded pin-manifest summary suitable for list pages.
 ///
 /// Alias proofs, metadata, council envelopes, and fee-payment details are
@@ -681,7 +624,6 @@ pub struct PinManifestSummaryV1 {
     /// Optional predecessor digest.
     pub successor_of: Option<ManifestDigest>,
 }
-
 impl From<&PinManifestRecord> for PinManifestSummaryV1 {
     fn from(record: &PinManifestRecord) -> Self {
         Self {
@@ -695,7 +637,6 @@ impl From<&PinManifestRecord> for PinManifestSummaryV1 {
         }
     }
 }
-
 /// Finalized, exclusive-keyset page of bounded pin-manifest summaries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -711,7 +652,6 @@ pub struct PinManifestPageV1 {
     /// Exclusive digest cursor for the next page when `has_more` is true.
     pub next_after_digest: Option<ManifestDigest>,
 }
-
 impl PinManifestRecord {
     /// Construct a new pending record from the supplied fields.
     #[allow(clippy::too_many_arguments)]
@@ -749,12 +689,10 @@ impl PinManifestRecord {
             pin_fee_payment: None,
         }
     }
-
     /// Record the public pin fee payment associated with this manifest.
     pub fn record_pin_fee_payment(&mut self, payment: PinFeePayment) {
         self.pin_fee_payment = Some(payment);
     }
-
     /// Transition the record into an approved state with the provided epoch and envelope digest.
     pub fn approve(&mut self, approved_epoch: u64, envelope_digest: Option<[u8; 32]>) {
         self.status = PinStatus::Approved(approved_epoch);
@@ -763,14 +701,12 @@ impl PinManifestRecord {
             self.council_envelope_digest = Some(digest);
         }
     }
-
     /// Transition the record into a retired state.
     pub fn retire(&mut self, retired_epoch: u64, reason: Option<String>) {
         self.status = PinStatus::Retired(retired_epoch);
         self.retirement_reason = reason;
     }
 }
-
 /// Canonical identifier for a manifest alias (`namespace/name`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -780,7 +716,6 @@ pub struct ManifestAliasId {
     /// Alias value (e.g., `docs`).
     pub name: String,
 }
-
 impl ManifestAliasId {
     /// Construct a new alias identifier.
     #[must_use]
@@ -790,20 +725,17 @@ impl ManifestAliasId {
             name: name.into(),
         }
     }
-
     /// Returns a human-readable `namespace/name` label.
     #[must_use]
     pub fn as_label(&self) -> String {
         format!("{}/{}", self.namespace, self.name)
     }
 }
-
 impl From<&ManifestAliasBinding> for ManifestAliasId {
     fn from(binding: &ManifestAliasBinding) -> Self {
         Self::new(binding.namespace.clone(), binding.name.clone())
     }
 }
-
 /// Registry record describing an approved alias binding.
 #[allow(missing_copy_implementations)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -820,7 +752,6 @@ pub struct ManifestAliasRecord {
     /// Epoch (inclusive) when the alias binding expires unless renewed.
     pub expiry_epoch: u64,
 }
-
 impl ManifestAliasRecord {
     /// Create a new alias record from the supplied binding.
     #[must_use]
@@ -839,20 +770,17 @@ impl ManifestAliasRecord {
             expiry_epoch,
         }
     }
-
     /// Returns the canonical alias identifier.
     #[must_use]
     pub fn alias_id(&self) -> ManifestAliasId {
         ManifestAliasId::from(&self.binding)
     }
-
     /// Returns `true` if the record refers to the supplied manifest digest.
     #[must_use]
     pub fn targets_manifest(&self, digest: &ManifestDigest) -> bool {
         &self.manifest == digest
     }
 }
-
 /// Unique identifier assigned to replication orders.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
@@ -862,21 +790,18 @@ impl ManifestAliasRecord {
 pub struct ReplicationOrderId(
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
 );
-
 impl ReplicationOrderId {
     /// Construct a new replication order identifier.
     #[must_use]
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Access the raw identifier bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 /// Governance identity of the exact provider-ingest completion signer policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -899,7 +824,6 @@ pub struct ProviderIngestCompletionSignerPolicyV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub policy_digest: [u8; 32],
 }
-
 impl ProviderIngestCompletionSignerPolicyV1 {
     /// Return whether every canonical identity component is non-zero.
     #[must_use]
@@ -934,7 +858,6 @@ impl ProviderIngestCompletionSignerPolicyV1 {
         policy_id_is_nonzero && predecessor_is_canonical && policy_digest_is_nonzero
     }
 }
-
 /// Chain-authoritative owner and governed signer policy for provider ingest.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -944,7 +867,6 @@ pub struct ProviderIngestCompletionAuthorityV1 {
     /// Exact governed completion-signer policy active for this owner.
     pub signer_policy: ProviderIngestCompletionSignerPolicyV1,
 }
-
 impl ProviderIngestCompletionAuthorityV1 {
     /// Construct one exact provider-ingest completion authority.
     #[must_use]
@@ -957,14 +879,12 @@ impl ProviderIngestCompletionAuthorityV1 {
             signer_policy,
         }
     }
-
     /// Return whether the governed signer policy has a canonical identity.
     #[must_use]
     pub const fn is_valid(&self) -> bool {
         self.signer_policy.is_valid()
     }
 }
-
 /// Finalized committed-chain anchor carried by a provider completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -975,7 +895,6 @@ pub struct ProviderIngestFinalizedAnchorV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
-
 impl ProviderIngestFinalizedAnchorV1 {
     /// Return whether this anchor can identify a committed block.
     #[must_use]
@@ -993,7 +912,6 @@ impl ProviderIngestFinalizedAnchorV1 {
         false
     }
 }
-
 /// Lifecycle status for replication orders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1012,7 +930,6 @@ pub enum ReplicationOrderStatus {
         u64,
     ),
 }
-
 impl ReplicationOrderStatus {
     /// Returns `true` when the order is still pending.
     #[must_use]
@@ -1020,7 +937,6 @@ impl ReplicationOrderStatus {
         matches!(self, Self::Pending)
     }
 }
-
 /// Provider-scoped completion recorded for a replication assignment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1038,7 +954,6 @@ pub struct ReplicationOrderCompletionRecord {
     /// Finalized committed-chain prefix on which completion preparation was based.
     pub finalized_anchor: ProviderIngestFinalizedAnchorV1,
 }
-
 /// Record stored for each issued replication order.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1067,7 +982,6 @@ pub struct ReplicationOrderRecord {
     /// Current lifecycle status for the order.
     pub status: ReplicationOrderStatus,
 }
-
 impl ReplicationOrderRecord {
     /// Return the completion recorded for `provider_id`, if any.
     #[must_use]
@@ -1079,19 +993,15 @@ impl ReplicationOrderRecord {
             .iter()
             .find(|completion| completion.provider_id == provider_id)
     }
-
     /// Mark the order as expired at the supplied epoch.
     pub fn expire(&mut self, expiration_epoch: u64) {
         self.status = ReplicationOrderStatus::Expired(expiration_epoch);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_primitives::numeric::Numeric;
-
     use super::*;
-
     fn fixture_account() -> AccountId {
         AccountId::new(
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -1099,7 +1009,6 @@ mod tests {
                 .expect("public key"),
         )
     }
-
     #[derive(Encode)]
     struct ForgedPinFeePayment {
         paid_by: AccountId,
@@ -1107,7 +1016,6 @@ mod tests {
         treasury_account_id: AccountId,
         amount: Numeric,
     }
-
     #[test]
     fn manifest_digest_round_trip() {
         let digest = ManifestDigest::new([0xAB; 32]);
@@ -1116,7 +1024,6 @@ mod tests {
         let decoded = ManifestDigest::decode(&mut slice).expect("decode manifest digest");
         assert_eq!(digest, decoded);
     }
-
     #[test]
     fn pin_resource_usage_uses_checked_transactional_arithmetic() {
         let usage = PinResourceUsage::default()
@@ -1152,7 +1059,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn pin_lineage_summary_uses_checked_depth_and_fanout_arithmetic() {
         let root = PinLineageSummaryV1::root();
@@ -1179,7 +1085,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn pin_fee_payment_rejects_forged_negative_amount() {
         let forged = ForgedPinFeePayment {
@@ -1198,7 +1103,6 @@ mod tests {
             "pin fee payment must reject a forged negative amount"
         );
     }
-
     #[test]
     fn manifest_root_cid_enforces_exact_width() {
         let bytes: [u8; MANIFEST_ROOT_CID_LENGTH] =
@@ -1215,7 +1119,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn manifest_root_cid_rejects_noncanonical_headers_and_inert_digest() {
         let canonical: [u8; MANIFEST_ROOT_CID_LENGTH] =
@@ -1248,7 +1151,6 @@ mod tests {
             malformed[index] = replacement;
             assert_eq!(ManifestRootCid::new(malformed), Err(expected));
         }
-
         let mut inert = canonical;
         inert[4..].fill(0);
         assert_eq!(
@@ -1266,7 +1168,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn manifest_root_cid_decoders_reject_noncanonical_values() {
         let canonical = ManifestRootCid::from_blake3_digest([0xA5; 32]).expect("canonical CID");
@@ -1276,13 +1177,11 @@ mod tests {
             ManifestRootCid::decode(&mut slice).expect("decode canonical CID"),
             canonical
         );
-
         let mut malformed = *canonical.as_bytes();
         malformed[1] = 0x70;
         let encoded = malformed.encode();
         let mut slice = encoded.as_slice();
         assert!(ManifestRootCid::decode(&mut slice).is_err());
-
         #[cfg(feature = "json")]
         {
             let value = norito::json::to_value(&canonical).expect("canonical CID JSON value");
@@ -1295,7 +1194,6 @@ mod tests {
             assert!(norito::json::from_value::<ManifestRootCid>(value).is_err());
         }
     }
-
     #[test]
     fn pin_manifest_record_state_transitions() {
         let digest = ManifestDigest::new([1; 32]);
@@ -1330,15 +1228,12 @@ mod tests {
         assert_eq!(record.chunk_digest_sha3_256, chunk_digest);
         assert_eq!(record.por_root, [0xCE; 32]);
         assert_eq!(record.content_length, 1_048_576);
-
         record.approve(64, Some([2; 32]));
         assert!(record.status.is_active());
-
         record.retire(128, Some("superseded".into()));
         assert!(matches!(record.status, PinStatus::Retired(128)));
         assert_eq!(record.retirement_reason.as_deref(), Some("superseded"));
     }
-
     #[test]
     fn provider_ingest_completion_context_enforces_canonical_policy_chain_and_anchor() {
         let revision_one = ProviderIngestCompletionSignerPolicyV1 {
@@ -1351,7 +1246,6 @@ mod tests {
         assert!(
             ProviderIngestCompletionAuthorityV1::new(fixture_account(), revision_one).is_valid()
         );
-
         let mut revision_one_with_predecessor = revision_one;
         revision_one_with_predecessor.predecessor_digest = Some([0x90; 32]);
         assert!(!revision_one_with_predecessor.is_valid());
@@ -1369,7 +1263,6 @@ mod tests {
             }
             .is_valid()
         );
-
         assert!(
             ProviderIngestFinalizedAnchorV1 {
                 height: 1,
@@ -1392,7 +1285,6 @@ mod tests {
             .is_valid()
         );
     }
-
     #[test]
     fn replication_order_record_stores_canonical_payload() {
         let payload = vec![0xAA, 0xBB, 0xCC];
@@ -1416,10 +1308,8 @@ mod tests {
             provider_completions: Vec::new(),
             status: ReplicationOrderStatus::Pending,
         };
-
         assert!(record.status.is_pending());
         assert_eq!(record.canonical_order, payload);
-
         let provider_id = ProviderId::new([0x66; 32]);
         let completed_by = record.issued_by.clone();
         record
@@ -1460,14 +1350,12 @@ mod tests {
             ReplicationOrderStatus::Expired(epoch) if epoch == 43
         ));
     }
-
     #[test]
     fn manifest_digest_matches_sorafs_manifest_digest() {
         use sorafs_manifest::{
             BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, DagCodecId, ManifestBuilder, PinPolicy,
             ProfileId, StorageClass,
         };
-
         let manifest = ManifestBuilder::new()
             .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(DagCodecId(0x71))
@@ -1495,10 +1383,8 @@ mod tests {
             })
             .build()
             .expect("build manifest");
-
         let digest = ManifestDigest::from_manifest(&manifest).expect("compute digest");
         let expected = manifest.digest().expect("compute manifest digest");
-
         assert_eq!(digest.as_bytes(), expected.as_bytes());
     }
 }

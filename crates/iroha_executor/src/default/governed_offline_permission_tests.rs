@@ -2,7 +2,6 @@
 #[cfg(test)]
 mod governed_offline_permission_tests {
     use core::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
@@ -19,17 +18,14 @@ mod governed_offline_permission_tests {
         parameter::CanSetParameters,
         role::CanManageRoles,
     };
-
     use super::*;
     use crate::{Iroha, permission::test_override, prelude};
-
     #[derive(Debug)]
     struct TestExecutor {
         host: Iroha,
         context: prelude::Context,
         verdict: crate::data_model::executor::Result<(), ValidationFail>,
     }
-
     impl TestExecutor {
         fn at_height(authority: AccountId, height: u64) -> Self {
             Self {
@@ -48,46 +44,36 @@ mod governed_offline_permission_tests {
                 verdict: Ok(()),
             }
         }
-
         fn genesis(authority: AccountId) -> Self {
             Self::at_height(authority, 1)
         }
-
         fn post_genesis(authority: AccountId) -> Self {
             Self::at_height(authority, 2)
         }
     }
-
     impl Execute for TestExecutor {
         fn host(&self) -> &Iroha {
             &self.host
         }
-
         fn context(&self) -> &prelude::Context {
             &self.context
         }
-
         fn context_mut(&mut self) -> &mut prelude::Context {
             &mut self.context
         }
-
         fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
             &self.verdict
         }
-
         fn deny(&mut self, reason: ValidationFail) {
             self.verdict = Err(reason);
         }
     }
-
     impl Visit for TestExecutor {}
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive deterministic permission fixture account");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn governed_offline_permissions() -> [PermissionObject; 3] {
         [
             CanManageOfflineEscrow.into(),
@@ -95,7 +81,6 @@ mod governed_offline_permission_tests {
             CanManageOfflineDeviceAttestationPolicy.into(),
         ]
     }
-
     fn assert_genesis_only_denial(
         verdict: &Result<(), ValidationFail>,
         permission: &PermissionObject,
@@ -111,12 +96,10 @@ mod governed_offline_permission_tests {
             "unexpected rejection for {permission:?}: {error}",
         );
     }
-
     #[test]
     fn genesis_accepts_all_exact_governed_offline_permission_grants() {
         let bootstrap = account(40);
         let destination = account(41);
-
         for token in governed_offline_permissions() {
             let grant = Grant::account_permission(token.clone(), destination.clone());
             let mut executor = TestExecutor::genesis(bootstrap.clone());
@@ -128,7 +111,6 @@ mod governed_offline_permission_tests {
             );
         }
     }
-
     #[test]
     fn governed_offline_permissions_are_not_delegable_post_genesis() {
         let banking = account(41);
@@ -144,7 +126,6 @@ mod governed_offline_permission_tests {
             test_override::replace_permissions(previous);
         }
     }
-
     #[test]
     fn governed_offline_permissions_are_not_revocable_post_genesis() {
         let banking = account(43);
@@ -157,7 +138,6 @@ mod governed_offline_permission_tests {
             assert_genesis_only_denial(executor.verdict(), &token);
         }
     }
-
     fn role_with_permissions(
         id: &str,
         grant_to: AccountId,
@@ -169,12 +149,10 @@ mod governed_offline_permission_tests {
         }
         role.inner().clone()
     }
-
     #[test]
     fn role_membership_revalidates_genesis_only_permissions() {
         let holder = account(44);
         let context = TestExecutor::post_genesis(holder.clone());
-
         for (index, permission) in governed_offline_permissions().into_iter().enumerate() {
             let role = role_with_permissions(
                 &format!("governed_offline_{index}"),
@@ -202,7 +180,6 @@ mod governed_offline_permission_tests {
             }
         }
     }
-
     #[test]
     fn role_membership_revalidates_every_sponsor_bound_permission() {
         let sponsor = account(45);
@@ -220,7 +197,6 @@ mod governed_offline_permission_tests {
         ];
         let previous =
             test_override::replace_permissions(vec![PermissionObject::from(CanSetParameters)]);
-
         for (index, permission) in permissions.into_iter().enumerate() {
             let role = role_with_permissions(
                 &format!("sponsor_bound_{index}"),
@@ -244,7 +220,6 @@ mod governed_offline_permission_tests {
         }
         test_override::replace_permissions(previous);
     }
-
     #[test]
     fn role_membership_preserves_safe_exact_permission_delegation() {
         let holder = account(47);
@@ -256,7 +231,6 @@ mod governed_offline_permission_tests {
             [permission.clone()],
         );
         let previous = test_override::replace_permissions(vec![permission]);
-
         for operation in [
             role::RoleDelegationOperation::Grant,
             role::RoleDelegationOperation::Revoke,
@@ -270,10 +244,8 @@ mod governed_offline_permission_tests {
             )
             .expect("an exact holder may delegate an ordinary role");
         }
-
         test_override::replace_permissions(previous);
     }
-
     #[test]
     fn role_membership_rejects_unknown_permission_contents() {
         let holder = account(48);
@@ -286,7 +258,6 @@ mod governed_offline_permission_tests {
                 Json::new(()),
             )],
         );
-
         let error = role::validate_role_delegation_permissions(
             &role,
             &holder,
@@ -297,7 +268,6 @@ mod governed_offline_permission_tests {
         .expect_err("unknown role permissions must fail closed");
         assert!(error.to_string().contains("Unknown permission"));
     }
-
     #[test]
     fn role_registration_validates_sponsor_permissions_against_transaction_authority() {
         let sponsor = account(49);
@@ -313,9 +283,7 @@ mod governed_offline_permission_tests {
         let previous =
             test_override::replace_permissions(vec![PermissionObject::from(CanManageRoles)]);
         let mut executor = TestExecutor::post_genesis(manager);
-
         role::visit_register_role(&mut executor, &registration);
-
         test_override::replace_permissions(previous);
         let error = executor
             .verdict()

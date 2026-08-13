@@ -6,7 +6,15 @@
 //! asset), recipient identity, ephemeral key, output identifier, and complete
 //! `(O,I,C)` tuple. Consensus validates this exact public shape; recipient
 //! wallets additionally authenticate and decode the note.
-
+use super::{
+    FCMP_OUTPUT_TUPLE_BYTES_V1, FcmpNativeErrorV1, FcmpOutputCommitmentOpeningV1,
+    FcmpOutputTupleV1,
+    field::{decode_edwards_point, validate_edwards_scalar},
+    sal::generator_t,
+};
+use crate::privacy_engines::x25519_wallet::{
+    validate_x25519_public_key_v1, x25519_public_key_v1, x25519_shared_secret_v1,
+};
 use chacha20poly1305::{
     XChaCha20Poly1305,
     aead::{Aead as _, KeyInit as _, Payload},
@@ -21,34 +29,19 @@ use iroha_data_model::privacy::{
 use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest as _, Sha256, compress256, digest::generic_array::GenericArray};
 use zeroize::{Zeroize, Zeroizing};
-
-use super::{
-    FCMP_OUTPUT_TUPLE_BYTES_V1, FcmpNativeErrorV1, FcmpOutputCommitmentOpeningV1,
-    FcmpOutputTupleV1,
-    field::{decode_edwards_point, validate_edwards_scalar},
-    sal::generator_t,
-};
-use crate::privacy_engines::x25519_wallet::{
-    validate_x25519_public_key_v1, x25519_public_key_v1, x25519_shared_secret_v1,
-};
-
 const NOTE_MAGIC_V1: [u8; 4] = *b"IFN1";
 const RECIPIENT_ID_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.wallet.recipient-id.v1";
 const NOTE_AAD_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.wallet.note-aad.v1";
 const NOTE_KEY_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.wallet.note-key.v1";
 const POLY1305_TAG_BYTES_V1: usize = 16;
 const AEAD_BYTES_V1: usize = PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1 + POLY1305_TAG_BYTES_V1;
-
 struct WalletSecretCopyValueV1<T: Copy + Zeroize>(T);
-
 struct BorrowedWalletCopySlotV1<'a, T: Copy + Zeroize>(&'a mut T);
-
 impl<T: Copy + Zeroize> BorrowedWalletCopySlotV1<'_, T> {
     fn expose_copy(&self) -> T {
         *self.0
     }
 }
-
 impl<T: Copy + Zeroize> Drop for BorrowedWalletCopySlotV1<'_, T> {
     fn drop(&mut self) {
         self.0.zeroize();
@@ -56,32 +49,26 @@ impl<T: Copy + Zeroize> Drop for BorrowedWalletCopySlotV1<'_, T> {
         let _ = core::hint::black_box(&mut *self.0);
     }
 }
-
 impl<T: Copy + Zeroize> WalletSecretCopyValueV1<T> {
     fn copy_from_ref(value: &T) -> Self {
         Self::from_copy(*value)
     }
-
     fn from_copy(mut value: T) -> Self {
         Self::take(&mut value)
     }
-
     fn take(value: &mut T) -> Self {
         let incoming = BorrowedWalletCopySlotV1(value);
         let owned = Self(incoming.expose_copy());
         drop(incoming);
         owned
     }
-
     fn expose_copy(&self) -> T {
         self.0
     }
-
     fn expose_ref(&self) -> &T {
         &self.0
     }
 }
-
 impl<T: Copy + Zeroize> Drop for WalletSecretCopyValueV1<T> {
     fn drop(&mut self) {
         self.0.zeroize();
@@ -89,14 +76,12 @@ impl<T: Copy + Zeroize> Drop for WalletSecretCopyValueV1<T> {
         let _ = core::hint::black_box(&mut self.0);
     }
 }
-
 struct WalletSecretSha256V1 {
     state: [u32; 8],
     block: [u8; 64],
     block_len: usize,
     byte_len: u64,
 }
-
 impl WalletSecretSha256V1 {
     fn new() -> Self {
         Self {
@@ -115,14 +100,12 @@ impl WalletSecretSha256V1 {
             byte_len: 0,
         }
     }
-
     fn compress_block_v1(&mut self) {
         let block = GenericArray::from_slice(&self.block);
         compress256(&mut self.state, core::slice::from_ref(block));
         self.block.zeroize();
         self.block_len = 0;
     }
-
     fn update_v1(&mut self, mut input: &[u8]) {
         self.byte_len = self
             .byte_len
@@ -138,7 +121,6 @@ impl WalletSecretSha256V1 {
             }
         }
     }
-
     fn finalize_v1(mut self) -> WalletSecretCopyValueV1<[u8; 32]> {
         let bit_len = self
             .byte_len
@@ -153,7 +135,6 @@ impl WalletSecretSha256V1 {
         self.block[self.block_len..56].zeroize();
         self.block[56..].copy_from_slice(&bit_len.to_be_bytes());
         self.compress_block_v1();
-
         let mut output = WalletSecretCopyValueV1([0_u8; 32]);
         for index in 0..32 {
             output.0[index] = (self.state[index / 4] >> (24 - (8 * (index % 4)))) as u8;
@@ -161,7 +142,6 @@ impl WalletSecretSha256V1 {
         output
     }
 }
-
 impl Drop for WalletSecretSha256V1 {
     fn drop(&mut self) {
         self.state.zeroize();
@@ -171,7 +151,6 @@ impl Drop for WalletSecretSha256V1 {
         let _ = core::hint::black_box(&mut self.block);
     }
 }
-
 /// Decrypted fixed-width FCMP++ wallet note.
 ///
 /// The output tuple is public; the amount, amount-commitment mask, `spend_x`,
@@ -183,7 +162,6 @@ pub struct FcmpWalletNoteV1 {
     spend_x: [u8; 32],
     output_y: [u8; 32],
 }
-
 impl core::fmt::Debug for FcmpWalletNoteV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -192,7 +170,6 @@ impl core::fmt::Debug for FcmpWalletNoteV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl PartialEq for FcmpWalletNoteV1 {
     fn eq(&self, other: &Self) -> bool {
         self.output == other.output
@@ -202,9 +179,7 @@ impl PartialEq for FcmpWalletNoteV1 {
             && self.output_y == other.output_y
     }
 }
-
 impl Eq for FcmpWalletNoteV1 {}
-
 impl Zeroize for FcmpWalletNoteV1 {
     fn zeroize(&mut self) {
         self.amount.zeroize();
@@ -213,13 +188,11 @@ impl Zeroize for FcmpWalletNoteV1 {
         self.output_y.zeroize();
     }
 }
-
 impl Drop for FcmpWalletNoteV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 impl FcmpWalletNoteV1 {
     /// Construct and validate a spendable note opening.
     pub fn new(
@@ -241,7 +214,6 @@ impl FcmpWalletNoteV1 {
             commitment_mask,
         )
     }
-
     /// Construct a note from borrowed secret openings without creating raw
     /// by-value copies in the caller.
     pub fn new_borrowed(
@@ -263,7 +235,6 @@ impl FcmpWalletNoteV1 {
             commitment_mask,
         )
     }
-
     fn from_secret_owners_v1(
         output: FcmpOutputTupleV1,
         spend_x_bytes: WalletSecretCopyValueV1<[u8; 32]>,
@@ -304,37 +275,31 @@ impl FcmpWalletNoteV1 {
             output_y: output_y_bytes.expose_copy(),
         })
     }
-
     /// Complete public output tuple recovered from the note.
     #[must_use]
     pub const fn output(&self) -> FcmpOutputTupleV1 {
         self.output
     }
-
     /// Canonical secret spend scalar.
     #[must_use]
     pub const fn spend_x(&self) -> &[u8; 32] {
         &self.spend_x
     }
-
     /// Canonical secret output blinding scalar.
     #[must_use]
     pub const fn output_y(&self) -> &[u8; 32] {
         &self.output_y
     }
-
     /// Hidden strict-positive `u64` amount.
     #[must_use]
     pub const fn amount(&self) -> &u64 {
         &self.amount
     }
-
     /// Canonical secret amount-commitment mask.
     #[must_use]
     pub const fn commitment_mask(&self) -> &[u8; 32] {
         &self.commitment_mask
     }
-
     /// Reconstruct the validated range-proof witness carried by this note.
     pub fn commitment_opening(&self) -> Result<FcmpOutputCommitmentOpeningV1, FcmpNativeErrorV1> {
         FcmpOutputCommitmentOpeningV1::new_borrowed(
@@ -343,7 +308,6 @@ impl FcmpWalletNoteV1 {
             &self.commitment_mask,
         )
     }
-
     fn encode(&self, output_id: [u8; 32]) -> Zeroizing<[u8; PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1]> {
         let mut bytes = Zeroizing::new([0_u8; PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1]);
         let mut cursor = 0;
@@ -363,7 +327,6 @@ impl FcmpWalletNoteV1 {
         bytes[cursor..cursor + 32].copy_from_slice(&self.output_y);
         bytes
     }
-
     fn decode(
         bytes: &[u8],
         expected_output_id: [u8; 32],
@@ -413,7 +376,6 @@ impl FcmpWalletNoteV1 {
         )
     }
 }
-
 fn model_output(output: PrivacyFcmpOutputTupleV1) -> Result<FcmpOutputTupleV1, FcmpNativeErrorV1> {
     FcmpOutputTupleV1::new(
         output.output_key,
@@ -421,7 +383,6 @@ fn model_output(output: PrivacyFcmpOutputTupleV1) -> Result<FcmpOutputTupleV1, F
         output.amount_commitment,
     )
 }
-
 /// Derive the sole first-release recipient identity from a canonical X25519
 /// public key.
 pub fn derive_fcmp_recipient_id_v1(
@@ -434,7 +395,6 @@ pub fn derive_fcmp_recipient_id_v1(
     hash.update(recipient_public_key);
     Ok(PrivacyRecipientIdV1::new(hash.finalize().into()))
 }
-
 /// Derive a canonical X25519 public key from a non-zero wallet secret.
 pub fn fcmp_recipient_public_key_v1(
     mut recipient_secret_key: [u8; 32],
@@ -443,7 +403,6 @@ pub fn fcmp_recipient_public_key_v1(
     x25519_public_key_v1(recipient_secret_key.expose_ref())
         .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)
 }
-
 fn aad_v1(
     pool_id: PrivacyPoolIdV1,
     recipient: PrivacyRecipientIdV1,
@@ -461,7 +420,6 @@ fn aad_v1(
     aad.extend_from_slice(&output.amount_commitment);
     aad
 }
-
 fn note_key_v1(shared_secret: &[u8; 32], aad: &[u8]) -> WalletSecretCopyValueV1<[u8; 32]> {
     let mut hash = WalletSecretSha256V1::new();
     hash.update_v1(NOTE_KEY_DOMAIN_V1);
@@ -469,7 +427,6 @@ fn note_key_v1(shared_secret: &[u8; 32], aad: &[u8]) -> WalletSecretCopyValueV1<
     hash.update_v1(aad);
     hash.finalize_v1()
 }
-
 fn parsed_ciphertext(
     output: &PrivacyFcmpEncryptedOutputV1,
 ) -> Result<([u8; 24], &[u8]), FcmpNativeErrorV1> {
@@ -507,7 +464,6 @@ fn parsed_ciphertext(
     }
     Ok((nonce, encrypted))
 }
-
 /// Validate the exact public FCMP++ wallet ciphertext shape and all public
 /// bindings available to consensus.
 pub fn validate_fcmp_encrypted_output_v1(
@@ -526,7 +482,6 @@ pub fn validate_fcmp_encrypted_output_v1(
         .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)?;
     parsed_ciphertext(encrypted).map(|_| ())
 }
-
 /// Encrypt one fixed-width spendable FCMP++ wallet note.
 pub fn encrypt_fcmp_wallet_note_v1(
     rng: &mut (impl RngCore + CryptoRng),
@@ -592,7 +547,6 @@ pub fn encrypt_fcmp_wallet_note_v1(
     validate_fcmp_encrypted_output_v1(pool_id, output, &encrypted)?;
     Ok(encrypted)
 }
-
 /// Decrypt and authenticate one fixed-width FCMP++ wallet note.
 pub fn decrypt_fcmp_wallet_note_v1(
     pool_id: PrivacyPoolIdV1,
@@ -640,31 +594,24 @@ pub fn decrypt_fcmp_wallet_note_v1(
         model_output(expected_output)?,
     )
 }
-
 #[cfg(test)]
 mod tests {
-    use core::cell::Cell;
-
-    use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
-    use rand_08::{SeedableRng, rngs::StdRng};
-
     use super::*;
     use crate::privacy_engines::fcmp_plus_plus::{FailingRngV1, range::amount_generator};
-
+    use core::cell::Cell;
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
+    use rand_08::{SeedableRng, rngs::StdRng};
     thread_local! {
         static WALLET_COPY_CLEARS: Cell<usize> = const { Cell::new(0) };
     }
-
     #[derive(Clone, Copy)]
     struct TrackingCopy(u64);
-
     impl Zeroize for TrackingCopy {
         fn zeroize(&mut self) {
             self.0 = 0;
             WALLET_COPY_CLEARS.with(|calls| calls.set(calls.get() + 1));
         }
     }
-
     #[test]
     fn wallet_copy_owner_clears_taken_and_borrowed_retained_slots() {
         WALLET_COPY_CLEARS.with(|calls| calls.set(0));
@@ -675,7 +622,6 @@ mod tests {
         assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 1);
         drop(owner);
         assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 2);
-
         WALLET_COPY_CLEARS.with(|calls| calls.set(0));
         let borrowed = TrackingCopy(11);
         let owner = WalletSecretCopyValueV1::copy_from_ref(&borrowed);
@@ -685,7 +631,6 @@ mod tests {
         drop(owner);
         assert_eq!(WALLET_COPY_CLEARS.with(Cell::get), 1);
     }
-
     #[test]
     fn wallet_secret_sha256_matches_the_frozen_note_kdf() {
         let shared_secret = [0x31; 32];
@@ -705,7 +650,6 @@ mod tests {
                 .expect("32-byte SHA-256")
         );
     }
-
     #[test]
     fn wallet_note_constructor_takes_inputs_before_validation_and_owns_products() {
         let source = include_str!("wallet.rs");
@@ -769,7 +713,6 @@ mod tests {
         assert!(!constructor.contains(
             "amount.expose_copy(),\n            commitment_mask.expose_copy(),\n        )?"
         ));
-
         let accessors = source
             .split_once("/// Complete public output tuple recovered from the note")
             .expect("wallet-note accessors")
@@ -787,7 +730,6 @@ mod tests {
             .1;
         assert!(opening.contains("FcmpOutputCommitmentOpeningV1::new_borrowed("));
         assert!(!opening.contains("FcmpOutputCommitmentOpeningV1::new(self.output"));
-
         let encoder = source
             .split_once("    fn encode(&self,")
             .expect("wallet-note encoder")
@@ -813,7 +755,6 @@ mod tests {
         assert!(!encoder.contains("copy_from_slice(&self.amount.to_le_bytes())"));
         assert!(!encoder.contains(") -> [u8; PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1]"));
     }
-
     #[test]
     fn wallet_note_accessors_borrow_exact_storage_and_opening_preserves_it() {
         let (_, _, note, _) = fixture();
@@ -821,14 +762,12 @@ mod tests {
         assert!(core::ptr::eq(note.output_y(), &note.output_y));
         assert!(core::ptr::eq(note.amount(), &note.amount));
         assert!(core::ptr::eq(note.commitment_mask(), &note.commitment_mask));
-
         let opening = note.commitment_opening().expect("borrowed note opening");
         assert_eq!(opening.amount(), note.amount());
         let opening_mask = opening.commitment_mask();
         assert_eq!(&*opening_mask, note.commitment_mask());
         assert_eq!(opening.output(), note.output());
     }
-
     #[test]
     fn wallet_x25519_secrets_are_taken_or_borrowed_across_helper_boundaries() {
         let source = include_str!("wallet.rs");
@@ -858,7 +797,6 @@ mod tests {
         assert!(drop.contains("self.block.zeroize()"));
         assert!(drop.contains("compiler_fence"));
         assert!(drop.matches("black_box").count() >= 2);
-
         let note_key = source
             .split_once("fn note_key_v1(")
             .expect("note-key helper")
@@ -879,7 +817,6 @@ mod tests {
         assert!(owner < secret_update && secret_update < finalize);
         assert!(!note_key.contains("Sha256::new()"));
         assert!(!note_key.contains(".finalize()"));
-
         let public_key = source
             .split_once("pub fn fcmp_recipient_public_key_v1(")
             .expect("recipient public-key helper")
@@ -895,7 +832,6 @@ mod tests {
             .expect("borrowed public-key derivation");
         assert!(public_take < public_derive);
         assert!(!public_key.contains("Zeroizing::new(recipient_secret_key)"));
-
         let encrypt = source
             .split_once("pub fn encrypt_fcmp_wallet_note_v1(")
             .expect("encrypt helper")
@@ -910,7 +846,6 @@ mod tests {
         assert!(!encrypt.contains("x25519_public_key_v1(*ephemeral_secret)"));
         assert!(!encrypt.contains("Zeroizing::new(\n        x25519_shared_secret_v1"));
         assert!(!encrypt.contains("Zeroizing::new(note.encode("));
-
         let decrypt = source
             .split_once("pub fn decrypt_fcmp_wallet_note_v1(")
             .expect("decrypt helper")
@@ -931,25 +866,20 @@ mod tests {
         assert!(!decrypt.contains("fcmp_recipient_public_key_v1(*recipient_secret_key)"));
         assert!(!decrypt.contains("Zeroizing::new(recipient_secret_key)"));
     }
-
     struct PeriodicRng {
         period: usize,
         cursor: usize,
     }
-
     impl RngCore for PeriodicRng {
         fn next_u32(&mut self) -> u32 {
             panic!("FCMP++ wallet must reject the periodic prefix")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("FCMP++ wallet must reject the periodic prefix")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("FCMP++ wallet must use fallible entropy")
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
             for byte in destination {
                 *byte = ((self.cursor % self.period) as u8)
@@ -960,9 +890,7 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for PeriodicRng {}
-
     fn fixture() -> (
         PrivacyPoolIdV1,
         PrivacyFcmpOutputTupleV1,
@@ -996,7 +924,6 @@ mod tests {
         .unwrap();
         (PrivacyPoolIdV1::new([0x61; 32]), model, note, [0x42; 32])
     }
-
     fn authenticated_plaintext_for_test(
         pool: PrivacyPoolIdV1,
         output: PrivacyFcmpOutputTupleV1,
@@ -1037,7 +964,6 @@ mod tests {
         replacement.ciphertext.extend_from_slice(&authenticated);
         replacement
     }
-
     #[test]
     fn wallet_note_debug_is_redacted_and_explicit_zeroize_covers_every_secret() {
         let (_pool, _output, mut note, _secret) = fixture();
@@ -1053,7 +979,6 @@ mod tests {
         assert_eq!(note.spend_x, [0; 32]);
         assert_eq!(note.output_y, [0; 32]);
     }
-
     #[test]
     fn wallet_rng_unavailability_fails_without_calling_infallible_rng_methods() {
         let (pool, output, note, secret) = fixture();
@@ -1063,7 +988,6 @@ mod tests {
             Err(FcmpNativeErrorV1::RandomnessUnavailable)
         );
     }
-
     #[test]
     fn wallet_binding_preflight_precedes_entropy_failure() {
         let (pool, mut output, note, secret) = fixture();
@@ -1076,7 +1000,6 @@ mod tests {
             Err(FcmpNativeErrorV1::EncryptedOutputBinding)
         );
     }
-
     #[test]
     fn wallet_rejects_every_prohibited_short_period_entropy_prefix() {
         let (pool, output, note, secret) = fixture();
@@ -1095,7 +1018,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn fixed_codec_round_trips_and_rejects_all_required_adversaries() {
         let (pool, output, note, secret) = fixture();
@@ -1110,7 +1032,6 @@ mod tests {
             decrypt_fcmp_wallet_note_v1(pool, output, &encrypted, secret).unwrap(),
             note
         );
-
         // A malicious sender can authenticate arbitrary plaintext. Recipient
         // decoding must still reject an amount/mask that does not open the
         // public C, instead of treating AEAD authentication as proof of the
@@ -1151,7 +1072,6 @@ mod tests {
             decrypt_fcmp_wallet_note_v1(pool, output, &mismatching_opening, secret,),
             Err(FcmpNativeErrorV1::RangeCommitmentOpeningMismatch)
         );
-
         for index in [
             0,
             4,
@@ -1179,7 +1099,6 @@ mod tests {
             ),
             Err(FcmpNativeErrorV1::EncryptedOutputAuthentication)
         ));
-
         let mut substituted = output;
         substituted.amount_commitment = (ED25519_BASEPOINT_POINT * Scalar::from(41_u64))
             .compress()
@@ -1196,14 +1115,12 @@ mod tests {
             Err(FcmpNativeErrorV1::EncryptedOutputAuthentication)
         ));
     }
-
     #[test]
     fn fixed_codec_rejects_noncanonical_shapes_and_unspendable_notes() {
         let (pool, output, note, secret) = fixture();
         let public = fcmp_recipient_public_key_v1(secret).unwrap();
         let mut rng = StdRng::seed_from_u64(0xfc_e002);
         let encrypted = encrypt_fcmp_wallet_note_v1(&mut rng, pool, output, &note, public).unwrap();
-
         let mut truncated = encrypted.clone();
         truncated.ciphertext.pop();
         assert!(matches!(
@@ -1219,7 +1136,6 @@ mod tests {
         let mut low_order = encrypted;
         low_order.ephemeral_public_key = PrivacyEncryptionKeyV1::new([0_u8; 32]);
         assert!(validate_fcmp_encrypted_output_v1(pool, output, &low_order).is_err());
-
         let native = model_output(output).unwrap();
         assert!(
             FcmpWalletNoteV1::new_borrowed(
@@ -1242,7 +1158,6 @@ mod tests {
             Err(FcmpNativeErrorV1::RangeCommitmentOpeningMismatch)
         ));
     }
-
     #[test]
     fn authenticated_malformed_plaintext_fields_fail_closed() {
         let (pool, output, note, secret) = fixture();
@@ -1250,7 +1165,6 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0xfc_e003);
         let encrypted = encrypt_fcmp_wallet_note_v1(&mut rng, pool, output, &note, public)
             .expect("canonical encrypted note");
-
         for (label, offset) in [
             ("note magic", 0),
             ("note version", 3),
@@ -1274,7 +1188,6 @@ mod tests {
                 "authenticated {label} substitution was accepted"
             );
         }
-
         let amount_start = 36 + FCMP_OUTPUT_TUPLE_BYTES_V1;
         for (label, start) in [
             ("commitment mask", amount_start + 8),

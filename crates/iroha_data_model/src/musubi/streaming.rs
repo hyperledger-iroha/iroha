@@ -1,7 +1,5 @@
 //! Allocation-free size accounting for canonical Musubi encodings.
-
 use super::*;
-
 pub(super) fn canonical_frame_len<T: norito::core::NoritoSerialize>(
     value: &T,
 ) -> Result<usize, norito::core::Error> {
@@ -9,7 +7,6 @@ pub(super) fn canonical_frame_len<T: norito::core::NoritoSerialize>(
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     norito::core::encoded_frame_len(value)
 }
-
 pub(super) fn validate_semantic_release_fields(
     release: &MusubiReleaseIdV1,
     abi: &MusubiAbiBindingV1,
@@ -46,7 +43,6 @@ pub(super) fn validate_semantic_release_fields(
     }
     Ok(())
 }
-
 pub(super) fn validate_semantic_release_lock(
     release: &MusubiReleaseIdV1,
     abi: &MusubiAbiBindingV1,
@@ -94,14 +90,11 @@ pub(super) fn validate_semantic_release_lock(
     }
     Ok(())
 }
-
 struct SemanticReleaseSource<'a>(&'a MusubiReleaseManifestV1);
-
 impl norito::core::NoritoSerialize for SemanticReleaseSource<'_> {
     fn schema_hash() -> [u8; 16] {
         <MusubiSemanticReleaseManifestV1 as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {
             return Err(norito::core::Error::UnsupportedFeature(
@@ -124,7 +117,6 @@ impl norito::core::NoritoSerialize for SemanticReleaseSource<'_> {
         }
         Ok(())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         if norito::core::use_packed_struct() {
             return None;
@@ -147,7 +139,6 @@ impl norito::core::NoritoSerialize for SemanticReleaseSource<'_> {
         })
     }
 }
-
 pub(super) fn semantic_release_digest(
     manifest: &MusubiReleaseManifestV1,
 ) -> MusubiSemanticReleaseDigestV1 {
@@ -156,14 +147,12 @@ pub(super) fn semantic_release_digest(
         &SemanticReleaseSource(manifest),
     ))
 }
-
 #[cfg(feature = "json")]
 struct JsonCountingSink {
     bytes: usize,
     maximum: usize,
     depth: usize,
 }
-
 #[cfg(feature = "json")]
 impl JsonCountingSink {
     const fn new(maximum: usize) -> Self {
@@ -173,7 +162,6 @@ impl JsonCountingSink {
             depth: 0,
         }
     }
-
     fn add(&mut self, bytes: usize) -> Result<(), norito::json::BoundedJsonError> {
         let next = self
             .bytes
@@ -186,17 +174,14 @@ impl JsonCountingSink {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonWriteSink for JsonCountingSink {
     fn push(&mut self, value: char) -> Result<(), norito::json::BoundedJsonError> {
         self.add(value.len_utf8())
     }
-
     fn push_str(&mut self, value: &str) -> Result<(), norito::json::BoundedJsonError> {
         self.add(value.len())
     }
-
     fn begin_container(&mut self) -> Result<(), norito::json::BoundedJsonError> {
         let next = self
             .depth
@@ -208,12 +193,10 @@ impl norito::json::JsonWriteSink for JsonCountingSink {
         self.depth = next;
         Ok(())
     }
-
     fn end_container(&mut self) {
         self.depth = self.depth.saturating_sub(1);
     }
 }
-
 #[cfg(feature = "json")]
 fn json_field<T: norito::json::JsonSerialize + ?Sized>(
     counter: &mut JsonCountingSink,
@@ -225,7 +208,6 @@ fn json_field<T: norito::json::JsonSerialize + ?Sized>(
     counter.add(name.len().saturating_add(3))?;
     value.json_serialize_to(counter)
 }
-
 #[cfg(feature = "json")]
 fn resolver_row_json(
     counter: &mut JsonCountingSink,
@@ -240,7 +222,6 @@ fn resolver_row_json(
     json_field(counter, "interface_digest", &row.interface_digest, false)?;
     json_field(counter, "abi", &row.abi, false)?;
     json_field(counter, "dependencies", &row.dependencies, false)?;
-
     counter.add("\"selection\":".len() + 1)?;
     norito::json::JsonWriteSink::begin_container(counter)?;
     counter.add(1)?;
@@ -261,18 +242,15 @@ fn resolver_row_json(
     json_field(counter, "revision", &row.selection.yank.revision, false)?;
     counter.add(1)?;
     norito::json::JsonWriteSink::end_container(counter);
-
     json_field(counter, "storage", &row.selection.storage, false)?;
     json_field(counter, "governance", &row.selection.governance, false)?;
     counter.add(1)?;
     norito::json::JsonWriteSink::end_container(counter);
-
     json_field(counter, "index_revision", &row.index_revision, false)?;
     counter.add(1)?;
     norito::json::JsonWriteSink::end_container(counter);
     Ok(())
 }
-
 #[cfg(feature = "json")]
 pub(super) fn musubi_resolver_row_json_len_bounded(
     row: &MusubiResolverReleaseRowV1,
@@ -282,7 +260,6 @@ pub(super) fn musubi_resolver_row_json_len_bounded(
     resolver_row_json(&mut counter, row)?;
     Ok(counter.bytes)
 }
-
 #[cfg(feature = "json")]
 pub(super) fn musubi_json_len_bounded(
     page: &MusubiResolverIndexPageV1,
@@ -307,13 +284,11 @@ pub(super) fn musubi_json_len_bounded(
     norito::json::JsonWriteSink::end_container(&mut counter);
     Ok(counter.bytes)
 }
-
 #[cfg(feature = "json")]
 struct FixedAccountAddress {
     bytes: [u8; MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1],
     len: usize,
 }
-
 #[cfg(feature = "json")]
 impl FixedAccountAddress {
     const fn new() -> Self {
@@ -322,7 +297,6 @@ impl FixedAccountAddress {
             len: 0,
         }
     }
-
     fn push(&mut self, byte: u8) -> Result<(), norito::json::BoundedJsonError> {
         let slot = self
             .bytes
@@ -332,7 +306,6 @@ impl FixedAccountAddress {
         self.len += 1;
         Ok(())
     }
-
     fn extend(&mut self, bytes: &[u8]) -> Result<(), norito::json::BoundedJsonError> {
         let end = self
             .len
@@ -347,7 +320,6 @@ impl FixedAccountAddress {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 fn write_account_i105_json(
     account: &AccountId,
@@ -390,7 +362,6 @@ fn write_account_i105_json(
             }
         }
     }
-
     let canonical_len = canonical.len;
     let canonical = &mut canonical.bytes[..canonical_len];
     let checksum = musubi_i105_checksum_digits(canonical);
@@ -427,7 +398,6 @@ fn write_account_i105_json(
         digits[0] = 0;
         digit_len = 1;
     }
-
     out.push('"')?;
     match crate::account::address::chain_discriminant() {
         0x02f1 => out.push_str("sora")?,
@@ -446,32 +416,27 @@ fn write_account_i105_json(
     }
     out.push('"')
 }
-
 #[cfg(feature = "json")]
 pub(super) mod account_i105_json {
     use super::*;
-
     pub fn serialize(account: &AccountId, out: &mut String) {
         let literal = account
             .canonical_i105()
             .expect("AccountId JSON serialization requires canonical I105 encoding");
         norito::json::JsonSerialize::json_serialize(&literal, out);
     }
-
     pub fn serialize_bounded(
         account: &AccountId,
         out: &mut dyn norito::json::JsonWriteSink,
     ) -> Result<(), norito::json::BoundedJsonError> {
         write_account_i105_json(account, out)
     }
-
     pub fn deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<AccountId, norito::json::Error> {
         <AccountId as norito::json::JsonDeserialize>::json_deserialize(parser)
     }
 }
-
 #[cfg(feature = "json")]
 fn musubi_curve_id(
     algorithm: iroha_crypto::Algorithm,
@@ -480,7 +445,6 @@ fn musubi_curve_id(
         .map(crate::account::curve::CurveId::as_u8)
         .map_err(|_| norito::json::BoundedJsonError::Unsupported)
 }
-
 #[cfg(feature = "json")]
 fn write_musubi_u16_decimal(
     mut value: u16,
@@ -501,7 +465,6 @@ fn write_musubi_u16_decimal(
     }
     Ok(())
 }
-
 #[cfg(feature = "json")]
 fn write_musubi_i105_symbol(
     digit: u8,
@@ -524,7 +487,6 @@ fn write_musubi_i105_symbol(
         Err(norito::json::BoundedJsonError::Unsupported)
     }
 }
-
 #[cfg(feature = "json")]
 fn musubi_i105_checksum_digits(canonical: &[u8]) -> [u8; 6] {
     fn step(mut checksum: u32, value: u8) -> u32 {
@@ -544,7 +506,6 @@ fn musubi_i105_checksum_digits(canonical: &[u8]) -> [u8; 6] {
         }
         checksum
     }
-
     let mut checksum = 1_u32;
     for &byte in b"snx" {
         checksum = step(checksum, byte >> 5);

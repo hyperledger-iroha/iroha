@@ -1,12 +1,10 @@
 use std::{collections::BTreeMap, error::Error, fmt};
-
 use super::{
     CertificateRef, ContextId, HeightContext, Phase, Proposal, ProposalJustification,
     QuorumCertificate, Round, Subject, TimeoutCertificate, TimeoutVote, ValidatorId, Vote,
     reducer::FinalizedHeight,
     refinement::{self, StrictSameRoundTimeoutUpgradeProjection},
 };
-
 /// Canonical Sumeragi-v2 safety-WAL file magic.
 pub const SAFETY_WAL_FILE_MAGIC: [u8; 8] = *b"SUMV2WAL";
 /// Canonical Sumeragi-v2 safety-WAL frame magic.
@@ -17,7 +15,6 @@ pub const SAFETY_WAL_FORMAT_VERSION: u16 = 1;
 pub const SAFETY_WAL_HASH_LEN: usize = 32;
 /// Maximum encoded payload accepted in one safety-WAL frame.
 pub const SAFETY_WAL_MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
-
 const SAFETY_WAL_FILE_HEADER_PREFIX_LEN: usize =
     SAFETY_WAL_FILE_MAGIC.len() + 2 + 2 + SAFETY_WAL_HASH_LEN + SAFETY_WAL_HASH_LEN;
 /// Canonical byte width of a complete safety-WAL file header.
@@ -26,7 +23,6 @@ pub const SAFETY_WAL_FILE_HEADER_LEN: usize =
 /// Canonical byte width of a frame header before its payload and checksum.
 pub const SAFETY_WAL_FRAME_HEADER_LEN: usize =
     SAFETY_WAL_FRAME_MAGIC.len() + 8 + 4 + SAFETY_WAL_HASH_LEN;
-
 /// Hash function supplied by the production adapter for WAL framing.
 ///
 /// The production mapping uses BLAKE3. Keeping the function behind this tiny
@@ -37,7 +33,6 @@ pub trait WalFileHasher {
     /// Hash canonical bytes into one fixed-width WAL digest.
     fn hash(&self, bytes: &[u8]) -> [u8; SAFETY_WAL_HASH_LEN];
 }
-
 impl<F> WalFileHasher for F
 where
     F: Fn(&[u8]) -> [u8; SAFETY_WAL_HASH_LEN],
@@ -46,7 +41,6 @@ where
         self(bytes)
     }
 }
-
 /// Network, protocol, and local consensus-key identity frozen into a WAL header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WalFileIdentity {
@@ -54,7 +48,6 @@ pub struct WalFileIdentity {
     network_id: [u8; SAFETY_WAL_HASH_LEN],
     consensus_key_hash: [u8; SAFETY_WAL_HASH_LEN],
 }
-
 impl WalFileIdentity {
     /// Construct the exact identity expected by one validator process.
     #[must_use]
@@ -69,26 +62,22 @@ impl WalFileIdentity {
             consensus_key_hash,
         }
     }
-
     /// Return the consensus wire-protocol revision.
     #[must_use]
     pub const fn protocol_version(self) -> u16 {
         self.protocol_version
     }
-
     /// Return the exact genesis-derived network identifier.
     #[must_use]
     pub const fn network_id(self) -> [u8; SAFETY_WAL_HASH_LEN] {
         self.network_id
     }
-
     /// Return the local consensus-public-key digest.
     #[must_use]
     pub const fn consensus_key_hash(self) -> [u8; SAFETY_WAL_HASH_LEN] {
         self.consensus_key_hash
     }
 }
-
 /// Header field whose persisted identity differs from the running validator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WalIdentityField {
@@ -99,7 +88,6 @@ pub enum WalIdentityField {
     /// Local consensus-key digest.
     ConsensusKeyHash,
 }
-
 /// Structural failure in a complete WAL header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WalHeaderCorruption {
@@ -112,7 +100,6 @@ pub enum WalHeaderCorruption {
     /// The complete header checksum did not match its canonical prefix.
     Checksum,
 }
-
 /// Structural or hash-chain failure in a complete WAL frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WalFrameCorruption {
@@ -127,7 +114,6 @@ pub enum WalFrameCorruption {
     /// The complete frame checksum did not match its canonical bytes.
     Checksum,
 }
-
 /// Failure while encoding or recovering the canonical safety-WAL bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WalCodecError {
@@ -152,7 +138,6 @@ pub enum WalCodecError {
     /// The next frame sequence cannot be represented.
     SequenceOverflow,
 }
-
 impl fmt::Display for WalCodecError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -173,9 +158,7 @@ impl fmt::Display for WalCodecError {
         }
     }
 }
-
 impl Error for WalCodecError {}
-
 /// One verified complete frame recovered from canonical WAL bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecoveredWalRecord {
@@ -183,27 +166,23 @@ pub struct RecoveredWalRecord {
     payload: Vec<u8>,
     frame_hash: [u8; SAFETY_WAL_HASH_LEN],
 }
-
 impl RecoveredWalRecord {
     /// Return the physical frame sequence, starting at zero.
     #[must_use]
     pub const fn sequence(&self) -> u64 {
         self.sequence
     }
-
     /// Return the opaque canonical payload bytes.
     #[must_use]
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
-
     /// Return the checksum of the exact complete frame accepted by recovery.
     #[must_use]
     pub const fn frame_hash(&self) -> [u8; SAFETY_WAL_HASH_LEN] {
         self.frame_hash
     }
 }
-
 /// Result of validating the complete WAL prefix.
 ///
 /// `valid_prefix_len` is the only permitted truncation point. When
@@ -217,39 +196,33 @@ pub struct WalFileRecovery {
     next_sequence: u64,
     last_frame_hash: [u8; SAFETY_WAL_HASH_LEN],
 }
-
 impl WalFileRecovery {
     /// Return all complete hash-chained records in physical order.
     #[must_use]
     pub fn records(&self) -> &[RecoveredWalRecord] {
         &self.records
     }
-
     /// Return the exact byte boundary following the last complete frame.
     #[must_use]
     pub const fn valid_prefix_len(&self) -> usize {
         self.valid_prefix_len
     }
-
     /// Report whether an incomplete, unacknowledged final append was ignored.
     #[must_use]
     pub const fn has_incomplete_tail(&self) -> bool {
         self.incomplete_tail
     }
-
     /// Return the physical sequence required for the next append.
     #[must_use]
     pub const fn next_sequence(&self) -> u64 {
         self.next_sequence
     }
-
     /// Return the hash-chain link required for the next append.
     #[must_use]
     pub const fn last_frame_hash(&self) -> [u8; SAFETY_WAL_HASH_LEN] {
         self.last_frame_hash
     }
 }
-
 /// Canonical bytes and hash of one planned WAL append.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EncodedWalFrame {
@@ -257,27 +230,23 @@ pub struct EncodedWalFrame {
     bytes: Vec<u8>,
     frame_hash: [u8; SAFETY_WAL_HASH_LEN],
 }
-
 impl EncodedWalFrame {
     /// Return the physical frame sequence.
     #[must_use]
     pub const fn sequence(&self) -> u64 {
         self.sequence
     }
-
     /// Return the exact bytes to append with one `write_all` operation.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
-
     /// Return the hash-chain link for the next frame.
     #[must_use]
     pub const fn frame_hash(&self) -> [u8; SAFETY_WAL_HASH_LEN] {
         self.frame_hash
     }
 }
-
 /// Encode the canonical, checksummed safety-WAL file header.
 #[must_use]
 pub fn encode_wal_file_header(
@@ -299,7 +268,6 @@ pub fn encode_wal_file_header(
     header[SAFETY_WAL_FILE_HEADER_PREFIX_LEN..].copy_from_slice(&checksum);
     header
 }
-
 /// Encode one complete canonical safety-WAL frame.
 ///
 /// # Errors
@@ -325,7 +293,6 @@ pub fn encode_wal_frame(
     sequence
         .checked_add(1)
         .ok_or(WalCodecError::SequenceOverflow)?;
-
     let mut bytes =
         Vec::with_capacity(SAFETY_WAL_FRAME_HEADER_LEN + payload.len() + SAFETY_WAL_HASH_LEN);
     bytes.extend_from_slice(&SAFETY_WAL_FRAME_MAGIC);
@@ -341,7 +308,6 @@ pub fn encode_wal_frame(
         frame_hash,
     })
 }
-
 /// Validate a WAL header and its maximal complete hash-chained frame prefix.
 ///
 /// An incomplete final frame is returned as an unacknowledged tail and never
@@ -360,13 +326,11 @@ pub fn recover_wal_file(
     hasher: &impl WalFileHasher,
 ) -> Result<WalFileRecovery, WalCodecError> {
     validate_wal_file_header(bytes, expected_identity, hasher)?;
-
     let mut offset = SAFETY_WAL_FILE_HEADER_LEN;
     let mut expected_sequence = 0_u64;
     let mut previous_hash = [0_u8; SAFETY_WAL_HASH_LEN];
     let mut records = Vec::new();
     let mut incomplete_tail = false;
-
     while offset < bytes.len() {
         if bytes.len().saturating_sub(offset) < SAFETY_WAL_FRAME_HEADER_LEN {
             incomplete_tail = true;
@@ -388,7 +352,6 @@ pub fn recover_wal_file(
         let mut encoded_previous = [0_u8; SAFETY_WAL_HASH_LEN];
         encoded_previous.copy_from_slice(&bytes[offset..offset + SAFETY_WAL_HASH_LEN]);
         offset += SAFETY_WAL_HASH_LEN;
-
         if sequence != expected_sequence {
             return Err(WalCodecError::CorruptFrame {
                 sequence: expected_sequence,
@@ -407,7 +370,6 @@ pub fn recover_wal_file(
                 reason: WalFrameCorruption::PreviousHash,
             });
         }
-
         let frame_len = SAFETY_WAL_FRAME_HEADER_LEN
             .checked_add(payload_len)
             .and_then(|length| length.checked_add(SAFETY_WAL_HASH_LEN))
@@ -456,7 +418,6 @@ pub fn recover_wal_file(
                 reason: WalFrameCorruption::Checksum,
             });
         }
-
         records.push(RecoveredWalRecord {
             sequence,
             payload,
@@ -468,7 +429,6 @@ pub fn recover_wal_file(
             .ok_or(WalCodecError::SequenceOverflow)?;
         offset = payload_end + SAFETY_WAL_HASH_LEN;
     }
-
     Ok(WalFileRecovery {
         records,
         valid_prefix_len: offset,
@@ -477,7 +437,6 @@ pub fn recover_wal_file(
         last_frame_hash: previous_hash,
     })
 }
-
 fn validate_wal_file_header(
     bytes: &[u8],
     expected_identity: WalFileIdentity,
@@ -540,21 +499,17 @@ fn validate_wal_file_header(
     }
     Ok(())
 }
-
 const fn read_wal_u16(bytes: &[u8]) -> u16 {
     u16::from_le_bytes([bytes[0], bytes[1]])
 }
-
 const fn read_wal_u32(bytes: &[u8]) -> u32 {
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
-
 const fn read_wal_u64(bytes: &[u8]) -> u64 {
     u64::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ])
 }
-
 /// Ordered durable-write operation supplied by a filesystem adapter.
 ///
 /// Implementations must perform the named operation on the same open append
@@ -563,7 +518,6 @@ const fn read_wal_u64(bytes: &[u8]) -> u64 {
 pub trait WalAppendIo {
     /// Adapter-specific I/O failure.
     type Error;
-
     /// Append every byte or return an error after a possible partial write.
     ///
     /// # Errors
@@ -585,7 +539,6 @@ pub trait WalAppendIo {
     /// Returns the adapter failure without minting a durability receipt.
     fn sync_data(&mut self) -> Result<(), Self::Error>;
 }
-
 /// Physical I/O stage at which an append failed closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WalIoStage {
@@ -596,7 +549,6 @@ pub enum WalIoStage {
     /// Durable `sync_data`.
     SyncData,
 }
-
 /// Failure of the ordered append lifecycle.
 #[derive(Debug)]
 pub enum WalAppendError<E> {
@@ -612,7 +564,6 @@ pub enum WalAppendError<E> {
     /// A previous I/O error requires reopen and verified WAL recovery.
     FailedClosed,
 }
-
 impl<E: fmt::Display> fmt::Display for WalAppendError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -626,7 +577,6 @@ impl<E: fmt::Display> fmt::Display for WalAppendError<E> {
         }
     }
 }
-
 impl<E: Error + 'static> Error for WalAppendError<E> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
@@ -636,28 +586,24 @@ impl<E: Error + 'static> Error for WalAppendError<E> {
         }
     }
 }
-
 /// Receipt minted only after write, flush, and durable synchronization succeed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WalAppendReceipt {
     sequence: u64,
     frame_hash: [u8; SAFETY_WAL_HASH_LEN],
 }
-
 impl WalAppendReceipt {
     /// Return the acknowledged physical frame sequence.
     #[must_use]
     pub const fn sequence(self) -> u64 {
         self.sequence
     }
-
     /// Return the acknowledged frame hash used by its successor.
     #[must_use]
     pub const fn frame_hash(self) -> [u8; SAFETY_WAL_HASH_LEN] {
         self.frame_hash
     }
 }
-
 /// Hash-chain state for ordered append acknowledgement.
 ///
 /// Any I/O error poisons the state. Retrying against the same handle could
@@ -669,7 +615,6 @@ pub struct WalAppendState {
     last_frame_hash: [u8; SAFETY_WAL_HASH_LEN],
     failed_closed: bool,
 }
-
 impl WalAppendState {
     /// Construct append state from a successfully verified recovery result.
     #[must_use]
@@ -680,7 +625,6 @@ impl WalAppendState {
             failed_closed: false,
         }
     }
-
     /// Construct append state from a prefix verified by the production streaming reader.
     ///
     /// This crate-private constructor keeps the host recovery path from materializing the entire
@@ -695,19 +639,16 @@ impl WalAppendState {
             failed_closed: false,
         }
     }
-
     /// Return the next required physical frame sequence.
     #[must_use]
     pub const fn next_sequence(self) -> u64 {
         self.next_sequence
     }
-
     /// Report whether an I/O failure requires verified reopen and replay.
     #[must_use]
     pub const fn is_failed_closed(self) -> bool {
         self.failed_closed
     }
-
     /// Encode, append, flush, and synchronize one frame in the mandatory order.
     ///
     /// State advances and a receipt is returned only after all three stages
@@ -733,7 +674,6 @@ impl WalAppendState {
             .next_sequence
             .checked_add(1)
             .ok_or(WalAppendError::Codec(WalCodecError::SequenceOverflow))?;
-
         if let Err(source) = io.write_all(frame.bytes()) {
             self.failed_closed = true;
             return Err(WalAppendError::Io {
@@ -762,7 +702,6 @@ impl WalAppendState {
             self.failed_closed = true;
             return Err(WalAppendError::FailedClosed);
         }
-
         self.next_sequence = next_sequence;
         self.last_frame_hash = frame.frame_hash();
         Ok(WalAppendReceipt {
@@ -771,7 +710,6 @@ impl WalAppendState {
         })
     }
 }
-
 /// Typed authorization to retire one closed height's WAL.
 ///
 /// The sole constructor derives from evidence exposed only after the reducer has
@@ -785,7 +723,6 @@ pub struct WalRetirementAuthorization {
     subject: Subject,
     certificate: CertificateRef,
 }
-
 impl WalRetirementAuthorization {
     /// Derive retirement authority from a successfully closed reducer height.
     #[must_use]
@@ -797,31 +734,26 @@ impl WalRetirementAuthorization {
             certificate: finalized.decision().reference(),
         }
     }
-
     /// Return the frozen height-context identity.
     #[must_use]
     pub const fn context_id(self) -> ContextId {
         self.context_id
     }
-
     /// Return the closed block height.
     #[must_use]
     pub const fn height(self) -> u64 {
         self.height
     }
-
     /// Return the exact finalized block subject.
     #[must_use]
     pub const fn subject(self) -> Subject {
         self.subject
     }
-
     /// Return the exact durable `CommitQC` reference.
     #[must_use]
     pub const fn certificate(self) -> CertificateRef {
         self.certificate
     }
-
     /// Check this token against the exact finalized-height evidence.
     ///
     /// The three durability premises are true by construction of
@@ -837,7 +769,6 @@ impl WalRetirementAuthorization {
             decision.reference(),
         )
     }
-
     /// Check this token against an exact durable decision identity.
     ///
     /// This exposes the same production/Verus predicate for negative adapter
@@ -878,25 +809,21 @@ impl WalRetirementAuthorization {
         )
     }
 }
-
 /// Monotonic identifier of a requested append to the safety WAL.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PersistenceId(u64);
-
 impl PersistenceId {
     /// Constructs a persistence identifier.
     #[must_use]
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
-
     /// Returns the numeric identifier.
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
 }
-
 /// Safety-relevant transition stored in the append-only WAL.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WalRecord {
@@ -928,7 +855,6 @@ pub enum WalRecord {
     /// authority; replay rejects only a later semantically different Decision.
     Decision(QuorumCertificate),
 }
-
 impl WalRecord {
     pub(crate) fn context_id(&self) -> ContextId {
         match self {
@@ -942,34 +868,29 @@ impl WalRecord {
         }
     }
 }
-
 /// One complete append-only WAL frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WalEntry {
     id: PersistenceId,
     record: WalRecord,
 }
-
 impl WalEntry {
     /// Constructs a WAL entry.
     #[must_use]
     pub const fn new(id: PersistenceId, record: WalRecord) -> Self {
         Self { id, record }
     }
-
     /// Returns the monotonic entry identifier.
     #[must_use]
     pub const fn id(&self) -> PersistenceId {
         self.id
     }
-
     /// Returns the stored safety transition.
     #[must_use]
     pub const fn record(&self) -> &WalRecord {
         &self.record
     }
 }
-
 /// Consensus state reconstructed exclusively from acknowledged WAL entries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DurableState {
@@ -986,7 +907,6 @@ pub struct DurableState {
     last_timeout: Option<TimeoutCertificate>,
     decision: Option<QuorumCertificate>,
 }
-
 impl DurableState {
     /// Creates the initial durable state for a height.
     #[must_use]
@@ -1006,7 +926,6 @@ impl DurableState {
             decision: None,
         }
     }
-
     /// Replays complete WAL entries in order and returns the reconstructed state.
     ///
     /// # Errors
@@ -1024,7 +943,6 @@ impl DurableState {
         }
         Ok(state)
     }
-
     /// Applies one complete WAL frame.
     ///
     /// # Errors
@@ -1043,7 +961,6 @@ impl DurableState {
         *self = next;
         Ok(())
     }
-
     /// Classify one timeout certificate through the source-shared lock-only
     /// upgrade kernel.
     ///
@@ -1077,7 +994,6 @@ impl DurableState {
             },
         )
     }
-
     /// Return whether `certificate` is the exact latest durable timeout
     /// justification for a locally generated proposal in `proposal_view`.
     ///
@@ -1098,7 +1014,6 @@ impl DurableState {
             self.last_timeout.as_ref(),
         )
     }
-
     #[allow(clippy::too_many_lines)]
     fn apply_in_place(
         &mut self,
@@ -1278,7 +1193,6 @@ impl DurableState {
                         }
                         Some(_) => {}
                     }
-
                     match &self.locked {
                         None => self.locked = Some(highest.clone()),
                         Some(locked) if highest.round().view() > locked.round().view() => {
@@ -1323,7 +1237,6 @@ impl DurableState {
         self.last_id = entry.id;
         Ok(())
     }
-
     fn validate_local_vote(
         context: &HeightContext,
         local_validator: Option<ValidatorId>,
@@ -1342,31 +1255,26 @@ impl DurableState {
         }
         Ok(())
     }
-
     /// Returns the height context identifier.
     #[must_use]
     pub const fn context_id(&self) -> ContextId {
         self.context_id
     }
-
     /// Returns the height represented by this state.
     #[must_use]
     pub const fn height(&self) -> u64 {
         self.height
     }
-
     /// Returns the current persisted view.
     #[must_use]
     pub const fn current_view(&self) -> u64 {
         self.current_view
     }
-
     /// Returns the last applied WAL identifier.
     #[must_use]
     pub const fn last_id(&self) -> PersistenceId {
         self.last_id
     }
-
     /// Returns the next required WAL identifier.
     ///
     /// # Errors
@@ -1379,57 +1287,47 @@ impl DurableState {
             .map(PersistenceId::new)
             .ok_or(ReplayError::SequenceOverflow)
     }
-
     /// Returns the highest durable `PrepareQC`.
     #[must_use]
     pub const fn highest_prepare(&self) -> Option<&QuorumCertificate> {
         self.highest_prepare.as_ref()
     }
-
     /// Returns the current durable lock.
     #[must_use]
     pub const fn locked(&self) -> Option<&QuorumCertificate> {
         self.locked.as_ref()
     }
-
     /// Returns the last installed timeout certificate.
     #[must_use]
     pub const fn last_timeout(&self) -> Option<&TimeoutCertificate> {
         self.last_timeout.as_ref()
     }
-
     /// Returns the durable decision, if any.
     #[must_use]
     pub const fn decision(&self) -> Option<&QuorumCertificate> {
         self.decision.as_ref()
     }
-
     /// Returns the local Prepare intent for a round.
     #[must_use]
     pub fn prepare_intent(&self, round: Round) -> Option<Vote> {
         self.prepare_intents.get(&round).copied()
     }
-
     /// Returns the local proposal intent for a round.
     #[must_use]
     pub fn proposal_intent(&self, round: Round) -> Option<&Proposal> {
         self.proposal_intents.get(&round)
     }
-
     /// Returns the local Commit intent for a round.
     #[must_use]
     pub fn commit_intent(&self, round: Round) -> Option<Vote> {
         self.commit_intents.get(&round).copied()
     }
-
     pub(crate) fn prepare_intents(&self) -> impl Iterator<Item = Vote> + '_ {
         self.prepare_intents.values().copied()
     }
-
     pub(crate) fn commit_intents(&self) -> impl Iterator<Item = Vote> + '_ {
         self.commit_intents.values().copied()
     }
-
     /// Return the sole same-round Commit intent authorized by `locked`.
     ///
     /// A timeout may leave this already-durable intent retransmittable, but it
@@ -1445,14 +1343,12 @@ impl DurableState {
                 && vote.subject() == locked.subject()
         })
     }
-
     /// Returns the local timeout intent for a round.
     #[must_use]
     pub fn timeout_intent(&self, round: Round) -> Option<TimeoutVote> {
         self.timeout_intents.get(&round).cloned()
     }
 }
-
 fn validate_qc(
     context: &HeightContext,
     certificate: &QuorumCertificate,
@@ -1466,7 +1362,6 @@ fn validate_qc(
         .map(|_| ())
         .map_err(|_| ReplayError::InvalidCertificate)
 }
-
 fn insert_unique_vote(intents: &mut BTreeMap<Round, Vote>, vote: Vote) -> Result<(), ReplayError> {
     if let Some(existing) = intents.get(&vote.round()) {
         if existing != &vote {
@@ -1477,7 +1372,6 @@ fn insert_unique_vote(intents: &mut BTreeMap<Round, Vote>, vote: Vote) -> Result
     }
     Ok(())
 }
-
 fn update_highest(
     highest: &mut Option<QuorumCertificate>,
     candidate: QuorumCertificate,
@@ -1498,7 +1392,6 @@ fn update_highest(
     *highest = Some(candidate);
     Ok(())
 }
-
 /// Failure while applying or replaying complete WAL records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReplayError {
@@ -1542,7 +1435,6 @@ pub enum ReplayError {
     /// Two durable `CommitQC`s decide different subjects.
     ConflictingDecision,
 }
-
 impl fmt::Display for ReplayError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1590,9 +1482,7 @@ impl fmt::Display for ReplayError {
         }
     }
 }
-
 impl Error for ReplayError {}
-
 #[cfg(test)]
 mod byte_lifecycle_tests {
     use super::super::{
@@ -1600,9 +1490,7 @@ mod byte_lifecycle_tests {
         VotingMode, VotingPower,
     };
     use super::*;
-
     const IDENTITY: WalFileIdentity = WalFileIdentity::new(3, [0x11; 32], [0x22; 32]);
-
     fn replay_context() -> HeightContext {
         let roster = (1_u8..=4)
             .map(|byte| Validator::new(ValidatorId::repeat(byte), VotingPower::new(1)))
@@ -1627,7 +1515,6 @@ mod byte_lifecycle_tests {
         )
         .expect("valid WAL replay context")
     }
-
     fn replay_shares() -> Vec<SignatureShare> {
         (1_u8..=3)
             .map(|byte| {
@@ -1638,7 +1525,6 @@ mod byte_lifecycle_tests {
             })
             .collect()
     }
-
     fn replay_prepare(context: &HeightContext, view: u64, subject: u8) -> QuorumCertificate {
         QuorumCertificate::new(
             CertificateRef::new(
@@ -1650,7 +1536,6 @@ mod byte_lifecycle_tests {
             replay_shares(),
         )
     }
-
     fn replay_timeout(
         context: &HeightContext,
         view: u64,
@@ -1662,7 +1547,6 @@ mod byte_lifecycle_tests {
             vec![TimeoutSignatureGroup::new(highest, replay_shares())],
         )
     }
-
     #[test]
     fn same_round_timeout_replay_accepts_only_a_strict_prepare_origin_upgrade() {
         let context = replay_context();
@@ -1684,12 +1568,10 @@ mod byte_lifecycle_tests {
             ],
         )
         .expect("strict same-round Prepare origin upgrade replays");
-
         assert_eq!(durable.current_view(), 2);
         assert_eq!(durable.highest_prepare(), Some(&prepare_one));
         assert_eq!(durable.locked(), Some(&prepare_one));
         assert_eq!(durable.last_timeout(), Some(&upgrade));
-
         for rejected in [
             replay_timeout(&context, 1, None),
             replay_timeout(&context, 1, Some(prepare_zero)),
@@ -1707,7 +1589,6 @@ mod byte_lifecycle_tests {
             assert_eq!(durable.last_timeout(), Some(&upgrade));
         }
     }
-
     fn test_hash(bytes: &[u8]) -> [u8; SAFETY_WAL_HASH_LEN] {
         let mut lanes = [
             0xcbf2_9ce4_8422_2325_u64,
@@ -1732,11 +1613,9 @@ mod byte_lifecycle_tests {
         }
         digest
     }
-
     fn header() -> Vec<u8> {
         encode_wal_file_header(IDENTITY, &test_hash).to_vec()
     }
-
     fn file_with_frames(payloads: &[&[u8]]) -> Vec<u8> {
         let mut bytes = header();
         let mut previous_hash = [0_u8; SAFETY_WAL_HASH_LEN];
@@ -1753,7 +1632,6 @@ mod byte_lifecycle_tests {
         }
         bytes
     }
-
     #[test]
     fn canonical_header_and_hash_chain_round_trip() {
         let bytes = file_with_frames(&[b"prepare", b"lock-and-commit", b"decision"]);
@@ -1788,7 +1666,6 @@ mod byte_lifecycle_tests {
             b"S2FR"
         );
     }
-
     #[test]
     fn every_incomplete_final_frame_boundary_is_unacknowledged() {
         let header = header();
@@ -1803,13 +1680,11 @@ mod byte_lifecycle_tests {
             assert_eq!(recovered.has_incomplete_tail(), cut != 0, "cut {cut}");
             assert_eq!(recovered.next_sequence(), 0, "cut {cut}");
         }
-
         let mut complete = header.clone();
         complete.extend_from_slice(first.bytes());
         let recovered = recover_wal_file(&complete, IDENTITY, &test_hash).expect("complete frame");
         assert_eq!(recovered.records().len(), 1);
         assert!(!recovered.has_incomplete_tail());
-
         let second =
             encode_wal_frame(1, first.frame_hash(), b"next", &test_hash).expect("second frame");
         for cut in 0..second.bytes().len() {
@@ -1824,7 +1699,6 @@ mod byte_lifecycle_tests {
             assert_eq!(recovered.last_frame_hash(), first.frame_hash(), "cut {cut}");
         }
     }
-
     #[test]
     fn complete_corruption_before_an_incomplete_tail_fails_closed() {
         let first_payload = b"durable decision";
@@ -1840,7 +1714,6 @@ mod byte_lifecycle_tests {
             })
         );
     }
-
     #[test]
     fn complete_final_frame_corruption_is_not_downgraded_to_a_crash_tail() {
         let mut magic = file_with_frames(&[b"prepare"]);
@@ -1852,7 +1725,6 @@ mod byte_lifecycle_tests {
                 reason: WalFrameCorruption::Magic,
             })
         ));
-
         let mut oversized = file_with_frames(&[b"prepare"]);
         let payload_len_offset =
             SAFETY_WAL_FILE_HEADER_LEN + SAFETY_WAL_FRAME_MAGIC.len() + std::mem::size_of::<u64>();
@@ -1867,7 +1739,6 @@ mod byte_lifecycle_tests {
                 reason: WalFrameCorruption::RecordLength,
             })
         ));
-
         let mut checksum = file_with_frames(&[b"prepare"]);
         *checksum.last_mut().expect("frame checksum byte") ^= 0x01;
         assert!(matches!(
@@ -1877,7 +1748,6 @@ mod byte_lifecycle_tests {
                 reason: WalFrameCorruption::Checksum,
             })
         ));
-
         let first = encode_wal_frame(0, [0; 32], b"prepare", &test_hash).expect("first");
         let second =
             encode_wal_frame(1, first.frame_hash(), b"decision", &test_hash).expect("second");
@@ -1894,7 +1764,6 @@ mod byte_lifecycle_tests {
                 reason: WalFrameCorruption::PreviousHash,
             })
         ));
-
         let mut sequence = file_with_frames(&[b"first", b"second"]);
         let first_len = encode_wal_frame(0, [0; 32], b"first", &test_hash)
             .expect("first")
@@ -1910,7 +1779,6 @@ mod byte_lifecycle_tests {
             })
         ));
     }
-
     #[test]
     fn header_and_consensus_identity_fail_closed() {
         let valid = header();
@@ -1921,14 +1789,12 @@ mod byte_lifecycle_tests {
                 "header cut {cut}"
             );
         }
-
         let mut magic = valid.clone();
         magic[0] ^= 0x01;
         assert_eq!(
             recover_wal_file(&magic, IDENTITY, &test_hash),
             Err(WalCodecError::InvalidHeader(WalHeaderCorruption::Magic))
         );
-
         let mut format = valid.clone();
         format[SAFETY_WAL_FILE_MAGIC.len()] ^= 0x01;
         assert_eq!(
@@ -1937,14 +1803,12 @@ mod byte_lifecycle_tests {
                 WalHeaderCorruption::FormatVersion
             ))
         );
-
         let mut checksum = valid.clone();
         *checksum.last_mut().expect("header checksum byte") ^= 0x01;
         assert_eq!(
             recover_wal_file(&checksum, IDENTITY, &test_hash),
             Err(WalCodecError::InvalidHeader(WalHeaderCorruption::Checksum))
         );
-
         let different_protocol_version = IDENTITY.protocol_version() ^ 1;
         for (identity, expected) in [
             (
@@ -1978,30 +1842,24 @@ mod byte_lifecycle_tests {
             );
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum FakeIoError {
         Failed(WalIoStage),
     }
-
     impl fmt::Display for FakeIoError {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(formatter, "injected {self:?}")
         }
     }
-
     impl Error for FakeIoError {}
-
     #[derive(Debug, Default)]
     struct FakeIo {
         bytes: Vec<u8>,
         calls: Vec<WalIoStage>,
         fail_at: Option<WalIoStage>,
     }
-
     impl WalAppendIo for FakeIo {
         type Error = FakeIoError;
-
         fn write_all(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
             self.calls.push(WalIoStage::Write);
             if self.fail_at == Some(WalIoStage::Write) {
@@ -2011,7 +1869,6 @@ mod byte_lifecycle_tests {
             self.bytes.extend_from_slice(bytes);
             Ok(())
         }
-
         fn flush(&mut self) -> Result<(), Self::Error> {
             self.calls.push(WalIoStage::Flush);
             if self.fail_at == Some(WalIoStage::Flush) {
@@ -2019,7 +1876,6 @@ mod byte_lifecycle_tests {
             }
             Ok(())
         }
-
         fn sync_data(&mut self) -> Result<(), Self::Error> {
             self.calls.push(WalIoStage::SyncData);
             if self.fail_at == Some(WalIoStage::SyncData) {
@@ -2028,7 +1884,6 @@ mod byte_lifecycle_tests {
             Ok(())
         }
     }
-
     #[test]
     fn append_acknowledgement_requires_write_flush_and_sync_in_order() {
         let initial_bytes = header();
@@ -2046,7 +1901,6 @@ mod byte_lifecycle_tests {
         assert_eq!(state.next_sequence(), 1);
         assert_eq!(receipt.frame_hash(), state.last_frame_hash);
         assert!(!state.is_failed_closed());
-
         let mut persisted = initial_bytes;
         persisted.extend_from_slice(&io.bytes);
         let replayed = recover_wal_file(&persisted, IDENTITY, &test_hash).expect("replay append");
@@ -2054,7 +1908,6 @@ mod byte_lifecycle_tests {
         assert_eq!(replayed.records()[0].frame_hash(), receipt.frame_hash());
         assert_eq!(replayed.last_frame_hash(), receipt.frame_hash());
     }
-
     #[test]
     fn every_io_failure_preserves_append_state_and_requires_recovery() {
         for failed_stage in [WalIoStage::Write, WalIoStage::Flush, WalIoStage::SyncData] {
@@ -2074,14 +1927,12 @@ mod byte_lifecycle_tests {
             assert_eq!(state.next_sequence(), before.next_sequence());
             assert_eq!(state.last_frame_hash, before.last_frame_hash);
             assert!(state.is_failed_closed());
-
             let calls_after_failure = io.calls.len();
             assert!(matches!(
                 state.append(b"must not retry", &test_hash, &mut io),
                 Err(WalAppendError::FailedClosed)
             ));
             assert_eq!(io.calls.len(), calls_after_failure);
-
             let mut on_disk = initial_bytes;
             on_disk.extend_from_slice(&io.bytes);
             let reopened = recover_wal_file(&on_disk, IDENTITY, &test_hash)
@@ -2106,7 +1957,6 @@ mod byte_lifecycle_tests {
             );
         }
     }
-
     #[test]
     fn codec_preflight_errors_do_not_write_or_mint_receipts() {
         let recovery = recover_wal_file(&header(), IDENTITY, &test_hash).expect("empty WAL");
@@ -2121,7 +1971,6 @@ mod byte_lifecycle_tests {
         ));
         assert!(io.calls.is_empty());
         assert!(!overflow.is_failed_closed());
-
         let oversized = vec![0_u8; SAFETY_WAL_MAX_RECORD_BYTES + 1];
         let mut state = WalAppendState::from_recovery(&recovery);
         assert!(matches!(

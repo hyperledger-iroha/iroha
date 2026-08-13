@@ -14,9 +14,7 @@
 //! - a BFV-backed secret affine evaluator that consumes BFV-encrypted input,
 //! - and a BFV-backed secret programmed evaluator with an instruction-driven
 //!   RAM-style encrypted state machine.
-
 use std::{fmt, ops::Deref, str::FromStr, string::String, sync::Arc, vec::Vec};
-
 use hex::FromHex as _;
 use hkdf::Hkdf;
 use iroha_schema::IntoSchema;
@@ -28,10 +26,8 @@ use norito::json;
 use sha3::Sha3_512;
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
-
 use rand::{Rng as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
-
 use crate::{
     BFV_EXACT_EVALUATOR_MAX_MULTIPLICATIVE_DEPTH_U8, BfvAffineCircuit, BfvCiphertext, BfvError,
     BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters, BfvParameters,
@@ -42,7 +38,6 @@ use crate::{
     registered_bfv_rns_modulus_chain, subtract_ciphertexts_rns_exact,
     validate_registered_bfv_parameters,
 };
-
 const POLICY_DOMAIN: &[u8] = b"iroha.ram_lfe.policy.hkdf_sha3_512_prf.v1";
 const SECRET_COMMITMENT_DOMAIN: &[u8] = b"iroha.ram_lfe.policy_secret.hkdf_sha3_512_prf.v1";
 const HKDF_SALT_DOMAIN: &[u8] = b"iroha.ram_lfe.hkdf_salt.hkdf_sha3_512_prf.v1";
@@ -75,9 +70,7 @@ const RAM_LFE_PROOF_VERIFYING_KEY_MAX_BYTES: usize = 1_048_576;
 const MAX_INPUT_BYTES: usize = 1_048_576;
 /// Maximum hidden RAM-LFE secret size accepted by evaluators and runtime configuration.
 pub const RAM_LFE_SECRET_MAX_BYTES: usize = 4096;
-
 const RAM_LFE_SECRET_REDACTED: &str = "[REDACTED RAM-LFE secret]";
-
 /// Validated, zeroizing hidden RAM-LFE secret material.
 ///
 /// Clones share one allocation so passing configuration into a runtime does not leave additional
@@ -85,20 +78,17 @@ const RAM_LFE_SECRET_REDACTED: &str = "[REDACTED RAM-LFE secret]";
 /// formatting never exposes its contents.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RamLfeSecret(Arc<Zeroizing<Vec<u8>>>);
-
 impl RamLfeSecret {
     /// Borrow the validated secret bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_slice()
     }
-
     /// Return the secret length without exposing its contents.
     #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
-
     /// Return whether this secret is empty.
     ///
     /// Constructed values are always non-empty; this method is provided for slice-like ergonomics.
@@ -107,30 +97,24 @@ impl RamLfeSecret {
         self.0.is_empty()
     }
 }
-
 impl fmt::Debug for RamLfeSecret {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(RAM_LFE_SECRET_REDACTED)
     }
 }
-
 impl AsRef<[u8]> for RamLfeSecret {
     fn as_ref(&self) -> &[u8] {
         self.as_bytes()
     }
 }
-
 impl Deref for RamLfeSecret {
     type Target = [u8];
-
     fn deref(&self) -> &Self::Target {
         self.as_bytes()
     }
 }
-
 impl TryFrom<Vec<u8>> for RamLfeSecret {
     type Error = RamLfeSecretError;
-
     fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
         let bytes = Zeroizing::new(bytes);
         if bytes.is_empty() {
@@ -145,10 +129,8 @@ impl TryFrom<Vec<u8>> for RamLfeSecret {
         Ok(Self(Arc::new(bytes)))
     }
 }
-
 impl FromStr for RamLfeSecret {
     type Err = RamLfeSecretError;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let value = value.trim();
         let value = value
@@ -159,7 +141,6 @@ impl FromStr for RamLfeSecret {
         Self::try_from(bytes)
     }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for RamLfeSecret {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -170,7 +151,6 @@ impl json::JsonDeserialize for RamLfeSecret {
             .map_err(|error: RamLfeSecretError| json::Error::Message(error.to_string()))
     }
 }
-
 /// Errors raised while constructing hidden RAM-LFE secret material.
 #[derive(Debug, Clone, Copy, Error)]
 pub enum RamLfeSecretError {
@@ -189,13 +169,11 @@ pub enum RamLfeSecretError {
     #[error("RAM-LFE secret is not valid hexadecimal: {0}")]
     InvalidHex(#[source] hex::FromHexError),
 }
-
 struct ProgramExecutionContext<'a> {
     params: &'a BfvParameters,
     evaluation_keys: &'a BfvEvaluationKeyBundle,
     rns_chain: &'a BfvRnsModulusChain,
 }
-
 /// Encrypted input profile applied before the programmed RAM-FHE backend executes.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -205,7 +183,6 @@ pub enum BfvRamEncryptedInputMode {
     /// canonicalize it through resolver-side decryption.
     EncryptedEnvelopeV1,
 }
-
 /// Public RAM-FHE execution profile for the programmed BFV backend.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -223,7 +200,6 @@ pub struct BfvRamProgramProfile {
     /// Minimum supported ciphertext modulus for this RAM-FHE profile.
     pub min_ciphertext_modulus: u64,
 }
-
 /// Receipt attestation mode published by a RAM-LFE program policy.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -234,7 +210,6 @@ pub enum RamLfeVerificationMode {
     /// Canonical payload bytes are bound to a Halo2 proof envelope.
     Proof,
 }
-
 /// Public proof-verifier metadata published by proof-carrying RAM-LFE policies.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -248,7 +223,6 @@ pub struct RamLfeProofVerifierMetadata {
     /// Opaque verifying-key bytes published to clients for stateless verification.
     pub verifying_key_bytes: Vec<u8>,
 }
-
 /// Canonical branchless instruction for the hidden programmed RAM-FHE backend.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
@@ -277,7 +251,6 @@ pub enum HiddenRamFheInstruction {
     /// Append one register to the plaintext output blob.
     Output(u16),
 }
-
 /// Canonical hidden program executed by the programmed BFV backend.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -291,7 +264,6 @@ pub struct HiddenRamFheProgram {
     /// Fixed-step branchless instruction tape.
     pub instructions: Vec<HiddenRamFheInstruction>,
 }
-
 impl HiddenRamFheProgram {
     /// Encode the program into canonical Norito bytes.
     ///
@@ -300,7 +272,6 @@ impl HiddenRamFheProgram {
     pub fn to_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
         norito::to_bytes(self)
     }
-
     /// Return the stable digest published by programmed policies.
     ///
     /// # Errors
@@ -310,7 +281,6 @@ impl HiddenRamFheProgram {
             .map(|bytes| Hash::new_from_chunks(&[BFV_PROGRAM_DIGEST_DOMAIN, bytes.as_slice()]))
     }
 }
-
 /// Public parameter bundle published by programmed BFV policies.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -338,7 +308,6 @@ pub struct BfvProgrammedPublicParameters {
     #[norito(default)]
     pub proof_verifier: Option<RamLfeProofVerifierMetadata>,
 }
-
 /// Supported RAM-LFE backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 pub enum RamLfeBackend {
@@ -349,7 +318,6 @@ pub enum RamLfeBackend {
     /// BFV-backed stateful secret program with non-linear per-slot transforms.
     BfvProgrammedSha3_256V1,
 }
-
 impl RamLfeBackend {
     /// Stable backend identifier.
     #[must_use]
@@ -361,13 +329,11 @@ impl RamLfeBackend {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonSerialize for RamLfeBackend {
     fn json_serialize(&self, out: &mut String) {
         json::JsonSerialize::json_serialize(self.as_str(), out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -375,7 +341,6 @@ impl json::JsonSerialize for RamLfeBackend {
         json::write_json_string_to(self.as_str(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl json::JsonDeserialize for RamLfeBackend {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -390,7 +355,6 @@ impl json::JsonDeserialize for RamLfeBackend {
         }
     }
 }
-
 /// Public commitment to a hidden identifier-derivation policy.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -403,7 +367,6 @@ pub struct PolicyCommitment {
     #[norito(default)]
     pub public_parameters: Vec<u8>,
 }
-
 /// Client request submitted to a RAM-LFE evaluator.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -414,7 +377,6 @@ pub struct ClientRequest {
     #[norito(default)]
     pub associated_data: Vec<u8>,
 }
-
 /// Deterministic RAM-LFE evaluation output.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -428,7 +390,6 @@ pub struct EvalResponse {
     /// Backend that produced the output.
     pub backend: RamLfeBackend,
 }
-
 /// Errors raised by the RAM-LFE plumbing layer.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum RamLfeError {
@@ -463,7 +424,6 @@ pub enum RamLfeError {
     #[error("unsupported RAM-LFE backend `{0}`")]
     UnsupportedBackend(String),
 }
-
 /// Runtime evaluator interface for hidden-function services.
 pub trait Evaluator: Send + Sync {
     /// Evaluate a request against the supplied policy commitment.
@@ -477,7 +437,6 @@ pub trait Evaluator: Send + Sync {
         request: &ClientRequest,
     ) -> Result<EvalResponse, RamLfeError>;
 }
-
 /// Construct the commitment record for the built-in HKDF-SHA3-512 backend.
 ///
 /// # Errors
@@ -488,7 +447,6 @@ pub fn policy_commitment(
 ) -> Result<PolicyCommitment, RamLfeError> {
     build_policy_commitment(secret, public_parameters, RamLfeBackend::HkdfSha3_512PrfV1)
 }
-
 /// Return the default public execution profile for the programmed BFV backend.
 #[must_use]
 pub const fn bfv_program_profile() -> BfvRamProgramProfile {
@@ -501,7 +459,6 @@ pub const fn bfv_program_profile() -> BfvRamProgramProfile {
         min_ciphertext_modulus: BFV_PROGRAM_MIN_CIPHERTEXT_MODULUS,
     }
 }
-
 /// Return the canonical hidden program used by the historical identifier-programmed backend.
 #[must_use]
 pub fn default_bfv_programmed_hidden_program() -> HiddenRamFheProgram {
@@ -523,19 +480,16 @@ pub fn default_bfv_programmed_hidden_program() -> HiddenRamFheProgram {
         instructions,
     }
 }
-
 /// Hash arbitrary RAM-LFE output bytes into a stable digest.
 #[must_use]
 pub fn ram_lfe_output_hash(output: &[u8]) -> Hash {
     Hash::new_from_chunks(&[RAM_FHE_OUTPUT_HASH_DOMAIN, output])
 }
-
 /// Derive the identifier-facing opaque id and receipt hash from engine output bytes.
 #[must_use]
 pub fn identifier_hashes_from_program_output(program_id: &[u8], output: &[u8]) -> (Hash, Hash) {
     identifier_hashes_from_output_hash(program_id, &ram_lfe_output_hash(output))
 }
-
 /// Derive the identifier-facing opaque id and receipt hash from a precomputed output hash.
 #[must_use]
 pub fn identifier_hashes_from_output_hash(program_id: &[u8], output_hash: &Hash) -> (Hash, Hash) {
@@ -552,7 +506,6 @@ pub fn identifier_hashes_from_output_hash(program_id: &[u8], output_hash: &Hash)
     ]);
     (opaque_id, receipt_hash)
 }
-
 /// Fallibly wrap BFV identifier-encryption parameters into the programmed
 /// RAM-FHE public bundle.
 ///
@@ -571,7 +524,6 @@ pub fn try_bfv_programmed_public_parameters(
         None,
     )
 }
-
 /// Fallibly wrap BFV identifier-encryption parameters and explicit
 /// hidden-program metadata.
 ///
@@ -610,7 +562,6 @@ pub fn try_bfv_programmed_public_parameters_with_program(
         proof_verifier,
     })
 }
-
 /// Decode programmed BFV public parameters.
 ///
 /// # Errors
@@ -629,7 +580,6 @@ pub fn decode_bfv_programmed_public_parameters(
     validate_proof_verifier_metadata(value.verification_mode, value.proof_verifier.as_ref())?;
     Ok(value)
 }
-
 /// Construct the commitment record for the BFV secret affine backend.
 ///
 /// # Errors
@@ -644,7 +594,6 @@ pub fn bfv_affine_policy_commitment(
         RamLfeBackend::BfvAffineSha3_256V1,
     )
 }
-
 /// Construct the commitment record for the BFV programmed backend.
 ///
 /// # Errors
@@ -659,7 +608,6 @@ pub fn bfv_programmed_policy_commitment(
         &default_bfv_programmed_hidden_program(),
     )
 }
-
 /// Construct the commitment record for an explicit hidden BFV program.
 ///
 /// # Errors
@@ -686,7 +634,6 @@ pub fn bfv_programmed_policy_commitment_with_program(
         RamLfeBackend::BfvProgrammedSha3_256V1,
     )
 }
-
 fn build_policy_commitment(
     secret: &[u8],
     public_parameters: Vec<u8>,
@@ -703,7 +650,6 @@ fn build_policy_commitment(
         public_parameters,
     })
 }
-
 /// Evaluate a request using the commitment-bound HKDF-SHA3-512 backend.
 ///
 /// # Errors
@@ -721,7 +667,6 @@ pub fn evaluate_commitment(
         Some(&default_bfv_programmed_hidden_program()),
     )
 }
-
 /// Evaluate a request using an explicit hidden program for programmed policies.
 ///
 /// For non-programmed backends, `program` is ignored.
@@ -752,7 +697,6 @@ pub fn evaluate_commitment_with_hidden_program(
         ),
     }
 }
-
 /// Validate a hidden BFV RAM-FHE program against the first-release profile.
 ///
 /// # Errors
@@ -762,7 +706,6 @@ pub fn evaluate_commitment_with_hidden_program(
 pub fn validate_hidden_ram_fhe_program(program: &HiddenRamFheProgram) -> Result<(), RamLfeError> {
     validate_hidden_program(program)
 }
-
 fn evaluate_hkdf_prf(
     secret: &[u8],
     commitment: &PolicyCommitment,
@@ -772,7 +715,6 @@ fn evaluate_hkdf_prf(
     if expected.policy_hash != commitment.policy_hash {
         return Err(RamLfeError::CommitmentMismatch);
     }
-
     let transcript = norito::to_bytes(&(
         expected.policy_hash,
         commitment.public_parameters.clone(),
@@ -782,14 +724,11 @@ fn evaluate_hkdf_prf(
     .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
     let hkdf_salt = [HKDF_SALT_DOMAIN, expected.policy_hash.as_ref()].concat();
     let hkdf = Hkdf::<Sha3_512>::new(Some(&hkdf_salt), secret);
-
     let mut opaque_material = Zeroizing::new([0_u8; Hash::LENGTH]);
     let opaque_info = [HKDF_OPAQUE_INFO_DOMAIN, transcript.as_slice()].concat();
     hkdf.expand(&opaque_info, opaque_material.as_mut())
         .map_err(|_| RamLfeError::DerivationFailed)?;
-
     let opaque_id = Hash::new_from_chunks(&[OPAQUE_HASH_DOMAIN, &opaque_material[..]]);
-
     let mut receipt_material = Zeroizing::new([0_u8; Hash::LENGTH]);
     let receipt_info = [
         HKDF_RECEIPT_INFO_DOMAIN,
@@ -799,7 +738,6 @@ fn evaluate_hkdf_prf(
     .concat();
     hkdf.expand(&receipt_info, receipt_material.as_mut())
         .map_err(|_| RamLfeError::DerivationFailed)?;
-
     let receipt_hash = Hash::new_from_chunks(&[
         RECEIPT_HASH_DOMAIN,
         &receipt_material[..],
@@ -812,7 +750,6 @@ fn evaluate_hkdf_prf(
         backend: commitment.backend,
     })
 }
-
 fn evaluate_bfv_affine(
     secret: &[u8],
     commitment: &PolicyCommitment,
@@ -822,7 +759,6 @@ fn evaluate_bfv_affine(
     if expected.policy_hash != commitment.policy_hash {
         return Err(RamLfeError::CommitmentMismatch);
     }
-
     let public_parameters = decode_bfv_public_parameters(&commitment.public_parameters)?;
     let (derived_public_parameters, secret_key, _) = derive_identifier_key_material_from_seed(
         &public_parameters.parameters,
@@ -834,7 +770,6 @@ fn evaluate_bfv_affine(
     if derived_public_parameters != public_parameters {
         return Err(RamLfeError::CommitmentMismatch);
     }
-
     let ciphertext: BfvIdentifierCiphertext = norito::decode_from_bytes(&request.normalized_input)
         .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
     let circuit = derive_secret_affine_circuit(secret, &public_parameters, commitment, request)?;
@@ -860,7 +795,6 @@ fn evaluate_bfv_affine(
         backend: commitment.backend,
     })
 }
-
 fn evaluate_bfv_programmed(
     secret: &[u8],
     commitment: &PolicyCommitment,
@@ -875,10 +809,8 @@ fn evaluate_bfv_programmed(
     if expected.policy_hash != commitment.policy_hash {
         return Err(RamLfeError::CommitmentMismatch);
     }
-
     let public_parameters = decode_bfv_programmed_public_parameters(&commitment.public_parameters)?;
     let encryption = &public_parameters.encryption;
-
     let ciphertext: BfvIdentifierCiphertext = norito::decode_from_bytes(&request.normalized_input)
         .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
     if ciphertext.slots.is_empty() {
@@ -891,14 +823,12 @@ fn evaluate_bfv_programmed(
             ciphertext.slots.len()
         )));
     }
-
     let expected_digest = program
         .digest()
         .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
     if expected_digest != public_parameters.hidden_program_digest {
         return Err(RamLfeError::HiddenProgramMismatch);
     }
-
     let mut state = derive_program_initial_state(
         &encryption.parameters,
         &ciphertext.slots[0],
@@ -932,7 +862,6 @@ fn evaluate_bfv_programmed(
         backend: commitment.backend,
     })
 }
-
 fn validate_secret(secret: &[u8]) -> Result<(), RamLfeError> {
     if secret.is_empty() {
         return Err(RamLfeError::EmptySecret);
@@ -942,7 +871,6 @@ fn validate_secret(secret: &[u8]) -> Result<(), RamLfeError> {
     }
     Ok(())
 }
-
 fn decode_bfv_public_parameters(
     public_parameters: &[u8],
 ) -> Result<BfvIdentifierPublicParameters, RamLfeError> {
@@ -954,7 +882,6 @@ fn decode_bfv_public_parameters(
         .map_err(|err| map_bfv_error(&err))?;
     Ok(public_parameters)
 }
-
 fn validate_programmed_public_parameters(
     public_parameters: &BfvProgrammedPublicParameters,
 ) -> Result<(), RamLfeError> {
@@ -996,7 +923,6 @@ fn validate_programmed_public_parameters(
     }
     Ok(())
 }
-
 fn validate_programmed_encryption_capacity(
     encryption: &BfvIdentifierPublicParameters,
 ) -> Result<(), RamLfeError> {
@@ -1009,7 +935,6 @@ fn validate_programmed_encryption_capacity(
     }
     Ok(())
 }
-
 fn validate_programmed_evaluation_keys(
     evaluation_keys: &BfvEvaluationKeyBundle,
 ) -> Result<(), RamLfeError> {
@@ -1031,7 +956,6 @@ fn validate_programmed_evaluation_keys(
     }
     Ok(())
 }
-
 fn validate_programmed_profile(profile: &BfvRamProgramProfile) -> Result<(), RamLfeError> {
     let expected = bfv_program_profile();
     if profile != &expected {
@@ -1041,7 +965,6 @@ fn validate_programmed_profile(profile: &BfvRamProgramProfile) -> Result<(), Ram
     }
     Ok(())
 }
-
 fn validate_proof_verifier_metadata(
     verification_mode: RamLfeVerificationMode,
     proof_verifier: Option<&RamLfeProofVerifierMetadata>,
@@ -1094,7 +1017,6 @@ fn validate_proof_verifier_metadata(
         }
     }
 }
-
 fn validate_proof_metadata_identifier(
     field: &str,
     value: &str,
@@ -1120,7 +1042,6 @@ fn validate_proof_metadata_identifier(
     }
     Ok(())
 }
-
 fn derive_program_initial_state(
     params: &BfvParameters,
     reference_slot: &BfvCiphertext,
@@ -1137,14 +1058,12 @@ fn derive_program_initial_state(
         })
         .collect()
 }
-
 fn zero_ciphertext_like(
     params: &BfvParameters,
     reference_slot: &BfvCiphertext,
 ) -> Result<BfvCiphertext, RamLfeError> {
     multiply_plain_scalar(params, reference_slot, 0).map_err(|err| map_bfv_error(&err))
 }
-
 fn derive_program_rng(
     secret: &[u8],
     commitment: &PolicyCommitment,
@@ -1165,7 +1084,6 @@ fn derive_program_rng(
     seed.zeroize();
     rng
 }
-
 fn execute_hidden_program(
     execution: &ProgramExecutionContext<'_>,
     program: &HiddenRamFheProgram,
@@ -1179,7 +1097,6 @@ fn execute_hidden_program(
     }
     machine.finish()
 }
-
 struct HiddenProgramMachine<'a> {
     execution: &'a ProgramExecutionContext<'a>,
     reference_input: &'a BfvCiphertext,
@@ -1188,7 +1105,6 @@ struct HiddenProgramMachine<'a> {
     registers: Vec<BfvCiphertext>,
     output_registers: Vec<BfvCiphertext>,
 }
-
 impl<'a> HiddenProgramMachine<'a> {
     fn new(
         execution: &'a ProgramExecutionContext<'a>,
@@ -1209,7 +1125,6 @@ impl<'a> HiddenProgramMachine<'a> {
             output_registers: Vec::new(),
         })
     }
-
     fn execute_instruction(
         &mut self,
         instruction: HiddenRamFheInstruction,
@@ -1268,14 +1183,12 @@ impl<'a> HiddenProgramMachine<'a> {
         }
         Ok(())
     }
-
     fn finish(self) -> Result<Vec<u8>, RamLfeError> {
         norito::to_bytes(&BfvIdentifierCiphertext {
             slots: self.output_registers,
         })
         .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))
     }
-
     fn load_constant(&self, value: u64) -> Result<BfvCiphertext, RamLfeError> {
         let value = value % self.execution.params.plaintext_modulus;
         let constant = add_plain_scalar(self.execution.params, self.reference_input, value)
@@ -1284,7 +1197,6 @@ impl<'a> HiddenProgramMachine<'a> {
             .map_err(|err| map_bfv_error(&err))?;
         add_plain_scalar(self.execution.params, &zeroed, value).map_err(|err| map_bfv_error(&err))
     }
-
     fn add_registers(&self, lhs: u16, rhs: u16) -> Result<BfvCiphertext, RamLfeError> {
         add_ciphertexts_rns_exact(
             self.execution.params,
@@ -1294,7 +1206,6 @@ impl<'a> HiddenProgramMachine<'a> {
         )
         .map_err(|err| map_bfv_error(&err))
     }
-
     fn add_plain(&self, src: u16, value: u64) -> Result<BfvCiphertext, RamLfeError> {
         add_plain_scalar(
             self.execution.params,
@@ -1303,7 +1214,6 @@ impl<'a> HiddenProgramMachine<'a> {
         )
         .map_err(|err| map_bfv_error(&err))
     }
-
     fn sub_plain(&self, src: u16, value: u64) -> Result<BfvCiphertext, RamLfeError> {
         let scalar = (self
             .execution
@@ -1313,7 +1223,6 @@ impl<'a> HiddenProgramMachine<'a> {
             % self.execution.params.plaintext_modulus;
         self.add_plain(src, scalar)
     }
-
     fn mul_plain(&self, src: u16, value: u64) -> Result<BfvCiphertext, RamLfeError> {
         multiply_plain_scalar(
             self.execution.params,
@@ -1322,7 +1231,6 @@ impl<'a> HiddenProgramMachine<'a> {
         )
         .map_err(|err| map_bfv_error(&err))
     }
-
     fn mul_registers(&self, lhs: u16, rhs: u16) -> Result<BfvCiphertext, RamLfeError> {
         multiply_ciphertexts_rns_exact(
             self.execution.params,
@@ -1333,7 +1241,6 @@ impl<'a> HiddenProgramMachine<'a> {
         )
         .map_err(|err| map_bfv_error(&err))
     }
-
     fn select_eq_zero(
         &self,
         condition: u16,
@@ -1366,7 +1273,6 @@ impl<'a> HiddenProgramMachine<'a> {
         )
         .map_err(|err| map_bfv_error(&err))
     }
-
     fn eq_zero_indicator(&self, condition: u16) -> Result<BfvCiphertext, RamLfeError> {
         if self.execution.params.plaintext_modulus != RAM_LFE_BFV_PLAINTEXT_MODULUS {
             return Err(RamLfeError::Bfv(format!(
@@ -1384,7 +1290,6 @@ impl<'a> HiddenProgramMachine<'a> {
         )
         .map_err(|err| map_bfv_error(&err))
     }
-
     fn pow_ciphertext(
         &self,
         mut base: BfvCiphertext,
@@ -1416,20 +1321,17 @@ impl<'a> HiddenProgramMachine<'a> {
         }
         Ok(result)
     }
-
     fn program_lane(&self, lane: u16) -> Result<&BfvCiphertext, RamLfeError> {
         self.state
             .get(usize::from(lane))
             .ok_or_else(|| invalid_program_error(&format!("lane {lane} out of bounds")))
     }
-
     fn program_lane_mut(&mut self, lane: u16) -> Result<&mut BfvCiphertext, RamLfeError> {
         self.state
             .get_mut(usize::from(lane))
             .ok_or_else(|| invalid_program_error(&format!("lane {lane} out of bounds")))
     }
 }
-
 fn validate_hidden_program(program: &HiddenRamFheProgram) -> Result<(), RamLfeError> {
     if program.version != 1 {
         return Err(invalid_program_error("unsupported hidden program version"));
@@ -1466,7 +1368,6 @@ fn validate_hidden_program(program: &HiddenRamFheProgram) -> Result<(), RamLfeEr
     validate_hidden_program_instruction_tape(program)?;
     Ok(())
 }
-
 fn validate_hidden_program_instruction_tape(
     program: &HiddenRamFheProgram,
 ) -> Result<(), RamLfeError> {
@@ -1474,7 +1375,6 @@ fn validate_hidden_program_instruction_tape(
     let mut register_depths = vec![0_u16; usize::from(program.register_count)];
     let mut state_depths = vec![0_u16; usize::from(program.memory_lane_count)];
     let mut output_count = 0_usize;
-
     for (pc, instruction) in program.instructions.iter().copied().enumerate() {
         let next_depth = match instruction {
             HiddenRamFheInstruction::LoadInput(dst, input_index) => {
@@ -1551,7 +1451,6 @@ fn validate_hidden_program_instruction_tape(
                 None
             }
         };
-
         if let Some((dst, depth)) = next_depth {
             if depth > budget {
                 return Err(invalid_program_error(&format!(
@@ -1561,10 +1460,8 @@ fn validate_hidden_program_instruction_tape(
             register_depths[usize::from(dst)] = depth;
         }
     }
-
     Ok(())
 }
-
 fn validate_plaintext_immediate(value: u64, pc: usize) -> Result<(), RamLfeError> {
     if value >= RAM_LFE_BFV_PLAINTEXT_MODULUS {
         return Err(invalid_program_error(&format!(
@@ -1573,7 +1470,6 @@ fn validate_plaintext_immediate(value: u64, pc: usize) -> Result<(), RamLfeError
     }
     Ok(())
 }
-
 fn validate_hidden_program_input_slots(
     program: &HiddenRamFheProgram,
     max_input_bytes: u16,
@@ -1590,7 +1486,6 @@ fn validate_hidden_program_input_slots(
     }
     Ok(())
 }
-
 fn validate_program_register_index(
     program: &HiddenRamFheProgram,
     register: u16,
@@ -1603,7 +1498,6 @@ fn validate_program_register_index(
     }
     Ok(())
 }
-
 fn program_depth_register(
     register_depths: &[u16],
     register: u16,
@@ -1618,7 +1512,6 @@ fn program_depth_register(
             ))
         })
 }
-
 fn program_register(
     registers: &[BfvCiphertext],
     index: usize,
@@ -1627,7 +1520,6 @@ fn program_register(
         .get(index)
         .ok_or_else(|| invalid_program_error(&format!("register {index} out of bounds")))
 }
-
 fn program_register_mut(
     registers: &mut [BfvCiphertext],
     index: usize,
@@ -1636,11 +1528,9 @@ fn program_register_mut(
         .get_mut(index)
         .ok_or_else(|| invalid_program_error(&format!("register {index} out of bounds")))
 }
-
 fn invalid_program_error(message: &str) -> RamLfeError {
     RamLfeError::Bfv(format!("invalid BFV RAM program: {message}"))
 }
-
 fn derive_secret_affine_circuit(
     secret: &[u8],
     public_parameters: &BfvIdentifierPublicParameters,
@@ -1673,7 +1563,6 @@ fn derive_secret_affine_circuit(
         .map_err(|err| map_bfv_error(&err))?;
     Ok(circuit)
 }
-
 fn decrypt_affine_outputs(
     public_parameters: &BfvIdentifierPublicParameters,
     secret_key: &crate::BfvSecretKey,
@@ -1698,11 +1587,9 @@ fn decrypt_affine_outputs(
         })
         .collect()
 }
-
 fn map_bfv_error(err: &BfvError) -> RamLfeError {
     RamLfeError::Bfv(err.to_string())
 }
-
 fn validate_request(request: &ClientRequest) -> Result<(), RamLfeError> {
     if request.normalized_input.is_empty() {
         return Err(RamLfeError::EmptyInput);
@@ -1712,7 +1599,6 @@ fn validate_request(request: &ClientRequest) -> Result<(), RamLfeError> {
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -1721,14 +1607,11 @@ mod tests {
         encrypt_identifier_from_seed, keygen_from_seed, ram_lfe_bfv_parameters_v1,
         rotation_key_from_seed,
     };
-
     use super::*;
-
     #[test]
     fn ram_lfe_secret_is_validated_shared_and_redacted() {
         let secret: RamLfeSecret = "0X01020304".parse().expect("valid RAM-LFE secret");
         let clone = secret.clone();
-
         assert_eq!(secret.as_bytes(), &[1, 2, 3, 4]);
         assert_eq!(secret.len(), 4);
         assert!(Arc::ptr_eq(&secret.0, &clone.0));
@@ -1736,20 +1619,17 @@ mod tests {
         assert!(debug.contains("REDACTED"));
         assert!(!debug.contains("01020304"));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn ram_lfe_secret_json_parsing_validates_bounds() {
         let secret: RamLfeSecret =
             norito::json::from_str("\"0x01020304\"").expect("valid RAM-LFE secret JSON");
         assert_eq!(secret.as_bytes(), &[1, 2, 3, 4]);
-
         assert!("".parse::<RamLfeSecret>().is_err());
         let oversized = vec![0_u8; RAM_LFE_SECRET_MAX_BYTES + 1];
         assert!(RamLfeSecret::try_from(oversized).is_err());
         assert!(norito::json::from_str::<RamLfeSecret>("\"not-hex\"").is_err());
     }
-
     #[test]
     fn policy_commitment_roundtrip_evaluates() {
         let secret = b"resolver-secret";
@@ -1758,12 +1638,10 @@ mod tests {
             normalized_input: b"+15551234567".to_vec(),
             associated_data: b"phone#retail".to_vec(),
         };
-
         let first = evaluate_commitment(secret, &commitment, &request).expect("evaluation");
         let second = evaluate_commitment(secret, &commitment, &request).expect("evaluation");
         assert_eq!(first, second);
     }
-
     #[test]
     fn policy_commitment_rejects_wrong_secret() {
         let commitment =
@@ -1772,12 +1650,10 @@ mod tests {
             normalized_input: b"+15551234567".to_vec(),
             associated_data: b"phone#retail".to_vec(),
         };
-
         let err = evaluate_commitment(b"secret-b", &commitment, &request)
             .expect_err("wrong secret must fail");
         assert_eq!(err, RamLfeError::CommitmentMismatch);
     }
-
     #[test]
     fn ram_lfe_chunked_transcripts_match_legacy_contiguous_layout() {
         let program = default_bfv_programmed_hidden_program();
@@ -1786,14 +1662,12 @@ mod tests {
             program.digest().expect("hidden program digest"),
             Hash::new([BFV_PROGRAM_DIGEST_DOMAIN, program_bytes.as_slice()].concat())
         );
-
         let output = b"ram-lfe-output";
         let output_hash = ram_lfe_output_hash(output);
         assert_eq!(
             output_hash,
             Hash::new([RAM_FHE_OUTPUT_HASH_DOMAIN, &output[..]].concat())
         );
-
         let program_id = b"phone#retail";
         let (opaque_id, receipt_hash) =
             identifier_hashes_from_output_hash(program_id, &output_hash);
@@ -1816,7 +1690,6 @@ mod tests {
         );
         assert_eq!(opaque_id, legacy_opaque_id);
         assert_eq!(receipt_hash, legacy_receipt_hash);
-
         let secret = b"resolver-secret";
         let public_parameters = b"phone#retail".to_vec();
         let commitment =
@@ -1833,7 +1706,6 @@ mod tests {
             Hash::new([POLICY_DOMAIN, legacy_transcript.as_slice()].concat())
         );
     }
-
     #[test]
     fn program_rng_derivation_binds_step_without_conversion() {
         let commitment = PolicyCommitment {
@@ -1845,7 +1717,6 @@ mod tests {
             normalized_input: Vec::new(),
             associated_data: b"phone#retail".to_vec(),
         };
-
         let mut first = derive_program_rng(
             b"secret",
             &commitment,
@@ -1870,7 +1741,6 @@ mod tests {
         let first_value = first.random::<u64>();
         assert_eq!(first_value, second.random::<u64>());
         assert_ne!(first_value, other_step.random::<u64>());
-
         let step_bytes = 1_u64.to_le_bytes();
         let legacy_seed: [u8; Hash::LENGTH] = Hash::new(
             [
@@ -1886,7 +1756,6 @@ mod tests {
         let mut legacy = <ChaCha20Rng as rand::SeedableRng>::from_seed(legacy_seed);
         assert_eq!(first_value, legacy.random::<u64>());
     }
-
     #[test]
     fn bfv_affine_policy_commitment_roundtrip_evaluates() {
         let secret = b"resolver-secret";
@@ -1910,14 +1779,12 @@ mod tests {
             normalized_input: norito::to_bytes(&ciphertext).expect("encode BFV ciphertext"),
             associated_data: associated_data.to_vec(),
         };
-
         let first = evaluate_commitment(secret, &commitment, &request).expect("evaluation");
         let second = evaluate_commitment(secret, &commitment, &request).expect("evaluation");
         assert_eq!(first, second);
         assert_eq!(first.backend, RamLfeBackend::BfvAffineSha3_256V1);
         assert_ne!(first.opaque_id, Hash::prehashed([0; Hash::LENGTH]));
     }
-
     #[test]
     fn secret_affine_circuit_maps_byte_inputs_to_bytes() {
         let secret = b"resolver-secret";
@@ -1938,7 +1805,6 @@ mod tests {
         let circuit =
             derive_secret_affine_circuit(secret, &public_parameters, &commitment, &request)
                 .expect("derive affine circuit");
-
         for (row, &bias) in circuit.weights.iter().zip(&circuit.bias) {
             let non_zero_weights = row
                 .iter()
@@ -1955,7 +1821,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn bfv_programmed_policy_commitment_roundtrip_evaluates() {
         let secret = b"resolver-secret";
@@ -1988,14 +1853,12 @@ mod tests {
             normalized_input: norito::to_bytes(&ciphertext).expect("encode BFV ciphertext"),
             associated_data: associated_data.to_vec(),
         };
-
         let first = evaluate_commitment(secret, &commitment, &request).expect("evaluation");
         let second = evaluate_commitment(secret, &commitment, &request).expect("evaluation");
         assert_eq!(first, second);
         assert_eq!(first.backend, RamLfeBackend::BfvProgrammedSha3_256V1);
         assert_ne!(first.opaque_id, Hash::prehashed([0; Hash::LENGTH]));
     }
-
     #[test]
     fn bfv_programmed_runtime_uses_registered_rns_exact_arithmetic() {
         let secret = b"resolver-secret-rns-runtime";
@@ -2047,7 +1910,6 @@ mod tests {
             normalized_input: norito::to_bytes(&ciphertext).expect("encode BFV ciphertext"),
             associated_data: associated_data.to_vec(),
         };
-
         let response =
             evaluate_commitment_with_hidden_program(secret, &commitment, &request, Some(&program))
                 .expect("RNS-backed programmed evaluation");
@@ -2068,7 +1930,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(scalars, vec![5, 6, 5]);
     }
-
     #[test]
     fn try_bfv_programmed_public_parameters_rejects_unregistered_profile() {
         let params = BfvParameters {
@@ -2094,12 +1955,10 @@ mod tests {
             galois_keys: Vec::new(),
             bootstrap_key: None,
         };
-
         let err = try_bfv_programmed_public_parameters(public_parameters, evaluation_keys)
             .expect_err("programmed BFV constructor must reject unregistered profiles");
         assert!(err.to_string().contains("not registered"));
     }
-
     #[test]
     fn try_bfv_programmed_public_parameters_rejects_program_inputs_beyond_envelope() {
         let secret = b"resolver-secret-program-input-bounds";
@@ -2133,7 +1992,6 @@ mod tests {
         .expect_err("programmed constructor must reject impossible input slots");
         assert!(err.to_string().contains("max_input_bytes"));
     }
-
     #[test]
     fn try_bfv_programmed_public_parameters_rejects_noncanonical_plaintext_immediate() {
         let secret = b"resolver-secret-program-immediate";
@@ -2169,7 +2027,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn programmed_policy_commitment_rejects_program_inputs_beyond_encoded_envelope() {
         let secret = b"resolver-secret-program-input-policy";
@@ -2208,12 +2065,10 @@ mod tests {
             proof_verifier: None,
         };
         let encoded = norito::to_bytes(&programmed).expect("encode adversarial policy");
-
         let err = bfv_programmed_policy_commitment_with_program(secret, &encoded, &program)
             .expect_err("policy commitment must reject impossible input slots");
         assert!(err.to_string().contains("max_input_bytes"));
     }
-
     #[test]
     fn decode_bfv_programmed_public_parameters_rejects_envelope_capacity_above_profile() {
         let secret = b"resolver-secret-program-capacity";
@@ -2238,7 +2093,6 @@ mod tests {
         .expect("build programmed BFV public parameters");
         programmed.encryption.max_input_bytes = BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16;
         let encoded = norito::to_bytes(&programmed).expect("encode oversized profile");
-
         let err = decode_bfv_programmed_public_parameters(&encoded)
             .expect_err("oversized programmed envelope capacity must be rejected");
         assert!(
@@ -2246,7 +2100,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn hidden_program_validation_rejects_chained_multiplicative_depth() {
         let mut instructions = vec![
@@ -2263,12 +2116,10 @@ mod tests {
             memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
             instructions,
         };
-
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("chained multiplications must exceed the profile depth budget");
         assert!(err.to_string().contains("multiplicative-depth budget"));
     }
-
     #[test]
     fn default_bfv_programmed_hidden_program_uses_profile_indexes() {
         let program = default_bfv_programmed_hidden_program();
@@ -2299,7 +2150,6 @@ mod tests {
             Some(&HiddenRamFheInstruction::Output(2))
         );
     }
-
     #[test]
     fn hidden_program_validation_rejects_static_index_overflow() {
         let program = HiddenRamFheProgram {
@@ -2311,12 +2161,10 @@ mod tests {
                 HiddenRamFheInstruction::Output(0),
             ],
         };
-
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("out-of-range input slot must be rejected before execution");
         assert!(err.to_string().contains("input slot"));
     }
-
     #[test]
     fn hidden_program_validation_rejects_static_memory_lane_overflow() {
         let program = HiddenRamFheProgram {
@@ -2328,12 +2176,10 @@ mod tests {
                 HiddenRamFheInstruction::Output(0),
             ],
         };
-
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("out-of-range memory lane must be rejected before execution");
         assert!(err.to_string().contains("memory lane"));
     }
-
     #[test]
     fn hidden_program_validation_rejects_static_register_overflow() {
         let program = HiddenRamFheProgram {
@@ -2345,12 +2191,10 @@ mod tests {
                 HiddenRamFheInstruction::Output(0),
             ],
         };
-
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("out-of-range register must be rejected before execution");
         assert!(err.to_string().contains("register"));
     }
-
     #[test]
     fn hidden_program_validation_rejects_noncanonical_plaintext_immediates() {
         for instruction in [
@@ -2365,7 +2209,6 @@ mod tests {
                 memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
                 instructions: vec![instruction, HiddenRamFheInstruction::Output(0)],
             };
-
             let err = validate_hidden_ram_fhe_program(&program)
                 .expect_err("noncanonical plaintext immediate must be rejected before execution");
             assert!(
@@ -2374,7 +2217,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn hidden_program_validation_rejects_output_slot_overflow() {
         let mut instructions = vec![HiddenRamFheInstruction::LoadConst(0, 1)];
@@ -2387,12 +2229,10 @@ mod tests {
             memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
             instructions,
         };
-
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("programs cannot emit more output slots than the profile admits");
         assert!(err.to_string().contains("too many output slots"));
     }
-
     #[test]
     fn hidden_program_validation_rejects_oversized_instruction_tape() {
         let program = HiddenRamFheProgram {
@@ -2404,12 +2244,10 @@ mod tests {
                 BFV_PROGRAM_MAX_INSTRUCTIONS + 1
             ],
         };
-
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("oversized instruction tapes must be rejected before execution");
         assert!(err.to_string().contains("maximum"));
     }
-
     #[test]
     fn hidden_program_validation_rejects_adversarial_program_shapes() {
         let cases = [
@@ -2468,7 +2306,6 @@ mod tests {
                 "at least one output",
             ),
         ];
-
         for (program, expected) in cases {
             let err = validate_hidden_ram_fhe_program(&program)
                 .expect_err("adversarial hidden-program shape must be rejected");
@@ -2478,7 +2315,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn programmed_public_parameters_reject_tampered_digests() {
         let secret = b"resolver-secret";
@@ -2501,7 +2337,6 @@ mod tests {
             None,
         )
         .expect("build programmed BFV public parameters");
-
         let mut wrong_parameter_digest = programmed.clone();
         wrong_parameter_digest.parameter_digest = Hash::new(b"wrong-parameters");
         let err = decode_bfv_programmed_public_parameters(
@@ -2509,7 +2344,6 @@ mod tests {
         )
         .expect_err("tampered parameter digest must be rejected");
         assert!(err.to_string().contains("parameter digest"));
-
         let mut zero_program_digest = programmed.clone();
         zero_program_digest.hidden_program_digest = Hash::prehashed([0; Hash::LENGTH]);
         let err = decode_bfv_programmed_public_parameters(
@@ -2517,7 +2351,6 @@ mod tests {
         )
         .expect_err("zero hidden-program digest must be rejected");
         assert!(err.to_string().contains("hidden-program digest"));
-
         let mut wrong_evaluation_digest = programmed;
         wrong_evaluation_digest.evaluation_key_digest = Hash::new(b"wrong-evaluation-keys");
         let err = decode_bfv_programmed_public_parameters(
@@ -2526,18 +2359,15 @@ mod tests {
         .expect_err("tampered evaluation-key digest must be rejected");
         assert!(err.to_string().contains("evaluation-key digest"));
     }
-
     #[test]
     fn programmed_public_parameters_reject_malformed_archive_without_panicking() {
         let err = decode_bfv_programmed_public_parameters(&[0xFF, 0x00, 0x7F])
             .expect_err("malformed programmed-BFV parameters must fail closed");
-
         assert!(
             matches!(err, RamLfeError::TranscriptEncoding(_)),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn programmed_public_parameters_reject_profile_and_verifier_metadata_abuse() {
@@ -2567,7 +2397,6 @@ mod tests {
             public_inputs_schema_hash: Hash::new(b"schema"),
             verifying_key_bytes: vec![0xAA],
         };
-
         let mut wrong_profile = programmed.clone();
         wrong_profile.ram_fhe_profile.register_count = wrong_profile
             .ram_fhe_profile
@@ -2578,7 +2407,6 @@ mod tests {
         )
         .expect_err("tampered RAM-FHE profile must be rejected");
         assert!(err.to_string().contains("profile"));
-
         let mut signed_with_verifier = programmed.clone();
         signed_with_verifier.proof_verifier = Some(verifier.clone());
         let err = decode_bfv_programmed_public_parameters(
@@ -2586,7 +2414,6 @@ mod tests {
         )
         .expect_err("signed policies must not publish proof verifier metadata");
         assert!(err.to_string().contains("signed RAM-LFE"));
-
         let mut proof_without_verifier = programmed.clone();
         proof_without_verifier.verification_mode = RamLfeVerificationMode::Proof;
         let err = decode_bfv_programmed_public_parameters(
@@ -2594,7 +2421,6 @@ mod tests {
         )
         .expect_err("proof policies must publish verifier metadata");
         assert!(err.to_string().contains("proof-carrying"));
-
         let mut proof_with_blank_backend = programmed.clone();
         proof_with_blank_backend.verification_mode = RamLfeVerificationMode::Proof;
         proof_with_blank_backend.proof_verifier = Some(RamLfeProofVerifierMetadata {
@@ -2606,7 +2432,6 @@ mod tests {
         )
         .expect_err("blank proof verifier backend must be rejected");
         assert!(err.to_string().contains("backend"));
-
         let mut proof_with_padded_backend = programmed.clone();
         proof_with_padded_backend.verification_mode = RamLfeVerificationMode::Proof;
         proof_with_padded_backend.proof_verifier = Some(RamLfeProofVerifierMetadata {
@@ -2618,7 +2443,6 @@ mod tests {
         )
         .expect_err("padded proof verifier backend must be rejected");
         assert!(err.to_string().contains("canonical"));
-
         let mut proof_with_control_circuit = programmed.clone();
         proof_with_control_circuit.verification_mode = RamLfeVerificationMode::Proof;
         proof_with_control_circuit.proof_verifier = Some(RamLfeProofVerifierMetadata {
@@ -2630,7 +2454,6 @@ mod tests {
         )
         .expect_err("control bytes in proof verifier circuit_id must be rejected");
         assert!(err.to_string().contains("printable ASCII"));
-
         let mut proof_with_zero_schema = programmed.clone();
         proof_with_zero_schema.verification_mode = RamLfeVerificationMode::Proof;
         proof_with_zero_schema.proof_verifier = Some(RamLfeProofVerifierMetadata {
@@ -2642,7 +2465,6 @@ mod tests {
         )
         .expect_err("zero proof verifier schema hash must be rejected");
         assert!(err.to_string().contains("schema hash"));
-
         let mut proof_with_oversized_vk = programmed.clone();
         proof_with_oversized_vk.verification_mode = RamLfeVerificationMode::Proof;
         proof_with_oversized_vk.proof_verifier = Some(RamLfeProofVerifierMetadata {
@@ -2654,7 +2476,6 @@ mod tests {
         )
         .expect_err("oversized proof verifier bytes must be rejected");
         assert!(err.to_string().contains("maximum supported length"));
-
         let mut proof_with_zero_vk = programmed.clone();
         proof_with_zero_vk.verification_mode = RamLfeVerificationMode::Proof;
         proof_with_zero_vk.proof_verifier = Some(RamLfeProofVerifierMetadata {
@@ -2666,7 +2487,6 @@ mod tests {
         )
         .expect_err("all-zero proof verifier bytes must be rejected");
         assert!(err.to_string().contains("all zero"));
-
         let mut proof_with_empty_vk = programmed;
         proof_with_empty_vk.verification_mode = RamLfeVerificationMode::Proof;
         proof_with_empty_vk.proof_verifier = Some(RamLfeProofVerifierMetadata {
@@ -2679,7 +2499,6 @@ mod tests {
         .expect_err("empty proof verifier bytes must be rejected");
         assert!(err.to_string().contains("verifier bytes"));
     }
-
     #[test]
     fn programmed_public_parameters_reject_unused_refresh_keys() {
         let secret = b"resolver-secret";
@@ -2702,7 +2521,6 @@ mod tests {
             None,
         )
         .expect("build programmed BFV public parameters");
-
         let mut with_rotation = programmed.clone();
         with_rotation.evaluation_keys.rotation_keys.push(
             rotation_key_from_seed(
@@ -2722,7 +2540,6 @@ mod tests {
         )
         .expect_err("programmed public parameters must reject unused rotation keys");
         assert!(err.to_string().contains("rotation refresh keys"));
-
         let mut with_galois = programmed.clone();
         with_galois.evaluation_keys.galois_keys.push(
             crate::galois_key_from_seed(
@@ -2742,7 +2559,6 @@ mod tests {
         )
         .expect_err("programmed public parameters must reject unused Galois keys");
         assert!(err.to_string().contains("Galois key-switching keys"));
-
         let mut with_bootstrap = programmed;
         with_bootstrap.evaluation_keys.bootstrap_key = Some(
             bootstrap_key_from_seed(
@@ -2763,7 +2579,6 @@ mod tests {
         .expect_err("programmed public parameters must reject unused bootstrap keys");
         assert!(err.to_string().contains("bootstrap refresh keys"));
     }
-
     #[test]
     fn programmed_evaluation_rejects_truncated_ciphertext_envelope() {
         let secret = b"resolver-secret";
@@ -2803,13 +2618,11 @@ mod tests {
             normalized_input: norito::to_bytes(&ciphertext).expect("encode tampered ciphertext"),
             associated_data: associated_data.to_vec(),
         };
-
         let err =
             evaluate_commitment_with_hidden_program(secret, &commitment, &request, Some(&program))
                 .expect_err("truncated ciphertext envelope must not evaluate");
         assert!(err.to_string().contains("expected"));
     }
-
     #[test]
     fn select_eq_zero_truth_table_covers_all_byte_values() {
         let secret = b"resolver-secret";
@@ -2850,7 +2663,6 @@ mod tests {
             &program,
         )
         .expect("build BFV policy commitment");
-
         for byte in 0_u8..=u8::MAX {
             let ciphertext = encrypt_identifier_from_seed(
                 &public_parameters,
@@ -2879,7 +2691,6 @@ mod tests {
             assert_eq!(plaintext[0], if byte == 0 { 42 } else { 7 }, "byte {byte}");
         }
     }
-
     #[test]
     fn bfv_programmed_public_parameters_reject_legacy_payload() {
         let secret = b"resolver-secret";
@@ -2892,7 +2703,6 @@ mod tests {
         decode_bfv_programmed_public_parameters(&legacy_bytes)
             .expect_err("legacy raw BFV payloads are not accepted in the first release");
     }
-
     #[test]
     fn bfv_programmed_public_parameters_reject_debug_proof_backends() {
         let secret = b"resolver-secret";
@@ -2921,19 +2731,16 @@ mod tests {
         )
         .expect_err("debug proof backend must be rejected");
         assert!(err.to_string().contains("debug proof backends"));
-
         let mut programmed =
             try_bfv_programmed_public_parameters(public_parameters, evaluation_keys)
                 .expect("build programmed BFV public parameters");
         programmed.verification_mode = RamLfeVerificationMode::Proof;
         programmed.proof_verifier = Some(debug_verifier);
         let encoded = norito::to_bytes(&programmed).expect("encode programmed params");
-
         let err = decode_bfv_programmed_public_parameters(&encoded)
             .expect_err("debug proof backend must be rejected while decoding");
         assert!(err.to_string().contains("debug proof backends"));
     }
-
     #[test]
     fn bfv_programmed_policy_commitment_changes_with_input() {
         let secret = b"resolver-secret";
@@ -2956,7 +2763,6 @@ mod tests {
             &norito::to_bytes(&programmed).expect("encode public parameters"),
         )
         .expect("build BFV policy commitment");
-
         let left = ClientRequest {
             normalized_input: norito::to_bytes(
                 &encrypt_identifier_from_seed(
@@ -2981,7 +2787,6 @@ mod tests {
             .expect("encode right ciphertext"),
             associated_data: associated_data.to_vec(),
         };
-
         let left = evaluate_commitment(secret, &commitment, &left).expect("left evaluation");
         let right = evaluate_commitment(secret, &commitment, &right).expect("right evaluation");
         assert_ne!(left.output, right.output);

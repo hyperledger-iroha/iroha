@@ -1,6 +1,5 @@
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use norito::core::DecodeFromSlice;
-
 use super::*;
 use crate::{
     Domain, DomainId, Level,
@@ -30,7 +29,6 @@ use crate::{
     },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
-
 fn sample_signed_transaction() -> SignedTransaction {
     let chain = test_network_id(0x11);
     let public_key: iroha_crypto::PublicKey =
@@ -42,7 +40,6 @@ fn sample_signed_transaction() -> SignedTransaction {
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
             .parse()
             .unwrap();
-
     TransactionBuilder::new(
         chain,
         authority,
@@ -51,7 +48,6 @@ fn sample_signed_transaction() -> SignedTransaction {
     .with_instructions([Log::new(Level::INFO, "exact slice".into())])
     .sign(&private_key)
 }
-
 #[cfg(feature = "json")]
 fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
     let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
@@ -64,7 +60,6 @@ fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         Err(norito::json::BoundedJsonError::BodyTooLarge)
     );
 }
-
 #[cfg(feature = "json")]
 #[test]
 fn transaction_manual_json_families_have_exact_checked_bounds() {
@@ -74,7 +69,6 @@ fn transaction_manual_json_families_have_exact_checked_bounds() {
         Log::new(Level::INFO, "checked execution step".to_owned()),
     )])));
 }
-
 #[test]
 fn transaction_domain_network_and_genesis_wire_are_disjoint_and_pinned() {
     let network_id = test_network_id(0x35);
@@ -89,7 +83,6 @@ fn transaction_domain_network_and_genesis_wire_are_disjoint_and_pinned() {
             .expect("decode pinned network transaction domain"),
         network
     );
-
     let genesis = TransactionDomain::Genesis;
     let genesis_bytes =
         norito::encode_canonical(&genesis).expect("encode genesis transaction domain");
@@ -105,7 +98,6 @@ fn transaction_domain_network_and_genesis_wire_are_disjoint_and_pinned() {
         "the closed transaction-domain enum must reject unknown discriminants"
     );
 }
-
 #[cfg(feature = "json")]
 #[test]
 fn transaction_domain_json_is_closed_and_rejects_legacy_identity_keys() {
@@ -128,7 +120,6 @@ fn transaction_domain_json_is_closed_and_rejects_legacy_identity_keys() {
             .expect("serialize genesis transaction domain"),
         r#"{"kind":"genesis"}"#
     );
-
     for rejected in [
         format!(r#"{{"kind":"network","content":{network_id_json}}}"#),
         format!(r#"{{"network_id":{network_id_json}}}"#),
@@ -145,7 +136,6 @@ fn transaction_domain_json_is_closed_and_rejects_legacy_identity_keys() {
         );
     }
 }
-
 #[cfg(feature = "json")]
 #[test]
 fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
@@ -175,7 +165,6 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
             "retired transaction identity key `{retired}` must be rejected"
         );
     }
-
     let mut unknown = canonical.clone();
     unknown
         .as_object_mut()
@@ -188,7 +177,6 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
         norito::json::from_value::<TransactionPayload>(unknown).is_err(),
         "unknown transaction payload fields must fail closed"
     );
-
     let mut missing_domain = canonical;
     missing_domain
         .as_object_mut()
@@ -199,14 +187,12 @@ fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
         "transaction payload domain is mandatory"
     );
 }
-
 fn sample_fee_asset() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "universal").expect("valid fee domain"),
         "xor".parse().expect("valid fee asset name"),
     )
 }
-
 fn privacy_test_authority() -> AccountId {
     let public_key: iroha_crypto::PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -214,17 +200,14 @@ fn privacy_test_authority() -> AccountId {
             .expect("test public key");
     AccountId::new(public_key)
 }
-
 fn privacy_test_private_key() -> iroha_crypto::PrivateKey {
     "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
         .parse()
         .expect("test private key")
 }
-
 const fn privacy_test_bytes(seed: u8) -> [u8; 32] {
     [seed; 32]
 }
-
 fn draft_privacy_submission() -> SubmitPrivacyProofV1 {
     let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0;
     let parameter_id = PrivacyParameterIdV1::new(privacy_test_bytes(1));
@@ -279,7 +262,6 @@ fn draft_privacy_submission() -> SubmitPrivacyProofV1 {
         ])),
     })
 }
-
 fn privacy_payload_with_executable(executable: Executable) -> TransactionPayload {
     TransactionBuilder::new_with_time(
         TransactionDomain::Network(test_network_id(0x30)),
@@ -291,11 +273,9 @@ fn privacy_payload_with_executable(executable: Executable) -> TransactionPayload
     .into_payload()
     .expect("valid test payload")
 }
-
 fn draft_privacy_payload() -> TransactionPayload {
     privacy_payload_with_executable(vec![InstructionBox::from(draft_privacy_submission())].into())
 }
-
 fn draft_zk_ace_privacy_payload() -> TransactionPayload {
     let mut payload = draft_privacy_payload();
     mutate_direct_privacy_submission(&mut payload, |submission| {
@@ -327,7 +307,6 @@ fn draft_zk_ace_privacy_payload() -> TransactionPayload {
     });
     payload
 }
-
 fn draft_vega_privacy_payload() -> TransactionPayload {
     let mut payload = draft_privacy_payload();
     mutate_direct_privacy_submission(&mut payload, |submission| {
@@ -375,7 +354,6 @@ fn draft_vega_privacy_payload() -> TransactionPayload {
     });
     payload
 }
-
 fn draft_ivm_private_note_privacy_payload() -> TransactionPayload {
     let mut payload = draft_privacy_payload();
     mutate_direct_privacy_submission(&mut payload, |submission| {
@@ -409,7 +387,6 @@ fn draft_ivm_private_note_privacy_payload() -> TransactionPayload {
     });
     payload
 }
-
 fn mutate_direct_privacy_submission(
     payload: &mut TransactionPayload,
     mutate: impl FnOnce(&mut SubmitPrivacyProofV1),
@@ -436,7 +413,6 @@ fn mutate_direct_privacy_submission(
     instructions[index] = submission.into();
     payload.instructions = Executable::Instructions(instructions.into());
 }
-
 fn finalized_privacy_payload() -> TransactionPayload {
     let mut payload = draft_privacy_payload();
     let intent = payload
@@ -462,7 +438,6 @@ fn finalized_privacy_payload() -> TransactionPayload {
     );
     payload
 }
-
 fn privacy_test_contract_call() -> ContractInvocation {
     ContractInvocation {
         contract_address: crate::smart_contract::ContractAddress::derive(
@@ -477,7 +452,6 @@ fn privacy_test_contract_call() -> ContractInvocation {
         arguments: None,
     }
 }
-
 fn legacy_proof_only_privacy_intent_digest(
     payload: &TransactionPayload,
 ) -> PrivacyTransactionIntentDigestV1 {
@@ -496,7 +470,6 @@ fn legacy_proof_only_privacy_intent_digest(
     hasher.update(&encoded);
     PrivacyTransactionIntentDigestV1::new(*hasher.finalize().as_bytes())
 }
-
 fn assert_privacy_binding_absent(payload: &TransactionPayload, message: &str) {
     assert!(
         payload
@@ -505,7 +478,6 @@ fn assert_privacy_binding_absent(payload: &TransactionPayload, message: &str) {
             .is_none()
     );
 }
-
 fn assert_privacy_digest_rejects_path(
     payload: &TransactionPayload,
     path: PrivacyTransactionIntentUnsupportedPathV1,
@@ -518,7 +490,6 @@ fn assert_privacy_digest_rejects_path(
         PrivacyTransactionIntentErrorV1::UnsupportedPath { path }
     );
 }
-
 fn assert_privacy_binding_rejects_path(
     payload: &TransactionPayload,
     path: PrivacyTransactionIntentUnsupportedPathV1,
@@ -531,7 +502,6 @@ fn assert_privacy_binding_rejects_path(
         PrivacyTransactionIntentErrorV1::UnsupportedPath { path }
     );
 }
-
 fn assert_privacy_ivm_paths_rejected() {
     let raw_ivm =
         privacy_payload_with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![1])));
@@ -544,7 +514,6 @@ fn assert_privacy_ivm_paths_rejected() {
         &raw_ivm,
         "an ordinary IVM transaction has no privacy binding",
     );
-
     let ordinary_proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
         bytecode: IvmBytecode::from_compiled(vec![2]),
         overlay: vec![InstructionBox::from(Log::new(
@@ -559,7 +528,6 @@ fn assert_privacy_ivm_paths_rejected() {
         &ordinary_proved,
         "an ordinary proved transaction has no privacy binding",
     );
-
     let proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
         bytecode: IvmBytecode::from_compiled(vec![2]),
         overlay: vec![InstructionBox::from(draft_privacy_submission())].into(),
@@ -572,7 +540,6 @@ fn assert_privacy_ivm_paths_rejected() {
         "proved overlays cannot carry a V1 privacy submission",
     );
 }
-
 fn assert_privacy_dynamic_dispatch_paths_rejected() {
     let contract =
         privacy_payload_with_executable(Executable::ContractCall(privacy_test_contract_call()));
@@ -585,7 +552,6 @@ fn assert_privacy_dynamic_dispatch_paths_rejected() {
         &contract,
         "an ordinary contract transaction has no privacy binding",
     );
-
     let mixed_batch = privacy_payload_with_executable(Executable::Batch(
         vec![
             ExecutableBatchItem::Instruction(draft_privacy_submission().into()),
@@ -608,7 +574,6 @@ fn assert_privacy_dynamic_dispatch_paths_rejected() {
         &ordinary_contract_batch,
         "an ordinary contract batch has no privacy binding",
     );
-
     let custom = privacy_payload_with_executable(
         vec![
             InstructionBox::from(draft_privacy_submission()),
@@ -631,7 +596,6 @@ fn assert_privacy_dynamic_dispatch_paths_rejected() {
         &ordinary_custom,
         "an ordinary custom instruction has no privacy binding",
     );
-
     let trigger = privacy_payload_with_executable(
         vec![
             InstructionBox::from(draft_privacy_submission()),
@@ -657,7 +621,6 @@ fn assert_privacy_dynamic_dispatch_paths_rejected() {
         "an ordinary trigger instruction has no privacy binding",
     );
 }
-
 fn assert_opaque_privacy_instruction_rejected() {
     let submission = draft_privacy_submission();
     let framed = norito::to_bytes(&submission).expect("framed privacy instruction");
@@ -670,7 +633,6 @@ fn assert_opaque_privacy_instruction_rejected() {
         "opaque privacy wire id must fail closed",
     );
 }
-
 fn assert_canonical_privacy_intent_kat(
     payload: &TransactionPayload,
     expected: PrivacyTransactionIntentDigestV1,
@@ -690,7 +652,6 @@ fn assert_canonical_privacy_intent_kat(
         "canonical privacy transaction-intent V1 digest"
     );
 }
-
 fn assert_privacy_proof_bytes_are_projected_out(
     payload: &TransactionPayload,
     expected: PrivacyTransactionIntentDigestV1,
@@ -709,7 +670,6 @@ fn assert_privacy_proof_bytes_are_projected_out(
         .validate_privacy_transaction_intent_binding_v1()
         .expect("proof bytes do not alter either derived digest");
 }
-
 fn assert_stored_privacy_digests_are_checked(
     payload: &TransactionPayload,
     expected: PrivacyTransactionIntentDigestV1,
@@ -749,7 +709,6 @@ fn assert_stored_privacy_digests_are_checked(
             .expect_err("zero stored intent"),
         PrivacyTransactionIntentErrorV1::ZeroIntentDigest
     );
-
     let mut stale_statement = payload.clone();
     mutate_direct_privacy_submission(&mut stale_statement, |submission| {
         submission.envelope.statement_digest =
@@ -778,7 +737,6 @@ fn assert_stored_privacy_digests_are_checked(
         PrivacyTransactionIntentErrorV1::ZeroStatementDigest
     );
 }
-
 fn assert_legacy_privacy_digest_cycle_is_broken(expected: PrivacyTransactionIntentDigestV1) {
     let draft = draft_privacy_payload();
     let first_legacy = legacy_proof_only_privacy_intent_digest(&draft);
@@ -807,7 +765,6 @@ fn assert_legacy_privacy_digest_cycle_is_broken(expected: PrivacyTransactionInte
         expected
     );
 }
-
 #[test]
 fn transaction_payload_exposes_execution_identity_ttl_and_network() {
     let chain = test_network_id(0x12);
@@ -829,14 +786,12 @@ fn transaction_payload_exposes_execution_identity_ttl_and_network() {
     )
     .with_executable(instructions.clone());
     builder.set_ttl(time_to_live);
-
     let payload = builder.payload();
     assert_eq!(payload.instructions(), &instructions);
     assert_eq!(payload.authority(), &authority);
     assert_eq!(payload.time_to_live(), Some(time_to_live));
     assert_eq!(payload.network_id(), Some(&chain));
 }
-
 #[test]
 fn privacy_transaction_intent_requires_one_direct_typed_submission() {
     let ordinary = privacy_payload_with_executable(
@@ -858,7 +813,6 @@ fn privacy_transaction_intent_requires_one_direct_typed_submission() {
             .expect("ordinary payload is not a privacy transaction")
             .is_none()
     );
-
     let duplicate = draft_privacy_submission();
     let duplicate_payload = privacy_payload_with_executable(
         vec![
@@ -880,14 +834,12 @@ fn privacy_transaction_intent_requires_one_direct_typed_submission() {
         PrivacyTransactionIntentErrorV1::MultipleSubmissions { count: 2 }
     );
 }
-
 #[test]
 fn privacy_transaction_intent_rejects_dynamic_and_opaque_paths() {
     assert_privacy_ivm_paths_rejected();
     assert_privacy_dynamic_dispatch_paths_rejected();
     assert_opaque_privacy_instruction_rejected();
 }
-
 #[test]
 fn privacy_transaction_intent_projection_breaks_the_derived_digest_cycle_exactly() {
     let payload = finalized_privacy_payload();
@@ -919,14 +871,12 @@ fn privacy_transaction_intent_projection_breaks_the_derived_digest_cycle_exactly
     assert_stored_privacy_digests_are_checked(&payload, expected);
     assert_legacy_privacy_digest_cycle_is_broken(expected);
 }
-
 #[test]
 fn zk_ace_intent_projection_zeroes_the_derived_nullifier_and_binds_action_fields() {
     let payload = draft_zk_ace_privacy_payload();
     let expected = payload
         .privacy_transaction_intent_digest_v1()
         .expect("derive ZK-ACE draft intent");
-
     let mut changed_nullifier = payload.clone();
     mutate_direct_privacy_submission(&mut changed_nullifier, |submission| {
         let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
@@ -942,7 +892,6 @@ fn zk_ace_intent_projection_zeroes_the_derived_nullifier_and_binds_action_fields
             .expect("derived replay nullifier is projected out"),
         expected
     );
-
     let mut changed_amount = payload.clone();
     mutate_direct_privacy_submission(&mut changed_amount, |submission| {
         let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
@@ -958,7 +907,6 @@ fn zk_ace_intent_projection_zeroes_the_derived_nullifier_and_binds_action_fields
             .expect("independent action amount remains bound"),
         expected
     );
-
     let mut changed_scope = payload.clone();
     mutate_direct_privacy_submission(&mut changed_scope, |submission| {
         let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
@@ -975,7 +923,6 @@ fn zk_ace_intent_projection_zeroes_the_derived_nullifier_and_binds_action_fields
             .expect("exact public balance scope remains bound"),
         expected
     );
-
     let mut finalized = payload;
     mutate_direct_privacy_submission(&mut finalized, |submission| {
         submission
@@ -996,7 +943,6 @@ fn zk_ace_intent_projection_zeroes_the_derived_nullifier_and_binds_action_fields
         expected
     );
 }
-
 #[test]
 fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
     let payload = draft_vega_privacy_payload();
@@ -1008,7 +954,6 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
         "88a32ad2633e7740cdc680972dc738ce8d94a60f774cc4e8a4286f5a99f4fc66",
         "canonical Vega two-phase transaction-intent projection KAT"
     );
-
     let mut changed_hdev = payload.clone();
     mutate_direct_privacy_submission(&mut changed_hdev, |submission| {
         let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
@@ -1025,7 +970,6 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
             .expect("derived H_dev is projected out"),
         expected
     );
-
     let independent_mutations: [fn(&mut VegaExistingCredentialStatementV1); 3] = [
         |statement: &mut VegaExistingCredentialStatementV1| {
             statement.reader_challenge.0[0] ^= 1;
@@ -1054,7 +998,6 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
             expected
         );
     }
-
     let mut finalized = payload;
     mutate_direct_privacy_submission(&mut finalized, |submission| {
         let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
@@ -1078,14 +1021,12 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
         expected
     );
 }
-
 #[test]
 fn ivm_private_note_intent_projection_breaks_the_action_digest_fixed_point() {
     let payload = draft_ivm_private_note_privacy_payload();
     let expected = payload
         .privacy_transaction_intent_digest_v1()
         .expect("derive IVM private-note draft intent");
-
     let mut changed_action_digest = payload.clone();
     mutate_direct_privacy_submission(&mut changed_action_digest, |submission| {
         let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) =
@@ -1101,7 +1042,6 @@ fn ivm_private_note_intent_projection_breaks_the_action_digest_fixed_point() {
             .expect("derived IVM action digest is projected out"),
         expected
     );
-
     let independent_mutations: [fn(&mut IrohaIvmPrivateNoteStarkStatementV1); 4] = [
         |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
             statement.state_root.0[0] ^= 1;
@@ -1134,7 +1074,6 @@ fn ivm_private_note_intent_projection_breaks_the_action_digest_fixed_point() {
             expected
         );
     }
-
     let mut finalized = payload;
     mutate_direct_privacy_submission(&mut finalized, |submission| {
         let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) =
@@ -1167,7 +1106,6 @@ fn ivm_private_note_intent_projection_breaks_the_action_digest_fixed_point() {
             .expect("final IVM intent binding"),
         expected
     );
-
     let mut stale_action_digest = finalized;
     mutate_direct_privacy_submission(&mut stale_action_digest, |submission| {
         let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) =
@@ -1185,7 +1123,6 @@ fn ivm_private_note_intent_projection_breaks_the_action_digest_fixed_point() {
         );
     });
 }
-
 #[test]
 #[ignore = "operator-only KAT regeneration after an intentional intent projection change"]
 fn print_vega_intent_projection_kat() {
@@ -1197,7 +1134,6 @@ fn print_vega_intent_projection_kat() {
         hex::encode(digest.as_bytes())
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn privacy_transaction_intent_binds_every_independent_payload_field() {
@@ -1205,7 +1141,6 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
     let expected = payload
         .privacy_transaction_intent_digest_v1()
         .expect("base intent");
-
     macro_rules! assert_bound {
         ($name:literal, $mutate:expr) => {{
             let mut changed = payload.clone();
@@ -1220,7 +1155,6 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
             );
         }};
     }
-
     assert_bound!("payload network", |changed: &mut TransactionPayload| {
         changed.domain = TransactionDomain::Network(test_network_id(0xFE));
     });
@@ -1257,7 +1191,6 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
         instructions.insert(0, Log::new(Level::INFO, "before privacy".into()).into());
         changed.instructions = Executable::Instructions(instructions.into());
     });
-
     macro_rules! assert_submission_bound {
         ($name:literal, $mutate:expr) => {
             assert_bound!($name, |changed: &mut TransactionPayload| {
@@ -1265,7 +1198,6 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
             });
         };
     }
-
     assert_submission_bound!("protocol tag", |submission: &mut SubmitPrivacyProofV1| {
         submission.envelope.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
     });
@@ -1406,7 +1338,6 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
         }
     );
 }
-
 #[test]
 fn privacy_intent_is_independent_of_the_complete_signed_transaction_hash() {
     let payload = finalized_privacy_payload();
@@ -1416,7 +1347,6 @@ fn privacy_intent_is_independent_of_the_complete_signed_transaction_hash() {
     let expected_intent = transaction
         .privacy_transaction_intent_digest_v1()
         .expect("signed transaction intent");
-
     let mut altered_signature = transaction.clone();
     altered_signature.signature = sample_signed_transaction().signature().clone();
     assert_eq!(
@@ -1431,7 +1361,6 @@ fn privacy_intent_is_independent_of_the_complete_signed_transaction_hash() {
         expected_intent
     );
 }
-
 #[test]
 fn fee_payment_intent_requires_canonical_positive_component_limits() {
     let asset = sample_fee_asset();
@@ -1441,16 +1370,13 @@ fn fee_payment_intent_requires_canonical_positive_component_limits() {
         asset.clone(),
         Quantity::from(20_u32),
     );
-
     FeePaymentIntent::authority(vec![nexus.clone(), pipeline.clone()], None)
         .validate()
         .expect("ordered positive fee limits are valid");
-
     let err = FeePaymentIntent::authority(vec![pipeline, nexus.clone()], None)
         .validate()
         .expect_err("reversed component order must fail");
     assert_eq!(err, FeePaymentIntentError::NonCanonicalChargeLimitOrder);
-
     let err = FeePaymentIntent::authority(vec![nexus.clone(), nexus], None)
         .validate()
         .expect_err("duplicate component must fail");
@@ -1458,7 +1384,6 @@ fn fee_payment_intent_requires_canonical_positive_component_limits() {
         err,
         FeePaymentIntentError::DuplicateChargeKind(FeeChargeKind::Nexus)
     );
-
     let err = FeePaymentIntent::authority(
         vec![FeeChargeLimit::new(
             FeeChargeKind::Nexus,
@@ -1477,7 +1402,6 @@ fn fee_payment_intent_requires_canonical_positive_component_limits() {
         }
     );
 }
-
 #[test]
 fn fee_quote_selection_comparison_binds_payer_revision_and_gas() {
     let authority = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100));
@@ -1497,7 +1421,6 @@ fn fee_quote_selection_comparison_binds_payer_revision_and_gas() {
             NonZeroU64::new(101),
         ))
     );
-
     let sponsor = sample_signed_transaction().authority().clone();
     let first = FeePaymentIntent::sponsor(
         FeeSponsorProgramId::new(sponsor.clone(), "wallet".parse().expect("program name")),
@@ -1521,7 +1444,6 @@ fn fee_quote_selection_comparison_binds_payer_revision_and_gas() {
     assert!(!first.has_same_payer_and_gas_bound(&other_revision));
     assert!(!first.has_same_payer_and_gas_bound(&authority));
 }
-
 #[test]
 fn legacy_fee_metadata_is_rejected_before_signing() {
     let mut metadata = Metadata::default();
@@ -1536,7 +1458,6 @@ fn legacy_fee_metadata_is_rejected_before_signing() {
         FeePaymentIntentError::LegacyMetadataKey("fee_sponsor".to_owned())
     );
 }
-
 #[test]
 fn transaction_payload_validates_typed_and_legacy_fee_invariants_together() {
     let mut payload = sample_signed_transaction().payload().clone();
@@ -1552,7 +1473,6 @@ fn transaction_payload_validates_typed_and_legacy_fee_invariants_together() {
         payload.validate_fee_payment_intent(),
         Err(FeePaymentIntentError::ZeroChargeLimit { .. })
     ));
-
     payload.fee_payment = FeePaymentIntent::authority(Vec::new(), None);
     payload.metadata.insert(
         "gas_limit".parse().expect("valid metadata key"),
@@ -1565,7 +1485,6 @@ fn transaction_payload_validates_typed_and_legacy_fee_invariants_together() {
         FeePaymentIntentError::LegacyMetadataKey("gas_limit".to_owned())
     );
 }
-
 #[test]
 fn signed_transaction_exposes_signature_bound_fee_intent() {
     let transaction = sample_signed_transaction();
@@ -1577,7 +1496,6 @@ fn signed_transaction_exposes_signature_bound_fee_intent() {
         .verify_signature()
         .expect("the signed fee intent must verify with the payload");
 }
-
 #[test]
 fn signed_contract_invocation_arguments_and_code_hash_are_signature_bound() {
     let network_id = test_network_id(0x13);
@@ -1619,7 +1537,6 @@ fn signed_contract_invocation_arguments_and_code_hash_are_signature_bound() {
     transaction
         .verify_signature()
         .expect("original signature verifies");
-
     let Executable::ContractCall(invocation) = &mut transaction.payload.instructions else {
         panic!("contract call executable");
     };
@@ -1628,12 +1545,10 @@ fn signed_contract_invocation_arguments_and_code_hash_are_signature_bound() {
         .as_mut()
         .expect("argument record")
         .as_mut_bytes()[0] ^= 0x01;
-
     assert_ne!(transaction.hash(), signed_hash);
     transaction
         .verify_signature()
         .expect_err("mutating signed arguments must invalidate the signature");
-
     let Executable::ContractCall(invocation) = &mut transaction.payload.instructions else {
         panic!("contract call executable");
     };
@@ -1654,7 +1569,6 @@ fn signed_contract_invocation_arguments_and_code_hash_are_signature_bound() {
         .verify_signature()
         .expect_err("mutating the expected code hash must invalidate the signature");
 }
-
 #[test]
 fn verify_proof_instruction_signed_tx_versioned_roundtrip() {
     let chain = test_network_id(0x14);
@@ -1675,7 +1589,6 @@ fn verify_proof_instruction_signed_tx_versioned_roundtrip() {
     );
     attachment.envelope_hash = Some(iroha_crypto::Hash::new(&proof_bytes).into());
     let instruction: InstructionBox = crate::isi::zk::VerifyProof::new(attachment).into();
-
     let tx = TransactionBuilder::new(
         chain,
         authority,
@@ -1686,39 +1599,32 @@ fn verify_proof_instruction_signed_tx_versioned_roundtrip() {
     let bytes = tx.encode_versioned();
     let decoded = SignedTransaction::decode_all_versioned(&bytes)
         .expect("versioned VerifyProof transaction must decode");
-
     assert_eq!(decoded.hash(), tx.hash());
     decoded
         .verify_signature()
         .expect("decoded VerifyProof transaction signature must verify");
 }
-
 fn checked_transaction_payload_signature(
     private_key: &iroha_crypto::PrivateKey,
     payload: &model::TransactionPayload,
 ) -> SignatureOf<model::TransactionPayload> {
     SignatureOf::try_new(private_key, payload).expect("checked transaction fixture signature")
 }
-
 fn checked_random_keypair() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random().expect("test fixture random key generation should succeed")
 }
-
 fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
         panic!("{algorithm:?} transaction fixture key generation should succeed: {err}")
     })
 }
-
 const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
-
 const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
     0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
 ];
-
 fn signature_of_with_malformed_ed25519_r<T>(
     signature: &SignatureOf<T>,
     replacement_r: &[u8; 32],
@@ -1727,19 +1633,16 @@ fn signature_of_with_malformed_ed25519_r<T>(
     payload[..replacement_r.len()].copy_from_slice(replacement_r);
     SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(&payload))
 }
-
 #[test]
 fn with_instructions_accepts_instruction_box() {
     let chain = test_network_id(0x15);
     let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-
     // Pre-boxed instruction
     let instruction: InstructionBox = Register::domain(Domain::new(
         DomainId::try_new("wonderland", "universal").unwrap(),
     ))
     .into();
     let expected_id = crate::isi::Instruction::id(&*instruction);
-
     // Use a known matching keypair (values from project samples)
     let public_key: iroha_crypto::PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -1750,9 +1653,7 @@ fn with_instructions_accepts_instruction_box() {
             .parse()
             .unwrap();
     let key_pair = iroha_crypto::KeyPair::new(public_key.clone(), private_key).unwrap();
-
     let authority = AccountId::new(public_key.clone());
-
     let tx = TransactionBuilder::new(
         chain,
         authority.clone(),
@@ -1761,12 +1662,10 @@ fn with_instructions_accepts_instruction_box() {
     .with_instructions(core::iter::once(instruction))
     .with_metadata(Metadata::default())
     .sign(key_pair.private_key());
-
     assert_eq!(
         tx.authority().expect_single_signatory(),
         key_pair.public_key()
     );
-
     if let Executable::Instructions(v) = tx.instructions() {
         assert_eq!(v.len(), 1);
         // Ensure the inner instruction wasn't double-boxed by verifying its type id.
@@ -1777,7 +1676,6 @@ fn with_instructions_accepts_instruction_box() {
         panic!("expected Instructions variant");
     }
 }
-
 #[test]
 fn with_executable_batch_preserves_mixed_item_order() {
     let key_pair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
@@ -1809,7 +1707,6 @@ fn with_executable_batch_preserves_mixed_item_order() {
     )
     .with_executable_batch(items)
     .sign(key_pair.private_key());
-
     let Executable::Batch(items) = tx.instructions() else {
         panic!("expected mixed executable batch");
     };
@@ -1826,7 +1723,6 @@ fn with_executable_batch_preserves_mixed_item_order() {
         crate::transaction::ExecutableBatchItem::Instruction(_)
     ));
 }
-
 #[test]
 fn transaction_builder_exports_signable_payload_and_accepts_external_signature() {
     let chain = test_network_id(0x16);
@@ -1838,11 +1734,9 @@ fn transaction_builder_exports_signable_payload_and_accepts_external_signature()
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "external signature".into())]);
-
     let payload_bytes = builder.encode_payload();
     let payload_hash = builder.payload_hash();
     assert_eq!(payload_hash, Hash::new(&payload_bytes));
-
     let payload_hash_bytes = builder.payload_hash_bytes();
     let signature = Signature::try_new(key_pair.private_key(), &payload_hash_bytes)
         .expect("checked external transaction fixture signature");
@@ -1852,7 +1746,6 @@ fn transaction_builder_exports_signable_payload_and_accepts_external_signature()
     let signed = builder.build_with_signature(signature);
     assert!(signed.verify_signature().is_ok());
 }
-
 #[test]
 fn transaction_builder_decodes_exact_external_signing_payload() {
     let chain = test_network_id(0x17);
@@ -1866,17 +1759,14 @@ fn transaction_builder_decodes_exact_external_signing_payload() {
     .with_instructions([Log::new(Level::INFO, "decode payload".into())]);
     builder.set_creation_time(Duration::from_millis(42));
     builder.set_nonce(NonZeroU32::new(7).unwrap());
-
     let encoded = builder.encode_payload();
     let decoded = TransactionBuilder::decode_payload(&encoded).unwrap();
     assert_eq!(decoded.encode_payload(), encoded);
     assert_eq!(decoded.payload_hash_bytes(), builder.payload_hash_bytes());
-
     let mut with_trailing = encoded;
     with_trailing.push(0);
     assert!(TransactionBuilder::decode_payload(&with_trailing).is_err());
     assert!(TransactionBuilder::decode_payload(&[]).is_err());
-
     let canonical = builder.encode_payload();
     assert!(
         canonical[0] < 0x80,
@@ -1888,7 +1778,6 @@ fn transaction_builder_decodes_exact_external_signing_payload() {
     overlong.extend_from_slice(&canonical[1..]);
     assert!(TransactionBuilder::decode_payload(&overlong).is_err());
 }
-
 #[test]
 fn transaction_builder_payload_roundtrip_preserves_quote_to_sign_preimage() {
     let chain = test_network_id(0x18);
@@ -1905,20 +1794,17 @@ fn transaction_builder_payload_roundtrip_preserves_quote_to_sign_preimage() {
     let mut builder = TransactionBuilder::new(chain, authority, intent)
         .with_instructions([Log::new(Level::INFO, "quote then sign".into())]);
     builder.set_creation_time(Duration::from_millis(42));
-
     let payload = builder.into_payload().expect("valid unsigned payload");
     let expected = norito::codec::encode_adaptive(&payload);
     let rebuilt = TransactionBuilder::from_payload(payload.clone())
         .expect("quoted payload reconstructs a builder");
     assert_eq!(rebuilt.encode_payload(), expected);
-
     let signed = rebuilt
         .try_sign(key_pair.private_key())
         .expect("exact quoted payload signs");
     assert_eq!(signed.payload(), &payload);
     signed.verify_signature().expect("signature verifies");
 }
-
 #[test]
 fn transaction_builder_from_payload_rejects_retired_fee_metadata() {
     let chain = test_network_id(0x19);
@@ -1935,7 +1821,6 @@ fn transaction_builder_from_payload_rejects_retired_fee_metadata() {
         "gas_limit".parse().expect("metadata key"),
         Json::new(10_u64),
     );
-
     let error = TransactionBuilder::from_payload(payload)
         .expect_err("retired fee metadata must fail before signing");
     assert!(matches!(
@@ -1943,7 +1828,6 @@ fn transaction_builder_from_payload_rejects_retired_fee_metadata() {
         TransactionSignatureError::InvalidFeePaymentIntent(_)
     ));
 }
-
 #[test]
 fn transaction_builder_try_sign_matches_compatibility_sign() {
     let chain = test_network_id(0x1A);
@@ -1960,12 +1844,10 @@ fn transaction_builder_try_sign_matches_compatibility_sign() {
         builder.set_creation_time(Duration::from_millis(1_234));
         builder
     };
-
     let fallible = make_builder()
         .try_sign(key_pair.private_key())
         .expect("transaction signing should succeed");
     let compatibility = make_builder().sign(key_pair.private_key());
-
     assert_eq!(
         norito::to_bytes(&fallible).expect("encode fallible signed transaction"),
         norito::to_bytes(&compatibility).expect("encode compatibility signed transaction")
@@ -1974,7 +1856,6 @@ fn transaction_builder_try_sign_matches_compatibility_sign() {
         .verify_signature()
         .expect("fallible signed transaction must verify");
 }
-
 #[test]
 fn transaction_signature_decode_from_slice_roundtrip() {
     let chain = test_network_id(0x1B);
@@ -1988,7 +1869,6 @@ fn transaction_signature_decode_from_slice_roundtrip() {
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
             .parse()
             .unwrap();
-
     let signed_tx = TransactionBuilder::new(
         chain,
         authority,
@@ -1996,26 +1876,22 @@ fn transaction_signature_decode_from_slice_roundtrip() {
     )
     .sign(&private_key);
     let signature = signed_tx.signature().clone();
-
     let encoded = norito::to_bytes(&signature).expect("encode signature");
     let decoded: TransactionSignature =
         norito::core::decode_from_bytes(&encoded).expect("decode signature");
     assert_eq!(decoded, signature);
-
     let inner = signature.0.clone();
     let inner_encoded = norito::to_bytes(&inner).expect("encode inner signature");
     let decoded_inner: iroha_crypto::SignatureOf<TransactionPayload> =
         norito::core::decode_from_bytes(&inner_encoded).expect("decode inner signature");
     assert_eq!(decoded_inner, inner);
 }
-
 #[test]
 fn transaction_signature_decode_rejects_empty_signature_material() {
     let signature = TransactionSignature(SignatureOf::from_signature(
         iroha_crypto::Signature::from_bytes(&[]),
     ));
     let encoded = norito::to_bytes(&signature).expect("encode invalid transaction signature");
-
     let err = norito::core::decode_from_bytes::<TransactionSignature>(&encoded)
         .expect_err("empty transaction signature must fail closed");
     let message = err.to_string();
@@ -2024,14 +1900,12 @@ fn transaction_signature_decode_rejects_empty_signature_material() {
         "unexpected transaction signature decode error: {message}"
     );
 }
-
 #[test]
 fn transaction_signature_decode_rejects_all_zero_signature_material() {
     let signature = TransactionSignature(SignatureOf::from_signature(
         iroha_crypto::Signature::from_bytes(&[0_u8; 64]),
     ));
     let encoded = norito::to_bytes(&signature).expect("encode invalid transaction signature");
-
     let err = norito::core::decode_from_bytes::<TransactionSignature>(&encoded)
         .expect_err("all-zero transaction signature must fail closed");
     let message = err.to_string();
@@ -2040,19 +1914,15 @@ fn transaction_signature_decode_rejects_all_zero_signature_material() {
         "unexpected transaction signature decode error: {message}"
     );
 }
-
 #[test]
 fn signed_transaction_decode_from_slice_rejects_trailing_bytes() {
     let signed_tx = sample_signed_transaction();
     let mut bytes = norito::codec::encode_adaptive(&signed_tx);
     bytes.push(0);
-
     let err = SignedTransaction::decode_from_slice(&bytes)
         .expect_err("signed transaction slice decoder must reject trailing bytes");
-
     assert!(matches!(err, norito::core::Error::LengthMismatch));
 }
-
 #[test]
 fn execution_step_decode_from_slice_rejects_trailing_bytes() {
     let step = ExecutionStep(ConstVec::from(vec![InstructionBox::from(Log::new(
@@ -2061,13 +1931,10 @@ fn execution_step_decode_from_slice_rejects_trailing_bytes() {
     ))]));
     let mut bytes = norito::codec::encode_adaptive(&step);
     bytes.push(0);
-
     let err = ExecutionStep::decode_from_slice(&bytes)
         .expect_err("execution step slice decoder must reject trailing bytes");
-
     assert!(matches!(err, norito::core::Error::LengthMismatch));
 }
-
 #[test]
 fn execution_step_decode_from_slice_roundtrips_instruction_vector() {
     let step = ExecutionStep(ConstVec::from(vec![
@@ -2075,26 +1942,20 @@ fn execution_step_decode_from_slice_roundtrips_instruction_vector() {
         InstructionBox::from(Log::new(Level::WARN, "second execution step".into())),
     ]));
     let bytes = norito::codec::encode_adaptive(&step);
-
     let (decoded, used) =
         ExecutionStep::decode_from_slice(&bytes).expect("decode exact execution step");
-
     assert_eq!(used, bytes.len());
     assert_eq!(decoded, step);
 }
-
 #[test]
 fn signed_transaction_versioned_decode_rejects_trailing_bytes() {
     let signed_tx = sample_signed_transaction();
     let mut bytes = signed_tx.encode_versioned();
     bytes.push(0);
-
     let err = SignedTransaction::decode_all_versioned(&bytes)
         .expect_err("versioned signed transaction decoder must reject trailing bytes");
-
     assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
 }
-
 #[test]
 fn signed_transaction_versioned_roundtrip() {
     let signed_tx = sample_signed_transaction();
@@ -2108,10 +1969,8 @@ fn signed_transaction_versioned_roundtrip() {
     );
     let decoded = SignedTransaction::decode_all_versioned(&bytes)
         .expect("versioned signed transaction must decode");
-
     assert_eq!(decoded, signed_tx);
 }
-
 #[test]
 fn signed_transaction_fixed_v1_wire_binds_full_authorization_proof() {
     let signer_a = checked_random_keypair();
@@ -2132,7 +1991,6 @@ fn signed_transaction_fixed_v1_wire_binds_full_authorization_proof() {
     .with_instructions([Log::new(Level::INFO, "authorization-sensitive wire".into())]);
     let signed_a = builder.clone().sign_multisig([signer_a.private_key()]);
     let signed_b = builder.sign_multisig([signer_b.private_key()]);
-
     signed_a.verify_signature().expect("first proof is valid");
     signed_b.verify_signature().expect("second proof is valid");
     assert_eq!(
@@ -2140,7 +1998,6 @@ fn signed_transaction_fixed_v1_wire_binds_full_authorization_proof() {
         signed_b.hash(),
         "the transaction identity intentionally hashes only the shared payload"
     );
-
     let wire_a = signed_a
         .encode_wire_v1()
         .expect("first fixed V1 wire must encode");
@@ -2154,40 +2011,33 @@ fn signed_transaction_fixed_v1_wire_binds_full_authorization_proof() {
         "different valid authorization proofs must produce different complete wire bytes"
     );
 }
-
 #[test]
 fn signed_transaction_versioned_decode_rejects_empty_payload_without_body_decode() {
     let err = SignedTransaction::decode_all_versioned(&[])
         .expect_err("empty signed transaction payload must be rejected");
-
     assert!(matches!(err, iroha_version::error::Error::NotVersioned));
     assert!(
         !err.to_string().contains("panic during decode"),
         "empty payloads should not surface as decode panics: {err}"
     );
 }
-
 #[test]
 fn signed_transaction_versioned_decode_rejects_version_only_payload_without_decode_panic() {
     let err = SignedTransaction::decode_all_versioned(&[1])
         .expect_err("version-only signed transaction payload must be rejected");
-
     assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
     assert!(
         !err.to_string().contains("panic during decode"),
         "truncated payloads should not surface as decode panics: {err}"
     );
 }
-
 #[test]
 fn signed_transaction_versioned_decode_rejects_unsupported_version_without_body_decode() {
     let signed_tx = sample_signed_transaction();
     let mut bytes = signed_tx.encode_versioned();
     bytes[0] = 2;
-
     let err = SignedTransaction::decode_all_versioned(&bytes)
         .expect_err("unsupported signed transaction version must be rejected");
-
     assert!(matches!(
         err,
         iroha_version::error::Error::UnsupportedVersion(_)
@@ -2197,14 +2047,12 @@ fn signed_transaction_versioned_decode_rejects_unsupported_version_without_body_
         "unsupported versions should not surface as decode panics: {err}"
     );
 }
-
 #[test]
 fn signed_transaction_decode_rejects_empty_signature_without_decode_panic() {
     let mut invalid_tx = sample_signed_transaction();
     invalid_tx.signature = TransactionSignature(iroha_crypto::SignatureOf::from_signature(
         iroha_crypto::Signature::from_bytes(&[]),
     ));
-
     let encoded = norito::to_bytes(&invalid_tx).expect("encode invalid transaction fixture");
     let err = norito::core::decode_from_bytes::<SignedTransaction>(&encoded)
         .expect_err("empty signed transaction signature must fail closed");
@@ -2213,7 +2061,6 @@ fn signed_transaction_decode_rejects_empty_signature_without_decode_panic() {
         message.contains("empty") || message.contains("length mismatch"),
         "unexpected signed transaction decode error: {message}"
     );
-
     let err = SignedTransaction::decode_all_versioned(&invalid_tx.encode_versioned())
         .expect_err("empty signed transaction signature must be rejected");
     let message = err.to_string();
@@ -2226,14 +2073,12 @@ fn signed_transaction_decode_rejects_empty_signature_without_decode_panic() {
         "empty signatures should not surface as decode panics: {message}"
     );
 }
-
 #[test]
 fn signed_transaction_decode_rejects_all_zero_signature_without_decode_panic() {
     let mut invalid_tx = sample_signed_transaction();
     invalid_tx.signature = TransactionSignature(iroha_crypto::SignatureOf::from_signature(
         iroha_crypto::Signature::from_bytes(&[0_u8; 64]),
     ));
-
     let encoded = norito::to_bytes(&invalid_tx).expect("encode invalid transaction fixture");
     let err = norito::core::decode_from_bytes::<SignedTransaction>(&encoded)
         .expect_err("all-zero signed transaction signature must fail closed");
@@ -2242,7 +2087,6 @@ fn signed_transaction_decode_rejects_all_zero_signature_without_decode_panic() {
         message.contains("all zero"),
         "unexpected signed transaction decode error: {message}"
     );
-
     let err = SignedTransaction::decode_all_versioned(&invalid_tx.encode_versioned())
         .expect_err("all-zero signed transaction signature must be rejected");
     let message = err.to_string();
@@ -2255,7 +2099,6 @@ fn signed_transaction_decode_rejects_all_zero_signature_without_decode_panic() {
         "all-zero signatures should not surface as decode panics: {message}"
     );
 }
-
 #[test]
 fn signed_transaction_versioned_decode_preserves_invalid_signature_for_validation() {
     let mut invalid_tx = sample_signed_transaction();
@@ -2268,20 +2111,16 @@ fn signed_transaction_versioned_decode_preserves_invalid_signature_for_validatio
         iroha_crypto::Signature::try_from_bytes(&signature)
             .expect("tampered transaction signature remains structurally admissible"),
     ));
-
     let decoded = SignedTransaction::decode_all_versioned(&invalid_tx.encode_versioned())
         .expect("well-formed transaction with invalid signature must still decode");
     let err = decoded
         .verify_signature()
         .expect_err("invalid transaction signature must fail verification");
-
     assert!(matches!(err, TransactionSignatureError::CryptoError(_)));
 }
-
 #[test]
 fn signed_transaction_rejects_malformed_ed25519_signature_r() {
     let tx = sample_signed_transaction();
-
     for (label, replacement_r) in [
         ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
         ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
@@ -2291,11 +2130,9 @@ fn signed_transaction_rejects_malformed_ed25519_signature_r() {
             &tx.signature.0,
             &replacement_r,
         ));
-
         let err = invalid_tx
             .verify_signature()
             .expect_err("malformed Ed25519 transaction signature R must fail admission");
-
         assert_eq!(
             err,
             TransactionSignatureError::CryptoError("Signature verification failed".to_owned()),
@@ -2303,7 +2140,6 @@ fn signed_transaction_rejects_malformed_ed25519_signature_r() {
         );
     }
 }
-
 #[test]
 fn signed_transaction_rejects_malformed_mldsa_signature_lengths() {
     let key_pair = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
@@ -2316,11 +2152,9 @@ fn signed_transaction_rejects_malformed_mldsa_signature_lengths() {
     )
     .with_instructions([Log::new(Level::INFO, "mldsa tx".into())])
     .sign(key_pair.private_key());
-
     tx.verify_signature()
         .expect("valid ML-DSA transaction signature verifies");
     let valid_signature = tx.signature.0.payload().to_vec();
-
     for (label, replacement_signature) in [
         (
             "short",
@@ -2336,7 +2170,6 @@ fn signed_transaction_rejects_malformed_mldsa_signature_lengths() {
         invalid_tx.signature = TransactionSignature(SignatureOf::from_signature(
             Signature::from_bytes(&replacement_signature),
         ));
-
         let err = invalid_tx
             .verify_signature()
             .expect_err("malformed ML-DSA transaction signature length must fail admission");
@@ -2346,19 +2179,15 @@ fn signed_transaction_rejects_malformed_mldsa_signature_lengths() {
         );
     }
 }
-
 #[test]
 fn transaction_entrypoint_versioned_decode_rejects_trailing_bytes() {
     let entrypoint = TransactionEntrypoint::from(sample_signed_transaction());
     let mut bytes = entrypoint.encode_versioned();
     bytes.push(0);
-
     let err = TransactionEntrypoint::decode_all_versioned(&bytes)
         .expect_err("versioned transaction entrypoint decoder must reject trailing bytes");
-
     assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
 }
-
 #[test]
 fn transaction_entrypoint_versioned_roundtrip_matches_fixed_v1_wire() {
     let entrypoint = TransactionEntrypoint::from(sample_signed_transaction());
@@ -2370,12 +2199,10 @@ fn transaction_entrypoint_versioned_roundtrip_matches_fixed_v1_wire() {
         versioned,
         "the inherent fixed-V1 entrypoint encoder must match EncodeVersioned"
     );
-
     let decoded = TransactionEntrypoint::decode_all_versioned(&versioned)
         .expect("versioned transaction entrypoint must decode");
     assert_eq!(decoded, entrypoint);
 }
-
 #[test]
 fn signed_transaction_roundtrip_preserves_instruction_order() {
     use crate::parameter::{Parameter, system::SumeragiParameter};
@@ -2389,7 +2216,6 @@ fn signed_transaction_roundtrip_preserves_instruction_order() {
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
             .parse()
             .unwrap();
-
     let ordered = vec![
         InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::MaxClockDriftMs(667),
@@ -2406,7 +2232,6 @@ fn signed_transaction_roundtrip_preserves_instruction_order() {
             ),
         ))),
     ];
-
     let tx = TransactionBuilder::new(
         chain,
         authority,
@@ -2414,7 +2239,6 @@ fn signed_transaction_roundtrip_preserves_instruction_order() {
     )
     .with_instructions(ordered.clone())
     .sign(&private_key);
-
     let bytes = norito::codec::encode_adaptive(&tx);
     let (decoded, used): (SignedTransaction, usize) =
         SignedTransaction::decode_from_slice(&bytes).expect("decode signed transaction");
@@ -2423,18 +2247,15 @@ fn signed_transaction_roundtrip_preserves_instruction_order() {
         bytes.len(),
         "signed transaction must consume full buffer"
     );
-
     let Executable::Instructions(actual) = decoded.instructions() else {
         panic!("expected instruction executable after roundtrip");
     };
-
     let actual = actual.iter().cloned().collect::<Vec<_>>();
     assert_eq!(
         actual, ordered,
         "instruction order must survive signed transaction roundtrip"
     );
 }
-
 #[test]
 fn sign_rejects_mismatched_signatory_without_rewriting_payload() {
     let chain = test_network_id(0x1E);
@@ -2449,7 +2270,6 @@ fn sign_rejects_mismatched_signatory_without_rewriting_payload() {
             .unwrap();
     let key_pair = iroha_crypto::KeyPair::from_private_key(private_key).unwrap();
     let authority = AccountId::new(stored_public_key.clone());
-
     assert_ne!(authority.expect_single_signatory(), key_pair.public_key());
     let error = TransactionBuilder::new(
         chain,
@@ -2461,7 +2281,6 @@ fn sign_rejects_mismatched_signatory_without_rewriting_payload() {
     assert_eq!(error, TransactionSignatureError::AuthorityKeyMismatch);
     assert_eq!(authority.expect_single_signatory(), &stored_public_key);
 }
-
 #[test]
 fn entrypoint_hashes_match_direct_encoding() {
     let chain = test_network_id(0x1F);
@@ -2475,7 +2294,6 @@ fn entrypoint_hashes_match_direct_encoding() {
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
             .parse()
             .unwrap();
-
     let tx = TransactionBuilder::new(
         chain,
         authority.clone(),
@@ -2490,7 +2308,6 @@ fn entrypoint_hashes_match_direct_encoding() {
     );
     assert_eq!(tx.hash_as_entrypoint(), entry.hash());
     assert_eq!(Hash::from(tx.hash()), Hash::from(tx.hash_as_entrypoint()));
-
     let time_entry = TimeTriggerEntrypoint {
         id: "trigger".parse().unwrap(),
         instructions: ExecutionStep(ConstVec::from(vec![])),
@@ -2500,18 +2317,15 @@ fn entrypoint_hashes_match_direct_encoding() {
     assert_eq!(HashOf::new(&entry_time), entry_time.hash());
     assert_eq!(time_entry.hash_as_entrypoint(), entry_time.hash());
 }
-
 #[test]
 fn verify_signature_rejects_missing_multisig_signatures() {
     let chain = test_network_id(0x20);
     let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let signer = checked_random_keypair();
-
     let member =
         MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
     let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
     let authority = AccountId::new_multisig(policy);
-
     let payload = model::TransactionPayload {
         domain: TransactionDomain::Network(chain),
         authority,
@@ -2532,7 +2346,6 @@ fn verify_signature_rejects_missing_multisig_signatures() {
         payload,
         multisig_signatures: None,
     };
-
     let err = tx
         .verify_signature()
         .expect_err("multisig must be rejected");
@@ -2546,18 +2359,15 @@ fn verify_signature_rejects_missing_multisig_signatures() {
         "expected stable multisig missing-signatures reason"
     );
 }
-
 #[test]
 fn verify_signature_accepts_multisig_with_quorum() {
     let chain = test_network_id(0x21);
     let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let signer = checked_random_keypair();
-
     let member =
         MultisigMember::new(signer.public_key().clone(), 2).expect("multisig member valid");
     let policy = MultisigPolicy::new(2, vec![member]).expect("multisig policy valid");
     let authority = AccountId::new_multisig(policy.clone());
-
     let payload = model::TransactionPayload {
         domain: TransactionDomain::Network(chain),
         authority,
@@ -2580,10 +2390,8 @@ fn verify_signature_accepts_multisig_with_quorum() {
         payload,
         multisig_signatures: Some(multisig_signatures),
     };
-
     tx.verify_signature()
         .expect("multisig with quorum must verify");
-
     let mut noncanonical = tx;
     let unrelated = checked_random_keypair();
     noncanonical.signature = TransactionSignature(checked_transaction_payload_signature(
@@ -2597,7 +2405,6 @@ fn verify_signature_accepts_multisig_with_quorum() {
         TransactionSignatureError::NonCanonicalMultisigSignatures
     );
 }
-
 #[test]
 fn verify_signature_rejects_multisig_bundle_for_single_controller() {
     let chain = test_network_id(0x22);
@@ -2611,7 +2418,6 @@ fn verify_signature_rejects_multisig_bundle_for_single_controller() {
     )
     .with_instructions([Log::new(Level::INFO, "single authority".into())])
     .sign(keypair.private_key());
-
     // A proof bundle for a different controller shape must not create an
     // alternate accepted envelope for the same signed intent.
     let payload = tx.payload().clone();
@@ -2622,7 +2428,6 @@ fn verify_signature_rejects_multisig_bundle_for_single_controller() {
         extraneous_signer.public_key().clone(),
         stray_signature,
     )]));
-
     assert_eq!(
         tx.signature_count(),
         1,
@@ -2634,7 +2439,6 @@ fn verify_signature_rejects_multisig_bundle_for_single_controller() {
         TransactionSignatureError::UnexpectedMultisigSignatures
     );
 }
-
 #[test]
 fn transaction_builder_try_sign_multisig_rejects_empty_signers() {
     let chain = test_network_id(0x23);
@@ -2649,25 +2453,20 @@ fn transaction_builder_try_sign_multisig_rejects_empty_signers() {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "empty multisig".into())]);
-
     let err = builder
         .try_sign_multisig(core::iter::empty::<&iroha_crypto::PrivateKey>())
         .expect_err("empty signer set must be rejected");
-
     assert!(matches!(err, TransactionSignatureError::NoSignatures));
 }
-
 #[test]
 fn verify_signature_rejects_empty_multisig_bundle() {
     let chain = test_network_id(0x24);
     let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let signer = checked_random_keypair();
-
     let member =
         MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
     let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
     let authority = AccountId::new_multisig(policy);
-
     let payload = model::TransactionPayload {
         domain: TransactionDomain::Network(chain),
         authority,
@@ -2688,7 +2487,6 @@ fn verify_signature_rejects_empty_multisig_bundle() {
         payload,
         multisig_signatures: Some(MultisigSignatures::new(Vec::new())),
     };
-
     let err = tx
         .verify_signature()
         .expect_err("empty multisig bundle must fail");
@@ -2697,19 +2495,16 @@ fn verify_signature_rejects_empty_multisig_bundle() {
         "expected NoSignatures, got {err:?}"
     );
 }
-
 #[test]
 fn verify_signature_rejects_unknown_signer() {
     let chain = test_network_id(0x25);
     let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let member_key = checked_random_keypair();
     let unknown_key = checked_random_keypair();
-
     let member =
         MultisigMember::new(member_key.public_key().clone(), 1).expect("multisig member valid");
     let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
     let authority = AccountId::new_multisig(policy);
-
     let payload = model::TransactionPayload {
         domain: TransactionDomain::Network(chain),
         authority,
@@ -2728,13 +2523,11 @@ fn verify_signature_rejects_unknown_signer() {
         unknown_key.public_key().clone(),
         unknown_signature,
     )]);
-
     let tx = SignedTransaction {
         signature,
         payload,
         multisig_signatures: Some(multisig_signatures),
     };
-
     let err = tx
         .verify_signature()
         .expect_err("unknown signer must be rejected");
@@ -2743,21 +2536,18 @@ fn verify_signature_rejects_unknown_signer() {
         "expected UnknownMultisigSigner, got {err:?}"
     );
 }
-
 #[test]
 fn verify_signature_does_not_double_count_duplicates() {
     let chain = test_network_id(0x26);
     let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let signer = checked_random_keypair();
     let other = checked_random_keypair();
-
     let members = vec![
         MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid"),
         MultisigMember::new(other.public_key().clone(), 1).expect("multisig member valid"),
     ];
     let policy = MultisigPolicy::new(2, members).expect("multisig policy valid");
     let authority = AccountId::new_multisig(policy);
-
     let payload = model::TransactionPayload {
         domain: TransactionDomain::Network(chain),
         authority,
@@ -2778,57 +2568,48 @@ fn verify_signature_does_not_double_count_duplicates() {
         MultisigSignature::new(signer.public_key().clone(), duplicate_signature.clone()),
         MultisigSignature::new(signer.public_key().clone(), duplicate_signature),
     ]);
-
     let tx = SignedTransaction {
         signature,
         payload,
         multisig_signatures: Some(multisig_signatures),
     };
-
     assert_eq!(
         tx.verify_signature()
             .expect_err("duplicate signatures are a non-canonical proof"),
         TransactionSignatureError::NonCanonicalMultisigSignatures
     );
 }
-
 #[test]
 fn verify_signature_accepts_mixed_algorithms() {
     let chain = test_network_id(0x27);
     let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let ed = checked_random_keypair();
     let secp = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
-
     let members = vec![
         MultisigMember::new(ed.public_key().clone(), 1).expect("member"),
         MultisigMember::new(secp.public_key().clone(), 1).expect("member"),
     ];
     let policy = MultisigPolicy::new(2, members).expect("policy");
     let authority = AccountId::new_multisig(policy);
-
     let tx = TransactionBuilder::new(
         chain,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .sign_multisig(vec![ed.private_key(), secp.private_key()]);
-
     assert_eq!(tx.signature_count(), 2);
     tx.verify_signature()
         .expect("mixed-algorithm multisig should verify");
 }
-
 #[test]
 fn signature_count_tracks_all_multisig_entries() {
     let chain = test_network_id(0x28);
     let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let signer = checked_random_keypair();
-
     let member =
         MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
     let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
     let authority = AccountId::new_multisig(policy);
-
     let payload = model::TransactionPayload {
         domain: TransactionDomain::Network(chain),
         authority,
@@ -2846,13 +2627,11 @@ fn signature_count_tracks_all_multisig_entries() {
         MultisigSignature::new(signer.public_key().clone(), signature.clone()),
         MultisigSignature::new(signer.public_key().clone(), signature.clone()),
     ]);
-
     let tx = SignedTransaction {
         signature: TransactionSignature(signature),
         payload,
         multisig_signatures: Some(multisig_signatures),
     };
-
     assert_eq!(tx.signature_count(), 3);
     assert_eq!(
         tx.verify_signature()
@@ -2860,7 +2639,6 @@ fn signature_count_tracks_all_multisig_entries() {
         TransactionSignatureError::NonCanonicalMultisigSignatures
     );
 }
-
 #[test]
 fn transaction_result_hash_matches_inner() {
     let ok_inner = DataTriggerSequence::default();
@@ -2870,7 +2648,6 @@ fn transaction_result_hash_matches_inner() {
         result_ok.hash(),
         TransactionResult::hash_from_inner(&Ok(ok_inner))
     );
-
     let err_reason = error::TransactionRejectionReason::LimitCheck(error::TransactionLimitError {
         reason: "limit exceeded".into(),
     });
@@ -2882,7 +2659,6 @@ fn transaction_result_hash_matches_inner() {
         TransactionResult::hash_from_inner(&err_inner)
     );
 }
-
 #[test]
 fn sealed_transaction_commitment_signs_and_reveals_expected_hash() {
     let tx = sample_signed_transaction();
@@ -2913,13 +2689,11 @@ fn sealed_transaction_commitment_signs_and_reveals_expected_hash() {
         core::num::NonZeroU64::new(7),
     );
     let signed = SignedSealedTransactionCommitment::sign(payload.clone(), &private_key);
-
     signed
         .verify_signature()
         .expect("sealed commitment signature verifies");
     assert_eq!(signed.payload(), &payload);
     assert_eq!(signed.commitment(), &commitment);
-
     let reveal = SealedTransactionReveal::new(commitment, tx, salt);
     assert_eq!(
         reveal.expected_commitment_with_deadline(reveal_deadline_height),
@@ -2930,7 +2704,6 @@ fn sealed_transaction_commitment_signs_and_reveals_expected_hash() {
         commitment
     );
 }
-
 #[test]
 fn sealed_transaction_commitment_try_sign_matches_compatibility_sign() {
     let tx = sample_signed_transaction();
@@ -2947,16 +2720,13 @@ fn sealed_transaction_commitment_try_sign_matches_compatibility_sign() {
         64,
         core::num::NonZeroU64::new(9),
     );
-
     let fallible = SignedSealedTransactionCommitment::try_sign(payload.clone(), &private_key)
         .expect("sealed commitment signing should succeed");
     let compatibility = SignedSealedTransactionCommitment::sign(payload, &private_key);
-
     assert_eq!(fallible, compatibility);
     fallible
         .verify_signature()
         .expect("fallible sealed commitment signature verifies");
 }
-
 include!("signed/genesis_domain_test.rs");
 include!("signed/result_json_test.rs");

@@ -10,14 +10,12 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
         return Ok(());
     }
     require_portable_smoke_prerequisites()?;
-
     let external_bundle =
         portable_smoke_required_env_path("IROHA_INROU_PORTABLE_SMOKE_BUNDLE_FILE")?;
     let external_entrypoint = std::env::var("IROHA_INROU_PORTABLE_SMOKE_ENTRYPOINT")
         .unwrap_or_else(|_| "/app/launch.sh".to_owned());
     let external_healthcheck = std::env::var("IROHA_INROU_PORTABLE_SMOKE_HEALTHCHECK")
         .unwrap_or_else(|_| "/health".to_owned());
-
     let temp_dir = tempfile::tempdir()?;
     let selected_guest_isa = current_host_inrou_guest_isa();
     let local_peer_id = "12D3KooWPortableVmExternalBundlePeer";
@@ -61,7 +59,6 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
             external_bundle.display()
         )
     })?;
-
     let mut bundle = sample_inrou_test_bundle()?;
     bundle.container.entrypoint = external_entrypoint;
     bundle.container.args.clear();
@@ -108,7 +105,6 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
             max_total_bytes: std::num::NonZeroU64::new(512 * 1024 * 1024).expect("bytes"),
         },
     ];
-
     let mut state = test_state()?;
     let deployment_state = sample_deployment_state(&bundle);
     {
@@ -151,17 +147,14 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
                 },
             );
     }
-
     let artifacts_root = temp_dir.path().join("artifacts");
     fs::create_dir_all(&artifacts_root)?;
     fs::write(
         artifacts_root.join(hash_cache_name(bundle.container.bundle_hash)),
         &bundle_bytes,
     )?;
-
     let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
     manager.reconcile_once()?;
-
     let service_dir = temp_dir
         .path()
         .join("services")
@@ -188,7 +181,6 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
     )?;
     Ok(())
 }
-
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires root on a real Linux/KVM host plus explicit guest assets; set IROHA_RUN_IGNORED=1 IROHA_INROU_LINUX_KVM=1"]
@@ -202,7 +194,6 @@ fn inrou_linux_kvm_smoke_boots_debian_guest_and_serves_healthcheck() -> Result<(
         return Ok(());
     }
     require_linux_kvm_smoke_prerequisites()?;
-
     let kernel_image = linux_smoke_required_env_path("IROHA_INROU_LINUX_KVM_KERNEL_IMAGE")?;
     let rootfs_image = linux_smoke_required_env_path("IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE")?;
     let initrd_image = std::env::var("IROHA_INROU_LINUX_KVM_INITRD_IMAGE")
@@ -217,7 +208,6 @@ fn inrou_linux_kvm_smoke_boots_debian_guest_and_serves_healthcheck() -> Result<(
             initrd_image.display()
         );
     }
-
     let python_http_server = r#"cat >/tmp/inrou-health.py <<'PY'
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -255,7 +245,6 @@ exec python3 /tmp/inrou-health.py
         initrd_image.as_deref(),
         bootstrap_overlay,
     )?;
-
     let mut bundle = sample_inrou_test_bundle()?;
     bundle.container.args = vec!["-lc".to_owned(), python_http_server.to_owned()];
     bundle.container.bundle_path = "/bundles/inrou-linux-kvm-smoke.tgz".to_owned();
@@ -273,7 +262,6 @@ exec python3 /tmp/inrou-health.py
                 SoraInrouGuestIsaV1::Aarch64 => "/inrou/aarch64/initrd.img".to_owned(),
             });
         });
-
     let mut state = test_state()?;
     let deployment_state = sample_deployment_state(&bundle);
     {
@@ -289,19 +277,16 @@ exec python3 /tmp/inrou-health.py
             .soracloud_service_deployments_mut_for_testing()
             .insert(bundle.service.service_name.clone(), deployment_state);
     }
-
     let artifacts_root = temp_dir.path().join("artifacts");
     fs::create_dir_all(&artifacts_root)?;
     fs::write(
         artifacts_root.join(hash_cache_name(bundle.container.bundle_hash)),
         &bundle_bytes,
     )?;
-
     let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
     config.inrou.start_grace = Duration::from_secs(240);
     let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
     manager.reconcile_once()?;
-
     let service_dir = temp_dir
         .path()
         .join("services")
@@ -315,7 +300,6 @@ exec python3 /tmp/inrou-health.py
         .replicas
         .first()
         .expect("replica runtime state present");
-
     assert_eq!(
         runtime_state.health_status,
         SoraServiceHealthStatusV1::Healthy
@@ -350,7 +334,6 @@ exec python3 /tmp/inrou-health.py
     )?;
     Ok(())
 }
-
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires root on a real Linux/KVM host plus explicit guest assets; set IROHA_RUN_IGNORED=1 IROHA_INROU_LINUX_KVM=1"]
@@ -365,7 +348,6 @@ fn inrou_linux_kvm_smoke_shares_service_volume_across_replicas_and_keeps_root_st
         return Ok(());
     }
     require_linux_kvm_smoke_prerequisites()?;
-
     let kernel_image = linux_smoke_required_env_path("IROHA_INROU_LINUX_KVM_KERNEL_IMAGE")?;
     let rootfs_image = linux_smoke_required_env_path("IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE")?;
     let initrd_image = std::env::var("IROHA_INROU_LINUX_KVM_INITRD_IMAGE")
@@ -380,7 +362,6 @@ fn inrou_linux_kvm_smoke_shares_service_volume_across_replicas_and_keeps_root_st
             initrd_image.display()
         );
     }
-
     let python_http_server = r#"cat >/tmp/inrou-shared-volume.py <<'PY'
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -429,7 +410,6 @@ exec python3 /tmp/inrou-shared-volume.py
         initrd_image.as_deref(),
         bootstrap_overlay,
     )?;
-
     let mut bundle = sample_inrou_test_bundle()?;
     bundle.container.args = vec!["-lc".to_owned(), python_http_server.to_owned()];
     bundle.container.bundle_path = "/bundles/inrou-linux-kvm-replica-smoke.tgz".to_owned();
@@ -448,7 +428,6 @@ exec python3 /tmp/inrou-shared-volume.py
                 SoraInrouGuestIsaV1::Aarch64 => "/inrou/aarch64/initrd.img".to_owned(),
             });
         });
-
     let mut state = test_state()?;
     let deployment_state = sample_deployment_state(&bundle);
     {
@@ -464,19 +443,16 @@ exec python3 /tmp/inrou-shared-volume.py
             .soracloud_service_deployments_mut_for_testing()
             .insert(bundle.service.service_name.clone(), deployment_state);
     }
-
     let artifacts_root = temp_dir.path().join("artifacts");
     fs::create_dir_all(&artifacts_root)?;
     fs::write(
         artifacts_root.join(hash_cache_name(bundle.container.bundle_hash)),
         &bundle_bytes,
     )?;
-
     let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
     config.inrou.start_grace = Duration::from_secs(240);
     let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
     manager.reconcile_once()?;
-
     let service_dir = temp_dir
         .path()
         .join("services")
@@ -491,7 +467,6 @@ exec python3 /tmp/inrou-shared-volume.py
         runtime_state.health_status,
         SoraServiceHealthStatusV1::Healthy
     );
-
     let mut observed_root_slots = BTreeSet::new();
     for replica in &runtime_state.replicas {
         assert_eq!(replica.health_status, SoraServiceHealthStatusV1::Healthy);
@@ -540,7 +515,6 @@ exec python3 /tmp/inrou-shared-volume.py
     );
     Ok(())
 }
-
 #[test]
 fn probe_hosted_http_health_accepts_paths_without_a_leading_slash() -> Result<()> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -572,7 +546,6 @@ fn probe_hosted_http_health_accepts_paths_without_a_leading_slash() -> Result<()
     handle.join().expect("fixture thread should complete");
     Ok(())
 }
-
 #[test]
 fn fetch_hosted_http_text_accepts_paths_without_a_leading_slash() -> Result<()> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -600,7 +573,6 @@ fn fetch_hosted_http_text_accepts_paths_without_a_leading_slash() -> Result<()> 
     assert_eq!(body, "replica-1\n");
     Ok(())
 }
-
 #[test]
 fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()> {
     let mut bundle = load_deployment_bundle_fixture()?;
@@ -640,7 +612,6 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
     assert_eq!(response.status_code, 200);
     assert_eq!(response.body, body);
     assert_eq!(response.body_hash, expected_hash);
-
     let rate_limited = host
         .egress_fetch(SoracloudEgressFetchRequestV1 {
             url,
@@ -649,7 +620,6 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
         })
         .expect_err("second request must exceed the per-minute rate limit");
     assert_eq!(rate_limited, VMError::PermissionDenied);
-
     let disallowed = host
         .egress_fetch(SoracloudEgressFetchRequestV1 {
             url: "http://example.com/blocked".to_owned(),
@@ -658,7 +628,6 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
         })
         .expect_err("disallowed hosts must be rejected before fetch");
     assert_eq!(disallowed, VMError::PermissionDenied);
-
     let (url, server) = spawn_http_fixture(b"too-large".to_vec())?;
     let (allowed_host, allowed_port) =
         url_host_port(&url).expect("fixture URL should include a host and port");
@@ -694,7 +663,6 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
     assert_eq!(byte_limited, VMError::PermissionDenied);
     Ok(())
 }
-
 #[test]
 fn ivm_host_egress_fetch_rejects_oversized_content_type() -> Result<()> {
     let mut bundle = load_deployment_bundle_fixture()?;
@@ -728,7 +696,6 @@ fn ivm_host_egress_fetch_rejects_oversized_content_type() -> Result<()> {
         },
         BTreeMap::new(),
     );
-
     let error = host
         .egress_fetch(SoracloudEgressFetchRequestV1 {
             url,
@@ -742,7 +709,6 @@ fn ivm_host_egress_fetch_rejects_oversized_content_type() -> Result<()> {
     assert_eq!(host.egress_bytes, 0);
     Ok(())
 }
-
 #[test]
 fn ivm_host_egress_fetch_rejects_allowlisted_host_on_unlisted_port() -> Result<()> {
     let mut bundle = load_deployment_bundle_fixture()?;
@@ -765,7 +731,6 @@ fn ivm_host_egress_fetch_rejects_allowlisted_host_on_unlisted_port() -> Result<(
         },
         BTreeMap::new(),
     );
-
     let error = host
         .egress_fetch(SoracloudEgressFetchRequestV1 {
             url: "http://127.0.0.1:9/disallowed-port".to_owned(),
@@ -776,7 +741,6 @@ fn ivm_host_egress_fetch_rejects_allowlisted_host_on_unlisted_port() -> Result<(
     assert_eq!(error, VMError::PermissionDenied);
     Ok(())
 }
-
 #[test]
 fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cache() -> Result<()> {
     let state = test_state()?;
@@ -784,7 +748,6 @@ fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cach
     let artifact_bytes = simple_soracloud_contract_artifact(&["apply_update"]);
     bundle.container.bundle_hash = Hash::new(&artifact_bytes);
     let temp_dir = tempfile::tempdir()?;
-
     let manager = SoracloudRuntimeManager::new(
         test_runtime_manager_config(temp_dir.path().to_path_buf()),
         Arc::clone(&state),
@@ -795,11 +758,9 @@ fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cach
         "update",
         sample_mailbox_message(&bundle, "update", b"missing-bundle".to_vec()),
     );
-
     let result = handle
         .execute_ordered_mailbox(request)
         .map_err(|error| eyre::eyre!("{error:?}"))?;
-
     assert!(result.state_mutations.is_empty());
     assert!(result.outbound_mailbox_messages.is_empty());
     assert_eq!(
@@ -810,7 +771,6 @@ fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cach
     assert_eq!(result.runtime_receipt.checkpoint_artifact_hash, None);
     Ok(())
 }
-
 #[test]
 fn warmed_ordered_mailbox_invalidates_a_changed_bundle_file() -> Result<()> {
     let state = test_state()?;
@@ -822,7 +782,6 @@ fn warmed_ordered_mailbox_invalidates_a_changed_bundle_file() -> Result<()> {
     fs::create_dir_all(&artifacts_root)?;
     let bundle_path = artifacts_root.join(hash_cache_name(bundle.container.bundle_hash));
     fs::write(&bundle_path, &artifact_bytes)?;
-
     let manager = SoracloudRuntimeManager::new(
         test_runtime_manager_config(temp_dir.path().to_path_buf()),
         Arc::clone(&state),
@@ -840,7 +799,6 @@ fn warmed_ordered_mailbox_invalidates_a_changed_bundle_file() -> Result<()> {
         first.runtime_state.expect("runtime state").health_status,
         SoraServiceHealthStatusV1::Healthy
     );
-
     fs::write(&bundle_path, b"tampered Soracloud bundle")?;
     let changed = handle
         .execute_ordered_mailbox(request)
@@ -862,7 +820,6 @@ fn warmed_ordered_mailbox_invalidates_a_changed_bundle_file() -> Result<()> {
     assert_eq!(stats.idle_runtimes, 0);
     Ok(())
 }
-
 #[test]
 fn execute_local_read_fails_closed_when_runtime_snapshot_is_behind() -> Result<()> {
     let mut state = test_state()?;
@@ -903,7 +860,6 @@ fn execute_local_read_fails_closed_when_runtime_snapshot_is_behind() -> Result<(
     manager.reconcile_once()?;
     manager.snapshot.write().observed_height = 99;
     let handle = test_runtime_handle(&manager, Arc::clone(&state));
-
     let error = handle
         .execute_local_read(SoracloudLocalReadRequest {
             observed_height: 0,

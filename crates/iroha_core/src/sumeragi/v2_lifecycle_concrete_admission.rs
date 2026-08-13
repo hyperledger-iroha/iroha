@@ -1,5 +1,4 @@
 //! Atomic admission boundary between digest-only lifecycle state and concrete work.
-
 use super::{
     AdmissionDecision, AdmissionRequest, CoordinatorFault, LifecycleCoordinator, LifecycleDigest,
     LifecyclePhase, LifecycleStageKind, LifecycleState, LifecycleWorkClass, PredecessorScope,
@@ -24,7 +23,6 @@ use crate::sumeragi::{
     v2_body_store::V2BodyStore,
     v2_runtime::PendingRuntimeEffectBinding,
 };
-
 /// Opaque process-local holder for concrete lifecycle work.
 ///
 /// It deliberately exposes only empty construction. Logical scheduling and
@@ -32,7 +30,6 @@ use crate::sumeragi::{
 pub(crate) struct LifecycleWorkRegistryHolder {
     registry: ConcreteLifecycleWorkRegistry,
 }
-
 impl LifecycleWorkRegistryHolder {
     /// Construct an empty holder for a future production lifecycle service.
     pub(crate) fn empty() -> Self {
@@ -40,12 +37,10 @@ impl LifecycleWorkRegistryHolder {
             registry: ConcreteLifecycleWorkRegistry::default(),
         }
     }
-
     /// Borrow the concrete map only for one coordinator-owned composite transaction.
     pub(super) fn registry_mut(&mut self) -> &mut ConcreteLifecycleWorkRegistry {
         &mut self.registry
     }
-
     /// Bind the exact Ready Apply row to its sealed recovered-Decision carrier.
     ///
     /// The holder exposes neither its registry nor the carrier. The returned
@@ -59,7 +54,6 @@ impl LifecycleWorkRegistryHolder {
         self.registry
             .attest_ready_recovered_decision_apply(coordinator, ordinal)
     }
-
     /// Project the exact claimed recovered Decision Apply into its dedicated worker task.
     ///
     /// The holder keeps the concrete registry private and returns only the
@@ -75,7 +69,98 @@ impl LifecycleWorkRegistryHolder {
         self.registry
             .prepare_recovered_decision_apply_dispatch(coordinator, lease)
     }
-
+    /// Return whether one recovered Broadcast declares a paired next Vote.
+    pub(super) fn recovered_lifecycle_signed_broadcast_declares_next_vote(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        broadcast_ordinal: u128,
+    ) -> bool {
+        self.registry
+            .recovered_lifecycle_signed_broadcast_declares_next_vote(coordinator, broadcast_ordinal)
+    }
+    /// Return the paired next-Vote ordinal retained by one Ready Broadcast.
+    pub(super) fn recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        broadcast_ordinal: u128,
+    ) -> Option<u128> {
+        self.registry
+            .recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(
+                coordinator,
+                broadcast_ordinal,
+            )
+    }
+    /// Attest one recovered signed Broadcast as a durable Ready refanout source.
+    pub(super) fn attest_ready_recovered_lifecycle_signed_broadcast(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<(), &'static str> {
+        self.registry
+            .attest_ready_recovered_lifecycle_signed_broadcast(coordinator, ordinal)
+    }
+    /// Attest one adjacent signed-Broadcast and next-WAL-Vote pair.
+    pub(super) fn attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        broadcast_ordinal: u128,
+        next_sign_ordinal: u128,
+    ) -> Result<
+        super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
+        super::work_registry::ReadyRecoveredLifecycleSignAttestationErrorV1,
+    > {
+        self.registry
+            .attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(
+                coordinator,
+                broadcast_ordinal,
+                next_sign_ordinal,
+            )
+    }
+    /// Project one claimed recovered Broadcast into its refanout authority.
+    pub(super) fn project_claimed_recovered_lifecycle_signed_broadcast_output(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        lease: &TurnLease,
+    ) -> Option<super::wal_recovery::RecoveredLifecycleSignedBroadcastOutputAuthorityV1> {
+        self.registry
+            .project_claimed_recovered_lifecycle_signed_broadcast_output(coordinator, lease)
+    }
+    /// Attest one Ready recovered Sign without exposing its concrete carrier.
+    pub(super) fn attest_ready_recovered_lifecycle_sign(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<
+        super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
+        super::work_registry::ReadyRecoveredLifecycleSignAttestationErrorV1,
+    > {
+        self.registry
+            .attest_ready_recovered_lifecycle_sign(coordinator, ordinal)
+    }
+    /// Project one claimed recovered Sign into its dedicated worker task.
+    pub(super) fn prepare_recovered_lifecycle_sign_dispatch(
+        &mut self,
+        coordinator: &LifecycleCoordinator,
+        lease: &TurnLease,
+    ) -> Result<
+        super::work_registry::PreparedRecoveredLifecycleSignDispatch<'_>,
+        super::work_registry::RecoveredLifecycleSignDispatchProjectionErrorV1,
+    > {
+        self.registry
+            .prepare_recovered_lifecycle_sign_dispatch(coordinator, lease)
+    }
+    /// Attest one exact Ready recovered Decision Fetch.
+    pub(super) fn attest_ready_recovered_decision_fetch(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<
+        super::work_registry::ReadyRecoveredDecisionFetchAttestationV1,
+        super::work_registry::ReadyRecoveredDecisionFetchAttestationErrorV1,
+    > {
+        self.registry
+            .attest_ready_recovered_decision_fetch(coordinator, ordinal)
+    }
     /// Bind one guarded worker completion to the exact claimed Apply carrier.
     pub(super) fn prepare_recovered_decision_apply_terminal_transition(
         &self,
@@ -89,7 +174,6 @@ impl LifecycleWorkRegistryHolder {
         self.registry
             .prepare_recovered_decision_apply_terminal_transition(coordinator, lease, completion)
     }
-
     /// Publish one recovered Apply terminal and remove its carrier after fsync.
     pub(super) fn publish_recovered_decision_apply_terminal_transition<T, E>(
         &mut self,
@@ -104,7 +188,6 @@ impl LifecycleWorkRegistryHolder {
                 prepared, current, staged, lease, publish,
             )
     }
-
     /// Reconstruct one storage-authenticated recovered Validate parent without a scheduler lease.
     ///
     /// The concrete registry never leaves this holder. Success returns only
@@ -133,26 +216,22 @@ impl LifecycleWorkRegistryHolder {
             recovered,
         )
     }
-
     /// Wrap a concrete registry for focused atomic-boundary tests.
     #[cfg(test)]
     pub(super) fn from_registry_for_test(registry: ConcreteLifecycleWorkRegistry) -> Self {
         Self { registry }
     }
-
     /// Borrow the concrete registry for drop- and failure-invariance checks.
     #[cfg(test)]
     pub(super) const fn registry_for_test(&self) -> &ConcreteLifecycleWorkRegistry {
         &self.registry
     }
-
     /// Mutably borrow the registry for focused corruption and unwind tests.
     #[cfg(test)]
     pub(super) fn registry_for_test_mut(&mut self) -> &mut ConcreteLifecycleWorkRegistry {
         &mut self.registry
     }
 }
-
 /// Closed precommit failure from the exact claimed-Validate dispatch cut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DurableValidateDispatchError {
@@ -171,7 +250,6 @@ pub(super) enum DurableValidateDispatchError {
     /// Pure blocked settlement changed more than the exact lease and source row.
     InvalidStagedTransition,
 }
-
 /// Closed failure while binding a Ready Validate carrier into scheduler input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ReadyValidateDemandAttestationError {
@@ -180,7 +258,6 @@ pub(super) enum ReadyValidateDemandAttestationError {
     /// The process-local carrier no longer matches the coordinator address/digest.
     Registry(ReadyValidateCarrierError),
 }
-
 /// Closed reason an effect/pending pair could not cross the atomic boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AdapterEffectAdmissionFailure {
@@ -191,7 +268,6 @@ pub(super) enum AdapterEffectAdmissionFailure {
     /// The lifecycle ledger could not publish after registry installation.
     Durability,
 }
-
 /// Ownership-preserving result of one concrete adapter-effect admission.
 #[derive(Debug)]
 #[must_use = "the caller must retain or execute the returned concrete work"]
@@ -222,13 +298,11 @@ pub(super) enum AdapterEffectAdmissionTransaction {
         pending: PendingRuntimeEffectBinding,
     },
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AdmittedWorkLocation {
     address: ConcreteWorkAddress,
     digest: LifecycleDigest,
 }
-
 impl LifecycleCoordinator {
     /// Convert one exact claimed durable Validate lease into an external wait
     /// and return its sole move-only validation dispatch.
@@ -307,7 +381,6 @@ impl LifecycleCoordinator {
             drop(prepared);
             return Err((DurableValidateDispatchError::AliasedWaitSource, lease));
         }
-
         let wait_token = WaitToken::new(source, observed_generation);
         let mut next = self.stage_durable_transaction();
         next.reduce_settle_turn(lease.clone(), TurnOutcome::Blocked(wait_token), None);
@@ -322,11 +395,9 @@ impl LifecycleCoordinator {
                 return Err((DurableValidateDispatchError::InvalidWaitSource, lease));
             }
         };
-
         *self = next;
         Ok(dispatch)
     }
-
     /// Atomically publish one exact executable Validate result across the
     /// volatile coordinator and concrete registry.
     ///
@@ -376,7 +447,6 @@ impl LifecycleCoordinator {
                 prepared.defer_merge_sidecar(),
             ));
         }
-
         let Some(ready_event) = authority.ready_event() else {
             return Err(
                 prepared.fail(DurableValidateCompletionPublicationError::InvalidStagedTransition)
@@ -390,7 +460,6 @@ impl LifecycleCoordinator {
             );
         }
         let staged_registry = prepared.stage_executable_carrier()?;
-
         core::mem::swap(self, &mut next);
         let published = staged_registry.commit();
         Ok(match published {
@@ -402,7 +471,6 @@ impl LifecycleCoordinator {
             }
         })
     }
-
     /// Bind one exact Ready Validate carrier into a transient scheduler seal.
     ///
     /// The registry returns only a closed carrier classification. This method
@@ -508,7 +576,6 @@ impl LifecycleCoordinator {
         AttestedReadyValidateDemand::from_registry_seal(record, seal)
             .ok_or(ReadyValidateDemandAttestationError::InvalidCoordinatorIndex)
     }
-
     /// Atomically admit and register one exact adapter effect.
     ///
     /// The effect and pending authority are consumed. A first admission stages
@@ -567,7 +634,6 @@ impl LifecycleCoordinator {
                 };
             }
         };
-
         let mut next = self.stage_durable_transaction();
         let decision = next.reduce_admit(request);
         let first_admission = matches!(decision, AdmissionDecision::Admitted { .. });
@@ -624,7 +690,6 @@ impl LifecycleCoordinator {
                 }
             };
         }
-
         let (effect, pending) = work.into_pair();
         *self = next;
         AdapterEffectAdmissionTransaction::Returned {
@@ -634,7 +699,6 @@ impl LifecycleCoordinator {
         }
     }
 }
-
 fn waiting_durable_validate_record_is_exact(
     coordinator: &LifecycleCoordinator,
     authority: DurableValidateCompletionAuthority,
@@ -714,7 +778,6 @@ fn waiting_durable_validate_record_is_exact(
                     && authority.matches_durable_payload(metadata.payload)
             })
 }
-
 #[allow(clippy::too_many_lines)]
 fn staged_durable_validate_ready_is_exact(
     current: &LifecycleCoordinator,
@@ -740,7 +803,6 @@ fn staged_durable_validate_ready_is_exact(
     expected_ready.insert(authority.ordinal());
     let mut expected_observed = current.observed_generation.clone();
     expected_observed.insert(authority.wait_token().source(), next_generation);
-
     next.episode_authority == current.episode_authority
         && next.active_context == current.active_context
         && next.records.len() == current.records.len()
@@ -764,7 +826,6 @@ fn staged_durable_validate_ready_is_exact(
         && next.ledger_store.is_some() == current.ledger_store.is_some()
         && next.fault.is_none()
 }
-
 fn claimed_durable_validate_record_is_exact(
     coordinator: &LifecycleCoordinator,
     lease: &TurnLease,
@@ -837,7 +898,6 @@ fn claimed_durable_validate_record_is_exact(
                     && durable_validate_payload_is_exact(record.key, metadata.payload)
             })
 }
-
 #[allow(clippy::too_many_lines)]
 fn staged_durable_validate_wait_is_exact(
     current: &LifecycleCoordinator,
@@ -855,7 +915,6 @@ fn staged_durable_validate_wait_is_exact(
     expected_observed
         .entry(wait_token.source())
         .or_insert(wait_token.observed_generation());
-
     next.episode_authority == current.episode_authority
         && next.active_context == current.active_context
         && next.records.len() == current.records.len()
@@ -879,7 +938,6 @@ fn staged_durable_validate_wait_is_exact(
         && next.ledger_store.is_some() == current.ledger_store.is_some()
         && next.fault.is_none()
 }
-
 fn concrete_work_location(
     coordinator: &LifecycleCoordinator,
     decision: AdmissionDecision,
@@ -925,29 +983,24 @@ fn concrete_work_location(
         ConcreteWorkAddress::new(owner, ordinal, slot).ok_or(RegistryError::InvalidAddress)?;
     Ok(AdmittedWorkLocation { address, digest })
 }
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
     use tempfile::TempDir;
-
     use super::super::{OwnerId, PhysicalSlotId};
     use super::*;
     use crate::sumeragi::{
         v2_core::{EventTag, Generation},
         v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     };
-
     struct Fixture {
         verified: VerifiedHeightContext,
         context: wire::HeightContext,
         round: wire::ConsensusRound,
         tag: EventTag,
     }
-
     impl Fixture {
         fn new() -> Self {
             let mut keys = (1_u8..=4)
@@ -1011,13 +1064,11 @@ mod tests {
                 tag: EventTag::new(7, 2, Generation::new(1)),
             }
         }
-
         fn active_context(&self) -> super::super::LifecycleContext {
             let mut digest = [0_u8; 32];
             digest.copy_from_slice(self.context.id().0.as_ref());
             super::super::LifecycleContext::new(LifecycleDigest::new(digest), self.context.height)
         }
-
         fn coordinator(&self, consensus_capacity: usize) -> LifecycleCoordinator {
             LifecycleCoordinator::new(
                 self.active_context(),
@@ -1030,7 +1081,6 @@ mod tests {
                 ]),
             )
         }
-
         fn effect(&self, marker: u8) -> AdapterEffect {
             let subject = wire::BlockSubject {
                 parent_block_hash: None,
@@ -1056,7 +1106,6 @@ mod tests {
                 }),
             ))
         }
-
         fn pair(
             &self,
             effect: AdapterEffect,
@@ -1078,11 +1127,9 @@ mod tests {
             (effect, pending)
         }
     }
-
     fn consensus_slot() -> PhysicalSlotId {
         PhysicalSlotId::for_capacity(super::super::CapacityClass::Consensus, 0)
     }
-
     fn recovery_snapshot(coordinator: &LifecycleCoordinator) -> super::super::RecoverySnapshot {
         super::super::RecoverySnapshot {
             context: coordinator.active_context,
@@ -1115,7 +1162,6 @@ mod tests {
             producer_debts: coordinator.producer_debts.clone(),
         }
     }
-
     #[test]
     fn occupied_address_returns_pair_and_leaves_coordinator_unchanged() {
         let fixture = Fixture::new();
@@ -1138,7 +1184,6 @@ mod tests {
         let owners_before = coordinator.owner_index.clone();
         let capacity_before = coordinator.capacity_used.clone();
         let (effect, pending) = fixture.pair(effect.clone(), 91);
-
         let outcome = coordinator.admit_concrete_adapter_effect(
             &mut registry,
             &fixture.verified,
@@ -1161,7 +1206,6 @@ mod tests {
         assert_eq!(returned_effect, effect);
         assert!(returned_pending.exactly_binds_adapter_effect(&returned_effect));
     }
-
     #[test]
     fn capacity_wait_returns_the_same_pair_for_each_exact_retry() {
         let fixture = Fixture::new();
@@ -1181,7 +1225,6 @@ mod tests {
                 ..
             })
         ));
-
         let waiting_effect = fixture.effect(3);
         let (effect, pending) = fixture.pair(waiting_effect.clone(), 93);
         let outcome = coordinator.admit_concrete_adapter_effect(
@@ -1223,7 +1266,6 @@ mod tests {
         assert_eq!(coordinator.admission_waits.len(), 1);
         assert_eq!(registry.registry.len(), 1);
     }
-
     #[test]
     fn admitted_location_rejects_causal_owner_and_digest_mismatch() {
         let fixture = Fixture::new();
@@ -1253,7 +1295,6 @@ mod tests {
         let (effect, pending) = work.into_pair();
         assert!(pending.exactly_binds_adapter_effect(&effect));
         assert!(registry.registry.is_empty());
-
         let work = ConcreteLifecycleWork::from_exact(effect, pending).expect("returned exact work");
         let owner = OwnerId::new(work.causal_root(), 1);
         let address =
@@ -1272,7 +1313,6 @@ mod tests {
         assert!(work.validate_exact());
         assert!(registry.registry.is_empty());
     }
-
     #[test]
     fn retry_and_terminal_decisions_never_replace_incumbent_work() {
         let fixture = Fixture::new();
@@ -1296,7 +1336,6 @@ mod tests {
         let address = ConcreteWorkAddress::new(record.owner, 1, consensus_slot())
             .expect("exact incumbent address");
         assert!(registry.registry.exactly_contains(address, &original));
-
         let (effect, pending) = fixture.pair(original.clone(), 96);
         let outcome = coordinator.admit_concrete_adapter_effect(
             &mut registry,
@@ -1315,7 +1354,6 @@ mod tests {
         assert!(pending.exactly_binds_adapter_effect(&effect));
         assert!(registry.registry.exactly_contains(address, &original));
         assert_eq!(registry.registry.len(), 1);
-
         coordinator
             .records
             .get_mut(&1)
@@ -1342,7 +1380,6 @@ mod tests {
         assert_eq!(registry.registry.len(), 1);
         assert_eq!(coordinator.high_water(), 1);
     }
-
     #[test]
     fn recovered_retry_installs_exact_work_without_allocating() {
         let fixture = Fixture::new();
@@ -1363,7 +1400,6 @@ mod tests {
         };
         assert_eq!(ordinal, 1);
         let snapshot = recovery_snapshot(&live);
-
         let mut recovered = LifecycleCoordinator::new(
             fixture.active_context(),
             live.high_water,
@@ -1383,7 +1419,6 @@ mod tests {
             })
         ));
         assert!(recovered.records[&ordinal].physical_slots.is_empty());
-
         let mut registry = LifecycleWorkRegistryHolder::empty();
         let (effect, pending) = fixture.pair(original.clone(), 101);
         let outcome = recovered.admit_concrete_adapter_effect(
@@ -1414,7 +1449,6 @@ mod tests {
         assert_eq!(registry.registry.len(), 1);
         assert!(matches!(decision, AdmissionDecision::Admitted { .. }));
     }
-
     #[test]
     fn recovered_retry_publication_failure_rolls_back_work_and_ready_transition() {
         let fixture = Fixture::new();
@@ -1435,7 +1469,6 @@ mod tests {
             })
         ));
         let snapshot = recovery_snapshot(&live);
-
         let mut recovered = LifecycleCoordinator::new(
             fixture.active_context(),
             live.high_water,
@@ -1454,7 +1487,6 @@ mod tests {
         recovered.redirect_test_ledger_to_missing_parent(root.path());
         let mut registry = LifecycleWorkRegistryHolder::empty();
         let (effect, pending) = fixture.pair(original.clone(), 103);
-
         let outcome = recovered.admit_concrete_adapter_effect(
             &mut registry,
             &fixture.verified,
@@ -1483,7 +1515,6 @@ mod tests {
         assert!(recovered.records[&1].physical_slots.is_empty());
         assert_eq!(recovered.fault(), Some(CoordinatorFault::DurabilityFailure));
     }
-
     #[test]
     fn durable_publication_failure_rolls_back_registry_and_logical_admission() {
         let fixture = Fixture::new();
@@ -1496,7 +1527,6 @@ mod tests {
         let mut registry = LifecycleWorkRegistryHolder::empty();
         let original = fixture.effect(6);
         let (effect, pending) = fixture.pair(original.clone(), 98);
-
         let outcome = coordinator.admit_concrete_adapter_effect(
             &mut registry,
             &fixture.verified,
@@ -1523,7 +1553,6 @@ mod tests {
             Some(CoordinatorFault::DurabilityFailure)
         );
     }
-
     #[test]
     fn projection_failure_returns_the_unmodified_pair() {
         let fixture = Fixture::new();
@@ -1541,7 +1570,6 @@ mod tests {
         let mut registry = LifecycleWorkRegistryHolder::empty();
         let original = fixture.effect(7);
         let (effect, pending) = fixture.pair(original.clone(), 99);
-
         let outcome = coordinator.admit_concrete_adapter_effect(
             &mut registry,
             &fixture.verified,

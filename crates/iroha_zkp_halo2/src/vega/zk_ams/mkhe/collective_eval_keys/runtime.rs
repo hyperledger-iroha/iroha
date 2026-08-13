@@ -16,7 +16,6 @@ pub struct ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
     sorafs_pointer: ZkAmsMkheEvaluatedKeySorafsPointerV1,
     runtime_context_digest: [u8; 32],
 }
-
 /// One canonical seekable evaluated key validated for one reusable runtime.
 ///
 /// This wrapper never owns a wire payload. It retains only the authenticated
@@ -41,7 +40,6 @@ pub struct ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
     digits: Vec<SeekableEvaluatedKeyDigitV1>,
     limbs: Vec<SeekableEvaluatedKeyLimbV1>,
 }
-
 impl core::fmt::Debug for ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -58,34 +56,29 @@ impl core::fmt::Debug for ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
             .finish()
     }
 }
-
 impl ZkAmsMkheValidatedCollectiveEvaluatedKeyV1 {
     /// Exact canonical manifest entry for this payload.
     #[must_use]
     pub const fn entry(&self) -> ZkAmsMkheCollectiveEvaluatedKeyEntryV1 {
         self.entry
     }
-
     /// Exact provider session bound during incremental validation.
     #[must_use]
     pub const fn provider_identity(&self) -> [u8; 32] {
         self.provider_identity
     }
-
     /// Exact immutable content revision bound during incremental validation.
     #[must_use]
     pub const fn snapshot_identity(&self) -> [u8; 32] {
         self.snapshot_identity
     }
 }
-
 fn consume_evidence_set_before_provider_v1(
     evidence_set: ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1,
     expected: evidence_set::EvidenceSetRuntimeBindingV1,
 ) -> Result<evidence_set::VerifiedEvidenceSetRuntimeAdmissionV1, ZkAmsMkheErrorV1> {
     evidence_set.consume_for_runtime_v1(expected)
 }
-
 impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
     /// Construct the reusable runtime from the compact evaluated-key binding.
     /// The native `2P` key was already dropped during CPK finalization.
@@ -105,7 +98,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
             expected_manifest_digest,
         )
     }
-
     fn new_with_eval_key_binding_v1(
         roster: &ZkAmsMkheGovernedActiveRosterV1,
         transcript_digest: [u8; 32],
@@ -175,19 +167,16 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
             runtime_context_digest,
         })
     }
-
     /// Verified aggregate collective-public-key digest.
     #[must_use]
     pub const fn collective_key_digest(&self) -> [u8; 32] {
         self.eval_key_binding.key_digest()
     }
-
     /// Exact consensus-bound evaluated-key manifest digest.
     #[must_use]
     pub const fn manifest_digest(&self) -> [u8; 32] {
         self.manifest_digest
     }
-
     /// Incrementally authenticate and index one exact manifest entry.
     ///
     /// The move-only evidence capability is consumed and fully checked before
@@ -272,7 +261,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
             limbs: validation.limbs,
         })
     }
-
     fn entry(
         &self,
         ordinal: usize,
@@ -310,7 +298,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
         }
         Ok(entry)
     }
-
     fn validate_key_context(
         &self,
         key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
@@ -366,7 +353,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
         }
         Ok(())
     }
-
     fn validate_provider_state<P>(
         &self,
         key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
@@ -378,7 +364,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
         self.validate_key_context(key)?;
         validate_bound_seekable_provider_state(key, provider)
     }
-
     fn stored_b_limb<P>(
         &self,
         key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
@@ -405,7 +390,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
         validate_bound_seekable_provider_state(key, provider)?;
         Ok(())
     }
-
     fn seeded_a_limb(
         &self,
         key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
@@ -427,7 +411,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
             output,
         )
     }
-
     fn output_lineage(
         &self,
         key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
@@ -449,7 +432,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1 {
         Ok(digest)
     }
 }
-
 fn read_seekable_evaluated_key_limb<P>(
     profile: &BgvProfile,
     key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
@@ -550,7 +532,6 @@ where
     }
     Ok(())
 }
-
 /// One coefficient-major CRT/radix pass hoisted across a bounded digit batch.
 ///
 /// Only compact signed digits are retained. Evaluated-key records and expanded
@@ -562,30 +543,24 @@ struct HoistedHybridDigitBatchV1<'a> {
     /// Digit-major coefficients, exactly `digit_count * ring_degree` values.
     signed_digits: Vec<i64>,
 }
-
 #[cfg(test)]
 std::thread_local! {
     static HOISTED_RESIDUE_READS_V1: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
-
 #[cfg(test)]
 fn reset_hoisted_residue_reads_v1() {
     HOISTED_RESIDUE_READS_V1.with(|count| count.set(0));
 }
-
 #[cfg(test)]
 fn hoisted_residue_reads_v1() -> usize {
     HOISTED_RESIDUE_READS_V1.with(std::cell::Cell::get)
 }
-
 #[cfg(test)]
 fn observe_hoisted_residue_read_v1() {
     HOISTED_RESIDUE_READS_V1.with(|count| count.set(count.get().saturating_add(1)));
 }
-
 #[cfg(not(test))]
 fn observe_hoisted_residue_read_v1() {}
-
 impl<'a> HoistedHybridDigitBatchV1<'a> {
     #[cfg(test)]
     fn new(
@@ -594,7 +569,6 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         Self::new_batch_with_automorphism(profile, polynomial, None, 0, profile.gadget_digits)
     }
-
     #[cfg(test)]
     fn new_automorphed(
         profile: &'a BgvProfile,
@@ -609,7 +583,6 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
             profile.gadget_digits,
         )
     }
-
     fn new_batch(
         profile: &'a BgvProfile,
         polynomial: &'a RnsPolynomial,
@@ -618,7 +591,6 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
     ) -> Result<Self, ZkAmsMkheErrorV1> {
         Self::new_batch_with_automorphism(profile, polynomial, None, first_digit, digit_count)
     }
-
     fn new_automorphed_batch(
         profile: &'a BgvProfile,
         polynomial: &'a RnsPolynomial,
@@ -634,7 +606,6 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
             digit_count,
         )
     }
-
     fn new_batch_with_automorphism(
         profile: &'a BgvProfile,
         polynomial: &'a RnsPolynomial,
@@ -701,7 +672,6 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
             return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
         }
         signed_digits.resize(signed_count, 0_i64);
-
         let mut residues = Vec::new();
         residues
             .try_reserve_exact(profile.moduli.len())
@@ -710,7 +680,6 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
             return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
         }
         residues.resize(profile.moduli.len(), 0_u64);
-
         for coefficient in 0..profile.ring_degree {
             for (limb, residue) in residues.iter_mut().enumerate() {
                 *residue = coefficient_residue_with_automorphism_v1(
@@ -776,7 +745,6 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
             signed_digits,
         })
     }
-
     fn signed_digit(&self, digit_index: usize) -> Result<&[i64], ZkAmsMkheErrorV1> {
         let end_digit = self
             .first_digit
@@ -795,7 +763,6 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
             .get(start..end)
             .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)
     }
-
     fn fill_digit_limb(
         &self,
         digit_index: usize,
@@ -811,13 +778,11 @@ impl<'a> HoistedHybridDigitBatchV1<'a> {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn digit(&self, digit_index: usize) -> Result<RnsPolynomial, ZkAmsMkheErrorV1> {
         rns_from_signed_exact(self.profile, self.signed_digit(digit_index)?)
     }
 }
-
 fn coefficient_residue_with_automorphism_v1(
     profile: &BgvProfile,
     polynomial: &RnsPolynomial,
@@ -856,7 +821,6 @@ fn coefficient_residue_with_automorphism_v1(
         value
     })
 }
-
 fn inverse_odd_mod_power_of_two(value: usize, modulus: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     if value == 0 || value.is_multiple_of(2) || modulus < 2 || !modulus.is_power_of_two() {
         return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
@@ -873,7 +837,6 @@ fn inverse_odd_mod_power_of_two(value: usize, modulus: usize) -> Result<usize, Z
     }
     usize::try_from(inverse).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)
 }
-
 #[cfg(test)]
 fn rns_from_signed_exact(
     profile: &BgvProfile,
@@ -903,7 +866,6 @@ fn rns_from_signed_exact(
     }
     RnsPolynomial::from_flat(profile, coefficients)
 }
-
 fn clone_rns_exact(
     profile: &BgvProfile,
     polynomial: &RnsPolynomial,
@@ -919,29 +881,24 @@ fn clone_rns_exact(
     coefficients.extend_from_slice(&polynomial.coefficients);
     RnsPolynomial::from_flat(profile, coefficients)
 }
-
 struct KeySwitchLimbWorkspaceV1 {
     evaluated_key: Vec<u64>,
     signed_digit: Vec<u64>,
 }
-
 #[cfg(test)]
 std::thread_local! {
     static KEY_SWITCH_LIMB_WORKSPACE_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 #[cfg(test)]
 fn reset_key_switch_limb_workspace_zeroized_drops_v1() {
     KEY_SWITCH_LIMB_WORKSPACE_ZEROIZED_DROPS_V1.with(|drops| drops.set(0));
 }
-
 #[cfg(test)]
 fn key_switch_limb_workspace_zeroized_drops_v1() -> usize {
     KEY_SWITCH_LIMB_WORKSPACE_ZEROIZED_DROPS_V1.with(std::cell::Cell::get)
 }
-
 impl KeySwitchLimbWorkspaceV1 {
     fn new(profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut evaluated_key = Vec::new();
@@ -965,7 +922,6 @@ impl KeySwitchLimbWorkspaceV1 {
         })
     }
 }
-
 impl Drop for KeySwitchLimbWorkspaceV1 {
     fn drop(&mut self) {
         let evaluated_key = core::hint::black_box(&mut self.evaluated_key);
@@ -984,7 +940,6 @@ impl Drop for KeySwitchLimbWorkspaceV1 {
         let _ = core::hint::black_box(&mut *signed_digit);
     }
 }
-
 fn multiply_accumulate_limb_in_place(
     profile: &BgvProfile,
     accumulator: &mut RnsPolynomial,
@@ -1039,13 +994,11 @@ fn multiply_accumulate_limb_in_place(
     }
     Ok(())
 }
-
 #[cfg(test)]
 std::thread_local! {
     static TRACK_SEEKABLE_LIVENESS_V1: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static SEEKABLE_LIVENESS_HIGH_WATER_V1: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
-
 #[cfg(test)]
 fn observe_seekable_liveness(bytes: u64) {
     TRACK_SEEKABLE_LIVENESS_V1.with(|enabled| {
@@ -1054,10 +1007,8 @@ fn observe_seekable_liveness(bytes: u64) {
         }
     });
 }
-
 #[cfg(not(test))]
 fn observe_seekable_liveness(_bytes: u64) {}
-
 #[cfg(test)]
 fn apply_compact_switch_streamed_core<StoredBLimb, SeededALimb>(
     profile: &BgvProfile,
@@ -1081,7 +1032,6 @@ where
         seeded_a_limb,
     )
 }
-
 fn apply_compact_switch_streamed_core_with_automorphism<StoredBLimb, SeededALimb>(
     profile: &BgvProfile,
     mut constant: RnsPolynomial,
@@ -1165,7 +1115,6 @@ where
     }
     Ok((constant, linear))
 }
-
 fn apply_compact_switch_with_seekable_provider<P>(
     runtime: &ZkAmsMkheCollectiveEvaluatedKeyRuntimeV1,
     key: &ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
@@ -1203,7 +1152,6 @@ where
     runtime.validate_provider_state(key, provider)?;
     Ok((constant, linear))
 }
-
 #[cfg(test)]
 fn apply_compact_switch_with_provider(
     profile: &BgvProfile,
@@ -1237,7 +1185,6 @@ fn apply_compact_switch_with_provider(
     }
     Ok((constant, linear))
 }
-
 #[cfg(test)]
 fn apply_compact_switch(
     profile: &BgvProfile,
@@ -1260,7 +1207,6 @@ fn apply_compact_switch(
         },
     )
 }
-
 /// Relinearize one exact collective level-one ciphertext with a compact key.
 ///
 /// The reusable runtime has already validated the roster, CPK proofs, and
@@ -1311,7 +1257,6 @@ where
         Some(collective_key.digest()),
     )
 }
-
 /// Apply a frozen Galois automorphism and compactly switch back to `S`.
 #[cfg(test)]
 pub fn automorphism_switch_zk_ams_mkhe_collective_v1<P>(

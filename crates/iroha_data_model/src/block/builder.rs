@@ -1,12 +1,9 @@
 //! Incremental block builder that uses typed incremental Merkle updates during assembly.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-
 use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
-
 use super::{
     BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockResult, BlockSignature,
     SignedBlock,
@@ -23,7 +20,6 @@ use crate::{
     },
     trigger::TimeTriggerEntrypoint,
 };
-
 /// Helper to incrementally assemble a block while maintaining Merkle roots.
 #[derive(Debug, Clone)]
 pub struct BlockBuilder {
@@ -41,7 +37,6 @@ pub struct BlockBuilder {
     npos_consensus_effects: Option<NposConsensusEffects>,
     execution_context: Option<BlockExecutionContextBundle>,
 }
-
 impl BlockBuilder {
     /// Create a new builder with an initial header. Merkle roots are derived as
     /// items are pushed and written into the header on `build()`.
@@ -62,7 +57,6 @@ impl BlockBuilder {
             npos_consensus_effects: None,
         }
     }
-
     /// Push a signed transaction and update the entrypoint Merkle tree.
     pub fn push_transaction(&mut self, tx: SignedTransaction) -> usize {
         let idx = self.external_entrypoints.len();
@@ -73,7 +67,6 @@ impl BlockBuilder {
         self.transactions.push(tx);
         idx
     }
-
     /// Push a sealed transaction commitment and update the entrypoint Merkle tree.
     pub fn push_sealed_transaction_commitment(
         &mut self,
@@ -86,7 +79,6 @@ impl BlockBuilder {
         self.external_entrypoints.push(entrypoint);
         idx
     }
-
     /// Push a sealed transaction reveal and update the entrypoint Merkle tree.
     pub fn push_sealed_transaction_reveal(&mut self, reveal: SealedTransactionReveal) -> usize {
         let idx = self.external_entrypoints.len();
@@ -96,7 +88,6 @@ impl BlockBuilder {
         self.external_entrypoints.push(entrypoint);
         idx
     }
-
     /// Push a time trigger and update the entrypoint Merkle tree.
     pub fn push_time_trigger(&mut self, trig: TimeTriggerEntrypoint) -> usize {
         let idx = self.external_entrypoints.len() + self.time_triggers.len();
@@ -105,7 +96,6 @@ impl BlockBuilder {
         self.time_triggers.push(trig);
         idx
     }
-
     /// Push a transaction result and update the result Merkle tree.
     pub fn push_result(&mut self, inner: TransactionResultInner) -> usize {
         let idx = self.results.len();
@@ -114,22 +104,18 @@ impl BlockBuilder {
         self.results.push(TransactionResult::from(inner));
         idx
     }
-
     /// Attach a pre-built DA commitment bundle that will be embedded in the resulting block.
     pub fn set_da_commitments(&mut self, bundle: Option<DaCommitmentBundle>) {
         self.da_commitments = bundle.filter(|bundle| !bundle.is_empty());
     }
-
     /// Attach a pre-built DA proof policy bundle that will be embedded in the resulting block.
     pub fn set_da_proof_policies(&mut self, bundle: Option<DaProofPolicyBundle>) {
         self.da_proof_policies = bundle;
     }
-
     /// Attach a pre-built DA pin intent bundle that will be embedded in the resulting block.
     pub fn set_da_pin_intents(&mut self, bundle: Option<DaPinIntentBundle>) {
         self.da_pin_intents = bundle.filter(|bundle| !bundle.is_empty());
     }
-
     fn normalize_empty_da_bundles(&mut self) {
         self.da_commitments = self
             .da_commitments
@@ -140,27 +126,22 @@ impl BlockBuilder {
             .take()
             .filter(|bundle| !bundle.is_empty());
     }
-
     /// Attach previous-height roster evidence that will be embedded in the resulting block.
     pub fn set_previous_roster_evidence(&mut self, evidence: Option<PreviousRosterEvidence>) {
         self.previous_roster_evidence = evidence;
     }
-
     /// Attach deterministic `NPoS` effects that will be embedded in the resulting block.
     pub fn set_npos_consensus_effects(&mut self, effects: Option<NposConsensusEffects>) {
         self.npos_consensus_effects = effects.filter(|bundle| !bundle.is_empty());
     }
-
     /// Attach durable execution context that will be embedded in the resulting block.
     pub fn set_execution_context(&mut self, context: Option<BlockExecutionContextBundle>) {
         self.execution_context = context.filter(|bundle| !bundle.is_empty());
     }
-
     /// Commit an SCCP commitment root in the resulting block header.
     pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
         self.header.set_sccp_commitment_root(root);
     }
-
     /// Build a `SignedBlock` with the provided signatures.
     pub fn build(mut self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
         self.normalize_empty_da_bundles();
@@ -217,7 +198,6 @@ impl BlockBuilder {
         block.set_execution_context(self.execution_context);
         block
     }
-
     /// Convenience: fallibly sign the built header hash with a single validator and return the block.
     ///
     /// # Errors
@@ -258,7 +238,6 @@ impl BlockBuilder {
         set.insert(BlockSignature::new(signatory_index, sig));
         Ok(self.build(set))
     }
-
     /// Convenience: sign the built header hash with a single validator and return the block.
     #[must_use]
     pub fn build_with_signature(
@@ -270,12 +249,10 @@ impl BlockBuilder {
             .expect("signing should succeed for a valid private key and finalized block header")
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         da::{
@@ -289,23 +266,19 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
         transaction::signed::TransactionBuilder,
     };
-
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("generate checked block-builder fixture keypair")
     }
-
     fn checked_seeded_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], algorithm)
             .expect("derive checked block-builder fixture keypair")
     }
-
     fn test_network_id() -> crate::NetworkId {
         crate::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x15; Hash::LENGTH]),
         ))
     }
-
     #[test]
     fn builder_roots_match_manual_construction() {
         // Minimal header
@@ -315,7 +288,6 @@ mod tests {
                 .parse()
                 .unwrap();
         let authority = AccountId::new(iroha_crypto::PublicKey::from(private_key.clone()));
-
         // Two txs
         let tx1 = TransactionBuilder::new(
             test_network_id(),
@@ -346,13 +318,11 @@ mod tests {
             ),
         );
         let r3 = TransactionResultInner::Ok(DataTriggerSequence::default());
-
         // Build incrementally
         let mut bb = BlockBuilder::new(header);
         bb.push_transaction(tx1.clone());
         bb.push_transaction(tx2.clone());
         let mut built = bb.build_with_signature(0, &private_key);
-
         // Manual construction
         let mut manual = SignedBlock::presigned(
             BlockSignature::new(
@@ -369,14 +339,12 @@ mod tests {
             trig.hash_as_entrypoint(),
         ];
         let results = vec![r1.clone(), r2.clone(), r3.clone()];
-
         built
             .set_transaction_results(vec![trig.clone()], &entry_hashes, results.clone())
             .expect("built block entrypoint hashes should match payload");
         manual
             .set_transaction_results(vec![trig], &entry_hashes, results)
             .expect("manual block entrypoint hashes should match payload");
-
         // Compare roots and contents
         assert_eq!(built.header().merkle_root(), manual.header().merkle_root());
         assert_eq!(
@@ -396,7 +364,6 @@ mod tests {
             manual.result_hashes().collect::<Vec<_>>()
         );
     }
-
     #[test]
     fn builder_attaches_da_bundle_and_sets_header_hash() {
         let header = BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
@@ -407,17 +374,14 @@ mod tests {
         assert_eq!(block.da_commitments().unwrap(), &bundle);
         assert!(block.header().da_commitments_hash().is_some());
     }
-
     #[test]
     fn builder_normalizes_empty_da_bundles() {
         let header = BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
         let mut builder = BlockBuilder::new(header);
         builder.set_da_commitments(Some(DaCommitmentBundle::default()));
         builder.set_da_pin_intents(Some(DaPinIntentBundle::default()));
-
         assert!(builder.da_commitments.is_none());
         assert!(builder.da_pin_intents.is_none());
-
         let mut unsigned_builder = builder.clone();
         unsigned_builder.da_commitments = Some(DaCommitmentBundle::default());
         unsigned_builder.da_pin_intents = Some(DaPinIntentBundle::default());
@@ -426,7 +390,6 @@ mod tests {
         assert!(unsigned.header().da_commitments_hash().is_none());
         assert!(unsigned.da_pin_intents().is_none());
         assert!(unsigned.header().da_pin_intents_hash().is_none());
-
         builder.da_commitments = Some(DaCommitmentBundle::default());
         builder.da_pin_intents = Some(DaPinIntentBundle::default());
         let keypair = checked_seeded_keypair(0xDA, Algorithm::Ed25519);
@@ -436,7 +399,6 @@ mod tests {
         assert!(signed.da_pin_intents().is_none());
         assert!(signed.header().da_pin_intents_hash().is_none());
     }
-
     #[test]
     fn build_with_signature_keeps_da_policy_hash_consistent() {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -464,19 +426,16 @@ mod tests {
             Some(HashOf::new(&bundle))
         );
     }
-
     #[test]
     fn try_build_with_signature_matches_compatibility_signature_and_verifies() {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let keypair = checked_seeded_keypair(0x42, Algorithm::Ed25519);
         let builder = BlockBuilder::new(header);
-
         let fallible = builder
             .clone()
             .try_build_with_signature(7, keypair.private_key())
             .expect("fallible block signing should succeed");
         let compatibility = builder.build_with_signature(7, keypair.private_key());
-
         assert_eq!(fallible.header(), compatibility.header());
         let fallible_signature = fallible.signatures().next().expect("fallible signature");
         let compatibility_signature = compatibility
@@ -490,7 +449,6 @@ mod tests {
             .verify_hash(keypair.public_key(), fallible.hash())
             .expect("fallible block signature verifies");
     }
-
     fn sample_da_bundle() -> DaCommitmentBundle {
         let record = DaCommitmentRecord::new(
             LaneId::new(7),

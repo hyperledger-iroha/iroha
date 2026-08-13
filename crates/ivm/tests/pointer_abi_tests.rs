@@ -1,10 +1,7 @@
 //! Pointer-ABI TLV guard regressions.
-
 use iroha_crypto::Hash;
 use ivm::{CoreHost, IVM, PointerType, encoding, syscalls};
-
 mod common;
-
 fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -16,7 +13,6 @@ fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 #[test]
 fn tlv_wrong_type_id_is_rejected() {
     let mut vm = IVM::new(u64::MAX);
@@ -46,7 +42,6 @@ fn tlv_wrong_type_id_is_rejected() {
         "expected NoritoInvalid for mismatched TLV type, got {err:?}"
     );
 }
-
 #[test]
 fn tlv_expected_type_rejects_high_register_bits_without_truncation() {
     let mut vm = IVM::new(u64::MAX);
@@ -68,6 +63,5 @@ fn tlv_expected_type_rejects_high_register_bits_without_truncation() {
         .concat(),
     );
     vm.load_program(&prog).expect("load program");
-
     assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
 }

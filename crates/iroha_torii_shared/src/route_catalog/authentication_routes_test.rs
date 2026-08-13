@@ -8,7 +8,6 @@ fn offline_receiver_lineage_requires_account_authentication_before_expensive_pro
         AuthenticationPolicy::CanonicalAccountSignature
     );
 }
-
 #[test]
 fn application_query_posts_authenticate_before_expensive_compute() {
     for route in [
@@ -43,7 +42,6 @@ fn application_query_posts_authenticate_before_expensive_compute() {
             route.path()
         );
     }
-
     let proof_query = application_api::PROOFS_QUERY_POST;
     assert_eq!(proof_query.effect(), RouteEffect::ExpensiveCompute);
     assert_eq!(
@@ -55,12 +53,10 @@ fn application_query_posts_authenticate_before_expensive_compute() {
         AuthenticationPolicy::CanonicalSignedBody
     );
 }
-
 #[test]
 fn canonical_catalog_includes_exact_gateway_and_directory_routes() {
     let catalog = RouteCatalog::new(CATALOGED_ROUTES);
     assert_eq!(catalog.validate(), Ok(()));
-
     for expected in soracloud_gateway::ROUTES
         .iter()
         .chain(content_directory::ROUTES)
@@ -79,7 +75,6 @@ fn canonical_catalog_includes_exact_gateway_and_directory_routes() {
         "the first-release gateway must not expose a trailing-slash alias"
     );
 }
-
 #[test]
 fn public_runtime_gateway_authentication_is_exactly_scoped() {
     let catalog_routes = CATALOGED_ROUTES
@@ -88,7 +83,6 @@ fn public_runtime_gateway_authentication_is_exactly_scoped() {
         .collect::<Vec<_>>();
     assert_eq!(catalog_routes.len(), soracloud_gateway::ROUTES.len());
     assert_eq!(soracloud_gateway::ROUTES.len(), 4);
-
     for route in soracloud_gateway::ROUTES {
         assert!(catalog_routes.iter().any(|catalog| **catalog == *route));
         assert_eq!(route.surface(), ApiSurface::Protocol);
@@ -99,7 +93,6 @@ fn public_runtime_gateway_authentication_is_exactly_scoped() {
         assert_eq!(route.projections(), RouteProjections::NONE);
     }
 }
-
 #[test]
 fn dedicated_onboarding_authentication_is_exactly_scoped() {
     for route in [
@@ -123,7 +116,6 @@ fn dedicated_onboarding_authentication_is_exactly_scoped() {
         "no unrelated route may inherit the onboarding credential policy"
     );
 }
-
 #[test]
 fn formerly_bearer_only_routes_require_exact_signatures() {
     assert_eq!(
@@ -143,7 +135,6 @@ fn formerly_bearer_only_routes_require_exact_signatures() {
         );
     }
 }
-
 #[test]
 fn local_sorafs_governance_state_is_operator_signed() {
     for route in [
@@ -178,7 +169,6 @@ fn local_sorafs_governance_state_is_operator_signed() {
         assert_eq!(route.projections(), RouteProjections::NONE);
     }
 }
-
 #[test]
 fn node_local_core_and_pipeline_reads_require_exact_operator_signatures() {
     for route in [
@@ -209,7 +199,6 @@ fn node_local_core_and_pipeline_reads_require_exact_operator_signatures() {
         assert!(!route.cors_options());
     }
 }
-
 #[test]
 fn sorafs_inventory_and_storage_reads_declare_fail_closed_admission() {
     for route in [sorafs::ALIASES, sorafs::REPLICATION] {
@@ -223,7 +212,6 @@ fn sorafs_inventory_and_storage_reads_declare_fail_closed_admission() {
         );
         assert_eq!(route.projections(), RouteProjections::OPENAPI_AND_SDK);
     }
-
     let storage_state = sorafs::STORAGE_STATE;
     assert_eq!(storage_state.method(), HttpMethod::Get);
     assert_eq!(storage_state.surface(), ApiSurface::Operator);
@@ -234,7 +222,6 @@ fn sorafs_inventory_and_storage_reads_declare_fail_closed_admission() {
         AuthenticationPolicy::OperatorSignature
     );
     assert_eq!(storage_state.projections(), RouteProjections::NONE);
-
     let storage_fetch = sorafs::STORAGE_FETCH;
     assert_eq!(storage_fetch.method(), HttpMethod::Post);
     assert_eq!(storage_fetch.surface(), ApiSurface::Operator);
@@ -245,7 +232,6 @@ fn sorafs_inventory_and_storage_reads_declare_fail_closed_admission() {
         AuthenticationPolicy::OperatorSignature
     );
     assert_eq!(storage_fetch.projections(), RouteProjections::NONE);
-
     for route in [sorafs::STORAGE_CAR, sorafs::STORAGE_CHUNK] {
         assert_eq!(route.method(), HttpMethod::Get);
         assert_eq!(route.effect(), RouteEffect::ReadOnly);
@@ -260,7 +246,6 @@ fn sorafs_inventory_and_storage_reads_declare_fail_closed_admission() {
         assert_eq!(route.projections(), RouteProjections::OPENAPI_AND_SDK);
     }
 }
-
 #[test]
 fn iso20022_routes_require_fresh_operator_signatures() {
     for route in iso20022::ROUTES {
@@ -271,7 +256,6 @@ fn iso20022_routes_require_fresh_operator_signatures() {
         );
     }
 }
-
 #[test]
 fn vpn_and_push_device_routes_declare_canonical_account_authentication() {
     for route in [
@@ -292,7 +276,6 @@ fn vpn_and_push_device_routes_declare_canonical_account_authentication() {
         );
     }
 }
-
 #[test]
 fn soracloud_commands_require_exact_account_authentication_and_honest_effects() {
     let commands = application_api::ROUTES
@@ -309,7 +292,6 @@ fn soracloud_commands_require_exact_account_authentication_and_honest_effects() 
         41,
         "every SoraCloud POST must be classified"
     );
-
     for route in commands {
         assert_eq!(
             route.authentication(),
@@ -338,7 +320,6 @@ fn soracloud_commands_require_exact_account_authentication_and_honest_effects() 
         );
     }
 }
-
 #[test]
 fn soracloud_sensitive_reads_require_exact_account_authentication() {
     let protected = [
@@ -376,7 +357,6 @@ fn soracloud_sensitive_reads_require_exact_account_authentication() {
         );
     }
 }
-
 #[test]
 fn soracloud_public_reads_are_bounded_single_object_discovery() {
     for route in [
@@ -390,7 +370,6 @@ fn soracloud_public_reads_are_bounded_single_object_discovery() {
         assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
     }
 }
-
 #[test]
 fn subscription_commands_require_exact_account_authentication_and_mutation_admission() {
     for route in [
@@ -413,7 +392,6 @@ fn subscription_commands_require_exact_account_authentication_and_mutation_admis
         assert_eq!(route.effect(), RouteEffect::Mutation);
     }
 }
-
 #[test]
 fn application_drafts_and_cryptographic_services_require_exact_account_authentication() {
     for route in [
@@ -435,7 +413,6 @@ fn application_drafts_and_cryptographic_services_require_exact_account_authentic
         );
     }
 }
-
 #[test]
 fn webhook_registry_is_operator_signed_and_effects_are_exact() {
     assert_eq!(
@@ -460,7 +437,6 @@ fn webhook_registry_is_operator_signed_and_effects_are_exact() {
         assert_eq!(route.admission(), AdmissionPolicy::Operator);
     }
 }
-
 #[test]
 fn zk_attachment_tenant_routes_are_account_authenticated_before_storage_access() {
     for route in [
@@ -492,7 +468,6 @@ fn zk_attachment_tenant_routes_are_account_authenticated_before_storage_access()
         RouteEffect::Mutation
     );
 }
-
 #[test]
 fn zk_compute_routes_require_exact_account_authentication() {
     for route in [
@@ -510,7 +485,6 @@ fn zk_compute_routes_require_exact_account_authentication() {
         assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
     }
 }
-
 #[test]
 fn state_backed_runtime_and_governance_routes_require_exact_account_authentication() {
     let routes = [
@@ -565,7 +539,6 @@ fn state_backed_runtime_and_governance_routes_require_exact_account_authenticati
             route.stable_route_id()
         );
     }
-
     for route in [
         runtime_governance::ZK_ROOTS,
         runtime_governance::ZK_MERKLE_PATH,
@@ -577,7 +550,6 @@ fn state_backed_runtime_and_governance_routes_require_exact_account_authenticati
     ] {
         assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
     }
-
     for route in [
         runtime_governance::RUNTIME_ABI_HASH,
         runtime_governance::GOV_FINALIZE,
@@ -587,7 +559,6 @@ fn state_backed_runtime_and_governance_routes_require_exact_account_authenticati
         assert_eq!(route.effect(), RouteEffect::ReadOnly);
     }
 }
-
 #[test]
 fn trusted_internal_account_reads_are_not_projected_to_public_tooling() {
     let routes = [
@@ -610,7 +581,6 @@ fn trusted_internal_account_reads_are_not_projected_to_public_tooling() {
     assert!(catalog.project(CatalogProjection::Sdk, enabled).is_empty());
     assert!(catalog.project(CatalogProjection::Mcp, enabled).is_empty());
 }
-
 #[test]
 fn account_alias_visibility_and_signed_operator_routes_declare_exact_authentication() {
     for route in [
@@ -625,7 +595,6 @@ fn account_alias_visibility_and_signed_operator_routes_declare_exact_authenticat
             route.stable_route_id()
         );
     }
-
     for route in [
         aliases::SETUP_PLAN,
         aliases::LEASE_RENEW_PLAN,
@@ -642,13 +611,11 @@ fn account_alias_visibility_and_signed_operator_routes_declare_exact_authenticat
             route.stable_route_id()
         );
     }
-
     assert_eq!(
         aliases::ASSET_RESOLVE.authentication(),
         AuthenticationPolicy::ToriiDefault,
         "public asset aliases do not expose an account binding"
     );
-
     for route in [
         contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
         contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST,
@@ -662,7 +629,6 @@ fn account_alias_visibility_and_signed_operator_routes_declare_exact_authenticat
         );
     }
 }
-
 #[test]
 fn moderation_dead_letter_routes_are_account_signed_operator_role_posts() {
     let routes = [
@@ -677,7 +643,6 @@ fn moderation_dead_letter_routes_are_account_signed_operator_role_posts() {
             "/v1/sorafs/moderation/dead-letters/apply",
         ),
     ];
-
     for (route, stable_route_id, path) in routes {
         assert_eq!(route.stable_route_id(), stable_route_id);
         assert_eq!(route.method(), HttpMethod::Post);
@@ -696,6 +661,5 @@ fn moderation_dead_letter_routes_are_account_signed_operator_role_posts() {
         );
         assert!(CATALOGED_ROUTES.contains(&route));
     }
-
     assert_eq!(validate_catalog(&routes.map(|(route, _, _)| route)), Ok(()));
 }

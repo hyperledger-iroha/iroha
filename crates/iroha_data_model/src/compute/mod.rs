@@ -4,18 +4,14 @@
 //! lane along with manifest metadata, sandbox guards, and metering helpers.
 //! All types derive Norito serialization so manifests, calls, and receipts can
 //! be persisted on-chain or shipped between Torii and SDKs deterministically.
-
 use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
 };
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::{name::Name, nexus::UniversalAccountId};
-
 /// Payload codec expected by a compute route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -33,7 +29,6 @@ pub enum ComputeCodec {
     /// Opaque binary payload.
     OctetStream,
 }
-
 /// Price weights used to turn metering data into chargeable compute units.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -48,7 +43,6 @@ pub struct ComputePriceWeights {
     /// Human-readable unit label (e.g., "cu").
     pub unit_label: String,
 }
-
 impl ComputePriceWeights {
     /// Compute the chargeable units for a metering record using ceil-division.
     #[must_use]
@@ -58,7 +52,6 @@ impl ComputePriceWeights {
         cycles_units.saturating_add(egress_units)
     }
 }
-
 /// Multipliers applied to compute units based on execution hints and determinism.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -73,7 +66,6 @@ pub struct ComputePriceAmplifiers {
     /// Basis-point multiplier applied when a call opts into best-effort determinism.
     pub best_effort_bps: NonZeroU32,
 }
-
 impl ComputePriceAmplifiers {
     /// Default GPU multiplier (1.3x).
     pub const DEFAULT_GPU_BPS: u32 = 13_000;
@@ -81,7 +73,6 @@ impl ComputePriceAmplifiers {
     pub const DEFAULT_TEE_BPS: u32 = 15_000;
     /// Default best-effort multiplier (1.25x).
     pub const DEFAULT_BEST_EFFORT_BPS: u32 = 12_500;
-
     /// Apply the configured multipliers to a base unit count.
     #[must_use]
     pub fn apply(
@@ -102,7 +93,6 @@ impl ComputePriceAmplifiers {
         units
     }
 }
-
 impl Default for ComputePriceAmplifiers {
     fn default() -> Self {
         Self {
@@ -113,7 +103,6 @@ impl Default for ComputePriceAmplifiers {
         }
     }
 }
-
 /// Determinism guarantees requested by a compute route or call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -128,7 +117,6 @@ pub enum ComputeDeterminism {
     /// Best-effort execution that may rely on non-deterministic helpers.
     BestEffort,
 }
-
 /// Execution class requested for the route (affects scheduling and routing).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -145,7 +133,6 @@ pub enum ComputeExecutionClass {
     /// Trusted execution environment (TEE) execution class.
     Tee,
 }
-
 /// Reference to a model or dataset stored in `SoraFS`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -162,7 +149,6 @@ pub struct ComputeModelRef {
     /// Chunk size used when streaming the model from `SoraFS`.
     pub chunk_size_bytes: NonZeroU64,
 }
-
 impl ComputeModelRef {
     /// Validate that the model reference is internally consistent.
     ///
@@ -188,7 +174,6 @@ impl ComputeModelRef {
         Ok(())
     }
 }
-
 /// Limits applied to caller-supplied inputs for a compute route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -203,7 +188,6 @@ pub struct ComputeInputLimits {
     /// Expected chunk size for streamed inputs (bytes).
     pub chunk_size_bytes: NonZeroU64,
 }
-
 impl ComputeInputLimits {
     /// Validate input limits against the owning route.
     ///
@@ -223,7 +207,6 @@ impl ComputeInputLimits {
         Ok(())
     }
 }
-
 /// Fee split applied to compute charges (basis points, denominator = `10_000`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -238,11 +221,9 @@ pub struct ComputeFeeSplit {
     /// Portion of fees paid to providers/executors (bps).
     pub providers_bps: u16,
 }
-
 impl ComputeFeeSplit {
     /// Basis points denominator for fee splits.
     pub const BPS_DENOMINATOR: u16 = 10_000;
-
     /// Sum of all fee buckets.
     #[must_use]
     pub const fn total_bps(&self) -> u16 {
@@ -251,7 +232,6 @@ impl ComputeFeeSplit {
             .saturating_add(self.providers_bps)
     }
 }
-
 /// Sponsor budget caps for subsidised compute calls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -264,7 +244,6 @@ pub struct ComputeSponsorPolicy {
     /// Maximum compute units a sponsor may cover per day.
     pub max_daily_cu: NonZeroU64,
 }
-
 /// Risk classes applied to price families for governance-bound deltas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -280,7 +259,6 @@ pub enum ComputePriceRiskClass {
     /// High-risk price families with relaxed bounds.
     High,
 }
-
 /// Delta bounds (basis points) used to constrain governance price updates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -293,7 +271,6 @@ pub struct ComputePriceDeltaBounds {
     /// Maximum delta for `egress_bytes_per_unit` vs baseline (bps).
     pub max_egress_delta_bps: NonZeroU16,
 }
-
 /// Resource budget applied to a compute route/profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -316,7 +293,6 @@ pub struct ComputeResourceBudget {
     /// Whether WASI-lite helpers are permitted alongside pure IVM execution.
     pub allow_wasi: bool,
 }
-
 /// Sandbox execution mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -330,7 +306,6 @@ pub enum ComputeSandboxMode {
     /// Allow a WASI-lite shim for network-less helpers.
     WasiLite,
 }
-
 /// Deterministic randomness policy for compute calls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -344,7 +319,6 @@ pub enum ComputeRandomnessPolicy {
     /// Seed deterministic randomness from the request hash.
     SeededFromRequest,
 }
-
 /// Storage policy for the compute sandbox.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -358,7 +332,6 @@ pub enum ComputeStorageAccess {
     /// Allow limited deterministic writes (e.g., logs), still sandboxed.
     ReadWrite,
 }
-
 /// Sandbox guardrails shared by compute manifests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -382,7 +355,6 @@ pub struct ComputeSandboxRules {
     #[cfg_attr(feature = "json", norito(default))]
     pub allow_tee_hints: bool,
 }
-
 /// Authentication policy for a compute route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -398,7 +370,6 @@ pub enum ComputeAuthPolicy {
     /// Permit both public and authenticated callers.
     Either,
 }
-
 /// Unique identifier for a compute route.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -411,7 +382,6 @@ pub struct ComputeRouteId {
     /// Method within the service.
     pub method: Name,
 }
-
 impl ComputeRouteId {
     /// Build a new route identifier.
     #[must_use]
@@ -419,7 +389,6 @@ impl ComputeRouteId {
         Self { service, method }
     }
 }
-
 /// Route descriptor stored inside the compute manifest.
 #[derive(Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -461,13 +430,11 @@ pub struct ComputeRoute {
     /// Authentication policy enforced for this route.
     pub auth: ComputeAuthPolicy,
 }
-
 impl ComputeRoute {
     fn validate_shape(&self) -> Result<(), ComputeManifestError> {
         if let Some(limits) = &self.input_limits {
             limits.validate(self)?;
         }
-
         if let Some(model) = &self.model {
             let mut validated = model.validate();
             if let Err(ComputeManifestError::InvalidModel { ref mut id, .. }) = validated {
@@ -475,11 +442,9 @@ impl ComputeRoute {
             }
             validated?;
         }
-
         Ok(())
     }
 }
-
 /// Compute manifest binding services/methods to Kotodama entrypoints.
 #[derive(Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -497,11 +462,9 @@ pub struct ComputeManifest {
     #[cfg_attr(feature = "json", norito(default))]
     pub routes: Vec<ComputeRoute>,
 }
-
 impl ComputeManifest {
     /// Current ABI version for the compute manifest.
     pub const ABI_VERSION: u32 = 1;
-
     /// Validate manifest consistency (duplicate routes, codec allowlists).
     ///
     /// # Errors
@@ -530,13 +493,11 @@ impl ComputeManifest {
         }
         Ok(())
     }
-
     /// Find a route descriptor by identifier.
     #[must_use]
     pub fn route(&self, id: &ComputeRouteId) -> Option<&ComputeRoute> {
         self.routes.iter().find(|route| &route.id == id)
     }
-
     /// Validate a call against the manifest/route constraints.
     ///
     /// # Errors
@@ -555,7 +516,6 @@ impl ComputeManifest {
             });
         };
         route.validate_call(call)?;
-
         match call.execution_class {
             ComputeExecutionClass::Gpu if !self.sandbox.allow_gpu_hints => {
                 return Err(ComputeValidationError::ExecutionClassNotAllowed {
@@ -569,11 +529,9 @@ impl ComputeManifest {
             }
             _ => {}
         }
-
         Ok(())
     }
 }
-
 /// Manifest validation errors.
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 #[cfg_attr(
@@ -627,7 +585,6 @@ pub enum ComputeManifestError {
         expected: u32,
     },
 }
-
 /// Canonical request envelope hashed to derive idempotency/replay keys.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -641,7 +598,6 @@ pub struct ComputeRequest {
     /// Hash of the payload.
     pub payload_hash: Hash,
 }
-
 impl ComputeRequest {
     /// Compute the canonical hash of this request envelope.
     #[must_use]
@@ -649,7 +605,6 @@ impl ComputeRequest {
         HashOf::new(self)
     }
 }
-
 /// Authentication payload for an authenticated compute call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -664,7 +619,6 @@ pub struct ComputeAuthn {
     #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
     pub session_hash: Option<Hash>,
 }
-
 /// Authentication material provided by the caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -678,7 +632,6 @@ pub enum ComputeAuthz {
     /// Authenticated call bound to a UAID (optional session hash).
     Authenticated(ComputeAuthn),
 }
-
 /// Caller-supplied request to the compute gateway.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -725,7 +678,6 @@ pub struct ComputeCall {
     /// Canonical request envelope (headers + payload hash).
     pub request: ComputeRequest,
 }
-
 impl ComputeCall {
     /// Canonical hash of the request envelope (used for replay keys).
     #[must_use]
@@ -733,7 +685,6 @@ impl ComputeCall {
         self.request.hash()
     }
 }
-
 impl ComputeRoute {
     /// Validate a call against the route caps and allowlists.
     ///
@@ -832,11 +783,9 @@ impl ComputeRoute {
                 max: model.expected_bytes.get(),
             });
         }
-
         Ok(())
     }
 }
-
 /// Validation errors surfaced while checking a compute call against manifest caps.
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum ComputeValidationError {
@@ -955,7 +904,6 @@ pub enum ComputeValidationError {
         max: u64,
     },
 }
-
 /// Governance errors surfaced when applying price or sponsor updates.
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum ComputeGovernanceError {
@@ -1022,7 +970,6 @@ pub enum ComputeGovernanceError {
         limit: u64,
     },
 }
-
 /// Validate a proposed price family update against risk-class delta bounds.
 ///
 /// # Errors
@@ -1049,7 +996,6 @@ pub fn validate_price_update(
         let delta_bounds = bounds
             .get(class)
             .ok_or_else(|| ComputeGovernanceError::MissingRiskBounds { class: *class })?;
-
         if current.unit_label != updated.unit_label {
             return Err(ComputeGovernanceError::UnitLabelChanged {
                 family: family.clone(),
@@ -1057,7 +1003,6 @@ pub fn validate_price_update(
                 to: updated.unit_label.clone(),
             });
         }
-
         let cycles_delta = delta_bps(current.cycles_per_unit, updated.cycles_per_unit);
         if cycles_delta > delta_bounds.max_cycles_delta_bps.get() {
             return Err(ComputeGovernanceError::CyclesDeltaExceeded {
@@ -1066,7 +1011,6 @@ pub fn validate_price_update(
                 max_bps: delta_bounds.max_cycles_delta_bps.get(),
             });
         }
-
         let egress_delta = delta_bps(current.egress_bytes_per_unit, updated.egress_bytes_per_unit);
         if egress_delta > delta_bounds.max_egress_delta_bps.get() {
             return Err(ComputeGovernanceError::EgressDeltaExceeded {
@@ -1076,10 +1020,8 @@ pub fn validate_price_update(
             });
         }
     }
-
     Ok(())
 }
-
 /// Enforce sponsor caps for a given request against accumulated usage.
 ///
 /// # Errors
@@ -1105,7 +1047,6 @@ pub fn enforce_sponsor_policy(
     }
     Ok(())
 }
-
 /// Summary of the call recorded in receipts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1150,7 +1091,6 @@ pub struct ComputeCallSummary {
     /// Caller authentication material.
     pub auth: ComputeAuthz,
 }
-
 impl From<&ComputeCall> for ComputeCallSummary {
     fn from(call: &ComputeCall) -> Self {
         Self {
@@ -1172,7 +1112,6 @@ impl From<&ComputeCall> for ComputeCallSummary {
         }
     }
 }
-
 /// Metering data recorded after execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1193,7 +1132,6 @@ pub struct ComputeMetering {
     /// Chargeable compute units.
     pub charged_units: u64,
 }
-
 /// Outcome kind for a compute call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1213,7 +1151,6 @@ pub enum ComputeOutcomeKind {
     /// Internal host or runtime error.
     InternalError,
 }
-
 /// Execution outcome plus optional response details.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1236,7 +1173,6 @@ pub struct ComputeOutcome {
     #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
     pub response_codec: Option<ComputeCodec>,
 }
-
 /// Receipt emitted after a compute call executes.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1251,7 +1187,6 @@ pub struct ComputeReceipt {
     /// Outcome classification and response hashes.
     pub outcome: ComputeOutcome,
 }
-
 fn ceil_div(numerator: u64, denominator: u64) -> u64 {
     if denominator == 0 {
         return 0;
@@ -1260,14 +1195,12 @@ fn ceil_div(numerator: u64, denominator: u64) -> u64 {
         .saturating_add(denominator.saturating_sub(1))
         .saturating_div(denominator)
 }
-
 fn scale_bps(value: u64, bps: u32) -> u64 {
     value
         .saturating_mul(u64::from(bps))
         .saturating_add(9_999)
         .saturating_div(10_000)
 }
-
 fn delta_bps(current: NonZeroU64, updated: NonZeroU64) -> u16 {
     let current = current.get();
     let updated = updated.get();
@@ -1281,27 +1214,21 @@ fn delta_bps(current: NonZeroU64, updated: NonZeroU64) -> u16 {
         .min(u64::from(u16::MAX));
     u16::try_from(bps).unwrap_or(u16::MAX)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
         num::{NonZeroU16, NonZeroU64},
         str::FromStr,
     };
-
     use norito::json;
-
     use super::*;
     use crate::nexus::UniversalAccountId;
-
     fn name(value: &str) -> Name {
         Name::from_str(value).expect("name")
     }
-
     fn sample_uaid() -> UniversalAccountId {
         UniversalAccountId::from_hash(Hash::new(b"uaid::compute"))
     }
-
     fn sample_request() -> ComputeRequest {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
@@ -1311,7 +1238,6 @@ mod tests {
             payload_hash: Hash::new(br#"{"pair":"XOR/USD"}"#),
         }
     }
-
     fn sample_route() -> ComputeRoute {
         ComputeRoute {
             id: ComputeRouteId::new(name("payments"), name("quote")),
@@ -1339,7 +1265,6 @@ mod tests {
             auth: ComputeAuthPolicy::Either,
         }
     }
-
     fn sample_manifest() -> ComputeManifest {
         ComputeManifest {
             namespace: name("compute"),
@@ -1355,7 +1280,6 @@ mod tests {
             routes: vec![sample_route()],
         }
     }
-
     fn sample_call() -> ComputeCall {
         ComputeCall {
             namespace: name("compute"),
@@ -1378,7 +1302,6 @@ mod tests {
             request: sample_request(),
         }
     }
-
     fn sample_pricing() -> ComputePriceWeights {
         ComputePriceWeights {
             cycles_per_unit: NonZeroU64::new(1_000_000).unwrap(),
@@ -1386,7 +1309,6 @@ mod tests {
             unit_label: "cu".to_string(),
         }
     }
-
     fn sample_metering() -> ComputeMetering {
         let pricing = sample_pricing();
         let metering = ComputeMetering {
@@ -1403,7 +1325,6 @@ mod tests {
             ..metering
         }
     }
-
     fn sample_receipt() -> ComputeReceipt {
         let call = sample_call();
         let metering = sample_metering();
@@ -1418,7 +1339,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn manifest_detects_duplicates_and_codecs() {
         let mut manifest = sample_manifest();
@@ -1427,7 +1347,6 @@ mod tests {
             manifest.validate(),
             Err(ComputeManifestError::DuplicateRoute { .. })
         ));
-
         let mut manifest = sample_manifest();
         manifest.routes[0].codecs.clear();
         assert!(matches!(
@@ -1435,21 +1354,18 @@ mod tests {
             Err(ComputeManifestError::EmptyCodecAllowlist { .. })
         ));
     }
-
     #[test]
     fn route_validation_enforces_caps() {
         let manifest = sample_manifest();
         let mut call = sample_call();
         assert_eq!(Ok(()), manifest.validate());
         assert_eq!(Ok(()), manifest.validate_call(&call));
-
         call.ttl_slots = NonZeroU64::new(128).unwrap();
         assert!(matches!(
             manifest.validate_call(&call),
             Err(ComputeValidationError::TtlExceeded { .. })
         ));
     }
-
     #[test]
     fn best_effort_requires_opt_in() {
         let manifest = sample_manifest();
@@ -1460,18 +1376,15 @@ mod tests {
             Err(ComputeValidationError::DeterminismMismatch { .. })
         ));
     }
-
     #[test]
     fn input_limits_gate_calls() {
         let manifest = sample_manifest();
-
         let mut call = sample_call();
         call.declared_input_bytes = NonZeroU64::new(300_000).map(Some).unwrap();
         assert!(matches!(
             manifest.validate_call(&call),
             Err(ComputeValidationError::InputBytesExceeded { .. })
         ));
-
         let mut call = sample_call();
         call.declared_input_chunks = NonZeroU32::new(128).map(Some).unwrap();
         assert!(matches!(
@@ -1479,7 +1392,6 @@ mod tests {
             Err(ComputeValidationError::InputChunksExceeded { .. })
         ));
     }
-
     #[test]
     fn execution_class_is_enforced() {
         let mut call = sample_call();
@@ -1489,14 +1401,12 @@ mod tests {
             manifest.validate_call(&call),
             Err(ComputeValidationError::ExecutionClassMismatch { .. })
         ));
-
         let mut call = sample_call();
         call.execution_class = ComputeExecutionClass::Gpu;
         let mut manifest = sample_manifest();
         manifest.sandbox.allow_gpu_hints = true;
         manifest.routes[0].execution_class = ComputeExecutionClass::Gpu;
         assert!(matches!(manifest.validate_call(&call), Ok(())));
-
         let mut call = sample_call();
         call.execution_class = ComputeExecutionClass::Tee;
         let mut manifest = sample_manifest();
@@ -1507,7 +1417,6 @@ mod tests {
             Err(ComputeValidationError::ExecutionClassNotAllowed { .. })
         ));
     }
-
     #[test]
     fn model_expectation_caps_input_bytes() {
         let mut manifest = sample_manifest();
@@ -1525,7 +1434,6 @@ mod tests {
             Err(ComputeValidationError::ModelSizeExceeded { .. })
         ));
     }
-
     #[test]
     fn manifest_rejects_invalid_input_limits() {
         let mut manifest = sample_manifest();
@@ -1539,7 +1447,6 @@ mod tests {
             Err(ComputeManifestError::InvalidInputLimits { .. })
         ));
     }
-
     #[test]
     fn request_hash_is_stable() {
         let hash = sample_request().hash();
@@ -1549,14 +1456,12 @@ mod tests {
             "update the compute request fixture if this hash intentionally changes"
         );
     }
-
     #[test]
     fn pricing_rounds_up_units() {
         let pricing = sample_pricing();
         let metering = sample_metering();
         assert_eq!(10, pricing.charge_units(&metering));
     }
-
     #[test]
     fn fixtures_round_trip() {
         let manifest: ComputeManifest = json::from_str(include_str!(
@@ -1571,19 +1476,16 @@ mod tests {
             "../../../../fixtures/compute/receipt_compute_payments.json"
         ))
         .expect("receipt fixture");
-
         assert_eq!(sample_manifest(), manifest);
         assert_eq!(sample_call(), call);
         assert_eq!(sample_receipt(), receipt);
     }
-
     #[test]
     #[ignore = "prints compute fixtures for manual regeneration"]
     fn print_compute_fixtures() {
         let manifest = sample_manifest();
         let call = sample_call();
         let receipt = sample_receipt();
-
         let manifest_json =
             json::to_string_pretty(&json::to_value(&manifest).expect("manifest json value"))
                 .expect("manifest json");
@@ -1592,17 +1494,14 @@ mod tests {
         let receipt_json =
             json::to_string_pretty(&json::to_value(&receipt).expect("receipt json value"))
                 .expect("receipt json");
-
         println!("{manifest_json}");
         println!("{call_json}");
         println!("{receipt_json}");
     }
-
     #[test]
     fn price_delta_bounds_enforced() {
         let mut baseline = BTreeMap::new();
         baseline.insert("default".parse().unwrap(), sample_pricing());
-
         let mut proposed = baseline.clone();
         proposed.insert(
             "default".parse().unwrap(),
@@ -1612,10 +1511,8 @@ mod tests {
                 unit_label: "cu".to_string(),
             },
         );
-
         let mut risk_classes = BTreeMap::new();
         risk_classes.insert("default".parse().unwrap(), ComputePriceRiskClass::Balanced);
-
         let mut bounds = BTreeMap::new();
         bounds.insert(
             ComputePriceRiskClass::Balanced,
@@ -1624,9 +1521,7 @@ mod tests {
                 max_egress_delta_bps: NonZeroU16::new(2_500).unwrap(),
             },
         );
-
         assert!(validate_price_update(&baseline, &proposed, &risk_classes, &bounds).is_ok());
-
         proposed.insert(
             "default".parse().unwrap(),
             ComputePriceWeights {
@@ -1640,7 +1535,6 @@ mod tests {
             Err(ComputeGovernanceError::CyclesDeltaExceeded { .. })
         ));
     }
-
     #[test]
     fn sponsor_policy_caps_requests() {
         let policy = ComputeSponsorPolicy {

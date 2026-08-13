@@ -5,13 +5,10 @@
 //! configuration overrides in Torii, but the defaults here remain the source of
 //! truth for generic ISO, CBPR+, Fedwire, SEPA SCT Inst, and securities CSD
 //! validation policy.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use norito::json::{self, Value};
 use sha2::{Digest as _, Sha256};
-
 const MAX_ISO4217_MINOR_UNITS: u8 = 4;
 const MAX_PROFILE_DER_BLOBS: usize = 8;
 const MAX_PROFILE_DER_BYTES: usize = 1024 * 1024;
@@ -44,10 +41,8 @@ const MESSAGE_PROFILE_KEYS: &[&str] = &[
     "amount_minor_units",
 ];
 const AMOUNT_MINOR_UNITS_KEYS: &[&str] = &["currency", "minor_units"];
-
 /// Default profile used when Torii configuration does not select a rail.
 pub const DEFAULT_PROFILE_ID: &str = "generic-iso20022";
-
 const DEFAULT_PROFILES_JSON: &str = r#"
 [
   {
@@ -414,7 +409,6 @@ const DEFAULT_PROFILES_JSON: &str = r#"
   }
 ]
 "#;
-
 /// High-level rail family represented by an ISO bridge profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TradfiRail {
@@ -429,7 +423,6 @@ pub enum TradfiRail {
     /// Securities central securities depository settlement profile.
     SecuritiesCsd,
 }
-
 impl TradfiRail {
     /// Parse a stable rail identifier.
     #[must_use]
@@ -443,7 +436,6 @@ impl TradfiRail {
             _ => None,
         }
     }
-
     /// Stable rail identifier.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -456,7 +448,6 @@ impl TradfiRail {
         }
     }
 }
-
 /// Direction in which a profile permits a message to move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MessageDirection {
@@ -467,7 +458,6 @@ pub enum MessageDirection {
     /// Follow-up message that updates the lifecycle of a prior instruction.
     FollowUp,
 }
-
 impl MessageDirection {
     /// Parse a stable direction identifier.
     #[must_use]
@@ -479,7 +469,6 @@ impl MessageDirection {
             _ => None,
         }
     }
-
     /// Stable direction identifier.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -490,7 +479,6 @@ impl MessageDirection {
         }
     }
 }
-
 /// Reference dataset required by a rail profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReferenceDatasetRequirement {
@@ -501,7 +489,6 @@ pub enum ReferenceDatasetRequirement {
     /// MIC directory snapshot.
     MicDirectory,
 }
-
 impl ReferenceDatasetRequirement {
     /// Parse a stable dataset identifier.
     #[must_use]
@@ -513,7 +500,6 @@ impl ReferenceDatasetRequirement {
             _ => None,
         }
     }
-
     /// Stable dataset identifier.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -524,7 +510,6 @@ impl ReferenceDatasetRequirement {
         }
     }
 }
-
 /// Policy for embedded XMLDSig/XAdES blocks inside ISO envelopes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddedSignaturePolicy {
@@ -535,7 +520,6 @@ pub enum EmbeddedSignaturePolicy {
     /// Require a verified signature before accepting the message.
     RequireVerified,
 }
-
 impl EmbeddedSignaturePolicy {
     /// Parse a stable policy identifier.
     #[must_use]
@@ -547,7 +531,6 @@ impl EmbeddedSignaturePolicy {
             _ => None,
         }
     }
-
     /// Stable policy identifier.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -558,7 +541,6 @@ impl EmbeddedSignaturePolicy {
         }
     }
 }
-
 /// Structured postal-address policy applied by a rail profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StructuredAddressMode {
@@ -569,7 +551,6 @@ pub enum StructuredAddressMode {
     /// Reject any unstructured postal address field.
     ForbidUnstructured,
 }
-
 impl StructuredAddressMode {
     /// Parse a stable structured-address mode.
     #[must_use]
@@ -581,7 +562,6 @@ impl StructuredAddressMode {
             _ => None,
         }
     }
-
     /// Stable structured-address mode.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -592,7 +572,6 @@ impl StructuredAddressMode {
         }
     }
 }
-
 /// Message-specific validation profile nested under a rail profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageProfile {
@@ -617,7 +596,6 @@ pub struct MessageProfile {
     /// Currency-specific minor-unit overrides.
     pub amount_minor_units: BTreeMap<String, u8>,
 }
-
 impl MessageProfile {
     /// Returns `true` if `version` is accepted by this profile.
     #[must_use]
@@ -626,7 +604,6 @@ impl MessageProfile {
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(version))
     }
-
     /// Returns `true` if `business_service` is accepted by this profile.
     #[must_use]
     pub fn allows_business_service(&self, business_service: &str) -> bool {
@@ -637,7 +614,6 @@ impl MessageProfile {
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(business_service))
     }
-
     /// Minor units allowed for the currency. Unlisted currencies default to two.
     #[must_use]
     pub fn minor_units_for(&self, currency: &str) -> u8 {
@@ -645,7 +621,6 @@ impl MessageProfile {
         self.amount_minor_units.get(&key).copied().unwrap_or(2)
     }
 }
-
 /// Complete rail profile used by the ISO bridge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TradfiRailProfile {
@@ -676,7 +651,6 @@ pub struct TradfiRailProfile {
     /// Message profiles supported by this rail profile.
     pub message_profiles: Vec<MessageProfile>,
 }
-
 impl TradfiRailProfile {
     /// Find a message profile by type and direction.
     #[must_use]
@@ -690,20 +664,17 @@ impl TradfiRailProfile {
                 && profile.message_type.eq_ignore_ascii_case(message_type)
         })
     }
-
     /// Returns `true` if the profile requires the dataset.
     #[must_use]
     pub fn requires_dataset(&self, dataset: ReferenceDatasetRequirement) -> bool {
         self.required_reference_datasets.contains(&dataset)
     }
-
     /// Returns `true` when this profile has at least one configured XMLDSig trust pin.
     #[must_use]
     pub fn has_xml_signature_trust_anchors(&self) -> bool {
         !self.signature_public_key_sha256_pins.is_empty()
             || !self.x509_trust_anchor_sha256_pins.is_empty()
     }
-
     /// Returns `true` when the verified XMLDSig key material matches this profile's pins.
     #[must_use]
     pub fn accepts_xml_signature_key(
@@ -734,7 +705,6 @@ impl TradfiRailProfile {
             })
     }
 }
-
 fn reject_unknown_keys(
     obj: &BTreeMap<String, Value>,
     allowed: &[&str],
@@ -747,7 +717,6 @@ fn reject_unknown_keys(
     }
     Ok(())
 }
-
 fn reject_sha256_overlap(
     profile_id: &str,
     left_field: &str,
@@ -765,7 +734,6 @@ fn reject_sha256_overlap(
     }
     Ok(())
 }
-
 /// Parse the embedded Norito JSON profile catalog.
 ///
 /// # Panics
@@ -776,7 +744,6 @@ pub fn default_profiles() -> Vec<TradfiRailProfile> {
         .expect("embedded ISO bridge profile catalog must be valid Norito JSON");
     profiles_from_value(&value).expect("embedded ISO bridge profile catalog must be valid")
 }
-
 /// Return the embedded catalog keyed by profile identifier.
 ///
 /// # Panics
@@ -788,7 +755,6 @@ pub fn default_profile_catalog() -> BTreeMap<String, TradfiRailProfile> {
         .map(|profile| (profile.id.clone(), profile))
         .collect()
 }
-
 /// Return one embedded profile by identifier.
 #[must_use]
 pub fn default_profile(id: &str) -> Option<TradfiRailProfile> {
@@ -796,14 +762,12 @@ pub fn default_profile(id: &str) -> Option<TradfiRailProfile> {
         .into_iter()
         .find(|profile| profile.id.eq_ignore_ascii_case(id))
 }
-
 fn profiles_from_value(value: &Value) -> Result<Vec<TradfiRailProfile>, String> {
     let profiles = value
         .as_array()
         .ok_or_else(|| "profile catalog must be an array".to_owned())?;
     profiles.iter().map(profile_from_value).collect()
 }
-
 fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
     let obj = value
         .as_object()
@@ -885,7 +849,6 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
         message_profiles,
     })
 }
-
 fn parse_reference_dataset_requirements(
     profile_id: &str,
     values: Vec<String>,
@@ -909,7 +872,6 @@ fn parse_reference_dataset_requirements(
     }
     Ok(parsed)
 }
-
 fn validate_message_profiles(
     profile_id: &str,
     message_profiles: &[MessageProfile],
@@ -925,7 +887,6 @@ fn validate_message_profiles(
     }
     Ok(())
 }
-
 fn canonical_sha256_pins(values: Vec<String>) -> Result<Vec<String>, String> {
     values
         .into_iter()
@@ -942,7 +903,6 @@ fn canonical_sha256_pins(values: Vec<String>) -> Result<Vec<String>, String> {
         })
         .collect()
 }
-
 fn message_profile_from_value(value: &Value) -> Result<MessageProfile, String> {
     let obj = value
         .as_object()
@@ -977,7 +937,6 @@ fn message_profile_from_value(value: &Value) -> Result<MessageProfile, String> {
         amount_minor_units,
     })
 }
-
 fn validate_versions(message_type: &str, versions: &[String]) -> Result<(), String> {
     if versions.is_empty() {
         return Err(format!(
@@ -1002,7 +961,6 @@ fn validate_versions(message_type: &str, versions: &[String]) -> Result<(), Stri
     }
     Ok(())
 }
-
 fn validate_business_services(
     message_type: &str,
     business_services: &[String],
@@ -1031,7 +989,6 @@ fn validate_business_services(
     }
     Ok(())
 }
-
 fn parse_minor_units(
     value: Option<&Value>,
     message_type: &str,
@@ -1070,13 +1027,11 @@ fn parse_minor_units(
     }
     Ok(out)
 }
-
 fn required_string<'a>(obj: &'a BTreeMap<String, Value>, key: &str) -> Result<&'a str, String> {
     obj.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing string field `{key}`"))
 }
-
 fn required_trimmed_string<'a>(
     obj: &'a BTreeMap<String, Value>,
     key: &str,
@@ -1085,14 +1040,12 @@ fn required_trimmed_string<'a>(
     require_trimmed_non_empty(&format!("field `{key}`"), value)?;
     Ok(value)
 }
-
 fn require_trimmed_non_empty(label: &str, value: &str) -> Result<(), String> {
     if value.is_empty() || value.trim() != value {
         return Err(format!("{label} must be a non-empty trimmed string"));
     }
     Ok(())
 }
-
 fn optional_string_array(obj: &BTreeMap<String, Value>, key: &str) -> Result<Vec<String>, String> {
     let Some(value) = obj.get(key) else {
         return Ok(Vec::new());
@@ -1110,19 +1063,16 @@ fn optional_string_array(obj: &BTreeMap<String, Value>, key: &str) -> Result<Vec
         })
         .collect()
 }
-
 #[derive(Clone, Copy)]
 enum DerMaterialKind {
     Crl,
     OcspResponse,
 }
-
 struct DerElement<'a> {
     tag: u8,
     value: &'a [u8],
     end: usize,
 }
-
 fn optional_der_base64_array(
     obj: &BTreeMap<String, Value>,
     key: &str,
@@ -1157,7 +1107,6 @@ fn optional_der_base64_array(
         )
         .map(|(_, out)| out)
 }
-
 fn decode_profile_der_base64(
     profile_id: &str,
     key: &str,
@@ -1183,7 +1132,6 @@ fn decode_profile_der_base64(
     }
     Ok(der)
 }
-
 fn require_der_sequence(der: &[u8], label: &str) -> Result<(), String> {
     let root = read_der_element(der, 0, label)?;
     if root.tag != 0x30 {
@@ -1194,7 +1142,6 @@ fn require_der_sequence(der: &[u8], label: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn require_crl_der_shape(der: &[u8], label: &str) -> Result<(), String> {
     let root = read_der_element(der, 0, label)?;
     let children = der_children(&root, label)?;
@@ -1207,7 +1154,6 @@ fn require_crl_der_shape(der: &[u8], label: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn require_ocsp_response_der_shape(der: &[u8], label: &str) -> Result<(), String> {
     let root = read_der_element(der, 0, label)?;
     let children = der_children(&root, label)?;
@@ -1235,7 +1181,6 @@ fn require_ocsp_response_der_shape(der: &[u8], label: &str) -> Result<(), String
     require_der_sequence(response_children[1].value, label)?;
     Ok(())
 }
-
 fn der_expect_single<'a>(data: &'a [u8], tag: u8, label: &str) -> Result<DerElement<'a>, String> {
     let element = read_der_element(data, 0, label)?;
     if element.tag != tag || element.end != data.len() {
@@ -1243,7 +1188,6 @@ fn der_expect_single<'a>(data: &'a [u8], tag: u8, label: &str) -> Result<DerElem
     }
     Ok(element)
 }
-
 fn der_children<'a>(element: &DerElement<'a>, label: &str) -> Result<Vec<DerElement<'a>>, String> {
     let mut offset = 0;
     let mut children = Vec::new();
@@ -1254,7 +1198,6 @@ fn der_children<'a>(element: &DerElement<'a>, label: &str) -> Result<Vec<DerElem
     }
     Ok(children)
 }
-
 fn read_der_element<'a>(
     data: &'a [u8],
     offset: usize,
@@ -1303,7 +1246,6 @@ fn read_der_element<'a>(
         end,
     })
 }
-
 fn optional_sha256_pin_array(
     obj: &BTreeMap<String, Value>,
     key: &str,
@@ -1328,7 +1270,6 @@ fn optional_sha256_pin_array(
         })
         .collect()
 }
-
 fn optional_oid_array(
     obj: &BTreeMap<String, Value>,
     key: &str,
@@ -1356,7 +1297,6 @@ fn optional_oid_array(
         })
         .map(|(_, out)| out)
 }
-
 fn is_valid_oid_literal(value: &str) -> bool {
     let mut parts = value.split('.');
     let Some(first) = parts.next() else {
@@ -1383,7 +1323,6 @@ fn is_valid_oid_literal(value: &str) -> bool {
     };
     first_arc <= 2 && (first_arc == 2 || second_arc <= 39)
 }
-
 fn optional_bool(obj: &BTreeMap<String, Value>, key: &str) -> Result<Option<bool>, String> {
     obj.get(key)
         .map(|value| {
@@ -1393,7 +1332,6 @@ fn optional_bool(obj: &BTreeMap<String, Value>, key: &str) -> Result<Option<bool
         })
         .transpose()
 }
-
 fn optional_usize(obj: &BTreeMap<String, Value>, key: &str) -> Result<Option<usize>, String> {
     obj.get(key)
         .map(|value| {
@@ -1404,11 +1342,9 @@ fn optional_usize(obj: &BTreeMap<String, Value>, key: &str) -> Result<Option<usi
         })
         .transpose()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn default_catalog_contains_expected_profiles() {
         let catalog = default_profile_catalog();
@@ -1422,7 +1358,6 @@ mod tests {
             assert!(catalog.contains_key(id), "missing profile {id}");
         }
     }
-
     #[test]
     fn live_profiles_reject_unsupported_embedded_signatures() {
         let catalog = default_profile_catalog();
@@ -1443,7 +1378,6 @@ mod tests {
             "default live profiles must not silently trust XMLDSig keys"
         );
     }
-
     #[test]
     fn xml_signature_sha256_pin_parsers_require_canonical_lowercase() {
         assert!(canonical_sha256_pins(vec!["ab".repeat(32)]).is_ok());
@@ -1455,7 +1389,6 @@ mod tests {
                 "unexpected pin error for {pin:?}: {err}"
             );
         }
-
         let profile_json = format!(
             r#"{{"signature_public_key_sha256_pins":["{}"]}}"#,
             "ab".repeat(32)
@@ -1463,7 +1396,6 @@ mod tests {
         let value: Value = json::from_json(&profile_json).expect("profile pin JSON");
         let obj = value.as_object().expect("profile pin object");
         assert!(optional_sha256_pin_array(obj, "signature_public_key_sha256_pins", "test").is_ok());
-
         for pin in ["AB".repeat(32), format!("{} ", "ab".repeat(32))] {
             let profile_json = format!(r#"{{"x509_trust_anchor_sha256_pins":["{pin}"]}}"#);
             let value: Value = json::from_json(&profile_json).expect("profile pin JSON");
@@ -1476,7 +1408,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn xml_signature_legacy_pin_aliases_are_rejected() {
         let pin = "ab".repeat(32);
@@ -1504,7 +1435,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn xml_signature_current_pin_roles_must_not_overlap() {
         let pin = "ab".repeat(32);
@@ -1546,7 +1476,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn embedded_profile_string_literals_must_be_non_empty_and_trimmed() {
         for (json, key) in [
@@ -1564,13 +1493,11 @@ mod tests {
             assert!(err.contains("non-empty trimmed string"));
         }
     }
-
     #[test]
     fn embedded_profile_der_lists_must_be_non_empty_and_trimmed() {
         const CRL_DER_B64: &str = "MAcwADAAAwEA";
         const OCSP_DER_B64: &str = "MBYKAQCgETAPBgkrBgEFBQcwAQEEAjAA";
         const GENERIC_SEQUENCE_B64: &str = "MAMCAQA=";
-
         let value: Value =
             json::from_json(&format!(r#"{{"x509_crl_der_base64":["{CRL_DER_B64}"]}}"#))
                 .expect("valid CRL list JSON");
@@ -1579,7 +1506,6 @@ mod tests {
             optional_der_base64_array(obj, "x509_crl_der_base64", "signed", DerMaterialKind::Crl)
                 .is_ok()
         );
-
         let value: Value = json::from_json(&format!(
             r#"{{"x509_ocsp_response_der_base64":["{OCSP_DER_B64}"]}}"#
         ))
@@ -1594,7 +1520,6 @@ mod tests {
             )
             .is_ok()
         );
-
         let value: Value =
             json::from_json(r#"{"x509_crl_der_base64":[" MIIB"]}"#).expect("CRL list JSON");
         let obj = value.as_object().expect("CRL list object");
@@ -1602,7 +1527,6 @@ mod tests {
             optional_der_base64_array(obj, "x509_crl_der_base64", "signed", DerMaterialKind::Crl)
                 .expect_err("padded CRL DER base64 entries must fail");
         assert!(err.contains("non-empty trimmed string"));
-
         let value: Value =
             json::from_json(r#"{"x509_ocsp_response_der_base64":[""]}"#).expect("OCSP list JSON");
         let obj = value.as_object().expect("OCSP list object");
@@ -1614,7 +1538,6 @@ mod tests {
         )
         .expect_err("empty OCSP DER base64 entries must fail");
         assert!(err.contains("non-empty trimmed string"));
-
         let value: Value = json::from_json(&format!(
             r#"{{"x509_crl_der_base64":["{GENERIC_SEQUENCE_B64}"]}}"#
         ))
@@ -1627,7 +1550,6 @@ mod tests {
             err.contains("DER X.509 CRLs"),
             "unexpected CRL DER shape error: {err}"
         );
-
         let value: Value = json::from_json(&format!(
             r#"{{"x509_ocsp_response_der_base64":["{GENERIC_SEQUENCE_B64}"]}}"#
         ))
@@ -1644,7 +1566,6 @@ mod tests {
             err.contains("successful DER OCSP responses"),
             "unexpected OCSP DER shape error: {err}"
         );
-
         let value: Value = json::from_json(&format!(
             r#"{{"x509_crl_der_base64":["{CRL_DER_B64}","{CRL_DER_B64}"]}}"#
         ))
@@ -1657,7 +1578,6 @@ mod tests {
             err.contains("duplicate-free"),
             "unexpected duplicate CRL DER error: {err}"
         );
-
         let too_many_crls = vec!["\"not-base64\""; MAX_PROFILE_DER_BLOBS + 1].join(",");
         let value: Value =
             json::from_json(&format!(r#"{{"x509_crl_der_base64":[{too_many_crls}]}}"#))
@@ -1670,7 +1590,6 @@ mod tests {
             err.contains("must not contain more than"),
             "unexpected over-limit CRL DER error: {err}"
         );
-
         let too_many_ocsp = vec!["\"not-base64\""; MAX_PROFILE_DER_BLOBS + 1].join(",");
         let value: Value = json::from_json(&format!(
             r#"{{"x509_ocsp_response_der_base64":[{too_many_ocsp}]}}"#
@@ -1689,7 +1608,6 @@ mod tests {
             "unexpected over-limit OCSP DER error: {err}"
         );
     }
-
     #[test]
     fn embedded_profile_der_parser_rejects_malformed_material() {
         fn assert_der_error(key: &str, kind: DerMaterialKind, der: &[u8], expected: &str) {
@@ -1704,7 +1622,6 @@ mod tests {
                 "unexpected DER error for {key}: {err}"
             );
         }
-
         assert_der_error(
             "x509_crl_der_base64",
             DerMaterialKind::Crl,
@@ -1757,14 +1674,12 @@ mod tests {
             "DER SEQUENCE values",
         );
     }
-
     #[test]
     fn xml_signature_key_pins_accept_terminal_certificate_digest() {
         let mut profile = default_profile("generic-iso20022").expect("profile");
         profile.signature_public_key_sha256_pins = vec!["aa".repeat(32)];
         profile.x509_trust_anchor_sha256_pins = vec!["ee".repeat(32)];
         profile.revoked_certificate_sha256 = vec!["dd".repeat(32)];
-
         assert!(profile.accepts_xml_signature_key(&"aa".repeat(32), &[]));
         assert!(
             profile
@@ -1785,7 +1700,6 @@ mod tests {
                 .accepts_xml_signature_key(&"11".repeat(32), &["bb".repeat(32), "dd".repeat(32)])
         );
     }
-
     #[test]
     fn required_reference_data_is_profile_specific() {
         let catalog = default_profile_catalog();
@@ -1800,7 +1714,6 @@ mod tests {
             catalog["securities-csd"].requires_dataset(ReferenceDatasetRequirement::MicDirectory)
         );
     }
-
     #[test]
     fn reference_dataset_requirements_reject_duplicates() {
         let err = parse_reference_dataset_requirements(
@@ -1809,13 +1722,11 @@ mod tests {
         )
         .expect_err("case-drifted duplicate reference datasets must fail");
         assert!(err.contains("duplicate-free"));
-
         let err =
             parse_reference_dataset_requirements("swift-cbpr-plus", vec![" bic-lei".to_owned()])
                 .expect_err("padded reference dataset requirements must fail");
         assert!(err.contains("non-empty trimmed string"));
     }
-
     #[test]
     fn message_profile_entries_must_be_unique_by_family_and_direction() {
         let profile = MessageProfile {
@@ -1834,7 +1745,6 @@ mod tests {
             .expect_err("duplicate message family/direction entries must fail");
         assert!(err.contains("unique by message_type and direction"));
     }
-
     #[test]
     fn minor_units_default_to_two_with_overrides() {
         let catalog = default_profile_catalog();
@@ -1846,18 +1756,15 @@ mod tests {
         assert_eq!(profile.minor_units_for("KWD"), 3);
         assert_eq!(profile.minor_units_for("XAU"), 2);
     }
-
     #[test]
     fn message_version_allowlists_must_be_explicit_and_trimmed() {
         let err = validate_versions("pacs.008", &[]).expect_err("empty list must fail");
         assert!(err.contains("requires at least one versions entry"));
-
         for version in ["", " ", " pacs.008.001.08", "pacs.008.001.08 "] {
             let err = validate_versions("pacs.008", &[version.to_owned()])
                 .expect_err("blank or padded versions must fail");
             assert!(err.contains("non-empty trimmed strings"));
         }
-
         let err = validate_versions(
             "pacs.008",
             &["pacs.008.001.08".to_owned(), "PACS.008.001.08".to_owned()],
@@ -1865,13 +1772,11 @@ mod tests {
         .expect_err("case-drifted duplicate versions must fail");
         assert!(err.contains("duplicate-free"));
     }
-
     #[test]
     fn required_business_service_profiles_must_have_explicit_allowlists() {
         let err =
             validate_business_services("pacs.008", &[], true).expect_err("empty list must fail");
         assert!(err.contains("requires at least one business_services entry"));
-
         let profile = MessageProfile {
             message_type: "pacs.008".to_owned(),
             direction: MessageDirection::Inbound,
@@ -1889,7 +1794,6 @@ mod tests {
             "required BizSvc profiles must not treat an empty allowlist as a wildcard"
         );
     }
-
     #[test]
     fn business_service_allowlist_entries_must_be_non_empty_and_trimmed() {
         for service in ["", " ", " swift.cbprplus.02", "swift.cbprplus.02 "] {
@@ -1897,7 +1801,6 @@ mod tests {
                 .expect_err("blank or padded service ids must fail");
             assert!(err.contains("non-empty trimmed strings"));
         }
-
         let err = validate_business_services(
             "pacs.008",
             &[
@@ -1909,7 +1812,6 @@ mod tests {
         .expect_err("case-drifted duplicate service ids must fail");
         assert!(err.contains("duplicate-free"));
     }
-
     #[test]
     fn amount_minor_units_reject_duplicate_currency_and_excess_precision() {
         let duplicate: Value = json::from_json(
@@ -1919,20 +1821,17 @@ mod tests {
         let err = parse_minor_units(Some(&duplicate), "pacs.008")
             .expect_err("duplicate normalized currencies must fail");
         assert!(err.contains("duplicate currency `USD`"));
-
         let excessive: Value =
             json::from_json(r#"[{"currency":"USD","minor_units":5}]"#).expect("minor-unit JSON");
         let err = parse_minor_units(Some(&excessive), "pacs.008")
             .expect_err("ISO fiat minor units must be bounded");
         assert!(err.contains("minor_units must be at most 4"));
-
         let padded: Value =
             json::from_json(r#"[{"currency":" USD","minor_units":2}]"#).expect("minor-unit JSON");
         let err = parse_minor_units(Some(&padded), "pacs.008")
             .expect_err("padded minor-unit currency literals must fail");
         assert!(err.contains("non-empty trimmed string"));
     }
-
     #[test]
     fn x509_policy_oid_literals_must_be_trimmed_and_duplicate_free() {
         let padded: Value = json::from_json(
@@ -1943,7 +1842,6 @@ mod tests {
         let err = optional_oid_array(obj, "x509_required_certificate_policy_oids", "signed")
             .expect_err("padded OID literals must fail");
         assert!(err.contains("non-empty trimmed string"));
-
         let duplicate: Value = json::from_json(
             r#"{"x509_required_certificate_policy_oids":["1.3.6.1.4.1.55555.1","1.3.6.1.4.1.55555.1"]}"#,
         )
@@ -1953,7 +1851,6 @@ mod tests {
             .expect_err("duplicate OID literals must fail");
         assert!(err.contains("duplicate-free"));
     }
-
     #[test]
     fn default_catalog_exposes_schema_backed_inbound_messages() {
         let catalog = default_profile_catalog();

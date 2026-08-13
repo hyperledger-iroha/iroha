@@ -1,7 +1,6 @@
 #[test]
 fn drained_internal_ignore_uses_exact_durable_tombstone_before_readmission() {
     const PHASE_INVENTORY: [&str; 2] = ["terminal_ignore", "restart_tombstone"];
-
     let directory = TempDir::new().expect("temporary runtime tombstone directory");
     let (mut runtime, context, _keys) =
         authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
@@ -28,7 +27,6 @@ fn drained_internal_ignore_uses_exact_durable_tombstone_before_readmission() {
             .expect("drain the first ownerless completion"),
         RuntimeStep::Advanced(ref effects) if effects.is_empty()
     ));
-
     let next_ordinal = runtime.ingress.next_admission_ordinal;
     for _ in 0..3 {
         runtime
@@ -39,7 +37,6 @@ fn drained_internal_ignore_uses_exact_durable_tombstone_before_readmission() {
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     let mut suppressed_phases = vec!["terminal_ignore"];
     drop(runtime);
-
     let (mut restarted, restarted_context, _keys) =
         authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
     assert_eq!(restarted_context.id(), context.id());
@@ -61,7 +58,6 @@ fn drained_internal_ignore_uses_exact_durable_tombstone_before_readmission() {
         Some(original_ownership.owner())
     );
     assert_eq!(restarted.ingress.next_admission_ordinal, next_ordinal);
-
     let foreign_ownership = RuntimeEffectOwnership::fresh_for_test(
         restarted_tag,
         original_ownership
@@ -81,7 +77,6 @@ fn drained_internal_ignore_uses_exact_durable_tombstone_before_readmission() {
     suppressed_phases.push("restart_tombstone");
     assert_eq!(suppressed_phases, PHASE_INVENTORY);
 }
-
 #[test]
 fn queued_body_completion_coalesces_only_its_incumbent_owner() {
     let directory = TempDir::new().expect("temporary queued-owner directory");
@@ -98,7 +93,6 @@ fn queued_body_completion_coalesces_only_its_incumbent_owner() {
             .expect("queued body completion has one exact owner"),
     );
     let next_ordinal = runtime.ingress.next_admission_ordinal;
-
     let exact = runtime
         .reserve_body_available_with_owner(tag, manifest.clone(), &incumbent)
         .expect("same-owner queued retry coalesces");
@@ -106,7 +100,6 @@ fn queued_body_completion_coalesces_only_its_incumbent_owner() {
     assert_eq!(exact.lifecycle_owner().as_ref(), Some(incumbent.owner()));
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
-
     let foreign = RuntimeEffectOwnership::fresh_for_test(
         tag,
         incumbent
@@ -123,7 +116,6 @@ fn queued_body_completion_coalesces_only_its_incumbent_owner() {
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     assert!(runtime.fail_closed);
 }
-
 #[test]
 fn same_owner_wrong_stage_cannot_coalesce_a_body_completion() {
     let directory = TempDir::new().expect("temporary wrong-stage owner directory");
@@ -168,7 +160,6 @@ fn same_owner_wrong_stage_cannot_coalesce_a_body_completion() {
     );
     let retained_statement = runtime.ingress.commands[0].candidate_semantic_statement;
     let next_ordinal = runtime.ingress.next_admission_ordinal;
-
     let validate_effect = AdapterEffect::ValidateBody {
         tag,
         round: manifest.round,
@@ -200,7 +191,6 @@ fn same_owner_wrong_stage_cannot_coalesce_a_body_completion() {
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     assert!(runtime.fail_closed);
 }
-
 #[test]
 fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
     let directory = TempDir::new().expect("temporary fetch-completion owner directory");
@@ -225,7 +215,6 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
         .pop()
         .expect("one Fetch owns one candidate")
     };
-
     let incumbent_ordinal = runtime
         .ingress
         .mint_non_fifo_lifecycle_ordinal()
@@ -238,7 +227,6 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
         .commit_body_available(first)
         .expect("publish the first exact completion");
     assert_eq!(runtime.queued_commands(), 1);
-
     let retry_ordinal = runtime
         .ingress
         .mint_non_fifo_lifecycle_ordinal()
@@ -256,7 +244,6 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
     runtime
         .commit_body_available(coalesced_retry)
         .expect("coalesced retry publishes no second completion");
-
     let mut prepare = signed_runtime_quorum_certificate(&context, &keys, 0xA9);
     prepare.phase = wire::GlobalPhase::Prepare;
     prepare.round = manifest.round;
@@ -296,7 +283,6 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
         Some(upgraded_statement),
         "the incumbent owner must retain the strongest admitted authority",
     );
-
     let mut conflicting_prepare = prepare;
     conflicting_prepare.execution_commitment =
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
@@ -332,7 +318,6 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
     );
     assert!(runtime.fail_closed);
 }
-
 #[test]
 fn busy_deferred_store_completion_keeps_incumbent_and_rejects_conflicting_authority() {
     let directory = TempDir::new().expect("temporary deferred-store owner directory");
@@ -368,7 +353,6 @@ fn busy_deferred_store_completion_keeps_incumbent_and_rejects_conflicting_author
     let incumbent_statement = incumbent_store
         .candidate_semantic_statement()
         .expect("ordinary Store carries its exact body statement");
-
     let deferred_before = runtime.driver.all_deferred_admission_ordinals();
     runtime
         .driver
@@ -404,7 +388,6 @@ fn busy_deferred_store_completion_keeps_incumbent_and_rejects_conflicting_author
             .insert(*deferred_ordinal, deferred)
             .is_none()
     );
-
     let evidence = BodyPipelineCompletionEvidence::BodyStored {
         round: manifest.round,
         subject: manifest.subject,
@@ -416,7 +399,6 @@ fn busy_deferred_store_completion_keeps_incumbent_and_rejects_conflicting_author
             .deferred_body_pipeline_completion_exact_owner_ordinals(tag, &evidence),
         vec![*deferred_ordinal],
     );
-
     let mut prepare = signed_runtime_quorum_certificate(&context, &keys, 0xAB);
     prepare.phase = wire::GlobalPhase::Prepare;
     prepare.round = manifest.round;
@@ -448,7 +430,6 @@ fn busy_deferred_store_completion_keeps_incumbent_and_rejects_conflicting_author
         .candidate_semantic_statement()
         .expect("certified Store retains its Prepare statement");
     assert_ne!(upgraded_store.owner(), incumbent_store.owner());
-
     runtime
         .enqueue_body_stored_with_owner(
             tag,
@@ -475,7 +456,6 @@ fn busy_deferred_store_completion_keeps_incumbent_and_rejects_conflicting_author
     );
     assert!(retained.validate_exact());
     assert!(!runtime.fail_closed);
-
     let mut conflicting_prepare = prepare;
     conflicting_prepare.execution_commitment =
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
@@ -538,7 +518,6 @@ fn busy_deferred_store_completion_keeps_incumbent_and_rejects_conflicting_author
     assert!(retained.validate_exact());
     assert!(runtime.fail_closed);
 }
-
 #[test]
 fn owned_validation_batch_refines_authority_only_after_atomic_commit() {
     let directory = TempDir::new().expect("temporary owned validation batch directory");
@@ -580,7 +559,6 @@ fn owned_validation_batch_refines_authority_only_after_atomic_commit() {
         runtime.ingress.commands[0].candidate_semantic_statement,
         Some(incumbent_statement),
     );
-
     let mut prepare = signed_runtime_quorum_certificate(&context, &keys, 0xAD);
     prepare.phase = wire::GlobalPhase::Prepare;
     prepare.round = incumbent_manifest.round;
@@ -611,7 +589,6 @@ fn owned_validation_batch_refines_authority_only_after_atomic_commit() {
     let upgraded_statement = upgraded_validate
         .candidate_semantic_statement()
         .expect("certified Validate retains its Prepare statement");
-
     let mut batch = vec![(
         tag,
         incumbent_manifest.round,
@@ -656,7 +633,6 @@ fn owned_validation_batch_refines_authority_only_after_atomic_commit() {
         "a rejected batch cannot strengthen an earlier coalesced member",
     );
     assert!(!runtime.fail_closed);
-
     runtime
         .enqueue_validation_failures_atomically_with_owners(&batch[..2])
         .expect("a fitting batch atomically refines and publishes its vacant member");
@@ -698,7 +674,6 @@ fn owned_validation_batch_refines_authority_only_after_atomic_commit() {
     );
     assert!(!runtime.fail_closed);
 }
-
 #[test]
 fn stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal() {
     let stale_directory = TempDir::new().expect("temporary stale internal-callback directory");
@@ -718,7 +693,6 @@ fn stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordin
     assert_eq!(runtime.queued_commands(), 0);
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
     drop(runtime);
-
     let (mut restarted, restarted_context, _keys) =
         authenticated_network_runtime(&stale_directory, RuntimeQueueConfig::new(8, 1, 1));
     assert_eq!(restarted_context.id(), context.id());
@@ -728,7 +702,6 @@ fn stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordin
         .expect("stale discard did not create a current-incarnation tombstone");
     assert_eq!(restarted.queued_commands(), 1);
     assert_ne!(restarted.ingress.next_admission_ordinal, next_ordinal);
-
     let malformed_directory =
         TempDir::new().expect("temporary malformed internal-callback directory");
     let (mut malformed_runtime, malformed_context, _keys) =
@@ -749,7 +722,6 @@ fn stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordin
     );
     assert!(malformed_runtime.fail_closed);
 }
-
 #[test]
 fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_duplicates() {
     let directory = TempDir::new().expect("temporary body-pipeline retirement directory");
@@ -784,7 +756,6 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
         validation: 0,
         local_proposal: 0,
     };
-
     let dormant_manifest = runtime_manifest(&context, 0xA0);
     let dormant_lifecycle_key = Hash::new(b"bulk-retired dormant body lifecycle");
     let dormant_lifecycle_ordinal = runtime
@@ -880,7 +851,6 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
         capacity_before_dormant,
         "repeated retirement cannot reacquire or release capacity",
     );
-
     let ingress_manifest = runtime_manifest(&context, 0xA1);
     let (durable, validated) = receipts(&ingress_manifest);
     stage_completion_for_queue_test(
@@ -920,7 +890,6 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
             .expect("retire ingress body pipeline"),
         three_stages
     );
-
     let ingress_failure_manifest = runtime_manifest(&context, 0xA2);
     runtime
         .enqueue_validation_failed(
@@ -939,7 +908,6 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
             .expect("retire ingress validation failure"),
         validation_only
     );
-
     let deferred_manifest = runtime_manifest(&context, 0xB1);
     for stage in [
         DeferredBodyPipelineStageForTest::BodyStored,
@@ -961,7 +929,6 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
             .expect("retire Busy-deferred body pipeline"),
         three_stages
     );
-
     let deferred_failure_manifest = runtime_manifest(&context, 0xB2);
     runtime
         .driver
@@ -981,7 +948,6 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
             .expect("retire Busy-deferred validation failure"),
         validation_only
     );
-
     let duplicate_body_stored = runtime_manifest(&context, 0xC1);
     let (durable, _) = receipts(&duplicate_body_stored);
     stage_completion_for_queue_test(
@@ -1072,7 +1038,6 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
         runtime.step(Instant::now()),
         Err(RuntimeError::FailClosed)
     ));
-
     let duplicate_directory =
         TempDir::new().expect("temporary duplicate dormant-body retirement directory");
     let (mut duplicate_runtime, duplicate_context, _keys) =
@@ -1171,7 +1136,6 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
         "duplicate preflight must preserve the complete capacity charge",
     );
 }
-
 #[test]
 fn pre_dequeue_probe_validates_unfrozen_leader_wire_identity() {
     let directory = TempDir::new().expect("temporary pre-dequeue probe directory");
@@ -1196,7 +1160,6 @@ fn pre_dequeue_probe_validates_unfrozen_leader_wire_identity() {
             .is_ok_and(|receipt| receipt.is_some())
     );
 }
-
 #[test]
 fn periodic_retransmit_cannot_starve_admitted_work_when_every_step_arrives_late() {
     let start = Instant::now();
@@ -1215,15 +1178,12 @@ fn periodic_retransmit_cannot_starve_admitted_work_when_every_step_arrives_late(
         )
         .unwrap();
     }
-
     for seconds in [2, 4, 6, 8] {
         let _ = runtime
             .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(seconds));
     }
-
     assert_eq!(runtime.driver.retransmits, vec![initial, initial]);
     assert_eq!(runtime.driver.delivered, vec![(initial, 1), (initial, 2)]);
-
     // Drain a periodic episode and the one-shot timeout before admitting
     // a new target. Every later runner entry is again exactly one whole
     // retransmit interval late. The drained timer's dormant semantic key
@@ -1248,7 +1208,6 @@ fn periodic_retransmit_cannot_starve_admitted_work_when_every_step_arrives_late(
         FakeCommand::record(9),
     )
     .expect("admit work after the old periodic owner drained");
-
     post_timeout
         .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(12))
         .expect("the admitted target precedes the fresh periodic episode");
@@ -1263,7 +1222,6 @@ fn periodic_retransmit_cannot_starve_admitted_work_when_every_step_arrives_late(
         .expect("the freshly positioned periodic episode follows the target");
     assert_eq!(post_timeout.driver.retransmits, vec![initial, initial]);
 }
-
 #[test]
 fn periodic_delay_is_bounded_and_absolute_timeout_has_priority() {
     let start = Instant::now();
@@ -1280,14 +1238,12 @@ fn periodic_delay_is_bounded_and_absolute_timeout_has_priority() {
         FakeCommand::record(7),
     )
     .unwrap();
-
     runtime
         .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(2))
         .expect("periodic retransmission gets one prompt bounded turn");
     assert!(runtime.driver.delivered.is_empty());
     assert_eq!(runtime.driver.retransmits, vec![initial]);
     assert!(runtime.driver.timeouts.is_empty());
-
     runtime
         .step(start + Duration::from_secs(2))
         .expect("FIFO debt runs immediately after the periodic turn");
@@ -1301,7 +1257,6 @@ fn periodic_delay_is_bounded_and_absolute_timeout_has_priority() {
     assert_eq!(runtime.driver.delivered, vec![(initial, 7)]);
     assert_eq!(runtime.driver.retransmits, vec![initial]);
     assert!(runtime.driver.timeouts.is_empty());
-
     runtime
         .step(start + Duration::from_secs(10))
         .expect("absolute timeout preempts every replenished periodic owner");
@@ -1319,7 +1274,6 @@ fn periodic_delay_is_bounded_and_absolute_timeout_has_priority() {
         "the absolute deadline cannot replenish a periodic owner ahead of timeout"
     );
 }
-
 #[test]
 fn due_timeout_becomes_older_than_replenished_exact_serve_tickets() {
     let start = Instant::now();
@@ -1338,7 +1292,6 @@ fn due_timeout_becomes_older_than_replenished_exact_serve_tickets() {
     runtime
         .arm_live_clocks(start)
         .expect("arm shared-source runtime");
-
     let first_barrier = lifecycle_ordinals
         .reserve_one()
         .expect("reserve first exact Serve occurrence");
@@ -1348,7 +1301,6 @@ fn due_timeout_becomes_older_than_replenished_exact_serve_tickets() {
             .expect("first barrier freezes the due timeout"),
         "a clock first frozen behind this ticket cannot overtake it"
     );
-
     let second_barrier = lifecycle_ordinals
         .reserve_one()
         .expect("reserve a distinct retransmission occurrence");
@@ -1363,7 +1315,6 @@ fn due_timeout_becomes_older_than_replenished_exact_serve_tickets() {
         .expect("one bounded predecessor episode dispatches the timeout");
     assert_eq!(runtime.driver.timeouts, vec![initial]);
 }
-
 #[test]
 fn restored_serve_high_watermark_precedes_startup_runtime_owner() {
     let start = Instant::now();
@@ -1389,7 +1340,6 @@ fn restored_serve_high_watermark_precedes_startup_runtime_owner() {
         43
     );
 }
-
 #[test]
 fn full_runtime_churn_cannot_cross_an_exact_serve_ordinal() {
     let start = Instant::now();
@@ -1427,7 +1377,6 @@ fn full_runtime_churn_cannot_cross_an_exact_serve_ordinal() {
         )
         .expect("fill only the later normal prefix");
     }
-
     assert!(
         runtime
             .older_lifecycle_predates_exact_serve(start, barrier)
@@ -1444,7 +1393,6 @@ fn full_runtime_churn_cannot_cross_an_exact_serve_ordinal() {
             .expect("later churn remains behind the exact ticket")
     );
 }
-
 #[test]
 fn network_admission_uses_exact_normal_and_progress_reservations() {
     let start = Instant::now();
@@ -1552,7 +1500,6 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
     assert!(runtime.can_admit_network_payload(&timeout_vote));
     assert!(runtime.can_admit_network_payload(&timeout_certificate));
     assert!(runtime.can_admit_network_payload(&commit_response));
-
     enqueue_fake(
         &mut runtime,
         initial,
@@ -1578,7 +1525,6 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
         "TimeoutVote can use the reserved progress slot"
     );
     assert!(runtime.can_admit_network_payload(&commit_response));
-
     enqueue_fake(
         &mut runtime,
         initial,
@@ -1606,7 +1552,6 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
         runtime.can_admit_network_payload(&commit_response),
         "a CommitQC recovery response owns the final physical certified-fence slot"
     );
-
     let transport = wire::ConsensusMessageV2Payload::PayloadManifest(wire::PayloadManifest {
         round,
         subject,
@@ -1624,7 +1569,6 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
     });
     assert!(runtime.can_admit_network_payload(&transport));
 }
-
 #[test]
 fn stale_completion_retains_tag_and_precedes_a_later_due_retransmit() {
     let start = Instant::now();
@@ -1657,7 +1601,6 @@ fn stale_completion_retains_tag_and_precedes_a_later_due_retransmit() {
     runtime
         .take_effect_ownership(1)
         .expect("consume the completion effect owner before the next turn");
-
     // The retransmit lifecycle was frozen when it first became due, so it
     // owns the next turn after the older completion drains.
     runtime
@@ -1672,7 +1615,6 @@ fn stale_completion_retains_tag_and_precedes_a_later_due_retransmit() {
         RuntimeSelectedOwnerKind::PeriodicTimer
     );
 }
-
 #[test]
 fn only_enter_view_effect_restarts_both_clocks() {
     let start = Instant::now();
@@ -1683,7 +1625,6 @@ fn only_enter_view_effect_restarts_both_clocks() {
         start,
         RuntimeQueueConfig::new(8, 2, 2),
     );
-
     enqueue_fake(
         &mut runtime,
         initial,
@@ -1693,7 +1634,6 @@ fn only_enter_view_effect_restarts_both_clocks() {
     .unwrap();
     let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(1));
     assert_eq!(runtime.round_tag(), initial);
-
     enqueue_fake(
         &mut runtime,
         initial,
@@ -1724,7 +1664,6 @@ fn only_enter_view_effect_restarts_both_clocks() {
     ));
     assert_eq!(runtime.round_timeout(), Duration::from_secs(20));
     assert_eq!(runtime.watchdog_threshold(), Duration::from_secs(22));
-
     assert!(matches!(
         runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10)),
         Ok(RuntimeStep::Idle)
@@ -1736,7 +1675,6 @@ fn only_enter_view_effect_restarts_both_clocks() {
     let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(29));
     assert_eq!(runtime.driver.timeouts, vec![next]);
 }
-
 #[test]
 fn startup_enter_view_effect_restarts_clocks_and_is_returned_unchanged() {
     let start = Instant::now();
@@ -1781,7 +1719,6 @@ fn startup_enter_view_effect_restarts_clocks_and_is_returned_unchanged() {
     let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(120));
     assert_eq!(runtime.driver.timeouts, vec![next]);
 }
-
 #[test]
 fn interrupted_tip_recovery_drains_ingress_without_arming_live_timers() {
     let start = Instant::now();
@@ -1801,7 +1738,6 @@ fn interrupted_tip_recovery_drains_ingress_without_arming_live_timers() {
         FakeCommand::record(7),
     )
     .expect("queue local recovery completion");
-
     assert!(matches!(
         runtime.step_recovery_and_take_scheduler_ownership_for_test(
             start + Duration::from_secs(1_000)
@@ -1818,7 +1754,6 @@ fn interrupted_tip_recovery_drains_ingress_without_arming_live_timers() {
         Ok(RuntimeStep::Idle)
     ));
 }
-
 #[test]
 fn interrupted_tip_recovery_is_rejected_after_live_clock_arm() {
     let start = Instant::now();
@@ -1828,13 +1763,11 @@ fn interrupted_tip_recovery_is_rejected_after_live_clock_arm() {
         start,
         RuntimeQueueConfig::new(8, 2, 2),
     );
-
     assert!(matches!(
         runtime.step_recovery(start),
         Err(RuntimeError::RecoveryAfterClocksArmed)
     ));
 }
-
 #[test]
 fn adapter_failure_closes_runtime_permanently() {
     let start = Instant::now();
@@ -1866,7 +1799,6 @@ fn adapter_failure_closes_runtime_permanently() {
         "the generic closed guard cannot replace the driver root cause"
     );
 }
-
 #[test]
 fn invalid_configuration_is_rejected() {
     let start = Instant::now();
@@ -1882,20 +1814,17 @@ fn invalid_configuration_is_rejected() {
         result,
         Err(RuntimeConfigError::InvalidRoundTimeout)
     ));
-
     let invalid_queue = RuntimeQueueConfig::new(3, 1, 1).validate();
     assert_eq!(
         invalid_queue,
         Err(RuntimeConfigError::InvalidQueueAllocation)
     );
 }
-
 #[test]
 fn queue_configuration_excludes_one_certified_credit_from_ordinary_limits() {
     let config = RuntimeQueueConfig::new(8, 2, 2)
         .validate()
         .expect("C=8, P=2, K=2 leaves a distinct certified credit");
-
     assert_eq!(config.normal_limit(), 3);
     assert_eq!(config.progress_limit(), 5);
     assert_eq!(config.ordinary_total_limit(), 7);

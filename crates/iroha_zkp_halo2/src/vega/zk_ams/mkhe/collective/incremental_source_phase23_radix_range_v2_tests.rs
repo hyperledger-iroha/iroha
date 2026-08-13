@@ -1,13 +1,10 @@
 use super::*;
-
 const PRODUCTION_SOURCE_V2: &str = include_str!("incremental_source_phase23_radix_range_v2.rs");
 const TEST_SOURCE_V2: &str = include_str!("incremental_source_phase23_radix_range_v2_tests.rs");
 const PARENT_SOURCE_V2: &str = include_str!("incremental_source_phase23.rs");
-
 fn exact_transcript_manifest_v2() -> Vec<u8> {
     encode_transcript_frames_v2(&RADIX_RANGE_TRANSCRIPT_FRAMES_V2)
 }
-
 fn encode_transcript_frames_v2(frames: &[&[u8]]) -> Vec<u8> {
     let mut encoded = Vec::new();
     for (ordinal, frame) in frames.iter().enumerate() {
@@ -17,7 +14,6 @@ fn encode_transcript_frames_v2(frames: &[&[u8]]) -> Vec<u8> {
     }
     encoded
 }
-
 #[test]
 fn exact_topology_formulas_and_coordinates_are_frozen() {
     assert_eq!(RADIX_RECORDS_V2, 43);
@@ -56,7 +52,6 @@ fn exact_topology_formulas_and_coordinates_are_frozen() {
         LOOKUP_FORMULA_V2,
         b"reject until z notin [0,32767];then U_D,U_S=(z-A)^-1;absorb Dinv then Sinv"
     );
-
     let family_boundaries = [(0, 1), (1, 2), (17, 3), (33, 4), (34, 5), (42, 6)];
     for (ordinal, family) in family_boundaries {
         assert_eq!(
@@ -71,7 +66,6 @@ fn exact_topology_formulas_and_coordinates_are_frozen() {
     assert_eq!(first.coefficient, 0);
     assert_eq!(first.source_index, 0);
     assert_eq!(first.packing_index, 0);
-
     let transposed = source_coordinate_v2(0, 0, 1, 2).unwrap();
     assert_eq!(transposed.source_index, 258);
     assert_eq!(transposed.packing_index, 129);
@@ -82,7 +76,6 @@ fn exact_topology_formulas_and_coordinates_are_frozen() {
     assert!(source_coordinate_v2(0, 8, 0, 0).is_err());
     assert!(source_coordinate_v2(0, 0, 64, 0).is_err());
     assert!(source_coordinate_v2(0, 0, 0, 256).is_err());
-
     let order = core::array::from_fn(|index| index as u16);
     let exact = topology_digest_for_record_order_v2(&order).unwrap();
     assert_eq!(exact, exact_topology_digest_v2().unwrap());
@@ -95,7 +88,6 @@ fn exact_topology_formulas_and_coordinates_are_frozen() {
     swapped[1] = 1;
     assert!(topology_digest_for_record_order_v2(&swapped).is_err());
 }
-
 #[test]
 fn exact_wire_work_io_heap_and_soundness_equations_are_planning_only() {
     let wire_components = [
@@ -125,7 +117,6 @@ fn exact_wire_work_io_heap_and_soundness_equations_are_planning_only() {
     assert_eq!(RADIX_Q_PCS_COMBINED_WIRE_BYTES_V2, 31_395_509);
     assert_eq!(RADIX_Q_PCS_COMBINED_CAP_BYTES_V2, 33_554_432);
     assert_eq!(RADIX_Q_PCS_COMBINED_MARGIN_BYTES_V2, 2_158_923);
-
     assert_eq!(RADIX_DIGIT_SLACK_EMISSIONS_V2, 191_627_264);
     assert_eq!(RADIX_BATCH_INVERSIONS_MAX_V2, 344 * 17);
     assert_eq!(RADIX_INVERSE_PASS_MULTIPLICATIONS_V2, 574_881_792);
@@ -137,7 +128,6 @@ fn exact_wire_work_io_heap_and_soundness_equations_are_planning_only() {
     assert_eq!(RADIX_COMMITTED_IPA_VECTOR_LENGTH_V2, 2_048);
     assert_eq!(RADIX_TABLE_IPAS_V2, 1);
     assert_eq!(RADIX_TABLE_IPA_VECTOR_LENGTH_V2, 32_768);
-
     assert_eq!(RADIX_EXTERNAL_IO_BYTES_V2, 26_846_528_789);
     assert_eq!(RADIX_CONFIDENTIAL_SCRATCH_BYTES_V2, 6_836_977_664);
     assert_eq!(RADIX_SOURCE_PUBLICATION_BYTES_V2, 7_152_600_416);
@@ -149,7 +139,6 @@ fn exact_wire_work_io_heap_and_soundness_equations_are_planning_only() {
     assert_eq!(RADIX_Q_PCS_OVERLAP_HEAP_BYTES_V2, 140_727_449);
     assert_eq!(RADIX_Q_PCS_HEAP_CEILING_BYTES_V2, 167_772_160);
     assert_eq!(RADIX_Q_PCS_HEAP_MARGIN_BYTES_V2, 27_044_711);
-
     let modulus = VEGA_T256_SCALAR_MODULUS_BE_V1
         .iter()
         .fold(0.0_f64, |value, byte| value * 256.0 + f64::from(*byte));
@@ -171,13 +160,11 @@ fn exact_wire_work_io_heap_and_soundness_equations_are_planning_only() {
         b"planning-only:no-proof:no-authority:no-RSS:no-release"
     );
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TinyRadix {
     low: [u8; 3],
     top: u8,
 }
-
 fn tiny_decompose_v2(mut value: u16) -> TinyRadix {
     let low = core::array::from_fn(|_| {
         let digit = (value % 4) as u8;
@@ -189,7 +176,6 @@ fn tiny_decompose_v2(mut value: u16) -> TinyRadix {
         top: value as u8,
     }
 }
-
 fn tiny_reconstruct_v2(radix: TinyRadix) -> Option<u16> {
     if radix.top > 1 || radix.low.iter().any(|digit| *digit >= 4) {
         return None;
@@ -201,7 +187,6 @@ fn tiny_reconstruct_v2(radix: TinyRadix) -> Option<u16> {
             + 64 * u16::from(radix.top),
     )
 }
-
 fn tiny_canonical_relation_v2(value: u16, d: TinyRadix, s: TinyRadix) -> bool {
     match (tiny_reconstruct_v2(d), tiny_reconstruct_v2(s)) {
         (Some(d_value), Some(s_value)) => {
@@ -210,7 +195,6 @@ fn tiny_canonical_relation_v2(value: u16, d: TinyRadix, s: TinyRadix) -> bool {
         _ => false,
     }
 }
-
 #[test]
 fn independent_tiny_canonical_radix_kat_rejects_overflow_high_bits() {
     let kats = [
@@ -303,7 +287,6 @@ fn independent_tiny_canonical_radix_kat_rejects_overflow_high_bits() {
         tiny_decompose_v2(112)
     ));
 }
-
 fn tiny_mod_pow_v2(mut base: u16, mut exponent: u16) -> u16 {
     let mut result = 1_u16;
     while exponent != 0 {
@@ -315,13 +298,11 @@ fn tiny_mod_pow_v2(mut base: u16, mut exponent: u16) -> u16 {
     }
     result
 }
-
 fn tiny_lookup_side_v2(values: &[u16], z: u16) -> u16 {
     values.iter().fold(0_u16, |sum, value| {
         (sum + tiny_mod_pow_v2((z + 113 - value) % 113, 111)) % 113
     })
 }
-
 fn tiny_table_side_v2(multiplicities: &[u16; 4], z: u16) -> u16 {
     multiplicities
         .iter()
@@ -331,7 +312,6 @@ fn tiny_table_side_v2(multiplicities: &[u16; 4], z: u16) -> u16 {
             (sum + multiplicity * inverse) % 113
         })
 }
-
 #[test]
 fn independent_log_derivative_lookup_kat_detects_a_replacement() {
     let table_side = tiny_table_side_v2(&[1, 2, 0, 1], 7);
@@ -340,7 +320,6 @@ fn independent_log_derivative_lookup_kat_detects_a_replacement() {
     assert_eq!(tiny_lookup_side_v2(&[0, 3, 1, 4], 7), 13);
     assert_ne!(tiny_lookup_side_v2(&[0, 3, 1, 4], 7), table_side);
 }
-
 fn tiny_packing_transpose_v2(source: &[u16], blocks: usize, width: usize) -> Vec<u16> {
     let mut packed = Vec::with_capacity(source.len());
     for coefficient in 0..width {
@@ -350,13 +329,11 @@ fn tiny_packing_transpose_v2(source: &[u16], blocks: usize, width: usize) -> Vec
     }
     packed
 }
-
 #[test]
 fn independent_packing_transpose_oracle_detects_coordinate_and_order_mutations() {
     let source = [0_u16, 1, 2, 3, 4, 5];
     assert_eq!(tiny_packing_transpose_v2(&source, 2, 3), [0, 3, 1, 4, 2, 5]);
     assert_ne!(tiny_packing_transpose_v2(&source, 3, 2), [0, 3, 1, 4, 2, 5]);
-
     let exact = source_coordinate_v2(0, 0, 1, 2).unwrap();
     let swapped_coordinate = source_coordinate_v2(0, 0, 2, 1).unwrap();
     assert_ne!(exact.source_index, swapped_coordinate.source_index);
@@ -364,7 +341,6 @@ fn independent_packing_transpose_oracle_detects_coordinate_and_order_mutations()
     let next_group = source_coordinate_v2(0, 1, 1, 2).unwrap();
     assert_eq!(next_group.source_index - exact.source_index, 16_384);
     assert_eq!(next_group.packing_index - exact.packing_index, 16_384);
-
     let order = core::array::from_fn(|index| index as u16);
     let exact_digest = topology_digest_for_record_order_v2(&order).unwrap();
     let mut reordered = order;
@@ -374,40 +350,33 @@ fn independent_packing_transpose_oracle_detects_coordinate_and_order_mutations()
         exact_digest
     );
 }
-
 #[test]
 fn transcript_manifest_rejects_splice_missing_extra_noncanonical_and_trailing_frames() {
     let exact = exact_transcript_manifest_v2();
     let digest = require_exact_transcript_manifest_v2(&exact).unwrap();
     assert_ne!(digest, [0; 32]);
-
     let mut spliced_frames = RADIX_RANGE_TRANSCRIPT_FRAMES_V2.to_vec();
     spliced_frames.swap(14, 15);
     assert!(
         require_exact_transcript_manifest_v2(&encode_transcript_frames_v2(&spliced_frames))
             .is_err()
     );
-
     let missing = encode_transcript_frames_v2(&RADIX_RANGE_TRANSCRIPT_FRAMES_V2[..31]);
     assert!(require_exact_transcript_manifest_v2(&missing).is_err());
-
     let mut extra_frames = RADIX_RANGE_TRANSCRIPT_FRAMES_V2.to_vec();
     extra_frames.push(b"extra");
     assert!(
         require_exact_transcript_manifest_v2(&encode_transcript_frames_v2(&extra_frames)).is_err()
     );
-
     let mut noncanonical_ordinal = exact.clone();
     noncanonical_ordinal[1] = 1;
     assert!(require_exact_transcript_manifest_v2(&noncanonical_ordinal).is_err());
     let mut noncanonical_length = exact.clone();
     noncanonical_length[3] += 1;
     assert!(require_exact_transcript_manifest_v2(&noncanonical_length).is_err());
-
     let mut trailing = exact;
     trailing.push(0);
     assert!(require_exact_transcript_manifest_v2(&trailing).is_err());
-
     assert_eq!(
         &RADIX_RANGE_TRANSCRIPT_FRAMES_V2[4..12],
         &[
@@ -463,7 +432,6 @@ fn transcript_manifest_rejects_splice_missing_extra_noncanonical_and_trailing_fr
             .iter()
             .any(|frame| *frame == b"lookup-U")
     );
-
     for inverse in [d_inverse, s_inverse] {
         let mut before_z = RADIX_RANGE_TRANSCRIPT_FRAMES_V2.to_vec();
         before_z.swap(z, inverse);
@@ -498,7 +466,6 @@ fn transcript_manifest_rejects_splice_missing_extra_noncanonical_and_trailing_fr
         require_exact_transcript_manifest_v2(&encode_transcript_frames_v2(&independent_u)).is_err()
     );
 }
-
 fn test_ingress_v2() -> RadixRangeIngressV2 {
     RadixRangeIngressV2::begin_v2(
         RadixRangeSourceSealV2::TestOnly,
@@ -507,25 +474,21 @@ fn test_ingress_v2() -> RadixRangeIngressV2 {
         RadixRangeZkSealV2::TestOnly,
     )
 }
-
 #[test]
 fn typestate_poison_error_unwind_zeroization_privacy_and_source_guards_hold() {
     ZEROIZED_TRANSIENT_DROPS_V2.store(0, Ordering::SeqCst);
     assert!(test_ingress_v2().check_v2(&[]).is_err());
     assert_eq!(ZEROIZED_TRANSIENT_DROPS_V2.load(Ordering::SeqCst), 1);
-
     let mut poisoned = test_ingress_v2();
     let live = poisoned.live.take().unwrap();
     drop(live);
     assert!(poisoned.check_v2(&exact_transcript_manifest_v2()).is_err());
     assert_eq!(ZEROIZED_TRANSIENT_DROPS_V2.load(Ordering::SeqCst), 2);
-
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         test_ingress_v2().force_unwind_after_take_v2()
     }));
     assert!(unwind.is_err());
     assert_eq!(ZEROIZED_TRANSIENT_DROPS_V2.load(Ordering::SeqCst), 3);
-
     let prerequisite = consume_phase23_radix_range_static_prerequisite_v2(
         RadixRangeSourceSealV2::TestOnly,
         RadixRangeReplaySealV2::TestOnly,
@@ -553,7 +516,6 @@ fn typestate_poison_error_unwind_zeroization_privacy_and_source_guards_hold() {
     assert!(!prerequisite.record.release_complete);
     drop(prerequisite);
     assert_eq!(ZEROIZED_TRANSIENT_DROPS_V2.load(Ordering::SeqCst), 4);
-
     for impossible in [
         "source_algebra: Infallible",
         "authenticated_replay: Infallible",
@@ -610,7 +572,6 @@ fn typestate_poison_error_unwind_zeroization_privacy_and_source_guards_hold() {
     assert!(PARENT_SOURCE_V2.contains("mod radix_range_v2;"));
     assert!(!PARENT_SOURCE_V2.contains("pub mod radix_range_v2;"));
 }
-
 #[test]
 fn source_and_test_files_remain_within_the_scoped_budgets() {
     assert!(PRODUCTION_SOURCE_V2.lines().count() <= 1_200);

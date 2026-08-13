@@ -2,13 +2,10 @@ use std::{
     io::{BufWriter, Write},
     path::PathBuf,
 };
-
 use clap::{Parser, ValueEnum};
 use color_eyre::eyre::eyre;
 use iroha_genesis::{NormalizedGenesis, RawGenesisTransaction};
-
 use crate::{Outcome, RunArgs, tui};
-
 /// Show the fully expanded genesis block (after injections and ordering).
 #[derive(Clone, Debug, Parser)]
 pub struct Args {
@@ -18,29 +15,24 @@ pub struct Args {
     #[clap(long, value_enum, default_value = "json")]
     format: OutputFormat,
 }
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum OutputFormat {
     Json,
     Text,
 }
-
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Normalizing genesis manifest");
         let manifest = RawGenesisTransaction::from_path(&self.genesis_file)?;
         let normalized = manifest.normalize()?;
-
         match self.format {
             OutputFormat::Json => render_json(&normalized, writer)?,
             OutputFormat::Text => render_text(&normalized, writer)?,
         }
-
         tui::success("Genesis manifest normalized");
         Ok(())
     }
 }
-
 fn render_json<T: Write>(
     normalized: &NormalizedGenesis,
     writer: &mut BufWriter<T>,
@@ -82,7 +74,6 @@ fn render_json<T: Write>(
     write_json_value(writer, &normalized.crypto)?;
     writeln!(writer, ",")?;
     writeln!(writer, "  \"transactions\": [")?;
-
     for (tx_idx, instructions) in normalized.transactions.iter().enumerate() {
         writeln!(writer, "    {{")?;
         writeln!(writer, "      \"index\": {tx_idx},")?;
@@ -108,7 +99,6 @@ fn render_json<T: Write>(
     writeln!(writer, "}}")?;
     Ok(())
 }
-
 fn write_json_value<T: norito::json::JsonSerialize + ?Sized, W: Write>(
     writer: &mut BufWriter<W>,
     value: &T,
@@ -118,7 +108,6 @@ fn write_json_value<T: norito::json::JsonSerialize + ?Sized, W: Write>(
     writer.write_all(json.as_bytes())?;
     Ok(())
 }
-
 fn render_text<T: Write>(
     normalized: &NormalizedGenesis,
     writer: &mut BufWriter<T>,
@@ -154,7 +143,6 @@ fn render_text<T: Write>(
         "crypto.allowed_signing: {:?}",
         normalized.crypto.allowed_signing
     )?;
-
     for (tx_idx, instructions) in normalized.transactions.iter().enumerate() {
         writeln!(
             writer,
@@ -168,20 +156,15 @@ fn render_text<T: Write>(
             writeln!(writer, "  [{instr_idx}] {rendered}")?;
         }
     }
-
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
-
     use iroha_data_model::{ChainId, parameter::system::SumeragiConsensusMode};
     use iroha_genesis::GenesisBuilder;
     use tempfile::NamedTempFile;
-
     use super::*;
-
     fn minimal_genesis() -> NamedTempFile {
         let genesis_file = NamedTempFile::new().expect("create temp genesis");
         let manifest =
@@ -192,7 +175,6 @@ mod tests {
         fs::write(genesis_file.path(), genesis_json).expect("write genesis json");
         genesis_file
     }
-
     #[test]
     fn emits_json() {
         let genesis = minimal_genesis();
@@ -210,7 +192,6 @@ mod tests {
             "output should include metadata"
         );
     }
-
     #[test]
     fn emits_text_summary() {
         let genesis = minimal_genesis();

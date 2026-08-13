@@ -1,9 +1,6 @@
 //! Round-trip and cross-SDK outcome coverage for committed SoraFS PDP fixtures.
-
 #![allow(unexpected_cfgs)]
-
 use std::{fs, path::Path};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
     PdpChallengeV1, PdpCommitmentV1, PdpProofV1, validate_pdp_challenge_bytes,
@@ -12,17 +9,14 @@ use sorafs_manifest::{
     validate_pdp_proof_bytes,
 };
 use tempfile::tempdir;
-
 const FIXTURES_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/sorafs_manifest/pdp"
 );
-
 fn read_fixture_bytes(path: &str) -> Vec<u8> {
     let path = format!("{FIXTURES_ROOT}/{path}");
     fs::read(&path).unwrap_or_else(|err| panic!("failed to read {path}: {err}"))
 }
-
 fn regenerate_fixtures(root: &Path) {
     let output = cargo_bin_cmd!("generate_pdp_fixtures")
         .current_dir(root)
@@ -35,7 +29,6 @@ fn regenerate_fixtures(root: &Path) {
         String::from_utf8_lossy(&output.stderr),
     );
 }
-
 fn assert_outcome_fixture(name: &str, actual: &sorafs_manifest::ValidationOutcomeV1) {
     let path = format!("{FIXTURES_ROOT}/{name}");
     let expected =
@@ -46,7 +39,6 @@ fn assert_outcome_fixture(name: &str, actual: &sorafs_manifest::ValidationOutcom
     );
     assert_eq!(actual, expected, "validation outcome fixture drifted");
 }
-
 fn assert_json_hex_matches(name: &str, bytes: &[u8]) {
     let path = format!("{FIXTURES_ROOT}/{name}.json");
     let json_text =
@@ -61,7 +53,6 @@ fn assert_json_hex_matches(name: &str, bytes: &[u8]) {
         hex::decode(norito_hex).expect("fixture commentary must contain valid hex payload");
     assert_eq!(norito_bytes, bytes, "`norito_bytes_hex` drifted");
 }
-
 #[test]
 fn pdp_commitment_fixture_decodes_validates_and_roundtrips() {
     let bytes = read_fixture_bytes("commitment_v1.to");
@@ -74,11 +65,9 @@ fn pdp_commitment_fixture_decodes_validates_and_roundtrips() {
         bytes
     );
     assert_json_hex_matches("commitment_v1", &bytes);
-
     let outcome = validate_pdp_commitment_bytes(&bytes, "commitment_v1.to", 123);
     assert!(outcome.is_ok(), "{outcome:?}");
 }
-
 #[test]
 fn pdp_challenge_fixture_decodes_validates_and_roundtrips() {
     let bytes = read_fixture_bytes("challenge_v1.to");
@@ -92,11 +81,9 @@ fn pdp_challenge_fixture_decodes_validates_and_roundtrips() {
         bytes
     );
     assert_json_hex_matches("challenge_v1", &bytes);
-
     let outcome = validate_pdp_challenge_bytes(&bytes, "challenge_v1.to", 123);
     assert!(outcome.is_ok(), "{outcome:?}");
 }
-
 #[test]
 fn pdp_proof_fixture_decodes_validates_and_roundtrips() {
     let bytes = read_fixture_bytes("proof_v1.to");
@@ -111,17 +98,14 @@ fn pdp_proof_fixture_decodes_validates_and_roundtrips() {
         bytes
     );
     assert_json_hex_matches("proof_v1", &bytes);
-
     let outcome = validate_pdp_proof_bytes(&bytes, "proof_v1.to", 123);
     assert!(outcome.is_ok(), "{outcome:?}");
 }
-
 #[test]
 fn pdp_commitment_challenge_and_challenge_proof_fixtures_cross_link() {
     let commitment_bytes = read_fixture_bytes("commitment_v1.to");
     let challenge_bytes = read_fixture_bytes("challenge_v1.to");
     let proof_bytes = read_fixture_bytes("proof_v1.to");
-
     let commitment_outcome = validate_pdp_commitment_challenge_bytes(
         &commitment_bytes,
         &challenge_bytes,
@@ -130,7 +114,6 @@ fn pdp_commitment_challenge_and_challenge_proof_fixtures_cross_link() {
         123,
     );
     assert!(commitment_outcome.is_ok(), "{commitment_outcome:?}");
-
     let proof_outcome = validate_pdp_challenge_proof_bytes(
         &challenge_bytes,
         &proof_bytes,
@@ -139,7 +122,6 @@ fn pdp_commitment_challenge_and_challenge_proof_fixtures_cross_link() {
         123,
     );
     assert!(proof_outcome.is_ok(), "{proof_outcome:?}");
-
     let combined_outcome = validate_pdp_commitment_challenge_proof_bytes(
         &commitment_bytes,
         &challenge_bytes,
@@ -162,7 +144,6 @@ fn pdp_commitment_challenge_and_challenge_proof_fixtures_cross_link() {
             && field.value == "exhaustive_pdp_witness_diagnostic_without_admission"
     }));
 }
-
 #[test]
 fn pdp_negative_challenge_fixture_is_rejected() {
     let bytes = read_fixture_bytes("negative/duplicate_hot_leaf_challenge_v1.to");
@@ -171,7 +152,6 @@ fn pdp_negative_challenge_fixture_is_rejected() {
     assert_eq!(outcome.code, "SFS-PDP-001");
     assert_json_hex_matches("negative/duplicate_hot_leaf_challenge_v1", &bytes);
 }
-
 #[test]
 fn pdp_negative_signature_fixture_is_rejected_structurally() {
     let name = "missing_signature_proof_v1";
@@ -182,7 +162,6 @@ fn pdp_negative_signature_fixture_is_rejected_structurally() {
     assert_eq!(outcome.code, "SFS-SIG-008", "{name}: {outcome:?}");
     assert_json_hex_matches(&fixture, &bytes);
 }
-
 #[test]
 fn pdp_negative_challenge_proof_pair_fixtures_are_rejected() {
     let challenge_bytes = read_fixture_bytes("challenge_v1.to");
@@ -191,7 +170,6 @@ fn pdp_negative_challenge_proof_pair_fixtures_are_rejected() {
         ("wrong_provider_proof_v1", "SFS-PDP-003"),
         ("wrong_manifest_proof_v1", "SFS-PDP-003"),
     ];
-
     for (name, expected_code) in cases {
         let fixture = format!("negative/{name}");
         let bytes = read_fixture_bytes(&format!("{fixture}.to"));
@@ -207,7 +185,6 @@ fn pdp_negative_challenge_proof_pair_fixtures_are_rejected() {
         assert_json_hex_matches(&fixture, &bytes);
     }
 }
-
 #[test]
 fn pdp_negative_merkle_witness_fixtures_are_rejected_exhaustively() {
     let commitment_bytes = read_fixture_bytes("commitment_v1.to");
@@ -217,7 +194,6 @@ fn pdp_negative_merkle_witness_fixtures_are_rejected_exhaustively() {
         ("missing_hot_leaf_path_proof_v1", "SFS-PDP-001"),
         ("wrong_path_proof_v1", "SFS-PDP-003"),
     ];
-
     for (name, expected_code) in cases {
         let fixture = format!("negative/{name}");
         let proof_bytes = read_fixture_bytes(&format!("{fixture}.to"));
@@ -235,7 +211,6 @@ fn pdp_negative_merkle_witness_fixtures_are_rejected_exhaustively() {
         assert_json_hex_matches(&fixture, &proof_bytes);
     }
 }
-
 #[test]
 fn pdp_negative_fixture_inventory_is_fully_tested() {
     let mut fixture_names = fs::read_dir(format!("{FIXTURES_ROOT}/negative"))
@@ -254,7 +229,6 @@ fn pdp_negative_fixture_inventory_is_fully_tested() {
         })
         .collect::<Vec<_>>();
     fixture_names.sort();
-
     assert_eq!(
         fixture_names,
         [
@@ -269,7 +243,6 @@ fn pdp_negative_fixture_inventory_is_fully_tested() {
         ]
     );
 }
-
 #[test]
 fn pdp_reference_outcomes_match_cross_sdk_fixtures_exactly() {
     let commitment = read_fixture_bytes("commitment_v1.to");
@@ -286,7 +259,6 @@ fn pdp_reference_outcomes_match_cross_sdk_fixtures_exactly() {
     );
     assert!(bundle.is_ok(), "{bundle:?}");
     assert_outcome_fixture("bundle_validation_outcome_v1.json", &bundle);
-
     let duplicate = read_fixture_bytes("negative/duplicate_hot_leaf_challenge_v1.to");
     let duplicate_outcome =
         validate_pdp_challenge_bytes(&duplicate, "duplicate_hot_leaf_challenge_v1.to", 123);
@@ -294,7 +266,6 @@ fn pdp_reference_outcomes_match_cross_sdk_fixtures_exactly() {
         "negative/duplicate_hot_leaf_challenge_validation_outcome_v1.json",
         &duplicate_outcome,
     );
-
     let missing_signature = read_fixture_bytes("negative/missing_signature_proof_v1.to");
     let missing_signature_outcome =
         validate_pdp_proof_bytes(&missing_signature, "missing_signature_proof_v1.to", 123);
@@ -302,7 +273,6 @@ fn pdp_reference_outcomes_match_cross_sdk_fixtures_exactly() {
         "negative/missing_signature_proof_validation_outcome_v1.json",
         &missing_signature_outcome,
     );
-
     for (name, expected_code) in [
         ("late_proof", "SFS-POL-002"),
         ("wrong_manifest_proof", "SFS-PDP-003"),
@@ -323,7 +293,6 @@ fn pdp_reference_outcomes_match_cross_sdk_fixtures_exactly() {
             &outcome,
         );
     }
-
     for (name, expected_code) in [
         ("missing_hot_leaf_path_proof", "SFS-PDP-001"),
         ("missing_segment_path_proof", "SFS-PDP-001"),
@@ -347,7 +316,6 @@ fn pdp_reference_outcomes_match_cross_sdk_fixtures_exactly() {
         );
     }
 }
-
 #[test]
 fn pdp_fixture_regeneration_is_byte_identical() {
     const FILES: [&str; 31] = [
@@ -383,12 +351,10 @@ fn pdp_fixture_regeneration_is_byte_identical() {
         "negative/wrong_provider_proof_v1.to",
         "negative/wrong_provider_proof_validation_outcome_v1.json",
     ];
-
     let first = tempdir().expect("create first fixture generation directory");
     let second = tempdir().expect("create second fixture generation directory");
     regenerate_fixtures(first.path());
     regenerate_fixtures(second.path());
-
     for name in FILES {
         let relative = Path::new("fixtures/sorafs_manifest/pdp").join(name);
         let first_bytes = fs::read(first.path().join(&relative))

@@ -1,12 +1,10 @@
 //! Split contract deploy helper for oversized public deploy envelopes.
 #![allow(clippy::too_many_lines)]
-
 use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
 };
-
 use clap::Parser;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
@@ -27,10 +25,8 @@ use iroha::{
 use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use iroha_torii_shared::FeeQuoteResponse;
 use iroha_version::codec::EncodeVersioned;
-
 #[cfg(test)]
 use iroha::data_model::transaction::Executable;
-
 #[derive(Parser, Debug)]
 struct Args {
     #[arg(long)]
@@ -65,7 +61,6 @@ struct Args {
     #[arg(long, default_value_t = false)]
     emit_only: bool,
 }
-
 fn sign_transaction(
     network_id: &NetworkId,
     authority: &AccountId,
@@ -83,7 +78,6 @@ fn sign_transaction(
     .try_sign(private_key)
     .wrap_err("failed to sign split contract deploy transaction")
 }
-
 fn quote_and_resign_transaction(
     client: &Client,
     draft: &SignedTransaction,
@@ -111,7 +105,6 @@ fn quote_and_resign_transaction(
         .wrap_err("failed to sign exact quoted split-deploy transaction")?;
     Ok((transaction, quote))
 }
-
 fn quote_native_upload_plan(
     client: &Client,
     mut plan: NativeUploadPlan,
@@ -131,7 +124,6 @@ fn quote_native_upload_plan(
     fee_quotes.push(quote);
     Ok((plan, fee_quotes))
 }
-
 fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathBuf, usize)> {
     fs::create_dir_all(out_dir)
         .wrap_err_with(|| format!("create output directory {}", out_dir.display()))?;
@@ -140,7 +132,6 @@ fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathB
     fs::write(&path, &bytes).wrap_err_with(|| format!("write {}", path.display()))?;
     Ok((path, bytes.len()))
 }
-
 fn insert_contract_deployment_address_metadata(
     metadata: &mut Metadata,
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
@@ -153,20 +144,17 @@ fn insert_contract_deployment_address_metadata(
         );
     }
 }
-
 struct NativeUploadPlan {
     chunk_count: u32,
     pre_stage: Vec<(String, String, SignedTransaction)>,
     finalize: (String, String, SignedTransaction),
 }
-
 fn native_upload_report(plan: &NativeUploadPlan) -> norito::json::Value {
     let register_bytes_stage_tx_hashes = plan
         .pre_stage
         .iter()
         .map(|(_, _, transaction)| transaction.hash().to_string())
         .collect::<Vec<_>>();
-
     norito::json!({
         "register_bytes_tx_strategy": ("native_chunks"),
         "register_bytes_chunk_size": (u64::try_from(SMART_CONTRACT_CODE_CHUNK_BYTES)
@@ -176,7 +164,6 @@ fn native_upload_report(plan: &NativeUploadPlan) -> norito::json::Value {
         "register_bytes_tx_hash": (plan.finalize.2.hash().to_string()),
     })
 }
-
 fn deployment_transaction_sequence(
     upload_plan: NativeUploadPlan,
     register_manifest_tx: SignedTransaction,
@@ -196,7 +183,6 @@ fn deployment_transaction_sequence(
     pre_stage.push(("commit".to_owned(), "commit".to_owned(), commit_tx));
     pre_stage
 }
-
 fn build_native_upload_plan(
     network_id: &NetworkId,
     authority: &AccountId,
@@ -220,7 +206,6 @@ fn build_native_upload_plan(
     let chunk_count = u32::try_from(chunk_count_usize)
         .wrap_err("contract upload chunk count does not fit u32")?;
     let mut pre_stage = Vec::with_capacity(chunk_count_usize.saturating_sub(1));
-
     for (index, chunk) in code.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
         let chunk_index =
             u32::try_from(index).wrap_err("contract upload index does not fit u32")?;
@@ -267,7 +252,6 @@ fn build_native_upload_plan(
     }
     Err(eyre!("contract upload plan did not contain a final chunk"))
 }
-
 fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
     let metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("inspect private-key file {}", path.display()))?;
@@ -286,7 +270,6 @@ fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         if metadata.permissions().mode() & 0o077 != 0 {
             return Err(eyre!(
                 "private-key file {} must not be accessible by group or other users",
@@ -310,7 +293,6 @@ fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
         .parse()
         .wrap_err_with(|| format!("parse private-key file {}", path.display()))
 }
-
 fn read_fee_payment_file(path: &Path) -> Result<FeePaymentIntent> {
     let bytes =
         fs::read(path).wrap_err_with(|| format!("read fee-payment file {}", path.display()))?;
@@ -331,7 +313,6 @@ fn read_fee_payment_file(path: &Path) -> Result<FeePaymentIntent> {
     }
     Ok(intent)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_commit_transaction(
     network_id: &NetworkId,
@@ -360,7 +341,6 @@ fn build_commit_transaction(
         })],
     )
 }
-
 fn main() -> Result<()> {
     let args = Args::parse();
     let config = Config::load(LoadPath::Explicit(&args.config))
@@ -390,7 +370,6 @@ fn main() -> Result<()> {
         .map(str::parse)
         .transpose()
         .wrap_err("failed to parse --expected-previous-contract-address")?;
-
     let code =
         fs::read(&args.code_file).wrap_err_with(|| format!("read {}", args.code_file.display()))?;
     let verified = ivm::verify_contract_artifact(&code)
@@ -406,7 +385,6 @@ fn main() -> Result<()> {
         .ok_or_else(|| eyre!("deploy nonce overflow"))?;
     let mut tx_metadata = Metadata::default();
     insert_contract_deployment_address_metadata(&mut tx_metadata, &contract_address);
-
     let upload_plan = build_native_upload_plan(
         &client.network_id,
         &authority,
@@ -443,7 +421,6 @@ fn main() -> Result<()> {
     let (commit_tx, commit_quote) =
         quote_and_resign_transaction(&client, &commit_tx, &fee_payment, &private_key)?;
     fee_quotes.push(commit_quote);
-
     let register_manifest_hash = register_manifest_tx.hash();
     let commit_hash = commit_tx.hash();
     let contract_subject_account = contract_address
@@ -453,7 +430,6 @@ fn main() -> Result<()> {
         .wrap_err("failed to encode contract subject for the target chain")?;
     let planned_transactions =
         deployment_transaction_sequence(upload_plan, register_manifest_tx, commit_tx);
-
     let written = if let Some(out_dir) = args.out_dir.as_deref() {
         Some(
             planned_transactions
@@ -464,13 +440,11 @@ fn main() -> Result<()> {
     } else {
         None
     };
-
     if !args.emit_only {
         for (_, _, transaction) in &planned_transactions {
             client.submit_transaction_blocking(transaction)?;
         }
     }
-
     let mut fields = std::collections::BTreeMap::from([
         ("ok".to_owned(), norito::json::Value::Bool(true)),
         (
@@ -542,11 +516,9 @@ fn main() -> Result<()> {
     println!("{}", norito::json::to_json_pretty(&result)?);
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn test_network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<iroha::data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -554,35 +526,28 @@ mod tests {
             ),
         )
     }
-
     fn checked_split_contract_deploy_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
             .expect("generate checked split contract deploy fixture key")
     }
-
     fn private_key_file_fixture(contents: &str) -> Result<tempfile::NamedTempFile> {
         use std::io::Write as _;
-
         let mut file = tempfile::NamedTempFile::new()?;
         file.write_all(contents.as_bytes())?;
         file.flush()?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600))?;
         }
         Ok(file)
     }
-
     #[test]
     fn private_key_file_accepts_one_exact_literal_with_terminal_newline() -> Result<()> {
         let expected = checked_split_contract_deploy_ed25519_key_fixture();
         let exposed = iroha_crypto::ExposedPrivateKey(expected.private_key().clone()).to_string();
         let file = private_key_file_fixture(&format!("{exposed}\n"))?;
-
         let actual = read_private_key_file(file.path())?;
-
         assert_eq!(
             KeyPair::from(actual).public_key(),
             expected.public_key(),
@@ -590,44 +555,35 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn private_key_file_rejects_surrounding_whitespace_without_echoing_secret() -> Result<()> {
         let secret = "secret-material-that-must-not-appear-in-errors";
         let file = private_key_file_fixture(&format!(" {secret}\n"))?;
-
         let error = read_private_key_file(file.path()).expect_err("whitespace must be rejected");
         let message = error.to_string();
-
         assert!(message.contains("one exact private-key literal"));
         assert!(!message.contains(secret));
         Ok(())
     }
-
     #[test]
     fn fee_payment_file_accepts_canonical_authority_gas_bound() -> Result<()> {
         let file = private_key_file_fixture(
             r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":2000000}}"#,
         )?;
-
         let actual = read_fee_payment_file(file.path())?;
-
         assert_eq!(
             actual,
             FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(2_000_000))
         );
         Ok(())
     }
-
     #[test]
     fn fee_payment_file_rejects_unknown_compatibility_fields() -> Result<()> {
         let file = private_key_file_fixture(
             r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":2000000,"legacy_fee":true}}"#,
         )?;
-
         let error =
             read_fee_payment_file(file.path()).expect_err("unknown fee fields must be rejected");
-
         let message = error.to_string();
         assert!(
             message.contains("parse fee-payment file")
@@ -635,22 +591,17 @@ mod tests {
         );
         Ok(())
     }
-
     #[cfg(unix)]
     #[test]
     fn private_key_file_rejects_group_readable_permissions() -> Result<()> {
         use std::os::unix::fs::PermissionsExt as _;
-
         let file = private_key_file_fixture("not-inspected-after-mode-check\n")?;
         fs::set_permissions(file.path(), fs::Permissions::from_mode(0o640))?;
-
         let error =
             read_private_key_file(file.path()).expect_err("group-readable secrets must fail");
-
         assert!(error.to_string().contains("group or other users"));
         Ok(())
     }
-
     #[test]
     fn clap_surface_does_not_accept_inline_private_keys() {
         let parsed = Args::try_parse_from([
@@ -670,13 +621,11 @@ mod tests {
             "--fee-payment-json",
             "fee.json",
         ]);
-
         assert!(
             parsed.is_err(),
             "inline private keys must not be a CLI option"
         );
     }
-
     #[test]
     fn split_contract_deploy_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
@@ -684,15 +633,12 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("split contract deploy fixture key advertises a valid algorithm");
-
         assert_eq!(actual, iroha_crypto::Algorithm::Ed25519);
     }
-
     #[test]
     fn sign_transaction_checked_helper_verifies() -> Result<()> {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
-
         let tx = sign_transaction(
             &test_network_id(b"split-contract-deploy-sign-test"),
             &authority,
@@ -700,13 +646,11 @@ mod tests {
             Metadata::default(),
             Vec::<InstructionBox>::new(),
         )?;
-
         tx.verify_signature()
             .wrap_err("verify split contract deploy helper signature")?;
         assert_eq!(tx.authority(), &authority);
         Ok(())
     }
-
     #[test]
     fn commit_transaction_uses_native_nonce_cas_without_generic_metadata_write() -> Result<()> {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
@@ -733,7 +677,6 @@ mod tests {
             None,
             None,
         )?;
-
         let Executable::Instructions(instructions) = transaction.instructions() else {
             panic!("native contract commit must use one instruction transaction");
         };
@@ -756,7 +699,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn native_upload_plan_rejects_empty_artifact() {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
@@ -773,10 +715,8 @@ mod tests {
             Ok(_) => panic!("an empty artifact cannot form a native upload"),
             Err(error) => error,
         };
-
         assert!(error.to_string().contains("must not be empty"));
     }
-
     #[test]
     fn native_upload_plan_rejects_noncanonical_code_hash() {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
@@ -794,10 +734,8 @@ mod tests {
             Ok(_) => panic!("a mismatched code hash cannot form a native upload"),
             Err(error) => error,
         };
-
         assert!(error.to_string().contains("canonical artifact hash"));
     }
-
     #[test]
     fn one_chunk_upload_uploads_and_finalizes_without_reserved_nonce_mutation() -> Result<()> {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
@@ -811,7 +749,6 @@ mod tests {
             ivm::contract_code_hash(&code),
             &code,
         )?;
-
         assert_eq!(plan.chunk_count, 1);
         assert!(plan.pre_stage.is_empty());
         let Executable::Instructions(instructions) = plan.finalize.2.instructions() else {
@@ -834,7 +771,6 @@ mod tests {
         assert_eq!(finalize.code_hash, upload.code_hash);
         assert_eq!(finalize.total_size, upload.total_size);
         assert_eq!(finalize.chunk_count, upload.chunk_count);
-
         let report = native_upload_report(&plan);
         let fields = report.as_object().expect("upload report is an object");
         assert_eq!(fields.len(), 5);
@@ -857,7 +793,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn multi_mib_upload_is_bounded_ordered_and_carries_stable_metadata() -> Result<()> {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
@@ -883,7 +818,6 @@ mod tests {
             code_hash,
             &code,
         )?;
-
         let expected_count = code.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES);
         assert_eq!(usize::try_from(plan.chunk_count)?, expected_count);
         assert_eq!(plan.pre_stage.len(), expected_count - 1);
@@ -896,7 +830,6 @@ mod tests {
             Some("register-bytes-chunk-0048-of-0049")
         );
         assert_eq!(plan.finalize.1, "register-bytes-finalize");
-
         let transactions = plan
             .pre_stage
             .iter()
@@ -986,7 +919,6 @@ mod tests {
             );
         }
         assert_eq!(rebuilt, code);
-
         let report = native_upload_report(&plan);
         let fields = report.as_object().expect("upload report is an object");
         assert_eq!(
@@ -1007,7 +939,6 @@ mod tests {
         }
         Ok(())
     }
-
     #[test]
     fn emit_sequence_writes_exact_ordered_native_filenames() -> Result<()> {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
@@ -1056,7 +987,6 @@ mod tests {
                 .iter()
                 .all(|(_, _, transaction)| transaction.metadata() == &metadata)
         );
-
         let output = tempfile::tempdir()?;
         let written = sequence
             .iter()

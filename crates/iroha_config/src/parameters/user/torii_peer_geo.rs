@@ -7,7 +7,6 @@ pub struct ToriiPeerGeo {
     /// Optional geo endpoint; required and HTTPS-only when lookups are enabled.
     pub endpoint: Option<Url>,
 }
-
 impl Default for ToriiPeerGeo {
     fn default() -> Self {
         Self {
@@ -16,7 +15,6 @@ impl Default for ToriiPeerGeo {
         }
     }
 }
-
 impl ToriiPeerGeo {
     fn parse(self) -> actual::ToriiPeerGeo {
         actual::ToriiPeerGeo {
@@ -25,11 +23,9 @@ impl ToriiPeerGeo {
         }
     }
 }
-
 #[cfg(test)]
 mod torii_peer_geo_tests {
     use super::*;
-
     #[test]
     fn torii_peer_geo_parse_copies_enabled_and_endpoint() {
         let endpoint = Url::parse("https://geo.example").expect("valid endpoint");
@@ -44,7 +40,6 @@ mod torii_peer_geo_tests {
             Some(endpoint.as_str())
         );
     }
-
     #[test]
     fn torii_peer_geo_parse_preserves_missing_endpoint() {
         let parsed = ToriiPeerGeo {

@@ -1,10 +1,7 @@
 //! Bounded orderbook current-memory helpers and their focused regressions.
-
 use iroha_data_model::account::{AccountController, curve::CurveId};
 use sorafs_manifest::orderbook::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1;
-
 use super::*;
-
 /// Compare one signed-payload owner literal with its authoritative account
 /// without populating the process-wide I105 cache or retaining parse scratch.
 pub(super) fn owner_literal_matches_for_current(
@@ -18,7 +15,6 @@ pub(super) fn owner_literal_matches_for_current(
         OrderbookQueryCurrent::new(resident_bytes).map_err(InstructionExecutionError::Query)?;
     result
 }
-
 fn owner_literal_matches_inner(
     owner: &AccountId,
     literal: &[u8],
@@ -69,7 +65,6 @@ fn owner_literal_matches_inner(
     }
     Ok(remaining.is_empty())
 }
-
 fn account_address_len(owner: &AccountId) -> Result<usize, InstructionExecutionError> {
     let controller_bytes = match owner.controller() {
         AccountController::Single(key) => {
@@ -109,7 +104,6 @@ fn account_address_len(owner: &AccountId) -> Result<usize, InstructionExecutionE
         .checked_add(1)
         .ok_or_else(|| corrupt_state("orderbook owner address length overflow"))
 }
-
 fn encode_account_address(
     owner: &AccountId,
     canonical: &mut Vec<u8>,
@@ -174,7 +168,6 @@ fn encode_account_address(
     }
     Ok(())
 }
-
 fn push_bounded(
     bytes: &mut Vec<u8>,
     maximum: usize,
@@ -188,13 +181,11 @@ fn push_bounded(
     bytes.push(byte);
     Ok(())
 }
-
 fn curve_id(algorithm: Algorithm) -> Result<u8, InstructionExecutionError> {
     CurveId::try_from_algorithm(algorithm)
         .map(CurveId::as_u8)
         .map_err(|_| corrupt_state("orderbook owner uses an unsupported account-address curve"))
 }
-
 fn encode_base105_in_scratch(
     scratch: &mut Vec<u8>,
     canonical_len: usize,
@@ -244,7 +235,6 @@ fn encode_base105_in_scratch(
     scratch[digits_start..].reverse();
     Ok(digits_start)
 }
-
 fn i105_checksum_digits(canonical: &[u8]) -> [u8; 6] {
     fn step(mut checksum: u32, value: u8) -> u32 {
         const GENERATORS: [u32; 5] = [
@@ -263,7 +253,6 @@ fn i105_checksum_digits(canonical: &[u8]) -> [u8; 6] {
         }
         checksum
     }
-
     let mut checksum = 1_u32;
     for &byte in b"snx" {
         checksum = step(checksum, byte >> 5);
@@ -304,7 +293,6 @@ fn i105_checksum_digits(canonical: &[u8]) -> [u8; 6] {
     }
     result
 }
-
 fn i105_sentinel<'a>(discriminant: u16, numeric: &'a mut [u8; 6]) -> &'a [u8] {
     match discriminant {
         0x02f1 => b"sora",
@@ -331,7 +319,6 @@ fn i105_sentinel<'a>(discriminant: u16, numeric: &'a mut [u8; 6]) -> &'a [u8] {
         }
     }
 }
-
 fn i105_symbol(digit: u8) -> Result<&'static str, InstructionExecutionError> {
     const SYMBOLS: [&str; 105] = [
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J",
@@ -346,7 +333,6 @@ fn i105_symbol(digit: u8) -> Result<&'static str, InstructionExecutionError> {
         .copied()
         .ok_or_else(|| corrupt_state("orderbook owner has an invalid I105 digit"))
 }
-
 fn consume_exact(remaining: &mut &[u8], expected: &[u8]) -> bool {
     if !remaining.starts_with(expected) {
         return false;
@@ -354,7 +340,6 @@ fn consume_exact(remaining: &mut &[u8], expected: &[u8]) -> bool {
     *remaining = &remaining[expected.len()..];
     true
 }
-
 #[cfg(test)]
 pub(super) mod tests {
     use iroha_data_model::{
@@ -367,14 +352,10 @@ pub(super) mod tests {
     use sorafs_manifest::orderbook::{
         ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1, decode_trade_event_v1_with_limits,
     };
-
     use super::super::tests::*;
     use super::*;
-    use crate::smartcontracts::isi::query::{
-        QueryLimits, SingularQueryOutputLimits, ValidQueryRequest,
-    };
+    use crate::smartcontracts::isi::query::{QueryLimits, SingularQueryOutputLimits, ValidQueryRequest};
     use crate::state::StateReadOnly;
-
     #[test]
     fn receipt_index_bounded_scratch_preserves_order_and_rejects_duplicate_ids() {
         let channel_id = [0x41; 32];
@@ -404,17 +385,14 @@ pub(super) mod tests {
             ],
         };
         let before = index.clone();
-
         validate_receipt_index(&index, channel_id).expect("valid receipt index");
         assert_eq!(index, before);
-
         index.ranges[2].receipt_id = duplicate_id;
         assert!(matches!(
             validate_receipt_index(&index, channel_id),
             Err(InstructionExecutionError::InvariantViolation(_))
         ));
     }
-
     #[test]
     fn current_owner_literal_comparison_is_exact_and_releases_scratch() {
         let owner = account(&keypair(0x42));
@@ -425,13 +403,11 @@ pub(super) mod tests {
                 .canonical_i105()
                 .expect("fixture account has canonical I105");
             let mut current = OrderbookQueryCurrent::new(0).expect("empty current fits");
-
             assert!(
                 owner_literal_matches_for_current(&owner, literal.as_bytes(), &mut current)
                     .expect("canonical literal compares")
             );
             assert_eq!(current.resident_bytes(), 0);
-
             let mut suffixed = literal.into_bytes();
             suffixed.push(b'x');
             assert!(
@@ -441,7 +417,6 @@ pub(super) mod tests {
             assert_eq!(current.resident_bytes(), 0);
         }
     }
-
     #[test]
     fn bounded_channel_query_shares_one_current_allowance_with_trade_validation() {
         let settlement = keypair(0x43);
@@ -467,7 +442,6 @@ pub(super) mod tests {
             Ok(())
         })
         .expect("commit bounded channel-query fixture");
-
         let view = state.view();
         let unbounded_channel = read_channel(view.world(), receipt.channel_id)
             .expect("read valid unbounded channel")
@@ -508,7 +482,6 @@ pub(super) mod tests {
             allocations.iter().sum::<usize>() > individual_allowance,
             "the combined measured current must exceed every individual source graph"
         );
-
         let limits =
             QueryLimits::default().with_singular_output_limits(SingularQueryOutputLimits::new(
                 u64::try_from(STATE_MAX_BYTES).expect("state bound fits u64"),
@@ -521,13 +494,11 @@ pub(super) mod tests {
             limits,
         )
         .expect("validate bounded channel query");
-
         let error = request
             .execute_ephemeral(view.query_handle(), &view, &authority)
             .expect_err("aggregate channel/trade current exceeds D");
         assert_eq!(error, QueryExecutionFail::CapacityLimit);
     }
-
     #[test]
     fn typed_queries_reject_not_found_and_invalid_limits() {
         let operator = keypair(0x29);
@@ -535,7 +506,6 @@ pub(super) mod tests {
         let mut state = state_with_accounts(&[&operator]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
-
         assert_eq!(
             FindSorafsOrderbookPolicy.execute(&stx),
             Err(QueryExecutionFail::Find(FindError::SorafsOrderbookPolicy))
@@ -562,7 +532,6 @@ pub(super) mod tests {
                 [0xE3; 32]
             )))
         );
-
         activate_policy(&mut stx, &authority);
         stx.apply();
         block.commit().expect("commit configured orderbook");
@@ -611,7 +580,6 @@ pub(super) mod tests {
             SorafsOrderbookLedgerEventKind::PolicyActivated
         );
     }
-
     #[test]
     fn query_scan_budget_is_inclusive_and_fails_closed() {
         let limits = OrderbookQueryScanLimitsV1 {
@@ -631,7 +599,6 @@ pub(super) mod tests {
                 "SoraFS orderbook fixture page query exceeded inspected-record budget 2".to_owned()
             ))
         );
-
         let mut byte_budget = OrderbookQueryScanBudgetV1::new(limits);
         assert_eq!(
             byte_budget.inspect(4, "fixture page"),

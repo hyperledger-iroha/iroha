@@ -1,11 +1,7 @@
 //! Bounded ownership corridor for server-owned singular-query execution.
-
 use std::{cell::Cell, marker::PhantomData, ops::Deref};
-
 use norito::core::{DecodeFlagsGuard, DeriveSmallBuf, Encoder, NoritoDeserialize, NoritoSerialize};
-
 use super::Error;
-
 /// Dynamic source/output ceilings for one singular query executed by a
 /// server-owned memory lane.
 ///
@@ -18,7 +14,6 @@ pub struct SingularQueryOutputLimits {
     max_frame_bytes: u64,
     max_allocated_bytes: u64,
 }
-
 impl SingularQueryOutputLimits {
     /// Construct singular-query ownership limits.
     #[must_use]
@@ -28,30 +23,25 @@ impl SingularQueryOutputLimits {
             max_allocated_bytes,
         }
     }
-
     /// Maximum complete canonical frame used to materialize one output.
     #[must_use]
     pub const fn max_frame_bytes(self) -> u64 {
         self.max_frame_bytes
     }
-
     /// Maximum resident allocation admitted while owning one output.
     #[must_use]
     pub const fn max_allocated_bytes(self) -> u64 {
         self.max_allocated_bytes
     }
 }
-
 thread_local! {
     static ACTIVE_LIMITS: Cell<Option<SingularQueryOutputLimits>> = const { Cell::new(None) };
     static ACTIVE_RETAINED_BUILDER_BYTES: Cell<usize> = const { Cell::new(0) };
 }
-
 struct SingularOutputLimitGuard {
     previous: Option<SingularQueryOutputLimits>,
     previous_retained_builder_bytes: usize,
 }
-
 impl SingularOutputLimitGuard {
     fn enter(limits: SingularQueryOutputLimits) -> Self {
         let previous = ACTIVE_LIMITS.replace(Some(limits));
@@ -65,14 +55,12 @@ impl SingularOutputLimitGuard {
         }
     }
 }
-
 impl Drop for SingularOutputLimitGuard {
     fn drop(&mut self) {
         ACTIVE_LIMITS.set(self.previous);
         ACTIVE_RETAINED_BUILDER_BYTES.set(self.previous_retained_builder_bytes);
     }
 }
-
 pub(super) fn execute_with_limits<T>(
     limits: Option<SingularQueryOutputLimits>,
     execute: impl FnOnce() -> Result<T, Error>,
@@ -89,7 +77,6 @@ where
     let _canonical_flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     bounded_roundtrip_owned(output, limits)
 }
-
 /// Own one borrowed producer value without invoking an unmetered deep clone.
 ///
 /// Ordinary/IVM queries have no active guard and retain their existing clone
@@ -106,7 +93,6 @@ where
     let _canonical_flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     bounded_roundtrip::<T, T>(value, limits)
 }
-
 /// Own a sequence of borrowed producer values without first accumulating
 /// clones in an intermediate `Vec`.
 ///
@@ -129,7 +115,6 @@ where
     };
     bounded_roundtrip::<_, Vec<T>>(&borrowed, limits)
 }
-
 /// Materialize a struct directly from borrowed fields in declaration order.
 ///
 /// This is the bounded counterpart for projections whose world-state storage
@@ -151,7 +136,6 @@ where
     let borrowed = BorrowedSingularStruct::<T, N>::new(fields);
     bounded_roundtrip::<_, T>(&borrowed, limits)
 }
-
 fn bounded_roundtrip<S, T>(source: &S, limits: SingularQueryOutputLimits) -> Result<T, Error>
 where
     S: NoritoSerialize,
@@ -167,7 +151,6 @@ where
     )
     .map_err(|_| Error::CapacityLimit)
 }
-
 fn bounded_roundtrip_owned<T>(source: T, limits: SingularQueryOutputLimits) -> Result<T, Error>
 where
     T: NoritoSerialize,
@@ -175,7 +158,6 @@ where
 {
     bounded_roundtrip_owned_as(source, limits)
 }
-
 /// Materialize an output from an owned wire-equivalent source.
 ///
 /// The source is encoded into the admitted frame and dropped before the
@@ -196,7 +178,6 @@ where
     let _canonical_flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     bounded_roundtrip_owned_as(source, limits)
 }
-
 fn bounded_roundtrip_owned_as<S, T>(
     source: S,
     limits: SingularQueryOutputLimits,
@@ -219,15 +200,12 @@ where
     )
     .map_err(|_| Error::CapacityLimit)
 }
-
 struct BorrowedSequence<I, T> {
     values: I,
     marker: PhantomData<T>,
 }
-
 /// Borrowed wire-equivalent of `Option<T>` for a singular projection field.
 pub(crate) struct BorrowedSingularOption<'a, T>(Option<&'a T>);
-
 impl<'a, T> BorrowedSingularOption<'a, T> {
     /// Construct a borrowed optional field.
     #[must_use]
@@ -235,12 +213,10 @@ impl<'a, T> BorrowedSingularOption<'a, T> {
         Self(value)
     }
 }
-
 impl<T: NoritoSerialize> NoritoSerialize for BorrowedSingularOption<'_, T> {
     fn schema_hash() -> [u8; 16] {
         Option::<T>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         match self.0 {
             Some(value) => {
@@ -254,7 +230,6 @@ impl<T: NoritoSerialize> NoritoSerialize for BorrowedSingularOption<'_, T> {
             }
         }
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         match self.0 {
             Some(value) => {
@@ -267,13 +242,11 @@ impl<T: NoritoSerialize> NoritoSerialize for BorrowedSingularOption<'_, T> {
         }
     }
 }
-
 /// Borrowed wire-equivalent of a derived struct in declaration order.
 pub(crate) struct BorrowedSingularStruct<'a, T, const N: usize> {
     fields: [&'a dyn NoritoSerialize; N],
     marker: PhantomData<T>,
 }
-
 impl<'a, T, const N: usize> BorrowedSingularStruct<'a, T, N> {
     /// Construct a borrowed derived-struct representation.
     #[must_use]
@@ -284,7 +257,6 @@ impl<'a, T, const N: usize> BorrowedSingularStruct<'a, T, N> {
         }
     }
 }
-
 impl<T, const N: usize> NoritoSerialize for BorrowedSingularStruct<'_, T, N>
 where
     T: NoritoSerialize,
@@ -292,7 +264,6 @@ where
     fn schema_hash() -> [u8; 16] {
         T::schema_hash()
     }
-
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {
             return Err(norito::core::Error::UnsupportedFeature(
@@ -305,7 +276,6 @@ where
         }
         Ok(())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         if norito::core::use_packed_struct() {
             return None;
@@ -318,7 +288,6 @@ where
         })
     }
 }
-
 impl<'a, I, T> NoritoSerialize for BorrowedSequence<I, T>
 where
     T: NoritoSerialize + 'a,
@@ -327,7 +296,6 @@ where
     fn schema_hash() -> [u8; 16] {
         Vec::<T>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         let count = self.values.clone().count();
         norito::core::write_seq_len(
@@ -340,7 +308,6 @@ where
         }
         Ok(())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.values.clone().try_fold(8usize, |total, value| {
             let value_len = value.encoded_len_exact()?;
@@ -350,7 +317,6 @@ where
         })
     }
 }
-
 /// Return the currently admitted complete-frame ceiling, capped by a producer
 /// protocol maximum.
 pub(crate) fn singular_query_frame_limit(protocol_max: usize) -> usize {
@@ -360,12 +326,10 @@ pub(crate) fn singular_query_frame_limit(protocol_max: usize) -> usize {
             .min(protocol_max)
     })
 }
-
 /// Return whether server-owned singular limits are active on this worker.
 pub(crate) fn singular_query_limits_active() -> bool {
     ACTIVE_LIMITS.get().is_some()
 }
-
 /// Fallibly build one retained singular-query sequence under the active
 /// resident-output allowance.
 ///
@@ -382,7 +346,6 @@ pub(crate) struct SingularQueryVecBuilder<T> {
     retained_charge_bytes: usize,
     encoded_frame_bytes: usize,
 }
-
 impl<T> SingularQueryVecBuilder<T>
 where
     T: NoritoSerialize,
@@ -433,7 +396,6 @@ where
             // deterministic preflight above is the allocation-safety gate.
             replace_retained_builder_charge(0, retained_charge_bytes, limits)?;
         }
-
         Ok(Self {
             values,
             item_allocation_bytes,
@@ -443,7 +405,6 @@ where
             encoded_frame_bytes,
         })
     }
-
     /// Canonicalize and admit one value before retaining it.
     pub(crate) fn try_push(&mut self, value: T) -> Result<(), Error> {
         let Some(limits) = ACTIVE_LIMITS.get() else {
@@ -462,7 +423,6 @@ where
         if self.values.len() >= self.admitted_capacity {
             return Err(Error::CapacityLimit);
         }
-
         let _canonical_flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let max_frame_bytes =
             usize::try_from(limits.max_frame_bytes).map_err(|_| Error::CapacityLimit)?;
@@ -480,7 +440,6 @@ where
             .checked_add(item_frame_bytes)
             .filter(|bytes| *bytes <= max_frame_bytes)
             .ok_or(Error::CapacityLimit)?;
-
         let bytes = norito::core::to_bytes_bounded(&value, max_frame_bytes)
             .map_err(|_| Error::CapacityLimit)?;
         let item_decode_limits = decode_limits(bytes.len(), limits.max_allocated_bytes)?;
@@ -495,7 +454,6 @@ where
             });
         let decoded = decoded.map_err(|_| Error::CapacityLimit)?;
         drop(bytes);
-
         let retained_nested_bytes = self
             .retained_nested_bytes
             .checked_add(usage.total_allocated_bytes())
@@ -512,7 +470,6 @@ where
             retained_nested_bytes,
         )?;
         replace_retained_builder_charge(self.retained_charge_bytes, retained_charge_bytes, limits)?;
-
         self.values.push(decoded);
         self.item_allocation_bytes
             .push(usage.total_allocated_bytes());
@@ -521,25 +478,21 @@ where
         self.encoded_frame_bytes = next_frame_bytes;
         Ok(())
     }
-
     /// Number of values currently retained by the builder.
     #[must_use]
     pub(crate) fn len(&self) -> usize {
         self.values.len()
     }
-
     /// Whether the builder currently retains no values.
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
-
     /// Return the most recently retained value.
     #[must_use]
     pub(crate) fn last(&self) -> Option<&T> {
         self.values.last()
     }
-
     /// Finish the builder without copying its retained values.
     #[must_use]
     pub(crate) fn into_vec(mut self) -> Result<Vec<T>, Error> {
@@ -555,7 +508,6 @@ where
         self.retained_charge_bytes = 0;
         Ok(values)
     }
-
     /// Finish into a vector that keeps its aggregate builder charge attached.
     ///
     /// This form is for producers that retain several source collections and
@@ -575,28 +527,23 @@ where
         }
     }
 }
-
 impl<T> Drop for SingularQueryVecBuilder<T> {
     fn drop(&mut self) {
         let _ = release_retained_builder_charge(self.retained_charge_bytes);
     }
 }
-
 /// A producer vector whose aggregate resident charge follows its allocation.
 pub(crate) struct SingularQueryRetainedVec<T> {
     values: Vec<T>,
     item_allocation_bytes: Vec<usize>,
     retained_charge_bytes: usize,
 }
-
 impl<T> Deref for SingularQueryRetainedVec<T> {
     type Target = [T];
-
     fn deref(&self) -> &Self::Target {
         &self.values
     }
 }
-
 impl<T> SingularQueryRetainedVec<T> {
     /// Sort values and their measured nested-allocation charges together.
     ///
@@ -615,7 +562,6 @@ impl<T> SingularQueryRetainedVec<T> {
             self.sift_down(0, end, &mut compare);
         }
     }
-
     fn sift_down(
         &mut self,
         mut root: usize,
@@ -643,7 +589,6 @@ impl<T> SingularQueryRetainedVec<T> {
             root = larger;
         }
     }
-
     fn swap_items(&mut self, left: usize, right: usize) {
         self.values.swap(left, right);
         if self.item_allocation_bytes.len() == self.values.len() {
@@ -651,22 +596,18 @@ impl<T> SingularQueryRetainedVec<T> {
         }
     }
 }
-
 impl<T> Drop for SingularQueryRetainedVec<T> {
     fn drop(&mut self) {
         let _ = release_retained_builder_charge(self.retained_charge_bytes);
     }
 }
-
 pub(crate) struct SingularQueryRetainedVecIntoIter<T> {
     values: std::vec::IntoIter<T>,
     item_allocation_bytes: std::vec::IntoIter<usize>,
     retained_charge_bytes: usize,
 }
-
 impl<T> Iterator for SingularQueryRetainedVecIntoIter<T> {
     type Item = Result<(T, usize), Error>;
-
     fn next(&mut self) -> Option<Self::Item> {
         match self.next_with_allocation_charge() {
             Ok(Some(item)) => Some(Ok(item)),
@@ -674,7 +615,6 @@ impl<T> Iterator for SingularQueryRetainedVecIntoIter<T> {
             Err(error) => Some(Err(error)),
         }
     }
-
     fn size_hint(&self) -> (usize, Option<usize>) {
         if ACTIVE_LIMITS.get().is_some()
             && self.values.as_slice().len() != self.item_allocation_bytes.as_slice().len()
@@ -685,7 +625,6 @@ impl<T> Iterator for SingularQueryRetainedVecIntoIter<T> {
         }
     }
 }
-
 impl<T> SingularQueryRetainedVecIntoIter<T> {
     /// Move the next value into the current corridor with its measured nested
     /// allocation charge.
@@ -697,7 +636,6 @@ impl<T> SingularQueryRetainedVecIntoIter<T> {
             }
             return Ok(None);
         };
-
         // Ordinary in-process callers do not install an allocation ledger.
         // Preserve that legacy behavior while enforcing the private parallel-
         // vector invariant for every server-owned execution.
@@ -708,7 +646,6 @@ impl<T> SingularQueryRetainedVecIntoIter<T> {
                 .saturating_sub(item_allocation_bytes);
             return Ok(Some((value, item_allocation_bytes)));
         }
-
         let Some(item_allocation_bytes) = self.item_allocation_bytes.next() else {
             poison_retained_builder_charge();
             return Err(Error::CapacityLimit);
@@ -726,24 +663,20 @@ impl<T> SingularQueryRetainedVecIntoIter<T> {
         self.retained_charge_bytes = retained_charge_bytes;
         Ok(Some((value, item_allocation_bytes)))
     }
-
     /// Remaining values, used by sorted merge validation.
     #[must_use]
     pub(crate) fn as_slice(&self) -> &[T] {
         self.values.as_slice()
     }
 }
-
 impl<T> Drop for SingularQueryRetainedVecIntoIter<T> {
     fn drop(&mut self) {
         let _ = release_retained_builder_charge(self.retained_charge_bytes);
     }
 }
-
 impl<T> IntoIterator for SingularQueryRetainedVec<T> {
     type Item = Result<(T, usize), Error>;
     type IntoIter = SingularQueryRetainedVecIntoIter<T>;
-
     fn into_iter(mut self) -> Self::IntoIter {
         let values = core::mem::take(&mut self.values).into_iter();
         let item_allocation_bytes = core::mem::take(&mut self.item_allocation_bytes).into_iter();
@@ -756,7 +689,6 @@ impl<T> IntoIterator for SingularQueryRetainedVec<T> {
         }
     }
 }
-
 fn ensure_retained_allocation_fits<T>(
     capacity: usize,
     charge_capacity: usize,
@@ -771,7 +703,6 @@ fn ensure_retained_allocation_fits<T>(
         .then_some(())
         .ok_or(Error::CapacityLimit)
 }
-
 fn retained_allocation_bytes<T>(
     capacity: usize,
     charge_capacity: usize,
@@ -788,7 +719,6 @@ fn retained_allocation_bytes<T>(
         .and_then(|bytes| bytes.checked_add(retained_nested_bytes))
         .ok_or(Error::CapacityLimit)
 }
-
 fn ensure_retained_builder_charge(
     previous_charge: usize,
     next_charge: usize,
@@ -805,7 +735,6 @@ fn ensure_retained_builder_charge(
         .then_some(())
         .ok_or(Error::CapacityLimit)
 }
-
 fn replace_retained_builder_charge(
     previous_charge: usize,
     next_charge: usize,
@@ -820,13 +749,11 @@ fn replace_retained_builder_charge(
     ACTIVE_RETAINED_BUILDER_BYTES.set(retained_bytes);
     Ok(())
 }
-
 fn poison_retained_builder_charge() {
     if ACTIVE_LIMITS.get().is_some() {
         ACTIVE_RETAINED_BUILDER_BYTES.set(usize::MAX);
     }
 }
-
 /// Release one retained charge, poisoning the active ledger on underflow.
 ///
 /// `false` means the ledger was already poisoned or this release exposed an
@@ -850,7 +777,6 @@ fn release_retained_builder_charge(charge: usize) -> bool {
     ACTIVE_RETAINED_BUILDER_BYTES.set(retained_bytes);
     true
 }
-
 /// Resident allocation owned by the one current producer value.
 ///
 /// This counter is deliberately local to one loop iteration. It is not a
@@ -859,7 +785,6 @@ fn release_retained_builder_charge(charge: usize) -> bool {
 pub(crate) struct SingularQueryCurrentAllocation {
     retained_bytes: usize,
 }
-
 /// A current-value vector with one immutable, logically admitted item count.
 ///
 /// The backing allocator may round its physical capacity up, but callers can
@@ -869,7 +794,6 @@ pub(crate) struct SingularQueryFixedVec<T> {
     values: Vec<T>,
     admitted_capacity: usize,
 }
-
 impl<T> SingularQueryFixedVec<T> {
     /// Insert one item without growing beyond the admitted logical count.
     pub(crate) fn push(&mut self, value: T) -> Result<(), Error> {
@@ -879,21 +803,17 @@ impl<T> SingularQueryFixedVec<T> {
         self.values.push(value);
         Ok(())
     }
-
     /// Release the fixed-count wrapper without copying its values.
     pub(crate) fn into_vec(self) -> Vec<T> {
         self.values
     }
 }
-
 impl<T> Deref for SingularQueryFixedVec<T> {
     type Target = [T];
-
     fn deref(&self) -> &Self::Target {
         &self.values
     }
 }
-
 impl SingularQueryCurrentAllocation {
     /// Start accounting with the measured nested allocation of a decoded
     /// source record moved out of a retained builder.
@@ -902,7 +822,6 @@ impl SingularQueryCurrentAllocation {
         current.ensure_fits()?;
         Ok(current)
     }
-
     /// Add one moved decoded record to the current value.
     pub(crate) fn add_nested(&mut self, bytes: usize) -> Result<(), Error> {
         self.retained_bytes = self
@@ -911,7 +830,6 @@ impl SingularQueryCurrentAllocation {
             .ok_or(Error::CapacityLimit)?;
         self.ensure_fits()
     }
-
     /// Return the measured allocation currently resident in this producer
     /// value so a nested validator can start a fresh, non-cumulative decode
     /// phase beside exactly the values that remain live.
@@ -919,7 +837,6 @@ impl SingularQueryCurrentAllocation {
     pub(crate) const fn resident_bytes(&self) -> usize {
         self.retained_bytes
     }
-
     /// Cap one additional source decode by the unoccupied part of this
     /// current value's resident allowance.
     ///
@@ -934,7 +851,6 @@ impl SingularQueryCurrentAllocation {
     ) -> Result<norito::DecodeLimits, Error> {
         singular_query_decode_limits_after_resident(encoded_len, protocol, self.retained_bytes)
     }
-
     /// Fallibly reserve an inline vector owned by the current value.
     pub(crate) fn vec_with_capacity<T>(
         &mut self,
@@ -951,7 +867,6 @@ impl SingularQueryCurrentAllocation {
             retained_bytes: next,
         }
         .ensure_fits()?;
-
         let mut values = Vec::new();
         values
             .try_reserve_exact(capacity)
@@ -962,7 +877,6 @@ impl SingularQueryCurrentAllocation {
             admitted_capacity: capacity,
         })
     }
-
     fn ensure_fits(&self) -> Result<(), Error> {
         let Some(limits) = ACTIVE_LIMITS.get() else {
             return Ok(());
@@ -974,7 +888,6 @@ impl SingularQueryCurrentAllocation {
             .ok_or(Error::CapacityLimit)
     }
 }
-
 /// Cap an existing producer decode policy by the active singular-query lane.
 ///
 /// The protocol's tighter dimensions are preserved. Persisted source records
@@ -986,7 +899,6 @@ pub(crate) fn singular_query_decode_limits(
 ) -> Result<norito::DecodeLimits, Error> {
     singular_query_decode_limits_after_resident(encoded_len, protocol, 0)
 }
-
 fn singular_query_decode_limits_after_resident(
     encoded_len: usize,
     protocol: norito::DecodeLimits,
@@ -1007,7 +919,6 @@ fn singular_query_decode_limits_after_resident(
         protocol.max_nesting_depth(),
     ))
 }
-
 fn decode_limits(
     encoded_len: usize,
     max_allocated_bytes: u64,
@@ -1023,25 +934,20 @@ fn decode_limits(
         64,
     ))
 }
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-
     use super::*;
-
     thread_local! {
         static OWNED_SOURCE_DROPPED: Cell<bool> = const { Cell::new(false) };
         static ENCODE_ERROR_SOURCE_DROPPED: Cell<bool> = const { Cell::new(false) };
         static DECODE_ERROR_SOURCE_DROPPED: Cell<bool> = const { Cell::new(false) };
     }
-
     struct DropBeforeDecodeProbe {
         source: bool,
         marker: u8,
         allocation: Vec<u8>,
     }
-
     impl Drop for DropBeforeDecodeProbe {
         fn drop(&mut self) {
             if self.source {
@@ -1049,22 +955,18 @@ mod tests {
             }
         }
     }
-
     impl NoritoSerialize for DropBeforeDecodeProbe {
         fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
             NoritoSerialize::serialize(&self.marker, encoder)
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             Some(1)
         }
     }
-
     impl<'de> NoritoDeserialize<'de> for DropBeforeDecodeProbe {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             Self::try_deserialize(archived).expect("drop-before-decode probe")
         }
-
         fn try_deserialize(
             _archived: &'de norito::core::Archived<Self>,
         ) -> Result<Self, norito::core::Error> {
@@ -1079,31 +981,25 @@ mod tests {
             })
         }
     }
-
     struct EncodeErrorDropProbe;
-
     impl Drop for EncodeErrorDropProbe {
         fn drop(&mut self) {
             ENCODE_ERROR_SOURCE_DROPPED.set(true);
         }
     }
-
     impl NoritoSerialize for EncodeErrorDropProbe {
         fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
             Err(norito::core::Error::LengthMismatch)
         }
     }
-
     impl<'de> NoritoDeserialize<'de> for EncodeErrorDropProbe {
         fn deserialize(_archived: &'de norito::core::Archived<Self>) -> Self {
             Self
         }
     }
-
     struct DecodeErrorDropProbe {
         source: bool,
     }
-
     impl Drop for DecodeErrorDropProbe {
         fn drop(&mut self) {
             if self.source {
@@ -1111,25 +1007,21 @@ mod tests {
             }
         }
     }
-
     impl NoritoSerialize for DecodeErrorDropProbe {
         fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
             NoritoSerialize::serialize(&1_u8, encoder)
         }
     }
-
     impl<'de> NoritoDeserialize<'de> for DecodeErrorDropProbe {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             Self::try_deserialize(archived).expect("decode-error probe")
         }
-
         fn try_deserialize(
             _archived: &'de norito::core::Archived<Self>,
         ) -> Result<Self, norito::core::Error> {
             Err(norito::core::Error::LengthMismatch)
         }
     }
-
     #[test]
     fn final_owned_roundtrip_drops_source_before_decode_allocation() {
         OWNED_SOURCE_DROPPED.set(false);
@@ -1142,12 +1034,10 @@ mod tests {
             })
         })
         .expect("owned source drops before decoder allocation");
-
         assert!(OWNED_SOURCE_DROPPED.get());
         assert_eq!(decoded.marker, 7);
         assert_eq!(decoded.allocation.len(), 256);
     }
-
     #[test]
     fn final_owned_roundtrip_drops_source_on_encode_error() {
         ENCODE_ERROR_SOURCE_DROPPED.set(false);
@@ -1158,7 +1048,6 @@ mod tests {
         ));
         assert!(ENCODE_ERROR_SOURCE_DROPPED.get());
     }
-
     #[test]
     fn final_owned_roundtrip_drops_source_before_decode_error() {
         DECODE_ERROR_SOURCE_DROPPED.set(false);
@@ -1169,7 +1058,6 @@ mod tests {
         ));
         assert!(DECODE_ERROR_SOURCE_DROPPED.get());
     }
-
     #[test]
     fn scoped_limits_restore_the_previous_value() {
         let outer = SingularQueryOutputLimits::new(1024, 2048);
@@ -1182,7 +1070,6 @@ mod tests {
         }
         assert_eq!(ACTIVE_LIMITS.get(), Some(outer));
     }
-
     #[test]
     fn builder_capacity_is_rejected_by_the_retained_limit() {
         let one_slot_bytes = core::mem::size_of::<u64>() + core::mem::size_of::<usize>();
@@ -1190,14 +1077,12 @@ mod tests {
             1_024,
             u64::try_from(one_slot_bytes).expect("one test slot fits"),
         ));
-
         assert!(SingularQueryVecBuilder::<u64>::new(1).is_ok());
         assert!(matches!(
             SingularQueryVecBuilder::<u64>::new(2),
             Err(Error::CapacityLimit)
         ));
     }
-
     #[test]
     fn retained_builders_share_one_resident_allowance() {
         let one_slot_bytes = core::mem::size_of::<u64>() + core::mem::size_of::<usize>();
@@ -1206,7 +1091,6 @@ mod tests {
             u64::try_from(one_slot_bytes).expect("one test slot fits"),
         ));
         let first = SingularQueryVecBuilder::<u64>::new(1).expect("first builder fits");
-
         assert!(matches!(
             SingularQueryVecBuilder::<u64>::new(1),
             Err(Error::CapacityLimit)
@@ -1214,7 +1098,6 @@ mod tests {
         drop(first);
         assert!(SingularQueryVecBuilder::<u64>::new(1).is_ok());
     }
-
     #[test]
     fn current_allocation_is_resident_not_cumulative() {
         let _limits = SingularOutputLimitGuard::enter(SingularQueryOutputLimits::new(1_024, 16));
@@ -1223,24 +1106,20 @@ mod tests {
             current.add_nested(8).expect("complete first current fits");
             assert!(matches!(current.add_nested(1), Err(Error::CapacityLimit)));
         }
-
         let mut next = SingularQueryCurrentAllocation::new(8).expect("next current resets D");
         next.add_nested(8).expect("complete next current fits");
     }
-
     #[test]
     fn current_decode_limit_uses_only_the_resident_remainder() {
         let _limits = SingularOutputLimitGuard::enter(SingularQueryOutputLimits::new(1_024, 16));
         let current = SingularQueryCurrentAllocation::new(6).expect("initial current fits");
         let protocol = norito::DecodeLimits::new(64, 64, 64, 64, 8);
-
         let limits = current
             .decode_limits(32, protocol)
             .expect("remaining current decode fits");
         assert_eq!(limits.max_total_allocated_bytes(), 10);
         assert_eq!(limits.max_field_bytes(), 10);
     }
-
     #[test]
     fn builder_rejects_an_oversized_item_before_retaining_it() {
         let _canonical_flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -1251,14 +1130,12 @@ mod tests {
             4_096,
         ));
         let mut builder = SingularQueryVecBuilder::new(1).expect("empty builder fits exactly");
-
         assert!(matches!(
             builder.try_push("x".to_owned()),
             Err(Error::CapacityLimit)
         ));
         assert!(builder.is_empty());
     }
-
     #[test]
     fn builder_preserves_values_inside_resident_limits() {
         let _limits = SingularOutputLimitGuard::enter(SingularQueryOutputLimits::new(4_096, 4_096));
@@ -1269,23 +1146,19 @@ mod tests {
         builder
             .try_push("beta".to_owned())
             .expect("second value fits");
-
         assert_eq!(
             builder.into_vec().expect("finished builder fits"),
             ["alpha", "beta"]
         );
     }
-
     #[test]
     fn active_builder_never_grows_beyond_its_preallocated_capacity() {
         let _limits = SingularOutputLimitGuard::enter(SingularQueryOutputLimits::new(4_096, 4_096));
         let mut builder = SingularQueryVecBuilder::new(1).expect("one slot fits");
         builder.try_push(7_u64).expect("preallocated slot fits");
-
         assert!(matches!(builder.try_push(8_u64), Err(Error::CapacityLimit)));
         assert_eq!(builder.into_vec().expect("finished builder fits"), [7]);
     }
-
     #[test]
     fn spare_allocator_capacity_does_not_expand_builder_admission() {
         let _limits = SingularOutputLimitGuard::enter(SingularQueryOutputLimits::new(4_096, 4_096));
@@ -1296,12 +1169,10 @@ mod tests {
         builder.item_allocation_bytes.reserve(32);
         assert!(builder.values.capacity() > builder.admitted_capacity);
         assert!(builder.item_allocation_bytes.capacity() > builder.admitted_capacity);
-
         builder.try_push(7_u64).expect("admitted slot fits");
         assert!(matches!(builder.try_push(8_u64), Err(Error::CapacityLimit)));
         assert_eq!(builder.into_vec().expect("finished builder fits"), [7]);
     }
-
     #[test]
     fn current_fixed_vec_rejects_spare_allocator_capacity() {
         let _limits = SingularOutputLimitGuard::enter(SingularQueryOutputLimits::new(4_096, 64));
@@ -1312,12 +1183,10 @@ mod tests {
         assert_eq!(current.retained_bytes, core::mem::size_of::<u64>());
         values.values.reserve(32);
         assert!(values.values.capacity() > values.admitted_capacity);
-
         values.push(7).expect("admitted slot fits");
         assert!(matches!(values.push(8), Err(Error::CapacityLimit)));
         assert_eq!(values.into_vec(), [7]);
     }
-
     #[test]
     fn retained_vector_sort_keeps_nested_charges_aligned() {
         let _limits = SingularOutputLimitGuard::enter(SingularQueryOutputLimits::new(8_192, 8_192));
@@ -1327,7 +1196,6 @@ mod tests {
         let mut retained = builder.into_retained_vec();
         retained.sort_by(Ord::cmp);
         let mut retained = retained.into_iter();
-
         let (short, short_charge) = retained
             .next_with_allocation_charge()
             .expect("retained charge table remains valid")
@@ -1340,7 +1208,6 @@ mod tests {
         assert_eq!(long, "z".repeat(64));
         assert!(short_charge < long_charge);
     }
-
     #[test]
     fn retained_builder_double_release_poison_is_sticky_until_scope_exit() {
         {
@@ -1351,7 +1218,6 @@ mod tests {
             ));
             let builder = SingularQueryVecBuilder::<u64>::new(1).expect("one builder fits");
             let charge = builder.retained_charge_bytes;
-
             assert!(release_retained_builder_charge(charge));
             drop(builder);
             assert_eq!(ACTIVE_RETAINED_BUILDER_BYTES.get(), usize::MAX);
@@ -1362,10 +1228,8 @@ mod tests {
             assert!(!release_retained_builder_charge(1));
             assert_eq!(ACTIVE_RETAINED_BUILDER_BYTES.get(), usize::MAX);
         }
-
         assert_eq!(ACTIVE_RETAINED_BUILDER_BYTES.get(), 0);
     }
-
     #[test]
     fn retained_vector_missing_charge_fails_closed() {
         let _limits = SingularOutputLimitGuard::enter(SingularQueryOutputLimits::new(1_024, 1_024));
@@ -1375,7 +1239,6 @@ mod tests {
             item_allocation_bytes: Vec::new().into_iter(),
             retained_charge_bytes: 1,
         };
-
         assert!(matches!(
             retained.next_with_allocation_charge(),
             Err(Error::CapacityLimit)
@@ -1386,7 +1249,6 @@ mod tests {
             Err(Error::CapacityLimit)
         ));
     }
-
     #[test]
     fn retained_vector_charge_subtraction_underflow_fails_closed() {
         let _limits = SingularOutputLimitGuard::enter(SingularQueryOutputLimits::new(1_024, 1_024));
@@ -1396,7 +1258,6 @@ mod tests {
             item_allocation_bytes: vec![2].into_iter(),
             retained_charge_bytes: 1,
         };
-
         assert!(matches!(
             retained.next_with_allocation_charge(),
             Err(Error::CapacityLimit)

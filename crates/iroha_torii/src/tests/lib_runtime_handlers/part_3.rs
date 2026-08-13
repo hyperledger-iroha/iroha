@@ -11,7 +11,6 @@ async fn torii_proxy_snapshot_roundtrips_status_headers_and_body() {
         axum::http::HeaderName::from_static("x-iroha-routed-by"),
         HeaderValue::from_static("proxy"),
     );
-
     let snapshot = super::response_to_torii_proxy_snapshot(response, usize::MAX).await;
     let restored = super::torii_proxy_snapshot_to_response(snapshot);
     let headers = restored.headers().clone();
@@ -33,14 +32,11 @@ async fn torii_proxy_snapshot_roundtrips_status_headers_and_body() {
         .expect("body bytes");
     assert_eq!(body.as_ref(), b"proxied-body");
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_snapshot_caps_buffered_response_bodies() {
     let response = Response::new(Body::from("proxied-body"));
-
     let snapshot = super::response_to_torii_proxy_snapshot(response, 4).await;
-
     assert_eq!(snapshot.status_code, StatusCode::BAD_GATEWAY.as_u16());
     let body = String::from_utf8(snapshot.body).expect("error body is utf8");
     assert!(
@@ -48,7 +44,6 @@ async fn torii_proxy_snapshot_caps_buffered_response_bodies() {
         "unexpected cap error body: {body}"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_snapshot_restore_drops_invalid_headers_and_status() {
@@ -70,9 +65,7 @@ async fn torii_proxy_snapshot_restore_drops_invalid_headers_and_status() {
         ],
         body: b"restored".to_vec(),
     };
-
     let restored = super::torii_proxy_snapshot_to_response(snapshot);
-
     assert_eq!(restored.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(
         restored
@@ -88,7 +81,6 @@ async fn torii_proxy_snapshot_restore_drops_invalid_headers_and_status() {
         .expect("restored body");
     assert_eq!(body.as_ref(), b"restored");
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn torii_proxy_header_conversion_preserves_duplicates_and_skips_invalid() {
@@ -105,7 +97,6 @@ fn torii_proxy_header_conversion_preserves_duplicates_and_skips_invalid() {
         axum::http::HeaderName::from_static("x-single"),
         HeaderValue::from_static("kept"),
     );
-
     let mut proxy_headers = super::header_map_to_torii_proxy_headers(&headers);
     proxy_headers.push(iroha_core::torii_proxy::ToriiProxyHeaderV1 {
         name: "bad header".to_owned(),
@@ -121,7 +112,6 @@ fn torii_proxy_header_conversion_preserves_duplicates_and_skips_invalid() {
         .iter()
         .filter_map(|value| value.to_str().ok())
         .collect::<Vec<_>>();
-
     assert_eq!(repeated, vec!["one", "two"]);
     assert_eq!(
         restored
@@ -132,7 +122,6 @@ fn torii_proxy_header_conversion_preserves_duplicates_and_skips_invalid() {
     assert!(restored.get("bad header").is_none());
     assert!(restored.get("x-bad-value").is_none());
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_snapshot_accepts_exact_limit_and_preserves_headers() {
@@ -142,9 +131,7 @@ async fn torii_proxy_snapshot_accepts_exact_limit_and_preserves_headers() {
         axum::http::HeaderName::from_static("x-proxy-test"),
         HeaderValue::from_static("kept"),
     );
-
     let snapshot = super::response_to_torii_proxy_snapshot(response, 4).await;
-
     assert_eq!(snapshot.status_code, StatusCode::CREATED.as_u16());
     assert_eq!(snapshot.body, b"four");
     assert!(
@@ -155,7 +142,6 @@ async fn torii_proxy_snapshot_accepts_exact_limit_and_preserves_headers() {
         "exact-limit responses should keep proxied headers"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn reqwest_torii_proxy_snapshot_caps_buffered_bridge_response_bodies() {
@@ -172,7 +158,6 @@ async fn reqwest_torii_proxy_snapshot_caps_buffered_bridge_response_bodies() {
             .await
             .expect("serve upstream");
     });
-
     let response = reqwest::get(format!("http://{addr}/oversized"))
         .await
         .expect("fetch upstream response");
@@ -181,13 +166,11 @@ async fn reqwest_torii_proxy_snapshot_caps_buffered_bridge_response_bodies() {
         Err(error) => error,
     };
     upstream_task.abort();
-
     assert!(
         error.contains("configured limit of 4 bytes"),
         "unexpected cap error: {error}"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn reqwest_torii_proxy_snapshot_accepts_exact_limit_bridge_response() {
@@ -212,7 +195,6 @@ async fn reqwest_torii_proxy_snapshot_accepts_exact_limit_bridge_response() {
             .await
             .expect("serve upstream");
     });
-
     let response = reqwest::get(format!("http://{addr}/exact"))
         .await
         .expect("fetch upstream response");
@@ -220,7 +202,6 @@ async fn reqwest_torii_proxy_snapshot_accepts_exact_limit_bridge_response() {
         .await
         .expect("exact-limit response should be accepted");
     upstream_task.abort();
-
     assert_eq!(snapshot.status_code, StatusCode::PARTIAL_CONTENT.as_u16());
     assert_eq!(snapshot.body, b"four");
     assert!(
@@ -230,7 +211,6 @@ async fn reqwest_torii_proxy_snapshot_accepts_exact_limit_bridge_response() {
         "exact-limit bridge responses should keep proxied headers"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn torii_proxy_response_body_limit_caps_hosted_http_and_strict_receipts() {
@@ -269,7 +249,6 @@ fn torii_proxy_response_body_limit_caps_hosted_http_and_strict_receipts() {
             .expect("test query memory geometry should fit");
     let (_strict_app, strict_request) =
         incoming_proxy_submit_fixture(0xaa, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
-
     assert_eq!(
         super::torii_proxy_response_body_limit(app.as_ref(), &hosted_request),
         1,
@@ -296,7 +275,6 @@ fn torii_proxy_response_body_limit_caps_hosted_http_and_strict_receipts() {
         "strict durable-admission receipts retain a bounded protocol budget even when the public transaction cap is smaller"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn torii_proxy_retry_policy_only_retries_gateway_class_statuses() {
@@ -316,7 +294,6 @@ fn torii_proxy_retry_policy_only_retries_gateway_class_statuses() {
         StatusCode::INTERNAL_SERVER_ERROR
     ));
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn torii_proxy_hosted_http_request_kind_uses_route_timeout() {
@@ -331,7 +308,6 @@ fn torii_proxy_hosted_http_request_kind_uses_route_timeout() {
         body: Vec::new(),
         remote_ip: Some("127.0.0.1".to_owned()),
     });
-
     assert_eq!(
         super::torii_proxy_attempt_timeout(&hosted_request),
         DEFAULT_ROUTE_TIMEOUT
@@ -341,7 +317,6 @@ fn torii_proxy_hosted_http_request_kind_uses_route_timeout() {
         "hosted_http"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn queue_plan_synced_runtime_timing_uses_the_complete_remaining_route_budget() {
@@ -378,7 +353,6 @@ fn queue_plan_synced_runtime_timing_uses_the_complete_remaining_route_budget() {
         (Duration::from_millis(250), Duration::ZERO),
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn durable_queue_plan_carrier_waits_when_owner_wake_is_deferred() {
@@ -396,7 +370,6 @@ fn durable_queue_plan_carrier_waits_when_owner_wake_is_deferred() {
         super::DurableQueuePlanWakeDisposition::OwnerMissing
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn queue_plan_synced_max_roster_is_not_serialized_by_proxy_hedging() {
@@ -407,7 +380,6 @@ fn queue_plan_synced_max_roster_is_not_serialized_by_proxy_hedging() {
         .saturating_add(durability_threshold)
         .saturating_sub(1);
     let hedge_delay = Duration::from_millis(250);
-
     assert_eq!(
         roster_len, 128,
         "the adversarial timing case models 128 validators"
@@ -427,7 +399,6 @@ fn queue_plan_synced_max_roster_is_not_serialized_by_proxy_hedging() {
         "ordinary proxy traffic must retain staggered hedging"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
@@ -445,7 +416,6 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
         super::torii_proxy_request_kind_name(&query_request),
         "signed_query_route_scan"
     );
-
     let keypair =
         checked_torii_test_ed25519_keypair(0xfc, "derive proxy submit timeout fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
@@ -532,7 +502,6 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
         ),
         "different ingress peers must not share proxy request identities"
     );
-
     let first_app = mk_app_state_for_tests();
     let second_app = mk_app_state_for_tests();
     assert_ne!(
@@ -557,7 +526,6 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
         "request sequence exhaustion must fail closed instead of wrapping"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn torii_proxy_v6_roundtrip_and_forwarding_preserve_transaction_admission_binding() {
@@ -577,7 +545,6 @@ fn torii_proxy_v6_roundtrip_and_forwarding_preserve_transaction_admission_bindin
         DataSpaceId::new(12),
     )));
     let forwarding_peer = PeerId::from(keypair.public_key().clone());
-
     let admission = ToriiProxyTransactionAdmissionV2::QueuePlanSynced;
     let request_id =
         Hash::new(norito::to_bytes(&admission).expect("encode admission request identity"));
@@ -635,21 +602,18 @@ fn torii_proxy_v6_roundtrip_and_forwarding_preserve_transaction_admission_bindin
     let decoded = norito::decode_from_bytes::<ToriiProxyRequestV6>(&encoded)
         .expect("decode V6 proxy admission request");
     assert_eq!(decoded, request);
-
     let forwarded = super::forwarded_torii_proxy_request(&request, &forwarding_peer);
     assert_eq!(forwarded.schema_version, TORII_PROXY_REQUEST_VERSION_V6);
     assert_eq!(forwarded.request_id, request.request_id);
     assert_eq!(forwarded.deadline_unix_ms, request.deadline_unix_ms);
     assert_eq!(forwarded.request, request.request);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn torii_proxy_authenticated_deadline_rejects_expiry_and_excess_horizon() {
     const NOW_UNIX_MS: u64 = 1_900_000_000_000;
     let max_horizon_ms = u64::try_from(super::TORII_PROXY_MAX_DEADLINE_HORIZON.as_millis())
         .expect("fixed proxy deadline horizon fits u64 milliseconds");
-
     assert_eq!(
         super::torii_proxy_remaining_budget(NOW_UNIX_MS + 1, NOW_UNIX_MS),
         Ok(Duration::from_millis(1))
@@ -692,7 +656,6 @@ fn torii_proxy_authenticated_deadline_rejects_expiry_and_excess_horizon() {
         super::torii_proxy_remaining_budget(NOW_UNIX_MS + max_horizon_ms + 1, NOW_UNIX_MS).is_err()
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn incoming_proxy_submit_fixture(
     seed: u8,
@@ -776,10 +739,8 @@ fn incoming_proxy_submit_fixture(
             admission_binding,
         },
     };
-
     (app, request)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn single_route_queue_plan_authorities(
     context: &iroha_core::queue::QueuePlanAdmissionContextV2,
@@ -801,7 +762,6 @@ fn single_route_queue_plan_authorities(
     );
     route.validator_set.clone()
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn set_proxy_fixture_latest_block_height(app: &SharedAppState, height: u64) {
     app.state
@@ -814,7 +774,6 @@ fn set_proxy_fixture_latest_block_height(app: &SharedAppState, height: u64) {
             0,
         ));
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn accepted_queue_hash_for_proxy_submit(
     app: &SharedAppState,
@@ -834,7 +793,6 @@ fn accepted_queue_hash_for_proxy_submit(
     .expect("proxy Submit fixture must pass canonical transaction admission")
     .hash()
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn exact_queue_plan_synced_acceptance_snapshot(
     app: &SharedAppState,
@@ -857,7 +815,6 @@ async fn exact_queue_plan_synced_acceptance_snapshot(
     );
     super::response_to_torii_proxy_snapshot(response, app.transaction_max_content_len.max(1)).await
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn sign_queue_plan_synced_test_receipt(
     binding: &QueuePlanAdmissionBindingV2,
@@ -877,7 +834,6 @@ fn sign_queue_plan_synced_test_receipt(
         signature,
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn bind_queue_plan_synced_test_authorities(
     request: &mut ToriiProxyRequestV6,
@@ -926,7 +882,6 @@ fn bind_queue_plan_synced_test_authorities(
     .expect("rebuild exact QueuePlanSynced journal claim");
     authorities
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn exact_queue_plan_synced_test_receipt(
     request: &ToriiProxyRequestV6,
@@ -950,7 +905,6 @@ fn exact_queue_plan_synced_test_receipt(
         .expect("QueuePlanSynced test signer must be in the coordinator roster");
     sign_queue_plan_synced_test_receipt(&expected.admission_binding, validator_index, signer)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_test_certificate_snapshot(
     request: &ToriiProxyRequestV6,
@@ -992,7 +946,6 @@ fn queue_plan_synced_test_certificate_snapshot(
         .expect("encode QueuePlanSynced test certificate"),
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn queue_plan_admission_publication_targets_every_live_successor_except_self() {
@@ -1028,7 +981,6 @@ fn queue_plan_admission_publication_targets_every_live_successor_except_self() {
         authorities[2].clone(),
         outsider,
     ]);
-
     assert_eq!(
         super::queue_plan_admission_publication_targets(&authorities[0], &online, binding,)
             .expect("resolve certified publication targets"),
@@ -1036,7 +988,6 @@ fn queue_plan_admission_publication_targets_every_live_successor_except_self() {
         "the local authority, one dead authority, and an online outsider must be excluded"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn queue_plan_admission_publication_validates_and_persists_idempotently() {
@@ -1052,7 +1003,6 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
     let expected = super::queue_plan_synced_acceptance_expectation(&request)
         .expect("publication fixture expectation must validate")
         .expect("publication fixture must use strict admission");
-
     assert_eq!(
         super::validate_queue_plan_admission_publication(&app, &publication)
             .expect("certified publication must validate against local state"),
@@ -1076,7 +1026,6 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
         panic!("an absent registry must retain the exact durable certificate");
     };
     assert_eq!(first_hash, second_hash);
-
     let mut unsupported = publication;
     unsupported.schema_version = unsupported.schema_version.saturating_add(1);
     assert!(
@@ -1085,7 +1034,6 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
             .contains("schema_version")
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_certificate_requires_canonical_distinct_authority_quorum() {
@@ -1116,7 +1064,6 @@ async fn queue_plan_synced_certificate_requires_canonical_distinct_authority_quo
             )
         })
         .collect::<Vec<_>>();
-
     let one_receipt_snapshot =
         queue_plan_synced_test_certificate_snapshot(&request, vec![receipts[0].clone()]);
     assert_eq!(
@@ -1148,7 +1095,6 @@ async fn queue_plan_synced_certificate_requires_canonical_distinct_authority_quo
     assert!(super::is_queue_plan_outcome_unknown_response(
         &one_receipt_response
     ));
-
     let snapshots = authorities
         .iter()
         .cloned()
@@ -1209,7 +1155,6 @@ async fn queue_plan_synced_certificate_requires_canonical_distinct_authority_quo
             .windows(2)
             .all(|pair| pair[0].validator_index < pair[1].validator_index)
     );
-
     let duplicate_snapshot = queue_plan_synced_test_certificate_snapshot(
         &request,
         vec![receipts[0].clone(), receipts[0].clone()],
@@ -1218,7 +1163,6 @@ async fn queue_plan_synced_certificate_requires_canonical_distinct_authority_quo
         super::validate_queue_plan_synced_acceptance(&duplicate_snapshot, &expectation).is_err(),
         "duplicate validator-index attestations must never count twice"
     );
-
     let mut noncanonical_receipts = receipts[..2].to_vec();
     noncanonical_receipts.sort_by(|left, right| right.validator_index.cmp(&left.validator_index));
     let mut noncanonical_snapshot =
@@ -1234,7 +1178,6 @@ async fn queue_plan_synced_certificate_requires_canonical_distinct_authority_quo
         "certificate validator-index order must be canonical"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_max_roster_reaches_honest_quorum_past_byzantine_prefix() {
@@ -1313,7 +1256,6 @@ async fn queue_plan_synced_max_roster_reaches_honest_quorum_past_byzantine_prefi
     )
     .await
     .expect("42 pending Byzantine authorities must not hedge-delay the honest quorum at index 84");
-
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert!(
         started
@@ -1323,7 +1265,6 @@ async fn queue_plan_synced_max_roster_reaches_honest_quorum_past_byzantine_prefi
         "the final honest authority required for quorum must launch without waiting 21 seconds"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_first_quorum_never_waits_for_pending_equivocation_evidence() {
@@ -1396,10 +1337,8 @@ async fn queue_plan_synced_first_quorum_never_waits_for_pending_equivocation_evi
     let response = tokio::time::timeout(Duration::from_secs(1), aggregation)
         .await
         .expect("a pending authority must not extend first-quorum acceptance");
-
     assert_eq!(response.status(), StatusCode::ACCEPTED);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_candidates_use_exact_bound_roster_and_count_local_quorum() {
@@ -1451,7 +1390,6 @@ async fn queue_plan_synced_candidates_use_exact_bound_roster_and_count_local_quo
     Arc::get_mut(&mut app)
         .expect("exact-roster fixture app must be uniquely owned")
         .online_peers = OnlinePeersProvider::new(online_rx);
-
     let candidates = super::torii_proxy_candidate_peer_ids_for_request(
         app.as_ref(),
         &local_peer_id,
@@ -1479,7 +1417,6 @@ async fn queue_plan_synced_candidates_use_exact_bound_roster_and_count_local_quo
             .iter()
             .all(|candidate| candidate.peer_id() != &outsider_peer_id)
     );
-
     let rotated_bound_roster = vec![local_peer_id.clone(), authorities[2].clone()];
     let proposal_height = match &request.request {
         ToriiProxyRequestKindV4::SubmitTransaction {
@@ -1506,7 +1443,6 @@ async fn queue_plan_synced_candidates_use_exact_bound_roster_and_count_local_quo
         ],
         "joining/leaving rotation must use the proposal-bound roster verbatim"
     );
-
     let local_receipt = exact_queue_plan_synced_test_receipt(&request, &signers[0], 12_000);
     let remote_receipt = exact_queue_plan_synced_test_receipt(&request, &signers[1], 12_001);
     let snapshots = BTreeMap::from([
@@ -1544,7 +1480,6 @@ async fn queue_plan_synced_candidates_use_exact_bound_roster_and_count_local_quo
         "the local exact authority must contribute one distinct f+1 durable attestation"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quorum_receipt() {
@@ -1559,7 +1494,6 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
             .expect("install real-local quorum queue plan journal"),
         0
     );
-
     let authority_signers = [
         app.torii_proxy_bridge_signer.clone(),
         checked_torii_test_ed25519_keypair(
@@ -1587,7 +1521,6 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
         }
         topology.commit();
     }
-
     let routing_plan = RoutingPlan::single(route);
     let admission_context = app
         .queue
@@ -1616,7 +1549,6 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
         )
         .expect("bind real-local quorum request"),
     );
-
     let local_peer_id = authorities[0].clone();
     let remote_peer_id = authorities[1].clone();
     assert_eq!(
@@ -1633,7 +1565,6 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
         expected.durability_threshold, 2,
         "four authorities must require f+1=2 durable receipts"
     );
-
     let remote_receipt =
         exact_queue_plan_synced_test_receipt(&request, &authority_signers[1], 12_100);
     let remote_snapshot =
@@ -1678,7 +1609,6 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
         |_request_id| async move {},
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(
         app.queue.active_len(),
@@ -1692,7 +1622,6 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
             > 0,
         "f+1 acceptance must include a locally fsynced V4 journal record"
     );
-
     let snapshot = super::response_to_torii_proxy_snapshot(
         response,
         QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2,
@@ -1722,7 +1651,6 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
         "the f+1 certificate must contain the real local and synthetic remote authorities"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_admission_context_rejects_height_plan_leg_incarnation_roster_and_threshold_drift()
@@ -1832,7 +1760,6 @@ async fn queue_plan_synced_admission_context_rejects_height_plan_leg_incarnation
         .validator_set
         .push(coordinator.validator_set[0].clone());
     drift_cases.push(("duplicate_roster", duplicate_roster));
-
     for (label, drifted_request) in drift_cases {
         assert!(
             super::queue_plan_synced_acceptance_expectation(&drifted_request).is_err()
@@ -1848,7 +1775,6 @@ async fn queue_plan_synced_admission_context_rejects_height_plan_leg_incarnation
         );
         assert_eq!(app.queue.active_len(), 0, "{label} changed queue ownership");
     }
-
     let mut nondeterministic_request_id = request.clone();
     let forged_request_id = Hash::new(b"nondeterministic-cross-ingress-request-id");
     nondeterministic_request_id.request_id = forged_request_id;
@@ -1885,7 +1811,6 @@ async fn queue_plan_synced_admission_context_rejects_height_plan_leg_incarnation
         "authorities must reject a self-consistent but nondeterministic request identity"
     );
     assert_eq!(app.queue.active_len(), 0);
-
     let mut missing = request.clone();
     let ToriiProxyRequestKindV4::SubmitTransaction {
         admission_binding, ..
@@ -1902,7 +1827,6 @@ async fn queue_plan_synced_admission_context_rejects_height_plan_leg_incarnation
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(app.queue.active_len(), 0);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_decode_amplification() {
@@ -1916,7 +1840,6 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
         .expect("bounded-response fixture must be strict");
     super::validate_queue_plan_synced_acceptance(&exact_snapshot, &expectation)
         .expect("exact bounded certificate must validate");
-
     let mut oversized_body = exact_snapshot.clone();
     oversized_body.body =
         vec![0_u8; QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2.saturating_add(1)];
@@ -1925,7 +1848,6 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
             .expect_err("body limit + 1 must fail")
             .contains("body")
     );
-
     let mut too_many_headers = exact_snapshot.clone();
     too_many_headers.headers = (0..=QUEUE_PLAN_SYNCED_MAX_HEADERS_V2)
         .map(|index| iroha_core::torii_proxy::ToriiProxyHeaderV1 {
@@ -1938,7 +1860,6 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
             .expect_err("header count limit + 1 must fail")
             .contains("too many headers")
     );
-
     let mut oversized_name = exact_snapshot.clone();
     oversized_name.headers = vec![iroha_core::torii_proxy::ToriiProxyHeaderV1 {
         name: "n".repeat(QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V2.saturating_add(1)),
@@ -1949,7 +1870,6 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
             .expect_err("header-name limit + 1 must fail")
             .contains("field limit")
     );
-
     let mut oversized_value = exact_snapshot.clone();
     oversized_value.headers = vec![iroha_core::torii_proxy::ToriiProxyHeaderV1 {
         name: "x-bound".to_owned(),
@@ -1960,7 +1880,6 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
             .expect_err("header-value limit + 1 must fail")
             .contains("field limit")
     );
-
     let mut oversized_aggregate = exact_snapshot.clone();
     oversized_aggregate.headers = (0..9)
         .map(|index| iroha_core::torii_proxy::ToriiProxyHeaderV1 {
@@ -1973,7 +1892,6 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
             .expect_err("aggregate header limit + 1 must fail")
             .contains("aggregate limit")
     );
-
     let mut non_identity_encoding = exact_snapshot.clone();
     non_identity_encoding
         .headers
@@ -2039,7 +1957,6 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
             .expect_err("duplicate strict P2P Content-Length must fail")
             .contains("duplicate")
     );
-
     let mut empty_body = exact_snapshot.clone();
     empty_body.body.clear();
     assert!(super::decode_queue_plan_synced_certificate(&empty_body.body).is_err());
@@ -2055,7 +1972,6 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
         super::decode_queue_plan_synced_certificate(&noncanonical_body.body).is_err(),
         "trailing bytes must not produce a second canonical certificate encoding"
     );
-
     let upstream = axum::Router::new().route(
         "/encoded",
         axum::routing::get(|| async {
@@ -2088,7 +2004,6 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
             .expect_err("non-identity encoding must fail");
     upstream_task.abort();
     assert!(encoding_error.contains("non-identity content encoding"));
-
     let request_id = Hash::new(b"strict-p2p-response-bound");
     let responder = PeerId::new(
         checked_torii_test_ed25519_keypair(0xd8, "derive strict P2P bound responder fixture key")
@@ -2123,7 +2038,6 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
         "P2P must drop an oversized strict response before handing bytes to the decoder"
     );
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_torii_proxy_rejects_malformed_v6_hop_chain_before_dispatch() {
@@ -2160,7 +2074,6 @@ async fn incoming_torii_proxy_rejects_malformed_v6_hop_chain_before_dispatch() {
             Vec::new(),
         )),
     };
-
     let mut malformed = Vec::new();
     let mut zero_hops = base_request.clone();
     zero_hops.hop_count = 0;
@@ -2188,7 +2101,6 @@ async fn incoming_torii_proxy_rejects_malformed_v6_hop_chain_before_dispatch() {
         receiver_revisit,
         Some(sender.clone()),
     ));
-
     for (label, request, authenticated_sender) in malformed {
         let response =
             super::execute_incoming_torii_proxy_request(&app, request, authenticated_sender).await;
@@ -2199,14 +2111,12 @@ async fn incoming_torii_proxy_rejects_malformed_v6_hop_chain_before_dispatch() {
         );
         assert_eq!(app.queue.active_len(), 0);
     }
-
     let mut revisit = base_request;
     revisit.visited_peer_ids = vec![local_peer];
     let response = super::forward_incoming_torii_proxy_request(&app, &sender, route, revisit).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(app.queue.active_len(), 0);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn queue_plan_synced_certificate_binds_exact_durable_journal_claim() {
@@ -2225,12 +2135,12 @@ fn queue_plan_synced_certificate_binds_exact_durable_journal_claim() {
             .admission_binding
             .signed_transaction_hash
             .as_ref(),
-        "ingress must expect the same inner signed-wire hash carried by the durable binding"
+        "ingress must expect the same signed transaction identity carried by the durable binding"
     );
-    assert_ne!(
+    assert_eq!(
         expected_signed_hash.as_ref(),
         expectation.entrypoint_hash.as_ref(),
-        "the inner signed-wire hash must remain distinct from the external entrypoint hash"
+        "external signed transaction and entrypoint identities must be equal"
     );
     let exact_receipt =
         exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 30_001);
@@ -2238,7 +2148,6 @@ fn queue_plan_synced_certificate_binds_exact_durable_journal_claim() {
         queue_plan_synced_test_certificate_snapshot(&request, vec![exact_receipt.clone()]);
     super::validate_queue_plan_synced_acceptance(&exact_snapshot, &expectation)
         .expect("exact durable journal claim must validate");
-
     let outsider = checked_torii_test_ed25519_keypair(
         0xdc,
         "derive exact durable journal claim outsider fixture key",
@@ -2338,7 +2247,6 @@ fn queue_plan_synced_certificate_binds_exact_durable_journal_claim() {
         "signature",
         queue_plan_synced_test_certificate_snapshot(&request, vec![forged_attestation]),
     ));
-
     for (label, snapshot) in mutations {
         assert!(
             super::validate_queue_plan_synced_acceptance(&snapshot, &expectation).is_err(),
@@ -2346,7 +2254,6 @@ fn queue_plan_synced_certificate_binds_exact_durable_journal_claim() {
         );
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity() {
@@ -2359,7 +2266,6 @@ fn queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity() {
         Hash::from(reconciliation_hash.clone()),
         Hash::from(accepted_queue_hash),
     );
-
     let ToriiProxyRequestKindV4::SubmitTransaction { transaction, .. } = &request.request else {
         unreachable!("fixture shape checked above");
     };
@@ -2370,7 +2276,6 @@ fn queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity() {
         "durable reconciliation must retain its exact typed entrypoint identity"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn queue_plan_synced_registry_timeout_never_returns_accepted() {
@@ -2379,7 +2284,6 @@ async fn queue_plan_synced_registry_timeout_never_returns_accepted() {
     let expected = super::queue_plan_synced_acceptance_expectation(&request)
         .expect("timeout fixture must be valid")
         .expect("timeout fixture must require synchronized admission");
-
     let outcome = super::wait_for_exact_queue_plan_admission_registry(
         app.state.as_ref(),
         &expected.admission_binding,
@@ -2399,15 +2303,12 @@ async fn queue_plan_synced_registry_timeout_never_returns_accepted() {
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(super::is_queue_plan_outcome_unknown_response(&response));
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn incoming_submit_queue_plan_synced_without_journal_is_stably_unavailable() {
     let (app, request) =
         incoming_proxy_submit_fixture(0xe2, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
-
     let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         app.queue.active_len(),
@@ -2421,7 +2322,6 @@ async fn incoming_submit_queue_plan_synced_without_journal_is_stably_unavailable
         norito::decode_from_bytes(&body).expect("decode QueuePlanSynced rejection envelope");
     assert_eq!(envelope.code(), "queue_plan_journal_unavailable");
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn incoming_submit_queue_plan_synced_succeeds_with_installed_journal() {
@@ -2435,7 +2335,6 @@ async fn incoming_submit_queue_plan_synced_succeeds_with_installed_journal() {
             .expect("install queue plan journal"),
         0
     );
-
     let local_peer_id = app
         .local_peer_id
         .clone()
@@ -2446,7 +2345,6 @@ async fn incoming_submit_queue_plan_synced_succeeds_with_installed_journal() {
     let snapshot = super::execute_torii_proxy_request_locally(&app, local_peer_id, local_request)
         .await
         .expect("local strict proxy execution must produce a bounded response");
-
     assert_eq!(snapshot.snapshot.status_code, StatusCode::ACCEPTED.as_u16());
     assert_eq!(app.queue.active_len(), 1);
     assert!(
@@ -2462,7 +2360,6 @@ async fn incoming_submit_queue_plan_synced_succeeds_with_installed_journal() {
     super::validate_queue_plan_synced_acceptance(&snapshot.snapshot, &expected)
         .expect("production strict response must attest the exact durable request and peer");
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn incoming_queue_plan_synced_exact_retry_survives_height_and_roster_advance() {
@@ -2474,14 +2371,12 @@ async fn incoming_queue_plan_synced_exact_retry_survives_height_and_roster_advan
     app.queue
         .install_plan_journal(&journal_path, 1024 * 1024, true)
         .expect("install historical strict-retry queue plan journal");
-
     let first = super::execute_incoming_torii_proxy_request(&app, request.clone(), None).await;
     assert_eq!(first.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 1);
     let durable_len = std::fs::metadata(&journal_path)
         .expect("strict-retry journal metadata after first admission")
         .len();
-
     set_proxy_fixture_latest_block_height(&app, 1);
     let rotated_peer_id = PeerId::from(
         checked_torii_test_ed25519_keypair(
@@ -2524,7 +2419,6 @@ async fn incoming_queue_plan_synced_exact_retry_survives_height_and_roster_advan
             .is_some_and(|local| !current_authorities.contains(local)),
         "the old durable authority must no longer belong to the current roster"
     );
-
     let retry = super::execute_incoming_torii_proxy_request(&app, request, None).await;
     assert_eq!(
         retry.status(),
@@ -2540,7 +2434,6 @@ async fn incoming_queue_plan_synced_exact_retry_survives_height_and_roster_advan
         "an exact retry must return the original durable claim without appending a replacement"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn incoming_queue_plan_synced_historical_context_without_owned_claim_fails_closed() {
@@ -2556,9 +2449,7 @@ async fn incoming_queue_plan_synced_historical_context_without_owned_claim_fails
         .expect("stale unowned admission journal baseline metadata")
         .len();
     set_proxy_fixture_latest_block_height(&app, 1);
-
     let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
-
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(
         app.queue.active_len(),
@@ -2579,7 +2470,6 @@ async fn incoming_queue_plan_synced_historical_context_without_owned_claim_fails
         norito::decode_from_bytes(&body).expect("decode historical unowned admission rejection");
     assert_eq!(envelope.code(), "queue_plan_admission_context_mismatch");
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn incoming_submit_queue_plan_synced_fails_closed_when_local_peer_and_signer_diverge() {
@@ -2604,9 +2494,7 @@ async fn incoming_submit_queue_plan_synced_fails_closed_when_local_peer_and_sign
     let journal_len_before_rejection = std::fs::metadata(&journal_path)
         .expect("signer-mismatch queue plan journal baseline metadata")
         .len();
-
     let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
-
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(
         app.queue.active_len(),
@@ -2627,7 +2515,6 @@ async fn incoming_submit_queue_plan_synced_fails_closed_when_local_peer_and_sign
         norito::decode_from_bytes(&body).expect("decode signer-mismatch error envelope");
     assert_eq!(envelope.code(), "queue_plan_synced_signer_mismatch");
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn validate_proxy_routing_plan_hint_rejects_forged_digest_and_roles() {
@@ -2645,7 +2532,6 @@ fn validate_proxy_routing_plan_hint_rejects_forged_digest_and_roles() {
         panic!("expected native AMX hint");
     };
     *plan_digest = advertised;
-
     let err = super::validate_proxy_routing_plan_hint(forged_digest)
         .expect_err("submit proxy must reject a forged Native AMX plan digest");
     assert_eq!(
@@ -2655,7 +2541,6 @@ fn validate_proxy_routing_plan_hint_rejects_forged_digest_and_roles() {
             native_plan.digest()
         )
     );
-
     let role_err = super::validate_proxy_routing_plan_hint(ToriiRoutingPlanHintV1::Single(
         iroha_core::torii_proxy::ToriiRouteLegHintV1 {
             route: ToriiRouteHintV1::from(coordinator),
@@ -2670,7 +2555,6 @@ fn validate_proxy_routing_plan_hint_rejects_forged_digest_and_roles() {
         )
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn validate_proxy_routing_plan_rejects_receiver_recomputed_plan() {
@@ -2678,10 +2562,8 @@ fn validate_proxy_routing_plan_rejects_receiver_recomputed_plan() {
     let resolved_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
     let ingress_plan = RoutingPlan::single(ingress_hint);
     let resolved_plan = RoutingPlan::single(resolved_route);
-
     let err = super::validate_proxy_routing_plan("submit_transaction", resolved_plan, ingress_plan)
         .expect_err("submit proxy must reject routing-plan drift");
-
     assert_eq!(
         err.ingress_digest,
         RoutingPlan::single(ingress_hint).digest()
@@ -2691,7 +2573,6 @@ fn validate_proxy_routing_plan_rejects_receiver_recomputed_plan() {
         RoutingPlan::single(resolved_route).digest()
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn validate_proxy_routing_plan_rejects_native_amx_participant_drift() {
@@ -2725,7 +2606,6 @@ fn validate_proxy_routing_plan_rejects_native_amx_participant_drift() {
             ),
         ],
     );
-
     assert_eq!(
         ingress_plan.coordinator_route(),
         resolved_plan.coordinator_route()
@@ -2736,23 +2616,19 @@ fn validate_proxy_routing_plan_rejects_native_amx_participant_drift() {
         ingress_plan.clone(),
     )
     .expect_err("submit proxy must reject Native AMX participant drift");
-
     assert_eq!(err.ingress_digest, ingress_plan.digest());
     assert_eq!(err.receiver_digest, resolved_plan.digest());
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn effective_proxy_routing_decision_prefers_receiver_recomputed_route() {
     let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let resolved_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
-
     assert_eq!(
         super::effective_proxy_routing_decision("verified_query", resolved_route, ingress_hint),
         resolved_route
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn proxy_signed_query_decode_requires_valid_signature_and_exact_bytes() {
@@ -2765,7 +2641,6 @@ fn proxy_signed_query_decode_requires_valid_signature_and_exact_bytes() {
     let limits =
         super::QueryFanoutMemoryEnvelope::decode_limits_for(query_bytes.len(), 1024 * 1024)
             .expect("test proxy decode limits");
-
     let Err(capacity_response) = super::decode_verified_proxy_signed_query(
         &query_bytes,
         "test proxy",
@@ -2776,7 +2651,6 @@ fn proxy_signed_query_decode_requires_valid_signature_and_exact_bytes() {
         panic!("a proxy signed query must obey its decode allocation ceiling");
     };
     assert_eq!(capacity_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-
     let verified = super::decode_verified_proxy_signed_query(
         &query_bytes,
         "test proxy",
@@ -2786,7 +2660,6 @@ fn proxy_signed_query_decode_requires_valid_signature_and_exact_bytes() {
     )
     .expect("the original signed query should verify");
     assert_eq!(verified.authority, authority);
-
     let mut forged_authority =
         <SignedQuery as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&query_bytes)
             .expect("signed proxy query should round-trip");
@@ -2809,7 +2682,6 @@ fn proxy_signed_query_decode_requires_valid_signature_and_exact_bytes() {
         .is_err(),
         "a peer cannot replace the client authority after signing",
     );
-
     let mut forged_request = signed_query;
     forged_request.payload.request = iroha_data_model::query::QueryRequest::Start(
         build_find_active_trigger_ids_query_for_test(),
@@ -2825,7 +2697,6 @@ fn proxy_signed_query_decode_requires_valid_signature_and_exact_bytes() {
         .is_err(),
         "a peer cannot replace the signed query payload",
     );
-
     let mut trailing = query_bytes;
     trailing.push(0);
     let Err(response) = super::decode_verified_proxy_signed_query(
@@ -2839,7 +2710,6 @@ fn proxy_signed_query_decode_requires_valid_signature_and_exact_bytes() {
     };
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn signed_proxy_route_scan_rejects_client_continuations_and_route_tampering() {
@@ -2872,26 +2742,22 @@ fn signed_proxy_route_scan_rejects_client_continuations_and_route_tampering() {
     let response = super::reject_proxy_client_continuation(&request, "signed route scan")
         .expect_err("client-provided proxy continuations must fail closed");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
     let authorized = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
     let tampered = RoutingDecision::new(LaneId::new(4), DataSpaceId::new(12));
     let response = super::validate_proxy_signed_query_route(&authority, &[authorized], tampered)
         .expect_err("a peer cannot replace the authorized route hint");
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn effective_proxy_signed_query_routing_decision_prefers_receiver_recomputed_route() {
     let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let resolved_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
-
     assert_eq!(
         super::effective_proxy_signed_query_routing_decision(resolved_route, ingress_hint),
         resolved_route
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn signed_query_proxy_does_not_retry_after_ambiguous_dispatch() {
@@ -2922,7 +2788,6 @@ async fn signed_query_proxy_does_not_retry_after_ambiguous_dispatch() {
     let attempts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let attempts_ref = attempts.clone();
     let first_peer_id_for_closure = first_peer_id.clone();
-
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![
             ToriiProxyCandidate::P2p(first_peer_id.clone()),
@@ -2956,7 +2821,6 @@ async fn signed_query_proxy_does_not_retry_after_ambiguous_dispatch() {
         |_request_id| async move {},
     )
     .await;
-
     assert_eq!(
         attempts
             .lock()

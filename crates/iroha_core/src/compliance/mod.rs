@@ -1,5 +1,4 @@
 //! Lane compliance policy evaluation and loading.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -7,7 +6,6 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
-
 use iroha_crypto::{Hash, privacy::LaneCommitmentId};
 use iroha_data_model::{
     account::AccountId,
@@ -20,19 +18,15 @@ use iroha_data_model::{
 use iroha_logger::warn;
 use norito::codec::{DecodeAll, Encode};
 use norito::{DecodeLimits, with_decode_limits};
-
 use crate::interlane::LanePrivacyRegistryHandle;
-
 /// Static engine that evaluates lane compliance policies.
 #[derive(Debug)]
 pub struct LaneComplianceEngine {
     policies: BTreeMap<LaneId, Arc<LaneCompliancePolicy>>,
     audit_only: bool,
 }
-
 static EMPTY_PRIVACY_COMMITMENTS: LazyLock<BTreeSet<LaneCommitmentId>> =
     LazyLock::new(BTreeSet::new);
-
 // Policy metadata can contain canonical `Json`, whose data model independently
 // validates its byte and nesting limits. The file ceiling leaves room for the
 // surrounding policy structure, while field, aggregate input, and decode-
@@ -48,7 +42,6 @@ const LANE_COMPLIANCE_POLICY_MAX_DECODE_ALLOCATED_BYTES: usize = 16 * 1024 * 102
 const LANE_COMPLIANCE_POLICY_MAX_DECODE_DEPTH: usize = 64;
 const LANE_COMPLIANCE_POLICY_DECODE_ALLOCATION_MULTIPLIER: usize = 8;
 const LANE_COMPLIANCE_POLICY_DECODE_FIXED_ALLOCATION_BYTES: usize = 16 * 1024;
-
 #[derive(Clone, Copy)]
 struct LaneComplianceLoadLimits {
     max_files: usize,
@@ -60,7 +53,6 @@ struct LaneComplianceLoadLimits {
     max_decode_allocated_bytes: usize,
     max_decode_depth: usize,
 }
-
 const LANE_COMPLIANCE_LOAD_LIMITS: LaneComplianceLoadLimits = LaneComplianceLoadLimits {
     max_files: MAX_ACTIVE_EXECUTION_LANES,
     max_file_bytes: LANE_COMPLIANCE_POLICY_MAX_BYTES,
@@ -71,7 +63,6 @@ const LANE_COMPLIANCE_LOAD_LIMITS: LaneComplianceLoadLimits = LaneComplianceLoad
     max_decode_allocated_bytes: LANE_COMPLIANCE_POLICY_MAX_DECODE_ALLOCATED_BYTES,
     max_decode_depth: LANE_COMPLIANCE_POLICY_MAX_DECODE_DEPTH,
 };
-
 impl LaneComplianceEngine {
     /// Construct an engine from explicit policy definitions.
     ///
@@ -91,7 +82,6 @@ impl LaneComplianceEngine {
             audit_only,
         })
     }
-
     /// Load Norito-encoded policy bundles from the supplied directory.
     ///
     /// Direct regular files are ingested one at a time under protocol-count, per-file, aggregate,
@@ -104,7 +94,6 @@ impl LaneComplianceEngine {
     pub fn from_directory(dir: &Path, audit_only: bool) -> Result<Self, LaneComplianceLoadError> {
         Self::from_directory_with_limits(dir, audit_only, LANE_COMPLIANCE_LOAD_LIMITS)
     }
-
     fn from_directory_with_limits(
         dir: &Path,
         audit_only: bool,
@@ -127,7 +116,6 @@ impl LaneComplianceEngine {
         {
             return Err(LaneComplianceLoadError::NotADirectory(dir.to_path_buf()));
         }
-
         let mut policies = BTreeMap::new();
         let mut file_count = 0_usize;
         let mut aggregate_bytes = 0_usize;
@@ -159,7 +147,6 @@ impl LaneComplianceEngine {
             if !file_type.is_file() || file_type.is_symlink() {
                 return Err(LaneComplianceLoadError::NotRegularFile(path));
             }
-
             let bytes = read_bounded_policy_file(&path, limits.max_file_bytes)?;
             let next_aggregate = aggregate_bytes.checked_add(bytes.len()).ok_or(
                 LaneComplianceLoadError::AggregateBytesExceeded {
@@ -174,7 +161,6 @@ impl LaneComplianceEngine {
                 });
             }
             aggregate_bytes = next_aggregate;
-
             let mut slice: &[u8] = &bytes;
             let decode_limits = lane_compliance_decode_limits(bytes.len(), limits);
             let policy = with_decode_limits(decode_limits, || {
@@ -186,17 +172,14 @@ impl LaneComplianceEngine {
             })?;
             insert_policy(&mut policies, policy, limits.max_files)?;
         }
-
         if policies.is_empty() {
             return Err(LaneComplianceLoadError::Empty(dir.to_path_buf()));
         }
-
         Ok(Self {
             policies,
             audit_only,
         })
     }
-
     /// Evaluate the policy if known for the given lane.
     #[must_use]
     pub fn evaluate(&self, ctx: &LaneComplianceContext<'_>) -> LaneComplianceEvaluation {
@@ -237,7 +220,6 @@ impl LaneComplianceEngine {
                     .or_else(|| Some("lane compliance deny rule matched".to_string())),
             ));
         }
-
         if policy.allow.is_empty() {
             return LaneComplianceEvaluation::Allowed(LaneComplianceDecisionRecord::new(
                 policy.id,
@@ -248,7 +230,6 @@ impl LaneComplianceEngine {
                 None,
             ));
         }
-
         if let Some(rule) = Self::match_rule(&policy.allow, ctx) {
             return LaneComplianceEvaluation::Allowed(LaneComplianceDecisionRecord::new(
                 policy.id,
@@ -259,7 +240,6 @@ impl LaneComplianceEngine {
                 rule.reason_code().map(str::to_string),
             ));
         }
-
         LaneComplianceEvaluation::Denied(LaneComplianceDecisionRecord::new(
             policy.id,
             ctx.lane_id,
@@ -269,7 +249,6 @@ impl LaneComplianceEngine {
             Some("no lane compliance allow rule matched".to_string()),
         ))
     }
-
     fn match_rule<'a>(
         rules: &'a [LaneComplianceRule],
         ctx: &LaneComplianceContext<'_>,
@@ -278,13 +257,11 @@ impl LaneComplianceEngine {
             .iter()
             .find(|rule| selector_matches(&rule.selector, ctx))
     }
-
     /// Whether the engine is running in audit-only mode.
     #[must_use]
     pub fn audit_only(&self) -> bool {
         self.audit_only
     }
-
     /// Return whether an exact policy is loaded for `lane_id`.
     #[must_use]
     pub fn has_policy(&self, lane_id: LaneId, dataspace_id: DataSpaceId) -> bool {
@@ -292,7 +269,6 @@ impl LaneComplianceEngine {
             .get(&lane_id)
             .is_some_and(|policy| policy.dataspace_id == dataspace_id)
     }
-
     /// Validate exact lane/dataspace policy coverage for every active lane.
     ///
     /// Policies for prospective lanes may remain pre-provisioned, but each
@@ -324,7 +300,6 @@ impl LaneComplianceEngine {
         }
         Ok(())
     }
-
     /// Compute a canonical digest of every loaded compliance policy.
     ///
     /// Policies are stored by lane identifier in a [`BTreeMap`], so their Norito preimage order is
@@ -341,7 +316,6 @@ impl LaneComplianceEngine {
         Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into()
     }
 }
-
 fn insert_policy(
     policies: &mut BTreeMap<LaneId, Arc<LaneCompliancePolicy>>,
     policy: LaneCompliancePolicy,
@@ -361,7 +335,6 @@ fn insert_policy(
     policies.insert(lane_id, Arc::new(policy));
     Ok(())
 }
-
 fn lane_compliance_decode_limits(
     encoded_len: usize,
     limits: LaneComplianceLoadLimits,
@@ -379,7 +352,6 @@ fn lane_compliance_decode_limits(
         limits.max_decode_depth,
     )
 }
-
 fn read_bounded_policy_file(
     path: &Path,
     maximum: usize,
@@ -399,7 +371,6 @@ fn read_bounded_policy_file(
             maximum,
         });
     }
-
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -444,7 +415,6 @@ fn read_bounded_policy_file(
             ),
         });
     }
-
     let capacity = usize::try_from(opened.len())
         .unwrap_or(maximum)
         .min(maximum);
@@ -463,7 +433,6 @@ fn read_bounded_policy_file(
             maximum,
         });
     }
-
     let opened_after = file
         .metadata()
         .map_err(|source| LaneComplianceLoadError::Io {
@@ -490,7 +459,6 @@ fn read_bounded_policy_file(
     }
     Ok(bytes)
 }
-
 fn policy_metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
@@ -498,14 +466,12 @@ fn policy_metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
-
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
         return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
     }
     #[cfg(not(windows))]
     false
 }
-
 #[cfg(unix)]
 fn policy_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
@@ -517,7 +483,6 @@ fn policy_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> 
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn policy_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
@@ -529,19 +494,16 @@ fn policy_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> 
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn policy_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 fn selector_matches(selector: &ParticipantSelector, ctx: &LaneComplianceContext<'_>) -> bool {
     if let Some(account) = selector.account.as_ref()
         && account != ctx.authority
     {
         return false;
     }
-
     if let Some(domain) = selector.domain.as_ref()
         && !ctx
             .authority_domains
@@ -550,7 +512,6 @@ fn selector_matches(selector: &ParticipantSelector, ctx: &LaneComplianceContext<
     {
         return false;
     }
-
     if let Some(prefix) = selector.domain_prefix.as_deref()
         && !ctx
             .authority_domains
@@ -559,14 +520,12 @@ fn selector_matches(selector: &ParticipantSelector, ctx: &LaneComplianceContext<
     {
         return false;
     }
-
     if let Some(required_uaid) = selector.uaid.as_ref() {
         match ctx.uaid {
             Some(current) if current == required_uaid => {}
             _ => return false,
         }
     }
-
     if let Some(prefix) = selector.uaid_prefix.as_ref() {
         match ctx.uaid {
             Some(current)
@@ -577,7 +536,6 @@ fn selector_matches(selector: &ParticipantSelector, ctx: &LaneComplianceContext<
             _ => return false,
         }
     }
-
     if let Some(tag) = selector.capability_tag.as_deref() {
         if !ctx
             .capability_tags
@@ -587,7 +545,6 @@ fn selector_matches(selector: &ParticipantSelector, ctx: &LaneComplianceContext<
             return false;
         }
     }
-
     if !selector.privacy_commitments_any_of.is_empty() {
         let has_verified = selector
             .privacy_commitments_any_of
@@ -597,10 +554,8 @@ fn selector_matches(selector: &ParticipantSelector, ctx: &LaneComplianceContext<
             return false;
         }
     }
-
     true
 }
-
 /// Metadata describing the evaluation context.
 #[derive(Debug)]
 pub struct LaneComplianceContext<'a> {
@@ -621,7 +576,6 @@ pub struct LaneComplianceContext<'a> {
     /// Commitments proven by attached lane privacy witnesses.
     pub verified_privacy_commitments: &'a BTreeSet<LaneCommitmentId>,
 }
-
 impl<'a> LaneComplianceContext<'a> {
     /// Convenience constructor for contexts without capability tags.
     #[must_use]
@@ -638,7 +592,6 @@ impl<'a> LaneComplianceContext<'a> {
         }
     }
 }
-
 /// Outcome of evaluating a transaction against a lane policy.
 #[derive(Debug)]
 pub enum LaneComplianceEvaluation {
@@ -649,7 +602,6 @@ pub enum LaneComplianceEvaluation {
     /// Transaction violates the policy.
     Denied(LaneComplianceDecisionRecord),
 }
-
 impl LaneComplianceEvaluation {
     /// Access the decision record (if available).
     #[must_use]
@@ -660,7 +612,6 @@ impl LaneComplianceEvaluation {
         }
     }
 }
-
 /// Record describing a single decision.
 #[derive(Debug, Clone)]
 pub struct LaneComplianceDecisionRecord {
@@ -677,7 +628,6 @@ pub struct LaneComplianceDecisionRecord {
     /// Optional human-readable reason.
     pub reason: Option<String>,
 }
-
 impl LaneComplianceDecisionRecord {
     fn new(
         policy_id: LaneCompliancePolicyId,
@@ -697,7 +647,6 @@ impl LaneComplianceDecisionRecord {
         }
     }
 }
-
 /// Decision kind emitted by the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaneComplianceDecision {
@@ -706,7 +655,6 @@ pub enum LaneComplianceDecision {
     /// Transaction denied.
     Deny,
 }
-
 /// Errors produced when loading lane compliance policies.
 #[derive(Debug, thiserror::Error)]
 pub enum LaneComplianceLoadError {
@@ -800,7 +748,6 @@ pub enum LaneComplianceLoadError {
     #[error("lane compliance directory {0:?} does not contain any policies")]
     Empty(PathBuf),
 }
-
 /// Active-catalog compliance coverage failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum LaneComplianceCoverageError {
@@ -825,7 +772,6 @@ pub enum LaneComplianceCoverageError {
         actual: DataSpaceId,
     },
 }
-
 impl LaneComplianceDecisionRecord {
     /// Helper for logging evaluation summaries.
     pub fn log(&self, audit_only: bool) {
@@ -858,11 +804,9 @@ impl LaneComplianceDecisionRecord {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeSet, fs, path::PathBuf};
-
     use iroha_crypto::{
         Algorithm, Hash, KeyPair,
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
@@ -872,10 +816,8 @@ mod tests {
         metadata::Metadata,
         nexus::{AuditControls, DataSpaceId, JurisdictionSet, LaneStorageProfile, LaneVisibility},
     };
-
     use super::*;
     use crate::{governance::manifest::LaneManifestStatus, interlane::LanePrivacyRegistry};
-
     fn account(name: &str, domain: &str) -> AccountId {
         let seed_literal = format!("{name}::{domain}");
         let mut seed = seed_literal.into_bytes();
@@ -886,7 +828,6 @@ mod tests {
             .expect("fixture seed must derive a valid keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     #[test]
     fn account_fixture_uses_checked_seed_derivation() {
         assert_ne!(account("alice", "wonderland"), account("bob", "wonderland"));
@@ -895,7 +836,6 @@ mod tests {
             "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
         );
     }
-
     #[test]
     fn consensus_policy_digest_binds_loaded_policy_content() {
         let alice = account("alice", "wonderland");
@@ -918,13 +858,11 @@ mod tests {
             false,
         )
         .expect("right policy engine");
-
         assert_ne!(
             left.consensus_policy_digest(),
             right.consensus_policy_digest()
         );
     }
-
     fn sample_policy(
         lane_id: LaneId,
         allow: &[AccountId],
@@ -967,7 +905,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn test_load_limits(
         max_files: usize,
         max_file_bytes: usize,
@@ -980,13 +917,11 @@ mod tests {
             ..LANE_COMPLIANCE_LOAD_LIMITS
         }
     }
-
     fn write_policy(dir: &Path, name: &str, policy: &LaneCompliancePolicy) -> Vec<u8> {
         let bytes = policy.encode();
         fs::write(dir.join(name), &bytes).expect("write compliance policy");
         bytes
     }
-
     #[test]
     fn directory_loader_retains_canonical_lane_order() {
         let directory = tempfile::tempdir().expect("policy directory");
@@ -994,7 +929,6 @@ mod tests {
         let low = sample_policy(LaneId::new(1), &[], &[]);
         write_policy(directory.path(), "a-high.norito", &high);
         write_policy(directory.path(), "z-low.norito", &low);
-
         let loaded = LaneComplianceEngine::from_directory(directory.path(), false)
             .expect("directory policies");
         let explicit =
@@ -1009,7 +943,6 @@ mod tests {
             "directory enumeration order must not affect the canonical digest"
         );
     }
-
     #[test]
     fn directory_loader_enforces_per_file_and_aggregate_byte_boundaries() {
         let directory = tempfile::tempdir().expect("policy directory");
@@ -1028,7 +961,6 @@ mod tests {
             .len()
             .checked_add(second.len())
             .expect("small fixtures");
-
         let engine = LaneComplianceEngine::from_directory_with_limits(
             directory.path(),
             false,
@@ -1036,7 +968,6 @@ mod tests {
         )
         .expect("exact byte boundaries must load");
         assert_eq!(engine.policies.len(), 2);
-
         let file_error = LaneComplianceEngine::from_directory_with_limits(
             directory.path(),
             false,
@@ -1048,7 +979,6 @@ mod tests {
             LaneComplianceLoadError::FileBytesExceeded { maximum, .. }
                 if maximum == maximum_file.saturating_sub(1)
         ));
-
         let aggregate_error = LaneComplianceEngine::from_directory_with_limits(
             directory.path(),
             false,
@@ -1061,7 +991,6 @@ mod tests {
                 if actual == aggregate && maximum == aggregate.saturating_sub(1)
         ));
     }
-
     #[test]
     fn directory_loader_caps_candidate_files_before_reading_overflow() {
         let directory = tempfile::tempdir().expect("policy directory");
@@ -1072,7 +1001,6 @@ mod tests {
                 &sample_policy(LaneId::new(lane), &[], &[]),
             );
         }
-
         let error = LaneComplianceEngine::from_directory_with_limits(
             directory.path(),
             false,
@@ -1091,14 +1019,12 @@ mod tests {
             "production file capacity must follow the protocol active-lane bound"
         );
     }
-
     #[test]
     fn directory_loader_rejects_duplicate_lane_before_retention() {
         let directory = tempfile::tempdir().expect("policy directory");
         let policy = sample_policy(LaneId::new(77), &[], &[]);
         let bytes = write_policy(directory.path(), "first.norito", &policy);
         write_policy(directory.path(), "second.norito", &policy);
-
         let error = LaneComplianceEngine::from_directory_with_limits(
             directory.path(),
             false,
@@ -1111,7 +1037,6 @@ mod tests {
                 if lane_id == LaneId::new(77)
         ));
     }
-
     #[test]
     fn policy_count_bound_preserves_sparse_prospective_lane_ids() {
         let sparse = LaneId::new(u32::MAX);
@@ -1119,7 +1044,6 @@ mod tests {
             LaneComplianceEngine::from_policies(vec![sample_policy(sparse, &[], &[])], false)
                 .expect("sparse prospective lane ids remain admissible");
         assert!(engine.policies.contains_key(&sparse));
-
         let mut policies = BTreeMap::new();
         insert_policy(&mut policies, sample_policy(LaneId::new(1), &[], &[]), 2)
             .expect("first policy");
@@ -1137,7 +1061,6 @@ mod tests {
         ));
         assert_eq!(policies.len(), 2, "overflow policy must not be retained");
     }
-
     #[test]
     fn directory_loader_applies_norito_resource_limits_before_retention() {
         let directory = tempfile::tempdir().expect("policy directory");
@@ -1150,13 +1073,11 @@ mod tests {
         );
         let mut limits = test_load_limits(1, bytes.len(), bytes.len());
         limits.max_sequence_elements = 1;
-
         let error =
             LaneComplianceEngine::from_directory_with_limits(directory.path(), false, limits)
                 .expect_err("two-rule policy must exceed one-element decode limit");
         assert!(matches!(error, LaneComplianceLoadError::Decode { .. }));
     }
-
     #[test]
     fn directory_loader_rejects_oversized_string_field_before_allocation() {
         let directory = tempfile::tempdir().expect("policy directory");
@@ -1171,17 +1092,14 @@ mod tests {
             bytes.len() <= LANE_COMPLIANCE_POLICY_MAX_BYTES,
             "fixture must reach the field bound before the file bound"
         );
-
         let error = LaneComplianceEngine::from_directory(directory.path(), false)
             .expect_err("oversized string field must fail under the Norito field budget");
         assert!(matches!(error, LaneComplianceLoadError::Decode { .. }));
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_loader_rejects_symlinked_policy_without_following() {
         use std::os::unix::fs::symlink;
-
         let directory = tempfile::tempdir().expect("policy directory");
         let target = tempfile::NamedTempFile::new().expect("policy target");
         fs::write(
@@ -1191,7 +1109,6 @@ mod tests {
         .expect("write policy target");
         let link = directory.path().join("lane.norito");
         symlink(target.path(), &link).expect("create policy symlink");
-
         let error = LaneComplianceEngine::from_directory(directory.path(), false)
             .expect_err("symlinked policy must fail closed");
         assert!(matches!(
@@ -1199,7 +1116,6 @@ mod tests {
             LaneComplianceLoadError::NotRegularFile(path) if path == link
         ));
     }
-
     #[test]
     fn allow_rule_matches() {
         let alpha = account("alice", "wonderland");
@@ -1210,7 +1126,6 @@ mod tests {
             std::slice::from_ref(&beta),
         );
         let engine = LaneComplianceEngine::from_policies(vec![policy], false).expect("engine");
-
         let ctx = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -1225,7 +1140,6 @@ mod tests {
         matches!(evaluation, LaneComplianceEvaluation::Allowed(_))
             .then_some(())
             .expect("allowed");
-
         let ctx_beta = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -1241,7 +1155,6 @@ mod tests {
             .then_some(())
             .expect("denied");
     }
-
     #[test]
     fn duplicate_lane_rejected() {
         let alpha = account("alice", "wonderland");
@@ -1254,7 +1167,6 @@ mod tests {
             LaneComplianceLoadError::DuplicateLane { lane_id } if lane_id == LaneId::SINGLE
         ));
     }
-
     #[test]
     fn active_catalog_coverage_rejects_missing_and_mismatched_policies() {
         let lane_one = LaneId::new(1);
@@ -1284,7 +1196,6 @@ mod tests {
                 dataspace_id: dataspace_one,
             }
         );
-
         let mismatched_policy = LaneCompliancePolicy {
             lane_id: lane_one,
             dataspace_id: DataSpaceId::new(8),
@@ -1304,7 +1215,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn not_configured_evaluation_preserves_enforcement_mode() {
         let authority = account("alice", "wonderland");
@@ -1330,7 +1240,6 @@ mod tests {
         ));
         assert!(audit.audit_only());
     }
-
     #[test]
     fn selector_requires_privacy_commitment() {
         let alpha = account("alice", "wonderland");
@@ -1348,7 +1257,6 @@ mod tests {
             ..sample_policy(LaneId::SINGLE, &[], &[])
         };
         let engine = LaneComplianceEngine::from_policies(vec![policy], false).expect("engine");
-
         let statuses = vec![LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "confidential".to_string(),
@@ -1384,7 +1292,6 @@ mod tests {
             engine.evaluate(&ctx_with_proof),
             LaneComplianceEvaluation::Allowed(_)
         ));
-
         let empty_verified = BTreeSet::new();
         let ctx_missing_proof = LaneComplianceContext {
             verified_privacy_commitments: &empty_verified,
@@ -1395,7 +1302,6 @@ mod tests {
             LaneComplianceEvaluation::Denied(_)
         ));
     }
-
     #[test]
     fn selector_matches_capability_tag() {
         let alpha = account("alice", "wonderland");
@@ -1413,7 +1319,6 @@ mod tests {
             ..sample_policy(LaneId::SINGLE, &[], &[])
         };
         let engine = LaneComplianceEngine::from_policies(vec![policy], false).expect("engine");
-
         let ctx_missing_tag = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -1428,7 +1333,6 @@ mod tests {
             engine.evaluate(&ctx_missing_tag),
             LaneComplianceEvaluation::Denied(_)
         ));
-
         let tags = vec!["fx-cleared".to_string()];
         let ctx_with_tag = LaneComplianceContext {
             capability_tags: &tags,
@@ -1439,7 +1343,6 @@ mod tests {
             LaneComplianceEvaluation::Allowed(_)
         ));
     }
-
     #[test]
     fn selector_matches_authority_domain() {
         let alpha = account("alice", "wonderland");
@@ -1460,7 +1363,6 @@ mod tests {
             ..sample_policy(LaneId::SINGLE, &[], &[])
         };
         let engine = LaneComplianceEngine::from_policies(vec![policy], false).expect("engine");
-
         let matched_domains = vec![retail_domain];
         let matched_ctx = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
@@ -1476,7 +1378,6 @@ mod tests {
             engine.evaluate(&matched_ctx),
             LaneComplianceEvaluation::Allowed(_)
         ));
-
         let mismatched_domains = vec![other_domain];
         let mismatched_ctx = LaneComplianceContext {
             authority_domains: &mismatched_domains,
@@ -1487,7 +1388,6 @@ mod tests {
             LaneComplianceEvaluation::Denied(_)
         ));
     }
-
     #[test]
     fn selector_matches_authority_domain_prefix() {
         let alpha = account("alice", "wonderland");
@@ -1506,7 +1406,6 @@ mod tests {
             ..sample_policy(LaneId::SINGLE, &[], &[])
         };
         let engine = LaneComplianceEngine::from_policies(vec![policy], false).expect("engine");
-
         let authority_domains = vec![retail_domain];
         let ctx = LaneComplianceContext {
             lane_id: LaneId::SINGLE,

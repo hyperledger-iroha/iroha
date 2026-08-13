@@ -1,14 +1,10 @@
 //! Bounded Musubi V1 registry and storage lifecycle events.
-
 use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use super::*;
-
 #[model]
 mod model {
     use super::*;
-
     /// Closed family of finalized Musubi registry transitions.
     #[derive(
         Debug,
@@ -65,7 +61,6 @@ mod model {
         /// Parliament replaced the chain-wide registry policy.
         RegistryPolicyChanged(MusubiRegistryPolicyEventV1),
     }
-
     /// Compact first-package-claim event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -81,7 +76,6 @@ mod model {
         /// Finalized claim height.
         pub finalized_height: u64,
     }
-
     /// Compact immutable-release publication event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -97,7 +91,6 @@ mod model {
         /// Finalized publication height.
         pub finalized_height: u64,
     }
-
     /// Compact yank/unyank event with its immutable archive binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -107,7 +100,6 @@ mod model {
         /// Immutable release archive, enabling exact archive-aware filtering.
         pub archive_id: crate::musubi::ArchiveId,
     }
-
     /// Compact accepted-member removal event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -123,7 +115,6 @@ mod model {
         /// Finalized removal height.
         pub finalized_height: u64,
     }
-
     /// Compact terminal transition for a pending package-member invitation.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -139,7 +130,6 @@ mod model {
         /// Finalized transition height.
         pub finalized_height: u64,
     }
-
     /// Compact Parliament package-recovery event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -155,7 +145,6 @@ mod model {
         /// Finalized recovery height.
         pub finalized_height: u64,
     }
-
     /// Compact archive-registration event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -169,7 +158,6 @@ mod model {
         /// Finalized registration height.
         pub finalized_height: u64,
     }
-
     /// Compact provider bundle-attestation registration event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -183,7 +171,6 @@ mod model {
         /// Finalized registration height.
         pub finalized_height: u64,
     }
-
     /// Closed archive-location transition kind.
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema,
@@ -199,7 +186,6 @@ mod model {
         /// Underlying `SoraFS` evidence changed its health state.
         EvidenceRefreshed,
     }
-
     /// Compact archive-location lifecycle event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -224,7 +210,6 @@ mod model {
         /// Finalized transition height.
         pub finalized_height: u64,
     }
-
     /// Compact Parliament artifact-takedown event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -240,7 +225,6 @@ mod model {
         /// Finalized height where the delayed action was applied.
         pub finalized_height: u64,
     }
-
     /// Compact registry-policy replacement event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -259,7 +243,6 @@ mod model {
         pub finalized_height: u64,
     }
 }
-
 impl MusubiEvent {
     /// Return the structural package affected by this event, when any.
     #[must_use]
@@ -288,7 +271,6 @@ impl MusubiEvent {
             | Self::RegistryPolicyChanged(_) => None,
         }
     }
-
     /// Return the archive affected by this event, when any.
     #[must_use]
     pub const fn archive(&self) -> Option<crate::musubi::ArchiveId> {
@@ -303,7 +285,6 @@ impl MusubiEvent {
             _ => None,
         }
     }
-
     /// Return the permanent alias affected by this event, when any.
     #[must_use]
     pub fn alias(&self) -> Option<&crate::musubi::MusubiAliasNameV1> {
@@ -313,7 +294,6 @@ impl MusubiEvent {
         }
     }
 }
-
 /// Common Musubi event exports.
 pub mod prelude {
     pub use super::{
@@ -325,13 +305,10 @@ pub mod prelude {
         MusubiReleasePublishedEventV1, MusubiReleaseYankEventV1,
     };
 }
-
 #[cfg(test)]
 mod tests {
     use norito::codec::{DecodeAll as _, Encode as _};
-
     use super::*;
-
     #[test]
     fn provider_attestation_registration_event_is_compact_and_archive_routable() {
         let archive_id = crate::musubi::ArchiveId::new([0x31; 32]);
@@ -355,12 +332,10 @@ mod tests {
                 finalized_height: 7,
             },
         );
-
         assert_eq!(event.archive(), Some(archive_id));
         assert_eq!(event.package(), None);
         assert_eq!(event.alias(), None);
     }
-
     #[test]
     fn archive_location_event_roundtrip_carries_only_compact_provider_commitment() {
         let event = MusubiArchiveLocationEventV1 {
@@ -378,7 +353,6 @@ mod tests {
             revision: 2,
             finalized_height: 7,
         };
-
         let decoded = MusubiArchiveLocationEventV1::decode_all(&mut event.encode().as_slice())
             .expect("compact location event Norito roundtrip");
         assert_eq!(decoded, event);

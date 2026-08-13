@@ -9,7 +9,6 @@ use ivm::{
     field_dispatch::{self, FieldArithmetic, ScalarField},
     poseidon2, poseidon6,
 };
-
 fn available_backends() -> Vec<(&'static dyn FieldArithmetic, &'static str)> {
     let mut backends: Vec<(&'static dyn FieldArithmetic, &'static str)> =
         vec![(&ScalarField, "scalar")];
@@ -31,7 +30,6 @@ fn available_backends() -> Vec<(&'static dyn FieldArithmetic, &'static str)> {
     }
     backends
 }
-
 fn bench_field_ops(c: &mut Criterion) {
     let a = FieldElem([1, 2, 3, 4]);
     let b = FieldElem([4, 3, 2, 1]);
@@ -41,9 +39,7 @@ fn bench_field_ops(c: &mut Criterion) {
     let bulk_b: Vec<FieldElem> = (0..256)
         .map(|i| FieldElem::from_u64((i * 3 + 7) as u64))
         .collect();
-
     let backends = available_backends();
-
     let mut add_group = c.benchmark_group("field_add");
     for (backend, name) in &backends {
         field_dispatch::set_field_impl_for_tests(*backend);
@@ -55,7 +51,6 @@ fn bench_field_ops(c: &mut Criterion) {
     }
     field_dispatch::clear_field_impl_for_tests();
     add_group.finish();
-
     let mut mul_group = c.benchmark_group("field_mul");
     for (backend, name) in &backends {
         field_dispatch::set_field_impl_for_tests(*backend);
@@ -67,7 +62,6 @@ fn bench_field_ops(c: &mut Criterion) {
     }
     field_dispatch::clear_field_impl_for_tests();
     mul_group.finish();
-
     let mut combo_group = c.benchmark_group("field_combo");
     for (backend, name) in &backends {
         field_dispatch::set_field_impl_for_tests(*backend);
@@ -80,7 +74,6 @@ fn bench_field_ops(c: &mut Criterion) {
     }
     field_dispatch::clear_field_impl_for_tests();
     combo_group.finish();
-
     let mut bulk_group = c.benchmark_group("field_add_bulk");
     for (backend, name) in &backends {
         field_dispatch::set_field_impl_for_tests(*backend);
@@ -97,12 +90,9 @@ fn bench_field_ops(c: &mut Criterion) {
     field_dispatch::clear_field_impl_for_tests();
     bulk_group.finish();
 }
-
 fn bench_poseidon(c: &mut Criterion) {
     let inputs6 = [1u64, 2, 3, 4, 5, 6];
-
     let backends = available_backends();
-
     let mut p2_group = c.benchmark_group("poseidon2");
     for (backend, name) in &backends {
         field_dispatch::set_field_impl_for_tests(*backend);
@@ -114,7 +104,6 @@ fn bench_poseidon(c: &mut Criterion) {
     }
     field_dispatch::clear_field_impl_for_tests();
     p2_group.finish();
-
     let mut p6_group = c.benchmark_group("poseidon6");
     for (backend, name) in &backends {
         field_dispatch::set_field_impl_for_tests(*backend);
@@ -127,7 +116,6 @@ fn bench_poseidon(c: &mut Criterion) {
     field_dispatch::clear_field_impl_for_tests();
     p6_group.finish();
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     let mut c = Criterion::default().configure_from_args();

@@ -1,11 +1,9 @@
 //! Debug-oriented opcode inspection for selected Kotodama snippets.
-
 use ivm::{
     encoding,
     instruction::wide,
     kotodama::compiler::{Compiler, CompilerMode, CompilerOptions},
 };
-
 #[test]
 fn debug_create_nfts_and_set_detail_words() {
     let src = "seiyaku DebugHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";

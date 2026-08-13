@@ -6,7 +6,6 @@ struct HandshakeRequestWithoutNetworkV1 {
     catalog_digest: [u8; 32],
     client_transcript_digest: [u8; 32],
 }
-
 #[test]
 fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
     let request = make_handshake_request(
@@ -53,7 +52,6 @@ fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
         Err(BrokerError::Protocol),
         "the retired networkless request schema must fail closed",
     );
-
     for mutation in 0..3 {
         let mut envelope = decode_canonical::<BrokerFrameV1>(&frame, MAX_HANDSHAKE_FRAME_BYTES_V1)
             .expect("decode frame envelope");
@@ -74,7 +72,6 @@ fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
             Err(BrokerError::Protocol)
         );
     }
-
     let mut trailing = ScrubbedBytes::new(frame.to_vec());
     trailing.push(0);
     assert_eq!(
@@ -85,7 +82,6 @@ fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
         ),
         Err(BrokerError::Protocol)
     );
-
     let oversized = u32::try_from(MAX_HANDSHAKE_FRAME_BYTES_V1 + 1)
         .expect("handshake bound fits u32")
         .to_be_bytes();
@@ -101,12 +97,10 @@ fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
         Err(BrokerError::Protocol)
     );
 }
-
 #[test]
 fn operation_request_prelude_enforces_role_limit_and_global_inbound_budget() {
     let slot = IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id();
     let operation = OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1;
-
     let mut oversized_moderation = Vec::new();
     oversized_moderation.extend_from_slice(&slot.to_be_bytes());
     oversized_moderation.extend_from_slice(&operation.to_be_bytes());
@@ -120,7 +114,6 @@ fn operation_request_prelude_enforces_role_limit_and_global_inbound_budget() {
         Err(BrokerError::Protocol),
         "the server applies the announced moderation operation limit before allocation"
     );
-
     let mut oversized_request_auth = Vec::new();
     oversized_request_auth.extend_from_slice(
         &IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator
@@ -139,7 +132,6 @@ fn operation_request_prelude_enforces_role_limit_and_global_inbound_budget() {
         Err(BrokerError::Protocol),
         "the request-auth bound is enforced before allocation"
     );
-
     let mut oversized_native_signer = Vec::new();
     oversized_native_signer.extend_from_slice(
         &IrohaRuntimeProviderSlotV1::ProofOutcomeTransactionSigner
@@ -157,7 +149,6 @@ fn operation_request_prelude_enforces_role_limit_and_global_inbound_budget() {
         Err(BrokerError::Protocol),
         "the native transaction bound is enforced before allocation"
     );
-
     let mut unknown_operation = Vec::new();
     unknown_operation.extend_from_slice(&slot.to_be_bytes());
     unknown_operation.extend_from_slice(&u16::MAX.to_be_bytes());
@@ -165,7 +156,6 @@ fn operation_request_prelude_enforces_role_limit_and_global_inbound_budget() {
         read_operation_request_frame(&mut Cursor::new(unknown_operation)),
         Err(BrokerError::Protocol)
     );
-
     let mut budget_exhaustion = Vec::new();
     budget_exhaustion.extend_from_slice(&slot.to_be_bytes());
     budget_exhaustion.extend_from_slice(&operation.to_be_bytes());
@@ -182,7 +172,6 @@ fn operation_request_prelude_enforces_role_limit_and_global_inbound_budget() {
         "declared inbound bytes must fit the single shared operation budget"
     );
 }
-
 #[test]
 fn stalled_operation_body_does_not_reserve_composed_decode_pool() {
     struct StalledBodyReader {
@@ -190,7 +179,6 @@ fn stalled_operation_body_does_not_reserve_composed_decode_pool() {
         decode_pool: Arc<DecodeResourcePoolV1>,
         observed_body_read: Arc<AtomicBool>,
     }
-
     impl std::io::Read for StalledBodyReader {
         fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
             if usize::try_from(self.prefix.position()).unwrap_or(usize::MAX)
@@ -210,7 +198,6 @@ fn stalled_operation_body_does_not_reserve_composed_decode_pool() {
             ))
         }
     }
-
     let operation = OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1;
     let policy = operation_decode_policy(operation);
     let decode_pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
@@ -245,14 +232,12 @@ fn stalled_operation_body_does_not_reserve_composed_decode_pool() {
         "failed body reads release the declared-byte reservation"
     );
 }
-
 #[test]
 fn length_prefixed_reader_preallocates_large_frame_once_and_reads_in_chunks() {
     struct CountingReader {
         inner: Cursor<Vec<u8>>,
         body_reads: usize,
     }
-
     impl std::io::Read for CountingReader {
         fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
             let body = self.inner.position() >= 4;
@@ -263,7 +248,6 @@ fn length_prefixed_reader_preallocates_large_frame_once_and_reads_in_chunks() {
             Ok(read)
         }
     }
-
     let frame_len = 2 * 1024 * 1024 + 17;
     let payload = vec![0xA5; frame_len];
     let mut framed = Vec::with_capacity(frame_len + 4);
@@ -282,7 +266,6 @@ fn length_prefixed_reader_preallocates_large_frame_once_and_reads_in_chunks() {
     assert!(frame.bytes.capacity() >= frame_len);
     assert_eq!(reader.body_reads, frame_len.div_ceil(64 * 1024));
 }
-
 #[test]
 fn configured_catalog_slots_roundtrip_through_the_canonical_inverse() {
     for slot in IrohaRuntimeProviderSlotV1::ALL {
@@ -298,14 +281,12 @@ fn configured_catalog_slots_roundtrip_through_the_canonical_inverse() {
             .expect("project configured binding");
         assert_eq!(wire.runtime_slot(), Ok(slot));
     }
-
     let mut unknown = signer_binding();
     for wire_id in [0, 60, u16::MAX] {
         unknown.slot = wire_id;
         assert_eq!(unknown.runtime_slot(), Err(BrokerError::BindingMismatch));
     }
 }
-
 #[test]
 fn evidence_viewer_webauthn_wire_is_canonical_and_binding_exact() {
     let valid = evidence_viewer_binding(IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn);
@@ -324,7 +305,6 @@ fn evidence_viewer_webauthn_wire_is_canonical_and_binding_exact() {
     };
     validate_evidence_viewer_verify_and_consume_wire(&request, configured)
         .expect("exact WebAuthn operation wire");
-
     for rp_id in ["Review.example", "localhost", "127.0.0.1"] {
         let mut binding = valid.clone();
         binding
@@ -338,7 +318,6 @@ fn evidence_viewer_webauthn_wire_is_canonical_and_binding_exact() {
             "{rp_id:?} must fail closed"
         );
     }
-
     for origin in [
         "http://review.example",
         "https://operator:secret@review.example",
@@ -360,7 +339,6 @@ fn evidence_viewer_webauthn_wire_is_canonical_and_binding_exact() {
             "{origin:?} must fail closed"
         );
     }
-
     let substituted = EvidenceViewerVerifyAndConsumeRequestWireV1 {
         challenge: b"canonical-challenge".to_vec(),
         assertion: vec![0xA5],
@@ -374,7 +352,6 @@ fn evidence_viewer_webauthn_wire_is_canonical_and_binding_exact() {
         Err(BrokerError::BindingMismatch)
     );
 }
-
 #[test]
 fn signer_observation_requires_governance_peer_and_strong_ed25519_key() {
     let binding = signer_binding();
@@ -389,7 +366,6 @@ fn signer_observation_requires_governance_peer_and_strong_ed25519_key() {
     validate_wire_binding(&binding).expect("accept pinned signer identity");
     let valid = observation(&binding);
     validate_observation(&binding, &valid).expect("accept canonical signer metadata");
-
     let mut missing_peer = binding.clone();
     missing_peer.governance_dag_publisher_peer_id = None;
     assert_eq!(
@@ -402,7 +378,6 @@ fn signer_observation_requires_governance_peer_and_strong_ed25519_key() {
         validate_wire_binding(&missing_key),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut substituted_peer = valid.clone();
     substituted_peer
         .signer_metadata
@@ -414,7 +389,6 @@ fn signer_observation_requires_governance_peer_and_strong_ed25519_key() {
         validate_observation(&binding, &substituted_peer),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut substituted_key = valid.clone();
     substituted_key
         .signer_metadata
@@ -426,7 +400,6 @@ fn signer_observation_requires_governance_peer_and_strong_ed25519_key() {
         validate_observation(&binding, &substituted_key),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut oversized_peer = valid.clone();
     oversized_peer
         .signer_metadata
@@ -438,7 +411,6 @@ fn signer_observation_requires_governance_peer_and_strong_ed25519_key() {
         validate_observation(&binding, &oversized_peer),
         Err(BrokerError::BindingMismatch)
     );
-
     for peer_id in [b"peer id".to_vec(), vec![0x7F], vec![0x80]] {
         let mut nonvisible_peer = valid.clone();
         nonvisible_peer
@@ -452,7 +424,6 @@ fn signer_observation_requires_governance_peer_and_strong_ed25519_key() {
             Err(BrokerError::BindingMismatch)
         );
     }
-
     let mut identity_key = [0; 32];
     identity_key[0] = 1;
     for public_key in [[0; 32], identity_key, [0xFF; 32]] {
@@ -469,7 +440,6 @@ fn signer_observation_requires_governance_peer_and_strong_ed25519_key() {
         );
     }
 }
-
 #[test]
 fn server_governance_signer_must_match_the_configured_publisher_identity() {
     let catalog = server_test_catalog();
@@ -479,7 +449,6 @@ fn server_governance_signer_must_match_the_configured_publisher_identity() {
     assert_eq!(binding, signer_binding_for_server());
     make_server_observation(&binding, &server_test_backends())
         .expect("accept exact configured signer identity");
-
     let mut substituted_peer = binding.clone();
     substituted_peer.governance_dag_publisher_peer_id =
         Some(b"12D3KooWRuntimeBrokerServerSecondary".to_vec());
@@ -488,7 +457,6 @@ fn server_governance_signer_must_match_the_configured_publisher_identity() {
         make_server_observation(&substituted_peer, &server_test_backends()),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     ));
-
     let mut substituted_key = binding;
     substituted_key.governance_dag_publisher_public_key =
         Some(server_test_request_auth_public_key());
@@ -498,7 +466,6 @@ fn server_governance_signer_must_match_the_configured_publisher_identity() {
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     ));
 }
-
 #[test]
 fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
     let catalog = request_auth_server_test_catalog();
@@ -526,7 +493,6 @@ fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
         ),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
-
     let state = request_auth_server_test_state();
     let binding = &state.catalog[0];
     let ingress_wire = binding
@@ -554,7 +520,6 @@ fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
         validate_wire_binding(&zero_bound),
         Err(BrokerError::BindingMismatch)
     );
-
     let qualification = sorafs_node::GovernanceDagRequestAuthenticator::ingress_qualification(
         &ServerTestGovernanceRequestAuthenticator::exact(),
     )
@@ -570,7 +535,6 @@ fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
         governance_request_ingress_qualification_from_wire(zero_replay),
         Err(BrokerError::Protocol)
     );
-
     let request =
         canonical_request_auth_test_request(sorafs_node::GovernanceDagAuthenticationScope::Ipfs);
     let wire = governance_request_auth_to_wire(&request);
@@ -578,7 +542,6 @@ fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
         governance_request_auth_from_wire(&wire, 1024),
         Ok(request.clone())
     );
-
     let authenticator = ServerTestGovernanceRequestAuthenticator::exact();
     let envelope =
         sorafs_node::GovernanceDagRequestAuthenticator::authenticate(&authenticator, &request)
@@ -592,7 +555,6 @@ fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
         ),
         Ok(envelope)
     );
-
     let mut bad_signature = result;
     bad_signature.signature[0] ^= 1;
     assert_eq!(
@@ -613,7 +575,6 @@ fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
         ),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut oversized_body = wire.clone();
     oversized_body.body_length = 1025;
     assert_eq!(
@@ -632,7 +593,6 @@ fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
         governance_request_auth_from_wire(&noncanonical_url, 1024),
         Err(BrokerError::Rejected)
     );
-
     let wrong_scope = canonical_request_auth_test_request(
         sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
     );
@@ -655,7 +615,6 @@ fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
         Err(BrokerError::BindingMismatch)
     );
 }
-
 #[test]
 fn governance_request_auth_round_trips_over_the_stock_broker() {
     let (_directory, policy, shutdown, server) = start_request_auth_test_server();
@@ -684,7 +643,6 @@ fn governance_request_auth_round_trips_over_the_stock_broker() {
     assert_eq!(envelope.scope(), request.scope());
     assert_eq!(envelope.request_digest(), request.request_digest());
     assert_eq!(envelope.public_key(), server_test_request_auth_public_key());
-
     drop(dependencies);
     shutdown.request_shutdown();
     server
@@ -692,11 +650,9 @@ fn governance_request_auth_round_trips_over_the_stock_broker() {
         .expect("join request-auth broker")
         .expect("request-auth broker exits cleanly");
 }
-
 #[test]
 fn native_signer_catalog_backend_set_and_identity_are_exact() {
     use iroha_torii::SorafsNativeTransactionSignerRoleV1 as Role;
-
     let catalog = native_signer_test_catalog();
     let wire = catalog
         .iter()
@@ -715,7 +671,6 @@ fn native_signer_catalog_backend_set_and_identity_are_exact() {
                 .clone()
         );
     }
-
     let mut role_confused_wire = wire[0].clone();
     role_confused_wire
         .native_signer_binding
@@ -732,7 +687,6 @@ fn native_signer_catalog_backend_set_and_identity_are_exact() {
         validate_wire_binding(&missing_native_identity),
         Err(BrokerError::BindingMismatch)
     );
-
     assert!(matches!(
         prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
@@ -765,7 +719,6 @@ fn native_signer_catalog_backend_set_and_identity_are_exact() {
     prepare_server_state(&catalog, native_signer_test_backends())
         .expect("accept all four independently injected native signer roles");
 }
-
 #[test]
 fn broker_server_accepts_exact_subset_and_confines_session_to_it() {
     let (_directory, policy, shutdown, server) = start_native_signer_test_server();
@@ -793,7 +746,6 @@ fn broker_server_accepts_exact_subset_and_confines_session_to_it() {
     .expect("connect with an exact subset of the server catalog");
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].binding, proof_binding);
-
     let full_state =
         prepare_server_state(&native_signer_test_catalog(), native_signer_test_backends())
             .expect("prepare full native signer state");
@@ -820,7 +772,6 @@ fn broker_server_accepts_exact_subset_and_confines_session_to_it() {
         ),
         "a session cannot invoke a configured role omitted from its handshake"
     );
-
     drop(session);
     shutdown.request_shutdown();
     server
@@ -828,7 +779,6 @@ fn broker_server_accepts_exact_subset_and_confines_session_to_it() {
         .expect("join native signer broker")
         .expect("native signer broker exits cleanly");
 }
-
 #[test]
 fn canonical_broker_codec_accounts_for_variable_payload_frame_header() {
     let value = SoracloudProvenanceSignRequestWireV1 {
@@ -844,7 +794,6 @@ fn canonical_broker_codec_accounts_for_variable_payload_frame_header() {
         framed_len > bare_payload_len,
         "the outer Norito frame must be included in broker limits"
     );
-
     let pool = Arc::new(DecodeResourcePoolV1::new(
         CONTROL_DECODE_POLICY_V1.max_composed_bytes,
     ));
@@ -875,7 +824,6 @@ fn canonical_broker_codec_accounts_for_variable_payload_frame_header() {
         value
     );
 }
-
 #[test]
 fn soracloud_broker_admission_rejects_explicit_purpose_mismatch() {
     let native = proof_native_signer_test_catalog();
@@ -891,7 +839,6 @@ fn soracloud_broker_admission_rejects_explicit_purpose_mismatch() {
         .expect("signer identity")
         .role = SORACLOUD_RUNTIME_SIGNER_ROLE_WIRE_V1;
     validate_wire_binding(&binding).expect("accept Soracloud signer binding");
-
     let preimage = iroha_data_model::soracloud::encode_soracloud_runtime_provenance_preimage_v1(
         iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
         b"canonical semantic payload",
@@ -917,7 +864,6 @@ fn soracloud_broker_admission_rejects_explicit_purpose_mismatch() {
     )
     .expect("seal valid request");
     validate_operation_request(&valid).expect("accept matching purpose");
-
     let mismatched_payload = encode_canonical(
         &SoracloudProvenanceSignRequestWireV1 {
             purpose:
@@ -942,11 +888,9 @@ fn soracloud_broker_admission_rejects_explicit_purpose_mismatch() {
         Err(BrokerError::Rejected)
     );
 }
-
 #[test]
 fn native_signer_payload_hard_cut_precedes_provider_use() {
     use iroha_torii::SorafsNativeTransactionSignerRoleV1 as Role;
-
     let signer = Arc::new(ServerTestNativeSigner::exact(Role::ProofOutcome));
     let state = proof_native_signer_test_state(signer.clone());
     let exact = native_transaction_signer_binding_from_wire(&state.catalog[0])
@@ -957,7 +901,6 @@ fn native_signer_payload_hard_cut_precedes_provider_use() {
         decode_native_transaction_payload(&canonical),
         Ok(payload.clone())
     );
-
     assert_eq!(
         decode_native_transaction_payload(&[]),
         Err(BrokerError::Rejected)
@@ -1009,7 +952,6 @@ fn native_signer_payload_hard_cut_precedes_provider_use() {
         Err(BrokerError::Rejected)
     );
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 0);
-
     let cross_network =
         native_signer_test_payload_for_network(test_network_id(0x16), exact.authority().clone());
     let cross_network_request = make_operation_request(
@@ -1033,7 +975,6 @@ fn native_signer_payload_hard_cut_precedes_provider_use() {
         0,
         "the external signer boundary must not see a foreign-network transaction"
     );
-
     let request = make_operation_request(
         TEST_SESSION_ID,
         3,
@@ -1058,11 +999,9 @@ fn native_signer_payload_hard_cut_precedes_provider_use() {
         .expect("verify exact signed payload");
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 1);
 }
-
 #[test]
 fn native_signer_rejects_tampered_and_drifting_provider_outputs() {
     use iroha_torii::SorafsNativeTransactionSignerRoleV1 as Role;
-
     for (mode, expected) in [
         (
             ServerTestNativeSignerMode::InvalidSignature,
@@ -1092,7 +1031,6 @@ fn native_signer_rejects_tampered_and_drifting_provider_outputs() {
         assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 1);
     }
 }
-
 #[test]
 fn appeal_finance_signer_rejects_cross_network_before_provider_use() {
     let signer = Arc::new(ServerTestAppealFinanceSigner::exact());
@@ -1124,7 +1062,6 @@ fn appeal_finance_signer_rejects_cross_network_before_provider_use() {
         0,
         "the appeal-finance external signer must not see a foreign-network transaction"
     );
-
     let exact_payload = native_signer_test_payload(exact.authority.clone());
     let exact_request = make_operation_request(
         TEST_SESSION_ID,
@@ -1152,7 +1089,6 @@ fn appeal_finance_signer_rejects_cross_network_before_provider_use() {
         .expect("verify appeal-finance transaction signature");
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 1);
 }
-
 #[test]
 fn native_signer_proxy_poisons_the_session_after_tamper_or_drift() {
     use iroha_torii::{
@@ -1160,7 +1096,6 @@ fn native_signer_proxy_poisons_the_session_after_tamper_or_drift() {
         SorafsNativeTransactionSignerProbeErrorV1 as ProbeError,
         SorafsNativeTransactionSignerRoleV1 as Role,
     };
-
     for mode in [
         ServerTestNativeSignerMode::InvalidSignature,
         ServerTestNativeSignerMode::DriftAfterSign,
@@ -1192,7 +1127,6 @@ fn native_signer_proxy_poisons_the_session_after_tamper_or_drift() {
             Err(ProbeError::Unavailable),
             "a poisoned signer session cannot be reused"
         );
-
         drop(dependencies);
         shutdown.request_shutdown();
         server
@@ -1201,13 +1135,11 @@ fn native_signer_proxy_poisons_the_session_after_tamper_or_drift() {
             .expect("adversarial native signer broker exits cleanly");
     }
 }
-
 #[test]
 fn all_native_signer_roles_round_trip_over_the_stock_broker() {
     let catalog = native_signer_test_catalog();
     let (_directory, policy, shutdown, server) = start_native_signer_test_server();
     let dependencies = resolve(&catalog, &policy).expect("resolve all native signer broker roles");
-
     macro_rules! assert_role_round_trip {
         ($field:ident, $slot:ident, $qualifier:ident) => {{
             let binding = catalog
@@ -1234,7 +1166,6 @@ fn all_native_signer_roles_round_trip_over_the_stock_broker() {
                 .expect("native signer output signature verifies");
         }};
     }
-
     assert_role_round_trip!(
         sorafs_proof_outcome_signer,
         ProofOutcomeTransactionSigner,
@@ -1255,7 +1186,6 @@ fn all_native_signer_roles_round_trip_over_the_stock_broker() {
         OrderbookTransactionSigner,
         qualify_sorafs_orderbook_transaction_signer_v1
     );
-
     drop(dependencies);
     shutdown.request_shutdown();
     server
@@ -1263,7 +1193,6 @@ fn all_native_signer_roles_round_trip_over_the_stock_broker() {
         .expect("join native signer broker")
         .expect("native signer broker exits cleanly");
 }
-
 #[test]
 fn moderation_transaction_signer_binding_backend_and_identity_are_exact() {
     let catalog = moderation_transaction_signer_test_catalog();
@@ -1279,7 +1208,6 @@ fn moderation_transaction_signer_binding_backend_and_identity_are_exact() {
         binding.native_signer_binding.is_none(),
         "slot 18 uses only its exact outer provider binding"
     );
-
     let mut role_confused = binding.clone();
     role_confused.native_signer_binding = proof_native_signer_test_catalog()
         .iter()
@@ -1291,7 +1219,6 @@ fn moderation_transaction_signer_binding_backend_and_identity_are_exact() {
         Err(BrokerError::BindingMismatch),
         "slot 18 must reject the authority-pinned native-role discriminator"
     );
-
     assert!(matches!(
         prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
@@ -1329,14 +1256,12 @@ fn moderation_transaction_signer_binding_backend_and_identity_are_exact() {
     )
     .expect("accept the exact moderation transaction signer");
 }
-
 #[test]
 fn moderation_transaction_signer_payload_and_result_are_exact() {
     let signer = Arc::new(ServerTestModerationTransactionSigner::exact());
     let state = moderation_transaction_signer_test_state(signer.clone());
     let payload = moderation_transaction_signer_test_payload();
     let canonical = encode_native_transaction_payload(&payload).expect("encode moderation payload");
-
     for malformed in [
         Vec::new(),
         vec![0xFF],
@@ -1362,7 +1287,6 @@ fn moderation_transaction_signer_payload_and_result_are_exact() {
         );
     }
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 0);
-
     let cross_network =
         native_signer_test_payload_for_network(test_network_id(0x16), payload.authority().clone());
     let cross_network_request = make_operation_request(
@@ -1386,7 +1310,6 @@ fn moderation_transaction_signer_payload_and_result_are_exact() {
         0,
         "the moderation external signer must not see a foreign-network transaction"
     );
-
     let request = make_operation_request(
         TEST_SESSION_ID,
         3,
@@ -1411,7 +1334,6 @@ fn moderation_transaction_signer_payload_and_result_are_exact() {
         .verify_signature()
         .expect("verify moderation transaction signature");
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 1);
-
     for mode in [
         ServerTestModerationTransactionSignerMode::InvalidSignature,
         ServerTestModerationTransactionSignerMode::SubstitutedPayload,
@@ -1431,7 +1353,6 @@ fn moderation_transaction_signer_payload_and_result_are_exact() {
         );
     }
 }
-
 #[test]
 fn moderation_transaction_signer_rejects_substitution_and_post_sign_drift() {
     for mode in [
@@ -1460,7 +1381,6 @@ fn moderation_transaction_signer_rejects_substitution_and_post_sign_drift() {
         assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 1);
     }
 }
-
 #[test]
 fn moderation_transaction_signer_round_trips_and_poisons_on_substitution() {
     let catalog = moderation_transaction_signer_test_catalog();
@@ -1493,14 +1413,12 @@ fn moderation_transaction_signer_round_trips_and_poisons_on_substitution() {
     signed
         .verify_signature()
         .expect("verify brokered moderation signature");
-
     drop(dependencies);
     shutdown.request_shutdown();
     server
         .join()
         .expect("join moderation transaction signer broker")
         .expect("moderation transaction signer broker exits cleanly");
-
     for mode in [
         ServerTestModerationTransactionSignerMode::InvalidSignature,
         ServerTestModerationTransactionSignerMode::DriftAfterSign,
@@ -1533,7 +1451,6 @@ fn moderation_transaction_signer_round_trips_and_poisons_on_substitution() {
                         ),
                         "a substituted or drifting signer poisons its broker session"
                     );
-
         drop(dependencies);
         shutdown.request_shutdown();
         server
@@ -1589,7 +1506,6 @@ fn catalog_digest_binds_protocol_and_exact_network_identity() {
         catalog_digest("test-chain", &network_id, &substituted_key)
             .expect("digest catalog with a substituted publisher key")
     );
-
     let mut other_magic = BROKER_MAGIC_V1;
     other_magic[0] ^= 1;
     assert_ne!(
@@ -1619,7 +1535,6 @@ fn catalog_digest_binds_protocol_and_exact_network_identity() {
         )
     );
 }
-
 #[test]
 fn handshake_rejects_catalog_nonce_session_binding_metadata_and_transcript_confusion() {
     assert_eq!(
@@ -1651,7 +1566,6 @@ fn handshake_rejects_catalog_nonce_session_binding_metadata_and_transcript_confu
     .expect("build handshake");
     let response = handshake_response(&request);
     validate_handshake_response(&request, &response).expect("validate exact handshake");
-
     for mutation in 0..9 {
         let mut confused = response.clone();
         match mutation {

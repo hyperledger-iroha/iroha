@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Regression tests ensuring Sumeragi keeps `locked_qc` in sync during view changes and restarts.
-
 use std::time::{Duration, Instant};
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -14,14 +12,11 @@ use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry}
 use norito::json::Value;
 use tokio::{task, time::sleep};
 use toml::Table;
-
 const VIEW_CHANGE_RECOVERY_TIMEOUT: Duration = Duration::from_secs(300);
-
 #[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_view_change_lock_convergence() -> Result<()> {
     init_instruction_registry();
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -32,7 +27,6 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full");
         });
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(sumeragi_view_change_lock_convergence),
@@ -41,7 +35,6 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
     else {
         return Ok(());
     };
-
     let client = network.client();
     let status = client.get_status()?;
     for idx in status.blocks..3 {
@@ -53,7 +46,6 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
     network
         .ensure_blocks_with(|height| height.total >= 3)
         .await?;
-
     let mut baseline_view_changes = Vec::new();
     let mut baseline_blocks = Vec::new();
     for peer in network.peers() {
@@ -61,7 +53,6 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         baseline_view_changes.push(u64::from(status.view_changes));
         baseline_blocks.push(status.blocks);
     }
-
     let baseline_height = baseline_blocks.into_iter().max().unwrap_or_default();
     let target_height = baseline_height + 1;
     let prf_seed = chain_epoch_seed(&network.chain_id());
@@ -76,7 +67,6 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
     );
     leader_peer.shutdown().await;
     sleep(Duration::from_secs(1)).await;
-
     let running: Vec<NetworkPeer> = network
         .peers()
         .iter()
@@ -88,7 +78,6 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         "expected at least 3 running peers after leader shutdown, got {}",
         running.len()
     );
-
     let wait_client = running
         .first()
         .ok_or_else(|| eyre!("no running peers available"))?
@@ -120,7 +109,6 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         "failed to submit log instruction to any running peer: {submit_errors:?}"
     );
     let _ = wait_for_height(&wait_client, target_height, VIEW_CHANGE_RECOVERY_TIMEOUT).await?;
-
     let view_change_deadline = Instant::now() + VIEW_CHANGE_RECOVERY_TIMEOUT;
     let mut observed_view_change_advance = false;
     while Instant::now() < view_change_deadline {
@@ -155,7 +143,6 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
             "view-change counters did not advance before timeout; continuing with locked QC convergence check: {snapshots:?}"
         );
     }
-
     let locked_convergence_deadline = Instant::now() + VIEW_CHANGE_RECOVERY_TIMEOUT;
     loop {
         let mut locked_entries = Vec::new();
@@ -166,7 +153,6 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
             let snapshot = fetch_qc_snapshot(&peer.client()).await?;
             locked_entries.push(snapshot.locked);
         }
-
         let locked_converged =
             assert_qc_entries_match(&locked_entries, "locked QC divergence after view change")
                 .is_ok();
@@ -183,16 +169,13 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         }
         sleep(Duration::from_millis(200)).await;
     }
-
     network.shutdown().await;
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
     init_instruction_registry();
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -201,7 +184,6 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full");
         });
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(sumeragi_restart_retains_lock_convergence),
@@ -210,7 +192,6 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
     else {
         return Ok(());
     };
-
     let client = network.client();
     let status = client.get_status()?;
     for idx in status.blocks..3 {
@@ -222,7 +203,6 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
     network
         .ensure_blocks_with(|height| height.total >= 3)
         .await?;
-
     let mut baseline_snapshots = Vec::new();
     for peer in network.peers() {
         baseline_snapshots.push(fetch_qc_snapshot(&peer.client()).await?);
@@ -245,22 +225,18 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         baseline_locked_height > 0,
         "expected baseline locked QC height to be greater than zero"
     );
-
     let config_layers: Vec<ConfigLayer> = network
         .config_layers()
         .map(|cow| ConfigLayer(cow.into_owned()))
         .collect();
-
     network.shutdown().await;
     sleep(Duration::from_secs(2)).await;
-
     for peer in network.peers() {
         let mnemonic = peer.mnemonic().to_string();
         peer.start_checked(config_layers.iter(), None)
             .await
             .wrap_err_with(|| format!("restart peer {mnemonic}"))?;
     }
-
     let running: Vec<NetworkPeer> = network
         .peers()
         .iter()
@@ -273,7 +249,6 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         running.len(),
         network.peers().len()
     );
-
     let post_restart_deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let mut post_restart_snapshots = Vec::new();
@@ -305,7 +280,6 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         }
         sleep(Duration::from_millis(200)).await;
     }
-
     let target_height = baseline_locked_height + 1;
     let wait_client = running
         .first()
@@ -342,33 +316,27 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         }
         sleep(Duration::from_millis(200)).await;
     }
-
     network.shutdown().await;
     Ok(())
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QcEntry {
     height: u64,
     view: u64,
     subject: Option<String>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QcSnapshot {
     highest: QcEntry,
     locked: QcEntry,
 }
-
 #[derive(Clone)]
 struct ConfigLayer(Table);
-
 impl AsRef<Table> for ConfigLayer {
     fn as_ref(&self) -> &Table {
         &self.0
     }
 }
-
 async fn fetch_qc_snapshot(client: &Client) -> Result<QcSnapshot> {
     let client = client.clone();
     let payload = task::spawn_blocking(move || client.get_sumeragi_qc_json())
@@ -376,7 +344,6 @@ async fn fetch_qc_snapshot(client: &Client) -> Result<QcSnapshot> {
         .wrap_err("fetch sumeragi QC snapshot")??;
     parse_qc_snapshot(&payload)
 }
-
 async fn wait_for_height(client: &Client, target_height: u64, timeout: Duration) -> Result<Status> {
     let client = client.clone();
     let deadline = Instant::now() + timeout;
@@ -391,7 +358,6 @@ async fn wait_for_height(client: &Client, target_height: u64, timeout: Duration)
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 async fn fetch_status(client: &Client) -> Result<Status> {
     let client = client.clone();
     task::spawn_blocking(move || client.get_status())
@@ -399,7 +365,6 @@ async fn fetch_status(client: &Client) -> Result<Status> {
         .wrap_err("join status fetch task")?
         .wrap_err("fetch status")
 }
-
 fn parse_qc_snapshot(value: &Value) -> Result<QcSnapshot> {
     let object = value
         .as_object()
@@ -415,7 +380,6 @@ fn parse_qc_snapshot(value: &Value) -> Result<QcSnapshot> {
         locked: parse_qc_entry(locked)?,
     })
 }
-
 fn resolve_permissioned_leader_peer(
     peers: &[NetworkPeer],
     height: u64,
@@ -440,13 +404,11 @@ fn resolve_permissioned_leader_peer(
         .cloned()
         .ok_or_else(|| eyre!("leader peer id not found in network peers"))
 }
-
 fn chain_epoch_seed(chain_id: &iroha::data_model::ChainId) -> [u8; 32] {
     let chain = chain_id.clone().into_inner();
     let hash = iroha_crypto::Hash::new(chain.as_bytes());
     <[u8; 32]>::from(hash)
 }
-
 fn parse_qc_entry(value: &Value) -> Result<QcEntry> {
     let object = value
         .as_object()
@@ -478,7 +440,6 @@ fn parse_qc_entry(value: &Value) -> Result<QcEntry> {
         subject,
     })
 }
-
 fn assert_qc_entries_match(entries: &[QcEntry], context: &str) -> Result<()> {
     ensure!(
         !entries.is_empty(),

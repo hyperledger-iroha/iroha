@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Localnet autoscale regressions for Nexus expansion and certified two-phase contraction.
-
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
@@ -15,7 +14,6 @@ use std::{
     thread,
     time::{Duration, Instant, UNIX_EPOCH},
 };
-
 use eyre::{Result, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -75,7 +73,6 @@ use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::ALICE_ID;
 use norito::codec::{DecodeAll, Encode};
 use toml::{Table, Value as TomlValue};
-
 const TOTAL_PEERS: usize = 4;
 const MULTILANE_RELEASE_MODE_ENV: &str = "IROHA_MULTILANE_RELEASE_MODE";
 const RUN_IGNORED_ENV: &str = "IROHA_RUN_IGNORED";
@@ -7633,7 +7630,6 @@ fn nexus_autoscale_soak_expand_contract_cycles_in_localnet() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeSet, fs, time::Duration};
-
     use eyre::Result;
     use iroha::{
         client::TxConfirmationStatus,
@@ -7655,7 +7651,6 @@ mod tests {
     };
     use norito::codec::Encode;
     use tempfile::tempdir;
-
     use super::{
         AUTOSCALE_DRAIN_COMMITMENT_LOG_MARKER, AUTOSCALE_DRAIN_INTENT_LOG_MARKER,
         AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER, AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,

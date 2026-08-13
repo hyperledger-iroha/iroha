@@ -1,7 +1,5 @@
 //! Cross-rail MDR/XSD and checked-in securities lifecycle fixture tests.
-
 use super::*;
-
 #[test]
 fn official_mdr_xsd_fixtures_cover_live_rail_profiles() {
     let (config, _reference_files) = sample_config_with_live_reference_data();
@@ -293,7 +291,6 @@ fn official_mdr_xsd_fixtures_cover_live_rail_profiles() {
             ),
         ),
     ];
-
     for (profile_id, message_type, msg_def_id, expected_service, xsd, expected_root, payload) in
         cases
     {
@@ -303,7 +300,6 @@ fn official_mdr_xsd_fixtures_cover_live_rail_profiles() {
             xsd_document_payload_root(xsd).as_deref(),
             Some(expected_root)
         );
-
         let parsed = parse_message(message_type, payload.as_bytes())
             .unwrap_or_else(|err| panic!("{profile_id} MDR/XSD fixture must parse: {err:?}"));
         let profile = runtime
@@ -312,13 +308,11 @@ fn official_mdr_xsd_fixtures_cover_live_rail_profiles() {
         let metadata = runtime
             .validate_profile_submission(profile, message_type, &parsed, payload.as_bytes())
             .unwrap_or_else(|err| panic!("{profile_id} MDR/XSD fixture must validate: {err:?}"));
-
         assert_eq!(metadata.profile_id(), Some(profile_id));
         assert_eq!(metadata.business_service(), Some(expected_service));
         assert_eq!(metadata.message_type(), Some(message_type));
     }
 }
-
 #[test]
 fn official_mdr_xsd_fixture_rejects_document_root_drift() {
     let pacs009_root =
@@ -333,13 +327,10 @@ fn official_mdr_xsd_fixture_rejects_document_root_drift() {
         "123e4567-e89b-12d3-a456-426614174450",
     )
     .replace("FIToFICstmrCdtTrf", &pacs009_root);
-
     let err = parse_message("pacs.008", payload.as_bytes())
         .expect_err("pacs.008 must reject a pacs.009 XSD document root");
-
     assert!(matches!(err, MsgError::UnknownMessageType));
 }
-
 #[test]
 fn checked_in_securities_fixtures_validate_and_link_through_torii_profile() {
     let (mut config, _reference_files) = sample_config_with_live_reference_data();
@@ -350,7 +341,6 @@ fn checked_in_securities_fixtures_validate_and_link_through_torii_profile() {
     let profile = runtime
         .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
         .expect("securities lifecycle profile");
-
     let instruction_payload = data_pdu_with_app_header(
         "SEC-INSTR-BAH-1",
         "sese.023.001.11",
@@ -392,7 +382,6 @@ fn checked_in_securities_fixtures_validate_and_link_through_torii_profile() {
         instruction_status.plan_execution_order(),
         Some("DELIVERY_THEN_PAYMENT")
     );
-
     let status_advice_payload = data_pdu_with_app_header(
         "SEC-STADV-BAH-1",
         "sese.024.001.10",
@@ -441,7 +430,6 @@ fn checked_in_securities_fixtures_validate_and_link_through_torii_profile() {
         status_advice_record.detail(),
         Some("recorded inbound ISO 20022 sese.024 lifecycle message")
     );
-
     let confirmation_payload = data_pdu_with_app_header(
         "SEC-CONF-BAH-1",
         "sese.025.001.11",
@@ -465,7 +453,6 @@ fn checked_in_securities_fixtures_validate_and_link_through_torii_profile() {
         confirmation_metadata.business_message_id(),
         Some("SEC-CONF-BAH-1")
     );
-
     record_original(&runtime, "sese.023:PVP-FIXTURE-1", "sese.023");
     assert!(runtime.check_and_record_inbound(&confirmation_id, confirmation_metadata));
     let confirmation_outcome = runtime

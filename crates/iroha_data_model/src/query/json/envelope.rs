@@ -4,17 +4,14 @@
 //! helpers convert between Norito JSON values and strongly-typed query objects,
 //! ensuring field ordering stays deterministic and validation errors surface
 //! with precise context.
-
 use std::{
     format,
     num::NonZeroU64,
     str::FromStr,
     string::{String, ToString},
 };
-
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use thiserror::Error;
-
 use crate::{
     name::Name,
     query::{
@@ -24,7 +21,6 @@ use crate::{
         parameters::{FetchSize, Pagination, QueryParams, Sorting},
     },
 };
-
 fn build_query_with_params<T, Q, F>(
     predicate: CompoundPredicate<T>,
     selector: SelectorTuple<T>,
@@ -51,7 +47,6 @@ where
         params,
     }
 }
-
 /// JSON envelope selecting either a singular or iterable query definition.
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueryEnvelopeJson {
@@ -60,15 +55,12 @@ pub enum QueryEnvelopeJson {
     /// Encodes an iterable query (batched response stream).
     Iterable(Box<IterableQueryJson>),
 }
-
 impl Eq for QueryEnvelopeJson {}
-
 fn singular_payload(map: &Map) -> Result<&Map, QueryJsonError> {
     map.get("payload")
         .and_then(Value::as_object)
         .ok_or(QueryJsonError::MissingField("singular", "payload"))
 }
-
 fn payload_required_string<'a>(
     payload: &'a Map,
     field: &'static str,
@@ -78,7 +70,6 @@ fn payload_required_string<'a>(
         .and_then(Value::as_str)
         .ok_or(QueryJsonError::MissingField("payload", field))
 }
-
 fn payload_optional_string(
     payload: &Map,
     field: &'static str,
@@ -93,12 +84,10 @@ fn payload_optional_string(
         })
         .transpose()
 }
-
 impl QueryEnvelopeJson {
     fn parse_map(map: &Map) -> Result<Self, QueryJsonError> {
         let mut singular: Option<&Value> = None;
         let mut iterable: Option<&Value> = None;
-
         for (key, value) in map {
             match key.as_str() {
                 "singular" => singular = Some(value),
@@ -106,7 +95,6 @@ impl QueryEnvelopeJson {
                 other => return Err(QueryJsonError::UnknownEnvelopeKey(other.to_owned())),
             }
         }
-
         match (singular, iterable) {
             (Some(value), None) => {
                 let sing = SingularQueryJson::from_value(value)?;
@@ -121,7 +109,6 @@ impl QueryEnvelopeJson {
         }
     }
 }
-
 impl JsonSerialize for QueryEnvelopeJson {
     fn json_serialize(&self, out: &mut String) {
         let mut map = Map::new();
@@ -136,7 +123,6 @@ impl JsonSerialize for QueryEnvelopeJson {
         Value::Object(map).json_serialize(out);
     }
 }
-
 impl JsonDeserialize for QueryEnvelopeJson {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = Value::json_deserialize(parser)?;
@@ -150,7 +136,6 @@ impl JsonDeserialize for QueryEnvelopeJson {
         }
     }
 }
-
 /// Supported singular queries for the JSON DSL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SingularQueryJson {
@@ -246,14 +231,12 @@ pub enum SingularQueryJson {
         policy_id: String,
     },
 }
-
 impl SingularQueryJson {
     fn parse_account_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindAccountById {
             account_id: payload_required_string(payload, "account_id")?.to_owned(),
         })
     }
-
     fn parse_account_by_alias(payload: &Map) -> Result<Self, QueryJsonError> {
         let alias = payload
             .get("alias")
@@ -264,7 +247,6 @@ impl SingularQueryJson {
             })?;
         Ok(Self::FindAccountByAlias { alias })
     }
-
     fn parse_aliases(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindAliasesByAccountId {
             account_id: payload_required_string(payload, "account_id")?.to_owned(),
@@ -272,7 +254,6 @@ impl SingularQueryJson {
             domain: payload_optional_string(payload, "domain")?,
         })
     }
-
     fn parse_recovery_policy(payload: &Map) -> Result<Self, QueryJsonError> {
         let alias = payload
             .get("alias")
@@ -283,7 +264,6 @@ impl SingularQueryJson {
             })?;
         Ok(Self::FindAccountRecoveryPolicyByAlias { alias })
     }
-
     fn parse_recovery_request(payload: &Map) -> Result<Self, QueryJsonError> {
         let alias = payload
             .get("alias")
@@ -294,25 +274,21 @@ impl SingularQueryJson {
             })?;
         Ok(Self::FindAccountRecoveryRequestByAlias { alias })
     }
-
     fn parse_contract_manifest(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindContractManifestByCodeHash {
             code_hash: payload_required_string(payload, "code_hash")?.to_owned(),
         })
     }
-
     fn parse_fee_sponsor_program_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindFeeSponsorProgramById {
             id: payload_required_string(payload, "id")?.to_owned(),
         })
     }
-
     fn parse_fx_corridor_policy_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindFxCorridorPolicyById {
             policy_id: payload_required_string(payload, "policy_id")?.to_owned(),
         })
     }
-
     fn parse_asset_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindAssetById {
             asset: payload_required_string(payload, "asset")?.to_owned(),
@@ -320,19 +296,16 @@ impl SingularQueryJson {
             scope: payload.get("scope").cloned(),
         })
     }
-
     fn parse_asset_definition(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindAssetDefinitionById {
             asset: payload_required_string(payload, "asset")?.to_owned(),
         })
     }
-
     fn parse_nft_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindNftById {
             nft_id: payload_required_string(payload, "nft_id")?.to_owned(),
         })
     }
-
     fn parse_asset_escrow(payload: &Map) -> Result<Self, QueryJsonError> {
         let escrow_id = payload
             .get("escrow_id")
@@ -343,13 +316,11 @@ impl SingularQueryJson {
             })?;
         Ok(Self::FindAssetEscrowById { escrow_id })
     }
-
     fn parse_trigger_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindTriggerById {
             id: payload_required_string(payload, "id")?.to_owned(),
         })
     }
-
     fn parse_twitter_binding(payload: &Map) -> Result<Self, QueryJsonError> {
         let binding_hash_value = payload
             .get("binding_hash")
@@ -358,13 +329,11 @@ impl SingularQueryJson {
             .map_err(|_| QueryJsonError::InvalidField("payload", "binding_hash"))?;
         Ok(Self::FindTwitterBindingByHash { binding_hash })
     }
-
     fn parse_domain_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindDomainById {
             domain_id: payload_required_string(payload, "domain_id")?.to_owned(),
         })
     }
-
     fn alias_payload(alias: &crate::account::AccountAlias) -> Map {
         let mut payload = Map::new();
         payload.insert(
@@ -373,20 +342,17 @@ impl SingularQueryJson {
         );
         payload
     }
-
     fn decode_account_id(account_id: &str) -> Result<crate::account::AccountId, QueryJsonError> {
         crate::account::AccountId::parse_encoded(account_id)
             .map(crate::account::ParsedAccountId::into_account_id)
             .map_err(|_| QueryJsonError::InvalidField("payload", "account_id"))
     }
-
     fn decode_asset_definition_id(
         asset: &str,
     ) -> Result<crate::asset::AssetDefinitionId, QueryJsonError> {
         crate::asset::AssetDefinitionId::parse_address_literal(asset)
             .map_err(|_| QueryJsonError::InvalidField("payload", "asset"))
     }
-
     fn decode_asset_scope(
         scope: Option<Value>,
     ) -> Result<crate::asset::AssetBalanceScope, QueryJsonError> {
@@ -398,18 +364,15 @@ impl SingularQueryJson {
             .transpose()
             .map(Option::unwrap_or_default)
     }
-
     fn decode_domain_id(domain_id: &str) -> Result<crate::domain::DomainId, QueryJsonError> {
         crate::domain::DomainId::parse_fully_qualified(domain_id)
             .map_err(|_| QueryJsonError::InvalidField("payload", "domain_id"))
     }
-
     fn decode_nft_id(nft_id: &str) -> Result<crate::nft::NftId, QueryJsonError> {
         nft_id
             .parse()
             .map_err(|_| QueryJsonError::InvalidField("payload", "nft_id"))
     }
-
     fn decode_contract_hash(code_hash: &str) -> Result<iroha_crypto::Hash, QueryJsonError> {
         let bytes = hex::decode(code_hash.trim_start_matches("0x"))
             .map_err(|_| QueryJsonError::InvalidHex("code_hash".to_owned()))?;
@@ -424,7 +387,6 @@ impl SingularQueryJson {
         arr.copy_from_slice(&bytes);
         Ok(iroha_crypto::Hash::prehashed(arr))
     }
-
     fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert(
@@ -523,7 +485,6 @@ impl SingularQueryJson {
         }
         Value::Object(map)
     }
-
     fn from_value(value: &Value) -> Result<Self, QueryJsonError> {
         let map = value
             .as_object()
@@ -565,7 +526,6 @@ impl SingularQueryJson {
             other => Err(QueryJsonError::UnknownSingularType(other.to_owned())),
         }
     }
-
     fn kind_label(&self) -> &'static str {
         match self {
             SingularQueryJson::FindAbiVersion => "FindAbiVersion",
@@ -595,7 +555,6 @@ impl SingularQueryJson {
             SingularQueryJson::FindFxCorridorPolicyById { .. } => "FindFxCorridorPolicyById",
         }
     }
-
     #[allow(clippy::too_many_lines)]
     fn into_box(self) -> Result<SingularQueryBox, QueryJsonError> {
         match self {
@@ -725,7 +684,6 @@ impl SingularQueryJson {
         }
     }
 }
-
 /// Supported iterable queries for the JSON DSL.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IterableQueryJson {
@@ -736,9 +694,7 @@ pub struct IterableQueryJson {
     /// Optional predicate evaluated against each item.
     pub predicate: Option<PredicateJson>,
 }
-
 impl Eq for IterableQueryJson {}
-
 impl IterableQueryJson {
     fn to_value(&self) -> Value {
         let mut map = Map::new();
@@ -757,7 +713,6 @@ impl IterableQueryJson {
         }
         Value::Object(map)
     }
-
     fn from_value(value: &Value) -> Result<Self, QueryJsonError> {
         let map = value
             .as_object()
@@ -765,7 +720,6 @@ impl IterableQueryJson {
         let mut kind: Option<IterableQueryKind> = None;
         let mut params: Option<IterableQueryParamsJson> = None;
         let mut predicate: Option<PredicateJson> = None;
-
         for (key, value) in map {
             match key.as_str() {
                 "type" => {
@@ -791,7 +745,6 @@ impl IterableQueryJson {
                 }
             }
         }
-
         let kind = kind.ok_or(QueryJsonError::MissingField("iterable", "type"))?;
         let params = params.unwrap_or_default();
         Ok(IterableQueryJson {
@@ -800,7 +753,6 @@ impl IterableQueryJson {
             predicate,
         })
     }
-
     fn predicate_or_pass<T: 'static>(&self) -> Result<CompoundPredicate<T>, QueryJsonError> {
         self.predicate.as_ref().map_or_else(
             || Ok(CompoundPredicate::PASS),
@@ -810,7 +762,6 @@ impl IterableQueryJson {
             },
         )
     }
-
     #[cfg(not(feature = "ids_projection"))]
     fn selector<T>(&self) -> Result<SelectorTuple<T>, QueryJsonError> {
         if self.params.ids_projection.unwrap_or(false) {
@@ -819,7 +770,6 @@ impl IterableQueryJson {
             Ok(SelectorTuple::default())
         }
     }
-
     #[cfg(feature = "ids_projection")]
     fn selector<T>(&self) -> SelectorTuple<T> {
         if self.params.ids_projection.unwrap_or(false) {
@@ -828,7 +778,6 @@ impl IterableQueryJson {
             SelectorTuple::default()
         }
     }
-
     fn build_for_kind<Item, Q, F>(
         &self,
         params: QueryParams,
@@ -856,7 +805,6 @@ impl IterableQueryJson {
             constructor,
         ))
     }
-
     #[allow(clippy::too_many_lines)]
     fn into_query_with_params(self) -> Result<QueryWithParams, QueryJsonError> {
         let params = self.params.clone().into_query_params()?;
@@ -942,7 +890,6 @@ impl IterableQueryJson {
         }
     }
 }
-
 /// Iterable query kinds understood by the JSON DSL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IterableQueryKind {
@@ -973,7 +920,6 @@ pub enum IterableQueryKind {
     /// Enumerate fee sponsor program identifiers.
     FindFeeSponsorProgramIds,
 }
-
 impl IterableQueryKind {
     fn as_str(self) -> &'static str {
         match self {
@@ -993,10 +939,8 @@ impl IterableQueryKind {
         }
     }
 }
-
 impl FromStr for IterableQueryKind {
     type Err = ();
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "FindPeers" => Ok(IterableQueryKind::FindPeers),
@@ -1016,7 +960,6 @@ impl FromStr for IterableQueryKind {
         }
     }
 }
-
 /// Execution modifiers for iterable queries.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IterableQueryParamsJson {
@@ -1037,7 +980,6 @@ pub struct IterableQueryParamsJson {
     /// Optional data-space identifier filter.
     pub dsid: Option<String>,
 }
-
 impl IterableQueryParamsJson {
     fn is_empty(&self) -> bool {
         self.limit.is_none()
@@ -1049,7 +991,6 @@ impl IterableQueryParamsJson {
             && self.lane_id.is_none()
             && self.dsid.is_none()
     }
-
     fn to_value(&self) -> Value {
         let mut map = Map::new();
         if let Some(limit) = self.limit {
@@ -1084,7 +1025,6 @@ impl IterableQueryParamsJson {
         }
         Value::Object(map)
     }
-
     fn from_value(value: &Value) -> Result<Self, QueryJsonError> {
         let map = value
             .as_object()
@@ -1097,7 +1037,6 @@ impl IterableQueryParamsJson {
         let mut ids_projection = None;
         let mut lane_id = None;
         let mut dsid = None;
-
         for (key, value) in map {
             match key.as_str() {
                 "limit" => limit = params_optional_u64(value, "limit")?,
@@ -1133,7 +1072,6 @@ impl IterableQueryParamsJson {
                 }
             }
         }
-
         Ok(Self {
             limit,
             offset,
@@ -1145,7 +1083,6 @@ impl IterableQueryParamsJson {
             dsid,
         })
     }
-
     fn into_query_params(self) -> Result<QueryParams, QueryJsonError> {
         let Self {
             limit,
@@ -1157,7 +1094,6 @@ impl IterableQueryParamsJson {
             lane_id: _,
             dsid: _,
         } = self;
-
         let limit = limit
             .map(|value| {
                 NonZeroU64::new(value).ok_or(QueryJsonError::InvalidNonZero("limit", value))
@@ -1165,13 +1101,11 @@ impl IterableQueryParamsJson {
             .transpose()?;
         let offset = offset.unwrap_or(0);
         let pagination = Pagination::new(limit, offset);
-
         let fetch_size = fetch_size
             .map(|value| {
                 NonZeroU64::new(value).ok_or(QueryJsonError::InvalidNonZero("fetch_size", value))
             })
             .transpose()?;
-
         if order.is_some() && sort_by_metadata_key.is_none() {
             Err(QueryJsonError::OrderWithoutSortKey)
         } else {
@@ -1183,13 +1117,11 @@ impl IterableQueryParamsJson {
                 Sorting::default()
             };
             sorting.order = order;
-
             let fetch_size = FetchSize::new(fetch_size);
             Ok(QueryParams::new(pagination, sorting, fetch_size))
         }
     }
 }
-
 fn params_optional_u64(value: &Value, field: &'static str) -> Result<Option<u64>, QueryJsonError> {
     match value {
         Value::Null => Ok(None),
@@ -1199,7 +1131,6 @@ fn params_optional_u64(value: &Value, field: &'static str) -> Result<Option<u64>
             .ok_or(QueryJsonError::InvalidField("params", field)),
     }
 }
-
 fn params_optional_bool(
     value: &Value,
     field: &'static str,
@@ -1210,7 +1141,6 @@ fn params_optional_bool(
         _ => Err(QueryJsonError::InvalidField("params", field)),
     }
 }
-
 fn params_optional_string(
     value: &Value,
     field: &'static str,
@@ -1221,7 +1151,6 @@ fn params_optional_string(
         _ => Err(QueryJsonError::InvalidField("params", field)),
     }
 }
-
 impl QueryEnvelopeJson {
     /// Convert the envelope into a raw [`QueryRequest`].
     ///
@@ -1243,7 +1172,6 @@ impl QueryEnvelopeJson {
         Ok(request)
     }
 }
-
 /// Errors produced when parsing or converting JSON query envelopes.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum QueryJsonError {
@@ -1314,13 +1242,11 @@ pub enum QueryJsonError {
     #[error("ids projection requested but feature is disabled")]
     IdsProjectionUnavailable,
 }
-
 impl From<PredicateParseError> for QueryJsonError {
     fn from(err: PredicateParseError) -> Self {
         QueryJsonError::PredicateParse(err.to_string())
     }
 }
-
 fn value_type_name(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
@@ -1331,7 +1257,6 @@ fn value_type_name(value: &Value) -> &'static str {
         Value::Object(_) => "object",
     }
 }
-
 impl IterableQueryJson {
     /// Build a raw [`QueryRequest`] from this JSON definition.
     ///
@@ -1341,15 +1266,11 @@ impl IterableQueryJson {
         Ok(QueryRequest::Start(self.into_query_with_params()?))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, KeyPair};
-
     use super::*;
-
     #[test]
     fn singular_roundtrip() {
         let singular = SingularQueryJson::FindParameters;
@@ -1366,7 +1287,6 @@ mod tests {
             SingularQueryBox::FindParameters(crate::query::executor::prelude::FindParameters)
         ));
     }
-
     #[test]
     fn twitter_binding_query_roundtrip() {
         let binding_hash = crate::oracle::KeyedHash::new("pepper-social-v1", b"pepper", b"payload");
@@ -1387,7 +1307,6 @@ mod tests {
                 if query.binding_hash == binding_hash
         ));
     }
-
     #[test]
     fn nft_by_id_query_roundtrip() {
         let nft_id: crate::nft::NftId =
@@ -1407,7 +1326,6 @@ mod tests {
             request,
             SingularQueryBox::FindNftById(query) if query.nft_id() == &nft_id
         ));
-
         let invalid = SingularQueryJson::FindNftById {
             nft_id: "missing-domain-separator".to_owned(),
         };
@@ -1416,7 +1334,6 @@ mod tests {
             .expect_err("non-canonical NFT identifiers must be rejected");
         assert_eq!(error, QueryJsonError::InvalidField("payload", "nft_id"));
     }
-
     #[test]
     fn find_aliases_by_account_id_roundtrip_with_filters() {
         let keypair = KeyPair::try_from_seed(vec![0xAC; 32], Algorithm::Ed25519)
@@ -1432,7 +1349,6 @@ mod tests {
             }
             other => panic!("unexpected query variant: {other:?}"),
         }
-
         let alias = crate::account::AccountAlias::domainless(
             "alice".parse().expect("alias label"),
             crate::nexus::DataSpaceId::UNIVERSAL,
@@ -1454,7 +1370,6 @@ mod tests {
             }
             other => panic!("unexpected query variant: {other:?}"),
         }
-
         let singular = SingularQueryJson::FindAliasesByAccountId {
             account_id: account_id.to_string(),
             dataspace: Some("centralbank".to_owned()),
@@ -1476,7 +1391,6 @@ mod tests {
             }
             other => panic!("unexpected query variant: {other:?}"),
         }
-
         let singular = SingularQueryJson::FindAccountRecoveryPolicyByAlias {
             alias: alias.clone(),
         };
@@ -1494,7 +1408,6 @@ mod tests {
             }
             other => panic!("unexpected query variant: {other:?}"),
         }
-
         let domain_id =
             crate::domain::DomainId::try_new("wonderland", "universal").expect("domain id");
         let singular = SingularQueryJson::FindDomainById {
@@ -1515,7 +1428,6 @@ mod tests {
             other => panic!("unexpected query variant: {other:?}"),
         }
     }
-
     #[test]
     fn find_asset_queries_roundtrip_with_public_selectors() {
         let definition_id = crate::asset::AssetDefinitionId::derive_from_components(
@@ -1525,7 +1437,6 @@ mod tests {
         let keypair = KeyPair::try_from_seed(vec![0xCD; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         let account_id = crate::account::AccountId::new(keypair.public_key().clone());
-
         let singular = SingularQueryJson::FindAssetById {
             asset: definition_id.to_string(),
             account_id: account_id.to_string(),
@@ -1535,7 +1446,6 @@ mod tests {
         let json = norito::json::to_json(&envelope).expect("serialize");
         let parsed: QueryEnvelopeJson = norito::json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, envelope);
-
         let query = match parsed {
             QueryEnvelopeJson::Singular(s) => s.into_box().expect("into box"),
             _ => unreachable!(),
@@ -1551,7 +1461,6 @@ mod tests {
             }
             other => panic!("unexpected query variant: {other:?}"),
         }
-
         let definition_query = SingularQueryJson::FindAssetDefinitionById {
             asset: definition_id.to_string(),
         };
@@ -1564,7 +1473,6 @@ mod tests {
             }
             other => panic!("unexpected query variant: {other:?}"),
         }
-
         let escrow_id = crate::escrow::EscrowId::new(iroha_crypto::Hash::new("escrow-json"));
         let escrow_query = SingularQueryJson::FindAssetEscrowById { escrow_id };
         let envelope = QueryEnvelopeJson::Singular(escrow_query.clone());
@@ -1587,12 +1495,10 @@ mod tests {
             }
             other => panic!("unexpected query variant: {other:?}"),
         }
-
         assert_eq!(
             IterableQueryKind::from_str("FindAssetEscrows"),
             Ok(IterableQueryKind::FindAssetEscrows)
         );
-
         let invalid = SingularQueryJson::FindAssetDefinitionById {
             asset: "prefix:2f17c72466f84a4bb8a8e24884fdcd2f".to_owned(),
         };
@@ -1600,7 +1506,6 @@ mod tests {
             .into_box()
             .expect_err("prefixed literal must be rejected");
         assert_eq!(err, QueryJsonError::InvalidField("payload", "asset"));
-
         let trigger_query = SingularQueryJson::FindTriggerById {
             id: "demo_trigger".to_owned(),
         };
@@ -1612,7 +1517,6 @@ mod tests {
             other => panic!("unexpected query variant: {other:?}"),
         }
     }
-
     #[test]
     fn escrow_query_json_rejects_noncanonical_id_shapes() {
         let escrow_id = crate::escrow::EscrowId::new(iroha_crypto::Hash::new("escrow-query-id"));
@@ -1629,7 +1533,6 @@ mod tests {
             norito::json!({"hash": (canonical_literal.clone())}),
             norito::json!({"EscrowId": (canonical_literal.clone())}),
         ];
-
         for kind in ["FindAssetEscrowById", "FindAnonymousAssetEscrowById"] {
             let canonical = norito::json!({
                 "singular": {
@@ -1641,7 +1544,6 @@ mod tests {
                 norito::json::from_value::<QueryEnvelopeJson>(canonical).is_ok(),
                 "{kind} must accept one canonical checksummed hash literal"
             );
-
             for alias in &aliases {
                 let envelope = norito::json!({
                     "singular": {
@@ -1656,7 +1558,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn fee_sponsor_program_queries_roundtrip() {
         let keypair = KeyPair::try_from_seed(vec![0xEF; 32], Algorithm::Ed25519)
@@ -1668,7 +1569,6 @@ mod tests {
                 .parse::<crate::Name>()
                 .expect("valid program name"),
         );
-
         let singular = SingularQueryJson::FindFeeSponsorProgramById {
             id: program_id.to_string(),
         };
@@ -1676,7 +1576,6 @@ mod tests {
         let json = norito::json::to_json(&envelope).expect("serialize");
         let parsed: QueryEnvelopeJson = norito::json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, envelope);
-
         let query = match parsed {
             QueryEnvelopeJson::Singular(s) => s.into_box().expect("into box"),
             _ => unreachable!(),
@@ -1687,7 +1586,6 @@ mod tests {
             }
             other => panic!("unexpected query variant: {other:?}"),
         }
-
         for kind in [
             IterableQueryKind::FindFeeSponsorPrograms,
             IterableQueryKind::FindFeeSponsorProgramIds,
@@ -1710,7 +1608,6 @@ mod tests {
             };
             assert!(parsed_iterable.into_query_with_params().is_ok());
         }
-
         assert_eq!(
             IterableQueryKind::from_str("FindFeeSponsorPrograms"),
             Ok(IterableQueryKind::FindFeeSponsorPrograms)
@@ -1719,7 +1616,6 @@ mod tests {
             IterableQueryKind::from_str("FindFeeSponsorProgramIds"),
             Ok(IterableQueryKind::FindFeeSponsorProgramIds)
         );
-
         let invalid = SingularQueryJson::FindFeeSponsorProgramById {
             id: "missing-program-separator".to_owned(),
         };
@@ -1728,7 +1624,6 @@ mod tests {
             .expect_err("invalid program id must be rejected");
         assert_eq!(err, QueryJsonError::InvalidField("payload", "id"));
     }
-
     #[test]
     fn iterable_json_builds_canonical_query_components() {
         let iterable = IterableQueryJson {
@@ -1736,7 +1631,6 @@ mod tests {
             params: IterableQueryParamsJson::default(),
             predicate: None,
         };
-
         let query = iterable
             .into_query_with_params()
             .expect("build canonical asset-escrow iterable query");
@@ -1758,7 +1652,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn iterable_params_validation() {
         let value = norito::json!({
@@ -1800,7 +1693,6 @@ mod tests {
             50
         );
     }
-
     #[test]
     fn iterable_query_unknown_field_rejected() {
         let value = norito::json!({
@@ -1816,7 +1708,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn iterable_params_unknown_field_rejected() {
         let value = norito::json!({
@@ -1833,15 +1724,12 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn iterable_params_absent_optional_fields_remain_optional() {
         let parsed = IterableQueryParamsJson::from_value(&norito::json!({}))
             .expect("empty params object should be accepted");
-
         assert_eq!(parsed, IterableQueryParamsJson::default());
     }
-
     #[test]
     fn iterable_params_null_optional_fields_equal_default() {
         let value = norito::json!({
@@ -1855,10 +1743,8 @@ mod tests {
         });
         let parsed = IterableQueryParamsJson::from_value(&value)
             .expect("null optional params should be accepted as absent");
-
         assert_eq!(parsed, IterableQueryParamsJson::default());
     }
-
     #[test]
     fn iterable_params_reject_present_invalid_optional_fields() {
         let invalid_values = [
@@ -1878,7 +1764,6 @@ mod tests {
             ("lane_id", Value::from("zero")),
             ("dsid", Value::from(false)),
         ];
-
         for (field, value) in invalid_values {
             let mut map = Map::new();
             map.insert(field.to_owned(), value);
@@ -1887,7 +1772,6 @@ mod tests {
             assert_eq!(error, QueryJsonError::InvalidField("params", field));
         }
     }
-
     #[test]
     fn ids_projection_requires_feature() {
         let json = norito::json!({

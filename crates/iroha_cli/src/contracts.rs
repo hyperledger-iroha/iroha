@@ -1,7 +1,5 @@
 //! Contracts helpers.
-
 mod local_debug_rendering;
-
 use std::{
     collections::BTreeMap,
     fs,
@@ -10,7 +8,6 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
-
 use base64::Engine as _;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
@@ -41,11 +38,9 @@ use ivm::kotodama::driver::{
     load_source_project_manifest as load_kotodama_source_project_manifest,
 };
 use reqwest::StatusCode;
-
 use local_debug_rendering::{
     build_local_debug_entrypoint, render_durable_state_overlay, render_queued_instructions,
 };
-
 use crate::{
     Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override, wait_for_transaction_status,
 };
@@ -3591,13 +3586,11 @@ fn normalize_local_contract_payload(
 mod tests {
     use super::*;
     use std::fs;
-
     use iroha_crypto::{Algorithm, ExposedPrivateKey};
     use iroha_i18n::{Bundle, Language, Localizer};
     use ivm::kotodama::session::{CompileRequest, CompilerSession};
     use tempfile::tempdir;
     use url::Url;
-
     #[test]
     fn default_contract_gas_limit_covers_strict_argument_admission_floor() {
         assert_eq!(

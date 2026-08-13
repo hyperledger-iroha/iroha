@@ -2,10 +2,8 @@
 use ivm::{IVM, Memory, encoding, instruction};
 #[cfg(feature = "cuda")]
 mod common;
-
 #[cfg(feature = "cuda")]
 use common::{MODE_VECTOR, assemble_with_mode};
-
 #[cfg(feature = "cuda")]
 fn sha256_compress_ref(mut state: [u32; 8], block: &[u8; 64]) -> [u32; 8] {
     const K: [u32; 64] = [
@@ -70,7 +68,6 @@ fn sha256_compress_ref(mut state: [u32; 8], block: &[u8; 64]) -> [u32; 8] {
     state[7] = state[7].wrapping_add(h);
     state
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn merkle_root_accel_matches_cpu_for_large_input() {
@@ -81,17 +78,14 @@ fn merkle_root_accel_matches_cpu_for_large_input() {
     for (i, byte) in data.iter_mut().enumerate() {
         *byte = (i as u8).wrapping_mul(31).wrapping_add(7);
     }
-
     if !ivm::cuda_available() {
         eprintln!("CUDA not available; skipping merkle accel test");
         return;
     }
-
     let t_cpu = ivm::ByteMerkleTree::from_bytes_parallel(&data, chunk);
     let root_gpu = ivm::ByteMerkleTree::root_from_bytes_accel(&data, chunk);
     assert_eq!(t_cpu.root(), root_gpu);
 }
-
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[test]
 fn merkle_root_accel_metal_matches_cpu_for_large_input() {
@@ -109,7 +103,6 @@ fn merkle_root_accel_metal_matches_cpu_for_large_input() {
     let root_gpu = ivm::ByteMerkleTree::root_from_bytes_accel(&data, chunk);
     assert_eq!(t_cpu.root(), root_gpu);
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_gpu_cpu_determinism_sha256block() {
@@ -117,7 +110,6 @@ fn test_gpu_cpu_determinism_sha256block() {
         eprintln!("No CUDA GPU available; skipping test");
         return;
     }
-
     const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
     let block = [0u8; 64];
     let initial = [

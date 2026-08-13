@@ -20,12 +20,10 @@ fn install_unavailable_local_read_runtime(
         captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
     }));
 }
-
 #[tokio::test]
 async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates_on_one_node() {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind upstream listener");
@@ -46,11 +44,9 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
             .expect("serve upstream");
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
-
     let temp = tempfile::tempdir().expect("tempdir");
     let listen_base_url = format!("http://{addr}");
     let live_materialization_dir = temp.path().join("travel-ops-live");
-
     let mut world = seed_public_soracloud_world();
     let seed_bundle = world
         .view()
@@ -58,7 +54,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
         .get(&("web_portal".to_owned(), "2026.02.0".to_owned()))
         .cloned()
         .expect("seed bundle");
-
     let mut live_bundle = seed_bundle.clone();
     live_bundle.service.service_name = "travel_ops_live".parse().expect("service");
     live_bundle.service.service_version = "2026.04.0".to_owned();
@@ -79,7 +74,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
     live_bundle.service.handlers.clear();
     live_bundle.service.state_bindings.clear();
     live_bundle.service.container.manifest_hash = live_bundle.container_manifest_hash();
-
     let mut vault_bundle = seed_bundle;
     vault_bundle.service.service_name = "travel_ops_vault".parse().expect("service");
     vault_bundle.service.service_version = "2026.04.0".to_owned();
@@ -106,7 +100,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
         }),
     }];
     vault_bundle.service.container.manifest_hash = vault_bundle.container_manifest_hash();
-
     for bundle in [live_bundle.clone(), vault_bundle.clone()] {
         let service_name = bundle.service.service_name.clone();
         world.soracloud_service_revisions_mut_for_testing().insert(
@@ -165,7 +158,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
                 },
             );
     }
-
     let live_validator_account_id = checked_torii_test_account_id(
         0x47,
         "derive hosted live/mailbox split validator fixture key",
@@ -189,7 +181,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         )],
     );
-
     let mut snapshot = iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default();
     snapshot.local_peer_id = Some(live_peer_id.to_string());
     snapshot.services.insert(
@@ -213,7 +204,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
             ),
         )]),
     );
-
     let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let runtime = TestMailboxRuntime {
         snapshot,
@@ -256,7 +246,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
     let router = axum::Router::new()
         .fallback(any(handler_soracloud_public_local_read))
         .with_state(app);
-
     let live_response = router
         .clone()
         .oneshot(
@@ -281,7 +270,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
         captured_requests.lock().expect("capture lock").is_empty(),
         "hosted live routes must bypass ordered mailbox execution"
     );
-
     let vault_payload = br#"{"home_airport":"BNE","cabin_preference":"business"}"#;
     let vault_response = router
         .oneshot(
@@ -304,7 +292,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
         .expect("vault body")
         .to_bytes();
     assert_eq!(vault_body.as_ref(), br#"{"status":"queued"}"#);
-
     let captured = captured_requests.lock().expect("capture lock");
     assert_eq!(captured.len(), 1);
     assert_eq!(
@@ -333,20 +320,16 @@ async fn soracloud_public_split_app_routes_hosted_live_and_ordered_vault_updates
         "preferences_put"
     );
     assert_eq!(captured[0].authoritative_pending_mailbox_messages, 1);
-
     upstream_task.abort();
 }
-
 #[tokio::test]
 async fn soracloud_public_local_read_route_returns_503_for_unhydrated_runtime() {
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
     install_unavailable_local_read_runtime(&mut app, None, "runtime hydration incomplete");
     let router = axum::Router::new()
         .fallback(any(handler_soracloud_public_local_read))
         .with_state(app);
-
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -360,12 +343,10 @@ async fn soracloud_public_local_read_route_returns_503_for_unhydrated_runtime() 
         .expect("response");
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
-
 #[tokio::test]
 async fn soracloud_public_ordered_mailbox_route_invokes_runtime_with_authoritative_context() {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-
     let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let runtime = TestMailboxRuntime {
         snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
@@ -407,7 +388,6 @@ async fn soracloud_public_ordered_mailbox_route_invokes_runtime_with_authoritati
     let router = axum::Router::new()
         .fallback(any(handler_soracloud_public_local_read))
         .with_state(app);
-
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -446,7 +426,6 @@ async fn soracloud_public_ordered_mailbox_route_invokes_runtime_with_authoritati
         .expect("body")
         .to_bytes();
     assert_eq!(body.as_ref(), br#"{"status":"queued"}"#);
-
     let captured = captured_requests.lock().expect("capture lock");
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0].deployment.service_name.as_ref(), "web_portal");
@@ -471,16 +450,13 @@ async fn soracloud_public_ordered_mailbox_route_invokes_runtime_with_authoritati
     assert_eq!(captured[0].mailbox_message.to_handler.as_ref(), "update");
     assert_eq!(captured[0].authoritative_pending_mailbox_messages, 1);
 }
-
 #[tokio::test]
 async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
     use http_body_util::BodyExt as _;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tower::ServiceExt as _;
-
     const FIRST_SSE_FRAME: &[u8] = b"event: session\ndata: ready\n\n";
     const SECOND_SSE_FRAME: &[u8] = b"data: {\"id\":\"search_1\"}\n\n";
-
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind upstream listener");
@@ -534,12 +510,10 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
         }
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
-
     let temp = tempfile::tempdir().expect("tempdir");
     let materialization_dir = temp.path().join("service");
     std::fs::create_dir_all(&materialization_dir).expect("materialization dir");
     let listen_base_url = format!("http://{addr}");
-
     let mut world = seed_public_soracloud_world();
     let mut bundle = world
         .view()
@@ -615,7 +589,6 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
                 lease_volume_states: Vec::new(),
             },
         );
-
     let hosted_validator_account_id =
         checked_torii_test_account_id(0x49, "derive hosted SSE validator fixture key");
     let hosted_peer_id = PeerId::from(
@@ -634,7 +607,6 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         )],
     );
-
     let mut snapshot = iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default();
     snapshot.local_peer_id = Some(hosted_peer_id.to_string());
     snapshot.services.insert(
@@ -734,7 +706,6 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
     let app_mut = Arc::get_mut(&mut app).expect("unique app state");
     app_mut.local_peer_id = Some(hosted_peer_id);
     app_mut.soracloud_runtime = Some(Arc::new(runtime));
-
     let route_match = match soracloud::resolve_public_route(
         &app,
         "portal.sora",
@@ -759,7 +730,6 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
         target.local_listen_base_url.as_deref(),
         Some(listen_base_url.as_str())
     );
-
     let direct_response = tokio::time::timeout(
         Duration::from_secs(3),
         super::proxy_soracloud_public_hosted_http_locally(
@@ -776,11 +746,9 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
     .expect("direct native proxy response");
     assert_eq!(direct_response.status(), StatusCode::OK);
     drop(direct_response);
-
     let router = axum::Router::new()
         .fallback(any(handler_soracloud_public_local_read))
         .with_state(app);
-
     let response = tokio::time::timeout(
         Duration::from_secs(3),
         router.oneshot(
@@ -803,7 +771,6 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
             .and_then(|value| value.to_str().ok()),
         Some("text/event-stream")
     );
-
     let mut body = response.into_body();
     let first_frame = tokio::time::timeout(Duration::from_millis(300), body.frame())
         .await
@@ -812,7 +779,6 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
         .expect("streamed frame");
     let first_chunk = first_frame.into_data().expect("data frame");
     assert_eq!(first_chunk.as_ref(), FIRST_SSE_FRAME);
-
     let second_frame = tokio::time::timeout(Duration::from_secs(6), body.frame())
         .await
         .expect("second SSE frame should arrive")
@@ -820,10 +786,8 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
         .expect("streamed frame");
     let second_chunk = second_frame.into_data().expect("data frame");
     assert_eq!(second_chunk.as_ref(), SECOND_SSE_FRAME);
-
     upstream_task.abort();
 }
-
 fn hosted_http_health_route(app: &SharedAppState) -> soracloud::HostedHttpRouteMatch {
     match soracloud::resolve_public_route(app, "portal.sora", "GET", "/app/v1/health")
         .expect("hosted route")
@@ -832,7 +796,6 @@ fn hosted_http_health_route(app: &SharedAppState) -> soracloud::HostedHttpRouteM
         other => panic!("expected hosted route match, got {other:?}"),
     }
 }
-
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_routes_canary_traffic_by_rollout_percent() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -844,7 +807,6 @@ async fn resolve_hosted_http_runtime_target_routes_canary_traffic_by_rollout_per
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-
     let canary_ip = hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket < 20);
     let canary_target = super::resolve_hosted_http_runtime_target(
         &app,
@@ -855,7 +817,6 @@ async fn resolve_hosted_http_runtime_target_routes_canary_traffic_by_rollout_per
     )
     .expect("healthy canary target");
     assert_eq!(canary_target.route_match.service_version, "2026.03.0");
-
     let baseline_ip =
         hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
     let baseline_target = super::resolve_hosted_http_runtime_target(
@@ -868,7 +829,6 @@ async fn resolve_hosted_http_runtime_target_routes_canary_traffic_by_rollout_per
     .expect("healthy baseline target");
     assert_eq!(baseline_target.route_match.service_version, "2026.02.0");
 }
-
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_falls_back_to_baseline_when_canary_is_unhealthy() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -881,7 +841,6 @@ async fn resolve_hosted_http_runtime_target_falls_back_to_baseline_when_canary_i
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
     let canary_ip = hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket < 20);
-
     let selected_target = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -892,7 +851,6 @@ async fn resolve_hosted_http_runtime_target_falls_back_to_baseline_when_canary_i
     .expect("baseline should stay available");
     assert_eq!(selected_target.route_match.service_version, "2026.02.0");
 }
-
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_fails_closed_without_any_healthy_revision() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -906,7 +864,6 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_any_healthy_rev
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
     let baseline_ip =
         hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
-
     let error = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -924,7 +881,6 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_any_healthy_rev
         error.message
     );
 }
-
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_fails_closed_without_service_lease() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -941,7 +897,6 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_service_lease()
     };
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-
     let error = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -959,7 +914,6 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_service_lease()
         error.message
     );
 }
-
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_expires() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -976,7 +930,6 @@ async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_expi
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-
     let error = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -992,7 +945,6 @@ async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_expi
         error.message
     );
 }
-
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_is_exhausted() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1009,7 +961,6 @@ async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_is_e
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-
     let error = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -1025,7 +976,6 @@ async fn resolve_hosted_http_runtime_target_fails_closed_when_service_lease_is_e
         error.message
     );
 }
-
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_balances_across_healthy_replicas_within_revision() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1060,7 +1010,6 @@ async fn resolve_hosted_http_runtime_target_balances_across_healthy_replicas_wit
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-
     let first_ip =
         hosted_http_replica_test_ip("web_portal", "2026.02.0", &method, &uri, |bucket| {
             bucket % 2 == 0
@@ -1077,7 +1026,6 @@ async fn resolve_hosted_http_runtime_target_balances_across_healthy_replicas_wit
         first_target.local_listen_base_url.as_deref(),
         Some("http://127.0.0.1:18080")
     );
-
     let second_ip =
         hosted_http_replica_test_ip("web_portal", "2026.02.0", &method, &uri, |bucket| {
             bucket % 2 == 1
@@ -1095,7 +1043,6 @@ async fn resolve_hosted_http_runtime_target_balances_across_healthy_replicas_wit
         Some("http://127.0.0.1:18081")
     );
 }
-
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_uses_local_snapshot_when_authoritative_runtime_state_lags()
  {
@@ -1132,13 +1079,11 @@ async fn resolve_hosted_http_runtime_target_uses_local_snapshot_when_authoritati
             )],
         );
     }
-
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
     let baseline_ip =
         hosted_http_rollout_test_ip("web_portal", &method, &uri, |bucket| bucket >= 20);
-
     let target = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -1153,7 +1098,6 @@ async fn resolve_hosted_http_runtime_target_uses_local_snapshot_when_authoritati
         Some("http://127.0.0.1:18080")
     );
 }
-
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_fails_closed_without_snapshot_replica_targets() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1167,7 +1111,6 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_snapshot_replic
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-
     let error = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -1185,7 +1128,6 @@ async fn resolve_hosted_http_runtime_target_fails_closed_without_snapshot_replic
         error.message
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn resolve_hosted_http_runtime_target_rejects_snapshot_from_different_peer() {
@@ -1261,11 +1203,9 @@ async fn resolve_hosted_http_runtime_target_rejects_snapshot_from_different_peer
             )],
         );
     }
-
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
-
     let error = super::resolve_hosted_http_runtime_target(
         &app,
         &route_match,
@@ -1286,7 +1226,6 @@ async fn resolve_hosted_http_runtime_target_rejects_snapshot_from_different_peer
         error.message
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn hosted_http_proxy_candidate_peers_exclude_local_and_visited() {
@@ -1329,18 +1268,15 @@ async fn hosted_http_proxy_candidate_peers_exclude_local_and_visited() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .online_peers = OnlinePeersProvider::new(online_rx);
-
     let candidates = super::hosted_http_proxy_candidate_peer_ids(
         app.as_ref(),
         &local_peer_id,
         &[first_remote_peer_id.clone(), second_remote_peer_id.clone()],
         std::slice::from_ref(&second_remote_peer_id),
     );
-
     assert_eq!(candidates.peers, vec![first_remote_peer_id]);
     assert_eq!(candidates.loop_prevention_drops, 1);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
@@ -1413,7 +1349,6 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
             )],
         );
     }
-
     let route_match = hosted_http_health_route(&app);
     let method = HttpMethod::GET;
     let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
@@ -1441,7 +1376,6 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
         })
         .await
         .expect("hosted HTTP proxy request should become pending");
-
         super::process_incoming_torii_proxy_response(
             &app_for_response,
             remote_peer_for_response,
@@ -1460,7 +1394,6 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
         )
         .await;
     });
-
     let response = super::proxy_soracloud_public_hosted_http(
         State(app),
         method,
@@ -1474,7 +1407,6 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
     response_task
         .await
         .expect("proxy response task should complete");
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -1488,7 +1420,6 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
         .expect("response body should be readable");
     assert_eq!(body.as_ref(), b"remote-hosted-http");
 }
-
 fn sample_generated_hf_infer_request(
     service_name: String,
     service_version: String,
@@ -1511,7 +1442,6 @@ fn sample_generated_hf_infer_request(
     request.request_commitment = super::soracloud_local_read_request_commitment(&request);
     request
 }
-
 fn sample_public_query_request(
     service_name: String,
     service_version: String,
@@ -1534,7 +1464,6 @@ fn sample_public_query_request(
     request.request_commitment = super::soracloud_local_read_request_commitment(&request);
     request
 }
-
 fn sample_generated_hf_proxy_response(
     app: &SharedAppState,
     request: &SoracloudLocalReadRequest,
@@ -1594,7 +1523,6 @@ fn sample_generated_hf_proxy_response(
         }),
     }
 }
-
 fn active_generated_hf_replica_peer_id(
     world: &World,
     service_name: &str,
@@ -1626,7 +1554,6 @@ fn active_generated_hf_replica_peer_id(
         .peer_id
         .clone()
 }
-
 #[tokio::test]
 async fn resolve_soracloud_local_read_proxy_target_returns_primary_when_local_is_not_primary() {
     let primary_peer_id = PeerId::from(
@@ -1654,17 +1581,14 @@ async fn resolve_soracloud_local_read_proxy_target_returns_primary_when_local_is
         Some(local_peer_id),
         "proxy target tests should not execute the runtime locally",
     );
-
     let target = super::resolve_soracloud_local_read_proxy_target(
         &app,
         &sample_generated_hf_infer_request(service_name, service_version),
     )
     .expect("proxy target resolution should succeed")
     .expect("non-primary ingress should proxy to the authoritative primary");
-
     assert_eq!(target.to_string(), primary_peer_id);
 }
-
 #[tokio::test]
 async fn resolve_soracloud_local_read_proxy_target_skips_proxy_when_local_is_primary() {
     let local_primary_peer_id = PeerId::from(
@@ -1684,19 +1608,16 @@ async fn resolve_soracloud_local_read_proxy_target_skips_proxy_when_local_is_pri
         Some(local_primary_peer_id),
         "proxy target tests should not execute the runtime locally",
     );
-
     let target = super::resolve_soracloud_local_read_proxy_target(
         &app,
         &sample_generated_hf_infer_request(service_name, service_version),
     )
     .expect("proxy target resolution should succeed");
-
     assert!(
         target.is_none(),
         "local primary ingress should execute without proxying"
     );
 }
-
 #[tokio::test]
 async fn soracloud_proxy_response_completes_pending_request() {
     let app = mk_app_state_for_tests();
@@ -1728,7 +1649,6 @@ async fn soracloud_proxy_response_completes_pending_request() {
             request: sample_public_query_request("web_portal".to_owned(), "2026.02.0".to_owned()),
         },
     );
-
     super::process_incoming_soracloud_proxy_response(
         &app,
         responder_peer_id,
@@ -1739,7 +1659,6 @@ async fn soracloud_proxy_response_completes_pending_request() {
         },
     )
     .await;
-
     match rx.await.expect("pending proxy request should resolve") {
         SoracloudLocalReadProxyOutcomeV1::Ok(delivered) => {
             assert_eq!(delivered.response_bytes, response.response_bytes);
@@ -1750,7 +1669,6 @@ async fn soracloud_proxy_response_completes_pending_request() {
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_routes() {
@@ -1760,7 +1678,6 @@ async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_rou
         checked_torii_test_ed25519_keypair(0x59, "derive authoritative-lane remote fixture key");
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
     let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
-
     let identityless_app = mk_app_state_for_tests();
     assert!(
         !super::is_local_authoritative_for_peers(
@@ -1776,7 +1693,6 @@ async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_rou
         ),
         "the explicit empty-roster legacy global-lane fallback remains locally executable"
     );
-
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -1795,7 +1711,6 @@ async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_rou
         app_mut.online_peers = OnlinePeersProvider::new(online_rx);
         app_mut.local_peer_id = Some(local_peer_id.clone());
     }
-
     {
         let mut topology = app.state.commit_topology.block();
         topology.clear();
@@ -1803,7 +1718,6 @@ async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_rou
         topology.push(remote_peer_id.clone());
         topology.commit();
     }
-
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
         None,
@@ -1819,10 +1733,8 @@ async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_rou
     peers.push(remote_peer_id.clone());
     peers.apply();
     block.commit().expect("commit permissioned peer roster");
-
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
-
     assert!(
         authoritative.is_empty(),
         "permissioned public routes should fail closed without explicit authoritative bindings"
@@ -1836,13 +1748,11 @@ async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_rou
         "the default global lane should still execute locally when no authoritative bindings exist"
     );
 }
-
 struct TwoOnlinePeerFixture {
     app: SharedAppState,
     local_peer_id: PeerId,
     remote_peer_id: PeerId,
 }
-
 fn two_online_peer_fixture() -> TwoOnlinePeerFixture {
     let local_keypair =
         checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
@@ -1874,7 +1784,6 @@ fn two_online_peer_fixture() -> TwoOnlinePeerFixture {
         remote_peer_id,
     }
 }
-
 fn install_two_peer_npos_roster(
     app: &SharedAppState,
     local_peer_id: &PeerId,
@@ -1887,7 +1796,6 @@ fn install_two_peer_npos_roster(
         topology.push(remote_peer_id.clone());
         topology.commit();
     }
-
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
         None,
@@ -1911,7 +1819,6 @@ fn install_two_peer_npos_roster(
     peers.apply();
     block.commit().expect("commit npos peer roster");
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn authoritative_lane_peers_do_not_fall_back_to_commit_topology_for_npos_core_lane() {
@@ -1920,12 +1827,9 @@ async fn authoritative_lane_peers_do_not_fall_back_to_commit_topology_for_npos_c
         local_peer_id,
         remote_peer_id,
     } = two_online_peer_fixture();
-
     install_two_peer_npos_roster(&app, &local_peer_id, &remote_peer_id);
-
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
-
     assert!(
         authoritative.is_empty(),
         "NPoS core-lane routing should fail closed when no authoritative bindings are present"
@@ -1939,7 +1843,6 @@ async fn authoritative_lane_peers_do_not_fall_back_to_commit_topology_for_npos_c
         "the default global lane should remain locally executable without explicit bindings"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn authoritative_lane_peers_do_not_fall_back_to_online_peers_when_state_is_empty() {
@@ -1948,13 +1851,11 @@ async fn authoritative_lane_peers_do_not_fall_back_to_online_peers_when_state_is
         local_peer_id: _,
         remote_peer_id: _,
     } = two_online_peer_fixture();
-
     {
         let mut topology = app.state.commit_topology.block();
         topology.clear();
         topology.commit();
     }
-
     {
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
@@ -1977,10 +1878,8 @@ async fn authoritative_lane_peers_do_not_fall_back_to_online_peers_when_state_is
         peers.apply();
         block.commit().expect("commit empty npos peer roster");
     }
-
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
-
     assert!(
         authoritative.is_empty(),
         "empty state snapshots should leave authoritative routing unresolved"
@@ -1990,7 +1889,6 @@ async fn authoritative_lane_peers_do_not_fall_back_to_online_peers_when_state_is
         "empty state snapshots should not infer local authority from connected peers"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn authoritative_lane_peers_do_not_fall_back_for_npos_non_core_lane() {
@@ -1999,12 +1897,9 @@ async fn authoritative_lane_peers_do_not_fall_back_for_npos_non_core_lane() {
         local_peer_id,
         remote_peer_id,
     } = two_online_peer_fixture();
-
     install_two_peer_npos_roster(&app, &local_peer_id, &remote_peer_id);
-
     let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
     let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
-
     assert!(
         authoritative.is_empty(),
         "non-core NPoS routes should still require explicit public validator records"
@@ -2018,7 +1913,6 @@ async fn authoritative_lane_peers_do_not_fall_back_for_npos_non_core_lane() {
         "non-core routes should continue to fail closed without explicit bindings"
     );
 }
-
 struct AdminManagedLaneFixture {
     app: SharedAppState,
     nexus: iroha_config::parameters::actual::Nexus,
@@ -2029,7 +1923,6 @@ struct AdminManagedLaneFixture {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
 }
-
 fn admin_managed_lane_fixture() -> AdminManagedLaneFixture {
     let local_validator_keypair = checked_torii_test_ed25519_keypair(
         0x5a,
@@ -2055,7 +1948,6 @@ fn admin_managed_lane_fixture() -> AdminManagedLaneFixture {
     let remote_peer_id = PeerId::from(remote_peer_keypair.public_key().clone());
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(1);
-
     let mut app = mk_app_state_for_tests();
     let nexus = {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -2074,7 +1966,6 @@ fn admin_managed_lane_fixture() -> AdminManagedLaneFixture {
             .expect("online peers update should succeed");
         app_mut.online_peers = OnlinePeersProvider::new(online_rx);
         app_mut.local_peer_id = Some(local_peer_id.clone());
-
         let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
             NonZeroU32::new(2).expect("non-zero lane count"),
             vec![
@@ -2105,7 +1996,6 @@ fn admin_managed_lane_fixture() -> AdminManagedLaneFixture {
             dataspace_catalog,
             ..iroha_config::parameters::actual::Nexus::default()
         };
-
         let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
         state.set_nexus(nexus.clone()).expect("apply nexus config");
         ensure_runtime_peer_binding_for_test(state, &local_validator, &local_peer_keypair, "local");
@@ -2117,7 +2007,6 @@ fn admin_managed_lane_fixture() -> AdminManagedLaneFixture {
         );
         nexus
     };
-
     AdminManagedLaneFixture {
         app,
         nexus,
@@ -2129,7 +2018,6 @@ fn admin_managed_lane_fixture() -> AdminManagedLaneFixture {
         dataspace_id,
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn authoritative_lane_peers_use_manifest_validators_for_admin_managed_lane() {
@@ -2166,10 +2054,8 @@ async fn authoritative_lane_peers_use_manifest_validators_for_admin_managed_lane
         let state_view = app_mut.state.view();
         app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
     }
-
     let route = RoutingDecision::new(lane_id, dataspace_id);
     let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
-
     assert!(
         authoritative.contains(&local_peer_id),
         "manifest-backed restricted lane should treat the local validator as authoritative"
@@ -2183,7 +2069,6 @@ async fn authoritative_lane_peers_use_manifest_validators_for_admin_managed_lane
         "manifest-backed restricted lane should be routable without staking records"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn authoritative_lane_peers_ignore_future_created_autoscale_manifest_bindings() {
@@ -2204,7 +2089,6 @@ async fn authoritative_lane_peers_ignore_future_created_autoscale_manifest_bindi
     let authoritative_peer_id = PeerId::from(authoritative_peer_keypair.public_key().clone());
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::UNIVERSAL;
-
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -2225,7 +2109,6 @@ async fn authoritative_lane_peers_ignore_future_created_autoscale_manifest_bindi
             .expect("online peers update should succeed");
         app_mut.online_peers = OnlinePeersProvider::new(online_rx);
         app_mut.local_peer_id = Some(local_peer_id.clone());
-
         let mut autoscale_lane = iroha_data_model::nexus::LaneConfig {
             id: lane_id,
             alias: format!("elastic-lane-{}", lane_id.as_u32()),
@@ -2257,7 +2140,6 @@ async fn authoritative_lane_peers_ignore_future_created_autoscale_manifest_bindi
         nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("non-zero max lanes");
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-
         let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
         {
             let mut current = state.nexus.write();
@@ -2292,7 +2174,6 @@ async fn authoritative_lane_peers_ignore_future_created_autoscale_manifest_bindi
             0,
         ));
     }
-
     let route = RoutingDecision::new(lane_id, dataspace_id);
     assert!(
         super::authoritative_lane_peers(app.as_ref(), route)
@@ -2300,7 +2181,6 @@ async fn authoritative_lane_peers_ignore_future_created_autoscale_manifest_bindi
             .is_empty(),
         "future-created autoscale manifest bindings must not bypass active-height authority"
     );
-
     app.state
         .update_latest_block_header_cache_for_tests(BlockHeader::new(
             NonZeroU64::new(7).expect("non-zero height"),
@@ -2316,7 +2196,6 @@ async fn authoritative_lane_peers_ignore_future_created_autoscale_manifest_bindi
         "manifest bindings should become authoritative at the autoscale creation height"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn manifest_backed_admin_managed_lane_ignores_local_commit_topology_filtering() {
@@ -2349,12 +2228,10 @@ async fn manifest_backed_admin_managed_lane_ignores_local_commit_topology_filter
         let state_view = app_mut.state.view();
         app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
     }
-
     let route = RoutingDecision::new(lane_id, dataspace_id);
     let authoritative = super::authoritative_lane_peers(app.as_ref(), route);
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
-
     assert_eq!(
         authoritative.authoritative,
         vec![remote_peer_id.clone()],
@@ -2374,7 +2251,6 @@ async fn manifest_backed_admin_managed_lane_ignores_local_commit_topology_filter
         "Torii proxy candidate discovery should route to the manifest-backed remote authority"
     );
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_stale() {
@@ -2401,13 +2277,11 @@ async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_st
         let state_view = app_mut.state.view();
         app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
     }
-
     let route = RoutingDecision::new(lane_id, dataspace_id);
     assert!(
         !super::should_execute_route_locally(app.as_ref(), route),
         "test requires a route the receiver would otherwise re-forward"
     );
-
     let verified_query = ToriiProxyRequestKindV4::SignedQueryRouteScan {
         query_bytes: Vec::new(),
         expected_route: ToriiRouteHintV1::from(route),
@@ -2440,7 +2314,6 @@ async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_st
         expected_route: ToriiRouteHintV1::from(route),
         response_format: ToriiProxyResponseFormatV1::Norito,
     };
-
     assert!(
         super::should_execute_incoming_torii_proxy_request_locally(
             app.as_ref(),
@@ -2474,7 +2347,6 @@ async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_st
         "write-path signed queries must still honor local authority checks"
     );
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 async fn incoming_read_proxy_response_for_route(
     app: SharedAppState,
@@ -2509,10 +2381,8 @@ async fn incoming_read_proxy_response_for_route(
             Vec::new(),
         )),
     };
-
     super::execute_incoming_torii_proxy_request(&app, request, None).await
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 async fn incoming_verified_query_proxy_response_for_route(
     app: SharedAppState,
@@ -2540,10 +2410,8 @@ async fn incoming_verified_query_proxy_response_for_route(
             response_format: ToriiProxyResponseFormatV1::Norito,
         },
     };
-
     super::execute_incoming_torii_proxy_request(&app, request, None).await
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 fn assert_incoming_proxy_stale_route_rejection(response: &Response, route: RoutingDecision) {
     let expected_lane = route.lane_id.as_u32().to_string();
@@ -2578,26 +2446,20 @@ fn assert_incoming_proxy_stale_route_rejection(response: &Response, route: Routi
         Some(expected_dataspace.as_str())
     );
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_read_proxy_rejects_retired_lane_hint() {
     let app = mk_app_state_for_tests();
     let route = RoutingDecision::new(LaneId::new(42), DataSpaceId::UNIVERSAL);
-
     let response = incoming_read_proxy_response_for_route(app, route).await;
-
     assert_incoming_proxy_stale_route_rejection(&response, route);
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_read_proxy_rejects_lane_dataspace_mismatch_hint() {
     let mut app = mk_app_state_for_tests();
     configure_multiple_dataspace_routes_for_test(&mut app);
     let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
-
     let response = incoming_read_proxy_response_for_route(app, route).await;
-
     assert_incoming_proxy_stale_route_rejection(&response, route);
 }

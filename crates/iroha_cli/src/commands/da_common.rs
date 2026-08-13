@@ -1,8 +1,6 @@
 //! Shared data-availability ingest helpers reused by the Taikai tooling and the
 //! standalone `iroha da` commands.
-
 use std::path::Path;
-
 use eyre::{Result, WrapErr, eyre};
 use iroha::{config::Config, da::DaManifestBundle};
 use iroha_data_model::{
@@ -24,16 +22,13 @@ use reqwest::{
     header::{ACCEPT, CONTENT_TYPE, HeaderValue},
 };
 use url::Url;
-
 const HEADER_SORA_PDP_COMMITMENT: &str = "sora-pdp-commitment";
-
 /// Blocking Torii publisher for `/v1/da/ingest`.
 pub(super) struct DaPublisher {
     client: HttpClient,
     endpoint: Url,
     basic_auth: Option<(String, String)>,
 }
-
 /// Receipt bundle containing Norito bytes, rendered JSON, and the typed record.
 pub(super) struct DaPublisherReceipt {
     pub(super) bytes: Vec<u8>,
@@ -41,14 +36,12 @@ pub(super) struct DaPublisherReceipt {
     pub(super) receipt: DaIngestReceipt,
     pub(super) pdp_commitment_header: Option<String>,
 }
-
 /// Blocking Torii fetcher for `/v1/da/manifests/{ticket}`.
 pub(super) struct DaManifestFetcher {
     client: HttpClient,
     endpoint: Url,
     basic_auth: Option<(String, String)>,
 }
-
 /// Response bundle returned by [`DaManifestFetcher`].
 pub(super) struct DaManifestFetchBundle {
     pub(super) manifest_bytes: Vec<u8>,
@@ -58,7 +51,6 @@ pub(super) struct DaManifestFetchBundle {
     pub(super) manifest_hash_hex: String,
     pub(super) blob_hash_hex: String,
 }
-
 impl DaPublisher {
     /// Build a publisher using CLI config (Torii URL + basic auth).
     pub(super) fn new(config: &Config, endpoint_override: Option<&str>) -> Result<Self> {
@@ -85,7 +77,6 @@ impl DaPublisher {
             basic_auth,
         })
     }
-
     /// Submit the encoded Norito payload to Torii and return the receipt bundle.
     pub(super) fn publish(&self, request_bytes: &[u8]) -> Result<DaPublisherReceipt> {
         let mut request = self
@@ -126,20 +117,17 @@ impl DaPublisher {
         })
     }
 }
-
 fn extract_pdp_header(headers: &reqwest::header::HeaderMap) -> Result<Option<String>> {
     headers
         .get(HEADER_SORA_PDP_COMMITMENT)
         .map_or_else(|| Ok(None), |value| parse_header_value(value).map(Some))
 }
-
 fn parse_header_value(value: &HeaderValue) -> Result<String> {
     value
         .to_str()
         .map(|raw| raw.trim().to_string())
         .map_err(|err| eyre!("invalid {HEADER_SORA_PDP_COMMITMENT} header: {err}"))
 }
-
 impl DaManifestFetcher {
     pub(super) fn new(config: &Config, endpoint_override: Option<&str>) -> Result<Self> {
         let endpoint = if let Some(url) = endpoint_override {
@@ -165,7 +153,6 @@ impl DaManifestFetcher {
             basic_auth,
         })
     }
-
     pub(super) fn fetch(&self, ticket_hex: &str) -> Result<DaManifestFetchBundle> {
         let url = self
             .endpoint
@@ -193,10 +180,8 @@ impl DaManifestFetcher {
         }
         let value: Value = norito::json::from_slice(&bytes)
             .map_err(|err| eyre!("failed to parse DA manifest response: {err}"))?;
-
         let parsed = DaManifestBundle::from_json(&value)
             .map_err(|err| eyre!("failed to decode DA manifest bundle: {err}"))?;
-
         let manifest_bytes = parsed.manifest_bytes.clone();
         let manifest_json = parsed.manifest_json.clone();
         let chunk_plan = parsed.chunk_plan.clone();
@@ -213,7 +198,6 @@ impl DaManifestFetcher {
         })
     }
 }
-
 /// Convert a JSON metadata map into the Norito `ExtraMetadata` structure.
 pub(super) fn metadata_map_to_extra(map: &Map) -> Result<ExtraMetadata> {
     let mut items = Vec::with_capacity(map.len());
@@ -230,7 +214,6 @@ pub(super) fn metadata_map_to_extra(map: &Map) -> Result<ExtraMetadata> {
     }
     Ok(ExtraMetadata { items })
 }
-
 /// Parse a blob-class label (supports aliases such as `taikai`).
 pub(super) fn parse_blob_class(label: &str) -> Result<BlobClass> {
     match label.to_ascii_lowercase().as_str() {
@@ -247,7 +230,6 @@ pub(super) fn parse_blob_class(label: &str) -> Result<BlobClass> {
         other => Err(eyre!("unsupported blob class `{other}`")),
     }
 }
-
 /// Parse an erasure FEC scheme identifier.
 pub(super) fn parse_fec_scheme(label: &str) -> Result<FecScheme> {
     match label.to_ascii_lowercase().as_str() {
@@ -264,7 +246,6 @@ pub(super) fn parse_fec_scheme(label: &str) -> Result<FecScheme> {
         other => Err(eyre!("unsupported FEC scheme `{other}`")),
     }
 }
-
 /// Parse a storage-class alias into the Norito enum.
 pub(super) fn parse_storage_class(label: &str) -> Result<StorageClass> {
     match label.to_ascii_lowercase().as_str() {
@@ -274,7 +255,6 @@ pub(super) fn parse_storage_class(label: &str) -> Result<StorageClass> {
         other => Err(eyre!("unsupported storage class `{other}`")),
     }
 }
-
 /// Load a Norito JSON file containing simple metadata entries.
 pub(super) fn load_metadata_from_path(path: &Path) -> Result<ExtraMetadata> {
     let bytes = std::fs::read(path)
@@ -286,12 +266,10 @@ pub(super) fn load_metadata_from_path(path: &Path) -> Result<ExtraMetadata> {
         .ok_or_else(|| eyre!("metadata JSON `{}` must be an object", path.display()))?;
     metadata_map_to_extra(map)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-
     #[test]
     fn parse_blob_class_supports_aliases() {
         assert!(matches!(
@@ -304,7 +282,6 @@ mod tests {
         ));
         assert!(parse_blob_class("unknown").is_err());
     }
-
     #[test]
     fn metadata_map_conversion_preserves_entries() {
         let mut map = Map::new();
@@ -326,7 +303,6 @@ mod tests {
             Some(&b"av1-main"[..])
         );
     }
-
     #[test]
     fn storage_class_aliases_supported() {
         assert!(matches!(

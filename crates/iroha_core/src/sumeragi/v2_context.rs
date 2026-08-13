@@ -3,9 +3,7 @@
 //! The reducer never reads mutable world state. Genesis inputs and finalized
 //! epoch snapshots enter here once, and every non-boundary successor carries
 //! the previous frozen election inputs unchanged.
-
 use std::collections::BTreeMap;
-
 use iroha_crypto::{Algorithm, Hash};
 use iroha_data_model::{
     NetworkId,
@@ -19,7 +17,6 @@ use iroha_genesis::GenesisBlock;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
 use thiserror::Error;
-
 use super::{
     stake_snapshot::{StrictV2StakeSnapshotError, strict_v2_voting_roster},
     v2::VerifiedHeightContext,
@@ -29,7 +26,6 @@ use crate::state::{
     live_consensus_key_pop_for_peer, nexus_active_lane_ids,
     public_lane_validator_record_matches_key,
 };
-
 /// Verified height-one inputs retained until the production reducer opens its
 /// safety WAL.
 pub struct GenesisV2Bootstrap {
@@ -37,7 +33,6 @@ pub struct GenesisV2Bootstrap {
     staged_nexus_amx_context: StagedGenesisNexusAmxContext,
     authenticated_genesis: AuthenticatedGenesisBodyV1,
 }
-
 /// Move-only signed genesis body authenticated by the height-one bootstrap.
 ///
 /// The signed block is copied only while [`freeze_staged_genesis_v2`] still
@@ -49,7 +44,6 @@ pub(in crate::sumeragi) struct AuthenticatedGenesisBodyV1 {
     signed_block: SignedBlock,
     authority: iroha_crypto::PublicKey,
 }
-
 impl AuthenticatedGenesisBodyV1 {
     fn authenticate(genesis: &GenesisBlock) -> Result<Self, V2GenesisBootstrapError> {
         let mut transactions = genesis.0.external_transactions();
@@ -71,18 +65,15 @@ impl AuthenticatedGenesisBodyV1 {
             authority,
         })
     }
-
     /// Borrow the exact authenticated body for executor installation.
     pub(in crate::sumeragi) const fn signed_block(&self) -> &SignedBlock {
         &self.signed_block
     }
-
     /// Compare the retained canonical genesis authority with recovery's key.
     pub(in crate::sumeragi) fn authorizes(&self, authority: &iroha_crypto::PublicKey) -> bool {
         &self.authority == authority
     }
 }
-
 /// Non-forgeable proof that one Nexus/AMX projection was recomputed from the
 /// validated, uncommitted genesis overlay.
 ///
@@ -93,27 +84,23 @@ impl AuthenticatedGenesisBodyV1 {
 pub(crate) struct StagedGenesisNexusAmxContext {
     hash: Hash,
 }
-
 impl StagedGenesisNexusAmxContext {
     /// Return the exact projection authenticated by staged genesis execution.
     pub(crate) const fn hash(self) -> Hash {
         self.hash
     }
-
     /// Construct an authenticated projection token for boundary unit tests.
     #[cfg(test)]
     pub(super) const fn for_test(hash: Hash) -> Self {
         Self { hash }
     }
 }
-
 impl GenesisV2Bootstrap {
     /// Borrow the exact signed-and-staged height context for diagnostics.
     #[must_use]
     pub fn context(&self) -> &wire::HeightContext {
         self.verified_context.context()
     }
-
     pub(in crate::sumeragi) fn into_parts(
         self,
     ) -> (
@@ -128,7 +115,6 @@ impl GenesisV2Bootstrap {
         )
     }
 }
-
 /// Extract the only voting roster source accepted at fresh genesis: signed
 /// `RegisterPeerWithPop` instructions in the genesis body.
 ///
@@ -140,7 +126,6 @@ pub fn signed_genesis_voting_peers(
         .into_keys()
         .collect())
 }
-
 /// Verify that persisted height-one finality consumes the exact voting
 /// authority signed into canonical genesis.
 ///
@@ -188,7 +173,6 @@ pub fn validate_signed_genesis_v2_authority(
         .map_err(|error| V2GenesisBootstrapError::Adapter(error.to_string()))?;
     Ok(())
 }
-
 /// Verify the complete persisted height-one election against deterministically
 /// executed signed genesis state.
 ///
@@ -224,7 +208,6 @@ pub(crate) fn validate_staged_genesis_v2_authority(
     }
     Ok(())
 }
-
 /// Freeze and cryptographically verify the height-one context from a validated
 /// but uncommitted genesis state block.
 ///
@@ -243,7 +226,6 @@ pub fn freeze_staged_genesis_v2(
     if signed_pops.is_empty() {
         return Err(V2GenesisBootstrapError::EmptyVotingRoster);
     }
-
     let voters = signed_pops.keys().cloned().collect::<Vec<_>>();
     for voter in &voters {
         if !staged_world.peers().iter().any(|peer| peer == voter) {
@@ -255,7 +237,6 @@ pub fn freeze_staged_genesis_v2(
             return Err(V2GenesisBootstrapError::ProofOfPossessionMismatch);
         }
     }
-
     let roster = match mode {
         wire::ConsensusMode::Permissioned => voters
             .iter()
@@ -277,9 +258,7 @@ pub fn freeze_staged_genesis_v2(
                 .ok_or(V2GenesisBootstrapError::ProofOfPossessionMismatch)
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     let network_id = staged.network_id;
-
     let (epoch_end_height, leader_seed) = match mode {
         wire::ConsensusMode::Permissioned => {
             let mut seed_preimage = b"sumeragi-v2:permissioned-leader-seed".to_vec();
@@ -295,7 +274,6 @@ pub fn freeze_staged_genesis_v2(
             (epoch_length, parameters.epoch_seed())
         }
     };
-
     let election = FrozenElectionInputs {
         epoch: 0,
         epoch_end_height,
@@ -328,7 +306,6 @@ pub fn freeze_staged_genesis_v2(
         authenticated_genesis,
     })
 }
-
 fn signed_genesis_validator_pops(
     genesis: &GenesisBlock,
 ) -> Result<BTreeMap<PeerId, Vec<u8>>, V2GenesisBootstrapError> {
@@ -359,7 +336,6 @@ fn signed_genesis_validator_pops(
     }
     Ok(validators)
 }
-
 /// Compute the canonical Nexus/AMX commitment from a validated genesis state
 /// block without committing that block. The projection binds every Nexus and
 /// deterministic AMX input used by proposal assembly or validation, plus the
@@ -400,7 +376,6 @@ pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
         &lane_lifecycle,
     )
 }
-
 fn verify_staged_nexus_amx_context_hash(
     staged: &StateBlock<'_>,
     signed_hash: [u8; 32],
@@ -412,7 +387,6 @@ fn verify_staged_nexus_amx_context_hash(
     }
     Ok(signed)
 }
-
 /// Compute the canonical V1 execution policy from a validated, uncommitted genesis block.
 ///
 /// # Errors
@@ -426,7 +400,6 @@ pub fn staged_genesis_execution_policy_hash(
         .map(Hash::prehashed)
         .map_err(|error| V2GenesisBootstrapError::ExecutionPolicy(error.to_string()))
 }
-
 fn verify_staged_execution_policy_hash(
     staged: &StateBlock<'_>,
     signed_hash: [u8; 32],
@@ -438,7 +411,6 @@ fn verify_staged_execution_policy_hash(
     }
     Ok(signed)
 }
-
 /// Failure to derive an exact fresh-genesis reducer bootstrap.
 #[derive(Debug, Error)]
 pub enum V2GenesisBootstrapError {
@@ -516,7 +488,6 @@ pub enum V2GenesisBootstrapError {
     #[error("failed to verify the Sumeragi v2 height context: {0}")]
     Adapter(String),
 }
-
 /// Fully frozen election inputs accepted by the context builder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FrozenElectionInputs {
@@ -531,13 +502,11 @@ pub(crate) struct FrozenElectionInputs {
     /// Finalized leader seed for deterministic rotation.
     pub leader_seed: [u8; 32],
 }
-
 impl FrozenElectionInputs {
     fn quorum(&self) -> Result<wire::DualQuorum, V2ContextBuildError> {
         wire::DualQuorum::from_roster(&self.roster).map_err(V2ContextBuildError::Wire)
     }
 }
-
 /// Consensus-relevant immutable inputs selected at genesis.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GenesisContextInputs {
@@ -554,7 +523,6 @@ pub(crate) struct GenesisContextInputs {
     /// Mandatory deterministic data-availability layout.
     pub da_layout: wire::DataAvailabilityLayout,
 }
-
 /// Build the only valid height-one context from genesis-frozen inputs.
 pub(crate) fn build_genesis_height_context(
     inputs: GenesisContextInputs,
@@ -582,7 +550,6 @@ pub(crate) fn build_genesis_height_context(
     context.validate()?;
     Ok(context)
 }
-
 /// Build the unique successor of one structurally valid finalized artifact.
 ///
 /// At an epoch boundary, all election inputs (including the next epoch end)
@@ -602,7 +569,6 @@ pub(crate) fn build_successor_height_context(
     if election.epoch_end_height < height {
         return Err(V2ContextBuildError::EpochEndBeforeSuccessor);
     }
-
     let context = wire::HeightContext {
         network_id: parent.height_context.network_id,
         protocol_version: wire::PROTOCOL_VERSION,
@@ -623,7 +589,6 @@ pub(crate) fn build_successor_height_context(
     context.validate()?;
     Ok(context)
 }
-
 fn successor_election_inputs(
     parent: &wire::finality::V2FinalityArtifact,
     height: wire::Height,
@@ -649,7 +614,6 @@ fn successor_election_inputs(
     }
     Ok(election)
 }
-
 /// Build and freeze the unique successor directly from finalized pre-state.
 pub(crate) fn build_successor_height_context_from_state(
     parent: &wire::finality::V2FinalityArtifact,
@@ -666,7 +630,6 @@ pub(crate) fn build_successor_height_context_from_state(
         finalized_next_epoch_snapshot(state, &parent.height_context.network_id, height, &election)?;
     build_successor_height_context(parent, nexus_amx_context_hash, next_epoch_snapshot)
 }
-
 /// Derive the complete transition committed by the old roster at an epoch's
 /// final height.
 ///
@@ -789,7 +752,6 @@ pub(crate) fn finalized_next_epoch_snapshot(
         leader_seed,
     }))
 }
-
 /// Canonical height-context construction failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum V2ContextBuildError {
@@ -836,11 +798,9 @@ pub(crate) enum V2ContextBuildError {
     #[error("Sumeragi v2 epoch end precedes its successor height")]
     EpochEndBeforeSuccessor,
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId, NetworkId,
@@ -859,20 +819,17 @@ mod tests {
     };
     use iroha_genesis::GenesisBlock;
     use iroha_primitives::numeric::Quantity;
-
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([seed; Hash::LENGTH]),
         ))
     }
-
     fn roster(powers: &[u64]) -> Vec<wire::ValidatorPower> {
         let mut entries = powers
             .iter()
@@ -890,7 +847,6 @@ mod tests {
         entries.sort_by(|left, right| left.validator.cmp(&right.validator));
         entries
     }
-
     fn genesis(mode: wire::ConsensusMode, powers: &[u64], end: u64) -> wire::HeightContext {
         let roster = roster(powers);
         let next_epoch_snapshot = (end == 1).then(|| {
@@ -928,7 +884,6 @@ mod tests {
         })
         .expect("valid genesis context")
     }
-
     fn signed_roster_genesis(
         voters: &[KeyPair],
         duplicate_first: bool,
@@ -972,7 +927,6 @@ mod tests {
             None,
         ))
     }
-
     #[test]
     fn authenticated_genesis_body_retains_exact_block_and_authority() {
         let voter = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::BlsNormal)
@@ -986,14 +940,12 @@ mod tests {
             Algorithm::Ed25519,
         )
         .expect("deterministic foreign authority");
-
         let authenticated = AuthenticatedGenesisBodyV1::authenticate(&genesis)
             .expect("validated genesis seals its exact signed body");
         assert_eq!(authenticated.signed_block(), &genesis.0);
         assert!(authenticated.authorizes(authority.public_key()));
         assert!(!authenticated.authorizes(foreign.public_key()));
     }
-
     #[test]
     fn signed_genesis_roster_is_canonical_and_excludes_non_voters() {
         let voters = [3_u8, 1, 2].map(|seed| {
@@ -1010,7 +962,6 @@ mod tests {
         assert_eq!(observed, expected);
         assert_eq!(observed.len(), voters.len());
     }
-
     #[test]
     fn signed_genesis_roster_rejects_duplicate_or_invalid_pop() {
         let voter = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::BlsNormal)
@@ -1032,7 +983,6 @@ mod tests {
             Err(V2GenesisBootstrapError::InvalidProofOfPossession)
         ));
     }
-
     #[test]
     fn persisted_genesis_finality_authority_is_rooted_in_signed_genesis() {
         let voters = (1_u8..=4)
@@ -1088,7 +1038,6 @@ mod tests {
         let (signed_context, signed_pops) = authority(&voters);
         validate_signed_genesis_v2_authority(&genesis, &signed_context, &signed_pops)
             .expect("the exact signed authority must be accepted");
-
         let mut forged_power_context = signed_context.clone();
         forged_power_context.roster[0].power = 1_000;
         forged_power_context.quorum =
@@ -1097,7 +1046,6 @@ mod tests {
             validate_signed_genesis_v2_authority(&genesis, &forged_power_context, &signed_pops,),
             Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch)
         ));
-
         let attacker_keys = (81_u8..=84)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -1110,7 +1058,6 @@ mod tests {
             Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch)
         ));
     }
-
     #[test]
     fn staged_genesis_rejects_an_empty_signed_voting_roster() {
         let genesis = signed_roster_genesis(&[], false, false);
@@ -1133,7 +1080,6 @@ mod tests {
             Err(V2GenesisBootstrapError::EmptyVotingRoster)
         ));
     }
-
     fn lane_record(peer: &PeerId, lane: LaneId, stake: u64) -> PublicLaneValidatorRecord {
         let validator = AccountId::new(peer.public_key().clone());
         PublicLaneValidatorRecord {
@@ -1150,7 +1096,6 @@ mod tests {
             last_reward_epoch: None,
         }
     }
-
     fn lane_hash_world(records: &[(LaneId, PeerId, u64)]) -> State {
         let world = World::default();
         {
@@ -1167,7 +1112,6 @@ mod tests {
             LiveQueryStore::start_test(),
         )
     }
-
     fn staged_context_hash(state: &State) -> Hash {
         let block = state.block(BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero test height"),
@@ -1179,7 +1123,6 @@ mod tests {
         ));
         staged_genesis_nexus_amx_context_hash(&block)
     }
-
     #[test]
     fn staged_lane_hash_is_order_independent_and_change_sensitive() {
         let peer_a = PeerId::new(
@@ -1224,7 +1167,6 @@ mod tests {
             Err(V2GenesisBootstrapError::NexusAmxContextHashMismatch { .. })
         ));
     }
-
     #[test]
     fn staged_execution_policy_hash_rejects_process_local_drift() {
         let baseline = lane_hash_world(&[]);
@@ -1244,7 +1186,6 @@ mod tests {
             expected
         );
         drop(staged);
-
         let mut drifted = baseline;
         let mut pipeline = drifted.pipeline_snapshot();
         pipeline.overlay_max_bytes = pipeline.overlay_max_bytes.saturating_add(1);
@@ -1262,7 +1203,6 @@ mod tests {
             Err(V2GenesisBootstrapError::ExecutionPolicyHashMismatch { .. })
         ));
     }
-
     #[test]
     fn staged_lane_hash_binds_catalog_routing_and_amx_policy() {
         let peer = PeerId::new(
@@ -1289,7 +1229,6 @@ mod tests {
         changed_catalog
             .set_nexus(nexus)
             .expect("install unrelated runtime catalog");
-
         assert_ne!(
             baseline.view().world().dataspace_catalog(),
             changed_catalog.view().world().dataspace_catalog(),
@@ -1299,7 +1238,6 @@ mod tests {
             staged_context_hash(&changed_catalog),
             "dataspace catalog changes must alter the signed height context",
         );
-
         let mut changed_amx = lane_hash_world(&records);
         let mut pipeline = changed_amx.pipeline_snapshot();
         pipeline.amx_group_budget_ms = pipeline.amx_group_budget_ms.saturating_add(1);
@@ -1310,7 +1248,6 @@ mod tests {
             "AMX policy changes must alter the signed height context",
         );
     }
-
     fn artifact(
         mut context: wire::HeightContext,
         next: Option<wire::finality::FinalizedNextEpochSnapshot>,
@@ -1354,7 +1291,6 @@ mod tests {
         let validator_set_pops = vec![vec![0xA6]; context.roster.len()];
         wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
     }
-
     #[test]
     fn non_boundary_successor_copies_frozen_election_inputs_exactly() {
         let parent_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 3);
@@ -1369,7 +1305,6 @@ mod tests {
         assert_eq!(successor.leader_seed, parent_context.leader_seed);
         assert_eq!(successor.parent_commit_qc, Some(parent.commit_qc));
     }
-
     #[test]
     fn boundary_successor_uses_only_the_finalized_next_epoch_snapshot() {
         let parent_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
@@ -1392,7 +1327,6 @@ mod tests {
         assert_eq!(successor.roster, next_roster);
         assert_eq!(successor.leader_seed, [0x77; 32]);
     }
-
     #[test]
     fn successor_epoch_end_and_pops_come_only_from_the_authenticated_parent() {
         let non_boundary = artifact(genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 3), None);
@@ -1400,7 +1334,6 @@ mod tests {
             .expect("non-boundary successor");
         assert_eq!(unchanged.epoch_end_height, 3);
         assert_eq!(unchanged.roster, non_boundary.height_context.roster);
-
         let boundary_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
         let next_pops = vec![vec![0x1A]; boundary_context.roster.len()];
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
@@ -1426,12 +1359,10 @@ mod tests {
             next_pops
         );
     }
-
     #[test]
     fn next_epoch_snapshot_obeys_successor_key_activation_and_expiry() {
         const BOUNDARY_HEIGHT: u64 = 7;
         const SUCCESSOR_HEIGHT: u64 = BOUNDARY_HEIGHT + 1;
-
         let mut keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -1446,7 +1377,6 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-
         let chain_id = ChainId::from("v2-expiry-boundary-test");
         let state_with_lifecycle = |expire_first: bool| {
             let mut world = World::new();
@@ -1482,7 +1412,6 @@ mod tests {
                 chain_id.clone(),
             )
         };
-
         let expiring_state = state_with_lifecycle(true);
         let expiring_view = expiring_state.view();
         let expiring_peer = &roster[0].validator;
@@ -1511,7 +1440,6 @@ mod tests {
             .is_some(),
             "Pending is a durable schedule and becomes live at activation height"
         );
-
         let election = FrozenElectionInputs {
             epoch: 4,
             epoch_end_height: BOUNDARY_HEIGHT,
@@ -1528,7 +1456,6 @@ mod tests {
             ),
             Err(V2ContextBuildError::MissingNextEpochProofOfPossession)
         ));
-
         let activating_state = state_with_lifecycle(false);
         let activating_view = activating_state.view();
         let snapshot = finalized_next_epoch_snapshot(
@@ -1547,7 +1474,6 @@ mod tests {
         )
         .expect("newly activated key is cryptographically admitted");
     }
-
     #[test]
     fn npos_boundary_fails_closed_without_authenticated_pre_boundary_record() {
         const BOUNDARY_HEIGHT: u64 = 7;
@@ -1579,13 +1505,11 @@ mod tests {
             roster: roster(&[1, 1, 1, 1]),
             leader_seed: [0x63; 32],
         };
-
         assert_eq!(
             finalized_next_epoch_snapshot(&view, view.network_id(), BOUNDARY_HEIGHT, &election,),
             Err(V2ContextBuildError::MissingPreBoundaryVrfRecord)
         );
     }
-
     #[test]
     fn genesis_rejects_non_unit_consensus_power() {
         let error = build_genesis_height_context(GenesisContextInputs {
@@ -1615,7 +1539,6 @@ mod tests {
             V2ContextBuildError::Wire(wire::ValidationError::VotingPowerNotOne)
         ));
     }
-
     #[test]
     fn terminal_height_never_derives_an_unrepresentable_epoch_snapshot() {
         let chain_id = ChainId::from("terminal-v2-context-builder-test");
@@ -1633,7 +1556,6 @@ mod tests {
             roster: Vec::new(),
             leader_seed: [0x7A; 32],
         };
-
         assert_eq!(
             finalized_next_epoch_snapshot(&view, view.network_id(), u64::MAX, &election),
             Ok(None),

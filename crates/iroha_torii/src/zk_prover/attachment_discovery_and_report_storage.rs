@@ -3,13 +3,11 @@ struct AttachmentLocation {
     tenant_key: String,
     id: String,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AttachmentDiscoveryGeometry {
     max_locations: usize,
     max_work_items: u64,
 }
-
 impl AttachmentDiscoveryGeometry {
     fn from_scan_bytes(max_scan_bytes: u64) -> Self {
         let max_locations_u64 = max_scan_bytes
@@ -26,13 +24,11 @@ impl AttachmentDiscoveryGeometry {
         }
     }
 }
-
 struct AttachmentDirectoryStream {
     root: PathBuf,
     tenant_entries: fs::ReadDir,
     current_tenant: Option<(String, fs::ReadDir)>,
 }
-
 struct AttachmentDiscoveryState {
     root: PathBuf,
     stream: Option<AttachmentDirectoryStream>,
@@ -40,13 +36,11 @@ struct AttachmentDiscoveryState {
     // directory work. The same hard location cap bounds this queue.
     retry_locations: Vec<AttachmentLocation>,
 }
-
 enum AttachmentDirectoryStep {
     Advanced,
     Location(AttachmentLocation),
     Complete,
 }
-
 impl AttachmentDirectoryStream {
     fn open(root: PathBuf) -> std::io::Result<Self> {
         let tenant_entries = fs::read_dir(&root)?;
@@ -56,7 +50,6 @@ impl AttachmentDirectoryStream {
             current_tenant: None,
         })
     }
-
     /// Advance by at most one directory-iterator operation.
     ///
     /// Keeping the iterator open across scan cycles ensures a bounded work
@@ -98,7 +91,6 @@ impl AttachmentDirectoryStream {
                 .clone();
             return AttachmentDirectoryStep::Location(AttachmentLocation { tenant_key, id });
         }
-
         let Some(entry) = self.tenant_entries.next() else {
             return AttachmentDirectoryStep::Complete;
         };
@@ -121,7 +113,6 @@ impl AttachmentDirectoryStream {
         AttachmentDirectoryStep::Advanced
     }
 }
-
 #[derive(Debug, Default)]
 struct AttachmentDiscovery {
     locations: Vec<AttachmentLocation>,
@@ -130,7 +121,6 @@ struct AttachmentDiscovery {
     work_exhausted: bool,
     time_exhausted: bool,
 }
-
 impl AttachmentDiscovery {
     fn budget_reason(&self) -> Option<&'static str> {
         if self.time_exhausted {
@@ -141,7 +131,6 @@ impl AttachmentDiscovery {
             None
         }
     }
-
     fn pending_estimate(&self) -> u64 {
         // An incomplete sweep cannot know the exact undiscovered backlog. A
         // single sentinel avoids advertising an empty queue while retaining
@@ -151,7 +140,6 @@ impl AttachmentDiscovery {
             .saturating_add(u64::from(!self.sweep_complete))
     }
 }
-
 fn sanitize_attachment_id(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.len() != ATTACHMENT_ID_HEX_LEN {
@@ -162,11 +150,9 @@ fn sanitize_attachment_id(raw: &str) -> Option<String> {
     }
     Some(trimmed.to_ascii_lowercase())
 }
-
 fn sanitize_report_id(raw: &str) -> Option<String> {
     sanitize_attachment_id(raw)
 }
-
 fn sanitize_tenant_key(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.len() != TENANT_KEY_HEX_LEN {
@@ -177,39 +163,31 @@ fn sanitize_tenant_key(raw: &str) -> Option<String> {
     }
     Some(trimmed.to_ascii_lowercase())
 }
-
 fn attachments_root_dir() -> PathBuf {
     super::zk_attachments::base_dir().join("zk_attachments")
 }
-
 fn attachment_meta_path(tenant_key: &str, id: &str) -> PathBuf {
     attachments_root_dir()
         .join(tenant_key)
         .join(format!("{}.json", id))
 }
-
 fn attachment_bin_path(tenant_key: &str, id: &str) -> PathBuf {
     attachments_root_dir()
         .join(tenant_key)
         .join(format!("{}.bin", id))
 }
-
 fn report_path_from_sanitized(id: &str) -> PathBuf {
     reports_dir().join(format!("{}.json", id))
 }
-
 fn report_index_dir() -> PathBuf {
     prover_dir().join("report_index")
 }
-
 fn report_summary_path_from_sanitized(id: &str) -> PathBuf {
     report_index_dir().join(format!("{id}.json"))
 }
-
 fn report_summary_lock() -> &'static Mutex<()> {
     REPORT_SUMMARY_LOCK.get_or_init(|| Mutex::new(()))
 }
-
 fn bounded_summary_text(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value.to_owned();
@@ -223,7 +201,6 @@ fn bounded_summary_text(value: &str, max_bytes: usize) -> String {
     bounded.push_str(marker);
     bounded
 }
-
 fn report_summary_from_report(report: &ProverReport) -> ProverReportSummary {
     let zk1_tags = report.zk1_tags.as_ref().and_then(|tags| {
         let mut bounded = Vec::new();
@@ -250,7 +227,6 @@ fn report_summary_from_report(report: &ProverReport) -> ProverReportSummary {
         zk1_tags,
     }
 }
-
 fn bound_persisted_report_summary(mut summary: ProverReportSummary) -> ProverReportSummary {
     summary.error = summary
         .error
@@ -270,7 +246,6 @@ fn bound_persisted_report_summary(mut summary: ProverReportSummary) -> ProverRep
     });
     summary
 }
-
 #[cfg(test)]
 fn normalize_report_summaries(raw: Vec<ProverReportSummary>) -> Vec<ProverReportSummary> {
     let mut by_id: BTreeMap<String, ProverReportSummary> = BTreeMap::new();
@@ -283,7 +258,6 @@ fn normalize_report_summaries(raw: Vec<ProverReportSummary>) -> Vec<ProverReport
     }
     by_id.into_values().collect()
 }
-
 fn persist_report_summary_locked(summary: &ProverReportSummary) -> std::io::Result<()> {
     let Some(id) = sanitize_report_id(&summary.id) else {
         return Err(IoError::new(

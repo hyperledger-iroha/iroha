@@ -7,14 +7,11 @@
 //! documented in the roadmap: monthly rent is computed per storage class and
 //! duration, underwriting ratios determine collateral requirements, and credit
 //! line caps / APR values track the assigned provider tier.
-
 use core::num::NonZeroU64;
-
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sorafs_manifest::deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity};
 use thiserror::Error;
-
 use crate::{
     DeriveJsonDeserialize, DeriveJsonSerialize,
     account::AccountId,
@@ -22,7 +19,6 @@ use crate::{
     events::data::sorafs::SorafsReserveLedgerEvent,
     sorafs::{capacity::ProviderId, pin_registry::StorageClass},
 };
-
 /// Schema version for [`ReservePolicyV1`].
 pub const RESERVE_POLICY_VERSION_V1: u8 = 1;
 /// First-release chain authority-policy version.
@@ -45,7 +41,6 @@ pub const RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1: usize = 1024 * 1024;
 pub const RESERVE_COMMITTED_EVENT_MAX_BYTES_V1: usize = 16 * 1024;
 /// Domain separator for authoritative reserve-policy digests.
 pub const RESERVE_AUTHORITY_POLICY_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.reserve.authority-policy.v1";
-
 /// Reserve tiers referenced by the Reserve+Rent policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -58,9 +53,7 @@ pub enum ReserveTier {
     /// Tier C — new entrants/manual approval lanes (4.5× underwriting, manual credit).
     TierC,
 }
-
 impl ReserveTier {}
-
 /// Rental commitment duration (`monthly`, `quarterly`, `annual`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -73,7 +66,6 @@ pub enum ReserveDuration {
     /// Annual commitment (25% discount).
     Annual,
 }
-
 /// Rent rate per storage class (GiB-month basis).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -83,7 +75,6 @@ pub struct ClassRentRate {
     /// Exact rent in XOR charged per GiB-month.
     pub rent_per_gib_month: XorQuantity,
 }
-
 impl ClassRentRate {
     /// Construct a rent rate entry.
     #[must_use]
@@ -94,7 +85,6 @@ impl ClassRentRate {
         }
     }
 }
-
 /// Duration factors encoded as basis points.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -106,7 +96,6 @@ pub struct DurationFactorSet {
     /// Annual factor (defaults to 0.75 = `7_500` bps).
     pub annual_bps: u16,
 }
-
 impl DurationFactorSet {
     const fn factor_bps(self, duration: ReserveDuration) -> u16 {
         match duration {
@@ -116,7 +105,6 @@ impl DurationFactorSet {
         }
     }
 }
-
 impl Default for DurationFactorSet {
     fn default() -> Self {
         Self {
@@ -126,7 +114,6 @@ impl Default for DurationFactorSet {
         }
     }
 }
-
 /// Per-tier underwriting + credit configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -141,7 +128,6 @@ pub struct ReserveTierConfig {
     /// Annual percentage rate applied to credit usage (basis points).
     pub interest_apr_bps: u16,
 }
-
 impl ReserveTierConfig {
     /// Construct a tier configuration.
     #[must_use]
@@ -159,7 +145,6 @@ impl ReserveTierConfig {
         }
     }
 }
-
 /// Reserve + rent policy payload (mirrors `sorafs_reserve_rent_plan.md`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -175,7 +160,6 @@ pub struct ReservePolicyV1 {
     /// Reserve top-up threshold (basis points of required reserve).
     pub top_up_threshold_bps: u16,
 }
-
 impl Default for ReservePolicyV1 {
     fn default() -> Self {
         let rent_rates = vec![
@@ -206,7 +190,6 @@ impl Default for ReservePolicyV1 {
         }
     }
 }
-
 /// Quoted rent/reserve breakdown for a provider + tier.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -239,7 +222,6 @@ pub struct ReserveQuote {
     /// Tier underwriting ratio (basis points).
     pub underwriting_ratio_bps: u32,
 }
-
 /// Ledger-oriented projection derived from a [`ReserveQuote`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -257,7 +239,6 @@ pub struct ReserveLedgerProjection {
     #[cfg_attr(feature = "json", norito(default))]
     pub needs_top_up_alert: bool,
 }
-
 /// Lifecycle stage derived from a reserve quote and payment aging inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -274,7 +255,6 @@ pub enum ReserveLifecycleStage {
     /// Provider should be removed from advert rotation and escalated.
     Default,
 }
-
 /// Deterministic reserve lifecycle projection for service and CLI automation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[allow(clippy::struct_excessive_bools)]
@@ -318,7 +298,6 @@ pub struct ReserveLifecycleProjection {
     #[cfg_attr(feature = "json", norito(default))]
     pub requires_manual_credit_approval: bool,
 }
-
 impl ReserveQuote {
     /// Project ledger-facing rent/reserve deltas based on the quote.
     ///
@@ -339,7 +318,6 @@ impl ReserveQuote {
             needs_top_up_alert,
         })
     }
-
     /// Project reserve lifecycle state from deterministic aging thresholds.
     ///
     /// The projection intentionally computes only policy state and transfer
@@ -363,7 +341,6 @@ impl ReserveQuote {
                 default_after_days,
             });
         }
-
         let ledger = self.ledger_projection()?;
         let automatic_credit_cap = self.credit_line_cap.clone();
         let credit_draw = if days_past_due == 0 {
@@ -405,7 +382,6 @@ impl ReserveQuote {
             stage,
             ReserveLifecycleStage::Delinquent | ReserveLifecycleStage::Default
         );
-
         Ok(ReserveLifecycleProjection {
             stage,
             days_past_due,
@@ -426,7 +402,6 @@ impl ReserveQuote {
         })
     }
 }
-
 /// Errors emitted during reserve quoting or validation.
 #[allow(variant_size_differences)]
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -497,7 +472,6 @@ pub enum ReservePolicyError {
         default_after_days: u16,
     },
 }
-
 impl From<DealAmountError> for ReservePolicyError {
     fn from(value: DealAmountError) -> Self {
         match value {
@@ -510,7 +484,6 @@ impl From<DealAmountError> for ReservePolicyError {
         }
     }
 }
-
 /// Identifiers used when validating basis-point ratios.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReserveRatioField {
@@ -529,7 +502,6 @@ pub enum ReserveRatioField {
     /// Commitment-duration discount factor.
     DurationFactor,
 }
-
 impl ReserveRatioField {
     const fn label(self) -> &'static str {
         match self {
@@ -543,7 +515,6 @@ impl ReserveRatioField {
         }
     }
 }
-
 impl ReservePolicyV1 {
     /// Quote the rent/reserve breakdown for the provided parameters.
     ///
@@ -566,7 +537,6 @@ impl ReservePolicyV1 {
         let rent_rate = self.rent_rate_for(storage_class)?;
         let tier_config = self.tier_config(tier)?;
         let duration_factor = u32::from(self.duration_factors.factor_bps(duration).max(1_u16));
-
         let base_rent = rent_rate.checked_mul_u64(capacity_gib)?;
         let monthly_rent = apply_basis_points_u32(&base_rent, duration_factor)?;
         let reserve_requirement =
@@ -581,7 +551,6 @@ impl ReservePolicyV1 {
             Some(bps) => Some(apply_basis_points_u32(&monthly_rent, bps)?),
             None => None,
         };
-
         Ok(ReserveQuote {
             storage_class,
             tier,
@@ -598,7 +567,6 @@ impl ReservePolicyV1 {
             underwriting_ratio_bps: tier_config.underwriting_ratio_bps,
         })
     }
-
     fn rent_rate_for(
         &self,
         storage_class: StorageClass,
@@ -609,7 +577,6 @@ impl ReservePolicyV1 {
             .map(|rate| rate.rent_per_gib_month.clone())
             .ok_or(ReservePolicyError::MissingRentRate(storage_class))
     }
-
     fn tier_config(&self, tier: ReserveTier) -> Result<ReserveTierConfig, ReservePolicyError> {
         self.tiers
             .iter()
@@ -617,7 +584,6 @@ impl ReservePolicyV1 {
             .find(|config| config.tier == tier)
             .ok_or(ReservePolicyError::MissingTierConfig(tier))
     }
-
     /// Return the validated configuration for one provider tier.
     ///
     /// # Errors
@@ -630,7 +596,6 @@ impl ReservePolicyV1 {
         self.validate()?;
         self.tier_config(tier)
     }
-
     /// Validate that every class, duration factor, and provider tier is present
     /// exactly once and stays within the first-release ratio bounds.
     ///
@@ -684,7 +649,6 @@ impl ReservePolicyV1 {
         Ok(())
     }
 }
-
 /// Governance envelope that makes reserve economics and custody chain-authoritative.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -725,7 +689,6 @@ pub struct ReserveAuthorityPolicyV1 {
     /// Maximum open appeals retained per provider.
     pub max_open_appeals_per_provider: u32,
 }
-
 impl ReserveAuthorityPolicyV1 {
     /// Validate first-release governance and economics bounds.
     ///
@@ -778,7 +741,6 @@ impl ReserveAuthorityPolicyV1 {
         }
         Ok(())
     }
-
     /// Compute the exact domain-separated digest of this policy.
     ///
     /// # Errors
@@ -791,20 +753,16 @@ impl ReserveAuthorityPolicyV1 {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-
 struct Blake3Writer<'a>(&'a mut blake3::Hasher);
-
 impl std::io::Write for Blake3Writer<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.0.update(bytes);
         Ok(bytes.len())
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
-
 /// Validation errors for an authoritative reserve governance policy.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ReserveAuthorityPolicyError {
@@ -855,7 +813,6 @@ pub enum ReserveAuthorityPolicyError {
         found: u32,
     },
 }
-
 /// Activated reserve policy with governance provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -870,7 +827,6 @@ pub struct ReserveAuthorityPolicyRecordV1 {
     /// Block timestamp assigned to activation.
     pub activated_at_unix: u64,
 }
-
 /// Immutable provider underwriting terms used to derive rent and credit caps.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -888,7 +844,6 @@ pub struct ReserveProviderTermsV1 {
     /// Capacity covered by rent and underwriting.
     pub capacity_gib: u64,
 }
-
 /// Authoritative per-provider reserve, debt, and lifecycle partition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -924,7 +879,6 @@ pub struct ReserveProviderAccountV1 {
     /// Block timestamp of the latest mutation.
     pub updated_at_unix: u64,
 }
-
 impl ReserveProviderAccountV1 {
     /// Return the number of whole rent periods due at a finalized block time.
     ///
@@ -941,7 +895,6 @@ impl ReserveProviderAccountV1 {
             })?;
         Ok(elapsed / RESERVE_RENT_BILLING_PERIOD_SECONDS_V1)
     }
-
     /// Return deterministic whole days since the first unsettled rent boundary.
     ///
     /// The exact boundary is day zero. Values beyond the native lifecycle
@@ -959,7 +912,6 @@ impl ReserveProviderAccountV1 {
         let elapsed_overdue = observed_at_unix.saturating_sub(first_unsettled_boundary);
         Ok(u16::try_from(elapsed_overdue / 86_400).unwrap_or(u16::MAX))
     }
-
     /// Return principal plus accrued interest.
     ///
     /// # Errors
@@ -970,7 +922,6 @@ impl ReserveProviderAccountV1 {
             .checked_add(&self.accrued_interest)
             .map_err(ReservePolicyError::from)
     }
-
     /// Return unused credit capacity after principal draw.
     ///
     /// # Errors
@@ -979,7 +930,6 @@ impl ReserveProviderAccountV1 {
     pub fn available_credit(&self) -> Result<XorQuantity, ReservePolicyError> {
         capped_sub(&self.credit_cap, &self.debt_principal)
     }
-
     /// Accrue whole-day simple interest on outstanding principal.
     ///
     /// The anchor advances only by complete elapsed days, so repeated calls in
@@ -1021,7 +971,6 @@ impl ReserveProviderAccountV1 {
         Ok(interest)
     }
 }
-
 /// Reserve custody movement direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1032,7 +981,6 @@ pub enum ReserveMovementKindV1 {
     /// Return available reserve funds to the provider.
     Withdrawal,
 }
-
 /// Decision lifecycle for a reserve movement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1045,7 +993,6 @@ pub enum ReserveMovementStatusV1 {
     /// Rejected without custody mutation.
     Rejected,
 }
-
 /// Authoritative reserve top-up or withdrawal request and decision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1077,7 +1024,6 @@ pub struct ReserveMovementRecordV1 {
     /// Bounded governance rationale.
     pub rationale: Option<String>,
 }
-
 /// Appeal lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1090,7 +1036,6 @@ pub enum ReserveAppealStatusV1 {
     /// Rejected without provider lifecycle mutation.
     Rejected,
 }
-
 /// Authoritative reserve lifecycle appeal.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1125,7 +1070,6 @@ pub struct ReserveAppealRecordV1 {
     /// Bounded governance rationale.
     pub rationale: Option<String>,
 }
-
 /// Finalized block anchor for one coherent reserve-ledger query result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1136,7 +1080,6 @@ pub struct ReserveFinalizedCursorV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
 }
-
 /// Exclusive cursor for one committed reserve-ledger event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1151,7 +1094,6 @@ pub struct ReserveFinalizedEventCursorV1 {
     /// Reserve-event index within the committing block.
     pub event_index: u32,
 }
-
 /// Typed reserve-ledger event with an unambiguous finalized-chain cursor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1168,7 +1110,6 @@ pub struct ReserveFinalizedEventV1 {
     /// Existing typed, payload-free native reserve-ledger event.
     pub event: SorafsReserveLedgerEvent,
 }
-
 impl ReserveFinalizedEventV1 {
     /// Return the exclusive cursor identifying this event.
     #[must_use]
@@ -1181,7 +1122,6 @@ impl ReserveFinalizedEventV1 {
         }
     }
 }
-
 /// Cursor-bounded page of typed committed reserve-ledger events.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1195,7 +1135,6 @@ pub struct ReserveFinalizedEventPageV1 {
     /// Exclusive continuation cursor, present only when `has_more` is true.
     pub next_after: Option<ReserveFinalizedEventCursorV1>,
 }
-
 /// Finalized, exclusive-provider-id page of authoritative reserve accounts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1209,7 +1148,6 @@ pub struct ReserveProviderAccountPageV1 {
     /// Exclusive provider-id continuation, present only when `has_more` is true.
     pub next_after: Option<ProviderId>,
 }
-
 /// Finalized, exclusive-movement-id page of authoritative reserve movements.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1227,7 +1165,6 @@ pub struct ReserveMovementPageV1 {
     )]
     pub next_after: Option<[u8; 32]>,
 }
-
 /// Finalized, exclusive-appeal-id page of authoritative reserve appeals.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1245,7 +1182,6 @@ pub struct ReserveAppealPageV1 {
     )]
     pub next_after: Option<[u8; 32]>,
 }
-
 fn validate_ratio(value: u32, field: ReserveRatioField) -> Result<(), ReservePolicyError> {
     if value == 0 || value > 1_000_000 {
         return Err(ReservePolicyError::InvalidRatio {
@@ -1255,7 +1191,6 @@ fn validate_ratio(value: u32, field: ReserveRatioField) -> Result<(), ReservePol
     }
     Ok(())
 }
-
 fn capped_sub(
     amount: &XorQuantity,
     deduction: &XorQuantity,
@@ -1268,7 +1203,6 @@ fn capped_sub(
             .map_err(ReservePolicyError::from)
     }
 }
-
 fn apply_basis_points_u32(
     amount: &XorQuantity,
     basis_points: u32,
@@ -1277,7 +1211,6 @@ fn apply_basis_points_u32(
         .checked_mul_basis_points_u32(basis_points)
         .map_err(ReservePolicyError::from)
 }
-
 fn divide_amount_by_ratio(
     amount: &XorQuantity,
     ratio_bps: u32,
@@ -1291,7 +1224,6 @@ fn divide_amount_by_ratio(
         .checked_mul_ratio(u64::from(BASIS_POINTS_PER_UNIT), denominator)
         .map_err(ReservePolicyError::from)
 }
-
 fn prorated_interest(
     principal: &XorQuantity,
     apr_bps: u16,
@@ -1309,18 +1241,15 @@ fn prorated_interest(
         .checked_mul_ratio(numerator, denominator)
         .map_err(ReservePolicyError::from)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         norito::to_bytes(value).expect("encode alternate-layout reserve value")
     }
-
     fn assert_canonical_norito_round_trip<T>(value: &T)
     where
         T: core::fmt::Debug + PartialEq + norito::NoritoSerialize,
@@ -1330,7 +1259,6 @@ mod tests {
         let decoded: T =
             norito::decode_canonical(&encoded).expect("decode canonical reserve value");
         assert_eq!(&decoded, value);
-
         let alternate = encode_with_alternate_norito_layout(value);
         assert_ne!(alternate, encoded);
         let alternate_decoded: T = norito::decode_from_bytes(&alternate)
@@ -1341,11 +1269,9 @@ mod tests {
             Err(norito::Error::NonCanonicalEncoding)
         ));
     }
-
     #[test]
     fn deal_amount_scale_overflow_preserves_diagnostic_context() {
         let error = ReservePolicyError::from(DealAmountError::ScaleOverflow { scale: 10, max: 9 });
-
         assert_eq!(
             error,
             ReservePolicyError::AmountScaleOverflow { scale: 10, max: 9 }
@@ -1355,7 +1281,6 @@ mod tests {
             "reserve amount scale 10 exceeds maximum 9"
         );
     }
-
     #[test]
     fn default_policy_renders_expected_quote() {
         let policy = ReservePolicyV1::default();
@@ -1368,7 +1293,6 @@ mod tests {
                 XorQuantity::zero(),
             )
             .expect("quote succeeds");
-
         assert_eq!(
             quote
                 .monthly_rent
@@ -1407,7 +1331,6 @@ mod tests {
         );
         assert_eq!(quote.interest_apr_bps, 300);
     }
-
     #[test]
     fn reserve_balance_reduces_effective_rent() {
         let policy = ReservePolicyV1::default();
@@ -1422,7 +1345,6 @@ mod tests {
                 balance,
             )
             .expect("quote succeeds");
-
         assert_eq!(
             quote
                 .reserve_offset
@@ -1438,7 +1360,6 @@ mod tests {
             119_250_000
         );
     }
-
     #[test]
     fn tier_c_has_no_credit_line_cap() {
         let policy = ReservePolicyV1::default();
@@ -1453,7 +1374,6 @@ mod tests {
             .expect("quote succeeds");
         assert!(quote.credit_line_cap.is_none());
     }
-
     #[test]
     fn ledger_projection_identifies_shortfalls() {
         let policy = ReservePolicyV1::default();
@@ -1500,7 +1420,6 @@ mod tests {
         assert!(!projection.meets_underwriting);
         assert!(projection.needs_top_up_alert);
     }
-
     #[test]
     fn ledger_projection_marks_satisfied_underwriting() {
         let policy = ReservePolicyV1::default();
@@ -1529,7 +1448,6 @@ mod tests {
         assert!(projection.top_up_shortfall.is_zero());
         assert!(!projection.needs_top_up_alert);
     }
-
     #[test]
     fn lifecycle_projection_warns_before_grace_when_reserve_is_low() {
         let policy = ReservePolicyV1::default();
@@ -1545,13 +1463,11 @@ mod tests {
         let lifecycle = quote
             .lifecycle_projection(0, 7, 30)
             .expect("lifecycle projection");
-
         assert_eq!(lifecycle.stage, ReserveLifecycleStage::Warning);
         assert!(lifecycle.restrict_new_manifests);
         assert!(!lifecycle.disable_adverts);
         assert!(lifecycle.credit_draw.is_zero());
     }
-
     #[test]
     fn lifecycle_projection_draws_credit_during_grace() {
         let policy = ReservePolicyV1::default();
@@ -1567,7 +1483,6 @@ mod tests {
         let lifecycle = quote
             .lifecycle_projection(3, 7, 30)
             .expect("lifecycle projection");
-
         assert_eq!(lifecycle.stage, ReserveLifecycleStage::Grace);
         assert_eq!(
             lifecycle
@@ -1586,7 +1501,6 @@ mod tests {
             120_000_000
         );
     }
-
     #[test]
     fn lifecycle_projection_accrues_interest_after_grace() {
         let policy = ReservePolicyV1::default();
@@ -1602,7 +1516,6 @@ mod tests {
         let lifecycle = quote
             .lifecycle_projection(12, 7, 30)
             .expect("lifecycle projection");
-
         assert_eq!(lifecycle.stage, ReserveLifecycleStage::Delinquent);
         assert_eq!(
             lifecycle
@@ -1629,7 +1542,6 @@ mod tests {
         );
         assert!(lifecycle.requires_governance_notification);
     }
-
     #[test]
     fn lifecycle_projection_defaults_when_credit_cannot_cover_rent() {
         let policy = ReservePolicyV1::default();
@@ -1645,7 +1557,6 @@ mod tests {
         let lifecycle = quote
             .lifecycle_projection(1, 7, 30)
             .expect("lifecycle projection");
-
         assert_eq!(lifecycle.stage, ReserveLifecycleStage::Default);
         assert!(lifecycle.requires_manual_credit_approval);
         assert!(lifecycle.disable_adverts);
@@ -1657,7 +1568,6 @@ mod tests {
             120_000_000
         );
     }
-
     #[test]
     fn lifecycle_projection_rejects_invalid_windows() {
         let policy = ReservePolicyV1::default();
@@ -1678,7 +1588,6 @@ mod tests {
             ReservePolicyError::InvalidLifecycleWindow { .. }
         ));
     }
-
     fn reserve_account() -> ReserveProviderAccountV1 {
         let provider_account = AccountId::new(
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -1709,7 +1618,6 @@ mod tests {
             updated_at_unix: 86_400,
         }
     }
-
     fn authority_policy() -> ReserveAuthorityPolicyV1 {
         let custody_account = reserve_account().terms.provider_account;
         let treasury_account = AccountId::new(
@@ -1738,7 +1646,6 @@ mod tests {
             max_open_appeals_per_provider: 4,
         }
     }
-
     #[test]
     fn authority_policy_digest_is_canonical_and_ambient_invariant() {
         let policy = authority_policy();
@@ -1750,7 +1657,6 @@ mod tests {
         historical.update(RESERVE_AUTHORITY_POLICY_DIGEST_DOMAIN_V1);
         historical.update(&canonical);
         assert_eq!(digest, *historical.finalize().as_bytes());
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -1763,7 +1669,6 @@ mod tests {
             "reserve-policy identity must ignore ambient Norito layout"
         );
     }
-
     #[test]
     fn rent_due_periods_use_only_the_consensus_anchor_and_reject_time_rollback() {
         let account = reserve_account();
@@ -1811,7 +1716,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn zero_debt_accrual_advances_anchor_before_a_later_draw() {
         let mut account = reserve_account();
@@ -1822,7 +1726,6 @@ mod tests {
                 .is_zero()
         );
         assert_eq!(account.interest_accrued_at_unix, 3 * 86_400);
-
         account.debt_principal =
             XorQuantity::try_from_micro(365_000_000).expect("principal fixture");
         let interest = account
@@ -1836,14 +1739,12 @@ mod tests {
         );
         assert_eq!(account.interest_accrued_at_unix, 4 * 86_400);
     }
-
     #[test]
     fn interest_timestamp_rollback_is_rejected_without_mutation() {
         let mut account = reserve_account();
         account.debt_principal =
             XorQuantity::try_from_micro(365_000_000).expect("principal fixture");
         let before = account.clone();
-
         assert_eq!(
             account
                 .accrue_interest(10_000, 86_399)
@@ -1852,11 +1753,9 @@ mod tests {
         );
         assert_eq!(account, before);
     }
-
     #[test]
     fn finalized_reserve_event_page_round_trips_canonically() {
         use crate::events::data::sorafs::SorafsReserveLedgerEventKind;
-
         let finalized_cursor = ReserveFinalizedCursorV1 {
             height: 7,
             block_hash: [0x71; 32],
@@ -1884,11 +1783,9 @@ mod tests {
             has_more: true,
             next_after: Some(event_cursor),
         };
-
         assert_canonical_norito_round_trip(&finalized_cursor);
         assert_canonical_norito_round_trip(&event_cursor);
         assert_canonical_norito_round_trip(&page);
-
         #[cfg(feature = "json")]
         {
             let encoded =
@@ -1898,7 +1795,6 @@ mod tests {
             assert_eq!(decoded, page);
         }
     }
-
     #[test]
     fn finalized_reserve_record_pages_round_trip_canonically() {
         let finalized_cursor = ReserveFinalizedCursorV1 {
@@ -1954,7 +1850,6 @@ mod tests {
             has_more: true,
             next_after: Some([0x61; 32]),
         };
-
         macro_rules! assert_page_round_trip {
             ($page:expr, $ty:ty) => {{
                 assert_canonical_norito_round_trip::<$ty>(&$page);
@@ -1968,7 +1863,6 @@ mod tests {
                 }
             }};
         }
-
         assert_page_round_trip!(provider_page, ReserveProviderAccountPageV1);
         assert_page_round_trip!(movement_page, ReserveMovementPageV1);
         assert_page_round_trip!(appeal_page, ReserveAppealPageV1);

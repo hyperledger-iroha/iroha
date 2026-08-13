@@ -4,24 +4,20 @@
 //! versions 1 through 40 and all four standard error-correction levels.  It is
 //! intentionally narrow: Iroha only needs deterministic byte payload rendering,
 //! so Kanji/alphanumeric segmentation and Micro QR are left out.
-
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss
 )]
-
 use std::{
     error::Error,
     fmt::{self, Write as _},
 };
-
 const MIN_VERSION: u8 = 1;
 const MAX_VERSION: u8 = 40;
 const MODE_BYTE: u32 = 0b0100;
 const QUIET_ZONE_MODULES: u32 = 4;
 const PAD_CODEWORDS: [u8; 2] = [0xEC, 0x11];
-
 const ECC_CODEWORDS_PER_BLOCK: [[u8; 41]; 4] = [
     [
         0, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28,
@@ -40,7 +36,6 @@ const ECC_CODEWORDS_PER_BLOCK: [[u8; 41]; 4] = [
         30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30,
     ],
 ];
-
 const NUM_ERROR_CORRECTION_BLOCKS: [[u8; 41]; 4] = [
     [
         0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 6, 6, 6, 6, 7, 8, 8, 9, 9, 10, 12, 12, 12, 13,
@@ -59,7 +54,6 @@ const NUM_ERROR_CORRECTION_BLOCKS: [[u8; 41]; 4] = [
         35, 37, 40, 42, 45, 48, 51, 54, 57, 60, 63, 66, 70, 74, 77, 81,
     ],
 ];
-
 const ALIGNMENT_PATTERN_POSITIONS: [&[u8]; 41] = [
     &[],
     &[],
@@ -103,7 +97,6 @@ const ALIGNMENT_PATTERN_POSITIONS: [&[u8]; 41] = [
     &[6, 26, 54, 82, 110, 138, 166],
     &[6, 30, 58, 86, 114, 142, 170],
 ];
-
 /// Standard QR Code error-correction level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EcLevel {
@@ -116,7 +109,6 @@ pub enum EcLevel {
     /// High error correction.
     H,
 }
-
 impl EcLevel {
     const fn table_index(self) -> usize {
         match self {
@@ -126,7 +118,6 @@ impl EcLevel {
             Self::H => 3,
         }
     }
-
     const fn format_bits(self) -> u32 {
         match self {
             Self::L => 1,
@@ -136,7 +127,6 @@ impl EcLevel {
         }
     }
 }
-
 /// Error returned when a QR Code cannot be generated.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QrError {
@@ -151,7 +141,6 @@ pub enum QrError {
         detail: &'static str,
     },
 }
-
 impl fmt::Display for QrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -162,9 +151,7 @@ impl fmt::Display for QrError {
         }
     }
 }
-
 impl Error for QrError {}
-
 /// Light or dark QR module color.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Color {
@@ -173,7 +160,6 @@ pub enum Color {
     /// Dark module.
     Dark,
 }
-
 /// Encoded normal QR Code symbol.
 #[derive(Clone, Debug)]
 pub struct QrCode {
@@ -182,7 +168,6 @@ pub struct QrCode {
     modules: Vec<bool>,
     function_modules: Vec<bool>,
 }
-
 impl QrCode {
     /// Encode bytes using byte mode and medium error correction.
     ///
@@ -191,7 +176,6 @@ impl QrCode {
     pub fn new(data: &[u8]) -> Result<Self, QrError> {
         Self::with_error_correction_level(data, EcLevel::M)
     }
-
     /// Encode bytes using byte mode and the requested error-correction level.
     ///
     /// # Errors
@@ -203,7 +187,6 @@ impl QrCode {
         let codewords = add_error_correction_and_interleave(&data_codewords, version, level)?;
         let mut base = Self::blank(version);
         base.draw_function_patterns();
-
         let mut best: Option<(i32, Self)> = None;
         for mask in 0..8 {
             let mut candidate = base.clone();
@@ -217,42 +200,35 @@ impl QrCode {
                 best = Some((penalty, candidate));
             }
         }
-
         best.map(|(_, code)| code)
             .ok_or(QrError::TableInvariant { detail: "no masks" })
     }
-
     /// Return the normal QR Code version number, from 1 to 40.
     #[must_use]
     pub const fn version(&self) -> u8 {
         self.version
     }
-
     /// Return the module width of the QR symbol without quiet-zone modules.
     #[must_use]
     pub const fn width(&self) -> usize {
         self.size
     }
-
     /// Return the quiet-zone width, in modules.
     #[must_use]
     #[allow(clippy::unused_self)]
     pub const fn quiet_zone(&self) -> u32 {
         QUIET_ZONE_MODULES
     }
-
     /// Return whether the module at `(x, y)` is dark.
     #[must_use]
     pub fn is_dark(&self, x: usize, y: usize) -> bool {
         self.modules[self.index(x, y)]
     }
-
     /// Return whether the module at `(x, y)` is reserved for QR function data.
     #[must_use]
     pub fn is_functional(&self, x: usize, y: usize) -> bool {
         self.function_modules[self.index(x, y)]
     }
-
     /// Return all modules as color values in row-major order.
     #[must_use]
     pub fn to_colors(&self) -> Vec<Color> {
@@ -261,7 +237,6 @@ impl QrCode {
             .map(|&dark| if dark { Color::Dark } else { Color::Light })
             .collect()
     }
-
     /// Render an SVG document with the requested pixel dimensions and palette.
     #[must_use]
     pub fn to_svg(&self, dimension: u32, dark: &str, light: &str) -> String {
@@ -282,7 +257,6 @@ impl QrCode {
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{dimension}\" height=\"{dimension}\" viewBox=\"0 0 {total} {total}\" shape-rendering=\"crispEdges\"><rect width=\"100%\" height=\"100%\" fill=\"{light}\"/><path d=\"{path}\" fill=\"{dark}\"/></svg>"
         )
     }
-
     /// Render a grayscale bitmap with dark modules as `0` and light modules as `255`.
     #[must_use]
     pub fn to_luma8(&self, dimension: u32) -> (u32, u32, Vec<u8>) {
@@ -308,7 +282,6 @@ impl QrCode {
         }
         (side, side, data)
     }
-
     fn blank(version: u8) -> Self {
         let size = usize::from(version) * 4 + 17;
         Self {
@@ -318,29 +291,24 @@ impl QrCode {
             function_modules: vec![false; size * size],
         }
     }
-
     fn index(&self, x: usize, y: usize) -> usize {
         assert!(x < self.size && y < self.size);
         y * self.size + x
     }
-
     fn set_module(&mut self, x: usize, y: usize, dark: bool) {
         let idx = self.index(x, y);
         self.modules[idx] = dark;
     }
-
     fn set_function_module(&mut self, x: usize, y: usize, dark: bool) {
         let idx = self.index(x, y);
         self.modules[idx] = dark;
         self.function_modules[idx] = true;
     }
-
     fn draw_function_patterns(&mut self) {
         let size = self.size;
         self.draw_finder_pattern(3, 3);
         self.draw_finder_pattern(size - 4, 3);
         self.draw_finder_pattern(3, size - 4);
-
         for i in 0..size {
             if !self.function_modules[self.index(6, i)] {
                 self.set_function_module(6, i, i % 2 == 0);
@@ -349,7 +317,6 @@ impl QrCode {
                 self.set_function_module(i, 6, i % 2 == 0);
             }
         }
-
         for &cy in ALIGNMENT_PATTERN_POSITIONS[usize::from(self.version)] {
             for &cx in ALIGNMENT_PATTERN_POSITIONS[usize::from(self.version)] {
                 let near_top = cy == 6;
@@ -362,13 +329,11 @@ impl QrCode {
                 self.draw_alignment_pattern(usize::from(cx), usize::from(cy));
             }
         }
-
         self.draw_format_bits(EcLevel::M, 0);
         if self.version >= 7 {
             self.draw_version_bits();
         }
     }
-
     fn draw_finder_pattern(&mut self, cx: usize, cy: usize) {
         for dy in -4i32..=4 {
             for dx in -4i32..=4 {
@@ -383,7 +348,6 @@ impl QrCode {
             }
         }
     }
-
     fn draw_alignment_pattern(&mut self, cx: usize, cy: usize) {
         for dy in -2i32..=2 {
             for dx in -2i32..=2 {
@@ -396,7 +360,6 @@ impl QrCode {
             }
         }
     }
-
     fn draw_format_bits(&mut self, level: EcLevel, mask: u8) {
         let bits = format_bits(level, mask);
         for i in 0..=5 {
@@ -408,7 +371,6 @@ impl QrCode {
         for i in 9..15 {
             self.set_function_module(14 - i, 8, bit(bits, i));
         }
-
         let size = self.size;
         for i in 0..8 {
             self.set_function_module(size - 1 - i, 8, bit(bits, i));
@@ -418,7 +380,6 @@ impl QrCode {
         }
         self.set_function_module(8, size - 8, true);
     }
-
     fn draw_version_bits(&mut self) {
         let mut rem = u32::from(self.version);
         for _ in 0..12 {
@@ -434,7 +395,6 @@ impl QrCode {
             self.set_function_module(b, a, dark);
         }
     }
-
     fn draw_codewords(&mut self, codewords: &[u8], mask: u8) {
         let mut bit_index = 0usize;
         let total_bits = codewords.len() * 8;
@@ -465,7 +425,6 @@ impl QrCode {
             right = right.saturating_sub(2);
         }
     }
-
     fn penalty_score(&self) -> i32 {
         let mut result = 0;
         result += self.penalty_adjacent_runs();
@@ -474,7 +433,6 @@ impl QrCode {
         result += self.penalty_balance();
         result
     }
-
     fn penalty_adjacent_runs(&self) -> i32 {
         let mut result = 0;
         for y in 0..self.size {
@@ -515,7 +473,6 @@ impl QrCode {
         }
         result
     }
-
     fn penalty_blocks(&self) -> i32 {
         let mut result = 0;
         for y in 0..self.size - 1 {
@@ -531,7 +488,6 @@ impl QrCode {
         }
         result
     }
-
     fn penalty_finder_like_patterns(&self) -> i32 {
         let mut result = 0;
         for y in 0..self.size {
@@ -546,7 +502,6 @@ impl QrCode {
         }
         result
     }
-
     fn has_finder_like_row(&self, x: usize, y: usize) -> bool {
         let pattern = [
             true, false, true, true, true, false, true, false, false, false, false,
@@ -563,7 +518,6 @@ impl QrCode {
                 .enumerate()
                 .all(|(i, &value)| self.is_dark(x + i, y) == value)
     }
-
     fn has_finder_like_col(&self, x: usize, y: usize) -> bool {
         let pattern = [
             true, false, true, true, true, false, true, false, false, false, false,
@@ -580,7 +534,6 @@ impl QrCode {
                 .enumerate()
                 .all(|(i, &value)| self.is_dark(x, y + i) == value)
     }
-
     fn penalty_balance(&self) -> i32 {
         let dark = self.modules.iter().filter(|&&module| module).count() as i32;
         let total = (self.size * self.size) as i32;
@@ -588,7 +541,6 @@ impl QrCode {
         k * 10
     }
 }
-
 fn choose_version(data_len: usize, level: EcLevel) -> Result<u8, QrError> {
     for version in MIN_VERSION..=MAX_VERSION {
         let capacity_bits = usize::from(num_data_codewords(version, level)) * 8;
@@ -599,7 +551,6 @@ fn choose_version(data_len: usize, level: EcLevel) -> Result<u8, QrError> {
     }
     Err(QrError::DataTooLong { bytes: data_len })
 }
-
 fn encode_data_codewords(data: &[u8], version: u8, level: EcLevel) -> Result<Vec<u8>, QrError> {
     let capacity_bits = usize::from(num_data_codewords(version, level)) * 8;
     let mut bits = BitBuffer::default();
@@ -625,7 +576,6 @@ fn encode_data_codewords(data: &[u8], version: u8, level: EcLevel) -> Result<Vec
     }
     Ok(data_codewords)
 }
-
 fn add_error_correction_and_interleave(
     data: &[u8],
     version: u8,
@@ -669,7 +619,6 @@ fn add_error_correction_and_interleave(
             detail: "unused data after block split",
         });
     }
-
     let mut result = Vec::with_capacity(raw_codewords);
     for i in 0..blocks[0].len() {
         for (block_index, block) in blocks.iter().enumerate() {
@@ -683,7 +632,6 @@ fn add_error_correction_and_interleave(
     }
     Ok(result)
 }
-
 fn num_data_codewords(version: u8, level: EcLevel) -> u16 {
     let raw = num_raw_data_modules(version) / 8;
     let table = level.table_index();
@@ -691,7 +639,6 @@ fn num_data_codewords(version: u8, level: EcLevel) -> u16 {
     let blocks = usize::from(NUM_ERROR_CORRECTION_BLOCKS[table][usize::from(version)]);
     (raw - ecc_per_block * blocks) as u16
 }
-
 fn num_raw_data_modules(version: u8) -> usize {
     let version = usize::from(version);
     let mut result = (16 * version + 128) * version + 64;
@@ -704,27 +651,22 @@ fn num_raw_data_modules(version: u8) -> usize {
     }
     result
 }
-
 const fn char_count_bits(version: u8) -> usize {
     if version <= 9 { 8 } else { 16 }
 }
-
 #[derive(Default)]
 struct BitBuffer {
     bits: Vec<bool>,
 }
-
 impl BitBuffer {
     fn append_bits(&mut self, value: u32, len: usize) {
         for i in (0..len).rev() {
             self.bits.push(((value >> i) & 1) != 0);
         }
     }
-
     fn len(&self) -> usize {
         self.bits.len()
     }
-
     fn into_bytes(self) -> Vec<u8> {
         let mut out = vec![0u8; self.bits.len().div_ceil(8)];
         for (i, bit) in self.bits.into_iter().enumerate() {
@@ -735,7 +677,6 @@ impl BitBuffer {
         out
     }
 }
-
 fn reed_solomon_divisor(degree: usize) -> Vec<u8> {
     let mut result = vec![0u8; degree];
     result[degree - 1] = 1;
@@ -752,7 +693,6 @@ fn reed_solomon_divisor(degree: usize) -> Vec<u8> {
     }
     result
 }
-
 fn reed_solomon_remainder(data: &[u8], divisor: &[u8]) -> Vec<u8> {
     let mut result = vec![0u8; divisor.len()];
     for &byte in data {
@@ -764,7 +704,6 @@ fn reed_solomon_remainder(data: &[u8], divisor: &[u8]) -> Vec<u8> {
     }
     result
 }
-
 fn reed_solomon_multiply(x: u8, y: u8) -> u8 {
     let mut z = 0u16;
     let mut x = u16::from(x);
@@ -781,7 +720,6 @@ fn reed_solomon_multiply(x: u8, y: u8) -> u8 {
     }
     z as u8
 }
-
 fn format_bits(level: EcLevel, mask: u8) -> u32 {
     let data = (level.format_bits() << 3) | u32::from(mask);
     let mut rem = data;
@@ -790,7 +728,6 @@ fn format_bits(level: EcLevel, mask: u8) -> u32 {
     }
     ((data << 10) | rem) ^ 0x5412
 }
-
 fn mask_bit(mask: u8, x: usize, y: usize) -> bool {
     match mask {
         0 => (x + y).is_multiple_of(2),
@@ -804,15 +741,12 @@ fn mask_bit(mask: u8, x: usize, y: usize) -> bool {
         _ => unreachable!("mask is in 0..8"),
     }
 }
-
 fn bit(value: u32, index: usize) -> bool {
     ((value >> index) & 1) != 0
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn encodes_basic_payload() {
         let code = QrCode::new(b"iroha").expect("qr");
@@ -821,7 +755,6 @@ mod tests {
         assert!(code.is_functional(3, 3));
         assert!(code.is_dark(3, 3));
     }
-
     #[test]
     fn renders_svg_without_xml_prelude() {
         let code = QrCode::new(b"iroha").expect("qr");
@@ -830,7 +763,6 @@ mod tests {
         assert!(svg.contains("fill=\"#000000\""));
         assert!(svg.contains("fill=\"#FFFFFF\""));
     }
-
     #[test]
     fn rejects_oversized_payload() {
         let payload = vec![0u8; 4_000];

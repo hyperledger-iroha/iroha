@@ -1,13 +1,10 @@
 //! Once-validated, budgeted common-`a` derivation shared by staged workers.
-
 use super::{
     ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1,
     Shake256Reader, ZkAmsMkheCpkRelationErrorV1, ZkAmsMkheGovernedActiveRosterV1,
     active_collective_public_a_context_v1,
 };
-
 const ACTIVE_COLLECTIVE_PUBLIC_A_CONTEXT_BYTES_V1: usize = 1 + 32 + 8 + 32;
-
 /// Opaque, non-cloneable common-`a` frame authority validated once per worker.
 pub(in super::super) struct ZkAmsMkhePreparedCollectivePublicAContextV1 {
     profile: BgvProfile,
@@ -18,7 +15,6 @@ pub(in super::super) struct ZkAmsMkhePreparedCollectivePublicAContextV1 {
     _cpk_transcript_digest: [u8; 32],
     frame_prefix: Vec<u8>,
 }
-
 /// Validate the complete immutable profile/roster/transcript axes once and
 /// freeze the native frame prefix used by every subsequent limb.
 pub(in super::super) fn prepare_active_collective_public_a_v1(
@@ -62,7 +58,6 @@ pub(in super::super) fn prepare_active_collective_public_a_v1(
         frame_prefix,
     })
 }
-
 /// Exact bytes cloned and absorbed for one limb, including the limb index.
 pub(in super::super) const fn active_collective_public_a_limb_frame_bytes_v1() -> usize {
     ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1.len()
@@ -71,7 +66,6 @@ pub(in super::super) const fn active_collective_public_a_limb_frame_bytes_v1() -
         + ACTIVE_COLLECTIVE_PUBLIC_A_CONTEXT_BYTES_V1
         + 2
 }
-
 /// Compatibility path preserving the native whole-polynomial derivation.
 pub(in super::super) fn derive_active_collective_public_a_limb_v1(
     profile: &BgvProfile,
@@ -82,7 +76,6 @@ pub(in super::super) fn derive_active_collective_public_a_limb_v1(
     prepare_active_collective_public_a_v1(profile, roster, cpk_transcript_digest)?
         .derive_limb_inner_v1(limb, None)
 }
-
 impl ZkAmsMkhePreparedCollectivePublicAContextV1 {
     /// Derive one byte-identical native limb while charging every accepted or
     /// rejected SHAKE candidate to the shared whole-worker budget.
@@ -93,7 +86,6 @@ impl ZkAmsMkhePreparedCollectivePublicAContextV1 {
     ) -> Result<Vec<u64>, ZkAmsMkheCpkRelationErrorV1> {
         self.derive_limb_inner_v1(limb, Some(remaining_candidates))
     }
-
     fn derive_limb_inner_v1(
         &self,
         limb: usize,
@@ -141,7 +133,6 @@ impl ZkAmsMkhePreparedCollectivePublicAContextV1 {
         Ok(coefficients)
     }
 }
-
 fn validate_profile_digest_axis_v1(
     profile_digest: [u8; 32],
     roster_profile_digest: [u8; 32],
@@ -151,7 +142,6 @@ fn validate_profile_digest_axis_v1(
     }
     Ok(())
 }
-
 fn consume_common_a_candidate_budget_v1(
     remaining_candidates: &mut u64,
 ) -> Result<(), ZkAmsMkheCpkRelationErrorV1> {
@@ -160,11 +150,9 @@ fn consume_common_a_candidate_budget_v1(
         .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn common_a_candidate_budget_accepts_boundary_and_rejects_one_over() {
         let mut remaining = 1_u64;
@@ -176,7 +164,6 @@ mod tests {
         );
         assert_eq!(remaining, 0);
     }
-
     #[test]
     fn prepared_common_a_rejects_mismatched_profile_axis() {
         assert_eq!(

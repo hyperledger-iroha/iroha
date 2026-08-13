@@ -11,7 +11,6 @@ fn kaigi_typed_routes_document_dual_responses() {
         "X-Iroha-Operator-Nonce".to_owned(),
         "X-Iroha-Operator-Signature".to_owned(),
     ]);
-
     for path in [
         "/v1/kaigi/relays",
         "/v1/kaigi/relays/{relay_id}",
@@ -69,7 +68,6 @@ fn kaigi_typed_routes_document_dual_responses() {
         assert!(content.contains_key("application/json"));
         assert!(content.contains_key("application/x-norito"));
     }
-
     let schemas = doc
         .get("components")
         .and_then(Value::as_object)

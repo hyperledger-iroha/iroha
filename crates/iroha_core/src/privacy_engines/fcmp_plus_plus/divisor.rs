@@ -6,36 +6,28 @@
 //! and are reduced by `y² = x³ + a·x + b` after every multiplication; this is
 //! substantially smaller than a general multivariate-polynomial engine while
 //! producing the same canonical normalized divisor.
-
-use std::collections::{BTreeMap, BTreeSet};
-
-use curve25519_dalek::edwards::EdwardsPoint;
-use zeroize::{Zeroize, Zeroizing};
-
 use super::{
     FcmpNativeErrorV1,
     field::{Field25519, HeliosPoint, SelenePoint, edwards_to_wei25519},
     proof_math::ProofScalar,
 };
-
+use curve25519_dalek::edwards::EdwardsPoint;
+use std::collections::{BTreeMap, BTreeSet};
+use zeroize::{Zeroize, Zeroizing};
 struct SecretDecompositionScalarV1<F: ProofScalar>(F);
-
 impl<F: ProofScalar> SecretDecompositionScalarV1<F> {
     fn expose_copy(&self) -> F {
         self.0
     }
-
     fn expose_mut(&mut self) -> &mut F {
         &mut self.0
     }
 }
-
 impl<F: ProofScalar> Drop for SecretDecompositionScalarV1<F> {
     fn drop(&mut self) {
         self.0.clear_secret();
     }
 }
-
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct NormalizedDivisor<F: ProofScalar> {
     pub(super) y: F,
@@ -44,7 +36,6 @@ pub(super) struct NormalizedDivisor<F: ProofScalar> {
     pub(super) x: Vec<F>,
     pub(super) zero: F,
 }
-
 impl<F: ProofScalar> Zeroize for NormalizedDivisor<F> {
     fn zeroize(&mut self) {
         self.y.clear_secret();
@@ -59,13 +50,11 @@ impl<F: ProofScalar> Zeroize for NormalizedDivisor<F> {
         self.zero.clear_secret();
     }
 }
-
 impl<F: ProofScalar> Drop for NormalizedDivisor<F> {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 impl<F: ProofScalar> NormalizedDivisor<F> {
     #[cfg(test)]
     pub(super) fn eval(&self, x: F, y: F) -> F {
@@ -83,7 +72,6 @@ impl<F: ProofScalar> NormalizedDivisor<F> {
         result
     }
 }
-
 /// Decompose a canonical nonzero scalar into exactly `scalar_bits`
 /// coefficients whose weighted sum represents the scalar and whose ordinary
 /// sum is also `scalar_bits`.
@@ -98,7 +86,6 @@ pub(super) fn scalar_decomposition<F: ProofScalar>(
     let scalar_bytes = Zeroizing::new((*scalar).encode());
     let minus_one = (-F::ONE).encode();
     let decomposition = scalar_decomposition_encoded(&scalar_bytes, &minus_one, scalar_bits)?;
-
     // Validate the two defining equations before using a secret-derived
     // decomposition to construct a large divisor.
     let mut represented = SecretDecompositionScalarV1(F::ZERO);
@@ -115,12 +102,10 @@ pub(super) fn scalar_decomposition<F: ProofScalar>(
     }
     Ok(decomposition)
 }
-
 pub(super) fn ed25519_scalar_decomposition(
     scalar: &curve25519_dalek::scalar::Scalar,
 ) -> Result<Zeroizing<Vec<u64>>, FcmpNativeErrorV1> {
     use curve25519_dalek::scalar::Scalar;
-
     let scalar_bytes = Zeroizing::new(scalar.to_bytes());
     let minus_one = (-Scalar::ONE).to_bytes();
     let decomposition = scalar_decomposition_encoded(&scalar_bytes, &minus_one, 253)?;
@@ -135,7 +120,6 @@ pub(super) fn ed25519_scalar_decomposition(
     }
     Ok(decomposition)
 }
-
 fn scalar_decomposition_encoded(
     scalar: &[u8; 32],
     minus_one: &[u8; 32],
@@ -151,14 +135,12 @@ fn scalar_decomposition_encoded(
     {
         return Err(FcmpNativeErrorV1::ScalarEncoding);
     }
-
     let bit = |bytes: &[u8; 32], index: usize| u64::from((bytes[index / 8] >> (index % 8)) & 1);
     let mut decomposition = Zeroizing::new(
         (0..scalar_bits)
             .map(|index| bit(scalar, index))
             .collect::<Vec<_>>(),
     );
-
     // The coefficient-rebalancing algorithm requires an integer larger than
     // the bit count.  For tiny scalars, add the field modulus as a
     // non-carried coefficient vector (`bits(-1) + 1`), preserving the value
@@ -174,10 +156,8 @@ fn scalar_decomposition_encoded(
         }
         decomposition[0] += 1;
     }
-
     let target = u64::try_from(scalar_bits).map_err(|_| FcmpNativeErrorV1::TreeFull)?;
     let mut sum = Zeroizing::new(decomposition.iter().sum::<u64>());
-
     // First lower an excessive coefficient sum without changing the
     // represented integer: `2·2^i -> 1·2^(i+1)`.
     let mut log2_bits = 0;
@@ -196,7 +176,6 @@ fn scalar_decomposition_encoded(
             }
         }
     }
-
     // Then raise a deficient coefficient sum by replacing the highest
     // nonzero `2^i` with two `2^(i-1)` terms.
     for _ in 0..scalar_bits {
@@ -216,7 +195,6 @@ fn scalar_decomposition_encoded(
     }
     Ok(decomposition)
 }
-
 pub(super) trait DivisorPoint<F: ProofScalar>: Copy + Eq {
     fn identity() -> Self;
     fn is_identity(self) -> bool;
@@ -225,80 +203,62 @@ pub(super) trait DivisorPoint<F: ProofScalar>: Copy + Eq {
     fn double(self) -> Self;
     fn coordinates(self) -> Result<(F, F), FcmpNativeErrorV1>;
 }
-
 impl DivisorPoint<Field25519> for EdwardsPoint {
     fn identity() -> Self {
         <EdwardsPoint as curve25519_dalek::traits::Identity>::identity()
     }
-
     fn is_identity(self) -> bool {
         self == <EdwardsPoint as curve25519_dalek::traits::Identity>::identity()
     }
-
     fn add(self, other: Self) -> Self {
         self + other
     }
-
     fn negate(self) -> Self {
         -self
     }
-
     fn double(self) -> Self {
         self + self
     }
-
     fn coordinates(self) -> Result<(Field25519, Field25519), FcmpNativeErrorV1> {
         edwards_to_wei25519(self.compress().to_bytes())
     }
 }
-
 impl DivisorPoint<Field25519> for HeliosPoint {
     fn identity() -> Self {
         HeliosPoint::identity()
     }
-
     fn is_identity(self) -> bool {
         HeliosPoint::is_identity(self)
     }
-
     fn add(self, other: Self) -> Self {
         HeliosPoint::add(self, other)
     }
-
     fn negate(self) -> Self {
         HeliosPoint::negate(self)
     }
-
     fn double(self) -> Self {
         HeliosPoint::double(self)
     }
-
     fn coordinates(self) -> Result<(Field25519, Field25519), FcmpNativeErrorV1> {
         HeliosPoint::coordinates(self).ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
     }
 }
-
 impl DivisorPoint<super::field::HelioseleneField> for SelenePoint {
     fn identity() -> Self {
         SelenePoint::identity()
     }
-
     fn is_identity(self) -> bool {
         SelenePoint::is_identity(self)
     }
-
     fn add(self, other: Self) -> Self {
         SelenePoint::add(self, other)
     }
-
     fn negate(self) -> Self {
         SelenePoint::negate(self)
     }
-
     fn double(self) -> Self {
         SelenePoint::double(self)
     }
-
     fn coordinates(
         self,
     ) -> Result<
@@ -311,14 +271,12 @@ impl DivisorPoint<super::field::HelioseleneField> for SelenePoint {
         SelenePoint::coordinates(self).ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
     }
 }
-
 #[derive(Clone, PartialEq, Eq)]
 struct ReducedPolynomial<F: ProofScalar> {
     // `(power of y, power of x) -> coefficient`; all stored y powers are
     // zero or one after reduction.
     terms: BTreeMap<(usize, usize), F>,
 }
-
 impl<F: ProofScalar> Drop for ReducedPolynomial<F> {
     fn drop(&mut self) {
         for coefficient in self.terms.values_mut() {
@@ -327,24 +285,20 @@ impl<F: ProofScalar> Drop for ReducedPolynomial<F> {
         self.terms.clear();
     }
 }
-
 impl<F: ProofScalar> ReducedPolynomial<F> {
     fn zero() -> Self {
         Self {
             terms: BTreeMap::new(),
         }
     }
-
     fn one() -> Self {
         Self::monomial((0, 0), F::ONE)
     }
-
     fn monomial(index: (usize, usize), coefficient: F) -> Self {
         let mut result = Self::zero();
         result.add_term(index, coefficient);
         result
     }
-
     fn add_term(&mut self, index: (usize, usize), coefficient: F) {
         if coefficient.is_zero() {
             return;
@@ -355,14 +309,12 @@ impl<F: ProofScalar> ReducedPolynomial<F> {
             self.terms.remove(&index);
         }
     }
-
     fn add(mut self, other: &Self) -> Self {
         for (index, coefficient) in &other.terms {
             self.add_term(*index, *coefficient);
         }
         self
     }
-
     fn scale(mut self, scalar: F) -> Self {
         if scalar.is_zero() {
             return Self::zero();
@@ -372,7 +324,6 @@ impl<F: ProofScalar> ReducedPolynomial<F> {
         }
         self
     }
-
     fn mul_mod(mut self, other: &Self, curve_a: F, curve_b: F) -> Result<Self, FcmpNativeErrorV1> {
         let mut result = Self::zero();
         for ((left_y, left_x), left) in core::mem::take(&mut self.terms) {
@@ -408,7 +359,6 @@ impl<F: ProofScalar> ReducedPolynomial<F> {
         }
         Ok(result)
     }
-
     /// Divide by an x-only polynomial. Each y coefficient is an independent
     /// univariate polynomial in x.
     fn div_rem_x(self, denominator: &Self) -> Result<(Self, Self), FcmpNativeErrorV1> {
@@ -431,7 +381,6 @@ impl<F: ProofScalar> ReducedPolynomial<F> {
             .collect::<BTreeSet<_>>();
         let mut quotient = Self::zero();
         let mut remainder = Self::zero();
-
         for y_power in y_powers {
             let mut row = self
                 .terms
@@ -466,7 +415,6 @@ impl<F: ProofScalar> ReducedPolynomial<F> {
         }
         Ok((quotient, remainder))
     }
-
     fn normalized(self) -> Result<NormalizedDivisor<F>, FcmpNativeErrorV1> {
         if self.terms.keys().any(|(y_power, _)| *y_power > 1) {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
@@ -521,7 +469,6 @@ impl<F: ProofScalar> ReducedPolynomial<F> {
         })
     }
 }
-
 fn line<F: ProofScalar, P: DivisorPoint<F>>(
     first: P,
     second: P,
@@ -535,7 +482,6 @@ fn line<F: ProofScalar, P: DivisorPoint<F>>(
         return Ok(ReducedPolynomial::monomial((0, 1), F::ONE)
             .add(&ReducedPolynomial::monomial((0, 0), -x)));
     }
-
     // For equal points, the line through P and -2P is tangent at P.
     let second = if first == second {
         first.double().negate()
@@ -553,7 +499,6 @@ fn line<F: ProofScalar, P: DivisorPoint<F>>(
         .add(&ReducedPolynomial::monomial((0, 1), -slope))
         .add(&ReducedPolynomial::monomial((0, 0), -intercept)))
 }
-
 fn new_divisor<F: ProofScalar, P: DivisorPoint<F>>(
     curve_a: F,
     curve_b: F,
@@ -569,7 +514,6 @@ fn new_divisor<F: ProofScalar, P: DivisorPoint<F>>(
     if !sum.is_identity() {
         return Err(FcmpNativeErrorV1::ArithmeticInvariant);
     }
-
     let mut divisors = Vec::with_capacity(points.len().div_ceil(2));
     let mut index = 0;
     while index < points.len() {
@@ -582,7 +526,6 @@ fn new_divisor<F: ProofScalar, P: DivisorPoint<F>>(
         ));
         index += 2;
     }
-
     while divisors.len() > 1 {
         let mut next = Vec::with_capacity(divisors.len().div_ceil(2));
         if divisors.len() % 2 == 1 {
@@ -623,7 +566,6 @@ fn new_divisor<F: ProofScalar, P: DivisorPoint<F>>(
         .map(|(_, _, divisor)| divisor)
         .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)
 }
-
 pub(super) fn scalar_mul_divisor<F: ProofScalar, P: DivisorPoint<F>>(
     curve_a: F,
     curve_b: F,
@@ -653,17 +595,14 @@ pub(super) fn scalar_mul_divisor<F: ProofScalar, P: DivisorPoint<F>>(
     }
     new_divisor(curve_a, curve_b, &points)?.normalized()
 }
-
 #[cfg(test)]
 mod tests {
-    use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
-
     use super::*;
     use crate::privacy_engines::fcmp_plus_plus::{
         field::{HelioseleneField, field25519_from_u64, helios_hash_initializer},
         proof_math::ProofPoint as _,
     };
-
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
     #[test]
     fn scalar_decompositions_preserve_value_and_fixed_weight() {
         for scalar in [
@@ -678,7 +617,6 @@ mod tests {
             assert_eq!(decomposition.len(), 253);
             assert_eq!(decomposition.iter().sum::<u64>(), 253);
         }
-
         for scalar in [
             HelioseleneField::ONE,
             HelioseleneField::from_u64(254),
@@ -693,7 +631,6 @@ mod tests {
         assert!(ed25519_scalar_decomposition(&Scalar::ZERO).is_err());
         assert!(scalar_decomposition(&HelioseleneField::ZERO, 255).is_err());
     }
-
     #[test]
     fn native_sparse_divisor_vanishes_at_scalar_mul_endpoints() {
         // A real 253-point FCMP divisor over Wei25519.
@@ -730,7 +667,6 @@ mod tests {
             let (x, y) = point.coordinates().expect("coordinates");
             assert!(divisor.eval(x, y).is_zero());
         }
-
         // Keep the cycle-curve implementation and point abstraction covered.
         let cycle_scalar = HelioseleneField::from_u64(9);
         let cycle_decomposition =

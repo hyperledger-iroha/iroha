@@ -6,7 +6,6 @@
 //! the still-missing hidden-mask opening relation.  The equation certificate
 //! binds both the implemented mechanics and the exact fail-closed mask-proof
 //! audit, so the release gate cannot be opened by stale coarse booleans.
-
 #[cfg(test)]
 use super::shake256;
 use super::{
@@ -15,12 +14,10 @@ use super::{
     phase23_mask_proof::zk_ams_phase23_mask_proof_audit_v1,
     terminal::zk_ams_phase3_terminal_implementation_v1,
 };
-
 const MAX_PHASE23_VECTOR_ELEMENTS_V1: usize = 1_048_576;
 const PHASE23_MAX_BATCH_SIZE_V1: u8 = 8;
 const PHASE23_ASSIGNMENT_COLUMNS_V1: u32 = 524_378;
 const PHASE23_CONSTRAINT_ROWS_V1: u32 = 1_048_576;
-
 const EQUATION_6_SCHEMA_V1: &[u8] =
     b"T=(AZ_acc)*(BZ_i)+(AZ_i)*(BZ_acc)-u_acc*(CZ_i)-u_i*(CZ_acc):componentwise:t256";
 const EQUATION_7_SCHEMA_V1: &[u8] = b"Tbar=G_T*r_T+H_T*T:additive-module-commitment:t256";
@@ -29,7 +26,6 @@ const EQUATIONS_9_10_SCHEMA_V1: &[u8] =
 const EQUATION_11_SCHEMA_V1: &[u8] =
     b"Ebar:=Ebar_acc+v*Tbar+v^2*Ebar_i|Wbar:=Wbar_acc+v*Wbar_i:t256";
 const PHASE3_CHECKER_SCHEMA_V1: &[u8] = b"padding-fold:fixed-governed-instance|C1:commitment-openings+(AZ)*(BZ)=u*(CZ)+E|C2:transcript+padding+terminal-proof";
-
 /// Fixed public material from which one folding challenge is derived.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,7 +49,6 @@ pub struct ZkAmsPhase23ChallengeContextV1 {
     /// One-based fold index in the canonical ordered batch.
     pub fold_index: u8,
 }
-
 /// Digestible closure state for the Phase-II/III algebraic obligations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase23EquationCertificateV1 {
@@ -96,7 +91,6 @@ pub struct ZkAmsPhase23EquationCertificateV1 {
     /// Digest of the complete hidden-mask proof audit and its blockers.
     pub hidden_mask_proof_audit_digest: [u8; 32],
 }
-
 impl ZkAmsPhase23EquationCertificateV1 {
     /// Return true only when every encrypted and finalization obligation is
     /// implemented in addition to the shared native algebra.
@@ -114,7 +108,6 @@ impl ZkAmsPhase23EquationCertificateV1 {
             && digest_is_nonzero(self.hidden_mask_proof_audit_digest)
     }
 }
-
 const fn digest_is_nonzero(digest: [u8; 32]) -> bool {
     let mut index = 0;
     while index < digest.len() {
@@ -125,7 +118,6 @@ const fn digest_is_nonzero(digest: [u8; 32]) -> bool {
     }
     false
 }
-
 /// Return a digestible description of the exact shared algebra, implemented
 /// mechanics, and fail-closed hidden-mask proof gate.
 #[must_use]
@@ -171,7 +163,6 @@ pub fn zk_ams_phase23_equation_certificate_v1() -> ZkAmsPhase23EquationCertifica
         hidden_mask_proof_audit_digest,
     }
 }
-
 /// Return the consensus digest of the shared algebra and every open closure bit.
 #[must_use]
 pub fn zk_ams_phase23_equation_certificate_digest_v1() -> [u8; 32] {
@@ -201,7 +192,6 @@ pub fn zk_ams_phase23_equation_certificate_digest_v1() -> [u8; 32] {
     frame.extend_from_slice(&certificate.hidden_mask_proof_audit_digest);
     keccak256(&frame)
 }
-
 /// Evaluate the exact Equation (6) cross term component-wise.
 #[allow(
     clippy::too_many_arguments,
@@ -235,7 +225,6 @@ pub fn zk_ams_phase23_cross_term_v1(
     }
     Ok(cross_term)
 }
-
 /// Fold a level-zero vector as `accumulated + challenge * incoming`.
 pub fn zk_ams_phase23_fold_linear_v1(
     accumulated: &[Scalar],
@@ -251,7 +240,6 @@ pub fn zk_ams_phase23_fold_linear_v1(
         .map(|(left, right)| left + challenge * right)
         .collect())
 }
-
 /// Fold a level-one vector as
 /// `accumulated + challenge * cross_term + challenge^2 * incoming`.
 pub fn zk_ams_phase23_fold_quadratic_v1(
@@ -273,7 +261,6 @@ pub fn zk_ams_phase23_fold_quadratic_v1(
         })
         .collect())
 }
-
 /// Derive the full-field Equation (8) challenge from a fixed-width frame.
 #[cfg(test)]
 pub fn zk_ams_phase23_challenge_v1(
@@ -313,7 +300,6 @@ pub fn zk_ams_phase23_challenge_v1(
     require_nondegenerate_challenge(challenge)?;
     Ok(challenge)
 }
-
 fn require_same_nonzero_length(vectors: &[&[Scalar]]) -> Result<usize, ZkAmsMkheErrorV1> {
     let Some(first) = vectors.first() else {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
@@ -327,22 +313,18 @@ fn require_same_nonzero_length(vectors: &[&[Scalar]]) -> Result<usize, ZkAmsMkhe
     }
     Ok(length)
 }
-
 fn require_nondegenerate_challenge(challenge: Scalar) -> Result<(), ZkAmsMkheErrorV1> {
     if challenge.is_zero() {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     fn challenge_context() -> ZkAmsPhase23ChallengeContextV1 {
         ZkAmsPhase23ChallengeContextV1 {
             batch_id: [1; 32],
@@ -356,7 +338,6 @@ mod tests {
             fold_index: 2,
         }
     }
-
     #[test]
     fn equations_6_9_10_and_11_match_independent_scalar_expansion() {
         let az_acc = [s(2), s(3), s(5)];
@@ -384,7 +365,6 @@ mod tests {
                     - s(71) * cz_acc[index]
             );
         }
-
         let challenge = s(73);
         assert_eq!(
             zk_ams_phase23_fold_linear_v1(&az_acc, &az_in, challenge).unwrap(),
@@ -401,7 +381,6 @@ mod tests {
                 .collect::<Vec<_>>()
         );
     }
-
     #[test]
     fn every_challenge_binding_changes_equation_8_and_invalid_frames_fail_closed() {
         let baseline = challenge_context();
@@ -422,7 +401,6 @@ mod tests {
             }
             assert_ne!(zk_ams_phase23_challenge_v1(changed).unwrap(), expected);
         }
-
         for invalid in [
             ZkAmsPhase23ChallengeContextV1 {
                 batch_id: [0; 32],
@@ -443,7 +421,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn malformed_vector_shapes_and_zero_challenges_fail_before_arithmetic() {
         assert_eq!(
@@ -472,7 +449,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
     }
-
     #[test]
     fn equation_certificate_binds_implemented_mechanics_and_exact_mask_blockers() {
         let certificate = zk_ams_phase23_equation_certificate_v1();

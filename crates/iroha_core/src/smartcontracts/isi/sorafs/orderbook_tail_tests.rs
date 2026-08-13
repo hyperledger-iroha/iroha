@@ -1,5 +1,4 @@
 // Same-scope orderbook regressions extracted to keep the parent source budget bounded.
-
 #[test]
 fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomically() {
     let settlement = keypair(0x53);
@@ -32,7 +31,6 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
         .expect("settlement lock")
         .custody
         .clone();
-
     let configured_asset = stx.gov.sorafs_pin_fee_asset_id.clone();
     stx.gov.sorafs_pin_fee_asset_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("sorafs", "universal").expect("settlement domain"),
@@ -44,7 +42,6 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
             .is_err()
     );
     stx.gov.sorafs_pin_fee_asset_id = configured_asset;
-
     stx.world
         .asset_escrows
         .get_mut(&escrow_id)
@@ -55,7 +52,6 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
             .execute(&authority, &mut stx)
             .is_err()
     );
-
     stx.world
         .asset_escrows
         .get_mut(&escrow_id)
@@ -71,7 +67,6 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
             .execute(&authority, &mut stx)
             .is_err()
     );
-
     {
         let escrow = stx
             .world
@@ -86,7 +81,6 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
             .execute(&authority, &mut stx)
             .is_err()
     );
-
     stx.world
         .asset_escrows
         .get_mut(&escrow_id)
@@ -103,7 +97,6 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
         .get_mut(&escrow_id)
         .expect("settlement lock")
         .expires_at_ms = Some((NOW + 100) * 1_000);
-
     stx.world
         .provider_owners
         .remove(ProviderId::new([0x71; 32]));
@@ -136,7 +129,6 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
             .execute(&authority, &mut stx)
             .is_err()
     );
-
     stx.world
         .provider_owners
         .insert(ProviderId::new([0x71; 32]), provider_id.clone());
@@ -168,7 +160,6 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
             .is_none()
     );
     assert_no_receipt_status_mutation(&stx);
-
     seed_test_call_hash(&mut stx, 0xA7);
     RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
         .execute(&authority, &mut stx)
@@ -182,7 +173,6 @@ fn receipt_rejects_misauthorized_expired_unregistered_and_untraced_locks_atomica
         candidate.fee_amount.clone().into_quantity()
     );
 }
-
 #[test]
 fn receipt_without_funded_lock_fails_closed() {
     let settlement = keypair(0x4A);
@@ -206,7 +196,6 @@ fn receipt_without_funded_lock_fails_closed() {
         &candidate,
         1_000,
     );
-
     assert!(
         RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
             .execute(&authority, &mut stx)
@@ -224,7 +213,6 @@ fn receipt_without_funded_lock_fails_closed() {
     );
     assert_no_receipt_status_mutation(&stx);
 }
-
 #[test]
 fn receipt_overdraw_rejects_without_asset_or_audit_mutation() {
     let settlement = keypair(0x4B);
@@ -257,7 +245,6 @@ fn receipt_overdraw_rejects_without_asset_or_audit_mutation() {
         .expect("settlement lock")
         .custody
         .clone();
-
     assert!(
         RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
             .execute(&authority, &mut stx)
@@ -286,7 +273,6 @@ fn receipt_overdraw_rejects_without_asset_or_audit_mutation() {
     );
     assert_no_receipt_status_mutation(&stx);
 }
-
 #[test]
 fn receipt_destination_overflow_rejects_without_partial_fee_or_custody_mutation() {
     let settlement = keypair(0x4F);
@@ -345,7 +331,6 @@ fn receipt_destination_overflow_rejects_without_partial_fee_or_custody_mutation(
     stx.world
         .assets
         .insert(provider_asset_id, provider_asset_value);
-
     assert!(
         RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
             .execute(&authority, &mut stx)
@@ -374,7 +359,6 @@ fn receipt_destination_overflow_rejects_without_partial_fee_or_custody_mutation(
     );
     assert_no_receipt_status_mutation(&stx);
 }
-
 #[test]
 fn corrupted_authoritative_state_fails_closed_before_new_mutation() {
     let buyer = keypair(0x51);
@@ -387,7 +371,6 @@ fn corrupted_authoritative_state_fails_closed_before_new_mutation() {
     stx.world
         .smart_contract_state
         .insert(order_key(order.order_id), vec![0xFF; 16]);
-
     assert!(
         SubmitSorafsOrderbookOrder::new(encode(&order), policy_digest)
             .execute(&authority, &mut stx)
@@ -415,7 +398,6 @@ fn corrupted_authoritative_state_fails_closed_before_new_mutation() {
         "typed listings must fail closed on corrupt committed records"
     );
 }
-
 #[test]
 fn missing_or_corrupt_status_fails_closed_before_order_mutation() {
     let buyer = keypair(0x57);
@@ -425,7 +407,6 @@ fn missing_or_corrupt_status_fails_closed_before_order_mutation() {
     let mut stx = block.transaction();
     let policy_digest = activate_policy(&mut stx, &authority);
     let order = order(&buyer, 1);
-
     stx.world.smart_contract_state.remove(status_key().clone());
     assert!(
         SubmitSorafsOrderbookOrder::new(encode(&order), policy_digest)
@@ -442,7 +423,6 @@ fn missing_or_corrupt_status_fails_closed_before_order_mutation() {
             .expect("read nonce")
             .is_none()
     );
-
     let corrupt = OrderbookLedgerStatusV1 {
         open_orders: 0,
         partially_filled_orders: 0,
@@ -479,7 +459,6 @@ fn missing_or_corrupt_status_fails_closed_before_order_mutation() {
             .expect("read nonce")
             .is_none()
     );
-
     let saturated = OrderbookLedgerStatusV1 {
         open_orders: u64::MAX,
         partially_filled_orders: 0,
@@ -517,7 +496,6 @@ fn missing_or_corrupt_status_fails_closed_before_order_mutation() {
             .is_none()
     );
 }
-
 #[test]
 fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget() {
     let settlement = keypair(0x2C);
@@ -527,10 +505,8 @@ fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget()
     let buyer_id = account(&buyer);
     let provider_id = account(&provider);
     let mut state = state_with_accounts(&[&settlement, &buyer, &provider]);
-
     transact(&mut state, 1, NOW, |transaction| {
         let policy_digest = activate_policy(transaction, &authority);
-
         let fixture_provider_id = ProviderId::new([0x72; 32]);
         transaction
             .world
@@ -573,7 +549,6 @@ fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget()
                 .smart_contract_state
                 .insert(order_key(record.order_id), encode(&record));
         }
-
         let first_receipt = receipt(&provider, 1, 0, 8, 0, 10);
         let second_receipt = receipt(&provider, 2, 0, 8, 10, 20);
         let other_channel_receipt = receipt(&provider, 3, 0, 9, 0, 10);
@@ -593,7 +568,6 @@ fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget()
             &other_channel_receipt,
             1_000,
         );
-
         let mut channel_ids = [first_receipt.channel_id, other_channel_receipt.channel_id];
         channel_ids.sort_unstable();
         let closed_channel_id = channel_ids[1];
@@ -609,7 +583,6 @@ fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget()
             .world
             .smart_contract_state
             .insert(channel_key(closed_channel_id), encode(&closed_channel));
-
         let receipt_index = OrderbookSettlementIndexRecord {
             channel_id: first_receipt.channel_id,
             trade_id: first_receipt.trade_id,
@@ -650,7 +623,6 @@ fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget()
         Ok(())
     })
     .expect("commit sparse filtered-query fixture");
-
     let view = state.view();
     let finalized_cursor =
         resolve_finalized_cursor(&view).expect("resolve committed fixture cursor");
@@ -658,7 +630,6 @@ fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget()
         max_inspected_records: 1,
         max_read_bytes: ORDERBOOK_QUERY_MAX_READ_BYTES_V1,
     };
-
     let mut order_budget = OrderbookQueryScanBudgetV1::new(test_limits);
     assert_eq!(
         query_order_page_with_budget(
@@ -671,7 +642,6 @@ fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget()
             "SoraFS orderbook order page query exceeded inspected-record budget 1".to_owned()
         ))
     );
-
     let mut receipt_budget = OrderbookQueryScanBudgetV1::new(test_limits);
     assert_eq!(
         query_receipt_page_with_budget(
@@ -684,7 +654,6 @@ fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget()
             "SoraFS orderbook receipt page query exceeded inspected-record budget 1".to_owned()
         ))
     );
-
     let mut channel_budget = OrderbookQueryScanBudgetV1::new(test_limits);
     assert_eq!(
         query_channel_page_with_budget(

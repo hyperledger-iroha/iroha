@@ -1,13 +1,10 @@
 //! Tests for instruction implementations
-
 use iroha_data_model::{
     isi::{BuiltInInstruction, register::RegisterPeerWithPop, rwa::*},
     prelude::*,
 };
 use norito::codec::Encode;
-
 fn assert_instruction<T: Instruction + BuiltInInstruction + Clone + Encode + 'static>() {}
-
 #[test]
 fn built_in_instructions_implement_traits() {
     macro_rules! check {
@@ -15,7 +12,6 @@ fn built_in_instructions_implement_traits() {
             $(assert_instruction::<$ty>();)*
         };
     }
-
     check!(
         SetKeyValue<Domain>,
         SetKeyValue<AssetDefinition>,

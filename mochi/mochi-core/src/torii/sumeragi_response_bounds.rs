@@ -5,7 +5,6 @@ const MAX_QUERY_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_STATUS_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_METRICS_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SUMERAGI_OPERATOR_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
-
 async fn read_bounded_response(
     mut response: Response,
     maximum: usize,
@@ -40,7 +39,6 @@ async fn read_bounded_response(
     }
     Ok(body)
 }
-
 async fn read_bounded_sumeragi_response(response: Response) -> ToriiResult<Vec<u8>> {
     read_bounded_response(
         response,

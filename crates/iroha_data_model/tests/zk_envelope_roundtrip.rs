@@ -1,6 +1,5 @@
 //! Norito and JSON roundtrip tests for ZK envelope types.
 use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
-
 #[test]
 fn norito_roundtrip_open_verify_envelope() {
     let mut vk = [0u8; 32];
@@ -20,7 +19,6 @@ fn norito_roundtrip_open_verify_envelope() {
     let got = norito::core::NoritoDeserialize::deserialize(archived);
     assert_eq!(got, env);
 }
-
 #[test]
 fn json_roundtrip_open_verify_envelope() {
     let env = OpenVerifyEnvelope::new(

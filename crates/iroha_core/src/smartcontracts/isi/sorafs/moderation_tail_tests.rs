@@ -1,5 +1,4 @@
 // Same-scope moderation regressions extracted to keep the parent source budget bounded.
-
 #[test]
 fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
     let mut fixture = PanelFixture::new();
@@ -22,7 +21,6 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
             .is_err()
     );
     assert_eq!(fixture.appeal().eligible_jurors.len(), 0);
-
     fixture.register_juror();
     let proof = proof_for_appeal(&fixture.appeal());
     assert!(
@@ -158,7 +156,6 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
         fixture.appeal().status,
         ModerationAppealStatusV1::RegisteringJurors
     );
-
     let sortition_digest = fixture.finalize_single_juror_sortition();
     assert!(
         fixture
@@ -303,7 +300,6 @@ fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
         sorafs_moderation_panel_roster_hash_v1(&case.spec.jurors, 1)
     );
 }
-
 #[test]
 fn insufficient_pool_and_no_show_failover_exhaustion_are_terminal() {
     let mut insufficient = PanelFixture::new();
@@ -347,7 +343,6 @@ fn insufficient_pool_and_no_show_failover_exhaustion_are_terminal() {
             })
             .is_err()
     );
-
     let mut no_show = PanelFixture::new();
     no_show.submit(1, 0, 1);
     no_show.register_juror();
@@ -390,7 +385,6 @@ fn insufficient_pool_and_no_show_failover_exhaustion_are_terminal() {
     assert_eq!(status.failed_panel_formations, 1);
     assert_eq!(status.open_cases, 0);
 }
-
 #[test]
 fn primary_no_show_uses_next_unique_waitlist_juror_atomically() {
     let mut fixture = PanelFixture::new();
@@ -522,7 +516,6 @@ fn primary_no_show_uses_next_unique_waitlist_juror_atomically() {
         1
     );
 }
-
 #[test]
 fn later_pop_revocation_rotation_does_not_rewrite_or_brick_admitted_snapshot() {
     let mut fixture = PanelFixture::new();
@@ -607,7 +600,6 @@ fn later_pop_revocation_rotation_does_not_rewrite_or_brick_admitted_snapshot() {
         1
     );
 }
-
 #[test]
 fn committed_event_pages_resolve_final_hashes_and_enforce_exact_cursors() {
     let mut fixture = Fixture::new(2);
@@ -633,7 +625,6 @@ fn committed_event_pages_resolve_final_hashes_and_enforce_exact_cursors() {
                 .execute(&juror1, transaction)
         })
         .expect("commit two moderation events in one block");
-
     let view = fixture.state.view();
     let anchor = resolve_finalized_cursor(&view).expect("resolve finalized moderation anchor");
     assert_eq!(anchor.height, 2);
@@ -658,7 +649,6 @@ fn committed_event_pages_resolve_final_hashes_and_enforce_exact_cursors() {
     );
     assert!(first.has_more);
     let continuation = first.next_after.expect("continuation cursor");
-
     let second = FindSorafsModerationEvents::new(anchor, Some(continuation), 2)
         .execute(&view)
         .expect("read second committed-event page");
@@ -674,7 +664,6 @@ fn committed_event_pages_resolve_final_hashes_and_enforce_exact_cursors() {
     assert!(exhausted.events.is_empty());
     assert!(!exhausted.has_more);
     assert!(exhausted.next_after.is_none());
-
     let mut tampered_after = continuation;
     tampered_after.block_hash[0] ^= 0xFF;
     assert!(matches!(
@@ -698,7 +687,6 @@ fn committed_event_pages_resolve_final_hashes_and_enforce_exact_cursors() {
             .is_err()
     );
 }
-
 #[test]
 fn snapshot_rebuilds_complete_chain_projection_in_logical_order() {
     let mut fixture = PanelFixture::new();
@@ -716,7 +704,6 @@ fn snapshot_rebuilds_complete_chain_projection_in_logical_order() {
             SubmitSorafsModerationAppeal::new(a_intake).execute(&appellant, transaction)
         })
         .expect("submit a appeal");
-
     let view = fixture.state.view();
     let snapshot = FindSorafsModerationSnapshot::new(8, 16)
         .execute(&view)
@@ -753,7 +740,6 @@ fn snapshot_rebuilds_complete_chain_projection_in_logical_order() {
             .is_err(),
         "a complete snapshot must fail instead of truncating cases"
     );
-
     let appeal = snapshot.appeals[0].appeal.clone();
     drop(view);
     fixture.state.world.smart_contract_state.insert(
@@ -767,14 +753,12 @@ fn snapshot_rebuilds_complete_chain_projection_in_logical_order() {
         "a mismatched persisted key must fail the complete projection"
     );
 }
-
 #[test]
 fn snapshot_includes_all_eligibility_and_latest_typed_events() {
     let mut fixture = PanelFixture::new();
     fixture.submit(1, 0, 1);
     fixture.register_juror();
     fixture.finalize_single_juror_sortition();
-
     let snapshot = FindSorafsModerationSnapshot::new(8, 16)
         .execute(&fixture.state.view())
         .expect("rebuild eligibility-bearing moderation snapshot");
@@ -791,7 +775,6 @@ fn snapshot_includes_all_eligibility_and_latest_typed_events() {
         Some(4)
     );
 }
-
 #[test]
 fn journal_rejects_missing_committed_parent_and_orphan_records() {
     let manager_pair = keypair(0xA1);
@@ -801,7 +784,6 @@ fn journal_rejects_missing_committed_parent_and_orphan_records() {
         SetSorafsModerationPolicy::new(policy()).execute(&manager, transaction)
     })
     .expect("write initial policy event");
-
     let active = FindSorafsModerationPolicy
         .execute(&state.view())
         .expect("active policy");
@@ -823,7 +805,6 @@ fn journal_rejects_missing_committed_parent_and_orphan_records() {
             .revision,
         1
     );
-
     state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(1, OPENED_AT)));
     let (head, terminal) = {
         let view = state.view();
@@ -854,7 +835,6 @@ fn journal_rejects_missing_committed_parent_and_orphan_records() {
         "event records beyond the journal head must fail closed"
     );
 }
-
 #[test]
 fn snapshot_budget_fails_closed_at_record_and_byte_ceilings() {
     let key = StatePath::from_str("moderation_budget_probe").expect("bounded probe key");
@@ -863,7 +843,6 @@ fn snapshot_budget_fails_closed_at_record_and_byte_ceilings() {
         encoded_bytes: MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
     };
     assert!(byte_budget.charge(&key, &[0x01]).is_err());
-
     let mut record_budget = ModerationSnapshotReadBudget {
         records: MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1,
         encoded_bytes: 0,

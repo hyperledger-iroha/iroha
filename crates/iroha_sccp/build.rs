@@ -1,7 +1,5 @@
 //! Captures exact compiler inputs for the signed SCCP validator-build identity.
-
 use std::{env, process::Command};
-
 fn canonical_build_value(value: &str) -> bool {
     !value.is_empty()
         && value.is_ascii()
@@ -10,10 +8,8 @@ fn canonical_build_value(value: &str) -> bool {
             .bytes()
             .all(|byte| byte == b' ' || (0x21..=0x7e).contains(&byte))
 }
-
 fn main() {
     println!("cargo:rerun-if-env-changed=RUSTC");
-
     let rustc = env::var_os("RUSTC").expect("Cargo must provide RUSTC to the SCCP build script");
     let output = Command::new(rustc)
         .arg("--version")
@@ -24,7 +20,6 @@ fn main() {
         .expect("rustc --version must be UTF-8")
         .trim()
         .to_owned();
-
     let target = env::var("TARGET").expect("Cargo must provide the exact target triple");
     let profile = env::var("PROFILE").expect("Cargo must provide the exact build profile");
     let mut features = env::vars()
@@ -41,7 +36,6 @@ fn main() {
     features.sort_unstable();
     features.dedup();
     let features = features.join(",");
-
     for (name, value) in [
         ("IROHA_SCCP_BUILD_TARGET", target),
         ("IROHA_SCCP_BUILD_PROFILE", profile),

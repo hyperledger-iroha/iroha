@@ -1,5 +1,4 @@
 //! Concrete syntax node and token kinds.
-
 /// Kotodama concrete syntax kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SyntaxKind {
@@ -77,7 +76,6 @@ pub enum SyntaxKind {
     ForStmt,
     /// Tokens skipped during recovery.
     ErrorNode,
-
     /// Spaces, newlines, or other Unicode whitespace.
     Whitespace,
     /// `//` comment.
@@ -100,7 +98,6 @@ pub enum SyntaxKind {
     Missing,
     /// End of file.
     Eof,
-
     /// `fn`.
     KwFn,
     /// `let`.
@@ -224,7 +221,6 @@ pub enum SyntaxKind {
     /// `#`.
     Hash,
 }
-
 impl SyntaxKind {
     /// Return whether the kind is source trivia.
     #[must_use]
@@ -234,7 +230,6 @@ impl SyntaxKind {
             Self::Whitespace | Self::LineComment | Self::BlockComment
         )
     }
-
     /// Return whether the kind begins a source-unit item.
     #[must_use]
     pub const fn starts_item(self) -> bool {
@@ -253,7 +248,6 @@ impl SyntaxKind {
                 | Self::Hash
         )
     }
-
     /// Return whether the kind is a unary prefix operator.
     #[must_use]
     pub const fn is_prefix_operator(self) -> bool {

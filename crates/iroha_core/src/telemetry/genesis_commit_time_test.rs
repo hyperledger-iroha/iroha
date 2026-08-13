@@ -1,5 +1,4 @@
 // Genesis commit-time coverage for mock-clock advancement.
-
 #[test]
 fn genesis_commit_time_is_zero() {
     let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1500));
@@ -13,9 +12,7 @@ fn genesis_commit_time_is_zero() {
         creation_time_ms,
         0,
     );
-
     time_handle.advance(Duration::from_secs(12));
     let report = BlockCommitReport::new(&header, &time_source);
-
     assert_eq!(report.commit_time, Duration::ZERO)
 }

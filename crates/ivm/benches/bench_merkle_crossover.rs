@@ -2,7 +2,6 @@
 //! Measures CPU-only vs auto-accelerated root computation across sizes.
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use ivm::{ByteMerkleTree, MerkleTree};
-
 fn make_data(leaves: usize, chunk: usize) -> Vec<u8> {
     // Deterministic non-zero pattern to avoid zero-fast-paths
     let mut v = vec![0u8; leaves * chunk];
@@ -12,7 +11,6 @@ fn make_data(leaves: usize, chunk: usize) -> Vec<u8> {
     }
     v
 }
-
 fn bench_merkle_crossover(c: &mut Criterion) {
     let chunk = 32usize;
     let mut group = c.benchmark_group("merkle_crossover");
@@ -22,7 +20,6 @@ fn bench_merkle_crossover(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(bytes as u64));
         let id_cpu = BenchmarkId::new("cpu", leaves);
         let id_auto = BenchmarkId::new("auto", leaves);
-
         group.bench_function(id_cpu, |b| {
             b.iter_batched(
                 || make_data(leaves, chunk),
@@ -38,7 +35,6 @@ fn bench_merkle_crossover(c: &mut Criterion) {
                 BatchSize::LargeInput,
             )
         });
-
         group.bench_function(id_auto, |b| {
             b.iter_batched(
                 || make_data(leaves, chunk),
@@ -53,6 +49,5 @@ fn bench_merkle_crossover(c: &mut Criterion) {
     }
     group.finish();
 }
-
 criterion_group!(benches, bench_merkle_crossover);
 criterion_main!(benches);

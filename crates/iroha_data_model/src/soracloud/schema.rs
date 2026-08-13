@@ -1,7 +1,6 @@
 const SORA_STORAGE_BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
 const SORA_NETWORK_BYTES_PER_MIB: u64 = 1024 * 1024;
 const SORA_HTTP_SERVICE_QUOTA_CLASS_TAIRA_OPEN: &str = "taira-open";
-
 #[allow(clippy::struct_field_names)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SoraHttpServiceQuotaClassPolicy {
@@ -13,7 +12,6 @@ struct SoraHttpServiceQuotaClassPolicy {
     max_tasks: u16,
     max_total_lease_volume_bytes: u64,
 }
-
 const TAIRA_OPEN_HTTP_SERVICE_QUOTA_POLICY: SoraHttpServiceQuotaClassPolicy =
     SoraHttpServiceQuotaClassPolicy {
         max_replicas: 4,
@@ -24,14 +22,12 @@ const TAIRA_OPEN_HTTP_SERVICE_QUOTA_POLICY: SoraHttpServiceQuotaClassPolicy =
         max_tasks: 1_024,
         max_total_lease_volume_bytes: 512 * SORA_STORAGE_BYTES_PER_GIB,
     };
-
 fn http_service_quota_class_policy(quota_class: &str) -> Option<SoraHttpServiceQuotaClassPolicy> {
     match quota_class {
         SORA_HTTP_SERVICE_QUOTA_CLASS_TAIRA_OPEN => Some(TAIRA_OPEN_HTTP_SERVICE_QUOTA_POLICY),
         _ => None,
     }
 }
-
 /// Validation errors returned by `Soracloud` manifest helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SoracloudManifestError {
@@ -106,7 +102,6 @@ pub enum SoracloudManifestError {
         asset: String,
     },
 }
-
 fn validate_schema_version(
     manifest: &'static str,
     found: u16,
@@ -121,7 +116,6 @@ fn validate_schema_version(
     }
     Ok(())
 }
-
 fn validate_nonblank_field(
     manifest: &'static str,
     field: &'static str,
@@ -132,7 +126,6 @@ fn validate_nonblank_field(
     }
     Ok(())
 }
-
 fn validate_optional_nonempty(
     manifest: &'static str,
     field: &'static str,
@@ -143,7 +136,6 @@ fn validate_optional_nonempty(
     }
     Ok(())
 }
-
 fn invalid_field(
     manifest: &'static str,
     field: &'static str,
@@ -155,7 +147,6 @@ fn invalid_field(
         reason: reason.to_owned(),
     }
 }
-
 /// Runtime expected by the container manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -170,21 +161,18 @@ pub enum SoraContainerRuntimeV1 {
     /// Execute a Soracloud Inrou workload for hosted HTTP services.
     Inrou,
 }
-
 impl SoraContainerRuntimeV1 {
     /// Returns `true` when the runtime is the deterministic IVM plane.
     #[must_use]
     pub const fn is_deterministic(self) -> bool {
         matches!(self, Self::Ivm)
     }
-
     /// Returns `true` when the runtime targets the hosted HTTP service plane.
     #[must_use]
     pub const fn is_http_service_runtime(self) -> bool {
         matches!(self, Self::Inrou)
     }
 }
-
 /// Guest userspace profile expected by an Inrou VM image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -197,7 +185,6 @@ pub enum SoraInrouGuestOsV1 {
     #[default]
     DebianSlim,
 }
-
 /// Guest ISA profile admitted for an Inrou VM image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -213,7 +200,6 @@ pub enum SoraInrouGuestIsaV1 {
     #[cfg_attr(feature = "json", norito(rename = "aarch64"))]
     Aarch64,
 }
-
 impl SoraInrouGuestIsaV1 {
     /// Canonical JSON/object-key label for the guest ISA profile.
     #[must_use]
@@ -223,7 +209,6 @@ impl SoraInrouGuestIsaV1 {
             Self::Aarch64 => "aarch64",
         }
     }
-
     /// Parse a canonical guest ISA label from JSON/object-key text.
     #[must_use]
     pub fn parse_key(value: &str) -> Option<Self> {
@@ -234,7 +219,6 @@ impl SoraInrouGuestIsaV1 {
         }
     }
 }
-
 /// Runtime backend used to materialize an Inrou hosted HTTP replica.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -248,7 +232,6 @@ pub enum SoraInrouRuntimeBackendV1 {
     /// Linux/KVM-accelerated Firecracker fast path.
     FirecrackerKvm,
 }
-
 /// CDN-like distribution target for Soracloud-published artifacts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -263,7 +246,6 @@ pub enum SoraArtifactDistributionTargetV1 {
     /// Prefer hosts tagged with one of the requested geographies.
     Geographies(BTreeSet<String>),
 }
-
 impl SoraArtifactDistributionTargetV1 {
     /// Validate the distribution target labels.
     ///
@@ -292,7 +274,6 @@ impl SoraArtifactDistributionTargetV1 {
         }
     }
 }
-
 /// Reusable policy for publishing artifacts to Soracloud host storage.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -310,7 +291,6 @@ pub struct SoraArtifactDistributionPolicyV1 {
     #[norito(default = "default_true")]
     pub fallback_to_low_latency_when_geography_unknown: bool,
 }
-
 impl Default for SoraArtifactDistributionPolicyV1 {
     fn default() -> Self {
         Self {
@@ -320,7 +300,6 @@ impl Default for SoraArtifactDistributionPolicyV1 {
         }
     }
 }
-
 impl SoraArtifactDistributionPolicyV1 {
     /// Validate the distribution policy.
     ///
@@ -330,7 +309,6 @@ impl SoraArtifactDistributionPolicyV1 {
         self.target.validate("target")
     }
 }
-
 /// Immutable `SoraFS` artifact reference used to hydrate Inrou guest images.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -349,7 +327,6 @@ pub struct SoraPublishedInrouGuestImageArtifactV1 {
     #[norito(default)]
     pub distribution: SoraArtifactDistributionPolicyV1,
 }
-
 impl SoraPublishedInrouGuestImageArtifactV1 {
     /// Validate the immutable artifact reference.
     ///
@@ -383,7 +360,6 @@ impl SoraPublishedInrouGuestImageArtifactV1 {
         self.distribution.validate()
     }
 }
-
 /// Guest-image member paths for one admitted Inrou ISA profile.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
@@ -402,14 +378,12 @@ pub struct SoraInrouGuestImageV1 {
     #[norito(default)]
     pub published_artifact: Option<SoraPublishedInrouGuestImageArtifactV1>,
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for SoraInrouGuestImageV1 {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
         let value = Value::json_deserialize(parser)?;
         Self::json_from_value(&value)
     }
-
     fn json_from_value(value: &Value) -> Result<Self, json::Error> {
         fn take_required<T: JsonDeserialize>(
             object: &mut BTreeMap<String, Value>,
@@ -422,7 +396,6 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
                 })?;
             json::from_value(value)
         }
-
         fn take_optional<T: JsonDeserialize>(
             object: &mut BTreeMap<String, Value>,
             field: &str,
@@ -432,7 +405,6 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
                 Some(value) => json::from_value(value).map(Some),
             }
         }
-
         let mut object = match value.clone() {
             Value::Object(map) => map,
             other => {
@@ -442,7 +414,6 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
                 });
             }
         };
-
         let kernel_image_path = take_required(&mut object, "kernel_image_path")?;
         let rootfs_image_path = take_required(&mut object, "rootfs_image_path")?;
         let initrd_image_path =
@@ -454,11 +425,9 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
             &mut object,
             "published_artifact",
         )?;
-
         if let Some(extra) = object.keys().next().cloned() {
             return Err(json::Error::UnknownField { field: extra });
         }
-
         Ok(Self {
             kernel_image_path,
             rootfs_image_path,
@@ -468,7 +437,6 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
         })
     }
 }
-
 impl SoraInrouGuestImageV1 {
     /// Validate Inrou guest-image bundle member paths.
     ///
@@ -511,7 +479,6 @@ impl SoraInrouGuestImageV1 {
         Ok(())
     }
 }
-
 /// Explicit Inrou VM metadata carried by hosted HTTP container manifests.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SoraInrouManifestV1 {
@@ -532,7 +499,6 @@ pub struct SoraInrouManifestV1 {
     #[norito(default)]
     pub ssh_authorized_keys: Vec<String>,
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for SoraInrouManifestV1 {
     fn json_serialize(&self, out: &mut String) {
@@ -571,7 +537,6 @@ impl norito::json::JsonSerialize for SoraInrouManifestV1 {
         self.ssh_authorized_keys.json_serialize(out);
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -607,14 +572,12 @@ impl norito::json::JsonSerialize for SoraInrouManifestV1 {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for SoraInrouManifestV1 {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
         let value = Value::json_deserialize(parser)?;
         Self::json_from_value(&value)
     }
-
     #[allow(clippy::too_many_lines, clippy::single_match_else)]
     fn json_from_value(value: &Value) -> Result<Self, json::Error> {
         fn take_required<T: JsonDeserialize>(
@@ -628,7 +591,6 @@ impl JsonDeserialize for SoraInrouManifestV1 {
                 })?;
             json::from_value(value)
         }
-
         fn take_optional<T: JsonDeserialize>(
             object: &mut BTreeMap<String, Value>,
             field: &str,
@@ -638,7 +600,6 @@ impl JsonDeserialize for SoraInrouManifestV1 {
                 Some(value) => json::from_value(value).map(Some),
             }
         }
-
         let mut object = match value.clone() {
             Value::Object(map) => map,
             other => {
@@ -648,7 +609,6 @@ impl JsonDeserialize for SoraInrouManifestV1 {
                 });
             }
         };
-
         let schema_version = take_required(&mut object, "schema_version")?;
         let guest_os = match object
             .remove("guest_os")
@@ -709,7 +669,6 @@ impl JsonDeserialize for SoraInrouManifestV1 {
             take_optional::<Option<String>>(&mut object, "bootstrap_user_data_path")?.flatten();
         let ssh_authorized_keys =
             take_optional::<Vec<String>>(&mut object, "ssh_authorized_keys")?.unwrap_or_default();
-
         let guest_images_value =
             object
                 .remove("guest_images")
@@ -735,11 +694,9 @@ impl JsonDeserialize for SoraInrouManifestV1 {
             })
             .collect::<Result<BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>, json::Error>>(
             )?;
-
         if let Some(extra) = object.keys().next().cloned() {
             return Err(json::Error::UnknownField { field: extra });
         }
-
         Ok(Self {
             schema_version,
             guest_os,
@@ -749,11 +706,9 @@ impl JsonDeserialize for SoraInrouManifestV1 {
         })
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod inrou_manifest_checked_json_tests {
     use super::*;
-
     #[test]
     fn manifest_map_writer_matches_legacy_bytes_and_exact_bound() {
         let manifest = SoraInrouManifestV1 {
@@ -783,7 +738,6 @@ mod inrou_manifest_checked_json_tests {
         );
     }
 }
-
 impl SoraInrouManifestV1 {
     /// Validate Inrou image paths and guest bootstrap metadata.
     ///
@@ -796,7 +750,6 @@ impl SoraInrouManifestV1 {
             self.schema_version,
             SORA_INROU_MANIFEST_VERSION_V1,
         )?;
-
         for required_isa in [SoraInrouGuestIsaV1::X8664, SoraInrouGuestIsaV1::Aarch64] {
             if !self.guest_images.contains_key(&required_isa) {
                 return Err(SoracloudManifestError::InvalidField {
@@ -822,7 +775,6 @@ impl SoraInrouManifestV1 {
                 bootstrap_user_data_path,
             )?;
         }
-
         let mut seen_ssh_authorized_keys = BTreeSet::new();
         for key in &self.ssh_authorized_keys {
             if key.trim().is_empty() {
@@ -847,11 +799,9 @@ impl SoraInrouManifestV1 {
                 });
             }
         }
-
         Ok(())
     }
 }
-
 /// Network egress policy for a service container.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -867,7 +817,6 @@ pub enum SoraNetworkPolicyV1 {
     /// Egress is allowed only to the listed hostnames and ports.
     Allowlist(Vec<SoraNetworkAllowlistEntryV1>),
 }
-
 /// A single allowlist rule for outbound network access.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -880,7 +829,6 @@ pub struct SoraNetworkAllowlistEntryV1 {
     /// Allowed outbound TCP ports for the hostname.
     pub ports: Vec<u16>,
 }
-
 impl SoraNetworkAllowlistEntryV1 {
     /// Construct a hostname + ports allowlist entry.
     #[must_use]
@@ -890,20 +838,17 @@ impl SoraNetworkAllowlistEntryV1 {
             ports: ports.into_iter().collect(),
         }
     }
-
     /// Return `true` when the rule matches the supplied hostname.
     #[must_use]
     pub fn matches_host(&self, host: &str) -> bool {
         self.host.eq_ignore_ascii_case(host)
     }
-
     /// Return `true` when the rule admits the supplied TCP port.
     #[must_use]
     pub fn allows_port(&self, port: u16) -> bool {
         self.ports.contains(&port)
     }
 }
-
 impl SoraNetworkPolicyV1 {
     /// Return `true` when the policy admits the supplied hostname.
     #[must_use]
@@ -914,7 +859,6 @@ impl SoraNetworkPolicyV1 {
             Self::Allowlist(entries) => entries.iter().any(|entry| entry.matches_host(host)),
         }
     }
-
     /// Return `true` when the policy admits the supplied hostname and port.
     #[must_use]
     pub fn allows_host_port(&self, host: &str, port: u16) -> bool {
@@ -927,7 +871,6 @@ impl SoraNetworkPolicyV1 {
         }
     }
 }
-
 /// Capability policy enforced by the Sora Container Runtime.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -948,7 +891,6 @@ pub struct SoraCapabilityPolicyV1 {
     /// Whether model-training ops are allowed for this workload.
     pub allow_model_training: bool,
 }
-
 /// Resource limits for SCR process admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -967,7 +909,6 @@ pub struct SoraResourceLimitsV1 {
     /// Maximum number of cooperative tasks/threads.
     pub max_tasks: NonZeroU16,
 }
-
 /// Lifecycle hooks and probe settings used by SCR.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -983,7 +924,6 @@ pub struct SoraLifecycleHooksV1 {
     #[norito(default)]
     pub healthcheck_path: Option<String>,
 }
-
 /// Explicit config export injected into the runtime environment or mounted tree.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -996,14 +936,12 @@ pub struct SoraConfigExportV1 {
     /// Concrete export target.
     pub target: SoraConfigExportTargetV1,
 }
-
 impl SoraConfigExportV1 {
     /// Return the required config name referenced by this export.
     #[must_use]
     pub fn config_name(&self) -> &str {
         &self.config_name
     }
-
     /// Return the unique target identifier used for duplicate detection.
     #[must_use]
     pub fn target_identifier(&self) -> &str {
@@ -1013,7 +951,6 @@ impl SoraConfigExportV1 {
         }
     }
 }
-
 /// Target kind for one explicit config export.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1027,7 +964,6 @@ pub enum SoraConfigExportTargetV1 {
     /// Export the canonical JSON payload into a mounted relative file path.
     File(String),
 }
-
 /// One verified signature entry in a multisig canonical request witness.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1040,7 +976,6 @@ pub struct CanonicalRequestSignatureWitnessV1 {
     /// Signature over the canonical request witness payload.
     pub signature: Signature,
 }
-
 /// Multisignature witness for app-auth canonical HTTP requests.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1062,7 +997,6 @@ pub struct CanonicalRequestWitnessV1 {
     #[norito(default)]
     pub signatures: Vec<CanonicalRequestSignatureWitnessV1>,
 }
-
 /// Canonical executable bundle manifest for `Soracloud` workloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
@@ -1105,14 +1039,12 @@ pub struct SoraContainerManifestV1 {
     /// Lifecycle and health probe settings.
     pub lifecycle: SoraLifecycleHooksV1,
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for SoraContainerManifestV1 {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
         let value = Value::json_deserialize(parser)?;
         Self::json_from_value(&value)
     }
-
     fn json_from_value(value: &Value) -> Result<Self, json::Error> {
         fn take_required<T: JsonDeserialize>(
             object: &mut BTreeMap<String, Value>,
@@ -1125,7 +1057,6 @@ impl JsonDeserialize for SoraContainerManifestV1 {
                 })?;
             json::from_value(value)
         }
-
         fn take_optional<T: JsonDeserialize>(
             object: &mut BTreeMap<String, Value>,
             field: &str,
@@ -1135,7 +1066,6 @@ impl JsonDeserialize for SoraContainerManifestV1 {
                 Some(value) => json::from_value(value).map(Some),
             }
         }
-
         let mut object = match value.clone() {
             Value::Object(map) => map,
             other => {
@@ -1145,7 +1075,6 @@ impl JsonDeserialize for SoraContainerManifestV1 {
                 });
             }
         };
-
         let schema_version = take_required(&mut object, "schema_version")?;
         let runtime = take_required(&mut object, "runtime")?;
         let bundle_hash = take_required(&mut object, "bundle_hash")?;
@@ -1165,11 +1094,9 @@ impl JsonDeserialize for SoraContainerManifestV1 {
         let capabilities = take_required(&mut object, "capabilities")?;
         let resources = take_required(&mut object, "resources")?;
         let lifecycle = take_required(&mut object, "lifecycle")?;
-
         if let Some(extra) = object.keys().next().cloned() {
             return Err(json::Error::UnknownField { field: extra });
         }
-
         Ok(Self {
             schema_version,
             runtime,
@@ -1188,7 +1115,6 @@ impl JsonDeserialize for SoraContainerManifestV1 {
         })
     }
 }
-
 impl SoraContainerManifestV1 {
     /// Validate schema version and deterministic constraints.
     ///
@@ -1202,17 +1128,12 @@ impl SoraContainerManifestV1 {
             self.schema_version,
             SORA_CONTAINER_MANIFEST_VERSION_V1,
         )?;
-
         validate_soracloud_digest_hash("sora container manifest", "bundle_hash", self.bundle_hash)?;
-
         validate_nonblank_field("sora container manifest", "bundle_path", &self.bundle_path)?;
-
         validate_nonblank_field("sora container manifest", "entrypoint", &self.entrypoint)?;
-
         for name in self.env.keys() {
             validate_environment_variable_name("env", name)?;
         }
-
         if self.runtime == SoraContainerRuntimeV1::Inrou {
             validate_bundle_absolute_path(
                 "sora container manifest",
@@ -1234,7 +1155,6 @@ impl SoraContainerManifestV1 {
                 "only Inrou runtimes may declare microVM metadata",
             ));
         }
-
         let mut required_configs = BTreeSet::new();
         for config_name in &self.required_config_names {
             validate_service_material_name(
@@ -1250,7 +1170,6 @@ impl SoraContainerManifestV1 {
                 });
             }
         }
-
         let mut required_secrets = BTreeSet::new();
         for secret_name in &self.required_secret_names {
             validate_service_material_name(
@@ -1266,7 +1185,6 @@ impl SoraContainerManifestV1 {
                 });
             }
         }
-
         let mut config_export_env_targets = BTreeSet::new();
         let mut config_export_file_targets = BTreeSet::new();
         for export in &self.config_exports {
@@ -1310,7 +1228,6 @@ impl SoraContainerManifestV1 {
                 }
             }
         }
-
         if let Some(path) = self.lifecycle.healthcheck_path.as_ref()
             && !path.starts_with('/')
         {
@@ -1320,11 +1237,9 @@ impl SoraContainerManifestV1 {
                 "must start with '/'",
             ));
         }
-
         Ok(())
     }
 }
-
 /// Public exposure mode for a service route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1339,7 +1254,6 @@ pub enum SoraRouteVisibilityV1 {
     /// Route is cluster-internal only.
     Internal,
 }
-
 /// TLS requirements for service ingress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1356,7 +1270,6 @@ pub enum SoraTlsModeV1 {
     /// TLS is disabled.
     Disabled,
 }
-
 /// Route definition for a deployed service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1375,7 +1288,6 @@ pub struct SoraRouteTargetV1 {
     /// TLS requirements for ingress.
     pub tls_mode: SoraTlsModeV1,
 }
-
 /// Rollout/upgrade behavior for the service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1392,7 +1304,6 @@ pub struct SoraRolloutPolicyV1 {
     /// Consecutive health failures before auto rollback.
     pub automatic_rollback_failures: NonZeroU32,
 }
-
 /// Reference to a previously admitted container manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1405,7 +1316,6 @@ pub struct SoraContainerManifestRefV1 {
     /// Expected schema version for the referenced manifest.
     pub expected_schema_version: u16,
 }
-
 /// Execution plane selected by a service manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1420,7 +1330,6 @@ pub enum SoraServiceExecutionPlaneV1 {
     /// Hosted HTTP service proxied through Torii/SoraDNS.
     HttpService,
 }
-
 /// Lease-backed mutable storage kind attached to an HTTP service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1439,21 +1348,18 @@ pub enum SoraLeaseVolumeKindV1 {
     /// separately for each replica.
     PersistentRootLeaseVolume,
 }
-
 impl SoraLeaseVolumeKindV1 {
     /// Returns `true` when the volume is attached separately to each hosted-HTTP replica.
     #[must_use]
     pub const fn is_per_replica(self) -> bool {
         matches!(self, Self::PersistentRootLeaseVolume)
     }
-
     /// Returns `true` when the volume is shared across replicas of the same revision.
     #[must_use]
     pub const fn is_shared_across_replicas(self) -> bool {
         !self.is_per_replica()
     }
 }
-
 /// Lease-backed mutable storage binding for one hosted HTTP service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1472,7 +1378,6 @@ pub struct SoraLeaseVolumeBindingV1 {
     /// Maximum logical bytes retained for this volume.
     pub max_total_bytes: NonZeroU64,
 }
-
 impl SoraLeaseVolumeBindingV1 {
     /// Returns `true` when this binding is attached separately to each
     /// hosted-HTTP replica.
@@ -1480,21 +1385,18 @@ impl SoraLeaseVolumeBindingV1 {
     pub const fn attaches_per_replica(&self) -> bool {
         self.kind.is_per_replica()
     }
-
     /// Returns `true` when this binding is shared across replicas of the same
     /// hosted-HTTP revision.
     #[must_use]
     pub const fn attaches_shared_across_replicas(&self) -> bool {
         self.kind.is_shared_across_replicas()
     }
-
     /// Validate lease-volume binding invariants.
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the mount path is invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_nonblank_field("sora lease volume binding", "mount_path", &self.mount_path)?;
-
         if !self.mount_path.starts_with('/') {
             return Err(invalid_field(
                 "sora lease volume binding",
@@ -1502,7 +1404,6 @@ impl SoraLeaseVolumeBindingV1 {
                 "must start with '/'",
             ));
         }
-
         if self.mount_path.chars().any(char::is_control) {
             return Err(invalid_field(
                 "sora lease volume binding",
@@ -1510,7 +1411,6 @@ impl SoraLeaseVolumeBindingV1 {
                 "must not contain control characters",
             ));
         }
-
         if self.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume && self.mount_path != "/" {
             return Err(invalid_field(
                 "sora lease volume binding",
@@ -1518,11 +1418,9 @@ impl SoraLeaseVolumeBindingV1 {
                 "persistent Inrou root volumes must mount at `/`",
             ));
         }
-
         Ok(())
     }
 }
-
 /// Economic policy required for hosted HTTP services.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1547,7 +1445,6 @@ pub struct SoraHttpServiceEconomicsV1 {
     /// Egress charge applied per MiB when runtime accounting reports traffic.
     pub egress_price_per_mib: Quantity,
 }
-
 impl Default for SoraHttpServiceEconomicsV1 {
     fn default() -> Self {
         Self {
@@ -1562,7 +1459,6 @@ impl Default for SoraHttpServiceEconomicsV1 {
         }
     }
 }
-
 impl SoraHttpServiceEconomicsV1 {
     /// Validate hosted-service economic policy.
     ///
@@ -1604,7 +1500,6 @@ impl SoraHttpServiceEconomicsV1 {
         Ok(())
     }
 }
-
 /// Authoritative hosted-service lease status projected by the control plane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1623,7 +1518,6 @@ pub enum SoraServiceLeaseStatusV1 {
     /// Lease was suspended by policy and must fail closed.
     Suspended,
 }
-
 /// Authoritative lease and accounting state for a hosted HTTP service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1660,7 +1554,6 @@ pub struct SoraServiceLeaseStateV1 {
     #[norito(default)]
     pub last_status_reason: Option<String>,
 }
-
 impl SoraServiceLeaseStateV1 {
     /// Validate lease-accounting invariants.
     ///
@@ -1736,7 +1629,6 @@ impl SoraServiceLeaseStateV1 {
         }
         Ok(())
     }
-
     /// Estimated accounting sequences elapsed under the current lease.
     #[must_use]
     pub fn billed_sequences_at(&self, current_sequence: u64) -> u64 {
@@ -1744,7 +1636,6 @@ impl SoraServiceLeaseStateV1 {
             .min(self.lease_expires_sequence)
             .saturating_sub(self.lease_started_sequence)
     }
-
     /// Estimated remaining nominal prepaid balance at the observed sequence.
     ///
     /// # Errors
@@ -1779,7 +1670,6 @@ impl SoraServiceLeaseStateV1 {
             self.prepaid_runtime_balance.checked_sub(&total_cost)
         }
     }
-
     /// Effective lease status at the observed sequence.
     ///
     /// # Errors
@@ -1803,7 +1693,6 @@ impl SoraServiceLeaseStateV1 {
         }
         Ok(self.status)
     }
-
     /// Returns `true` when the lease is still active at the observed sequence.
     ///
     /// # Errors
@@ -1817,7 +1706,6 @@ impl SoraServiceLeaseStateV1 {
             == SoraServiceLeaseStatusV1::Active)
     }
 }
-
 /// Authoritative leased-volume state recorded by the hosting control plane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1847,7 +1735,6 @@ pub struct SoraServiceLeaseVolumeStateV1 {
     #[norito(default)]
     pub last_materialized_sequence: Option<u64>,
 }
-
 impl SoraServiceLeaseVolumeStateV1 {
     /// Validate authoritative leased-volume metadata.
     ///
@@ -1905,14 +1792,12 @@ impl SoraServiceLeaseVolumeStateV1 {
         }
         Ok(())
     }
-
     /// Returns `true` when the volume lease is still active.
     #[must_use]
     pub fn is_active_at(&self, current_sequence: u64) -> bool {
         current_sequence < self.lease_expires_sequence
     }
 }
-
 /// State namespace addressed by a service binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1933,7 +1818,6 @@ pub enum SoraStateScopeV1 {
     /// Confidential namespace for sensitive records.
     ConfidentialState,
 }
-
 /// Mutation mode allowed by the binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1950,7 +1834,6 @@ pub enum SoraStateMutabilityV1 {
     /// Binding supports full read/write updates.
     ReadWrite,
 }
-
 /// Encryption policy expected for values in the binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -1967,7 +1850,6 @@ pub enum SoraStateEncryptionV1 {
     /// Values are FHE ciphertexts.
     FheCiphertext,
 }
-
 /// Deterministic state binding contract for an SCR service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1992,7 +1874,6 @@ pub struct SoraStateBindingV1 {
     /// Maximum cumulative bytes for the binding namespace.
     pub max_total_bytes: NonZeroU64,
 }
-
 impl SoraStateBindingV1 {
     /// Validate schema version and namespace limits.
     ///
@@ -2005,9 +1886,7 @@ impl SoraStateBindingV1 {
             self.schema_version,
             SORA_STATE_BINDING_VERSION_V1,
         )?;
-
         validate_nonblank_field("sora state binding", "key_prefix", &self.key_prefix)?;
-
         if !self.key_prefix.starts_with('/') {
             return Err(invalid_field(
                 "sora state binding",
@@ -2015,7 +1894,6 @@ impl SoraStateBindingV1 {
                 "must start with '/'",
             ));
         }
-
         if self.max_item_bytes > self.max_total_bytes {
             return Err(invalid_field(
                 "sora state binding",
@@ -2023,7 +1901,6 @@ impl SoraStateBindingV1 {
                 "cannot exceed max_total_bytes",
             ));
         }
-
         if self.scope == SoraStateScopeV1::ConfidentialState
             && self.encryption == SoraStateEncryptionV1::Plaintext
         {
@@ -2033,11 +1910,9 @@ impl SoraStateBindingV1 {
                 "confidential state requires ciphertext encryption",
             ));
         }
-
         Ok(())
     }
 }
-
 /// Handler class for Soracloud runtime entrypoints.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -2056,7 +1931,6 @@ pub enum SoraServiceHandlerClassV1 {
     /// Ordered replicated private/ciphertext/secret mutation.
     PrivateUpdate,
 }
-
 /// Certification mode attached to local fast-path responses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -2076,7 +1950,6 @@ pub enum SoraCertifiedResponsePolicyV1 {
     /// Response is bound to an execution/audit receipt.
     AuditReceipt,
 }
-
 /// Artifact category referenced by a service revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -2099,7 +1972,6 @@ pub enum SoraArtifactKindV1 {
     /// Model-weight binary bundle.
     ModelWeights,
 }
-
 /// Content-addressed artifact reference attached to a service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2117,7 +1989,6 @@ pub struct SoraArtifactRefV1 {
     #[norito(default)]
     pub handler_name: Option<Name>,
 }
-
 impl SoraArtifactRefV1 {
     /// Validate deterministic artifact-reference constraints.
     ///
@@ -2126,9 +1997,7 @@ impl SoraArtifactRefV1 {
     /// control characters.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_soracloud_digest_hash("sora artifact ref", "artifact_hash", self.artifact_hash)?;
-
         validate_nonblank_field("sora artifact ref", "artifact_path", &self.artifact_path)?;
-
         if self.artifact_path.chars().any(char::is_control) {
             return Err(invalid_field(
                 "sora artifact ref",
@@ -2136,11 +2005,9 @@ impl SoraArtifactRefV1 {
                 "must not contain control characters",
             ));
         }
-
         Ok(())
     }
 }
-
 /// Ordered mailbox contract attached to replicated service handlers.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2157,7 +2024,6 @@ pub struct SoraMailboxContractV1 {
     /// Retention bound for queued messages.
     pub retention_blocks: NonZeroU32,
 }
-
 impl SoraMailboxContractV1 {
     /// Validate deterministic mailbox-contract constraints.
     ///
@@ -2172,11 +2038,9 @@ impl SoraMailboxContractV1 {
                 "must be at least 16 bytes",
             ));
         }
-
         Ok(())
     }
 }
-
 /// Runtime handler definition exposed by a service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2199,7 +2063,6 @@ pub struct SoraServiceHandlerV1 {
     #[norito(default)]
     pub mailbox: Option<SoraMailboxContractV1>,
 }
-
 impl SoraServiceHandlerV1 {
     /// Validate handler classification and deterministic routing rules.
     ///
@@ -2208,7 +2071,6 @@ impl SoraServiceHandlerV1 {
     /// invalid or handler-class invariants are violated.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_nonblank_field("sora service handler", "entrypoint", &self.entrypoint)?;
-
         if let Some(route_path) = self.route_path.as_ref() {
             if route_path.trim().is_empty() {
                 return Err(invalid_field(
@@ -2225,7 +2087,6 @@ impl SoraServiceHandlerV1 {
                 ));
             }
         }
-
         match self.class {
             SoraServiceHandlerClassV1::Asset | SoraServiceHandlerClassV1::Query => {
                 if self.certified_response == SoraCertifiedResponsePolicyV1::None {
@@ -2261,11 +2122,9 @@ impl SoraServiceHandlerV1 {
                 mailbox.validate()?;
             }
         }
-
         Ok(())
     }
 }
-
 /// Canonical deployment manifest for a routable `Soracloud` service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2307,7 +2166,6 @@ pub struct SoraServiceManifestV1 {
     #[norito(default)]
     pub artifacts: Vec<SoraArtifactRefV1>,
 }
-
 impl SoraServiceManifestV1 {
     /// Validate schema version, routing constraints, and binding invariants.
     ///
@@ -2320,19 +2178,16 @@ impl SoraServiceManifestV1 {
             self.schema_version,
             SORA_SERVICE_MANIFEST_VERSION_V1,
         )?;
-
         validate_nonblank_field(
             "sora service manifest",
             "service_version",
             &self.service_version,
         )?;
-
         validate_soracloud_digest_hash(
             "sora service manifest",
             "container.manifest_hash",
             self.container.manifest_hash,
         )?;
-
         if self.container.expected_schema_version != SORA_CONTAINER_MANIFEST_VERSION_V1 {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora service manifest",
@@ -2343,7 +2198,6 @@ impl SoraServiceManifestV1 {
                 ),
             });
         }
-
         if self.rollout.canary_percent > 100 {
             return Err(invalid_field(
                 "sora service manifest",
@@ -2351,10 +2205,8 @@ impl SoraServiceManifestV1 {
                 "must be within 0..=100",
             ));
         }
-
         self.validate_route()?;
         self.economics.validate()?;
-
         let mut seen = BTreeSet::new();
         for binding in &self.state_bindings {
             binding.validate()?;
@@ -2364,9 +2216,7 @@ impl SoraServiceManifestV1 {
                 });
             }
         }
-
         self.validate_lease_volumes()?;
-
         if self.execution_plane == SoraServiceExecutionPlaneV1::DeterministicService
             && self.handlers.is_empty()
         {
@@ -2375,18 +2225,14 @@ impl SoraServiceManifestV1 {
                 field: "handlers",
             });
         }
-
         let handler_names = self.validate_handlers()?;
         self.validate_artifacts(&handler_names)?;
         self.validate_execution_plane_requirements()?;
-
         Ok(())
     }
-
     fn validate_route(&self) -> Result<(), SoracloudManifestError> {
         if let Some(route) = self.route.as_ref() {
             validate_nonblank_field("sora service manifest", "route.host", &route.host)?;
-
             if !route.path_prefix.starts_with('/') {
                 return Err(invalid_field(
                     "sora service manifest",
@@ -2395,10 +2241,8 @@ impl SoraServiceManifestV1 {
                 ));
             }
         }
-
         Ok(())
     }
-
     fn validate_lease_volumes(&self) -> Result<(), SoracloudManifestError> {
         let mut seen_lease_volumes = BTreeSet::new();
         for volume in &self.lease_volumes {
@@ -2409,10 +2253,8 @@ impl SoraServiceManifestV1 {
                 });
             }
         }
-
         Ok(())
     }
-
     fn validate_handlers(&self) -> Result<BTreeSet<Name>, SoracloudManifestError> {
         let mut handler_names = BTreeSet::new();
         for handler in &self.handlers {
@@ -2423,10 +2265,8 @@ impl SoraServiceManifestV1 {
                 });
             }
         }
-
         Ok(handler_names)
     }
-
     fn validate_artifacts(
         &self,
         handler_names: &BTreeSet<Name>,
@@ -2443,10 +2283,8 @@ impl SoraServiceManifestV1 {
                 });
             }
         }
-
         Ok(())
     }
-
     fn validate_execution_plane_requirements(&self) -> Result<(), SoracloudManifestError> {
         match self.execution_plane {
             SoraServiceExecutionPlaneV1::DeterministicService => {
@@ -2498,10 +2336,8 @@ impl SoraServiceManifestV1 {
                 }
             }
         }
-
         Ok(())
     }
-
     fn minimum_hosted_runtime_prepaid(&self) -> Result<Quantity, NumericOperationError> {
         let storage_bytes = self
             .lease_volumes
@@ -2522,7 +2358,6 @@ impl SoraServiceManifestV1 {
             .checked_add(&storage_cost)
     }
 }
-
 /// Upgrade mode for long-lived AI agent apartments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -2539,7 +2374,6 @@ pub enum AgentUpgradePolicyV1 {
     /// Apartment revision is pinned and cannot be upgraded.
     Pinned,
 }
-
 /// Tool-level execution cap for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2556,7 +2390,6 @@ pub struct AgentToolCapabilityV1 {
     /// Whether the tool may write to local persistent files.
     pub allow_filesystem_write: bool,
 }
-
 /// Spend guardrail for a specific asset under apartment policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2571,7 +2404,6 @@ pub struct AgentSpendLimitV1 {
     /// Maximum nominal amount spendable per day.
     pub max_per_day: Quantity,
 }
-
 /// Deterministic policy manifest for a persistent AI agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2601,14 +2433,12 @@ pub struct AgentApartmentManifestV1 {
     /// Upgrade policy for apartment revisions.
     pub upgrade_policy: AgentUpgradePolicyV1,
 }
-
 impl AgentApartmentManifestV1 {
     /// Compute the canonical hash of the apartment manifest.
     #[must_use]
     pub fn manifest_hash(&self) -> Hash {
         Hash::new(Encode::encode(self))
     }
-
     /// Validate schema version and deterministic policy constraints.
     ///
     /// # Errors
@@ -2621,13 +2451,11 @@ impl AgentApartmentManifestV1 {
             self.schema_version,
             AGENT_APARTMENT_MANIFEST_VERSION_V1,
         )?;
-
         validate_soracloud_digest_hash(
             "agent apartment manifest",
             "container.manifest_hash",
             self.container.manifest_hash,
         )?;
-
         if self.container.expected_schema_version != SORA_CONTAINER_MANIFEST_VERSION_V1 {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "agent apartment manifest",
@@ -2638,7 +2466,6 @@ impl AgentApartmentManifestV1 {
                 ),
             });
         }
-
         let mut seen_tools = BTreeSet::new();
         for tool_capability in &self.tool_capabilities {
             let tool = tool_capability.tool.trim();
@@ -2649,7 +2476,6 @@ impl AgentApartmentManifestV1 {
                 });
             }
         }
-
         let mut seen_policies = BTreeSet::new();
         for policy in &self.policy_capabilities {
             if !seen_policies.insert(policy.clone()) {
@@ -2658,7 +2484,6 @@ impl AgentApartmentManifestV1 {
                 });
             }
         }
-
         let mut seen_spend_assets = BTreeSet::new();
         for limit in &self.spend_limits {
             let asset = limit.asset_definition.trim();
@@ -2687,7 +2512,6 @@ impl AgentApartmentManifestV1 {
                 });
             }
         }
-
         if let SoraNetworkPolicyV1::Allowlist(entries) = &self.network_egress {
             if entries.is_empty() {
                 return Err(invalid_field(
@@ -2756,7 +2580,6 @@ impl AgentApartmentManifestV1 {
                 }
             }
         }
-
         Ok(())
     }
 }

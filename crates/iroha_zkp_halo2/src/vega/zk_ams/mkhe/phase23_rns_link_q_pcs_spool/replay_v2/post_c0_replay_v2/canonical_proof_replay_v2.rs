@@ -1,9 +1,6 @@
 //! Sequential final-proof replay adapters for C0 and Cq.
-
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::CanonicalProofSectionV2;
-
 use super::*;
-
 pub(in super::super) struct C0CanonicalProofReplayV2 {
     replay: Option<C0BatchReplayV2>,
     purpose: Option<CanonicalTreePurposeBoundV2>,
@@ -11,7 +8,6 @@ pub(in super::super) struct C0CanonicalProofReplayV2 {
     next_column: u64,
     ordinal: u8,
 }
-
 pub(in super::super) struct CqCanonicalProofReplayV2 {
     owner: Option<QPcsCqStoredV2>,
     purpose: Option<CanonicalTreePurposeBoundV2>,
@@ -19,7 +15,6 @@ pub(in super::super) struct CqCanonicalProofReplayV2 {
     next_column: u64,
     ordinal: u8,
 }
-
 impl QPcsC0StoredV2 {
     pub(in super::super) fn begin_canonical_proof_replay_v2(
         self,
@@ -54,17 +49,14 @@ impl QPcsC0StoredV2 {
         })
     }
 }
-
 impl CanonicalTreeReplayV2 for C0CanonicalProofReplayV2 {
     type Owner = QPcsC0StoredV2;
-
     fn shape_v2(&self) -> Result<CanonicalTreeReplayShapeV2, ProverPrerequisiteErrorV2> {
         if self.replay.is_none() || self.purpose.is_none() {
             return Err(ProverPrerequisiteErrorV2::Poisoned);
         }
         Ok(self.shape)
     }
-
     fn read_next_column_v2(
         &mut self,
     ) -> Result<AuthenticatedReplayChunkV2, ProverPrerequisiteErrorV2> {
@@ -84,7 +76,6 @@ impl CanonicalTreeReplayV2 for C0CanonicalProofReplayV2 {
         self.replay = Some(replay);
         Ok(chunk)
     }
-
     fn complete_v2(mut self) -> Result<Self::Owner, ProverPrerequisiteErrorV2> {
         let replay = self
             .replay
@@ -104,7 +95,6 @@ impl CanonicalTreeReplayV2 for C0CanonicalProofReplayV2 {
         Ok(owner)
     }
 }
-
 impl QPcsCqStoredV2 {
     #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn begin_canonical_proof_replay_v2(
@@ -154,17 +144,14 @@ impl QPcsCqStoredV2 {
         })
     }
 }
-
 impl CanonicalTreeReplayV2 for CqCanonicalProofReplayV2 {
     type Owner = QPcsCqStoredV2;
-
     fn shape_v2(&self) -> Result<CanonicalTreeReplayShapeV2, ProverPrerequisiteErrorV2> {
         if self.owner.is_none() || self.purpose.is_none() {
             return Err(ProverPrerequisiteErrorV2::Poisoned);
         }
         Ok(self.shape)
     }
-
     fn read_next_column_v2(
         &mut self,
     ) -> Result<AuthenticatedReplayChunkV2, ProverPrerequisiteErrorV2> {
@@ -187,7 +174,6 @@ impl CanonicalTreeReplayV2 for CqCanonicalProofReplayV2 {
         self.owner = Some(owner);
         Ok(chunk)
     }
-
     fn complete_v2(mut self) -> Result<Self::Owner, ProverPrerequisiteErrorV2> {
         let owner = self
             .owner

@@ -1,5 +1,4 @@
 //! Allocation-bounded helpers for deterministic lane-authority selection.
-
 use iroha_config::parameters::actual::LaneValidatorMode;
 use iroha_data_model::{
     account::AccountId,
@@ -9,10 +8,8 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
-
 use super::{WorldReadOnly, peer_has_live_consensus_key, public_lane_validator_record_matches_key};
 use crate::governance::manifest::{LANE_MANIFEST_MAX_VALIDATORS_V1, ManifestValidatorBinding};
-
 pub(super) struct LaneAuthorityInputs {
     pub(super) dataspace_id: DataSpaceId,
     pub(super) autoscale_validator_set: Option<Vec<PeerId>>,
@@ -20,12 +17,10 @@ pub(super) struct LaneAuthorityInputs {
     pub(super) minimum_stake: Quantity,
     pub(super) max_validators: u32,
 }
-
 pub(super) fn staking_validator_limit_from(configured: u32) -> Option<usize> {
     let limit = usize::try_from(configured).ok()?;
     (limit <= MAX_LANE_CONSENSUS_VALIDATORS).then_some(limit)
 }
-
 pub(super) fn insert_unique_by<T: Copy>(
     selected: &mut Vec<T>,
     candidate: T,
@@ -60,7 +55,6 @@ pub(super) fn insert_unique_by<T: Copy>(
         .unwrap_or_else(|index| index);
     selected.insert(index, candidate);
 }
-
 pub(super) fn live_manifest_validator_bindings(
     world: &impl WorldReadOnly,
     bindings: &[ManifestValidatorBinding],
@@ -97,7 +91,6 @@ pub(super) fn live_manifest_validator_bindings(
     });
     live
 }
-
 pub(super) fn live_manifest_validator_account_peers(
     world: &impl WorldReadOnly,
     validators: &[AccountId],
@@ -123,7 +116,6 @@ pub(super) fn live_manifest_validator_account_peers(
     live.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
     live
 }
-
 pub(super) fn stake_elected_validator_accounts(
     world: &impl WorldReadOnly,
     lane_id: LaneId,
@@ -166,7 +158,6 @@ pub(super) fn stake_elected_validator_accounts(
         .map(|record| record.validator.clone())
         .collect()
 }
-
 pub(super) fn stake_elected_peer_ids(
     world: &impl WorldReadOnly,
     lane_id: LaneId,
@@ -210,23 +201,19 @@ pub(super) fn stake_elected_peer_ids(
         .map(|record| record.peer_id.clone())
         .collect()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct Candidate {
         identity: u16,
         stake: u64,
     }
-
     fn rank(lhs: &Candidate, rhs: &Candidate) -> std::cmp::Ordering {
         rhs.stake
             .cmp(&lhs.stake)
             .then_with(|| lhs.identity.cmp(&rhs.identity))
     }
-
     #[test]
     fn bounded_selection_matches_full_reference_and_never_grows() {
         const LIMIT: usize = 128;
@@ -249,7 +236,6 @@ mod tests {
             assert!(bounded.len() <= LIMIT);
             assert_eq!(bounded.capacity(), initial_capacity);
         }
-
         let mut reference: Vec<_> = input.iter().collect();
         reference.sort_by(|lhs, rhs| rank(lhs, rhs));
         reference.dedup_by_key(|candidate| candidate.identity);

@@ -1,13 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify Proof events map to the expected JSON object (WS/SSE share mapper).
 #![cfg(feature = "app_api")]
-
 #[path = "common/proof_events.rs"]
 mod proof_events;
-
 use iroha_torii::event_to_json_value;
 use proof_events::ProofEventFixture;
-
 #[test]
 fn proof_verified_and_rejected_json_mapping() {
     // Verified
@@ -36,7 +33,6 @@ fn proof_verified_and_rejected_json_mapping() {
         j.get("vk_commitment").and_then(|x| x.as_str()),
         Some(hex::encode([0x34u8; 32]).as_str())
     );
-
     // Rejected
     let r = ProofEventFixture::new("groth16", [0x56; 32])
         .without_vk()

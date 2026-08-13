@@ -1,16 +1,12 @@
 //! State preverification backend-admission regression tests.
-
 use std::{num::NonZeroU64, sync::Arc};
-
 use iroha_data_model::{
     block::BlockHeader,
     proof::{ProofBox, VerifyingKeyBox},
     zk::{BackendTag, OpenVerifyEnvelope},
 };
-
 use super::*;
 use crate::{kura::Kura, zk::PreverifyResult};
-
 #[test]
 fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy() {
     let kura = Kura::blank_kura_for_testing();
@@ -20,7 +16,6 @@ fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Bn254;
-
     for backend in [
         "halo2/bn254",
         "halo2/bn254/vote",
@@ -38,7 +33,6 @@ fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy
             "case {backend}"
         );
     }
-
     let admitted = ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![1, 2, 3, 4]);
     assert_eq!(
         transaction.preverify_proof(&admitted, None, 0, None, None, true),
@@ -46,7 +40,6 @@ fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy
         "admitted Halo2/Pasta backends must still honor curve policy"
     );
 }
-
 #[test]
 fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
     let kura = Kura::blank_kura_for_testing();
@@ -55,7 +48,6 @@ fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-
     for backend in [
         crate::zk::ZK_BACKEND_STARK_FRI_V1,
         "stark/fri/sha256-goldilocks",
@@ -65,7 +57,6 @@ fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
         let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
         let vk_commitment = crate::zk::hash_vk(&vk);
         let raw = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
-
         assert_eq!(
             transaction.preverify_proof(
                 &raw,
@@ -78,7 +69,6 @@ fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
             PreverifyResult::MalformedProof,
             "state preverify must require OpenVerifyEnvelope metadata for {backend}"
         );
-
         let envelope = OpenVerifyEnvelope {
             backend: BackendTag::Stark,
             circuit_id: format!("{backend}:state-preverify-test"),
@@ -91,7 +81,6 @@ fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
             backend.to_owned(),
             norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
         );
-
         assert_eq!(
             transaction.preverify_proof(
                 &proof,
@@ -106,7 +95,6 @@ fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
         );
     }
 }
-
 #[test]
 fn halo2_ipa_profile_labels_use_family_curve_segment() {
     let kura = Kura::blank_kura_for_testing();
@@ -116,7 +104,6 @@ fn halo2_ipa_profile_labels_use_family_curve_segment() {
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Pallas;
-
     let backend = "halo2/ipa:ivm-execution-v1";
     let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
     let vk_commitment = crate::zk::hash_vk(&vk);
@@ -132,7 +119,6 @@ fn halo2_ipa_profile_labels_use_family_curve_segment() {
         backend.to_owned(),
         norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
     );
-
     assert_eq!(
         transaction.preverify_proof(
             &proof,

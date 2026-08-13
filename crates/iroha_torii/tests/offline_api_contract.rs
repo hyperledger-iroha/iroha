@@ -1,11 +1,9 @@
 //! Catalog guards for the first-release offline API.
 #![cfg(feature = "app_api")]
-
 use iroha_torii_shared::{
     route_catalog::{CatalogProjection, EnabledFeatures, HttpMethod, RouteCatalog, offline},
     uri,
 };
-
 #[test]
 fn offline_catalog_exposes_only_the_first_release_routes() {
     assert_eq!(uri::OFFLINE_READINESS, "/v1/offline/readiness");
@@ -19,7 +17,6 @@ fn offline_catalog_exposes_only_the_first_release_routes() {
         uri::OFFLINE_OPERATION,
         "/v1/offline/operations/{operation_id}"
     );
-
     let catalog = RouteCatalog::new(offline::ROUTES);
     catalog.validate().expect("offline route catalog is valid");
     let mounted = catalog.project(
@@ -41,13 +38,11 @@ fn offline_catalog_exposes_only_the_first_release_routes() {
         ]
     );
 }
-
 #[test]
 fn offline_catalog_projections_are_explicit() {
     let catalog = RouteCatalog::new(offline::ROUTES);
     let enabled = ["app_api"];
     let features = EnabledFeatures::new(&enabled);
-
     assert_eq!(
         catalog.project(CatalogProjection::OpenApi, features).len(),
         5

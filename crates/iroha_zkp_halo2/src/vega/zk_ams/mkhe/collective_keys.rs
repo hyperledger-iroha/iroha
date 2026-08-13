@@ -4,9 +4,7 @@
 //! compact Galois keys in the frozen T256 binary-rotation schedule.  The large
 //! key payload is content addressed; consensus binds this small exact manifest
 //! and never interprets network availability as a cryptographic validity bit.
-
 use std::collections::BTreeSet;
-
 use super::{
     MKHE_VERSION_V1, ZkAmsMkheErrorV1, ZkAmsMkheGovernedRosterWireV1,
     manifest::release_profile_v1,
@@ -17,7 +15,6 @@ use super::{
     resource::derive_resource_certificate_v1,
 };
 use crate::vega::sponge::{Keccak256, keccak256};
-
 const COLLECTIVE_EVALUATED_KEY_MANIFEST_TAG_V1: [u8; 4] = *b"ZAEK";
 const COLLECTIVE_EVALUATED_KEY_MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-evaluated-key-manifest";
@@ -29,7 +26,6 @@ const COLLECTIVE_EVALUATED_KEY_HEADER_BYTES_V1: usize =
     4 + 1 + 32 + 32 + 8 + 32 + 32 + 1 + 8 + 8 + 32 + 32 + 8 + 32 + 32 + 32 + 32;
 const COLLECTIVE_EVALUATED_KEY_MANIFEST_BYTES_V1: usize = COLLECTIVE_EVALUATED_KEY_HEADER_BYTES_V1
     + COLLECTIVE_EVALUATED_KEY_COUNT_V1 * COLLECTIVE_EVALUATED_KEY_ENTRY_BYTES_V1;
-
 /// Purpose of one compact collective evaluated key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -39,7 +35,6 @@ pub enum ZkAmsMkheCollectiveEvaluatedKeyPurposeV1 {
     /// Key-switch one exact automorphed collective secret.
     Galois = 2,
 }
-
 impl ZkAmsMkheCollectiveEvaluatedKeyPurposeV1 {
     fn decode(tag: u8) -> Result<Self, ZkAmsMkheErrorV1> {
         match tag {
@@ -49,7 +44,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyPurposeV1 {
         }
     }
 }
-
 /// Content and proof identities for one exact seeded compact key blob.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectiveEvaluatedKeyEntryV1 {
@@ -62,7 +56,6 @@ pub struct ZkAmsMkheCollectiveEvaluatedKeyEntryV1 {
     source_proof_set_digest: [u8; 32],
     cks_proof_set_digest: [u8; 32],
 }
-
 impl ZkAmsMkheCollectiveEvaluatedKeyEntryV1 {
     /// Construct one entry at its caller-asserted canonical position.
     #[allow(clippy::too_many_arguments)]
@@ -94,56 +87,47 @@ impl ZkAmsMkheCollectiveEvaluatedKeyEntryV1 {
             cks_proof_set_digest,
         })
     }
-
     /// Zero-based exact key position: relinearization first, then schedule order.
     #[must_use]
     pub const fn ordinal(self) -> u8 {
         self.ordinal
     }
-
     /// Evaluated-key purpose.
     #[must_use]
     pub const fn purpose(self) -> ZkAmsMkheCollectiveEvaluatedKeyPurposeV1 {
         self.purpose
     }
-
     /// Odd automorphism exponent, or zero for the relinearization key.
     #[must_use]
     pub const fn galois_exponent(self) -> u32 {
         self.galois_exponent
     }
-
     /// Byte offset in the complete SoraFS payload.
     #[must_use]
     pub const fn payload_offset(self) -> u64 {
         self.payload_offset
     }
-
     /// Exact canonical seeded-key byte length.
     #[must_use]
     pub const fn payload_bytes(self) -> u64 {
         self.payload_bytes
     }
-
     /// BLAKE3 digest of the exact key bytes at this entry.
     #[must_use]
     pub const fn payload_blake3(self) -> [u8; 32] {
         self.payload_blake3
     }
-
     /// Digest of all authenticated source RKG or Galois contribution proofs.
     #[must_use]
     pub const fn source_proof_set_digest(self) -> [u8; 32] {
         self.source_proof_set_digest
     }
-
     /// Digest of the exact full-roster CKS proof set compacting this key.
     #[must_use]
     pub const fn cks_proof_set_digest(self) -> [u8; 32] {
         self.cks_proof_set_digest
     }
 }
-
 /// SoraFS identities for the complete concatenated evaluated-key payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheEvaluatedKeySorafsPointerV1 {
@@ -153,7 +137,6 @@ pub struct ZkAmsMkheEvaluatedKeySorafsPointerV1 {
     sorafs_manifest_blake3: [u8; 32],
     chunker_profile_digest: [u8; 32],
 }
-
 impl ZkAmsMkheEvaluatedKeySorafsPointerV1 {
     /// Construct an externally verified content-addressed SoraFS pointer.
     pub fn new(
@@ -179,38 +162,32 @@ impl ZkAmsMkheEvaluatedKeySorafsPointerV1 {
             chunker_profile_digest,
         })
     }
-
     /// BLAKE3 digest of the complete payload.
     #[must_use]
     pub const fn payload_blake3(self) -> [u8; 32] {
         self.payload_blake3
     }
-
     /// Exact complete payload byte length.
     #[must_use]
     pub const fn payload_bytes(self) -> u64 {
         self.payload_bytes
     }
-
     /// Root of the exact ordered SoraFS chunk list.
     #[must_use]
     pub const fn chunk_root(self) -> [u8; 32] {
         self.chunk_root
     }
-
     /// BLAKE3 digest of the canonical SoraFS manifest.
     #[must_use]
     pub const fn sorafs_manifest_blake3(self) -> [u8; 32] {
         self.sorafs_manifest_blake3
     }
-
     /// Digest of the governed SoraFS chunker profile.
     #[must_use]
     pub const fn chunker_profile_digest(self) -> [u8; 32] {
         self.chunker_profile_digest
     }
 }
-
 /// Small consensus-bound manifest for the complete compact evaluated-key set.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectiveEvaluatedKeyManifestV1 {
@@ -227,7 +204,6 @@ pub struct ZkAmsMkheCollectiveEvaluatedKeyManifestV1 {
     sorafs: ZkAmsMkheEvaluatedKeySorafsPointerV1,
     manifest_digest: [u8; 32],
 }
-
 impl ZkAmsMkheCollectiveEvaluatedKeyManifestV1 {
     /// Build the exact release topology without sorting or repairing caller input.
     pub fn new(
@@ -263,7 +239,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyManifestV1 {
         value.validate(roster)?;
         Ok(value)
     }
-
     /// Encode after revalidating against the independently trusted roster.
     pub fn encode(
         &self,
@@ -302,7 +277,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyManifestV1 {
         }
         Ok(bytes)
     }
-
     /// Decode exactly under an independently trusted roster and transcript.
     pub fn decode_exact(
         bytes: &[u8],
@@ -375,31 +349,26 @@ impl ZkAmsMkheCollectiveEvaluatedKeyManifestV1 {
         }
         Ok(value)
     }
-
     /// Exact canonical ordered key entries.
     #[must_use]
     pub fn entries(&self) -> &[ZkAmsMkheCollectiveEvaluatedKeyEntryV1] {
         &self.entries
     }
-
     /// Complete SoraFS payload pointer.
     #[must_use]
     pub const fn sorafs(&self) -> ZkAmsMkheEvaluatedKeySorafsPointerV1 {
         self.sorafs
     }
-
     /// Digest of the exact entry table.
     #[must_use]
     pub const fn entry_table_digest(&self) -> [u8; 32] {
         self.entry_table_digest
     }
-
     /// Consensus identity of the complete manifest.
     #[must_use]
     pub const fn manifest_digest(&self) -> [u8; 32] {
         self.manifest_digest
     }
-
     fn validate_fields(
         &self,
         roster: &ZkAmsMkheGovernedRosterWireV1,
@@ -464,7 +433,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyManifestV1 {
         }
         Ok(())
     }
-
     fn validate(&self, roster: &ZkAmsMkheGovernedRosterWireV1) -> Result<(), ZkAmsMkheErrorV1> {
         self.validate_fields(roster)?;
         if self.entry_table_digest == [0; 32]
@@ -477,7 +445,6 @@ impl ZkAmsMkheCollectiveEvaluatedKeyManifestV1 {
         Ok(())
     }
 }
-
 fn encode_entry(bytes: &mut Vec<u8>, entry: ZkAmsMkheCollectiveEvaluatedKeyEntryV1) {
     bytes.push(entry.ordinal);
     bytes.push(entry.purpose as u8);
@@ -488,7 +455,6 @@ fn encode_entry(bytes: &mut Vec<u8>, entry: ZkAmsMkheCollectiveEvaluatedKeyEntry
     bytes.extend_from_slice(&entry.source_proof_set_digest);
     bytes.extend_from_slice(&entry.cks_proof_set_digest);
 }
-
 fn decode_entry(
     bytes: &[u8],
     cursor: &mut usize,
@@ -504,7 +470,6 @@ fn decode_entry(
         read_array(bytes, cursor)?,
     )
 }
-
 fn entry_table_digest(entries: &[ZkAmsMkheCollectiveEvaluatedKeyEntryV1]) -> [u8; 32] {
     let mut frame = Vec::with_capacity(8 + entries.len() * COLLECTIVE_EVALUATED_KEY_ENTRY_BYTES_V1);
     frame.extend_from_slice(COLLECTIVE_EVALUATED_KEY_TABLE_DOMAIN_V1);
@@ -514,7 +479,6 @@ fn entry_table_digest(entries: &[ZkAmsMkheCollectiveEvaluatedKeyEntryV1]) -> [u8
     }
     keccak256(&frame)
 }
-
 fn manifest_digest(manifest: &ZkAmsMkheCollectiveEvaluatedKeyManifestV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(COLLECTIVE_EVALUATED_KEY_MANIFEST_DOMAIN_V1);
@@ -534,7 +498,6 @@ fn manifest_digest(manifest: &ZkAmsMkheCollectiveEvaluatedKeyManifestV1) -> [u8;
     hash.update(&manifest.sorafs.chunker_profile_digest);
     hash.finalize()
 }
-
 fn read_exact<'a>(
     bytes: &'a [u8],
     cursor: &mut usize,
@@ -549,11 +512,9 @@ fn read_exact<'a>(
     *cursor = end;
     Ok(value)
 }
-
 fn read_u8(bytes: &[u8], cursor: &mut usize) -> Result<u8, ZkAmsMkheErrorV1> {
     Ok(read_exact(bytes, cursor, 1)?[0])
 }
-
 fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, ZkAmsMkheErrorV1> {
     Ok(u32::from_be_bytes(
         read_exact(bytes, cursor, 4)?
@@ -561,7 +522,6 @@ fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, ZkAmsMkheErrorV1> {
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
     ))
 }
-
 fn read_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64, ZkAmsMkheErrorV1> {
     Ok(u64::from_be_bytes(
         read_exact(bytes, cursor, 8)?
@@ -569,34 +529,29 @@ fn read_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64, ZkAmsMkheErrorV1> {
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
     ))
 }
-
 fn read_array(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     read_exact(bytes, cursor, 32)?
         .try_into()
         .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
-
 fn expect_bytes(bytes: &[u8], cursor: &mut usize, expected: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
     if read_exact(bytes, cursor, expected.len())? != expected {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
     Ok(())
 }
-
 fn expect_u8(bytes: &[u8], cursor: &mut usize, expected: u8) -> Result<(), ZkAmsMkheErrorV1> {
     if read_u8(bytes, cursor)? != expected {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
     Ok(())
 }
-
 fn expect_u64(bytes: &[u8], cursor: &mut usize, expected: u64) -> Result<(), ZkAmsMkheErrorV1> {
     if read_u64(bytes, cursor)? != expected {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
     Ok(())
 }
-
 fn expect_array(
     bytes: &[u8],
     cursor: &mut usize,
@@ -607,14 +562,11 @@ fn expect_array(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vega::zk_ams::mkhe::ZkAmsMkhePartyIdV1;
-
     const TRANSCRIPT: [u8; 32] = [0xa1; 32];
-
     fn roster() -> ZkAmsMkheGovernedRosterWireV1 {
         let parties = core::array::from_fn(|index| {
             ZkAmsMkhePartyIdV1::new(
@@ -629,14 +581,12 @@ mod tests {
         )
         .expect("release roster")
     }
-
     fn digest(seed: usize, domain: u8) -> [u8; 32] {
         let mut value = [domain; 32];
         value[0] = u8::try_from(seed + 1).expect("test seed fits u8");
         value[31] ^= u8::try_from(seed).expect("test seed fits u8");
         value
     }
-
     fn entries() -> Vec<ZkAmsMkheCollectiveEvaluatedKeyEntryV1> {
         let roster = roster();
         let resources =
@@ -670,7 +620,6 @@ mod tests {
             })
             .collect()
     }
-
     fn pointer() -> ZkAmsMkheEvaluatedKeySorafsPointerV1 {
         ZkAmsMkheEvaluatedKeySorafsPointerV1::new(
             [0xb1; 32],
@@ -681,12 +630,10 @@ mod tests {
         )
         .expect("SoraFS pointer")
     }
-
     fn manifest() -> ZkAmsMkheCollectiveEvaluatedKeyManifestV1 {
         ZkAmsMkheCollectiveEvaluatedKeyManifestV1::new(&roster(), TRANSCRIPT, entries(), pointer())
             .expect("manifest")
     }
-
     #[test]
     fn exact_collective_topology_and_sorafs_wire_roundtrip() {
         let roster = roster();
@@ -713,7 +660,6 @@ mod tests {
                 .map(|entry| entry.exponent)
                 .collect::<Vec<_>>()
         );
-
         let bytes = manifest.encode(&roster).expect("encode");
         assert_eq!(bytes.len(), COLLECTIVE_EVALUATED_KEY_MANIFEST_BYTES_V1);
         assert_eq!(
@@ -721,19 +667,16 @@ mod tests {
             Ok(manifest)
         );
     }
-
     #[test]
     fn missing_duplicate_reordered_and_spliced_entries_fail_closed() {
         let roster = roster();
         let baseline = entries();
-
         let mut missing = baseline.clone();
         missing.pop();
         assert_eq!(
             ZkAmsMkheCollectiveEvaluatedKeyManifestV1::new(&roster, TRANSCRIPT, missing, pointer(),),
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
-
         let mut reordered = baseline.clone();
         reordered.swap(1, 2);
         assert!(
@@ -745,7 +688,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut duplicate_payload = baseline.clone();
         duplicate_payload[2].payload_blake3 = duplicate_payload[1].payload_blake3;
         assert_eq!(
@@ -757,7 +699,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
-
         let mut duplicate_proof = baseline.clone();
         duplicate_proof[2].cks_proof_set_digest = duplicate_proof[1].cks_proof_set_digest;
         assert_eq!(
@@ -769,7 +710,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
-
         let mut wrong_exponent = baseline.clone();
         wrong_exponent[1].galois_exponent ^= 2;
         assert_eq!(
@@ -781,7 +721,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::MissingEvaluatedKey)
         );
-
         let mut wrong_offset = baseline;
         wrong_offset[9].payload_offset += 1;
         assert_eq!(
@@ -794,13 +733,11 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
     }
-
     #[test]
     fn roster_transcript_transport_and_wire_mutations_fail_closed() {
         let roster = roster();
         let manifest = manifest();
         let bytes = manifest.encode(&roster).unwrap();
-
         assert!(
             ZkAmsMkheCollectiveEvaluatedKeyManifestV1::decode_exact(
                 &bytes[..bytes.len() - 1],
@@ -821,7 +758,6 @@ mod tests {
             ZkAmsMkheCollectiveEvaluatedKeyManifestV1::decode_exact(&bytes, &roster, [0xa2; 32],)
                 .is_err()
         );
-
         for offset in [0, 4, 5, 37, 69, 77, 109, 141, 142, 150, 158, 190] {
             let mut mutation = bytes.clone();
             mutation[offset] ^= 1;
@@ -833,7 +769,6 @@ mod tests {
                 "mutation at byte {offset} was accepted"
             );
         }
-
         assert_eq!(
             ZkAmsMkheEvaluatedKeySorafsPointerV1::new(
                 [0xb1; 32], 0, [0xb2; 32], [0xb3; 32], [0xb4; 32],

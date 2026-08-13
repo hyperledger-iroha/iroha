@@ -1,13 +1,10 @@
 use super::*;
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::keccak256};
-
 const POINT_WIRE_V1: &str = "8025a4e3128f042d728e58b7e09a51b72585be4435f4e94aac8517f2e158b3eae6";
-
 fn point_v1() -> Point {
     Point::from_non_identity_wire_bytes_exact(&hex::decode(POINT_WIRE_V1).expect("literal hex"))
         .expect("literal canonical T256 point")
 }
-
 fn axes_v1() -> ResponseLinkAxesV1 {
     ResponseLinkAxesV1 {
         profile_digest: [0x11; 32],
@@ -21,7 +18,6 @@ fn axes_v1() -> ResponseLinkAxesV1 {
         party_index: 3,
     }
 }
-
 fn challenge_v1() -> SparseChallengeV1 {
     SparseChallengeV1 {
         seed: [0x88; 32],
@@ -31,7 +27,6 @@ fn challenge_v1() -> SparseChallengeV1 {
         }),
     }
 }
-
 fn source_v1() -> PersistentDecryptionResponseLinkSourceV1 {
     PersistentDecryptionResponseLinkSourceV1 {
         axes: axes_v1(),
@@ -39,7 +34,6 @@ fn source_v1() -> PersistentDecryptionResponseLinkSourceV1 {
         seal: ResponseLinkSourceSealV1::TestOnly,
     }
 }
-
 fn response_use_v1<'a>(
     source: &'a PersistentDecryptionResponseLinkSourceV1,
     response: &'a [i64],
@@ -56,7 +50,6 @@ fn response_use_v1<'a>(
         secret_response: response,
     }
 }
-
 fn literal_negacyclic_product_v1(terms: &[(usize, i64)], witness: &[i64]) -> Vec<i64> {
     let mut output = vec![0_i64; witness.len()];
     for &(shift, sign) in terms {
@@ -71,7 +64,6 @@ fn literal_negacyclic_product_v1(terms: &[(usize, i64)], witness: &[i64]) -> Vec
     }
     output
 }
-
 fn projected_equation_v1(
     beta: Scalar,
     terms: &[SparseChallengeTermV1],
@@ -89,7 +81,6 @@ fn projected_equation_v1(
     }
     result
 }
-
 fn structural_proof_wire_v1() -> Vec<u8> {
     let point = hex::decode(POINT_WIRE_V1).expect("literal point");
     let mut wire = vec![0_u8; RESPONSE_LINK_TAIL_BYTES_V1];
@@ -115,7 +106,6 @@ fn structural_proof_wire_v1() -> Vec<u8> {
     assert_eq!(cursor, RESPONSE_LINK_TAIL_BYTES_V1);
     wire
 }
-
 #[test]
 fn independent_tiny_polynomial_oracle_matches_adjoint_equation() {
     let secret = [1, -1, 0, 1, 0, -1, 1, 0];
@@ -133,7 +123,6 @@ fn independent_tiny_polynomial_oracle_matches_adjoint_equation() {
     mutated[3] += 1;
     assert!(!projected_equation_v1(beta, &terms, &secret, &mask, &mutated).is_zero());
 }
-
 #[test]
 fn release_constraint_has_exact_sixteen_vector_openings_and_no_scalars() {
     let response = vec![0_i64; RESPONSE_LINK_RING_DEGREE_V1];
@@ -158,7 +147,6 @@ fn release_constraint_has_exact_sixteen_vector_openings_and_no_scalars() {
     assert!(constraint.wl.is_empty() && constraint.wr.is_empty() && constraint.wo.is_empty());
     assert!(constraint.wv.is_empty() && constraint.c.is_zero());
 }
-
 #[test]
 fn zero_divisor_regression_never_inverts_sparse_challenge() {
     // Over F_2, (1+X)(1+X+X^2+X^3)=X^4+1=0.  The adjoint identity
@@ -178,7 +166,6 @@ fn zero_divisor_regression_never_inverts_sparse_challenge() {
     );
     assert!(!RESPONSE_LINK_SOUNDNESS_RECORD_V1.4);
 }
-
 #[test]
 fn signed_small_lift_and_wide_smudge_separation_are_exact() {
     assert_eq!(RESPONSE_LINK_SECRET_MASK_BOUND_V1, 20 * (1 << 24));
@@ -203,7 +190,6 @@ fn signed_small_lift_and_wide_smudge_separation_are_exact() {
             .any(|window| window == b"smudge_response")
     );
 }
-
 #[test]
 fn purpose_transcript_codec_kat_is_deterministic_and_order_bound() {
     let expected_header = [
@@ -226,21 +212,18 @@ fn purpose_transcript_codec_kat_is_deterministic_and_order_bound() {
     let second = ResponseLinkTranscriptSeedV1::new_v1(&second_use).unwrap();
     assert_eq!(first.beta.to_le_bytes(), second.beta.to_le_bytes());
     assert_eq!(first.binding_digest_v1(), second.binding_digest_v1());
-
     let mut changed_source = source_v1();
     changed_source.axes.share_first_message_digest[0] ^= 1;
     let changed_use = response_use_v1(&changed_source, &response);
     let changed = ResponseLinkTranscriptSeedV1::new_v1(&changed_use).unwrap();
     assert_ne!(first.binding_digest_v1(), changed.binding_digest_v1());
     assert_ne!(first.beta.to_le_bytes(), changed.beta.to_le_bytes());
-
     let mut changed_response = response;
     changed_response[RESPONSE_LINK_RING_DEGREE_V1 - 1] = 1;
     let changed_use = response_use_v1(&source, &changed_response);
     let changed = ResponseLinkTranscriptSeedV1::new_v1(&changed_use).unwrap();
     assert_ne!(first.binding_digest_v1(), changed.binding_digest_v1());
 }
-
 #[test]
 fn exact_proof_codec_kat_rejects_every_boundary_mutation() {
     let wire = structural_proof_wire_v1();
@@ -248,7 +231,6 @@ fn exact_proof_codec_kat_rejects_every_boundary_mutation() {
         .expect("structurally canonical proof");
     assert_eq!(proof.wire_v1(), wire.as_slice());
     assert_eq!(proof.core_v1().len(), RESPONSE_LINK_CORE_BYTES_V1);
-
     for end in [0, 1, RESPONSE_LINK_TAIL_BYTES_V1 - 1] {
         assert!(
             PersistentDecryptionResponseLinkProofV1::from_wire_bytes_exact_v1(&wire[..end])
@@ -283,7 +265,6 @@ fn exact_proof_codec_kat_rejects_every_boundary_mutation() {
     changed[scalar_offset..scalar_offset + 32].copy_from_slice(&noncanonical);
     assert!(PersistentDecryptionResponseLinkProofV1::from_wire_bytes_exact_v1(&changed).is_err());
 }
-
 #[test]
 fn accounting_soundness_and_every_operational_gate_remain_false() {
     assert_eq!(
@@ -333,7 +314,6 @@ fn accounting_soundness_and_every_operational_gate_remain_false() {
         assert!(!gate);
     }
 }
-
 #[test]
 fn privacy_typestate_order_and_source_budgets_are_static() {
     let production = include_str!("persistent_decryption_response_link.rs");

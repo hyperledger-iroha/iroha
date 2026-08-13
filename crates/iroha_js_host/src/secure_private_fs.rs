@@ -3,22 +3,18 @@
 //! The JavaScript boundary deliberately accepts one already-existing parent, one private
 //! directory, and one leaf filename. Keeping the namespace this small lets the host validate
 //! every object identity and reject indirection before publishing security-sensitive state.
-
 use std::{
     fmt, fs, io,
     io::{Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     sync::Mutex,
 };
-
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use rand_core_06::{OsRng, RngCore as _};
-
 const MAXIMUM_BYTES_HARD_LIMIT: u32 = 64 * 1024 * 1024;
 const TEMP_NAME_ATTEMPTS: usize = 32;
 static STORAGE_LOCK: Mutex<()> = Mutex::new(());
-
 #[derive(Debug)]
 enum SecureFsError {
     InvalidInput(String),
@@ -29,7 +25,6 @@ enum SecureFsError {
         source: io::Error,
     },
 }
-
 impl SecureFsError {
     fn io(action: &'static str, path: &Path, source: io::Error) -> Self {
         Self::Io {
@@ -38,12 +33,10 @@ impl SecureFsError {
             source,
         }
     }
-
     fn unsafe_storage(message: impl Into<String>) -> Self {
         Self::UnsafeStorage(message.into())
     }
 }
-
 impl fmt::Display for SecureFsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -58,7 +51,6 @@ impl fmt::Display for SecureFsError {
         }
     }
 }
-
 impl From<SecureFsError> for napi::Error {
     fn from(error: SecureFsError) -> Self {
         let status = match error {
@@ -70,49 +62,40 @@ impl From<SecureFsError> for napi::Error {
         napi::Error::new(status, error.to_string())
     }
 }
-
 #[cfg(unix)]
 type FileIdentity = (u64, u64);
 #[cfg(windows)]
 type FileIdentity = (u64, [u8; 16]);
 #[cfg(not(any(unix, windows)))]
 type FileIdentity = ();
-
 #[cfg(unix)]
 fn file_identity(metadata: &fs::Metadata) -> FileIdentity {
     use std::os::unix::fs::MetadataExt as _;
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn file_identity(_metadata: &fs::Metadata) -> FileIdentity {}
-
 #[cfg(unix)]
 fn identity_available(_identity: FileIdentity) -> bool {
     true
 }
-
 #[cfg(windows)]
 fn identity_available(identity: FileIdentity) -> bool {
     identity.1 != [0; 16]
 }
-
 #[cfg(not(any(unix, windows)))]
 fn identity_available(_identity: FileIdentity) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn is_single_link(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     metadata.nlink() == 1
 }
-
 #[cfg(not(any(unix, windows)))]
 fn is_single_link(_metadata: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
@@ -125,7 +108,6 @@ fn metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
@@ -134,12 +116,10 @@ fn metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.creation_time() == right.creation_time()
         && left.file_attributes() == right.file_attributes()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn publication_preserved_object(staged: &fs::Metadata, published: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
@@ -153,7 +133,6 @@ fn publication_preserved_object(staged: &fs::Metadata, published: &fs::Metadata)
         && staged.mtime() == published.mtime()
         && staged.mtime_nsec() == published.mtime_nsec()
 }
-
 #[cfg(windows)]
 fn publication_preserved_object(staged: &fs::Metadata, published: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
@@ -162,29 +141,24 @@ fn publication_preserved_object(staged: &fs::Metadata, published: &fs::Metadata)
         && staged.creation_time() == published.creation_time()
         && staged.last_write_time() == published.last_write_time()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn publication_preserved_object(_staged: &fs::Metadata, _published: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn path_identity(path: &Path, metadata: &fs::Metadata) -> Result<FileIdentity, SecureFsError> {
     let _ = path;
     Ok(file_identity(metadata))
 }
-
 #[cfg(windows)]
 fn path_identity(path: &Path, _metadata: &fs::Metadata) -> Result<FileIdentity, SecureFsError> {
     platform::path_identity(path)
         .map_err(|source| SecureFsError::io("query path filesystem identity", path, source))
 }
-
 #[cfg(not(any(unix, windows)))]
 fn path_identity(_path: &Path, metadata: &fs::Metadata) -> Result<FileIdentity, SecureFsError> {
     Ok(file_identity(metadata))
 }
-
 #[cfg(unix)]
 fn handle_identity(
     file: &fs::File,
@@ -194,7 +168,6 @@ fn handle_identity(
     let _ = (file, path);
     Ok(file_identity(metadata))
 }
-
 #[cfg(windows)]
 fn handle_identity(
     file: &fs::File,
@@ -204,7 +177,6 @@ fn handle_identity(
     platform::handle_identity(file)
         .map_err(|source| SecureFsError::io("query handle filesystem identity", path, source))
 }
-
 #[cfg(not(any(unix, windows)))]
 fn handle_identity(
     _file: &fs::File,
@@ -213,24 +185,20 @@ fn handle_identity(
 ) -> Result<FileIdentity, SecureFsError> {
     Ok(file_identity(metadata))
 }
-
 #[cfg(unix)]
 fn path_is_single_link(_path: &Path, metadata: &fs::Metadata) -> Result<bool, SecureFsError> {
     Ok(is_single_link(metadata))
 }
-
 #[cfg(windows)]
 fn path_is_single_link(path: &Path, _metadata: &fs::Metadata) -> Result<bool, SecureFsError> {
     platform::path_link_count(path)
         .map(|links| links == 1)
         .map_err(|source| SecureFsError::io("query path link count", path, source))
 }
-
 #[cfg(not(any(unix, windows)))]
 fn path_is_single_link(_path: &Path, metadata: &fs::Metadata) -> Result<bool, SecureFsError> {
     Ok(is_single_link(metadata))
 }
-
 #[cfg(unix)]
 fn handle_is_single_link(
     _file: &fs::File,
@@ -239,7 +207,6 @@ fn handle_is_single_link(
 ) -> Result<bool, SecureFsError> {
     Ok(is_single_link(metadata))
 }
-
 #[cfg(windows)]
 fn handle_is_single_link(
     file: &fs::File,
@@ -250,7 +217,6 @@ fn handle_is_single_link(
         .map(|links| links == 1)
         .map_err(|source| SecureFsError::io("query handle link count", path, source))
 }
-
 #[cfg(not(any(unix, windows)))]
 fn handle_is_single_link(
     _file: &fs::File,
@@ -259,7 +225,6 @@ fn handle_is_single_link(
 ) -> Result<bool, SecureFsError> {
     Ok(is_single_link(metadata))
 }
-
 fn validate_maximum_bytes(maximum_bytes: u32) -> Result<u64, SecureFsError> {
     if maximum_bytes == 0 || maximum_bytes > MAXIMUM_BYTES_HARD_LIMIT {
         return Err(SecureFsError::InvalidInput(format!(
@@ -268,7 +233,6 @@ fn validate_maximum_bytes(maximum_bytes: u32) -> Result<u64, SecureFsError> {
     }
     Ok(u64::from(maximum_bytes))
 }
-
 fn validate_root_path(root: &Path) -> Result<(), SecureFsError> {
     if !root.is_absolute() {
         return Err(SecureFsError::InvalidInput(
@@ -280,7 +244,6 @@ fn validate_root_path(root: &Path) -> Result<(), SecureFsError> {
             "secure private root must name a directory below an existing parent".to_owned(),
         ));
     }
-
     let mut saw_normal = false;
     for component in root.components() {
         match component {
@@ -300,7 +263,6 @@ fn validate_root_path(root: &Path) -> Result<(), SecureFsError> {
     }
     platform::validate_root_syntax(root)
 }
-
 fn validate_filename(filename: &str) -> Result<(), SecureFsError> {
     if filename.is_empty() || filename.as_bytes().contains(&0) {
         return Err(SecureFsError::InvalidInput(
@@ -316,19 +278,15 @@ fn validate_filename(filename: &str) -> Result<(), SecureFsError> {
     }
     platform::validate_filename_syntax(filename)
 }
-
 fn path_has_indirection(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink() || platform::metadata_is_reparse_point(metadata)
 }
-
 struct DirectoryPin {
     path: PathBuf,
     identity: FileIdentity,
     handle: fs::File,
 }
-
 struct DirectoryChain(Vec<DirectoryPin>);
-
 impl DirectoryChain {
     fn verify(&self) -> Result<(), SecureFsError> {
         for pinned in &self.0 {
@@ -353,7 +311,6 @@ impl DirectoryChain {
         Ok(())
     }
 }
-
 fn inspect_directory_chain(path: &Path) -> Result<DirectoryChain, SecureFsError> {
     let mut cursor = PathBuf::new();
     let mut directories = Vec::new();
@@ -400,7 +357,6 @@ fn inspect_directory_chain(path: &Path) -> Result<DirectoryChain, SecureFsError>
     }
     Ok(DirectoryChain(directories))
 }
-
 fn direct_directory_identity(path: &Path) -> Result<FileIdentity, SecureFsError> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|source| SecureFsError::io("inspect directory", path, source))?;
@@ -417,7 +373,6 @@ fn direct_directory_identity(path: &Path) -> Result<FileIdentity, SecureFsError>
     }
     Ok(identity)
 }
-
 fn verify_directory_identity(path: &Path, expected: FileIdentity) -> Result<(), SecureFsError> {
     if direct_directory_identity(path)? != expected {
         return Err(SecureFsError::unsafe_storage(format!(
@@ -427,12 +382,10 @@ fn verify_directory_identity(path: &Path, expected: FileIdentity) -> Result<(), 
     }
     Ok(())
 }
-
 struct ValidatedRoot {
     identity: FileIdentity,
     chain: DirectoryChain,
 }
-
 impl ValidatedRoot {
     fn verify(&self, root: &Path) -> Result<(), SecureFsError> {
         self.chain.verify()?;
@@ -440,7 +393,6 @@ impl ValidatedRoot {
         platform::validate_private_directory(root)
     }
 }
-
 fn validate_private_root(root: &Path) -> Result<ValidatedRoot, SecureFsError> {
     validate_root_path(root)?;
     let chain = inspect_directory_chain(root)?;
@@ -449,7 +401,6 @@ fn validate_private_root(root: &Path) -> Result<ValidatedRoot, SecureFsError> {
     platform::validate_private_directory(root)?;
     Ok(ValidatedRoot { identity, chain })
 }
-
 fn ensure_private_root(root: &Path) -> Result<ValidatedRoot, SecureFsError> {
     validate_root_path(root)?;
     let parent = root.parent().ok_or_else(|| {
@@ -459,7 +410,6 @@ fn ensure_private_root(root: &Path) -> Result<ValidatedRoot, SecureFsError> {
     platform::validate_supported_filesystem(parent)?;
     platform::validate_parent_directory(parent)?;
     let parent_identity = direct_directory_identity(parent)?;
-
     match fs::symlink_metadata(root) {
         Ok(_) => {}
         Err(source) if source.kind() == io::ErrorKind::NotFound => {
@@ -483,7 +433,6 @@ fn ensure_private_root(root: &Path) -> Result<ValidatedRoot, SecureFsError> {
             ));
         }
     }
-
     parent_chain.verify()?;
     verify_directory_identity(parent, parent_identity)?;
     let validated = validate_private_root(root)?;
@@ -493,12 +442,10 @@ fn ensure_private_root(root: &Path) -> Result<ValidatedRoot, SecureFsError> {
     validated.verify(root)?;
     Ok(validated)
 }
-
 fn open_private_file(path: &Path) -> Result<fs::File, SecureFsError> {
     platform::open_private_file(path)
         .map_err(|source| SecureFsError::io("open secure private file", path, source))
 }
-
 fn validate_private_file_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -519,7 +466,6 @@ fn validate_private_file_metadata(
     }
     platform::validate_private_file_path(path)
 }
-
 fn read_private_file(
     root: &Path,
     filename: &str,
@@ -543,7 +489,6 @@ fn read_private_file(
     };
     validate_private_file_metadata(&path, &path_before, maximum_bytes)?;
     let path_before_identity = path_identity(&path, &path_before)?;
-
     let mut file = open_private_file(&path)?;
     let opened_before = file
         .metadata()
@@ -559,14 +504,12 @@ fn read_private_file(
         )));
     }
     platform::validate_private_file_handle(&file, &path)?;
-
     let capacity = usize::try_from(opened_before.len()).unwrap_or(0);
     let mut bytes = Vec::with_capacity(capacity);
     Read::by_ref(&mut file)
         .take(maximum_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|source| SecureFsError::io("read secure private file", &path, source))?;
-
     let opened_after = file
         .metadata()
         .map_err(|source| SecureFsError::io("reinspect opened private file", &path, source))?;
@@ -594,12 +537,10 @@ fn read_private_file(
     validated_root.verify(root)?;
     Ok(Some(bytes))
 }
-
 struct TemporaryPath {
     path: PathBuf,
     published: bool,
 }
-
 impl TemporaryPath {
     fn new(path: PathBuf) -> Self {
         Self {
@@ -607,12 +548,10 @@ impl TemporaryPath {
             published: false,
         }
     }
-
     fn mark_published(&mut self) {
         self.published = true;
     }
 }
-
 impl Drop for TemporaryPath {
     fn drop(&mut self) {
         if !self.published {
@@ -620,7 +559,6 @@ impl Drop for TemporaryPath {
         }
     }
 }
-
 fn create_private_temporary_file(
     root: &Path,
     maximum_bytes: u64,
@@ -670,7 +608,6 @@ fn create_private_temporary_file(
         "could not allocate a collision-free secure private temporary filename",
     ))
 }
-
 fn write_private_file(
     root: &Path,
     filename: &str,
@@ -682,7 +619,6 @@ fn write_private_file(
             "secure private file content must be non-empty and within maximumBytes".to_owned(),
         ));
     }
-
     let validated_root = validate_private_root(root)?;
     let destination = root.join(filename);
     match fs::symlink_metadata(&destination) {
@@ -696,7 +632,6 @@ fn write_private_file(
             ));
         }
     }
-
     let (mut temporary, mut file) = create_private_temporary_file(root, maximum_bytes)?;
     let temporary_path = temporary.path.clone();
     file.write_all(bytes)
@@ -709,7 +644,6 @@ fn write_private_file(
                 source,
             )
         })?;
-
     file.seek(SeekFrom::Start(0)).map_err(|source| {
         SecureFsError::io(
             "rewind secure private temporary file",
@@ -763,7 +697,6 @@ fn write_private_file(
         )));
     }
     validated_root.verify(root)?;
-
     platform::replace_file(&temporary_path, &destination).map_err(|source| {
         SecureFsError::io(
             "atomically replace secure private file",
@@ -772,7 +705,6 @@ fn write_private_file(
         )
     })?;
     temporary.mark_published();
-
     let published_handle_metadata = file.metadata().map_err(|source| {
         SecureFsError::io(
             "inspect published secure private file handle",
@@ -805,7 +737,6 @@ fn write_private_file(
     platform::validate_private_file_handle(&file, &destination)?;
     platform::sync_private_directory(root)?;
     validated_root.verify(root)?;
-
     let published = read_private_file(root, filename, maximum_bytes)?.ok_or_else(|| {
         SecureFsError::unsafe_storage(format!(
             "published secure private file disappeared: {}",
@@ -820,13 +751,11 @@ fn write_private_file(
     }
     Ok(published)
 }
-
 fn lock_storage() -> Result<std::sync::MutexGuard<'static, ()>, SecureFsError> {
     STORAGE_LOCK
         .lock()
         .map_err(|_| SecureFsError::unsafe_storage("secure private storage lock was poisoned"))
 }
-
 /// Report the exact secure private-file contract implemented by this addon.
 ///
 /// N-API callbacks do not expose their Rust argument count through JavaScript's
@@ -836,7 +765,6 @@ fn lock_storage() -> Result<std::sync::MutexGuard<'static, ()>, SecureFsError> {
 pub fn secure_private_file_abi_version() -> u32 {
     1
 }
-
 /// Ensure that `root_path` is a direct current-user-private directory.
 #[napi(js_name = "securePrivateDirectoryEnsure")]
 pub fn secure_private_directory_ensure(root_path: String) -> napi::Result<()> {
@@ -844,7 +772,6 @@ pub fn secure_private_directory_ensure(root_path: String) -> napi::Result<()> {
     ensure_private_root(Path::new(&root_path))?;
     Ok(())
 }
-
 /// Read one bounded private file, returning `null` when the leaf does not exist.
 #[napi(js_name = "securePrivateFileRead")]
 pub fn secure_private_file_read(
@@ -860,7 +787,6 @@ pub fn secure_private_file_read(
         .map(|bytes| bytes.map(Buffer::from))
         .map_err(Into::into)
 }
-
 /// Atomically replace one bounded private file and return its exact durable readback.
 #[napi(js_name = "securePrivateFileWriteAtomic")]
 pub fn secure_private_file_write_atomic(
@@ -882,7 +808,6 @@ pub fn secure_private_file_write_atomic(
     .map(Buffer::from)
     .map_err(Into::into)
 }
-
 #[cfg(unix)]
 mod platform {
     use std::{
@@ -890,32 +815,24 @@ mod platform {
         os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _},
         path::Path,
     };
-
     use super::SecureFsError;
-
     const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
     const PRIVATE_FILE_MODE: u32 = 0o600;
-
     pub(super) fn validate_root_syntax(_root: &Path) -> Result<(), SecureFsError> {
         Ok(())
     }
-
     pub(super) fn validate_filename_syntax(_filename: &str) -> Result<(), SecureFsError> {
         Ok(())
     }
-
     pub(super) fn metadata_is_reparse_point(_metadata: &fs::Metadata) -> bool {
         false
     }
-
     pub(super) fn directory_metadata_is_supported(metadata: &fs::Metadata) -> bool {
         metadata.ino() != 0
     }
-
     pub(super) fn file_metadata_is_supported(metadata: &fs::Metadata) -> bool {
         metadata.ino() != 0
     }
-
     pub(super) fn validate_ancestor_directory(
         path: &Path,
         metadata: &fs::Metadata,
@@ -933,15 +850,12 @@ mod platform {
         extended_acl::validate_ancestor_path(path)?;
         Ok(())
     }
-
     fn effective_uid() -> u32 {
         rustix::process::geteuid().as_raw()
     }
-
     pub(super) fn validate_supported_filesystem(_path: &Path) -> Result<(), SecureFsError> {
         Ok(())
     }
-
     pub(super) fn validate_parent_directory(path: &Path) -> Result<(), SecureFsError> {
         let metadata = fs::symlink_metadata(path)
             .map_err(|source| SecureFsError::io("inspect secure private parent", path, source))?;
@@ -954,7 +868,6 @@ mod platform {
         extended_acl::validate_ancestor_path(path)?;
         Ok(())
     }
-
     pub(super) fn validate_private_directory(path: &Path) -> Result<(), SecureFsError> {
         let metadata = fs::symlink_metadata(path)
             .map_err(|source| SecureFsError::io("inspect secure private root", path, source))?;
@@ -967,7 +880,6 @@ mod platform {
         extended_acl::validate_private_path(path)?;
         Ok(())
     }
-
     pub(super) fn validate_private_file_path(path: &Path) -> Result<(), SecureFsError> {
         let metadata = fs::symlink_metadata(path)
             .map_err(|source| SecureFsError::io("inspect secure private file", path, source))?;
@@ -980,7 +892,6 @@ mod platform {
         extended_acl::validate_private_path(path)?;
         Ok(())
     }
-
     pub(super) fn validate_private_file_handle(
         file: &fs::File,
         path: &Path,
@@ -997,7 +908,6 @@ mod platform {
         extended_acl::validate_file(file, path)?;
         Ok(())
     }
-
     pub(super) fn create_private_directory(path: &Path) -> io::Result<()> {
         let mut builder = fs::DirBuilder::new();
         builder.mode(PRIVATE_DIRECTORY_MODE);
@@ -1008,7 +918,6 @@ mod platform {
         }
         Ok(())
     }
-
     pub(super) fn pin_ancestor_directory(path: &Path) -> io::Result<fs::File> {
         let mut options = fs::OpenOptions::new();
         options.read(true).custom_flags(
@@ -1016,7 +925,6 @@ mod platform {
         );
         options.open(path)
     }
-
     pub(super) fn open_private_file(path: &Path) -> io::Result<fs::File> {
         let mut options = fs::OpenOptions::new();
         options
@@ -1024,7 +932,6 @@ mod platform {
             .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
         options.open(path)
     }
-
     pub(super) fn create_private_file(path: &Path) -> io::Result<fs::File> {
         let mut options = fs::OpenOptions::new();
         options
@@ -1041,11 +948,9 @@ mod platform {
         }
         Ok(file)
     }
-
     pub(super) fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
         fs::rename(source, destination)
     }
-
     fn sync_directory(path: &Path) -> io::Result<()> {
         let mut options = fs::OpenOptions::new();
         options.read(true).custom_flags(
@@ -1053,18 +958,15 @@ mod platform {
         );
         options.open(path)?.sync_all()
     }
-
     pub(super) fn sync_parent_after_create(path: &Path) -> Result<(), SecureFsError> {
         sync_directory(path)
             .map_err(|source| SecureFsError::io("synchronize secure private parent", path, source))
     }
-
     pub(super) fn sync_private_directory(path: &Path) -> Result<(), SecureFsError> {
         sync_directory(path).map_err(|source| {
             SecureFsError::io("synchronize secure private directory", path, source)
         })
     }
-
     #[cfg(target_os = "macos")]
     #[allow(unsafe_code)]
     mod extended_acl {
@@ -1075,17 +977,13 @@ mod platform {
             path::Path,
             ptr,
         };
-
         use super::SecureFsError;
-
         const ACL_TYPE_EXTENDED: c_int = 0x0000_0100;
         const ACL_FIRST_ENTRY: c_int = 0;
         const ACL_NEXT_ENTRY: c_int = -1;
         const ACL_EXTENDED_DENY: c_int = 2;
-
         type Acl = *mut c_void;
         type AclEntry = *mut c_void;
-
         unsafe extern "C" {
             fn acl_free(object: *mut c_void) -> c_int;
             fn acl_get_entry(acl: Acl, entry_id: c_int, entry: *mut AclEntry) -> c_int;
@@ -1097,9 +995,7 @@ mod platform {
             fn acl_set_link_np(path: *const c_char, acl_type: c_int, acl: Acl) -> c_int;
             fn acl_valid(acl: Acl) -> c_int;
         }
-
         struct AclGuard(Acl);
-
         impl Drop for AclGuard {
             fn drop(&mut self) {
                 if !self.0.is_null() {
@@ -1110,13 +1006,11 @@ mod platform {
                 }
             }
         }
-
         fn c_path(path: &Path) -> io::Result<CString> {
             CString::new(path.as_os_str().as_bytes()).map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidInput, "path contains an embedded NUL")
             })
         }
-
         fn acl_or_absent(acl: Acl, path: &Path) -> Result<Option<AclGuard>, SecureFsError> {
             if acl.is_null() {
                 let source = io::Error::last_os_error();
@@ -1127,7 +1021,6 @@ mod platform {
             }
             Ok(Some(AclGuard(acl)))
         }
-
         fn require_valid(acl: &AclGuard, path: &Path) -> Result<(), SecureFsError> {
             // SAFETY: The guard owns a live ACL returned by the macOS ACL API.
             if unsafe { acl_valid(acl.0) } == 0 {
@@ -1139,12 +1032,10 @@ mod platform {
                 io::Error::last_os_error(),
             ))
         }
-
         fn is_entry_exhaustion(source: &io::Error) -> bool {
             // macOS returns EINVAL after the final ACL entry (including an empty ACL).
             source.kind() == io::ErrorKind::InvalidInput
         }
-
         fn require_empty(acl: Acl, path: &Path) -> Result<(), SecureFsError> {
             let Some(acl) = acl_or_absent(acl, path)? else {
                 return Ok(());
@@ -1171,7 +1062,6 @@ mod platform {
                 }
             }
         }
-
         fn require_deny_only(acl: Acl, path: &Path) -> Result<(), SecureFsError> {
             let Some(acl) = acl_or_absent(acl, path)? else {
                 return Ok(());
@@ -1214,7 +1104,6 @@ mod platform {
                 }
             }
         }
-
         pub(super) fn validate_ancestor_path(path: &Path) -> Result<(), SecureFsError> {
             let path_c = c_path(path)
                 .map_err(|source| SecureFsError::io("encode macOS ACL path", path, source))?;
@@ -1224,7 +1113,6 @@ mod platform {
                 path,
             )
         }
-
         pub(super) fn validate_private_path(path: &Path) -> Result<(), SecureFsError> {
             let path_c = c_path(path)
                 .map_err(|source| SecureFsError::io("encode macOS ACL path", path, source))?;
@@ -1234,7 +1122,6 @@ mod platform {
                 path,
             )
         }
-
         pub(super) fn validate_file(file: &fs::File, path: &Path) -> Result<(), SecureFsError> {
             // SAFETY: The descriptor remains live for the duration of this ACL query.
             require_empty(
@@ -1242,7 +1129,6 @@ mod platform {
                 path,
             )
         }
-
         fn empty_acl() -> io::Result<AclGuard> {
             // SAFETY: Zero requests an initialized ACL containing no entries.
             let acl = unsafe { acl_init(0) };
@@ -1251,7 +1137,6 @@ mod platform {
             }
             Ok(AclGuard(acl))
         }
-
         pub(super) fn clear_path(path: &Path) -> io::Result<()> {
             let path_c = c_path(path)?;
             let acl = empty_acl()?;
@@ -1261,7 +1146,6 @@ mod platform {
             }
             Ok(())
         }
-
         pub(super) fn clear_file(file: &fs::File) -> io::Result<()> {
             let acl = empty_acl()?;
             // SAFETY: The descriptor and ACL remain live for the duration of the call.
@@ -1271,35 +1155,27 @@ mod platform {
             Ok(())
         }
     }
-
     #[cfg(not(target_os = "macos"))]
     mod extended_acl {
         use std::{fs, io, path::Path};
-
         use super::SecureFsError;
-
         pub(super) fn validate_ancestor_path(_path: &Path) -> Result<(), SecureFsError> {
             Ok(())
         }
-
         pub(super) fn validate_private_path(_path: &Path) -> Result<(), SecureFsError> {
             Ok(())
         }
-
         pub(super) fn validate_file(_file: &fs::File, _path: &Path) -> Result<(), SecureFsError> {
             Ok(())
         }
-
         pub(super) fn clear_path(_path: &Path) -> io::Result<()> {
             Ok(())
         }
-
         pub(super) fn clear_file(_file: &fs::File) -> io::Result<()> {
             Ok(())
         }
     }
 }
-
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod platform {
@@ -1314,7 +1190,6 @@ mod platform {
         path::{Component, Path, Prefix},
         ptr,
     };
-
     #[cfg(test)]
     use windows_sys::Win32::Security::{Authorization::SetSecurityInfo, WinWorldSid};
     use windows_sys::Win32::{
@@ -1351,17 +1226,13 @@ mod platform {
             Threading::{GetCurrentProcess, OpenProcessToken},
         },
     };
-
     use super::SecureFsError;
-
     const ANCESTOR_REPLACEMENT_OR_CONTROL_RIGHTS: u32 =
         FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL;
     const PARENT_CREATION_RIGHTS: u32 = FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
-
     fn wide_literal(value: &OsStr) -> Vec<u16> {
         value.encode_wide().chain(Some(0)).collect()
     }
-
     fn wide_path(path: &Path) -> Vec<u16> {
         let needs_verbatim_prefix = matches!(
             path.components().next(),
@@ -1376,15 +1247,12 @@ mod platform {
         result.push(0);
         result
     }
-
     fn last_error() -> io::Error {
         io::Error::last_os_error()
     }
-
     fn win32_error(code: u32) -> io::Error {
         io::Error::from_raw_os_error(i32::try_from(code).unwrap_or(i32::MAX))
     }
-
     fn file_information(file: &fs::File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
         let mut information = BY_HANDLE_FILE_INFORMATION::default();
         // SAFETY: The file handle is live and `information` is a valid output buffer.
@@ -1394,7 +1262,6 @@ mod platform {
         }
         Ok(information)
     }
-
     pub(super) fn handle_identity(file: &fs::File) -> io::Result<super::FileIdentity> {
         let mut information = FILE_ID_INFO::default();
         // SAFETY: The file handle is live and `information` is the exact documented output
@@ -1415,24 +1282,19 @@ mod platform {
             information.FileId.Identifier,
         ))
     }
-
     pub(super) fn handle_link_count(file: &fs::File) -> io::Result<u32> {
         Ok(file_information(file)?.nNumberOfLinks)
     }
-
     pub(super) fn path_identity(path: &Path) -> io::Result<super::FileIdentity> {
         handle_identity(&open_metadata_object(path)?)
     }
-
     pub(super) fn path_link_count(path: &Path) -> io::Result<u32> {
         handle_link_count(&open_metadata_object(path)?)
     }
-
     struct SidBuffer {
         words: Vec<usize>,
         length: u32,
     }
-
     impl SidBuffer {
         fn with_length(length: u32) -> io::Result<Self> {
             let bytes = usize::try_from(length)
@@ -1443,18 +1305,15 @@ mod platform {
                 length,
             })
         }
-
         fn as_sid(&self) -> PSID {
             self.words.as_ptr().cast_mut().cast()
         }
     }
-
     struct PrivateSids {
         user: SidBuffer,
         system: SidBuffer,
         administrators: SidBuffer,
     }
-
     impl PrivateSids {
         fn current() -> io::Result<Self> {
             let mut token: HANDLE = ptr::null_mut();
@@ -1464,7 +1323,6 @@ mod platform {
             }
             // SAFETY: OpenProcessToken returned an owned kernel handle.
             let token = unsafe { OwnedHandle::from_raw_handle(token.cast()) };
-
             let mut required = 0_u32;
             // SAFETY: A null buffer with zero length is the documented size-query form.
             let first = unsafe {
@@ -1513,7 +1371,6 @@ mod platform {
             if unsafe { CopySid(user_length, user.as_sid(), token_user.User.Sid) } == 0 {
                 return Err(last_error());
             }
-
             let system = well_known_sid(WinLocalSystemSid)?;
             let administrators = well_known_sid(WinBuiltinAdministratorsSid)?;
             Ok(Self {
@@ -1522,7 +1379,6 @@ mod platform {
                 administrators,
             })
         }
-
         fn all(&self) -> [PSID; 3] {
             [
                 self.user.as_sid(),
@@ -1530,7 +1386,6 @@ mod platform {
                 self.administrators.as_sid(),
             ]
         }
-
         fn unique(&self) -> Vec<PSID> {
             let mut unique = Vec::new();
             for sid in self.all() {
@@ -1545,7 +1400,6 @@ mod platform {
             unique
         }
     }
-
     fn well_known_sid(sid_type: i32) -> io::Result<SidBuffer> {
         let mut sid = SidBuffer::with_length(SECURITY_MAX_SID_SIZE)?;
         let mut length = sid.length;
@@ -1557,13 +1411,11 @@ mod platform {
         sid.length = length;
         Ok(sid)
     }
-
     struct PrivateSecurityDescriptor {
         _sids: PrivateSids,
         _acl_words: Vec<usize>,
         descriptor: Box<SECURITY_DESCRIPTOR>,
     }
-
     impl PrivateSecurityDescriptor {
         fn new(directory: bool) -> io::Result<Self> {
             let sids = PrivateSids::current()?;
@@ -1608,7 +1460,6 @@ mod platform {
                     return Err(last_error());
                 }
             }
-
             let mut descriptor = Box::<SECURITY_DESCRIPTOR>::default();
             let descriptor_pointer = descriptor.as_mut() as *mut SECURITY_DESCRIPTOR;
             // SAFETY: The descriptor, ACL, and SIDs remain owned by the returned structure.
@@ -1638,7 +1489,6 @@ mod platform {
                 descriptor,
             })
         }
-
         fn security_attributes(&mut self) -> SECURITY_ATTRIBUTES {
             SECURITY_ATTRIBUTES {
                 nLength: u32::try_from(mem::size_of::<SECURITY_ATTRIBUTES>())
@@ -1648,9 +1498,7 @@ mod platform {
             }
         }
     }
-
     struct LocalSecurityDescriptor(*mut c_void);
-
     impl Drop for LocalSecurityDescriptor {
         fn drop(&mut self) {
             if !self.0.is_null() {
@@ -1661,9 +1509,7 @@ mod platform {
             }
         }
     }
-
     struct LocalSid(PSID);
-
     impl LocalSid {
         fn trusted_installer() -> io::Result<Self> {
             // The service SID is stable across supported Windows releases.
@@ -1678,7 +1524,6 @@ mod platform {
             Ok(Self(sid))
         }
     }
-
     impl Drop for LocalSid {
         fn drop(&mut self) {
             if !self.0.is_null() {
@@ -1689,7 +1534,6 @@ mod platform {
             }
         }
     }
-
     fn validate_private_acl(
         file: &fs::File,
         path: &Path,
@@ -1751,7 +1595,6 @@ mod platform {
                 path.display()
             )));
         }
-
         let mut information = ACL_SIZE_INFORMATION::default();
         // SAFETY: `dacl` is valid and `information` has the documented layout.
         if unsafe {
@@ -1779,7 +1622,6 @@ mod platform {
                 path.display()
             )));
         }
-
         let expected_flags = u8::try_from(if directory {
             OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
         } else {
@@ -1835,7 +1677,6 @@ mod platform {
         }
         Ok(())
     }
-
     fn validate_safe_directory_acl(
         file: &fs::File,
         path: &Path,
@@ -1891,7 +1732,6 @@ mod platform {
                 path.display()
             )));
         }
-
         let mut information = ACL_SIZE_INFORMATION::default();
         // SAFETY: `dacl` is valid and `information` has the documented layout.
         if unsafe {
@@ -1910,7 +1750,6 @@ mod platform {
                 last_error(),
             ));
         }
-
         let mut rejected_rights = ANCESTOR_REPLACEMENT_OR_CONTROL_RIGHTS;
         if reject_unexpected_creation_rights {
             rejected_rights |= PARENT_CREATION_RIGHTS;
@@ -1954,7 +1793,6 @@ mod platform {
         }
         Ok(())
     }
-
     fn validate_windows_leaf(value: &str) -> Result<(), SecureFsError> {
         if value.ends_with([' ', '.'])
             || value
@@ -2003,7 +1841,6 @@ mod platform {
         }
         Ok(())
     }
-
     pub(super) fn validate_root_syntax(root: &Path) -> Result<(), SecureFsError> {
         let mut components = root.components();
         let prefix = match components.next() {
@@ -2036,23 +1873,18 @@ mod platform {
         }
         Ok(())
     }
-
     pub(super) fn validate_filename_syntax(filename: &str) -> Result<(), SecureFsError> {
         validate_windows_leaf(filename)
     }
-
     pub(super) fn metadata_is_reparse_point(metadata: &fs::Metadata) -> bool {
         metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
-
     pub(super) fn directory_metadata_is_supported(_metadata: &fs::Metadata) -> bool {
         true
     }
-
     pub(super) fn file_metadata_is_supported(_metadata: &fs::Metadata) -> bool {
         true
     }
-
     pub(super) fn validate_ancestor_directory(
         path: &Path,
         _metadata: &fs::Metadata,
@@ -2061,7 +1893,6 @@ mod platform {
             .map_err(|source| SecureFsError::io("open secure private ancestor", path, source))?;
         validate_safe_directory_acl(&file, path, false, false)
     }
-
     pub(super) fn validate_supported_filesystem(path: &Path) -> Result<(), SecureFsError> {
         let path_wide = wide_path(path);
         let mut volume_path = vec![0_u16; 32_768];
@@ -2114,32 +1945,27 @@ mod platform {
         }
         Ok(())
     }
-
     pub(super) fn validate_parent_directory(path: &Path) -> Result<(), SecureFsError> {
         let file = open_directory(path)
             .map_err(|source| SecureFsError::io("open secure private parent", path, source))?;
         validate_safe_directory_acl(&file, path, true, true)
     }
-
     pub(super) fn validate_private_directory(path: &Path) -> Result<(), SecureFsError> {
         let file = open_directory(path)
             .map_err(|source| SecureFsError::io("open secure private root", path, source))?;
         validate_private_acl(&file, path, true)
     }
-
     pub(super) fn validate_private_file_path(path: &Path) -> Result<(), SecureFsError> {
         let file = open_private_file(path)
             .map_err(|source| SecureFsError::io("open secure private file ACL", path, source))?;
         validate_private_acl(&file, path, false)
     }
-
     pub(super) fn validate_private_file_handle(
         file: &fs::File,
         path: &Path,
     ) -> Result<(), SecureFsError> {
         validate_private_acl(file, path, false)
     }
-
     pub(super) fn create_private_directory(path: &Path) -> io::Result<()> {
         let mut descriptor = PrivateSecurityDescriptor::new(true)?;
         let attributes = descriptor.security_attributes();
@@ -2150,7 +1976,6 @@ mod platform {
         }
         Ok(())
     }
-
     fn create_file_with_security(path: &Path) -> io::Result<fs::File> {
         let mut descriptor = PrivateSecurityDescriptor::new(false)?;
         let attributes = descriptor.security_attributes();
@@ -2173,7 +1998,6 @@ mod platform {
         // SAFETY: CreateFileW returned an owned file handle.
         Ok(unsafe { fs::File::from_raw_handle(handle.cast()) })
     }
-
     fn open_directory_with_share(path: &Path, share_mode: u32) -> io::Result<fs::File> {
         let path = wide_path(path);
         // SAFETY: The path is a live NUL-terminated UTF-16 buffer.
@@ -2194,19 +2018,15 @@ mod platform {
         // SAFETY: CreateFileW returned an owned directory handle.
         Ok(unsafe { fs::File::from_raw_handle(handle.cast()) })
     }
-
     fn open_metadata_object(path: &Path) -> io::Result<fs::File> {
         open_directory_with_share(path, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
     }
-
     fn open_directory(path: &Path) -> io::Result<fs::File> {
         open_directory_with_share(path, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
     }
-
     pub(super) fn pin_ancestor_directory(path: &Path) -> io::Result<fs::File> {
         open_directory_with_share(path, FILE_SHARE_READ | FILE_SHARE_WRITE)
     }
-
     pub(super) fn open_private_file(path: &Path) -> io::Result<fs::File> {
         let mut options = fs::OpenOptions::new();
         options
@@ -2215,11 +2035,9 @@ mod platform {
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         options.open(path)
     }
-
     pub(super) fn create_private_file(path: &Path) -> io::Result<fs::File> {
         create_file_with_security(path)
     }
-
     pub(super) fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
         let source = wide_path(source);
         let destination = wide_path(destination);
@@ -2236,18 +2054,15 @@ mod platform {
         }
         Ok(())
     }
-
     pub(super) fn sync_parent_after_create(_path: &Path) -> Result<(), SecureFsError> {
         // CreateDirectoryW publishes the final ACL in the same kernel operation. Windows does not
         // expose a portable directory-fsync primitive; later file replacement uses WRITE_THROUGH.
         Ok(())
     }
-
     pub(super) fn sync_private_directory(_path: &Path) -> Result<(), SecureFsError> {
         // MoveFileExW(MOVEFILE_WRITE_THROUGH) is the supported namespace durability boundary.
         Ok(())
     }
-
     #[cfg(test)]
     pub(super) fn grant_world_parent_mutation_for_test(path: &Path) -> io::Result<()> {
         let sids = PrivateSids::current()?;
@@ -2289,7 +2104,6 @@ mod platform {
                 return Err(last_error());
             }
         }
-
         let path_wide = wide_path(path);
         // SAFETY: The path is a live NUL-terminated UTF-16 buffer.
         let handle = unsafe {
@@ -2326,19 +2140,15 @@ mod platform {
         Ok(())
     }
 }
-
 #[cfg(not(any(unix, windows)))]
 mod platform {
     use std::{fs, io, path::Path};
-
     use super::SecureFsError;
-
     fn unsupported() -> SecureFsError {
         SecureFsError::unsafe_storage(
             "secure private filesystem is supported only on Unix and Windows",
         )
     }
-
     pub(super) fn validate_root_syntax(_root: &Path) -> Result<(), SecureFsError> {
         Err(unsupported())
     }
@@ -2400,16 +2210,13 @@ mod platform {
         Err(unsupported())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[cfg(target_os = "macos")]
     struct MacOsAclGuard {
         path: PathBuf,
     }
-
     #[cfg(target_os = "macos")]
     impl Drop for MacOsAclGuard {
         fn drop(&mut self) {
@@ -2419,7 +2226,6 @@ mod tests {
                 .status();
         }
     }
-
     #[cfg(target_os = "macos")]
     fn add_macos_acl(path: &Path, entry: &str) -> MacOsAclGuard {
         let output = std::process::Command::new("/bin/chmod")
@@ -2438,7 +2244,6 @@ mod tests {
             path: path.to_path_buf(),
         }
     }
-
     #[cfg(windows)]
     fn create_windows_junction(link: &Path, target: &Path) {
         let output = std::process::Command::new("cmd.exe")
@@ -2459,18 +2264,15 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-
     fn private_root(parent: &Path) -> PathBuf {
         parent.join("governance-integrity-v1")
     }
-
     fn canonical_parent(parent: &tempfile::TempDir) -> PathBuf {
         parent
             .path()
             .canonicalize()
             .expect("canonical temporary parent")
     }
-
     #[test]
     fn validates_paths_and_bounds() {
         assert!(validate_root_path(Path::new("relative")).is_err());
@@ -2481,19 +2283,16 @@ mod tests {
         assert!(validate_maximum_bytes(0).is_err());
         assert!(validate_maximum_bytes(MAXIMUM_BYTES_HARD_LIMIT + 1).is_err());
     }
-
     #[cfg(unix)]
     #[test]
     fn creates_private_root_and_round_trips_replacements() {
         use std::os::unix::fs::MetadataExt as _;
-
         let parent = tempfile::tempdir().expect("temporary parent");
         let root = private_root(&canonical_parent(&parent));
         ensure_private_root(&root).expect("create private root");
         let root_metadata = fs::symlink_metadata(&root).expect("root metadata");
         assert_eq!(root_metadata.mode() & 0o777, 0o700);
         assert_eq!(root_metadata.uid(), rustix::process::geteuid().as_raw());
-
         assert_eq!(
             read_private_file(&root, "state.json", 1024).expect("read missing"),
             None
@@ -2525,19 +2324,16 @@ mod tests {
                 .starts_with(".secure-private-")
         }));
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_permissive_roots_and_files() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let parent = tempfile::tempdir().expect("temporary parent");
         let root = private_root(&canonical_parent(&parent));
         fs::create_dir(&root).expect("create root");
         fs::set_permissions(&root, fs::Permissions::from_mode(0o755))
             .expect("make root permissive");
         assert!(validate_private_root(&root).is_err());
-
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("make root private");
         let path = root.join("state.json");
         fs::write(&path, b"state").expect("write file");
@@ -2545,12 +2341,10 @@ mod tests {
             .expect("make file permissive");
         assert!(read_private_file(&root, "state.json", 1024).is_err());
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_symlinks_and_hard_links() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         let parent = tempfile::tempdir().expect("temporary parent");
         let parent_path = canonical_parent(&parent);
         let root = private_root(&parent_path);
@@ -2558,17 +2352,14 @@ mod tests {
         let outside = parent_path.join("outside.json");
         fs::write(&outside, b"outside").expect("write outside");
         fs::set_permissions(&outside, fs::Permissions::from_mode(0o600)).expect("protect outside");
-
         symlink(&outside, root.join("state.json")).expect("create symlink");
         assert!(read_private_file(&root, "state.json", 1024).is_err());
         fs::remove_file(root.join("state.json")).expect("remove symlink");
-
         fs::hard_link(&outside, root.join("state.json")).expect("create hard link");
         assert!(read_private_file(&root, "state.json", 1024).is_err());
         assert!(write_private_file(&root, "state.json", b"replacement", 1024).is_err());
         assert_eq!(fs::read(&outside).expect("outside remains"), b"outside");
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_empty_and_oversized_content() {
@@ -2577,11 +2368,9 @@ mod tests {
         ensure_private_root(&root).expect("create root");
         assert!(write_private_file(&root, "state.json", b"", 8).is_err());
         assert!(write_private_file(&root, "state.json", b"123456789", 8).is_err());
-
         fs::write(root.join("state.json"), b"").expect("empty file");
         assert!(read_private_file(&root, "state.json", 8).is_err());
     }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn accepts_deny_only_macos_ancestor_acl() {
@@ -2589,7 +2378,6 @@ mod tests {
         let parent_path = canonical_parent(&parent);
         let _acl = add_macos_acl(&parent_path, "everyone deny delete");
         let root = private_root(&parent_path);
-
         ensure_private_root(&root).expect("deny-only ACL must be safe on an ancestor");
         assert_eq!(
             write_private_file(&root, "state.json", b"private state", 1024)
@@ -2603,14 +2391,12 @@ mod tests {
             b"private state"
         );
     }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn rejects_macos_extended_allow_acls() {
         let parent = tempfile::tempdir().expect("temporary parent");
         let parent_path = canonical_parent(&parent);
         let root = private_root(&parent_path);
-
         {
             let _acl = add_macos_acl(&parent_path, "everyone allow read");
             assert!(
@@ -2618,7 +2404,6 @@ mod tests {
                 "an extended allow ACE on an ancestor must be rejected"
             );
         }
-
         ensure_private_root(&root).expect("create private root after clearing ancestor ACL");
         {
             let _acl = add_macos_acl(&root, "everyone allow read");
@@ -2627,7 +2412,6 @@ mod tests {
                 "any extended ACL on the private root must be rejected"
             );
         }
-
         write_private_file(&root, "state.json", b"private state", 1024)
             .expect("create private file");
         {
@@ -2638,7 +2422,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_rejects_the_unsupported_zero_file_id_sentinel() {
@@ -2648,7 +2431,6 @@ mod tests {
         supported_file_id[15] = 1;
         assert!(identity_available((0, supported_file_id)));
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_round_trips_replacements_at_long_unicode_paths() {
@@ -2669,7 +2451,6 @@ mod tests {
                 > 260,
             "test path must exercise the Windows long-path boundary"
         );
-
         let root = private_root(&parent_path);
         ensure_private_root(&root).expect("create Windows private root");
         let root_identity = platform::path_identity(&root).expect("read Windows root identity");
@@ -2706,7 +2487,6 @@ mod tests {
                 })
         );
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_rejects_broadened_parent_and_private_root_dacls() {
@@ -2718,7 +2498,6 @@ mod tests {
             ensure_private_root(&private_root(&unsafe_parent_path)).is_err(),
             "a parent DACL granting world namespace mutation must be rejected"
         );
-
         let private_parent = tempfile::tempdir().expect("temporary private parent");
         let private_parent_path = canonical_parent(&private_parent);
         let root = private_root(&private_parent_path);
@@ -2729,7 +2508,6 @@ mod tests {
             "a private root with an extra world ACE must be rejected"
         );
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_rejects_hard_links_and_directory_reparse_points() {
@@ -2752,7 +2530,6 @@ mod tests {
             fs::read(&outside).expect("outside file remains"),
             b"outside"
         );
-
         let reparse_parent = tempfile::tempdir().expect("temporary reparse parent");
         let reparse_parent_path = canonical_parent(&reparse_parent);
         let target = reparse_parent_path.join("junction-target");
@@ -2765,7 +2542,6 @@ mod tests {
         );
         fs::remove_dir(&junction_root).expect("remove test junction");
     }
-
     #[cfg(windows)]
     #[test]
     fn windows_rejects_ambiguous_and_reserved_paths() {

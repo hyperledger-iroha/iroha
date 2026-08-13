@@ -12,7 +12,6 @@ pub struct ProviderIngestFinalizedArchiveKeyV1 {
     /// Exact result-bearing block creation time.
     pub finalized_at_unix_ms: u64,
 }
-
 impl ProviderIngestFinalizedArchiveKeyV1 {
     /// Construct one validated exact key.
     ///
@@ -35,7 +34,6 @@ impl ProviderIngestFinalizedArchiveKeyV1 {
         key.validate()?;
         Ok(key)
     }
-
     /// Validate this exact finalized identity.
     ///
     /// # Errors
@@ -64,7 +62,6 @@ impl ProviderIngestFinalizedArchiveKeyV1 {
         }
         Ok(())
     }
-
     fn finalized_anchor(&self) -> ProviderIngestFinalizedAnchorV1 {
         ProviderIngestFinalizedAnchorV1 {
             height: self.height,

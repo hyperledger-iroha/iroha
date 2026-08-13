@@ -1,7 +1,6 @@
 use super::*;
 use crate::vega::sponge::Keccak256;
 use hex_literal::hex;
-
 const PARAMETER_KAT_V2: [u8; 32] =
     hex!("cc56911877ef83b04c3ce879640f2943ceabe13c38a7372d5c4f69637fe77566");
 const MAPPING_KATS_V2: [(u8, [u8; 32]); 4] = [
@@ -62,7 +61,6 @@ const NODE_KATS_V2: [(u8, u8, [u8; 32]); 4] = [
         hex!("ecd99303d3927df127705bf0717d3a2da080b160910185256ceae3e92fc59e32"),
     ),
 ];
-
 fn manual_mapping_v2(layer: u8) -> [u8; 32] {
     let logical_length = REPLAY_DOMAIN_VALUES_V2 >> layer;
     let values_per_block = u16::try_from(logical_length.min(1_024)).unwrap();
@@ -97,7 +95,6 @@ fn manual_mapping_v2(layer: u8) -> [u8; 32] {
     }
     hash.finalize()
 }
-
 fn manual_leaf_v2(parameter: [u8; 32], layer: u8, values: &[u8]) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v2.q-pcs.ten-row-merkle-leaf\0");
@@ -109,7 +106,6 @@ fn manual_leaf_v2(parameter: [u8; 32], layer: u8, values: &[u8]) -> [u8; 32] {
     hash.update(values);
     hash.finalize()
 }
-
 fn manual_node_v2(
     parameter: [u8; 32],
     layer: u8,
@@ -126,7 +122,6 @@ fn manual_node_v2(
     hash.update(&right);
     hash.finalize()
 }
-
 #[test]
 fn selected_layer_mappings_match_literal_independent_kats() {
     assert_eq!(
@@ -139,7 +134,6 @@ fn selected_layer_mappings_match_literal_independent_kats() {
         assert_eq!(manual_mapping_v2(layer), expected);
     }
 }
-
 #[test]
 fn selected_layer_leaf_and_node_frames_match_literal_independent_kats() {
     let values = [0x42; 6_080];
@@ -167,7 +161,6 @@ fn selected_layer_leaf_and_node_frames_match_literal_independent_kats() {
         );
     }
 }
-
 #[test]
 fn terminal_scatter_places_one_value_in_each_equal_leaf() {
     let mut terminal = ZeroizingFriTerminalV2::new_v2();
@@ -180,18 +173,23 @@ fn terminal_scatter_places_one_value_in_each_equal_leaf() {
     );
     assert_eq!(&terminal.bytes_v2()[..6_080], &terminal.bytes_v2()[6_080..]);
 }
-
 #[test]
 fn source_guards_pin_the_bounded_nonauthorizing_continuation() {
     let batch = include_str!("fri_layers2_17_v2.rs");
     let storage = include_str!("storage_v2/fold_layer1_v2/fold_layers2_17_v2.rs");
     let parent = include_str!("../batch_fri_v2.rs");
+    let quarantine = include_str!("fri_layers2_17_v2/atomic_quarantine_v2.rs");
+    let materialized =
+        include_str!("fri_layers2_17_v2/atomic_quarantine_v2/materialized_plaintext_v2.rs");
     assert!(batch.lines().count() <= 400);
     assert!(storage.lines().count() <= 650);
     assert!(parent.lines().count() <= 500);
+    assert!(quarantine.lines().count() <= 650);
+    assert!(materialized.lines().count() <= 500);
     for required in [
         "accepted_fri_layers: [Option<FriLayerRootedV2>; FRI_CONTINUATION_LAYERS_V2]",
         "terminal_replay_complete: Option<FriLayerReplayCompleteV2>",
+        "canonical_proof_v2::prepare_canonical_proof_quarantine_v2(prepared, directory)",
         "array::from_fn(|_| None)",
         "for source_layer in 1..17_usize",
         "fold_terminal_v2(ready, source)",
@@ -225,5 +223,12 @@ fn source_guards_pin_the_bounded_nonauthorizing_continuation() {
     assert!(storage.contains("continuation_leaf_hash_v2"));
     assert!(storage.contains("continuation_node_hash_v2"));
     assert!(!batch.contains("B18"));
+    assert!(!batch.contains("PathBuf"));
     assert!(!storage.contains("layer 18"));
+    assert!(quarantine.contains("AtomicProofQuarantineReplayPermitV2"));
+    assert!(quarantine.contains("release_after_atomic_quarantine_v2"));
+    assert!(materialized.contains("bytes: Zeroizing<Vec<u8>>"));
+    assert!(materialized.contains("impl AtomicProofQuarantineReadyV2"));
+    assert!(materialized.contains("pub(super) fn materialize_v2("));
+    assert!(materialized.contains("sink.begin_exact_v2(self.exact_bytes)?"));
 }

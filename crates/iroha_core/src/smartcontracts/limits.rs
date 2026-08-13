@@ -5,12 +5,9 @@ use iroha_data_model::{
     prelude::*,
 };
 use ivm::limits::GasScheduleEntry;
-
 use crate::state::StateTransaction;
-
 /// Default maximum size in bytes for JSON payloads (1 MiB).
 pub const DEFAULT_JSON_LIMIT: usize = 1_048_576;
-
 /// Enforce a maximum JSON size for values, consulting a custom parameter if present.
 ///
 /// # Errors
@@ -42,13 +39,11 @@ pub fn enforce_json_size(
     }
     Ok(())
 }
-
 /// Return the canonical IVM gas schedule entries in opcode order.
 #[must_use]
 pub fn ivm_gas_schedule_entries() -> Vec<GasScheduleEntry> {
     ivm::limits::gas_schedule_entries()
 }
-
 /// Return the deterministic hash of the canonical IVM gas schedule.
 #[must_use]
 pub fn ivm_gas_schedule_hash() -> Hash {

@@ -29,7 +29,6 @@ fn roadmap_invalid_evidence_roundtrip_cases() {
             roundtrip_case_mixed_manifest_payload,
         ),
     ];
-
     for (label, expected, build) in cases {
         let evidence = build(&ctx);
         assert_invalid_evidence_rejected(&context, &evidence, *expected);

@@ -1,20 +1,16 @@
 // Same-scope regression coverage extracted to keep the parent source budget bounded.
-
 #[test]
 fn multisig_executes_fi_registration_alias_batch_as_multisig_authority() {
     assert_multisig_executes_fi_registration_alias_batch(false);
 }
-
 #[test]
 fn multisig_executes_fi_registration_alias_batch_with_uaid_account() {
     assert_multisig_executes_fi_registration_alias_batch(true);
 }
-
 #[test]
 fn checked_keypair_helper_preserves_default_algorithm() {
     assert_eq!(checked_keypair().algorithm(), Algorithm::default());
 }
-
 fn register_account_in_domain(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -28,7 +24,6 @@ fn register_account_in_domain(
     .execute(authority, state_transaction)
     .expect(label);
 }
-
 fn register_multisig_account(
     state_transaction: &mut StateTransaction<'_, '_>,
     owner_id: &AccountId,
@@ -75,7 +70,6 @@ fn register_multisig_account(
     .expect("configure multisig roles");
     updated_account
 }
-
 fn install_trigger_contract(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -128,7 +122,6 @@ fn install_trigger_contract(
     .expect("activate trigger contract");
     (bytecode, contract_address)
 }
-
 fn bind_account_label(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -145,7 +138,6 @@ fn bind_account_label(
         label,
     )
 }
-
 fn bind_account_label_in_dataspace(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -197,7 +189,6 @@ fn bind_account_label_in_dataspace(
     );
     label
 }
-
 fn account_alias_lease_record(
     state_transaction: &StateTransaction<'_, '_>,
     alias: &AccountAlias,
@@ -215,7 +206,6 @@ fn account_alias_lease_record(
     assert!(slice.is_empty(), "account alias lease must be canonical");
     record
 }
-
 fn assert_account_rekey_not_applied(
     state_transaction: &StateTransaction<'_, '_>,
     old_account: &AccountId,
@@ -248,7 +238,6 @@ fn assert_account_rekey_not_applied(
         );
     }
 }
-
 fn load_signatory_memberships(
     state_transaction: &StateTransaction<'_, '_>,
     signatory: &AccountId,
@@ -256,7 +245,6 @@ fn load_signatory_memberships(
     load_multisig_signatory_memberships(state_transaction, signatory)
         .expect("load signatory memberships")
 }
-
 fn multisig_policy_for_members(members: &[(&KeyPair, u16)]) -> MultisigPolicy {
     MultisigPolicy::new(
         u16::try_from(members.len()).expect("member count fits u16"),
@@ -270,7 +258,6 @@ fn multisig_policy_for_members(members: &[(&KeyPair, u16)]) -> MultisigPolicy {
     )
     .expect("valid multisig policy")
 }
-
 fn seed_domain_name_lease(
     world: &mut World,
     owner: &AccountId,
@@ -295,7 +282,6 @@ fn seed_domain_name_lease(
         norito::codec::Encode::encode(&record),
     );
 }
-
 fn seed_domain_name_lease_tx(
     state_transaction: &mut StateTransaction<'_, '_>,
     owner: &AccountId,
@@ -320,13 +306,11 @@ fn seed_domain_name_lease_tx(
         norito::codec::Encode::encode(&record),
     );
 }
-
 fn durable_int_value(bytes: &[u8]) -> i64 {
     use ivm::state_value::{
         StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
         StateValueSchemaV1, state_value_schema_hash_v1,
     };
-
     // Typed durable state stores a schema-bound Norito record. The authenticated
     // pointer-ABI envelope is the record's leaf atom, not the outer storage bytes.
     let schema = StateValueSchemaV1 {
@@ -357,7 +341,6 @@ fn durable_int_value(bytes: &[u8]) -> i64 {
         .try_to_i64()
         .expect("test durable int value fits i64")
 }
-
 fn durable_state_values_under_contract_prefix(
     state_transaction: &StateTransaction<'_, '_>,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -377,7 +360,6 @@ fn durable_state_values_under_contract_prefix(
         })
         .collect()
 }
-
 fn register_domain_with_name_lease(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -389,7 +371,6 @@ fn register_domain_with_name_lease(
         .execute(authority, state_transaction)
         .expect(label);
 }
-
 #[test]
 fn initial_executor_runs_multisig_flow() {
     let kura = Kura::blank_kura_for_testing();
@@ -405,19 +386,16 @@ fn initial_executor_runs_multisig_flow() {
     let mut state_transaction = block.transaction();
     let domain_id: iroha_data_model::domain::DomainId =
         DomainId::try_new("acme", "universal").unwrap();
-
     let signer1 = checked_keypair();
     let signer2 = checked_keypair();
     let signer1_id = new_account_id(&signer1);
     let signer2_id = new_account_id(&signer2);
-
     register_domain_with_name_lease(
         &mut state_transaction,
         &signer1_id,
         &domain_id,
         "domain registration",
     );
-
     register_account_in_domain(
         &mut state_transaction,
         &signer1_id,
@@ -432,7 +410,6 @@ fn initial_executor_runs_multisig_flow() {
         &signer2_id,
         "register signer2",
     );
-
     let spec = MultisigSpec {
         signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
         quorum: NonZeroU16::new(2).unwrap(),
@@ -450,7 +427,6 @@ fn initial_executor_runs_multisig_flow() {
             InstructionBox::from(register),
         )
         .expect("multisig register");
-
     let policy = multisig_policy_from_spec(&spec).expect("policy");
     let expected_id = AccountId::new_multisig(policy);
     state_transaction

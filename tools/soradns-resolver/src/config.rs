@@ -5,7 +5,6 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-
 use eyre::{Context, Result, bail};
 use hickory_proto::rr::{
     Name, RData, Record,
@@ -14,7 +13,6 @@ use hickory_proto::rr::{
 use norito::{decode_from_bytes_with_limits, json};
 use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use reqwest::header::HeaderName;
-
 use crate::{
     bundle::ProofBundleV1,
     limits::{
@@ -27,7 +25,6 @@ use crate::{
     },
     rad::{ResolverAttestation, decode_rad_entries},
 };
-
 /// Resolver configuration with normalised runtime values.
 #[derive(Debug, Clone)]
 pub struct ResolverConfig {
@@ -44,7 +41,6 @@ pub struct ResolverConfig {
     event_log_path: Option<PathBuf>,
     sync_interval: Duration,
 }
-
 impl ResolverConfig {
     /// Load configuration from a Norito JSON file.
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self> {
@@ -57,7 +53,6 @@ impl ResolverConfig {
                 .wrap_err("failed to parse resolver config JSON")?;
         Self::try_from(raw)
     }
-
     /// Validate high-level invariants.
     pub fn validate(&self) -> Result<()> {
         check_string("resolver_id", &self.resolver_id, MAX_IDENTIFIER_BYTES)?;
@@ -79,58 +74,47 @@ impl ResolverConfig {
         }
         Ok(())
     }
-
     #[must_use]
     pub(crate) fn doh_listen(&self) -> &[SocketAddr] {
         &self.doh_listen
     }
-
     #[must_use]
     pub(crate) fn dot_listen(&self) -> &[SocketAddr] {
         &self.dot_listen
     }
-
     #[must_use]
     pub(crate) fn doq_listen(&self) -> &[SocketAddr] {
         &self.doq_listen
     }
-
     #[must_use]
     pub(crate) fn bundle_sources(&self) -> &[BundleSource] {
         &self.bundle_sources
     }
-
     #[must_use]
     pub(crate) fn rad_sources(&self) -> &[RadSource] {
         &self.rad_sources
     }
-
     #[must_use]
     pub(crate) fn event_listen(&self) -> Option<SocketAddr> {
         self.event_listen
     }
-
     #[must_use]
     pub(crate) fn dot_tls(&self) -> Option<&DotTlsConfig> {
         self.dot_tls.as_ref()
     }
-
     #[must_use]
     pub(crate) fn static_zones(&self) -> &[StaticZone] {
         &self.static_zones
     }
-
     #[must_use]
     pub(crate) fn event_log_path(&self) -> Option<&PathBuf> {
         self.event_log_path.as_ref()
     }
-
     /// Configured background refresh cadence for bundles/RAD adverts.
     #[must_use]
     pub fn sync_interval(&self) -> Duration {
         self.sync_interval
     }
-
     /// Override the sync interval after loading configuration.
     pub fn override_sync_interval(&mut self, interval: Duration) -> Result<()> {
         if interval.is_zero() {
@@ -140,13 +124,10 @@ impl ResolverConfig {
         Ok(())
     }
 }
-
 impl TryFrom<ResolverConfigRaw> for ResolverConfig {
     type Error = eyre::Error;
-
     fn try_from(raw: ResolverConfigRaw) -> Result<Self> {
         raw.validate_bounds()?;
-
         let raw_bundle_sources = raw.bundle_sources.unwrap_or_default();
         let mut bundle_sources = Vec::new();
         bundle_sources
@@ -155,7 +136,6 @@ impl TryFrom<ResolverConfigRaw> for ResolverConfig {
         for source in raw_bundle_sources {
             bundle_sources.push(source.try_into_source()?);
         }
-
         let raw_rad_sources = raw.rad_sources.unwrap_or_default();
         let mut rad_sources = Vec::new();
         rad_sources
@@ -164,7 +144,6 @@ impl TryFrom<ResolverConfigRaw> for ResolverConfig {
         for source in raw_rad_sources {
             rad_sources.push(source.try_into_source()?);
         }
-
         let raw_static_zones = raw.static_zones.unwrap_or_default();
         let mut static_zones = Vec::new();
         static_zones
@@ -183,7 +162,6 @@ impl TryFrom<ResolverConfigRaw> for ResolverConfig {
                 })?;
             static_zones.push(zone);
         }
-
         let doh_listen = parse_socket_list("doh_listen", raw.doh_listen)?;
         let dot_listen = parse_socket_list("dot_listen", raw.dot_listen)?;
         let doq_listen = parse_socket_list("doq_listen", raw.doq_listen)?;
@@ -198,7 +176,6 @@ impl TryFrom<ResolverConfigRaw> for ResolverConfig {
             bail!("sync_interval_secs must be greater than zero");
         }
         let sync_interval = Duration::from_secs(sync_secs);
-
         Ok(Self {
             resolver_id: raw.resolver_id,
             region: raw.region,
@@ -215,7 +192,6 @@ impl TryFrom<ResolverConfigRaw> for ResolverConfig {
         })
     }
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct ResolverConfigRaw {
     resolver_id: String,
@@ -231,7 +207,6 @@ struct ResolverConfigRaw {
     event_log_path: Option<String>,
     sync_interval_secs: Option<u64>,
 }
-
 impl ResolverConfigRaw {
     fn validate_bounds(&self) -> Result<()> {
         check_string("resolver_id", &self.resolver_id, MAX_IDENTIFIER_BYTES)?;
@@ -246,7 +221,6 @@ impl ResolverConfigRaw {
             self.event_log_path.as_deref(),
             MAX_FIELD_BYTES,
         )?;
-
         let bundle_sources = self.bundle_sources.as_deref().unwrap_or_default();
         check_count("bundle_sources", bundle_sources.len(), MAX_SOURCES_PER_KIND)?;
         let rad_sources = self.rad_sources.as_deref().unwrap_or_default();
@@ -271,7 +245,6 @@ impl ResolverConfigRaw {
             self.static_zones.as_deref(),
             MAX_STATIC_ZONES,
         )?;
-
         let mut references = 0usize;
         for source in bundle_sources {
             references = references
@@ -299,7 +272,6 @@ impl ResolverConfigRaw {
         if let Some(tls) = &self.dot_tls {
             tls.validate_bounds()?;
         }
-
         let mut record_count = 0usize;
         for zone in self.static_zones.as_deref().unwrap_or_default() {
             record_count = record_count
@@ -313,20 +285,16 @@ impl ResolverConfigRaw {
         Ok(())
     }
 }
-
 const DEFAULT_SYNC_INTERVAL_SECS: u64 = 30;
-
 fn check_count(label: &str, count: usize, maximum: usize) -> Result<()> {
     if count > maximum {
         bail!("{label} contains {count} entries; the limit is {maximum}");
     }
     Ok(())
 }
-
 fn check_optional_count<T>(label: &str, values: Option<&[T]>, maximum: usize) -> Result<()> {
     check_count(label, values.map_or(0, |values| values.len()), maximum)
 }
-
 fn check_string(label: &str, value: &str, maximum: usize) -> Result<()> {
     if value.len() > maximum {
         bail!(
@@ -336,14 +304,12 @@ fn check_string(label: &str, value: &str, maximum: usize) -> Result<()> {
     }
     Ok(())
 }
-
 fn check_optional_string(label: &str, value: Option<&str>, maximum: usize) -> Result<()> {
     if let Some(value) = value {
         check_string(label, value, maximum)?;
     }
     Ok(())
 }
-
 fn parse_socket_list(name: &str, list: Option<Vec<String>>) -> Result<Vec<SocketAddr>> {
     let mut result = Vec::new();
     if let Some(values) = list {
@@ -359,7 +325,6 @@ fn parse_socket_list(name: &str, list: Option<Vec<String>>) -> Result<Vec<Socket
     }
     Ok(result)
 }
-
 fn parse_socket(name: &str, value: Option<String>) -> Result<Option<SocketAddr>> {
     value
         .map(|addr| {
@@ -368,26 +333,22 @@ fn parse_socket(name: &str, value: Option<String>) -> Result<Option<SocketAddr>>
         })
         .transpose()
 }
-
 /// TLS configuration for DoT listeners.
 #[derive(Debug, Clone)]
 pub struct DotTlsConfig {
     pub cert_path: PathBuf,
     pub key_path: PathBuf,
 }
-
 #[derive(Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 struct DotTlsConfigRaw {
     cert_path: String,
     key_path: String,
 }
-
 impl DotTlsConfigRaw {
     fn validate_bounds(&self) -> Result<()> {
         check_string("dot_tls.cert_path", &self.cert_path, MAX_FIELD_BYTES)?;
         check_string("dot_tls.key_path", &self.key_path, MAX_FIELD_BYTES)
     }
-
     fn try_into_config(self) -> Result<DotTlsConfig> {
         if self.cert_path.trim().is_empty() {
             bail!("dot_tls.cert_path must not be empty");
@@ -401,7 +362,6 @@ impl DotTlsConfigRaw {
         })
     }
 }
-
 /// Source for proof bundles. Each variant may yield one or more bundles during a fetch.
 #[derive(Debug, Clone)]
 pub(crate) enum BundleSource {
@@ -419,7 +379,6 @@ pub(crate) enum BundleSource {
         headers: Vec<HeaderEntry>,
     },
 }
-
 impl BundleSource {
     pub async fn fetch(&self, client: &reqwest::Client) -> Result<Vec<ProofBundleV1>> {
         match self {
@@ -491,7 +450,6 @@ impl BundleSource {
         }
     }
 }
-
 /// Resolver Advertisement source.
 #[derive(Debug, Clone)]
 pub(crate) enum RadSource {
@@ -508,7 +466,6 @@ pub(crate) enum RadSource {
         headers: Vec<HeaderEntry>,
     },
 }
-
 impl RadSource {
     pub async fn fetch(&self, client: &reqwest::Client) -> Result<Vec<ResolverAttestation>> {
         match self {
@@ -560,7 +517,6 @@ impl RadSource {
         }
     }
 }
-
 fn decode_proof_bundle(bytes: &[u8], label: &str) -> Result<ProofBundleV1> {
     if bytes.len() > MAX_PROOF_BUNDLE_BYTES {
         bail!("{label} exceeds the {MAX_PROOF_BUNDLE_BYTES}-byte limit");
@@ -572,7 +528,6 @@ fn decode_proof_bundle(bytes: &[u8], label: &str) -> Result<ProofBundleV1> {
         .wrap_err_with(|| format!("{label} exceeds proof-bundle field limits"))?;
     Ok(bundle)
 }
-
 fn push_fetched_bundle(
     bundles: &mut Vec<ProofBundleV1>,
     bundle: ProofBundleV1,
@@ -594,7 +549,6 @@ fn push_fetched_bundle(
     *retained_bytes = next;
     Ok(())
 }
-
 #[derive(Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "kind", content = "value")]
 enum BundleSourceConfig {
@@ -613,7 +567,6 @@ enum BundleSourceConfig {
         headers: Option<Vec<HeaderConfig>>,
     },
 }
-
 impl BundleSourceConfig {
     fn reference_count(&self) -> usize {
         match self {
@@ -622,7 +575,6 @@ impl BundleSourceConfig {
             Self::SoraFs { cids, .. } => cids.len(),
         }
     }
-
     fn validate_bounds(&self) -> Result<()> {
         match self {
             Self::File { path } => check_string("bundle source path", path, MAX_FIELD_BYTES),
@@ -664,7 +616,6 @@ impl BundleSourceConfig {
             }
         }
     }
-
     fn try_into_source(self) -> Result<BundleSource> {
         match self {
             Self::File { path } => {
@@ -712,7 +663,6 @@ impl BundleSourceConfig {
         }
     }
 }
-
 #[derive(Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "kind", content = "value")]
 enum RadSourceConfig {
@@ -730,7 +680,6 @@ enum RadSourceConfig {
         headers: Option<Vec<HeaderConfig>>,
     },
 }
-
 impl RadSourceConfig {
     fn validate_bounds(&self) -> Result<()> {
         match self {
@@ -750,7 +699,6 @@ impl RadSourceConfig {
             }
         }
     }
-
     fn try_into_source(self) -> Result<RadSource> {
         match self {
             Self::File { path } => {
@@ -790,19 +738,16 @@ impl RadSourceConfig {
         }
     }
 }
-
 #[derive(Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 struct HeaderConfig {
     name: String,
     value: String,
 }
-
 #[derive(Debug, Clone)]
 pub(crate) struct HeaderEntry {
     name: HeaderName,
     value: String,
 }
-
 fn validate_headers(headers: Option<&[HeaderConfig]>) -> Result<()> {
     check_optional_count("source headers", headers, MAX_HEADERS_PER_SOURCE)?;
     for header in headers.unwrap_or_default() {
@@ -811,7 +756,6 @@ fn validate_headers(headers: Option<&[HeaderConfig]>) -> Result<()> {
     }
     Ok(())
 }
-
 fn convert_headers(configs: Option<Vec<HeaderConfig>>) -> Result<Vec<HeaderEntry>> {
     let mut entries = Vec::new();
     if let Some(headers) = configs {
@@ -832,7 +776,6 @@ fn convert_headers(configs: Option<Vec<HeaderConfig>>) -> Result<Vec<HeaderEntry
     }
     Ok(entries)
 }
-
 fn apply_headers(
     mut request: reqwest::RequestBuilder,
     headers: &[HeaderEntry],
@@ -842,17 +785,14 @@ fn apply_headers(
     }
     request
 }
-
 fn trim_trailing_slash(input: &str) -> String {
     input.trim_end_matches('/').to_string()
 }
-
 fn normalize_domain(domain: &str) -> Result<String> {
     let name =
         Name::from_ascii(domain).wrap_err_with(|| format!("invalid domain name `{domain}`"))?;
     Ok(name.to_ascii().trim_end_matches('.').to_lowercase())
 }
-
 #[derive(Debug, Clone)]
 pub(crate) struct StaticZone {
     pub domain: String,
@@ -860,7 +800,6 @@ pub(crate) struct StaticZone {
     pub freeze: Option<FreezeMetadata>,
     pub(crate) retained_bytes: usize,
 }
-
 #[derive(Debug, Clone)]
 pub(crate) struct FreezeMetadata {
     pub state: FreezeState,
@@ -868,7 +807,6 @@ pub(crate) struct FreezeMetadata {
     pub expires_at: Option<String>,
     pub notes: Vec<String>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FreezeState {
     Soft,
@@ -877,7 +815,6 @@ pub(crate) enum FreezeState {
     Monitoring,
     Emergency,
 }
-
 impl FreezeState {
     fn from_str(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -893,7 +830,6 @@ impl FreezeState {
         }
     }
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct FreezeMetadataConfig {
     state: String,
@@ -901,7 +837,6 @@ struct FreezeMetadataConfig {
     expires_at: Option<String>,
     notes: Option<Vec<String>>,
 }
-
 impl FreezeMetadataConfig {
     fn validate_bounds(&self) -> Result<()> {
         check_string(
@@ -929,7 +864,6 @@ impl FreezeMetadataConfig {
         }
         Ok(())
     }
-
     fn try_into_metadata(self) -> Result<FreezeMetadata> {
         let state = FreezeState::from_str(&self.state)?;
         let notes = self.notes.unwrap_or_default();
@@ -941,14 +875,12 @@ impl FreezeMetadataConfig {
         })
     }
 }
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct StaticZoneConfig {
     domain: String,
     records: Vec<StaticRecordConfig>,
     freeze: Option<FreezeMetadataConfig>,
 }
-
 impl StaticZoneConfig {
     fn validate_bounds(&self) -> Result<()> {
         check_string("static zone domain", &self.domain, MAX_IDENTIFIER_BYTES)?;
@@ -965,7 +897,6 @@ impl StaticZoneConfig {
         }
         Ok(())
     }
-
     fn retained_bytes(&self) -> Result<usize> {
         let mut retained = std::mem::size_of::<StaticZone>()
             .saturating_mul(2)
@@ -1021,7 +952,6 @@ impl StaticZoneConfig {
         }
         Ok(retained)
     }
-
     fn try_into_zone(self) -> Result<StaticZone> {
         let retained_bytes = self.retained_bytes()?;
         let canonical = normalize_domain(&self.domain)?;
@@ -1046,7 +976,6 @@ impl StaticZoneConfig {
         })
     }
 }
-
 #[derive(Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "type", content = "value")]
 enum StaticRecordConfig {
@@ -1059,7 +988,6 @@ enum StaticRecordConfig {
     #[norito(rename = "TXT")]
     Txt { ttl: u32, text: Vec<String> },
 }
-
 impl StaticRecordConfig {
     fn validate_bounds(&self) -> Result<()> {
         match self {
@@ -1081,7 +1009,6 @@ impl StaticRecordConfig {
             }
         }
     }
-
     fn retained_source_bytes(&self) -> usize {
         let base = std::mem::size_of::<Self>();
         match self {
@@ -1098,7 +1025,6 @@ impl StaticRecordConfig {
             ),
         }
     }
-
     fn into_record(self, origin: &Name) -> Result<Record> {
         match self {
             StaticRecordConfig::A { ttl, address } => {
@@ -1134,23 +1060,18 @@ impl StaticRecordConfig {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-
     use expect_test::expect;
     use tempfile::NamedTempFile;
-
     use super::*;
-
     fn write_config(contents: &str) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");
         file.write_all(contents.as_bytes()).expect("write config");
         file.flush().expect("flush");
         file
     }
-
     #[test]
     fn parses_config() {
         let temp_bundle = NamedTempFile::new().expect("bundle file");
@@ -1218,7 +1139,6 @@ mod tests {
         assert!(config.event_log_path().is_some());
         assert_eq!(config.sync_interval(), Duration::from_secs(45));
     }
-
     #[test]
     fn static_zone_retained_bytes_accounts_for_optional_freeze_notes() {
         let config = StaticZoneConfig {
@@ -1256,10 +1176,8 @@ mod tests {
             .saturating_add(std::mem::size_of::<FreezeMetadata>().saturating_mul(2))
             .saturating_add(freeze.state.capacity().saturating_mul(2))
             .saturating_add(note_bytes);
-
         assert_eq!(config.retained_bytes().expect("retained bytes"), expected);
     }
-
     #[test]
     fn empty_bundle_sources_rejected() {
         let file = write_config(
@@ -1274,7 +1192,6 @@ mod tests {
         let err = config.validate().expect_err("validation should fail");
         expect!["at least one bundle source is required"].assert_eq(&err.to_string());
     }
-
     #[test]
     fn sync_interval_defaults_to_constant() {
         let temp_bundle = NamedTempFile::new().expect("bundle file");
@@ -1296,7 +1213,6 @@ mod tests {
             Duration::from_secs(DEFAULT_SYNC_INTERVAL_SECS)
         );
     }
-
     #[test]
     fn zero_sync_interval_rejected() {
         let temp_bundle = NamedTempFile::new().expect("bundle file");
@@ -1316,7 +1232,6 @@ mod tests {
         let err = ResolverConfig::load_from_path(file.path()).expect_err("should fail");
         expect!["sync_interval_secs must be greater than zero"].assert_eq(&err.to_string());
     }
-
     #[test]
     fn override_sync_interval_updates_value() {
         let temp_bundle = NamedTempFile::new().expect("bundle file");
@@ -1338,7 +1253,6 @@ mod tests {
             .expect("override succeeds");
         assert_eq!(config.sync_interval(), Duration::from_secs(5));
     }
-
     #[test]
     fn override_sync_interval_rejects_zero_duration() {
         let temp_bundle = NamedTempFile::new().expect("bundle file");
@@ -1360,7 +1274,6 @@ mod tests {
             .expect_err("override should fail");
         expect!["sync interval must be greater than zero seconds"].assert_eq(&err.to_string());
     }
-
     #[test]
     fn config_file_byte_corridor_accepts_exact_and_rejects_plus_one() {
         let prefix = r#"{"resolver_id":"r","region":"g"}"#;
@@ -1368,7 +1281,6 @@ mod tests {
         exact.extend(std::iter::repeat_n(' ', MAX_CONFIG_BYTES - prefix.len()));
         let exact_file = write_config(&exact);
         ResolverConfig::load_from_path(exact_file.path()).expect("exact byte boundary loads");
-
         exact.push(' ');
         let oversized_file = write_config(&exact);
         let error = ResolverConfig::load_from_path(oversized_file.path())
@@ -1379,7 +1291,6 @@ mod tests {
                 .contains("exceeding the 1048576-byte limit")
         );
     }
-
     #[test]
     fn collection_corridors_accept_exact_and_reject_plus_one() {
         for (label, maximum) in [

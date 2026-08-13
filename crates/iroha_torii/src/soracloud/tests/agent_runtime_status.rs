@@ -1,11 +1,9 @@
 #[test]
 fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<(), eyre::Report> {
     use iroha_core::state::World;
-
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-
     runtime.block_on(async move {
         let temp_dir = tempfile::tempdir()?;
         let mut world = World::default();
@@ -124,7 +122,6 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
                     succeeded: Some(true),
                 },
             );
-
         let mut app = mk_app_state_for_tests_with_world(world);
         Arc::get_mut(&mut app)
             .expect("unique app state")
@@ -132,7 +129,6 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
             snapshot: SoracloudRuntimeSnapshot::default(),
             state_dir: temp_dir.path().to_path_buf(),
         }));
-
         let summary_dir = temp_dir
             .path()
             .join("apartments")
@@ -176,7 +172,6 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
         };
         let summary_bytes = norito::json::to_vec_pretty(&summary)?;
         fs::write(summary_dir.join("execution_summary.json"), &summary_bytes)?;
-
         let status = authoritative_agent_autonomy_status_response(&app, "ops_agent")
             .map_err(|err| eyre::eyre!("agent autonomy status failed: {err:?}"))?;
         assert_eq!(

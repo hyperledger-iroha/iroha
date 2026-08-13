@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Adversarial relay and partition scenarios for unstable networks.
-
 use std::{
     any::Any,
     borrow::Cow,
@@ -9,7 +8,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-
 use eyre::{Result, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use integration_tests::sandbox;
@@ -35,7 +33,6 @@ use tokio::{
     time::{sleep, timeout},
 };
 use toml::{Table, Value as TomlValue};
-
 mod relay {
     //! Utilities to build a peer-to-peer network relay using TCP proxies with ability to targetly
     //! suspend communication.
@@ -53,7 +50,6 @@ mod relay {
     //! It is possible to "suspend" a particular peer in the network by suspending all incoming/outgoing packages from/to other peers.
     //! Relay provides [`P2pRelay::suspend`] to acquire a [`Suspend`] control (per-peer), which provides
     //! [`Suspend::activate`] and [`Suspend::deactivate`] in turn.
-
     use std::{
         collections::HashMap,
         iter::once,
@@ -63,7 +59,6 @@ mod relay {
             atomic::{AtomicBool, Ordering},
         },
     };
-
     use futures_util::{StreamExt, stream::FuturesUnordered};
     use iroha_data_model::{peer::PeerId, prelude::Peer};
     use iroha_primitives::{
@@ -79,13 +74,11 @@ mod relay {
         task::JoinSet,
     };
     use tracing::{Instrument, Level};
-
     #[derive(Debug)]
     pub struct P2pRelay {
         peers: HashMap<PeerId, RelayPeer>,
         tasks: JoinSet<()>,
     }
-
     #[derive(Debug)]
     struct RelayPeer {
         real_addr: SocketAddr,
@@ -94,7 +87,6 @@ mod relay {
         mock_outgoing: HashMap<PeerId, (SocketAddr, AllocatedPort)>,
         suspend: Suspend,
     }
-
     impl P2pRelay {
         /// Construct a relay with the given topology.
         pub fn new(real_topology: &UniqueVec<Peer>) -> Self {
@@ -121,7 +113,6 @@ mod relay {
                     (id.clone(), relay_peer)
                 })
                 .collect();
-
             let mut table = ascii_table::AsciiTable::default();
             table.set_max_width(ascii_table::Width::Fixed(30 * (1 + real_topology.len())));
             table.column(0).set_header("From");
@@ -150,22 +141,18 @@ mod relay {
                         .collect::<Vec<_>>()
                 })
                 .collect();
-
             let mut table_buf = Vec::new();
             table
                 .writeln(&mut table_buf, &rows)
                 .expect("writing ascii table should succeed");
             let table_formatted = String::from_utf8(table_buf)
                 .unwrap_or_else(|_| "<table render failed>".to_string());
-
             iroha_logger::debug!("TCP relay table:\n{table_formatted}");
-
             Self {
                 peers,
                 tasks: <_>::default(),
             }
         }
-
         /// Construct a relay using the given network's peers as topology.
         pub fn for_network(network: &Network) -> Self {
             Self::new(
@@ -176,7 +163,6 @@ mod relay {
                     .collect(),
             )
         }
-
         /// Get trusted peers for a particular peer in the given topology.
         ///
         /// The relay constructs "virtual" set of addresses of other peers for each peer. This must
@@ -193,7 +179,6 @@ mod relay {
                 .chain(Some(Peer::new(peer_info.real_addr.clone(), peer.clone())))
                 .collect()
         }
-
         /// Start the relay, i.e. the set of TCP proxies between the peers.
         pub fn start(&mut self) -> eyre::Result<()> {
             let mut proxy_specs = Vec::new();
@@ -202,7 +187,6 @@ mod relay {
                     let other_peer = self.peers.get(other).expect("must be present");
                     let suspend =
                         SuspendIfAny(vec![peer.suspend.clone(), other_peer.suspend.clone()]);
-
                     proxy_specs.push((
                         other_mock_addr.clone(),
                         other_peer.real_addr.clone(),
@@ -210,7 +194,6 @@ mod relay {
                     ));
                 }
             }
-
             // Bind every proxy before spawning any accept loop. This makes `start` a readiness
             // barrier: once it returns, the kernel can queue connections for every virtual peer
             // address, even if the spawned tasks have not yet been polled.
@@ -224,10 +207,8 @@ mod relay {
             for (listener, from, to, suspend) in ready {
                 P2pRelay::run_proxy(&mut self.tasks, listener, from, to, suspend);
             }
-
             Ok(())
         }
-
         fn run_proxy(
             tasks: &mut JoinSet<()>,
             listener: TcpListener,
@@ -237,7 +218,6 @@ mod relay {
         ) {
             let span = tracing::span!(Level::INFO, "proxy_run", from = %from, to = %to);
             let mut proxy = Proxy::new(listener, from, to, suspend);
-
             tasks.spawn(
                 async move {
                     if let Err(err) = proxy.run().await {
@@ -249,7 +229,6 @@ mod relay {
                 .instrument(span),
             );
         }
-
         /// Acquire a [`Suspend`] control for a peer
         pub fn suspend(&self, peer: &PeerId) -> Suspend {
             self.peers
@@ -259,13 +238,11 @@ mod relay {
                 .clone()
         }
     }
-
     #[derive(Clone, Debug)]
     pub struct Suspend {
         active: Arc<AtomicBool>,
         notify: Arc<Notify>,
     }
-
     impl Suspend {
         fn new() -> Self {
             Self {
@@ -273,20 +250,16 @@ mod relay {
                 notify: <_>::default(),
             }
         }
-
         pub fn activate(&self) {
             self.active.store(true, Ordering::Release);
         }
-
         pub fn deactivate(&self) {
             self.active.store(false, Ordering::Release);
             self.notify.notify_waiters();
         }
     }
-
     #[derive(Clone, Debug)]
     struct SuspendIfAny(Vec<Suspend>);
-
     impl SuspendIfAny {
         async fn is_not_active(&self) {
             loop {
@@ -308,14 +281,12 @@ mod relay {
             }
         }
     }
-
     struct Proxy {
         listener: TcpListener,
         from: SocketAddr,
         to: SocketAddr,
         suspend: SuspendIfAny,
     }
-
     impl Proxy {
         fn new(
             listener: TcpListener,
@@ -330,7 +301,6 @@ mod relay {
                 suspend,
             }
         }
-
         async fn run(&mut self) -> eyre::Result<()> {
             loop {
                 let (client, _) = self.listener.accept().await?;
@@ -346,10 +316,8 @@ mod relay {
                         continue;
                     }
                 };
-
                 let (mut eread, mut ewrite) = client.into_split();
                 let (mut oread, mut owrite) = server.into_split();
-
                 let suspend = self.suspend.clone();
                 let mut e2o =
                     tokio::spawn(
@@ -360,7 +328,6 @@ mod relay {
                     tokio::spawn(
                         async move { Proxy::copy(&suspend, &mut oread, &mut ewrite).await },
                     );
-
                 select! {
                     _ = &mut e2o => {
                         o2e.abort();
@@ -373,7 +340,6 @@ mod relay {
                 }
             }
         }
-
         async fn copy<R, W>(
             suspend: &SuspendIfAny,
             mut reader: R,
@@ -385,35 +351,28 @@ mod relay {
         {
             // NOTE: quite large to allocate on stack, causing overflow
             let mut buf = vec![0u8; 2usize.pow(20)];
-
             loop {
                 suspend.is_not_active().await;
-
                 let n = reader.read(&mut buf).await?;
                 if n == 0 {
                     break;
                 }
-
                 writer.write_all(&buf[..n]).await?;
             }
-
             Ok(())
         }
     }
 }
-
 #[derive(Default)]
 enum GenesisPeer {
     #[default]
     Whichever,
     Nth(usize),
 }
-
 fn scaled_timeout(base: Duration, peer_count: usize) -> Duration {
     let scale = ((peer_count + 3) / 4).max(1) as u32;
     base.saturating_mul(scale)
 }
-
 fn non_faulty_sync_timeout(
     sync_timeout: Duration,
     pipeline_time: Duration,
@@ -438,37 +397,31 @@ fn non_faulty_sync_timeout(
     };
     sync_timeout.min(cap)
 }
-
 fn submit_retry_backoff(attempt: usize) -> Duration {
     let step = Duration::from_millis(200);
     let scaled = step.saturating_mul(u32::try_from(attempt).unwrap_or(u32::MAX));
     scaled.min(Duration::from_secs(2))
 }
-
 fn initial_resubmit_delay(sync_timeout: Duration, pipeline_time: Duration) -> Duration {
     let early = pipeline_time.saturating_mul(4);
     let half = sync_timeout.checked_div(2).unwrap_or(sync_timeout);
     early.min(half)
 }
-
 fn recovered_submit_window(sync_timeout: Duration, pipeline_time: Duration) -> Duration {
     pipeline_time
         .saturating_mul(2)
         .max(Duration::from_secs(5))
         .min(sync_timeout)
 }
-
 fn stagger_recovery_gap(pipeline_time: Duration) -> Duration {
     pipeline_time
         .checked_div(2)
         .unwrap_or(Duration::from_secs(1))
         .max(Duration::from_secs(1))
 }
-
 fn should_resubmit_tx(allow_resubmit: bool, now: Instant, next_resubmit_at: Instant) -> bool {
     allow_resubmit && now >= next_resubmit_at
 }
-
 fn is_submission_accepted_duplicate(err: &eyre::Report) -> bool {
     err.chain().any(|cause| {
         let text = cause.to_string();
@@ -477,22 +430,18 @@ fn is_submission_accepted_duplicate(err: &eyre::Report) -> bool {
             || text.to_ascii_lowercase().contains("already committed")
     })
 }
-
 fn allow_supply_resubmit(faulty_peers: usize, force_soft_fork: bool) -> bool {
     faulty_peers > 0 || force_soft_fork
 }
-
 fn allow_round_supply_deadline_slip(faulty_peers: usize, force_soft_fork: bool) -> bool {
     // Under partitioned rounds, transaction dissemination can lag one round behind while
     // still converging globally; defer strictness to the final supply assertion.
     force_soft_fork || faulty_peers > 0
 }
-
 fn permissioned_prf_seed(chain_id: &ChainId) -> [u8; 32] {
     let hash = Hash::new(chain_id.as_str().as_bytes());
     <[u8; 32]>::from(hash)
 }
-
 fn topology_for_permissioned_round(
     peer_ids: &[PeerId],
     chain_id: &ChainId,
@@ -507,7 +456,6 @@ fn topology_for_permissioned_round(
     topology.nth_rotation(view);
     topology.into_iter().collect()
 }
-
 async fn start_network_under_relay(
     network: &Network,
     relay: &P2pRelay,
@@ -522,7 +470,6 @@ async fn start_network_under_relay(
         let pop = peer.bls_pop().expect("network peers should have BLS PoPs");
         pops_by_peer_id.insert(peer.id(), pop.to_vec());
     }
-
     let designated_genesis_index = match genesis_peer {
         GenesisPeer::Whichever => 0,
         GenesisPeer::Nth(n) => n,
@@ -543,7 +490,6 @@ async fn start_network_under_relay(
         .enumerate()
         .map(|(stage, idx)| (idx, stage))
         .collect();
-
     let startup_timeout = scaled_timeout(network.peer_startup_timeout(), network.peers().len());
     let start_results = match timeout(
         startup_timeout,
@@ -579,7 +525,6 @@ async fn start_network_under_relay(
                     );
                     trusted_peers_pop.push(TomlValue::Table(pop_entry));
                 }
-
                 let config = network.config_layers().chain(Some(Cow::Owned(
                     Table::new()
                         .write(["trusted_peers"], trusted_peers_list)
@@ -595,9 +540,7 @@ async fn start_network_under_relay(
                             socket_addr!(192.0.2.133:1337).to_literal(),
                         ),
                 )));
-
                 let genesis = Some(genesis_block.clone());
-
                 async move {
                     if start_stage > 0 {
                         let delay = Duration::from_millis(200)
@@ -628,20 +571,16 @@ async fn start_network_under_relay(
             ));
         }
     };
-
     for result in start_results {
         result?;
     }
     network.ensure_blocks(1).await?;
-
     Ok(())
 }
-
 async fn wait_for_full_peer_connectivity(network: &Network, wait_timeout: Duration) -> Result<()> {
     let expected = u64::try_from(network.peers().len().saturating_sub(1))
         .expect("test-network peer count should fit into u64");
     let deadline = Instant::now() + wait_timeout;
-
     loop {
         let mut all_ready = true;
         let mut snapshot = Vec::with_capacity(network.peers().len());
@@ -667,7 +606,6 @@ async fn wait_for_full_peer_connectivity(network: &Network, wait_timeout: Durati
                 }
             }
         }
-
         if all_ready && snapshot.len() == network.peers().len() {
             iroha_logger::info!(
                 expected_remote_peers = expected,
@@ -690,19 +628,16 @@ async fn wait_for_full_peer_connectivity(network: &Network, wait_timeout: Durati
         .await;
     }
 }
-
 fn panic_reason(panic: &(dyn Any + Send)) -> Option<String> {
     panic
         .downcast_ref::<&str>()
         .map(std::string::ToString::to_string)
         .or_else(|| panic.downcast_ref::<String>().cloned())
 }
-
 fn is_sandbox_message(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("permission denied") || lower.contains("operation not permitted")
 }
-
 #[allow(clippy::unnecessary_wraps)]
 fn run_or_skip_on_sandbox_panic<T, F>(context: &str, build: F) -> Result<Option<T>>
 where
@@ -723,7 +658,6 @@ where
         }
     }
 }
-
 #[test]
 fn sandbox_panic_skips_network_build() -> Result<()> {
     let result = run_or_skip_on_sandbox_panic("sandbox_panic_skips_network_build", || -> usize {
@@ -732,7 +666,6 @@ fn sandbox_panic_skips_network_build() -> Result<()> {
     assert!(result.is_none());
     Ok(())
 }
-
 #[test]
 fn non_sandbox_panic_is_propagated() {
     let result = panic::catch_unwind(|| {
@@ -742,7 +675,6 @@ fn non_sandbox_panic_is_propagated() {
     });
     assert!(result.is_err());
 }
-
 #[tokio::test]
 async fn network_starts_with_relay() -> Result<()> {
     let Some((network, mut relay)) =
@@ -759,7 +691,6 @@ async fn network_starts_with_relay() -> Result<()> {
     else {
         return Ok(());
     };
-
     relay.start()?;
     if sandbox::handle_result(
         start_network_under_relay(&network, &relay, GenesisPeer::Whichever).await,
@@ -781,7 +712,6 @@ async fn network_starts_with_relay() -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-
     let client = network
         .peers()
         .iter()
@@ -808,10 +738,8 @@ async fn network_starts_with_relay() -> Result<()> {
         once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
     )
     .await??;
-
     Ok(())
 }
-
 #[tokio::test]
 async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
     let Some((network, relay)) = run_or_skip_on_sandbox_panic(
@@ -830,7 +758,6 @@ async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
     else {
         return Ok(());
     };
-
     if sandbox::handle_result(
         start_network_under_relay(&network, &relay, GenesisPeer::Whichever).await,
         stringify!(network_doesnt_start_without_relay_being_started),
@@ -839,7 +766,6 @@ async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
     {
         return Ok(());
     }
-
     let client = network.client();
     spawn_blocking(move || {
         client.submit(
@@ -848,7 +774,6 @@ async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
         )
     })
     .await??;
-
     let Err(_) = timeout(
         Duration::from_secs(3),
         once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
@@ -857,15 +782,12 @@ async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
     else {
         panic!("network must not start!")
     };
-
     Ok(())
 }
-
 #[tokio::test]
 async fn suspending_works() -> Result<()> {
     const N_PEERS: usize = 4;
     const { assert!(N_PEERS > 0) };
-
     let Some((network, mut relay)) =
         run_or_skip_on_sandbox_panic(stringify!(suspending_works), || {
             let guard = sandbox::serial_guard();
@@ -888,7 +810,6 @@ async fn suspending_works() -> Result<()> {
         .last()
         .expect("there are more than 0 of them");
     let suspend = relay.suspend(&last_peer.id());
-
     suspend.activate();
     relay.start()?;
     if sandbox::handle_result(
@@ -899,7 +820,6 @@ async fn suspending_works() -> Result<()> {
     {
         return Ok(());
     }
-
     let client = network.client();
     spawn_blocking(move || {
         client.submit(
@@ -908,7 +828,6 @@ async fn suspending_works() -> Result<()> {
         )
     })
     .await??;
-
     // all peers except the last one should get the non-empty block
     timeout(
         sync_timeout,
@@ -927,7 +846,6 @@ async fn suspending_works() -> Result<()> {
     {
         return Err(eyre!("suspending_works: peer caught up while suspended"));
     }
-
     // unsuspend, the last peer should get the block too
     suspend.deactivate();
     timeout(
@@ -936,10 +854,8 @@ async fn suspending_works() -> Result<()> {
     )
     .await
     .map_err(|_| eyre!("suspending_works: timed out waiting for peer to catch up"))?;
-
     Ok(())
 }
-
 #[tokio::test]
 async fn block_after_genesis_is_synced() -> Result<()> {
     // A consensus anomaly occurred deterministically depending on the peer set
@@ -948,7 +864,6 @@ async fn block_after_genesis_is_synced() -> Result<()> {
     // case.
     const SEED: &str = "we want a determined order of peers";
     const GENESIS_PEER_INDEX: usize = 3;
-
     let Some((network, mut relay)) =
         run_or_skip_on_sandbox_panic(stringify!(block_after_genesis_is_synced), || {
             let guard = sandbox::serial_guard();
@@ -967,7 +882,6 @@ async fn block_after_genesis_is_synced() -> Result<()> {
     };
     let pipeline_window = network.block_cadence() + Duration::from_secs(3);
     let sync_timeout = scaled_timeout(network.sync_timeout(), network.peers().len());
-
     relay.start()?;
     if sandbox::handle_result(
         start_network_under_relay(&network, &relay, GenesisPeer::Nth(GENESIS_PEER_INDEX)).await,
@@ -978,7 +892,6 @@ async fn block_after_genesis_is_synced() -> Result<()> {
         return Ok(());
     }
     network.ensure_blocks(1).await?;
-
     for peer in network.peers() {
         relay.suspend(&peer.id()).activate();
     }
@@ -1009,19 +922,15 @@ async fn block_after_genesis_is_synced() -> Result<()> {
         once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
     )
     .await??;
-
     Ok(())
 }
-
 // ======= ACTUAL TESTS BEGIN HERE =======
-
 struct UnstableNetwork {
     n_peers: usize,
     n_faulty_peers: usize,
     n_rounds: usize,
     force_soft_fork: bool,
 }
-
 impl UnstableNetwork {
     async fn run(self) -> Result<()> {
         if !is_valid_committee_size(self.n_peers) {
@@ -1048,7 +957,6 @@ impl UnstableNetwork {
                 commit_quorum
             ));
         }
-
         let account_id = ALICE_ID.clone();
         let asset_owning_domain = DomainId::try_new("wonderland", "universal").expect("Valid");
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
@@ -1080,7 +988,6 @@ impl UnstableNetwork {
         let init_blocks = 1;
         let preexisting_faulty_ids =
             Self::wait_for_initial_sync_budget(&network, init_blocks, self.n_faulty_peers).await?;
-
         let peers = network.peers();
         let initial_non_empty = peers
             .iter()
@@ -1104,7 +1011,6 @@ impl UnstableNetwork {
             )
             .await?;
         }
-
         let expected_height =
             round_ctx.initial_non_empty + u64::try_from(self.n_rounds).unwrap_or(0);
         Self::assert_total_supply(
@@ -1115,14 +1021,11 @@ impl UnstableNetwork {
             self.force_soft_fork,
         )
         .await?;
-
         Ok(())
     }
-
     fn fault_budget_for_peer_count(peer_count: usize) -> usize {
         peer_count.saturating_sub(commit_quorum_from_len(peer_count))
     }
-
     fn fault_round_seed(round_index: usize, n_faulty_peers: usize, fault_budget: usize) -> usize {
         if n_faulty_peers >= fault_budget {
             0
@@ -1130,7 +1033,6 @@ impl UnstableNetwork {
             round_index
         }
     }
-
     fn select_faulty_peer_ids(
         peer_ids: &[PeerId],
         n_faulty_peers: usize,
@@ -1168,7 +1070,6 @@ impl UnstableNetwork {
                 }
             }
         }
-
         let mut selected = Vec::new();
         let mut seen = HashSet::new();
         for peer in rotated
@@ -1186,7 +1087,6 @@ impl UnstableNetwork {
         if selected.len() == n_faulty_peers {
             return selected;
         }
-
         let mut rng =
             ChaCha8Rng::seed_from_u64(0x5553_5442 + u64::try_from(round_index).unwrap_or(0));
         let remaining = n_faulty_peers.saturating_sub(selected.len());
@@ -1200,7 +1100,6 @@ impl UnstableNetwork {
         );
         selected
     }
-
     fn build_network(&self, asset_definition_id: &AssetDefinitionId) -> Network {
         let builder = NetworkBuilder::new()
             .with_auto_populated_trusted_peers()
@@ -1268,10 +1167,8 @@ impl UnstableNetwork {
                 },
                 ALICE_ID.clone(),
             ));
-
         builder.build()
     }
-
     async fn wait_for_initial_sync_budget(
         network: &Network,
         target_height: u64,
@@ -1287,11 +1184,9 @@ impl UnstableNetwork {
         let commit_quorum = commit_quorum_from_len(running_count);
         let mut last_ready = 0usize;
         let mut last_lagging = Vec::new();
-
         loop {
             let mut ready = 0usize;
             let mut lagging = Vec::new();
-
             for peer in network.peers().iter().filter(|peer| peer.is_running()) {
                 let non_empty = match peer.status().await {
                     Ok(status) => BlockHeight::from(status).non_empty,
@@ -1306,11 +1201,9 @@ impl UnstableNetwork {
                     lagging.push((peer.id().clone(), peer.mnemonic().to_owned(), non_empty));
                 }
             }
-
             if lagging.is_empty() {
                 return Ok(HashSet::new());
             }
-
             if lagging.len() <= fault_budget && ready >= commit_quorum {
                 iroha_logger::warn!(
                     target_height,
@@ -1324,7 +1217,6 @@ impl UnstableNetwork {
                 );
                 return Ok(lagging.into_iter().map(|(peer_id, _, _)| peer_id).collect());
             }
-
             if Instant::now() >= deadline {
                 let lagging_snapshot = last_lagging
                     .iter()
@@ -1335,7 +1227,6 @@ impl UnstableNetwork {
                     "initial network sync did not reach height {target_height}; ready peers: {last_ready}/{running_count}, lagging peers: [{lagging_snapshot}]"
                 ));
             }
-
             last_ready = ready;
             last_lagging = lagging
                 .iter()
@@ -1344,7 +1235,6 @@ impl UnstableNetwork {
             sleep(Duration::from_millis(200)).await;
         }
     }
-
     async fn execute_round(
         &self,
         round_index: usize,
@@ -1359,7 +1249,6 @@ impl UnstableNetwork {
             total = self.n_rounds,
             "Begin round"
         );
-
         let target_height = ctx.initial_non_empty + (round_index as u64) + 1;
         let chain_id = network.chain_id();
         let peer_ids: Vec<_> = peers.iter().map(NetworkPeer::id).collect();
@@ -1392,7 +1281,6 @@ impl UnstableNetwork {
             .filter(|peer| faulty_ids.contains(&peer.id()))
             .cloned()
             .collect();
-
         let sync_timeout = scaled_timeout(network.sync_timeout(), peers.len());
         let relay_pause =
             non_faulty_sync_timeout(sync_timeout, network.block_cadence(), self.n_faulty_peers);
@@ -1580,7 +1468,6 @@ impl UnstableNetwork {
                 }
             }
         }
-
         if !stagger_faults {
             if submit_while_partitioned {
                 match timeout(
@@ -1611,7 +1498,6 @@ impl UnstableNetwork {
             } else {
                 sleep(relay_pause).await;
             }
-
             for peer in &faulty {
                 relay.suspend(&peer.id()).deactivate();
                 iroha_logger::info!(peer = peer.mnemonic(), "Unsuspended");
@@ -1731,7 +1617,6 @@ impl UnstableNetwork {
             }
             sleep(Duration::from_millis(200)).await;
         }
-
         let catch_up_timeout = sync_timeout.min(Duration::from_secs(180));
         match timeout(
             catch_up_timeout,
@@ -1754,7 +1639,6 @@ impl UnstableNetwork {
                 ));
             }
         }
-
         if !faulty.is_empty() {
             match timeout(
                 catch_up_timeout,
@@ -1778,10 +1662,8 @@ impl UnstableNetwork {
                 }
             }
         }
-
         Ok(())
     }
-
     async fn assert_total_supply(
         network: &Network,
         asset_definition_id: &AssetDefinitionId,
@@ -1856,20 +1738,16 @@ impl UnstableNetwork {
         }
     }
 }
-
 struct RoundContext<'a> {
     initial_non_empty: u64,
     asset_definition_id: &'a AssetDefinitionId,
     account_id: &'a AccountId,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
-
     use iroha_crypto::KeyPair;
-
     #[test]
     fn faulty_peer_selection_preserves_the_active_leader() {
         let peer_ids: Vec<_> = (0..10)
@@ -1888,7 +1766,6 @@ mod tests {
         );
         assert_eq!(selected_single.len(), 1);
         assert_ne!(Some(&selected_single[0]), rotated.first());
-
         let selected_multi: BTreeSet<_> = UnstableNetwork::select_faulty_peer_ids(
             &peer_ids,
             3,
@@ -1906,7 +1783,6 @@ mod tests {
                 .is_none_or(|leader| !selected_multi.contains(leader))
         );
     }
-
     #[test]
     fn preferred_faulty_peers_are_selected_first() {
         let peer_ids: Vec<_> = (0..4)
@@ -1924,7 +1800,6 @@ mod tests {
             .expect("test roster should have a safe preferred peer")
             .clone();
         let preferred_faulty_ids = HashSet::from([preferred.clone()]);
-
         let selected = UnstableNetwork::select_faulty_peer_ids(
             &peer_ids,
             1,
@@ -1933,10 +1808,8 @@ mod tests {
             height,
             &preferred_faulty_ids,
         );
-
         assert_eq!(selected, vec![preferred]);
     }
-
     #[test]
     fn preferred_active_leader_does_not_override_safe_selection() {
         let peer_ids: Vec<_> = (0..7)
@@ -1952,7 +1825,6 @@ mod tests {
             .expect("test roster should have a leader")
             .clone();
         let preferred_faulty_ids = HashSet::from([preferred_leader.clone()]);
-
         let selected = UnstableNetwork::select_faulty_peer_ids(
             &peer_ids,
             1,
@@ -1961,11 +1833,9 @@ mod tests {
             height,
             &preferred_faulty_ids,
         );
-
         assert_eq!(selected.len(), 1);
         assert_ne!(selected[0], preferred_leader);
     }
-
     #[test]
     fn fault_budget_matches_commit_quorum_tail() {
         let peer_count = 10;
@@ -1973,7 +1843,6 @@ mod tests {
         let fault_budget = UnstableNetwork::fault_budget_for_peer_count(peer_count);
         assert_eq!(fault_budget, peer_count - commit_quorum);
     }
-
     #[test]
     fn fault_round_seed_sticks_at_budget() {
         let budget = UnstableNetwork::fault_budget_for_peer_count(13);
@@ -1983,7 +1852,6 @@ mod tests {
         let rotating = UnstableNetwork::fault_round_seed(4, budget.saturating_sub(1), budget);
         assert_eq!(rotating, 4);
     }
-
     #[test]
     fn non_faulty_sync_timeout_caps_multi_faults() {
         let sync_timeout = Duration::from_secs(180);
@@ -2001,14 +1869,12 @@ mod tests {
         let no_faults = non_faulty_sync_timeout(sync_timeout, pipeline_time, 0);
         assert_eq!(no_faults, sync_timeout);
     }
-
     #[test]
     fn submit_retry_backoff_caps_delay() {
         assert_eq!(submit_retry_backoff(1), Duration::from_millis(200));
         assert_eq!(submit_retry_backoff(5), Duration::from_millis(1000));
         assert_eq!(submit_retry_backoff(20), Duration::from_secs(2));
     }
-
     #[test]
     fn resubmit_gate_respects_flags_and_deadline() {
         let now = Instant::now();
@@ -2016,14 +1882,12 @@ mod tests {
         assert!(should_resubmit_tx(true, now, now));
         assert!(!should_resubmit_tx(true, now, now + Duration::from_secs(1)));
     }
-
     #[test]
     fn supply_resubmit_allowed_for_faults_or_soft_fork() {
         assert!(!allow_supply_resubmit(0, false));
         assert!(allow_supply_resubmit(1, false));
         assert!(allow_supply_resubmit(0, true));
     }
-
     #[test]
     fn round_supply_deadline_slip_allowed_for_fault_or_soft_fork() {
         assert!(!allow_round_supply_deadline_slip(0, false));
@@ -2031,40 +1895,33 @@ mod tests {
         assert!(allow_round_supply_deadline_slip(2, false));
         assert!(allow_round_supply_deadline_slip(0, true));
     }
-
     #[test]
     fn submit_acceptance_accepts_enqueued_or_committed_duplicate() {
         let enqueued = eyre!("PRTRY:ALREADY_ENQUEUED");
         assert!(is_submission_accepted_duplicate(&enqueued));
-
         let committed = eyre!("transaction already committed to the blockchain");
         assert!(is_submission_accepted_duplicate(&committed));
     }
-
     #[test]
     fn initial_resubmit_delay_caps_at_half_sync_timeout() {
         let delay = initial_resubmit_delay(Duration::from_secs(10), Duration::from_secs(4));
         assert_eq!(delay, Duration::from_secs(5));
     }
-
     #[test]
     fn initial_resubmit_delay_prefers_pipeline_multiple() {
         let delay = initial_resubmit_delay(Duration::from_secs(600), Duration::from_secs(6));
         assert_eq!(delay, Duration::from_secs(24));
     }
-
     #[test]
     fn recovered_submit_window_has_minimum_probe_delay() {
         let delay = recovered_submit_window(Duration::from_secs(600), Duration::from_secs(2));
         assert_eq!(delay, Duration::from_secs(5));
     }
-
     #[test]
     fn recovered_submit_window_caps_at_sync_timeout() {
         let delay = recovered_submit_window(Duration::from_secs(3), Duration::from_secs(10));
         assert_eq!(delay, Duration::from_secs(3));
     }
-
     #[test]
     fn stagger_recovery_gap_scales_with_pipeline() {
         assert_eq!(
@@ -2077,7 +1934,6 @@ mod tests {
         );
     }
 }
-
 #[tokio::test]
 async fn unstable_network_4_peers_1_fault() -> Result<()> {
     UnstableNetwork {
@@ -2089,7 +1945,6 @@ async fn unstable_network_4_peers_1_fault() -> Result<()> {
     .run()
     .await
 }
-
 #[tokio::test]
 async fn soft_fork() -> Result<()> {
     UnstableNetwork {
@@ -2101,7 +1956,6 @@ async fn soft_fork() -> Result<()> {
     .run()
     .await
 }
-
 #[tokio::test]
 async fn unstable_network_7_peers_1_fault() -> Result<()> {
     UnstableNetwork {
@@ -2113,7 +1967,6 @@ async fn unstable_network_7_peers_1_fault() -> Result<()> {
     .run()
     .await
 }
-
 #[tokio::test]
 async fn unstable_network_7_peers_2_faults() -> Result<()> {
     UnstableNetwork {
@@ -2125,7 +1978,6 @@ async fn unstable_network_7_peers_2_faults() -> Result<()> {
     .run()
     .await
 }
-
 #[tokio::test]
 async fn unstable_network_10_peers_3_faults() -> Result<()> {
     UnstableNetwork {
@@ -2139,7 +1991,6 @@ async fn unstable_network_10_peers_3_faults() -> Result<()> {
     .run()
     .await
 }
-
 #[tokio::test]
 async fn unstable_network_13_peers_4_faults() -> Result<()> {
     UnstableNetwork {
@@ -2151,7 +2002,6 @@ async fn unstable_network_13_peers_4_faults() -> Result<()> {
     .run()
     .await
 }
-
 #[tokio::test]
 async fn unstable_network_rejects_non_revision4_committee_geometry() {
     let error = UnstableNetwork {
@@ -2163,7 +2013,6 @@ async fn unstable_network_rejects_non_revision4_committee_geometry() {
     .run()
     .await
     .expect_err("invalid revision-4 committee geometry must fail before startup");
-
     assert!(
         error.to_string().contains("exact revision-4 3f + 1"),
         "unexpected geometry error: {error}"

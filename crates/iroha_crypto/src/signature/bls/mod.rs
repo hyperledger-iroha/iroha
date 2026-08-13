@@ -45,7 +45,6 @@ pub use small::SmallBls as BlsSmall;
 pub use small::SmallPrivateKey as BlsSmallPrivateKey;
 /// Compact BLS public key (smaller signatures).
 pub use small::SmallPublicKey as BlsSmallPublicKey;
-
 // Select backend implementation module
 // - Default: compat w3f-bls (arkworks-based) when `bls-backend-blstrs` is NOT set
 // - New: pure blstrs backend when `bls-backend-blstrs` is set
@@ -54,23 +53,19 @@ mod implementation;
 #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
 #[path = "implementation_blstrs.rs"]
 mod implementation;
-
 mod ethereum;
 pub use ethereum::{
     ETHEREUM_BLS_POP_DST, ethereum_bls_pop_fast_aggregate_verify,
     ethereum_bls_pop_validate_public_key,
 };
-
 /// This version is the "normal" BLS signature scheme
 /// with the public key group in G1 and signature group in G2.
 /// 192 byte signatures and 97 byte public keys
 mod normal {
     use super::{implementation, implementation::BlsConfiguration};
     use crate::Algorithm;
-
     #[derive(Debug, Clone, Copy)]
     pub struct NormalConfiguration;
-
     impl BlsConfiguration for NormalConfiguration {
         const ALGORITHM: Algorithm = Algorithm::BlsNormal;
         #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
@@ -78,7 +73,6 @@ mod normal {
         #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
         const NORMAL: bool = true;
     }
-
     /// Default (non-compact) BLS signature suite.
     pub type NormalBls = implementation::BlsImpl<NormalConfiguration>;
     /// Public key type for the default BLS suite.
@@ -95,7 +89,6 @@ mod normal {
     #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
     pub type NormalPrivateKey = implementation::SecretKey<NormalConfiguration>;
 }
-
 /// Small BLS signature scheme results in smaller signatures but slower
 /// operations and bigger public key.
 ///
@@ -103,7 +96,6 @@ mod normal {
 mod small {
     use super::implementation::{self, BlsConfiguration};
     use crate::Algorithm;
-
     #[derive(Debug, Clone, Copy)]
     pub struct SmallConfiguration;
     impl BlsConfiguration for SmallConfiguration {
@@ -113,7 +105,6 @@ mod small {
         #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
         const NORMAL: bool = false;
     }
-
     /// Compact BLS signature suite with smaller signatures.
     pub type SmallBls = implementation::BlsImpl<SmallConfiguration>;
     /// Public key type for the compact BLS suite.
@@ -129,10 +120,8 @@ mod small {
     #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
     pub type SmallPrivateKey = implementation::SecretKey<SmallConfiguration>;
 }
-
 #[cfg(test)]
 mod tests;
-
 // Crate-local helpers let the PoP-enforcing public wrappers share the
 // aggregate implementations without exposing raw-key same-message checks.
 pub(crate) fn verify_aggregate_same_message_normal(
@@ -146,7 +135,6 @@ pub(crate) fn verify_aggregate_same_message_normal(
         public_keys,
     )
 }
-
 pub(crate) fn verify_aggregate_same_message_small(
     message: &[u8],
     signatures: &[&[u8]],
@@ -158,7 +146,6 @@ pub(crate) fn verify_aggregate_same_message_small(
         public_keys,
     )
 }
-
 /// Exact per-signature verification across distinct messages, normal variant.
 ///
 /// Success proves every signature is valid for the public key and message at
@@ -175,7 +162,6 @@ pub fn verify_aggregate_multi_message_normal(
         public_keys,
     )
 }
-
 /// Exact per-signature verification across distinct messages, small variant.
 ///
 /// Success proves every signature is valid for the public key and message at
@@ -192,14 +178,12 @@ pub fn verify_aggregate_multi_message_small(
         public_keys,
     )
 }
-
 /// Aggregate (sum) signatures for the same-message case (normal variant: pk in G1, sig in G2).
 /// Returns aggregated signature bytes.
 #[cfg(feature = "bls")]
 pub fn aggregate_same_message_normal(signatures: &[&[u8]]) -> Result<Vec<u8>, crate::Error> {
     implementation::BlsImpl::<normal::NormalConfiguration>::aggregate_signatures(signatures)
 }
-
 /// Verify a pre-aggregated signature for the same-message case (normal variant).
 #[cfg(feature = "bls")]
 pub(crate) fn verify_preaggregated_same_message_normal(

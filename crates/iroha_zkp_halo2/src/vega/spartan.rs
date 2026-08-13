@@ -4,9 +4,6 @@
 //! inputs. It is sound only inside the canonical composition where Nova NIFS
 //! has already bound both input instances and the cross-term commitment to the
 //! same transcript. The type and entry points remain crate-private.
-
-use thiserror::Error;
-
 use super::{
     VegaT256ScalarV1 as Scalar,
     algebra::{
@@ -21,7 +18,7 @@ use super::{
     },
     transcript::{VegaTranscriptError, VegaTranscriptV1},
 };
-
+use thiserror::Error;
 /// Failure while proving or verifying the fixed-shape Relaxed Spartan proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum SpartanError {
@@ -46,7 +43,6 @@ pub(super) enum SpartanError {
     #[error(transparent)]
     Transcript(#[from] VegaTranscriptError),
 }
-
 /// Canonical non-ZK Spartan proof for one relaxed R1CS instance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RelaxedSpartanProof {
@@ -58,7 +54,6 @@ pub(super) struct RelaxedSpartanProof {
     pub(super) error_opening: Vec<Scalar>,
     pub(super) error_opening_blinding: Scalar,
 }
-
 impl RelaxedSpartanProof {
     pub(super) fn prove(
         shape: &Shape,
@@ -69,10 +64,8 @@ impl RelaxedSpartanProof {
     ) -> Result<Self, SpartanError> {
         let dimensions = SpartanDimensions::validate(shape, key)?;
         validate_prover_input(shape, key, instance, witness, dimensions)?;
-
         transcript.absorb_scalar(b"u_relaxed", instance.relaxation)?;
         transcript.absorb_scalars(b"X_relaxed", &instance.public_inputs)?;
-
         let mut tau = Vec::with_capacity(dimensions.outer_rounds);
         for _ in 0..dimensions.outer_rounds {
             tau.push(transcript.squeeze(b"t")?);
@@ -103,7 +96,6 @@ impl RelaxedSpartanProof {
         )?;
         drop(tau);
         transcript.absorb_scalars(b"claims_outer", &outer_claims)?;
-
         let batching_challenge = transcript.squeeze(b"r")?;
         let batching_challenge_squared = batching_challenge.square();
         let row_weights = SecretScalarTable::try_eq_evals(&row_point)?;
@@ -111,7 +103,6 @@ impl RelaxedSpartanProof {
         let inner_claim = outer_claims[0]
             + batching_challenge * outer_claims[1]
             + batching_challenge_squared * (outer_claims[2] - error_claim);
-
         let batched_matrix = bind_batched_matrix(
             shape,
             row_weights.as_slice(),
@@ -128,7 +119,6 @@ impl RelaxedSpartanProof {
         assignment_values[shape.variable_count()] = instance.relaxation;
         assignment_values[shape.variable_count() + 1..shape.columns()]
             .copy_from_slice(&instance.public_inputs);
-
         let (inner_sumcheck, column_point, _) = prove_quadratic_owned(
             inner_claim,
             dimensions.inner_rounds,
@@ -146,7 +136,6 @@ impl RelaxedSpartanProof {
             prove_direct(key, &witness.error, &witness.error_blindings, &row_point)?;
         transcript.absorb_scalars(b"v_W", &witness_opening)?;
         transcript.absorb_scalars(b"v_E", &error_opening)?;
-
         Ok(Self {
             outer_sumcheck,
             outer_claims,
@@ -157,7 +146,6 @@ impl RelaxedSpartanProof {
             error_opening_blinding,
         })
     }
-
     pub(super) fn verify(
         &self,
         shape: &Shape,
@@ -167,10 +155,8 @@ impl RelaxedSpartanProof {
     ) -> Result<(), SpartanError> {
         let dimensions = SpartanDimensions::validate(shape, key)?;
         validate_verifier_input(self, shape, key, instance, dimensions)?;
-
         transcript.absorb_scalar(b"u_relaxed", instance.relaxation)?;
         transcript.absorb_scalars(b"X_relaxed", &instance.public_inputs)?;
-
         let mut tau = Vec::with_capacity(dimensions.outer_rounds);
         for _ in 0..dimensions.outer_rounds {
             tau.push(transcript.squeeze(b"t")?);
@@ -184,7 +170,6 @@ impl RelaxedSpartanProof {
             return Err(SpartanError::InvalidOuterClaim);
         }
         transcript.absorb_scalars(b"claims_outer", &self.outer_claims)?;
-
         let batching_challenge = transcript.squeeze(b"r")?;
         let batching_challenge_squared = batching_challenge.square();
         let error_evaluation = verify_direct(
@@ -207,7 +192,6 @@ impl RelaxedSpartanProof {
             self.witness_opening_blinding,
             &column_point[1..],
         )?;
-
         let row_weights = eq_evals(&row_point)?;
         let column_weights = eq_evals(&column_point)?;
         let mut assignment_evaluation = (Scalar::one() - column_point[0]) * witness_evaluation;
@@ -224,13 +208,11 @@ impl RelaxedSpartanProof {
         if inner_final != batched_matrix_evaluation * assignment_evaluation {
             return Err(SpartanError::InvalidInnerClaim);
         }
-
         transcript.absorb_scalars(b"v_W", &self.witness_opening)?;
         transcript.absorb_scalars(b"v_E", &self.error_opening)?;
         Ok(())
     }
 }
-
 fn derive_assignment_products_split(
     shape: &Shape,
     instance: &RelaxedInstance,
@@ -282,7 +264,6 @@ fn derive_assignment_products_split(
     }
     Ok(products)
 }
-
 fn bind_batched_matrix(
     shape: &Shape,
     row_weights: &[Scalar],
@@ -310,7 +291,6 @@ fn bind_batched_matrix(
     }
     Ok(batched)
 }
-
 #[derive(Clone, Copy)]
 struct SpartanDimensions {
     outer_rounds: usize,
@@ -319,7 +299,6 @@ struct SpartanDimensions {
     witness_rows: usize,
     error_rows: usize,
 }
-
 impl SpartanDimensions {
     fn validate(shape: &Shape, key: &CommitmentKey) -> Result<Self, SpartanError> {
         if !key.columns().is_power_of_two() {
@@ -360,7 +339,6 @@ impl SpartanDimensions {
         })
     }
 }
-
 fn validate_prover_input(
     shape: &Shape,
     key: &CommitmentKey,
@@ -389,7 +367,6 @@ fn validate_prover_input(
     }
     Ok(())
 }
-
 fn validate_verifier_input(
     proof: &RelaxedSpartanProof,
     shape: &Shape,
@@ -417,7 +394,6 @@ fn validate_verifier_input(
     }
     Ok(())
 }
-
 fn validate_instance(
     shape: &Shape,
     _key: &CommitmentKey,
@@ -432,7 +408,6 @@ fn validate_instance(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,11 +415,9 @@ mod tests {
         nifs::{NovaNifs, NovaNifsProverInput},
         r1cs::{Instance, SparseMatrix, Witness},
     };
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     fn h(value: &str) -> Scalar {
         let bytes: [u8; 32] = hex::decode(value)
             .expect("hex")
@@ -452,7 +425,6 @@ mod tests {
             .expect("32-byte scalar");
         Scalar::from_be_bytes_exact(bytes).expect("canonical scalar")
     }
-
     fn fixture() -> (
         CommitmentKey,
         Shape,
@@ -468,7 +440,6 @@ mod tests {
         let c = SparseMatrix::new(4, 5, &entries).expect("canonical C");
         let shape = Shape::new(4, 4, 0, a, b, c).expect("shape");
         let key = CommitmentKey::derive(b"vega-spartan-test", 2).expect("key");
-
         let relaxed_witness = RelaxedWitness {
             values: vec![s(2), s(3), s(4), s(5)],
             witness_blindings: vec![s(11), s(13)],
@@ -504,7 +475,6 @@ mod tests {
             regular_witness,
         )
     }
-
     #[test]
     fn streamed_products_and_reused_batch_match_materialized_algebra() {
         let (_, shape, instance, witness, _, _) = fixture();
@@ -525,7 +495,6 @@ mod tests {
             assert_eq!(lower, &expected[..half]);
             assert_eq!(upper, &expected[half..]);
         }
-
         let row_weights = [s(2), s(3), s(5), s(7)];
         let challenge = s(11);
         let challenge_squared = challenge.square();
@@ -549,7 +518,6 @@ mod tests {
         .expect("single-buffer batch");
         assert_eq!(actual_batch.as_slice(), expected_batch.as_slice());
     }
-
     #[test]
     fn spartan_prover_source_splits_and_releases_first_round_tables() {
         let source = include_str!("spartan.rs");
@@ -567,7 +535,6 @@ mod tests {
         assert!(production.contains("prove_quadratic_owned"));
         assert!(production.contains("drop(row_weights)"));
     }
-
     fn prove_composed() -> (
         CommitmentKey,
         Shape,
@@ -613,7 +580,6 @@ mod tests {
             proof,
         )
     }
-
     fn verify_composed(
         key: &CommitmentKey,
         shape: &Shape,
@@ -629,7 +595,6 @@ mod tests {
         proof.verify(shape, key, &folded, &mut transcript)?;
         Ok(folded)
     }
-
     #[test]
     fn composed_nifs_and_relaxed_spartan_prove_and_verify() {
         let (key, shape, u1, u2, nifs, folded, witness, proof) = prove_composed();
@@ -727,7 +692,6 @@ mod tests {
             h("7c4175b3a65853572a1520d371e8794bd8ff5a867a934a656d3246d7e302beea")
         );
     }
-
     #[test]
     fn every_spartan_response_category_is_bound_and_checked() {
         let (key, shape, u1, u2, nifs, _, _, proof) = prove_composed();
@@ -784,7 +748,6 @@ mod tests {
         altered.error_opening_blinding += Scalar::one();
         assert!(verify_composed(&key, &shape, &u1, &u2, &nifs, &altered).is_err());
     }
-
     #[test]
     fn spartan_rejects_round_degree_opening_and_instance_shape_attacks() {
         let (key, shape, u1, u2, nifs, folded, _, proof) = prove_composed();
@@ -808,7 +771,6 @@ mod tests {
             verify_composed(&key, &shape, &u1, &u2, &nifs, &altered),
             Err(SpartanError::InvalidDimension)
         );
-
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
         let verified_fold = nifs
             .verify(&key, &shape, &mut transcript, &u1, &u2)
@@ -821,7 +783,6 @@ mod tests {
                 .verify(&shape, &key, &altered_instance, &mut transcript)
                 .is_err()
         );
-
         let mut altered_context = VegaTranscriptV1::new_neutron_nova();
         altered_context
             .domain_separator(b"cross-context-replay")

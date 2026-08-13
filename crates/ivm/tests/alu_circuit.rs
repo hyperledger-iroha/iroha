@@ -1,6 +1,5 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::{ALUCircuit, ALUOp};
-
 #[test]
 fn test_add_sub_circuit() {
     let add = ALUCircuit {
@@ -17,7 +16,6 @@ fn test_add_sub_circuit() {
         result: 13,
     };
     assert!(add_fail.verify().is_err());
-
     let sub = ALUCircuit {
         op: ALUOp::Sub,
         a: 5,
@@ -26,7 +24,6 @@ fn test_add_sub_circuit() {
     };
     assert!(sub.verify().is_ok());
 }
-
 #[test]
 fn test_bitwise_ops_circuit() {
     let and_c = ALUCircuit {
@@ -58,7 +55,6 @@ fn test_bitwise_ops_circuit() {
     };
     assert!(not_c.verify().is_ok());
 }
-
 #[test]
 fn test_shift_rotate_circuit() {
     let sll = ALUCircuit {

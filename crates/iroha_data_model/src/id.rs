@@ -1,5 +1,4 @@
 use std::borrow::Borrow;
-
 use derive_more::Display;
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::{EnumRef, model};
@@ -7,25 +6,21 @@ use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use norito::core::{DecodeFromSlice, Error as NoritoError};
-
 pub use self::model::*;
 use crate::error::ParseError;
 use crate::{
     account, asset, block::BlockHeader, domain, nexus, nft, parameter, peer, permission, repo,
     role, rwa, trigger,
 };
-
 /// Maximum byte length of a canonical [`ChainId`].
 ///
 /// Chain identifiers are ASCII, so this is also the maximum character count.
 /// The bound keeps every signed, configured, and peer-advertised chain identity
 /// small before any allocation is performed.
 pub const MAX_CHAIN_ID_BYTES: usize = 128;
-
 #[model]
 mod model {
     use super::*;
-
     /// Exact deployment identity derived from the consensus hash of the genesis header.
     ///
     /// Unlike [`ChainId`], this value is not an operator-selected label. Distinct genesis
@@ -36,59 +31,49 @@ mod model {
     #[schema(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
     pub struct NetworkId(HashOf<BlockHeader>);
-
     impl NetworkId {
         /// Construct the network identity from the exact genesis consensus-header hash.
         #[must_use]
         pub const fn from_genesis_hash(hash: HashOf<BlockHeader>) -> Self {
             Self(hash)
         }
-
         /// Borrow the exact genesis consensus-header hash.
         #[must_use]
         pub const fn as_genesis_hash(&self) -> &HashOf<BlockHeader> {
             &self.0
         }
-
         /// Recover the exact genesis consensus-header hash.
         #[must_use]
         pub const fn into_genesis_hash(self) -> HashOf<BlockHeader> {
             self.0
         }
-
         /// Borrow the canonical 32-byte identity.
         #[must_use]
         pub fn as_bytes(&self) -> &[u8; iroha_crypto::Hash::LENGTH] {
             self.0.as_ref()
         }
     }
-
     impl From<HashOf<BlockHeader>> for NetworkId {
         fn from(value: HashOf<BlockHeader>) -> Self {
             Self::from_genesis_hash(value)
         }
     }
-
     impl From<NetworkId> for HashOf<BlockHeader> {
         fn from(value: NetworkId) -> Self {
             value.into_genesis_hash()
         }
     }
-
     impl core::str::FromStr for NetworkId {
         type Err = iroha_crypto::error::ParseError;
-
         fn from_str(value: &str) -> Result<Self, Self::Err> {
             value.parse::<HashOf<BlockHeader>>().map(Self::from)
         }
     }
-
     #[cfg(feature = "json")]
     impl norito::json::FastJsonWrite for NetworkId {
         fn write_json(&self, out: &mut String) {
             norito::json::FastJsonWrite::write_json(&self.0, out);
         }
-
         fn write_json_to(
             &self,
             out: &mut dyn norito::json::JsonWriteSink,
@@ -96,7 +81,6 @@ mod model {
             norito::json::FastJsonWrite::write_json_to(&self.0, out)
         }
     }
-
     #[cfg(feature = "json")]
     impl norito::json::JsonDeserialize for NetworkId {
         fn json_deserialize(
@@ -106,7 +90,6 @@ mod model {
                 .map(Self::from_genesis_hash)
         }
     }
-
     /// Canonical, deployment-selected identifier of a blockchain.
     ///
     /// The value is exact, case-sensitive ASCII. It starts and ends with an
@@ -116,7 +99,6 @@ mod model {
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
     pub struct ChainId(Box<str>);
-
     impl ChainId {
         fn parse(value: &str) -> Result<Self, ParseError> {
             if value.is_empty() {
@@ -141,7 +123,6 @@ mod model {
             }
             Ok(Self(value.into()))
         }
-
         pub(super) fn decode_text_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
             let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;
             if len > MAX_CHAIN_ID_BYTES {
@@ -162,12 +143,10 @@ mod model {
             norito::core::note_payload_access(bytes, end);
             Ok((chain, end))
         }
-
         pub(super) fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
             let (wire, used) = norito::core::decode_field_canonical::<ChainIdWire>(bytes)?;
             Ok((wire.0.0, used))
         }
-
         /// Access inner string (owned).
         pub fn into_inner(self) -> Box<str> {
             self.0
@@ -177,55 +156,44 @@ mod model {
             &self.0
         }
     }
-
     impl From<&'static str> for ChainId {
         fn from(value: &'static str) -> Self {
             Self::parse(value).expect("static chain id must be canonical")
         }
     }
-
     impl core::str::FromStr for ChainId {
         type Err = ParseError;
-
         fn from_str(value: &str) -> Result<Self, Self::Err> {
             Self::parse(value)
         }
     }
-
     impl TryFrom<String> for ChainId {
         type Error = ParseError;
-
         fn try_from(value: String) -> Result<Self, Self::Error> {
             Self::parse(&value)
         }
     }
-
     impl TryFrom<Box<str>> for ChainId {
         type Error = ParseError;
-
         fn try_from(value: Box<str>) -> Result<Self, Self::Error> {
             Self::parse(&value)
         }
     }
-
     impl AsRef<str> for ChainId {
         fn as_ref(&self) -> &str {
             self.as_str()
         }
     }
-
     impl Borrow<str> for ChainId {
         fn borrow(&self) -> &str {
             self.as_str()
         }
     }
-
     #[cfg(feature = "json")]
     impl norito::json::FastJsonWrite for ChainId {
         fn write_json(&self, out: &mut String) {
             norito::json::JsonSerialize::json_serialize(self.as_str(), out);
         }
-
         fn write_json_to(
             &self,
             out: &mut dyn norito::json::JsonWriteSink,
@@ -233,7 +201,6 @@ mod model {
             norito::json::write_json_string_to(self.as_str(), out)
         }
     }
-
     #[cfg(feature = "json")]
     impl norito::json::JsonDeserialize for ChainId {
         fn json_deserialize(
@@ -243,7 +210,6 @@ mod model {
             Self::parse(&value).map_err(|error| norito::json::Error::Message(error.reason.into()))
         }
     }
-
     /// Sized container for all possible identifications.
     #[derive(
         Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, EnumRef, FromVariant, IntoSchema,
@@ -290,27 +256,22 @@ mod model {
         RepoAgreementId(repo::RepoAgreementId),
     }
 }
-
 impl norito::core::NoritoSerialize for NetworkId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(self.as_genesis_hash(), writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(iroha_crypto::Hash::LENGTH)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         Some(iroha_crypto::Hash::LENGTH)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for NetworkId {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("NetworkId deserialization must succeed for a valid genesis hash")
     }
-
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -320,38 +281,31 @@ impl<'a> norito::core::NoritoDeserialize<'a> for NetworkId {
         .map(Self::from_genesis_hash)
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for NetworkId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
         <HashOf<BlockHeader> as DecodeFromSlice<'a>>::decode_from_slice(bytes)
             .map(|(hash, used)| (Self::from_genesis_hash(hash), used))
     }
 }
-
 /// Validation-aware decoder for the text field inside the structural V1
 /// `ChainId` tuple-newtype representation.
 struct ChainIdText(ChainId);
-
 impl norito::core::NoritoSerialize for ChainIdText {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::NoritoSerialize>::serialize(&self.0.as_str(), writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.0.as_str())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.0.as_str())
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for ChainIdText {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ChainId text deserialization must succeed for valid archives")
     }
-
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -364,18 +318,15 @@ impl<'a> norito::core::NoritoDeserialize<'a> for ChainIdText {
         Ok(Self(chain_id))
     }
 }
-
 /// Mirrors the single-field structural layout originally assigned to
 /// `ChainId`, while delegating its inner field to the validating decoder.
 #[derive(Encode, Decode)]
 struct ChainIdWire(ChainIdText);
-
 impl<'a> norito::core::NoritoDeserialize<'a> for ChainId {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ChainId deserialization must succeed for valid archives")
     }
-
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -383,23 +334,19 @@ impl<'a> norito::core::NoritoDeserialize<'a> for ChainId {
         if let Ok(payload) = norito::core::payload_slice_from_ptr(ptr) {
             return ChainId::decode_wire(payload).map(|(chain, _)| chain);
         }
-
         let string = norito::core::NoritoDeserialize::deserialize(archived.cast::<String>());
         string
             .parse()
             .map_err(|error: ParseError| norito::core::Error::Message(error.reason.into()))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for ChainId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
         Self::decode_wire(bytes)
     }
 }
-
 mod id_box_codec {
     use super::*;
-
     #[derive(Encode, Decode)]
     enum IdBoxCandidate {
         DomainId(domain::DomainId),
@@ -416,7 +363,6 @@ mod id_box_codec {
         CustomParameterId(parameter::CustomParameterId),
         RepoAgreementId(repo::RepoAgreementId),
     }
-
     impl From<IdBox> for IdBoxCandidate {
         fn from(id: IdBox) -> Self {
             match id {
@@ -436,7 +382,6 @@ mod id_box_codec {
             }
         }
     }
-
     impl From<IdBoxCandidate> for IdBox {
         fn from(id: IdBoxCandidate) -> Self {
             match id {
@@ -456,7 +401,6 @@ mod id_box_codec {
             }
         }
     }
-
     impl norito::core::NoritoSerialize for IdBox {
         fn serialize(
             &self,
@@ -466,7 +410,6 @@ mod id_box_codec {
             norito::core::NoritoSerialize::serialize(&candidate, writer)
         }
     }
-
     impl<'de> norito::core::NoritoDeserialize<'de> for IdBox {
         fn deserialize(archived: &'de norito::core::Archived<IdBox>) -> Self {
             let candidate =
@@ -475,7 +418,6 @@ mod id_box_codec {
         }
     }
 }
-
 macro_rules! impl_encode_as_id_box {
     ($($ty:ty),+ $(,)?) => { $(
         impl $ty {
@@ -486,7 +428,6 @@ macro_rules! impl_encode_as_id_box {
         }
     )+ };
 }
-
 impl_encode_as_id_box! {
     peer::PeerId,
     domain::DomainId,
@@ -500,31 +441,24 @@ impl_encode_as_id_box! {
     repo::RepoAgreementId,
     nexus::LaneId,
 }
-
 #[cfg(test)]
 mod tests {
     use norito::core::DecodeFromSlice as _;
-
     use super::*;
-
     #[derive(Encode)]
     struct UncheckedChainIdWire(Box<str>);
-
     #[derive(Encode)]
     struct ChainIdEnvelope(ChainId);
-
     fn network_id_fixture() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]),
         ))
     }
-
     #[test]
     fn network_id_is_the_exact_transparent_genesis_hash_wire() {
         let network_id = network_id_fixture();
         let genesis_hash = *network_id.as_genesis_hash();
         let encoded = network_id.encode();
-
         assert_eq!(encoded.len(), iroha_crypto::Hash::LENGTH);
         assert_eq!(encoded, genesis_hash.encode());
         assert_eq!(network_id.encoded_len(), iroha_crypto::Hash::LENGTH);
@@ -533,7 +467,6 @@ mod tests {
             NetworkId::decode_from_slice(&encoded).expect("decode exact network identity"),
             (network_id, iroha_crypto::Hash::LENGTH)
         );
-
         let framed = norito::to_bytes(&network_id).expect("frame network identity");
         assert_eq!(
             norito::decode_from_bytes::<NetworkId>(&framed).expect("framed roundtrip"),
@@ -547,7 +480,6 @@ mod tests {
             network_id
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn network_id_json_is_the_canonical_hash_literal() {
@@ -555,7 +487,6 @@ mod tests {
         let network_json = norito::json::to_json(&network_id).expect("serialize network identity");
         let hash_json =
             norito::json::to_json(network_id.as_genesis_hash()).expect("serialize genesis hash");
-
         assert_eq!(network_json, hash_json);
         assert!(network_json.starts_with("\"hash:"));
         assert_eq!(
@@ -563,13 +494,11 @@ mod tests {
             network_id
         );
     }
-
     #[test]
     fn chain_id_from_str() {
         let id: ChainId = "test".parse().expect("valid chain id");
         assert_eq!(id, ChainId::from("test"));
     }
-
     #[test]
     fn chain_id_enforces_canonical_ascii_and_byte_limit() {
         let boundary = format!("a{}z", "0".repeat(MAX_CHAIN_ID_BYTES - 2));
@@ -580,7 +509,6 @@ mod tests {
                 .as_str(),
             boundary
         );
-
         for invalid in [
             String::new(),
             "-leading".to_owned(),
@@ -600,7 +528,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn chain_id_uses_one_canonical_structural_v1_wire_layout() {
         let id = ChainId::from("test");
@@ -611,7 +538,6 @@ mod tests {
             ChainIdEnvelope(id.clone()).encode(),
             [6, 5, 4, b't', b'e', b's', b't']
         );
-
         let mut cursor = encoded.as_slice();
         assert_eq!(ChainId::decode(&mut cursor).expect("bare roundtrip"), id);
         assert_eq!(
@@ -623,22 +549,18 @@ mod tests {
             norito::decode_from_bytes::<ChainId>(&framed).expect("framed roundtrip"),
             id
         );
-
         let transparent = "test".to_owned().encode();
         assert!(
             ChainId::decode_from_slice(&transparent).is_err(),
             "the transient transparent representation must not be accepted"
         );
-
         let mut truncated = encoded.clone();
         truncated.pop();
         assert!(ChainId::decode_from_slice(&truncated).is_err());
-
         let mut trailing = encoded;
         trailing.push(0);
         assert!(ChainId::decode_from_slice(&trailing).is_err());
     }
-
     #[test]
     fn chain_id_norito_decoders_cannot_bypass_validation() {
         for invalid in [
@@ -668,7 +590,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn chain_id_decoder_rejects_declared_oversize_before_body_access() {
         let mut inner = Vec::new();
@@ -682,7 +603,6 @@ mod tests {
             u64::try_from(inner.len()).expect("inner header length fits u64"),
         );
         declared_oversize.extend_from_slice(&inner);
-
         let error = ChainId::decode_from_slice(&declared_oversize)
             .expect_err("oversized declared ChainId must fail before reading the body");
         assert!(
@@ -690,7 +610,6 @@ mod tests {
             "decoder reached a generic truncation error before the ChainId limit: {error}"
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn chain_id_json_decoder_enforces_the_same_invariant() {

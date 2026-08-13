@@ -1,7 +1,5 @@
 //! Dependency-free SHA-256 used by the Microsoft Vega compatibility boundary.
-
 use thiserror::Error;
-
 const INITIAL_STATE: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -12,7 +10,6 @@ const INITIAL_STATE: [u32; 8] = [
     0x1f83_d9ab,
     0x5be0_cd19,
 ];
-
 const ROUND_CONSTANTS: [u32; 64] = [
     0x428a_2f98,
     0x7137_4491,
@@ -79,7 +76,6 @@ const ROUND_CONSTANTS: [u32; 64] = [
     0xbef9_a3f7,
     0xc671_78f2,
 ];
-
 /// Input length exceeded SHA-256's 64-bit bit-length field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum Sha256Error {
@@ -87,7 +83,6 @@ pub(super) enum Sha256Error {
     #[error("SHA-256 input length exceeds the canonical 64-bit bit-length field")]
     LengthOverflow,
 }
-
 /// Streaming SHA-256 state with no dependency or allocation requirement.
 #[derive(Clone)]
 pub(super) struct Sha256 {
@@ -96,7 +91,6 @@ pub(super) struct Sha256 {
     pending_len: usize,
     total_bytes: u64,
 }
-
 impl Sha256 {
     /// Construct an empty SHA-256 state.
     pub(super) const fn new() -> Self {
@@ -107,7 +101,6 @@ impl Sha256 {
             total_bytes: 0,
         }
     }
-
     /// Absorb one fragment of the digest stream.
     pub(super) fn update(&mut self, mut input: &[u8]) -> Result<(), Sha256Error> {
         let added = u64::try_from(input.len()).map_err(|_| Sha256Error::LengthOverflow)?;
@@ -116,7 +109,6 @@ impl Sha256 {
             .checked_add(added)
             .filter(|bytes| *bytes <= u64::MAX / 8)
             .ok_or(Sha256Error::LengthOverflow)?;
-
         if self.pending_len != 0 {
             let take = input.len().min(64 - self.pending_len);
             self.pending[self.pending_len..self.pending_len + take].copy_from_slice(&input[..take]);
@@ -129,7 +121,6 @@ impl Sha256 {
             self.pending = [0; 64];
             self.pending_len = 0;
         }
-
         let mut blocks = input.chunks_exact(64);
         for block in &mut blocks {
             compress(
@@ -142,7 +133,6 @@ impl Sha256 {
         self.pending_len = remainder.len();
         Ok(())
     }
-
     /// Finalize and return the standard 32-byte digest.
     pub(super) fn finalize(mut self) -> [u8; 32] {
         let bit_len = self.total_bytes * 8;
@@ -157,7 +147,6 @@ impl Sha256 {
         }
         self.pending[56..].copy_from_slice(&bit_len.to_be_bytes());
         compress(&mut self.state, &self.pending);
-
         let mut output = [0_u8; 32];
         for (destination, word) in output.chunks_exact_mut(4).zip(self.state) {
             destination.copy_from_slice(&word.to_be_bytes());
@@ -165,7 +154,6 @@ impl Sha256 {
         output
     }
 }
-
 /// Hash one complete byte string.
 #[cfg(test)]
 pub(super) fn sha256(input: &[u8]) -> Result<[u8; 32], Sha256Error> {
@@ -173,7 +161,6 @@ pub(super) fn sha256(input: &[u8]) -> Result<[u8; 32], Sha256Error> {
     state.update(input)?;
     Ok(state.finalize())
 }
-
 fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut schedule = [0_u32; 64];
     for (word, bytes) in schedule.iter_mut().zip(block.chunks_exact(4)) {
@@ -191,7 +178,6 @@ fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
             .wrapping_add(schedule[index - 7])
             .wrapping_add(s1);
     }
-
     let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
     for index in 0..64 {
         let sigma1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
@@ -204,7 +190,6 @@ fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
         let sigma0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
         let majority = (a & b) ^ (a & c) ^ (b & c);
         let temporary2 = sigma0.wrapping_add(majority);
-
         h = g;
         g = f;
         f = e;
@@ -218,11 +203,9 @@ fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
         *destination = destination.wrapping_add(value);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn sha256_matches_fips_known_answers_and_fragmentation() {
         let cases = [
@@ -253,7 +236,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn sha256_handles_padding_on_both_sides_of_one_block() {
         let fifty_five = [0xa5_u8; 55];

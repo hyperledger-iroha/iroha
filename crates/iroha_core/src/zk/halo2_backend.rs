@@ -3,9 +3,7 @@
 //! This module intentionally keeps `halo2-axiom` proof plumbing behind a small
 //! Iroha-owned surface so runtime code does not spread direct dependency usage
 //! across verifier dispatch and proof builders.
-
 use std::{io, io::Write};
-
 use halo2_proofs::{
     SerdeFormat,
     circuit::{AssignedCell, Region, Value},
@@ -34,7 +32,6 @@ use halo2_proofs::{
     },
 };
 use rand_core_06::OsRng;
-
 /// Pasta curve used by the transparent Halo2 IPA backend.
 pub(crate) type Curve = EqAffine;
 /// Pasta scalar field used by the transparent Halo2 IPA backend.
@@ -47,12 +44,10 @@ pub(crate) type VerifyingKey = Halo2VerifyingKey<Curve>;
 pub(crate) type ProvingKey = Halo2ProvingKey<Curve>;
 /// Plonk error emitted by the Pasta backend.
 pub(crate) type Error = PlonkError;
-
 /// Construct deterministic Pasta IPA parameters for a domain size exponent.
 pub(crate) fn params_new(k: u32) -> PastaParams {
     ParamsIPA::<Curve>::new(k)
 }
-
 /// Generate a Pasta Halo2 verifying key.
 pub(crate) fn keygen_vk<C>(params: &PastaParams, circuit: &C) -> Result<VerifyingKey, PlonkError>
 where
@@ -60,7 +55,6 @@ where
 {
     halo2_keygen_vk(params, circuit)
 }
-
 /// Generate a Pasta Halo2 proving key from an existing verifying key.
 pub(crate) fn keygen_pk<C>(
     params: &PastaParams,
@@ -72,32 +66,26 @@ where
 {
     halo2_keygen_pk(params, vk, circuit)
 }
-
 /// Return the standard processed verifying-key serialization.
 pub(crate) fn verifying_key_to_processed_bytes(vk: &VerifyingKey) -> Vec<u8> {
     vk.to_bytes(SerdeFormat::Processed)
 }
-
 /// Return the standard processed proving-key serialization.
 pub(crate) fn proving_key_to_processed_bytes(pk: &ProvingKey) -> Vec<u8> {
     pk.to_bytes(SerdeFormat::Processed)
 }
-
 /// Return the processed verifying-key serialization embedded in a proving key.
 pub(crate) fn proving_key_vk_to_processed_bytes(pk: &ProvingKey) -> Vec<u8> {
     verifying_key_to_processed_bytes(pk.get_vk())
 }
-
 /// Return the proving-key domain exponent.
 pub(crate) fn proving_key_domain_k(pk: &ProvingKey) -> u32 {
     pk.get_vk().get_domain().k()
 }
-
 /// Canonical constraint-system failure used by cache adapters.
 pub(crate) fn constraint_system_failure() -> Error {
     PlonkError::ConstraintSystemFailure
 }
-
 /// Read a processed Pasta verifying key, respecting the optional circuit-params API.
 pub(crate) fn read_verifying_key<C, R>(reader: &mut R) -> io::Result<VerifyingKey>
 where
@@ -114,7 +102,6 @@ where
         VerifyingKey::read::<_, C>(reader, SerdeFormat::Processed)
     }
 }
-
 /// Read a processed Pasta proving key, respecting the optional circuit-params API.
 pub(crate) fn read_proving_key<C, R>(reader: &mut R) -> io::Result<ProvingKey>
 where
@@ -131,7 +118,6 @@ where
         ProvingKey::read::<_, C>(reader, SerdeFormat::Processed)
     }
 }
-
 /// Assign advice using the vendored Halo2 API shape while preserving the
 /// annotation-compatible call surface used by older circuits.
 #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
@@ -153,24 +139,19 @@ where
     let value = to().map(Into::into);
     Ok(Region::assign_advice(region, column, offset, value))
 }
-
 /// Hash serialized IPA parameters for VK cache keys.
 pub(crate) fn params_fingerprint(params: &PastaParams) -> [u8; 32] {
     use sha2::{Digest, Sha256};
-
     struct HashWriter<'a, H: Digest>(&'a mut H);
-
     impl<H: Digest> Write for HashWriter<'_, H> {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             self.0.update(buf);
             Ok(buf.len())
         }
-
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
     }
-
     let mut hasher = Sha256::new();
     let mut writer = HashWriter(&mut hasher);
     params
@@ -178,7 +159,6 @@ pub(crate) fn params_fingerprint(params: &PastaParams) -> [u8; 32] {
         .expect("failed to hash Halo2 params");
     hasher.finalize().into()
 }
-
 /// Create a Pasta IPA proof and return the raw transcript bytes.
 pub(crate) fn create_ipa_proof<C>(
     params: &PastaParams,
@@ -200,7 +180,6 @@ where
     >(params, pk, circuits, instances, OsRng, &mut transcript)?;
     Ok(transcript.finalize())
 }
-
 /// Verify a Pasta IPA proof from raw transcript bytes.
 pub(crate) fn verify_ipa_proof(
     params: &PastaParams,
@@ -220,7 +199,6 @@ pub(crate) fn verify_ipa_proof(
     >(params, vk, strategy, instances, &mut transcript)
     .map(|_| ())
 }
-
 /// Verify a Pasta IPA proof that has no public instances.
 #[allow(dead_code)]
 pub(crate) fn verify_ipa_proof_no_instances(
@@ -231,7 +209,6 @@ pub(crate) fn verify_ipa_proof_no_instances(
     let instances: [&[Scalar]; 0] = [];
     verify_ipa_proof(params, vk, proof_payload, &[&instances])
 }
-
 /// Verify a Pasta IPA proof whose public inputs are provided as instance columns.
 #[allow(dead_code)]
 pub(crate) fn verify_ipa_proof_with_columns(
@@ -243,7 +220,6 @@ pub(crate) fn verify_ipa_proof_with_columns(
     let proofs_instances = [columns];
     verify_ipa_proof(params, vk, proof_payload, &proofs_instances)
 }
-
 #[cfg(test)]
 mod tests {
     use halo2_proofs::{
@@ -254,9 +230,7 @@ mod tests {
             ipa::{multiopen::VerifierIPA, strategy::AccumulatorStrategy},
         },
     };
-
     use super::*;
-
     /// A deliberately tiny circuit used to exercise Halo2's native IPA
     /// accumulator strategy. This is a host-side batch-verification proof of
     /// concept, not a recursive verifier circuit: `AccumulatorStrategy` keeps
@@ -266,16 +240,13 @@ mod tests {
     struct PublicValue {
         value: Scalar,
     }
-
     impl Circuit<Scalar> for PublicValue {
         type Config = (Column<Advice>, Column<Instance>);
         type FloorPlanner = SimpleFloorPlanner;
         type Params = ();
-
         fn without_witnesses(&self) -> Self {
             Self::default()
         }
-
         fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
             let advice = meta.advice_column();
             let instance = meta.instance_column();
@@ -283,7 +254,6 @@ mod tests {
             meta.enable_equality(instance);
             (advice, instance)
         }
-
         fn synthesize(
             &self,
             (advice, instance): Self::Config,
@@ -306,7 +276,6 @@ mod tests {
             Ok(())
         }
     }
-
     #[test]
     fn native_ipa_accumulator_batches_full_plonk_proofs_but_is_not_recursive() {
         let params = params_new(5);
@@ -315,7 +284,6 @@ mod tests {
         };
         let vk = keygen_vk(&params, &circuit).expect("tiny verifier key");
         let pk = keygen_pk(&params, vk.clone(), &circuit).expect("tiny proving key");
-
         let values = [Scalar::from(7), Scalar::from(11)];
         let proofs = values
             .iter()
@@ -326,7 +294,6 @@ mod tests {
                 create_ipa_proof(&params, &pk, &[circuit], &[&columns]).expect("tiny IPA proof")
             })
             .collect::<Vec<_>>();
-
         let mut strategy = AccumulatorStrategy::new(&params);
         for (proof, value) in proofs.iter().zip(values) {
             let column = [value];
@@ -344,7 +311,6 @@ mod tests {
             .expect("well-formed proof contributes to accumulator");
         }
         assert!(strategy.finalize(), "both accumulated proofs must verify");
-
         let wrong_column = [Scalar::from(8)];
         let wrong_columns: [&[Scalar]; 1] = [&wrong_column];
         let wrong_instances: [&[&[Scalar]]; 1] = [&wrong_columns];

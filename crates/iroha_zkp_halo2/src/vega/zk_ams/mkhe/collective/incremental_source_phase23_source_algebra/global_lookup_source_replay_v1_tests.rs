@@ -1,11 +1,9 @@
 use super::*;
-
 const PRODUCTION_SOURCE_V1: &str = include_str!("global_lookup_source_replay_v1.rs");
 const PARENT_SOURCE_V1: &str = include_str!("../incremental_source_phase23_source_algebra.rs");
 const EXTERNAL_SOURCE_V1: &str = include_str!("../../phase23_rns_link_external_source.rs");
 const LEAF_SOURCE_V1: &str =
     include_str!("../../../../../../../iroha_confidential_spool/src/lib.rs");
-
 fn context_axes_v1() -> SourceReplayContextAxesV1 {
     SourceReplayContextAxesV1 {
         source_receipt_digest: [0x11; 32],
@@ -19,7 +17,6 @@ fn context_axes_v1() -> SourceReplayContextAxesV1 {
         aggregate_schedule_digest: [0x99; 32],
     }
 }
-
 fn encoded_i64_block_v1(value: i64) -> Vec<u8> {
     let mut bytes = vec![0_u8; PHASE23_MAIN_BLOCK_BYTES_V1];
     for encoded in bytes.chunks_exact_mut(8) {
@@ -27,7 +24,6 @@ fn encoded_i64_block_v1(value: i64) -> Vec<u8> {
     }
     bytes
 }
-
 fn replay_record_v1() -> GlobalLookupSourceReplayRecordV1 {
     GlobalLookupSourceReplayRecordV1 {
         source_receipt_digest: [0x11; 32],
@@ -55,7 +51,6 @@ fn replay_record_v1() -> GlobalLookupSourceReplayRecordV1 {
         record_digest: [0; 32],
     }
 }
-
 #[test]
 fn exact_read_plane_and_file_accounting_is_frozen() {
     assert_eq!(SOURCE_BLOCKS_PER_COMPACT_PLANE_V1, 16);
@@ -87,7 +82,6 @@ fn exact_read_plane_and_file_accounting_is_frozen() {
     assert!(!RELEASE_READY_V1);
     assert!(!RELEASE_COMPLETE_V1);
 }
-
 #[test]
 fn replay_receipt_kat_binds_plaintext_authenticated_and_total_io_separately() {
     let mut record = replay_record_v1();
@@ -97,7 +91,6 @@ fn replay_receipt_kat_binds_plaintext_authenticated_and_total_io_separately() {
         "7bdc5d30dc1c4ec734942ffb50305ebe6b5ef106a8e24891edb0973ef3d44e10"
     );
     validate_replay_record_v1(&record).unwrap();
-
     let mutations: [fn(&mut GlobalLookupSourceReplayRecordV1); 3] = [
         |record: &mut GlobalLookupSourceReplayRecordV1| {
             record.source_plaintext_read_bytes += 1;
@@ -116,7 +109,6 @@ fn replay_receipt_kat_binds_plaintext_authenticated_and_total_io_separately() {
         assert!(validate_replay_record_v1(&changed).is_err());
     }
 }
-
 #[test]
 fn plane_coordinate_mapping_is_exact_bijective_and_bounded() {
     for slot in 0..COMPACT_PLANE_COUNT_V1 {
@@ -142,7 +134,6 @@ fn plane_coordinate_mapping_is_exact_bijective_and_bounded() {
     );
     assert!(compact_plane_coordinate_v1(1_032).is_err());
 }
-
 #[test]
 fn literal_topology_mapping_and_context_kats_reject_reorder_dup_trailing_and_context() {
     assert_eq!(
@@ -156,7 +147,6 @@ fn literal_topology_mapping_and_context_kats_reject_reorder_dup_trailing_and_con
         "df87ce02f22af1a5e961cda99b1bcab0582271ead7a6aeb9f3dd113e7ffc084c"
     );
     assert_eq!(mapping, exact_mapping_digest_v1().unwrap());
-
     let mut reordered = exact;
     reordered.swap(0, 1);
     assert_ne!(
@@ -170,7 +160,6 @@ fn literal_topology_mapping_and_context_kats_reject_reorder_dup_trailing_and_con
     let mut trailing = exact.to_vec();
     trailing.push(1_032);
     assert!(mapping_digest_for_plane_order_v1(&trailing).is_err());
-
     let context =
         spool_context_digest_v1(context_axes_v1(), mapping, GLOBAL_LOOKUP_TOPOLOGY_KAT_V1).unwrap();
     assert_eq!(
@@ -187,7 +176,6 @@ fn literal_topology_mapping_and_context_kats_reject_reorder_dup_trailing_and_con
     wrong_topology[0] ^= 1;
     assert!(spool_context_digest_v1(context_axes_v1(), mapping, wrong_topology).is_err());
 }
-
 #[test]
 fn signed_i64_to_i8_narrowing_is_exact_and_hostile_encodings_fail() {
     for role in CompactSourceRoleV1::ALL {
@@ -231,7 +219,6 @@ fn signed_i64_to_i8_narrowing_is_exact_and_hostile_encodings_fail() {
         .is_err()
     );
 }
-
 #[test]
 fn canonical_scalar_blocks_reject_modulus_and_trailing_width() {
     let zero = [0_u8; PHASE23_MAIN_BLOCK_BYTES_V1];
@@ -246,7 +233,6 @@ fn canonical_scalar_blocks_reject_modulus_and_trailing_width() {
     validate_canonical_source_block_v1(&modulus).unwrap();
     assert!(validate_canonical_source_block_v1(&zero[..zero.len() - 1]).is_err());
 }
-
 #[test]
 fn privacy_poison_auth_sink_and_unwind_guards_are_structural() {
     for required in [

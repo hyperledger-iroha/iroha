@@ -1,7 +1,6 @@
 #[test]
 fn sumeragi_operator_reads_document_exact_signature_authentication() {
     use iroha_torii_shared::route_catalog::sumeragi;
-
     let document = generate_spec();
     let required_headers = BTreeSet::from([
         "X-Iroha-Operator-Public-Key".to_owned(),
@@ -74,7 +73,6 @@ fn sumeragi_operator_reads_document_exact_signature_authentication() {
         assert!(responses.contains_key("401"), "{}", route.path());
         assert!(responses.contains_key("403"), "{}", route.path());
     }
-
     if catalog_openapi_route_enabled(CatalogHttpMethod::Get, sumeragi::EVIDENCE_LIST.path()) {
         let evidence = openapi_operation(&document, sumeragi::EVIDENCE_LIST.path(), "get");
         let evidence_parameters = evidence
@@ -117,7 +115,6 @@ fn sumeragi_operator_reads_document_exact_signature_authentication() {
             "BLS-key response cap and bounded source must be explicit"
         );
     }
-
     if catalog_openapi_route_enabled(CatalogHttpMethod::Get, sumeragi::STATUS_SSE.path()) {
         let stream = openapi_operation(&document, sumeragi::STATUS_SSE.path(), "get");
         assert!(

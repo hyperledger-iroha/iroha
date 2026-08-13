@@ -28,7 +28,6 @@ fn every_governed_envelope_binding_fails_closed_when_tampered() {
         assert_rejected(&candidate, &activation, &network_id, label);
     }
 }
-
 #[test]
 fn every_statement_context_artifact_binding_fails_closed_when_tampered() {
     let (envelope, activation, network_id) = valid_envelope();

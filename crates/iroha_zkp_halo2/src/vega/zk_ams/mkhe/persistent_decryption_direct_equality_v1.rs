@@ -26,12 +26,9 @@
     dead_code,
     reason = "direct-equality production capabilities are deliberately uninhabited"
 )]
-
 use core::convert::Infallible;
-
 use super::super::{ZkAmsMkhePartyIdV1, manifest::RELEASE_MODULI_V1};
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256PointV1 as Point};
-
 const DIRECT_EQUALITY_VERSION_V1: u8 = 1;
 const DIRECT_EQUALITY_PARTIES_V1: usize = 8;
 const DIRECT_EQUALITY_SECRET_COMMITMENTS_V1: usize = 8;
@@ -41,17 +38,14 @@ const DIRECT_EQUALITY_RNS_LIMBS_V1: usize = 38;
 const DIRECT_EQUALITY_SECRET_MIN_V1: i8 = -1;
 const DIRECT_EQUALITY_SECRET_MAX_V1: i8 = 1;
 const DIRECT_EQUALITY_WIDE_Z_MAGNITUDE_BITS_V1: u16 = 1_855;
-
 const DIRECT_EQUALITY_LANGUAGE_V1: &[u8] = b"R=Z[X]/(X^131072+1);for j=0..7 the existing T256 Cs_j=<s[j*16384..(j+1)*16384],G>+r_j*H under the bound generator basis;the assembled s is one ternary polynomial with s[k] in {-1,0,1};one signed integer z has |z[k]|<=2^1855-1;for every ordered release limb l=0..37:share_l=negacyclic(c1_l,s)+(pT mod q_l)*(z mod q_l) mod q_l;the same s and z are used in all limbs;no D inversion;no cyclotomic cancellation";
 const RESPONSE_LINK_STATUS_V1: &[u8] = b"persistent_decryption_response_link is auxiliary and non-authorizing;its signed-small T256 projection does not prove the same approximately-1855-bit z across 38 RNS limbs";
-
 const PARENT_BEFORE_DECLARATION_SHA256_V1: &str =
     "370c605f7d740f1b91310942999ab2690d1c29f21496d53d7090cc0130e3e64d";
 const AUXILIARY_RESPONSE_LINK_SHA256_V1: &str =
     "cdc5aabf77ed20abf402b3921d73471fb315bd77b21466eb95880cfa84d97530";
 const AUXILIARY_RESPONSE_LINK_TESTS_SHA256_V1: &str =
     "03e59fb4bd35ca3de976e93da598d3a392926ff01ea9b6b3005dad65b69d6efd";
-
 const SHORTCUT_FIELD_MODULUS_V1: i64 = 17;
 const SHORTCUT_RING_DEGREE_V1: usize = 4;
 const SHORTCUT_D_V1: [i64; SHORTCUT_RING_DEGREE_V1] = [1, 1, 0, 0];
@@ -64,7 +58,6 @@ const SHORTCUT_COMMON_EVALUATION_V1: i64 = 3;
 const RESPONSE_LINK_AUTHORIZES_DIRECT_EQUALITY_V1: bool = false;
 const D_INVERSION_PERMITTED_V1: bool = false;
 const CYCLOTOMIC_CANCELLATION_PERMITTED_V1: bool = false;
-
 const WORKER_HEAP_CAP_BYTES_V1: u64 = 167_772_160;
 const DIRECT_PROOF_CAP_BYTES_V1: u64 = 33_554_432;
 const EXISTING_MANIFEST_BYTES_V1: u64 = 498;
@@ -81,7 +74,6 @@ const REMAINING_WORK_V1: u64 = 30_507_514_351;
 const ONE_PARTY_MAX_TOTAL_BYTES_V1: u64 = 106_431_059;
 const SEQUENTIAL_NONCOEXISTENCE_REQUIRED_V1: bool = true;
 const SEQUENTIAL_NONCOEXISTENCE_CONTRACT_V1: &[u8] = b"the direct-equality backend stage and the existing staged-decryption prover peak execute sequentially;the 106431059-byte one-party maximum does not authorize co-residency";
-
 struct DirectEqualityCapLedgerV1 {
     direct_proof_cap_bytes: u64,
     future_manifest_bytes: u64,
@@ -95,7 +87,6 @@ struct DirectEqualityCapLedgerV1 {
     one_party_max_total_bytes: u64,
     sequential_noncoexistence_required: bool,
 }
-
 const DIRECT_EQUALITY_CAP_LEDGER_V1: DirectEqualityCapLedgerV1 = DirectEqualityCapLedgerV1 {
     direct_proof_cap_bytes: DIRECT_PROOF_CAP_BYTES_V1,
     future_manifest_bytes: FUTURE_DIRECT_MANIFEST_BYTES_V1,
@@ -109,7 +100,6 @@ const DIRECT_EQUALITY_CAP_LEDGER_V1: DirectEqualityCapLedgerV1 = DirectEqualityC
     one_party_max_total_bytes: ONE_PARTY_MAX_TOTAL_BYTES_V1,
     sequential_noncoexistence_required: SEQUENTIAL_NONCOEXISTENCE_REQUIRED_V1,
 };
-
 const FALLBACK_PER_ROUND_ENVELOPE_BYTES_V1: u64 = 33_032_907;
 const FALLBACK_PROOF_CAP_MARGIN_BYTES_V1: u64 = 521_525;
 const FALLBACK_MANIFEST_FIXED_BYTES_V1: u64 = 456;
@@ -133,7 +123,6 @@ const FALLBACK_NINE_ROUND_BITS_HUNDREDTHS_V1: u32 = 13_284;
 const FALLBACK_TARGET_BITS_HUNDREDTHS_V1: u32 = 12_800;
 const FALLBACK_EIGHT_ROUNDS_SUFFICIENT_V1: bool = false;
 const FALLBACK_NINE_ROUNDS_SUFFICIENT_V1: bool = true;
-
 struct RepetitionFallbackLedgerV1 {
     per_round_envelope_bytes: u64,
     three_round_bytes: u64,
@@ -149,7 +138,6 @@ struct RepetitionFallbackLedgerV1 {
     eight_round_bits_hundredths: u32,
     nine_round_bits_hundredths: u32,
 }
-
 const REPETITION_FALLBACK_LEDGER_V1: RepetitionFallbackLedgerV1 = RepetitionFallbackLedgerV1 {
     per_round_envelope_bytes: FALLBACK_PER_ROUND_ENVELOPE_BYTES_V1,
     three_round_bytes: FALLBACK_THREE_ROUND_BYTES_V1,
@@ -165,11 +153,9 @@ const REPETITION_FALLBACK_LEDGER_V1: RepetitionFallbackLedgerV1 = RepetitionFall
     eight_round_bits_hundredths: FALLBACK_EIGHT_ROUND_BITS_HUNDREDTHS_V1,
     nine_round_bits_hundredths: FALLBACK_NINE_ROUND_BITS_HUNDREDTHS_V1,
 };
-
 const THEOREM_DIGEST_SLOT_V1: [u8; 32] = [0; 32];
 const CIRCUIT_DIGEST_SLOT_V1: [u8; 32] = [0; 32];
 const BACKEND_DIGEST_SLOT_V1: [u8; 32] = [0; 32];
-
 const THEOREM_PINNED_V1: bool = false;
 const CIRCUIT_PINNED_V1: bool = false;
 const BACKEND_IMPLEMENTED_V1: bool = false;
@@ -182,7 +168,6 @@ const PRODUCTION_RSS_QUALIFIED_V1: bool = false;
 const ZERO_KNOWLEDGE_ACCEPTED_V1: bool = false;
 const PERSISTENT_DECRYPTION_AUDIT_BIT_7_CLOSED_V1: bool = false;
 const RELEASE_READY_V1: bool = false;
-
 struct DirectEqualityStatementAxesV1 {
     profile_digest: [u8; 32],
     roster_digest: [u8; 32],
@@ -207,7 +192,6 @@ struct DirectEqualityStatementAxesV1 {
     party_index: u8,
     level: u8,
 }
-
 struct DirectEqualityRnsLimbAxisV1 {
     limb_index: u8,
     modulus: u64,
@@ -215,13 +199,11 @@ struct DirectEqualityRnsLimbAxisV1 {
     ciphertext_c1_digest: [u8; 32],
     decryption_share_digest: [u8; 32],
 }
-
 struct DirectEqualityArtifactDigestSlotsV1 {
     theorem_digest: [u8; 32],
     circuit_digest: [u8; 32],
     backend_digest: [u8; 32],
 }
-
 struct DirectEqualityPrivateWitnessShapeV1 {
     secret_coefficients: usize,
     secret_commitment_blindings: usize,
@@ -232,7 +214,6 @@ struct DirectEqualityPrivateWitnessShapeV1 {
     wide_z_is_signed: bool,
     shared_wide_z_limb_count: usize,
 }
-
 const DIRECT_EQUALITY_PRIVATE_WITNESS_SHAPE_V1: DirectEqualityPrivateWitnessShapeV1 =
     DirectEqualityPrivateWitnessShapeV1 {
         secret_coefficients: DIRECT_EQUALITY_RING_DEGREE_V1,
@@ -244,14 +225,12 @@ const DIRECT_EQUALITY_PRIVATE_WITNESS_SHAPE_V1: DirectEqualityPrivateWitnessShap
         wide_z_is_signed: true,
         shared_wide_z_limb_count: DIRECT_EQUALITY_RNS_LIMBS_V1,
     };
-
 const UNPINNED_ARTIFACT_DIGEST_SLOTS_V1: DirectEqualityArtifactDigestSlotsV1 =
     DirectEqualityArtifactDigestSlotsV1 {
         theorem_digest: THEOREM_DIGEST_SLOT_V1,
         circuit_digest: CIRCUIT_DIGEST_SLOT_V1,
         backend_digest: BACKEND_DIGEST_SLOT_V1,
     };
-
 enum DirectEqualityWitnessSealV1 {
     Production {
         retained_persistent_openings: Infallible,
@@ -261,7 +240,6 @@ enum DirectEqualityWitnessSealV1 {
     #[cfg(test)]
     TestOnly,
 }
-
 enum DirectEqualityBackendSealV1 {
     Production {
         theorem_digest_pinned: Infallible,
@@ -271,7 +249,6 @@ enum DirectEqualityBackendSealV1 {
     #[cfg(test)]
     TestOnly,
 }
-
 enum DirectEqualityIntegrationSealV1 {
     Production {
         state_hook: Infallible,
@@ -281,7 +258,6 @@ enum DirectEqualityIntegrationSealV1 {
     #[cfg(test)]
     TestOnly,
 }
-
 struct PersistentDecryptionDirectEqualityLanguageV1 {
     axes: DirectEqualityStatementAxesV1,
     persistent_secret_commitments: [Point; DIRECT_EQUALITY_SECRET_COMMITMENTS_V1],
@@ -292,7 +268,6 @@ struct PersistentDecryptionDirectEqualityLanguageV1 {
     backend_seal: DirectEqualityBackendSealV1,
     integration_seal: DirectEqualityIntegrationSealV1,
 }
-
 fn t256_residue_v1(modulus: u64) -> u64 {
     VEGA_T256_SCALAR_MODULUS_BE_V1
         .iter()
@@ -300,7 +275,6 @@ fn t256_residue_v1(modulus: u64) -> u64 {
             ((u128::from(acc) * 256 + u128::from(*byte)) % u128::from(modulus)) as u64
         })
 }
-
 impl PersistentDecryptionDirectEqualityLanguageV1 {
     fn has_exact_frozen_shape_v1(&self) -> bool {
         let axes = &self.axes;
@@ -355,7 +329,6 @@ impl PersistentDecryptionDirectEqualityLanguageV1 {
         })
     }
 }
-
 const _: () = {
     assert!(DIRECT_EQUALITY_VERSION_V1 == 1);
     assert!(
@@ -425,11 +398,9 @@ const _: () = {
     assert!(!ZERO_KNOWLEDGE_ACCEPTED_V1 && !PERSISTENT_DECRYPTION_AUDIT_BIT_7_CLOSED_V1);
     assert!(!RELEASE_READY_V1);
 };
-
 // TODO: Replace the `Infallible` seals only after independent theorem,
 // circuit, backend, integration, replay, receipt, KAT, RSS, and ZK evidence is
 // pinned and jointly re-audited under the release caps above.
-
 #[cfg(test)]
 #[path = "persistent_decryption_direct_equality_v1_tests.rs"]
 mod tests;

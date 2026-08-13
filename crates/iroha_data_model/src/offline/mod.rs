@@ -2,19 +2,14 @@
 //!
 //! The module exposes one lifecycle: exact online top-up, recursive
 //! offline split/spend, and exact online redemption.
-
 mod receiver_snapshot;
 mod status;
-
 pub use receiver_snapshot::*;
 pub use status::*;
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 #[cfg(test)]
 use iroha_crypto::KeyPair;
-use iroha_crypto::{
-    Algorithm, Hash, PublicKey, SignatureOf, derive_non_signing_ed25519_public_key,
-};
+use iroha_crypto::{Algorithm, Hash, PublicKey, SignatureOf, derive_non_signing_ed25519_public_key};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
@@ -25,7 +20,6 @@ use p256::ecdsa::{
     Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier as _,
 };
 use sha2::{Digest as _, Sha256};
-
 pub use self::model::*;
 use crate::{
     NetworkId,
@@ -797,7 +791,6 @@ fn kagemusha_test_network_id(seed: impl AsRef<[u8]>) -> NetworkId {
 mod offline_escrow_account_tests {
     use super::*;
     use crate::domain::DomainId;
-
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new([
@@ -837,7 +830,6 @@ mod offline_escrow_account_tests {
 #[model]
 mod model {
     use super::*;
-
     /// Sole first-release Kagemusha device authority key.
     ///
     /// The wire value is exactly one canonical uncompressed SEC1 NIST P-256
@@ -5176,7 +5168,6 @@ const KAGEMUSHA_REVIEWED_SOURCE_UNTRACKED_MANIFEST_DOMAIN_V1: &[u8] =
     b"untracked-path-blob-manifest-sha256\0";
 fn append_python_ascii_json_string(out: &mut String, value: &str) {
     use core::fmt::Write as _;
-
     out.push('"');
     for character in value.chars() {
         match character {
@@ -7365,14 +7356,11 @@ impl KagemushaUnshieldPublicInputsBindingV2 {
 #[cfg(test)]
 mod kagemusha_v4_artifact_contract_tests {
     use norito::core::{DecodeFromSlice as _, NoritoDeserialize as _};
-
     use crate::{
         domain::DomainId,
         isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4},
     };
-
     use super::*;
-
     fn digest(label: &[u8]) -> [u8; 32] {
         Sha256::digest(label).into()
     }
@@ -9896,7 +9884,6 @@ impl KagemushaRecursiveSpendPublicStatementV4 {
 #[cfg(test)]
 mod kagemusha_v4_lifecycle_domain_tests {
     use super::*;
-
     #[test]
     fn abi21_lifecycle_digest_domains_are_distinct_from_v2() {
         let v4 = [

@@ -3,31 +3,25 @@ fn native_amx_context_guard_rejects_replayed_round_epoch_and_future_view() {
     let (adapter, _) = fixture(wire::ConsensusMode::Permissioned);
     let body = native_body(&adapter);
     assert!(adapter.native_body_matches_context(&body, 0));
-
     let mut wrong_context = body;
     wrong_context.round.context_id =
         wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(b"other-context")));
     assert!(!adapter.native_body_matches_context(&wrong_context, 0));
-
     let mut wrong_epoch = body;
     wrong_epoch.epoch = wrong_epoch.epoch.saturating_add(1);
     assert!(!adapter.native_body_matches_context(&wrong_epoch, 0));
-
     let mut future_view = body;
     future_view.round.view = 1;
     assert!(!adapter.native_body_matches_context(&future_view, 0));
     assert!(adapter.native_body_matches_context(&future_view, 1));
-
     let mut wrong_lane_height = body;
     wrong_lane_height.planned_coordinator_block_height = 2;
     assert!(!adapter.native_body_matches_context(&wrong_lane_height, 0));
 }
-
 #[test]
 fn native_signing_boundary_rechecks_view_routes_predecessors_and_authority() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
     let exact = native_request(&adapter, &keys);
-
     let mut wrong_context = exact.clone();
     wrong_context.body.round.context_id =
         wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(b"other-context")));
@@ -36,11 +30,12 @@ fn native_signing_boundary_rechecks_view_routes_predecessors_and_authority() {
     let mut wrong_epoch = exact.clone();
     wrong_epoch.body.epoch = wrong_epoch.body.epoch.saturating_add(1);
     let mut wrong_chain = exact.clone();
-    wrong_chain.body.network_id = iroha_data_model::NetworkId::from_genesis_hash(
-        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+    wrong_chain.body.network_id =
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
             Hash::new(b"foreign-signing-guard-genesis"),
-        ),
-    );
+        ));
     let mut wrong_coordinator_dataspace = exact.clone();
     wrong_coordinator_dataspace.body.coordinator_dataspace_id = DataSpaceId::new(70);
     let mut wrong_coordinator_incarnation = exact.clone();
@@ -78,7 +73,6 @@ fn native_signing_boundary_rechecks_view_routes_predecessors_and_authority() {
         .body
         .authority_context_height
         .saturating_add(1);
-
     for (label, request, active_view) in [
         ("active reducer view", exact.clone(), 1),
         ("height context", wrong_context, 0),
@@ -118,7 +112,6 @@ fn native_signing_boundary_rechecks_view_routes_predecessors_and_authority() {
         !adapter.output_guard.restart_required(),
         "ordinary stale-context rejection is not a journal ambiguity"
     );
-
     adapter
         .sign_native_request_once(&exact, 0)
         .expect("the exact request remains signable under its authoritative active view");
@@ -131,7 +124,6 @@ fn native_signing_boundary_rechecks_view_routes_predecessors_and_authority() {
         1
     );
 }
-
 fn native_request_for_distinct_routes(
     adapter: &V2LaneWorkAdapter,
     keys: &[KeyPair],
@@ -169,7 +161,6 @@ fn native_request_for_distinct_routes(
         vec![RouteLeg::new(participant, RouteLegRole::Participant)],
     );
     body.plan_digest = plan.digest();
-
     let mut ordered_keys = keys.to_vec();
     ordered_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
     let coordinator_base = proposal_for_route(
@@ -201,7 +192,6 @@ fn native_request_for_distinct_routes(
     body.planned_coordinator_block_height = coordinator_proposal.descriptor.lane_block_height;
     body.coordinator_lane_block_view = coordinator_proposal.descriptor.lane_block_view;
     body.coordinator_proposal_hash = coordinator_proposal.proposal_hash;
-
     let mut participant_proposal = proposal_for_route(
         adapter,
         &ordered_keys,
@@ -226,7 +216,6 @@ fn native_request_for_distinct_routes(
         iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
             .expect("hash fixture distinct participant settlement"),
     );
-
     NativeAmxAttestationRequestV2 {
         body,
         plan_legs: plan.legs(),
@@ -235,7 +224,6 @@ fn native_request_for_distinct_routes(
         participant_settlement,
     }
 }
-
 fn recreate_native_signing_test_lane(
     adapter: &V2LaneWorkAdapter,
     lane_id: LaneId,
@@ -258,7 +246,6 @@ fn recreate_native_signing_test_lane(
         .lane_incarnation_at_height(lane_id, adapter.context.height)
         .expect("recreated Native signing fixture lane is active")
 }
-
 #[test]
 fn native_signing_boundary_rejects_plan_valid_participant_predecessor_drift() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -277,7 +264,6 @@ fn native_signing_boundary_rejects_plan_valid_participant_predecessor_drift() {
         1,
         None,
     );
-
     let mut ordered_keys = keys.clone();
     ordered_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
     let mut participant_proposal = proposal_for_route(
@@ -306,7 +292,6 @@ fn native_signing_boundary_rejects_plan_valid_participant_predecessor_drift() {
         iroha_data_model::nexus::compute_settlement_hash(&request.participant_settlement)
             .expect("hash plan-valid predecessor-drift settlement"),
     );
-
     assert_eq!(request.validate_plan_binding(), Ok(()));
     assert!(
         !adapter.native_request_matches_context(&request, 0),
@@ -323,7 +308,6 @@ fn native_signing_boundary_rejects_plan_valid_participant_predecessor_drift() {
         "participant predecessor drift must fail before durable authorization"
     );
 }
-
 #[test]
 fn native_signing_boundary_rejects_delayed_participant_after_same_id_recreation() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -346,7 +330,6 @@ fn native_signing_boundary_rejects_delayed_participant_after_same_id_recreation(
     assert!(adapter.native_request_matches_context(&request, 0));
     let incarnation_a = request.body.participant_lane_incarnation;
     let coordinator_incarnation = request.body.coordinator_lane_incarnation;
-
     let incarnation_b =
         recreate_native_signing_test_lane(&adapter, participant.lane_id, participant.dataspace_id);
     assert_ne!(incarnation_b, incarnation_a);
@@ -361,7 +344,6 @@ fn native_signing_boundary_rejects_delayed_participant_after_same_id_recreation(
     assert_eq!(request.validate_plan_binding(), Ok(()));
     assert!(!adapter.native_request_matches_context(&request, 0));
     assert!(adapter.sign_native_request_once(&request, 0).is_none());
-
     let incarnation_c =
         recreate_native_signing_test_lane(&adapter, participant.lane_id, participant.dataspace_id);
     assert_ne!(incarnation_c, incarnation_a);
@@ -379,7 +361,6 @@ fn native_signing_boundary_rejects_delayed_participant_after_same_id_recreation(
         0
     );
 }
-
 #[test]
 fn native_signing_boundary_rejects_plan_valid_stale_coordinator_incarnation() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -396,7 +377,6 @@ fn native_signing_boundary_rejects_plan_valid_stale_coordinator_incarnation() {
     assert!(adapter.native_request_matches_context(&request, 0));
     let stale_coordinator_incarnation = request.body.coordinator_lane_incarnation;
     let participant_incarnation = request.body.participant_lane_incarnation;
-
     let active_coordinator_incarnation = recreate_native_signing_test_lane(
         &adapter,
         recreated_route.lane_id,
@@ -426,7 +406,6 @@ fn native_signing_boundary_rejects_plan_valid_stale_coordinator_incarnation() {
         0
     );
 }
-
 #[test]
 fn native_signing_boundary_rechecks_state_after_durable_record_before_signature() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -449,7 +428,6 @@ fn native_signing_boundary_rechecks_state_after_durable_record_before_signature(
     assert!(adapter.native_request_matches_context(&request, 0));
     let initial_incarnation = request.body.participant_lane_incarnation;
     let context_checks = Cell::new(0_u8);
-
     let vote = adapter.sign_native_vote_once_with_context(&request, |adapter| {
         let check = context_checks.get().saturating_add(1);
         context_checks.set(check);
@@ -463,7 +441,6 @@ fn native_signing_boundary_rechecks_state_after_durable_record_before_signature(
         }
         adapter.native_request_matches_context(&request, 0)
     });
-
     assert!(
         vote.is_none(),
         "a route change after durable authorization must prevent signature emission"

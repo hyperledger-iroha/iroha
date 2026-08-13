@@ -10,7 +10,6 @@ fn post_commit_failure_preserves_reconciliation_and_publication_uncertainty() {
         }),
     )
     .expect("compound post-commit failure");
-
     match failure {
         SupervisorError::ReconciliationAndPublicationUncertainty {
             reconciliation,
@@ -25,7 +24,6 @@ fn post_commit_failure_preserves_reconciliation_and_publication_uncertainty() {
         other => panic!("expected compound post-commit failure, got {other:?}"),
     }
 }
-
 #[test]
 fn post_commit_failure_combiner_preserves_single_failures_and_success() {
     let reconciliation = combine_post_commit_failures(
@@ -34,7 +32,6 @@ fn post_commit_failure_combiner_preserves_single_failures_and_success() {
     )
     .expect("reconciliation failure");
     assert!(matches!(reconciliation, SupervisorError::Config(_)));
-
     let uncertainty = combine_post_commit_failures(
         None,
         Some(SupervisorError::PublicationUncertain {
@@ -49,7 +46,6 @@ fn post_commit_failure_combiner_preserves_single_failures_and_success() {
     ));
     assert!(combine_post_commit_failures(None, None).is_none());
 }
-
 #[test]
 fn builder_early_reconciliation_failure_preserves_publication_uncertainty() {
     if !ports_available("builder_early_reconciliation_failure_preserves_publication_uncertainty") {
@@ -63,7 +59,6 @@ fn builder_early_reconciliation_failure_preserves_publication_uncertainty() {
         .with_post_commit_faults_for_test(PublicationFaultPoint::AfterPointerRename)
         .build()
         .expect_err("early reconciliation and uncertainty must both surface");
-
     match error {
         SupervisorError::ReconciliationAndPublicationUncertainty {
             reconciliation,
@@ -81,7 +76,6 @@ fn builder_early_reconciliation_failure_preserves_publication_uncertainty() {
         }
         other => panic!("expected compound builder post-commit failure, got {other:?}"),
     }
-
     let paths = NetworkPaths::from_root(
         temp.path(),
         &NetworkProfile::from_preset(ProfilePreset::SinglePeer),
@@ -92,7 +86,6 @@ fn builder_early_reconciliation_failure_preserves_publication_uncertainty() {
     verify_selected_generation(paths.root(), &selected)
         .expect("early reconciliation failure must retain committed generation");
 }
-
 #[test]
 fn selected_storage_lease_blocks_writers_until_every_clone_drops() {
     if !ports_available("selected_storage_lease_blocks_writers_until_every_clone_drops") {
@@ -111,7 +104,6 @@ fn selected_storage_lease_blocks_writers_until_every_clone_drops() {
         .expect("resolve selected storage")
         .expect("selected storage");
     let selected_clone = selected.clone();
-
     let error = GenerationTransaction::begin_replacing(root, expected.clone())
         .expect_err("selection lease must block an exclusive writer");
     assert!(matches!(error, SupervisorError::GenerationLocked { .. }));
@@ -120,11 +112,9 @@ fn selected_storage_lease_blocks_writers_until_every_clone_drops() {
         .expect_err("cloned selection lease must retain the shared lock");
     assert!(matches!(error, SupervisorError::GenerationLocked { .. }));
     drop(selected_clone);
-
     GenerationTransaction::begin_replacing(root, expected)
         .expect("dropping every selection lease releases the writer lock");
 }
-
 #[test]
 fn selected_storage_resolver_rejects_pointer_change_before_shared_lock() {
     if !ports_available("selected_storage_resolver_rejects_pointer_change_before_shared_lock") {
@@ -140,7 +130,6 @@ fn selected_storage_resolver_rejects_pointer_change_before_shared_lock() {
     let root = initial.paths().root().to_path_buf();
     let initial_generation = initial.generation_id().to_owned();
     let mut newer_generation = None;
-
     let error = resolve_selected_peer_storage_paths_with_hook(&root, "peer0", || {
         initial
             .restart_peer_with_extra_layers("peer0", &[])
@@ -161,7 +150,6 @@ fn selected_storage_resolver_rejects_pointer_change_before_shared_lock() {
         Some(newer_generation)
     );
 }
-
 #[test]
 fn selected_storage_resolver_fails_fast_while_writer_holds_exclusive_lock() {
     if !ports_available("selected_storage_resolver_fails_fast_while_writer_holds_exclusive_lock") {
@@ -178,17 +166,14 @@ fn selected_storage_resolver_fails_fast_while_writer_holds_exclusive_lock() {
     let expected = Some(supervisor.generation_id().to_owned());
     let writer = GenerationTransaction::begin_replacing(root, expected)
         .expect("hold exclusive generation writer lock");
-
     let error = resolve_selected_peer_storage_paths(root, supervisor.peers()[0].alias())
         .expect_err("resolver must fail fast while an exclusive writer is active");
     assert!(matches!(error, SupervisorError::GenerationLocked { .. }));
     drop(writer);
-
     resolve_selected_peer_storage_paths(root, supervisor.peers()[0].alias())
         .expect("resolver succeeds after exclusive writer drops")
         .expect("selection remains available");
 }
-
 #[test]
 fn session_info_fails_fast_while_writer_holds_exclusive_lock() {
     if !ports_available("session_info_fails_fast_while_writer_holds_exclusive_lock") {
@@ -205,7 +190,6 @@ fn session_info_fails_fast_while_writer_holds_exclusive_lock() {
     let writer =
         GenerationTransaction::begin_replacing(root, Some(supervisor.generation_id().to_owned()))
             .expect("hold exclusive generation writer lock");
-
     let error = supervisor
         .session_info()
         .expect_err("session metadata must fail fast while a writer is active");
@@ -215,7 +199,6 @@ fn session_info_fails_fast_while_writer_holds_exclusive_lock() {
         .session_info()
         .expect("session metadata succeeds after writer drops");
 }
-
 #[test]
 fn supervisor_respects_explicit_kagami_override() {
     if !ports_available("supervisor_respects_explicit_kagami_override") {
@@ -229,14 +212,12 @@ fn supervisor_respects_explicit_kagami_override() {
         .kagami_path(stub.script_path())
         .build()
         .expect("build supervisor with explicit kagami path");
-
     let log = fs::read_to_string(stub.log_path()).expect("explicit kagami log");
     assert!(
         log.contains("--genesis-public-key"),
         "expected explicit kagami stub to capture genesis args, got `{log}`"
     );
 }
-
 #[test]
 fn supervisor_runs_kagami_verify_for_profile() {
     if !ports_available("supervisor_runs_kagami_verify_for_profile") {
@@ -246,13 +227,11 @@ fn supervisor_runs_kagami_verify_for_profile() {
     let temp = tempfile::tempdir().expect("tempdir");
     let stub = StandaloneKagamiStub::create(temp.path());
     let _guard = EnvVarGuard::set("MOCHI_KAGAMI", stub.script_path().as_os_str());
-
     let _supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
         .genesis_profile(GenesisProfile::Iroha3Dev)
         .build()
         .expect("build supervisor with kagami verify");
-
     let log = fs::read_to_string(stub.log_path()).expect("read kagami log");
     let lines: Vec<_> = log.lines().collect();
     assert!(
@@ -268,7 +247,6 @@ fn supervisor_runs_kagami_verify_for_profile() {
         "expected kagami verify invocation, got `{log}`"
     );
 }
-
 #[test]
 fn existing_peer_directories_preserve_unmanaged_artifacts_during_build() {
     if !ports_available("existing_peer_directories_preserve_unmanaged_artifacts_during_build") {
@@ -276,7 +254,6 @@ fn existing_peer_directories_preserve_unmanaged_artifacts_during_build() {
     }
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
-
     let slug = NetworkProfile::from_preset(ProfilePreset::SinglePeer).slug();
     let root = temp.path().join(slug);
     let peer_dir = root.join("peers").join("peer0");
@@ -287,25 +264,21 @@ fn existing_peer_directories_preserve_unmanaged_artifacts_during_build() {
         stale_file.exists(),
         "stale file should exist before supervisor build"
     );
-
     let _stub = KagamiStub::install(temp.path());
     let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     assert!(
         stale_file.exists(),
         "building a new generation must not delete unmanaged peer artifacts"
     );
-
     let rebuilt_storage = supervisor.peers()[0].spec.storage_dir.clone();
     assert!(
         rebuilt_storage.exists(),
         "storage directory should be recreated after cleanup"
     );
 }
-
 #[test]
 fn selected_storage_resolver_reports_config_only_overlay_separately() {
     if !ports_available("selected_storage_resolver_reports_config_only_overlay_separately") {
@@ -320,11 +293,9 @@ fn selected_storage_resolver_reports_config_only_overlay_separately() {
         .expect("build supervisor");
     let old_config_generation = supervisor.generation_id().to_owned();
     let old_storage = supervisor.peers()[0].storage_dir().to_path_buf();
-
     supervisor
         .restart_peer_with_extra_layers("peer0", &[])
         .expect("publish config-only overlay");
-
     let selected = resolve_selected_peer_storage_paths(
         supervisor.paths().root(),
         supervisor.peers()[0].alias(),
@@ -341,7 +312,6 @@ fn selected_storage_resolver_reports_config_only_overlay_separately() {
         supervisor.peers()[0].snapshot_dir()
     );
 }
-
 #[test]
 fn second_supervisor_cannot_publish_until_current_owner_drops() {
     if !ports_available("second_supervisor_cannot_publish_until_current_owner_drops") {
@@ -357,7 +327,6 @@ fn second_supervisor_cannot_publish_until_current_owner_drops() {
     let current_generation = current.generation_id().to_owned();
     let current_config = current.peers()[0].config_path().to_path_buf();
     let current_config_bytes = fs::read(&current_config).expect("read current config");
-
     let error = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
         .build()
@@ -372,7 +341,6 @@ fn second_supervisor_cannot_publish_until_current_owner_drops() {
         fs::read(&current_config).expect("read preserved config"),
         current_config_bytes
     );
-
     drop(current);
     let replacement = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
@@ -380,7 +348,6 @@ fn second_supervisor_cannot_publish_until_current_owner_drops() {
         .expect("dropping the current owner releases the runtime root");
     assert_ne!(replacement.generation_id(), current_generation);
 }
-
 #[test]
 fn consuming_same_root_replacement_transfers_ownership() {
     if !ports_available("consuming_same_root_replacement_transfers_ownership") {
@@ -400,7 +367,6 @@ fn consuming_same_root_replacement_transfers_ownership() {
         .expect("consume previous owner into replacement");
     assert_ne!(replacement.generation_id(), previous_generation);
 }
-
 #[test]
 fn consuming_replacement_returns_previous_only_after_precommit_failure() {
     if !ports_available("consuming_replacement_returns_previous_only_after_precommit_failure") {
@@ -427,7 +393,6 @@ fn consuming_replacement_returns_previous_only_after_precommit_failure() {
         Some(generation)
     );
 }
-
 #[test]
 fn consuming_cross_root_replacement_keeps_old_owner_only_until_success() {
     if !ports_available("consuming_cross_root_replacement_keeps_old_owner_only_until_success") {
@@ -450,7 +415,6 @@ fn consuming_cross_root_replacement_keeps_old_owner_only_until_success() {
     assert_ne!(replacement.paths().root(), old_root);
     SupervisorOwnershipLock::acquire(&old_root).expect("successful transition releases old root");
 }
-
 #[test]
 fn consuming_postcommit_failure_permanently_retires_previous() {
     if !ports_available("consuming_postcommit_failure_permanently_retires_previous") {
@@ -475,7 +439,6 @@ fn consuming_postcommit_failure_permanently_retires_previous() {
     ));
     assert!(previous.is_none(), "stale previous handle must be retired");
 }
-
 #[cfg(unix)]
 #[test]
 fn overlay_rejects_retained_storage_symlink_before_publication() {
@@ -492,7 +455,6 @@ fn overlay_rejects_retained_storage_symlink_before_publication() {
     let generation = supervisor.generation_id().to_owned();
     let attacker = temp.path().join("attacker-overlay-storage");
     let sentinel = redirect_storage_generations_through_symlink(&supervisor.peers()[0], &attacker);
-
     let error = supervisor
         .restart_peer_with_extra_layers("peer0", &[])
         .expect_err("overlay must reject redirected retained storage");
@@ -506,7 +468,6 @@ fn overlay_rejects_retained_storage_symlink_before_publication() {
         b"must-not-touch"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn overlay_rejects_retained_streaming_symlink_before_publication() {
@@ -530,7 +491,6 @@ fn overlay_rejects_retained_streaming_symlink_before_publication() {
         supervisor.peers()[0].storage_dir().join("streaming"),
     )
     .expect("redirect managed streaming directory");
-
     let error = supervisor
         .restart_peer_with_extra_layers("peer0", &[])
         .expect_err("overlay must reject redirected streaming storage");
@@ -544,7 +504,6 @@ fn overlay_rejects_retained_streaming_symlink_before_publication() {
         b"must-not-touch"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn overlay_precommit_failure_preserves_primary_when_peer_restart_fails() {
@@ -570,7 +529,6 @@ fn overlay_precommit_failure_preserves_primary_when_peer_restart_fails() {
         .permissions();
     permissions.set_mode(0o600);
     fs::set_permissions(&irohad, permissions).expect("disable irohad stub execution");
-
     let error = supervisor
         .restart_peer_with_extra_layers_with_publication_fault(
             "peer0",
@@ -601,7 +559,6 @@ fn overlay_precommit_failure_preserves_primary_when_peer_restart_fails() {
     );
     assert!(!supervisor.peers()[0].is_running());
 }
-
 #[cfg(unix)]
 #[test]
 fn overlay_publication_uncertainty_adopts_commit_before_restart_failure() {
@@ -626,7 +583,6 @@ fn overlay_publication_uncertainty_adopts_commit_before_restart_failure() {
         .permissions();
     permissions.set_mode(0o600);
     fs::set_permissions(&irohad, permissions).expect("disable irohad stub execution");
-
     let error = supervisor
         .restart_peer_with_extra_layers_with_publication_fault(
             "peer0",
@@ -657,7 +613,6 @@ fn overlay_publication_uncertainty_adopts_commit_before_restart_failure() {
     );
     assert!(!supervisor.peers()[0].is_running());
 }
-
 #[cfg(unix)]
 #[test]
 fn committed_overlay_surfaces_final_peer_restart_failure() {
@@ -682,7 +637,6 @@ fn committed_overlay_surfaces_final_peer_restart_failure() {
         .permissions();
     permissions.set_mode(0o600);
     fs::set_permissions(&irohad, permissions).expect("disable irohad stub execution");
-
     let error = supervisor
         .restart_peer_with_extra_layers("peer0", &[])
         .expect_err("committed overlay must report its peer restart failure");
@@ -697,7 +651,6 @@ fn committed_overlay_surfaces_final_peer_restart_failure() {
     );
     assert!(!supervisor.peers()[0].is_running());
 }
-
 #[test]
 fn selected_storage_resolver_rejects_unsafe_alias_without_a_selection() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -705,7 +658,6 @@ fn selected_storage_resolver_rejects_unsafe_alias_without_a_selection() {
         .expect_err("unsafe alias must fail before selection lookup");
     assert!(error.to_string().contains("one safe path component"));
 }
-
 #[test]
 fn selected_storage_resolver_reports_absent_selection() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -715,7 +667,6 @@ fn selected_storage_resolver_reports_absent_selection() {
         None
     );
 }
-
 #[test]
 fn wipe_and_regenerate_resets_storage_and_genesis() {
     if !ports_available("wipe_and_regenerate_resets_storage_and_genesis") {
@@ -728,7 +679,6 @@ fn wipe_and_regenerate_resets_storage_and_genesis() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     for (idx, peer) in supervisor.peers().iter().enumerate() {
         let storage_file = peer.storage_dir().join(format!("leftover-{idx}.bin"));
         fs::write(&storage_file, b"stale").expect("write stale storage file");
@@ -736,7 +686,6 @@ fn wipe_and_regenerate_resets_storage_and_genesis() {
             storage_file.exists(),
             "stale storage file should exist before wipe"
         );
-
         let snapshot_file = peer.snapshot_dir().join("stale.txt");
         fs::write(&snapshot_file, b"stale-snapshot").expect("write stale snapshot file");
         assert!(
@@ -744,14 +693,11 @@ fn wipe_and_regenerate_resets_storage_and_genesis() {
             "stale snapshot file should exist before wipe"
         );
     }
-
     let retired_genesis_path = supervisor.genesis_manifest().to_path_buf();
     fs::write(&retired_genesis_path, b"not-json").expect("corrupt genesis manifest");
-
     supervisor
         .wipe_and_regenerate()
         .expect("wipe and regenerate should succeed");
-
     let genesis_path = supervisor.genesis_manifest().to_path_buf();
     assert_ne!(
         genesis_path, retired_genesis_path,
@@ -768,7 +714,6 @@ fn wipe_and_regenerate_resets_storage_and_genesis() {
         supervisor.chain_id(),
         "regenerated genesis should carry supervisor chain id"
     );
-
     for (idx, peer) in supervisor.peers().iter().enumerate() {
         let storage_file = peer.storage_dir().join(format!("leftover-{idx}.bin"));
         assert!(
@@ -798,7 +743,6 @@ fn wipe_and_regenerate_resets_storage_and_genesis() {
         );
     }
 }
-
 #[test]
 fn post_commit_publication_fault_reconciles_generation_and_storage_atomically() {
     if !ports_available(
@@ -823,7 +767,6 @@ fn post_commit_publication_fault_reconciles_generation_and_storage_atomically() 
         fs::write(storage.join(format!("sentinel-{index}")), b"old state")
             .expect("write old-generation sentinel");
     }
-
     let error = supervisor
         .wipe_and_regenerate_with_publication_fault(PublicationFaultPoint::AfterPointerRename)
         .expect_err("post-rename durability fault must be reported as uncertain");
@@ -862,7 +805,6 @@ fn post_commit_publication_fault_reconciles_generation_and_storage_atomically() 
         );
     }
 }
-
 #[test]
 fn precommit_publication_fault_removes_only_candidate_runtime_storage() {
     if !ports_available("precommit_publication_fault_removes_only_candidate_runtime_storage") {
@@ -894,7 +836,6 @@ fn precommit_publication_fault_removes_only_candidate_runtime_storage() {
         fs::write(active.join(format!("sentinel-{index}")), b"active state")
             .expect("write active storage sentinel");
     }
-
     let error = supervisor
         .wipe_and_regenerate_with_publication_fault(PublicationFaultPoint::BeforeInventory)
         .expect_err("precommit publication fault must fail");
@@ -921,7 +862,6 @@ fn precommit_publication_fault_removes_only_candidate_runtime_storage() {
         );
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn precommit_failure_guard_blocks_competing_writer_through_peer_restoration() {
@@ -942,7 +882,6 @@ fn precommit_failure_guard_blocks_competing_writer_through_peer_restoration() {
     let root = supervisor.paths().root().to_path_buf();
     let expected = Some(supervisor.generation_id().to_owned());
     let mut hook_called = false;
-
     let error = supervisor
         .wipe_and_regenerate_with_publication_fault_and_failure_hook(
             PublicationFaultPoint::BeforeInventory,
@@ -960,12 +899,10 @@ fn precommit_failure_guard_blocks_competing_writer_through_peer_restoration() {
         supervisor.peers()[0].is_running(),
         "captured peer must be restored before the failure guard drops"
     );
-
     GenerationTransaction::begin_replacing(&root, expected)
         .expect("competing writer succeeds after lifecycle restoration returns");
     supervisor.stop_all().expect("stop restored peer");
 }
-
 #[cfg(unix)]
 #[test]
 fn every_precommit_publication_fault_restores_exact_running_sandbox() {
@@ -1005,7 +942,6 @@ fn every_precommit_publication_fault_restores_exact_running_sandbox() {
         )
         .expect("write running sentinel");
     }
-
     for point in [
         PublicationFaultPoint::BeforeInventory,
         PublicationFaultPoint::AfterInventory,
@@ -1047,7 +983,6 @@ fn every_precommit_publication_fault_restores_exact_running_sandbox() {
         }
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn precommit_failure_restores_only_the_captured_partial_running_set() {
@@ -1071,11 +1006,9 @@ fn precommit_failure_restores_only_the_captured_partial_running_set() {
         .iter()
         .map(|peer| peer.storage_dir().to_path_buf())
         .collect::<Vec<_>>();
-
     supervisor
         .wipe_and_regenerate_with_publication_fault(PublicationFaultPoint::AfterPointerSync)
         .expect_err("precommit fault must fail");
-
     assert_eq!(supervisor.generation_id(), old_generation);
     for (index, peer) in supervisor.peers().iter().enumerate() {
         let expected_running = matches!(peer.alias(), "peer0" | "peer2");
@@ -1088,7 +1021,6 @@ fn precommit_failure_restores_only_the_captured_partial_running_set() {
         assert_eq!(peer.storage_dir(), old_storage[index]);
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn precommit_failure_surfaces_running_set_restoration_failure() {
@@ -1113,7 +1045,6 @@ fn precommit_failure_surfaces_running_set_restoration_failure() {
         .permissions();
     permissions.set_mode(0o600);
     fs::set_permissions(&irohad, permissions).expect("disable irohad stub execution");
-
     let error = supervisor
         .wipe_and_regenerate_with_publication_fault(PublicationFaultPoint::BeforeInventory)
         .expect_err("precommit and lifecycle restoration must both fail");
@@ -1136,7 +1067,6 @@ fn precommit_failure_surfaces_running_set_restoration_failure() {
     );
     assert!(!supervisor.peers()[0].is_running());
 }
-
 #[cfg(unix)]
 #[test]
 fn publication_uncertainty_adopts_commit_before_surfacing_restart_failure() {
@@ -1161,7 +1091,6 @@ fn publication_uncertainty_adopts_commit_before_surfacing_restart_failure() {
         .permissions();
     permissions.set_mode(0o600);
     fs::set_permissions(&irohad, permissions).expect("disable irohad stub execution");
-
     let error = supervisor
         .wipe_and_regenerate_with_publication_fault(PublicationFaultPoint::AfterPointerRename)
         .expect_err("uncertain commit and restart must both be surfaced");
@@ -1191,7 +1120,6 @@ fn publication_uncertainty_adopts_commit_before_surfacing_restart_failure() {
     );
     assert!(!supervisor.peers()[0].is_running());
 }
-
 #[test]
 fn genesis_topology_matches_peer_configuration_across_presets() {
     if !ports_available("genesis_topology_matches_peer_configuration_across_presets") {
@@ -1200,13 +1128,11 @@ fn genesis_topology_matches_peer_configuration_across_presets() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-
     for preset in [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft] {
         let supervisor = SupervisorBuilder::new(preset)
             .data_root(temp.path())
             .build()
             .expect("build supervisor");
-
         let bytes = fs::read(supervisor.genesis_manifest()).expect("genesis manifest readable");
         let manifest: norito::json::Value =
             norito::json::from_slice(&bytes).expect("parse genesis json");
@@ -1219,7 +1145,6 @@ fn genesis_topology_matches_peer_configuration_across_presets() {
             .filter_map(|tx| tx.get("topology").and_then(norito::json::Value::as_array))
             .find(|entries| !entries.is_empty())
             .expect("non-empty topology transaction present");
-
         let actual_peer_ids: Vec<PeerId> = topology
             .iter()
             .map(|entry| {
@@ -1233,12 +1158,10 @@ fn genesis_topology_matches_peer_configuration_across_presets() {
             .iter()
             .map(|peer| peer.peer_id())
             .collect();
-
         assert_eq!(
             actual_peer_ids, expected_peer_ids,
             "topology should mirror prepared peers for preset {preset:?}"
         );
-
         let chain = manifest
             .get("chain")
             .and_then(norito::json::Value::as_str)
@@ -1250,7 +1173,6 @@ fn genesis_topology_matches_peer_configuration_across_presets() {
         );
     }
 }
-
 #[test]
 fn peer_spec_peer_id_roundtrip() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1261,7 +1183,6 @@ fn peer_spec_peer_id_roundtrip() {
     let parsed: PublicKey = peer_id.public_key().clone();
     assert_eq!(parsed, spec.keys.public_key);
 }
-
 #[test]
 fn generated_peer_config_preserves_all_mochi_managed_paths() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1279,11 +1200,9 @@ fn generated_peer_config_preserves_all_mochi_managed_paths() {
     .expect("write generated peer config");
     let config =
         ManagedNodeConfig::from_path(&spec.config_path).expect("parse generated peer config");
-
     validate_managed_peer_paths(&config, &spec, 1)
         .expect("generated config keeps every Mochi-managed path");
 }
-
 #[test]
 fn managed_peer_path_validation_rejects_runtime_root_redirects() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1301,26 +1220,22 @@ fn managed_peer_path_validation_rejects_runtime_root_redirects() {
     .expect("write generated peer config");
     let load =
         || ManagedNodeConfig::from_path(&spec.config_path).expect("parse generated peer config");
-
     let mut config = load();
     config.managed_paths.kura_store_dir = temp.path().join("redirected-kura");
     let error = validate_managed_peer_paths(&config, &spec, 1)
         .expect_err("redirected Kura root must fail generation validation");
     assert!(error.to_string().contains("kura.store_dir"));
-
     let mut config = load();
     config.managed_paths.snapshot_store_dir = temp.path().join("redirected-snapshot");
     let error = validate_managed_peer_paths(&config, &spec, 1)
         .expect_err("redirected snapshot root must fail generation validation");
     assert!(error.to_string().contains("snapshot.store_dir"));
-
     let mut config = load();
     config.managed_paths.torii_data_dir = temp.path().join("redirected-torii");
     let error = validate_managed_peer_paths(&config, &spec, 1)
         .expect_err("redirected Torii root must fail generation validation");
     assert!(error.to_string().contains("torii.data_dir"));
 }
-
 #[test]
 fn normalize_peer_config_overrides_sets_lane_count_and_local_services() {
     let mut nexus = toml::Table::new();
@@ -1338,10 +1253,8 @@ fn normalize_peer_config_overrides_sets_lane_count_and_local_services() {
     let mut nexus = Some(nexus);
     let mut sumeragi = None;
     let mut torii = None;
-
     normalize_peer_config_overrides(&mut nexus, &mut sumeragi, &mut torii)
         .expect("normalize overrides");
-
     let nexus = nexus.expect("nexus config");
     assert_eq!(
         nexus.get("lane_count").and_then(toml::Value::as_integer),
@@ -1362,7 +1275,6 @@ fn normalize_peer_config_overrides_sets_lane_count_and_local_services() {
         Some(toml::Value::String(value)) if value == LOCAL_MCP_PROFILE
     ));
 }
-
 #[test]
 fn normalize_peer_config_overrides_rejects_disabled_nexus_with_lanes() {
     let mut nexus = toml::Table::new();
@@ -1371,7 +1283,6 @@ fn normalize_peer_config_overrides_rejects_disabled_nexus_with_lanes() {
     let mut nexus = Some(nexus);
     let mut sumeragi = None;
     let mut torii = None;
-
     let err = normalize_peer_config_overrides(&mut nexus, &mut sumeragi, &mut torii)
         .expect_err("disabled nexus should fail");
     match err {
@@ -1382,7 +1293,6 @@ fn normalize_peer_config_overrides_rejects_disabled_nexus_with_lanes() {
         other => panic!("expected SupervisorError::Config, got {other:?}"),
     }
 }
-
 #[test]
 fn supervisor_defaults_nexus_disabled_for_local_permissioned_profiles() {
     if !ports_available("supervisor_defaults_nexus_disabled_for_local_permissioned_profiles") {
@@ -1391,12 +1301,10 @@ fn supervisor_defaults_nexus_disabled_for_local_permissioned_profiles() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let _stub = KagamiStub::install(temp.path());
-
     let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let nexus = supervisor
         .nexus_config_overrides()
         .expect("default nexus overrides");
@@ -1405,7 +1313,6 @@ fn supervisor_defaults_nexus_disabled_for_local_permissioned_profiles() {
         Some(toml::Value::Boolean(false))
     ));
 }
-
 #[test]
 fn supervisor_rejects_enabled_nexus_without_npos_consensus() {
     if !ports_available("supervisor_rejects_enabled_nexus_without_npos_consensus") {
@@ -1414,7 +1321,6 @@ fn supervisor_rejects_enabled_nexus_without_npos_consensus() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let _stub = KagamiStub::install(temp.path());
-
     let err = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
         .nexus_enabled(true)
@@ -1428,7 +1334,6 @@ fn supervisor_rejects_enabled_nexus_without_npos_consensus() {
         other => panic!("expected SupervisorError::Config, got {other:?}"),
     }
 }
-
 #[test]
 fn supervisor_exposes_config_overrides() {
     if !ports_available("supervisor_exposes_config_overrides") {
@@ -1437,7 +1342,6 @@ fn supervisor_exposes_config_overrides() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let _stub = KagamiStub::install(temp.path());
-
     let mut nexus = toml::Table::new();
     nexus.insert("enabled".into(), toml::Value::Boolean(true));
     let mut sumeragi = toml::Table::new();
@@ -1447,7 +1351,6 @@ fn supervisor_exposes_config_overrides() {
         "address".into(),
         toml::Value::String("127.0.0.1:8080".to_owned()),
     );
-
     let supervisor =
         SupervisorBuilder::with_profile(npos_preset_profile(ProfilePreset::SinglePeer))
             .data_root(temp.path())
@@ -1456,7 +1359,6 @@ fn supervisor_exposes_config_overrides() {
             .torii_config(torii)
             .build()
             .expect("build supervisor");
-
     let nexus = supervisor
         .nexus_config_overrides()
         .expect("nexus overrides");
@@ -1479,21 +1381,18 @@ fn supervisor_exposes_config_overrides() {
         Some(toml::Value::String(value)) if value == "127.0.0.1:8080"
     ));
 }
-
 #[test]
 fn lane_slug_sanitizes_alias() {
     assert_eq!(lane_slug("Core Lane", 0), "core_lane");
     assert_eq!(lane_slug("Gov+Ops", 2), "gov_ops");
     assert_eq!(lane_slug("---", 3), "lane3");
 }
-
 #[test]
 fn lane_path_comments_include_default_aliases_for_multilane() {
     let temp = tempfile::tempdir().expect("temp dir");
     let mut nexus = toml::Table::new();
     nexus.insert("enabled".into(), toml::Value::Boolean(true));
     nexus.insert("lane_count".into(), toml::Value::Integer(3));
-
     let comments = lane_path_comments(temp.path(), Some(&nexus));
     assert!(
         comments
@@ -1511,7 +1410,6 @@ fn lane_path_comments_include_default_aliases_for_multilane() {
             .any(|line| line.contains("mochi.lane[2].alias = lane2"))
     );
 }
-
 #[test]
 fn peer_spec_writes_nexus_and_always_on_da_storage() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -1520,7 +1418,6 @@ fn peer_spec_writes_nexus_and_always_on_da_storage() {
     paths.ensure().expect("paths");
     let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
     let genesis = test_genesis_material(&paths);
-
     let mut nexus = toml::Table::new();
     nexus.insert("enabled".into(), toml::Value::Boolean(true));
     nexus.insert("lane_count".into(), toml::Value::Integer(1));
@@ -1532,7 +1429,6 @@ fn peer_spec_writes_nexus_and_always_on_da_storage() {
     let specs = vec![spec.clone()];
     spec.write_config("demo-chain", &genesis, &specs, &overrides, &[])
         .expect("write config");
-
     let contents = fs::read_to_string(&spec.config_path).expect("read config");
     let value: toml::Table = toml::from_str(&contents).expect("parse config");
     let nexus = value
@@ -1593,7 +1489,6 @@ fn peer_spec_writes_nexus_and_always_on_da_storage() {
         Some(expected_manifest.as_str())
     );
 }
-
 #[test]
 fn peer_specs_write_distinct_managed_sorafs_state_roots() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -1607,7 +1502,6 @@ fn peer_specs_write_distinct_managed_sorafs_state_roots() {
         })
         .collect::<Vec<_>>();
     let genesis = test_genesis_material(&paths);
-
     for spec in &specs {
         spec.write_config(
             "demo-chain",
@@ -1618,7 +1512,6 @@ fn peer_specs_write_distinct_managed_sorafs_state_roots() {
         )
         .expect("write config");
     }
-
     let mut configured_roots = HashSet::new();
     for spec in &specs {
         let contents = fs::read_to_string(&spec.config_path).expect("read config");
@@ -1640,7 +1533,6 @@ fn peer_specs_write_distinct_managed_sorafs_state_roots() {
     }
     assert_eq!(configured_roots.len(), specs.len());
 }
-
 #[test]
 fn peer_spec_preserves_managed_sorafs_root_when_overlay_enables_storage() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -1655,7 +1547,6 @@ fn peer_spec_preserves_managed_sorafs_root_when_overlay_enables_storage() {
     sorafs.insert("storage".into(), toml::Value::Table(storage));
     let mut overlay = toml::Table::new();
     overlay.insert("sorafs".into(), toml::Value::Table(sorafs));
-
     spec.write_config(
         "demo-chain",
         &genesis,
@@ -1664,7 +1555,6 @@ fn peer_spec_preserves_managed_sorafs_root_when_overlay_enables_storage() {
         &[overlay],
     )
     .expect("write config");
-
     let contents = fs::read_to_string(&spec.config_path).expect("read config");
     let value: toml::Table = toml::from_str(&contents).expect("parse config");
     let storage = value
@@ -1683,7 +1573,6 @@ fn peer_spec_preserves_managed_sorafs_root_when_overlay_enables_storage() {
         Some(expected.as_str())
     );
 }
-
 #[test]
 fn peer_spec_rejects_sorafs_state_root_override() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -1701,7 +1590,6 @@ fn peer_spec_rejects_sorafs_state_root_override() {
     sorafs.insert("storage".into(), toml::Value::Table(storage));
     let mut overlay = toml::Table::new();
     overlay.insert("sorafs".into(), toml::Value::Table(sorafs));
-
     let err = spec
         .write_config(
             "demo-chain",
@@ -1720,7 +1608,6 @@ fn peer_spec_rejects_sorafs_state_root_override() {
         other => panic!("expected SupervisorError::Config, got {other:?}"),
     }
 }
-
 #[test]
 fn peer_specs_write_distinct_managed_streaming_state_roots() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -1734,7 +1621,6 @@ fn peer_specs_write_distinct_managed_streaming_state_roots() {
         })
         .collect::<Vec<_>>();
     let genesis = test_genesis_material(&paths);
-
     for spec in &specs {
         spec.write_config(
             "demo-chain",
@@ -1745,7 +1631,6 @@ fn peer_specs_write_distinct_managed_streaming_state_roots() {
         )
         .expect("write config");
     }
-
     let mut session_roots = HashSet::new();
     let mut soranet_roots = HashSet::new();
     let mut soravpn_roots = HashSet::new();
@@ -1816,7 +1701,6 @@ fn peer_specs_write_distinct_managed_streaming_state_roots() {
     assert_eq!(soranet_roots.len(), specs.len());
     assert_eq!(soravpn_roots.len(), specs.len());
 }
-
 #[test]
 fn peer_specs_stage_distinct_rans_tables_and_write_absolute_paths() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -1830,7 +1714,6 @@ fn peer_specs_stage_distinct_rans_tables_and_write_absolute_paths() {
         })
         .collect::<Vec<_>>();
     let genesis = test_genesis_material(&paths);
-
     for spec in &specs {
         spec.write_config(
             "demo-chain",
@@ -1841,7 +1724,6 @@ fn peer_specs_stage_distinct_rans_tables_and_write_absolute_paths() {
         )
         .expect("write config");
     }
-
     let mut configured_paths = HashSet::new();
     for spec in &specs {
         let contents = fs::read_to_string(&spec.config_path).expect("read config");
@@ -1879,7 +1761,6 @@ fn peer_specs_stage_distinct_rans_tables_and_write_absolute_paths() {
             .and_then(toml::Value::as_str)
             .expect("managed rANS tables path");
         let configured = Path::new(configured);
-
         assert!(configured.is_absolute());
         assert_eq!(configured, spec.rans_tables_path);
         assert!(configured.is_file());
@@ -1897,7 +1778,6 @@ fn peer_specs_stage_distinct_rans_tables_and_write_absolute_paths() {
     }
     assert_eq!(configured_paths.len(), specs.len());
 }
-
 #[test]
 fn peer_spec_preserves_managed_streaming_roots_with_shallow_opt_in_overlay() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -1906,7 +1786,6 @@ fn peer_spec_preserves_managed_streaming_roots_with_shallow_opt_in_overlay() {
     paths.ensure().expect("paths");
     let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
     let genesis = test_genesis_material(&paths);
-
     let mut soranet = toml::Table::new();
     soranet.insert("enabled".into(), toml::Value::Boolean(true));
     soranet.insert(
@@ -1943,7 +1822,6 @@ fn peer_spec_preserves_managed_streaming_roots_with_shallow_opt_in_overlay() {
     streaming.insert("soravpn".into(), toml::Value::Table(soravpn));
     let mut overlay = toml::Table::new();
     overlay.insert("streaming".into(), toml::Value::Table(streaming));
-
     spec.write_config(
         "demo-chain",
         &genesis,
@@ -1952,7 +1830,6 @@ fn peer_spec_preserves_managed_streaming_roots_with_shallow_opt_in_overlay() {
         &[overlay],
     )
     .expect("write config");
-
     let contents = fs::read_to_string(&spec.config_path).expect("read config");
     let value: toml::Table = toml::from_str(&contents).expect("parse config");
     let streaming = value
@@ -2040,7 +1917,6 @@ fn peer_spec_preserves_managed_streaming_roots_with_shallow_opt_in_overlay() {
         Some(expected.join("soravpn_routes").to_string_lossy().as_ref())
     );
 }
-
 #[test]
 fn peer_spec_rejects_managed_streaming_state_redirects() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -2049,7 +1925,6 @@ fn peer_spec_rejects_managed_streaming_state_redirects() {
     paths.ensure().expect("paths");
     let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
     let genesis = test_genesis_material(&paths);
-
     for (key, nested, expected_error) in [
         ("session_store_dir", None, "managed streaming session root"),
         (
@@ -2093,7 +1968,6 @@ fn peer_spec_rejects_managed_streaming_state_redirects() {
         }
     }
 }
-
 #[test]
 fn peer_spec_config_honors_torii_da_ingest_overrides() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -2102,7 +1976,6 @@ fn peer_spec_config_honors_torii_da_ingest_overrides() {
     paths.ensure().expect("paths");
     let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
     let genesis = test_genesis_material(&paths);
-
     let mut da_ingest = toml::Table::new();
     da_ingest.insert(
         "replay_cache_store_dir".into(),
@@ -2122,7 +1995,6 @@ fn peer_spec_config_honors_torii_da_ingest_overrides() {
     let specs = vec![spec.clone()];
     spec.write_config("demo-chain", &genesis, &specs, &overrides, &[])
         .expect("write config");
-
     let contents = fs::read_to_string(&spec.config_path).expect("read config");
     let value: toml::Table = toml::from_str(&contents).expect("parse config");
     let torii = value
@@ -2146,7 +2018,6 @@ fn peer_spec_config_honors_torii_da_ingest_overrides() {
         Some("/custom/manifests")
     );
 }
-
 #[test]
 fn peer_spec_rejects_kura_store_override() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -2162,7 +2033,6 @@ fn peer_spec_rejects_kura_store_override() {
     );
     let mut overlay = toml::Table::new();
     overlay.insert("kura".into(), toml::Value::Table(kura));
-
     let err = spec
         .write_config(
             "demo-chain",
@@ -2181,7 +2051,6 @@ fn peer_spec_rejects_kura_store_override() {
         other => panic!("expected SupervisorError::Config, got {other:?}"),
     }
 }
-
 #[test]
 fn peer_spec_rejects_non_string_kura_store_overlay() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -2194,7 +2063,6 @@ fn peer_spec_rejects_non_string_kura_store_overlay() {
     kura.insert("store_dir".into(), toml::Value::Integer(7));
     let mut overlay = toml::Table::new();
     overlay.insert("kura".into(), toml::Value::Table(kura));
-
     let err = spec
         .write_config(
             "demo-chain",
@@ -2212,7 +2080,6 @@ fn peer_spec_rejects_non_string_kura_store_overlay() {
         other => panic!("expected SupervisorError::Config, got {other:?}"),
     }
 }
-
 #[test]
 fn peer_spec_config_header_includes_lane_paths() {
     let temp = tempfile::tempdir().expect("temp dir");
@@ -2221,7 +2088,6 @@ fn peer_spec_config_header_includes_lane_paths() {
     paths.ensure().expect("paths");
     let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
     let genesis = test_genesis_material(&paths);
-
     let mut lane0 = toml::Table::new();
     lane0.insert("alias".into(), toml::Value::String("Core Lane".into()));
     lane0.insert("index".into(), toml::Value::Integer(0));
@@ -2243,7 +2109,6 @@ fn peer_spec_config_header_includes_lane_paths() {
     let specs = vec![spec.clone()];
     spec.write_config("demo-chain", &genesis, &specs, &overrides, &[])
         .expect("write config");
-
     let contents = fs::read_to_string(&spec.config_path).expect("read config");
     let lane0_slug = lane_slug("Core Lane", 0);
     let lane1_slug = lane_slug("Gov+Ops", 1);
@@ -2271,7 +2136,6 @@ fn peer_spec_config_header_includes_lane_paths() {
         .join(format!("lane_001_{lane1_slug}_merge.log"))
         .display()
         .to_string();
-
     assert!(contents.contains("# mochi.lane[0].alias = Core Lane"));
     assert!(contents.contains("# mochi.lane[1].alias = Gov+Ops"));
     assert!(contents.contains(&format!("# mochi.lane[0].blocks_dir = {lane0_blocks}")));
@@ -2279,7 +2143,6 @@ fn peer_spec_config_header_includes_lane_paths() {
     assert!(contents.contains(&format!("# mochi.lane[0].merge_log = {lane0_merge}")));
     assert!(contents.contains(&format!("# mochi.lane[1].merge_log = {lane1_merge}")));
 }
-
 #[cfg(unix)]
 fn onboarding_test_paths(root: &Path, name: &str) -> NetworkPaths {
     let profile = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
@@ -2287,7 +2150,6 @@ fn onboarding_test_paths(root: &Path, name: &str) -> NetworkPaths {
     paths.ensure().expect("create onboarding test paths");
     paths
 }
-
 #[cfg(unix)]
 fn write_private_test_file(path: &Path, payload: &[u8]) {
     fs::write(path, payload).expect("write private test file");
@@ -2297,7 +2159,6 @@ fn write_private_test_file(path: &Path, payload: &[u8]) {
     permissions.set_mode(0o600);
     fs::set_permissions(path, permissions).expect("set private test file permissions");
 }
-
 #[test]
 #[cfg(unix)]
 fn onboarding_bundle_reuses_existing_material_without_rotation() {
@@ -2314,10 +2175,8 @@ fn onboarding_bundle_reuses_existing_material_without_rotation() {
     let token_inode = fs::metadata(&first.token_file)
         .expect("token metadata")
         .ino();
-
     let second =
         OnboardingRuntimeBundle::create(&paths, authority).expect("reuse onboarding bundle");
-
     assert_eq!(second.token_hash, first.token_hash);
     assert_eq!(second.private_key_file, first.private_key_file);
     assert_eq!(second.token_file, first.token_file);
@@ -2334,7 +2193,6 @@ fn onboarding_bundle_reuses_existing_material_without_rotation() {
         "valid token must not be rotated or replaced"
     );
 }
-
 #[test]
 #[cfg(unix)]
 fn onboarding_bundle_reuses_dpn_tokens_and_hashes_normalized_body() {
@@ -2343,7 +2201,6 @@ fn onboarding_bundle_reuses_dpn_tokens_and_hashes_normalized_body() {
     let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
     let signer_payload = format!("{private_key}\n");
     let token_body = format!("nevo-local-{}", "A".repeat(48));
-
     for (index, terminator) in [b"\n".as_slice(), b"\r\n".as_slice()]
         .into_iter()
         .enumerate()
@@ -2364,10 +2221,8 @@ fn onboarding_bundle_reuses_dpn_tokens_and_hashes_normalized_body() {
         let signer_inode = fs::metadata(&signer).unwrap().ino();
         let token_inode = fs::metadata(&token).unwrap().ino();
         let manifest_inode = fs::metadata(&manifest).unwrap().ino();
-
         let bundle = OnboardingRuntimeBundle::create(&paths, authority)
             .expect("reuse DPN onboarding material");
-
         assert_eq!(
             bundle.token_hash,
             *blake3::hash(token_body.as_bytes()).as_bytes()
@@ -2380,7 +2235,6 @@ fn onboarding_bundle_reuses_dpn_tokens_and_hashes_normalized_body() {
         assert_eq!(fs::metadata(&manifest).unwrap().ino(), manifest_inode);
     }
 }
-
 #[test]
 #[cfg(unix)]
 fn onboarding_bundle_rejects_conflicting_signer_without_mutation() {
@@ -2395,10 +2249,8 @@ fn onboarding_bundle_rejects_conflicting_signer_without_mutation() {
     );
     let signer_before = fs::read(&first.private_key_file).unwrap();
     let token_before = fs::read(&first.token_file).unwrap();
-
     let error = OnboardingRuntimeBundle::create(&paths, authority)
         .expect_err("conflicting signer must fail");
-
     assert!(matches!(
         error,
         SupervisorError::Config(message) if message.contains("signer conflicts")
@@ -2406,7 +2258,6 @@ fn onboarding_bundle_rejects_conflicting_signer_without_mutation() {
     assert_eq!(fs::read(&first.private_key_file).unwrap(), signer_before);
     assert_eq!(fs::read(&first.token_file).unwrap(), token_before);
 }
-
 #[test]
 #[cfg(unix)]
 fn onboarding_bundle_rejects_partial_material_without_completion() {
@@ -2414,7 +2265,6 @@ fn onboarding_bundle_rejects_partial_material_without_completion() {
     let authority = localnet_admin_signer().expect("localnet admin");
     let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
     let signer_payload = format!("{private_key}\n");
-
     for signer_only in [true, false] {
         let paths = onboarding_test_paths(
             temp.path(),
@@ -2438,7 +2288,6 @@ fn onboarding_bundle_rejects_partial_material_without_completion() {
                 b"nevo-local-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             );
         }
-
         let error = OnboardingRuntimeBundle::create(&paths, authority)
             .expect_err("partial bundle must fail");
         assert!(matches!(
@@ -2449,13 +2298,11 @@ fn onboarding_bundle_rejects_partial_material_without_completion() {
         assert_eq!(token.exists(), !signer_only);
     }
 }
-
 #[test]
 #[cfg(unix)]
 fn onboarding_bundle_rejects_unsafe_private_file_modes() {
     let temp = tempfile::tempdir().expect("temp dir");
     let authority = localnet_admin_signer().expect("localnet admin");
-
     for target_signer in [true, false] {
         let paths = onboarding_test_paths(
             temp.path(),
@@ -2474,7 +2321,6 @@ fn onboarding_bundle_rejects_unsafe_private_file_modes() {
         };
         fs::set_permissions(target, fs::Permissions::from_mode(0o644))
             .expect("make private file unsafe");
-
         let error = OnboardingRuntimeBundle::create(&paths, authority)
             .expect_err("unsafe private file must fail");
         assert!(matches!(
@@ -2488,7 +2334,6 @@ fn onboarding_bundle_rejects_unsafe_private_file_modes() {
         );
     }
 }
-
 #[test]
 #[cfg(unix)]
 fn onboarding_bundle_rejects_malformed_tokens() {
@@ -2501,7 +2346,6 @@ fn onboarding_bundle_rejects_malformed_tokens() {
         b"nevo-local-AAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAA".as_slice(),
         b"nevo-local-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n".as_slice(),
     ];
-
     for (index, malformed_token) in malformed_tokens.into_iter().enumerate() {
         let paths = onboarding_test_paths(temp.path(), &format!("malformed-{index}"));
         let runtime = paths.root().join(LOCAL_ONBOARDING_RUNTIME_DIRECTORY);
@@ -2513,7 +2357,6 @@ fn onboarding_bundle_rejects_malformed_tokens() {
             signer_payload.as_bytes(),
         );
         write_private_test_file(&runtime.join(LOCAL_ONBOARDING_TOKEN_FILE), malformed_token);
-
         let error = OnboardingRuntimeBundle::create(&paths, authority)
             .expect_err("malformed token must fail");
         assert!(matches!(
@@ -2522,7 +2365,6 @@ fn onboarding_bundle_rejects_malformed_tokens() {
         ));
     }
 }
-
 #[test]
 #[cfg(unix)]
 fn four_peer_onboarding_bundle_is_private_identical_and_session_metadata_is_safe() {
@@ -2540,7 +2382,6 @@ fn four_peer_onboarding_bundle_is_private_identical_and_session_metadata_is_safe
         .p2p_base_port(25_000)
         .build()
         .expect("build four-peer supervisor");
-
     let session = supervisor.session_info().expect("session info");
     assert_eq!(
         session.onboarding_token_file,
@@ -2561,7 +2402,6 @@ fn four_peer_onboarding_bundle_is_private_identical_and_session_metadata_is_safe
     assert!((32..=256).contains(&token.len()));
     assert!(token.bytes().all(|byte| (b'!'..=b'~').contains(&byte)));
     assert_eq!(token, token.trim_end());
-
     let runtime_dir = session
         .onboarding_token_file
         .parent()
@@ -2582,7 +2422,6 @@ fn four_peer_onboarding_bundle_is_private_identical_and_session_metadata_is_safe
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         assert_eq!(metadata.nlink(), 1);
     }
-
     let admin = localnet_admin_signer().expect("localnet admin");
     let admin_account = admin.account_id().to_string();
     let admin_private = ExposedPrivateKey(admin.key_pair().private_key().clone()).to_string();
@@ -2656,7 +2495,6 @@ fn four_peer_onboarding_bundle_is_private_identical_and_session_metadata_is_safe
             expected_onboarding = Some(onboarding);
         }
     }
-
     let session_debug = format!("{session:?}");
     assert!(!session_debug.contains(&token));
     assert!(!session_debug.contains(&expected_digest));
@@ -2664,7 +2502,6 @@ fn four_peer_onboarding_bundle_is_private_identical_and_session_metadata_is_safe
     assert!(!supervisor_debug.contains(&token));
     assert!(!supervisor_debug.contains(&expected_digest));
 }
-
 #[test]
 fn supervisor_session_info_reports_workspace_and_mcp_urls() {
     if !ports_available("supervisor_session_info_reports_workspace_and_mcp_urls") {
@@ -2675,12 +2512,10 @@ fn supervisor_session_info_reports_workspace_and_mcp_urls() {
     let workspace_root = temp.path().join("workspace");
     let sandbox_root = workspace_root.join(".mochi").join("sandbox");
     let _stub = KagamiStub::install(temp.path());
-
     let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(&sandbox_root)
         .build()
         .expect("build supervisor");
-
     let info = supervisor.session_info().expect("session info");
     assert_eq!(
         info.workspace_root.as_deref(),
@@ -2701,7 +2536,6 @@ fn supervisor_session_info_reports_workspace_and_mcp_urls() {
         info.sandbox_root.join("runtime/onboarding-signer.key")
     );
 }
-
 #[test]
 fn managed_block_stream_unknown_peer_errors() {
     if !ports_available("managed_block_stream_unknown_peer_errors") {
@@ -2715,13 +2549,11 @@ fn managed_block_stream_unknown_peer_errors() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let err = supervisor
         .managed_block_stream("missing", runtime.handle())
         .expect_err("unknown peer should fail");
     matches!(err, SupervisorError::PeerUnknown { .. });
 }
-
 #[test]
 fn managed_block_stream_returns_handle_for_peer() {
     if !ports_available("managed_block_stream_returns_handle_for_peer") {
@@ -2735,15 +2567,12 @@ fn managed_block_stream_returns_handle_for_peer() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let stream = supervisor
         .managed_block_stream("peer0", runtime.handle())
         .expect("managed stream handle");
-
     assert_eq!(stream.alias(), "peer0");
     stream.abort();
 }
-
 #[test]
 fn restart_policy_backoff_scales() {
     let policy = RestartPolicy::OnFailure {
@@ -2755,14 +2584,12 @@ fn restart_policy_backoff_scales() {
     assert_eq!(policy.backoff_for(3), Duration::from_millis(2000));
     assert_eq!(policy.backoff_for(6), Duration::from_millis(8000));
 }
-
 #[test]
 fn restart_policy_rejects_zero_attempt() {
     let policy = RestartPolicy::default();
     assert!(!policy.should_retry(0));
     assert_eq!(policy.backoff_for(0), Duration::ZERO);
 }
-
 #[cfg(unix)]
 #[test]
 fn managed_peer_process_uses_its_peer_directory_as_cwd() {
@@ -2773,7 +2600,6 @@ fn managed_peer_process_uses_its_peer_directory_as_cwd() {
     paths.ensure().expect("paths");
     let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
     fs::write(&spec.config_path, "chain = \"cwd-test\"\n").expect("write config");
-
     let cwd_capture = temp.path().join("peer-cwd.txt");
     let stub = temp.path().join("irohad-cwd-stub.sh");
     fs::write(
@@ -2785,7 +2611,6 @@ fn managed_peer_process_uses_its_peer_directory_as_cwd() {
     perms.set_mode(0o755);
     fs::set_permissions(&stub, perms).expect("set stub permissions");
     let _capture_guard = EnvVarGuard::set("MOCHI_TEST_PEER_CWD", cwd_capture.as_os_str());
-
     let expected = spec
         .config_path
         .canonicalize()
@@ -2810,7 +2635,6 @@ fn managed_peer_process_uses_its_peer_directory_as_cwd() {
         child.wait().expect("wait for peer stub");
     }
 }
-
 #[test]
 fn manual_stop_cancels_pending_restart() {
     if !ports_available("manual_stop_cancels_pending_restart") {
@@ -2819,7 +2643,6 @@ fn manual_stop_cancels_pending_restart() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _kagami = KagamiStub::install(temp.path());
-
     let irohad_stub = temp.path().join("irohad_stub.sh");
     let stub_script = r#"#!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -2838,7 +2661,6 @@ exit 1
         fs::set_permissions(&irohad_stub, perms).expect("set stub perms");
     }
     let _irohad_guard = EnvVarGuard::set("MOCHI_IROHAD", irohad_stub.as_os_str());
-
     let mut supervisor = match SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
         .restart_policy(RestartPolicy::OnFailure {
@@ -2856,12 +2678,10 @@ exit 1
         }
         Err(err) => panic!("build supervisor: {err}"),
     };
-
     supervisor.start_peer("peer0").expect("start peer");
     // Stub exits immediately; refresh to observe the failure and schedule a restart.
     std::thread::sleep(Duration::from_millis(10));
     supervisor.refresh_peer_states();
-
     let peer = &supervisor.peers()[0];
     assert!(
         matches!(peer.state, PeerState::Restarting | PeerState::Stopped),
@@ -2871,11 +2691,9 @@ exit 1
         peer.next_restart_at.is_some(),
         "failure should set a restart timer"
     );
-
     supervisor
         .stop_peer("peer0")
         .expect("manual stop should succeed");
-
     let peer = &supervisor.peers()[0];
     assert!(
         peer.next_restart_at.is_none(),
@@ -2883,11 +2701,9 @@ exit 1
     );
     assert_eq!(peer.restart_attempts, 0);
     assert!(matches!(peer.state, PeerState::Stopped));
-
     // Allow enough time for the original backoff to elapse and confirm no restart occurs.
     std::thread::sleep(Duration::from_millis(250));
     supervisor.refresh_peer_states();
-
     let peer = &supervisor.peers()[0];
     assert!(
         peer.process.is_none(),
@@ -2897,7 +2713,6 @@ exit 1
     assert_eq!(peer.restart_attempts, 0);
     assert!(matches!(peer.state, PeerState::Stopped));
 }
-
 #[test]
 fn supervisor_exposes_log_stream() {
     if !ports_available("supervisor_exposes_log_stream") {
@@ -2910,13 +2725,11 @@ fn supervisor_exposes_log_stream() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let stream = supervisor
         .log_stream("peer0")
         .expect("log stream should be available");
     assert_eq!(stream.alias(), "peer0");
 }
-
 #[test]
 fn start_peer_unknown_alias_errors() {
     if !ports_available("start_peer_unknown_alias_errors") {
@@ -2940,13 +2753,11 @@ fn start_peer_unknown_alias_errors() {
         }
         Err(err) => panic!("build supervisor: {err}"),
     };
-
     let err = supervisor
         .start_peer("missing-peer")
         .expect_err("unknown peer should fail");
     assert!(matches!(err, SupervisorError::PeerUnknown { .. }));
 }
-
 #[test]
 fn stop_peer_unknown_alias_errors() {
     if !ports_available("stop_peer_unknown_alias_errors") {
@@ -2970,7 +2781,6 @@ fn stop_peer_unknown_alias_errors() {
         }
         Err(err) => panic!("build supervisor: {err}"),
     };
-
     let err = supervisor
         .stop_peer("missing-peer")
         .expect_err("unknown peer should fail");

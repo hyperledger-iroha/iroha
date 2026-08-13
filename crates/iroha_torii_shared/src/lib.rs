@@ -8,7 +8,6 @@ use iroha_data_model::{
     transaction::{FeeChargeKind, FeePaymentIntent, TransactionPayload},
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
 /// Public Torii DTOs for the offline cash lifecycle.
@@ -23,10 +22,8 @@ pub mod sorafs_hedging_billing_api;
 pub mod sorafs_moderation_api;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
 pub mod validation_fee_api;
-
 /// Required WebSocket subprotocol for canonical Norito event and block streams.
 pub const NORITO_V1_WEBSOCKET_SUBPROTOCOL: &str = "iroha-norito-v1";
-
 /// Canonical request body for account-signed `POST /v1/fees/quote`.
 ///
 /// The draft fixes every non-fee transaction field and selects the payer,
@@ -40,7 +37,6 @@ pub struct FeeQuoteRequest {
     /// Exact canonical unsigned transaction payload to evaluate.
     pub payload: TransactionPayload,
 }
-
 /// Ledger observation used for a deterministic fee quote.
 #[derive(
     JsonDeserialize,
@@ -61,7 +57,6 @@ pub struct FeeQuoteObservation {
     /// Dataspace selected by canonical transaction routing.
     pub route_dataspace_id: DataSpaceId,
 }
-
 /// One canonically ordered maximum fee component.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -74,7 +69,6 @@ pub struct FeeQuoteComponent {
     /// Maximum deterministic charge at the observed state.
     pub max_amount: Quantity,
 }
-
 /// Remaining sponsor-program capacity for one fee asset.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -93,7 +87,6 @@ pub struct FeeQuoteCapacity {
     /// Remaining beneficiary capacity in the observed beneficiary epoch.
     pub beneficiary_epoch_remaining: Quantity,
 }
-
 /// Successful deterministic fee-admission decision.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -111,7 +104,6 @@ pub enum FeeQuoteDecision {
         program_revision: Option<u64>,
     },
 }
-
 /// Successful response returned by account-signed `POST /v1/fees/quote`.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -128,7 +120,6 @@ pub struct FeeQuoteResponse {
     /// Successful admission decision and selected debit source.
     pub decision: FeeQuoteDecision,
 }
-
 /// Canonical request body for exact sponsor-program lookup.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -138,7 +129,6 @@ pub struct FeeSponsorProgramByIdRequest {
     /// Canonical `sponsor/program` literal.
     pub program_id: String,
 }
-
 impl FeeSponsorProgramByIdRequest {
     /// Construct a lookup request from a typed program identifier.
     #[must_use]
@@ -148,10 +138,8 @@ impl FeeSponsorProgramByIdRequest {
         }
     }
 }
-
 pub mod uri {
     //! URI that Torii uses to route incoming requests.
-
     /// Query URI is used to handle incoming Query requests.
     pub const QUERY: &str = "/v1/query";
     /// URI used to evaluate offline-payment readiness.
@@ -329,7 +317,6 @@ pub mod uri {
     /// Runtime: cancel a runtime upgrade by id (hex)
     pub const RUNTIME_UPGRADES_CANCEL: &str = "/v1/runtime/upgrades/cancel/{id}";
 }
-
 /// Queue pressure snapshot returned with transaction queue rejections.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 pub struct QueueErrorSnapshot {
@@ -342,7 +329,6 @@ pub struct QueueErrorSnapshot {
     /// Whether the queue is currently saturated.
     pub saturated: bool,
 }
-
 /// AXT rejection metadata returned with validation failures when available.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
@@ -377,7 +363,6 @@ pub struct AxtErrorDetails {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub next_handle_counter: Option<u64>,
 }
-
 /// Structured fee-payment rejection metadata returned to authorized callers.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
@@ -420,7 +405,6 @@ pub struct FeeErrorDetails {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub remediation: Option<String>,
 }
-
 /// Structured metadata carried by [`ErrorEnvelope`].
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
@@ -487,7 +471,6 @@ pub struct ErrorDetails {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fee: Option<FeeErrorDetails>,
 }
-
 impl ErrorDetails {
     /// Return whether this details payload carries any structured fields.
     #[must_use]
@@ -509,7 +492,6 @@ impl ErrorDetails {
             && self.fee.is_none()
     }
 }
-
 /// Stable public network profile metadata used by clients and Torii helpers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NetworkProfile {
@@ -518,7 +500,6 @@ pub struct NetworkProfile {
     /// I105 chain discriminant assigned to this public network.
     pub chain_discriminant: u16,
 }
-
 /// Taira public testnet profile name.
 pub const NETWORK_PROFILE_TAIRA: &str = "taira";
 /// Minamoto public network profile name.
@@ -527,7 +508,6 @@ pub const NETWORK_PROFILE_MINAMOTO: &str = "minamoto";
 pub const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 /// Minamoto public network I105 chain discriminant.
 pub const MINAMOTO_CHAIN_DISCRIMINANT: u16 = 753;
-
 /// Public network profiles accepted by developer-facing tools.
 pub const NETWORK_PROFILES: &[NetworkProfile] = &[
     NetworkProfile {
@@ -539,7 +519,6 @@ pub const NETWORK_PROFILES: &[NetworkProfile] = &[
         chain_discriminant: MINAMOTO_CHAIN_DISCRIMINANT,
     },
 ];
-
 /// Resolve a public network profile by name.
 #[must_use]
 pub fn network_profile(name: &str) -> Option<&'static NetworkProfile> {
@@ -547,7 +526,6 @@ pub fn network_profile(name: &str) -> Option<&'static NetworkProfile> {
         .iter()
         .find(|profile| profile.name.eq_ignore_ascii_case(name.trim()))
 }
-
 /// Resolve a public network profile by I105 chain discriminant.
 #[must_use]
 pub fn network_profile_for_discriminant(discriminant: u16) -> Option<&'static NetworkProfile> {
@@ -555,7 +533,6 @@ pub fn network_profile_for_discriminant(discriminant: u16) -> Option<&'static Ne
         .iter()
         .find(|profile| profile.chain_discriminant == discriminant)
 }
-
 /// Return a comma-separated list of supported public network profile names.
 #[must_use]
 pub fn network_profile_names() -> String {
@@ -565,7 +542,6 @@ pub fn network_profile_names() -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
-
 /// Canonical Torii error envelope returned for HTTP API failures.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 pub struct ErrorEnvelope {
@@ -578,7 +554,6 @@ pub struct ErrorEnvelope {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub details: Option<ErrorDetails>,
 }
-
 impl ErrorEnvelope {
     /// Construct a new error envelope.
     #[must_use]
@@ -589,33 +564,28 @@ impl ErrorEnvelope {
             details: None,
         }
     }
-
     /// Attach structured details to an error envelope.
     #[must_use]
     pub fn with_details(mut self, details: ErrorDetails) -> Self {
         self.details = Some(details);
         self
     }
-
     /// Stable error code string.
     #[must_use]
     pub fn code(&self) -> &str {
         &self.code
     }
-
     /// Human-readable error detail.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 }
-
 /// Maximum distinct proof backends that one retention-status response may summarize.
 ///
 /// This first-release protocol ceiling bounds node-local aggregation and response memory. Torii
 /// fails the request with HTTP 422 when the proof registry contains more distinct backends.
 pub const PROOF_RETENTION_STATUS_MAX_BACKENDS: usize = 256;
-
 /// Per-backend proof retention snapshot.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 pub struct ProofRetentionBackendStatus {
@@ -630,7 +600,6 @@ pub struct ProofRetentionBackendStatus {
     /// Newest verification height (if recorded).
     pub newest_height: Option<u64>,
 }
-
 /// Proof retention configuration and live counters.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 pub struct ProofRetentionStatus {
@@ -647,7 +616,6 @@ pub struct ProofRetentionStatus {
     /// Per-backend retention snapshots.
     pub backends: Vec<ProofRetentionBackendStatus>,
 }
-
 /// Typed status payload returned by `/v1/pipeline/transactions/status`.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -662,7 +630,6 @@ pub struct PipelineTransactionStatusResponse {
     /// Source used to resolve the status (`cache`, `queue`, `state`).
     pub resolved_from: String,
 }
-
 /// Compact trigger completion included in authenticated detail and historical evidence.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -681,7 +648,6 @@ pub struct TriggerCompletionSummary {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
-
 /// Historical trigger completion record returned by `/v1/triggers/completed`.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -699,7 +665,6 @@ pub struct TriggerCompletionRecord {
     /// for legacy blocks reconstructed from transaction results.
     pub source: String,
 }
-
 /// Historical trigger completion query response.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -718,7 +683,6 @@ pub struct TriggerCompletionListResponse {
     /// Matching completion records, newest block first.
     pub completions: Vec<TriggerCompletionRecord>,
 }
-
 /// Status details embedded in [`PipelineTransactionStatusResponse`].
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -731,7 +695,6 @@ pub struct PipelineTransactionStatus {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub block_height: Option<u64>,
 }
-
 /// Authenticated detailed transaction response.
 ///
 /// This payload is never returned by the public pipeline-status endpoint. It is
@@ -748,7 +711,6 @@ pub struct PipelineTransactionDetailsResponse {
     /// Trigger completions associated with the exact committed entrypoint.
     pub trigger_completions: Vec<TriggerCompletionSummary>,
 }
-
 impl PipelineTransactionStatusResponse {
     /// Construct a public status-only response.
     #[must_use]
@@ -766,7 +728,6 @@ impl PipelineTransactionStatusResponse {
         }
     }
 }
-
 /// Canonical account-read payload returned by `GET /v1/accounts/{account_id}`.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
@@ -787,7 +748,6 @@ pub struct AccountReadResponse {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub opaque_ids: Vec<OpaqueAccountId>,
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
@@ -797,7 +757,6 @@ mod tests {
         nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId},
         transaction::FeePaymentIntent,
     };
-
     use super::{
         AccountReadResponse, ErrorDetails, ErrorEnvelope, FeeErrorDetails, FeeQuoteDecision,
         FeeQuoteObservation, FeeQuoteResponse, FeeSponsorProgramByIdRequest,
@@ -805,19 +764,16 @@ mod tests {
         PipelineTransactionStatus, PipelineTransactionStatusResponse, QueueErrorSnapshot,
         TAIRA_CHAIN_DISCRIMINANT, network_profile, network_profile_for_discriminant,
     };
-
     fn checked_test_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("Torii shared test fixture key derivation should succeed")
     }
-
     #[test]
     fn error_envelope_new_sets_fields() {
         let envelope = ErrorEnvelope::new("test_code", "test message");
         assert_eq!(envelope.code(), "test_code");
         assert_eq!(envelope.message(), "test message");
     }
-
     #[test]
     fn privacy_issuance_error_fixture_matches_authoritative_norito_serializer() {
         let fixture: norito::json::Value = norito::json::from_str(include_str!(
@@ -863,7 +819,6 @@ mod tests {
             mismatches.join("\n"),
         );
     }
-
     #[test]
     fn fee_program_selector_and_quote_response_roundtrip_canonically() {
         let account = AccountId::new(checked_test_keypair(0x24).public_key().clone());
@@ -877,7 +832,6 @@ mod tests {
             norito::json::from_slice(&selector_json).expect("decode program selector");
         assert_eq!(decoded_selector, selector);
         assert_eq!(decoded_selector.program_id, program_id.to_string());
-
         let quote = FeeQuoteResponse {
             intent: FeePaymentIntent::authority(Vec::new(), None),
             observation: FeeQuoteObservation {
@@ -897,7 +851,6 @@ mod tests {
             norito::json::from_slice(&quote_json).expect("decode typed fee quote");
         assert_eq!(decoded_quote, quote);
     }
-
     #[test]
     fn error_envelope_roundtrip_preserves_queue_details() {
         let envelope = ErrorEnvelope::new("queue_full", "transaction queue is at capacity")
@@ -926,7 +879,6 @@ mod tests {
         assert_eq!(queue.capacity, 24);
         assert!(queue.saturated);
     }
-
     #[test]
     fn error_envelope_roundtrip_preserves_public_debug_details() {
         let envelope = ErrorEnvelope::new("transaction_finality_failed", "finality failed")
@@ -962,7 +914,6 @@ mod tests {
             Some("inspect transaction rejection reason")
         );
     }
-
     #[test]
     fn error_envelope_roundtrip_preserves_fee_details() {
         let envelope = ErrorEnvelope::new("fee_payment_rejected", "fee payment rejected")
@@ -981,7 +932,6 @@ mod tests {
                 }),
                 ..Default::default()
             });
-
         let bytes = norito::to_bytes(&envelope).expect("encode fee error envelope");
         let decoded: ErrorEnvelope =
             norito::decode_from_bytes(&bytes).expect("decode fee error envelope");
@@ -996,7 +946,6 @@ mod tests {
         assert_eq!(fee.available.as_deref(), Some("4"));
         assert_eq!(fee.observation_height, Some(42));
     }
-
     #[test]
     fn error_envelope_json_discards_unknown_members_and_rejects_duplicates() {
         let decoded: ErrorEnvelope = norito::json::from_str(
@@ -1014,7 +963,6 @@ mod tests {
         let canonical = norito::json::to_string(&decoded).expect("re-encode closed envelope");
         assert!(!canonical.contains("unknown"));
         assert!(!canonical.contains("secret"));
-
         for json in [
             r#"{"code":"bad_request","code":"conflict","message":"invalid"}"#,
             r#"{"code":"bad_request","message":"invalid","details":{"field":"amount","field":"asset"}}"#,
@@ -1027,7 +975,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn error_envelope_json_rejects_untyped_details_values() {
         for details in ["[]", "\"dynamic\"", "1", "true"] {
@@ -1037,7 +984,6 @@ mod tests {
                 .expect_err("details must be the declared typed record or null");
         }
     }
-
     #[test]
     fn error_details_is_empty_tracks_optional_fields() {
         let mut details = ErrorDetails::default();
@@ -1059,7 +1005,6 @@ mod tests {
         });
         assert!(!details.is_empty());
     }
-
     #[test]
     fn network_profile_registry_resolves_public_discriminants() {
         assert_eq!(
@@ -1075,7 +1020,6 @@ mod tests {
             Some(NETWORK_PROFILE_TAIRA)
         );
     }
-
     #[test]
     fn pipeline_transaction_status_roundtrip_is_status_only() {
         let payload = PipelineTransactionStatusResponse::new(
@@ -1087,12 +1031,10 @@ mod tests {
             "auto".to_owned(),
             "state".to_owned(),
         );
-
         let encoded = norito::to_bytes(&payload).expect("encode status payload");
         let decoded: PipelineTransactionStatusResponse =
             norito::decode_from_bytes(&encoded).expect("decode status payload");
         assert_eq!(decoded, payload);
-
         let json = norito::json::to_json(&payload).expect("encode public status JSON");
         for forbidden in [
             "rejection_reason",
@@ -1111,17 +1053,14 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn account_read_response_fixture_uses_checked_key_derivation() {
         let key_pair = checked_test_keypair(0x23);
         let expected = KeyPair::try_from_seed(vec![0x23; 32], Algorithm::Ed25519)
             .expect("direct checked Torii shared fixture key derivation");
-
         assert_eq!(key_pair.public_key(), expected.public_key());
         assert!(KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err());
     }
-
     #[test]
     fn account_read_response_roundtrip_preserves_subject_metadata() {
         let key_pair = checked_test_keypair(0x23);
@@ -1137,14 +1076,12 @@ mod tests {
             uaid: None,
             opaque_ids: Vec::new(),
         };
-
         let encoded = norito::to_bytes(&response).expect("encode account response");
         let decoded: AccountReadResponse =
             norito::decode_from_bytes(&encoded).expect("decode account response");
         assert_eq!(decoded, response);
     }
 }
-
 /// Iroha Connect protocol types (WalletConnect‑style overlay).
 ///
 /// These are Norito‑encoded wire types used over Torii WebSockets and the

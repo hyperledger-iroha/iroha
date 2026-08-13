@@ -1,16 +1,13 @@
 //! Ensure structured data events are emitted in the same order as instructions
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! execute within a single transaction (WSV Overlays & Commit ordering).
-
 use std::{borrow::Cow, sync::Arc};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
 };
 // no specific event enum imports needed here
 use iroha_data_model::prelude::*;
-
 #[test]
 fn data_events_follow_instruction_order_in_tx() {
     // Build world with a domain, account, and an asset definition
@@ -40,7 +37,6 @@ fn data_events_follow_instruction_order_in_tx() {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-
     // Single transaction: three instructions in a fixed order
     let asset = AssetId::of(
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -69,7 +65,6 @@ fn data_events_follow_instruction_order_in_tx() {
     )
     .with_instructions(instrs)
     .sign(kp.private_key());
-
     // Build and validate block with one tx
     let acc = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let new_block = BlockBuilder::new(vec![acc])
@@ -80,7 +75,6 @@ fn data_events_follow_instruction_order_in_tx() {
     let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
     let events = sb.apply_without_execution(&cb, Vec::new());
-
     // Extract Data events in emission order
     let data_events: Vec<_> = events
         .into_iter()
@@ -89,7 +83,6 @@ fn data_events_follow_instruction_order_in_tx() {
             _ => None,
         })
         .collect();
-
     // Expect at least three data events; basic sanity on count
     assert!(data_events.len() >= 3, "expected multiple data events");
 }

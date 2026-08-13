@@ -1,11 +1,9 @@
 //! Adaptive tests for additional shapes: (u64, bytes, bool) and (u64, u32, bool).
-
 use norito::columnar::{
     ADAPTIVE_TAG_AOS, ADAPTIVE_TAG_NCB, decode_rows_u64_bytes_bool_adaptive,
     decode_rows_u64_u32_bool_adaptive, encode_rows_u64_bytes_bool_adaptive,
     encode_rows_u64_u32_bool_adaptive, should_use_columnar,
 };
-
 #[test]
 fn adaptive_bytes_small_prefers_aos() {
     let mut rows: Vec<(u64, Vec<u8>, bool)> = Vec::new();
@@ -28,7 +26,6 @@ fn adaptive_bytes_small_prefers_aos() {
     let decoded = decode_rows_u64_bytes_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
 }
-
 #[test]
 fn adaptive_bytes_large_prefers_ncb() {
     let mut rows: Vec<(u64, Vec<u8>, bool)> = Vec::new();
@@ -49,7 +46,6 @@ fn adaptive_bytes_large_prefers_ncb() {
     let decoded = decode_rows_u64_bytes_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
 }
-
 #[test]
 fn adaptive_u64_u32_small_prefers_aos() {
     let mut rows: Vec<(u64, u32, bool)> = Vec::new();
@@ -70,7 +66,6 @@ fn adaptive_u64_u32_small_prefers_aos() {
     let decoded = decode_rows_u64_u32_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
 }
-
 #[test]
 fn adaptive_u64_u32_large_prefers_ncb() {
     let mut rows: Vec<(u64, u32, bool)> = Vec::new();

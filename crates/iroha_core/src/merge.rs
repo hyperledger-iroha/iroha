@@ -1,7 +1,5 @@
 //! Merge-ledger helpers (reduction, validation, and related utilities).
-
 use std::collections::BTreeMap;
-
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
     NetworkId,
@@ -18,7 +16,6 @@ use iroha_data_model::{
 };
 use iroha_zkp_halo2::poseidon;
 use norito::codec::{Decode, Encode};
-
 /// Domain separator applied to the merge-hint reduction payloads.
 const MERGE_REDUCE_DOMAIN_TAG: &[u8] = b"iroha:merge:reduce:v1\0";
 /// Domain separator applied to merge-committee signature payloads.
@@ -40,7 +37,6 @@ const MERGE_POST_STATE_DOMAIN_TAG: &[u8] = b"iroha:merge:post-state:v1\0";
 /// Domain separator for a complete merge execution batch.
 const MERGE_EXECUTION_BATCH_DOMAIN_TAG: &[u8] = b"iroha:merge:execution-batch:v1\0";
 const MERGE_CANDIDATE_BODY_DOMAIN_TAG: &[u8] = b"iroha:merge:candidate-body:v2\0";
-
 /// Merge-ledger entry data required for signature payloads.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -74,37 +70,31 @@ pub struct MergeLedgerCandidate {
     /// Deterministic reduction of `merge_hint_roots` across all lanes.
     pub global_state_root: Hash,
 }
-
 impl MergeLedgerCandidate {
     /// Current supported candidate/entry layout.
     pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V2;
-
     /// Return whether this candidate advertises the current first-release layout.
     #[must_use]
     pub const fn has_current_version(&self) -> bool {
         self.version == Self::VERSION
     }
-
     /// Return the canonical framed Norito body transferred before QC signing.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
         norito::encode_canonical(self)
             .expect("merge candidate must have a canonical Norito encoding")
     }
-
     /// Return the domain-separated hash of [`Self::canonical_bytes`].
     #[must_use]
     pub fn canonical_hash(&self) -> Hash {
         let bytes = self.canonical_bytes();
         Hash::new_from_chunks(&[MERGE_CANDIDATE_BODY_DOMAIN_TAG, bytes.as_slice()])
     }
-
     /// Return whether the candidate fits the shared full-entry transfer cap.
     #[must_use]
     pub fn canonical_size_within_limit(&self) -> bool {
         self.canonical_bytes().len() <= iroha_data_model::merge::MAX_MERGE_LEDGER_ENTRY_BYTES
     }
-
     /// Canonical lane tips derived from [`Self::lane_snapshots`].
     #[must_use]
     pub fn lane_tips(&self) -> Vec<HashOf<BlockHeader>> {
@@ -113,7 +103,6 @@ impl MergeLedgerCandidate {
             .map(|snapshot| snapshot.tip_hash)
             .collect()
     }
-
     /// Canonical merge-hint roots derived from [`Self::lane_snapshots`].
     #[must_use]
     pub fn merge_hint_roots(&self) -> Vec<Hash> {
@@ -122,7 +111,6 @@ impl MergeLedgerCandidate {
             .map(|snapshot| snapshot.merge_hint_root)
             .collect()
     }
-
     /// Convert this candidate into a full merge-ledger entry with the supplied QC.
     #[must_use]
     pub fn into_entry(self, merge_qc: MergeQuorumCertificate) -> MergeLedgerEntry {
@@ -142,7 +130,6 @@ impl MergeLedgerCandidate {
         }
     }
 }
-
 impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
     fn from(entry: &MergeLedgerEntry) -> Self {
         Self {
@@ -163,28 +150,24 @@ impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
         }
     }
 }
-
 /// Return the canonical framed Norito bytes used by hash-addressed merge-entry
 /// sidecars and compact globally ordered references.
 #[must_use]
 pub fn canonical_merge_ledger_entry_bytes(entry: &MergeLedgerEntry) -> Vec<u8> {
     entry.canonical_bytes()
 }
-
 /// Compute the domain-separated digest of a complete merge-ledger entry,
 /// including its merge QC and execution batch.
 #[must_use]
 pub fn merge_ledger_entry_hash(entry: &MergeLedgerEntry) -> HashOf<MergeLedgerEntry> {
     entry.canonical_hash()
 }
-
 /// Return the exact canonical framed byte length committed by a compact
 /// merge-entry reference.
 #[must_use]
 pub fn merge_ledger_entry_encoded_len(entry: &MergeLedgerEntry) -> u64 {
     entry.canonical_encoded_len()
 }
-
 /// Verify the hash and exact byte length of a caller-resolved merge sidecar.
 #[must_use]
 pub fn merge_ledger_entry_reference_matches(
@@ -194,7 +177,6 @@ pub fn merge_ledger_entry_reference_matches(
 ) -> bool {
     entry.canonical_encoded_len() == expected_encoded_len && entry.canonical_hash() == expected_hash
 }
-
 #[derive(Encode)]
 struct MergeLedgerSignPayload {
     version: u8,
@@ -215,7 +197,6 @@ struct MergeLedgerSignPayload {
     queue_plan_admissions: Vec<Vec<u8>>,
     global_state_root: Hash,
 }
-
 /// Compute the deterministic message digest for merge-committee signatures.
 #[must_use]
 pub fn merge_qc_message_digest(
@@ -249,14 +230,12 @@ pub fn merge_qc_message_digest(
     preimage.extend_from_slice(&payload_bytes);
     Hash::new(preimage)
 }
-
 /// Compute the canonical activation root for an already canonical incarnation list.
 #[must_use]
 pub fn merge_activation_root(active_lanes: &[MergeLaneBinding]) -> Hash {
     let encoded = active_lanes.to_vec().encode();
     Hash::new_from_chunks(&[MERGE_ACTIVATION_ROOT_DOMAIN_TAG, encoded.as_slice()])
 }
-
 #[derive(Encode)]
 struct MergeLaneConfigConsensusProjection {
     version: u16,
@@ -270,7 +249,6 @@ struct MergeLaneConfigConsensusProjection {
     proof_scheme: DaProofScheme,
     metadata: BTreeMap<String, String>,
 }
-
 impl MergeLaneConfigConsensusProjection {
     fn from_lane(lane: &LaneConfig) -> Self {
         // Keep this destructuring exhaustive so adding a field to `LaneConfig`
@@ -288,7 +266,6 @@ impl MergeLaneConfigConsensusProjection {
             proof_scheme,
             metadata,
         } = lane;
-
         Self {
             version: MERGE_LANE_CONFIG_PROJECTION_VERSION,
             id: *id,
@@ -303,7 +280,6 @@ impl MergeLaneConfigConsensusProjection {
         }
     }
 }
-
 /// Compute the canonical consensus configuration hash embedded in an active merge binding.
 ///
 /// Human-facing aliases and descriptions remain committed by the exact catalog
@@ -313,14 +289,12 @@ pub fn merge_lane_config_hash(lane: &LaneConfig) -> Hash {
     let encoded = MergeLaneConfigConsensusProjection::from_lane(lane).encode();
     Hash::new_from_chunks(&[MERGE_LANE_CONFIG_DOMAIN_TAG, encoded.as_slice()])
 }
-
 /// Compute the canonical digest of one lane execution transcript.
 #[must_use]
 pub fn merge_lane_execution_hash(execution: &MergeLaneExecution) -> Hash {
     let encoded = execution.encode();
     Hash::new_from_chunks(&[MERGE_LANE_EXECUTION_DOMAIN_TAG, encoded.as_slice()])
 }
-
 /// Compute the ordered root of all lane execution transcripts in a batch.
 #[must_use]
 pub fn merge_execution_root(executions: &[MergeLaneExecution]) -> Hash {
@@ -331,7 +305,6 @@ pub fn merge_execution_root(executions: &[MergeLaneExecution]) -> Hash {
     let encoded = transcript_hashes.encode();
     Hash::new_from_chunks(&[MERGE_EXECUTION_ROOT_DOMAIN_TAG, encoded.as_slice()])
 }
-
 /// Strip carrier payload roots while retaining every block-context field that
 /// can affect deterministic transaction admission/execution (height, parent,
 /// ledger time, and view). This avoids a hash cycle with the compact merge
@@ -347,7 +320,6 @@ pub fn merge_application_header_from_carrier(carrier: &BlockHeader) -> BlockHead
         carrier.view_change_index(),
     )
 }
-
 /// Return entrypoint hashes in the exact lane/batch execution order used by
 /// merge-sidecar inclusion proofs.
 #[must_use]
@@ -364,7 +336,6 @@ pub fn merge_execution_entrypoint_hashes(
         })
         .collect()
 }
-
 /// Return result hashes in the exact lane/batch execution order used by
 /// merge-sidecar inclusion proofs.
 #[must_use]
@@ -376,7 +347,6 @@ pub fn merge_execution_result_hashes(
         .flat_map(|execution| execution.results.iter().map(|result| result.hash()))
         .collect()
 }
-
 /// Compute the canonical ordered entrypoint Merkle root for a non-empty batch.
 #[must_use]
 pub fn merge_execution_entrypoint_merkle_root(
@@ -387,7 +357,6 @@ pub fn merge_execution_entrypoint_merkle_root(
         .collect::<MerkleTree<TransactionEntrypoint>>()
         .root()
 }
-
 /// Compute the canonical ordered result Merkle root for a non-empty batch.
 #[must_use]
 pub fn merge_execution_result_merkle_root(
@@ -398,14 +367,12 @@ pub fn merge_execution_result_merkle_root(
         .collect::<MerkleTree<TransactionResult>>()
         .root()
 }
-
 #[derive(Encode)]
 struct MergePostStatePreimage {
     base_state_height: u64,
     base_state_hash: HashOf<BlockHeader>,
     write_set_root: Hash,
 }
-
 /// Compute the deterministic post-state identity represented by a batch.
 ///
 /// `base_state_hash` is the canonical committed WSV snapshot hash, not the latest
@@ -430,7 +397,6 @@ pub fn merge_expected_post_state_hash(
         encoded.as_slice(),
     ]))
 }
-
 #[derive(Encode)]
 struct MergeExecutionBatchPreimage {
     version: u8,
@@ -446,7 +412,6 @@ struct MergeExecutionBatchPreimage {
     write_set_root: Hash,
     expected_post_state_hash: HashOf<BlockHeader>,
 }
-
 /// Compute the canonical digest of a complete execution batch.
 #[must_use]
 pub fn merge_execution_batch_hash(batch: &MergeExecutionBatch) -> Hash {
@@ -467,7 +432,6 @@ pub fn merge_execution_batch_hash(batch: &MergeExecutionBatch) -> Hash {
     .encode();
     Hash::new_from_chunks(&[MERGE_EXECUTION_BATCH_DOMAIN_TAG, encoded.as_slice()])
 }
-
 #[derive(Encode)]
 struct MergeExecutionIdentityPreimage {
     version: u8,
@@ -480,7 +444,6 @@ struct MergeExecutionIdentityPreimage {
     execution_root: Hash,
     application_write_set_root: Hash,
 }
-
 /// Compute the stable pre-marker identity of a merge execution batch.
 ///
 /// Replay markers use this identity instead of the final batch hash because the
@@ -503,7 +466,6 @@ pub fn merge_execution_batch_identity_hash(batch: &MergeExecutionBatch) -> Hash 
     .encode();
     Hash::new_from_chunks(&[MERGE_EXECUTION_IDENTITY_DOMAIN_TAG, encoded.as_slice()])
 }
-
 /// Return whether all redundant execution-batch commitments are canonical.
 #[must_use]
 pub fn merge_execution_batch_commitments_match(batch: &MergeExecutionBatch) -> bool {
@@ -530,7 +492,6 @@ pub fn merge_execution_batch_commitments_match(batch: &MergeExecutionBatch) -> b
         ) == batch.expected_post_state_hash
         && merge_execution_batch_hash(batch) == batch.batch_hash
 }
-
 /// Deterministically fold lane merge-hint roots into a single global root.
 ///
 /// The reduction uses the Poseidon2 permutation (rate 2, capacity 1) with the
@@ -554,21 +515,16 @@ pub fn reduce_merge_hint_roots(roots: &[Hash]) -> Hash {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
-
     use iroha_data_model::nexus::{LaneCatalog, LaneLifecycleParameterV1};
-
     use super::*;
-
     fn exact_catalog_hash(lane: LaneConfig) -> Hash {
         let catalog = LaneCatalog::new(NonZeroU32::new(1).expect("one is non-zero"), vec![lane])
             .expect("single default-id lane must form a valid catalog");
         LaneLifecycleParameterV1::catalog_hash(&catalog)
     }
-
     #[test]
     fn merge_lane_config_hash_excludes_display_fields_but_exact_catalog_hash_keeps_them() {
         let base = LaneConfig {
@@ -579,16 +535,13 @@ mod tests {
         renamed.alias = "renamed-primary".to_owned();
         let mut redescribed = base.clone();
         redescribed.description = Some("Updated operator-facing description".to_owned());
-
         let consensus_hash = merge_lane_config_hash(&base);
         assert_eq!(merge_lane_config_hash(&renamed), consensus_hash);
         assert_eq!(merge_lane_config_hash(&redescribed), consensus_hash);
-
         let exact_hash = exact_catalog_hash(base);
         assert_ne!(exact_catalog_hash(renamed), exact_hash);
         assert_ne!(exact_catalog_hash(redescribed), exact_hash);
     }
-
     #[test]
     fn merge_lane_config_hash_commits_every_functional_field_and_all_metadata() {
         let mut base = LaneConfig {
@@ -601,7 +554,6 @@ mod tests {
             .insert("consensus.max_txs".to_owned(), "100".to_owned());
         base.metadata
             .insert("operator.policy".to_owned(), "strict".to_owned());
-
         let mut changed_id = base.clone();
         changed_id.id = LaneId::new(1);
         let mut changed_dataspace = base.clone();
@@ -624,7 +576,6 @@ mod tests {
         changed_metadata_entries
             .metadata
             .insert("consensus.timeout_ms".to_owned(), "500".to_owned());
-
         let baseline_hash = merge_lane_config_hash(&base);
         for (field, changed) in [
             ("id", changed_id),
@@ -644,7 +595,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn merge_lane_config_hash_matches_protocol_golden() {
         let mut lane = LaneConfig {
@@ -664,13 +614,11 @@ mod tests {
             .insert("consensus.max_txs".to_owned(), "100".to_owned());
         lane.metadata
             .insert("operator.policy".to_owned(), "strict".to_owned());
-
         assert_eq!(
             merge_lane_config_hash(&lane).to_string(),
             "3cfede3ff6488a005392fe462b04975fdc81214ab52ae2bd90203c5271130027"
         );
     }
-
     #[test]
     fn typed_merge_proof_roots_bind_order_and_duplicate_leaves() {
         let first = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(b"first"));
@@ -690,25 +638,21 @@ mod tests {
             .collect::<MerkleTree<TransactionEntrypoint>>()
             .root()
             .expect("non-empty root");
-
         assert_ne!(ordered, reordered);
         assert_ne!(ordered, duplicated);
     }
-
     #[test]
     fn reduces_empty_sequence_to_domain_digest() {
         let reduced = reduce_merge_hint_roots(&[]);
         let expected = Hash::prehashed(poseidon::hash_bytes(MERGE_REDUCE_DOMAIN_TAG));
         assert_eq!(reduced, expected);
     }
-
     #[test]
     fn single_lane_is_identity() {
         let lane_root = Hash::prehashed([0xAA; Hash::LENGTH]);
         let reduced = reduce_merge_hint_roots(&[lane_root]);
         assert_eq!(reduced, lane_root);
     }
-
     #[test]
     fn multi_lane_matches_golden() {
         let lanes = [
@@ -728,7 +672,6 @@ mod tests {
         let expected = Hash::prehashed(acc);
         assert_eq!(reduced, expected);
     }
-
     #[test]
     fn merge_qc_message_digest_is_deterministic() {
         use iroha_crypto::{Algorithm, KeyPair};
@@ -736,7 +679,6 @@ mod tests {
             consensus::VALIDATOR_SET_HASH_VERSION_V1,
             merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
         };
-
         let lane_id = iroha_data_model::nexus::LaneId::new(1);
         let lane_incarnation = Hash::new(b"merge-test-lane-incarnation");
         let dataspace_id = iroha_data_model::nexus::DataSpaceId::new(7);
@@ -838,7 +780,6 @@ mod tests {
             merge_qc_message_digest(&network_id, &other_version, 1, validator_set_hash),
             "the entry layout version must be bound into the merge QC signature payload"
         );
-
         let mut with_queue_plan_admission = candidate.clone();
         with_queue_plan_admission.queue_plan_admissions = vec![
             norito::to_bytes(&Hash::new(b"queue-plan-admission"))
@@ -854,7 +795,6 @@ mod tests {
             ),
             "exact queue-plan admission bytes must be bound into the merge QC signature payload"
         );
-
         let drain_keypair = KeyPair::try_from_seed(
             b"merge-digest-drain-validator".to_vec(),
             Algorithm::BlsNormal,

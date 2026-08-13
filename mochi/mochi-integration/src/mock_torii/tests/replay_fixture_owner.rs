@@ -4,11 +4,8 @@ use std::{
     io::Write as _,
     path::{Path, PathBuf},
 };
-
 use super::*;
-
 const STAGE_ENV: &str = "IROHA_MOCHI_REPLAY_FIXTURE_STAGE";
-
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -16,7 +13,6 @@ fn repository_root() -> PathBuf {
         .expect("mochi-integration is nested below the repository root")
         .to_path_buf()
 }
-
 fn fixture_output_root() -> (PathBuf, bool) {
     let checked = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -36,7 +32,6 @@ fn fixture_output_root() -> (PathBuf, bool) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         assert_eq!(
             metadata.permissions().mode() & 0o777,
             0o700,
@@ -59,7 +54,6 @@ fn fixture_output_root() -> (PathBuf, bool) {
     );
     (stage, true)
 }
-
 fn publish_or_check(fixtures: &[(&str, Vec<u8>)]) {
     let (root, write) = fixture_output_root();
     for (name, expected) in fixtures {
@@ -70,7 +64,6 @@ fn publish_or_check(fixtures: &[(&str, Vec<u8>)]) {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt as _;
-
                 options.mode(0o600);
             }
             let mut output = options.open(&path).unwrap_or_else(|error| {
@@ -124,13 +117,11 @@ fn publish_or_check(fixtures: &[(&str, Vec<u8>)]) {
             .expect("sync Mochi replay fixture stage");
     }
 }
-
 fn json_fixture<T: json::JsonSerialize + ?Sized>(value: &T, error: &'static str) -> Vec<u8> {
     let mut bytes = json::to_vec_pretty(value).expect(error);
     bytes.push(b'\n');
     bytes
 }
-
 fn fixture_bytes(data: &MockToriiData) -> [(&'static str, Vec<u8>); 6] {
     [
         (
@@ -156,7 +147,6 @@ fn fixture_bytes(data: &MockToriiData) -> [(&'static str, Vec<u8>); 6] {
         ("query.bin", data.query_response.clone()),
     ]
 }
-
 #[test]
 #[ignore = "registered fixture owner; checks in place unless an external stage is supplied"]
 fn torii_replay_fixture_owner() {

@@ -1,6 +1,5 @@
 use super::*;
 use crate::content::{ContentBundleId, ContentBundleManifest};
-
 isi! {
     /// Publish a content bundle (hashed tar archive) into the on-chain content lane.
     pub struct PublishContentBundle {
@@ -17,9 +16,7 @@ isi! {
         pub manifest: Option<ContentBundleManifest>,
     }
 }
-
 impl crate::seal::Instruction for PublishContentBundle {}
-
 isi! {
     /// Retire a previously published content bundle as its original creator.
     pub struct RetireContentBundle {
@@ -27,5 +24,4 @@ isi! {
         pub bundle_id: ContentBundleId,
     }
 }
-
 impl crate::seal::Instruction for RetireContentBundle {}

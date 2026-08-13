@@ -1,8 +1,6 @@
 //! Trust-gossip capability gating integration tests.
 #![allow(unexpected_cfgs)]
-
 use std::{collections::HashSet, num::NonZeroUsize};
-
 use iroha_config::parameters::{
     actual::{
         LaneProfile, Network as Config, RelayMode, SoranetHandshake as ActualSoranetHandshake,
@@ -29,15 +27,12 @@ use iroha_p2p::{
 use iroha_primitives::addr::{SocketAddr, socket_addr};
 use norito::codec::{Decode, Encode};
 use tokio::{sync::mpsc, time::Duration};
-
 use super::next_port;
-
 #[derive(Clone, Debug, Decode, Encode)]
 enum TrustTestMessage {
     Trust(u32),
     Peer(u32),
 }
-
 impl ClassifyTopic for TrustTestMessage {
     fn topic(&self) -> Topic {
         match self {
@@ -46,13 +41,11 @@ impl ClassifyTopic for TrustTestMessage {
         }
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for TrustTestMessage {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
     // Admission puzzles are covered by `p2p_puzzle`; keeping them out of this
@@ -200,7 +193,6 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         quic_max_idle_timeout: None,
     }
 }
-
 async fn wait_for_peer(net: &NetworkHandle<TrustTestMessage>) {
     let mut handle = net.clone();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -218,7 +210,6 @@ async fn wait_for_peer(net: &NetworkHandle<TrustTestMessage>) {
     .await
     .expect("peer should connect");
 }
-
 async fn observe_peer_and_trust(
     rx: &mut mpsc::Receiver<PeerMessage<TrustTestMessage>>,
     expected_peer: u32,
@@ -226,7 +217,6 @@ async fn observe_peer_and_trust(
 ) -> (bool, bool) {
     let mut saw_peer = false;
     let mut saw_trust = false;
-
     let peer_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < peer_deadline && !saw_peer {
         let remaining = peer_deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -239,7 +229,6 @@ async fn observe_peer_and_trust(
             Ok(None) | Err(_) => break,
         }
     }
-
     // Give the network a brief window to deliver any (unexpected) trust-gossip frames after the
     // peer-gossip message arrives.
     let trust_deadline = tokio::time::Instant::now() + Duration::from_millis(500);
@@ -256,10 +245,8 @@ async fn observe_peer_and_trust(
             Ok(None) | Err(_) => break,
         }
     }
-
     (saw_peer, saw_trust)
 }
-
 fn connect_topology(
     net_a: &NetworkHandle<TrustTestMessage>,
     net_b: &NetworkHandle<TrustTestMessage>,
@@ -277,7 +264,6 @@ fn connect_topology(
     )]));
     net_b.update_topology(UpdateTopology([peer_a.id().clone()].into_iter().collect()));
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
@@ -287,7 +273,6 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
     let kp_a = super::random_node_key_pair();
     let kp_b = super::random_node_key_pair();
-
     let (net_a, _) = match NetworkHandle::start(
         super::p2p_identity_keys(kp_a.clone()),
         make_config(&addr_a, TRUST_GOSSIP),
@@ -320,7 +305,6 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
             return;
         }
     };
-
     let (mut rx_a, mut rx_b) = {
         let (tx_a, rx_a) = mpsc::channel(4);
         let (tx_b, rx_b) = mpsc::channel(4);
@@ -332,14 +316,12 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
             .expect("subscribe net_b");
         (rx_a, rx_b)
     };
-
     let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
     let peer_b = Peer::new(addr_b.clone(), kp_b.public_key().clone());
     connect_topology(&net_a, &net_b, &peer_a, &peer_b);
     wait_for_peer(&net_a).await;
     wait_for_peer(&net_b).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
-
     net_a.post(Post {
         data: TrustTestMessage::Trust(1),
         peer_id: peer_b.id().clone(),
@@ -360,17 +342,13 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
         peer_id: peer_a.id().clone(),
         priority: Priority::Low,
     });
-
     let (b_saw_peer, b_saw_trust) = observe_peer_and_trust(&mut rx_b, 2, 1).await;
-
     assert!(b_saw_peer, "peer gossip should still be delivered");
     assert!(
         !b_saw_trust,
         "trust gossip should be dropped when the capability is disabled"
     );
-
     let (a_saw_peer, a_saw_trust) = observe_peer_and_trust(&mut rx_a, 4, 3).await;
-
     assert!(
         a_saw_peer,
         "peer gossip should still flow from a trust-gossip-disabled peer"
@@ -380,7 +358,6 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
         "peer with trust_gossip disabled must not emit trust frames"
     );
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn trust_gossip_enabled_reaches_both_peers() {
     test_logger();
@@ -389,7 +366,6 @@ async fn trust_gossip_enabled_reaches_both_peers() {
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
     let kp_a = super::random_node_key_pair();
     let kp_b = super::random_node_key_pair();
-
     let (net_a, _) = match NetworkHandle::start(
         super::p2p_identity_keys(kp_a.clone()),
         make_config(&addr_a, TRUST_GOSSIP),
@@ -422,7 +398,6 @@ async fn trust_gossip_enabled_reaches_both_peers() {
             return;
         }
     };
-
     let (mut rx_a, mut rx_b) = {
         let (tx_a, rx_a) = mpsc::channel(4);
         let (tx_b, rx_b) = mpsc::channel(4);
@@ -434,14 +409,12 @@ async fn trust_gossip_enabled_reaches_both_peers() {
             .expect("subscribe net_b");
         (rx_a, rx_b)
     };
-
     let peer_a = Peer::new(addr_a.clone(), kp_a.public_key().clone());
     let peer_b = Peer::new(addr_b.clone(), kp_b.public_key().clone());
     connect_topology(&net_a, &net_b, &peer_a, &peer_b);
     wait_for_peer(&net_a).await;
     wait_for_peer(&net_b).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
-
     net_a.post(Post {
         data: TrustTestMessage::Trust(10),
         peer_id: peer_b.id().clone(),
@@ -452,7 +425,6 @@ async fn trust_gossip_enabled_reaches_both_peers() {
         peer_id: peer_a.id().clone(),
         priority: Priority::Low,
     });
-
     let recv_a = tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(PeerMessage { payload, .. }) = rx_a.recv().await {
             if matches!(payload, TrustTestMessage::Trust(11)) {
@@ -473,7 +445,6 @@ async fn trust_gossip_enabled_reaches_both_peers() {
     })
     .await
     .unwrap_or(false);
-
     assert!(recv_a, "trust gossip should reach trust-enabled peer A");
     assert!(recv_b, "trust gossip should reach trust-enabled peer B");
 }

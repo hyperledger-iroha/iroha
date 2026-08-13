@@ -4,7 +4,6 @@
 //! provide a simple, feature-complete transport layer used by the client. The
 //! module does not yet expose configuration hooks for alternative backends.
 use std::{net::TcpStream, sync::OnceLock, thread};
-
 use eyre::{Error, Result, WrapErr, eyre};
 use http::header::{HeaderName, HeaderValue};
 use reqwest::blocking::Client as BlockingClient;
@@ -12,23 +11,17 @@ pub use tungstenite::handshake::client::Response as WebSocketResponse;
 pub use tungstenite::{Error as WebSocketError, Message as WebSocketMessage};
 use tungstenite::{WebSocket, client::IntoClientRequest, stream::MaybeTlsStream};
 use url::Url;
-
 use crate::http::{Method, RequestBuilder, Response};
-
 type Bytes = Vec<u8>;
-
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const RESPONSE_INITIAL_ALLOCATION_BYTES: usize = 16 * 1024;
 const RESPONSE_READ_BUFFER_BYTES: usize = 16 * 1024;
-
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
-
 fn header_name_from_str(str: &str) -> Result<HeaderName> {
     str.parse::<HeaderName>()
         .wrap_err_with(|| format!("Failed to parse header name {str}"))
 }
-
 #[derive(Debug)]
 struct PendingRequest {
     method: Method,
@@ -38,7 +31,6 @@ struct PendingRequest {
     timeout: Option<std::time::Duration>,
     max_response_bytes: usize,
 }
-
 #[derive(Debug)]
 struct PreparedRequest {
     method: Method,
@@ -48,13 +40,11 @@ struct PreparedRequest {
     timeout: Option<std::time::Duration>,
     max_response_bytes: usize,
 }
-
 /// Default request builder implemented on top of `reqwest`.
 #[derive(Debug)]
 pub struct DefaultRequestBuilder {
     inner: Result<PendingRequest>,
 }
-
 impl DefaultRequestBuilder {
     /// Apply `.and_then()` semantics to the inner `Result` with underlying request state.
     fn and_then<F>(self, fun: F) -> Self
@@ -65,7 +55,6 @@ impl DefaultRequestBuilder {
             inner: self.inner.and_then(fun),
         }
     }
-
     /// Build request by consuming self.
     pub fn build(self) -> Result<DefaultRequest> {
         self.inner.map(|pending| DefaultRequest {
@@ -79,7 +68,6 @@ impl DefaultRequestBuilder {
             },
         })
     }
-
     /// Apply per-request timeout (overrides the client default when set).
     #[must_use]
     pub fn timeout(self, timeout: std::time::Duration) -> Self {
@@ -88,7 +76,6 @@ impl DefaultRequestBuilder {
             Ok(pending)
         })
     }
-
     /// Bound the decoded HTTP response body retained in memory.
     ///
     /// The limit applies even when a peer omits or lies about `Content-Length` and after any
@@ -104,13 +91,11 @@ impl DefaultRequestBuilder {
         })
     }
 }
-
 /// Request built by [`DefaultRequestBuilder`].
 #[derive(Debug)]
 pub struct DefaultRequest {
     prepared: PreparedRequest,
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct RequestSnapshot {
@@ -121,25 +106,20 @@ pub struct RequestSnapshot {
     pub timeout: Option<std::time::Duration>,
     pub max_response_bytes: usize,
 }
-
 #[cfg(test)]
 type SendHook = Arc<dyn Fn(RequestSnapshot) -> Result<Response<Bytes>> + Send + Sync + 'static>;
-
 #[cfg(test)]
 fn send_hook_slot() -> &'static Mutex<Option<SendHook>> {
     static HOOK: OnceLock<Mutex<Option<SendHook>>> = OnceLock::new();
     HOOK.get_or_init(|| Mutex::new(None))
 }
-
 #[cfg(test)]
 pub fn set_send_hook(hook: Option<SendHook>) {
     *send_hook_slot().lock().expect("set send hook") = hook;
 }
-
 #[cfg(test)]
 pub fn with_send_hook<R>(hook: SendHook, f: impl FnOnce() -> R) -> R {
     use std::panic::{AssertUnwindSafe, catch_unwind};
-
     static HOOK_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
     let guard = HOOK_MUTEX
         .get_or_init(|| Mutex::new(()))
@@ -154,7 +134,6 @@ pub fn with_send_hook<R>(hook: SendHook, f: impl FnOnce() -> R) -> R {
         Err(panic) => std::panic::resume_unwind(panic),
     }
 }
-
 #[cfg(test)]
 fn try_send_with_hook(request: &DefaultRequest) -> Option<Result<Response<Bytes>>> {
     let hook_opt = send_hook_slot()
@@ -164,7 +143,6 @@ fn try_send_with_hook(request: &DefaultRequest) -> Option<Result<Response<Bytes>
         .cloned();
     hook_opt.map(|hook| hook(request.snapshot()))
 }
-
 #[cfg(test)]
 impl DefaultRequest {
     fn snapshot(&self) -> RequestSnapshot {
@@ -191,14 +169,12 @@ impl DefaultRequest {
         }
     }
 }
-
 impl DefaultRequest {
     #[cfg(test)]
     #[must_use]
     pub fn uri(&self) -> &Url {
         &self.prepared.url
     }
-
     /// Sends itself and returns byte response
     ///
     /// # Errors
@@ -208,7 +184,6 @@ impl DefaultRequest {
         if let Some(result) = try_send_with_hook(&self) {
             return result;
         }
-
         // If we are running inside a Tokio runtime, offload the blocking reqwest call to
         // a dedicated thread to avoid nested-runtime drops in a non-blocking context.
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -221,10 +196,8 @@ impl DefaultRequest {
                     ))
                 });
         }
-
         self.into_response()
     }
-
     fn into_response(self) -> Result<Response<Bytes>> {
         let PreparedRequest {
             method,
@@ -234,7 +207,6 @@ impl DefaultRequest {
             timeout,
             max_response_bytes,
         } = self.prepared;
-
         let client = http_client();
         let mut builder = client.request(method.clone(), url.clone());
         for (name, value) in &headers {
@@ -249,7 +221,6 @@ impl DefaultRequest {
         let response = builder
             .send()
             .wrap_err_with(|| format!("Failed to send http {method} request to {url}"))?;
-
         ClientResponse {
             response,
             max_response_bytes,
@@ -257,7 +228,6 @@ impl DefaultRequest {
         .try_into()
     }
 }
-
 impl RequestBuilder for DefaultRequestBuilder {
     fn new(method: Method, url: Url) -> Self {
         Self {
@@ -271,7 +241,6 @@ impl RequestBuilder for DefaultRequestBuilder {
             }),
         }
     }
-
     fn header<K: AsRef<str>, V: ToString + ?Sized>(self, key: K, value: &V) -> Self {
         self.and_then(|mut pending| {
             let name = header_name_from_str(key.as_ref())?;
@@ -281,7 +250,6 @@ impl RequestBuilder for DefaultRequestBuilder {
             Ok(pending)
         })
     }
-
     fn param<K: AsRef<str>, V: ToString + ?Sized>(self, key: K, value: &V) -> Self {
         self.and_then(|mut pending| {
             {
@@ -291,7 +259,6 @@ impl RequestBuilder for DefaultRequestBuilder {
             Ok(pending)
         })
     }
-
     fn body(self, data: Vec<u8>) -> Self {
         self.and_then(|mut pending| {
             pending.body = Some(data);
@@ -299,10 +266,8 @@ impl RequestBuilder for DefaultRequestBuilder {
         })
     }
 }
-
 /// Request builder built on top of [`http::request::Builder`]. Used for `WebSocket` connections.
 pub struct DefaultWebSocketRequestBuilder(Result<http::request::Builder>);
-
 impl DefaultWebSocketRequestBuilder {
     /// Same as [`DefaultRequestBuilder::and_then`].
     fn and_then<F>(self, func: F) -> Self
@@ -311,7 +276,6 @@ impl DefaultWebSocketRequestBuilder {
     {
         Self(self.0.and_then(func))
     }
-
     /// Consumes itself to build request.
     pub fn build(self) -> Result<DefaultWebSocketStreamRequest> {
         let builder = self.0?;
@@ -328,28 +292,23 @@ impl DefaultWebSocketRequestBuilder {
         Ok(DefaultWebSocketStreamRequest(request))
     }
 }
-
 /// `WebSocket` request built by [`DefaultWebSocketRequestBuilder`]
 pub struct DefaultWebSocketStreamRequest(http::Request<()>);
-
 impl DefaultWebSocketStreamRequest {
     /// Open [`WebSocketStream`] synchronously.
     pub fn connect(self) -> Result<WebSocketStream> {
         let (stream, _) = self.connect_with_response()?;
         Ok(stream)
     }
-
     /// Open [`WebSocketStream`] synchronously and retain the HTTP upgrade response.
     pub fn connect_with_response(self) -> Result<(WebSocketStream, WebSocketResponse)> {
         Ok(tungstenite::connect(self.0)?)
     }
-
     /// Open [`AsyncWebSocketStream`].
     pub async fn connect_async(self) -> Result<AsyncWebSocketStream> {
         let (stream, _) = self.connect_async_with_response().await?;
         Ok(stream)
     }
-
     /// Open [`AsyncWebSocketStream`] and retain the HTTP upgrade response.
     pub async fn connect_async_with_response(
         self,
@@ -357,22 +316,18 @@ impl DefaultWebSocketStreamRequest {
         Ok(tokio_tungstenite::connect_async(self.0).await?)
     }
 }
-
 impl RequestBuilder for DefaultWebSocketRequestBuilder {
     fn new(method: Method, url: Url) -> Self {
         Self(Ok(http::Request::builder()
             .method(method)
             .uri(url.as_ref())))
     }
-
     fn param<K, V: ?Sized>(self, _key: K, _val: &V) -> Self {
         Self(self.0.and(Err(eyre!("No params expected"))))
     }
-
     fn header<N: AsRef<str>, V: ToString + ?Sized>(self, name: N, value: &V) -> Self {
         self.and_then(|b| Ok(b.header(header_name_from_str(name.as_ref())?, value.to_string())))
     }
-
     fn body(self, data: Vec<u8>) -> Self {
         self.and_then(|b| {
             if data.is_empty() {
@@ -383,16 +338,13 @@ impl RequestBuilder for DefaultWebSocketRequestBuilder {
         })
     }
 }
-
 pub type WebSocketStream = WebSocket<MaybeTlsStream<TcpStream>>;
 pub type AsyncWebSocketStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
 fn http_client() -> &'static BlockingClient {
     static CLIENT: OnceLock<BlockingClient> = OnceLock::new();
     CLIENT.get_or_init(build_http_client)
 }
-
 fn build_http_client() -> BlockingClient {
     BlockingClient::builder()
         // This transport carries one-shot signed requests. Following a redirect
@@ -404,12 +356,10 @@ fn build_http_client() -> BlockingClient {
         .build()
         .expect("Failed to build blocking HTTP client")
 }
-
 struct ClientResponse {
     response: reqwest::blocking::Response,
     max_response_bytes: usize,
 }
-
 fn read_bounded_response_body(
     reader: &mut impl std::io::Read,
     advertised_length: Option<u64>,
@@ -418,19 +368,16 @@ fn read_bounded_response_body(
     if max_response_bytes == 0 {
         return Err(eyre!("HTTP response byte limit must be positive"));
     }
-
     let max_response_bytes_u64 = u64::try_from(max_response_bytes).unwrap_or(u64::MAX);
     if let Some(length) = advertised_length.filter(|length| *length > max_response_bytes_u64) {
         return Err(eyre!(
             "HTTP response Content-Length {length} exceeds the {max_response_bytes}-byte limit"
         ));
     }
-
     let initial_capacity = response_initial_capacity(advertised_length, max_response_bytes);
     let mut body = Vec::new();
     reserve_response_body_capacity(&mut body, initial_capacity, max_response_bytes)?;
     let mut buffer = [0_u8; RESPONSE_READ_BUFFER_BYTES];
-
     loop {
         let remaining = max_response_bytes - body.len();
         let read_capacity = remaining.min(buffer.len());
@@ -443,7 +390,6 @@ fn read_bounded_response_body(
                 "HTTP response body exceeds the {max_response_bytes}-byte limit"
             ));
         }
-
         let read = read_response_body_chunk(reader, &mut buffer[..read_capacity])?;
         if read == 0 {
             break;
@@ -457,7 +403,6 @@ fn read_bounded_response_body(
     }
     Ok(body)
 }
-
 fn response_initial_capacity(advertised_length: Option<u64>, max_response_bytes: usize) -> usize {
     advertised_length
         .and_then(|length| usize::try_from(length).ok())
@@ -465,7 +410,6 @@ fn response_initial_capacity(advertised_length: Option<u64>, max_response_bytes:
         .min(RESPONSE_INITIAL_ALLOCATION_BYTES)
         .min(max_response_bytes)
 }
-
 fn read_response_body_chunk(reader: &mut impl std::io::Read, buffer: &mut [u8]) -> Result<usize> {
     loop {
         match reader.read(buffer) {
@@ -481,7 +425,6 @@ fn read_response_body_chunk(reader: &mut impl std::io::Read, buffer: &mut [u8]) 
         }
     }
 }
-
 fn reserve_response_body_capacity(
     body: &mut Vec<u8>,
     required_len: usize,
@@ -495,7 +438,6 @@ fn reserve_response_body_capacity(
     if required_len <= body.capacity() {
         return Ok(());
     }
-
     let target_capacity = body
         .capacity()
         .saturating_mul(2)
@@ -507,10 +449,8 @@ fn reserve_response_body_capacity(
     body.try_reserve_exact(additional)
         .wrap_err_with(|| format!("Failed to reserve {target_capacity} HTTP response body bytes"))
 }
-
 impl TryFrom<ClientResponse> for Response<Bytes> {
     type Error = Error;
-
     fn try_from(response: ClientResponse) -> Result<Self> {
         let ClientResponse {
             mut response,
@@ -525,7 +465,6 @@ impl TryFrom<ClientResponse> for Response<Bytes> {
             .collect();
         let body =
             read_bounded_response_body(&mut response, advertised_length, max_response_bytes)?;
-
         let mut builder = Response::builder().status(status);
         let headers_map = builder
             .headers_mut()
@@ -538,7 +477,6 @@ impl TryFrom<ClientResponse> for Response<Bytes> {
             .wrap_err("Failed to construct response bytes body")
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -547,9 +485,7 @@ mod tests {
         sync::Arc,
         time::{Duration, Instant},
     };
-
     use super::*;
-
     #[test]
     fn owned_http_client_does_not_follow_signed_body_redirects() {
         for (status_code, reason) in [
@@ -563,7 +499,6 @@ mod tests {
             target_listener
                 .set_nonblocking(true)
                 .expect("nonblocking target listener");
-
             let redirect_server = thread::spawn(move || {
                 let (mut stream, _) = redirect_listener.accept().expect("redirect request");
                 let mut request = [0_u8; 1024];
@@ -575,7 +510,6 @@ mod tests {
                 )
                 .expect("write redirect response");
             });
-
             let target_server = thread::spawn(move || {
                 let deadline = Instant::now() + Duration::from_millis(750);
                 loop {
@@ -602,25 +536,21 @@ mod tests {
                     }
                 }
             });
-
             let response = build_http_client()
                 .post(format!("http://{redirect_addr}/query"))
                 .body(vec![0x01, 0x02, 0x03])
                 .send()
                 .expect("redirect response");
-
             redirect_server.join().expect("redirect server");
             let followed = target_server.join().expect("target server");
             assert_eq!(response.status().as_u16(), status_code);
             assert!(!followed, "one-shot signed body must not be redirected");
         }
     }
-
     #[test]
     fn owned_http_client_does_not_retry_signed_body_after_server_response() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("test listener");
         let address = listener.local_addr().expect("test address");
-
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("first request");
             let mut request = [0_u8; 1024];
@@ -632,7 +562,6 @@ mod tests {
                 )
                 .expect("write first response");
             drop(stream);
-
             listener
                 .set_nonblocking(true)
                 .expect("nonblocking retry listener");
@@ -650,20 +579,17 @@ mod tests {
                 }
             }
         });
-
         let response = build_http_client()
             .post(format!("http://{address}/transaction"))
             .body(vec![0x01, 0x02, 0x03])
             .send()
             .expect("server response");
-
         assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
         assert!(
             !server.join().expect("test server"),
             "signed body was retried"
         );
     }
-
     #[test]
     fn send_is_safe_inside_tokio_runtime_multi_thread() {
         let request = DefaultRequestBuilder::new(
@@ -672,7 +598,6 @@ mod tests {
         )
         .build()
         .expect("build request");
-
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         let result = with_send_hook(
             Arc::new(|snapshot| {
@@ -687,7 +612,6 @@ mod tests {
         );
         assert!(result.is_ok());
     }
-
     #[test]
     fn send_is_safe_inside_current_thread_runtime() {
         let request = DefaultRequestBuilder::new(
@@ -696,7 +620,6 @@ mod tests {
         )
         .build()
         .expect("build request");
-
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -714,7 +637,6 @@ mod tests {
         );
         assert!(result.is_ok());
     }
-
     #[test]
     fn builder_timeout_is_forwarded() {
         let timeout = std::time::Duration::from_secs(2);
@@ -725,7 +647,6 @@ mod tests {
         .timeout(timeout)
         .build()
         .expect("build request");
-
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         let result = with_send_hook(
             Arc::new(move |snapshot| {
@@ -739,7 +660,6 @@ mod tests {
         );
         assert!(result.is_ok());
     }
-
     #[test]
     fn builder_response_limit_is_forwarded() {
         let request = DefaultRequestBuilder::new(
@@ -749,7 +669,6 @@ mod tests {
         .max_response_bytes(4096)
         .build()
         .expect("build request");
-
         let result = with_send_hook(
             Arc::new(|snapshot| {
                 assert_eq!(snapshot.max_response_bytes, 4096);
@@ -762,7 +681,6 @@ mod tests {
         );
         assert!(result.is_ok());
     }
-
     #[test]
     fn request_snapshot_preserves_utf8_header_bytes_used_by_account_ids() {
         let account = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -773,14 +691,12 @@ mod tests {
         .header("x-iroha-account", &account)
         .build()
         .expect("build request");
-
         let snapshot = request.snapshot();
         assert_eq!(
             snapshot.headers,
             vec![("x-iroha-account".to_owned(), account.to_owned())]
         );
     }
-
     #[test]
     fn builder_rejects_zero_response_limit() {
         let error = DefaultRequestBuilder::new(
@@ -790,51 +706,41 @@ mod tests {
         .max_response_bytes(0)
         .build()
         .expect_err("zero response limit must be rejected");
-
         assert!(error.to_string().contains("must be positive"));
     }
-
     #[test]
     fn bounded_response_rejects_zero_limit_without_reading() {
         struct PanicReader;
-
         impl std::io::Read for PanicReader {
             fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
                 panic!("zero response limit must reject before reading")
             }
         }
-
         let error = read_bounded_response_body(&mut PanicReader, None, 0)
             .expect_err("zero response limit must be rejected");
         assert!(error.to_string().contains("must be positive"));
     }
-
     #[test]
     fn bounded_response_rejects_advertised_oversize_without_reading() {
         struct PanicReader;
-
         impl std::io::Read for PanicReader {
             fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
                 panic!("oversized Content-Length must reject before reading")
             }
         }
-
         let error = read_bounded_response_body(&mut PanicReader, Some(9), 8)
             .expect_err("advertised oversized response must reject");
         assert!(error.to_string().contains("Content-Length"));
     }
-
     #[test]
     fn bounded_response_accepts_exact_limit() {
         for advertised_length in [None, Some(0), Some(1), Some(8)] {
             let mut reader = std::io::Cursor::new(b"12345678");
             let body = read_bounded_response_body(&mut reader, advertised_length, 8)
                 .expect("exact-limit response must be accepted");
-
             assert_eq!(body, b"12345678");
         }
     }
-
     #[test]
     fn bounded_response_rejects_missing_understated_or_encoded_content_length() {
         // A small advertised length with a larger decoded reader models transparent
@@ -843,48 +749,40 @@ mod tests {
             let mut reader = std::io::Cursor::new(b"123456789");
             let error = read_bounded_response_body(&mut reader, advertised_length, 8)
                 .expect_err("actual oversized response must reject");
-
             assert!(error.to_string().contains("body exceeds"));
         }
     }
-
     #[test]
     fn bounded_response_does_not_preallocate_from_large_content_length() {
         let advertised_length = u64::from(u32::MAX);
         let max_response_bytes = usize::try_from(advertised_length)
             .expect("supported targets represent a u32 response limit");
-
         assert_eq!(
             response_initial_capacity(Some(advertised_length), max_response_bytes),
             RESPONSE_INITIAL_ALLOCATION_BYTES
         );
         assert_eq!(response_initial_capacity(None, 7), 7);
-
         let mut reader = std::io::Cursor::new(Vec::<u8>::new());
         let body =
             read_bounded_response_body(&mut reader, Some(advertised_length), max_response_bytes)
                 .expect("empty body with an in-range advertised length must be readable");
         assert!(body.is_empty());
     }
-
     #[test]
     fn bounded_response_never_reserves_beyond_limit() {
         let mut body = Vec::with_capacity(16);
         let original_capacity = body.capacity();
         let error = reserve_response_body_capacity(&mut body, 9, 8)
             .expect_err("capacity above the response limit must be rejected");
-
         assert!(error.to_string().contains("body exceeds"));
         assert_eq!(body.capacity(), original_capacity);
     }
-
     #[test]
     fn bounded_response_reads_only_one_sentinel_byte_beyond_limit() {
         #[derive(Default)]
         struct InfiniteReader {
             requested_lengths: Vec<usize>,
         }
-
         impl std::io::Read for InfiniteReader {
             fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
                 self.requested_lengths.push(buffer.len());
@@ -892,51 +790,41 @@ mod tests {
                 Ok(buffer.len())
             }
         }
-
         let mut reader = InfiniteReader::default();
         let error = read_bounded_response_body(&mut reader, None, 8)
             .expect_err("an unbounded reader must be rejected after the sentinel byte");
-
         assert!(error.to_string().contains("body exceeds"));
         assert_eq!(reader.requested_lengths, [8, 1]);
     }
-
     #[test]
     fn bounded_response_rejects_reader_length_contract_violation_without_panicking() {
         struct MisreportingReader;
-
         impl std::io::Read for MisreportingReader {
             fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
                 Ok(buffer.len() + 1)
             }
         }
-
         let error = read_bounded_response_body(&mut MisreportingReader, None, 8)
             .expect_err("a reader cannot report more bytes than its buffer");
         assert!(error.to_string().contains("reader reported"));
     }
-
     #[test]
     fn bounded_response_propagates_reader_failure() {
         struct FailingReader;
-
         impl std::io::Read for FailingReader {
             fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
                 Err(std::io::Error::other("adversarial read failure"))
             }
         }
-
         let error = read_bounded_response_body(&mut FailingReader, None, 8)
             .expect_err("reader failure must reject");
         assert!(error.to_string().contains("Failed to read"));
     }
-
     #[test]
     fn bounded_response_discards_partial_body_on_reader_failure() {
         struct PartialThenFailingReader {
             first_read: bool,
         }
-
         impl std::io::Read for PartialThenFailingReader {
             fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
                 if self.first_read {
@@ -947,7 +835,6 @@ mod tests {
                 Ok(4)
             }
         }
-
         let error = read_bounded_response_body(
             &mut PartialThenFailingReader { first_read: false },
             None,
@@ -956,13 +843,11 @@ mod tests {
         .expect_err("partial body followed by a reader failure must reject");
         assert!(format!("{error:#}").contains("adversarial failure after bytes"));
     }
-
     #[test]
     fn bounded_response_retries_interrupted_reads() {
         struct InterruptedReader {
             state: u8,
         }
-
         impl std::io::Read for InterruptedReader {
             fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
                 match self.state {
@@ -979,7 +864,6 @@ mod tests {
                 }
             }
         }
-
         let body = read_bounded_response_body(&mut InterruptedReader { state: 0 }, None, 8)
             .expect("interrupted reads must be retried");
         assert_eq!(body, b"1234");

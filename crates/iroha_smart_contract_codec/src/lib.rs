@@ -5,11 +5,8 @@
 //! contracts, and utils crates to exchange Norito-encoded payloads without
 //! duplicating pointer-handling logic.
 #![allow(unsafe_code)]
-
 use core::{convert::TryInto, mem, ops::RangeFrom};
-
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
-
 /// Encode the given value with a `usize` length prefix.
 ///
 /// The returned allocation owns the encoded bytes and is suitable for passing
@@ -22,13 +19,11 @@ pub fn encode_with_length_prefix<T: NoritoSerialize>(value: &T) -> Box<[u8]> {
     let total_len = len_size_bytes
         .checked_add(encoded.len())
         .expect("encoded payload length must fit in usize");
-
     let mut bytes = Vec::with_capacity(total_len);
     bytes.extend_from_slice(&total_len.to_le_bytes());
     bytes.extend_from_slice(&encoded);
     bytes.into_boxed_slice()
 }
-
 /// Consume a pointer previously produced by [`encode_with_length_prefix`].
 ///
 /// # Safety
@@ -46,17 +41,14 @@ where
             .try_into()
             .expect("length prefix must match usize width"),
     );
-
     unsafe { decode_from_raw_in_range(ptr, len, len_size_bytes..) }
 }
-
 unsafe fn decode_from_raw_in_range<T>(ptr: *const u8, len: usize, range: RangeFrom<usize>) -> T
 where
     for<'de> T: NoritoDeserialize<'de> + norito::core::DecodeFromSlice<'de>,
 {
     let bytes = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr.cast_mut(), len)) };
     let payload = &bytes[range];
-
     #[allow(clippy::expect_fun_call)]
     decode_from_bytes::<T>(payload).expect(
         format!(
@@ -66,18 +58,15 @@ where
         .as_str(),
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
     #[norito(decode_from_slice)]
     struct Dummy {
         a: u32,
         b: bool,
     }
-
     #[test]
     fn roundtrip_length_prefixed_payload() {
         let value = Dummy { a: 5, b: true };
@@ -87,7 +76,6 @@ mod tests {
             bytes.len(),
             usize::from_le_bytes(bytes[..len_size_bytes].try_into().unwrap())
         );
-
         let ptr = Box::into_raw(bytes) as *const u8;
         let decoded = unsafe { decode_with_length_prefix_from_raw::<Dummy>(ptr) };
         assert_eq!(decoded, value);

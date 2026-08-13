@@ -1,23 +1,18 @@
 //! Module with multihash implementation
-
 use std::{
     format,
     string::{String, ToString as _},
     vec,
     vec::Vec,
 };
-
 use derive_more::Display;
 use zeroize::Zeroizing;
-
 use crate::{Algorithm, ParseError, hex_decode, varint};
-
 pub fn decode_public_key(bytes: &[u8]) -> Result<(Algorithm, Vec<u8>), ParseError> {
     let (digest_function, payload) = decode_multihash(bytes)?;
     let algorithm = digest_function_public::decode(digest_function)?;
     Ok((algorithm, payload))
 }
-
 pub fn encode_public_key(
     algorithm: Algorithm,
     payload: &[u8],
@@ -25,13 +20,11 @@ pub fn encode_public_key(
     let digest_function = digest_function_public::encode(algorithm);
     encode_multihash(digest_function, payload)
 }
-
 pub fn decode_private_key(bytes: &[u8]) -> Result<(Algorithm, Vec<u8>), ParseError> {
     let (digest_function, payload) = decode_multihash(bytes)?;
     let algorithm = digest_function_private::decode(digest_function)?;
     Ok((algorithm, payload))
 }
-
 pub fn encode_private_key(
     algorithm: Algorithm,
     payload: &[u8],
@@ -39,7 +32,6 @@ pub fn encode_private_key(
     let digest_function = digest_function_private::encode(algorithm);
     encode_multihash(digest_function, payload)
 }
-
 /// Format a multihash as a canonical hex string.
 ///
 /// # Errors
@@ -51,20 +43,16 @@ pub fn multihash_to_hex_string(bytes: &[u8]) -> Result<String, ParseError> {
     let (digest_function, payload) = decode_multihash(bytes)?;
     Ok(format_multihash_hex(digest_function, &payload))
 }
-
 fn format_multihash_hex(digest_function: DigestFunction, payload: &[u8]) -> String {
     let df_varint: varint::VarUint = digest_function.into();
     let df_bytes: Vec<u8> = df_varint.into();
     let len_varint: varint::VarUint = (payload.len() as u64).into();
     let len_bytes: Vec<u8> = len_varint.into();
-
     let fn_code = hex::encode(df_bytes);
     let dig_size = hex::encode(len_bytes);
     let key = hex::encode_upper(payload);
-
     format!("{fn_code}{dig_size}{key}")
 }
-
 /// Encode a public key into an algorithm-prefixed multihash hex string, e.g. "ed25519:...".
 #[cfg(not(feature = "ffi_import"))]
 pub fn encode_public_key_prefixed(
@@ -78,7 +66,6 @@ pub fn encode_public_key_prefixed(
         multihash_to_hex_string(&mh).map_err(|err| MultihashConvertError::new(err.to_string()))?
     ))
 }
-
 /// Encode a private key into an algorithm-prefixed multihash hex string, e.g. "ml-dsa:...".
 #[cfg(not(feature = "ffi_import"))]
 pub fn encode_private_key_prefixed(
@@ -93,7 +80,6 @@ pub fn encode_private_key_prefixed(
             .map_err(|err| MultihashConvertError::new(err.to_string()))?
     ))
 }
-
 /// Decode a public key from either a bare multihash hex string or an
 /// algorithm-prefixed form like "ed25519:<multihash-hex>".
 /// Input must be canonical multihash hex (varint bytes lowercase, payload uppercase);
@@ -117,19 +103,16 @@ pub fn decode_public_key_str(s: &str) -> Result<(Algorithm, Vec<u8>), ParseError
         decode_public_key(&bytes)
     }
 }
-
 /// Borrowed, allocation-free canonical public-key multihash components.
 #[cfg(not(feature = "ffi_import"))]
 pub(crate) struct BorrowedPublicKeyHex<'a> {
     pub(crate) algorithm: Algorithm,
     pub(crate) payload_hex: &'a str,
 }
-
 /// Longest canonical public-key literal accepted by the current protocol.
 #[cfg(not(feature = "ffi_import"))]
 pub(crate) const MAX_PUBLIC_KEY_LITERAL_BYTES: usize =
     28 + 1 + 2 * (2 + 2 + crate::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
-
 /// Parse canonical public-key multihash text without allocating payload or diagnostics.
 #[cfg(not(feature = "ffi_import"))]
 pub(crate) fn decode_public_key_str_borrowed(s: &str) -> Option<BorrowedPublicKeyHex<'_>> {
@@ -172,7 +155,6 @@ pub(crate) fn decode_public_key_str_borrowed(s: &str) -> Option<BorrowedPublicKe
         payload_hex,
     })
 }
-
 #[cfg(not(feature = "ffi_import"))]
 fn decode_canonical_header_varint(encoded: &str, cursor: &mut usize) -> Option<u64> {
     let mut value = 0_u64;
@@ -197,7 +179,6 @@ fn decode_canonical_header_varint(encoded: &str, cursor: &mut usize) -> Option<u
     }
     None
 }
-
 #[cfg(not(feature = "ffi_import"))]
 fn decode_hex_pair(pair: &[u8], uppercase: bool) -> Option<u8> {
     if pair.len() != 2 {
@@ -211,19 +192,16 @@ fn decode_hex_pair(pair: &[u8], uppercase: bool) -> Option<u8> {
     };
     Some((nibble(pair[0])? << 4) | nibble(pair[1])?)
 }
-
 /// Decode one canonical uppercase public-key payload byte.
 #[cfg(not(feature = "ffi_import"))]
 pub(crate) fn decode_public_key_payload_byte(pair: &[u8]) -> Option<u8> {
     decode_hex_pair(pair, true)
 }
-
 /// Return the public-key multicodec value without constructing a multihash.
 #[cfg(not(feature = "ffi_import"))]
 pub(crate) fn public_key_digest_function(algorithm: Algorithm) -> u64 {
     digest_function_public::encode(algorithm)
 }
-
 /// Decode a private key from either a bare multihash hex string or an
 /// algorithm-prefixed form like "ml-dsa:<multihash-hex>".
 /// Input must be canonical multihash hex (varint bytes lowercase, payload uppercase);
@@ -247,13 +225,11 @@ pub fn decode_private_key_str(s: &str) -> Result<(Algorithm, Vec<u8>), ParseErro
         decode_private_key(bytes.as_slice())
     }
 }
-
 pub fn private_multihash_to_hex_string(bytes: &[u8]) -> Result<String, ParseError> {
     let (digest_function, payload) = decode_multihash(bytes)?;
     let payload = Zeroizing::new(payload);
     Ok(format_multihash_hex(digest_function, payload.as_slice()))
 }
-
 #[cfg(not(feature = "ffi_import"))]
 fn decode_multihash_hex_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     let bytes = hex_decode(s)?;
@@ -264,7 +240,6 @@ fn decode_multihash_hex_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     }
     Ok(bytes)
 }
-
 #[cfg(not(feature = "ffi_import"))]
 fn decode_private_multihash_hex_bytes(s: &str) -> Result<Zeroizing<Vec<u8>>, ParseError> {
     let bytes = Zeroizing::new(hex_decode(s)?);
@@ -276,16 +251,12 @@ fn decode_private_multihash_hex_bytes(s: &str) -> Result<Zeroizing<Vec<u8>>, Par
     }
     Ok(bytes)
 }
-
 /// Value of byte code corresponding to algorithm.
 /// See [official multihash table](https://github.com/multiformats/multicodec/blob/master/table.csv)
 type DigestFunction = u64;
-
 mod digest_function_public {
     use std::string::String;
-
     use crate::{Algorithm, error::ParseError, multihash::DigestFunction};
-
     const ED_25519: DigestFunction = 0xed;
     const SECP_256_K1: DigestFunction = 0xe7;
     // Provisional multicodec for ML‑DSA (Dilithium3) public keys; align with upstream when assigned.
@@ -308,7 +279,6 @@ mod digest_function_public {
     #[cfg(feature = "sm")]
     // Provisional multicodec assignment; replace once canonical code is allocated.
     const SM2_PUB: DigestFunction = 0x1306;
-
     pub fn decode_option(digest_function: DigestFunction) -> Option<Algorithm> {
         Some(match digest_function {
             ED_25519 => Algorithm::Ed25519,
@@ -333,11 +303,9 @@ mod digest_function_public {
             _ => return None,
         })
     }
-
     pub fn decode(digest_function: DigestFunction) -> Result<Algorithm, ParseError> {
         decode_option(digest_function).ok_or_else(|| ParseError(String::from("No such algorithm")))
     }
-
     pub fn encode(algorithm: Algorithm) -> u64 {
         match algorithm {
             Algorithm::Ed25519 => ED_25519,
@@ -362,12 +330,9 @@ mod digest_function_public {
         }
     }
 }
-
 mod digest_function_private {
     use std::string::String;
-
     use crate::{Algorithm, error::ParseError, multihash::DigestFunction};
-
     const ED_25519: DigestFunction = 0x1300;
     const SECP_256_K1: DigestFunction = 0x1301;
     // Provisional multicodec for ML‑DSA (Dilithium3) private keys; align with upstream when assigned.
@@ -390,7 +355,6 @@ mod digest_function_private {
     #[cfg(feature = "sm")]
     // Provisional multicodec assignment; replace once canonical code is allocated.
     const SM2_PRIV: DigestFunction = 0x1311;
-
     pub fn decode(digest_function: DigestFunction) -> Result<Algorithm, ParseError> {
         let algorithm = match digest_function {
             ED_25519 => Algorithm::Ed25519,
@@ -416,7 +380,6 @@ mod digest_function_private {
         };
         Ok(algorithm)
     }
-
     pub fn encode(algorithm: Algorithm) -> u64 {
         match algorithm {
             Algorithm::Ed25519 => ED_25519,
@@ -441,7 +404,6 @@ mod digest_function_private {
         }
     }
 }
-
 fn decode_multihash(bytes: &[u8]) -> Result<(DigestFunction, Vec<u8>), ParseError> {
     // Parse varint-encoded function code
     let idx_fn_end = bytes
@@ -450,14 +412,11 @@ fn decode_multihash(bytes: &[u8]) -> Result<(DigestFunction, Vec<u8>), ParseErro
         .find(|&(_, &byte)| (byte & 0b1000_0000) == 0)
         .ok_or_else(|| ParseError(String::from("Failed to find end of function code varint")))?
         .0;
-
     let (fn_varint, rest) = bytes.split_at(idx_fn_end + 1);
-
     let digest_function: u64 = varint::VarUint::new(fn_varint)
         .map_err(|err| ParseError(err.to_string()))?
         .try_into()
         .map_err(|err: varint::ConvertError| ParseError(err.to_string()))?;
-
     // Parse varint-encoded digest length
     let idx_len_end = rest
         .iter()
@@ -470,7 +429,6 @@ fn decode_multihash(bytes: &[u8]) -> Result<(DigestFunction, Vec<u8>), ParseErro
         .map_err(|err| ParseError(err.to_string()))?
         .try_into()
         .map_err(|err: varint::ConvertError| ParseError(err.to_string()))?;
-
     if payload.len() as u64 != digest_size {
         return Err(ParseError(String::from(
             "Digest size not equal to actual length",
@@ -478,52 +436,43 @@ fn decode_multihash(bytes: &[u8]) -> Result<(DigestFunction, Vec<u8>), ParseErro
     }
     Ok((digest_function, payload.to_vec()))
 }
-
 #[allow(clippy::unnecessary_wraps)]
 fn encode_multihash(
     digest_function: DigestFunction,
     payload: &[u8],
 ) -> Result<Vec<u8>, MultihashConvertError> {
     let mut out = vec![];
-
     // varint-encode function code
     let df_varint: varint::VarUint = digest_function.into();
     let mut df_bytes: Vec<u8> = df_varint.into();
     out.append(&mut df_bytes);
-
     // varint-encode payload length (supports large keys, e.g., ML‑DSA)
     let len_u64 = payload.len() as u64;
     let len_varint: varint::VarUint = len_u64.into();
     let len_bytes: Vec<u8> = len_varint.into();
     out.extend_from_slice(&len_bytes);
-
     // payload
     out.extend_from_slice(payload);
     Ok(out)
 }
-
 /// Error which occurs when converting to/from `Multihash`
 #[derive(Debug, Clone, Display)]
 pub struct MultihashConvertError {
     reason: String,
 }
-
 impl MultihashConvertError {
     #[allow(dead_code)]
     pub(crate) const fn new(reason: String) -> Self {
         Self { reason }
     }
 }
-
 impl std::error::Error for MultihashConvertError {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hex_decode;
     #[cfg(feature = "sm")]
     use crate::sm::encode_sm2_public_key_payload;
-
     #[test]
     fn test_encode_public_key() {
         let algorithm = Algorithm::Ed25519;
@@ -534,7 +483,6 @@ mod tests {
                 .unwrap();
         assert_eq!(encode_public_key(algorithm, &payload).unwrap(), multihash);
     }
-
     #[cfg(not(feature = "ffi_import"))]
     #[test]
     fn borrowed_public_key_decoder_matches_owned_and_rejects_noncanonical_text() {
@@ -547,7 +495,6 @@ mod tests {
             "1509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         );
         assert_eq!(hex::encode_upper(payload), borrowed.payload_hex);
-
         for invalid in [
             "ED01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
             "ed8120001509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
@@ -557,7 +504,6 @@ mod tests {
             assert!(decode_public_key_str_borrowed(invalid).is_none());
         }
     }
-
     #[cfg(feature = "sm")]
     #[test]
     fn test_encode_sm2_public_key() {
@@ -568,7 +514,6 @@ mod tests {
         let multihash = hex_decode("8626550012414C494345313233405941484F4F2E434F4D040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857").unwrap();
         assert_eq!(encode_public_key(algorithm, &payload).unwrap(), multihash);
     }
-
     #[test]
     fn test_decode_public_key() {
         let algorithm = Algorithm::Ed25519;
@@ -579,7 +524,6 @@ mod tests {
                 .unwrap();
         assert_eq!(decode_public_key(&multihash).unwrap(), (algorithm, payload));
     }
-
     #[test]
     fn multihash_to_hex_string_formats_canonical() {
         let multihash =
@@ -591,13 +535,11 @@ mod tests {
             "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         );
     }
-
     #[test]
     fn multihash_to_hex_string_rejects_truncated_input() {
         assert!(multihash_to_hex_string(&[]).is_err());
         assert!(multihash_to_hex_string(&[0x01]).is_err());
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn decode_public_key_str_rejects_non_canonical_hex() {
@@ -609,7 +551,6 @@ mod tests {
         let prefixed = format!("0x{canonical}");
         assert!(decode_public_key_str(&prefixed).is_err());
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn decode_private_key_str_rejects_non_canonical_hex() {
@@ -617,7 +558,6 @@ mod tests {
         let lower = canonical.to_lowercase();
         assert!(decode_private_key_str(&lower).is_err());
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn private_key_prefixed_string_roundtrip() {
@@ -625,7 +565,6 @@ mod tests {
         let payload =
             hex_decode("8F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F").unwrap();
         let encoded = encode_private_key_prefixed(algorithm, &payload).expect("encode private key");
-
         assert_eq!(
             encoded,
             "ed25519:8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
@@ -635,7 +574,6 @@ mod tests {
             (algorithm, payload)
         );
     }
-
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn decode_public_key_str_rejects_non_canonical_varint() {
@@ -646,7 +584,6 @@ mod tests {
         let input = hex::encode(bytes);
         assert!(decode_public_key_str(&input).is_err());
     }
-
     #[test]
     fn test_encode_private_key() {
         let algorithm = Algorithm::Ed25519;
@@ -657,7 +594,6 @@ mod tests {
                 .unwrap();
         assert_eq!(encode_private_key(algorithm, &payload).unwrap(), multihash);
     }
-
     #[test]
     fn test_decode_private_key() {
         let algorithm = Algorithm::Ed25519;
@@ -671,7 +607,6 @@ mod tests {
             (algorithm, payload)
         );
     }
-
     #[cfg(feature = "gost")]
     #[test]
     fn test_gost_public_key_multihash_roundtrip() {
@@ -682,7 +617,6 @@ mod tests {
             (Algorithm::Gost3410_2012_512ParamSetA, 64),
             (Algorithm::Gost3410_2012_512ParamSetB, 64),
         ];
-
         for (index, (algorithm, len)) in cases.into_iter().enumerate() {
             let mut payload = vec![0u8; len];
             for (offset, byte) in payload.iter_mut().enumerate() {
@@ -695,7 +629,6 @@ mod tests {
             assert_eq!(payload, decoded_payload);
         }
     }
-
     #[cfg(feature = "gost")]
     #[test]
     fn test_gost_private_key_multihash_roundtrip() {
@@ -706,7 +639,6 @@ mod tests {
             (Algorithm::Gost3410_2012_512ParamSetA, 64),
             (Algorithm::Gost3410_2012_512ParamSetB, 64),
         ];
-
         for (index, (algorithm, len)) in cases.into_iter().enumerate() {
             let mut payload = vec![0u8; len];
             for (offset, byte) in payload.iter_mut().enumerate() {
@@ -719,7 +651,6 @@ mod tests {
             assert_eq!(payload, decoded_payload);
         }
     }
-
     #[cfg(feature = "sm")]
     #[test]
     fn test_sm2_public_key_multihash_roundtrip() {

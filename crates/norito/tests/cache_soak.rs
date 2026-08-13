@@ -1,5 +1,4 @@
 //! Soak tests for Norito columnar cache guards and telemetry.
-
 use norito::{
     Error,
     columnar::{
@@ -7,7 +6,6 @@ use norito::{
         view_opt_str_column,
     },
 };
-
 #[test]
 fn cache_metrics_accumulate_over_soak() {
     adaptive_metrics_reset();
@@ -43,7 +41,6 @@ fn cache_metrics_accumulate_over_soak() {
     assert_eq!(snap.cache_rejects, before.cache_rejects);
     assert_eq!(snap.cache_reject_rows_total, before.cache_reject_rows_total);
 }
-
 #[test]
 fn cache_rejects_malicious_presence_stream() {
     adaptive_metrics_reset();

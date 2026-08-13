@@ -33,7 +33,12 @@ def _write_candidates(root: Path) -> None:
                 if relative in release_manifest.COMMON_TARGET_FILES
                 else str(index)
             )
-            path.write_bytes(f"{prefix}:{relative}\n".encode())
+            payload = (
+                f'release_version = "{VERSION}"\n'
+                if relative == "version-map.toml"
+                else f"{prefix}:{relative}\n"
+            )
+            path.write_bytes(payload.encode())
         checksums = []
         for relative in sorted(payload_paths):
             path = candidate / relative
@@ -267,7 +272,9 @@ def test_manifest_rejects_release_wide_file_drift_across_targets(
     target = release_manifest.TARGETS[-1]
     candidate = candidates / f"sorafs-cli-{VERSION}-{target}"
     common_file = candidate / "version-map.toml"
-    common_file.write_bytes(b"substituted target-specific version map\n")
+    common_file.write_bytes(
+        f'release_version = "{VERSION}"\n# substituted target-specific map\n'.encode()
+    )
     common_digest = hashlib.sha256(common_file.read_bytes()).hexdigest()
     checksum_lines = (
         candidate / "SHA256SUMS"
@@ -284,6 +291,48 @@ def test_manifest_rejects_release_wide_file_drift_across_targets(
 
     with pytest.raises(release_manifest.ManifestError, match="differ across"):
         _build(candidates)
+
+
+def test_manifest_rejects_embedded_version_map_mismatch(tmp_path: Path) -> None:
+    candidates = tmp_path / "candidates"
+    candidates.mkdir()
+    _write_candidates(candidates)
+    target = release_manifest.TARGETS[0]
+    candidate = candidates / f"sorafs-cli-{VERSION}-{target}"
+    version_map = candidate / "version-map.toml"
+    version_map.write_text('release_version = "9.9.9"\n', encoding="utf-8")
+    digest = hashlib.sha256(version_map.read_bytes()).hexdigest()
+    checksum = candidate / "SHA256SUMS"
+    checksum.write_text(
+        "".join(
+            f"{digest}  version-map.toml\n"
+            if line.endswith("  version-map.toml\n")
+            else line
+            for line in checksum.read_text(encoding="utf-8").splitlines(keepends=True)
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(release_manifest.ManifestError, match="manifest version"):
+        _build(candidates)
+
+
+@pytest.mark.parametrize("version", ("01.2.3", "1.2", "release-1.2.3"))
+def test_manifest_rejects_noncanonical_semver(
+    tmp_path: Path, version: str
+) -> None:
+    candidates = tmp_path / "candidates"
+    candidates.mkdir()
+    _write_candidates(candidates)
+
+    with pytest.raises(release_manifest.ManifestError, match="canonical SemVer"):
+        release_manifest.build_manifest(
+            candidates,
+            version=version,
+            commit=COMMIT,
+            repository=REPOSITORY,
+            ref=REF,
+        )
 
 
 def test_manifest_candidate_discovery_enforces_depth_limit(

@@ -5,7 +5,6 @@ fn process_client_hello_rejects_resume_hash_mismatch() {
         hex_literal::hex!("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff");
     let resume_b =
         hex_literal::hex!("ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100");
-
     let client_params = RuntimeParams {
         descriptor_commit: defaults.descriptor_commit,
         client_capabilities: defaults.client_capabilities,
@@ -36,12 +35,10 @@ fn process_client_hello_rejects_resume_hash_mismatch() {
         tls_server_name: defaults.tls_server_name,
         resume_hash: None,
     };
-
     let mut rng_client = StdRng::seed_from_u64(7);
     let (client_hello, _client_state) =
         build_client_hello(&client_params, &mut rng_client).expect("client hello");
     let relay_keys = checked_random_keypair();
-
     let mut rng_relay = StdRng::seed_from_u64(8);
     match process_client_hello(
         &client_hello,
@@ -58,7 +55,6 @@ fn process_client_hello_rejects_resume_hash_mismatch() {
         Err(err) => panic!("expected resume mismatch, got {err:?}"),
         Ok(_) => panic!("expected resume mismatch, got Ok"),
     }
-
     let mut rng_relay = StdRng::seed_from_u64(9);
     match process_client_hello(&client_hello, &absent_params, &relay_keys, &mut rng_relay) {
         Err(HarnessError::Validation(message)) => {
@@ -71,7 +67,6 @@ fn process_client_hello_rejects_resume_hash_mismatch() {
         Ok(_) => panic!("expected unexpected resume hash error, got Ok"),
     }
 }
-
 #[test]
 fn simulate_handshake_produces_transcript_hash() {
     let client_caps = DEFAULT_CLIENT_CAPABILITIES.to_vec();
@@ -86,7 +81,6 @@ fn simulate_handshake_produces_transcript_hash() {
         decode_hex("d5f4f2f9c2b1a39e88bbd3c0a4f9e178d93e7bfacaf0c3e872b712f4a341c9de")
             .expect("relay nonce");
     let (client_static_sk, relay_static_sk) = sample_static_keys();
-
     let result = simulate_handshake(&SimulationParams {
         client_capabilities: &client_caps,
         relay_capabilities: &relay_caps,
@@ -100,7 +94,6 @@ fn simulate_handshake_produces_transcript_hash() {
         sig_id: 1,
     })
     .expect("simulate");
-
     let expected = TranscriptInputs {
         descriptor_commit: &descriptor_commit,
         client_nonce: &client_nonce,
@@ -121,7 +114,6 @@ fn simulate_handshake_produces_transcript_hash() {
     assert_eq!(result.handshake_steps[0].note, STEP_NOTE_HYBRID_INIT);
     assert_eq!(result.handshake_steps[1].note, STEP_NOTE_HYBRID_RESPONSE);
 }
-
 #[test]
 fn simulate_handshake_negotiates_nk2_hybrid_suite() {
     let client_caps = capabilities_with_suites(
@@ -142,7 +134,6 @@ fn simulate_handshake_negotiates_nk2_hybrid_suite() {
         decode_hex("2b64a7e5c1d3f4b2a9c8d7e6f5a4132233445566778899aabbccddeeff001122")
             .expect("relay nonce");
     let (client_static_sk, relay_static_sk) = sample_static_keys();
-
     let result = simulate_handshake(&SimulationParams {
         client_capabilities: &client_caps,
         relay_capabilities: &relay_caps,
@@ -156,7 +147,6 @@ fn simulate_handshake_negotiates_nk2_hybrid_suite() {
         sig_id: 1,
     })
     .expect("simulate");
-
     assert_eq!(result.handshake_suite, HandshakeSuite::Nk2Hybrid);
     assert!(result.warnings.is_empty());
     assert_eq!(result.handshake_steps.len(), 2);
@@ -164,7 +154,6 @@ fn simulate_handshake_negotiates_nk2_hybrid_suite() {
     assert_eq!(result.handshake_steps[1].note, STEP_NOTE_HYBRID_RESPONSE);
     assert_eq!(result.telemetry_payloads.len(), 1);
 }
-
 #[test]
 fn simulate_handshake_negotiates_nk3_forward_secure_suite() {
     let client_caps = capabilities_with_suites(
@@ -191,7 +180,6 @@ fn simulate_handshake_negotiates_nk3_forward_secure_suite() {
         decode_hex("445566778899aabbccddeeff00112233445566778899aabbccddeeff10213254")
             .expect("relay nonce");
     let (client_static_sk, relay_static_sk) = sample_static_keys();
-
     let result = simulate_handshake(&SimulationParams {
         client_capabilities: &client_caps,
         relay_capabilities: &relay_caps,
@@ -205,7 +193,6 @@ fn simulate_handshake_negotiates_nk3_forward_secure_suite() {
         sig_id: 1,
     })
     .expect("simulate");
-
     assert_eq!(result.handshake_suite, HandshakeSuite::Nk3PqForwardSecure);
     assert!(result.warnings.is_empty());
     assert_eq!(result.handshake_steps.len(), 2);

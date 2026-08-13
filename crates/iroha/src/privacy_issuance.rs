@@ -3,9 +3,7 @@
 //! This deliberately does not reuse the general Torii request pipeline. Issuance
 //! credentials must never cross redirects, proxies, transparent decompression,
 //! retry middleware, or generic request observers.
-
 use std::{fmt, hint::black_box, io::Read as _, time::Duration};
-
 use base64::{Engine as _, encoded_len, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::{
     StatusCode, Url,
@@ -17,9 +15,7 @@ use reqwest::{
     redirect::Policy,
 };
 use thiserror::Error;
-
 use iroha_torii_shared::ErrorEnvelope;
-
 /// Canonical authorization endpoint.
 pub const BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1: &str =
     "/v1/privacy/bootle-lantern/issuance/authorize";
@@ -37,20 +33,16 @@ pub const BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1: usize = 71_896;
 pub const BOOTLE_LANTERN_ISSUANCE_ISSUE_RESPONSE_BYTES_V1: usize = 3_176;
 /// Maximum accepted structured error response length.
 pub const BOOTLE_LANTERN_ISSUANCE_ERROR_RESPONSE_MAX_BYTES_V1: usize = 512;
-
 const JSON_MEDIA_TYPE_V1: &str = "application/json";
 const AUTHORIZATION_MAGIC_V1: &[u8; 4] = b"ILA1";
 const BLIND_REQUEST_MAGIC_V1: &[u8; 4] = b"ILQ1";
 const RESPONSE_MAGIC_V1: &[u8; 4] = b"ILR1";
 const WWW_AUTHENTICATE_VALUE_V1: &[u8] = b"Bearer realm=\"iroha-bootle-lantern-issuance\"";
-
 const DEFAULT_REQUEST_TIMEOUT_V1: Duration = Duration::from_secs(15);
-
 /// Opaque issuer credential erased when dropped.
 pub struct BootleLanternIssuanceCredentialV1 {
     bytes: Vec<u8>,
 }
-
 impl BootleLanternIssuanceCredentialV1 {
     /// Copy and validate an opaque bearer credential.
     ///
@@ -64,7 +56,6 @@ impl BootleLanternIssuanceCredentialV1 {
             bytes: bytes.to_vec(),
         })
     }
-
     /// Decode one canonical, unpadded base64url credential without a `Bearer` prefix.
     ///
     /// # Errors
@@ -84,7 +75,6 @@ impl BootleLanternIssuanceCredentialV1 {
         {
             return Err(BootleLanternIssuanceClientErrorV1::InvalidCredential);
         }
-
         let mut bytes = vec![0_u8; BOOTLE_LANTERN_ISSUANCE_AUTHENTICATION_MAX_BYTES_V1];
         let Ok(written) = URL_SAFE_NO_PAD.decode_slice(encoded, &mut bytes) else {
             bytes.fill(0);
@@ -105,7 +95,6 @@ impl BootleLanternIssuanceCredentialV1 {
         black_box(bytes.as_slice());
         result
     }
-
     fn authorization_header_value_v1(
         &self,
     ) -> Result<HeaderValue, BootleLanternIssuanceClientErrorV1> {
@@ -128,20 +117,17 @@ impl BootleLanternIssuanceCredentialV1 {
         result
     }
 }
-
 impl fmt::Debug for BootleLanternIssuanceCredentialV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("BootleLanternIssuanceCredentialV1([REDACTED])")
     }
 }
-
 impl Drop for BootleLanternIssuanceCredentialV1 {
     fn drop(&mut self) {
         self.bytes.fill(0);
         black_box(self.bytes.as_slice());
     }
 }
-
 /// Exact transport failures for Bootle/Lantern blind issuance.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum BootleLanternIssuanceClientErrorV1 {
@@ -201,13 +187,11 @@ pub enum BootleLanternIssuanceClientErrorV1 {
     #[error("Bootle/Lantern issuance response has an invalid wire magic")]
     InvalidResponseMagic,
 }
-
 /// Dedicated synchronous client for the two first-release issuance routes.
 pub struct BootleLanternIssuanceClientV1 {
     origin: Url,
     transport: Client,
 }
-
 impl fmt::Debug for BootleLanternIssuanceClientV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -216,7 +200,6 @@ impl fmt::Debug for BootleLanternIssuanceClientV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl BootleLanternIssuanceClientV1 {
     /// Build a dedicated client with a 15-second per-request timeout.
     ///
@@ -227,7 +210,6 @@ impl BootleLanternIssuanceClientV1 {
     pub fn new(origin: Url) -> Result<Self, BootleLanternIssuanceClientErrorV1> {
         Self::with_timeout(origin, DEFAULT_REQUEST_TIMEOUT_V1)
     }
-
     /// Build a dedicated client with an exact non-zero per-request timeout.
     ///
     /// # Errors
@@ -242,7 +224,6 @@ impl BootleLanternIssuanceClientV1 {
         if timeout.is_zero() {
             return Err(BootleLanternIssuanceClientErrorV1::InvalidTimeout);
         }
-
         let transport = Client::builder()
             .redirect(Policy::none())
             .retry(reqwest::retry::never())
@@ -256,7 +237,6 @@ impl BootleLanternIssuanceClientV1 {
             .map_err(|_| BootleLanternIssuanceClientErrorV1::TransportBuild)?;
         Ok(Self { origin, transport })
     }
-
     /// Submit exactly one empty authorization request and return the 320-byte `ILA1` body.
     ///
     /// # Errors
@@ -274,7 +254,6 @@ impl BootleLanternIssuanceClientV1 {
             BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_RESPONSE_BYTES_V1,
         )
     }
-
     /// Submit exactly one `ILA1 || ILQ1` request and return the 3,176-byte `ILR1` body.
     ///
     /// # Errors
@@ -306,7 +285,6 @@ impl BootleLanternIssuanceClientV1 {
             BOOTLE_LANTERN_ISSUANCE_ISSUE_RESPONSE_BYTES_V1,
         )
     }
-
     fn execute_exact_v1(
         &self,
         path: &'static str,
@@ -328,7 +306,6 @@ impl BootleLanternIssuanceClientV1 {
             },
         )
     }
-
     fn execute_exact_with_v1<F>(
         &self,
         path: &'static str,
@@ -347,7 +324,6 @@ impl BootleLanternIssuanceClientV1 {
         let response = send_once(request, expected_response_bytes)?;
         validate_raw_response_v1(response, expected_response_bytes)
     }
-
     fn build_request_v1(
         &self,
         path: &'static str,
@@ -371,13 +347,11 @@ impl BootleLanternIssuanceClientV1 {
         Ok(request)
     }
 }
-
 struct RawIssuanceResponseV1 {
     status: StatusCode,
     headers: HeaderMap,
     body: Vec<u8>,
 }
-
 fn validate_origin_v1(origin: &Url) -> Result<(), BootleLanternIssuanceClientErrorV1> {
     let valid_path = origin.path().is_empty() || origin.path() == "/";
     if origin.scheme() != "https"
@@ -392,14 +366,12 @@ fn validate_origin_v1(origin: &Url) -> Result<(), BootleLanternIssuanceClientErr
     }
     Ok(())
 }
-
 fn validate_credential_length_v1(length: usize) -> Result<(), BootleLanternIssuanceClientErrorV1> {
     if length == 0 || length > BOOTLE_LANTERN_ISSUANCE_AUTHENTICATION_MAX_BYTES_V1 {
         return Err(BootleLanternIssuanceClientErrorV1::InvalidCredential);
     }
     Ok(())
 }
-
 fn canonical_base64_url_matches_v1(encoded: &str, decoded: &[u8]) -> bool {
     let encoded_bytes = encoded_len(decoded.len(), false)
         .expect("bounded credential length has a base64url representation");
@@ -415,7 +387,6 @@ fn canonical_base64_url_matches_v1(encoded: &str, decoded: &[u8]) -> bool {
     black_box(canonical.as_slice());
     matches
 }
-
 fn collect_network_response_v1(
     mut response: Response,
     expected_bytes: usize,
@@ -441,7 +412,6 @@ fn collect_network_response_v1(
         body,
     })
 }
-
 fn validate_raw_response_v1(
     response: RawIssuanceResponseV1,
     expected_bytes: usize,
@@ -467,7 +437,6 @@ fn validate_raw_response_v1(
         &response.body,
     ))
 }
-
 fn validate_success_response_metadata_v1(
     headers: &HeaderMap,
     expected_bytes: usize,
@@ -485,7 +454,6 @@ fn validate_success_response_metadata_v1(
     if headers.get_all(WWW_AUTHENTICATE).iter().next().is_some() {
         return Err(BootleLanternIssuanceClientErrorV1::UnexpectedAuthenticationChallenge);
     }
-
     let mut content_lengths = headers.get_all(CONTENT_LENGTH).iter();
     if let Some(value) = content_lengths.next()
         && (content_lengths.next().is_some()
@@ -495,7 +463,6 @@ fn validate_success_response_metadata_v1(
     }
     Ok(())
 }
-
 fn decode_error_response_v1(
     status: StatusCode,
     headers: &HeaderMap,
@@ -514,7 +481,6 @@ fn decode_error_response_v1(
     {
         return BootleLanternIssuanceClientErrorV1::InvalidErrorResponse;
     }
-
     let envelope = if status == StatusCode::NOT_ACCEPTABLE {
         let expected = format!("{{\"code\":\"{expected_code}\",\"message\":\"{expected_code}\"}}");
         if body != expected.as_bytes() {
@@ -533,14 +499,12 @@ fn decode_error_response_v1(
     {
         return BootleLanternIssuanceClientErrorV1::InvalidErrorResponse;
     }
-
     BootleLanternIssuanceClientErrorV1::Http {
         status: status.as_u16(),
         code: envelope.code,
         retry_after_seconds: (status == StatusCode::TOO_MANY_REQUESTS).then_some(1),
     }
 }
-
 fn issuance_error_contract_v1(status: StatusCode) -> Option<(&'static str, &'static str)> {
     let code = match status {
         StatusCode::BAD_REQUEST => "privacy_issuance_invalid_request",
@@ -560,7 +524,6 @@ fn issuance_error_contract_v1(status: StatusCode) -> Option<(&'static str, &'sta
     };
     Some((code, media_type))
 }
-
 fn has_exact_single_header_v1(
     headers: &HeaderMap,
     name: reqwest::header::HeaderName,
@@ -572,7 +535,6 @@ fn has_exact_single_header_v1(
         .filter(|_| values.next().is_none())
         .is_some_and(|value| value.as_bytes() == expected)
 }
-
 fn has_canonical_optional_content_length_v1(headers: &HeaderMap, actual_bytes: usize) -> bool {
     let mut values = headers.get_all(CONTENT_LENGTH).iter();
     let Some(value) = values.next() else {
@@ -580,7 +542,6 @@ fn has_canonical_optional_content_length_v1(headers: &HeaderMap, actual_bytes: u
     };
     values.next().is_none() && canonical_content_length_v1(value.as_bytes(), actual_bytes)
 }
-
 fn has_canonical_retry_after_v1(headers: &HeaderMap, status: StatusCode) -> bool {
     let mut values = headers.get_all(RETRY_AFTER).iter();
     if status == StatusCode::TOO_MANY_REQUESTS {
@@ -591,7 +552,6 @@ fn has_canonical_retry_after_v1(headers: &HeaderMap, status: StatusCode) -> bool
     }
     values.next().is_none()
 }
-
 fn has_canonical_www_authenticate_v1(headers: &HeaderMap, status: StatusCode) -> bool {
     let mut values = headers.get_all(WWW_AUTHENTICATE).iter();
     if status == StatusCode::UNAUTHORIZED {
@@ -602,7 +562,6 @@ fn has_canonical_www_authenticate_v1(headers: &HeaderMap, status: StatusCode) ->
     }
     values.next().is_none()
 }
-
 fn canonical_content_length_v1(bytes: &[u8], expected_bytes: usize) -> bool {
     if bytes.is_empty()
         || bytes.iter().any(|byte| !byte.is_ascii_digit())
@@ -615,19 +574,14 @@ fn canonical_content_length_v1(bytes: &[u8], expected_bytes: usize) -> bool {
         .and_then(|value| value.parse::<usize>().ok())
         == Some(expected_bytes)
 }
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-
     use base64::Engine as _;
     use sha2::{Digest as _, Sha256};
-
     use super::*;
-
     const CLIENT_CONTRACT_FIXTURE_V1: &str =
         include_str!("../../../fixtures/privacy/bootle_lantern_issuance_client_v1.json");
-
     fn patterned_v1(length: usize) -> Vec<u8> {
         let mut body: Vec<u8> = (0_u8..=u8::MAX).cycle().take(length).collect();
         match length {
@@ -647,19 +601,16 @@ mod tests {
         }
         body
     }
-
     fn client_v1() -> BootleLanternIssuanceClientV1 {
         BootleLanternIssuanceClientV1::new(
             Url::parse("https://validator.example").expect("valid test URL"),
         )
         .expect("valid client")
     }
-
     fn credential_v1() -> BootleLanternIssuanceCredentialV1 {
         BootleLanternIssuanceCredentialV1::from_opaque_bytes(b"opaque credential")
             .expect("valid credential")
     }
-
     fn response_v1(length: usize) -> RawIssuanceResponseV1 {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -676,7 +627,6 @@ mod tests {
             body: patterned_v1(length),
         }
     }
-
     fn error_response_v1(status: StatusCode, code: &str) -> RawIssuanceResponseV1 {
         let media_type = if status == StatusCode::NOT_ACCEPTABLE {
             JSON_MEDIA_TYPE_V1
@@ -713,7 +663,6 @@ mod tests {
             body,
         }
     }
-
     #[test]
     fn origin_is_exact_https_origin() {
         for invalid in [
@@ -741,7 +690,6 @@ mod tests {
             BootleLanternIssuanceClientErrorV1::InvalidTimeout
         );
     }
-
     #[test]
     fn credential_rejects_noncanonical_and_redacts_debug() {
         assert_eq!(
@@ -772,7 +720,6 @@ mod tests {
             format!("{credential:?}"),
             "BootleLanternIssuanceCredentialV1([REDACTED])"
         );
-
         let maximum = vec![0xA5; BOOTLE_LANTERN_ISSUANCE_AUTHENTICATION_MAX_BYTES_V1];
         let mut maximum_encoded = vec![
             0_u8;
@@ -787,7 +734,6 @@ mod tests {
             std::str::from_utf8(&maximum_encoded[..written]).expect("base64url is valid UTF-8");
         BootleLanternIssuanceCredentialV1::from_canonical_base64_url(maximum_encoded)
             .expect("maximum-length credential must be accepted");
-
         let oversized_encoded = "A".repeat(maximum_encoded.len().saturating_add(1));
         assert_eq!(
             BootleLanternIssuanceCredentialV1::from_canonical_base64_url(&oversized_encoded)
@@ -795,7 +741,6 @@ mod tests {
             BootleLanternIssuanceClientErrorV1::InvalidCredential
         );
     }
-
     #[test]
     fn shared_client_contract_fixture_binds_exact_wire_bytes() {
         let fixture: norito::json::Value =
@@ -814,7 +759,6 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("public-synthetic-test-data")
         );
-
         let transport = root
             .get("transport")
             .and_then(norito::json::Value::as_object)
@@ -849,7 +793,6 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             std::str::from_utf8(WWW_AUTHENTICATE_VALUE_V1).ok()
         );
-
         let credential = root
             .get("credential")
             .and_then(norito::json::Value::as_object)
@@ -905,7 +848,6 @@ mod tests {
                 format!("Bearer {encoded}")
             );
         }
-
         let bodies = root
             .get("bodies")
             .and_then(norito::json::Value::as_object)
@@ -969,7 +911,6 @@ mod tests {
             u64::try_from(BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1)
                 .expect("issue request bound fits u64")
         );
-
         let errors = root
             .get("errors")
             .and_then(norito::json::Value::as_object)
@@ -1062,7 +1003,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn request_is_exact_and_send_is_invoked_once() {
         let client = client_v1();
@@ -1130,7 +1070,6 @@ mod tests {
             BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_RESPONSE_BYTES_V1
         );
     }
-
     #[test]
     fn issue_length_is_rejected_before_network_access() {
         for invalid in [32, BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1 + 1] {
@@ -1143,7 +1082,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn issue_magic_is_rejected_before_network_access() {
         for prefix in [*b"\0\0\0\0", *b"ILA0", *b"ILA\0", *b"XLA1"] {
@@ -1170,7 +1108,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn transport_failure_is_not_retried() {
         let client = client_v1();
@@ -1191,18 +1128,15 @@ mod tests {
         assert_eq!(error, BootleLanternIssuanceClientErrorV1::Network);
         assert_eq!(calls.get(), 1);
     }
-
     #[test]
     fn response_metadata_and_lengths_fail_closed() {
         let expected = BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_RESPONSE_BYTES_V1;
-
         let mut status = response_v1(expected);
         status.status = StatusCode::TEMPORARY_REDIRECT;
         assert_eq!(
             validate_raw_response_v1(status, expected).expect_err("redirect must fail"),
             BootleLanternIssuanceClientErrorV1::InvalidErrorResponse
         );
-
         let mut content_type = response_v1(expected);
         content_type.headers.insert(
             CONTENT_TYPE,
@@ -1212,14 +1146,12 @@ mod tests {
             validate_raw_response_v1(content_type, expected).expect_err("media substitution"),
             BootleLanternIssuanceClientErrorV1::InvalidContentType
         );
-
         let mut missing_type = response_v1(expected);
         missing_type.headers.remove(CONTENT_TYPE);
         assert_eq!(
             validate_raw_response_v1(missing_type, expected).expect_err("missing media type"),
             BootleLanternIssuanceClientErrorV1::InvalidContentType
         );
-
         let mut duplicate_type = response_v1(expected);
         duplicate_type.headers.append(
             CONTENT_TYPE,
@@ -1229,7 +1161,6 @@ mod tests {
             validate_raw_response_v1(duplicate_type, expected).expect_err("duplicate media type"),
             BootleLanternIssuanceClientErrorV1::InvalidContentType
         );
-
         let mut encoded = response_v1(expected);
         encoded
             .headers
@@ -1238,7 +1169,6 @@ mod tests {
             validate_raw_response_v1(encoded, expected).expect_err("encoding header must fail"),
             BootleLanternIssuanceClientErrorV1::ContentEncoding
         );
-
         let mut challenged = response_v1(expected);
         challenged.headers.insert(
             WWW_AUTHENTICATE,
@@ -1249,7 +1179,6 @@ mod tests {
                 .expect_err("successful response challenge must fail"),
             BootleLanternIssuanceClientErrorV1::UnexpectedAuthenticationChallenge
         );
-
         for invalid_length in ["0320", "319", "321", "+320", "320, 320"] {
             let mut response = response_v1(expected);
             response.headers.insert(
@@ -1263,7 +1192,6 @@ mod tests {
                 "length {invalid_length:?}"
             );
         }
-
         let mut duplicate_length = response_v1(expected);
         duplicate_length.headers.append(
             CONTENT_LENGTH,
@@ -1274,7 +1202,6 @@ mod tests {
                 .expect_err("duplicate declared length must fail"),
             BootleLanternIssuanceClientErrorV1::InvalidContentLength
         );
-
         let mut omitted_length = response_v1(expected);
         omitted_length.headers.remove(CONTENT_LENGTH);
         assert_eq!(
@@ -1283,7 +1210,6 @@ mod tests {
                 .len(),
             expected
         );
-
         for actual in [expected - 1, expected + 1] {
             let mut response = response_v1(expected);
             response.body.resize(actual, 0);
@@ -1293,7 +1219,6 @@ mod tests {
                 BootleLanternIssuanceClientErrorV1::InvalidResponseLength
             );
         }
-
         for prefix in [*b"\0\0\0\0", *b"ILA0", *b"ILA\0", *b"XLA1"] {
             let mut response = response_v1(expected);
             response.body[..4].copy_from_slice(&prefix);
@@ -1303,7 +1228,6 @@ mod tests {
                 BootleLanternIssuanceClientErrorV1::InvalidResponseMagic
             );
         }
-
         for prefix in [*b"\0\0\0\0", *b"ILR0", *b"ILR\0", *b"XLR1"] {
             let expected = BOOTLE_LANTERN_ISSUANCE_ISSUE_RESPONSE_BYTES_V1;
             let mut response = response_v1(expected);
@@ -1315,7 +1239,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn structured_error_responses_fail_closed() {
         let expected = BOOTLE_LANTERN_ISSUANCE_AUTHORIZATION_RESPONSE_BYTES_V1;
@@ -1354,7 +1277,6 @@ mod tests {
                 }
             );
         }
-
         let mut missing_retry = error_response_v1(
             StatusCode::TOO_MANY_REQUESTS,
             "privacy_issuance_capacity_exhausted",
@@ -1364,7 +1286,6 @@ mod tests {
             validate_raw_response_v1(missing_retry, expected).expect_err("missing retry hint"),
             BootleLanternIssuanceClientErrorV1::InvalidErrorResponse
         );
-
         let mut unexpected_retry = error_response_v1(
             StatusCode::SERVICE_UNAVAILABLE,
             "privacy_issuance_unavailable",
@@ -1377,7 +1298,6 @@ mod tests {
                 .expect_err("unexpected retry hint"),
             BootleLanternIssuanceClientErrorV1::InvalidErrorResponse
         );
-
         let mut missing_challenge =
             error_response_v1(StatusCode::UNAUTHORIZED, "privacy_issuance_unauthorized");
         missing_challenge.headers.remove(WWW_AUTHENTICATE);
@@ -1386,7 +1306,6 @@ mod tests {
                 .expect_err("missing authentication challenge"),
             BootleLanternIssuanceClientErrorV1::InvalidErrorResponse
         );
-
         let mut duplicate_challenge =
             error_response_v1(StatusCode::UNAUTHORIZED, "privacy_issuance_unauthorized");
         duplicate_challenge.headers.append(
@@ -1398,7 +1317,6 @@ mod tests {
                 .expect_err("duplicate authentication challenge"),
             BootleLanternIssuanceClientErrorV1::InvalidErrorResponse
         );
-
         let mut substituted_challenge =
             error_response_v1(StatusCode::UNAUTHORIZED, "privacy_issuance_unauthorized");
         substituted_challenge.headers.insert(
@@ -1410,7 +1328,6 @@ mod tests {
                 .expect_err("substituted authentication challenge"),
             BootleLanternIssuanceClientErrorV1::InvalidErrorResponse
         );
-
         let mut unexpected_challenge =
             error_response_v1(StatusCode::BAD_REQUEST, "privacy_issuance_invalid_request");
         unexpected_challenge.headers.insert(
@@ -1422,7 +1339,6 @@ mod tests {
                 .expect_err("authentication challenge is forbidden outside 401"),
             BootleLanternIssuanceClientErrorV1::InvalidErrorResponse
         );
-
         let mut wrong_media =
             error_response_v1(StatusCode::BAD_REQUEST, "privacy_issuance_invalid_request");
         wrong_media
@@ -1432,7 +1348,6 @@ mod tests {
             validate_raw_response_v1(wrong_media, expected).expect_err("wrong media type"),
             BootleLanternIssuanceClientErrorV1::InvalidErrorResponse
         );
-
         let mut corrupted =
             error_response_v1(StatusCode::BAD_REQUEST, "privacy_issuance_invalid_request");
         corrupted.body[0] ^= 0x01;
@@ -1444,7 +1359,6 @@ mod tests {
             validate_raw_response_v1(corrupted, expected).expect_err("corrupt Norito frame"),
             BootleLanternIssuanceClientErrorV1::InvalidErrorResponse
         );
-
         let mut wrong_code =
             error_response_v1(StatusCode::BAD_REQUEST, "privacy_issuance_unauthorized");
         wrong_code.headers.insert(
@@ -1455,7 +1369,6 @@ mod tests {
             validate_raw_response_v1(wrong_code, expected).expect_err("status/code mismatch"),
             BootleLanternIssuanceClientErrorV1::InvalidErrorResponse
         );
-
         let mut noncanonical_json = error_response_v1(
             StatusCode::NOT_ACCEPTABLE,
             "privacy_issuance_not_acceptable",

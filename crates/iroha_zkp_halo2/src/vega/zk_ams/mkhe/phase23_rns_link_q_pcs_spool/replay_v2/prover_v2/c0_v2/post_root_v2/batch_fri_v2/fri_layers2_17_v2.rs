@@ -1,16 +1,11 @@
 //! Bounded authenticated B1-to-B17 FRI continuation and equal-terminal binding.
-
 use core::{array, convert::Infallible};
 use std::path::Path;
-
 use iroha_confidential_spool::ConfidentialSpoolChunkV1;
-
 use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
     ProverFriQueriesV2, ProverFriRoundsReadyV2,
 };
-
 use super::*;
-
 const FRI_CONTINUATION_LAYERS_V2: usize = 17;
 const FRI_CONTINUATION_READ_BYTES_V2: u64 = 3_190_802_240;
 const FRI_CONTINUATION_WRITE_BYTES_V2: u64 = 1_595_410_240;
@@ -37,7 +32,6 @@ const FRI_CONTINUATION_PEAK_ROOT_HEAP_BYTES_V2: usize = 6_242_304;
 const FRI_CONTINUATION_PEAK_FOLD_HEAP_BYTES_V2: usize = 49_152;
 const FRI_CONTINUATION_TERMINAL_BYTES_V2: usize = 12_224;
 const FRI_CONTINUATION_EXPLICIT_PEAK_BYTES_V2: usize = 12_599_296;
-
 const AUTHENTICATED_FRI_REPLAY_COMPLETE_V2: bool = false;
 const FRI_ALL_FOLDS_COMPLETE_V2: bool = false;
 const FRI_TERMINAL_EQUALITY_BOUND_V2: bool = false;
@@ -47,7 +41,6 @@ const FRI_CONTINUATION_PROOF_EMITTED_V2: bool = false;
 const FRI_CONTINUATION_RSS_ACCEPTED_V2: bool = false;
 const FRI_CONTINUATION_RECEIPT_ACCEPTED_V2: bool = false;
 const FRI_CONTINUATION_RELEASE_READY_V2: bool = false;
-
 const _: () = {
     assert!(FRI_CONTINUATION_LAYERS_V2 == 17);
     assert!(
@@ -107,7 +100,6 @@ const _: () = {
     assert!(!FRI_CONTINUATION_RECEIPT_ACCEPTED_V2);
     assert!(!FRI_CONTINUATION_RELEASE_READY_V2);
 };
-
 pub(in super::super) enum BatchFriContinuationAuthorityV2 {
     Production {
         authenticated_layers: Infallible,
@@ -117,7 +109,6 @@ pub(in super::super) enum BatchFriContinuationAuthorityV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 /// Non-authorizing owner of every rooted FRI file and the derived query schedule.
 pub(in super::super) struct BatchFriTerminalPreparedV2 {
     accepted_c0: Option<QPcsC0StoredV2>,
@@ -135,13 +126,13 @@ pub(in super::super) struct BatchFriTerminalPreparedV2 {
     quotient_root: [u8; 32],
     layer0_root: [u8; 32],
 }
-
 impl BatchFriLayer1RootPreparedV2 {
     pub(in super::super) fn prepare_batch_fri_terminal_v2(
         self,
         directory: &Path,
         authority: BatchFriContinuationAuthorityV2,
-    ) -> Result<BatchFriTerminalPreparedV2, ProverPrerequisiteErrorV2> {
+    ) -> Result<canonical_proof_v2::BatchFriCanonicalProofPreparedV2, ProverPrerequisiteErrorV2>
+    {
         match authority {
             BatchFriContinuationAuthorityV2::Production {
                 authenticated_layers,
@@ -151,10 +142,10 @@ impl BatchFriLayer1RootPreparedV2 {
             #[cfg(test)]
             BatchFriContinuationAuthorityV2::TestOnly => {}
         }
-        prepare_batch_fri_terminal_operation_v2(self, directory)
+        let prepared = prepare_batch_fri_terminal_operation_v2(self, directory)?;
+        canonical_proof_v2::prepare_canonical_proof_quarantine_v2(prepared, directory)
     }
 }
-
 fn fold_round_into_layer_v2(
     directory: &Path,
     ready: ProverFriRoundsReadyV2,
@@ -187,7 +178,6 @@ fn fold_round_into_layer_v2(
     let destination = writer.seal_v2(replay_complete)?.root_v2()?;
     Ok((source, destination, complete.continue_v2()?))
 }
-
 fn fold_terminal_v2(
     ready: ProverFriRoundsReadyV2,
     source: FriLayerRootedV2,
@@ -216,7 +206,6 @@ fn fold_terminal_v2(
         .derive_queries_v2()?;
     Ok((source, terminal, replay_complete, queries))
 }
-
 fn prepare_batch_fri_terminal_operation_v2(
     mut prepared: BatchFriLayer1RootPreparedV2,
     directory: &Path,
@@ -264,7 +253,6 @@ fn prepare_batch_fri_terminal_operation_v2(
         layer0_root: prepared.layer0_root,
     })
 }
-
 #[path = "fri_layers2_17_v2/canonical_proof_v2.rs"]
 mod canonical_proof_v2;
 pub(in super::super) use canonical_proof_v2::*;

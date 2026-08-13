@@ -1,15 +1,12 @@
 // Focused generic application-API fanout memory bounds.
-
 #[derive(
     Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
 struct ToriiAppFanoutNoritoTestDto {
     nested: Vec<Vec<Vec<u8>>>,
 }
-
 impl torii_app_fanout_norito_dto_sealed::Sealed for ToriiAppFanoutNoritoTestDto {}
 impl ToriiAppFanoutNoritoDto for ToriiAppFanoutNoritoTestDto {}
-
 fn generous_json_limits() -> ToriiFanoutJsonLimits {
     ToriiFanoutJsonLimits {
         raw_bytes: 1 << 20,
@@ -22,7 +19,6 @@ fn generous_json_limits() -> ToriiFanoutJsonLimits {
         decoded_graph_bytes: 64 << 20,
     }
 }
-
 #[test]
 fn app_fanout_json_preflight_counts_tiny_token_amplification() {
     let body = b"[0,0,0,0,0]";
@@ -34,7 +30,6 @@ fn app_fanout_json_preflight_counts_tiny_token_amplification() {
     assert_eq!(profile.values, 6);
     assert_eq!(profile.array_entries, 5);
     assert!(profile.decoded_graph_bytes > body.len());
-
     limits.values = 5;
     assert!(matches!(
         preflight_torii_fanout_json(body, limits),
@@ -45,7 +40,6 @@ fn app_fanout_json_preflight_counts_tiny_token_amplification() {
             ..
         })
     ));
-
     limits.values = 6;
     limits.array_entries = 4;
     assert!(matches!(
@@ -58,7 +52,6 @@ fn app_fanout_json_preflight_counts_tiny_token_amplification() {
         })
     ));
 }
-
 #[test]
 fn app_fanout_json_preflight_counts_object_entries_and_depth_exactly() {
     let body = br#"{"a":{"b":0},"c":1}"#;
@@ -70,7 +63,6 @@ fn app_fanout_json_preflight_counts_object_entries_and_depth_exactly() {
     assert_eq!(profile.objects, 2);
     assert_eq!(profile.object_entries, 3);
     assert_eq!(profile.max_nesting_depth, 3);
-
     limits.object_entries = 2;
     assert!(matches!(
         preflight_torii_fanout_json(body, limits),
@@ -81,7 +73,6 @@ fn app_fanout_json_preflight_counts_object_entries_and_depth_exactly() {
             ..
         })
     ));
-
     limits.object_entries = 3;
     limits.nesting_depth = 2;
     assert!(matches!(
@@ -94,7 +85,6 @@ fn app_fanout_json_preflight_counts_object_entries_and_depth_exactly() {
         })
     ));
 }
-
 #[test]
 fn app_fanout_json_preflight_charges_encoded_escaped_string_capacity() {
     let body = br#"{"k":"\u0041\n"}"#;
@@ -108,7 +98,6 @@ fn app_fanout_json_preflight_charges_encoded_escaped_string_capacity() {
         "the one-byte key plus escaped string's geometric capacity must be charged"
     );
     assert!(profile.max_escaped_string_capacity_bytes >= 32);
-
     limits.encoded_string_bytes = 13;
     preflight_torii_fanout_json(body, limits)
         .expect("exact aggregate encoded string-token limit must fit");
@@ -122,7 +111,6 @@ fn app_fanout_json_preflight_charges_encoded_escaped_string_capacity() {
             ..
         })
     ));
-
     limits.encoded_string_bytes = 13;
     limits.decoded_string_bytes = 3;
     preflight_torii_fanout_json(body, limits)
@@ -138,7 +126,6 @@ fn app_fanout_json_preflight_charges_encoded_escaped_string_capacity() {
         })
     ));
 }
-
 #[test]
 fn app_fanout_json_preflight_rejects_invalid_input_before_value_decode() {
     for body in [
@@ -165,7 +152,6 @@ fn app_fanout_json_preflight_rejects_invalid_input_before_value_decode() {
         })
     ));
 }
-
 #[test]
 fn app_fanout_decoder_diagnostics_do_not_reflect_hostile_payloads() {
     let hostile_key = "private-key-material".repeat(64);
@@ -180,7 +166,6 @@ fn app_fanout_decoder_diagnostics_do_not_reflect_hostile_payloads() {
     let sanitized = sanitize_torii_app_fanout_json_error(json_error).to_string();
     assert_eq!(sanitized, "proxied JSON response failed bounded decoding");
     assert!(!sanitized.contains("private-key-material"));
-
     let norito_error = norito::decode_from_bytes_with_limits::<Vec<u8>>(
         b"hostile-norito-body",
         norito::DecodeLimits::new(1, 1, 1, 1, 1),
@@ -190,7 +175,6 @@ fn app_fanout_decoder_diagnostics_do_not_reflect_hostile_payloads() {
     assert_eq!(sanitized, "proxied Norito response failed bounded decoding");
     assert!(!sanitized.contains("hostile-norito-body"));
 }
-
 #[test]
 fn app_fanout_norito_default_layout_decodes_once_under_explicit_limits() {
     let budget = ToriiAppFanoutMemoryBudget::new(1024 * 1024).expect("test budget");
@@ -209,7 +193,6 @@ fn app_fanout_norito_default_layout_decodes_once_under_explicit_limits() {
         .expect("sealed DTO decodes sequentially under explicit limits");
     assert_eq!(decoded, expected);
 }
-
 #[test]
 fn app_fanout_json_raw_and_decode_graph_overlap_has_exact_boundary() {
     let body = b"[0]";
@@ -233,7 +216,6 @@ fn app_fanout_json_raw_and_decode_graph_overlap_has_exact_boundary() {
     exact
         .admit_json_decode(profile)
         .expect("raw plus decode graph must fit exact boundary");
-
     let short = ToriiAppFanoutMemoryBudget::new(peak - 1).expect("non-zero budget");
     assert!(matches!(
         short.admit_json_decode(profile),
@@ -245,7 +227,6 @@ fn app_fanout_json_raw_and_decode_graph_overlap_has_exact_boundary() {
         }) if attempted == peak && limit == peak - 1
     ));
 }
-
 #[test]
 fn app_fanout_aggregate_merge_candidate_and_final_phases_are_bounded() {
     let mut budget = ToriiAppFanoutMemoryBudget::new(100).expect("test budget");
@@ -254,7 +235,6 @@ fn app_fanout_aggregate_merge_candidate_and_final_phases_are_bounded() {
         .admit_temporary(60)
         .expect("merge graph may overlap decoded inputs at the exact bound");
     assert!(budget.admit_temporary(61).is_err());
-
     budget
         .retain(60)
         .expect("retain merged graph after admission");
@@ -271,7 +251,6 @@ fn app_fanout_aggregate_merge_candidate_and_final_phases_are_bounded() {
         "an invalid release must leave the ledger unchanged"
     );
 }
-
 #[test]
 fn app_fanout_budget_borrows_the_existing_shared_reservation() {
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
@@ -285,7 +264,6 @@ fn app_fanout_budget_borrows_the_existing_shared_reservation() {
             .expect("shared reservation creates a request ledger");
     assert_eq!(budget.remaining_bytes().expect("valid ledger"), 8 * 1024);
     assert_eq!(semaphore.available_permits(), 0);
-
     let _ = budget;
     assert_eq!(
         semaphore.available_permits(),
@@ -295,7 +273,6 @@ fn app_fanout_budget_borrows_the_existing_shared_reservation() {
     drop(reservation);
     assert_eq!(semaphore.available_permits(), 1);
 }
-
 #[test]
 fn app_fanout_norito_plan_keeps_raw_bytes_live_and_splits_routes() {
     let capacity = 64 * 1024;
@@ -330,7 +307,6 @@ fn app_fanout_norito_plan_keeps_raw_bytes_live_and_splits_routes() {
         .expect("successful decoded graph retains its complete allocation slice");
     assert_eq!(budget.retained_bytes(), prior + route_slice);
 }
-
 #[test]
 fn app_fanout_norito_limits_reject_nested_and_packed_amplification() {
     let budget = ToriiAppFanoutMemoryBudget::new(1024 * 1024).expect("test budget");
@@ -348,7 +324,6 @@ fn app_fanout_norito_limits_reject_nested_and_packed_amplification() {
         error.to_string(),
         "proxied Norito response failed bounded decoding"
     );
-
     let mut packed_bytes = norito::to_bytes(&nested).expect("encode test DTO");
     packed_bytes[norito::core::Header::SIZE - 1] |= norito::core::header_flags::PACKED_SEQ;
     let packed_plan = budget
@@ -362,7 +337,6 @@ fn app_fanout_norito_limits_reject_nested_and_packed_amplification() {
         "proxied Norito response failed bounded decoding"
     );
 }
-
 #[test]
 fn app_fanout_norito_limits_reject_hostile_declared_lengths_before_allocation() {
     let declared = 1_u64 << 30;

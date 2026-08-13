@@ -1,12 +1,10 @@
 //! Production prover facade for the first-release IVM private-note STARK.
-
 use iroha_data_model::privacy::{
     IrohaIvmPrivateNoteStarkStatementV1, PrivacyConsensusLimitsV1, PrivacyNativeConsensusBindingV1,
     PrivacyNativeConsensusBindingValidationErrorV1,
 };
 use rand::{TryCryptoRng, rngs::OsRng};
 use thiserror::Error;
-
 use super::{
     relation::{
         IvmPrivateNoteRelationErrorV1, IvmPrivateNoteWitnessV1, validate_private_note_relation_v1,
@@ -18,7 +16,6 @@ use crate::privacy_engines::{
     proof_managed_note_stark::ProofManagedNoteStarkErrorV1,
     prover_randomness::{HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1},
 };
-
 /// Failure constructing or checking a complete IVM private-note proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum IvmPrivateNoteProofErrorV1 {
@@ -51,7 +48,6 @@ pub enum IvmPrivateNoteProofErrorV1 {
     #[error("IVM private-note prover self-verification failed")]
     SelfVerification,
 }
-
 fn map_entropy_error_v1(error: TryCryptoProverRandomnessErrorV1) -> IvmPrivateNoteProofErrorV1 {
     match error {
         TryCryptoProverRandomnessErrorV1::Unavailable => {
@@ -62,7 +58,6 @@ fn map_entropy_error_v1(error: TryCryptoProverRandomnessErrorV1) -> IvmPrivateNo
         }
     }
 }
-
 fn map_prover_error_v1(error: ProofManagedNoteStarkErrorV1) -> IvmPrivateNoteProofErrorV1 {
     match error {
         ProofManagedNoteStarkErrorV1::Randomness => {
@@ -81,7 +76,6 @@ fn map_prover_error_v1(error: ProofManagedNoteStarkErrorV1) -> IvmPrivateNotePro
         | ProofManagedNoteStarkErrorV1::Internal => IvmPrivateNoteProofErrorV1::ProverInvariant,
     }
 }
-
 fn map_verifier_error_v1(error: ProofManagedNoteStarkErrorV1) -> IvmPrivateNoteProofErrorV1 {
     match error {
         ProofManagedNoteStarkErrorV1::Resource => IvmPrivateNoteProofErrorV1::ResourceLimit,
@@ -99,7 +93,6 @@ fn map_verifier_error_v1(error: ProofManagedNoteStarkErrorV1) -> IvmPrivateNoteP
         | ProofManagedNoteStarkErrorV1::Randomness => IvmPrivateNoteProofErrorV1::InvalidProof,
     }
 }
-
 /// Construct a complete canonical private-note proof with injected entropy.
 ///
 /// The complete relation and exact one-to-two cardinality bounds are checked
@@ -139,7 +132,6 @@ pub fn prove_ivm_private_note_v1_with_rng<R: TryCryptoRng + ?Sized>(
         .map_err(|_| IvmPrivateNoteProofErrorV1::SelfVerification)?;
     Ok(proof)
 }
-
 /// Construct a complete canonical private-note proof with operating-system entropy.
 ///
 /// # Errors
@@ -160,7 +152,6 @@ pub fn prove_ivm_private_note_v1(
         &mut OsRng,
     )
 }
-
 /// Verify one complete first-release IVM private-note proof.
 ///
 /// # Errors
@@ -182,7 +173,6 @@ pub fn verify_ivm_private_note_v1(
     verify_private_note_stark_v1(statement, consensus_binding, consensus_limits, proof)
         .map_err(map_verifier_error_v1)
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::privacy::{
@@ -190,7 +180,6 @@ mod tests {
         PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
     use rand::{TryCryptoRng, TryRngCore};
-
     use super::*;
     use crate::privacy_engines::ivm_private_note::{
         IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteWitnessV1,
@@ -198,35 +187,27 @@ mod tests {
         PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PrivateInstructionV1, PrivateNotePlaintextV1,
         PrivateOpcodeV1, PrivateProgramV1, derive_note_authority_v1,
     };
-
     #[derive(Debug)]
     struct InjectedEntropyError;
-
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected IVM private-note entropy failure")
         }
     }
-
     enum EntropyMode {
         FailPartial,
         Constant,
         Repeated,
     }
-
     struct AdversarialRng(EntropyMode);
-
     impl TryRngCore for AdversarialRng {
         type Error = InjectedEntropyError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedEntropyError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(InjectedEntropyError)
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             match self.0 {
                 EntropyMode::FailPartial => {
@@ -247,9 +228,7 @@ mod tests {
             }
         }
     }
-
     impl TryCryptoRng for AdversarialRng {}
-
     fn consensus_material(
         statement: &IrohaIvmPrivateNoteStarkStatementV1,
     ) -> (PrivacyNativeConsensusBindingV1, PrivacyConsensusLimitsV1) {
@@ -258,7 +237,6 @@ mod tests {
             .expect("valid IVM private-note consensus binding");
         (binding, limits)
     }
-
     #[test]
     fn typed_constructors_reject_malformed_material_and_debug_is_redacted() {
         assert_eq!(
@@ -293,7 +271,6 @@ mod tests {
             ),
             Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent)
         );
-
         let mut instructions = [PrivateInstructionV1::HALT; PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1];
         instructions[0] = PrivateInstructionV1::new(PrivateOpcodeV1::MoveImmediate, 7, 0, 0, 1)
             .expect("instruction");
@@ -317,7 +294,6 @@ mod tests {
         assert!(debug.contains("input_count"));
         assert!(!debug.contains("41414141"));
     }
-
     #[test]
     fn facade_rejects_partial_constant_and_repeated_entropy_before_proving() {
         let value = crate::privacy_engines::ivm_private_note::tests::fixture();
@@ -345,13 +321,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn facade_rejects_every_context_axis_mismatch_before_proof_parsing() {
         let value = crate::privacy_engines::ivm_private_note::tests::fixture();
         let (binding, limits) = consensus_material(&value.statement);
         let mut substitutions = Vec::new();
-
         let mut changed = binding.clone();
         changed.network_id =
             iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -365,7 +339,6 @@ mod tests {
             changed,
             PrivacyNativeConsensusBindingValidationErrorV1::NetworkIdMismatch,
         ));
-
         let mut changed = binding.clone();
         changed.action_index ^= 1;
         substitutions.push((
@@ -373,7 +346,6 @@ mod tests {
             changed,
             PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch,
         ));
-
         let mut changed = binding.clone();
         changed.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0xD1; 32]);
         substitutions.push((
@@ -381,7 +353,6 @@ mod tests {
             changed,
             PrivacyNativeConsensusBindingValidationErrorV1::TransactionIntentDigestMismatch,
         ));
-
         let mut changed = binding.clone();
         changed.parameter_id = PrivacyParameterIdV1::new([0xD2; 32]);
         substitutions.push((
@@ -389,7 +360,6 @@ mod tests {
             changed,
             PrivacyNativeConsensusBindingValidationErrorV1::ParameterIdMismatch,
         ));
-
         let mut changed = binding.clone();
         changed.parameter_digest = PrivacyParameterDigestV1::new([0xD3; 32]);
         substitutions.push((
@@ -397,7 +367,6 @@ mod tests {
             changed,
             PrivacyNativeConsensusBindingValidationErrorV1::ParameterDigestMismatch,
         ));
-
         let mut changed = binding.clone();
         changed.verifier_digest = PrivacyVerifierDigestV1::new([0xD4; 32]);
         substitutions.push((
@@ -405,7 +374,6 @@ mod tests {
             changed,
             PrivacyNativeConsensusBindingValidationErrorV1::VerifierDigestMismatch,
         ));
-
         let mut changed = binding.clone();
         changed.statement_schema_digest = PrivacyStatementSchemaDigestV1::new([0xD5; 32]);
         substitutions.push((
@@ -413,7 +381,6 @@ mod tests {
             changed,
             PrivacyNativeConsensusBindingValidationErrorV1::StatementSchemaDigestMismatch,
         ));
-
         let mut changed = binding.clone();
         changed.engine_manifest_digest = PrivacyEngineManifestDigestV1::new([0xD6; 32]);
         substitutions.push((
@@ -421,7 +388,6 @@ mod tests {
             changed,
             PrivacyNativeConsensusBindingValidationErrorV1::EngineManifestDigestMismatch,
         ));
-
         for (axis, changed, expected) in substitutions {
             assert_eq!(
                 verify_ivm_private_note_v1(&value.statement, &changed, &limits, &[]),
@@ -429,7 +395,6 @@ mod tests {
                 "{axis} substitution reached proof parsing"
             );
         }
-
         let mut zero_genesis = binding;
         zero_genesis.genesis_hash = [0; 32];
         assert_eq!(
@@ -440,13 +405,11 @@ mod tests {
             "reserved zero genesis reached proof parsing"
         );
     }
-
     #[test]
     fn invalid_consensus_limits_fail_before_entropy_or_proof_parsing() {
         let value = crate::privacy_engines::ivm_private_note::tests::fixture();
         let (binding, mut limits) = consensus_material(&value.statement);
         limits.max_actions_per_transaction = 0;
-
         assert!(matches!(
             prove_ivm_private_note_v1_with_rng(
                 &value.statement,
@@ -466,7 +429,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn verifier_preflights_statement_bounds_before_proof_parsing() {
         let mut statement = crate::privacy_engines::ivm_private_note::tests::fixture().statement;

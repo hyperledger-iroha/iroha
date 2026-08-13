@@ -1,7 +1,5 @@
 //! Grouped Iroha data model integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../model_parser.rs"]
 mod model_parser;
 #[path = "../../src/bin/musubi_fixture_values.rs"]

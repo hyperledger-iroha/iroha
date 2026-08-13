@@ -5,7 +5,6 @@
 //! throughout the data model whenever heterogeneous queries need to be passed
 //! around.
 #![allow(clippy::missing_inline_in_public_items)]
-
 use std::{
     any::Any,
     boxed::Box,
@@ -15,7 +14,6 @@ use std::{
     sync::OnceLock,
     vec::{self, Vec},
 };
-
 use derive_more::Constructor;
 use iroha_crypto::{
     Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment, PublicKey, SignatureOf,
@@ -27,7 +25,6 @@ use iroha_schema::IntoSchema;
 use iroha_version::Version;
 use norito::codec::{Decode, Encode};
 use parameters::{ForwardCursor, QueryParams};
-
 pub use self::model::*;
 use self::{
     account::*, asset::*, block::*, domain::*, dsl::*, executor::*, nft::*, peer::*, permission::*,
@@ -165,7 +162,6 @@ impl iroha_version::codec::DecodeVersioned for SignedQuery {
 #[cfg(all(feature = "json", not(doc)))]
 pub mod json_wrappers {
     use super::*;
-
     /// Failure to reconstruct the native request carried by a JSON wrapper.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
     pub enum QueryRequestJsonError {
@@ -494,7 +490,6 @@ pub mod json_wrappers {
     #[cfg(test)]
     mod tests {
         use super::*;
-
         #[derive(Default)]
         struct StringSink(String);
         impl norito::json::JsonWriteSink for StringSink {
@@ -549,7 +544,6 @@ pub mod json_wrappers {
 #[cfg(feature = "json")]
 #[doc = "JSON conversion helpers used by query APIs."]
 pub mod json;
-
 // NOTE: Additional encode instrumentation for queries lives in iroha_crypto (SignatureOf::new, HashOf::new).
 #[cfg(feature = "fault_injection")]
 use crate::{
@@ -567,7 +561,6 @@ pub mod dsl;
 #[doc = "Query parameter storage and cursor types."]
 pub mod parameters;
 pub(crate) mod tx_predicate;
-
 /// A query that either returns a single value or errors out
 // NOTE: we are planning to remove this class of queries (https://github.com/hyperledger-iroha/iroha/issues/4933)
 /// Trait implemented by query types participating in the Iroha API.
@@ -867,12 +860,10 @@ fn builtin_query_registry() -> &'static QueryRegistry {
 #[cfg(test)]
 #[path = "tests/wire_ids.rs"]
 mod wire_id_tests;
-
 #[model]
 mod model {
     use getset::Getters;
     use iroha_crypto::HashOf;
-
     use super::*;
     use crate::{
         prelude::{TransactionEntrypoint, TransactionResult},
@@ -932,9 +923,7 @@ mod model {
             self.encode()
         }
     }
-
     use std::any::Any;
-
     /// Trait implemented by query types participating in the Iroha API.
     pub trait ErasedQuery<T>: Query<Item = T> + ErasedEncode + Any + Send + Sync {
         /// Expose the concrete query as `Any` for downcasting.
@@ -3027,7 +3016,6 @@ impl Iterator for QueryOutputBatchBoxIntoIter {
 #[cfg(test)]
 #[path = "tests/query_output_batch_box_tuple.rs"]
 mod query_output_batch_box_tuple_tests;
-
 impl SingularQuery for SingularQueryBox {
     type Output = SingularQueryOutputBox;
     fn dyn_encode(&self) -> Vec<u8> {
@@ -3223,10 +3211,8 @@ impl SignedQuery {
         verify_query_signature_for_signer(signature, signatory, &self.payload)
     }
 }
-
 mod candidate {
     use super::*;
-
     #[derive(Encode, Decode)]
     struct SignedQueryCandidate {
         signature: QuerySignature,
@@ -3272,11 +3258,9 @@ mod candidate {
     #[cfg(test)]
     mod tests {
         use std::sync::LazyLock;
-
         use iroha_crypto::KeyPair;
         #[cfg(feature = "json")]
         use norito::json;
-
         use crate::{
             account::{AccountId, MultisigMember, MultisigPolicy},
             query::{
@@ -3489,10 +3473,8 @@ mod candidate {
 #[cfg(test)]
 mod json_roundtrip_tests {
     use std::sync::LazyLock;
-
     use iroha_crypto::{KeyPair, Signature, SignatureOf};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
-
     use super::*;
     use crate::{
         account::{AccountId, MultisigMember, MultisigPolicy},
@@ -3913,7 +3895,6 @@ mod json_roundtrip_tests {
     #[test]
     fn query_with_params_clone_preserves_canonical_parts() {
         use crate::query::QueryItemKind;
-
         let pred = norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS);
         let sel = norito::codec::Encode::encode(&SelectorTuple::<Domain>::default());
         let original = QueryWithParams {
@@ -4264,10 +4245,8 @@ impl_singular_queries! {
 #[cfg(test)]
 mod trait_object_tests {
     use norito::codec::Encode;
-
     use super::*;
     use crate::query::dsl::{HasProjection, PredicateMarker, SelectorMarker};
-
     fn bare_bytes_with_flags(value: &dyn norito::core::NoritoSerialize, flags: u8) -> Vec<u8> {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
@@ -4381,7 +4360,6 @@ mod trait_object_tests {
     #[test]
     fn query_with_filter_converts() {
         use crate::query::dsl::{CompoundPredicate, SelectorTuple};
-
         let q = QueryWithFilter::new(
             (),
             CompoundPredicate::<crate::domain::Domain>::PASS,
@@ -4394,12 +4372,10 @@ mod trait_object_tests {
 macro_rules! queries {
     ($($($meta:meta)* $item:item)+) => {
         pub use self::model::*;
-
         #[iroha_data_model_derive::model]
         mod model{
             use super::*;
             use norito::codec::{Decode, Encode}; $(
-
             #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
             #[derive(Decode, Encode)]
             #[cfg_attr(
@@ -4414,16 +4390,12 @@ macro_rules! queries {
     };
 }
 include!("domain_queries.rs");
-
 pub mod sns {
     //! SNS-related query definitions.
     //!
     //! Queries related to authoritative SNS-backed ownership.
-
     use derive_more::Display;
-
     use crate::nexus::DataSpaceId;
-
     queries! {
         /// Fetch the active SNS owner for a dataspace alias resolved from the current catalog.
         #[derive(Display)]
@@ -4446,15 +4418,12 @@ pub mod sns {
     }
 }
 include!("musubi_queries.rs");
-
 pub mod trigger {
     //! Trigger-related query definitions.
     //!
     //! Trigger-related queries.
     use std::{format, string::String, vec::Vec};
-
     use derive_more::Display;
-
     queries! {
         /// Find all currently active (as in not disabled and/or expired)
         /// trigger IDs.
@@ -4482,20 +4451,16 @@ pub mod trigger {
             &self.id
         }
     }
-
     pub mod prelude {
         //! Convenient re-exports for common query types.
         pub use super::{FindActiveTriggerIds, FindTriggerById, FindTriggers};
     }
 }
-
 pub mod smart_contract {
     //! Smart-contract query definitions.
     //!
     //! Smart contract code/manifest related queries.
-
     use derive_more::Display;
-
     queries! {
         /// Find a smart contract manifest by its content-addressed code hash.
         #[derive(Display)]
@@ -4506,23 +4471,18 @@ pub mod smart_contract {
             pub code_hash: iroha_crypto::Hash,
         }
     }
-
     pub mod prelude {
         //! Prelude re-exports for smart contract queries.
         pub use super::FindContractManifestByCodeHash;
     }
 }
-
 pub mod transaction {
     //! Transaction query definitions.
     //!
     //! Queries related to transactions.
     #![allow(clippy::missing_inline_in_public_items)]
-
     use std::{format, string::String, vec::Vec};
-
     use derive_more::Display;
-
     queries! {
         /// [`FindTransactions`] Iroha Query lists all transactions included in a blockchain
         #[derive(Copy, Display)]
@@ -4530,23 +4490,18 @@ pub mod transaction {
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindTransactions;
     }
-
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
         pub use super::FindTransactions;
     }
 }
-
 pub mod block {
     //! Block query definitions.
     //!
     //! Queries related to blocks.
     #![allow(clippy::missing_inline_in_public_items)]
-
     use std::{format, string::String, vec::Vec};
-
     use derive_more::Display;
-
     queries! {
         /// [`FindBlocks`] Iroha Query lists all blocks sorted by
         /// height in descending order
@@ -4561,15 +4516,12 @@ pub mod block {
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindBlockHeaders;
     }
-
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
         pub use super::{FindBlockHeaders, FindBlocks};
     }
 }
-
 pub mod error;
-
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 #[allow(ambiguous_glob_reexports)]
 pub mod prelude {

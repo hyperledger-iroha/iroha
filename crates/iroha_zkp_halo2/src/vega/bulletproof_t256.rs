@@ -4,29 +4,23 @@
 //! exact ZK-AMS coefficient-membership arguments.  It deliberately does not
 //! reuse FCMP's 32-byte cycle transcript: T256 proof points occupy 33 bytes and
 //! its scalar field uses the canonical Vega little-endian proof encoding.
-
 #![allow(dead_code)]
-
-use core::{
-    marker::PhantomData,
-    ops::{AddAssign, Neg, SubAssign},
+use super::{
+    VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, derive_t256_generators_v1,
+    sponge::{Keccak256, keccak256},
 };
-use std::sync::OnceLock;
-
-use halo2curves::ff::Field as _;
-use thiserror::Error;
-
 use crate::generalized_bulletproof::{
     ArithmeticCircuitStatement, ArithmeticCircuitWitness, GeneralizedBulletproofErrorV1, LinComb,
     ProofGenerators, ProofPoint, ProofRandomSource, ProofScalar, ProofSuite, ProverTranscript,
     SecretMultiexpBuilder, Variable, VectorCommitmentOpening, VerifierTranscript,
 };
-
-use super::{
-    VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, derive_t256_generators_v1,
-    sponge::{Keccak256, keccak256},
+use core::{
+    marker::PhantomData,
+    ops::{AddAssign, Neg, SubAssign},
 };
-
+use halo2curves::ff::Field as _;
+use std::sync::OnceLock;
+use thiserror::Error;
 const T256_BP_MAX_GATES_V1: usize = 65_536;
 const T256_BP_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.generalized-bulletproof.t256.transcript.v1";
 const T256_BP_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.generalized-bulletproof.t256.challenge.v1";
@@ -51,7 +45,14 @@ const ZK_AMS_MEMBERSHIP_WIRE_VERSION_V1: u8 = 1;
 const ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1: usize = 4 + 1 + 1 + 2 + 4 + 33 + 2;
 const ZK_AMS_MEMBERSHIP_FIXED_PROOF_POINTS_V1: usize = 9;
 const ZK_AMS_MEMBERSHIP_FIXED_PROOF_SCALARS_V1: usize = 5;
-
+const ZK_AMS_MEMBERSHIP_PRE_IPA_SCALARS_V1: usize = 3;
+const ZK_AMS_MEMBERSHIP_FINAL_IPA_SCALARS_V1: usize = 2;
+const _: () = {
+    assert!(
+        ZK_AMS_MEMBERSHIP_PRE_IPA_SCALARS_V1 + ZK_AMS_MEMBERSHIP_FINAL_IPA_SCALARS_V1
+            == ZK_AMS_MEMBERSHIP_FIXED_PROOF_SCALARS_V1
+    );
+};
 /// Best-effort erased named copy of a T256 prover secret.
 ///
 /// The public scalar type is intentionally `Copy` for field arithmetic, so
@@ -59,21 +60,17 @@ const ZK_AMS_MEMBERSHIP_FIXED_PROOF_SCALARS_V1: usize = 5;
 /// its own stack instance.  Owned witness vectors are cleared independently by
 /// the generalized-Bulletproof RAII containers.
 pub(super) struct ZeroizingT256ScalarCopyV1(Scalar);
-
 struct BorrowedT256ScalarCopyV1<'a>(&'a mut Scalar);
-
 impl BorrowedT256ScalarCopyV1<'_> {
     fn get(&self) -> Scalar {
         *self.0
     }
 }
-
 impl Drop for BorrowedT256ScalarCopyV1<'_> {
     fn drop(&mut self) {
         self.0.clear_secret();
     }
 }
-
 impl ZeroizingT256ScalarCopyV1 {
     pub(super) fn new(mut value: Scalar) -> Self {
         let incoming = BorrowedT256ScalarCopyV1(&mut value);
@@ -81,7 +78,6 @@ impl ZeroizingT256ScalarCopyV1 {
         drop(incoming);
         owned
     }
-
     /// Transfer a named scalar slot into this owner and clear the source slot
     /// on normal return or unwind.
     pub(super) fn take(value: &mut Scalar) -> Self {
@@ -90,44 +86,36 @@ impl ZeroizingT256ScalarCopyV1 {
         drop(incoming);
         owned
     }
-
     pub(super) fn get(&self) -> Scalar {
         self.0
     }
-
     pub(super) fn as_ref(&self) -> &Scalar {
         &self.0
     }
-
     /// Accumulate one borrowed product without materializing either operand or
     /// the running secret in a caller-owned `Copy` slot.
     pub(super) fn add_product_assign(&mut self, left: &Scalar, right: &Scalar) {
         self.0 += *left * *right;
     }
 }
-
 impl Drop for ZeroizingT256ScalarCopyV1 {
     fn drop(&mut self) {
         self.0.clear_secret();
     }
 }
-
 /// Audited RAII owner for a vector of secret T256 scalars.
 ///
 /// This is crate-private so other native T256 protocols reuse the same
 /// clearing boundary instead of growing protocol-local best-effort erasers.
 pub(super) struct ZeroizingT256ScalarVecV1(Vec<Scalar>);
-
 impl ZeroizingT256ScalarVecV1 {
     #[cfg(test)]
     pub(super) fn new(values: Vec<Scalar>) -> Self {
         Self(values)
     }
-
     pub(super) fn with_capacity(capacity: usize) -> Self {
         Self(Vec::with_capacity(capacity))
     }
-
     pub(super) fn push(&mut self, mut value: Scalar) {
         let incoming = BorrowedT256ScalarCopyV1(&mut value);
         self.0.push(incoming.get());
@@ -136,19 +124,15 @@ impl ZeroizingT256ScalarVecV1 {
         // performs the same erasure if allocation unwinds inside `Vec::push`.
         drop(incoming);
     }
-
     pub(super) fn len(&self) -> usize {
         self.0.len()
     }
-
     pub(super) fn as_slice(&self) -> &[Scalar] {
         &self.0
     }
-
     pub(super) fn as_mut_slice(&mut self) -> &mut [Scalar] {
         &mut self.0
     }
-
     /// Clear the removed suffix before reducing the logical vector length.
     pub(super) fn clear_and_truncate(&mut self, len: usize) {
         if len < self.0.len() {
@@ -158,18 +142,15 @@ impl ZeroizingT256ScalarVecV1 {
             self.0.truncate(len);
         }
     }
-
     pub(super) fn take(&mut self) -> Vec<Scalar> {
         core::mem::take(&mut self.0)
     }
 }
-
 impl core::fmt::Debug for ZeroizingT256ScalarVecV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZeroizingT256ScalarVecV1([REDACTED])")
     }
 }
-
 impl Drop for ZeroizingT256ScalarVecV1 {
     fn drop(&mut self) {
         for scalar in &mut self.0 {
@@ -183,17 +164,14 @@ impl Drop for ZeroizingT256ScalarVecV1 {
         }
     }
 }
-
 #[cfg(test)]
 std::thread_local! {
     static ZEROIZING_T256_SCALAR_VEC_DROPS_V1: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
-
 #[cfg(test)]
 pub(super) fn zeroizing_t256_scalar_vec_drop_count_v1() -> usize {
     ZEROIZING_T256_SCALAR_VEC_DROPS_V1.with(core::cell::Cell::get)
 }
-
 /// Exact small-coefficient set certified by one membership proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -203,7 +181,6 @@ pub(super) enum ZkAmsT256MembershipBoundV1 {
     /// Coefficients are members of `{-2, -1, 0, 1, 2}`.
     Two = 2,
 }
-
 impl ZkAmsT256MembershipBoundV1 {
     fn gates_per_coefficient(self) -> usize {
         match self {
@@ -211,22 +188,18 @@ impl ZkAmsT256MembershipBoundV1 {
             Self::Two => 3,
         }
     }
-
     fn constraints_per_coefficient(self) -> usize {
         match self {
             Self::One => 5,
             Self::Two => 7,
         }
     }
-
     fn contains(self, coefficient: i8) -> bool {
         coefficient.unsigned_abs() <= self as u8
     }
 }
-
 impl TryFrom<u8> for ZkAmsT256MembershipBoundV1 {
     type Error = ZkAmsT256MembershipErrorV1;
-
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::One),
@@ -235,7 +208,6 @@ impl TryFrom<u8> for ZkAmsT256MembershipBoundV1 {
         }
     }
 }
-
 /// Stable failure classes for exact T256 coefficient-membership proofs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum ZkAmsT256MembershipErrorV1 {
@@ -260,7 +232,6 @@ pub(super) enum ZkAmsT256MembershipErrorV1 {
     #[error(transparent)]
     Backend(#[from] GeneralizedBulletproofErrorV1),
 }
-
 /// Canonical public evidence for one coefficient chunk.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsT256MembershipProofV1 {
@@ -270,28 +241,181 @@ pub(super) struct ZkAmsT256MembershipProofV1 {
     commitment: Point,
     proof: Vec<u8>,
 }
-
+struct BorrowedZkAmsT256MembershipProofWireV1<'a> {
+    bound: ZkAmsT256MembershipBoundV1,
+    chunk_ordinal: u16,
+    coefficient_count: u32,
+    commitment: Point,
+    proof: &'a [u8],
+    padded_gates: usize,
+}
+fn borrow_zk_ams_t256_membership_proof_wire_exact_v1(
+    bytes: &[u8],
+) -> Result<BorrowedZkAmsT256MembershipProofWireV1<'_>, ZkAmsT256MembershipErrorV1> {
+    if bytes.len() < ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1
+        || bytes[..4] != ZK_AMS_MEMBERSHIP_WIRE_MAGIC_V1
+        || bytes[4] != ZK_AMS_MEMBERSHIP_WIRE_VERSION_V1
+    {
+        return Err(ZkAmsT256MembershipErrorV1::WireEncoding);
+    }
+    let bound = ZkAmsT256MembershipBoundV1::try_from(bytes[5])?;
+    let chunk_ordinal = u16::from_be_bytes(
+        bytes[6..8]
+            .try_into()
+            .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?,
+    );
+    if chunk_ordinal > ZK_AMS_MEMBERSHIP_MAX_CHUNK_ORDINAL_V1 {
+        return Err(ZkAmsT256MembershipErrorV1::ChunkOrdinal);
+    }
+    let coefficient_count = u32::from_be_bytes(
+        bytes[8..12]
+            .try_into()
+            .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?,
+    );
+    let coefficient_count_usize = usize::try_from(coefficient_count)
+        .map_err(|_| ZkAmsT256MembershipErrorV1::CoefficientCount)?;
+    let (_, padded_gates, _) = membership_shape(coefficient_count_usize, bound)?;
+    let expected_proof_len = membership_proof_len(padded_gates)?;
+    let commitment = Point::from_non_identity_wire_bytes_exact(&bytes[12..45])
+        .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?;
+    let encoded_proof_len = usize::from(u16::from_be_bytes(
+        bytes[45..47]
+            .try_into()
+            .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?,
+    ));
+    let expected_wire_len = ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1
+        .checked_add(encoded_proof_len)
+        .ok_or(ZkAmsT256MembershipErrorV1::WireEncoding)?;
+    if encoded_proof_len != expected_proof_len || bytes.len() != expected_wire_len {
+        return Err(ZkAmsT256MembershipErrorV1::ProofLength);
+    }
+    Ok(BorrowedZkAmsT256MembershipProofWireV1 {
+        bound,
+        chunk_ordinal,
+        coefficient_count,
+        commitment,
+        proof: &bytes[ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1..],
+        padded_gates,
+    })
+}
+struct CanonicalMembershipProofSyntaxCursorV1<'a> {
+    proof: &'a [u8],
+    cursor: usize,
+}
+impl CanonicalMembershipProofSyntaxCursorV1<'_> {
+    fn read_point(&mut self) -> Result<(), GeneralizedBulletproofErrorV1> {
+        let end = self
+            .cursor
+            .checked_add(Point::POINT_BYTES)
+            .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        let bytes =
+            self.proof
+                .get(self.cursor..end)
+                .ok_or(GeneralizedBulletproofErrorV1::ProofLength {
+                    actual: self.proof.len(),
+                    expected: end,
+                })?;
+        Point::from_non_identity_wire_bytes_exact(bytes).map_err(|error| {
+            if matches!(error, super::VegaCurveError::IdentityPoint) {
+                GeneralizedBulletproofErrorV1::PointIdentity
+            } else {
+                GeneralizedBulletproofErrorV1::PointEncoding
+            }
+        })?;
+        self.cursor = end;
+        Ok(())
+    }
+    fn read_scalar(&mut self) -> Result<(), GeneralizedBulletproofErrorV1> {
+        let end = self
+            .cursor
+            .checked_add(32)
+            .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+        let bytes = self
+            .proof
+            .get(self.cursor..end)
+            .ok_or(GeneralizedBulletproofErrorV1::ProofLength {
+                actual: self.proof.len(),
+                expected: end,
+            })?
+            .try_into()
+            .map_err(|_| GeneralizedBulletproofErrorV1::ScalarEncoding)?;
+        Scalar::from_le_bytes_exact(bytes)
+            .map_err(|_| GeneralizedBulletproofErrorV1::ScalarEncoding)?;
+        self.cursor = end;
+        Ok(())
+    }
+    fn finish(self) -> Result<(), GeneralizedBulletproofErrorV1> {
+        if self.cursor != self.proof.len() {
+            return Err(GeneralizedBulletproofErrorV1::TranscriptConsumption);
+        }
+        Ok(())
+    }
+}
+fn preflight_generalized_membership_proof_syntax_v1(
+    proof: &[u8],
+    padded_gates: usize,
+) -> Result<(), ZkAmsT256MembershipErrorV1> {
+    if padded_gates == 0 || !padded_gates.is_power_of_two() {
+        return Err(ZkAmsT256MembershipErrorV1::CoefficientCount);
+    }
+    let ipa_rounds = usize::try_from(padded_gates.ilog2())
+        .map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;
+    let mut cursor = CanonicalMembershipProofSyntaxCursorV1 { proof, cursor: 0 };
+    for _ in 0..ZK_AMS_MEMBERSHIP_FIXED_PROOF_POINTS_V1 {
+        cursor.read_point()?;
+    }
+    for _ in 0..ZK_AMS_MEMBERSHIP_PRE_IPA_SCALARS_V1 {
+        cursor.read_scalar()?;
+    }
+    for _ in 0..ipa_rounds
+        .checked_mul(2)
+        .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow)?
+    {
+        cursor.read_point()?;
+    }
+    for _ in 0..ZK_AMS_MEMBERSHIP_FINAL_IPA_SCALARS_V1 {
+        cursor.read_scalar()?;
+    }
+    cursor.finish()?;
+    Ok(())
+}
+/// Allocation-free canonical syntax preflight for one exact membership chunk.
+///
+/// This validates the fixed wrapper, outer commitment, all generalized-
+/// Bulletproof points and scalars, and exact terminal consumption. It does not
+/// evaluate the proof equations or allocate an owned proof buffer.
+pub(super) fn preflight_zk_ams_t256_membership_chunk_wire_v1(
+    bytes: &[u8],
+    expected_chunk_ordinal: u16,
+    expected_bound: ZkAmsT256MembershipBoundV1,
+    expected_coefficient_count: usize,
+) -> Result<Point, ZkAmsT256MembershipErrorV1> {
+    let borrowed = borrow_zk_ams_t256_membership_proof_wire_exact_v1(bytes)?;
+    if borrowed.bound != expected_bound
+        || borrowed.chunk_ordinal != expected_chunk_ordinal
+        || usize::try_from(borrowed.coefficient_count).ok() != Some(expected_coefficient_count)
+    {
+        return Err(ZkAmsT256MembershipErrorV1::StatementMismatch);
+    }
+    preflight_generalized_membership_proof_syntax_v1(borrowed.proof, borrowed.padded_gates)?;
+    Ok(borrowed.commitment)
+}
 impl ZkAmsT256MembershipProofV1 {
     pub(super) fn bound(&self) -> ZkAmsT256MembershipBoundV1 {
         self.bound
     }
-
     pub(super) fn chunk_ordinal(&self) -> u16 {
         self.chunk_ordinal
     }
-
     pub(super) fn coefficient_count(&self) -> u32 {
         self.coefficient_count
     }
-
     pub(super) fn commitment(&self) -> Point {
         self.commitment
     }
-
     pub(super) fn proof_bytes(&self) -> &[u8] {
         &self.proof
     }
-
     pub(super) fn to_wire_bytes(&self) -> Vec<u8> {
         let proof_len = u16::try_from(self.proof.len())
             .expect("governed T256 membership proof length fits u16");
@@ -312,154 +436,93 @@ impl ZkAmsT256MembershipProofV1 {
         bytes.extend_from_slice(&self.proof);
         bytes
     }
-
     pub(super) fn from_wire_bytes_exact(bytes: &[u8]) -> Result<Self, ZkAmsT256MembershipErrorV1> {
-        if bytes.len() < ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1
-            || bytes[..4] != ZK_AMS_MEMBERSHIP_WIRE_MAGIC_V1
-            || bytes[4] != ZK_AMS_MEMBERSHIP_WIRE_VERSION_V1
-        {
-            return Err(ZkAmsT256MembershipErrorV1::WireEncoding);
-        }
-        let bound = ZkAmsT256MembershipBoundV1::try_from(bytes[5])?;
-        let chunk_ordinal = u16::from_be_bytes(
-            bytes[6..8]
-                .try_into()
-                .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?,
-        );
-        if chunk_ordinal > ZK_AMS_MEMBERSHIP_MAX_CHUNK_ORDINAL_V1 {
-            return Err(ZkAmsT256MembershipErrorV1::ChunkOrdinal);
-        }
-        let coefficient_count = u32::from_be_bytes(
-            bytes[8..12]
-                .try_into()
-                .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?,
-        );
-        let coefficient_count_usize = usize::try_from(coefficient_count)
-            .map_err(|_| ZkAmsT256MembershipErrorV1::CoefficientCount)?;
-        let (_, padded_gates, _) = membership_shape(coefficient_count_usize, bound)?;
-        let expected_proof_len = membership_proof_len(padded_gates)?;
-        let commitment = Point::from_non_identity_wire_bytes_exact(&bytes[12..45])
-            .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?;
-        let encoded_proof_len = usize::from(u16::from_be_bytes(
-            bytes[45..47]
-                .try_into()
-                .map_err(|_| ZkAmsT256MembershipErrorV1::WireEncoding)?,
-        ));
-        let expected_wire_len = ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1
-            .checked_add(encoded_proof_len)
-            .ok_or(ZkAmsT256MembershipErrorV1::WireEncoding)?;
-        if encoded_proof_len != expected_proof_len || bytes.len() != expected_wire_len {
-            return Err(ZkAmsT256MembershipErrorV1::ProofLength);
-        }
+        let borrowed = borrow_zk_ams_t256_membership_proof_wire_exact_v1(bytes)?;
         Ok(Self {
-            bound,
-            chunk_ordinal,
-            coefficient_count,
-            commitment,
-            proof: bytes[ZK_AMS_MEMBERSHIP_WIRE_HEADER_BYTES_V1..].to_vec(),
+            bound: borrowed.bound,
+            chunk_ordinal: borrowed.chunk_ordinal,
+            coefficient_count: borrowed.coefficient_count,
+            commitment: borrowed.commitment,
+            proof: borrowed.proof.to_vec(),
         })
     }
 }
-
 impl ProofScalar for Scalar {
     const ZERO: Self = Self::zero();
     const ONE: Self = Self::one();
     const SCALAR_BITS: usize = 256;
-
     fn from_u64(value: u64) -> Self {
         Self::from_u64(value)
     }
-
     fn decode(bytes: [u8; 32]) -> Option<Self> {
         Self::from_le_bytes_exact(bytes).ok()
     }
-
     fn encode(self) -> [u8; 32] {
         self.to_le_bytes()
     }
-
     fn reduce_wide(bytes: [u8; 64]) -> Self {
         Self::from_uniform_le_bytes(bytes)
     }
-
     fn invert(self) -> Option<Self> {
         self.inverse().ok()
     }
-
     fn sqrt(self) -> Option<Self> {
         Option::from(self.0.sqrt()).map(Self)
     }
-
     fn square(self) -> Self {
         self.square()
     }
-
     fn double(self) -> Self {
         self + self
     }
-
     fn is_zero(self) -> bool {
         self.is_zero()
     }
-
     fn is_odd(self) -> bool {
         self.to_le_bytes()[0] & 1 == 1
     }
-
     fn clear_secret(&mut self) {
         Scalar::clear_secret(self);
     }
 }
-
 impl Neg for Point {
     type Output = Self;
-
     fn neg(self) -> Self::Output {
         self.negate()
     }
 }
-
 impl AddAssign for Point {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
-
 impl SubAssign for Point {
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
-
 impl ProofPoint for Point {
     type Scalar = Scalar;
     type Encoded = [u8; 33];
     const POINT_BYTES: usize = 33;
-
     fn identity() -> Self {
         Self::identity()
     }
-
     fn is_identity(self) -> bool {
         self.is_identity()
     }
-
     fn double(self) -> Self {
         self + self
     }
-
     fn scale(self, scalar: Self::Scalar) -> Self {
         self.mul_scalar(scalar)
     }
-
     fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
         Point::conditional_select(a, b, choice)
     }
-
     fn clear_secret(&mut self) {
         Point::clear_secret(self);
     }
-
     fn encode(self) -> Self::Encoded {
         if self.is_identity() {
             let mut identity = [0_u8; 33];
@@ -470,7 +533,6 @@ impl ProofPoint for Point {
                 .expect("non-identity T256 point has a canonical encoding")
         }
     }
-
     fn decode(
         bytes: impl AsRef<[u8]>,
         allow_identity: bool,
@@ -492,15 +554,12 @@ impl ProofPoint for Point {
         })
     }
 }
-
 /// The full T256 basis needed by the largest exact membership circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ZkAmsT256BulletproofSuiteV1;
-
 impl ProofSuite for ZkAmsT256BulletproofSuiteV1 {
     type Scalar = Scalar;
     type Point = Point;
-
     fn generators() -> &'static ProofGenerators<Self> {
         static GENERATORS: OnceLock<ProofGenerators<ZkAmsT256BulletproofSuiteV1>> = OnceLock::new();
         GENERATORS.get_or_init(|| {
@@ -514,14 +573,12 @@ impl ProofSuite for ZkAmsT256BulletproofSuiteV1 {
         })
     }
 }
-
 fn one_generator(label: &[u8]) -> Point {
     derive_t256_generators_v1(label, 1)
         .expect("fixed T256 Bulletproof generator label is valid")
         .pop()
         .expect("one T256 Bulletproof generator was requested")
 }
-
 fn build_t256_generators<S>(
     g_label: &[u8],
     h_label: &[u8],
@@ -541,7 +598,6 @@ where
     ProofGenerators::new(g, h, g_bold, h_bold)
         .expect("fixed T256 Bulletproof basis has canonical shape")
 }
-
 /// Digest of every point in the full, ordered T256 generator basis.
 pub(super) fn zk_ams_t256_bulletproof_generator_basis_digest_v1() -> [u8; 32] {
     static DIGEST: OnceLock<[u8; 32]> = OnceLock::new();
@@ -568,7 +624,6 @@ pub(super) fn zk_ams_t256_bulletproof_generator_basis_digest_v1() -> [u8; 32] {
         hash.finalize()
     })
 }
-
 fn membership_shape(
     coefficient_count: usize,
     bound: ZkAmsT256MembershipBoundV1,
@@ -600,7 +655,6 @@ fn membership_shape(
     }
     Ok((actual_gates, padded_gates, constraint_count))
 }
-
 fn membership_proof_len(padded_gates: usize) -> Result<usize, ZkAmsT256MembershipErrorV1> {
     if padded_gates == 0 || !padded_gates.is_power_of_two() {
         return Err(ZkAmsT256MembershipErrorV1::CoefficientCount);
@@ -623,7 +677,6 @@ fn membership_proof_len(padded_gates: usize) -> Result<usize, ZkAmsT256Membershi
         })
         .ok_or(GeneralizedBulletproofErrorV1::ResourceOverflow.into())
 }
-
 fn boolean_constraints(gate: usize) -> [LinComb<Scalar>; 2] {
     [
         LinComb::empty()
@@ -634,7 +687,6 @@ fn boolean_constraints(gate: usize) -> [LinComb<Scalar>; 2] {
             .term(-Scalar::ONE, Variable::aL(gate)),
     ]
 }
-
 fn membership_constraints(
     coefficient_count: usize,
     bound: ZkAmsT256MembershipBoundV1,
@@ -693,7 +745,6 @@ fn membership_constraints(
     debug_assert_eq!(constraints.len(), constraint_count);
     Ok((padded_gates, constraints))
 }
-
 fn signed_scalar(coefficient: i8) -> Scalar {
     // Obtain the absolute value and sign with arithmetic masks, then select
     // the field sign algebraically. Valid membership coefficients are in
@@ -706,7 +757,6 @@ fn signed_scalar(coefficient: i8) -> Scalar {
     let magnitude = Scalar::from_u64(magnitude);
     magnitude - (Scalar::from_u64(sign) * (magnitude + magnitude))
 }
-
 fn append_boolean_witness(
     a_l: &mut ZeroizingT256ScalarVecV1,
     a_r: &mut ZeroizingT256ScalarVecV1,
@@ -716,7 +766,6 @@ fn append_boolean_witness(
     a_l.push(bit.get());
     a_r.push(bit.get());
 }
-
 fn membership_commitment_for_suite<S>(
     coefficients: &[i8],
     bound: ZkAmsT256MembershipBoundV1,
@@ -751,7 +800,6 @@ where
     }
     Ok((commitment, values, actual_gates))
 }
-
 fn membership_witness<S>(
     coefficients: &[i8],
     bound: ZkAmsT256MembershipBoundV1,
@@ -763,7 +811,6 @@ where
     let blinding = ZeroizingT256ScalarCopyV1::new(*blinding);
     let (commitment, mut values, actual_gates) =
         membership_commitment_for_suite::<S>(coefficients, bound, blinding.as_ref())?;
-
     let mut a_l = ZeroizingT256ScalarVecV1::with_capacity(actual_gates);
     let mut a_r = ZeroizingT256ScalarVecV1::with_capacity(actual_gates);
     for coefficient in coefficients.iter().copied() {
@@ -790,7 +837,6 @@ where
     let witness = ArithmeticCircuitWitness::<S>::new(a_l.take(), a_r.take(), openings)?;
     Ok((commitment, witness))
 }
-
 fn prove_membership_chunk_for_suite<S, R>(
     context_digest: [u8; 32],
     generator_basis_digest: [u8; 32],
@@ -844,7 +890,6 @@ where
         transcript_digest,
     ))
 }
-
 fn verify_membership_chunk_for_suite<S>(
     context_digest: [u8; 32],
     generator_basis_digest: [u8; 32],
@@ -890,7 +935,6 @@ where
     .verify(&mut transcript)?;
     Ok(transcript.finish()?)
 }
-
 /// Prove exact membership for one release-shape 16,384-coefficient chunk.
 pub(super) fn prove_zk_ams_t256_membership_chunk_v1<R: ProofRandomSource>(
     context_digest: [u8; 32],
@@ -914,7 +958,6 @@ pub(super) fn prove_zk_ams_t256_membership_chunk_v1<R: ProofRandomSource>(
         rng,
     )
 }
-
 /// Commit one exact release-shape membership chunk under the canonical T256 basis.
 ///
 /// This is the shared commitment primitive for state-owned opening checks and
@@ -936,7 +979,6 @@ pub(super) fn commit_zk_ams_t256_membership_chunk_v1(
     )
     .map(|(commitment, _values, _actual_gates)| commitment)
 }
-
 /// Verify exact membership for one release-shape 16,384-coefficient chunk.
 pub(super) fn verify_zk_ams_t256_membership_chunk_v1(
     context_digest: [u8; 32],
@@ -953,7 +995,6 @@ pub(super) fn verify_zk_ams_t256_membership_chunk_v1(
         evidence,
     )
 }
-
 fn initialize_transcript_state(
     context_digest: [u8; 32],
     generator_basis_digest: [u8; 32],
@@ -981,12 +1022,10 @@ fn initialize_transcript_state(
     );
     Ok(state)
 }
-
 fn append_scalar(state: &mut Vec<u8>, scalar: Scalar) {
     state.push(T256_BP_SCALAR_TAG_V1);
     state.extend_from_slice(&scalar.to_le_bytes());
 }
-
 fn append_point(
     state: &mut Vec<u8>,
     point: Point,
@@ -998,7 +1037,6 @@ fn append_point(
     state.extend_from_slice(&encoded);
     Ok(encoded)
 }
-
 fn derive_nonzero_challenge(
     state: &mut Vec<u8>,
     ordinal: &mut u32,
@@ -1033,7 +1071,6 @@ fn derive_nonzero_challenge(
     }
     Err(GeneralizedBulletproofErrorV1::TranscriptChallengeExhausted)
 }
-
 /// Typed prover transcript for one T256 membership-proof chunk.
 pub(super) struct T256BulletproofProverTranscriptV1<S>
 where
@@ -1044,7 +1081,6 @@ where
     challenge_ordinal: u32,
     suite: PhantomData<S>,
 }
-
 impl<S> T256BulletproofProverTranscriptV1<S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -1069,12 +1105,10 @@ where
             suite: PhantomData,
         })
     }
-
     pub(super) fn complete(self) -> (Vec<u8>, [u8; 32]) {
         (self.proof, keccak256(&self.state))
     }
 }
-
 impl<S> ProverTranscript<S> for T256BulletproofProverTranscriptV1<S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -1084,18 +1118,15 @@ where
         self.proof.extend_from_slice(&scalar.to_le_bytes());
         Ok(())
     }
-
     fn push_point(&mut self, point: Point) -> Result<(), GeneralizedBulletproofErrorV1> {
         let encoded = append_point(&mut self.state, point)?;
         self.proof.extend_from_slice(&encoded);
         Ok(())
     }
-
     fn challenge(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
         derive_nonzero_challenge(&mut self.state, &mut self.challenge_ordinal)
     }
 }
-
 /// Exact, allocation-bounded verifier transcript over attacker proof bytes.
 pub(super) struct T256BulletproofVerifierTranscriptV1<'a, S>
 where
@@ -1107,7 +1138,6 @@ where
     challenge_ordinal: u32,
     suite: PhantomData<S>,
 }
-
 impl<'a, S> T256BulletproofVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -1134,7 +1164,6 @@ where
             suite: PhantomData,
         })
     }
-
     fn take(&mut self, bytes: usize) -> Result<&'a [u8], GeneralizedBulletproofErrorV1> {
         let end = self
             .cursor
@@ -1150,7 +1179,6 @@ where
         self.cursor = end;
         Ok(value)
     }
-
     pub(super) fn finish(self) -> Result<[u8; 32], GeneralizedBulletproofErrorV1> {
         if self.cursor != self.proof.len() {
             return Err(GeneralizedBulletproofErrorV1::TranscriptConsumption);
@@ -1158,7 +1186,6 @@ where
         Ok(keccak256(&self.state))
     }
 }
-
 impl<S> VerifierTranscript<S> for T256BulletproofVerifierTranscriptV1<'_, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
@@ -1173,7 +1200,6 @@ where
         append_scalar(&mut self.state, scalar);
         Ok(scalar)
     }
-
     fn read_point(&mut self) -> Result<Point, GeneralizedBulletproofErrorV1> {
         let bytes: [u8; 33] = self
             .take(33)?
@@ -1189,12 +1215,10 @@ where
         append_point(&mut self.state, point)?;
         Ok(point)
     }
-
     fn challenge(&mut self) -> Result<Scalar, GeneralizedBulletproofErrorV1> {
         derive_nonzero_challenge(&mut self.state, &mut self.challenge_ordinal)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1205,7 +1229,6 @@ mod tests {
         },
         vega::VEGA_T256_SCALAR_MODULUS_BE_V1,
     };
-
     #[test]
     fn scalar_copy_owner_take_clears_named_source_and_guards_by_value_boundary() {
         let expected = Scalar::from_u64(41);
@@ -1213,7 +1236,6 @@ mod tests {
         let owned = ZeroizingT256ScalarCopyV1::take(&mut source_scalar);
         assert!(source_scalar.is_zero());
         assert_eq!(owned.get(), expected);
-
         let source = include_str!("bulletproof_t256.rs");
         assert!(source.contains("pub(super) fn new(mut value: Scalar) -> Self"));
         assert!(source.contains("let incoming = BorrowedT256ScalarCopyV1(&mut value);"));
@@ -1240,14 +1262,11 @@ mod tests {
         assert!(boolean_witness.contains("let bit = ZeroizingT256ScalarCopyV1::new("));
         assert_eq!(boolean_witness.matches("push(bit.get())").count(), 2);
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct TinyT256Suite;
-
     impl ProofSuite for TinyT256Suite {
         type Scalar = Scalar;
         type Point = Point;
-
         fn generators() -> &'static ProofGenerators<Self> {
             static GENERATORS: OnceLock<ProofGenerators<TinyT256Suite>> = OnceLock::new();
             GENERATORS.get_or_init(|| {
@@ -1261,14 +1280,11 @@ mod tests {
             })
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct CancellationT256Suite;
-
     impl ProofSuite for CancellationT256Suite {
         type Scalar = Scalar;
         type Point = Point;
-
         fn generators() -> &'static ProofGenerators<Self> {
             static GENERATORS: OnceLock<ProofGenerators<CancellationT256Suite>> = OnceLock::new();
             GENERATORS.get_or_init(|| {
@@ -1284,12 +1300,10 @@ mod tests {
             })
         }
     }
-
     struct KatRandom {
         seed: [u8; 32],
         counter: u64,
     }
-
     impl KatRandom {
         fn new(label: &[u8]) -> Self {
             Self {
@@ -1298,7 +1312,6 @@ mod tests {
             }
         }
     }
-
     impl ProofRandomSource for KatRandom {
         fn fill_bytes(
             &mut self,
@@ -1321,7 +1334,6 @@ mod tests {
             Ok(())
         }
     }
-
     type TinyFixture = (
         [u8; 32],
         [u8; 32],
@@ -1329,7 +1341,6 @@ mod tests {
         Vec<LinComb<Scalar>>,
         ArithmeticCircuitWitness<TinyT256Suite>,
     );
-
     fn fixture() -> TinyFixture {
         let generators = TinyT256Suite::generators().reduce(4).expect("tiny basis");
         let values = vec![
@@ -1394,7 +1405,6 @@ mod tests {
             witness,
         )
     }
-
     fn scalar_commitment(value: Scalar, mask: Scalar) -> Point {
         let generators = TinyT256Suite::generators();
         let mut terms = SecretMultiexpBuilder::<TinyT256Suite>::new(2)
@@ -1407,21 +1417,18 @@ mod tests {
             .expect("scalar mask term fits exact capacity");
         terms.evaluate().expect("complete scalar commitment")
     }
-
     fn scalar_openings() -> Vec<(Scalar, Scalar)> {
         vec![
             (Scalar::from_u64(7), Scalar::from_u64(11)),
             (Scalar::from_u64(13), Scalar::from_u64(17)),
         ]
     }
-
     fn scalar_commitments() -> Vec<Point> {
         scalar_openings()
             .into_iter()
             .map(|(value, mask)| scalar_commitment(value, mask))
             .collect()
     }
-
     fn scalar_constraints() -> Vec<LinComb<Scalar>> {
         vec![
             LinComb::empty()
@@ -1434,15 +1441,12 @@ mod tests {
                 .constant(-Scalar::from_u64(56)),
         ]
     }
-
     fn scalar_fixture_context() -> [u8; 32] {
         keccak256(b"t256-bp-scalar-opening-context")
     }
-
     fn scalar_fixture_basis() -> [u8; 32] {
         keccak256(b"t256-bp-scalar-opening-basis")
     }
-
     fn prove_scalar_fixture(
         constraints: Vec<LinComb<Scalar>>,
         vector_commitments: Vec<Point>,
@@ -1477,7 +1481,6 @@ mod tests {
         .prove(&mut KatRandom::new(rng_label), &mut transcript, witness)?;
         Ok(transcript.complete())
     }
-
     fn verify_scalar_fixture(
         constraints: Vec<LinComb<Scalar>>,
         vector_commitments: Vec<Point>,
@@ -1505,7 +1508,6 @@ mod tests {
         .verify(&mut transcript)?;
         transcript.finish()
     }
-
     fn mixed_vector_opening() -> (Point, VectorCommitmentOpening<Scalar>) {
         let generators = TinyT256Suite::generators().reduce(4).expect("tiny basis");
         let values = vec![
@@ -1530,7 +1532,6 @@ mod tests {
             VectorCommitmentOpening::new(values, mask),
         )
     }
-
     fn verify_fixture_with_axes(
         context: [u8; 32],
         basis: [u8; 32],
@@ -1553,7 +1554,6 @@ mod tests {
             .verify(&mut transcript)?;
         transcript.finish()
     }
-
     fn verify_fixture(
         context: [u8; 32],
         basis: [u8; 32],
@@ -1562,7 +1562,6 @@ mod tests {
     ) -> Result<[u8; 32], GeneralizedBulletproofErrorV1> {
         verify_fixture_with_axes(context, basis, 7, 2, commitment, proof)
     }
-
     fn padded_tail_membership_witness(
         bound: ZkAmsT256MembershipBoundV1,
         coefficients: &[i8],
@@ -1582,7 +1581,6 @@ mod tests {
         let generators = TinyT256Suite::generators()
             .reduce(padded_gates)
             .expect("tiny padded basis");
-
         let mut values = coefficients
             .iter()
             .copied()
@@ -1604,7 +1602,6 @@ mod tests {
             .evaluate()
             .expect("complete padded commitment");
         assert!(!commitment.is_identity());
-
         let mut a_l = Vec::with_capacity(actual_gates);
         let mut a_r = Vec::with_capacity(actual_gates);
         for coefficient in coefficients.iter().copied() {
@@ -1631,7 +1628,6 @@ mod tests {
         .expect("shape-valid padded-tail witness");
         (padded_gates, commitment, witness)
     }
-
     #[test]
     fn t256_scalar_and_point_adapters_are_exact_and_non_malleable() {
         let scalar = Scalar::from_u64(0x0102);
@@ -1647,7 +1643,6 @@ mod tests {
             <Scalar as ProofScalar>::sqrt(scalar.square()).map(|root| root.square()),
             Some(scalar.square())
         );
-
         let point = TinyT256Suite::generators().g;
         let encoded = <Point as ProofPoint>::encode(point);
         assert_eq!(encoded.len(), 33);
@@ -1674,7 +1669,6 @@ mod tests {
             Err(GeneralizedBulletproofErrorV1::PointEncoding)
         );
     }
-
     #[test]
     fn release_generator_basis_digest_is_pinned() {
         assert_eq!(
@@ -1682,7 +1676,6 @@ mod tests {
             ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1
         );
     }
-
     #[test]
     fn branchless_signed_membership_scalar_covers_release_coefficients() {
         assert_eq!(signed_scalar(-2), -Scalar::from_u64(2));
@@ -1691,7 +1684,6 @@ mod tests {
         assert_eq!(signed_scalar(1), Scalar::ONE);
         assert_eq!(signed_scalar(2), Scalar::from_u64(2));
     }
-
     #[test]
     fn factored_membership_commitment_matches_embedded_proof_commitment() {
         let context = keccak256(b"t256-factored-membership-commitment-context");
@@ -1714,16 +1706,13 @@ mod tests {
             &mut KatRandom::new(b"t256-factored-membership-commitment-rng"),
         )
         .expect("valid tiny membership proof");
-
         assert_eq!(direct, evidence.commitment());
     }
-
     #[test]
     fn release_membership_commitment_is_exact_and_binds_every_opening_input() {
         let bound = ZkAmsT256MembershipBoundV1::One;
         let blinding = Scalar::from_u64(29);
         let mut coefficients = vec![0_i8; ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1];
-
         assert_eq!(
             commit_zk_ams_t256_membership_chunk_v1(
                 bound,
@@ -1750,24 +1739,20 @@ mod tests {
             commit_zk_ams_t256_membership_chunk_v1(bound, &coefficients, &Scalar::ZERO),
             Err(ZkAmsT256MembershipErrorV1::Blinding)
         );
-
         let commitment = commit_zk_ams_t256_membership_chunk_v1(bound, &coefficients, &blinding)
             .expect("valid exact release commitment");
         assert!(!commitment.is_identity());
-
         coefficients[changed_index] = 1;
         let changed_coefficient =
             commit_zk_ams_t256_membership_chunk_v1(bound, &coefficients, &blinding)
                 .expect("mutated coefficient remains in range");
         assert_ne!(commitment, changed_coefficient);
-
         coefficients[changed_index] = 0;
         let changed_blinding =
             commit_zk_ams_t256_membership_chunk_v1(bound, &coefficients, &Scalar::from_u64(31))
                 .expect("mutated blinding remains nonzero");
         assert_ne!(commitment, changed_blinding);
     }
-
     #[test]
     fn membership_commitment_rejects_constructible_identity() {
         let result = membership_commitment_for_suite::<CancellationT256Suite>(
@@ -1780,11 +1765,9 @@ mod tests {
             Err(ZkAmsT256MembershipErrorV1::CommitmentIdentity)
         ));
     }
-
     #[test]
     fn membership_verifier_rejects_legacy_nonzero_padded_opening_tails_for_both_bounds() {
         type PaddedTailCase<'a> = (ZkAmsT256MembershipBoundV1, &'a [i8], u64, u64, &'a [u8]);
-
         let context = keccak256(b"t256-membership-padded-tail-context");
         let basis = keccak256(b"t256-membership-padded-tail-basis");
         let cases: [PaddedTailCase<'_>; 2] = [
@@ -1803,7 +1786,6 @@ mod tests {
                 b"t256-membership-padded-tail-bound-two",
             ),
         ];
-
         for (case_index, (bound, coefficients, tail, mask, rng_label)) in
             cases.into_iter().enumerate()
         {
@@ -1838,7 +1820,6 @@ mod tests {
                     coefficient_count + offset
                 );
             }
-
             // Reconstruct the formerly accepted statement by dropping the
             // new tail constraints.  Its valid proof demonstrates that the
             // nonzero coordinate is a real legacy forgery, not malformed
@@ -1870,7 +1851,6 @@ mod tests {
             )
             .expect("legacy statement admits the nonzero padded tail");
             let (proof, prover_digest) = prover_transcript.complete();
-
             let mut legacy_verifier = T256BulletproofVerifierTranscriptV1::<TinyT256Suite>::new(
                 context,
                 basis,
@@ -1892,7 +1872,6 @@ mod tests {
             .verify(&mut legacy_verifier)
             .expect("legacy verifier accepts its forged statement");
             assert_eq!(legacy_verifier.finish(), Ok(prover_digest));
-
             let forged_evidence = ZkAmsT256MembershipProofV1 {
                 bound,
                 chunk_ordinal,
@@ -1915,7 +1894,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn exact_membership_circuits_cover_both_sets_and_reject_adversarial_evidence() {
         let context = keccak256(b"t256-membership-test-context");
@@ -1979,7 +1957,6 @@ mod tests {
             ),
             Ok(bound_one_digest)
         );
-
         let (bound_two, bound_two_digest) = prove_membership_chunk_for_suite::<TinyT256Suite, _>(
             context,
             basis,
@@ -2035,7 +2012,6 @@ mod tests {
             ),
             Ok(bound_two_digest)
         );
-
         for index in 0..bound_two.proof.len() {
             let mut changed = bound_two.clone();
             changed.proof[index] ^= 1;
@@ -2052,7 +2028,6 @@ mod tests {
                 "changed membership proof byte {index} was accepted"
             );
         }
-
         let wire = bound_two.to_wire_bytes();
         assert_eq!(
             ZkAmsT256MembershipProofV1::from_wire_bytes_exact(&wire),
@@ -2085,7 +2060,6 @@ mod tests {
                 );
             }
         }
-
         let mut wrong_magic = wire.clone();
         wrong_magic[0] ^= 1;
         assert_eq!(
@@ -2133,7 +2107,6 @@ mod tests {
             ),
             Err(ZkAmsT256MembershipErrorV1::StatementMismatch)
         );
-
         assert_eq!(
             prove_membership_chunk_for_suite::<TinyT256Suite, _>(
                 context,
@@ -2193,7 +2166,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn scalar_pedersen_openings_roundtrip_for_one_and_mixed_commitments() {
         let mut one_constraints = scalar_constraints();
@@ -2221,7 +2193,6 @@ mod tests {
             Ok(one_digest)
         );
         assert_eq!(one_proof.len(), 589);
-
         let (vector_commitment, vector_opening) = mixed_vector_opening();
         let (mixed_proof, mixed_digest) = prove_scalar_fixture(
             scalar_constraints(),
@@ -2242,14 +2213,12 @@ mod tests {
             Ok(mixed_digest)
         );
         assert_eq!(mixed_proof.len(), 589);
-
         // Scalar openings use the omitted center coefficient and therefore
         // add no transcript elements at the governed lookup dimensions.
         assert_eq!(membership_proof_len(1_024), Ok(1_117));
         assert_eq!(membership_proof_len(16_384), Ok(1_381));
         assert_eq!(membership_proof_len(32_768), Ok(1_447));
     }
-
     #[test]
     fn scalar_pedersen_openings_reject_wrong_openings_order_count_weights_and_sign() {
         let canonical_commitments = scalar_commitments();
@@ -2272,7 +2241,6 @@ mod tests {
             ),
             Ok(digest)
         );
-
         let mut wrong_value = canonical_openings.clone();
         wrong_value[0].0 += Scalar::ONE;
         let mut wrong_mask = canonical_openings.clone();
@@ -2300,7 +2268,6 @@ mod tests {
                 Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
             ));
         }
-
         let mut prover_wrong_sign = scalar_constraints();
         prover_wrong_sign[0].wv[0].1 = Scalar::ONE;
         assert!(matches!(
@@ -2327,7 +2294,6 @@ mod tests {
             ),
             Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant)
         ));
-
         let mut reordered_commitments = canonical_commitments.clone();
         reordered_commitments.swap(0, 1);
         assert!(
@@ -2339,7 +2305,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut wrong_sign = scalar_constraints();
         wrong_sign[0].wv[0].1 = Scalar::ONE;
         assert!(
@@ -2358,7 +2323,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn t256_generalized_bulletproof_roundtrip_binds_every_byte_and_axis() {
         let (context, basis, commitment, constraints, witness) = fixture();
@@ -2381,7 +2345,6 @@ mod tests {
             verify_fixture(context, basis, commitment, &proof),
             Ok(prover_digest)
         );
-
         for index in 0..proof.len() {
             let mut changed = proof.clone();
             changed[index] ^= 1;

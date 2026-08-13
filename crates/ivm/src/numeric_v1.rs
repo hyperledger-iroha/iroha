@@ -1,7 +1,5 @@
 //! Kotodama V1 exact numeric syscall implementation.
-
 use core::cmp::Ordering;
-
 use iroha_primitives::{
     bigint::{BigInt, BigIntError},
     numeric::{
@@ -9,7 +7,6 @@ use iroha_primitives::{
         Quantity, RoundingMode,
     },
 };
-
 use crate::{
     IVM, VMError,
     numeric::{
@@ -21,13 +18,11 @@ use crate::{
     syscall_metering::SyscallMeteringPhase,
     syscalls,
 };
-
 #[derive(Clone, Copy)]
 enum FailureMode {
     Trap,
     Status,
 }
-
 fn failure_mode(vm: &IVM, reserved: &[usize]) -> Result<FailureMode, VMError> {
     if reserved.iter().any(|&register| vm.register(register) != 0) {
         return Err(VMError::NumericFault(
@@ -40,7 +35,6 @@ fn failure_mode(vm: &IVM, reserved: &[usize]) -> Result<FailureMode, VMError> {
         _ => Err(VMError::NumericFault(NumericFaultV1::InvalidFailureMode)),
     }
 }
-
 fn require_zero_registers(vm: &IVM, reserved: &[usize]) -> Result<(), VMError> {
     if reserved.iter().any(|&register| vm.register(register) != 0) {
         Err(VMError::NumericFault(
@@ -50,7 +44,6 @@ fn require_zero_registers(vm: &IVM, reserved: &[usize]) -> Result<(), VMError> {
         Ok(())
     }
 }
-
 fn rounding_mode(vm: &IVM) -> Result<RoundingMode, VMError> {
     let mode = RoundingModeV1::from_tag(vm.register(NUMERIC_ROUNDING_REGISTER))
         .ok_or(VMError::NumericFault(NumericFaultV1::InvalidRoundingMode))?;
@@ -64,7 +57,6 @@ fn rounding_mode(vm: &IVM) -> Result<RoundingMode, VMError> {
         RoundingModeV1::NearestTowardZero => RoundingMode::NearestTowardZero,
     })
 }
-
 fn numeric_fault(error: NumericOperationError) -> Result<NumericFaultV1, VMError> {
     Ok(match error {
         NumericOperationError::MantissaOverflow => NumericFaultV1::MantissaOverflow,
@@ -83,7 +75,6 @@ fn numeric_fault(error: NumericOperationError) -> Result<NumericFaultV1, VMError
         }
     })
 }
-
 fn bigint_fault(error: BigIntError) -> Result<NumericFaultV1, VMError> {
     match error {
         BigIntError::Overflow => Ok(NumericFaultV1::MantissaOverflow),
@@ -91,7 +82,6 @@ fn bigint_fault(error: BigIntError) -> Result<NumericFaultV1, VMError> {
         BigIntError::NonCanonical => Err(VMError::PointerAbiFault(PointerAbiFaultV1::NonCanonical)),
     }
 }
-
 fn enforce_int_domain(value: BigInt) -> Result<BigInt, BigIntError> {
     if value.twos_byte_len() <= MAX_MANTISSA_BYTES {
         Ok(value)
@@ -99,11 +89,9 @@ fn enforce_int_domain(value: BigInt) -> Result<BigInt, BigIntError> {
         Err(BigIntError::Overflow)
     }
 }
-
 fn checked_int_result(result: Result<BigInt, BigIntError>) -> Result<BigInt, BigIntError> {
     result.and_then(enforce_int_domain)
 }
-
 fn checked_int_div_rem(
     result: Result<(BigInt, BigInt), BigIntError>,
 ) -> Result<(BigInt, BigInt), BigIntError> {
@@ -115,7 +103,6 @@ fn checked_int_div_rem(
         enforce_int_domain(remainder)?,
     ))
 }
-
 fn wrap_int_result(value: BigInt) -> Result<BigInt, BigIntError> {
     let source = value.to_twos_bytes();
     let extension = if value.is_negative() { 0xff } else { 0x00 };
@@ -124,13 +111,11 @@ fn wrap_int_result(value: BigInt) -> Result<BigInt, BigIntError> {
     low[..copied].copy_from_slice(&source[..copied]);
     BigInt::from_twos_bytes(&low)
 }
-
 fn recover(vm: &mut IVM, fault: NumericFaultV1) -> Result<(), VMError> {
     vm.set_register(NUMERIC_RESULT_REGISTER, 0);
     vm.set_register(NUMERIC_STATUS_REGISTER, fault.tag());
     vm.mark_staged_syscall_recoverable_failure()
 }
-
 fn resolve_failure<T>(
     vm: &mut IVM,
     mode: FailureMode,
@@ -150,7 +135,6 @@ fn resolve_failure<T>(
         }
     }
 }
-
 fn resolve_bigint_failure<T>(
     vm: &mut IVM,
     mode: FailureMode,
@@ -170,7 +154,6 @@ fn resolve_bigint_failure<T>(
         }
     }
 }
-
 fn resolve_observed<T>(
     vm: &mut IVM,
     mode: FailureMode,
@@ -182,7 +165,6 @@ fn resolve_observed<T>(
         Err(ObservedNumericError::Numeric(error)) => resolve_failure(vm, mode, Err(error)),
     }
 }
-
 fn observe_work(vm: &mut IVM, step: NumericWorkStep) -> Result<(), VMError> {
     let phase = match step {
         NumericWorkStep::CanonicalityProbe { .. } => SyscallMeteringPhase::CanonicalValidation,
@@ -201,11 +183,9 @@ fn observe_work(vm: &mut IVM, step: NumericWorkStep) -> Result<(), VMError> {
     };
     vm.charge_syscall_stage(phase, numeric_gas::work_step_gas(step)?)
 }
-
 fn limb_count(value: &BigInt) -> u64 {
     numeric_gas::limbs_for_bits(u64::try_from(value.bit_len()).unwrap_or(u64::MAX))
 }
-
 fn twos_limb_count(value: &BigInt) -> Result<u64, VMError> {
     let magnitude_bits = u64::try_from(value.bit_len()).map_err(|_| VMError::GasCostOverflow)?;
     let conservative_signed_bits = magnitude_bits
@@ -213,72 +193,60 @@ fn twos_limb_count(value: &BigInt) -> Result<u64, VMError> {
         .ok_or(VMError::GasCostOverflow)?;
     Ok(numeric_gas::limbs_for_bits(conservative_signed_bits))
 }
-
 fn charge_limb_work(vm: &mut IVM, work: u64) -> Result<(), VMError> {
     vm.charge_syscall_stage(
         SyscallMeteringPhase::Arithmetic,
         numeric_gas::work_gas(work)?,
     )
 }
-
 fn charge_unary(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
     charge_limb_work(vm, limb_count(value))
 }
-
 fn charge_checked_unary(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
     charge_limb_work(vm, numeric_gas::checked_int_unary_work(limb_count(value))?)
 }
-
 fn charge_additive(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
     charge_limb_work(vm, limb_count(lhs).max(limb_count(rhs)))
 }
-
 fn charge_checked_additive(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
     charge_limb_work(
         vm,
         numeric_gas::checked_int_additive_work(limb_count(lhs), limb_count(rhs))?,
     )
 }
-
 fn charge_wrapping_additive(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
     charge_limb_work(
         vm,
         numeric_gas::wrapping_additive_work(limb_count(lhs), limb_count(rhs))?,
     )
 }
-
 fn charge_checked_multiplication(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
     charge_limb_work(
         vm,
         numeric_gas::checked_int_multiplication_work(limb_count(lhs), limb_count(rhs))?,
     )
 }
-
 fn charge_wrapping_multiplication(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
     charge_limb_work(
         vm,
         numeric_gas::wrapping_multiplication_work(limb_count(lhs), limb_count(rhs))?,
     )
 }
-
 fn charge_checked_division(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
     charge_limb_work(
         vm,
         numeric_gas::checked_int_division_work(limb_count(lhs), limb_count(rhs))?,
     )
 }
-
 fn charge_wrapping_unary(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
     charge_limb_work(vm, numeric_gas::wrapping_unary_work(limb_count(value))?)
 }
-
 fn charge_wrapping_reduction(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
     charge_limb_work(
         vm,
         numeric_gas::wrapping_reduction_work(twos_limb_count(value)?)?,
     )
 }
-
 fn charge_decimal_comparison(vm: &mut IVM, lhs: &Numeric, rhs: &Numeric) -> Result<(), VMError> {
     let target = lhs.scale().max(rhs.scale());
     let lhs_delta = u8::try_from(target - lhs.scale()).map_err(|_| VMError::GasCostOverflow)?;
@@ -297,47 +265,39 @@ fn charge_decimal_comparison(vm: &mut IVM, lhs: &Numeric, rhs: &Numeric) -> Resu
     )?;
     charge_limb_work(vm, work)
 }
-
 fn publish_int(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
     let pointer = numeric_tlv::allocate_int_metered(vm, value)?;
     vm.set_register(NUMERIC_RESULT_REGISTER, pointer);
     vm.set_register(NUMERIC_STATUS_REGISTER, 0);
     Ok(())
 }
-
 fn publish_decimal(vm: &mut IVM, value: &Numeric) -> Result<(), VMError> {
     let pointer = numeric_tlv::allocate_decimal_metered(vm, value)?;
     vm.set_register(NUMERIC_RESULT_REGISTER, pointer);
     vm.set_register(NUMERIC_STATUS_REGISTER, 0);
     Ok(())
 }
-
 fn publish_quantity(vm: &mut IVM, value: &Quantity) -> Result<(), VMError> {
     let pointer = numeric_tlv::allocate_quantity_metered(vm, value)?;
     vm.set_register(NUMERIC_RESULT_REGISTER, pointer);
     vm.set_register(NUMERIC_STATUS_REGISTER, 0);
     Ok(())
 }
-
 fn publish_bool(vm: &mut IVM, value: bool) {
     vm.set_register(NUMERIC_RESULT_REGISTER, u64::from(value));
 }
-
 fn decode_int_register(vm: &mut IVM, register: usize) -> Result<BigInt, VMError> {
     let pointer = vm.register(register);
     numeric_tlv::decode_int_metered(vm, pointer)
 }
-
 fn decode_decimal_register(vm: &mut IVM, register: usize) -> Result<Numeric, VMError> {
     let pointer = vm.register(register);
     numeric_tlv::decode_decimal_metered(vm, pointer)
 }
-
 fn decode_quantity_register(vm: &mut IVM, register: usize) -> Result<Quantity, VMError> {
     let pointer = vm.register(register);
     numeric_tlv::decode_quantity_metered(vm, pointer)
 }
-
 fn decode_scale(vm: &mut IVM) -> Result<Result<u32, NumericOperationError>, VMError> {
     let scale = decode_int_register(vm, NUMERIC_SCALE_REGISTER)?;
     Ok(match scale.try_to_u64() {
@@ -347,7 +307,6 @@ fn decode_scale(vm: &mut IVM) -> Result<Result<u32, NumericOperationError>, VMEr
         _ => Err(NumericOperationError::InvalidScale),
     })
 }
-
 fn decimal_exact_division_observed(
     vm: &mut IVM,
     lhs: &Numeric,
@@ -355,7 +314,6 @@ fn decimal_exact_division_observed(
 ) -> Result<Numeric, ObservedNumericError<VMError>> {
     lhs.try_decimal_div_exact_observed(rhs, &mut |step| observe_work(vm, step))
 }
-
 /// Execute one allowed Kotodama V1 numeric syscall.
 ///
 /// # Errors
@@ -731,7 +689,6 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
     }
     Ok(0)
 }
-
 fn comparison(number: u32, ordering: Ordering) -> bool {
     match number {
         syscalls::SYSCALL_INT_EQ | syscalls::SYSCALL_DECIMAL_EQ | syscalls::SYSCALL_QUANTITY_EQ => {

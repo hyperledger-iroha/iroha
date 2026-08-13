@@ -1,5 +1,4 @@
 use super::*;
-
 fn scalar_chunk_v1(values: &[u64]) -> ConfidentialSpoolChunkV1 {
     let mut chunk =
         ConfidentialSpoolChunkV1::new_zeroed_v1(SLOT_PLAINTEXT_BYTES_V1).expect("tiny exact chunk");
@@ -10,7 +9,6 @@ fn scalar_chunk_v1(values: &[u64]) -> ConfidentialSpoolChunkV1 {
     }
     chunk
 }
-
 fn message_v1(values: [u64; 3]) -> [u8; 96] {
     let mut message = [0_u8; 96];
     for (encoded, value) in message.chunks_exact_mut(32).zip(values) {
@@ -18,7 +16,6 @@ fn message_v1(values: [u64; 3]) -> [u8; 96] {
     }
     message
 }
-
 fn manual_mapping_v1(completed_rounds: u8) -> [u8; 32] {
     let remaining_log = GLOBAL_SUMCHECK_ROUNDS_V1 - completed_rounds;
     let values = 1_u64 << remaining_log;
@@ -44,7 +41,6 @@ fn manual_mapping_v1(completed_rounds: u8) -> [u8; 32] {
     }
     hash.finalize()
 }
-
 fn manual_manifest_v1() -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(b"iroha.zk-ams.v1.phase23.global-lookup.external-sumcheck.manifest\0");
@@ -76,7 +72,6 @@ fn manual_manifest_v1() -> [u8; 32] {
     hash.update(&[1, 0, 0, 0, 0, 0, 0, 0, 0]);
     hash.finalize()
 }
-
 fn manual_context_v1(
     public_context: [u8; 32],
     descriptor: &ExternalColumnDescriptorV1,
@@ -92,7 +87,6 @@ fn manual_context_v1(
     hash.update(&[role as u8, generation, descriptor.completed_rounds]);
     hash.finalize()
 }
-
 #[test]
 fn release_geometry_accounting_and_false_claims_are_exact() {
     let release = descriptor_v1(3).expect("release descriptor");
@@ -122,7 +116,6 @@ fn release_geometry_accounting_and_false_claims_are_exact() {
         assert!(!gate);
     }
 }
-
 #[test]
 fn independent_literal_frames_pin_mapping_manifest_and_role_contexts() {
     let release = descriptor_v1(3).expect("release descriptor");
@@ -143,7 +136,6 @@ fn independent_literal_frames_pin_mapping_manifest_and_role_contexts() {
     );
     assert_ne!(a, u);
     assert_ne!(release.mapping_digest, tiny.mapping_digest);
-
     assert_eq!(
         release.mapping_digest,
         hex_literal::hex!("7a15a17394d8fb38dd26239158593a076775dc248e8e3f9db23555f3afe982c3")
@@ -165,7 +157,6 @@ fn independent_literal_frames_pin_mapping_manifest_and_role_contexts() {
         hex_literal::hex!("269a285a2f78ada0568c7cda81662a0ed064ec8b8e0c732b34e32a6b69525b9e")
     );
 }
-
 #[test]
 fn tiny_authenticated_pair_roundtrip_and_two_folds_are_exact() {
     let directory = tempfile::tempdir().expect("tempdir");
@@ -185,7 +176,6 @@ fn tiny_authenticated_pair_roundtrip_and_two_folds_are_exact() {
         .push_inverse_slot_v1(0, scalar_chunk_v1(&[5, 6, 7, 8]))
         .expect("inverse");
     let pair = initial.seal_v1().expect("seal pair");
-
     let evaluated = evaluate_round_v1(
         pair,
         RoundEvaluatorSealV1::TestOnly {
@@ -219,7 +209,6 @@ fn tiny_authenticated_pair_roundtrip_and_two_folds_are_exact() {
         Scalar::from_u64(5)
     );
     drop(a);
-
     let evaluated = evaluate_round_v1(
         pair,
         RoundEvaluatorSealV1::TestOnly {
@@ -250,7 +239,6 @@ fn tiny_authenticated_pair_roundtrip_and_two_folds_are_exact() {
     );
     assert!(a.as_slice_v1()[32..].iter().all(|byte| *byte == 0));
 }
-
 #[test]
 fn malformed_padding_order_message_and_challenge_fail_closed() {
     assert_eq!(descriptor_v1(2), Err(ExternalStorageErrorV1::Shape));
@@ -268,7 +256,6 @@ fn malformed_padding_order_message_and_challenge_fail_closed() {
         validate_message_v1(&bad_message),
         Err(ExternalStorageErrorV1::Encoding)
     );
-
     let directory = tempfile::tempdir().unwrap();
     let mut initial = begin_initial_pair_v1(
         [7; 32],
@@ -287,12 +274,10 @@ fn malformed_padding_order_message_and_challenge_fail_closed() {
         Err(ExternalStorageErrorV1::Order)
     );
 }
-
 fn fail_with_scalar_bytes_v1() -> Result<(), ExternalStorageErrorV1> {
     let _bytes = SecretScalarBytesV1([0x5a; 32]);
     Err(ExternalStorageErrorV1::Spool)
 }
-
 #[test]
 fn scalar_byte_owner_covers_success_error_and_unwind() {
     assert!(core::mem::needs_drop::<SecretScalarBytesV1>());
@@ -306,7 +291,6 @@ fn scalar_byte_owner_covers_success_error_and_unwind() {
         .is_err()
     );
 }
-
 #[test]
 fn source_guards_freeze_privacy_typestate_and_budgets() {
     let source = include_str!("external_sumcheck_storage_v1.rs");

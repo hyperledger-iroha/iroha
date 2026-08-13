@@ -5,9 +5,7 @@
 //! (lanes and data-spaces) so callers can adopt the eventual multi-lane feeds
 //! by swapping in the real scheduler hooks once they land; until then we keep
 //! the fallback values in this module to avoid breaking operator dashboards.
-
 pub mod capability;
-
 #[cfg(feature = "telemetry")]
 use std::collections::btree_map::Entry as BTreeEntry;
 #[cfg(feature = "telemetry")]
@@ -22,7 +20,6 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
-
 use http::StatusCode;
 use iroha_config::parameters::actual::{DataspaceGossipFallback, RestrictedPublicPayload};
 use iroha_crypto::{Hash, HashOf};
@@ -34,9 +31,7 @@ use iroha_data_model::events::data::{
     space_directory::SpaceDirectoryEvent,
 };
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
-use iroha_data_model::soranet::privacy_metrics::{
-    SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1,
-};
+use iroha_data_model::soranet::privacy_metrics::{SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1};
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use iroha_data_model::{
     Identifiable,
@@ -98,7 +93,6 @@ use norito::streaming::{
 use settlement_router::XorQuantity;
 use settlement_router::policy::BufferStatus;
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
-
 #[cfg(feature = "telemetry")]
 use crate::pipeline::access::AccessSetSource;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
@@ -9022,7 +9016,6 @@ mod tests {
         sync::Arc,
         time::Duration,
     };
-
     use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, SignatureOf};
     #[cfg(feature = "telemetry")]
@@ -9053,9 +9046,7 @@ mod tests {
         trigger::prelude::{Action, Repeats, Trigger, TriggerId},
     };
     #[cfg(feature = "telemetry")]
-    use iroha_data_model::{
-        events::data::sorafs::SorafsProofHealthAlert, sorafs::capacity::ProviderId,
-    };
+    use iroha_data_model::{events::data::sorafs::SorafsProofHealthAlert, sorafs::capacity::ProviderId};
     use iroha_primitives::{
         addr::{SocketAddr, socket_addr},
         time::{MockTimeHandle, TimeSource},
@@ -9069,7 +9060,6 @@ mod tests {
         TelemetryEnergyStats, TelemetryNetworkStats,
     };
     use tokio::task::spawn_blocking;
-
     #[cfg(feature = "telemetry")]
     use super::StreamingTelemetry;
     use super::*;
@@ -9912,9 +9902,7 @@ mod tests {
         use iroha_telemetry::metrics::Status;
         use iroha_test_samples::PEER_KEYPAIR;
         use nonzero_ext::nonzero;
-
         use super::StateTelemetry;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_catalog = LaneCatalog::new(
@@ -12089,7 +12077,6 @@ mod tests {
     #[test]
     fn pending_block_metrics_updated() {
         use std::sync::Arc;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
         telemetry.record_pending_block_metrics(12, 4, 1);
@@ -12101,7 +12088,6 @@ mod tests {
     #[test]
     fn prf_context_updates_metrics() {
         use std::sync::Arc;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
         let seed = [0xAB; 32];
@@ -12130,7 +12116,6 @@ mod tests {
     #[test]
     fn tiered_snapshot_metrics_updated() {
         use std::sync::Arc;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         record_state_tiered_snapshot(&telemetry, 7, 3, 512, 2, 1024, 1, 2, 3, 2048, 4, 512);
@@ -12150,7 +12135,6 @@ mod tests {
     #[test]
     fn storage_budget_metrics_updated() {
         use std::sync::Arc;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.record_storage_budget_usage("kura", 512, 2048);
@@ -12181,7 +12165,6 @@ mod tests {
     #[test]
     fn storage_da_metrics_updated() {
         use std::sync::Arc;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.inc_storage_da_cache("kura", "hit");
@@ -12262,7 +12245,6 @@ mod tests {
     #[test]
     fn governance_proposal_gauge_seeding_resets_counts() {
         use crate::state::GovernanceProposalStatus as GPS;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.record_governance_proposal_transition(None, GPS::Proposed);
@@ -12300,13 +12282,10 @@ mod tests {
     #[test]
     fn governance_events_drive_metrics_via_ingest() {
         use std::sync::Arc;
-
         use iroha_data_model::events::data::governance::{
             GovernanceEvent, GovernanceProposalApproved, GovernanceProposalEnacted,
         };
-
         use crate::state::GovernanceProposalStatus as GPS;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let proposal_id = [0xAB; 32];
@@ -12350,7 +12329,6 @@ mod tests {
     #[test]
     fn council_persist_event_updates_gauges() {
         use std::sync::Arc;
-
         use iroha_data_model::{
             events::data::governance::{GovernanceCouncilPersisted, GovernanceEvent},
             isi::governance::CouncilDerivationKind,
@@ -12375,7 +12353,6 @@ mod tests {
     #[test]
     fn governance_bond_events_increment() {
         use std::sync::Arc;
-
         use iroha_data_model::events::data::governance::{
             GovernanceEvent, GovernanceLockCreated, GovernanceLockExtended, GovernanceLockUnlocked,
         };
@@ -12430,9 +12407,7 @@ mod tests {
     #[test]
     fn citizen_service_events_increment() {
         use std::sync::Arc;
-
         use iroha_data_model::isi::governance::CitizenServiceEvent;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.record_citizen_service_event(CitizenServiceEvent::Decline, &Quantity::zero());
@@ -13416,7 +13391,6 @@ mod tests {
     #[tokio::test]
     async fn p2p_subscriber_unrouted_metric_tracks_counter() {
         use iroha_p2p::network::message::Topic;
-
         let sut = SystemUnderTest::new();
         let metrics = sut.telemetry.metrics().await;
         let baseline = metrics.p2p_subscriber_unrouted_total.get();
@@ -13431,7 +13405,6 @@ mod tests {
     #[tokio::test]
     async fn p2p_subscriber_queue_full_metric_tracks_counter() {
         use iroha_p2p::network::message::Topic;
-
         let sut = SystemUnderTest::new();
         let metrics = sut.telemetry.metrics().await;
         let baseline = metrics.p2p_subscriber_queue_full_total.get();
@@ -13446,7 +13419,6 @@ mod tests {
     #[tokio::test]
     async fn p2p_subscriber_queue_full_by_topic_tracks_counters() {
         use iroha_p2p::network::{inc_subscriber_queue_full_for_test as bump, message::Topic};
-
         let sut = SystemUnderTest::new();
         let metrics = sut.telemetry.metrics().await;
         let by = &metrics.p2p_subscriber_queue_full_by_topic_total;
@@ -13502,7 +13474,6 @@ mod tests {
     #[tokio::test]
     async fn p2p_subscriber_unrouted_by_topic_tracks_counters() {
         use iroha_p2p::network::{inc_subscriber_unrouted_for_test as bump, message::Topic};
-
         let sut = SystemUnderTest::new();
         let metrics = sut.telemetry.metrics().await;
         let by = &metrics.p2p_subscriber_unrouted_by_topic_total;

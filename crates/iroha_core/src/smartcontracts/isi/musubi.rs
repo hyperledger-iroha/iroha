@@ -2,9 +2,7 @@
 //!
 //! The registry uses only typed first-release stores. No legacy state-path
 //! decoding or compatibility aliases live here.
-
 use std::collections::{BTreeMap, BTreeSet};
-
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     asset::AssetId,
@@ -22,7 +20,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
-
 use super::prelude::*;
 use crate::{
     prelude::ValidSingularQuery,
@@ -33,7 +30,6 @@ use crate::{
     },
     telemetry::{MusubiGovernanceActionV1, MusubiGovernanceRejectionReasonV1},
 };
-
 impl Execute for RegisterMusubiNamespaceBindingV1 {
     fn execute(
         self,
@@ -96,7 +92,6 @@ impl Execute for RegisterMusubiNamespaceBindingV1 {
         )
     }
 }
-
 impl Execute for RegisterMusubiArchiveV1 {
     fn execute(
         self,
@@ -212,7 +207,6 @@ impl Execute for RegisterMusubiArchiveV1 {
         )
     }
 }
-
 impl Execute for RegisterMusubiProviderBundleAttestationV1 {
     fn execute(
         self,
@@ -329,7 +323,6 @@ impl Execute for RegisterMusubiProviderBundleAttestationV1 {
         )
     }
 }
-
 impl Execute for AddMusubiArchiveLocationV1 {
     fn execute(
         self,
@@ -509,7 +502,6 @@ impl Execute for AddMusubiArchiveLocationV1 {
         )
     }
 }
-
 impl Execute for RetireMusubiArchiveLocationV1 {
     fn execute(
         self,
@@ -598,7 +590,6 @@ impl Execute for RetireMusubiArchiveLocationV1 {
         )
     }
 }
-
 impl Execute for PublishMusubiReleaseV1 {
     fn execute(
         self,
@@ -683,7 +674,6 @@ impl Execute for PublishMusubiReleaseV1 {
                     authority,
                     state_transaction.world(),
                 )?;
-
                 let height = execution_height(state_transaction);
                 let existing_package = state_transaction
                     .world
@@ -785,7 +775,6 @@ impl Execute for PublishMusubiReleaseV1 {
                 package
                     .validate()
                     .map_err(|error| invariant(error.reason()))?;
-
                 let initial_reason = MusubiReasonV1::new("initial publication")
                     .expect("static Musubi reason is valid");
                 let yank = MusubiReleaseYankV1 {
@@ -811,7 +800,6 @@ impl Execute for PublishMusubiReleaseV1 {
                 record
                     .validate()
                     .map_err(|error| invariant(error.reason()))?;
-
                 let planned_index_revision = plan_resolver_index_revision(state_transaction)?;
                 let index_revision = planned_index_revision.get();
                 let reverse_references = plan_archive_reverse_reference(
@@ -859,7 +847,6 @@ impl Execute for PublishMusubiReleaseV1 {
                     .as_ref()
                     .cloned()
                     .map(MusubiEvent::PackageMetadataChanged);
-
                 *state_transaction
                     .world
                     .musubi_resolver_index_revision
@@ -927,7 +914,6 @@ impl Execute for PublishMusubiReleaseV1 {
         )
     }
 }
-
 impl Execute for SetMusubiReleaseYankV1 {
     fn execute(
         self,
@@ -1015,7 +1001,6 @@ impl Execute for SetMusubiReleaseYankV1 {
         )
     }
 }
-
 impl Execute for SetMusubiPackageMetadataV1 {
     fn execute(
         self,
@@ -1079,7 +1064,6 @@ impl Execute for SetMusubiPackageMetadataV1 {
         )
     }
 }
-
 impl Execute for InviteMusubiPackageMaintainerV1 {
     fn execute(
         self,
@@ -1188,7 +1172,6 @@ impl Execute for InviteMusubiPackageMaintainerV1 {
         )
     }
 }
-
 impl Execute for AcceptMusubiPackageMaintainerV1 {
     fn execute(
         self,
@@ -1320,7 +1303,6 @@ impl Execute for AcceptMusubiPackageMaintainerV1 {
         )
     }
 }
-
 impl Execute for RevokeMusubiPackageMaintainerInvitationV1 {
     fn execute(
         self,
@@ -1406,7 +1388,6 @@ impl Execute for RevokeMusubiPackageMaintainerInvitationV1 {
         )
     }
 }
-
 impl Execute for SetMusubiPackageMaintainerRoleV1 {
     fn execute(
         self,
@@ -1517,7 +1498,6 @@ impl Execute for SetMusubiPackageMaintainerRoleV1 {
         )
     }
 }
-
 impl Execute for RemoveMusubiPackageMaintainerV1 {
     fn execute(
         self,
@@ -1608,7 +1588,6 @@ impl Execute for RemoveMusubiPackageMaintainerV1 {
         )
     }
 }
-
 impl Execute for RegisterMusubiAliasV1 {
     fn execute(
         self,
@@ -1733,7 +1712,6 @@ impl Execute for RegisterMusubiAliasV1 {
         )
     }
 }
-
 impl Execute for RecoverMusubiPackageV1 {
     fn execute(
         self,
@@ -1870,7 +1848,6 @@ impl Execute for RecoverMusubiPackageV1 {
         )
     }
 }
-
 impl Execute for RetargetMusubiAliasV1 {
     fn execute(
         self,
@@ -1948,7 +1925,6 @@ impl Execute for RetargetMusubiAliasV1 {
         )
     }
 }
-
 impl Execute for SetMusubiArtifactTakedownV1 {
     fn execute(
         self,
@@ -2039,7 +2015,6 @@ impl Execute for SetMusubiArtifactTakedownV1 {
         )
     }
 }
-
 impl Execute for SetMusubiRegistryPolicyV1 {
     fn execute(
         self,
@@ -2094,7 +2069,6 @@ impl Execute for SetMusubiRegistryPolicyV1 {
         )
     }
 }
-
 impl Execute for AssertMusubiReleaseDigestV1 {
     fn execute(
         self,
@@ -2116,9 +2090,7 @@ impl Execute for AssertMusubiReleaseDigestV1 {
         }
     }
 }
-
 include!("musubi/query_execution.rs");
-
 fn upsert_maintainer_directory(
     entry: MusubiMaintainerDirectoryEntryV1,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -2128,7 +2100,6 @@ fn upsert_maintainer_directory(
         .musubi_maintainer_directory
         .insert(entry.key(), entry);
 }
-
 #[must_use = "a package-governance advance plan must be applied after fallible checks complete"]
 struct PackageGovernanceAdvance {
     revision: u64,
@@ -2136,13 +2107,11 @@ struct PackageGovernanceAdvance {
     invitation_events: Vec<MusubiEvent>,
     terminal_invitation: Option<MusubiMaintainerInvitationV1>,
 }
-
 struct PackageInvitationUpdate {
     directory_key: MusubiMaintainerDirectoryKeyV1,
     invitation: MusubiMaintainerInvitationV1,
     keep_pending: bool,
 }
-
 impl PackageGovernanceAdvance {
     fn apply_invitation_updates(&self, state_transaction: &mut StateTransaction<'_, '_>) {
         for update in &self.invitation_updates {
@@ -2164,7 +2133,6 @@ impl PackageGovernanceAdvance {
         }
     }
 }
-
 fn plan_package_governance_advance(
     package: &mut MusubiPackageRecordV1,
     finalized_height: u64,
@@ -2249,7 +2217,6 @@ fn plan_package_governance_advance(
             ));
         }
     }
-
     let mut updates = Vec::with_capacity(pending.len());
     let mut invitation_events = Vec::new();
     let mut terminal_invitation = None;
@@ -2293,7 +2260,6 @@ fn plan_package_governance_advance(
         terminal_invitation,
     })
 }
-
 fn active_pending_invitation_count(
     package: &MusubiPackageIdV1,
     current_height: u64,
@@ -2314,7 +2280,6 @@ fn active_pending_invitation_count(
         })
         .count()
 }
-
 #[cfg(test)]
 fn pending_invitation_count(package: &MusubiPackageIdV1, world: &impl WorldReadOnly) -> usize {
     world
@@ -2325,7 +2290,6 @@ fn pending_invitation_count(package: &MusubiPackageIdV1, world: &impl WorldReadO
         .filter(|(key, _)| key.invitation.is_some())
         .count()
 }
-
 fn maintainer_directory_entry_visible_at_height(
     entry: &MusubiMaintainerDirectoryEntryV1,
     finalized_height: u64,
@@ -2337,7 +2301,6 @@ fn maintainer_directory_entry_visible_at_height(
         }
     }
 }
-
 #[derive(Clone, Copy)]
 enum PackageCapability {
     Publish,
@@ -2345,7 +2308,6 @@ enum PackageCapability {
     Metadata,
     ArchiveLocations,
 }
-
 fn execute_governance_mutation<'block, 'state>(
     state_transaction: &mut StateTransaction<'block, 'state>,
     action: MusubiGovernanceActionV1,
@@ -2368,7 +2330,6 @@ fn execute_governance_mutation<'block, 'state>(
     let _ = action;
     result
 }
-
 fn classify_governance_rejection<T>(
     result: Result<T, Error>,
     rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
@@ -2379,7 +2340,6 @@ fn classify_governance_rejection<T>(
         error
     })
 }
-
 fn reject_governance_mutation<T>(
     rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
     reason: MusubiGovernanceRejectionReasonV1,
@@ -2388,7 +2348,6 @@ fn reject_governance_mutation<T>(
     *rejection_reason = reason;
     Err(error)
 }
-
 fn validate_role(role: MusubiPackageRoleV1) -> Result<(), Error> {
     if matches!(role, MusubiPackageRoleV1::Maintainer(permissions) if permissions.is_empty()) {
         Err(invalid_parameter(
@@ -2398,7 +2357,6 @@ fn validate_role(role: MusubiPackageRoleV1) -> Result<(), Error> {
         Ok(())
     }
 }
-
 fn ensure_package_owner(
     package: &MusubiPackageIdV1,
     authority: &AccountId,
@@ -2418,7 +2376,6 @@ fn ensure_package_owner(
         )))
     }
 }
-
 fn ensure_package_capability(
     package: &MusubiPackageIdV1,
     authority: &AccountId,
@@ -2455,7 +2412,6 @@ fn ensure_package_capability(
         )))
     }
 }
-
 fn ensure_archive_manager(
     archive: &MusubiArchiveRecordV1,
     authority: &AccountId,
@@ -2483,7 +2439,6 @@ fn ensure_archive_manager(
     }
     Ok(())
 }
-
 fn ensure_namespace_registration_owner(
     binding: &MusubiNamespaceBindingV1,
     authority: &AccountId,
@@ -2496,7 +2451,6 @@ fn ensure_namespace_registration_owner(
         .map_err(|error| invalid_parameter(error.reason()))?;
     ensure_resolved_namespace_owner(binding, authority, &owner, rejection_reason)
 }
-
 fn ensure_namespace_current_owner(
     binding: &MusubiNamespaceBindingV1,
     authority: &AccountId,
@@ -2506,7 +2460,6 @@ fn ensure_namespace_current_owner(
     let (owner, _) = namespace_owner_and_generation(binding, state_transaction)?;
     ensure_resolved_namespace_owner(binding, authority, &owner, rejection_reason)
 }
-
 fn ensure_resolved_namespace_owner(
     binding: &MusubiNamespaceBindingV1,
     authority: &AccountId,
@@ -2523,7 +2476,6 @@ fn ensure_resolved_namespace_owner(
         )))
     }
 }
-
 fn namespace_owner_and_generation(
     binding: &MusubiNamespaceBindingV1,
     state_transaction: &StateTransaction<'_, '_>,
@@ -2569,7 +2521,6 @@ fn namespace_owner_and_generation(
         }
     }
 }
-
 fn validate_namespace_home_dataspace(
     binding: &MusubiNamespaceBindingV1,
     world: &impl WorldReadOnly,
@@ -2596,7 +2547,6 @@ fn validate_namespace_home_dataspace(
     }
     Ok(())
 }
-
 fn ensure_namespace_claim_authority(
     binding: &MusubiNamespaceBindingV1,
     delegation: Option<&MusubiNamespaceDelegationV1>,
@@ -2615,7 +2565,6 @@ fn ensure_namespace_claim_authority(
         Some(rejection_reason),
     )
 }
-
 #[cfg(test)]
 fn validate_namespace_claim_authority(
     binding: &MusubiNamespaceBindingV1,
@@ -2635,7 +2584,6 @@ fn validate_namespace_claim_authority(
         None,
     )
 }
-
 fn validate_namespace_claim_authority_classified(
     binding: &MusubiNamespaceBindingV1,
     delegation: Option<&MusubiNamespaceDelegationV1>,
@@ -2680,7 +2628,6 @@ fn validate_namespace_claim_authority_classified(
             invariant(error.reason())
         })
 }
-
 fn namespace_binding_for_package(
     namespace: &MusubiNamespaceV1,
     package: &MusubiPackageIdV1,
@@ -2702,11 +2649,9 @@ fn namespace_binding_for_package(
     }
     Ok(binding)
 }
-
 fn ensure_policy_revision(policy: &MusubiRegistryPolicyV1, expected: u64) -> Result<(), Error> {
     ensure_revision("registry policy", policy.revision, expected)
 }
-
 fn ensure_admitted(
     policy: &MusubiRegistryPolicyV1,
     dataspace: Option<DataSpaceId>,
@@ -2751,7 +2696,6 @@ fn ensure_admitted(
         }
     }
 }
-
 fn validate_replication_order_archive_binding(
     archive: &MusubiArchiveRecordV1,
     replication_order: &iroha_data_model::sorafs::pin_registry::ReplicationOrderId,
@@ -2777,7 +2721,6 @@ fn validate_replication_order_archive_binding(
     }
     Ok(reference.lifecycle.clone())
 }
-
 fn bind_location_reverse_indices(
     existing: Option<&MusubiArchiveLocationV1>,
     location: &MusubiArchiveLocationV1,
@@ -2822,7 +2765,6 @@ fn bind_location_reverse_indices(
             ));
         }
     }
-
     if let Some(existing) = existing {
         let old_pin = state_transaction
             .world
@@ -2874,7 +2816,6 @@ fn bind_location_reverse_indices(
                 .remove(MusubiProviderLocationKeyV1::new(*provider, key));
         }
     }
-
     state_transaction.world.musubi_locations_by_pin.insert(
         location.pin_manifest,
         MusubiPinLocationReferenceV1 {
@@ -2905,7 +2846,6 @@ fn bind_location_reverse_indices(
     }
     Ok(())
 }
-
 fn load_location_provider_attestations(
     archive: &MusubiArchiveRecordV1,
     location: &MusubiArchiveLocationV1,
@@ -2992,7 +2932,6 @@ fn load_location_provider_attestations(
     }
     Ok(records)
 }
-
 fn validate_exact_archive_location_replay(
     archive: &MusubiArchiveRecordV1,
     location: &MusubiArchiveLocationV1,
@@ -3020,7 +2959,6 @@ fn validate_exact_archive_location_replay(
             "Musubi archive location provider attestation registry is inconsistent",
         ));
     }
-
     let key = location.key();
     let pin_reference = state_transaction
         .world
@@ -3036,7 +2974,6 @@ fn validate_exact_archive_location_replay(
     {
         return Err(invariant("Musubi pin reverse index is inconsistent"));
     }
-
     let order_reference = state_transaction
         .world
         .musubi_locations_by_replication_order
@@ -3052,7 +2989,6 @@ fn validate_exact_archive_location_replay(
     {
         return Err(invariant("Musubi order reverse index is inconsistent"));
     }
-
     for provider in &location.providers {
         let provider_key = MusubiProviderLocationKeyV1::new(*provider, key);
         provider_key
@@ -3067,10 +3003,8 @@ fn validate_exact_archive_location_replay(
             return Err(invariant("Musubi provider reverse index is inconsistent"));
         }
     }
-
     Ok(())
 }
-
 fn retire_location_reverse_indices(
     location: &MusubiArchiveLocationV1,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -3128,7 +3062,6 @@ fn retire_location_reverse_indices(
     }
     Ok(())
 }
-
 fn validate_provider_bundle_attestation(
     archive: &MusubiArchiveRecordV1,
     attestation: &MusubiProviderBundleVerificationAttestationV1,
@@ -3197,7 +3130,6 @@ fn validate_provider_bundle_attestation(
         .verify(binding)
         .map_err(|error| invariant(error.reason()))
 }
-
 fn validate_sorafs_location(
     archive: &MusubiArchiveRecordV1,
     pin_manifest: &iroha_data_model::sorafs::pin_registry::ManifestDigest,
@@ -3317,7 +3249,6 @@ fn validate_sorafs_location(
     }
     Ok(providers)
 }
-
 fn validate_seed_ingress_receipt(
     commitment: &MusubiArchiveCommitmentV1,
     receipt: &MusubiSeedIngressReceiptV1,
@@ -3350,7 +3281,6 @@ fn validate_seed_ingress_receipt(
         .verify(binding, execution_time_ms(state_transaction)?)
         .map_err(|error| invariant(error.reason()))
 }
-
 fn validate_publication_archive_evidence(
     publication: &MusubiPublicationV1,
     archive: &MusubiArchiveRecordV1,
@@ -3366,7 +3296,6 @@ fn validate_publication_archive_evidence(
             "Musubi release does not match the authenticated seed-ingress receipt",
         ));
     }
-
     let mut verified_providers = BTreeSet::new();
     for location_id in &archive.location_ids {
         let key = MusubiArchiveLocationKeyV1::new(archive.archive_id, *location_id);
@@ -3397,7 +3326,6 @@ fn validate_publication_archive_evidence(
     }
     Ok(())
 }
-
 fn validate_publication_snapshot(
     publication: &MusubiPublicationV1,
     state_transaction: &StateTransaction<'_, '_>,
@@ -3407,7 +3335,6 @@ fn validate_publication_snapshot(
         state_transaction,
     )
 }
-
 /// Require a canonical finalized Musubi registry ancestor whose resolver
 /// revision was active at the claimed height.
 ///
@@ -3430,7 +3357,6 @@ pub fn validate_musubi_registry_snapshot_history_v1(
         state_ro.world().musubi_resolver_index_revision(),
     )
 }
-
 fn canonical_finalized_hash(
     block_hashes: &[HashOf<BlockHeader>],
     finalized_height: u64,
@@ -3441,7 +3367,6 @@ fn canonical_finalized_hash(
         .and_then(|index| block_hashes.get(index))
         .map(|hash| *hash.as_ref())
 }
-
 fn validate_publication_snapshot_history(
     snapshot: &MusubiRegistrySnapshotV1,
     world: &impl WorldReadOnly,
@@ -3456,7 +3381,6 @@ fn validate_publication_snapshot_history(
         canonical_finalized_hash(block_hashes, snapshot.finalized_height),
         current_revision,
     )?;
-
     let revision = MusubiResolverIndexRevisionV1::new(snapshot.index_revision)
         .map_err(|error| invariant(error.reason()))?;
     let checkpoints = world.musubi_resolver_index_checkpoints();
@@ -3481,7 +3405,6 @@ fn validate_publication_snapshot_history(
             "Musubi publication proof snapshot predates its resolver revision activation",
         ));
     }
-
     if let Some((successor_revision, successor)) = checkpoints
         .range((
             std::ops::Bound::Excluded(revision),
@@ -3508,7 +3431,6 @@ fn validate_publication_snapshot_history(
     }
     Ok(())
 }
-
 fn validate_publication_snapshot_anchor(
     snapshot: &MusubiRegistrySnapshotV1,
     current_height: u64,
@@ -3530,7 +3452,6 @@ fn validate_publication_snapshot_anchor(
     }
     Ok(())
 }
-
 fn validate_resolution_proof(
     publication: &MusubiPublicationV1,
     world: &impl WorldReadOnly,
@@ -3661,7 +3582,6 @@ fn validate_resolution_proof(
     }
     Ok(())
 }
-
 fn plan_archive_reverse_reference(
     archive_id: ArchiveId,
     release: MusubiReleaseIdV1,
@@ -3690,7 +3610,6 @@ fn plan_archive_reverse_reference(
         .map_err(|error| invariant(error.reason()))?;
     Ok(references)
 }
-
 pub(crate) fn current_location_providers(
     location: &MusubiArchiveLocationV1,
     world: &impl WorldReadOnly,
@@ -3778,7 +3697,6 @@ pub(crate) fn current_location_providers(
         .collect::<Vec<_>>();
     Some(providers)
 }
-
 /// Prevent an explicit lifecycle change from removing the last quorum-healthy
 /// location of an active or yanked release.
 pub(crate) fn ensure_locations_may_be_invalidated(
@@ -3820,7 +3738,6 @@ pub(crate) fn ensure_locations_may_be_invalidated(
     }
     Ok(())
 }
-
 /// Prevent provider removal from making a protected archive entirely
 /// unfetchable. Falling below fresh-selection quorum remains allowed.
 pub(crate) fn ensure_provider_may_be_removed(
@@ -3856,11 +3773,9 @@ pub(crate) fn ensure_provider_may_be_removed(
     }
     Ok(())
 }
-
 const fn provider_count_is_healthy(provider_count: usize) -> bool {
     provider_count >= MUSUBI_MIN_HEALTHY_REPLICAS_V1 as usize
 }
-
 /// Recompute location and universal resolver projections after an underlying
 /// SoraFS lifecycle change. Every lookup is exact or bounded by archive-local
 /// directories populated at registration.
@@ -3934,7 +3849,6 @@ pub(crate) fn refresh_musubi_locations(
     }
     Ok(())
 }
-
 fn refresh_archive_availability(
     archive_id: ArchiveId,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -4089,7 +4003,6 @@ fn refresh_archive_availability(
     );
     Ok(())
 }
-
 fn exact_archive_projection_references(
     archive_id: ArchiveId,
     availability: MusubiArchiveAvailabilityV1,
@@ -4129,7 +4042,6 @@ fn exact_archive_projection_references(
             "Musubi archive reverse-reference projection has the wrong archive identity",
         ));
     }
-
     let mut packages = BTreeSet::new();
     for release_id in &references.releases {
         let release = world.musubi_releases().get(release_id).ok_or_else(|| {
@@ -4182,7 +4094,6 @@ fn exact_archive_projection_references(
     }
     Ok(references.releases.clone())
 }
-
 fn refresh_directory_for_package(
     package: &MusubiPackageIdV1,
     index_revision: u64,
@@ -4209,7 +4120,6 @@ fn refresh_directory_for_package(
         .insert(entry.selector.clone(), entry);
     Ok(())
 }
-
 fn plan_package_directory_entry(
     package: &MusubiPackageRecordV1,
     latest_selectable: Option<MusubiVersionV1>,
@@ -4231,7 +4141,6 @@ fn plan_package_directory_entry(
         .map_err(|error| invariant(error.reason()))?;
     Ok(entry)
 }
-
 fn archive_has_protected_release(archive_id: ArchiveId, world: &impl WorldReadOnly) -> bool {
     world
         .musubi_archive_reverse_references()
@@ -4246,7 +4155,6 @@ fn archive_has_protected_release(archive_id: ArchiveId, world: &impl WorldReadOn
             )
         })
 }
-
 fn package_has_active_release(package: &MusubiPackageIdV1, world: &impl WorldReadOnly) -> bool {
     world
         .musubi_resolver_index()
@@ -4254,7 +4162,6 @@ fn package_has_active_release(package: &MusubiPackageIdV1, world: &impl WorldRea
         .take_while(|(release, _)| release.package == *package)
         .any(|(_, row)| row.selection.fresh_selectable())
 }
-
 fn package_release_start(package: &MusubiPackageIdV1) -> MusubiReleaseIdV1 {
     MusubiReleaseIdV1::new(
         package.clone(),
@@ -4262,7 +4169,6 @@ fn package_release_start(package: &MusubiPackageIdV1) -> MusubiReleaseIdV1 {
             .expect("the static minimum Musubi version is valid"),
     )
 }
-
 fn package_release_page_start(
     package: &MusubiPackageIdV1,
     page: &MusubiPageRequestV1,
@@ -4276,7 +4182,6 @@ fn package_release_page_start(
         Ok(package_release_start(package))
     }
 }
-
 fn verify_parliament_decision(
     decision: &MusubiGovernanceDecisionV1,
     action: &MusubiParliamentActionV1,
@@ -4364,7 +4269,6 @@ fn verify_parliament_decision(
     }
     Ok(())
 }
-
 fn consume_parliament_decision(
     decision: MusubiGovernanceDecisionV1,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -4383,7 +4287,6 @@ fn consume_parliament_decision(
         .insert(decision.decision_id, consumption);
     Ok(())
 }
-
 fn bump_resolver_index_revision(
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<u64, Error> {
@@ -4394,7 +4297,6 @@ fn bump_resolver_index_revision(
         .get_mut() = next;
     Ok(next.get())
 }
-
 fn plan_replication_shortfall_transition(
     current: u64,
     previous: MusubiStorageAvailabilityV1,
@@ -4418,7 +4320,6 @@ fn plan_replication_shortfall_transition(
             .ok_or_else(|| invariant("Musubi replication-shortfall release count would overflow"))
     }
 }
-
 fn plan_resolver_index_revision(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<MusubiResolverIndexRevisionV1, Error> {
@@ -4426,20 +4327,16 @@ fn plan_resolver_index_revision(
         .checked_next()
         .ok_or_else(|| invariant("Musubi resolver-index revision overflow"))
 }
-
 fn execution_height(state_transaction: &StateTransaction<'_, '_>) -> u64 {
     state_transaction._curr_block.height().get()
 }
-
 fn execution_hash(state_transaction: &StateTransaction<'_, '_>) -> [u8; 32] {
     *state_transaction._curr_block.hash().as_ref()
 }
-
 fn execution_time_ms(state_transaction: &StateTransaction<'_, '_>) -> Result<u64, Error> {
     u64::try_from(state_transaction._curr_block.creation_time().as_millis())
         .map_err(|_| invariant("Musubi block creation time overflows u64 milliseconds"))
 }
-
 fn ensure_revision(label: &str, actual: u64, expected: u64) -> Result<(), Error> {
     if actual == expected {
         Ok(())
@@ -4447,55 +4344,44 @@ fn ensure_revision(label: &str, actual: u64, expected: u64) -> Result<(), Error>
         Err(stale_revision(label, actual, expected))
     }
 }
-
 fn next_revision(revision: u64, label: &str) -> Result<u64, Error> {
     revision
         .checked_add(1)
         .ok_or_else(|| invariant(format!("Musubi {label} revision overflow")))
 }
-
 fn stale_revision(label: &str, actual: u64, expected: u64) -> Error {
     invariant(format!(
         "stale Musubi {label} revision: expected {expected}, current {actual}"
     ))
 }
-
 fn package_not_found(package: &MusubiPackageIdV1) -> Error {
     invariant(format!("Musubi package '{package}' was not found"))
 }
-
 fn release_not_found(release: &MusubiReleaseIdV1) -> Error {
     invariant(format!("Musubi release '{release}' was not found"))
 }
-
 fn archive_not_found(archive: ArchiveId) -> Error {
     invariant(format!(
         "Musubi archive '{}' was not found",
         digest_label(archive.as_bytes())
     ))
 }
-
 fn digest_label(bytes: &[u8; 32]) -> String {
     hex::encode(bytes)
 }
-
 fn invalid_parameter(message: impl Into<String>) -> Error {
     Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
 }
-
 fn invariant(message: impl Into<String>) -> Error {
     Error::InvariantViolation(message.into().into())
 }
-
 fn emit_musubi_event(event: MusubiEvent, state_transaction: &mut StateTransaction<'_, '_>) {
     state_transaction
         .world
         .emit_events(Some(DataEvent::Musubi(event)));
 }
-
 #[cfg(test)]
 mod tests {
     include!("musubi/archive_replay_tests.rs");
-
     include!("musubi/governance_tests.rs");
 }

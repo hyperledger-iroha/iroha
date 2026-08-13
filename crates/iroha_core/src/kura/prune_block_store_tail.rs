@@ -1,5 +1,4 @@
 // Included at `kura` module scope; keep the extracted methods on `BlockStore`.
-
 impl BlockStore {
     /// Prune the block storage to the given height
     ///
@@ -16,7 +15,6 @@ impl BlockStore {
     pub fn prune(&mut self, height: u64) -> Result<()> {
         self.prune_with_failpoint(height, 0)
     }
-
     fn maybe_fail_prune_after_stage(fail_stage: usize, stage: usize) {
         #[cfg(test)]
         if fail_stage == stage {
@@ -25,12 +23,10 @@ impl BlockStore {
         #[cfg(not(test))]
         let _ = (fail_stage, stage);
     }
-
     fn prune_with_failpoint(&mut self, height: u64, fail_stage: usize) -> Result<()> {
         self.recover_canonical_storage_stages()?;
         self.prune_durable(height, false, fail_stage)
     }
-
     fn validate_rollback_prefix(
         &mut self,
         intent: &KuraRollbackIntent,
@@ -85,7 +81,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn prune_for_rollback(
         &mut self,
         intent: &KuraRollbackIntent,
@@ -95,7 +90,6 @@ impl BlockStore {
         self.prune_durable(intent.target_height, true, 0)?;
         self.verify_rollback_boundary(intent, intent_path)
     }
-
     fn verify_rollback_boundary(
         &mut self,
         intent: &KuraRollbackIntent,
@@ -176,7 +170,6 @@ impl BlockStore {
         }
         Ok(())
     }
-
     fn prune_durable(&mut self, height: u64, rollback: bool, fail_stage: usize) -> Result<()> {
         self.invalidate_data_mmap();
         let logical_count = self.read_index_count_from_len()?;
@@ -191,7 +184,6 @@ impl BlockStore {
                 self.path_to_blockchain.clone(),
             ));
         }
-
         // The prune marker is a forward-recovery authority and is published
         // before destructive work. Legacy rollback intents instead retain the
         // source marker until every canonical file reaches the target.
@@ -199,7 +191,6 @@ impl BlockStore {
             self.publish_commit_marker(pruned_index_count)?;
             Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_BLOCK_MARKER);
         }
-
         {
             let mut file =
                 FileWrap::open_read_write(self.path_to_blockchain.join(INDEX_FILE_NAME))?;
@@ -214,7 +205,6 @@ impl BlockStore {
         if rollback {
             rollback_fault_point(RollbackFaultPoint::BlockIndexSynced)?;
         }
-
         {
             let mut file =
                 FileWrap::open_read_write(self.path_to_blockchain.join(HASHES_FILE_NAME))?;
@@ -229,7 +219,6 @@ impl BlockStore {
         if rollback {
             rollback_fault_point(RollbackFaultPoint::BlockHashesSynced)?;
         }
-
         {
             let mut file = FileWrap::open_read_write(self.path_to_blockchain.join(DATA_FILE_NAME))?;
             let len = file.try_io(|file| file.metadata().map(|metadata| metadata.len()))?;
@@ -243,13 +232,11 @@ impl BlockStore {
         if rollback {
             rollback_fault_point(RollbackFaultPoint::BlockDataSynced)?;
         }
-
         self.prune_da_block_files_above(pruned_index_count)?;
         Self::maybe_fail_prune_after_stage(fail_stage, PRUNE_STAGE_DA_SIDECARS);
         if rollback {
             rollback_fault_point(RollbackFaultPoint::DaPruned)?;
         }
-
         self.commit_marker_pending = None;
         self.commit_marker_count = pruned_index_count;
         if rollback {
@@ -262,7 +249,6 @@ impl BlockStore {
         {
             self.remove_verified_snapshot_tail_marker()?;
         }
-
         Ok(())
     }
 }

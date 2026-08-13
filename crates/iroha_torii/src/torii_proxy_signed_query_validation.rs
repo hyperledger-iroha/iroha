@@ -4,7 +4,6 @@ enum ProxySignedQueryReplayScope {
     Client,
     RouteScanDeferred,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn decode_verified_proxy_signed_query(
     query_bytes: &[u8],
@@ -52,7 +51,6 @@ fn decode_verified_proxy_signed_query(
     }
     .map_err(IntoResponse::into_response)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn reject_proxy_client_continuation(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
@@ -70,7 +68,6 @@ fn reject_proxy_client_continuation(
     }
     Ok(())
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn validate_proxy_signed_query_route(
     authority: &AccountId,

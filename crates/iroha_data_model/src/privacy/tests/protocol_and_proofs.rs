@@ -1,9 +1,6 @@
 use std::str::FromStr as _;
-
 use hex_literal::hex;
-
 use crate::{domain::DomainId, name::Name};
-
 use super::{
     exact12_fixture::{
         account, assert_fixed_width_norito, asset_definition_id, bootle_lantern_policy, commitment,
@@ -16,7 +13,6 @@ use super::{
     },
     *,
 };
-
 fn pgc_accounts(count: u8) -> Vec<PrivacyPgcAccountV1> {
     (1..=count)
         .map(|seed| PrivacyPgcAccountV1 {
@@ -25,7 +21,6 @@ fn pgc_accounts(count: u8) -> Vec<PrivacyPgcAccountV1> {
         })
         .collect()
 }
-
 fn pgc_bootstrap() -> PrivacyPgcAccountBootstrapV1 {
     let statement = statement_for(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1);
     PrivacyPgcAccountBootstrapV1 {
@@ -36,7 +31,6 @@ fn pgc_bootstrap() -> PrivacyPgcAccountBootstrapV1 {
         accounts: pgc_accounts(16),
     }
 }
-
 #[derive(Clone, Copy)]
 enum RootCorruption {
     ZeroSuccessor,
@@ -44,7 +38,6 @@ enum RootCorruption {
     SkippedEpoch,
     EpochOverflow,
 }
-
 fn corrupt_root_transition(statement: &mut PrivacyStatementV1, corruption: RootCorruption) {
     macro_rules! corrupt {
         ($current:expr, $epoch:expr, $next:expr, $next_epoch:expr) => {
@@ -90,7 +83,6 @@ fn corrupt_root_transition(statement: &mut PrivacyStatementV1, corruption: RootC
         _ => panic!("protocol does not manage a root transition"),
     }
 }
-
 fn protocol_limits(protocol: PrivacyProtocolIdV1) -> PrivacyProtocolActivationLimitsV1 {
     match protocol {
         PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
@@ -160,7 +152,6 @@ fn protocol_limits(protocol: PrivacyProtocolIdV1) -> PrivacyProtocolActivationLi
         }
     }
 }
-
 fn assert_stable_schema_wire<T>(value: &T, schema_name: &str, expected_schema_hash: [u8; 16])
 where
     T: norito::NoritoSerialize
@@ -182,13 +173,11 @@ where
         <T as norito::NoritoDeserialize<'static>>::schema_hash(),
         expected_schema_hash
     );
-
     let legacy_type_name_hash = norito::core::type_name_schema_hash::<T>();
     assert_ne!(
         legacy_type_name_hash, expected_schema_hash,
         "permanent public schema must not fall back to the Rust type name"
     );
-
     let canonical = norito::encode_canonical(value).expect("encode permanent-schema frame");
     assert_eq!(
         &canonical[6..22],
@@ -199,7 +188,6 @@ where
         norito::decode_canonical::<T>(&canonical).expect("decode permanent-schema frame"),
         *value
     );
-
     let mut legacy_header = canonical.clone();
     legacy_header[6..22].copy_from_slice(&legacy_type_name_hash);
     assert!(
@@ -209,7 +197,6 @@ where
         ),
         "the pre-release Rust type-name wire must fail closed"
     );
-
     let mut forged_header = canonical;
     forged_header[6] ^= 0x80;
     assert!(
@@ -220,7 +207,6 @@ where
         "an unknown schema identity must fail before payload decoding"
     );
 }
-
 #[test]
 fn first_release_privacy_schema_names_and_old_headers_are_frozen() {
     let statement = statement_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
@@ -246,7 +232,6 @@ fn first_release_privacy_schema_names_and_old_headers_are_frozen() {
         source_allowlist: policy.source_allowlist,
         lifecycle: policy.lifecycle,
     };
-
     assert_stable_schema_wire(
         &authorization_statement,
         ZK_ACE_AUTHORIZATION_STATEMENT_SCHEMA_NAME_V1,
@@ -288,7 +273,6 @@ fn first_release_privacy_schema_names_and_old_headers_are_frozen() {
         hex!("5b9d88f68fd595c78e84f1693bbb0dcb"),
     );
 }
-
 fn activation(envelope: &PrivacyProofEnvelopeV1) -> PrivacyProtocolActivationRecordV1 {
     PrivacyProtocolActivationRecordV1 {
         protocol_id: envelope.protocol_id,
@@ -309,7 +293,6 @@ fn activation(envelope: &PrivacyProofEnvelopeV1) -> PrivacyProtocolActivationRec
         assurance: PrivacyAssuranceV1::Experimental,
     }
 }
-
 fn compiled_profile_snapshot(
     activation: &PrivacyProtocolActivationRecordV1,
 ) -> PrivacyCompiledProfileSnapshotV1 {
@@ -325,7 +308,6 @@ fn compiled_profile_snapshot(
         protocol_limits: activation.protocol_limits,
     }
 }
-
 fn capability_snapshot() -> PrivacyCapabilitySnapshotV1 {
     let pgc_activation = activation(&envelope(statement_for(
         PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
@@ -357,19 +339,16 @@ fn capability_snapshot() -> PrivacyCapabilitySnapshotV1 {
             .collect(),
     }
 }
-
 fn exact12_capability_manifest() -> PrivacyExact12CapabilityManifestV1 {
     capability_snapshot()
         .exact12_capability_manifest_v1()
         .expect("project valid committed snapshot")
 }
-
 fn redigest_exact12_capability_manifest(manifest: &mut PrivacyExact12CapabilityManifestV1) {
     manifest.manifest_digest = manifest
         .computed_manifest_digest()
         .expect("recompute canonical manifest digest");
 }
-
 fn compiled_profile_catalog() -> PrivacyCompiledProfileCatalogV1 {
     let pgc_activation = activation(&envelope(statement_for(
         PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
@@ -392,7 +371,6 @@ fn compiled_profile_catalog() -> PrivacyCompiledProfileCatalogV1 {
             .collect(),
     }
 }
-
 #[test]
 fn protocol_ids_keep_closed_norito_discriminants() {
     assert_eq!(PrivacyProtocolIdV1::ALL.len(), PrivacyProtocolIdV1::COUNT);
@@ -413,7 +391,6 @@ fn protocol_ids_keep_closed_norito_discriminants() {
         );
     }
 }
-
 #[test]
 fn protocol_ids_have_unique_exact_external_labels() {
     let expected = [
@@ -461,7 +438,6 @@ fn protocol_ids_have_unique_exact_external_labels() {
         (PrivacyProtocolIdV1::PqMaspStarkV0, "pq-masp-stark-v0"),
     ];
     assert_eq!(expected.len(), PrivacyProtocolIdV1::COUNT);
-
     for (index, (protocol, label)) in expected.into_iter().enumerate() {
         assert_eq!(PrivacyProtocolIdV1::ALL[index], protocol);
         assert_eq!(protocol.canonical_label(), label);
@@ -477,7 +453,6 @@ fn protocol_ids_have_unique_exact_external_labels() {
         );
     }
 }
-
 #[test]
 fn active_and_retired_protocol_labels_share_one_exact_reservation_namespace() {
     let mut reserved = std::collections::BTreeSet::new();
@@ -507,7 +482,6 @@ fn active_and_retired_protocol_labels_share_one_exact_reservation_namespace() {
         reserved.len(),
         PrivacyProtocolIdV1::COUNT + PRIVACY_RETIRED_PROTOCOL_LABELS_V1.len()
     );
-
     for label in reserved {
         for near_miss in [
             format!("generic-{label}"),
@@ -523,7 +497,6 @@ fn active_and_retired_protocol_labels_share_one_exact_reservation_namespace() {
         }
     }
 }
-
 #[test]
 fn protocol_id_parser_rejects_aliases_retired_ids_and_noncanonical_text() {
     for label in [
@@ -555,7 +528,6 @@ fn protocol_id_parser_rejects_aliases_retired_ids_and_noncanonical_text() {
         );
     }
 }
-
 fn assert_protocol_json_labels_roundtrip() {
     for protocol in PrivacyProtocolIdV1::ALL {
         let expected = format!(
@@ -571,7 +543,6 @@ fn assert_protocol_json_labels_roundtrip() {
                 .expect("deserialize protocol id"),
             protocol
         );
-
         let limits = protocol_limits(protocol);
         let limits_json = norito::json::to_json(&limits).expect("serialize protocol limits");
         assert!(
@@ -588,7 +559,6 @@ fn assert_protocol_json_labels_roundtrip() {
         );
     }
 }
-
 fn assert_proof_system_json_labels_roundtrip() {
     let proof_systems = [
         (
@@ -638,7 +608,6 @@ fn assert_proof_system_json_labels_roundtrip() {
         );
     }
 }
-
 fn assert_engine_json_labels_roundtrip() {
     let engines = [
         (
@@ -681,7 +650,6 @@ fn assert_engine_json_labels_roundtrip() {
         );
     }
 }
-
 fn assert_unavailable_reason_json_labels_roundtrip() {
     let unavailable = [
         (
@@ -717,7 +685,6 @@ fn assert_unavailable_reason_json_labels_roundtrip() {
         );
     }
 }
-
 #[test]
 fn privacy_public_json_labels_are_exact_and_roundtrip() {
     assert_protocol_json_labels_roundtrip();
@@ -738,7 +705,6 @@ fn privacy_public_json_labels_are_exact_and_roundtrip() {
         "{\"state\":\"active\",\"record\":{\"proposed_at_height\":1,\"activated_at_height\":2,\"state_since_height\":2}}"
     );
 }
-
 #[test]
 fn privacy_public_json_rejects_aliases_case_whitespace_confusables_and_unknown_fields() {
     for hostile in [
@@ -784,7 +750,6 @@ fn privacy_public_json_rejects_aliases_case_whitespace_confusables_and_unknown_f
         assert!(rejected, "hostile closed-enum JSON {hostile} must fail");
     }
 }
-
 fn available_pgc_profile(
     snapshot: &PrivacyCapabilitySnapshotV1,
 ) -> PrivacyCompiledProfileSnapshotV1 {
@@ -793,16 +758,13 @@ fn available_pgc_profile(
         PrivacyCompiledProfileResultV1::Unavailable(_) => unreachable!("PGC fixture available"),
     }
 }
-
 fn assert_capability_snapshot_codecs(snapshot: &PrivacyCapabilitySnapshotV1) -> String {
     snapshot.validate().expect("valid capability snapshot");
-
     let archive = norito::to_bytes(snapshot).expect("encode snapshot");
     let decoded: PrivacyCapabilitySnapshotV1 =
         norito::decode_from_bytes(&archive).expect("decode snapshot");
     assert_eq!(decoded, *snapshot);
     decoded.validate().expect("validate decoded snapshot");
-
     let canonical = norito::json::to_json(snapshot).expect("serialize snapshot JSON");
     let decoded_json: PrivacyCapabilitySnapshotV1 =
         norito::json::from_json(&canonical).expect("decode snapshot JSON");
@@ -810,7 +772,6 @@ fn assert_capability_snapshot_codecs(snapshot: &PrivacyCapabilitySnapshotV1) -> 
     decoded_json.validate().expect("validate JSON snapshot");
     canonical
 }
-
 fn assert_capability_snapshot_json_adversaries(
     snapshot: &PrivacyCapabilitySnapshotV1,
     canonical: &str,
@@ -825,7 +786,6 @@ fn assert_capability_snapshot_json_adversaries(
         norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&duplicate).is_err(),
         "duplicate top-level field must fail"
     );
-
     let assurance_alias = canonical.replacen(
         "\"assurance\":\"experimental\"",
         "\"assurance\":\"production\"",
@@ -835,7 +795,6 @@ fn assert_capability_snapshot_json_adversaries(
         norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&assurance_alias).is_err(),
         "non-Experimental assurance must fail"
     );
-
     let pgc_profile = available_pgc_profile(snapshot);
     let parameter_json =
         norito::json::to_json(&pgc_profile.parameter_id).expect("serialize fixed bytes");
@@ -858,7 +817,6 @@ fn assert_capability_snapshot_json_adversaries(
         "out-of-range fixed byte must fail"
     );
 }
-
 fn assert_capability_snapshot_structural_adversaries(snapshot: PrivacyCapabilitySnapshotV1) {
     let mut missing = snapshot.clone();
     missing.protocols.pop();
@@ -866,21 +824,18 @@ fn assert_capability_snapshot_structural_adversaries(snapshot: PrivacyCapability
         missing.validate(),
         Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolCount { .. })
     ));
-
     let mut duplicate_row = snapshot.clone();
     duplicate_row.protocols[2] = duplicate_row.protocols[1];
     assert!(matches!(
         duplicate_row.validate(),
         Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolOrder { .. })
     ));
-
     let mut reordered = snapshot.clone();
     reordered.protocols.swap(0, 1);
     assert!(matches!(
         reordered.validate(),
         Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolOrder { .. })
     ));
-
     let mut embedded_id_mismatch = snapshot.clone();
     embedded_id_mismatch.protocols[2].compiled_profile =
         PrivacyCompiledProfileResultV1::Available(available_pgc_profile(&snapshot));
@@ -891,7 +846,6 @@ fn assert_capability_snapshot_structural_adversaries(snapshot: PrivacyCapability
             ..
         })
     ));
-
     let mut activation_profile_mismatch = snapshot.clone();
     activation_profile_mismatch.protocols[1]
         .activation
@@ -907,7 +861,6 @@ fn assert_capability_snapshot_structural_adversaries(snapshot: PrivacyCapability
             ..
         })
     ));
-
     let mut unavailable_activation = snapshot;
     unavailable_activation.protocols[2].activation = Some(activation(&envelope(statement_for(
         PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
@@ -920,7 +873,6 @@ fn assert_capability_snapshot_structural_adversaries(snapshot: PrivacyCapability
         })
     ));
 }
-
 #[test]
 fn capability_snapshot_roundtrips_and_rejects_structural_adversaries() {
     let snapshot = capability_snapshot();
@@ -928,7 +880,6 @@ fn capability_snapshot_roundtrips_and_rejects_structural_adversaries() {
     assert_capability_snapshot_json_adversaries(&snapshot, &canonical);
     assert_capability_snapshot_structural_adversaries(snapshot);
 }
-
 #[test]
 fn compiled_profile_catalog_roundtrips_and_has_no_governance_projection() {
     let catalog = compiled_profile_catalog();
@@ -941,12 +892,10 @@ fn compiled_profile_catalog_roundtrips_and_has_no_governance_projection() {
             .map(|row| row.protocol_id)
             .eq(PrivacyProtocolIdV1::ALL)
     );
-
     let archive = norito::to_bytes(&catalog).expect("encode catalog");
     let decoded: PrivacyCompiledProfileCatalogV1 =
         norito::decode_from_bytes(&archive).expect("decode catalog");
     assert_eq!(decoded, catalog);
-
     let json = norito::json::to_json(&catalog).expect("encode catalog JSON");
     let decoded_json: PrivacyCompiledProfileCatalogV1 =
         norito::json::from_json(&json).expect("decode catalog JSON");
@@ -965,7 +914,6 @@ fn compiled_profile_catalog_roundtrips_and_has_no_governance_projection() {
             "local catalog must not project governance field {governance_field}"
         );
     }
-
     let unknown = json.replacen('{', "{\"committed_height\":0,", 1);
     assert!(
         norito::json::from_json::<PrivacyCompiledProfileCatalogV1>(&unknown).is_err(),
@@ -977,32 +925,27 @@ fn compiled_profile_catalog_roundtrips_and_has_no_governance_projection() {
         "duplicate top-level field must fail closed"
     );
 }
-
 #[test]
 fn compiled_profile_catalog_rejects_missing_duplicate_reordered_and_mutated_rows() {
     let catalog = compiled_profile_catalog();
-
     let mut missing = catalog.clone();
     missing.protocols.pop();
     assert!(matches!(
         missing.validate(),
         Err(PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolCount { .. })
     ));
-
     let mut duplicate = catalog.clone();
     duplicate.protocols[2] = duplicate.protocols[1];
     assert!(matches!(
         duplicate.validate(),
         Err(PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolOrder { .. })
     ));
-
     let mut reordered = catalog.clone();
     reordered.protocols.swap(0, 1);
     assert!(matches!(
         reordered.validate(),
         Err(PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolOrder { .. })
     ));
-
     let mut profile_id_mismatch = catalog.clone();
     profile_id_mismatch.protocols[2].compiled_profile =
         profile_id_mismatch.protocols[1].compiled_profile;
@@ -1016,7 +959,6 @@ fn compiled_profile_catalog_rejects_missing_duplicate_reordered_and_mutated_rows
                 ..
             })
         ));
-
     let mut binding_mutation = catalog;
     let PrivacyCompiledProfileResultV1::Available(profile) =
         &mut binding_mutation.protocols[1].compiled_profile
@@ -1036,11 +978,9 @@ fn compiled_profile_catalog_rejects_missing_duplicate_reordered_and_mutated_rows
         )
     ));
 }
-
 #[test]
 fn canonical_compiled_profile_catalog_validator_is_bounded_and_fail_closed() {
     use PrivacyCompiledProfileCatalogArchiveValidationStatusV1 as Status;
-
     assert_eq!(
         PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
         256 * 1024
@@ -1054,7 +994,6 @@ fn canonical_compiled_profile_catalog_validator_is_bounded_and_fail_closed() {
     assert_eq!(Status::NonCanonical.code(), 6);
     assert_eq!(Status::MalformedArchive.code(), 7);
     assert_eq!(Status::InvalidCatalog.code(), 8);
-
     let catalog = compiled_profile_catalog();
     let archive = norito::encode_canonical(&catalog).expect("canonical catalog archive");
     assert_eq!(
@@ -1073,7 +1012,6 @@ fn canonical_compiled_profile_catalog_validator_is_bounded_and_fail_closed() {
         ]),
         Status::ArchiveTooLarge
     );
-
     for truncated in [
         &archive[..archive.len() - 1],
         &archive[1..],
@@ -1090,14 +1028,12 @@ fn canonical_compiled_profile_catalog_validator_is_bounded_and_fail_closed() {
         validate_privacy_compiled_profile_catalog_archive_v1(&trailing),
         Status::Valid
     );
-
     let mut wrong_schema = archive.clone();
     wrong_schema[6] ^= 0x80;
     assert_eq!(
         validate_privacy_compiled_profile_catalog_archive_v1(&wrong_schema),
         Status::SchemaMismatch
     );
-
     let mut reordered = catalog.clone();
     reordered.protocols.swap(0, 1);
     assert_eq!(
@@ -1106,7 +1042,6 @@ fn canonical_compiled_profile_catalog_validator_is_bounded_and_fail_closed() {
         ),
         Status::InvalidCatalog
     );
-
     let mut duplicate = catalog.clone();
     duplicate.protocols[2] = duplicate.protocols[1];
     assert_eq!(
@@ -1115,7 +1050,6 @@ fn canonical_compiled_profile_catalog_validator_is_bounded_and_fail_closed() {
         ),
         Status::InvalidCatalog
     );
-
     let mut mutation = catalog.clone();
     let PrivacyCompiledProfileResultV1::Available(profile) =
         &mut mutation.protocols[1].compiled_profile
@@ -1129,7 +1063,6 @@ fn canonical_compiled_profile_catalog_validator_is_bounded_and_fail_closed() {
         ),
         Status::InvalidCatalog
     );
-
     let mut excessive_rows = catalog;
     excessive_rows.protocols.push(excessive_rows.protocols[0]);
     assert_eq!(
@@ -1139,11 +1072,9 @@ fn canonical_compiled_profile_catalog_validator_is_bounded_and_fail_closed() {
         Status::DecodeResourceLimit
     );
 }
-
 #[test]
 fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     use PrivacyCapabilityArchiveValidationStatusV1 as Status;
-
     assert_eq!(PRIVACY_BRIDGE_ABI_VERSION_V1, 22);
     assert_eq!(PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1, 256 * 1024);
     assert_eq!(Status::Valid.code(), 0);
@@ -1155,14 +1086,12 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     assert_eq!(Status::NonCanonical.code(), 6);
     assert_eq!(Status::MalformedArchive.code(), 7);
     assert_eq!(Status::InvalidManifest.code(), 8);
-
     let manifest = exact12_capability_manifest();
     let archive = norito::encode_canonical(&manifest).expect("canonical capability archive");
     assert_eq!(
         validate_privacy_capability_archive_v1(&archive),
         Status::Valid
     );
-
     assert_eq!(validate_privacy_capability_archive_v1(&[]), Status::Empty);
     assert_eq!(
         validate_privacy_capability_archive_v1(&vec![
@@ -1175,14 +1104,12 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         validate_privacy_capability_archive_v1(&archive[..archive.len() - 1]),
         Status::MalformedArchive
     );
-
     let mut wrong_schema = archive.clone();
     wrong_schema[6] ^= 0x80;
     assert_eq!(
         validate_privacy_capability_archive_v1(&wrong_schema),
         Status::SchemaMismatch
     );
-
     // Preserve a valid CRC over a one-byte payload while substituting the
     // expected manifest schema. Header-only validation used to accept this
     // exact adversary; the typed decoder must reject it.
@@ -1192,7 +1119,6 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         validate_privacy_capability_archive_v1(&one_byte_fake),
         Status::MalformedArchive
     );
-
     let legacy_snapshot =
         norito::encode_canonical(&capability_snapshot()).expect("canonical legacy snapshot");
     assert_eq!(
@@ -1200,7 +1126,6 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         Status::SchemaMismatch,
         "the manifest validator must reject the old snapshot schema outright"
     );
-
     let mut reordered = manifest.clone();
     reordered.protocols.swap(0, 1);
     let reordered =
@@ -1209,7 +1134,6 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         validate_privacy_capability_archive_v1(&reordered),
         Status::InvalidManifest
     );
-
     let mut profile_mutation = manifest.clone();
     let PrivacyCompiledProfileResultV1::Available(profile) =
         &mut profile_mutation.protocols[1].compiled_profile
@@ -1223,7 +1147,6 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         validate_privacy_capability_archive_v1(&profile_mutation),
         Status::InvalidManifest
     );
-
     let mut activation_mutation = manifest.clone();
     activation_mutation.protocols[1]
         .activation
@@ -1236,7 +1159,6 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         validate_privacy_capability_archive_v1(&activation_mutation),
         Status::InvalidManifest
     );
-
     let mut excessive_rows = manifest;
     excessive_rows.protocols.push(excessive_rows.protocols[0]);
     let excessive_rows =
@@ -1246,7 +1168,6 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         Status::DecodeResourceLimit
     );
 }
-
 #[test]
 fn all_protocol_mappings_and_typed_variants_are_exact() {
     let statements = sample_statements();
@@ -1298,17 +1219,14 @@ fn all_protocol_mappings_and_typed_variants_are_exact() {
         );
     }
 }
-
 #[test]
 fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
     use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
-
     use crate::{
         isi::privacy::SubmitPrivacyProofV1,
         transaction::{SignedTransaction, TransactionBuilder},
     };
     use PrivacyExact12FixtureBundleValidationStatusV1 as Status;
-
     let bundle = privacy_exact12_fixture_bundle_v1().expect("typed exact12 fixture bundle");
     let archive =
         privacy_exact12_fixture_bundle_bytes_v1().expect("canonical exact12 fixture archive");
@@ -1319,7 +1237,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&archive),
         Status::Valid
     );
-
     for (row, expected_protocol) in bundle.rows.iter().zip(PrivacyProtocolIdV1::ALL) {
         assert_eq!(row.protocol_id, expected_protocol);
         let statement: PrivacyStatementV1 =
@@ -1329,7 +1246,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
             norito::encode_canonical(&statement).expect("canonical statement"),
             row.statement_norito
         );
-
         let envelope: PrivacyProofEnvelopeV1 =
             norito::decode_from_bytes(&row.envelope_norito).expect("typed envelope");
         assert_eq!(envelope.protocol_id, expected_protocol);
@@ -1341,7 +1257,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
             norito::encode_canonical(&envelope).expect("canonical envelope"),
             row.envelope_norito
         );
-
         assert_eq!(
             row.submit_proof_wire_id,
             SubmitPrivacyProofV1::WIRE_ID,
@@ -1355,7 +1270,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
             norito::encode_canonical(&submission).expect("canonical submission instruction"),
             row.submit_proof_instruction_norito
         );
-
         let unsigned_builder =
             TransactionBuilder::decode_payload(&row.unsigned_transaction_payload_norito)
                 .expect("canonical unsigned transaction payload");
@@ -1374,7 +1288,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
             row.transaction_intent_projection_norito, row.unsigned_transaction_payload_norito,
             "the signed payload must retain proof bytes while the intent projection removes them"
         );
-
         let signed =
             SignedTransaction::decode_all_versioned(&row.signed_transaction_versioned_norito)
                 .expect("canonical versioned signed transaction");
@@ -1388,7 +1301,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         );
         assert_eq!(signed.hash().as_ref(), &row.signed_transaction_hash);
     }
-
     assert_eq!(
         validate_privacy_exact12_fixture_bundle_v1(&[]),
         Status::Empty
@@ -1401,7 +1313,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         ]),
         Status::ArchiveTooLarge
     );
-
     let truncated = &archive[..archive.len() - 1];
     assert!(
         !validate_privacy_exact12_fixture_bundle_v1(truncated).is_valid(),
@@ -1413,7 +1324,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         !validate_privacy_exact12_fixture_bundle_v1(&trailing).is_valid(),
         "trailing outer bytes must reject"
     );
-
     let mut wrong_version = bundle.clone();
     wrong_version.version = 2;
     let wrong_version =
@@ -1422,7 +1332,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&wrong_version),
         Status::InvalidBundle
     );
-
     let mut reordered = bundle.clone();
     reordered.rows.swap(0, 1);
     let reordered = norito::encode_canonical(&reordered).expect("canonical reordered mutation");
@@ -1430,7 +1339,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&reordered),
         Status::InvalidBundle
     );
-
     let mut cross_protocol = bundle.clone();
     cross_protocol.rows[0].protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
     let cross_protocol =
@@ -1439,7 +1347,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&cross_protocol),
         Status::InvalidBundle
     );
-
     let mut stale_statement = bundle.clone();
     stale_statement.rows[0].statement_norito[0] ^= 1;
     let stale_statement =
@@ -1448,7 +1355,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&stale_statement),
         Status::InvalidBundle
     );
-
     let mut stale_envelope = bundle.clone();
     let final_byte = stale_envelope.rows[11].envelope_norito.len() - 1;
     stale_envelope.rows[11].envelope_norito[final_byte] ^= 1;
@@ -1458,7 +1364,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&stale_envelope),
         Status::InvalidBundle
     );
-
     let mut wrong_wire_id = bundle.clone();
     wrong_wire_id.rows[0].submit_proof_wire_id.push('x');
     let wrong_wire_id =
@@ -1467,7 +1372,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&wrong_wire_id),
         Status::InvalidBundle
     );
-
     let mut stale_instruction = bundle.clone();
     stale_instruction.rows[1].submit_proof_instruction_norito[0] ^= 1;
     let stale_instruction =
@@ -1476,7 +1380,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&stale_instruction),
         Status::InvalidBundle
     );
-
     let mut stale_projection = bundle.clone();
     stale_projection.rows[2].transaction_intent_projection_norito[0] ^= 1;
     let stale_projection =
@@ -1485,7 +1388,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&stale_projection),
         Status::InvalidBundle
     );
-
     let mut stale_intent = bundle.clone();
     stale_intent.rows[3].transaction_intent_digest[0] ^= 1;
     let stale_intent =
@@ -1494,7 +1396,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&stale_intent),
         Status::InvalidBundle
     );
-
     let mut stale_unsigned = bundle.clone();
     stale_unsigned.rows[4].unsigned_transaction_payload_norito[0] ^= 1;
     let stale_unsigned = norito::encode_canonical(&stale_unsigned)
@@ -1503,7 +1404,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&stale_unsigned),
         Status::InvalidBundle
     );
-
     let mut stale_signed = bundle.clone();
     stale_signed.rows[5].signed_transaction_versioned_norito[0] ^= 1;
     let stale_signed = norito::encode_canonical(&stale_signed)
@@ -1512,7 +1412,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         validate_privacy_exact12_fixture_bundle_v1(&stale_signed),
         Status::InvalidBundle
     );
-
     let mut stale_transaction_hash = bundle;
     stale_transaction_hash.rows[6].signed_transaction_hash[0] ^= 1;
     let stale_transaction_hash = norito::encode_canonical(&stale_transaction_hash)
@@ -1522,7 +1421,6 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         Status::InvalidBundle
     );
 }
-
 #[test]
 #[ignore = "explicit regeneration helper for fixtures/privacy/exact12_v1.tsv"]
 fn emit_exact12_typed_envelope_fixture_rows() {
@@ -1537,7 +1435,6 @@ fn emit_exact12_typed_envelope_fixture_rows() {
         );
     }
 }
-
 #[test]
 #[ignore = "explicit complete regeneration helper for fixtures/privacy/exact12_v1.tsv"]
 fn emit_exact12_matrix_fixture() {
@@ -1547,23 +1444,19 @@ fn emit_exact12_matrix_fixture() {
         std::str::from_utf8(&bytes).expect("exact12 generator emits UTF-8")
     );
 }
-
 #[test]
 #[ignore = "explicit regeneration helper for fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64"]
 fn emit_exact12_fixture_bundle_base64() {
     use base64::Engine as _;
-
     let bytes = privacy_exact12_fixture_bundle_bytes_v1().expect("compiled exact12 fixture");
     println!(
         "{}",
         base64::engine::general_purpose::STANDARD.encode(bytes)
     );
 }
-
 #[test]
 fn exact12_checked_in_fixture_bundle_is_canonical_and_current() {
     use base64::Engine as _;
-
     let encoded =
         include_str!("../../../../../fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64");
     assert_eq!(
@@ -1582,7 +1475,6 @@ fn exact12_checked_in_fixture_bundle_is_canonical_and_current() {
         !payload.bytes().any(|byte| byte.is_ascii_whitespace()),
         "exact12 base64 fixture must be a single unwrapped line"
     );
-
     let archive = base64::engine::general_purpose::STANDARD
         .decode(payload)
         .expect("exact12 fixture must use STANDARD base64");
@@ -1595,7 +1487,6 @@ fn exact12_checked_in_fixture_bundle_is_canonical_and_current() {
         payload,
         "exact12 fixture must use the canonical padded base64 spelling"
     );
-
     let expected = privacy_exact12_fixture_bundle_bytes_v1().expect("compiled exact12 fixture");
     assert_eq!(
         archive, expected,
@@ -1606,7 +1497,6 @@ fn exact12_checked_in_fixture_bundle_is_canonical_and_current() {
         PrivacyExact12FixtureBundleValidationStatusV1::Valid
     );
 }
-
 #[test]
 fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
     let matrix = include_str!("../../../../../fixtures/privacy/exact12_v1.tsv");
@@ -1626,7 +1516,6 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
             .all(|line| !line.is_empty()),
         "matrix must not contain empty rows"
     );
-
     let mut matrix_version = None;
     let mut registry_sha256 = None;
     let mut protocols = Vec::new();
@@ -1676,7 +1565,6 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
             _ => panic!("malformed exact12 matrix row {}", line_index + 1),
         }
     }
-
     assert_eq!(matrix_version, Some("1"));
     assert_eq!(protocols.len(), PrivacyProtocolIdV1::COUNT);
     assert_eq!(typed_envelopes.len(), PrivacyProtocolIdV1::COUNT);
@@ -1710,7 +1598,6 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
         hex::encode(Sha256::digest(registry_preimage.as_bytes())),
         registry_sha256.expect("registry digest")
     );
-
     for (semantic, row) in semantic_rows.iter().zip(typed_envelopes) {
         let (
             label,
@@ -1747,7 +1634,6 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
             expected_envelope_sha256
         );
     }
-
     let mut unique_retired = std::collections::BTreeSet::new();
     for label in retired {
         assert!(unique_retired.insert(label), "duplicate retired label");
@@ -1757,7 +1643,6 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
         );
     }
 }
-
 #[test]
 fn exact12_compiled_semantics_are_closed_unique_and_context_bound() {
     let rows = privacy_exact12_typed_envelope_rows_v1().expect("compiled exact12 semantics");
@@ -1786,7 +1671,6 @@ fn exact12_compiled_semantics_are_closed_unique_and_context_bound() {
             .len(),
         PrivacyProtocolIdV1::COUNT
     );
-
     let mut mutated = statement_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
     let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &mut mutated else {
         unreachable!("closed first row is ZK-ACE")
@@ -1803,7 +1687,6 @@ fn exact12_compiled_semantics_are_closed_unique_and_context_bound() {
     );
     assert_ne!(mutated_envelope_sha256, rows[0].envelope_sha256);
 }
-
 #[test]
 fn fixed_digest_types_are_exact_and_nonzero_checked() {
     macro_rules! check_type {
@@ -1850,7 +1733,6 @@ fn fixed_digest_types_are_exact_and_nonzero_checked() {
     check_type!(PrivacyZkAmsIssuerPolicyRecordDigestV1, 16);
     check_type!(PrivacyZkAmsRegistryRecordDigestV1, 19);
 }
-
 #[test]
 fn all_statements_and_envelopes_roundtrip_and_validate() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -1864,7 +1746,6 @@ fn all_statements_and_envelopes_roundtrip_and_validate() {
             decoded_statement.digest().expect("decoded digest"),
             statement.digest().expect("original digest")
         );
-
         let envelope = envelope(statement);
         envelope
             .validate_with_limits(&limits)
@@ -1874,14 +1755,12 @@ fn all_statements_and_envelopes_roundtrip_and_validate() {
         envelope
             .validate_against_activation(&activation, &limits, 2)
             .expect("valid active envelope");
-
         let bytes = norito::to_bytes(&envelope).expect("frame envelope");
         let decoded: PrivacyProofEnvelopeV1 =
             norito::decode_from_bytes(&bytes).expect("decode envelope");
         assert_eq!(decoded, envelope);
     }
 }
-
 #[test]
 fn normalization_accessors_cover_every_statement_and_nested_proof_variant() {
     for mut statement in sample_statements() {
@@ -1889,21 +1768,18 @@ fn normalization_accessors_cover_every_statement_and_nested_proof_variant() {
         statement.context_mut().transaction_intent_digest = replacement;
         assert_eq!(statement.context().transaction_intent_digest, replacement);
     }
-
     let mut batch =
         PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
             PrivacyProofBytesV1::new(vec![1, 2, 3]),
         ));
     batch.bytes_mut().bytes.clear();
     assert!(batch.bytes().as_bytes().is_empty());
-
     let mut provisioning =
         PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
             PrivacyProofBytesV1::new(vec![4, 5, 6]),
         ));
     provisioning.bytes_mut().bytes.clear();
     assert!(provisioning.bytes().as_bytes().is_empty());
-
     for mut proof in sample_statements()
         .into_iter()
         .map(envelope)
@@ -1913,11 +1789,9 @@ fn normalization_accessors_cover_every_statement_and_nested_proof_variant() {
         assert!(proof.bytes().as_bytes().is_empty());
     }
 }
-
 #[test]
 fn zk_ams_envelope_requires_the_proof_variant_for_its_exact_action() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-
     let batch_statement = statement_for(PrivacyProtocolIdV1::IrohaZkAmsV1);
     let mut batch_envelope = envelope(batch_statement);
     batch_envelope
@@ -1930,7 +1804,6 @@ fn zk_ams_envelope_requires_the_proof_variant_for_its_exact_action() {
         batch_envelope.validate_with_limits(&limits),
         Err(PrivacyProofEnvelopeValidationError::ZkAmsActionProofMismatch)
     ));
-
     let provision_statement = zk_ams_provision_statement(16);
     let mut provision_envelope = envelope(provision_statement);
     provision_envelope
@@ -1944,7 +1817,6 @@ fn zk_ams_envelope_requires_the_proof_variant_for_its_exact_action() {
         Err(PrivacyProofEnvelopeValidationError::ZkAmsActionProofMismatch)
     ));
 }
-
 #[test]
 fn p256_wire_types_are_exact_width_and_closed() {
     let point = p256_point(9);
@@ -1958,24 +1830,20 @@ fn p256_wire_types_are_exact_width_and_closed() {
     );
     assert!(PrivacyP256PointV1::decode(&mut [0x02; 32].as_slice()).is_err());
     assert!(PrivacyP256PointV1::decode(&mut [0x02; 34].as_slice()).is_err());
-
     let ciphertext = p256_ciphertext(10);
     let bytes = norito::to_bytes(&ciphertext).expect("frame ciphertext");
     let decoded: PrivacyP256CiphertextV1 =
         norito::decode_from_bytes(&bytes).expect("decode ciphertext");
     assert_eq!(decoded, ciphertext);
-
     for unknown in [2_u32, 3, u32::MAX] {
         assert!(PrivacyVeRangeBitLengthV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
     }
 }
-
 #[test]
 fn zk_ams_ristretto_wire_types_and_action_tags_are_closed() {
     let seed_key = zk_ams_seed_key(9);
     assert_eq!(seed_key.as_bytes().len(), 32);
     assert_fixed_width_norito(&seed_key, seed_key.as_bytes());
-
     let key_image = PrivacyZkAmsKeyImageV1::new(raw(10));
     assert_eq!(key_image.as_bytes().len(), 32);
     assert_fixed_width_norito(&key_image, key_image.as_bytes());
@@ -1988,17 +1856,14 @@ fn zk_ams_ristretto_wire_types_and_action_tags_are_closed() {
     );
     assert!(PrivacyZkAmsSeedPublicKeyV1::decode(&mut [9; 31].as_slice()).is_err());
     assert!(PrivacyZkAmsSeedPublicKeyV1::decode(&mut [9; 33].as_slice()).is_err());
-
     let key_image = PrivacyZkAmsKeyImageV1::new(raw(10));
     assert_eq!(key_image.encode().len(), 33);
     assert!(PrivacyZkAmsKeyImageV1::decode(&mut key_image.encode().as_slice()).is_ok());
-
     for unknown in [2_u32, 3, u32::MAX] {
         assert!(PrivacyZkAmsActionV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
         assert!(IrohaZkAmsProofV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
     }
 }
-
 #[test]
 fn context_rejects_zero_network_id_and_invalid_action_indexes() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -2008,7 +1873,6 @@ fn context_rejects_zero_network_id_and_invalid_action_indexes() {
         value.validate(&limits),
         Err(PrivacyStatementValidationError::ZeroNetworkId)
     );
-
     value = context();
     value.action_index = 1;
     assert!(matches!(
@@ -2018,7 +1882,6 @@ fn context_rejects_zero_network_id_and_invalid_action_indexes() {
             max_actions: 1
         })
     ));
-
     value = context();
     value.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
     assert_eq!(
@@ -2026,7 +1889,6 @@ fn context_rejects_zero_network_id_and_invalid_action_indexes() {
         Err(PrivacyStatementValidationError::ZeroTransactionIntentDigest)
     );
 }
-
 #[test]
 fn native_consensus_binding_roundtrips_only_in_the_canonical_wire_shape() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -2036,28 +1898,24 @@ fn native_consensus_binding_roundtrips_only_in_the_canonical_wire_shape() {
     binding
         .validate_against_context(&context(), &limits)
         .expect("binding matches its statement context");
-
     let canonical = norito::encode_canonical(&binding).expect("encode canonical binding");
     assert_eq!(
         norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&canonical)
             .expect("decode canonical binding"),
         binding
     );
-
     let mut truncated = canonical.clone();
     truncated.pop();
     assert!(
         norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&truncated).is_err(),
         "truncated binding must fail closed"
     );
-
     let mut trailing = canonical;
     trailing.push(0);
     assert!(
         norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&trailing).is_err(),
         "trailing binding bytes must fail closed"
     );
-
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let alternate = {
@@ -2072,7 +1930,6 @@ fn native_consensus_binding_roundtrips_only_in_the_canonical_wire_shape() {
         norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&alternate),
         Err(norito::Error::NonCanonicalEncoding)
     ));
-
     let json = norito::json::to_json(&binding).expect("encode binding JSON");
     assert_eq!(
         norito::json::from_json::<PrivacyNativeConsensusBindingV1>(&json)
@@ -2088,52 +1945,40 @@ fn native_consensus_binding_roundtrips_only_in_the_canonical_wire_shape() {
         "unknown legacy JSON fields must fail closed"
     );
 }
-
 #[test]
 fn native_consensus_binding_digest_changes_on_every_consensus_axis() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let binding = PrivacyNativeConsensusBindingV1::new(&context(), raw(200), &limits)
         .expect("construct canonical native consensus binding");
     let expected = binding.digest().expect("digest canonical binding");
-
     let mut mutations = Vec::new();
-
     let mut mutated = binding.clone();
     mutated.network_id = network_id(201);
     mutations.push(("network_id", mutated));
-
     let mut mutated = binding.clone();
     mutated.genesis_hash = raw(201);
     mutations.push(("genesis_hash", mutated));
-
     let mut mutated = binding.clone();
     mutated.action_index = 1;
     mutations.push(("action_index", mutated));
-
     let mut mutated = binding.clone();
     mutated.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(raw(202));
     mutations.push(("transaction_intent_digest", mutated));
-
     let mut mutated = binding.clone();
     mutated.parameter_id = PrivacyParameterIdV1::new(raw(203));
     mutations.push(("parameter_id", mutated));
-
     let mut mutated = binding.clone();
     mutated.parameter_digest = PrivacyParameterDigestV1::new(raw(204));
     mutations.push(("parameter_digest", mutated));
-
     let mut mutated = binding.clone();
     mutated.verifier_digest = PrivacyVerifierDigestV1::new(raw(205));
     mutations.push(("verifier_digest", mutated));
-
     let mut mutated = binding.clone();
     mutated.statement_schema_digest = PrivacyStatementSchemaDigestV1::new(raw(206));
     mutations.push(("statement_schema_digest", mutated));
-
     let mut mutated = binding;
     mutated.engine_manifest_digest = PrivacyEngineManifestDigestV1::new(raw(207));
     mutations.push(("engine_manifest_digest", mutated));
-
     for (axis, mutation) in mutations {
         assert_ne!(
             mutation.digest().expect("digest binding mutation"),
@@ -2142,7 +1987,6 @@ fn native_consensus_binding_digest_changes_on_every_consensus_axis() {
         );
     }
 }
-
 #[test]
 fn native_consensus_binding_rejects_zero_or_mismatched_network_identity() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -2150,22 +1994,18 @@ fn native_consensus_binding_rejects_zero_or_mismatched_network_identity() {
         PrivacyNativeConsensusBindingV1::new(&context(), [0; 32], &limits),
         Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash)
     );
-
     assert_eq!(
         PrivacyNativeConsensusBindingV1::new(&context(), raw(201), &limits),
         Err(PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch)
     );
 }
-
 #[test]
 fn native_consensus_binding_rejects_every_statement_context_substitution() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let base_context = context();
     let binding = PrivacyNativeConsensusBindingV1::new(&base_context, raw(200), &limits)
         .expect("construct canonical native consensus binding");
-
     let mut substitutions = Vec::new();
-
     let mut substituted = base_context.clone();
     substituted.network_id = network_id(201);
     substitutions.push((
@@ -2173,7 +2013,6 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::NetworkIdMismatch,
     ));
-
     let mut substituted = base_context.clone();
     substituted.action_index = 1;
     substitutions.push((
@@ -2181,7 +2020,6 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch,
     ));
-
     let mut substituted = base_context.clone();
     substituted.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(raw(210));
     substitutions.push((
@@ -2189,7 +2027,6 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::TransactionIntentDigestMismatch,
     ));
-
     let mut substituted = base_context.clone();
     substituted.parameter_id = PrivacyParameterIdV1::new(raw(211));
     substitutions.push((
@@ -2197,7 +2034,6 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::ParameterIdMismatch,
     ));
-
     let mut substituted = base_context.clone();
     substituted.parameter_digest = PrivacyParameterDigestV1::new(raw(212));
     substitutions.push((
@@ -2205,7 +2041,6 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::ParameterDigestMismatch,
     ));
-
     let mut substituted = base_context.clone();
     substituted.verifier_digest = PrivacyVerifierDigestV1::new(raw(213));
     substitutions.push((
@@ -2213,7 +2048,6 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::VerifierDigestMismatch,
     ));
-
     let mut substituted = base_context.clone();
     substituted.statement_schema_digest = PrivacyStatementSchemaDigestV1::new(raw(214));
     substitutions.push((
@@ -2221,7 +2055,6 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::StatementSchemaDigestMismatch,
     ));
-
     let mut substituted = base_context;
     substituted.engine_manifest_digest = PrivacyEngineManifestDigestV1::new(raw(215));
     substitutions.push((
@@ -2229,7 +2062,6 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
         substituted,
         PrivacyNativeConsensusBindingValidationErrorV1::EngineManifestDigestMismatch,
     ));
-
     for (axis, substituted, expected) in substitutions {
         assert_eq!(
             binding.validate_against_context(&substituted, &limits),
@@ -2237,7 +2069,6 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
             "substituted {axis} must fail closed"
         );
     }
-
     let mut zero_genesis = binding;
     zero_genesis.genesis_hash = [0; 32];
     assert_eq!(
@@ -2245,7 +2076,6 @@ fn native_consensus_binding_rejects_every_statement_context_substitution() {
         Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash)
     );
 }
-
 #[test]
 fn privacy_context_statement_proof_and_envelope_json_are_closed() {
     let context = context();
@@ -2259,7 +2089,6 @@ fn privacy_context_statement_proof_and_envelope_json_are_closed() {
         ))
         .is_err()
     );
-
     let envelope = envelope(statement_for(
         PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
     ));
@@ -2276,7 +2105,6 @@ fn privacy_context_statement_proof_and_envelope_json_are_closed() {
         ))
         .is_err()
     );
-
     let statement_json =
         norito::json::to_json(&envelope.statement).expect("encode typed statement JSON");
     let statement_prefix = statement_json
@@ -2288,7 +2116,6 @@ fn privacy_context_statement_proof_and_envelope_json_are_closed() {
         ))
         .is_err()
     );
-
     let proof_json = norito::json::to_json(&envelope.proof).expect("encode typed proof JSON");
     let proof_prefix = proof_json
         .strip_suffix('}')
@@ -2300,7 +2127,6 @@ fn privacy_context_statement_proof_and_envelope_json_are_closed() {
         .is_err()
     );
 }
-
 #[test]
 fn first_release_statements_reject_nested_unknown_json_fields() {
     for protocol_id in PrivacyProtocolIdV1::ALL {
@@ -2344,7 +2170,6 @@ fn first_release_statements_reject_nested_unknown_json_fields() {
             "removed caller-selected field `{removed_field}` must not decode"
         );
     }
-
     let authorization = norito::json::to_json(&PrivacyPqAuthorizationProfileV1::MlDsa65)
         .expect("encode PQ authorization profile");
     let authorization_prefix = authorization
@@ -2356,7 +2181,6 @@ fn first_release_statements_reject_nested_unknown_json_fields() {
         ))
         .is_err()
     );
-
     let encryption =
         norito::json::to_json(&PrivacyPqNoteEncryptionProfileV1::MlKem768XChaCha20Poly1305)
             .expect("encode PQ note-encryption profile");
@@ -2369,7 +2193,6 @@ fn first_release_statements_reject_nested_unknown_json_fields() {
         ))
         .is_err()
     );
-
     let encrypted_note =
         norito::json::to_json(&encrypted_output(31, 32)).expect("encode encrypted note");
     let encrypted_note_prefix = encrypted_note
@@ -2382,7 +2205,6 @@ fn first_release_statements_reject_nested_unknown_json_fields() {
         .is_err(),
         "nested private-note encrypted output must reject unknown fields"
     );
-
     let output = fcmp_output(33);
     let fcmp_encrypted_output = PrivacyFcmpEncryptedOutputV1 {
         recipient: PrivacyRecipientIdV1::new(raw(34)),
@@ -2403,7 +2225,6 @@ fn first_release_statements_reject_nested_unknown_json_fields() {
         "nested FCMP++ encrypted output must reject unknown fields"
     );
 }
-
 #[test]
 fn taira_consensus_limits_reject_zero_overflow_and_inconsistent_profiles() {
     let defaults = PrivacyConsensusLimitsV1::taira_default();
@@ -2420,7 +2241,6 @@ fn taira_consensus_limits_reject_zero_overflow_and_inconsistent_profiles() {
         defaults.max_commitments_per_action,
         TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1
     );
-
     let invalid = [
         {
             let mut value = defaults;
@@ -2489,7 +2309,6 @@ fn taira_consensus_limits_reject_zero_overflow_and_inconsistent_profiles() {
             "mutated limits must fail: {value:?}"
         );
     }
-
     let hard_maximum_mutations: [(PrivacyLimitFieldV1, u32, fn(&mut PrivacyConsensusLimitsV1)); 4] = [
         (
             PrivacyLimitFieldV1::ProofBytesPerAction,
@@ -2525,7 +2344,6 @@ fn taira_consensus_limits_reject_zero_overflow_and_inconsistent_profiles() {
         );
     }
 }
-
 #[test]
 fn privacy_proof_payload_admits_exact_nine_mib_and_rejects_cap_plus_one() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -2533,7 +2351,6 @@ fn privacy_proof_payload_admits_exact_nine_mib_and_rejects_cap_plus_one() {
         usize::try_from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1).expect("cap fits usize");
     let mut proof = PrivacyProofBytesV1::new(vec![0xA5; maximum]);
     proof.validate(&limits).expect("exact 9 MiB proof payload");
-
     proof.bytes.push(0x5A);
     assert_eq!(
         proof.validate(&limits),
@@ -2543,9 +2360,7 @@ fn privacy_proof_payload_admits_exact_nine_mib_and_rejects_cap_plus_one() {
         })
     );
 }
-
 type ConsensusLimitMutationV1 = (PrivacyLimitFieldV1, fn(&mut PrivacyConsensusLimitsV1));
-
 #[test]
 fn consensus_limit_tightening_is_strict_and_rejects_every_component_increase() {
     let current = PrivacyConsensusLimitsV1 {
@@ -2561,7 +2376,6 @@ fn consensus_limit_tightening_is_strict_and_rejects_every_component_increase() {
         retained_root_count: 100,
     };
     current.validate().expect("lower valid current profile");
-
     assert!(matches!(
         current.validate_tightening_to(&current),
         Err(PrivacyConsensusLimitsTighteningErrorV1::NoChange)
@@ -2571,7 +2385,6 @@ fn consensus_limit_tightening_is_strict_and_rejects_every_component_increase() {
     current
         .validate_tightening_to(&strict)
         .expect("one component may be lowered");
-
     let mutations: [ConsensusLimitMutationV1; 10] = [
         (PrivacyLimitFieldV1::ActionsPerTransaction, |value| {
             value.max_actions_per_transaction += 1
@@ -2631,7 +2444,6 @@ fn consensus_limit_tightening_is_strict_and_rejects_every_component_increase() {
             ));
         }
     }
-
     let mut mixed = strict;
     mixed.max_actions_per_block += 1;
     assert!(matches!(
@@ -2642,7 +2454,6 @@ fn consensus_limit_tightening_is_strict_and_rejects_every_component_increase() {
         })
     ));
 }
-
 #[test]
 fn consensus_policy_schedule_enforces_exact_notice_and_snapshot_boundaries() {
     let current_limits = PrivacyConsensusLimitsV1::taira_default();
@@ -2657,7 +2468,6 @@ fn consensus_policy_schedule_enforces_exact_notice_and_snapshot_boundaries() {
     valid
         .validate_against(&current_limits)
         .expect("exact +300 schedule");
-
     for invalid in [
         PrivacyConsensusPolicyTighteningV1 {
             scheduled_at_height: 0,
@@ -2686,7 +2496,6 @@ fn consensus_policy_schedule_enforces_exact_notice_and_snapshot_boundaries() {
             "invalid schedule must reject: {invalid:?}"
         );
     }
-
     let policy = PrivacyConsensusPolicyV1 {
         current_limits,
         pending_tightening: Some(valid),
@@ -2719,7 +2528,6 @@ fn consensus_policy_schedule_enforces_exact_notice_and_snapshot_boundaries() {
         next_limits.retained_root_count
     );
 }
-
 #[test]
 fn protocol_limit_schedule_rejects_bad_timing_mismatch_increase_and_noop() {
     let current =
@@ -2738,7 +2546,6 @@ fn protocol_limit_schedule_rejects_bad_timing_mismatch_increase_and_noop() {
     valid
         .validate_against(&current)
         .expect("exact delayed protocol tightening");
-
     assert!(matches!(
         PrivacyProtocolLimitsTighteningV1 {
             next_limits: current,
@@ -2771,7 +2578,6 @@ fn protocol_limit_schedule_rejects_bad_timing_mismatch_increase_and_noop() {
             PrivacyProtocolActivationLimitsValidationError::ProtocolMismatch { .. }
         ))
     ));
-
     let lower_current = next;
     assert!(matches!(
         PrivacyProtocolLimitsTighteningV1 {

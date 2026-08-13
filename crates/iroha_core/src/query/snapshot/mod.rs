@@ -3,16 +3,13 @@
 //! This module centralises snapshot-lane execution so that server-facing
 //! callers (Torii, pipeline harnesses, etc.) can reuse the same validation,
 //! metrics, and policy enforcement.
-
 use std::sync::Arc;
 #[cfg(feature = "telemetry")]
 use std::time::Instant;
-
 use iroha_data_model::{
     prelude::*,
     query::{QueryRequest, QueryResponse},
 };
-
 use crate::{
     query::store::LiveQueryStoreHandle,
     smartcontracts::isi::query::{
@@ -22,7 +19,6 @@ use crate::{
     },
     state::{State, StateReadOnly},
 };
-
 /// Error type for snapshot query lane execution.
 #[derive(Debug)]
 pub enum SnapshotQueryError {
@@ -31,7 +27,6 @@ pub enum SnapshotQueryError {
     /// Query execution failed while producing results.
     Execution(iroha_data_model::query::error::QueryExecutionFail),
 }
-
 /// Cursor handling mode for iterable queries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CursorMode {
@@ -40,7 +35,6 @@ pub enum CursorMode {
     /// Store a server-side cursor in the `LiveQueryStore` and allow `Continue`.
     Stored,
 }
-
 /// Ordinary-query response paired with its move-only server memory lease.
 ///
 /// Torii must keep the lease alive through bounded encoding and the final
@@ -51,7 +45,6 @@ pub struct ServerOwnedQueryResponse {
     response: QueryResponse,
     memory_lease: OrdinaryQueryMemoryLease,
 }
-
 fn drop_response_cursor(live_query_store: &LiveQueryStoreHandle, response: &QueryResponse) {
     if let QueryResponse::Iterable(output) = response
         && let Some(cursor) = &output.continue_cursor
@@ -59,7 +52,6 @@ fn drop_response_cursor(live_query_store: &LiveQueryStoreHandle, response: &Quer
         live_query_store.drop_query(&cursor.query);
     }
 }
-
 impl ServerOwnedQueryResponse {
     /// Separate the response from the lease that must cover its remaining
     /// encoding, proxy, and slow-body lifetime.
@@ -68,7 +60,6 @@ impl ServerOwnedQueryResponse {
         (self.response, self.memory_lease)
     }
 }
-
 fn revalidate_stored_continuation(
     live_query_store: &LiveQueryStoreHandle,
     authority: &AccountId,
@@ -101,7 +92,6 @@ fn revalidate_stored_continuation(
         .map_err(SnapshotQueryError::Validation)?;
     Ok(())
 }
-
 /// Execute a query against a point-in-time snapshot of the state with the provided cursor mode
 /// and query limits.
 ///
@@ -121,7 +111,6 @@ pub fn run_on_snapshot_with_mode(
     limits: QueryLimits,
 ) -> Result<QueryResponse, SnapshotQueryError> {
     let view = state.query_view();
-
     if matches!(mode, CursorMode::Ephemeral) && matches!(request, QueryRequest::Continue(_)) {
         return Err(SnapshotQueryError::Validation(
             ValidationFail::NotPermitted(
@@ -129,7 +118,6 @@ pub fn run_on_snapshot_with_mode(
             ),
         ));
     }
-
     if let (CursorMode::Stored, QueryRequest::Continue(cursor)) = (&mode, &request) {
         let min_gas = view.pipeline().query_stored_min_gas_units;
         if min_gas > 0 && cursor.gas_budget.unwrap_or(0) < min_gas {
@@ -140,14 +128,11 @@ pub fn run_on_snapshot_with_mode(
             ));
         }
     }
-
     if matches!(mode, CursorMode::Stored) {
         revalidate_stored_continuation(live_query_store, authority, &request, &view, limits)?;
     }
-
     let validated = ValidQueryRequest::validate_for_client_parts(request, authority, &view, limits)
         .map_err(SnapshotQueryError::Validation)?;
-
     #[cfg(feature = "telemetry")]
     let telemetry_start = Instant::now();
     let response = match mode {
@@ -158,7 +143,6 @@ pub fn run_on_snapshot_with_mode(
             .execute(live_query_store, &view, authority)
             .map_err(SnapshotQueryError::Execution)?,
     };
-
     #[cfg(feature = "telemetry")]
     {
         let telemetry = view.telemetry;
@@ -173,10 +157,8 @@ pub fn run_on_snapshot_with_mode(
             telemetry.observe_snapshot_iterable(mode_label, elapsed_ms, output);
         }
     }
-
     Ok(response)
 }
-
 /// Execute a query from an owning state handle.
 ///
 /// Stored cursors retain continuation data derived from the initial query view;
@@ -208,7 +190,6 @@ pub fn run_on_snapshot_with_mode_arc(
         None,
     )
 }
-
 /// Execute an Arc-backed snapshot query while carrying the validated client
 /// budget for a stored `Start` request into query projection.
 ///
@@ -240,7 +221,6 @@ pub fn run_on_snapshot_with_mode_arc_and_start_budget(
         None,
     )
 }
-
 /// Execute an Arc-backed query in a server-owned ephemeral lane under an
 /// explicit deterministic work budget.
 ///
@@ -271,7 +251,6 @@ pub fn run_on_snapshot_ephemeral_with_budget_arc(
         Some(budget),
     )
 }
-
 /// Execute one ordinary Torii query under a server-owned weighted memory
 /// reservation.
 ///
@@ -322,7 +301,6 @@ pub fn run_on_snapshot_with_server_owned_memory_arc(
             ));
         }
     }
-
     let cursor_retained_bytes =
         if mode == CursorMode::Stored && matches!(&request, QueryRequest::Start(_)) {
             ordinary_limits.max_cursor_retained_bytes()
@@ -340,7 +318,6 @@ pub fn run_on_snapshot_with_server_owned_memory_arc(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         ));
     }
-
     let cursor_policy = (cursor_retained_bytes != 0).then_some(current_cursor_policy);
     let admission =
         OrdinaryQueryMemoryAdmission::new(memory_lease, cursor_retained_bytes, cursor_policy)
@@ -361,7 +338,6 @@ pub fn run_on_snapshot_with_server_owned_memory_arc(
         drop_response_cursor(&scoped_store, &response);
         return Err(SnapshotQueryError::Execution(error));
     }
-
     let has_cursor = matches!(
         &response,
         QueryResponse::Iterable(output) if output.continue_cursor.is_some()
@@ -378,7 +354,6 @@ pub fn run_on_snapshot_with_server_owned_memory_arc(
         memory_lease,
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn run_on_snapshot_with_mode_arc_inner(
     state: &Arc<State>,
@@ -397,7 +372,6 @@ fn run_on_snapshot_with_mode_arc_inner(
         limits
     };
     let view = state.query_view();
-
     if matches!(mode, CursorMode::Ephemeral) && matches!(request, QueryRequest::Continue(_)) {
         return Err(SnapshotQueryError::Validation(
             ValidationFail::NotPermitted(
@@ -405,7 +379,6 @@ fn run_on_snapshot_with_mode_arc_inner(
             ),
         ));
     }
-
     if let (CursorMode::Stored, QueryRequest::Continue(cursor)) = (&mode, &request) {
         let min_gas = view.pipeline().query_stored_min_gas_units;
         if min_gas > 0 && cursor.gas_budget.unwrap_or(0) < min_gas {
@@ -416,7 +389,6 @@ fn run_on_snapshot_with_mode_arc_inner(
             ));
         }
     }
-
     if validate_start_budget
         && matches!(mode, CursorMode::Stored)
         && matches!(request, QueryRequest::Start(_))
@@ -430,14 +402,11 @@ fn run_on_snapshot_with_mode_arc_inner(
             ));
         }
     }
-
     if matches!(mode, CursorMode::Stored) {
         revalidate_stored_continuation(live_query_store, authority, &request, &view, limits)?;
     }
-
     let validated = ValidQueryRequest::validate_for_client_parts(request, authority, &view, limits)
         .map_err(SnapshotQueryError::Validation)?;
-
     #[cfg(feature = "telemetry")]
     let telemetry_start = Instant::now();
     let response = match mode {
@@ -455,7 +424,6 @@ fn run_on_snapshot_with_mode_arc_inner(
             )
             .map_err(SnapshotQueryError::Execution)?,
     };
-
     #[cfg(feature = "telemetry")]
     {
         let telemetry = view.telemetry;
@@ -470,10 +438,8 @@ fn run_on_snapshot_with_mode_arc_inner(
             telemetry.observe_snapshot_iterable(mode_label, elapsed_ms, output);
         }
     }
-
     Ok(response)
 }
-
 /// Convenience wrapper for ephemeral cursor semantics.
 ///
 /// # Errors
@@ -494,14 +460,12 @@ pub fn run_on_snapshot(
         limits,
     )
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     };
-
     use iroha_data_model::{
         permission::Permission,
         query::{
@@ -513,7 +477,6 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         kura::Kura,
@@ -527,29 +490,24 @@ mod tests {
         },
         state::{State, World},
     };
-
     #[derive(Debug)]
     struct TestMemoryReservation {
         bytes: u64,
         pool_generation: u64,
         released: Arc<AtomicU64>,
     }
-
     impl Drop for TestMemoryReservation {
         fn drop(&mut self) {
             self.released.fetch_add(self.bytes, Ordering::SeqCst);
         }
     }
-
     impl OrdinaryQueryMemoryReservation for TestMemoryReservation {
         fn reserved_bytes(&self) -> u64 {
             self.bytes
         }
-
         fn pool_generation(&self) -> u64 {
             self.pool_generation
         }
-
         fn split_off(&mut self, bytes: u64) -> Option<Box<dyn OrdinaryQueryMemoryReservation>> {
             if bytes == 0 || bytes > self.bytes {
                 return None;
@@ -562,7 +520,6 @@ mod tests {
             }))
         }
     }
-
     #[test]
     fn post_execution_failure_drops_cursor_retention_once() {
         let released = Arc::new(AtomicU64::new(0));
@@ -617,7 +574,6 @@ mod tests {
             .bind_revalidation_request(&cursor, &ALICE_ID, vec![0xaa])
             .expect("bind archive");
         let response = QueryResponse::Iterable(output);
-
         drop_response_cursor(&scoped, &response);
         assert_eq!(released.load(Ordering::SeqCst), cursor_retained_bytes);
         assert!(matches!(
@@ -626,18 +582,15 @@ mod tests {
         ));
         drop_response_cursor(&scoped, &response);
         assert_eq!(released.load(Ordering::SeqCst), cursor_retained_bytes);
-
         let response_lease = admission
             .take_response_lease(false)
             .expect("response headroom");
         drop(response_lease);
         assert_eq!(released.load(Ordering::SeqCst), total);
     }
-
     fn alice_account() -> Account {
         Account::new(ALICE_ID.clone()).build(&ALICE_ID)
     }
-
     fn find_domains_start(params: QueryParams) -> iroha_data_model::query::QueryRequest {
         let payload =
             norito::codec::Encode::encode(&iroha_data_model::query::domain::prelude::FindDomains);
@@ -651,7 +604,6 @@ mod tests {
             &qbox, params,
         ))
     }
-
     fn find_permissions_start(
         account: AccountId,
         params: QueryParams,
@@ -669,7 +621,6 @@ mod tests {
             &qbox, params,
         ))
     }
-
     fn domain_ids_from_batch(
         batch: iroha_data_model::query::QueryOutputBatchBoxTuple,
     ) -> Vec<DomainId> {
@@ -681,7 +632,6 @@ mod tests {
             other => panic!("unexpected batch variant: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn snapshot_iterable_is_ephemeral() {
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
@@ -689,11 +639,9 @@ mod tests {
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1.clone(), d2.clone(), d3.clone()], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, store.clone(), ChainId::from("chain"));
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
@@ -710,7 +658,6 @@ mod tests {
         let qreq = iroha_data_model::query::QueryRequest::Start(
             iroha_data_model::query::QueryWithParams::new(&qbox, params),
         );
-
         let resp = run_on_snapshot(&state, &store, &ALICE_ID, qreq, QueryLimits::default())
             .expect("query ok");
         let iroha_data_model::query::QueryResponse::Iterable(batch) = resp else {
@@ -719,13 +666,10 @@ mod tests {
         let (_out, _rem, cursor) = batch.into_parts();
         assert!(cursor.is_none());
     }
-
     include!("canonical_topk_tests.rs");
-
     #[tokio::test]
     async fn snapshot_sorted_asset_definitions_returns_first_batch_without_cursor() {
         use iroha_primitives::json::Json;
-
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let mut ad1 = AssetDefinition::numeric(
@@ -762,12 +706,10 @@ mod tests {
             .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
         ad2.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-
         let world = World::with([domain], [account], [ad1.clone(), ad2.clone(), ad3.clone()]);
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, store.clone(), ChainId::from("chain"));
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
@@ -785,7 +727,6 @@ mod tests {
         let qreq = iroha_data_model::query::QueryRequest::Start(
             iroha_data_model::query::QueryWithParams::new(&qbox, params),
         );
-
         let resp = run_on_snapshot(&state, &store, &ALICE_ID, qreq, QueryLimits::default())
             .expect("query ok");
         let iroha_data_model::query::QueryResponse::Iterable(batch) = resp else {
@@ -796,17 +737,14 @@ mod tests {
             iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(defs) => defs,
             other => panic!("unexpected batch variant: {other:?}"),
         };
-
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].id(), ad2.id());
         assert_eq!(remaining, 2);
         assert!(cursor.is_none());
     }
-
     #[tokio::test]
     async fn snapshot_sorted_asset_definitions_stored_cursor_continues_in_order() {
         use iroha_primitives::json::Json;
-
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let mut ad1 = AssetDefinition::numeric(
@@ -843,12 +781,10 @@ mod tests {
             .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
         ad2.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-
         let world = World::with([domain], [account], [ad1.clone(), ad2.clone(), ad3.clone()]);
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, store.clone(), ChainId::from("chain"));
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
@@ -866,7 +802,6 @@ mod tests {
         let qreq = iroha_data_model::query::QueryRequest::Start(
             iroha_data_model::query::QueryWithParams::new(&qbox, params),
         );
-
         let resp = run_on_snapshot_with_mode(
             &state,
             &store,
@@ -884,11 +819,9 @@ mod tests {
             iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(defs) => defs,
             other => panic!("unexpected batch variant: {other:?}"),
         };
-
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].id(), ad2.id());
         assert_eq!(remaining, 2);
-
         let cursor = cursor.expect("stored lane must return cursor");
         let next = run_on_snapshot_with_mode(
             &state,
@@ -907,25 +840,21 @@ mod tests {
             iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(defs) => defs,
             other => panic!("unexpected batch variant: {other:?}"),
         };
-
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].id(), ad1.id());
         assert_eq!(remaining, 1);
         assert!(cursor.is_some());
     }
-
     #[tokio::test]
     async fn snapshot_iterable_continuation_is_snapshot_consistent() {
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1.clone(), d2.clone()], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state =
             State::new_with_chain(world, kura.clone(), store.clone(), ChainId::from("chain"));
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
@@ -942,7 +871,6 @@ mod tests {
         let req = iroha_data_model::query::QueryRequest::Start(
             iroha_data_model::query::QueryWithParams::new(&qbox, params),
         );
-
         let snapshot_ids: std::collections::BTreeSet<_> = state
             .view()
             .world
@@ -951,7 +879,6 @@ mod tests {
             .map(|(id, _)| id.clone())
             .collect();
         assert_eq!(snapshot_ids.len(), 2);
-
         let iroha_data_model::query::QueryResponse::Iterable(first) = run_on_snapshot_with_mode(
             &state,
             &store,
@@ -973,7 +900,6 @@ mod tests {
             seen.insert(dom.id().clone());
         }
         assert!(cursor.is_some(), "should have continuation");
-
         let header =
             crate::block::ValidBlock::new_dummy(iroha_test_samples::ALICE_KEYPAIR.private_key())
                 .as_ref()
@@ -986,7 +912,6 @@ mod tests {
             .expect("register domain");
         stx.apply();
         let _ = sblock.commit();
-
         while let Some(cur) = cursor.take() {
             let next = store
                 .handle_iter_continue(cur, &ALICE_ID)
@@ -1001,21 +926,17 @@ mod tests {
             }
             cursor = next_cur;
         }
-
         assert_eq!(seen, snapshot_ids);
         assert!(!seen.contains(&DomainId::try_new("d3", "universal").unwrap()));
     }
-
     #[tokio::test]
     async fn bounded_stored_arc_continuation_returns_next_snapshot_page() {
         use crate::smartcontracts::isi::query::QueryCountMode;
-
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1.clone(), d2.clone(), d3.clone()], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = Arc::new(State::new_with_chain(
@@ -1024,7 +945,6 @@ mod tests {
             store.clone(),
             ChainId::from("chain"),
         ));
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
@@ -1042,7 +962,6 @@ mod tests {
             iroha_data_model::query::QueryWithParams::new(&qbox, params),
         );
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
-
         let iroha_data_model::query::QueryResponse::Iterable(first) =
             run_on_snapshot_with_mode_arc(
                 &state,
@@ -1065,7 +984,6 @@ mod tests {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(first_domains, vec![d1, d2]);
-
         let cursor = cursor.expect("bounded stored cursor");
         let iroha_data_model::query::QueryResponse::Iterable(next) = run_on_snapshot_with_mode_arc(
             &state,
@@ -1089,19 +1007,15 @@ mod tests {
         };
         assert_eq!(next_domains, vec![d3]);
     }
-
     #[tokio::test]
     async fn bounded_stored_arc_wrong_cursor_does_not_consume_original_cursor() {
         use std::num::NonZeroU64;
-
         use crate::smartcontracts::isi::query::QueryCountMode;
-
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1.clone(), d2.clone(), d3.clone()], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = Arc::new(State::new_with_chain(
@@ -1110,7 +1024,6 @@ mod tests {
             store.clone(),
             ChainId::from("chain"),
         ));
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
@@ -1132,7 +1045,6 @@ mod tests {
         };
         let (_batch, _remaining_hint, cursor) = first.into_parts();
         let cursor = cursor.expect("bounded stored cursor");
-
         let mut bad_cursor = cursor.clone();
         bad_cursor.cursor =
             NonZeroU64::new(cursor.cursor.get().saturating_add(1)).expect("non-zero");
@@ -1151,7 +1063,6 @@ mod tests {
             ) => {}
             other => panic!("unexpected error: {other:?}"),
         }
-
         let iroha_data_model::query::QueryResponse::Iterable(next) = run_on_snapshot_with_mode_arc(
             &state,
             &store,
@@ -1168,17 +1079,14 @@ mod tests {
         assert!(cursor.is_none());
         assert_eq!(domain_ids_from_batch(batch), vec![d3.id]);
     }
-
     #[tokio::test]
     async fn bounded_stored_arc_forged_or_foreign_cursor_does_not_consume_original() {
         use crate::smartcontracts::isi::query::QueryCountMode;
-
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1, d2, d3.clone()], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = Arc::new(State::new_with_chain(
@@ -1187,7 +1095,6 @@ mod tests {
             store.clone(),
             ChainId::from("chain"),
         ));
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
@@ -1209,7 +1116,6 @@ mod tests {
         };
         let (_batch, _remaining_hint, cursor) = first.into_parts();
         let cursor = cursor.expect("bounded stored cursor");
-
         let mut forged = cursor.clone();
         forged.query = format!("{}-forged", forged.query);
         let err = run_on_snapshot_with_mode_arc(
@@ -1227,7 +1133,6 @@ mod tests {
             ) => {}
             other => panic!("unexpected error: {other:?}"),
         }
-
         let err = run_on_snapshot_with_mode_arc(
             &state,
             &store,
@@ -1243,7 +1148,6 @@ mod tests {
             ) => {}
             other => panic!("unexpected error: {other:?}"),
         }
-
         let iroha_data_model::query::QueryResponse::Iterable(next) = run_on_snapshot_with_mode_arc(
             &state,
             &store,
@@ -1259,17 +1163,14 @@ mod tests {
         assert!(cursor.is_none());
         assert_eq!(domain_ids_from_batch(batch), vec![d3.id]);
     }
-
     #[tokio::test]
     async fn arc_ephemeral_continue_with_real_cursor_does_not_consume_it() {
         use crate::smartcontracts::isi::query::QueryCountMode;
-
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1, d2, d3.clone()], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = Arc::new(State::new_with_chain(
@@ -1278,7 +1179,6 @@ mod tests {
             store.clone(),
             ChainId::from("chain"),
         ));
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
@@ -1300,7 +1200,6 @@ mod tests {
         };
         let (_batch, _remaining_hint, cursor) = first.into_parts();
         let cursor = cursor.expect("bounded stored cursor");
-
         let err = run_on_snapshot_with_mode_arc(
             &state,
             &store,
@@ -1316,7 +1215,6 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
-
         let iroha_data_model::query::QueryResponse::Iterable(next) = run_on_snapshot_with_mode_arc(
             &state,
             &store,
@@ -1332,23 +1230,19 @@ mod tests {
         assert!(cursor.is_none());
         assert_eq!(domain_ids_from_batch(batch), vec![d3.id]);
     }
-
     #[tokio::test]
     async fn arc_underfunded_continue_with_real_cursor_does_not_consume_it() {
         use crate::smartcontracts::isi::query::QueryCountMode;
-
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1, d2, d3.clone()], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let mut state = State::new_with_chain(world, kura, store.clone(), ChainId::from("chain"));
         state.pipeline.query_stored_min_gas_units = 10;
         let state = Arc::new(state);
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
@@ -1370,7 +1264,6 @@ mod tests {
         };
         let (_batch, _remaining_hint, cursor) = first.into_parts();
         let mut cursor = cursor.expect("bounded stored cursor");
-
         let mut underfunded = cursor.clone();
         underfunded.gas_budget = Some(1);
         let err = run_on_snapshot_with_mode_arc(
@@ -1388,7 +1281,6 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
-
         cursor.gas_budget = Some(10);
         let iroha_data_model::query::QueryResponse::Iterable(next) = run_on_snapshot_with_mode_arc(
             &state,
@@ -1405,17 +1297,14 @@ mod tests {
         assert!(cursor.is_none());
         assert_eq!(domain_ids_from_batch(batch), vec![d3.id]);
     }
-
     #[tokio::test]
     async fn arc_stored_start_carries_validated_client_budget_above_minimum() {
         use crate::smartcontracts::isi::query::QueryCountMode;
-
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1, d2, d3], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let mut state = State::new_with_chain(world, kura, store.clone(), ChainId::from("chain"));
@@ -1427,7 +1316,6 @@ mod tests {
             fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
         };
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
-
         let err = run_on_snapshot_with_mode_arc_and_start_budget(
             &state,
             &store,
@@ -1443,7 +1331,6 @@ mod tests {
             SnapshotQueryError::Validation(ValidationFail::NotPermitted(message))
                 if message.contains("gas")
         ));
-
         let iroha_data_model::query::QueryResponse::Iterable(first) =
             run_on_snapshot_with_mode_arc_and_start_budget(
                 &state,
@@ -1464,18 +1351,15 @@ mod tests {
             "returned cursor must carry the validated client budget"
         );
     }
-
     #[tokio::test]
     async fn bounded_stored_arc_limit_boundary_returns_no_cursor_despite_extra_rows() {
         use crate::smartcontracts::isi::query::QueryCountMode;
-
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
         let d4 = Domain::new(DomainId::try_new("d4", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1.clone(), d2.clone(), d3, d4], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = Arc::new(State::new_with_chain(
@@ -1484,7 +1368,6 @@ mod tests {
             store.clone(),
             ChainId::from("chain"),
         ));
-
         let params = QueryParams {
             pagination: Pagination {
                 limit: Some(nonzero_ext::nonzero!(2_u64)),
@@ -1513,17 +1396,14 @@ mod tests {
         assert!(cursor.is_none());
         assert_eq!(domain_ids_from_batch(batch), vec![d1.id, d2.id]);
     }
-
     #[tokio::test]
     async fn bounded_stored_arc_cursor_excludes_later_state_on_continue() {
         use crate::smartcontracts::isi::query::QueryCountMode;
-
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1, d2, d3.clone()], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = Arc::new(State::new_with_chain(
@@ -1532,7 +1412,6 @@ mod tests {
             store.clone(),
             ChainId::from("chain"),
         ));
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
@@ -1554,7 +1433,6 @@ mod tests {
         };
         let (_batch, _remaining_hint, cursor) = first.into_parts();
         let cursor = cursor.expect("bounded stored cursor");
-
         let d4_id = DomainId::try_new("d4", "universal").unwrap();
         let header =
             crate::block::ValidBlock::new_dummy(iroha_test_samples::ALICE_KEYPAIR.private_key())
@@ -1567,7 +1445,6 @@ mod tests {
             .expect("register domain");
         stx.apply();
         let _ = sblock.commit();
-
         let iroha_data_model::query::QueryResponse::Iterable(next) = run_on_snapshot_with_mode_arc(
             &state,
             &store,
@@ -1583,7 +1460,6 @@ mod tests {
         assert!(cursor.is_none());
         assert_eq!(domain_ids_from_batch(batch), vec![d3.id]);
     }
-
     #[tokio::test]
     async fn stored_account_cursor_revalidates_exact_grant_without_advancing_on_denial() {
         let exact: Permission = iroha_executor_data_model::permission::query::CanReadAccountData {
@@ -1631,7 +1507,6 @@ mod tests {
             fetch_size: FetchSize::new(nonzero_ext::nonzero!(1_u64).into()),
             ..QueryParams::default()
         };
-
         let QueryResponse::Iterable(first) = run_on_snapshot_with_mode(
             &state,
             &store,
@@ -1656,7 +1531,6 @@ mod tests {
             first_permission, expected_permissions[0],
             "the first stored page must match the canonical permission order"
         );
-
         let mut block = state.block(BlockHeader::new(
             nonzero_ext::nonzero!(1_u64),
             None,
@@ -1671,7 +1545,6 @@ mod tests {
             .expect("revoke exact direct reader grant");
         transaction.apply();
         let _ = block.commit();
-
         let denied = run_on_snapshot_with_mode(
             &state,
             &store,
@@ -1684,7 +1557,6 @@ mod tests {
         assert!(matches!(denied, SnapshotQueryError::Validation(
             ValidationFail::NotPermitted(message)
         ) if message.contains("CanReadAccountData")));
-
         let role_id: RoleId = "cursor_account_reader".parse().expect("role id");
         let mut block = state.block(BlockHeader::new(
             nonzero_ext::nonzero!(2_u64),
@@ -1700,7 +1572,6 @@ mod tests {
             .expect("restore the exact reader through an assigned role");
         transaction.apply();
         let _ = block.commit();
-
         let QueryResponse::Iterable(second) = run_on_snapshot_with_mode(
             &state,
             &store,
@@ -1725,7 +1596,6 @@ mod tests {
             "the denied continuation must not consume the second page"
         );
         let second_cursor = second_cursor.expect("one archived page must remain");
-
         let mut block = state.block(BlockHeader::new(
             nonzero_ext::nonzero!(3_u64),
             None,
@@ -1740,13 +1610,11 @@ mod tests {
             .expect("unregister the account whose private data was delegated");
         transaction.apply();
         let _ = block.commit();
-
         let view = state.view();
         let role = view.world.roles.get(&role_id).expect("reader role remains");
         assert!(!role.permissions().any(|permission| permission == &exact));
         assert!(!role.permission_epochs().contains_key(&exact));
         drop(view);
-
         let denied = run_on_snapshot_with_mode(
             &state,
             &store,
@@ -1760,13 +1628,11 @@ mod tests {
             ValidationFail::NotPermitted(message)
         ) if message.contains("CanReadAccountData")));
     }
-
     #[tokio::test]
     async fn arc_ephemeral_continue_is_rejected_before_store_lookup() {
         let d = Domain::new(DomainId::try_new("lane", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = Arc::new(State::new_with_chain(
@@ -1775,7 +1641,6 @@ mod tests {
             store.clone(),
             ChainId::from("chain"),
         ));
-
         let cursor = iroha_data_model::query::parameters::ForwardCursor {
             query: "missing".to_owned(),
             cursor: nonzero_ext::nonzero!(1_u64),
@@ -1797,19 +1662,16 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn arc_stored_cursor_requires_budget_before_store_lookup() {
         let d = Domain::new(DomainId::try_new("lane", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let mut state = State::new_with_chain(world, kura, store.clone(), ChainId::from("chain"));
         state.pipeline.query_stored_min_gas_units = 10;
         let state = Arc::new(state);
-
         let cursor = iroha_data_model::query::parameters::ForwardCursor {
             query: "missing".to_owned(),
             cursor: nonzero_ext::nonzero!(1_u64),
@@ -1831,19 +1693,16 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn arc_stored_missing_cursor_with_sufficient_budget_reaches_store_and_expires() {
         let d = Domain::new(DomainId::try_new("lane", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let mut state = State::new_with_chain(world, kura, store.clone(), ChainId::from("chain"));
         state.pipeline.query_stored_min_gas_units = 10;
         let state = Arc::new(state);
-
         let cursor = iroha_data_model::query::parameters::ForwardCursor {
             query: "missing".to_owned(),
             cursor: nonzero_ext::nonzero!(1_u64),
@@ -1865,17 +1724,14 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn bounded_stored_arc_cursor_owns_snapshot_after_state_is_dropped() {
         use crate::smartcontracts::isi::query::QueryCountMode;
-
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1, d2, d3], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = Arc::new(State::new_with_chain(
@@ -1884,7 +1740,6 @@ mod tests {
             store.clone(),
             ChainId::from("chain"),
         ));
-
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
@@ -1905,9 +1760,7 @@ mod tests {
         };
         let (_batch, _remaining_hint, cursor) = first.into_parts();
         let cursor = cursor.expect("bounded stored cursor");
-
         drop(state);
-
         let next = store
             .handle_iter_continue(cursor, &ALICE_ID)
             .expect("stored snapshot does not borrow the state");
@@ -1919,7 +1772,6 @@ mod tests {
             vec![DomainId::try_new("d3", "universal").unwrap()]
         );
     }
-
     #[tokio::test]
     async fn snapshot_singular_find_parameters_smoke() {
         let d = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
@@ -1928,11 +1780,9 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let state = State::new(world, kura, store.clone());
-
         let req = iroha_data_model::query::QueryRequest::Singular(
             iroha_data_model::query::prelude::FindParameters.into(),
         );
-
         let resp = run_on_snapshot(&state, &store, &ALICE_ID, req, QueryLimits::default())
             .expect("query ok");
         let iroha_data_model::query::QueryResponse::Singular(out) = resp else {
@@ -1943,18 +1793,15 @@ mod tests {
             other => panic!("expected Parameters, got {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn stored_cursor_requires_budget_on_continue() {
         let d = Domain::new(DomainId::try_new("lane", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d], [account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let store = LiveQueryStore::start_test();
         let mut state = State::new(world, kura, store.clone());
         state.pipeline.query_stored_min_gas_units = 10;
-
         let cursor = iroha_data_model::query::parameters::ForwardCursor {
             query: "q".to_owned(),
             cursor: nonzero_ext::nonzero!(1_u64),

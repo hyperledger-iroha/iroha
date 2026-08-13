@@ -13,17 +13,13 @@
     dead_code,
     reason = "static planning evidence is production-uninhabited"
 )]
-
 use core::convert::Infallible;
 #[cfg(test)]
 use core::sync::atomic::{AtomicUsize, Ordering};
-
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
-
 use super::{
     PHASE23_RECORD_COUNT_V1, PHASE23_RING_DEGREE_V1, ZkAmsMkheErrorV1, phase23_record_position_v1,
 };
-
 const RADIX_RANGE_VERSION_V2: u8 = 2;
 const RADIX_BASE_V2: usize = 1 << 15;
 const RADIX_LOW_LIMBS_V2: usize = 17;
@@ -47,7 +43,6 @@ const RADIX_RANGE_COMMITMENT_POINTS_V2: usize =
     RADIX_GROUPS_V2 * RADIX_COMMITMENT_POINTS_PER_GROUP_V2;
 const RADIX_SOURCE_COEFFICIENT_COMMITMENT_POINTS_V2: usize = RADIX_GROUPS_V2;
 const RADIX_RECORD_ORDER_V2: &[u8] = b"X1/U16/E16/RE1/W8/RW1";
-
 const DECOMPOSITION_D_FORMULA_V2: &[u8] = b"D=sum_{h=0}^{16}(2^15)^h*d_h+(2^15)^17*b_d";
 const DECOMPOSITION_S_FORMULA_V2: &[u8] = b"S=sum_{h=0}^{16}(2^15)^h*s_h+(2^15)^17*b_s";
 const CANONICAL_VALUE_FORMULA_V2: &[u8] = b"v=D mod p;D+S=p-1";
@@ -64,7 +59,6 @@ const LOOKUP_SOUNDNESS_FORMULA_V2: &[u8] = b"191679039/(p-32768)<2^-228.48";
 const CROSS_BASIS_HVZK_FORMULA_V2: &[u8] =
     b"64-byte-modular-reduction-vector-mask:distance-from-ideal<2^-245";
 const STATIC_EVIDENCE_FORMULA_V2: &[u8] = b"planning-only:no-proof:no-authority:no-RSS:no-release";
-
 const RADIX_WIRE_HEADER_BYTES_V2: usize = 1_024;
 const RADIX_WIRE_TERMINAL_BP_BYTES_V2: usize = 50_688;
 const RADIX_WIRE_CROSS_SCHNORR_BYTES_V2: usize = 32_866;
@@ -86,11 +80,9 @@ const Q_PCS_WIRE_BYTES_V2: usize = 29_245_792;
 const RADIX_Q_PCS_COMBINED_WIRE_BYTES_V2: usize = 31_395_509;
 const RADIX_Q_PCS_COMBINED_CAP_BYTES_V2: usize = 32 * 1_048_576;
 const RADIX_Q_PCS_COMBINED_MARGIN_BYTES_V2: usize = 2_158_923;
-
 const RADIX_LOOKUP_SOUNDNESS_NUMERATOR_V2: u64 = 191_679_039;
 const RADIX_LOOKUP_SOUNDNESS_BITS_X100_FLOOR_V2: u32 = 22_848;
 const CROSS_BASIS_STATISTICAL_HVZK_BITS_V2: u16 = 245;
-
 const RADIX_DIGIT_SLACK_EMISSIONS_V2: u64 = 191_627_264;
 const RADIX_BATCH_INVERSIONS_MAX_V2: u64 = 5_848;
 const RADIX_INVERSE_PASS_MULTIPLICATIONS_V2: u64 = 574_881_792;
@@ -102,7 +94,6 @@ const RADIX_COMMITTED_IPAS_V2: usize = 1_536;
 const RADIX_COMMITTED_IPA_VECTOR_LENGTH_V2: usize = 2_048;
 const RADIX_TABLE_IPAS_V2: usize = 1;
 const RADIX_TABLE_IPA_VECTOR_LENGTH_V2: usize = 32_768;
-
 const RADIX_EXTERNAL_IO_BYTES_V2: u64 = 26_846_528_789;
 const RADIX_CONFIDENTIAL_SCRATCH_BYTES_V2: u64 = 6_836_977_664;
 const RADIX_SOURCE_PUBLICATION_BYTES_V2: u64 = 7_152_600_416;
@@ -114,7 +105,6 @@ const Q_PCS_CONSERVATIVE_HEAP_BYTES_V2: usize = 120_129_088;
 const RADIX_Q_PCS_OVERLAP_HEAP_BYTES_V2: usize = 140_727_449;
 const RADIX_Q_PCS_HEAP_CEILING_BYTES_V2: usize = 160 * 1_048_576;
 const RADIX_Q_PCS_HEAP_MARGIN_BYTES_V2: usize = 27_044_711;
-
 const SOURCE_ALGEBRA_ACTUALLY_VERIFIED_V2: bool = false;
 const RADIX_DECOMPOSITION_ACTUALLY_VERIFIED_V2: bool = false;
 const RADIX_CANONICAL_RANGE_ACTUALLY_VERIFIED_V2: bool = false;
@@ -131,7 +121,6 @@ const RSS_QUALIFIED_V2: bool = false;
 const PROOF_MINTED_V2: bool = false;
 const AUTHORITY_MINTED_V2: bool = false;
 const RELEASE_COMPLETE_V2: bool = false;
-
 const _: () = {
     assert!(RADIX_RECORDS_V2 == PHASE23_RECORD_COUNT_V1);
     assert!(RADIX_COEFFICIENTS_V2 == 5_636_096);
@@ -205,13 +194,11 @@ const _: () = {
     assert!(!AUTHORITY_MINTED_V2);
     assert!(!RELEASE_COMPLETE_V2);
 };
-
 struct RadixRangeFamilyV2 {
     tag: u8,
     records: u8,
     label: &'static [u8],
 }
-
 const RADIX_RANGE_FAMILIES_V2: [RadixRangeFamilyV2; 6] = [
     RadixRangeFamilyV2 {
         tag: 1,
@@ -244,7 +231,6 @@ const RADIX_RANGE_FAMILIES_V2: [RadixRangeFamilyV2; 6] = [
         label: b"RW",
     },
 ];
-
 struct RadixRangeSourceCoordinateV2 {
     ordinal: u16,
     family: u8,
@@ -254,7 +240,6 @@ struct RadixRangeSourceCoordinateV2 {
     source_index: u32,
     packing_index: u32,
 }
-
 fn source_coordinate_v2(
     ordinal: u16,
     group: usize,
@@ -287,7 +272,6 @@ fn source_coordinate_v2(
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
     })
 }
-
 const RADIX_RANGE_TRANSCRIPT_FRAMES_V2: [&[u8]; 32] = [
     b"axes",
     b"ordered-manifests",
@@ -322,7 +306,6 @@ const RADIX_RANGE_TRANSCRIPT_FRAMES_V2: [&[u8]; 32] = [
     b"beta",
     b"qpcs",
 ];
-
 const RADIX_RANGE_TOPOLOGY_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.phase23.radix-range.topology";
 const RADIX_RANGE_FORMULA_DOMAIN_V2: &[u8] = b"iroha.zk-ams.v2.phase23.radix-range.formulas";
 const RADIX_RANGE_ACCOUNTING_DOMAIN_V2: &[u8] =
@@ -331,14 +314,12 @@ const RADIX_RANGE_TRANSCRIPT_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.radix-range.transcript-manifest";
 const RADIX_RANGE_PREREQUISITE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.phase23.radix-range.static-prerequisite";
-
 fn nonzero_digest_v2(digest: [u8; 32]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     if digest == [0; 32] {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     Ok(digest)
 }
-
 fn topology_digest_for_record_order_v2(
     record_order: &[u16; RADIX_RECORDS_V2],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -381,7 +362,6 @@ fn topology_digest_for_record_order_v2(
     }
     nonzero_digest_v2(hash.finalize())
 }
-
 fn exact_topology_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut order = [0_u16; RADIX_RECORDS_V2];
     for (ordinal, destination) in order.iter_mut().enumerate() {
@@ -390,7 +370,6 @@ fn exact_topology_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     }
     topology_digest_for_record_order_v2(&order)
 }
-
 fn exact_formula_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(RADIX_RANGE_FORMULA_DOMAIN_V2);
@@ -414,7 +393,6 @@ fn exact_formula_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     }
     nonzero_digest_v2(hash.finalize())
 }
-
 fn exact_accounting_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(RADIX_RANGE_ACCOUNTING_DOMAIN_V2);
@@ -451,13 +429,11 @@ fn exact_accounting_digest_v2() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     hash.update(&CROSS_BASIS_STATISTICAL_HVZK_BITS_V2.to_be_bytes());
     nonzero_digest_v2(hash.finalize())
 }
-
 struct RadixRangeManifestCursorV2<'a> {
     encoded: &'a [u8],
     next_ordinal: usize,
     hash: Keccak256,
 }
-
 impl<'a> RadixRangeManifestCursorV2<'a> {
     fn begin_v2(encoded: &'a [u8]) -> Self {
         let mut hash = Keccak256::new();
@@ -470,7 +446,6 @@ impl<'a> RadixRangeManifestCursorV2<'a> {
             hash,
         }
     }
-
     fn absorb_expected_v2(&mut self) -> Result<(), ZkAmsMkheErrorV1> {
         let expected = RADIX_RANGE_TRANSCRIPT_FRAMES_V2
             .get(self.next_ordinal)
@@ -492,7 +467,6 @@ impl<'a> RadixRangeManifestCursorV2<'a> {
         self.next_ordinal += 1;
         Ok(())
     }
-
     fn absorb_until_v2(&mut self, end_exclusive: usize) -> Result<(), ZkAmsMkheErrorV1> {
         while self.next_ordinal < end_exclusive {
             self.absorb_expected_v2()?;
@@ -503,26 +477,21 @@ impl<'a> RadixRangeManifestCursorV2<'a> {
         Ok(())
     }
 }
-
 struct RadixRangePreLookupManifestV2<'a> {
     cursor: RadixRangeManifestCursorV2<'a>,
 }
-
 struct RadixRangeLookupZDerivedManifestV2<'a> {
     cursor: RadixRangeManifestCursorV2<'a>,
 }
-
 struct RadixRangeLookupUManifestV2<'a> {
     cursor: RadixRangeManifestCursorV2<'a>,
 }
-
 impl<'a> RadixRangePreLookupManifestV2<'a> {
     fn begin_v2(encoded: &'a [u8]) -> Self {
         Self {
             cursor: RadixRangeManifestCursorV2::begin_v2(encoded),
         }
     }
-
     fn derive_lookup_z_v2(
         mut self,
     ) -> Result<RadixRangeLookupZDerivedManifestV2<'a>, ZkAmsMkheErrorV1> {
@@ -534,7 +503,6 @@ impl<'a> RadixRangePreLookupManifestV2<'a> {
         })
     }
 }
-
 impl<'a> RadixRangeLookupZDerivedManifestV2<'a> {
     fn absorb_z_dependent_inverse_planes_v2(
         mut self,
@@ -547,7 +515,6 @@ impl<'a> RadixRangeLookupZDerivedManifestV2<'a> {
         })
     }
 }
-
 impl RadixRangeLookupUManifestV2<'_> {
     fn finish_v2(mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
         self.cursor
@@ -558,14 +525,12 @@ impl RadixRangeLookupUManifestV2<'_> {
         nonzero_digest_v2(self.cursor.hash.finalize())
     }
 }
-
 fn require_exact_transcript_manifest_v2(encoded: &[u8]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     RadixRangePreLookupManifestV2::begin_v2(encoded)
         .derive_lookup_z_v2()?
         .absorb_z_dependent_inverse_planes_v2()?
         .finish_v2()
 }
-
 /// Production cannot assert that the source-algebra witness has been
 /// materialized and bound to the exact 43-record source order.
 pub(super) enum RadixRangeSourceSealV2 {
@@ -575,7 +540,6 @@ pub(super) enum RadixRangeSourceSealV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 /// Production cannot open an authenticated, purpose-bound replay view.
 pub(super) enum RadixRangeReplaySealV2 {
     Production {
@@ -584,7 +548,6 @@ pub(super) enum RadixRangeReplaySealV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 /// Production cannot assert the coefficient/packing transpose or equality.
 pub(super) enum RadixRangePackingSealV2 {
     Production {
@@ -594,7 +557,6 @@ pub(super) enum RadixRangePackingSealV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 /// Production cannot assert the lookup, sumcheck, Hyrax, or statistical-HVZK
 /// obligations represented by this static plan.
 pub(super) enum RadixRangeZkSealV2 {
@@ -607,14 +569,11 @@ pub(super) enum RadixRangeZkSealV2 {
     #[cfg(test)]
     TestOnly,
 }
-
 #[cfg(test)]
 static ZEROIZED_TRANSIENT_DROPS_V2: AtomicUsize = AtomicUsize::new(0);
-
 struct RadixRangeTransientV2 {
     bytes: [u8; 32],
 }
-
 impl Drop for RadixRangeTransientV2 {
     fn drop(&mut self) {
         self.bytes.fill(0);
@@ -624,7 +583,6 @@ impl Drop for RadixRangeTransientV2 {
         }
     }
 }
-
 struct RadixRangeLiveV2 {
     _source: RadixRangeSourceSealV2,
     _replay: RadixRangeReplaySealV2,
@@ -632,11 +590,9 @@ struct RadixRangeLiveV2 {
     _zk: RadixRangeZkSealV2,
     transient: RadixRangeTransientV2,
 }
-
 struct RadixRangeIngressV2 {
     live: Option<RadixRangeLiveV2>,
 }
-
 struct RadixRangeCheckedV2 {
     live: Option<RadixRangeLiveV2>,
     topology_digest: [u8; 32],
@@ -644,7 +600,6 @@ struct RadixRangeCheckedV2 {
     accounting_digest: [u8; 32],
     transcript_manifest_digest: [u8; 32],
 }
-
 struct RadixRangeStaticRecordV2 {
     topology_digest: [u8; 32],
     formula_digest: [u8; 32],
@@ -668,14 +623,12 @@ struct RadixRangeStaticRecordV2 {
     release_complete: bool,
     record_digest: [u8; 32],
 }
-
 /// Move-only owner of static planning evidence.  It exposes no decomposition
 /// seam and carries no proof or release authority.
 pub(super) struct Phase23RadixRangeStaticPrerequisiteV2 {
     live: Option<RadixRangeLiveV2>,
     record: RadixRangeStaticRecordV2,
 }
-
 impl RadixRangeIngressV2 {
     fn begin_v2(
         source: RadixRangeSourceSealV2,
@@ -693,7 +646,6 @@ impl RadixRangeIngressV2 {
             }),
         }
     }
-
     fn check_v2(
         mut self,
         transcript_manifest: &[u8],
@@ -717,14 +669,12 @@ impl RadixRangeIngressV2 {
             transcript_manifest_digest,
         })
     }
-
     #[cfg(test)]
     fn force_unwind_after_take_v2(mut self) -> ! {
         let _live = self.live.take().expect("test ingress must be live");
         panic!("test unwind after poison")
     }
 }
-
 impl RadixRangeCheckedV2 {
     fn freeze_v2(mut self) -> Result<Phase23RadixRangeStaticPrerequisiteV2, ZkAmsMkheErrorV1> {
         let live = self
@@ -770,7 +720,6 @@ impl RadixRangeCheckedV2 {
         })
     }
 }
-
 fn static_record_digest_v2(
     record: &RadixRangeStaticRecordV2,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -801,7 +750,6 @@ fn static_record_digest_v2(
     ]);
     nonzero_digest_v2(hash.finalize())
 }
-
 fn validate_static_record_v2(record: &RadixRangeStaticRecordV2) -> Result<(), ZkAmsMkheErrorV1> {
     if [
         record.topology_digest,
@@ -833,7 +781,6 @@ fn validate_static_record_v2(record: &RadixRangeStaticRecordV2) -> Result<(), Zk
     }
     Ok(())
 }
-
 /// Consumes four impossible production seals into static evidence only.
 pub(super) fn consume_phase23_radix_range_static_prerequisite_v2(
     source: RadixRangeSourceSealV2,
@@ -846,7 +793,6 @@ pub(super) fn consume_phase23_radix_range_static_prerequisite_v2(
         .check_v2(transcript_manifest)?
         .freeze_v2()
 }
-
 #[cfg(test)]
 #[path = "incremental_source_phase23_radix_range_v2_tests.rs"]
 mod tests;

@@ -8,7 +8,6 @@ fn soracloud_uploaded_model_finalize_rejects_pin_digest_changed_after_register()
         .header();
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
-
     deploy_uploaded_model_service(&mut stx)?;
     let digest = ManifestDigest::new([0xF1; 32]);
     insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
@@ -25,7 +24,6 @@ fn soracloud_uploaded_model_finalize_rejects_pin_digest_changed_after_register()
         bundle.ciphertext_bytes,
         PinStatus::Approved(2),
     );
-
     let result = sample_uploaded_model_finalize_instruction(
         &bundle,
         "uploaded-artifact-mutated-pin-digest",
@@ -44,10 +42,9 @@ fn soracloud_uploaded_model_finalize_rejects_pin_digest_changed_after_register()
     );
     Ok(())
 }
-
 #[test]
-fn soracloud_uploaded_model_finalize_rejects_provenance_signer_mismatch()
--> Result<(), eyre::Report> {
+fn soracloud_uploaded_model_finalize_rejects_provenance_signer_mismatch() -> Result<(), eyre::Report>
+{
     let kura = Kura::blank_kura_for_testing();
     let state = state_with_soracloud_permission(&kura)?;
     let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
@@ -55,7 +52,6 @@ fn soracloud_uploaded_model_finalize_rejects_provenance_signer_mismatch()
         .header();
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
-
     deploy_uploaded_model_service(&mut stx)?;
     let digest = ManifestDigest::new([0xDB; 32]);
     insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
@@ -65,7 +61,6 @@ fn soracloud_uploaded_model_finalize_rejects_provenance_signer_mismatch()
         provenance: uploaded_model_bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
-
     let mut instruction = sample_uploaded_model_finalize_instruction(
         &bundle,
         "uploaded-artifact-signer-mismatch",
@@ -98,10 +93,9 @@ fn soracloud_uploaded_model_finalize_rejects_provenance_signer_mismatch()
     );
     Ok(())
 }
-
 #[test]
-fn soracloud_uploaded_model_finalize_rejects_retired_pin_after_register()
--> Result<(), eyre::Report> {
+fn soracloud_uploaded_model_finalize_rejects_retired_pin_after_register() -> Result<(), eyre::Report>
+{
     let kura = Kura::blank_kura_for_testing();
     let state = state_with_soracloud_permission(&kura)?;
     let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
@@ -109,7 +103,6 @@ fn soracloud_uploaded_model_finalize_rejects_retired_pin_after_register()
         .header();
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
-
     deploy_uploaded_model_service(&mut stx)?;
     let digest = ManifestDigest::new([0xD7; 32]);
     insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
@@ -120,7 +113,6 @@ fn soracloud_uploaded_model_finalize_rejects_retired_pin_after_register()
     }
     .execute(&ALICE_ID, &mut stx)?;
     insert_uploaded_model_pin(&mut stx, digest, PinStatus::Retired(12));
-
     let result = sample_uploaded_model_finalize_instruction(
         &bundle,
         "uploaded-artifact-retired",

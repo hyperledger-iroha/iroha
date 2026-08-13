@@ -10,21 +10,17 @@ use std::{
     path::Path,
     process,
 };
-
 use sorafs_chunker::{ChunkDigest, ChunkProfile, chunk_bytes_with_digests_profile};
-
 #[derive(Debug, Clone)]
 struct CliConfig {
     profile: ChunkProfile,
     input: String,
 }
-
 #[derive(Debug)]
 enum ParseError {
     Help,
     Message(String),
 }
-
 const USAGE: &str = "\
 usage: sorafs-chunk-dump [OPTIONS] <path|->
 
@@ -43,7 +39,6 @@ Examples:
     sorafs-chunk-dump --profile sf1 fixtures/sorafs_chunker/sf1_profile_v1_input.bin
     sorafs-chunk-dump --min-size 4096 --target-size 32768 --max-size 65536 myfile.bin
 ";
-
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");
@@ -51,7 +46,6 @@ fn main() {
         process::exit(1);
     }
 }
-
 fn run() -> Result<(), String> {
     let config = match parse_cli(env::args().skip(1)) {
         Ok(config) => config,
@@ -61,13 +55,11 @@ fn run() -> Result<(), String> {
         }
         Err(ParseError::Message(err)) => return Err(err),
     };
-
     let input = read_input(&config.input)?;
     let output = generate_output(config.profile, &input);
     println!("{output}");
     Ok(())
 }
-
 fn parse_cli<I>(args: I) -> Result<CliConfig, ParseError>
 where
     I: IntoIterator<Item = String>,
@@ -78,7 +70,6 @@ where
     let mut max_override: Option<usize> = None;
     let mut mask_override: Option<u64> = None;
     let mut input: Option<String> = None;
-
     let mut iter = args.into_iter().peekable();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -136,7 +127,6 @@ where
             }
         }
     }
-
     if let Some(min) = min_override {
         profile.min_size = min;
     }
@@ -149,7 +139,6 @@ where
     if let Some(mask) = mask_override {
         profile.break_mask = mask;
     }
-
     if profile.min_size == 0 {
         return Err(ParseError::Message(
             "--min-size must be greater than zero".to_owned(),
@@ -165,11 +154,9 @@ where
             "--break-mask must be non-zero".to_owned(),
         ));
     }
-
     let input = input.ok_or_else(|| ParseError::Message("missing input path".to_owned()))?;
     Ok(CliConfig { profile, input })
 }
-
 fn take_value<I>(iter: &mut std::iter::Peekable<I>, flag: &str) -> Result<String, ParseError>
 where
     I: Iterator<Item = String>,
@@ -177,7 +164,6 @@ where
     iter.next()
         .ok_or_else(|| ParseError::Message(format!("{flag} requires a value")))
 }
-
 fn resolve_profile(value: &str) -> Result<ChunkProfile, ParseError> {
     match value {
         "sf1" | "sorafs.sf1@1.0.0" => Ok(ChunkProfile::DEFAULT),
@@ -185,14 +171,12 @@ fn resolve_profile(value: &str) -> Result<ChunkProfile, ParseError> {
         other => Err(ParseError::Message(format!("unknown profile `{other}`"))),
     }
 }
-
 fn parse_usize(value: &str, flag: &str) -> Result<usize, ParseError> {
     require_canonical_unsigned_decimal(value, flag)?;
     value.parse::<usize>().map_err(|err| {
         ParseError::Message(format!("{flag} expects a canonical integer value: {err}"))
     })
 }
-
 fn require_canonical_unsigned_decimal(value: &str, flag: &str) -> Result<(), ParseError> {
     let digits = value.as_bytes();
     if digits.is_empty()
@@ -205,7 +189,6 @@ fn require_canonical_unsigned_decimal(value: &str, flag: &str) -> Result<(), Par
     }
     Ok(())
 }
-
 fn require_canonical_hex_mask(value: &str) -> Result<(), ParseError> {
     let digits = value.as_bytes();
     if digits.is_empty()
@@ -220,7 +203,6 @@ fn require_canonical_hex_mask(value: &str) -> Result<(), ParseError> {
     }
     Ok(())
 }
-
 fn parse_mask(value: &str) -> Result<u64, ParseError> {
     if let Some(hex) = value.strip_prefix("0x") {
         require_canonical_hex_mask(hex)?;
@@ -236,7 +218,6 @@ fn parse_mask(value: &str) -> Result<u64, ParseError> {
         })
     }
 }
-
 fn read_input(path: &str) -> Result<Vec<u8>, String> {
     if path == "-" {
         let mut buf = Vec::new();
@@ -245,7 +226,6 @@ fn read_input(path: &str) -> Result<Vec<u8>, String> {
             .map_err(|err| format!("failed to read stdin: {err}"))?;
         return Ok(buf);
     }
-
     let path_ref = Path::new(path);
     let mut file = File::open(path_ref).map_err(|err| format!("failed to open {path}: {err}"))?;
     let mut buf = Vec::new();
@@ -253,12 +233,10 @@ fn read_input(path: &str) -> Result<Vec<u8>, String> {
         .map_err(|err| format!("failed to read {path}: {err}"))?;
     Ok(buf)
 }
-
 fn generate_output(profile: ChunkProfile, input: &[u8]) -> String {
     let chunks = chunk_bytes_with_digests_profile(profile, input);
     build_payload(profile, input, &chunks)
 }
-
 fn build_payload(profile: ChunkProfile, input: &[u8], chunks: &[ChunkDigest]) -> String {
     let mut out = String::new();
     writeln!(
@@ -284,7 +262,6 @@ fn build_payload(profile: ChunkProfile, input: &[u8], chunks: &[ChunkDigest]) ->
     out.push_str("  ]\n}");
     out
 }
-
 fn hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -294,16 +271,13 @@ fn hex(bytes: &[u8]) -> String {
     }
     out
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn parse(args: &[&str]) -> Result<CliConfig, ParseError> {
         let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         parse_cli(owned)
     }
-
     #[test]
     fn parse_cli_defaults() {
         let config = parse(&["input.bin"]).expect("parse default");
@@ -316,7 +290,6 @@ mod tests {
         assert_eq!(config.profile.max_size, ChunkProfile::DEFAULT.max_size);
         assert_eq!(config.profile.break_mask, ChunkProfile::DEFAULT.break_mask);
     }
-
     #[test]
     fn parse_cli_overrides_profile_and_params() {
         let config = parse(&[
@@ -339,7 +312,6 @@ mod tests {
         assert_eq!(config.profile.max_size, 1024);
         assert_eq!(config.profile.break_mask, 0xff);
     }
-
     #[test]
     fn parse_cli_rejects_noncanonical_size_values() {
         for value in ["", " 256", "256 ", "+256", "0256", "2_56", "-256"] {
@@ -352,7 +324,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn parse_cli_rejects_noncanonical_break_masks() {
         for value in [
@@ -367,16 +338,13 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn parse_cli_accepts_canonical_decimal_and_hex_masks() {
         let decimal = parse(&["--break-mask", "255", "input.bin"]).expect("decimal mask");
         assert_eq!(decimal.profile.break_mask, 255);
-
         let hex = parse(&["--break-mask", "0xff", "input.bin"]).expect("hex mask");
         assert_eq!(hex.profile.break_mask, 255);
     }
-
     #[test]
     fn generate_output_respects_profile() {
         let profile = ChunkProfile {
@@ -406,7 +374,6 @@ mod tests {
             "custom max_size should split into two chunks"
         );
     }
-
     #[test]
     fn parse_cli_handles_help() {
         match parse(&["--help"]) {
@@ -414,7 +381,6 @@ mod tests {
             other => panic!("expected help, got {other:?}"),
         }
     }
-
     #[test]
     fn parse_cli_rejects_invalid_mask() {
         match parse(&["--break-mask", "0xZZ", "input.bin"]) {

@@ -3,7 +3,6 @@ fn contract_dispatch_context_rejects_no_selector_self_describing_artifact_withou
     let (program, expected_entrypoint_pc) =
         contract_program_with_entrypoint("run", Some("RunPermission"));
     let metadata = Metadata::default();
-
     let err = parse_contract_call_execution_context(&metadata, &program)
         .expect_err("self-describing default dispatch without main should reject");
     assert!(matches!(
@@ -11,7 +10,6 @@ fn contract_dispatch_context_rejects_no_selector_self_describing_artifact_withou
         ValidationFail::NotPermitted(message)
             if message.contains("require explicit contract_entrypoint")
     ));
-
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("contract_entrypoint").expect("static name"),
@@ -24,7 +22,6 @@ fn contract_dispatch_context_rejects_no_selector_self_describing_artifact_withou
     assert_eq!(context.entrypoint_pc(), Some(expected_entrypoint_pc));
     assert_eq!(context.entrypoint_permission(), Some("RunPermission"));
 }
-
 #[test]
 fn trigger_dispatch_encodes_event_args_as_one_canonical_record() {
     let contract = prepared_parameterized_trigger_contract();
@@ -34,10 +31,8 @@ fn trigger_dispatch_encodes_event_args_as_one_canonical_record() {
         Json::new("run".to_owned()),
     );
     let event_args = Json::from(norito::json!({"val": "1.25"}));
-
     validate_trigger_call_execution_context(&metadata, contract.artifact())
         .expect("registration validates the typed callback without a fabricated payload");
-
     let context =
         parse_prepared_trigger_call_execution_context(&metadata, &contract, &event_args, u64::MAX)
             .expect("bind typed trigger arguments");
@@ -50,7 +45,6 @@ fn trigger_dispatch_encodes_event_args_as_one_canonical_record() {
         .expect("run argument schema");
     let expected = ivm::encode_argument_record_from_json(schema, &event_args)
         .expect("encode expected canonical record");
-
     assert_eq!(context.argument_record(), Some(expected.as_slice()));
     ivm::validate_argument_record(
         schema,
@@ -58,7 +52,6 @@ fn trigger_dispatch_encodes_event_args_as_one_canonical_record() {
     )
     .expect("roundtrip canonical trigger argument record");
 }
-
 #[test]
 #[cfg(debug_assertions)]
 fn malformed_invocation_arguments_fail_during_context_preparation() {
@@ -89,7 +82,6 @@ fn malformed_invocation_arguments_fail_during_context_preparation() {
                 .expect("bounded malformed fixture"),
         ),
     };
-
     ivm::reset_argument_record_decode_count();
     let error = parse_prepared_contract_invocation_execution_context(
         &invocation,
@@ -99,7 +91,6 @@ fn malformed_invocation_arguments_fail_during_context_preparation() {
         u64::MAX,
     )
     .expect_err("malformed arguments must fail before a VM is constructed or entered");
-
     assert!(matches!(
         error,
         ValidationFail::NotPermitted(message)
@@ -107,12 +98,10 @@ fn malformed_invocation_arguments_fail_during_context_preparation() {
     ));
     assert_eq!(ivm::argument_record_decode_count(), 1);
 }
-
 #[test]
 fn trigger_dispatch_rejects_static_payload_and_implicit_entrypoint() {
     let contract = prepared_parameterized_trigger_contract();
     let event_args = Json::from(norito::json!({"val": "7"}));
-
     let err = parse_prepared_trigger_call_execution_context(
         &Metadata::default(),
         &contract,
@@ -125,7 +114,6 @@ fn trigger_dispatch_rejects_static_payload_and_implicit_entrypoint() {
         ValidationFail::NotPermitted(message)
             if message.contains("explicit contract_entrypoint")
     ));
-
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("contract_entrypoint").expect("static name"),
@@ -144,7 +132,6 @@ fn trigger_dispatch_rejects_static_payload_and_implicit_entrypoint() {
             if message.contains("triggering event")
     ));
 }
-
 #[test]
 fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
     let authority = ALICE_ID.clone();
@@ -156,7 +143,6 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
-
     let contract_address = ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
@@ -174,7 +160,6 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
         ValidationFail::NotPermitted(message)
             if message.contains("requires an exact `CanInvokeContractEntrypoint` grant")
     ));
-
     let direct_permission: Permission =
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
             contract: contract_address.clone(),
@@ -186,7 +171,6 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
         .expect("grant direct contract permission");
     enforce_contract_entrypoint_permission(&tx.world, &authority, &direct_context)
         .expect("direct permission should allow contract entrypoint");
-
     let role_context = contract_permission_context(contract_address.clone(), "role_admin");
     let role_id: RoleId = "contract_admin_role".parse().expect("role id");
     let role: iroha_data_model::role::NewRole = Role::new(role_id.clone(), authority.clone())
@@ -201,7 +185,6 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
         .expect("register contract role");
     enforce_contract_entrypoint_permission(&tx.world, &authority, &role_context)
         .expect("role permission should allow contract entrypoint");
-
     for denied_context in [
         contract_permission_context(contract_address.clone(), "wrong_entrypoint"),
         contract_permission_context(
@@ -220,7 +203,6 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
         enforce_contract_entrypoint_permission(&tx.world, &authority, &denied_context)
             .expect_err("a grant for another contract or selector must fail closed");
     }
-
     Grant::account_permission(
         Permission::new("CanInvokeContractEntrypoint".to_owned(), Json::new(())),
         authority.clone(),
@@ -230,7 +212,6 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
     let malformed_only = contract_permission_context(contract_address.clone(), "malformed_only");
     enforce_contract_entrypoint_permission(&tx.world, &authority, &malformed_only)
         .expect_err("a name-only permission must never bypass exact payload matching");
-
     let custom_name = "ContractOperations";
     let noncanonical_custom = Permission::new(
         custom_name.to_owned(),
@@ -265,14 +246,12 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
     )
     .expect("the exact empty-payload custom permission must authorize its marker");
 }
-
 fn generate_denied_program(message: &str) -> Vec<u8> {
     let verdict = Err(iroha_data_model::ValidationFail::NotPermitted(
         message.to_owned(),
     ));
     generate_verdict_program(&verdict)
 }
-
 #[test]
 fn execute_instruction_with_ivm() {
     fn read_default_bytecode() -> Option<Vec<u8>> {
@@ -287,11 +266,9 @@ fn execute_instruction_with_ivm() {
         }
         None
     }
-
     let bytecode = read_default_bytecode().unwrap_or_else(generate_ok_program);
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
     let executor = super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
-
     let wonderland_domain_id: DomainId =
         DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
@@ -303,7 +280,6 @@ fn execute_instruction_with_ivm() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
-
     let domain_id: DomainId = DomainId::try_new("test", "universal").expect("domain id");
     let instruction = Register::domain(Domain::new(domain_id.clone())).into();
     executor
@@ -311,16 +287,13 @@ fn execute_instruction_with_ivm() {
         .expect("execution");
     assert!(state_tx.world.domains.get(&domain_id).is_some());
 }
-
 #[test]
 fn loaded_executor_stack_limit_tracks_gas_limit() {
     let bytecode = generate_ok_program();
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
     let loaded = super::LoadedExecutor::load(raw).expect("load");
-
     let small_limit = 10_000;
     let large_limit = 50_000;
-
     {
         let vm_small = loaded
             .checkout_runtime_for_gas_limit(small_limit, Memory::HEAP_MAX_SIZE)
@@ -331,7 +304,6 @@ fn loaded_executor_stack_limit_tracks_gas_limit() {
         );
         assert_eq!(vm_small.remaining_gas(), small_limit);
     }
-
     {
         let vm_large = loaded
             .checkout_runtime_for_gas_limit(large_limit, Memory::HEAP_MAX_SIZE)
@@ -343,7 +315,6 @@ fn loaded_executor_stack_limit_tracks_gas_limit() {
         assert_eq!(vm_large.remaining_gas(), large_limit);
     }
 }
-
 #[test]
 fn loaded_executor_runtime_tracks_governed_heap_limit() {
     const GAS_LIMIT: u64 = 10_000;
@@ -351,7 +322,6 @@ fn loaded_executor_runtime_tracks_governed_heap_limit() {
     const LARGE_HEAP_LIMIT: u64 = 128;
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
     let loaded = super::LoadedExecutor::load(raw).expect("load");
-
     {
         let mut runtime = loaded
             .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT)
@@ -369,7 +339,6 @@ fn loaded_executor_runtime_tracks_governed_heap_limit() {
         assert_eq!(runtime.memory.heap_max_limit(), LARGE_HEAP_LIMIT);
     }
     let (after_distinct_limits, _) = loaded.runtime_pool_snapshot();
-
     let runtime = loaded
         .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT)
         .expect("warm small heap runtime");
@@ -378,11 +347,9 @@ fn loaded_executor_runtime_tracks_governed_heap_limit() {
     let (after_reuse, _) = loaded.runtime_pool_snapshot();
     assert_eq!(after_reuse.hits, after_distinct_limits.hits + 1);
 }
-
 #[test]
 fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
     const GAS_LIMIT: u64 = 10_000;
-
     fn dirty_then_fail(loaded: &super::LoadedExecutor) -> Result<(), *const u8> {
         let mut runtime = loaded
             .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
@@ -399,15 +366,12 @@ fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
             .expect("dirty input memory");
         Err(allocation)
     }
-
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
     let loaded = super::LoadedExecutor::load(raw).expect("load");
     let (before, _) = loaded.runtime_pool_snapshot();
-
     let allocation = dirty_then_fail(&loaded).expect_err("synthetic validation failure");
     let (after_error, _) = loaded.runtime_pool_snapshot();
     assert_eq!(after_error.dirty_resets, before.dirty_resets + 1);
-
     let runtime = loaded
         .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
         .expect("warm checkout");
@@ -435,7 +399,6 @@ fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
     assert_eq!(after_reuse.program_loads, after_error.program_loads);
     assert_eq!(after_reuse.template_builds, after_error.template_builds);
 }
-
 #[test]
 fn loaded_executor_runtime_variants_are_bounded() {
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
@@ -460,12 +423,10 @@ fn loaded_executor_runtime_variants_are_bounded() {
             .expect("checkout gas/stack variant");
         assert_eq!(runtime.memory.stack_limit(), key.stack_limit);
     }
-
     let (after, variant_count) = loaded.runtime_pool_snapshot();
     assert_eq!(variant_count, capacity);
     assert!(after.evictions > before.evictions);
 }
-
 #[test]
 fn execute_transaction_rejects_authority_argument_mismatch() {
     let domain_id = DomainId::try_new("wonderland", "universal").expect("valid fixture domain");
@@ -490,7 +451,6 @@ fn execute_transaction_rejects_authority_argument_mismatch() {
     .with_executable(Executable::Instructions(Vec::new().into()))
     .sign(ALICE_KEYPAIR.private_key());
     let mut ivm_cache = IvmCache::new();
-
     let error = super::Executor::Initial
         .execute_transaction(&mut state_transaction, &BOB_ID, transaction, &mut ivm_cache)
         .expect_err("the call-site authority must match the signed transaction");
@@ -502,14 +462,12 @@ fn execute_transaction_rejects_authority_argument_mismatch() {
         "a mismatched authority must fail before execution or fee accounting"
     );
 }
-
 #[test]
 fn transaction_metadata_cannot_change_governed_executor_fuel_budget() {
     let bytecode = generate_ok_program();
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
     let user_executor =
         super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
-
     for (executor_name, executor) in [
         ("initial", super::Executor::Initial),
         ("user-provided", user_executor),
@@ -531,7 +489,6 @@ fn transaction_metadata_cannot_change_governed_executor_fuel_budget() {
             state_tx.executor_fuel_remaining, governed_fuel,
             "{executor_name} transaction must start with the governed fuel budget"
         );
-
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("additional_fuel").expect("static name"),
@@ -547,24 +504,20 @@ fn transaction_metadata_cannot_change_governed_executor_fuel_budget() {
         .sign(ALICE_KEYPAIR.private_key());
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let executor = state_tx.world.executor.clone();
-
         executor
             .execute_transaction(&mut state_tx, &ALICE_ID, tx, &mut ivm_cache)
             .expect("ordinary metadata must not reject execution");
-
         assert_eq!(
             state_tx.executor_fuel_remaining, governed_fuel,
             "{executor_name} transaction metadata must not alter the governed fuel budget"
         );
     }
 }
-
 #[test]
 fn executor_validation_consumes_fuel_budget() {
     let bytecode = generate_ok_program();
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
     let executor = super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
-
     let wonderland_domain_id: DomainId =
         DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
@@ -577,7 +530,6 @@ fn executor_validation_consumes_fuel_budget() {
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let base_fuel = state_tx.world.parameters.get().executor().fuel.get();
-
     let instruction: InstructionBox = Log::new(Level::INFO, "executor fuel".to_owned()).into();
     executor
         .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
@@ -588,13 +540,11 @@ fn executor_validation_consumes_fuel_budget() {
         "expected executor fuel budget to decrease"
     );
 }
-
 #[test]
 fn executor_validation_rejects_when_budget_exhausted() {
     let bytecode = generate_ok_program();
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
     let executor = super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
-
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
@@ -603,7 +553,6 @@ fn executor_validation_rejects_when_budget_exhausted() {
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     state_tx.executor_fuel_remaining = 0;
-
     let instruction: InstructionBox = Log::new(Level::INFO, "executor fuel".to_owned()).into();
     let err = executor
         .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
@@ -613,7 +562,6 @@ fn executor_validation_rejects_when_budget_exhausted() {
         "unexpected error: {err:?}"
     );
 }
-
 fn native_find_accounts_request() -> QueryRequest {
     use iroha_data_model::query::{
         QueryBox, QueryWithParams,
@@ -621,7 +569,6 @@ fn native_find_accounts_request() -> QueryRequest {
         dsl::{CompoundPredicate, SelectorTuple},
         parameters::QueryParams,
     };
-
     let query: QueryBox<_> = Box::new(iroha_data_model::query::ErasedIterQuery::<Account>::new(
         CompoundPredicate::PASS,
         SelectorTuple::default(),
@@ -630,14 +577,12 @@ fn native_find_accounts_request() -> QueryRequest {
     let query = QueryWithParams::new(&query, QueryParams::default());
     QueryRequest::Start(query)
 }
-
 fn native_find_permissions_request_with_payload(payload: Vec<u8>) -> QueryRequest {
     use iroha_data_model::query::{
         QueryBox, QueryWithParams,
         dsl::{CompoundPredicate, SelectorTuple},
         parameters::QueryParams,
     };
-
     let query: QueryBox<_> = Box::new(iroha_data_model::query::ErasedIterQuery::<Permission>::new(
         CompoundPredicate::PASS,
         SelectorTuple::default(),
@@ -646,13 +591,11 @@ fn native_find_permissions_request_with_payload(payload: Vec<u8>) -> QueryReques
     let query = QueryWithParams::new(&query, QueryParams::default());
     QueryRequest::Start(query)
 }
-
 fn native_find_permissions_request(account: AccountId) -> QueryRequest {
     native_find_permissions_request_with_payload(norito::codec::Encode::encode(
         &iroha_data_model::query::permission::prelude::FindPermissionsByAccountId::new(account),
     ))
 }
-
 fn validate_native_query_with_world(
     executor: &super::Executor,
     world: &World,
@@ -662,7 +605,6 @@ fn validate_native_query_with_world(
     let world_view = world.view();
     executor.validate_query_with_world_parts(&world_view, None, authority, query)
 }
-
 fn remove_committed_storage_entry<K: mv::Key, V: mv::Value>(
     storage: &mv::storage::Storage<K, V>,
     key: K,
@@ -672,7 +614,6 @@ fn remove_committed_storage_entry<K: mv::Key, V: mv::Value>(
     block.commit();
     removed
 }
-
 #[test]
 fn native_query_boundary_requires_registered_authority_for_every_executor() {
     let public_query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
@@ -684,7 +625,6 @@ fn native_query_boundary_requires_registered_authority_for_every_executor() {
         .expect("load allow-all executor"),
     );
     let empty_world = World::new();
-
     for executor in [&initial, &allow_all] {
         let error =
             validate_native_query_with_world(executor, &empty_world, &ALICE_ID, &public_query)
@@ -692,13 +632,11 @@ fn native_query_boundary_requires_registered_authority_for_every_executor() {
         assert!(matches!(error, ValidationFail::NotPermitted(message)
             if message.contains("not a registered account")));
     }
-
     let registered_world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
     validate_native_query_with_world(&initial, &registered_world, &ALICE_ID, &public_query)
         .expect("registered accounts may use public queries");
     validate_native_query_with_world(&allow_all, &registered_world, &ALICE_ID, &public_query)
         .expect("the shared native boundary must also admit a registered IVM caller");
-
     let error = validate_native_query_with_world(
         &allow_all,
         &registered_world,
@@ -709,7 +647,6 @@ fn native_query_boundary_requires_registered_authority_for_every_executor() {
     assert!(matches!(error, ValidationFail::NotPermitted(message)
         if message.contains("CanReadAllLedgerData")));
 }
-
 #[test]
 fn native_global_query_requires_exact_direct_or_assigned_role_grant() {
     let mut world = World::with(
@@ -723,7 +660,6 @@ fn native_global_query_requires_exact_direct_or_assigned_role_grant() {
     let query = native_find_accounts_request();
     let executor = super::Executor::Initial;
     let exact: Permission = executor_permission::query::CanReadAllLedgerData.into();
-
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &query)
         .expect_err("the account roster must not be public");
     world.account_permissions.insert(
@@ -735,7 +671,6 @@ fn native_global_query_requires_exact_direct_or_assigned_role_grant() {
     );
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &query)
         .expect_err("same-name malformed grants must fail closed");
-
     world
         .account_permissions
         .insert(ALICE_ID.clone(), BTreeSet::from([exact.clone()]));
@@ -747,7 +682,6 @@ fn native_global_query_requires_exact_direct_or_assigned_role_grant() {
     );
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &query)
         .expect_err("revoking the direct root must revoke access");
-
     let role_id: RoleId = "native_global_reader".parse().expect("role id");
     world.roles.insert(
         role_id.clone(),
@@ -771,7 +705,6 @@ fn native_global_query_requires_exact_direct_or_assigned_role_grant() {
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &query)
         .expect_err("revoking role membership must revoke global access");
 }
-
 #[test]
 fn native_account_query_is_self_scoped_and_exact_payload_bound() {
     let mut world = World::with(
@@ -791,7 +724,6 @@ fn native_account_query_is_self_scoped_and_exact_payload_bound() {
         account: BOB_ID.clone(),
     }
     .into();
-
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &self_query)
         .expect("an account may read its own private data");
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &bob_query)
@@ -808,7 +740,6 @@ fn native_account_query_is_self_scoped_and_exact_payload_bound() {
     );
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &bob_query)
         .expect_err("wrong-target and malformed grants must not authorize Bob's data");
-
     world
         .account_permissions
         .insert(ALICE_ID.clone(), BTreeSet::from([exact.clone()]));
@@ -820,7 +751,6 @@ fn native_account_query_is_self_scoped_and_exact_payload_bound() {
     );
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &bob_query)
         .expect_err("revoking the exact grant must revoke account access");
-
     let role_id: RoleId = "native_account_reader".parse().expect("role id");
     world.roles.insert(
         role_id.clone(),
@@ -841,7 +771,6 @@ fn native_account_query_is_self_scoped_and_exact_payload_bound() {
         .is_some(),
         "the account-reader role assignment must exist before revocation"
     );
-
     let mut malformed_payload = norito::codec::Encode::encode(
         &iroha_data_model::query::permission::prelude::FindPermissionsByAccountId::new(
             BOB_ID.clone(),
@@ -857,17 +786,14 @@ fn native_account_query_is_self_scoped_and_exact_payload_bound() {
         .expect_err("a malformed iterable carrier must fail before permission lookup");
     assert!(matches!(error, ValidationFail::NotPermitted(message)
         if message.contains("malformed") || message.contains("authorization matrix")));
-
     validate_native_query_with_world(&executor, &world, &ALICE_ID, &bob_query)
         .expect("the global read root must override an account-scoped grant");
 }
-
 #[test]
 fn validate_query_with_ivm() {
     let bytecode = read_default_bytecode().unwrap_or_else(generate_ok_program);
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
     let executor = super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
-
     let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
@@ -875,13 +801,11 @@ fn validate_query_with_ivm() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let state_tx = block.transaction();
-
     let query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
     executor
         .validate_query(&state_tx, &ALICE_ID.clone(), &query)
         .expect("validation");
 }
-
 #[test]
 fn initial_executor_mirrors_default_private_query_permissions() {
     use iroha_data_model::query::sorafs::prelude::{
@@ -890,7 +814,6 @@ fn initial_executor_mirrors_default_private_query_permissions() {
         FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
         FindSorafsReserveEvents,
     };
-
     let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
     let world = World::with([], [alice_account, bob_account], []);
@@ -944,7 +867,6 @@ fn initial_executor_mirrors_default_private_query_permissions() {
         )
         .into(),
     );
-
     let orderbook_error = executor
         .validate_query_with_world_parts(
             &state_transaction.world,
@@ -1017,7 +939,6 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             &moderation_events,
         )
         .expect("payload-free committed moderation events must remain public");
-
     state_transaction.world.account_permissions.insert(
         ALICE_ID.clone(),
         BTreeSet::from([
@@ -1069,13 +990,11 @@ fn initial_executor_mirrors_default_private_query_permissions() {
             &moderation_snapshot,
         )
         .expect("moderation managers must be able to read complete snapshots");
-
     let public_query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
     executor
         .validate_query_with_world_parts(&state_transaction.world, None, &ALICE_ID, &public_query)
         .expect("standard public queries must remain available");
 }
-
 #[test]
 fn validate_start_query_with_ivm() {
     use iroha_data_model::query::{
@@ -1104,7 +1023,6 @@ fn validate_start_query_with_ivm() {
     let bytecode = read_default_bytecode().unwrap_or_else(generate_ok_program);
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
     let executor = super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
-
     let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
@@ -1112,7 +1030,6 @@ fn validate_start_query_with_ivm() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let state_tx = block.transaction();
-
     let iter_query = QueryWithParams {
         query: (),
         query_payload: norito::codec::Encode::encode(
@@ -1124,18 +1041,15 @@ fn validate_start_query_with_ivm() {
         params: QueryParams::default(),
     };
     let query = QueryRequest::Start(iter_query);
-
     executor
         .validate_query(&state_tx, &ALICE_ID.clone(), &query)
         .expect("validation");
 }
-
 #[test]
 fn validate_query_rejected_by_executor() {
     let bytecode = generate_denied_program("queries disabled");
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
     let executor = super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
-
     let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
@@ -1143,12 +1057,10 @@ fn validate_query_rejected_by_executor() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let state_tx = block.transaction();
-
     let query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
     let err = executor
         .validate_query(&state_tx, &ALICE_ID.clone(), &query)
         .expect_err("executor should deny the query");
-
     assert!(
         matches!(
             err,
@@ -1157,7 +1069,6 @@ fn validate_query_rejected_by_executor() {
         "unexpected validation failure: {err:?}"
     );
 }
-
 #[test]
 fn migrate_invokes_entrypoint_and_swaps_executor() {
     // A loadable validation executor is not necessarily a migration
@@ -1166,10 +1077,8 @@ fn migrate_invokes_entrypoint_and_swaps_executor() {
     // independently generated bundled validation fixture.
     let bytecode = generate_migration_program(&Ok(initial_executor_data_model_fallback()));
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
-
     // Start with the initial executor
     let mut executor = super::Executor::Initial;
-
     // Minimal state scaffolding
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
@@ -1178,19 +1087,16 @@ fn migrate_invokes_entrypoint_and_swaps_executor() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
-
     // Perform migration
     executor
         .migrate(raw, &mut state_tx, &ALICE_ID.clone())
         .expect("migration should succeed");
-
     // Ensure executor has been swapped
     match executor {
         super::Executor::UserProvided(_) => {}
         _ => panic!("expected UserProvided executor after migration"),
     }
 }
-
 #[test]
 fn migrate_rejects_unauthorized_non_genesis_callers_before_loading_bytecode() {
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(Vec::new()));
@@ -1204,15 +1110,12 @@ fn migrate_rejects_unauthorized_non_genesis_callers_before_loading_bytecode() {
     let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_transaction = block.transaction();
-
     let error = executor
         .migrate(raw, &mut state_transaction, &ALICE_ID)
         .expect_err("direct migration must enforce executor-upgrade authority");
-
     assert_eq!(error, VMError::PermissionDenied);
     assert!(matches!(executor, super::Executor::Initial));
 }
-
 #[test]
 fn migrate_applies_data_model_from_entrypoint() {
     let retained_permission = Permission::new(
@@ -1248,9 +1151,7 @@ fn migrate_applies_data_model_from_entrypoint() {
     let verdict = Ok(data_model.clone());
     let bytecode = generate_migration_program(&verdict);
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
-
     let mut executor = super::Executor::Initial;
-
     let role_id: RoleId = "legacy_escalation_role".parse().expect("role id");
     let stored_permissions = core::iter::once(retained_permission.clone())
         .chain(legacy_permissions.iter().cloned())
@@ -1286,11 +1187,9 @@ fn migrate_applies_data_model_from_entrypoint() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
-
     executor
         .migrate(raw, &mut state_tx, &ALICE_ID.clone())
         .expect("migration should succeed");
-
     assert_eq!(*state_tx.world.executor_data_model.get(), data_model);
     assert_eq!(
         state_tx
@@ -1316,7 +1215,6 @@ fn migrate_applies_data_model_from_entrypoint() {
         _ => panic!("expected UserProvided executor after migration"),
     }
 }
-
 #[test]
 fn migrate_fails_on_invalid_bytecode() {
     // Construct an invalid program (oversized code section) to trigger a VM error
@@ -1328,11 +1226,8 @@ fn migrate_fails_on_invalid_bytecode() {
     let heap_start =
         usize::try_from(ivm::Memory::HEAP_START).expect("HEAP_START fits within usize");
     prog.extend(std::iter::repeat_n(0u8, heap_start + 8));
-
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(prog));
-
     let mut executor = super::Executor::Initial;
-
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
@@ -1340,7 +1235,6 @@ fn migrate_fails_on_invalid_bytecode() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
-
     let res = executor.migrate(raw, &mut state_tx, &ALICE_ID.clone());
     assert!(res.is_err(), "migration with invalid bytecode must fail");
     // Ensure executor remains unchanged

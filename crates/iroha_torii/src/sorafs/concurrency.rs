@@ -1,20 +1,15 @@
 //! Concurrency tracking for SoraFS stream tokens.
-
 use std::sync::{
     Arc,
     atomic::{AtomicU32, Ordering},
 };
-
 use dashmap::{DashMap, mapref::entry::Entry};
-
 const MAX_TOKEN_ID_BYTES: usize = 128;
-
 /// Tracks active stream requests per token to enforce concurrency budgets.
 #[derive(Clone, Default)]
 pub struct StreamTokenConcurrencyTracker {
     inner: Arc<StreamTokenConcurrencyInner>,
 }
-
 impl StreamTokenConcurrencyTracker {
     /// Attempt to acquire a concurrency slot for `token_id`.
     ///
@@ -32,7 +27,6 @@ impl StreamTokenConcurrencyTracker {
         if max_streams == 0 || !valid_token_id(token_id) {
             return Err(ConcurrencyLimitExceeded);
         }
-
         let inner = Arc::clone(&self.inner);
         let counter = inner.try_acquire(token_id, max_streams)?;
         Ok(Some(StreamTokenConcurrencyPermit {
@@ -42,12 +36,10 @@ impl StreamTokenConcurrencyTracker {
         }))
     }
 }
-
 #[derive(Debug, Default)]
 struct StreamTokenConcurrencyInner {
     counters: DashMap<String, Arc<TokenCounter>>,
 }
-
 impl StreamTokenConcurrencyInner {
     fn try_acquire(
         &self,
@@ -61,7 +53,6 @@ impl StreamTokenConcurrencyInner {
         entry.try_acquire(max_streams)?;
         Ok(Arc::clone(entry.value()))
     }
-
     fn release(&self, token_id: &str, counter: &Arc<TokenCounter>) {
         match self.counters.entry(token_id.to_owned()) {
             Entry::Occupied(entry) if Arc::ptr_eq(entry.get(), counter) => {
@@ -75,7 +66,6 @@ impl StreamTokenConcurrencyInner {
         }
     }
 }
-
 fn valid_token_id(token_id: &str) -> bool {
     !token_id.is_empty()
         && token_id.len() <= MAX_TOKEN_ID_BYTES
@@ -83,12 +73,10 @@ fn valid_token_id(token_id: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
-
 #[derive(Debug, Default)]
 struct TokenCounter {
     active: AtomicU32,
 }
-
 impl TokenCounter {
     fn try_acquire(&self, max_streams: u16) -> Result<(), ConcurrencyLimitExceeded> {
         loop {
@@ -105,12 +93,10 @@ impl TokenCounter {
             }
         }
     }
-
     fn release(&self) -> bool {
         self.active.fetch_sub(1, Ordering::Release) == 1
     }
 }
-
 /// Guard that releases a concurrency slot when dropped.
 #[derive(Debug)]
 pub struct StreamTokenConcurrencyPermit {
@@ -118,17 +104,14 @@ pub struct StreamTokenConcurrencyPermit {
     token_id: String,
     counter: Arc<TokenCounter>,
 }
-
 impl Drop for StreamTokenConcurrencyPermit {
     fn drop(&mut self) {
         self.inner.release(&self.token_id, &self.counter);
     }
 }
-
 /// Error returned when the token's concurrency budget would be exceeded.
 #[derive(Debug, Clone, Copy)]
 pub struct ConcurrencyLimitExceeded;
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -138,9 +121,7 @@ mod tests {
         },
         thread,
     };
-
     use super::*;
-
     #[test]
     fn zero_limit_and_noncanonical_ids_fail_closed_without_state() {
         let tracker = StreamTokenConcurrencyTracker::default();
@@ -154,7 +135,6 @@ mod tests {
         );
         assert!(tracker.inner.counters.is_empty());
     }
-
     #[test]
     fn permits_enforce_limit_and_remove_idle_counter() {
         let tracker = StreamTokenConcurrencyTracker::default();
@@ -173,18 +153,15 @@ mod tests {
         drop(tracker.try_acquire("other", 1).expect("permit"));
         assert!(tracker.inner.counters.len() <= 1);
     }
-
     #[test]
     fn last_release_cannot_split_one_token_across_counters() {
         const THREADS: usize = 8;
         const ITERATIONS: usize = 2_000;
-
         let tracker = Arc::new(StreamTokenConcurrencyTracker::default());
         let start = Arc::new(Barrier::new(THREADS));
         let active = Arc::new(AtomicUsize::new(0));
         let maximum = Arc::new(AtomicUsize::new(0));
         let mut workers = Vec::new();
-
         for _ in 0..THREADS {
             let tracker = Arc::clone(&tracker);
             let start = Arc::clone(&start);
@@ -205,7 +182,6 @@ mod tests {
                 }
             }));
         }
-
         for worker in workers {
             worker.join().expect("worker must not panic");
         }

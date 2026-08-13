@@ -6,14 +6,11 @@
 //! pair and full-book matching, fee calculation, settlement-channel opening,
 //! receipt application, and payload signature verification. Authoritative
 //! sequencing, lifecycle state, and escrow mutation are committed ledger state.
-
 use std::collections::BTreeSet;
-
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
 use crate::{
     deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity},
     provider_advert::SignatureAlgorithm,
@@ -1092,10 +1089,8 @@ pub struct SettlementReceiptV1 {
     /// Signature over the canonical settlement receipt bytes.
     pub settlement_signature: OrderbookSignatureV1,
 }
-
 mod borrowed_norito {
     use norito::core::NoritoSerialize;
-
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
     impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
@@ -1935,11 +1930,9 @@ pub enum OrderbookValidationError {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
-
     use super::*;
     use ed25519_dalek::SigningKey;
     use norito::core::NoritoSerialize as _;
-
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -1977,7 +1970,6 @@ mod tests {
     }
     fn supported_layouts() -> [u8; 8] {
         use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
-
         [
             0,
             COMPACT_LEN,

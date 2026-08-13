@@ -19,11 +19,8 @@ pub const BUNDLED_RANS_GPU_BUILD_AVAILABLE: bool = cfg!(all(
         feature = "codec-gpu-cuda"
     )
 ));
-
 use core::{fmt, str::FromStr};
-
 use thiserror::Error;
-
 use crate::{
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
     core::{self as norito_core, DecodeFromSlice, Error as CoreError},
@@ -86,7 +83,6 @@ pub type VerifierId = [u8; 32];
 pub type ContractSignature = Signature;
 /// ISO-style region code used in ticket policies (e.g., "us", "eu").
 pub type RegionCode = String;
-
 pub use codec::{
     BundleContextRemap, BundleContextStats, BundledStats, BundledTelemetry, BundledToken,
     load_bundle_context_remap_from_json,
@@ -1380,7 +1376,6 @@ impl json::FastJsonWrite for SignatureAlgorithm {
 #[cfg(test)]
 mod signature_algorithm_json_tests {
     use super::*;
-
     #[test]
     fn signature_algorithm_has_exact_checked_json_bytes() {
         let value = SignatureAlgorithm::Ed25519;
@@ -1439,7 +1434,6 @@ pub struct SignedRansTablesV1 {
     /// Optional signature attesting the payload.
     pub signature: Option<RansTablesSignatureV1>,
 }
-
 pub mod crypto {
     use chacha20poly1305::{
         ChaCha20Poly1305, XChaCha20Poly1305,
@@ -1448,9 +1442,7 @@ pub mod crypto {
     use hkdf::Hkdf;
     use sha3::Sha3_256;
     use thiserror::Error;
-
     use super::{CapabilityRole, ContentKeyUpdate, EncryptionSuite, Hash, KeyUpdate};
-
     const STS_SALT: &[u8] = b"nsc-sts";
     const STS_ROOT_LABEL: &[u8] = b"nsc-sts-root";
     const STS_SEND_LABEL: &[u8] = b"nsc-sts-send";
@@ -2462,10 +2454,8 @@ pub mod crypto {
         }
     }
 }
-
 pub mod chunk {
     use thiserror::Error;
-
     use super::{AudioCodecError, Hash, MerkleProof, saturating_usize_to_u32};
     use crate::streaming::codec::{
         Chroma420Frame, EncodedSegment, FRAME_HEADER_LEN, FrameDimensions, FrameType, SegmentError,
@@ -3068,7 +3058,6 @@ pub mod chunk {
     #[cfg(test)]
     mod tests {
         use super::*;
-
         fn sample_payload(byte: u8, len: usize) -> Vec<u8> {
             vec![byte; len]
         }
@@ -3156,7 +3145,6 @@ pub mod chunk {
         }
     }
 }
-
 pub mod codec {
     use std::{
         collections::{BTreeMap, VecDeque},
@@ -3165,12 +3153,10 @@ pub mod codec {
         path::Path,
         sync::{Arc, OnceLock},
     };
-
     use norito_derive::{NoritoDeserialize, NoritoSerialize};
     use sha2::{Digest, Sha256};
     use thiserror::Error;
     use toml::Value as TomlValue;
-
     use super::{
         AudioCodecError, AudioCodecLayoutMismatchInfo, AudioEncoderSampleCountMismatchInfo,
         AudioFrame, AudioLayout, AudioTrackSummary, BundleAcceleration, Bytes, CapabilityFlags,
@@ -3188,7 +3174,6 @@ pub mod codec {
         json, norito_core, saturating_usize_to_u32, saturating_usize_to_u64,
     };
     use crate as norito;
-
     pub(crate) const BLOCK_SIZE: usize = 8;
     pub(crate) const BLOCK_PIXELS: usize = BLOCK_SIZE * BLOCK_SIZE;
     pub(crate) const FRAME_HEADER_LEN: usize = 16;
@@ -5684,7 +5669,6 @@ pub mod codec {
     #[cfg(test)]
     mod block_tests {
         use super::*;
-
         fn linear_frame(dims: FrameDimensions, offset: u8) -> Vec<u8> {
             (0..dims.pixel_count())
                 .map(|idx| offset.wrapping_add(idx as u8))
@@ -6594,7 +6578,6 @@ pub mod codec {
     #[cfg(test)]
     mod rdo_tests {
         use super::*;
-
         #[test]
         fn dp_optimizer_reduces_rate_on_sparse_block() {
             let mut coeffs = [0i16; BLOCK_PIXELS];
@@ -8112,7 +8095,6 @@ pub mod codec {
     #[cfg(test)]
     mod tests {
         use std::{str::FromStr, sync::Arc};
-
         use super::*;
         use crate::streaming::{
             Hash,
@@ -9847,14 +9829,12 @@ pub mod codec {
         }
     }
 }
-
 pub use codec::{
     BundleAnsTables, BundleTableError, default_bundle_tables, load_bundle_tables_from_toml,
 };
 #[cfg(test)]
 mod tests {
     use sha2::{Digest, Sha256};
-
     use super::*;
     use crate::{
         deserialize_from, json,

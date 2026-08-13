@@ -1,23 +1,16 @@
 use std::{collections::BTreeMap, num::NonZeroU32};
-
-use iroha_data_model::nexus::{
-    LaneCatalog, LaneConfig as LaneConfigMetadata, LaneId, LaneVisibility,
-};
+use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneConfigMetadata, LaneId, LaneVisibility};
 use iroha_primitives::{addr::socket_addr, unique_vec};
-
 use super::*;
-
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked iroha_config dummy peer keypair")
 }
-
 fn dummy_peer(port: u16) -> Peer {
     Peer::new(
         socket_addr!(127.0.0.1:port),
         checked_random_keypair().into_parts().0,
     )
 }
-
 #[test]
 fn torii_operator_auth_defaults_match_expected() {
     let auth = ToriiOperatorAuth::default();
@@ -34,35 +27,29 @@ fn torii_operator_auth_defaults_match_expected() {
         defaults::torii::operator_auth::mtls_trusted_proxy_cidrs()
     );
 }
-
 #[test]
 fn concurrency_validate_rejects_zero_stacks() {
     let mut cfg = Concurrency::from_defaults();
     cfg.scheduler_stack_bytes = 0;
-
     let err = cfg.validate().expect_err("zero stack should be invalid");
     assert!(matches!(
         err.current_context(),
         ParseError::InvalidConcurrencyConfig
     ));
 }
-
 #[test]
 fn concurrency_defaults_to_safe_tokio_stack() {
     let cfg = Concurrency::from_defaults();
-
     assert_eq!(
         cfg.tokio_stack_bytes,
         defaults::concurrency::TOKIO_STACK_BYTES
     );
     cfg.validate().expect("default Tokio stack must be valid");
 }
-
 #[test]
 fn concurrency_validate_rejects_tokio_stack_below_minimum() {
     let mut cfg = Concurrency::from_defaults();
     cfg.tokio_stack_bytes = defaults::concurrency::TOKIO_STACK_BYTES_MIN - 1;
-
     let err = cfg
         .validate()
         .expect_err("Tokio stack below minimum must fail");
@@ -71,12 +58,10 @@ fn concurrency_validate_rejects_tokio_stack_below_minimum() {
         ParseError::InvalidConcurrencyConfig
     ));
 }
-
 #[test]
 fn concurrency_validate_rejects_tokio_stack_above_maximum() {
     let mut cfg = Concurrency::from_defaults();
     cfg.tokio_stack_bytes = defaults::concurrency::TOKIO_STACK_BYTES_MAX + 1;
-
     let err = cfg
         .validate()
         .expect_err("Tokio stack above maximum must fail");
@@ -85,12 +70,10 @@ fn concurrency_validate_rejects_tokio_stack_above_maximum() {
         ParseError::InvalidConcurrencyConfig
     ));
 }
-
 #[test]
 fn concurrency_validate_rejects_too_small_sumeragi_stack() {
     let mut cfg = Concurrency::from_defaults();
     cfg.sumeragi_stack_bytes = defaults::concurrency::SUMERAGI_STACK_BYTES_MIN - 1;
-
     let err = cfg
         .validate()
         .expect_err("Sumeragi stack below minimum must fail");
@@ -99,12 +82,10 @@ fn concurrency_validate_rejects_too_small_sumeragi_stack() {
         ParseError::InvalidConcurrencyConfig
     ));
 }
-
 #[test]
 fn concurrency_validate_rejects_known_unsafe_sumeragi_stack() {
     let mut cfg = Concurrency::from_defaults();
     cfg.sumeragi_stack_bytes = 32 * 1024 * 1024;
-
     let err = cfg
         .validate()
         .expect_err("known unsafe Sumeragi stack size must fail");
@@ -113,12 +94,10 @@ fn concurrency_validate_rejects_known_unsafe_sumeragi_stack() {
         ParseError::InvalidConcurrencyConfig
     ));
 }
-
 #[test]
 fn concurrency_validate_rejects_excessive_sumeragi_stack() {
     let mut cfg = Concurrency::from_defaults();
     cfg.sumeragi_stack_bytes = defaults::concurrency::SUMERAGI_STACK_BYTES_MAX + 1;
-
     let err = cfg
         .validate()
         .expect_err("Sumeragi stack above maximum must fail");
@@ -127,12 +106,10 @@ fn concurrency_validate_rejects_excessive_sumeragi_stack() {
         ParseError::InvalidConcurrencyConfig
     ));
 }
-
 #[test]
 fn concurrency_validate_accepts_defaults() {
     assert!(Concurrency::from_defaults().validate().is_ok());
 }
-
 #[test]
 fn lane_config_uses_metadata_shard_id() {
     let mut metadata = BTreeMap::new();
@@ -147,13 +124,11 @@ fn lane_config_uses_metadata_shard_id() {
         }],
     )
     .expect("lane catalog");
-
     let config = LaneConfig::from_catalog(&catalog);
     let entry = config.entry(LaneId::new(5)).expect("lane entry");
     assert_eq!(entry.shard_id, 9);
     assert_eq!(config.shard_id(LaneId::new(5)), 9);
 }
-
 #[test]
 fn shard_mapping_exposes_lane_binding() {
     let mut metadata = BTreeMap::new();
@@ -175,12 +150,10 @@ fn shard_mapping_exposes_lane_binding() {
         ],
     )
     .expect("lane catalog");
-
     let config = LaneConfig::from_catalog(&catalog);
     assert_eq!(config.shard_id(LaneId::new(0)), 7);
     assert_eq!(config.shard_id(LaneId::new(1)), 1);
 }
-
 #[test]
 fn shard_defaults_to_lane_id_when_metadata_missing() {
     let catalog = LaneCatalog::new(
@@ -192,12 +165,10 @@ fn shard_defaults_to_lane_id_when_metadata_missing() {
         }],
     )
     .expect("lane catalog");
-
     let config = LaneConfig::from_catalog(&catalog);
     let entry = config.entry(LaneId::new(3)).expect("lane entry");
     assert_eq!(entry.shard_id, 3);
 }
-
 #[test]
 fn sorafs_anonymity_stage_accepts_only_exact_v1_labels() {
     for (label, expected) in [
@@ -233,14 +204,12 @@ fn sorafs_anonymity_stage_accepts_only_exact_v1_labels() {
         );
     }
 }
-
 #[test]
 fn sorafs_anonymity_stage_labels_are_canonical() {
     assert_eq!(SorafsAnonymityStage::GuardPq.label(), "anon-guard-pq");
     assert_eq!(SorafsAnonymityStage::MajorityPq.label(), "anon-majority-pq");
     assert_eq!(SorafsAnonymityStage::StrictPq.label(), "anon-strict-pq");
 }
-
 #[test]
 fn sorafs_rollout_phase_accepts_only_exact_v1_labels() {
     for (label, expected) in [
@@ -276,7 +245,6 @@ fn sorafs_rollout_phase_accepts_only_exact_v1_labels() {
         );
     }
 }
-
 #[test]
 fn sorafs_gateway_effective_anonymity_policy_respects_phase_fallback() {
     let mut gateway = SorafsGateway::default();
@@ -284,19 +252,16 @@ fn sorafs_gateway_effective_anonymity_policy_respects_phase_fallback() {
         gateway.effective_anonymity_policy(),
         SorafsAnonymityStage::GuardPq
     );
-
     gateway.anonymity_policy = None;
     gateway.rollout_phase = SorafsRolloutPhase::Default;
     assert_eq!(
         gateway.effective_anonymity_policy(),
         SorafsAnonymityStage::StrictPq
     );
-
     gateway.anonymity_policy = Some(SorafsAnonymityStage::MajorityPq);
     assert_eq!(
         gateway.effective_anonymity_policy(),
         SorafsAnonymityStage::MajorityPq
     );
 }
-
 include!("actual/runtime_tail_tests.rs");

@@ -1,7 +1,5 @@
 //! Grouped IVM integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../control_flow_circuit.rs"]
 mod control_flow_circuit;
 #[path = "../control_flows.rs"]

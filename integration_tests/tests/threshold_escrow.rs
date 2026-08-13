@@ -1,11 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end coverage for the canonical threshold escrow Kotodama sample.
-
 use std::{
     num::NonZeroU64,
     time::{Duration, Instant},
 };
-
 use base64::Engine as _;
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
@@ -24,33 +22,26 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{
-    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, load_sample_ivm,
-};
-
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, load_sample_ivm};
 const TX_TIMEOUT: Duration = Duration::from_secs(60);
 const CONTRACT_CALL_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
 const CONTRACT_CALL_ADMISSION_POLL: Duration = Duration::from_millis(250);
 const CONTRACT_GAS_LIMIT: u64 = 100_000;
 const SAMPLE_ASSET_DEFINITION_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-
 fn sample_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(SAMPLE_ASSET_DEFINITION_LITERAL)
         .expect("sample asset definition literal must parse")
 }
-
 fn amount_args(amount: u64) -> norito::json::Value {
     let mut map = norito::json::Map::new();
     map.insert("amount".to_owned(), norito::json!(amount));
     norito::json::Value::Object(map)
 }
-
 fn open_escrow_args(target_amount: u64) -> norito::json::Value {
     let mut map = norito::json::Map::new();
     map.insert("target_amount".to_owned(), norito::json!(target_amount));
     norito::json::Value::Object(map)
 }
-
 fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
     let status = payload
         .get("content")
@@ -62,7 +53,6 @@ fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
         _ => None,
     }
 }
-
 async fn wait_for_tx_terminal_status(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
@@ -77,7 +67,6 @@ async fn wait_for_tx_terminal_status(
     let deadline = Instant::now() + timeout;
     let mut last_payload = String::new();
     let mut last_kind = String::from("pending");
-
     loop {
         let response = http
             .get(status_url.clone())
@@ -96,7 +85,6 @@ async fn wait_for_tx_terminal_status(
                 }
             }
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "{stage}: timed out waiting for tx `{tx_hash_hex}` to finish; last_kind={last_kind}; last_payload={last_payload}"
@@ -105,7 +93,6 @@ async fn wait_for_tx_terminal_status(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn deploy_threshold_escrow(
     client: &Client,
     _http: &reqwest::Client,
@@ -131,7 +118,6 @@ async fn deploy_threshold_escrow(
     .expect("deploy threshold escrow task")?;
     Ok(contract_address)
 }
-
 async fn call_contract_expect_status(
     client: &Client,
     http: &reqwest::Client,
@@ -170,7 +156,6 @@ async fn call_contract_expect_status(
     }
     Ok(())
 }
-
 async fn submit_contract_call_json(
     client: &Client,
     http: &reqwest::Client,
@@ -183,7 +168,6 @@ async fn submit_contract_call_json(
 ) -> Result<norito::json::Value> {
     let url = client.torii_url.join("v1/contracts/call")?;
     let deadline = Instant::now() + CONTRACT_CALL_ADMISSION_TIMEOUT;
-
     loop {
         let mut body = norito::json::Map::new();
         body.insert("authority".into(), authority.to_string().into());
@@ -208,7 +192,6 @@ async fn submit_contract_call_json(
                 NonZeroU64::new(CONTRACT_GAS_LIMIT),
             ))?,
         );
-
         let response = http
             .post(url.clone())
             .header("Content-Type", "application/json")
@@ -223,7 +206,6 @@ async fn submit_contract_call_json(
                 eyre!("{stage}: decode contract call response: {err}; body={text}")
             });
         }
-
         let last_response = format!("{status}: {text}");
         if Instant::now() >= deadline {
             return Err(eyre!(
@@ -233,7 +215,6 @@ async fn submit_contract_call_json(
         tokio::time::sleep(CONTRACT_CALL_ADMISSION_POLL).await;
     }
 }
-
 async fn contract_state_values(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
@@ -279,12 +260,10 @@ async fn contract_state_values(
     }
     Ok(out)
 }
-
 fn decode_contract_state_entry_json(entry: &norito::json::Value) -> Result<norito::json::Value> {
     if let Some(value_json) = entry.get("value_json").cloned() {
         return Ok(value_json);
     }
-
     let value_b64 = entry
         .get("value_b64")
         .and_then(norito::json::Value::as_str)
@@ -322,10 +301,8 @@ fn decode_contract_state_entry_json(entry: &norito::json::Value) -> Result<norit
             ));
         }
     };
-
     Ok(value)
 }
-
 fn decode_contract_state_norito_bytes(path: &str, payload: &[u8]) -> Result<norito::json::Value> {
     match path {
         "payer_account" | "recipient_account" | "escrow_account_id" => {
@@ -365,7 +342,6 @@ fn decode_contract_state_norito_bytes(path: &str, payload: &[u8]) -> Result<nori
         )),
     }
 }
-
 fn decode_norito_value_with_optional_inner_tlv<T>(
     payload: &[u8],
     expected_inner_type: ivm::pointer_abi::PointerType,
@@ -377,7 +353,6 @@ where
     if let Ok(value) = norito::decode_from_bytes::<T>(payload) {
         return Ok(value);
     }
-
     let inner = ivm::pointer_abi::validate_tlv_bytes(payload)
         .map_err(|err| eyre!("decode {label} fallback inner TLV: {err}"))?;
     if inner.type_id != expected_inner_type {
@@ -386,11 +361,9 @@ where
             inner.type_id
         ));
     }
-
     norito::decode_from_bytes(inner.payload)
         .map_err(|err| eyre!("decode {label} fallback inner payload: {err}"))
 }
-
 fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Quantity>> {
     match client.query_single(FindAssetById::new(asset_id.clone())) {
         Ok(asset) => Ok(Some(asset.value().clone())),
@@ -400,7 +373,6 @@ fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Quantity>> 
         Err(err) => Err(eyre!(err)),
     }
 }
-
 fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool> {
     match client.query_single(FindAccountById::new(account_id.clone())) {
         Ok(_) => Ok(true),
@@ -410,7 +382,6 @@ fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool> {
         Err(err) => Err(eyre!(err)),
     }
 }
-
 fn asset_definition_exists(
     client: &Client,
     asset_definition_id: &AssetDefinitionId,
@@ -423,7 +394,6 @@ fn asset_definition_exists(
         Err(err) => Err(eyre!(err)),
     }
 }
-
 async fn setup_ledger_for_sample(
     client: &Client,
     asset_definition_id: &AssetDefinitionId,
@@ -465,7 +435,6 @@ async fn setup_ledger_for_sample(
     })
     .await
     .expect("setup ledger task")?;
-
     let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     tokio::task::spawn_blocking({
         let client = client.clone();
@@ -490,7 +459,6 @@ async fn setup_ledger_for_sample(
     .expect("grant escrow transfer permission task")?;
     Ok(())
 }
-
 fn threshold_state_paths() -> [&'static str; 9] {
     [
         "payer_account",
@@ -504,7 +472,6 @@ fn threshold_state_paths() -> [&'static str; 9] {
         "is_refunded",
     ]
 }
-
 #[tokio::test]
 async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     let register_permission: Permission = CanRegisterSmartContractCode.into();
@@ -528,15 +495,12 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     else {
         return Ok(());
     };
-
     network.ensure_blocks(1).await?;
     let client = network.client();
     let http = integration_tests::http::client();
     let asset_definition_id = sample_asset_definition_id();
     setup_ledger_for_sample(&client, &asset_definition_id, 20).await?;
-
     let contract_address = deploy_threshold_escrow(&client, &http).await?;
-
     call_contract_expect_status(
         &client,
         &http,
@@ -549,7 +513,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         "open_escrow",
     )
     .await?;
-
     let opened_state = contract_state_values(
         &http,
         &client.torii_url,
@@ -590,7 +553,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         opened_state["is_refunded"],
         norito::json::Value::from(false)
     );
-
     call_contract_expect_status(
         &client,
         &http,
@@ -603,7 +565,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         "deposit_partial",
     )
     .await?;
-
     let alice_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
     let recipient_asset = AssetId::new(asset_definition_id.clone(), CARPENTER_ID.clone());
     let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
@@ -616,7 +577,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         Some(Quantity::from(4_u32))
     );
     assert_eq!(asset_value(&client, &recipient_asset)?, None);
-
     let partial_state = contract_state_values(
         &http,
         &client.torii_url,
@@ -642,7 +602,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         partial_state["is_refunded"],
         norito::json::Value::from(false)
     );
-
     call_contract_expect_status(
         &client,
         &http,
@@ -655,7 +614,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         "deposit_by_non_payer",
     )
     .await?;
-
     call_contract_expect_status(
         &client,
         &http,
@@ -668,7 +626,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         "deposit_over_target",
     )
     .await?;
-
     call_contract_expect_status(
         &client,
         &http,
@@ -681,7 +638,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         "release_too_early",
     )
     .await?;
-
     let early_release_state = contract_state_values(
         &http,
         &client.torii_url,
@@ -698,7 +654,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         Some(Quantity::from(4_u32))
     );
     assert_eq!(asset_value(&client, &recipient_asset)?, None);
-
     call_contract_expect_status(
         &client,
         &http,
@@ -711,7 +666,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         "deposit_remainder",
     )
     .await?;
-
     let funded_state = contract_state_values(
         &http,
         &client.torii_url,
@@ -732,7 +686,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         asset_value(&client, &escrow_asset)?,
         Some(Quantity::from(10_u32))
     );
-
     call_contract_expect_status(
         &client,
         &http,
@@ -745,7 +698,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         "release_if_ready",
     )
     .await?;
-
     let released_state = contract_state_values(
         &http,
         &client.torii_url,
@@ -780,7 +732,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         Some(Quantity::from(10_u32))
     );
     assert_eq!(asset_value(&client, &escrow_asset)?, None);
-
     call_contract_expect_status(
         &client,
         &http,
@@ -829,10 +780,8 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         "reopen_after_release",
     )
     .await?;
-
     Ok(())
 }
-
 #[tokio::test]
 async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     let register_permission: Permission = CanRegisterSmartContractCode.into();
@@ -856,15 +805,12 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     else {
         return Ok(());
     };
-
     network.ensure_blocks(1).await?;
     let client = network.client();
     let http = integration_tests::http::client();
     let asset_definition_id = sample_asset_definition_id();
     setup_ledger_for_sample(&client, &asset_definition_id, 20).await?;
-
     let contract_address = deploy_threshold_escrow(&client, &http).await?;
-
     call_contract_expect_status(
         &client,
         &http,
@@ -889,7 +835,6 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         "deposit_partial",
     )
     .await?;
-
     let alice_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
     let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     assert_eq!(
@@ -900,7 +845,6 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         asset_value(&client, &escrow_asset)?,
         Some(Quantity::from(3_u32))
     );
-
     call_contract_expect_status(
         &client,
         &http,
@@ -913,7 +857,6 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         "refund",
     )
     .await?;
-
     let refunded_state = contract_state_values(
         &http,
         &client.torii_url,
@@ -944,7 +887,6 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         Some(Quantity::from(20_u32))
     );
     assert_eq!(asset_value(&client, &escrow_asset)?, None);
-
     call_contract_expect_status(
         &client,
         &http,
@@ -993,6 +935,5 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         "reopen_after_refund",
     )
     .await?;
-
     Ok(())
 }

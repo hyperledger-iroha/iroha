@@ -3,7 +3,6 @@
 #![cfg(feature = "zk-tests")]
 //! Tests for `VerifyingKey` registry lifecycle events.
 #![allow(clippy::items_after_statements)]
-
 use iroha_core::{
     executor::Executor, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
     state::State,
@@ -16,10 +15,8 @@ use iroha_data_model::{
 };
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-
 #[path = "common/world_fixture.rs"]
 mod test_world;
-
 #[test]
 fn vk_register_update_emit_events() {
     // Minimal node state and block context
@@ -27,13 +24,10 @@ fn vk_register_update_emit_events() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
-
     let mut stx = block.transaction();
     let exec = Executor::default();
-
     // Grant CanManageVerifyingKeys to ALICE using a generic permission token
     use iroha_data_model::{permission::Permission, prelude::Grant};
     let perm = Permission::new(
@@ -46,7 +40,6 @@ fn vk_register_update_emit_events() {
     // The permission grant emits an account-level event; clear it so we only
     // assert on verifying-key lifecycle events below.
     stx.world.take_external_events();
-
     // Prepare a VK record and Register
     let id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_test");
     let vk_box = iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
@@ -70,7 +63,6 @@ fn vk_register_update_emit_events() {
     .into();
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_insn)
         .expect("register vk");
-
     // Update to version 2
     let mut rec2 = iroha_data_model::proof::VerifyingKeyRecord::new(
         2,
@@ -91,7 +83,6 @@ fn vk_register_update_emit_events() {
     .into();
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
         .expect("update vk");
-
     // Apply and extract events
     stx.apply();
     let mut events = block.world.take_external_events();

@@ -17,7 +17,6 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
-
 use hex::ToHex;
 #[cfg(feature = "local-quic-proxy")]
 use iroha_logger::info;
@@ -51,12 +50,9 @@ use tokio::{
 };
 #[cfg(feature = "local-quic-proxy")]
 use url::{Host, Url};
-
 use crate::soranet::{GuardCacheKey, GuardCacheKeyError};
 #[cfg(feature = "local-quic-proxy")]
-use crate::{
-    OutboundNetworkPolicy, is_public_ip, resolve_and_validate_host, validate_public_dns_name,
-};
+use crate::{OutboundNetworkPolicy, is_public_ip, resolve_and_validate_host, validate_public_dns_name};
 #[cfg(feature = "local-quic-proxy")]
 const PROXY_HANDSHAKE_VERSION: u8 = 1;
 #[cfg(feature = "local-quic-proxy")]
@@ -2607,13 +2603,10 @@ impl ProxyStreamService {
 #[cfg(all(test, feature = "local-quic-proxy"))]
 mod tests {
     use std::{net::SocketAddr, sync::Arc, time::Duration};
-
     use tempfile::TempDir;
     use tokio::{io::AsyncWriteExt, task::JoinHandle};
-
     use super::*;
     use rand::rand_core::TryRngCore;
-
     const TEST_GUARD_KEY: &str = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
     #[derive(Debug)]
     struct FailingProxyRng;
@@ -2734,7 +2727,6 @@ mod tests {
     #[tokio::test]
     async fn bridge_file_open_rejects_symlinks_and_symlink_roots() {
         use std::os::unix::fs::symlink;
-
         let root = TempDir::new().expect("tempdir");
         let real = root.path().join("real.norito");
         let link = root.path().join("link.norito");
@@ -2752,7 +2744,6 @@ mod tests {
         std::fs::remove_file(root_link).expect("remove root symlink");
     }
     impl TryCryptoRng for FailingProxyRng {}
-
     use quinn::{
         ClientConfig, Endpoint, ServerConfig, VarInt,
         crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
@@ -3447,7 +3438,6 @@ mod tests {
 #[cfg(all(test, not(feature = "local-quic-proxy")))]
 mod tests {
     use super::*;
-
     #[test]
     fn spawn_local_quic_proxy_reports_disabled_feature() {
         let result = spawn_local_quic_proxy(LocalQuicProxyConfig::default());

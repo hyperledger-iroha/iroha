@@ -10,7 +10,6 @@
 //! The broker adapter implements the existing native transaction signer traits,
 //! so replacing this software backend with a future HSM adapter does not change
 //! Torii or runtime-provider registry interfaces.
-
 #[cfg(unix)]
 mod adapter;
 mod envelope;
@@ -29,7 +28,6 @@ mod service;
 mod typed_payload;
 #[cfg(unix)]
 mod unix;
-
 #[cfg(unix)]
 pub use adapter::{
     ExternalSoftwareSignerAdapterErrorV1, ExternalSoftwareSignerNativeAdapterV1,
@@ -69,7 +67,6 @@ pub use unix::{
     SoftwareSignerSignatureReceiptV1, load_software_signer_wrapping_key_from_credential_v1,
     load_software_signer_wrapping_key_from_fd_v1,
 };
-
 #[cfg(all(test, unix))]
 mod runtime_adapter_tests;
 #[cfg(all(test, unix))]

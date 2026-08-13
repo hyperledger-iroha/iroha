@@ -24,7 +24,6 @@ use crate::sorafs::{
     },
 };
 use sorafs_manifest::{capacity::ReplicationAssignmentV1, deal::XorQuantity};
-
 isi! {
     /// Register a canonical `SoraFS` manifest with the paid pin registry.
     #[cfg_attr(
@@ -2114,7 +2113,6 @@ impl_sorafs_decode_from_slice!(FinalizeSorafsModerationCase {
 mod tests {
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::sorafs::{
         capacity::{CapacityDisputeEvidence, CapacityDisputeId},
@@ -2612,9 +2610,7 @@ mod tests {
     #[test]
     fn proof_outcome_submission_schema_references_explicit_payloads() {
         use core::any::TypeId;
-
         use iroha_schema::{IntoSchema as _, Metadata};
-
         let schema = SorafsProofOutcomeSubmissionV1::schema();
         let Metadata::Enum(metadata) = schema
             .get::<SorafsProofOutcomeSubmissionV1>()

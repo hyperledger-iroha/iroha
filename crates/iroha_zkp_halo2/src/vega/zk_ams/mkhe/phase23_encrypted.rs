@@ -10,14 +10,11 @@
 //! The frozen release certificate deliberately remains open.  A small-profile
 //! KAT exercises the complete native path, but it is not evidence for the
 //! release degree, roster, memory ceiling, or wall-clock budget.
-
 use core::fmt;
 #[cfg(test)]
 use std::collections::BTreeMap;
 use std::sync::Arc;
-
 use once_cell::sync::Lazy;
-
 #[cfg(test)]
 use super::phase23::{
     ZkAmsPhase23ChallengeContextV1, zk_ams_phase23_challenge_v1, zk_ams_phase23_fold_linear_v1,
@@ -55,7 +52,6 @@ use crate::vega::{
     r1cs::{Instance, RelaxedInstance, Shape, SparseMatrix},
     sponge::Keccak256,
 };
-
 pub(super) const PHASE23_ENCRYPTED_VERSION_V1: u8 = 1;
 pub(super) const PHASE23_MAX_BATCH_SIZE_V1: u8 = 8;
 const PHASE23_MAX_ROWS_V1: u32 = 1_048_576;
@@ -99,13 +95,10 @@ const PHASE23_COMPOSITION_CONTEXT_FRAME_DOMAIN_V1: &[u8] =
 const PHASE23_PUBLIC_FOLD_RECORD_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.public-fold-record";
 const PHASE23_PUBLIC_FOLD_HISTORY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.public-fold-history";
 const PHASE23_ENCRYPTED_ALGEBRA_V1: &[u8] = b"A/B/C:canonical-csr:packed-diagonals:minimal-signed-binary-galois-composition|U:row-count-replicated-single-ciphertext-clones|Eq6:direct-replicated-U-mul+relinearize-four-terms|Eq7:G*rT+H*T|Eq9-10:x,u,W,rW=linear;E=quadratic;rE=quadratic-scalars|Eq11:Ebar=linear+quadratic;Wbar=linear";
-
 type CommitmentPreimageLayoutDigestsV1 = ([u8; 32], [u8; 32], [u8; 32]);
-
 static PHASE23_RELEASE_MAP_MANIFEST_V1: Lazy<
     Result<ZkAmsPhase23ReleaseMapManifestV1, ZkAmsMkheErrorV1>,
 > = Lazy::new(compile_release_map_manifest_v1);
-
 /// Maximum number of nonzero entries admitted by one canonical sparse map.
 ///
 /// The Shape-backed canonical view checks this as a streaming work ceiling;
@@ -119,7 +112,6 @@ pub const ZK_AMS_PHASE23_RELEASE_MAP_SET_KAT_DIGEST_V1: [u8; 32] = [
 ];
 // TODO: Record isolated release-harness RSS and wall-clock evidence for the
 // Shape-streaming manifest compiler before closing the release KAT gate.
-
 /// Domain tag for one canonical public linear map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -135,7 +127,6 @@ pub enum ZkAmsPhase23MapKindV1 {
     /// Equation (7) message matrix `H_T`.
     CommitmentH = 5,
 }
-
 impl ZkAmsPhase23MapKindV1 {
     fn from_tag(tag: u8) -> Result<Self, ZkAmsMkheErrorV1> {
         match tag {
@@ -147,12 +138,10 @@ impl ZkAmsPhase23MapKindV1 {
             _ => Err(ZkAmsMkheErrorV1::InvalidWireEncoding),
         }
     }
-
     const fn tag(self) -> u8 {
         self as u8
     }
 }
-
 /// Canonical release layout of the Hyrax cross-term commitment preimage.
 ///
 /// This is deliberately not a scalar sparse map and not a curve commitment.
@@ -175,80 +164,67 @@ pub struct ZkAmsPhase23CommitmentPreimageLayoutV1 {
     h_map_digest: [u8; 32],
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase23CommitmentPreimageLayoutV1 {
     /// Encoding version.
     #[must_use]
     pub const fn version(self) -> u8 {
         self.version
     }
-
     /// Exact number of cross-term message scalars.
     #[must_use]
     pub const fn message_value_count(self) -> u32 {
         self.message_value_count
     }
-
     /// Exact number of Hyrax commitment rows and blinding scalars.
     #[must_use]
     pub const fn row_count(self) -> u32 {
         self.row_count
     }
-
     /// Exact number of message generators per full Hyrax row.
     #[must_use]
     pub const fn message_columns(self) -> u32 {
         self.message_columns
     }
-
     /// Exact number of row-blinding inputs consumed by the canonical `G` map.
     #[must_use]
     pub const fn blinding_count(self) -> u32 {
         self.blinding_count
     }
-
     /// Exact number of message scalars in the final row.
     #[must_use]
     pub const fn last_row_message_count(self) -> u32 {
         self.last_row_message_count
     }
-
     /// Generator index occupied by the hiding generator in every row.
     #[must_use]
     pub const fn hiding_generator_index(self) -> u32 {
         self.hiding_generator_index
     }
-
     /// Digest of the exact canonical Hyrax key label.
     #[must_use]
     pub const fn commitment_key_label_digest(self) -> [u8; 32] {
         self.commitment_key_label_digest
     }
-
     /// Digest of all message generators plus the hiding generator.
     #[must_use]
     pub const fn generator_basis_digest(self) -> [u8; 32] {
         self.generator_basis_digest
     }
-
     /// Digest of the canonical `G` row/blinding incidence map.
     #[must_use]
     pub const fn g_map_digest(self) -> [u8; 32] {
         self.g_map_digest
     }
-
     /// Digest of the canonical `H` row/message-generator incidence map.
     #[must_use]
     pub const fn h_map_digest(self) -> [u8; 32] {
         self.h_map_digest
     }
-
     /// Digest binding the complete commitment-preimage layout.
     #[must_use]
     pub const fn digest(self) -> [u8; 32] {
         self.digest
     }
-
     /// Resolve one `G`-map input to `(row, hiding-generator index)`.
     pub fn blinding_position(self, index: u32) -> Result<(u32, u32), ZkAmsMkheErrorV1> {
         validate_commitment_preimage_layout(self)?;
@@ -257,7 +233,6 @@ impl ZkAmsPhase23CommitmentPreimageLayoutV1 {
         }
         Ok((index, self.hiding_generator_index))
     }
-
     /// Resolve one `H`-map input to `(row, message-generator index)`.
     pub fn message_position(self, index: u32) -> Result<(u32, u32), ZkAmsMkheErrorV1> {
         validate_commitment_preimage_layout(self)?;
@@ -267,7 +242,6 @@ impl ZkAmsPhase23CommitmentPreimageLayoutV1 {
         Ok((index / self.message_columns, index % self.message_columns))
     }
 }
-
 /// Compact identity of one canonical release relation map.
 ///
 /// This manifest deliberately contains no CSR buffers. The canonical entries
@@ -283,51 +257,43 @@ pub struct ZkAmsPhase23SparseMapManifestV1 {
     nonzero_count: u32,
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase23SparseMapManifestV1 {
     /// Encoding version of the identified sparse map.
     #[must_use]
     pub const fn version(self) -> u8 {
         self.version
     }
-
     /// Protocol role of the identified sparse map.
     #[must_use]
     pub const fn kind(self) -> ZkAmsPhase23MapKindV1 {
         self.kind
     }
-
     /// Exact output dimension.
     #[must_use]
     pub const fn row_count(self) -> u32 {
         self.row_count
     }
-
     /// Exact paper-order input dimension.
     #[must_use]
     pub const fn column_count(self) -> u32 {
         self.column_count
     }
-
     /// Exact maximum number of nonzero entries in one row.
     #[must_use]
     pub const fn max_row_fan_in(self) -> u32 {
         self.max_row_fan_in
     }
-
     /// Exact total number of nonzero entries.
     #[must_use]
     pub const fn nonzero_count(self) -> u32 {
         self.nonzero_count
     }
-
     /// Digest of the exact canonical CSR wire fields and entries.
     #[must_use]
     pub const fn digest(self) -> [u8; 32] {
         self.digest
     }
 }
-
 /// Compact manifest for the sole canonical release A/B/C relation and Hyrax
 /// G/H preimage layout.
 ///
@@ -341,38 +307,32 @@ pub struct ZkAmsPhase23ReleaseMapManifestV1 {
     commitment_preimage_layout: ZkAmsPhase23CommitmentPreimageLayoutV1,
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase23ReleaseMapManifestV1 {
     /// Compact identity of the canonical paper-order `A` map.
     #[must_use]
     pub const fn a(self) -> ZkAmsPhase23SparseMapManifestV1 {
         self.a
     }
-
     /// Compact identity of the canonical paper-order `B` map.
     #[must_use]
     pub const fn b(self) -> ZkAmsPhase23SparseMapManifestV1 {
         self.b
     }
-
     /// Compact identity of the canonical paper-order `C` map.
     #[must_use]
     pub const fn c(self) -> ZkAmsPhase23SparseMapManifestV1 {
         self.c
     }
-
     /// Compact map identities in exact `A`, `B`, `C` order.
     #[must_use]
     pub const fn abc(self) -> [ZkAmsPhase23SparseMapManifestV1; 3] {
         [self.a, self.b, self.c]
     }
-
     /// Canonical Hyrax `G`/`H` commitment-preimage row layout.
     #[must_use]
     pub const fn commitment_preimage_layout(&self) -> ZkAmsPhase23CommitmentPreimageLayoutV1 {
         self.commitment_preimage_layout
     }
-
     /// Digest binding the relation source, paper column order, A/B/C maps,
     /// canonical commitment key, and G/H preimage maps.
     #[must_use]
@@ -380,7 +340,6 @@ impl ZkAmsPhase23ReleaseMapManifestV1 {
         self.digest
     }
 }
-
 /// Return the compact deterministic release A/B/C and Hyrax G/H manifest.
 ///
 /// The returned static contains no row offsets, columns, coefficients, or
@@ -392,7 +351,6 @@ pub fn zk_ams_phase23_release_map_manifest_v1()
         Err(error) => Err(*error),
     }
 }
-
 /// Shared canonical release relation used by native terminal entrypoints.
 ///
 /// Constructing this value clones only an `Arc`; the matrices remain uniquely
@@ -401,19 +359,16 @@ pub(super) struct ZkAmsPhase23ReleaseRelationV1 {
     shape: Arc<Shape>,
     manifest: &'static ZkAmsPhase23ReleaseMapManifestV1,
 }
-
 impl ZkAmsPhase23ReleaseRelationV1 {
     /// Shared immutable canonical shape.
     pub(super) const fn shape(&self) -> &Arc<Shape> {
         &self.shape
     }
-
     /// Constant-size release map manifest.
     pub(super) const fn manifest(&self) -> &'static ZkAmsPhase23ReleaseMapManifestV1 {
         self.manifest
     }
 }
-
 /// Borrow the canonical release relation without constructing paper-order CSR
 /// buffers.
 pub(super) fn zk_ams_phase23_release_relation_v1()
@@ -423,12 +378,10 @@ pub(super) fn zk_ams_phase23_release_relation_v1()
     validate_release_shape_manifest_geometry_v1(&shape, *manifest)?;
     Ok(ZkAmsPhase23ReleaseRelationV1 { shape, manifest })
 }
-
 /// Return the digest of the sole canonical release map set.
 pub fn zk_ams_phase23_release_map_set_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     Ok(zk_ams_phase23_release_map_manifest_v1()?.digest())
 }
-
 /// Require exact structural identity with the sole canonical A/B/C release
 /// maps.  Semantic equivalence or alternate CSR metadata is not admitted.
 #[cfg(test)]
@@ -439,7 +392,6 @@ pub(super) fn require_release_relation_maps_v1(
     let manifest = *zk_ams_phase23_release_map_manifest_v1()?;
     require_relation_maps_matching_manifest_v1(maps, &shape, manifest)
 }
-
 /// Canonical public relaxed instance retained for fold-history replay.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase23PublicAccumulatorV1 {
@@ -453,7 +405,6 @@ pub struct ZkAmsPhase23PublicAccumulatorV1 {
     error_commitment_digest: [u8; 32],
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase23PublicAccumulatorV1 {
     /// Construct one exact release-shape relaxed public instance.
     pub fn new(
@@ -500,54 +451,45 @@ impl ZkAmsPhase23PublicAccumulatorV1 {
         }
         Ok(value)
     }
-
     /// Relaxation scalar `u` as exact canonical T256 bytes.
     #[must_use]
     pub const fn relaxation(&self) -> [u8; 32] {
         self.relaxation
     }
-
     /// Exact strict-order public input scalar bytes.
     #[must_use]
     pub const fn public_inputs(&self) -> &[[u8; 32]; ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1] {
         &self.public_inputs
     }
-
     /// Digest of the exact public-input vector.
     #[must_use]
     pub const fn public_input_digest(&self) -> [u8; 32] {
         self.public_input_digest
     }
-
     /// Canonical nonidentity witness-commitment point encodings.
     #[must_use]
     pub fn witness_commitment(&self) -> &[[u8; 33]] {
         &self.witness_commitment
     }
-
     /// Canonical nonidentity error-commitment point encodings.
     #[must_use]
     pub fn error_commitment(&self) -> &[[u8; 33]] {
         &self.error_commitment
     }
-
     /// Digest of the complete public relaxed instance.
     #[must_use]
     pub const fn digest(&self) -> [u8; 32] {
         self.digest
     }
-
     /// Digest of the witness commitment used by Fiat--Shamir replay.
     pub const fn witness_commitment_digest(&self) -> [u8; 32] {
         self.witness_commitment_digest
     }
-
     /// Digest of the error commitment used by Fiat--Shamir replay.
     pub const fn error_commitment_digest(&self) -> [u8; 32] {
         self.error_commitment_digest
     }
 }
-
 /// Canonical strict public instance supplied by the ZK-AMS core for one fold.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase23StrictPublicInstanceV1 {
@@ -558,7 +500,6 @@ pub struct ZkAmsPhase23StrictPublicInstanceV1 {
     witness_commitment_digest: [u8; 32],
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase23StrictPublicInstanceV1 {
     /// Construct one exact release-shape strict public instance.
     pub fn new(
@@ -594,38 +535,32 @@ impl ZkAmsPhase23StrictPublicInstanceV1 {
         }
         Ok(value)
     }
-
     /// Exact canonical strict public-input scalar bytes.
     #[must_use]
     pub const fn public_inputs(&self) -> &[[u8; 32]; ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1] {
         &self.public_inputs
     }
-
     /// Digest independently supplied by the core and rederived from values.
     #[must_use]
     pub const fn public_input_digest(&self) -> [u8; 32] {
         self.public_input_digest
     }
-
     /// Canonical nonidentity strict-witness commitment points.
     #[must_use]
     pub fn witness_commitment(&self) -> &[[u8; 33]] {
         &self.witness_commitment
     }
-
     /// Digest of the exact strict-witness commitment points.
     #[must_use]
     pub const fn witness_commitment_digest(&self) -> [u8; 32] {
         self.witness_commitment_digest
     }
-
     /// Digest of the complete strict public instance.
     #[must_use]
     pub const fn digest(&self) -> [u8; 32] {
         self.digest
     }
 }
-
 /// Canonical decrypted Hyrax commitment to one hidden Equation (6) cross term.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase23CrossTermCommitmentV1 {
@@ -634,7 +569,6 @@ pub struct ZkAmsPhase23CrossTermCommitmentV1 {
     preimage_layout_digest: [u8; 32],
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase23CrossTermCommitmentV1 {
     /// Bind full-roster-decrypted/PBS commitment points to the sole release
     /// preimage layout.
@@ -662,26 +596,22 @@ impl ZkAmsPhase23CrossTermCommitmentV1 {
         };
         Ok(value)
     }
-
     /// Canonical nonidentity cross-term commitment points.
     #[must_use]
     pub fn points(&self) -> &[[u8; 33]] {
         &self.points
     }
-
     /// Sole canonical Hyrax commitment-preimage layout digest.
     #[must_use]
     pub const fn preimage_layout_digest(&self) -> [u8; 32] {
         self.preimage_layout_digest
     }
-
     /// Digest of the exact cross-term commitment points.
     #[must_use]
     pub const fn digest(&self) -> [u8; 32] {
         self.digest
     }
 }
-
 /// One verifier-replayable public Phase-II/III fold record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase23PublicFoldRecordV1 {
@@ -696,64 +626,54 @@ pub struct ZkAmsPhase23PublicFoldRecordV1 {
     resulting_public_accumulator: ZkAmsPhase23PublicAccumulatorV1,
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase23PublicFoldRecordV1 {
     /// One-based position in the exact ordered batch.
     #[must_use]
     pub const fn fold_index(&self) -> u8 {
         self.fold_index
     }
-
     /// Digest of the governed terminal context bound into the audit record.
     #[must_use]
     pub const fn terminal_context_digest(&self) -> [u8; 32] {
         self.terminal_context_digest
     }
-
     /// Digest of the exact core admission composition context frame.
     #[must_use]
     pub const fn composition_context_digest(&self) -> [u8; 32] {
         self.composition_context_digest
     }
-
     /// Prior relaxed public-instance digest.
     #[must_use]
     pub const fn prior_public_accumulator_digest(&self) -> [u8; 32] {
         self.prior_public_accumulator_digest
     }
-
     /// Exact strict public instance for this fold.
     #[must_use]
     pub const fn strict(&self) -> &ZkAmsPhase23StrictPublicInstanceV1 {
         &self.strict
     }
-
     /// Full-roster-decrypted canonical cross-term commitment.
     #[must_use]
     pub const fn cross_term_commitment(&self) -> &ZkAmsPhase23CrossTermCommitmentV1 {
         &self.cross_term_commitment
     }
-
     /// Canonical T256 challenge bytes squeezed by the sole masked-Nova
     /// transcript after absorbing full `U1`, `U2`, and `comm_T`.
     #[must_use]
     pub const fn challenge(&self) -> [u8; 32] {
         self.challenge
     }
-
     /// Resulting relaxed public instance, fully replayed at construction.
     #[must_use]
     pub const fn resulting_public_accumulator(&self) -> &ZkAmsPhase23PublicAccumulatorV1 {
         &self.resulting_public_accumulator
     }
-
     /// Digest of the complete fold record.
     #[must_use]
     pub const fn digest(&self) -> [u8; 32] {
         self.digest
     }
 }
-
 /// Complete verifier-replayable public history beginning at one fresh relaxed
 /// mask and containing at most eight strict folds.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -766,7 +686,6 @@ pub struct ZkAmsPhase23PublicFoldHistoryV1 {
     folds: Vec<ZkAmsPhase23PublicFoldRecordV1>,
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase23PublicFoldHistoryV1 {
     /// Construct a complete release history with the sole core admission
     /// transcript, canonical shape, and canonical Hyrax key.
@@ -791,7 +710,6 @@ impl ZkAmsPhase23PublicFoldHistoryV1 {
             cross_term_commitments,
         )
     }
-
     /// Independently replay every Nova challenge and resulting public
     /// accumulator against the governed terminal context and exact core frame.
     pub fn verify(
@@ -807,37 +725,31 @@ impl ZkAmsPhase23PublicFoldHistoryV1 {
         }
         validate_public_fold_history(self)
     }
-
     /// Digest of the governed terminal context bound into every record.
     #[must_use]
     pub const fn terminal_context_digest(&self) -> [u8; 32] {
         self.terminal_context_digest
     }
-
     /// Exact core admission composition context frame.
     #[must_use]
     pub fn composition_context_frame(&self) -> &[u8] {
         &self.composition_context_frame
     }
-
     /// Digest of the exact composition context frame.
     #[must_use]
     pub const fn composition_context_digest(&self) -> [u8; 32] {
         self.composition_context_digest
     }
-
     /// Initial fresh full relaxed public mask instance.
     #[must_use]
     pub const fn initial_public_mask(&self) -> &ZkAmsPhase23PublicAccumulatorV1 {
         &self.initial_public_mask
     }
-
     /// Exact ordered fold records.
     #[must_use]
     pub fn folds(&self) -> &[ZkAmsPhase23PublicFoldRecordV1] {
         &self.folds
     }
-
     /// Final replayed relaxed public accumulator.
     #[must_use]
     pub fn final_public_accumulator(&self) -> &ZkAmsPhase23PublicAccumulatorV1 {
@@ -845,14 +757,12 @@ impl ZkAmsPhase23PublicFoldHistoryV1 {
             &fold.resulting_public_accumulator
         })
     }
-
     /// Digest of the complete mask and ordered fold history.
     #[must_use]
     pub const fn digest(&self) -> [u8; 32] {
         self.digest
     }
 }
-
 fn canonical_release_commitment_preimage_layout_v1()
 -> Result<ZkAmsPhase23CommitmentPreimageLayoutV1, ZkAmsMkheErrorV1> {
     let layout = compile_commitment_preimage_layout_v1(PHASE23_MAX_ROWS_V1)?;
@@ -865,16 +775,13 @@ fn canonical_release_commitment_preimage_layout_v1()
     }
     Ok(layout)
 }
-
 fn scalar_from_canonical_bytes(bytes: [u8; 32]) -> Result<Scalar, ZkAmsMkheErrorV1> {
     Scalar::from_be_bytes_exact(bytes).map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn point_from_canonical_bytes(bytes: &[u8; 33]) -> Result<VegaT256PointV1, ZkAmsMkheErrorV1> {
     VegaT256PointV1::from_non_identity_wire_bytes_exact(bytes)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn public_input_vector_digest(
     public_inputs: &[[u8; 32]; ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -892,7 +799,6 @@ fn public_input_vector_digest(
     }
     Ok(hash.finalize())
 }
-
 fn point_vector_digest(
     domain: &[u8],
     points: &[[u8; 33]],
@@ -915,7 +821,6 @@ fn point_vector_digest(
     }
     Ok(hash.finalize())
 }
-
 fn validate_public_accumulator_fields(
     accumulator: &ZkAmsPhase23PublicAccumulatorV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -945,7 +850,6 @@ fn validate_public_accumulator_fields(
     }
     Ok(())
 }
-
 fn public_accumulator_digest_from_bound_fields(
     accumulator: &ZkAmsPhase23PublicAccumulatorV1,
 ) -> [u8; 32] {
@@ -958,14 +862,12 @@ fn public_accumulator_digest_from_bound_fields(
     hash.update(&accumulator.error_commitment_digest);
     hash.finalize()
 }
-
 fn public_accumulator_digest(
     accumulator: &ZkAmsPhase23PublicAccumulatorV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     validate_public_accumulator_fields(accumulator)?;
     Ok(public_accumulator_digest_from_bound_fields(accumulator))
 }
-
 fn validate_public_accumulator(
     accumulator: &ZkAmsPhase23PublicAccumulatorV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -976,7 +878,6 @@ fn validate_public_accumulator(
     }
     Ok(())
 }
-
 fn strict_public_instance_digest(strict: &ZkAmsPhase23StrictPublicInstanceV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(PHASE23_STRICT_INSTANCE_DOMAIN_V1);
@@ -985,7 +886,6 @@ fn strict_public_instance_digest(strict: &ZkAmsPhase23StrictPublicInstanceV1) ->
     hash.update(&strict.witness_commitment_digest);
     hash.finalize()
 }
-
 fn validate_strict_public_instance(
     strict: &ZkAmsPhase23StrictPublicInstanceV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1009,7 +909,6 @@ fn validate_strict_public_instance(
     }
     Ok(())
 }
-
 fn validate_cross_term_commitment(
     cross_term: &ZkAmsPhase23CrossTermCommitmentV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1028,7 +927,6 @@ fn validate_cross_term_commitment(
     }
     Ok(())
 }
-
 fn composition_context_digest_v1(
     composition_context_frame: &[u8],
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -1050,7 +948,6 @@ fn composition_context_digest_v1(
     hash.update(composition_context_frame);
     Ok(hash.finalize())
 }
-
 fn commitment_from_canonical_points_v1(
     points: &[[u8; 33]],
     expected_len: usize,
@@ -1064,7 +961,6 @@ fn commitment_from_canonical_points_v1(
         .collect::<Result<Vec<_>, _>>()?;
     Commitment::from_points(points).map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn commitment_to_canonical_points_v1(
     commitment: &Commitment,
     expected_len: usize,
@@ -1082,7 +978,6 @@ fn commitment_to_canonical_points_v1(
         })
         .collect()
 }
-
 fn public_accumulator_to_protocol_v1(
     accumulator: &ZkAmsPhase23PublicAccumulatorV1,
 ) -> Result<RelaxedInstance, ZkAmsMkheErrorV1> {
@@ -1105,7 +1000,6 @@ fn public_accumulator_to_protocol_v1(
         public_inputs,
     })
 }
-
 fn strict_public_instance_to_protocol_v1(
     strict: &ZkAmsPhase23StrictPublicInstanceV1,
 ) -> Result<Instance, ZkAmsMkheErrorV1> {
@@ -1122,7 +1016,6 @@ fn strict_public_instance_to_protocol_v1(
             .collect::<Result<Vec<_>, _>>()?,
     })
 }
-
 fn cross_term_commitment_to_protocol_v1(
     cross_term: &ZkAmsPhase23CrossTermCommitmentV1,
 ) -> Result<Commitment, ZkAmsMkheErrorV1> {
@@ -1131,7 +1024,6 @@ fn cross_term_commitment_to_protocol_v1(
         ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1,
     )
 }
-
 fn public_accumulator_from_protocol_v1(
     accumulator: &RelaxedInstance,
 ) -> Result<ZkAmsPhase23PublicAccumulatorV1, ZkAmsMkheErrorV1> {
@@ -1155,7 +1047,6 @@ fn public_accumulator_from_protocol_v1(
         )?,
     )
 }
-
 fn release_shape_and_commitment_key_v1() -> Result<(Arc<Shape>, CommitmentKey), ZkAmsMkheErrorV1> {
     let shape = super::super::canonical_shape().map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
     if shape.public_input_count() != ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1
@@ -1177,7 +1068,6 @@ fn release_shape_and_commitment_key_v1() -> Result<(Arc<Shape>, CommitmentKey), 
     .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
     Ok((shape, key))
 }
-
 fn public_fold_record_digest(record: &ZkAmsPhase23PublicFoldRecordV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(PHASE23_PUBLIC_FOLD_RECORD_DOMAIN_V1);
@@ -1193,7 +1083,6 @@ fn public_fold_record_digest(record: &ZkAmsPhase23PublicFoldRecordV1) -> [u8; 32
     hash.update(&record.resulting_public_accumulator.digest);
     hash.finalize()
 }
-
 fn validate_public_fold_record(
     record: &ZkAmsPhase23PublicFoldRecordV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1219,7 +1108,6 @@ fn validate_public_fold_record(
     validate_public_accumulator(&record.resulting_public_accumulator)?;
     Ok(())
 }
-
 fn replay_public_fold_history_v1(
     history: &ZkAmsPhase23PublicFoldHistoryV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1287,7 +1175,6 @@ fn replay_public_fold_history_v1(
     }
     Ok(())
 }
-
 fn public_fold_history_digest(history: &ZkAmsPhase23PublicFoldHistoryV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(PHASE23_PUBLIC_FOLD_HISTORY_DOMAIN_V1);
@@ -1313,7 +1200,6 @@ fn public_fold_history_digest(history: &ZkAmsPhase23PublicFoldHistoryV1) -> [u8;
     }
     hash.finalize()
 }
-
 fn validate_public_fold_history(
     history: &ZkAmsPhase23PublicFoldHistoryV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1322,7 +1208,6 @@ fn validate_public_fold_history(
     }
     replay_public_fold_history_v1(history)
 }
-
 fn build_public_fold_history_v1(
     terminal_context: super::terminal::ZkAmsPhase3TerminalContextV1,
     composition_context_frame: Vec<u8>,
@@ -1350,7 +1235,6 @@ fn build_public_fold_history_v1(
     for cross_term in &cross_term_commitments {
         validate_cross_term_commitment(cross_term)?;
     }
-
     let (shape, key) = release_shape_and_commitment_key_v1()?;
     let protocol_strict = strict_instances
         .iter()
@@ -1420,7 +1304,6 @@ fn build_public_fold_history_v1(
     history.digest = public_fold_history_digest(&history);
     Ok(history)
 }
-
 /// Canonical bounded CSR encoding of one public T256 linear map.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase23SparseMapV1 {
@@ -1446,7 +1329,6 @@ pub struct ZkAmsPhase23SparseMapV1 {
     /// Digest of every field and every CSR word.
     pub digest: [u8; 32],
 }
-
 impl ZkAmsPhase23SparseMapV1 {
     /// Construct and fully validate one canonical sparse map.
     pub fn new(
@@ -1474,7 +1356,6 @@ impl ZkAmsPhase23SparseMapV1 {
         validate_sparse_map(&map)?;
         Ok(map)
     }
-
     /// Encode the exact canonical bounded wire representation.
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
         validate_sparse_map(self)?;
@@ -1505,7 +1386,6 @@ impl ZkAmsPhase23SparseMapV1 {
         debug_assert_eq!(bytes.len(), length);
         Ok(bytes)
     }
-
     /// Decode after checking all length and allocation ceilings from the fixed
     /// header.  No count from the wire is used as a capacity before these
     /// checks complete.
@@ -1573,7 +1453,6 @@ impl ZkAmsPhase23SparseMapV1 {
         Ok(map)
     }
 }
-
 /// Exact binding shared by every ciphertext and evaluated key in one fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase23EncryptedBindingV1 {
@@ -1600,7 +1479,6 @@ pub struct ZkAmsPhase23EncryptedBindingV1 {
     /// Digest binding every preceding field.
     pub digest: [u8; 32],
 }
-
 impl ZkAmsPhase23EncryptedBindingV1 {
     /// Construct a complete, non-replayable fold binding.
     #[allow(clippy::too_many_arguments)]
@@ -1634,7 +1512,6 @@ impl ZkAmsPhase23EncryptedBindingV1 {
         Ok(binding)
     }
 }
-
 /// Exact lengths of all six accumulator families.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase23AccumulatorShapeV1 {
@@ -1649,7 +1526,6 @@ pub struct ZkAmsPhase23AccumulatorShapeV1 {
     /// Number of witness-commitment randomness values.
     pub r_w: u32,
 }
-
 impl ZkAmsPhase23AccumulatorShapeV1 {
     /// Construct a bounded, nonempty shape. The encrypted `U` family has
     /// `e` row replicas, while canonical materialization returns one scalar.
@@ -1658,7 +1534,6 @@ impl ZkAmsPhase23AccumulatorShapeV1 {
         validate_accumulator_shape(shape)?;
         Ok(shape)
     }
-
     fn total_values(self) -> Result<usize, ZkAmsMkheErrorV1> {
         [self.x, 1, self.e, self.r_e, self.w, self.r_w]
             .into_iter()
@@ -1672,7 +1547,6 @@ impl ZkAmsPhase23AccumulatorShapeV1 {
             })
     }
 }
-
 /// Canonical release-packed input to six-family materialization.
 #[cfg_attr(test, derive(Clone))]
 #[derive(PartialEq, Eq)]
@@ -1688,7 +1562,6 @@ pub(super) struct ZkAmsPhase23PackedAccumulatorSetV1 {
     pub w: Vec<ZkAmsT256PackedPlaintextV1>,
     pub r_w: Vec<ZkAmsT256PackedPlaintextV1>,
 }
-
 /// Canonical, padding-free materialization of all six accumulator families.
 #[cfg_attr(test, derive(Clone))]
 #[derive(PartialEq, Eq)]
@@ -1724,21 +1597,18 @@ pub struct ZkAmsPhase23MaterializedAccumulatorsV1 {
     /// Digest of the complete canonical padding-free representation.
     pub(super) digest: [u8; 32],
 }
-
 #[cfg(test)]
 std::thread_local! {
     static MATERIALIZED_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
-
 #[cfg(test)]
 fn materialized_zeroized_drop_count_v1() -> usize {
     MATERIALIZED_ZEROIZED_DROPS_V1
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
-
 impl Drop for ZkAmsPhase23MaterializedAccumulatorsV1 {
     fn drop(&mut self) {
         let mut families = [
@@ -1770,7 +1640,6 @@ impl Drop for ZkAmsPhase23MaterializedAccumulatorsV1 {
         let _ = core::hint::black_box(&mut *families);
     }
 }
-
 impl fmt::Debug for ZkAmsPhase23MaterializedAccumulatorsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1782,15 +1651,12 @@ impl fmt::Debug for ZkAmsPhase23MaterializedAccumulatorsV1 {
             .finish()
     }
 }
-
 struct ZeroizingMaterializedScalarEncodingV1([u8; 32]);
-
 impl ZeroizingMaterializedScalarEncodingV1 {
     fn new(value: Scalar) -> Self {
         Self(value.to_be_bytes())
     }
 }
-
 impl Drop for ZeroizingMaterializedScalarEncodingV1 {
     fn drop(&mut self) {
         let bytes = core::hint::black_box(&mut self.0);
@@ -1799,7 +1665,6 @@ impl Drop for ZeroizingMaterializedScalarEncodingV1 {
         let _ = core::hint::black_box(&mut *bytes);
     }
 }
-
 /// Digestible implementation status for this encrypted slice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase23EncryptedImplementationV1 {
@@ -1816,7 +1681,6 @@ pub struct ZkAmsPhase23EncryptedImplementationV1 {
     /// Digest binding the status including its open release evidence.
     pub digest: [u8; 32],
 }
-
 /// Return the exact implementation identity while keeping release evidence open.
 #[must_use]
 pub fn zk_ams_phase23_encrypted_implementation_v1() -> ZkAmsPhase23EncryptedImplementationV1 {
@@ -1838,7 +1702,6 @@ pub fn zk_ams_phase23_encrypted_implementation_v1() -> ZkAmsPhase23EncryptedImpl
     implementation.digest = keccak256(&frame);
     implementation
 }
-
 /// Consume owned chunks in exact `X/U/E/rE/W/rW` order with one retained `U`.
 #[allow(clippy::too_many_arguments)]
 pub fn zk_ams_phase23_materialize_release_accumulator_chunks_v1<I>(
@@ -1876,7 +1739,6 @@ where
         },
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn materialize_release_accumulator_chunk_stream_with_decoder_v1<I, D>(
     profile_digest: [u8; 32],
@@ -2008,7 +1870,6 @@ where
     validate_materialized(&materialized)?;
     Ok(materialized)
 }
-
 fn validate_sparse_map_structure(map: &ZkAmsPhase23SparseMapV1) -> Result<(), ZkAmsMkheErrorV1> {
     let nonzero_count = map.column_indices.len();
     if map.version != PHASE23_ENCRYPTED_VERSION_V1
@@ -2071,7 +1932,6 @@ fn validate_sparse_map_structure(map: &ZkAmsPhase23SparseMapV1) -> Result<(), Zk
     }
     Ok(())
 }
-
 fn validate_sparse_map(map: &ZkAmsPhase23SparseMapV1) -> Result<(), ZkAmsMkheErrorV1> {
     validate_sparse_map_structure(map)?;
     if map.digest == [0; 32] || map.digest != sparse_map_digest(map)? {
@@ -2079,7 +1939,6 @@ fn validate_sparse_map(map: &ZkAmsPhase23SparseMapV1) -> Result<(), ZkAmsMkheErr
     }
     Ok(())
 }
-
 /// Validate a canonical sparse map without materializing its potentially
 /// release-sized wire encoding.
 pub(super) fn validate_sparse_map_v1(
@@ -2087,7 +1946,6 @@ pub(super) fn validate_sparse_map_v1(
 ) -> Result<(), ZkAmsMkheErrorV1> {
     validate_sparse_map(map)
 }
-
 fn sparse_map_digest(map: &ZkAmsPhase23SparseMapV1) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     validate_sparse_map_structure(map)?;
     let mut hash = Keccak256::new();
@@ -2110,7 +1968,6 @@ fn sparse_map_digest(map: &ZkAmsPhase23SparseMapV1) -> Result<[u8; 32], ZkAmsMkh
     }
     Ok(hash.finalize())
 }
-
 #[cfg(test)]
 fn sparse_map_manifest_from_owned_v1(
     map: &ZkAmsPhase23SparseMapV1,
@@ -2129,7 +1986,6 @@ fn sparse_map_manifest_from_owned_v1(
     validate_sparse_map_manifest_v1(manifest)?;
     Ok(manifest)
 }
-
 fn validate_sparse_map_manifest_v1(
     manifest: ZkAmsPhase23SparseMapManifestV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -2152,7 +2008,6 @@ fn validate_sparse_map_manifest_v1(
     }
     Ok(())
 }
-
 fn validate_release_map_manifest_v1(
     manifest: ZkAmsPhase23ReleaseMapManifestV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -2187,7 +2042,6 @@ fn validate_release_map_manifest_v1(
     }
     Ok(())
 }
-
 fn validate_release_shape_manifest_geometry_v1(
     shape: &Shape,
     manifest: ZkAmsPhase23ReleaseMapManifestV1,
@@ -2222,7 +2076,6 @@ fn validate_release_shape_manifest_geometry_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn sparse_map_matches_paper_view_v1(
     provided: &ZkAmsPhase23SparseMapV1,
@@ -2261,7 +2114,6 @@ fn sparse_map_matches_paper_view_v1(
     }
     Ok(true)
 }
-
 #[cfg(test)]
 fn require_relation_maps_matching_manifest_v1(
     maps: [&ZkAmsPhase23SparseMapV1; 3],
@@ -2296,7 +2148,6 @@ fn require_relation_maps_matching_manifest_v1(
     }
     Ok(())
 }
-
 /// Borrowed paper-order view of one matrix in the shared canonical shape.
 ///
 /// A row is emitted as `W`, then `x`, then the single postponed `u` entry.
@@ -2309,7 +2160,6 @@ struct PaperOrderRelationMapViewV1<'a> {
     row_count: u32,
     column_count: u32,
 }
-
 impl<'a> PaperOrderRelationMapViewV1<'a> {
     fn new(
         kind: ZkAmsPhase23MapKindV1,
@@ -2347,7 +2197,6 @@ impl<'a> PaperOrderRelationMapViewV1<'a> {
                 .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
         })
     }
-
     fn for_each_paper_row_entry(
         &self,
         row: usize,
@@ -2396,7 +2245,6 @@ impl<'a> PaperOrderRelationMapViewV1<'a> {
         Ok(count)
     }
 }
-
 fn compile_release_map_manifest_v1() -> Result<ZkAmsPhase23ReleaseMapManifestV1, ZkAmsMkheErrorV1> {
     let shape = super::super::canonical_shape().map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
     let variable_count = shape.variable_count();
@@ -2439,7 +2287,6 @@ fn compile_release_map_manifest_v1() -> Result<ZkAmsPhase23ReleaseMapManifestV1,
     validate_release_map_manifest_v1(manifest)?;
     Ok(manifest)
 }
-
 fn compile_paper_order_map_manifest_v1(
     view: PaperOrderRelationMapViewV1<'_>,
 ) -> Result<ZkAmsPhase23SparseMapManifestV1, ZkAmsMkheErrorV1> {
@@ -2458,7 +2305,6 @@ fn compile_paper_order_map_manifest_v1(
     if max_row_fan_in == 0 {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-
     let mut hash = Keccak256::new();
     hash.update(PHASE23_SPARSE_MAP_DOMAIN_V1);
     hash.update(&[PHASE23_ENCRYPTED_VERSION_V1, view.kind.tag()]);
@@ -2466,7 +2312,6 @@ fn compile_paper_order_map_manifest_v1(
     hash.update(&view.column_count.to_be_bytes());
     hash.update(&max_row_fan_in.to_be_bytes());
     hash.update(&nonzero_count.to_be_bytes());
-
     let mut offset = 0_u32;
     hash.update(&offset.to_be_bytes());
     for row in 0..view.matrix.rows() {
@@ -2498,7 +2343,6 @@ fn compile_paper_order_map_manifest_v1(
     validate_sparse_map_manifest_v1(manifest)?;
     Ok(manifest)
 }
-
 fn internal_to_paper_column_v1(
     internal_column: usize,
     variable_count: usize,
@@ -2526,7 +2370,6 @@ fn internal_to_paper_column_v1(
     };
     u32::try_from(paper_column).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn compile_commitment_preimage_layout_v1(
     message_value_count: u32,
 ) -> Result<ZkAmsPhase23CommitmentPreimageLayoutV1, ZkAmsMkheErrorV1> {
@@ -2577,7 +2420,6 @@ fn compile_commitment_preimage_layout_v1(
     validate_commitment_preimage_layout(layout)?;
     Ok(layout)
 }
-
 fn validate_commitment_preimage_layout(
     layout: ZkAmsPhase23CommitmentPreimageLayoutV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -2621,7 +2463,6 @@ fn validate_commitment_preimage_layout(
     }
     Ok(())
 }
-
 fn compile_commitment_preimage_layout_without_validation_v1(
     message_value_count: u32,
     message_columns: u32,
@@ -2673,7 +2514,6 @@ fn compile_commitment_preimage_layout_without_validation_v1(
     layout_hash.update(&h_map_digest);
     Ok((g_map_digest, h_map_digest, layout_hash.finalize()))
 }
-
 fn release_map_set_digest_v1(
     a: ZkAmsPhase23SparseMapManifestV1,
     b: ZkAmsPhase23SparseMapManifestV1,
@@ -2712,7 +2552,6 @@ fn release_map_set_digest_v1(
     hash.update(&layout.digest);
     Ok(hash.finalize())
 }
-
 fn sparse_map_wire_length(row_count: u32, nonzero_count: u32) -> Result<usize, ZkAmsMkheErrorV1> {
     if row_count == 0 || row_count > PHASE23_MAX_ROWS_V1 {
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
@@ -2733,7 +2572,6 @@ fn sparse_map_wire_length(row_count: u32, nonzero_count: u32) -> Result<usize, Z
         .and_then(|body| body.checked_add(PHASE23_SPARSE_MAP_WIRE_HEADER_BYTES_V1 + 32))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn validate_encrypted_binding_fields(
     binding: ZkAmsPhase23EncryptedBindingV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -2756,7 +2594,6 @@ fn validate_encrypted_binding_fields(
     }
     Ok(())
 }
-
 fn validate_encrypted_binding(
     binding: ZkAmsPhase23EncryptedBindingV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -2766,7 +2603,6 @@ fn validate_encrypted_binding(
     }
     Ok(())
 }
-
 fn encrypted_binding_digest(binding: ZkAmsPhase23EncryptedBindingV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(320);
     frame.extend_from_slice(PHASE23_ENCRYPTED_BINDING_DOMAIN_V1);
@@ -2782,7 +2618,6 @@ fn encrypted_binding_digest(binding: ZkAmsPhase23EncryptedBindingV1) -> [u8; 32]
     frame.push(binding.fold_index);
     keccak256(&frame)
 }
-
 pub(super) fn validate_accumulator_shape(
     shape: ZkAmsPhase23AccumulatorShapeV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -2798,7 +2633,6 @@ pub(super) fn validate_accumulator_shape(
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 fn materialized_from_values(
@@ -2838,7 +2672,6 @@ fn materialized_from_values(
     validate_materialized(&materialized)?;
     Ok(materialized)
 }
-
 fn validate_materialized_fields(
     materialized: &ZkAmsPhase23MaterializedAccumulatorsV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -2865,7 +2698,6 @@ fn validate_materialized_fields(
     }
     Ok(())
 }
-
 pub(super) fn validate_materialized(
     materialized: &ZkAmsPhase23MaterializedAccumulatorsV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -2875,7 +2707,6 @@ pub(super) fn validate_materialized(
     }
     Ok(())
 }
-
 /// Validate an already materialized accumulator set without constructing its
 /// potentially large canonical byte representation.
 pub(super) fn validate_materialized_accumulators_v1(
@@ -2883,7 +2714,6 @@ pub(super) fn validate_materialized_accumulators_v1(
 ) -> Result<(), ZkAmsMkheErrorV1> {
     validate_materialized(materialized)
 }
-
 fn materialized_digest(
     materialized: &ZkAmsPhase23MaterializedAccumulatorsV1,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -2922,7 +2752,6 @@ fn materialized_digest(
     }
     Ok(hash.finalize())
 }
-
 pub(super) fn materialized_wire_length(
     shape: ZkAmsPhase23AccumulatorShapeV1,
 ) -> Result<usize, ZkAmsMkheErrorV1> {
@@ -2933,7 +2762,6 @@ pub(super) fn materialized_wire_length(
         .and_then(|body| body.checked_add(PHASE23_MATERIALIZED_WIRE_HEADER_BYTES_V1 + 32))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 fn collapse_replicated_u_values(
     values: Vec<Scalar>,
@@ -2950,7 +2778,6 @@ fn collapse_replicated_u_values(
     }
     Ok(vec![scalar])
 }
-
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ZkAmsMkheErrorV1> {
     Ok(u32::from_be_bytes(
         bytes
@@ -2960,7 +2787,6 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ZkAmsMkheErrorV1> {
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
     ))
 }
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -2978,14 +2804,12 @@ enum EncryptedFamily {
     CrossTermRandomness = 11,
     CrossTermCommitment = 12,
 }
-
 #[cfg(test)]
 impl EncryptedFamily {
     const fn tag(self) -> u8 {
         self as u8
     }
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EncryptedPackedVector {
@@ -2999,7 +2823,6 @@ struct EncryptedPackedVector {
     chunks: Vec<LinearCiphertext>,
     digest: [u8; 32],
 }
-
 #[cfg(test)]
 impl EncryptedPackedVector {
     fn new(
@@ -3028,7 +2851,6 @@ impl EncryptedPackedVector {
         Ok(vector)
     }
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EncryptedAccumulatorState {
@@ -3041,7 +2863,6 @@ struct EncryptedAccumulatorState {
     e_commitment: Vec<Scalar>,
     w_commitment: Vec<Scalar>,
 }
-
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EncryptedCrossTerm {
@@ -3049,7 +2870,6 @@ struct EncryptedCrossTerm {
     r_t: EncryptedPackedVector,
     encrypted_commitment: EncryptedPackedVector,
 }
-
 #[cfg(test)]
 fn encrypted_session_digest(binding: ZkAmsPhase23EncryptedBindingV1) -> [u8; 32] {
     let mut frame = Vec::with_capacity(256);
@@ -3064,7 +2884,6 @@ fn encrypted_session_digest(binding: ZkAmsPhase23EncryptedBindingV1) -> [u8; 32]
     frame.push(binding.fold_index);
     keccak256(&frame)
 }
-
 #[cfg(test)]
 fn slots_per_chunk(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErrorV1> {
     profile.validate()?;
@@ -3083,7 +2902,6 @@ fn slots_per_chunk(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErrorV1> {
         PlaintextModulus::Tiny(_) => Err(ZkAmsMkheErrorV1::InvalidProfile),
     }
 }
-
 #[cfg(test)]
 fn packed_chunk_count(logical_values: u32, slots: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     if logical_values == 0 || logical_values > PHASE23_MAX_ROWS_V1 || slots == 0 {
@@ -3095,7 +2913,6 @@ fn packed_chunk_count(logical_values: u32, slots: usize) -> Result<usize, ZkAmsM
         .and_then(|value| value.checked_div(slots))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 fn validate_encrypted_vector_fields(
     profile: &BgvProfile,
@@ -3137,7 +2954,6 @@ fn validate_encrypted_vector_fields(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn validate_encrypted_vector(
     profile: &BgvProfile,
@@ -3150,7 +2966,6 @@ fn validate_encrypted_vector(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn encrypted_vector_digest(
     profile: &BgvProfile,
@@ -3175,7 +2990,6 @@ fn encrypted_vector_digest(
     }
     Ok(hash.finalize())
 }
-
 #[cfg(test)]
 fn commitment_vector_digest(
     domain: &[u8],
@@ -3196,7 +3010,6 @@ fn commitment_vector_digest(
     }
     Ok(hash.finalize())
 }
-
 #[cfg(test)]
 fn accumulator_state_digest(
     profile: &BgvProfile,
@@ -3221,7 +3034,6 @@ fn accumulator_state_digest(
     )?);
     Ok(keccak256(&frame))
 }
-
 #[cfg(test)]
 fn validate_accumulator_state(
     profile: &BgvProfile,
@@ -3259,7 +3071,6 @@ fn validate_accumulator_state(
     }
     Ok(())
 }
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct DiagonalKey {
@@ -3268,7 +3079,6 @@ struct DiagonalKey {
     input_chunk: usize,
     shift: usize,
 }
-
 #[cfg(test)]
 fn evaluate_sparse_map(
     profile: &BgvProfile,
@@ -3428,7 +3238,6 @@ fn evaluate_sparse_map(
     }
     EncryptedPackedVector::new(profile, binding, output_family, map.row_count, chunks)
 }
-
 #[cfg(test)]
 fn zero_ciphertext(
     profile: &BgvProfile,
@@ -3446,12 +3255,10 @@ fn zero_ciphertext(
     ciphertext.validate(profile)?;
     Ok(ciphertext)
 }
-
 #[cfg(test)]
 fn rotation_exponent(profile: &BgvProfile, shift: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     rotation_exponent_for_direction(profile, shift, false)
 }
-
 #[cfg(test)]
 fn rotation_exponent_for_direction(
     profile: &BgvProfile,
@@ -3486,7 +3293,6 @@ fn rotation_exponent_for_direction(
         PlaintextModulus::Tiny(_) => Err(ZkAmsMkheErrorV1::InvalidProfile),
     }
 }
-
 #[cfg(test)]
 fn canonical_slot_shift_decomposition(
     slots: usize,
@@ -3502,7 +3308,6 @@ fn canonical_slot_shift_decomposition(
         Ok((false, shift))
     }
 }
-
 /// Compose an arbitrary forward slot shift from the governed binary Galois-key
 /// schedule.  No direct key for a non-power-of-two shift is required or
 /// admitted by the release topology.
@@ -3545,7 +3350,6 @@ fn rotate_ciphertext_by_slot_shift(
     }
     Ok(rotated)
 }
-
 #[cfg(test)]
 fn encode_slots_to_rns(
     profile: &BgvProfile,
@@ -3573,7 +3377,6 @@ fn encode_slots_to_rns(
         PlaintextModulus::Tiny(_) => Err(ZkAmsMkheErrorV1::InvalidProfile),
     }
 }
-
 #[cfg(test)]
 fn select_rotation_keys(
     profile: &BgvProfile,
@@ -3601,7 +3404,6 @@ fn select_rotation_keys(
     }
     Ok(selected)
 }
-
 #[cfg(test)]
 fn multiply_packed_vectors(
     profile: &BgvProfile,
@@ -3656,7 +3458,6 @@ fn multiply_packed_vectors(
         chunks,
     )
 }
-
 #[cfg(test)]
 fn select_product_keys(
     profile: &BgvProfile,
@@ -3689,7 +3490,6 @@ fn select_product_keys(
     }
     Ok(selected)
 }
-
 #[cfg(test)]
 fn scale_packed_vector(
     profile: &BgvProfile,
@@ -3725,7 +3525,6 @@ fn scale_packed_vector(
         chunks,
     )
 }
-
 #[cfg(test)]
 fn negate_packed_vector(
     profile: &BgvProfile,
@@ -3762,7 +3561,6 @@ fn negate_packed_vector(
         chunks,
     )
 }
-
 #[cfg(test)]
 fn promote_packed_vector_to_level_one(
     profile: &BgvProfile,
@@ -3792,7 +3590,6 @@ fn promote_packed_vector_to_level_one(
         chunks,
     )
 }
-
 #[cfg(test)]
 fn add_packed_vectors(
     profile: &BgvProfile,
@@ -3823,7 +3620,6 @@ fn add_packed_vectors(
         chunks,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 fn encrypted_equation_6(
@@ -3959,7 +3755,6 @@ fn encrypted_equation_6(
         EncryptedFamily::CrossTerm,
     )
 }
-
 #[cfg(test)]
 fn encrypted_equation_7(
     profile: &BgvProfile,
@@ -4019,7 +3814,6 @@ fn encrypted_equation_7(
         encrypted_commitment,
     })
 }
-
 #[cfg(test)]
 fn fold_linear_encrypted(
     profile: &BgvProfile,
@@ -4041,7 +3835,6 @@ fn fold_linear_encrypted(
     let scaled = scale_packed_vector(profile, binding, incoming, challenge, family)?;
     add_packed_vectors(profile, binding, accumulated, &scaled, family)
 }
-
 #[cfg(test)]
 fn fold_error_encrypted(
     profile: &BgvProfile,
@@ -4085,7 +3878,6 @@ fn fold_error_encrypted(
     )?;
     add_packed_vectors(profile, binding, &sum, &scaled_incoming, EncryptedFamily::E)
 }
-
 #[cfg(test)]
 fn fold_error_randomness_encrypted(
     profile: &BgvProfile,
@@ -4136,7 +3928,6 @@ fn fold_error_randomness_encrypted(
         EncryptedFamily::RE,
     )
 }
-
 #[cfg(test)]
 fn fold_encrypted_accumulators(
     profile: &BgvProfile,
@@ -4271,7 +4062,6 @@ fn fold_encrypted_accumulators(
     validate_accumulator_state(profile, binding, &state)?;
     Ok(state)
 }
-
 #[cfg(test)]
 fn encode_tiny_slots_to_rns(
     profile: &BgvProfile,
@@ -4313,7 +4103,6 @@ fn encode_tiny_slots_to_rns(
     }
     RnsPolynomial::from_test_plaintext(profile, &coefficients)
 }
-
 #[cfg(test)]
 fn decode_tiny_slots_from_coefficients(
     profile: &BgvProfile,
@@ -4347,7 +4136,6 @@ fn decode_tiny_slots_from_coefficients(
     }
     Ok(slots)
 }
-
 #[cfg(test)]
 fn tiny_scalar_value(value: Scalar) -> Result<u64, ZkAmsMkheErrorV1> {
     let bytes = value.to_be_bytes();
@@ -4355,7 +4143,6 @@ fn tiny_scalar_value(value: Scalar) -> Result<u64, ZkAmsMkheErrorV1> {
         (remainder * 256 + u64::from(*byte)) % 17
     }))
 }
-
 #[cfg(test)]
 mod tests {
     include!("phase23_encrypted_tests.rs");

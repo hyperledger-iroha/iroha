@@ -10,6 +10,7 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "crates/iroha_core/src/sumeragi/mod.rs",
         "crates/iroha_core/src/sumeragi/status.rs",
+        "crates/iroha_core/src/sumeragi/v2_first_release_recovery.rs",
         "crates/iroha_core/src/sumeragi/v2.rs",
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
         "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
@@ -150,6 +151,13 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
             "recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal",
             "recovered_lifecycle_signed_broadcast_unchecked_adjacent_ordinal",
             "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+            "fn recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal(",
+            "next.ordinal == broadcast_ordinal.checked_add(1)?",
+            "next.ordinal > broadcast_ordinal",
+            "retained recovered Broadcast-and-next-Vote pair seal omits production refinement tokens",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
@@ -640,6 +648,13 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
             "ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner();",
             "let _ = ();",
             "production lifecycle owner retained Serve census omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_first_release_recovery.rs",
+            "pub(crate) use super::v2_lifecycle_coordinator::{",
+            "run_complete_tip_retirement_release_regressions",
+            "run_unchecked_complete_tip_retirement_release_regressions",
+            "CompleteTip first-release recovery seam omits production refinement tokens",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
@@ -1228,6 +1243,7 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "crates/iroha_core/src/sumeragi/mod.rs",
         "crates/iroha_core/src/sumeragi/status.rs",
+        "crates/iroha_core/src/sumeragi/v2_first_release_recovery.rs",
         "crates/iroha_core/src/sumeragi/v2.rs",
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
         "crates/iroha_core/src/sumeragi/v2_block_sync.rs",

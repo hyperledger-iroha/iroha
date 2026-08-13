@@ -4,19 +4,16 @@
 //! prefix exists, this move-only session forces each oracle message through
 //! the exact shared transcript before the resulting challenge can fold A, U,
 //! or M. No scalar, challenge, context, or storage owner is returned.
-
 use super::super::external_sumcheck_storage_v1::{
     EvaluatedGlobalRoundV1, FoldSinkSealV1, GlobalCubicCompleteV1, GlobalCubicOracleV1,
     GlobalCubicPrefixReadyV1, MOracleErrorV1, OracleTransitionV1, begin_global_cubic_oracle_v1,
 };
 use super::*;
-
 const GLOBAL_MESSAGE_OFFSET_V1: usize = 205;
 const EXTERNAL_FIRST_ROUND_V1: usize = 3;
 const EXTERNAL_LAST_ROUND_V1: usize = 28;
 const HANDOFF_NEXT_SUMCHECK_V1: usize = 208;
 const HANDOFF_CHALLENGE_ORDINAL_V1: u32 = 257;
-
 const _: () = {
     assert!(GLOBAL_MESSAGE_OFFSET_V1 + EXTERNAL_FIRST_ROUND_V1 == HANDOFF_NEXT_SUMCHECK_V1);
     assert!(
@@ -24,13 +21,11 @@ const _: () = {
     );
     assert!(GLOBAL_MESSAGE_OFFSET_V1 + EXTERNAL_LAST_ROUND_V1 + 1 == REQUIRED_CUBIC_MESSAGES_V1);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GlobalLookupExternalSumcheckErrorV1 {
     Transcript(GlobalLookupErrorV1),
     Oracle(MOracleErrorV1),
 }
-
 #[must_use = "dropping this session closes the transcript and authenticated oracle"]
 pub(super) struct GlobalLookupExternalSumcheckSessionV1 {
     live: Option<(
@@ -38,7 +33,6 @@ pub(super) struct GlobalLookupExternalSumcheckSessionV1 {
         GlobalCubicOracleV1,
     )>,
 }
-
 #[must_use = "the public message and move-only transition must be consumed together"]
 pub(super) enum GlobalLookupExternalSumcheckTransitionV1 {
     Continue {
@@ -51,7 +45,6 @@ pub(super) enum GlobalLookupExternalSumcheckTransitionV1 {
         oracle: GlobalCubicCompleteV1,
     },
 }
-
 impl GlobalLookupExternalSumcheckTransitionV1 {
     pub(super) fn message_v1(&self) -> &[u8; CUBIC_MESSAGE_BYTES_V1] {
         match self {
@@ -59,7 +52,6 @@ impl GlobalLookupExternalSumcheckTransitionV1 {
         }
     }
 }
-
 impl GlobalLookupExternalSumcheckSessionV1 {
     pub(super) fn begin_v1(
         transcript: GlobalLookupTranscriptV1<SumcheckStageV1>,
@@ -84,7 +76,6 @@ impl GlobalLookupExternalSumcheckSessionV1 {
             live: Some((transcript, oracle)),
         })
     }
-
     #[cfg(test)]
     fn from_aligned_test_only_v1(
         transcript: GlobalLookupTranscriptV1<SumcheckStageV1>,
@@ -97,7 +88,6 @@ impl GlobalLookupExternalSumcheckSessionV1 {
             live: Some((transcript, oracle)),
         })
     }
-
     pub(super) fn advance_v1(
         mut self,
         sink: FoldSinkSealV1,
@@ -155,7 +145,6 @@ impl GlobalLookupExternalSumcheckSessionV1 {
         }
     }
 }
-
 fn validate_alignment_v1(
     transcript: &GlobalLookupTranscriptV1<SumcheckStageV1>,
     oracle: &GlobalCubicOracleV1,
@@ -188,7 +177,6 @@ fn validate_alignment_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 #[path = "global_lookup_external_sumcheck_v1_tests.rs"]
 mod tests;

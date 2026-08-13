@@ -1,15 +1,11 @@
 //! Deterministic settlement receipts serialised via Norito.
-
 use std::convert::TryFrom;
-
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
 };
 use time::OffsetDateTime;
-
 use crate::{Quantity, ShadowPrice};
-
 /// Receipt construction failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum SettlementReceiptError {
@@ -17,7 +13,6 @@ pub enum SettlementReceiptError {
     #[error("settlement receipt timestamp is out of range")]
     TimestampOutOfRange,
 }
-
 /// Receipt produced once a transaction has been admitted with an associated
 /// shadow price.
 #[derive(
@@ -35,7 +30,6 @@ pub struct SettlementReceipt {
     /// Timestamp (UTC) when the receipt was generated.
     pub timestamp: crate::TimestampMs,
 }
-
 impl SettlementReceipt {
     /// Build a receipt using a supplied UTC timestamp in milliseconds.
     ///
@@ -57,7 +51,6 @@ impl SettlementReceipt {
             timestamp,
         })
     }
-
     /// Build a receipt using the current UTC timestamp rounded to milliseconds.
     #[must_use]
     pub fn new(source_id: [u8; 32], local_amount: Quantity, shadow: &ShadowPrice) -> Self {
@@ -72,12 +65,10 @@ impl SettlementReceipt {
             .expect("current UTC timestamp is representable")
     }
 }
-
 #[cfg(test)]
 mod tests {
     use norito::{decode_from_bytes, json};
     use time::Duration;
-
     use crate::{
         Numeric, Quantity,
         config::{EpsilonBps, SettlementConfig},
@@ -86,7 +77,6 @@ mod tests {
         receipt::{SettlementReceipt, SettlementReceiptError},
         volatility::VolatilityBucket,
     };
-
     fn shadow(local: &Quantity) -> crate::ShadowPrice {
         ShadowPriceCalculator::new(SettlementConfig {
             twap_window: crate::DurationSeconds::new(Duration::seconds(60)),
@@ -101,17 +91,14 @@ mod tests {
         )
         .expect("valid shadow price")
     }
-
     #[test]
     fn receipt_rounds_timestamp() {
         let local = Quantity::from(1_000_000_u64);
         let receipt = SettlementReceipt::new([0xAA; 32], local.clone(), &shadow(&local));
-
         assert_eq!(receipt.timestamp.as_offset_datetime().millisecond(), 0);
         assert_eq!(receipt.source_id, [0xAA; 32]);
         assert_eq!(receipt.local_amount, local);
     }
-
     #[test]
     fn receipt_norito_roundtrip_preserves_wide_fractional_amounts() {
         let local: Quantity = "340282366920938463463374607431768211456.125"
@@ -124,17 +111,14 @@ mod tests {
             1_687_123_456,
         )
         .expect("timestamp");
-
         let bytes = norito::to_bytes(&receipt).expect("encode");
         let decoded: SettlementReceipt = decode_from_bytes(&bytes).expect("decode");
         assert_eq!(decoded, receipt);
-
         let json_text = json::to_json(&receipt).expect("json encode");
         let parsed: SettlementReceipt = json::from_str(&json_text).expect("json decode");
         assert_eq!(parsed, receipt);
         assert!(json_text.contains(&format!("\"{local}\"")));
     }
-
     #[test]
     fn receipt_rejects_out_of_range_timestamp_without_panicking() {
         let local = Quantity::one();

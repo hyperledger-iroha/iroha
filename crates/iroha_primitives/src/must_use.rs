@@ -4,11 +4,8 @@
 //! drops it without handling, preventing accidental omission of important
 //! results. This is particularly helpful for functions returning [`Result`]
 //! that might otherwise be ignored in tests or prototypes.
-
 use core::borrow::{Borrow, BorrowMut};
-
 use derive_more::{AsMut, AsRef, Constructor, Deref, Display};
-
 /// Wrapper type that propagates the `#[must_use]` attribute to any inner value.
 ///
 /// This is most commonly used with [`Result`] to ensure that error values are
@@ -43,7 +40,6 @@ use derive_more::{AsMut, AsRef, Constructor, Deref, Display};
 #[repr(transparent)]
 #[must_use]
 pub struct MustUse<T>(pub T);
-
 impl<T> MustUse<T> {
     /// Consumes the wrapper, returning the inner value.
     #[inline]
@@ -51,20 +47,17 @@ impl<T> MustUse<T> {
         self.0
     }
 }
-
 impl<T> From<T> for MustUse<T> {
     fn from(source: T) -> Self {
         MustUse(source)
     }
 }
-
 impl<T> Borrow<T> for MustUse<T> {
     #[inline]
     fn borrow(&self) -> &T {
         &self.0
     }
 }
-
 impl<T> BorrowMut<T> for MustUse<T> {
     #[inline]
     fn borrow_mut(&mut self) -> &mut T {

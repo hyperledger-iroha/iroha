@@ -3,16 +3,13 @@
 //! delegation placeholders) for a regular internet zone pointing at the
 //! `SoraDNS` gateway. Provider storage ingest is exercised by the internal
 //! finalized-ledger outbox suites, not by a public upload route.
-
 use std::collections::HashMap;
-
 use eyre::{Result, eyre};
 use iroha_primitives::soradns::{GatewayHostBindings, derive_gateway_hosts};
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
 use sorafs_manifest::{
     DagCodecId, ManifestBuilder, ManifestV1, PinPolicy, StorageClass, chunker_registry,
 };
-
 const WELCOME_TEXT: &str = "welcome to SORA Nexus / Hyperledger Iroha 3";
 const DNS_TTL_SECS: u32 = 600;
 const PLACEHOLDER_NS_HOSTS: [&str; 2] = ["ns1.soranet.example.", "ns2.soranet.example."];
@@ -21,7 +18,6 @@ const PLACEHOLDER_DS_ALGO: u8 = 13;
 const PLACEHOLDER_DS_DIGEST_TYPE: u8 = 2;
 const PLACEHOLDER_DS_DIGEST_HEX: &str =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DnsRecord {
     hostname: String,
@@ -29,7 +25,6 @@ struct DnsRecord {
     values: Vec<String>,
     ttl_secs: u32,
 }
-
 impl DnsRecord {
     fn cname(hostname: impl Into<String>, values: Vec<String>) -> Self {
         Self {
@@ -39,7 +34,6 @@ impl DnsRecord {
             ttl_secs: DNS_TTL_SECS,
         }
     }
-
     fn alias(hostname: impl Into<String>, values: Vec<String>) -> Self {
         Self {
             hostname: hostname.into(),
@@ -48,7 +42,6 @@ impl DnsRecord {
             ttl_secs: DNS_TTL_SECS,
         }
     }
-
     fn ns(hostname: impl Into<String>, values: Vec<String>) -> Self {
         Self {
             hostname: hostname.into(),
@@ -57,7 +50,6 @@ impl DnsRecord {
             ttl_secs: DNS_TTL_SECS,
         }
     }
-
     fn ds(hostname: impl Into<String>, values: Vec<String>) -> Self {
         Self {
             hostname: hostname.into(),
@@ -67,13 +59,11 @@ impl DnsRecord {
         }
     }
 }
-
 /// Minimal authoritative DNS stub for public-zone CNAME/ALIAS checks in tests.
 struct ReferenceAuthoritativeDns {
     cname_records: HashMap<String, Vec<String>>,
     alias_records: HashMap<String, Vec<String>>,
 }
-
 impl ReferenceAuthoritativeDns {
     fn new(records: &[DnsRecord]) -> Self {
         let mut cname_records = HashMap::new();
@@ -94,7 +84,6 @@ impl ReferenceAuthoritativeDns {
             alias_records,
         }
     }
-
     fn resolve_alias_or_cname(&self, hostname: &str) -> Option<&[String]> {
         let key = normalize_host(hostname);
         self.alias_records
@@ -103,17 +92,14 @@ impl ReferenceAuthoritativeDns {
             .map(Vec::as_slice)
     }
 }
-
 fn normalize_host(hostname: &str) -> String {
     hostname.trim().trim_end_matches('.').to_ascii_lowercase()
 }
-
 fn ds_placeholder_value() -> String {
     format!(
         "{PLACEHOLDER_DS_KEY_TAG} {PLACEHOLDER_DS_ALGO} {PLACEHOLDER_DS_DIGEST_TYPE} {PLACEHOLDER_DS_DIGEST_HEX}"
     )
 }
-
 fn delegation_records_for_zone(zone: &str) -> Vec<DnsRecord> {
     vec![
         DnsRecord::ns(
@@ -127,7 +113,6 @@ fn delegation_records_for_zone(zone: &str) -> Vec<DnsRecord> {
         DnsRecord::ds(zone.to_string(), vec![ds_placeholder_value()]),
     ]
 }
-
 // Regular DNS deployments use ALIAS/ANAME for apex/TLDs and CNAME for subdomains.
 fn public_dns_settings_for_domain(bindings: &GatewayHostBindings, zone: &str) -> Vec<DnsRecord> {
     let pretty = bindings.pretty_host().to_string();
@@ -140,7 +125,6 @@ fn public_dns_settings_for_domain(bindings: &GatewayHostBindings, zone: &str) ->
     records.extend(delegation_records_for_zone(zone));
     records
 }
-
 fn build_manifest_and_plan(payload: &[u8]) -> Result<(ManifestV1, CarBuildPlan)> {
     let descriptor = chunker_registry::default_descriptor();
     let plan = CarBuildPlan::single_file_with_profile(payload, descriptor.profile)?;
@@ -169,13 +153,11 @@ fn build_manifest_and_plan(payload: &[u8]) -> Result<(ManifestV1, CarBuildPlan)>
         .build()?;
     Ok((manifest, plan))
 }
-
 #[test]
 fn public_dns_settings_include_delegation_placeholders() {
     let bindings = derive_gateway_hosts("sora-nexus.sora").expect("derive hosts");
     let zone = "sora";
     let records = public_dns_settings_for_domain(&bindings, zone);
-
     let alias_records: Vec<_> = records
         .iter()
         .filter(|record| record.record_type == "ALIAS")
@@ -192,7 +174,6 @@ fn public_dns_settings_include_delegation_placeholders() {
         .iter()
         .filter(|record| record.record_type == "DS")
         .collect();
-
     assert_eq!(alias_records.len(), 1, "expected apex ALIAS record");
     assert_eq!(alias_records[0].hostname, zone);
     assert_eq!(
@@ -219,7 +200,6 @@ fn public_dns_settings_include_delegation_placeholders() {
     assert_eq!(ds_records[0].hostname, zone);
     assert_eq!(ds_records[0].values, vec![ds_placeholder_value()]);
 }
-
 #[test]
 fn soranet_webpage_manifest_and_dns_settings() -> Result<()> {
     let html = format!(
@@ -227,11 +207,9 @@ fn soranet_webpage_manifest_and_dns_settings() -> Result<()> {
     );
     let payload = html.as_bytes().to_vec();
     let (manifest, plan) = build_manifest_and_plan(&payload)?;
-
     assert_eq!(manifest.content_length, payload.len() as u64);
     assert_eq!(plan.content_length, payload.len() as u64);
     assert!(!manifest.root_cid.is_empty());
-
     let fqdn = "sora-nexus.sora";
     let zone = "sora";
     let bindings = derive_gateway_hosts(fqdn)?;
@@ -270,6 +248,5 @@ fn soranet_webpage_manifest_and_dns_settings() -> Result<()> {
             .is_none(),
         "canonical host is managed under gw.sora.id, not the public zone"
     );
-
     Ok(())
 }

@@ -1,5 +1,4 @@
 //! Production stream-token admission for SoraFS serving routes.
-
 use super::*;
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
@@ -10,7 +9,6 @@ use iroha_data_model::sorafs::{
     },
 };
 use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
-
 use crate::sorafs::{
     StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionErrorV1,
     StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionRequestV1,
@@ -18,13 +16,11 @@ use crate::sorafs::{
 };
 #[cfg(test)]
 use crate::sorafs::{StreamTokenConcurrencyPermit, StreamTokenQuotaError};
-
 #[derive(Debug)]
 struct ExternalStreamTokenLease {
     capture: Arc<StreamTokenAdmissionCaptureV1>,
     record: StreamTokenGatewayAdmissionRecordV1,
 }
-
 impl Drop for ExternalStreamTokenLease {
     fn drop(&mut self) {
         if let Err(error) = self.capture.release_lease(self.record) {
@@ -36,7 +32,6 @@ impl Drop for ExternalStreamTokenLease {
         }
     }
 }
-
 #[derive(Debug)]
 pub(super) struct RangeFetchConcurrencyGuard {
     telemetry: MaybeTelemetry,
@@ -44,7 +39,6 @@ pub(super) struct RangeFetchConcurrencyGuard {
     #[cfg(test)]
     local_permit: Option<StreamTokenConcurrencyPermit>,
 }
-
 impl RangeFetchConcurrencyGuard {
     fn external(
         telemetry: MaybeTelemetry,
@@ -61,7 +55,6 @@ impl RangeFetchConcurrencyGuard {
             local_permit: None,
         }
     }
-
     #[cfg(test)]
     fn local(telemetry: MaybeTelemetry, permit: Option<StreamTokenConcurrencyPermit>) -> Self {
         if permit.is_some() {
@@ -75,13 +68,11 @@ impl RangeFetchConcurrencyGuard {
             local_permit: permit,
         }
     }
-
     #[cfg(test)]
     pub(super) fn has_permit(&self) -> bool {
         self.external_lease.is_some() || self.local_permit.is_some()
     }
 }
-
 impl Drop for RangeFetchConcurrencyGuard {
     fn drop(&mut self) {
         if self.external_lease.is_some() || {
@@ -100,13 +91,11 @@ impl Drop for RangeFetchConcurrencyGuard {
         }
     }
 }
-
 #[derive(Clone, Copy)]
 struct DecodedAdmissionMaterial<'a> {
     body: &'a StreamTokenBodyV1,
     body_digest: [u8; 32],
 }
-
 fn external_admission_unavailable(error: StreamTokenGatewayAdmissionErrorV1) -> Response {
     error!(?error, "stream-token external admission failed closed");
     let mut response = json_error(
@@ -118,7 +107,6 @@ fn external_admission_unavailable(error: StreamTokenGatewayAdmissionErrorV1) -> 
         .insert(RETRY_AFTER, HeaderValue::from_static("1"));
     response
 }
-
 fn requested_bytes(route: StreamTokenRequestRouteV1) -> u64 {
     match route {
         StreamTokenRequestRouteV1::CarRange(range) => range
@@ -127,7 +115,6 @@ fn requested_bytes(route: StreamTokenRequestRouteV1) -> u64 {
         StreamTokenRequestRouteV1::Chunk(chunk) => chunk.stored_length,
     }
 }
-
 fn capture_terminal(
     state: &SharedAppState,
     context: &StreamTokenValidationRequestContextV1,
@@ -171,7 +158,6 @@ fn capture_terminal(
         .map_err(external_admission_unavailable)?;
     Ok(Some((capture, record)))
 }
-
 fn capture_then_reject(
     state: &SharedAppState,
     context: &StreamTokenValidationRequestContextV1,
@@ -183,7 +169,6 @@ fn capture_then_reject(
     let _ = capture_terminal(state, context, validated_at_unix_ms, status, material)?;
     Err(response)
 }
-
 fn retry_response(
     status: StreamTokenValidationStatusV1,
     retry_after_secs: Option<u32>,
@@ -208,7 +193,6 @@ fn retry_response(
     }
     response
 }
-
 fn response_for_external_terminal(
     telemetry: &MaybeTelemetry,
     record: StreamTokenGatewayAdmissionRecordV1,
@@ -246,7 +230,6 @@ fn response_for_external_terminal(
     };
     Some(response)
 }
-
 fn context_error_response(error: StreamTokenRequestContextErrorV1) -> Response {
     if matches!(error, StreamTokenRequestContextErrorV1::InvalidRequestNonce) {
         json_error(
@@ -264,7 +247,6 @@ fn context_error_response(error: StreamTokenRequestContextErrorV1) -> Response {
         )
     }
 }
-
 #[allow(clippy::result_large_err)]
 pub(super) fn enforce_stream_token_for_request(
     state: &SharedAppState,
@@ -329,7 +311,6 @@ pub(super) fn enforce_stream_token_for_request(
         route,
     )
     .map_err(context_error_response)?;
-
     let Some(token_header) = token_header else {
         return capture_then_reject(
             state,
@@ -387,7 +368,6 @@ pub(super) fn enforce_stream_token_for_request(
             ),
         );
     }
-
     let token = match decode_token_base64(token_str) {
         Ok(token) => token,
         Err(error) => {
@@ -468,7 +448,6 @@ pub(super) fn enforce_stream_token_for_request(
             ),
         );
     }
-
     let now = validated_at_unix_ms / 1_000;
     if token.body.issued_at > now.saturating_add(MAX_TOKEN_FUTURE_SKEW_SECS) {
         return capture_then_reject(
@@ -524,7 +503,6 @@ pub(super) fn enforce_stream_token_for_request(
             json_error(StatusCode::FORBIDDEN, "stream token provider mismatch"),
         );
     }
-
     if let Some((capture, record)) = capture_terminal(
         state,
         &context,
@@ -540,7 +518,6 @@ pub(super) fn enforce_stream_token_for_request(
             token.body,
         ));
     }
-
     #[cfg(test)]
     return enforce_test_local_admission(state, telemetry, token, route, now);
     #[cfg(not(test))]
@@ -548,7 +525,6 @@ pub(super) fn enforce_stream_token_for_request(
         StreamTokenGatewayAdmissionErrorV1::Unavailable,
     ))
 }
-
 #[cfg(test)]
 fn enforce_test_local_admission(
     state: &SharedAppState,

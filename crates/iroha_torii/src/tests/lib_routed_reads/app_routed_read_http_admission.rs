@@ -1,5 +1,4 @@
 // Exact public-HTTP admission regressions for all application routed reads.
-
 mod app_routed_read_http_admission_tests {
     use std::{
         convert::Infallible,
@@ -9,7 +8,6 @@ mod app_routed_read_http_admission_tests {
         },
         task::Poll,
     };
-
     use axum::{
         Router,
         body::{Body, Bytes},
@@ -19,9 +17,7 @@ mod app_routed_read_http_admission_tests {
         routing::any,
     };
     use tower::ServiceExt as _;
-
     use super::*;
-
     fn pending_body(polls: &Arc<AtomicUsize>) -> Body {
         let polls = Arc::clone(polls);
         Body::from_stream(futures::stream::poll_fn(move |_| {
@@ -29,7 +25,6 @@ mod app_routed_read_http_admission_tests {
             Poll::<Option<Result<Bytes, Infallible>>>::Pending
         }))
     }
-
     async fn insert_test_route_metadata(
         descriptor: iroha_torii_shared::route_catalog::RouteDescriptor,
         mut request: Request<Body>,
@@ -40,14 +35,12 @@ mod app_routed_read_http_admission_tests {
             .insert(MatchedRouteMetadata::from_descriptor(descriptor));
         next.run(request).await
     }
-
     async fn test_auth_gate(request: Request<Body>, next: Next) -> Response {
         if request.headers().get("x-test-auth").is_none() {
             return StatusCode::UNAUTHORIZED.into_response();
         }
         next.run(request).await
     }
-
     fn admission_router(
         app: SharedAppState,
         descriptor: iroha_torii_shared::route_catalog::RouteDescriptor,
@@ -68,7 +61,6 @@ mod app_routed_read_http_admission_tests {
         }
         router
     }
-
     fn json_request(path: &str, body: Body) -> Request<Body> {
         Request::builder()
             .method("POST")
@@ -77,7 +69,6 @@ mod app_routed_read_http_admission_tests {
             .body(body)
             .expect("valid test request")
     }
-
     fn endpoint_inventory() -> [ToriiReadEndpointV1; 45] {
         use ToriiReadEndpointV1::*;
         [
@@ -128,7 +119,6 @@ mod app_routed_read_http_admission_tests {
             ContractDeploymentState,
         ]
     }
-
     #[test]
     fn all_45_endpoint_and_stable_route_id_mappings_are_exact_and_unique() {
         let expected = endpoint_inventory();
@@ -143,7 +133,6 @@ mod app_routed_read_http_admission_tests {
                 "endpoint {endpoint:?} must have exactly one public HTTP admission entry"
             );
         }
-
         let mut route_ids = std::collections::BTreeSet::new();
         for entry in APP_ROUTED_READ_HTTP_ENDPOINTS_V1 {
             assert!(route_ids.insert(entry.route.stable_route_id()));
@@ -169,7 +158,6 @@ mod app_routed_read_http_admission_tests {
         }
         assert_eq!(route_ids.len(), 45);
     }
-
     #[test]
     fn catalog_bounds_axum_url_parameter_topology() {
         let mut maximum = 0;
@@ -190,7 +178,6 @@ mod app_routed_read_http_admission_tests {
         assert_eq!(maximum, APP_ROUTED_READ_MAX_URL_PARAMETERS_V1);
         assert_eq!(APP_ROUTED_READ_URL_PARAMETER_VEC_CAPACITY_V1, 4);
     }
-
     #[test]
     fn content_length_grammar_is_canonical_and_exact() {
         for invalid in ["", "00", "01", "+1", " 1", "1 ", "1,1", "-1"] {
@@ -201,7 +188,6 @@ mod app_routed_read_http_admission_tests {
             );
             assert!(preflight_app_routed_read_content_length(&headers, 8).is_err());
         }
-
         let mut exact = HeaderMap::new();
         exact.insert(header::CONTENT_LENGTH, HeaderValue::from_static("8"));
         assert_eq!(
@@ -209,12 +195,10 @@ mod app_routed_read_http_admission_tests {
             Some(8)
         );
         assert!(preflight_app_routed_read_content_length(&exact, 7).is_err());
-
         let mut duplicate = HeaderMap::new();
         duplicate.append(header::CONTENT_LENGTH, HeaderValue::from_static("1"));
         duplicate.append(header::CONTENT_LENGTH, HeaderValue::from_static("1"));
         assert!(preflight_app_routed_read_content_length(&duplicate, 8).is_err());
-
         let mut ambiguous = exact;
         ambiguous.insert(
             header::TRANSFER_ENCODING,
@@ -227,7 +211,6 @@ mod app_routed_read_http_admission_tests {
             None
         );
     }
-
     #[test]
     fn bodyless_routes_allow_only_missing_or_canonical_zero_framing() {
         assert_eq!(
@@ -249,7 +232,6 @@ mod app_routed_read_http_admission_tests {
         );
         assert!(preflight_bodyless_app_routed_read(&chunked).is_err());
     }
-
     #[tokio::test]
     async fn missing_content_length_keeps_exact_owner_and_body_extraction_is_zero_copy() {
         let admitted = collect_app_routed_read_body(Body::from("abc"), 8, None)
@@ -258,7 +240,6 @@ mod app_routed_read_http_admission_tests {
         assert_eq!(admitted.bytes.as_ref(), b"abc");
         assert_eq!(admitted.destination_bytes, 8);
         let pointer = admitted.bytes.as_ptr();
-
         let mut request = Request::new(Body::from(admitted.bytes.clone()));
         request.extensions_mut().insert(admitted.clone());
         let extension = admitted_app_routed_read_body(&request).expect("stored admitted body");
@@ -268,14 +249,12 @@ mod app_routed_read_http_admission_tests {
             .expect("one Full<Bytes> frame collects");
         assert_eq!(extracted.as_ptr(), pointer);
     }
-
     #[tokio::test]
     async fn unknown_and_lying_lengths_reject_exact_plus_one() {
         let unknown = collect_app_routed_read_body(Body::from("123456789"), 8, None)
             .await
             .expect_err("unknown body over cap must fail");
         assert_eq!(unknown.status(), StatusCode::PAYLOAD_TOO_LARGE);
-
         let short = collect_app_routed_read_body(Body::from("123"), 8, Some(4))
             .await
             .expect_err("short declared body must fail");
@@ -285,7 +264,6 @@ mod app_routed_read_http_admission_tests {
             .expect_err("long declared body must fail");
         assert_eq!(long.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
-
     #[tokio::test]
     async fn bodyless_routes_probe_missing_and_zero_length_bodies() {
         let mut app = mk_app_state_for_tests();
@@ -294,7 +272,6 @@ mod app_routed_read_http_admission_tests {
             .app_api_routed_read_body_read_timeout = std::time::Duration::from_millis(1);
         let descriptor = route_catalog::pipeline::TRANSACTION_STATUS;
         let before = app.query_fanout_inflight.available_permits();
-
         for declared_zero in [false, true] {
             let mut request = Request::builder()
                 .uri(descriptor.path())
@@ -313,7 +290,6 @@ mod app_routed_read_http_admission_tests {
             drop(response);
             assert_eq!(app.query_fanout_inflight.available_permits(), before);
         }
-
         let polls = Arc::new(AtomicUsize::new(0));
         let response = admission_router(Arc::clone(&app), descriptor, false)
             .oneshot(
@@ -330,7 +306,6 @@ mod app_routed_read_http_admission_tests {
         drop(response);
         assert_eq!(app.query_fanout_inflight.available_permits(), before);
     }
-
     #[tokio::test]
     async fn one_byte_and_empty_frames_are_bounded_only_by_admitted_bytes() {
         const BYTES: usize = 5_000;
@@ -348,7 +323,6 @@ mod app_routed_read_http_admission_tests {
             .expect("more than 4096 one-byte frames remain compatible");
         assert_eq!(admitted.bytes.len(), BYTES);
     }
-
     #[tokio::test]
     async fn malformed_and_duplicate_media_reject_without_poll_or_permit() {
         let app = mk_app_state_for_tests();
@@ -382,7 +356,6 @@ mod app_routed_read_http_admission_tests {
             assert_eq!(app.query_fanout_inflight.available_permits(), before);
         }
     }
-
     #[tokio::test]
     async fn authentication_precedes_admission_and_authenticated_body_reaches_deadline() {
         let mut app = mk_app_state_for_tests();
@@ -391,7 +364,6 @@ mod app_routed_read_http_admission_tests {
             .app_api_routed_read_body_read_timeout = std::time::Duration::from_millis(1);
         let descriptor = route_catalog::application_api::ACCOUNTS_QUERY_POST;
         let before = app.query_fanout_inflight.available_permits();
-
         let unauthenticated_polls = Arc::new(AtomicUsize::new(0));
         let response = admission_router(Arc::clone(&app), descriptor, true)
             .oneshot(json_request(
@@ -403,7 +375,6 @@ mod app_routed_read_http_admission_tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(unauthenticated_polls.load(Ordering::SeqCst), 0);
         assert_eq!(app.query_fanout_inflight.available_permits(), before);
-
         let authenticated_polls = Arc::new(AtomicUsize::new(0));
         let mut request = json_request(descriptor.path(), pending_body(&authenticated_polls));
         request
@@ -419,7 +390,6 @@ mod app_routed_read_http_admission_tests {
         drop(response);
         assert_eq!(app.query_fanout_inflight.available_permits(), before);
     }
-
     #[tokio::test]
     async fn busy_admission_fails_before_body_poll_and_task_local_clone_does_not_reacquire() {
         let app = mk_app_state_for_tests();
@@ -435,7 +405,6 @@ mod app_routed_read_http_admission_tests {
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(polls.load(Ordering::SeqCst), 0);
         assert_eq!(app.query_fanout_inflight.available_permits(), occupied);
-
         let plan = torii_routed_read_request_decode_plan(&app).expect("test request plan");
         let admission = AppRoutedReadHttpAdmission {
             reservation: reservation.clone(),
@@ -451,7 +420,6 @@ mod app_routed_read_http_admission_tests {
             .await;
         drop(reservation);
     }
-
     #[test]
     fn dynamic_raw_target_exact_and_plus_one_precede_permit_acquisition() {
         let app = mk_app_state_for_tests();
@@ -465,14 +433,12 @@ mod app_routed_read_http_admission_tests {
         );
         plan.admit_raw_input(app_routed_read_raw_target_bytes(&exact_uri))
             .expect("exact raw target fits");
-
         let over_uri: axum::http::Uri = format!("{exact}x").parse().expect("over-limit URI");
         assert!(
             plan.admit_raw_input(app_routed_read_raw_target_bytes(&over_uri))
                 .is_err()
         );
         assert_eq!(app.query_fanout_inflight.available_permits(), before);
-
         let source = include_str!("../../torii_app_routed_read_http.rs");
         let target = source
             .find("let target_bytes = app_routed_read_raw_target_bytes")

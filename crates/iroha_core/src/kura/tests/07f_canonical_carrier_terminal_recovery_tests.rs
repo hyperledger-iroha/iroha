@@ -31,7 +31,6 @@ fn lifecycle_terminal_bound_payload_for_test(
     )
     .expect("construct terminal-outcome-bound payload")
 }
-
 fn install_live_lifecycle_cursor_for_terminal_test(
     kura: &Kura,
     generation: &AutonomousLifecycleProcessGenerationClaim,
@@ -121,7 +120,6 @@ fn install_live_lifecycle_cursor_for_terminal_test(
     );
     (binding, reservation_group)
 }
-
 fn release_terminal_projection_for_test(
     kura: &Kura,
     payload: &LaneExecutablePayloadV1,
@@ -137,7 +135,6 @@ fn release_terminal_projection_for_test(
         .expect("consume exact release terminal projection")[2]
         .after
 }
-
 fn canonical_terminal_payload_for_test(
     lane: &LaneConfigEntry,
     height_context_id: HeightContextId,
@@ -216,7 +213,6 @@ fn canonical_terminal_payload_for_test(
     )
     .expect("construct canonical terminal payload")
 }
-
 fn canonical_terminal_merge_execution_for_test(
     kura: &Kura,
     payload: &LaneExecutablePayloadV1,
@@ -258,7 +254,6 @@ fn canonical_terminal_merge_execution_for_test(
         .expect("read canonical terminal durable merge source");
     canonical_terminal_merge_execution_from_durable_source_for_test(payload, source)
 }
-
 fn canonical_terminal_merge_execution_from_durable_source_for_test(
     payload: &LaneExecutablePayloadV1,
     source: DurableAutonomousLaneMergeSource,
@@ -338,7 +333,6 @@ fn canonical_terminal_merge_execution_from_durable_source_for_test(
         settlement_commitment,
     }
 }
-
 fn canonical_terminal_merge_carrier_for_test(
     execution: MergeLaneExecution,
     merge_epoch: u64,
@@ -384,7 +378,6 @@ fn canonical_terminal_merge_carrier_for_test(
     attach_ok_results_to_block(&mut executed_carrier);
     (parent, Arc::new(executed_carrier), merge_entry)
 }
-
 fn canonical_terminal_projection_for_test(
     group: LaneQueueReservationGroupBindingV1,
 ) -> ProductionInFlightFirstReleaseStateProjection {
@@ -437,7 +430,6 @@ fn canonical_terminal_projection_for_test(
     assert!(production_in_flight_first_release_state_kernel(projection));
     projection
 }
-
 #[test]
 fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
     let temp_dir = TempDir::new().expect("terminal-outcome temp dir");
@@ -468,7 +460,6 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
     let generation = kura
         .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim terminal-outcome process generation");
-
     let mut attempts = Vec::new();
     for (index, (lane, payload)) in lanes.iter().zip(&payloads).enumerate() {
         install_autonomous_lane_marker_for_kura(&kura, &lane_config, payload);
@@ -531,7 +522,6 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         assert_eq!(fs::read(&path).expect("reread Pending outcome"), bytes);
         attempts.push((payload.clone(), group, retirement, barrier, path, bytes));
     }
-
     let (first_payload, first_group, first_retirement, first_barrier, first_path, first_bytes) =
         &attempts[0];
     assert!(
@@ -653,7 +643,6 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         "a substituted retirement source must fail before Queue mutation",
     );
     fs::write(first_path, first_bytes).expect("restore retirement-bound Pending outcome");
-
     let recoveries = kura
         .pending_autonomous_lifecycle_terminal_outcome_inventory()
         .expect("inventory exact Pending outcomes");
@@ -785,7 +774,6 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         complete_bytes,
         "Complete replay must be a byte-for-byte no-op",
     );
-
     let (
         second_payload,
         second_group,
@@ -819,7 +807,6 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
             .is_empty()
     );
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen completed outcomes");
     assert!(
         reopened
@@ -846,7 +833,6 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         "a missing artifact namespace must not accept unused planner Pending coverage",
     );
 }
-
 #[test]
 fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane_set() {
     let temp_dir = TempDir::new().expect("canonical terminal temp dir");
@@ -886,7 +872,6 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
     let generation = kura
         .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
         .expect("claim canonical terminal process generation");
-
     let mut executions = Vec::new();
     let mut groups = Vec::new();
     let mut outcome_paths = Vec::new();
@@ -919,7 +904,6 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
             payload.origin_proposal.descriptor.proposal_height,
         ));
     }
-
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
     let raw_carrier = blocks.next();
@@ -984,7 +968,6 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
     );
     kura.persist_merge_lane_block_application_receipts(&merge_entry, carrier_height, carrier_hash)
         .expect("persist canonical terminal application receipts");
-
     assert!(
         outcome_paths.iter().all(|path| !path.exists()),
         "zero-file crash boundary starts without a terminal outcome seed",
@@ -1004,7 +987,6 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         2,
     );
     assert!(outcome_paths.iter().all(|path| path.is_file()));
-
     let initial_recoveries = kura
         .pending_autonomous_lifecycle_terminal_outcome_inventory()
         .expect("inventory complete Pending carrier handoff");
@@ -1020,7 +1002,6 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         stage.source_kind() == AutonomousLifecycleTerminalOutcomeSourceKind::CanonicalCarrier
             && stage.stage() == AutonomousLifecycleTerminalOutcomeDurableStage::Pending
     }));
-
     fs::remove_file(&outcome_paths[1]).expect("remove strict-prefix second outcome");
     assert!(
         kura.verify_expected_autonomous_lifecycle_terminal_outcome_stages(
@@ -1037,7 +1018,6 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
     assert_eq!(prefix_recoveries[0].pending_outcome_count(), 2);
     assert_eq!(prefix_recoveries[0].route_identities().len(), 2);
     assert!(outcome_paths[1].is_file());
-
     let second_bytes = fs::read(&outcome_paths[1]).expect("read second Pending outcome");
     fs::write(&outcome_paths[1], [0xFF]).expect("corrupt later carrier member");
     assert!(
@@ -1046,7 +1026,6 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         "a malformed later carrier member must prevent every recovery token from returning",
     );
     fs::write(&outcome_paths[1], &second_bytes).expect("restore second Pending outcome");
-
     let first_bytes = fs::read(&outcome_paths[0]).expect("read first Pending outcome");
     let first_pending =
         Kura::decode_autonomous_lifecycle_terminal_outcome(&outcome_paths[0], &first_bytes)
@@ -1106,7 +1085,6 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         .expect("decode Complete first outcome")
         .is_complete(),
     );
-
     let second_pending = Kura::decode_autonomous_lifecycle_terminal_outcome(
         &outcome_paths[1],
         &fs::read(&outcome_paths[1]).expect("read second Pending outcome for completion"),

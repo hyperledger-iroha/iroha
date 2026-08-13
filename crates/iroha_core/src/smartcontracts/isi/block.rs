@@ -1,6 +1,5 @@
 //! This module contains trait implementations related to block queries
 use std::{collections::BTreeSet, num::NonZeroUsize};
-
 use eyre::Result;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -14,19 +13,15 @@ use iroha_data_model::{
 use iroha_telemetry::metrics;
 use nonzero_ext::nonzero;
 use norito::json::Value;
-
 use super::*;
 use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
-
 fn block_height_from_value(value: &Value) -> Option<NonZeroUsize> {
     let height = usize::try_from(value.as_u64()?).ok()?;
     NonZeroUsize::new(height)
 }
-
 fn block_hash_from_value(value: &Value) -> Option<HashOf<BlockHeader>> {
     norito::json::from_value(value.clone()).ok()
 }
-
 fn intersect_block_candidate_heights(
     best: &mut Option<BTreeSet<NonZeroUsize>>,
     candidates: BTreeSet<NonZeroUsize>,
@@ -37,7 +32,6 @@ fn intersect_block_candidate_heights(
     };
     *best = Some(current.intersection(&candidates).copied().collect());
 }
-
 fn block_candidate_heights(
     predicate: &PredicateJson,
     state_ro: &impl StateReadOnly,
@@ -45,7 +39,6 @@ fn block_candidate_heights(
     is_hash_field: impl Fn(&str) -> bool,
 ) -> Option<BTreeSet<NonZeroUsize>> {
     let mut best = None;
-
     for cond in &predicate.equals {
         if is_height_field(&cond.field) {
             intersect_block_candidate_heights(
@@ -64,7 +57,6 @@ fn block_candidate_heights(
             );
         }
     }
-
     for cond in &predicate.r#in {
         if is_height_field(&cond.field) {
             intersect_block_candidate_heights(
@@ -87,10 +79,8 @@ fn block_candidate_heights(
             );
         }
     }
-
     best
 }
-
 fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     if path.is_empty() {
         return None;
@@ -107,20 +97,17 @@ fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value
     }
     Some(current)
 }
-
 fn predicate_value_equals_hash(value: &Value, expected: HashOf<BlockHeader>) -> bool {
     value
         .as_str()
         .is_some_and(|raw| raw == expected.to_string())
         || block_hash_from_value(value).is_some_and(|hash| hash == expected)
 }
-
 fn predicate_values_contain_hash(values: &[Value], expected: HashOf<BlockHeader>) -> bool {
     values
         .iter()
         .any(|value| predicate_value_equals_hash(value, expected))
 }
-
 fn block_header_alias_equals(header: &BlockHeader, field: &str, value: &Value) -> Option<bool> {
     match field {
         "height" => Some(value.as_u64() == Some(header.height().get())),
@@ -128,7 +115,6 @@ fn block_header_alias_equals(header: &BlockHeader, field: &str, value: &Value) -
         _ => None,
     }
 }
-
 fn signed_block_alias_equals(block: &SignedBlock, field: &str, value: &Value) -> Option<bool> {
     match field {
         "height" | "header.height" | "payload.header.height" => {
@@ -140,7 +126,6 @@ fn signed_block_alias_equals(block: &SignedBlock, field: &str, value: &Value) ->
         _ => None,
     }
 }
-
 fn block_header_alias_in(header: &BlockHeader, field: &str, values: &[Value]) -> Option<bool> {
     match field {
         "height" => Some(
@@ -152,7 +137,6 @@ fn block_header_alias_in(header: &BlockHeader, field: &str, values: &[Value]) ->
         _ => None,
     }
 }
-
 fn signed_block_alias_in(block: &SignedBlock, field: &str, values: &[Value]) -> Option<bool> {
     match field {
         "height" | "header.height" | "payload.header.height" => Some(
@@ -166,11 +150,9 @@ fn signed_block_alias_in(block: &SignedBlock, field: &str, values: &[Value]) -> 
         _ => None,
     }
 }
-
 fn block_header_alias_exists(field: &str) -> bool {
     matches!(field, "height" | "hash" | "block_hash")
 }
-
 fn signed_block_alias_exists(field: &str) -> bool {
     matches!(
         field,
@@ -182,7 +164,6 @@ fn signed_block_alias_exists(field: &str) -> bool {
             | "header.hash"
     )
 }
-
 fn block_header_json_value<'a>(
     cache: &'a mut Option<Value>,
     header: &BlockHeader,
@@ -192,7 +173,6 @@ fn block_header_json_value<'a>(
     }
     cache.as_ref()
 }
-
 fn signed_block_json_value<'a>(
     cache: &'a mut Option<Value>,
     block: &SignedBlock,
@@ -202,10 +182,8 @@ fn signed_block_json_value<'a>(
     }
     cache.as_ref()
 }
-
 fn predicate_matches_block_header(predicate: &PredicateJson, header: &BlockHeader) -> bool {
     let mut header_json = None;
-
     for cond in &predicate.equals {
         if let Some(matches) = block_header_alias_equals(header, &cond.field, &cond.value) {
             if !matches {
@@ -223,7 +201,6 @@ fn predicate_matches_block_header(predicate: &PredicateJson, header: &BlockHeade
             return false;
         }
     }
-
     for cond in &predicate.r#in {
         if let Some(matches) = block_header_alias_in(header, &cond.field, &cond.values) {
             if !matches {
@@ -241,7 +218,6 @@ fn predicate_matches_block_header(predicate: &PredicateJson, header: &BlockHeade
             return false;
         }
     }
-
     for field in &predicate.exists {
         if block_header_alias_exists(field) {
             continue;
@@ -256,13 +232,10 @@ fn predicate_matches_block_header(predicate: &PredicateJson, header: &BlockHeade
             return false;
         }
     }
-
     true
 }
-
 fn predicate_matches_signed_block(predicate: &PredicateJson, block: &SignedBlock) -> bool {
     let mut block_json = None;
-
     for cond in &predicate.equals {
         if let Some(matches) = signed_block_alias_equals(block, &cond.field, &cond.value) {
             if !matches {
@@ -280,7 +253,6 @@ fn predicate_matches_signed_block(predicate: &PredicateJson, block: &SignedBlock
             return false;
         }
     }
-
     for cond in &predicate.r#in {
         if let Some(matches) = signed_block_alias_in(block, &cond.field, &cond.values) {
             if !matches {
@@ -298,7 +270,6 @@ fn predicate_matches_signed_block(predicate: &PredicateJson, block: &SignedBlock
             return false;
         }
     }
-
     for field in &predicate.exists {
         if signed_block_alias_exists(field) {
             continue;
@@ -313,10 +284,8 @@ fn predicate_matches_signed_block(predicate: &PredicateJson, block: &SignedBlock
             return false;
         }
     }
-
     true
 }
-
 impl ValidQuery for FindBlocks {
     #[metrics(+"find_blocks")]
     fn execute(
@@ -354,7 +323,6 @@ impl ValidQuery for FindBlocks {
             );
             return Ok(iter);
         }
-
         let iter: Box<dyn Iterator<Item = SignedBlock> + '_> = Box::new(
             state_ro
                 .all_blocks(nonzero!(1_usize))
@@ -370,7 +338,6 @@ impl ValidQuery for FindBlocks {
         Ok(iter)
     }
 }
-
 impl ValidQuery for FindBlockHeaders {
     #[metrics(+"find_block_headers")]
     fn execute(
@@ -404,7 +371,6 @@ impl ValidQuery for FindBlockHeaders {
             );
             return Ok(iter);
         }
-
         let iter: Box<dyn Iterator<Item = BlockHeader> + '_> = Box::new(
             state_ro
                 .all_blocks(nonzero!(1_usize))
@@ -421,11 +387,9 @@ impl ValidQuery for FindBlockHeaders {
         Ok(iter)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn block_candidate_heights_are_intersected() {
         let mut candidates = None;
@@ -437,7 +401,6 @@ mod tests {
             &mut candidates,
             BTreeSet::from([nonzero!(2_usize), nonzero!(3_usize)]),
         );
-
         assert_eq!(candidates, Some(BTreeSet::from([nonzero!(2_usize)])));
     }
 }

@@ -9,14 +9,12 @@ fn query_hash_is_domain_separated() {
         query_hash(b"versions", b"different")
     );
 }
-
 #[test]
 fn borrowed_query_hashes_match_the_legacy_clone_encoding() {
     let page = MusubiPageRequestV1 {
         limit: 17,
         cursor: None,
     };
-
     let resolver = MusubiResolverIndexQueryV1 {
         package: package("borrowed-hash"),
         requirement: Some("~1.2.3".parse().expect("version requirement")),
@@ -28,7 +26,6 @@ fn borrowed_query_hashes_match_the_legacy_clone_encoding() {
         resolver_query_hash(&resolver).expect("borrowed resolver hash"),
         query_hash(b"resolver-index", &legacy_resolver.encode())
     );
-
     let package_page = MusubiPackagePageQueryV1 {
         package: package("borrowed-page-hash"),
         page: page.clone(),
@@ -39,7 +36,6 @@ fn borrowed_query_hashes_match_the_legacy_clone_encoding() {
         package_page_query_hash(b"versions", &package_page).expect("borrowed package-page hash"),
         query_hash(b"versions", &legacy_package_page.encode())
     );
-
     let archive = MusubiArchiveLocationQueryV1 {
         archive_id: ArchiveId::new([0xA5; 32]),
         page: page.clone(),
@@ -50,7 +46,6 @@ fn borrowed_query_hashes_match_the_legacy_clone_encoding() {
         archive_location_query_hash(&archive).expect("borrowed archive hash"),
         query_hash(b"archive-locations", &legacy_archive.encode())
     );
-
     let alias = MusubiAliasQueryV1 {
         alias: "borrowed-hash".parse().expect("alias"),
         page: page.clone(),
@@ -61,7 +56,6 @@ fn borrowed_query_hashes_match_the_legacy_clone_encoding() {
         alias_history_query_hash(&alias).expect("borrowed alias hash"),
         query_hash(b"alias-history", &legacy_alias.encode())
     );
-
     let prefix = MusubiOrderedPrefixQueryV1 {
         prefix: MusubiOrderedPrefixV1::new("sora/borrowed-").expect("ordered prefix"),
         page,

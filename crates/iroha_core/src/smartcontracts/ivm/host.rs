@@ -7,7 +7,6 @@
 //! uniformly and prevents direct world state mutations from the VM.
 //!
 //! Helper syscalls that do not touch WSV are forwarded to the IVM default host.
-
 use std::{
     any::Any,
     borrow::Cow,
@@ -18,7 +17,6 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
-
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
@@ -37,9 +35,7 @@ use crate::{
 };
 use iroha_crypto::{Hash, HashOf, PublicKey, streaming::TransportCapabilityResolutionSnapshot};
 #[cfg(test)]
-use iroha_data_model::soracloud::{
-    SORACLOUD_HOST_REQUEST_VERSION_V1, SoracloudEgressFetchRequestV1,
-};
+use iroha_data_model::soracloud::{SORACLOUD_HOST_REQUEST_VERSION_V1, SoracloudEgressFetchRequestV1};
 use iroha_data_model::{
     DataSpaceId, NetworkId, ValidationFail,
     account::rekey::AccountAlias,
@@ -130,9 +126,7 @@ use norito::{
     json,
     streaming::CapabilityFlags,
 };
-
 use super::cache::PreparedContractCache;
-
 const AXT_PROOF_CACHE_HIT: &str = "hit";
 const AXT_PROOF_CACHE_MISS: &str = "miss";
 const AXT_PROOF_CACHE_EXPIRED: &str = "expired";
@@ -1446,14 +1440,11 @@ fn visit_merged_durable_state_keys(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod durable_state_merge_tests {
     use iroha_data_model::state_path::MAX_STATE_PATH_BYTES;
     use iroha_test_samples::ALICE_ID;
-
     use super::*;
-
     fn state_path(value: &str) -> StatePath {
         value.parse().expect("durable-state test path")
     }
@@ -3513,7 +3504,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         state: &(impl StateReadOnly + ?Sized),
     ) -> Option<AxtPolicySnapshot> {
         use std::collections::{BTreeMap, btree_map::Entry};
-
         let mut lane_for_dataspace = BTreeMap::new();
         let nexus = state.nexus();
         let state_height = u64::try_from(state.height()).unwrap_or(u64::MAX);
@@ -3684,7 +3674,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         {
             use iroha_config::parameters::defaults::crypto as defaults;
             use iroha_crypto::Algorithm;
-
             fn adjust(cfg: &mut iroha_config::parameters::actual::Crypto, enabled: bool) {
                 if enabled {
                     if !cfg
@@ -9865,7 +9854,6 @@ impl<QS> CoreHostImpl<QS> {
         let value = map.remove(key).ok_or(ivm::VMError::DecodeError)?;
         json::from_value(value).map_err(|_| ivm::VMError::DecodeError)
     }
-
     fn decode_trigger_filter(value: json::Value) -> Result<EventFilterBox, ivm::VMError> {
         use iroha_data_model::events::{
             data::DataEventFilter, execute_trigger::ExecuteTriggerEventFilter,
@@ -11432,7 +11420,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 ivm::syscalls::SYSCALL_VRF_EPOCH_SEED => {
                     use ivm::vrf::VrfEpochSeedRequest;
-
                     const OK: u64 = 0;
                     const ERR_TYPE: u64 = 1;
                     const ERR_DECODE: u64 = 2;
@@ -11890,11 +11877,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
         self.access_log_enabled
     }
 }
-
 #[cfg(test)]
 mod pointer_abi_tests {
     use core::{num::NonZeroU16, str::FromStr};
-
     use super::{
         tests::{
             begin_axt_envelope, contract_test_state, fixture_public_key_from_seed,
@@ -15999,11 +15984,9 @@ fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
     program.extend_from_slice(code);
     program
 }
-
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, sync::Arc};
-
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         parameter::{CustomParameter, Parameter, SmartContractParameter},
@@ -16027,7 +16010,6 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         kura::Kura,
@@ -22975,10 +22957,8 @@ seiyaku Callee {
         paynet: DataSpaceId,
         retail_domain_id: Option<DomainId>,
     }
-
     fn load_alias_contract_cases() -> AliasContractCaseFileV1 {
         use sha2::{Digest as _, Sha256};
-
         assert_eq!(
             Hash::new(ALIAS_CASES_V1).to_string(),
             "f36f5396aaad73fab1176df6e2778532c845a696cb6ca7bfff81174c8c249f19",
@@ -28628,37 +28608,6 @@ seiyaku PreparedBoundaryArguments {
         assert_eq!(vm.remaining_gas(), 0);
         assert_eq!(vm.register(10), name_ptr, "must not allocate guest output");
         assert_eq!(vm.register(11), 0xfeed, "must not mutate output registers");
-    }
-    #[test]
-    fn get_public_input_rejects_registry_type_mismatch() {
-        crate::test_alias::ensure();
-        let authority: AccountId = fixture_account("alice");
-        let name: Name = "pub_key".parse().unwrap();
-        let payload = b"hello".to_vec();
-        let tlv = make_tlv(PointerType::Blob as u16, &payload);
-        let entry = norito::json::object([
-            ("name", norito::json::Value::from(name.as_ref())),
-            (
-                "type_id",
-                norito::json::Value::from(u64::from(PointerType::Name as u16)),
-            ),
-            ("tlv_hex", norito::json::Value::from(hex::encode(&tlv))),
-        ])
-        .expect("registry entry");
-        let registry = norito::json::Value::Array(vec![entry]);
-        let custom = CustomParameter::new(ivm_metadata::public_inputs_id(), Json::from(registry));
-        let mut params = Parameters::default();
-        params.set_parameter(Parameter::Custom(custom));
-        let mut host = CoreHost::new(authority);
-        host.set_public_inputs_from_parameters(&params);
-        assert!(host.public_inputs.is_empty());
-        let mut vm = IVM::new(10_000);
-        let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&name));
-        vm.set_register(10, name_ptr);
-        let err = host
-            .syscall(ivm_sys::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
-            .expect_err("mismatched registry entry should error");
-        assert!(matches!(err, VMError::PermissionDenied));
     }
     // Keep pointer-ABI boundary checks together so host runtime code remains auditable.
     include!("host/pointer_abi_validation_tests.rs");

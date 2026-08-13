@@ -1,15 +1,12 @@
 //! Deterministic address test vector generator for ADDR-2.
-
 use core::fmt;
 use std::convert::TryInto;
-
 use hex;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use norito::{
     json,
     json::{JsonSerialize, Value},
 };
-
 use super::{
     AccountAddressError::*, CONTROLLER_MULTISIG_TAG, CONTROLLER_SINGLE_KEY_TAG,
     DEFAULT_DOMAIN_NAME, DomainSelector, compute_local_digest,
@@ -18,10 +15,8 @@ use crate::{
     account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
     domain::DomainId,
 };
-
 /// Default I105 prefix used for deterministic vectors.
 pub const DEFAULT_VECTOR_NETWORK_PREFIX: u16 = 0x1234;
-
 const VECTOR_SINGLE_DOMAINS: [(&str, u8); 12] = [
     ("default", 0x0C),
     ("treasury", 0x01),
@@ -36,13 +31,11 @@ const VECTOR_SINGLE_DOMAINS: [(&str, u8); 12] = [
     ("kitsune", 0x0A),
     ("da", 0x0B),
 ];
-
 struct MultisigFixtureSpec {
     domain: &'static str,
     members: &'static [(u8, u16)],
     threshold: u16,
 }
-
 const MULTISIG_FIXTURES: &[MultisigFixtureSpec] = &[
     MultisigFixtureSpec {
         domain: "council",
@@ -60,14 +53,12 @@ const MULTISIG_FIXTURES: &[MultisigFixtureSpec] = &[
         threshold: 3,
     },
 ];
-
 fn json_value<T>(value: &T) -> Value
 where
     T: JsonSerialize + ?Sized,
 {
     json::to_value(value).expect("serialize JSON value")
 }
-
 fn json_object(pairs: Vec<(&str, Value)>) -> Value {
     let mut map = json::Map::new();
     for (key, value) in pairs {
@@ -75,7 +66,6 @@ fn json_object(pairs: Vec<(&str, Value)>) -> Value {
     }
     Value::Object(map)
 }
-
 /// Full bundle of deterministic vectors.
 #[derive(Clone, Debug)]
 pub struct AddressVectorBundle {
@@ -90,7 +80,6 @@ pub struct AddressVectorBundle {
     /// Negative fixtures describing expected decoder failures.
     pub errors: Vec<ErrorVector>,
 }
-
 impl AddressVectorBundle {
     /// Serialise the bundle into a Norito JSON value.
     #[must_use]
@@ -110,7 +99,6 @@ impl AddressVectorBundle {
             .iter()
             .map(ErrorVector::to_json_value)
             .collect::<Vec<Value>>();
-
         let network_prefix_hex = format_u16_hex(self.network_prefix);
         let metadata = json_object(vec![
             (
@@ -128,7 +116,6 @@ impl AddressVectorBundle {
                 ),
             ),
         ]);
-
         json_object(vec![
             ("metadata", metadata),
             ("single_key", Value::Array(single)),
@@ -137,7 +124,6 @@ impl AddressVectorBundle {
         ])
     }
 }
-
 /// Deterministic vectors for single-key controllers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SingleKeyVector {
@@ -160,7 +146,6 @@ pub struct SingleKeyVector {
     /// Hexadecimal encoding of the controller public key.
     pub public_key_hex: String,
 }
-
 impl SingleKeyVector {
     fn to_json_value(&self, network_prefix: u16) -> Value {
         let network_prefix_hex = format_u16_hex(network_prefix);
@@ -176,7 +161,6 @@ impl SingleKeyVector {
             ("algorithm", json_value(&self.controller_algorithm)),
             ("public_key_hex", json_value(&self.public_key_hex)),
         ]);
-
         json_object(vec![
             ("domain", json_value(self.domain_label)),
             ("seed_byte", json_value(&seed_byte_hex)),
@@ -188,7 +172,6 @@ impl SingleKeyVector {
         ])
     }
 }
-
 /// Deterministic vectors for multisignature controllers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MultisigVector {
@@ -215,7 +198,6 @@ pub struct MultisigVector {
     /// Hexadecimal encoding of the policy digest (Blake2b-256, personalised).
     pub policy_digest_hex: String,
 }
-
 impl MultisigVector {
     fn to_json_value(&self, network_prefix: u16) -> Value {
         let network_prefix_hex = format_u16_hex(network_prefix);
@@ -240,7 +222,6 @@ impl MultisigVector {
             ("ctap2_cbor_hex", json_value(&self.policy_cbor_hex)),
             ("digest_blake2b256_hex", json_value(&self.policy_digest_hex)),
         ]);
-
         json_object(vec![
             ("domain", json_value(self.domain_label)),
             ("account_id", json_value(&self.account_id)),
@@ -251,7 +232,6 @@ impl MultisigVector {
         ])
     }
 }
-
 /// Metadata for a multisignature member entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MultisigMemberVector {
@@ -266,7 +246,6 @@ pub struct MultisigMemberVector {
     /// Length of the public key material in bytes.
     pub key_length: usize,
 }
-
 impl MultisigMemberVector {
     fn to_json_value(&self) -> Value {
         let curve_hex = format_u8_hex(self.curve_id);
@@ -279,7 +258,6 @@ impl MultisigMemberVector {
         ])
     }
 }
-
 /// Historical domain-selector metadata used by interoperability diagnostics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DomainSelectorVector {
@@ -301,7 +279,6 @@ pub enum DomainSelectorVector {
         tag: u8,
     },
 }
-
 impl DomainSelectorVector {
     fn to_json_value(&self) -> Value {
         match self {
@@ -321,7 +298,6 @@ impl DomainSelectorVector {
         }
     }
 }
-
 /// Negative vector harness capturing failure expectations.
 #[derive(Clone, Debug)]
 pub struct ErrorVector {
@@ -340,7 +316,6 @@ pub struct ErrorVector {
     /// Optional structured details associated with the error.
     pub details: Option<Value>,
 }
-
 impl ErrorVector {
     fn to_json_value(&self) -> Value {
         let message = &self.message;
@@ -369,16 +344,13 @@ impl ErrorVector {
         ])
     }
 }
-
 /// Produce the deterministic ADDR-2 vector bundle.
 #[must_use]
 pub fn build_vector_bundle() -> AddressVectorBundle {
     let default_domain_label = DEFAULT_DOMAIN_NAME.to_owned();
-
     let single_key = build_single_key_vectors(DEFAULT_VECTOR_NETWORK_PREFIX);
     let multisig = build_multisig_vectors(DEFAULT_VECTOR_NETWORK_PREFIX);
     let errors = build_error_vectors(DEFAULT_VECTOR_NETWORK_PREFIX);
-
     AddressVectorBundle {
         default_domain_label,
         network_prefix: DEFAULT_VECTOR_NETWORK_PREFIX,
@@ -387,13 +359,11 @@ pub fn build_vector_bundle() -> AddressVectorBundle {
         errors,
     }
 }
-
 /// Convenience helper returning the bundle encoded as JSON.
 #[must_use]
 pub fn address_vectors_json() -> Value {
     build_vector_bundle().to_json_value()
 }
-
 fn build_single_key_vectors(network_prefix: u16) -> Vec<SingleKeyVector> {
     VECTOR_SINGLE_DOMAINS
         .iter()
@@ -406,7 +376,6 @@ fn build_single_key_vectors(network_prefix: u16) -> Vec<SingleKeyVector> {
         })
         .collect()
 }
-
 fn build_single_vector(
     label: &'static str,
     seed: u8,
@@ -430,15 +399,12 @@ fn build_single_vector(
     );
     let single_payload = decode_single_controller_payload(view.controller_payload);
     let domain_selector = canonical_selector_metadata();
-
     let (algorithm, key_bytes) = account
         .controller()
         .single_signatory()
         .expect("single-key account must have signatory")
         .to_bytes();
-
     let public_key_hex = format_hex_prefixed(key_bytes);
-
     SingleKeyVector {
         domain_label: label,
         seed_byte: seed,
@@ -451,7 +417,6 @@ fn build_single_vector(
         public_key_hex,
     }
 }
-
 fn build_multisig_vectors(network_prefix: u16) -> Vec<MultisigVector> {
     MULTISIG_FIXTURES
         .iter()
@@ -489,10 +454,8 @@ fn build_multisig_vectors(network_prefix: u16) -> Vec<MultisigVector> {
                     key_length: member.key_bytes.len(),
                 })
                 .collect::<Vec<_>>();
-
             let policy_cbor = policy.encode_ctap2();
             let policy_digest = policy.digest_blake2b256();
-
             MultisigVector {
                 domain_label: spec.domain,
                 account_id: account.to_string(),
@@ -513,18 +476,15 @@ fn build_multisig_vectors(network_prefix: u16) -> Vec<MultisigVector> {
         })
         .collect()
 }
-
 fn build_error_vectors(network_prefix: u16) -> Vec<ErrorVector> {
     ErrorHarness::new(network_prefix).build_all()
 }
-
 struct ErrorHarness {
     network_prefix: u16,
     address: AccountAddress,
     i105: String,
     canonical_hex: String,
 }
-
 impl ErrorHarness {
     fn new(network_prefix: u16) -> Self {
         let account = AccountId::new(ed25519_pk_with(0x2A));
@@ -543,7 +503,6 @@ impl ErrorHarness {
             canonical_hex,
         }
     }
-
     fn build_all(&self) -> Vec<ErrorVector> {
         vec![
             self.i105_invalid_char(),
@@ -555,7 +514,6 @@ impl ErrorHarness {
             self.domain_mismatch(),
         ]
     }
-
     fn i105_invalid_char(&self) -> ErrorVector {
         let mut chars = self.i105.chars().collect::<Vec<_>>();
         let last = chars.len().saturating_sub(1);
@@ -563,7 +521,6 @@ impl ErrorHarness {
         let invalid_char = chars.into_iter().collect::<String>();
         let err =
             AccountAddress::from_i105(&invalid_char).expect_err("invalid character must fail");
-
         ErrorVector {
             label: "i105_invalid_char",
             decoder: "i105",
@@ -574,7 +531,6 @@ impl ErrorHarness {
             details: Some(json_object(vec![("invalid_char", json_value("!"))])),
         }
     }
-
     fn i105_checksum_mismatch(&self) -> ErrorVector {
         let canonical = self
             .address
@@ -593,7 +549,6 @@ impl ErrorHarness {
         }
         let err = AccountAddress::from_i105_for_discriminant(&tampered, Some(self.network_prefix))
             .expect_err("checksum mismatch must fail");
-
         ErrorVector {
             label: "i105_checksum_mismatch",
             decoder: "i105",
@@ -604,12 +559,10 @@ impl ErrorHarness {
             details: None,
         }
     }
-
     fn i105_too_short(&self) -> ErrorVector {
         let too_short = super::i105_sentinel_for_discriminant(self.network_prefix);
         let err = AccountAddress::from_i105_for_discriminant(&too_short, Some(self.network_prefix))
             .expect_err("too short i105 form must fail");
-
         ErrorVector {
             label: "i105_too_short",
             decoder: "i105",
@@ -620,7 +573,6 @@ impl ErrorHarness {
             details: None,
         }
     }
-
     fn i105_unexpected_discriminant(&self) -> ErrorVector {
         let err = AccountAddress::from_i105_for_discriminant(
             &self.i105,
@@ -632,7 +584,6 @@ impl ErrorHarness {
         };
         let expected_hex = format_u16_hex(expected);
         let found_hex = format_u16_hex(found);
-
         ErrorVector {
             label: "i105_unexpected_discriminant",
             decoder: "i105",
@@ -646,12 +597,10 @@ impl ErrorHarness {
             ])),
         }
     }
-
     fn canonical_invalid_hex() -> ErrorVector {
         let invalid_hex = "0xnothex";
         let err = AccountAddress::parse_encoded(invalid_hex, None)
             .expect_err("invalid canonical_hex strict decode must fail");
-
         ErrorVector {
             label: "canonical_invalid_hex",
             decoder: "canonical_hex",
@@ -662,12 +611,10 @@ impl ErrorHarness {
             details: None,
         }
     }
-
     fn unsupported_alias_literal() -> ErrorVector {
         let alias_literal = "alice@banka.dataspace";
         let err = AccountAddress::parse_encoded(alias_literal, None)
             .expect_err("alias literal must fail");
-
         ErrorVector {
             label: "unsupported_alias_literal",
             decoder: "auto_detect",
@@ -678,7 +625,6 @@ impl ErrorHarness {
             details: None,
         }
     }
-
     fn domain_mismatch(&self) -> ErrorVector {
         let mut mismatched = self.address.clone();
         mismatched.domain = DomainSelector::Local12(compute_local_digest("wonderland"));
@@ -687,7 +633,6 @@ impl ErrorHarness {
             .ensure_domain_matches(&other_domain)
             .expect_err("domain mismatch must fail");
         let other_domain_label = other_domain.to_string();
-
         ErrorVector {
             label: "domain_mismatch",
             decoder: "domain_check",
@@ -702,32 +647,27 @@ impl ErrorHarness {
         }
     }
 }
-
 #[derive(Clone, Debug)]
 struct SingleControllerPayload {
     curve_id: u8,
 }
-
 #[derive(Clone, Debug)]
 struct MultisigControllerPayload<'a> {
     version: u8,
     threshold: u16,
     members: Vec<MultisigMemberPayload<'a>>,
 }
-
 #[derive(Clone, Debug)]
 struct MultisigMemberPayload<'a> {
     curve_id: u8,
     weight: u16,
     key_bytes: &'a [u8],
 }
-
 #[derive(Clone, Copy)]
 struct CanonicalView<'a> {
     controller_tag: u8,
     controller_payload: &'a [u8],
 }
-
 fn canonical_view(bytes: &[u8]) -> CanonicalView<'_> {
     debug_assert!(
         !bytes.is_empty(),
@@ -744,11 +684,9 @@ fn canonical_view(bytes: &[u8]) -> CanonicalView<'_> {
         controller_payload,
     }
 }
-
 fn canonical_selector_metadata() -> DomainSelectorVector {
     DomainSelectorVector::ImplicitDefault
 }
-
 fn decode_single_controller_payload(payload: &[u8]) -> SingleControllerPayload {
     let curve_id = payload
         .first()
@@ -756,7 +694,6 @@ fn decode_single_controller_payload(payload: &[u8]) -> SingleControllerPayload {
         .expect("single controller payload must include curve id");
     SingleControllerPayload { curve_id }
 }
-
 fn decode_multisig_payload(payload: &[u8]) -> MultisigControllerPayload<'_> {
     let version = payload
         .first()
@@ -813,12 +750,10 @@ fn decode_multisig_payload(payload: &[u8]) -> MultisigControllerPayload<'_> {
         members,
     }
 }
-
 fn domain_id(label: &str) -> DomainId {
     DomainId::try_new(label, "universal")
         .unwrap_or_else(|_| panic!("invalid domain id `{label}.universal`"))
 }
-
 fn ed25519_pk_with(byte: u8) -> PublicKey {
     let seed = vec![byte; 32];
     let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
@@ -826,7 +761,6 @@ fn ed25519_pk_with(byte: u8) -> PublicKey {
         .into_parts();
     public_key
 }
-
 fn variant_name(error: &AccountAddressError) -> &'static str {
     match error {
         UnsupportedAlgorithm(_) => "UnsupportedAlgorithm",
@@ -856,19 +790,15 @@ fn variant_name(error: &AccountAddressError) -> &'static str {
         InvalidMultisigPolicy(_) => "InvalidMultisigPolicy",
     }
 }
-
 fn format_u8_hex(value: u8) -> String {
     format!("0x{value:02x}")
 }
-
 fn format_u16_hex(value: u16) -> String {
     format!("0x{value:04x}")
 }
-
 fn format_hex_prefixed(bytes: impl AsRef<[u8]>) -> String {
     format!("0x{}", hex::encode(bytes.as_ref()))
 }
-
 impl fmt::Display for AddressVectorBundle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let json = json::to_json_pretty(&self.to_json_value())
@@ -876,12 +806,10 @@ impl fmt::Display for AddressVectorBundle {
         write!(f, "{json}")
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::account::address::AccountAddress;
-
     #[test]
     fn ed25519_pk_with_uses_checked_seed_derivation() {
         assert_eq!(
@@ -891,7 +819,6 @@ mod tests {
             Algorithm::Ed25519
         );
     }
-
     #[test]
     fn json_value_serialises_borrowed_inputs() {
         let owned = String::from("owned");
@@ -900,35 +827,29 @@ mod tests {
             owned_value,
             json::to_value(&owned).expect("serialize owned string")
         );
-
         let literal_value = json_value("literal");
         assert_eq!(
             literal_value,
             json::to_value("literal").expect("serialize literal str")
         );
         assert_eq!(literal_value, Value::String("literal".to_owned()));
-
         let number = 7_u32;
         let number_value = json_value(&number);
         assert_eq!(
             number_value,
             json::to_value(&number).expect("serialize integer")
         );
-
         assert_eq!(owned, "owned");
     }
-
     #[test]
     fn default_single_vector_matches_fixture() {
         let bundle = build_vector_bundle();
         assert_eq!(bundle.single_key.len(), VECTOR_SINGLE_DOMAINS.len());
-
         let default_vector = bundle
             .single_key
             .iter()
             .find(|vector| vector.domain_label == "default")
             .expect("default domain vector must be present");
-
         assert_eq!(
             default_vector.canonical_hex,
             "0x020001200b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
@@ -939,7 +860,6 @@ mod tests {
             DomainSelectorVector::ImplicitDefault
         ));
     }
-
     #[test]
     fn error_vectors_cover_expected_variants() {
         let bundle = build_vector_bundle();
@@ -953,7 +873,6 @@ mod tests {
             .iter()
             .map(|vector| vector.error_code)
             .collect::<Vec<_>>();
-
         assert!(variants.contains(&"InvalidI105Char"));
         assert!(variants.contains(&"ChecksumMismatch"));
         assert!(variants.contains(&"I105TooShort"));
@@ -967,7 +886,6 @@ mod tests {
         assert!(codes.contains(&"ERR_UNSUPPORTED_ADDRESS_FORMAT"));
         assert!(codes.contains(&"ERR_DOMAIN_MISMATCH"));
     }
-
     #[test]
     fn error_vector_shapes_match_expected_decoders() {
         let bundle = build_vector_bundle();
@@ -987,11 +905,9 @@ mod tests {
         ];
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn i105_roundtrip_for_vector_domain_labels() {
         let seeds = [1_u8, 2, 3, 7, 12, 31, 63, 127, 128, 191, 255];
-
         for &seed in &seeds {
             for (label, _) in VECTOR_SINGLE_DOMAINS {
                 let _domain = domain_id(label);

@@ -1,35 +1,28 @@
 // Outermost HTTP request admission for application-API routed reads.
-
 use http_body_util::BodyExt as _;
-
 #[derive(Clone)]
 struct AppRoutedReadHttpAdmission {
     reservation: QueryFanoutMemoryReservation,
     decode_plan: ToriiRoutedReadRequestDecodePlan,
 }
-
 tokio::task_local! {
     static APP_ROUTED_READ_HTTP_ADMISSION: AppRoutedReadHttpAdmission;
 }
-
 fn current_app_routed_read_fanout_reservation() -> Option<QueryFanoutMemoryReservation> {
     APP_ROUTED_READ_HTTP_ADMISSION
         .try_with(|admission| admission.reservation.clone())
         .ok()
 }
-
 fn current_app_routed_read_decode_plan() -> Option<ToriiRoutedReadRequestDecodePlan> {
     APP_ROUTED_READ_HTTP_ADMISSION
         .try_with(|admission| admission.decode_plan)
         .ok()
 }
-
 #[derive(Clone, Debug)]
 struct AdmittedAppRoutedReadBody {
     bytes: Bytes,
     destination_bytes: usize,
 }
-
 fn admitted_app_routed_read_body(request: &Request<Body>) -> Option<Bytes> {
     request
         .extensions()
@@ -39,7 +32,6 @@ fn admitted_app_routed_read_body(request: &Request<Body>) -> Option<Bytes> {
             body.bytes.clone()
         })
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppRoutedReadHttpDecoder {
     None,
@@ -49,7 +41,6 @@ enum AppRoutedReadHttpDecoder {
     Json(&'static str),
     ExactInternalAssetScope,
 }
-
 impl AppRoutedReadHttpDecoder {
     fn body_type_name(self) -> Option<&'static str> {
         match self {
@@ -59,7 +50,6 @@ impl AppRoutedReadHttpDecoder {
             }
         }
     }
-
     fn typed_request_name(self) -> Option<&'static str> {
         match self {
             Self::Query(name)
@@ -69,7 +59,6 @@ impl AppRoutedReadHttpDecoder {
             Self::None | Self::ExactInternalAssetScope => None,
         }
     }
-
     fn preflight_media(self, headers: &HeaderMap) -> Result<(), Response> {
         match self {
             Self::JsonOrNorito(_) => crate::utils::typed_request_content_format(headers).map(drop),
@@ -80,14 +69,12 @@ impl AppRoutedReadHttpDecoder {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 struct AppRoutedReadHttpEndpoint {
     endpoint: ToriiReadEndpointV1,
     route: iroha_torii_shared::route_catalog::RouteDescriptor,
     decoder: AppRoutedReadHttpDecoder,
 }
-
 macro_rules! app_routed_read_endpoint {
     ($endpoint:ident, $route:path, $decoder:expr) => {
         AppRoutedReadHttpEndpoint {
@@ -97,7 +84,6 @@ macro_rules! app_routed_read_endpoint {
         }
     };
 }
-
 const APP_ROUTED_READ_HTTP_ENDPOINTS_V1: [AppRoutedReadHttpEndpoint; 45] = [
     app_routed_read_endpoint!(AccountGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_GET, AppRoutedReadHttpDecoder::None),
     app_routed_read_endpoint!(ExplorerAccountDetail, route_catalog::application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET, AppRoutedReadHttpDecoder::None),
@@ -145,14 +131,12 @@ const APP_ROUTED_READ_HTTP_ENDPOINTS_V1: [AppRoutedReadHttpEndpoint; 45] = [
     app_routed_read_endpoint!(InternalAccountAssetGet, route_catalog::application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET, AppRoutedReadHttpDecoder::ExactInternalAssetScope),
     app_routed_read_endpoint!(ContractDeploymentState, route_catalog::contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST, AppRoutedReadHttpDecoder::Json("ContractDeploymentStateRequestDto")),
 ];
-
 fn app_routed_read_http_endpoint(route_id: &str) -> Option<AppRoutedReadHttpEndpoint> {
     APP_ROUTED_READ_HTTP_ENDPOINTS_V1
         .iter()
         .copied()
         .find(|entry| entry.route.stable_route_id() == route_id)
 }
-
 async fn enforce_app_routed_read_http_admission(
     State(app): State<SharedAppState>,
     request: Request<Body>,
@@ -165,11 +149,9 @@ async fn enforce_app_routed_read_http_admission(
     else {
         return next.run(request).await;
     };
-
     if let Err(response) = endpoint.decoder.preflight_media(request.headers()) {
         return response;
     }
-
     let decode_plan = match torii_routed_read_request_decode_plan(&app) {
         Ok(plan) => plan,
         Err(response) => return response,
@@ -244,12 +226,10 @@ async fn enforce_app_routed_read_http_admission(
     let _inventory_identity = (endpoint.endpoint, endpoint.decoder.typed_request_name());
     hold_app_routed_read_reservation_if_needed(response, reservation)
 }
-
 fn app_routed_read_raw_target_bytes(uri: &axum::http::Uri) -> usize {
     uri.path_and_query()
         .map_or_else(|| uri.path().len(), |target| target.as_str().len())
 }
-
 fn hold_app_routed_read_reservation_if_needed(
     response: Response,
     reservation: QueryFanoutMemoryReservation,
@@ -264,7 +244,6 @@ fn hold_app_routed_read_reservation_if_needed(
         hold_query_fanout_memory_in_response_body(response, reservation)
     }
 }
-
 fn preflight_app_routed_read_content_length(
     headers: &HeaderMap,
     body_limit: usize,
@@ -321,7 +300,6 @@ fn preflight_app_routed_read_content_length(
     }
     Ok(Some(declared))
 }
-
 fn preflight_bodyless_app_routed_read(headers: &HeaderMap) -> Result<Option<usize>, Response> {
     if headers.contains_key(axum::http::header::TRANSFER_ENCODING) {
         return Err(torii_proxy_error_response(
@@ -332,7 +310,6 @@ fn preflight_bodyless_app_routed_read(headers: &HeaderMap) -> Result<Option<usiz
     }
     preflight_app_routed_read_content_length(headers, 0)
 }
-
 async fn collect_app_routed_read_body(
     body: Body,
     limit: usize,
@@ -406,7 +383,6 @@ async fn collect_app_routed_read_body(
         destination_bytes,
     })
 }
-
 fn app_routed_read_body_error_response() -> Response {
     torii_proxy_error_response(
         StatusCode::BAD_REQUEST,
@@ -414,12 +390,10 @@ fn app_routed_read_body_error_response() -> Response {
         "The application routed-read request body stream failed.",
     )
 }
-
 struct ExactAppRoutedReadBody {
     storage: Box<[std::mem::MaybeUninit<u8>]>,
     len: usize,
 }
-
 impl AsRef<[u8]> for ExactAppRoutedReadBody {
     #[allow(unsafe_code)]
     fn as_ref(&self) -> &[u8] {
@@ -428,6 +402,5 @@ impl AsRef<[u8]> for ExactAppRoutedReadBody {
         unsafe { std::slice::from_raw_parts(self.storage.as_ptr().cast::<u8>(), self.len) }
     }
 }
-
 #[cfg(test)]
 include!("tests/lib_routed_reads/app_routed_read_http_admission.rs");

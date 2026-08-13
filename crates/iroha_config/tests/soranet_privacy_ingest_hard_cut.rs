@@ -1,17 +1,13 @@
 //! Validate the exact-signature hard cut for SoraNet privacy telemetry ingress.
-
 use std::path::PathBuf;
-
 use iroha_config::parameters::user::Root as UserConfig;
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
-
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()
         .read_toml_with_extends(base_path)
         .expect("base config should load")
 }
-
 fn strip_ansi_codes(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -29,7 +25,6 @@ fn strip_ansi_codes(input: &str) -> String {
     }
     result
 }
-
 #[test]
 fn retired_soranet_privacy_bearer_fields_are_rejected_without_disclosure() {
     for (field, value) in [

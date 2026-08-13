@@ -1,5 +1,4 @@
 //! Gossiper actor responsible for transaction gossiping.
-
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -7,7 +6,6 @@ use std::{
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
-
 use iroha_config::parameters::{
     actual::{
         DataspaceGossip, DataspaceGossipFallback, LaneConfig as LaneGeometry,
@@ -33,7 +31,6 @@ use norito::{
     core as ncore,
 };
 use tokio::sync::mpsc;
-
 use crate::{
     IrohaNetwork, NetworkMessage,
     queue::{
@@ -232,9 +229,7 @@ impl TransactionGossiperHandle {
 #[cfg(test)]
 mod handle_tests {
     use tokio::sync::mpsc;
-
     use super::*;
-
     #[test]
     fn gossip_drops_when_queue_full() {
         let (message_sender, mut message_receiver) = mpsc::channel(1);
@@ -3394,7 +3389,6 @@ mod tests {
         sync::Arc,
         time::Duration,
     };
-
     use iroha_config::{
         kura::{FsyncMode, InitMode},
         parameters::{
@@ -3432,14 +3426,10 @@ mod tests {
         },
     };
     use iroha_primitives::{addr::socket_addr, numeric::Quantity, time::TimeSource};
-    use iroha_test_samples::{
-        ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
-    };
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR};
     use norito::{codec::Decode, core as ncore};
     use tempfile::tempdir;
-
     use crate::NetworkMessage;
-
     use super::*;
     use crate::{
         kura::Kura,

@@ -19,7 +19,6 @@
 //! `metadata.range_capability`, `metadata.stream_budget`, and
 //! `metadata.transport_hints` when the source advert supplied them so dashboards
 //! and fixtures can reason about the same scheduling inputs as the orchestrator.
-
 use blake3::Hasher;
 use hex::encode as hex_encode;
 use iroha_crypto::HybridSuite;
@@ -78,19 +77,15 @@ use std::{
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");
         process::exit(1);
     }
 }
-
 use base64::Engine as _;
-
 #[derive(Clone)]
 enum JsonSource {
     File(PathBuf),
@@ -2581,7 +2576,6 @@ fn to_hex(bytes: &[u8]) -> String {
     }
     out
 }
-
 fn format_multi_source_error(error: MultiSourceError) -> Result<String, String> {
     use MultiSourceError::*;
     match error {
@@ -2872,7 +2866,6 @@ fn parse_bps(value: &Value, field: &'static str, idx: usize) -> Result<u16, Stri
     }
     Ok(parsed as u16)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2881,7 +2874,6 @@ mod tests {
         path::{Path, PathBuf},
         sync::Arc,
     };
-
     use assert_cmd::Command as AssertCommand;
     use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
     use norito::to_bytes;
@@ -2899,9 +2891,7 @@ mod tests {
         provider_advert::ProviderCapabilitySoranetPqV1,
     };
     use tempfile::{NamedTempFile, TempDir, tempdir};
-
     use super::*;
-
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");

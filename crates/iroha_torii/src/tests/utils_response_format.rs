@@ -1,7 +1,5 @@
 use http_body_util::BodyExt as _;
-
 use super::*;
-
 #[derive(
     Clone,
     Debug,
@@ -14,16 +12,13 @@ use super::*;
 struct DummyPayload {
     value: u32,
 }
-
 #[derive(norito::derive::NoritoSerialize)]
 struct LegacyJsonSerializerMustNotRun;
-
 impl norito::json::JsonSerialize for LegacyJsonSerializerMustNotRun {
     fn json_serialize(&self, _out: &mut String) {
         panic!("bounded encoding must not invoke a legacy String serializer");
     }
 }
-
 #[tokio::test]
 async fn respond_with_format_produces_norito_bytes() {
     let payload = DummyPayload { value: 42 };
@@ -40,7 +35,6 @@ async fn respond_with_format_produces_norito_bytes() {
     let decoded: DummyPayload = norito::decode_from_bytes(&bytes).expect("decode Norito body");
     assert_eq!(decoded, payload);
 }
-
 #[tokio::test]
 async fn respond_with_format_produces_json() {
     let payload = DummyPayload { value: 7 };
@@ -53,7 +47,6 @@ async fn respond_with_format_produces_json() {
     let decoded: DummyPayload = norito::json::from_slice(&bytes).expect("decode JSON body");
     assert_eq!(decoded, payload);
 }
-
 #[tokio::test]
 async fn bounded_response_accepts_exact_norito_limit_and_rejects_next_byte() {
     let payload = DummyPayload { value: 99 };
@@ -69,7 +62,6 @@ async fn bounded_response_accepts_exact_norito_limit_and_rejects_next_byte() {
             .len(),
         exact
     );
-
     let error = match respond_with_format_bounded(payload, ResponseFormat::Norito, exact - 1) {
         Ok(_) => panic!("one byte below the exact frame must fail"),
         Err(error) => error,
@@ -82,7 +74,6 @@ async fn bounded_response_accepts_exact_norito_limit_and_rejects_next_byte() {
         }
     );
 }
-
 #[test]
 fn bounded_response_rejects_legacy_json_without_invoking_its_string_serializer() {
     let error = match respond_with_format_bounded(
@@ -95,7 +86,6 @@ fn bounded_response_rejects_legacy_json_without_invoking_its_string_serializer()
     };
     assert_eq!(error, BoundedResponseEncodeError::Serialization);
 }
-
 #[tokio::test]
 async fn bounded_response_accepts_exact_json_limit_and_rejects_next_byte() {
     let payload = DummyPayload { value: 99 };
@@ -117,7 +107,6 @@ async fn bounded_response_accepts_exact_json_limit_and_rejects_next_byte() {
     assert_eq!(bytes.len(), exact);
     let decoded: DummyPayload = norito::json::from_slice(&bytes).expect("decode bounded JSON");
     assert_eq!(decoded, payload);
-
     let error = match respond_with_format_bounded(payload, ResponseFormat::Json, exact - 1) {
         Ok(_) => panic!("one byte below the exact JSON body must fail"),
         Err(error) => error,
@@ -129,7 +118,6 @@ async fn bounded_response_accepts_exact_json_limit_and_rejects_next_byte() {
         }
     );
 }
-
 #[test]
 fn bounded_json_helper_accepts_exact_limit_and_rejects_one_byte_less() {
     let payload = DummyPayload { value: 7 };
@@ -144,13 +132,11 @@ fn bounded_json_helper_accepts_exact_limit_and_rejects_one_byte_less() {
         norito::json::BoundedJsonError::BodyTooLarge
     );
 }
-
 #[test]
 fn bounded_json_helper_supports_the_iterable_query_response_envelope() {
     use iroha_data_model::query::{
         QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
     };
-
     let response = QueryResponse::Iterable(QueryOutput {
         batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(vec![
             "bounded".to_owned(),
@@ -165,7 +151,6 @@ fn bounded_json_helper_supports_the_iterable_query_response_envelope() {
         ordinary
     );
 }
-
 #[test]
 fn typed_error_response_carries_bounded_telemetry_code() {
     let response = respond_with_status_and_format(
@@ -180,7 +165,6 @@ fn typed_error_response_carries_bounded_telemetry_code() {
             .map(HttpErrorCode::as_str),
         Some("idempotency_key_conflict")
     );
-
     let response = respond_with_status_and_format(
         StatusCode::BAD_REQUEST,
         ErrorEnvelope::new("raw/value/from/request", "invalid"),
@@ -194,7 +178,6 @@ fn typed_error_response_carries_bounded_telemetry_code() {
         Some("invalid_error_code")
     );
 }
-
 #[tokio::test]
 async fn unacceptable_representation_uses_typed_json_fallback() {
     let header = HeaderValue::from_static("image/png");
@@ -211,7 +194,6 @@ async fn unacceptable_representation_uses_typed_json_fallback() {
         norito::json::from_slice(&bytes).expect("decode typed error envelope");
     assert_eq!(envelope.code(), "response_not_acceptable");
 }
-
 #[tokio::test]
 async fn respond_value_with_format_keeps_dynamic_payloads_json_only() {
     let value = json::Value::from(7_u64);
@@ -224,7 +206,6 @@ async fn respond_value_with_format_keeps_dynamic_payloads_json_only() {
     let parsed: json::Value = json::from_slice(&bytes).expect("decode JSON payload");
     assert_eq!(parsed, json::Value::from(7_u64));
 }
-
 #[tokio::test]
 async fn respond_json_document_with_format_wraps_json_string_as_norito() {
     let mut object = json::Map::new();
@@ -235,7 +216,6 @@ async fn respond_json_document_with_format_wraps_json_string_as_norito() {
         ResponseFormat::Norito,
     )
     .into_parts();
-
     assert_eq!(parts.status, StatusCode::ACCEPTED);
     assert_eq!(
         parts.headers.get(CONTENT_TYPE),
@@ -250,7 +230,6 @@ async fn respond_json_document_with_format_wraps_json_string_as_norito() {
     let decoded: json::Value = json::from_str(&json).expect("decode JSON document");
     assert_eq!(decoded["ok"].as_bool(), Some(true));
 }
-
 #[tokio::test]
 async fn respond_json_document_with_format_renders_json() {
     let mut object = json::Map::new();
@@ -261,7 +240,6 @@ async fn respond_json_document_with_format_renders_json() {
         ResponseFormat::Json,
     )
     .into_parts();
-
     assert_eq!(parts.status, StatusCode::ACCEPTED);
     assert_eq!(
         parts.headers.get(CONTENT_TYPE),

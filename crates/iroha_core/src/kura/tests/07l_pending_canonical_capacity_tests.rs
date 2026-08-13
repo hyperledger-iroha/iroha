@@ -9,7 +9,6 @@ fn pending_canonical_capacity_fixture() -> (TempDir, Arc<Kura>) {
     kura.append_pending_block_for_bench(DummyBlocks::new().next());
     (temp_dir, kura)
 }
-
 fn pending_canonical_capacity_snapshot(kura: &Kura) -> u64 {
     let _prune_guard = kura.prune_lock.lock();
     kura.ensure_prune_recovery_not_required()
@@ -18,7 +17,6 @@ fn pending_canonical_capacity_snapshot(kura: &Kura) -> u64 {
     kura.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()
         .expect("measure pending canonical bytes")
 }
-
 fn pending_canonical_capacity_stable_required(kura: &Kura, pending: u64) -> u64 {
     kura.refresh_disk_usage_bytes()
         .expect("refresh pending capacity physical accounting");
@@ -48,11 +46,9 @@ fn pending_canonical_capacity_stable_required(kura: &Kura, pending: u64) -> u64 
         })
         .expect("pending stable capacity fits")
 }
-
 #[test]
 fn shared_autonomous_mutation_gate_counts_pending_canonical_bytes_exactly() {
     const ADDITIONAL_PEAK: u64 = 37;
-
     let (temp_dir, mut kura) = pending_canonical_capacity_fixture();
     let pending = pending_canonical_capacity_snapshot(&kura);
     assert!(
@@ -69,7 +65,6 @@ fn shared_autonomous_mutation_gate_counts_pending_canonical_bytes_exactly() {
         .post_wsv_lane_artifact_budget_reservations
         .lock()
         .clone();
-
     Arc::get_mut(&mut kura)
         .expect("pending capacity Kura remains exclusive")
         .max_disk_usage_bytes = exact_limit - 1;
@@ -110,7 +105,6 @@ fn shared_autonomous_mutation_gate_counts_pending_canonical_bytes_exactly() {
         *kura.post_wsv_lane_artifact_budget_reservations.lock(),
         reservations_before,
     );
-
     Arc::get_mut(&mut kura)
         .expect("pending capacity Kura remains exclusive at exact limit")
         .max_disk_usage_bytes = exact_limit;
@@ -134,7 +128,6 @@ fn shared_autonomous_mutation_gate_counts_pending_canonical_bytes_exactly() {
     };
     accepted.expect("the exact peak must be accepted");
 }
-
 #[test]
 fn startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation() {
     let (temp_dir, mut kura) = pending_canonical_capacity_fixture();
@@ -151,7 +144,6 @@ fn startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation(
         .post_wsv_lane_artifact_budget_reservations
         .lock()
         .clone();
-
     Arc::get_mut(&mut kura)
         .expect("startup capacity Kura remains exclusive")
         .max_disk_usage_bytes = exact_limit - 1;
@@ -173,7 +165,6 @@ fn startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation(
         *kura.post_wsv_lane_artifact_budget_reservations.lock(),
         reservations_before,
     );
-
     Arc::get_mut(&mut kura)
         .expect("startup capacity Kura remains exclusive at exact limit")
         .max_disk_usage_bytes = exact_limit;
@@ -187,7 +178,6 @@ fn startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation(
             .send(worker_kura.validate_configured_kura_capacity_after_startup_recovery())
             .expect("report startup capacity result");
     });
-
     let deadline = Instant::now() + Duration::from_secs(5);
     while kura.pending_budget_raw_scans.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
         thread::yield_now();

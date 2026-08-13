@@ -4,9 +4,7 @@ use std::{
     rc::Rc,
     sync::{Arc, Mutex, RwLock},
 };
-
 use impls::impls;
-
 struct Variant1;
 struct Variant2;
 struct Variant3;
@@ -15,7 +13,6 @@ struct Variant5;
 struct Variant6;
 struct Variant7;
 struct Variant8;
-
 #[derive(iroha_derive::FromVariant)]
 enum Enum {
     Variant1(Box<Variant1>),
@@ -27,7 +24,6 @@ enum Enum {
     Variant7(RwLock<Variant7>),
     Variant8(Variant8),
 }
-
 macro_rules! check_variant {
     ($container:ty, $no_container:ident) => {
         assert!(impls!(Enum: From<$container>), "Enum does not implement From<{}>", stringify!($container));

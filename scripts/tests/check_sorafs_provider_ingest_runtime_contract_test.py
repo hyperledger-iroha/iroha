@@ -1,5 +1,7 @@
 """Static contracts for the production SoraFS provider-ingest runtime."""
 
+import hashlib
+
 from pathlib import Path
 
 
@@ -21,6 +23,18 @@ DAEMON_RUNTIME_TESTS = (
     / "src"
     / "sorafs_provider_ingest_runtime"
     / "tests.rs"
+)
+QUARANTINE_RESTART_TEST = (
+    REPO_ROOT
+    / "crates"
+    / "irohad"
+    / "src"
+    / "sorafs_provider_ingest_runtime"
+    / "tests"
+    / "quarantine_restart.rs"
+)
+QUARANTINE_RESTART_SHA256 = (
+    "948a6740a3e9dd9629e60bae59fc47d7abe054e73bb1c7944216981f2a516786"
 )
 CONFIG_USER = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"
@@ -51,6 +65,20 @@ CLOSURE_LEDGER = REPO_ROOT / "specs" / "sorafs" / "v1_closure_ledger.md"
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def test_quarantine_restart_proof_is_frozen_connected_and_unignored() -> None:
+    raw = QUARANTINE_RESTART_TEST.read_bytes()
+    source = raw.decode("utf-8")
+    parent = _read(DAEMON_RUNTIME_TESTS)
+    name = "post_admission_quarantine_survives_restart_with_shared_chunks"
+
+    assert hashlib.sha256(raw).hexdigest() == QUARANTINE_RESTART_SHA256
+    assert parent.count("mod quarantine_restart;") == 1
+    assert source.count("#[tokio::test]") == 1
+    assert source.count(f"async fn {name}()") == 1
+    assert "#[ignore]" not in source
+    assert "#[should_panic" not in source
 
 
 def test_authenticated_source_pool_is_bounded_canonical_and_rechecked() -> None:

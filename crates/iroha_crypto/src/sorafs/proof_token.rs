@@ -3,21 +3,18 @@
 //! The types below encode the `ProofTokenV1` structure from the SoraFS gateway
 //! compliance plan and provide deterministic helpers for minting and verifying
 //! response headers (`Sora-Moderation-Token`).
-
 use std::{
     convert::TryFrom as _,
     string::String,
     time::{Duration, SystemTime, UNIX_EPOCH},
     vec::Vec,
 };
-
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use blake3::Hasher;
 use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Signer, SigningKey, VerifyingKey};
 use rand_core::TryCryptoRng;
 use thiserror::Error;
 use zeroize::Zeroizing;
-
 const FRAME_MAGIC: &[u8; 4] = b"SFGT";
 const DIGEST_DOMAIN: &[u8] = b"sorafs.proof_token.digest.v1";
 const SIGNING_DOMAIN: &[u8] = b"sorafs.proof_token.sign.v1";
@@ -25,24 +22,20 @@ const MAX_ENTRY_IDS: usize = 32;
 const MAX_ENTRY_LEN: usize = 255;
 const FLAG_HAS_EXPIRY: u8 = 0x01;
 const PROOF_TOKEN_SIGNATURE_PLACEHOLDER: [u8; SIGNATURE_LENGTH] = [0xA6; SIGNATURE_LENGTH];
-
 /// Secret used to derive the blinded digest portion of a token body.
 #[derive(Clone)]
 pub struct ProofTokenDigestKey(Zeroizing<[u8; 32]>);
-
 impl ProofTokenDigestKey {
     /// Construct a new digest key from raw bytes.
     #[must_use]
     pub fn new(bytes: [u8; 32]) -> Self {
         Self(Zeroizing::new(bytes))
     }
-
     #[must_use]
     fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 /// Moderation action classification embedded inside the token body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationAction {
@@ -57,7 +50,6 @@ pub enum ModerationAction {
     /// Reserved/custom action code.
     Custom(u8),
 }
-
 impl ModerationAction {
     #[must_use]
     fn to_u8(self) -> u8 {
@@ -69,7 +61,6 @@ impl ModerationAction {
             Self::Custom(code) => code,
         }
     }
-
     #[must_use]
     fn from_u8(code: u8) -> Self {
         match code {
@@ -81,7 +72,6 @@ impl ModerationAction {
         }
     }
 }
-
 /// Minting parameters for a [`ProofToken`].
 pub struct ProofTokenParams<'a> {
     /// Moderation action classification to encode.
@@ -95,7 +85,6 @@ pub struct ProofTokenParams<'a> {
     /// Optional expiry timestamp (rate limiting or warnings).
     pub expires_at: Option<SystemTime>,
 }
-
 /// Proof token issued for every gateway moderation action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofToken {
@@ -107,17 +96,14 @@ pub struct ProofToken {
     blinded_digest: [u8; 32],
     signature: Signature,
 }
-
 struct FrameReader<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
-
 impl<'a> FrameReader<'a> {
     fn new(bytes: &'a [u8], cursor: usize) -> Self {
         Self { bytes, cursor }
     }
-
     fn take(&mut self, len: usize) -> Result<&'a [u8], DecodeError> {
         let end = self.cursor.checked_add(len).ok_or(DecodeError::Truncated)?;
         if end > self.bytes.len() {
@@ -127,22 +113,18 @@ impl<'a> FrameReader<'a> {
         self.cursor = end;
         Ok(slice)
     }
-
     fn take_array<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
         let mut out = [0u8; N];
         out.copy_from_slice(self.take(N)?);
         Ok(out)
     }
-
     fn remaining(&self) -> usize {
         self.bytes.len().saturating_sub(self.cursor)
     }
 }
-
 impl ProofToken {
     /// Current on-wire version.
     pub const VERSION: u8 = 1;
-
     /// Mint a new proof token.
     #[allow(clippy::missing_errors_doc)]
     pub fn mint<R: TryCryptoRng>(
@@ -160,7 +142,6 @@ impl ProofToken {
                 actual: params.entry_ids.len(),
             });
         }
-
         let issued_at = to_unix_seconds(params.issued_at)?;
         let expires_at = match params.expires_at {
             Some(ts) => {
@@ -172,10 +153,8 @@ impl ProofToken {
             }
             None => None,
         };
-
         let mut token_id = [0u8; 16];
         fill_random(rng, "minting proof token id", &mut token_id)?;
-
         let mut entry_ids: Vec<String> = Vec::with_capacity(params.entry_ids.len());
         for &entry in params.entry_ids {
             if entry.is_empty() {
@@ -189,11 +168,9 @@ impl ProofToken {
             }
             entry_ids.push(entry.to_string());
         }
-
         let blinded_digest =
             compute_blinded_digest(digest_key, &token_id, params.evidence_digest, &entry_ids)
                 .map_err(MintError::Encoding)?;
-
         let mut token = Self {
             token_id,
             moderation: params.moderation,
@@ -210,7 +187,6 @@ impl ProofToken {
         token.signature = signing_key.sign(&message);
         Ok(token)
     }
-
     /// Try to serialize the token frame.
     ///
     /// # Errors
@@ -227,25 +203,21 @@ impl ProofToken {
             })?;
         body.extend_from_slice(&sig_len.to_be_bytes());
         body.extend_from_slice(&sig_bytes);
-
         let mut out = Vec::with_capacity(FRAME_MAGIC.len() + body.len());
         out.extend_from_slice(FRAME_MAGIC);
         out.extend_from_slice(&body);
         Ok(out)
     }
-
     /// Serialize the token frame.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         self.try_encode().unwrap_or_else(|_| FRAME_MAGIC.to_vec())
     }
-
     /// Serialize the token as URL-safe base64 (header-friendly).
     #[must_use]
     pub fn encode_base64(&self) -> String {
         encode_base64_url_no_pad(&self.encode())
     }
-
     /// Decode a token from its binary frame.
     ///
     /// # Errors
@@ -262,12 +234,10 @@ impl ProofToken {
             return Err(DecodeError::BadMagic);
         }
         let mut reader = FrameReader::new(bytes, FRAME_MAGIC.len());
-
         let version = reader.take_array::<1>()?[0];
         if version != Self::VERSION {
             return Err(DecodeError::UnsupportedVersion(version));
         }
-
         let flags = reader.take_array::<1>()?[0];
         if flags & !FLAG_HAS_EXPIRY != 0 {
             return Err(DecodeError::InvalidFlags(flags));
@@ -301,9 +271,7 @@ impl ProofToken {
                 value: expires_at,
             });
         }
-
         let token_id = reader.take_array::<16>()?;
-
         let entry_count = u16::from_be_bytes(reader.take_array::<2>()?) as usize;
         if entry_count == 0 {
             return Err(DecodeError::MissingEntries);
@@ -321,9 +289,7 @@ impl ProofToken {
             let entry = std::str::from_utf8(entry).map_err(|_| DecodeError::InvalidUtf8)?;
             entry_ids.push(entry.to_owned());
         }
-
         let blinded_digest = reader.take_array::<32>()?;
-
         let sig_len = u16::from_be_bytes(reader.take_array::<2>()?) as usize;
         let remaining = reader.remaining();
         if sig_len != remaining {
@@ -345,7 +311,6 @@ impl ProofToken {
         }
         let signature = crate::signature::ed25519::Ed25519Sha512::parse_signature(&sig_bytes)
             .map_err(|_| DecodeError::InvalidSignature)?;
-
         Ok(Self {
             token_id,
             moderation,
@@ -356,7 +321,6 @@ impl ProofToken {
             signature,
         })
     }
-
     /// Decode a token from its base64 representation.
     ///
     /// # Errors
@@ -367,57 +331,48 @@ impl ProofToken {
         let decoded = decode_base64_url_no_pad(s)?;
         Self::decode(&decoded)
     }
-
     /// Return the moderation action classification.
     #[must_use]
     pub fn moderation(&self) -> ModerationAction {
         self.moderation
     }
-
     /// UNIX timestamp (seconds) describing when the token was issued.
     #[must_use]
     pub fn issued_at(&self) -> SystemTime {
         self.checked_issued_at().unwrap_or(UNIX_EPOCH)
     }
-
     /// UNIX timestamp (seconds) describing when the token was issued, if it is
     /// representable by `SystemTime`.
     #[must_use]
     pub fn checked_issued_at(&self) -> Option<SystemTime> {
         unix_time_from_secs(self.issued_at)
     }
-
     /// Optional expiry timestamp.
     #[must_use]
     pub fn expires_at(&self) -> Option<SystemTime> {
         self.expires_at
             .map(|ts| unix_time_from_secs(ts).unwrap_or(UNIX_EPOCH))
     }
-
     /// Optional expiry timestamp, if present and representable by `SystemTime`.
     #[must_use]
     pub fn checked_expires_at(&self) -> Option<SystemTime> {
         self.expires_at.and_then(unix_time_from_secs)
     }
-
     /// Token identifier bytes (UUID-compatible).
     #[must_use]
     pub fn token_id(&self) -> [u8; 16] {
         self.token_id
     }
-
     /// Borrow the entry identifiers encoded in the token.
     #[must_use]
     pub fn entry_ids(&self) -> &[String] {
         &self.entry_ids
     }
-
     /// Access the blinded digest that commits to the moderation evidence.
     #[must_use]
     pub fn blinded_digest(&self) -> &[u8; 32] {
         &self.blinded_digest
     }
-
     /// Verify the detached Ed25519 signature covering the token body.
     ///
     /// # Errors
@@ -442,7 +397,6 @@ impl ProofToken {
             .verify_strict(&message, &signature)
             .map_err(|_| VerificationError::InvalidSignature)
     }
-
     /// Verify the detached Ed25519 signature using raw public-key bytes.
     ///
     /// # Errors
@@ -458,7 +412,6 @@ impl ProofToken {
                 .map_err(|_| VerificationError::InvalidSignature)?;
         self.verify_signature(&verifying_key)
     }
-
     /// Recompute the blinded digest using the shared secret and evidence hash.
     ///
     /// # Errors
@@ -479,7 +432,6 @@ impl ProofToken {
             Err(VerificationError::BlindedDigestMismatch)
         }
     }
-
     fn body_without_signature(&self) -> Result<Vec<u8>, EncodeError> {
         let mut out = Vec::new();
         out.push(Self::VERSION);
@@ -513,7 +465,6 @@ impl ProofToken {
         Ok(out)
     }
 }
-
 /// Errors surfaced while serializing proof tokens.
 #[derive(Debug, Clone, Copy, Error)]
 pub enum EncodeError {
@@ -542,7 +493,6 @@ pub enum EncodeError {
         actual: usize,
     },
 }
-
 /// Errors surfaced when minting new tokens.
 #[derive(Debug, Clone, Error)]
 pub enum MintError {
@@ -586,7 +536,6 @@ pub enum MintError {
     #[error("proof token body encoding failed: {0}")]
     Encoding(EncodeError),
 }
-
 /// Errors surfaced while decoding proof tokens.
 #[derive(Debug, Clone, Copy, Error)]
 pub enum DecodeError {
@@ -648,7 +597,6 @@ pub enum DecodeError {
     #[error("invalid base64 payload")]
     Base64,
 }
-
 /// Errors produced during verification.
 #[derive(Debug, Clone, Copy, Error)]
 pub enum VerificationError {
@@ -662,17 +610,14 @@ pub enum VerificationError {
     #[error("blinded digest mismatch")]
     BlindedDigestMismatch,
 }
-
 fn to_unix_seconds(time: SystemTime) -> Result<u64, MintError> {
     time.duration_since(UNIX_EPOCH)
         .map_err(|_| MintError::TimestampOutOfRange)
         .map(|duration| duration.as_secs())
 }
-
 fn unix_time_from_secs(secs: u64) -> Option<SystemTime> {
     UNIX_EPOCH.checked_add(Duration::from_secs(secs))
 }
-
 fn fill_random<R: TryCryptoRng>(
     rng: &mut R,
     operation: &'static str,
@@ -691,7 +636,6 @@ fn fill_random<R: TryCryptoRng>(
     }
     Ok(())
 }
-
 fn encode_base64_url_no_pad(bytes: &[u8]) -> String {
     let encoded_len =
         base64::encoded_len(bytes.len(), false).expect("proof token base64 length fits usize");
@@ -701,7 +645,6 @@ fn encode_base64_url_no_pad(bytes: &[u8]) -> String {
     buffer.truncate(written);
     buffer.into_iter().map(char::from).collect()
 }
-
 fn decode_base64_url_no_pad(s: &str) -> Result<Vec<u8>, DecodeError> {
     let mut buffer = vec![0u8; base64::decoded_len_estimate(s.len())];
     let written = base64::Engine::decode_slice(&URL_SAFE_NO_PAD, s, &mut buffer)
@@ -709,7 +652,6 @@ fn decode_base64_url_no_pad(s: &str) -> Result<Vec<u8>, DecodeError> {
     buffer.truncate(written);
     Ok(buffer)
 }
-
 fn compute_blinded_digest(
     digest_key: &ProofTokenDigestKey,
     token_id: &[u8; 16],
@@ -731,23 +673,19 @@ fn compute_blinded_digest(
     }
     Ok(hasher.finalize().into())
 }
-
 fn signing_message(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(SIGNING_DOMAIN.len() + body.len());
     out.extend_from_slice(SIGNING_DOMAIN);
     out.extend_from_slice(body);
     out
 }
-
 fn signature_bytes_are_all_zero(signature: &[u8; SIGNATURE_LENGTH]) -> bool {
     signature.iter().all(|&byte| byte == 0)
 }
-
 fn proof_token_signature_placeholder() -> Signature {
     crate::signature::ed25519::Ed25519Sha512::parse_signature(&PROOF_TOKEN_SIGNATURE_PLACEHOLDER)
         .expect("proof-token placeholder signature has canonical Ed25519 R material")
 }
-
 #[cfg(test)]
 mod tests {
     use curve25519_dalek::{
@@ -760,85 +698,64 @@ mod tests {
     use rand_chacha::ChaCha20Rng;
     use rand_core::{TryCryptoRng, TryRngCore};
     use sha2::{Digest, Sha512};
-
     use super::*;
-
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const ED25519_NONCANONICAL_IDENTITY: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn test_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[7u8; 32])
     }
-
     struct FailingTryRng;
-
     #[derive(Debug)]
     struct FailingTryRngError;
-
     impl std::fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing proof token RNG")
         }
     }
-
     impl TryRngCore for FailingTryRng {
         type Error = FailingTryRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingTryRngError)
         }
     }
-
     impl TryCryptoRng for FailingTryRng {}
-
     struct FixedTryRng {
         byte: u8,
     }
-
     impl TryRngCore for FixedTryRng {
         type Error = core::convert::Infallible;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok(u64::from_le_bytes([self.byte; 8]))
         }
-
         fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
             dest.fill(self.byte);
             Ok(())
         }
     }
-
     impl TryCryptoRng for FixedTryRng {}
-
     #[test]
     fn proof_token_signature_placeholder_is_nonzero() {
         let placeholder = proof_token_signature_placeholder();
         let payload = placeholder.to_bytes();
-
         assert_eq!(payload, PROOF_TOKEN_SIGNATURE_PLACEHOLDER);
         assert!(!payload.iter().all(|byte| *byte == 0));
     }
-
     #[test]
     fn mint_roundtrip() {
         let mut rng = ChaCha20Rng::seed_from_u64(42);
@@ -865,7 +782,6 @@ mod tests {
             .verify_blinded_digest(&digest_key, &evidence)
             .unwrap();
     }
-
     #[test]
     fn digest_key_clone_preserves_blinded_digest() {
         let digest_key = ProofTokenDigestKey::new([0x13; 32]);
@@ -873,15 +789,12 @@ mod tests {
         let token_id = [0x24; 16];
         let evidence = [0x42; 32];
         let entries = vec!["denylist/global".to_string(), "manual/guardian".to_string()];
-
         let original_digest = compute_blinded_digest(&digest_key, &token_id, &evidence, &entries)
             .expect("original digest");
         let cloned_digest =
             compute_blinded_digest(&cloned, &token_id, &evidence, &entries).expect("cloned digest");
-
         assert_eq!(original_digest, cloned_digest);
     }
-
     #[test]
     fn mint_reports_rng_failure() {
         let mut rng = FailingTryRng;
@@ -895,7 +808,6 @@ mod tests {
             issued_at: UNIX_EPOCH + Duration::from_secs(1_714_000_000),
             expires_at: None,
         };
-
         let err = ProofToken::mint(&mut rng, &digest_key, &signing, &params)
             .expect_err("mint should surface RNG failure");
         match err {
@@ -906,15 +818,12 @@ mod tests {
             other => panic!("expected RNG failure, got {other:?}"),
         }
     }
-
     #[test]
     fn fill_random_rejects_all_zero_token_id_material() {
         let mut rng = FixedTryRng { byte: 0 };
         let mut token_id = [0u8; 16];
-
         let err = fill_random(&mut rng, "minting proof token id", &mut token_id)
             .expect_err("all-zero proof token id material must fail");
-
         match err {
             MintError::RandomBytes { operation, message } => {
                 assert_eq!(operation, "minting proof token id");
@@ -923,7 +832,6 @@ mod tests {
             other => panic!("expected all-zero token id RandomBytes error, got {other:?}"),
         }
     }
-
     #[test]
     fn decode_truncated_token_prefixes_fail_closed() {
         let mut rng = ChaCha20Rng::seed_from_u64(43);
@@ -940,7 +848,6 @@ mod tests {
         let encoded = ProofToken::mint(&mut rng, &digest_key, &signing, &params)
             .expect("mint")
             .encode();
-
         for len in 0..encoded.len() {
             assert!(
                 ProofToken::decode(&encoded[..len]).is_err(),
@@ -948,7 +855,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn base64_roundtrip() {
         let mut rng = ChaCha20Rng::seed_from_u64(17);
@@ -967,18 +873,15 @@ mod tests {
         let decoded = ProofToken::decode_base64(&header).unwrap();
         assert_eq!(token, decoded);
     }
-
     #[test]
     fn decode_base64_rejects_malformed_text_and_invalid_frames() {
         let err = ProofToken::decode_base64("%%%").expect_err("invalid base64 should be rejected");
         assert!(matches!(err, DecodeError::Base64));
-
         let truncated = encode_base64_url_no_pad(FRAME_MAGIC);
         let err =
             ProofToken::decode_base64(&truncated).expect_err("truncated frame should be rejected");
         assert!(matches!(err, DecodeError::Truncated));
     }
-
     #[test]
     fn decode_rejects_empty_entries() {
         let token = ProofToken {
@@ -993,7 +896,6 @@ mod tests {
         let err = ProofToken::decode(&token.encode()).expect_err("empty entries should fail");
         assert!(matches!(err, DecodeError::MissingEntries));
     }
-
     #[test]
     fn decode_rejects_expiry_before_issue() {
         let token = ProofToken {
@@ -1014,7 +916,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn decode_rejects_unrepresentable_timestamps() {
         let issued_overflow = ProofToken {
@@ -1035,7 +936,6 @@ mod tests {
             }
             other => panic!("expected timestamp range error, got {other:?}"),
         }
-
         let expiry_overflow = ProofToken {
             token_id: [0u8; 16],
             moderation: ModerationAction::Block,
@@ -1055,7 +955,6 @@ mod tests {
             other => panic!("expected timestamp range error, got {other:?}"),
         }
     }
-
     #[test]
     fn timestamp_accessors_fail_closed_on_unrepresentable_values() {
         let token = ProofToken {
@@ -1067,12 +966,10 @@ mod tests {
             blinded_digest: [0u8; 32],
             signature: proof_token_signature_placeholder(),
         };
-
         assert!(token.checked_issued_at().is_none());
         assert_eq!(token.issued_at(), UNIX_EPOCH);
         assert!(token.checked_expires_at().is_none());
         assert_eq!(token.expires_at(), Some(UNIX_EPOCH));
-
         let no_expiry = ProofToken {
             expires_at: None,
             ..token
@@ -1080,7 +977,6 @@ mod tests {
         assert!(no_expiry.checked_expires_at().is_none());
         assert!(no_expiry.expires_at().is_none());
     }
-
     #[test]
     fn decode_rejects_unknown_flags() {
         let token = ProofToken {
@@ -1097,7 +993,6 @@ mod tests {
         let err = ProofToken::decode(&bytes).expect_err("unknown flags should fail");
         assert!(matches!(err, DecodeError::InvalidFlags(0x80)));
     }
-
     #[test]
     fn decode_rejects_all_zero_signature_material() {
         let token = ProofToken {
@@ -1109,13 +1004,10 @@ mod tests {
             blinded_digest: [0x42; 32],
             signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
         };
-
         let err = ProofToken::decode(&token.encode())
             .expect_err("all-zero proof-token signature must fail decoding");
-
         assert!(matches!(err, DecodeError::InertSignature));
     }
-
     #[test]
     fn decode_rejects_invalid_signature_r_material() {
         for invalid_r in [ED25519_SMALL_ORDER_POINT, ED25519_NONCANONICAL_IDENTITY] {
@@ -1135,14 +1027,11 @@ mod tests {
             let mut signature = token.signature.to_bytes();
             signature[..32].copy_from_slice(&invalid_r);
             token.signature = Signature::from_bytes(&signature);
-
             let err = ProofToken::decode(&token.encode())
                 .expect_err("invalid Ed25519 signature R must fail decoding");
-
             assert!(matches!(err, DecodeError::InvalidSignature));
         }
     }
-
     #[test]
     fn verify_signature_rejects_all_zero_signature_material() {
         let token = ProofToken {
@@ -1154,20 +1043,15 @@ mod tests {
             blinded_digest: [0x42; 32],
             signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
         };
-
         let err = token
             .verify_signature(&test_signing_key().verifying_key())
             .expect_err("all-zero proof-token signature must fail verification");
-
         assert!(matches!(err, VerificationError::InertSignature));
-
         let err = token
             .verify_signature_bytes(&test_signing_key().verifying_key().to_bytes())
             .expect_err("all-zero proof-token signature must fail byte verification");
-
         assert!(matches!(err, VerificationError::InertSignature));
     }
-
     #[test]
     fn verify_signature_rejects_invalid_signature_r_material() {
         for invalid_r in [ED25519_SMALL_ORDER_POINT, ED25519_NONCANONICAL_IDENTITY] {
@@ -1187,15 +1071,12 @@ mod tests {
             let mut signature = token.signature.to_bytes();
             signature[..32].copy_from_slice(&invalid_r);
             token.signature = Signature::from_bytes(&signature);
-
             let err = token
                 .verify_signature(&signing.verifying_key())
                 .expect_err("invalid Ed25519 signature R must fail verification admission");
-
             assert!(matches!(err, VerificationError::InvalidSignature));
         }
     }
-
     #[test]
     fn verify_signature_bytes_rejects_inert_or_malformed_public_key_material() {
         let mut rng = ChaCha20Rng::seed_from_u64(37);
@@ -1210,7 +1091,6 @@ mod tests {
             expires_at: None,
         };
         let token = ProofToken::mint(&mut rng, &digest_key, &signing, &params).expect("mint token");
-
         for invalid_public_key in [
             [0u8; 32],
             ED25519_SMALL_ORDER_POINT,
@@ -1219,11 +1099,9 @@ mod tests {
             let err = token
                 .verify_signature_bytes(&invalid_public_key)
                 .expect_err("invalid Ed25519 public-key material must fail verification");
-
             assert!(matches!(err, VerificationError::InvalidSignature));
         }
     }
-
     #[test]
     fn tampering_detected() {
         let mut rng = ChaCha20Rng::seed_from_u64(99);
@@ -1241,7 +1119,6 @@ mod tests {
         let token = ProofToken::mint(&mut rng, &digest_key, &signing, &params).unwrap();
         token.verify_signature(&verifying).unwrap();
         token.verify_blinded_digest(&digest_key, &evidence).unwrap();
-
         let mut bytes = token.encode();
         // Flip one byte inside the first entry id.
         let offset = FRAME_MAGIC.len() + 1 + 1 + 1 + 8 + 8 + 16 + 2 + 2;
@@ -1249,7 +1126,6 @@ mod tests {
         let decoded = ProofToken::decode(&bytes).unwrap();
         assert!(decoded.verify_signature(&verifying).is_err());
     }
-
     #[test]
     fn try_encode_rejects_unencodable_direct_entry_count_without_panic() {
         let token = ProofToken {
@@ -1261,7 +1137,6 @@ mod tests {
             blinded_digest: [0u8; 32],
             signature: proof_token_signature_placeholder(),
         };
-
         let err = token
             .try_encode()
             .expect_err("oversized direct entry count should not encode");
@@ -1282,7 +1157,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn unencodable_direct_entry_lengths_fail_closed_without_panic() {
         let digest_key = ProofTokenDigestKey::new([5; 32]);
@@ -1296,7 +1170,6 @@ mod tests {
             blinded_digest: [0u8; 32],
             signature: proof_token_signature_placeholder(),
         };
-
         let err = token
             .try_encode()
             .expect_err("oversized direct entry should not encode");
@@ -1316,7 +1189,6 @@ mod tests {
             Err(VerificationError::BlindedDigestMismatch)
         ));
     }
-
     #[test]
     fn verify_signature_rejects_low_order_public_key_signatures() {
         fn hash_mod_order(
@@ -1332,7 +1204,6 @@ mod tests {
             let k = curve25519_dalek::scalar::Scalar::from_hash(h);
             (k.to_bytes()[0] as usize) % order
         }
-
         let pk = VerifyingKey::from_bytes(&ED25519_SMALL_ORDER_POINT)
             .expect("low-order public key should parse");
         let a_point = pk.to_edwards();
@@ -1343,14 +1214,12 @@ mod tests {
             order += 1;
             assert!(order <= 8, "torsion order exceeded expected bound");
         }
-
         let mut torsion_points = Vec::with_capacity(order);
         let mut acc = EdwardsPoint::identity();
         for _ in 0..order {
             torsion_points.push(acc);
             acc += a_point;
         }
-
         let mut token = ProofToken {
             token_id: [0u8; 16],
             moderation: ModerationAction::Block,
@@ -1360,12 +1229,10 @@ mod tests {
             blinded_digest: [0u8; 32],
             signature: proof_token_signature_placeholder(),
         };
-
         for counter in 0u32..2048 {
             token.token_id[..4].copy_from_slice(&counter.to_le_bytes());
             let body = token.body_without_signature().expect("body");
             let message = signing_message(&body);
-
             for (m, r_point) in torsion_points.iter().enumerate() {
                 let k_mod = hash_mod_order(r_point, pk.as_bytes(), &message, order);
                 let expected_m = (order - k_mod) % order;
@@ -1383,7 +1250,6 @@ mod tests {
                 }
             }
         }
-
         panic!("failed to forge low-order proof token signature");
     }
 }

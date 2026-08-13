@@ -1,7 +1,5 @@
 use std::{error::Error, fmt};
-
 use super::{Quorum, QuorumError};
-
 /// Wire protocol version implemented by this crate.
 pub const PROTOCOL_VERSION_V4: u16 = 4;
 /// Minimum Byzantine fault tolerance supported by a production committee.
@@ -14,39 +12,33 @@ pub const MAX_FAULT_TOLERANCE: usize = 10;
 pub const MAX_VOTING_ROSTER_LEN: usize = 3 * MAX_FAULT_TOLERANCE + 1;
 /// Adjacent future timeout rounds retained for bounded pacemaker catch-up.
 pub(crate) const FUTURE_TIMEOUT_VOTE_LOOKAHEAD: u64 = 1;
-
 /// Whether a timeout-vote view belongs to the bounded current/future window.
 pub(crate) const fn timeout_vote_view_is_admissible(current_view: u64, vote_view: u64) -> bool {
     vote_view >= current_view
         && vote_view <= current_view.saturating_add(FUTURE_TIMEOUT_VOTE_LOOKAHEAD)
 }
-
 macro_rules! fixed_id {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
         #[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name([u8; 32]);
-
         impl $name {
             /// Constructs the value from its canonical 32-byte representation.
             #[must_use]
             pub const fn new(bytes: [u8; 32]) -> Self {
                 Self(bytes)
             }
-
             /// Returns the canonical byte representation.
             #[must_use]
             pub const fn as_bytes(&self) -> &[u8; 32] {
                 &self.0
             }
-
             /// Creates a deterministic value useful in fixtures and model traces.
             #[must_use]
             pub const fn repeat(byte: u8) -> Self {
                 Self([byte; 32])
             }
         }
-
         impl fmt::Debug for $name {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(formatter, "{}(", stringify!($name))?;
@@ -56,7 +48,6 @@ macro_rules! fixed_id {
                 formatter.write_str("…)")
             }
         }
-
         impl fmt::Display for $name {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 for byte in &self.0[..8] {
@@ -67,7 +58,6 @@ macro_rules! fixed_id {
         }
     };
 }
-
 fixed_id!(Digest, "An opaque, canonical 32-byte digest.");
 fixed_id!(
     NetworkId,
@@ -76,52 +66,44 @@ fixed_id!(
 fixed_id!(ContextId, "Digest identifying a frozen height context.");
 fixed_id!(ValidatorId, "Canonical identifier of a voting validator.");
 fixed_id!(Subject, "Digest identifying a proposed block body.");
-
 /// Voting power assigned to one validator or represented by a signer set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VotingPower(u64);
-
 impl VotingPower {
     /// Constructs a voting-power value.
     #[must_use]
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
-
     /// Returns the integer voting power.
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
 }
-
 /// A voting validator frozen into a height context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Validator {
     id: ValidatorId,
     power: VotingPower,
 }
-
 impl Validator {
     /// Constructs a validator entry.
     #[must_use]
     pub const fn new(id: ValidatorId, power: VotingPower) -> Self {
         Self { id, power }
     }
-
     /// Returns the validator identifier.
     #[must_use]
     pub const fn id(self) -> ValidatorId {
         self.id
     }
-
     /// Returns the validator voting power.
     #[must_use]
     pub const fn power(self) -> VotingPower {
         self.power
     }
 }
-
 /// Voting-power interpretation selected by genesis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum VotingMode {
@@ -130,38 +112,32 @@ pub enum VotingMode {
     /// Stake selects the epoch-frozen committee; every member has one vote.
     Npos,
 }
-
 /// Height and view identifying a protocol round.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Round {
     height: u64,
     view: u64,
 }
-
 impl Round {
     /// Constructs a round.
     #[must_use]
     pub const fn new(height: u64, view: u64) -> Self {
         Self { height, view }
     }
-
     /// Returns the block height.
     #[must_use]
     pub const fn height(self) -> u64 {
         self.height
     }
-
     /// Returns the view within the height.
     #[must_use]
     pub const fn view(self) -> u64 {
         self.view
     }
 }
-
 /// Local incarnation counter used to reject stale asynchronous completions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Generation(u64);
-
 impl Generation {
     /// Initial generation for a fresh process/view ownership episode.
     ///
@@ -169,24 +145,20 @@ impl Generation {
     /// changes.  Only a strict lock upgrade for the already-installed timeout
     /// round increments this local counter.
     pub(crate) const INITIAL: Self = Self(0);
-
     /// Constructs a generation.
     #[must_use]
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
-
     /// Returns the numeric generation.
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
-
     pub(crate) fn next(self) -> Option<Self> {
         self.0.checked_add(1).map(Self)
     }
 }
-
 /// Tag attached to every adapter completion and authenticated input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EventTag {
@@ -194,7 +166,6 @@ pub struct EventTag {
     view: u64,
     generation: Generation,
 }
-
 impl EventTag {
     /// Constructs an event tag.
     #[must_use]
@@ -205,25 +176,21 @@ impl EventTag {
             generation,
         }
     }
-
     /// Returns the tagged height.
     #[must_use]
     pub const fn height(self) -> u64 {
         self.height
     }
-
     /// Returns the tagged view.
     #[must_use]
     pub const fn view(self) -> u64 {
         self.view
     }
-
     /// Returns the tagged local generation.
     #[must_use]
     pub const fn generation(self) -> Generation {
         self.generation
     }
-
     /// Whether this tag is a strictly later local incarnation at the same
     /// height.
     ///
@@ -240,7 +207,6 @@ impl EventTag {
                 || (self.view == previous.view && self.generation.0 > previous.generation.0))
     }
 }
-
 /// The two voting phases of the global Sumeragi v2 protocol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Phase {
@@ -249,7 +215,6 @@ pub enum Phase {
     /// Certifies finality for a prepared subject.
     Commit,
 }
-
 /// Stable identity of a quorum certificate, independent of its signature set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CertificateRef {
@@ -259,14 +224,12 @@ pub struct CertificateRef {
     phase: Phase,
     subject: Subject,
 }
-
 impl CertificateRef {
     /// Constructs a certificate reference.
     #[must_use]
     pub const fn new(context_id: ContextId, round: Round, phase: Phase, subject: Subject) -> Self {
         Self::new_with_proposal_round(context_id, round, round, phase, subject)
     }
-
     /// Constructs a certificate reference with an explicit proposal round.
     /// Validation requires it to equal `round`; the explicit form is retained
     /// for canonical decode and adversarial fixtures.
@@ -286,37 +249,31 @@ impl CertificateRef {
             subject,
         }
     }
-
     /// Returns the referenced height context.
     #[must_use]
     pub const fn context_id(self) -> ContextId {
         self.context_id
     }
-
     /// Returns the referenced round.
     #[must_use]
     pub const fn round(self) -> Round {
         self.round
     }
-
     /// Returns the proposal round, which equals the certified round when valid.
     #[must_use]
     pub const fn proposal_round(self) -> Round {
         self.proposal_round
     }
-
     /// Returns the referenced phase.
     #[must_use]
     pub const fn phase(self) -> Phase {
         self.phase
     }
-
     /// Returns the referenced subject.
     #[must_use]
     pub const fn subject(self) -> Subject {
         self.subject
     }
-
     /// Return whether two certificates concern one immutable body at one height.
     ///
     /// The view and phase are intentionally excluded so a Prepare lock and a
@@ -333,7 +290,6 @@ impl CertificateRef {
             other.subject,
         )
     }
-
     /// Returns whether both references certify the same committed decision.
     ///
     /// An immutable body may acquire a CommitQC before or after unchanged
@@ -346,7 +302,6 @@ impl CertificateRef {
             && self.same_height_subject(other)
     }
 }
-
 /// Immutable consensus inputs for one block height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeightContext {
@@ -365,7 +320,6 @@ pub struct HeightContext {
     da_layout_hash: Digest,
     leader_seed: Digest,
 }
-
 impl HeightContext {
     /// Constructs and validates a frozen height context.
     ///
@@ -403,7 +357,6 @@ impl HeightContext {
             leader_seed,
         )
     }
-
     /// Construct the first context after an authenticated hash-only snapshot boundary.
     ///
     /// The wire adapter admits this constructor only after verifying the complete typed bootstrap
@@ -441,7 +394,6 @@ impl HeightContext {
             leader_seed,
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn new_inner(
         id: ContextId,
@@ -519,91 +471,76 @@ impl HeightContext {
             leader_seed,
         })
     }
-
     /// Returns the protocol version.
     #[must_use]
     pub const fn protocol_version(&self) -> u16 {
         self.protocol_version
     }
-
     /// Returns the frozen context identifier.
     #[must_use]
     pub const fn id(&self) -> ContextId {
         self.id
     }
-
     /// Returns the exact genesis-derived network identifier.
     #[must_use]
     pub const fn network_id(&self) -> NetworkId {
         self.network_id
     }
-
     /// Returns the block height.
     #[must_use]
     pub const fn height(&self) -> u64 {
         self.height
     }
-
     /// Returns the parent `CommitQC` reference, if the height is not genesis.
     #[must_use]
     pub const fn parent_commit(&self) -> Option<CertificateRef> {
         self.parent_commit
     }
-
     /// Return whether an audited snapshot, rather than a parent CommitQC, anchors this height.
     #[must_use]
     pub const fn is_snapshot_bootstrap(&self) -> bool {
         self.snapshot_bootstrap
     }
-
     /// Returns the epoch containing this height.
     #[must_use]
     pub const fn epoch(&self) -> u64 {
         self.epoch
     }
-
     /// Returns the canonically ordered voting roster.
     #[must_use]
     pub fn roster(&self) -> &[Validator] {
         &self.roster
     }
-
     /// Returns the selected voting mode.
     #[must_use]
     pub const fn mode(&self) -> VotingMode {
         self.mode
     }
-
     /// Returns the total voting power.
     #[must_use]
     pub const fn total_voting_power(&self) -> VotingPower {
         self.total_voting_power
     }
-
     /// Returns the strict two-thirds count threshold.
     #[must_use]
     pub const fn minimum_signer_count(&self) -> usize {
         self.roster.len() - (self.roster.len() - 1) / 3
     }
-
     /// Returns the frozen Nexus/AMX consensus-context commitment.
     #[must_use]
     pub const fn nexus_amx_context_hash(&self) -> Digest {
         self.nexus_amx_context_hash
     }
-
     /// Returns the frozen V1 boot execution-policy identity.
     #[must_use]
     pub const fn execution_policy_hash(&self) -> Digest {
         self.execution_policy_hash
     }
-
     /// Returns the deterministic data-availability layout commitment.
     #[must_use]
     pub const fn da_layout_hash(&self) -> Digest {
         self.da_layout_hash
     }
-
     /// Returns a roster entry by identifier.
     #[must_use]
     pub fn validator(&self, id: &ValidatorId) -> Option<Validator> {
@@ -612,7 +549,6 @@ impl HeightContext {
             .ok()
             .map(|index| self.roster[index])
     }
-
     /// Returns the expected leader for a view.
     ///
     /// `leader_seed` is the adapter-supplied
@@ -635,7 +571,6 @@ impl HeightContext {
         self.roster[(start + view_offset) % self.roster.len()].id
     }
 }
-
 /// Failure while constructing a frozen height context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeightContextError {
@@ -658,7 +593,6 @@ pub enum HeightContextError {
     /// The parent reference is not a `CommitQC` for the preceding height.
     InvalidParentCommit,
 }
-
 impl fmt::Display for HeightContextError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -688,54 +622,45 @@ impl fmt::Display for HeightContextError {
         }
     }
 }
-
 impl Error for HeightContextError {}
-
 /// Opaque signature bytes produced and checked by the cryptographic adapter.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OpaqueSignature(Vec<u8>);
-
 impl OpaqueSignature {
     /// Constructs opaque signature bytes.
     #[must_use]
     pub fn new(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }
-
     /// Borrows the opaque bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 }
-
 /// One validator signature included in a QC or TC.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SignatureShare {
     signer: ValidatorId,
     signature: OpaqueSignature,
 }
-
 impl SignatureShare {
     /// Constructs a signature share.
     #[must_use]
     pub fn new(signer: ValidatorId, signature: OpaqueSignature) -> Self {
         Self { signer, signature }
     }
-
     /// Returns the signer.
     #[must_use]
     pub const fn signer(&self) -> ValidatorId {
         self.signer
     }
-
     /// Returns the opaque signature.
     #[must_use]
     pub const fn signature(&self) -> &OpaqueSignature {
         &self.signature
     }
 }
-
 /// Vote over one subject in one phase and round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Vote {
@@ -746,7 +671,6 @@ pub struct Vote {
     subject: Subject,
     signer: ValidatorId,
 }
-
 impl Vote {
     /// Constructs a vote.
     #[must_use]
@@ -759,7 +683,6 @@ impl Vote {
     ) -> Self {
         Self::new_with_proposal_round(context_id, round, round, phase, subject, signer)
     }
-
     /// Constructs a vote with an explicit proposal round. Validation requires
     /// it to equal `round`; the explicit form is retained for decode adapters
     /// and adversarial fixtures.
@@ -781,43 +704,36 @@ impl Vote {
             signer,
         }
     }
-
     /// Returns the height context identifier.
     #[must_use]
     pub const fn context_id(self) -> ContextId {
         self.context_id
     }
-
     /// Returns the vote round.
     #[must_use]
     pub const fn round(self) -> Round {
         self.round
     }
-
     /// Returns the proposal round, which equals the vote round when valid.
     #[must_use]
     pub const fn proposal_round(self) -> Round {
         self.proposal_round
     }
-
     /// Returns the vote phase.
     #[must_use]
     pub const fn phase(self) -> Phase {
         self.phase
     }
-
     /// Returns the voted subject.
     #[must_use]
     pub const fn subject(self) -> Subject {
         self.subject
     }
-
     /// Returns the signer.
     #[must_use]
     pub const fn signer(self) -> ValidatorId {
         self.signer
     }
-
     /// Return whether two validators voted for the exact same signable statement.
     ///
     /// The authenticated signer is intentionally excluded: a quorum is formed
@@ -844,41 +760,35 @@ impl Vote {
         )
     }
 }
-
 /// Authenticated vote whose signature has already been checked by an adapter.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SignedVote {
     vote: Vote,
     signature: OpaqueSignature,
 }
-
 impl SignedVote {
     /// Constructs an authenticated vote.
     #[must_use]
     pub fn new(vote: Vote, signature: OpaqueSignature) -> Self {
         Self { vote, signature }
     }
-
     /// Returns the signed vote body.
     #[must_use]
     pub const fn vote(&self) -> Vote {
         self.vote
     }
-
     /// Returns its opaque signature.
     #[must_use]
     pub const fn signature(&self) -> &OpaqueSignature {
         &self.signature
     }
 }
-
 /// A quorum certificate for a Prepare or Commit vote set.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct QuorumCertificate {
     reference: CertificateRef,
     signatures: Vec<SignatureShare>,
 }
-
 impl QuorumCertificate {
     /// Constructs a quorum certificate from canonically ordered signatures.
     #[must_use]
@@ -888,43 +798,36 @@ impl QuorumCertificate {
             signatures,
         }
     }
-
     /// Returns the stable certificate reference.
     #[must_use]
     pub const fn reference(&self) -> CertificateRef {
         self.reference
     }
-
     /// Returns the certificate round.
     #[must_use]
     pub const fn round(&self) -> Round {
         self.reference.round
     }
-
     /// Returns the exact proposal round, equal to the certificate round.
     #[must_use]
     pub const fn proposal_round(&self) -> Round {
         self.reference.proposal_round
     }
-
     /// Returns the certificate phase.
     #[must_use]
     pub const fn phase(&self) -> Phase {
         self.reference.phase
     }
-
     /// Returns the certified subject.
     #[must_use]
     pub const fn subject(&self) -> Subject {
         self.reference.subject
     }
-
     /// Returns the canonical signature shares.
     #[must_use]
     pub fn signatures(&self) -> &[SignatureShare] {
         &self.signatures
     }
-
     /// Validates the context, height, signer order, and both quorum thresholds.
     ///
     /// # Errors
@@ -945,7 +848,6 @@ impl QuorumCertificate {
         Quorum::require(context, &signers)
     }
 }
-
 /// Payload identity and deterministic data-availability layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PayloadManifest {
@@ -955,7 +857,6 @@ pub struct PayloadManifest {
     byte_len: u64,
     chunk_count: u32,
 }
-
 impl PayloadManifest {
     /// Constructs a payload manifest.
     #[must_use]
@@ -974,38 +875,32 @@ impl PayloadManifest {
             chunk_count,
         }
     }
-
     /// Returns the subject derived from the exact block body.
     #[must_use]
     pub const fn subject(&self) -> Subject {
         self.subject
     }
-
     /// Returns the full payload hash.
     #[must_use]
     pub const fn payload_hash(&self) -> Digest {
         self.payload_hash
     }
-
     /// Returns the chunk-layout Merkle root.
     #[must_use]
     pub const fn chunk_root(&self) -> Digest {
         self.chunk_root
     }
-
     /// Returns the exact encoded byte length.
     #[must_use]
     pub const fn byte_len(&self) -> u64 {
         self.byte_len
     }
-
     /// Returns the number of chunks.
     #[must_use]
     pub const fn chunk_count(&self) -> u32 {
         self.chunk_count
     }
 }
-
 /// One payload chunk transported outside the reducer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PayloadChunk {
@@ -1014,7 +909,6 @@ pub struct PayloadChunk {
     bytes: Vec<u8>,
     proof: Vec<Digest>,
 }
-
 impl PayloadChunk {
     /// Constructs a payload chunk and its Merkle proof.
     #[must_use]
@@ -1026,32 +920,27 @@ impl PayloadChunk {
             proof,
         }
     }
-
     /// Returns the payload subject.
     #[must_use]
     pub const fn subject(&self) -> Subject {
         self.subject
     }
-
     /// Returns the zero-based chunk index.
     #[must_use]
     pub const fn index(&self) -> u32 {
         self.index
     }
-
     /// Returns the chunk bytes.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
-
     /// Returns the Merkle proof supplied by the transport adapter.
     #[must_use]
     pub fn proof(&self) -> &[Digest] {
         &self.proof
     }
 }
-
 /// Justification required by a proposal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProposalJustification {
@@ -1060,7 +949,6 @@ pub enum ProposalJustification {
     /// A later view is justified by a timeout certificate for the prior view.
     Timeout(TimeoutCertificate),
 }
-
 /// A proposal from the deterministic leader.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Proposal {
@@ -1070,7 +958,6 @@ pub struct Proposal {
     manifest: PayloadManifest,
     justification: ProposalJustification,
 }
-
 impl Proposal {
     /// Constructs a proposal.
     #[must_use]
@@ -1089,45 +976,38 @@ impl Proposal {
             justification,
         }
     }
-
     /// Returns the height context identifier.
     #[must_use]
     pub const fn context_id(&self) -> ContextId {
         self.context_id
     }
-
     /// Returns the proposal round.
     #[must_use]
     pub const fn round(&self) -> Round {
         self.round
     }
-
     /// Returns the proposer.
     #[must_use]
     pub const fn proposer(&self) -> ValidatorId {
         self.proposer
     }
-
     /// Returns the payload manifest.
     #[must_use]
     pub const fn manifest(&self) -> &PayloadManifest {
         &self.manifest
     }
-
     /// Returns the proposal justification.
     #[must_use]
     pub const fn justification(&self) -> &ProposalJustification {
         &self.justification
     }
 }
-
 /// Authenticated proposal received from the network.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignedProposal {
     proposal: Proposal,
     signature: OpaqueSignature,
 }
-
 impl SignedProposal {
     /// Constructs an authenticated proposal.
     #[must_use]
@@ -1137,20 +1017,17 @@ impl SignedProposal {
             signature,
         }
     }
-
     /// Returns the proposal.
     #[must_use]
     pub const fn proposal(&self) -> &Proposal {
         &self.proposal
     }
-
     /// Returns the opaque signature.
     #[must_use]
     pub const fn signature(&self) -> &OpaqueSignature {
         &self.signature
     }
 }
-
 /// A durable timeout intent for one view.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TimeoutVote {
@@ -1159,7 +1036,6 @@ pub struct TimeoutVote {
     signer: ValidatorId,
     highest_prepare: Option<QuorumCertificate>,
 }
-
 impl TimeoutVote {
     /// Constructs a timeout vote.
     #[must_use]
@@ -1176,31 +1052,26 @@ impl TimeoutVote {
             highest_prepare,
         }
     }
-
     /// Returns the height context identifier.
     #[must_use]
     pub const fn context_id(&self) -> ContextId {
         self.context_id
     }
-
     /// Returns the timed-out round.
     #[must_use]
     pub const fn round(&self) -> Round {
         self.round
     }
-
     /// Returns the signer.
     #[must_use]
     pub const fn signer(&self) -> ValidatorId {
         self.signer
     }
-
     /// Returns the highest durable `PrepareQC` observed by the signer.
     #[must_use]
     pub const fn highest_prepare(&self) -> Option<&QuorumCertificate> {
         self.highest_prepare.as_ref()
     }
-
     /// Returns the stable reference authenticated by this vote.
     #[must_use]
     pub fn highest_prepare_ref(&self) -> Option<CertificateRef> {
@@ -1209,41 +1080,35 @@ impl TimeoutVote {
             .map(QuorumCertificate::reference)
     }
 }
-
 /// Authenticated timeout vote.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SignedTimeoutVote {
     vote: TimeoutVote,
     signature: OpaqueSignature,
 }
-
 impl SignedTimeoutVote {
     /// Constructs an authenticated timeout vote.
     #[must_use]
     pub fn new(vote: TimeoutVote, signature: OpaqueSignature) -> Self {
         Self { vote, signature }
     }
-
     /// Returns the timeout vote.
     #[must_use]
     pub fn vote(&self) -> TimeoutVote {
         self.vote.clone()
     }
-
     /// Returns the opaque signature.
     #[must_use]
     pub const fn signature(&self) -> &OpaqueSignature {
         &self.signature
     }
 }
-
 /// Timeout signatures grouped by the stable identity of the reported high QC.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TimeoutSignatureGroup {
     highest_prepare: Option<QuorumCertificate>,
     signatures: Vec<SignatureShare>,
 }
-
 impl TimeoutSignatureGroup {
     /// Constructs a timeout-signature group.
     #[must_use]
@@ -1256,13 +1121,11 @@ impl TimeoutSignatureGroup {
             signatures,
         }
     }
-
     /// Returns the full `PrepareQC` reported by this group, if any.
     #[must_use]
     pub const fn highest_prepare(&self) -> Option<&QuorumCertificate> {
         self.highest_prepare.as_ref()
     }
-
     /// Returns the stable identity signed by members of this group.
     #[must_use]
     pub fn highest_prepare_ref(&self) -> Option<CertificateRef> {
@@ -1270,14 +1133,12 @@ impl TimeoutSignatureGroup {
             .as_ref()
             .map(QuorumCertificate::reference)
     }
-
     /// Returns the canonical timeout signature shares.
     #[must_use]
     pub fn signatures(&self) -> &[SignatureShare] {
         &self.signatures
     }
 }
-
 /// Certificate proving that an equal-vote quorum timed out one view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TimeoutCertificate {
@@ -1285,7 +1146,6 @@ pub struct TimeoutCertificate {
     round: Round,
     groups: Vec<TimeoutSignatureGroup>,
 }
-
 impl TimeoutCertificate {
     /// Constructs a timeout certificate.
     #[must_use]
@@ -1296,25 +1156,21 @@ impl TimeoutCertificate {
             groups,
         }
     }
-
     /// Returns the height context identifier.
     #[must_use]
     pub const fn context_id(&self) -> ContextId {
         self.context_id
     }
-
     /// Returns the timed-out round.
     #[must_use]
     pub const fn round(&self) -> Round {
         self.round
     }
-
     /// Returns all high-QC signature groups.
     #[must_use]
     pub fn groups(&self) -> &[TimeoutSignatureGroup] {
         &self.groups
     }
-
     /// Returns the deterministically highest `PrepareQC` carried by the groups.
     #[must_use]
     pub fn highest_prepare(&self) -> Option<&QuorumCertificate> {
@@ -1323,7 +1179,6 @@ impl TimeoutCertificate {
             .filter_map(TimeoutSignatureGroup::highest_prepare)
             .max_by_key(|certificate| (certificate.round().view(), certificate.subject()))
     }
-
     /// Validates nested `PrepareQC`s, canonical group ordering, signer
     /// disjointness, and the union's equal-vote quorum.
     ///
@@ -1333,7 +1188,6 @@ impl TimeoutCertificate {
     /// overlapping groups, conflicting maxima, or an insufficient signer union.
     pub fn validate(&self, context: &HeightContext) -> Result<Quorum, QuorumError> {
         use std::collections::BTreeSet;
-
         if self.context_id != context.id() {
             return Err(QuorumError::ContextMismatch);
         }
@@ -1385,7 +1239,6 @@ impl TimeoutCertificate {
         Quorum::require(context, &ordered)
     }
 }
-
 /// Versioned Sumeragi v2 network message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConsensusMessageV2 {
@@ -1404,21 +1257,17 @@ pub enum ConsensusMessageV2 {
     /// One body chunk returned by the transport adapter.
     BodyChunk(PayloadChunk),
 }
-
 #[cfg(test)]
 mod tests {
     use super::{EventTag, Generation};
-
     #[test]
     fn event_tag_advance_is_lexicographic_within_one_height() {
         let previous = EventTag::new(7, 3, Generation::new(u64::MAX));
         let later_view = EventTag::new(7, 4, Generation::INITIAL);
         assert!(later_view.strictly_advances(previous));
-
         let same_view_previous = EventTag::new(7, 4, Generation::new(8));
         let same_view_upgrade = EventTag::new(7, 4, Generation::new(9));
         assert!(same_view_upgrade.strictly_advances(same_view_previous));
-
         assert!(!same_view_previous.strictly_advances(same_view_previous));
         assert!(
             !EventTag::new(7, 3, Generation::new(u64::MAX)).strictly_advances(same_view_previous)

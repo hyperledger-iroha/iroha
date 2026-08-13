@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-
 use eyre::{Result, WrapErr, bail};
 use hickory_proto::{
     op::{Message, Query, ResponseCode},
@@ -7,7 +6,6 @@ use hickory_proto::{
 };
 use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use tracing::warn;
-
 use crate::{
     bundle::ProofBundleV1,
     config::{FreezeMetadata, FreezeState, StaticZone},
@@ -18,7 +16,6 @@ use crate::{
     },
     rad::{ResolverAttestation, rad_retained_bytes},
 };
-
 /// In-memory resolver state shared between tasks.
 #[derive(Debug, Default)]
 pub struct ResolverState {
@@ -31,7 +28,6 @@ pub struct ResolverState {
     rad_retained_bytes: usize,
     static_retained_bytes: usize,
 }
-
 impl ResolverState {
     #[must_use]
     pub fn new(resolver_id: String, region: String) -> Self {
@@ -46,17 +42,14 @@ impl ResolverState {
             static_retained_bytes: 0,
         }
     }
-
     #[must_use]
     pub fn resolver_id(&self) -> &str {
         &self.resolver_id
     }
-
     #[must_use]
     pub fn region(&self) -> &str {
         &self.region
     }
-
     pub fn update_bundles(
         &mut self,
         bundles: HashMap<String, ProofBundleV1>,
@@ -80,19 +73,16 @@ impl ResolverState {
                 diff.added.push((namehash.clone(), snapshot.clone()));
             }
         }
-
         for (namehash, bundle) in &self.bundles {
             if !bundles.contains_key(namehash) {
                 let snapshot = BundleSnapshot::from_bundle(bundle);
                 diff.removed.push((namehash.clone(), snapshot));
             }
         }
-
         self.bundles = bundles;
         self.bundle_retained_bytes = retained_bytes;
         Ok(diff)
     }
-
     pub fn update_resolver_adverts(
         &mut self,
         adverts: HashMap<String, ResolverAttestation>,
@@ -108,18 +98,15 @@ impl ResolverState {
                 None => diff.added.push(resolver_id.clone()),
             }
         }
-
         for resolver_id in self.resolver_adverts.keys() {
             if !adverts.contains_key(resolver_id) {
                 diff.removed.push(resolver_id.clone());
             }
         }
-
         self.resolver_adverts = adverts;
         self.rad_retained_bytes = retained_bytes;
         Ok(diff)
     }
-
     pub(crate) fn update_static_zones(&mut self, zones: &[StaticZone]) -> Result<()> {
         if zones.len() > MAX_STATIC_ZONES {
             bail!(
@@ -140,7 +127,6 @@ impl ResolverState {
             self.bundle_retained_bytes,
             self.rad_retained_bytes,
         )?;
-
         let mut next = HashMap::new();
         next.try_reserve(zones.len())
             .wrap_err("failed to reserve bounded static-zone state map")?;
@@ -157,32 +143,26 @@ impl ResolverState {
         self.static_retained_bytes = retained_bytes;
         Ok(())
     }
-
     fn admit_projected_state(&self, bundle_bytes: usize, rad_bytes: usize) -> Result<()> {
         admitted_state_retained_bytes(self.static_retained_bytes, bundle_bytes, rad_bytes)?;
         Ok(())
     }
-
     #[must_use]
     pub fn bundle_count(&self) -> usize {
         self.bundles.len()
     }
-
     #[must_use]
     pub fn zone_count(&self) -> usize {
         self.bundles.len()
     }
-
     #[must_use]
     pub fn resolver_advert_count(&self) -> usize {
         self.resolver_adverts.len()
     }
-
     #[must_use]
     pub fn static_zone_count(&self) -> usize {
         self.static_zones.len()
     }
-
     /// Remove proof bundles and resolver attestations that are outside their validity windows.
     pub fn prune_stale_entries(&mut self, now_unix: i64) -> Result<ExpiryDiff> {
         let mut diff = ExpiryDiff::default();
@@ -192,7 +172,6 @@ impl ResolverState {
         diff.expired_resolvers
             .try_reserve(self.resolver_adverts.len())
             .wrap_err("failed to reserve resolver-expiry diff")?;
-
         self.bundles.retain(|namehash, bundle| {
             let issued_at = bundle.freshness.issued_at as i64;
             let expires_at = bundle.freshness.expires_at as i64;
@@ -205,7 +184,6 @@ impl ResolverState {
             }
             true
         });
-
         self.resolver_adverts.retain(|resolver_id, advert| {
             match advert.valid_from_unix.cmp(&(now_unix as u64)) {
                 std::cmp::Ordering::Greater => {
@@ -227,12 +205,10 @@ impl ResolverState {
                 _ => true,
             }
         });
-
         self.bundle_retained_bytes = bundle_map_retained_bytes(&self.bundles)?;
         self.rad_retained_bytes = rad_map_retained_bytes(&self.resolver_adverts)?;
         Ok(diff)
     }
-
     /// Resolve a DNS message using the in-memory state.
     #[must_use]
     pub fn resolve_message(&self, request: &Message) -> Message {
@@ -244,7 +220,6 @@ impl ResolverState {
             dns::build_nxdomain_response(request)
         }
     }
-
     /// Produce a metrics snapshot derived from the in-memory view.
     #[must_use]
     pub fn metrics_snapshot(&self, now_unix: i64) -> ResolverStateMetrics {
@@ -264,7 +239,6 @@ impl ResolverState {
                 None => ttl,
             });
         }
-
         ResolverStateMetrics {
             resolver_id: self.resolver_id.clone(),
             region: self.region.clone(),
@@ -275,7 +249,6 @@ impl ResolverState {
             proof_ttl_min_secs,
         }
     }
-
     fn resolve_static(&self, request: &Message) -> Option<Message> {
         let query = request.queries.first()?;
         let key = canonical_query_name(query);
@@ -303,7 +276,6 @@ impl ResolverState {
         ))
     }
 }
-
 fn map_bucket_bytes<K, V>(capacity: usize) -> Result<usize> {
     capacity
         .checked_mul(std::mem::size_of::<(K, V)>())
@@ -312,7 +284,6 @@ fn map_bucket_bytes<K, V>(capacity: usize) -> Result<usize> {
         .and_then(|bytes| bytes.checked_mul(2))
         .ok_or_else(|| eyre::eyre!("resolver state map capacity accounting overflow"))
 }
-
 fn admitted_state_retained_bytes(
     static_bytes: usize,
     bundle_bytes: usize,
@@ -328,7 +299,6 @@ fn admitted_state_retained_bytes(
             )
         })
 }
-
 fn charge_key(total: &mut usize, key: &str, capacity: usize) -> Result<()> {
     if key.len() > MAX_IDENTIFIER_BYTES {
         bail!(
@@ -341,7 +311,6 @@ fn charge_key(total: &mut usize, key: &str, capacity: usize) -> Result<()> {
         .ok_or_else(|| eyre::eyre!("resolver state key accounting overflow"))?;
     Ok(())
 }
-
 fn bundle_map_retained_bytes(bundles: &HashMap<String, ProofBundleV1>) -> Result<usize> {
     validate_state_count("proof-bundle state", bundles.len(), MAX_STATE_BUNDLES)?;
     let mut retained = map_bucket_bytes::<String, ProofBundleV1>(bundles.capacity())?;
@@ -353,7 +322,6 @@ fn bundle_map_retained_bytes(bundles: &HashMap<String, ProofBundleV1>) -> Result
     }
     Ok(retained)
 }
-
 fn rad_map_retained_bytes(adverts: &HashMap<String, ResolverAttestation>) -> Result<usize> {
     validate_state_count("RAD state", adverts.len(), MAX_STATE_RAD_ENTRIES)?;
     let mut retained = map_bucket_bytes::<String, ResolverAttestation>(adverts.capacity())?;
@@ -365,24 +333,20 @@ fn rad_map_retained_bytes(adverts: &HashMap<String, ResolverAttestation>) -> Res
     }
     Ok(retained)
 }
-
 fn validate_state_count(label: &str, count: usize, maximum: usize) -> Result<()> {
     if count > maximum {
         bail!("{label} contains {count} entries; the limit is {maximum}");
     }
     Ok(())
 }
-
 fn canonical_query_name(query: &Query) -> String {
     query.name().to_ascii().trim_end_matches('.').to_lowercase()
 }
-
 #[derive(Debug, Clone)]
 struct StaticZoneEntry {
     records: Vec<Record>,
     freeze: Option<FreezeMetadata>,
 }
-
 fn build_authoritative_response(
     request: &Message,
     code: ResponseCode,
@@ -403,7 +367,6 @@ fn build_authoritative_response(
     }
     response
 }
-
 fn freeze_response_code(metadata: &FreezeMetadata) -> Option<ResponseCode> {
     match metadata.state {
         FreezeState::Soft => Some(ResponseCode::ServFail),
@@ -411,7 +374,6 @@ fn freeze_response_code(metadata: &FreezeMetadata) -> Option<ResponseCode> {
         FreezeState::Thawing | FreezeState::Monitoring => None,
     }
 }
-
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -425,7 +387,6 @@ pub struct BundleSnapshot {
     pub freshness_signer: String,
     pub freshness_signature_hex: String,
 }
-
 impl BundleSnapshot {
     fn from_bundle(bundle: &ProofBundleV1) -> Self {
         Self {
@@ -440,7 +401,6 @@ impl BundleSnapshot {
         }
     }
 }
-
 #[derive(Debug, Default, Clone)]
 pub struct BundleDiff {
     pub added: Vec<(String, BundleSnapshot)>,
@@ -448,7 +408,6 @@ pub struct BundleDiff {
     pub reorged: Vec<(String, BundleSnapshot, BundleSnapshot)>,
     pub removed: Vec<(String, BundleSnapshot)>,
 }
-
 impl BundleDiff {
     fn reserve(&mut self, maximum_changes: usize) -> Result<()> {
         self.added
@@ -466,14 +425,12 @@ impl BundleDiff {
         Ok(())
     }
 }
-
 #[derive(Debug, Default)]
 pub struct ResolverDiff {
     pub added: Vec<String>,
     pub updated: Vec<String>,
     pub removed: Vec<String>,
 }
-
 impl ResolverDiff {
     fn reserve(&mut self, maximum_changes: usize) -> Result<()> {
         self.added
@@ -488,14 +445,12 @@ impl ResolverDiff {
         Ok(())
     }
 }
-
 /// Differences surfaced when expiring stale bundles or resolver attestations.
 #[derive(Debug, Default, Clone)]
 pub struct ExpiryDiff {
     pub expired_bundles: Vec<(String, BundleSnapshot)>,
     pub expired_resolvers: Vec<ResolverInvalidation>,
 }
-
 /// Resolver invalidation event captured during pruning.
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -504,14 +459,12 @@ pub struct ResolverInvalidation {
     pub resolver_id: String,
     pub reason: String,
 }
-
 /// Reason a resolver attestation was invalidated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvalidationReason {
     Expired,
     NotYetValid,
 }
-
 impl InvalidationReason {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -521,7 +474,6 @@ impl InvalidationReason {
         }
     }
 }
-
 /// Snapshot of resolver state metrics exposed via HTTP.
 #[derive(Debug, Clone)]
 pub struct ResolverStateMetrics {
@@ -533,11 +485,9 @@ pub struct ResolverStateMetrics {
     pub proof_age_max_secs: Option<i64>,
     pub proof_ttl_min_secs: Option<i64>,
 }
-
 #[cfg(test)]
 mod tests {
     use std::net::Ipv4Addr;
-
     use hickory_proto::{
         op::{Message, MessageType, OpCode, Query},
         rr::{Name, RData, Record, RecordType, rdata::A},
@@ -551,13 +501,11 @@ mod tests {
         },
     };
     use iroha_primitives::soradns::derive_gateway_hosts;
-
     use super::*;
     use crate::{
         bundle::{DelegationProofV1, FreshnessProofV1, KskEntryV1, ProofBundleV1, ZskSignatureV1},
         config::StaticZone,
     };
-
     fn sample_bundle(version: u64) -> ProofBundleV1 {
         ProofBundleV1 {
             namehash: [1; 32],
@@ -590,7 +538,6 @@ mod tests {
             policy_hash: [3; 32],
         }
     }
-
     #[test]
     fn update_bundles_records_diffs() {
         let mut state = ResolverState::new("resolver".into(), "global".into());
@@ -600,7 +547,6 @@ mod tests {
         assert_eq!(diff_first.added.len(), 1);
         assert_eq!(diff_first.added[0].0, "hash");
         assert_eq!(diff_first.added[0].1.zone_version, 1);
-
         let mut second = HashMap::new();
         second.insert("hash".into(), sample_bundle(2));
         let diff_second = state.update_bundles(second).expect("bounded second update");
@@ -608,7 +554,6 @@ mod tests {
         assert_eq!(diff_second.updated[0].0, "hash");
         assert_eq!(diff_second.updated[0].1.zone_version, 1);
         assert_eq!(diff_second.updated[0].2.zone_version, 2);
-
         let diff_remove = state
             .update_bundles(HashMap::new())
             .expect("bounded removal update");
@@ -616,7 +561,6 @@ mod tests {
         assert_eq!(diff_remove.removed[0].0, "hash");
         assert_eq!(diff_remove.removed[0].1.zone_version, 2);
     }
-
     #[test]
     fn resolve_message_static_zone() {
         let mut state = ResolverState::new("resolver".into(), "global".into());
@@ -633,18 +577,15 @@ mod tests {
                 retained_bytes: 1024,
             }])
             .expect("bounded static zones");
-
         let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("example.sora").unwrap(),
             RecordType::A,
         ));
-
         let response = state.resolve_message(&request);
         assert_eq!(response.metadata.response_code, ResponseCode::NoError);
         assert_eq!(response.answers.len(), 1);
     }
-
     #[test]
     fn resolve_message_soft_freeze_returns_servfail() {
         let mut state = ResolverState::new("resolver".into(), "global".into());
@@ -666,18 +607,15 @@ mod tests {
                 retained_bytes: 1024,
             }])
             .expect("bounded static zones");
-
         let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("freeze.sora").unwrap(),
             RecordType::A,
         ));
-
         let response = state.resolve_message(&request);
         assert_eq!(response.metadata.response_code, ResponseCode::ServFail);
         assert!(response.answers.is_empty());
     }
-
     #[test]
     fn resolve_message_hard_freeze_returns_refused() {
         let mut state = ResolverState::new("resolver".into(), "global".into());
@@ -699,18 +637,15 @@ mod tests {
                 retained_bytes: 1024,
             }])
             .expect("bounded static zones");
-
         let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("blocked.sora").unwrap(),
             RecordType::A,
         ));
-
         let response = state.resolve_message(&request);
         assert_eq!(response.metadata.response_code, ResponseCode::Refused);
         assert!(response.answers.is_empty());
     }
-
     #[test]
     fn resolve_message_emergency_freeze_returns_refused() {
         let mut state = ResolverState::new("resolver".into(), "global".into());
@@ -732,13 +667,11 @@ mod tests {
                 retained_bytes: 1024,
             }])
             .expect("bounded static zones");
-
         let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("emergency.sora").unwrap(),
             RecordType::A,
         ));
-
         let response = state.resolve_message(&request);
         assert_eq!(response.metadata.response_code, ResponseCode::Refused);
         assert!(
@@ -746,7 +679,6 @@ mod tests {
             "emergency freeze must refuse DNS answers"
         );
     }
-
     #[test]
     fn resolve_message_thawing_freeze_serves_records() {
         let mut state = ResolverState::new("resolver".into(), "global".into());
@@ -768,19 +700,16 @@ mod tests {
                 retained_bytes: 1024,
             }])
             .expect("bounded static zones");
-
         let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("thawing.sora").unwrap(),
             RecordType::A,
         ));
-
         let response = state.resolve_message(&request);
         assert_eq!(response.metadata.response_code, ResponseCode::NoError);
         assert_eq!(response.answers.len(), 1);
         assert_eq!(response.answers[0], record);
     }
-
     #[test]
     fn resolve_message_monitoring_freeze_serves_records() {
         let mut state = ResolverState::new("resolver".into(), "global".into());
@@ -802,19 +731,16 @@ mod tests {
                 retained_bytes: 1024,
             }])
             .expect("bounded static zones");
-
         let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("monitoring.sora").unwrap(),
             RecordType::A,
         ));
-
         let response = state.resolve_message(&request);
         assert_eq!(response.metadata.response_code, ResponseCode::NoError);
         assert_eq!(response.answers.len(), 1);
         assert_eq!(response.answers[0], record);
     }
-
     #[test]
     fn resolve_message_nxdomain() {
         let mut state = ResolverState::new("resolver".into(), "global".into());
@@ -839,7 +765,6 @@ mod tests {
         let response = state.resolve_message(&request);
         assert_eq!(response.metadata.response_code, ResponseCode::NXDomain);
     }
-
     #[test]
     fn resolve_message_servfail_without_static_zones() {
         let state = ResolverState::new("resolver".into(), "global".into());
@@ -851,20 +776,17 @@ mod tests {
         let response = state.resolve_message(&request);
         assert_eq!(response.metadata.response_code, ResponseCode::ServFail);
     }
-
     #[test]
     fn prune_stale_entries_drops_expired_items() {
         let mut state = ResolverState::new("resolver".into(), "global".into());
         let mut bundles = HashMap::new();
         bundles.insert("hash".into(), sample_bundle(1));
         state.update_bundles(bundles).expect("bounded bundle state");
-
         let mut adverts = HashMap::new();
         adverts.insert("deadbeef".into(), sample_rad(0, 1));
         state
             .update_resolver_adverts(adverts)
             .expect("bounded RAD state");
-
         let diff = state.prune_stale_entries(2).expect("bounded expiry diff");
         assert_eq!(state.bundle_count(), 0);
         assert_eq!(state.resolver_advert_count(), 0);
@@ -875,7 +797,6 @@ mod tests {
             InvalidationReason::Expired.as_str()
         );
     }
-
     #[test]
     fn aggregate_state_budget_accepts_exact_and_rejects_plus_one() {
         assert_eq!(
@@ -892,7 +813,6 @@ mod tests {
             "aggregate max + 1 must fail"
         );
     }
-
     #[test]
     fn state_count_budget_accepts_exact_and_rejects_plus_one() {
         validate_state_count("test map", MAX_STATE_BUNDLES, MAX_STATE_BUNDLES)
@@ -901,7 +821,6 @@ mod tests {
             validate_state_count("test map", MAX_STATE_BUNDLES + 1, MAX_STATE_BUNDLES).is_err()
         );
     }
-
     fn sample_rad(valid_from_unix: u64, valid_until_unix: u64) -> ResolverAttestation {
         let bindings = derive_gateway_hosts("docs.sora").expect("derive hosts");
         let operator_account = {
@@ -911,7 +830,6 @@ mod tests {
                     .expect("public key literal");
             AccountId::new(public_key)
         };
-
         ResolverAttestation {
             version: 1,
             resolver_id: [1; 32],

@@ -5,15 +5,12 @@
 //! - Create [`ConfigGetDTO`] from [`base::Root`] and serialize it for the client
 #![allow(clippy::too_many_lines, clippy::or_fun_call)]
 //! - Deserialize [`ConfigUpdateDTO`] from the client and apply the changes
-
 // NonZero types are imported from core::num below
-
 use core::{
     fmt::Write as _,
     num::{NonZero, NonZeroU32, NonZeroU64},
 };
 use std::{collections::BTreeMap, str::FromStr};
-
 use hex;
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
@@ -24,19 +21,16 @@ use norito::{
     Error as NoritoError,
     json::{self, Arena, FastFromJson, FastJsonWrite, JsonDeserialize, TapeWalker},
 };
-
 use crate::{
     logger::Directives,
     parameters::{actual as base, defaults},
 };
-
 fn parse_exact_value_via_tape<'input, T>(
     parser: &mut json::Parser<'input>,
     parse: impl FnOnce(&mut TapeWalker<'input>, &mut Arena) -> Result<T, NoritoError>,
 ) -> Result<T, json::Error> {
     let input = parser.input();
     let start = parser.position();
-
     // Bound and validate exactly the next value before building the structural
     // tape. In particular, do not rebuild a tape for the entire enclosing
     // document for every element when this bridge is used under `Vec<T>`.
@@ -46,7 +40,6 @@ fn parse_exact_value_via_tape<'input, T>(
     let subtree = input
         .get(start..end)
         .ok_or_else(|| json::Error::Message("JSON value bounds are not UTF-8 boundaries".into()))?;
-
     let mut walker = TapeWalker::new(subtree);
     walker.ensure_document_depth()?;
     let mut arena = Arena::new();
@@ -58,18 +51,15 @@ fn parse_exact_value_via_tape<'input, T>(
             "fast JSON parser did not consume the exact JSON value".into(),
         ));
     }
-
     *parser = boundary;
     Ok(value)
 }
-
 fn parse_via_fast<T>(parser: &mut json::Parser<'_>) -> Result<T, json::Error>
 where
     for<'a> T: FastFromJson<'a>,
 {
     parse_exact_value_via_tape(parser, T::parse)
 }
-
 // Manual Norito fast JSON writers for small DTOs used on the client path
 impl FastJsonWrite for Logger {
     fn write_json(&self, out: &mut String) {
@@ -95,7 +85,6 @@ impl FastJsonWrite for Logger {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for Queue {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -111,7 +100,6 @@ impl FastJsonWrite for Queue {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for SoranetPrivacySummary {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -141,7 +129,6 @@ impl FastJsonWrite for SoranetPrivacySummary {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for SoranetVpnSummary {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -222,7 +209,6 @@ impl FastJsonWrite for SoranetVpnSummary {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for Network {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -294,7 +280,6 @@ impl FastJsonWrite for Network {
         out.push('}');
     }
 }
-
 /// Partial network update payload.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NetworkUpdate {
@@ -305,7 +290,6 @@ pub struct NetworkUpdate {
     /// Override the lane profile preset (`core` or `home`).
     pub lane_profile: Option<base::LaneProfile>,
 }
-
 impl FastJsonWrite for NetworkUpdate {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -333,7 +317,6 @@ impl FastJsonWrite for NetworkUpdate {
         out.push('}');
     }
 }
-
 impl<'a> FastFromJson<'a> for NetworkUpdate {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -369,7 +352,6 @@ impl<'a> FastFromJson<'a> for NetworkUpdate {
         })
     }
 }
-
 impl<'a> FastFromJson<'a> for TransportUpdate {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -389,7 +371,6 @@ impl<'a> FastFromJson<'a> for TransportUpdate {
         Ok(Self { norito_rpc })
     }
 }
-
 impl<'a> FastFromJson<'a> for NoritoRpcUpdate {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -436,7 +417,6 @@ impl<'a> FastFromJson<'a> for NoritoRpcUpdate {
         })
     }
 }
-
 impl FastJsonWrite for SoranetHandshakeSummary {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -472,7 +452,6 @@ impl FastJsonWrite for SoranetHandshakeSummary {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for SoranetHandshakeUpdate {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -532,7 +511,6 @@ impl FastJsonWrite for SoranetHandshakeUpdate {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for TransportUpdate {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -543,7 +521,6 @@ impl FastJsonWrite for TransportUpdate {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for NoritoRpcUpdate {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -589,7 +566,6 @@ impl FastJsonWrite for NoritoRpcUpdate {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for SoranetHandshakePowUpdate {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -639,7 +615,6 @@ impl FastJsonWrite for SoranetHandshakePowUpdate {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for SoranetHandshakePowSummary {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -670,7 +645,6 @@ impl FastJsonWrite for SoranetHandshakePowSummary {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for NetworkAcl {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -742,7 +716,6 @@ impl FastJsonWrite for NetworkAcl {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for ConfidentialGas {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -763,7 +736,6 @@ impl FastJsonWrite for ConfidentialGas {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for ConfigUpdateDTO {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -799,7 +771,6 @@ impl FastJsonWrite for ConfigUpdateDTO {
         out.push('}');
     }
 }
-
 /// Subset of Iroha configuration returned to clients via the API.
 #[derive(Debug, Clone)]
 pub struct ConfigGetDTO {
@@ -820,7 +791,6 @@ pub struct ConfigGetDTO {
     /// Nexus-specific configuration snapshot.
     pub nexus: Nexus,
 }
-
 /// Consensus configuration summary exposed via the client API.
 #[derive(Debug, Clone)]
 pub struct Consensus {
@@ -829,7 +799,6 @@ pub struct Consensus {
     /// Node-local participation role.
     pub role: String,
 }
-
 impl From<&base::Sumeragi> for Consensus {
     fn from(value: &base::Sumeragi) -> Self {
         let role = match value.role {
@@ -842,7 +811,6 @@ impl From<&base::Sumeragi> for Consensus {
         }
     }
 }
-
 /// Client-facing confidential gas schedule parameters.
 #[derive(Debug, Clone, Copy)]
 pub struct ConfidentialGas {
@@ -857,7 +825,6 @@ pub struct ConfidentialGas {
     /// Cost per commitment.
     pub per_commitment: u64,
 }
-
 /// Transport configuration summary exposed via the client API.
 #[derive(Debug, Clone)]
 pub struct Transport {
@@ -866,14 +833,12 @@ pub struct Transport {
     /// Streaming transport summary (e.g., `SoraNet` bridge defaults).
     pub streaming: StreamingTransportSummary,
 }
-
 /// Nexus configuration summary exposed via the client API.
 #[derive(Debug, Clone, Copy)]
 pub struct Nexus {
     /// AXT expiry/cache/replay guardrails.
     pub axt: Axt,
 }
-
 /// AXT timing/cache configuration surfaced to SDKs.
 #[derive(Debug, Clone, Copy)]
 pub struct Axt {
@@ -886,7 +851,6 @@ pub struct Axt {
     /// Number of slots to retain handle usage for replay rejection across restarts/peers.
     pub replay_retention_slots: NonZeroU64,
 }
-
 /// Norito-RPC summary (enable flag, stage, allowlist metadata).
 #[derive(Debug, Clone)]
 pub struct NoritoRpcSummary {
@@ -899,14 +863,12 @@ pub struct NoritoRpcSummary {
     /// Number of tokens currently allowlisted for canary access.
     pub canary_allowlist_size: usize,
 }
-
 /// Streaming transport summary exposed to clients.
 #[derive(Debug, Clone)]
 pub struct StreamingTransportSummary {
     /// Default `SoraNet` bridge metadata applied to streaming routes.
     pub soranet: SoranetStreamingSummary,
 }
-
 /// `SoraNet` streaming bridge defaults surfaced via the configuration endpoint.
 #[derive(Debug, Clone)]
 pub struct SoranetStreamingSummary {
@@ -931,7 +893,6 @@ pub struct SoranetStreamingSummary {
     /// Maximum number of queued privacy-route provisioning jobs.
     pub provision_queue_capacity: u64,
 }
-
 impl From<&'_ base::Root> for ConfigGetDTO {
     fn from(value: &'_ base::Root) -> Self {
         Self {
@@ -946,7 +907,6 @@ impl From<&'_ base::Root> for ConfigGetDTO {
         }
     }
 }
-
 impl Transport {
     fn from_config(
         transport: &'_ base::ToriiTransport,
@@ -958,7 +918,6 @@ impl Transport {
         }
     }
 }
-
 impl From<&'_ base::Nexus> for Nexus {
     fn from(value: &'_ base::Nexus) -> Self {
         Self {
@@ -966,7 +925,6 @@ impl From<&'_ base::Nexus> for Nexus {
         }
     }
 }
-
 impl From<&'_ base::NexusAxt> for Axt {
     fn from(value: &'_ base::NexusAxt) -> Self {
         Self {
@@ -977,7 +935,6 @@ impl From<&'_ base::NexusAxt> for Axt {
         }
     }
 }
-
 impl From<&'_ base::NoritoRpcTransport> for NoritoRpcSummary {
     fn from(value: &'_ base::NoritoRpcTransport) -> Self {
         Self {
@@ -988,7 +945,6 @@ impl From<&'_ base::NoritoRpcTransport> for NoritoRpcSummary {
         }
     }
 }
-
 impl From<&'_ base::StreamingSoranet> for StreamingTransportSummary {
     fn from(value: &'_ base::StreamingSoranet) -> Self {
         Self {
@@ -996,7 +952,6 @@ impl From<&'_ base::StreamingSoranet> for StreamingTransportSummary {
         }
     }
 }
-
 impl From<&'_ base::StreamingSoranet> for SoranetStreamingSummary {
     fn from(value: &'_ base::StreamingSoranet) -> Self {
         let access_kind = value.access_kind.as_str().to_string();
@@ -1020,7 +975,6 @@ impl From<&'_ base::StreamingSoranet> for SoranetStreamingSummary {
         }
     }
 }
-
 impl FastJsonWrite for ConfigGetDTO {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1051,7 +1005,6 @@ impl FastJsonWrite for ConfigGetDTO {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for Consensus {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1064,7 +1017,6 @@ impl FastJsonWrite for Consensus {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for Transport {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1076,7 +1028,6 @@ impl FastJsonWrite for Transport {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for Nexus {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1085,7 +1036,6 @@ impl FastJsonWrite for Nexus {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for Axt {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1103,7 +1053,6 @@ impl FastJsonWrite for Axt {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for NoritoRpcSummary {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1122,7 +1071,6 @@ impl FastJsonWrite for NoritoRpcSummary {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for StreamingTransportSummary {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1131,7 +1079,6 @@ impl FastJsonWrite for StreamingTransportSummary {
         out.push('}');
     }
 }
-
 impl FastJsonWrite for SoranetStreamingSummary {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1178,9 +1125,7 @@ impl FastJsonWrite for SoranetStreamingSummary {
         out.push('}');
     }
 }
-
 // ---------- FastFromJson (typed, tape-first) implementations ----------
-
 impl<'a> FastFromJson<'a> for Logger {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -1240,7 +1185,6 @@ impl<'a> FastFromJson<'a> for Logger {
         })
     }
 }
-
 impl<'a> FastFromJson<'a> for Transport {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -1270,7 +1214,6 @@ impl<'a> FastFromJson<'a> for Transport {
         })
     }
 }
-
 impl<'a> FastFromJson<'a> for NoritoRpcSummary {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -1318,7 +1261,6 @@ impl<'a> FastFromJson<'a> for NoritoRpcSummary {
         })
     }
 }
-
 impl<'a> FastFromJson<'a> for StreamingTransportSummary {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -1341,7 +1283,6 @@ impl<'a> FastFromJson<'a> for StreamingTransportSummary {
         })
     }
 }
-
 impl<'a> FastFromJson<'a> for SoranetStreamingSummary {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -1445,13 +1386,11 @@ impl<'a> FastFromJson<'a> for SoranetStreamingSummary {
         })
     }
 }
-
 impl JsonDeserialize for Logger {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl<'a> FastFromJson<'a> for Queue {
     fn parse(w: &mut TapeWalker<'a>, _arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -1483,13 +1422,11 @@ impl<'a> FastFromJson<'a> for Queue {
         })
     }
 }
-
 impl JsonDeserialize for Queue {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn finalize_network(
     chain_discriminant: Option<u16>,
@@ -1551,7 +1488,6 @@ fn finalize_network(
             .unwrap_or(defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH),
     })
 }
-
 impl<'a> FastFromJson<'a> for Network {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -1729,13 +1665,11 @@ impl<'a> FastFromJson<'a> for Network {
         )
     }
 }
-
 impl JsonDeserialize for Network {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl<'a> FastFromJson<'a> for SoranetPrivacySummary {
     fn parse(w: &mut TapeWalker<'a>, _arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -1809,7 +1743,6 @@ impl<'a> FastFromJson<'a> for SoranetPrivacySummary {
         })
     }
 }
-
 impl<'a> FastFromJson<'a> for SoranetVpnSummary {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -1832,7 +1765,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
         let mut route_pushes = None;
         let mut excluded_routes = None;
         let mut dns_servers = None;
-
         let kh_enabled = norito::json::key_hash_const("enabled");
         let kh_cell = norito::json::key_hash_const("cell_size_bytes");
         let kh_flow = norito::json::key_hash_const("flow_label_bits");
@@ -1852,7 +1784,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
         let kh_route_pushes = norito::json::key_hash_const("route_pushes");
         let kh_excluded_routes = norito::json::key_hash_const("excluded_routes");
         let kh_dns_servers = norito::json::key_hash_const("dns_servers");
-
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
@@ -1958,14 +1889,12 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
             let _ = w.consume_comma_if_present()?;
         }
         w.expect_object_end()?;
-
         let flow_label_bits = flow_label_bits.unwrap_or(defaults::soranet::vpn::FLOW_LABEL_BITS);
         if let Err(err) =
             iroha_data_model::soranet::vpn::VpnFlowLabelV1::max_value_for_bits(flow_label_bits)
         {
             return Err(NoritoError::Message(err.to_string()));
         }
-
         let lease_secs = lease_secs.unwrap_or(defaults::soranet::vpn::lease_secs_u64());
         let lease_secs = u32::try_from(lease_secs)
             .map_err(|_| NoritoError::Message("lease_secs exceeds u32::MAX".into()))?;
@@ -1975,7 +1904,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
             .map_err(|err| NoritoError::Message(err.to_string()))?
             .as_label()
             .to_string();
-
         Ok(SoranetVpnSummary {
             enabled: enabled.unwrap_or(defaults::soranet::vpn::ENABLED),
             cell_size_bytes: cell_size_bytes.unwrap_or(defaults::soranet::vpn::CELL_SIZE_BYTES),
@@ -2007,7 +1935,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
         })
     }
 }
-
 impl<'a> FastFromJson<'a> for NetworkAcl {
     fn parse(w: &mut TapeWalker<'a>, _arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -2082,13 +2009,11 @@ impl<'a> FastFromJson<'a> for NetworkAcl {
         })
     }
 }
-
 impl JsonDeserialize for NetworkAcl {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl<'a> FastFromJson<'a> for ConfigUpdateDTO {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -2147,13 +2072,11 @@ impl<'a> FastFromJson<'a> for ConfigUpdateDTO {
         })
     }
 }
-
 impl JsonDeserialize for ConfigUpdateDTO {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl<'a> FastFromJson<'a> for ConfigGetDTO {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         use iroha_crypto::PublicKey;
@@ -2225,14 +2148,12 @@ impl<'a> FastFromJson<'a> for ConfigGetDTO {
         })
     }
 }
-
 // Bridge for typed JSON parser path used by `from_json_fast_smart` on small inputs.
 impl JsonDeserialize for ConfigGetDTO {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl<'a> FastFromJson<'a> for Consensus {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -2266,13 +2187,11 @@ impl<'a> FastFromJson<'a> for Consensus {
         })
     }
 }
-
 impl JsonDeserialize for Consensus {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl<'a> FastFromJson<'a> for Nexus {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -2295,13 +2214,11 @@ impl<'a> FastFromJson<'a> for Nexus {
         })
     }
 }
-
 impl JsonDeserialize for Nexus {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl<'a> FastFromJson<'a> for Axt {
     fn parse(w: &mut TapeWalker<'a>, _arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -2346,13 +2263,11 @@ impl<'a> FastFromJson<'a> for Axt {
         })
     }
 }
-
 impl JsonDeserialize for Axt {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl From<&'_ base::ConfidentialGas> for ConfidentialGas {
     fn from(value: &'_ base::ConfidentialGas) -> Self {
         Self {
@@ -2364,7 +2279,6 @@ impl From<&'_ base::ConfidentialGas> for ConfidentialGas {
         }
     }
 }
-
 impl<'a> FastFromJson<'a> for ConfidentialGas {
     fn parse(w: &mut TapeWalker<'a>, _arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -2416,13 +2330,11 @@ impl<'a> FastFromJson<'a> for ConfidentialGas {
         })
     }
 }
-
 impl JsonDeserialize for ConfidentialGas {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 fn parse_price_weights(
     w: &mut TapeWalker<'_>,
     arena: &mut Arena,
@@ -2464,7 +2376,6 @@ fn parse_price_weights(
         unit_label: unit_label.ok_or_else(|| NoritoError::Message("missing unit_label".into()))?,
     })
 }
-
 fn parse_price_families(
     w: &mut TapeWalker<'_>,
     arena: &mut Arena,
@@ -2483,7 +2394,6 @@ fn parse_price_families(
     w.expect_object_end()?;
     Ok(families)
 }
-
 /// Compute pricing update payload (price families + default family).
 #[derive(Debug, Clone, Default)]
 pub struct ComputePricingUpdate {
@@ -2492,7 +2402,6 @@ pub struct ComputePricingUpdate {
     /// Optional default price family override.
     pub default_price_family: Option<Name>,
 }
-
 impl FastJsonWrite for ComputePricingUpdate {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -2527,7 +2436,6 @@ impl FastJsonWrite for ComputePricingUpdate {
         out.push('}');
     }
 }
-
 impl<'a> FastFromJson<'a> for ComputePricingUpdate {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -2559,7 +2467,6 @@ impl<'a> FastFromJson<'a> for ComputePricingUpdate {
         })
     }
 }
-
 /// Subset of the configuration that clients are allowed to update.
 #[derive(Debug, Clone)]
 pub struct ConfigUpdateDTO {
@@ -2576,14 +2483,12 @@ pub struct ConfigUpdateDTO {
     /// Optional compute pricing override (governance bounded).
     pub compute_pricing: Option<ComputePricingUpdate>,
 }
-
 /// Partial transport update payload.
 #[derive(Debug, Clone, Default)]
 pub struct TransportUpdate {
     /// Optional Norito-RPC update.
     pub norito_rpc: Option<NoritoRpcUpdate>,
 }
-
 /// Norito-RPC transport update payload.
 #[derive(Debug, Clone, Default)]
 pub struct NoritoRpcUpdate {
@@ -2596,7 +2501,6 @@ pub struct NoritoRpcUpdate {
     /// Optional stage label override (`disabled`, `canary`, `ga`).
     pub stage: Option<String>,
 }
-
 /// P2P ACL update DTO.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkAcl {
@@ -2611,7 +2515,6 @@ pub struct NetworkAcl {
     /// CIDR denylist.
     pub deny_cidrs: Option<Vec<String>>,
 }
-
 /// Logger configuration exposed to clients.
 #[derive(Debug, Clone)]
 pub struct Logger {
@@ -2620,7 +2523,6 @@ pub struct Logger {
     /// Optional module-specific filters.
     pub filter: Option<Directives>,
 }
-
 impl From<&'_ base::Logger> for Logger {
     fn from(value: &'_ base::Logger) -> Self {
         Self {
@@ -2629,7 +2531,6 @@ impl From<&'_ base::Logger> for Logger {
         }
     }
 }
-
 /// Selected queue configuration exposed to clients.
 #[derive(Debug, Clone, Copy)]
 pub struct Queue {
@@ -2638,7 +2539,6 @@ pub struct Queue {
     /// Estimated maximum retained queue memory budget in bytes.
     pub max_retained_bytes: NonZeroU64,
 }
-
 impl From<&'_ base::Queue> for Queue {
     fn from(value: &'_ base::Queue) -> Self {
         Self {
@@ -2647,7 +2547,6 @@ impl From<&'_ base::Queue> for Queue {
         }
     }
 }
-
 /// Selected network configuration exposed to clients.
 #[derive(Debug, Clone)]
 pub struct Network {
@@ -2690,7 +2589,6 @@ pub struct Network {
     /// Whether peers must match the OpenSSL preview toggle during handshake.
     pub require_sm_openssl_preview_match: bool,
 }
-
 impl From<&'_ base::Root> for Network {
     fn from(value: &'_ base::Root) -> Self {
         let handshake = SoranetHandshakeSummary::from(&value.network.soranet_handshake);
@@ -2727,7 +2625,6 @@ impl From<&'_ base::Root> for Network {
         }
     }
 }
-
 /// Client-facing view of the `SoraNet` handshake settings.
 #[derive(Debug, Clone, Default)]
 pub struct SoranetHandshakeSummary {
@@ -2746,7 +2643,6 @@ pub struct SoranetHandshakeSummary {
     /// Proof-of-work admission parameters.
     pub pow: SoranetHandshakePowSummary,
 }
-
 impl From<&'_ base::SoranetHandshake> for SoranetHandshakeSummary {
     fn from(value: &'_ base::SoranetHandshake) -> Self {
         Self {
@@ -2763,7 +2659,6 @@ impl From<&'_ base::SoranetHandshake> for SoranetHandshakeSummary {
         }
     }
 }
-
 /// Summary of the privacy telemetry configuration advertised by the relay.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetPrivacySummary {
@@ -2784,7 +2679,6 @@ pub struct SoranetPrivacySummary {
     /// Capacity of the in-memory privacy event buffer.
     pub event_buffer_capacity: usize,
 }
-
 impl From<&'_ base::SoranetPrivacy> for SoranetPrivacySummary {
     fn from(value: &'_ base::SoranetPrivacy) -> Self {
         Self {
@@ -2799,7 +2693,6 @@ impl From<&'_ base::SoranetPrivacy> for SoranetPrivacySummary {
         }
     }
 }
-
 /// Summary of the VPN control-plane configuration.
 #[derive(Debug, Clone, Default)]
 pub struct SoranetVpnSummary {
@@ -2842,7 +2735,6 @@ pub struct SoranetVpnSummary {
     /// DNS servers pushed to VPN clients.
     pub dns_servers: Vec<String>,
 }
-
 impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
     fn from(value: &'_ base::SoranetVpn) -> Self {
         let lease_secs = u32::try_from(value.lease.as_secs())
@@ -2872,7 +2764,6 @@ impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
         }
     }
 }
-
 /// Summary of the proof-of-work admission settings.
 #[derive(Debug, Clone, Default)]
 pub struct SoranetHandshakePowSummary {
@@ -2891,7 +2782,6 @@ pub struct SoranetHandshakePowSummary {
     /// Optional ML-DSA-44 public key for verifying signed tickets (hex).
     pub signed_ticket_public_key_hex: Option<String>,
 }
-
 impl From<&'_ base::SoranetPow> for SoranetHandshakePowSummary {
     fn from(value: &'_ base::SoranetPow) -> Self {
         Self {
@@ -2905,7 +2795,6 @@ impl From<&'_ base::SoranetPow> for SoranetHandshakePowSummary {
         }
     }
 }
-
 /// Summary of the Argon2 puzzle gate.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetHandshakePuzzleSummary {
@@ -2916,7 +2805,6 @@ pub struct SoranetHandshakePuzzleSummary {
     /// Parallel lanes.
     pub lanes: u32,
 }
-
 impl From<base::SoranetPuzzle> for SoranetHandshakePuzzleSummary {
     fn from(value: base::SoranetPuzzle) -> Self {
         Self {
@@ -2926,7 +2814,6 @@ impl From<base::SoranetPuzzle> for SoranetHandshakePuzzleSummary {
         }
     }
 }
-
 impl<'a> FastFromJson<'a> for SoranetHandshakePuzzleSummary {
     fn parse(w: &mut TapeWalker<'a>, _arena: &mut Arena) -> Result<Self, NoritoError> {
         let mut summary = Self::default();
@@ -2958,13 +2845,11 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePuzzleSummary {
         Ok(summary)
     }
 }
-
 impl JsonDeserialize for SoranetHandshakePuzzleSummary {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl SoranetHandshakePuzzleSummary {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -2979,7 +2864,6 @@ impl SoranetHandshakePuzzleSummary {
         out.push('}');
     }
 }
-
 /// Partial update directive for Argon2 puzzle parameters.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SoranetHandshakePuzzleUpdate {
@@ -2992,7 +2876,6 @@ pub struct SoranetHandshakePuzzleUpdate {
     /// Override Argon2 lanes.
     pub lanes: Option<u32>,
 }
-
 impl SoranetHandshakePuzzleUpdate {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -3027,7 +2910,6 @@ impl SoranetHandshakePuzzleUpdate {
         out.push('}');
     }
 }
-
 fn parse_soranet_puzzle_update(
     w: &mut TapeWalker<'_>,
 ) -> Result<SoranetHandshakePuzzleUpdate, NoritoError> {
@@ -3077,7 +2959,6 @@ fn parse_soranet_puzzle_update(
         lanes,
     })
 }
-
 /// Directive describing how to update the handshake resume hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResumeHashDirective {
@@ -3086,7 +2967,6 @@ pub enum ResumeHashDirective {
     /// Set the resume hash to the provided hex string.
     Set(String),
 }
-
 /// Partial update DTO for the `SoraNet` handshake settings.
 #[derive(Debug, Clone, Default)]
 pub struct SoranetHandshakeUpdate {
@@ -3105,7 +2985,6 @@ pub struct SoranetHandshakeUpdate {
     /// Optional `PoW` override.
     pub pow: Option<SoranetHandshakePowUpdate>,
 }
-
 /// Partial update DTO for `PoW` admission configuration.
 #[derive(Debug, Clone, Default)]
 pub struct SoranetHandshakePowUpdate {
@@ -3124,7 +3003,6 @@ pub struct SoranetHandshakePowUpdate {
     /// Override the signed-ticket verification key (hex).
     pub signed_ticket_public_key_hex: Option<String>,
 }
-
 impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -3190,13 +3068,11 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
         })
     }
 }
-
 impl JsonDeserialize for SoranetHandshakePowSummary {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         let _ = arena;
@@ -3263,19 +3139,16 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
         })
     }
 }
-
 impl JsonDeserialize for SoranetHandshakePowUpdate {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl JsonDeserialize for SoranetHandshakePuzzleUpdate {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_exact_value_via_tape(parser, |walker, _arena| parse_soranet_puzzle_update(walker))
     }
 }
-
 impl<'a> FastFromJson<'a> for SoranetHandshakeUpdate {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -3352,13 +3225,11 @@ impl<'a> FastFromJson<'a> for SoranetHandshakeUpdate {
         })
     }
 }
-
 impl JsonDeserialize for SoranetHandshakeUpdate {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 impl<'a> FastFromJson<'a> for SoranetHandshakeSummary {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
@@ -3435,13 +3306,11 @@ impl<'a> FastFromJson<'a> for SoranetHandshakeSummary {
         })
     }
 }
-
 impl JsonDeserialize for SoranetHandshakeSummary {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parse_via_fast(parser)
     }
 }
-
 #[cfg(test)]
 mod test {
     use iroha_crypto::{
@@ -3452,17 +3321,13 @@ mod test {
     };
     use iroha_data_model::Level;
     use nonzero_ext::nonzero;
-
     use super::*;
-
     std::thread_local! {
         static FAST_BRIDGE_TAPE_BYTES: std::cell::Cell<usize> = const {
             std::cell::Cell::new(0)
         };
     }
-
     struct CountingLogger(Logger);
-
     impl<'a> FastFromJson<'a> for CountingLogger {
         fn parse(walker: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
             FAST_BRIDGE_TAPE_BYTES.with(|bytes| {
@@ -3471,13 +3336,11 @@ mod test {
             <Logger as FastFromJson<'a>>::parse(walker, arena).map(Self)
         }
     }
-
     impl JsonDeserialize for CountingLogger {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             parse_via_fast(parser)
         }
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn snapshot_serialized_form() {
@@ -3579,15 +3442,12 @@ mod test {
                 },
             },
         };
-
         let actual = norito::json::to_json_pretty(&value).expect("The value is a valid JSON");
-
         // NOTE: whenever this is updated, make sure to update the documentation accordingly:
         //       https://docs.iroha.tech/reference/torii-endpoints.html
         //       -> Configuration endpoints
         expect_test::expect_file!["client_api/config_get_snapshot.v1.json"]
             .assert_eq(&format!("{actual}\n"));
-
         let parsed: ConfigGetDTO =
             norito::json::from_json(&actual).expect("configuration snapshot should deserialize");
         assert_eq!(parsed.confidential_gas.proof_base, 777_777);
@@ -3596,7 +3456,6 @@ mod test {
         assert_eq!(parsed.confidential_gas.per_nullifier, 123);
         assert_eq!(parsed.confidential_gas.per_commitment, 321);
     }
-
     #[test]
     fn config_update_with_handshake_roundtrip() {
         let update = ConfigUpdateDTO {
@@ -3630,10 +3489,8 @@ mod test {
             transport: None,
             compute_pricing: None,
         };
-
         let json = norito::json::to_json(&update).expect("serialize update");
         let parsed: ConfigUpdateDTO = norito::json::from_json(&json).expect("deserialize update");
-
         assert_eq!(parsed.logger.level, Level::INFO);
         let handshake = parsed
             .soranet_handshake
@@ -3656,7 +3513,6 @@ mod test {
         assert_eq!(network.require_sm_handshake_match, Some(false));
         assert_eq!(network.require_sm_openssl_preview_match, Some(true));
     }
-
     #[test]
     fn config_update_rejects_confidential_gas_override() {
         let err = norito::json::from_json::<ConfigUpdateDTO>(
@@ -3672,13 +3528,11 @@ mod test {
             }"#,
         )
         .expect_err("confidential gas must not be mutable at runtime");
-
         assert!(
             err.to_string().contains("confidential_gas is read-only"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn vpn_summary_parse_rejects_unknown_exit_class() {
         let mut parser = norito::json::Parser::new(r#"{"exit_class":"ultra-fast"}"#);
@@ -3688,7 +3542,6 @@ mod test {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn vpn_summary_parse_rejects_overflowing_lease() {
         let overflowing = u64::from(u32::MAX) + 10;
@@ -3700,14 +3553,12 @@ mod test {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn generic_collection_fast_bridge_builds_tapes_only_for_exact_elements() {
         const ELEMENT_COUNT: usize = 64;
         let element = r#"{"level":"INFO","filter":null}"#;
         let payload = format!("[{}]", vec![element; ELEMENT_COUNT].join(","));
         FAST_BRIDGE_TAPE_BYTES.with(|bytes| bytes.set(0));
-
         let parsed = norito::json::from_json::<Vec<CountingLogger>>(&payload)
             .expect("decode logger collection through the generic-to-fast bridge");
         assert_eq!(parsed.len(), ELEMENT_COUNT);
@@ -3724,7 +3575,6 @@ mod test {
             );
         });
     }
-
     #[test]
     fn parse_via_fast_accepts_global_depth_boundary_and_rejects_next_level() {
         let boundary_wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 2;
@@ -3739,7 +3589,6 @@ mod test {
             .expect("complete-document depth boundary must decode");
         assert_eq!(parsed.level, Level::INFO);
         assert_eq!(boundary_parser.position(), boundary_payload.len());
-
         let wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 1;
         let nested = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
         let payload = format!(r#"{{"unknown":{nested}}}"#);
@@ -3753,7 +3602,6 @@ mod test {
             }) if depth == norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1
         ));
     }
-
     #[test]
     fn puzzle_update_custom_parser_rejects_globally_overdeep_documents() {
         let wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 1;

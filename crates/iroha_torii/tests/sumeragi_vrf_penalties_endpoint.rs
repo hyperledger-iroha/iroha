@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level tests for `GET /v1/sumeragi/vrf/penalties/{epoch}`.
 #![cfg(feature = "telemetry")]
-
 use axum::{
     Router,
     body::Body,
@@ -11,7 +10,6 @@ use axum::{
 use http_body_util::BodyExt;
 use iroha_core::sumeragi::{epoch_report, epoch_report::VrfPenaltiesReport};
 use tower::ServiceExt as _;
-
 fn vrf_penalties_router() -> Router {
     Router::new().route(
         "/v1/sumeragi/vrf/penalties/{epoch}",
@@ -22,7 +20,6 @@ fn vrf_penalties_router() -> Router {
         }),
     )
 }
-
 #[tokio::test]
 async fn sumeragi_vrf_penalties_endpoint_returns_report() {
     let epoch: u64 = 42;
@@ -32,7 +29,6 @@ async fn sumeragi_vrf_penalties_endpoint_returns_report() {
         committed_no_reveal: vec![1, 3],
         no_participation: vec![2],
     });
-
     let app = vrf_penalties_router();
     let resp = app
         .oneshot(
@@ -50,7 +46,6 @@ async fn sumeragi_vrf_penalties_endpoint_returns_report() {
             .and_then(|h| h.to_str().ok()),
         Some("application/json")
     );
-
     let body = BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
     let payload: norito::json::Value = norito::json::from_slice(&body).unwrap();
     assert_eq!(
@@ -90,12 +85,10 @@ async fn sumeragi_vrf_penalties_endpoint_returns_report() {
         vec![2]
     );
 }
-
 #[tokio::test]
 async fn sumeragi_vrf_penalties_endpoint_returns_empty_when_missing() {
     let missing_epoch: u64 = 113;
     let app = vrf_penalties_router();
-
     let resp = app
         .oneshot(
             Request::builder()
@@ -135,7 +128,6 @@ async fn sumeragi_vrf_penalties_endpoint_returns_empty_when_missing() {
             .is_none_or(std::vec::Vec::is_empty)
     );
 }
-
 #[tokio::test]
 async fn sumeragi_vrf_penalties_endpoint_parses_hex_epochs() {
     let epoch: u64 = 54;
@@ -146,7 +138,6 @@ async fn sumeragi_vrf_penalties_endpoint_parses_hex_epochs() {
         no_participation: vec![4, 7],
     });
     let app = vrf_penalties_router();
-
     let resp = app
         .oneshot(
             Request::builder()

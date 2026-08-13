@@ -60,7 +60,6 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering as AtomicOrdering},
     time::Duration,
 };
-
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::consensus::{CertPhase, NativeAmxAttestationBodyV2};
@@ -115,7 +114,6 @@ use norito::codec::Encode;
 #[cfg(feature = "bls")]
 use norito::json::Value as JsonValue;
 use sha2::Digest as _;
-
 fn ensure_confidential_features_match(
     expected: Option<ConfidentialFeatureDigest>,
     actual: Option<ConfidentialFeatureDigest>,
@@ -140,7 +138,6 @@ fn validate_external_entrypoint_count(
 #[cfg(test)]
 mod external_entrypoint_count_tests {
     use super::*;
-
     #[test]
     fn configured_block_limit_is_enforced_before_expensive_validation() {
         let max = NonZeroU64::new(1).expect("one is non-zero");
@@ -322,9 +319,7 @@ mod overlay_error_tests {
         },
         transaction::{ExecutableBatchItem, IvmBytecode, IvmProved},
     };
-
     use super::*;
-
     #[test]
     fn map_overlay_error_preserves_axt_context() {
         let ctx = AxtRejectContext {
@@ -402,7 +397,6 @@ const EMPTY_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
 use settlement_router::haircut::LiquidityProfile;
 use settlement_router::{XorQuantity, policy::BufferStatus};
 use thiserror::Error;
-
 #[cfg(test)]
 pub(crate) use self::event::EventProducer;
 pub(crate) use self::event::WithEvents;
@@ -1742,7 +1736,6 @@ fn record_lane_settlement_metrics(
     }
 }
 use std::sync::Arc;
-
 #[cfg(feature = "telemetry")]
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
@@ -1832,7 +1825,6 @@ fn union_from_sorted_triplets(
     triplets: &[crate::pipeline::gpu::AccessTriplet],
 ) {
     use iroha_primitives::small::SmallVec;
-
     let mut cur_key: Option<u32> = None;
     let mut last_writer: Option<usize> = None;
     let mut open_readers: SmallVec<[usize; 8]> = SmallVec::new();
@@ -1862,7 +1854,6 @@ fn union_from_sorted_triplets(
 #[allow(clippy::explicit_iter_loop)]
 fn intern_access(access: &[crate::pipeline::access::AccessSet]) -> (usize, Vec<AccessIds>) {
     use std::collections::{BTreeMap, BTreeSet};
-
     let mut wildcard_bases: BTreeSet<String> = BTreeSet::new();
     let mut global_present = false;
     for aset in access.iter() {
@@ -1954,7 +1945,6 @@ fn dag_fingerprint(
     call_hashes: &[HashOf<TransactionEntrypoint>],
 ) -> [u8; 32] {
     use sha2::{Digest, Sha256};
-
     let mut h = Sha256::new();
     h.update((key_count as u64).to_le_bytes());
     for aset in access_ids.iter() {
@@ -2137,7 +2127,6 @@ mod prefetch_tests {
     use iroha_logger::Level;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         kura::Kura,
@@ -2469,7 +2458,6 @@ mod prefetch_tests {
 #[cfg(test)]
 mod pipeline_recovery_tests {
     use super::*;
-
     #[test]
     fn expected_pipeline_dag_fingerprint_requires_matching_block_hash() {
         let height = 1;
@@ -2634,7 +2622,6 @@ fn component_iteration_order(
     >],
 ) -> Vec<usize> {
     use core::cmp::Ordering;
-
     let mut indices: Vec<usize> = (0..components.len()).collect();
     let mut keys: Vec<
         Option<(
@@ -2667,7 +2654,6 @@ fn schedule_components_ready_heap(
     >],
 ) -> Option<Vec<usize>> {
     use std::{cmp::Reverse, collections::BinaryHeap};
-
     let n = call_hashes.len();
     debug_assert_eq!(
         row_offsets.len(),
@@ -2940,7 +2926,6 @@ fn schedule_ready_heap_global(
     >],
 ) -> Vec<usize> {
     use std::{cmp::Reverse, collections::BinaryHeap};
-
     let n = indeg.len();
     debug_assert_eq!(
         row_offsets.len(),
@@ -3533,13 +3518,10 @@ pub(crate) fn is_default_test_execution_context_ownership(
                 "block-builder-test",
             )
 }
-
 mod pending {
     use iroha_primitives::time::TimeSource;
     use nonzero_ext::nonzero;
-
     use super::*;
-
     /// First stage in the life-cycle of a [`Block`].
     /// In the beginning the block is assumed to be verified and to contain only accepted transactions.
     /// Additionally the block must retain events emitted during the execution of on-chain logic during
@@ -3674,13 +3656,10 @@ mod pending {
         }
     }
 }
-
 mod chained {
     use iroha_crypto::SignatureOf;
     use new::NewBlock;
-
     use super::*;
-
     /// When a `Pending` block is chained with the blockchain it becomes [`Chained`] block.
     #[derive(Debug, Clone)]
     pub struct Chained {
@@ -3887,11 +3866,9 @@ mod chained {
         }
     }
 }
-
 mod new {
     use super::*;
     use crate::state::StateBlock;
-
     /// First stage in the life-cycle of a block.
     ///
     /// Transactions in this block are not categorized.
@@ -3998,15 +3975,12 @@ mod new {
     #[cfg(test)]
     mod tests {
         use std::{borrow::Cow, time::Duration};
-
         use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
         use iroha_logger::Level;
         use iroha_primitives::time::TimeSource;
         use iroha_test_samples::gen_account_in;
-
         use super::*;
         use crate::{block::BlockBuilder, tx::AcceptedTransaction};
-
         #[test]
         fn into_signed_block_preserves_external_transactions_without_legacy_cache() {
             let network_id = deterministic_test_network_id(0x01);
@@ -4099,10 +4073,8 @@ mod new {
         }
     }
 }
-
 pub(crate) mod valid {
     use std::{num::NonZeroUsize, time::Instant};
-
     use commit::CommittedBlock;
     #[cfg(test)]
     use iroha_data_model::ChainId;
@@ -4118,7 +4090,6 @@ pub(crate) mod valid {
     };
     use iroha_logger::warn;
     use iroha_primitives::time::TimeSource;
-
     use super::{
         event::{map_block_err_to_reason, map_sig_err_to_reason},
         *,
@@ -6125,7 +6096,6 @@ pub(crate) mod valid {
             topology: &Topology,
         ) -> Result<(), SignatureVerificationError> {
             use SignatureVerificationError::{LeaderMissing, UnknownSignature};
-
             // Enforce BLS-normal for leader
             if !Self::is_bls_normal_public_key(topology.leader().public_key()) {
                 return Err(LeaderMissing);
@@ -6153,7 +6123,6 @@ pub(crate) mod valid {
                 .filter_signatures_by_roles(valid_roles, block.signatures())
                 .try_for_each(|signature| {
                     use SignatureVerificationError::{UnknownSignatory, UnknownSignature};
-
                     let signatory =
                         usize::try_from(signature.index()).map_err(|_err| UnknownSignatory)?;
                     let signatory: &PeerId =
@@ -10309,9 +10278,7 @@ pub(crate) mod valid {
                         .map(|prepared| prepared.metadata.entrypoint_hash),
                 );
             }
-
             use rayon::prelude::*;
-
             let mut ed25519_prechecked = vec![false; prepared_txs.len()];
             let ed25519_batch_cap = pipeline_cfg.signature_batch_max_ed25519;
             if !is_genesis_block && ed25519_batch_cap > 0 {
@@ -11271,7 +11238,6 @@ pub(crate) mod valid {
             persist_pipeline_recovery_sidecar: bool,
         ) -> Result<(), BlockValidationError> {
             use rayon::prelude::*;
-
             use crate::pipeline::{
                 access::{
                     AccessSetSource, derive_for_prepared_overlay_with_source,
@@ -13287,9 +13253,7 @@ pub(crate) mod valid {
             // or via the sequential path based on the `pipeline.parallel_apply` knob.
             if state_block.pipeline.parallel_apply {
                 use rayon::prelude::*;
-
                 use crate::state::DetachedStateTransactionDelta;
-
                 #[derive(Clone)]
                 struct PreparedEntry {
                     idx: usize,
@@ -15194,7 +15158,6 @@ pub(crate) mod valid {
             topology: &Topology,
         ) -> Result<(), SignatureVerificationError> {
             use SignatureVerificationError::{Other, UnknownSignatory, UnknownSignature};
-
             let signatory = usize::try_from(signature.index()).map_err(|_err| UnknownSignatory)?;
             let signatory = topology.as_ref().get(signatory).ok_or(UnknownSignatory)?;
             if matches!(topology.role(signatory), Role::Leader | Role::Undefined) {
@@ -15560,7 +15523,6 @@ pub(crate) mod valid {
             sync::Arc,
             time::Duration,
         };
-
         use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature, SignatureOf};
         use iroha_data_model::{
             Registrable,
@@ -15614,7 +15576,6 @@ pub(crate) mod valid {
         use mv::cell::Cell;
         use mv::storage::StorageReadOnly;
         use nonzero_ext::nonzero;
-
         use super::*;
         use crate::{
             kura::Kura,
@@ -16328,7 +16289,7 @@ pub(crate) mod valid {
             )
             .expect("exact control-only autonomous anchor must validate");
         }
-        include!("block/autonomous_anchor_network_test.rs");
+        include!("block/autonomous_anchor_network_tests.rs");
         #[test]
         fn autonomous_anchor_admission_uses_lane_slot_author_not_global_leader() {
             let fixture = autonomous_anchor_fixture(None, 0);
@@ -19225,7 +19186,6 @@ pub(crate) mod valid {
         #[test]
         fn legacy_live_validation_profile_is_explicitly_permissioned() {
             use iroha_data_model::block::consensus_v2::ConsensusMode;
-
             // World/Parameters defaults do not contain signed NPoS parameters,
             // and the legacy entrypoint has no authenticated height context.
             assert!(World::new().view().sumeragi_npos_parameters().is_none());
@@ -24654,7 +24614,6 @@ pub(crate) mod valid {
         #[test]
         fn validate_keep_voting_block_enforces_fraud_policy_with_stateless_cache() {
             use std::iter;
-
             use iroha_config::parameters::actual::{FraudMonitoring, FraudRiskBand};
             use iroha_data_model::{
                 ValidationFail, account::Account, asset::AssetDefinition, domain::Domain,
@@ -24732,7 +24691,6 @@ pub(crate) mod valid {
         fn genesis_block_without_upgrade_is_valid() {
             use iroha_data_model::prelude::*;
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let tx = TransactionBuilder::new_genesis(
                 genesis_account.clone(),
@@ -24752,7 +24710,6 @@ pub(crate) mod valid {
         fn check_genesis_block_rejects_proof_policy_sidecar_substitution() {
             use iroha_data_model::prelude::*;
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let tx = TransactionBuilder::new_genesis(
                 genesis_account.clone(),
@@ -24780,7 +24737,6 @@ pub(crate) mod valid {
         fn check_genesis_block_rejects_height_above_one() {
             use iroha_data_model::prelude::*;
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let tx = TransactionBuilder::new_genesis(
                 genesis_account.clone(),
@@ -24813,7 +24769,6 @@ pub(crate) mod valid {
         fn check_genesis_block_rejects_parent_hash() {
             use iroha_data_model::prelude::*;
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let tx = TransactionBuilder::new_genesis(
                 genesis_account.clone(),
@@ -24848,7 +24803,6 @@ pub(crate) mod valid {
         fn resultless_genesis_proposal_is_authenticated_before_execution() {
             use iroha_data_model::prelude::*;
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let transaction = TransactionBuilder::new_genesis(
                 genesis_account.clone(),
@@ -24905,7 +24859,6 @@ pub(crate) mod valid {
         #[test]
         fn genesis_block_signature_does_not_replace_transaction_signature() {
             use iroha_data_model::prelude::*;
-
             let genesis_keypair = crate::block::checked_keypair();
             let unrelated = crate::block::checked_keypair();
             let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
@@ -24930,7 +24883,6 @@ pub(crate) mod valid {
         #[test]
         fn block_authenticated_genesis_rejects_invalid_per_transaction_bls_proof() {
             use iroha_data_model::prelude::*;
-
             let chain_id = ChainId::from("block-authenticated-bls-genesis");
             let genesis_keypair =
                 crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -25017,7 +24969,6 @@ pub(crate) mod valid {
                 prelude::*,
             };
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-
             let transaction = TransactionBuilder::new_genesis(
                 SAMPLE_GENESIS_ACCOUNT_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -25045,7 +24996,6 @@ pub(crate) mod valid {
         fn genesis_block_with_da_commitments_uses_header_tree_commitment() {
             use iroha_data_model::prelude::*;
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let tx = TransactionBuilder::new_genesis(
                 genesis_account.clone(),
@@ -25083,7 +25033,6 @@ pub(crate) mod valid {
         fn genesis_asset_definition_in_genesis_domain_is_authorized() {
             use iroha_data_model::prelude::*;
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("genesis", "universal").expect("valid domain id"),
@@ -25118,7 +25067,6 @@ pub(crate) mod valid {
                 prelude::*,
             };
             use iroha_genesis::GenesisBuilder;
-
             use crate::{
                 kura::Kura, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
             };
@@ -25190,7 +25138,6 @@ pub(crate) mod valid {
         use iroha_logger::Level;
         use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
         use std::{borrow::Cow, time::Duration};
-
         use crate::{
             kura::Kura, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
             tx::AcceptedTransaction,
@@ -25252,10 +25199,8 @@ pub(crate) mod valid {
         }));
     }
 }
-
 mod commit {
     use super::*;
-
     /// Represents a block accepted by consensus.
     /// Every [`Self`] will have a different height.
     #[derive(Debug, Clone)]
@@ -25284,7 +25229,6 @@ mod commit {
     #[cfg(all(test, feature = "app_api"))]
     mod axt_validation_tests {
         use std::{collections::BTreeMap, time::Duration};
-
         use iroha_data_model::nexus::{
             AssetHandle, AxtBinding, AxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
             AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofEnvelope,
@@ -25292,7 +25236,6 @@ mod commit {
             HandleSubject, ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
         };
         use iroha_primitives::time::TimeSource;
-
         use super::*;
         use crate::{
             block::valid::validate_axt_envelopes,
@@ -27283,15 +27226,11 @@ mod commit {
         }
     }
 }
-
 mod event {
     use std::collections::BTreeSet;
-
     use new::NewBlock;
-
     use super::*;
     use crate::state::StateBlock;
-
     pub trait EventProducer {
         fn produce_events(&self) -> impl Iterator<Item = PipelineEventBox>;
     }
@@ -27422,7 +27361,6 @@ mod event {
         err: &SignatureVerificationError,
     ) -> iroha_data_model::block::error::BlockRejectionReason {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
-
         match err {
             SignatureVerificationError::NotEnoughSignatures { .. } => {
                 Reason::InsufficientBlockSignatures
@@ -27441,7 +27379,6 @@ mod event {
         err: &BlockValidationError,
     ) -> iroha_data_model::block::error::BlockRejectionReason {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
-
         match err {
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
@@ -27544,7 +27481,6 @@ mod event {
     #[cfg(test)]
     mod tests {
         use super::*;
-
         #[test]
         fn valid_block_transaction_events_use_entrypoint_index_after_sealed_commitment() {
             let keypair = iroha_crypto::KeyPair::try_random()
@@ -27720,7 +27656,6 @@ fn dedup_sorted_usize_smallvec(parents: &mut iroha_primitives::small::SmallVec<[
 #[cfg(feature = "simd")]
 mod simd_parent_dedup {
     use core::simd::{LaneCount, Simd, SimdPartialEq, SupportedLaneCount};
-
     const LANES: usize = 8;
     pub(super) fn dedup_sorted_slice(slice: &mut [usize]) -> Option<usize>
     where
@@ -27772,7 +27707,6 @@ fn build_conflict_graph(
     Vec<usize>,
 ) {
     use iroha_primitives::small::SmallVec;
-
     // Intern keys once per block to operate on compact integer IDs while
     // preserving deterministic ordering across peers.
     let (key_count, access_ids) = intern_access(access);
@@ -27837,7 +27771,6 @@ fn build_conflict_graph(
 mod dag_tests {
     use super::build_conflict_graph;
     use crate::pipeline::access::AccessSet;
-
     fn rw(reads: &[&str], writes: &[&str]) -> AccessSet {
         let mut s = AccessSet::new();
         for k in reads {
@@ -27954,10 +27887,8 @@ mod dag_tests {
 #[cfg(test)]
 mod dsu_tests {
     use iroha_primitives::small::SmallVec;
-
     use super::{DisjointSet, intern_access};
     use crate::pipeline::access::AccessSet;
-
     fn ids(reads: &[&str], writes: &[&str]) -> AccessSet {
         let mut s = AccessSet::new();
         for k in reads {
@@ -28025,7 +27956,6 @@ include!("block/scheduler_variant_tests.rs");
 mod tests {
     use core::time::Duration;
     use std::{borrow::Cow, num::NonZeroU64};
-
     use iroha_crypto::{Hash, HashOf, KeyPair, Signature, bls_normal_aggregate_signatures};
     use iroha_data_model::{
         errors::AmxStage,
@@ -28046,7 +27976,6 @@ mod tests {
     use iroha_primitives::time::TimeSource;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         block::event::map_sig_err_to_reason,
@@ -32516,9 +32445,7 @@ seiyaku MeteredFailure {
     fn verify_validator_signatures_accepts_bls_normal() {
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::prelude::PeerId;
-
         use crate::sumeragi::network_topology::Topology;
-
         // 3 BLS peers
         let kp0 = KeyPair::try_from_seed(b"seed0".to_vec(), Algorithm::BlsNormal)
             .expect("test BLS validator keypair should be valid");
@@ -32554,7 +32481,6 @@ seiyaku MeteredFailure {
 #[cfg(test)]
 #[path = "block/commit_signature_tally_tests.rs"]
 mod commit_signature_tally_tests;
-
 #[cfg(any(test, feature = "telemetry"))]
 fn committed_teu_by_lane_from_routes(
     routes: impl IntoIterator<Item = impl core::borrow::Borrow<crate::queue::RoutingDecision>>,
@@ -32575,9 +32501,7 @@ fn committed_teu_by_lane_from_routes(
 #[cfg(test)]
 mod committed_teu_tests {
     use iroha_data_model::nexus::{DataSpaceId, LaneId};
-
     use super::committed_teu_by_lane_from_routes;
-
     #[test]
     fn committed_teu_attribution_uses_supplied_routes_not_cached_hints() {
         let stale_hint_lane = LaneId::new(99);

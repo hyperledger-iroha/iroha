@@ -1,14 +1,11 @@
 //! VRF batch-syscall verification and exact-network admission tests.
-
 #![cfg(feature = "ivm_vrf_tests")]
 use ivm::{IVM, Memory, PointerType, host::DefaultHost};
-
 mod common;
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
 use common::assemble_syscalls;
 use group::{Curve, Group, prime::PrimeCurveAffine};
 use ivm::vrf::{VrfVerifyBatchRequest, VrfVerifyRequest};
-
 fn vrf_batch_vm_gas(payload_len: usize) -> u64 {
     ivm::gas::vrf_verify_gas(
         u64::try_from(ivm::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1).expect("VRF batch cap fits u64"),
@@ -16,7 +13,6 @@ fn vrf_batch_vm_gas(payload_len: usize) -> u64 {
     )
     .saturating_add(1_024)
 }
-
 fn hash_to_g1(msg: &[u8]) -> G1Affine {
     const DST: &[u8] = b"BLS12381G1_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
     G1Projective::hash_to_curve(msg, DST, &[]).to_affine()
@@ -25,7 +21,6 @@ fn hash_to_g2(msg: &[u8]) -> G2Affine {
     const DST: &[u8] = b"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
     G2Projective::hash_to_curve(msg, DST, &[]).to_affine()
 }
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     use iroha_crypto::Hash;
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -37,25 +32,21 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn run_vrf_verify_batch(req: VrfVerifyBatchRequest) -> (u64, u64, u64) {
     let network_id = req.items.first().map(|item| item.network_id);
     let body = norito::to_bytes(&req).expect("encode batch");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
-
     let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
     if let Some(network_id) = network_id {
         vm.set_host(DefaultHost::new().with_network_id(network_id));
     }
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-
     let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH as u8]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
     (vm.register(10), vm.register(11), vm.register(12))
 }
-
 #[test]
 fn syscall_vrf_verify_batch_two_items_ok() {
     // Item 1: Normal (SigInG2)
@@ -85,7 +76,6 @@ fn syscall_vrf_verify_batch_two_items_ok() {
     y1buf.extend_from_slice(b"iroha:vrf:v1:output");
     y1buf.extend_from_slice(&sig1);
     let exp1: [u8; 32] = iroha_crypto::Hash::new(&y1buf).into();
-
     // Item 2: Small (SigInG1)
     let sk2 = {
         let mut b = [0u8; 32];
@@ -111,7 +101,6 @@ fn syscall_vrf_verify_batch_two_items_ok() {
     y2buf.extend_from_slice(b"iroha:vrf:v1:output");
     y2buf.extend_from_slice(&sig2);
     let exp2: [u8; 32] = iroha_crypto::Hash::new(&y2buf).into();
-
     let req = VrfVerifyBatchRequest {
         items: vec![
             VrfVerifyRequest {
@@ -132,16 +121,13 @@ fn syscall_vrf_verify_batch_two_items_ok() {
     };
     let body = norito::to_bytes(&req).expect("encode batch");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
-
     let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
     vm.set_host(DefaultHost::new().with_network_id(network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-
     let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH as u8]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
-
     assert_eq!(vm.register(11), 0, "status ok");
     let p = vm.register(10);
     let tlv = vm.memory.validate_tlv(p).expect("valid tlv");
@@ -151,7 +137,6 @@ fn syscall_vrf_verify_batch_two_items_ok() {
     assert_eq!(outs[0], exp1);
     assert_eq!(outs[1], exp2);
 }
-
 #[test]
 fn syscall_vrf_verify_batch_fail_index_is_reported() {
     // One good, one bad (mismatched variant/length), expect r11!=0 and r12==1
@@ -177,10 +162,8 @@ fn syscall_vrf_verify_batch_fail_index_is_reported() {
     let sig1 = (G2Projective::from(hash_to_g2(&msg1)) * sk1)
         .to_affine()
         .to_compressed();
-
     // Bad item: use G1 sig but claim variant 1 (expects G2 sig). Build a fake but valid-length G1 encoding.
     let bad_sig_g1 = G1Affine::generator().to_compressed();
-
     let req = VrfVerifyBatchRequest {
         items: vec![
             VrfVerifyRequest {
@@ -201,27 +184,22 @@ fn syscall_vrf_verify_batch_fail_index_is_reported() {
     };
     let body = norito::to_bytes(&req).expect("encode batch");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
-
     let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
     vm.set_host(DefaultHost::new().with_network_id(network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-
     let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH as u8]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
-
     assert_ne!(vm.register(11), 0, "status must be error");
     assert_eq!(vm.register(12), 1, "failing index must be 1");
 }
-
 #[test]
 fn syscall_vrf_verify_batch_network_mismatch_reports_index() {
     // Host enforces an exact network identity; the second item claims another network.
     // Expect: r11 = 8 (ERR_NETWORK) and r12 = index of first mismatch.
     let host_network_id = common::test_network_id(0x51);
     let bad_network_id = common::test_network_id(0x52);
-
     // Item 1: Valid (SigInG2) with the correct network identity.
     let sk1 = {
         let mut b = [0u8; 32];
@@ -243,7 +221,6 @@ fn syscall_vrf_verify_batch_network_mismatch_reports_index() {
     let sig1 = (G2Projective::from(hash_to_g2(&msg1)) * sk1)
         .to_affine()
         .to_compressed();
-
     // Item 2: proof content is irrelevant because the host rejects the
     // mismatched network identity before verification.
     let sk2 = {
@@ -266,7 +243,6 @@ fn syscall_vrf_verify_batch_network_mismatch_reports_index() {
     let sig2 = (G1Projective::from(hash_to_g1(&msg2)) * sk2)
         .to_affine()
         .to_compressed();
-
     let req = VrfVerifyBatchRequest {
         items: vec![
             VrfVerifyRequest {
@@ -287,21 +263,17 @@ fn syscall_vrf_verify_batch_network_mismatch_reports_index() {
     };
     let body = norito::to_bytes(&req).expect("encode batch");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
-
     let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
     vm.set_host(DefaultHost::new().with_network_id(host_network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-
     let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH as u8]);
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
-
     assert_eq!(vm.register(11), 8, "status must be ERR_NETWORK (8)");
     assert_eq!(vm.register(12), 1, "failing index must be 1");
     assert_eq!(vm.register(10), 0, "output pointer must be 0 on error");
 }
-
 #[test]
 fn syscall_vrf_verify_batch_rejects_inert_material_with_index() {
     let network_id = common::test_network_id(0x51);
@@ -352,7 +324,6 @@ fn syscall_vrf_verify_batch_rejects_inert_material_with_index() {
             "identity small proof",
         ),
     ];
-
     for (item, expected_status, label) in cases {
         let req = VrfVerifyBatchRequest { items: vec![item] };
         let (output_ptr, status, failed_index) = run_vrf_verify_batch(req);

@@ -27,7 +27,6 @@ impl Client {
         }
         builder
     }
-
     fn operator_signed_request(
         &self,
         method: HttpMethod,
@@ -64,7 +63,6 @@ impl Client {
             .header(HEADER_OPERATOR_TIMESTAMP_MS, &timestamp)
             .header(HEADER_OPERATOR_NONCE, &nonce)
             .header(HEADER_OPERATOR_SIGNATURE, &signature_b64);
-
         if body.is_empty() {
             Ok(builder)
         } else {

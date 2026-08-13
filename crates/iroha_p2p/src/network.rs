@@ -17,7 +17,6 @@ use std::{
     },
     time::{Duration, SystemTime},
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPow as ActualSoranetPow,
@@ -46,7 +45,6 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Semaphore, mpsc, watch},
 };
-
 #[cfg(feature = "p2p_tls")]
 use crate::boilerplate;
 use crate::{
@@ -302,10 +300,8 @@ fn bind_reusable_tcp_listener(addrs: &[std::net::SocketAddr]) -> io::Result<TcpL
         )
     }))
 }
-
 fn bind_reusable_tcp_listener_addr(addr: std::net::SocketAddr) -> io::Result<TcpListener> {
     use socket2::{Domain, Protocol, Socket, Type};
-
     let domain = if addr.is_ipv4() {
         Domain::IPV4
     } else {
@@ -321,7 +317,6 @@ fn bind_reusable_tcp_listener_addr(addr: std::net::SocketAddr) -> io::Result<Tcp
 #[cfg(test)]
 #[path = "network/tcp_listener_bind_tests.rs"]
 mod tcp_listener_bind_tests;
-
 // Simple CIDR (IPv4/IPv6) representation for ACLs.
 #[derive(Clone, Debug)]
 struct IpNet {
@@ -537,10 +532,8 @@ fn relay_role_from_mode(mode: iroha_config::parameters::actual::RelayMode) -> Re
 #[cfg(test)]
 #[path = "network/runtime_tests.rs"]
 mod runtime_tests;
-
 mod net_channel {
     use tokio::sync::mpsc;
-
     pub type Sender<T> = mpsc::Sender<T>;
     pub type Receiver<T> = mpsc::Receiver<T>;
     pub fn channel_with_capacity<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
@@ -742,7 +735,6 @@ where
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         use std::borrow::Cow;
-
         let min_size = ncore::archived_payload_size::<Self>();
         let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
             let mut padded = Vec::with_capacity(min_size);
@@ -1801,7 +1793,6 @@ impl<T: Pload + message::ClassifyTopic> DeferredPeerFrameQueue<T> {
 #[cfg(test)]
 #[path = "network/data_frame_wire_len_tests.rs"]
 mod data_frame_wire_len_tests;
-
 /// Returns the number of dropped post messages (bounded queues only).
 ///
 /// In unbounded mode this counter stays at 0.
@@ -3899,10 +3890,8 @@ impl NetworkActorAdmissionTicketTestFixture {
             .ticket_drop_cancellations
     }
 }
-
 mod best_effort_admission;
 pub use best_effort_admission::{NetworkActorAdmissionRejection, NetworkPostAdmissionError};
-
 /// Recoverable result of semantic-progress admission into the network actor.
 #[derive(Debug)]
 pub enum NetworkActorAdmissionError<M> {
@@ -6027,10 +6016,8 @@ fn inc_subscriber_unrouted_for(topic: message::Topic) -> u64 {
 pub fn post_overflow_count() -> u64 {
     POST_OVERFLOWS.load(Ordering::Relaxed)
 }
-
 fn inc_trust_gossip_skipped(direction: &'static str, reason: &'static str) {
     use std::sync::atomic::Ordering::Relaxed;
-
     TRUST_GOSSIP_SKIPPED_CAP_OFF.fetch_add(1, Relaxed);
     iroha_logger::trace!(direction, reason, "trust gossip message skipped");
 }
@@ -6678,10 +6665,8 @@ impl<T: Pload> Subscriber<T> {
             .checked_add(1)
             .expect("byte-bounded safety subscriber backlog count cannot overflow");
     }
-
     fn flush_safety(&mut self, budget: usize) -> Result<usize, ()> {
         use tokio::sync::mpsc::error::TrySendError;
-
         let mut sent = 0usize;
         while sent < budget {
             let Some(peer_id) = self.safety_pending_order.pop_front() else {
@@ -6741,10 +6726,8 @@ impl<T: Pload> Subscriber<T> {
             .checked_add(1)
             .expect("byte-bounded progress subscriber backlog count cannot overflow");
     }
-
     fn flush_progress(&mut self, budget: usize) -> Result<usize, ()> {
         use tokio::sync::mpsc::error::TrySendError;
-
         let mut sent = 0usize;
         while sent < budget {
             let Some(key) = self.progress_pending_order.pop_front() else {
@@ -7032,7 +7015,6 @@ impl<T: Pload> InboundReservationGuard<T> {
 impl<T: Pload> Drop for InboundReservationGuard<T> {
     fn drop(&mut self) {
         use tokio::sync::mpsc::error::TrySendError;
-
         if !self.armed {
             return;
         }
@@ -7101,7 +7083,6 @@ fn inbound_source_credit_capacity(
         .checked_add(usize::from(remainder != 0))
         .map(|capacity| capacity.max(1))
 }
-
 #[cfg(test)]
 mod inbound_source_memory_bound_tests {
     use super::{
@@ -8625,7 +8606,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         NetworkActorAdmissionError<NetworkMessage<T>>,
     > {
         use tokio::sync::mpsc::error::TrySendError;
-
         let wire_bytes = match self.outbound_actor_wire_bytes_recoverable(&message, topic) {
             Ok(wire_bytes) => wire_bytes,
             Err(reason) => {
@@ -9288,7 +9268,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     #[allow(clippy::needless_pass_by_value)]
     pub fn post(&self, msg: Post<T>) {
         use tokio::sync::mpsc::error::TrySendError;
-
         let topic = msg.data.topic();
         let route = msg.data.subscriber_route();
         let priority = canonical_outbound_priority(topic, route, msg.priority);
@@ -9366,7 +9345,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     #[allow(clippy::needless_pass_by_value)]
     pub fn broadcast(&self, msg: Broadcast<T>) {
         use tokio::sync::mpsc::error::TrySendError;
-
         let topic = msg.data.topic();
         let route = msg.data.subscriber_route();
         let priority = canonical_outbound_priority(topic, route, msg.priority);
@@ -9562,11 +9540,9 @@ fn test_network_actor_progress_budget() -> Arc<NetworkActorProgressBudget> {
 }
 #[cfg(test)]
 include!("network/handle_update_tests.rs");
-
 #[cfg(test)]
 mod accept_stream_tests {
     use std::{collections::HashSet, sync::Arc, time::Duration};
-
     use iroha_config::parameters::actual::{
         LaneProfile, Network as NetCfg, RelayMode, SoranetHandshake as ActualSoranetHandshake,
         SoranetPow, SoranetPrivacy as ActualSoranetPrivacy,
@@ -9585,7 +9561,6 @@ mod accept_stream_tests {
     #[allow(unused_imports)]
     use quinn::crypto::rustls::QuicClientConfig;
     use tokio::{net::TcpListener, sync::mpsc};
-
     use super::*;
     use crate::peer::{
         SoranetHandshakeConfig,
@@ -9682,14 +9657,12 @@ mod accept_stream_tests {
         }
     }
     impl_decode_from_slice_via_codec!(DummyConsensusChunk);
-
     #[cfg(any(feature = "p2p_tls", feature = "quic"))]
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
     #[cfg(any(feature = "p2p_tls", feature = "quic"))]
     use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
     #[cfg(any(feature = "p2p_tls", feature = "quic"))]
     use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
-
     #[cfg(any(feature = "p2p_tls", feature = "quic"))]
     #[derive(Debug)]
     struct AcceptAllVerifier;
@@ -10007,7 +9980,6 @@ mod accept_stream_tests {
     #[test]
     fn shipped_defaults_form_valid_chacha_transport_geometry() {
         use iroha_config::parameters::defaults::network as defaults;
-
         let topic_caps = TopicFrameCaps {
             consensus: defaults::MAX_FRAME_BYTES_CONSENSUS.get(),
             control: defaults::MAX_FRAME_BYTES_CONTROL.get(),
@@ -10203,9 +10175,7 @@ mod accept_stream_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn connect_peer_propagates_frame_cap() {
         use std::collections::HashSet;
-
         use iroha_primitives::addr::socket_addr;
-
         let baseline = snapshot().len();
         let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
@@ -10249,7 +10219,6 @@ mod accept_stream_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn tls_listener_propagates_frame_cap() {
         use std::sync::Arc;
-
         use tokio::sync::mpsc;
         use tokio_rustls::{
             TlsConnector,
@@ -10343,7 +10312,6 @@ mod accept_stream_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn accept_stream_propagates_frame_cap() {
         use std::net::SocketAddr as StdSocketAddr;
-
         let baseline = snapshot().len();
         let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
@@ -10391,7 +10359,6 @@ mod accept_stream_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn start_provides_bind_listener_context_on_failure() {
         use iroha_primitives::addr::socket_addr;
-
         let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.address = iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:1));
@@ -10570,9 +10537,7 @@ mod accept_stream_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn quic_listener_propagates_frame_cap() {
         use std::sync::Arc;
-
         use tokio::sync::mpsc;
-
         let baseline = snapshot().len();
         let key_pair = test_node_key_pair();
         let network_id = test_network_id("test-chain");
@@ -10691,7 +10656,6 @@ mod accept_stream_tests {
     async fn peer_message_over_cap_increments_violation_counter() {
         use crate::network::cap_violations_consensus;
         let _guard = cap_violation_test_guard();
-
         assert_peer_message_cap(
             DummyConsensus,
             128,
@@ -10706,7 +10670,6 @@ mod accept_stream_tests {
     async fn peer_message_consensus_payload_uses_block_sync_cap() {
         use crate::network::cap_violations_consensus;
         let _guard = cap_violation_test_guard();
-
         assert_peer_message_cap(
             DummyConsensusPayload,
             512,
@@ -10721,7 +10684,6 @@ mod accept_stream_tests {
     async fn peer_message_consensus_chunk_uses_block_sync_cap() {
         use crate::network::cap_violations_block_sync;
         let _guard = cap_violation_test_guard();
-
         assert_peer_message_cap(
             DummyConsensusChunk,
             512,
@@ -10761,9 +10723,7 @@ mod accept_stream_tests {
     #[test]
     fn overflow_counters_full_matrix() {
         use std::sync::atomic::Ordering::Relaxed;
-
         use super::message::Topic::*;
-
         // Snapshot bases
         let base_total = super::post_overflow_count();
         let b_hi = (
@@ -10844,15 +10804,11 @@ mod accept_stream_tests {
         assert!(a_lo.6 > b_lo.6);
     }
 }
-
 #[cfg(test)]
 mod reputation_tests {
     use std::collections::HashSet;
-
     use iroha_crypto::KeyPair;
-
     use super::*;
-
     #[test]
     fn trust_and_scores_update() {
         let id1 = PeerId::from(KeyPair::random().public_key().clone());
@@ -10911,12 +10867,10 @@ where
     E: Enc,
 {
     use std::sync::Arc;
-
     use quinn::{
         IdleTimeout, TransportConfig, crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
     };
     use rustls::pki_types::PrivatePkcs8KeyDer;
-
     let rcgen::CertifiedKey { cert, signing_key } =
         rcgen::generate_simple_self_signed(["iroha-quic".to_owned()])
             .map_err(|e| Error::from(std::io::Error::other(format!("rcgen: {e}"))))?;
@@ -11142,17 +11096,13 @@ where
     });
     Ok(AbortOnDropTask::new(task))
 }
-
 #[cfg(all(test, feature = "quic"))]
 mod quic_tests {
     use std::sync::Arc;
-
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, Encode};
-
     use super::*;
-
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     impl<'a> ncore::DecodeFromSlice<'a> for Dummy {
@@ -15272,10 +15222,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         let admission_peer_id = msg.peer.id().clone();
         self.dispatch_to_subscribers_from(msg, admission_peer_id);
     }
-
     fn dispatch_to_subscribers_from(&mut self, msg: PeerMessage<T>, admission_peer_id: PeerId) {
         use tokio::sync::mpsc::error::TrySendError;
-
         let topic = msg.payload.topic();
         let route = msg.payload.subscriber_route();
         let progress_class = subscriber_progress_class(topic, route);
@@ -15645,22 +15593,18 @@ fn bounded_hash_jitter_ms(material: &str, upper_ms: u64) -> u64 {
     u64::try_from(u128::from(raw) % (u128::from(upper_ms) + 1))
         .expect("bounded jitter value fits in u64")
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeSet, HashSet};
     use std::sync::{Mutex, OnceLock};
-
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::DecodeAll;
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
     use tokio::sync::mpsc::error::TryRecvError;
-
     use super::handle_update_tests::handle_with_network_receivers;
     use super::*;
-
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyMsg;
     #[derive(Clone, Debug, Decode, Encode)]
@@ -15732,7 +15676,6 @@ mod tests {
     #[test]
     fn reliable_progress_class_matches_actor_reservations_exactly() {
         use message::{SubscriberRoute as Route, Topic};
-
         for (topic, route, expected) in [
             (
                 Topic::ConsensusSafety,
@@ -26380,15 +26323,11 @@ mod tests {
         );
     }
 }
-
 pub mod message {
     //! Module for network messages
-
     use iroha_data_model::peer::Peer;
     use norito::codec::{Decode, Encode};
-
     use super::*;
-
     /// Priority for network messages.
     #[derive(Clone, Copy, Debug, Encode, Decode, PartialEq, Eq)]
     pub enum Priority {

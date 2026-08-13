@@ -19,7 +19,6 @@ impl TransactionBuilder {
             .validate_fee_payment_intent()
             .map_err(|err| TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()))
     }
-
     /// Reconstruct a transaction builder from one exact unsigned payload.
     ///
     /// The payload retains its signature-bound proof attachments. Only the
@@ -38,7 +37,6 @@ impl TransactionBuilder {
             construction: TransactionConstruction::Ordinary,
         })
     }
-
     /// Reconstruct an explicit genesis-only builder from one exact unsigned payload.
     ///
     /// This entry point is intentionally separate from [`Self::from_payload`]
@@ -59,7 +57,6 @@ impl TransactionBuilder {
             construction: TransactionConstruction::Genesis,
         })
     }
-
     /// Consume the builder and return its exact unsigned payload.
     ///
     /// Proof attachments are part of the returned signature preimage.
@@ -74,7 +71,6 @@ impl TransactionBuilder {
         self.validate_payload_state()?;
         Ok(self.payload)
     }
-
     fn decode_payload_for_construction(
         bytes: &[u8],
         construction: TransactionConstruction,
@@ -97,7 +93,6 @@ impl TransactionBuilder {
         }
         Ok(builder)
     }
-
     /// Reconstruct a transaction builder from an exact canonical payload archive.
     ///
     /// This is the inverse of [`Self::encode_payload`] for external-signature
@@ -112,7 +107,6 @@ impl TransactionBuilder {
     pub fn decode_payload(bytes: &[u8]) -> Result<Self, norito::core::Error> {
         Self::decode_payload_for_construction(bytes, TransactionConstruction::Ordinary)
     }
-
     /// Reconstruct an explicit genesis-only builder from an exact canonical payload archive.
     ///
     /// # Errors

@@ -1,9 +1,6 @@
 //! Validated Torii query load-profile definitions used by benchmark binaries.
-
 use std::fmt;
-
 use iroha_data_model::query::parameters::MAX_FETCH_SIZE;
-
 /// Upper bound for built-in benchmark concurrency.
 pub const MAX_BENCH_CONCURRENCY: usize = 256;
 /// Upper bound for measured operations in one sustained profile run.
@@ -14,7 +11,6 @@ pub const MAX_BENCH_ACCOUNTS: usize = 1_000_000;
 pub const MAX_BENCH_COMMITTED_TRANSACTIONS: usize = 1_000_000;
 /// Upper bound for signed-query continuation depth in one operation.
 pub const MAX_BENCH_CONTINUATION_DEPTH: usize = 10_000;
-
 /// Sustained Torii query workload categories.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QueryLoadWorkload {
@@ -31,7 +27,6 @@ pub enum QueryLoadWorkload {
     /// App-facing generic aggregate query.
     GenericAggregate,
 }
-
 impl QueryLoadWorkload {
     /// Stable label used in Criterion ids and profile output.
     #[must_use]
@@ -45,12 +40,10 @@ impl QueryLoadWorkload {
             Self::GenericAggregate => "generic_aggregate",
         }
     }
-
     const fn requires_continuation(self) -> bool {
         matches!(self, Self::SignedIterableStoredContinuation)
     }
 }
-
 /// One sustained query-load profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QueryLoadProfile {
@@ -77,7 +70,6 @@ pub struct QueryLoadProfile {
     /// Continuation requests after the initial signed iterable query.
     pub continuation_depth: usize,
 }
-
 impl QueryLoadProfile {
     /// Validate the profile before a benchmark constructs fixtures.
     ///
@@ -159,7 +151,6 @@ impl QueryLoadProfile {
         Ok(())
     }
 }
-
 fn validate_profile_name(name: &str) -> Result<(), QueryLoadProfileError> {
     if name.is_empty() {
         return Err(QueryLoadProfileError::NameEmpty);
@@ -175,7 +166,6 @@ fn validate_profile_name(name: &str) -> Result<(), QueryLoadProfileError> {
     }
     Ok(())
 }
-
 /// Built-in sustained Torii query benchmark profiles.
 #[must_use]
 pub const fn standard_query_load_profiles() -> [QueryLoadProfile; 6] {
@@ -260,7 +250,6 @@ pub const fn standard_query_load_profiles() -> [QueryLoadProfile; 6] {
         },
     ]
 }
-
 /// Profile validation failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QueryLoadProfileError {
@@ -311,7 +300,6 @@ pub enum QueryLoadProfileError {
     /// Non-continuation workload unexpectedly specified continuations.
     UnexpectedContinuationDepth,
 }
-
 impl fmt::Display for QueryLoadProfileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -343,21 +331,16 @@ impl fmt::Display for QueryLoadProfileError {
         })
     }
 }
-
 impl std::error::Error for QueryLoadProfileError {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn valid_profile() -> QueryLoadProfile {
         standard_query_load_profiles()[0]
     }
-
     fn assert_invalid(profile: QueryLoadProfile, error: QueryLoadProfileError) {
         assert_eq!(profile.validate(), Err(error));
     }
-
     #[test]
     fn built_in_profiles_validate() {
         for profile in standard_query_load_profiles() {
@@ -366,7 +349,6 @@ mod tests {
                 .unwrap_or_else(|err| panic!("{} rejected: {err}", profile.name));
         }
     }
-
     #[test]
     fn rejects_invalid_names() {
         assert_invalid(
@@ -398,7 +380,6 @@ mod tests {
             QueryLoadProfileError::NameTooLong,
         );
     }
-
     #[test]
     fn rejects_zero_or_oversized_operation_counts() {
         assert_invalid(
@@ -423,7 +404,6 @@ mod tests {
             QueryLoadProfileError::WarmupOpsTooLarge,
         );
     }
-
     #[test]
     fn rejects_invalid_concurrency_and_fetch_limits() {
         assert_invalid(
@@ -455,7 +435,6 @@ mod tests {
             QueryLoadProfileError::FetchSizeTooLarge,
         );
     }
-
     #[test]
     fn rejects_invalid_dataset_shapes() {
         assert_invalid(
@@ -541,7 +520,6 @@ mod tests {
             QueryLoadProfileError::PageLimitExceedsDataset,
         );
     }
-
     #[test]
     fn rejects_bad_continuation_profiles() {
         assert_invalid(

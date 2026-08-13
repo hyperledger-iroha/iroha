@@ -6,14 +6,12 @@
 //! committed history even without a dedicated column family.
 //! Durable candidates are rejected before allocation when their encoded size,
 //! collection cardinality, or Norito decode budget exceeds protocol bounds.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
-
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_data_model::{
     da::commitment::{DaCommitmentBundle, DaCommitmentRecord},
@@ -26,14 +24,12 @@ use norito::{
     decode_from_bytes_with_limits, to_bytes,
 };
 use thiserror::Error;
-
 /// First-release ceiling for cursor/reset records in one durable journal.
 const SHARD_CURSOR_JOURNAL_MAX_ENTRIES: usize = MAX_ACTIVE_EXECUTION_LANES;
 /// First-release encoded ceiling for one cursor journal candidate.
 const SHARD_CURSOR_JOURNAL_MAX_BYTES: usize = 512 * 1024;
 const SHARD_CURSOR_JOURNAL_MAX_DECODE_ALLOCATED_BYTES: usize = 1024 * 1024;
 const SHARD_CURSOR_JOURNAL_MAX_DECODE_DEPTH: usize = 32;
-
 /// Cursor describing the latest DA commitment accepted for a shard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DaShardCursor {
@@ -46,7 +42,6 @@ pub struct DaShardCursor {
     /// Block height that recorded the cursor advance.
     pub last_block_height: u64,
 }
-
 impl DaShardCursor {
     /// Construct a new cursor.
     #[must_use]
@@ -59,7 +54,6 @@ impl DaShardCursor {
         }
     }
 }
-
 /// Errors surfaced when attempting to regress or derive a shard cursor.
 #[allow(variant_size_differences)]
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -119,7 +113,6 @@ pub enum DaShardCursorError {
         block_height: u64,
     },
 }
-
 /// In-memory shard cursor index reconstructed from committed DA bundles.
 #[derive(Debug, Default, Clone)]
 pub struct DaShardCursorIndex {
@@ -127,7 +120,6 @@ pub struct DaShardCursorIndex {
     cursors: BTreeMap<u32, DaShardCursor>,
     canonical_reset_heights: BTreeMap<LaneId, u64>,
 }
-
 impl DaShardCursorIndex {
     /// Build a cursor index seeded with the current lane mapping.
     #[must_use]
@@ -136,7 +128,6 @@ impl DaShardCursorIndex {
         index.sync_mapping(lane_config);
         index
     }
-
     /// Refresh the lane→shard mapping and drop cursors whose shard disappeared.
     pub fn sync_mapping(&mut self, lane_config: &LaneConfig) {
         self.mapping = lane_config.shard_mapping();
@@ -144,13 +135,11 @@ impl DaShardCursorIndex {
         self.cursors
             .retain(|shard_id, _| allowed.contains(shard_id));
     }
-
     /// Return the current cursor for a shard.
     #[must_use]
     pub fn get(&self, shard_id: u32) -> Option<&DaShardCursor> {
         self.cursors.get(&shard_id)
     }
-
     /// Drop shard cursors owned only by retired or reset lanes.
     pub fn prune_lanes(&mut self, lanes: &BTreeSet<LaneId>) {
         let mut reset_shards = BTreeSet::new();
@@ -168,7 +157,6 @@ impl DaShardCursorIndex {
         self.cursors
             .retain(|shard_id, _| !reset_shards.contains(shard_id));
     }
-
     /// Remember that lane-scoped DA history at or before `reset_height` belongs
     /// to an earlier lane incarnation.
     pub fn mark_lanes_canonically_reset(&mut self, lanes: &BTreeSet<LaneId>, reset_height: u64) {
@@ -179,7 +167,6 @@ impl DaShardCursorIndex {
                 .or_insert(reset_height);
         }
     }
-
     /// Replace reset watermarks, preserving any newer in-memory watermark.
     pub fn merge_canonical_reset_heights(
         &mut self,
@@ -192,19 +179,16 @@ impl DaShardCursorIndex {
                 .or_insert(*reset_height);
         }
     }
-
     /// Return the last reset height recorded for a lane.
     #[must_use]
     pub fn canonical_reset_height_for_lane(&self, lane_id: LaneId) -> Option<u64> {
         self.canonical_reset_heights.get(&lane_id).copied()
     }
-
     /// Return all lane reset watermarks.
     #[must_use]
     pub fn canonical_reset_heights(&self) -> &BTreeMap<LaneId, u64> {
         &self.canonical_reset_heights
     }
-
     /// Advance the shard cursor using the supplied commitment.
     ///
     /// # Errors
@@ -232,12 +216,10 @@ impl DaShardCursorIndex {
                 });
             }
         }
-
         let cursor = DaShardCursor::new(shard_id, record.epoch, record.sequence, block_height);
         self.cursors.insert(shard_id, cursor);
         Ok(())
     }
-
     /// Bulk-advance cursors using all commitments in the bundle.
     ///
     /// # Errors
@@ -257,7 +239,6 @@ impl DaShardCursorIndex {
         *self = candidate;
         Ok(())
     }
-
     /// Record all commitments in the bundle against the shard cursor index.
     ///
     /// # Errors
@@ -273,7 +254,6 @@ impl DaShardCursorIndex {
     ) -> Result<(), DaShardCursorError> {
         self.record_records(lane_config, &bundle.commitments, block_height)
     }
-
     /// Record a slice of commitments against the shard cursor index.
     ///
     /// # Errors
@@ -296,7 +276,6 @@ impl DaShardCursorIndex {
         *self = candidate;
         Ok(())
     }
-
     fn shard_id_for_lane(
         &self,
         lane_id: LaneId,
@@ -310,13 +289,11 @@ impl DaShardCursorIndex {
                 block_height,
             })
     }
-
     /// Return true when no shard cursors are tracked.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.cursors.is_empty()
     }
-
     /// Restore a cursor entry sourced from a persisted journal.
     ///
     /// Returns `Ok(true)` when the entry was installed, `Ok(false)` when the entry was skipped
@@ -340,7 +317,6 @@ impl DaShardCursorIndex {
                 block_height: entry.last_block_height,
             });
         }
-
         let candidate = (entry.epoch, entry.sequence, entry.last_block_height);
         let should_update = self.cursors.get(&shard_id).is_none_or(|existing| {
             (
@@ -364,7 +340,6 @@ impl DaShardCursorIndex {
         Ok(false)
     }
 }
-
 /// Persisted cursor for a `(shard_id, lane_id)` pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub struct LaneShardCursor {
@@ -380,7 +355,6 @@ pub struct LaneShardCursor {
     #[norito(default)]
     pub last_block_height: u64,
 }
-
 /// Persisted representation of shard cursors.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct PersistedShardCursors {
@@ -393,7 +367,6 @@ struct PersistedShardCursors {
     /// Stored cursor entries.
     entries: Vec<LaneShardCursor>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum JournalRelation {
     Equal,
@@ -401,7 +374,6 @@ enum JournalRelation {
     CandidateBehind,
     Conflicting,
 }
-
 /// Errors returned when loading or persisting shard cursors.
 #[derive(Debug, Error)]
 pub enum ShardCursorJournalError {
@@ -480,7 +452,6 @@ pub enum ShardCursorJournalError {
         version: u32,
     },
 }
-
 /// Journal that records shard cursors derived from DA commitments.
 #[derive(Debug, Clone)]
 pub struct DaShardCursorJournal {
@@ -489,18 +460,15 @@ pub struct DaShardCursorJournal {
     canonical_reset_heights: BTreeMap<LaneId, u64>,
     path: PathBuf,
 }
-
 impl DaShardCursorJournal {
     /// Filename used to persist shard cursor journals next to the DA spool.
     pub const JOURNAL_FILE: &'static str = "da-shard-cursors.norito";
     const JOURNAL_VERSION: u32 = 1;
-
     /// Build the canonical journal path under the provided root.
     #[must_use]
     pub fn journal_path(root: &Path) -> PathBuf {
         root.join(Self::JOURNAL_FILE)
     }
-
     /// Construct a fresh journal with an empty cursor set.
     #[must_use]
     pub fn new(lane_config: &LaneConfig, path: impl Into<PathBuf>) -> Self {
@@ -511,7 +479,6 @@ impl DaShardCursorJournal {
             path: path.into(),
         }
     }
-
     /// Load a journal from disk, dropping entries whose lane→shard binding no longer matches.
     ///
     /// Missing files are treated as empty journals.
@@ -603,7 +570,6 @@ impl DaShardCursorJournal {
                 }
             },
         };
-
         if let Some(persisted) = persisted {
             journal.merge_canonical_reset_heights(&persisted.canonical_reset_heights);
             for entry in persisted.entries {
@@ -615,7 +581,6 @@ impl DaShardCursorJournal {
                     );
                     continue;
                 };
-
                 if expected != entry.shard_id {
                     warn!(
                         lane = %entry.lane_id.as_u32(),
@@ -625,14 +590,11 @@ impl DaShardCursorJournal {
                     );
                     continue;
                 }
-
                 journal.upsert(entry);
             }
         }
-
         Ok(journal)
     }
-
     /// Record cursors for every commitment in the bundle.
     ///
     /// # Errors
@@ -652,7 +614,6 @@ impl DaShardCursorJournal {
         *self = candidate;
         Ok(())
     }
-
     /// Record a single commitment against the shard journal.
     ///
     /// # Errors
@@ -670,7 +631,6 @@ impl DaShardCursorJournal {
                 .ok_or(ShardCursorJournalError::UnknownLane {
                     lane_id: record.lane_id,
                 })?;
-
         let entry = LaneShardCursor {
             shard_id,
             lane_id: record.lane_id,
@@ -681,7 +641,6 @@ impl DaShardCursorJournal {
         self.upsert(entry);
         Ok(())
     }
-
     fn record_commitment_strict(
         &mut self,
         block_height: u64,
@@ -694,7 +653,6 @@ impl DaShardCursorJournal {
                 .ok_or(ShardCursorJournalError::UnknownLane {
                     lane_id: record.lane_id,
                 })?;
-
         if let Some(current) = self.latest_for_shard(shard_id) {
             if (record.epoch, record.sequence) <= (current.epoch, current.sequence) {
                 return Err(ShardCursorJournalError::Regression {
@@ -709,7 +667,6 @@ impl DaShardCursorJournal {
                 });
             }
         }
-
         let entry = LaneShardCursor {
             shard_id,
             lane_id: record.lane_id,
@@ -720,7 +677,6 @@ impl DaShardCursorJournal {
         self.upsert(entry);
         Ok(())
     }
-
     /// Retrieve the cursor for a lane if present.
     #[must_use]
     pub fn cursor_for_lane(&self, lane_id: LaneId) -> Option<&LaneShardCursor> {
@@ -728,19 +684,16 @@ impl DaShardCursorJournal {
             .get(&lane_id)
             .and_then(|shard_id| self.cursors.get(&(*shard_id, lane_id)))
     }
-
     /// Return the last reset height recorded for a lane.
     #[must_use]
     pub fn canonical_reset_height_for_lane(&self, lane_id: LaneId) -> Option<u64> {
         self.canonical_reset_heights.get(&lane_id).copied()
     }
-
     /// Return all persisted lane reset watermarks.
     #[must_use]
     pub fn canonical_reset_heights(&self) -> &BTreeMap<LaneId, u64> {
         &self.canonical_reset_heights
     }
-
     /// Merge reset watermarks, preserving the highest known height per lane.
     pub fn merge_canonical_reset_heights(
         &mut self,
@@ -753,18 +706,15 @@ impl DaShardCursorJournal {
                 .or_insert(*reset_height);
         }
     }
-
     /// Snapshot the stored cursor entries (deduplicated per lane).
     pub fn entries(&self) -> impl Iterator<Item = &LaneShardCursor> {
         self.cursors.values()
     }
-
     /// Expose the underlying mapping for diagnostics.
     #[must_use]
     pub fn mapping(&self) -> &BTreeMap<LaneId, ShardId> {
         &self.mapping
     }
-
     /// Persist the current cursor set to disk.
     ///
     /// # Errors
@@ -794,7 +744,6 @@ impl DaShardCursorJournal {
                 ),
             });
         }
-
         Self::create_journal_parent_no_follow(&self.path)?;
         let tmp_path = Self::temp_path(&self.path);
         {
@@ -848,7 +797,6 @@ impl DaShardCursorJournal {
         }
         Ok(())
     }
-
     /// Build a journal populated from an in-memory cursor index.
     #[must_use]
     pub fn from_index(
@@ -873,7 +821,6 @@ impl DaShardCursorJournal {
         }
         journal
     }
-
     fn upsert(&mut self, entry: LaneShardCursor) {
         let key = (entry.shard_id, entry.lane_id);
         let should_update = self
@@ -884,11 +831,9 @@ impl DaShardCursorJournal {
             self.cursors.insert(key, entry);
         }
     }
-
     fn should_advance(current: &LaneShardCursor, candidate: &LaneShardCursor) -> bool {
         (candidate.epoch, candidate.sequence) > (current.epoch, current.sequence)
     }
-
     fn latest_for_shard(&self, shard_id: ShardId) -> Option<LaneShardCursor> {
         self.cursors
             .values()
@@ -896,11 +841,9 @@ impl DaShardCursorJournal {
             .max_by_key(|entry| (entry.epoch, entry.sequence))
             .copied()
     }
-
     fn temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
     }
-
     fn validate_journal_parent_for_read(path: &Path) -> Result<bool, ShardCursorJournalError> {
         let Some(parent) = path
             .parent()
@@ -926,7 +869,6 @@ impl DaShardCursorJournal {
         })?;
         Ok(true)
     }
-
     fn create_journal_parent_no_follow(path: &Path) -> Result<(), ShardCursorJournalError> {
         let Some(parent) = path
             .parent()
@@ -945,7 +887,6 @@ impl DaShardCursorJournal {
             }
         })
     }
-
     fn validate_journal_parent_for_write(path: &Path) -> Result<(), ShardCursorJournalError> {
         let Some(parent) = path
             .parent()
@@ -960,12 +901,10 @@ impl DaShardCursorJournal {
             }
         })
     }
-
     fn validate_journal_dir_no_follow(dir: &Path) -> io::Result<()> {
         let metadata = fs::symlink_metadata(dir)?;
         Self::validate_journal_dir_metadata(dir, &metadata)
     }
-
     fn validate_journal_dir_metadata(dir: &Path, metadata: &fs::Metadata) -> io::Result<()> {
         if !metadata.file_type().is_dir() {
             return Err(io::Error::new(
@@ -978,7 +917,6 @@ impl DaShardCursorJournal {
         }
         Ok(())
     }
-
     fn read_persisted(
         path: &Path,
     ) -> Result<Option<PersistedShardCursors>, ShardCursorJournalError> {
@@ -1079,7 +1017,6 @@ impl DaShardCursorJournal {
             });
         }
         Self::revalidate_persisted_read(path, &metadata, bytes.len())?;
-
         let persisted: PersistedShardCursors =
             decode_from_bytes_with_limits(&bytes, Self::decode_limits()).map_err(|source| {
                 ShardCursorJournalError::Decode {
@@ -1087,7 +1024,6 @@ impl DaShardCursorJournal {
                     source,
                 }
             })?;
-
         if persisted.version != Self::JOURNAL_VERSION {
             return Err(ShardCursorJournalError::UnsupportedVersion {
                 path: path.to_path_buf(),
@@ -1095,10 +1031,8 @@ impl DaShardCursorJournal {
             });
         }
         Self::validate_persisted(path, &persisted)?;
-
         Ok(Some(persisted))
     }
-
     fn revalidate_persisted_read(
         path: &Path,
         metadata: &fs::Metadata,
@@ -1131,7 +1065,6 @@ impl DaShardCursorJournal {
         }
         Ok(())
     }
-
     fn validate_persisted(
         path: &Path,
         persisted: &PersistedShardCursors,
@@ -1165,7 +1098,6 @@ impl DaShardCursorJournal {
         }
         Ok(())
     }
-
     fn validate_entry_counts(
         path: &Path,
         entries: usize,
@@ -1189,7 +1121,6 @@ impl DaShardCursorJournal {
         }
         Ok(())
     }
-
     fn decode_limits() -> DecodeLimits {
         DecodeLimits::new(
             SHARD_CURSOR_JOURNAL_MAX_ENTRIES,
@@ -1199,7 +1130,6 @@ impl DaShardCursorJournal {
             SHARD_CURSOR_JOURNAL_MAX_DECODE_DEPTH,
         )
     }
-
     fn compare_journals(
         current: &PersistedShardCursors,
         candidate: &PersistedShardCursors,
@@ -1208,7 +1138,6 @@ impl DaShardCursorJournal {
         let candidate_entries = Self::journal_entry_map(candidate);
         let mut ahead = false;
         let mut behind = false;
-
         Self::compare_canonical_reset_heights(
             &current.canonical_reset_heights,
             &candidate.canonical_reset_heights,
@@ -1218,7 +1147,6 @@ impl DaShardCursorJournal {
         if ahead && behind {
             return JournalRelation::Conflicting;
         }
-
         for key in current_entries.keys().chain(candidate_entries.keys()) {
             match (current_entries.get(key), candidate_entries.get(key)) {
                 (Some(current), Some(candidate)) if candidate > current => ahead = true,
@@ -1231,7 +1159,6 @@ impl DaShardCursorJournal {
                 return JournalRelation::Conflicting;
             }
         }
-
         match (ahead, behind) {
             (false, false) => JournalRelation::Equal,
             (true, false) => JournalRelation::CandidateAhead,
@@ -1239,7 +1166,6 @@ impl DaShardCursorJournal {
             (true, true) => JournalRelation::Conflicting,
         }
     }
-
     fn compare_canonical_reset_heights(
         current: &BTreeMap<LaneId, u64>,
         candidate: &BTreeMap<LaneId, u64>,
@@ -1259,7 +1185,6 @@ impl DaShardCursorJournal {
             }
         }
     }
-
     fn journal_entry_map(
         persisted: &PersistedShardCursors,
     ) -> BTreeMap<(ShardId, LaneId), (u64, u64, u64)> {
@@ -1277,7 +1202,6 @@ impl DaShardCursorJournal {
         }
         entries
     }
-
     fn remove_temp(tmp_path: &Path) -> Result<(), ShardCursorJournalError> {
         match fs::remove_file(tmp_path) {
             Ok(()) => Ok(()),
@@ -1288,7 +1212,6 @@ impl DaShardCursorJournal {
             }),
         }
     }
-
     fn promote_temp(tmp_path: &Path, path: &Path) -> Result<(), ShardCursorJournalError> {
         match fs::rename(tmp_path, path) {
             Ok(()) => {}
@@ -1309,7 +1232,6 @@ impl DaShardCursorJournal {
                 });
             }
         };
-
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 sync_dir(parent).map_err(|source| ShardCursorJournalError::Write {
@@ -1321,12 +1243,10 @@ impl DaShardCursorJournal {
         Ok(())
     }
 }
-
 fn sync_dir(path: &Path) -> std::io::Result<()> {
     let file = fs::File::open(path)?;
     file.sync_all()
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1334,7 +1254,6 @@ mod tests {
         num::NonZeroU32,
         path::{Path, PathBuf},
     };
-
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
@@ -1349,9 +1268,7 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
     };
     use tempfile::tempdir;
-
     use super::*;
-
     fn sample_record(lane_id: u32, epoch: u64, sequence: u64) -> DaCommitmentRecord {
         let lane_byte = u8::try_from(lane_id).expect("lane fits in u8 for test record");
         let epoch_byte = u8::try_from(epoch).expect("epoch fits in u8 for test record");
@@ -1371,7 +1288,6 @@ mod tests {
                 .expect("checked core DA shard cursor acknowledgement signature fixture"),
         )
     }
-
     fn lane_config_with_mappings(mappings: &[(u32, u32)]) -> ConfigLaneConfig {
         let lane_count = mappings
             .iter()
@@ -1396,14 +1312,11 @@ mod tests {
                 .collect(),
         )
         .expect("lane catalog");
-
         ConfigLaneConfig::from_catalog(&catalog)
     }
-
     fn lane_config_with_mapping(lane_id: u32, shard_id: u32) -> ConfigLaneConfig {
         lane_config_with_mappings(&[(lane_id, shard_id)])
     }
-
     fn journal_entry(
         lane_id: u32,
         shard_id: u32,
@@ -1419,7 +1332,6 @@ mod tests {
             last_block_height,
         }
     }
-
     fn write_journal_payload(path: &Path, entries: Vec<LaneShardCursor>) {
         let payload = PersistedShardCursors {
             version: DaShardCursorJournal::JOURNAL_VERSION,
@@ -1429,12 +1341,10 @@ mod tests {
         fs::write(path, to_bytes(&payload).expect("encode cursor journal"))
             .expect("write cursor journal");
     }
-
     #[test]
     fn advances_and_records_height() {
         let mut index = DaShardCursorIndex::default();
         let record = sample_record(1, 2, 3);
-
         index
             .advance(99, &record, 7)
             .expect("advance should succeed");
@@ -1444,7 +1354,6 @@ mod tests {
         assert_eq!(cursor.sequence, 3);
         assert_eq!(cursor.last_block_height, 7);
     }
-
     #[test]
     fn rejects_regression() {
         let mut index = DaShardCursorIndex::default();
@@ -1452,7 +1361,6 @@ mod tests {
         index
             .advance(1, &first, 10)
             .expect("first advance should succeed");
-
         let regressing = sample_record(1, 5, 6);
         let err = index
             .advance(1, &regressing, 11)
@@ -1470,7 +1378,6 @@ mod tests {
         assert_eq!(cursor.sequence, 7);
         assert_eq!(cursor.last_block_height, 10);
     }
-
     #[test]
     fn advance_bundle_handles_multiple_lanes() {
         let mut index = DaShardCursorIndex::default();
@@ -1479,22 +1386,18 @@ mod tests {
             sample_record(2, 2, 3),
             sample_record(1, 2, 0),
         ];
-
         index
             .advance_bundle(|lane| lane.as_u32() + 10, &records, 5)
             .expect("bundle should advance cursors");
-
         let shard_one = index.get(11).expect("lane 1 shard cursor present");
         assert_eq!(shard_one.epoch, 2);
         assert_eq!(shard_one.sequence, 0);
         assert_eq!(shard_one.last_block_height, 5);
-
         let shard_two = index.get(12).expect("lane 2 shard cursor present");
         assert_eq!(shard_two.epoch, 2);
         assert_eq!(shard_two.sequence, 3);
         assert_eq!(shard_two.last_block_height, 5);
     }
-
     #[test]
     fn advance_bundle_rejects_regression_and_rolls_back() {
         let mut index = DaShardCursorIndex::default();
@@ -1502,11 +1405,9 @@ mod tests {
             .advance(11, &sample_record(1, 1, 7), 4)
             .expect("seed shard cursor");
         let records = vec![sample_record(2, 1, 8), sample_record(1, 1, 6)];
-
         let err = index
             .advance_bundle(|lane| lane.as_u32() + 10, &records, 5)
             .expect_err("later shard regression should reject the whole bundle");
-
         assert!(matches!(err, DaShardCursorError::Regression { .. }));
         assert!(
             index.get(12).is_none(),
@@ -1516,41 +1417,34 @@ mod tests {
         assert_eq!(cursor.sequence, 7);
         assert_eq!(cursor.last_block_height, 4);
     }
-
     #[test]
     fn record_bundle_syncs_mapping() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 7, 9)]);
         let mut index = DaShardCursorIndex::new(&ConfigLaneConfig::default());
         let config = lane_config_with_mapping(1, 10);
-
         index
             .record_bundle(&config, &bundle, 5)
             .expect("record bundle");
-
         let cursor = index.get(10).expect("cursor present");
         assert_eq!(cursor.epoch, 7);
         assert_eq!(cursor.sequence, 9);
         assert_eq!(cursor.last_block_height, 5);
     }
-
     #[test]
     fn bundle_rejects_unknown_lane() {
         let config = ConfigLaneConfig::default();
         let bundle = DaCommitmentBundle::new(vec![sample_record(5, 1, 1)]);
         let mut index = DaShardCursorIndex::default();
-
         let err = index
             .record_bundle(&config, &bundle, 1)
             .expect_err("lane missing from config");
         assert!(matches!(err, DaShardCursorError::UnknownLane { .. }));
     }
-
     #[test]
     fn record_records_rejects_unknown_lane() {
         let config = lane_config_with_mapping(0, 1);
         let mut index = DaShardCursorIndex::new(&config);
         let unknown = sample_record(3, 1, 0);
-
         let err = index
             .record_records(&config, &[unknown], 9)
             .expect_err("lane must be present in mapping");
@@ -1559,7 +1453,6 @@ mod tests {
         );
         assert!(index.get(3).is_none(), "cursor should remain untouched");
     }
-
     #[test]
     fn record_records_rolls_back_when_later_record_regresses() {
         let lane_config = {
@@ -1588,7 +1481,6 @@ mod tests {
                 1,
             )
             .expect("initial records");
-
         let err = index
             .record_records(
                 &lane_config,
@@ -1611,7 +1503,6 @@ mod tests {
             (3, 3, 1)
         );
     }
-
     #[test]
     fn record_records_respects_reshard_mapping() {
         let initial_config = lane_config_with_mapping(4, 5);
@@ -1620,18 +1511,15 @@ mod tests {
             .record_records(&initial_config, &[sample_record(4, 1, 1)], 3)
             .expect("initial record");
         assert!(index.get(5).is_some(), "cursor stored under original shard");
-
         let resharded_config = lane_config_with_mapping(4, 7);
         index
             .record_records(&resharded_config, &[sample_record(4, 2, 0)], 4)
             .expect("reshard record");
-
         assert!(index.get(5).is_none(), "old shard cursor should be removed");
         let cursor = index.get(7).expect("cursor stored under new shard id");
         assert_eq!((cursor.epoch, cursor.sequence), (2, 0));
         assert_eq!(cursor.last_block_height, 4);
     }
-
     #[test]
     fn prune_lanes_removes_unshared_reset_shards() {
         let config = lane_config_with_mappings(&[(0, 0), (1, 1)]);
@@ -1643,16 +1531,13 @@ mod tests {
                 3,
             )
             .expect("seed lane shard cursors");
-
         index.prune_lanes(&BTreeSet::from([LaneId::new(1)]));
-
         assert!(index.get(0).is_some(), "retained lane shard should remain");
         assert!(
             index.get(1).is_none(),
             "reset lane's unshared shard cursor should be cleared"
         );
     }
-
     #[test]
     fn prune_lanes_keeps_shared_retained_shards() {
         let config = lane_config_with_mappings(&[(0, 7), (1, 7)]);
@@ -1664,15 +1549,12 @@ mod tests {
                 3,
             )
             .expect("seed shared shard cursor");
-
         index.prune_lanes(&BTreeSet::from([LaneId::new(1)]));
-
         let cursor = index
             .get(7)
             .expect("shared shard cursor must remain for retained lane");
         assert_eq!((cursor.epoch, cursor.sequence), (1, 1));
     }
-
     #[test]
     fn journal_persists_and_recovers_cursors() {
         let dir = tempdir().expect("tempdir");
@@ -1695,7 +1577,6 @@ mod tests {
         .expect("catalog");
         let lane_config = ConfigLaneConfig::from_catalog(&catalog);
         let path = DaShardCursorJournal::journal_path(dir.path());
-
         {
             let mut journal = DaShardCursorJournal::new(&lane_config, path.clone());
             let record = DaCommitmentRecord::new(
@@ -1719,7 +1600,6 @@ mod tests {
             journal.merge_canonical_reset_heights(&BTreeMap::from([(LaneId::new(0), 5)]));
             journal.persist().expect("persist");
         }
-
         let loaded = DaShardCursorJournal::load(&lane_config, path).expect("load");
         let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
         assert_eq!(cursor.shard_id, ShardId::new(0));
@@ -1730,7 +1610,6 @@ mod tests {
             Some(7)
         );
     }
-
     #[test]
     fn journal_persist_rejects_existing_temp_without_truncating() {
         let dir = tempdir().expect("tempdir");
@@ -1742,11 +1621,9 @@ mod tests {
         journal
             .record_commitment(1, &sample_record(0, 1, 1))
             .expect("record commitment");
-
         let err = journal
             .persist()
             .expect_err("existing temp journal should reject persistence");
-
         match err {
             ShardCursorJournalError::Write {
                 path: err_path,
@@ -1766,12 +1643,10 @@ mod tests {
             "failed persistence must not promote the temp journal"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn journal_persist_rejects_journal_dir_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tempdir");
         let target = dir.path().join("cursor-root-target");
         fs::create_dir(&target).expect("create cursor target directory");
@@ -1783,11 +1658,9 @@ mod tests {
         journal
             .record_commitment(1, &sample_record(0, 1, 1))
             .expect("record commitment");
-
         let err = journal
             .persist()
             .expect_err("symlinked cursor journal root must reject persistence");
-
         match err {
             ShardCursorJournalError::Write {
                 path: err_path,
@@ -1814,13 +1687,11 @@ mod tests {
             "symlink target must not receive temp cursor journal"
         );
     }
-
     #[test]
     fn journal_load_promotes_temp_file() {
         let dir = tempdir().expect("tempdir");
         let config = lane_config_with_mapping(0, 0);
         let path = DaShardCursorJournal::journal_path(dir.path());
-
         {
             let mut journal = DaShardCursorJournal::new(&config, path.clone());
             journal
@@ -1828,38 +1699,30 @@ mod tests {
                 .expect("record commitment");
             journal.persist().expect("persist");
         }
-
         let tmp_path = DaShardCursorJournal::temp_path(&path);
         fs::rename(&path, &tmp_path).expect("move journal to temp");
-
         let loaded = DaShardCursorJournal::load(&config, path.clone()).expect("load");
         assert!(path.exists(), "expected journal promoted to main");
         assert!(!tmp_path.exists(), "temp journal should be removed");
-
         let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
         assert_eq!((cursor.epoch, cursor.sequence), (1, 2));
     }
-
     #[test]
     fn journal_load_promotes_newer_temp_when_main_valid() {
         let dir = tempdir().expect("tempdir");
         let config = lane_config_with_mapping(0, 0);
         let path = DaShardCursorJournal::journal_path(dir.path());
         let tmp_path = DaShardCursorJournal::temp_path(&path);
-
         write_journal_payload(&path, vec![journal_entry(0, 0, 1, 2, 1)]);
         write_journal_payload(&tmp_path, vec![journal_entry(0, 0, 2, 0, 2)]);
-
         let loaded = DaShardCursorJournal::load(&config, path.clone()).expect("load");
         assert!(path.exists(), "expected newer temp promoted to main");
         assert!(!tmp_path.exists(), "newer temp should be consumed");
-
         let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
         assert_eq!(
             (cursor.epoch, cursor.sequence, cursor.last_block_height),
             (2, 0, 2)
         );
-
         let reloaded = DaShardCursorJournal::load(&config, path).expect("reload");
         let persisted = reloaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
         assert_eq!(
@@ -1871,34 +1734,28 @@ mod tests {
             (2, 0, 2)
         );
     }
-
     #[test]
     fn journal_load_discards_older_temp_when_main_valid() {
         let dir = tempdir().expect("tempdir");
         let config = lane_config_with_mapping(0, 0);
         let path = DaShardCursorJournal::journal_path(dir.path());
         let tmp_path = DaShardCursorJournal::temp_path(&path);
-
         write_journal_payload(&path, vec![journal_entry(0, 0, 3, 1, 4)]);
         write_journal_payload(&tmp_path, vec![journal_entry(0, 0, 2, 9, 3)]);
-
         let loaded = DaShardCursorJournal::load(&config, path).expect("load");
         assert!(!tmp_path.exists(), "older temp should be removed");
-
         let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
         assert_eq!(
             (cursor.epoch, cursor.sequence, cursor.last_block_height),
             (3, 1, 4)
         );
     }
-
     #[test]
     fn journal_load_discards_conflicting_temp_when_main_valid() {
         let dir = tempdir().expect("tempdir");
         let config = lane_config_with_mappings(&[(0, 0), (1, 1)]);
         let path = DaShardCursorJournal::journal_path(dir.path());
         let tmp_path = DaShardCursorJournal::temp_path(&path);
-
         write_journal_payload(
             &path,
             vec![journal_entry(0, 0, 4, 0, 4), journal_entry(1, 1, 4, 0, 4)],
@@ -1907,10 +1764,8 @@ mod tests {
             &tmp_path,
             vec![journal_entry(0, 0, 5, 0, 5), journal_entry(1, 1, 3, 9, 3)],
         );
-
         let loaded = DaShardCursorJournal::load(&config, path).expect("load");
         assert!(!tmp_path.exists(), "conflicting temp should be removed");
-
         let lane0 = loaded.cursor_for_lane(LaneId::new(0)).expect("lane 0");
         let lane1 = loaded.cursor_for_lane(LaneId::new(1)).expect("lane 1");
         assert_eq!(
@@ -1922,27 +1777,22 @@ mod tests {
             (4, 0, 4)
         );
     }
-
     #[test]
     fn journal_load_removes_corrupt_temp_when_main_valid() {
         let dir = tempdir().expect("tempdir");
         let config = lane_config_with_mapping(0, 0);
         let path = DaShardCursorJournal::journal_path(dir.path());
         let tmp_path = DaShardCursorJournal::temp_path(&path);
-
         write_journal_payload(&path, vec![journal_entry(0, 0, 1, 2, 1)]);
         fs::write(&tmp_path, b"corrupt").expect("write corrupt temp");
-
         let loaded = DaShardCursorJournal::load(&config, path).expect("load");
         assert!(!tmp_path.exists(), "corrupt temp should be removed");
-
         let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
         assert_eq!(
             (cursor.epoch, cursor.sequence, cursor.last_block_height),
             (1, 2, 1)
         );
     }
-
     #[test]
     fn journal_load_rejects_orphan_corrupt_temp_file() {
         let dir = tempdir().expect("tempdir");
@@ -1950,10 +1800,8 @@ mod tests {
         let path = DaShardCursorJournal::journal_path(dir.path());
         let tmp_path = DaShardCursorJournal::temp_path(&path);
         fs::write(&tmp_path, b"corrupt").expect("write corrupt temp");
-
         let err = DaShardCursorJournal::load(&config, path)
             .expect_err("orphan corrupt temp journal should fail closed");
-
         match err {
             ShardCursorJournalError::Decode { path: err_path, .. } => {
                 assert_eq!(err_path, tmp_path)
@@ -1965,22 +1813,18 @@ mod tests {
             "orphan corrupt temp journal should remain visible for operator repair"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn journal_load_rejects_main_journal_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tempdir");
         let config = lane_config_with_mapping(0, 0);
         let path = DaShardCursorJournal::journal_path(dir.path());
         let target = dir.path().join("cursor-target.norito");
         write_journal_payload(&target, vec![journal_entry(0, 0, 1, 2, 1)]);
         symlink(&target, &path).expect("create main cursor journal symlink");
-
         let err = DaShardCursorJournal::load(&config, path.clone())
             .expect_err("main cursor journal symlink should fail closed");
-
         match err {
             ShardCursorJournalError::Read {
                 path: err_path,
@@ -2000,12 +1844,10 @@ mod tests {
         );
         assert!(target.exists(), "symlink target should not be removed");
     }
-
     #[cfg(unix)]
     #[test]
     fn journal_load_rejects_journal_dir_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tempdir");
         let target = dir.path().join("cursor-root-target");
         fs::create_dir(&target).expect("create cursor target directory");
@@ -2015,10 +1857,8 @@ mod tests {
         symlink(&target, &link).expect("create cursor root symlink");
         let config = lane_config_with_mapping(0, 0);
         let path = DaShardCursorJournal::journal_path(&link);
-
         let err = DaShardCursorJournal::load(&config, path)
             .expect_err("symlinked cursor journal root should fail closed");
-
         match err {
             ShardCursorJournalError::Read {
                 path: err_path,
@@ -2041,12 +1881,10 @@ mod tests {
             "failed recovery should not remove target cursor journal"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn journal_load_rejects_orphan_temp_journal_symlink() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tempdir");
         let config = lane_config_with_mapping(0, 0);
         let path = DaShardCursorJournal::journal_path(dir.path());
@@ -2054,10 +1892,8 @@ mod tests {
         let target = dir.path().join("cursor-temp-target.norito");
         write_journal_payload(&target, vec![journal_entry(0, 0, 1, 2, 1)]);
         symlink(&target, &tmp_path).expect("create temp cursor journal symlink");
-
         let err = DaShardCursorJournal::load(&config, path)
             .expect_err("orphan temp cursor journal symlink should fail closed");
-
         match err {
             ShardCursorJournalError::Read {
                 path: err_path,
@@ -2077,7 +1913,6 @@ mod tests {
         );
         assert!(target.exists(), "symlink target should not be removed");
     }
-
     #[test]
     fn journal_read_revalidation_rejects_length_change() {
         let dir = tempdir().expect("tempdir");
@@ -2085,11 +1920,9 @@ mod tests {
         fs::write(&path, b"old-journal").expect("write initial journal");
         let metadata = fs::symlink_metadata(&path).expect("inspect initial journal");
         fs::write(&path, b"new-journal-with-more-bytes").expect("replace journal bytes");
-
         let err =
             DaShardCursorJournal::revalidate_persisted_read(&path, &metadata, b"old-journal".len())
                 .expect_err("post-read length changes must reject shard cursor journals");
-
         match err {
             ShardCursorJournalError::Read {
                 path: err_path,
@@ -2105,7 +1938,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn journal_resource_limits_reject_first_overflow_without_allocating_it() {
         let path = Path::new("da-shard-cursors.norito");
@@ -2115,7 +1947,6 @@ mod tests {
             SHARD_CURSOR_JOURNAL_MAX_ENTRIES,
         )
         .expect("exact cursor/reset limits are valid");
-
         assert!(matches!(
             DaShardCursorJournal::validate_entry_counts(
                 path,
@@ -2135,7 +1966,6 @@ mod tests {
                 if reason.contains("reset heights")
         ));
     }
-
     #[test]
     fn journal_load_rejects_oversized_sparse_file_before_decode() {
         let dir = tempdir().expect("tempdir");
@@ -2149,19 +1979,16 @@ mod tests {
                 )
             })
             .expect("create oversized sparse cursor journal");
-
         assert!(matches!(
             DaShardCursorJournal::load(&config, &path),
             Err(ShardCursorJournalError::Read { path: failed_path, source })
                 if failed_path == path && source.kind() == io::ErrorKind::InvalidData
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn journal_read_revalidation_rejects_symlink_replacement() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("tempdir");
         let path = DaShardCursorJournal::journal_path(dir.path());
         fs::write(&path, b"old-journal").expect("write initial journal");
@@ -2170,11 +1997,9 @@ mod tests {
         fs::write(&target, b"old-journal").expect("write symlink target");
         fs::remove_file(&path).expect("remove inspected journal");
         symlink(&target, &path).expect("replace journal with symlink");
-
         let err =
             DaShardCursorJournal::revalidate_persisted_read(&path, &metadata, b"old-journal".len())
                 .expect_err("post-read symlink replacement must reject shard cursor journals");
-
         match err {
             ShardCursorJournalError::Read {
                 path: err_path,
@@ -2191,7 +2016,6 @@ mod tests {
         }
         assert!(target.exists(), "symlink target should not be removed");
     }
-
     #[test]
     fn journal_load_rejects_unremovable_bad_temp_when_main_valid() {
         let dir = tempdir().expect("tempdir");
@@ -2200,10 +2024,8 @@ mod tests {
         let tmp_path = DaShardCursorJournal::temp_path(&path);
         write_journal_payload(&path, vec![journal_entry(0, 0, 1, 2, 1)]);
         fs::create_dir(&tmp_path).expect("block temp cleanup");
-
         let err = DaShardCursorJournal::load(&config, path)
             .expect_err("unremovable bad temp journal should fail closed");
-
         match err {
             ShardCursorJournalError::Write { path: err_path, .. } => {
                 assert_eq!(err_path, tmp_path)
@@ -2215,13 +2037,11 @@ mod tests {
             "failed temp cleanup should leave path visible for operator repair"
         );
     }
-
     #[test]
     fn journal_load_falls_back_to_temp_on_corrupt_main() {
         let dir = tempdir().expect("tempdir");
         let config = lane_config_with_mapping(0, 0);
         let path = DaShardCursorJournal::journal_path(dir.path());
-
         {
             let mut journal = DaShardCursorJournal::new(&config, path.clone());
             journal
@@ -2229,19 +2049,15 @@ mod tests {
                 .expect("record commitment");
             journal.persist().expect("persist");
         }
-
         let tmp_path = DaShardCursorJournal::temp_path(&path);
         fs::copy(&path, &tmp_path).expect("copy journal to temp");
         fs::write(&path, b"corrupt").expect("corrupt main journal");
-
         let loaded = DaShardCursorJournal::load(&config, path.clone()).expect("load");
         assert!(path.exists(), "expected journal restored to main");
         assert!(!tmp_path.exists(), "temp journal should be removed");
-
         let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
         assert_eq!((cursor.epoch, cursor.sequence), (2, 3));
     }
-
     #[test]
     fn journal_load_rejects_unpromotable_temp_file() {
         let dir = tempdir().expect("tempdir");
@@ -2250,16 +2066,13 @@ mod tests {
         let tmp_path = DaShardCursorJournal::temp_path(&path);
         fs::create_dir(&path).expect("block main journal path");
         write_journal_payload(&tmp_path, vec![journal_entry(0, 0, 2, 3, 4)]);
-
         let err = DaShardCursorJournal::load(&config, path.clone())
             .expect_err("unpromotable temp journal should fail closed");
-
         match err {
             ShardCursorJournalError::Write { path: err_path, .. } => assert_eq!(err_path, path),
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn journal_drops_resharded_entries() {
         let dir = tempdir().expect("tempdir");
@@ -2270,30 +2083,25 @@ mod tests {
             .record_commitment(1, &sample_record(1, 5, 6))
             .expect("record");
         journal.persist().expect("persist");
-
         let resharded_config = lane_config_with_mapping(1, 3);
         let loaded = DaShardCursorJournal::load(&resharded_config, path).expect("load");
         assert!(loaded.cursor_for_lane(LaneId::new(1)).is_none());
     }
-
     #[test]
     fn journal_advances_only_forward() {
         let dir = tempdir().expect("tempdir");
         let path = DaShardCursorJournal::journal_path(dir.path());
         let config = lane_config_with_mapping(0, 0);
         let mut journal = DaShardCursorJournal::new(&config, path);
-
         journal
             .record_commitment(1, &sample_record(0, 1, 1))
             .expect("record");
         journal
             .record_commitment(2, &sample_record(0, 1, 0))
             .expect("record");
-
         let cursor = journal.cursor_for_lane(LaneId::new(0)).expect("cursor");
         assert_eq!((cursor.epoch, cursor.sequence), (1, 1));
     }
-
     #[test]
     fn journal_bundle_updates_multiple_lanes() {
         let catalog = LaneCatalog::new(
@@ -2319,10 +2127,8 @@ mod tests {
         .expect("catalog");
         let config = ConfigLaneConfig::from_catalog(&catalog);
         let mut journal = DaShardCursorJournal::new(&config, PathBuf::from("unused"));
-
         let bundle = DaCommitmentBundle::new(vec![sample_record(0, 0, 1), sample_record(1, 2, 3)]);
         journal.record_bundle(1, &bundle).expect("record bundle");
-
         let shard0 = journal
             .cursor_for_lane(LaneId::new(0))
             .expect("lane0 cursor");
@@ -2333,7 +2139,6 @@ mod tests {
         assert_eq!(shard1.shard_id, ShardId::new(5));
         assert_eq!((shard1.epoch, shard1.sequence), (2, 3));
     }
-
     #[test]
     fn journal_record_bundle_rolls_back_on_unknown_lane() {
         let config = lane_config_with_mapping(0, 0);
@@ -2341,12 +2146,10 @@ mod tests {
         journal
             .record_commitment(1, &sample_record(0, 1, 1))
             .expect("seed cursor");
-
         let bundle = DaCommitmentBundle::new(vec![sample_record(0, 2, 0), sample_record(1, 0, 0)]);
         let err = journal
             .record_bundle(2, &bundle)
             .expect_err("unknown lane should reject whole bundle");
-
         assert!(
             matches!(err, ShardCursorJournalError::UnknownLane { lane_id } if lane_id == LaneId::new(1))
         );
@@ -2359,7 +2162,6 @@ mod tests {
         );
         assert!(journal.cursor_for_lane(LaneId::new(1)).is_none());
     }
-
     #[test]
     fn journal_record_bundle_rejects_regression_and_rolls_back() {
         let config = lane_config_with_mappings(&[(0, 0), (1, 0)]);
@@ -2367,12 +2169,10 @@ mod tests {
         journal
             .record_commitment(1, &sample_record(1, 1, 1))
             .expect("seed cursor");
-
         let bundle = DaCommitmentBundle::new(vec![sample_record(0, 2, 0), sample_record(1, 1, 9)]);
         let err = journal
             .record_bundle(2, &bundle)
             .expect_err("regression should reject whole bundle");
-
         assert!(
             matches!(
                 err,
@@ -2403,7 +2203,6 @@ mod tests {
             "advanced record from rejected bundle must not be retained"
         );
     }
-
     #[test]
     fn journal_record_bundle_rejects_cross_lane_same_shard_regression() {
         let config = lane_config_with_mappings(&[(0, 7), (1, 7)]);
@@ -2411,12 +2210,10 @@ mod tests {
         journal
             .record_commitment(1, &sample_record(0, 5, 0))
             .expect("seed cursor");
-
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 4, 9)]);
         let err = journal
             .record_bundle(2, &bundle)
             .expect_err("same-shard regression should reject whole bundle");
-
         assert!(
             matches!(
                 err,
@@ -2447,7 +2244,6 @@ mod tests {
             (5, 0, 1)
         );
     }
-
     #[test]
     fn rejects_unknown_journal_version() {
         let dir = tempdir().expect("tempdir");
@@ -2468,9 +2264,7 @@ mod tests {
             canonical_reset_heights: BTreeMap::new(),
             entries: Vec::new(),
         };
-
         fs::write(&path, to_bytes(&payload).expect("encode")).expect("write");
-
         match DaShardCursorJournal::load(&config, path).expect_err("version mismatch") {
             ShardCursorJournalError::UnsupportedVersion { version, .. } => {
                 assert_eq!(version, DaShardCursorJournal::JOURNAL_VERSION + 1);
@@ -2478,7 +2272,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn rejects_duplicate_journal_entries() {
         let dir = tempdir().expect("tempdir");
@@ -2488,7 +2281,6 @@ mod tests {
             &path,
             vec![journal_entry(0, 0, 1, 2, 3), journal_entry(0, 0, 4, 5, 6)],
         );
-
         match DaShardCursorJournal::load(&config, path.clone()).expect_err("duplicate entry") {
             ShardCursorJournalError::InvalidEntry {
                 path: err_path,
@@ -2503,7 +2295,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn rejects_noncanonical_journal_entry_order() {
         let dir = tempdir().expect("tempdir");
@@ -2513,7 +2304,6 @@ mod tests {
             &path,
             vec![journal_entry(1, 1, 1, 2, 3), journal_entry(0, 0, 1, 3, 4)],
         );
-
         match DaShardCursorJournal::load(&config, path.clone())
             .expect_err("non-canonical journal order should reject")
         {

@@ -1,8 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Multi-lane routing and storage provisioning regression.
-
 use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc, time::Duration};
-
 use eyre::Result;
 use iroha_config::{
     base::WithOrigin,
@@ -42,7 +40,6 @@ use iroha_primitives::time::TimeSource;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 use tempfile::tempdir;
-
 fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
     let lane_catalog = LaneCatalog::new(
         NonZeroU32::new(3).expect("non-zero lane count"),
@@ -89,7 +86,6 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
         ],
     )
     .expect("lane catalog");
-
     let dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata {
             id: DataSpaceId::UNIVERSAL,
@@ -111,7 +107,6 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
         },
     ])
     .expect("dataspace catalog");
-
     let policy = LaneRoutingPolicy {
         default_lane: LaneId::new(0),
         default_dataspace: DataSpaceId::UNIVERSAL,
@@ -136,10 +131,8 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
             },
         ],
     };
-
     (lane_catalog, dataspace_catalog, policy)
 }
-
 fn autoscale_elastic_lane(id: LaneId, created_height: u64) -> LaneConfigMetadata {
     let mut metadata = BTreeMap::new();
     metadata.insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
@@ -161,7 +154,6 @@ fn autoscale_elastic_lane(id: LaneId, created_height: u64) -> LaneConfigMetadata
         metadata,
     }
 }
-
 fn install_state_nexus(
     lane_catalog: LaneCatalog,
     dataspace_catalog: DataSpaceCatalog,
@@ -188,7 +180,6 @@ fn install_state_nexus(
     *state.nexus.write() = nexus;
     Ok(state)
 }
-
 fn new_state(kura: Arc<Kura>) -> State {
     let query = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
@@ -202,7 +193,6 @@ fn new_state(kura: Arc<Kura>) -> State {
     let state = State::new(World::default(), kura, query);
     state
 }
-
 fn seed_committed_height(state: &mut State, height: u64) {
     for idx in 0..height {
         state.push_block_hash_for_testing(iroha_crypto::HashOf::<
@@ -220,7 +210,6 @@ fn seed_committed_height(state: &mut State, height: u64) {
         0,
     ));
 }
-
 fn build_tx(
     network_id: NetworkId,
     authority: &AccountId,
@@ -256,16 +245,13 @@ fn build_tx(
     )
     .expect("transaction should be accepted")
 }
-
 #[test]
 fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
     let (lane_catalog, dataspace_catalog, policy) = sample_catalogs();
     let lane_config = LaneDerivedConfig::from_catalog(&lane_catalog);
-
     let temp = tempdir()?;
     let store_dir = temp.path().join("kura");
     std::fs::create_dir_all(&store_dir)?;
-
     let kura_cfg = KuraConfig {
         init_mode: InitMode::Strict,
         store_dir: WithOrigin::inline(store_dir.clone()),
@@ -279,7 +265,6 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };
-
     let (kura, block_count) =
         Kura::new_with_configured_lane_catalog(&kura_cfg, &lane_config, &lane_catalog)?;
     assert_eq!(block_count.0, 0, "fresh store should be empty");
@@ -295,7 +280,6 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         routing_policy: policy.clone(),
         ..Default::default()
     })?;
-
     for entry in lane_config.entries() {
         let blocks_dir = entry.blocks_dir(&store_dir);
         assert!(
@@ -310,7 +294,6 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
                 .is_some_and(|name| name.starts_with("lane_")),
             "blocks dir should use lane slug naming"
         );
-
         let merge_log = entry.merge_log_path(&store_dir);
         assert!(
             merge_log.exists(),
@@ -318,7 +301,6 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
             entry.lane_id.as_u32()
         );
     }
-
     let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
         policy,
         dataspace_catalog,
@@ -326,7 +308,6 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
     ));
     let (authority, keypair) = gen_account_in("nexus");
     let network_id = *state.network_id_ref();
-
     let governance_tx = build_tx(
         network_id,
         &authority,
@@ -366,23 +347,18 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
             ),
         ))],
     );
-
     let decision = router.route(&governance_tx);
     assert_eq!(decision.lane_id, LaneId::new(1));
     assert_eq!(decision.dataspace_id, DataSpaceId::new(1));
-
     let decision = router.route(&zk_tx);
     assert_eq!(decision.lane_id, LaneId::new(2));
     assert_eq!(decision.dataspace_id, DataSpaceId::new(2));
-
     let decision = router.route(&default_tx);
     assert_eq!(decision.lane_id, LaneId::new(0));
     assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
-
     drop(kura);
     Ok(())
 }
-
 #[test]
 fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Result<()> {
     let (base_lane_catalog, dataspace_catalog, policy) = sample_catalogs();
@@ -398,10 +374,8 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
     ));
     let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
     seed_committed_height(&mut state, 7);
-
     let (authority, keypair) = gen_account_in("nexus");
     let network_id = *state.network_id_ref();
-
     let governance_tx = build_tx(
         network_id,
         &authority,
@@ -413,7 +387,6 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
     let governance = router.route_with_view(&governance_tx, &state.view());
     assert_eq!(governance.lane_id, LaneId::new(1));
     assert_eq!(governance.dataspace_id, DataSpaceId::new(1));
-
     let zk_tx = build_tx(
         network_id,
         &authority,
@@ -432,7 +405,6 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
     let zk = router.route_with_view(&zk_tx, &state.view());
     assert_eq!(zk.lane_id, LaneId::new(2));
     assert_eq!(zk.dataspace_id, DataSpaceId::new(2));
-
     let mut lanes_seen = std::collections::BTreeSet::new();
     for idx in 0..512 {
         let role_id = iroha_data_model::role::RoleId {
@@ -465,28 +437,23 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
             break;
         }
     }
-
     assert_eq!(
         lanes_seen,
         std::collections::BTreeSet::from([LaneId::new(0), LaneId::new(3), LaneId::new(4)]),
         "default-route traffic should shard across the base lane and autoscale elastic lanes"
     );
-
     Ok(())
 }
-
 #[test]
 fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Result<()> {
     struct CorruptionCase {
         name: &'static str,
         lane: LaneConfigMetadata,
     }
-
     let mut malformed_managed = autoscale_elastic_lane(LaneId::new(4), 7);
     malformed_managed.alias = "malformed-elastic-lane".to_owned();
     let mut off_default_managed = autoscale_elastic_lane(LaneId::new(4), 7);
     off_default_managed.dataspace_id = DataSpaceId::new(1);
-
     let cases = [
         CorruptionCase {
             name: "manual",
@@ -513,7 +480,6 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
             lane: off_default_managed,
         },
     ];
-
     for case in cases {
         let (base_lane_catalog, dataspace_catalog, policy) = sample_catalogs();
         let mut lanes = base_lane_catalog.lanes().to_vec();
@@ -531,11 +497,9 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
         let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))
             .unwrap_or_else(|err| panic!("{}: install Nexus state: {err}", case.name));
         seed_committed_height(&mut state, 7);
-
         let (authority, keypair) = gen_account_in("nexus");
         let network_id = *state.network_id_ref();
         let mut lanes_seen = std::collections::BTreeSet::new();
-
         for idx in 0..128 {
             let role_id = iroha_data_model::role::RoleId {
                 name: format!("corrupt{}{}", case.name, idx)
@@ -554,7 +518,6 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
             assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
             lanes_seen.insert(decision.lane_id);
         }
-
         assert_eq!(
             lanes_seen,
             std::collections::BTreeSet::from([LaneId::new(0)]),
@@ -562,10 +525,8 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
             case.name
         );
     }
-
     Ok(())
 }
-
 #[test]
 fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> Result<()> {
     let (base_lane_catalog, dataspace_catalog, policy) = sample_catalogs();
@@ -582,11 +543,9 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
     let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
     seed_committed_height(&mut state, 7);
     state.nexus.write().autoscale.enabled = false;
-
     let (authority, keypair) = gen_account_in("nexus");
     let network_id = *state.network_id_ref();
     let mut lanes_seen = std::collections::BTreeSet::new();
-
     for idx in 0..128 {
         let role_id = iroha_data_model::role::RoleId {
             name: format!("staleelasticdisabled{idx}")
@@ -605,16 +564,13 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
         assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
         lanes_seen.insert(decision.lane_id);
     }
-
     assert_eq!(
         lanes_seen,
         std::collections::BTreeSet::from([LaneId::new(0)]),
         "disabled autoscale must keep default-route traffic on the base lane even when stale managed lanes remain in the catalog"
     );
-
     Ok(())
 }
-
 #[test]
 fn multilane_router_ignores_stale_autoscale_lanes_when_nexus_disabled() -> Result<()> {
     let (base_lane_catalog, dataspace_catalog, policy) = sample_catalogs();
@@ -631,11 +587,9 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_nexus_disabled() -> Resul
     let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
     seed_committed_height(&mut state, 7);
     state.nexus.write().enabled = false;
-
     let (authority, keypair) = gen_account_in("nexus");
     let network_id = *state.network_id_ref();
     let mut lanes_seen = std::collections::BTreeSet::new();
-
     for idx in 0..128 {
         let role_id = iroha_data_model::role::RoleId {
             name: format!("staleelasticnexusdisabled{idx}")
@@ -654,12 +608,10 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_nexus_disabled() -> Resul
         assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
         lanes_seen.insert(decision.lane_id);
     }
-
     assert_eq!(
         lanes_seen,
         std::collections::BTreeSet::from([LaneId::new(0)]),
         "disabled Nexus must keep default-route traffic on the base lane even when stale managed lanes remain in the catalog"
     );
-
     Ok(())
 }

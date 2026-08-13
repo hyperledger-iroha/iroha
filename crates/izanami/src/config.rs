@@ -1,8 +1,6 @@
 #![allow(dead_code)]
 //! Runtime configuration and CLI parsing for the Izanami chaos tool.
-
 use std::{ops::RangeInclusive, path::PathBuf, sync::OnceLock, time::Duration};
-
 use clap::{Args, Parser, ValueEnum};
 use color_eyre::{Result, eyre::eyre};
 use humantime::parse_duration;
@@ -27,9 +25,7 @@ use iroha_data_model::{
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use toml::{Table, Value};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
 use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
-
 /// Command-line arguments exposed by the `izanami` binary.
 #[derive(Debug, Parser, Clone)]
 #[command(author, version, about = "Izanami chaosnet orchestrator for Iroha", long_about = None)]
@@ -137,7 +133,6 @@ pub struct IzanamiArgs {
     #[arg(long)]
     pub diagnostic_dir: Option<PathBuf>,
 }
-
 /// Workload profiles for recipe selection.
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
 pub enum WorkloadProfile {
@@ -147,7 +142,6 @@ pub enum WorkloadProfile {
     /// Include intentionally invalid recipes for chaos coverage.
     Chaos,
 }
-
 pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(15);
 pub const DEFAULT_PROGRESS_TIMEOUT: Duration = Duration::from_secs(120);
 pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
@@ -155,7 +149,6 @@ pub const DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS: u64 = 1_024;
 pub const DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER: u64 = 1;
 /// Minimum pipeline time accepted by the test-network builder (must stay in sync).
 pub const MIN_PIPELINE_TIME: Duration = Duration::from_millis(2);
-
 /// CLI fault toggles controlling which fault injectors run.
 #[derive(Debug, Clone, Args)]
 #[allow(clippy::struct_excessive_bools)]
@@ -241,7 +234,6 @@ pub struct FaultArgs {
     )]
     pub disk_saturation: bool,
 }
-
 impl FaultArgs {
     pub fn to_toggles(&self) -> FaultToggles {
         FaultToggles::from_explicit_array_with_packet_loss([
@@ -256,7 +248,6 @@ impl FaultArgs {
         ])
     }
 }
-
 impl Default for FaultArgs {
     fn default() -> Self {
         Self {
@@ -271,7 +262,6 @@ impl Default for FaultArgs {
         }
     }
 }
-
 impl From<FaultToggles> for FaultArgs {
     fn from(toggles: FaultToggles) -> Self {
         Self {
@@ -286,13 +276,11 @@ impl From<FaultToggles> for FaultArgs {
         }
     }
 }
-
 /// Bitflags describing which fault injectors are enabled.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FaultToggles {
     bits: u8,
 }
-
 impl FaultToggles {
     const CRASH_RESTART: u8 = 1 << 0;
     const WIPE_STORAGE: u8 = 1 << 1;
@@ -310,20 +298,17 @@ impl FaultToggles {
         | Self::NETWORK_PACKET_LOSS
         | Self::CPU_STRESS
         | Self::DISK_SATURATION;
-
     /// Legacy helper preserving the historical "optional add-on faults" semantics used by tests.
     pub const fn from_array(flags: [bool; 4]) -> Self {
         Self::from_explicit_array_with_packet_loss([
             true, true, true, flags[0], flags[1], false, flags[2], flags[3],
         ])
     }
-
     pub const fn from_explicit_array(flags: [bool; 7]) -> Self {
         Self::from_explicit_array_with_packet_loss([
             flags[0], flags[1], flags[2], flags[3], flags[4], false, flags[5], flags[6],
         ])
     }
-
     pub const fn from_explicit_array_with_packet_loss(flags: [bool; 8]) -> Self {
         let mut bits = 0u8;
         if flags[0] {
@@ -352,54 +337,42 @@ impl FaultToggles {
         }
         Self { bits }
     }
-
     pub const fn from_bits(bits: u8) -> Self {
         Self {
             bits: bits & Self::ALL_BITS,
         }
     }
-
     pub const fn bits(self) -> u8 {
         self.bits
     }
-
     pub const fn any_enabled(self) -> bool {
         self.bits != 0
     }
-
     pub const fn crash_restart(self) -> bool {
         self.bits & Self::CRASH_RESTART != 0
     }
-
     pub const fn wipe_storage(self) -> bool {
         self.bits & Self::WIPE_STORAGE != 0
     }
-
     pub const fn spam_invalid_transactions(self) -> bool {
         self.bits & Self::SPAM_INVALID_TRANSACTIONS != 0
     }
-
     pub const fn network_latency(self) -> bool {
         self.bits & Self::NETWORK_LATENCY != 0
     }
-
     pub const fn network_partition(self) -> bool {
         self.bits & Self::NETWORK_PARTITION != 0
     }
-
     pub const fn network_packet_loss(self) -> bool {
         self.bits & Self::NETWORK_PACKET_LOSS != 0
     }
-
     pub const fn cpu_stress(self) -> bool {
         self.bits & Self::CPU_STRESS != 0
     }
-
     pub const fn disk_saturation(self) -> bool {
         self.bits & Self::DISK_SATURATION != 0
     }
 }
-
 /// Derived runtime configuration constructed from [`IzanamiArgs`].
 #[derive(Debug, Clone)]
 pub struct ChaosConfig {
@@ -433,10 +406,8 @@ pub struct ChaosConfig {
     pub nexus: Option<NexusProfile>,
     pub diagnostic_dir: Option<PathBuf>,
 }
-
 impl TryFrom<IzanamiArgs> for ChaosConfig {
     type Error = color_eyre::Report;
-
     fn try_from(args: IzanamiArgs) -> Result<Self> {
         if !args.allow_net {
             return Err(eyre!(
@@ -567,7 +538,6 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
                 args.packet_loss_percent
             ));
         }
-
         let toggles = args.faults.to_toggles();
         if args.faulty > 0 && !toggles.any_enabled() {
             return Err(eyre!(
@@ -611,7 +581,6 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         } else {
             None
         };
-
         Ok(Self {
             allow_net,
             peer_count: peers,
@@ -644,7 +613,6 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         })
     }
 }
-
 /// Initialise tracing using the resolved filter string.
 pub fn init_tracing_with_filter(default_filter: &str) {
     static SUBSCRIBER: OnceLock<()> = OnceLock::new();
@@ -656,7 +624,6 @@ pub fn init_tracing_with_filter(default_filter: &str) {
             .try_init();
     });
 }
-
 impl IzanamiArgs {
     pub fn from_config(cfg: &ChaosConfig) -> Self {
         let (min, max) = cfg.fault_interval.clone().into_inner();
@@ -693,12 +660,10 @@ impl IzanamiArgs {
             diagnostic_dir: cfg.diagnostic_dir.clone(),
         }
     }
-
     pub fn defaults() -> Self {
         Self::parse_from(["izanami"])
     }
 }
-
 /// Nexus/Sora profile derived from `defaults/nexus/config.toml`.
 #[derive(Debug, Clone)]
 pub struct NexusProfile {
@@ -713,14 +678,12 @@ pub struct NexusProfile {
     pub da: Da,
     pub config_layer: Table,
 }
-
 fn canonical_addr_literal(addr: &str) -> Result<String> {
     let parsed: std::net::SocketAddr = addr
         .parse()
         .map_err(|err| eyre!("failed to parse embedded socket address `{addr}`: {err}"))?;
     Ok(IrohaSocketAddr::from(parsed).to_literal())
 }
-
 fn resolve_embedded_asset_selector(
     field_path: &str,
     selector: &str,
@@ -729,20 +692,17 @@ fn resolve_embedded_asset_selector(
     if let Ok(asset_id) = selector.parse() {
         return Ok(asset_id);
     }
-
     selector.parse::<AssetDefinitionAlias>().map_err(|err| {
         eyre!(
             "failed to parse embedded {field_path} `{selector}` as a canonical asset definition id or alias: {err}"
         )
     })?;
-
     canonical_default.parse().map_err(|err| {
         eyre!(
             "failed to resolve embedded {field_path} alias `{selector}` to canonical asset definition id `{canonical_default}`: {err}"
         )
     })
 }
-
 impl NexusProfile {
     /// Load the embedded Sora profile and expose both typed values and a TOML layer.
     pub fn sora_defaults() -> Result<Self> {
@@ -815,7 +775,6 @@ impl NexusProfile {
             .map_err(|err| eyre!("failed to load embedded nexus config: {err:?}"))?
             .parse()
             .map_err(|err| eyre!("failed to parse embedded nexus config: {err:?}"))?;
-
         let nexus = actual.nexus.clone();
         let sumeragi = actual.sumeragi;
         let bootstrap_public_lanes = derive_bootstrap_public_lanes(&nexus);
@@ -830,7 +789,6 @@ impl NexusProfile {
             &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
         )?;
         let config_layer = build_nexus_layer(&nexus, &sumeragi, &stake_asset_id, &fee_asset_id);
-
         Ok(Self {
             lane_catalog: nexus.lane_catalog,
             dataspace_catalog: nexus.dataspace_catalog,
@@ -845,7 +803,6 @@ impl NexusProfile {
         })
     }
 }
-
 fn derive_bootstrap_public_lanes(nexus: &ActualNexus) -> Vec<LaneId> {
     let lanes: Vec<LaneId> = if nexus.lane_catalog.lanes().is_empty() {
         vec![LaneId::SINGLE]
@@ -857,7 +814,6 @@ fn derive_bootstrap_public_lanes(nexus: &ActualNexus) -> Vec<LaneId> {
             .map(|lane| lane.id)
             .collect()
     };
-
     lanes
         .into_iter()
         .filter(|lane| {
@@ -868,7 +824,6 @@ fn derive_bootstrap_public_lanes(nexus: &ActualNexus) -> Vec<LaneId> {
         })
         .collect()
 }
-
 fn normalize_lane_metadata(raw: &mut Table) {
     if let Some(nexus) = raw.get_mut("nexus").and_then(Value::as_table_mut) {
         if let Some(Value::Array(lanes)) = nexus.get_mut("lane_catalog") {
@@ -882,10 +837,8 @@ fn normalize_lane_metadata(raw: &mut Table) {
         }
     }
 }
-
 fn embedded_dataspace_manifest_hash(id: DataSpaceId) -> String {
     use std::fmt::Write as _;
-
     let mut bytes = [0_u8; 32];
     bytes[..8].copy_from_slice(&id.as_u64().to_le_bytes());
     let mut encoded = String::with_capacity(bytes.len() * 2);
@@ -894,7 +847,6 @@ fn embedded_dataspace_manifest_hash(id: DataSpaceId) -> String {
     }
     encoded
 }
-
 fn build_nexus_layer(
     nexus: &ActualNexus,
     sumeragi: &ActualSumeragi,
@@ -907,9 +859,7 @@ fn build_nexus_layer(
         ["nexus", "lane_count"],
         i64::from(nexus.lane_catalog.lane_count().get()),
     );
-
     let dataspace_aliases = dataspace_alias_map(&nexus.dataspace_catalog);
-
     let lane_entries: Vec<Value> = nexus
         .lane_catalog
         .lanes()
@@ -960,7 +910,6 @@ fn build_nexus_layer(
         })
         .collect();
     TomlWriter::new(&mut layer).write(["nexus", "lane_catalog"], Value::Array(lane_entries));
-
     let dataspace_entries: Vec<Value> = nexus
         .dataspace_catalog
         .entries()
@@ -989,7 +938,6 @@ fn build_nexus_layer(
         ["nexus", "dataspace_catalog"],
         Value::Array(dataspace_entries),
     );
-
     TomlWriter::new(&mut layer).write(
         ["nexus", "routing_policy", "default_lane"],
         i64::from(nexus.routing_policy.default_lane.as_u32()),
@@ -1015,7 +963,6 @@ fn build_nexus_layer(
         ["nexus", "staking", "stake_asset_id"],
         stake_asset_id.to_string(),
     );
-
     TomlWriter::new(&mut layer).write(
         ["nexus", "fusion", "floor_teu"],
         i64::from(nexus.fusion.floor_teu),
@@ -1032,12 +979,10 @@ fn build_nexus_layer(
         ["nexus", "fusion", "max_window_slots"],
         i64::from(nexus.fusion.max_window_slots.get()),
     );
-
     TomlWriter::new(&mut layer).write(
         ["nexus", "commit", "window_slots"],
         i64::from(nexus.commit.window_slots.get()),
     );
-
     TomlWriter::new(&mut layer).write(
         ["nexus", "da", "q_in_slot_total"],
         i64::from(nexus.da.q_in_slot_total.get()),
@@ -1094,12 +1039,9 @@ fn build_nexus_layer(
         ["nexus", "da", "rotation", "latency_decay"],
         nexus.da.rotation.latency_decay,
     );
-
     write_sumeragi_v2_layer(&mut layer, sumeragi);
-
     layer
 }
-
 fn write_sumeragi_v2_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
     let usize_value = |value: usize| i64::try_from(value).expect("Sumeragi limit fits i64");
     let role = match sumeragi.role {
@@ -1119,7 +1061,6 @@ fn write_sumeragi_v2_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
         .cloned()
         .map(Value::String)
         .collect();
-
     TomlWriter::new(layer)
         .write(["sumeragi", "role"], role)
         .write(
@@ -1175,7 +1116,6 @@ fn write_sumeragi_v2_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
             Value::Array(allowed_hsm_providers),
         );
 }
-
 fn dataspace_alias_map(
     catalog: &DataSpaceCatalog,
 ) -> std::collections::BTreeMap<DataSpaceId, String> {
@@ -1185,7 +1125,6 @@ fn dataspace_alias_map(
         .map(|entry| (entry.id, entry.alias.clone()))
         .collect()
 }
-
 fn lane_rule_to_value(
     rule: &LaneRoutingRule,
     dataspace_aliases: &std::collections::BTreeMap<DataSpaceId, String>,
@@ -1220,11 +1159,9 @@ fn lane_rule_to_value(
     table.insert("matcher".to_string(), Value::Table(matcher));
     Value::Table(table)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn chaos_config_rejects_invalid_faulty_counts() {
         let args = IzanamiArgs {
@@ -1275,7 +1212,6 @@ mod tests {
             "error should report the revision-4 fault bound: {err}"
         );
     }
-
     #[test]
     fn chaos_config_accepts_every_revision4_committee_size() {
         for peers in (MIN_VALIDATORS_PER_HEIGHT..=MAX_VALIDATORS_PER_HEIGHT).step_by(3) {
@@ -1283,14 +1219,12 @@ mod tests {
             args.allow_net = true;
             args.peers = peers;
             args.faulty = (peers - 1) / 3;
-
             let config = ChaosConfig::try_from(args)
                 .unwrap_or_else(|error| panic!("valid {peers}-peer committee failed: {error}"));
             assert_eq!(config.peer_count, peers);
             assert_eq!(config.faulty_peers, (peers - 1) / 3);
         }
     }
-
     #[test]
     fn chaos_config_rejects_non_revision4_committee_sizes() {
         for peers in [0, 1, 2, 3, 5, 6, 8, 30, 32, 34] {
@@ -1298,7 +1232,6 @@ mod tests {
             args.allow_net = true;
             args.peers = peers;
             args.faulty = 0;
-
             let error = ChaosConfig::try_from(args)
                 .expect_err("non-revision-4 committee geometry must fail");
             assert!(
@@ -1307,7 +1240,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn init_tracing_is_idempotent() {
         let args = IzanamiArgs {
@@ -1346,7 +1278,6 @@ mod tests {
         init_tracing_with_filter(&args.log_filter);
         init_tracing_with_filter(&args.log_filter);
     }
-
     #[test]
     fn chaos_config_requires_allow_net_opt_in() {
         let args = IzanamiArgs {
@@ -1390,7 +1321,6 @@ mod tests {
             "error should mention allow_net opt-in: {err}"
         );
     }
-
     #[test]
     fn chaos_config_rejects_zero_target_blocks() {
         let args = IzanamiArgs {
@@ -1428,7 +1358,6 @@ mod tests {
         };
         assert!(ChaosConfig::try_from(args).is_err());
     }
-
     #[test]
     fn chaos_config_rejects_pipeline_time_under_minimum() {
         let args = IzanamiArgs {
@@ -1476,7 +1405,6 @@ mod tests {
             "error should mention pipeline_time minimum: {err}"
         );
     }
-
     #[test]
     fn nexus_profile_emits_only_node_local_sumeragi_v2_configuration() {
         let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
@@ -1500,7 +1428,6 @@ mod tests {
         assert!(sumeragi.contains_key("keys"));
         assert!(!sumeragi.contains_key("npos"));
     }
-
     #[test]
     fn nexus_profile_derives_bootstrap_public_lanes() {
         let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
@@ -1510,7 +1437,6 @@ mod tests {
             "embedded nexus profile should expose every stake-elected bootstrap lane"
         );
     }
-
     #[test]
     fn nexus_profile_preserves_embedded_dataspace_manifest_hashes() {
         let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
@@ -1529,7 +1455,6 @@ mod tests {
                 .and_then(|entry| entry.get("manifest_hash"))
                 .and_then(Value::as_str)
         };
-
         assert_eq!(manifest_hash("universal"), None);
         assert_eq!(
             manifest_hash("governance"),
@@ -1540,7 +1465,6 @@ mod tests {
             Some("0200000000000000000000000000000000000000000000000000000000000000")
         );
     }
-
     #[test]
     fn nexus_profile_preserves_effective_bootstrap_asset_ids() {
         let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
@@ -1565,7 +1489,6 @@ mod tests {
         assert_eq!(fee_asset, Some(expected_fee_asset.as_str()));
         assert_eq!(stake_asset, Some(expected_stake_asset.as_str()));
     }
-
     #[test]
     fn chaos_config_rejects_progress_interval_over_timeout() {
         let args = IzanamiArgs {
@@ -1609,7 +1532,6 @@ mod tests {
             "error should mention progress_interval: {err}"
         );
     }
-
     #[test]
     fn chaos_config_rejects_non_finite_tps() {
         let args = IzanamiArgs {
@@ -1653,7 +1575,6 @@ mod tests {
             "error should mention finite tps: {err}"
         );
     }
-
     #[test]
     fn chaos_config_rejects_tps_too_high_for_timer() {
         let args = IzanamiArgs {
@@ -1697,7 +1618,6 @@ mod tests {
             "error should mention timer resolution: {err}"
         );
     }
-
     #[test]
     fn chaos_config_rejects_tps_too_low_for_timer() {
         let args = IzanamiArgs {
@@ -1741,7 +1661,6 @@ mod tests {
             "error should mention timer range: {err}"
         );
     }
-
     #[test]
     fn chaos_config_accepts_latency_threshold_without_target_blocks() {
         let args = IzanamiArgs {
@@ -1784,7 +1703,6 @@ mod tests {
             Some(Duration::from_millis(900))
         );
     }
-
     #[test]
     fn chaos_config_rejects_zero_latency_threshold() {
         let args = IzanamiArgs {
@@ -1828,7 +1746,6 @@ mod tests {
             "error should mention latency_p95_threshold: {err}"
         );
     }
-
     #[test]
     fn chaos_config_accepts_sumeragi_block_tuning() {
         let mut args = IzanamiArgs::defaults();
@@ -1836,12 +1753,10 @@ mod tests {
         args.faulty = 0;
         args.sumeragi_block_max_transactions = 1_536;
         args.sumeragi_proposal_queue_scan_multiplier = 2;
-
         let config = ChaosConfig::try_from(args).expect("sumeragi block tuning should be valid");
         assert_eq!(config.sumeragi_block_max_transactions, 1_536);
         assert_eq!(config.sumeragi_proposal_queue_scan_multiplier, 2);
     }
-
     #[test]
     fn chaos_config_accepts_bounded_fault_window() {
         let mut args = IzanamiArgs::defaults();
@@ -1849,13 +1764,10 @@ mod tests {
         args.duration = Duration::from_secs(800);
         args.fault_window_start = Some(Duration::from_secs(133));
         args.fault_window_end = Some(Duration::from_secs(266));
-
         let config = ChaosConfig::try_from(args).expect("paper fault window should be valid");
-
         assert_eq!(config.fault_window_start, Some(Duration::from_secs(133)));
         assert_eq!(config.fault_window_end, Some(Duration::from_secs(266)));
     }
-
     #[test]
     fn chaos_config_rejects_fault_window_end_before_start() {
         let mut args = IzanamiArgs::defaults();
@@ -1863,30 +1775,24 @@ mod tests {
         args.duration = Duration::from_secs(800);
         args.fault_window_start = Some(Duration::from_secs(266));
         args.fault_window_end = Some(Duration::from_secs(133));
-
         let err = ChaosConfig::try_from(args).expect_err("inverted fault window must fail");
-
         assert!(
             err.to_string().contains("fault_window_end"),
             "error should mention fault_window_end: {err}"
         );
     }
-
     #[test]
     fn chaos_config_rejects_fault_window_start_after_duration() {
         let mut args = IzanamiArgs::defaults();
         args.allow_net = true;
         args.duration = Duration::from_secs(30);
         args.fault_window_start = Some(Duration::from_secs(30));
-
         let err = ChaosConfig::try_from(args).expect_err("late fault window must fail");
-
         assert!(
             err.to_string().contains("fault_window_start"),
             "error should mention fault_window_start: {err}"
         );
     }
-
     #[test]
     fn chaos_config_rejects_zero_submitters() {
         let args = IzanamiArgs {
@@ -1930,7 +1836,6 @@ mod tests {
             "error should mention submitters: {err}"
         );
     }
-
     #[test]
     fn chaos_config_rejects_faulty_peers_with_no_enabled_faults() {
         let args = IzanamiArgs {

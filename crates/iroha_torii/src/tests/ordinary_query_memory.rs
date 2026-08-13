@@ -1,16 +1,12 @@
 // Focused tests for Torii's app-local ordinary-query memory corridor.
-
 #[cfg(test)]
 mod ordinary_query_memory_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
-
     use iroha_core::smartcontracts::isi::query::{
         OrdinaryQueryExecutionLimits, OrdinaryQueryMemoryReservation as _,
     };
-
     use super::*;
-
     fn default_geometry() -> (QueryMemoryGeometry, QueryWeightedMemoryPool) {
         let geometry = query_memory_geometry(
             usize::try_from(defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES.get())
@@ -24,7 +20,6 @@ mod ordinary_query_memory_tests {
             .expect("default weighted pool");
         (geometry, pool)
     }
-
     fn default_policy(
         geometry: QueryMemoryGeometry,
         pool: &QueryWeightedMemoryPool,
@@ -40,7 +35,6 @@ mod ordinary_query_memory_tests {
         )
         .expect("default ordinary policy")
     }
-
     #[cfg(feature = "app_api")]
     fn proof_query_fixture(
         seed: u8,
@@ -61,7 +55,6 @@ mod ordinary_query_memory_tests {
             query::{QueryRequest, SingularQueryBox, proof::prelude::FindProofRecordById},
         };
         use iroha_version::codec::EncodeVersioned as _;
-
         let key_pair = tests_runtime_handlers::checked_torii_test_ed25519_keypair(
             seed,
             "derive bounded proof query key",
@@ -124,21 +117,18 @@ mod ordinary_query_memory_tests {
             base64::engine::general_purpose::STANDARD.encode(signed.encode_versioned());
         (app, authority, record, signed_query_b64)
     }
-
     #[cfg(feature = "app_api")]
     fn proof_query_dto(signed_query_b64: &str) -> crate::routing::ProofFindByIdQueryDto {
         crate::routing::ProofFindByIdQueryDto {
             signed_query_b64: signed_query_b64.to_owned(),
         }
     }
-
     #[test]
     fn weighted_pool_rounding_is_conservative_and_never_overcommits() {
         let pool = QueryWeightedMemoryPool::with_max_permits(10, 3).expect("small test pool");
         assert_eq!(pool.bytes_per_permit.get(), 4);
         assert_eq!(pool.total_permits.get(), 2);
         assert_eq!(pool.capacity_bytes(), 8);
-
         let permit = pool
             .try_acquire_parts([5])
             .expect("five bytes round to both permits");
@@ -148,7 +138,6 @@ mod ordinary_query_memory_tests {
         drop(permit);
         assert_eq!(pool.available_bytes(), 8);
     }
-
     #[test]
     fn weighted_pool_handles_u32_boundary_without_ceil_overflow() {
         let Ok(larger_than_u32) = usize::try_from(u64::from(u32::MAX) + 17) else {
@@ -160,7 +149,6 @@ mod ordinary_query_memory_tests {
         assert!(pool.capacity_bytes() > 0);
         assert!(pool.try_acquire_parts([u64::MAX]).is_none());
     }
-
     #[test]
     fn independently_rounded_start_parts_split_without_losing_p() {
         let pool = QueryWeightedMemoryPool::with_max_permits(32, 8).expect("split test pool");
@@ -173,7 +161,6 @@ mod ordinary_query_memory_tests {
             pool_generation: pool.generation(),
         };
         assert_eq!(reservation.reserved_bytes(), 12);
-
         let child = reservation.split_off(3).expect("split rounded R");
         assert_eq!(child.reserved_bytes(), 4);
         assert_eq!(child.pool_generation(), pool.generation());
@@ -184,7 +171,6 @@ mod ordinary_query_memory_tests {
         drop(reservation);
         assert_eq!(pool.available_bytes(), 32);
     }
-
     #[test]
     fn failed_split_leaves_parent_weight_unchanged() {
         let pool = QueryWeightedMemoryPool::with_max_permits(16, 4).expect("split test pool");
@@ -197,7 +183,6 @@ mod ordinary_query_memory_tests {
         assert!(reservation.split_off(9).is_none());
         assert_eq!(reservation.reserved_bytes(), 8);
     }
-
     #[test]
     fn app_local_pool_and_policy_generations_are_unique_and_wrap_closed() {
         let (geometry, first_pool) = default_geometry();
@@ -210,14 +195,12 @@ mod ordinary_query_memory_tests {
             first_policy.limits.policy_generation(),
             second_policy.limits.policy_generation()
         );
-
         let wrapped = AtomicU64::new(u64::MAX);
         assert_eq!(take_nonzero_generation(&wrapped), None);
         assert_eq!(wrapped.load(Ordering::Relaxed), u64::MAX);
         let invalid = AtomicU64::new(0);
         assert_eq!(take_nonzero_generation(&invalid), None);
     }
-
     #[test]
     fn torii_policy_charges_the_transport_copy_above_core_minimum() {
         let (geometry, pool) = default_geometry();
@@ -251,7 +234,6 @@ mod ordinary_query_memory_tests {
         );
         assert!(pool.can_reserve_parts(policy.singular_execution_reservation_parts()));
     }
-
     #[test]
     fn exhausted_weighted_pool_rejects_start_without_pinning_ingress() {
         let app = mk_app_state_for_tests();
@@ -275,7 +257,6 @@ mod ordinary_query_memory_tests {
             "fail-fast promotion must not retain any ingress slot"
         );
     }
-
     #[test]
     fn proxy_memory_promotion_ignores_the_ordinary_query_wait_timeout() {
         let mut app = mk_app_state_for_tests();
@@ -283,12 +264,10 @@ mod ordinary_query_memory_tests {
             .expect("unique test app")
             .query_queue_timeout = Duration::from_secs(60);
         let held = try_acquire_torii_proxy_memory(&app).expect("occupy proxy memory lane");
-
         let result = acquire_torii_proxy_memory(&app);
         assert!(result.is_err());
         drop(held);
     }
-
     #[test]
     fn response_body_owns_ordinary_lease_after_extension_is_removed() {
         let pool = QueryWeightedMemoryPool::with_max_permits(16, 16).expect("body test pool");
@@ -315,14 +294,12 @@ mod ordinary_query_memory_tests {
         drop(slow_body);
         assert_eq!(pool.available_bytes(), 16);
     }
-
     #[test]
     fn admitted_ordinary_output_closure_has_bounded_json_writers() {
         use iroha_data_model::query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
             SingularQueryOutputBox,
         };
-
         let iterable = |batch| {
             QueryResponse::Iterable(QueryOutput {
                 batch: QueryOutputBatchBoxTuple::from_batch(batch),
@@ -342,7 +319,6 @@ mod ordinary_query_memory_tests {
                 iroha_data_model::query::runtime::AbiVersion { abi_version: 1 },
             )),
         ];
-
         for response in responses {
             let exact = norito::json::to_string(&response)
                 .expect("ordinary response JSON")
@@ -365,7 +341,6 @@ mod ordinary_query_memory_tests {
             ));
         }
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn proof_query_uses_bounded_singular_lane_and_preserves_json() {
@@ -394,7 +369,6 @@ mod ordinary_query_memory_tests {
             ) if actual == expected
         ));
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn proof_query_fails_fast_before_consuming_the_signed_nonce() {
@@ -410,7 +384,6 @@ mod ordinary_query_memory_tests {
         assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
         drop(rejected);
         drop(held);
-
         let accepted = execute_bounded_proof_query(
             &app,
             proof_query_dto(&signed_query_b64),
@@ -420,7 +393,6 @@ mod ordinary_query_memory_tests {
         .expect("the same nonce remains unused after fail-fast rejection");
         assert_eq!(accepted.status(), StatusCode::OK);
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn proof_query_rejects_oversized_base64_before_versioned_decode() {
@@ -435,7 +407,6 @@ mod ordinary_query_memory_tests {
             .expect("oversized proof input must fail before versioned decode");
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn proof_query_rejects_output_above_singular_frame_limit() {
@@ -472,7 +443,6 @@ mod ordinary_query_memory_tests {
             "failed proof execution releases its complete reservation"
         );
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn proof_response_slow_body_owns_the_fanout_reservation() {
@@ -503,7 +473,6 @@ mod ordinary_query_memory_tests {
             available_before
         );
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn proof_query_uses_the_source_bounded_ordinary_singular_lane() {
@@ -536,7 +505,6 @@ mod ordinary_query_memory_tests {
                     .singular_execution_reservation_bytes
         );
     }
-
     #[test]
     fn bounded_norito_response_accepts_exact_f_and_rejects_f_minus_one() {
         let value = vec![1_u64, 2, 3, 5, 8];
@@ -554,7 +522,6 @@ mod ordinary_query_memory_tests {
             Err(crate::utils::BoundedResponseEncodeError::BodyTooLarge { .. })
         ));
     }
-
     #[tokio::test]
     async fn aborted_blocking_join_keeps_weight_until_worker_exits() {
         let pool = QueryWeightedMemoryPool::with_max_permits(16, 16).expect("cancel test pool");
@@ -585,7 +552,6 @@ mod ordinary_query_memory_tests {
         }
         panic!("detached blocking worker did not release its reservation");
     }
-
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn proxy_snapshot_and_rebuilt_body_keep_ordinary_weight() {
@@ -605,7 +571,6 @@ mod ordinary_query_memory_tests {
         let admitted = response_to_admitted_torii_proxy_snapshot(response, 8).await;
         assert!(admitted.ordinary_query_memory.is_some());
         assert_eq!(pool.available_bytes(), 8);
-
         let mut rebuilt = admitted_torii_proxy_snapshot_to_response(admitted);
         let extracted = take_ordinary_query_memory_reservation(&mut rebuilt)
             .expect("rebuilt response extension");

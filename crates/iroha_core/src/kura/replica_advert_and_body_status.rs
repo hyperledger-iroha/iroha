@@ -16,12 +16,10 @@ pub(crate) struct KuraReplicaAdvertSourceV1 {
     keeper_index: u32,
     keeper: PeerId,
 }
-
 impl KuraReplicaAdvertSourceV1 {
     pub(crate) const fn height(&self) -> u64 {
         self.height
     }
-
     #[cfg(test)]
     pub(crate) fn for_refresh_owner_test(height: u64, keeper: PeerId) -> Self {
         let test_hash = |domain: &[u8]| {
@@ -42,7 +40,6 @@ impl KuraReplicaAdvertSourceV1 {
             keeper,
         }
     }
-
     fn from_advert(advert: &KuraReplicaAdvertV1) -> Self {
         Self {
             network_id: advert.network_id,
@@ -55,7 +52,6 @@ impl KuraReplicaAdvertSourceV1 {
             keeper: advert.keeper.clone(),
         }
     }
-
     fn unsigned_advert(&self) -> KuraReplicaAdvertV1 {
         KuraReplicaAdvertV1 {
             version: crate::sumeragi::message::KURA_REPLICA_ADVERT_VERSION_V1,
@@ -71,7 +67,6 @@ impl KuraReplicaAdvertSourceV1 {
         }
     }
 }
-
 impl Kura {
     /// Return `true` when the block payload is available locally (in memory, `blocks.data`, or the
     /// local sidecar cache).
@@ -85,7 +80,6 @@ impl Kura {
         };
         self.block_payload_available_by_height(height)
     }
-
     #[cfg(test)]
     fn block_payload_available_by_height(&self, block_height: NonZeroUsize) -> bool {
         matches!(
@@ -93,7 +87,6 @@ impl Kura {
             Some(BlockBodyStatus::Cached | BlockBodyStatus::Inline | BlockBodyStatus::LocalSidecar)
         )
     }
-
     /// Bind the immutable local transport identity before Kura's writer starts.
     ///
     /// Repeating the exact identity is idempotent; a different identity fails
@@ -112,12 +105,10 @@ impl Kura {
             Err(_) => Err(Error::KuraReplicaLocalPeerConflict),
         }
     }
-
     #[cfg(test)]
     fn kura_replica_advert_body_reads_for_tests(&self) -> usize {
         self.kura_replica_advert_body_reads.load(Ordering::Acquire)
     }
-
     /// Read the exact canonical durable tip used to anchor one proactive
     /// refresh cursor.  Height and hash are captured under the same prune and
     /// canonical-chain guards so same-height replacement cannot masquerade as
@@ -142,7 +133,6 @@ impl Kura {
         )?;
         Ok(Some((height, hash)))
     }
-
     /// Probe one exact durable height without reading its block body.
     ///
     /// Heights without retained v2 finality and heights for which this node is
@@ -158,14 +148,12 @@ impl Kura {
         if self.local_peer_id.get() != Some(&keeper) {
             return Err(Error::KuraReplicaLocalPeerConflict);
         }
-
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.ensure_canonical_storage_not_poisoned()?;
         self.probe_kura_replica_advert_source_under_guards(height, &keeper)
     }
-
     /// Build and sign a local advert only while the exact canonical body is
     /// durably readable and the local peer is selected by its verified
     /// CommitQC keeper authority.
@@ -181,7 +169,6 @@ impl Kura {
         self.build_signed_kura_replica_advert_from_source(&source, local_key)
             .map(Some)
     }
-
     /// Revalidate one retained source token, read its complete canonical body
     /// exactly once, and sign the resulting advert.
     pub(crate) fn build_signed_kura_replica_advert_from_source(
@@ -193,7 +180,6 @@ impl Kura {
         if source.keeper != keeper || self.local_peer_id.get() != Some(&keeper) {
             return Err(Error::KuraReplicaLocalPeerConflict);
         }
-
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
@@ -212,7 +198,6 @@ impl Kura {
             ));
         }
         self.verify_complete_kura_replica_body_under_guards(source)?;
-
         let mut advert = source.unsigned_advert();
         advert.signature =
             iroha_crypto::Signature::try_new(local_key.private_key(), &advert.signature_preimage())
@@ -228,7 +213,6 @@ impl Kura {
             .map_err(Error::InvalidKuraReplicaAdvert)?;
         Ok(advert)
     }
-
     /// Revalidate a retained exact-output advert before it crosses a height
     /// rollover.  This repeats body, finality, keeper, key, and signature
     /// checks instead of trusting the queued wire object.
@@ -247,7 +231,6 @@ impl Kura {
         }
         self.revalidate_kura_replica_advert_source(advert)
     }
-
     /// Revalidate a retained local advert from durable Kura state without
     /// re-signing it or publishing it into the remote-replica registry.
     pub(crate) fn revalidate_kura_replica_advert_source(
@@ -260,7 +243,6 @@ impl Kura {
         if self.local_peer_id.get() != Some(&advert.keeper) {
             return Err(Error::KuraReplicaLocalPeerConflict);
         }
-
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
@@ -281,7 +263,6 @@ impl Kura {
         self.verify_complete_kura_replica_body_under_guards(&source)?;
         Ok(())
     }
-
     /// Authenticate the canonical index, retained finality, and local keeper
     /// while the caller owns the prune and canonical-chain guards.  This path
     /// never reads the encoded block body.
@@ -339,7 +320,6 @@ impl Kura {
             keeper: keeper.clone(),
         }))
     }
-
     /// Read and validate the complete local body only after exact keeper
     /// authority has been authenticated under the enclosing guards.
     fn verify_complete_kura_replica_body_under_guards(
@@ -403,7 +383,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Authenticate the canonical index, retained finality, and deterministic
     /// keeper while the caller owns the prune and canonical-chain guards.
     fn verified_kura_replica_advert_authority_under_guards(
@@ -468,7 +447,6 @@ impl Kura {
         }
         Ok((authority, durable_count))
     }
-
     /// Authenticate and retain one direct keeper advert against exact durable
     /// canonical finality.  Structural/signature validation happens before
     /// any Kura lock; canonical identity and keeper selection are then checked
@@ -477,7 +455,6 @@ impl Kura {
         advert
             .verify_keeper_signature()
             .map_err(Error::InvalidKuraReplicaAdvert)?;
-
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
@@ -485,7 +462,6 @@ impl Kura {
         let blocks_dir = self.active_blocks_dir.lock().clone();
         let (authority, canonical_tip) =
             self.verified_kura_replica_advert_authority_under_guards(advert, &blocks_dir)?;
-
         let now = Instant::now();
         let mut registry = self.replica_registry.lock();
         let (minimum_height, maximum_height) = self.replica_registry_height_horizon(canonical_tip);
@@ -546,7 +522,6 @@ impl Kura {
                 "replica registry peer count exceeds the protocol validator bound".to_owned(),
             ));
         }
-
         self.prune_replica_adverts_for_horizon(&mut registry, now, minimum_height, maximum_height);
         registry.retain(|key, _| key.height != authority.key.height || key == &authority.key);
         registry.entry(authority.key).or_default().insert(
@@ -558,7 +533,6 @@ impl Kura {
         );
         Ok(())
     }
-
     /// Return local/remote body status for a canonical block hash known to Kura.
     #[cfg(test)]
     pub(crate) fn block_body_status_by_hash(
@@ -571,7 +545,6 @@ impl Kura {
         let height = self.get_block_height_by_hash(hash)?;
         self.block_body_status_by_height(height)
     }
-
     #[cfg(test)]
     fn block_body_status_by_height(&self, block_height: NonZeroUsize) -> Option<BlockBodyStatus> {
         if self.prune_recovery_is_required()
@@ -596,7 +569,6 @@ impl Kura {
             }
             return Some(BlockBodyStatus::Cached);
         }
-
         let (index, expected_hash, blocks_dir, da_blocks_dir, da_path, canonical_tip) = {
             let mut store = self.block_store.lock();
             if self.prune_recovery_is_required() {
@@ -649,7 +621,6 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return None;
         }
-
         if index.length == 0 {
             return Some(BlockBodyStatus::Missing);
         }
@@ -660,7 +631,6 @@ impl Kura {
                 BlockBodyStatus::Inline
             });
         }
-
         let Some(expected_hash) = expected_hash else {
             return Some(BlockBodyStatus::Missing);
         };
@@ -687,7 +657,6 @@ impl Kura {
         {
             return Some(BlockBodyStatus::LocalSidecar);
         }
-
         let Some(authority) = authority else {
             return Some(BlockBodyStatus::Missing);
         };
@@ -703,7 +672,6 @@ impl Kura {
             Some(BlockBodyStatus::Missing)
         }
     }
-
     fn prune_replica_adverts_for_horizon(
         &self,
         registry: &mut BlockReplicaRegistry,
@@ -719,11 +687,9 @@ impl Kura {
         });
         registry.retain(|key, _| key.height >= minimum_height && key.height <= maximum_height);
     }
-
     fn replica_registry_capacity(&self) -> usize {
         self.replica_registry_key_capacity.get()
     }
-
     fn replica_registry_height_horizon(&self, canonical_tip: u64) -> (u64, u64) {
         let span = self
             .replica_registry_key_capacity
@@ -737,7 +703,6 @@ impl Kura {
             .max(1);
         (minimum_height, canonical_tip)
     }
-
     fn matching_selected_keeper_count(
         &self,
         authority: &VerifiedKuraReplicaAuthority,
@@ -762,7 +727,6 @@ impl Kura {
             })
             .unwrap_or(0)
     }
-
     fn has_all_selected_remote_keepers(
         &self,
         authority: &VerifiedKuraReplicaAuthority,

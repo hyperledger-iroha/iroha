@@ -1,7 +1,5 @@
 //! Exact-purpose authenticated replay and temporary-storage geometry for qPCS V2.
-
 use super::*;
-
 #[path = "replay_v2/post_c0_replay_v2.rs"]
 mod post_c0_replay_v2;
 use post_c0_replay_v2::*;
@@ -50,7 +48,6 @@ const FRI_RELEASE_FILES_V2: [u64; 18] = [
     54_720,
     30_400,
 ];
-
 const _: () = {
     assert!(REPLAY_COLUMNS_V2 as u64 == RELEASE_LDE_COLUMNS_V2);
     assert!(REPLAY_DOMAIN_VALUES_V2 == 1_u64 << RELEASE_DOMAIN_LOG_V2);
@@ -68,20 +65,17 @@ const _: () = {
     assert!(!RELEASE_READY_V2);
     assert!(!RELEASE_COMPLETE_V2);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StorageRoleV2 {
     CqColumnStage = 1,
     RowScratch = 2,
     FriLayer = 3,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScratchOrientationV2 {
     Rows = 1,
     Columns = 2,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RowScratchAxesV2 {
     limb: u8,
@@ -91,7 +85,6 @@ struct RowScratchAxesV2 {
     orientation: ScratchOrientationV2,
     tile: u16,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct StorageLayoutDescriptorV2 {
     role: StorageRoleV2,
@@ -105,7 +98,6 @@ struct StorageLayoutDescriptorV2 {
     file_bytes: u64,
     mapping_digest: [u8; 32],
 }
-
 fn fixed_row_column_v2(
     limb: u8,
     repetition: u8,
@@ -122,7 +114,6 @@ fn fixed_row_column_v2(
         + u16::from(repetition) * u16::from(ROWS_PER_REPETITION_V2)
         + role)
 }
-
 fn checked_layout_v2(
     role: StorageRoleV2,
     layer: u8,
@@ -172,7 +163,6 @@ fn checked_layout_v2(
         mapping_digest,
     })
 }
-
 fn cq_column_layout_v2(
     parameter_digest: [u8; 32],
 ) -> Result<StorageLayoutDescriptorV2, QPcsSpoolErrorV2> {
@@ -198,7 +188,6 @@ fn cq_column_layout_v2(
     }
     Ok(layout)
 }
-
 fn row_scratch_layout_v2(
     parameter_digest: [u8; 32],
     axes: RowScratchAxesV2,
@@ -225,7 +214,6 @@ fn row_scratch_layout_v2(
     }
     Ok(layout)
 }
-
 fn fri_layer_layout_v2(
     parameter_digest: [u8; 32],
     layer: u8,
@@ -258,7 +246,6 @@ fn fri_layer_layout_v2(
     }
     Ok(layout)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn mapping_digest_for_layout_v2(
     role: StorageRoleV2,
@@ -389,7 +376,6 @@ fn mapping_digest_for_layout_v2(
     }
     Ok(digest)
 }
-
 fn derived_context_digest_v2(
     descriptor: StorageLayoutDescriptorV2,
     context: PublicSpoolContextV2,
@@ -411,7 +397,6 @@ fn derived_context_digest_v2(
     }
     Ok(digest)
 }
-
 struct LiveCoefficientReplayStageV2 {
     coefficient: ConfidentialSpoolSnapshotV1,
     lde: ConfidentialSpoolWriterV1,
@@ -419,7 +404,6 @@ struct LiveCoefficientReplayStageV2 {
     next_coefficient_purpose: u16,
     replay_permit: AuthenticatedReplayPermitV2,
 }
-
 pub(super) struct QPcsCoefficientReplayStageV2 {
     live: Option<LiveCoefficientReplayStageV2>,
     geometry: SpoolGeometryV2,
@@ -427,7 +411,6 @@ pub(super) struct QPcsCoefficientReplayStageV2 {
     coefficient_context_digest: [u8; 32],
     lde_context_digest: [u8; 32],
 }
-
 impl QPcsSpoolWriterV2 {
     pub(super) fn seal_coefficients_for_replay_v2(
         mut self,
@@ -452,7 +435,6 @@ impl QPcsSpoolWriterV2 {
         })
     }
 }
-
 impl QPcsCoefficientReplayStageV2 {
     pub(super) fn begin_next_coefficient_row_v2(
         self,
@@ -484,7 +466,6 @@ impl QPcsCoefficientReplayStageV2 {
             next_block: 0,
         })
     }
-
     pub(super) fn push_lde_block_v2(
         &mut self,
         chunk: ConfidentialSpoolChunkV1,
@@ -503,7 +484,6 @@ impl QPcsCoefficientReplayStageV2 {
         self.live = Some(live);
         Ok(())
     }
-
     pub(super) fn seal_lde_v2(mut self) -> Result<QPcsSpoolSnapshotV2, QPcsSpoolErrorV2> {
         let live = self.live.take().ok_or(QPcsSpoolErrorV2::Poisoned)?;
         let purpose_count = u16::from(self.geometry.limb_count_v2()?)
@@ -538,14 +518,12 @@ impl QPcsCoefficientReplayStageV2 {
         })
     }
 }
-
 pub(super) struct CoefficientReplayReaderV2 {
     stage: Option<QPcsCoefficientReplayStageV2>,
     pair: u16,
     component: CoefficientComponentV2,
     next_block: u64,
 }
-
 impl CoefficientReplayReaderV2 {
     pub(super) fn read_next_block_v2(
         &mut self,
@@ -574,7 +552,6 @@ impl CoefficientReplayReaderV2 {
         self.stage = Some(stage);
         Ok(AuthenticatedReplayChunkV2 { chunk })
     }
-
     pub(super) fn complete_v2(mut self) -> Result<QPcsCoefficientReplayStageV2, QPcsSpoolErrorV2> {
         let mut stage = self.stage.take().ok_or(QPcsSpoolErrorV2::Poisoned)?;
         if self.next_block != stage.geometry.coefficient_blocks_per_component_v2()? {
@@ -587,20 +564,17 @@ impl CoefficientReplayReaderV2 {
             .ok_or(QPcsSpoolErrorV2::InvalidGeometry)?;
         Ok(stage)
     }
-
     #[cfg(test)]
     fn panic_after_take_for_test_v2(&mut self) {
         let _stage = self.stage.take().expect("live coefficient replay reader");
         panic!("intentional coefficient replay unwind test");
     }
 }
-
 struct LiveSpoolSnapshotsV2 {
     coefficient: ConfidentialSpoolSnapshotV1,
     lde: ConfidentialSpoolSnapshotV1,
     replay_permit: AuthenticatedReplayPermitV2,
 }
-
 pub(super) struct QPcsSpoolSnapshotV2 {
     live: Option<LiveSpoolSnapshotsV2>,
     geometry: SpoolGeometryV2,
@@ -609,16 +583,13 @@ pub(super) struct QPcsSpoolSnapshotV2 {
     lde_context_digest: [u8; 32],
     snapshot_binding_digest: [u8; 32],
 }
-
 impl QPcsSpoolSnapshotV2 {
     pub(super) const fn parameter_digest_v2(&self) -> [u8; 32] {
         self.parameter_digest
     }
-
     pub(super) const fn snapshot_binding_digest_v2(&self) -> [u8; 32] {
         self.snapshot_binding_digest
     }
-
     pub(super) fn begin_c0_replay_v2(self) -> Result<C0ReplayReaderV2, QPcsSpoolErrorV2> {
         if self.live.is_none() {
             return Err(QPcsSpoolErrorV2::Poisoned);
@@ -630,13 +601,11 @@ impl QPcsSpoolSnapshotV2 {
         })
     }
 }
-
 pub(super) struct C0ReplayReaderV2 {
     snapshot: Option<QPcsSpoolSnapshotV2>,
     next_block: u64,
     next_column: u64,
 }
-
 impl C0ReplayReaderV2 {
     pub(super) fn read_next_block_column_v2(
         &mut self,
@@ -659,7 +628,6 @@ impl C0ReplayReaderV2 {
         self.snapshot = Some(snapshot);
         Ok(AuthenticatedReplayChunkV2 { chunk })
     }
-
     pub(super) fn complete_v2(mut self) -> Result<QPcsC0CompleteV2, QPcsSpoolErrorV2> {
         let snapshot = self.snapshot.take().ok_or(QPcsSpoolErrorV2::Poisoned)?;
         if self.next_block != snapshot.geometry.lde_blocks_per_column_v2()? || self.next_column != 0
@@ -669,20 +637,17 @@ impl C0ReplayReaderV2 {
         Ok(QPcsC0CompleteV2 { snapshot })
     }
 }
-
 pub(super) struct QPcsC0CompleteV2 {
     snapshot: QPcsSpoolSnapshotV2,
 }
 pub(super) struct AuthenticatedReplayChunkV2 {
     chunk: ConfidentialSpoolChunkV1,
 }
-
 impl AuthenticatedReplayChunkV2 {
     pub(super) fn bytes_v2(&self) -> &[u8] {
         self.chunk.as_slice_v1()
     }
 }
-
 impl Drop for AuthenticatedReplayChunkV2 {
     fn drop(&mut self) {
         self.chunk.as_mut_slice_v1().fill(0);
@@ -691,7 +656,6 @@ impl Drop for AuthenticatedReplayChunkV2 {
         REPLAY_CHUNK_ZEROIZED_DROPS_V2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
-
 pub(super) struct QPcsDerivedReplayV2 {
     snapshot: Option<ConfidentialSpoolSnapshotV1>,
     descriptor: StorageLayoutDescriptorV2,
@@ -699,7 +663,6 @@ pub(super) struct QPcsDerivedReplayV2 {
     next_unit: u64,
     replay_permit: AuthenticatedReplayPermitV2,
 }
-
 fn bind_derived_replay_v2(
     snapshot: ConfidentialSpoolSnapshotV1,
     descriptor: StorageLayoutDescriptorV2,
@@ -721,7 +684,6 @@ fn bind_derived_replay_v2(
         replay_permit,
     })
 }
-
 impl QPcsDerivedReplayV2 {
     pub(super) fn begin_next_cq_transpose_window_v2(
         mut self,
@@ -738,7 +700,6 @@ impl QPcsDerivedReplayV2 {
             next_column: 0,
         })
     }
-
     pub(super) fn begin_next_fri_fold_column_v2(
         mut self,
     ) -> Result<FriFoldPairReaderV2, QPcsSpoolErrorV2> {
@@ -755,12 +716,10 @@ impl QPcsDerivedReplayV2 {
         })
     }
 }
-
 pub(super) struct CqTransposeWindowReaderV2 {
     owner: Option<QPcsDerivedReplayV2>,
     next_column: u16,
 }
-
 impl CqTransposeWindowReaderV2 {
     pub(super) fn read_next_column_v2(
         &mut self,
@@ -778,7 +737,6 @@ impl CqTransposeWindowReaderV2 {
         self.owner = Some(owner);
         Ok(AuthenticatedReplayChunkV2 { chunk })
     }
-
     pub(super) fn complete_v2(mut self) -> Result<QPcsDerivedReplayV2, QPcsSpoolErrorV2> {
         let mut owner = self.owner.take().ok_or(QPcsSpoolErrorV2::Poisoned)?;
         if self.next_column != owner.descriptor.columns {
@@ -788,18 +746,15 @@ impl CqTransposeWindowReaderV2 {
         Ok(owner)
     }
 }
-
 pub(super) struct FriFoldPairChunksV2 {
     pub(super) lower: AuthenticatedReplayChunkV2,
     pub(super) upper: Option<AuthenticatedReplayChunkV2>,
     pub(super) values_per_half: u16,
 }
-
 pub(super) struct FriFoldPairReaderV2 {
     owner: Option<QPcsDerivedReplayV2>,
     next_pair_block: u64,
 }
-
 impl FriFoldPairReaderV2 {
     pub(super) fn read_next_pair_v2(&mut self) -> Result<FriFoldPairChunksV2, QPcsSpoolErrorV2> {
         let mut owner = self.owner.take().ok_or(QPcsSpoolErrorV2::Poisoned)?;
@@ -839,7 +794,6 @@ impl FriFoldPairReaderV2 {
             values_per_half,
         })
     }
-
     pub(super) fn complete_v2(mut self) -> Result<QPcsDerivedReplayV2, QPcsSpoolErrorV2> {
         let mut owner = self.owner.take().ok_or(QPcsSpoolErrorV2::Poisoned)?;
         let expected = if owner.descriptor.blocks_per_column >= 2 {
@@ -854,11 +808,9 @@ impl FriFoldPairReaderV2 {
         Ok(owner)
     }
 }
-
 #[cfg(test)]
 static REPLAY_CHUNK_ZEROIZED_DROPS_V2: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-
 #[path = "replay_v2/canonical_proof_replay_v2.rs"]
 mod canonical_proof_replay_v2;
 use canonical_proof_replay_v2::*;

@@ -1,14 +1,11 @@
 //! Transaction submission receipt types and signing helpers.
-
 use iroha_crypto::{Algorithm, HashOf, KeyPair, PublicKey, Signature};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
     core::NoritoSerialize,
 };
-
 use super::{SignedTransaction, signed::TransactionEntrypoint};
-
 fn verify_signature_for_signer(
     signature: &Signature,
     signer: &PublicKey,
@@ -25,10 +22,8 @@ fn verify_signature_for_signer(
     }
     signature.verify(signer, payload)
 }
-
 /// Domain tag for transaction submission receipt signatures.
 pub const TX_SUBMISSION_RECEIPT_DOMAIN: &str = "iroha.tx.submission.receipt@v1";
-
 /// Canonical payload signed by a Torii node when accepting a transaction submission.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -51,7 +46,6 @@ pub struct TransactionSubmissionReceiptPayload {
     /// Public key of the node that issued the receipt.
     pub signer: PublicKey,
 }
-
 impl TransactionSubmissionReceiptPayload {
     /// Deterministic signing bytes for this receipt payload.
     #[must_use]
@@ -66,7 +60,6 @@ impl TransactionSubmissionReceiptPayload {
         bytes
     }
 }
-
 /// Signed receipt acknowledging transaction submission.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -79,7 +72,6 @@ pub struct TransactionSubmissionReceipt {
     /// Signature over the canonical payload.
     pub signature: Signature,
 }
-
 impl TransactionSubmissionReceipt {
     /// Fallibly create a signed receipt from the payload.
     ///
@@ -92,14 +84,12 @@ impl TransactionSubmissionReceipt {
         let signature = Signature::try_new(key_pair.private_key(), &payload.signing_bytes())?;
         Ok(Self { payload, signature })
     }
-
     /// Create a signed receipt from the payload.
     #[must_use]
     pub fn sign(payload: TransactionSubmissionReceiptPayload, key_pair: &KeyPair) -> Self {
         Self::try_sign(payload, key_pair)
             .expect("signing should succeed for a valid receipt key and payload")
     }
-
     /// Verify the receipt signature against the payload signer.
     ///
     /// # Errors
@@ -112,25 +102,20 @@ impl TransactionSubmissionReceipt {
         )
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked transaction receipt fixture keypair")
     }
-
     fn checked_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked Ed25519 transaction receipt fixture keypair")
     }
-
     fn checked_mldsa_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
             .expect("generate checked ML-DSA transaction receipt fixture keypair")
     }
-
     fn sample_receipt_payload(key_pair: &KeyPair) -> TransactionSubmissionReceiptPayload {
         TransactionSubmissionReceiptPayload {
             tx_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xA5; 32])),
@@ -145,22 +130,18 @@ mod tests {
             signer: key_pair.public_key().clone(),
         }
     }
-
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn signature_with_payload(replacement_payload: &[u8]) -> Signature {
         Signature::from_bytes(replacement_payload)
     }
-
     #[test]
     fn submission_receipt_roundtrips_signature() {
         let key_pair = checked_random_keypair();
@@ -171,20 +152,17 @@ mod tests {
         let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
         assert!(receipt.verify().is_ok());
     }
-
     #[test]
     fn submission_receipt_rejects_malformed_ed25519_signature() {
         let key_pair = checked_ed25519_keypair();
         let receipt =
             TransactionSubmissionReceipt::sign(sample_receipt_payload(&key_pair), &key_pair);
-
         let mut small_order_signature = receipt.signature.payload().to_vec();
         small_order_signature[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
             .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
         let mut noncanonical_signature = receipt.signature.payload().to_vec();
         noncanonical_signature[..NONCANONICAL_ED25519_SIGNATURE_R.len()]
             .copy_from_slice(&NONCANONICAL_ED25519_SIGNATURE_R);
-
         for (label, replacement_payload) in [
             ("all-zero", vec![0_u8; 64]),
             ("short", vec![0x42_u8; 32]),
@@ -193,7 +171,6 @@ mod tests {
         ] {
             let mut invalid_receipt = receipt.clone();
             invalid_receipt.signature = signature_with_payload(&replacement_payload);
-
             let err = invalid_receipt
                 .verify()
                 .expect_err("malformed receipt signature must fail admission");
@@ -206,7 +183,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn submission_receipt_rejects_malformed_mldsa_signature_lengths() {
         let key_pair = checked_mldsa_keypair();
@@ -216,7 +192,6 @@ mod tests {
             .verify()
             .expect("valid ML-DSA transaction receipt signature verifies");
         let valid_signature = receipt.signature.payload().to_vec();
-
         for (label, replacement_payload) in [
             (
                 "short",
@@ -230,7 +205,6 @@ mod tests {
         ] {
             let mut invalid_receipt = receipt.clone();
             invalid_receipt.signature = signature_with_payload(&replacement_payload);
-
             let err = invalid_receipt
                 .verify()
                 .expect_err("malformed ML-DSA receipt signature length must fail admission");

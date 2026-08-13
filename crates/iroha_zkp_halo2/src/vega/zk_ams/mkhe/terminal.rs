@@ -15,9 +15,7 @@
 //! enforced at encrypted ingress by the authenticated full-roster mask-share
 //! ceremony bound to the roster/epoch/transcript context, not by trusting a
 //! prover-supplied digest at this terminal boundary.
-
 use std::sync::Arc;
-
 use super::{
     Scalar, ZkAmsMkheErrorV1, keccak256,
     manifest::release_profile_v1,
@@ -40,7 +38,6 @@ use crate::vega::{
     nifs::NovaNifs,
     r1cs::{Instance, RelaxedInstance, RelaxedWitness, Shape, SparseMatrix},
 };
-
 const PHASE3_TERMINAL_VERSION_V1: u8 = 1;
 const PHASE3_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase3.terminal-context";
 const PHASE3_MAP_SET_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase3.paper-order-map-set";
@@ -62,11 +59,9 @@ const PHASE3_IMPLEMENTATION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase3.terminal
 const PHASE3_C1_SCHEMA_V1: &[u8] = b"C1:Com(E,rE)+Com(W,rW)+(A*Z)*(B*Z)=u*(C*Z)+E:Z=(W,x,u)";
 const PHASE3_C2_SCHEMA_V1: &[u8] =
     b"C2:tagged-length-framed(generic-proof-context,terminal-context-digest,governed-batch-digest)+full-public-mask+ordered-strict-inputs+ordered-W-commitments+ordered-T-commitments+Nova-replay+exact-IaccN-anchor+C1-Relaxed-Spartan";
-
 /// Hard cap checked before decoding one canonical terminal proof.
 pub const ZK_AMS_PHASE3_MAX_TERMINAL_PROOF_BYTES_V1: usize =
     super::super::MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1;
-
 /// Exact consensus context of one terminal Phase-III proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase3TerminalContextV1 {
@@ -89,7 +84,6 @@ pub struct ZkAmsPhase3TerminalContextV1 {
     /// Digest binding every preceding context field.
     pub digest: [u8; 32],
 }
-
 impl ZkAmsPhase3TerminalContextV1 {
     /// Construct one complete terminal context.
     pub fn new(
@@ -118,7 +112,6 @@ impl ZkAmsPhase3TerminalContextV1 {
         Ok(context)
     }
 }
-
 /// Digest the exact canonical ordered public settlement inputs. This is the
 /// sole meaning of `ordered_batch_input_digest` in the first-release context.
 pub fn zk_ams_phase3_ordered_public_inputs_digest_v1(
@@ -163,7 +156,6 @@ pub fn zk_ams_phase3_ordered_public_inputs_digest_v1(
     }
     Ok(keccak256(&frame))
 }
-
 /// Compact public representation of the final replayed accumulator instance
 /// `I_acc,N`. The context digest binds the commitments and public `u,x` to the
 /// exact roster epoch, transcript, batch, ordered inputs, maps, and verifier.
@@ -188,7 +180,6 @@ pub struct ZkAmsPhase3BatchAnchorV1 {
     /// Digest binding the ordered fields above.
     pub digest: [u8; 32],
 }
-
 impl ZkAmsPhase3BatchAnchorV1 {
     /// Construct a context-bound public relaxed instance from exact canonical
     /// commitment points and T256 scalars.
@@ -230,7 +221,6 @@ impl ZkAmsPhase3BatchAnchorV1 {
         Ok(anchor)
     }
 }
-
 /// Exact governed strict public inputs supplied independently by settlement.
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -247,7 +237,6 @@ pub struct ZkAmsPhase3GovernedBatchV1 {
     /// Digest binding the ordered fields above.
     pub digest: [u8; 32],
 }
-
 impl ZkAmsPhase3GovernedBatchV1 {
     /// Construct the exact governed batch and require its public-input digest
     /// to equal the independently supplied terminal context.
@@ -284,7 +273,6 @@ impl ZkAmsPhase3GovernedBatchV1 {
         Ok(batch)
     }
 }
-
 /// Public precomputed Nova history generated before PBS materialization. The
 /// proof transports these commitments; this type is the prover-side input.
 #[derive(
@@ -306,7 +294,6 @@ pub struct ZkAmsPhase3FoldHistoryV1 {
     /// Digest binding the ordered fields above.
     pub digest: [u8; 32],
 }
-
 impl ZkAmsPhase3FoldHistoryV1 {
     /// Construct an exact bounded public fold history.
     pub fn new(
@@ -345,7 +332,6 @@ impl ZkAmsPhase3FoldHistoryV1 {
         Ok(history)
     }
 }
-
 /// Public output of the PBS terminal prover. The materialized witness remains
 /// prover-local; settlement receives only this anchor and canonical proof.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -355,7 +341,6 @@ pub struct ZkAmsPhase3TerminalProverOutputV1 {
     /// Exact canonical terminal proof bytes.
     pub proof_bytes: Vec<u8>,
 }
-
 /// Opaque in-process result of one public terminal verification.
 ///
 /// Private fields and the absence of `Clone`, `Copy`, and serialization are
@@ -384,69 +369,58 @@ pub struct ZkAmsPhase3TerminalReceiptV1 {
     /// Receipt digest binding the ordered fields above.
     digest: [u8; 32],
 }
-
 impl ZkAmsPhase3TerminalReceiptV1 {
     /// Receipt schema version.
     #[must_use]
     pub const fn version(&self) -> u8 {
         self.version
     }
-
     /// Digest of the complete consensus context.
     #[must_use]
     pub const fn context_digest(&self) -> [u8; 32] {
         self.context_digest
     }
-
     /// Digest of the exact framed generic and terminal composition context.
     #[must_use]
     pub const fn composition_context_digest(&self) -> [u8; 32] {
         self.composition_context_digest
     }
-
     /// Digest of the verified compact final batch anchor.
     #[must_use]
     pub const fn batch_anchor_digest(&self) -> [u8; 32] {
         self.batch_anchor_digest
     }
-
     /// Digest of the original paper-order `A`, `B`, and `C` maps.
     #[must_use]
     pub const fn map_set_digest(&self) -> [u8; 32] {
         self.map_set_digest
     }
-
     /// Digest of the exact governed strict public inputs.
     #[must_use]
     pub const fn governed_batch_digest(&self) -> [u8; 32] {
         self.governed_batch_digest
     }
-
     /// Digest of the complete public mask/fold history.
     #[must_use]
     pub const fn fold_history_digest(&self) -> [u8; 32] {
         self.fold_history_digest
     }
-
     /// Digest of the verifier-reconstructed terminal relaxed instance.
     #[must_use]
     pub const fn terminal_instance_digest(&self) -> [u8; 32] {
         self.terminal_instance_digest
     }
-
     /// Digest of the exact canonical proof bytes.
     #[must_use]
     pub const fn proof_digest(&self) -> [u8; 32] {
         self.proof_digest
     }
-
     /// Digest binding every ordered receipt field.
     #[must_use]
     pub const fn digest(&self) -> [u8; 32] {
         self.digest
     }
 }
-
 /// Digestible implementation state while release-size evidence remains open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsPhase3TerminalImplementationV1 {
@@ -465,7 +439,6 @@ pub struct ZkAmsPhase3TerminalImplementationV1 {
     /// Digest binding this fail-closed state.
     pub digest: [u8; 32],
 }
-
 /// Return the exact terminal implementation state without closing its release
 /// KAT gate.
 #[must_use]
@@ -490,14 +463,12 @@ pub fn zk_ams_phase3_terminal_implementation_v1() -> ZkAmsPhase3TerminalImplemen
     implementation.digest = keccak256(&frame);
     implementation
 }
-
 struct TerminalProfile {
     shape: Arc<Shape>,
     commitment_key: CommitmentKey,
     map_set_digest: [u8; 32],
     nifs_verifier_digest: [u8; 32],
 }
-
 #[derive(Clone, Copy)]
 enum TerminalRelationSourceV1<'a> {
     CanonicalRelease,
@@ -510,13 +481,11 @@ enum TerminalRelationSourceV1<'a> {
         expected_shape: &'a Shape,
     },
 }
-
 impl TerminalRelationSourceV1<'_> {
     const fn is_release(self) -> bool {
         matches!(self, Self::CanonicalRelease)
     }
 }
-
 impl TerminalProfile {
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         let key_digest = commitment_key_digest(&self.commitment_key)?;
@@ -535,12 +504,10 @@ impl TerminalProfile {
         Ok(())
     }
 }
-
 /// Owns materialized scalars after they leave the single consuming accumulator
 /// owner and until they are transferred into the guarded folded witness.
 /// Deliberately neither `Clone` nor `Debug`.
 struct ZeroizingTerminalScalarVecV1(Vec<Scalar>);
-
 #[cfg(test)]
 std::thread_local! {
     static TERMINAL_SCALAR_VEC_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
@@ -553,53 +520,44 @@ std::thread_local! {
         std::cell::Cell::new(0)
     };
 }
-
 #[cfg(test)]
 fn terminal_scalar_vec_zeroized_drop_count_v1() -> usize {
     TERMINAL_SCALAR_VEC_ZEROIZED_DROPS_V1
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
-
 #[cfg(test)]
 fn terminal_relaxed_witness_zeroized_drop_count_v1() -> usize {
     TERMINAL_RELAXED_WITNESS_ZEROIZED_DROPS_V1
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
-
 #[cfg(test)]
 fn terminal_structured_digest_entry_count_v1() -> usize {
     TERMINAL_STRUCTURED_DIGEST_ENTRIES_V1
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
-
 #[cfg(test)]
 fn reset_terminal_structured_digest_entry_count_v1() {
     let _ = TERMINAL_STRUCTURED_DIGEST_ENTRIES_V1.try_with(|entries| entries.set(0));
 }
-
 #[cfg(test)]
 fn note_terminal_structured_digest_entry_v1() {
     let _ = TERMINAL_STRUCTURED_DIGEST_ENTRIES_V1
         .try_with(|entries| entries.set(entries.get().saturating_add(1)));
 }
-
 impl ZeroizingTerminalScalarVecV1 {
     fn new(values: Vec<Scalar>) -> Self {
         Self(values)
     }
-
     fn as_slice(&self) -> &[Scalar] {
         &self.0
     }
-
     fn take(&mut self) -> Vec<Scalar> {
         core::mem::take(&mut self.0)
     }
 }
-
 impl Drop for ZeroizingTerminalScalarVecV1 {
     fn drop(&mut self) {
         #[cfg(test)]
@@ -617,28 +575,23 @@ impl Drop for ZeroizingTerminalScalarVecV1 {
         let _ = core::hint::black_box(&mut *values);
     }
 }
-
 /// Move-only RAII owner for the consumed final folded witness.
 ///
 /// It covers construction errors, receipt rejection, and unwinding. On the
 /// success path ownership is handed directly to the proof layer, whose
 /// `SecretRelaxedWitness` guard performs the same erasure on every exit.
 struct ZeroizingTerminalRelaxedWitnessV1(Option<RelaxedWitness>);
-
 impl ZeroizingTerminalRelaxedWitnessV1 {
     fn new(witness: RelaxedWitness) -> Self {
         Self(Some(witness))
     }
-
     fn take(&mut self) -> Result<RelaxedWitness, ZkAmsMkheErrorV1> {
         self.0.take().ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     }
-
     fn as_ref(&self) -> &RelaxedWitness {
         self.0.as_ref().expect("guarded witness is present")
     }
 }
-
 impl Drop for ZeroizingTerminalRelaxedWitnessV1 {
     fn drop(&mut self) {
         if let Some(witness) = &mut self.0 {
@@ -669,7 +622,6 @@ impl Drop for ZeroizingTerminalRelaxedWitnessV1 {
         }
     }
 }
-
 /// Borrowed exact terminal rows used by the private cross-basis bridge.
 ///
 /// The slices remain owned by [`ZkAmsPhase3PreparedTerminalMaterializationV1`]
@@ -686,49 +638,40 @@ pub(super) struct ZkAmsPhase3PreparedTerminalOpeningsV1<'a> {
     witness_blindings: &'a [Scalar],
     witness_commitment: &'a Commitment,
 }
-
 impl<'a> ZkAmsPhase3PreparedTerminalOpeningsV1<'a> {
     /// Digest of the exact terminal context checked before borrowing rows.
     pub(super) const fn context_digest_v1(&self) -> [u8; 32] {
         self.context_digest
     }
-
     /// Digest of the consumed padding-free materialization.
     pub(super) const fn materialized_digest_v1(&self) -> [u8; 32] {
         self.materialized_digest
     }
-
     /// Exact `E` scalars in canonical terminal row order.
     pub(super) const fn error_values_v1(&self) -> &'a [Scalar] {
         self.error_values
     }
-
     /// One Hyrax blinding scalar for every `E` row.
     pub(super) const fn error_blindings_v1(&self) -> &'a [Scalar] {
         self.error_blindings
     }
-
     /// Existing Hyrax commitment to the exact `E,rE` opening above.
     pub(super) const fn error_commitment_v1(&self) -> &'a Commitment {
         self.error_commitment
     }
-
     /// Exact `W` scalars in canonical terminal row order.
     pub(super) const fn witness_values_v1(&self) -> &'a [Scalar] {
         self.witness_values
     }
-
     /// One Hyrax blinding scalar for every `W` row.
     pub(super) const fn witness_blindings_v1(&self) -> &'a [Scalar] {
         self.witness_blindings
     }
-
     /// Existing Hyrax commitment to the exact `W,rW` opening above.
     pub(super) const fn witness_commitment_v1(&self) -> &'a Commitment {
         self.witness_commitment
     }
 }
-
 /// Move-only prepared terminal materialization for one private bridge proof.
 ///
 /// Construction consumes the six-family materialization, recomputes the
@@ -743,7 +686,6 @@ pub(super) struct ZkAmsPhase3PreparedTerminalMaterializationV1 {
     instance: RelaxedInstance,
     witness: ZeroizingTerminalRelaxedWitnessV1,
 }
-
 impl ZkAmsPhase3PreparedTerminalMaterializationV1 {
     fn validate_context_v1(
         &self,
@@ -757,7 +699,6 @@ impl ZkAmsPhase3PreparedTerminalMaterializationV1 {
         }
         Ok(())
     }
-
     /// Borrow the exact checked openings without transferring any owner.
     pub(super) fn openings_for_cross_basis_v1(
         &self,
@@ -783,7 +724,6 @@ impl ZkAmsPhase3PreparedTerminalMaterializationV1 {
             witness_commitment: &self.instance.witness_commitment,
         })
     }
-
     /// Consume the same prepared opening only for the exact checked context.
     fn consume_for_terminal_v1(
         self,
@@ -793,14 +733,12 @@ impl ZkAmsPhase3PreparedTerminalMaterializationV1 {
         Ok((self.instance, self.witness))
     }
 }
-
 /// Compute the exact terminal NIFS verifier identity from the shared canonical
 /// shape and compact paper-order map manifest.
 pub fn zk_ams_phase3_nifs_verifier_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let profile = build_terminal_profile(TerminalRelationSourceV1::CanonicalRelease)?;
     Ok(profile.nifs_verifier_digest)
 }
-
 /// Generate one canonical setup-free terminal proof and its compact public
 /// final batch anchor. The six materialized families are consumed only here.
 pub fn prove_zk_ams_phase3_terminal_v1(
@@ -820,7 +758,6 @@ pub fn prove_zk_ams_phase3_terminal_v1(
         TerminalRelationSourceV1::CanonicalRelease,
     )
 }
-
 /// Verify one exact-canonical terminal proof from public settlement data only.
 /// The verifier never receives `E_f,rE_f,W_f,rW_f`.
 pub fn verify_zk_ams_phase3_terminal_v1(
@@ -840,7 +777,6 @@ pub fn verify_zk_ams_phase3_terminal_v1(
         proof_bytes,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn prove_terminal_inner(
     proof_context: &super::super::ZkAmsProofContextV1<'_>,
@@ -908,7 +844,6 @@ fn prove_terminal_inner(
         proof_bytes: encoded,
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn verify_terminal_inner(
     proof_context: &super::super::ZkAmsProofContextV1<'_>,
@@ -969,7 +904,6 @@ fn verify_terminal_inner(
         proof_digest,
     )
 }
-
 fn validate_terminal_context_fields(
     context: ZkAmsPhase3TerminalContextV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -989,7 +923,6 @@ fn validate_terminal_context_fields(
     }
     Ok(())
 }
-
 pub(super) fn validate_terminal_context(
     context: ZkAmsPhase3TerminalContextV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -999,7 +932,6 @@ pub(super) fn validate_terminal_context(
     }
     Ok(())
 }
-
 fn terminal_composition_context_frame(
     proof_context: &super::super::ZkAmsProofContextV1<'_>,
     context: ZkAmsPhase3TerminalContextV1,
@@ -1033,7 +965,6 @@ fn terminal_composition_context_frame(
     )?;
     Ok(frame)
 }
-
 fn append_terminal_composition_field(
     frame: &mut Vec<u8>,
     tag: &[u8],
@@ -1057,11 +988,9 @@ fn append_terminal_composition_field(
     frame.extend_from_slice(value);
     Ok(())
 }
-
 fn terminal_context_digest(context: ZkAmsPhase3TerminalContextV1) -> [u8; 32] {
     keccak256(&terminal_context_frame(context))
 }
-
 fn terminal_context_frame(context: ZkAmsPhase3TerminalContextV1) -> Vec<u8> {
     let mut frame = Vec::with_capacity(288);
     frame.extend_from_slice(PHASE3_CONTEXT_DOMAIN_V1);
@@ -1075,7 +1004,6 @@ fn terminal_context_frame(context: ZkAmsPhase3TerminalContextV1) -> Vec<u8> {
     frame.extend_from_slice(&context.nifs_verifier_digest);
     frame
 }
-
 fn validate_context_materialized_binding(
     context: ZkAmsPhase3TerminalContextV1,
     materialized: &ZkAmsPhase23MaterializedAccumulatorsV1,
@@ -1094,7 +1022,6 @@ fn validate_context_materialized_binding(
     }
     Ok(())
 }
-
 fn batch_anchor_from_instance(
     context: ZkAmsPhase3TerminalContextV1,
     instance: &RelaxedInstance,
@@ -1116,7 +1043,6 @@ fn batch_anchor_from_instance(
     anchor.digest = batch_anchor_digest(&anchor)?;
     Ok(anchor)
 }
-
 fn preflight_governed_rows<T>(rows: &[Vec<T>]) -> Result<(), ZkAmsMkheErrorV1> {
     if rows.is_empty()
         || rows.len() > MAX_MASKED_RELAXED_STRICT_INSTANCES_V1
@@ -1128,7 +1054,6 @@ fn preflight_governed_rows<T>(rows: &[Vec<T>]) -> Result<(), ZkAmsMkheErrorV1> {
     }
     Ok(())
 }
-
 fn preflight_batch_anchor_lengths(
     witness_commitment_points: usize,
     error_commitment_points: usize,
@@ -1145,7 +1070,6 @@ fn preflight_batch_anchor_lengths(
     }
     Ok(())
 }
-
 fn preflight_batch_anchor_release_maxima(
     anchor: &ZkAmsPhase3BatchAnchorV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1155,7 +1079,6 @@ fn preflight_batch_anchor_release_maxima(
         anchor.public_inputs.len(),
     )
 }
-
 fn preflight_batch_anchor_shape(
     anchor: &ZkAmsPhase3BatchAnchorV1,
     shape: &Shape,
@@ -1172,7 +1095,6 @@ fn preflight_batch_anchor_shape(
     }
     Ok(())
 }
-
 fn preflight_fold_history_lengths(
     mask: &ZkAmsPhase3BatchAnchorV1,
     strict_witness_commitments: &[Vec<VegaPointWireV1>],
@@ -1193,7 +1115,6 @@ fn preflight_fold_history_lengths(
     }
     Ok(())
 }
-
 fn preflight_fold_history_shape(
     history: &ZkAmsPhase3FoldHistoryV1,
     shape: &Shape,
@@ -1205,7 +1126,6 @@ fn preflight_fold_history_shape(
     )?;
     preflight_batch_anchor_shape(&history.mask, shape, MASKED_RELAXED_COMMITMENT_COLUMNS_V1)
 }
-
 fn batch_anchor_digest(anchor: &ZkAmsPhase3BatchAnchorV1) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     preflight_batch_anchor_release_maxima(anchor)?;
     #[cfg(test)]
@@ -1225,7 +1145,6 @@ fn batch_anchor_digest(anchor: &ZkAmsPhase3BatchAnchorV1) -> Result<[u8; 32], Zk
     frame.extend_from_slice(&encoded);
     Ok(keccak256(&frame))
 }
-
 fn governed_batch_digest(batch: &ZkAmsPhase3GovernedBatchV1) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     preflight_governed_rows(&batch.strict_public_inputs)?;
     #[cfg(test)]
@@ -1245,7 +1164,6 @@ fn governed_batch_digest(batch: &ZkAmsPhase3GovernedBatchV1) -> Result<[u8; 32],
     frame.extend_from_slice(&encoded);
     Ok(keccak256(&frame))
 }
-
 fn fold_history_digest(history: &ZkAmsPhase3FoldHistoryV1) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     preflight_fold_history_lengths(
         &history.mask,
@@ -1269,7 +1187,6 @@ fn fold_history_digest(history: &ZkAmsPhase3FoldHistoryV1) -> Result<[u8; 32], Z
     frame.extend_from_slice(&encoded);
     Ok(keccak256(&frame))
 }
-
 fn validate_governed_batch_fields(
     context: ZkAmsPhase3TerminalContextV1,
     governed_batch: &ZkAmsPhase3GovernedBatchV1,
@@ -1306,7 +1223,6 @@ fn validate_governed_batch_fields(
     }
     Ok(strict_public_inputs)
 }
-
 fn validate_governed_batch(
     context: ZkAmsPhase3TerminalContextV1,
     governed_batch: &ZkAmsPhase3GovernedBatchV1,
@@ -1322,7 +1238,6 @@ fn validate_governed_batch(
     }
     validate_governed_batch_fields(context, governed_batch)
 }
-
 fn fold_history_to_protocol(
     context: ZkAmsPhase3TerminalContextV1,
     governed_batch: &ZkAmsPhase3GovernedBatchV1,
@@ -1371,7 +1286,6 @@ fn fold_history_to_protocol(
         .collect::<Result<Vec<_>, _>>()?;
     Ok((mask, strict_instances, folds))
 }
-
 fn preflight_fold_history_proof_shape(
     proof: &MaskedRelaxedProofWireV1,
     shape: &Shape,
@@ -1409,7 +1323,6 @@ fn preflight_fold_history_proof_shape(
     }
     Ok(())
 }
-
 fn fold_history_digest_from_proof(
     context: ZkAmsPhase3TerminalContextV1,
     proof: &MaskedRelaxedProofWireV1,
@@ -1445,7 +1358,6 @@ fn fold_history_digest_from_proof(
     history.digest = fold_history_digest(&history)?;
     Ok(history.digest)
 }
-
 fn batch_anchor_to_instance(
     anchor: &ZkAmsPhase3BatchAnchorV1,
     context: ZkAmsPhase3TerminalContextV1,
@@ -1470,7 +1382,6 @@ fn batch_anchor_to_instance(
         public_inputs,
     })
 }
-
 fn build_terminal_profile(
     relation_source: TerminalRelationSourceV1<'_>,
 ) -> Result<TerminalProfile, ZkAmsMkheErrorV1> {
@@ -1537,7 +1448,6 @@ fn build_terminal_profile(
     profile.validate()?;
     Ok(profile)
 }
-
 fn shape_from_paper_order_maps(
     maps: [&ZkAmsPhase23SparseMapV1; 3],
     variable_count: usize,
@@ -1572,7 +1482,6 @@ fn shape_from_paper_order_maps(
     Shape::new(rows, variable_count, public_input_count, a, b, c)
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn sparse_matrix_from_paper_order(
     map: &ZkAmsPhase23SparseMapV1,
     variable_count: usize,
@@ -1603,7 +1512,6 @@ fn sparse_matrix_from_paper_order(
     entries.sort_unstable_by_key(|entry| (entry.0, entry.1));
     SparseMatrix::new(rows, columns, &entries).map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn paper_to_internal_column(
     paper_column: usize,
     variable_count: usize,
@@ -1625,7 +1533,6 @@ fn paper_to_internal_column(
         Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
     }
 }
-
 fn map_set_digest(
     maps: [&ZkAmsPhase23SparseMapV1; 3],
     variable_count: usize,
@@ -1657,7 +1564,6 @@ fn map_set_digest(
         commitment_columns,
     )
 }
-
 fn map_set_digest_from_manifest(
     maps: [ZkAmsPhase23SparseMapManifestV1; 3],
     variable_count: usize,
@@ -1701,7 +1607,6 @@ fn map_set_digest_from_manifest(
         commitment_columns,
     )
 }
-
 fn map_set_digest_from_identities(
     identities: [(ZkAmsPhase23MapKindV1, [u8; 32]); 3],
     variable_count: usize,
@@ -1722,7 +1627,6 @@ fn map_set_digest_from_identities(
     }
     Ok(keccak256(&frame))
 }
-
 fn commitment_key_digest(key: &CommitmentKey) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut frame = Vec::with_capacity(
         PHASE3_KEY_DOMAIN_V1.len()
@@ -1748,7 +1652,6 @@ fn commitment_key_digest(key: &CommitmentKey) -> Result<[u8; 32], ZkAmsMkheError
     );
     Ok(keccak256(&frame))
 }
-
 fn nifs_verifier_digest(
     shape: &Shape,
     map_set_digest: [u8; 32],
@@ -1772,7 +1675,6 @@ fn nifs_verifier_digest(
     }
     Ok(keccak256(&frame))
 }
-
 fn verify_native_materialized_opening_v1(
     context: ZkAmsPhase3TerminalContextV1,
     mut materialized: ZkAmsPhase23MaterializedAccumulatorsV1,
@@ -1847,14 +1749,12 @@ fn verify_native_materialized_opening_v1(
         witness,
     })
 }
-
 fn terminal_proof_bytes_digest(encoded: &[u8]) -> [u8; 32] {
     let mut frame = Vec::with_capacity(PHASE3_PROOF_DOMAIN_V1.len() + encoded.len());
     frame.extend_from_slice(PHASE3_PROOF_DOMAIN_V1);
     frame.extend_from_slice(encoded);
     keccak256(&frame)
 }
-
 fn terminal_instance_digest(terminal: &RelaxedInstance) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     let mut frame = Vec::with_capacity(256);
     frame.extend_from_slice(PHASE3_TERMINAL_INSTANCE_DOMAIN_V1);
@@ -1867,7 +1767,6 @@ fn terminal_instance_digest(terminal: &RelaxedInstance) -> Result<[u8; 32], ZkAm
     }
     Ok(keccak256(&frame))
 }
-
 fn terminal_receipt(
     context: ZkAmsPhase3TerminalContextV1,
     composition_context_digest: [u8; 32],
@@ -1905,14 +1804,12 @@ fn terminal_receipt(
     receipt.digest = keccak256(&frame);
     Ok(receipt)
 }
-
 fn commitment_digest(commitment: &Commitment) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     commitment
         .transcript_bytes()
         .map(|bytes| keccak256(&bytes))
         .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
-
 fn commitment_to_wire(commitment: &Commitment) -> Result<Vec<VegaPointWireV1>, ZkAmsMkheErrorV1> {
     commitment
         .points()
@@ -1923,7 +1820,6 @@ fn commitment_to_wire(commitment: &Commitment) -> Result<Vec<VegaPointWireV1>, Z
         })
         .collect()
 }
-
 fn commitment_from_wire(points: &[VegaPointWireV1]) -> Result<Commitment, ZkAmsMkheErrorV1> {
     Commitment::from_points(
         points
@@ -1938,28 +1834,23 @@ fn commitment_from_wire(points: &[VegaPointWireV1]) -> Result<Commitment, ZkAmsM
     )
     .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
-
 fn scalar_from_wire(value: VegaScalarWireV1) -> Result<Scalar, ZkAmsMkheErrorV1> {
     value
         .to_scalar()
         .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
-
 fn scalars_from_wire(values: &[VegaScalarWireV1]) -> Result<Vec<Scalar>, ZkAmsMkheErrorV1> {
     values.iter().copied().map(scalar_from_wire).collect()
 }
-
 fn commitment_rows(length: usize, columns: usize) -> Result<usize, ZkAmsMkheErrorV1> {
     if length == 0 || columns == 0 {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     Ok(length.div_ceil(columns))
 }
-
 fn usize_to_u32(value: usize) -> Result<u32, ZkAmsMkheErrorV1> {
     u32::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1967,7 +1858,6 @@ mod tests {
         panic::{AssertUnwindSafe, catch_unwind},
         sync::OnceLock,
     };
-
     use super::*;
     use crate::vega::{
         circuit::CircuitAssignment,
@@ -1976,15 +1866,12 @@ mod tests {
         },
         zk_ams::mkhe::phase23_encrypted::ZkAmsPhase23AccumulatorShapeV1,
     };
-
     const TEST_ROWS: usize = MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
-
     #[derive(Clone)]
     struct KatRandom {
         seed: [u8; 32],
         counter: u64,
     }
-
     impl KatRandom {
         fn new() -> Self {
             Self {
@@ -1993,7 +1880,6 @@ mod tests {
             }
         }
     }
-
     impl MaskedRelaxedRandomSourceV1 for KatRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             for (chunk_index, chunk) in destination.chunks_mut(32).enumerate() {
@@ -2008,7 +1894,6 @@ mod tests {
             Ok(())
         }
     }
-
     #[derive(Clone)]
     struct Fixture {
         maps: [ZkAmsPhase23SparseMapV1; 3],
@@ -2020,15 +1905,12 @@ mod tests {
         materialized: ZkAmsPhase23MaterializedAccumulatorsV1,
         output: ZkAmsPhase3TerminalProverOutputV1,
     }
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     fn map_refs(maps: &[ZkAmsPhase23SparseMapV1; 3]) -> [&ZkAmsPhase23SparseMapV1; 3] {
         [&maps[0], &maps[1], &maps[2]]
     }
-
     fn external_relation<'a>(
         maps: &'a [ZkAmsPhase23SparseMapV1; 3],
         shape: &'a Shape,
@@ -2038,7 +1920,6 @@ mod tests {
             expected_shape: shape,
         }
     }
-
     fn diagonal_map(kind: ZkAmsPhase23MapKindV1, columns: Vec<u32>) -> ZkAmsPhase23SparseMapV1 {
         ZkAmsPhase23SparseMapV1::new(
             kind,
@@ -2051,7 +1932,6 @@ mod tests {
         )
         .expect("canonical synthetic paper-order map")
     }
-
     fn test_maps() -> [ZkAmsPhase23SparseMapV1; 3] {
         [
             diagonal_map(ZkAmsPhase23MapKindV1::A, (0..TEST_ROWS as u32).collect()),
@@ -2063,7 +1943,6 @@ mod tests {
             diagonal_map(ZkAmsPhase23MapKindV1::C, vec![TEST_ROWS as u32; TEST_ROWS]),
         ]
     }
-
     fn strict_assignment(shape: &Arc<Shape>, public_input: u64) -> CircuitAssignment {
         let assignment = CircuitAssignment {
             shape: Arc::clone(shape),
@@ -2075,7 +1954,6 @@ mod tests {
             .expect("synthetic strict assignment satisfies W*u=u*x");
         assignment
     }
-
     fn proof_context() -> super::super::super::ZkAmsProofContextV1<'static> {
         super::super::super::ZkAmsProofContextV1 {
             chain_id: b"taira-zk-ams-terminal-test",
@@ -2090,7 +1968,6 @@ mod tests {
             generator_digest: [0x18; 32],
         }
     }
-
     fn materialized_digest_for_test(
         materialized: &ZkAmsPhase23MaterializedAccumulatorsV1,
     ) -> [u8; 32] {
@@ -2127,7 +2004,6 @@ mod tests {
         }
         keccak256(&frame)
     }
-
     fn reseal_materialized(
         mut materialized: ZkAmsPhase23MaterializedAccumulatorsV1,
     ) -> ZkAmsPhase23MaterializedAccumulatorsV1 {
@@ -2135,30 +2011,25 @@ mod tests {
         materialized.digest = materialized_digest_for_test(&materialized);
         materialized
     }
-
     fn reseal_anchor(mut anchor: ZkAmsPhase3BatchAnchorV1) -> ZkAmsPhase3BatchAnchorV1 {
         anchor.digest = [0; 32];
         anchor.digest = batch_anchor_digest(&anchor).expect("bounded anchor digest");
         anchor
     }
-
     fn reseal_history(mut history: ZkAmsPhase3FoldHistoryV1) -> ZkAmsPhase3FoldHistoryV1 {
         history.digest = [0; 32];
         history.digest = fold_history_digest(&history).expect("bounded fold-history digest");
         history
     }
-
     fn reseal_governed(mut governed: ZkAmsPhase3GovernedBatchV1) -> ZkAmsPhase3GovernedBatchV1 {
         governed.digest = [0; 32];
         governed.digest = governed_batch_digest(&governed).expect("bounded governed digest");
         governed
     }
-
     fn reseal_context(mut context: ZkAmsPhase3TerminalContextV1) -> ZkAmsPhase3TerminalContextV1 {
         context.digest = terminal_context_digest(context);
         context
     }
-
     fn build_fixture() -> Fixture {
         let maps = test_maps();
         let shape = Arc::new(
@@ -2277,12 +2148,10 @@ mod tests {
             output,
         }
     }
-
     fn fixture() -> &'static Fixture {
         static FIXTURE: OnceLock<Fixture> = OnceLock::new();
         FIXTURE.get_or_init(build_fixture)
     }
-
     impl Fixture {
         fn verify(
             &self,
@@ -2301,7 +2170,6 @@ mod tests {
                 proof,
             )
         }
-
         fn prove_with(
             &self,
             governed: &ZkAmsPhase3GovernedBatchV1,
@@ -2318,7 +2186,6 @@ mod tests {
             )
         }
     }
-
     #[test]
     fn complete_history_proves_exact_final_anchor_on_the_standard_core_wire() {
         let fixture = fixture();
@@ -2380,7 +2247,6 @@ mod tests {
         );
         assert_ne!(receipt.terminal_instance_digest(), [0; 32]);
         assert_ne!(receipt.digest(), [0; 32]);
-
         let implementation = zk_ams_phase3_terminal_implementation_v1();
         assert_eq!(
             implementation.max_proof_bytes as usize,
@@ -2388,7 +2254,6 @@ mod tests {
         );
         assert!(!implementation.release_kat_complete);
         assert_eq!(implementation.release_kat_digest, [0; 32]);
-
         // Public release entrypoints cannot bypass the common readiness gate.
         assert_eq!(
             prove_zk_ams_phase3_terminal_v1(
@@ -2411,7 +2276,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
         );
     }
-
     #[test]
     fn terminal_consumed_witness_owners_zeroize_success_error_and_unwind() {
         let before_scalar_success = terminal_scalar_vec_zeroized_drop_count_v1();
@@ -2420,7 +2284,6 @@ mod tests {
             terminal_scalar_vec_zeroized_drop_count_v1(),
             before_scalar_success + 1
         );
-
         fn reject_scalars(_values: ZeroizingTerminalScalarVecV1) -> Result<(), ZkAmsMkheErrorV1> {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         }
@@ -2433,7 +2296,6 @@ mod tests {
             terminal_scalar_vec_zeroized_drop_count_v1(),
             before_scalar_error + 1
         );
-
         let before_scalar_unwind = terminal_scalar_vec_zeroized_drop_count_v1();
         let scalar_unwind = catch_unwind(AssertUnwindSafe(|| {
             let _owner = ZeroizingTerminalScalarVecV1::new(vec![s(9)]);
@@ -2444,7 +2306,6 @@ mod tests {
             terminal_scalar_vec_zeroized_drop_count_v1(),
             before_scalar_unwind + 1
         );
-
         let witness_owner = || {
             ZeroizingTerminalRelaxedWitnessV1::new(RelaxedWitness {
                 values: vec![s(3)],
@@ -2459,7 +2320,6 @@ mod tests {
             terminal_relaxed_witness_zeroized_drop_count_v1(),
             before_witness_success + 1
         );
-
         fn reject_witness(
             _witness: ZeroizingTerminalRelaxedWitnessV1,
         ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -2474,7 +2334,6 @@ mod tests {
             terminal_relaxed_witness_zeroized_drop_count_v1(),
             before_witness_error + 1
         );
-
         let before_witness_unwind = terminal_relaxed_witness_zeroized_drop_count_v1();
         let witness_unwind = catch_unwind(AssertUnwindSafe(|| {
             let _witness = witness_owner();
@@ -2486,13 +2345,11 @@ mod tests {
             before_witness_unwind + 1
         );
     }
-
     #[test]
     fn prepared_terminal_materialization_is_equation_checked_borrowed_and_context_bound() {
         let fixture = fixture();
         let profile = build_terminal_profile(external_relation(&fixture.maps, &fixture.shape))
             .expect("synthetic terminal profile");
-
         let prepared = verify_native_materialized_opening_v1(
             fixture.context,
             fixture.materialized.clone(),
@@ -2531,7 +2388,6 @@ mod tests {
         );
         assert_eq!(witness.as_ref().values.len(), fixture.materialized.w.len());
         assert_eq!(witness.as_ref().error.len(), fixture.materialized.e.len());
-
         let prepared = verify_native_materialized_opening_v1(
             fixture.context,
             fixture.materialized.clone(),
@@ -2543,7 +2399,6 @@ mod tests {
         wrong_context.digest[0] ^= 1;
         assert!(prepared.openings_for_cross_basis_v1(wrong_context).is_err());
         assert!(prepared.consume_for_terminal_v1(wrong_context).is_err());
-
         let mut wrong_materialized = fixture.materialized.clone();
         wrong_materialized.digest[0] ^= 1;
         assert!(
@@ -2555,7 +2410,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut wrong_profile =
             build_terminal_profile(external_relation(&fixture.maps, &fixture.shape)).unwrap();
         wrong_profile.nifs_verifier_digest[0] ^= 1;
@@ -2569,7 +2423,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn canonical_wire_rejects_truncation_trailing_oversize_and_adversarial_mutations() {
         let fixture = fixture();
@@ -2615,7 +2468,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::WireTooLarge)
         );
-
         let baseline =
             super::super::super::decode_zk_ams_admission_relation_wire_v1(2, proof).unwrap();
         let assert_rejected = |relation: MaskedRelaxedProofWireV1, label: &str| {
@@ -2634,7 +2486,6 @@ mod tests {
                 "{label} unexpectedly verified"
             );
         };
-
         let mut changed = baseline.clone();
         changed.strict_instance_count = 1;
         assert_rejected(changed, "false strict count");
@@ -2655,11 +2506,9 @@ mod tests {
         changed.witness_opening.clear();
         assert_rejected(changed, "post-transcript Spartan-opening removal");
     }
-
     #[test]
     fn governed_inputs_history_core_context_and_final_anchor_are_exact() {
         let fixture = fixture();
-
         let mut governed = fixture.governed.clone();
         governed.strict_public_inputs.swap(0, 1);
         governed = reseal_governed(governed);
@@ -2688,7 +2537,6 @@ mod tests {
                 )
                 .is_err()
         );
-
         for mutation in 0..5 {
             let mut history = fixture.history.clone();
             match mutation {
@@ -2715,7 +2563,6 @@ mod tests {
                 "history mutation {mutation} reached a proof"
             );
         }
-
         for mutation in 0..6 {
             let mut anchor = fixture.output.batch_anchor.clone();
             match mutation {
@@ -2743,7 +2590,6 @@ mod tests {
                 "final anchor mutation {mutation} unexpectedly verified"
             );
         }
-
         for mutation in 0..9 {
             let mut proof_context = fixture.proof_context;
             match mutation {
@@ -2784,7 +2630,6 @@ mod tests {
                 )
                 .is_err()
         );
-
         for mutation in 0..7 {
             let mut context = fixture.context;
             match mutation {
@@ -2811,7 +2656,6 @@ mod tests {
                 "unsealed terminal context mutation {mutation} unexpectedly verified"
             );
         }
-
         // Recompute every wrapper digest so these cases reach proof replay.
         // The original proof must still fail because the terminal transcript
         // commits the exact roster, epoch, transcript, and batch identities.
@@ -2845,7 +2689,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn prover_rejects_every_bad_materialized_family_metadata_and_fold_count() {
         let fixture = fixture();
@@ -2880,28 +2723,24 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn hostile_nested_dimensions_fail_before_structured_digest_clone_entry() {
         let fixture = fixture();
         let scalar = fixture.governed.strict_public_inputs[0][0];
         let witness_point = fixture.history.strict_witness_commitments[0][0];
         let error_point = fixture.history.cross_term_commitments[0][0];
-
         let mut governed = fixture.governed.clone();
         governed.strict_public_inputs[0] =
             vec![scalar; super::super::super::ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1 + 1];
         reset_terminal_structured_digest_entry_count_v1();
         assert!(governed_batch_digest(&governed).is_err());
         assert_eq!(terminal_structured_digest_entry_count_v1(), 0);
-
         let mut governed = fixture.governed.clone();
         governed.strict_public_inputs =
             vec![vec![scalar]; MAX_MASKED_RELAXED_STRICT_INSTANCES_V1 + 1];
         reset_terminal_structured_digest_entry_count_v1();
         assert!(governed_batch_digest(&governed).is_err());
         assert_eq!(terminal_structured_digest_entry_count_v1(), 0);
-
         for mutation in 0..3 {
             let mut anchor = fixture.output.batch_anchor.clone();
             match mutation {
@@ -2927,7 +2766,6 @@ mod tests {
                 "oversized anchor mutation {mutation} entered digest cloning"
             );
         }
-
         for mutation in 0..3 {
             let mut history = fixture.history.clone();
             match mutation {
@@ -2955,7 +2793,6 @@ mod tests {
                 "oversized fold-history mutation {mutation} entered digest cloning"
             );
         }
-
         let mut bounded_wrong_anchor = fixture.output.batch_anchor.clone();
         bounded_wrong_anchor.witness_commitment.push(witness_point);
         reset_terminal_structured_digest_entry_count_v1();
@@ -2969,7 +2806,6 @@ mod tests {
             .is_err()
         );
         assert_eq!(terminal_structured_digest_entry_count_v1(), 0);
-
         let mut bounded_wrong_governed = fixture.governed.clone();
         bounded_wrong_governed.strict_public_inputs[0].push(scalar);
         reset_terminal_structured_digest_entry_count_v1();
@@ -2978,7 +2814,6 @@ mod tests {
                 .is_err()
         );
         assert_eq!(terminal_structured_digest_entry_count_v1(), 0);
-
         let mut relation = super::super::super::decode_zk_ams_admission_relation_wire_v1(
             fixture.governed.strict_public_inputs.len(),
             &fixture.output.proof_bytes,
@@ -2992,7 +2827,6 @@ mod tests {
         );
         assert_eq!(terminal_structured_digest_entry_count_v1(), 0);
     }
-
     #[test]
     fn count_map_and_constructor_boundaries_fail_closed() {
         let fixture = fixture();
@@ -3018,7 +2852,6 @@ mod tests {
             ]])
             .is_err()
         );
-
         let mut missing = fixture.history.clone();
         missing.cross_term_commitments.pop();
         assert!(
@@ -3039,7 +2872,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut swapped = map_refs(&fixture.maps);
         swapped.swap(0, 1);
         assert!(
@@ -3077,7 +2909,6 @@ mod tests {
                 "malformed map {mutation} unexpectedly verified"
             );
         }
-
         let mut wrong_context = fixture.context;
         wrong_context.epoch += 1;
         wrong_context = reseal_context(wrong_context);
@@ -3106,7 +2937,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn release_terminal_fast_path_uses_shared_shape_and_compact_manifest() {
         let source = include_str!("terminal.rs");
@@ -3127,7 +2957,6 @@ mod tests {
         assert!(profile_builder.contains("Arc::clone(relation.shape())"));
         assert!(profile_builder.contains("map_set_digest_from_manifest"));
     }
-
     #[test]
     fn prepared_terminal_hook_is_move_only_borrowed_and_error_then_witness_ordered() {
         let source = include_str!("terminal.rs");
@@ -3149,7 +2978,6 @@ mod tests {
         assert!(
             !production.contains("impl Clone for ZkAmsPhase3PreparedTerminalMaterializationV1")
         );
-
         let view = production
             .split("pub(super) struct ZkAmsPhase3PreparedTerminalOpeningsV1")
             .nth(1)
@@ -3164,7 +2992,6 @@ mod tests {
         assert!(view.contains("&'a [Scalar]"));
         assert!(view.contains("&'a Commitment"));
         assert!(!view.contains("Vec<"));
-
         let borrow = production
             .split("pub(super) fn openings_for_cross_basis_v1")
             .nth(1)
@@ -3177,7 +3004,6 @@ mod tests {
         assert!(borrow.contains("witness_commitment: &self.instance.witness_commitment"));
         assert!(!borrow.contains("core::mem::take"));
     }
-
     #[test]
     fn settlement_surface_and_standard_wire_never_carry_plaintext_families() {
         let source = include_str!("terminal.rs");
@@ -3200,7 +3026,6 @@ mod tests {
             .expect("native materialized opening source");
         assert!(native_opening.contains("core::mem::take(&mut materialized.x)"));
         assert!(!native_opening.contains("from_be_bytes_exact"));
-
         let verifier_start = source
             .find("pub fn verify_zk_ams_phase3_terminal_v1")
             .expect("public verifier source");
@@ -3213,7 +3038,6 @@ mod tests {
         assert!(signature.contains("ZkAmsPhase3BatchAnchorV1"));
         assert!(!signature.contains("Materialized"));
         assert!(!signature.contains("materialized"));
-
         let fixture = fixture();
         let mut public_wire = norito::codec::encode_adaptive(&fixture.output.batch_anchor);
         public_wire.extend_from_slice(&fixture.output.proof_bytes);
@@ -3241,7 +3065,6 @@ mod tests {
         }
     }
 }
-
 #[cfg(test)]
 #[path = "terminal_release_kat.rs"]
 mod release_kat_tests;

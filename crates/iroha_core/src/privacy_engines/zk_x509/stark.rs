@@ -21,9 +21,7 @@
 //! Proof dimensions are reconstructed from the verifier statement.  The wire
 //! contains no caller-selected parameter and the strict reader rejects every
 //! truncation and trailing suffix.
-
 mod main_aggregate;
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) use main_aggregate::commit_zk_x509_main_base_phase_v1_with_rng;
 #[cfg(test)]
@@ -34,23 +32,18 @@ use main_aggregate::{
     main_opened_composition_value_v1, record_main_group_commitment_v1, validate_main_fri_mixes_v1,
 };
 #[cfg(test)]
-pub(crate) use main_aggregate::{
-    ZkX509MainAwaitingCredentialBindingV1, ZkX509MainCompositionPhaseV1,
-};
+pub(crate) use main_aggregate::{ZkX509MainAwaitingCredentialBindingV1, ZkX509MainCompositionPhaseV1};
 use main_aggregate::{p256_opened_residues_v1, p256_scalar_opened_residues_v1};
 pub(crate) use main_aggregate::{
     verify_zk_x509_main_aggregate_stark_v1, zk_x509_main_pre_aux_from_proof_v1,
 };
-
 use std::collections::BTreeMap;
-
 use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyStatementV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use rand::TryRngCore;
 use thiserror::Error;
-
 #[cfg(test)]
 use super::der_stark::ZkX509DerStarkChallengesV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]

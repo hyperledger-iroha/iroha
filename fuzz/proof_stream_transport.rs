@@ -1,5 +1,4 @@
 #![no_main]
-
 use arbitrary::Arbitrary;
 use flate2::{
     Compression,
@@ -19,7 +18,6 @@ use sorafs_car::{
 use sorafs_manifest::ProofStreamRequestV1;
 use std::{io::Write, sync::OnceLock};
 use zstd::stream::encode_all as encode_zstd;
-
 #[derive(Debug, Arbitrary)]
 struct FuzzLine {
     /// When true we emit a well-formed JSON object, otherwise raw bytes.
@@ -27,14 +25,12 @@ struct FuzzLine {
     /// Raw payload used either as JSON fragment or arbitrary bytes.
     bytes: Vec<u8>,
 }
-
 #[derive(Debug, Arbitrary)]
 struct FuzzCase {
     /// Encoding selector (0 = identity, 1 = gzip, 2 = deflate, 3 = zstd, others = mixed).
     encoding: u8,
     lines: Vec<FuzzLine>,
 }
-
 fn canonical_request() -> ProofStreamRequestV1 {
     ProofStreamRequestV1 {
         manifest_digest: [1; 32],
@@ -51,7 +47,6 @@ fn canonical_request() -> ProofStreamRequestV1 {
         tier: None,
     }
 }
-
 fn canonical_por_sample() -> &'static (usize, PorProof, [u8; 32]) {
     static SAMPLE: OnceLock<(usize, PorProof, [u8; 32])> = OnceLock::new();
     SAMPLE.get_or_init(|| {
@@ -74,11 +69,9 @@ fn canonical_por_sample() -> &'static (usize, PorProof, [u8; 32]) {
         (flat_index, proof, root)
     })
 }
-
 fn canonical_line(_bytes: &[u8], index: usize) -> Vec<u8> {
     let (flat_index, proof, _) = canonical_por_sample();
     let latency_ms = u32::try_from(index).unwrap_or(u32::MAX);
-
     let mut map = sample_to_map(*flat_index, proof);
     let request_digest = proof_stream_request_digest_v1(&canonical_request())
         .expect("digest canonical fuzz request");
@@ -99,7 +92,6 @@ fn canonical_line(_bytes: &[u8], index: usize) -> Vec<u8> {
     );
     to_vec(&Value::Object(map)).expect("encode canonical fuzz PoR row")
 }
-
 fn build_line(line: &FuzzLine, index: usize) -> Vec<u8> {
     if line.well_formed {
         // Exercise the complete successful decoder path with a bounded canonical PoR witness.
@@ -111,7 +103,6 @@ fn build_line(line: &FuzzLine, index: usize) -> Vec<u8> {
         line.bytes.clone()
     }
 }
-
 fn build_payload(case: &FuzzCase) -> (Option<&'static str>, Vec<u8>) {
     let mut joined: Vec<u8> = Vec::new();
     if case.lines.is_empty() {
@@ -129,7 +120,6 @@ fn build_payload(case: &FuzzCase) -> (Option<&'static str>, Vec<u8>) {
             joined.push(b'\n');
         }
     }
-
     match case.encoding % 5 {
         0 => (None, joined),
         1 => {
@@ -158,14 +148,12 @@ fn build_payload(case: &FuzzCase) -> (Option<&'static str>, Vec<u8>) {
             let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
             let _ = encoder.write_all(&joined);
             let gzip = encoder.finish().unwrap_or_default();
-
             let mut composite = joined.clone();
             composite.extend_from_slice(&gzip);
             (Some("identity"), composite)
         }
     }
 }
-
 fuzz_target!(|case: FuzzCase| {
     let (encoding, payload) = build_payload(&case);
     let context =

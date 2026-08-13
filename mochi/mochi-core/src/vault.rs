@@ -4,7 +4,6 @@
 //! can sign transactions with real account keys instead of the bundled
 //! development fixtures. First-release byte, signer, field, and JSON-graph
 //! ceilings are enforced before owned decoding or filesystem mutation.
-
 use std::{
     collections::BTreeSet,
     fs::{self, File},
@@ -12,16 +11,13 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
-
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
 use iroha_data_model::{account::AccountId, role::RoleId};
 use norito::json::{self, Map, Value};
-
 use crate::{
     compose::{InstructionPermission, SigningAuthority, development_signing_authorities},
     config::NetworkPaths,
 };
-
 /// Canonical filename storing signer metadata beneath a network root.
 pub const SIGNERS_FILE_NAME: &str = "signers.json";
 /// Maximum complete first-release signer-vault JSON file.
@@ -39,7 +35,6 @@ const SIGNER_VAULT_MAX_JSON_ARRAY_ENTRIES_V1: usize =
     SIGNER_VAULT_MAX_SIGNERS_V1 * (SIGNER_VAULT_MAX_ROLES_PER_SIGNER_V1 + 12 + 1);
 const SIGNER_VAULT_MAX_JSON_OBJECT_ENTRIES_V1: usize = SIGNER_VAULT_MAX_SIGNERS_V1 * 8;
 const SIGNER_VAULT_MAX_JSON_DEPTH_V1: usize = 8;
-
 /// Errors emitted when reading or writing signing authorities.
 #[derive(Debug, thiserror::Error)]
 pub enum SignerVaultError {
@@ -53,13 +48,11 @@ pub enum SignerVaultError {
     #[error("invalid signer entry: {0}")]
     InvalidEntry(String),
 }
-
 /// Helper to expose the on-disk `signers.json` layout.
 #[derive(Debug, Clone)]
 pub struct SignerVault {
     path: PathBuf,
 }
-
 fn read_vault_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     let mut file = match File::open(path) {
         Ok(file) => file,
@@ -106,11 +99,9 @@ fn read_vault_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
     Ok(Some(bytes))
 }
-
 fn signer_vault_limit(message: impl Into<String>) -> SignerVaultError {
     SignerVaultError::InvalidEntry(message.into())
 }
-
 fn ensure_string_limit(value: &str, label: &str, maximum: usize) -> Result<(), SignerVaultError> {
     if value.len() > maximum {
         return Err(signer_vault_limit(format!(
@@ -120,7 +111,6 @@ fn ensure_string_limit(value: &str, label: &str, maximum: usize) -> Result<(), S
     }
     Ok(())
 }
-
 fn json_string_encoded_len(value: &str) -> Result<usize, SignerVaultError> {
     let mut encoded = 2usize;
     for character in value.chars() {
@@ -135,7 +125,6 @@ fn json_string_encoded_len(value: &str) -> Result<usize, SignerVaultError> {
     }
     Ok(encoded)
 }
-
 impl SignerVault {
     /// Create a vault handle rooted under the provided network paths.
     #[must_use]
@@ -144,25 +133,21 @@ impl SignerVault {
             path: paths.root().join(SIGNERS_FILE_NAME),
         }
     }
-
     /// Create a vault handle for an explicit file path.
     #[must_use]
     pub fn from_path(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
-
     /// Path to the underlying `signers.json`.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
-
     /// Whether the vault file exists on disk.
     #[must_use]
     pub fn exists(&self) -> bool {
         self.path.exists()
     }
-
     /// Load signing authorities from disk without applying fallbacks.
     ///
     /// Returns an empty list when the vault file is absent.
@@ -197,7 +182,6 @@ impl SignerVault {
                 entries.len()
             )));
         }
-
         let mut signers = Vec::with_capacity(entries.len());
         for entry in entries {
             match parse_entry(entry) {
@@ -207,7 +191,6 @@ impl SignerVault {
         }
         Ok(signers)
     }
-
     /// Load signing authorities, falling back to development fixtures when unavailable.
     #[must_use]
     pub fn load_with_fallback(&self) -> Vec<SigningAuthority> {
@@ -223,7 +206,6 @@ impl SignerVault {
             }
         }
     }
-
     /// Persist the provided signing authorities to disk, replacing the existing vault.
     pub fn save(&self, signers: &[SigningAuthority]) -> Result<(), SignerVaultError> {
         if signers.len() > SIGNER_VAULT_MAX_SIGNERS_V1 {
@@ -272,7 +254,6 @@ impl SignerVault {
         Ok(())
     }
 }
-
 fn signer_worst_case_json_bytes(signer: &SigningAuthority) -> Result<usize, SignerVaultError> {
     fn charge_string(
         total: &mut usize,
@@ -287,7 +268,6 @@ fn signer_worst_case_json_bytes(signer: &SigningAuthority) -> Result<usize, Sign
             .ok_or_else(|| signer_vault_limit("signer vault byte accounting overflow"))?;
         Ok(())
     }
-
     let mut total = 512usize;
     charge_string(
         &mut total,
@@ -309,7 +289,6 @@ fn signer_worst_case_json_bytes(signer: &SigningAuthority) -> Result<usize, Sign
         "signer private key",
         SIGNER_VAULT_MAX_PRIVATE_KEY_BYTES_V1,
     )?;
-
     let permission_count = signer.permissions().count();
     if permission_count > InstructionPermission::all().len() {
         return Err(signer_vault_limit(format!(
@@ -320,7 +299,6 @@ fn signer_worst_case_json_bytes(signer: &SigningAuthority) -> Result<usize, Sign
     total = total
         .checked_add(permission_count.saturating_mul(64))
         .ok_or_else(|| signer_vault_limit("signer permission byte accounting overflow"))?;
-
     let mut role_count = 0usize;
     for role in signer.roles() {
         if role_count == SIGNER_VAULT_MAX_ROLES_PER_SIGNER_V1 {
@@ -339,12 +317,10 @@ fn signer_worst_case_json_bytes(signer: &SigningAuthority) -> Result<usize, Sign
     }
     Ok(total)
 }
-
 fn parse_entry(entry: &Value) -> Result<SigningAuthority, SignerVaultError> {
     let object = entry.as_object().ok_or_else(|| {
         SignerVaultError::InvalidEntry("signer entry must be a JSON object".to_owned())
     })?;
-
     let label = extract_string(
         object,
         "label",
@@ -362,7 +338,6 @@ fn parse_entry(entry: &Value) -> Result<SigningAuthority, SignerVaultError> {
         .map_err(|err| {
             SignerVaultError::InvalidEntry(format!("invalid account id `{account_str}`: {err}"))
         })?;
-
     let key_field = object
         .get("private_key")
         .or_else(|| object.get("privateKey"))
@@ -382,7 +357,6 @@ fn parse_entry(entry: &Value) -> Result<SigningAuthority, SignerVaultError> {
     let key_pair = KeyPair::from_private_key(private_key).map_err(|err| {
         SignerVaultError::InvalidEntry(format!("failed to construct key pair: {err}"))
     })?;
-
     let permissions = parse_permissions(object)?;
     let roles = parse_roles(object)?;
     Ok(SigningAuthority::with_permissions_and_roles(
@@ -393,7 +367,6 @@ fn parse_entry(entry: &Value) -> Result<SigningAuthority, SignerVaultError> {
         roles,
     ))
 }
-
 fn parse_permissions(object: &Map) -> Result<BTreeSet<InstructionPermission>, SignerVaultError> {
     let Some(raw) = object.get("permissions") else {
         return Ok(InstructionPermission::all().into_iter().collect());
@@ -429,7 +402,6 @@ fn parse_permissions(object: &Map) -> Result<BTreeSet<InstructionPermission>, Si
     }
     Ok(set)
 }
-
 fn parse_roles(object: &Map) -> Result<BTreeSet<RoleId>, SignerVaultError> {
     let Some(raw) = object.get("roles") else {
         return Ok(BTreeSet::new());
@@ -456,7 +428,6 @@ fn parse_roles(object: &Map) -> Result<BTreeSet<RoleId>, SignerVaultError> {
     }
     Ok(set)
 }
-
 fn encode_entry(signer: &SigningAuthority) -> Result<Value, SignerVaultError> {
     let mut object = Map::new();
     object.insert("label".into(), Value::from(signer.label().to_owned()));
@@ -479,11 +450,9 @@ fn encode_entry(signer: &SigningAuthority) -> Result<Value, SignerVaultError> {
     object.insert("roles".into(), Value::Array(roles));
     Ok(Value::Object(object))
 }
-
 fn account_literal(account_id: &AccountId) -> String {
     account_id.to_string()
 }
-
 fn extract_string(
     object: &Map,
     key: &str,
@@ -496,29 +465,24 @@ fn extract_string(
     ensure_string_limit(value, label, maximum)?;
     Ok(value.to_owned())
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use tempfile::tempdir;
-
     use super::*;
     use crate::config::{NetworkProfile, ProfilePreset};
-
     fn dummy_paths(root: &Path) -> NetworkPaths {
         NetworkPaths::from_root(
             root,
             &NetworkProfile::from_preset(ProfilePreset::FourPeerBft),
         )
     }
-
     #[test]
     fn vault_roundtrip_preserves_signers() {
         let dir = tempdir().expect("temp dir");
         let paths = dummy_paths(dir.path());
         paths.ensure().expect("ensure directories");
         let vault = SignerVault::new(&paths);
-
         let role: RoleId = "basic_user".parse().expect("role id");
         let custom_signer = SigningAuthority::with_permissions_and_roles(
             "Alice custom",
@@ -527,10 +491,8 @@ mod tests {
             [InstructionPermission::MintAsset],
             [role.clone()],
         );
-
         let signers = vec![custom_signer];
         vault.save(&signers).expect("save vault");
-
         let loaded = vault.load().expect("load vault");
         assert_eq!(loaded.len(), 1);
         let loaded_signer = &loaded[0];
@@ -554,7 +516,6 @@ mod tests {
         let roles: Vec<_> = loaded_signer.roles().collect();
         assert_eq!(roles, vec![&role], "role list should persist");
     }
-
     #[test]
     fn vault_json_string_charge_matches_canonical_escaping() {
         let value = "plain\nquote\"slash\\tab\tcontrol\u{1f}雪";
@@ -565,7 +526,6 @@ mod tests {
             encoded.len()
         );
     }
-
     #[test]
     fn load_missing_vault_produces_empty_list() {
         let dir = tempdir().expect("temp dir");
@@ -575,7 +535,6 @@ mod tests {
         let loaded = vault.load().expect("load missing vault returns Ok");
         assert!(loaded.is_empty(), "missing vault should return empty set");
     }
-
     #[test]
     fn bounded_vault_reader_accepts_exact_limit_and_rejects_first_overflow() {
         let dir = tempdir().expect("temp dir");
@@ -591,7 +550,6 @@ mod tests {
                 .len(),
             SIGNER_VAULT_MAX_BYTES_V1
         );
-
         File::create(&path)
             .expect("replace sparse vault")
             .set_len((SIGNER_VAULT_MAX_BYTES_V1 + 1) as u64)
@@ -599,7 +557,6 @@ mod tests {
         let error = read_vault_file(&path).expect_err("first overflow byte must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[test]
     fn load_rejects_signer_count_before_owned_decode() {
         let dir = tempdir().expect("temp dir");
@@ -611,13 +568,11 @@ mod tests {
                 .join(",")
         );
         fs::write(&path, payload).expect("write over-count vault");
-
         let error = SignerVault::from_path(path)
             .load()
             .expect_err("first signer beyond the V1 count must fail");
         assert!(error.to_string().contains("vault JSON admission failed"));
     }
-
     #[test]
     fn save_rejects_oversized_label_before_filesystem_mutation() {
         let dir = tempdir().expect("temp dir");
@@ -629,7 +584,6 @@ mod tests {
             ALICE_KEYPAIR.clone(),
             [InstructionPermission::MintAsset],
         );
-
         let error = vault
             .save(&[signer])
             .expect_err("oversized label must fail before persistence");
@@ -639,14 +593,12 @@ mod tests {
             "validation must precede directory creation"
         );
     }
-
     #[test]
     fn save_replaces_existing_vault_atomically() {
         let dir = tempdir().expect("temp dir");
         let paths = dummy_paths(dir.path());
         paths.ensure().expect("ensure directories");
         let vault = SignerVault::new(&paths);
-
         let first = SigningAuthority::with_permissions(
             "first signer",
             ALICE_ID.clone(),
@@ -657,7 +609,6 @@ mod tests {
         let initial = vault.load().expect("load initial vault");
         assert_eq!(initial.len(), 1);
         assert_eq!(initial[0].label(), "first signer");
-
         let second = SigningAuthority::with_permissions(
             "second signer",
             ALICE_ID.clone(),

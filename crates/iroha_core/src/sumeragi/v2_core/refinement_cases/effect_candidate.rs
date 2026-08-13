@@ -1,7 +1,6 @@
 fn runtime_identity(kind: u8, byte: u8) -> CanonicalIdentityProjection {
     successor_identity(IDENTITY_DOMAIN_PROCESS_LOCAL, kind, byte)
 }
-
 fn valid_effect_candidate_projection() -> ProductionEffectToCandidateTraceProjection {
     let owner = runtime_identity(IDENTITY_KIND_RUNTIME_LIFECYCLE_OWNER, 0x11);
     ProductionEffectToCandidateTraceProjection {
@@ -42,7 +41,6 @@ fn valid_effect_candidate_projection() -> ProductionEffectToCandidateTraceProjec
         producer_episode_retained: true,
     }
 }
-
 #[test]
 fn effect_to_candidate_kernel_rejects_identity_rank_and_owner_weakening() {
     let valid = valid_effect_candidate_projection();
@@ -53,14 +51,12 @@ fn effect_to_candidate_kernel_rejects_identity_rank_and_owner_weakening() {
             .into_projection(),
         valid
     );
-
     let coalesced_retry = ProductionEffectToCandidateTraceProjection {
         candidate_owner_count_before: 1,
         candidate_owner_admitted: false,
         ..valid
     };
     assert!(production_effect_to_candidate_refines_async_ownership_kernel(coalesced_retry));
-
     for mutant in [
         ProductionEffectToCandidateTraceProjection {
             stored_effect_kind: RUNTIME_EFFECT_KIND_FETCH_BODY,
@@ -96,7 +92,6 @@ fn effect_to_candidate_kernel_rejects_identity_rank_and_owner_weakening() {
         assert!(!production_effect_to_candidate_refines_async_ownership_kernel(mutant));
         assert!(check_production_effect_to_candidate_transition(mutant).is_none());
     }
-
     let zero = CanonicalIdentityProjection::zero();
     let diagnostic = ProductionEffectToCandidateTraceProjection {
         incoming_effect_kind: RUNTIME_EFFECT_KIND_BROADCAST,

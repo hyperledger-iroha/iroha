@@ -18,7 +18,6 @@
 //! cross-representation equality, external-store proving, wire integration,
 //! and every release/readiness/audit gate therefore remain unimplemented and
 //! false.
-
 use super::super::ZkAmsMkheErrorV1;
 use super::{
     RNS_LINK_FAMILY_COUNT_V1, RNS_LINK_RELEASE_COMMITMENTS_V1, RNS_LINK_VERSION_V1,
@@ -28,14 +27,12 @@ use super::{
     q_pcs::zk_ams_phase23_rns_link_q_pcs_release_parameter_digest_v1,
 };
 use crate::vega::sponge::Keccak256;
-
 const Q_NATIVE_RELATION_ADAPTER_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.q-native-relation-adapter-prerequisite";
 const Q_NATIVE_TOPOLOGY_OPENING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.q-native-topology-opening";
 const Q_NATIVE_RELATION_METADATA_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.q-native-relation-unverified-metadata";
-
 const RLWE_EQUATIONS_PER_OPENING_V1: u16 = 2;
 const RELEASE_OPENING_COUNT_V1: u16 = RNS_LINK_RELEASE_COMMITMENTS_V1 as u16;
 const RELEASE_RLWE_EQUATION_COUNT_V1: u16 =
@@ -47,7 +44,6 @@ const FIAT_SHAMIR_RELATION_BOUND_V1: bool = false;
 const ZERO_KNOWLEDGE_MASKED_V1: bool = false;
 const DETERMINISTIC_PLAINTEXT_LINEAGE_HIDDEN_V1: bool = false;
 const SECRET_PACKED_PLAINTEXT_OWNER_HARDENED_V1: bool = false;
-
 const CANONICAL_FAMILY_CHUNK_COUNTS_V1: [(ZkAmsPhase23RnsLinkFamilyV1, u16);
     RNS_LINK_FAMILY_COUNT_V1] = [
     (ZkAmsPhase23RnsLinkFamilyV1::X, 1),
@@ -57,20 +53,17 @@ const CANONICAL_FAMILY_CHUNK_COUNTS_V1: [(ZkAmsPhase23RnsLinkFamilyV1, u16);
     (ZkAmsPhase23RnsLinkFamilyV1::W, 8),
     (ZkAmsPhase23RnsLinkFamilyV1::RW, 1),
 ];
-
 const _: () = {
     assert!(RELEASE_OPENING_COUNT_V1 == 43);
     assert!(RELEASE_RLWE_EQUATION_COUNT_V1 == 86);
     assert!(RELEASE_Q_NATIVE_RELATION_COORDINATE_COUNT_V1 == 3_268);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CanonicalOpeningPositionV1 {
     family: ZkAmsPhase23RnsLinkFamilyV1,
     chunk_index: u16,
     family_chunk_count: u16,
 }
-
 /// Concrete, move-only sink for the sole private native-opening path.
 ///
 /// The type is nameable by the collective sibling only so that its verifier
@@ -87,7 +80,6 @@ pub(in super::super) struct ZkAmsPhase23QNativeRelationAdapterSinkV1 {
     validated_q_native_relation_coordinate_count: u32,
     ordered_topology_hash: Keccak256,
 }
-
 /// Public-only, explicitly unverified metadata returned after all 43 native
 /// opening validations reach the sealed sink in canonical order.
 ///
@@ -109,7 +101,6 @@ pub(super) struct ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
     pub(super) secret_packed_plaintext_owner_hardened: bool,
     pub(super) digest: [u8; 32],
 }
-
 impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
     /// Construct the sealed release-shape sink inside the Phase-23 subtree.
     /// No collective sibling can call this constructor.
@@ -124,7 +115,6 @@ impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
         {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         let mut ordered_topology_hash = Keccak256::new();
         ordered_topology_hash.update(Q_NATIVE_RELATION_ADAPTER_DOMAIN_V1);
         ordered_topology_hash.update(&[RNS_LINK_VERSION_V1]);
@@ -134,7 +124,6 @@ impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
         ordered_topology_hash.update(&RELEASE_OPENING_COUNT_V1.to_be_bytes());
         ordered_topology_hash.update(&RELEASE_RLWE_EQUATION_COUNT_V1.to_be_bytes());
         ordered_topology_hash.update(&RELEASE_Q_NATIVE_RELATION_COORDINATE_COUNT_V1.to_be_bytes());
-
         Ok(Self {
             release_parameter_digest,
             geometry,
@@ -144,7 +133,6 @@ impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
             ordered_topology_hash,
         })
     }
-
     /// Record that both native equations for the next canonical opening were
     /// validated while the owned opening was still live in the collective
     /// verifier.
@@ -167,7 +155,6 @@ impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
         {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         let next_opening = self
             .next_opening
             .checked_add(1)
@@ -187,7 +174,6 @@ impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
                     .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
             )
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-
         let mut topology_hash = Keccak256::new();
         topology_hash.update(Q_NATIVE_TOPOLOGY_OPENING_DOMAIN_V1);
         topology_hash.update(&[RNS_LINK_VERSION_V1]);
@@ -201,7 +187,6 @@ impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
         if topology_digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         self.ordered_topology_hash.update(&topology_digest);
         self.next_opening = next_opening;
         self.validated_rlwe_equation_count = validated_rlwe_equation_count;
@@ -209,7 +194,6 @@ impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
             validated_q_native_relation_coordinate_count;
         Ok(())
     }
-
     /// Finish by value and emit public-only, unverified stage metadata.
     pub(super) fn finish_into_unverified_metadata_v1(
         self,
@@ -223,7 +207,6 @@ impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
         if ordered_topology_root == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         let mut hash = Keccak256::new();
         hash.update(Q_NATIVE_RELATION_METADATA_DOMAIN_V1);
         hash.update(&[RNS_LINK_VERSION_V1]);
@@ -249,7 +232,6 @@ impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
         if digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         Ok(ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
             release_parameter_digest: self.release_parameter_digest,
             ordered_topology_root,
@@ -265,7 +247,6 @@ impl ZkAmsPhase23QNativeRelationAdapterSinkV1 {
         })
     }
 }
-
 fn validate_release_geometry_v1(
     geometry: &ZkAmsPhase23RnsLinkReleaseGeometryV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
@@ -289,7 +270,6 @@ fn validate_release_geometry_v1(
     }
     Ok(())
 }
-
 fn canonical_opening_position_v1(ordinal: usize) -> Option<CanonicalOpeningPositionV1> {
     let mut family_start = 0_usize;
     for (family, family_chunk_count) in CANONICAL_FAMILY_CHUNK_COUNTS_V1 {
@@ -305,7 +285,6 @@ fn canonical_opening_position_v1(ordinal: usize) -> Option<CanonicalOpeningPosit
     }
     None
 }
-
 fn require_complete_counts_v1(
     opening_count: u16,
     rlwe_equation_count: u16,
@@ -319,11 +298,9 @@ fn require_complete_counts_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn canonical_order_and_relation_coordinate_counts_are_exact() {
         let mut ordinal = 0_usize;
@@ -350,7 +327,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn source_boundary_is_concrete_public_only_and_fail_closed() {
         let source = include_str!("phase23_rns_link_q_relation_adapter.rs");
@@ -363,7 +339,6 @@ mod tests {
         let q_pcs = include_str!("phase23_rns_link_q_pcs.rs");
         assert!(source.lines().count() <= 450);
         assert!(source.len() <= 20_000);
-
         for forbidden in [
             "SecretPolynomial",
             "RnsPolynomial",

@@ -1,6 +1,5 @@
 //! `CreateElection` should seed a Zk referendum when none exists, using governance window defaults.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -29,7 +28,6 @@ use iroha_executor_data_model::permission::governance::{CanEnactGovernance, CanM
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 #[test]
 fn create_election_inserts_referendum_with_configured_window() {
     // Build minimal state
@@ -47,11 +45,9 @@ fn create_election_inserts_referendum_with_configured_window() {
     cfg.min_enactment_delay = 3;
     cfg.window_span = 5;
     state.set_gov(cfg);
-
     let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     // No referendum exists yet
     assert!(
         stx.world
@@ -59,7 +55,6 @@ fn create_election_inserts_referendum_with_configured_window() {
             .get("ref-auto")
             .is_none()
     );
-
     let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
     let vk_id = VerifyingKeyId::new("halo2/ipa", "vk-auto");
     let mut vk_record = VerifyingKeyRecord::new(
@@ -95,7 +90,6 @@ fn create_election_inserts_referendum_with_configured_window() {
     }
     .execute(&alice_id, &mut stx)
     .expect("register verifying key");
-
     for options in [0, MAX_ELECTION_OPTIONS_V1 + 1] {
         let election_id = format!("ref-invalid-{options}");
         let election_count_before = stx.world.elections_mut().iter().count();
@@ -144,7 +138,6 @@ fn create_election_inserts_referendum_with_configured_window() {
             "rejected election must preserve the referendum registry"
         );
     }
-
     let election_count_before = stx.world.elections_mut().iter().count();
     let referendum_count_before = stx.world.governance_referenda_mut().iter().count();
     let bounded_election_id = "ref-auto".to_owned();
@@ -177,7 +170,6 @@ fn create_election_inserts_referendum_with_configured_window() {
         stx.world.governance_referenda_mut().iter().count(),
         referendum_count_before + 1
     );
-
     for tally_len in [0, 64, 65] {
         stx.world
             .elections_mut()
@@ -220,7 +212,6 @@ fn create_election_inserts_referendum_with_configured_window() {
             "rejection must not truncate or replace the stored tally"
         );
     }
-
     let rec = stx
         .world
         .governance_referenda_mut()

@@ -3,13 +3,10 @@
 //! Dynamic hints are advisory scheduler metadata. They do not authorize an
 //! access, but every producer and consumer must agree on one exact wire
 //! vocabulary so malformed metadata cannot be interpreted differently.
-
 use core::fmt;
-
 use iroha_data_model::smart_contract::{
     entrypoint::is_canonical_kotodama_identifier, manifest::DynamicAccessHint,
 };
-
 // BEGIN GENERATED: kotodama-v1-dynamic-access-policy
 /// Maximum number of keys a single V1 dynamic-access hint may cover.
 pub const DYNAMIC_ACCESS_HINT_MAX_KEYS_V1: u32 = 64;
@@ -113,7 +110,6 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
 /// Exact compiler-owned prefixes forbidden for state declarations.
 pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1: &[&str] = &["__kotodama_link_"];
 // END GENERATED: kotodama-v1-dynamic-access-policy
-
 /// Reason a dynamic-access hint is outside the canonical V1 domain.
 #[allow(
     clippy::enum_variant_names,
@@ -130,7 +126,6 @@ pub enum DynamicAccessHintV1Error {
     /// `max_keys` was outside `1..=64`.
     MaxKeys,
 }
-
 impl fmt::Display for DynamicAccessHintV1Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -143,9 +138,7 @@ impl fmt::Display for DynamicAccessHintV1Error {
         })
     }
 }
-
 impl std::error::Error for DynamicAccessHintV1Error {}
-
 /// Return whether `name` is one canonical V1 state declaration identifier.
 #[must_use]
 pub fn is_canonical_dynamic_state_identifier_v1(name: &str) -> bool {
@@ -159,7 +152,6 @@ pub fn is_canonical_dynamic_state_identifier_v1(name: &str) -> bool {
             .iter()
             .any(|prefix| name.starts_with(prefix))
 }
-
 /// Extract the state declaration name from a canonical V1 dynamic base key.
 pub fn dynamic_access_hint_state_name_v1(base_key: &str) -> Result<&str, DynamicAccessHintV1Error> {
     let Some(name) = base_key.strip_prefix("state:") else {
@@ -170,19 +162,16 @@ pub fn dynamic_access_hint_state_name_v1(base_key: &str) -> Result<&str, Dynamic
     }
     Ok(name)
 }
-
 /// Return whether `key_type` is an exact active V1 `StateMap` key type.
 #[must_use]
 pub fn is_dynamic_access_hint_key_type_v1(key_type: &str) -> bool {
     DYNAMIC_ACCESS_HINT_KEY_TYPES_V1.contains(&key_type)
 }
-
 /// Return whether `bound_kind` is an exact active V1 bound source.
 #[must_use]
 pub fn is_dynamic_access_hint_bound_kind_v1(bound_kind: &str) -> bool {
     DYNAMIC_ACCESS_HINT_BOUND_KINDS_V1.contains(&bound_kind)
 }
-
 /// Validate one dynamic state-access hint against the complete nominal V1
 /// surface. This intentionally performs no trimming or alias conversion.
 pub fn validate_dynamic_access_hint_v1(
@@ -200,11 +189,9 @@ pub fn validate_dynamic_access_hint_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn hint(base_key: &str, key_type: &str, bound_kind: &str, max_keys: u32) -> DynamicAccessHint {
         DynamicAccessHint {
             base_key: base_key.to_owned(),
@@ -213,7 +200,6 @@ mod tests {
             max_keys,
         }
     }
-
     #[test]
     fn exact_v1_domain_is_accepted_without_poisoning_business_names() {
         assert!(
@@ -237,7 +223,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn base_key_requires_one_canonical_state_declaration_identifier() {
         for invalid in [
@@ -265,7 +250,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn aliases_unknown_values_and_out_of_range_bounds_reject() {
         for invalid in ["Int", "Numeric", "Amount", "json", "AccountID", " int"] {

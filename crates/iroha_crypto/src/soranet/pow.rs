@@ -2,14 +2,12 @@
 //!
 //! Persistent ticket-consumption snapshots are hard-bounded, decoded under
 //! explicit Norito limits, and loaded only from stable direct regular files.
-
 use std::{
     collections::HashMap,
     fmt, fs,
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use blake3::Hasher;
 #[cfg(test)]
 use norito::to_bytes;
@@ -22,7 +20,6 @@ use norito::{
 use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
-
 use super::{
     replay_lock::ExclusiveLedgerLock,
     snapshot_file::{
@@ -1444,9 +1441,7 @@ mod tests {
     use rand::SeedableRng;
     use rand_core::{TryCryptoRng, TryRngCore};
     use tempfile::tempdir;
-
     use super::*;
-
     const RELAY_A: [u8; 32] = [0xCC; 32];
     const RELAY_B: [u8; 32] = [0xDD; 32];
     const TRANSCRIPT: [u8; 32] = [0xEE; 32];
@@ -2129,7 +2124,6 @@ mod tests {
     #[test]
     fn signed_ticket_encode_decode_roundtrip() {
         use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
-
         let kp = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
         let ticket = Ticket {
             version: 1,
@@ -3011,7 +3005,6 @@ mod tests {
     #[test]
     fn signed_ticket_replay_rejected_after_reload() {
         use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
-
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
         let now = UNIX_EPOCH + Duration::from_secs(42_000);
         let limits = TicketRevocationStoreLimits::new(8, Duration::from_secs(600)).expect("limits");
@@ -3084,7 +3077,6 @@ mod tests {
     #[test]
     fn signed_ticket_relay_mismatch_is_reported() {
         use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
-
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
         let now = UNIX_EPOCH + Duration::from_secs(50_000);
         let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(45));

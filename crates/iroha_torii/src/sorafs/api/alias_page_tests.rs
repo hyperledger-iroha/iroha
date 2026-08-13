@@ -1,5 +1,4 @@
 // Bounded SoraFS alias projection regressions.
-
 #[test]
 fn alias_page_projects_only_the_bounded_selection() {
     let state = make_state();
@@ -9,7 +8,6 @@ fn alias_page_projects_only_the_bounded_selection() {
     let successor_digest = ManifestDigest::new([0x36; 32]);
     let mut block = state.block(default_block_header());
     let mut tx = block.transaction();
-
     tx.world_mut_for_testing()
         .pin_manifests_mut_for_testing()
         .insert(
@@ -47,7 +45,6 @@ fn alias_page_projects_only_the_bounded_selection() {
     tx.world_mut_for_testing()
         .pin_manifests_mut_for_testing()
         .insert(successor_digest, successor);
-
     for (name, digest) in [("a-valid", valid_digest), ("z-missing", missing_digest)] {
         let binding = ManifestAliasBinding {
             namespace: "sora".to_owned(),
@@ -61,7 +58,6 @@ fn alias_page_projects_only_the_bounded_selection() {
     }
     tx.apply();
     block.commit().expect("commit bounded alias page fixture");
-
     let view = state.view();
     let page = collect_alias_page(view.world(), 0, 1, None, None)
         .expect("unselected broken alias must not be projected");
@@ -74,7 +70,6 @@ fn alias_page_projects_only_the_bounded_selection() {
     );
     assert_eq!(page.entries[0].lineage.depth_to_head, 1);
     assert!(page.entries[0].lineage.approved_successor.is_some());
-
     assert!(matches!(
         collect_alias_page(view.world(), 1, 1, None, None),
         Err(PinRegistryError::MissingAliasManifest { .. })
@@ -84,7 +79,6 @@ fn alias_page_projects_only_the_bounded_selection() {
     assert_eq!(invalid_filter.total_count, 0);
     assert!(invalid_filter.entries.is_empty());
 }
-
 #[test]
 fn alias_offset_clamp_does_not_truncate_large_totals() {
     if usize::BITS > u32::BITS {

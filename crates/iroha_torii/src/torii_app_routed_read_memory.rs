@@ -1,7 +1,6 @@
 // Response-corridor memory accounting for application-API routed reads.
 // Local producer coverage is separate and exhaustively inventoried in the
 // routed-read source-bound tests.
-
 // Axum 0.8.9 collects at most two dynamic parameters on the routed-read
 // catalog below. Its empty `Vec` grows to four `(Arc<str>, Arc<str>)` slots;
 // each key/value Arc owns two atomic counters and alignment padding. Decoded
@@ -11,7 +10,6 @@
 const APP_ROUTED_READ_MAX_URL_PARAMETERS_V1: usize = 2;
 const APP_ROUTED_READ_URL_PARAMETER_VEC_CAPACITY_V1: usize = 4;
 const APP_ROUTED_READ_URL_PARAMETER_KEY_BYTES_V1: usize = 64;
-
 fn app_routed_read_url_parameter_fixed_bytes() -> Option<usize> {
     let arc_handle_bytes = core::mem::size_of::<std::sync::Arc<str>>();
     let arc_control_and_padding = core::mem::size_of::<usize>()
@@ -26,19 +24,16 @@ fn app_routed_read_url_parameter_fixed_bytes() -> Option<usize> {
         )?
         .checked_add(APP_ROUTED_READ_URL_PARAMETER_KEY_BYTES_V1)
 }
-
 #[derive(Clone, Copy, Debug)]
 struct ToriiRoutedReadDecodePlan {
     limits: norito::DecodeLimits,
     canonical_limit_bytes: usize,
 }
-
 #[derive(Debug)]
 struct ToriiBoundedNoritoPayload<T> {
     value: T,
     canonical_bytes: Vec<u8>,
 }
-
 /// Logical ledger backed by one existing query-fanout working-set permit.
 ///
 /// Route bodies are decoded sequentially. Norito's measured decode scope
@@ -54,7 +49,6 @@ struct ToriiRoutedReadMemoryBudget {
     retained_canonical_bytes: usize,
     merge_allocated_bytes: usize,
 }
-
 impl ToriiRoutedReadMemoryBudget {
     fn new(working_set_bytes: usize, configured_body_limit_bytes: usize) -> Result<Self, Response> {
         Ok(Self {
@@ -65,7 +59,6 @@ impl ToriiRoutedReadMemoryBudget {
             merge_allocated_bytes: 0,
         })
     }
-
     /// Bound the complete routed request retained across transport retries.
     fn admit_request_bytes(&self, bytes: usize) -> Result<(), Response> {
         torii_routed_read_ensure(
@@ -82,16 +75,13 @@ impl ToriiRoutedReadMemoryBudget {
         }
         Ok(())
     }
-
     /// Prove every App request representation fits beside each fanout phase.
     fn app_request_phases_fit(&self, bytes: usize) -> bool {
         self.app_request_high_water_bytes(bytes)
             .is_some_and(|total| total <= self.envelope.working_set_bytes)
     }
-
     fn app_request_high_water_bytes(&self, bytes: usize) -> Option<usize> {
         const INNER_REQUEST_REPRESENTATIONS: usize = 3;
-
         let fixed_overhead = query_fanout_fixed_overhead_bytes()?;
         let inner_requests = bytes.checked_mul(INNER_REQUEST_REPRESENTATIONS)?;
         // This is a phase maximum, not five identical owners. Before handler
@@ -158,17 +148,14 @@ impl ToriiRoutedReadMemoryBudget {
             .and_then(|fixed| fixed.checked_add(inner_requests))
             .and_then(|fixed| fixed.checked_add(peak))
     }
-
     fn route_body_limit(&self) -> usize {
         self.configured_body_limit_bytes
             .min(self.envelope.route_body_bytes)
     }
-
     fn final_body_limit(&self) -> usize {
         self.configured_body_limit_bytes
             .min(self.envelope.final_body_bytes)
     }
-
     fn canonical_remaining(&self) -> Result<usize, Response> {
         let remaining = self
             .envelope
@@ -184,7 +171,6 @@ impl ToriiRoutedReadMemoryBudget {
         }
         Ok(remaining)
     }
-
     fn decode_plan(&self, raw_body_bytes: usize) -> Result<ToriiRoutedReadDecodePlan, Response> {
         torii_routed_read_ensure("raw route body", raw_body_bytes, self.route_body_limit())?;
         let phase_bytes = self.envelope.decode_allocated_bytes;
@@ -209,7 +195,6 @@ impl ToriiRoutedReadMemoryBudget {
             canonical_limit_bytes: self.canonical_remaining()?,
         })
     }
-
     fn json_profile(
         &self,
         body: &[u8],
@@ -224,7 +209,6 @@ impl ToriiRoutedReadMemoryBudget {
         )
         .map_err(torii_routed_read_json_preflight_response)
     }
-
     fn retain_decode_usage(
         &mut self,
         usage: norito::core::DecodeAllocationUsage,
@@ -237,7 +221,6 @@ impl ToriiRoutedReadMemoryBudget {
         )?;
         self.admit_retained_allocation(decoded_bytes)
     }
-
     fn admit_retained_allocation(&mut self, bytes: usize) -> Result<(), Response> {
         let retained = self
             .retained_decoded_bytes
@@ -251,14 +234,12 @@ impl ToriiRoutedReadMemoryBudget {
         self.retained_decoded_bytes = retained;
         Ok(())
     }
-
     /// Allocate a retained payload vector inside the accumulator phase.
     fn try_retained_vec<T>(&mut self, capacity: usize) -> Result<Vec<T>, Response> {
         let mut values = Vec::new();
         self.ensure_retained_vec_capacity(&mut values, capacity)?;
         Ok(values)
     }
-
     /// Grow a retained payload vector only after its requested Rust-layout
     /// capacity is admitted. Growth allocates the exact replacement layout,
     /// moves the initialized prefix, and only then releases the old layout.
@@ -306,13 +287,11 @@ impl ToriiRoutedReadMemoryBudget {
         *values = replacement;
         Ok(())
     }
-
     fn push_retained<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), Response> {
         self.ensure_retained_vec_capacity(values, 1)?;
         values.push(value);
         Ok(())
     }
-
     fn retain_canonical_bytes(&mut self, bytes: usize) -> Result<(), Response> {
         let retained = self
             .retained_canonical_bytes
@@ -326,23 +305,19 @@ impl ToriiRoutedReadMemoryBudget {
         self.retained_canonical_bytes = retained;
         Ok(())
     }
-
     /// Retain the allocator-visible capacity of a canonical byte vector.
     fn retain_canonical_capacity(&mut self, capacity: usize) -> Result<(), Response> {
         self.retain_canonical_bytes(capacity)
     }
-
     /// Start a JSON merge after its decode-time canonical probes were dropped.
     fn begin_json_merge(&mut self) {
         self.retained_canonical_bytes = 0;
         self.merge_allocated_bytes = 0;
     }
-
     /// Start a typed merge whose canonical frames remain owned by payloads.
     fn begin_typed_merge(&mut self) {
         self.merge_allocated_bytes = 0;
     }
-
     fn admit_merge_allocation(&mut self, bytes: usize) -> Result<(), Response> {
         let total = self
             .merge_allocated_bytes
@@ -356,14 +331,12 @@ impl ToriiRoutedReadMemoryBudget {
         self.merge_allocated_bytes = total;
         Ok(())
     }
-
     /// Pre-admit standard-library B-tree nodes used by a merge index.
     fn admit_merge_btree<K, V>(&mut self, maps: usize, entries: usize) -> Result<(), Response> {
         let bytes = norito::core::owned_btree_maps_allocation_bytes::<K, V>(maps, entries)
             .map_err(|_| torii_routed_read_accounting_response())?;
         self.admit_merge_allocation(bytes)
     }
-
     /// Allocate a merge vector only after its complete Rust-layout request is
     /// admitted by the existing candidate-allocation phase.
     fn try_merge_vec<T>(&mut self, capacity: usize) -> Result<Vec<T>, Response> {
@@ -373,7 +346,6 @@ impl ToriiRoutedReadMemoryBudget {
         self.admit_merge_allocation(bytes)?;
         torii_routed_read_exact_vec(capacity, "merge vector", bytes)
     }
-
     /// Encode one transient canonical key inside the space left beside keys
     /// that the merge has actually retained. Callers commit its byte length
     /// only if they keep the returned allocation.
@@ -383,7 +355,6 @@ impl ToriiRoutedReadMemoryBudget {
             .map(Vec::from)
             .map_err(|_| torii_routed_read_json_encode_response())
     }
-
     fn json_response<T: norito::json::JsonSerialize + ?Sized>(
         &self,
         value: &T,
@@ -398,7 +369,6 @@ impl ToriiRoutedReadMemoryBudget {
             .body(Body::from(Bytes::from(body)))
             .expect("build preflighted routed-read JSON response"))
     }
-
     fn json_body<T: norito::json::JsonSerialize + ?Sized>(
         &self,
         value: &T,
@@ -407,7 +377,6 @@ impl ToriiRoutedReadMemoryBudget {
         norito::json::to_json_bounded_boxed(value, limit)
             .map_err(|_| torii_routed_read_json_encode_response())
     }
-
     /// Verify that native `Value` parser charges cover every owned graph node.
     fn verify_json_value_usage(
         &self,
@@ -430,7 +399,6 @@ impl ToriiRoutedReadMemoryBudget {
         Ok(())
     }
 }
-
 /// Allocate a `Vec` with exactly the admitted non-ZST element layout.
 ///
 /// `Vec::try_reserve_exact` is permitted to return spare capacity. Observing
@@ -458,7 +426,6 @@ fn torii_routed_read_exact_vec<T>(
     // SAFETY: the allocation above owns `capacity` uninitialized `T` slots.
     Ok(unsafe { Vec::from_raw_parts(allocation.as_ptr(), 0, capacity) })
 }
-
 /// Heap bytes reachable from a native JSON `Value` after parsing.
 ///
 /// Strings and arrays use the parser's exact-reserve requests. The lexical
@@ -485,7 +452,6 @@ fn torii_routed_read_json_value_graph_bytes(
         .and_then(|bytes| bytes.checked_add(object_bytes))
         .ok_or_else(torii_routed_read_accounting_response)
 }
-
 fn torii_routed_read_request_bytes(
     path_args: &[String],
     path_arg_capacity: usize,
@@ -506,7 +472,6 @@ fn torii_routed_read_request_bytes(
         .and_then(|bytes| bytes.checked_add(query_string.map_or(0, String::capacity)))
         .ok_or_else(torii_routed_read_accounting_response)
 }
-
 fn torii_routed_read_ensure(
     phase: &'static str,
     attempted: usize,
@@ -517,7 +482,6 @@ fn torii_routed_read_ensure(
     }
     Ok(())
 }
-
 fn torii_routed_read_capacity_response(
     phase: &'static str,
     attempted: usize,
@@ -531,7 +495,6 @@ fn torii_routed_read_capacity_response(
         ),
     )
 }
-
 fn torii_routed_read_accounting_response() -> Response {
     torii_proxy_error_response(
         StatusCode::BAD_GATEWAY,
@@ -539,7 +502,6 @@ fn torii_routed_read_accounting_response() -> Response {
         "proxied application response memory accounting overflowed",
     )
 }
-
 fn torii_routed_read_allocation_response(phase: &'static str, bytes: usize) -> Response {
     torii_proxy_error_response(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -547,7 +509,6 @@ fn torii_routed_read_allocation_response(phase: &'static str, bytes: usize) -> R
         format!("failed to reserve the admitted {bytes}-byte {phase}"),
     )
 }
-
 fn torii_routed_read_json_preflight_response(error: norito::json::JsonPreflightError) -> Response {
     if error.resource_kind().is_some() {
         return torii_routed_read_capacity_response(
@@ -562,7 +523,6 @@ fn torii_routed_read_json_preflight_response(error: norito::json::JsonPreflightE
         "proxied JSON response failed bounded lexical validation",
     )
 }
-
 /// Consume a hostile parser error without reflecting payload-derived text.
 fn torii_routed_read_json_decode_response(_: norito::json::Error) -> Response {
     torii_proxy_error_response(
@@ -571,7 +531,6 @@ fn torii_routed_read_json_decode_response(_: norito::json::Error) -> Response {
         "proxied JSON response failed bounded decoding",
     )
 }
-
 /// Consume a hostile binary decoder error without reflecting payload bytes.
 fn torii_routed_read_norito_decode_response(_: norito::Error) -> Response {
     torii_proxy_error_response(
@@ -580,7 +539,6 @@ fn torii_routed_read_norito_decode_response(_: norito::Error) -> Response {
         "proxied Norito response failed bounded decoding",
     )
 }
-
 fn torii_routed_read_body_response() -> Response {
     torii_proxy_error_response(
         StatusCode::BAD_GATEWAY,
@@ -588,7 +546,6 @@ fn torii_routed_read_body_response() -> Response {
         "proxied application response body exceeded its admitted bound",
     )
 }
-
 fn torii_routed_read_norito_encode_response() -> Response {
     torii_proxy_error_response(
         StatusCode::BAD_GATEWAY,
@@ -596,7 +553,6 @@ fn torii_routed_read_norito_encode_response() -> Response {
         "proxied Norito response exceeded its bounded canonical representation",
     )
 }
-
 fn torii_routed_read_json_encode_response() -> Response {
     torii_proxy_error_response(
         StatusCode::BAD_GATEWAY,
@@ -604,6 +560,5 @@ fn torii_routed_read_json_encode_response() -> Response {
         "proxied JSON response exceeded its bounded canonical representation",
     )
 }
-
 #[cfg(test)]
 include!("tests/lib_routed_reads/routed_read_memory_bounds.rs");

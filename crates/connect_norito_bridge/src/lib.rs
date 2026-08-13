@@ -18,7 +18,6 @@ use std::{
     },
     time::Duration,
 };
-
 use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;
 use iroha_core::privacy_profiles::{
@@ -439,7 +438,6 @@ fn native_signer_jni_contract_revision() -> u32 {
 }
 fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
     use AccountAddressError::*;
-
     let mut fields = JsonMap::new();
     match err {
         UnsupportedAlgorithm(algorithm) => {
@@ -2697,7 +2695,6 @@ fn detached_transaction_hash_hex(bytes: &[u8; 32]) -> JsonValue {
 }
 fn detached_transaction_executable_json(tx: &SignedTransaction) -> BridgeResult<JsonValue> {
     use iroha_data_model::prelude::TransferBox;
-
     match tx.instructions() {
         Executable::ContractCall(invocation) => {
             let arguments = invocation
@@ -3303,7 +3300,6 @@ pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_veri
 }
 fn signed_transaction_bridge_debug_json(tx: &SignedTransaction) -> JsonValue {
     use iroha_data_model::prelude::TransferBox;
-
     let mut transfer_asset_scopes = Vec::new();
     for instruction in tx.instructions().explicit_instructions() {
         let Some(transfer_box) = instruction.as_any().downcast_ref::<TransferBox>() else {
@@ -5536,7 +5532,6 @@ impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4 {
         parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
     ) -> BridgeResult<File> {
         use iroha_data_model::offline::KagemushaPastaCycleArtifactKindV4;
-
         self.validate_live_inventory()?;
         let descriptor = self
             .manifest()
@@ -6588,7 +6583,6 @@ impl KagemushaOutputMembershipPathsV4 {
         anchor: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
     ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaOutputMembershipWitnessV4> {
         use iroha_core::zk::kagemusha_v2::KagemushaOutputMembershipOperationV4;
-
         if self.initial_root != anchor.initial_root
             || self.final_root != anchor.finalized_root
             || self.recipient.as_ref().map(|leaf| leaf.leaf_index) != Some(anchor.shield_leaf_index)
@@ -6607,7 +6601,6 @@ impl KagemushaOutputMembershipPathsV4 {
         split: &iroha_data_model::offline::KagemushaRecursiveSpendSplitIntentV4,
     ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaOutputMembershipWitnessV4> {
         use iroha_core::zk::kagemusha_v2::KagemushaOutputMembershipOperationV4;
-
         split
             .validate_public_binding()
             .map_err(|_| BridgeError::KagemushaProve)?;
@@ -6639,7 +6632,6 @@ impl KagemushaOutputMembershipPathsV4 {
         redemption: &iroha_data_model::offline::KagemushaRecursiveSpendRedemptionIntentV4,
     ) -> BridgeResult<iroha_core::zk::kagemusha_v2::KagemushaOutputMembershipWitnessV4> {
         use iroha_core::zk::kagemusha_v2::KagemushaOutputMembershipOperationV4;
-
         redemption
             .validate_public_binding()
             .map_err(|_| BridgeError::KagemushaProve)?;
@@ -6762,7 +6754,6 @@ fn validate_kagemusha_recursive_spend_topup_anchor_shape_v4(
     anchor: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
 ) -> BridgeResult<()> {
     use iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2;
-
     anchor
         .amount
         .validate()
@@ -6836,7 +6827,6 @@ fn validate_kagemusha_recursive_spend_verify_request_shape_v4(
     request: &iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV4,
 ) -> BridgeResult<()> {
     use iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2;
-
     validate_kagemusha_recursive_spend_bundle_shape_v4(&request.bundle)?;
     request
         .recipient_request
@@ -7462,7 +7452,6 @@ fn open_kagemusha_candidate_evidence_lab_artifact_v4() -> BridgeResult<File> {
 #[cfg(unix)]
 fn kagemusha_recursive_spend_file_is_read_only_v4(file: &File) -> bool {
     use std::os::fd::AsRawFd as _;
-
     let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
     flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDONLY
 }
@@ -7479,7 +7468,6 @@ fn require_private_kagemusha_recursive_spend_artifact_inode_v4(
     expected_links: u64,
 ) -> BridgeResult<std::fs::Metadata> {
     use std::os::unix::fs::MetadataExt as _;
-
     let metadata = file
         .metadata()
         .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?;
@@ -7522,7 +7510,6 @@ fn pin_and_unlink_kagemusha_recursive_spend_artifact_v4(
     expected_size: u64,
 ) -> BridgeResult<(File, File)> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-
     let original =
         require_private_kagemusha_recursive_spend_artifact_inode_v4(&writable, expected_size, 1)?;
     let read_only = OpenOptions::new()
@@ -7597,7 +7584,6 @@ fn reopen_kagemusha_recursive_spend_artifact_read_only_v4(
     #[cfg(unix)]
     let read_only = {
         use std::os::unix::fs::MetadataExt as _;
-
         if staging_path.is_some() {
             return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
         }
@@ -7923,7 +7909,6 @@ fn derive_kagemusha_owned_note_v2(
     opening: &KagemushaNoteOpeningV2,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2> {
     use iroha_core::zk::confidential_v2;
-
     opening.validate()?;
     amount.validate().map_err(|_| BridgeError::KagemushaProve)?;
     let owner_tag = Zeroizing::new(
@@ -7986,7 +7971,6 @@ fn derive_kagemusha_redemption_change_opening_v4(
     entropy: &[u8; 32],
 ) -> BridgeResult<KagemushaRecursiveSpendRedemptionChangePrepareResultV4> {
     use iroha_core::zk::confidential_v2::default_confidential_diversifier_v2;
-
     input_opening.validate()?;
     input_note
         .validate_public_binding()
@@ -8059,7 +8043,6 @@ fn prepare_kagemusha_peer_split_change_opening_v4(
     entropy: &[u8; 32],
 ) -> BridgeResult<KagemushaRecursiveSpendPeerSplitChangePrepareResultV4> {
     use iroha_core::zk::confidential_v2::default_confidential_diversifier_v2;
-
     if bundles.is_empty()
         || bundles.len() > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
         || bundles.len() != input_openings.len()
@@ -8204,7 +8187,6 @@ fn require_kagemusha_confidential_verifier_v2(
     vk_box: &iroha_data_model::proof::VerifyingKeyBox,
 ) -> BridgeResult<()> {
     use iroha_core::zk::{ZK_BACKEND_HALO2_IPA, hash_vk};
-
     if id.backend.as_str() != ZK_BACKEND_HALO2_IPA
         || id.name != expected_name
         || commitment == [0; 32]
@@ -8239,7 +8221,6 @@ fn kagemusha_recursive_spend_init_operation_v4(
         kagemusha_v2::KagemushaStepOperationVectorV4,
     };
     use iroha_data_model::offline::kagemusha_confidential_amount_encoding_v2;
-
     let anchor = &request.topup_anchor;
     let topup = KagemushaTopUpShieldPublicInputsV2 {
         output_commitment: anchor.current_note.note_commitment,
@@ -8472,7 +8453,6 @@ fn execute_kagemusha_recursive_spend_init_v4(
     installed: &impl KagemushaRecursiveSpendArtifactSetViewV4,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendInitResultV4> {
     use iroha_data_model::offline::KagemushaRecursiveSpendInitResultV4;
-
     local.validate_shape()?;
     let anchor = &local.request.topup_anchor;
     let expected_note = derive_kagemusha_owned_note_v2(
@@ -9768,7 +9748,6 @@ fn kagemusha_receiver_acknowledgement_payload_v2(
     accepted_at_ms: u64,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2> {
     use iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2;
-
     request
         .validate_at(accepted_at_ms)
         .map_err(|_| BridgeError::KagemushaProve)?;
@@ -13642,7 +13621,6 @@ fn bridge_source() -> &'static str {
 #[cfg(test)]
 mod detached_transaction_scaffold_tests {
     use std::{num::NonZeroU32, ptr};
-
     use iroha_data_model::{
         asset::AssetId,
         nexus::DataSpaceId,
@@ -13653,9 +13631,7 @@ mod detached_transaction_scaffold_tests {
             signed::{MultisigSignatures, TransactionBuilder},
         },
     };
-
     use super::*;
-
     fn detached_test_network_id() -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
@@ -14268,9 +14244,7 @@ mod kagemusha_bridge_tests {
         },
     };
     use p256::ecdsa::{SigningKey, signature::Signer as _};
-
     use super::*;
-
     #[cfg(feature = "privacy-production-enabled")]
     const KAGEMUSHA_V4_GUARD_FD_ENV: &str = "IROHA_KAGEMUSHA_V4_GUARD_FD";
     const CURRENT_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
@@ -14307,7 +14281,6 @@ mod kagemusha_bridge_tests {
         #[cfg(unix)]
         fn from_descriptor_value(value: Option<&std::ffi::OsStr>) -> std::io::Result<Self> {
             use std::os::unix::fs::FileTypeExt as _;
-
             let value = value.ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
@@ -14367,7 +14340,6 @@ mod kagemusha_bridge_tests {
         #[cfg(feature = "privacy-production-enabled")]
         fn write_phase(&mut self, phase: &str) -> std::io::Result<()> {
             use std::io::Write as _;
-
             if phase.is_empty()
                 || !phase.bytes().all(|byte| {
                     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
@@ -14455,7 +14427,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn recursive_spend_v4_worker_serializes_release_sized_lifecycles() {
         use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-
         let active = Arc::new(AtomicUsize::new(0));
         let peak = Arc::new(AtomicUsize::new(0));
         std::thread::scope(|scope| {
@@ -14914,7 +14885,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn recursive_spend_v4_artifact_spool_is_anonymous_before_streaming() {
         use std::os::unix::fs::MetadataExt as _;
-
         let (writable, retained_read_only, staging_path) =
             open_kagemusha_recursive_spend_artifact_v4()
                 .expect("open anonymous production artifact spool");
@@ -14946,7 +14916,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn recursive_spend_v4_artifact_spool_rejects_symlink_swap() {
         use std::os::unix::fs::symlink;
-
         let temporary = tempfile::tempdir().expect("create symlink adversarial directory");
         let named = tempfile::Builder::new()
             .prefix(".iroha-krv4-symlink-")
@@ -15421,7 +15390,6 @@ mod kagemusha_bridge_tests {
     }
     #[path = "tests/recipient_fixture_owner.rs"]
     mod recipient_fixture_owner;
-
     #[test]
     fn receiver_offer_size_budget_covers_one_realistic_finality_proof() {
         use iroha_torii_shared::offline_api::{
@@ -17274,7 +17242,6 @@ mod kagemusha_bridge_tests {
         generation: &str,
     ) -> Option<iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2> {
         use std::io::Read as _;
-
         let path = std::env::var_os(TAIRA_RELEASE_ROSTER_ENV_V4).map(std::path::PathBuf::from)?;
         assert!(
             path.is_absolute(),
@@ -19020,7 +18987,6 @@ mod kagemusha_bridge_tests {
         ) -> std::io::Result<Vec<std::ffi::OsString>> {
             use std::os::unix::ffi::OsStrExt as _;
             use std::path::Component;
-
             if !path.is_absolute() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -19059,7 +19025,6 @@ mod kagemusha_bridge_tests {
         ) -> std::io::Result<Vec<std::ffi::OsString>> {
             use std::os::unix::ffi::OsStrExt as _;
             use std::path::Component;
-
             let path = std::path::Path::new(relative);
             if path.is_absolute() || relative.is_empty() {
                 return Err(std::io::Error::new(
@@ -19095,7 +19060,6 @@ mod kagemusha_bridge_tests {
         }
         fn component_c_string(name: &std::ffi::OsStr) -> std::io::Result<std::ffi::CString> {
             use std::os::unix::ffi::OsStrExt as _;
-
             std::ffi::CString::new(name.as_bytes()).map_err(|_| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -19105,7 +19069,6 @@ mod kagemusha_bridge_tests {
         }
         fn open_filesystem_root() -> std::io::Result<File> {
             use std::os::fd::FromRawFd as _;
-
             let descriptor = unsafe {
                 libc::open(
                     c"/".as_ptr(),
@@ -19123,7 +19086,6 @@ mod kagemusha_bridge_tests {
             create_missing: bool,
         ) -> std::io::Result<File> {
             use std::os::fd::{AsRawFd as _, FromRawFd as _};
-
             let name = Self::component_c_string(name)?;
             let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
             let mut descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
@@ -19163,13 +19125,11 @@ mod kagemusha_bridge_tests {
         }
         fn exact_identity(file: &File) -> std::io::Result<(u64, u64)> {
             use std::os::unix::fs::MetadataExt as _;
-
             let metadata = file.metadata()?;
             Ok((metadata.dev(), metadata.ino()))
         }
         fn require_owned_directory(file: &File) -> std::io::Result<()> {
             use std::os::unix::fs::MetadataExt as _;
-
             let metadata = file.metadata()?;
             if metadata.uid() != unsafe { libc::geteuid() } {
                 return Err(std::io::Error::new(
@@ -19181,7 +19141,6 @@ mod kagemusha_bridge_tests {
         }
         fn require_owner_private_directory(file: &File) -> std::io::Result<()> {
             use std::os::unix::fs::MetadataExt as _;
-
             Self::require_owned_directory(file)?;
             if file.metadata()?.mode() & 0o7777 != 0o700 {
                 return Err(std::io::Error::new(
@@ -19193,7 +19152,6 @@ mod kagemusha_bridge_tests {
         }
         fn require_owner_private_file(file: &File) -> std::io::Result<()> {
             use std::os::unix::fs::MetadataExt as _;
-
             let metadata = file.metadata()?;
             if !metadata.is_file()
                 || metadata.uid() != unsafe { libc::geteuid() }
@@ -19210,7 +19168,6 @@ mod kagemusha_bridge_tests {
         fn require_empty(directory: &File) -> std::io::Result<()> {
             use std::ffi::CStr;
             use std::os::fd::AsRawFd as _;
-
             let duplicate = unsafe { libc::dup(directory.as_raw_fd()) };
             if duplicate < 0 {
                 return Err(std::io::Error::last_os_error());
@@ -19251,7 +19208,6 @@ mod kagemusha_bridge_tests {
         }
         fn create(path: std::path::PathBuf) -> std::io::Result<Self> {
             use std::os::fd::AsRawFd as _;
-
             let directory = Self::open_absolute_directory(&path, true)?;
             Self::require_empty(&directory)?;
             Self::require_owned_directory(&directory)?;
@@ -19270,7 +19226,6 @@ mod kagemusha_bridge_tests {
         }
         fn create_private_file(&self, relative: &str) -> std::io::Result<File> {
             use std::os::fd::{AsRawFd as _, FromRawFd as _};
-
             let mut components = Self::normalized_relative_components(relative)?;
             let file_name = components.pop().expect("validated non-empty relative path");
             let mut directory = self.directory.try_clone()?;
@@ -19307,7 +19262,6 @@ mod kagemusha_bridge_tests {
         }
         fn write_private_file(&self, relative: &str, bytes: &[u8]) -> std::io::Result<()> {
             use std::io::Write as _;
-
             let mut file = self.create_private_file(relative)?;
             file.write_all(bytes)?;
             file.sync_all()
@@ -19317,7 +19271,6 @@ mod kagemusha_bridge_tests {
         }
         fn open_child_file(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
             use std::os::fd::{AsRawFd as _, FromRawFd as _};
-
             let name = Self::component_c_string(name)?;
             let descriptor = unsafe {
                 libc::openat(
@@ -19365,7 +19318,6 @@ mod kagemusha_bridge_tests {
             directory: &File,
         ) -> std::io::Result<std::collections::BTreeSet<std::ffi::OsString>> {
             use std::{ffi::CStr, os::fd::AsRawFd as _, os::unix::ffi::OsStringExt as _};
-
             let duplicate = unsafe { libc::dup(directory.as_raw_fd()) };
             if duplicate < 0 {
                 return Err(std::io::Error::last_os_error());
@@ -19448,7 +19400,6 @@ mod kagemusha_bridge_tests {
             expected: &ProductionSbdAcceptanceExpectedFileV1,
         ) -> std::io::Result<()> {
             use std::{io::Read as _, os::unix::fs::MetadataExt as _};
-
             let mut file = Self::open_child_file(directory, name)?;
             Self::require_owner_private_file(&file)?;
             let before = file.metadata()?;
@@ -20875,7 +20826,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn recursive_spend_v4_installed_source_serializes_file_access() {
         use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-
         let source = lightweight_authenticated_source_v4();
         let active = Arc::new(AtomicUsize::new(0));
         let peak = Arc::new(AtomicUsize::new(0));
@@ -20974,7 +20924,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn recursive_spend_v4_acceptance_export_rejects_symlinked_final_root() {
         use std::os::unix::fs::symlink;
-
         let (_temporary, base) = canonical_acceptance_export_test_root();
         let target = base.join("real-bundle");
         std::fs::create_dir(&target).expect("create real bundle target");
@@ -20994,7 +20943,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn recursive_spend_v4_acceptance_export_rejects_symlinked_ancestor() {
         use std::os::unix::fs::symlink;
-
         let (_temporary, base) = canonical_acceptance_export_test_root();
         let target_ancestor = base.join("real-ancestor");
         std::fs::create_dir(&target_ancestor).expect("create real ancestor");
@@ -21008,7 +20956,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn recursive_spend_v4_acceptance_export_enforces_normalized_private_tree() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let (_temporary, base) = canonical_acceptance_export_test_root();
         let non_normalized =
             std::path::PathBuf::from(format!("{}/./not-normalized", base.display()));
@@ -21071,7 +21018,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn recursive_spend_v4_acceptance_export_rejects_post_write_content_and_link_mutation() {
         use std::io::{Seek as _, Write as _};
-
         assert_acceptance_finalization_rejects_v1("same-size content mutation", |root| {
             let path = root.join("sender/payload.norito");
             let mut changed = b"private payload".to_vec();
@@ -21114,7 +21060,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn recursive_spend_v4_acceptance_export_rejects_exact_tree_mutation() {
         use std::os::unix::fs::symlink;
-
         assert_acceptance_finalization_rejects_v1("missing expected file", |root| {
             std::fs::remove_file(root.join("sender/payload.norito"))
                 .expect("remove expected acceptance file");
@@ -21150,7 +21095,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn recursive_spend_v4_acceptance_export_rejects_mode_and_root_identity_mutation() {
         use std::os::unix::fs::PermissionsExt as _;
-
         assert_acceptance_finalization_rejects_v1("file mode mutation", |root| {
             std::fs::set_permissions(
                 root.join("sender/payload.norito"),
@@ -21584,7 +21528,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn output_membership_local_carrier_enforces_operation_shape_and_exact_commitments() {
         use iroha_core::zk::kagemusha_v2::KagemushaOutputMembershipOperationV4 as Operation;
-
         let initial_root = [0x11; 32];
         let intermediate_root = [0x12; 32];
         let final_root = [0x13; 32];
@@ -21695,7 +21638,6 @@ mod kagemusha_bridge_tests {
     #[test]
     fn output_membership_local_carrier_rejects_index_and_root_substitution() {
         use iroha_core::zk::kagemusha_v2::KagemushaOutputMembershipOperationV4 as Operation;
-
         let initial_root = [0x11; 32];
         let final_root = [0x13; 32];
         let valid = KagemushaOutputMembershipPathsV4 {
@@ -25479,7 +25421,6 @@ pub unsafe extern "C" fn connect_norito_sm2_compute_za(
 #[cfg(test)]
 mod test_support {
     use std::sync::{Mutex, MutexGuard, OnceLock};
-
     static CHAIN_DISCRIMINANT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     pub(super) fn chain_discriminant_guard() -> MutexGuard<'static, ()> {
         CHAIN_DISCRIMINANT_LOCK
@@ -25520,12 +25461,9 @@ mod accel_tests {
         num::{NonZeroU16, NonZeroU32, NonZeroU64},
         ptr, slice,
     };
-
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude::TransferBox;
-
     use super::*;
-
     const AUTHORITY_FEE_PAYMENT_JSON: &[u8] =
         br#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}}"#;
     fn fixture_key_pair(seed: u8) -> KeyPair {
@@ -27431,9 +27369,7 @@ mod accel_tests {
 #[cfg(test)]
 mod secp256k1_tests {
     use hex::decode;
-
     use super::*;
-
     const PRIVATE_KEY: &str = "e4f21b38e005d4f895a29e84948d7cc83eac79041aeb644ee4fab8d9da42f713";
     const PUBLIC_KEY: &str = "0242c1e1f775237a26da4fd51b8d75ee2709711f6e90303e511169a324ef0789c0";
     const SIGNATURE: &str = "0aab347be3530a3fd7d91c354956561101e6f273b8a1ea3d414f82fbd5939db34b99c54c16c45bf4cde8193b58d718e7efa8c055e7add7d9c9cbe8935e849200";
@@ -28364,7 +28300,6 @@ pub unsafe extern "C" fn connect_norito_get_acceleration_state(
         0
     }
 }
-
 mod platform_jni;
 #[cfg(not(test))]
 #[allow(unused_imports)]
@@ -28372,7 +28307,6 @@ pub use platform_jni::*;
 #[cfg(test)]
 #[allow(unused_imports)]
 use platform_jni::*;
-
 #[cfg(any(
     test,
     target_os = "android",
@@ -30709,12 +30643,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate
 #[cfg(test)]
 mod tests {
     use std::{ffi::CString, mem::MaybeUninit};
-
     use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
     use iroha_data_model::isi::rwa::RwaInstructionBox;
-
     use super::*;
-
     #[test]
     fn native_signer_jni_contract_revision_is_the_v5_network_id_hard_cut() {
         assert_eq!(native_signer_jni_contract_revision(), 5);
@@ -31012,7 +30943,6 @@ mod tests {
             AliasPlanResourceV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
         };
         use norito::codec::Encode as _;
-
         let key_pair = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
             .expect("derive onboarding bridge authority");
         let authority = AccountId::new(key_pair.public_key().clone());
@@ -32220,7 +32150,6 @@ mod tests {
         use iroha_crypto::Signature;
         use iroha_data_model::identifier::IdentifierResolutionReceipt;
         use iroha_data_model::isi::{Instruction, InstructionBox, identifier::ClaimIdentifier};
-
         let payload = sample_identifier_receipt_payload();
         let receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),

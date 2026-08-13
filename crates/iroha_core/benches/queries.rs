@@ -7,7 +7,6 @@
     clippy::items_after_statements
 )]
 use std::{num::NonZeroU64, sync::LazyLock};
-
 use criterion::{BatchSize, BenchmarkId, Criterion};
 use iroha_core::{
     prelude::*,
@@ -40,7 +39,6 @@ use ivm::{
     core_query::{CoreQueryEntityTagV1, QUERY_PAGE_CAPACITY_V1},
     host::IVMHost,
 };
-
 // Shared Tokio runtime for benches that need background tasks (e.g., LiveQueryStore)
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
@@ -48,7 +46,6 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
         .build()
         .expect("Failed building the Runtime")
 });
-
 fn fixture_account_in_domain(label: &str, _domain_id: &DomainId) -> AccountId {
     let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
     let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
@@ -56,32 +53,26 @@ fn fixture_account_in_domain(label: &str, _domain_id: &DomainId) -> AccountId {
         .into_parts();
     AccountId::new(public_key)
 }
-
 fn bench_domain_id() -> DomainId {
     DomainId::try_new("bench", "universal").expect("bench domain id")
 }
-
 fn bench_account(label: &str) -> AccountId {
     fixture_account_in_domain(label, &bench_domain_id())
 }
-
 fn bench_asset_def_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("bench", "universal").expect("bench domain"),
         "coin".parse().expect("bench asset definition name"),
     )
 }
-
 fn build_state_with_accounts(n: usize) -> State {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     // Ensure Tokio reactor is available for LiveQueryStore background task
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
-
     let domain_id = bench_domain_id();
     let authority_id = bench_account("authority");
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
-
     let mut accounts = Vec::with_capacity(n);
     for i in 0..n {
         let acc_id = bench_account(&format!("user{i}"));
@@ -89,7 +80,6 @@ fn build_state_with_accounts(n: usize) -> State {
         let account = Account::new(acc_id.clone()).build(&acc_id);
         accounts.push(account);
     }
-
     State::try_new(
         World::with([domain], accounts, []),
         kura,
@@ -99,7 +89,6 @@ fn build_state_with_accounts(n: usize) -> State {
     )
     .expect("benchmark State startup must validate")
 }
-
 fn bench_find_accounts_small(c: &mut Criterion) {
     let state = build_state_with_accounts(1_000);
     c.bench_function("find_accounts_iter_1k", |b| {
@@ -112,7 +101,6 @@ fn bench_find_accounts_small(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_find_accounts_large(c: &mut Criterion) {
     let state = build_state_with_accounts(10_000);
     c.bench_function("find_accounts_iter_10k", |b| {
@@ -125,7 +113,6 @@ fn bench_find_accounts_large(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_find_accounts_filter_id_literal(c: &mut Criterion) {
     let state = build_state_with_accounts(10_000);
     let needle = bench_account("user4242");
@@ -140,7 +127,6 @@ fn bench_find_accounts_filter_id_literal(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_find_accounts_sort_id(c: &mut Criterion) {
     let state = build_state_with_accounts(10_000);
     c.bench_function("find_accounts_sort_by_id_10k", |b| {
@@ -154,7 +140,6 @@ fn bench_find_accounts_sort_id(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_find_accounts_paginate(c: &mut Criterion) {
     let state = build_state_with_accounts(10_000);
     let page = 100usize;
@@ -176,14 +161,12 @@ fn bench_find_accounts_paginate(c: &mut Criterion) {
         })
     });
 }
-
 #[derive(Clone, Copy)]
 struct TypedCoreQueryFamily {
     benchmark_name: &'static str,
     tag: CoreQueryEntityTagV1,
     words_per_item: u64,
 }
-
 const TYPED_CORE_QUERY_FAMILIES: [TypedCoreQueryFamily; 5] = [
     TypedCoreQueryFamily {
         benchmark_name: "typed_core_query_accounts_page_64",
@@ -211,7 +194,6 @@ const TYPED_CORE_QUERY_FAMILIES: [TypedCoreQueryFamily; 5] = [
         words_per_item: 3,
     },
 ];
-
 fn raw_core_query_response(
     state: &State,
     query_handle: &iroha_core::query::store::LiveQueryStoreHandle,
@@ -225,7 +207,6 @@ fn raw_core_query_response(
         Sorting::default(),
         FetchSize::new(Some(page_size)),
     );
-
     macro_rules! request_for {
         ($item:ty, $query:expr) => {{
             let query = $query;
@@ -238,7 +219,6 @@ fn raw_core_query_response(
             QueryRequest::Start(QueryWithParams::new(&boxed, params.clone()))
         }};
     }
-
     let request = match tag {
         CoreQueryEntityTagV1::Account => request_for!(Account, FindAccounts),
         CoreQueryEntityTagV1::Asset => request_for!(Asset, FindAssets),
@@ -270,12 +250,10 @@ fn raw_core_query_response(
     );
     response
 }
-
 fn build_state_for_typed_core_query_pages() -> (State, AccountId, [u64; 5]) {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
-
     let authority = bench_account("typed-query-authority");
     let mut domains = Vec::with_capacity(QUERY_PAGE_CAPACITY_V1);
     let mut accounts = Vec::with_capacity(QUERY_PAGE_CAPACITY_V1);
@@ -287,12 +265,10 @@ fn build_state_for_typed_core_query_pages() -> (State, AccountId, [u64; 5]) {
         let domain_id = DomainId::try_new(format!("typed{i}"), "universal")
             .expect("typed query benchmark domain id");
         domains.push(Domain::new(domain_id.clone()).build(&authority));
-
         let account_id = bench_account(&format!("typed-query-user{i}"));
         if i + 1 < QUERY_PAGE_CAPACITY_V1 {
             accounts.push(Account::new(account_id.clone()).build(&authority));
         }
-
         let asset_definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "coin".parse().expect("asset name"),
@@ -310,13 +286,11 @@ fn build_state_for_typed_core_query_pages() -> (State, AccountId, [u64; 5]) {
             AssetId::of(asset_definition_id, authority.clone()),
             Quantity::from(u64::try_from(i).expect("fixture index fits u64") + 1),
         ));
-
         let nft_id: NftId = format!("ticket{i}$typed{i}.universal")
             .parse()
             .expect("typed query benchmark NFT id");
         nfts.push(Nft::new(nft_id, Metadata::default()).build(&authority));
     }
-
     let state = State::try_new(
         World::with_assets(domains, accounts, asset_definitions, assets, nfts),
         kura,
@@ -345,14 +319,12 @@ fn build_state_for_typed_core_query_pages() -> (State, AccountId, [u64; 5]) {
     });
     (state, authority, raw_query_response_bytes)
 }
-
 fn bench_typed_core_query_pages(c: &mut Criterion) {
     let (state, authority, raw_query_response_bytes) = build_state_for_typed_core_query_pages();
     let view = state.view();
     let mut host = CoreHostImpl::new(authority);
     host.set_query_state(&view);
     host.enable_core_query_page_metrics();
-
     for (family, raw_query_response_bytes) in TYPED_CORE_QUERY_FAMILIES
         .into_iter()
         .zip(raw_query_response_bytes)
@@ -360,7 +332,6 @@ fn bench_typed_core_query_pages(c: &mut Criterion) {
         let page_layout =
             ivm::list::ListLayoutV1::try_new(QUERY_PAGE_CAPACITY_V1 as u64, family.words_per_item)
                 .expect("typed query-page List layout");
-
         // Prove the performance contract on the exact production path before
         // Criterion samples it. Keeping these assertions outside the timed
         // loop prevents validation overhead from contaminating the result.
@@ -415,7 +386,6 @@ fn bench_typed_core_query_pages(c: &mut Criterion) {
             preflight_metrics.projection_payload_bytes,
             raw_query_response_bytes,
         );
-
         c.bench_function(family.benchmark_name, |b| {
             b.iter_batched(
                 || {
@@ -474,7 +444,6 @@ fn bench_typed_core_query_pages(c: &mut Criterion) {
         });
     }
 }
-
 fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
     // Build world with 10k domains
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
@@ -495,7 +464,6 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
         kura,
         query_handle.clone(),
     );
-
     // Build erased iterable FindDomains with small fetch_size
     let params = iroha_data_model::query::parameters::QueryParams::default();
     let payload =
@@ -506,7 +474,6 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
         payload,
     );
     let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
-
     // Live (baseline): just execute ValidQuery and take first batch materialization cost
     c.bench_function("live_find_domains_first_batch", |b| {
         b.iter(|| {
@@ -522,7 +489,6 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
             std::hint::black_box(count);
         })
     });
-
     // Snapshot ephemeral
     c.bench_function("snapshot_ephemeral_find_domains_first_batch", |b| {
         b.iter(|| {
@@ -551,7 +517,6 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
             std::hint::black_box(v.len());
         })
     });
-
     // Snapshot stored (same first-batch measurement)
     c.bench_function("snapshot_stored_find_domains_first_batch", |b| {
         b.iter(|| {
@@ -581,7 +546,6 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
             std::hint::black_box(v.len());
         })
     });
-
     let mut count_group = c.benchmark_group("snapshot_find_domains_count_mode_first_batch");
     for count_mode in [QueryCountMode::Exact, QueryCountMode::Bounded] {
         let label = match count_mode {
@@ -589,7 +553,6 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
             QueryCountMode::Bounded => "bounded",
         };
         let limits = QueryLimits::default().with_count_mode(count_mode);
-
         count_group.bench_with_input(
             BenchmarkId::new("ephemeral", label),
             &limits,
@@ -616,7 +579,6 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
                 })
             },
         );
-
         count_group.bench_with_input(BenchmarkId::new("stored", label), &limits, |b, limits| {
             b.iter(|| {
                 let request = iroha_data_model::query::QueryRequest::Start(
@@ -648,7 +610,6 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
     }
     count_group.finish();
 }
-
 fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
     use iroha_data_model::query::asset::prelude::FindAssets;
     // Build world: 1k accounts, each with one asset
@@ -688,7 +649,6 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
         [],
     );
     let state = State::new_for_testing(world, kura, query_handle.clone());
-
     // Build erased iterable FindAssets
     let params = iroha_data_model::query::parameters::QueryParams::default();
     let payload = norito::codec::Encode::encode(&FindAssets);
@@ -698,7 +658,6 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
         payload,
     );
     let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
-
     // Live baseline
     c.bench_function("live_find_assets_first_batch", |b| {
         b.iter(|| {
@@ -770,7 +729,6 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
     use iroha_data_model::query::asset::prelude::FindAssetsDefinitions;
     // Build world with 10k asset defs and rank metadata
@@ -807,7 +765,6 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
         <_>::default(),
     )
     .expect("benchmark State startup must validate");
-
     // Params with sorting by metadata key rank
     let mut params = iroha_data_model::query::parameters::QueryParams::default();
     params.sorting =
@@ -819,7 +776,6 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
         payload,
     );
     let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
-
     c.bench_function("snapshot_ephemeral_sorted_asset_defs_first_batch", |b| {
         b.iter(|| {
             let request = iroha_data_model::query::QueryRequest::Start(
@@ -875,7 +831,6 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
             std::hint::black_box(v.len());
         })
     });
-
     c.bench_function("snapshot_stored_sorted_asset_defs_first_continue", |b| {
         b.iter(|| {
             let request = iroha_data_model::query::QueryRequest::Start(
@@ -895,7 +850,6 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
             };
             let (_first_batch, _first_remaining, cursor) = first.into_parts();
             let cursor = cursor.expect("stored continuation");
-
             let continued = run_on_snapshot_with_mode(
                 &state,
                 &query_handle,
@@ -924,11 +878,9 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
-
     let domain_id = bench_domain_id();
     let authority_id = bench_account("authority");
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
-
     let base_def_id = bench_asset_def_id();
     let mut definition_ids = Vec::with_capacity(assets_per_account.max(1));
     definition_ids.push(base_def_id.clone());
@@ -957,7 +909,6 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
             .build(&authority_id)
         })
         .collect();
-
     let mut accounts = Vec::with_capacity(n_accounts);
     let mut assets = Vec::with_capacity(n_accounts * definition_ids.len());
     for i in 0..n_accounts {
@@ -970,7 +921,6 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
         }
         accounts.push(account);
     }
-
     State::try_new(
         World::with_assets([domain], accounts, definitions, assets, []),
         kura,
@@ -980,7 +930,6 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
     )
     .expect("benchmark State startup must validate")
 }
-
 fn bench_find_assets_iter(c: &mut Criterion) {
     let state = build_state_with_assets(5_000, 2);
     c.bench_function("find_assets_iter_10k", |b| {
@@ -993,7 +942,6 @@ fn bench_find_assets_iter(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_find_assets_filter_account(c: &mut Criterion) {
     let state = build_state_with_assets(10_000, 1);
     let target = bench_account("user9999");
@@ -1007,7 +955,6 @@ fn bench_find_assets_filter_account(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_find_assets_filter_quantity(c: &mut Criterion) {
     let state = build_state_with_assets(5_000, 2);
     let threshold = Quantity::from(2_u32);
@@ -1021,7 +968,6 @@ fn bench_find_assets_filter_quantity(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_find_assets_filter_definition_literal(c: &mut Criterion) {
     let state = build_state_with_assets(10_000, 2);
     let definition = bench_asset_def_id();
@@ -1036,7 +982,6 @@ fn bench_find_assets_filter_definition_literal(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_find_assets_filter_domain_literal(c: &mut Criterion) {
     let state = build_state_with_assets(10_000, 2);
     let filter = CompoundPredicate::<Asset>::build(|p| p.equals("domain", "bench"));
@@ -1049,7 +994,6 @@ fn bench_find_assets_filter_domain_literal(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_find_accounts_with_asset_literal(c: &mut Criterion) {
     let state = build_state_with_assets(10_000, 1);
     let definition = bench_asset_def_id();
@@ -1069,19 +1013,16 @@ fn bench_find_accounts_with_asset_literal(c: &mut Criterion) {
         })
     });
 }
-
 fn build_state_with_domains(n: usize) -> State {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
-
     let authority_id = bench_account("authority");
     let mut domains = Vec::with_capacity(n);
     for i in 0..n {
         let id = DomainId::try_new(format!("d{}", i), "universal").expect("domain id");
         domains.push(Domain::new(id).build(&authority_id));
     }
-
     State::try_new(
         World::with(domains, [], []),
         kura,
@@ -1091,7 +1032,6 @@ fn build_state_with_domains(n: usize) -> State {
     )
     .expect("benchmark State startup must validate")
 }
-
 fn bench_find_domains_iter(c: &mut Criterion) {
     let state = build_state_with_domains(5_000);
     c.bench_function("find_domains_iter_5k", |b| {
@@ -1104,7 +1044,6 @@ fn bench_find_domains_iter(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_find_domains_sort(c: &mut Criterion) {
     let state = build_state_with_domains(10_000);
     c.bench_function("find_domains_sort_by_id_10k", |b| {
@@ -1118,17 +1057,14 @@ fn bench_find_domains_sort(c: &mut Criterion) {
         })
     });
 }
-
 fn build_state_with_asset_definitions(n: usize) -> State {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
-
     let domain_id = bench_domain_id();
     let authority_id = bench_account("authority");
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let owner = Account::new(authority_id.clone()).build(&authority_id);
-
     let mut defs = Vec::with_capacity(n);
     for i in 0..n {
         let def_id = AssetDefinitionId::derive_from_components(
@@ -1145,7 +1081,6 @@ fn build_state_with_asset_definitions(n: usize) -> State {
             .build(&authority_id),
         );
     }
-
     State::try_new(
         World::with_assets([domain], [owner], defs, [], []),
         kura,
@@ -1155,7 +1090,6 @@ fn build_state_with_asset_definitions(n: usize) -> State {
     )
     .expect("benchmark State startup must validate")
 }
-
 fn bench_find_asset_defs_iter(c: &mut Criterion) {
     let state = build_state_with_asset_definitions(10_000);
     c.bench_function("find_asset_defs_iter_10k", |b| {
@@ -1169,25 +1103,20 @@ fn bench_find_asset_defs_iter(c: &mut Criterion) {
         })
     });
 }
-
 fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
     use iroha_core::block::BlockBuilder;
     use iroha_data_model::{
         events::time::{ExecutionTime, TimeEventFilter},
         trigger::prelude::*,
     };
-
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
-
     // Start with an empty world and then register domain/account to act as authority
     // Use `new_for_testing` to provide a telemetry instance when required
     let state = State::new_for_testing(World::default(), kura, query_handle);
-
     fn dummy_accepted_transaction(network_id: NetworkId) -> AcceptedTransaction<'static> {
         use std::{borrow::Cow, time::Duration};
-
         let keypair = KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(
@@ -1201,7 +1130,6 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
-
     // Create a header for a block to stage registrations
     let latest = state.view().latest_block();
     let priv_key = iroha_crypto::KeyPair::random().private_key().clone();
@@ -1210,10 +1138,8 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
         .sign(&priv_key)
         .unpack(|_| {})
         .header();
-
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
-
     // Authority
     let domain_id = bench_domain_id();
     let authority_id = bench_account("authority");
@@ -1223,7 +1149,6 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
     Register::account(Account::new(authority_id.clone()))
         .execute(&authority_id, &mut stx)
         .expect("register account");
-
     // Time triggers (PreCommit), minimal action body
     for i in 0..n_time {
         let trig_id: TriggerId = format!("time_{}", i).parse().unwrap();
@@ -1241,7 +1166,6 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
             .execute(&authority_id, &mut stx)
             .expect("register time trigger");
     }
-
     // By-call triggers (no-op)
     use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
     for i in 0..n_by_call {
@@ -1260,13 +1184,10 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
             .execute(&authority_id, &mut stx)
             .expect("register by-call trigger");
     }
-
     stx.apply();
     state_block.commit().unwrap();
-
     state
 }
-
 fn bench_find_triggers_iter(c: &mut Criterion) {
     let state = build_state_with_triggers(5_000, 5_000);
     c.bench_function("find_triggers_iter_10k", |b| {
@@ -1279,7 +1200,6 @@ fn bench_find_triggers_iter(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_find_active_trigger_ids_iter(c: &mut Criterion) {
     let state = build_state_with_triggers(10_000, 0);
     c.bench_function("find_active_trigger_ids_iter_10k", |b| {
@@ -1292,7 +1212,6 @@ fn bench_find_active_trigger_ids_iter(c: &mut Criterion) {
         })
     });
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     // Silence IVM banner for benches that may trigger VM init in inner paths.

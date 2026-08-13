@@ -9,7 +9,6 @@ fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit(
         )
         .expect("one exact topology fanout")
     };
-
     let mut tight = PendingExactOutput::new(1, 1, 1, &[])
         .expect("one individual fanout fits the exact corridor");
     assert!(
@@ -31,7 +30,6 @@ fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit(
     assert!(tight.source_fifo_owners.is_empty());
     assert!(tight.reservation_owner_counts.is_empty());
     assert_eq!(tight.next_fanout_fifo_id, ExactFanoutFifoId::MAX);
-
     let mut roomy =
         PendingExactOutput::new(2, 1, 1, &[]).expect("the exact pair fits the aggregate corridor");
     roomy.next_fanout_fifo_id = ExactFanoutFifoId::MAX;
@@ -52,13 +50,11 @@ fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit(
     assert_eq!(roomy.ownership_units, 2);
     assert_eq!(roomy.shared_ownership_units, 2);
 }
-
 #[test]
 fn armed_recovered_proposal_output_reservation_fails_stop_on_drop() {
     use super::super::v2_lifecycle_coordinator::{
         RecoveredLifecycleSignClassV1, RecoveredLifecycleSignDispatchIdentityV1,
     };
-
     let (mut service, keys) = fixture_with_block_payload();
     let (_, payload, mut proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = service.active_tag;
@@ -109,7 +105,6 @@ fn armed_recovered_proposal_output_reservation_fails_stop_on_drop() {
         "dropping an armed Proposal reservation must close process output"
     );
 }
-
 #[test]
 fn durable_recovered_broadcast_capture_owns_and_retries_one_exact_fanout() {
     let (mut service, _) = fixture();
@@ -137,7 +132,6 @@ fn durable_recovered_broadcast_capture_owns_and_retries_one_exact_fanout() {
             .has_pending_exact_output()
             .expect("inspect the retained recovered Broadcast fanout")
     );
-
     service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
     assert!(
         !service
@@ -151,11 +145,9 @@ fn durable_recovered_broadcast_capture_owns_and_retries_one_exact_fanout() {
     );
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_families() {
     use super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1;
-
     let phase_key = RecoveredLifecycleSignDispatchKeyV1::for_test(
         7,
         9,
@@ -174,7 +166,6 @@ fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_famili
     assert_ne!(phase_key, proposal_key);
     assert_ne!(phase_key, timeout_key);
     assert_ne!(proposal_key, timeout_key);
-
     let (mut service, keys) = fixture();
     allow_fixture_block_payload(&mut service.context);
     let directory = TempDir::new().expect("temporary recovered Sign body store");
@@ -211,7 +202,6 @@ fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_famili
             .expect("Proposal restores its exact outbound body"),
         &payload
     );
-
     let mut vote = routing_vote(&service, proposal.round.view, wire::GlobalPhase::Prepare);
     vote.signature.clear();
     let vote_request = super::super::v2::SignRequest::Vote(vote);
@@ -241,7 +231,6 @@ fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_famili
         }),
         "opaque PhaseVote task retains its future Prepare-body successor marker"
     );
-
     let timeout = wire::TimeoutVote {
         round: proposal.round,
         highest_prepare_qc: None,
@@ -264,7 +253,6 @@ fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_famili
     .expect("sign exact recovered timeout vote");
     assert!(timeout_result.is_exact());
     assert!(timeout_result.outbound_payload.is_none());
-
     assert_ne!(proposal_result.dispatch_key(), vote_result.dispatch_key());
     assert_ne!(vote_result.dispatch_key(), timeout_result.dispatch_key());
     assert!(
@@ -308,7 +296,6 @@ fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_famili
         .is_none(),
         "carrier-to-task projection pins exact tag and request transitively"
     );
-
     let mut historical_commit = routing_vote(&service, 0, wire::GlobalPhase::Commit);
     historical_commit.signature.clear();
     let historical_request = super::super::v2::SignRequest::Vote(historical_commit);
@@ -355,11 +342,9 @@ fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_famili
         "changing the retained tag must still change the complete effect identity"
     );
 }
-
 #[test]
 fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction() {
     use super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1;
-
     let (mut service, keys) = fixture();
     let directory = TempDir::new().expect("temporary recovered Sign body store");
     let body_store = V2BodyStore::open(directory.path(), service.context.clone())
@@ -397,7 +382,6 @@ fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction(
             .map(|tracked| tracked.state),
         Some(V2IoWorkState::Queued)
     );
-
     let task = match command_rx
         .try_recv()
         .expect("activate the exact recovered Sign command")
@@ -434,7 +418,6 @@ fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction(
             .map(|tracked| tracked.state),
         Some(V2IoWorkState::CompletionPending)
     );
-
     let (completion_tx, completion_rx) = mpsc::sync_channel(2);
     send_tracked_completion_with_lifecycle_ordinal(
         &completion_tx,
@@ -460,7 +443,6 @@ fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction(
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission: Arc::clone(&admission),
     });
-
     let generic = service.take_io_completion(true);
     assert!(generic.completion.is_none() && generic.retained_runtime);
     let retained = service
@@ -486,7 +468,6 @@ fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction(
         Some(V2IoWorkState::CompletionPending),
         "opaque extraction must retain the dedicated command index"
     );
-
     let unrelated = service.take_io_completion(true);
     let Some(PendingServiceCompletion::Io {
         completion: V2IoCompletion::AuxiliaryNoop,
@@ -518,7 +499,6 @@ fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction(
             .map(|tracked| tracked.state),
         Some(V2IoWorkState::CompletionPending)
     );
-
     let duplicate_guard = ConsensusOutputGuard::isolated();
     let duplicate_operation = duplicate_guard
         .begin_fail_stop_operation()
@@ -543,7 +523,6 @@ fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction(
         !duplicate_guard.restart_required(),
         "duplicate preflight releases its uncommitted fail-stop operation"
     );
-
     let adapter_authority = retained
         .project_adapter_completion_authority()
         .expect("the exact parked result projects one sealed adapter preview authority");
@@ -552,11 +531,9 @@ fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction(
         !output_guard.restart_required(),
         "dropping only the cloned preview authority cannot acknowledge the parked owner"
     );
-
     drop(retained);
     assert!(output_guard.restart_required());
 }
-
 #[test]
 fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extraction() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -586,7 +563,6 @@ fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extracti
         LifecycleIngressIoTargetSeal::for_recovered_decision_fetch_test(&service.context, key, 23);
     let task = RecoveredDecisionFetchBodyPersistenceTaskV1::for_test(&target, key, authenticated);
     let response_hash = task.response_hash();
-
     let admission = Arc::new(V2IoAdmission::new(2, 2).expect("bounded Fetch admission"));
     let (command_tx, command_rx) = v2_io_command_channel(2, 1, 1, 1, Arc::clone(&admission));
     let output_guard = ConsensusOutputGuard::isolated();
@@ -611,7 +587,6 @@ fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extracti
             .map(|tracked| (tracked.state, tracked.response_hash)),
         Some((V2IoWorkState::Queued, response_hash))
     );
-
     let task = match command_rx
         .try_recv()
         .expect("activate the exact recovered Fetch persistence command")
@@ -628,7 +603,6 @@ fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extracti
             .map(|tracked| tracked.state),
         Some(V2IoWorkState::Active)
     );
-
     let directory = TempDir::new().expect("temporary recovered Fetch body store");
     let mut body_store = V2BodyStore::open(directory.path(), service.context.clone())
         .expect("open recovered Fetch body store");
@@ -648,7 +622,6 @@ fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extracti
             .map(|tracked| tracked.state),
         Some(V2IoWorkState::CompletionPending)
     );
-
     let ordinary_tag = EventTag::new(service.context.height, 0, Generation::new(2));
     let mut ordinary_vote = routing_vote(&service, 0, wire::GlobalPhase::Prepare);
     ordinary_vote.signature.clear();
@@ -670,7 +643,6 @@ fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extracti
         Ok(V2IoCommand::Sign { task, .. }) if task.id() == ordinary_id
     ));
     command_rx.complete_work(ordinary_id);
-
     let (completion_tx, completion_rx) = mpsc::sync_channel(2);
     send_tracked_completion_with_lifecycle_ordinal(
         &completion_tx,
@@ -703,7 +675,6 @@ fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extracti
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
         admission: Arc::clone(&admission),
     });
-
     let generic = service.take_io_completion(false);
     assert!(generic.completion.is_none() && generic.retained_runtime);
     let still_blocked = service.take_io_completion(false);
@@ -760,15 +731,12 @@ fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extracti
             .is_empty(),
         "dedicated extraction transfers only completion metadata"
     );
-
     drop(retained);
     assert!(output_guard.restart_required());
 }
-
 #[test]
 fn recovered_lifecycle_sign_capacity_unavailable_leaves_no_dedicated_index() {
     use super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1;
-
     let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded Sign admission"));
     let (command_tx, command_rx) = v2_io_command_channel(1, 1, 1, 1, Arc::clone(&admission));
     command_tx
@@ -798,7 +766,6 @@ fn recovered_lifecycle_sign_capacity_unavailable_leaves_no_dedicated_index() {
     assert!(matches!(command_rx.try_recv(), Ok(V2IoCommand::Shutdown)));
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn cold_durable_proposal_refanout_atomically_owns_control_and_chunks() {
@@ -833,7 +800,6 @@ fn cold_durable_proposal_refanout_atomically_owns_control_and_chunks() {
             rank: 1,
         })
     });
-
     let cold_output = super::super::v2::RecoveredLifecycleColdProposalOutputV1::for_test(
         payload.clone(),
         body_store_identity,

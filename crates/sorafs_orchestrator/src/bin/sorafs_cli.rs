@@ -19,10 +19,8 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-
 use base64::{
     Engine,
     engine::general_purpose::{
@@ -136,10 +134,8 @@ use sorafs_orchestrator::{
     taikai_cache::{TaikaiCacheConfig, TaikaiCacheStatsSnapshot, TaikaiPullQueueStats},
 };
 use tokio::runtime::Runtime;
-
 const SORAFS_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 use url::{Url, form_urlencoded::Serializer};
-
 const DEFAULT_CHUNKER_HANDLE: &str = "sorafs.sf1@1.0.0";
 const CONTEXT_APPEAL_QUOTE: &str = "sorafs_cli appeal quote";
 const CONTEXT_APPEAL_SETTLE: &str = "sorafs_cli appeal settle";
@@ -2489,6 +2485,7 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
         endpoint.set_query(Some(&query));
     }
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
     let response = client
@@ -2597,6 +2594,7 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
         .join(&format!("v1/sorafs/por/report/{iso_week}"))
         .map_err(|err| format!("failed to resolve PoR report endpoint: {err}"))?;
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
     let response = client
@@ -2646,7 +2644,6 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
     if report.cycle != iso_week {
         return Err("PoR weekly report cycle does not match the requested week".into());
     }
-
     match output_format {
         ReportOutputFormat::Markdown => {
             let rendered = render_report_markdown(&report);
@@ -6633,6 +6630,7 @@ fn moderation_runner_canary(raw_args: Vec<String>) -> Result<(), String> {
         return Err("`--payload` file must not be empty".to_string());
     }
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_millis(timeout_ms))
         .build()
         .map_err(|err| format!("failed to construct runner canary HTTP client: {err}"))?;
@@ -8718,6 +8716,7 @@ fn moderation_committee_canary(raw_args: Vec<String>) -> Result<(), String> {
     let request =
         moderation_committee_canary_aggregate_request_json(&result_values, notes.as_deref());
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_millis(timeout_ms))
         .build()
         .map_err(|err| format!("failed to construct committee canary HTTP client: {err}"))?;
@@ -9394,20 +9393,15 @@ impl moderation_runner_grpc::runner_server::Runner for ModerationRunnerGrpcHandl
             .map_err(tonic::Status::invalid_argument)
     }
 }
-
 mod moderation_runner_grpc {
     use std::{convert::Infallible, sync::Arc, task::Poll};
-
     use tonic::codegen::*;
-
     use super::{
         ModerationRunnerScreenRequest, ModerationRunnerScreenResponse,
         ModerationRunnerStatusRequest, ModerationRunnerStatusResponse,
     };
-
     pub mod runner_server {
         use super::*;
-
         #[tonic::async_trait]
         pub trait Runner: Send + Sync + 'static {
             async fn status(
@@ -12161,7 +12155,6 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
 fn format_exact(value: &impl std::fmt::Display) -> String {
     value.to_string()
 }
-
 #[cfg(test)]
 mod manifest_tests {
     use ed25519_dalek::SigningKey;
@@ -12171,9 +12164,7 @@ mod manifest_tests {
     use norito::json::{Map, Value};
     use sorafs_orchestrator::proxy::LocalQuicProxyConfig;
     use tempfile::TempDir;
-
     use super::*;
-
     fn account_string(label: u8) -> String {
         let seed = [label; ed25519_dalek::SECRET_KEY_LENGTH];
         let signer = SigningKey::from_bytes(&seed);
@@ -12304,7 +12295,6 @@ mod manifest_tests {
         moderation_validate_corpus(vec![format!("--manifest={}", manifest_path.display())])
             .expect("corpus manifest validated");
     }
-
     fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
         use iroha_data_model::sorafs::moderation::{
             ADVERSARIAL_CORPUS_VERSION_V1, AdversarialPerceptualFamilyV1,
@@ -12329,7 +12319,6 @@ mod manifest_tests {
             }],
         }
     }
-
     fn signed_moderation_repro_manifest_fixture() -> ModerationReproManifestV1 {
         use iroha_data_model::sorafs::moderation::{
             MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationReproBodyV1,
@@ -12380,7 +12369,6 @@ mod manifest_tests {
             moderation_model_required_operations_v1,
         };
         use sorafs_orchestrator::moderation_runner::fingerprint_model_artifact;
-
         let mut fingerprints = Vec::new();
         let mut files = Vec::new();
         for (model_id, filename, feature, signed_weight, ensemble_weight) in [
@@ -15156,6 +15144,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         None => None,
     };
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
     let submission = submit_pin_register(
@@ -15820,7 +15809,6 @@ fn reputation_auth_file_identity(metadata: &FsMetadata) -> ReputationAuthFileIde
 #[cfg(windows)]
 fn reputation_auth_file_identity(metadata: &FsMetadata) -> ReputationAuthFileIdentity {
     use std::os::windows::fs::MetadataExt as _;
-
     (metadata.volume_serial_number(), metadata.file_index())
 }
 #[cfg(not(any(unix, windows)))]
@@ -15845,7 +15833,6 @@ fn reputation_auth_file_is_single_link(metadata: &FsMetadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
-
         metadata.number_of_links() == Some(1)
     }
     #[cfg(not(any(unix, windows)))]
@@ -15857,7 +15844,6 @@ fn reputation_auth_file_is_single_link(metadata: &FsMetadata) -> bool {
 #[cfg(windows)]
 fn reputation_auth_file_is_reparse_point(metadata: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
@@ -15909,7 +15895,6 @@ fn reputation_auth_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> 
 #[cfg(windows)]
 fn reputation_auth_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     reputation_auth_file_identity_available(reputation_auth_file_identity(left))
         && reputation_auth_file_identity(left) == reputation_auth_file_identity(right)
         && left.number_of_links() == Some(1)
@@ -21045,11 +21030,9 @@ fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
     );
     Value::Object(map)
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fs, path::Path};
-
     use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
     use iroha_data_model::{
         metadata::Metadata,
@@ -21064,9 +21047,7 @@ mod tests {
     };
     use sorafs_orchestrator::{PolicyReport, PolicyStatus};
     use tempfile::tempdir;
-
     use super::*;
-
     include!("sorafs_cli/appeal_verdict_parser_tests.rs");
     fn sample_manifest() -> ManifestV1 {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
@@ -21263,7 +21244,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(path, fs::Permissions::from_mode(0o600))
                 .expect("secure private key permissions");
         }
@@ -21897,7 +21877,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(&malformed_path, fs::Permissions::from_mode(0o600))
                 .expect("secure malformed fixture");
         }
@@ -21910,7 +21889,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(&utf8_path, fs::Permissions::from_mode(0o600))
                 .expect("secure UTF-8 fixture");
         }
@@ -21926,7 +21904,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(&oversize_path, fs::Permissions::from_mode(0o600))
                 .expect("secure oversize fixture");
         }
@@ -21938,7 +21915,6 @@ mod tests {
     #[test]
     fn reputation_auth_private_key_rejects_symlinks_hardlinks_and_open_permissions() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         let directory = tempdir().expect("tempdir");
         let key_pair = fixture_keypair(0x43);
         let target = directory.path().join("target.key");

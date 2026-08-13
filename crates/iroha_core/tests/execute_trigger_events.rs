@@ -1,8 +1,6 @@
 //! Validate that by-call trigger execution emits both the trigger event and resulting data events.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use std::{borrow::Cow, sync::Arc};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -16,7 +14,6 @@ use iroha_core::{
 use iroha_data_model::prelude::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use mv::storage::StorageReadOnly;
-
 fn build_state_and_ids() -> (State, NetworkId, TriggerId, AssetId) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
@@ -60,7 +57,6 @@ fn build_state_and_ids() -> (State, NetworkId, TriggerId, AssetId) {
         [fee_asset],
         [],
     );
-
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
@@ -70,7 +66,6 @@ fn build_state_and_ids() -> (State, NetworkId, TriggerId, AssetId) {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-
     let trigger_id: TriggerId = "sse_smoke_trigger".parse().expect("trigger id");
     let asset_id = AssetId::new(stored_asset_definition_id, ALICE_ID.clone());
     state
@@ -78,10 +73,8 @@ fn build_state_and_ids() -> (State, NetworkId, TriggerId, AssetId) {
         .world()
         .asset_definition(asset_id.definition())
         .expect("seeded asset definition must be resolvable");
-
     (state, network_id, trigger_id, asset_id)
 }
-
 fn register_trigger(
     state: &State,
     network_id: &NetworkId,
@@ -110,7 +103,6 @@ fn register_trigger(
     )
     .with_instructions([register_trigger])
     .sign(ALICE_KEYPAIR.private_key());
-
     let register_block =
         BlockBuilder::new(vec![iroha_core::tx::AcceptedTransaction::new_unchecked(
             Cow::Owned(register_tx),
@@ -135,7 +127,6 @@ fn register_trigger(
         .expect("register block commits");
     (committed_register, fragment_count)
 }
-
 fn execute_trigger(
     state: &State,
     network_id: &NetworkId,
@@ -152,7 +143,6 @@ fn execute_trigger(
         trigger_id.clone(),
     ))])
     .sign(ALICE_KEYPAIR.private_key());
-
     let execute_block =
         BlockBuilder::new(vec![iroha_core::tx::AcceptedTransaction::new_unchecked(
             Cow::Owned(exec_tx),
@@ -178,7 +168,6 @@ fn execute_trigger(
     execute_state_block.commit().expect("execute block commits");
     (events, fragment_count, execute_error)
 }
-
 fn assert_trigger_registered(state: &State, trigger_id: &TriggerId, asset_id: &AssetId) {
     let view = state.view();
     let action = view
@@ -203,7 +192,6 @@ fn assert_trigger_registered(state: &State, trigger_id: &TriggerId, asset_id: &A
         "registered trigger must mint the seeded asset"
     );
 }
-
 fn assert_trigger_events(
     events: &[EventBox],
     trigger_id: &TriggerId,
@@ -212,7 +200,6 @@ fn assert_trigger_events(
 ) {
     let mut saw_execute = false;
     let mut saw_asset_added = false;
-
     for ev in events {
         match ev {
             EventBox::ExecuteTrigger(ev) => {
@@ -233,7 +220,6 @@ fn assert_trigger_events(
             _ => {}
         }
     }
-
     assert!(
         saw_execute,
         "ExecuteTrigger event should be broadcast for by-call triggers"
@@ -243,12 +229,10 @@ fn assert_trigger_events(
         "Minted asset should emit an AssetEvent::Added data event"
     );
 }
-
 #[test]
 fn execute_trigger_emits_execute_and_data_events() {
     let (state, chain_id, trigger_id, asset_id) = build_state_and_ids();
     let alice_id = ALICE_ID.clone();
-
     let (committed_register, register_fragments) =
         register_trigger(&state, &chain_id, &trigger_id, &asset_id);
     assert!(
@@ -261,7 +245,6 @@ fn execute_trigger_emits_execute_and_data_events() {
         .world()
         .asset_definition(asset_id.definition())
         .expect("asset definition must survive trigger registration");
-
     let (events, fragment_count, execute_error) = execute_trigger(
         &state,
         &chain_id,

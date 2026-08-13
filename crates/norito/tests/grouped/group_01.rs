@@ -1,7 +1,5 @@
 //! Grouped Norito integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../adaptive_codec_telemetry.rs"]
 mod adaptive_codec_telemetry;
 #[path = "../adaptive_combo.rs"]

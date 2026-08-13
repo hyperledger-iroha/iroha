@@ -1,18 +1,15 @@
 //! Error types produced by query execution.
 //!
 //! Module containing errors that can occur during query execution.
-
 #[cfg(feature = "json")]
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 pub use self::model::*;
 use super::*;
 use crate::prelude::*;
-
 #[model]
 mod model {
     use super::*;
@@ -66,7 +63,6 @@ mod model {
         /// The authority reached the per-tenant limit of stored cursors.
         AuthorityQuotaExceeded,
     }
-
     /// Stable identity carried by a missing chain-authoritative `SoraFS` proof outcome.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -81,7 +77,6 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub identity_digest: [u8; 32],
     }
-
     /// Type assertion error
     #[derive(
         Debug,

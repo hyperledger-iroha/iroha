@@ -1,7 +1,5 @@
 //! Discovery propagation integration tests covering gossip, signature checks, and capability GREASE.
-
 use std::collections::{HashMap, HashSet, VecDeque};
-
 use blake3::hash as blake3_hash;
 use ed25519_dalek::{Signer, SigningKey};
 use sorafs_manifest::{
@@ -10,10 +8,8 @@ use sorafs_manifest::{
     PathDiversityPolicy, ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
     QosHints, RendezvousTopic, SignatureAlgorithm, StakePointer,
 };
-
 const ISSUED_AT: u64 = 1_700_000_000;
 const TTL_SECS: u64 = 3_600;
-
 #[test]
 fn dht_gossip_propagates_valid_adverts() {
     let signing_key = SigningKey::from_bytes(&[7u8; 32]);
@@ -41,7 +37,6 @@ fn dht_gossip_propagates_valid_adverts() {
         ],
         false,
     );
-
     let mut mesh = TestMesh::with_edges(
         vec![
             TestNode::new(
@@ -68,10 +63,8 @@ fn dht_gossip_propagates_valid_adverts() {
         ],
         &[("alpha", "beta"), ("beta", "gamma")],
     );
-
     mesh.publish("alpha", advert.clone(), ISSUED_AT + 30)
         .expect("propagation succeeds");
-
     for id in ["alpha", "beta", "gamma"] {
         let node = mesh.node(id);
         assert_eq!(
@@ -90,7 +83,6 @@ fn dht_gossip_propagates_valid_adverts() {
         );
     }
 }
-
 #[test]
 fn invalid_signature_is_rejected_and_not_gossiped() {
     let signing_key = SigningKey::from_bytes(&[8u8; 32]);
@@ -105,7 +97,6 @@ fn invalid_signature_is_rejected_and_not_gossiped() {
         false,
     );
     advert.signature.signature[0] ^= 0xFF;
-
     let mut mesh = TestMesh::with_edges(
         vec![
             TestNode::new("alpha", &[CapabilityType::ToriiGateway]),
@@ -113,7 +104,6 @@ fn invalid_signature_is_rejected_and_not_gossiped() {
         ],
         &[("alpha", "beta")],
     );
-
     let result = mesh.publish("alpha", advert.clone(), ISSUED_AT + 10);
     assert!(
         result
@@ -133,7 +123,6 @@ fn invalid_signature_is_rejected_and_not_gossiped() {
         "invalid adverts must not be propagated"
     );
 }
-
 #[test]
 fn mixed_capability_peers_honour_grease_policy() {
     let signing_key = SigningKey::from_bytes(&[9u8; 32]);
@@ -141,7 +130,6 @@ fn mixed_capability_peers_honour_grease_policy() {
         cap_type: CapabilityType::VendorReserved,
         payload: vec![0xAA, 0xBB],
     };
-
     let modern_advert = make_signed_advert(
         &signing_key,
         [0x55; 32],
@@ -155,7 +143,6 @@ fn mixed_capability_peers_honour_grease_policy() {
         ],
         true,
     );
-
     let mut mesh = TestMesh::with_edges(
         vec![
             TestNode::new(
@@ -170,10 +157,8 @@ fn mixed_capability_peers_honour_grease_policy() {
         ],
         &[("modern", "relay"), ("relay", "strict")],
     );
-
     mesh.publish("modern", modern_advert.clone(), ISSUED_AT + 90)
         .expect("GREASE-allowed advert should propagate");
-
     let strict_caps = mesh
         .node("strict")
         .capabilities_for(&modern_advert.body.provider_id)
@@ -187,7 +172,6 @@ fn mixed_capability_peers_honour_grease_policy() {
         mesh.node("strict").rejection_reasons().is_empty(),
         "GREASE-enabled advert should not record rejections"
     );
-
     let strict_advert = make_signed_advert(
         &signing_key,
         [0x77; 32],
@@ -201,7 +185,6 @@ fn mixed_capability_peers_honour_grease_policy() {
         ],
         false,
     );
-
     let mut mesh = TestMesh::with_edges(
         vec![
             TestNode::new(
@@ -216,10 +199,8 @@ fn mixed_capability_peers_honour_grease_policy() {
         ],
         &[("modern", "relay"), ("relay", "strict")],
     );
-
     mesh.publish("modern", strict_advert.clone(), ISSUED_AT + 120)
         .expect("origin accepts advert it can verify");
-
     assert!(
         mesh.node("strict")
             .capabilities_for(&strict_advert.body.provider_id)
@@ -238,7 +219,6 @@ fn mixed_capability_peers_honour_grease_policy() {
         "intermediate peers with knowledge retain the advert"
     );
 }
-
 #[test]
 fn stale_advert_is_rejected() {
     let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
@@ -252,7 +232,6 @@ fn stale_advert_is_rejected() {
         }],
         false,
     );
-
     let mut mesh = TestMesh::with_edges(
         vec![TestNode::new(
             "alpha",
@@ -263,7 +242,6 @@ fn stale_advert_is_rejected() {
         )],
         &[],
     );
-
     let expired_at = advert.expires_at.saturating_add(1);
     let err = mesh
         .publish("alpha", advert.clone(), expired_at)
@@ -278,7 +256,6 @@ fn stale_advert_is_rejected() {
         "stale advert must not be retained locally"
     );
 }
-
 #[test]
 fn duplicate_advert_is_ignored_without_recounting() {
     let signing_key = SigningKey::from_bytes(&[0xBC; 32]);
@@ -292,7 +269,6 @@ fn duplicate_advert_is_ignored_without_recounting() {
         }],
         false,
     );
-
     let mut mesh = TestMesh::with_edges(
         vec![
             TestNode::new("alpha", &[CapabilityType::ToriiGateway]),
@@ -300,7 +276,6 @@ fn duplicate_advert_is_ignored_without_recounting() {
         ],
         &[("alpha", "beta")],
     );
-
     mesh.publish("alpha", advert.clone(), ISSUED_AT + 5)
         .expect("initial gossip succeeds");
     assert_eq!(
@@ -308,7 +283,6 @@ fn duplicate_advert_is_ignored_without_recounting() {
         1,
         "neighbor must store first copy"
     );
-
     mesh.publish("alpha", advert.clone(), ISSUED_AT + 6)
         .expect("duplicate gossip treated as no-op");
     assert_eq!(
@@ -322,7 +296,6 @@ fn duplicate_advert_is_ignored_without_recounting() {
         "neighbor store count remains unchanged after duplicate gossip"
     );
 }
-
 #[test]
 fn invalid_path_policy_is_rejected() {
     let signing_key = SigningKey::from_bytes(&[0xCD; 32]);
@@ -336,14 +309,11 @@ fn invalid_path_policy_is_rejected() {
         }],
         false,
     );
-
     advert.body.path_policy.min_guard_weight = 0;
-
     let mut mesh = TestMesh::with_edges(
         vec![TestNode::new("alpha", &[CapabilityType::ToriiGateway])],
         &[],
     );
-
     let err = mesh
         .publish("alpha", advert, ISSUED_AT + 10)
         .expect_err("invalid path policy must be rejected");
@@ -357,7 +327,6 @@ fn invalid_path_policy_is_rejected() {
         "invalid adverts must not be persisted"
     );
 }
-
 #[allow(clippy::assertions_on_constants)]
 fn make_signed_advert(
     signing_key: &SigningKey,
@@ -370,7 +339,6 @@ fn make_signed_advert(
         TTL_SECS <= MAX_ADVERT_TTL_SECS,
         "test TTL must respect advert bounds"
     );
-
     let body = ProviderAdvertBodyV1 {
         provider_id,
         profile_id: "sorafs.sf1@1.0.0".to_owned(),
@@ -409,7 +377,6 @@ fn make_signed_advert(
     };
     body.validate()
         .expect("test vectors must build valid advert bodies");
-
     let mut advert = ProviderAdvertV1 {
         version: PROVIDER_ADVERT_VERSION_V1,
         issued_at: ISSUED_AT,
@@ -431,12 +398,10 @@ fn make_signed_advert(
     advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
     advert
 }
-
 struct TestMesh {
     nodes: HashMap<&'static str, TestNode>,
     adjacency: HashMap<&'static str, Vec<&'static str>>,
 }
-
 impl TestMesh {
     fn with_edges(nodes: Vec<TestNode>, edges: &[(&'static str, &'static str)]) -> Self {
         let mut adjacency: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
@@ -444,19 +409,16 @@ impl TestMesh {
             adjacency.entry(a).or_default().push(b);
             adjacency.entry(b).or_default().push(a);
         }
-
         let mut node_map = HashMap::new();
         for node in nodes {
             adjacency.entry(node.id).or_default();
             node_map.insert(node.id, node);
         }
-
         Self {
             nodes: node_map,
             adjacency,
         }
     }
-
     fn publish(
         &mut self,
         origin: &'static str,
@@ -471,10 +433,8 @@ impl TestMesh {
                 return Err(format!("origin {origin} rejected advert: {reason}"));
             }
         }
-
         let mut visited: HashSet<&'static str> = HashSet::new();
         visited.insert(origin);
-
         while let Some((current, advert)) = queue.pop_front() {
             if let Some(neighbors) = self.adjacency.get(current).cloned() {
                 for neighbor in neighbors {
@@ -491,27 +451,22 @@ impl TestMesh {
                 }
             }
         }
-
         Ok(())
     }
-
     fn node(&self, id: &'static str) -> &TestNode {
         self.nodes.get(id).expect("node registered in mesh")
     }
-
     fn node_mut(&mut self, id: &'static str) -> Result<&mut TestNode, String> {
         self.nodes
             .get_mut(id)
             .ok_or_else(|| format!("node {id} not registered"))
     }
 }
-
 #[derive(Clone)]
 struct AdvertRecord {
     provider_id: [u8; 32],
     known_capabilities: Vec<CapabilityType>,
 }
-
 struct TestNode {
     id: &'static str,
     known_capabilities: Vec<CapabilityType>,
@@ -519,7 +474,6 @@ struct TestNode {
     seen: HashSet<[u8; 32]>,
     rejections: Vec<String>,
 }
-
 impl TestNode {
     fn new(id: &'static str, known_capabilities: &[CapabilityType]) -> Self {
         Self {
@@ -530,28 +484,23 @@ impl TestNode {
             rejections: Vec::new(),
         }
     }
-
     fn stored_count(&self) -> usize {
         self.adverts.len()
     }
-
     fn capabilities_for(&self, provider_id: &[u8; 32]) -> Option<Vec<CapabilityType>> {
         self.adverts
             .iter()
             .find(|record| &record.provider_id == provider_id)
             .map(|record| record.known_capabilities.clone())
     }
-
     fn rejection_reasons(&self) -> &[String] {
         &self.rejections
     }
-
     fn accept(&mut self, advert: &ProviderAdvertV1, now: u64) -> Result<Acceptance, String> {
         let fingerprint = advert_fingerprint(advert)?;
         if !self.seen.insert(fingerprint) {
             return Ok(Acceptance::AlreadyKnown);
         }
-
         advert
             .validate_with_body(now)
             .map_err(|err| format!("validation failed: {err}"))?;
@@ -559,7 +508,6 @@ impl TestNode {
         if !advert.signature_strict {
             return Err("provider advert disabled mandatory signature verification".to_owned());
         }
-
         let mut known_caps = Vec::new();
         let mut unknown_caps = Vec::new();
         for capability in &advert.body.capabilities {
@@ -569,7 +517,6 @@ impl TestNode {
                 unknown_caps.push(capability.cap_type);
             }
         }
-
         if !unknown_caps.is_empty() && !advert.allow_unknown_capabilities {
             let message = format!(
                 "unknown capabilities {:?} rejected on {}",
@@ -578,27 +525,22 @@ impl TestNode {
             self.rejections.push(message.clone());
             return Ok(Acceptance::Rejected(message));
         }
-
         self.adverts.push(AdvertRecord {
             provider_id: advert.body.provider_id,
             known_capabilities: known_caps,
         });
-
         Ok(Acceptance::Stored)
     }
 }
-
 enum Acceptance {
     Stored,
     AlreadyKnown,
     Rejected(String),
 }
-
 fn advert_fingerprint(advert: &ProviderAdvertV1) -> Result<[u8; 32], String> {
     let bytes = norito::to_bytes(advert).map_err(|err| format!("encode advert: {err}"))?;
     Ok(blake3_hash(&bytes).into())
 }
-
 fn verify_signature(advert: &ProviderAdvertV1) -> Result<(), String> {
     advert.verify_signature().map_err(|err| err.to_string())
 }

@@ -1,10 +1,7 @@
 //! Dedicated instructions for real-world asset lots.
-
 use iroha_primitives::numeric::Quantity;
-
 use super::*;
 use crate::rwa::{NewRwa, Rwa, RwaControlPolicy, RwaId, RwaParentRef};
-
 isi! {
     /// Issue a new canonical RWA lot.
     pub struct RegisterRwa {
@@ -12,7 +9,6 @@ isi! {
         pub rwa: NewRwa,
     }
 }
-
 isi! {
     /// Transfer quantity from an existing lot into a destination account.
     pub struct TransferRwa {
@@ -26,7 +22,6 @@ isi! {
         pub destination: AccountId,
     }
 }
-
 isi! {
     /// Create a derived lot by merging one or more parent lots.
     pub struct MergeRwas {
@@ -40,7 +35,6 @@ isi! {
         pub metadata: Metadata,
     }
 }
-
 isi! {
     /// Redeem a quantity from an existing lot.
     pub struct RedeemRwa {
@@ -50,7 +44,6 @@ isi! {
         pub quantity: Quantity,
     }
 }
-
 isi! {
     /// Freeze an existing lot.
     pub struct FreezeRwa {
@@ -58,7 +51,6 @@ isi! {
         pub rwa: RwaId,
     }
 }
-
 isi! {
     /// Unfreeze an existing lot.
     pub struct UnfreezeRwa {
@@ -66,7 +58,6 @@ isi! {
         pub rwa: RwaId,
     }
 }
-
 isi! {
     /// Reserve a quantity on an existing lot.
     pub struct HoldRwa {
@@ -76,7 +67,6 @@ isi! {
         pub quantity: Quantity,
     }
 }
-
 isi! {
     /// Release a reserved quantity on an existing lot.
     pub struct ReleaseRwa {
@@ -86,7 +76,6 @@ isi! {
         pub quantity: Quantity,
     }
 }
-
 isi! {
     /// Perform a controller-driven transfer from an existing lot.
     pub struct ForceTransferRwa {
@@ -98,7 +87,6 @@ isi! {
         pub destination: AccountId,
     }
 }
-
 isi! {
     /// Replace the control policy on an existing lot.
     pub struct SetRwaControls {
@@ -108,13 +96,11 @@ isi! {
         pub controls: RwaControlPolicy,
     }
 }
-
 impl core::fmt::Display for RegisterRwa {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "REGISTER_RWA `{}`", self.rwa.primary_reference)
     }
 }
-
 impl core::fmt::Display for TransferRwa {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
@@ -124,43 +110,36 @@ impl core::fmt::Display for TransferRwa {
         )
     }
 }
-
 impl core::fmt::Display for MergeRwas {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "MERGE_RWAS {}", self.parents.len())
     }
 }
-
 impl core::fmt::Display for RedeemRwa {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "REDEEM_RWA `{}` {}", self.rwa, self.quantity)
     }
 }
-
 impl core::fmt::Display for FreezeRwa {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "FREEZE_RWA `{}`", self.rwa)
     }
 }
-
 impl core::fmt::Display for UnfreezeRwa {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "UNFREEZE_RWA `{}`", self.rwa)
     }
 }
-
 impl core::fmt::Display for HoldRwa {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "HOLD_RWA `{}` {}", self.rwa, self.quantity)
     }
 }
-
 impl core::fmt::Display for ReleaseRwa {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "RELEASE_RWA `{}` {}", self.rwa, self.quantity)
     }
 }
-
 impl core::fmt::Display for ForceTransferRwa {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
@@ -170,63 +149,51 @@ impl core::fmt::Display for ForceTransferRwa {
         )
     }
 }
-
 impl core::fmt::Display for SetRwaControls {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "SET_RWA_CONTROLS `{}`", self.rwa)
     }
 }
-
 impl RegisterRwa {
     /// Stable wire identifier for RWA instruction grouping.
     pub const WIRE_ID: &'static str = "iroha.rwa.register";
 }
-
 impl TransferRwa {
     /// Stable wire identifier for lot transfers.
     pub const WIRE_ID: &'static str = "iroha.rwa.transfer";
 }
-
 impl MergeRwas {
     /// Stable wire identifier for lot merges.
     pub const WIRE_ID: &'static str = "iroha.rwa.merge";
 }
-
 impl RedeemRwa {
     /// Stable wire identifier for lot redemption.
     pub const WIRE_ID: &'static str = "iroha.rwa.redeem";
 }
-
 impl FreezeRwa {
     /// Stable wire identifier for lot freezing.
     pub const WIRE_ID: &'static str = "iroha.rwa.freeze";
 }
-
 impl UnfreezeRwa {
     /// Stable wire identifier for lot unfreezing.
     pub const WIRE_ID: &'static str = "iroha.rwa.unfreeze";
 }
-
 impl HoldRwa {
     /// Stable wire identifier for lot holds.
     pub const WIRE_ID: &'static str = "iroha.rwa.hold";
 }
-
 impl ReleaseRwa {
     /// Stable wire identifier for releasing holds.
     pub const WIRE_ID: &'static str = "iroha.rwa.release";
 }
-
 impl ForceTransferRwa {
     /// Stable wire identifier for controller-driven transfers.
     pub const WIRE_ID: &'static str = "iroha.rwa.force_transfer";
 }
-
 impl SetRwaControls {
     /// Stable wire identifier for control-policy replacement.
     pub const WIRE_ID: &'static str = "iroha.rwa.set_controls";
 }
-
 impl crate::seal::Instruction for RegisterRwa {}
 impl crate::seal::Instruction for TransferRwa {}
 impl crate::seal::Instruction for MergeRwas {}
@@ -239,7 +206,6 @@ impl crate::seal::Instruction for ForceTransferRwa {}
 impl crate::seal::Instruction for SetRwaControls {}
 impl crate::seal::Instruction for SetKeyValue<Rwa> {}
 impl crate::seal::Instruction for RemoveKeyValue<Rwa> {}
-
 isi_box! {
     /// Grouping enum for RWA-related instructions.
     pub enum RwaInstructionBox {
@@ -269,12 +235,10 @@ isi_box! {
         RemoveKeyValue(RemoveKeyValue<Rwa>),
     }
 }
-
 impl RwaInstructionBox {
     /// Stable wire identifier for the grouped RWA instruction family.
     pub const WIRE_ID: &'static str = "iroha.rwa";
 }
-
 impl_into_box! {
     RegisterRwa |
     TransferRwa |
@@ -290,13 +254,10 @@ impl_into_box! {
     RemoveKeyValue<Rwa>
 => RwaInstructionBox
 }
-
 impl crate::seal::Instruction for RwaInstructionBox {}
-
 fn rwa_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_rwa_decode_from_slice {
     ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -305,7 +266,6 @@ macro_rules! impl_rwa_decode_from_slice {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -322,53 +282,42 @@ macro_rules! impl_rwa_decode_from_slice {
         }
     };
 }
-
 impl_rwa_decode_from_slice!(RegisterRwa { rwa: NewRwa });
-
 impl_rwa_decode_from_slice!(TransferRwa {
     source: AccountId,
     rwa: RwaId,
     quantity: Quantity,
     destination: AccountId,
 });
-
 impl_rwa_decode_from_slice!(MergeRwas {
     parents: Vec<RwaParentRef>,
     primary_reference: String,
     status: Option<Name>,
     metadata: Metadata,
 });
-
 impl_rwa_decode_from_slice!(RedeemRwa {
     rwa: RwaId,
     quantity: Quantity,
 });
-
 impl_rwa_decode_from_slice!(FreezeRwa { rwa: RwaId });
-
 impl_rwa_decode_from_slice!(UnfreezeRwa { rwa: RwaId });
-
 impl_rwa_decode_from_slice!(HoldRwa {
     rwa: RwaId,
     quantity: Quantity,
 });
-
 impl_rwa_decode_from_slice!(ReleaseRwa {
     rwa: RwaId,
     quantity: Quantity,
 });
-
 impl_rwa_decode_from_slice!(ForceTransferRwa {
     rwa: RwaId,
     quantity: Quantity,
     destination: AccountId,
 });
-
 impl_rwa_decode_from_slice!(SetRwaControls {
     rwa: RwaId,
     controls: RwaControlPolicy,
 });
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RwaInstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = rwa_decode_flags();
@@ -444,7 +393,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RwaInstructionBox {
         Ok((value, offset))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -454,9 +402,7 @@ mod tests {
     };
     use norito::codec::Encode;
     use norito::core::DecodeFromSlice;
-
     use super::*;
-
     #[derive(Encode)]
     struct ForgedTransferRwa {
         source: AccountId,
@@ -464,21 +410,17 @@ mod tests {
         quantity: Numeric,
         destination: AccountId,
     }
-
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked RWA fixture account keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn domain() -> DomainId {
         DomainId::try_new("wonderland", "universal").expect("domain")
     }
-
     fn rwa_id(seed: &'static str) -> RwaId {
         RwaId::generated(domain(), Hash::new(seed))
     }
-
     fn controls() -> RwaControlPolicy {
         RwaControlPolicy {
             controller_accounts: vec![account(0xCA)],
@@ -489,11 +431,9 @@ mod tests {
             redeem_enabled: true,
         }
     }
-
     fn parent_ref() -> RwaParentRef {
         RwaParentRef::new(rwa_id("rwa-parent"), Quantity::from(25_u64))
     }
-
     fn new_rwa() -> NewRwa {
         NewRwa::new(
             domain(),
@@ -506,11 +446,9 @@ mod tests {
             controls(),
         )
     }
-
     fn key() -> Name {
         "quality".parse().expect("metadata key")
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -521,7 +459,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &str,
@@ -541,14 +478,12 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn rwa_decode_from_slice_roundtrips() {
         let source = account(0xA1);
         let destination = account(0xB2);
         let rwa = rwa_id("rwa-slice");
-
         assert_slice_roundtrip(RegisterRwa { rwa: new_rwa() });
         assert_slice_roundtrip(TransferRwa {
             source: source.clone(),
@@ -595,12 +530,10 @@ mod tests {
             key(),
         )));
     }
-
     #[test]
     fn rwa_instruction_box_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RwaInstructionBox::Register(RegisterRwa { rwa: new_rwa() }));
     }
-
     #[test]
     fn negative_numeric_payload_cannot_decode_as_rwa_instruction_quantity() {
         let forged = ForgedTransferRwa {
@@ -609,13 +542,11 @@ mod tests {
             quantity: Numeric::new(-1_i32, 0),
             destination: account(0xB2),
         };
-
         assert!(
             TransferRwa::decode_from_slice(&forged.encode()).is_err(),
             "a negative signed payload must not decode as an RWA transfer"
         );
     }
-
     #[test]
     fn rwa_instruction_box_registry_decodes_type_name_and_stable_id() {
         let registry = crate::isi::registry::default();

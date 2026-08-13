@@ -1,7 +1,6 @@
 //! Taikai ingest helpers and anchor integration for DA.
 
 #![allow(clippy::redundant_pub_crate)]
-
 use std::{
     borrow::Cow,
     fs::{self, OpenOptions},
@@ -10,7 +9,6 @@ use std::{
     str::FromStr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
@@ -40,13 +38,11 @@ use norito::{
 use reqwest::Client;
 use sorafs_car::ChunkStore;
 use sorafs_manifest::{ProviderAdmissionCouncilPolicy, canonical_manifest_root_cid};
-
 use super::{ingest::ManifestArtifacts, storage_class_label};
 use crate::{
     routing::MaybeTelemetry,
     sorafs::{AliasCachePolicy, AliasProofEvaluation},
 };
-
 pub(crate) const TAIKAI_SPOOL_SUBDIR: &str = "taikai";
 pub(crate) const META_TAIKAI_EVENT_ID: &str = "taikai.event_id";
 pub(crate) const META_TAIKAI_STREAM_ID: &str = "taikai.stream_id";
@@ -105,7 +101,6 @@ pub(crate) const TAIKAI_ANCHOR_LINEAGE_MAX_BYTES: usize = 64 * 1024;
 /// This exceeds the base64 expansion of both capped 4 MiB manifests plus the
 /// capped envelope, indexes, lineage, and JSON field overhead.
 pub(crate) const TAIKAI_ANCHOR_REQUEST_MAX_BYTES: usize = 16 * 1024 * 1024;
-
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) mod taikai_ingest {
     use std::{
@@ -116,22 +111,16 @@ pub(crate) mod taikai_ingest {
         str::FromStr,
         sync::atomic::{AtomicU64, Ordering},
     };
-
     use sorafs_car::{CarBuildPlan, CarWriter};
-
     use super::*;
-
     static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
     pub(crate) const STREAM_LABEL_FALLBACK: &str = "<unknown>";
-
     pub(crate) struct EnvelopeArtifacts {
         pub envelope_bytes: Vec<u8>,
         pub indexes_json: Vec<u8>,
         pub telemetry: TaikaiTelemetrySample,
         pub car_digest: BlobDigest,
     }
-
     #[derive(Clone)]
     pub(crate) struct TaikaiTelemetrySample {
         pub event_id: String,
@@ -142,9 +131,7 @@ pub(crate) mod taikai_ingest {
         pub ingest_latency_ms: Option<u32>,
         pub live_edge_drift_ms: Option<i32>,
     }
-
     const TAIKAI_TRM_LINEAGE_VERSION: u64 = 1;
-
     #[derive(Clone, Debug)]
     struct TrmLineageRecord {
         alias_namespace: String,
@@ -154,7 +141,6 @@ pub(crate) mod taikai_ingest {
         window_end_sequence: u64,
         updated_unix: u64,
     }
-
     pub(crate) struct TrmLineageGuard {
         manifest_store_dir: PathBuf,
         base_dir: PathBuf,
@@ -165,7 +151,6 @@ pub(crate) mod taikai_ingest {
         record_path: PathBuf,
         previous: Option<TrmLineageRecord>,
     }
-
     impl TrmLineageGuard {
         pub fn new(
             spool_dir: &Path,
@@ -210,7 +195,6 @@ pub(crate) mod taikai_ingest {
                 previous,
             }))
         }
-
         pub fn validate(
             &self,
             manifest: &TaikaiRoutingManifestV1,
@@ -243,7 +227,6 @@ pub(crate) mod taikai_ingest {
             }
             Ok(())
         }
-
         pub fn persist_lineage_hint(
             &self,
             lane_id: LaneId,
@@ -282,7 +265,6 @@ pub(crate) mod taikai_ingest {
             })?;
             Ok(())
         }
-
         pub fn commit(
             &mut self,
             window: TaikaiSegmentWindow,
@@ -311,11 +293,9 @@ pub(crate) mod taikai_ingest {
             Ok(())
         }
     }
-
     struct TrmAliasLock {
         path: PathBuf,
     }
-
     impl TrmAliasLock {
         fn acquire(base_dir: &Path, slug: &str) -> Result<Self, (StatusCode, String)> {
             let path = base_dir.join(format!(
@@ -377,7 +357,6 @@ pub(crate) mod taikai_ingest {
             ))
         }
     }
-
     fn remove_stale_lock(path: &Path, slug: &str) -> Result<(), (StatusCode, String)> {
         match fs::remove_file(path) {
             Ok(()) => Ok(()),
@@ -388,7 +367,6 @@ pub(crate) mod taikai_ingest {
             ))),
         }
     }
-
     impl Drop for TrmAliasLock {
         fn drop(&mut self) {
             if let Err(err) = fs::remove_file(&self.path) {
@@ -402,7 +380,6 @@ pub(crate) mod taikai_ingest {
             }
         }
     }
-
     fn alias_slug(namespace: &str, name: &str) -> String {
         let mut hasher = Blake3Hasher::new();
         hasher.update(namespace.as_bytes());
@@ -416,7 +393,6 @@ pub(crate) mod taikai_ingest {
             sanitize_alias_component(name)
         )
     }
-
     fn sanitize_alias_component(component: &str) -> String {
         component
             .chars()
@@ -428,13 +404,11 @@ pub(crate) mod taikai_ingest {
             })
             .collect()
     }
-
     fn lineage_record_path(base_dir: &Path, slug: &str) -> PathBuf {
         base_dir.join(format!(
             "{TAIKAI_TRM_LINEAGE_PREFIX}{slug}{TAIKAI_TRM_LINEAGE_SUFFIX}"
         ))
     }
-
     fn lock_is_stale(path: &Path) -> io::Result<bool> {
         match fs::symlink_metadata(path) {
             Ok(metadata) => {
@@ -462,14 +436,12 @@ pub(crate) mod taikai_ingest {
             }
         }
     }
-
     fn current_unix_seconds() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
     }
-
     pub(super) fn ensure_taikai_artifact_size(
         label: &str,
         actual: usize,
@@ -483,7 +455,6 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
-
     fn read_regular_taikai_file_bounded(
         path: &Path,
         label: &str,
@@ -507,7 +478,6 @@ pub(crate) mod taikai_ingest {
                 ),
             ));
         }
-
         let capacity = usize::try_from(metadata.len()).unwrap_or(0);
         let mut bytes = Vec::with_capacity(capacity);
         let mut file = fs::File::open(path)?;
@@ -518,7 +488,6 @@ pub(crate) mod taikai_ingest {
         revalidate_regular_taikai_read(path, metadata.len(), bytes.len(), label)?;
         Ok(bytes)
     }
-
     fn revalidate_regular_taikai_read(
         path: &Path,
         original_len: u64,
@@ -545,17 +514,14 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
-
     fn create_taikai_spool_dir_no_follow(base_dir: &Path) -> io::Result<()> {
         fs::create_dir_all(base_dir)?;
         validate_taikai_spool_dir_no_follow(base_dir)
     }
-
     fn validate_taikai_spool_dir_no_follow(base_dir: &Path) -> io::Result<()> {
         let metadata = fs::symlink_metadata(base_dir)?;
         validate_taikai_spool_dir_metadata(base_dir, &metadata)
     }
-
     fn validate_taikai_spool_dir_metadata(
         base_dir: &Path,
         metadata: &fs::Metadata,
@@ -571,7 +537,6 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
-
     fn read_lineage_record(path: &Path) -> io::Result<Option<TrmLineageRecord>> {
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
@@ -679,7 +644,6 @@ pub(crate) mod taikai_ingest {
             updated_unix,
         }))
     }
-
     fn write_lineage_record(path: &Path, record: &TrmLineageRecord) -> io::Result<()> {
         let mut map = Map::new();
         map.insert("version".into(), Value::from(TAIKAI_TRM_LINEAGE_VERSION));
@@ -726,7 +690,6 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
-
     fn validate_lineage_alias(
         record: &TrmLineageRecord,
         expected_namespace: &str,
@@ -745,7 +708,6 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
-
     fn validate_manifest_digest_hex(digest: &str) -> io::Result<()> {
         if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(invalid_lineage_record(
@@ -760,16 +722,13 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
-
     fn invalid_lineage_record(message: impl Into<String>) -> io::Error {
         io::Error::new(ErrorKind::InvalidData, message.into())
     }
-
     fn sync_dir(path: &Path) -> io::Result<()> {
         let file = fs::File::open(path)?;
         file.sync_all()
     }
-
     fn build_lineage_hint_bytes(
         alias_namespace: &str,
         alias_name: &str,
@@ -809,7 +768,6 @@ pub(crate) mod taikai_ingest {
             .map_err(|err| io::Error::new(ErrorKind::Other, err.to_string()))?;
         Ok(rendered.into_bytes())
     }
-
     pub(crate) fn build_envelope(
         _request: &DaIngestRequest,
         manifest: &ManifestArtifacts,
@@ -818,11 +776,9 @@ pub(crate) mod taikai_ingest {
         chunking_observer: Option<&dyn Fn(Duration)>,
     ) -> Result<EnvelopeArtifacts, (StatusCode, String)> {
         let metadata = &manifest.manifest.metadata;
-
         let event_id = TaikaiEventId::new(parse_name(metadata, META_TAIKAI_EVENT_ID)?);
         let stream_id = TaikaiStreamId::new(parse_name(metadata, META_TAIKAI_STREAM_ID)?);
         let rendition_id = TaikaiRenditionId::new(parse_name(metadata, META_TAIKAI_RENDITION_ID)?);
-
         let track_kind = TaikaiTrackKind::from_str(require_utf8(metadata, META_TAIKAI_TRACK_KIND)?)
             .map_err(|err| parse_error(META_TAIKAI_TRACK_KIND, err))?;
         let codec = TaikaiCodec::from_str(require_utf8(metadata, META_TAIKAI_TRACK_CODEC)?)
@@ -831,7 +787,6 @@ pub(crate) mod taikai_ingest {
             require_utf8(metadata, META_TAIKAI_TRACK_BITRATE)?,
             META_TAIKAI_TRACK_BITRATE,
         )?;
-
         let track = match track_kind {
             TaikaiTrackKind::Video => {
                 let resolution_str = require_utf8(metadata, META_TAIKAI_TRACK_RESOLUTION)?;
@@ -868,7 +823,6 @@ pub(crate) mod taikai_ingest {
             }
             TaikaiTrackKind::Data => TaikaiTrackMetadata::data(codec, bitrate),
         };
-
         if matches!(track.kind, TaikaiTrackKind::Video) && track.resolution.is_none() {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -877,7 +831,6 @@ pub(crate) mod taikai_ingest {
                 ),
             ));
         }
-
         if matches!(track.kind, TaikaiTrackKind::Audio) && track.audio_layout.is_none() {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -886,7 +839,6 @@ pub(crate) mod taikai_ingest {
                 ),
             ));
         }
-
         let segment_sequence = parse_u64(
             require_utf8(metadata, META_TAIKAI_SEGMENT_SEQUENCE)?,
             META_TAIKAI_SEGMENT_SEQUENCE,
@@ -903,13 +855,11 @@ pub(crate) mod taikai_ingest {
             require_utf8(metadata, META_TAIKAI_WALLCLOCK_MS)?,
             META_TAIKAI_WALLCLOCK_MS,
         )?;
-
         let chunk_count: u32 = chunk_store
             .chunks()
             .len()
             .try_into()
             .map_err(|_| internal_error("chunk count exceeds supported range".into()))?;
-
         let chunking_started = Instant::now();
         let plan = CarBuildPlan::single_file(canonical_payload)
             .map_err(|err| internal_error(format!("failed to derive CAR plan: {err}")))?;
@@ -921,14 +871,12 @@ pub(crate) mod taikai_ingest {
         if let Some(observer) = chunking_observer {
             observer(chunking_started.elapsed());
         }
-
         let car_digest = BlobDigest::from_hash(stats.car_archive_digest);
         let car_pointer = TaikaiCarPointer::new(
             format!("b{}", encode_base32_lower(&stats.car_cid)),
             car_digest,
             stats.car_size,
         );
-
         let ingest_pointer = TaikaiIngestPointer::new(
             manifest.manifest_hash,
             manifest.storage_ticket,
@@ -936,11 +884,9 @@ pub(crate) mod taikai_ingest {
             chunk_count,
             car_pointer,
         );
-
         let event_label = event_id.as_name().as_ref().to_owned();
         let stream_label = stream_id.as_name().as_ref().to_owned();
         let rendition_label = rendition_id.as_name().as_ref().to_owned();
-
         let mut envelope = TaikaiSegmentEnvelopeV1::new(
             event_id,
             stream_id,
@@ -952,7 +898,6 @@ pub(crate) mod taikai_ingest {
             wallclock_unix_ms,
             ingest_pointer,
         );
-
         if let Some(latency_str) = optional_utf8(metadata, META_TAIKAI_INGEST_LATENCY_MS)? {
             let latency = parse_u32(latency_str, META_TAIKAI_INGEST_LATENCY_MS)?;
             envelope.instrumentation.encoder_to_ingest_latency_ms = Some(latency);
@@ -971,13 +916,11 @@ pub(crate) mod taikai_ingest {
                 envelope.instrumentation.ingest_node_id = Some(node_id.trim().to_owned());
             }
         }
-
         let indexes = envelope.indexes();
         let envelope_bytes = envelope.encode();
         let indexes_json = norito::json::to_json_pretty(&indexes)
             .map_err(|err| internal_error(format!("failed to render Taikai indexes: {err}")))?
             .into_bytes();
-
         let telemetry = TaikaiTelemetrySample {
             event_id: event_label,
             stream_id: stream_label,
@@ -987,7 +930,6 @@ pub(crate) mod taikai_ingest {
             ingest_latency_ms: envelope.instrumentation.encoder_to_ingest_latency_ms,
             live_edge_drift_ms,
         };
-
         Ok(EnvelopeArtifacts {
             envelope_bytes,
             indexes_json,
@@ -995,7 +937,6 @@ pub(crate) mod taikai_ingest {
             car_digest,
         })
     }
-
     pub(crate) fn persist_envelope(
         spool_dir: &Path,
         lane_id: LaneId,
@@ -1018,7 +959,6 @@ pub(crate) mod taikai_ingest {
             TAIKAI_ANCHOR_ENVELOPE_MAX_BYTES,
         )
     }
-
     pub(crate) fn persist_indexes(
         spool_dir: &Path,
         lane_id: LaneId,
@@ -1041,7 +981,6 @@ pub(crate) mod taikai_ingest {
             TAIKAI_ANCHOR_INDEXES_MAX_BYTES,
         )
     }
-
     pub(crate) fn persist_ssm(
         spool_dir: &Path,
         lane_id: LaneId,
@@ -1064,7 +1003,6 @@ pub(crate) mod taikai_ingest {
             TAIKAI_ANCHOR_SSM_MAX_BYTES,
         )
     }
-
     pub(crate) fn persist_trm(
         spool_dir: &Path,
         lane_id: LaneId,
@@ -1087,7 +1025,6 @@ pub(crate) mod taikai_ingest {
             TAIKAI_ANCHOR_TRM_MAX_BYTES,
         )
     }
-
     fn install_artifact_without_overwrite(
         tmp_path: &Path,
         target_path: &Path,
@@ -1114,32 +1051,27 @@ pub(crate) mod taikai_ingest {
             }
         }
     }
-
     fn open_new_private_artifact(path: &Path) -> io::Result<fs::File> {
         let mut options = OpenOptions::new();
         options.create_new(true).write(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-
             options.mode(0o600);
         }
         options.open(path)
     }
-
     fn write_temp_artifact(tmp_path: &Path, bytes: &[u8]) -> io::Result<()> {
         let mut file = open_new_private_artifact(tmp_path)?;
         file.write_all(bytes)?;
         file.sync_all()
     }
-
     fn temp_artifact_write_error(tmp_path: &Path, err: io::Error) -> io::Error {
         if err.kind() == ErrorKind::AlreadyExists {
             return err;
         }
         remove_temp_artifact(tmp_path).err().unwrap_or(err)
     }
-
     fn allocate_artifact_temp_counter(counter: &AtomicU64) -> io::Result<u64> {
         counter
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -1152,12 +1084,10 @@ pub(crate) mod taikai_ingest {
                 )
             })
     }
-
     fn artifact_temp_suffix() -> io::Result<String> {
         let counter = allocate_artifact_temp_counter(&ARTIFACT_TEMP_COUNTER)?;
         Ok(format!("{}-{counter:016x}", std::process::id()))
     }
-
     fn sync_parent_dir(path: &Path) -> io::Result<()> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -1166,7 +1096,6 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
-
     fn remove_temp_artifact(tmp_path: &Path) -> io::Result<()> {
         match fs::remove_file(tmp_path) {
             Ok(()) => Ok(()),
@@ -1180,21 +1109,16 @@ pub(crate) mod taikai_ingest {
             )),
         }
     }
-
     #[cfg(test)]
     mod temp_cleanup_tests {
         use tempfile::tempdir;
-
         use super::*;
-
         #[test]
         fn taikai_temp_artifact_cleanup_reports_unremovable_path() {
             let dir = tempdir().expect("tempdir");
             let tmp_path = dir.path().join(".taikai.tmp");
             fs::create_dir(&tmp_path).expect("block temp cleanup");
-
             let err = remove_temp_artifact(&tmp_path).expect_err("directory cleanup should fail");
-
             assert!(
                 err.to_string()
                     .contains("failed to remove Taikai temp artifact"),
@@ -1205,22 +1129,18 @@ pub(crate) mod taikai_ingest {
                 "failed cleanup should leave temp path visible for operator repair"
             );
         }
-
         #[test]
         fn taikai_temp_artifact_write_rejects_existing_path_without_truncating() {
             let dir = tempdir().expect("tempdir");
             let tmp_path = dir.path().join(".taikai.tmp");
             fs::write(&tmp_path, b"existing").expect("seed temp artifact");
-
             let err = write_temp_artifact(&tmp_path, b"replacement")
                 .expect_err("existing temp artifact should not be overwritten");
-
             assert_eq!(err.kind(), ErrorKind::AlreadyExists);
             assert_eq!(
                 fs::read(&tmp_path).expect("read existing temp artifact"),
                 b"existing"
             );
-
             let err =
                 temp_artifact_write_error(&tmp_path, io::Error::from(ErrorKind::AlreadyExists));
             assert_eq!(err.kind(), ErrorKind::AlreadyExists);
@@ -1229,18 +1149,14 @@ pub(crate) mod taikai_ingest {
                 b"existing"
             );
         }
-
         #[cfg(unix)]
         #[test]
         fn taikai_temp_artifact_write_uses_owner_only_permissions() {
             use std::os::unix::fs::PermissionsExt;
-
             let dir = tempdir().expect("tempdir");
             let tmp_path = dir.path().join(".taikai.tmp");
-
             write_temp_artifact(&tmp_path, b"sensitive Taikai artifact")
                 .expect("write owner-only temp artifact");
-
             let mode = fs::metadata(&tmp_path)
                 .expect("inspect temp artifact")
                 .permissions()
@@ -1251,14 +1167,11 @@ pub(crate) mod taikai_ingest {
                 "Taikai temp artifact must not grant group or world access"
             );
         }
-
         #[test]
         fn taikai_temp_artifact_counter_rejects_exhaustion_without_wrapping() {
             let counter = AtomicU64::new(u64::MAX);
-
             let err = allocate_artifact_temp_counter(&counter)
                 .expect_err("exhausted temp counter must reject");
-
             assert_eq!(err.kind(), ErrorKind::Other);
             assert!(
                 err.to_string().contains("temp suffix counter exhausted"),
@@ -1266,14 +1179,11 @@ pub(crate) mod taikai_ingest {
             );
             assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
         }
-
         #[test]
         fn taikai_temp_artifact_counter_allocates_pre_exhaustion_suffix_once() {
             let counter = AtomicU64::new(u64::MAX - 1);
-
             let suffix = allocate_artifact_temp_counter(&counter)
                 .expect("last non-exhausted temp counter should allocate");
-
             assert_eq!(suffix, u64::MAX - 1);
             assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
             assert!(
@@ -1282,7 +1192,6 @@ pub(crate) mod taikai_ingest {
             );
             assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
         }
-
         #[test]
         fn taikai_read_revalidation_rejects_length_change() {
             let dir = tempdir().expect("tempdir");
@@ -1292,7 +1201,6 @@ pub(crate) mod taikai_ingest {
                 .expect("inspect original artifact")
                 .len();
             fs::write(&path, b"replacement-artifact").expect("replace artifact");
-
             let err = revalidate_regular_taikai_read(
                 &path,
                 original_len,
@@ -1300,19 +1208,16 @@ pub(crate) mod taikai_ingest {
                 "Taikai artifact test",
             )
             .expect_err("changed artifact length must reject");
-
             assert_eq!(err.kind(), ErrorKind::InvalidData);
             assert!(
                 err.to_string().contains("changed while reading"),
                 "unexpected error: {err}"
             );
         }
-
         #[cfg(unix)]
         #[test]
         fn taikai_read_revalidation_rejects_symlink_replacement() {
             use std::os::unix::fs::symlink;
-
             let dir = tempdir().expect("tempdir");
             let path = dir.path().join("taikai-artifact.norito");
             fs::write(&path, b"old-artifact").expect("seed artifact");
@@ -1323,7 +1228,6 @@ pub(crate) mod taikai_ingest {
             fs::write(&target, b"old-artifact").expect("write symlink target");
             fs::remove_file(&path).expect("remove original artifact");
             symlink(&target, &path).expect("replace artifact with symlink");
-
             let err = revalidate_regular_taikai_read(
                 &path,
                 original_len,
@@ -1331,7 +1235,6 @@ pub(crate) mod taikai_ingest {
                 "Taikai artifact test",
             )
             .expect_err("symlink replacement must reject");
-
             assert_eq!(err.kind(), ErrorKind::InvalidData);
             assert!(
                 err.to_string().contains("changed to a non-regular file"),
@@ -1346,18 +1249,15 @@ pub(crate) mod taikai_ingest {
             );
             assert!(target.exists(), "symlink target should not be removed");
         }
-
         #[test]
         fn taikai_install_artifact_reports_temp_cleanup_failure_after_link_error() {
             let dir = tempdir().expect("tempdir");
             let tmp_path = dir.path().join(".taikai.tmp");
             let target_path = dir.path().join("taikai-target.norito");
             fs::create_dir(&tmp_path).expect("block temp cleanup");
-
             let err =
                 install_artifact_without_overwrite(&tmp_path, &target_path, b"expected", "taikai")
                     .expect_err("directory temp artifact should fail cleanup");
-
             assert!(
                 err.to_string()
                     .contains("failed to remove Taikai temp artifact"),
@@ -1372,21 +1272,17 @@ pub(crate) mod taikai_ingest {
                 "failed hard-link install must not create the target artifact"
             );
         }
-
         #[cfg(unix)]
         #[test]
         fn taikai_existing_artifact_rejects_target_symlink() {
             use std::os::unix::fs::symlink;
-
             let dir = tempdir().expect("tempdir");
             let target = dir.path().join("artifact-target.norito");
             fs::write(&target, b"expected").expect("write symlink target");
             let path = dir.path().join("taikai-envelope-test.norito");
             symlink(&target, &path).expect("create Taikai artifact symlink");
-
             let err = existing_taikai_artifact_path_if_matching(&path, b"expected", "taikai")
                 .expect_err("symlinked existing artifact must reject");
-
             assert_eq!(err.kind(), ErrorKind::InvalidData);
             assert!(
                 fs::symlink_metadata(&path)
@@ -1397,12 +1293,10 @@ pub(crate) mod taikai_ingest {
             );
             assert!(target.exists(), "symlink target should not be removed");
         }
-
         #[cfg(unix)]
         #[test]
         fn taikai_install_artifact_rejects_existing_target_symlink() {
             use std::os::unix::fs::symlink;
-
             let dir = tempdir().expect("tempdir");
             let tmp_path = dir.path().join(".taikai.tmp");
             fs::write(&tmp_path, b"expected").expect("write temp artifact");
@@ -1410,11 +1304,9 @@ pub(crate) mod taikai_ingest {
             fs::write(&target, b"expected").expect("write symlink target");
             let target_path = dir.path().join("taikai-envelope-test.norito");
             symlink(&target, &target_path).expect("create Taikai artifact symlink");
-
             let err =
                 install_artifact_without_overwrite(&tmp_path, &target_path, b"expected", "taikai")
                     .expect_err("existing artifact symlink must reject install");
-
             assert_eq!(err.kind(), ErrorKind::InvalidData);
             assert!(
                 !tmp_path.exists(),
@@ -1429,21 +1321,17 @@ pub(crate) mod taikai_ingest {
             );
             assert!(target.exists(), "symlink target should not be removed");
         }
-
         #[cfg(unix)]
         #[test]
         fn taikai_anchor_request_capture_rejects_symlink() {
             use std::os::unix::fs::symlink;
-
             let dir = tempdir().expect("tempdir");
             let target = dir.path().join("request-target.json");
             fs::write(&target, b"expected").expect("write symlink target");
             let request_path = dir.path().join("taikai-anchor-request-test.json");
             symlink(&target, &request_path).expect("create anchor request symlink");
-
             let err = validate_existing_anchor_request_capture(&request_path, b"expected")
                 .expect_err("symlinked anchor request capture must reject");
-
             assert_eq!(err.kind(), ErrorKind::AlreadyExists);
             assert!(
                 fs::symlink_metadata(&request_path)
@@ -1455,7 +1343,6 @@ pub(crate) mod taikai_ingest {
             assert!(target.exists(), "symlink target should not be removed");
         }
     }
-
     fn existing_taikai_artifact_path_if_matching(
         target_path: &Path,
         expected: &[u8],
@@ -1475,7 +1362,6 @@ pub(crate) mod taikai_ingest {
                 ),
             ));
         }
-
         let label = format!("Taikai artifact {prefix}");
         let expected_len = u64::try_from(expected.len()).unwrap_or(u64::MAX);
         if metadata.len() != expected_len {
@@ -1500,7 +1386,6 @@ pub(crate) mod taikai_ingest {
             ))
         }
     }
-
     fn validate_existing_taikai_artifact(
         target_path: &Path,
         expected: &[u8],
@@ -1517,7 +1402,6 @@ pub(crate) mod taikai_ingest {
             )),
         }
     }
-
     #[allow(clippy::too_many_arguments)]
     fn persist_artifact(
         spool_dir: &Path,
@@ -1535,10 +1419,8 @@ pub(crate) mod taikai_ingest {
         if spool_dir.as_os_str().is_empty() {
             return Ok(None);
         }
-
         let base_dir = spool_dir.join(TAIKAI_SPOOL_SUBDIR);
         create_taikai_spool_dir_no_follow(&base_dir)?;
-
         let lane = lane_id.as_u32();
         let ticket_hex = hex::encode(storage_ticket.as_ref());
         let fingerprint_hex = hex::encode(fingerprint.as_bytes());
@@ -1592,20 +1474,16 @@ pub(crate) mod taikai_ingest {
         {
             return Ok(Some(path));
         }
-
         let tmp_name = format!(
             ".{prefix}-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.tmp-{}",
             artifact_temp_suffix()?
         );
         let tmp_path = base_dir.join(tmp_name);
-
         match write_temp_artifact(&tmp_path, bytes) {
             Ok(()) => {}
             Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
         }
-
         install_artifact_without_overwrite(&tmp_path, &target_path, bytes, prefix)?;
-
         debug!(
             path = ?target_path,
             lane = lane,
@@ -1615,31 +1493,26 @@ pub(crate) mod taikai_ingest {
             kind = prefix,
             "queued Taikai artefact for anchoring"
         );
-
         Ok(Some(target_path))
     }
-
     fn parse_u64(value: &str, key: &str) -> Result<u64, (StatusCode, String)> {
         value
             .trim()
             .parse::<u64>()
             .map_err(|err| bad_request(key, format!("invalid integer `{value}`: {err}")))
     }
-
     fn parse_u32(value: &str, key: &str) -> Result<u32, (StatusCode, String)> {
         value
             .trim()
             .parse::<u32>()
             .map_err(|err| bad_request(key, format!("invalid integer `{value}`: {err}")))
     }
-
     fn parse_i32(value: &str, key: &str) -> Result<i32, (StatusCode, String)> {
         value
             .trim()
             .parse::<i32>()
             .map_err(|err| bad_request(key, format!("invalid integer `{value}`: {err}")))
     }
-
     pub(crate) fn parse_name(
         metadata: &ExtraMetadata,
         key: &str,
@@ -1648,7 +1521,6 @@ pub(crate) mod taikai_ingest {
         Name::from_str(value.trim())
             .map_err(|err| bad_request(key, format!("invalid Name `{value}`: {err}")))
     }
-
     fn require_utf8<'a>(
         metadata: &'a ExtraMetadata,
         key: &str,
@@ -1656,7 +1528,6 @@ pub(crate) mod taikai_ingest {
         let entry = metadata_entry(metadata, key)?;
         std::str::from_utf8(&entry.value).map_err(|_| bad_request(key, "value must be valid UTF-8"))
     }
-
     fn optional_utf8<'a>(
         metadata: &'a ExtraMetadata,
         key: &str,
@@ -1669,7 +1540,6 @@ pub(crate) mod taikai_ingest {
             .map_err(|_| bad_request(key, "value must be valid UTF-8"))?;
         Ok(Some(value))
     }
-
     pub(crate) fn take_ssm_entry(
         metadata: &mut ExtraMetadata,
     ) -> Result<Option<Vec<u8>>, (StatusCode, String)> {
@@ -1691,7 +1561,6 @@ pub(crate) mod taikai_ingest {
         }
         Ok(None)
     }
-
     pub(crate) fn take_trm_entry(
         metadata: &mut ExtraMetadata,
     ) -> Result<Option<Vec<u8>>, (StatusCode, String)> {
@@ -1713,7 +1582,6 @@ pub(crate) mod taikai_ingest {
         }
         Ok(None)
     }
-
     fn metadata_entry<'a>(
         metadata: &'a ExtraMetadata,
         key: &str,
@@ -1731,7 +1599,6 @@ pub(crate) mod taikai_ingest {
         validate_metadata_entry(entry).map_err(|message| bad_request(key, message))?;
         Ok(entry)
     }
-
     fn validate_metadata_entry(entry: &MetadataEntry) -> Result<(), String> {
         if entry.visibility != MetadataVisibility::Public {
             return Err("must use public visibility".into());
@@ -1741,22 +1608,18 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
-
     pub(crate) fn bad_request(key: &str, message: impl Into<String>) -> (StatusCode, String) {
         (
             StatusCode::BAD_REQUEST,
             format!("invalid Taikai metadata `{key}`: {}", message.into()),
         )
     }
-
     fn parse_error(key: &str, err: TaikaiParseError) -> (StatusCode, String) {
         bad_request(key, err.to_string())
     }
-
     pub(crate) fn internal_error(message: String) -> (StatusCode, String) {
         (StatusCode::INTERNAL_SERVER_ERROR, message)
     }
-
     fn encode_base32_lower(data: &[u8]) -> String {
         const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
         if data.is_empty() {
@@ -1785,7 +1648,6 @@ pub(crate) mod taikai_ingest {
         }
         encoded
     }
-
     pub fn spawn_anchor_worker(
         manifest_store_dir: PathBuf,
         anchor_cfg: DaTaikaiAnchor,
@@ -1799,7 +1661,6 @@ pub(crate) mod taikai_ingest {
         } else {
             anchor_cfg.poll_interval
         };
-
         let spool_dir = manifest_store_dir.join(TAIKAI_SPOOL_SUBDIR);
         let sender = match HttpAnchorSender::new() {
             Ok(sender) => sender,
@@ -1808,16 +1669,13 @@ pub(crate) mod taikai_ingest {
                 return;
             }
         };
-
         tokio::spawn(async move {
             if let Err(err) = create_taikai_spool_dir_no_follow_async(&spool_dir).await {
                 iroha_logger::warn!(?err, ?spool_dir, "failed to prepare Taikai spool directory");
             }
-
             run_anchor_worker(spool_dir, anchor_cfg, sender, shutdown, poll_interval).await;
         });
     }
-
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_data_model::Encode;
     use tokio::{
@@ -1825,11 +1683,9 @@ pub(crate) mod taikai_ingest {
         io::AsyncReadExt as _,
         time::{MissedTickBehavior, interval},
     };
-
     struct HttpAnchorSender {
         client: Client,
     }
-
     impl HttpAnchorSender {
         fn new() -> Result<Self, reqwest::Error> {
             Ok(Self {
@@ -1837,9 +1693,7 @@ pub(crate) mod taikai_ingest {
             })
         }
     }
-
     pub(crate) type AnchorSendError = Box<dyn std::error::Error + Send + Sync + 'static>;
-
     #[async_trait]
     pub(crate) trait AnchorSender: Send + Sync {
         async fn send(
@@ -1849,7 +1703,6 @@ pub(crate) mod taikai_ingest {
             api_token: Option<&str>,
         ) -> Result<(), AnchorSendError>;
     }
-
     #[async_trait]
     impl AnchorSender for HttpAnchorSender {
         async fn send(
@@ -1869,36 +1722,30 @@ pub(crate) mod taikai_ingest {
             Ok(())
         }
     }
-
     pub(crate) struct PendingUpload {
         base_id: String,
         body: String,
         sentinel_path: PathBuf,
     }
-
     #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
     struct PendingEnvelope {
         file_name: String,
         base_id: String,
         envelope_path: PathBuf,
     }
-
     #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
     struct AnchorAckRecord {
         acknowledged_unix_secs: u64,
         base_id: String,
     }
-
     impl PendingUpload {
         pub(crate) fn base_id(&self) -> &str {
             &self.base_id
         }
-
         pub(crate) fn body(&self) -> &str {
             &self.body
         }
     }
-
     fn persist_anchor_request_capture(
         spool_dir: &Path,
         base_id: &str,
@@ -1923,14 +1770,12 @@ pub(crate) mod taikai_ingest {
         };
         let tmp_path =
             request_path.with_file_name(format!(".{name}.tmp-{}", artifact_temp_suffix()?));
-
         match write_temp_artifact(&tmp_path, body.as_bytes()) {
             Ok(()) => {}
             Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
         }
         install_anchor_request_capture(&tmp_path, &request_path, body.as_bytes())
     }
-
     fn install_anchor_request_capture(
         tmp_path: &Path,
         request_path: &Path,
@@ -1956,7 +1801,6 @@ pub(crate) mod taikai_ingest {
             }
         }
     }
-
     fn validate_existing_anchor_request_capture(
         request_path: &Path,
         expected: &[u8],
@@ -1997,7 +1841,6 @@ pub(crate) mod taikai_ingest {
             ),
         ))
     }
-
     fn persist_anchor_sentinel(path: &Path, marker: &str) -> io::Result<()> {
         ensure_taikai_artifact_size(
             "Taikai anchor sentinel",
@@ -2014,7 +1857,6 @@ pub(crate) mod taikai_ingest {
             ));
         };
         let tmp_path = path.with_file_name(format!(".{name}.tmp-{}", artifact_temp_suffix()?));
-
         match write_temp_artifact(&tmp_path, marker.as_bytes()) {
             Ok(()) => {}
             Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
@@ -2025,7 +1867,6 @@ pub(crate) mod taikai_ingest {
         }
         sync_parent_dir(path)
     }
-
     fn retire_anchored_source_artifacts(spool_dir: &Path, base_id: &str) -> io::Result<()> {
         if !valid_spool_artifact_base_id(base_id) {
             return Err(io::Error::new(
@@ -2033,7 +1874,6 @@ pub(crate) mod taikai_ingest {
                 format!("malformed Taikai spool artifact id `{base_id}`"),
             ));
         }
-
         // Remove the envelope last. If cleanup is interrupted, its durable
         // acknowledgement still suppresses delivery and a later scan retries
         // retirement of the remaining companions.
@@ -2068,7 +1908,6 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
-
     fn remove_regular_taikai_file_if_present(path: &Path, label: &str) -> io::Result<bool> {
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
@@ -2084,7 +1923,6 @@ pub(crate) mod taikai_ingest {
         fs::remove_file(path)?;
         Ok(true)
     }
-
     async fn run_anchor_worker<S>(
         spool_dir: PathBuf,
         anchor_cfg: DaTaikaiAnchor,
@@ -2096,7 +1934,6 @@ pub(crate) mod taikai_ingest {
     {
         let mut ticker = interval(poll_interval);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
         loop {
             tokio::select! {
                 _ = shutdown.receive() => break,
@@ -2108,7 +1945,6 @@ pub(crate) mod taikai_ingest {
             }
         }
     }
-
     /// Deliver at most one fixed-size spool batch to the configured anchor.
     ///
     /// Directory enumeration retains only the earliest bounded set of paths,
@@ -2126,7 +1962,6 @@ pub(crate) mod taikai_ingest {
         let pending = collect_pending_envelopes(spool_dir).await?;
         prune_anchor_ack_history(spool_dir).await?;
         let mut processing_errors = Vec::with_capacity(pending.len());
-
         for candidate in pending {
             let upload = load_pending_upload(spool_dir, candidate).await?;
             let PendingUpload {
@@ -2182,13 +2017,11 @@ pub(crate) mod taikai_ingest {
                 }
             }
         }
-
         if let Err(err) = prune_anchor_ack_history(spool_dir).await {
             processing_errors.push(format!(
                 "failed to prune Taikai anchor acknowledgements: {err}"
             ));
         }
-
         match processing_errors.as_slice() {
             [] => Ok(()),
             [message] => Err(message.clone()),
@@ -2199,7 +2032,6 @@ pub(crate) mod taikai_ingest {
             )),
         }
     }
-
     /// Collect one deterministic, bounded upload batch for source-coupled tests.
     ///
     /// Production processing loads and sends one selected envelope at a time;
@@ -2215,13 +2047,11 @@ pub(crate) mod taikai_ingest {
         }
         Ok(uploads)
     }
-
     async fn collect_pending_envelopes(spool_dir: &Path) -> Result<Vec<PendingEnvelope>, String> {
         let mut earliest = BinaryHeap::with_capacity(TAIKAI_ANCHOR_BATCH_MAX);
         let Some(mut dir) = open_taikai_spool_dir(spool_dir).await? else {
             return Ok(Vec::new());
         };
-
         while let Some(entry) = dir.next_entry().await.map_err(|err| {
             format!(
                 "failed to iterate Taikai spool directory `{}`: {err}",
@@ -2233,7 +2063,6 @@ pub(crate) mod taikai_ingest {
             else {
                 continue;
             };
-
             let base_id =
                 file_name["taikai-envelope-".len()..file_name.len() - ".norito".len()].to_string();
             if !valid_spool_artifact_base_id(base_id.as_str()) {
@@ -2268,7 +2097,6 @@ pub(crate) mod taikai_ingest {
                     ));
                 }
             }
-
             let candidate = PendingEnvelope {
                 file_name,
                 base_id,
@@ -2284,10 +2112,8 @@ pub(crate) mod taikai_ingest {
                 earliest.push(candidate);
             }
         }
-
         Ok(earliest.into_sorted_vec())
     }
-
     async fn load_pending_upload(
         spool_dir: &Path,
         candidate: PendingEnvelope,
@@ -2297,12 +2123,10 @@ pub(crate) mod taikai_ingest {
             envelope_path,
             ..
         } = candidate;
-
         let indexes_name = format!("taikai-indexes-{base_id}.json");
         let indexes_path = spool_dir.join(&indexes_name);
         let ssm_name = format!("taikai-ssm-{base_id}.norito");
         let ssm_path = spool_dir.join(&ssm_name);
-
         let envelope_bytes = read_required_regular_file(
             &envelope_path,
             "Taikai envelope",
@@ -2310,7 +2134,6 @@ pub(crate) mod taikai_ingest {
         )
         .await?;
         let envelope_b64 = BASE64.encode(envelope_bytes);
-
         let indexes_bytes = read_required_regular_file(
             &indexes_path,
             "Taikai indexes JSON",
@@ -2324,7 +2147,6 @@ pub(crate) mod taikai_ingest {
             )
         })?;
         drop(indexes_bytes);
-
         let ssm_bytes = read_required_regular_file(
             &ssm_path,
             "Taikai signing manifest",
@@ -2332,7 +2154,6 @@ pub(crate) mod taikai_ingest {
         )
         .await?;
         let ssm_b64 = BASE64.encode(ssm_bytes);
-
         let trm_name = format!("taikai-trm-{base_id}.norito");
         let trm_path = spool_dir.join(&trm_name);
         let trm_b64 = read_optional_regular_file(
@@ -2359,7 +2180,6 @@ pub(crate) mod taikai_ingest {
             })?),
             None => None,
         };
-
         let mut payload = Map::new();
         payload.insert("envelope_base64".to_string(), Value::String(envelope_b64));
         payload.insert("indexes".to_string(), indexes_value);
@@ -2380,7 +2200,6 @@ pub(crate) mod taikai_ingest {
             TAIKAI_ANCHOR_REQUEST_MAX_BYTES,
         )
         .map_err(|err| err.to_string())?;
-
         persist_anchor_request_capture(spool_dir, base_id.as_str(), &body).map_err(|err| {
             format!(
                 "failed to persist Taikai anchor request payload `{}`: {err}",
@@ -2391,25 +2210,21 @@ pub(crate) mod taikai_ingest {
                     .display()
             )
         })?;
-
         let sentinel_path = spool_dir.join(format!(
             "{TAIKAI_ANCHOR_SENTINEL_PREFIX}{base_id}{TAIKAI_ANCHOR_SENTINEL_SUFFIX}"
         ));
-
         Ok(PendingUpload {
             base_id,
             body,
             sentinel_path,
         })
     }
-
     async fn prune_anchor_ack_history(spool_dir: &Path) -> Result<(), String> {
         let Some(mut dir) = open_taikai_spool_dir(spool_dir).await? else {
             return Ok(());
         };
         let mut newest = BinaryHeap::with_capacity(TAIKAI_ANCHOR_ACK_RETENTION_MAX);
         let mut acknowledgement_count = 0usize;
-
         while let Some(entry) = dir.next_entry().await.map_err(|err| {
             format!(
                 "failed to scan Taikai anchor acknowledgements in `{}`: {err}",
@@ -2428,7 +2243,6 @@ pub(crate) mod taikai_ingest {
             acknowledgement_count = acknowledgement_count.checked_add(1).ok_or_else(|| {
                 "Taikai anchor acknowledgement count exceeds platform limits".to_string()
             })?;
-
             if newest.len() < TAIKAI_ANCHOR_ACK_RETENTION_MAX {
                 newest.push(Reverse(record));
             } else if newest
@@ -2440,16 +2254,13 @@ pub(crate) mod taikai_ingest {
             }
         }
         drop(dir);
-
         if acknowledgement_count <= TAIKAI_ANCHOR_ACK_RETENTION_MAX {
             return Ok(());
         }
-
         let retention_floor = newest
             .peek()
             .map(|Reverse(record)| record.clone())
             .ok_or_else(|| "Taikai anchor acknowledgement retention window is empty".to_string())?;
-
         let Some(mut dir) = open_taikai_spool_dir(spool_dir).await? else {
             return Ok(());
         };
@@ -2480,7 +2291,6 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
-
     async fn read_anchor_ack_record(
         entry: &async_fs::DirEntry,
     ) -> Result<Option<AnchorAckRecord>, String> {
@@ -2501,7 +2311,6 @@ pub(crate) mod taikai_ingest {
             base_id,
         }))
     }
-
     async fn read_anchor_ack_marker(sentinel_path: &Path) -> Result<u64, String> {
         let marker = read_required_regular_file(
             sentinel_path,
@@ -2531,7 +2340,6 @@ pub(crate) mod taikai_ingest {
             })?;
         Ok(acknowledged_unix_secs)
     }
-
     async fn ensure_anchor_source_retired(spool_dir: &Path, base_id: &str) -> Result<(), String> {
         let envelope_path = spool_dir.join(format!("taikai-envelope-{base_id}.norito"));
         match async_fs::symlink_metadata(&envelope_path).await {
@@ -2546,7 +2354,6 @@ pub(crate) mod taikai_ingest {
             )),
         }
     }
-
     async fn remove_anchor_ack_record(
         spool_dir: &Path,
         base_id: &str,
@@ -2567,7 +2374,6 @@ pub(crate) mod taikai_ingest {
                 .await?;
         Ok(removed)
     }
-
     async fn remove_regular_taikai_file_if_present_async(
         path: &Path,
         label: &str,
@@ -2593,7 +2399,6 @@ pub(crate) mod taikai_ingest {
             .map_err(|err| format!("failed to remove {label} `{}`: {err}", path.display()))?;
         Ok(true)
     }
-
     async fn open_taikai_spool_dir(spool_dir: &Path) -> Result<Option<async_fs::ReadDir>, String> {
         let metadata = match async_fs::symlink_metadata(spool_dir).await {
             Ok(metadata) => metadata,
@@ -2616,7 +2421,6 @@ pub(crate) mod taikai_ingest {
                 )
             })
     }
-
     async fn create_taikai_spool_dir_no_follow_async(spool_dir: &Path) -> Result<(), String> {
         async_fs::create_dir_all(spool_dir).await.map_err(|err| {
             format!(
@@ -2632,7 +2436,6 @@ pub(crate) mod taikai_ingest {
         })?;
         validate_taikai_spool_dir_metadata(spool_dir, &metadata).map_err(|err| err.to_string())
     }
-
     async fn read_required_regular_file(
         path: &Path,
         label: &str,
@@ -2646,7 +2449,6 @@ pub(crate) mod taikai_ingest {
             )),
         }
     }
-
     async fn read_optional_regular_file(
         path: &Path,
         label: &str,
@@ -2678,7 +2480,6 @@ pub(crate) mod taikai_ingest {
                 metadata.len()
             ));
         }
-
         let file = async_fs::File::open(path)
             .await
             .map_err(|err| format!("failed to open {label} `{}`: {err}", path.display()))?;
@@ -2692,7 +2493,6 @@ pub(crate) mod taikai_ingest {
         revalidate_regular_taikai_async_read(path, metadata.len(), bytes.len(), label).await?;
         Ok(Some(bytes))
     }
-
     async fn revalidate_regular_taikai_async_read(
         path: &Path,
         original_len: u64,
@@ -2718,7 +2518,6 @@ pub(crate) mod taikai_ingest {
         }
         Ok(())
     }
-
     fn valid_spool_artifact_base_id(base_id: &str) -> bool {
         let mut fields = base_id.split('-');
         let Some(lane_hex) = fields.next() else {
@@ -2743,7 +2542,6 @@ pub(crate) mod taikai_ingest {
             && fixed_hex(ticket_hex, 64)
             && fixed_hex(fingerprint_hex, 64)
     }
-
     fn taikai_envelope_file_name(name: &OsStr) -> Result<Option<&str>, String> {
         if let Some(name) = name.to_str() {
             return Ok(
@@ -2755,7 +2553,6 @@ pub(crate) mod taikai_ingest {
         }
         Ok(None)
     }
-
     fn taikai_anchor_sentinel_base_id(name: &OsStr) -> Result<Option<&str>, String> {
         let Some(name) = name.to_str() else {
             if non_utf8_artifact_name_matches(
@@ -2775,28 +2572,22 @@ pub(crate) mod taikai_ingest {
         };
         Ok(Some(base_id))
     }
-
     #[cfg(unix)]
     fn non_utf8_artifact_name_matches(name: &OsStr, prefix: &[u8], suffix: &[u8]) -> bool {
         use std::os::unix::ffi::OsStrExt;
-
         let bytes = name.as_bytes();
         bytes.starts_with(prefix) && bytes.ends_with(suffix)
     }
-
     #[cfg(not(unix))]
     fn non_utf8_artifact_name_matches(_name: &OsStr, _prefix: &[u8], _suffix: &[u8]) -> bool {
         false
     }
-
     fn fixed_hex(value: &str, width: usize) -> bool {
         value.len() == width && value.bytes().all(|byte| byte.is_ascii_hexdigit())
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
-
         fn anchor_test_base_id(sequence: usize) -> String {
             format!(
                 "00000001-0000000000000002-{sequence:016x}-\
@@ -2804,7 +2595,6 @@ pub(crate) mod taikai_ingest {
                  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             )
         }
-
         #[test]
         fn taikai_artifact_size_accepts_boundary_and_rejects_overflow() {
             ensure_taikai_artifact_size("test artifact", 8, 8).expect("exact boundary accepts");
@@ -2813,14 +2603,12 @@ pub(crate) mod taikai_ingest {
             assert_eq!(err.kind(), ErrorKind::InvalidData);
             assert!(err.to_string().contains("exceeding the 8-byte limit"));
         }
-
         #[test]
         fn oversized_envelope_is_rejected_before_spool_creation() {
             let dir = tempfile::tempdir().expect("tempdir");
             let storage_ticket = StorageTicketId::new([0xAA; 32]);
             let fingerprint = ReplayFingerprint::from_hash(blake3_hash(b"oversized-envelope"));
             let oversized = vec![0_u8; TAIKAI_ANCHOR_ENVELOPE_MAX_BYTES + 1];
-
             let err = persist_envelope(
                 dir.path(),
                 LaneId::new(1),
@@ -2831,7 +2619,6 @@ pub(crate) mod taikai_ingest {
                 &oversized,
             )
             .expect_err("oversized envelope must fail closed");
-
             assert_eq!(err.kind(), ErrorKind::InvalidData);
             assert!(err.to_string().contains("exceeding"));
             assert!(
@@ -2839,7 +2626,6 @@ pub(crate) mod taikai_ingest {
                 "oversized append must not create the spool directory"
             );
         }
-
         #[tokio::test]
         async fn pending_envelope_selection_is_sorted_and_batch_bounded() {
             let dir = tempfile::tempdir().expect("tempdir");
@@ -2857,7 +2643,6 @@ pub(crate) mod taikai_ingest {
                 .await
                 .expect("write envelope");
             }
-
             let pending = collect_pending_envelopes(&spool_dir)
                 .await
                 .expect("select bounded batch");
@@ -2870,7 +2655,6 @@ pub(crate) mod taikai_ingest {
                 .collect();
             assert_eq!(observed, expected);
         }
-
         #[tokio::test]
         async fn bounded_async_artifact_read_rejects_oversized_sparse_file() {
             let dir = tempfile::tempdir().expect("tempdir");
@@ -2879,13 +2663,11 @@ pub(crate) mod taikai_ingest {
                 .await
                 .expect("create artifact");
             file.set_len(65).await.expect("extend sparse artifact");
-
             let err = read_required_regular_file(&path, "Taikai envelope", 64)
                 .await
                 .expect_err("oversized artifact rejects before buffering");
             assert!(err.contains("exceeding the 64-byte limit"));
         }
-
         #[test]
         fn anchored_source_retirement_preserves_bounded_audit_artifacts() {
             let dir = tempfile::tempdir().expect("tempdir");
@@ -2909,16 +2691,13 @@ pub(crate) mod taikai_ingest {
             ));
             fs::write(&sentinel, b"ack").expect("write sentinel");
             fs::write(&capture, b"request").expect("write capture");
-
             retire_anchored_source_artifacts(spool_dir, &base_id).expect("retire source artifacts");
-
             for name in source_names {
                 assert!(!spool_dir.join(name).exists(), "source artifact remains");
             }
             assert!(sentinel.exists(), "durable acknowledgement must remain");
             assert!(capture.exists(), "bounded request capture must remain");
         }
-
         #[tokio::test]
         async fn anchor_ack_history_retains_only_deterministic_newest_window() {
             let dir = tempfile::tempdir().expect("tempdir");
@@ -2946,11 +2725,9 @@ pub(crate) mod taikai_ingest {
                 .await
                 .expect("write request capture");
             }
-
             prune_anchor_ack_history(&spool_dir)
                 .await
                 .expect("prune acknowledgement history");
-
             for sequence in 0..total {
                 let base_id = anchor_test_base_id(sequence);
                 let sentinel = spool_dir.join(format!(
@@ -2964,30 +2741,25 @@ pub(crate) mod taikai_ingest {
                 assert_eq!(capture.exists(), should_remain, "capture retention");
             }
         }
-
         #[test]
         fn encode_base32_lower_uses_lowercase_no_padding_alphabet() {
             assert_eq!(encode_base32_lower(b""), "");
             assert_eq!(encode_base32_lower(b"foo"), "mzxw6");
             assert_eq!(encode_base32_lower(&[0xff, 0x00]), "74aa");
         }
-
         #[cfg(unix)]
         #[test]
         fn taikai_envelope_file_name_rejects_non_utf8_shaped_name() {
             use std::{ffi::OsString, os::unix::ffi::OsStringExt};
-
             let name = OsString::from_vec(b"taikai-envelope-\xFF.norito".to_vec());
             let err = taikai_envelope_file_name(name.as_os_str())
                 .expect_err("non-UTF8 envelope-shaped name rejects");
             assert!(err.contains("not valid UTF-8"));
         }
-
         #[cfg(unix)]
         #[test]
         fn taikai_envelope_file_name_ignores_unrelated_non_utf8_name() {
             use std::{ffi::OsString, os::unix::ffi::OsStringExt};
-
             let name = OsString::from_vec(b"taikai-index-\xFF.norito".to_vec());
             assert!(
                 taikai_envelope_file_name(name.as_os_str())
@@ -2995,7 +2767,6 @@ pub(crate) mod taikai_ingest {
                     .is_none()
             );
         }
-
         #[tokio::test]
         async fn taikai_async_read_revalidation_rejects_length_change() {
             let dir = tempfile::tempdir().expect("tempdir");
@@ -3010,7 +2781,6 @@ pub(crate) mod taikai_ingest {
             async_fs::write(&path, b"replacement-artifact")
                 .await
                 .expect("replace artifact");
-
             let err = revalidate_regular_taikai_async_read(
                 &path,
                 original_len,
@@ -3019,18 +2789,15 @@ pub(crate) mod taikai_ingest {
             )
             .await
             .expect_err("changed artifact length must reject");
-
             assert!(
                 err.contains("changed while reading"),
                 "unexpected error: {err}"
             );
         }
-
         #[cfg(unix)]
         #[tokio::test]
         async fn taikai_async_read_revalidation_rejects_symlink_replacement() {
             use std::os::unix::fs::symlink;
-
             let dir = tempfile::tempdir().expect("tempdir");
             let path = dir.path().join("taikai-artifact.norito");
             async_fs::write(&path, b"old-artifact")
@@ -3048,7 +2815,6 @@ pub(crate) mod taikai_ingest {
                 .await
                 .expect("remove original artifact");
             symlink(&target, &path).expect("replace artifact with symlink");
-
             let err = revalidate_regular_taikai_async_read(
                 &path,
                 original_len,
@@ -3057,7 +2823,6 @@ pub(crate) mod taikai_ingest {
             )
             .await
             .expect_err("symlink replacement must reject");
-
             assert!(
                 err.contains("changed to a non-regular file"),
                 "unexpected error: {err}"
@@ -3073,9 +2838,7 @@ pub(crate) mod taikai_ingest {
         }
     }
 }
-
 pub use taikai_ingest::spawn_anchor_worker;
-
 /// Extract the Taikai stream label from metadata for telemetry tagging.
 pub(crate) fn stream_label_from_metadata(metadata: &ExtraMetadata) -> Option<String> {
     metadata
@@ -3085,7 +2848,6 @@ pub(crate) fn stream_label_from_metadata(metadata: &ExtraMetadata) -> Option<Str
         .and_then(|entry| std::str::from_utf8(&entry.value).ok())
         .map(|value| value.trim().to_owned())
 }
-
 /// Validate the proof tier metadata against the enforced storage class.
 pub(crate) fn validate_da_proof_tier(
     metadata: &ExtraMetadata,
@@ -3121,7 +2883,6 @@ pub(crate) fn validate_da_proof_tier(
     }
     Ok(())
 }
-
 /// Validate the Taikai cache hint metadata against the canonical payload.
 pub(crate) fn validate_taikai_cache_hint(
     metadata: &ExtraMetadata,
@@ -3155,7 +2916,6 @@ pub(crate) fn validate_taikai_cache_hint(
     let hint = hint_value.as_object().ok_or_else(|| {
         taikai_ingest::bad_request(META_TAIKAI_CACHE_HINT, "cache hint must be a JSON object")
     })?;
-
     let event = taikai_ingest::parse_name(metadata, META_TAIKAI_EVENT_ID)?;
     let stream = taikai_ingest::parse_name(metadata, META_TAIKAI_STREAM_ID)?;
     let rendition = taikai_ingest::parse_name(metadata, META_TAIKAI_RENDITION_ID)?;
@@ -3186,7 +2946,6 @@ pub(crate) fn validate_taikai_cache_hint(
             format!("invalid integer `{sequence_str}`: {err}"),
         )
     })?;
-
     let expect_str = |key: &str| -> Result<&str, (StatusCode, String)> {
         hint.get(key)
             .and_then(Value::as_str)
@@ -3207,7 +2966,6 @@ pub(crate) fn validate_taikai_cache_hint(
             )
         })
     };
-
     let event_value = expect_str("event")?;
     let stream_value = expect_str("stream")?;
     let rendition_value = expect_str("rendition")?;
@@ -3220,7 +2978,6 @@ pub(crate) fn validate_taikai_cache_hint(
             "cache hint identifiers must match segment metadata",
         ));
     }
-
     let sequence_value = expect_u64("sequence")?;
     if sequence_value != sequence {
         return Err(taikai_ingest::bad_request(
@@ -3228,7 +2985,6 @@ pub(crate) fn validate_taikai_cache_hint(
             "cache hint sequence must match segment metadata",
         ));
     }
-
     let payload_len = expect_u64("payload_len")?;
     if payload_len != expected_payload_len {
         return Err(taikai_ingest::bad_request(
@@ -3236,7 +2992,6 @@ pub(crate) fn validate_taikai_cache_hint(
             "cache hint payload_len must match canonical payload size",
         ));
     }
-
     let digest_hex = expect_str("payload_blake3_hex")?;
     let digest_bytes = hex::decode(digest_hex).map_err(|err| {
         taikai_ingest::bad_request(
@@ -3250,10 +3005,8 @@ pub(crate) fn validate_taikai_cache_hint(
             "cache hint payload digest does not match canonical payload",
         ));
     }
-
     Ok(())
 }
-
 #[derive(Debug)]
 /// Result details from validating a Taikai signing manifest.
 pub(crate) struct TaikaiSsmOutcome {
@@ -3264,7 +3017,6 @@ pub(crate) struct TaikaiSsmOutcome {
     /// Alias proof evaluation metadata.
     pub(crate) evaluation: AliasProofEvaluation,
 }
-
 /// Validate a Taikai signing manifest payload against ingest artifacts.
 pub(crate) fn validate_taikai_ssm(
     ssm_bytes: &[u8],
@@ -3289,7 +3041,6 @@ pub(crate) fn validate_taikai_ssm(
                 format!("failed to decode signing manifest: {err}"),
             )
         })?;
-
     match signing_manifest.body.publisher_key.try_algorithm() {
         Ok(iroha_crypto::Algorithm::Ed25519) => {
             iroha_crypto::ed25519_parse_signature(signing_manifest.signature.payload()).map_err(
@@ -3313,7 +3064,6 @@ pub(crate) fn validate_taikai_ssm(
         }
         _ => {}
     }
-
     signing_manifest
         .signature
         .verify(&signing_manifest.body.publisher_key, &signing_manifest.body)
@@ -3323,7 +3073,6 @@ pub(crate) fn validate_taikai_ssm(
                 format!("publisher signature verification failed: {err}"),
             )
         })?;
-
     if &signing_manifest.body.manifest_hash != manifest_hash {
         return Err(taikai_ingest::bad_request(
             META_TAIKAI_SSM,
@@ -3336,7 +3085,6 @@ pub(crate) fn validate_taikai_ssm(
             "CAR digest mismatch between SSM and ingest artefact",
         ));
     }
-
     let envelope_hash = BlobDigest::from_hash(blake3_hash(envelope_bytes));
     if signing_manifest.body.segment_envelope_hash != envelope_hash {
         return Err(taikai_ingest::bad_request(
@@ -3350,7 +3098,6 @@ pub(crate) fn validate_taikai_ssm(
             "segment sequence mismatch between SSM and ingest metadata",
         ));
     }
-
     let alias_binding = &signing_manifest.body.alias_binding;
     if alias_binding.proof.is_empty() {
         return Err(taikai_ingest::bad_request(
@@ -3358,7 +3105,6 @@ pub(crate) fn validate_taikai_ssm(
             "alias proof payload must not be empty",
         ));
     }
-
     let alias_label = format!("{}/{}", alias_binding.namespace, alias_binding.name);
     let alias_council_policy = alias_council_policy.ok_or_else(|| {
         taikai_ingest::internal_error(
@@ -3390,7 +3136,6 @@ pub(crate) fn validate_taikai_ssm(
             ),
         ));
     }
-
     let now_secs = crate::sorafs::unix_now_secs();
     let evaluation = alias_policy.evaluate(&alias_proof, now_secs);
     let status_label = evaluation.status_label();
@@ -3402,14 +3147,12 @@ pub(crate) fn validate_taikai_ssm(
     telemetry.with_metrics(|metrics| {
         metrics.record_sorafs_alias_cache(result, status_label, evaluation.age.as_secs_f64());
     });
-
     if !evaluation.state.is_servable() {
         return Err(taikai_ingest::bad_request(
             META_TAIKAI_SSM,
             format!("alias proof for `{alias_label}` expired ({status_label})"),
         ));
     }
-
     let ssm_digest = BlobDigest::from_hash(blake3_hash(ssm_bytes));
     Ok(TaikaiSsmOutcome {
         alias_label,
@@ -3417,7 +3160,6 @@ pub(crate) fn validate_taikai_ssm(
         evaluation,
     })
 }
-
 /// Derive the Taikai availability class from the routing manifest metadata.
 pub(crate) fn taikai_availability_from_metadata(
     metadata: &ExtraMetadata,
@@ -3476,7 +3218,6 @@ pub(crate) fn taikai_availability_from_metadata(
     };
     Ok(Some(route.availability_class))
 }
-
 /// Apply Taikai-specific metadata tags for ingest and proof policy enforcement.
 pub(crate) fn apply_taikai_ingest_tags(
     metadata: &mut ExtraMetadata,
@@ -3517,7 +3258,6 @@ pub(crate) fn apply_taikai_ingest_tags(
         META_TAIKAI_REPLICATION_COLD_SECS,
         retention.cold_retention_secs.to_string(),
     );
-
     let sample_window = compute_sample_window(payload_len);
     upsert_metadata(
         metadata,
@@ -3529,7 +3269,6 @@ pub(crate) fn apply_taikai_ingest_tags(
         META_DA_POTR_SAMPLE_WINDOW,
         sample_window.to_string(),
     );
-
     let event = taikai_ingest::parse_name(metadata, META_TAIKAI_EVENT_ID)?;
     let stream = taikai_ingest::parse_name(metadata, META_TAIKAI_STREAM_ID)?;
     let rendition = taikai_ingest::parse_name(metadata, META_TAIKAI_RENDITION_ID)?;
@@ -3564,7 +3303,6 @@ pub(crate) fn apply_taikai_ingest_tags(
             format!("invalid u64 `{sequence_raw}`: {err}"),
         )
     })?;
-
     let mut hint = Map::new();
     hint.insert("event".into(), Value::from(event.as_ref()));
     hint.insert("stream".into(), Value::from(stream.as_ref()));
@@ -3582,10 +3320,8 @@ pub(crate) fn apply_taikai_ingest_tags(
         )
     })?;
     upsert_metadata(metadata, META_TAIKAI_CACHE_HINT, rendered_hint);
-
     Ok(())
 }
-
 /// Compute the Taikai ingest metadata enrichment applied by Torii.
 ///
 /// # Errors
@@ -3608,7 +3344,6 @@ pub fn compute_taikai_ingest_tags(
     )?;
     Ok(metadata)
 }
-
 fn upsert_metadata(metadata: &mut ExtraMetadata, key: &str, value: impl Into<Vec<u8>>) {
     if let Some(index) = metadata.items.iter().position(|entry| entry.key == key) {
         metadata.items.remove(index);
@@ -3619,7 +3354,6 @@ fn upsert_metadata(metadata: &mut ExtraMetadata, key: &str, value: impl Into<Vec
         MetadataVisibility::Public,
     ));
 }
-
 fn availability_label(class: TaikaiAvailabilityClass) -> &'static str {
     match class {
         TaikaiAvailabilityClass::Hot => "hot",
@@ -3627,7 +3361,6 @@ fn availability_label(class: TaikaiAvailabilityClass) -> &'static str {
         TaikaiAvailabilityClass::Cold => "cold",
     }
 }
-
 /// Validate a Taikai routing manifest payload against the segment envelope.
 pub(crate) fn validate_taikai_trm(
     trm_bytes: &[u8],
@@ -3645,7 +3378,6 @@ pub(crate) fn validate_taikai_trm(
             format!("failed to decode routing manifest: {err}"),
         )
     })?;
-
     if manifest.version != TaikaiRoutingManifestV1::VERSION {
         return Err(taikai_ingest::bad_request(
             META_TAIKAI_TRM,
@@ -3656,14 +3388,12 @@ pub(crate) fn validate_taikai_trm(
             ),
         ));
     }
-
     if let Err(err) = manifest.validate() {
         return Err(taikai_ingest::bad_request(
             META_TAIKAI_TRM,
             format!("invalid routing manifest: {err}"),
         ));
     }
-
     if manifest.event_id.as_name().as_ref() != envelope.telemetry.event_id {
         return Err(taikai_ingest::bad_request(
             META_TAIKAI_TRM,
@@ -3674,7 +3404,6 @@ pub(crate) fn validate_taikai_trm(
             ),
         ));
     }
-
     if manifest.stream_id.as_name().as_ref() != envelope.telemetry.stream_id {
         return Err(taikai_ingest::bad_request(
             META_TAIKAI_TRM,
@@ -3685,7 +3414,6 @@ pub(crate) fn validate_taikai_trm(
             ),
         ));
     }
-
     let expected_rendition = envelope.telemetry.rendition_id.as_str();
     if !manifest
         .renditions
@@ -3697,17 +3425,14 @@ pub(crate) fn validate_taikai_trm(
             format!("manifest missing rendition `{expected_rendition}` required by this segment"),
         ));
     }
-
     if !manifest.covers_sequence(envelope.telemetry.segment_sequence) {
         return Err(taikai_ingest::bad_request(
             META_TAIKAI_TRM,
             "manifest window does not cover this segment sequence",
         ));
     }
-
     Ok(manifest)
 }
-
 /// Record Taikai ingest latency/drift metrics for telemetry.
 pub(crate) fn record_taikai_ingest_metrics(
     telemetry: &MaybeTelemetry,
@@ -3726,7 +3451,6 @@ pub(crate) fn record_taikai_ingest_metrics(
         }
     });
 }
-
 /// Record a Taikai alias rotation event in telemetry.
 pub(crate) fn record_taikai_alias_rotation_event(
     telemetry: &MaybeTelemetry,
@@ -3755,7 +3479,6 @@ pub(crate) fn record_taikai_alias_rotation_event(
         );
     });
 }
-
 /// Record a Taikai ingest error classified by status code.
 pub(crate) fn record_taikai_ingest_error(
     telemetry: &MaybeTelemetry,

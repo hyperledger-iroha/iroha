@@ -4,13 +4,11 @@
 //! container. Iroha v1 deliberately does not expose an OPRF/VOPRF service; a
 //! future privacy-preserving lookup protocol must ship as a complete, keyed,
 //! verifiable construction rather than a hash-shaped placeholder.
-
 use std::{
     collections::BTreeMap,
     fmt,
     sync::{Arc, RwLock},
 };
-
 use iroha_crypto::{HashOf, KeyPair, Signature};
 use iroha_data_model::{
     account::{AccountId, rekey::AccountAlias},
@@ -34,11 +32,8 @@ use iroha_telemetry::metrics::Metrics;
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
 use tracing::{Level, event, instrument};
-
 use crate::state::WorldReadOnly;
-
 const ALIAS_ATTESTATION_SIGNATURE_DOMAIN: &[u8] = b"iroha:alias:attestation:v1";
-
 fn alias_attestation_signature_preimage(record: &AliasRecord, attester: &AccountId) -> Vec<u8> {
     let attester_bytes = norito::to_bytes(attester).expect("AccountId must encode");
     let record_hash = HashOf::<AliasRecord>::new(record);
@@ -55,14 +50,12 @@ fn alias_attestation_signature_preimage(record: &AliasRecord, attester: &Account
     preimage.extend_from_slice(record_hash.as_ref());
     preimage
 }
-
 /// Signer used to attest alias storage updates.
 #[derive(Clone, Debug)]
 pub struct AliasAttester {
     account_id: AccountId,
     key_pair: KeyPair,
 }
-
 impl AliasAttester {
     /// Build an alias attester from a checked key pair.
     #[must_use]
@@ -73,12 +66,10 @@ impl AliasAttester {
             key_pair,
         }
     }
-
     /// Account identity that will be recorded as the attester.
     pub fn account_id(&self) -> &AccountId {
         &self.account_id
     }
-
     fn sign_record(&self, record: &AliasRecord) -> Result<AliasAttestation, AliasError> {
         let preimage = alias_attestation_signature_preimage(record, &self.account_id);
         let signature = Signature::try_new(self.key_pair.private_key(), &preimage)
@@ -91,7 +82,6 @@ impl AliasAttester {
         ))
     }
 }
-
 /// Verify that `attestation` signs the canonical alias-record preimage.
 ///
 /// # Errors
@@ -118,7 +108,6 @@ pub fn verify_alias_attestation(
         .verify(public_key, &preimage)
         .map_err(|_| AliasError::InvalidAttestation("signature verification failed"))
 }
-
 fn authority_has_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -143,7 +132,6 @@ fn authority_has_permission(
             );
         }
     }
-
     if world.account_roles_iter(authority).any(|role_id| {
         world
             .roles()
@@ -152,7 +140,6 @@ fn authority_has_permission(
     }) {
         return true;
     }
-
     let direct_permissions: Vec<String> = world
         .account_permissions()
         .get(authority)
@@ -179,7 +166,6 @@ fn authority_has_permission(
     );
     false
 }
-
 fn resolved_account_alias_from_numeric(
     world: &impl WorldReadOnly,
     alias: &AccountAlias,
@@ -188,7 +174,6 @@ fn resolved_account_alias_from_numeric(
     let canonical_name = literal.parse::<AccountAliasName>().ok()?;
     Some(ResolvedAccountAliasV1::new(canonical_name, alias.dataspace))
 }
-
 fn authority_has_exact_alias_permission<T>(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -204,7 +189,6 @@ where
         &permission(AccountAliasPermissionScope::Alias(alias.clone())).into(),
     )
 }
-
 /// Return `true` when the authority holds the exact permission required to resolve `alias`.
 ///
 /// Domain-qualified aliases require their exact domain permission. Dataspace permission applies
@@ -240,7 +224,6 @@ pub fn authority_can_resolve_account_alias(
         Err(_) => false,
     }
 }
-
 /// Return `true` when the authority may resolve an exact resolved account alias.
 ///
 /// Exact alias permission is checked before applicable domain or dataspace scope.
@@ -264,7 +247,6 @@ pub fn authority_can_resolve_resolved_account_alias(
         &Permission::from(CanResolveAccountAlias { scope }),
     )
 }
-
 /// Return `true` when the authority holds the exact permissions required to mutate `alias`.
 pub fn authority_can_manage_account_alias(
     world: &impl WorldReadOnly,
@@ -288,7 +270,6 @@ pub fn authority_can_manage_account_alias(
         Err(_) => false,
     }
 }
-
 /// Return `true` when the authority may mutate an exact resolved account alias.
 ///
 /// Exact alias permission is checked before applicable domain or dataspace scope.
@@ -312,7 +293,6 @@ pub fn authority_can_manage_resolved_account_alias(
         &Permission::from(CanManageAccountAlias { scope }),
     )
 }
-
 /// Return `true` when `authority` holds account-alias management permission for an explicit
 /// dataspace/domain scope.
 ///
@@ -339,7 +319,6 @@ pub fn authority_can_manage_account_alias_scope(
     };
     authority_has_permission(world, authority, &permission)
 }
-
 /// Return `true` when `authority` holds the asset-definition-alias capability for `alias`.
 ///
 /// An exact alias-and-definition grant is checked first. A qualified alias otherwise requires its
@@ -364,7 +343,6 @@ pub fn authority_can_manage_asset_definition_alias(
     if authority_has_permission(world, authority, &exact) {
         return true;
     }
-
     let scoped: Permission = match domain {
         Some(domain) => CanManageAssetDefinitionAlias {
             scope: AssetDefinitionAliasPermissionScope::Domain(domain.clone()),
@@ -377,7 +355,6 @@ pub fn authority_can_manage_asset_definition_alias(
     };
     authority_has_permission(world, authority, &scoped)
 }
-
 /// Return whether an exact asset-definition-alias permission targets a live binding.
 ///
 /// This is a Core storage invariant, independent from whichever executor authorizes the grant.
@@ -415,14 +392,12 @@ pub(crate) fn asset_definition_alias_permission_targets_active_binding(
         | AssetDefinitionAliasPermissionScope::Dataspace(_) => true,
     }
 }
-
 /// Metric categories emitted by the alias service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AliasMetricKind {
     /// Tracks alias resolution operations for telemetry emission.
     Resolve,
 }
-
 impl AliasMetricKind {
     const fn as_label(self) -> &'static str {
         match self {
@@ -430,7 +405,6 @@ impl AliasMetricKind {
         }
     }
 }
-
 /// Alias storage backed by a Merkle-friendly map.
 #[derive(Clone)]
 pub struct AliasStorage {
@@ -439,7 +413,6 @@ pub struct AliasStorage {
     attester: AliasAttester,
     metrics: Option<Arc<Metrics>>,
 }
-
 impl fmt::Debug for AliasStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let alias_count = self.inner.read().map(|map| map.len()).unwrap_or(0);
@@ -452,7 +425,6 @@ impl fmt::Debug for AliasStorage {
             .finish()
     }
 }
-
 impl AliasStorage {
     /// Create an empty storage instance backed by `attester`.
     #[must_use]
@@ -464,7 +436,6 @@ impl AliasStorage {
             metrics: None,
         }
     }
-
     /// Create storage wired to the shared telemetry metrics registry.
     #[must_use]
     pub fn with_metrics(attester: AliasAttester, metrics: Arc<Metrics>) -> Self {
@@ -472,12 +443,10 @@ impl AliasStorage {
         storage.metrics = Some(metrics);
         storage
     }
-
     /// Attach telemetry metrics to an existing storage instance.
     pub fn set_metrics(&mut self, metrics: Arc<Metrics>) {
         self.metrics = Some(metrics);
     }
-
     /// Insert or update an alias record.
     ///
     /// # Errors
@@ -506,7 +475,6 @@ impl AliasStorage {
             attestation,
         }))
     }
-
     /// Resolve alias by name.
     ///
     /// # Errors
@@ -515,7 +483,6 @@ impl AliasStorage {
         let guard = self.inner.read().map_err(|_| AliasError::Poison("alias"))?;
         Ok(guard.get(alias).cloned())
     }
-
     /// Resolve alias by Merkle index.
     ///
     /// # Errors
@@ -527,10 +494,8 @@ impl AliasStorage {
             .map_err(|_| AliasError::Poison("index"))?
             .get(&index)
             .cloned();
-
         alias.map_or_else(|| Ok(None), |name| self.resolve(&name))
     }
-
     /// Record a Merkle attestation hash for an alias if present.
     ///
     /// # Errors
@@ -551,7 +516,6 @@ impl AliasStorage {
         record.push_attestation(hash);
         Ok(())
     }
-
     /// Emit telemetry for alias usage (lookup, attestation, etc.).
     pub fn emit_metrics(&self, alias: &Name, lane: &'static str, kind: AliasMetricKind) {
         if let Some(metrics) = &self.metrics {
@@ -569,7 +533,6 @@ impl AliasStorage {
             "alias_usage"
         );
     }
-
     /// Emit an audit log entry capturing attester signature material.
     pub fn audit_attestation(&self, alias: &Name, attestation: &AliasAttestation) {
         event!(
@@ -581,7 +544,6 @@ impl AliasStorage {
         );
     }
 }
-
 /// Errors returned by alias operations.
 #[derive(Debug, Error)]
 pub enum AliasError {
@@ -598,13 +560,11 @@ pub enum AliasError {
     #[error("alias attestation invalid: {0}")]
     InvalidAttestation(&'static str),
 }
-
 /// Helper builder for CLI/SDK wiring. Keeps operations explicit.
 #[derive(Debug)]
 pub struct AliasService {
     storage: AliasStorage,
 }
-
 impl AliasService {
     /// Construct service with empty storage backed by `attester`.
     #[must_use]
@@ -613,7 +573,6 @@ impl AliasService {
             storage: AliasStorage::new(attester),
         }
     }
-
     /// Construct service with metrics instrumentation attached.
     #[must_use]
     pub fn with_metrics(attester: AliasAttester, metrics: Arc<Metrics>) -> Self {
@@ -621,17 +580,14 @@ impl AliasService {
             storage: AliasStorage::with_metrics(attester, metrics),
         }
     }
-
     /// Access storage for read/write operations.
     pub fn storage(&self) -> &AliasStorage {
         &self.storage
     }
-
     /// Attach metrics instrumentation to the service storage.
     pub fn set_metrics(&mut self, metrics: Arc<Metrics>) {
         self.storage.set_metrics(metrics);
     }
-
     /// Resolve alias to target, returning attestation hashes for auditing.
     ///
     /// # Errors
@@ -648,7 +604,6 @@ impl AliasService {
         Ok((record.target, record.attestation_hashes))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -656,33 +611,26 @@ mod tests {
         str::FromStr,
         sync::Arc,
     };
-
     use iroha_crypto::Algorithm;
     use iroha_data_model::{account::AccountId, alias::AliasIndex, name::Name};
-
     use super::*;
-
     fn owner() -> AccountId {
         const SIGNATORY: &str =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
         AccountId::new(SIGNATORY.parse().expect("public key"))
     }
-
     fn alias_attester(seed: u8) -> AliasAttester {
         AliasAttester::new(
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("derive checked alias attester fixture key"),
         )
     }
-
     fn alias_service() -> AliasService {
         AliasService::new(alias_attester(0xA1))
     }
-
     fn alias_storage() -> AliasStorage {
         AliasStorage::new(alias_attester(0xA2))
     }
-
     #[test]
     fn storage_roundtrip() {
         let service = alias_service();
@@ -721,7 +669,6 @@ mod tests {
             .expect("alias present");
         assert_eq!(resolved_by_index.alias, alias);
     }
-
     #[test]
     fn service_resolve_success() {
         let service = alias_service();
@@ -730,12 +677,10 @@ mod tests {
         let record = AliasRecord::new(alias.clone(), owner(), target.clone(), AliasIndex(2));
         let expected_attestations = record.attestation_hashes.clone();
         service.storage.put(record).expect("put should succeed");
-
         let (resolved_target, attestations) = service.resolve(&alias).expect("should resolve");
         assert_eq!(resolved_target, target);
         assert_eq!(attestations, expected_attestations);
     }
-
     #[test]
     fn put_returns_error_when_alias_lock_poisoned() {
         let storage = alias_storage();
@@ -746,7 +691,6 @@ mod tests {
             AliasTarget::Custom(vec![1, 2, 3]),
             AliasIndex(1),
         );
-
         let storage_clone = storage.clone();
         let _ = catch_unwind(AssertUnwindSafe(|| {
             let _guard = storage_clone
@@ -755,13 +699,11 @@ mod tests {
                 .expect("poison setup should acquire alias lock");
             panic!("poison alias lock");
         }));
-
         let err = storage
             .put(record)
             .expect_err("alias lock poisoning should error");
         assert!(matches!(err, AliasError::Poison("alias")));
     }
-
     #[test]
     fn put_returns_error_when_index_lock_poisoned() {
         let storage = alias_storage();
@@ -772,14 +714,12 @@ mod tests {
             AliasTarget::Custom(vec![1, 2, 3]),
             AliasIndex(1),
         );
-
         // Pre-populate alias map so alias lock isn't poisoned.
         storage
             .inner
             .write()
             .expect("setup should not be poisoned")
             .insert(alias.clone(), record.clone());
-
         let storage_clone = storage.clone();
         let _ = catch_unwind(AssertUnwindSafe(|| {
             let _guard = storage_clone
@@ -788,18 +728,15 @@ mod tests {
                 .expect("poison setup should acquire index lock");
             panic!("poison index lock");
         }));
-
         let err = storage
             .put(record)
             .expect_err("index lock poisoning should error");
         assert!(matches!(err, AliasError::Poison("index")));
     }
-
     #[test]
     fn service_resolve_poisoned_lock() {
         let service = alias_service();
         let alias = Name::from_str("bob").expect("valid");
-
         let _ = catch_unwind(AssertUnwindSafe(|| {
             let _guard = service
                 .storage
@@ -808,26 +745,21 @@ mod tests {
                 .expect("lock should be available");
             panic!("poisoning alias storage");
         }));
-
         let err = service.resolve(&alias).expect_err("lock is poisoned");
         assert!(matches!(err, AliasError::Poison("alias")));
     }
-
     #[test]
     fn emit_metrics_records_usage_counter() {
         let metrics = Arc::new(Metrics::default());
         let storage = AliasStorage::with_metrics(alias_attester(0xA3), Arc::clone(&metrics));
         let alias = Name::from_str("usage").expect("valid");
-
         storage.emit_metrics(&alias, "global", AliasMetricKind::Resolve);
-
         let counter = metrics
             .alias_usage_total
             .with_label_values(&["global", AliasMetricKind::Resolve.as_label()])
             .get();
         assert_eq!(counter, 1);
     }
-
     #[test]
     fn verify_alias_attestation_rejects_tampered_record() {
         let storage = alias_storage();
@@ -842,7 +774,6 @@ mod tests {
             panic!("unexpected event");
         };
         verify_alias_attestation(&event.record, &event.attestation).expect("valid attestation");
-
         let mut tampered = event.record.clone();
         tampered.index = AliasIndex(10);
         let err = verify_alias_attestation(&tampered, &event.attestation)

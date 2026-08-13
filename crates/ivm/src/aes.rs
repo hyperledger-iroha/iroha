@@ -16,7 +16,6 @@ pub const SBOX: [u8; 256] = [
     0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
     0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
 ];
-
 pub const INV_SBOX: [u8; 256] = [
     0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
     0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
@@ -35,7 +34,6 @@ pub const INV_SBOX: [u8; 256] = [
     0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
     0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d,
 ];
-
 fn gmul(mut a: u8, mut b: u8) -> u8 {
     let mut res = 0;
     for _ in 0..8 {
@@ -51,19 +49,16 @@ fn gmul(mut a: u8, mut b: u8) -> u8 {
     }
     res
 }
-
 fn sub_bytes(state: &mut [u8; 16]) {
     for b in state.iter_mut() {
         *b = SBOX[*b as usize];
     }
 }
-
 fn inv_sub_bytes(state: &mut [u8; 16]) {
     for b in state.iter_mut() {
         *b = INV_SBOX[*b as usize];
     }
 }
-
 fn shift_rows(state: &mut [u8; 16]) {
     let tmp = *state;
     state[1] = tmp[5];
@@ -79,7 +74,6 @@ fn shift_rows(state: &mut [u8; 16]) {
     state[11] = tmp[7];
     state[15] = tmp[11];
 }
-
 fn inv_shift_rows(state: &mut [u8; 16]) {
     let tmp = *state;
     state[5] = tmp[1];
@@ -95,7 +89,6 @@ fn inv_shift_rows(state: &mut [u8; 16]) {
     state[7] = tmp[11];
     state[11] = tmp[15];
 }
-
 fn mix_columns(state: &mut [u8; 16]) {
     for c in 0..4 {
         let i = c * 4;
@@ -109,7 +102,6 @@ fn mix_columns(state: &mut [u8; 16]) {
         state[i + 3] = gmul(a0, 3) ^ a1 ^ a2 ^ gmul(a3, 2);
     }
 }
-
 fn inv_mix_columns(state: &mut [u8; 16]) {
     for c in 0..4 {
         let i = c * 4;
@@ -123,13 +115,11 @@ fn inv_mix_columns(state: &mut [u8; 16]) {
         state[i + 3] = gmul(a0, 11) ^ gmul(a1, 13) ^ gmul(a2, 9) ^ gmul(a3, 14);
     }
 }
-
 fn add_round_key(state: &mut [u8; 16], rk: &[u8; 16]) {
     for i in 0..16 {
         state[i] ^= rk[i];
     }
 }
-
 pub fn aesenc(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     if let Some(res) = crate::vector::metal_aesenc_round(state, rk) {
@@ -157,7 +147,6 @@ pub fn aesenc(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     }
     aesenc_impl(state, rk)
 }
-
 pub fn aesenc_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     sub_bytes(&mut state);
     shift_rows(&mut state);
@@ -165,7 +154,6 @@ pub fn aesenc_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     add_round_key(&mut state, &rk);
     state
 }
-
 pub fn aesdec(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     if let Some(res) = crate::vector::metal_aesdec_round(state, rk) {
@@ -193,7 +181,6 @@ pub fn aesdec(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     }
     aesdec_impl(state, rk)
 }
-
 pub fn aesdec_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     add_round_key(&mut state, &rk);
     inv_mix_columns(&mut state);
@@ -201,11 +188,9 @@ pub fn aesdec_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     inv_sub_bytes(&mut state);
     state
 }
-
 pub fn sbox(byte: u8) -> u8 {
     SBOX[byte as usize]
 }
-
 /// Process many 16-byte blocks with a single AESENC round.
 /// Preference order: Metal (macOS) – batch not available; uses per-block → CUDA batch → CPU loop.
 #[allow(dead_code)]
@@ -231,7 +216,6 @@ pub fn aesenc_many(states: &[[u8; 16]], rk: [u8; 16]) -> Vec<[u8; 16]> {
     }
     states.iter().map(|&s| aesenc(s, rk)).collect()
 }
-
 /// Process many 16-byte blocks with a single AESDEC round.
 #[allow(dead_code)]
 pub fn aesdec_many(states: &[[u8; 16]], rk: [u8; 16]) -> Vec<[u8; 16]> {
@@ -250,7 +234,6 @@ pub fn aesdec_many(states: &[[u8; 16]], rk: [u8; 16]) -> Vec<[u8; 16]> {
     }
     states.iter().map(|&s| aesdec(s, rk)).collect()
 }
-
 /// Apply N AES encryption rounds (each equivalent to `aesenc`) to many blocks.
 /// `round_keys` supplies the N round keys in order. This function does not
 /// perform the initial AddRoundKey or handle the final round differences; it is
@@ -277,7 +260,6 @@ pub fn aesenc_n_rounds_many(states: &[[u8; 16]], round_keys: &[[u8; 16]]) -> Vec
     }
     cur
 }
-
 /// Apply N AES decryption rounds (each equivalent to `aesdec`) to many blocks.
 #[allow(dead_code)]
 pub fn aesdec_n_rounds_many(states: &[[u8; 16]], round_keys: &[[u8; 16]]) -> Vec<[u8; 16]> {
@@ -300,7 +282,6 @@ pub fn aesdec_n_rounds_many(states: &[[u8; 16]], round_keys: &[[u8; 16]]) -> Vec
     }
     cur
 }
-
 /// AES "last" round for encryption (no MixColumns): SubBytes → ShiftRows → AddRoundKey.
 #[allow(dead_code)]
 pub fn aesenc_last_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
@@ -309,7 +290,6 @@ pub fn aesenc_last_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     add_round_key(&mut state, &rk);
     state
 }
-
 /// AES "last" round for decryption (no InvMixColumns): AddRoundKey → InvShiftRows → InvSubBytes.
 #[allow(dead_code)]
 pub fn aesdec_last_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
@@ -318,7 +298,6 @@ pub fn aesdec_last_impl(mut state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     inv_sub_bytes(&mut state);
     state
 }
-
 /// Convenience: AES-128 encrypt many blocks with pre-expanded key schedule (11 round keys).
 /// Layout: round_keys[0] is initial key (for AddRoundKey), 1..=9 used with aesenc_many,
 /// and round_keys[10] used with aesenc_last_impl.
@@ -344,7 +323,6 @@ pub fn aes128_encrypt_many(states: &[[u8; 16]], round_keys: &[[u8; 16]; 11]) -> 
     }
     cur
 }
-
 /// Convenience: AES-128 decrypt many blocks with pre-expanded key schedule (11 round keys, reversed order).
 #[allow(dead_code)]
 pub fn aes128_decrypt_many(states: &[[u8; 16]], round_keys: &[[u8; 16]; 11]) -> Vec<[u8; 16]> {
@@ -364,18 +342,14 @@ pub fn aes128_decrypt_many(states: &[[u8; 16]], round_keys: &[[u8; 16]; 11]) -> 
     }
     cur
 }
-
 // --- AES-128 key expansion (pre-expanded schedule helpers) ---
-
 #[allow(dead_code)]
 const RCON: [u8; 10] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36];
-
 #[inline]
 #[allow(dead_code)]
 fn rot_word(w: [u8; 4]) -> [u8; 4] {
     [w[1], w[2], w[3], w[0]]
 }
-
 #[inline]
 #[allow(dead_code)]
 fn sub_word(mut w: [u8; 4]) -> [u8; 4] {
@@ -385,7 +359,6 @@ fn sub_word(mut w: [u8; 4]) -> [u8; 4] {
     w[3] = SBOX[w[3] as usize];
     w
 }
-
 /// Expand a 128-bit AES key into 11 round keys (initial + 10 rounds).
 #[allow(dead_code)]
 pub fn aes128_expand_key(key: [u8; 16]) -> [[u8; 16]; 11] {
@@ -418,11 +391,9 @@ pub fn aes128_expand_key(key: [u8; 16]) -> [[u8; 16]; 11] {
     }
     rks
 }
-
 #[cfg(test)]
 mod key_schedule_tests {
     use super::*;
-
     #[test]
     fn expand_key_matches_known_vector() {
         // FIPS-197 Appendix A.1 test vector
@@ -451,9 +422,7 @@ mod key_schedule_tests {
         );
     }
 }
-
 // --- CPU acceleration helpers (x86 AES-NI) ---
-
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline(always)]
 fn is_x86_aes_available() -> bool {
@@ -466,9 +435,7 @@ fn is_x86_aes_available() -> bool {
         std::is_x86_feature_detected!("aes")
     }
 }
-
 // --- CPU acceleration helpers (AArch64 AES) ---
-
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 fn is_aarch64_aes_available() -> bool {
@@ -509,7 +476,6 @@ fn is_aarch64_aes_available() -> bool {
         true
     })
 }
-
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "aes")]
 unsafe fn aesenc_armv8(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
@@ -526,7 +492,6 @@ unsafe fn aesenc_armv8(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     unsafe { vst1q_u8(out.as_mut_ptr(), r) };
     out
 }
-
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "aes")]
 unsafe fn aesdec_armv8(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
@@ -544,7 +509,6 @@ unsafe fn aesdec_armv8(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     unsafe { vst1q_u8(out.as_mut_ptr(), r) };
     out
 }
-
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "aes")]
 unsafe fn aesenc_aesni(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
@@ -552,7 +516,6 @@ unsafe fn aesenc_aesni(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     use core::arch::x86::*;
     #[cfg(target_arch = "x86_64")]
     use core::arch::x86_64::*;
-
     unsafe {
         let s = _mm_loadu_si128(state.as_ptr() as *const __m128i);
         let k = _mm_loadu_si128(rk.as_ptr() as *const __m128i);
@@ -562,7 +525,6 @@ unsafe fn aesenc_aesni(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
         out.assume_init()
     }
 }
-
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "aes")]
 unsafe fn aesdec_aesni(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
@@ -570,7 +532,6 @@ unsafe fn aesdec_aesni(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
     use core::arch::x86::*;
     #[cfg(target_arch = "x86_64")]
     use core::arch::x86_64::*;
-
     unsafe {
         let s = _mm_loadu_si128(state.as_ptr() as *const __m128i);
         let k = _mm_loadu_si128(rk.as_ptr() as *const __m128i);
@@ -586,11 +547,9 @@ unsafe fn aesdec_aesni(state: [u8; 16], rk: [u8; 16]) -> [u8; 16] {
         out.assume_init()
     }
 }
-
 #[cfg(test)]
 mod tests_accel {
     use super::*;
-
     #[test]
     fn aesenc_parity_with_scalar() {
         // Fixed test vectors (arbitrary but deterministic)
@@ -606,7 +565,6 @@ mod tests_accel {
         let got = aesenc(state, rk);
         assert_eq!(got, scalar);
     }
-
     #[test]
     fn aesdec_parity_with_scalar() {
         let state = [
@@ -621,7 +579,6 @@ mod tests_accel {
         let got = aesdec(state, rk);
         assert_eq!(got, scalar);
     }
-
     #[test]
     fn aesdec_inverts_public_aesenc_round() {
         let state = [

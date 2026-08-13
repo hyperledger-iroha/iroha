@@ -1,8 +1,6 @@
 //! `World`-related ISI implementations.
-
 use iroha_data_model::smart_contract::manifest::{ContractManifest, ManifestProvenance};
 use iroha_telemetry::metrics;
-
 use super::prelude::*;
 use crate::{
     prelude::*,
@@ -25,12 +23,9 @@ pub mod isi {
         collections::{BTreeMap, BTreeSet},
         str::FromStr,
     };
-
     use base64::engine::Engine as _;
     use eyre::Result;
-    use iroha_crypto::{
-        Algorithm, Hash, Hash as CryptoHash, PublicKey, Signature, blake2::Blake2b512,
-    };
+    use iroha_crypto::{Algorithm, Hash, Hash as CryptoHash, PublicKey, Signature, blake2::Blake2b512};
     use iroha_executor_data_model::permission::{
         account::{
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
@@ -247,7 +242,6 @@ pub mod isi {
     use iroha_telemetry::metrics::GovernanceManifestActivation;
     use mv::storage::StorageReadOnly;
     use sha2::Digest as _;
-
     use super::*;
     use crate::{
         governance::draw::{self, derive_parliament_bodies},
@@ -295,7 +289,6 @@ pub mod isi {
     }
     fn validate_ivm_heap_parameter(parameter: &Parameter) -> Result<(), Error> {
         use iroha_data_model::parameter::SmartContractParameter;
-
         let (name, limit) = match parameter {
             Parameter::SmartContract(SmartContractParameter::Memory(limit)) => {
                 ("smart_contract.memory", limit.get())
@@ -401,7 +394,6 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         use iroha_data_model::sorafs::reputation::ReputationFinalizedArchiveRetentionRequestV1;
-
         let Some(next) = ReputationFinalizedArchiveRetentionRequestV1::from_custom_parameter(
             custom,
         )
@@ -895,7 +887,6 @@ pub mod isi {
         payload: &[u8],
     ) -> Result<VerifiedLaneRelayRecord, iroha_data_model::query::error::QueryExecutionFail> {
         use iroha_data_model::query::error::QueryExecutionFail;
-
         let json_payload = verified_lane_relay_record_json_payload(payload)
             .map_err(QueryExecutionFail::Conversion)?;
         let elements = json_payload
@@ -8311,7 +8302,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             use iroha_data_model::events::data::governance as gev;
-
             let expected_referendum_id = hex::encode(self.proposal_id);
             if self.referendum_id != expected_referendum_id {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -9581,7 +9571,6 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         use iroha_data_model::runtime::RuntimeUpgradeProvenanceError;
-
         let policy = &state_transaction.gov.runtime_upgrade_provenance;
         let has_provenance = !(manifest.sbom_digests.is_empty()
             && manifest.slsa_attestation.is_empty()
@@ -11227,7 +11216,6 @@ pub mod isi {
         encoded_envelope_len: usize,
     ) -> Result<crate::state::SccpVerifierWorkV1, Error> {
         use iroha_sccp::SccpNativeSourceProofV1;
-
         match &decoded.source.proof {
             SccpNativeSourceProofV1::EthereumBeacon(proof) => {
                 let updates = u64::try_from(proof.updates.len()).map_err(|_| {
@@ -11664,10 +11652,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             use std::collections::BTreeSet;
-
-            use iroha_data_model::events::data::proof::{
-                ProofEvent, ProofPruneOrigin, ProofPruned,
-            };
+            use iroha_data_model::events::data::proof::{ProofEvent, ProofPruneOrigin, ProofPruned};
             let cap = state_transaction.zk.proof_history_cap;
             let grace = state_transaction.zk.proof_retention_grace_blocks;
             let prune_batch = state_transaction.zk.proof_prune_batch;
@@ -12806,7 +12791,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             use iroha_data_model::events::data::prelude::BridgeEvent;
-
             consume_bridge_receipt_proof(&self.receipt, state_transaction)?;
             state_transaction
                 .world
@@ -13523,7 +13507,6 @@ pub mod isi {
     #[cfg(test)]
     mod retention_tests {
         use super::*;
-
         #[test]
         fn retention_prunes_entries_older_than_grace_window() {
             let backend = "halo2/ipa";
@@ -16927,7 +16910,6 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         use iroha_data_model::nexus::{FeeSponsorRuleEffect, FeeSponsorRuleSelector};
-
         revision
             .validate()
             .map_err(|error| invalid_fee_sponsor_program(error.to_string()))?;
@@ -17081,7 +17063,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             use iroha_data_model::nexus::FeeSponsorProgramLifecycle;
-
             let program = self.program().clone();
             ensure_fee_sponsor_program_owner(authority, &program.id, state_transaction)?;
             if state_transaction
@@ -17140,7 +17121,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             use iroha_data_model::nexus::FeeSponsorProgramLifecycle;
-
             let revision = self.revision().clone();
             ensure_fee_sponsor_program_owner(authority, &revision.program_id, state_transaction)?;
             let mut program = state_transaction
@@ -17323,7 +17303,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             use iroha_data_model::nexus::FeeSponsorProgramLifecycle;
-
             let program_id = self.program_id().clone();
             ensure_fee_sponsor_program_owner(authority, &program_id, state_transaction)?;
             let mut program = state_transaction
@@ -17354,7 +17333,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             use iroha_data_model::nexus::FeeSponsorProgramLifecycle;
-
             let program_id = self.program_id().clone();
             ensure_fee_sponsor_program_owner(authority, &program_id, state_transaction)?;
             let mut program = state_transaction
@@ -17386,7 +17364,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             use iroha_data_model::nexus::FeeSponsorProgramLifecycle;
-
             let program_id = self.program_id().clone();
             ensure_fee_sponsor_program_owner(authority, &program_id, state_transaction)?;
             let mut program = state_transaction
@@ -17610,7 +17587,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             use iroha_data_model::nexus::{FeeSponsorProgramLifecycle, FeeSponsorVaultKey};
-
             let program_id = self.program_id().clone();
             ensure_fee_sponsor_withdrawal_authority(authority, &program_id)?;
             if self.amount().is_zero() {
@@ -19018,7 +18994,6 @@ pub mod isi {
             str::FromStr,
             sync::Arc,
         };
-
         use crate::smartcontracts::triggers::set::SetReadOnly;
         use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
@@ -19129,7 +19104,6 @@ pub mod isi {
         #[test]
         fn set_parameter_rejects_malformed_governed_gas_rates_but_accepts_zero_rate() {
             use iroha_data_model::parameter::{CustomParameter, CustomParameterId};
-
             let state = State::new_for_testing(
                 World::default(),
                 Kura::blank_kura_for_testing(),
@@ -20600,7 +20574,6 @@ pub mod isi {
         #[test]
         fn create_election_rejects_noncanonical_selector_before_mutating_governance_state() {
             use iroha_executor_data_model::permission::governance::CanManageParliament;
-
             let state = State::new_for_testing(
                 World::default(),
                 Kura::blank_kura_for_testing(),
@@ -20922,7 +20895,6 @@ pub mod isi {
                 "wrong-target slash and restitution must not create ledger state"
             );
         }
-
         use iroha_executor_data_model::permission::{
             account::{AccountAliasPermissionScope, CanManageAccountAlias},
             domain::CanModifyDomainMetadata,
@@ -20934,7 +20906,6 @@ pub mod isi {
         #[allow(unused_imports)]
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
-
         use super::*;
         use crate::{
             block::ValidBlock,
@@ -21554,9 +21525,7 @@ pub mod isi {
         }
         #[test]
         fn record_sccp_message_rejects_stale_binding_route_and_cross_profile_contexts() {
-            use iroha_data_model::bridge::{
-                SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
-            };
+            use iroha_data_model::bridge::{SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1};
             let state = State::new_for_testing(
                 World::default(),
                 Kura::blank_kura_for_testing(),
@@ -24768,7 +24737,6 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn extract_vote_public_inputs_handles_halo2_envelope() {
             use iroha_zkp_halo2::Halo2ProofEnvelope;
-
             let inputs = vec![[1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]];
             let halo_env = Halo2ProofEnvelope::new(18, 1, 1, 0, inputs.clone(), vec![0xaa])
                 .expect("halo2 envelope");
@@ -24789,7 +24757,6 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn extract_vote_public_inputs_handles_stark_envelope() {
             use iroha_data_model::zk::StarkFriOpenProofV1;
-
             let columns: Vec<Vec<[u8; 32]>> = vec![vec![[1u8; 32]], vec![[2u8; 32]]];
             let open = StarkFriOpenProofV1 {
                 version: 1,
@@ -36773,7 +36740,6 @@ seiyaku GovernanceLifecycle {
     /// Query module provides `IrohaQuery` Peer related implementations.
     pub mod query {
         use std::collections::BTreeSet;
-
         use eyre::Result;
         use iroha_data_model::{
             parameter::Parameters,
@@ -36787,7 +36753,6 @@ seiyaku GovernanceLifecycle {
             role::Role,
         };
         use norito::json::Value;
-
         use super::*;
         use crate::{
             smartcontracts::ValidQuery,
@@ -36829,7 +36794,6 @@ seiyaku GovernanceLifecycle {
         #[cfg(test)]
         mod role_candidate_tests {
             use super::*;
-
             #[test]
             fn role_candidate_ids_are_intersected() {
                 let admin_id: RoleId = "intersect_admin".parse().unwrap();
@@ -37259,7 +37223,6 @@ seiyaku GovernanceLifecycle {
             state_ro: &impl StateReadOnly,
         ) -> Result<iroha_data_model::isi::settlement::FxCorridorPolicyRegistry, Error> {
             use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
-
             let parameter = state_ro
                 .world()
                 .parameters()

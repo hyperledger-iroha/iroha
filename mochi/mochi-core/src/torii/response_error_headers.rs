@@ -5,7 +5,6 @@ fn reject_code_from_headers(headers: &HeaderMap) -> Option<String> {
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
 }
-
 fn retry_after_from_headers(headers: &HeaderMap) -> Option<Duration> {
     headers
         .get(reqwest::header::RETRY_AFTER)

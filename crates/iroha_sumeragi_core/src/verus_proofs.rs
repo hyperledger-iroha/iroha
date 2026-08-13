@@ -10,9 +10,7 @@
 //! The definitions and proof bodies contain no proof escape hatches. See `VERIFICATION.md` for
 //! pinned execution evidence and the residual collection-extraction, adapter-contract, WAL-byte,
 //! cross-tool, and liveness boundaries that remain before a complete production-correctness claim.
-
 use vstd::{assert_seqs_equal, prelude::*};
-
 use crate::refinement::{
     BOUNDARY_COMPLETE_APPLICATION, BOUNDARY_NONE, BOUNDARY_RESUME_AFTER_REPLAY,
     CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_INCOMING, CERTIFICATE_EVIDENCE_LOCAL,
@@ -4062,14 +4060,6 @@ pub struct ProductionInFlightFirstReleaseTransitionProjection {
     pub target: u128,
     pub before: ProductionInFlightFirstReleaseStateProjection,
     pub after: ProductionInFlightFirstReleaseStateProjection,
-}
-/// Verus-side reverse classification of one terminal economic owner.
-#[derive(Copy, Clone)]
-pub struct ProductionInFlightFirstReleaseTerminalOwnerProjection {
-    pub ordinary_fifo_owner: bool,
-    pub canonical_wsv_owner: bool,
-    pub commit_terminal: bool,
-    pub release_terminal: bool,
 }
 /// Verus-side complete immutable identity of one durable predecessor.
 #[derive(Copy, Clone)]

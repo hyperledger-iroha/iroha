@@ -13,7 +13,6 @@ const fn operator_local_get(stable_route_id: &'static str, path: &'static str) -
     .with_projections(RouteProjections::NONE)
     .with_implicit_head(true)
 }
-
 const fn operator_local_expensive_post(
     stable_route_id: &'static str,
     path: &'static str,
@@ -31,7 +30,6 @@ const fn operator_local_expensive_post(
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::NONE)
 }
-
 const fn delegated_routing_get(
     stable_route_id: &'static str,
     path: &'static str,

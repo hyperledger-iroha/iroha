@@ -1,14 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry and metrics surface integration tests.
-
 use std::collections::{HashMap, HashSet};
-
 use eyre::ensure;
 use iroha_core::sumeragi::consensus::NPOS_TAG;
 use iroha_data_model::{Level, isi::Log, peer::Peer};
 use iroha_test_network::NetworkBuilder;
 use tokio::runtime::Runtime;
-
 const TELEMETRY_REQUIRED_KEYS: &[&str] = &[
     "accounts{domain=\"garden_of_live_flowers\"}",
     "accounts{domain=\"genesis\"}",
@@ -48,7 +45,6 @@ const TELEMETRY_REQUIRED_KEYS: &[&str] = &[
     "uptime_since_genesis_ms",
     "view_changes",
 ];
-
 fn builder_with_full_telemetry() -> NetworkBuilder {
     NetworkBuilder::new().with_config_layer(|layer| {
         layer
@@ -56,11 +52,9 @@ fn builder_with_full_telemetry() -> NetworkBuilder {
             .write("telemetry_profile", "full");
     })
 }
-
 struct MetricsReader {
     map: HashMap<String, f64>,
 }
-
 impl MetricsReader {
     fn new(raw: &str) -> Self {
         let map = raw
@@ -76,28 +70,23 @@ impl MetricsReader {
             .collect();
         Self { map }
     }
-
     fn get(&self, key: impl AsRef<str>) -> f64 {
         let Some(value) = self.map.get(key.as_ref()) else {
             panic!("key \"{}\" does not exist", key.as_ref());
         };
         *value
     }
-
     fn keys(&self) -> impl Iterator<Item = &String> {
         self.map.keys()
     }
 }
-
 use integration_tests::sandbox;
-
 fn start_network(
     builder: NetworkBuilder,
     context: &'static str,
 ) -> eyre::Result<Option<(sandbox::SerializedNetwork, Runtime)>> {
     sandbox::start_network_blocking_or_skip(builder, context)
 }
-
 #[allow(clippy::float_cmp)]
 #[tokio::test]
 async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
@@ -110,7 +99,6 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
     else {
         return Ok(());
     };
-
     // misc_measurements (genesis metrics) before submitting extra transactions
     let metrics = reqwest::get(network.client().torii_url.join("/metrics").unwrap())
         .await?
@@ -118,7 +106,6 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         .await?;
     println!("{metrics}");
     let metrics = MetricsReader::new(&metrics);
-
     let keys = metrics
         .keys()
         .map(String::as_str)
@@ -129,7 +116,6 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             "missing metric key {key}; available keys: {keys:?}"
         );
     }
-
     assert_eq!(metrics.get("tx_amount_sum"), 7_000_057.0);
     assert_eq!(metrics.get("tx_amount_count"), 16.0);
     assert_eq!(metrics.get("tx_amount_bucket{le=\"0\"}"), 0.0);
@@ -141,7 +127,6 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         metrics.get("accounts{domain=\"garden_of_live_flowers\"}"),
         0.0
     );
-
     // fetch_online_peers
     for peer in network.peers() {
         let others: HashSet<_> = network
@@ -150,7 +135,6 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             .filter(|x| x.id() != peer.id())
             .map(|x| Peer::new(x.p2p_address(), x.id()))
             .collect();
-
         let peer_client = peer.client();
         let operator_key_pair = peer_client
             .operator_key_pair
@@ -182,17 +166,14 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         let response_body = response.text().await?;
         let response: HashSet<Peer> = norito::json::from_str(&response_body)
             .map_err(|err| eyre::Report::msg(format!("decode peers response: {err}")))?;
-
         assert_eq!(response, others);
     }
-
     // commit_time
     network.client().submit_blocking(
         Log::new(Level::INFO, "mewo".to_owned()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     network.ensure_blocks_with(|x| x.non_empty >= 2).await?;
-
     for client in network
         .peers()
         .iter()
@@ -204,10 +185,8 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             "No peer can commit block immediately, even the leader one"
         );
     }
-
     Ok(())
 }
-
 #[test]
 fn status_reports_npos_mode_tag_on_start() -> eyre::Result<()> {
     let builder = builder_with_full_telemetry()
@@ -219,7 +198,6 @@ fn status_reports_npos_mode_tag_on_start() -> eyre::Result<()> {
     else {
         return Ok(());
     };
-
     let status = network.client().get_status()?;
     let sumeragi = status
         .sumeragi
@@ -229,6 +207,5 @@ fn status_reports_npos_mode_tag_on_start() -> eyre::Result<()> {
         "expected /status mode_tag to be {NPOS_TAG}, got {}",
         sumeragi.mode_tag
     );
-
     Ok(())
 }

@@ -1,5 +1,4 @@
 use norito::columnar::{AosEnumRef, *};
-
 #[test]
 fn aos_view_str_bool() {
     let rows: Vec<(u64, &str, bool)> = vec![(1, "a", true), (2, "bc", false)];
@@ -16,7 +15,6 @@ fn aos_view_str_bool() {
     assert_eq!(view.name(1).unwrap(), "bc");
     assert!(!view.flag(1));
 }
-
 #[test]
 fn aos_view_bytes_u32_bool() {
     let rows: Vec<(u64, &[u8], u32, bool)> =
@@ -36,7 +34,6 @@ fn aos_view_bytes_u32_bool() {
     assert_eq!(view.val(1), 9);
     assert!(!view.flag(1));
 }
-
 #[test]
 fn aos_view_enum_bool() {
     let rows: Vec<(u64, EnumBorrow<'_>, bool)> = vec![
@@ -62,7 +59,6 @@ fn aos_view_enum_bool() {
     }
     assert!(!view.flag(1));
 }
-
 #[test]
 fn aos_view_opt_str_bool() {
     let rows: Vec<(u64, Option<&str>, bool)> = vec![(1, Some("x"), true), (2, None, false)];
@@ -79,7 +75,6 @@ fn aos_view_opt_str_bool() {
     assert_eq!(view.name(1).unwrap(), None);
     assert!(!view.flag(1));
 }
-
 #[test]
 fn aos_view_opt_u32_bool() {
     let rows: Vec<(u64, Option<u32>, bool)> = vec![(10, Some(7), true), (11, None, false)];

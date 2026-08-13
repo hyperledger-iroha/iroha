@@ -3,10 +3,8 @@ use crate::vega::{
     MaskedRelaxedRandomErrorV1, sponge::shake256,
     zk_ams::mkhe::manifest::ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1,
 };
-
 const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
 const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
-
 pub(super) fn test_profile() -> BgvProfile {
     BgvProfile {
         profile_id: [0x61; 32],
@@ -26,12 +24,10 @@ pub(super) fn test_profile() -> BgvProfile {
         max_work_units: 1 << 20,
     }
 }
-
 pub(super) struct KatRandom {
     state: [u8; 32],
     counter: u64,
 }
-
 impl KatRandom {
     pub(super) fn new(label: &[u8]) -> Self {
         Self {
@@ -40,7 +36,6 @@ impl KatRandom {
         }
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for KatRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         let mut written = 0;
@@ -58,14 +53,12 @@ impl MaskedRelaxedRandomSourceV1 for KatRandom {
         Ok(())
     }
 }
-
 struct BufferedExerciseRandom {
     state: [u8; 32],
     counter: u64,
     block: [u8; 64],
     cursor: usize,
 }
-
 impl BufferedExerciseRandom {
     fn new(label: &[u8]) -> Self {
         Self {
@@ -75,7 +68,6 @@ impl BufferedExerciseRandom {
             cursor: 64,
         }
     }
-
     fn refill(&mut self) {
         let mut frame = Vec::with_capacity(40);
         frame.extend_from_slice(&self.state);
@@ -86,7 +78,6 @@ impl BufferedExerciseRandom {
         self.cursor = 0;
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for BufferedExerciseRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         let mut written = 0;
@@ -103,7 +94,6 @@ impl MaskedRelaxedRandomSourceV1 for BufferedExerciseRandom {
         Ok(())
     }
 }
-
 impl Drop for BufferedExerciseRandom {
     fn drop(&mut self) {
         clear_secret_bytes_v1(&mut self.state);
@@ -115,36 +105,29 @@ impl Drop for BufferedExerciseRandom {
         let _ = core::hint::black_box(&mut self.cursor);
     }
 }
-
 struct ConstantRandom(u8);
-
 impl MaskedRelaxedRandomSourceV1 for ConstantRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         destination.fill(self.0);
         Ok(())
     }
 }
-
 struct FailingRandom;
-
 impl MaskedRelaxedRandomSourceV1 for FailingRandom {
     fn fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         Err(MaskedRelaxedRandomErrorV1::Unavailable)
     }
 }
-
 fn persistent_blinding_uniform_block(value: u64) -> [u8; 64] {
     let mut block = [0; 64];
     block[..8].copy_from_slice(&value.to_le_bytes());
     block
 }
-
 struct ScriptedPersistentBlindingRandom {
     blocks: Vec<[u8; 64]>,
     next: usize,
     request_lengths: Vec<usize>,
 }
-
 impl ScriptedPersistentBlindingRandom {
     fn from_scalars(values: impl IntoIterator<Item = u64>) -> Self {
         Self {
@@ -157,7 +140,6 @@ impl ScriptedPersistentBlindingRandom {
         }
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for ScriptedPersistentBlindingRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         self.request_lengths.push(destination.len());
@@ -172,13 +154,11 @@ impl MaskedRelaxedRandomSourceV1 for ScriptedPersistentBlindingRandom {
         Ok(())
     }
 }
-
 struct PartialFailurePersistentBlindingRandom {
     successful_requests: usize,
     calls: usize,
     partial_bytes: usize,
 }
-
 impl MaskedRelaxedRandomSourceV1 for PartialFailurePersistentBlindingRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         assert_eq!(destination.len(), PERSISTENT_BLINDING_ENTROPY_BYTES_V1);
@@ -194,13 +174,11 @@ impl MaskedRelaxedRandomSourceV1 for PartialFailurePersistentBlindingRandom {
         Err(MaskedRelaxedRandomErrorV1::Unavailable)
     }
 }
-
 struct PartialPanicPersistentBlindingRandom {
     successful_requests: usize,
     calls: usize,
     partial_bytes: usize,
 }
-
 impl MaskedRelaxedRandomSourceV1 for PartialPanicPersistentBlindingRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         assert_eq!(destination.len(), PERSISTENT_BLINDING_ENTROPY_BYTES_V1);
@@ -216,26 +194,21 @@ impl MaskedRelaxedRandomSourceV1 for PartialPanicPersistentBlindingRandom {
         panic!("injected persistent-blinding entropy panic");
     }
 }
-
 fn reset_persistent_blinding_drop_audits() {
     PERSISTENT_BLINDING_ENTROPY_ZEROIZED_DROPS_V1.with(|drops| drops.set(0));
     PERSISTENT_BLINDING_OWNER_ZEROIZED_DROPS_V1.with(|drops| drops.set(0));
 }
-
 fn persistent_blinding_drop_audits() -> (usize, usize) {
     let entropy = PERSISTENT_BLINDING_ENTROPY_ZEROIZED_DROPS_V1.with(std::cell::Cell::get);
     let owner = PERSISTENT_BLINDING_OWNER_ZEROIZED_DROPS_V1.with(std::cell::Cell::get);
     (entropy, owner)
 }
-
 fn test_persistent_secret_commitment_blindings() -> PersistentSecretCommitmentBlindingsV1 {
     PersistentSecretCommitmentBlindingsV1(core::array::from_fn(|index| {
         Scalar::from_u64(u64::try_from(index + 17).expect("test blinding index fits u64"))
     }))
 }
-
 struct RepeatedHealthyBlockRandom;
-
 impl MaskedRelaxedRandomSourceV1 for RepeatedHealthyBlockRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         for (index, byte) in destination.iter_mut().enumerate() {
@@ -244,17 +217,14 @@ impl MaskedRelaxedRandomSourceV1 for RepeatedHealthyBlockRandom {
         Ok(())
     }
 }
-
 struct DistinctOddPeriodProbeRandom {
     calls: usize,
 }
-
 impl DistinctOddPeriodProbeRandom {
     const fn new() -> Self {
         Self { calls: 0 }
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for DistinctOddPeriodProbeRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         let pattern = if self.calls == 0 {
@@ -269,17 +239,14 @@ impl MaskedRelaxedRandomSourceV1 for DistinctOddPeriodProbeRandom {
         Ok(())
     }
 }
-
 struct ProbeThenConstantRandom {
     calls: usize,
 }
-
 impl ProbeThenConstantRandom {
     const fn new() -> Self {
         Self { calls: 0 }
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for ProbeThenConstantRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         match self.calls {
@@ -299,7 +266,6 @@ impl MaskedRelaxedRandomSourceV1 for ProbeThenConstantRandom {
         Ok(())
     }
 }
-
 fn test_parties() -> super::super::PartySet {
     super::super::PartySet::new(
         (1_u8..=ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 as u8)
@@ -312,7 +278,6 @@ fn test_parties() -> super::super::PartySet {
     )
     .unwrap()
 }
-
 pub(super) fn test_key(label: u8) -> (ZkAmsMkheCollectivePublicKeyV1, SecretPolynomial) {
     let profile = test_profile();
     profile.validate().unwrap();
@@ -345,7 +310,6 @@ pub(super) fn test_key(label: u8) -> (ZkAmsMkheCollectivePublicKeyV1, SecretPoly
     key.validate(&profile).unwrap();
     (key, aggregate_secret)
 }
-
 fn release_native_bgv_test_key() -> ZkAmsMkheCollectivePublicKeyV1 {
     let profile = release_profile_v1();
     profile.validate().expect("release profile validates");
@@ -385,13 +349,11 @@ fn release_native_bgv_test_key() -> ZkAmsMkheCollectivePublicKeyV1 {
     key.validate(&profile).expect("release test key validates");
     key
 }
-
 fn release_packed_slots(first: u64) -> Vec<[u8; 32]> {
     let mut slots = vec![[0_u8; 32]; ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1];
     slots[0][24..].copy_from_slice(&first.to_be_bytes());
     slots
 }
-
 fn release_native_bgv_encryption_fixture(
     key: &ZkAmsMkheCollectivePublicKeyV1,
     label: &[u8],
@@ -419,7 +381,6 @@ fn release_native_bgv_encryption_fixture(
     .expect("release native BGV encryption with opening");
     (layout, plaintext, ciphertext, opening)
 }
-
 pub(super) fn test_canonical_plaintext(values: &[u64; 8]) -> Vec<[u8; 32]> {
     values
         .iter()
@@ -430,7 +391,6 @@ pub(super) fn test_canonical_plaintext(values: &[u64; 8]) -> Vec<[u8; 32]> {
         })
         .collect()
 }
-
 pub(super) fn test_input_topology(
     profile: &BgvProfile,
     label: &[u8],
@@ -441,7 +401,6 @@ pub(super) fn test_input_topology(
         plaintext_used_slots: u32::try_from(profile.ring_degree).unwrap(),
     }
 }
-
 pub(super) fn encrypt_test_with_opening(
     profile: &BgvProfile,
     key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -506,7 +465,6 @@ fn try_encrypt_test_with_random<R: MaskedRelaxedRandomSourceV1>(
         random,
     )
 }
-
 fn encrypt_test(
     profile: &BgvProfile,
     key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -519,7 +477,6 @@ fn encrypt_test(
     drop(opening);
     ciphertext
 }
-
 fn decrypt_compact(
     profile: &BgvProfile,
     ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
@@ -537,7 +494,6 @@ fn decrypt_compact(
         .unwrap();
     super::super::reduce_test_polynomial(profile, &value).unwrap()
 }
-
 fn decrypt_level_one(
     profile: &BgvProfile,
     ciphertext: &ZkAmsMkheCollectiveLevelOneV1,
@@ -556,7 +512,6 @@ fn decrypt_level_one(
         .unwrap();
     super::super::reduce_test_polynomial(profile, &value).unwrap()
 }
-
 fn negacyclic_plaintext_product(left: &[u64; 8], right: &[u64; 8]) -> Vec<u64> {
     let mut output = [0_i128; 8];
     for (left_index, left_value) in left.iter().copied().enumerate() {
@@ -575,7 +530,6 @@ fn negacyclic_plaintext_product(left: &[u64; 8], right: &[u64; 8]) -> Vec<u64> {
         .map(|value| value.rem_euclid(17) as u64)
         .collect()
 }
-
 #[test]
 fn tiny_collective_algebra_matches_plaintext_oracle() {
     let profile = test_profile();
@@ -586,7 +540,6 @@ fn tiny_collective_algebra_matches_plaintext_oracle() {
     let right = encrypt_test(&profile, &key, &right_values, 17, b"collective-right");
     assert_eq!(decrypt_compact(&profile, &left, &secret), left_values);
     assert_eq!(decrypt_compact(&profile, &right, &secret), right_values);
-
     let sum = compact_binary_with_profile(
         &profile,
         &left,
@@ -606,7 +559,6 @@ fn tiny_collective_algebra_matches_plaintext_oracle() {
     );
     assert_eq!(sum.sample_index(), 11);
     assert_ne!(sum.transcript_digest(), left.transcript_digest());
-
     let difference = compact_binary_with_profile(
         &profile,
         &left,
@@ -625,7 +577,6 @@ fn tiny_collective_algebra_matches_plaintext_oracle() {
             .collect::<Vec<_>>()
     );
     assert_ne!(sum.digest(), difference.digest());
-
     let expected_product = negacyclic_plaintext_product(&left_values, &right_values);
     let product = multiply_with_profile(&profile, &left, &key, &right).unwrap();
     assert_eq!(
@@ -633,7 +584,6 @@ fn tiny_collective_algebra_matches_plaintext_oracle() {
         expected_product
     );
     assert_eq!(product.evaluation_key_digest(), key.digest());
-
     let plaintext_multiplier = RnsPolynomial::from_test_plaintext(&profile, &right_values).unwrap();
     let scaled = compact_plaintext_mul_with_profile(
         &profile,
@@ -647,7 +597,6 @@ fn tiny_collective_algebra_matches_plaintext_oracle() {
         decrypt_compact(&profile, &scaled, &secret),
         expected_product
     );
-
     let doubled_product = level_one_binary_with_profile(
         &profile,
         &product,
@@ -677,7 +626,6 @@ fn tiny_collective_algebra_matches_plaintext_oracle() {
         decrypt_level_one(&profile, &zero_product, &secret),
         vec![0; 8]
     );
-
     let scaled_product = level_one_plaintext_mul_with_profile(
         &profile,
         &product,
@@ -691,7 +639,6 @@ fn tiny_collective_algebra_matches_plaintext_oracle() {
         decrypt_level_one(&profile, &scaled_product, &secret),
         negacyclic_plaintext_product(&expected_product_array, &right_values)
     );
-
     let transformed_product =
         level_one_automorphism_with_profile(&profile, &product, &key, 3, 3_u64.to_be_bytes())
             .unwrap();
@@ -706,7 +653,6 @@ fn tiny_collective_algebra_matches_plaintext_oracle() {
         super::super::reduce_test_polynomial(&profile, &expected_transformed).unwrap()
     );
 }
-
 #[test]
 fn raw_automorphism_moves_to_exact_automorphed_key_domain() {
     let profile = test_profile();
@@ -749,7 +695,6 @@ fn raw_automorphism_moves_to_exact_automorphed_key_domain() {
         );
     }
 }
-
 #[test]
 fn cross_key_unbound_and_tampered_ciphertexts_fail_closed() {
     let profile = test_profile();
@@ -768,7 +713,6 @@ fn cross_key_unbound_and_tampered_ciphertexts_fail_closed() {
         ),
         Err(ZkAmsMkheErrorV1::InvalidCiphertext)
     );
-
     let unbound = ZkAmsMkheCollectiveCiphertextV1::new(
         &profile,
         &key.parties,
@@ -791,7 +735,6 @@ fn cross_key_unbound_and_tampered_ciphertexts_fail_closed() {
         ),
         Err(ZkAmsMkheErrorV1::InvalidCiphertext)
     );
-
     for axis in 0..4 {
         let mut tampered = ciphertext.clone();
         match axis {
@@ -809,7 +752,6 @@ fn cross_key_unbound_and_tampered_ciphertexts_fail_closed() {
         Err(ZkAmsMkheErrorV1::InvalidPolynomial)
     );
 }
-
 #[test]
 fn level_one_component_and_digest_tampering_is_rejected() {
     let profile = test_profile();
@@ -830,7 +772,6 @@ fn level_one_component_and_digest_tampering_is_rejected() {
         Err(ZkAmsMkheErrorV1::InvalidCiphertext)
     );
 }
-
 #[test]
 fn deterministic_zero_ternary_rng_exhausts_without_emitting_secret_or_ciphertext() {
     let profile = test_profile();
@@ -839,7 +780,6 @@ fn deterministic_zero_ternary_rng_exhausts_without_emitting_secret_or_ciphertext
         sample_nonzero_ternary(&profile, &mut zero_ternary),
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     ));
-
     let (key, _) = test_key(0x71);
     // The two initial probes are distinct and non-periodic; all subsequent
     // ternary bytes encode zero, so bounded rejection must still stop.
@@ -849,7 +789,6 @@ fn deterministic_zero_ternary_rng_exhausts_without_emitting_secret_or_ciphertext
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     ));
 }
-
 #[test]
 fn collective_opening_adapter_recomputes_both_rlwe_equations_independently() {
     let profile = test_profile();
@@ -857,7 +796,6 @@ fn collective_opening_adapter_recomputes_both_rlwe_equations_independently() {
     let values = [1, 16, 3, 14, 5, 12, 7, 10];
     let (ciphertext, opening, message, canonical, input_topology, _) =
         encrypt_test_with_opening(&profile, &key, &values, 29, b"opening-equations");
-
     opening
         .with_validated_native_proof_witness_v1(
             &profile,
@@ -877,7 +815,6 @@ fn collective_opening_adapter_recomputes_both_rlwe_equations_independently() {
                 );
                 assert!(bounded_error_polynomial(&profile, error_zero));
                 assert!(bounded_error_polynomial(&profile, error_one));
-
                 // Recompute from the raw validated witnesses rather than
                 // relying on the opening's validation result.
                 let ephemeral_rns = ZeroizingRns(ephemeral.as_rns(&profile)?);
@@ -903,12 +840,10 @@ fn collective_opening_adapter_recomputes_both_rlwe_equations_independently() {
         )
         .unwrap();
 }
-
 #[test]
 #[ignore = "release-size 38-limb native BGV opening exercise; not KAT/readiness evidence"]
 fn release_native_bgv_capability_executes_and_rejects_stale_packing() {
     let key = release_native_bgv_test_key();
-
     let (layout, plaintext, ciphertext, opening) =
         release_native_bgv_encryption_fixture(&key, b"native-bgv-capability-success");
     super::super::phase23_rns_link::test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1(
@@ -921,7 +856,6 @@ fn release_native_bgv_capability_executes_and_rejects_stale_packing() {
     .expect("native BGV opening is verified and consumed in process");
     drop(plaintext);
     drop(ciphertext);
-
     let (layout, original_plaintext, ciphertext, opening) =
         release_native_bgv_encryption_fixture(&key, b"native-bgv-stale-plaintext");
     let changed_plaintext = super::super::packing::encode_zk_ams_t256_packed_plaintext_v1(
@@ -948,7 +882,6 @@ fn release_native_bgv_capability_executes_and_rejects_stale_packing() {
     drop(changed_plaintext);
     drop(original_plaintext);
     drop(ciphertext);
-
     let (original_layout, original_plaintext, ciphertext, opening) =
         release_native_bgv_encryption_fixture(&key, b"native-bgv-stale-layout");
     let changed_layout = super::super::packing::zk_ams_t256_packing_layout_v1(65_537)
@@ -977,7 +910,6 @@ fn release_native_bgv_capability_executes_and_rejects_stale_packing() {
     drop(changed_layout_plaintext);
     drop(original_plaintext);
     drop(ciphertext);
-
     let receipt_audit =
         super::super::receipt_capability_audit::zk_ams_mkhe_receipt_capability_audit_v1();
     assert_eq!(receipt_audit.blocker_mask, 0xff);
@@ -988,7 +920,6 @@ fn release_native_bgv_capability_executes_and_rejects_stale_packing() {
     assert!(!readiness.receipt_capability_gate);
     assert!(!readiness.is_ready());
 }
-
 #[test]
 fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
     let profile = test_profile();
@@ -997,7 +928,6 @@ fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
     let values = [2, 4, 6, 8, 10, 12, 14, 16];
     let (ciphertext, opening, message, canonical, topology, transcript_digest) =
         encrypt_test_with_opening(&profile, &key, &values, 31, b"opening-splices");
-
     assert!(
         opening
             .validate_against(
@@ -1010,7 +940,6 @@ fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
             )
             .is_err()
     );
-
     let other_ciphertext = encrypt_test(
         &profile,
         &key,
@@ -1030,7 +959,6 @@ fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
             )
             .is_err()
     );
-
     let wrong_message =
         RnsPolynomial::from_test_plaintext(&profile, &[3, 4, 6, 8, 10, 12, 14, 16]).unwrap();
     assert!(
@@ -1045,7 +973,6 @@ fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
             )
             .is_err()
     );
-
     let mut wrong_canonical = canonical.clone();
     wrong_canonical[0][31] ^= 1;
     assert!(
@@ -1060,7 +987,6 @@ fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
             )
             .is_err()
     );
-
     for axis in 0..3 {
         let mut wrong_topology = topology;
         match axis {
@@ -1082,7 +1008,6 @@ fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
             "context splice axis {axis} was accepted"
         );
     }
-
     let mut wrong_transcript_ciphertext = ciphertext.clone();
     wrong_transcript_ciphertext.transcript_digest[0] ^= 1;
     wrong_transcript_ciphertext.digest = wrong_transcript_ciphertext
@@ -1104,7 +1029,6 @@ fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
         wrong_transcript_ciphertext.transcript_digest,
         transcript_digest
     );
-
     let mut wrong_sample_ciphertext = ciphertext.clone();
     wrong_sample_ciphertext.sample_index ^= 1;
     wrong_sample_ciphertext.digest = wrong_sample_ciphertext.compute_digest(&profile).unwrap();
@@ -1134,7 +1058,6 @@ fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
             )
             .is_err()
     );
-
     let (ciphertext, mut opening, message, canonical, topology, _) =
         encrypt_test_with_opening(&profile, &key, &values, 31, b"opening-nonce-splice");
     opening.input_identity.encryption_nonce.as_mut_bytes()[0] ^= 1;
@@ -1145,13 +1068,11 @@ fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
         "an opening-owned encryption nonce splice was accepted"
     );
 }
-
 #[test]
 fn collective_opening_rejects_out_of_range_or_tampered_secret_witnesses() {
     let profile = test_profile();
     let (key, _) = test_key(0x75);
     let values = [1, 2, 3, 4, 5, 6, 7, 8];
-
     for axis in 0..4 {
         let (ciphertext, mut opening, message, canonical, topology, _) = encrypt_test_with_opening(
             &profile,
@@ -1176,7 +1097,6 @@ fn collective_opening_rejects_out_of_range_or_tampered_secret_witnesses() {
         );
     }
 }
-
 #[test]
 fn changed_plaintext_is_rejected_by_the_constant_rlwe_equation() {
     let profile = test_profile();
@@ -1187,7 +1107,6 @@ fn changed_plaintext_is_rejected_by_the_constant_rlwe_equation() {
         encrypt_test_with_opening(&profile, &key, &original, 48, b"changed-plaintext-equation");
     let changed_message = RnsPolynomial::from_test_plaintext(&profile, &changed).unwrap();
     let changed_canonical = test_canonical_plaintext(&changed);
-
     // Make the retained canonical views agree with the hostile caller so
     // rejection cannot rely on the removed deterministic plaintext
     // lineage. The unchanged RLWE constant must still fail independently.
@@ -1217,7 +1136,6 @@ fn changed_plaintext_is_rejected_by_the_constant_rlwe_equation() {
         "changed plaintext passed the constant RLWE equation"
     );
 }
-
 #[test]
 fn independent_entropy_gives_same_input_distinct_public_lineage() {
     let profile = test_profile();
@@ -1243,7 +1161,6 @@ fn independent_entropy_gives_same_input_distinct_public_lineage() {
         &mut second_random,
     )
     .unwrap();
-
     assert_eq!(
         first_opening.input_identity.topology,
         second_opening.input_identity.topology
@@ -1256,7 +1173,6 @@ fn independent_entropy_gives_same_input_distinct_public_lineage() {
     drop(first_opening);
     drop(second_opening);
 }
-
 #[test]
 fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
     let source = include_str!("../collective.rs");
@@ -1265,7 +1181,6 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
         .next()
         .expect("collective module source prefix");
     assert!(!module_source.contains("plaintext_digest"));
-
     let identity = module_source
         .split("struct CollectiveEncryptionInputIdentityV1")
         .nth(1)
@@ -1280,7 +1195,6 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
     assert!(!module_source.contains("fn encryption_nonce("));
     assert!(!module_source.contains("pub encryption_nonce"));
     assert!(module_source.contains(".field(\"encryption_nonce\", &\"[REDACTED]\")"));
-
     let public_ciphertext = module_source
         .split("pub struct ZkAmsMkheCollectiveCiphertextV1")
         .nth(1)
@@ -1290,7 +1204,6 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
         .expect("public ciphertext source slice");
     assert!(public_ciphertext.contains("transcript_digest: [u8; 32]"));
     assert!(!public_ciphertext.contains("encryption_nonce"));
-
     let fresh_encryption = module_source
         .split("fn encrypt_zk_ams_mkhe_collective_packed_with_opening_v1")
         .nth(1)
@@ -1300,7 +1213,6 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
         .expect("fresh encryption source slice");
     assert!(!fresh_encryption.contains("plaintext.digest"));
     assert!(fresh_encryption.contains("CollectiveEncryptionInputTopologyV1::from_packed"));
-
     let opening_verifier = module_source
         .split("fn verify_and_consume_phase23_native_bgv_opening_v1")
         .nth(1)
@@ -1309,7 +1221,6 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
         .next()
         .expect("opening verifier source slice");
     assert!(!opening_verifier.contains("plaintext.digest"));
-
     let transcript = module_source
         .split("fn collective_encryption_transcript_digest_v1")
         .nth(1)
@@ -1337,7 +1248,6 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
     assert!(transcript.contains("hash.finalize_into(&mut digest)"));
     assert!(transcript.contains("drop(hash)"));
     assert!(!transcript.contains("hash.finalize()"));
-
     let entropy = module_source
         .split("fn derive_collective_encryption_nonce_v1")
         .nth(1)
@@ -1356,7 +1266,6 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
     assert!(entropy.contains("drop(hash)"));
     assert!(entropy.contains("nonce.is_zero()"));
     assert!(!entropy.contains("let nonce = hash.finalize()"));
-
     let short_period = module_source
         .split("fn entropy_probe_has_short_period")
         .nth(1)
@@ -1367,7 +1276,6 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
     assert!(short_period.contains("probe[period..]"));
     assert!(short_period.contains(".zip(&probe[..probe.len() - period])"));
     assert!(!short_period.contains("is_multiple_of"));
-
     let native_encryption = module_source
         .split("fn encrypt_collective_native_with_opening")
         .nth(1)
@@ -1382,7 +1290,6 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
         .find("sample_nonzero_ternary_zeroizing(profile, random)?")
         .expect("ephemeral witness sampling");
     assert!(nonce_position < witness_position);
-
     // Public multipliers deliberately retain their own digest-bound
     // evaluation lineage; this test certifies fresh encryption only.
     assert_eq!(
@@ -1391,15 +1298,12 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
     );
     assert!(module_source.contains("This evaluation operand is public"));
 }
-
 #[test]
 fn native_whole_owner_reference_surface_is_test_only() {
     let source = include_str!("../collective.rs");
-
     assert!(source.contains(
         "#[cfg(test)]\n#[derive(Clone, Debug, PartialEq, Eq)]\npub struct ZkAmsMkheCollectiveCiphertextV1"
     ));
-
     for marker in [
         "const COLLECTIVE_ADD_DOMAIN_V1",
         "const COLLECTIVE_SUB_DOMAIN_V1",
@@ -1456,7 +1360,6 @@ fn native_whole_owner_reference_surface_is_test_only() {
             );
         }
     }
-
     for marker in ["impl ZkAmsMkheCollectiveCiphertextV1"] {
         let positions: Vec<_> = source
             .match_indices(marker)
@@ -1476,14 +1379,12 @@ fn native_whole_owner_reference_surface_is_test_only() {
         }
     }
 }
-
 #[test]
 fn collective_encryption_rejects_zero_repeating_and_failing_entropy() {
     let mut healthy = KatRandom::new(b"entropy-healthy");
     let nonce = derive_collective_encryption_nonce_v1(&mut healthy).unwrap();
     assert_ne!(nonce.as_bytes(), &[0; 32]);
     drop(nonce);
-
     let mut zero = ConstantRandom(0);
     assert!(matches!(
         derive_collective_encryption_nonce_v1(&mut zero),
@@ -1509,7 +1410,6 @@ fn collective_encryption_rejects_zero_repeating_and_failing_entropy() {
         derive_collective_encryption_nonce_v1(&mut failing),
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     ));
-
     let profile = test_profile();
     let (key, _) = test_key(0x76);
     let mut repeating = RepeatedHealthyBlockRandom;
@@ -1537,7 +1437,6 @@ fn collective_encryption_rejects_zero_repeating_and_failing_entropy() {
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     ));
 }
-
 #[test]
 fn encryption_nonce_allocation_is_stable_and_zeroizes_on_success_error_and_unwind() {
     let reset_drops = || ENCRYPTION_NONCE_ZEROIZED_DROPS_V1.with(|drops| drops.set(0));
@@ -1546,7 +1445,6 @@ fn encryption_nonce_allocation_is_stable_and_zeroizes_on_success_error_and_unwin
             .try_with(std::cell::Cell::get)
             .unwrap_or(0)
     };
-
     reset_drops();
     let mut nonce = ZeroizingEncryptionNonce::zeroed();
     nonce.as_mut_bytes().fill(0x39);
@@ -1555,7 +1453,6 @@ fn encryption_nonce_allocation_is_stable_and_zeroizes_on_success_error_and_unwin
     assert_eq!(moved.as_bytes().as_ptr(), address);
     drop(moved);
     assert_eq!(drop_count(), 1);
-
     reset_drops();
     let error = (|| -> Result<(), ZkAmsMkheErrorV1> {
         let mut nonce = ZeroizingEncryptionNonce::zeroed();
@@ -1564,7 +1461,6 @@ fn encryption_nonce_allocation_is_stable_and_zeroizes_on_success_error_and_unwin
     })();
     assert_eq!(error, Err(ZkAmsMkheErrorV1::RandomUnavailable));
     assert_eq!(drop_count(), 1);
-
     reset_drops();
     let unwind = std::panic::catch_unwind(|| {
         let mut nonce = ZeroizingEncryptionNonce::zeroed();
@@ -1576,7 +1472,6 @@ fn encryption_nonce_allocation_is_stable_and_zeroizes_on_success_error_and_unwin
     });
     assert!(unwind.is_err());
     assert_eq!(drop_count(), 1);
-
     let source = include_str!("../collective.rs");
     let test_module_marker = "\n#[cfg(test)]\n#[path = \"collective/tests.rs\"]\nmod tests;";
     assert_eq!(source.matches(test_module_marker).count(), 1);
@@ -1589,7 +1484,6 @@ fn encryption_nonce_allocation_is_stable_and_zeroizes_on_success_error_and_unwin
     assert!(production.contains("clear_secret_bytes_v1(self.0.as_mut())"));
     assert!(!production.contains("struct ZeroizingEncryptionNonce([u8; 32])"));
 }
-
 #[test]
 fn collective_opening_debug_is_redacted_and_drop_zeroizes_every_witness() {
     let profile = test_profile();
@@ -1607,13 +1501,11 @@ fn collective_opening_debug_is_redacted_and_drop_zeroizes_every_witness() {
         opening.input_identity.encryption_nonce.as_bytes()
     )));
     assert!(!debug.contains("coefficients:"));
-
     let audit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     opening.arm_drop_zeroization_audit(audit.clone());
     drop(opening);
     assert!(audit.load(std::sync::atomic::Ordering::SeqCst));
 }
-
 #[test]
 fn natural_lift_effective_error_uses_the_exact_centered_boundary() {
     let profile = release_profile_v1();
@@ -1641,13 +1533,11 @@ fn natural_lift_effective_error_uses_the_exact_centered_boundary() {
             .iter()
             .all(|coefficient| *coefficient == 0)
     );
-
     assert!(matches!(
         derive_natural_lift_effective_error_zero(&test_profile(), &canonical[..8], &sampled),
         Err(ZkAmsMkheErrorV1::InvalidCiphertext)
     ));
 }
-
 #[test]
 fn persistent_commitment_blindings_have_exact_shape_order_and_redaction() {
     reset_persistent_blinding_drop_audits();
@@ -1657,7 +1547,6 @@ fn persistent_commitment_blindings_have_exact_shape_order_and_redaction() {
     );
     let owner = PersistentSecretCommitmentBlindingsV1::sample(&mut random)
         .expect("eight nonzero scripted blindings");
-
     assert_eq!(
         random.request_lengths,
         vec![PERSISTENT_BLINDING_ENTROPY_BYTES_V1; ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1]
@@ -1688,7 +1577,6 @@ fn persistent_commitment_blindings_have_exact_shape_order_and_redaction() {
     drop(owner);
     assert_eq!(persistent_blinding_drop_audits(), (8, 1));
 }
-
 #[test]
 fn persistent_secret_membership_view_rejects_wrong_shape_and_non_ternary_state() {
     let exact_len =
@@ -1704,7 +1592,6 @@ fn persistent_secret_membership_view_rejects_wrong_shape_and_non_ternary_state()
     assert_eq!(narrowed.as_slice()[0], -1);
     assert_eq!(narrowed.as_slice()[exact_len - 1], 1);
     drop(narrowed);
-
     let short = SecretPolynomial {
         coefficients: vec![0; exact_len - 1],
     };
@@ -1712,14 +1599,12 @@ fn persistent_secret_membership_view_rejects_wrong_shape_and_non_ternary_state()
         ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&short),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     ));
-
     valid.coefficients[ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1] = 2;
     assert!(matches!(
         ZeroizingT256MembershipCoefficientsV1::from_ternary_secret(&valid),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     ));
 }
-
 #[test]
 fn state_owned_cpk_commitments_reject_secret_blinding_order_and_splice_changes() {
     let exact_len =
@@ -1734,7 +1619,6 @@ fn state_owned_cpk_commitments_reject_secret_blinding_order_and_splice_changes()
         .expect("exact state-owned opening commits all eight chunks");
     ensure_state_owned_cpk_commitments_v1(&expected, &expected)
         .expect("the exact ordered set is accepted");
-
     let mut changed_coefficients = coefficients[..ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1].to_vec();
     changed_coefficients[0] = 0;
     let changed_secret_point = commit_zk_ams_t256_membership_chunk_v1(
@@ -1744,7 +1628,6 @@ fn state_owned_cpk_commitments_reject_secret_blinding_order_and_splice_changes()
     )
     .expect("mutated ternary chunk remains a valid commitment opening");
     assert_ne!(changed_secret_point, expected[0]);
-
     let changed_blinding_point = commit_zk_ams_t256_membership_chunk_v1(
         ZkAmsT256MembershipBoundV1::One,
         &coefficients[..ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1],
@@ -1752,28 +1635,24 @@ fn state_owned_cpk_commitments_reject_secret_blinding_order_and_splice_changes()
     )
     .expect("replacement nonzero blinding remains a valid opening");
     assert_ne!(changed_blinding_point, expected[0]);
-
     let mut reordered = expected;
     reordered.swap(0, 1);
     assert!(matches!(
         ensure_state_owned_cpk_commitments_v1(&reordered, &expected),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     ));
-
     let mut duplicated = expected;
     duplicated[1] = duplicated[0];
     assert!(matches!(
         ensure_state_owned_cpk_commitments_v1(&duplicated, &expected),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     ));
-
     let mut spliced = expected;
     spliced[0] = changed_secret_point;
     assert!(matches!(
         ensure_state_owned_cpk_commitments_v1(&spliced, &expected),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     ));
-
     let mut zero_blinding = blindings;
     zero_blinding[3] = Scalar::zero();
     assert!(matches!(
@@ -1785,7 +1664,6 @@ fn state_owned_cpk_commitments_reject_secret_blinding_order_and_splice_changes()
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     ));
 }
-
 #[test]
 fn persistent_commitment_blindings_retry_zero_without_reordering() {
     reset_persistent_blinding_drop_audits();
@@ -1793,7 +1671,6 @@ fn persistent_commitment_blindings_retry_zero_without_reordering() {
         ScriptedPersistentBlindingRandom::from_scalars(core::iter::once(0).chain(1..=8));
     let owner = PersistentSecretCommitmentBlindingsV1::sample(&mut random)
         .expect("zero is retried before the ordered nonzero values");
-
     assert_eq!(random.request_lengths, vec![64; 9]);
     assert_eq!(
         owner
@@ -1807,7 +1684,6 @@ fn persistent_commitment_blindings_retry_zero_without_reordering() {
     drop(owner);
     assert_eq!(persistent_blinding_drop_audits(), (9, 1));
 }
-
 #[test]
 fn persistent_commitment_blindings_stop_at_exact_zero_rejection_ceiling() {
     reset_persistent_blinding_drop_audits();
@@ -1829,7 +1705,6 @@ fn persistent_commitment_blindings_stop_at_exact_zero_rejection_ceiling() {
         (MAX_RANDOM_REJECTION_ATTEMPTS_V1, 1)
     );
 }
-
 #[test]
 fn persistent_commitment_blindings_erase_partial_state_on_rng_failure() {
     reset_persistent_blinding_drop_audits();
@@ -1845,7 +1720,6 @@ fn persistent_commitment_blindings_erase_partial_state_on_rng_failure() {
     assert_eq!(random.calls, 4);
     assert_eq!(persistent_blinding_drop_audits(), (4, 1));
 }
-
 #[test]
 fn persistent_commitment_blindings_erase_partial_state_during_unwind() {
     reset_persistent_blinding_drop_audits();
@@ -1861,7 +1735,6 @@ fn persistent_commitment_blindings_erase_partial_state_during_unwind() {
     assert_eq!(random.calls, 3);
     assert_eq!(persistent_blinding_drop_audits(), (3, 1));
 }
-
 #[test]
 fn persistent_commitment_blindings_move_without_duplicate_drop() {
     fn move_once(
@@ -1869,7 +1742,6 @@ fn persistent_commitment_blindings_move_without_duplicate_drop() {
     ) -> PersistentSecretCommitmentBlindingsV1 {
         owner
     }
-
     reset_persistent_blinding_drop_audits();
     let mut random = ScriptedPersistentBlindingRandom::from_scalars(1..=8);
     let owner = PersistentSecretCommitmentBlindingsV1::sample(&mut random)
@@ -1880,7 +1752,6 @@ fn persistent_commitment_blindings_move_without_duplicate_drop() {
     drop(owner);
     assert_eq!(persistent_blinding_drop_audits(), (8, 1));
 }
-
 #[test]
 fn opaque_party_state_debug_and_api_do_not_expose_rlwe_coefficients() {
     let state = ZkAmsMkheCollectivePartyStateV1 {
@@ -1920,7 +1791,6 @@ fn opaque_party_state_debug_and_api_do_not_expose_rlwe_coefficients() {
             .all(|blinding| !blinding.is_zero())
     );
 }
-
 #[test]
 fn in_place_party_b_finish_matches_owned_polynomial_algebra() {
     let profile = test_profile();
@@ -1937,7 +1807,6 @@ fn in_place_party_b_finish_matches_owned_polynomial_algebra() {
     negate_and_add_scaled_error_in_place(&mut actual, &error, &profile).unwrap();
     assert_eq!(actual, expected);
 }
-
 #[test]
 fn in_place_collective_aggregation_matches_owned_algebra_and_rejects_atomically() {
     let profile = test_profile();
@@ -1947,7 +1816,6 @@ fn in_place_collective_aggregation_matches_owned_algebra_and_rejects_atomically(
     let mut actual = first.coefficients.clone();
     add_canonical_residues_in_place_v1(&mut actual, &second.coefficients, &profile).unwrap();
     assert_eq!(actual, expected.coefficients);
-
     let accepted = actual.clone();
     assert_eq!(
         add_canonical_residues_in_place_v1(
@@ -1958,7 +1826,6 @@ fn in_place_collective_aggregation_matches_owned_algebra_and_rejects_atomically(
         Err(ZkAmsMkheErrorV1::InvalidPolynomial)
     );
     assert_eq!(actual, accepted);
-
     let mut noncanonical = second.coefficients.clone();
     noncanonical[profile.ring_degree] = profile.moduli[1];
     assert_eq!(
@@ -1967,7 +1834,6 @@ fn in_place_collective_aggregation_matches_owned_algebra_and_rejects_atomically(
     );
     assert_eq!(actual, accepted);
 }
-
 #[test]
 fn collective_aggregation_source_has_no_party_b_release_copy_or_add_output() {
     let source = include_str!("../collective.rs");
@@ -1983,7 +1849,6 @@ fn collective_aggregation_source_has_no_party_b_release_copy_or_add_output() {
     assert!(!aggregate.contains("party_public_b.residues().to_vec()"));
     assert!(!aggregate.contains("aggregate_b = aggregate_b.add"));
 }
-
 #[test]
 fn prepared_party_generator_has_no_separate_scaled_error_table() {
     let source = include_str!("../collective.rs");
@@ -2003,7 +1868,6 @@ fn prepared_party_generator_has_no_separate_scaled_error_table() {
     assert!(!generator.contains("let secret_rns"));
     assert!(!generator.contains("public_a.residues().to_vec()"));
     assert!(!generator.contains("public_a_native"));
-
     let validator = source
         .split("fn validate_collective_public_key_share_unsealed_v1")
         .nth(1)

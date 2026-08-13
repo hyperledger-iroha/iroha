@@ -4,38 +4,30 @@
 //! [`CompoundPredicate`] values.  The structures keep field ordering stable so
 //! serialised predicates are deterministic and easy to compare in tests or
 //! caches.
-
 use std::{
     cell::Cell,
     string::{String, ToString},
     vec::Vec,
 };
-
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use thiserror::Error;
-
 use crate::query::dsl::CompoundPredicate;
-
 #[derive(Clone, Copy)]
 struct PredicateJsonExecutionBounds {
     body_bytes: usize,
     allocation_bytes: usize,
 }
-
 std::thread_local! {
     static PREDICATE_JSON_EXECUTION_BOUNDS: Cell<Option<PredicateJsonExecutionBounds>> = const {
         Cell::new(None)
     };
 }
-
 struct PredicateJsonExecutionBoundsGuard(Option<PredicateJsonExecutionBounds>);
-
 impl Drop for PredicateJsonExecutionBoundsGuard {
     fn drop(&mut self) {
         PREDICATE_JSON_EXECUTION_BOUNDS.with(|slot| slot.set(self.0));
     }
 }
-
 /// Run predicate JSON work with checked body and allocation ceilings.
 ///
 /// This server-boundary hook leaves ordinary in-process evaluation unchanged
@@ -62,11 +54,9 @@ pub fn with_bounded_predicate_json_execution<R>(
     let _guard = PredicateJsonExecutionBoundsGuard(previous);
     execute()
 }
-
 fn predicate_json_execution_bounds() -> Option<PredicateJsonExecutionBounds> {
     PREDICATE_JSON_EXECUTION_BOUNDS.with(Cell::get)
 }
-
 fn predicate_json_decode_limits(bounds: PredicateJsonExecutionBounds) -> norito::DecodeLimits {
     let total_elements = bounds.allocation_bytes.max(bounds.body_bytes);
     norito::DecodeLimits::new(
@@ -77,7 +67,6 @@ fn predicate_json_decode_limits(bounds: PredicateJsonExecutionBounds) -> norito:
         norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
     )
 }
-
 /// Materialize one predicate candidate through the checked JSON writer when a
 /// server execution scope is active.
 #[doc(hidden)]
@@ -91,7 +80,6 @@ pub fn predicate_json_value_for_execution<T: JsonSerialize + ?Sized>(value: &T) 
         json::parse_value(raw).ok()
     })
 }
-
 /// Parse retained predicate JSON through the owned, allocation-charged
 /// conversion when a server execution scope is active.
 #[doc(hidden)]
@@ -108,7 +96,6 @@ pub fn predicate_json_from_raw_for_execution(raw: &str) -> Option<PredicateJson>
         PredicateJson::try_from_owned_value(value).ok()
     })
 }
-
 /// Parse predicate JSON for an optional producer-local candidate plan.
 ///
 /// The bounded ordinary-query lane deliberately returns no candidate plan:
@@ -125,7 +112,6 @@ pub fn predicate_json_candidate_plan_for_execution(raw: &str) -> Option<Predicat
     let value = json::from_json::<Value>(raw).ok()?;
     PredicateJson::try_from_value(&value).ok()
 }
-
 /// JSON representation of a lightweight predicate tree.
 ///
 /// Supported operators:
@@ -141,19 +127,15 @@ pub struct PredicateJson {
     /// Field paths whose presence is required.
     pub exists: Vec<String>,
 }
-
 impl Eq for PredicateJson {}
-
 impl PredicateJson {
     /// Returns true when no conditions are specified.
     pub fn is_empty(&self) -> bool {
         self.equals.is_empty() && self.r#in.is_empty() && self.exists.is_empty()
     }
-
     /// Convert into a canonical JSON value with deterministic ordering.
     fn to_value(&self) -> Value {
         let mut map = Map::new();
-
         if !self.equals.is_empty() {
             let mut eqs = self.equals.clone();
             eqs.sort_by(|a, b| a.field.cmp(&b.field));
@@ -168,7 +150,6 @@ impl PredicateJson {
                 .collect();
             map.insert("equals".to_owned(), Value::Array(arr));
         }
-
         if !self.r#in.is_empty() {
             let mut list = self.r#in.clone();
             list.sort_by(|a, b| a.field.cmp(&b.field));
@@ -183,23 +164,19 @@ impl PredicateJson {
                 .collect();
             map.insert("in".to_owned(), Value::Array(arr));
         }
-
         if !self.exists.is_empty() {
             let mut fields = self.exists.clone();
             fields.sort();
             let arr = fields.into_iter().map(Value::String).collect();
             map.insert("exists".to_owned(), Value::Array(arr));
         }
-
         Value::Object(map)
     }
-
     fn sort_in_place(&mut self) {
         stable_insertion_sort_by(&mut self.equals, |left, right| left.field.cmp(&right.field));
         stable_insertion_sort_by(&mut self.r#in, |left, right| left.field.cmp(&right.field));
         stable_insertion_sort_by(&mut self.exists, |left, right| left.cmp(right));
     }
-
     /// Build predicate from JSON value.
     ///
     /// # Errors
@@ -278,7 +255,6 @@ impl PredicateJson {
             other => Err(PredicateParseError::ExpectedObjectRoot(other.type_name())),
         }
     }
-
     /// Build a predicate by consuming an owned JSON value.
     ///
     /// Unlike [`Self::try_from_value`], this path moves condition strings and
@@ -297,7 +273,6 @@ impl PredicateJson {
             Value::Object(map) => map,
             other => return Err(PredicateParseError::ExpectedObjectRoot(other.type_name())),
         };
-
         let mut predicate = PredicateJson::default();
         for (key, entry) in map {
             match key.as_str() {
@@ -357,7 +332,6 @@ impl PredicateJson {
         predicate.sort_in_place();
         Ok(predicate)
     }
-
     /// Convert into a [`CompoundPredicate`] by serialising the canonical JSON
     /// representation. The resulting predicate carries the JSON payload that
     /// backends can interpret later.
@@ -372,7 +346,6 @@ impl PredicateJson {
         }
     }
 }
-
 fn stable_insertion_sort_by<T>(values: &mut [T], compare: impl Fn(&T, &T) -> core::cmp::Ordering) {
     for index in 1..values.len() {
         let mut current = index;
@@ -382,7 +355,6 @@ fn stable_insertion_sort_by<T>(values: &mut [T], compare: impl Fn(&T, &T) -> cor
         }
     }
 }
-
 fn admitted_vec<T>(capacity: usize) -> Result<Vec<T>, PredicateParseError> {
     let requested = capacity
         .checked_mul(core::mem::size_of::<T>())
@@ -405,7 +377,6 @@ fn admitted_vec<T>(capacity: usize) -> Result<Vec<T>, PredicateParseError> {
     }
     Ok(values)
 }
-
 fn take_string_field(
     object: &mut Map,
     section: &'static str,
@@ -419,7 +390,6 @@ fn take_string_field(
         _ => Err(PredicateParseError::ExpectedString(section, field)),
     }
 }
-
 #[cfg(feature = "json")]
 fn next_sorted_index_by<T, F>(items: &[T], previous: Option<usize>, key: F) -> Option<usize>
 where
@@ -434,12 +404,10 @@ where
         })
         .min_by(|&left, &right| (key(&items[left]), left).cmp(&(key(&items[right]), right)))
 }
-
 impl JsonSerialize for PredicateJson {
     fn json_serialize(&self, out: &mut String) {
         json::write_with_unbounded_sink(out, |sink| self.json_serialize_to(sink));
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -447,7 +415,6 @@ impl JsonSerialize for PredicateJson {
         out.begin_container()?;
         out.push('{')?;
         let mut wrote_section = false;
-
         if !self.equals.is_empty() {
             out.push_str("\"equals\":[")?;
             out.begin_container()?;
@@ -474,7 +441,6 @@ impl JsonSerialize for PredicateJson {
             out.end_container();
             wrote_section = true;
         }
-
         if !self.exists.is_empty() {
             if wrote_section {
                 out.push(',')?;
@@ -495,7 +461,6 @@ impl JsonSerialize for PredicateJson {
             out.end_container();
             wrote_section = true;
         }
-
         if !self.r#in.is_empty() {
             if wrote_section {
                 out.push(',')?;
@@ -524,20 +489,17 @@ impl JsonSerialize for PredicateJson {
             out.push(']')?;
             out.end_container();
         }
-
         out.push('}')?;
         out.end_container();
         Ok(())
     }
 }
-
 impl JsonDeserialize for PredicateJson {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = Value::json_deserialize(parser)?;
         PredicateJson::try_from_value(&value).map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-
 /// Equality predicate condition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EqualsCondition {
@@ -546,9 +508,7 @@ pub struct EqualsCondition {
     /// Value that must match exactly.
     pub value: Value,
 }
-
 impl Eq for EqualsCondition {}
-
 impl EqualsCondition {
     /// Construct an equality condition for the given field and value.
     pub fn new(field: impl Into<String>, value: Value) -> Self {
@@ -558,7 +518,6 @@ impl EqualsCondition {
         }
     }
 }
-
 /// Set membership predicate condition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InCondition {
@@ -567,9 +526,7 @@ pub struct InCondition {
     /// Allowed values for the field.
     pub values: Vec<Value>,
 }
-
 impl Eq for InCondition {}
-
 impl InCondition {
     /// Construct a membership condition for the given field and allowed values.
     pub fn new(field: impl Into<String>, values: Vec<Value>) -> Self {
@@ -579,7 +536,6 @@ impl InCondition {
         }
     }
 }
-
 /// Errors produced when parsing predicate JSON structures.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PredicateParseError {
@@ -609,12 +565,10 @@ pub enum PredicateParseError {
     #[error("predicate JSON exceeds the active allocation limit")]
     ResourceLimit,
 }
-
 trait ValueExt {
     fn as_string(&self) -> Option<&str>;
     fn type_name(&self) -> &'static str;
 }
-
 impl ValueExt for Value {
     fn as_string(&self) -> Option<&str> {
         match self {
@@ -622,7 +576,6 @@ impl ValueExt for Value {
             _ => None,
         }
     }
-
     fn type_name(&self) -> &'static str {
         match self {
             Value::Null => "null",
@@ -634,11 +587,9 @@ impl ValueExt for Value {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const ALICE_ID_STR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     #[test]
     fn predicate_roundtrip_canonicalises_order() {
@@ -659,12 +610,10 @@ mod tests {
             ],
             "exists": ["metadata.display_name", "metadata.avatar"]
         });
-
         let parsed = PredicateJson::try_from_value(&json).expect("parse predicate");
         assert_eq!(parsed.equals.len(), 2);
         assert_eq!(parsed.r#in.len(), 2);
         assert_eq!(parsed.exists.len(), 2);
-
         let first_encode = norito::json::to_json(&parsed.to_value()).expect("encode");
         let second = parsed
             .into_compound::<()>()
@@ -673,13 +622,11 @@ mod tests {
             .unwrap()
             .to_owned();
         assert_eq!(first_encode, second);
-
         // Order is canonical; the equals section must be sorted by field name.
         assert!(second.contains("authority"));
         assert!(second.contains("metadata.display_name"));
         assert!(second.contains("metadata.tier"));
     }
-
     #[test]
     fn predicate_rejects_empty_in_values() {
         let json = norito::json!({
@@ -690,7 +637,6 @@ mod tests {
         let err = PredicateJson::try_from_value(&json).expect_err("should fail");
         assert!(matches!(err, PredicateParseError::EmptyValues(field) if field == "authority"));
     }
-
     #[test]
     fn owned_predicate_conversion_moves_values_and_obeys_decode_limits() {
         fn value() -> Value {
@@ -700,7 +646,6 @@ mod tests {
                 "exists": ["metadata.rank"]
             })
         }
-
         let input = value();
         let expected = PredicateJson::try_from_value(&input).expect("borrowed conversion");
         let limits = norito::DecodeLimits::new(64, 4 * 1_024, 256, 4 * 1_024, 16);
@@ -709,7 +654,6 @@ mod tests {
         });
         assert_eq!(actual.expect("owned conversion"), expected);
         assert!(usage.total_allocated_bytes() > 0);
-
         let denied = norito::core::with_decode_limits(
             norito::DecodeLimits::new(64, 4 * 1_024, 256, 1, 16),
             || {
@@ -719,7 +663,6 @@ mod tests {
         );
         assert!(denied.is_err());
     }
-
     #[test]
     fn execution_scope_checks_candidate_body_and_restores_legacy_path() {
         let value = norito::json!({"id": "alice", "metadata": {"rank": 7}});
@@ -728,14 +671,12 @@ mod tests {
             predicate_json_value_for_execution(&value)
         });
         assert_eq!(admitted, Some(value.clone()));
-
         let denied = with_bounded_predicate_json_execution(canonical.len() - 1, 8 * 1_024, || {
             predicate_json_value_for_execution(&value)
         });
         assert!(denied.is_none());
         assert_eq!(predicate_json_value_for_execution(&value), Some(value));
     }
-
     #[test]
     fn execution_scope_uses_owned_predicate_conversion_under_allocation_limit() {
         let predicate = PredicateJson {
@@ -753,7 +694,6 @@ mod tests {
         });
         assert!(denied.is_none());
     }
-
     #[test]
     fn predicate_wire_decoders_have_no_borrowed_deep_clone_path() {
         for source in [include_str!("../dsl.rs"), include_str!("../dsl_fast.rs")] {
@@ -763,14 +703,12 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn predicate_empty_defaults_to_pass() {
         let predicate = PredicateJson::default();
         let compound = predicate.into_compound::<()>().expect("compound predicate");
         assert!(compound.json_payload().is_none());
     }
-
     #[test]
     fn direct_predicate_json_matches_legacy_value_and_exact_bound() {
         let predicate = PredicateJson {

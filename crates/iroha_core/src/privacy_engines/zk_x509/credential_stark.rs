@@ -6,10 +6,8 @@
 //! in the fixed header so decode cannot silently pair a proof with another
 //! statement, root, or root-SPKI channel. The cryptographic verifier must still
 //! derive and compare that material from its trusted statement.
-
 use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyStatementV1};
 use thiserror::Error;
-
 use super::{
     accumulator_stark::{
         ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1,
@@ -25,7 +23,6 @@ use super::{
     },
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
-
 const CREDENTIAL_MAGIC_V1: [u8; 4] = *b"X5S1";
 const MAIN_AGGREGATE_MAGIC_V1: [u8; 4] = *b"X5M1";
 const CA_SUBPROOF_MAGIC_V1: [u8; 4] = *b"X5C1";
@@ -59,7 +56,6 @@ const _: () = assert!(
         + ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1
         == ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize
 );
-
 /// Compute the exact encoded outer-envelope length without allocation.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const fn zk_x509_credential_envelope_encoded_len_v1(
@@ -71,7 +67,6 @@ pub(crate) const fn zk_x509_credential_envelope_encoded_len_v1(
         None => None,
     }
 }
-
 /// Fixed verifier-derived public material repeated in the `X5S1` header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CredentialPublicBindingV1 {
@@ -82,7 +77,6 @@ pub(crate) struct ZkX509CredentialPublicBindingV1 {
     /// Canonical root-SPKI byte channel.
     pub(crate) root_spki_channel: u32,
 }
-
 impl ZkX509CredentialPublicBindingV1 {
     /// Derive all header material from verifier-owned consensus context.
     pub(crate) fn from_consensus_context_v1(
@@ -115,7 +109,6 @@ impl ZkX509CredentialPublicBindingV1 {
             root_spki_channel,
         })
     }
-
     /// Convert the byte-level public binding to the compact-CA field input.
     pub(crate) fn ca_public_v1(self) -> ZkX509CaAccumulatorStarkPublicV1 {
         ZkX509CaAccumulatorStarkPublicV1 {
@@ -124,7 +117,6 @@ impl ZkX509CredentialPublicBindingV1 {
         }
     }
 }
-
 /// Proof-derived terminals from the main aggregate that must equal `X5C1`.
 ///
 /// The main verifier constructs this value only after verifying all opened-row
@@ -139,7 +131,6 @@ pub(crate) struct ZkX509MainCaBindingV1 {
     /// Main-RFC terminal reserved for the root-SPKI consumer.
     pub(crate) root_spki_consumer_products: [F; 4],
 }
-
 /// Borrowed exact contents of a canonical `X5S1` envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CredentialEnvelopeV1<'a> {
@@ -150,7 +141,6 @@ pub(crate) struct ZkX509CredentialEnvelopeV1<'a> {
     /// Exact compact-CA `X5C1` proof bytes.
     pub(crate) ca_subproof: &'a [u8],
 }
-
 /// Canonical credential envelope or cross-subproof verification failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509CredentialProofErrorV1 {
@@ -176,17 +166,14 @@ pub(crate) enum ZkX509CredentialProofErrorV1 {
     #[error("zk-X509 credential cross-subproof terminals do not match")]
     CrossSubproofMismatch,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_u16_v1(output: &mut Vec<u8>, value: u16) {
     output.extend_from_slice(&value.to_be_bytes());
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_u32_v1(output: &mut Vec<u8>, value: u32) {
     output.extend_from_slice(&value.to_be_bytes());
 }
-
 fn read_u16_v1(encoded: &[u8], cursor: &mut usize) -> Result<u16, ZkX509CredentialProofErrorV1> {
     let end = cursor
         .checked_add(2)
@@ -199,7 +186,6 @@ fn read_u16_v1(encoded: &[u8], cursor: &mut usize) -> Result<u16, ZkX509Credenti
         ZkX509CredentialProofErrorV1::MalformedEnvelope
     })?))
 }
-
 fn read_u32_v1(encoded: &[u8], cursor: &mut usize) -> Result<u32, ZkX509CredentialProofErrorV1> {
     let end = cursor
         .checked_add(4)
@@ -212,7 +198,6 @@ fn read_u32_v1(encoded: &[u8], cursor: &mut usize) -> Result<u32, ZkX509Credenti
         ZkX509CredentialProofErrorV1::MalformedEnvelope
     })?))
 }
-
 fn read_array_v1<const N: usize>(
     encoded: &[u8],
     cursor: &mut usize,
@@ -228,7 +213,6 @@ fn read_array_v1<const N: usize>(
     *cursor = end;
     Ok(value)
 }
-
 fn read_subproof_v1<'a>(
     encoded: &'a [u8],
     cursor: &mut usize,
@@ -261,7 +245,6 @@ fn read_subproof_v1<'a>(
     *cursor = end;
     Ok(proof)
 }
-
 /// Encode exactly one main aggregate followed by exactly one `X5C1` proof.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn encode_zk_x509_credential_envelope_v1(
@@ -289,7 +272,6 @@ pub(crate) fn encode_zk_x509_credential_envelope_v1(
     if encoded_length > ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize {
         return Err(ZkX509CredentialProofErrorV1::ProofTooLarge);
     }
-
     let mut encoded = Vec::new();
     encoded
         .try_reserve_exact(encoded_length)
@@ -313,7 +295,6 @@ pub(crate) fn encode_zk_x509_credential_envelope_v1(
     }
     Ok(encoded)
 }
-
 /// Decode the sole exact, bounded `X5S1` credential container.
 pub(crate) fn decode_zk_x509_credential_envelope_v1(
     encoded: &[u8],
@@ -360,7 +341,6 @@ pub(crate) fn decode_zk_x509_credential_envelope_v1(
         ca_subproof,
     })
 }
-
 /// Validate the exact public and terminal equality binding between verified proofs.
 ///
 /// `main` and `ca` must be reconstructed independently from successfully
@@ -413,7 +393,6 @@ pub(crate) fn validate_cross_subproof_binding_v1(
     }
     Ok(())
 }
-
 /// Verify the exact envelope and pair independently verified main/CA bindings.
 ///
 /// The two callbacks are cryptographic verifier boundaries, not witness
@@ -439,7 +418,6 @@ where
     let ca = verify_ca(envelope.ca_subproof).map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?;
     validate_cross_subproof_binding_v1(expected_public, main, ca)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,7 +430,6 @@ mod tests {
             ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1, ZK_X509_MAX_PROOF_BYTES_V1,
         },
     };
-
     fn public(seed: u8) -> ZkX509CredentialPublicBindingV1 {
         ZkX509CredentialPublicBindingV1 {
             consensus_context_digest: [seed; 32],
@@ -460,7 +437,6 @@ mod tests {
             root_spki_channel: 36,
         }
     }
-
     fn role(index: usize) -> ZkX509ShaCallRoleV1 {
         if index == 0 {
             ZkX509ShaCallRoleV1::CaLeaf
@@ -468,7 +444,6 @@ mod tests {
             ZkX509ShaCallRoleV1::CaNode(u8::try_from(index - 1).expect("fixture level"))
         }
     }
-
     fn main_binding(public: ZkX509CredentialPublicBindingV1, seed: u64) -> ZkX509MainCaBindingV1 {
         ZkX509MainCaBindingV1 {
             public,
@@ -485,7 +460,6 @@ mod tests {
             root_spki_consumer_products: core::array::from_fn(|lane| F(seed + 1_000 + lane as u64)),
         }
     }
-
     fn ca_binding(main: ZkX509MainCaBindingV1) -> ZkX509CaAccumulatorSubproofBindingV1 {
         ZkX509CaAccumulatorSubproofBindingV1 {
             public: main.public.ca_public_v1(),
@@ -505,7 +479,6 @@ mod tests {
             },
         }
     }
-
     fn proof_fixture() -> (
         ZkX509CredentialPublicBindingV1,
         ZkX509MainCaBindingV1,
@@ -520,7 +493,6 @@ mod tests {
                 .expect("fixture envelope");
         (public, main, ca, encoded)
     }
-
     fn verify_fixture(
         expected: ZkX509CredentialPublicBindingV1,
         main: ZkX509MainCaBindingV1,
@@ -542,7 +514,6 @@ mod tests {
             },
         )
     }
-
     fn assert_direct_and_callback_cross_binding_result(
         expected_public: ZkX509CredentialPublicBindingV1,
         main: ZkX509MainCaBindingV1,
@@ -555,7 +526,6 @@ mod tests {
             Err(expected_error),
             "{case}: direct validation result"
         );
-
         let encoded = encode_zk_x509_credential_envelope_v1(
             expected_public,
             b"X5M1main-proof",
@@ -582,7 +552,6 @@ mod tests {
         assert_eq!(main_calls, 1, "{case}: main callback count");
         assert_eq!(ca_calls, 1, "{case}: CA callback count");
     }
-
     fn wrong_role(index: usize) -> ZkX509ShaCallRoleV1 {
         if index == 0 {
             ZkX509ShaCallRoleV1::CaNode(0)
@@ -590,7 +559,6 @@ mod tests {
             ZkX509ShaCallRoleV1::CaLeaf
         }
     }
-
     #[test]
     fn canonical_envelope_round_trips_and_binds_exactly_two_proofs() {
         let (public, main, ca, encoded) = proof_fixture();
@@ -614,7 +582,6 @@ mod tests {
             ZK_X509_SHA_CA_NODE_CALL_START_V1
         );
     }
-
     #[test]
     fn every_truncation_and_any_trailing_suffix_is_rejected() {
         let (_, _, _, encoded) = proof_fixture();
@@ -631,7 +598,6 @@ mod tests {
             Err(ZkX509CredentialProofErrorV1::MalformedEnvelope)
         );
     }
-
     #[test]
     fn malformed_duplicate_reordered_and_excess_subproofs_are_rejected() {
         let (_, _, _, encoded) = proof_fixture();
@@ -649,7 +615,6 @@ mod tests {
                 "header mutation at {offset} accepted"
             );
         }
-
         let main_length = b"X5M1main-proof".len();
         let second_kind = FIXED_HEADER_BYTES_V1 + SUBPROOF_HEADER_BYTES_V1 + main_length;
         let mut nonzero_ca_instance = encoded.clone();
@@ -658,17 +623,14 @@ mod tests {
             decode_zk_x509_credential_envelope_v1(&nonzero_ca_instance),
             Err(ZkX509CredentialProofErrorV1::MalformedEnvelope)
         );
-
         let mut duplicate_main = encoded.clone();
         duplicate_main[second_kind..second_kind + 2]
             .copy_from_slice(&MAIN_SUBPROOF_KIND_V1.to_be_bytes());
         assert!(decode_zk_x509_credential_envelope_v1(&duplicate_main).is_err());
-
         let mut duplicate_ca = encoded.clone();
         duplicate_ca[FIXED_HEADER_BYTES_V1..FIXED_HEADER_BYTES_V1 + 2]
             .copy_from_slice(&CA_SUBPROOF_KIND_V1.to_be_bytes());
         assert!(decode_zk_x509_credential_envelope_v1(&duplicate_ca).is_err());
-
         let main_record = &encoded[FIXED_HEADER_BYTES_V1..second_kind];
         let ca_record = &encoded[second_kind..];
         let mut swapped = encoded[..FIXED_HEADER_BYTES_V1].to_vec();
@@ -678,12 +640,10 @@ mod tests {
             decode_zk_x509_credential_envelope_v1(&swapped),
             Err(ZkX509CredentialProofErrorV1::MalformedEnvelope)
         );
-
         let mut excess = encoded;
         excess[6..8].copy_from_slice(&3_u16.to_be_bytes());
         assert!(decode_zk_x509_credential_envelope_v1(&excess).is_err());
     }
-
     #[test]
     fn every_public_header_byte_is_bound_to_the_verifier_owned_context() {
         let (public, main, ca, encoded) = proof_fixture();
@@ -697,7 +657,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn consensus_context_derivation_binds_statement_profile_intent_and_genesis() {
         let (statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
@@ -705,7 +664,6 @@ mod tests {
         let canonical =
             ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, genesis)
                 .expect("canonical consensus context");
-
         let mut changed_intent = statement.clone();
         changed_intent.context.transaction_intent_digest =
             iroha_data_model::privacy::PrivacyTransactionIntentDigestV1::new([0xA1; 32]);
@@ -714,7 +672,6 @@ mod tests {
                 .expect("changed transaction intent"),
             canonical
         );
-
         let mut changed_profile = statement.clone();
         changed_profile.context.parameter_digest =
             iroha_data_model::privacy::PrivacyParameterDigestV1::new([0xA2; 32]);
@@ -723,7 +680,6 @@ mod tests {
                 .expect("changed parameter digest"),
             canonical
         );
-
         let mut changed_manifest = statement.clone();
         changed_manifest.context.engine_manifest_digest =
             iroha_data_model::privacy::PrivacyEngineManifestDigestV1::new([0xA3; 32]);
@@ -732,7 +688,6 @@ mod tests {
                 .expect("changed engine manifest digest"),
             canonical
         );
-
         assert_ne!(
             ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, [0x92; 32],)
                 .expect("changed committed genesis"),
@@ -743,11 +698,9 @@ mod tests {
             Err(ZkX509CredentialProofErrorV1::InvalidStatement)
         );
     }
-
     #[test]
     fn every_one_sided_sha_terminal_field_mutation_is_rejected_on_both_paths() {
         let (public, main, ca, _) = proof_fixture();
-
         for index in 0..main.sha_terminals.len() {
             let mut corrupt_main = main;
             corrupt_main.sha_terminals[index].call =
@@ -759,7 +712,6 @@ mod tests {
                 ZkX509CredentialProofErrorV1::CrossSubproofMismatch,
                 &format!("main terminal {index} call"),
             );
-
             let mut corrupt_ca = ca;
             corrupt_ca.sha_terminals[index].call =
                 corrupt_ca.sha_terminals[index].call.wrapping_add(1);
@@ -770,7 +722,6 @@ mod tests {
                 ZkX509CredentialProofErrorV1::CrossSubproofMismatch,
                 &format!("CA terminal {index} call"),
             );
-
             let mut corrupt_main = main;
             corrupt_main.sha_terminals[index].role = wrong_role(index);
             assert_direct_and_callback_cross_binding_result(
@@ -780,7 +731,6 @@ mod tests {
                 ZkX509CredentialProofErrorV1::CrossSubproofMismatch,
                 &format!("main terminal {index} role"),
             );
-
             let mut corrupt_ca = ca;
             corrupt_ca.sha_terminals[index].role = wrong_role(index);
             assert_direct_and_callback_cross_binding_result(
@@ -790,7 +740,6 @@ mod tests {
                 ZkX509CredentialProofErrorV1::CrossSubproofMismatch,
                 &format!("CA terminal {index} role"),
             );
-
             for lane in 0..main.sha_terminals[index].source_products.len() {
                 let mut corrupt_main = main;
                 corrupt_main.sha_terminals[index].source_products[lane] =
@@ -802,7 +751,6 @@ mod tests {
                     ZkX509CredentialProofErrorV1::CrossSubproofMismatch,
                     &format!("main terminal {index} source lane {lane}"),
                 );
-
                 let mut corrupt_ca = ca;
                 corrupt_ca.sha_terminals[index].source_products[lane] =
                     corrupt_ca.sha_terminals[index].source_products[lane].add(F::ONE);
@@ -813,7 +761,6 @@ mod tests {
                     ZkX509CredentialProofErrorV1::CrossSubproofMismatch,
                     &format!("CA terminal {index} source lane {lane}"),
                 );
-
                 let mut corrupt_main = main;
                 corrupt_main.sha_terminals[index].digest_products[lane] =
                     corrupt_main.sha_terminals[index].digest_products[lane].add(F::ONE);
@@ -824,7 +771,6 @@ mod tests {
                     ZkX509CredentialProofErrorV1::CrossSubproofMismatch,
                     &format!("main terminal {index} digest lane {lane}"),
                 );
-
                 let mut corrupt_ca = ca;
                 corrupt_ca.sha_terminals[index].digest_products[lane] =
                     corrupt_ca.sha_terminals[index].digest_products[lane].add(F::ONE);
@@ -838,11 +784,9 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn every_root_spki_product_and_metadata_mutation_is_rejected_on_both_paths() {
         let (public, main, ca, _) = proof_fixture();
-
         for lane in 0..main.root_spki_consumer_products.len() {
             let mut corrupt_main = main;
             corrupt_main.root_spki_consumer_products[lane] =
@@ -854,7 +798,6 @@ mod tests {
                 ZkX509CredentialProofErrorV1::CrossSubproofMismatch,
                 &format!("main root-SPKI consumer lane {lane}"),
             );
-
             let mut corrupt_ca = ca;
             corrupt_ca.root_spki_terminal.consumer_products[lane] =
                 corrupt_ca.root_spki_terminal.consumer_products[lane].add(F::ONE);
@@ -866,7 +809,6 @@ mod tests {
                 &format!("CA root-SPKI consumer lane {lane}"),
             );
         }
-
         let mut wrong_channel = ca;
         wrong_channel.root_spki_terminal.channel =
             wrong_channel.root_spki_terminal.channel.wrapping_add(1);
@@ -877,7 +819,6 @@ mod tests {
             ZkX509CredentialProofErrorV1::CrossSubproofMismatch,
             "root-SPKI channel",
         );
-
         let mut wrong_event_count = ca;
         wrong_event_count.root_spki_terminal.event_count = wrong_event_count
             .root_spki_terminal
@@ -891,11 +832,9 @@ mod tests {
             "root-SPKI event count",
         );
     }
-
     #[test]
     fn coordinated_semantic_mutations_cannot_bypass_pure_validation() {
         let (public, main, ca, _) = proof_fixture();
-
         for index in 0..main.sha_terminals.len() {
             let mut corrupt_main = main;
             let mut corrupt_ca = ca;
@@ -909,7 +848,6 @@ mod tests {
                 ZkX509CredentialProofErrorV1::CrossSubproofMismatch,
                 &format!("coordinated terminal {index} call"),
             );
-
             let mut corrupt_main = main;
             let mut corrupt_ca = ca;
             let wrong_role = wrong_role(index);
@@ -922,7 +860,6 @@ mod tests {
                 ZkX509CredentialProofErrorV1::CrossSubproofMismatch,
                 &format!("coordinated terminal {index} role"),
             );
-
             let target = (index + 1) % main.sha_terminals.len();
             let mut corrupt_main = main;
             let mut corrupt_ca = ca;
@@ -938,7 +875,6 @@ mod tests {
                 &format!("coordinated terminal {index} identity substitution"),
             );
         }
-
         let changed_public = ZkX509CredentialPublicBindingV1 {
             consensus_context_digest: [0xA5; 32],
             governed_ca_root: [0x5A; 32],
@@ -956,11 +892,9 @@ mod tests {
             "coordinated public and root-SPKI channel",
         );
     }
-
     #[test]
     fn mismatched_public_bindings_are_rejected_before_or_after_callbacks() {
         let (public, main, ca, encoded) = proof_fixture();
-
         for (index, changed_public) in [
             ZkX509CredentialPublicBindingV1 {
                 consensus_context_digest: [9; 32],
@@ -988,7 +922,6 @@ mod tests {
                 &format!("main public field {index}"),
             );
         }
-
         for lane in 0..ca.public.governed_root.len() {
             let mut corrupt_ca = ca;
             corrupt_ca.public.governed_root[lane] =
@@ -1010,7 +943,6 @@ mod tests {
             ZkX509CredentialProofErrorV1::PublicBindingMismatch,
             "CA public root-SPKI channel",
         );
-
         let mismatched_expected = ZkX509CredentialPublicBindingV1 {
             consensus_context_digest: [0x3C; 32],
             ..public
@@ -1035,7 +967,6 @@ mod tests {
         assert_eq!(main_calls, 0, "MAIN callback ran after header mismatch");
         assert_eq!(ca_calls, 0, "CA callback ran after header mismatch");
     }
-
     #[test]
     fn inner_payload_bit_corruption_is_rejected_by_independent_verifiers() {
         let (public, main, ca, encoded) = proof_fixture();
@@ -1047,7 +978,6 @@ mod tests {
             assert!(verify_fixture(public, main, ca, &corrupt).is_err());
         }
     }
-
     #[test]
     fn encoder_rejects_wrong_inner_identity_and_global_resource_overflow() {
         let public = public(1);
@@ -1066,7 +996,6 @@ mod tests {
             Err(ZkX509CredentialProofErrorV1::ProofTooLarge)
         );
     }
-
     #[test]
     fn section_specific_resource_caps_are_enforced_before_payload_slicing() {
         let (public, _, _, encoded) = proof_fixture();
@@ -1090,7 +1019,6 @@ mod tests {
             decode_zk_x509_credential_envelope_v1(&declared_oversized_main),
             Err(ZkX509CredentialProofErrorV1::ProofTooLarge)
         );
-
         let ca_length_offset =
             FIXED_HEADER_BYTES_V1 + SUBPROOF_HEADER_BYTES_V1 + b"X5M1main-proof".len() + 4;
         for declared in [0_u32, 1, 2, 3] {
@@ -1112,14 +1040,12 @@ mod tests {
             decode_zk_x509_credential_envelope_v1(&declared_oversized_ca),
             Err(ZkX509CredentialProofErrorV1::ProofTooLarge)
         );
-
         let mut oversized_main = vec![0; ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1 + 1];
         oversized_main[..4].copy_from_slice(&MAIN_AGGREGATE_MAGIC_V1);
         assert_eq!(
             encode_zk_x509_credential_envelope_v1(public, &oversized_main, b"X5C1"),
             Err(ZkX509CredentialProofErrorV1::ProofTooLarge)
         );
-
         let mut oversized_ca = vec![0; ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1 + 1];
         oversized_ca[..4].copy_from_slice(&CA_SUBPROOF_MAGIC_V1);
         assert_eq!(
@@ -1127,7 +1053,6 @@ mod tests {
             Err(ZkX509CredentialProofErrorV1::ProofTooLarge)
         );
     }
-
     #[test]
     fn exact_maximum_envelope_includes_the_single_authoritative_outer_frame() {
         assert_eq!(ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1, 92);
@@ -1154,7 +1079,6 @@ mod tests {
             Some(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize)
         );
         assert!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 < ZK_X509_MAX_PROOF_BYTES_V1);
-
         let main_bytes = ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1;
         assert_eq!(
             main_bytes,
@@ -1171,7 +1095,6 @@ mod tests {
             ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize
         );
         drop(encoded);
-
         main.push(0);
         assert_eq!(
             encode_zk_x509_credential_envelope_v1(public(3), &main, &ca),

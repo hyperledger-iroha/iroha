@@ -4,17 +4,14 @@ fn iterable_query_payload_decode_is_canonical_and_variant_safe() {
         account::prelude::FindAccountsWithAsset,
         domain::prelude::{FindDomains, FindDomainsByAccountId},
     };
-
     let unit_payload = norito::codec::Encode::encode(&FindDomains);
     assert!(decode_iter_query_payload_exact::<FindDomains>(&unit_payload).is_some());
-
     let mut trailing_unit_payload = unit_payload;
     trailing_unit_payload.push(0xA5);
     assert!(
         decode_iter_query_payload_exact::<FindDomains>(&trailing_unit_payload).is_none(),
         "a unit query must not accept nonempty or trailing payload bytes"
     );
-
     let parameterized = FindDomainsByAccountId {
         id: ALICE_ID.clone(),
     };
@@ -26,7 +23,6 @@ fn iterable_query_payload_decode_is_canonical_and_variant_safe() {
         decode_iter_query_payload_exact::<FindDomains>(&parameterized_payload).is_none(),
         "a parameterized payload must not collide with the global unit query"
     );
-
     let mut trailing_parameterized_payload = parameterized_payload;
     trailing_parameterized_payload.push(0x5A);
     assert!(
@@ -34,7 +30,6 @@ fn iterable_query_payload_decode_is_canonical_and_variant_safe() {
             .is_none(),
         "a parameterized query must reject trailing payload bytes"
     );
-
     let other_parameterized_payload = norito::codec::Encode::encode(&FindAccountsWithAsset {
         asset_definition: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("valid domain"),
@@ -46,7 +41,6 @@ fn iterable_query_payload_decode_is_canonical_and_variant_safe() {
         "another query variant's payload must not become a global domain query"
     );
 }
-
 #[test]
 fn stored_query_revalidation_archive_ignores_ambient_norito_layout() {
     let request = block_request_with_payload(Vec::new()).request;
@@ -66,7 +60,6 @@ fn stored_query_revalidation_archive_ignores_ambient_norito_layout() {
         canonical
     );
 }
-
 #[tokio::test]
 async fn iterable_query_engines_reject_noncanonical_payloads_before_global_execution() -> Result<()>
 {
@@ -74,11 +67,9 @@ async fn iterable_query_engines_reject_noncanonical_payloads_before_global_execu
         account::prelude::FindAccountsWithAsset,
         domain::prelude::{FindDomains, FindDomainsByAccountId},
     };
-
     let state = state_with_test_blocks_and_transactions(1, 1, 0)?;
     let state_view = state.view();
     let query_handle = state_view.query_handle().clone();
-
     let mut trailing_unit = norito::codec::Encode::encode(&FindDomains);
     trailing_unit.push(0xA5);
     let mut trailing_parameterized = norito::codec::Encode::encode(&FindDomainsByAccountId {
@@ -91,7 +82,6 @@ async fn iterable_query_engines_reject_noncanonical_payloads_before_global_execu
             "rose".parse().expect("valid asset name"),
         ),
     });
-
     for (case, payload) in [
         ("trailing unit bytes", trailing_unit),
         ("trailing parameterized bytes", trailing_parameterized),
@@ -111,7 +101,6 @@ async fn iterable_query_engines_reject_noncanonical_payloads_before_global_execu
             "ephemeral execution accepted {case} as a global domain query"
         );
     }
-
     let cross_variant = norito::codec::Encode::encode(&FindAccountsWithAsset {
         asset_definition: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("valid domain"),
@@ -154,10 +143,8 @@ async fn iterable_query_engines_reject_noncanonical_payloads_before_global_execu
             .is_err(),
         "ephemeral execution treated FindAccountsWithAsset bytes as global roles"
     );
-
     Ok(())
 }
-
 #[test]
 fn checked_keypair_helpers_preserve_requested_algorithm() {
     assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -171,7 +158,6 @@ fn checked_keypair_helpers_preserve_requested_algorithm() {
         Algorithm::BlsNormal
     );
 }
-
 fn dummy_accepted_transaction(network_id: NetworkId) -> AcceptedTransaction<'static> {
     let keypair = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let authority = AccountId::new(keypair.public_key().clone());
@@ -186,7 +172,6 @@ fn dummy_accepted_transaction(network_id: NetworkId) -> AcceptedTransaction<'sta
         .sign(keypair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(tx))
 }
-
 #[tokio::test]
 async fn validate_for_client_world_parts_matches_state_view_path() {
     let state = State::new_for_testing(
@@ -195,7 +180,6 @@ async fn validate_for_client_world_parts_matches_state_view_path() {
         LiveQueryStore::start_test(),
     );
     let limits = QueryLimits::default();
-
     ValidQueryRequest::validate_for_client_parts(
         QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters)),
         &ALICE_ID,
@@ -203,7 +187,6 @@ async fn validate_for_client_world_parts_matches_state_view_path() {
         limits,
     )
     .expect("state-view validation should pass");
-
     let world = state.world_view();
     let latest_block = state.latest_block_header_fast();
     ValidQueryRequest::validate_for_client_world_parts(

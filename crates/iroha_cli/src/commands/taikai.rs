@@ -3,7 +3,6 @@
 //! Provides helpers for bundling broadcast segments into deterministic CAR
 //! archives and Norito envelopes so downstream services can index and publish
 //! them without re-deriving ingest metadata.
-
 use super::da_common::{
     DaPublisher, metadata_map_to_extra, parse_blob_class, parse_fec_scheme, parse_storage_class,
 };
@@ -52,10 +51,8 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 const DEFAULT_LADDER_PRESETS_JSON: &str =
     include_str!("../../../../fixtures/taikai/ladder_presets.json");
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Bundle a Taikai segment into a CAR archive and Norito envelope.
@@ -68,7 +65,6 @@ pub enum Command {
     #[command(subcommand)]
     Ingest(IngestCommand),
 }
-
 impl Run for Command {
     #[allow(clippy::too_many_lines)]
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -80,7 +76,6 @@ impl Run for Command {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum IngestCommand {
@@ -89,7 +84,6 @@ pub enum IngestCommand {
     /// Prototype edge receiver that emits CMAF fragments and drift logs for the watcher.
     Edge(IngestEdgeArgs),
 }
-
 impl Run for IngestCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -98,20 +92,17 @@ impl Run for IngestCommand {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum CliTrackKind {
     Video,
     Audio,
     Data,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum EdgeProtocol {
     Srt,
     Rtmp,
 }
-
 impl EdgeProtocol {
     fn as_str(self) -> &'static str {
         match self {
@@ -119,12 +110,10 @@ impl EdgeProtocol {
             EdgeProtocol::Rtmp => "rtmp",
         }
     }
-
     fn slug(self) -> &'static str {
         self.as_str()
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct BundleArgs {
     /// Path to the CMAF fragment or segment payload to ingest.
@@ -197,7 +186,6 @@ pub struct BundleArgs {
     #[arg(long, value_name = "PATH")]
     pub metadata_json: Option<PathBuf>,
 }
-
 impl Run for BundleArgs {
     #[allow(clippy::too_many_lines)]
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -212,7 +200,6 @@ impl Run for BundleArgs {
             Some(path) => Some(load_extra_metadata(path)?),
             None => None,
         };
-
         let summary = bundle_segment(&BundleRequest {
             payload_path: &self.payload,
             payload_bytes: None,
@@ -235,13 +222,11 @@ impl Run for BundleArgs {
             ingest_node_id: self.ingest_node_id.clone(),
             extra_metadata,
         })?;
-
         let summary_value = build_bundle_summary_value(&summary);
         let text = render_bundle_summary_text(&summary);
         print_with_optional_text(context, Some(text), &summary_value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IngestEdgeArgs {
     /// Path to a sample fragment payload (treated as CMAF bytes).
@@ -278,7 +263,6 @@ pub struct IngestEdgeArgs {
     #[arg(long, value_enum, default_value_t = EdgeProtocol::Srt)]
     pub protocol: EdgeProtocol,
 }
-
 impl Run for IngestEdgeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         if self.segments == 0 {
@@ -362,7 +346,6 @@ impl Run for IngestEdgeArgs {
         print_with_optional_text(context, Some(text), &summary_value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IngestWatchArgs {
     /// Directory that receives CMAF fragments (e.g., `.m4s` files).
@@ -487,7 +470,6 @@ pub struct IngestWatchArgs {
     #[arg(long = "da-endpoint", value_name = "URL")]
     pub da_endpoint: Option<String>,
 }
-
 impl Run for IngestWatchArgs {
     #[allow(clippy::too_many_lines)]
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -614,7 +596,6 @@ impl Run for IngestWatchArgs {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct CekRotateArgs {
     /// Identifier of the Taikai event.
@@ -651,7 +632,6 @@ pub struct CekRotateArgs {
     #[arg(long, value_name = "PATH")]
     pub json_out: Option<PathBuf>,
 }
-
 impl Run for CekRotateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let event_name = parse_name(&self.event_id, "event-id")?;
@@ -689,7 +669,6 @@ impl Run for CekRotateArgs {
         print_with_optional_text(context, Some(text), &output)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RptAttestArgs {
     /// Identifier of the Taikai event.
@@ -729,7 +708,6 @@ pub struct RptAttestArgs {
     #[arg(long)]
     pub notes: Option<String>,
 }
-
 impl Run for RptAttestArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let event_name = parse_name(&self.event_id, "event-id")?;
@@ -782,16 +760,13 @@ impl Run for RptAttestArgs {
         print_with_optional_text(context, Some(text), &output)
     }
 }
-
 fn parse_name(value: &str, field: &str) -> Result<Name> {
     Name::from_str(value).map_err(|err| eyre!("invalid {field} `{value}`: {err}"))
 }
-
 fn parse_blob_digest(value: &str, field: &str) -> Result<BlobDigest> {
     let bytes = parse_hex_32(value, field)?;
     Ok(BlobDigest::new(bytes))
 }
-
 fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
     let trimmed = value.trim_start_matches("0x");
     let bytes =
@@ -806,46 +781,39 @@ fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
     out.copy_from_slice(&bytes);
     Ok(out)
 }
-
 fn build_cek_hkdf_salt(explicit: Option<&str>) -> Result<[u8; 32]> {
     match explicit {
         Some(hex) => parse_hex_32(hex, "hkdf-salt"),
         None => random_cek_hkdf_salt(),
     }
 }
-
 fn random_cek_hkdf_salt() -> Result<[u8; 32]> {
     random_cek_hkdf_salt_with_rng(&mut OsRng)
 }
-
 fn random_cek_hkdf_salt_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<[u8; 32]> {
     let mut salt = [0u8; 32];
     rng.try_fill_bytes(&mut salt)
         .map_err(|err| eyre!("failed to generate Taikai CEK HKDF salt random bytes: {err}"))?;
     Ok(salt)
 }
-
 fn write_norito_file<T: NoritoSerialize>(path: &Path, label: &str, value: &T) -> Result<()> {
     let bytes = norito::to_bytes(value)
         .wrap_err_with(|| format!("failed to encode {label} as canonical Norito framing"))?;
     fs::write(path, &bytes)
         .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
 }
-
 fn write_json_file<T: JsonSerialize>(path: &Path, label: &str, value: &T) -> Result<()> {
     let rendered = norito::json::to_json_pretty(value)
         .map_err(|err| eyre!("failed to render {label} JSON: {err}"))?;
     fs::write(path, rendered.as_bytes())
         .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
 }
-
 fn current_unix_timestamp() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .map_err(|err| eyre!("clock drifted before UNIX_EPOCH: {err}"))
 }
-
 fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
     let metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?;
@@ -859,7 +827,6 @@ fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
     hash_file_entry(path, &relative, &mut hasher)?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn compute_bundle_digest(path: &Path) -> Result<[u8; 32]> {
     let metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?;
@@ -879,7 +846,6 @@ fn compute_bundle_digest(path: &Path) -> Result<[u8; 32]> {
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
     update_path_marker(relative, b'F', hasher);
     let mut file =
@@ -896,7 +862,6 @@ fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<
     }
     Ok(())
 }
-
 fn hash_directory_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
     update_path_marker(relative, b'D', hasher);
     let mut entries = Vec::new();
@@ -920,7 +885,6 @@ fn hash_directory_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Re
     }
     Ok(())
 }
-
 fn hash_path_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
     let metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?;
@@ -935,7 +899,6 @@ fn hash_path_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<
         ))
     }
 }
-
 fn update_path_marker(relative: &Path, kind: u8, hasher: &mut Hasher) {
     let label: Cow<'_, str> = if relative.as_os_str().is_empty() {
         Cow::Borrowed(".")
@@ -945,7 +908,6 @@ fn update_path_marker(relative: &Path, kind: u8, hasher: &mut Hasher) {
     hasher.update(label.as_bytes());
     hasher.update(&[0xFF, kind]);
 }
-
 fn normalize_labels(values: &[String], field: &str) -> Result<Vec<String>> {
     let mut out = Vec::with_capacity(values.len());
     for value in values {
@@ -957,7 +919,6 @@ fn normalize_labels(values: &[String], field: &str) -> Result<Vec<String>> {
     }
     Ok(out)
 }
-
 fn build_track_metadata(args: &BundleArgs) -> Result<TaikaiTrackMetadata> {
     track_metadata_from_parts(
         args.track_kind,
@@ -967,7 +928,6 @@ fn build_track_metadata(args: &BundleArgs) -> Result<TaikaiTrackMetadata> {
         args.audio_layout.as_deref(),
     )
 }
-
 fn track_metadata_from_parts(
     kind: CliTrackKind,
     codec_label: &str,
@@ -1005,7 +965,6 @@ fn track_metadata_from_parts(
         CliTrackKind::Data => Ok(TaikaiTrackMetadata::data(codec.clone(), bitrate_kbps)),
     }
 }
-
 #[derive(Clone, Debug)]
 struct TrackDescriptor {
     track_kind: CliTrackKind,
@@ -1014,7 +973,6 @@ struct TrackDescriptor {
     resolution: Option<String>,
     audio_layout: Option<String>,
 }
-
 impl TrackDescriptor {
     fn build_metadata(&self) -> Result<TaikaiTrackMetadata> {
         track_metadata_from_parts(
@@ -1026,7 +984,6 @@ impl TrackDescriptor {
         )
     }
 }
-
 fn resolve_track_descriptor(
     args: &IngestWatchArgs,
     store: &LadderPresetStore,
@@ -1069,11 +1026,9 @@ fn resolve_track_descriptor(
     }
     Ok(descriptor)
 }
-
 struct LadderPresetStore {
     presets: HashMap<String, TrackDescriptor>,
 }
-
 impl LadderPresetStore {
     fn load(path: Option<&Path>) -> Result<Self> {
         let contents = if let Some(path) = path {
@@ -1085,12 +1040,10 @@ impl LadderPresetStore {
         let presets = parse_ladder_presets_json(&contents)?;
         Ok(Self { presets })
     }
-
     fn get(&self, id: &str) -> Option<&TrackDescriptor> {
         self.presets.get(id)
     }
 }
-
 fn parse_ladder_presets_json(contents: &str) -> Result<HashMap<String, TrackDescriptor>> {
     let value: Value = json::from_str(contents)
         .map_err(|err| eyre!("failed to parse ladder preset JSON: {err}"))?;
@@ -1142,9 +1095,7 @@ fn parse_ladder_presets_json(contents: &str) -> Result<HashMap<String, TrackDesc
     }
     Ok(presets)
 }
-
 type DaIngestOpts = DaIngestParams;
-
 fn build_da_ingest_opts(args: &IngestWatchArgs) -> Result<DaIngestOpts> {
     let lane_id = LaneId::new(args.da_lane);
     let blob_class = parse_blob_class(&args.da_blob_class)?;
@@ -1177,14 +1128,12 @@ fn build_da_ingest_opts(args: &IngestWatchArgs) -> Result<DaIngestOpts> {
         client_blob_id: None,
     })
 }
-
 fn merge_metadata(mut base: ExtraMetadata, overlay: Option<&ExtraMetadata>) -> ExtraMetadata {
     if let Some(extra) = overlay {
         base.items.extend(extra.items.clone());
     }
     base
 }
-
 fn ensure_video_codec(codec: &TaikaiCodec) -> Result<()> {
     match codec {
         TaikaiCodec::AvcHigh
@@ -1196,7 +1145,6 @@ fn ensure_video_codec(codec: &TaikaiCodec) -> Result<()> {
         )),
     }
 }
-
 fn ensure_audio_codec(codec: &TaikaiCodec) -> Result<()> {
     match codec {
         TaikaiCodec::AacLc | TaikaiCodec::Opus | TaikaiCodec::Custom(_) => Ok(()),
@@ -1205,13 +1153,11 @@ fn ensure_audio_codec(codec: &TaikaiCodec) -> Result<()> {
         )),
     }
 }
-
 struct EdgeOutputLayout {
     fragments_dir: PathBuf,
     log_path: PathBuf,
     drift_summary_path: PathBuf,
 }
-
 impl EdgeOutputLayout {
     fn new(explicit: Option<PathBuf>) -> Result<Self> {
         let root = default_ingest_edge_root(explicit)?;
@@ -1229,13 +1175,11 @@ impl EdgeOutputLayout {
             drift_summary_path,
         })
     }
-
     fn fragment_path(&self, protocol: EdgeProtocol, sequence: u64) -> PathBuf {
         self.fragments_dir
             .join(format!("{}_segment_{sequence:06}.m4s", protocol.slug()))
     }
 }
-
 fn default_ingest_edge_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(path);
@@ -1247,7 +1191,6 @@ fn default_ingest_edge_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
     root.push(format!("ingest_edge_run_{stamp}"));
     Ok(root)
 }
-
 struct EdgeLogEntry {
     fragment: PathBuf,
     protocol: EdgeProtocol,
@@ -1257,11 +1200,9 @@ struct EdgeLogEntry {
     drift_ms: i32,
     ingest_node_id: Option<String>,
 }
-
 struct EdgeLogWriter {
     file: File,
 }
-
 impl EdgeLogWriter {
     fn create(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -1280,7 +1221,6 @@ impl EdgeLogWriter {
             .wrap_err_with(|| format!("failed to create ingest edge log `{}`", path.display()))?;
         Ok(Self { file })
     }
-
     fn write_entry(&mut self, entry: &EdgeLogEntry) -> Result<()> {
         let value = build_edge_log_value(entry);
         let rendered = norito::json::to_json(&value)
@@ -1294,14 +1234,12 @@ impl EdgeLogWriter {
         Ok(())
     }
 }
-
 struct DriftAccumulator {
     count: u64,
     sum: i128,
     min: i32,
     max: i32,
 }
-
 impl DriftAccumulator {
     fn new() -> Self {
         Self {
@@ -1311,14 +1249,12 @@ impl DriftAccumulator {
             max: i32::MIN,
         }
     }
-
     fn record(&mut self, value: i32) {
         self.count = self.count.saturating_add(1);
         self.sum = self.sum.saturating_add(i128::from(value));
         self.min = self.min.min(value);
         self.max = self.max.max(value);
     }
-
     #[allow(clippy::cast_precision_loss)]
     fn into_summary(
         self,
@@ -1350,7 +1286,6 @@ impl DriftAccumulator {
         }
     }
 }
-
 struct EdgeSummary {
     protocol: EdgeProtocol,
     segments: u64,
@@ -1365,7 +1300,6 @@ struct EdgeSummary {
     drift_avg_ms: f64,
     ingest_node_id: Option<String>,
 }
-
 impl EdgeSummary {
     fn with_output(
         mut self,
@@ -1379,12 +1313,10 @@ impl EdgeSummary {
         self.segment_interval_ms = segment_interval_ms;
         self
     }
-
     fn with_node(mut self, node: Option<&str>) -> Self {
         self.ingest_node_id = node.map(ToOwned::to_owned);
         self
     }
-
     fn write(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             fs::create_dir_all(parent).wrap_err_with(|| {
@@ -1405,7 +1337,6 @@ impl EdgeSummary {
         Ok(())
     }
 }
-
 fn build_edge_rng(seed: Option<u64>) -> Result<StdRng> {
     match seed {
         Some(seed) => Ok(StdRng::seed_from_u64(seed)),
@@ -1413,7 +1344,6 @@ fn build_edge_rng(seed: Option<u64>) -> Result<StdRng> {
             .map_err(|err| eyre!("failed to seed Taikai edge drift RNG from OS entropy: {err}")),
     }
 }
-
 fn jittered_drift<R: Rng + ?Sized>(base: i32, jitter_ms: u32, rng: &mut R) -> i32 {
     if jitter_ms == 0 {
         return base;
@@ -1422,7 +1352,6 @@ fn jittered_drift<R: Rng + ?Sized>(base: i32, jitter_ms: u32, rng: &mut R) -> i3
     let offset = rng.random_range(-jitter_clamped..=jitter_clamped);
     base.saturating_add(offset)
 }
-
 fn unix_timestamp_ms() -> Result<u64> {
     let now = SystemTime::now();
     let duration = now
@@ -1430,7 +1359,6 @@ fn unix_timestamp_ms() -> Result<u64> {
         .map_err(|err| eyre!("clock drifted before UNIX_EPOCH: {err}"))?;
     u64::try_from(duration.as_millis()).map_err(|_| eyre!("wallclock timestamp exceeds u64::MAX"))
 }
-
 fn build_edge_log_value(entry: &EdgeLogEntry) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -1457,7 +1385,6 @@ fn build_edge_log_value(entry: &EdgeLogEntry) -> Value {
     );
     Value::Object(map)
 }
-
 fn build_edge_summary_value(summary: &EdgeSummary) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -1495,7 +1422,6 @@ fn build_edge_summary_value(summary: &EdgeSummary) -> Value {
     );
     Value::Object(map)
 }
-
 struct IngestOutputLayout {
     root: PathBuf,
     car_dir: PathBuf,
@@ -1505,7 +1431,6 @@ struct IngestOutputLayout {
     da_request_dir: PathBuf,
     da_receipt_dir: PathBuf,
 }
-
 impl IngestOutputLayout {
     fn new(explicit: Option<PathBuf>) -> Result<Self> {
         let root = default_ingest_root(explicit)?;
@@ -1537,7 +1462,6 @@ impl IngestOutputLayout {
             da_receipt_dir,
         })
     }
-
     fn allocate_paths(&self, source: &Path, sequence: u64) -> IngestOutputPaths {
         let stem = source
             .file_stem()
@@ -1553,7 +1477,6 @@ impl IngestOutputLayout {
             metadata: self.metadata_dir.join(format!("{slug}.da.json")),
         }
     }
-
     fn allocate_da_paths(&self, slug: &str) -> DaRequestPaths {
         DaRequestPaths {
             request: self.da_request_dir.join(format!("{slug}.request.norito")),
@@ -1563,7 +1486,6 @@ impl IngestOutputLayout {
         }
     }
 }
-
 struct IngestOutputPaths {
     slug: String,
     car: PathBuf,
@@ -1571,14 +1493,12 @@ struct IngestOutputPaths {
     indexes: PathBuf,
     metadata: PathBuf,
 }
-
 struct DaRequestPaths {
     request: PathBuf,
     request_json: PathBuf,
     receipt: PathBuf,
     receipt_json: PathBuf,
 }
-
 fn default_ingest_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(path);
@@ -1593,7 +1513,6 @@ fn default_ingest_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
     root.push(format!("ingest_run_{stamp}"));
     Ok(root)
 }
-
 fn sanitize_slug(value: &str) -> String {
     value
         .chars()
@@ -1606,12 +1525,10 @@ fn sanitize_slug(value: &str) -> String {
         })
         .collect()
 }
-
 struct DriftAnchors {
     pts_anchor: u64,
     wallclock_anchor_ms: u128,
 }
-
 impl DriftAnchors {
     fn new(pts_anchor: u64) -> Result<Self> {
         let wallclock_anchor_ms = SystemTime::now()
@@ -1623,7 +1540,6 @@ impl DriftAnchors {
             wallclock_anchor_ms,
         })
     }
-
     fn measure(&self, segment_pts: u64, actual_ms: u128) -> i128 {
         let delta_pts = segment_pts.saturating_sub(self.pts_anchor);
         let expected_ms = self.wallclock_anchor_ms + u128::from(delta_pts) / 1_000;
@@ -1632,7 +1548,6 @@ impl DriftAnchors {
         actual_i - expected_i
     }
 }
-
 struct IngestSummary {
     bundle: BundleSummary,
     drift_ms: i128,
@@ -1649,11 +1564,9 @@ struct IngestSummary {
     ingest_latency_ms: Option<u32>,
     ingest_node_id: Option<String>,
 }
-
 struct IngestSummaryLog {
     file: File,
 }
-
 impl IngestSummaryLog {
     fn create(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -1671,7 +1584,6 @@ impl IngestSummaryLog {
             })?;
         Ok(Self { file })
     }
-
     fn write_entry(&mut self, source: &Path, summary: &IngestSummary) -> Result<()> {
         let value = build_ingest_summary_value(source, summary);
         let rendered = norito::json::to_json(&value)
@@ -1685,7 +1597,6 @@ impl IngestSummaryLog {
         Ok(())
     }
 }
-
 fn build_ingest_summary_value(source: &Path, summary: &IngestSummary) -> Value {
     let mut map = Map::new();
     map.insert("payload".into(), Value::from(path_to_string(source)));
@@ -1777,7 +1688,6 @@ fn build_ingest_summary_value(source: &Path, summary: &IngestSummary) -> Value {
     );
     Value::Object(map)
 }
-
 fn build_bundle_summary_value(summary: &BundleSummary) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -1815,7 +1725,6 @@ fn build_bundle_summary_value(summary: &BundleSummary) -> Value {
     );
     Value::Object(map)
 }
-
 fn build_edge_output_value(summary: &EdgeSummary, drift_summary_path: &Path) -> Value {
     let mut map = match build_edge_summary_value(summary) {
         Value::Object(map) => map,
@@ -1827,7 +1736,6 @@ fn build_edge_output_value(summary: &EdgeSummary, drift_summary_path: &Path) -> 
     );
     Value::Object(map)
 }
-
 fn build_receipt_output_value<T: JsonSerialize>(
     label: &str,
     payload: &T,
@@ -1845,7 +1753,6 @@ fn build_receipt_output_value<T: JsonSerialize>(
     map.insert("json_out".into(), optional_path_value(json_out));
     Ok(Value::Object(map))
 }
-
 fn render_bundle_summary_text(summary: &BundleSummary) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "Taikai segment bundle generated");
@@ -1880,7 +1787,6 @@ fn render_bundle_summary_text(summary: &BundleSummary) -> String {
     }
     out
 }
-
 fn render_edge_summary_text(
     summary: &EdgeSummary,
     drift_summary_path: &Path,
@@ -1905,7 +1811,6 @@ fn render_edge_summary_text(
     );
     out
 }
-
 fn render_receipt_text(
     header: &str,
     out_label: &str,
@@ -1920,23 +1825,18 @@ fn render_receipt_text(
     }
     out
 }
-
 fn optional_path_value(path: Option<&Path>) -> Value {
     path.map_or(Value::Null, |p| Value::from(path_to_string(p)))
 }
-
 fn optional_u32_value(value: Option<u32>) -> Value {
     value.map_or(Value::Null, Value::from)
 }
-
 fn optional_string_value(value: Option<&str>) -> Value {
     value.map_or(Value::Null, |val| Value::from(val.to_string()))
 }
-
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
-
 #[cfg(test)]
 mod summary_tests {
     use super::*;
@@ -1949,7 +1849,6 @@ mod summary_tests {
         },
     };
     use std::{path::Path, str::FromStr};
-
     fn sample_bundle_summary() -> BundleSummary {
         let time_key = TaikaiTimeIndexKey {
             event_id: TaikaiEventId::new(Name::from_str("event").unwrap()),
@@ -1975,7 +1874,6 @@ mod summary_tests {
             ingest_metadata: Map::new(),
         }
     }
-
     #[test]
     fn build_ingest_summary_value_tracks_core_fields() {
         let bundle = sample_bundle_summary();
@@ -2042,7 +1940,6 @@ mod summary_tests {
             Some("node-a")
         );
     }
-
     #[test]
     fn build_bundle_summary_value_tracks_paths() {
         let summary = sample_bundle_summary();
@@ -2067,7 +1964,6 @@ mod summary_tests {
             Some("/tmp/out.da.json")
         );
     }
-
     #[test]
     fn render_bundle_summary_text_mentions_outputs() {
         let summary = sample_bundle_summary();
@@ -2076,7 +1972,6 @@ mod summary_tests {
         assert!(text.contains("envelope_out: /tmp/out.to"));
         assert!(text.contains("indexes_out: /tmp/out.json"));
     }
-
     #[test]
     fn render_edge_summary_text_mentions_paths() {
         let summary = EdgeSummary {
@@ -2097,7 +1992,6 @@ mod summary_tests {
         assert!(text.contains("fragments"));
         assert!(text.contains("drift log"));
     }
-
     #[test]
     fn build_receipt_output_value_tracks_paths() {
         let payload = norito::json!({ "ok": true });
@@ -2109,7 +2003,6 @@ mod summary_tests {
             Some("/tmp/out.to")
         );
     }
-
     #[test]
     fn render_receipt_text_includes_json_path() {
         let text = render_receipt_text(
@@ -2122,7 +2015,6 @@ mod summary_tests {
         assert!(text.contains("json_out: /tmp/out.json"));
     }
 }
-
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn process_ingest_file(
     payload_path: &Path,
@@ -2190,7 +2082,6 @@ fn process_ingest_file(
         ingest_node_id: ingest_node_owned.clone(),
         extra_metadata: metadata.cloned(),
     })?;
-
     let ingest_metadata = metadata_map_to_extra(&summary.ingest_metadata)?;
     let combined_metadata = merge_metadata(ingest_metadata, metadata);
     let mut request_params = da_opts.clone();
@@ -2221,7 +2112,6 @@ fn process_ingest_file(
             da_paths.request_json.display()
         )
     })?;
-
     let receipt_path = if let Some(publisher) = publisher {
         let receipt = publisher.publish(&request_bytes)?;
         fs::write(&da_paths.receipt, &receipt.bytes).wrap_err_with(|| {
@@ -2240,7 +2130,6 @@ fn process_ingest_file(
     } else {
         None
     };
-
     Ok(IngestSummary {
         bundle: summary,
         drift_ms,
@@ -2258,7 +2147,6 @@ fn process_ingest_file(
         ingest_node_id: ingest_node_owned,
     })
 }
-
 fn derive_storage_ticket(
     digest: &BlobDigest,
     event_id: &TaikaiEventId,
@@ -2274,7 +2162,6 @@ fn derive_storage_ticket(
     hasher.update(&sequence.to_le_bytes());
     StorageTicketId::from_hash(hasher.finalize())
 }
-
 fn emit_ingest_summary<C: RunContext>(
     context: &mut C,
     source: &Path,
@@ -2313,7 +2200,6 @@ fn emit_ingest_summary<C: RunContext>(
     }
     Ok(())
 }
-
 fn compute_ingest_latency_ms(
     override_value: Option<u32>,
     path: &Path,
@@ -2328,11 +2214,9 @@ fn compute_ingest_latency_ms(
     let millis = duration.as_millis();
     Some(u32::try_from(millis.min(u128::from(u32::MAX))).unwrap())
 }
-
 struct ExtensionMatcher {
     extensions: Vec<String>,
 }
-
 impl ExtensionMatcher {
     fn new(values: &[String]) -> Result<Self> {
         let mut extensions = Vec::new();
@@ -2349,7 +2233,6 @@ impl ExtensionMatcher {
         }
         Ok(Self { extensions })
     }
-
     fn matches(&self, path: &Path) -> bool {
         let ext = path
             .extension()
@@ -2362,45 +2245,34 @@ impl ExtensionMatcher {
         })
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha::data_model::taikai::TaikaiTrackKind;
     use rand::RngCore as _;
     use std::{fs, path::Path};
-
     #[derive(Debug)]
     struct FailingTryRngError;
-
     impl std::fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing Taikai CEK salt RNG")
         }
     }
-
     impl std::error::Error for FailingTryRngError {}
-
     struct FailingTryRng;
-
     impl rand::rand_core::TryRngCore for FailingTryRng {
         type Error = FailingTryRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingTryRngError)
         }
     }
-
     impl rand::rand_core::TryCryptoRng for FailingTryRng {}
-
     #[test]
     fn hex_parser_accepts_32_byte_values() {
         let hex = "aa".repeat(32);
@@ -2409,7 +2281,6 @@ mod tests {
         let err = parse_blob_digest("ff", "test").unwrap_err();
         assert!(err.to_string().contains("64 hex chars"));
     }
-
     #[test]
     fn ensure_codec_validation_matches_track_kind() {
         assert!(ensure_video_codec(&TaikaiCodec::Av1Main).is_ok());
@@ -2417,17 +2288,14 @@ mod tests {
         assert!(ensure_audio_codec(&TaikaiCodec::Opus).is_ok());
         assert!(ensure_audio_codec(&TaikaiCodec::AvcHigh).is_err());
     }
-
     #[test]
     fn build_track_metadata_enforces_required_fields() {
         let mut base = sample_args();
         let built = build_track_metadata(&base).expect("video track");
         assert_eq!(built.kind, TaikaiTrackKind::Video);
         assert_eq!(built.resolution.unwrap().width, 1920, "resolution width");
-
         base.resolution = None;
         assert!(build_track_metadata(&base).is_err());
-
         let mut audio = sample_args();
         audio.track_kind = CliTrackKind::Audio;
         audio.codec = "aac-lc".into();
@@ -2436,10 +2304,8 @@ mod tests {
         let built_audio = build_track_metadata(&audio).expect("audio track");
         assert_eq!(built_audio.kind, TaikaiTrackKind::Audio);
         assert_eq!(built_audio.audio_layout.unwrap(), TaikaiAudioLayout::Stereo);
-
         audio.audio_layout = None;
         assert!(build_track_metadata(&audio).is_err());
-
         let mut data = sample_args();
         data.track_kind = CliTrackKind::Data;
         data.codec = "custom:id3".into();
@@ -2449,7 +2315,6 @@ mod tests {
         assert_eq!(built_data.kind, TaikaiTrackKind::Data);
         assert!(built_data.resolution.is_none());
     }
-
     #[test]
     fn ladder_preset_store_exposes_defaults() {
         let store = LadderPresetStore::load(None).expect("store");
@@ -2459,7 +2324,6 @@ mod tests {
         assert_eq!(preset.track_kind, CliTrackKind::Video);
         assert_eq!(preset.bitrate_kbps, 8_000);
     }
-
     #[test]
     fn extension_matcher_filters_extensions() {
         let matcher =
@@ -2468,13 +2332,11 @@ mod tests {
         assert!(matcher.matches(Path::new("demo.cmfv")));
         assert!(!matcher.matches(Path::new("notes.txt")));
     }
-
     #[test]
     fn sanitize_slug_rewrites_problematic_chars() {
         assert_eq!(sanitize_slug("foo bar#baz"), "foo_bar_baz");
         assert_eq!(sanitize_slug("中継_stream"), "___stream");
     }
-
     #[test]
     fn ingest_edge_log_writer_emits_ndjson() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -2491,7 +2353,6 @@ mod tests {
             ingest_node_id: Some("edge-a".to_string()),
         };
         writer.write_entry(&entry).expect("write log");
-
         let contents = fs::read_to_string(&log_path).expect("log contents");
         let value: Value = json::from_str(contents.trim()).expect("parse log");
         let map = value.as_object().expect("log entry object");
@@ -2511,7 +2372,6 @@ mod tests {
             Some("edge-a")
         );
     }
-
     #[test]
     fn ingest_edge_summary_writes_report() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -2542,19 +2402,16 @@ mod tests {
             Some(path_to_string(&layout.fragments_dir).as_str())
         );
     }
-
     #[test]
     fn cek_hkdf_salt_accepts_explicit_hex() {
         let salt = build_cek_hkdf_salt(Some(&"ab".repeat(32))).expect("explicit salt");
         assert_eq!(salt, [0xAB; 32]);
     }
-
     #[test]
     fn cek_hkdf_salt_random_path_reads_os_entropy() {
         let salt = build_cek_hkdf_salt(None).expect("OS RNG should seed CEK salt RNG");
         assert_eq!(salt.len(), 32);
     }
-
     #[test]
     fn cek_hkdf_salt_random_path_reports_rng_failure() {
         let err = random_cek_hkdf_salt_with_rng(&mut FailingTryRng)
@@ -2562,21 +2419,18 @@ mod tests {
         assert!(err.to_string().contains("Taikai CEK HKDF salt"));
         assert!(err.to_string().contains("failing Taikai CEK salt RNG"));
     }
-
     #[test]
     fn build_edge_rng_seeded_path_is_deterministic() {
         let mut first = build_edge_rng(Some(42)).expect("seeded edge RNG");
         let mut second = build_edge_rng(Some(42)).expect("seeded edge RNG");
         assert_eq!(first.next_u64(), second.next_u64());
     }
-
     #[test]
     fn build_edge_rng_unseeded_path_reads_os_entropy() {
         let mut rng = build_edge_rng(None).expect("OS RNG should seed Taikai edge RNG");
         let mut bytes = [0u8; 32];
         rng.fill_bytes(&mut bytes);
     }
-
     fn sample_args() -> BundleArgs {
         BundleArgs {
             payload: PathBuf::from("payload"),

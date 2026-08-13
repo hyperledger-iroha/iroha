@@ -2,16 +2,13 @@
 //!
 //! The daemon owns only the public configuration-to-registry binding. Private
 //! provider material remains behind the deployment-supplied registry.
-
 use std::{fmt, sync::Arc};
-
 use iroha_config::parameters::actual::SorafsPopCredentialService;
 use iroha_torii::sorafs::pop_api::{
     PopCredentialRuntimeConfigV1, PopCredentialRuntimeProviderRegistryV1,
     PopCredentialToriiRuntimeV1,
 };
 use sorafs_node::pop_credentials::PopCredentialServiceError;
-
 /// Fail-closed `PoP` runtime startup failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopRuntimeStartupError {
@@ -22,7 +19,6 @@ pub enum PopRuntimeStartupError {
     /// The injected registry or its resolved providers failed qualification.
     Runtime(PopCredentialServiceError),
 }
-
 impl fmt::Display for PopRuntimeStartupError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -36,7 +32,6 @@ impl fmt::Display for PopRuntimeStartupError {
         }
     }
 }
-
 impl std::error::Error for PopRuntimeStartupError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -45,7 +40,6 @@ impl std::error::Error for PopRuntimeStartupError {
         }
     }
 }
-
 /// Build the `PoP` runtime from public config and one deployment-owned registry.
 ///
 /// The Torii constructor validates the exact configured provider handle,
@@ -76,7 +70,6 @@ pub fn build(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -87,7 +80,6 @@ mod tests {
         },
         time::Duration,
     };
-
     use iroha_config::parameters::actual::SorafsPopApprovalSigner;
     use iroha_crypto::{Algorithm, HybridKeyPair, KeyPair};
     use iroha_torii::sorafs::pop_api::{
@@ -108,24 +100,19 @@ mod tests {
         PopRegistryOperationV1, PopRegistrySubmitter, PopRequestAuthorityV1, PopWalletKeyWrapper,
         PopWalletRecipientV1, pop_enrollment_recipient_public_key_digest_v1,
     };
-
     use super::*;
-
     #[derive(Debug)]
     struct FixedIssuerSigner {
         key_id: String,
         public_key: [u8; 32],
     }
-
     impl PopIssuerSigner for FixedIssuerSigner {
         fn key_id(&self) -> &str {
             &self.key_id
         }
-
         fn public_key(&self) -> [u8; 32] {
             self.public_key
         }
-
         fn sign_digest(
             &self,
             _purpose: PopIssuerSigningPurposeV1,
@@ -134,21 +121,17 @@ mod tests {
             Ok([0x91; 64])
         }
     }
-
     #[derive(Debug)]
     struct FixedWalletKeyWrapper {
         key_id: String,
     }
-
     impl PopWalletKeyWrapper for FixedWalletKeyWrapper {
         fn active_key_id(&self) -> &str {
             &self.key_id
         }
-
         fn wrap_dek(&self, _context: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
             Ok(dek.to_vec())
         }
-
         fn unwrap_dek(
             &self,
             key_id: &str,
@@ -163,13 +146,11 @@ mod tests {
                 .map_err(|_| "invalid wrapped key length".to_owned())
         }
     }
-
     struct FixedRecipient {
         key_id: String,
         secret: iroha_crypto::HybridSecretKey,
         public_key_digest: [u8; 32],
     }
-
     impl fmt::Debug for FixedRecipient {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -179,16 +160,13 @@ mod tests {
                 .finish()
         }
     }
-
     impl PopEnrollmentRecipientV1 for FixedRecipient {
         fn key_id(&self) -> &str {
             &self.key_id
         }
-
         fn public_key_digest(&self) -> [u8; 32] {
             self.public_key_digest
         }
-
         fn open_enrollment(
             &self,
             encrypted_payload: &HybridPayloadEnvelopeV1,
@@ -198,16 +176,13 @@ mod tests {
                 .map_err(|_| PopRecipientOpenErrorV1::Rejected)
         }
     }
-
     impl PopWalletRecipientV1 for FixedRecipient {
         fn key_id(&self) -> &str {
             &self.key_id
         }
-
         fn public_key_digest(&self) -> [u8; 32] {
             self.public_key_digest
         }
-
         fn open_wallet_delivery(
             &self,
             encrypted_payload: &HybridPayloadEnvelopeV1,
@@ -217,10 +192,8 @@ mod tests {
                 .map_err(|_| PopRecipientOpenErrorV1::Rejected)
         }
     }
-
     #[derive(Debug)]
     struct FixedAuthenticator;
-
     impl PopCredentialApiAuthenticator for FixedAuthenticator {
         fn authenticate(
             &self,
@@ -236,10 +209,8 @@ mod tests {
             })
         }
     }
-
     #[derive(Debug)]
     struct NoopRegistrySubmitter;
-
     impl PopRegistrySubmitter for NoopRegistrySubmitter {
         fn submit(
             &self,
@@ -249,10 +220,8 @@ mod tests {
             Ok(())
         }
     }
-
     #[derive(Debug)]
     struct EmptyRegistryReader;
-
     impl PopFinalizedRegistryReader for EmptyRegistryReader {
         fn next_after(
             &self,
@@ -261,10 +230,8 @@ mod tests {
             Ok(None)
         }
     }
-
     #[derive(Debug)]
     struct UnavailableIssuanceDraftProvider;
-
     impl PopIssuanceDraftProviderV1 for UnavailableIssuanceDraftProvider {
         fn resolve(
             &self,
@@ -274,10 +241,8 @@ mod tests {
             Err(PopPrivateMaterialProviderErrorV1::Unavailable)
         }
     }
-
     #[derive(Debug)]
     struct UnavailableWalletWitnessProvider;
-
     impl PopWalletWitnessProviderV1 for UnavailableWalletWitnessProvider {
         fn resolve(
             &self,
@@ -287,10 +252,8 @@ mod tests {
             Err(PopPrivateMaterialProviderErrorV1::Unavailable)
         }
     }
-
     #[derive(Debug)]
     struct FixedFinalizedTimeProvider;
-
     impl PopFinalizedTimeProviderV1 for FixedFinalizedTimeProvider {
         fn sample(&self) -> Result<PopFinalizedTimeSampleV1, PopFinalizedTimeProviderErrorV1> {
             Ok(PopFinalizedTimeSampleV1 {
@@ -301,7 +264,6 @@ mod tests {
             })
         }
     }
-
     struct TestProviderRegistry {
         handle: String,
         revision: u64,
@@ -312,7 +274,6 @@ mod tests {
         providers: Mutex<Option<PopCredentialRuntimeProvidersV1>>,
         observed_bindings: Mutex<Option<PopCredentialRuntimeProviderBindingsV1>>,
     }
-
     impl fmt::Debug for TestProviderRegistry {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -322,12 +283,10 @@ mod tests {
                 .finish_non_exhaustive()
         }
     }
-
     impl PopCredentialRuntimeProviderRegistryV1 for TestProviderRegistry {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -348,7 +307,6 @@ mod tests {
                 self.policy_digest,
             ))
         }
-
         fn resolve(
             &self,
             bindings: &PopCredentialRuntimeProviderBindingsV1,
@@ -366,7 +324,6 @@ mod tests {
                 .ok_or(PopCredentialRuntimeProviderRegistryErrorV1::Unavailable)
         }
     }
-
     fn ed25519_public_key(seed: u8) -> [u8; 32] {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive fixture Ed25519 key")
@@ -376,17 +333,14 @@ mod tests {
             .try_into()
             .expect("Ed25519 public key width")
     }
-
     fn enrollment_recipient_key() -> HybridKeyPair {
         let mut rng = StdRng::from_seed([0x31; 32]);
         HybridKeyPair::generate(&mut rng).expect("deterministic enrollment recipient key")
     }
-
     fn wallet_recipient_key() -> HybridKeyPair {
         let mut rng = StdRng::from_seed([0x32; 32]);
         HybridKeyPair::generate(&mut rng).expect("deterministic wallet recipient key")
     }
-
     fn service_config(root: &Path) -> SorafsPopCredentialService {
         let enrollment_recipient = enrollment_recipient_key();
         let wallet_recipient = wallet_recipient_key();
@@ -431,7 +385,6 @@ mod tests {
             max_finalized_time_skew: Duration::from_secs(30),
         }
     }
-
     fn temporary_service_config(temporary: &tempfile::TempDir) -> SorafsPopCredentialService {
         let canonical_root = temporary
             .path()
@@ -439,7 +392,6 @@ mod tests {
             .expect("canonical temporary runtime root");
         service_config(&canonical_root)
     }
-
     fn provider_registry(
         config: &SorafsPopCredentialService,
         handle: impl Into<String>,
@@ -485,13 +437,11 @@ mod tests {
             observed_bindings: Mutex::new(None),
         })
     }
-
     fn erased_registry(
         registry: &Arc<TestProviderRegistry>,
     ) -> Arc<dyn PopCredentialRuntimeProviderRegistryV1> {
         registry.clone()
     }
-
     fn exact_registry(config: &SorafsPopCredentialService) -> Arc<TestProviderRegistry> {
         provider_registry(
             config,
@@ -502,7 +452,6 @@ mod tests {
             false,
         )
     }
-
     fn assert_startup_failure_before_state(
         config: &SorafsPopCredentialService,
         registry: &Arc<TestProviderRegistry>,
@@ -516,11 +465,9 @@ mod tests {
         assert!(!issuer_state_dir.exists());
         assert!(!wallet_state_dir.exists());
     }
-
     #[test]
     fn builder_covers_all_enabled_and_injected_combinations() {
         assert!(build(None, None).expect("disabled PoP service").is_none());
-
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let config = temporary_service_config(&temporary);
         let registry = exact_registry(&config);
@@ -530,7 +477,6 @@ mod tests {
         );
         assert!(!config.issuer_state_dir.exists());
         assert!(!config.wallet_state_dir.exists());
-
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let config = temporary_service_config(&temporary);
         assert_eq!(
@@ -539,7 +485,6 @@ mod tests {
         );
         assert!(!config.issuer_state_dir.exists());
         assert!(!config.wallet_state_dir.exists());
-
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let config = temporary_service_config(&temporary);
         let registry = exact_registry(&config);
@@ -560,7 +505,6 @@ mod tests {
         );
         assert!(config.issuer_state_dir.exists());
         assert!(config.wallet_state_dir.exists());
-
         let observed = registry
             .observed_bindings
             .lock()
@@ -592,7 +536,6 @@ mod tests {
             config.wallet_wrapping_key_id
         );
     }
-
     #[test]
     fn builder_rejects_substituted_stale_revoked_test_marked_and_drifting_registries() {
         let temporary = tempfile::tempdir().expect("temporary runtime root");
@@ -612,7 +555,6 @@ mod tests {
                 PopCredentialServiceError::RuntimeProviderRegistryMismatch,
             ),
         );
-
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let config = temporary_service_config(&temporary);
         let registry = provider_registry(
@@ -630,7 +572,6 @@ mod tests {
                 PopCredentialServiceError::RuntimeProviderRegistryMismatch,
             ),
         );
-
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let config = temporary_service_config(&temporary);
         let registry = provider_registry(
@@ -648,7 +589,6 @@ mod tests {
                 PopCredentialServiceError::RuntimeProviderRegistryMismatch,
             ),
         );
-
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let config = temporary_service_config(&temporary);
         let registry = provider_registry(
@@ -666,7 +606,6 @@ mod tests {
                 PopCredentialServiceError::RuntimeProviderRegistryUnavailable,
             ),
         );
-
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let mut config = temporary_service_config(&temporary);
         config.runtime_provider_registry_handle = "runtime:pop:providers:test".to_owned();
@@ -678,7 +617,6 @@ mod tests {
                 field: "runtime_provider_registry_handle",
             }),
         );
-
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let config = temporary_service_config(&temporary);
         let registry = provider_registry(
@@ -697,7 +635,6 @@ mod tests {
             ),
         );
     }
-
     #[test]
     fn production_builder_has_no_secret_or_fallback_source() {
         let source = include_str!("sorafs_pop_runtime.rs");
@@ -722,7 +659,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn startup_error_exposes_only_stable_payload_free_text() {
         let error = PopRuntimeStartupError::Runtime(

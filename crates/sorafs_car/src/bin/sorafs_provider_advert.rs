@@ -6,10 +6,8 @@ use std::{
     path::{Component, Path, PathBuf},
     process,
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-
 use ed25519_dalek::VerifyingKey;
 use iroha_crypto::sha256;
 use norito::json::{Map, Value, to_string_pretty};
@@ -21,21 +19,18 @@ use sorafs_manifest::{
     SignatureAlgorithm, StreamBudgetV1, TransportHintV1, TransportProtocol, deal::XorQuantity,
     decode_provider_advert_v1, provider_advert::ProviderCapabilitySoranetPqV1,
 };
-
 const ED25519_PUBLIC_KEY_BYTES: usize = 32;
 const ED25519_SIGNATURE_BYTES: usize = 64;
 const PREPARE_SIGNATURE_PLACEHOLDER: [u8; ED25519_SIGNATURE_BYTES] =
     [0xA6; ED25519_SIGNATURE_BYTES];
 const PROVIDER_ADVERT_MAX_BYTES: u64 = 1024 * 1024;
 const SIGNING_PAYLOAD_MAX_BYTES: u64 = 1024 * 1024;
-
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");
         process::exit(1);
     }
 }
-
 fn run() -> Result<(), String> {
     let mut args = env::args().skip(1);
     let command = match args.next() {
@@ -159,14 +154,12 @@ fn run() -> Result<(), String> {
         }
         _ => return Err(usage().to_string()),
     };
-
     match command {
         Command::Prepare(opts) => handle_prepare(*opts),
         Command::Emit(opts) => handle_emit(*opts),
         Command::Verify(opts) => handle_verify(opts),
     }
 }
-
 fn handle_prepare(opts: EmitOptions) -> Result<(), String> {
     if opts.signature_file.is_some() || opts.signing_payload_file.is_some() {
         return Err("--prepare does not accept --signature-file or --signing-payload-file".into());
@@ -199,7 +192,6 @@ fn handle_prepare(opts: EmitOptions) -> Result<(), String> {
             "--json-out",
         ),
     ])?;
-
     let (public_key, fingerprint) =
         load_reviewed_public_key(public_key_path, opts.public_key_fingerprint_sha256.as_ref())?;
     // Signature bytes are excluded from the signed payload and this advert is never emitted.
@@ -213,11 +205,9 @@ fn handle_prepare(opts: EmitOptions) -> Result<(), String> {
         .signature_payload_bytes()
         .map_err(|err| format!("encode advert signing payload: {err}"))?;
     write_bytes(signing_payload_out, &signing_payload)?;
-
     let report = build_signing_request_report(&advert, &signing_payload, &fingerprint);
     write_report(&report, opts.json_out.as_deref())
 }
-
 fn handle_emit(opts: EmitOptions) -> Result<(), String> {
     if opts.signing_payload_out.is_some() {
         return Err("--emit does not accept --signing-payload-out; use --prepare first".into());
@@ -296,7 +286,6 @@ fn handle_emit(opts: EmitOptions) -> Result<(), String> {
             "--json-out",
         ),
     ])?;
-
     let (public_key, fingerprint) =
         load_reviewed_public_key(public_key_path, opts.public_key_fingerprint_sha256.as_ref())?;
     let signature = read_trusted_regular_file(
@@ -325,14 +314,11 @@ fn handle_emit(opts: EmitOptions) -> Result<(), String> {
     }
     verify_advert_signature(&advert)
         .map_err(|err| format!("signature validation failed: {err}"))?;
-
     let bytes = norito::to_bytes(&advert).map_err(|err| err.to_string())?;
     write_bytes(advert_out, &bytes)?;
-
     let report = build_report(&advert, &bytes, true, &fingerprint);
     write_report(&report, opts.json_out.as_deref())
 }
-
 fn handle_verify(opts: VerifyOptions) -> Result<(), String> {
     let advert_path = opts
         .advert_path
@@ -371,7 +357,6 @@ fn handle_verify(opts: VerifyOptions) -> Result<(), String> {
     let report = build_report(&advert, &bytes, true, &fingerprint);
     write_report(&report, opts.json_out.as_deref())
 }
-
 fn usage() -> &'static str {
     "usage: sorafs_provider_advert <--prepare|--emit|--verify> \
      --prepare|--emit \
@@ -409,7 +394,6 @@ fn usage() -> &'static str {
      [--now=unix] \
      [--json-out=path]"
 }
-
 fn build_advert(
     opts: &EmitOptions,
     public_key_bytes: Vec<u8>,
@@ -439,7 +423,6 @@ fn build_advert(
             aliases
         })
         .unwrap_or_else(|| vec![profile_handle.clone()]);
-
     let issued_at = opts
         .issued_at
         .ok_or_else(|| "missing required option: --issued-at".to_string())?;
@@ -501,7 +484,6 @@ fn build_advert(
     {
         return Err("--transport-hint=soranet requires --soranet-pq".into());
     }
-
     let mut builder = ProviderAdvertV1::builder();
     let _ = builder
         .profile_id(profile_handle.clone())
@@ -555,7 +537,6 @@ fn build_advert(
         public_key_bytes,
         signature_bytes,
     );
-
     builder.build().map_err(|err| match err {
         ProviderAdvertBuildError::MissingField(field) => {
             let option = match field {
@@ -578,7 +559,6 @@ fn build_advert(
         ProviderAdvertBuildError::Validation(validation) => validation.to_string(),
     })
 }
-
 fn build_report(
     advert: &ProviderAdvertV1,
     bytes: &[u8],
@@ -598,7 +578,6 @@ fn build_report(
         "allow_unknown_capabilities".into(),
         Value::from(advert.allow_unknown_capabilities),
     );
-
     let mut body_obj = Map::new();
     body_obj.insert(
         "provider_id_hex".into(),
@@ -655,7 +634,6 @@ fn build_report(
         "max_concurrent_streams".into(),
         Value::from(advert.body.qos.max_concurrent_streams),
     );
-
     let capabilities: Vec<Value> = advert
         .body
         .capabilities
@@ -714,7 +692,6 @@ fn build_report(
         })
         .collect();
     body_obj.insert("capabilities".into(), Value::Array(capabilities));
-
     if let Some(budget) = &advert.body.stream_budget {
         let mut budget_obj = Map::new();
         budget_obj.insert(
@@ -745,7 +722,6 @@ fn build_report(
             .collect();
         body_obj.insert("transport_hints".into(), Value::Array(hint_values));
     }
-
     let endpoints: Vec<Value> = advert
         .body
         .endpoints
@@ -775,7 +751,6 @@ fn build_report(
         })
         .collect();
     body_obj.insert("endpoints".into(), Value::Array(endpoints));
-
     let topics: Vec<Value> = advert
         .body
         .rendezvous_topics
@@ -788,7 +763,6 @@ fn build_report(
         })
         .collect();
     body_obj.insert("rendezvous_topics".into(), Value::Array(topics));
-
     let mut path_obj = Map::new();
     path_obj.insert(
         "min_guard_weight".into(),
@@ -803,11 +777,9 @@ fn build_report(
         Value::from(advert.body.path_policy.max_same_pool_per_path as u64),
     );
     body_obj.insert("path_policy".into(), Value::Object(path_obj));
-
     if let Some(notes) = &advert.body.notes {
         body_obj.insert("notes".into(), Value::from(notes.clone()));
     }
-
     advert_obj.insert("body".into(), Value::Object(body_obj));
     let mut sig_obj = Map::new();
     sig_obj.insert(
@@ -830,10 +802,8 @@ fn build_report(
     advert_obj.insert("signature_verified".into(), Value::from(signature_verified));
     advert_obj.insert("norito_len".into(), Value::from(bytes.len() as u64));
     advert_obj.insert("norito_hex".into(), Value::from(hex(bytes)));
-
     Value::Object(advert_obj)
 }
-
 fn build_signing_request_report(
     advert: &ProviderAdvertV1,
     signing_payload: &[u8],
@@ -870,12 +840,10 @@ fn build_signing_request_report(
     report.insert("signature_required".into(), Value::from(true));
     Value::Object(report)
 }
-
 fn write_report(report: &Value, json_out: Option<&Path>) -> Result<(), String> {
     let mut report_string =
         to_string_pretty(report).map_err(|err| format!("failed to serialise JSON: {err}"))?;
     report_string.push('\n');
-
     let wrote_stdout = if let Some(path) = json_out {
         write_text(path, &report_string)?
     } else {
@@ -886,13 +854,11 @@ fn write_report(report: &Value, json_out: Option<&Path>) -> Result<(), String> {
     }
     Ok(())
 }
-
 enum Command {
     Prepare(Box<EmitOptions>),
     Emit(Box<EmitOptions>),
     Verify(VerifyOptions),
 }
-
 #[derive(Default)]
 struct EmitOptions {
     profile_handle: Option<String>,
@@ -924,7 +890,6 @@ struct EmitOptions {
     stream_budget: Option<StreamBudgetV1>,
     transport_hints: Vec<TransportHintV1>,
 }
-
 #[derive(Default)]
 struct VerifyOptions {
     advert_path: Option<PathBuf>,
@@ -933,7 +898,6 @@ struct VerifyOptions {
     json_out: Option<PathBuf>,
     now: Option<u64>,
 }
-
 fn parse_availability(value: &str) -> Result<AvailabilityTier, String> {
     match value {
         "hot" => Ok(AvailabilityTier::Hot),
@@ -942,7 +906,6 @@ fn parse_availability(value: &str) -> Result<AvailabilityTier, String> {
         other => Err(format!("unknown availability tier: {other}")),
     }
 }
-
 fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
     let (head, payload_str) = value
         .split_once(':')
@@ -977,7 +940,6 @@ fn parse_capability(value: &str) -> Result<CapabilityTlv, String> {
     };
     Ok(CapabilityTlv { cap_type, payload })
 }
-
 fn parse_soranet_pq(value: &str) -> Result<ProviderCapabilitySoranetPqV1, String> {
     let capability = match value {
         "guard" => ProviderCapabilitySoranetPqV1 {
@@ -1006,7 +968,6 @@ fn parse_soranet_pq(value: &str) -> Result<ProviderCapabilitySoranetPqV1, String
         .map_err(|err| format!("invalid soranet-pq capability: {err}"))?;
     Ok(capability)
 }
-
 fn parse_range_capability(value: &str) -> Result<ProviderCapabilityRangeV1, String> {
     let mut max_span = None;
     let mut min_granularity = None;
@@ -1077,7 +1038,6 @@ fn parse_range_capability(value: &str) -> Result<ProviderCapabilityRangeV1, Stri
         .map_err(|err| format!("invalid range capability: {err}"))?;
     Ok(capability)
 }
-
 fn parse_stream_budget(value: &str) -> Result<StreamBudgetV1, String> {
     let mut max_in_flight = None;
     let mut max_bytes_per_sec = None;
@@ -1133,7 +1093,6 @@ fn parse_stream_budget(value: &str) -> Result<StreamBudgetV1, String> {
         .map_err(|err| format!("invalid stream budget: {err}"))?;
     Ok(budget)
 }
-
 fn parse_transport_hint(value: &str) -> Result<TransportHintV1, String> {
     let (protocol_str, priority_str) = value
         .split_once(':')
@@ -1147,7 +1106,6 @@ fn parse_transport_hint(value: &str) -> Result<TransportHintV1, String> {
         .map_err(|err| format!("invalid transport hint: {err}"))?;
     Ok(hint)
 }
-
 fn parse_transport_protocol(value: &str) -> Result<TransportProtocol, String> {
     match value {
         "torii" => Ok(TransportProtocol::ToriiHttpRange),
@@ -1159,7 +1117,6 @@ fn parse_transport_protocol(value: &str) -> Result<TransportProtocol, String> {
         )),
     }
 }
-
 fn parse_endpoint(value: &str) -> Result<AdvertEndpoint, String> {
     let (kind_str, host) = value
         .split_once(':')
@@ -1176,7 +1133,6 @@ fn parse_endpoint(value: &str) -> Result<AdvertEndpoint, String> {
         metadata: Vec::new(),
     })
 }
-
 fn parse_endpoint_metadata(value: &str, opts: &mut EmitOptions) -> Result<(), String> {
     let (key_str, data) = value
         .split_once(':')
@@ -1201,7 +1157,6 @@ fn parse_endpoint_metadata(value: &str, opts: &mut EmitOptions) -> Result<(), St
     });
     Ok(())
 }
-
 fn parse_topic(value: &str) -> Result<RendezvousTopic, String> {
     let (topic, region) = value
         .split_once(':')
@@ -1211,7 +1166,6 @@ fn parse_topic(value: &str) -> Result<RendezvousTopic, String> {
         region: region.to_string(),
     })
 }
-
 fn set_unique_path(target: &mut Option<PathBuf>, value: &str, flag: &str) -> Result<(), String> {
     if target.is_some() {
         return Err(format!("{flag} may only be specified once"));
@@ -1222,7 +1176,6 @@ fn set_unique_path(target: &mut Option<PathBuf>, value: &str, flag: &str) -> Res
     *target = Some(PathBuf::from(value));
     Ok(())
 }
-
 fn parse_reviewed_fingerprint(value: &str) -> Result<[u8; 32], String> {
     if value.len() != 64
         || !value
@@ -1240,13 +1193,11 @@ fn parse_reviewed_fingerprint(value: &str) -> Result<[u8; 32], String> {
         .try_into()
         .expect("reviewed fingerprint length checked above"))
 }
-
 fn required_public_key_path(opts: &EmitOptions) -> Result<&Path, String> {
     opts.public_key_file
         .as_deref()
         .ok_or_else(|| "--public-key-file=<raw-32-byte-path> is required".to_string())
 }
-
 fn load_reviewed_public_key(
     path: &Path,
     reviewed_fingerprint: Option<&[u8; 32]>,
@@ -1277,7 +1228,6 @@ fn load_reviewed_public_key(
     }
     Ok((public_key, actual_fingerprint))
 }
-
 fn ensure_distinct_paths(pairs: &[(&Path, &str, &Path, &str)]) -> Result<(), String> {
     let current_dir =
         env::current_dir().map_err(|err| format!("failed to resolve current directory: {err}"))?;
@@ -1295,7 +1245,6 @@ fn ensure_distinct_paths(pairs: &[(&Path, &str, &Path, &str)]) -> Result<(), Str
     }
     Ok(())
 }
-
 fn resolve_profile_handle(input: &str) -> Result<String, String> {
     if input.is_empty() {
         return Err("chunker profile cannot be empty".into());
@@ -1317,7 +1266,6 @@ fn resolve_profile_handle(input: &str) -> Result<String, String> {
         "unknown chunker profile handle '{input}'. expected namespace.name@semver"
     ))
 }
-
 fn parse_hex_vec(value: &str) -> Result<Vec<u8>, String> {
     require_canonical_hex(value, "hex input")?;
     let mut out = Vec::with_capacity(value.len() / 2);
@@ -1331,7 +1279,6 @@ fn parse_hex_vec(value: &str) -> Result<Vec<u8>, String> {
     }
     Ok(out)
 }
-
 fn parse_hex_fixed<const N: usize>(value: &str) -> Result<[u8; N], String> {
     let vec = parse_hex_vec(value)?;
     if vec.len() != N {
@@ -1341,7 +1288,6 @@ fn parse_hex_fixed<const N: usize>(value: &str) -> Result<[u8; N], String> {
     arr.copy_from_slice(&vec);
     Ok(arr)
 }
-
 fn parse_u64(value: &str) -> Result<u64, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
         require_canonical_hex_unsigned(stripped, "u64")?;
@@ -1351,7 +1297,6 @@ fn parse_u64(value: &str) -> Result<u64, String> {
         value.parse::<u64>().map_err(|err| err.to_string())
     }
 }
-
 fn parse_xor_quantity(value: &str) -> Result<XorQuantity, String> {
     let quantity = value
         .parse::<XorQuantity>()
@@ -1363,7 +1308,6 @@ fn parse_xor_quantity(value: &str) -> Result<XorQuantity, String> {
     }
     Ok(quantity)
 }
-
 fn parse_u32(value: &str) -> Result<u32, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
         require_canonical_hex_unsigned(stripped, "u32")?;
@@ -1373,7 +1317,6 @@ fn parse_u32(value: &str) -> Result<u32, String> {
         value.parse::<u32>().map_err(|err| err.to_string())
     }
 }
-
 fn parse_u16(value: &str) -> Result<u16, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
         require_canonical_hex_unsigned(stripped, "u16")?;
@@ -1383,7 +1326,6 @@ fn parse_u16(value: &str) -> Result<u16, String> {
         value.parse::<u16>().map_err(|err| err.to_string())
     }
 }
-
 fn parse_u8(value: &str) -> Result<u8, String> {
     if let Some(stripped) = value.strip_prefix("0x") {
         require_canonical_hex_unsigned(stripped, "u8")?;
@@ -1393,14 +1335,12 @@ fn parse_u8(value: &str) -> Result<u8, String> {
         value.parse::<u8>().map_err(|err| err.to_string())
     }
 }
-
 fn is_canonical_unsigned_decimal(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
         && bytes.iter().all(u8::is_ascii_digit)
         && (bytes.len() == 1 || bytes[0] != b'0')
 }
-
 fn require_canonical_unsigned_decimal(value: &str, ty: &str) -> Result<(), String> {
     if is_canonical_unsigned_decimal(value) {
         Ok(())
@@ -1410,7 +1350,6 @@ fn require_canonical_unsigned_decimal(value: &str, ty: &str) -> Result<(), Strin
         ))
     }
 }
-
 fn require_canonical_hex_unsigned(value: &str, ty: &str) -> Result<(), String> {
     let bytes = value.as_bytes();
     if !bytes.is_empty()
@@ -1426,7 +1365,6 @@ fn require_canonical_hex_unsigned(value: &str, ty: &str) -> Result<(), String> {
         ))
     }
 }
-
 fn require_no_ascii_whitespace(value: &str, label: &str) -> Result<(), String> {
     if value.as_bytes().iter().any(u8::is_ascii_whitespace) {
         Err(format!("{label} must not contain ASCII whitespace"))
@@ -1434,7 +1372,6 @@ fn require_no_ascii_whitespace(value: &str, label: &str) -> Result<(), String> {
         Ok(())
     }
 }
-
 fn require_canonical_hex(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty()
         || !value.len().is_multiple_of(2)
@@ -1456,7 +1393,6 @@ fn require_canonical_hex(value: &str, label: &str) -> Result<(), String> {
         Ok(())
     }
 }
-
 fn parse_bool(value: &str) -> Result<bool, String> {
     match value {
         "true" => Ok(true),
@@ -1464,7 +1400,6 @@ fn parse_bool(value: &str) -> Result<bool, String> {
         other => Err(format!("expected boolean true|false, got {other}")),
     }
 }
-
 fn decode_hex(byte: u8) -> Result<u8, String> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
@@ -1472,7 +1407,6 @@ fn decode_hex(byte: u8) -> Result<u8, String> {
         _ => Err(format!("invalid hex digit: {}", byte as char)),
     }
 }
-
 fn read_trusted_regular_file(
     path: &Path,
     label: &str,
@@ -1483,7 +1417,6 @@ fn read_trusted_regular_file(
     let before = fs::symlink_metadata(&direct_path)
         .map_err(|err| format!("failed to inspect {label}: {err}"))?;
     validate_trusted_input_metadata(label, &before, maximum_bytes)?;
-
     let mut options = OpenOptions::new();
     options.read(true);
     set_no_follow_flag(&mut options);
@@ -1497,7 +1430,6 @@ fn read_trusted_regular_file(
     if !trusted_metadata_matches(&before, &opened) {
         return Err(format!("{label} changed while being opened"));
     }
-
     let capacity =
         usize::try_from(opened.len()).map_err(|_| format!("{label} exceeds host size limits"))?;
     let mut bytes = Vec::with_capacity(capacity);
@@ -1505,7 +1437,6 @@ fn read_trusted_regular_file(
         .take(maximum_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|err| format!("failed to read {label}: {err}"))?;
-
     let after = fs::symlink_metadata(&direct_path)
         .map_err(|err| format!("failed to re-inspect {label}: {err}"))?;
     validate_trusted_input_metadata(label, &after, maximum_bytes)?;
@@ -1523,7 +1454,6 @@ fn read_trusted_regular_file(
     }
     Ok(bytes)
 }
-
 fn trusted_direct_path(path: &Path, label: &str) -> Result<PathBuf, String> {
     let current_dir =
         env::current_dir().map_err(|err| format!("failed to resolve {label} path: {err}"))?;
@@ -1533,7 +1463,6 @@ fn trusted_direct_path(path: &Path, label: &str) -> Result<PathBuf, String> {
     validate_direct_parent_path(&direct_path, label)?;
     Ok(direct_path)
 }
-
 fn lexical_absolute_path(current_dir: &Path, path: &Path) -> Result<PathBuf, String> {
     if path.as_os_str().is_empty()
         || path
@@ -1548,7 +1477,6 @@ fn lexical_absolute_path(current_dir: &Path, path: &Path) -> Result<PathBuf, Str
         current_dir.join(path)
     })
 }
-
 fn validate_direct_parent_path(path: &Path, label: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         for ancestor in parent.ancestors() {
@@ -1564,7 +1492,6 @@ fn validate_direct_parent_path(path: &Path, label: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_trusted_input_metadata(
     label: &str,
     metadata: &fs::Metadata,
@@ -1587,7 +1514,6 @@ fn validate_trusted_input_metadata(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn trusted_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev()
@@ -1598,12 +1524,10 @@ fn trusted_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(not(unix))]
 fn trusted_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if path == Path::new("-") {
         return Err("binary outputs do not support '-'".into());
@@ -1616,7 +1540,6 @@ fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|err| format!("failed to sync {path:?}: {err}"))?;
     validate_open_output_identity(&output_path, &file, "binary output")
 }
-
 fn write_text(path: &Path, text: &str) -> Result<bool, String> {
     if path == Path::new("-") {
         io::stdout()
@@ -1626,7 +1549,6 @@ fn write_text(path: &Path, text: &str) -> Result<bool, String> {
     }
     write_bytes(path, text.as_bytes()).map(|_| false)
 }
-
 fn open_output_file(path: &Path, label: &str) -> Result<fs::File, String> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -1655,7 +1577,6 @@ fn open_output_file(path: &Path, label: &str) -> Result<fs::File, String> {
     }
     Ok(file)
 }
-
 fn trusted_output_path(path: &Path, label: &str) -> Result<PathBuf, String> {
     let current_dir =
         env::current_dir().map_err(|err| format!("failed to resolve {label} path: {err}"))?;
@@ -1666,7 +1587,6 @@ fn trusted_output_path(path: &Path, label: &str) -> Result<PathBuf, String> {
     validate_direct_parent_path(&direct_path, label)?;
     Ok(direct_path)
 }
-
 fn validate_open_output_identity(path: &Path, file: &fs::File, label: &str) -> Result<(), String> {
     validate_direct_parent_path(path, label)?;
     let opened = file
@@ -1686,7 +1606,6 @@ fn validate_open_output_identity(path: &Path, file: &fs::File, label: &str) -> R
     }
     Ok(())
 }
-
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -1696,7 +1615,6 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_output_path(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -1713,7 +1631,6 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
         Err(err) => return Err(format!("failed to inspect output {path:?}: {err}")),
     }
-
     if let Some(parent) = path.parent() {
         for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
             if ancestor.as_os_str().is_empty() {
@@ -1739,20 +1656,16 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -1768,7 +1681,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -1785,7 +1697,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 fn capability_name(cap: CapabilityType) -> &'static str {
     match cap {
         CapabilityType::ToriiGateway => "torii_gateway",
@@ -1796,7 +1707,6 @@ fn capability_name(cap: CapabilityType) -> &'static str {
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }
-
 fn availability_name(availability: AvailabilityTier) -> &'static str {
     match availability {
         AvailabilityTier::Hot => "hot",
@@ -1804,11 +1714,9 @@ fn availability_name(availability: AvailabilityTier) -> &'static str {
         AvailabilityTier::Cold => "cold",
     }
 }
-
 fn verify_advert_signature(advert: &ProviderAdvertV1) -> Result<(), String> {
     advert.verify_signature().map_err(|err| err.to_string())
 }
-
 fn endpoint_kind_name(kind: EndpointKind) -> &'static str {
     match kind {
         EndpointKind::Torii => "torii",
@@ -1816,7 +1724,6 @@ fn endpoint_kind_name(kind: EndpointKind) -> &'static str {
         EndpointKind::NoritoRpc => "norito-rpc",
     }
 }
-
 fn endpoint_metadata_name(key: EndpointMetadataKey) -> &'static str {
     match key {
         EndpointMetadataKey::TlsFingerprint => "tls_fingerprint",
@@ -1824,7 +1731,6 @@ fn endpoint_metadata_name(key: EndpointMetadataKey) -> &'static str {
         EndpointMetadataKey::Region => "region",
     }
 }
-
 fn transport_protocol_name(protocol: TransportProtocol) -> &'static str {
     match protocol {
         TransportProtocol::ToriiHttpRange => "torii_http_range",
@@ -1833,14 +1739,12 @@ fn transport_protocol_name(protocol: TransportProtocol) -> &'static str {
         TransportProtocol::VendorReserved => "vendor_reserved",
     }
 }
-
 fn signature_alg_name(alg: SignatureAlgorithm) -> &'static str {
     match alg {
         SignatureAlgorithm::Ed25519 => "ed25519",
         SignatureAlgorithm::MultiSig => "multisig",
     }
 }
-
 fn hex(bytes: &[u8]) -> String {
     const TABLE: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -1850,13 +1754,11 @@ fn hex(bytes: &[u8]) -> String {
     }
     out
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use tempfile::tempdir;
-
     fn externally_sign_advert(opts: &EmitOptions, signing_key: &SigningKey) -> ProviderAdvertV1 {
         let public_key = signing_key.verifying_key().to_bytes();
         let mut advert = build_advert(
@@ -1871,21 +1773,17 @@ mod tests {
         advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
         advert
     }
-
     #[test]
     fn write_bytes_creates_parent_and_writes_all_bytes() {
         let temp = tempdir().expect("tempdir");
         let temp_path = temp.path().canonicalize().expect("canonical tempdir");
         let output_path = temp_path.join("nested").join("advert.to");
-
         write_bytes(&output_path, b"provider-advert").expect("write bytes");
-
         assert_eq!(
             fs::read(&output_path).expect("read output"),
             b"provider-advert"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn write_text_rejects_symlink_output() {
@@ -1895,16 +1793,13 @@ mod tests {
         fs::write(&target_path, b"unchanged\n").expect("write target");
         let output_path = temp_path.join("report.json");
         std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
-
         let err = write_text(&output_path, "changed\n").expect_err("reject symlink output");
-
         assert!(
             err.contains("must not be a symlink"),
             "unexpected error: {err}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
     }
-
     #[cfg(unix)]
     #[test]
     fn write_bytes_rejects_symlink_parent() {
@@ -1915,9 +1810,7 @@ mod tests {
         let linked_dir = temp_path.join("linked");
         std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
         let output_path = linked_dir.join("advert.to");
-
         let err = write_bytes(&output_path, b"changed").expect_err("reject symlink parent");
-
         assert!(
             err.contains("parent") && err.contains("must be a real directory"),
             "unexpected error: {err}"
@@ -1927,7 +1820,6 @@ mod tests {
             "symlink parent should not receive output"
         );
     }
-
     #[test]
     fn parse_range_capability_success() {
         let capability = parse_range_capability(
@@ -1940,11 +1832,9 @@ mod tests {
         assert!(!capability.requires_alignment);
         assert!(capability.supports_merkle_proof);
     }
-
     #[test]
     fn usage_uses_cargo_binary_name() {
         let text = usage();
-
         assert!(text.contains("sorafs_provider_advert <--prepare|--emit|--verify>"));
         assert!(!text.contains("signing-key"));
         assert!(!text.contains("--public-key=hex"));
@@ -1952,14 +1842,12 @@ mod tests {
         assert!(text.contains("--chunker-profile=namespace.name@semver"));
         assert!(text.contains("--public-key-fingerprint-sha256"));
     }
-
     #[test]
     fn parse_range_capability_missing_field() {
         let err = parse_range_capability("min_granularity=4,sparse=false")
             .expect_err("missing max_span rejected");
         assert!(err.contains("max_span"), "unexpected error message: {err}");
     }
-
     #[test]
     fn parse_stream_budget_success() {
         let budget =
@@ -1968,7 +1856,6 @@ mod tests {
         assert_eq!(budget.max_bytes_per_sec, 1000);
         assert_eq!(budget.burst_bytes, Some(200));
     }
-
     #[test]
     fn numeric_parsers_reject_noncanonical_unsigned_tokens() {
         for value in [
@@ -1980,7 +1867,6 @@ mod tests {
                 "unexpected u64 error for {value:?}: {err}"
             );
         }
-
         assert_eq!(parse_u64("0").expect("canonical zero"), 0);
         assert_eq!(parse_u64("0x0").expect("canonical hex zero"), 0);
         assert_eq!(parse_u64("0xff").expect("canonical lowercase hex"), 255);
@@ -2002,21 +1888,18 @@ mod tests {
         assert_eq!(parse_u32("42").expect("canonical u32"), 42);
         assert_eq!(parse_u16("7").expect("canonical u16"), 7);
         assert_eq!(parse_u8("15").expect("canonical u8"), 15);
-
         let err = parse_u16("70000").expect_err("u16 overflow must still fail");
         assert!(
             err.contains("number too large"),
             "unexpected overflow error: {err}"
         );
     }
-
     #[test]
     fn hex_parsers_reject_noncanonical_material() {
         assert_eq!(
             parse_hex_vec("00ff10").expect("canonical lowercase hex"),
             vec![0x00, 0xff, 0x10]
         );
-
         for value in ["", "f", "0x00", "0X00", "00 ", " 00", "AA", "aA", "gg"] {
             let err = parse_hex_vec(value).expect_err("noncanonical hex must fail");
             assert!(
@@ -2025,7 +1908,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn fixed_hex_parser_requires_exact_width() {
         let exact = "11".repeat(32);
@@ -2033,7 +1915,6 @@ mod tests {
             parse_hex_fixed::<32>(&exact).expect("exact provider id"),
             [0x11; 32]
         );
-
         for (value, expected) in [
             ("11".repeat(31), "expected exactly 32 hex bytes"),
             ("11".repeat(33), "expected exactly 32 hex bytes"),
@@ -2046,7 +1927,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn structured_hex_payloads_reject_noncanonical_forms() {
         for (value, expected) in [
@@ -2061,7 +1941,6 @@ mod tests {
                 "expected {expected:?} for {value:?}, got: {err}"
             );
         }
-
         let mut opts = EmitOptions {
             endpoints: vec![AdvertEndpoint {
                 kind: EndpointKind::Torii,
@@ -2077,7 +1956,6 @@ mod tests {
             "unexpected endpoint metadata error: {err}"
         );
     }
-
     #[test]
     fn parse_range_capability_rejects_noncanonical_numeric_fields() {
         for value in [
@@ -2096,7 +1974,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_stream_budget_rejects_noncanonical_numeric_fields() {
         for value in [
@@ -2115,20 +1992,17 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_transport_hint_enforces_priority() {
         let hint = parse_transport_hint("torii:0").expect("valid hint parses");
         assert_eq!(hint.protocol, TransportProtocol::ToriiHttpRange);
         assert_eq!(hint.priority, 0);
-
         let err = parse_transport_hint("quic:32").expect_err("priority above 15 rejected");
         assert!(
             err.contains("invalid transport hint"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn parse_transport_hint_rejects_noncanonical_priority() {
         for value in ["torii:01", "torii:+1", "torii: 1", " torii:1"] {
@@ -2140,13 +2014,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn v1_selector_parsers_reject_compatibility_aliases() {
         for value in ["HOT", "Hot", " hot", "hot "] {
             parse_availability(value).expect_err("availability aliases must fail");
         }
-
         for value in [
             "torii-gateway",
             "quic-noise",
@@ -2161,7 +2033,6 @@ mod tests {
         ] {
             parse_capability(value).expect_err("capability aliases must fail");
         }
-
         for value in [
             "",
             "Guard",
@@ -2175,7 +2046,6 @@ mod tests {
         ] {
             parse_soranet_pq(value).expect_err("SoraNet PQ aliases must fail");
         }
-
         for value in [
             "max-chunk-span=16,min_granularity=4",
             "max_chunk_span=16,min_granularity=4",
@@ -2187,7 +2057,6 @@ mod tests {
         ] {
             parse_range_capability(value).expect_err("range field aliases must fail");
         }
-
         for value in [
             "max-in-flight=2,max_bytes_per_sec=1024",
             "inflight=2,max_bytes_per_sec=1024",
@@ -2198,7 +2067,6 @@ mod tests {
         ] {
             parse_stream_budget(value).expect_err("stream-budget field aliases must fail");
         }
-
         for value in [
             "torii-http",
             "torii_http",
@@ -2214,7 +2082,6 @@ mod tests {
         ] {
             parse_transport_protocol(value).expect_err("transport aliases must fail");
         }
-
         for value in [
             "noritorpc:storage.example",
             "TORII:storage.example",
@@ -2222,7 +2089,6 @@ mod tests {
         ] {
             parse_endpoint(value).expect_err("endpoint aliases must fail");
         }
-
         for value in ["tls:11", "tls-fingerprint:11", "TLS_FINGERPRINT:11"] {
             let mut opts = EmitOptions {
                 endpoints: vec![
@@ -2232,12 +2098,10 @@ mod tests {
             };
             parse_endpoint_metadata(value, &mut opts).expect_err("metadata alias must fail");
         }
-
         for value in ["1", "0", "yes", "no", "TRUE", "False", " true"] {
             parse_bool(value).expect_err("boolean aliases must fail");
         }
     }
-
     #[test]
     fn v1_selector_parsers_accept_exact_canonical_tokens() {
         for value in ["hot", "warm", "cold"] {
@@ -2289,7 +2153,6 @@ mod tests {
         assert!(parse_bool("true").expect("canonical true"));
         assert!(!parse_bool("false").expect("canonical false"));
     }
-
     #[test]
     fn structured_selectors_reject_duplicate_fields() {
         for value in [
@@ -2310,13 +2173,11 @@ mod tests {
             assert!(err.contains("multiple times"), "unexpected error: {err}");
         }
     }
-
     #[test]
     fn reviewed_fingerprint_requires_exact_lowercase_sha256_hex() {
         let fingerprint =
             parse_reviewed_fingerprint(&"ab".repeat(32)).expect("canonical reviewed fingerprint");
         assert_eq!(fingerprint, [0xAB; 32]);
-
         for value in [
             "",
             "ab",
@@ -2331,7 +2192,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn trusted_input_rejects_hardlinks() {
@@ -2341,7 +2201,6 @@ mod tests {
         let linked = temp_path.join("provider-copy.pub");
         fs::write(&original, [0xA5; ED25519_PUBLIC_KEY_BYTES]).expect("write public key");
         fs::hard_link(&original, &linked).expect("create hard link");
-
         let err = read_trusted_regular_file(
             &original,
             "provider advert public key",
@@ -2354,7 +2213,6 @@ mod tests {
             "unexpected hard-link error: {err}"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn trusted_metadata_detects_path_replacement() {
@@ -2363,17 +2221,14 @@ mod tests {
         let displaced = temp.path().join("provider.displaced");
         fs::write(&path, [0xA5; ED25519_PUBLIC_KEY_BYTES]).expect("write original");
         let before = fs::symlink_metadata(&path).expect("inspect original");
-
         fs::rename(&path, &displaced).expect("displace original");
         fs::write(&path, [0xA5; ED25519_PUBLIC_KEY_BYTES]).expect("write replacement");
         let after = fs::symlink_metadata(&path).expect("inspect replacement");
-
         assert!(
             !trusted_metadata_matches(&before, &after),
             "same-sized path replacement must not retain trusted identity"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn write_bytes_rejects_existing_hardlinked_output_without_mutation() {
@@ -2383,9 +2238,7 @@ mod tests {
         let alias = temp_path.join("advert.alias");
         fs::write(&output, b"existing").expect("write existing output");
         fs::hard_link(&output, &alias).expect("create output hard link");
-
         let err = write_bytes(&output, b"replacement").expect_err("reject existing hard link");
-
         assert!(
             err.contains("already exists"),
             "unexpected output error: {err}"
@@ -2393,7 +2246,6 @@ mod tests {
         assert_eq!(fs::read(&output).expect("read output"), b"existing");
         assert_eq!(fs::read(&alias).expect("read alias"), b"existing");
     }
-
     #[test]
     fn verify_advert_signature_rejects_all_zero_signature_material() {
         let opts = EmitOptions {
@@ -2426,13 +2278,10 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
         let mut advert = externally_sign_advert(&opts, &signing_key);
         advert.signature.signature.fill(0);
-
         let err = verify_advert_signature(&advert)
             .expect_err("all-zero signature material must be rejected");
-
         assert!(err.contains("all zero"), "unexpected error: {err}");
     }
-
     #[test]
     fn verify_advert_signature_rejects_malformed_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -2472,37 +2321,31 @@ mod tests {
             ..EmitOptions::default()
         };
         let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
-
         for (label, replacement_r, expected) in [
             ("small-order", SMALL_ORDER_R, "small-order"),
             ("noncanonical", NONCANONICAL_R, "not a canonical"),
         ] {
             let mut advert = externally_sign_advert(&opts, &signing_key);
             advert.signature.signature[..32].copy_from_slice(&replacement_r);
-
             let err = verify_advert_signature(&advert)
                 .expect_err("malformed signature R must be rejected");
-
             assert!(
                 err.contains(expected),
                 "{label} signature R produced unexpected error: {err}"
             );
         }
     }
-
     #[test]
     fn resolves_canonical_handle() {
         let handle = resolve_profile_handle("sorafs.sf1@1.0.0").expect("handle resolves");
         assert_eq!(handle, "sorafs.sf1@1.0.0");
     }
-
     #[test]
     fn rejects_whitespace_padded_profile_handle() {
         let err = resolve_profile_handle(" sorafs.sf1@1.0.0")
             .expect_err("whitespace-padded handle must fail");
         assert!(err.contains("whitespace"), "unexpected error: {err}");
     }
-
     #[test]
     fn rejects_profile_selector_aliases() {
         for value in [
@@ -2516,7 +2359,6 @@ mod tests {
             resolve_profile_handle(value).expect_err("profile selector alias must fail");
         }
     }
-
     #[test]
     fn rejects_empty_input() {
         let err = resolve_profile_handle("").expect_err("empty input");

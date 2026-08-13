@@ -1,7 +1,5 @@
 //! Declarative alias setup, lease lifecycle, and binding lifecycle instructions.
-
 use super::*;
-
 isi! {
     /// Ensure one alias/SNS resource matches an exact declarative intent.
     ///
@@ -22,11 +20,9 @@ isi! {
         pub quote_guard: crate::alias_setup::AliasQuoteGuardV1,
     }
 }
-
 impl EnsureAlias {
     /// Stable wire identifier for declarative alias setup.
     pub const WIRE_ID: &'static str = "iroha.alias.ensure";
-
     /// Construct a declarative alias setup instruction.
     #[must_use]
     pub const fn new(
@@ -41,9 +37,7 @@ impl EnsureAlias {
         }
     }
 }
-
 impl crate::seal::Instruction for EnsureAlias {}
-
 isi! {
     /// Renew one lease using expiry compare-and-set and an absolute target expiry.
     #[norito(decode_from_slice)]
@@ -62,11 +56,9 @@ isi! {
         pub quote_guard: crate::alias_setup::AliasQuoteGuardV1,
     }
 }
-
 impl RenewAliasLease {
     /// Stable wire identifier for guarded alias lease renewal.
     pub const WIRE_ID: &'static str = "iroha.alias.lease.renew";
-
     /// Construct an expiry-CAS lease renewal.
     #[must_use]
     pub const fn new(
@@ -83,9 +75,7 @@ impl RenewAliasLease {
         }
     }
 }
-
 impl crate::seal::Instruction for RenewAliasLease {}
-
 isi! {
     /// Configure or disable native deterministic alias auto-renew.
     #[norito(decode_from_slice)]
@@ -103,11 +93,9 @@ isi! {
         pub config: Option<crate::alias_setup::AliasAutoRenewConfigV1>,
     }
 }
-
 impl ConfigureAliasAutoRenew {
     /// Stable wire identifier for alias auto-renew configuration.
     pub const WIRE_ID: &'static str = "iroha.alias.auto_renew.configure";
-
     /// Construct an auto-renew configuration compare-and-set.
     #[must_use]
     pub const fn new(
@@ -122,9 +110,7 @@ impl ConfigureAliasAutoRenew {
         }
     }
 }
-
 impl crate::seal::Instruction for ConfigureAliasAutoRenew {}
-
 isi! {
     /// Explicitly rebind an account alias using target-account compare-and-set.
     ///
@@ -139,11 +125,9 @@ isi! {
         pub new_target_account: AccountId,
     }
 }
-
 impl RebindAccountAlias {
     /// Stable wire identifier for account alias rebinding.
     pub const WIRE_ID: &'static str = "iroha.account.alias.rebind";
-
     /// Construct an exact target-account compare-and-set rebind.
     #[must_use]
     pub const fn new(
@@ -158,9 +142,7 @@ impl RebindAccountAlias {
         }
     }
 }
-
 impl crate::seal::Instruction for RebindAccountAlias {}
-
 isi! {
     /// Explicitly update an account's primary alias using compare-and-set.
     ///
@@ -177,11 +159,9 @@ isi! {
         pub new_alias: Option<crate::alias_setup::ResolvedAccountAliasV1>,
     }
 }
-
 impl CompareAndSetPrimaryAccountAlias {
     /// Stable wire identifier for primary account-alias compare-and-set.
     pub const WIRE_ID: &'static str = "iroha.account.alias.primary.compare_and_set";
-
     /// Construct a primary alias compare-and-set.
     #[must_use]
     pub const fn new(
@@ -196,15 +176,12 @@ impl CompareAndSetPrimaryAccountAlias {
         }
     }
 }
-
 impl crate::seal::Instruction for CompareAndSetPrimaryAccountAlias {}
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         alias_setup::{
@@ -216,13 +193,11 @@ mod tests {
         domain::DomainId,
         nexus::DataSpaceId,
     };
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked alias ISI fixture keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn alias() -> ResolvedAccountAliasV1 {
         ResolvedAccountAliasV1::new(
             "merchant@banka.paynet"
@@ -231,18 +206,15 @@ mod tests {
             DataSpaceId::new(7),
         )
     }
-
     fn payment_asset() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("assets", "paynet").expect("asset domain"),
             "xor".parse().expect("asset name"),
         )
     }
-
     fn amount(value: u32) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, 0)).expect("quantity")
     }
-
     fn guard() -> AliasQuoteGuardV1 {
         AliasQuoteGuardV1 {
             expected_policy_version: 2,
@@ -251,7 +223,6 @@ mod tests {
             valid_until_ms: 50_000,
         }
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -262,14 +233,12 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     #[test]
     fn alias_setup_instructions_decode_from_slice_roundtrip() {
         let first = account(0xC1);
         let second = account(0xC2);
         let alias = alias();
         let target = AliasTargetV1::AccountAlias(alias.clone());
-
         assert_slice_roundtrip(EnsureAlias::new(
             AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
                 alias: alias.clone(),
@@ -306,7 +275,6 @@ mod tests {
             Some(alias),
         ));
     }
-
     #[test]
     fn default_registry_uses_stable_alias_setup_wire_ids() {
         let registry = crate::instruction_registry::default();
@@ -332,7 +300,6 @@ mod tests {
         for (type_name, wire_id) in cases {
             assert_eq!(registry.wire_id(type_name), Some(wire_id));
         }
-
         let owner = account(0xD1);
         let ensure = EnsureAlias::new(
             AliasIntentV1::AccountAlias(AliasAccountIntentV1 {

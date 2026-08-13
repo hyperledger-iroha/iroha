@@ -5,22 +5,17 @@ mod tests {
         PrivacyProposedLifecycleV1,
     };
     use iroha_schema::{Declaration, MetaMap, NamedFieldsMeta, TypeId};
-
     use super::*;
-
     struct SchemaOrderAb;
-
     impl TypeId for SchemaOrderAb {
         fn id() -> String {
             "privacy-test::CanonicalSchema".to_owned()
         }
     }
-
     impl IntoSchema for SchemaOrderAb {
         fn type_name() -> String {
             "CanonicalSchema".to_owned()
         }
-
         fn update_schema_map(map: &mut MetaMap) {
             u32::update_schema_map(map);
             u64::update_schema_map(map);
@@ -38,20 +33,16 @@ mod tests {
             }));
         }
     }
-
     struct SchemaOrderBa;
-
     impl TypeId for SchemaOrderBa {
         fn id() -> String {
             "privacy-test::CanonicalSchema".to_owned()
         }
     }
-
     impl IntoSchema for SchemaOrderBa {
         fn type_name() -> String {
             "CanonicalSchema".to_owned()
         }
-
         fn update_schema_map(map: &mut MetaMap) {
             u32::update_schema_map(map);
             u64::update_schema_map(map);
@@ -69,20 +60,16 @@ mod tests {
             }));
         }
     }
-
     struct SchemaRetyped;
-
     impl TypeId for SchemaRetyped {
         fn id() -> String {
             "privacy-test::CanonicalSchema".to_owned()
         }
     }
-
     impl IntoSchema for SchemaRetyped {
         fn type_name() -> String {
             "CanonicalSchema".to_owned()
         }
-
         fn update_schema_map(map: &mut MetaMap) {
             u64::update_schema_map(map);
             map.insert::<Self>(Metadata::Struct(NamedFieldsMeta {
@@ -99,20 +86,16 @@ mod tests {
             }));
         }
     }
-
     struct SchemaEquivalentAliases;
-
     impl TypeId for SchemaEquivalentAliases {
         fn id() -> String {
             "privacy-test::EquivalentAliases".to_owned()
         }
     }
-
     impl IntoSchema for SchemaEquivalentAliases {
         fn type_name() -> String {
             "EquivalentAliases".to_owned()
         }
-
         fn update_schema_map(map: &mut MetaMap) {
             String::update_schema_map(map);
             Box::<str>::update_schema_map(map);
@@ -130,56 +113,44 @@ mod tests {
             }));
         }
     }
-
     struct SchemaConflictLeft;
-
     impl TypeId for SchemaConflictLeft {
         fn id() -> String {
             "privacy-test::ConflictingAlias".to_owned()
         }
     }
-
     impl IntoSchema for SchemaConflictLeft {
         fn type_name() -> String {
             "ConflictingAlias".to_owned()
         }
-
         fn update_schema_map(map: &mut MetaMap) {
             map.insert::<Self>(Metadata::Int(IntMode::FixedWidth));
         }
     }
-
     struct SchemaConflictRight;
-
     impl TypeId for SchemaConflictRight {
         fn id() -> String {
             "privacy-test::ConflictingAlias".to_owned()
         }
     }
-
     impl IntoSchema for SchemaConflictRight {
         fn type_name() -> String {
             "ConflictingAlias".to_owned()
         }
-
         fn update_schema_map(map: &mut MetaMap) {
             map.insert::<Self>(Metadata::Bool);
         }
     }
-
     struct SchemaConflictingAliases;
-
     impl TypeId for SchemaConflictingAliases {
         fn id() -> String {
             "privacy-test::ConflictingAliases".to_owned()
         }
     }
-
     impl IntoSchema for SchemaConflictingAliases {
         fn type_name() -> String {
             "ConflictingAliases".to_owned()
         }
-
         fn update_schema_map(map: &mut MetaMap) {
             SchemaConflictLeft::update_schema_map(map);
             SchemaConflictRight::update_schema_map(map);
@@ -197,7 +168,6 @@ mod tests {
             }));
         }
     }
-
     fn verange_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
             .expect("fixed VeRange parameters derive")
@@ -208,7 +178,6 @@ mod tests {
                 },
             ))
     }
-
     #[cfg(feature = "zk-stark")]
     fn zk_ace_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
@@ -220,7 +189,6 @@ mod tests {
                 },
             ))
     }
-
     fn pgc_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
             .expect("fixed Anonymous-PGC parameters derive")
@@ -231,7 +199,6 @@ mod tests {
                 },
             ))
     }
-
     fn jindo_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
             .expect("fixed Jindo parameters derive")
@@ -242,7 +209,6 @@ mod tests {
                 },
             ))
     }
-
     fn vega_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
             .expect("fixed Vega profile derives")
@@ -253,7 +219,6 @@ mod tests {
                 },
             ))
     }
-
     fn bootle_lantern_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_bootle_lantern_profile_material_v1()
             .expect("fixed Bootle/Lantern profile derives")
@@ -264,7 +229,6 @@ mod tests {
                 },
             ))
     }
-
     fn orchard_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
             .expect("fixed Orchard profile derives")
@@ -275,7 +239,6 @@ mod tests {
                 },
             ))
     }
-
     fn fcmp_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
             .expect("fixed FCMP++ profile derives")
@@ -286,7 +249,6 @@ mod tests {
                 },
             ))
     }
-
     fn ivm_private_note_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
             .expect("fixed IVM private-note profile derives")
@@ -297,7 +259,6 @@ mod tests {
                 },
             ))
     }
-
     fn pq_masp_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV0)
             .expect("fixed PQ-MASP profile derives")
@@ -308,7 +269,6 @@ mod tests {
                 },
             ))
     }
-
     fn zk_x509_activation() -> PrivacyProtocolActivationRecordV1 {
         zk_x509_release_candidate_profile_material_v1()
             .expect("release-pinned zk-X.509 candidate profile derives")
@@ -319,7 +279,6 @@ mod tests {
                 },
             ))
     }
-
     #[test]
     fn semantic_parameter_labels_and_framed_note_profiles_cannot_drift() {
         assert_eq!(
@@ -384,7 +343,6 @@ mod tests {
             "the complete PQ-MASP authorization wire consumes the governed global cap"
         );
     }
-
     #[test]
     fn pq_masp_profile_binds_the_exact_wallet_and_verified_effect_schemas() {
         assert_eq!(
@@ -413,7 +371,6 @@ mod tests {
                 String::from_utf8_lossy(stale_field)
             );
         }
-
         let exact = compiled_pq_masp_profile_v1().expect("compiled PQ-MASP profile");
         for changed in [
             compiled_pq_masp_profile_v1_with_schemas(
@@ -437,7 +394,6 @@ mod tests {
             assert_ne!(changed.engine_manifest_digest, exact.engine_manifest_digest);
         }
     }
-
     #[test]
     fn local_compiled_profile_catalog_is_exact12_and_contains_no_governance_state() {
         let catalog = compiled_privacy_profile_catalog_v1().expect("compiled profile catalog");
@@ -450,7 +406,6 @@ mod tests {
                 .map(|row| row.protocol_id)
                 .eq(PrivacyProtocolIdV1::ALL)
         );
-
         let json = norito::json::to_json(&catalog).expect("catalog JSON");
         for forbidden in [
             "committed_height",
@@ -464,7 +419,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn compiled_profile_catalog_cache_returns_owned_isolated_clones() {
         let canonical = compiled_privacy_profile_catalog_v1().expect("compiled profile catalog");
@@ -472,14 +426,12 @@ mod tests {
         assert_eq!(canonical.protocols.len(), PrivacyProtocolIdV1::COUNT);
         let canonical_archive =
             norito::encode_canonical(&canonical).expect("canonical compiled catalog archive");
-
         let mut caller_owned = canonical;
         caller_owned.protocols.rotate_left(1);
         assert!(
             caller_owned.validate().is_err(),
             "mutating one returned clone must make only that caller's copy noncanonical"
         );
-
         let subsequent =
             compiled_privacy_profile_catalog_v1().expect("subsequent compiled profile catalog");
         subsequent
@@ -500,18 +452,15 @@ mod tests {
             "a caller mutation must not alias or modify the immutable cache"
         );
     }
-
     #[test]
     fn local_compiled_profile_catalog_archive_rejects_canonical_substitution() {
         use PrivacyCompiledProfileCatalogArchiveValidationStatusV1 as Status;
-
         let catalog = compiled_privacy_profile_catalog_v1().expect("compiled profile catalog");
         let archive = norito::encode_canonical(&catalog).expect("canonical catalog");
         assert_eq!(
             validate_local_privacy_compiled_profile_catalog_archive_v1(&archive),
             Status::Valid
         );
-
         let mut substituted = catalog;
         let profile = substituted
             .protocols
@@ -540,7 +489,6 @@ mod tests {
             "the local validator must reject a canonical profile substitution"
         );
     }
-
     #[test]
     fn only_governance_released_engines_have_compiled_profiles() {
         let available = PrivacyProtocolIdV1::ALL
@@ -569,7 +517,6 @@ mod tests {
         );
         assert_eq!(available, expected);
     }
-
     #[test]
     fn ivm_private_note_profile_binds_distinct_proof_and_wallet_randomness_policies() {
         let exact = compiled_ivm_private_note_profile_v1().expect("compiled IVM profile");
@@ -582,7 +529,6 @@ mod tests {
                 .windows(CURVE_PROVER_RANDOMNESS_POLICY_V1.len())
                 .any(|window| window == CURVE_PROVER_RANDOMNESS_POLICY_V1)
         );
-
         let mut changed_proof_policy = TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1.to_vec();
         changed_proof_policy[0] ^= 1;
         let mut changed_wallet_policy = CURVE_PROVER_RANDOMNESS_POLICY_V1.to_vec();
@@ -609,7 +555,6 @@ mod tests {
             assert_ne!(changed.engine_manifest_digest, exact.engine_manifest_digest);
         }
     }
-
     #[test]
     fn ivm_private_note_and_pq_masp_profiles_are_exact_bounded_and_mutation_closed() {
         let cases = [
@@ -632,7 +577,6 @@ mod tests {
                 }),
             ),
         ];
-
         for (protocol_id, valid, expected_limits) in cases {
             let first = compiled_privacy_profile_v1(protocol_id).expect("compiled native profile");
             let second = compiled_privacy_profile_v1(protocol_id).expect("deterministic profile");
@@ -681,7 +625,6 @@ mod tests {
                 "every consensus-critical {} binding is a pinned KAT",
                 protocol_id.canonical_label(),
             );
-
             validate_compiled_privacy_activation_v1(&valid)
                 .expect("exact compiled activation is accepted");
             let mutations: [(
@@ -739,7 +682,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn compiling_ivm_private_note_and_pq_masp_does_not_activate_their_lifecycles() {
         let snapshot = committed_privacy_capability_snapshot_v1(
@@ -764,7 +706,6 @@ mod tests {
             assert_eq!(row.activation, None);
         }
     }
-
     #[test]
     fn fcmp_profile_is_deterministic_exact_bounded_and_mutation_closed() {
         let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
@@ -841,7 +782,6 @@ mod tests {
             policy_mutation.engine_manifest_digest,
             first.engine_manifest_digest
         );
-
         let valid = fcmp_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact FCMP++ activation");
         let mutations: [(
@@ -898,7 +838,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn bootle_lantern_profile_is_deterministic_complete_bounded_and_mutation_closed() {
         let first = compiled_bootle_lantern_profile_material_v1().expect("profile material");
@@ -1097,7 +1036,6 @@ mod tests {
             ),
             "every consensus-critical Bootle/Lantern binding is a pinned KAT"
         );
-
         if !BOOTLE_LANTERN_FULL_ENGINE_AVAILABLE_V1 {
             return;
         }
@@ -1159,7 +1097,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn bootle_lantern_complete_sampling_profile_is_parameter_bound_and_kat_pinned() {
         assert!(
@@ -1167,7 +1104,6 @@ mod tests {
                 .windows(b"max-rejected-uniform-draws-per-coefficient=4096".len())
                 .any(|window| { window == b"max-rejected-uniform-draws-per-coefficient=4096" })
         );
-
         let public_parameter_seed = public_parameter_seed_v1();
         let sampling_profile_digest = bootle_sampling_profile_digest_v1();
         assert_eq!(
@@ -1193,7 +1129,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn orchard_profile_is_deterministic_complete_bounded_and_mutation_closed() {
         let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
@@ -1283,7 +1218,6 @@ mod tests {
             ),
             "every consensus-critical Orchard profile binding is a pinned KAT"
         );
-
         let valid = orchard_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
         let mutations: [fn(&mut PrivacyProtocolActivationRecordV1); 7] = [
@@ -1303,7 +1237,6 @@ mod tests {
             assert!(validate_compiled_privacy_activation_v1(&changed).is_err());
         }
     }
-
     #[cfg(not(feature = "zk-stark"))]
     #[test]
     fn zk_ace_remains_fail_closed_without_a_sound_compiled_profile() {
@@ -1313,7 +1246,6 @@ mod tests {
             Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
         );
     }
-
     #[cfg(feature = "zk-stark")]
     #[test]
     fn zk_ace_profile_is_deterministic_complete_and_bounded() {
@@ -1359,7 +1291,6 @@ mod tests {
             )
         );
     }
-
     #[cfg(feature = "zk-stark")]
     #[test]
     fn zk_ace_compiled_profile_rejects_every_binding_mismatch() {
@@ -1416,7 +1347,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn zk_ams_profile_is_unavailable_until_every_mkhe_gate_closes() {
         let expected = CompiledPrivacyProfileErrorV1::EngineUnavailable {
@@ -1431,7 +1361,6 @@ mod tests {
             Err(expected),
             "the unavailable result must be deterministic"
         );
-
         let candidate = zk_ams_release_candidate_profile_material_v1()
             .expect("release-candidate profile material derives independently of activation");
         assert_eq!(candidate.protocol_id, PrivacyProtocolIdV1::IrohaZkAmsV1);
@@ -1444,7 +1373,6 @@ mod tests {
         ] {
             assert_ne!(digest, [0; 32]);
         }
-
         let candidate_activation = candidate.activation_record(
             PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
                 proposed_at_height: 100,
@@ -1456,7 +1384,6 @@ mod tests {
             Err(CompiledPrivacyProfileValidationErrorV1::Profile(expected)),
             "release-candidate material must never bypass the production readiness gate",
         );
-
         let readiness =
             iroha_zkp_halo2::vega::zk_ams_mkhe_readiness_v1().expect("candidate readiness derives");
         assert!(readiness.parameter_gate);
@@ -1471,7 +1398,6 @@ mod tests {
         assert!(!readiness.release_kat_gate);
         assert!(!readiness.is_ready());
     }
-
     #[test]
     fn structural_schema_digest_detects_reordering_and_retyping() {
         let original = canonical_schema_digest_v1::<SchemaOrderAb>().expect("schema");
@@ -1485,7 +1411,6 @@ mod tests {
             canonical_schema_digest_v1::<SchemaOrderAb>().expect("schema")
         );
     }
-
     #[test]
     fn structural_schema_digest_deduplicates_only_equivalent_aliases() {
         let equivalent =
@@ -1500,7 +1425,6 @@ mod tests {
             Err(CanonicalSchemaDigestErrorV1::ConflictingStableTypeId)
         );
     }
-
     #[test]
     fn verange_profile_is_deterministic_and_uses_effective_global_cap() {
         let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
@@ -1542,7 +1466,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn anonymous_pgc_profile_is_deterministic_complete_and_bounded() {
         let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
@@ -1580,7 +1503,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn jindo_profile_is_deterministic_complete_and_bounded() {
         let first =
@@ -1637,7 +1559,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn vega_profile_is_deterministic_complete_and_bounded() {
         let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
@@ -1687,7 +1608,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     #[ignore = "operator-only KAT regeneration after an intentional compiled-profile change"]
     fn print_all_compiled_profile_tuples() {
@@ -1714,7 +1634,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn vega_compiled_profile_rejects_every_binding_mismatch() {
         let valid = vega_activation();
@@ -1763,7 +1682,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn jindo_compiled_profile_rejects_every_binding_and_policy_mismatch() {
         let valid = jindo_activation();
@@ -1823,12 +1741,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn every_compiled_cryptographic_binding_is_immutable() {
         let valid = verange_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
-
         let mutations: [(
             CompiledPrivacyProfileValidationErrorV1,
             fn(&mut PrivacyProtocolActivationRecordV1),
@@ -1871,7 +1787,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn compiled_validation_accepts_lower_protocol_policy_without_changing_digests() {
         let verange_compiled =
@@ -1895,7 +1810,6 @@ mod tests {
             verange.engine_manifest_digest,
             verange_compiled.engine_manifest_digest
         );
-
         let pgc_compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
             .expect("PGC profile");
         let mut pgc = pgc_activation();
@@ -1917,7 +1831,6 @@ mod tests {
             pgc.engine_manifest_digest,
             pgc_compiled.engine_manifest_digest
         );
-
         let jindo_compiled =
             compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
                 .expect("Jindo profile");
@@ -1939,7 +1852,6 @@ mod tests {
             jindo.engine_manifest_digest,
             jindo_compiled.engine_manifest_digest
         );
-
         let orchard_compiled =
             compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
                 .expect("Orchard profile");
@@ -1961,11 +1873,9 @@ mod tests {
             orchard_compiled.engine_manifest_digest
         );
     }
-
     #[test]
     fn compiled_validation_rejects_protocol_limit_overflow_mismatch_and_invalid_lowering() {
         let mut invalid = Vec::new();
-
         let mut verange_over = verange_activation();
         verange_over.protocol_limits = PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
             VeRangeActivationLimitsV1 {
@@ -1973,7 +1883,6 @@ mod tests {
             },
         );
         invalid.push(verange_over);
-
         let mut pgc_n_over = pgc_activation();
         pgc_n_over.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
             AnonymousPgcActivationLimitsV1 {
@@ -1982,7 +1891,6 @@ mod tests {
             },
         );
         invalid.push(pgc_n_over);
-
         let mut pgc_k_over = pgc_activation();
         pgc_k_over.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
             AnonymousPgcActivationLimitsV1 {
@@ -1991,7 +1899,6 @@ mod tests {
             },
         );
         invalid.push(pgc_k_over);
-
         let mut pgc_bad_closed_set = pgc_activation();
         pgc_bad_closed_set.protocol_limits =
             PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
@@ -2001,7 +1908,6 @@ mod tests {
                 },
             );
         invalid.push(pgc_bad_closed_set);
-
         let mut zero_verange = verange_activation();
         zero_verange.protocol_limits = PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
             VeRangeActivationLimitsV1 {
@@ -2009,7 +1915,6 @@ mod tests {
             },
         );
         invalid.push(zero_verange);
-
         let mut jindo_over = jindo_activation();
         jindo_over.protocol_limits =
             PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
@@ -2018,7 +1923,6 @@ mod tests {
                 },
             );
         invalid.push(jindo_over);
-
         let mut zero_jindo = jindo_activation();
         zero_jindo.protocol_limits =
             PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
@@ -2027,21 +1931,18 @@ mod tests {
                 },
             );
         invalid.push(zero_jindo);
-
         let mut orchard_over = orchard_activation();
         orchard_over.protocol_limits =
             PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(OrchardActivationLimitsV1 {
                 max_action_count: ORCHARD_MODEL_MAX_ACTIONS_V1 + 1,
             });
         invalid.push(orchard_over);
-
         let mut zero_orchard = orchard_activation();
         zero_orchard.protocol_limits =
             PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(OrchardActivationLimitsV1 {
                 max_action_count: 0,
             });
         invalid.push(zero_orchard);
-
         let mut wrong_variant = verange_activation();
         wrong_variant.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
             AnonymousPgcActivationLimitsV1 {
@@ -2050,7 +1951,6 @@ mod tests {
             },
         );
         invalid.push(wrong_variant);
-
         for activation in invalid {
             assert_eq!(
                 validate_compiled_privacy_activation_v1(&activation),
@@ -2058,7 +1958,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn zk_x509_compiled_activation_is_complete_and_immutable() {
         let candidate = zk_x509_release_candidate_profile_material_v1()
@@ -2092,7 +1991,6 @@ mod tests {
             valid.protocol_limits,
             PrivacyProtocolActivationLimitsV1::IrohaZkX509StarkP256V0
         );
-
         let mutations: [(
             CompiledPrivacyProfileValidationErrorV1,
             fn(&mut PrivacyProtocolActivationRecordV1),
@@ -2151,7 +2049,6 @@ mod tests {
                 Err(expected)
             );
         }
-
         let mut wrong_protocol = valid;
         wrong_protocol.protocol_id = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
         assert_eq!(
@@ -2159,7 +2056,6 @@ mod tests {
             Err(CompiledPrivacyProfileValidationErrorV1::ProtocolMismatch)
         );
     }
-
     #[test]
     fn anonymous_pgc_compiled_bindings_are_immutable() {
         let valid = pgc_activation();

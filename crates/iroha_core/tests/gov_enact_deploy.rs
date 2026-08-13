@@ -2,9 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(unused_imports)]
 #![allow(clippy::items_after_statements)]
-
 use core::convert::TryInto;
-
 use iroha_core::{
     kura::Kura,
     prelude::*,
@@ -22,20 +20,16 @@ use iroha_data_model::{
     smart_contract::manifest::ContractManifest,
 };
 use mv::storage::StorageReadOnly;
-
 fn checked_random_governance_enact_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked governance enact keypair")
 }
-
 #[test]
 fn governance_enact_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_governance_enact_keypair();
 }
-
 fn mk_world_with_account() -> (State, iroha_data_model::account::AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_random_governance_enact_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -46,7 +40,6 @@ fn mk_world_with_account() -> (State, iroha_data_model::account::AccountId, KeyP
     let state = State::new_for_testing(world, kura, query_handle);
     (state, account_id, kp)
 }
-
 fn compute_proposal_id(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     code_hex: &str,
@@ -77,7 +70,6 @@ fn compute_proposal_id(
     out.copy_from_slice(&digest[..32]);
     out
 }
-
 fn sample_contract_address(
     authority: &iroha_data_model::account::AccountId,
     deploy_nonce: u64,
@@ -92,7 +84,6 @@ fn sample_contract_address(
     )
     .expect("contract address")
 }
-
 fn governance_contract_artifact() -> (Vec<u8>, ContractManifest) {
     let (artifact, _) = ivm::KotodamaCompiler::new()
         .compile_source_with_manifest(
@@ -108,7 +99,6 @@ seiyaku GovernanceEnactFixture {
         ivm::verify_contract_artifact(&artifact).expect("verify governance enactment fixture");
     (artifact, verified.manifest)
 }
-
 fn prepare_approved_enactment(
     stx: &mut iroha_core::state::StateTransaction<'_, '_>,
     proposal_id: [u8; 32],
@@ -148,7 +138,6 @@ fn prepare_approved_enactment(
     );
     (preimage_hash, at_window)
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn enact_inserts_manifest_and_marks_enacted() {
@@ -165,7 +154,6 @@ fn enact_inserts_manifest_and_marks_enacted() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     // Grant governance permissions
     let p_enact: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
@@ -214,7 +202,6 @@ fn enact_inserts_manifest_and_marks_enacted() {
     }
     .execute(&account_id, &mut stx)
     .expect("propose");
-
     let pid = compute_proposal_id(&contract_address, &code_hex, &abi_hex);
     let (preimage_hash, at_window) = prepare_approved_enactment(&mut stx, pid);
     // Enact
@@ -231,7 +218,6 @@ fn enact_inserts_manifest_and_marks_enacted() {
         "manifest inserted in transaction"
     );
     stx.apply();
-
     // Verify manifest inserted using block world snapshot
     use iroha_core::state::WorldReadOnly;
     use mv::storage::StorageReadOnly;
@@ -245,7 +231,6 @@ fn enact_inserts_manifest_and_marks_enacted() {
         man.abi_hash.unwrap(),
         iroha_crypto::Hash::prehashed(abi_arr)
     );
-
     // Verify proposal status updated
     let p = block
         .world
@@ -265,7 +250,6 @@ fn enact_inserts_manifest_and_marks_enacted() {
         .copied();
     assert_eq!(inst, Some(key));
 }
-
 #[test]
 fn enact_rejects_unregistered_bytecode_without_creating_an_active_stub() {
     let (state, account_id, _) = mk_world_with_account();
@@ -285,7 +269,6 @@ fn enact_rejects_unregistered_bytecode_without_creating_an_active_stub() {
     Grant::account_permission(permission, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant CanEnactGovernance");
-
     let pid = [0xA5; 32];
     let code_hash_bytes = [0x5A; 32];
     let code_hash = iroha_crypto::Hash::prehashed(code_hash_bytes);
@@ -310,7 +293,6 @@ fn enact_rejects_unregistered_bytecode_without_creating_an_active_stub() {
         },
     );
     let (preimage_hash, at_window) = prepare_approved_enactment(&mut stx, pid);
-
     let error = iroha_data_model::isi::governance::EnactReferendum {
         referendum_id: pid,
         preimage_hash,
@@ -343,7 +325,6 @@ fn enact_rejects_unregistered_bytecode_without_creating_an_active_stub() {
         iroha_core::state::GovernanceProposalStatus::Approved
     ));
 }
-
 #[test]
 fn enact_rejects_on_conflicting_existing_manifest() {
     let (state, account_id, kp) = mk_world_with_account();
@@ -358,7 +339,6 @@ fn enact_rejects_on_conflicting_existing_manifest() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     // Grant CanEnactGovernance
     let token = iroha_executor_data_model::permission::governance::CanEnactGovernance;
     let perm: iroha_data_model::permission::Permission = token.into();
@@ -370,7 +350,6 @@ fn enact_rejects_on_conflicting_existing_manifest() {
     Grant::account_permission(lifecycle_permission, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant contract lifecycle authority");
-
     // Prepare verified code plus a conflicting preexisting manifest.
     let pid = [0xCDu8; 32];
     let (artifact, verified_manifest) = governance_contract_artifact();
@@ -388,7 +367,6 @@ fn enact_rejects_on_conflicting_existing_manifest() {
     let abi_hex = hex::encode(abi_hash_bytes);
     let mut abi_conflict_bytes = abi_hash_bytes;
     abi_conflict_bytes[0] ^= 0xFF;
-
     // Seed proposal
     stx.world.governance_proposals_mut().insert(
         pid,
@@ -410,7 +388,6 @@ fn enact_rejects_on_conflicting_existing_manifest() {
         },
     );
     let (preimage_hash, at_window) = prepare_approved_enactment(&mut stx, pid);
-
     // Pre-insert conflicting manifest via instruction
     let mut man = verified_manifest;
     man.abi_hash = Some(iroha_crypto::Hash::prehashed(abi_conflict_bytes));
@@ -418,7 +395,6 @@ fn enact_rejects_on_conflicting_existing_manifest() {
     stx.world
         .contract_manifests_mut_for_testing()
         .insert(key, man);
-
     // Enact should fail due to abi_hash mismatch
     let instr = iroha_data_model::isi::governance::EnactReferendum {
         referendum_id: pid,
@@ -429,7 +405,6 @@ fn enact_rejects_on_conflicting_existing_manifest() {
     let s = format!("{err}");
     assert!(s.contains("existing manifest does not match the verified contract artifact"));
 }
-
 #[test]
 fn propose_rejects_mismatched_abi_hash() {
     let (state, account_id, _kp) = mk_world_with_account();
@@ -444,7 +419,6 @@ fn propose_rejects_mismatched_abi_hash() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::governance::CanProposeContractDeployment {
             contract_address: contract_address.clone(),
@@ -453,7 +427,6 @@ fn propose_rejects_mismatched_abi_hash() {
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant CanProposeContractDeployment");
-
     let code_hex = "aa".repeat(32);
     // Intentionally mismatched abi hash (not canonical for v1)
     let abi_hex = "bb".repeat(32);

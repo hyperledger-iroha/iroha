@@ -4,16 +4,13 @@
 //! residues, parses only the bounded signed proof responses, checks the record
 //! footer and EOF, then verifies every relation one RNS limb at a time. The
 //! returned receipt is move-only and contains no replayable evidence graph.
-
 use super::*;
-
 const SOURCE_RELEASE_LIMBS_V1: usize = 38;
 const SOURCE_EVIDENCE_PREFIX_BYTES_V1: usize = 4 + 1 + 1 + 8;
 const SOURCE_TRUSTED_CONTEXT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-source-trusted-context";
 const SOURCE_VALIDATED_RECEIPT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-source-validated-receipt";
-
 /// Compact move-only context for seekable source-evidence verification.
 ///
 /// Construction first validates the materialized aggregate key and ordered
@@ -30,7 +27,6 @@ pub struct ZkAmsMkheTrustedSourceContextV1 {
     cks_verification_seal: [u8; 32],
     verification_seal: [u8; 32],
 }
-
 impl core::fmt::Debug for ZkAmsMkheTrustedSourceContextV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -57,7 +53,6 @@ impl core::fmt::Debug for ZkAmsMkheTrustedSourceContextV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheTrustedSourceContextV1 {
     /// Crate-private mint seam for the consuming staged CPK ceremony.
     ///
@@ -92,7 +87,6 @@ impl ZkAmsMkheTrustedSourceContextV1 {
         context.validate()?;
         Ok(context)
     }
-
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         self.active_roster.validate()?;
         if self.transcript_digest == [0; 32]
@@ -116,7 +110,6 @@ impl ZkAmsMkheTrustedSourceContextV1 {
         Ok(())
     }
 }
-
 fn trusted_source_context_seal(context: &ZkAmsMkheTrustedSourceContextV1) -> [u8; 32] {
     let mut hash = Keccak256::new();
     hash.update(SOURCE_TRUSTED_CONTEXT_DOMAIN_V1);
@@ -137,7 +130,6 @@ fn trusted_source_context_seal(context: &ZkAmsMkheTrustedSourceContextV1) -> [u8
     hash.update(&context.cks_verification_seal);
     hash.finalize()
 }
-
 /// Move-only receipt for one exactly decoded and fully verified `ZASE` record.
 ///
 /// No polynomial, proof, canonical payload, reader, path, or provider is
@@ -154,7 +146,6 @@ pub struct ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1 {
     canonical_digest: [u8; 32],
     verification_seal: [u8; 32],
 }
-
 impl core::fmt::Debug for ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -170,62 +161,52 @@ impl core::fmt::Debug for ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1 {
     /// Canonical source-record family which was verified.
     #[must_use]
     pub const fn kind(&self) -> ZkAmsMkheCollectiveEvidenceRecordKindV1 {
         self.kind
     }
-
     /// Evaluated-key ordinal containing this source record.
     #[must_use]
     pub const fn ordinal(&self) -> u8 {
         self.ordinal
     }
-
     /// Gap-free canonical record position within that source set.
     #[must_use]
     pub const fn source_record_index(&self) -> u32 {
         self.source_record_index
     }
-
     /// Exact governed contributor position.
     #[must_use]
     pub const fn party_index(&self) -> u8 {
         self.party_index
     }
-
     /// Exact verified active-relation statement digest.
     #[must_use]
     pub const fn statement_digest(&self) -> [u8; 32] {
         self.statement_digest
     }
-
     /// Authenticated active proof payload digest.
     #[must_use]
     pub const fn payload_digest(&self) -> [u8; 32] {
         self.payload_digest
     }
-
     /// Digest of the governed authenticated contribution.
     #[must_use]
     pub const fn contribution_digest(&self) -> [u8; 32] {
         self.contribution_digest
     }
-
     /// Exact canonical record length accepted from durable storage.
     #[must_use]
     pub const fn canonical_bytes(&self) -> u64 {
         self.canonical_bytes
     }
-
     /// Verified digest footer of every preceding canonical record byte.
     #[must_use]
     pub const fn canonical_digest(&self) -> [u8; 32] {
         self.canonical_digest
     }
-
     /// Decode exactly one seekable `ZASE` record and mint a bounded receipt.
     ///
     /// Every public polynomial is indexed in place and digest-checked on each
@@ -237,7 +218,6 @@ impl ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1 {
         decode_and_verify_source_evidence_record_streaming(reader, trusted_context)
     }
 }
-
 fn index_canonical_source_polynomial<R>(
     body: &mut CanonicalBodyReader<'_, R>,
     profile: &BgvProfile,
@@ -296,7 +276,6 @@ where
         nonzero,
     )
 }
-
 fn validate_source_outer_coordinate_v1(
     trusted_context: &ZkAmsMkheTrustedSourceContextV1,
     kind: ZkAmsMkheCollectiveEvidenceRecordKindV1,
@@ -386,7 +365,6 @@ fn validate_source_outer_coordinate_v1(
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn source_validated_receipt_seal(
     trusted_context: &ZkAmsMkheTrustedSourceContextV1,
@@ -412,7 +390,6 @@ fn source_validated_receipt_seal(
     hash.update(&canonical_digest);
     hash.finalize()
 }
-
 /// Return only the fixed admission axes of an exactly resealed trusted source
 /// context. Sibling evidence aggregation cannot inspect or retain the roster.
 pub(super) fn verified_evidence_context_summary_v1(
@@ -432,7 +409,6 @@ pub(super) fn verified_evidence_context_summary_v1(
         linked_cks_context_seal: trusted_context.cks_verification_seal,
     })
 }
-
 /// Consume one move-only source receipt after recomputing its private seal
 /// against the exact trusted context. Only compact descriptor fields escape.
 pub(super) fn consume_verified_evidence_receipt_v1(
@@ -464,7 +440,6 @@ pub(super) fn consume_verified_evidence_receipt_v1(
         canonical_digest: receipt.canonical_digest,
     })
 }
-
 fn decode_and_verify_source_evidence_record_streaming<R>(
     reader: &mut R,
     trusted_context: &ZkAmsMkheTrustedSourceContextV1,
@@ -633,7 +608,6 @@ where
         verification_seal,
     })
 }
-
 pub(super) fn source_evidence_body_bytes_v1(canonical_bytes: u64) -> Result<u64, ZkAmsMkheErrorV1> {
     let maximum = u64::try_from(maximum_source_evidence_record_bytes()?)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
@@ -648,7 +622,6 @@ pub(super) fn source_evidence_body_bytes_v1(canonical_bytes: u64) -> Result<u64,
         .and_then(|value| value.checked_sub(SOURCE_EVIDENCE_PREFIX_BYTES_V1 as u64))
         .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)
 }
-
 #[cfg(test)]
 pub(super) fn test_mint_verified_evidence_receipt_v1(
     trusted_context: &ZkAmsMkheTrustedSourceContextV1,
@@ -705,14 +678,12 @@ pub(super) fn test_mint_verified_evidence_receipt_v1(
         verification_seal,
     }
 }
-
 #[cfg(test)]
 pub(super) fn test_tamper_verified_evidence_receipt_seal_v1(
     receipt: &mut ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1,
 ) {
     receipt.verification_seal[0] ^= 1;
 }
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -740,7 +711,6 @@ mod tests {
             164_627_074
         );
     }
-
     #[test]
     fn production_decoder_is_seekable_bounded_and_receipt_only() {
         let source = include_str!("source_stream.rs");
@@ -781,7 +751,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn production_parent_has_no_legacy_owned_decoder_or_heavy_generator_entry() {
         let source = include_str!("source_stream.rs");

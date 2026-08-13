@@ -1,17 +1,12 @@
 //! `SoraFS` gateway compliance events exposed via the data event stream.
-
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::Quantity;
-
 pub use self::model::*;
 use super::*;
-
 #[model]
 mod model {
     use getset::Getters;
-
     use super::*;
-
     /// Events emitted by the `SoraFS` gateway compliance surface.
     #[derive(
         Debug,
@@ -42,7 +37,6 @@ mod model {
         /// Consensus committed a reputation recorder-policy or journal transition.
         ReputationJournal(SorafsReputationJournalEvent),
     }
-
     /// High-level policy classification for a GAR violation.
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -62,7 +56,6 @@ mod model {
         /// CDN and runtime enforcement derived from GAR policy.
         Cdn,
     }
-
     /// Detailed policy outcome for a GAR violation.
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -96,7 +89,6 @@ mod model {
         /// Request blocked due to an active legal hold.
         CdnLegalHoldActive,
     }
-
     /// Payload describing a GAR policy violation.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -136,7 +128,6 @@ mod model {
         /// Timestamp when the violation occurred (seconds since UNIX epoch).
         pub occurred_at_unix: u64,
     }
-
     /// Payload describing a PDP/PoTR proof failure alert emitted by the runtime.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -175,7 +166,6 @@ mod model {
         /// Whether the alert was suppressed due to a cooldown window.
         pub cooldown_active: bool,
     }
-
     /// Stable chain-authoritative repair transition category.
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -201,7 +191,6 @@ mod model {
         /// The provider owner committed the slash appeal.
         Appealed,
     }
-
     /// Typed event emitted by a finalized repair-ledger mutation.
     #[derive(
         Debug,
@@ -239,7 +228,6 @@ mod model {
         /// Committing block timestamp.
         pub occurred_at_unix_ms: u64,
     }
-
     /// Stable chain-authoritative moderation transition category.
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -277,7 +265,6 @@ mod model {
         /// The single terminal outcome was committed.
         CaseFinalized,
     }
-
     /// Typed event emitted by a finalized moderation-ledger mutation.
     #[derive(
         Debug,
@@ -308,7 +295,6 @@ mod model {
         /// Committing block timestamp.
         pub occurred_at_unix_ms: u64,
     }
-
     /// Stable chain-authoritative orderbook transition category.
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -336,7 +322,6 @@ mod model {
         /// A provider-signed settlement receipt was committed.
         ReceiptRecorded,
     }
-
     /// Typed event emitted by a finalized authoritative orderbook mutation.
     #[derive(
         Debug,
@@ -391,7 +376,6 @@ mod model {
         /// Committing block timestamp.
         pub occurred_at_unix_ms: u64,
     }
-
     /// Stable chain-authoritative reserve transition category.
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -427,7 +411,6 @@ mod model {
         /// Governance rejected a provider lifecycle appeal.
         AppealRejected,
     }
-
     /// Typed event emitted by a finalized authoritative reserve mutation.
     #[derive(
         Debug,
@@ -470,7 +453,6 @@ mod model {
         /// Committing block timestamp.
         pub occurred_at_unix_ms: u64,
     }
-
     /// Typed chain-authoritative reputation-journal transition.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -486,7 +468,6 @@ mod model {
         /// Consensus appended one globally sequenced source projection.
         EntryCommitted(SorafsReputationJournalEntryCommittedV1),
     }
-
     /// Recorder-policy activation emitted by the authoritative journal.
     #[derive(
         Debug,
@@ -516,7 +497,6 @@ mod model {
         /// Exact committing block timestamp.
         pub occurred_at_unix_ms: u64,
     }
-
     /// Globally sequenced journal entry emitted after native state mutation.
     #[derive(
         Debug,
@@ -559,7 +539,6 @@ mod model {
         pub recorded_at_unix_ms: u64,
     }
 }
-
 impl SorafsModerationLedgerEvent {
     /// Construct a typed finalized moderation-ledger event.
     #[must_use]
@@ -579,7 +558,6 @@ impl SorafsModerationLedgerEvent {
         }
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGarPolicy {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = bytes;
@@ -589,7 +567,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGarPolicy {
         Ok((value, consumed))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGarPolicyDetail {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = bytes;
@@ -599,7 +576,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGarPolicyDetail {
         Ok((value, consumed))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGarViolation {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = bytes;
@@ -609,7 +585,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGarViolation {
         Ok((value, consumed))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGatewayEvent {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = bytes;
@@ -619,19 +594,15 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGatewayEvent {
         Ok((value, consumed))
     }
 }
-
 #[cfg(feature = "json")]
 mod json_support {
     use std::io::Cursor;
-
     use base64::Engine as _;
     use norito::{
         codec::Decode,
         json::{Error, FastJsonWrite, JsonDeserialize, Parser},
     };
-
     use super::{SorafsGarViolation, SorafsGatewayEvent};
-
     fn decode_from_base64<T: Decode>(encoded: &str) -> Result<T, Error> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded.as_bytes())
@@ -639,12 +610,10 @@ mod json_support {
         let mut cursor = Cursor::new(bytes.as_slice());
         Decode::decode(&mut cursor).map_err(|err| Error::Message(err.to_string()))
     }
-
     impl FastJsonWrite for SorafsGarViolation {
         fn write_json(&self, out: &mut String) {
             norito::json::write_bare_norito_base64_json(self, out);
         }
-
         fn write_json_to(
             &self,
             out: &mut dyn norito::json::JsonWriteSink,
@@ -652,19 +621,16 @@ mod json_support {
             norito::json::write_bare_norito_base64_json_to(self, out)
         }
     }
-
     impl JsonDeserialize for SorafsGarViolation {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let encoded = parser.parse_string()?;
             decode_from_base64(&encoded)
         }
     }
-
     impl FastJsonWrite for SorafsGatewayEvent {
         fn write_json(&self, out: &mut String) {
             norito::json::write_bare_norito_base64_json(self, out);
         }
-
         fn write_json_to(
             &self,
             out: &mut dyn norito::json::JsonWriteSink,
@@ -672,20 +638,16 @@ mod json_support {
             norito::json::write_bare_norito_base64_json_to(self, out)
         }
     }
-
     impl JsonDeserialize for SorafsGatewayEvent {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let encoded = parser.parse_string()?;
             decode_from_base64(&encoded)
         }
     }
-
     #[cfg(test)]
     mod tests {
         use base64::Engine as _;
-
         use super::*;
-
         fn assert_bare_base64_json<T>(value: &T)
         where
             T: norito::codec::Encode + norito::core::NoritoSerialize + norito::json::JsonSerialize,
@@ -704,7 +666,6 @@ mod json_support {
                 Err(norito::json::BoundedJsonError::BodyTooLarge)
             );
         }
-
         #[test]
         fn gateway_event_families_stream_exact_bare_norito_base64() {
             let violation = SorafsGarViolation {
@@ -728,7 +689,6 @@ mod json_support {
         }
     }
 }
-
 /// Prelude exports for `SoraFS` gateway events.
 pub mod prelude {
     pub use super::{

@@ -1,5 +1,4 @@
 //! Testnet-only Taira Kagemusha release and genesis bootstrap helpers.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write as _,
@@ -7,7 +6,6 @@ use std::{
     path::PathBuf,
     str::FromStr as _,
 };
-
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
 use iroha_core::zk::confidential_v2::{
@@ -44,9 +42,7 @@ use iroha_genesis::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::json::Value as JsonValue;
-
 use super::{Outcome, Result, publish_new_durable_file};
-
 const PUBLIC_TAIRA_CHAIN_NAME: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const TAIRA_RELEASE_GENERATION_V4: &str = "production-gate-real-artifacts-v4";
 const TAIRA_RELEASE_ACTIVATION_HEIGHT_V4: u64 = 2;
@@ -61,7 +57,6 @@ const PUBLIC_TAIRA_FEE_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const LEGACY_TAIRA_OFFLINE_ASSET_NAME: &str = "sbd";
 const LEGACY_TAIRA_OFFLINE_ASSET_ALIAS: &str = "sbd#cbsi";
 const PUBLIC_TAIRA_OFFLINE_ASSET_NAME: &str = "ds";
-
 /// Build the exact public Taira top-up finality roster consumed by release generation.
 #[derive(Debug, ClapArgs)]
 pub(super) struct PrepareReleaseRosterV4Args {
@@ -78,7 +73,6 @@ pub(super) struct PrepareReleaseRosterV4Args {
     #[arg(long)]
     output: PathBuf,
 }
-
 /// Append only network-independent offline-cash prerequisites to a fresh Taira genesis.
 ///
 /// The exact release roster, recursive release, governed device policy, and
@@ -102,7 +96,6 @@ pub(super) struct PrepareTestnetBaseGenesisV4Args {
     #[arg(long)]
     output: PathBuf,
 }
-
 fn json_string_field<'a>(
     fields: &'a norito::json::Map,
     key: &str,
@@ -113,7 +106,6 @@ fn json_string_field<'a>(
         .and_then(JsonValue::as_str)
         .ok_or_else(|| eyre!("{context}.{key} must be a string"))
 }
-
 fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Result<()> {
     let transactions = manifest
         .get_mut("transactions")
@@ -121,7 +113,6 @@ fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Res
         .ok_or_else(|| eyre!("fresh Taira genesis is missing its transactions array"))?;
     let mut registration_count = 0_usize;
     let mut alias_count = 0_usize;
-
     for (transaction_index, transaction) in transactions.iter_mut().enumerate() {
         let transaction = transaction
             .as_object_mut()
@@ -132,14 +123,12 @@ fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Res
         let instructions = instructions.as_array_mut().ok_or_else(|| {
             eyre!("genesis transaction {transaction_index}.instructions is not an array")
         })?;
-
         for (instruction_index, instruction) in instructions.iter_mut().enumerate() {
             let instruction_context =
                 format!("transactions[{transaction_index}].instructions[{instruction_index}]");
             let instruction = instruction
                 .as_object_mut()
                 .ok_or_else(|| eyre!("{instruction_context} is not an object"))?;
-
             if let Some(register) = instruction.get_mut("Register") {
                 let register = register
                     .as_object_mut()
@@ -219,7 +208,6 @@ fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Res
                     }
                 }
             }
-
             if let Some(set_alias) = instruction.get_mut("SetAssetDefinitionAlias") {
                 let set_alias = set_alias.as_object_mut().ok_or_else(|| {
                     eyre!("{instruction_context}.SetAssetDefinitionAlias is not an object")
@@ -263,7 +251,6 @@ fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Res
             }
         }
     }
-
     if registration_count != 1 {
         bail!(
             "fresh Taira genesis must contain exactly one `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}` registration"
@@ -276,13 +263,11 @@ fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Res
     }
     Ok(())
 }
-
 #[derive(Debug)]
 struct PublicValidatorWithPop {
     validator: ValidatorPower,
     pop: [u8; 96],
 }
-
 fn parse_public_validator_roster(config: &toml::Value) -> Result<Vec<PublicValidatorWithPop>> {
     let entries = config
         .get("trusted_peers_pop")
@@ -293,7 +278,6 @@ fn parse_public_validator_roster(config: &toml::Value) -> Result<Vec<PublicValid
     if entries.len() < 4 {
         bail!("Taira release roster requires at least four validators");
     }
-
     let mut validators = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
         let table = entry
@@ -341,7 +325,6 @@ fn parse_public_validator_roster(config: &toml::Value) -> Result<Vec<PublicValid
     }
     Ok(validators)
 }
-
 fn taira_release_roster_v4(
     network_id: NetworkId,
     validators: Vec<PublicValidatorWithPop>,
@@ -374,7 +357,6 @@ fn taira_release_roster_v4(
         .map_err(|error| eyre!("rendered Taira finality roster is invalid: {error}"))?;
     Ok(roster)
 }
-
 pub(super) fn prepare_release_roster_v4<T: std::io::Write>(
     args: PrepareReleaseRosterV4Args,
     writer: &mut std::io::BufWriter<T>,
@@ -408,13 +390,11 @@ pub(super) fn prepare_release_roster_v4<T: std::io::Write>(
     )?;
     Ok(())
 }
-
 fn parse_taira_account(raw: &str) -> Result<AccountId> {
     AccountId::parse_encoded(raw)
         .map(ParsedAccountId::into_account_id)
         .map_err(|error| eyre!("invalid Taira account literal `{raw}`: {error}"))
 }
-
 fn taira_base_verifier_records(
     activation_height: u64,
 ) -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 3]> {
@@ -443,7 +423,6 @@ fn taira_base_verifier_records(
         )?,
     ])
 }
-
 #[derive(Debug)]
 struct TairaGenesisInventory {
     accounts: BTreeSet<AccountId>,
@@ -457,7 +436,6 @@ struct TairaGenesisInventory {
     ds_alias_binding: Option<AssetDefinitionId>,
     has_recursive_activation: bool,
 }
-
 impl TairaGenesisInventory {
     fn from_genesis(genesis: &RawGenesisTransaction) -> Result<Self> {
         let ds_alias: AssetDefinitionAlias = PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
@@ -475,7 +453,6 @@ impl TairaGenesisInventory {
             ds_alias_binding: None,
             has_recursive_activation: false,
         };
-
         for instruction in genesis.instructions() {
             if instruction
                 .as_any()
@@ -541,7 +518,6 @@ impl TairaGenesisInventory {
         Ok(inventory)
     }
 }
-
 fn register_account_if_missing(
     accounts: &mut BTreeSet<AccountId>,
     instructions: &mut Vec<InstructionBox>,
@@ -553,7 +529,6 @@ fn register_account_if_missing(
     instructions.push(Register::account(Account::new(account_id)).into());
     true
 }
-
 fn has_nonzero_online_backing_source(
     asset_mints: &[(AssetId, Quantity)],
     asset_definition_id: &AssetDefinitionId,
@@ -562,7 +537,6 @@ fn has_nonzero_online_backing_source(
         asset_id.definition() == asset_definition_id && !quantity.is_zero()
     })
 }
-
 fn validate_source_block_cadence_ms(block_cadence_ms: u64) -> Result<()> {
     if matches!(
         block_cadence_ms,
@@ -574,11 +548,9 @@ fn validate_source_block_cadence_ms(block_cadence_ms: u64) -> Result<()> {
         "source genesis has unexpected signed block cadence {block_cadence_ms} ms; expected legacy {LEGACY_TAIRA_BLOCK_CADENCE_MS} ms or target {PUBLIC_TAIRA_BLOCK_CADENCE_MS} ms"
     )
 }
-
 fn unit_permission(name: &'static str) -> Permission {
     Permission::new(name.into(), Json::new(()))
 }
-
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 struct TairaBaseGenesisReport {
     status: String,
@@ -601,7 +573,6 @@ struct TairaBaseGenesisReport {
     instructions_hash: String,
     output: String,
 }
-
 #[allow(clippy::too_many_lines)]
 pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     args: PrepareTestnetBaseGenesisV4Args,
@@ -648,7 +619,6 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     if fee_mint.is_zero() {
         bail!("fee mint must be greater than zero");
     }
-
     let asset_definition_id =
         AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
             .expect("static Taira asset ID");
@@ -711,7 +681,6 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
             "canonical Taira offline asset has no non-zero online source liquidity; at least one funded account is required before the exact-network escrow is materialized"
         );
     }
-
     let base_verifiers = taira_base_verifier_records(TAIRA_RELEASE_ACTIVATION_HEIGHT_V4)?;
     let target_ids = base_verifiers
         .iter()
@@ -744,7 +713,6 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
             record.version
         );
     }
-
     let mut instructions = Vec::<InstructionBox>::new();
     register_account_if_missing(
         &mut inventory.accounts,
@@ -806,7 +774,6 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
         )
         .into(),
     );
-
     let instructions_hash = HashOf::new(&instructions);
     let instruction_count = instructions.len();
     let mut builder = genesis
@@ -837,7 +804,6 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     validate_genesis_manifest_json(output_json.as_bytes())
         .wrap_err("generated Taira base genesis exceeds fixed resource bounds")?;
     publish_new_durable_file(writer, &args.output, output_json.as_bytes())?;
-
     let report = TairaBaseGenesisReport {
         status: "base_genesis_prepared".to_owned(),
         chain_name: PUBLIC_TAIRA_CHAIN_NAME.to_owned(),
@@ -866,25 +832,21 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     )?;
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{ChainId, offline::offline_escrow_account_id};
-
     fn test_network_id(seed: impl AsRef<[u8]>) -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(seed)),
         )
     }
-
     fn test_account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive test account");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn legacy_taira_asset_json() -> JsonValue {
         norito::json::from_str(
             r#"{
@@ -916,14 +878,12 @@ mod tests {
         )
         .expect("decode legacy Taira asset fixture")
     }
-
     #[test]
     fn legacy_taira_asset_is_migrated_to_exact_digital_shekel_identity() {
         let mut manifest = legacy_taira_asset_json();
         migrate_legacy_taira_asset_to_digital_shekel(&mut manifest)
             .expect("migrate the unique clean legacy asset");
         let encoded = norito::json::to_string(&manifest).expect("encode migrated fixture");
-
         for expected in [
             r#""name":"ds""#,
             r#""currency_code":"DS""#,
@@ -941,7 +901,6 @@ mod tests {
         assert!(!encoded.contains("sbd#cbsi"));
         assert!(!encoded.contains("Digital Solomon Islands Dollar"));
     }
-
     #[test]
     fn legacy_taira_asset_migration_rejects_unreviewed_metadata() {
         let mut manifest = legacy_taira_asset_json();
@@ -953,7 +912,6 @@ mod tests {
             .expect_err("unreviewed source identity must fail closed");
         assert!(error.to_string().contains("currency_code"));
     }
-
     #[test]
     fn checked_in_taira_genesis_migrates_without_changing_backing_supply() {
         iroha_genesis::init_instruction_registry();
@@ -970,7 +928,6 @@ mod tests {
             TairaGenesisInventory::from_genesis(&genesis).expect("inventory migrated genesis");
         let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
             .expect("static Taira asset definition");
-
         assert_eq!(
             inventory.asset_names.get(&definition).map(String::as_str),
             Some(PUBLIC_TAIRA_OFFLINE_ASSET_NAME)
@@ -985,7 +942,6 @@ mod tests {
             &definition,
         ));
     }
-
     #[test]
     fn base_verifiers_are_distinct_and_height_two_active() {
         let records = taira_base_verifier_records(TAIRA_RELEASE_ACTIVATION_HEIGHT_V4)
@@ -1016,7 +972,6 @@ mod tests {
             assert!(record.key.is_some());
         }
     }
-
     #[test]
     fn release_roster_rejects_height_two_withdrawal() {
         let network_id =
@@ -1028,14 +983,12 @@ mod tests {
                 .expect_err("an empty issuance window must fail");
         assert!(error.to_string().contains("withdrawal height"));
     }
-
     #[test]
     fn missing_recovery_and_command_accounts_are_registered_once() {
         let recovery = test_account(0x31);
         let command = test_account(0x32);
         let mut accounts = BTreeSet::new();
         let mut instructions = Vec::new();
-
         assert!(register_account_if_missing(
             &mut accounts,
             &mut instructions,
@@ -1056,11 +1009,9 @@ mod tests {
             &mut instructions,
             command.clone(),
         ));
-
         assert_eq!(accounts, BTreeSet::from([recovery, command]));
         assert_eq!(instructions.len(), 2);
     }
-
     #[test]
     fn implicit_genesis_signer_is_not_registered_again() {
         let signer = test_account(0x33);
@@ -1068,7 +1019,6 @@ mod tests {
         let distinct_command = test_account(0x34);
         let mut accounts = BTreeSet::from([signer.clone()]);
         let mut instructions = Vec::new();
-
         assert!(!register_account_if_missing(
             &mut accounts,
             &mut instructions,
@@ -1087,7 +1037,6 @@ mod tests {
         assert_eq!(instructions.len(), 1);
         assert!(accounts.contains(&distinct_command));
     }
-
     #[test]
     fn backing_source_must_be_nonzero_before_exact_escrow_derivation() {
         let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
@@ -1095,7 +1044,6 @@ mod tests {
         let holder = test_account(0x42);
         let zero_holder = AssetId::new(definition.clone(), holder.clone());
         let funded_holder = AssetId::new(definition.clone(), holder);
-
         assert!(!has_nonzero_online_backing_source(
             &[(zero_holder, Quantity::zero())],
             &definition,
@@ -1105,7 +1053,6 @@ mod tests {
             &definition,
         ));
     }
-
     #[test]
     fn taira_cadence_accepts_legacy_input_but_rejects_unknown_conflicts() {
         validate_source_block_cadence_ms(LEGACY_TAIRA_BLOCK_CADENCE_MS)
@@ -1120,7 +1067,6 @@ mod tests {
                 .contains("unexpected signed block cadence")
         );
     }
-
     #[test]
     fn genesis_builder_freezes_effective_taira_cadence_at_four_seconds() {
         let _discriminant = ChainDiscriminantGuard::enter(PUBLIC_TAIRA_CHAIN_DISCRIMINANT);
@@ -1141,7 +1087,6 @@ mod tests {
                 .get(),
             LEGACY_TAIRA_BLOCK_CADENCE_MS,
         );
-
         let upgraded = source
             .into_builder()
             .with_block_cadence_ms(
@@ -1158,7 +1103,6 @@ mod tests {
             PUBLIC_TAIRA_BLOCK_CADENCE_MS,
         );
     }
-
     #[test]
     fn canonical_taira_escrow_derivation_matches_deployment_binding() {
         let _discriminant = ChainDiscriminantGuard::enter(PUBLIC_TAIRA_CHAIN_DISCRIMINANT);

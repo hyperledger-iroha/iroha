@@ -1,13 +1,10 @@
 //! Asset definition alias literals and catalog-pinned permission targets.
-
 use core::fmt;
 use std::{format, str::FromStr, string::String};
-
 use iroha_data_model_derive::model;
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 pub use self::model::*;
 use crate::{
     asset::id::AssetDefinitionId,
@@ -16,21 +13,17 @@ use crate::{
     name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
-
 #[model]
 mod model {
     use derive_more::Display;
     use iroha_schema::IntoSchema;
-
     use super::*;
-
     /// Asset alias in either `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` format.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct AssetDefinitionAlias(pub(super) ConstString);
 }
-
 impl AssetDefinitionAlias {
     /// Build an alias from validated components.
     ///
@@ -52,7 +45,6 @@ impl AssetDefinitionAlias {
         );
         literal.parse()
     }
-
     /// Asset name segment (`<name>`).
     #[must_use]
     pub fn name_segment(&self) -> &str {
@@ -60,7 +52,6 @@ impl AssetDefinitionAlias {
             .expect("asset alias must remain valid after construction");
         segments.name
     }
-
     /// Optional alias-domain segment (`<domain>`).
     #[must_use]
     pub fn domain_segment(&self) -> Option<&str> {
@@ -68,7 +59,6 @@ impl AssetDefinitionAlias {
             .expect("asset alias must remain valid after construction");
         segments.domain
     }
-
     /// Dataspace segment (`<dataspace>`).
     #[must_use]
     pub fn dataspace_segment(&self) -> &str {
@@ -76,7 +66,6 @@ impl AssetDefinitionAlias {
             .expect("asset alias must remain valid after construction");
         segments.dataspace
     }
-
     fn validate(value: &str) -> Result<(), ParseError> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -92,7 +81,6 @@ impl AssetDefinitionAlias {
                 "asset alias must not contain control characters",
             ));
         }
-
         let segments = split_alias_segments(trimmed)?;
         validate_segment(segments.name, "asset alias name")?;
         if let Some(domain) = segments.domain {
@@ -102,13 +90,11 @@ impl AssetDefinitionAlias {
         Ok(())
     }
 }
-
 struct AliasSegments<'a> {
     name: &'a str,
     domain: Option<&'a str>,
     dataspace: &'a str,
 }
-
 fn split_alias_segments(input: &str) -> Result<AliasSegments<'_>, ParseError> {
     let (name, right) = input.split_once('#').ok_or_else(|| {
         ParseError::new(
@@ -145,7 +131,6 @@ fn split_alias_segments(input: &str) -> Result<AliasSegments<'_>, ParseError> {
         dataspace: right,
     })
 }
-
 fn validate_segment(value: &str, segment: &'static str) -> Result<(), ParseError> {
     if value.is_empty() {
         return Err(ParseError::new("asset alias segments must not be empty"));
@@ -167,22 +152,18 @@ fn validate_segment(value: &str, segment: &'static str) -> Result<(), ParseError
     })?;
     Ok(())
 }
-
 impl FromStr for AssetDefinitionAlias {
     type Err = ParseError;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Self::validate(value)?;
         Ok(Self(ConstString::from(value)))
     }
 }
-
 impl AsRef<str> for AssetDefinitionAlias {
     fn as_ref(&self) -> &str {
         self.0.as_ref()
     }
 }
-
 /// Canonical asset-definition alias paired with its expected numeric dataspace and definition IDs.
 ///
 /// Exact permission scopes use this resolved form so neither a textual dataspace remap nor an
@@ -201,7 +182,6 @@ pub struct ResolvedAssetDefinitionAliasV1 {
     /// Canonical asset definition to which this exact capability is bound.
     pub asset_definition_id: AssetDefinitionId,
 }
-
 impl ResolvedAssetDefinitionAliasV1 {
     /// Construct a resolved asset-definition alias pair.
     #[must_use]
@@ -216,7 +196,6 @@ impl ResolvedAssetDefinitionAliasV1 {
             asset_definition_id,
         }
     }
-
     /// Resolve an asset-definition alias using a static catalog.
     ///
     /// # Errors
@@ -234,7 +213,6 @@ impl ResolvedAssetDefinitionAliasV1 {
             .ok_or_else(|| ParseError::new("unknown dataspace alias in asset-definition alias"))?;
         Ok(Self::new(canonical_name, dataspace_id, asset_definition_id))
     }
-
     /// Return whether the textual parent still maps to the pinned numeric ID.
     #[must_use]
     pub fn matches_catalog(&self, catalog: &DataSpaceCatalog) -> bool {
@@ -242,13 +220,11 @@ impl ResolvedAssetDefinitionAliasV1 {
             .by_alias(self.canonical_name.dataspace_segment())
             .is_some_and(|entry| entry.id == self.dataspace_id)
     }
-
     /// Return the canonical textual form.
     #[must_use]
     pub fn canonical_text(&self) -> String {
         self.canonical_name.to_string()
     }
-
     /// Return the optional dataspace-qualified domain containing this alias.
     ///
     /// # Errors
@@ -262,19 +238,16 @@ impl ResolvedAssetDefinitionAliasV1 {
             .transpose()
     }
 }
-
 impl fmt::Display for ResolvedAssetDefinitionAliasV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.canonical_name.fmt(f)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for AssetDefinitionAlias {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -282,7 +255,6 @@ impl norito::json::FastJsonWrite for AssetDefinitionAlias {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for AssetDefinitionAlias {
     fn json_deserialize(
@@ -294,12 +266,10 @@ impl norito::json::JsonDeserialize for AssetDefinitionAlias {
             .map_err(|err: ParseError| norito::json::Error::Message(err.reason.into()))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::nexus::DataSpaceMetadata;
-
     fn catalog() -> DataSpaceCatalog {
         DataSpaceCatalog::new(vec![DataSpaceMetadata {
             id: DataSpaceId::new(7),
@@ -309,14 +279,12 @@ mod tests {
         }])
         .expect("valid catalog")
     }
-
     fn definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("banka", "paynet").expect("domain"),
             "usd".parse().expect("asset name"),
         )
     }
-
     #[test]
     fn asset_alias_parses_valid_literal() {
         let parsed: AssetDefinitionAlias = "usd#issuer.main".parse().expect("valid alias");
@@ -324,7 +292,6 @@ mod tests {
         assert_eq!(parsed.domain_segment(), Some("issuer"));
         assert_eq!(parsed.dataspace_segment(), "main");
     }
-
     #[test]
     fn asset_alias_parses_valid_short_literal() {
         let parsed: AssetDefinitionAlias = "usd#main".parse().expect("valid short alias");
@@ -332,7 +299,6 @@ mod tests {
         assert_eq!(parsed.domain_segment(), None);
         assert_eq!(parsed.dataspace_segment(), "main");
     }
-
     #[test]
     fn asset_alias_rejects_invalid_literals() {
         for raw in [
@@ -355,27 +321,23 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn asset_alias_from_components_builds_long_literal() {
         let alias = AssetDefinitionAlias::from_components("usd", Some("issuer"), "main")
             .expect("components should build");
         assert_eq!(alias.as_ref(), "usd#issuer.main");
     }
-
     #[test]
     fn asset_alias_from_components_builds_short_literal() {
         let alias = AssetDefinitionAlias::from_components("usd", None, "main")
             .expect("components should build");
         assert_eq!(alias.as_ref(), "usd#main");
     }
-
     #[test]
     fn asset_alias_rejects_dotted_domain_and_dataspace_segments() {
         assert!(AssetDefinitionAlias::from_components("usd", Some("issuer.sub"), "main").is_err());
         assert!(AssetDefinitionAlias::from_components("usd", Some("issuer"), "main.ops").is_err());
     }
-
     #[test]
     fn resolved_asset_alias_pins_catalog_identity_and_parent_domain() {
         let definition_id = definition_id();
@@ -385,7 +347,6 @@ mod tests {
             definition_id.clone(),
         )
         .expect("resolved alias");
-
         assert_eq!(resolved.dataspace_id, DataSpaceId::new(7));
         assert_eq!(resolved.asset_definition_id, definition_id);
         assert!(resolved.matches_catalog(&catalog()));

@@ -1,5 +1,4 @@
 use core::cell::Cell;
-
 use super::*;
 use crate::vega::{
     MaskedRelaxedRandomErrorV1, MaskedRelaxedRandomSourceV1, derive_t256_generators_v1,
@@ -11,15 +10,12 @@ use crate::vega::{
         manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
     },
 };
-
 const TEST_PROOF_BYTES_V1: usize = 1_447;
 const TEST_CHUNK_WIRE_BYTES_V1: usize = 1_494;
-
 struct StreamRandom {
     seed: Vec<u8>,
     counter: u64,
 }
-
 impl StreamRandom {
     fn new(seed: &[u8]) -> Self {
         Self {
@@ -28,7 +24,6 @@ impl StreamRandom {
         }
     }
 }
-
 impl MaskedRelaxedRandomSourceV1 for StreamRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         let mut written = 0;
@@ -44,7 +39,6 @@ impl MaskedRelaxedRandomSourceV1 for StreamRandom {
         Ok(())
     }
 }
-
 fn governed_fixture(
     label: &[u8],
 ) -> (
@@ -117,7 +111,6 @@ fn governed_fixture(
     .expect("direct RKG context");
     (roster, bindings, direct_context)
 }
-
 fn coefficient_at(index: usize) -> i8 {
     match index % 3 {
         0 => -1,
@@ -125,7 +118,6 @@ fn coefficient_at(index: usize) -> i8 {
         _ => 1,
     }
 }
-
 fn scalar_for_coefficient(coefficient: i8) -> Scalar {
     match coefficient {
         -1 => -Scalar::one(),
@@ -134,7 +126,6 @@ fn scalar_for_coefficient(coefficient: i8) -> Scalar {
         _ => unreachable!("test coefficient is ternary"),
     }
 }
-
 fn fake_chunk(
     context_digest: [u8; 32],
     ordinal: usize,
@@ -163,7 +154,6 @@ fn fake_chunk(
     assert_eq!(wire.len(), TEST_CHUNK_WIRE_BYTES_V1);
     ZkAmsT256MembershipProofV1::from_wire_bytes_exact(&wire).expect("synthetic chunk")
 }
-
 fn fake_verify(
     context_digest: [u8; 32],
     ordinal: u16,
@@ -182,7 +172,6 @@ fn fake_verify(
     hash.update(&chunk.to_wire_bytes());
     Ok(hash.finalize())
 }
-
 fn evidence_and_opening_fixture(
     context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
 ) -> (
@@ -217,7 +206,6 @@ fn evidence_and_opening_fixture(
         transcript_digests,
     )
     .expect("synthetic evidence");
-
     let mut u =
         ZeroizingT256ScalarVecV1::with_capacity(ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1);
     for index in 0..ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1 {
@@ -230,7 +218,6 @@ fn evidence_and_opening_fixture(
     assert!(raw_blindings.iter().all(|blinding| blinding.is_zero()));
     (evidence, u, blindings)
 }
-
 fn verified_source_fixture(
     context: ZkAmsMkheDirectRkgEphemeralMembershipContextV1,
 ) -> (
@@ -244,7 +231,6 @@ fn verified_source_fixture(
         .expect("exact-verifier source");
     (source, u, blindings)
 }
-
 #[test]
 fn wrapper_wire_is_exact_role_separated_and_binds_every_axis() {
     let (roster, bindings, direct_context) = governed_fixture(b"rkg-ephemeral-wire");
@@ -270,7 +256,6 @@ fn wrapper_wire_is_exact_role_separated_and_binds_every_axis() {
             .expect("re-encode"),
         wire
     );
-
     for axis in 0..12 {
         let mut changed = context;
         match axis {
@@ -310,7 +295,6 @@ fn wrapper_wire_is_exact_role_separated_and_binds_every_axis() {
         );
     }
 }
-
 #[test]
 fn only_exact_verification_mints_source_and_tampering_blocks_binding_mint() {
     let (roster, bindings, direct_context) = governed_fixture(b"rkg-ephemeral-source");
@@ -336,7 +320,6 @@ fn only_exact_verification_mints_source_and_tampering_blocks_binding_mint() {
         ),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     );
-
     let galois = ZkAmsMkheDirectCeremonyContextV1::from_verified_binding_set(
         &roster,
         &bindings,
@@ -361,7 +344,6 @@ fn only_exact_verification_mints_source_and_tampering_blocks_binding_mint() {
         .is_err()
     );
 }
-
 #[test]
 fn retained_opening_is_move_only_round_scoped_and_rejects_non_rkg_consumers() {
     let (roster, bindings, direct_context) = governed_fixture(b"rkg-ephemeral-retained");
@@ -414,7 +396,6 @@ fn retained_opening_is_move_only_round_scoped_and_rejects_non_rkg_consumers() {
             .expect("authorized opening use");
         assert_eq!(observed, keccak256(b"closure-ran"));
     }
-
     let closure_calls = Cell::new(0_u8);
     for round in [
         ZkAmsMkheDirectCeremonyRoundV1::RkgNormalize,
@@ -436,7 +417,6 @@ fn retained_opening_is_move_only_round_scoped_and_rejects_non_rkg_consumers() {
     assert!(debug.contains("[REDACTED; 131072]"));
     assert!(debug.contains("[REDACTED; 8]"));
 }
-
 #[test]
 fn compact_verifier_binding_rejects_another_valid_direct_digit_context() {
     let (roster, bindings, direct_context) = governed_fixture(b"rkg-ephemeral-context-replay");
@@ -469,7 +449,6 @@ fn compact_verifier_binding_rejects_another_valid_direct_digit_context() {
         verifier_binding.source_statement_digest(),
         wrapper_context.statement_digest()
     );
-
     let next_digit_context = ZkAmsMkheDirectCeremonyContextV1::from_verified_binding_set(
         &roster,
         &bindings,
@@ -488,7 +467,6 @@ fn compact_verifier_binding_rejects_another_valid_direct_digit_context() {
         ),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     );
-
     let next_record_context =
         ZkAmsMkheDirectRkgEphemeralMembershipContextV1::from_verified_binding_set(
             &roster,
@@ -519,7 +497,6 @@ fn compact_verifier_binding_rejects_another_valid_direct_digit_context() {
         next_binding.identity_digest()
     );
 }
-
 #[test]
 fn retained_opening_recomputes_every_commitment_and_zeroizes_error_owners() {
     let (roster, bindings, direct_context) = governed_fixture(b"rkg-ephemeral-hostile-opening");
@@ -531,7 +508,6 @@ fn retained_opening_recomputes_every_commitment_and_zeroizes_error_owners() {
         117,
     )
     .expect("wrapper context");
-
     let (source, mut u, blindings) = verified_source_fixture(context);
     u.as_mut_slice()[ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1 * 6] = Scalar::from_u64(2);
     let before_error = crate::vega::bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1();
@@ -551,7 +527,6 @@ fn retained_opening_recomputes_every_commitment_and_zeroizes_error_owners() {
     assert!(
         crate::vega::bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1() > before_error
     );
-
     let (source, mut short_u, blindings) = verified_source_fixture(context);
     short_u.clear_and_truncate(ZK_AMS_MKHE_EXACT_MEMBERSHIP_COEFFICIENTS_V1 - 1);
     assert!(matches!(
@@ -568,7 +543,6 @@ fn retained_opening_recomputes_every_commitment_and_zeroizes_error_owners() {
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     ));
 }
-
 #[test]
 fn retained_opening_rechecks_hostile_post_construction_mutation_before_closure() {
     let (roster, bindings, direct_context) = governed_fixture(b"rkg-ephemeral-hostile-retained");
@@ -592,7 +566,6 @@ fn retained_opening_rechecks_hostile_post_construction_mutation_before_closure()
         blindings,
     )
     .expect("retained opening");
-
     opening.u.as_mut_slice()[0].clear_secret();
     let closure_calls = Cell::new(0_u8);
     assert_eq!(
@@ -607,7 +580,6 @@ fn retained_opening_rechecks_hostile_post_construction_mutation_before_closure()
     );
     assert_eq!(closure_calls.get(), 0);
 }
-
 #[test]
 fn source_and_opening_api_guards_stay_move_only_and_release_stays_closed() {
     let source = include_str!("direct_rkg_ephemeral_membership.rs");
@@ -622,7 +594,6 @@ fn source_and_opening_api_guards_stay_move_only_and_release_stays_closed() {
     assert!(!verified.contains("impl Clone"));
     assert!(!verified.contains("from_wire_bytes"));
     assert!(!verified.contains("pub(super) fn new"));
-
     let opening = source
         .split("pub(super) struct RetainedRkgEphemeralOpeningV1")
         .nth(1)
@@ -658,7 +629,6 @@ fn source_and_opening_api_guards_stay_move_only_and_release_stays_closed() {
     assert!(round_use.contains(
         "verify_retained_opening_commitments_v1(&self.binding, &self.u, &self.blindings)?;\n        Ok(use_opening("
     ));
-
     let binding_source = include_str!("active_exact_binding.rs");
     let binding_fields = binding_source
         .split("pub(super) struct VerifiedPersistentWitnessBindingV1")
@@ -669,7 +639,6 @@ fn source_and_opening_api_guards_stay_move_only_and_release_stays_closed() {
         .expect("persistent binding fields");
     assert!(binding_fields.contains("source_context_digest: [u8; 32]"));
     assert!(binding_fields.contains("source_statement_digest: [u8; 32]"));
-
     let binding_impl = binding_source
         .split("impl VerifiedPersistentWitnessBindingV1")
         .nth(1)
@@ -683,7 +652,6 @@ fn source_and_opening_api_guards_stay_move_only_and_release_stays_closed() {
     assert!(binding_impl.contains("self.source_statement_digest != [0; 32]"));
     assert!(binding_impl.contains("self.source_context_digest == [0; 32]"));
     assert!(binding_impl.contains("self.source_statement_digest == [0; 32]"));
-
     let ephemeral_mint = binding_source
         .split("pub(super) fn mint_rkg_ephemeral_binding_from_verified_membership_v1")
         .nth(1)
@@ -702,7 +670,6 @@ fn source_and_opening_api_guards_stay_move_only_and_release_stays_closed() {
         .expect("source statement retention");
     assert!(source_validation < context_retention);
     assert!(context_retention < statement_retention);
-
     let direct_context_validation = binding_source
         .split("pub(super) fn validate_rkg_ephemeral_binding_for_direct_context")
         .nth(1)
@@ -718,7 +685,6 @@ fn source_and_opening_api_guards_stay_move_only_and_release_stays_closed() {
         direct_context_validation
             .contains("binding.source_statement_digest != expected_context.statement_digest()")
     );
-
     let direct_use = binding_source
         .split("pub(super) fn bind_direct_relation_use")
         .nth(1)
@@ -729,7 +695,6 @@ fn source_and_opening_api_guards_stay_move_only_and_release_stays_closed() {
     assert!(direct_use.contains("binding.source_context_digest != selector.context_digest"));
     assert!(direct_use.contains("ephemeral_source_statement_digest"));
     assert!(direct_use.contains("ephemeral_record_index"));
-
     let identity_hash = binding_source
         .split("fn verified_binding_identity_digest")
         .nth(1)
@@ -750,7 +715,6 @@ fn source_and_opening_api_guards_stay_move_only_and_release_stays_closed() {
     assert!(verification_hash.contains("binding.role == PersistentWitnessRoleV1::RkgEphemeral"));
     assert!(verification_hash.contains("binding.source_context_digest"));
     assert!(verification_hash.contains("binding.source_statement_digest"));
-
     let state =
         super::super::active_exact_binding::exact_binding_release_state_v1(&release_profile_v1())
             .expect("fail-closed audit");

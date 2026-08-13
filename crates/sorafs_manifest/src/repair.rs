@@ -4,19 +4,13 @@
 //! slash proposals emitted when storage providers miss remediation SLAs. All
 //! payloads are Norito-encoded so governance, Torii, and tooling can exchange
 //! deterministic artefacts without bespoke serializers.
-
 #![allow(clippy::size_of_ref)]
-
 use std::fmt;
-
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
 use crate::deal::{BASIS_POINTS_PER_UNIT, XorQuantity};
-
 #[cfg(test)]
 use iroha_crypto::numeric::Quantity;
-
 /// Schema version for [`RepairEvidenceV1`].
 pub const REPAIR_EVIDENCE_VERSION_V1: u8 = 1;
 /// Schema version for [`RepairReportV1`].
@@ -54,7 +48,6 @@ pub const GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1: &str = "deal_active";
 pub const GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1: &str = "shared_chunks";
 /// Maximum length permitted for ticket identifiers and string fields.
 const MAX_STRING_BYTES: usize = 256;
-
 /// Identifier assigned to a repair ticket (e.g., `REP-351`).
 #[derive(
     Clone,
@@ -69,7 +62,6 @@ const MAX_STRING_BYTES: usize = 256;
     JsonDeserialize,
 )]
 pub struct RepairTicketId(pub String);
-
 impl RepairTicketId {
     /// Return whether a borrowed ticket identifier satisfies the wire policy.
     ///
@@ -83,7 +75,6 @@ impl RepairTicketId {
                 byte.is_ascii_uppercase() || byte.is_ascii_digit() || b"-_".contains(&byte)
             })
     }
-
     /// Validate the ticket identifier.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
         validate_non_empty_string(&self.0, "ticket_id")?;
@@ -102,13 +93,11 @@ impl RepairTicketId {
         Ok(())
     }
 }
-
 impl fmt::Display for RepairTicketId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
-
 /// Proof-of-retrievability failure cause details.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -122,7 +111,6 @@ pub struct RepairPorFailureCauseV1 {
     #[norito(default)]
     pub proof_digest: Option<[u8; 32]>,
 }
-
 /// Stable PDP failure category used by repair automation and governance archives.
 #[derive(
     Clone,
@@ -150,7 +138,6 @@ pub enum RepairPdpFailureKindV1 {
     #[norito(rename = "storage_unavailable")]
     StorageUnavailable,
 }
-
 /// Proof-of-data-possession failure details handed to the repair scheduler.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -168,7 +155,6 @@ pub struct RepairPdpFailureCauseV1 {
     /// Stable machine-readable failure category.
     pub failure_kind: RepairPdpFailureKindV1,
 }
-
 /// Latency SLA breach cause details.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -180,7 +166,6 @@ pub struct RepairLatencySlaCauseV1 {
     #[norito(default)]
     pub receipt_digest: Option<[u8; 32]>,
 }
-
 /// Replica shortfall cause details.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -189,7 +174,6 @@ pub struct RepairReplicaShortfallCauseV1 {
     /// Estimated number of missing chunks.
     pub missing_chunks: u32,
 }
-
 /// Manual repair cause details.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -198,7 +182,6 @@ pub struct RepairManualCauseV1 {
     /// Free-form description of the trigger.
     pub reason: String,
 }
-
 /// Root cause captured by an auditor when scheduling repairs.
 #[allow(clippy::size_of_ref)]
 #[derive(
@@ -222,7 +205,6 @@ pub enum RepairCauseV1 {
     #[norito(rename = "manual")]
     Manual(RepairManualCauseV1),
 }
-
 impl RepairCauseV1 {
     /// Validate the repair cause payload.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -263,7 +245,6 @@ impl RepairCauseV1 {
         Ok(())
     }
 }
-
 /// Evidence accompanying a repair ticket.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -287,7 +268,6 @@ pub struct RepairEvidenceV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 impl RepairEvidenceV1 {
     /// Validate the evidence payload.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -306,7 +286,6 @@ impl RepairEvidenceV1 {
         Ok(())
     }
 }
-
 /// Auditor-submitted repair report.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -326,7 +305,6 @@ pub struct RepairReportV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 impl RepairReportV1 {
     /// Validate the repair report payload.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -358,7 +336,6 @@ impl RepairReportV1 {
         Ok(())
     }
 }
-
 /// Payload describing a queued repair ticket.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct QueuedRepairStateV1 {
@@ -368,7 +345,6 @@ pub struct QueuedRepairStateV1 {
     #[norito(default)]
     pub sla_deadline_unix: Option<u64>,
 }
-
 /// Payload describing an in-progress repair ticket.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct InProgressRepairStateV1 {
@@ -380,7 +356,6 @@ pub struct InProgressRepairStateV1 {
     #[norito(default)]
     pub repair_agent: Option<String>,
 }
-
 /// Payload describing a completed repair ticket.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct CompletedRepairStateV1 {
@@ -394,7 +369,6 @@ pub struct CompletedRepairStateV1 {
     #[norito(default)]
     pub resolution_notes: Option<String>,
 }
-
 /// Payload describing a failed repair ticket.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct FailedRepairStateV1 {
@@ -405,7 +379,6 @@ pub struct FailedRepairStateV1 {
     /// Human-readable reason.
     pub reason: String,
 }
-
 /// Payload describing an escalated repair ticket.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EscalatedRepairStateV1 {
@@ -416,7 +389,6 @@ pub struct EscalatedRepairStateV1 {
     /// Escalation reason.
     pub reason: String,
 }
-
 /// Lifecycle state for a repair ticket.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(tag = "state", content = "details")]
@@ -437,7 +409,6 @@ pub enum RepairTaskStateV1 {
     #[norito(rename = "escalated")]
     Escalated(EscalatedRepairStateV1),
 }
-
 impl RepairTaskStateV1 {
     /// Validate state invariants.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -566,7 +537,6 @@ impl RepairTaskStateV1 {
         Ok(())
     }
 }
-
 /// Scheduler record describing the current state of a repair ticket.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct RepairTaskRecordV1 {
@@ -595,7 +565,6 @@ pub struct RepairTaskRecordV1 {
     #[norito(default)]
     pub slash_proposal_digest: Option<[u8; 32]>,
 }
-
 impl RepairTaskRecordV1 {
     /// Validate the task record.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -626,7 +595,6 @@ impl RepairTaskRecordV1 {
         Ok(())
     }
 }
-
 /// Slash proposal generated after a repair escalation.
 #[derive(
     Clone,
@@ -654,7 +622,6 @@ pub enum RepairTaskStatusV1 {
     /// Ticket escalated to governance.
     Escalated,
 }
-
 impl fmt::Display for RepairTaskStatusV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self {
@@ -668,7 +635,6 @@ impl fmt::Display for RepairTaskStatusV1 {
         f.write_str(label)
     }
 }
-
 /// Append-only event emitted whenever a repair ticket changes status.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -693,7 +659,6 @@ pub struct RepairTaskEventV1 {
     #[norito(default)]
     pub message: Option<String>,
 }
-
 impl RepairTaskEventV1 {
     /// Validate the event payload.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -716,7 +681,6 @@ impl RepairTaskEventV1 {
         Ok(())
     }
 }
-
 /// Header metadata for audit trail payloads (ordering + signer + digest).
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -731,7 +695,6 @@ pub struct SorafsAuditHeaderV1 {
     /// Digest of the payload encoded with Norito.
     pub payload_digest: [u8; 32],
 }
-
 /// Canonical audit event emitted for repair status transitions.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -744,7 +707,6 @@ pub struct RepairAuditEventV1 {
     /// Repair task transition payload.
     pub payload: RepairTaskEventV1,
 }
-
 impl RepairAuditEventV1 {
     /// Validate the canonical audit envelope and its payload binding.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -768,7 +730,6 @@ impl RepairAuditEventV1 {
         )
     }
 }
-
 /// Canonical GC audit payload emitted when retention evicts data.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -790,7 +751,6 @@ pub struct GcAuditPayloadV1 {
     #[norito(default)]
     pub blocked_reason: Option<String>,
 }
-
 impl GcAuditPayloadV1 {
     /// Validate canonical GC reason, provider, and outcome invariants.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -828,7 +788,6 @@ impl GcAuditPayloadV1 {
         Ok(())
     }
 }
-
 /// Canonical audit event emitted for GC/retention actions.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -841,7 +800,6 @@ pub struct GcAuditEventV1 {
     /// GC eviction payload.
     pub payload: GcAuditPayloadV1,
 }
-
 impl GcAuditEventV1 {
     /// Validate the canonical audit envelope and its payload binding.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -860,21 +818,18 @@ impl GcAuditEventV1 {
         )
     }
 }
-
 /// Compute the canonical header-bearing digest for a repair audit payload.
 pub fn repair_audit_payload_digest_v1(
     payload: &RepairTaskEventV1,
 ) -> Result<[u8; 32], RepairValidationError> {
     canonical_audit_payload_digest("repair task event", payload)
 }
-
 /// Compute the canonical header-bearing digest for a GC audit payload.
 pub fn gc_audit_payload_digest_v1(
     payload: &GcAuditPayloadV1,
 ) -> Result<[u8; 32], RepairValidationError> {
     canonical_audit_payload_digest("GC audit payload", payload)
 }
-
 /// Governance policy applied to repair escalations and slash proposals.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -893,7 +848,6 @@ pub struct RepairEscalationPolicyV1 {
     /// Maximum exact XOR-denominated slash penalty allowed for repair escalations.
     pub max_penalty: XorQuantity,
 }
-
 impl RepairEscalationPolicyV1 {
     /// Validate the governance policy payload.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -917,7 +871,6 @@ impl RepairEscalationPolicyV1 {
         Ok(())
     }
 }
-
 /// Governance approval summary attached to an escalation proposal.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -936,7 +889,6 @@ pub struct RepairEscalationApprovalV1 {
     /// Unix timestamp (seconds) when the decision became final after appeals.
     pub finalized_at_unix: u64,
 }
-
 impl RepairEscalationApprovalV1 {
     /// Validate the approval summary payload.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -965,7 +917,6 @@ impl RepairEscalationApprovalV1 {
         Ok(())
     }
 }
-
 /// Slash proposal generated after a repair escalation.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -991,7 +942,6 @@ pub struct RepairSlashProposalV1 {
     #[norito(default)]
     pub approval: Option<RepairEscalationApprovalV1>,
 }
-
 impl RepairSlashProposalV1 {
     /// Validate the slash proposal payload.
     pub fn validate(&self) -> Result<(), RepairValidationError> {
@@ -1030,7 +980,6 @@ impl RepairSlashProposalV1 {
         Ok(())
     }
 }
-
 /// Errors emitted while validating repair payloads.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum RepairValidationError {
@@ -1146,7 +1095,6 @@ pub enum RepairValidationError {
     #[error("blocked GC audit outcomes must report zero freed_bytes")]
     InvalidGcAuditFreedBytes,
 }
-
 fn canonical_audit_payload_digest<T: norito::core::NoritoSerialize>(
     payload_name: &'static str,
     payload: &T,
@@ -1158,7 +1106,6 @@ fn canonical_audit_payload_digest<T: norito::core::NoritoSerialize>(
         })?;
     Ok(*blake3::hash(&bytes).as_bytes())
 }
-
 fn validate_audit_header(
     header: &SorafsAuditHeaderV1,
     expected_timestamp: u64,
@@ -1189,7 +1136,6 @@ fn validate_audit_header(
     }
     Ok(())
 }
-
 fn validate_non_empty_string(
     value: &str,
     field: &'static str,
@@ -1202,7 +1148,6 @@ fn validate_non_empty_string(
     }
     Ok(())
 }
-
 fn validate_optional_string(value: &str, field: &'static str) -> Result<(), RepairValidationError> {
     validate_non_empty_string(value, field)?;
     if value.len() > MAX_STRING_BYTES {
@@ -1214,34 +1159,28 @@ fn validate_optional_string(value: &str, field: &'static str) -> Result<(), Repa
     }
     Ok(())
 }
-
 fn ensure_timestamp(timestamp: u64, field: &'static str) -> Result<(), RepairValidationError> {
     if timestamp == 0 {
         return Err(RepairValidationError::InvalidTimestamp { field, timestamp });
     }
     Ok(())
 }
-
 fn ensure_digest(digest: &[u8; 32], field: &'static str) -> Result<(), RepairValidationError> {
     if digest.iter().all(|byte| *byte == 0) {
         return Err(RepairValidationError::EmptyString { field });
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use norito::codec::{Decode, Encode};
-
     fn provider_id() -> [u8; 32] {
         [0xAA; 32]
     }
-
     fn manifest_digest() -> [u8; 32] {
         [0xBB; 32]
     }
-
     fn sample_evidence() -> RepairEvidenceV1 {
         RepairEvidenceV1 {
             version: REPAIR_EVIDENCE_VERSION_V1,
@@ -1257,7 +1196,6 @@ mod tests {
             notes: Some("provider reported disk failure".into()),
         }
     }
-
     fn sample_escalation_policy(max_penalty: &str) -> RepairEscalationPolicyV1 {
         RepairEscalationPolicyV1 {
             version: REPAIR_ESCALATION_POLICY_VERSION_V1,
@@ -1268,7 +1206,6 @@ mod tests {
             max_penalty: max_penalty.parse().expect("canonical XOR maximum penalty"),
         }
     }
-
     fn sample_slash_proposal(proposed_penalty: &str) -> RepairSlashProposalV1 {
         RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
@@ -1284,13 +1221,11 @@ mod tests {
             approval: None,
         }
     }
-
     #[test]
     fn ticket_validation_succeeds() {
         let id = RepairTicketId("REP-351".into());
         assert!(id.validate().is_ok());
     }
-
     #[test]
     fn ticket_validation_rejects_lowercase() {
         let id = RepairTicketId("rep-351".into());
@@ -1299,7 +1234,6 @@ mod tests {
             Err(RepairValidationError::InvalidTicketId { .. })
         ));
     }
-
     #[test]
     fn borrowed_ticket_validation_rejects_before_ownership() {
         assert!(RepairTicketId::is_valid_str("REP-351"));
@@ -1309,13 +1243,11 @@ mod tests {
             &"A".repeat(MAX_STRING_BYTES + 1)
         ));
     }
-
     #[test]
     fn evidence_validation_succeeds() {
         let evidence = sample_evidence();
         assert!(evidence.validate().is_ok());
     }
-
     #[test]
     fn evidence_norito_roundtrips() {
         let evidence = sample_evidence();
@@ -1323,7 +1255,6 @@ mod tests {
         let decoded: RepairEvidenceV1 = norito::decode_from_bytes(&bytes).expect("decode evidence");
         assert_eq!(decoded, evidence);
     }
-
     #[test]
     fn pdp_failure_evidence_is_typed_bounded_and_roundtrips() {
         let evidence = RepairEvidenceV1 {
@@ -1346,7 +1277,6 @@ mod tests {
         let decoded: RepairEvidenceV1 =
             norito::decode_from_bytes(&encoded).expect("decode PDP failure evidence");
         assert_eq!(decoded, evidence);
-
         for (index, mut invalid) in [evidence.clone(), evidence.clone()].into_iter().enumerate() {
             let RepairCauseV1::PdpFailure(cause) = &mut invalid.cause else {
                 unreachable!();
@@ -1359,7 +1289,6 @@ mod tests {
             assert!(invalid.validate().is_err());
         }
     }
-
     #[test]
     fn report_validation_succeeds() {
         let report = RepairReportV1 {
@@ -1372,7 +1301,6 @@ mod tests {
         };
         assert!(report.validate().is_ok());
     }
-
     #[test]
     fn task_state_transitions_validate() {
         let queued = RepairTaskStateV1::Queued(QueuedRepairStateV1 {
@@ -1380,14 +1308,12 @@ mod tests {
             sla_deadline_unix: Some(2),
         });
         assert!(queued.validate().is_ok());
-
         let in_progress = RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
             queued_at_unix: 1,
             started_at_unix: 2,
             repair_agent: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
         });
         assert!(in_progress.validate().is_ok());
-
         let completed = RepairTaskStateV1::Completed(CompletedRepairStateV1 {
             queued_at_unix: 1,
             started_at_unix: 2,
@@ -1396,7 +1322,6 @@ mod tests {
         });
         assert!(completed.validate().is_ok());
     }
-
     #[test]
     fn task_record_validation_succeeds() {
         let record = RepairTaskRecordV1 {
@@ -1416,35 +1341,29 @@ mod tests {
         };
         assert!(record.validate().is_ok());
     }
-
     #[test]
     fn slash_proposal_validation_succeeds() {
         let proposal = sample_slash_proposal("1000000000");
         assert!(proposal.validate().is_ok());
     }
-
     #[test]
     fn repair_escalation_xor_penalties_roundtrip_exactly() {
         let maximum = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
         let policy = sample_escalation_policy(maximum);
         let proposal = sample_slash_proposal("340282366920938463463374607431768211456.000000001");
-
         let policy_bytes = norito::to_bytes(&policy).expect("encode escalation policy");
         let decoded_policy: RepairEscalationPolicyV1 =
             norito::decode_from_bytes(&policy_bytes).expect("decode escalation policy");
         assert_eq!(decoded_policy, policy);
-
         let proposal_bytes = norito::to_bytes(&proposal).expect("encode slash proposal");
         let decoded_proposal: RepairSlashProposalV1 =
             norito::decode_from_bytes(&proposal_bytes).expect("decode slash proposal");
         assert_eq!(decoded_proposal, proposal);
-
         let policy_json = norito::json::to_string(&policy).expect("encode escalation policy JSON");
         assert!(policy_json.contains(&format!("\"max_penalty\":\"{maximum}\"")));
         let decoded_policy: RepairEscalationPolicyV1 =
             norito::json::from_str(&policy_json).expect("decode escalation policy JSON");
         assert_eq!(decoded_policy, policy);
-
         let proposal_json = norito::json::to_string(&proposal).expect("encode slash proposal JSON");
         assert!(proposal_json.contains(
             "\"proposed_penalty\":\"340282366920938463463374607431768211456.000000001\""
@@ -1453,7 +1372,6 @@ mod tests {
             norito::json::from_str(&proposal_json).expect("decode slash proposal JSON");
         assert_eq!(decoded_proposal, proposal);
     }
-
     #[test]
     fn repair_escalation_xor_penalty_json_rejects_adversarial_values() {
         let policy_json =
@@ -1472,7 +1390,6 @@ mod tests {
             "1".to_owned(),
             format!("\"{overflow}\""),
         ];
-
         for invalid in invalid_json_values {
             let forged_policy = policy_json.replace(
                 "\"max_penalty\":\"1\"",
@@ -1483,7 +1400,6 @@ mod tests {
                 norito::json::from_str::<RepairEscalationPolicyV1>(&forged_policy).is_err(),
                 "policy accepted adversarial max_penalty {invalid}"
             );
-
             let forged_proposal = proposal_json.replace(
                 "\"proposed_penalty\":\"1\"",
                 &format!("\"proposed_penalty\":{invalid}"),
@@ -1498,7 +1414,6 @@ mod tests {
             );
         }
     }
-
     #[derive(NoritoSerialize)]
     struct RawQuantityEscalationPolicyV1 {
         version: u8,
@@ -1508,7 +1423,6 @@ mod tests {
         appeal_window_secs: u64,
         max_penalty: Quantity,
     }
-
     #[derive(NoritoSerialize)]
     struct RawQuantitySlashProposalV1 {
         version: u8,
@@ -1521,7 +1435,6 @@ mod tests {
         rationale: String,
         approval: Option<RepairEscalationApprovalV1>,
     }
-
     #[test]
     fn repair_escalation_norito_rejects_generic_scale_ten_quantities() {
         let too_precise: Quantity = "0.0000000001"
@@ -1537,7 +1450,6 @@ mod tests {
         };
         let policy_bytes = norito::to_bytes(&forged_policy).expect("encode raw quantity policy");
         assert!(norito::decode_from_bytes::<RepairEscalationPolicyV1>(&policy_bytes).is_err());
-
         let forged_proposal = RawQuantitySlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
@@ -1553,7 +1465,6 @@ mod tests {
             norito::to_bytes(&forged_proposal).expect("encode raw quantity slash proposal");
         assert!(norito::decode_from_bytes::<RepairSlashProposalV1>(&proposal_bytes).is_err());
     }
-
     #[test]
     fn escalation_approval_validation_succeeds() {
         let approval = RepairEscalationApprovalV1 {
@@ -1566,13 +1477,11 @@ mod tests {
         };
         assert!(approval.validate().is_ok());
     }
-
     #[test]
     fn escalation_policy_validation_succeeds() {
         let policy = sample_escalation_policy("1000");
         assert!(policy.validate().is_ok());
     }
-
     #[test]
     fn escalation_policy_validation_rejects_zero_maximum_penalty() {
         let policy = RepairEscalationPolicyV1 {
@@ -1588,7 +1497,6 @@ mod tests {
             Err(RepairValidationError::InvalidMaxPenalty)
         );
     }
-
     #[test]
     fn escalation_approval_validation_rejects_empty_votes() {
         let approval = RepairEscalationApprovalV1 {
@@ -1604,7 +1512,6 @@ mod tests {
             Err(RepairValidationError::InvalidVoteCount)
         ));
     }
-
     #[test]
     fn task_event_validation_succeeds() {
         let event = RepairTaskEventV1 {
@@ -1619,7 +1526,6 @@ mod tests {
         };
         assert!(event.validate().is_ok());
     }
-
     #[test]
     fn task_event_rejects_blank_actor() {
         let event = RepairTaskEventV1 {
@@ -1637,7 +1543,6 @@ mod tests {
             Err(RepairValidationError::BlankString { field: "actor" })
         ));
     }
-
     #[test]
     fn task_event_rejects_empty_manifest_digest() {
         let event = RepairTaskEventV1 {
@@ -1657,7 +1562,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn task_event_rejects_empty_provider_id() {
         let event = RepairTaskEventV1 {
@@ -1677,7 +1581,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn repair_audit_event_roundtrips() {
         let actor = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
@@ -1708,7 +1611,6 @@ mod tests {
         assert_eq!(decoded, event);
         decoded.validate().expect("validate repair audit event");
     }
-
     #[test]
     fn gc_audit_event_roundtrips() {
         let payload = GcAuditPayloadV1 {
@@ -1737,7 +1639,6 @@ mod tests {
         assert_eq!(decoded, event);
         decoded.validate().expect("validate GC audit event");
     }
-
     #[test]
     fn repair_audit_event_rejects_header_tampering() {
         let payload = RepairTaskEventV1 {
@@ -1761,7 +1662,6 @@ mod tests {
             payload,
         };
         event.validate().expect("valid audit event");
-
         let mut zero_sequence = event.clone();
         zero_sequence.header.sequence = 0;
         assert!(matches!(
@@ -1796,7 +1696,6 @@ mod tests {
             Err(RepairValidationError::InvalidAuditHeader { .. })
         ));
     }
-
     #[test]
     fn gc_audit_payload_rejects_reason_provider_and_outcome_drift() {
         let valid = GcAuditPayloadV1 {
@@ -1809,7 +1708,6 @@ mod tests {
             blocked_reason: None,
         };
         valid.validate().expect("valid GC payload");
-
         let mut unknown_reason = valid.clone();
         unknown_reason.reason = "operator_override".into();
         assert_eq!(
@@ -1847,7 +1745,6 @@ mod tests {
             .validate()
             .expect("empty manifests may be evicted without freeing payload bytes");
     }
-
     #[test]
     fn gc_audit_event_rejects_header_tampering() {
         let payload = GcAuditPayloadV1 {
@@ -1870,7 +1767,6 @@ mod tests {
             payload,
         };
         event.validate().expect("valid GC audit event");
-
         let mut wrong_version = event.clone();
         wrong_version.version = 2;
         assert!(matches!(

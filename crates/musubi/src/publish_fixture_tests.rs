@@ -1,12 +1,9 @@
 // Publication sidecar, compact-envelope, and journal transition tests.
-
 use std::{collections::VecDeque, io::Cursor};
-
 #[cfg(unix)]
 use std::io::Write as _;
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
-
 use iroha::{
     crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf},
     data_model::{
@@ -38,22 +35,17 @@ use iroha::{
     },
 };
 use tempfile::tempdir;
-
 use super::*;
-
 fn publication_test_network_id(marker: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([marker; 32]),
     ))
 }
-
 struct BytesSource(Vec<u8>);
-
 impl PublicationCarSource for BytesSource {
     fn open_car(&self) -> io::Result<Box<dyn Read + '_>> {
         Ok(Box::new(Cursor::new(self.0.as_slice())))
     }
-
     fn car_plan(
         &self,
         commitment: &MusubiArchiveCommitmentV1,
@@ -62,7 +54,6 @@ impl PublicationCarSource for BytesSource {
             .map_err(|_| invalid_plan_source("test publication plan differs from the commitment"))
     }
 }
-
 #[test]
 fn staged_car_source_reopens_only_the_exact_operation_file() {
     let state = tempdir().expect("state root");
@@ -72,7 +63,6 @@ fn staged_car_source_reopens_only_the_exact_operation_file() {
         .expect("operation id");
     let source = PublicationStagedCarSourceV1::new(state.path(), operation_id, 4);
     fs::write(source.path(), b"car!").expect("stage fixture CAR");
-
     let mut bytes = Vec::new();
     source
         .open_car()
@@ -80,7 +70,6 @@ fn staged_car_source_reopens_only_the_exact_operation_file() {
         .read_to_end(&mut bytes)
         .expect("read exact CAR");
     assert_eq!(bytes, b"car!");
-
     let wrong_size = PublicationStagedCarSourceV1::new(state.path(), operation_id, 5);
     assert_eq!(
         wrong_size
@@ -91,7 +80,6 @@ fn staged_car_source_reopens_only_the_exact_operation_file() {
         io::ErrorKind::InvalidData
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn staged_car_reader_rejects_hard_links_and_in_place_growth() {
@@ -113,7 +101,6 @@ fn staged_car_reader_rejects_hard_links_and_in_place_growth() {
         io::ErrorKind::InvalidData
     );
     fs::remove_file(linked).expect("remove fixture hard link");
-
     let mut reader = source.open_car().expect("open exact CAR");
     let mut prefix = [0_u8; 2];
     reader.read_exact(&mut prefix).expect("read prefix");
@@ -129,7 +116,6 @@ fn staged_car_reader_rejects_hard_links_and_in_place_growth() {
         .expect_err("in-place growth rejected");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
 }
-
 #[cfg(unix)]
 #[test]
 fn staged_car_bytes_are_commitment_checked_and_idempotent() {
@@ -169,7 +155,6 @@ fn staged_car_bytes_are_commitment_checked_and_idempotent() {
         source.car_plan(&commitment).expect("reopen exact plan"),
         MusubiSeedIngressCarPlanV1::from_car_build_plan(&plan, &commitment).expect("wire plan")
     );
-
     fs::write(source.path(), vec![0xA5; bytes.len()]).expect("substitute same-length fixture");
     assert!(matches!(
         PublicationStagedCarSourceV1::stage_bytes(
@@ -182,7 +167,6 @@ fn staged_car_bytes_are_commitment_checked_and_idempotent() {
         Err(PublicationError::JournalWrite(ref error))
             if error.code() == crate::atomic_io::AtomicWriteErrorCode::ImmutableConflict
     ));
-
     let other_id = "0303030303030303030303030303030303030303030303030303030303030303"
         .parse()
         .expect("other operation id");
@@ -207,7 +191,6 @@ fn staged_car_bytes_are_commitment_checked_and_idempotent() {
             .exists()
     );
 }
-
 #[test]
 fn staged_car_rejects_a_different_file_inventory_before_install() {
     let state = tempdir().expect("state root");
@@ -227,7 +210,6 @@ fn staged_car_rejects_a_different_file_inventory_before_install() {
         .expect("substituted inventory remains a valid SoraFS plan");
     MusubiSeedIngressCarPlanV1::from_car_build_plan(&substituted_plan, &commitment)
         .expect("scalar commitment fields do not bind the file inventory");
-
     assert!(matches!(
         PublicationStagedCarSourceV1::stage_bytes(
             state.path(),
@@ -245,7 +227,6 @@ fn staged_car_rejects_a_different_file_inventory_before_install() {
     assert!(!source.path().exists());
     assert!(!source.plan_path().exists());
 }
-
 #[test]
 fn detached_begin_persists_the_recovery_anchor_before_sidecar_failure() {
     let state = tempdir().expect("state root");
@@ -254,7 +235,6 @@ fn detached_begin_persists_the_recovery_anchor_before_sidecar_failure() {
     let (request, _) = request();
     let operation_id = request.operation_id();
     let expected_size = request.archive_commitment.car_size;
-
     assert!(matches!(
         engine.begin_detached_with_car(
             request.clone(),
@@ -277,7 +257,6 @@ fn detached_begin_persists_the_recovery_anchor_before_sidecar_failure() {
     assert!(!source.path().exists());
     assert!(!source.plan_path().exists());
 }
-
 #[cfg(unix)]
 #[test]
 fn detached_begin_idempotently_reuses_sidecars_while_the_journal_is_pristine() {
@@ -287,7 +266,6 @@ fn detached_begin_idempotently_reuses_sidecars_while_the_journal_is_pristine() {
     let (plan, car, commitment) = publication_fixture_canonical_car();
     let (request, _) = request_with_archive_commitment(commitment);
     let expected_operation_id = request.operation_id();
-
     let (operation_id, source) = engine
         .begin_detached_with_car(request.clone(), &plan, &car)
         .expect("begin detached publication");
@@ -297,7 +275,6 @@ fn detached_begin_idempotently_reuses_sidecars_while_the_journal_is_pristine() {
     assert_eq!(journal_before.revision, 1);
     let car_before = fs::metadata(source.path()).expect("staged CAR metadata");
     let plan_before = fs::metadata(source.plan_path()).expect("staged plan metadata");
-
     let (retried_operation_id, retried_source) = engine
         .begin_detached_with_car(request, &plan, &car)
         .expect("idempotently recover pristine detached publication");
@@ -317,7 +294,6 @@ fn detached_begin_idempotently_reuses_sidecars_while_the_journal_is_pristine() {
         journal_before
     );
 }
-
 #[test]
 fn detached_begin_rejects_an_advanced_journal_that_must_resume() {
     let state = tempdir().expect("state root");
@@ -337,7 +313,6 @@ fn detached_begin_rejects_an_advanced_journal_that_must_resume() {
         .expect("advance fixture journal");
     let car_before = fs::read(source.path()).expect("read staged CAR");
     let plan_before = fs::read(source.plan_path()).expect("read staged plan");
-
     assert!(matches!(
         engine.begin_detached_with_car(request, &plan, &car),
         Err(PublicationError::InvalidJournal(ref reason))
@@ -358,7 +333,6 @@ fn detached_begin_rejects_an_advanced_journal_that_must_resume() {
         plan_before
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn pristine_pre_ingress_recovery_installs_and_idempotently_reuses_exact_sidecars() {
@@ -374,7 +348,6 @@ fn pristine_pre_ingress_recovery_installs_and_idempotently_reuses_exact_sidecars
         .path()
         .join(journal_relative_path(journal.operation_id));
     let journal_before = fs::read(&journal_path).expect("read pristine journal");
-
     let source = engine
         .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
         .expect("recover exact sidecars");
@@ -389,7 +362,6 @@ fn pristine_pre_ingress_recovery_installs_and_idempotently_reuses_exact_sidecars
         MusubiSeedIngressCarPlanV1::from_car_build_plan(&plan, &commitment)
             .expect("canonical wire plan")
     );
-
     let retried = engine
         .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
         .expect("idempotently recover exact sidecars");
@@ -406,7 +378,6 @@ fn pristine_pre_ingress_recovery_installs_and_idempotently_reuses_exact_sidecars
         journal_before
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn pristine_pre_ingress_recovery_repairs_a_car_only_partial_install() {
@@ -426,7 +397,6 @@ fn pristine_pre_ingress_recovery_repairs_a_car_only_partial_install() {
         PublicationStagedCarSourceV1::new(state.path(), journal.operation_id, commitment.car_size);
     let car_before = fs::metadata(source.path()).expect("partial CAR metadata");
     assert!(!source.plan_path().exists());
-
     let repaired = engine
         .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
         .expect("repair missing plan sidecar");
@@ -440,7 +410,6 @@ fn pristine_pre_ingress_recovery_repairs_a_car_only_partial_install() {
         journal
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn pristine_pre_ingress_recovery_repairs_a_plan_only_partial_install() {
@@ -466,7 +435,6 @@ fn pristine_pre_ingress_recovery_repairs_a_plan_only_partial_install() {
         PublicationStagedCarSourceV1::new(state.path(), journal.operation_id, commitment.car_size);
     let plan_before = fs::metadata(source.plan_path()).expect("partial plan metadata");
     assert!(!source.path().exists());
-
     let repaired = engine
         .recover_pre_ingress_sidecars(&journal, &request.publication, &commitment, &plan, &car)
         .expect("repair missing CAR sidecar");
@@ -480,7 +448,6 @@ fn pristine_pre_ingress_recovery_repairs_a_plan_only_partial_install() {
         journal
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn pre_ingress_recovery_rejects_mismatch_stale_and_advanced_journals_before_install() {
@@ -494,7 +461,6 @@ fn pre_ingress_recovery_rejects_mismatch_stale_and_advanced_journals_before_inst
         .expect("persist pristine recovery anchor");
     let source =
         PublicationStagedCarSourceV1::new(state.path(), journal.operation_id, commitment.car_size);
-
     let mut substituted_publication = request.publication.clone();
     substituted_publication.manifest.interface_digest = MusubiContentDigestV1::new([0xA5; 32]);
     assert!(matches!(
@@ -512,7 +478,6 @@ fn pre_ingress_recovery_rejects_mismatch_stale_and_advanced_journals_before_inst
     ));
     assert!(!source.path().exists());
     assert!(!source.plan_path().exists());
-
     let mut next = journal.clone();
     next.validation = Some(validation_evidence(&request));
     next.phase = PublicationPhaseV1::SeedIngress;
@@ -542,7 +507,6 @@ fn pre_ingress_recovery_rejects_mismatch_stale_and_advanced_journals_before_inst
     assert!(!source.path().exists());
     assert!(!source.plan_path().exists());
 }
-
 #[cfg(unix)]
 #[test]
 fn validation_requires_the_exact_plan_before_calling_the_backend() {
@@ -568,7 +532,6 @@ fn validation_requires_the_exact_plan_before_calling_the_backend() {
         receipt_window: None,
         prepare_calls: 0,
     };
-
     assert!(matches!(
         engine.advance_once(journal.operation_id, &source, &mut backend),
         Err(PublicationError::CarSource(_))
@@ -582,7 +545,6 @@ fn validation_requires_the_exact_plan_before_calling_the_backend() {
         journal
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn staged_plan_missing_corrupt_or_hard_linked_fails_closed() {
@@ -615,7 +577,6 @@ fn staged_plan_missing_corrupt_or_hard_linked_fails_closed() {
         assert!(source.car_plan(&commitment).is_err());
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn staged_plan_substitution_fails_commitment_validation() {
@@ -633,7 +594,6 @@ fn staged_plan_substitution_fails_commitment_validation() {
         &bytes,
     )
     .expect("stage fixture");
-
     let mut substituted_plan = expected_plan.clone();
     let source_file = substituted_plan
         .files
@@ -670,7 +630,6 @@ fn staged_plan_substitution_fails_commitment_validation() {
             .expect("encode substituted plan"),
     )
     .expect("substitute sidecar bytes");
-
     assert_eq!(
         source
             .car_plan(&expected_commitment)
@@ -679,7 +638,6 @@ fn staged_plan_substitution_fails_commitment_validation() {
         io::ErrorKind::InvalidData
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn journal_load_rejects_a_fifo_substitution_without_blocking() {
@@ -688,7 +646,6 @@ fn journal_load_rejects_a_fifo_substitution_without_blocking() {
     let (request, _) = request();
     let operation_id = request.operation_id();
     store.create(request).expect("create canonical journal");
-
     TEST_PUBLICATION_READ_FIFO_SUBSTITUTIONS.with(|remaining| remaining.set(1));
     assert!(matches!(
         store.load(operation_id),
@@ -703,7 +660,6 @@ fn journal_load_rejects_a_fifo_substitution_without_blocking() {
     );
     TEST_PUBLICATION_READ_FIFO_SUBSTITUTIONS.with(|remaining| assert_eq!(remaining.get(), 0));
 }
-
 #[cfg(unix)]
 #[test]
 fn journal_decode_rejects_trailing_bare_and_oversized_frames() {
@@ -718,7 +674,6 @@ fn journal_decode_rejects_trailing_bare_and_oversized_frames() {
         decode_publication_journal(&canonical).expect("decode canonical journal"),
         journal
     );
-
     OpenOptions::new()
         .append(true)
         .open(&path)
@@ -729,7 +684,6 @@ fn journal_decode_rejects_trailing_bare_and_oversized_frames() {
         store.load(operation_id),
         Err(PublicationError::InvalidJournal(_))
     ));
-
     store
         .root
         .replace(&journal_relative_path(operation_id), &journal.encode())
@@ -738,14 +692,12 @@ fn journal_decode_rejects_trailing_bare_and_oversized_frames() {
         store.load(operation_id),
         Err(PublicationError::InvalidJournal(_))
     ));
-
     let oversized = vec![0_u8; MAX_JOURNAL_BYTES_USIZE + 1];
     assert!(matches!(
         decode_publication_journal(&oversized),
         Err(PublicationError::InvalidJournal(_))
     ));
 }
-
 #[test]
 fn compact_release_envelope_reconstructs_exact_wire_and_detects_proof_substitution() {
     let (request, broker) = request();
@@ -758,7 +710,6 @@ fn compact_release_envelope_reconstructs_exact_wire_and_detects_proof_substituti
         .reconstruct_signed_transaction(&request)
         .expect("reconstruct compact release transaction");
     assert_eq!(reconstructed, signed);
-
     let wire = release_signed_transaction_wire_v1(&signed).expect("release V1 wire");
     assert_eq!(
         wire,
@@ -766,7 +717,6 @@ fn compact_release_envelope_reconstructs_exact_wire_and_detects_proof_substituti
             .encode_wire_v1()
             .expect("data-model fixed V1 transaction wire")
     );
-
     let intent = PublicationReleaseSubmissionIntentV1::try_new(
         request.operation_id(),
         &request,
@@ -784,7 +734,6 @@ fn compact_release_envelope_reconstructs_exact_wire_and_detects_proof_substituti
             .expect("validate decoded compact intent"),
         signed
     );
-
     let other = signed_release_transaction(&request, 2);
     let forged = TransactionBuilder::from_payload(signed.payload().clone())
         .expect("valid original payload")
@@ -806,7 +755,6 @@ fn compact_release_envelope_reconstructs_exact_wire_and_detects_proof_substituti
         })
     ));
 }
-
 #[test]
 fn compact_release_envelope_distinguishes_valid_authorization_bundles() {
     let (mut request, _) = request();
@@ -836,7 +784,6 @@ fn compact_release_envelope_distinguishes_valid_authorization_bundles() {
     builder.set_nonce(NonZeroU32::new(1).expect("fixture nonce"));
     let transaction_a = builder.clone().sign_multisig([signer_a.private_key()]);
     let transaction_b = builder.sign_multisig([signer_b.private_key()]);
-
     assert_eq!(transaction_a.payload(), transaction_b.payload());
     assert_eq!(transaction_a.hash(), transaction_b.hash());
     transaction_a.verify_signature().expect("first valid proof");
@@ -850,7 +797,6 @@ fn compact_release_envelope_distinguishes_valid_authorization_bundles() {
         domain_hash(RELEASE_SIGNED_TRANSACTION_DOMAIN, &wire_a),
         domain_hash(RELEASE_SIGNED_TRANSACTION_DOMAIN, &wire_b)
     );
-
     let envelope_a =
         PublicationReleaseSignedEnvelopeV1::try_from_signed_transaction(&request, &transaction_a)
             .expect("first compact authorization");
@@ -871,13 +817,11 @@ fn compact_release_envelope_distinguishes_valid_authorization_bundles() {
         transaction_b
     );
 }
-
 #[test]
 fn compact_release_envelope_rejects_omitted_and_noncanonical_payload_fields() {
     let (request, _) = request();
     let signed = signed_release_transaction(&request, 1);
     let (_, publisher_keypair) = account(20);
-
     let mut metadata_payload = signed.payload().clone();
     metadata_payload
         .metadata
@@ -892,7 +836,6 @@ fn compact_release_envelope_rejects_omitted_and_noncanonical_payload_fields() {
         )
         .is_err()
     );
-
     let attachment = ProofAttachment::new_ref(
         "halo2/ipa".into(),
         ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
@@ -911,7 +854,6 @@ fn compact_release_envelope_rejects_omitted_and_noncanonical_payload_fields() {
         )
         .is_err()
     );
-
     let mut overflow_payload = signed.payload().clone();
     overflow_payload.creation_time_ms = u64::MAX;
     overflow_payload.time_to_live_ms = NonZeroU64::new(1);
@@ -925,7 +867,6 @@ fn compact_release_envelope_rejects_omitted_and_noncanonical_payload_fields() {
         )
         .is_err()
     );
-
     let mut wrong_network_payload = signed.payload().clone();
     wrong_network_payload.domain = iroha_data_model::transaction::TransactionDomain::Network(
         publication_test_network_id(0xFF),
@@ -941,7 +882,6 @@ fn compact_release_envelope_rejects_omitted_and_noncanonical_payload_fields() {
         .is_err()
     );
 }
-
 #[test]
 fn compact_release_envelope_preserves_maximum_canonical_multisig_bundle() {
     let (request, _) = request();
@@ -965,7 +905,6 @@ fn compact_release_envelope_preserves_maximum_canonical_multisig_bundle() {
         .swap(0, 1);
     assert!(reordered.reconstruct_signed_transaction(&request).is_err());
 }
-
 #[test]
 fn compact_final_checkpoint_covers_the_maximum_admitted_release_signers() {
     let (request, _) = request();
@@ -993,7 +932,6 @@ fn compact_final_checkpoint_covers_the_maximum_admitted_release_signers() {
     assert_eq!(checkpoint.release, request.publication.manifest.release);
     assert_ne!(checkpoint.home_release_digest, [0; 32]);
     assert_ne!(checkpoint.universal_release_digest, [0; 32]);
-
     let encoded = norito::encode_canonical(&checkpoint).expect("encode final checkpoint");
     let decoded: PublicationFinalCheckpointV1 =
         norito::decode_canonical(&encoded).expect("decode final checkpoint");
@@ -1002,7 +940,6 @@ fn compact_final_checkpoint_covers_the_maximum_admitted_release_signers() {
         decoded.checkpoint_digest,
         decoded.digest().expect("checkpoint digest")
     );
-
     let mut different_operation = request.clone();
     different_operation.nonce[0] ^= 1;
     assert_ne!(different_operation.operation_id(), request.operation_id());
@@ -1031,12 +968,10 @@ fn compact_final_checkpoint_covers_the_maximum_admitted_release_signers() {
             .validate_for(&request, &substituted_submission)
             .is_err()
     );
-
     let mut substituted = checkpoint;
     substituted.home_release_digest[0] ^= 1;
     assert!(substituted.validate_for(&request, &submission).is_err());
 }
-
 #[test]
 fn compact_final_checkpoint_accepts_later_paired_yank_and_storage_projection() {
     let (request, _) = request();
@@ -1069,7 +1004,6 @@ fn compact_final_checkpoint_accepts_later_paired_yank_and_storage_projection() {
         .storage
         .healthy_replicas = 1;
     assert!(!evidence.universal_release.selection.fresh_selectable());
-
     let submission = PublicationAmxSubmissionV1::new(
         request.operation_id(),
         &request.publish_instruction(),
@@ -1082,7 +1016,6 @@ fn compact_final_checkpoint_accepts_later_paired_yank_and_storage_projection() {
         .validate_for(&request, &submission)
         .expect("compact checkpoint remains request-bound");
 }
-
 #[test]
 fn compact_final_checkpoint_decouples_near_limit_governance_account() {
     let (request, _) = request();
@@ -1096,7 +1029,6 @@ fn compact_final_checkpoint_decouples_near_limit_governance_account() {
     let ordinary_checkpoint =
         PublicationFinalCheckpointV1::from_verified(&request, &submission, &ordinary_evidence)
             .expect("ordinary compact checkpoint");
-
     let changed_by = maximum_legal_musubi_account();
     let changed_by_size = norito::to_bytes(&changed_by)
         .expect("near-limit account has canonical Norito bytes")
@@ -1104,7 +1036,6 @@ fn compact_final_checkpoint_decouples_near_limit_governance_account() {
     assert!(changed_by_size <= MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1);
     assert!(changed_by_size > MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 - 256);
     validate_musubi_account_id_v1(&changed_by).expect("near-limit account is legal in Musubi");
-
     let mut large_evidence = ordinary_evidence.clone();
     let yank = MusubiReleaseYankV1 {
         release: request.publication.manifest.release.clone(),
@@ -1117,7 +1048,6 @@ fn compact_final_checkpoint_decouples_near_limit_governance_account() {
     large_evidence.home_release.yank = yank.clone();
     large_evidence.home_release.revisions.yank = yank.revision;
     large_evidence.universal_release.selection.yank = yank;
-
     let large_checkpoint =
         PublicationFinalCheckpointV1::from_verified(&request, &submission, &large_evidence)
             .expect("near-limit governance projection compacts");
@@ -1129,7 +1059,6 @@ fn compact_final_checkpoint_decouples_near_limit_governance_account() {
         canonical_encoded_len(&ordinary_checkpoint).expect("ordinary final checkpoint size");
     let large_checkpoint_size =
         canonical_encoded_len(&large_checkpoint).expect("large final checkpoint size");
-
     assert!(large_evidence_size > ordinary_evidence_size + changed_by_size);
     assert_eq!(large_checkpoint_size, ordinary_checkpoint_size);
     assert!(large_checkpoint_size <= MAX_RELEASE_FINAL_CHECKPOINT_CANONICAL_BYTES);
@@ -1142,7 +1071,6 @@ fn compact_final_checkpoint_decouples_near_limit_governance_account() {
         ordinary_checkpoint.universal_release_digest
     );
 }
-
 #[test]
 fn release_component_canonical_budget_accepts_boundary_and_rejects_plus_one() {
     fn bytes_with_canonical_size(target: usize) -> Vec<u8> {
@@ -1168,7 +1096,6 @@ fn release_component_canonical_budget_accepts_boundary_and_rejects_plus_one() {
         }
         panic!("canonical byte-vector encoding could not represent exact size {target}");
     }
-
     let at_limit = bytes_with_canonical_size(MAX_RELEASE_INTENT_CANONICAL_BYTES);
     ensure_release_component_budget(
         &at_limit,
@@ -1177,7 +1104,6 @@ fn release_component_canonical_budget_accepts_boundary_and_rejects_plus_one() {
         PublicationPhaseV1::ReleaseSubmission,
     )
     .expect("exact canonical boundary is admitted");
-
     let above_limit = bytes_with_canonical_size(MAX_RELEASE_INTENT_CANONICAL_BYTES + 1);
     assert!(matches!(
         ensure_release_component_budget(
@@ -1204,7 +1130,6 @@ fn release_component_canonical_budget_accepts_boundary_and_rejects_plus_one() {
         })
     ));
 }
-
 #[test]
 fn release_absence_requires_exact_empty_same_snapshot_retention_evidence() {
     let (request, broker) = request();
@@ -1228,18 +1153,15 @@ fn release_absence_requires_exact_empty_same_snapshot_retention_evidence() {
     )
     .validate_for(&request, &intent)
     .expect("consensus-time terminal proof");
-
     let mut unknown = absence.clone();
     unknown.retention_page.items[0].disposition =
         MusubiArchiveRetentionDispositionV1::RetainUnknown;
     unknown.retention_page.items[0].storage = None;
     assert!(unknown.validate_for(&request).is_err());
-
     let mut wrong_snapshot = absence.clone();
     wrong_snapshot.retention_page.snapshot.finalized_height += 1;
     wrong_snapshot.retention_page.snapshot.finalized_block_hash = [0xD2; 32];
     assert!(wrong_snapshot.validate_for(&request).is_err());
-
     let mut future_storage = absence.clone();
     future_storage.retention_page.items[0]
         .storage
@@ -1247,11 +1169,9 @@ fn release_absence_requires_exact_empty_same_snapshot_retention_evidence() {
         .expect("known archive storage")
         .finalized_height = future_storage.retention_page.snapshot.finalized_height + 1;
     assert!(future_storage.validate_for(&request).is_err());
-
     let mut non_exact = absence.clone();
     non_exact.resolver_page.query.requirement = Some("*".parse().expect("wildcard"));
     assert!(non_exact.validate_for(&request).is_err());
-
     let at_deadline = release_absence_evidence(&request, 80, deadline);
     assert!(
         PublicationReleaseSubmissionTerminalV1::finalized_validity_window_elapsed(
@@ -1262,7 +1182,6 @@ fn release_absence_requires_exact_empty_same_snapshot_retention_evidence() {
         .is_err()
     );
 }
-
 #[cfg(unix)]
 #[test]
 #[allow(
@@ -1359,7 +1278,6 @@ fn release_attempt_journal_is_append_only_bounded_and_durable() {
         store.load(operation_id).expect("reload release history"),
         journal
     );
-
     let mut completed = journal.clone();
     let last_attempt = completed
         .release_submission_attempts
@@ -1423,7 +1341,6 @@ fn release_attempt_journal_is_append_only_bounded_and_durable() {
         Err(PublicationError::InvalidJournal(ref reason))
             if reason.contains("compact final checkpoint is not append-only")
     ));
-
     let mut immutable_rewrite = journal.clone();
     let first_terminal = match immutable_rewrite.release_submission_attempts[0]
         .outcome
@@ -1440,7 +1357,6 @@ fn release_attempt_journal_is_append_only_bounded_and_durable() {
         &journal.release_submission_attempts,
         &immutable_rewrite.release_submission_attempts,
     ));
-
     let mut ninth = journal;
     let last = ninth
         .release_submission_attempts
@@ -1484,7 +1400,6 @@ fn release_attempt_journal_is_append_only_bounded_and_durable() {
             if reason.contains("release-submission attempt bound")
     ));
 }
-
 #[cfg(unix)]
 #[test]
 #[allow(
@@ -1511,7 +1426,6 @@ fn release_attempt_transition_persists_live_intent_before_any_outcome() {
     store
         .write(&previous)
         .expect("persist release-ready journal");
-
     let (_, floor) = release_preparation_fixture(&request, &broker);
     let signed = signed_release_transaction(&request, 1);
     let intent =
@@ -1523,7 +1437,6 @@ fn release_attempt_transition_persists_live_intent_before_any_outcome() {
         intent.transaction_hash,
         80,
     );
-
     let mut direct_applied = previous.clone();
     let mut applied_attempt = PublicationReleaseSubmissionAttemptV1::new(1, intent.clone());
     applied_attempt.outcome = Some(PublicationReleaseSubmissionOutcomeV1::applied(
@@ -1539,7 +1452,6 @@ fn release_attempt_transition_persists_live_intent_before_any_outcome() {
         Err(PublicationError::InvalidJournal(ref reason))
             if reason.contains("release-submission attempt history is not append-only")
     ));
-
     let preparation_height = intent
         .preparation
         .replication
@@ -1569,7 +1481,6 @@ fn release_attempt_transition_persists_live_intent_before_any_outcome() {
         Err(PublicationError::InvalidJournal(ref reason))
             if reason.contains("release-submission attempt history is not append-only")
     ));
-
     let mut live = previous.clone();
     live.phase = PublicationPhaseV1::ReleaseSubmission;
     live.readbacks = intent.preparation.readbacks.clone();
@@ -1583,7 +1494,6 @@ fn release_attempt_transition_persists_live_intent_before_any_outcome() {
     let terminal_history = store
         .transition(&live, terminal_history)
         .expect("append terminal outcome separately");
-
     let (_, refreshed_floor) = release_preparation_fixture_with_offset(&request, &broker, 1);
     let refreshed_signed = signed_release_transaction(&request, 2);
     let refreshed_intent = PublicationReleaseSubmissionIntentV1::try_new(
@@ -1630,7 +1540,6 @@ fn release_attempt_transition_persists_live_intent_before_any_outcome() {
             if reason.contains("release-submission attempt history is not append-only")
     ));
 }
-
 #[test]
 #[allow(
     clippy::too_many_lines,
@@ -1670,7 +1579,6 @@ fn release_attempt_applied_binding_and_rejected_successor_are_exact() {
         .expect("submission")
         .transaction_hash[0] ^= 1;
     assert!(applied_journal.validate().is_err());
-
     let mut successor_journal = release_ready_journal(&request, &broker);
     let (first_registration, first_floor) = release_preparation_fixture(&request, &broker);
     let first_signed = signed_release_transaction(&request, 1);
@@ -1716,7 +1624,6 @@ fn release_attempt_applied_binding_and_rejected_successor_are_exact() {
     successor_journal
         .validate()
         .expect("higher same-location revision permits rejected successor");
-
     let mut covering_replication =
         replication_checkpoint_with_directory_advance(&request, &first_registration);
     covering_replication.finalized_page.snapshot = covering_snapshot;
@@ -1741,7 +1648,6 @@ fn release_attempt_applied_binding_and_rejected_successor_are_exact() {
         Err(PublicationError::InvalidJournal(ref reason))
             if reason.contains("did not refresh or replace its location")
     ));
-
     let mut replacement_journal = release_ready_journal(&request, &broker);
     let registered = replacement_journal
         .registered_archive
@@ -1792,7 +1698,6 @@ fn release_attempt_applied_binding_and_rejected_successor_are_exact() {
         .validate()
         .expect("retirement covering rejection permits a later location generation");
 }
-
 #[cfg(unix)]
 #[test]
 fn operation_lock_is_private_exclusive_and_rejects_hard_links() {
@@ -1807,7 +1712,6 @@ fn operation_lock_is_private_exclusive_and_rejects_hard_links() {
     let metadata = fs::symlink_metadata(&lock_path).expect("operation lock metadata");
     assert_eq!(metadata.len(), 0);
     assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
-
     let held = store
         .lock_operation(operation_id)
         .expect("hold operation lock");
@@ -1817,7 +1721,6 @@ fn operation_lock_is_private_exclusive_and_rejects_hard_links() {
         Err(PublicationError::ConcurrentJournalUpdate)
     ));
     held.finish(Ok(())).expect("release operation lock");
-
     let hard_link = state.path().join("operation-lock-hard-link");
     fs::hard_link(&lock_path, &hard_link).expect("link operation lock");
     assert!(matches!(
@@ -1825,7 +1728,6 @@ fn operation_lock_is_private_exclusive_and_rejects_hard_links() {
         Err(PublicationError::InvalidJournal(_))
     ));
     fs::remove_file(hard_link).expect("remove fixture hard link");
-
     fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o4600))
         .expect("add set-user-ID bit to operation lock");
     assert!(matches!(
@@ -1835,12 +1737,10 @@ fn operation_lock_is_private_exclusive_and_rejects_hard_links() {
     fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))
         .expect("restore operation lock permissions");
 }
-
 #[cfg(unix)]
 #[test]
 fn concurrent_transition_cas_has_exactly_one_winner() {
     use std::sync::{Arc, Barrier};
-
     let state = tempdir().expect("state root");
     let store = PublicationJournalStore::open(state.path()).expect("journal store");
     let (request, _) = request();

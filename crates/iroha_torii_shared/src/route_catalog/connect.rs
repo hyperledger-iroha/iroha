@@ -2,7 +2,6 @@ use super::{
     AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
     PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
 };
-
 /// Create a wallet-pairing session.
 pub const SESSION_CREATE: RouteDescriptor = RouteDescriptor::new(
     "connect.session.create",
@@ -87,7 +86,6 @@ pub const STATUS: RouteDescriptor = RouteDescriptor::new(
 .with_projections(RouteProjections::OPENAPI_AND_SDK)
 .with_implicit_head(true)
 .with_cors_options(true);
-
 /// Canonical Connect route set.
 pub const ROUTES: &[RouteDescriptor] = &[
     SESSION_CREATE,
@@ -96,11 +94,9 @@ pub const ROUTES: &[RouteDescriptor] = &[
     SESSION_STATUS,
     STATUS,
 ];
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn session_and_aggregate_status_have_disjoint_authentication() {
         for route in [SESSION_CREATE, SESSION_DELETE, WEBSOCKET, SESSION_STATUS] {

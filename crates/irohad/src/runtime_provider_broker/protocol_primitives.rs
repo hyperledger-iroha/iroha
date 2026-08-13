@@ -116,12 +116,10 @@ pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1: u16 = 124
 // A real payload byte avoids relying on zero-sized archive reconstruction;
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
-
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SignRequestWireV1 {
     pub(super) payload: Vec<u8>,
 }
-
 impl fmt::Debug for SignRequestWireV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -130,20 +128,17 @@ impl fmt::Debug for SignRequestWireV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl Drop for SignRequestWireV1 {
     fn drop(&mut self) {
         self.payload.fill(0);
         let _ = std::hint::black_box(&self.payload);
     }
 }
-
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PurposeSignRequestWireV1 {
     pub(super) purpose: u8,
     pub(super) payload: Vec<u8>,
 }
-
 impl fmt::Debug for PurposeSignRequestWireV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -153,24 +148,20 @@ impl fmt::Debug for PurposeSignRequestWireV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl Drop for PurposeSignRequestWireV1 {
     fn drop(&mut self) {
         self.payload.fill(0);
         let _ = std::hint::black_box(&self.payload);
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SignResultWireV1 {
     pub(super) signature: [u8; 64],
 }
-
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct VariableSignatureResultWireV1 {
     pub(super) signature: Vec<u8>,
 }
-
 impl fmt::Debug for VariableSignatureResultWireV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -179,24 +170,20 @@ impl fmt::Debug for VariableSignatureResultWireV1 {
             .finish_non_exhaustive()
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PopIssuerSignRequestWireV1 {
     pub(super) purpose: u8,
     pub(super) digest: [u8; 32],
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PopIssuerSignResultWireV1 {
     pub(super) signature: [u8; 64],
 }
-
 pub(super) fn governance_signing_purpose_from_wire(
     value: u8,
 ) -> Result<sorafs_node::GovernanceDagSigningPurposeV1, BrokerError> {
     sorafs_node::GovernanceDagSigningPurposeV1::try_from_wire_id(value).ok_or(BrokerError::Rejected)
 }
-
 pub(super) fn validate_governance_purpose_signing_request(
     signing: &PurposeSignRequestWireV1,
     binding: &ProviderBindingWireV1,
@@ -248,7 +235,6 @@ pub(super) fn validate_governance_purpose_signing_request(
     valid.map_err(|_| BrokerError::Rejected)?;
     Ok(purpose)
 }
-
 pub(super) fn validate_governance_sign_operation_result(
     request: &OperationRequestV1,
     result: &[u8],
@@ -268,14 +254,12 @@ pub(super) fn validate_governance_sign_operation_result(
     verify_evidence_viewer_ed25519_signature(public_key, signed.signature, &sign.payload)
         .map_err(|_| BrokerError::Protocol)
 }
-
 pub(super) fn evidence_signing_purpose_from_wire(
     value: u8,
 ) -> Result<sorafs_node::evidence_viewer::EvidenceViewerSigningPurposeV1, BrokerError> {
     sorafs_node::evidence_viewer::EvidenceViewerSigningPurposeV1::try_from_wire_id(value)
         .ok_or(BrokerError::Rejected)
 }
-
 pub(super) fn validate_evidence_purpose_signing_request(
     signing: &PurposeSignRequestWireV1,
     binding: &ProviderBindingWireV1,
@@ -298,20 +282,17 @@ pub(super) fn validate_evidence_purpose_signing_request(
     .map_err(|_| BrokerError::Rejected)?;
     Ok(purpose)
 }
-
 pub(super) const STATUS_OK_V1: u8 = 0;
 pub(super) const STATUS_REJECTED_V1: u8 = 1;
 pub(super) const STATUS_CONFLICT_V1: u8 = 2;
 pub(super) const STATUS_STALE_OR_REVOKED_V1: u8 = 3;
 pub(super) const STATUS_AMBIGUOUS_V1: u8 = 4;
 pub(super) const STATUS_UNAVAILABLE_V1: u8 = 5;
-
 pub(super) const ERROR_UNAVAILABLE: &str = "runtime provider is unavailable";
 pub(super) const ERROR_STALE_OR_REVOKED: &str = "runtime provider binding is stale or revoked";
 pub(super) const ERROR_REJECTED: &str = "runtime provider request was rejected";
 pub(super) const ERROR_CONFLICT: &str = "runtime provider compare-and-swap conflict";
 pub(super) const ERROR_AMBIGUOUS: &str = "runtime provider outcome is ambiguous";
-
 pub(super) const CATALOG_DIGEST_DOMAIN_V1: &[u8] = b"iroha.runtime-provider-broker.catalog.v1";
 pub(super) const CLIENT_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"iroha.runtime-provider-broker.client-transcript.v1";
@@ -331,7 +312,6 @@ pub(super) const PROVIDER_INGEST_SOURCE_STREAM_DOMAIN_V1: &[u8] =
     b"iroha.runtime-provider-broker.provider-ingest-source-stream.v1";
 pub(super) const PROVIDER_INGEST_SOURCE_CHUNK_DOMAIN_V1: &[u8] =
     b"iroha.runtime-provider-broker.provider-ingest-source-chunk.v1";
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PopRuntimeOpenResultWireV1 {
     pub(super) issuer_signer_handle: String,
@@ -342,13 +322,11 @@ pub(super) struct PopRuntimeOpenResultWireV1 {
     pub(super) wallet_recipient_public_key_digest: [u8; 32],
     pub(super) wallet_wrapping_key_id: String,
 }
-
 #[derive(PartialEq, Eq, Decode, Encode)]
 pub(super) struct PopRecipientOpenRequestWireV1 {
     pub(super) encrypted_payload: sorafs_manifest::hybrid_envelope::HybridPayloadEnvelopeV1,
     pub(super) aad: Vec<u8>,
 }
-
 impl fmt::Debug for PopRecipientOpenRequestWireV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -358,25 +336,21 @@ impl fmt::Debug for PopRecipientOpenRequestWireV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl Drop for PopRecipientOpenRequestWireV1 {
     fn drop(&mut self) {
         self.aad.fill(0);
         let _ = std::hint::black_box(&self.aad);
     }
 }
-
 #[derive(PartialEq, Eq, Decode, Encode)]
 pub(super) struct PopRecipientOpenResultWireV1 {
     pub(super) plaintext: Vec<u8>,
 }
-
 impl PopRecipientOpenResultWireV1 {
     pub(super) fn take_plaintext(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.plaintext)
     }
 }
-
 impl fmt::Debug for PopRecipientOpenResultWireV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -385,14 +359,12 @@ impl fmt::Debug for PopRecipientOpenResultWireV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl Drop for PopRecipientOpenResultWireV1 {
     fn drop(&mut self) {
         self.plaintext.fill(0);
         let _ = std::hint::black_box(&self.plaintext);
     }
 }
-
 pub(super) fn validate_pop_open_result(
     result: &PopRuntimeOpenResultWireV1,
     exact: &PopCredentialRuntimeBindingWireV1,
@@ -410,7 +382,6 @@ pub(super) fn validate_pop_open_result(
     }
     Ok(())
 }
-
 pub(super) fn validate_pop_cursor(
     cursor: sorafs_node::pop_credentials::PopFinalizedCursorV1,
 ) -> Result<(), BrokerError> {
@@ -419,10 +390,8 @@ pub(super) fn validate_pop_cursor(
     }
     Ok(())
 }
-
 const POP_RECIPIENT_AAD_MAX_BYTES_V1: usize = 64 * 1024;
 const POP_HYBRID_AEAD_TAG_BYTES_V1: usize = 16;
-
 fn pop_recipient_plaintext_limit(operation: u16) -> Result<usize, BrokerError> {
     match operation {
         OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1 => {
@@ -434,7 +403,6 @@ fn pop_recipient_plaintext_limit(operation: u16) -> Result<usize, BrokerError> {
         _ => Err(BrokerError::Rejected),
     }
 }
-
 pub(super) fn validate_pop_recipient_open_request(
     request: &PopRecipientOpenRequestWireV1,
     operation: u16,
@@ -461,7 +429,6 @@ pub(super) fn validate_pop_recipient_open_request(
     }
     Ok(())
 }
-
 pub(super) fn validate_pop_recipient_open_result(
     result: &PopRecipientOpenResultWireV1,
     operation: u16,
@@ -472,18 +439,15 @@ pub(super) fn validate_pop_recipient_open_result(
     }
     Ok(())
 }
-
 pub(super) struct ScrubbedBytes {
     pub(super) bytes: Vec<u8>,
     pub(super) inbound_permit: Option<tokio::sync::OwnedSemaphorePermit>,
     pub(super) decode_admission: Option<Arc<DecodeResourceAdmissionV1>>,
 }
-
 #[cfg(test)]
 mod pop_recipient_wire_tests {
     use super::*;
     use rand::{SeedableRng as _, rngs::StdRng};
-
     fn exact_binding() -> PopCredentialRuntimeBindingWireV1 {
         PopCredentialRuntimeBindingWireV1 {
             issuer_policy_digest: [0x11; 32],
@@ -497,7 +461,6 @@ mod pop_recipient_wire_tests {
             wallet_wrapping_key_id: "kms:pop/wallet-wrap:primary".to_owned(),
         }
     }
-
     fn valid_open_request() -> PopRecipientOpenRequestWireV1 {
         let mut rng = StdRng::from_seed([0x21; 32]);
         let recipient = iroha_crypto::HybridKeyPair::generate(&mut rng)
@@ -515,7 +478,6 @@ mod pop_recipient_wire_tests {
             aad,
         }
     }
-
     #[test]
     fn pop_runtime_open_is_public_and_legacy_operation_is_retired() {
         let exact = exact_binding();
@@ -544,7 +506,6 @@ mod pop_recipient_wire_tests {
             Err(BrokerError::Rejected)
         );
     }
-
     #[test]
     fn pop_recipient_open_rejects_noncanonical_envelopes_and_redacts_values() {
         let request = valid_open_request();
@@ -558,7 +519,6 @@ mod pop_recipient_wire_tests {
         let debug = format!("{request:?}");
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("private-payload"));
-
         let mut missing_aad = valid_open_request();
         missing_aad.aad.clear();
         assert_eq!(
@@ -609,7 +569,6 @@ mod pop_recipient_wire_tests {
             ),
             Err(BrokerError::Rejected)
         );
-
         let mut result = PopRecipientOpenResultWireV1 {
             plaintext: b"private-payload".to_vec(),
         };
@@ -622,7 +581,6 @@ mod pop_recipient_wire_tests {
         );
         assert_eq!(result.take_plaintext(), b"private-payload".to_vec());
         assert!(result.plaintext.is_empty());
-
         let enrollment_too_large = PopRecipientOpenResultWireV1 {
             plaintext: vec![
                 0xA5;
@@ -645,7 +603,6 @@ mod pop_recipient_wire_tests {
         );
     }
 }
-
 impl ScrubbedBytes {
     pub(super) fn new(bytes: Vec<u8>) -> Self {
         Self {
@@ -654,7 +611,6 @@ impl ScrubbedBytes {
             decode_admission: None,
         }
     }
-
     pub(super) fn with_inbound_permit(
         bytes: Vec<u8>,
         inbound_permit: tokio::sync::OwnedSemaphorePermit,
@@ -665,7 +621,6 @@ impl ScrubbedBytes {
             decode_admission: None,
         }
     }
-
     pub(super) fn with_decode_admission(
         bytes: Vec<u8>,
         decode_admission: Arc<DecodeResourceAdmissionV1>,
@@ -676,32 +631,26 @@ impl ScrubbedBytes {
             decode_admission: Some(decode_admission),
         }
     }
-
     pub(super) fn take(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.bytes)
     }
-
     pub(super) fn enter_decode_admission(&self) -> Option<DecodeResourceAdmissionScopeV1> {
         self.decode_admission
             .as_ref()
             .map(DecodeResourceAdmissionV1::enter)
     }
 }
-
 impl std::ops::Deref for ScrubbedBytes {
     type Target = Vec<u8>;
-
     fn deref(&self) -> &Self::Target {
         &self.bytes
     }
 }
-
 impl std::ops::DerefMut for ScrubbedBytes {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.bytes
     }
 }
-
 impl fmt::Debug for ScrubbedBytes {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -712,45 +661,36 @@ impl fmt::Debug for ScrubbedBytes {
             .finish_non_exhaustive()
     }
 }
-
 impl PartialEq for ScrubbedBytes {
     fn eq(&self, other: &Self) -> bool {
         self.bytes == other.bytes
     }
 }
-
 impl Eq for ScrubbedBytes {}
-
 impl Drop for ScrubbedBytes {
     fn drop(&mut self) {
         self.bytes.fill(0);
         let _ = std::hint::black_box(&self.bytes);
     }
 }
-
 pub(super) struct ScrubbedReadChunk(pub(super) [u8; 64 * 1024]);
-
 impl std::ops::Deref for ScrubbedReadChunk {
     type Target = [u8; 64 * 1024];
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl std::ops::DerefMut for ScrubbedReadChunk {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-
 impl Drop for ScrubbedReadChunk {
     fn drop(&mut self) {
         self.0.fill(0);
         let _ = std::hint::black_box(&self.0);
     }
 }
-
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct BrokerFrameV1 {
     pub(super) magic: [u8; 8],
@@ -758,7 +698,6 @@ pub(super) struct BrokerFrameV1 {
     pub(super) kind: u8,
     pub(super) body: Vec<u8>,
 }
-
 impl fmt::Debug for BrokerFrameV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -769,14 +708,12 @@ impl fmt::Debug for BrokerFrameV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl Drop for BrokerFrameV1 {
     fn drop(&mut self) {
         self.body.fill(0);
         let _ = std::hint::black_box(&self.body);
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct ProviderBindingWireV1 {
     pub(super) slot: u16,
@@ -818,7 +755,6 @@ pub(super) struct ProviderBindingWireV1 {
     pub(super) moderation_panel_notification_archive_binding:
         Option<ModerationPanelNotificationArchiveBindingWireV1>,
 }
-
 /// Exact public identity and resource bound for moderation receipt archives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct ModerationPanelNotificationArchiveBindingWireV1 {
@@ -828,7 +764,6 @@ pub(super) struct ModerationPanelNotificationArchiveBindingWireV1 {
     pub(super) max_bytes: u64,
     pub(super) max_records: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct GovernanceRequestIngressBindingWireV1 {
     pub(super) scope: u8,
@@ -838,14 +773,12 @@ pub(super) struct GovernanceRequestIngressBindingWireV1 {
     pub(super) max_envelope_lifetime_secs: u64,
     pub(super) max_future_skew_secs: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct BootleLanternIssuanceBindingsWireV1 {
     pub(super) issuer_id: [u8; 32],
     pub(super) policy_id: [u8; 32],
     pub(super) authorization_lifetime_blocks: u64,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct AppealFinanceSignerBindingWireV1 {
     pub(super) authority: iroha_data_model::account::AccountId,
@@ -853,12 +786,10 @@ pub(super) struct AppealFinanceSignerBindingWireV1 {
     pub(super) valid_from_block_height: u64,
     pub(super) revoked_at_block_height: Option<u64>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct AppealFinanceCheckpointBindingWireV1 {
     pub(super) public_key: iroha_crypto::PublicKey,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PopCredentialRuntimeBindingWireV1 {
     pub(super) issuer_policy_digest: [u8; 32],
@@ -871,13 +802,11 @@ pub(super) struct PopCredentialRuntimeBindingWireV1 {
     pub(super) wallet_recipient_public_key_digest: [u8; 32],
     pub(super) wallet_wrapping_key_id: String,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PorReplayArchiveProofLimitsWireV1 {
     pub(super) max_successor_receipts: u32,
     pub(super) max_successor_proof_bytes: u64,
 }
-
 impl From<crate::runtime_provider_registry::PorReplayArchiveProofLimitsV1>
     for PorReplayArchiveProofLimitsWireV1
 {
@@ -888,7 +817,6 @@ impl From<crate::runtime_provider_registry::PorReplayArchiveProofLimitsV1>
         }
     }
 }
-
 impl From<&crate::runtime_provider_registry::PopCredentialRuntimeBindingV1>
     for PopCredentialRuntimeBindingWireV1
 {
@@ -906,7 +834,6 @@ impl From<&crate::runtime_provider_registry::PopCredentialRuntimeBindingV1>
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PotrAdmissionPolicyBindingWireV1 {
     pub(super) provider_id: [u8; 32],
@@ -917,7 +844,6 @@ pub(super) struct PotrAdmissionPolicyBindingWireV1 {
     pub(super) finalized_block_hash: [u8; 32],
     pub(super) admission_envelope_digest: [u8; 32],
 }
-
 impl PotrAdmissionPolicyBindingWireV1 {
     pub(super) fn to_binding(self) -> sorafs_node::PotrAdmissionPolicyBindingV1 {
         sorafs_node::PotrAdmissionPolicyBindingV1 {
@@ -931,7 +857,6 @@ impl PotrAdmissionPolicyBindingWireV1 {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PotrRuntimeBindingWireV1 {
     pub(super) gateway_handle: String,
@@ -948,7 +873,6 @@ pub(super) struct PotrRuntimeBindingWireV1 {
     pub(super) resolver_id: [u8; 32],
     pub(super) baseline_admission_policy: PotrAdmissionPolicyBindingWireV1,
 }
-
 impl From<&iroha_config::parameters::actual::SorafsPotrRuntimeBinding>
     for PotrRuntimeBindingWireV1
 {
@@ -979,23 +903,19 @@ impl From<&iroha_config::parameters::actual::SorafsPotrRuntimeBinding>
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct NativeTransactionSignerBindingWireV1 {
     pub(super) role: u8,
     pub(super) authority: iroha_data_model::account::AccountId,
     pub(super) public_key: iroha_crypto::PublicKey,
 }
-
 pub(super) const SORACLOUD_RUNTIME_SIGNER_ROLE_WIRE_V1: u8 = 5;
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct EvidenceViewerWebAuthnBindingWireV1 {
     pub(super) rp_id: String,
     pub(super) allowed_origins: Vec<String>,
     pub(super) challenge_ttl_ms: u64,
 }
-
 impl From<&EvidenceViewerWebAuthnBindingV1> for EvidenceViewerWebAuthnBindingWireV1 {
     fn from(binding: &EvidenceViewerWebAuthnBindingV1) -> Self {
         Self {
@@ -1005,7 +925,6 @@ impl From<&EvidenceViewerWebAuthnBindingV1> for EvidenceViewerWebAuthnBindingWir
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct ProviderIngestSourceLimitsWireV1 {
     pub(super) operation_timeout_ms: u64,
@@ -1013,7 +932,6 @@ pub(super) struct ProviderIngestSourceLimitsWireV1 {
     pub(super) max_source_providers: u32,
     pub(super) max_concurrent_streams: u32,
 }
-
 impl From<ProviderIngestSourceLimitsV1> for ProviderIngestSourceLimitsWireV1 {
     fn from(limits: ProviderIngestSourceLimitsV1) -> Self {
         Self {
@@ -1024,7 +942,6 @@ impl From<ProviderIngestSourceLimitsV1> for ProviderIngestSourceLimitsWireV1 {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct ProviderIngestSignerBindingWireV1 {
     pub(super) runtime_handle: String,
@@ -1036,7 +953,6 @@ pub(super) struct ProviderIngestSignerBindingWireV1 {
     pub(super) algorithm: u8,
     pub(super) public_key: Vec<u8>,
 }
-
 impl ProviderIngestSignerBindingWireV1 {
     pub(super) fn try_from_binding(
         binding: &sorafs_node::ProviderIngestCompletionSignerBindingV1,
@@ -1069,7 +985,6 @@ impl ProviderIngestSignerBindingWireV1 {
             public_key: public_key.to_vec(),
         })
     }
-
     pub(super) fn to_binding(
         &self,
     ) -> Result<sorafs_node::ProviderIngestCompletionSignerBindingV1, BrokerError> {
@@ -1109,7 +1024,6 @@ impl ProviderIngestSignerBindingWireV1 {
         Ok(binding)
     }
 }
-
 pub(super) const fn provider_ingest_algorithm_to_wire(
     algorithm: iroha_crypto::Algorithm,
 ) -> Option<u8> {
@@ -1119,7 +1033,6 @@ pub(super) const fn provider_ingest_algorithm_to_wire(
         _ => None,
     }
 }
-
 pub(super) const fn provider_ingest_algorithm_from_wire(
     wire: u8,
 ) -> Option<iroha_crypto::Algorithm> {

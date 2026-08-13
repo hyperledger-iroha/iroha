@@ -1,18 +1,13 @@
 //! Asset transfer control records used for account-scoped on-chain asset policy.
-
 use std::{format, string::String, vec::Vec};
-
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
 use crate::asset::AssetDefinitionId;
-
 /// Account metadata key storing the v1 asset-transfer control store.
 pub const ASSET_TRANSFER_CONTROL_METADATA_KEY: &str = "asset_transfer_controls";
 /// Maximum UTF-8 byte length of an asset-transfer availability reason.
 pub const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1: usize = 512;
-
 /// Validate an optional operator reason for an availability transition.
 ///
 /// Reasons are persisted in account metadata and therefore must be canonical,
@@ -48,7 +43,6 @@ pub fn validate_asset_transfer_availability_reason(
     }
     Ok(())
 }
-
 /// Whether an account may participate in one direction of account-to-account transfers.
 ///
 /// This policy does not govern supply operations such as mint or burn. Holding
@@ -69,7 +63,6 @@ pub enum AssetTransferAvailability {
     /// Asset movement in this direction is rejected.
     Disabled,
 }
-
 impl AssetTransferAvailability {
     /// Returns `true` when movement in this direction is enabled.
     #[must_use]
@@ -77,7 +70,6 @@ impl AssetTransferAvailability {
         matches!(self, Self::Enabled)
     }
 }
-
 /// Calendar window used for outbound transfer caps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -94,7 +86,6 @@ pub enum AssetTransferControlWindow {
     /// UTC calendar month.
     Month,
 }
-
 impl AssetTransferControlWindow {
     /// Canonical uppercase label used by Torii app APIs.
     #[must_use]
@@ -106,10 +97,8 @@ impl AssetTransferControlWindow {
         }
     }
 }
-
 impl core::str::FromStr for AssetTransferControlWindow {
     type Err = crate::error::ParseError;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_uppercase().as_str() {
             "DAY" => Ok(Self::Day),
@@ -121,13 +110,11 @@ impl core::str::FromStr for AssetTransferControlWindow {
         }
     }
 }
-
 impl core::fmt::Display for AssetTransferControlWindow {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 /// Configured cap for a specific calendar window.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -142,7 +129,6 @@ pub struct AssetTransferLimit {
     #[norito(default)]
     pub cap_amount: Option<Quantity>,
 }
-
 /// Usage bucket tracking actual spent amount in a UTC calendar window.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -158,7 +144,6 @@ pub struct AssetTransferUsageBucket {
     /// Amount already spent in the bucket.
     pub spent_amount: Quantity,
 }
-
 /// Control state for one `(account_id, asset_definition_id)` pair.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -206,7 +191,6 @@ pub struct AssetTransferControlRecord {
     #[norito(default)]
     pub updated_at_ms: Option<u64>,
 }
-
 impl AssetTransferControlRecord {
     /// Construct the implicit initial control state for one asset definition.
     #[must_use]
@@ -224,7 +208,6 @@ impl AssetTransferControlRecord {
             updated_at_ms: None,
         }
     }
-
     /// Returns `true` when the record has no active controls and can be dropped from storage.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -237,19 +220,16 @@ impl AssetTransferControlRecord {
             && self.limits.iter().all(|limit| limit.cap_amount.is_none())
     }
 }
-
 #[cfg(test)]
 mod availability_tests {
     use super::*;
     use crate::domain::DomainId;
-
     fn definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         )
     }
-
     #[test]
     fn availability_defaults_to_enabled() {
         assert!(AssetTransferAvailability::default().is_enabled());
@@ -259,7 +239,6 @@ mod availability_tests {
         assert!(record.outgoing_availability.is_enabled());
         assert!(record.is_empty());
     }
-
     #[test]
     fn availability_revision_keeps_reopened_record() {
         let record = AssetTransferControlRecord {
@@ -276,13 +255,11 @@ mod availability_tests {
         };
         assert!(!record.is_empty());
     }
-
     #[test]
     fn availability_reason_is_canonical_and_byte_bounded() {
         let exact_limit = "é".repeat(ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 / 2);
         assert!(validate_asset_transfer_availability_reason(Some(&exact_limit)).is_ok());
         assert!(validate_asset_transfer_availability_reason(None).is_ok());
-
         let over_limit = format!("{exact_limit}a");
         assert!(validate_asset_transfer_availability_reason(Some(&over_limit)).is_err());
         for invalid in ["", " padded", "padded ", "line\nbreak"] {
@@ -293,7 +270,6 @@ mod availability_tests {
         }
     }
 }
-
 /// Account-scoped store of asset-transfer control entries.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -306,7 +282,6 @@ pub struct AssetTransferControlStoreV1 {
     #[norito(default)]
     pub controls: Vec<AssetTransferControlRecord>,
 }
-
 impl AssetTransferControlStoreV1 {
     /// Fetch the control entry for the asset definition when present.
     pub fn find(
@@ -317,7 +292,6 @@ impl AssetTransferControlStoreV1 {
             .iter()
             .find(|entry| &entry.asset_definition_id == asset_definition_id)
     }
-
     /// Fetch the mutable control entry for the asset definition when present.
     pub fn find_mut(
         &mut self,
@@ -327,7 +301,6 @@ impl AssetTransferControlStoreV1 {
             .iter_mut()
             .find(|entry| &entry.asset_definition_id == asset_definition_id)
     }
-
     /// Insert or replace a record, dropping empty records from the store.
     pub fn upsert(&mut self, record: AssetTransferControlRecord) {
         if let Some(existing) = self.find_mut(&record.asset_definition_id) {
@@ -338,17 +311,14 @@ impl AssetTransferControlStoreV1 {
         self.prune_empty();
         self.sort_canonical();
     }
-
     /// Remove the entry for an asset definition.
     pub fn remove(&mut self, asset_definition_id: &AssetDefinitionId) {
         self.controls
             .retain(|entry| &entry.asset_definition_id != asset_definition_id);
     }
-
     fn prune_empty(&mut self) {
         self.controls.retain(|entry| !entry.is_empty());
     }
-
     fn sort_canonical(&mut self) {
         self.controls.sort_by(|left, right| {
             left.asset_definition_id
@@ -357,26 +327,21 @@ impl AssetTransferControlStoreV1 {
         });
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_primitives::numeric::Numeric;
-
     use super::*;
-
     #[derive(Encode)]
     struct ForgedAssetTransferLimit {
         window: AssetTransferControlWindow,
         cap_amount: Option<Numeric>,
     }
-
     #[derive(Encode)]
     struct ForgedAssetTransferUsageBucket {
         window: AssetTransferControlWindow,
         bucket_start_ms: u64,
         spent_amount: Numeric,
     }
-
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_transfer_control_quantities() {
         let forged_limit = ForgedAssetTransferLimit {
@@ -388,7 +353,6 @@ mod tests {
             AssetTransferLimit::decode(&mut encoded.as_slice()).is_err(),
             "a signed negative payload must not cross the transfer-cap quantity boundary"
         );
-
         let forged_usage = ForgedAssetTransferUsageBucket {
             window: AssetTransferControlWindow::Day,
             bucket_start_ms: 0,

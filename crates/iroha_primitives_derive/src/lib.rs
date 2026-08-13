@@ -1,11 +1,8 @@
 //! Crate containing procedural macros for `iroha_primitives`.
-
 use manyhow::{Result, manyhow};
 use proc_macro2::TokenStream;
-
 mod numeric;
 mod socket_addr;
-
 /// Convenience macro to concisely construct a `SocketAddr`
 ///
 /// # Examples
@@ -30,7 +27,6 @@ mod socket_addr;
 pub fn socket_addr(input: TokenStream) -> Result<TokenStream> {
     socket_addr::socket_addr_impl(input)
 }
-
 /// Convenience macro to concisely construct a `Numeric`
 ///
 /// # Examples

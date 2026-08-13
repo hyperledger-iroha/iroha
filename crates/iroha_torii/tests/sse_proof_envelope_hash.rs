@@ -2,16 +2,13 @@
 //! Assert SSE filtering by `proof_envelope_hash` works and JSON contains the field.
 #![cfg(feature = "app_api")]
 #![allow(clippy::items_after_statements)]
-
 #[path = "common/proof_events.rs"]
 mod proof_events;
-
 use axum::{Router, routing::get};
 use futures_util::StreamExt as _;
 // use http_body_util::BodyExt as _;
 use proof_events::ProofEventFixture;
 use tower::ServiceExt as _;
-
 #[tokio::test]
 async fn sse_filters_by_proof_envelope_hash() {
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
@@ -22,7 +19,6 @@ async fn sse_filters_by_proof_envelope_hash() {
             move |q| async move { iroha_torii::handle_v1_events_sse(events, q) }
         }),
     );
-
     // Filter by envelope hash (hex, 64 chars)
     let want_hex = hex::encode([0xCCu8; 32]);
     let filter_value = iroha_torii::json_object(vec![
@@ -41,14 +37,12 @@ async fn sse_filters_by_proof_envelope_hash() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
-
     // Send a non-matching event (different envelope_hash)
     let ev_bad = ProofEventFixture::new("halo2/ipa", [0x12; 32])
         .without_vk()
         .with_envelope_hash(Some([0xDD; 32]))
         .verified();
     let _ = events.send(ev_bad);
-
     // Negative path: ensure no data frame is produced for the non-matching event
     // Read a couple of chunks with timeout and assert none contain a data: line
     let mut body_stream = resp.into_body().into_data_stream();
@@ -67,14 +61,12 @@ async fn sse_filters_by_proof_envelope_hash() {
             break;
         }
     }
-
     // Send a matching event with the exact envelope hash
     let ev_ok = ProofEventFixture::new("halo2/ipa", [0x13; 32])
         .without_vk()
         .with_envelope_hash(Some([0xCC; 32]))
         .verified();
     let _ = events.send(ev_ok);
-
     // Read until a data frame appears; validate envelope_hash field
     let mut data_json: Option<String> = None;
     while let Some(chunk) = body_stream.next().await {

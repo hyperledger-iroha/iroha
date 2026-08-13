@@ -1,17 +1,13 @@
 //! Time event and filter
 use std::{convert::TryFrom, ops::Range, string::String, time::Duration};
-
 use derive_more::Constructor;
 use getset::Getters;
 use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use super::*;
-
 #[model]
 mod model {
     use super::*;
-
     /// Special event that is emitted when state is ready for handling time-triggers
     ///
     /// Contains time interval which is used to identify time-triggers to be executed
@@ -35,7 +31,6 @@ mod model {
         /// Time interval between creation of two blocks
         pub interval: TimeInterval,
     }
-
     /// Filter time-events and allow only the ones within the given time interval.
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Constructor, Decode, Encode, IntoSchema,
@@ -43,7 +38,6 @@ mod model {
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct TimeEventFilter(pub ExecutionTime);
-
     /// Trigger execution time
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -53,7 +47,6 @@ mod model {
         /// Execute with some schedule
         Schedule(Schedule),
     }
-
     /// Schedule of the trigger
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -66,7 +59,6 @@ mod model {
         /// Sumeragi block cadence.
         pub period_ms: Option<u64>,
     }
-
     /// Time interval in which `TimeAction` should appear
     ///
     /// `since_ms` and `length_ms` are serialized as a number of milliseconds.
@@ -81,7 +73,6 @@ mod model {
         pub length_ms: u64,
     }
 }
-
 // Norito slice decoding helpers: delegate to `Decode` using a cursor.
 impl<'a> norito::core::DecodeFromSlice<'a> for ExecutionTime {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -93,7 +84,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ExecutionTime {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for TimeEventFilter {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = std::io::Cursor::new(bytes);
@@ -104,15 +94,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TimeEventFilter {
         ))
     }
 }
-
 // Internal wire helper with a stable Norito tuple layout
 mod wire {
     use norito::core as ncore;
-
     use super::*;
-
     pub(super) struct TimeIntervalWire(pub u64, pub u64);
-
     impl From<TimeInterval> for TimeIntervalWire {
         fn from(t: TimeInterval) -> Self {
             Self(t.since_ms, t.length_ms)
@@ -126,7 +112,6 @@ mod wire {
             }
         }
     }
-
     impl ncore::NoritoSerialize for TimeIntervalWire {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             <(u64, u64) as ncore::NoritoSerialize>::serialize(&(self.0, self.1), writer)
@@ -141,16 +126,13 @@ mod wire {
     }
 }
 // (Codec for TimeInterval is provided by derive; use the wire helper for stable transport in tests.)
-
 #[cfg(feature = "transparent_api")]
 impl EventFilter for TimeEventFilter {
     type Event = TimeEvent;
-
     /// Isn't useful for time-triggers
     fn matches(&self, event: &TimeEvent) -> bool {
         self.count_matches(event) > 0
     }
-
     fn count_matches(&self, event: &TimeEvent) -> u32 {
         match &self.0 {
             ExecutionTime::PreCommit => 1,
@@ -159,7 +141,6 @@ impl EventFilter for TimeEventFilter {
             }
         }
     }
-
     fn mintable(&self) -> bool {
         !matches!(
             self.0,
@@ -170,7 +151,6 @@ impl EventFilter for TimeEventFilter {
         )
     }
 }
-
 /// Count something with the `schedule` within the `interval`
 #[cfg(feature = "transparent_api")]
 fn count_matches_in_interval(schedule: &Schedule, interval: &TimeInterval) -> u32 {
@@ -190,14 +170,12 @@ fn count_matches_in_interval(schedule: &Schedule, interval: &TimeInterval) -> u3
                 // state bypassed registration validation.
                 return 0;
             }
-
             let schedule_start = u128::from(schedule.start_ms);
             let interval_start = u128::from(interval.since_ms);
             let interval_end = interval_start + u128::from(interval.length_ms);
             if interval_end <= schedule_start {
                 return 0;
             }
-
             // Find the first schedule point in the half-open interval without
             // iterating over every missed tick.
             let first_index = if interval_start <= schedule_start {
@@ -210,7 +188,6 @@ fn count_matches_in_interval(schedule: &Schedule, interval: &TimeInterval) -> u3
             if first_match >= interval_end {
                 return 0;
             }
-
             // Count the arithmetic progression in O(1). Saturation keeps this
             // total function safe even for intervals spanning more than
             // `u32::MAX` schedule points; execution applies a separate
@@ -220,7 +197,6 @@ fn count_matches_in_interval(schedule: &Schedule, interval: &TimeInterval) -> u3
         },
     )
 }
-
 impl Schedule {
     /// Create new [`Schedule`] starting at `start` and without period
     #[must_use]
@@ -234,7 +210,6 @@ impl Schedule {
             period_ms: None,
         }
     }
-
     /// Add `period` to `self`
     #[must_use]
     #[inline]
@@ -247,18 +222,15 @@ impl Schedule {
         );
         self
     }
-
     /// Instant of the first execution
     pub fn start(&self) -> Duration {
         Duration::from_millis(self.start_ms)
     }
-
     /// Period of repeated executions
     pub fn period(&self) -> Option<Duration> {
         self.period_ms.map(Duration::from_millis)
     }
 }
-
 #[cfg(feature = "json")]
 fn write_key(out: &mut String, key: &str) {
     out.push('"');
@@ -266,7 +238,6 @@ fn write_key(out: &mut String, key: &str) {
     out.push('"');
     out.push(':');
 }
-
 #[cfg(feature = "json")]
 fn write_key_to(
     out: &mut dyn norito::json::JsonWriteSink,
@@ -275,7 +246,6 @@ fn write_key_to(
     norito::json::write_json_string_to(key, out)?;
     out.push(':')
 }
-
 #[cfg(feature = "json")]
 fn expect_u64(field: &str, value: &norito::json::Value) -> Result<u64, norito::json::Error> {
     if let norito::json::Value::Number(num) = value {
@@ -291,7 +261,6 @@ fn expect_u64(field: &str, value: &norito::json::Value) -> Result<u64, norito::j
         })
     }
 }
-
 #[cfg(feature = "json")]
 fn parse_value_as<T>(value: &norito::json::Value) -> Result<T, norito::json::Error>
 where
@@ -302,7 +271,6 @@ where
     let mut parser = norito::json::Parser::new(&json);
     T::json_deserialize(&mut parser)
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for TimeEvent {
     fn write_json(&self, out: &mut String) {
@@ -311,7 +279,6 @@ impl norito::json::FastJsonWrite for TimeEvent {
         norito::json::JsonSerialize::json_serialize(&self.interval, out);
         out.push('}');
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -325,7 +292,6 @@ impl norito::json::FastJsonWrite for TimeEvent {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for TimeEvent {
     fn json_deserialize(
@@ -353,13 +319,11 @@ impl norito::json::JsonDeserialize for TimeEvent {
         Ok(Self { interval })
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for TimeEventFilter {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -367,7 +331,6 @@ impl norito::json::FastJsonWrite for TimeEventFilter {
         norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for TimeEventFilter {
     fn json_deserialize(
@@ -376,7 +339,6 @@ impl norito::json::JsonDeserialize for TimeEventFilter {
         ExecutionTime::json_deserialize(parser).map(TimeEventFilter)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ExecutionTime {
     fn write_json(&self, out: &mut String) {
@@ -392,7 +354,6 @@ impl norito::json::FastJsonWrite for ExecutionTime {
             }
         }
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -410,7 +371,6 @@ impl norito::json::FastJsonWrite for ExecutionTime {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ExecutionTime {
     fn json_deserialize(
@@ -457,7 +417,6 @@ impl norito::json::JsonDeserialize for ExecutionTime {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for Schedule {
     fn write_json(&self, out: &mut String) {
@@ -469,7 +428,6 @@ impl norito::json::FastJsonWrite for Schedule {
         norito::json::JsonSerialize::json_serialize(&self.period_ms, out);
         out.push('}');
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -486,7 +444,6 @@ impl norito::json::FastJsonWrite for Schedule {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for Schedule {
     fn json_deserialize(
@@ -530,7 +487,6 @@ impl norito::json::JsonDeserialize for Schedule {
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for TimeInterval {
     fn write_json(&self, out: &mut String) {
@@ -542,7 +498,6 @@ impl norito::json::FastJsonWrite for TimeInterval {
         norito::json::JsonSerialize::json_serialize(&self.length_ms, out);
         out.push('}');
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -559,7 +514,6 @@ impl norito::json::FastJsonWrite for TimeInterval {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for TimeInterval {
     fn json_deserialize(
@@ -600,7 +554,6 @@ impl norito::json::JsonDeserialize for TimeInterval {
         })
     }
 }
-
 impl TimeInterval {
     /// Create new [`Self`]
     pub fn new(since: Duration, length: Duration) -> Self {
@@ -615,7 +568,6 @@ impl TimeInterval {
                 .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX"),
         }
     }
-
     /// Create [`Self`] from since and to points
     pub fn new_since_to(since: Duration, to: Duration) -> Self {
         let length = to
@@ -623,36 +575,28 @@ impl TimeInterval {
             .expect("time interval end must be after start");
         Self::new(since, length)
     }
-
     /// Instant of the previous execution
     pub fn since(&self) -> Duration {
         Duration::from_millis(self.since_ms)
     }
-
     /// Time since the previous execution
     pub fn length(&self) -> Duration {
         Duration::from_millis(self.length_ms)
     }
 }
-
 impl From<TimeInterval> for Range<Duration> {
     #[inline]
     fn from(interval: TimeInterval) -> Self {
         interval.since()..interval.since() + interval.length()
     }
 }
-
 /// Exports common structs and enums from this module.
 pub mod prelude {
-    pub use super::{
-        ExecutionTime, Schedule as TimeSchedule, TimeEvent, TimeEventFilter, TimeInterval,
-    };
+    pub use super::{ExecutionTime, Schedule as TimeSchedule, TimeEvent, TimeEventFilter, TimeInterval};
 }
-
 #[cfg(test)]
 mod json_tests {
     use super::*;
-
     #[cfg(feature = "json")]
     #[test]
     fn json_roundtrip() {
@@ -662,10 +606,8 @@ mod json_tests {
         };
         let json = norito::json::to_json(&interval).expect("serialize");
         assert_eq!(json, r#"{"since_ms":1000,"length_ms":2000}"#);
-
         let deserialized: TimeInterval = norito::json::from_str(&json).expect("deserialize");
         assert_eq!(deserialized, interval);
-
         fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
             let expected = norito::json::to_json(value).expect("serialize ordinary JSON");
             assert_eq!(
@@ -678,7 +620,6 @@ mod json_tests {
                 Err(norito::json::BoundedJsonError::BodyTooLarge)
             );
         }
-
         let schedule = Schedule {
             start_ms: 500,
             period_ms: Some(250),
@@ -690,7 +631,6 @@ mod json_tests {
         assert_bounded(&TimeEventFilter(ExecutionTime::Schedule(schedule)));
         assert_bounded(&TimeEvent { interval });
     }
-
     #[test]
     fn codec_roundtrip() {
         // Use header-framed Norito path; headers now include hybrid packed-struct bits.
@@ -704,11 +644,9 @@ mod json_tests {
         let decoded: TimeInterval = decoded_w.into();
         assert_eq!(decoded, interval);
     }
-
     #[test]
     fn ti_roundtrip_diagnostics() {
         use norito::codec::{Decode, Encode};
-
         fn hex_prefix(bytes: &[u8], n: usize) -> String {
             let mut s = String::new();
             for b in bytes.iter().take(n) {
@@ -717,12 +655,10 @@ mod json_tests {
             }
             s
         }
-
         let interval = TimeInterval {
             since_ms: 10,
             length_ms: 20,
         };
-
         // Bare codec encode/decode
         let bare = interval.encode();
         let mut cur = bare.as_slice();
@@ -730,13 +666,11 @@ mod json_tests {
             since_ms: 0,
             length_ms: 0,
         });
-
         // Header-framed encode/decode
         let hdr = norito::to_bytes(&wire::TimeIntervalWire::from(interval)).expect("to_bytes");
         let archived = norito::from_bytes::<wire::TimeIntervalWire>(&hdr).expect("from_bytes");
         let decoded_hdr_w = norito::core::NoritoDeserialize::deserialize(archived);
         let decoded_hdr: TimeInterval = decoded_hdr_w.into();
-
         eprintln!("TI bare len={} hdr len={}", bare.len(), hdr.len());
         eprintln!("bare[0..32] = {}", hex_prefix(&bare, 32));
         eprintln!("hdr[0..32]  = {}", hex_prefix(&hdr, 32));
@@ -749,74 +683,61 @@ mod json_tests {
         );
     }
 }
-
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod tests {
     use super::*;
-
     /// Sample timestamp
     const TIMESTAMP: u64 = 1_647_443_386;
-
     /// Tests for `count_matches_in_interval()`
     mod count_matches_in_interval {
         use super::*;
-
         #[test]
         fn test_no_period_before_left_border() {
             // ----|-----[-----)-------
             //     p    i1     i2
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP - 5));
             let since = Duration::from_secs(TIMESTAMP);
             let length = Duration::from_secs(10);
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 0);
         }
-
         #[test]
         fn test_no_period_on_left_border() {
             //     |
             // ----[---------)------
             //   p, i1      i2
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP));
             let since = Duration::from_secs(TIMESTAMP);
             let length = Duration::from_secs(10);
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 1);
         }
-
         #[test]
         fn test_no_period_inside() {
             // ----[------|-----)----
             //     i1     p    i2
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP + 5));
             let since = Duration::from_secs(TIMESTAMP);
             let length = Duration::from_secs(10);
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 1);
         }
-
         #[test]
         fn test_no_period_on_right_border() {
             //               |
             // ----[---------)------
             //    i1      i2, p
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP + 10));
             let since = Duration::from_secs(TIMESTAMP);
             let length = Duration::from_secs(10);
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 0);
         }
-
         #[test]
         fn test_jump_over_inside() {
             // ----[------|-----)----*----
             //     i1     p    i2
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP + 5))
                 .with_period(Duration::from_secs(30));
             let since = Duration::from_secs(TIMESTAMP);
@@ -824,12 +745,10 @@ mod tests {
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 1);
         }
-
         #[test]
         fn test_jump_over_outside() {
             // ----|------[-----)----*----
             //     p     i1    i2
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP))
                 .with_period(Duration::from_secs(10));
             let since = Duration::from_secs(TIMESTAMP + 35);
@@ -837,12 +756,10 @@ mod tests {
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 0);
         }
-
         #[test]
         fn test_interval_on_the_left() {
             // ----[----)----|-----*-----*----
             //     i1   i2   p
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP))
                 .with_period(Duration::from_secs(6));
             let since = Duration::from_secs(TIMESTAMP - 10);
@@ -850,12 +767,10 @@ mod tests {
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 0);
         }
-
         #[test]
         fn test_schedule_starts_at_the_middle() {
             // ----[------|----*----*----*--)-*----
             //     i1     p                i2
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP))
                 .with_period(Duration::from_secs(6));
             let since = Duration::from_secs(TIMESTAMP - 10);
@@ -863,12 +778,10 @@ mod tests {
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 4);
         }
-
         #[test]
         fn test_interval_on_the_right() {
             // ----|----*--[----*----*----*----*----)----*----
             //     p      i1                       i2
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP))
                 .with_period(Duration::from_millis(600));
             let since = Duration::from_secs(TIMESTAMP + 3) + Duration::from_millis(500);
@@ -876,13 +789,11 @@ mod tests {
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 4);
         }
-
         #[test]
         fn test_only_left_border() {
             //             *
             // ----|-------[----)--*-------*--
             //     p      i1   i2
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP - 10))
                 .with_period(Duration::from_secs(10));
             let since = Duration::from_secs(TIMESTAMP);
@@ -890,13 +801,11 @@ mod tests {
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 1);
         }
-
         #[test]
         fn test_only_right_border_inside() {
             //               *
             // ----[----|----)----*----*----
             //     i1   p    i2
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP))
                 .with_period(Duration::from_secs(5));
             let since = Duration::from_secs(TIMESTAMP - 10);
@@ -904,13 +813,11 @@ mod tests {
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 1);
         }
-
         #[test]
         fn test_only_right_border_outside() {
             //              *
             // ----|---[----)--------*----
             //     p   i1   i2
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP - 10))
                 .with_period(Duration::from_secs(15));
             let since = Duration::from_secs(TIMESTAMP);
@@ -918,13 +825,11 @@ mod tests {
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 0);
         }
-
         #[test]
         fn test_matches_right_border_and_ignores_left() {
             //     |             *
             // ----[-*-*-*-*-*-*-)-*-*-*
             //   p, i1           i2
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP))
                 .with_period(Duration::from_secs(1));
             let since = Duration::from_secs(TIMESTAMP);
@@ -932,7 +837,6 @@ mod tests {
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 7);
         }
-
         #[test]
         fn excessive_periodic_match_count_saturates_without_iteration() {
             let schedule = Schedule {
@@ -943,84 +847,64 @@ mod tests {
                 since_ms: 0,
                 length_ms: u64::MAX,
             };
-
             assert_eq!(count_matches_in_interval(&schedule, &interval), u32::MAX);
         }
     }
-
     // Tests for [`TimeEventFilter`]
     mod time_event_filter {
         use super::*;
-
         #[test]
         fn test_schedule_start_before_interval() {
             //
             // ----|---[--*----*--)--*------
             //     s   a          b
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP))
                 .with_period(Duration::from_secs(10));
             let filter = TimeEventFilter(ExecutionTime::Schedule(schedule));
-
             let a = Duration::from_secs(TIMESTAMP + 5);
             let b = Duration::from_secs(TIMESTAMP + 25);
             let interval = TimeInterval::new_since_to(a, b);
-
             let event = TimeEvent { interval };
-
             assert_eq!(filter.count_matches(&event), 2);
         }
-
         #[test]
         fn test_schedule_start_inside_interval() {
             //
             // -------[--|-----*--)--*------
             //        a  s        b
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP + 5))
                 .with_period(Duration::from_secs(10));
             let filter = TimeEventFilter(ExecutionTime::Schedule(schedule));
-
             let a = Duration::from_secs(TIMESTAMP);
             let b = Duration::from_secs(TIMESTAMP + 20);
             let interval = TimeInterval::new_since_to(a, b);
-
             let event = TimeEvent { interval };
-
             assert_eq!(filter.count_matches(&event), 2);
         }
-
         #[test]
         fn test_schedule_start_after_interval() {
             //
             // -------[--------)----|--
             //        a        b    s
-
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP + 35))
                 .with_period(Duration::from_secs(10));
             let filter = TimeEventFilter(ExecutionTime::Schedule(schedule));
-
             let a = Duration::from_secs(TIMESTAMP);
             let b = Duration::from_secs(TIMESTAMP + 20);
             let interval = TimeInterval::new_since_to(a, b);
-
             let event = TimeEvent { interval };
-
             assert_eq!(filter.count_matches(&event), 0);
         }
-
         #[test]
         fn zero_period_schedule_never_matches() {
             let schedule = Schedule::starting_at(Duration::from_secs(TIMESTAMP))
                 .with_period(Duration::from_secs(0));
             let filter = TimeEventFilter(ExecutionTime::Schedule(schedule));
-
             let interval = TimeInterval::new_since_to(
                 Duration::from_secs(TIMESTAMP),
                 Duration::from_secs(TIMESTAMP + 10),
             );
             let event = TimeEvent { interval };
-
             assert_eq!(filter.count_matches(&event), 0);
         }
     }

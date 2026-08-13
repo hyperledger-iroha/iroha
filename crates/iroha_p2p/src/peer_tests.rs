@@ -7,27 +7,21 @@ mod tests {
         task::{Context, Poll},
         time::Duration,
     };
-
     use iroha_crypto::{Algorithm, KeyPair, Signature, encryption::ChaCha20Poly1305};
     use iroha_primitives::addr::SocketAddr;
     use norito::codec::{DecodeAll, Encode};
     use tokio::io::AsyncWrite;
-
     use super::{Connection, SoranetHandshakeConfig, cryptographer::Cryptographer, state::*};
     use crate::{ConfidentialHandshakeCaps, ConsensusConfigCaps, ConsensusMode, RelayRole};
-
     const TEST_SORANET_TRANSPORT_BINDING: [u8; iroha_crypto::Hash::LENGTH] =
         [0xD7; iroha_crypto::Hash::LENGTH];
-
     fn delegation_test_key(seed: u8, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], algorithm)
             .expect("deterministic delegation test key must be valid")
     }
-
     fn delegation_test_challenge(byte: u8) -> super::SoranetTransportDelegationChallenge {
         [byte; super::SORANET_TRANSPORT_DELEGATION_CHALLENGE_BYTES]
     }
-
     fn signed_delegation(
         node: &KeyPair,
         transport: &KeyPair,
@@ -37,16 +31,13 @@ mod tests {
         super::sign_soranet_transport_delegation_v3(node, transport, network_id, challenge)
             .expect("valid test roles must sign a canonical delegation")
     }
-
     fn decode_signed_delegation(frame: &[u8]) -> super::SignedSoranetTransportDelegationV3 {
         norito::decode_canonical(frame).expect("signed delegation must be canonical Norito")
     }
-
     fn encode_signed_delegation(signed: &super::SignedSoranetTransportDelegationV3) -> Vec<u8> {
         norito::encode_canonical(signed)
             .expect("delegation test fixture must encode as canonical Norito")
     }
-
     fn sign_delegation_statement(
         signer: &KeyPair,
         statement: &super::SoranetTransportDelegationStatementV3,
@@ -59,14 +50,12 @@ mod tests {
         .payload()
         .to_vec()
     }
-
     fn unwrap_delegation_error(error: crate::Error) -> crate::SoranetTransportDelegationError {
         match error {
             crate::Error::HandshakeSoranetDelegation(error) => error,
             other => panic!("expected SoraNet transport delegation error, got {other:?}"),
         }
     }
-
     async fn read_delegation_wire(
         wire: &[u8],
         expected_network_id: &iroha_data_model::NetworkId,
@@ -74,7 +63,6 @@ mod tests {
         expected_challenge: &super::SoranetTransportDelegationChallenge,
     ) -> Result<super::VerifiedSoranetTransportDelegationV3, crate::Error> {
         use tokio::io::AsyncWriteExt;
-
         let (mut sender, mut receiver) = tokio::io::duplex(wire.len().saturating_add(1).max(1));
         sender
             .write_all(wire)
@@ -92,7 +80,6 @@ mod tests {
         )
         .await
     }
-
     #[test]
     fn soranet_transport_delegation_v3_canonical_roundtrip_is_deterministic() {
         assert_eq!(super::PRE_VERSION, 3);
@@ -103,7 +90,6 @@ mod tests {
         let transport = delegation_test_key(0x22, Algorithm::Ed25519);
         let transport_public_key = transport.public_key().clone();
         let signed = signed_delegation(&node, &transport, &network_id, challenge);
-
         assert!(!signed.canonical_signed_frame.is_empty());
         assert!(
             signed.canonical_signed_frame.len()
@@ -119,7 +105,6 @@ mod tests {
         assert_eq!(decoded.statement.network_id, network_id);
         assert_eq!(decoded.statement.node_id, node_id);
         assert_eq!(decoded.statement.transport_public_key, transport_public_key);
-
         let verified = super::verify_soranet_transport_delegation_v3(
             &signed.canonical_signed_frame,
             &network_id,
@@ -133,7 +118,6 @@ mod tests {
             signed.binding,
             super::soranet_transport_delegation_binding_v3(&signed.canonical_signed_frame)
         );
-
         let repeated = signed_delegation(
             &delegation_test_key(0x11, Algorithm::BlsNormal),
             &delegation_test_key(0x22, Algorithm::Ed25519),
@@ -146,7 +130,6 @@ mod tests {
         );
         assert_eq!(signed.binding, repeated.binding);
     }
-
     #[test]
     fn soranet_transport_delegation_v3_rejects_cross_role_algorithms() {
         let network_id = test_network_id("delegation-role-chain");
@@ -164,7 +147,6 @@ mod tests {
                 found: Algorithm::Ed25519
             }
         ));
-
         let error = super::sign_soranet_transport_delegation_v3(
             &delegation_test_key(0x33, Algorithm::BlsNormal),
             &delegation_test_key(0x34, Algorithm::BlsNormal),
@@ -179,7 +161,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn soranet_transport_delegation_v3_replay_fails_under_fresh_challenge() {
         let network_id = test_network_id("delegation-replay-chain");
@@ -190,7 +171,6 @@ mod tests {
         let fresh_challenge = delegation_test_challenge(0x44);
         let captured = signed_delegation(&node, &transport, &network_id, old_challenge);
         let fresh = signed_delegation(&node, &transport, &network_id, fresh_challenge);
-
         assert_ne!(
             captured.canonical_signed_frame,
             fresh.canonical_signed_frame
@@ -218,7 +198,6 @@ mod tests {
         )
         .expect("freshly challenged delegation must verify");
     }
-
     #[test]
     fn soranet_transport_delegation_v3_rejects_same_name_different_genesis() {
         let display_name = iroha_data_model::ChainId::from("delegation-shared-name");
@@ -236,7 +215,6 @@ mod tests {
             &signed_network,
             challenge,
         );
-
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &frame.canonical_signed_frame,
@@ -258,7 +236,6 @@ mod tests {
             Err(crate::SoranetTransportDelegationError::PeerMismatch { expected, found })
                 if expected == other_node_id && found == node_id
         ));
-
         let mut wrong_version = decode_signed_delegation(&frame.canonical_signed_frame);
         wrong_version.statement.p2p_preface_version = 2;
         assert!(matches!(
@@ -273,7 +250,6 @@ mod tests {
                 found: 2
             })
         ));
-
         let mut wrong_signer = decode_signed_delegation(&frame.canonical_signed_frame);
         wrong_signer.node_signature =
             sign_delegation_statement(&other_node, &wrong_signer.statement);
@@ -287,7 +263,6 @@ mod tests {
             Err(crate::SoranetTransportDelegationError::InvalidNodeSignature)
         ));
     }
-
     #[test]
     fn soranet_transport_delegation_v3_verifier_rejects_wrong_key_roles() {
         let network_id = test_network_id("delegation-algorithm-chain");
@@ -320,7 +295,6 @@ mod tests {
                 }
             )
         ));
-
         let bls_node = delegation_test_key(0x64, Algorithm::BlsNormal);
         let bls_node_id = iroha_data_model::peer::PeerId::from(bls_node.public_key().clone());
         let non_ed_statement = super::SoranetTransportDelegationStatementV3 {
@@ -350,7 +324,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn soranet_transport_delegation_v3_rejects_signature_attacks_and_bit_mutation() {
         let network_id = test_network_id("delegation-signature-chain");
@@ -365,7 +338,6 @@ mod tests {
         );
         let signed = decode_signed_delegation(&frame.canonical_signed_frame);
         let expected_len = Algorithm::BlsNormal.signature_payload_len();
-
         for found in [0, 1, expected_len - 1, expected_len + 1] {
             let mut malformed = signed.clone();
             malformed.node_signature = vec![0xA5; found];
@@ -382,7 +354,6 @@ mod tests {
                 }) if expected == expected_len && actual == found
             ));
         }
-
         let mut all_zero = signed.clone();
         all_zero.node_signature = vec![0; expected_len];
         assert!(matches!(
@@ -394,7 +365,6 @@ mod tests {
             ),
             Err(crate::SoranetTransportDelegationError::MalformedNodeSignature)
         ));
-
         let mut bit_flipped = signed;
         bit_flipped.node_signature[0] ^= 1;
         assert!(matches!(
@@ -407,7 +377,6 @@ mod tests {
             Err(crate::SoranetTransportDelegationError::InvalidNodeSignature)
         ));
     }
-
     #[test]
     fn soranet_transport_delegation_v3_rejects_empty_oversize_truncated_and_trailing() {
         let network_id = test_network_id("delegation-frame-chain");
@@ -420,7 +389,6 @@ mod tests {
             &network_id,
             challenge,
         );
-
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(&[], &network_id, &node_id, &challenge,),
             Err(crate::SoranetTransportDelegationError::EmptyFrame)
@@ -437,7 +405,6 @@ mod tests {
                 if found == super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES + 1
                     && max == super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES
         ));
-
         let mut truncated = frame.canonical_signed_frame.clone();
         truncated.pop();
         assert!(matches!(
@@ -470,7 +437,6 @@ mod tests {
             Err(crate::SoranetTransportDelegationError::NonCanonicalEncoding(_))
         ));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn soranet_transport_delegation_v3_wire_reader_enforces_boundaries() {
         let network_id = test_network_id("delegation-wire-chain");
@@ -483,7 +449,6 @@ mod tests {
             &network_id,
             challenge,
         );
-
         let error = read_delegation_wire(&[0, 0], &network_id, &node_id, &challenge)
             .await
             .expect_err("zero-length frame must fail");
@@ -491,7 +456,6 @@ mod tests {
             unwrap_delegation_error(error),
             crate::SoranetTransportDelegationError::EmptyFrame
         ));
-
         let oversized_len = u16::try_from(super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES + 1)
             .expect("wire bound fits u16");
         let error = read_delegation_wire(
@@ -508,7 +472,6 @@ mod tests {
                 if found == usize::from(oversized_len)
                     && max == super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES
         ));
-
         let declared_len =
             u16::try_from(frame.canonical_signed_frame.len()).expect("fixture fits u16");
         let mut truncated_wire = declared_len.to_be_bytes().to_vec();
@@ -521,7 +484,6 @@ mod tests {
                 .expect_err("EOF inside frame must fail"),
             crate::Error::Io(error) if error.kind() == std::io::ErrorKind::UnexpectedEof
         ));
-
         let trailing_len =
             u16::try_from(frame.canonical_signed_frame.len() + 1).expect("fixture fits u16");
         let mut trailing_wire = trailing_len.to_be_bytes().to_vec();
@@ -535,7 +497,6 @@ mod tests {
             crate::SoranetTransportDelegationError::NonCanonicalEncoding(_)
         ));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn soranet_transport_delegation_v3_prefaces_and_full_duplex_exchange_are_exact() {
         let network_id = test_network_id("delegation-duplex-chain");
@@ -548,7 +509,6 @@ mod tests {
         let server_node = node.clone();
         let server_transport = transport.clone();
         let (mut client, mut server) = tokio::io::duplex(2048);
-
         let server_task = tokio::spawn(async move {
             let received = super::read_and_verify_client_pre_handshake_header(&mut server)
                 .await
@@ -566,7 +526,6 @@ mod tests {
             .expect("canonical frame write");
             frame.binding
         });
-
         super::write_client_pre_handshake_header(&mut client, &challenge)
             .await
             .expect("valid client preface write");
@@ -586,7 +545,6 @@ mod tests {
             verified.binding,
             server_task.await.expect("server exchange must complete")
         );
-
         let mut client_preface = TrackingWrite::new();
         super::write_client_pre_handshake_header(&mut client_preface, &challenge)
             .await
@@ -596,7 +554,6 @@ mod tests {
         expected_client.extend_from_slice(&challenge);
         assert_eq!(client_preface.buffer, expected_client);
         assert_eq!(client_preface.flushes, 1);
-
         let mut server_preface = TrackingWrite::new();
         super::write_server_pre_handshake_header(&mut server_preface)
             .await
@@ -606,7 +563,6 @@ mod tests {
         assert_eq!(server_preface.buffer, expected_server);
         assert_eq!(server_preface.flushes, 1);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn v3_delegation_and_mandatory_soranet_kem_complete_full_duplex() {
         let network_id = test_network_id("delegation-full-handshake-chain");
@@ -618,7 +574,6 @@ mod tests {
         let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
         let (client_read, client_write) = tokio::io::split(client_stream);
         let (server_read, server_write) = tokio::io::split(server_stream);
-
         let connected_to = ConnectedTo::for_transport_delegation_test(
             "127.0.0.1:1337".parse().expect("client address"),
             server_id,
@@ -641,7 +596,6 @@ mod tests {
             trust_gossip: true,
             relay_role: RelayRole::Disabled,
         };
-
         let (outbound, inbound) = tokio::join!(
             ConnectedTo::send_client_hello::<ChaCha20Poly1305>(connected_to),
             ConnectedFrom::read_client_hello::<ChaCha20Poly1305>(connected_from),
@@ -657,11 +611,9 @@ mod tests {
             "both sides must derive the same mandatory SoraNet ML-KEM session"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn invalid_v3_delegation_stops_connected_to_before_puzzle_or_kem_bytes() {
         use tokio::io::AsyncReadExt;
-
         let network_id = test_network_id("delegation-order-chain");
         let remote_node = delegation_test_key(0xA4, Algorithm::BlsNormal);
         let remote_node_id = iroha_data_model::peer::PeerId::from(remote_node.public_key().clone());
@@ -670,7 +622,6 @@ mod tests {
         let server_chain = network_id.clone();
         let (client_stream, mut server_stream) = tokio::io::duplex(2048);
         let (client_read, client_write) = tokio::io::split(client_stream);
-
         let server_task = tokio::spawn(async move {
             let received = super::read_and_verify_client_pre_handshake_header(&mut server_stream)
                 .await
@@ -692,12 +643,10 @@ mod tests {
             )
             .await
             .expect("captured-frame simulation write");
-
             let post_delegation_read =
                 tokio::time::timeout(Duration::from_secs(1), server_stream.read_u8()).await;
             (received, replay_challenge, post_delegation_read)
         });
-
         let connected = ConnectedTo::for_transport_delegation_test(
             "127.0.0.1:1337".parse().expect("local test address"),
             remote_node_id,
@@ -728,11 +677,9 @@ mod tests {
             "the client must close without writing a puzzle ticket, client hello, or KEM bytes"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn soranet_transport_delegation_v3_bad_header_fails_before_challenge_read() {
         use tokio::io::AsyncWriteExt;
-
         let (mut sender, mut receiver) = tokio::io::duplex(5);
         sender.write_all(super::PRE_MAGIC).await.expect("magic");
         sender.write_all(&[2]).await.expect("legacy version");
@@ -741,7 +688,6 @@ mod tests {
             .await
             .expect_err("v2 must fail without fallback");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-
         let truncated_challenge = delegation_test_challenge(0xC1);
         let (mut sender, mut receiver) = tokio::io::duplex(64);
         sender.write_all(super::PRE_MAGIC).await.expect("magic");
@@ -759,7 +705,6 @@ mod tests {
             .expect_err("a truncated v3 challenge must fail closed");
         assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn soranet_transport_delegation_v3_writer_rejects_empty_and_oversize() {
         let mut rejecting_writer = TrackingWrite::new();
@@ -771,7 +716,6 @@ mod tests {
             crate::SoranetTransportDelegationError::EmptyFrame
         ));
         assert!(rejecting_writer.buffer.is_empty());
-
         let oversized_len = super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES + 1;
         let oversized = vec![0xA5; oversized_len];
         let error = super::write_soranet_transport_delegation_v3(&mut rejecting_writer, &oversized)
@@ -786,7 +730,6 @@ mod tests {
         assert!(rejecting_writer.buffer.is_empty());
         assert_eq!(rejecting_writer.flushes, 0);
     }
-
     #[test]
     fn final_handshake_payload_binds_every_v3_delegation_frame_bit() {
         let network_id = test_network_id("delegation-binding-chain");
@@ -811,7 +754,6 @@ mod tests {
             &frame.binding,
             None,
         );
-
         let mut mutated_signed = decode_signed_delegation(&frame.canonical_signed_frame);
         mutated_signed.node_signature[0] ^= 1;
         let mutated_frame = encode_signed_delegation(&mutated_signed);
@@ -842,7 +784,6 @@ mod tests {
             ivm_gas_schedule_hash: [0xE7; 32],
         }
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn soranet_handshake_accepts_bls_peer_identities() {
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
@@ -856,11 +797,9 @@ mod tests {
         let inbound_addr: SocketAddr = "127.0.0.1:10012".parse().unwrap();
         let expected_inbound_id =
             iroha_data_model::prelude::PeerId::from(inbound_keys.public_key().clone());
-
         let (outbound_stream, inbound_stream) = tokio::io::duplex(64 * 1024);
         let (outbound_read, outbound_write) = tokio::io::split(outbound_stream);
         let (inbound_read, inbound_write) = tokio::io::split(inbound_stream);
-
         let outbound = ConnectedTo::for_transport_delegation_test(
             outbound_addr,
             expected_inbound_id,
@@ -883,7 +822,6 @@ mod tests {
             trust_gossip: true,
             relay_role: RelayRole::Disabled,
         };
-
         let (outbound_result, inbound_result) = tokio::join!(
             ConnectedTo::send_client_hello::<ChaCha20Poly1305>(outbound),
             ConnectedFrom::read_client_hello::<ChaCha20Poly1305>(inbound),
@@ -891,47 +829,39 @@ mod tests {
         outbound_result.expect("outbound BLS SoraNet handshake");
         inbound_result.expect("inbound BLS SoraNet handshake");
     }
-
     #[test]
     fn consensus_config_mismatch_rejects_execution_policy_drift() {
         let expected = sample_consensus_config_caps();
         let mut got = expected;
         got.execution_policy_hash[0] ^= 1;
-
         let reason = consensus_config_mismatch(&expected, &got)
             .expect("one-bit execution-policy drift must fail the handshake");
         assert!(reason.starts_with("execution_policy_hash mismatch"));
     }
-
     #[test]
     fn consensus_config_mismatch_rejects_nexus_policy_digest_drift() {
         let expected = sample_consensus_config_caps();
         let mut got = expected;
         got.nexus_policy_digest[0] ^= 1;
-
         let reason = consensus_config_mismatch(&expected, &got)
             .expect("one-bit Nexus policy drift must fail the handshake");
         assert!(reason.starts_with("nexus_policy_digest mismatch"));
     }
-
     #[test]
     fn consensus_config_mismatch_rejects_ivm_gas_schedule_drift() {
         let expected = sample_consensus_config_caps();
         let mut got = expected;
         got.ivm_gas_schedule_hash[0] ^= 1;
-
         let reason = consensus_config_mismatch(&expected, &got)
             .expect("one-bit IVM gas-schedule drift must fail the handshake");
         assert!(reason.starts_with("ivm_gas_schedule_hash mismatch"));
         assert!(reason.contains(&hex_bytes(&expected.ivm_gas_schedule_hash)));
         assert!(reason.contains(&hex_bytes(&got.ivm_gas_schedule_hash)));
     }
-
     struct TrackingWrite {
         buffer: Vec<u8>,
         flushes: usize,
     }
-
     impl TrackingWrite {
         fn new() -> Self {
             Self {
@@ -940,7 +870,6 @@ mod tests {
             }
         }
     }
-
     impl AsyncWrite for TrackingWrite {
         fn poll_write(
             mut self: Pin<&mut Self>,
@@ -950,7 +879,6 @@ mod tests {
             self.buffer.extend_from_slice(buf);
             Poll::Ready(Ok(buf.len()))
         }
-
         fn poll_flush(
             mut self: Pin<&mut Self>,
             _cx: &mut Context<'_>,
@@ -958,12 +886,10 @@ mod tests {
             self.flushes = self.flushes.saturating_add(1);
             Poll::Ready(Ok(()))
         }
-
         fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
             Poll::Ready(Ok(()))
         }
     }
-
     fn unsigned_handshake_hello(key_pair: &KeyPair, addr: SocketAddr) -> HandshakeHelloV1 {
         let (algorithm, public_key) = key_pair
             .public_key()
@@ -998,17 +924,14 @@ mod tests {
             },
         }
     }
-
     async fn read_crafted_handshake_hello(
         hello: HandshakeHelloV1,
         cryptographer: Cryptographer<ChaCha20Poly1305>,
     ) -> Result<Ready<ChaCha20Poly1305>, crate::Error> {
         use tokio::io::AsyncWriteExt;
-
         let encoded =
             encode_handshake_message(&cryptographer, &hello).expect("encode crafted hello");
         let hello_len = u16::try_from(encoded.len()).expect("crafted hello fits handshake frame");
-
         let (stream_a, stream_b) = tokio::io::duplex(encoded.len() + 2);
         let (_sender_read, mut sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
@@ -1020,7 +943,6 @@ mod tests {
             .write_all(&encoded)
             .await
             .expect("write hello bytes");
-
         let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split(15, receiver_read, receiver_write),
             expected_peer_id: None,
@@ -1036,7 +958,6 @@ mod tests {
         };
         GetKey::read_their_public_key(get_key).await
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_writes_flush_frames() {
         let mut writer = TrackingWrite::new();
@@ -1045,13 +966,11 @@ mod tests {
             .await
             .expect("preface write");
         assert_eq!(writer.flushes, 1, "preface should flush once");
-
         let payload = b"hello";
         super::write_handshake_frame(&mut writer, payload)
             .await
             .expect("handshake frame write");
         assert_eq!(writer.flushes, 2, "handshake frame should flush once");
-
         let mut expected = Vec::from(&super::PRE_MAGIC[..]);
         expected.push(super::PRE_VERSION);
         expected.extend_from_slice(&challenge);
@@ -1060,19 +979,16 @@ mod tests {
             expected.as_slice(),
             "preface bytes should be written first"
         );
-
         let frame = &writer.buffer[expected.len()..];
         assert_eq!(frame.len(), 2 + payload.len());
         let len = u16::from_be_bytes([frame[0], frame[1]]);
         assert_eq!(len as usize, payload.len());
         assert_eq!(&frame[2..], payload);
     }
-
     #[test]
     fn handshake_signature_payload_is_consistent_between_sides() {
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0xA5; 32])
             .expect("valid key length");
-
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let hello = unsigned_handshake_hello(&KeyPair::random(), addr);
         let sender_payload = handshake_signature_payload::<ChaCha20Poly1305>(
@@ -1081,24 +997,20 @@ mod tests {
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
-
         let receiver_payload = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
             &hello,
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
-
         assert_eq!(sender_payload, receiver_payload);
     }
-
     #[test]
     fn handshake_signature_payload_rejects_same_name_different_genesis() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let mut hello_a = unsigned_handshake_hello(&KeyPair::random(), addr);
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x5A; 32])
             .expect("valid key length");
-
         let display_name = iroha_data_model::ChainId::from("shared-display-name");
         let network_a = test_network_id("handshake-genesis-a");
         let network_b = test_network_id("handshake-genesis-b");
@@ -1117,11 +1029,9 @@ mod tests {
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
-
         assert_ne!(payload_a, payload_b);
         assert_eq!(display_name.as_str(), "shared-display-name");
     }
-
     #[test]
     fn handshake_signature_payload_binds_the_full_session_hash() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
@@ -1134,7 +1044,6 @@ mod tests {
             cryptographer.disambiguator, same_compact_prefix.disambiguator,
             "fixture must preserve the 64-bit operational tie-breaker"
         );
-
         let expected = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
             &hello,
@@ -1147,13 +1056,11 @@ mod tests {
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
-
         assert_ne!(
             expected, changed,
             "identity authentication must bind all 256 session-binding bits"
         );
     }
-
     #[test]
     fn handshake_signature_payload_binds_all_advertised_capabilities() {
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x6D; 32])
@@ -1169,7 +1076,6 @@ mod tests {
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
-
         let mut changed = hello.clone();
         changed.relay = RelayRole::Hub;
         assert_ne!(
@@ -1182,7 +1088,6 @@ mod tests {
             ),
             "relay capability must be authenticated"
         );
-
         let mut changed = hello.clone();
         changed.consensus.mode = Some(ConsensusMode::Npos);
         assert_ne!(
@@ -1195,7 +1100,6 @@ mod tests {
             ),
             "consensus capabilities must be authenticated"
         );
-
         let mut changed = hello.clone();
         changed.confidential.enabled = Some(false);
         assert_ne!(
@@ -1208,7 +1112,6 @@ mod tests {
             ),
             "confidential capabilities must be authenticated"
         );
-
         let mut changed = hello.clone();
         changed.crypto.sm_enabled = Some(true);
         assert_ne!(
@@ -1221,7 +1124,6 @@ mod tests {
             ),
             "cryptographic capabilities must be authenticated"
         );
-
         let mut changed = hello;
         changed.trust.scion_supported = true;
         assert_ne!(
@@ -1235,7 +1137,6 @@ mod tests {
             "trust and transport capabilities must be authenticated"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_capabilities_changed_after_signing() {
         let key_pair = KeyPair::random();
@@ -1254,7 +1155,6 @@ mod tests {
             .expect("sign canonical handshake claims")
             .payload()
             .to_vec();
-
         hello.trust.scion_supported = true;
         let error = match read_crafted_handshake_hello(hello, cryptographer).await {
             Ok(_) => panic!("capabilities changed after signing must fail authentication"),
@@ -1265,7 +1165,6 @@ mod tests {
             "expected signature verification failure, got {error:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_same_name_peer_from_a_different_genesis() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
@@ -1276,7 +1175,6 @@ mod tests {
         let (stream_a, stream_b) = tokio::io::duplex(512);
         let (sender_read, sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
-
         let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr,
             expected_peer_id: None,
@@ -1305,7 +1203,6 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         };
-
         let sender = tokio::spawn(async move {
             let _ = SendKey::send_our_public_key(send_key).await?;
             Result::<(), crate::Error>::Ok(())
@@ -1318,7 +1215,6 @@ mod tests {
             .await
             .expect("sender task panicked")
             .expect("sending handshake should succeed");
-
         assert!(matches!(
             error,
             crate::Error::HandshakeNetworkMismatch { expected, found }
@@ -1327,7 +1223,6 @@ mod tests {
         ));
         assert_eq!(display_name.as_str(), "shared-display-name");
     }
-
     #[test]
     fn confidential_digest_roundtrip_preserves_zk_policy_hash() {
         let digest = crate::ConfidentialFeatureDigest::new(
@@ -1342,13 +1237,11 @@ mod tests {
         let mut slice = encoded.as_slice();
         let decoded = HandshakeConfidentialDigest::decode_all(&mut slice)
             .expect("decode confidential handshake digest");
-
         assert!(slice.is_empty(), "digest decode should consume all bytes");
         let roundtrip = crate::ConfidentialFeatureDigest::from(decoded);
         assert_eq!(roundtrip, digest);
         assert_eq!(roundtrip.zk_policy_hash, Some([0xA5; 32]));
     }
-
     fn confidential_feature_digest(
         policy_hash_byte: Option<u8>,
     ) -> crate::ConfidentialFeatureDigest {
@@ -1357,14 +1250,12 @@ mod tests {
             policy_hash_byte,
         )
     }
-
     fn confidential_feature_digest_with_rules(
         rules_version: Option<u32>,
         policy_hash_byte: Option<u8>,
     ) -> crate::ConfidentialFeatureDigest {
         confidential_feature_digest_full(None, None, None, rules_version, policy_hash_byte)
     }
-
     fn confidential_feature_digest_full(
         vk_set_hash_byte: Option<u8>,
         poseidon_params_id: Option<u32>,
@@ -1380,7 +1271,6 @@ mod tests {
             policy_hash_byte.map(|byte| [byte; 32]),
         )
     }
-
     fn confidential_zk_caps(
         features: Option<crate::ConfidentialFeatureDigest>,
     ) -> ConfidentialHandshakeCaps {
@@ -1391,7 +1281,6 @@ mod tests {
             features,
         }
     }
-
     fn confidential_zk_caps_with_flags(
         assume_valid: bool,
         verifier_backend: &str,
@@ -1399,7 +1288,6 @@ mod tests {
     ) -> ConfidentialHandshakeCaps {
         confidential_zk_caps_full(true, assume_valid, verifier_backend, features)
     }
-
     fn confidential_zk_caps_full(
         enabled: bool,
         assume_valid: bool,
@@ -1413,14 +1301,12 @@ mod tests {
             features,
         }
     }
-
     async fn confidential_handshake_error(
         sender_caps: ConfidentialHandshakeCaps,
         receiver_caps: ConfidentialHandshakeCaps,
     ) -> crate::Error {
         confidential_handshake_error_with_caps(Some(sender_caps), Some(receiver_caps)).await
     }
-
     async fn confidential_handshake_error_with_caps(
         sender_caps: Option<ConfidentialHandshakeCaps>,
         receiver_caps: Option<ConfidentialHandshakeCaps>,
@@ -1429,11 +1315,9 @@ mod tests {
         let key_pair = KeyPair::random();
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[12u8; 32]).unwrap();
-
         let (stream_a, stream_b) = tokio::io::duplex(1024);
         let (sender_read, sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
-
         let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr.clone(),
             expected_peer_id: None,
@@ -1449,7 +1333,6 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         });
-
         let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split(22, receiver_read, receiver_write),
             expected_peer_id: None,
@@ -1463,12 +1346,10 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         };
-
         let sender = tokio::spawn(async move {
             let _ = SendKey::send_our_public_key(send_key).await?;
             Result::<(), crate::Error>::Ok(())
         });
-
         let err = match GetKey::read_their_public_key(get_key).await {
             Ok(_) => panic!("confidential capability mismatch must reject handshake"),
             Err(err) => err,
@@ -1477,10 +1358,8 @@ mod tests {
             .await
             .expect("sender task panicked")
             .expect("sending handshake should succeed");
-
         err
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_confidential_zk_policy_hash_mismatch() {
         let err = confidential_handshake_error(
@@ -1488,13 +1367,11 @@ mod tests {
             confidential_zk_caps(Some(confidential_feature_digest(Some(0xBB)))),
         )
         .await;
-
         assert!(
             matches!(err, crate::Error::HandshakeConfidentialMismatch),
             "expected confidential mismatch, got {err:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_missing_confidential_feature_digest_when_expected() {
         let err = confidential_handshake_error(
@@ -1502,13 +1379,11 @@ mod tests {
             confidential_zk_caps(Some(confidential_feature_digest(Some(0xAA)))),
         )
         .await;
-
         assert!(
             matches!(err, crate::Error::HandshakeConfidentialMismatch),
             "expected confidential mismatch, got {err:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_missing_confidential_meta_when_expected() {
         let err = confidential_handshake_error_with_caps(
@@ -1518,13 +1393,11 @@ mod tests {
             )))),
         )
         .await;
-
         assert!(
             matches!(err, crate::Error::HandshakeConfidentialMismatch),
             "expected confidential mismatch, got {err:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_missing_zk_policy_hash_when_expected() {
         let err = confidential_handshake_error(
@@ -1532,13 +1405,11 @@ mod tests {
             confidential_zk_caps(Some(confidential_feature_digest(Some(0xAA)))),
         )
         .await;
-
         assert!(
             matches!(err, crate::Error::HandshakeConfidentialMismatch),
             "expected confidential mismatch, got {err:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_missing_confidential_rules_version_when_expected() {
         let err = confidential_handshake_error(
@@ -1549,13 +1420,11 @@ mod tests {
             confidential_zk_caps(Some(confidential_feature_digest(Some(0xAA)))),
         )
         .await;
-
         assert!(
             matches!(err, crate::Error::HandshakeConfidentialMismatch),
             "expected confidential mismatch, got {err:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_confidential_rules_version_mismatch() {
         let err = confidential_handshake_error(
@@ -1566,13 +1435,11 @@ mod tests {
             confidential_zk_caps(Some(confidential_feature_digest(Some(0xAA)))),
         )
         .await;
-
         assert!(
             matches!(err, crate::Error::HandshakeConfidentialMismatch),
             "expected confidential mismatch, got {err:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_confidential_feature_material_mismatches() {
         for (label, sender_features, receiver_features) in [
@@ -1602,14 +1469,12 @@ mod tests {
                 confidential_zk_caps(Some(receiver_features)),
             )
             .await;
-
             assert!(
                 matches!(err, crate::Error::HandshakeConfidentialMismatch),
                 "{label} should produce confidential mismatch, got {err:?}"
             );
         }
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_confidential_assume_valid_mismatch() {
         let features = Some(confidential_feature_digest(Some(0xAA)));
@@ -1618,13 +1483,11 @@ mod tests {
             confidential_zk_caps_with_flags(false, "halo2-ipa-pallas", features),
         )
         .await;
-
         assert!(
             matches!(err, crate::Error::HandshakeConfidentialMismatch),
             "expected confidential mismatch, got {err:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_confidential_enabled_mismatch() {
         let features = Some(confidential_feature_digest(Some(0xAA)));
@@ -1633,13 +1496,11 @@ mod tests {
             confidential_zk_caps_full(true, false, "halo2-ipa-pallas", features),
         )
         .await;
-
         assert!(
             matches!(err, crate::Error::HandshakeConfidentialMismatch),
             "expected confidential mismatch, got {err:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_confidential_verifier_backend_mismatch() {
         let features = Some(confidential_feature_digest(Some(0xAA)));
@@ -1648,13 +1509,11 @@ mod tests {
             confidential_zk_caps_with_flags(false, "halo2-ipa-pallas", features),
         )
         .await;
-
         assert!(
             matches!(err, crate::Error::HandshakeConfidentialMismatch),
             "expected confidential mismatch, got {err:?}"
         );
     }
-
     #[test]
     fn untagged_handshake_is_rejected() {
         let cryptographer =
@@ -1693,7 +1552,6 @@ mod tests {
                 scion_supported: false,
             },
         };
-
         let raw = hello.encode();
         let encrypted = cryptographer.encrypt(&raw).expect("encrypt raw handshake");
         let decoded = decode_handshake_message(&cryptographer, &encrypted);
@@ -1702,7 +1560,6 @@ mod tests {
             "untagged handshake must be rejected"
         );
     }
-
     #[test]
     fn versioned_handshake_preserves_trust_flag() {
         let cryptographer =
@@ -1741,7 +1598,6 @@ mod tests {
                 scion_supported: true,
             },
         };
-
         let encrypted =
             encode_handshake_message(&cryptographer, &hello).expect("encode v1 handshake");
         let decoded =
@@ -1750,7 +1606,6 @@ mod tests {
         assert_eq!(v1.addr, addr);
         assert!(v1.trust.trust_gossip);
     }
-
     #[test]
     fn handshake_decode_honors_its_pre_auth_resource_budget() {
         let key_pair = KeyPair::random();
@@ -1758,7 +1613,6 @@ mod tests {
         let hello = unsigned_handshake_hello(&key_pair, addr);
         let body = hello.encode();
         let no_sequence_budget = norito::DecodeLimits::new(0, body.len(), 0, body.len(), 16);
-
         let error = decode_handshake_body_with_limits(&body, no_sequence_budget)
             .expect_err("the handshake decoder must not widen its caller's resource budget");
         assert!(
@@ -1773,7 +1627,6 @@ mod tests {
             "expected a decode-budget rejection, got {error:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_fails_when_metadata_exceeds_limit() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
@@ -1814,18 +1667,15 @@ mod tests {
             "expected HandshakeMessageTooLarge, got {err:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_v1_defaults_to_trust_gossip() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let key_pair = KeyPair::random();
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[7u8; 32]).unwrap();
-
         let (stream_a, stream_b) = tokio::io::duplex(256);
         let (sender_read, sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
-
         let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr.clone(),
             expected_peer_id: None,
@@ -1841,7 +1691,6 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         });
-
         let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split(2, receiver_read, receiver_write),
             expected_peer_id: None,
@@ -1855,12 +1704,10 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         };
-
         let sender = tokio::spawn(async move {
             let _ = SendKey::send_our_public_key(send_key).await?;
             Result::<(), crate::Error>::Ok(())
         });
-
         let ready = GetKey::read_their_public_key(get_key)
             .await
             .expect("handshake should succeed");
@@ -1868,25 +1715,21 @@ mod tests {
             .await
             .expect("sender task panicked")
             .expect("sending handshake should succeed");
-
         assert!(ready.trust_gossip, "handshake should enable trust gossip");
         assert!(
             ready.scion_supported,
             "handshake should propagate SCION support flag"
         );
     }
-
     async fn write_framed_handshake<W>(writer: &mut W, encoded: &[u8])
     where
         W: tokio::io::AsyncWrite + Unpin,
     {
         use tokio::io::AsyncWriteExt;
-
         let len = u16::try_from(encoded.len()).expect("fixture handshake message length fits u16");
         writer.write_u16(len).await.expect("write hello length");
         writer.write_all(encoded).await.expect("write hello bytes");
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_all_zero_signature_material() {
         let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
@@ -1927,12 +1770,10 @@ mod tests {
         };
         let encoded =
             encode_handshake_message(&cryptographer, &hello).expect("encode crafted hello");
-
         let (stream_a, stream_b) = tokio::io::duplex(4096);
         let (_sender_read, mut sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
         write_framed_handshake(&mut sender_write, &encoded).await;
-
         let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split(15, receiver_read, receiver_write),
             expected_peer_id: None,
@@ -1946,7 +1787,6 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         };
-
         let err = match GetKey::read_their_public_key(get_key).await {
             Ok(_) => panic!("all-zero handshake signature material must be rejected"),
             Err(err) => err,
@@ -1956,7 +1796,6 @@ mod tests {
             "expected signature parse failure, got {err:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_malformed_ed25519_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -1968,7 +1807,6 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -1993,12 +1831,10 @@ mod tests {
             hello.signature = signature;
             let encoded =
                 encode_handshake_message(&cryptographer, &hello).expect("encode crafted hello");
-
             let (stream_a, stream_b) = tokio::io::duplex(4096);
             let (_sender_read, mut sender_write) = tokio::io::split(stream_a);
             let (receiver_read, receiver_write) = tokio::io::split(stream_b);
             write_framed_handshake(&mut sender_write, &encoded).await;
-
             let get_key = GetKey::<ChaCha20Poly1305> {
                 connection: Connection::from_split(15, receiver_read, receiver_write),
                 expected_peer_id: None,
@@ -2012,7 +1848,6 @@ mod tests {
                 local_scion_supported: true,
                 trust_gossip: true,
             };
-
             let err = match GetKey::read_their_public_key(get_key).await {
                 Ok(_) => panic!("{label} Ed25519 handshake signature R must be rejected"),
                 Err(err) => err,
@@ -2023,7 +1858,6 @@ mod tests {
             );
         }
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_malformed_mldsa_signature_lengths() {
         let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
@@ -2047,16 +1881,13 @@ mod tests {
             .payload()
             .to_vec();
         hello.signature = valid_signature.clone();
-
         read_crafted_handshake_hello(hello.clone(), cryptographer.clone())
             .await
             .expect("valid ML-DSA handshake signature must verify");
-
         let mut short = valid_signature.clone();
         short.pop();
         let mut overlong = valid_signature.clone();
         overlong.push(0x42);
-
         for (label, signature) in [
             ("short", short),
             ("overlong", overlong),
@@ -2074,7 +1905,6 @@ mod tests {
             );
         }
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_accepts_matching_transport_binding() {
         let addr: SocketAddr = "127.0.0.1:1444".parse().unwrap();
@@ -2082,11 +1912,9 @@ mod tests {
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[9u8; 32]).unwrap();
         let transport_binding = [0x5Au8; iroha_crypto::Hash::LENGTH];
-
         let (stream_a, stream_b) = tokio::io::duplex(256);
         let (sender_read, sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
-
         let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr,
             expected_peer_id: None,
@@ -2107,7 +1935,6 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         });
-
         let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split_with_binding(
                 12,
@@ -2126,12 +1953,10 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         };
-
         let sender = tokio::spawn(async move {
             let _ = SendKey::send_our_public_key(send_key).await?;
             Result::<(), crate::Error>::Ok(())
         });
-
         let ready = GetKey::read_their_public_key(get_key)
             .await
             .expect("handshake should succeed with matching transport binding");
@@ -2139,21 +1964,17 @@ mod tests {
             .await
             .expect("sender task panicked")
             .expect("sending handshake should succeed");
-
         assert_eq!(ready.connection.transport_binding, Some(transport_binding));
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_mismatched_transport_binding() {
         let addr: SocketAddr = "127.0.0.1:1446".parse().unwrap();
         let key_pair = KeyPair::random();
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[10u8; 32]).unwrap();
-
         let (stream_a, stream_b) = tokio::io::duplex(256);
         let (sender_read, sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
-
         let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr,
             expected_peer_id: None,
@@ -2174,7 +1995,6 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         });
-
         let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split_with_binding(
                 14,
@@ -2193,12 +2013,10 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         };
-
         let sender = tokio::spawn(async move {
             let _ = SendKey::send_our_public_key(send_key).await?;
             Result::<(), crate::Error>::Ok(())
         });
-
         let err = match GetKey::read_their_public_key(get_key).await {
             Ok(_) => panic!("mismatched transport binding must be rejected"),
             Err(err) => err,
@@ -2207,13 +2025,11 @@ mod tests {
             .await
             .expect("sender task panicked")
             .expect("sending handshake should succeed");
-
         assert!(
             matches!(err, crate::Error::Keys(_)),
             "expected signature verification failure, got {err:?}"
         );
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn outgoing_handshake_rejects_unexpected_peer_identity() {
         let addr: SocketAddr = "127.0.0.1:1445".parse().unwrap();
@@ -2222,11 +2038,9 @@ mod tests {
             iroha_data_model::prelude::PeerId::from(KeyPair::random().public_key().clone());
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[8u8; 32]).unwrap();
-
         let (stream_a, stream_b) = tokio::io::duplex(256);
         let (sender_read, sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
-
         let send_key = SendKey::<ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr.clone(),
             expected_peer_id: None,
@@ -2242,7 +2056,6 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         });
-
         let get_key = GetKey::<ChaCha20Poly1305> {
             connection: Connection::from_split(4, receiver_read, receiver_write),
             expected_peer_id: Some(expected_peer_id.clone()),
@@ -2256,12 +2069,10 @@ mod tests {
             local_scion_supported: true,
             trust_gossip: true,
         };
-
         let sender = tokio::spawn(async move {
             let _ = SendKey::send_our_public_key(send_key).await?;
             Result::<(), crate::Error>::Ok(())
         });
-
         let err = match GetKey::read_their_public_key(get_key).await {
             Ok(_) => panic!("unexpected peer identity must be rejected"),
             Err(err) => err,
@@ -2270,7 +2081,6 @@ mod tests {
             .await
             .expect("sender task panicked")
             .expect("sending handshake should succeed");
-
         match err {
             crate::Error::HandshakePeerMismatch { expected, found } => {
                 assert_eq!(expected, expected_peer_id);
@@ -2279,7 +2089,6 @@ mod tests {
             other => panic!("expected HandshakePeerMismatch, got {other:?}"),
         }
     }
-
     #[tokio::test(flavor = "current_thread")]
     async fn pre_handshake_header_rejects_garbage() {
         // Build a duplex to simulate a remote sending garbage preface
@@ -2289,7 +2098,6 @@ mod tests {
             use tokio::io::AsyncWriteExt;
             let _ = b.write_all(b"BAD!!").await;
         });
-
         // ConnectedFrom will attempt to read the preface and should error out
         let key_pair = KeyPair::try_from_seed(vec![0xD4; 32], Algorithm::BlsNormal)
             .expect("test BLS-normal node key");
@@ -2322,5 +2130,4 @@ mod tests {
         assert!(matches!(err, crate::Error::HandshakeBadPreface));
     }
 }
-
 // handshake payload is encoded/decoded as a tuple to avoid extra type definitions

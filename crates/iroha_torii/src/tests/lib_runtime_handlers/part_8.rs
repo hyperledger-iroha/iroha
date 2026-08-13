@@ -7,12 +7,9 @@ async fn incoming_read_proxy_rejects_inactive_autoscale_range_lane_hint() {
             &mut app,
         );
     let route = RoutingDecision::new(inactive_lane, inactive_dataspace);
-
     let response = incoming_read_proxy_response_for_route(app, route).await;
-
     assert_incoming_proxy_stale_route_rejection(&response, route);
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_read_proxy_rejects_future_created_autoscale_lane_hint() {
@@ -20,35 +17,26 @@ async fn incoming_read_proxy_rejects_future_created_autoscale_lane_hint() {
     let (future_lane, future_dataspace) =
         torii_routed_read_tests::configure_future_created_autoscale_route_for_test(&mut app);
     let route = RoutingDecision::new(future_lane, future_dataspace);
-
     let response = incoming_read_proxy_response_for_route(app, route).await;
-
     assert_incoming_proxy_stale_route_rejection(&response, route);
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_verified_query_proxy_rejects_retired_lane_hint() {
     let app = mk_app_state_for_tests();
     let route = RoutingDecision::new(LaneId::new(43), DataSpaceId::UNIVERSAL);
-
     let response = incoming_verified_query_proxy_response_for_route(app, route).await;
-
     assert_incoming_proxy_stale_route_rejection(&response, route);
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_verified_query_proxy_rejects_lane_dataspace_mismatch_hint() {
     let mut app = mk_app_state_for_tests();
     configure_multiple_dataspace_routes_for_test(&mut app);
     let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
-
     let response = incoming_verified_query_proxy_response_for_route(app, route).await;
-
     assert_incoming_proxy_stale_route_rejection(&response, route);
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_verified_query_proxy_rejects_inactive_autoscale_range_lane_hint() {
@@ -58,12 +46,9 @@ async fn incoming_verified_query_proxy_rejects_inactive_autoscale_range_lane_hin
             &mut app,
         );
     let route = RoutingDecision::new(inactive_lane, inactive_dataspace);
-
     let response = incoming_verified_query_proxy_response_for_route(app, route).await;
-
     assert_incoming_proxy_stale_route_rejection(&response, route);
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_verified_query_proxy_rejects_future_created_autoscale_lane_hint() {
@@ -71,12 +56,9 @@ async fn incoming_verified_query_proxy_rejects_future_created_autoscale_lane_hin
     let (future_lane, future_dataspace) =
         torii_routed_read_tests::configure_future_created_autoscale_route_for_test(&mut app);
     let route = RoutingDecision::new(future_lane, future_dataspace);
-
     let response = incoming_verified_query_proxy_response_for_route(app, route).await;
-
     assert_incoming_proxy_stale_route_rejection(&response, route);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
@@ -100,7 +82,6 @@ async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
         AccountId::new(authoritative_validator_keypair.public_key().clone());
     let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
     let fallback_peer_id = PeerId::from(fallback_keypair.public_key().clone());
-
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -129,7 +110,6 @@ async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
         app_mut.online_peers = OnlinePeersProvider::new(online_rx);
         app_mut.local_peer_id = Some(local_peer_id.clone());
     }
-
     {
         let mut topology = app.state.commit_topology.block();
         topology.clear();
@@ -154,7 +134,6 @@ async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
             )],
         );
     }
-
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let authoritative_without_local: Vec<_> = super::authoritative_lane_peers(app.as_ref(), route)
         .authoritative
@@ -164,7 +143,6 @@ async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
         .collect();
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
-
     assert_eq!(
         candidates.authoritative_count,
         authoritative_without_local.len()
@@ -181,7 +159,6 @@ async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
             .any(|candidate| candidate.peer_id() == &fallback_peer_id)
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_authority() {
@@ -202,7 +179,6 @@ async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_au
     let authoritative_validator =
         AccountId::new(authoritative_validator_keypair.public_key().clone());
     let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
-
     let mut app = mk_app_state_for_tests();
     let (future_lane, future_dataspace) =
         torii_routed_read_tests::configure_future_created_autoscale_route_for_test(&mut app);
@@ -225,7 +201,6 @@ async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_au
             .expect("online peers update should succeed");
         app_mut.online_peers = OnlinePeersProvider::new(online_rx);
         app_mut.local_peer_id = Some(local_peer_id.clone());
-
         let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
         ensure_runtime_peer_binding_for_test(
             state,
@@ -252,7 +227,6 @@ async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_au
             "fixture lane should remain inactive after manifest binding setup"
         );
     }
-
     let route = RoutingDecision::new(future_lane, future_dataspace);
     assert!(
         super::authoritative_lane_peers(app.as_ref(), route)
@@ -260,10 +234,8 @@ async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_au
             .is_empty(),
         "future-created autoscale manifest bindings must not become proxy authority early"
     );
-
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
-
     assert_eq!(candidates.authoritative_count, 0);
     assert_eq!(candidates.authoritative_total_count, 0);
     assert_eq!(candidates.offline_authoritative_count, 0);
@@ -274,7 +246,6 @@ async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_au
         Some(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_candidate_peers_fail_closed_when_manifest_authoritative_peers_are_offline() {
@@ -293,7 +264,6 @@ async fn torii_proxy_candidate_peers_fail_closed_when_manifest_authoritative_pee
     let authoritative_validator =
         AccountId::new(authoritative_validator_keypair.public_key().clone());
     let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
-
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -307,7 +277,6 @@ async fn torii_proxy_candidate_peers_fail_closed_when_manifest_authoritative_pee
         app_mut.online_peers = OnlinePeersProvider::new(online_rx);
         app_mut.local_peer_id = Some(local_peer_id.clone());
     }
-
     {
         let mut topology = app.state.commit_topology.block();
         topology.clear();
@@ -332,11 +301,9 @@ async fn torii_proxy_candidate_peers_fail_closed_when_manifest_authoritative_pee
             )],
         );
     }
-
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
-
     assert_eq!(candidates.authoritative_count, 0);
     assert_eq!(candidates.authoritative_total_count, 1);
     assert_eq!(candidates.offline_authoritative_count, 1);
@@ -347,7 +314,6 @@ async fn torii_proxy_candidate_peers_fail_closed_when_manifest_authoritative_pee
         Some(ToriiProxyUnavailableReason::AuthoritativePeersOffline)
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_torii_url_is_present()
@@ -367,7 +333,6 @@ async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_t
     let authoritative_validator =
         AccountId::new(authoritative_validator_keypair.public_key().clone());
     let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
-
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -381,7 +346,6 @@ async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_t
         app_mut.online_peers = OnlinePeersProvider::new(online_rx);
         app_mut.local_peer_id = Some(local_peer_id.clone());
     }
-
     {
         let mut topology = app.state.commit_topology.block();
         topology.clear();
@@ -410,11 +374,9 @@ async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_t
             )],
         );
     }
-
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
-
     assert_eq!(candidates.authoritative_count, 1);
     assert_eq!(candidates.authoritative_total_count, 1);
     assert_eq!(candidates.offline_authoritative_count, 1);
@@ -427,7 +389,6 @@ async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_t
         }]
     );
     assert!(candidates.unavailable_reason.is_none());
-
     let proposal_height = app
         .state
         .latest_block_header_fast()
@@ -451,7 +412,6 @@ async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_t
         "proposal-bound exact authorities must retain their manifest HTTP bridge"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn execute_torii_proxy_request_with_fallback_returns_route_unavailable_when_manifest_authoritative_peers_are_offline()
@@ -471,7 +431,6 @@ async fn execute_torii_proxy_request_with_fallback_returns_route_unavailable_whe
     let authoritative_validator =
         AccountId::new(authoritative_validator_keypair.public_key().clone());
     let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
-
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -485,7 +444,6 @@ async fn execute_torii_proxy_request_with_fallback_returns_route_unavailable_whe
         app_mut.online_peers = OnlinePeersProvider::new(online_rx);
         app_mut.local_peer_id = Some(local_peer_id.clone());
     }
-
     {
         let mut topology = app.state.commit_topology.block();
         topology.clear();
@@ -510,7 +468,6 @@ async fn execute_torii_proxy_request_with_fallback_returns_route_unavailable_whe
             )],
         );
     }
-
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let response = super::execute_torii_proxy_request_with_fallback(
         &app,
@@ -522,7 +479,6 @@ async fn execute_torii_proxy_request_with_fallback_returns_route_unavailable_whe
         },
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         response
@@ -531,7 +487,6 @@ async fn execute_torii_proxy_request_with_fallback_returns_route_unavailable_whe
             .and_then(|value| value.to_str().ok()),
         Some("route_unavailable")
     );
-
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("collect error body");
@@ -543,7 +498,6 @@ async fn execute_torii_proxy_request_with_fallback_returns_route_unavailable_whe
         ToriiProxyUnavailableReason::AuthoritativePeersOffline.ingress_message(route)
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
@@ -555,7 +509,6 @@ async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
     );
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
     let fallback_peer_id = PeerId::from(fallback_keypair.public_key().clone());
-
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -574,7 +527,6 @@ async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
         app_mut.online_peers = OnlinePeersProvider::new(online_rx);
         app_mut.local_peer_id = Some(local_peer_id.clone());
     }
-
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
         None,
@@ -597,11 +549,9 @@ async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
     peers.push(fallback_peer_id.clone());
     peers.apply();
     block.commit().expect("commit npos peer roster");
-
     let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
-
     assert!(
         super::authoritative_lane_peers(app.as_ref(), route)
             .authoritative
@@ -618,7 +568,6 @@ async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
         Some(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when_exhausted() {
@@ -659,7 +608,6 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
     let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
     let sender_peer_id = PeerId::from(sender_keypair.public_key().clone());
     let visited_peer_id = PeerId::from(visited_keypair.public_key().clone());
-
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -689,7 +637,6 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
         app_mut.online_peers = OnlinePeersProvider::new(online_rx);
         app_mut.local_peer_id = Some(local_peer_id.clone());
     }
-
     {
         let mut topology = app.state.commit_topology.block();
         topology.clear();
@@ -724,7 +671,6 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
             )],
         );
     }
-
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let candidates = super::torii_proxy_candidate_peer_ids(
         app.as_ref(),
@@ -733,7 +679,6 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
         Some(&sender_peer_id),
         std::slice::from_ref(&visited_peer_id),
     );
-
     assert_eq!(candidates.authoritative_count, 1);
     assert_eq!(
         candidates.peers,
@@ -752,7 +697,6 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
             .any(|candidate| candidate.peer_id() == &visited_peer_id)
     );
     assert_eq!(candidates.loop_prevention_drops, 2);
-
     let local_fanout_request = ToriiProxyRequestV6 {
         schema_version: TORII_PROXY_REQUEST_VERSION_V6,
         request_id: Hash::new(b"local-nexus-fanout-cannot-target-self"),
@@ -787,7 +731,6 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
         }),
         "an outbound local Nexus fanout leg must never re-enter local proxy delivery"
     );
-
     let exhausted = super::torii_proxy_candidate_peer_ids(
         app.as_ref(),
         &local_peer_id,
@@ -807,7 +750,6 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
         Some(ToriiProxyUnavailableReason::LoopPreventionExhausted)
     );
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn local_nexus_read_fanout_completes_without_recursive_self_proxying() {
@@ -839,7 +781,6 @@ async fn local_nexus_read_fanout_completes_without_recursive_self_proxying() {
             ToriiProxyResponseFormatV1::Json,
         )),
     };
-
     let snapshot = tokio::time::timeout(
         Duration::from_secs(2),
         super::execute_torii_proxy_request_locally(&app, local_peer_id, request),
@@ -849,7 +790,6 @@ async fn local_nexus_read_fanout_completes_without_recursive_self_proxying() {
     .expect("local fanout snapshot");
     assert_eq!(snapshot.snapshot.status_code, StatusCode::OK.as_u16());
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_torii_proxy_rejects_every_non_v6_schema_before_dispatch() {
@@ -874,7 +814,6 @@ async fn incoming_torii_proxy_rejects_every_non_v6_schema_before_dispatch() {
                 Vec::new(),
             )),
         };
-
         let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
         assert_eq!(
             response.status(),
@@ -883,7 +822,6 @@ async fn incoming_torii_proxy_rejects_every_non_v6_schema_before_dispatch() {
         );
     }
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn incoming_torii_proxy_rejects_expired_and_excessive_authenticated_deadlines() {
@@ -916,7 +854,6 @@ async fn incoming_torii_proxy_rejects_expired_and_excessive_authenticated_deadli
                 Vec::new(),
             )),
         };
-
         let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
         assert_eq!(
             response.status(),
@@ -932,12 +869,10 @@ async fn incoming_torii_proxy_rejects_expired_and_excessive_authenticated_deadli
         );
     }
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn internal_torii_proxy_route_accepts_node_signed_requests() {
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
     let bridge_signer = checked_torii_test_ed25519_keypair(
         0x67,
@@ -962,7 +897,6 @@ async fn internal_torii_proxy_route_accepts_node_signed_requests() {
         topology.push(sender_peer_id.clone());
         topology.commit();
     }
-
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let proxy_request = ToriiProxyRequestV6 {
         schema_version: TORII_PROXY_REQUEST_VERSION_V6,
@@ -1020,13 +954,11 @@ async fn internal_torii_proxy_route_accepts_node_signed_requests() {
         HeaderValue::from_static("application/x-norito"),
     );
     request.headers_mut().extend(signed_headers);
-
     let response = router
         .clone()
         .oneshot(request)
         .await
         .expect("router response");
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -1040,7 +972,6 @@ async fn internal_torii_proxy_route_accepts_node_signed_requests() {
         .expect("response body should be readable");
     let payload = std::str::from_utf8(&body).expect("JSON response body");
     assert!(payload.contains(&ALICE_ID.to_string()));
-
     let untrusted_signer = checked_torii_test_ed25519_keypair(
         0x6b,
         "derive untrusted internal Torii HTTP bridge sender fixture key",
@@ -1087,12 +1018,10 @@ async fn internal_torii_proxy_route_accepts_node_signed_requests() {
         .expect("untrusted peer response");
     assert_eq!(untrusted_response.status(), StatusCode::FORBIDDEN);
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[tokio::test]
 async fn internal_torii_proxy_route_rejects_unsigned_requests() {
     use tower::ServiceExt as _;
-
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
     let local_peer_id = PeerId::from(
         checked_torii_test_ed25519_keypair(
@@ -1142,7 +1071,6 @@ async fn internal_torii_proxy_route_rejects_unsigned_requests() {
         )),
     })
     .expect("encode proxied read");
-
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -1155,17 +1083,13 @@ async fn internal_torii_proxy_route_rejects_unsigned_requests() {
         )
         .await
         .expect("router response");
-
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
     use tower::ServiceExt as _;
-
     let app = mk_app_state_for_tests();
     let signer = app.da_receipt_signer.clone();
     let operator_layer = axum::middleware::from_fn_with_state::<
@@ -1187,7 +1111,6 @@ async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
     let body = br#"{"proof_b64":"not-base64%%"}"#.to_vec();
     let remote =
         axum::extract::ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 19_999));
-
     let unsigned = axum::http::Request::builder()
         .uri("/v1/sorafs/capacity/por-proof")
         .method(axum::http::Method::POST)
@@ -1201,7 +1124,6 @@ async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
         .await
         .expect("unsigned response");
     assert_eq!(unsigned_response.status(), StatusCode::UNAUTHORIZED);
-
     let uri = "/v1/sorafs/capacity/por-proof"
         .parse::<crate::Uri>()
         .expect("PoR proof URI");
@@ -1224,21 +1146,18 @@ async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
         request.headers_mut().extend(signed_headers.clone());
         request
     };
-
     let accepted_auth = router
         .clone()
         .oneshot(signed_request())
         .await
         .expect("authenticated response");
     assert_eq!(accepted_auth.status(), StatusCode::BAD_REQUEST);
-
     let replay = router
         .clone()
         .oneshot(signed_request())
         .await
         .expect("replay response");
     assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
-
     let mut cross_path = axum::http::Request::builder()
         .uri("/v1/sorafs/capacity/por-verdict")
         .method(axum::http::Method::POST)
@@ -1253,7 +1172,6 @@ async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
         .expect("cross-path response");
     assert_eq!(cross_path_response.status(), StatusCode::UNAUTHORIZED);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hops_exhausted() {
@@ -1277,7 +1195,6 @@ async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hop
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .local_peer_id = Some(local_peer_id.clone());
-
     let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
     let response = super::forward_incoming_torii_proxy_request(
         &app,
@@ -1298,7 +1215,6 @@ async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hop
         },
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         response
@@ -1308,7 +1224,6 @@ async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hop
         Some("route_unavailable")
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
@@ -1360,7 +1275,6 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
         app_mut.local_peer_id = Some(local_peer_id.clone());
         app_mut.p2p = Some(iroha_core::IrohaNetwork::closed_for_tests());
     }
-
     {
         let mut topology = app.state.commit_topology.block();
         topology.clear();
@@ -1388,7 +1302,6 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
             )],
         );
     }
-
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let request_id = Hash::new(b"torii-proxy-forward-success");
     let app_for_response = app.clone();
@@ -1410,7 +1323,6 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
         })
         .await
         .expect("forwarded Torii proxy request should become pending");
-
         super::process_incoming_torii_proxy_response(
             &app_for_response,
             authoritative_peer_for_response,
@@ -1426,7 +1338,6 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
         )
         .await;
     });
-
     let response = super::forward_incoming_torii_proxy_request(
         &app,
         &sender_peer_id,
@@ -1449,14 +1360,12 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
     response_task
         .await
         .expect("proxy response task should complete");
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("forwarded response body should be readable");
     assert_eq!(body.as_ref(), b"forwarded-ok");
 }
-
 #[tokio::test]
 async fn validate_incoming_soracloud_proxy_request_authority_accepts_generated_hf_primary() {
     let primary_peer_id = PeerId::from(
@@ -1486,18 +1395,15 @@ async fn validate_incoming_soracloud_proxy_request_authority_accepts_generated_h
         captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
     }));
-
     let result = super::validate_incoming_soracloud_proxy_request_authority(
         &app,
         &sample_generated_hf_infer_request(service_name, service_version),
     );
-
     assert!(
         result.is_ok(),
         "generated HF primary proxy request must validate"
     );
 }
-
 #[tokio::test]
 async fn validate_incoming_soracloud_proxy_request_authority_rejects_commitment_mismatch() {
     let primary_peer_id = PeerId::from(
@@ -1527,19 +1433,16 @@ async fn validate_incoming_soracloud_proxy_request_authority_rejects_commitment_
         captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
     }));
-
     let mut request = sample_generated_hf_infer_request(service_name, service_version);
     request.request_commitment = Hash::new(b"forged-generated-hf-proxy-request");
     let error = super::validate_incoming_soracloud_proxy_request_authority(&app, &request)
         .expect_err("mismatched proxy request commitment must fail closed");
-
     assert_eq!(
         error.kind,
         SoracloudRuntimeExecutionErrorKind::InvalidRequest
     );
     assert!(error.message.contains("request commitment"));
 }
-
 #[tokio::test]
 async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_generated_hf() {
     let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
@@ -1569,13 +1472,11 @@ async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_generat
         captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
     }));
-
     let error = super::validate_incoming_soracloud_proxy_request_authority(
         &app,
         &sample_public_query_request("web_portal".to_owned(), "2026.02.0".to_owned()),
     )
     .expect_err("non-generated public routes must be rejected over proxy");
-
     assert_eq!(
         error.kind,
         SoracloudRuntimeExecutionErrorKind::InvalidRequest
@@ -1586,7 +1487,6 @@ async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_generat
             .contains("generated HF `infer` query handlers")
     );
 }
-
 #[tokio::test]
 async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_primary_peer() {
     let primary_peer_id = PeerId::from(
@@ -1625,17 +1525,14 @@ async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_primary
         captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
     }));
-
     let error = super::validate_incoming_soracloud_proxy_request_authority(
         &app,
         &sample_generated_hf_infer_request(service_name, service_version),
     )
     .expect_err("non-primary peer must reject proxy execution");
-
     assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
     assert!(error.message.contains("not the authoritative warm primary"));
 }
-
 #[tokio::test]
 async fn incoming_proxy_authority_failure_requests_generated_hf_reconcile() {
     let primary_peer_id = PeerId::from(
@@ -1668,12 +1565,10 @@ async fn incoming_proxy_authority_failure_requests_generated_hf_reconcile() {
         captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
     }));
-
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = super::validate_incoming_soracloud_proxy_request_authority(&app, &request)
         .expect_err("non-primary peer must reject proxy execution");
     super::handle_incoming_soracloud_generated_hf_proxy_authority_failure(&app, &request, &error);
-
     let captured = captured_reconcile_requests
         .lock()
         .expect("reconcile capture lock");
@@ -1691,7 +1586,6 @@ async fn incoming_proxy_authority_failure_requests_generated_hf_reconcile() {
             .contains("not the authoritative warm primary")
     );
 }
-
 #[tokio::test]
 async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_requests_reconcile_once()
 {
@@ -1728,7 +1622,6 @@ async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_reques
     }));
     Arc::get_mut(&mut app).expect("unique app state").p2p =
         Some(iroha_core::IrohaNetwork::closed_for_tests());
-
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let incoming_request = SoracloudLocalReadProxyRequestV1 {
         schema_version: SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
@@ -1771,7 +1664,6 @@ async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_reques
         )
         .await;
     });
-
     super::process_incoming_soracloud_proxy_request(
         app.clone(),
         iroha_core::IrohaNetwork::closed_for_tests(),
@@ -1790,7 +1682,6 @@ async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_reques
     response_task
         .await
         .expect("proxy response task should succeed");
-
     let proxy_failures = captured_proxy_failures
         .lock()
         .expect("proxy failure capture lock");
@@ -1802,7 +1693,6 @@ async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_reques
         SoracloudRuntimeExecutionErrorKind::Unavailable
     );
     assert!(proxy_failures[0].2.message.contains("timed out"));
-
     let captured = captured_reconcile_requests
         .lock()
         .expect("reconcile capture lock");
@@ -1815,7 +1705,6 @@ async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_reques
     );
     assert!(captured[0].1.message.contains("timed out"));
 }
-
 #[tokio::test]
 async fn resolve_incoming_soracloud_proxy_forward_target_returns_primary() {
     let primary_peer_id = PeerId::from(
@@ -1852,14 +1741,11 @@ async fn resolve_incoming_soracloud_proxy_forward_target_returns_primary() {
         SoracloudRuntimeExecutionErrorKind::Unavailable,
         "local peer is no longer the authoritative warm primary",
     );
-
     let forward_target =
         super::resolve_incoming_soracloud_proxy_forward_target(&app, &request, &error)
             .expect("non-primary generated-HF receiver should forward to primary");
-
     assert_eq!(forward_target.to_string(), primary_peer_id);
 }
-
 #[tokio::test]
 async fn resolve_incoming_soracloud_proxy_forward_target_rejects_unassigned_receiver() {
     let primary_peer_id = PeerId::from(
@@ -1903,16 +1789,13 @@ async fn resolve_incoming_soracloud_proxy_forward_target_rejects_unassigned_rece
         SoracloudRuntimeExecutionErrorKind::Unavailable,
         "local peer is no longer the authoritative warm primary",
     );
-
     let forward_target =
         super::resolve_incoming_soracloud_proxy_forward_target(&app, &request, &error);
-
     assert!(
         forward_target.is_none(),
         "unassigned receivers must not act as generated-HF proxy intermediaries"
     );
 }
-
 #[tokio::test]
 async fn resolve_incoming_soracloud_proxy_forward_target_rejects_invalid_request() {
     let primary_peer_id = PeerId::from(
@@ -1947,13 +1830,10 @@ async fn resolve_incoming_soracloud_proxy_forward_target_rejects_invalid_request
         SoracloudRuntimeExecutionErrorKind::InvalidRequest,
         "proxy request commitment is invalid",
     );
-
     let forward_target =
         super::resolve_incoming_soracloud_proxy_forward_target(&app, &request, &error);
-
     assert!(forward_target.is_none());
 }
-
 #[tokio::test]
 async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending_request() {
     let app = mk_app_state_for_tests();
@@ -1984,7 +1864,6 @@ async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending
             request: sample_public_query_request("web_portal".to_owned(), "2026.02.0".to_owned()),
         },
     );
-
     super::process_incoming_soracloud_proxy_response(
         &app,
         responder_peer_id.clone(),
@@ -2006,7 +1885,6 @@ async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending
         },
     )
     .await;
-
     assert!(
         tokio::time::timeout(Duration::from_millis(50), &mut rx)
             .await
@@ -2020,7 +1898,6 @@ async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending
             .contains_key(&request_id),
         "unexpected responder must not poison the pending proxy request"
     );
-
     let replacement_response = iroha_core::soracloud_runtime::SoracloudLocalReadResponse {
         response_bytes: b"authoritative".to_vec(),
         content_type: None,
@@ -2041,7 +1918,6 @@ async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending
         },
     )
     .await;
-
     let pending_result = app
         .soracloud_proxy_pending
         .lock()
@@ -2067,7 +1943,6 @@ async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending
         }
     }
 }
-
 #[tokio::test]
 async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
     let primary_peer_id = PeerId::from(
@@ -2110,7 +1985,6 @@ async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
         captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
     }));
-
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let request_id = Hash::new(b"generated-hf-unexpected-assigned-responder");
     let (tx, _rx) = tokio::sync::oneshot::channel();
@@ -2122,7 +1996,6 @@ async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
             request: request.clone(),
         },
     );
-
     super::process_incoming_soracloud_proxy_response(
         &app,
         unexpected_peer_id
@@ -2146,7 +2019,6 @@ async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
         },
     )
     .await;
-
     assert!(
         app.soracloud_proxy_pending
             .lock()
@@ -2154,7 +2026,6 @@ async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
             .contains_key(&request_id),
         "unexpected assigned responder must not poison the pending proxy request"
     );
-
     let reconcile_requests = captured_reconcile_requests
         .lock()
         .expect("reconcile capture lock");
@@ -2171,7 +2042,6 @@ async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
             .contains("unexpected proxy responder")
     );
 }
-
 #[tokio::test]
 async fn soracloud_proxy_response_rejects_unsupported_schema() {
     let app = mk_app_state_for_tests();
@@ -2193,7 +2063,6 @@ async fn soracloud_proxy_response_rejects_unsupported_schema() {
             request: sample_public_query_request("web_portal".to_owned(), "2026.02.0".to_owned()),
         },
     );
-
     super::process_incoming_soracloud_proxy_response(
         &app,
         responder_peer_id,
@@ -2215,7 +2084,6 @@ async fn soracloud_proxy_response_rejects_unsupported_schema() {
         },
     )
     .await;
-
     match rx.await.expect("pending proxy request should resolve") {
         SoracloudLocalReadProxyOutcomeV1::Err(error) => {
             assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
@@ -2226,7 +2094,6 @@ async fn soracloud_proxy_response_rejects_unsupported_schema() {
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
@@ -2255,7 +2122,6 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
             strict_queue_plan_synced: false,
         },
     );
-
     let payload = iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
         schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
         request_id,
@@ -2267,7 +2133,6 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
     let (responder_peer, _, payload, _, p2p_memory) =
         iroha_p2p::peer::message::PeerMessage::new(responder_peer, payload, payload_bytes)
             .into_parts();
-
     super::handle_torii_proxy_network_message(
         app.clone(),
         iroha_core::IrohaNetwork::closed_for_tests(),
@@ -2276,7 +2141,6 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
         p2p_memory,
     )
     .await;
-
     assert_eq!(
         rx.await
             .expect("pending Torii proxy request should resolve"),
@@ -2291,7 +2155,6 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
         "Torii proxy response dispatcher must clear the pending request"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn process_incoming_torii_proxy_response_marks_late_responses_once() {
@@ -2306,7 +2169,6 @@ async fn process_incoming_torii_proxy_response_marks_late_responses_once() {
         .clone(),
     );
     super::mark_torii_proxy_request_completed(&app, request_id).await;
-
     let response = ToriiProxyResponseV1 {
         schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
         request_id,
@@ -2327,7 +2189,6 @@ async fn process_incoming_torii_proxy_response_marks_late_responses_once() {
             "first late response should latch the one-time ignore marker"
         );
     }
-
     super::process_incoming_torii_proxy_response(
         &app,
         responder_peer_id,
@@ -2347,7 +2208,6 @@ async fn process_incoming_torii_proxy_response_marks_late_responses_once() {
         "late responses must not recreate pending state after completion"
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
 fn completed_torii_proxy_requests_are_fifo_bounded_and_ttl_pruned() {
@@ -2376,12 +2236,10 @@ fn completed_torii_proxy_requests_are_fifo_bounded_and_ttl_pruned() {
             .contains_key(&request_id(TORII_PROXY_COMPLETED_CAP)),
         "capacity overflow must retain the newest completed request"
     );
-
     completed.prune(now + TORII_PROXY_COMPLETED_TTL);
     assert!(completed.entries.is_empty());
     assert!(completed.insertion_order.is_empty());
 }
-
 #[tokio::test]
 async fn soracloud_proxy_failure_reports_remote_primary_health() {
     let primary_peer_id = PeerId::from(
@@ -2415,7 +2273,6 @@ async fn soracloud_proxy_failure_reports_remote_primary_health() {
         captured_proxy_failures: Arc::clone(&captured_proxy_failures),
         captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
     }));
-
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = SoracloudRuntimeExecutionError::new(
         SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -2427,7 +2284,6 @@ async fn soracloud_proxy_failure_reports_remote_primary_health() {
         &primary_peer_id.parse().expect("valid peer id"),
         &error,
     );
-
     let reports = captured_proxy_failures
         .lock()
         .expect("proxy failure capture lock");
@@ -2440,7 +2296,6 @@ async fn soracloud_proxy_failure_reports_remote_primary_health() {
     );
     assert!(reports[0].2.message.contains("timed out"));
 }
-
 #[tokio::test]
 async fn validate_generated_hf_proxy_response_authority_accepts_matching_receipt() {
     let primary_peer_id = PeerId::from(
@@ -2453,17 +2308,14 @@ async fn validate_generated_hf_proxy_response_authority_accepts_matching_receipt
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let app = mk_app_state_for_tests_with_world(world);
     let response = sample_generated_hf_proxy_response(&app, &request);
-
     let result = super::validate_generated_hf_proxy_response_authority(
         &app,
         &request,
         &primary_peer_id.parse().expect("valid peer id"),
         &response,
     );
-
     assert!(result.is_ok(), "matching proxy receipt must validate");
 }
-
 #[tokio::test]
 async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_receipt() {
     let primary_peer_id = PeerId::from(
@@ -2491,7 +2343,6 @@ async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_recei
         )
         .to_string(),
     );
-
     let error = super::validate_generated_hf_proxy_response_authority(
         &app,
         &request,
@@ -2499,11 +2350,9 @@ async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_recei
         &response,
     )
     .expect_err("mismatched proxy receipt must fail closed");
-
     assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
     assert!(error.message.contains("receipt attribution"));
 }
-
 #[tokio::test]
 async fn validate_generated_hf_proxy_response_authority_rejects_result_commitment_mismatch() {
     let primary_peer_id = PeerId::from(
@@ -2521,7 +2370,6 @@ async fn validate_generated_hf_proxy_response_authority_rejects_result_commitmen
         .as_mut()
         .expect("generated HF proxy receipt")
         .result_commitment = Hash::new(b"mismatched-generated-hf-proxy-result");
-
     let error = super::validate_generated_hf_proxy_response_authority(
         &app,
         &request,
@@ -2529,11 +2377,9 @@ async fn validate_generated_hf_proxy_response_authority_rejects_result_commitmen
         &response,
     )
     .expect_err("receipt and response commitments must agree");
-
     assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
     assert!(error.message.contains("response commitments"));
 }
-
 #[tokio::test]
 async fn proxy_validation_failure_reports_remote_primary_health_and_requests_reconcile() {
     let primary_peer_id = PeerId::from(
@@ -2568,7 +2414,6 @@ async fn proxy_validation_failure_reports_remote_primary_health_and_requests_rec
         captured_proxy_failures: Arc::clone(&captured_proxy_failures),
         captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
     }));
-
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let mut response = sample_generated_hf_proxy_response(&app, &request);
     response
@@ -2593,14 +2438,12 @@ async fn proxy_validation_failure_reports_remote_primary_health_and_requests_rec
         &response,
     )
     .expect_err("mismatched proxy receipt must fail closed");
-
     super::handle_soracloud_generated_hf_proxy_validation_failure(
         &app,
         &request,
         &primary_peer_id.parse().expect("valid peer id"),
         &error,
     );
-
     let proxy_failures = captured_proxy_failures
         .lock()
         .expect("proxy failure capture lock");
@@ -2612,7 +2455,6 @@ async fn proxy_validation_failure_reports_remote_primary_health_and_requests_rec
         SoracloudRuntimeExecutionErrorKind::Unavailable
     );
     assert!(proxy_failures[0].2.message.contains("receipt attribution"));
-
     let reconcile_requests = captured_reconcile_requests
         .lock()
         .expect("reconcile capture lock");
@@ -2629,7 +2471,6 @@ async fn proxy_validation_failure_reports_remote_primary_health_and_requests_rec
             .contains("receipt attribution")
     );
 }
-
 #[tokio::test]
 async fn proxy_execution_failure_reports_remote_primary_health_and_requests_reconcile() {
     let primary_peer_id = PeerId::from(
@@ -2664,7 +2505,6 @@ async fn proxy_execution_failure_reports_remote_primary_health_and_requests_reco
         captured_proxy_failures: Arc::clone(&captured_proxy_failures),
         captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
     }));
-
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = SoracloudRuntimeExecutionError::new(
         SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -2676,7 +2516,6 @@ async fn proxy_execution_failure_reports_remote_primary_health_and_requests_reco
         &primary_peer_id.parse().expect("valid peer id"),
         &error,
     );
-
     let proxy_failures = captured_proxy_failures
         .lock()
         .expect("proxy failure capture lock");
@@ -2688,7 +2527,6 @@ async fn proxy_execution_failure_reports_remote_primary_health_and_requests_reco
         SoracloudRuntimeExecutionErrorKind::Unavailable
     );
     assert!(proxy_failures[0].2.message.contains("timed out"));
-
     let reconcile_requests = captured_reconcile_requests
         .lock()
         .expect("reconcile capture lock");
@@ -2700,7 +2538,6 @@ async fn proxy_execution_failure_reports_remote_primary_health_and_requests_reco
     );
     assert!(reconcile_requests[0].1.message.contains("timed out"));
 }
-
 #[tokio::test]
 async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_primary() {
     let primary_peer_id = PeerId::from(
@@ -2731,7 +2568,6 @@ async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_prima
         captured_proxy_failures: Arc::clone(&captured_proxy_failures),
         captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
     }));
-
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = super::execute_soracloud_local_read_via_proxy(
         &app,
@@ -2740,10 +2576,8 @@ async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_prima
     )
     .await
     .expect_err("missing P2P network must fail closed");
-
     assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
     assert!(error.message.contains("attached P2P network"));
-
     let proxy_failures = captured_proxy_failures
         .lock()
         .expect("proxy failure capture lock");
@@ -2751,7 +2585,6 @@ async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_prima
         proxy_failures.is_empty(),
         "local proxy transport failure must not blame the authoritative primary"
     );
-
     let reconcile_requests = captured_reconcile_requests
         .lock()
         .expect("reconcile capture lock");
@@ -2768,7 +2601,6 @@ async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_prima
             .contains("attached P2P network")
     );
 }
-
 #[tokio::test]
 async fn soracloud_routing_failure_requests_generated_hf_reconcile() {
     let primary_peer_id = PeerId::from(
@@ -2796,14 +2628,12 @@ async fn soracloud_routing_failure_requests_generated_hf_reconcile() {
         captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
     }));
-
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = SoracloudRuntimeExecutionError::new(
         SoracloudRuntimeExecutionErrorKind::Unavailable,
         "generated HF service has no warm authoritative primary host",
     );
     super::maybe_request_soracloud_generated_hf_reconcile(&app, &request, &error);
-
     let captured = captured_reconcile_requests
         .lock()
         .expect("reconcile capture lock");
@@ -2816,15 +2646,12 @@ async fn soracloud_routing_failure_requests_generated_hf_reconcile() {
     );
     assert!(captured[0].1.message.contains("warm authoritative primary"));
 }
-
 fn sccp_ingress_test_router_with_limit(
     app: SharedAppState,
     operator_max_body_bytes: usize,
 ) -> axum::Router {
     use axum::{Router, routing::post};
-
     seed_sccp_ingress_auth_account(&app);
-
     Router::new()
         .route(
             "/v1/bridge/proofs/submit",
@@ -2855,19 +2682,15 @@ fn sccp_ingress_test_router_with_limit(
             super::enforce_sccp_submit_ingress,
         ))
 }
-
 fn sccp_ingress_test_router(app: SharedAppState) -> axum::Router {
     sccp_ingress_test_router_with_limit(app, usize::MAX)
 }
-
 fn sccp_ingress_echo_router_with_limit(
     app: SharedAppState,
     operator_max_body_bytes: usize,
 ) -> axum::Router {
     use axum::{Router, routing::post};
-
     seed_sccp_ingress_auth_account(&app);
-
     Router::new()
         .route(
             "/v1/bridge/proofs/submit",
@@ -2898,10 +2721,8 @@ fn sccp_ingress_echo_router_with_limit(
             super::enforce_sccp_submit_ingress,
         ))
 }
-
 fn sccp_body_that_must_not_be_polled() -> axum::body::Body {
     use std::task::Poll;
-
     let stream = futures::stream::poll_fn(
         |_context| -> Poll<Option<Result<axum::body::Bytes, std::io::Error>>> {
             panic!("rejected SCCP ingress polled the request body")
@@ -2909,7 +2730,6 @@ fn sccp_body_that_must_not_be_polled() -> axum::body::Body {
     );
     axum::body::Body::from_stream(stream)
 }
-
 fn sccp_ingress_request(
     path: &str,
     body: axum::body::Body,

@@ -1,11 +1,8 @@
 use std::{fmt::Display, format, string::String};
-
 use iroha_primitives::numeric::Quantity;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
-
 use super::*;
-
 isi! {
     /// Generic instruction for a transfer of an object from the identifiable source to the identifiable destination.
     pub struct Transfer<S: Identifiable, O, D: Identifiable> {
@@ -17,7 +14,6 @@ isi! {
         pub destination: D::Id,
     }
 }
-
 impl Transfer<Account, DomainId, Account> {
     /// Constructs a new [`Transfer`] for a [`Domain`].
     pub fn domain(from: AccountId, domain_id: DomainId, to: AccountId) -> Self {
@@ -28,7 +24,6 @@ impl Transfer<Account, DomainId, Account> {
         }
     }
 }
-
 impl Transfer<Account, AssetDefinitionId, Account> {
     /// Constructs a new [`Transfer`] for an [`AssetDefinition`].
     pub fn asset_definition(
@@ -43,7 +38,6 @@ impl Transfer<Account, AssetDefinitionId, Account> {
         }
     }
 }
-
 impl Transfer<Asset, Quantity, Account> {
     /// Constructs a new [`Transfer`] for a non-negative [`Asset`] quantity.
     pub fn asset_quantity(asset_id: AssetId, quantity: impl Into<Quantity>, to: AccountId) -> Self {
@@ -54,7 +48,6 @@ impl Transfer<Asset, Quantity, Account> {
         }
     }
 }
-
 impl Transfer<Account, NftId, Account> {
     /// Constructs a new [`Transfer`] for an [`Nft`].
     pub fn nft(from: AccountId, nft_id: NftId, to: AccountId) -> Self {
@@ -65,7 +58,6 @@ impl Transfer<Account, NftId, Account> {
         }
     }
 }
-
 impl_display! {
     Transfer<S, O, D>
     where
@@ -80,14 +72,12 @@ impl_display! {
     source,
     destination,
 }
-
 impl_into_box! {
     Transfer<Account, DomainId, Account> |
     Transfer<Account, AssetDefinitionId, Account> |
     Transfer<Asset, Quantity, Account> | Transfer<Account, NftId, Account>
 => TransferBox
 }
-
 isi_box! {
     /// Enum with all supported [`Transfer`] instructions.
     ///
@@ -104,7 +94,6 @@ isi_box! {
         Nft(Transfer<Account, NftId, Account>),
     }
 }
-
 enum_type! {
     pub(crate) enum TransferType {
         Domain,
@@ -113,14 +102,12 @@ enum_type! {
         Nft,
     }
 }
-
 // Seal implementations
 impl crate::seal::Instruction for TransferBox {}
 impl crate::seal::Instruction for Transfer<Account, DomainId, Account> {}
 impl crate::seal::Instruction for Transfer<Account, AssetDefinitionId, Account> {}
 impl crate::seal::Instruction for Transfer<Asset, Quantity, Account> {}
 impl crate::seal::Instruction for Transfer<Account, NftId, Account> {}
-
 impl<'a, S, O, D> norito::core::DecodeFromSlice<'a> for Transfer<S, O, D>
 where
     S: Identifiable,
@@ -136,7 +123,6 @@ where
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let source = super::decode_aos_canonical_field::<S::Id>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -164,7 +150,6 @@ where
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for TransferBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -213,13 +198,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransferBox {
         Ok((value, offset))
     }
 }
-
 // Stable wire ID for encoding
 impl TransferBox {
     /// Norito wire identifier for boxed transfer instructions.
     pub const WIRE_ID: &'static str = "iroha.transfer";
 }
-
 isi! {
     /// Single entry within a [`TransferAssetBatch`] instruction.
     pub struct TransferAssetBatchEntry {
@@ -235,7 +218,6 @@ isi! {
         amount: Quantity,
     }
 }
-
 impl TransferAssetBatchEntry {
     /// Construct a new batch entry with a deterministic identifier.
     ///
@@ -258,7 +240,6 @@ impl TransferAssetBatchEntry {
             amount,
         }
     }
-
     /// Construct a new batch entry with an explicit receipt correlation identifier.
     #[must_use]
     pub fn with_leg_id(
@@ -277,7 +258,6 @@ impl TransferAssetBatchEntry {
         }
     }
 }
-
 /// Settlement semantics for [`TransferAssetBatch`].
 #[derive(
     Debug,
@@ -309,7 +289,6 @@ pub enum BatchMode {
     /// account-creation state or fees into a passing sibling leg.
     Independent,
 }
-
 isi! {
     /// Deterministic batch transfer instruction covering multiple `Transfer::asset_quantity` calls.
     pub struct TransferAssetBatch {
@@ -319,11 +298,9 @@ isi! {
         entries: Vec<TransferAssetBatchEntry>,
     }
 }
-
 impl TransferAssetBatch {
     /// Stable wire identifier for Norito encoding.
     pub const WIRE_ID: &'static str = "iroha.transfer_batch";
-
     /// Construct a new batch instruction.
     #[must_use]
     pub fn new(entries: Vec<TransferAssetBatchEntry>) -> Self {
@@ -332,7 +309,6 @@ impl TransferAssetBatch {
             entries,
         }
     }
-
     /// Construct an independently settling batch instruction.
     #[must_use]
     pub fn independent(entries: Vec<TransferAssetBatchEntry>) -> Self {
@@ -341,7 +317,6 @@ impl TransferAssetBatch {
             entries,
         }
     }
-
     /// Set explicit batch settlement semantics.
     #[must_use]
     pub fn with_mode(mut self, mode: BatchMode) -> Self {
@@ -349,9 +324,7 @@ impl TransferAssetBatch {
         self
     }
 }
-
 impl crate::seal::Instruction for TransferAssetBatch {}
-
 impl<'a> norito::core::DecodeFromSlice<'a> for TransferAssetBatchEntry {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -359,7 +332,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransferAssetBatchEntry {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let leg_id = super::decode_aos_canonical_field::<String>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -397,7 +369,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransferAssetBatchEntry {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for TransferAssetBatch {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -405,7 +376,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransferAssetBatch {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let mode = super::decode_aos_canonical_field::<BatchMode>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -422,13 +392,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransferAssetBatch {
         Ok((Self { mode, entries }, offset))
     }
 }
-
 impl From<TransferAssetBatch> for InstructionBox {
     fn from(instruction: TransferAssetBatch) -> Self {
         InstructionBox(Box::new(instruction))
     }
 }
-
 #[cfg(feature = "json")]
 impl<S, O, D> FastJsonWrite for Transfer<S, O, D>
 where
@@ -448,7 +416,6 @@ where
         JsonSerialize::json_serialize(&self.destination, out);
         out.push('}');
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -465,7 +432,6 @@ where
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for TransferAssetBatchEntry {
     fn write_json(&self, out: &mut String) {
@@ -483,7 +449,6 @@ impl FastJsonWrite for TransferAssetBatchEntry {
         JsonSerialize::json_serialize(&self.amount, out);
         out.push('}');
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -504,7 +469,6 @@ impl FastJsonWrite for TransferAssetBatchEntry {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for TransferAssetBatch {
     fn write_json(&self, out: &mut String) {
@@ -516,7 +480,6 @@ impl FastJsonWrite for TransferAssetBatch {
         JsonSerialize::json_serialize(&self.entries, out);
         out.push('}');
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -531,28 +494,23 @@ impl FastJsonWrite for TransferAssetBatch {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::{Numeric, NumericOperationError};
     use norito::core::DecodeFromSlice;
-
     use super::*;
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked transfer fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         )
     }
-
     #[cfg(feature = "json")]
     fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
@@ -565,7 +523,6 @@ mod tests {
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn transfer_json_families_match_legacy_bytes_at_exact_bounds() {
@@ -581,7 +538,6 @@ mod tests {
         assert_exact_json(&entry);
         assert_exact_json(&TransferAssetBatch::independent(vec![entry]));
     }
-
     #[test]
     fn transfer_decode_from_slice_roundtrips_asset_quantity() {
         let from = account(0x11);
@@ -589,14 +545,11 @@ mod tests {
         let asset_id = AssetId::of(asset_definition(), from);
         let transfer = Transfer::asset_quantity(asset_id, 7_u32, to);
         let bytes = transfer.encode();
-
         let (decoded, used) =
             Transfer::<Asset, Quantity, Account>::decode_from_slice(&bytes).expect("decode");
-
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, transfer);
     }
-
     #[test]
     fn negative_asset_quantity_cannot_decode_as_transfer() {
         let from = account(0x19);
@@ -611,13 +564,11 @@ mod tests {
             object: negative,
             destination: to,
         };
-
         assert!(
             Transfer::<Asset, Quantity, Account>::decode_from_slice(&forged.encode()).is_err(),
             "negative signed payload must not decode as an asset transfer"
         );
     }
-
     #[test]
     fn transfer_box_registry_decodes_stable_id_from_misaligned_payload() {
         let from = account(0x33);
@@ -632,7 +583,6 @@ mod tests {
         misaligned.extend_from_slice(&framed);
         let registry = crate::isi::InstructionRegistry::new()
             .register_with_id_slice::<TransferBox>(TransferBox::WIRE_ID);
-
         let decoded = crate::isi::InstructionRegistry::decode(
             &registry,
             TransferBox::WIRE_ID,
@@ -640,10 +590,8 @@ mod tests {
         )
         .expect("registered transfer box")
         .expect("decode transfer box");
-
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn transfer_asset_batch_decode_from_slice_roundtrips() {
         let from = account(0x55);
@@ -660,16 +608,13 @@ mod tests {
             TransferAssetBatchEntry::with_leg_id("invoice-2", to, from, definition, 2_u32),
         ]);
         let bytes = batch.encode();
-
         let (decoded, used) = TransferAssetBatch::decode_from_slice(&bytes).expect("decode batch");
-
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, batch);
         assert_eq!(decoded.mode, BatchMode::Independent);
         assert_eq!(decoded.entries[0].leg_id, "invoice-1");
         assert_eq!(decoded.entries[1].leg_id, "invoice-2");
     }
-
     #[test]
     fn transfer_asset_batch_registry_decodes_stable_id() {
         let from = account(0x77);
@@ -686,7 +631,6 @@ mod tests {
                 .expect("frame batch");
         let registry = crate::isi::InstructionRegistry::new()
             .register_with_id_slice::<TransferAssetBatch>(TransferAssetBatch::WIRE_ID);
-
         let decoded = crate::isi::InstructionRegistry::decode(
             &registry,
             TransferAssetBatch::WIRE_ID,
@@ -694,7 +638,6 @@ mod tests {
         )
         .expect("registered transfer batch")
         .expect("decode transfer batch");
-
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
 }

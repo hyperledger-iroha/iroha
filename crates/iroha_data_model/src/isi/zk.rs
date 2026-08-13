@@ -2,11 +2,9 @@
 //!
 //! This module defines instructions for submitting proofs for verification
 //! against on-chain verifying keys.
-
 use super::*;
 use crate::asset::definition::ConfidentialPolicyMode;
 use iroha_crypto::Hash;
-
 isi! {
     /// Verify a zero-knowledge proof against a verifying key.
     ///
@@ -18,16 +16,13 @@ isi! {
         pub attachment: crate::proof::ProofAttachment,
     }
 }
-
 impl crate::seal::Instruction for VerifyProof {}
-
 impl VerifyProof {
     /// Construct a new `VerifyProof` instruction from a proof attachment.
     pub fn new(attachment: crate::proof::ProofAttachment) -> Self {
         Self { attachment }
     }
 }
-
 isi! {
     /// Prune proof registry entries according to the on-chain retention policy.
     ///
@@ -43,18 +38,14 @@ isi! {
         pub backend: Option<String>,
     }
 }
-
 impl crate::seal::Instruction for PruneProofs {}
-
 impl PruneProofs {
     /// Construct a new prune request.
     pub fn new(backend: Option<String>) -> Self {
         Self { backend }
     }
 }
-
 // --- ZK Assets ---
-
 isi! {
     /// Register a ZK-capable asset definition with policy and verifying keys.
     #[cfg_attr(
@@ -70,7 +61,6 @@ isi! {
         pub vk_shield: Option<crate::proof::VerifyingKeyId>,
     }
 }
-
 impl crate::seal::Instruction for RegisterZkAsset {}
 impl RegisterZkAsset {
     /// Validate the first-release verifier-role relationship.
@@ -83,7 +73,6 @@ impl RegisterZkAsset {
         }
         Ok(())
     }
-
     /// Construct a new `RegisterZkAsset` instruction.
     pub fn new(
         asset: AssetDefinitionId,
@@ -97,7 +86,6 @@ impl RegisterZkAsset {
         }
     }
 }
-
 isi! {
     /// Schedule a confidential policy transition for an asset definition.
     #[cfg_attr(
@@ -117,7 +105,6 @@ isi! {
         pub conversion_window: Option<u64>,
     }
 }
-
 impl crate::seal::Instruction for ScheduleConfidentialPolicyTransition {}
 impl ScheduleConfidentialPolicyTransition {
     /// Construct a new `ScheduleConfidentialPolicyTransition` instruction.
@@ -137,7 +124,6 @@ impl ScheduleConfidentialPolicyTransition {
         }
     }
 }
-
 isi! {
     /// Cancel a pending confidential policy transition for an asset definition.
     #[cfg_attr(
@@ -151,7 +137,6 @@ isi! {
         pub transition_id: Hash,
     }
 }
-
 impl crate::seal::Instruction for CancelConfidentialPolicyTransition {}
 impl CancelConfidentialPolicyTransition {
     /// Construct a new `CancelConfidentialPolicyTransition` instruction.
@@ -162,14 +147,11 @@ impl CancelConfidentialPolicyTransition {
         }
     }
 }
-
 // --- ZK Voting ---
-
 /// Maximum number of options admitted by the first-release election ABI.
 ///
 /// This matches the V1 bounded-list capacity used by Kotodama and the IVM ABI.
 pub const MAX_ELECTION_OPTIONS_V1: u32 = 64;
-
 /// A malformed first-release election shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ElectionShapeV1Error {
@@ -198,7 +180,6 @@ pub enum ElectionShapeV1Error {
         actual: usize,
     },
 }
-
 /// Validate a first-release election option count and return its allocation length.
 ///
 /// # Errors
@@ -221,7 +202,6 @@ pub fn validate_election_options_v1(options: u32) -> Result<usize, ElectionShape
     }
     Ok(options)
 }
-
 /// Validate that a tally contains exactly one counter per valid V1 election option.
 ///
 /// # Errors
@@ -241,7 +221,6 @@ pub fn validate_election_tally_v1(
     }
     Ok(expected)
 }
-
 isi! {
     /// Create an anonymous election.
     #[cfg_attr(
@@ -271,9 +250,7 @@ isi! {
         pub domain_tag: String,
     }
 }
-
 impl crate::seal::Instruction for CreateElection {}
-
 isi! {
     /// Submit a private ballot for an election.
     #[cfg_attr(
@@ -292,9 +269,7 @@ isi! {
         pub nullifier: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for SubmitBallot {}
-
 isi! {
     /// Finalize an election by verifying the tally proof and recording the result.
     #[cfg_attr(
@@ -310,13 +285,10 @@ isi! {
         pub tally_proof: crate::proof::ProofAttachment,
     }
 }
-
 impl crate::seal::Instruction for FinalizeElection {}
-
 fn zk_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_zk_decode_from_slice {
     ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -325,7 +297,6 @@ macro_rules! impl_zk_decode_from_slice {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -342,14 +313,12 @@ macro_rules! impl_zk_decode_from_slice {
         }
     };
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for VerifyProof {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = zk_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let attachment = super::decode_aos_slice_field::<crate::proof::ProofAttachment>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -362,17 +331,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for VerifyProof {
         Ok((Self { attachment }, offset))
     }
 }
-
 impl_zk_decode_from_slice!(PruneProofs {
     backend: Option<String>,
 });
-
 impl_zk_decode_from_slice!(RegisterZkAsset {
     asset: AssetDefinitionId,
     vk_unshield: Option<crate::proof::VerifyingKeyId>,
     vk_shield: Option<crate::proof::VerifyingKeyId>,
 });
-
 impl_zk_decode_from_slice!(ScheduleConfidentialPolicyTransition {
     asset: AssetDefinitionId,
     new_mode: ConfidentialPolicyMode,
@@ -380,12 +346,10 @@ impl_zk_decode_from_slice!(ScheduleConfidentialPolicyTransition {
     transition_id: Hash,
     conversion_window: Option<u64>,
 });
-
 impl_zk_decode_from_slice!(CancelConfidentialPolicyTransition {
     asset: AssetDefinitionId,
     transition_id: Hash,
 });
-
 impl_zk_decode_from_slice!(CreateElection {
     election_id: String,
     options: u32,
@@ -396,30 +360,23 @@ impl_zk_decode_from_slice!(CreateElection {
     vk_tally: crate::proof::VerifyingKeyId,
     domain_tag: String,
 });
-
 impl_zk_decode_from_slice!(SubmitBallot {
     election_id: String,
     ciphertext: Vec<u8>,
     ballot_proof: crate::proof::ProofAttachment,
     nullifier: [u8; 32],
 });
-
 impl_zk_decode_from_slice!(FinalizeElection {
     election_id: String,
     tally: Vec<u64>,
     tally_proof: crate::proof::ProofAttachment,
 });
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::too_many_lines)]
-
     use std::str::FromStr as _;
-
     use norito::core::DecodeFromSlice;
-
     use super::*;
-
     #[test]
     fn election_shape_v1_enforces_option_and_tally_boundaries() {
         assert_eq!(
@@ -441,7 +398,6 @@ mod tests {
                 actual: MAX_ELECTION_OPTIONS_V1 as usize + 1,
             })
         );
-
         assert_eq!(validate_election_tally_v1(1, 1), Ok(1));
         assert_eq!(
             validate_election_tally_v1(MAX_ELECTION_OPTIONS_V1, 64),
@@ -467,22 +423,18 @@ mod tests {
         name::Name,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     };
-
     fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             Name::from_str("xor").expect("asset name"),
         )
     }
-
     fn backend() -> iroha_schema::Ident {
         "halo2/ipa/poly-open".into()
     }
-
     fn verifying_key(name: &str) -> VerifyingKeyId {
         VerifyingKeyId::new(backend(), name)
     }
-
     fn proof_attachment() -> ProofAttachment {
         let backend = backend();
         ProofAttachment::new_ref(
@@ -491,7 +443,6 @@ mod tests {
             VerifyingKeyId::new(backend, "vk_test"),
         )
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -502,7 +453,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &str,
@@ -522,13 +472,11 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn zk_decode_from_slice_roundtrips() {
         let asset = asset_definition_id();
         let proof = proof_attachment();
-
         assert_slice_roundtrip(VerifyProof::new(proof.clone()));
         assert_slice_roundtrip(PruneProofs::new(Some("halo2/ipa".to_owned())));
         assert_slice_roundtrip(RegisterZkAsset::new(
@@ -569,12 +517,10 @@ mod tests {
             tally_proof: proof,
         });
     }
-
     #[test]
     fn zk_default_registry_decodes_type_names_and_stable_ids() {
         let registry = crate::isi::registry::default();
         let asset = asset_definition_id();
-
         assert_registry_decodes(
             &registry,
             std::any::type_name::<VerifyProof>(),
@@ -610,13 +556,11 @@ mod tests {
             ),
         );
     }
-
     #[test]
     fn shield_verifier_requires_an_unshield_verifier() {
         let asset = asset_definition_id();
         let shield = Some(verifying_key("shield"));
         let unshield = Some(verifying_key("unshield"));
-
         assert!(
             RegisterZkAsset::new(asset.clone(), None, shield.clone())
                 .validate_verifier_roles()

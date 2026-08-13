@@ -6,7 +6,6 @@
 //! the stack before spilling onto the heap.
 use core::fmt;
 use std::{format, string::String, vec::Vec};
-
 use iroha_schema::{IntoSchema, TypeId};
 use norito::{
     NoritoDeserialize, NoritoSerialize, core as ncore,
@@ -16,20 +15,16 @@ pub use small_string::SmallStr;
 pub use small_vector::SmallVec;
 use smallstr::SmallString;
 pub use smallvec::{Array, smallvec};
-
 /// The go-to size for `SmallVec`. When in doubt, use this.
 pub const SMALL_SIZE: usize = 8_usize;
-
 mod small_string {
     use super::*;
-
     #[derive(Debug, derive_more::Display, Clone, PartialEq, Eq, IntoSchema)]
     /// Wrapper around the [`smallstr::SmallString`] type, enforcing a
     /// specific size of stack-based strings.
     #[schema(transparent = "String")]
     #[repr(transparent)]
     pub struct SmallStr(SmallString<[u8; 32]>);
-
     impl SmallStr {
         #[must_use]
         #[inline]
@@ -37,7 +32,6 @@ mod small_string {
         pub fn from_string(other: String) -> Self {
             Self(SmallString::from_string(other))
         }
-
         #[must_use]
         #[inline]
         #[allow(clippy::should_implement_trait)]
@@ -48,38 +42,32 @@ mod small_string {
         pub fn from_str(other: &str) -> Self {
             Self(SmallString::from_str(other))
         }
-
         #[inline]
         /// Checks if the specified pattern is the prefix of given string.
         pub fn starts_with(&self, pattern: &str) -> bool {
             self.0.starts_with(pattern)
         }
     }
-
     impl<A: Array<Item = u8>> From<SmallString<A>> for SmallStr {
         fn from(string: SmallString<A>) -> Self {
             Self(SmallString::from_str(SmallString::as_str(&string)))
         }
     }
-
     impl AsRef<str> for SmallStr {
         fn as_ref(&self) -> &str {
             self.0.as_str()
         }
     }
-
     impl SmallStr {
         #[inline]
         fn as_str(&self) -> &str {
             self.0.as_str()
         }
     }
-
     impl FastJsonWrite for SmallStr {
         fn write_json(&self, out: &mut String) {
             json::write_json_string(self.as_str(), out);
         }
-
         fn write_json_to(
             &self,
             out: &mut dyn json::JsonWriteSink,
@@ -87,20 +75,17 @@ mod small_string {
             json::write_json_string_to(self.as_str(), out)
         }
     }
-
     impl JsonDeserialize for SmallStr {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             let value = parser.parse_string()?;
             Ok(Self::from_str(&value))
         }
     }
-
     impl NoritoSerialize for SmallStr {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             <&str as NoritoSerialize>::serialize(&self.as_str(), writer)
         }
     }
-
     impl<'a> NoritoDeserialize<'a> for SmallStr {
         fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
             let archived_str: &ncore::Archived<String> = archived.cast();
@@ -108,7 +93,6 @@ mod small_string {
             Self::from_str(&string)
         }
     }
-
     impl<'a> ncore::DecodeFromSlice<'a> for SmallStr {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
             let (value, used) = <&str as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
@@ -116,7 +100,6 @@ mod small_string {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use norito::{
@@ -124,9 +107,7 @@ mod tests {
         codec::{Decode, Encode},
         core as ncore, decode_from_bytes, json, to_bytes,
     };
-
     use super::*;
-
     // Encoding and decoding a `SmallVec` should produce an identical vector.
     #[test]
     fn smallvec_encode_decode_round_trip() {
@@ -135,7 +116,6 @@ mod tests {
         let decoded = SmallVec::<[u32; 4]>::decode(&mut bytes.as_slice()).expect("decode");
         assert_eq!(vec, decoded);
     }
-
     #[test]
     fn smallvec_decode_heap_allocation() {
         let vec: SmallVec<[u32; 4]> = SmallVec(smallvec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
@@ -143,32 +123,26 @@ mod tests {
         let decoded = SmallVec::<[u32; 4]>::decode(&mut bytes.as_slice()).expect("decode");
         assert_eq!(vec, decoded);
     }
-
     #[test]
     fn smallstr_constructors_prefix_and_display() {
         let owned = SmallStr::from_string(String::from("ledger-alpha"));
         let borrowed = SmallStr::from_str("ledger-alpha");
-
         assert_eq!(owned, borrowed);
         assert_eq!(owned.as_ref(), "ledger-alpha");
         assert!(owned.starts_with("ledger"));
         assert!(!owned.starts_with("account"));
         assert_eq!(owned.to_string(), "ledger-alpha");
     }
-
     #[test]
     fn smallstr_decode_from_slice_reports_used_bytes() {
         let value = SmallStr::from_str("slice-value");
         let mut bytes = Vec::new();
         ncore::serialize_to_buffer(&value, &mut bytes).expect("serialize SmallStr");
-
         let (decoded, used) =
             <SmallStr as ncore::DecodeFromSlice>::decode_from_slice(&bytes).expect("decode slice");
-
         assert_eq!(decoded, value);
         assert_eq!(used, bytes.len());
     }
-
     #[test]
     fn smallstr_json_roundtrip() {
         for sample in ["", "abc", "Δfire🔥"] {
@@ -180,7 +154,6 @@ mod tests {
             assert_eq!(decoded, small);
         }
     }
-
     #[test]
     fn smallvec_json_roundtrip() {
         let vec: SmallVec<[u32; 4]> = SmallVec(smallvec![1, 2, 3, 4]);
@@ -190,7 +163,6 @@ mod tests {
             json::from_json(&json_repr).expect("deserialize SmallVec");
         assert_eq!(decoded, vec);
     }
-
     #[test]
     fn smallstr_norito_roundtrip() {
         let value = SmallStr::from_str("tiny");
@@ -198,7 +170,6 @@ mod tests {
         let decoded: SmallStr = decode_from_bytes(&bytes).expect("decode SmallStr");
         assert_eq!(decoded, value);
     }
-
     #[test]
     fn smallvec_norito_roundtrip() {
         let value: SmallVec<[u32; 4]> = SmallVec(smallvec![4, 3, 2, 1]);
@@ -206,11 +177,9 @@ mod tests {
         let decoded: SmallVec<[u32; 4]> = decode_from_bytes(&bytes).expect("decode SmallVec");
         assert_eq!(decoded, value);
     }
-
     #[test]
     fn smallvec_api_methods_preserve_order() {
         let mut vec = SmallVec::<[u32; 4]>::new();
-
         vec.push(1);
         vec.extend([2, 3, 4, 5]);
         assert_eq!(&*vec, &[1, 2, 3, 4, 5]);
@@ -219,47 +188,37 @@ mod tests {
         vec.clear();
         assert!(vec.is_empty());
     }
-
     #[test]
     fn smallvec_from_vec_from_iter_and_into_iter_preserve_order() {
         let from_vec = SmallVec::<[u32; 2]>::from(vec![7, 8, 9]);
         let from_iter = [7_u32, 8, 9].into_iter().collect::<SmallVec<[u32; 2]>>();
-
         assert_eq!(from_vec, from_iter);
         assert_eq!(from_vec.into_iter().collect::<Vec<_>>(), vec![7, 8, 9]);
     }
-
     #[test]
     fn smallvec_decode_rejects_truncated_element_payload() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&1_u64.to_le_bytes());
         bytes.extend_from_slice(&4_u64.to_le_bytes());
         bytes.extend_from_slice(&[0xAA, 0xBB]);
-
         let err = <SmallVec<[u32; 4]> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
             .expect_err("truncated element payload should fail");
-
         assert!(matches!(err, ncore::Error::LengthMismatch));
     }
-
     #[test]
     fn smallvec_try_deserialize_honors_zero_payload_context() {
         let value: SmallVec<[u32; 4]> = SmallVec(smallvec![1, 2, 3]);
         let bytes = to_bytes(&value).expect("encode SmallVec");
         let archived = norito::core::from_bytes::<SmallVec<[u32; 4]>>(&bytes).expect("archive");
         let _payload_ctx = ncore::PayloadCtxGuard::enter_with_len(&[], 0);
-
         let decoded =
             <SmallVec<[u32; 4]> as NoritoDeserialize>::try_deserialize(archived).expect("decode");
-
         assert!(decoded.is_empty());
     }
-
     #[test]
     fn smallvec_zero_sized_round_trip() {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         struct Zst;
-
         impl NoritoSerialize for Zst {
             fn serialize(
                 &self,
@@ -268,13 +227,11 @@ mod tests {
                 Ok(())
             }
         }
-
         impl<'a> NoritoDeserialize<'a> for Zst {
             fn deserialize(_: &'a ncore::Archived<Self>) -> Self {
                 Self
             }
         }
-
         impl<'a> ncore::DecodeFromSlice<'a> for Zst {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
                 if !bytes.is_empty() {
@@ -283,17 +240,14 @@ mod tests {
                 Ok((Self, 0))
             }
         }
-
         let vec: SmallVec<[Zst; 4]> = SmallVec(smallvec![Zst, Zst, Zst]);
         let bytes = vec.encode();
         let decoded = SmallVec::<[Zst; 4]>::decode(&mut bytes.as_slice()).expect("decode");
         assert_eq!(decoded, vec);
     }
 }
-
 mod small_vector {
     use super::*;
-
     /// Wrapper struct around [`smallvec::SmallVec`] type. Keeps `N`
     /// elements on the stack if `self.len()` is less than `N`, if not,
     /// produces a heap-allocated vector.
@@ -306,13 +260,11 @@ mod small_vector {
     /// ```
     #[repr(transparent)]
     pub struct SmallVec<A: Array>(pub smallvec::SmallVec<A>);
-
     impl<A: Array> Default for SmallVec<A> {
         fn default() -> Self {
             Self(smallvec::SmallVec::new())
         }
     }
-
     impl<A: Array> Clone for SmallVec<A>
     where
         A::Item: Clone,
@@ -321,7 +273,6 @@ mod small_vector {
             Self(self.0.clone())
         }
     }
-
     impl<A: Array> fmt::Debug for SmallVec<A>
     where
         A::Item: fmt::Debug,
@@ -330,13 +281,11 @@ mod small_vector {
             f.debug_tuple("SmallVec").field(&self.0).finish()
         }
     }
-
     impl<A: Array> FromIterator<A::Item> for SmallVec<A> {
         fn from_iter<T: IntoIterator<Item = A::Item>>(iter: T) -> Self {
             Self(iter.into_iter().collect())
         }
     }
-
     #[allow(clippy::unconditional_recursion)] // False-positive
     impl<A: Array> PartialEq for SmallVec<A>
     where
@@ -346,7 +295,6 @@ mod small_vector {
             self.0.eq(&other.0)
         }
     }
-
     impl<A: Array> PartialOrd for SmallVec<A>
     where
         A::Item: PartialOrd,
@@ -355,7 +303,6 @@ mod small_vector {
             self.0.partial_cmp(&other.0)
         }
     }
-
     impl<A: Array> Ord for SmallVec<A>
     where
         A::Item: Ord,
@@ -364,23 +311,18 @@ mod small_vector {
             self.0.cmp(&other.0)
         }
     }
-
     impl<A: Array> core::ops::Deref for SmallVec<A> {
         type Target = <smallvec::SmallVec<A> as core::ops::Deref>::Target;
-
         fn deref(&self) -> &Self::Target {
             &self.0
         }
     }
-
     impl<A: Array> core::ops::DerefMut for SmallVec<A> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.0
         }
     }
-
     impl<A: Array> Eq for SmallVec<A> where A::Item: Eq {}
-
     impl<A: Array> SmallVec<A> {
         /// Construct new empty [`SmallVec`]
         #[inline]
@@ -388,19 +330,16 @@ mod small_vector {
         pub fn new() -> Self {
             Self(smallvec::SmallVec::new())
         }
-
         /// Append an item to the vector.
         #[inline]
         pub fn push(&mut self, value: A::Item) {
             self.0.push(value);
         }
-
         /// Remove all elements from the vector without altering capacity.
         #[inline]
         pub fn clear(&mut self) {
             self.0.clear();
         }
-
         /// Remove and return the element at position `index`, shifting all elements after it to the
         /// left.
         ///
@@ -409,7 +348,6 @@ mod small_vector {
         pub fn remove(&mut self, index: usize) -> A::Item {
             self.0.remove(index)
         }
-
         /// Convert a [`SmallVec`] to a [`Vec`], without reallocating if the [`SmallVec`]
         /// has already spilled onto the heap.
         #[inline]
@@ -418,23 +356,18 @@ mod small_vector {
             self.0.into_vec()
         }
     }
-
     impl<A: Array> From<Vec<A::Item>> for SmallVec<A> {
         fn from(vec: Vec<A::Item>) -> Self {
             Self(vec.into_iter().collect())
         }
     }
-
     impl<A: Array> IntoIterator for SmallVec<A> {
         type Item = <A as smallvec::Array>::Item;
-
         type IntoIter = <smallvec::SmallVec<A> as IntoIterator>::IntoIter;
-
         fn into_iter(self) -> Self::IntoIter {
             self.0.into_iter()
         }
     }
-
     impl<A: smallvec::Array + 'static> TypeId for SmallVec<A>
     where
         A::Item: TypeId,
@@ -452,27 +385,23 @@ mod small_vector {
         fn type_name() -> String {
             Vec::<A::Item>::type_name()
         }
-
         #[inline]
         fn update_schema_map(map: &mut iroha_schema::MetaMap) {
             if !map.contains_key::<Self>() {
                 if !map.contains_key::<Vec<A::Item>>() {
                     Vec::<A::Item>::update_schema_map(map);
                 }
-
                 if let Some(schema) = map.get::<Vec<A::Item>>() {
                     map.insert::<Self>(schema.clone());
                 }
             }
         }
     }
-
     impl<A: smallvec::Array> Extend<A::Item> for SmallVec<A> {
         fn extend<T: IntoIterator<Item = A::Item>>(&mut self, iter: T) {
             self.0.extend(iter);
         }
     }
-
     impl<A: smallvec::Array> FastJsonWrite for SmallVec<A>
     where
         A::Item: JsonSerialize,
@@ -489,7 +418,6 @@ mod small_vector {
             }
             out.push(']');
         }
-
         fn write_json_to(
             &self,
             out: &mut dyn json::JsonWriteSink,
@@ -507,7 +435,6 @@ mod small_vector {
             Ok(())
         }
     }
-
     impl<A: smallvec::Array> JsonDeserialize for SmallVec<A>
     where
         A::Item: JsonDeserialize,
@@ -519,7 +446,6 @@ mod small_vector {
             Ok(Self(out))
         }
     }
-
     impl<A: Array> NoritoSerialize for SmallVec<A>
     where
         A::Item: NoritoSerialize,
@@ -539,7 +465,6 @@ mod small_vector {
             Ok(())
         }
     }
-
     impl<'a, A: Array> NoritoDeserialize<'a> for SmallVec<A>
     where
         A::Item: NoritoDeserialize<'a> + for<'slice> ncore::DecodeFromSlice<'slice>,
@@ -552,7 +477,6 @@ mod small_vector {
                 )
             })
         }
-
         fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
             if let Some((_, len)) = ncore::payload_ctx()
                 && len == 0
@@ -569,7 +493,6 @@ mod small_vector {
             Ok(value)
         }
     }
-
     impl<'a, A: Array> ncore::DecodeFromSlice<'a> for SmallVec<A>
     where
         A::Item: ncore::DecodeFromSlice<'a>,
@@ -578,7 +501,6 @@ mod small_vector {
             let (len, mut offset) = <u64 as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
             let len = usize::try_from(len).map_err(|_| ncore::Error::LengthMismatch)?;
             let mut out = smallvec::SmallVec::<A>::with_capacity(len);
-
             for _ in 0..len {
                 let (elem_len, used_len) =
                     <u64 as ncore::DecodeFromSlice>::decode_from_slice(&bytes[offset..])?;
@@ -587,7 +509,6 @@ mod small_vector {
                     .ok_or(ncore::Error::LengthMismatch)?;
                 let elem_len =
                     usize::try_from(elem_len).map_err(|_| ncore::Error::LengthMismatch)?;
-
                 if elem_len == 0 {
                     if ncore::archived_payload_size::<A::Item>() != 0 {
                         return Err(ncore::Error::LengthMismatch);
@@ -600,7 +521,6 @@ mod small_vector {
                     out.push(value);
                     continue;
                 }
-
                 let end = offset
                     .checked_add(elem_len)
                     .ok_or(ncore::Error::LengthMismatch)?;
@@ -612,7 +532,6 @@ mod small_vector {
                 out.push(value);
                 offset = end;
             }
-
             Ok((Self(out), offset))
         }
     }

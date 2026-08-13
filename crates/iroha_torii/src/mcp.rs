@@ -11,7 +11,6 @@
 //! bodies become JSON strings, and the typed value is placed under
 //! `structuredContent`. This keeps ledger-controlled content in the data plane
 //! instead of promoting it into the MCP result's text summary.
-
 use std::{
     collections::BTreeSet,
     fmt::Write as _,
@@ -19,7 +18,6 @@ use std::{
     sync::LazyLock,
     time::Duration,
 };
-
 use axum::{
     body::Body,
     http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode, header},
@@ -34,12 +32,9 @@ use iroha_torii_shared::route_catalog::{
 };
 use norito::json::{self, Map, Value};
 use tower::ServiceExt as _;
-
 use crate::{SharedAppState, limits, openapi};
-
 mod connect_session_tools;
 mod governance_ballot_tools;
-
 use connect_session_tools::{build_connect_session_create_body, decode_canonical, required_string};
 use governance_ballot_tools::{
     governance_selector_v1_schema, iroha_gov_ballots_plain_tool,
@@ -730,7 +725,6 @@ fn is_tool_allowed_by_policy(
     tool: &ToolSpec,
 ) -> bool {
     use iroha_config::parameters::actual::ToriiMcpProfile;
-
     let profile_allowed = match (cfg.profile, tool.effect) {
         (ToriiMcpProfile::Operator, _) => true,
         (ToriiMcpProfile::Writer, ToolEffect::Operator) => false,

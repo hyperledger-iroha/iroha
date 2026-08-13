@@ -1,10 +1,8 @@
 // Same-scope repair query regressions extracted to keep the parent source budget bounded.
-
 #[test]
 fn repair_task_byte_budget_returns_stable_continuation_cursor() {
     const TASK_COUNT: usize = 300;
     const EVIDENCE_PADDING_BYTES: usize = 30 * 1024;
-
     let mut state = make_state();
     let provider = ProviderId::new([0xC2; 32]);
     grant_repair_operator(&mut state, &alice(), provider);
@@ -35,7 +33,6 @@ fn repair_task_byte_budget_returns_stable_continuation_cursor() {
         Ok(())
     })
     .expect("commit large repair task index");
-
     let view = state.view();
     let first = FindSorafsRepairTasks::new(None, None, REPAIR_QUERY_MAX_ITEMS_V1)
         .execute(&view)
@@ -74,7 +71,6 @@ fn repair_task_byte_budget_returns_stable_continuation_cursor() {
         "byte-budget continuation must preserve strict task-id order"
     );
 }
-
 #[test]
 fn repair_committed_event_queries_fail_closed_on_corrupt_journals() {
     let missing_head =
@@ -89,7 +85,6 @@ fn repair_committed_event_queries_fail_closed_on_corrupt_journals() {
         FindSorafsRepairEvents::new(None, None, 10).execute(&missing_head.view()),
         Err(QueryExecutionFail::Conversion(_))
     ));
-
     let malformed_event =
         committed_repair_fixture("REP-CORRUPT-BYTES", [0x62; 32], |_, transaction| {
             transaction
@@ -102,7 +97,6 @@ fn repair_committed_event_queries_fail_closed_on_corrupt_journals() {
         FindSorafsRepairEvents::new(None, None, 10).execute(&malformed_event.view()),
         Err(QueryExecutionFail::Conversion(_))
     ));
-
     let orphan_event =
         committed_repair_fixture("REP-CORRUPT-ORPHAN", [0x63; 32], |_, transaction| {
             let mut orphan = read_repair_persisted_event(transaction.world(), 1)?
@@ -119,7 +113,6 @@ fn repair_committed_event_queries_fail_closed_on_corrupt_journals() {
         FindSorafsRepairEvents::new(None, None, 10).execute(&orphan_event.view()),
         Err(QueryExecutionFail::Conversion(_))
     ));
-
     let orphan_task = committed_repair_fixture("REP-CORRUPT-TASK", [0x64; 32], |_, transaction| {
         let mut orphan = read_repair_persisted_event(transaction.world(), 1)?
             .expect("initial repair event exists");
@@ -134,7 +127,6 @@ fn repair_committed_event_queries_fail_closed_on_corrupt_journals() {
         FindSorafsRepairEvents::new(None, None, 10).execute(&orphan_task.view()),
         Err(QueryExecutionFail::Conversion(_))
     ));
-
     let missing_middle =
         committed_repair_fixture("REP-CORRUPT-GAP", [0x65; 32], |report, transaction| {
             ApplySorafsRepairTaskAction::new(
@@ -166,7 +158,6 @@ fn repair_committed_event_queries_fail_closed_on_corrupt_journals() {
         FindSorafsRepairEvents::new(None, None, 10).execute(&missing_middle.view()),
         Err(QueryExecutionFail::Conversion(_))
     ));
-
     let nonfinalized =
         committed_repair_fixture("REP-CORRUPT-HEIGHT", [0x66; 32], |_, transaction| {
             let mut event = read_repair_persisted_event(transaction.world(), 1)?
@@ -190,7 +181,6 @@ fn repair_committed_event_queries_fail_closed_on_corrupt_journals() {
         Err(QueryExecutionFail::Conversion(_))
     ));
 }
-
 #[test]
 fn repair_query_resource_and_encoded_budget_guards_fail_closed() {
     let oversized_record =
@@ -205,7 +195,6 @@ fn repair_query_resource_and_encoded_budget_guards_fail_closed() {
         FindSorafsRepairTasks::new(None, None, 1).execute(&oversized_record.view()),
         Err(QueryExecutionFail::Conversion(_))
     ));
-
     let mut inspected_records = 3usize;
     assert!(
         charge_repair_query_inspected_records(
@@ -226,7 +215,6 @@ fn repair_query_resource_and_encoded_budget_guards_fail_closed() {
         )
         .is_err()
     );
-
     let state = committed_repair_fixture("REP-BUDGET-PAGE", [0x68; 32], |_, _| Ok(()));
     let view = state.view();
     let finalized_task = FindSorafsRepairTask::new("REP-BUDGET-PAGE".to_owned(), None)
@@ -248,7 +236,6 @@ fn repair_query_resource_and_encoded_budget_guards_fail_closed() {
         )
         .is_err()
     );
-
     let event_page = FindSorafsRepairEvents::new(Some(finalized_task.finalized_cursor), None, 1)
         .execute(&view)
         .expect("query repair budget fixture event");
@@ -274,7 +261,6 @@ fn repair_query_resource_and_encoded_budget_guards_fail_closed() {
         .is_err()
     );
 }
-
 #[test]
 fn repair_escalation_and_provider_appeal_are_atomic_and_idempotent() {
     let mut state = make_state();
@@ -286,7 +272,6 @@ fn repair_escalation_and_provider_appeal_are_atomic_and_idempotent() {
     let block_hash = iroha_crypto::HashOf::new(&header);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-
     SubmitSorafsRepairTask::new([0xE3; 32], to_bytes(&report).expect("encode repair report"))
         .execute(&alice(), &mut transaction)
         .expect("submit repair task");
@@ -322,7 +307,6 @@ fn repair_escalation_and_provider_appeal_are_atomic_and_idempotent() {
     )
     .execute(&alice(), &mut transaction)
     .expect("slash proposal and terminal escalation commit atomically");
-
     let appeal = SubmitSorafsRepairAppeal::new(
         report.ticket_id.0.clone(),
         3,
@@ -337,7 +321,6 @@ fn repair_escalation_and_provider_appeal_are_atomic_and_idempotent() {
     appeal
         .execute(&bob(), &mut transaction)
         .expect("exact appeal replay is idempotent");
-
     let conflicting_replay = SubmitSorafsRepairAppeal::new(
         report.ticket_id.0.clone(),
         3,
@@ -358,11 +341,9 @@ fn repair_escalation_and_provider_appeal_are_atomic_and_idempotent() {
     .execute(&bob(), &mut transaction)
     .expect_err("slash proposal permits only one appeal");
     assert!(smart_contract_error_message(&duplicate_appeal).contains("single appeal"));
-
     transaction.apply();
     block.commit().expect("commit repair escalation block");
     state.push_block_hash_for_testing(block_hash);
-
     let view = state.view();
     let task = FindSorafsRepairTask::new(report.ticket_id.0, None)
         .execute(&view)

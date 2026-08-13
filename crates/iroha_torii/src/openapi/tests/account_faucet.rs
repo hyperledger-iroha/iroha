@@ -7,7 +7,6 @@ fn account_faucet_openapi_requires_exact_network_pow_for_mutation() {
         operation_response_schema_ref(puzzle, "200", "/v1/accounts/faucet/puzzle"),
         "#/components/schemas/AccountFaucetPuzzle"
     );
-
     let claim = openapi_operation(&document, "/v1/accounts/faucet", "post");
     assert_eq!(
         operation_request_schema_ref(claim, "/v1/accounts/faucet"),
@@ -17,7 +16,6 @@ fn account_faucet_openapi_requires_exact_network_pow_for_mutation() {
         operation_response_schema_ref(claim, "202", "/v1/accounts/faucet"),
         "#/components/schemas/AccountFaucetResponse"
     );
-
     let schemas = component_schemas(&document);
     let puzzle_schema = schemas
         .get("AccountFaucetPuzzle")
@@ -44,7 +42,6 @@ fn account_faucet_openapi_requires_exact_network_pow_for_mutation() {
             .and_then(Value::as_u64),
         Some(1)
     );
-
     let claim_required = schemas
         .get("AccountFaucetRequest")
         .and_then(Value::as_object)

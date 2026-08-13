@@ -1,20 +1,15 @@
 //! Doc-sync tests for the Sumeragi governance and evidence documentation.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use std::path::Path;
-
 use iroha_config::parameters::defaults::sumeragi::npos;
-
 #[test]
 fn sumeragi_doc_mentions_reconfig_defaults_and_errors() {
     let repo_root = workspace_root();
     let doc =
         std::fs::read_to_string(repo_root.join("specs/sumeragi.md")).expect("read sumeragi.md");
-
     let horizon = npos::RECONFIG_EVIDENCE_HORIZON_BLOCKS;
     let activation = npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
     let slashing_delay = npos::SLASHING_DELAY_BLOCKS;
-
     assert!(
         doc.contains(&format!("evidence_horizon_blocks = {horizon}")),
         "specs/sumeragi.md is missing the canonical evidence_horizon_blocks default ({horizon})"
@@ -32,17 +27,14 @@ fn sumeragi_doc_mentions_reconfig_defaults_and_errors() {
         "specs/sumeragi.md must document the joint-consensus staging error message"
     );
 }
-
 #[test]
 fn governance_api_doc_covers_joint_consensus_flow() {
     let repo_root = workspace_root();
     let doc = std::fs::read_to_string(repo_root.join("specs/governance_api.md"))
         .expect("read governance_api.md");
-
     let horizon = npos::RECONFIG_EVIDENCE_HORIZON_BLOCKS;
     let activation = npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
     let slashing_delay = npos::SLASHING_DELAY_BLOCKS;
-
     assert!(
         doc.contains(&format!(
             "sumeragi.npos.reconfig.evidence_horizon_blocks` (default `{horizon}` blocks)"
@@ -66,7 +58,6 @@ fn governance_api_doc_covers_joint_consensus_flow() {
         "specs/governance_api.md must document the joint-consensus staging error message"
     );
 }
-
 fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

@@ -1,7 +1,5 @@
 //! Public lane staking instruction handlers (NX-9).
-
 use std::{collections::BTreeMap, time::Duration};
-
 use iroha_data_model::{
     asset::{Asset, AssetDefinitionId, AssetId},
     isi::{
@@ -22,7 +20,6 @@ use iroha_data_model::{
     prelude::AccountId,
 };
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
-
 use super::prelude::*;
 use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
@@ -34,9 +31,7 @@ use crate::{
     sumeragi::status as sumeragi_status,
     telemetry::StateTelemetry,
 };
-
 use crate::sumeragi::evidence::evidence_key;
-
 /// One-shot retained-state proof for an exact public-lane staking slash.
 pub(in crate::smartcontracts::isi) struct VerifiedStakingSlashDebit {
     lane_id: LaneId,
@@ -1903,7 +1898,6 @@ fn assert_stake_amount_matches_spec(
 mod tests {
     use core::num::{NonZeroU32, NonZeroU64};
     use std::time::Duration;
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::{Account, MultisigMember, MultisigPolicy},
@@ -1926,7 +1920,6 @@ mod tests {
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         block::ValidBlock,

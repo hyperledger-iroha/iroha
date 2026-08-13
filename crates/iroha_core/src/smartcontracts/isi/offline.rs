@@ -1,11 +1,8 @@
 //! Kagemusha offline-cash instruction execution.
-
 mod kagemusha_terminal_registry_v4;
-
 pub use kagemusha_terminal_registry_v4::{
     KagemushaCatalogQualificationSealV1, KagemushaReleaseCatalogV4,
 };
-
 use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
 use std::{
@@ -13,7 +10,6 @@ use std::{
     io::Cursor,
     sync::LazyLock,
 };
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -774,7 +770,6 @@ pub fn ensure_kagemusha_active_release_material_v4(
 #[cfg(test)]
 #[path = "offline/recursive_readiness_tests.rs"]
 mod recursive_readiness_tests;
-
 fn resolve_offline_escrow_account(
     state_transaction: &mut StateTransaction<'_, '_>,
     definition: &AssetDefinitionId,
@@ -897,7 +892,6 @@ fn reserve_kagemusha_escrow(
 /// Execution logic for Kagemusha offline-cash instructions.
 pub mod isi {
     use super::*;
-
     const KAGEMUSHA_DEVICE_REGISTRATION_DOMAIN: &str = "kagemusha-device-registration";
     const KAGEMUSHA_ATTESTATION_CHALLENGE_REPLAY_DOMAIN: &str = "kagemusha-attestation-challenge";
     const KAGEMUSHA_ATTESTATION_REPORT_REPLAY_DOMAIN: &str = "kagemusha-attestation-report";

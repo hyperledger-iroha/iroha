@@ -1,11 +1,9 @@
 use std::collections::VecDeque;
-
 use crate::sumeragi::v2_core::Generation;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::peer::PeerId;
 use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture};
 use tempfile::TempDir;
-
 use super::*;
 use crate::sumeragi::{
     InboundBlockMessage,
@@ -15,14 +13,12 @@ use crate::sumeragi::{
     },
     v2_chunks::encode_payload,
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FakeCommand {
     record: Option<u8>,
     enter_view: Option<EventTag>,
     fail: bool,
 }
-
 impl FakeCommand {
     const fn record(value: u8) -> Self {
         Self {
@@ -31,7 +27,6 @@ impl FakeCommand {
             fail: false,
         }
     }
-
     const fn enter_view(tag: EventTag) -> Self {
         Self {
             record: None,
@@ -39,7 +34,6 @@ impl FakeCommand {
             fail: false,
         }
     }
-
     const fn fail() -> Self {
         Self {
             record: None,
@@ -48,9 +42,7 @@ impl FakeCommand {
         }
     }
 }
-
 impl exact_runtime_command_identity_sealed::Sealed for FakeCommand {}
-
 impl ExactRuntimeCommandIdentity for FakeCommand {
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
         let mut identity = Vec::new();
@@ -77,14 +69,12 @@ impl ExactRuntimeCommandIdentity for FakeCommand {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FakeEffect {
     enter_view: Option<EventTag>,
     fresh: Option<RuntimeFreshRootKind>,
     semantic: u8,
 }
-
 impl FakeEffect {
     const fn other() -> Self {
         Self {
@@ -93,7 +83,6 @@ impl FakeEffect {
             semantic: 0,
         }
     }
-
     const fn enter_view(tag: EventTag) -> Self {
         Self {
             enter_view: Some(tag),
@@ -101,7 +90,6 @@ impl FakeEffect {
             semantic: 0,
         }
     }
-
     const fn historical(semantic: u8) -> Self {
         Self {
             enter_view: None,
@@ -110,18 +98,14 @@ impl FakeEffect {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FakeError;
-
 impl fmt::Display for FakeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("fake driver failure")
     }
 }
-
 impl std::error::Error for FakeError {}
-
 struct FakeDriver {
     current_tag: EventTag,
     delivered: Vec<(EventTag, u8)>,
@@ -147,7 +131,6 @@ struct FakeDriver {
     signature_fence_active: bool,
     signature_fence_identity: u64,
 }
-
 impl FakeDriver {
     fn new(tag: EventTag) -> Self {
         Self {
@@ -173,17 +156,14 @@ impl FakeDriver {
         }
     }
 }
-
 impl RuntimeDriver for FakeDriver {
     type Command = FakeCommand;
     type Effect = FakeEffect;
     type Error = FakeError;
     type SignatureFenceIdentity = u64;
-
     fn current_tag(&self) -> EventTag {
         self.current_tag
     }
-
     fn preflight_command_admission(
         &self,
         _tag: EventTag,
@@ -192,13 +172,11 @@ impl RuntimeDriver for FakeDriver {
         self.admission_preflight_override
             .unwrap_or(RuntimeCommandAdmissionPreflight::Admit)
     }
-
     fn dormant_local_fifo_reservations(
         &self,
     ) -> Result<Vec<RuntimeDormantLocalFifoReservation>, String> {
         Ok(self.dormant_local_fifo_reservations.clone())
     }
-
     fn dispatch(
         &mut self,
         tagged: TaggedCommand<Self::Command>,
@@ -226,7 +204,6 @@ impl RuntimeDriver for FakeDriver {
         self.delivered.push((tagged.tag, value));
         Ok(RuntimeDriverDispatch::completed(vec![FakeEffect::other()]))
     }
-
     fn timeout_elapsed(
         &mut self,
         tag: EventTag,
@@ -236,7 +213,6 @@ impl RuntimeDriver for FakeDriver {
             self.timer_effects.pop_front().unwrap_or_default(),
         ))
     }
-
     fn retransmit_elapsed(
         &mut self,
         tag: EventTag,
@@ -246,15 +222,12 @@ impl RuntimeDriver for FakeDriver {
             self.timer_effects.pop_front().unwrap_or_default(),
         ))
     }
-
     fn deferred_work_is_serviceable(&self) -> bool {
         !self.deferred_effects.is_empty()
     }
-
     fn signature_fence_is_active(&self) -> bool {
         self.signature_fence_active
     }
-
     fn signature_fence_identity(
         &self,
     ) -> Result<Option<Self::SignatureFenceIdentity>, Self::Error> {
@@ -262,19 +235,15 @@ impl RuntimeDriver for FakeDriver {
             .signature_fence_active
             .then_some(self.signature_fence_identity))
     }
-
     fn deferred_admission_ordinal_source(&self) -> &DeferredAdmissionOrdinalSource {
         &self.deferred_admission_ordinals
     }
-
     fn authenticated_deferred_admission_ordinals(&self) -> BTreeSet<u128> {
         BTreeSet::new()
     }
-
     fn all_deferred_admission_ordinals(&self) -> BTreeSet<u128> {
         self.deferred_active_ordinals.clone()
     }
-
     fn deferred_occurrence_ownership(
         &self,
         admission_ordinal: u128,
@@ -283,7 +252,6 @@ impl RuntimeDriver for FakeDriver {
             .get(&admission_ordinal)
             .cloned()
     }
-
     fn synthetic_deferred_lifecycle_owner(
         &self,
         evidence: &DeferredServiceEvidence,
@@ -297,7 +265,6 @@ impl RuntimeDriver for FakeDriver {
         let lifecycle_ordinal = evidence.admission_ordinal.checked_add(1)?;
         RuntimeLifecycleOwner::new(origin, lifecycle_ordinal).ok()
     }
-
     fn dispatch_deferred(
         &mut self,
         _eligible: &BTreeSet<u128>,
@@ -332,11 +299,9 @@ impl RuntimeDriver for FakeDriver {
         self.deferred_service_cursor = evidence.service_cursor_after;
         Ok(Some((effects, evidence, None)))
     }
-
     fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag> {
         effect.enter_view
     }
-
     fn effect_causality(
         effect: &Self::Effect,
         _source: RuntimeEffectSource,
@@ -346,18 +311,15 @@ impl RuntimeDriver for FakeDriver {
             RuntimeEffectCausality::Fresh,
         )
     }
-
     fn fresh_effect_semantic_identity(
         effect: &Self::Effect,
         kind: RuntimeFreshRootKind,
     ) -> Vec<u8> {
         vec![kind.code(), effect.semantic]
     }
-
     fn effect_root_tag(_effect: &Self::Effect) -> Option<EventTag> {
         None
     }
-
     fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool {
         matches!(
             (payload, self.protected_commit),
@@ -371,11 +333,9 @@ impl RuntimeDriver for FakeDriver {
         )
     }
 }
-
 fn tag(view: u64) -> EventTag {
     EventTag::new(7, view, Generation::new(view + 11))
 }
-
 fn authenticated_proposal_for_test(
     manifest: wire::PayloadManifest,
 ) -> AuthenticatedConsensusMessage {
@@ -392,7 +352,6 @@ fn authenticated_proposal_for_test(
         }),
     ))
 }
-
 fn authenticated_runtime_context() -> (wire::HeightContext, Vec<KeyPair>) {
     let mut keys = (1_u8..=4)
         .map(|seed| {
@@ -434,7 +393,6 @@ fn authenticated_runtime_context() -> (wire::HeightContext, Vec<KeyPair>) {
     };
     (context, keys)
 }
-
 fn signed_runtime_proposal(
     context: &wire::HeightContext,
     keys: &[KeyPair],
@@ -474,7 +432,6 @@ fn signed_runtime_proposal(
     .to_vec();
     wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal))
 }
-
 fn signed_runtime_vote(
     keys: &[KeyPair],
     round: wire::ConsensusRound,
@@ -499,7 +456,6 @@ fn signed_runtime_vote(
     .to_vec();
     wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote))
 }
-
 fn signed_runtime_timeout_vote(
     context: &wire::HeightContext,
     keys: &[KeyPair],
@@ -508,7 +464,6 @@ fn signed_runtime_timeout_vote(
 ) -> wire::ConsensusMessageV2 {
     signed_runtime_timeout_vote_with_highest_prepare_qc(context, keys, view, signer, None)
 }
-
 fn signed_runtime_timeout_vote_with_highest_prepare_qc(
     context: &wire::HeightContext,
     keys: &[KeyPair],
@@ -534,7 +489,6 @@ fn signed_runtime_timeout_vote_with_highest_prepare_qc(
     .to_vec();
     wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(vote))
 }
-
 fn fair_runtime_ownership(
     message: &wire::ConsensusMessageV2,
     semantic_origin: PeerId,
@@ -550,7 +504,6 @@ fn fair_runtime_ownership(
         .take_ingress_ownership()
         .expect("real fair ingress attaches exact ownership")
 }
-
 fn fair_runtime_ownership_at_lifecycle(
     mut ownership: FairV2IngressOwnershipEvidence,
     lifecycle_ordinal: u128,
@@ -563,7 +516,6 @@ fn fair_runtime_ownership_at_lifecycle(
     );
     ownership
 }
-
 fn fair_runtime_ownership_with_reply_route(
     message: &wire::ConsensusMessageV2,
     semantic_origin: PeerId,
@@ -583,7 +535,6 @@ fn fair_runtime_ownership_with_reply_route(
         .take_ingress_ownership()
         .expect("real fair ingress attaches route ownership")
 }
-
 fn signed_runtime_quorum_certificate(
     context: &wire::HeightContext,
     keys: &[KeyPair],
@@ -591,7 +542,6 @@ fn signed_runtime_quorum_certificate(
 ) -> wire::QuorumCertificate {
     signed_runtime_quorum_certificate_for_phase(context, keys, marker, wire::GlobalPhase::Commit)
 }
-
 fn signed_runtime_quorum_certificate_for_phase(
     context: &wire::HeightContext,
     keys: &[KeyPair],
@@ -600,7 +550,6 @@ fn signed_runtime_quorum_certificate_for_phase(
 ) -> wire::QuorumCertificate {
     signed_runtime_quorum_certificate_for_phase_at_view(context, keys, marker, phase, 0)
 }
-
 fn signed_runtime_quorum_certificate_for_phase_at_view(
     context: &wire::HeightContext,
     keys: &[KeyPair],
@@ -659,7 +608,6 @@ fn signed_runtime_quorum_certificate_for_phase_at_view(
             .expect("aggregate runtime fixture certificate"),
     }
 }
-
 fn pending_validate_binding_for_test(
     tag: EventTag,
     round: wire::ConsensusRound,
@@ -714,14 +662,12 @@ fn pending_validate_binding_for_test(
         .expect("Store fixture derives Validate");
     (validate, validate_binding)
 }
-
 fn signed_runtime_timeout_certificate(
     context: &wire::HeightContext,
     keys: &[KeyPair],
 ) -> wire::TimeoutCertificate {
     signed_runtime_timeout_certificate_for_view(context, keys, 0)
 }
-
 fn signed_runtime_timeout_certificate_for_view(
     context: &wire::HeightContext,
     keys: &[KeyPair],
@@ -762,7 +708,6 @@ fn signed_runtime_timeout_certificate_for_view(
         }],
     }
 }
-
 fn runtime_manifest(context: &wire::HeightContext, marker: u8) -> wire::PayloadManifest {
     let round = wire::ConsensusRound {
         context_id: context.id(),
@@ -780,7 +725,6 @@ fn runtime_manifest(context: &wire::HeightContext, marker: u8) -> wire::PayloadM
         .manifest()
         .clone()
 }
-
 fn recovered_next_wal_vote_seal_fixture(
     marker: u8,
 ) -> (
@@ -835,14 +779,12 @@ fn recovered_next_wal_vote_seal_fixture(
             .expect("exact next-WAL Vote seal fixture");
     (verified, seal, validated, effect)
 }
-
 #[test]
 fn recovered_next_wal_vote_projection_is_exact_and_fail_closed() {
     let (verified, seal, _, _) = recovered_next_wal_vote_seal_fixture(0x31);
     let projection = project_recovered_lifecycle_next_wal_vote_candidate(&verified, seal)
         .expect("exact seal projects one canonical standalone Sign");
     assert!(projection.is_exact(&verified));
-
     let (verified, foreign_context_seal, _, _) = recovered_next_wal_vote_seal_fixture(0x32);
     let (mut foreign_context, foreign_keys) = authenticated_runtime_context();
     foreign_context.nexus_amx_context_hash = Hash::new(b"foreign next-WAL context");
@@ -863,7 +805,6 @@ fn recovered_next_wal_vote_projection_is_exact_and_fail_closed() {
         .is_err(),
         "a foreign verified height cannot authorize the retained Vote"
     );
-
     let (_, mut foreign_body_seal, validated, _) = recovered_next_wal_vote_seal_fixture(0x33);
     let manifest = runtime_manifest(verified.context(), 0x34);
     let foreign_durable = DurableBodyReceipt::for_test(
@@ -879,7 +820,6 @@ fn recovered_next_wal_vote_projection_is_exact_and_fail_closed() {
         "a substituted body receipt cannot authorize the retained Vote"
     );
     drop(validated);
-
     let (verified, mut foreign_wal_seal, _, _) = recovered_next_wal_vote_seal_fixture(0x35);
     foreign_wal_seal
         .substitute_wal_identity_for_test(RecoveredWalFrameIdentity::for_test(91, 92, [0xE1; 32]));
@@ -887,7 +827,6 @@ fn recovered_next_wal_vote_projection_is_exact_and_fail_closed() {
         project_recovered_lifecycle_next_wal_vote_candidate(&verified, foreign_wal_seal).is_err(),
         "a substituted WAL identity cannot authorize canonical replay evidence"
     );
-
     let (verified, mut foreign_effect_seal, _, mut foreign_effect) =
         recovered_next_wal_vote_seal_fixture(0x36);
     let AdapterEffect::Sign {
@@ -905,7 +844,6 @@ fn recovered_next_wal_vote_projection_is_exact_and_fail_closed() {
         "a substituted Sign effect cannot reuse the retained replay evidence"
     );
 }
-
 #[test]
 fn recovered_next_wal_vote_projection_surface_is_affine_and_closed() {
     let replay = include_str!("../v2_lifecycle_replay_authority.rs");
@@ -929,7 +867,6 @@ fn recovered_next_wal_vote_projection_surface_is_affine_and_closed() {
         );
     }
     assert!(!projection.contains("derive(Clone"));
-
     let implementation = replay
         .split_once("impl RecoveredLifecycleNextWalVoteCandidateProjectionV1")
         .expect("locate next-WAL Vote projection implementation")
@@ -952,7 +889,6 @@ fn recovered_next_wal_vote_projection_surface_is_affine_and_closed() {
             "projection exposed forbidden constituent API: {forbidden}"
         );
     }
-
     let runtime = include_str!("../v2_runtime.rs");
     let permit = runtime
         .split_once("struct RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1")
@@ -973,7 +909,6 @@ fn recovered_next_wal_vote_projection_surface_is_affine_and_closed() {
     assert!(seam.contains("RecoveredLifecycleNextWalVoteSealV1"));
     assert!(seam.contains("seal.into_candidate_projection("));
 }
-
 #[test]
 fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
     let (context, keys) = authenticated_runtime_context();
@@ -1015,7 +950,6 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
     certificate
         .validate(&context)
         .expect("exact Fetch certificate is authenticated");
-
     let fetch = AdapterEffect::FetchBody {
         tag,
         round: manifest.round,
@@ -1058,7 +992,6 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
         successor.exact_effect_identity(),
         pending.exact_effect_identity()
     );
-
     let validate = AdapterEffect::ValidateBody {
         tag,
         round: manifest.round,
@@ -1088,7 +1021,6 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
     );
     assert!(!successor.exactly_binds_adapter_effect(&validate));
     assert!(!validate_successor.exactly_binds_adapter_effect(&store));
-
     let wrong_tag = AdapterEffect::StoreBody {
         tag: EventTag::new(context.height, 0, Generation::new(2)),
         round: manifest.round,
@@ -1112,7 +1044,6 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
             .project_certified_fetch_store_successor(&ordinary_fetch, &store)
             .is_none()
     );
-
     let wrong_validate_tag = AdapterEffect::ValidateBody {
         tag: EventTag::new(context.height, 0, Generation::new(2)),
         round: manifest.round,
@@ -1142,7 +1073,6 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
         "the projected successor cannot duplicate predecessor authority"
     );
 }
-
 #[test]
 fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() {
     let (context, keys) = authenticated_runtime_context();
@@ -1163,7 +1093,6 @@ fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() 
         subject: commit.subject,
         certificate: commit.clone(),
     };
-
     let local_store = bind_adapter_effect_batch_ownership(
         std::slice::from_ref(&store),
         vec![RuntimeEffectOwnership::fresh_for_test(tag, 72)],
@@ -1195,7 +1124,6 @@ fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() 
         local_apply.exact_effect_identity(),
         local_validate.exact_effect_identity()
     );
-
     let prepare = signed_runtime_quorum_certificate_for_phase(
         &context,
         &keys,
@@ -1233,7 +1161,6 @@ fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() 
         prepare_apply.candidate_statement(),
         local_apply.candidate_statement()
     );
-
     let wrong_tag_apply = AdapterEffect::Apply {
         tag: EventTag::new(context.height, commit.round.view, Generation::new(3)),
         subject: commit.subject,
@@ -1293,7 +1220,6 @@ fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() 
         "the projected Apply binding cannot duplicate predecessor authority"
     );
 }
-
 #[test]
 fn live_wal_payload_free_pending_roots_bind_all_five_stages_and_exact_frames() {
     let (context, keys) = authenticated_runtime_context();
@@ -1379,7 +1305,6 @@ fn live_wal_payload_free_pending_roots_bind_all_five_stages_and_exact_frames() {
         roots.push(*pending.causal_lifecycle_key());
     }
     assert_eq!(roots.iter().collect::<BTreeSet<_>>().len(), effects.len());
-
     let first = LiveWalFrameIdentity::for_test(9, 10, [0; 32]);
     let second = LiveWalFrameIdentity::for_test(10, 11, [0; 32]);
     let first_pending =
@@ -1394,7 +1319,6 @@ fn live_wal_payload_free_pending_roots_bind_all_five_stages_and_exact_frames() {
         "identical effects from different exact WAL frames cannot share causal authority"
     );
 }
-
 #[test]
 fn pending_validate_projects_exact_prepare_commit_and_report_successors() {
     let (context, keys) = authenticated_runtime_context();
@@ -1414,7 +1338,6 @@ fn pending_validate_projects_exact_prepare_commit_and_report_successors() {
         Some(prepare.clone()),
         75,
     );
-
     let prepare_sign = AdapterEffect::Sign {
         tag,
         request: SignRequest::Vote(wire::Vote {
@@ -1443,7 +1366,6 @@ fn pending_validate_projects_exact_prepare_commit_and_report_successors() {
         prepare_statement.execution_commitment(),
         Some(prepare.execution_commitment)
     );
-
     let commit_sign = AdapterEffect::Sign {
         tag,
         request: SignRequest::Vote(wire::Vote {
@@ -1472,7 +1394,6 @@ fn pending_validate_projects_exact_prepare_commit_and_report_successors() {
         commit_statement.execution_commitment(),
         Some(prepare.execution_commitment)
     );
-
     let report = AdapterEffect::ReportInvalidCertifiedBody {
         subject: prepare.subject,
         certificate: prepare,
@@ -1491,7 +1412,6 @@ fn pending_validate_projects_exact_prepare_commit_and_report_successors() {
         prepare_validate.exact_effect_identity()
     );
 }
-
 #[test]
 fn pending_sign_projects_only_its_exact_signed_broadcast_successor() {
     let (context, keys) = authenticated_runtime_context();
@@ -1520,7 +1440,6 @@ fn pending_sign_projects_only_its_exact_signed_broadcast_successor() {
     let sign_pending = validate_pending
         .project_validate_sign_prepare_successor(&validate, &sign)
         .expect("Validate projects its exact unsigned Prepare vote");
-
     let mut signed_vote = unsigned_vote.clone();
     signed_vote.signature = vec![0xD6; 96];
     let broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
@@ -1539,7 +1458,6 @@ fn pending_sign_projects_only_its_exact_signed_broadcast_successor() {
         broadcast_pending.exact_effect_identity(),
         sign_pending.exact_effect_identity()
     );
-
     signed_vote.signature.clear();
     let unsigned_broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::Vote(signed_vote.clone()),
@@ -1550,7 +1468,6 @@ fn pending_sign_projects_only_its_exact_signed_broadcast_successor() {
             .is_none(),
         "an unsigned envelope is not a completed Sign successor"
     );
-
     signed_vote.signature = vec![0xD6; 96];
     signed_vote.subject.payload_hash = Hash::new(b"foreign signed subject");
     let foreign_broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
@@ -1563,7 +1480,6 @@ fn pending_sign_projects_only_its_exact_signed_broadcast_successor() {
         "a signature cannot authorize changed consensus coordinates"
     );
 }
-
 #[test]
 fn recovered_commit_retags_monotonically_without_widening_live_projection() {
     let (context, keys) = authenticated_runtime_context();
@@ -1605,7 +1521,6 @@ fn recovered_commit_retags_monotonically_without_widening_live_projection() {
             signature: Vec::new(),
         }),
     };
-
     assert!(
         prepare_validate
             .project_validate_sign_commit_successor(&validate, &historical_commit)
@@ -1632,7 +1547,6 @@ fn recovered_commit_retags_monotonically_without_widening_live_projection() {
             .is_some(),
         "the recovered ordinary-Validate refinement uses the same bounded relation"
     );
-
     let AdapterEffect::Sign { request, .. } = &historical_commit else {
         unreachable!("historical Commit fixture is a Sign effect")
     };
@@ -1655,7 +1569,6 @@ fn recovered_commit_retags_monotonically_without_widening_live_projection() {
         "recovery cannot cross a reducer generation"
     );
 }
-
 #[test]
 fn pending_validate_successor_projection_rejects_forged_coordinates_and_authority() {
     let (context, keys) = authenticated_runtime_context();
@@ -1709,7 +1622,6 @@ fn pending_validate_successor_projection_rejects_forged_coordinates_and_authorit
         subject: prepare.subject,
         certificate: prepare.clone(),
     };
-
     assert!(
         ordinary_validate
             .project_validate_sign_prepare_successor(&validate, &commit_sign)
@@ -1732,7 +1644,6 @@ fn pending_validate_successor_projection_rejects_forged_coordinates_and_authorit
             .is_none(),
         "invalid-body reporting requires Prepare rather than Commit authority"
     );
-
     let foreign = signed_runtime_quorum_certificate_for_phase(
         &context,
         &keys,
@@ -1772,7 +1683,6 @@ fn pending_validate_successor_projection_rejects_forged_coordinates_and_authorit
             .is_none(),
         "report cannot change the registered Prepare commitment"
     );
-
     let wrong_tag_prepare = AdapterEffect::Sign {
         tag: EventTag::new(context.height, prepare.round.view, Generation::new(6)),
         request: SignRequest::Vote(wire::Vote {
@@ -1802,7 +1712,6 @@ fn pending_validate_successor_projection_rejects_forged_coordinates_and_authorit
             .is_none(),
         "report projection requires the exactly bound Validate tag"
     );
-
     let wrong_subject_sign = AdapterEffect::Sign {
         tag,
         request: SignRequest::Vote(wire::Vote {
@@ -1836,7 +1745,6 @@ fn pending_validate_successor_projection_rejects_forged_coordinates_and_authorit
             .is_none(),
         "report cannot change the validated subject"
     );
-
     assert!(
         ordinary_validate
             .project_validate_sign_prepare_successor(&store, &prepare_sign)

@@ -1,7 +1,5 @@
 //! Deterministic complete fixtures for non-shipping tests and release evidence.
-
 use std::str::FromStr as _;
-
 use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
@@ -21,9 +19,7 @@ use soranet_pq::{
     generate_mlkem_keypair_from_seed,
 };
 use zeroize::Zeroizing;
-
 use crate::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
-
 use super::{
     PQ_MASP_TREE_DEPTH_V1, PqMaspInputWitnessV1, PqMaspNotePlaintextV1, PqMaspOutputWitnessV1,
     PqMaspWitnessV1, derive_pq_masp_authorization_key_digest_v1, derive_pq_masp_note_commitment_v1,
@@ -34,25 +30,20 @@ use super::{
         validate_pq_masp_relation_v1,
     },
 };
-
 /// Complete fixture material kept behind `test` or release-evidence cfg.
 pub(crate) struct PqMaspReleaseFixtureV1 {
     pub(crate) statement: PqMaspStarkStatementV1,
     pub(crate) witness: PqMaspWitnessV1,
     pub(crate) authorization_secret_key: Zeroizing<Vec<u8>>,
 }
-
 /// Closed fixture-construction failure. Key and engine diagnostics stay local.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PqMaspReleaseFixtureErrorV1;
-
 const FIXTURE_KEYGEN_SEED_DOMAIN_V1: &[u8] =
     b"iroha.privacy.pq-masp.release-fixture.keygen-seed.v1";
-
 fn raw(byte: u8) -> [u8; 32] {
     [byte; 32]
 }
-
 fn fixture_keygen_seed_v1(
     master_seed: [u8; 32],
     purpose: &[u8],
@@ -72,7 +63,6 @@ fn fixture_keygen_seed_v1(
     }
     Ok(seed)
 }
-
 fn context_from_compiled_profile_v1(
     profile: &CompiledPrivacyProfileV1,
 ) -> PrivacyStatementContextV1 {
@@ -91,13 +81,11 @@ fn context_from_compiled_profile_v1(
         engine_manifest_digest: profile.engine_manifest_digest,
     }
 }
-
 fn context() -> Result<PrivacyStatementContextV1, PqMaspReleaseFixtureErrorV1> {
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV0)
         .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
     Ok(context_from_compiled_profile_v1(&profile))
 }
-
 fn empty_authentication_path_v1()
 -> Result<[[u8; 32]; PQ_MASP_TREE_DEPTH_V1], PqMaspReleaseFixtureErrorV1> {
     const EMPTY_LEAF_DOMAIN_V1: &[u8] = b"iroha.privacy.proof-managed-note-tree.empty-leaf.v1";
@@ -116,7 +104,6 @@ fn empty_authentication_path_v1()
     }
     Ok(path)
 }
-
 fn anchor_for_input_v1(
     statement: &PqMaspStarkStatementV1,
     input: u8,
@@ -140,7 +127,6 @@ fn anchor_for_input_v1(
     }
     Ok(PrivacyRootV1::new(current))
 }
-
 fn note(
     value: u128,
     authorization_key_digest: PrivacyAuthorizationKeyDigestV1,
@@ -163,7 +149,6 @@ fn note(
     )
     .map_err(|_| PqMaspReleaseFixtureErrorV1)
 }
-
 fn recipient_public_key_v1(
     keygen_master_seed: [u8; 32],
     index: usize,
@@ -182,7 +167,6 @@ fn recipient_public_key_v1(
     .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
     Ok(keys.public_key().to_vec())
 }
-
 fn build_fixture<R: TryCryptoRng + ?Sized>(
     maximum: bool,
     invalid_path: bool,
@@ -201,7 +185,6 @@ fn build_fixture<R: TryCryptoRng + ?Sized>(
         derive_pq_masp_authorization_key_digest_v1(authorization_keys.public_key())
             .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
     let authorization_secret_key = Zeroizing::new(authorization_keys.secret_key().to_vec());
-
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal").map_err(|_| PqMaspReleaseFixtureErrorV1)?,
         Name::from_str("pq_note").map_err(|_| PqMaspReleaseFixtureErrorV1)?,
@@ -221,7 +204,6 @@ fn build_fixture<R: TryCryptoRng + ?Sized>(
         note_encryption_key_digest: PrivacyNoteEncryptionKeyDigestV1::new(raw(14)),
         authorization_epoch: 1,
     };
-
     let input_specs: &[(u128, u8, u8, u8, u8, u8)] = if maximum {
         &[(60, 50, 52, 53, 54, 55), (40, 51, 56, 57, 58, 59)]
     } else {
@@ -242,7 +224,6 @@ fn build_fixture<R: TryCryptoRng + ?Sized>(
             raw(secret),
         ));
     }
-
     let output_specs: &[(u128, u8, u8, u8, u8)] = if maximum {
         &[(55, 62, 63, 64, 65), (45, 68, 69, 70, 71)]
     } else {
@@ -276,7 +257,6 @@ fn build_fixture<R: TryCryptoRng + ?Sized>(
     statement.note_encryption_key_digest =
         derive_pq_masp_note_encryption_keys_digest_v1(&statement)
             .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
-
     let input_commitments = input_notes
         .iter()
         .map(|(input_note, _)| {
@@ -321,7 +301,6 @@ fn build_fixture<R: TryCryptoRng + ?Sized>(
                 .map_err(|_| PqMaspReleaseFixtureErrorV1)
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     if invalid_path {
         paths[0][7][3] ^= 1;
     }
@@ -341,14 +320,12 @@ fn build_fixture<R: TryCryptoRng + ?Sized>(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let witness = PqMaspWitnessV1::new(inputs, outputs).map_err(|_| PqMaspReleaseFixtureErrorV1)?;
-
     Ok(PqMaspReleaseFixtureV1 {
         statement,
         witness,
         authorization_secret_key,
     })
 }
-
 /// Construct a complete normal or exact two-by-two production fixture.
 pub(crate) fn pq_masp_release_fixture_v1<R: TryCryptoRng + ?Sized>(
     maximum: bool,
@@ -357,7 +334,6 @@ pub(crate) fn pq_masp_release_fixture_v1<R: TryCryptoRng + ?Sized>(
 ) -> Result<PqMaspReleaseFixtureV1, PqMaspReleaseFixtureErrorV1> {
     build_fixture(maximum, false, keygen_master_seed, randomness)
 }
-
 /// Construct a normal fixture whose nonzero authentication path misses the root.
 pub(crate) fn pq_masp_release_invalid_path_fixture_v1<R: TryCryptoRng + ?Sized>(
     keygen_master_seed: [u8; 32],
@@ -365,7 +341,6 @@ pub(crate) fn pq_masp_release_invalid_path_fixture_v1<R: TryCryptoRng + ?Sized>(
 ) -> Result<PqMaspReleaseFixtureV1, PqMaspReleaseFixtureErrorV1> {
     build_fixture(false, true, keygen_master_seed, randomness)
 }
-
 /// Refresh the normal fixture's consumed-note path against the exact
 /// authoritative successor produced by its own output append.
 ///
@@ -388,7 +363,6 @@ pub(crate) fn pq_masp_release_successor_replay_fixture_v1(
     if input.leaf_position != 0 {
         return Err(PqMaspReleaseFixtureErrorV1);
     }
-
     let input_commitment = input
         .commitment_v1(&fixture.statement)
         .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
@@ -397,7 +371,6 @@ pub(crate) fn pq_masp_release_successor_replay_fixture_v1(
         .digest;
     let mut successor_path = input.authentication_path;
     successor_path[0] = output_leaf;
-
     let mut statement = fixture.statement.clone();
     statement.anchor = anchor_for_input_v1(&statement, 0, input_commitment, 0, &successor_path)?;
     let successor_epoch = statement
@@ -406,7 +379,6 @@ pub(crate) fn pq_masp_release_successor_replay_fixture_v1(
         .ok_or(PqMaspReleaseFixtureErrorV1)?;
     statement.anchor_epoch = successor_epoch;
     statement.authorization_epoch = successor_epoch;
-
     let origin =
         crate::privacy_engines::proof_managed_accumulator::build_proof_managed_frontier_v1(
             namespace_v1(&statement),
@@ -429,7 +401,6 @@ pub(crate) fn pq_masp_release_successor_replay_fixture_v1(
     if successor.root != statement.anchor {
         return Err(PqMaspReleaseFixtureErrorV1);
     }
-
     let replay_input = PqMaspInputWitnessV1::new(
         input.note.clone(),
         input.nullifier_secret,
@@ -442,11 +413,9 @@ pub(crate) fn pq_masp_release_successor_replay_fixture_v1(
     validate_pq_masp_relation_v1(&statement, &witness).map_err(|_| PqMaspReleaseFixtureErrorV1)?;
     Ok((statement, witness))
 }
-
 #[cfg(test)]
 mod tests {
     use rand::{SeedableRng as _, rngs::StdRng};
-
     use super::*;
     #[test]
     fn release_context_binds_every_compiled_profile_digest() {
@@ -471,7 +440,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn shared_normal_maximum_and_invalid_path_fixtures_are_exact() {
         let mut normal_rng = StdRng::from_seed(raw(0xd1));
@@ -485,7 +453,6 @@ mod tests {
         assert_eq!(normal.witness.inputs().len(), 1);
         assert_eq!(normal.witness.outputs().len(), 1);
         assert!(!normal.authorization_secret_key.is_empty());
-
         let mut maximum_rng = StdRng::from_seed(raw(0xd2));
         let maximum =
             pq_masp_release_fixture_v1(true, raw(0xe2), &mut maximum_rng).expect("maximum fixture");
@@ -493,13 +460,11 @@ mod tests {
             .expect("maximum relation");
         assert_eq!(maximum.witness.inputs().len(), 2);
         assert_eq!(maximum.witness.outputs().len(), 2);
-
         let mut invalid_rng = StdRng::from_seed(raw(0xd3));
         let invalid = pq_masp_release_invalid_path_fixture_v1(raw(0xe3), &mut invalid_rng)
             .expect("invalid fixture");
         assert!(validate_pq_masp_relation_v1(&invalid.statement, &invalid.witness).is_err());
     }
-
     #[test]
     fn successor_replay_refreshes_anchor_but_preserves_the_stable_nullifier() {
         let mut rng = StdRng::from_seed(raw(0xd4));
@@ -521,7 +486,6 @@ mod tests {
         );
         validate_pq_masp_relation_v1(&statement, &witness).expect("refreshed replay relation");
     }
-
     #[test]
     fn keygen_subseeds_are_deterministic_and_purpose_separated() {
         let master = raw(0xf1);

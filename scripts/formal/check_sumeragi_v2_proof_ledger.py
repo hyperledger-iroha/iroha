@@ -65,20 +65,36 @@ PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS = (
 # promoted to a complete trace theorem.
 
 _CHECKER_COMPONENT_FILES = (
-    "sumeragi_v2_proof_ledger_async_contracts.py", "sumeragi_v2_proof_ledger_contract_types.py",
-    "sumeragi_v2_proof_ledger_cross_tool_contracts.py", "sumeragi_v2_proof_ledger_proof_inventory.py",
-    "sumeragi_v2_proof_ledger_serve_contracts.py", "sumeragi_v2_proof_ledger_historical_contracts.py",
-    "sumeragi_v2_proof_ledger_quantitative_contracts.py", "sumeragi_v2_proof_ledger_exact_property_contracts.py",
-    "sumeragi_v2_proof_ledger_supporting_theorem_contracts.py", "sumeragi_v2_proof_ledger_proof_token_contracts.py",
-    "sumeragi_v2_proof_ledger_source_seal_contracts.py", "sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py",
-    "sumeragi_v2_proof_ledger_production_trace_contracts.py", "sumeragi_v2_proof_ledger_serviced_candidate_contracts.py",
-    "sumeragi_v2_proof_ledger_reply_writer_deadline_formal_contracts.py", "sumeragi_v2_proof_ledger_reply_writer_deadline_production_contracts.py",
-    "sumeragi_v2_proof_ledger_merge_runtime_config_contracts.py", "sumeragi_v2_proof_ledger_shared_tlc_result_contracts.py",
-    "sumeragi_v2_proof_ledger_locked_body_reproposal_contracts.py", "sumeragi_v2_proof_ledger_runtime_ingress_contracts.py",
-    "sumeragi_v2_proof_ledger_successor_production_contracts.py", "sumeragi_v2_proof_ledger_successor_recovery_contracts.py", "sumeragi_v2_proof_ledger_chain_inventory_contracts.py",
-    "sumeragi_v2_proof_ledger_release_inventory_contracts.py", "sumeragi_v2_proof_ledger_proof_architecture_contracts.py",
-    "sumeragi_v2_proof_ledger_effect_capacity_tail_contracts.py", "sumeragi_v2_proof_ledger_effect_capacity_contracts.py",
-    "sumeragi_v2_proof_ledger_leader_wire_contracts.py", "sumeragi_v2_proof_ledger_timeout_vote_episode_contracts.py",
+    "sumeragi_v2_proof_ledger_async_contracts.py",
+    "sumeragi_v2_proof_ledger_contract_types.py",
+    "sumeragi_v2_proof_ledger_cross_tool_contracts.py",
+    "sumeragi_v2_proof_ledger_proof_inventory.py",
+    "sumeragi_v2_proof_ledger_serve_contracts.py",
+    "sumeragi_v2_proof_ledger_historical_contracts.py",
+    "sumeragi_v2_proof_ledger_quantitative_contracts.py",
+    "sumeragi_v2_proof_ledger_exact_property_contracts.py",
+    "sumeragi_v2_proof_ledger_supporting_theorem_contracts.py",
+    "sumeragi_v2_proof_ledger_proof_token_contracts.py",
+    "sumeragi_v2_proof_ledger_source_seal_contracts.py",
+    "sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py",
+    "sumeragi_v2_proof_ledger_production_trace_contracts.py",
+    "sumeragi_v2_proof_ledger_serviced_candidate_contracts.py",
+    "sumeragi_v2_proof_ledger_reply_writer_deadline_formal_contracts.py",
+    "sumeragi_v2_proof_ledger_reply_writer_deadline_production_contracts.py",
+    "sumeragi_v2_proof_ledger_merge_runtime_config_contracts.py",
+    "sumeragi_v2_proof_ledger_shared_tlc_result_contracts.py",
+    "sumeragi_v2_proof_ledger_locked_body_reproposal_contracts.py",
+    "sumeragi_v2_proof_ledger_runtime_ingress_contracts.py",
+    "sumeragi_v2_proof_ledger_successor_production_contracts.py",
+    "sumeragi_v2_proof_ledger_successor_recovery_contracts.py",
+    "sumeragi_v2_proof_ledger_successor_recovery_tail_contracts.py",
+    "sumeragi_v2_proof_ledger_chain_inventory_contracts.py",
+    "sumeragi_v2_proof_ledger_release_inventory_contracts.py",
+    "sumeragi_v2_proof_ledger_proof_architecture_contracts.py",
+    "sumeragi_v2_proof_ledger_effect_capacity_tail_contracts.py",
+    "sumeragi_v2_proof_ledger_effect_capacity_contracts.py",
+    "sumeragi_v2_proof_ledger_leader_wire_contracts.py",
+    "sumeragi_v2_proof_ledger_timeout_vote_episode_contracts.py",
     "sumeragi_v2_proof_ledger_terminal_discharge_contracts.py",
 )
 
@@ -3736,122 +3752,6 @@ def _rust_clause_is_obviously_tautological(tokens: Sequence[str]) -> bool:
     return False
 
 
-@dataclass(frozen=True)
-class _CrossToolKernelContractView:
-    """Uniform validated view of a claim's primary or supplemental kernel."""
-
-    verified_kernel: str
-    verified_kernel_source: str
-    verified_kernel_parameters: str
-    verified_kernel_body: str
-    verified_kernel_const: bool
-    verified_kernel_public: bool
-    verified_kernel_shared_macro_sha256: tuple[tuple[str, str], ...]
-    theorem_kernel_projection: str
-    theorem_projection_builders: tuple[CrossToolProjectionBuilderContract, ...]
-    production_call_sites: tuple[CrossToolProductionCallContract, ...]
-    total_gate: CrossToolTotalGateContract | None
-    auxiliary_verus_theorem: str | None
-    auxiliary_verus_parameters: str | None
-    auxiliary_verus_theorem_item_sha256: str | None
-
-
-def _cross_tool_kernel_views(
-    claim: CrossToolClaimContract,
-) -> tuple[_CrossToolKernelContractView, ...]:
-    """Return every exact kernel carried by one theorem contract."""
-
-    shared_primary_values = (
-        claim.verified_kernel,
-        claim.verified_kernel_source,
-        claim.verified_kernel_parameters,
-        claim.verified_kernel_body,
-        claim.theorem_kernel_projection,
-    )
-    if not all(_nonempty_string(value) for value in shared_primary_values):
-        return ()
-    (
-        kernel,
-        kernel_source,
-        kernel_parameters,
-        kernel_body,
-        theorem_projection,
-    ) = shared_primary_values
-    assert isinstance(kernel, str)
-    assert isinstance(kernel_source, str)
-    assert isinstance(kernel_parameters, str)
-    assert isinstance(kernel_body, str)
-    assert isinstance(theorem_projection, str)
-    if claim.proof_mode == "legacy_requires_builder":
-        builder_values = (
-            claim.theorem_projection_builder,
-            claim.theorem_projection_builder_parameters,
-            claim.theorem_projection_builder_return,
-            claim.theorem_projection_builder_item_sha256,
-        )
-        if not all(_nonempty_string(value) for value in builder_values):
-            return ()
-        builder, builder_parameters, builder_return, builder_sha256 = builder_values
-        assert isinstance(builder, str)
-        assert isinstance(builder_parameters, str)
-        assert isinstance(builder_return, str)
-        assert isinstance(builder_sha256, str)
-        builders = (
-            CrossToolProjectionBuilderContract(
-                name=builder,
-                parameters=builder_parameters,
-                return_type=builder_return,
-                item_token_sha256=builder_sha256,
-            ),
-        )
-    elif claim.proof_mode == "total_checked_gate":
-        if claim.total_gate is None:
-            return ()
-        builders = ()
-    else:
-        return ()
-    primary = _CrossToolKernelContractView(
-        verified_kernel=kernel,
-        verified_kernel_source=kernel_source,
-        verified_kernel_parameters=kernel_parameters,
-        verified_kernel_body=kernel_body,
-        verified_kernel_const=claim.verified_kernel_const,
-        verified_kernel_public=claim.verified_kernel_public,
-        verified_kernel_shared_macro_sha256=(
-            claim.verified_kernel_shared_macro_sha256
-        ),
-        theorem_kernel_projection=theorem_projection,
-        theorem_projection_builders=builders,
-        production_call_sites=claim.production_call_sites,
-        total_gate=claim.total_gate,
-        auxiliary_verus_theorem=None,
-        auxiliary_verus_parameters=None,
-        auxiliary_verus_theorem_item_sha256=None,
-    )
-    supplemental = tuple(
-        _CrossToolKernelContractView(
-            verified_kernel=contract.verified_kernel,
-            verified_kernel_source=contract.verified_kernel_source,
-            verified_kernel_parameters=contract.verified_kernel_parameters,
-            verified_kernel_body=contract.verified_kernel_body,
-            verified_kernel_const=contract.verified_kernel_const,
-            verified_kernel_public=contract.verified_kernel_public,
-            verified_kernel_shared_macro_sha256=(
-                contract.verified_kernel_shared_macro_sha256
-            ),
-            theorem_kernel_projection=contract.theorem_kernel_projection,
-            theorem_projection_builders=contract.theorem_projection_builders,
-            production_call_sites=contract.production_call_sites,
-            total_gate=contract.total_gate,
-            auxiliary_verus_theorem=contract.auxiliary_verus_theorem,
-            auxiliary_verus_parameters=contract.auxiliary_verus_parameters,
-            auxiliary_verus_theorem_item_sha256=(
-                contract.auxiliary_verus_theorem_item_sha256
-            ),
-        )
-        for contract in claim.supplemental_kernels
-    )
-    return (primary, *supplemental)
 
 
 def _cross_tool_total_gate_promotion_contract_errors(
@@ -75150,10 +75050,9 @@ if confirmed_snapshot != artifact_snapshot
 
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_production_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_contracts.py")
+_execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_tail_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_chain_inventory_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_release_inventory_contracts.py")
-
-
 
 _execute_checker_component("sumeragi_v2_proof_ledger_terminal_discharge_contracts.py")
 

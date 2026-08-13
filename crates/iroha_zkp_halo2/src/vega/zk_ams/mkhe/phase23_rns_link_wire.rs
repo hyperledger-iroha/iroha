@@ -20,14 +20,11 @@
 //! verifier-derived digest of the complete release RNS challenge set.
 
 #![allow(dead_code)]
-
 use core::fmt;
-
 use crate::vega::{
     MaskedRelaxedRandomSourceV1, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
     bulletproof_t256::{ZeroizingT256ScalarCopyV1, ZeroizingT256ScalarVecV1},
 };
-
 use super::{
     ZkAmsMkheErrorV1,
     phase23_rns_link::{
@@ -36,13 +33,11 @@ use super::{
         ZkAmsPhase23RnsLinkWholeProofBindingV1, expected_logical_values_v1,
     },
 };
-
 const WHOLE_PROOF_MAGIC_V1: [u8; 8] = *b"ZKRNLNK1";
 const WHOLE_PROOF_VERSION_V1: u8 = 1;
 const WHOLE_PROOF_FLAGS_V1: u8 = 0;
 const WHOLE_PROOF_SECTION_FLAGS_V1: u8 = 0;
 const WHOLE_PROOF_RECORD_FLAGS_V1: u8 = 0;
-
 const WHOLE_PROOF_FAMILY_COUNT_V1: usize = 6;
 const WHOLE_PROOF_SECTION_COUNT_V1: usize = 10;
 const WHOLE_PROOF_RNS_LIMB_COUNT_V1: usize = ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1;
@@ -52,7 +47,6 @@ const WHOLE_PROOF_HYRAX_EQUALITY_RECORDS_V1: usize = WHOLE_PROOF_RNS_LIMB_COUNT_
 const WHOLE_PROOF_MAX_SECTION_RECORDS_V1: usize = WHOLE_PROOF_RNS_LIMB_COUNT_V1;
 const WHOLE_PROOF_INTERNAL_BLINDING_COUNT_V1: usize = 196;
 const WHOLE_PROOF_BLINDING_REJECTION_ATTEMPTS_V1: usize = 128;
-
 const WHOLE_PROOF_HEADER_BYTES_V1: usize = 213;
 const WHOLE_PROOF_SECTION_HEADER_BYTES_V1: usize = 8;
 const WHOLE_PROOF_FAMILY_RECORD_BYTES_V1: usize = 111;
@@ -63,14 +57,12 @@ const WHOLE_PROOF_EXACT_BYTES_V1: usize = WHOLE_PROOF_HEADER_BYTES_V1
     + WHOLE_PROOF_SECTION_COUNT_V1 * WHOLE_PROOF_SECTION_HEADER_BYTES_V1
     + WHOLE_PROOF_FAMILY_RECORD_COUNT_V1 * WHOLE_PROOF_FAMILY_RECORD_BYTES_V1
     + WHOLE_PROOF_RELATION_RECORD_COUNT_V1 * WHOLE_PROOF_RELATION_RECORD_BYTES_V1;
-
 /// Exact and maximum canonical byte length of the frozen release-shape
 /// structural envelope.
 ///
 /// This is not a measured algebraic-proof size and is never resource evidence.
 pub(super) const ZK_AMS_PHASE23_RNS_LINK_WHOLE_PROOF_MAX_BYTES_V1: usize =
     WHOLE_PROOF_EXACT_BYTES_V1;
-
 const HEADER_FLAGS_OFFSET_V1: usize = 9;
 const HEADER_LENGTH_OFFSET_V1: usize = 10;
 const HEADER_TOTAL_LENGTH_OFFSET_V1: usize = 12;
@@ -79,11 +71,9 @@ const HEADER_FAMILY_COUNT_OFFSET_V1: usize = 17;
 const HEADER_LIMB_COUNT_OFFSET_V1: usize = 18;
 const HEADER_RESERVED_OFFSET_V1: usize = 19;
 const HEADER_PROOF_BLINDING_COMMITMENT_OFFSET_V1: usize = 180;
-
 const SECTION_FLAGS_OFFSET_V1: usize = 1;
 const SECTION_RECORD_COUNT_OFFSET_V1: usize = 2;
 const SECTION_PAYLOAD_LENGTH_OFFSET_V1: usize = 4;
-
 const FAMILY_RECORD_FLAGS_OFFSET_V1: usize = 1;
 const FAMILY_RECORD_LOGICAL_OFFSET_OFFSET_V1: usize = 2;
 const FAMILY_RECORD_USED_VALUES_OFFSET_V1: usize = 6;
@@ -91,13 +81,11 @@ const FAMILY_RECORD_ZERO_PADDING_OFFSET_V1: usize = 10;
 const FAMILY_RECORD_COMMITMENT_OFFSET_V1: usize = 14;
 const FAMILY_RECORD_EVALUATION_OFFSET_V1: usize = 47;
 const FAMILY_RECORD_BLINDING_RESPONSE_OFFSET_V1: usize = 79;
-
 const RELATION_RECORD_FLAGS_OFFSET_V1: usize = 1;
 const RELATION_RECORD_ARITY_OFFSET_V1: usize = 2;
 const RELATION_RECORD_COMMITMENT_OFFSET_V1: usize = 4;
 const RELATION_RECORD_EVALUATION_OFFSET_V1: usize = 37;
 const RELATION_RECORD_BLINDING_RESPONSE_OFFSET_V1: usize = 69;
-
 const _: () = {
     assert!(WHOLE_PROOF_FAMILY_COUNT_V1 == 6);
     assert!(WHOLE_PROOF_SECTION_COUNT_V1 == 10);
@@ -110,7 +98,6 @@ const _: () = {
     assert!(WHOLE_PROOF_EXACT_BYTES_V1 == 20_418);
     assert!(WHOLE_PROOF_EXACT_BYTES_V1 < 32 * 1024 * 1024);
 };
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum WholeProofFamilyV1 {
@@ -121,7 +108,6 @@ enum WholeProofFamilyV1 {
     W = 5,
     RW = 6,
 }
-
 impl WholeProofFamilyV1 {
     const fn logical_values(self) -> usize {
         expected_logical_values_v1(match self {
@@ -133,12 +119,10 @@ impl WholeProofFamilyV1 {
             Self::RW => ZkAmsPhase23RnsLinkFamilyV1::RW,
         })
     }
-
     const fn chunk_count(self) -> usize {
         (self.logical_values() + WHOLE_PROOF_SLOT_COUNT_V1 - 1) / WHOLE_PROOF_SLOT_COUNT_V1
     }
 }
-
 const WHOLE_PROOF_FAMILY_ORDER_V1: [WholeProofFamilyV1; WHOLE_PROOF_FAMILY_COUNT_V1] = [
     WholeProofFamilyV1::X,
     WholeProofFamilyV1::U,
@@ -147,7 +131,6 @@ const WHOLE_PROOF_FAMILY_ORDER_V1: [WholeProofFamilyV1; WHOLE_PROOF_FAMILY_COUNT
     WholeProofFamilyV1::W,
     WholeProofFamilyV1::RW,
 ];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum WholeProofRelationSectionV1 {
@@ -156,7 +139,6 @@ enum WholeProofRelationSectionV1 {
     NegacyclicQuotient = 9,
     HyraxBgvEquality = 10,
 }
-
 impl WholeProofRelationSectionV1 {
     const fn record_count(self) -> usize {
         match self {
@@ -166,7 +148,6 @@ impl WholeProofRelationSectionV1 {
             Self::HyraxBgvEquality => WHOLE_PROOF_HYRAX_EQUALITY_RECORDS_V1,
         }
     }
-
     const fn relation_arity(self) -> u16 {
         match self {
             // Five transcript-derived evaluation points are frozen per RNS limb.
@@ -182,14 +163,12 @@ impl WholeProofRelationSectionV1 {
         }
     }
 }
-
 const WHOLE_PROOF_RELATION_ORDER_V1: [WholeProofRelationSectionV1; 4] = [
     WholeProofRelationSectionV1::Packing,
     WholeProofRelationSectionV1::RadixCrtCarry,
     WholeProofRelationSectionV1::NegacyclicQuotient,
     WholeProofRelationSectionV1::HyraxBgvEquality,
 ];
-
 const _: () = {
     assert!(WholeProofFamilyV1::X.logical_values() == 89);
     assert!(WholeProofFamilyV1::X.chunk_count() == 1);
@@ -204,7 +183,6 @@ const _: () = {
     assert!(WholeProofFamilyV1::RW.logical_values() == 512);
     assert!(WholeProofFamilyV1::RW.chunk_count() == 1);
 };
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WholeProofFamilyRecordV1 {
     ordinal: u8,
@@ -215,13 +193,11 @@ struct WholeProofFamilyRecordV1 {
     evaluation: Scalar,
     blinding_response: Scalar,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WholeProofFamilySectionV1 {
     family: WholeProofFamilyV1,
     records: Vec<WholeProofFamilyRecordV1>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WholeProofRelationRecordV1 {
     ordinal: u8,
@@ -230,13 +206,11 @@ struct WholeProofRelationRecordV1 {
     evaluation: Scalar,
     blinding_response: Scalar,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WholeProofRelationRecordsV1 {
     section: WholeProofRelationSectionV1,
     records: Vec<WholeProofRelationRecordV1>,
 }
-
 /// Structurally decoded but cryptographically unverified whole-proof envelope.
 ///
 /// No constructor is exposed: decoding proves canonical transport shape only.
@@ -253,7 +227,6 @@ pub(super) struct ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
     family_sections: [WholeProofFamilySectionV1; WHOLE_PROOF_FAMILY_COUNT_V1],
     relation_sections: [WholeProofRelationRecordsV1; 4],
 }
-
 impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
     /// Decode exactly after an allocation-free structural and canonical
     /// preflight. The returned value remains explicitly unverified.
@@ -269,14 +242,12 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
         decoder.expect_u8(as_u8(WHOLE_PROOF_FAMILY_COUNT_V1)?)?;
         decoder.expect_u8(as_u8(WHOLE_PROOF_RNS_LIMB_COUNT_V1)?)?;
         decoder.expect_u8(0)?;
-
         let profile_digest = decoder.array()?;
         let algorithm_manifest_digest = decoder.array()?;
         let context_digest = decoder.array()?;
         let statement_digest = decoder.array()?;
         let commitment_root = decoder.array()?;
         let proof_blinding_commitment = decoder.point()?;
-
         let mut family_sections = Vec::new();
         reserve_decode_records(&mut family_sections, WHOLE_PROOF_FAMILY_COUNT_V1)?;
         for family in WHOLE_PROOF_FAMILY_ORDER_V1 {
@@ -321,7 +292,6 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
             }
             family_sections.push(WholeProofFamilySectionV1 { family, records });
         }
-
         let mut relation_sections = Vec::new();
         reserve_decode_records(&mut relation_sections, WHOLE_PROOF_RELATION_ORDER_V1.len())?;
         for section in WHOLE_PROOF_RELATION_ORDER_V1 {
@@ -359,7 +329,6 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
             relation_sections.push(WholeProofRelationRecordsV1 { section, records });
         }
         decoder.finish()?;
-
         let value = Self {
             profile_digest,
             algorithm_manifest_digest,
@@ -381,7 +350,6 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
         }
         Ok(value)
     }
-
     /// Decode canonically and bind the envelope to verifier-owned release
     /// inputs.
     ///
@@ -405,7 +373,6 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
         value.validate_release_binding(&binding)?;
         Ok(value)
     }
-
     /// Encode the sole canonical structural representation. This operation
     /// does not claim that any encoded algebraic relation is true.
     pub(super) fn encode_canonical(&self) -> Result<Vec<u8>, ZkAmsMkheErrorV1> {
@@ -429,7 +396,6 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
         bytes.extend_from_slice(&self.statement_digest);
         bytes.extend_from_slice(&self.commitment_root);
         push_point(&mut bytes, self.proof_blinding_commitment)?;
-
         for section in &self.family_sections {
             bytes.push(section.family as u8);
             bytes.push(WHOLE_PROOF_SECTION_FLAGS_V1);
@@ -484,7 +450,6 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
         preflight_zk_ams_phase23_rns_link_whole_proof_v1(&bytes)?;
         Ok(bytes)
     }
-
     fn validate_structure(&self) -> Result<(), ZkAmsMkheErrorV1> {
         if [
             self.profile_digest,
@@ -542,7 +507,6 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
         }
         Ok(())
     }
-
     fn validate_release_binding(
         &self,
         binding: &ZkAmsPhase23RnsLinkWholeProofBindingV1,
@@ -555,7 +519,6 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
         {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-
         let mut expected = binding.hyrax_commitments.iter();
         for record in self
             .family_sections
@@ -572,7 +535,6 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
         Ok(())
     }
 }
-
 /// Allocation-free structural preflight for the exact release-shape envelope.
 ///
 /// This parses no variable-size count into owned storage. It rejects the full
@@ -603,7 +565,6 @@ pub(super) fn preflight_zk_ams_phase23_rns_link_whole_proof_v1(
         }
     }
     decoder.point()?;
-
     for family in WHOLE_PROOF_FAMILY_ORDER_V1 {
         preflight_family_section(&mut decoder, family)?;
     }
@@ -612,7 +573,6 @@ pub(super) fn preflight_zk_ams_phase23_rns_link_whole_proof_v1(
     }
     decoder.finish()
 }
-
 fn preflight_family_section(
     decoder: &mut WholeProofDecoderV1<'_>,
     family: WholeProofFamilyV1,
@@ -643,7 +603,6 @@ fn preflight_family_section(
     }
     Ok(())
 }
-
 fn preflight_relation_section(
     decoder: &mut WholeProofDecoderV1<'_>,
     section: WholeProofRelationSectionV1,
@@ -670,7 +629,6 @@ fn preflight_relation_section(
     }
     Ok(())
 }
-
 fn expected_family_record_shape(
     family: WholeProofFamilyV1,
     ordinal: usize,
@@ -695,21 +653,17 @@ fn expected_family_record_shape(
         as_u32(zero_padding_values)?,
     ))
 }
-
 struct WholeProofDecoderV1<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
-
 impl<'a> WholeProofDecoderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
-
     const fn position(&self) -> usize {
         self.offset
     }
-
     fn take(&mut self, length: usize) -> Result<&'a [u8], ZkAmsMkheErrorV1> {
         let end = self
             .offset
@@ -722,38 +676,31 @@ impl<'a> WholeProofDecoderV1<'a> {
         self.offset = end;
         Ok(value)
     }
-
     fn array<const N: usize>(&mut self) -> Result<[u8; N], ZkAmsMkheErrorV1> {
         self.take(N)?
             .try_into()
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
     }
-
     fn u8(&mut self) -> Result<u8, ZkAmsMkheErrorV1> {
         self.take(1)?
             .first()
             .copied()
             .ok_or(ZkAmsMkheErrorV1::InvalidWireEncoding)
     }
-
     fn u16(&mut self) -> Result<u16, ZkAmsMkheErrorV1> {
         Ok(u16::from_be_bytes(self.array()?))
     }
-
     fn u32(&mut self) -> Result<u32, ZkAmsMkheErrorV1> {
         Ok(u32::from_be_bytes(self.array()?))
     }
-
     fn point(&mut self) -> Result<Point, ZkAmsMkheErrorV1> {
         Point::from_non_identity_wire_bytes_exact(self.take(33)?)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
     }
-
     fn scalar(&mut self) -> Result<Scalar, ZkAmsMkheErrorV1> {
         Scalar::from_be_bytes_exact(self.array()?)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)
     }
-
     fn nonzero_scalar(&mut self) -> Result<Scalar, ZkAmsMkheErrorV1> {
         let scalar = self.scalar()?;
         if scalar.is_zero() {
@@ -761,35 +708,30 @@ impl<'a> WholeProofDecoderV1<'a> {
         }
         Ok(scalar)
     }
-
     fn expect_bytes(&mut self, expected: &[u8]) -> Result<(), ZkAmsMkheErrorV1> {
         if self.take(expected.len())? != expected {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
         Ok(())
     }
-
     fn expect_u8(&mut self, expected: u8) -> Result<(), ZkAmsMkheErrorV1> {
         if self.u8()? != expected {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
         Ok(())
     }
-
     fn expect_u16(&mut self, expected: u16) -> Result<(), ZkAmsMkheErrorV1> {
         if self.u16()? != expected {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
         Ok(())
     }
-
     fn expect_u32(&mut self, expected: u32) -> Result<(), ZkAmsMkheErrorV1> {
         if self.u32()? != expected {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
         }
         Ok(())
     }
-
     fn finish(self) -> Result<(), ZkAmsMkheErrorV1> {
         if self.offset != self.bytes.len() {
             return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
@@ -797,15 +739,12 @@ impl<'a> WholeProofDecoderV1<'a> {
         Ok(())
     }
 }
-
 fn push_u16(bytes: &mut Vec<u8>, value: u16) {
     bytes.extend_from_slice(&value.to_be_bytes());
 }
-
 fn push_u32(bytes: &mut Vec<u8>, value: u32) {
     bytes.extend_from_slice(&value.to_be_bytes());
 }
-
 fn push_point(bytes: &mut Vec<u8>, point: Point) -> Result<(), ZkAmsMkheErrorV1> {
     bytes.extend_from_slice(
         &point
@@ -814,25 +753,20 @@ fn push_point(bytes: &mut Vec<u8>, point: Point) -> Result<(), ZkAmsMkheErrorV1>
     );
     Ok(())
 }
-
 fn as_u8(value: usize) -> Result<u8, ZkAmsMkheErrorV1> {
     u8::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn as_u16(value: usize) -> Result<u16, ZkAmsMkheErrorV1> {
     u16::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 fn as_u32(value: usize) -> Result<u32, ZkAmsMkheErrorV1> {
     u32::try_from(value).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
-
 #[cfg(test)]
 std::thread_local! {
     static WHOLE_PROOF_DECODE_ALLOCATIONS_V1: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     static WHOLE_PROOF_UNIFORM_BUFFER_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
-
 fn reserve_decode_records<T>(values: &mut Vec<T>, length: usize) -> Result<(), ZkAmsMkheErrorV1> {
     if length > WHOLE_PROOF_MAX_SECTION_RECORDS_V1 {
         return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
@@ -844,23 +778,18 @@ fn reserve_decode_records<T>(values: &mut Vec<T>, length: usize) -> Result<(), Z
     WHOLE_PROOF_DECODE_ALLOCATIONS_V1.with(|count| count.set(count.get().saturating_add(1)));
     Ok(())
 }
-
 struct ZeroizingWholeProofUniformBytesV1([u8; 64]);
-
 impl ZeroizingWholeProofUniformBytesV1 {
     const fn new() -> Self {
         Self([0; 64])
     }
-
     fn bytes_mut(&mut self) -> &mut [u8] {
         &mut self.0
     }
-
     fn bytes(&self) -> &[u8; 64] {
         &self.0
     }
 }
-
 impl Drop for ZeroizingWholeProofUniformBytesV1 {
     fn drop(&mut self) {
         self.0.fill(0);
@@ -873,17 +802,14 @@ impl Drop for ZeroizingWholeProofUniformBytesV1 {
         }
     }
 }
-
 /// Move-only owner for the exact internally sampled whole-proof blindings.
 /// These scalars never appear directly in the public envelope.
 struct ZkAmsPhase23RnsLinkWholeProofBlindingsV1(ZeroizingT256ScalarVecV1);
-
 impl fmt::Debug for ZkAmsPhase23RnsLinkWholeProofBlindingsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ZkAmsPhase23RnsLinkWholeProofBlindingsV1([REDACTED])")
     }
 }
-
 impl ZkAmsPhase23RnsLinkWholeProofBlindingsV1 {
     fn validate(&self) -> Result<(), ZkAmsMkheErrorV1> {
         if self.0.len() != WHOLE_PROOF_INTERNAL_BLINDING_COUNT_V1
@@ -893,12 +819,10 @@ impl ZkAmsPhase23RnsLinkWholeProofBlindingsV1 {
         }
         Ok(())
     }
-
     fn as_slice(&self) -> &[Scalar] {
         self.0.as_slice()
     }
 }
-
 fn sample_internal_whole_proof_blindings_v1<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<ZkAmsPhase23RnsLinkWholeProofBlindingsV1, ZkAmsMkheErrorV1> {
@@ -927,7 +851,6 @@ fn sample_internal_whole_proof_blindings_v1<R: MaskedRelaxedRandomSourceV1>(
     blindings.validate()?;
     Ok(blindings)
 }
-
 fn with_internal_whole_proof_blindings_v1<R, T, F>(
     random: &mut R,
     use_blindings: F,
@@ -940,29 +863,24 @@ where
     blindings.validate()?;
     use_blindings(blindings.as_slice())
 }
-
 #[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
-
     use crate::vega::{
         MaskedRelaxedRandomErrorV1, VEGA_T256_BASE_MODULUS_BE_V1, VEGA_T256_SCALAR_MODULUS_BE_V1,
         bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1, derive_t256_generators_v1,
         sponge::keccak256,
     };
-
     use super::super::phase23_encrypted::zk_ams_phase23_release_map_set_digest_v1;
     use super::super::phase23_rns_link::{
         ZkAmsPhase23RnsLinkCommitmentDigestsV1, ZkAmsPhase23RnsLinkFamilyV1,
     };
     use super::*;
-
     fn next_scalar(counter: &mut u64) -> Scalar {
         let value = *counter;
         *counter = counter.checked_add(1).expect("fixture scalar counter fits");
         Scalar::from_u64(value)
     }
-
     fn whole_proof_fixture() -> ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
         let mut points = derive_t256_generators_v1(
             b"iroha.zk-ams.v1.phase23.rns-link.whole-proof-wire-test",
@@ -972,7 +890,6 @@ mod tests {
         .into_iter();
         let proof_blinding_commitment = points.next().expect("proof blinding point");
         let mut scalar_counter = 1_u64;
-
         let mut family_sections = Vec::new();
         family_sections
             .try_reserve_exact(WHOLE_PROOF_FAMILY_COUNT_V1)
@@ -997,7 +914,6 @@ mod tests {
             }
             family_sections.push(WholeProofFamilySectionV1 { family, records });
         }
-
         let mut relation_sections = Vec::new();
         relation_sections
             .try_reserve_exact(WHOLE_PROOF_RELATION_ORDER_V1.len())
@@ -1019,7 +935,6 @@ mod tests {
             relation_sections.push(WholeProofRelationRecordsV1 { section, records });
         }
         assert!(points.next().is_none());
-
         ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
             profile_digest: [0x11; 32],
             algorithm_manifest_digest: [0x22; 32],
@@ -1033,14 +948,12 @@ mod tests {
                 .expect("four relation sections"),
         }
     }
-
     fn binding_digest(label: &[u8], family: u8, chunk: u8, field: u8) -> [u8; 32] {
         let mut frame = Vec::with_capacity(label.len() + 3);
         frame.extend_from_slice(label);
         frame.extend_from_slice(&[family, chunk, field]);
         keccak256(&frame)
     }
-
     fn release_context(label: &[u8]) -> ZkAmsPhase23RnsLinkContextV1 {
         let axis = |field: u8| binding_digest(label, 0, 0, field);
         ZkAmsPhase23RnsLinkContextV1::new(
@@ -1054,7 +967,6 @@ mod tests {
         )
         .expect("release context")
     }
-
     const fn relation_family(family: WholeProofFamilyV1) -> ZkAmsPhase23RnsLinkFamilyV1 {
         match family {
             WholeProofFamilyV1::X => ZkAmsPhase23RnsLinkFamilyV1::X,
@@ -1065,7 +977,6 @@ mod tests {
             WholeProofFamilyV1::RW => ZkAmsPhase23RnsLinkFamilyV1::RW,
         }
     }
-
     fn relation_commitments(
         proof: &ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1,
         label: &[u8],
@@ -1117,7 +1028,6 @@ mod tests {
         }
         commitments
     }
-
     fn release_bound_fixture() -> (
         ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1,
         ZkAmsPhase23RnsLinkContextV1,
@@ -1135,7 +1045,6 @@ mod tests {
         proof.commitment_root = binding.ordered_commitment_root;
         (proof, context, commitments)
     }
-
     fn section_ranges_v1() -> [(usize, usize); WHOLE_PROOF_SECTION_COUNT_V1] {
         let mut offset = WHOLE_PROOF_HEADER_BYTES_V1;
         let mut ranges = Vec::new();
@@ -1157,21 +1066,17 @@ mod tests {
         assert_eq!(offset, WHOLE_PROOF_EXACT_BYTES_V1);
         ranges.try_into().expect("ten section ranges")
     }
-
     fn decode_allocation_count_v1() -> usize {
         WHOLE_PROOF_DECODE_ALLOCATIONS_V1.with(core::cell::Cell::get)
     }
-
     fn uniform_zeroized_drop_count_v1() -> usize {
         WHOLE_PROOF_UNIFORM_BUFFER_ZEROIZED_DROPS_V1.with(core::cell::Cell::get)
     }
-
     fn assert_preflight_rejects_without_decode_allocation(bytes: &[u8]) {
         let before = decode_allocation_count_v1();
         assert!(preflight_zk_ams_phase23_rns_link_whole_proof_v1(bytes).is_err());
         assert_eq!(decode_allocation_count_v1(), before);
     }
-
     #[test]
     fn release_shape_roundtrip_is_exact_bounded_and_explicitly_unverified() {
         let proof = whole_proof_fixture();
@@ -1185,7 +1090,6 @@ mod tests {
         assert_eq!(WHOLE_PROOF_RNS_LIMB_COUNT_V1, 38);
         assert_eq!(WHOLE_PROOF_FAMILY_RECORD_COUNT_V1, 43);
         assert_eq!(WHOLE_PROOF_RELATION_RECORD_COUNT_V1, 152);
-
         let before_preflight = decode_allocation_count_v1();
         preflight_zk_ams_phase23_rns_link_whole_proof_v1(&wire).expect("preflight");
         assert_eq!(decode_allocation_count_v1(), before_preflight);
@@ -1195,7 +1099,6 @@ mod tests {
         assert!(decoded == proof);
         assert_eq!(decoded.encode_canonical().expect("re-encode"), wire);
     }
-
     #[test]
     fn bound_decode_recomputes_release_context_challenges_root_and_hyrax_commitments() {
         let (proof, context, commitments) = release_bound_fixture();
@@ -1208,7 +1111,6 @@ mod tests {
             )
             .expect("canonical transport is bound to native relation inputs");
         assert_eq!(decoded, proof);
-
         // A structurally canonical digest shell is not sufficient.
         let shell = whole_proof_fixture()
             .encode_canonical()
@@ -1222,7 +1124,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut digest_substitutions = Vec::new();
         for axis in 0..5 {
             let mut changed = proof.clone();
@@ -1253,7 +1154,6 @@ mod tests {
                 Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
             );
         }
-
         let wrong_context = release_context(b"different-release-context");
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
@@ -1263,7 +1163,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let different_commitments = relation_commitments(&proof, b"different-commitments");
         assert_eq!(
             ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified(
@@ -1273,7 +1172,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         let mut reordered_commitments = commitments.clone();
         reordered_commitments.swap(0, 1);
         assert_eq!(
@@ -1284,7 +1182,6 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
-
         // Even with every digest header intact, substituting one canonical
         // non-identity Hyrax point is rejected against the native commitment.
         let mut changed_hyrax = proof;
@@ -1302,7 +1199,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
     }
-
     #[test]
     fn every_truncation_and_every_single_byte_suffix_fail_before_allocation() {
         let wire = whole_proof_fixture().encode_canonical().expect("wire");
@@ -1315,20 +1211,16 @@ mod tests {
             assert_preflight_rejects_without_decode_allocation(&extended);
         }
     }
-
     #[test]
     fn duplicate_reordered_unknown_and_wrong_count_sections_fail_closed() {
         let wire = whole_proof_fixture().encode_canonical().expect("wire");
         let ranges = section_ranges_v1();
-
         let mut duplicate = wire.clone();
         duplicate[ranges[1].0] = duplicate[ranges[0].0];
         assert_preflight_rejects_without_decode_allocation(&duplicate);
-
         let mut unknown = wire.clone();
         unknown[ranges[0].0] = 0xff;
         assert_preflight_rejects_without_decode_allocation(&unknown);
-
         let mut reordered = Vec::new();
         reordered
             .try_reserve_exact(wire.len())
@@ -1341,25 +1233,21 @@ mod tests {
         }
         assert_eq!(reordered.len(), wire.len());
         assert_preflight_rejects_without_decode_allocation(&reordered);
-
         let mut wrong_count = wire.clone();
         wrong_count[ranges[0].0 + SECTION_RECORD_COUNT_OFFSET_V1
             ..ranges[0].0 + SECTION_RECORD_COUNT_OFFSET_V1 + 2]
             .copy_from_slice(&u16::MAX.to_be_bytes());
         assert_preflight_rejects_without_decode_allocation(&wrong_count);
-
         let mut missing_section = wire;
         missing_section[HEADER_SECTION_COUNT_OFFSET_V1] = 9;
         assert_preflight_rejects_without_decode_allocation(&missing_section);
     }
-
     #[test]
     fn noncanonical_numbers_lengths_flags_and_overflow_claims_fail_before_allocation() {
         let wire = whole_proof_fixture().encode_canonical().expect("wire");
         let ranges = section_ranges_v1();
         let first_family_record = ranges[0].0 + WHOLE_PROOF_SECTION_HEADER_BYTES_V1;
         let first_relation_record = ranges[6].0 + WHOLE_PROOF_SECTION_HEADER_BYTES_V1;
-
         for (offset, value) in [
             (HEADER_FLAGS_OFFSET_V1, 1),
             (HEADER_FAMILY_COUNT_OFFSET_V1, 5),
@@ -1373,93 +1261,77 @@ mod tests {
             malformed[offset] = value;
             assert_preflight_rejects_without_decode_allocation(&malformed);
         }
-
         let mut header_length = wire.clone();
         header_length[HEADER_LENGTH_OFFSET_V1..HEADER_LENGTH_OFFSET_V1 + 2]
             .copy_from_slice(&0_u16.to_be_bytes());
         assert_preflight_rejects_without_decode_allocation(&header_length);
-
         let mut total_length = wire.clone();
         total_length[HEADER_TOTAL_LENGTH_OFFSET_V1..HEADER_TOTAL_LENGTH_OFFSET_V1 + 4]
             .copy_from_slice(&u32::MAX.to_be_bytes());
         assert_preflight_rejects_without_decode_allocation(&total_length);
-
         let mut payload_length = wire.clone();
         payload_length[ranges[0].0 + SECTION_PAYLOAD_LENGTH_OFFSET_V1
             ..ranges[0].0 + SECTION_PAYLOAD_LENGTH_OFFSET_V1 + 4]
             .copy_from_slice(&u32::MAX.to_be_bytes());
         assert_preflight_rejects_without_decode_allocation(&payload_length);
-
         let mut logical_offset = wire.clone();
         logical_offset[first_family_record + FAMILY_RECORD_LOGICAL_OFFSET_OFFSET_V1
             ..first_family_record + FAMILY_RECORD_LOGICAL_OFFSET_OFFSET_V1 + 4]
             .copy_from_slice(&u32::MAX.to_be_bytes());
         assert_preflight_rejects_without_decode_allocation(&logical_offset);
-
         let mut used_values = wire.clone();
         used_values[first_family_record + FAMILY_RECORD_USED_VALUES_OFFSET_V1
             ..first_family_record + FAMILY_RECORD_USED_VALUES_OFFSET_V1 + 4]
             .copy_from_slice(&0_u32.to_be_bytes());
         assert_preflight_rejects_without_decode_allocation(&used_values);
-
         let mut padding = wire.clone();
         padding[first_family_record + FAMILY_RECORD_ZERO_PADDING_OFFSET_V1
             ..first_family_record + FAMILY_RECORD_ZERO_PADDING_OFFSET_V1 + 4]
             .copy_from_slice(&1_u32.to_be_bytes());
         assert_preflight_rejects_without_decode_allocation(&padding);
-
         let mut arity = wire.clone();
         arity[first_relation_record + RELATION_RECORD_ARITY_OFFSET_V1
             ..first_relation_record + RELATION_RECORD_ARITY_OFFSET_V1 + 2]
             .copy_from_slice(&u16::MAX.to_be_bytes());
         assert_preflight_rejects_without_decode_allocation(&arity);
     }
-
     #[test]
     fn noncanonical_points_scalars_identity_and_zero_blindings_fail_closed() {
         let wire = whole_proof_fixture().encode_canonical().expect("wire");
         let ranges = section_ranges_v1();
         let first_family_record = ranges[0].0 + WHOLE_PROOF_SECTION_HEADER_BYTES_V1;
         let first_relation_record = ranges[6].0 + WHOLE_PROOF_SECTION_HEADER_BYTES_V1;
-
         let mut identity = wire.clone();
         identity[HEADER_PROOF_BLINDING_COMMITMENT_OFFSET_V1
             ..HEADER_PROOF_BLINDING_COMMITMENT_OFFSET_V1 + 33]
             .fill(0);
         identity[HEADER_PROOF_BLINDING_COMMITMENT_OFFSET_V1] = 0x40;
         assert_preflight_rejects_without_decode_allocation(&identity);
-
         let family_point = first_family_record + FAMILY_RECORD_COMMITMENT_OFFSET_V1;
         let mut undefined_point_flag = wire.clone();
         undefined_point_flag[family_point] = 0x20;
         assert_preflight_rejects_without_decode_allocation(&undefined_point_flag);
-
         let mut noncanonical_x = wire.clone();
         noncanonical_x[family_point] = 0;
         noncanonical_x[family_point + 1..family_point + 33]
             .copy_from_slice(&VEGA_T256_BASE_MODULUS_BE_V1);
         assert_preflight_rejects_without_decode_allocation(&noncanonical_x);
-
         let mut noncanonical_scalar = wire.clone();
         let evaluation = first_family_record + FAMILY_RECORD_EVALUATION_OFFSET_V1;
         noncanonical_scalar[evaluation..evaluation + 32]
             .copy_from_slice(&VEGA_T256_SCALAR_MODULUS_BE_V1);
         assert_preflight_rejects_without_decode_allocation(&noncanonical_scalar);
-
         let mut zero_blinding = wire.clone();
         let blinding = first_family_record + FAMILY_RECORD_BLINDING_RESPONSE_OFFSET_V1;
         zero_blinding[blinding..blinding + 32].fill(0);
         assert_preflight_rejects_without_decode_allocation(&zero_blinding);
-
         let mut relation_identity = wire;
         let relation_point = first_relation_record + RELATION_RECORD_COMMITMENT_OFFSET_V1;
         relation_identity[relation_point..relation_point + 33].fill(0);
         relation_identity[relation_point] = 0x40;
         assert_preflight_rejects_without_decode_allocation(&relation_identity);
     }
-
     struct CounterRandom(u64);
-
     impl MaskedRelaxedRandomSourceV1 for CounterRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             for (index, byte) in destination.iter_mut().enumerate() {
@@ -1471,9 +1343,7 @@ mod tests {
             Ok(())
         }
     }
-
     struct FailingRandom;
-
     impl MaskedRelaxedRandomSourceV1 for FailingRandom {
         fn fill_bytes(
             &mut self,
@@ -1482,25 +1352,20 @@ mod tests {
             Err(MaskedRelaxedRandomErrorV1::Unavailable)
         }
     }
-
     struct ZeroRandom;
-
     impl MaskedRelaxedRandomSourceV1 for ZeroRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             destination.fill(0);
             Ok(())
         }
     }
-
     struct PanickingRandom;
-
     impl MaskedRelaxedRandomSourceV1 for PanickingRandom {
         fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             destination.fill(0xa5);
             panic!("injected entropy-source panic")
         }
     }
-
     #[test]
     fn internal_blindings_are_nonzero_redacted_and_zeroized_on_every_exit() {
         let scalar_before = zeroizing_t256_scalar_vec_drop_count_v1();
@@ -1517,14 +1382,12 @@ mod tests {
             uniform_zeroized_drop_count_v1(),
             uniform_before + WHOLE_PROOF_INTERNAL_BLINDING_COUNT_V1
         );
-
         let mut debug_random = CounterRandom(2);
         let debug_owner = sample_internal_whole_proof_blindings_v1(&mut debug_random)
             .expect("debug owner sample");
         let debug = format!("{debug_owner:?}");
         assert!(debug.contains("[REDACTED]"));
         drop(debug_owner);
-
         let before_error = zeroizing_t256_scalar_vec_drop_count_v1();
         let mut error_random = CounterRandom(3);
         assert_eq!(
@@ -1534,7 +1397,6 @@ mod tests {
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
         assert_eq!(zeroizing_t256_scalar_vec_drop_count_v1(), before_error + 1);
-
         let before_unwind = zeroizing_t256_scalar_vec_drop_count_v1();
         let mut unwind_random = CounterRandom(4);
         let unwind = catch_unwind(AssertUnwindSafe(|| {
@@ -1545,7 +1407,6 @@ mod tests {
         }));
         assert!(unwind.is_err());
         assert_eq!(zeroizing_t256_scalar_vec_drop_count_v1(), before_unwind + 1);
-
         let failing_scalar_before = zeroizing_t256_scalar_vec_drop_count_v1();
         let failing_uniform_before = uniform_zeroized_drop_count_v1();
         assert!(matches!(
@@ -1557,7 +1418,6 @@ mod tests {
             failing_scalar_before + 1
         );
         assert_eq!(uniform_zeroized_drop_count_v1(), failing_uniform_before + 1);
-
         let zero_scalar_before = zeroizing_t256_scalar_vec_drop_count_v1();
         assert!(matches!(
             sample_internal_whole_proof_blindings_v1(&mut ZeroRandom),
@@ -1567,7 +1427,6 @@ mod tests {
             zeroizing_t256_scalar_vec_drop_count_v1(),
             zero_scalar_before + 1
         );
-
         let panic_scalar_before = zeroizing_t256_scalar_vec_drop_count_v1();
         let panic_uniform_before = uniform_zeroized_drop_count_v1();
         let panic = catch_unwind(AssertUnwindSafe(|| {
@@ -1579,7 +1438,6 @@ mod tests {
             panic_scalar_before + 1
         );
         assert_eq!(uniform_zeroized_drop_count_v1(), panic_uniform_before + 1);
-
         let mut raw = vec![Scalar::one(); WHOLE_PROOF_INTERNAL_BLINDING_COUNT_V1];
         raw[0] = Scalar::zero();
         let zero_owner =

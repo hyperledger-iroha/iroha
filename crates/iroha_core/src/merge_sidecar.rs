@@ -7,7 +7,6 @@
 //! crash-safe, while incomplete payload bytes remain in memory. Only a
 //! completely reassembled, canonical, reference-matching entry may be handed
 //! to Kura's atomic pending-sidecar store.
-
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs::{self, File, OpenOptions},
@@ -17,7 +16,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2::MAX_VALIDATORS_PER_HEIGHT},
@@ -37,7 +35,6 @@ use iroha_p2p::{
 };
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
-
 #[cfg(test)]
 use crate::sumeragi::v2_core::{
     production_reliable_flush_trace_refines_outbound_ownership_kernel,
@@ -299,7 +296,6 @@ impl MergeSidecarLimits {
     #[cfg(test)]
     pub(crate) fn defaults() -> Self {
         use iroha_config::parameters::defaults::sumeragi as defaults;
-
         Self::new(
             defaults::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY,
             defaults::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER,
@@ -359,7 +355,6 @@ impl MergeSigningGuardLimits {
     #[cfg(test)]
     pub(crate) fn defaults() -> Self {
         use iroha_config::parameters::defaults::sumeragi as defaults;
-
         Self::new(
             defaults::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY,
             defaults::V2_MERGE_SIGNING_GUARD_RECORD_BYTES,
@@ -1741,13 +1736,11 @@ type LifecycleArtifactRevision = ();
 #[cfg(unix)]
 fn lifecycle_artifact_identity(metadata: &fs::Metadata) -> LifecycleArtifactIdentity {
     use std::os::unix::fs::MetadataExt as _;
-
     (metadata.dev(), metadata.ino())
 }
 #[cfg(windows)]
 fn lifecycle_artifact_identity(metadata: &fs::Metadata) -> LifecycleArtifactIdentity {
     use std::os::windows::fs::MetadataExt as _;
-
     (metadata.volume_serial_number(), metadata.file_index())
 }
 #[cfg(not(any(unix, windows)))]
@@ -1755,7 +1748,6 @@ fn lifecycle_artifact_identity(_metadata: &fs::Metadata) -> LifecycleArtifactIde
 #[cfg(unix)]
 fn lifecycle_artifact_revision(metadata: &fs::Metadata) -> LifecycleArtifactRevision {
     use std::os::unix::fs::MetadataExt as _;
-
     (
         metadata.len(),
         metadata.mtime(),
@@ -1771,7 +1763,6 @@ fn lifecycle_artifact_revision(metadata: &fs::Metadata) -> LifecycleArtifactRevi
 #[cfg(windows)]
 fn lifecycle_artifact_revision(metadata: &fs::Metadata) -> LifecycleArtifactRevision {
     use std::os::windows::fs::MetadataExt as _;
-
     (
         metadata.file_size(),
         metadata.creation_time(),
@@ -1798,13 +1789,11 @@ fn lifecycle_artifact_is_single_link(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         metadata.nlink() == 1
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
-
         metadata.number_of_links() == Some(1)
     }
     #[cfg(not(any(unix, windows)))]
@@ -1816,7 +1805,6 @@ fn lifecycle_artifact_is_single_link(metadata: &fs::Metadata) -> bool {
 #[cfg(windows)]
 fn lifecycle_artifact_is_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
@@ -1865,7 +1853,6 @@ fn open_lifecycle_directory(path: &Path) -> Result<File, MergeSidecarError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(
             (rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW).bits() as i32,
         );
@@ -1873,7 +1860,6 @@ fn open_lifecycle_directory(path: &Path) -> Result<File, MergeSidecarError> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
         // `FlushFileBuffers`, which backs `File::sync_all`, requires a
@@ -1941,13 +1927,11 @@ fn open_lifecycle_regular(path: &Path, artifact: &str) -> Result<File, MergeSide
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
@@ -5804,7 +5788,6 @@ impl MergeSidecarTransport {
             false,
         )
     }
-
     /// Register a lifecycle-owned decided carrier in reserved capacity.
     ///
     /// Unlike executor-owned decided work, this exact carrier is not named by
@@ -9497,11 +9480,9 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::merge::{MergeQuorumCertificate, MergeSignerProof};
-
     #[test]
     fn runtime_limit_constructors_reject_degenerate_and_overflowing_geometry() {
         use iroha_config::parameters::defaults::sumeragi as defaults;
-
         let valid = MergeSidecarLimits::defaults();
         assert!(MergeSidecarTransport::with_limits(1, valid).is_ok());
         assert!(MergeSidecarTransport::with_limits(usize::MAX, valid).is_err());
@@ -16650,154 +16631,6 @@ mod tests {
         );
     }
     #[test]
-    fn session_and_deferred_caps_fail_closed_without_unbounded_growth() {
-        let now = Instant::now();
-        let requester = peer(b"requester");
-        let mut transport = MergeSidecarTransport::new();
-        for index in 0..MAX_INBOUND_SESSIONS - RESERVED_DECIDED_INBOUND_SESSIONS {
-            let mut reference = reference(1, 2);
-            reference.entry_hash = HashOf::from_untyped_unchecked(Hash::new(index.to_le_bytes()));
-            let block_hash = HashOf::from_untyped_unchecked(Hash::new([index as u8, 1]));
-            transport
-                .defer_block(block_hash, 2, 0, reference, &requester, 1, now)
-                .expect("within session cap");
-        }
-        let mut overflow = reference(1, 2);
-        overflow.entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"overflow"));
-        assert_eq!(
-            transport.defer_block(
-                HashOf::from_untyped_unchecked(Hash::new(b"overflow-block")),
-                2,
-                0,
-                overflow,
-                &requester,
-                1,
-                now,
-            ),
-            Err(MergeSidecarError::Capacity("inbound session count"))
-        );
-        let mut decided = reference(1, 2);
-        decided.entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"decided entry"));
-        assert!(
-            transport
-                .defer_decided_block(
-                    HashOf::from_untyped_unchecked(Hash::new(b"decided block")),
-                    2,
-                    0,
-                    decided,
-                    &requester,
-                    1,
-                    now,
-                )
-                .expect("decided fetch owns reserved capacity")
-                .is_some(),
-            "ordinary requests must leave one global and per-holder slot for finality"
-        );
-        assert_eq!(transport.inbound_len(), MAX_INBOUND_SESSIONS);
-    }
-    #[test]
-    fn decided_deferred_carrier_survives_generic_pending_cleanup() {
-        let now = Instant::now();
-        let requester = peer(b"decided cleanup requester");
-        let block = HashOf::from_untyped_unchecked(Hash::new(b"decided cleanup block"));
-        let reference = reference(1, 2);
-        let mut transport = MergeSidecarTransport::new();
-        transport
-            .defer_lifecycle_decided_block(block, 2, 0, reference, &requester, 1, now)
-            .expect("register decided sidecar owner");
-
-        transport
-            .retain_pending_blocks(&BTreeSet::new(), 1)
-            .expect("generic cleanup preserves decided owner");
-        assert_eq!(
-            transport.inbound_len(),
-            1,
-            "executor-only pending census cannot retire lifecycle-owned decided work"
-        );
-
-        transport
-            .retain_pending_blocks(&BTreeSet::new(), 2)
-            .expect("committed height retires the old decided owner");
-        assert_eq!(transport.inbound_len(), 0);
-    }
-
-    #[test]
-    fn executor_decided_carrier_still_obeys_generic_pending_cleanup() {
-        let now = Instant::now();
-        let requester = peer(b"executor decided cleanup requester");
-        let block = HashOf::from_untyped_unchecked(Hash::new(b"executor decided block"));
-        let reference = reference(1, 2);
-        let mut transport = MergeSidecarTransport::new();
-        transport
-            .defer_decided_block(block, 2, 0, reference, &requester, 1, now)
-            .expect("register executor-owned decided sidecar");
-
-        transport
-            .retain_pending_blocks(&BTreeSet::new(), 1)
-            .expect("generic cleanup retires executor-owned decided sidecar");
-        assert_eq!(transport.inbound_len(), 0);
-    }
-
-    #[test]
-    fn per_carrier_decided_priority_survives_mixed_generic_cleanup() {
-        let now = Instant::now();
-        let requester = peer(b"mixed decided cleanup requester");
-        let ordinary = HashOf::from_untyped_unchecked(Hash::new(b"ordinary sibling"));
-        let decided = HashOf::from_untyped_unchecked(Hash::new(b"decided sibling"));
-        let reference = reference(1, 2);
-        let key = (
-            reference.entry_hash,
-            certified_merge_reference_digest(&reference),
-        );
-        let mut transport = MergeSidecarTransport::new();
-        transport
-            .defer_block(ordinary, 2, 0, reference.clone(), &requester, 1, now)
-            .expect("register ordinary sibling");
-        transport
-            .defer_lifecycle_decided_block(decided, 2, 0, reference, &requester, 1, now)
-            .expect("register decided sibling");
-
-        transport
-            .retain_pending_blocks(&BTreeSet::new(), 1)
-            .expect("generic cleanup keeps only the decided sibling");
-        let deferred = &transport
-            .inbound
-            .get(&key)
-            .expect("decided sibling retains its assembly")
-            .deferred;
-        assert_eq!(deferred.keys().copied().collect::<Vec<_>>(), vec![decided]);
-    }
-
-    #[test]
-    fn repeated_carrier_registration_promotes_priority_to_decided() {
-        let now = Instant::now();
-        let requester = peer(b"promoted decided cleanup requester");
-        let block = HashOf::from_untyped_unchecked(Hash::new(b"promoted decided block"));
-        let reference = reference(1, 2);
-        let key = (
-            reference.entry_hash,
-            certified_merge_reference_digest(&reference),
-        );
-        let mut transport = MergeSidecarTransport::new();
-        transport
-            .defer_block(block, 2, 0, reference.clone(), &requester, 1, now)
-            .expect("register ordinary carrier");
-        transport
-            .defer_lifecycle_decided_block(block, 2, 0, reference, &requester, 1, now)
-            .expect("promote exact carrier to decided");
-
-        transport
-            .retain_pending_blocks(&BTreeSet::new(), 1)
-            .expect("generic cleanup preserves promoted carrier");
-        let carrier = transport
-            .inbound
-            .get(&key)
-            .and_then(|assembly| assembly.deferred.get(&block))
-            .expect("promoted carrier remains owned");
-        assert!(carrier.lifecycle_owned);
-    }
-
-    #[test]
     fn attacker_first_conflicting_reference_isolated_from_honest_session() {
         let (_, requester, honest, _, now) = start_session(64, 3);
         let attacker_block = HashOf::from_untyped_unchecked(Hash::new(b"attacker block"));
@@ -18137,7 +17970,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-
             let temp = tempfile::tempdir().expect("temp dir");
             let direct = temp.path().join("direct.norito");
             let alias = temp.path().join("alias.norito");

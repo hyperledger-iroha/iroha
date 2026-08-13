@@ -1,6 +1,5 @@
 //! Bench full AES-128 encrypt/decrypt using pre-expanded key schedules.
 use criterion::Criterion;
-
 fn make_blocks(n: usize) -> Vec<[u8; 16]> {
     let mut v = vec![[0u8; 16]; n];
     for (i, blk) in v.iter_mut().enumerate().take(n) {
@@ -9,14 +8,12 @@ fn make_blocks(n: usize) -> Vec<[u8; 16]> {
     }
     v
 }
-
 fn make_key() -> [u8; 16] {
     [
         0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f,
         0x3c,
     ]
 }
-
 fn bench_aes128_encrypt(c: &mut Criterion) {
     let blocks = 16384usize; // 16k
     let states = make_blocks(blocks);
@@ -30,7 +27,6 @@ fn bench_aes128_encrypt(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_aes128_decrypt(c: &mut Criterion) {
     let blocks = 16384usize; // 16k
     let states = make_blocks(blocks);
@@ -45,7 +41,6 @@ fn bench_aes128_decrypt(c: &mut Criterion) {
         })
     });
 }
-
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_aes128_encrypt(&mut c);

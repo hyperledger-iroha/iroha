@@ -1,13 +1,10 @@
 //! Exact canonical-section plan derived from the terminal-bound query owner.
-
 use super::*;
-
 const CANONICAL_SECTION_SHAPE_DOMAIN_V2: &[u8] =
     b"iroha.zk-ams.v2.qpcs.canonical-proof-section-shape\0";
 const CANONICAL_SECTION_COUNT_V2: usize = 20;
 const CANONICAL_INITIAL_LAYER_SENTINEL_V2: u8 = 0xff;
 const CANONICAL_KAT_WIRE_BYTES_V2: usize = 27_196_704;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub(in super::super) enum CanonicalProofTreeKindV2 {
@@ -15,7 +12,6 @@ pub(in super::super) enum CanonicalProofTreeKindV2 {
     OpeningQuotient = 2,
     Fri = 3,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) struct CanonicalProofSectionV2 {
     ordinal: u8,
@@ -25,7 +21,6 @@ pub(in super::super) struct CanonicalProofSectionV2 {
     opened: u32,
     authentication: u32,
 }
-
 impl CanonicalProofSectionV2 {
     #[cfg(test)]
     pub(in super::super) const fn test_only_v2(
@@ -44,39 +39,31 @@ impl CanonicalProofSectionV2 {
         };
         section_v2(ordinal, kind, layer, length, opened, authentication)
     }
-
     pub(in super::super) const fn ordinal_v2(self) -> u8 {
         self.ordinal
     }
-
     pub(in super::super) const fn kind_v2(self) -> CanonicalProofTreeKindV2 {
         self.kind
     }
-
     pub(in super::super) const fn layer_v2(self) -> u8 {
         self.layer
     }
-
     pub(in super::super) const fn merkle_layer_v2(self) -> u8 {
         match self.kind {
             CanonicalProofTreeKindV2::Initial | CanonicalProofTreeKindV2::OpeningQuotient => 0,
             CanonicalProofTreeKindV2::Fri => self.layer,
         }
     }
-
     pub(in super::super) const fn length_v2(self) -> u32 {
         self.length
     }
-
     pub(in super::super) const fn opened_v2(self) -> u32 {
         self.opened
     }
-
     pub(in super::super) const fn authentication_v2(self) -> u32 {
         self.authentication
     }
 }
-
 const fn section_v2(
     ordinal: u8,
     kind: CanonicalProofTreeKindV2,
@@ -94,7 +81,6 @@ const fn section_v2(
         authentication,
     }
 }
-
 const CANONICAL_SECTION_LAYOUTS_V2: [CanonicalProofSectionV2; CANONICAL_SECTION_COUNT_V2] = [
     section_v2(0, CanonicalProofTreeKindV2::Initial, 0xff, 524_288, 0, 0),
     section_v2(
@@ -124,12 +110,10 @@ const CANONICAL_SECTION_LAYOUTS_V2: [CanonicalProofSectionV2; CANONICAL_SECTION_
     section_v2(18, CanonicalProofTreeKindV2::Fri, 16, 8, 0, 0),
     section_v2(19, CanonicalProofTreeKindV2::Fri, 17, 4, 0, 0),
 ];
-
 struct CanonicalIndexSetV2 {
     values: [u32; 2 * QUERY_COUNT_V2],
     len: usize,
 }
-
 /// Move-only proof layout owner. The terminal query owner is consumed to make it.
 pub(in super::super) struct ProverCanonicalProofPlanV2 {
     transcript: [u8; 32],
@@ -141,7 +125,6 @@ pub(in super::super) struct ProverCanonicalProofPlanV2 {
     section_shape_digest: [u8; 32],
     exact_wire_bytes: usize,
 }
-
 fn query_digest_v2(queries: &[u32; QUERY_COUNT_V2]) -> [u8; 32] {
     let mut frame = [0_u8; QUERY_COUNT_V2 * 4];
     for (ordinal, query) in queries.iter().enumerate() {
@@ -149,7 +132,6 @@ fn query_digest_v2(queries: &[u32; QUERY_COUNT_V2]) -> [u8; 32] {
     }
     keccak256(&frame)
 }
-
 fn canonical_indices_v2(queries: &[u32; QUERY_COUNT_V2], length: u32) -> CanonicalIndexSetV2 {
     let half = length / 2;
     let mut indices = CanonicalIndexSetV2 {
@@ -172,7 +154,6 @@ fn canonical_indices_v2(queries: &[u32; QUERY_COUNT_V2], length: u32) -> Canonic
     indices.len = unique;
     indices
 }
-
 fn canonical_authentication_count_v2(
     indices: &CanonicalIndexSetV2,
     mut length: u32,
@@ -202,7 +183,6 @@ fn canonical_authentication_count_v2(
     }
     Ok(authentication)
 }
-
 fn derive_sections_v2(
     queries: &[u32; QUERY_COUNT_V2],
 ) -> Result<([CanonicalProofSectionV2; CANONICAL_SECTION_COUNT_V2], usize), SoundnessErrorV2> {
@@ -263,7 +243,6 @@ fn derive_sections_v2(
     }
     Ok((sections, wire_bytes))
 }
-
 fn section_shape_digest_v2(
     sections: &[CanonicalProofSectionV2; CANONICAL_SECTION_COUNT_V2],
 ) -> Result<[u8; 32], SoundnessErrorV2> {
@@ -278,7 +257,6 @@ fn section_shape_digest_v2(
     }
     Ok(keccak256(frame.bytes()))
 }
-
 impl ProverFriQueriesV2 {
     pub(in super::super) fn into_canonical_proof_plan_v2(
         self,
@@ -306,12 +284,10 @@ impl ProverFriQueriesV2 {
         })
     }
 }
-
 impl ProverCanonicalProofPlanV2 {
     pub(in super::super) const fn queries_v2(&self) -> &[u32; QUERY_COUNT_V2] {
         &self.queries
     }
-
     pub(in super::super) fn section_v2(
         &self,
         ordinal: usize,
@@ -321,19 +297,15 @@ impl ProverCanonicalProofPlanV2 {
             .copied()
             .ok_or(SoundnessErrorV2::InvalidSectionCount)
     }
-
     pub(in super::super) const fn query_digest_v2(&self) -> [u8; 32] {
         self.query_digest
     }
-
     pub(in super::super) const fn section_shape_digest_v2(&self) -> [u8; 32] {
         self.section_shape_digest
     }
-
     pub(in super::super) const fn exact_wire_bytes_v2(&self) -> usize {
         self.exact_wire_bytes
     }
-
     pub(in super::super) const fn transcript_context_v2(&self) -> ([u8; 32], [u8; 32], [u8; 32]) {
         (
             self.transcript,
@@ -342,24 +314,20 @@ impl ProverCanonicalProofPlanV2 {
         )
     }
 }
-
 const _: () = {
     assert!(CANONICAL_SECTION_COUNT_V2 == SECTION_COUNT_V2);
     assert!(CANONICAL_INITIAL_LAYER_SENTINEL_V2 == 0xff);
     assert!(CANONICAL_KAT_WIRE_BYTES_V2 <= MAX_PROOF_BYTES_V2);
     assert!(CANONICAL_KAT_WIRE_BYTES_V2 < GLOBAL_PROOF_CAP_BYTES_V2);
 };
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const SHAPE_DIGEST_KAT_V2: [u8; 32] = [
         0x03, 0xb8, 0x27, 0x20, 0x89, 0x43, 0xc7, 0x25, 0xf2, 0x02, 0x34, 0x24, 0x09, 0x0c, 0x5a,
         0x1a, 0x9a, 0x1a, 0xd1, 0x75, 0x20, 0x76, 0x43, 0x87, 0xd2, 0x90, 0xf9, 0xc4, 0x91, 0xa1,
         0xe1, 0x5d,
     ];
-
     fn kat_sections_v2() -> [CanonicalProofSectionV2; CANONICAL_SECTION_COUNT_V2] {
         let shapes = [
             (320, 3_096),
@@ -390,7 +358,6 @@ mod tests {
         }
         sections
     }
-
     #[test]
     fn exact_correlated_section_table_and_wire_size_are_frozen() {
         let sections = kat_sections_v2();

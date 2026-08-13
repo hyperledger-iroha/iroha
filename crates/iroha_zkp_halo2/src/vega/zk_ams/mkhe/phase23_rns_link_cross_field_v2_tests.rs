@@ -1,13 +1,10 @@
 use super::*;
-
 const POINT_A_V2: &str = "8016f70c3f35b3257896971b306635647bc52eb7cad7a5eca1a42f2340737749e3";
 const POINT_B_V2: &str = "00a37dc092877e239385cd8392ba2360ce1859a37f7a2b9c626b336608d2ce4cfe";
-
 fn point_v2(encoded: &str) -> Point {
     Point::from_non_identity_wire_bytes_exact(&hex::decode(encoded).expect("literal hex"))
         .expect("literal canonical non-identity T256 point")
 }
-
 fn evaluation_v2() -> AuthenticatedQpcsEvaluationV2 {
     let modulus = RELEASE_MODULI_V1[0];
     let point = 7;
@@ -33,7 +30,6 @@ fn evaluation_v2() -> AuthenticatedQpcsEvaluationV2 {
         masked_h_evaluation,
     }
 }
-
 fn axes_v2() -> CrossFieldAxesV2 {
     CrossFieldAxesV2 {
         fixed_axes_digest: [0x11; 32],
@@ -46,14 +42,12 @@ fn axes_v2() -> CrossFieldAxesV2 {
         qpcs_parameter_digest: [0x88; 32],
     }
 }
-
 struct CommitmentFixtureV2 {
     radix_groups: Vec<RadixGroupCommitmentsV2>,
     comparators: Vec<ComparatorGroupCommitmentsV2>,
     small_source: Vec<SmallSourceBlockCommitmentsV2>,
     q_masks: Vec<QMaskBlockCommitmentsV2>,
 }
-
 impl CommitmentFixtureV2 {
     fn new_v2() -> Self {
         let a = point_v2(POINT_A_V2);
@@ -95,7 +89,6 @@ impl CommitmentFixtureV2 {
             ],
         }
     }
-
     fn view_v2(&self) -> BoundCommitmentViewV2<'_> {
         BoundCommitmentViewV2 {
             source_seal: SourceCommitmentSealV2::TestOnly,
@@ -109,7 +102,6 @@ impl CommitmentFixtureV2 {
         }
     }
 }
-
 fn derived_fixture_v2() -> DerivedCommitmentsV2 {
     DerivedCommitmentsV2 {
         positive: point_v2(POINT_A_V2),
@@ -117,7 +109,6 @@ fn derived_fixture_v2() -> DerivedCommitmentsV2 {
         source_binding_digest: [0xb3; 32],
     }
 }
-
 fn canonical_proof_bytes_v2() -> Vec<u8> {
     let a = point_v2(POINT_A_V2)
         .to_non_identity_wire_bytes()
@@ -142,7 +133,6 @@ fn canonical_proof_bytes_v2() -> Vec<u8> {
     assert_eq!(proof.len(), BP_PROOF_BYTES_V2);
     proof
 }
-
 #[test]
 fn exact_inventory_wire_and_fail_closed_gates_are_frozen() {
     assert_eq!(COMPARATOR_GROUPS_V2, 344);
@@ -172,7 +162,6 @@ fn exact_inventory_wire_and_fail_closed_gates_are_frozen() {
         (28, 29)
     );
     assert_eq!(CONDITIONAL_MINIMUM_LOOKUP_DELTA_BYTES_V2, 96);
-
     assert!(!SOURCE_SET_BOUND_V2);
     assert!(!RANGE_SET_BOUND_V2);
     assert!(!CANONICAL_Q_MASK_SET_BOUND_V2);
@@ -187,7 +176,6 @@ fn exact_inventory_wire_and_fail_closed_gates_are_frozen() {
     assert!(!MEASURED_RSS_QUALIFIED_V2);
     assert!(!RELEASE_READY_V2);
 }
-
 #[test]
 fn ordered_inventory_and_binding_have_literal_kat_and_reject_mutation() {
     let mut fixture = CommitmentFixtureV2::new_v2();
@@ -204,7 +192,6 @@ fn ordered_inventory_and_binding_have_literal_kat_and_reject_mutation() {
         hex::encode(view.source_binding_digest_v2().expect("binding")),
         "11cead6073a53eb3fd47f3d2c86c9b0e4d21b10cdaaf40932b1b585c3a110c97"
     );
-
     let original = view.source_binding_digest_v2().expect("original binding");
     fixture.small_source[0].signed = point_v2(POINT_B_V2);
     let mutated = fixture
@@ -213,7 +200,6 @@ fn ordered_inventory_and_binding_have_literal_kat_and_reject_mutation() {
         .expect("mutated binding");
     assert_ne!(original, mutated);
 }
-
 #[test]
 fn deterministic_derived_commitments_change_with_sealed_input() {
     let mut fixture = CommitmentFixtureV2::new_v2();
@@ -223,7 +209,6 @@ fn deterministic_derived_commitments_change_with_sealed_input() {
     assert_eq!(first.positive, repeated.positive);
     assert_eq!(first.negative, repeated.negative);
     assert_eq!(first.source_binding_digest, repeated.source_binding_digest);
-
     fixture.small_source[0].signed = point_v2(POINT_B_V2);
     let mutated = fixture
         .view_v2()
@@ -233,7 +218,6 @@ fn deterministic_derived_commitments_change_with_sealed_input() {
     assert_eq!(first.negative, mutated.negative);
     assert_ne!(first.source_binding_digest, mutated.source_binding_digest);
 }
-
 #[test]
 fn exact_two_commitment_statement_is_206_gates_and_413_constraints() {
     let evaluation = evaluation_v2();
@@ -260,11 +244,9 @@ fn exact_two_commitment_statement_is_206_gates_and_413_constraints() {
     assert!(relation.wr.is_empty());
     assert!(relation.wo.is_empty());
     assert!(relation.wv.is_empty());
-
     build_cross_field_statement_v2(&derived_fixture_v2(), &evaluation)
         .expect("backend accepts the exact n=16384/c=2 statement");
 }
-
 #[test]
 fn exact_1513_byte_parser_rejects_length_point_and_scalar_mutations() {
     let proof = canonical_proof_bytes_v2();
@@ -279,14 +261,12 @@ fn exact_1513_byte_parser_rejects_length_point_and_scalar_mutations() {
         ExactProofViewV2::parse_v2(&trailing).err(),
         Some(CrossFieldErrorV2::Wire)
     );
-
     let mut invalid_point = proof.clone();
     invalid_point[0] = 0x41;
     assert_eq!(
         ExactProofViewV2::parse_v2(&invalid_point).err(),
         Some(CrossFieldErrorV2::Wire)
     );
-
     let mut invalid_scalar = proof;
     let scalar_offset = 13 * POINT_BYTES_V2;
     let mut modulus_le = VEGA_T256_SCALAR_MODULUS_BE_V1;
@@ -297,7 +277,6 @@ fn exact_1513_byte_parser_rejects_length_point_and_scalar_mutations() {
         Some(CrossFieldErrorV2::Wire)
     );
 }
-
 #[test]
 fn purpose_bound_transcript_has_literal_kat_and_binds_every_context_field() {
     let derived = derived_fixture_v2();
@@ -307,7 +286,6 @@ fn purpose_bound_transcript_has_literal_kat_and_binds_every_context_field() {
         hex::encode(keccak256(&state)),
         "c7a0e1af173e65083a37a020abc9c69a99cf1cbe15143b26ea4794aad8f872ed"
     );
-
     let mut changed_entry = evaluation;
     changed_entry.complete_entry_digest[0] ^= 1;
     assert_ne!(
@@ -329,7 +307,6 @@ fn purpose_bound_transcript_has_literal_kat_and_binds_every_context_field() {
         )
     );
 }
-
 #[test]
 fn verifier_transcript_consumes_the_only_canonical_proof_shape() {
     let derived = derived_fixture_v2();
@@ -364,7 +341,6 @@ fn verifier_transcript_consumes_the_only_canonical_proof_shape() {
     }
     transcript.finish_v2().expect("exact consumption");
 }
-
 #[test]
 fn release_extrema_no_wrap_and_soundness_literals_are_pinned() {
     assert_eq!(RELEASE_MODULI_V1.iter().copied().min(), Some(Q_MIN_V2));
@@ -382,7 +358,6 @@ fn release_extrema_no_wrap_and_soundness_literals_are_pinned() {
     assert!(SOUNDNESS_FORMULA_V2.ends_with(b"2^-204.75"));
     assert_eq!(VEGA_T256_SCALAR_MODULUS_BE_V1[0], 0xff);
 }
-
 #[test]
 fn conditional_subtotal_preflight_accepts_only_the_frozen_inventory() {
     let exact = CrossFieldConditionalSubtotalPreflightV2 {
@@ -401,7 +376,6 @@ fn conditional_subtotal_preflight_accepts_only_the_frozen_inventory() {
     };
     assert_eq!(wrong.validate_v2(), Err(CrossFieldErrorV2::Shape));
 }
-
 #[test]
 fn source_budget_and_uninhabited_api_boundary_are_static() {
     let production = include_str!("phase23_rns_link_cross_field_v2.rs");

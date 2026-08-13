@@ -15,13 +15,10 @@ use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::transaction::{SignedTransaction, TransactionEntrypoint};
 use norito::codec::{Decode, Encode};
-
 use crate::torii_proxy::QueuePlanAdmissionBindingV2;
-
 use super::{
     LaneQueueReservationKeyV2, LaneQueueReservationOwnerPhaseV6,
     LaneQueueReservationRecoveryPhaseV1, QueuePlanAdmissionContextV2,
@@ -3064,13 +3061,11 @@ type JournalFileIdentity = ();
 #[cfg(unix)]
 fn journal_file_identity(metadata: &fs::Metadata) -> JournalFileIdentity {
     use std::os::unix::fs::MetadataExt as _;
-
     (metadata.dev(), metadata.ino())
 }
 #[cfg(windows)]
 fn journal_file_identity(metadata: &fs::Metadata) -> JournalFileIdentity {
     use std::os::windows::fs::MetadataExt as _;
-
     (metadata.volume_serial_number(), metadata.file_index())
 }
 #[cfg(not(any(unix, windows)))]
@@ -3091,13 +3086,11 @@ fn journal_file_is_single_link(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         metadata.nlink() == 1
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
-
         metadata.number_of_links() == Some(1)
     }
     #[cfg(not(any(unix, windows)))]
@@ -3109,7 +3102,6 @@ fn journal_file_is_single_link(metadata: &fs::Metadata) -> bool {
 #[cfg(windows)]
 fn journal_file_is_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
@@ -3153,7 +3145,6 @@ fn open_regular_directory(path: &Path) -> io::Result<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(
             (rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW).bits() as i32,
         );
@@ -3161,7 +3152,6 @@ fn open_regular_directory(path: &Path) -> io::Result<File> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
         // `FlushFileBuffers`, which backs `File::sync_all`, requires a write-capable handle.
@@ -3967,7 +3957,6 @@ include!("journal_direct_file_io.rs");
 #[cfg(test)]
 mod tests {
     use std::fs::{self, OpenOptions};
-
     use iroha_data_model::{
         isi::{
             InstructionBox, Log,
@@ -3977,9 +3966,7 @@ mod tests {
     };
     use iroha_logger::Level;
     use iroha_test_samples::gen_account_in;
-
     use super::*;
-
     const TEST_MAX_BYTES: u64 = 4 * 1024 * 1024;
     fn limits(max_live_records: usize) -> QueuePlanJournalLimits {
         QueuePlanJournalLimits::new(

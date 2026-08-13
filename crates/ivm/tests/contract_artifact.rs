@@ -11,7 +11,6 @@ use iroha_data_model::{
     trigger::{TriggerId, action::Repeats},
 };
 mod common;
-
 fn time_trigger(id: &str, namespace: Option<&str>, entrypoint: &str) -> TriggerDescriptor {
     TriggerDescriptor {
         id: TriggerId::new(id.parse().expect("trigger id")),
@@ -29,7 +28,6 @@ fn time_trigger(id: &str, namespace: Option<&str>, entrypoint: &str) -> TriggerD
         },
     }
 }
-
 fn entrypoint(
     name: &str,
     kind: EntryPointKind,
@@ -51,14 +49,12 @@ fn entrypoint(
         entry_pc,
     }
 }
-
 fn contract_artifact(
     abi_version: u8,
     entrypoints: Vec<ivm::EmbeddedEntrypointDescriptor>,
 ) -> Vec<u8> {
     contract_artifact_with_access_hints(abi_version, entrypoints, None)
 }
-
 fn contract_artifact_with_access_hints(
     abi_version: u8,
     entrypoints: Vec<ivm::EmbeddedEntrypointDescriptor>,
@@ -71,7 +67,6 @@ fn contract_artifact_with_access_hints(
         &[ivm::encoding::wide::encode_halt()],
     )
 }
-
 fn contract_artifact_with_code(
     abi_version: u8,
     entrypoints: Vec<ivm::EmbeddedEntrypointDescriptor>,
@@ -80,7 +75,6 @@ fn contract_artifact_with_code(
 ) -> Vec<u8> {
     contract_artifact_with_mode_and_code(abi_version, 0, 0, entrypoints, access_set_hints, code)
 }
-
 fn contract_artifact_with_mode_and_code(
     abi_version: u8,
     mode: u8,
@@ -115,7 +109,6 @@ fn contract_artifact_with_mode_and_code(
     }
     bytes
 }
-
 fn contract_artifact_with_error_codes(error_codes: Vec<ContractErrorCodeDescriptor>) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
@@ -141,11 +134,9 @@ fn contract_artifact_with_error_codes(error_codes: Vec<ContractErrorCodeDescript
     bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     bytes
 }
-
 fn contract_artifact_with_states(states: Vec<ivm::EmbeddedStateDescriptor>) -> Vec<u8> {
     contract_artifact_with_access_hints_and_states(None, states)
 }
-
 fn contract_artifact_with_access_hints_and_states(
     access_set_hints: Option<AccessSetHints>,
     states: Vec<ivm::EmbeddedStateDescriptor>,
@@ -174,7 +165,6 @@ fn contract_artifact_with_access_hints_and_states(
     bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     bytes
 }
-
 fn contract_artifact_with_seiyaku_name(seiyaku_name: &str) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
@@ -200,7 +190,6 @@ fn contract_artifact_with_seiyaku_name(seiyaku_name: &str) -> Vec<u8> {
     bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     bytes
 }
-
 fn contract_artifact_with_execution_features(mode: u8, features_bitmap: u64) -> Vec<u8> {
     let metadata = ivm::ProgramMetadata {
         version_major: 1,
@@ -226,13 +215,11 @@ fn contract_artifact_with_execution_features(mode: u8, features_bitmap: u64) -> 
     bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     bytes
 }
-
 fn value_type(kind: EntrypointValueKindV1) -> EntrypointValueTypeV1 {
     EntrypointValueTypeV1 {
         nodes: vec![EntrypointValueTypeNodeV1::Leaf(kind)],
     }
 }
-
 #[test]
 fn verifier_rejects_stale_embedded_abi_hash_before_execution() {
     let artifact = contract_artifact(1, vec![entrypoint("inspect", EntryPointKind::View, 0)]);
@@ -241,7 +228,6 @@ fn verifier_rejects_stale_embedded_abi_hash_before_execution() {
         .contract_interface
         .expect("contract fixture carries CNTR");
     interface.abi_hash[0] ^= 0x80;
-
     let mut stale = parsed.metadata.encode();
     stale.extend_from_slice(&interface.encode_section());
     stale.extend_from_slice(
@@ -249,7 +235,6 @@ fn verifier_rejects_stale_embedded_abi_hash_before_execution() {
             .get(parsed.code_offset..)
             .expect("parsed code offset is in bounds"),
     );
-
     let error = ivm::verify_contract_artifact(&stale)
         .expect_err("stale embedded ABI binding must fail closed");
     assert!(
@@ -259,7 +244,6 @@ fn verifier_rejects_stale_embedded_abi_hash_before_execution() {
         "unexpected stale-ABI error: {error}"
     );
 }
-
 #[test]
 fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
     let mut argument_mismatch = entrypoint("inspect", EntryPointKind::View, 0);
@@ -281,7 +265,6 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
     let error = ivm::verify_contract_artifact(&artifact)
         .expect_err("argument schema/type mismatch must fail");
     assert!(error.to_string().contains("invalid argument schema"));
-
     let mut return_mismatch = entrypoint("inspect", EntryPointKind::View, 0);
     return_mismatch.return_type = Some("int".to_owned());
     return_mismatch.return_schema = Some(value_type(EntrypointValueKindV1::Bool));
@@ -289,7 +272,6 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
     let error = ivm::verify_contract_artifact(&artifact)
         .expect_err("return schema/type mismatch must fail");
     assert!(error.to_string().contains("return schema"));
-
     let mut oversized = entrypoint("inspect", EntryPointKind::View, 0);
     oversized.return_type = Some(format!("({})", vec!["int"; 14].join(", ")));
     oversized.return_schema = Some(EntrypointValueTypeV1 {
@@ -305,7 +287,6 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
         .expect_err("14-word public return must fail closed");
     assert!(error.to_string().contains("public register window"));
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn verifier_rejects_forged_reserved_query_page_schemas() {
@@ -328,7 +309,6 @@ fn verifier_rejects_forged_reserved_query_page_schemas() {
             ],
         }
     }
-
     let valid = account_page_schema();
     let singular = EntrypointValueTypeV1 {
         nodes: std::iter::once(EntrypointValueTypeNodeV1::Option)
@@ -346,13 +326,11 @@ fn verifier_rejects_forged_reserved_query_page_schemas() {
     singular_descriptor.return_schema = Some(singular);
     ivm::verify_contract_artifact(&contract_artifact(1, vec![singular_descriptor]))
         .expect("exact reserved singular projection schema must be admitted");
-
     let mut descriptor = entrypoint("inspect", EntryPointKind::View, 0);
     descriptor.return_type = Some("QueryPage<AccountView>".to_owned());
     descriptor.return_schema = Some(valid.clone());
     ivm::verify_contract_artifact(&contract_artifact(1, vec![descriptor]))
         .expect("exact reserved QueryPage schema must be admitted");
-
     let assert_rejected = |label: &str, schema: EntrypointValueTypeV1, return_type: &str| {
         let mut descriptor = entrypoint("inspect", EntryPointKind::View, 0);
         descriptor.return_type = Some(return_type.to_owned());
@@ -366,14 +344,12 @@ fn verifier_rejects_forged_reserved_query_page_schemas() {
             "{label}: {error}"
         );
     };
-
     let mut unknown_view = valid.clone();
     let EntrypointValueTypeNodeV1::Struct(view) = &mut unknown_view.nodes[2] else {
         unreachable!("page fixture has a projected struct")
     };
     view.name = "UnknownView".to_owned();
     assert_rejected("unknown projection", unknown_view, "QueryPage<UnknownView>");
-
     let mut wrong_fields = valid.clone();
     let EntrypointValueTypeNodeV1::Struct(view) = &mut wrong_fields.nodes[2] else {
         unreachable!("page fixture has a projected struct")
@@ -384,7 +360,6 @@ fn verifier_rejects_forged_reserved_query_page_schemas() {
         wrong_fields,
         "QueryPage<AccountView>",
     );
-
     let mut wrong_kind = valid.clone();
     wrong_kind.nodes[3] = EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::DomainId);
     assert_rejected(
@@ -392,7 +367,6 @@ fn verifier_rejects_forged_reserved_query_page_schemas() {
         wrong_kind,
         "QueryPage<AccountView>",
     );
-
     let mut wrong_capacity = valid.clone();
     let EntrypointValueTypeNodeV1::List(items) = &mut wrong_capacity.nodes[1] else {
         unreachable!("page fixture has an items list")
@@ -403,7 +377,6 @@ fn verifier_rejects_forged_reserved_query_page_schemas() {
         wrong_capacity,
         "QueryPage<AccountView>",
     );
-
     let mut wrong_next_offset = valid;
     wrong_next_offset.nodes[6] = EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::String);
     assert_rejected(
@@ -412,7 +385,6 @@ fn verifier_rejects_forged_reserved_query_page_schemas() {
         "QueryPage<AccountView>",
     );
 }
-
 #[test]
 fn compiler_embeds_exact_nested_return_schema_in_cntr_and_manifest() {
     let source = r#"
@@ -468,7 +440,6 @@ fn compiler_embeds_exact_nested_return_schema_in_cntr_and_manifest() {
     );
     ivm::verify_contract_artifact(&artifact).expect("verify exact nested return artifact");
 }
-
 #[test]
 fn verify_rejects_ambiguous_or_reserved_error_codes() {
     let duplicate = contract_artifact_with_error_codes(vec![
@@ -490,7 +461,6 @@ fn verify_rejects_ambiguous_or_reserved_error_codes() {
             .to_string()
             .contains("duplicate numeric error code 1001")
     );
-
     let reserved = contract_artifact_with_error_codes(vec![ContractErrorCodeDescriptor {
         namespace: "PaymentError".to_owned(),
         name: "Unspecified".to_owned(),
@@ -499,7 +469,6 @@ fn verify_rejects_ambiguous_or_reserved_error_codes() {
     let error =
         ivm::verify_contract_artifact(&reserved).expect_err("reserved code must be rejected");
     assert!(error.to_string().contains("uses reserved code 0"));
-
     for (namespace, name) in [
         ("1PaymentError", "Unauthorized"),
         ("PaymеntError", "Unauthorized"), // Cyrillic `е`.
@@ -522,7 +491,6 @@ fn verify_rejects_ambiguous_or_reserved_error_codes() {
         );
     }
 }
-
 #[test]
 fn compiler_emits_self_describing_contract_artifact() {
     let src = r#"
@@ -549,7 +517,6 @@ fn compiler_emits_self_describing_contract_artifact() {
         .expect("compiler must emit CNTR");
     assert_eq!(interface.seiyaku_name, "Demo");
     assert_eq!(manifest.seiyaku_name.as_deref(), Some("Demo"));
-
     let verified = ivm::verify_contract_artifact(&bytes).expect("verify artifact");
     assert_eq!(
         verified.manifest.signature_payload(),
@@ -557,7 +524,6 @@ fn compiler_emits_self_describing_contract_artifact() {
         "compiler manifest must match the embedded contract interface",
     );
 }
-
 #[test]
 fn verifier_binds_feature_bitmap_to_execution_capabilities_not_host_hardware() {
     for (mode, feature, label) in [
@@ -572,7 +538,6 @@ fn verifier_binds_feature_bitmap_to_execution_capabilities_not_host_hardware() {
         let verified = ivm::verify_contract_artifact(&artifact)
             .unwrap_or_else(|error| panic!("matching {label} capability must verify: {error}"));
         assert_eq!(verified.manifest.features_bitmap, Some(feature));
-
         let missing = contract_artifact_with_execution_features(mode, 0);
         let error = ivm::verify_contract_artifact(&missing)
             .expect_err("execution-header capability must be mirrored in CNTR");
@@ -580,7 +545,6 @@ fn verifier_binds_feature_bitmap_to_execution_capabilities_not_host_hardware() {
             error.to_string().contains(label),
             "unexpected missing-{label} error: {error}"
         );
-
         let forged = contract_artifact_with_execution_features(0, feature);
         let error = ivm::verify_contract_artifact(&forged)
             .expect_err("CNTR cannot invent an execution capability");
@@ -589,7 +553,6 @@ fn verifier_binds_feature_bitmap_to_execution_capabilities_not_host_hardware() {
             "unexpected forged-{label} error: {error}"
         );
     }
-
     let hardware_like_bit = 1_u64 << 63;
     let error = ivm::verify_contract_artifact(&contract_artifact_with_execution_features(
         0,
@@ -598,7 +561,6 @@ fn verifier_binds_feature_bitmap_to_execution_capabilities_not_host_hardware() {
     .expect_err("unassigned feature bits must not encode host hardware availability");
     assert!(error.to_string().contains("unsupported bits"));
 }
-
 #[test]
 fn contract_code_hash_binds_every_byte_of_compiled_deployable_image() {
     let source = r#"
@@ -621,7 +583,6 @@ fn contract_code_hash_binds_every_byte_of_compiled_deployable_image() {
         parsed.code_offset < bytes.len(),
         "executable code must be present"
     );
-
     let expected = ivm::contract_code_hash(&bytes);
     for offset in 0..bytes.len() {
         let mut mutated = bytes.clone();
@@ -633,14 +594,12 @@ fn contract_code_hash_binds_every_byte_of_compiled_deployable_image() {
         );
     }
 }
-
 #[test]
 fn verified_code_hash_binds_execution_header() {
     let original = contract_artifact(1, vec![entrypoint("main", EntryPointKind::Kotoage, 0)]);
     let original_verified =
         ivm::verify_contract_artifact(&original).expect("verify original artifact");
     let original_hash = original_verified.code_hash;
-
     let mut changed_cycles = original.clone();
     changed_cycles[8..16].copy_from_slice(&1_u64.to_le_bytes());
     let changed_cycles_verified = ivm::verify_contract_artifact(&changed_cycles)
@@ -651,7 +610,6 @@ fn verified_code_hash_binds_execution_header() {
         original_verified.manifest.signature_payload(),
         "manifest signatures must bind max_cycles"
     );
-
     let mut changed_vector_length = original;
     changed_vector_length[7] = 1;
     let changed_vector_hash = ivm::verify_contract_artifact(&changed_vector_length)
@@ -659,7 +617,6 @@ fn verified_code_hash_binds_execution_header() {
         .code_hash;
     assert_ne!(changed_vector_hash, original_hash);
 }
-
 #[test]
 fn signed_manifest_rejects_every_execution_header_mutation() {
     let original = contract_artifact(1, vec![entrypoint("main", EntryPointKind::Kotoage, 0)]);
@@ -674,7 +631,6 @@ fn signed_manifest_rejects_every_execution_header_mutation() {
         .signature
         .verify(&provenance.signer, &signed.signature_payload_bytes())
         .expect("original manifest signature");
-
     let mut mutations = Vec::<(&str, Vec<u8>)>::new();
     for index in 0..ivm::METADATA_MAGIC.len() {
         let mut magic = original.clone();
@@ -704,7 +660,6 @@ fn signed_manifest_rejects_every_execution_header_mutation() {
         abi_hash[index] ^= 0xff;
         mutations.push(("abi_hash", abi_hash));
     }
-
     for (field, mutated) in mutations {
         let Ok(verified) = ivm::verify_contract_artifact(&mutated) else {
             // Structural rejection is an admission rejection before provenance is checked.
@@ -727,7 +682,6 @@ fn signed_manifest_rejects_every_execution_header_mutation() {
         );
     }
 }
-
 #[test]
 fn public_entrypoint_descriptor_targets_halting_wrapper() {
     let src = r#"
@@ -752,7 +706,6 @@ fn public_entrypoint_descriptor_targets_halting_wrapper() {
         .iter()
         .find(|candidate| candidate.name == "run")
         .expect("run entrypoint");
-
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&bytes).expect("load artifact");
     vm.set_program_counter(parsed.prefix_len() as u64 + run.entry_pc)
@@ -760,7 +713,6 @@ fn public_entrypoint_descriptor_targets_halting_wrapper() {
     vm.run().expect("run entrypoint wrapper");
     assert_eq!(common::decode_i64_register(&vm, 10), 42);
 }
-
 #[test]
 fn contract_artifact_with_cntr_requires_explicit_entrypoint_selection() {
     let src = r#"
@@ -791,12 +743,10 @@ seiyaku ContractArtifactFixture {
         parsed.code_offset > parsed.header_len + cntr_len,
         "string literals should emit a prefix section after CNTR",
     );
-
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&bytes).expect("load artifact");
     vm.run().expect("raw non-dispatching halt");
     assert_eq!(vm.register(10), 0, "raw PC 0 must not invoke main");
-
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&bytes).expect("load artifact");
     vm.set_program_counter(parsed.prefix_len() as u64 + main.entry_pc)
@@ -804,7 +754,6 @@ seiyaku ContractArtifactFixture {
     vm.run().expect("run selected main entrypoint");
     assert_eq!(common::decode_i64_register(&vm, 10), 7);
 }
-
 #[test]
 fn verify_rejects_missing_cntr() {
     let mut bytes = ivm::ProgramMetadata {
@@ -820,7 +769,6 @@ fn verify_rejects_missing_cntr() {
     let err = ivm::verify_contract_artifact(&bytes).expect_err("missing CNTR must fail");
     assert!(err.to_string().contains("missing required CNTR"));
 }
-
 #[test]
 fn verify_rejects_malformed_cntr() {
     let mut bytes = ivm::ProgramMetadata {
@@ -839,7 +787,6 @@ fn verify_rejects_malformed_cntr() {
     let err = ivm::verify_contract_artifact(&bytes).expect_err("malformed CNTR must fail");
     assert!(err.to_string().contains("metadata parse failed"));
 }
-
 #[test]
 fn verify_rejects_embedded_debug_metadata() {
     let mut bytes = contract_artifact(1, vec![entrypoint("main", EntryPointKind::Kotoage, 0)]);
@@ -853,16 +800,13 @@ fn verify_rejects_embedded_debug_metadata() {
         .encode_section(),
     );
     bytes.extend_from_slice(&code);
-
     let err = ivm::verify_contract_artifact(&bytes)
         .expect_err("deployable artifacts must not contain debug metadata");
     assert!(err.to_string().contains("DBG1"));
 }
-
 #[test]
 fn verify_rejects_direct_control_flow_outside_instruction_boundaries() {
     use ivm::instruction::wide;
-
     let outside = ivm::encoding::wide::encode_branch(wide::control::BEQ, 0, 0, 1);
     let bytes = contract_artifact_with_code(
         1,
@@ -873,7 +817,6 @@ fn verify_rejects_direct_control_flow_outside_instruction_boundaries() {
     let err = ivm::verify_contract_artifact(&bytes)
         .expect_err("branch to the end of the stream must be rejected");
     assert!(err.to_string().contains("instruction boundary"));
-
     let before_start = ivm::encoding::wide::encode_offset24(wide::control::JMP, -1);
     let bytes = contract_artifact_with_code(
         1,
@@ -885,11 +828,9 @@ fn verify_rejects_direct_control_flow_outside_instruction_boundaries() {
         ivm::verify_contract_artifact(&bytes).expect_err("jump before the stream must be rejected");
     assert!(err.to_string().contains("outside the executable stream"));
 }
-
 #[test]
 fn verify_rejects_missing_direct_control_flow_fallthrough_even_when_unreachable() {
     use ivm::instruction::wide;
-
     let terminal_control_flow = [
         (
             "conditional branch",
@@ -904,7 +845,6 @@ fn verify_rejects_missing_direct_control_flow_fallthrough_even_when_unreachable(
             ivm::encoding::wide::encode_jump(wide::control::JAL, 1, 0),
         ),
     ];
-
     for (encoding, terminal) in terminal_control_flow {
         let bytes = contract_artifact_with_code(
             1,
@@ -920,11 +860,9 @@ fn verify_rejects_missing_direct_control_flow_fallthrough_even_when_unreachable(
         );
     }
 }
-
 #[test]
 fn verify_rejects_unexecutable_control_flow_even_when_unreachable() {
     use ivm::instruction::wide;
-
     let invalid_control_flow = [
         (
             "indirect jump",
@@ -942,7 +880,6 @@ fn verify_rejects_unexecutable_control_flow_even_when_unreachable() {
             "unsupported link register r2",
         ),
     ];
-
     for (encoding, invalid, expected) in invalid_control_flow {
         let bytes = contract_artifact_with_code(
             1,
@@ -958,7 +895,6 @@ fn verify_rejects_unexecutable_control_flow_even_when_unreachable() {
         );
     }
 }
-
 #[test]
 fn verify_rejects_disallowed_syscalls_before_execution() {
     let disallowed_number = ivm::syscalls::RETIRED_SYSCALL_BUILD_PATH_MAP_KEY;
@@ -980,7 +916,6 @@ fn verify_rejects_disallowed_syscalls_before_execution() {
         .expect_err("unknown bytecode syscall must fail artifact admission");
     assert!(err.to_string().contains("disallowed syscall"));
 }
-
 #[test]
 fn verify_rejects_private_input_syscall_without_zk_mode() {
     let private_input = ivm::encoding::wide::encode_sys(
@@ -993,7 +928,6 @@ fn verify_rejects_private_input_syscall_without_zk_mode() {
         None,
         &[private_input, ivm::encoding::wide::encode_halt()],
     );
-
     let error = ivm::verify_contract_artifact(&bytes)
         .expect_err("non-ZK artifacts must not admit private-input syscalls");
     assert!(
@@ -1001,11 +935,9 @@ fn verify_rejects_private_input_syscall_without_zk_mode() {
         "unexpected admission error: {error}"
     );
 }
-
 #[test]
 fn prepared_contract_derives_transitive_private_input_requirement_from_bytecode() {
     use ivm::instruction::wide;
-
     let private_input = ivm::encoding::wide::encode_sys(
         wide::system::SCALL,
         ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT as u8,
@@ -1029,7 +961,6 @@ fn prepared_contract_derives_transitive_private_input_requirement_from_bytecode(
     );
     let prepared = ivm::prepare_contract(std::sync::Arc::from(bytes.into_boxed_slice()))
         .expect("valid ZK contract prepares");
-
     assert_eq!(
         prepared.entrypoint_requires_private_inputs("private_commitment"),
         Some(true),
@@ -1041,11 +972,9 @@ fn prepared_contract_derives_transitive_private_input_requirement_from_bytecode(
     );
     assert_eq!(prepared.entrypoint_requires_private_inputs("missing"), None);
 }
-
 #[test]
 fn verify_derives_transitive_view_effects_from_bytecode() {
     use ivm::instruction::wide;
-
     let state_write = ivm::encoding::wide::encode_sys(
         wide::system::SCALL,
         ivm::syscalls::SYSCALL_STATE_SET as u8,
@@ -1061,7 +990,6 @@ fn verify_derives_transitive_view_effects_from_bytecode() {
             ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
         ),
     ];
-
     for (encoding, call_helper) in calls {
         let code = [
             call_helper,
@@ -1069,7 +997,6 @@ fn verify_derives_transitive_view_effects_from_bytecode() {
             state_write,
             return_from_helper,
         ];
-
         let malicious_view = contract_artifact_with_code(
             1,
             vec![entrypoint("inspect", EntryPointKind::View, 0)],
@@ -1084,7 +1011,6 @@ fn verify_derives_transitive_view_effects_from_bytecode() {
                 .contains("transitively reaches effectful syscall"),
             "{encoding} call was not included in view reachability: {error}"
         );
-
         let mut authorized = entrypoint("mutate", EntryPointKind::Kotoage, 0);
         authorized.write_keys = vec!["state:*".to_owned()];
         let authorized_entry = contract_artifact_with_code(1, vec![authorized], None, &code);
@@ -1092,11 +1018,9 @@ fn verify_derives_transitive_view_effects_from_bytecode() {
             .expect("the same write is valid behind an authorized entrypoint");
     }
 }
-
 #[test]
 fn strict_return_integrity_traps_view_return_address_poisoning_before_the_write() {
     use ivm::instruction::wide;
-
     let code = [
         // Copy an attacker-controlled target into r1, then use the syntactically
         // canonical return form to try to enter the hidden state-write block.
@@ -1116,7 +1040,6 @@ fn strict_return_integrity_traps_view_return_address_poisoning_before_the_write(
     );
     ivm::verify_contract_artifact(&malicious_view)
         .expect("the hidden block is unreachable under protected return semantics");
-
     let prepared = ivm::prepare_contract(std::sync::Arc::from(malicious_view.into_boxed_slice()))
         .expect("poisoning fixture prepares");
     let entry_pc = prepared
@@ -1128,18 +1051,15 @@ fn strict_return_integrity_traps_view_return_address_poisoning_before_the_write(
     vm.set_register(2, hidden_write_pc);
     vm.set_program_counter(entry_pc)
         .expect("select malicious view");
-
     let error = vm
         .run()
         .expect_err("a poisoned canonical return must trap before the write");
     assert_eq!(error, ivm::VMError::AssertionFailed);
     assert_eq!(vm.pc(), entry_pc + 4, "the hidden write was not reached");
 }
-
 #[test]
 fn strict_outer_return_cannot_switch_between_valid_halt_sentinels() {
     use ivm::instruction::wide;
-
     let code = [
         // The invocation starts with r1 pointing at the first HALT. Bytecode
         // then attempts to replace it with a different, otherwise valid HALT.
@@ -1164,7 +1084,6 @@ fn strict_outer_return_cannot_switch_between_valid_halt_sentinels() {
     vm.set_register(1, entry_pc + 8);
     vm.set_register(2, entry_pc + 12);
     vm.set_program_counter(entry_pc).expect("select view");
-
     assert_eq!(
         vm.run()
             .expect_err("outer return must remain bound to the initial HALT"),
@@ -1172,11 +1091,9 @@ fn strict_outer_return_cannot_switch_between_valid_halt_sentinels() {
     );
     assert_eq!(vm.pc(), entry_pc + 4);
 }
-
 #[test]
 fn verify_allows_read_only_helper_beside_a_mutating_entrypoint() {
     use ivm::instruction::wide;
-
     let code = [
         ivm::encoding::wide::encode_offset24(wide::control::JALS, 4),
         ivm::encoding::wide::encode_halt(),
@@ -1196,16 +1113,13 @@ fn verify_allows_read_only_helper_beside_a_mutating_entrypoint() {
     let mut mutate = entrypoint("mutate", EntryPointKind::Kotoage, 8);
     mutate.write_keys = vec!["state:*".to_owned()];
     let bytes = contract_artifact_with_code(1, vec![inspect, mutate], None, &code);
-
     ivm::verify_contract_artifact(&bytes).expect(
         "a read-only helper must not inherit an unreachable sibling entrypoint's write effect",
     );
 }
-
 #[test]
 fn strict_return_integrity_allows_nested_direct_calls_for_raw_and_prepared_loads() {
     use ivm::instruction::wide;
-
     let code = [
         // Outer call: return to the HALT at pc 4.
         ivm::encoding::wide::encode_jump(wide::control::JAL, 1, 2),
@@ -1226,23 +1140,19 @@ fn strict_return_integrity_allows_nested_direct_calls_for_raw_and_prepared_loads
     );
     let prepared = ivm::prepare_contract(std::sync::Arc::from(bytes.clone().into_boxed_slice()))
         .expect("nested call fixture prepares");
-
     let mut raw = ivm::IVM::new(u64::MAX);
     raw.load_program(&bytes).expect("raw contract loads");
     raw.run().expect("raw contract nested calls return");
     assert_eq!(raw.register(7), 9);
-
     let mut warm = ivm::IVM::new(u64::MAX);
     warm.load_prepared(&prepared)
         .expect("prepared contract loads");
     warm.run().expect("prepared contract nested calls return");
     assert_eq!(warm.register(7), 9);
 }
-
 #[test]
 fn verifier_rejects_self_recursive_direct_calls_before_execution() {
     use ivm::instruction::wide;
-
     let bytes = contract_artifact_with_code(
         1,
         vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
@@ -1259,11 +1169,9 @@ fn verifier_rejects_self_recursive_direct_calls_before_execution() {
         "unexpected recursion error: {error}"
     );
 }
-
 #[test]
 fn verifier_rejects_mutual_and_unreachable_direct_call_cycles() {
     use ivm::instruction::wide;
-
     let return_from_helper = ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0);
     let mutual = contract_artifact_with_code(
         1,
@@ -1281,7 +1189,6 @@ fn verifier_rejects_mutual_and_unreachable_direct_call_cycles() {
     let error = ivm::verify_contract_artifact(&mutual)
         .expect_err("mutually recursive helpers must fail artifact admission");
     assert!(error.to_string().contains("recursive direct-call cycle"));
-
     let unreachable = contract_artifact_with_code(
         1,
         vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
@@ -1296,11 +1203,9 @@ fn verifier_rejects_mutual_and_unreachable_direct_call_cycles() {
         .expect_err("an unreachable recursive helper must still fail artifact admission");
     assert!(error.to_string().contains("recursive direct-call cycle"));
 }
-
 #[test]
 fn verifier_does_not_confuse_an_ordinary_branch_loop_with_recursion() {
     use ivm::instruction::wide;
-
     let bytes = contract_artifact_with_code(
         1,
         vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
@@ -1313,11 +1218,9 @@ fn verifier_does_not_confuse_an_ordinary_branch_loop_with_recursion() {
     ivm::verify_contract_artifact(&bytes)
         .expect("an ordinary control-flow loop is not a recursive function call");
 }
-
 #[test]
 fn verify_view_can_call_a_read_only_helper_when_the_artifact_has_no_writes() {
     use ivm::instruction::wide;
-
     let code = [
         ivm::encoding::wide::encode_jump(wide::control::JAL, 1, 2),
         ivm::encoding::wide::encode_halt(),
@@ -1330,15 +1233,12 @@ fn verify_view_can_call_a_read_only_helper_when_the_artifact_has_no_writes() {
     let mut inspect = entrypoint("inspect", EntryPointKind::View, 0);
     inspect.read_keys = vec!["state:*".to_owned()];
     let bytes = contract_artifact_with_code(1, vec![inspect], None, &code);
-
     ivm::verify_contract_artifact(&bytes)
         .expect("an indirect return is safe when no artifact instruction can write state");
 }
-
 #[test]
 fn verify_view_effect_analysis_follows_both_branch_arms() {
     use ivm::instruction::wide;
-
     let code = [
         ivm::encoding::wide::encode_branch(wide::control::BEQ, 0, 0, 2),
         ivm::encoding::wide::encode_halt(),
@@ -1362,11 +1262,9 @@ fn verify_view_effect_analysis_follows_both_branch_arms() {
             .contains("transitively reaches effectful syscall")
     );
 }
-
 #[test]
 fn verify_view_effect_analysis_decodes_scall_and_system_writes() {
     use ivm::instruction::wide;
-
     let encodings = [
         (
             "high-bit SCALL",
@@ -1380,7 +1278,6 @@ fn verify_view_effect_analysis_decodes_scall_and_system_writes() {
             ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_STATE_SET),
         ),
     ];
-
     for (encoding, write) in encodings {
         let bytes = contract_artifact_with_code(
             1,
@@ -1398,11 +1295,9 @@ fn verify_view_effect_analysis_decodes_scall_and_system_writes() {
         );
     }
 }
-
 #[test]
 fn verify_view_effect_analysis_ignores_unreachable_write_code() {
     use ivm::instruction::wide;
-
     let state_write = ivm::encoding::wide::encode_sys(
         wide::system::SCALL,
         ivm::syscalls::SYSCALL_STATE_SET as u8,
@@ -1417,15 +1312,12 @@ fn verify_view_effect_analysis_ignores_unreachable_write_code() {
             ivm::encoding::wide::encode_halt(),
         ],
     );
-
     ivm::verify_contract_artifact(&bytes)
         .expect("unreachable code must not contaminate a read-only entrypoint");
 }
-
 #[test]
 fn verify_rejects_unverifiable_indirect_entrypoint_control_flow() {
     use ivm::instruction::wide;
-
     let indirect_jumps = [
         ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 2, 0),
         ivm::encoding::wide::encode_rr(wide::control::JR, 2, 0, 0),
@@ -1446,11 +1338,9 @@ fn verify_rejects_unverifiable_indirect_entrypoint_control_flow() {
         );
     }
 }
-
 #[test]
 fn verify_rejects_helper_hidden_access_classes_under_reported_by_cntr() {
     use ivm::instruction::wide;
-
     for (label, syscall, expected_access) in [
         (
             "ledger write",
@@ -1473,7 +1363,6 @@ fn verify_rejects_helper_hidden_access_classes_under_reported_by_cntr() {
         forged.read_keys = vec!["state:decoy".to_owned()];
         forged.write_keys = vec!["state:decoy".to_owned()];
         let bytes = contract_artifact_with_code(1, vec![forged], None, &code);
-
         let error = ivm::verify_contract_artifact(&bytes)
             .expect_err("complete CNTR access claims must cover bytecode-derived access classes");
         let message = error.to_string();
@@ -1484,7 +1373,6 @@ fn verify_rejects_helper_hidden_access_classes_under_reported_by_cntr() {
         );
     }
 }
-
 #[test]
 fn verify_rejects_duplicate_entrypoints() {
     let bytes = contract_artifact(
@@ -1497,7 +1385,6 @@ fn verify_rejects_duplicate_entrypoints() {
     let err = ivm::verify_contract_artifact(&bytes).expect_err("duplicate entrypoints must fail");
     assert!(err.to_string().contains("duplicate entrypoint `main`"));
 }
-
 #[test]
 fn verify_rejects_entrypoint_pc_aliases_and_missing_authorization() {
     let bytes = contract_artifact(
@@ -1509,7 +1396,6 @@ fn verify_rejects_entrypoint_pc_aliases_and_missing_authorization() {
     );
     let err = ivm::verify_contract_artifact(&bytes).expect_err("entrypoint PC alias must fail");
     assert!(err.to_string().contains("reuses entry_pc"));
-
     let mut public = entrypoint("main", EntryPointKind::Kotoage, 0);
     public.permission = None;
     let bytes = contract_artifact(1, vec![public]);
@@ -1517,7 +1403,6 @@ fn verify_rejects_entrypoint_pc_aliases_and_missing_authorization() {
         .expect_err("public entrypoint without authorization must fail");
     assert!(err.to_string().contains("missing caller authorization"));
 }
-
 #[test]
 fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
     for name in [
@@ -1543,7 +1428,6 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
             "unexpected error for `{name}`: {error}"
         );
     }
-
     for name in ["entry", "init", "upgrade", "_run2"] {
         ivm::verify_contract_artifact(&contract_artifact(
             1,
@@ -1551,7 +1435,6 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
         ))
         .unwrap_or_else(|error| panic!("valid ordinary identifier `{name}` was rejected: {error}"));
     }
-
     for name in kotodama_lang::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
         if !iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(name) {
             continue;
@@ -1562,7 +1445,6 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
         });
     }
 }
-
 #[test]
 fn verify_rejects_noncanonical_or_reserved_seiyaku_names() {
     for name in [
@@ -1585,7 +1467,6 @@ fn verify_rejects_noncanonical_or_reserved_seiyaku_names() {
             "unexpected error for `{name}`: {error}"
         );
     }
-
     for name in kotodama_lang::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
         let artifact = contract_artifact_with_seiyaku_name(name);
         let error = ivm::verify_contract_artifact(&artifact)
@@ -1597,12 +1478,10 @@ fn verify_rejects_noncanonical_or_reserved_seiyaku_names() {
             "unexpected error for retired seiyaku name `{name}`: {error}"
         );
     }
-
     let artifact = contract_artifact_with_seiyaku_name("_Ledger2");
     ivm::verify_contract_artifact(&artifact)
         .expect("valid ASCII seiyaku identifier must pass admission");
 }
-
 #[test]
 fn verify_rejects_noncanonical_or_reserved_state_names() {
     for name in [
@@ -1627,7 +1506,6 @@ fn verify_rejects_noncanonical_or_reserved_state_names() {
             "unexpected error for `{name}`: {error}"
         );
     }
-
     ivm::verify_contract_artifact(&contract_artifact_with_states(vec![
         ivm::EmbeddedStateDescriptor {
             name: "_counter2".to_owned(),
@@ -1635,7 +1513,6 @@ fn verify_rejects_noncanonical_or_reserved_state_names() {
         },
     ]))
     .expect("valid ASCII state identifier must pass admission");
-
     for ty in [
         ivm::EmbeddedStateType::Struct {
             name: "Rеcord".to_owned(), // Cyrillic `е`.
@@ -1672,7 +1549,6 @@ fn verify_rejects_noncanonical_or_reserved_state_names() {
         );
     }
 }
-
 #[test]
 fn verify_rejects_source_controlled_lifecycle_authorization() {
     for (name, kind) in [
@@ -1693,7 +1569,6 @@ fn verify_rejects_source_controlled_lifecycle_authorization() {
         );
     }
 }
-
 #[test]
 fn verify_requires_reserved_lifecycle_names_to_match_their_kinds() {
     for (name, kind, expected) in [
@@ -1726,7 +1601,6 @@ fn verify_requires_reserved_lifecycle_names_to_match_their_kinds() {
             "unexpected error for `{name}`: {error}"
         );
     }
-
     for (name, kind) in [
         ("hajimari", EntryPointKind::Hajimari),
         ("始まり", EntryPointKind::Hajimari),
@@ -1739,7 +1613,6 @@ fn verify_requires_reserved_lifecycle_names_to_match_their_kinds() {
             });
     }
 }
-
 #[test]
 fn verify_rejects_inconsistent_access_completeness() {
     let mut complete = entrypoint("main", EntryPointKind::Kotoage, 0);
@@ -1747,14 +1620,12 @@ fn verify_rejects_inconsistent_access_completeness() {
     let err = ivm::verify_contract_artifact(&contract_artifact(1, vec![complete]))
         .expect_err("complete hints with skipped reasons must fail");
     assert!(err.to_string().contains("marks access hints complete"));
-
     let mut incomplete = entrypoint("main", EntryPointKind::Kotoage, 0);
     incomplete.access_hints_complete = Some(false);
     let err = ivm::verify_contract_artifact(&contract_artifact(1, vec![incomplete]))
         .expect_err("incomplete hints without reason must fail");
     assert!(err.to_string().contains("without a reason"));
 }
-
 #[test]
 fn verify_rejects_invalid_entry_pc() {
     for invalid_pc in [1, 2, 3, 4, u64::MAX] {
@@ -1770,7 +1641,6 @@ fn verify_rejects_invalid_entry_pc() {
         );
     }
 }
-
 #[test]
 fn verify_rejects_invalid_trigger_callback_target() {
     let mut main = entrypoint("main", EntryPointKind::Kotoage, 0);
@@ -1780,7 +1650,6 @@ fn verify_rejects_invalid_trigger_callback_target() {
         .expect_err("invalid trigger callback target must fail");
     assert!(err.to_string().contains("callback target `missing`"));
 }
-
 #[test]
 fn verify_rejects_forbidden_trigger_identifier_positions() {
     for (trigger, expected) in [
@@ -1803,11 +1672,9 @@ fn verify_rejects_forbidden_trigger_identifier_positions() {
         );
     }
 }
-
 #[test]
 fn verify_rejects_raw_control_flow_into_a_distinct_entrypoint() {
     use ivm::instruction::wide;
-
     let transfers = [
         (
             "conditional branch",
@@ -1841,7 +1708,6 @@ fn verify_rejects_raw_control_flow_into_a_distinct_entrypoint() {
         ("hajimari", EntryPointKind::Hajimari),
         ("kaizen", EntryPointKind::Kaizen),
     ];
-
     for (encoding, transfer, expected_error) in transfers {
         for (target_name, target_kind) in targets {
             let bytes = contract_artifact_with_code(
@@ -1873,18 +1739,15 @@ fn verify_rejects_raw_control_flow_into_a_distinct_entrypoint() {
         }
     }
 }
-
 #[test]
 fn verify_rejects_duplicate_trigger_ids() {
     let mut main = entrypoint("main", EntryPointKind::Kotoage, 0);
     main.triggers.push(time_trigger("wake", None, "main"));
     main.triggers.push(time_trigger("wake", None, "main"));
-
     let err = ivm::verify_contract_artifact(&contract_artifact(1, vec![main]))
         .expect_err("duplicate trigger IDs must fail closed during artifact admission");
     assert!(err.to_string().contains("duplicate trigger `wake`"));
 }
-
 #[test]
 fn verify_rejects_non_kotoage_local_trigger_callbacks() {
     for (target, kind) in [
@@ -1904,7 +1767,6 @@ fn verify_rejects_non_kotoage_local_trigger_callbacks() {
                 ivm::encoding::wide::encode_halt(),
             ],
         );
-
         let err = ivm::verify_contract_artifact(&bytes).unwrap_err();
         assert!(
             err.to_string()
@@ -1913,18 +1775,15 @@ fn verify_rejects_non_kotoage_local_trigger_callbacks() {
         );
     }
 }
-
 #[test]
 fn verify_accepts_namespaced_trigger_callback_target() {
     let mut main = entrypoint("main", EntryPointKind::Kotoage, 0);
     main.triggers
         .push(time_trigger("amount", Some("callee"), "run"));
     let bytes = contract_artifact(1, vec![main]);
-
     ivm::verify_contract_artifact(&bytes)
         .expect("lowercase business identifiers remain valid trigger IDs");
 }
-
 #[test]
 fn verify_accepts_global_access_wildcard_hints() {
     let hints = AccessSetHints {
@@ -1938,10 +1797,8 @@ fn verify_accepts_global_access_wildcard_hints() {
         vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
         Some(hints),
     );
-
     ivm::verify_contract_artifact(&bytes).expect("global wildcard access hints are supported");
 }
-
 #[test]
 fn verify_accepts_state_access_wildcard_hints() {
     let hints = AccessSetHints {
@@ -1955,10 +1812,8 @@ fn verify_accepts_state_access_wildcard_hints() {
         vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
         Some(hints),
     );
-
     ivm::verify_contract_artifact(&bytes).expect("state wildcard access hints are supported");
 }
-
 #[test]
 fn verify_rejects_invalid_dynamic_access_hints() {
     let hints = AccessSetHints {
@@ -1981,7 +1836,6 @@ fn verify_rejects_invalid_dynamic_access_hints() {
     assert!(err.to_string().contains(
         "base_key must be `state:` followed by one canonical state declaration identifier"
     ));
-
     let hints = AccessSetHints {
         read_keys: Vec::new(),
         write_keys: Vec::new(),
@@ -2001,7 +1855,6 @@ fn verify_rejects_invalid_dynamic_access_hints() {
     let err = ivm::verify_contract_artifact(&bytes).expect_err("zero dynamic hint must fail");
     assert!(err.to_string().contains("max_keys must be in 1..=64"));
 }
-
 #[test]
 fn verify_dynamic_access_hints_resolve_the_exact_declared_state_map() {
     let hint = DynamicAccessHint {
@@ -2027,7 +1880,6 @@ fn verify_dynamic_access_hints_resolve_the_exact_declared_state_map() {
         contract_artifact_with_access_hints_and_states(Some(hints.clone()), vec![state.clone()]);
     ivm::verify_contract_artifact(&artifact)
         .expect("exact dynamic hint must resolve to its declared StateMap");
-
     let mut mismatched_hints = hints.clone();
     mismatched_hints.dynamic_reads[0].key_type = "int".to_owned();
     let artifact =
@@ -2039,7 +1891,6 @@ fn verify_dynamic_access_hints_resolve_the_exact_declared_state_map() {
             .to_string()
             .contains("declares key_type `int` but its StateMap key type is `quantity`")
     );
-
     let artifact = contract_artifact_with_access_hints_and_states(
         Some(hints),
         vec![ivm::EmbeddedStateDescriptor {
@@ -2054,7 +1905,6 @@ fn verify_dynamic_access_hints_resolve_the_exact_declared_state_map() {
             .to_string()
             .contains("must reference a declared top-level StateMap")
     );
-
     let artifact = contract_artifact_with_access_hints_and_states(
         Some(AccessSetHints {
             read_keys: Vec::new(),
@@ -2072,7 +1922,6 @@ fn verify_dynamic_access_hints_resolve_the_exact_declared_state_map() {
             .contains("must reference a declared top-level StateMap")
     );
 }
-
 #[test]
 fn verify_rejects_unsupported_abi_version() {
     let bytes = contract_artifact(2, vec![entrypoint("main", EntryPointKind::Kotoage, 0)]);

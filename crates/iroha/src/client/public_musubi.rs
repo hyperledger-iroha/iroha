@@ -1,17 +1,13 @@
 //! Exact-network authenticated public Musubi query helpers.
-
 use std::time::Duration;
-
 use super::{APPLICATION_JSON, Client};
 use crate::http::{Method as HttpMethod, RequestBuilder as _, StatusCode};
 use eyre::{Result, WrapErr as _, eyre};
-
 // Exact-release JSON repeats the bounded dependency vector in the authoritative home record and
 // the universal resolver row. Byte-budgeted resolver pages share this Musubi-specific ceiling,
 // which remains below the shared HTTP client's 64 MiB default.
 pub(super) const MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES: usize =
     iroha_data_model::musubi::MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1;
-
 /// First-release authenticated public Musubi query endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicMusubiQueryPathV1 {
@@ -40,7 +36,6 @@ pub enum PublicMusubiQueryPathV1 {
     /// Search the finalized-event package metadata projection.
     Search,
 }
-
 impl PublicMusubiQueryPathV1 {
     pub(super) const fn path(self) -> &'static str {
         match self {
@@ -59,7 +54,6 @@ impl PublicMusubiQueryPathV1 {
         }
     }
 }
-
 /// Result of an authenticated public Musubi query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PublicMusubiQueryResultV1<T> {
@@ -70,7 +64,6 @@ pub enum PublicMusubiQueryResultV1<T> {
     /// A supplied finalized cursor is stale and must not be silently restarted.
     StaleCursor,
 }
-
 /// Execute one bounded public Musubi V1 query with the client's exact-network account signer.
 ///
 /// This function deliberately accepts only the fixed typed-query route inventory. It

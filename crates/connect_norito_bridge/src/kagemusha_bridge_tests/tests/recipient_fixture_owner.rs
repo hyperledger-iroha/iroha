@@ -4,14 +4,10 @@ use std::{
     io::Write as _,
     path::{Path, PathBuf},
 };
-
 use super::*;
-
 const FIXTURE_STAGE_ENV: &str = "IROHA_CONNECT_RECIPIENT_FIXTURE_STAGE";
-
 fn fixture_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
-
     let mut encoded = String::with_capacity(bytes.len() * 2 + bytes.len() / 32 + 1);
     for chunk in bytes.chunks(32) {
         for byte in chunk {
@@ -21,7 +17,6 @@ fn fixture_hex(bytes: &[u8]) -> String {
     }
     encoded
 }
-
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -29,7 +24,6 @@ fn repository_root() -> PathBuf {
         .expect("connect crate is nested below the repository root")
         .to_path_buf()
 }
-
 fn fixture_output_root() -> (PathBuf, bool) {
     let checked = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -54,7 +48,6 @@ fn fixture_output_root() -> (PathBuf, bool) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         assert_eq!(
             metadata.permissions().mode() & 0o777,
             0o700,
@@ -77,7 +70,6 @@ fn fixture_output_root() -> (PathBuf, bool) {
     );
     (stage, true)
 }
-
 fn publish_or_check(fixtures: &[(&str, Vec<u8>)]) {
     let (root, write) = fixture_output_root();
     for (name, bytes) in fixtures {
@@ -89,7 +81,6 @@ fn publish_or_check(fixtures: &[(&str, Vec<u8>)]) {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt as _;
-
                 options.mode(0o600);
             }
             let mut output = options.open(&path).unwrap_or_else(|error| {
@@ -143,7 +134,6 @@ fn publish_or_check(fixtures: &[(&str, Vec<u8>)]) {
             .expect("sync recipient fixture stage");
     }
 }
-
 #[test]
 #[ignore = "registered fixture owner; checks in place unless an external stage is supplied"]
 fn recipient_receive_offer_v2_fixture_owner() {

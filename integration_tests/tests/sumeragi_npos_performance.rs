@@ -3,14 +3,12 @@
 //! The scenario captures telemetry snapshots while producing a fixed number of
 //! blocks, aggregates phase latency EMAs, queue depths, and throughput, then
 //! persists a JSON summary for reporting.
-
 use std::{
     collections::BTreeMap,
     fs,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
-
 use eyre::{Context as _, Result, bail, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
@@ -25,7 +23,6 @@ use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use nonzero_ext::nonzero;
 use norito::json::{self, JsonSerialize, Map, Value};
 use tokio::time::sleep;
-
 const BASE_SEED: &str = "npos-baseline-1s";
 const SCENARIO_NAME: &str = "npos_baseline_1s";
 const BLOCK_TIME_MS: u64 = 1_000;
@@ -68,12 +65,9 @@ const CHUNK_LOSS_PAYLOAD_BYTES: usize = 64 * 1024;
 const CHUNK_LOSS_DROP_INTERVAL: i64 = 2;
 const CHUNK_LOSS_POLL_TIMEOUT: Duration = Duration::from_secs(120);
 const CHUNK_LOSS_RBC_VISIBILITY_TTL_MS: i64 = 10 * 60 * 1_000;
-
 const STRESS_PEERS_ENV: &str = "SUMERAGI_NPOS_STRESS_PEERS";
 const SUBMIT_CONNECTIVITY_TIMEOUT: Duration = Duration::from_secs(30);
-
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
-
 fn env_parse<T>(key: &str) -> Option<T>
 where
     T: std::str::FromStr,
@@ -82,7 +76,6 @@ where
         .ok()
         .and_then(|value| value.trim().parse().ok())
 }
-
 fn stress_peer_count(default: usize) -> usize {
     let peers = env_parse::<usize>(STRESS_PEERS_ENV).unwrap_or(default);
     assert!(
@@ -91,14 +84,12 @@ fn stress_peer_count(default: usize) -> usize {
     );
     peers
 }
-
 fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
     match peer_count {
         0..=2 => 0,
         _ => u64::try_from(peer_count.saturating_sub(2)).expect("peer count should fit into u64"),
     }
 }
-
 fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
     if block_totals.is_empty() {
         return 0;
@@ -115,7 +106,6 @@ fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
     let offset = seed % best_indices.len();
     best_indices[offset]
 }
-
 fn pick_submit_peer_index(
     leader_index: Option<usize>,
     leader_connected: bool,
@@ -129,7 +119,6 @@ fn pick_submit_peer_index(
         fallback
     }
 }
-
 fn submit_client_for_network(
     network: &sandbox::SerializedNetwork,
     _probe: &iroha::client::Client,
@@ -182,7 +171,6 @@ fn submit_client_for_network(
         })
         .client()
 }
-
 async fn wait_for_submit_connectivity(
     network: &sandbox::SerializedNetwork,
     timeout: Duration,
@@ -190,7 +178,6 @@ async fn wait_for_submit_connectivity(
     let deadline = Instant::now() + timeout;
     let expected = min_connected_peers_for_submit(network.peers().len());
     let mut last_snapshot = Vec::new();
-
     loop {
         let peer_counts = network
             .peers()
@@ -203,29 +190,24 @@ async fn wait_for_submit_connectivity(
                 return Ok(());
             }
         }
-
         if Instant::now() >= deadline {
             bail!(
                 "peer connectivity did not reach {expected} connected peers within {:?}; last_snapshot={last_snapshot:?}",
                 timeout
             );
         }
-
         sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn npos_custom_parameter() -> Parameter {
     Parameter::Custom(SumeragiNposParameters::default().into_custom_parameter())
 }
-
 fn json_value<T>(value: &T) -> Value
 where
     T: JsonSerialize + ?Sized,
 {
     json::to_value(value).expect("serialize helper")
 }
-
 #[test]
 fn min_connected_peers_for_submit_keeps_quorum_margin() {
     assert_eq!(min_connected_peers_for_submit(0), 0);
@@ -234,7 +216,6 @@ fn min_connected_peers_for_submit_keeps_quorum_margin() {
     assert_eq!(min_connected_peers_for_submit(3), 1);
     assert_eq!(min_connected_peers_for_submit(4), 2);
 }
-
 #[test]
 fn revision4_stress_committees_require_exact_bounded_three_f_plus_one() {
     for peers in [4, 7, 10, 13, 16, 19, 22, 25, 28, 31] {
@@ -244,26 +225,21 @@ fn revision4_stress_committees_require_exact_bounded_three_f_plus_one() {
         assert!(!is_valid_committee_size(peers), "{peers} must be rejected");
     }
 }
-
 #[test]
 fn pick_fallback_submit_peer_index_prefers_best_height_round_robin() {
     let totals = [7, 11, 11, 3];
-
     assert_eq!(pick_fallback_submit_peer_index(&totals, 0), 1);
     assert_eq!(pick_fallback_submit_peer_index(&totals, 1), 2);
     assert_eq!(pick_fallback_submit_peer_index(&totals, 2), 1);
     assert_eq!(pick_fallback_submit_peer_index(&[], 42), 0);
 }
-
 #[test]
 fn pick_submit_peer_index_prefers_connected_leader() {
     let totals = [4, 9, 9, 1];
-
     assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
     assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
     assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
 }
-
 #[derive(Debug, Clone)]
 struct Stats {
     samples: usize,
@@ -272,7 +248,6 @@ struct Stats {
     mean: f64,
     median: f64,
 }
-
 impl Stats {
     fn from_samples(samples: &[f64]) -> Option<Self> {
         if samples.is_empty() {
@@ -299,7 +274,6 @@ impl Stats {
             median,
         })
     }
-
     fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert("samples".into(), json_value(&(self.samples as u64)));
@@ -310,14 +284,11 @@ impl Stats {
         Value::Object(map)
     }
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn npos_baseline_1s_captures_metrics() -> Result<()> {
     init_instruction_registry();
-
     let npos_params = SumeragiNposParameters::default();
-
     let builder = NetworkBuilder::new()
         .with_peers(7)
         .with_base_seed(BASE_SEED)
@@ -335,7 +306,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
         )));
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(npos_baseline_1s_captures_metrics),
@@ -344,12 +314,10 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
     else {
         return Ok(());
     };
-
     network.ensure_blocks(1).await?;
     wait_for_submit_connectivity(&network, SUBMIT_CONNECTIVITY_TIMEOUT)
         .await
         .wrap_err("submit connectivity not ready before baseline sampling")?;
-
     let client = network.client();
     let status_before = client
         .get_status()
@@ -373,13 +341,11 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         .wrap_err("submit baseline log transaction")?;
         next_seed = next_seed.saturating_add(1);
     }
-
     let http = integration_tests::http::client();
     let metrics_url = client
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;
-
     let phases: &[&str] = &[
         "propose",
         "collect_da",
@@ -393,11 +359,9 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
     let mut queue_depth_samples = Vec::new();
     let mut queue_peer_max_samples = Vec::new();
     let mut view_change_installs = Vec::new();
-
     let start_instant = Instant::now();
     #[allow(unused_assignments)]
     let mut last_status = status_before;
-
     loop {
         if start_instant.elapsed() > SAMPLE_TIMEOUT {
             bail!(
@@ -405,7 +369,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
                 SAMPLE_TIMEOUT
             );
         }
-
         let response = http
             .get(metrics_url.clone())
             .header("Accept", "text/plain")
@@ -422,7 +385,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
             .await
             .wrap_err("read metrics response body")?;
         let reader = MetricsReader::new(&metrics_body);
-
         for &phase in phases {
             let key = format!("sumeragi_phase_latency_ema_ms{{phase=\"{phase}\"}}");
             if let Some(value) = reader.get_optional(&key)
@@ -431,7 +393,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
                 samples.push(value);
             }
         }
-
         if let Some(depth) = reader.get_optional("sumeragi_bg_post_queue_depth") {
             queue_depth_samples.push(depth);
         }
@@ -441,7 +402,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         if let Some(installs) = reader.get_optional("sumeragi_view_change_install_total") {
             view_change_installs.push(installs);
         }
-
         last_status = client
             .get_status()
             .wrap_err("fetch status during sampling")?;
@@ -464,10 +424,8 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         if last_status.blocks_non_empty >= target_non_empty {
             break;
         }
-
         sleep(POLL_INTERVAL).await;
     }
-
     let elapsed = start_instant.elapsed();
     let blocks_sampled = last_status.blocks_non_empty.saturating_sub(start_non_empty);
     ensure!(
@@ -488,12 +446,10 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         observed_block_time_ms,
         BASELINE_BLOCK_SPACING_MAX_MS
     );
-
     let phase_stats: BTreeMap<&'static str, Stats> = phase_samples
         .into_iter()
         .filter_map(|(phase, samples)| Stats::from_samples(&samples).map(|stats| (phase, stats)))
         .collect();
-
     let commit_stats = phase_stats
         .get("commit")
         .ok_or_else(|| eyre!("missing commit phase EMA samples"))?;
@@ -503,7 +459,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         commit_stats.max,
         COMMIT_EMA_MAX_MS
     );
-
     let prevote_stats = phase_stats
         .get("collect_prevote")
         .ok_or_else(|| eyre!("missing collect_prevote EMA samples"))?;
@@ -513,7 +468,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         prevote_stats.max,
         PREVOTE_EMA_MAX_MS
     );
-
     let precommit_stats = phase_stats
         .get("collect_precommit")
         .ok_or_else(|| eyre!("missing collect_precommit EMA samples"))?;
@@ -523,7 +477,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         precommit_stats.max,
         PRECOMMIT_EMA_MAX_MS
     );
-
     let propose_stats = phase_stats
         .get("propose")
         .ok_or_else(|| eyre!("missing propose EMA samples"))?;
@@ -533,16 +486,13 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         propose_stats.max,
         PROPOSE_EMA_MAX_MS
     );
-
     let queue_depth_stats = Stats::from_samples(&queue_depth_samples);
     let queue_peer_max_stats = Stats::from_samples(&queue_peer_max_samples);
     let view_change_stats = Stats::from_samples(&view_change_installs);
-
     let mut phase_map = Map::new();
     for (phase, stats) in &phase_stats {
         phase_map.insert((*phase).into(), stats.to_value());
     }
-
     let mut queue_map = Map::new();
     if let Some(stats) = queue_depth_stats {
         queue_map.insert("bg_post_depth".into(), stats.to_value());
@@ -550,7 +500,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
     if let Some(stats) = queue_peer_max_stats {
         queue_map.insert("bg_post_peer_max".into(), stats.to_value());
     }
-
     let mut view_change_map = Map::new();
     view_change_map.insert(
         "install_total".into(),
@@ -568,7 +517,6 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         obj.insert("value".into(), json_value(&last_status.view_changes));
         Value::Object(obj)
     });
-
     let mut summary_root = Map::new();
     summary_root.insert("scenario".into(), json_value(&SCENARIO_NAME));
     summary_root.insert("network".into(), {
@@ -622,27 +570,21 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         obj.insert("family".into(), json_value(&std::env::consts::FAMILY));
         Value::Object(obj)
     });
-
     let summary_value = Value::Object(summary_root);
     let summary_json =
         norito::json::to_string(&summary_value).wrap_err("serialize summary json")?;
     println!("sumeragi_baseline_summary::{SCENARIO_NAME}::{summary_json}");
-
     let summary_pretty =
         norito::json::to_string_pretty(&summary_value).wrap_err("serialize pretty summary json")?;
     persist_summary_if_requested(SCENARIO_NAME, &summary_pretty)?;
-
     network.shutdown().await;
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
     init_instruction_registry();
-
     let peers = stress_peer_count(4);
-
     let builder = NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
@@ -680,7 +622,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
                 .write(["queue", "capacity_per_user"], QUEUE_CAPACITY_PER_USER);
         })
         .with_genesis_instruction(SetParameter::new(npos_custom_parameter()));
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(npos_queue_backpressure_triggers_metrics),
@@ -689,13 +630,10 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
     else {
         return Ok(());
     };
-
     network
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
-
     let network_id = network.network_id();
-
     for idx in 0..2 {
         let payload = format!(
             "queue-rbc-primer-{idx:02}-{}",
@@ -711,7 +649,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         let submit_client = network.client();
         tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
     }
-
     let mut handles = Vec::with_capacity(QUEUE_STRESS_TXS);
     for idx in 0..QUEUE_STRESS_TXS {
         let client = network.client();
@@ -726,7 +663,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
             client.submit_transaction(&tx)
         }));
     }
-
     let mut submit_ok = 0usize;
     let mut queue_backpressure_rejects = 0usize;
     for handle in handles {
@@ -753,26 +689,22 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         queue_backpressure_rejects > 0,
         "stress submissions did not observe queue backpressure rejections"
     );
-
     let client = network.client();
     let metrics_url = client
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;
     let http = integration_tests::http::client();
-
     let mut observed_saturation = queue_backpressure_rejects > 0;
     let mut observed_deferrals = 0.0;
     let mut observed_rbc_deferrals = 0.0;
     let mut max_queue_depth = 0.0;
     let mut queue_capacity = 0.0;
-
     let start = Instant::now();
     loop {
         if start.elapsed() > QUEUE_SATURATION_TIMEOUT {
             break;
         }
-
         let response = http
             .get(metrics_url.clone())
             .header("Accept", "text/plain")
@@ -789,7 +721,6 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
             .await
             .wrap_err("read metrics response body")?;
         let reader = MetricsReader::new(&body);
-
         if let Some(depth) = reader.get_optional("sumeragi_tx_queue_depth")
             && depth > max_queue_depth
         {
@@ -814,14 +745,11 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         {
             observed_rbc_deferrals = deferrals;
         }
-
         if observed_saturation && (observed_deferrals > 0.0 || observed_rbc_deferrals > 0.0) {
             break;
         }
-
         sleep(QUEUE_SATURATION_POLL_INTERVAL).await;
     }
-
     ensure!(
         observed_saturation,
         "queue saturation gauge never rose above zero"
@@ -861,27 +789,21 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         );
         Value::Object(map)
     });
-
     let summary_value = Value::Object(summary_root);
     let summary_json =
         norito::json::to_string(&summary_value).wrap_err("serialize stress summary json")?;
     println!("sumeragi_baseline_summary::{QUEUE_STRESS_SCENARIO_NAME}::{summary_json}");
-
     let summary_pretty = norito::json::to_string_pretty(&summary_value)
         .wrap_err("serialize pretty stress summary json")?;
     persist_summary_if_requested(QUEUE_STRESS_SCENARIO_NAME, &summary_pretty)?;
-
     network.shutdown().await;
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
     init_instruction_registry();
-
     let peers = stress_peer_count(4);
-
     let builder = NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
@@ -917,7 +839,6 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
                 );
         })
         .with_genesis_instruction(SetParameter::new(npos_custom_parameter()));
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(npos_rbc_store_backpressure_records_metrics),
@@ -926,13 +847,10 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
     else {
         return Ok(());
     };
-
     network
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
-
     let network_id = network.network_id();
-
     for idx in 0..2 {
         let message = format!(
             "rbc-store-{idx:02}-{}",
@@ -948,14 +866,12 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
         let submit_client = network.client();
         tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
     }
-
     let client = network.client();
     let metrics_url = client
         .torii_url
         .join("metrics")
         .wrap_err("compose metrics URL")?;
     let http = integration_tests::http::client();
-
     let mut max_pressure: f64 = 0.0;
     let mut max_sessions: f64 = 0.0;
     let mut max_bytes: f64 = 0.0;
@@ -963,13 +879,11 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
     let mut last_snapshot: Option<String> = None;
     let start = Instant::now();
     let mut timed_out = false;
-
     loop {
         if start.elapsed() > RBC_STORE_POLL_TIMEOUT {
             timed_out = true;
             break;
         }
-
         let response = http
             .get(metrics_url.clone())
             .header("Accept", "text/plain")
@@ -983,7 +897,6 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
         );
         let snapshot = response.text().await.wrap_err("read metrics body")?;
         let reader = MetricsReader::new(&snapshot);
-
         if let Some(value) = reader.get_optional("sumeragi_rbc_store_pressure") {
             max_pressure = max_pressure.max(value);
         }
@@ -996,21 +909,17 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
         if let Some(value) = reader.get_optional("sumeragi_rbc_backpressure_deferrals_total") {
             max_deferrals = max_deferrals.max(value);
         }
-
         if max_pressure > 0.0 || max_sessions > 0.0 || max_bytes > 0.0 || max_deferrals >= 1.0 {
             last_snapshot.get_or_insert(snapshot);
             break;
         }
-
         sleep(RBC_STORE_POLL_INTERVAL).await;
     }
-
     if timed_out && max_pressure <= 0.0 && max_sessions <= 0.0 && max_bytes <= 0.0 {
         eprintln!(
             "[npos_rbc_store_backpressure_records_metrics] RBC store pressure metrics remained zero before timeout"
         );
     }
-
     let mut root = Map::new();
     root.insert("scenario".into(), json_value(&RBC_STORE_SCENARIO_NAME));
     let mut metrics = Map::new();
@@ -1023,26 +932,20 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
     metrics.insert("last_snapshot".into(), json_value(&snapshot_value));
     root.insert("metrics".into(), Value::Object(metrics));
     let summary_value = Value::Object(root);
-
     let summary_json =
         norito::json::to_string(&summary_value).wrap_err("serialize RBC store summary")?;
     println!("sumeragi_baseline_summary::{RBC_STORE_SCENARIO_NAME}::{summary_json}");
-
     let summary_pretty = norito::json::to_string_pretty(&summary_value)
         .wrap_err("serialize pretty RBC store summary")?;
     persist_summary_if_requested(RBC_STORE_SCENARIO_NAME, &summary_pretty)?;
-
     network.shutdown().await;
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
     init_instruction_registry();
-
     let peers = stress_peer_count(4);
-
     let builder = NetworkBuilder::new()
         .with_peers(peers)
         .with_auto_populated_trusted_peers()
@@ -1070,7 +973,6 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
                 );
         })
         .with_genesis_instruction(SetParameter::new(npos_custom_parameter()));
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(npos_rbc_chunk_loss_fault_reports_backlog),
@@ -1079,11 +981,9 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
     else {
         return Ok(());
     };
-
     network
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
-
     let client = network.client();
     client.submit_blocking(
         Log::new(Level::INFO, "chunk-loss seed".to_owned()),
@@ -1103,7 +1003,6 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
     .sign(ALICE_KEYPAIR.private_key());
     let submit_client = network.client();
     tokio::task::spawn_blocking(move || submit_client.submit_transaction(&tx)).await??;
-
     let http = integration_tests::http::client();
     let probe_clients: Vec<_> = network.peers().iter().map(|peer| peer.client()).collect();
     let metrics_urls = probe_clients
@@ -1111,19 +1010,16 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
         .map(|client| client.torii_url.join("metrics"))
         .collect::<std::result::Result<Vec<_>, _>>()
         .wrap_err("compose metrics URLs")?;
-
     let mut pending_sessions_max: f64 = 0.0;
     let mut backlog_chunks_max: f64 = 0.0;
     let mut backlog_chunks_total: f64 = 0.0;
     let mut last_metrics_snapshot: Option<String> = None;
     let start = Instant::now();
-
     loop {
         ensure!(
             start.elapsed() <= CHUNK_LOSS_POLL_TIMEOUT,
             "timed out waiting for RBC chunk loss backlog"
         );
-
         for metrics_url in &metrics_urls {
             let response = http
                 .get(metrics_url.clone())
@@ -1138,7 +1034,6 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
             );
             let snapshot = response.text().await.wrap_err("read metrics body")?;
             let reader = MetricsReader::new(&snapshot);
-
             if let Some(value) = reader.get_optional("sumeragi_rbc_backlog_sessions_pending") {
                 pending_sessions_max = pending_sessions_max.max(value);
             }
@@ -1148,7 +1043,6 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
             if let Some(value) = reader.get_optional("sumeragi_rbc_backlog_chunks_max") {
                 backlog_chunks_max = backlog_chunks_max.max(value);
             }
-
             if pending_sessions_max >= 1.0
                 || backlog_chunks_total >= 1.0
                 || backlog_chunks_max >= 1.0
@@ -1156,23 +1050,19 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
                 last_metrics_snapshot.get_or_insert(snapshot);
             }
         }
-
         let backlog_observed =
             pending_sessions_max >= 1.0 || backlog_chunks_total >= 1.0 || backlog_chunks_max >= 1.0;
         if backlog_observed {
             break;
         }
-
         sleep(RBC_STORE_POLL_INTERVAL).await;
     }
-
     let backlog_observed =
         pending_sessions_max >= 1.0 || backlog_chunks_total >= 1.0 || backlog_chunks_max >= 1.0;
     ensure!(
         backlog_observed,
         "expected chunk-loss fault to expose RBC backlog signals"
     );
-
     let mut root = Map::new();
     root.insert("scenario".into(), json_value(&CHUNK_LOSS_SCENARIO_NAME));
     let mut metrics = Map::new();
@@ -1189,25 +1079,20 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
     metrics.insert("last_snapshot".into(), json_value(&metrics_snapshot));
     root.insert("metrics".into(), Value::Object(metrics));
     let summary_value = Value::Object(root);
-
     let summary_json =
         norito::json::to_string(&summary_value).wrap_err("serialize chunk-loss summary")?;
     println!("sumeragi_baseline_summary::{CHUNK_LOSS_SCENARIO_NAME}::{summary_json}");
-
     let summary_pretty = norito::json::to_string_pretty(&summary_value)
         .wrap_err("serialize pretty chunk-loss summary")?;
     persist_summary_if_requested(CHUNK_LOSS_SCENARIO_NAME, &summary_pretty)?;
-
     network.shutdown().await;
     Ok(())
 }
-
 fn persist_summary_if_requested(scenario: &str, summary_pretty: &str) -> Result<()> {
     let dir = match std::env::var("SUMERAGI_BASELINE_ARTIFACT_DIR") {
         Ok(dir) => dir,
         Err(_) => return Ok(()),
     };
-
     let root = std::path::Path::new(&dir);
     fs::create_dir_all(root).wrap_err("create baseline artifact directory")?;
     let path = root.join(format!("{scenario}.summary.json"));
@@ -1215,11 +1100,9 @@ fn persist_summary_if_requested(scenario: &str, summary_pretty: &str) -> Result<
         .wrap_err_with(|| format!("write summary file {}", path.display()))?;
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::Stats;
-
     #[test]
     fn stats_from_samples_computes_median() {
         let stats = Stats::from_samples(&[1.0, 3.0, 2.0]).expect("stats");

@@ -1,5 +1,4 @@
 //! Compiler-internal canonical codec for aggregate durable-state values.
-
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -22,24 +21,19 @@ use ivm_abi::{
 };
 #[cfg(test)]
 use norito::{decode_from_bytes, to_bytes};
-
 use crate::{
     VMError,
     host::preflight_reserved_syscall_gas,
     ivm::IVM,
     pointer_abi::{self, PointerType, Tlv},
 };
-
 const STATE_VALUE_GAS_BASE: u64 = 32;
-
 type AddressResolver = fn(&IVM, u64) -> u64;
-
 fn gas(bytes: usize, words: usize) -> u64 {
     STATE_VALUE_GAS_BASE
         .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX))
         .saturating_add(u64::try_from(words).unwrap_or(u64::MAX))
 }
-
 fn load_tlv<'a>(
     vm: &'a IVM,
     address: u64,
@@ -64,7 +58,6 @@ fn load_tlv<'a>(
     )?;
     Ok((envelope, tlv))
 }
-
 fn load_expected_tlv<'a>(
     vm: &'a IVM,
     address: u64,
@@ -83,7 +76,6 @@ fn load_expected_tlv<'a>(
     }
     Ok((envelope, tlv))
 }
-
 fn decode_schema(
     vm: &IVM,
     address: u64,
@@ -99,14 +91,12 @@ fn decode_schema(
     }
     Ok((schema, tlv.payload))
 }
-
 fn decode_canonical_norito<T>(payload: &[u8]) -> Result<T, VMError>
 where
     T: norito::codec::Decode + norito::codec::Encode,
 {
     decode_abi_canonical_norito(payload).map_err(|_| VMError::DecodeError)
 }
-
 fn validate_pointer_payload(kind: StateValueKindV1, payload: &[u8]) -> Result<(), VMError> {
     match kind {
         StateValueKindV1::Bool => return Err(VMError::DecodeError),
@@ -170,7 +160,6 @@ fn validate_pointer_payload(kind: StateValueKindV1, payload: &[u8]) -> Result<()
     }
     Ok(())
 }
-
 fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, VMError> {
     let payload_len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -181,7 +170,6 @@ fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, VMEr
     out.extend_from_slice(Hash::new(payload).as_ref());
     Ok(out)
 }
-
 fn table_words(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError> {
     if count > MAX_STATE_VALUE_WORDS || !address.is_multiple_of(8) {
         return Err(VMError::NoritoInvalid);
@@ -203,7 +191,6 @@ fn table_words(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VMError
         .map(|chunk| u64::from_le_bytes(chunk.try_into().expect("eight-byte chunk")))
         .collect())
 }
-
 fn skip_state_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> Result<(), VMError> {
     let mut pending = 1_usize;
     while pending != 0 {
@@ -221,7 +208,6 @@ fn skip_state_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> Result
     }
     Ok(())
 }
-
 fn state_node_word_count(
     nodes: &[StateValueNodeV1],
     node_index: &mut usize,
@@ -259,7 +245,6 @@ fn state_node_word_count(
     }
     Ok(words)
 }
-
 fn validate_state_pointer_atom(
     policy: ivm_abi::SyscallPolicy,
     kind: StateValueKindV1,
@@ -274,7 +259,6 @@ fn validate_state_pointer_atom(
     // rebuilding the same TLV would only repeat the payload hash.
     validate_pointer_payload(kind, tlv.payload)
 }
-
 fn validate_state_atoms_recursive(
     policy: ivm_abi::SyscallPolicy,
     nodes: &[StateValueNodeV1],
@@ -288,13 +272,11 @@ fn validate_state_atoms_recursive(
         node_index: usize,
         atom_index: usize,
     }
-
     enum Work {
         Validate(usize),
         Skip(usize),
         FinishStream(usize),
     }
-
     let mut cursors = vec![Cursor {
         nodes,
         atoms,
@@ -435,7 +417,6 @@ fn validate_state_atoms_recursive(
     *atom_index = root.atom_index;
     Ok(())
 }
-
 fn validate_state_atom_stream(
     policy: ivm_abi::SyscallPolicy,
     schema: &StateValueSchemaV1,
@@ -455,14 +436,12 @@ fn validate_state_atom_stream(
     }
     Ok(())
 }
-
 /// Reconstruct the exact compiler-owned durable-value schema embedded in CNTR.
 pub(crate) fn schema_for_embedded_state_type(
     ty: &crate::metadata::EmbeddedStateType,
 ) -> Result<StateValueSchemaV1, VMError> {
     state_value_schema_for_embedded_type_v1(ty).ok_or(VMError::NoritoInvalid)
 }
-
 fn decode_validated_state_value_record(
     policy: ivm_abi::SyscallPolicy,
     schema: &StateValueSchemaV1,
@@ -482,7 +461,6 @@ fn decode_validated_state_value_record(
     validate_state_atom_stream(policy, schema, &record.atoms)?;
     Ok(record)
 }
-
 /// Validate one persisted record against an exact CNTR-derived state schema.
 pub(crate) fn validate_state_value_record(
     vm: &IVM,
@@ -493,23 +471,19 @@ pub(crate) fn validate_state_value_record(
     decode_validated_state_value_record(vm.syscall_policy(), schema, &schema_payload, payload)
         .map(drop)
 }
-
 #[derive(Clone, Copy)]
 struct StateEncodeContext<'a> {
     vm: &'a IVM,
     resolver: AddressResolver,
 }
-
 impl StateEncodeContext<'_> {
     fn resolve(self, pointer: u64) -> u64 {
         (self.resolver)(self.vm, pointer)
     }
 }
-
 struct StateAtomOutputArena {
     streams: Vec<Vec<StateValueAtomV1>>,
 }
-
 impl StateAtomOutputArena {
     fn new() -> Self {
         Self {
@@ -517,7 +491,6 @@ impl StateAtomOutputArena {
         }
     }
 }
-
 impl Drop for StateAtomOutputArena {
     fn drop(&mut self) {
         let mut pending = std::mem::take(&mut self.streams);
@@ -530,7 +503,6 @@ impl Drop for StateAtomOutputArena {
         }
     }
 }
-
 fn encode_state_node(
     nodes: &[StateValueNodeV1],
     node_index: &mut usize,
@@ -544,7 +516,6 @@ fn encode_state_node(
         Borrowed(&'a [u64]),
         Owned(Vec<u64>),
     }
-
     impl WordStream<'_> {
         fn as_slice(&self) -> &[u64] {
             match self {
@@ -553,7 +524,6 @@ fn encode_state_node(
             }
         }
     }
-
     struct Cursor<'a> {
         nodes: &'a [StateValueNodeV1],
         node_index: usize,
@@ -561,7 +531,6 @@ fn encode_state_node(
         word_index: usize,
         output: usize,
     }
-
     enum Work<'a> {
         Encode(usize),
         FinishCursor {
@@ -578,7 +547,6 @@ fn encode_state_node(
             item_outputs: Vec<usize>,
         },
     }
-
     let mut cursors = vec![Cursor {
         nodes,
         node_index: *node_index,
@@ -589,7 +557,6 @@ fn encode_state_node(
     let mut outputs = StateAtomOutputArena::new();
     let mut work = vec![Work::Encode(0)];
     let mut encoded_pointer_bytes = 0_usize;
-
     while let Some(task) = work.pop() {
         match task {
             Work::FinishCursor {
@@ -908,7 +875,6 @@ fn encode_state_node(
             }
         }
     }
-
     let root = cursors.first().ok_or(VMError::DecodeError)?;
     *node_index = root.node_index;
     *word_index = root.word_index;
@@ -918,7 +884,6 @@ fn encode_state_node(
     *pointer_bytes = pointer_bytes.saturating_add(encoded_pointer_bytes);
     Ok(())
 }
-
 /// Encode the compiler word table selected by `r11`/`r12` using the schema in `r10`.
 pub(crate) fn encode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMError> {
     let (schema, schema_payload) = decode_schema(vm, vm.register(10), resolver)?;
@@ -968,7 +933,6 @@ pub(crate) fn encode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     vm.set_register(10, pointer);
     Ok(actual)
 }
-
 enum PlannedStateWord {
     Scalar(u64),
     Pointer(Vec<u8>),
@@ -982,12 +946,10 @@ enum PlannedStateWord {
         elements: Vec<Vec<usize>>,
     },
 }
-
 struct PlannedState {
     values: Vec<PlannedStateWord>,
     roots: Vec<usize>,
 }
-
 fn plan_state_atoms(
     nodes: &[StateValueNodeV1],
     atoms: &[StateValueAtomV1],
@@ -999,7 +961,6 @@ fn plan_state_atoms(
         atom_index: usize,
         output: usize,
     }
-
     enum Work {
         Plan(usize),
         FinishActive {
@@ -1022,7 +983,6 @@ fn plan_state_atoms(
             layout: ListLayoutV1,
         },
     }
-
     fn push_planned(
         values: &mut Vec<PlannedStateWord>,
         outputs: &mut [Vec<usize>],
@@ -1037,7 +997,6 @@ fn plan_state_atoms(
             .push(value_id);
         Ok(())
     }
-
     let mut cursors = vec![Cursor {
         nodes,
         atoms,
@@ -1048,7 +1007,6 @@ fn plan_state_atoms(
     let mut outputs = vec![Vec::new()];
     let mut values = Vec::new();
     let mut work = vec![Work::Plan(0)];
-
     while let Some(task) = work.pop() {
         match task {
             Work::FinishActive {
@@ -1341,7 +1299,6 @@ fn plan_state_atoms(
             }
         }
     }
-
     let root = cursors.first().ok_or(VMError::DecodeError)?;
     if root.node_index != nodes.len() || root.atom_index != atoms.len() {
         return Err(VMError::DecodeError);
@@ -1351,7 +1308,6 @@ fn plan_state_atoms(
         roots: std::mem::take(outputs.first_mut().ok_or(VMError::DecodeError)?),
     })
 }
-
 fn planned_state_bytes(planned: &PlannedState) -> usize {
     planned.values.iter().fold(0_usize, |bytes, value| {
         let value_bytes = match value {
@@ -1371,7 +1327,6 @@ fn planned_state_bytes(planned: &PlannedState) -> usize {
         bytes.saturating_add(value_bytes)
     })
 }
-
 fn planned_state_allocation_shape(planned: &PlannedState, tlv_lengths: &mut Vec<usize>) -> usize {
     planned.values.iter().fold(0_usize, |bytes, value| {
         let value_bytes = match value {
@@ -1394,7 +1349,6 @@ fn planned_state_allocation_shape(planned: &PlannedState, tlv_lengths: &mut Vec<
         bytes.saturating_add(value_bytes)
     })
 }
-
 fn materialize_state_words(vm: &mut IVM, planned: &PlannedState) -> Result<Vec<u64>, VMError> {
     let mut materialized = Vec::with_capacity(planned.values.len());
     for value in &planned.values {
@@ -1437,7 +1391,6 @@ fn materialize_state_words(vm: &mut IVM, planned: &PlannedState) -> Result<Vec<u
         .map(|root| materialized.get(*root).copied().ok_or(VMError::DecodeError))
         .collect()
 }
-
 /// Decode the record in `r11`, returning an aligned Blob word table in `r10`.
 pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMError> {
     let (schema, schema_payload) = decode_schema(vm, vm.register(10), resolver)?;
@@ -1460,13 +1413,11 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     )?;
     let atoms = &record.atoms;
     let record_len = tlv.payload.len();
-
     let planned = plan_state_atoms(&schema.nodes, atoms)?;
     if planned.roots.len() != schema.word_count().ok_or(VMError::DecodeError)? {
         return Err(VMError::DecodeError);
     }
     let pointer_bytes = planned_state_bytes(&planned);
-
     let table_payload_len = 1usize.saturating_add(planned.roots.len().saturating_mul(8));
     let actual = gas(
         schema_payload
@@ -1477,7 +1428,6 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
         planned.roots.len(),
     );
     preflight_reserved_syscall_gas(vm, actual)?;
-
     let mut tlv_lengths = Vec::new();
     let raw_heap_bytes = planned_state_allocation_shape(&planned, &mut tlv_lengths);
     tlv_lengths.push(
@@ -1496,7 +1446,6 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     {
         return Err(VMError::OutOfMemory);
     }
-
     let words = materialize_state_words(vm, &planned)?;
     let mut table = Vec::with_capacity(table_payload_len);
     table.push(0);
@@ -1508,7 +1457,6 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     vm.set_register(10, pointer);
     Ok(actual)
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_data_model::nexus::{DataSpaceId, LaneId};
@@ -1516,19 +1464,15 @@ mod tests {
     use ivm_abi::state_value::{
         StateValueAtomV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
     };
-
     use super::*;
-
     fn identity_address(_vm: &IVM, address: u64) -> u64 {
         address
     }
-
     fn install_schema(vm: &mut IVM, schema: &StateValueSchemaV1) -> u64 {
         let payload = to_bytes(schema).expect("schema bytes");
         let envelope = encode_tlv(PointerType::NoritoBytes, &payload).expect("schema TLV");
         vm.alloc_host_tlv(&envelope).expect("install schema")
     }
-
     fn install_int(vm: &mut IVM, value: i64) -> u64 {
         let frame = IntValueV1::try_new(BigInt::from_i128(i128::from(value)))
             .expect("test int is inside V1 domain")
@@ -1537,7 +1481,6 @@ mod tests {
         let envelope = encode_tlv(PointerType::Int, &frame).expect("int TLV");
         vm.alloc_host_tlv(&envelope).expect("install int")
     }
-
     fn install_quantity(vm: &mut IVM, value: &str) -> u64 {
         let quantity = value.parse().expect("canonical quantity");
         let frame = QuantityValueV1::new(quantity)
@@ -1546,7 +1489,6 @@ mod tests {
         let envelope = encode_tlv(PointerType::Quantity, &frame).expect("quantity TLV");
         vm.alloc_host_tlv(&envelope).expect("install quantity")
     }
-
     fn nested_singleton_list_schema(depth: usize) -> StateValueSchemaV1 {
         (0..depth).fold(
             StateValueSchemaV1 {
@@ -1560,14 +1502,12 @@ mod tests {
             },
         )
     }
-
     fn nested_active_option_schema(depth: usize) -> StateValueSchemaV1 {
         let mut nodes = Vec::with_capacity(depth + 1);
         nodes.extend((0..depth).map(|_| StateValueNodeV1::Option));
         nodes.push(StateValueNodeV1::Leaf(StateValueKindV1::Bool));
         StateValueSchemaV1 { nodes }
     }
-
     fn nested_singleton_list_value(vm: &mut IVM, depth: usize, mut word: u64) -> u64 {
         let layout = ListLayoutV1::try_new(1, 1).expect("singleton List layout");
         for _ in 0..depth {
@@ -1576,7 +1516,6 @@ mod tests {
         }
         word
     }
-
     fn read_singleton_lists(vm: &IVM, mut word: u64, depth: usize) -> u64 {
         let layout = ListLayoutV1::try_new(1, 1).expect("singleton List layout");
         for _ in 0..depth {
@@ -1587,7 +1526,6 @@ mod tests {
         }
         word
     }
-
     fn read_active_options(vm: &IVM, mut word: u64, depth: usize) -> u64 {
         let layout = SumLayoutV1::option(1).expect("Option layout");
         for _ in 0..depth {
@@ -1599,11 +1537,9 @@ mod tests {
         }
         word
     }
-
     #[test]
     fn nested_list_runtime_walkers_are_stack_safe_at_the_v1_boundary() {
         const DEPTH: usize = 255;
-
         let worker = std::thread::Builder::new()
             .name("state-value-runtime-list-boundary".into())
             .stack_size(128 * 1024)
@@ -1611,7 +1547,6 @@ mod tests {
                 let schema = nested_singleton_list_schema(DEPTH);
                 assert!(schema.validate());
                 assert_eq!(schema.word_count(), Some(1));
-
                 let mut vm = IVM::new(u64::MAX);
                 let schema_pointer = install_schema(&mut vm, &schema);
                 let value = nested_singleton_list_value(&mut vm, DEPTH, 1);
@@ -1629,7 +1564,6 @@ mod tests {
                     .to_vec();
                 validate_state_value_record(&vm, &schema, &record_payload)
                     .expect("validate nested List record");
-
                 let record: StateValueRecordV1 =
                     decode_from_bytes(&record_payload).expect("decode nested List record");
                 validate_state_atom_stream(vm.syscall_policy(), &schema, &record.atoms)
@@ -1646,7 +1580,6 @@ mod tests {
                     read_singleton_lists(&planned_vm, planned_words[0], DEPTH),
                     1
                 );
-
                 vm.set_register(10, schema_pointer);
                 vm.set_register(11, record_pointer);
                 decode_state_value(&mut vm, identity_address).expect("decode nested Lists");
@@ -1659,7 +1592,6 @@ mod tests {
                         .expect("decoded root word"),
                 );
                 assert_eq!(read_singleton_lists(&vm, decoded_root, DEPTH), 1);
-
                 let rejected_schema = nested_singleton_list_schema(DEPTH + 1);
                 assert!(!rejected_schema.validate());
                 assert!(
@@ -1670,11 +1602,9 @@ mod tests {
             .expect("spawn small-stack nested List worker");
         worker.join().expect("small-stack nested List worker");
     }
-
     #[test]
     fn nested_list_encode_error_cleanup_is_stack_safe() {
         const INNER_DEPTH: usize = 254;
-
         let worker = std::thread::Builder::new()
             .name("state-value-runtime-list-error-cleanup".into())
             .stack_size(128 * 1024)
@@ -1686,7 +1616,6 @@ mod tests {
                     }],
                 };
                 assert!(schema.validate());
-
                 let mut vm = IVM::new(u64::MAX);
                 let schema_pointer = install_schema(&mut vm, &schema);
                 let valid = nested_singleton_list_value(&mut vm, INNER_DEPTH, 1);
@@ -1704,7 +1633,6 @@ mod tests {
                 vm.set_register(10, schema_pointer);
                 vm.set_register(11, table);
                 vm.set_register(12, 1);
-
                 assert_eq!(
                     encode_state_value(&mut vm, identity_address),
                     Err(VMError::DecodeError)
@@ -1715,11 +1643,9 @@ mod tests {
             .expect("spawn small-stack List cleanup worker");
         worker.join().expect("small-stack List cleanup worker");
     }
-
     #[test]
     fn active_option_runtime_walkers_are_stack_safe_at_the_v1_boundary() {
         const DEPTH: usize = 255;
-
         let worker = std::thread::Builder::new()
             .name("state-value-runtime-option-boundary".into())
             .stack_size(128 * 1024)
@@ -1732,7 +1658,6 @@ mod tests {
                 let mut counted = 0;
                 assert_eq!(state_node_word_count(&schema.nodes, &mut counted), Ok(1));
                 assert_eq!(counted, DEPTH + 1);
-
                 let mut vm = IVM::new(u64::MAX);
                 let schema_pointer = install_schema(&mut vm, &schema);
                 let layout = SumLayoutV1::option(1).expect("Option layout");
@@ -1755,7 +1680,6 @@ mod tests {
                     .to_vec();
                 validate_state_value_record(&vm, &schema, &record_payload)
                     .expect("validate active Option record");
-
                 let record: StateValueRecordV1 =
                     decode_from_bytes(&record_payload).expect("decode active Option record");
                 let planned =
@@ -1767,14 +1691,12 @@ mod tests {
                     .expect("materialize active Options");
                 assert_eq!(planned_words.len(), 1);
                 assert_eq!(read_active_options(&planned_vm, planned_words[0], DEPTH), 1);
-
                 validate_state_atom_stream(
                     vm.syscall_policy(),
                     &schema,
                     &[StateValueAtomV1::Tag(false)],
                 )
                 .expect("skip the inactive nested Option payload");
-
                 vm.set_register(10, schema_pointer);
                 vm.set_register(11, record_pointer);
                 decode_state_value(&mut vm, identity_address).expect("decode active Options");
@@ -1787,7 +1709,6 @@ mod tests {
                         .expect("decoded root word"),
                 );
                 assert_eq!(read_active_options(&vm, decoded_root, DEPTH), 1);
-
                 let rejected_schema = nested_active_option_schema(DEPTH + 1);
                 assert!(!rejected_schema.validate());
                 assert!(
@@ -1798,14 +1719,12 @@ mod tests {
             .expect("spawn small-stack active Option worker");
         worker.join().expect("small-stack active Option worker");
     }
-
     #[test]
     fn capability_payload_validation_is_canonical_and_uses_decode_errors() {
         use crate::axt::{
             AssetHandle, AxtDescriptor, AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject,
             ProofBlob,
         };
-
         let dsid = DataSpaceId::new(7);
         let descriptor = AxtDescriptor {
             dsids: vec![dsid],
@@ -1820,7 +1739,6 @@ mod tests {
             validate_pointer_payload(StateValueKindV1::AxtDescriptor, &canonical),
             Ok(())
         );
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate = {
@@ -1832,7 +1750,6 @@ mod tests {
             validate_pointer_payload(StateValueKindV1::AxtDescriptor, &alternate),
             Err(VMError::DecodeError)
         );
-
         let invalid_descriptor = AxtDescriptor {
             dsids: Vec::new(),
             touches: Vec::new(),
@@ -1844,7 +1761,6 @@ mod tests {
             ),
             Err(VMError::DecodeError)
         );
-
         let invalid_handle = AssetHandle {
             scope: vec!["transfer".to_owned()],
             subject: HandleSubject {
@@ -1876,7 +1792,6 @@ mod tests {
             ),
             Err(VMError::DecodeError)
         );
-
         let invalid_proof = ProofBlob {
             payload: Vec::new(),
             expiry_slot: Some(0),
@@ -1888,7 +1803,6 @@ mod tests {
             ),
             Err(VMError::DecodeError)
         );
-
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let ambient_before = to_bytes(&descriptor).expect("ambient descriptor");
         assert_eq!(
@@ -1900,7 +1814,6 @@ mod tests {
             ambient_before
         );
     }
-
     fn mixed_pointer_scalar_schema() -> StateValueSchemaV1 {
         StateValueSchemaV1 {
             nodes: vec![
@@ -1914,7 +1827,6 @@ mod tests {
             ],
         }
     }
-
     fn assert_mixed_name_pointer_rejected<F>(install_pointer: F, expected: VMError)
     where
         F: FnOnce(&mut IVM) -> u64,
@@ -1934,7 +1846,6 @@ mod tests {
         vm.set_register(10, schema_pointer);
         vm.set_register(11, table);
         vm.set_register(12, 3);
-
         assert_eq!(encode_state_value(&mut vm, identity_address), Err(expected));
         assert_eq!(
             vm.register(10),
@@ -1947,12 +1858,10 @@ mod tests {
             "a rejected input must not allocate a partial output"
         );
     }
-
     fn install_pointer(vm: &mut IVM, pointer_type: PointerType, payload: &[u8]) -> u64 {
         let envelope = encode_tlv(pointer_type, payload).expect("pointer TLV");
         vm.alloc_host_tlv(&envelope).expect("install pointer")
     }
-
     #[test]
     fn schema_hash_is_domain_separated_and_stable() {
         let schema = StateValueSchemaV1 {
@@ -1968,7 +1877,6 @@ mod tests {
             *Hash::new(&bytes).as_ref()
         );
     }
-
     #[test]
     fn aggregate_record_bytes_are_deterministic() {
         let schema = StateValueSchemaV1 {
@@ -1987,7 +1895,6 @@ mod tests {
         let integer = install_int(&mut vm, 9);
         vm.store_u64(table, integer).expect("store integer pointer");
         vm.store_u64(table + 8, 1).expect("store boolean");
-
         let mut outputs = Vec::new();
         for _ in 0..2 {
             vm.set_register(10, schema_pointer);
@@ -2005,7 +1912,6 @@ mod tests {
             [StateValueAtomV1::Pointer(_), StateValueAtomV1::Bool(true)]
         ));
     }
-
     #[test]
     fn nested_bytes_sources_encode_as_identical_canonical_blob_records() {
         let schema = StateValueSchemaV1 {
@@ -2026,7 +1932,6 @@ mod tests {
         let table = vm.alloc_heap(8).expect("word table");
         let payload = b"canonical bytes";
         let mut records = Vec::new();
-
         for pointer_type in [PointerType::Blob, PointerType::NoritoBytes] {
             let source = install_pointer(&mut vm, pointer_type, payload);
             vm.store_u64(table, source).expect("store bytes pointer");
@@ -2038,7 +1943,6 @@ mod tests {
             let record_tlv = vm.validate_tlv(record_pointer).expect("encoded record");
             records.push((record_pointer, record_tlv.payload.to_vec()));
         }
-
         assert_eq!(records[0].1, records[1].1);
         let record: StateValueRecordV1 =
             decode_from_bytes(&records[1].1).expect("decode stored record");
@@ -2048,7 +1952,6 @@ mod tests {
         let atom = pointer_abi::validate_tlv_bytes(envelope).expect("canonical bytes atom");
         assert_eq!(atom.type_id, PointerType::Blob);
         assert_eq!(atom.payload, payload);
-
         vm.set_register(10, schema_pointer);
         vm.set_register(11, records[1].0);
         decode_state_value(&mut vm, identity_address).expect("decode nested bytes");
@@ -2062,7 +1965,6 @@ mod tests {
         assert_eq!(bytes.type_id, PointerType::Blob);
         assert_eq!(bytes.payload, payload);
     }
-
     #[test]
     fn persisted_norito_bytes_atom_is_rejected_for_bytes_schema() {
         let schema = StateValueSchemaV1 {
@@ -2078,13 +1980,11 @@ mod tests {
         };
         let record = to_bytes(&record).expect("record bytes");
         let vm = IVM::new(u64::MAX);
-
         assert_eq!(
             validate_state_value_record(&vm, &schema, &record),
             Err(VMError::DecodeError)
         );
     }
-
     #[test]
     fn bytes_normalization_does_not_widen_other_pointer_types() {
         let bytes_schema = StateValueSchemaV1 {
@@ -2095,7 +1995,6 @@ mod tests {
         };
         let mut vm = IVM::new(u64::MAX);
         let table = vm.alloc_heap(8).expect("word table");
-
         let bytes_schema_pointer = install_schema(&mut vm, &bytes_schema);
         let unrelated = install_pointer(&mut vm, PointerType::Name, b"unrelated");
         vm.store_u64(table, unrelated)
@@ -2107,7 +2006,6 @@ mod tests {
             encode_state_value(&mut vm, identity_address),
             Err(VMError::NoritoInvalid)
         );
-
         let string_schema_pointer = install_schema(&mut vm, &string_schema);
         let norito_bytes = install_pointer(&mut vm, PointerType::NoritoBytes, b"text");
         vm.store_u64(table, norito_bytes)
@@ -2120,7 +2018,6 @@ mod tests {
             Err(VMError::NoritoInvalid)
         );
     }
-
     #[test]
     fn decode_rejects_schema_mismatch() {
         let first = StateValueSchemaV1 {
@@ -2151,7 +2048,6 @@ mod tests {
         vm.set_register(12, 1);
         encode_state_value(&mut vm, identity_address).expect("encode aggregate");
         let record_pointer = vm.register(10);
-
         let second_pointer = install_schema(&mut vm, &second);
         vm.set_register(10, second_pointer);
         vm.set_register(11, record_pointer);
@@ -2160,7 +2056,6 @@ mod tests {
             Err(VMError::DecodeError)
         ));
     }
-
     #[test]
     fn decode_rejects_noncanonical_inactive_sum_payload() {
         let schema = StateValueSchemaV1 {
@@ -2192,7 +2087,6 @@ mod tests {
             Err(VMError::DecodeError)
         );
     }
-
     #[test]
     fn missing_record_is_rejected_before_any_output_allocation() {
         let schema = StateValueSchemaV1 {
@@ -2211,7 +2105,6 @@ mod tests {
         );
         assert_eq!(vm.register(10), schema_pointer);
     }
-
     #[test]
     fn encode_rejects_inactive_payload_words_and_null_active_pointers() {
         let option = StateValueSchemaV1 {
@@ -2237,7 +2130,6 @@ mod tests {
             Err(VMError::DecodeError),
             "an inactive payload word is not part of the V1 value"
         );
-
         let none = crate::sum::allocate_words(&mut vm, option_layout, 0, &[])
             .expect("canonical Option::none");
         vm.store_u64(table, none).expect("store canonical Option");
@@ -2249,7 +2141,6 @@ mod tests {
         let record: StateValueRecordV1 =
             decode_from_bytes(encoded.payload).expect("decode active-only record");
         assert_eq!(record.atoms, vec![StateValueAtomV1::Tag(false)]);
-
         let text = StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::String)],
         };
@@ -2263,7 +2154,6 @@ mod tests {
             Err(VMError::DecodeError)
         );
     }
-
     #[test]
     fn typed_pointer_leaf_rejects_a_hash_valid_but_malformed_payload() {
         let schema = StateValueSchemaV1 {
@@ -2285,7 +2175,6 @@ mod tests {
             Err(VMError::DecodeError)
         );
     }
-
     #[test]
     fn mixed_pointer_scalar_record_rejects_missing_stale_and_malformed_dynamic_pointers() {
         assert_mixed_name_pointer_rejected(|_| 0, VMError::DecodeError);
@@ -2316,7 +2205,6 @@ mod tests {
             VMError::NoritoInvalid,
         );
     }
-
     #[test]
     fn quantity_list_roundtrips_as_one_canonical_sequence_handle() {
         let element = StateValueSchemaV1 {
@@ -2347,7 +2235,6 @@ mod tests {
         vm.set_register(12, 1);
         encode_state_value(&mut vm, identity_address).expect("encode list state");
         let record_pointer = vm.register(10);
-
         vm.set_register(10, schema_pointer);
         vm.set_register(11, record_pointer);
         decode_state_value(&mut vm, identity_address).expect("decode list state");
@@ -2368,7 +2255,6 @@ mod tests {
                 "1.25".parse::<Quantity>().expect("canonical quantity")
             );
         }
-
         let overflow = crate::list::allocate_words(
             &mut vm,
             layout,
@@ -2388,7 +2274,6 @@ mod tests {
             Err(VMError::DecodeError)
         );
     }
-
     #[test]
     fn list_of_nested_option_results_roundtrips_active_only_handles() {
         let element = StateValueSchemaV1 {
@@ -2433,7 +2318,6 @@ mod tests {
         vm.set_register(12, 1);
         encode_state_value(&mut vm, identity_address).expect("encode nested sums");
         let record_pointer = vm.register(10);
-
         vm.set_register(10, schema_pointer);
         vm.set_register(11, record_pointer);
         decode_state_value(&mut vm, identity_address).expect("decode nested sums");
@@ -2441,7 +2325,6 @@ mod tests {
         let list = u64::from_le_bytes(table.payload[1..9].try_into().expect("list word"));
         let list = crate::list::read_words(&vm, list, list_layout).expect("read list");
         assert_eq!(list.len(), 3);
-
         let (some, first) =
             crate::sum::read_words(&vm, list[0][0], option_layout).expect("read first Option");
         assert!(some);
@@ -2456,7 +2339,6 @@ mod tests {
             amount,
             "1.25".parse::<Quantity>().expect("canonical quantity")
         );
-
         let (some, second) =
             crate::sum::read_words(&vm, list[1][0], option_layout).expect("read second Option");
         assert!(some);
@@ -2464,7 +2346,6 @@ mod tests {
             crate::sum::read_words(&vm, second[0], result_layout).expect("read second Result");
         assert!(!ok);
         assert_eq!(error, vec![1]);
-
         let (some, payload) =
             crate::sum::read_words(&vm, list[2][0], option_layout).expect("read Option::none");
         assert!(!some);

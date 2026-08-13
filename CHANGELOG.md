@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- *(sorafs/sdk)* Add fail-closed JS and Python signed orderbook submission helpers with native route/signature/network validation, pinned Torii receipt verification, exact response identity binding, and explicit ambiguous-admission errors.
 - Drop the legacy binary codec shim; `norito::codec` is now implemented with native Norito serialization.
 - Replace legacy binary codec usages with `norito::codec` across crates.
 - Begin migrating tooling to native Norito serialization.

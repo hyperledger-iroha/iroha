@@ -1,5 +1,4 @@
 // Focused tests for operator-signature request-body deadlines.
-
 fn table_with_operator_signature_body_timeout(timeout_ms: i64) -> Table {
     let mut table = base_table();
     table
@@ -15,7 +14,6 @@ fn table_with_operator_signature_body_timeout(timeout_ms: i64) -> Table {
         );
     table
 }
-
 #[test]
 fn operator_signature_body_timeout_defaults_and_accepts_one_millisecond() {
     let default = load_root(base_table());
@@ -23,14 +21,12 @@ fn operator_signature_body_timeout_defaults_and_accepts_one_millisecond() {
         default.torii.operator_signatures.body_read_timeout,
         defaults::torii::operator_signatures::BODY_READ_TIMEOUT
     );
-
     let exact = load_root(table_with_operator_signature_body_timeout(1));
     assert_eq!(
         exact.torii.operator_signatures.body_read_timeout,
         std::time::Duration::from_millis(1)
     );
 }
-
 #[test]
 fn operator_signature_body_timeout_rejects_zero() {
     let error = actual::Root::from_toml_source(TomlSource::inline(

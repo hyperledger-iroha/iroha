@@ -81,7 +81,6 @@ pub use vpn::VpnRelayTrust;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
     use norito::json::{self, JsonSerialize, Value};
-
     fn log_failed(context: &str, err: &json::Error) {
         iroha_logger::error!(%context, ?err, "Torii JSON serialization failed");
     }
@@ -157,9 +156,6 @@ pub mod json_utils {
         (key.into(), json_value(&value))
     }
 }
-
-pub use json_utils::{json_array, json_entry, json_object, json_value};
-
 pub use crate::app_auth::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, HEADER_WITNESS, Method,
     Uri, canonical_network_request_hash, canonical_network_request_message,
@@ -169,29 +165,12 @@ pub use crate::app_auth::{
 pub use crate::operator_signatures::{
     OperatorSignatureError, signed_request_headers as operator_signed_request_headers,
 };
-
+pub use json_utils::{json_array, json_entry, json_object, json_value};
 pub mod openapi;
-
 use iso_profile::from_request as iso_profile_from_request;
-
 mod content;
 mod proof_filters;
 pub mod sorafs;
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
-    convert::{Infallible, TryInto},
-    fmt::Debug,
-    net::{IpAddr, ToSocketAddrs},
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -364,6 +343,20 @@ use norito::json::{self};
 use norito::json::{JsonDeserialize, JsonSerialize};
 #[cfg(feature = "app_api")]
 use sorafs_manifest::provider_advert::CapabilityType;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    convert::{Infallible, TryInto},
+    fmt::Debug,
+    net::{IpAddr, ToSocketAddrs},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
@@ -375,11 +368,9 @@ use tokio::{
 use tower::ServiceExt as _;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use utils::extractors::JsonOrNoritoVersioned;
-
 const TORII_TCP_LISTEN_BACKLOG: i32 = 1024;
 fn bind_reusable_tcp_listener(addr: std::net::SocketAddr) -> std::io::Result<TcpListener> {
     use socket2::{Domain, Protocol, Socket, Type};
-
     let domain = if addr.is_ipv4() {
         Domain::IPV4
     } else {
@@ -937,7 +928,6 @@ mod telemetry;
 pub mod test_utils;
 #[cfg(feature = "app_api")]
 mod tx_history_alias_policy;
-
 #[cfg(feature = "telemetry")]
 use soranet_privacy_ingress::{
     SORANET_PRIVACY_INGEST_MAX_BODY_BYTES, handler_post_soranet_privacy_event,
@@ -2253,7 +2243,6 @@ pub(crate) fn authorize_query_for_test(
     authority: iroha_data_model::account::AccountId,
 ) -> iroha_data_model::query::QueryRequestWithAuthority {
     use std::sync::atomic::{AtomicU64, Ordering};
-
     static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
     let creation_time_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3302,7 +3291,6 @@ fn hold_preauth_guard_in_response_body(
     guard: PreAuthRequestGuard,
 ) -> axum::response::Response {
     use http_body_util::BodyExt as _;
-
     let (parts, body) = response.into_parts();
     // `map_frame` preserves data frames, trailers, errors, and the original
     // size hint. Capturing the guard in the mapper ties its lifetime to the
@@ -3639,7 +3627,6 @@ async fn inject_remote_addr_header(
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     use axum::{extract::ConnectInfo, http::header::HeaderName};
-
     let header = HeaderName::from_static(limits::REMOTE_ADDR_HEADER);
     let remote_ip = req
         .extensions()
@@ -3730,7 +3717,6 @@ async fn enforce_preauth(
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     use axum::{extract::ConnectInfo, response::IntoResponse};
-
     let transport_ip = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
@@ -3806,8 +3792,7 @@ async fn enforce_preauth(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod preauth_connection_lifetime_tests {
-    use std::{collections::HashSet, convert::Infallible, sync::Arc};
-
+    use super::*;
     use axum::{
         Router,
         body::{Body, Bytes},
@@ -3819,11 +3804,9 @@ mod preauth_connection_lifetime_tests {
     use futures::StreamExt as _;
     use http_body_util::BodyExt as _;
     use iroha_crypto::Algorithm;
+    use std::{collections::HashSet, convert::Infallible, sync::Arc};
     use tokio::sync::{Semaphore, mpsc};
     use tower::ServiceExt as _;
-
-    use super::*;
-
     fn app_with_scheme_cap(scheme: &str) -> SharedAppState {
         let mut app = crate::mk_app_state_for_tests();
         Arc::get_mut(&mut app)
@@ -3873,7 +3856,6 @@ mod preauth_connection_lifetime_tests {
     }
     fn request_with_remote(transport_ip: &str, forwarded_ip: &str) -> Request<Body> {
         use axum::extract::ConnectInfo;
-
         let mut request = Request::builder()
             .uri("/hold")
             .header(limits::FORWARDED_FOR_HEADER, forwarded_ip)
@@ -4554,7 +4536,6 @@ mod preauth_connection_lifetime_tests {
     #[tokio::test]
     async fn offline_command_authentication_precedes_media_and_idempotency_validation() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-
         async fn error_code(response: Response) -> String {
             let body = response
                 .into_body()
@@ -5120,7 +5101,6 @@ fn validate_sccp_submit_content_length(
     max_body_bytes: usize,
 ) -> Result<Option<usize>, SccpSubmitContentLengthError> {
     use axum::http::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
-
     let mut values = headers.get_all(CONTENT_LENGTH).iter();
     let Some(value) = values.next() else {
         return Ok(None);
@@ -5152,7 +5132,6 @@ fn validate_sccp_submit_content_type(
     headers: &axum::http::HeaderMap,
 ) -> Result<(), SccpSubmitContentTypeError> {
     use axum::http::header::CONTENT_TYPE;
-
     let mut values = headers.get_all(CONTENT_TYPE).iter();
     let value = values
         .next()
@@ -5216,7 +5195,6 @@ async fn enforce_sccp_submit_ingress(
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     use axum::response::IntoResponse as _;
-
     if req.method() != axum::http::Method::POST {
         return Ok(next.run(req).await);
     }
@@ -5493,7 +5471,6 @@ async fn enforce_soracloud_signed_mutation_request(
 #[cfg(all(test, feature = "app_api"))]
 #[path = "tests/soracloud_signed_mutation_middleware.rs"]
 mod soracloud_signed_mutation_middleware_tests;
-
 #[cfg(feature = "app_api")]
 fn soracloud_signed_mutation_body_limit(app: &AppState, path: &str) -> usize {
     if path.starts_with("/v1/soracloud/model/upload/") {
@@ -6353,7 +6330,6 @@ async fn enforce_typed_error_contract(
     next: Next,
 ) -> Result<AxResponse, Infallible> {
     use axum::body::HttpBody as _;
-
     let method = req.method().clone();
     let accept = response_boundary_accept_header(req.headers());
     let route = req.extensions().get::<MatchedRouteMetadata>().cloned();
@@ -6651,9 +6627,7 @@ async fn record_http_metrics(
             _ => "other".to_string(),
         }
     }
-
     use axum::body::HttpBody as _;
-
     let method = req.method().clone();
     let route_metadata = req
         .extensions()
@@ -6755,6 +6729,7 @@ async fn record_http_metrics(
 }
 #[cfg(test)]
 mod matched_route_metadata_tests {
+    use super::*;
     use axum::{
         Extension,
         body::Body,
@@ -6765,9 +6740,6 @@ mod matched_route_metadata_tests {
         RouteEffect, RouteProjections,
     };
     use tower::ServiceExt as _;
-
-    use super::*;
-
     const ITEM: RouteDescriptor = RouteDescriptor::new(
         "test.item.read",
         HttpMethod::Get,
@@ -6867,7 +6839,6 @@ mod matched_route_metadata_tests {
     async fn cors_cannot_create_undeclared_options_routes() {
         use http_body_util::BodyExt as _;
         use tower_http::cors::{Any, CorsLayer};
-
         let mut builder = RouterBuilder::new(
             (),
             RouteCatalog::new(&[ITEM, CORS_ITEM]),
@@ -6939,6 +6910,7 @@ mod strict_request_target_tests {
 }
 #[cfg(test)]
 mod offline_cache_policy_tests {
+    use super::enforce_offline_cache_policy;
     use axum::{
         Router,
         body::Body,
@@ -6948,9 +6920,6 @@ mod offline_cache_policy_tests {
         routing::{get, post},
     };
     use tower::ServiceExt as _;
-
-    use super::enforce_offline_cache_policy;
-
     #[tokio::test]
     async fn every_operation_status_outcome_is_no_store() {
         let router = Router::new()
@@ -7088,10 +7057,8 @@ mod offline_cache_policy_tests {
 }
 #[cfg(test)]
 mod content_type_utf8_tests {
-    use axum::http::{HeaderMap, HeaderValue, header::CONTENT_TYPE};
-
     use super::{normalize_json_content_type, normalize_json_response_content_type};
-
+    use axum::http::{HeaderMap, HeaderValue, header::CONTENT_TYPE};
     #[test]
     fn normalizes_json_media_type_with_utf8_charset() {
         assert_eq!(
@@ -7137,11 +7104,7 @@ mod content_type_utf8_tests {
 }
 #[cfg(test)]
 mod response_negotiation_middleware_tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
+    use super::*;
     use axum::{
         Router,
         body::Body,
@@ -7150,10 +7113,11 @@ mod response_negotiation_middleware_tests {
         routing::{get, post},
     };
     use http_body_util::BodyExt as _;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use tower::ServiceExt as _;
-
-    use super::*;
-
     fn native_response(content_type: &'static str) -> Response {
         Response::builder()
             .status(StatusCode::OK)
@@ -7603,6 +7567,7 @@ mod response_negotiation_middleware_tests {
 }
 #[cfg(test)]
 mod typed_error_contract_tests {
+    use super::*;
     use axum::{
         Router,
         body::Body,
@@ -7612,9 +7577,6 @@ mod typed_error_contract_tests {
     };
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-
-    use super::*;
-
     fn with_error_contract(router: Router) -> Router {
         router.layer(axum::middleware::from_fn(enforce_typed_error_contract))
     }
@@ -8505,18 +8467,15 @@ mod typed_error_contract_tests {
 }
 #[cfg(test)]
 mod request_id_middleware_tests {
-    use std::collections::HashSet;
-
+    use super::*;
     use axum::{
         Router,
         body::Body,
         http::{HeaderValue, Request, StatusCode},
         routing::get,
     };
+    use std::collections::HashSet;
     use tower::ServiceExt as _;
-
-    use super::*;
-
     fn request_id(response: &axum::response::Response) -> &str {
         response
             .headers()
@@ -8974,7 +8933,6 @@ fn finalize_bridge_finality_attestation_response(result: Result<AxResponse, Erro
 #[cfg(test)]
 mod bridge_finality_attestation_route_tests {
     use super::*;
-
     #[test]
     fn challenge_header_is_exact_nonzero_lowercase_hex() {
         let raw = [0xAB; 32];
@@ -9704,10 +9662,8 @@ fn install_canonical_account_private_cache_headers(response: &mut Response) {
     );
 }
 // -------------- Governance handlers (AppState-based) --------------
-use axum::{extract::Path as AxPath, response::Response as AxResponse};
-
 use crate::NoritoQuery as AxQuery;
-
+use axum::{extract::Path as AxPath, response::Response as AxResponse};
 #[cfg(feature = "app_api")]
 async fn handler_gov_contract_get(
     State(app): State<SharedAppState>,
@@ -11558,7 +11514,6 @@ pub(crate) fn ensure_nexus_lanes_enabled(
 #[cfg(test)]
 mod nexus_lane_boundary_tests {
     use super::*;
-
     #[test]
     fn gating_rejects_when_nexus_disabled() {
         let err = ensure_nexus_lanes_enabled(false, routing::ENDPOINT_NEXUS_PUBLIC_LANE_STAKE)
@@ -12008,7 +11963,6 @@ fn encode_offline_capability_representation(
 #[cfg(feature = "app_api")]
 fn strong_etag_for_representation(bytes: &[u8]) -> String {
     use sha2::Digest as _;
-
     format!("\"{}\"", hex::encode(sha2::Sha256::digest(bytes)))
 }
 #[cfg(feature = "app_api")]
@@ -12471,7 +12425,6 @@ struct ExplorerAssetDefinitionsQuery {
 #[cfg(all(test, feature = "app_api"))]
 mod explorer_asset_definitions_query_tests {
     use super::ExplorerAssetDefinitionsQuery;
-
     #[test]
     fn owning_domain_is_the_only_asset_definition_domain_filter() {
         let query: ExplorerAssetDefinitionsQuery =
@@ -15752,7 +15705,6 @@ pub struct ZkIvmProveRequestDto {
 #[cfg(test)]
 mod zk_ivm_request_dto_json_tests {
     use super::*;
-
     #[test]
     fn closed_zk_ivm_requests_reject_unknown_json_fields() {
         for error in [
@@ -16649,7 +16601,6 @@ fn zk_pk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyI
 #[cfg(feature = "app_api")]
 fn read_zk_key_file_bounded(path: &Path, label: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
     use std::io::Read as _;
-
     let path_metadata = std::fs::symlink_metadata(path).map_err(|err| {
         format!(
             "failed to inspect {label} bytes at {}: {err}",
@@ -21271,7 +21222,6 @@ fn is_trigger_inventory_query(query: &iroha_data_model::query::QueryWithParams) 
 }
 fn is_public_control_plane_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
     use iroha_data_model::query::{QueryItemKind, peer::prelude::FindPeers};
-
     query.item == QueryItemKind::PeerId && payload_matches_query::<FindPeers>(&query.query_payload)
 }
 fn decode_query_payload<Query>(payload: &[u8]) -> Option<Query>
@@ -21375,7 +21325,6 @@ fn target_scope_singular_query(
     query: &iroha_data_model::query::SingularQueryBox,
 ) -> Option<SignedQueryScope> {
     use iroha_data_model::query::SingularQueryBox;
-
     match query {
         SingularQueryBox::FindAssetById(query) => {
             Some(SignedQueryScope::TargetAccount(query.id.account().clone()))
@@ -21483,7 +21432,6 @@ fn target_scope_singular_query_for_app(
     query: &iroha_data_model::query::SingularQueryBox,
 ) -> Option<SignedQueryScope> {
     use iroha_data_model::query::SingularQueryBox;
-
     match query {
         SingularQueryBox::FindAssetById(query) => {
             Some(SignedQueryScope::TargetAccount(query.id.account().clone()))
@@ -21499,7 +21447,6 @@ fn target_domain_iterable_query_for_app(
     query: &iroha_data_model::query::QueryWithParams,
 ) -> Option<iroha_data_model::domain::DomainId> {
     use iroha_data_model::prelude::FindAccountsWithAsset;
-
     (query.item == iroha_data_model::query::QueryItemKind::Account)
         .then(|| decode_query_payload::<FindAccountsWithAsset>(&query.query_payload))
         .flatten()
@@ -21514,7 +21461,6 @@ fn target_domain_iterable_query_for_app(
 }
 fn is_authority_routed_iterable_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
     use iroha_data_model::query::{QueryItemKind, transaction::prelude::FindTransactions};
-
     query.item == QueryItemKind::CommittedTransaction
         && payload_matches_query::<FindTransactions>(&query.query_payload)
 }
@@ -21523,7 +21469,6 @@ fn is_trigger_inventory_query_bounded(
     _memory_limits: QueryScopeMemoryLimits,
 ) -> Result<bool, Response> {
     use iroha_data_model::query::QueryItemKind;
-
     let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
     match item_kind {
         QueryItemKind::Trigger | QueryItemKind::TriggerId => {
@@ -21537,7 +21482,6 @@ fn is_public_control_plane_query_bounded(
     _memory_limits: QueryScopeMemoryLimits,
 ) -> Result<bool, Response> {
     use iroha_data_model::query::QueryItemKind;
-
     let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
     if item_kind == QueryItemKind::PeerId {
         Ok(bounded_unit_query_payload_matches(payload))
@@ -21578,7 +21522,6 @@ fn target_domain_iterable_query_for_app_bounded(
     memory_limits: QueryScopeMemoryLimits,
 ) -> Result<Option<iroha_data_model::domain::DomainId>, Response> {
     use iroha_data_model::prelude::FindAccountsWithAsset;
-
     let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
     if item_kind != iroha_data_model::query::QueryItemKind::Account {
         return Ok(None);
@@ -21602,7 +21545,6 @@ fn is_authority_routed_iterable_query_bounded(
     _memory_limits: QueryScopeMemoryLimits,
 ) -> Result<bool, Response> {
     use iroha_data_model::query::QueryItemKind;
-
     let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
     if item_kind == QueryItemKind::CommittedTransaction {
         Ok(bounded_unit_query_payload_matches(payload))
@@ -22012,7 +21954,6 @@ fn canonical_fanout_error_response(
     error: iroha_data_model::query::error::QueryExecutionFail,
 ) -> Response {
     use iroha_data_model::query::error::QueryExecutionFail;
-
     match error {
         QueryExecutionFail::GasBudgetExceeded | QueryExecutionFail::CapacityLimit => {
             torii_proxy_error_response(
@@ -27389,7 +27330,6 @@ async fn execute_torii_proof_record_get_query(
     routed_by: &'static str,
 ) -> Response {
     use iroha_data_model::proof::ProofId;
-
     let raw_proof_id = proof_id;
     let proof_id = match raw_proof_id.parse::<ProofId>() {
         Ok(proof_id) => proof_id,
@@ -30817,6 +30757,10 @@ fn validate_norito_websocket_handshake(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod canonical_stream_handshake_tests {
+    use super::*;
+    use axum::extract::FromRequestParts;
+    use axum::http::{HeaderMap, HeaderValue, header, request::Parts};
+    use axum::{Router, body::Body, routing::get};
     use std::{
         collections::HashSet,
         sync::{
@@ -30824,14 +30768,7 @@ mod canonical_stream_handshake_tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
-
-    use axum::extract::FromRequestParts;
-    use axum::http::{HeaderMap, HeaderValue, header, request::Parts};
-    use axum::{Router, body::Body, routing::get};
     use tower::ServiceExt as _;
-
-    use super::*;
-
     fn error_code(error: Error) -> &'static str {
         match error {
             Error::AppQueryValidation { code, .. } => code,
@@ -31535,7 +31472,6 @@ fn is_expected_ws_disconnect(error: &eyre::Report) -> bool {
 #[cfg(all(test, feature = "app_api"))]
 mod ws_disconnect_classification_tests {
     use super::is_expected_ws_disconnect;
-
     #[test]
     fn detects_expected_disconnect_errors() {
         assert!(is_expected_ws_disconnect(&eyre::eyre!(
@@ -36476,7 +36412,6 @@ fn insert_iso_metadata_fields(
 }
 fn map_iso_error(err: MsgError) -> iroha_data_model::ValidationFail {
     use iroha_data_model::ValidationFail;
-
     match err {
         MsgError::ValidationFailed => {
             ValidationFail::NotPermitted("ISO 20022 validation failed".into())
@@ -37103,7 +37038,6 @@ mod transaction_ingress_decode_tests {
         transaction::{TransactionBuilder, signed::TransactionSignature},
     };
     use iroha_logger::Level;
-
     fn signed_transaction_for_test() -> SignedTransaction {
         signed_transaction_for_test_with_message("batch decode")
     }
@@ -37810,7 +37744,6 @@ async fn handler_connect_session(
     NoritoJson(req): NoritoJson<routing::ConnectSessionRequest>,
 ) -> Result<JsonBody<routing::ConnectSessionResponse>> {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-
     require_connect_enabled(&app)?;
     let remote_ip = connect_remote_ip_from_headers(&headers).map_err(|message| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -37882,7 +37815,6 @@ async fn handler_connect_session_delete(
     axum::extract::Path(sid_str): axum::extract::Path<String>,
 ) -> axum::response::Response {
     use axum::http::StatusCode;
-
     if let Err(error) = require_connect_enabled(&app) {
         return error.into_response();
     }
@@ -37992,7 +37924,6 @@ fn resolve_connect_ws_token(
     headers: &axum::http::HeaderMap,
 ) -> Result<ConnectWsToken, axum::response::Response> {
     use axum::http::StatusCode;
-
     let auth_token = parse_authorization_token(headers)?;
     let protocol_token = parse_protocol_token(headers)?;
     if let Some(auth) = auth_token {
@@ -38028,10 +37959,8 @@ fn resolve_connect_ws_token(
 }
 #[cfg(all(test, feature = "connect"))]
 mod connect_token_tests {
-    use axum::http::{HeaderMap, HeaderName, StatusCode, header};
-
     use super::{connect_remote_ip_from_headers, parse_connect_ws_query, resolve_connect_ws_token};
-
+    use axum::http::{HeaderMap, HeaderName, StatusCode, header};
     #[test]
     fn connect_query_rejects_token_param() {
         let err = parse_connect_ws_query(Some("sid=abc&role=app&token=deadbeef"))
@@ -38104,7 +38033,6 @@ fn parse_authorization_token(
     headers: &axum::http::HeaderMap,
 ) -> Result<Option<String>, axum::response::Response> {
     use axum::http::{StatusCode, header};
-
     let Some(value) = headers.get(header::AUTHORIZATION) else {
         return Ok(None);
     };
@@ -38146,7 +38074,6 @@ fn parse_protocol_token(
     headers: &axum::http::HeaderMap,
 ) -> Result<Option<ProtocolToken>, axum::response::Response> {
     use axum::http::{StatusCode, header};
-
     let mut values_iter = headers.get_all(header::SEC_WEBSOCKET_PROTOCOL).iter();
     let Some(first_value) = values_iter.next() else {
         return Ok(None);
@@ -38179,7 +38106,6 @@ fn parse_protocol_token(
 fn decode_protocol_token(encoded: &str) -> Result<String, axum::response::Response> {
     use axum::http::StatusCode;
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-
     let bytes = B64.decode(encoded).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -38205,7 +38131,6 @@ async fn handler_connect_session_status(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> axum::response::Response {
     use axum::http::StatusCode;
-
     if let Err(error) = require_connect_enabled(&app) {
         return error.into_response();
     }
@@ -38374,7 +38299,6 @@ fn alias_setup_plan_report_response(
 #[cfg(feature = "app_api")]
 fn alias_setup_dependency_rank(intent: &iroha_data_model::alias_setup::AliasIntentV1) -> u8 {
     use iroha_data_model::alias_setup::AliasIntentV1;
-
     match intent {
         AliasIntentV1::Dataspace(_) => 0,
         AliasIntentV1::Domain(_) => 1,
@@ -38386,7 +38310,6 @@ fn alias_setup_parent_target(
     target: &iroha_data_model::alias_setup::AliasTargetV1,
 ) -> Option<iroha_data_model::alias_setup::AliasTargetV1> {
     use iroha_data_model::alias_setup::{AliasTargetV1, ResolvedDataSpaceV1};
-
     match target {
         AliasTargetV1::Dataspace(_) => None,
         AliasTargetV1::Domain(domain) => Some(AliasTargetV1::Dataspace(domain.parent_dataspace())),
@@ -41600,7 +41523,6 @@ mod zk1;
 pub mod zk_attachments;
 #[cfg(feature = "app_api")]
 pub mod zk_prover;
-
 const DEFAULT_ROUTE_TIMEOUT: Duration = Duration::from_mins(1);
 const ZK_IVM_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
 const HEADER_NORITO_RPC_ERROR: &str = "x-iroha-error-code";
@@ -42445,11 +42367,6 @@ enum SoraFsAppealFinanceSignerSelectionError {
 }
 #[cfg(all(test, feature = "app_api"))]
 mod appeal_finance_runtime_signer_tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
-    };
-
     use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_data_model::transaction::TransactionBuilder;
@@ -42461,8 +42378,11 @@ mod appeal_finance_runtime_signer_tests {
         AppealFinanceRuntimeProviderQualificationV1, AppealFinanceSealedCheckpointRecordV1,
         AppealFinanceTransactionForwarder, AppealFinanceTransactionForwarderPolicyV1,
     };
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
     use tempfile::TempDir;
-
     struct TestSigner {
         handle: String,
         keypair: KeyPair,
@@ -43267,7 +43187,6 @@ fn sorafs_evidence_viewer_dependency_error(
 #[cfg(all(test, feature = "app_api"))]
 mod sorafs_evidence_viewer_startup_tests {
     use super::*;
-
     #[test]
     fn runtime_dependency_shape_is_fail_closed() {
         for supplied_mask in 0_u16..128 {
@@ -43566,7 +43485,6 @@ fn finalized_block_hash_at(state: &CoreState, height: u64) -> Option<[u8; 32]> {
 #[cfg(test)]
 mod iso_bridge_body_limit_tests {
     use super::iso_bridge_body_limit;
-
     #[test]
     fn body_limit_is_positive_and_capped_by_transaction_limit() {
         assert_eq!(iso_bridge_body_limit(1024 * 1024, 64_000_000), 1024 * 1024);
@@ -43576,13 +43494,11 @@ mod iso_bridge_body_limit_tests {
 }
 #[cfg(all(test, feature = "app_api"))]
 mod musubi_search_initialization_tests {
+    use super::select_initial_musubi_search_index;
     use iroha_core::musubi_search::{MusubiSearchError, MusubiSearchIndexV1};
     use iroha_data_model::musubi::{
         MusubiPackageMetadataRecordV1, MusubiPackageRecordV1, MusubiSearchSnapshotV1,
     };
-
-    use super::select_initial_musubi_search_index;
-
     #[test]
     fn inconsistent_discovery_projection_does_not_disable_registry_routes() {
         let unavailable =
@@ -44631,14 +44547,12 @@ fn preflight_sorafs_native_transaction_signers(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod sorafs_native_transaction_signer_startup_tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
     use iroha_data_model::{
         account::AccountId,
         transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
     };
-
-    use super::*;
-
     const QUALIFICATION: SorafsNativeTransactionSignerQualificationV1 =
         SorafsNativeTransactionSignerQualificationV1::new(9, [0x59; 32]);
     #[test]
@@ -45286,7 +45200,6 @@ impl Torii {
     #[cfg(feature = "app_api")]
     fn spawn_musubi_search_projection_worker(&self, shutdown_signal: ShutdownSignal) {
         use iroha_core::musubi_search::search_event_height;
-
         let mut events = self.events.subscribe();
         let state = self.state.clone();
         let search = self.musubi_search.clone();
@@ -52104,10 +52017,8 @@ fn build_sorafs_gateway_security(
 }
 #[cfg(all(test, feature = "app_api"))]
 mod gateway_runtime_config_tests {
-    use ed25519_dalek::SigningKey;
-
     use super::*;
-
+    use ed25519_dalek::SigningKey;
     #[derive(Debug)]
     struct TestAcmeClient;
     impl sorafs::gateway::AcmeClient for TestAcmeClient {
@@ -52727,7 +52638,6 @@ fn build_por_components(
 #[cfg(all(test, feature = "app_api"))]
 mod por_runtime_readiness_tests {
     use super::{assert_por_runtime_ready, por_runtime_readiness_error};
-
     fn configured_por() -> iroha_config::parameters::actual::SorafsPor {
         let mut config = iroha_config::parameters::actual::SorafsPor {
             enabled: true,
@@ -52940,7 +52850,6 @@ pub enum Error {
 }
 fn offline_reject_code_from_message(message: &str) -> Option<&str> {
     use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
-
     let start = message.find(OFFLINE_REJECTION_REASON_PREFIX)?;
     let rest = &message[start + OFFLINE_REJECTION_REASON_PREFIX.len()..];
     let (label, _) = rest.split_once(':')?;
@@ -52950,7 +52859,6 @@ fn offline_reject_code_from_query_fail(
     fail: &iroha_data_model::query::error::QueryExecutionFail,
 ) -> Option<&str> {
     use iroha_data_model::query::error::QueryExecutionFail as Q;
-
     match fail {
         Q::Conversion(message) => offline_reject_code_from_message(message),
         _ => None,
@@ -52960,7 +52868,6 @@ fn offline_reject_code_from_instruction_fail(
     fail: &iroha_data_model::isi::error::InstructionExecutionError,
 ) -> Option<&str> {
     use iroha_data_model::isi::error::InstructionExecutionError as I;
-
     match fail {
         I::Conversion(message) => offline_reject_code_from_message(message),
         I::InvariantViolation(message) => offline_reject_code_from_message(message.as_ref()),
@@ -52972,7 +52879,6 @@ fn offline_reject_code_from_validation_fail(
     fail: &iroha_data_model::ValidationFail,
 ) -> Option<&str> {
     use iroha_data_model::ValidationFail as V;
-
     match fail {
         V::NotPermitted(message) => offline_reject_code_from_message(message),
         V::QueryFailed(fail) => offline_reject_code_from_query_fail(fail),
@@ -53300,7 +53206,6 @@ include!("tests/lib_runtime_handlers.rs");
 include!("tests/lib_queue_metadata.rs");
 #[cfg(all(test, feature = "app_api"))]
 pub(crate) use tests_runtime_handlers::mk_app_state_for_tests;
-
 impl Error {
     fn into_envelope(self) -> ErrorEnvelope {
         match self {
@@ -53429,7 +53334,6 @@ impl Error {
     }
     fn status_code(&self) -> StatusCode {
         use Error::*;
-
         match self {
             Query(e) => Self::query_status_code(e),
             AcceptTransaction(_) => StatusCode::BAD_REQUEST,

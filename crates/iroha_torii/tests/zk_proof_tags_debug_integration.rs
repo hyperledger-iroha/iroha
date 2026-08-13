@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test for /v1/zk/proof-tags/{backend}/{hash} (feature `zk-proof-tags`).
 #![cfg(all(feature = "app_api", feature = "zk-proof-tags"))]
-
 use std::sync::Arc;
-
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -14,13 +12,11 @@ use iroha_core::{
 use iroha_data_model::proof::ProofId;
 use nonzero_ext::nonzero;
 use tower::ServiceExt as _;
-
 #[tokio::test]
 async fn proof_tags_returns_ascii_tags() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
-
     // Insert tag index directly (prototype path)
     let backend = "halo2/ipa";
     let proof_hash = [0x44; 32];
@@ -44,7 +40,6 @@ async fn proof_tags_returns_ascii_tags() {
         stx.apply();
         block.commit().expect("commit proof tag indexes");
     }
-
     let state = Arc::new(state);
     let app = Router::new().route(
         "/v1/zk/proof-tags/{backend}/{hash}",
@@ -55,7 +50,6 @@ async fn proof_tags_returns_ascii_tags() {
             }
         }),
     );
-
     let backend_enc = urlencoding::encode(backend);
     let hash_hex = hex::encode(proof_hash);
     let uri = format!("/v1/zk/proof-tags/{}/{}", backend_enc, hash_hex);

@@ -2,11 +2,9 @@
 //! Basic shape test for `/v1/sumeragi/status/sse`
 #![cfg(feature = "telemetry")]
 #![allow(unexpected_cfgs)]
-
 #[tokio::test]
 async fn sumeragi_status_sse_content_type() {
     use std::sync::Arc;
-
     use axum::{Router, routing::get};
     use iroha_core::{
         kura::Kura,
@@ -14,7 +12,6 @@ async fn sumeragi_status_sse_content_type() {
         state::{State, World},
     };
     use tower::ServiceExt;
-
     let state = Arc::new(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -27,7 +24,6 @@ async fn sumeragi_status_sse_content_type() {
             async move { iroha_torii::handle_v1_sumeragi_status_sse(state, 200, true, None) }
         }),
     );
-
     let resp = app
         .oneshot(
             axum::http::Request::builder()
